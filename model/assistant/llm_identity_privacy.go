@@ -177,7 +177,7 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 
 func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	if p == nil || p.provider == nil {
-		return nil, errors.New("chatbot: identity privacy provider is not configured")
+		return nil, errors.New("diana: identity privacy provider is not configured")
 	}
 	if p.scope == nil {
 		return p.provider.Generate(ctx, req)

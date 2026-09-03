@@ -154,13 +154,13 @@ func (c *OneBotChannel) SendWithResult(ctx context.Context, msg OutgoingMessage)
 		action = "send_group_msg"
 		groupID, err := strconv.ParseInt(msg.GroupID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("chatbot: invalid group id %q", msg.GroupID)
+			return nil, fmt.Errorf("diana: invalid group id %q", msg.GroupID)
 		}
 		params["group_id"] = groupID
 	} else {
 		userID, err := strconv.ParseInt(msg.UserID, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("chatbot: invalid user id %q", msg.UserID)
+			return nil, fmt.Errorf("diana: invalid user id %q", msg.UserID)
 		}
 		params["user_id"] = userID
 	}
@@ -305,7 +305,7 @@ func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[s
 	conn := c.conn
 	c.connMu.RUnlock()
 	if conn == nil {
-		return nil, errors.New("chatbot: onebot websocket is not connected")
+		return nil, errors.New("diana: onebot websocket is not connected")
 	}
 
 	echo := strconv.FormatInt(time.Now().UnixNano(), 36)

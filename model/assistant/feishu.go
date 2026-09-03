@@ -281,17 +281,24 @@ func (c *FeishuChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 	client := c.client
 	c.mu.RUnlock()
 
+	// 飞书的 text 消息不渲染 Markdown，带标记时改发卡片。只在确实有标记时才换：
+	// 卡片会把气泡变成一个框，为大白话消息换掉不值当。
+	msgType := "text"
+	if card, ok := feishuMarkdownCard(text); ok {
+		msgType, content = "interactive", []byte(card)
+	}
+
 	base := feishuAPIBase(cfg)
 	endpoint := base + feishuMessagePath + "?receive_id_type=" + feishuReceiveIDType(target, isGroup)
 	body := map[string]any{
 		"receive_id": target,
-		"msg_type":   "text",
+		"msg_type":   msgType,
 		"content":    string(content),
 	}
 	// 有被回复的消息时走 reply 接口，回复会挂在原消息下面形成话题。
 	if replyID := strings.TrimSpace(msg.ReplyMessageID); replyID != "" {
 		endpoint = base + feishuMessagePath + "/" + replyID + "/reply"
-		body = map[string]any{"msg_type": "text", "content": string(content)}
+		body = map[string]any{"msg_type": msgType, "content": string(content)}
 	}
 
 	raw, err := platformJSONRequest(ctx, client, http.MethodPost, endpoint, map[string]string{
@@ -650,4 +657,34 @@ func (d *eventDeduper) Accept(id string) bool {
 	}
 	d.seen[id] = now
 	return true
+}
+
+// feishuMarkdownFeatures 是飞书卡片里 markdown 元素认的子集：粗体、斜体、删除线、
+// 行内代码、代码块、链接和列表。它不认 # 标题（降级成粗体）和 > 引用。
+var feishuMarkdownFeatures = platformMarkdownFeatures{
+	Bold:       true,
+	Italic:     true,
+	Strike:     true,
+	InlineCode: true,
+	CodeFence:  true,
+	Links:      true,
+	Lists:      true,
+}
+
+// feishuMarkdownCard 把带 Markdown 的文本包成一张只有 markdown 元素的卡片。
+// 文本里没有任何标记时返回 false，让调用方继续发普通 text 消息。
+func feishuMarkdownCard(text string) (string, bool) {
+	if !platformTextHasMarkdown(text) {
+		return "", false
+	}
+	card, err := json.Marshal(map[string]any{
+		"config": map[string]any{"wide_screen_mode": true},
+		"elements": []map[string]any{
+			{"tag": "markdown", "content": downgradeMarkdownFor(text, feishuMarkdownFeatures)},
+		},
+	})
+	if err != nil {
+		return "", false
+	}
+	return string(card), true
 }

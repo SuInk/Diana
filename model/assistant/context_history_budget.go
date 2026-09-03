@@ -111,7 +111,7 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 		stored, err = store.ListRecentMessageEvents(loadCtx, session, candidateLimit)
 		cancel()
 		if err != nil {
-			log.Printf("chatbot token-budget history load failed: %v", err)
+			log.Printf("diana token-budget history load failed: %v", err)
 		}
 	}
 	history := dropSummarizedHistory(mergeMessageHistory(memory, stored, candidateLimit), memory, summaryWatermark)
@@ -463,7 +463,7 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
-		Action:   "chatbot.context_budget",
+		Action:   "diana.context_budget",
 		Message:  "上下文预算已编排",
 		Actor:    "chat_context",
 		Target:   strings.TrimSpace(event.MessageID),

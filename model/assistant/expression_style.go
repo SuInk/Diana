@@ -132,13 +132,13 @@ func (r *Runtime) observeGroupExpression(event MessageEvent, text string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := store.BumpGroupExpression(ctx, scope, phrase, userID, seenAt); err != nil {
-			log.Printf("chatbot expression bump failed: %v", err)
+			log.Printf("diana expression bump failed: %v", err)
 			return
 		}
 		// 淘汰搭便车做：写一条顺手扫一次的概率很低，均摊下来没有存在感。
 		if rand.Intn(256) == 0 {
 			if err := store.PruneGroupExpressions(ctx, seenAt.Add(-expressionPruneAfter)); err != nil {
-				log.Printf("chatbot expression prune failed: %v", err)
+				log.Printf("diana expression prune failed: %v", err)
 			}
 		}
 	}()
@@ -161,7 +161,7 @@ func (r *Runtime) expressionStyleContext(ctx context.Context, event MessageEvent
 	expressions, err := store.TopGroupExpressions(loadCtx, expressionScopeKey(event), time.Now().Add(-expressionWindow), expressionMinCount, expressionMinUsers, expressionInjectLimit)
 	cancel()
 	if err != nil {
-		log.Printf("chatbot expression style load failed: %v", err)
+		log.Printf("diana expression style load failed: %v", err)
 		return ""
 	}
 	if len(expressions) == 0 {

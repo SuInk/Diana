@@ -206,9 +206,9 @@ type PluginManager struct {
 }
 
 var (
-	ErrPluginNotFound        = errors.New("chatbot: plugin not found")
-	ErrBuiltInPluginAction   = errors.New("chatbot: built-in plugins do not support install or uninstall")
-	ErrInternalPluginDisable = errors.New("chatbot: 该能力已内置，无法停用")
+	ErrPluginNotFound        = errors.New("diana: plugin not found")
+	ErrBuiltInPluginAction   = errors.New("diana: built-in plugins do not support install or uninstall")
+	ErrInternalPluginDisable = errors.New("diana: 该能力已内置，无法停用")
 )
 
 const (
@@ -414,7 +414,7 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 		return nil, nil
 	}
 	if m == nil {
-		return nil, fmt.Errorf("chatbot: plugin manager is not configured")
+		return nil, fmt.Errorf("diana: plugin manager is not configured")
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -422,7 +422,7 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 	for id, values := range overrides {
 		id = strings.TrimSpace(id)
 		if id == "" {
-			return nil, fmt.Errorf("chatbot: plugin ID cannot be empty")
+			return nil, fmt.Errorf("diana: plugin ID cannot be empty")
 		}
 		plugin, ok := m.catalog[id]
 		if !ok {
@@ -430,7 +430,7 @@ func (m *PluginManager) ValidateGroupSettingOverrides(overrides PluginSettingOve
 		}
 		normalized, err := normalizeGroupPluginSettings(plugin.Manifest().Settings, values)
 		if err != nil {
-			return nil, fmt.Errorf("chatbot: plugin %q group settings: %w", id, err)
+			return nil, fmt.Errorf("diana: plugin %q group settings: %w", id, err)
 		}
 		if len(normalized) > 0 {
 			out[id] = normalized
@@ -566,7 +566,7 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 	}
 	manifest := plugin.Manifest()
 	if len(manifest.Settings) == 0 {
-		return PluginState{}, fmt.Errorf("chatbot: plugin %q has no configurable settings", id)
+		return PluginState{}, fmt.Errorf("diana: plugin %q has no configurable settings", id)
 	}
 	normalized, err := normalizePluginSettings(manifest.Settings, values)
 	if err != nil {
@@ -620,7 +620,7 @@ func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error)
 	state := m.states[id]
 	state.Manifest = plugin.Manifest()
 	if !state.Installed {
-		return state, fmt.Errorf("chatbot: plugin %q is not installed", id)
+		return state, fmt.Errorf("diana: plugin %q is not installed", id)
 	}
 	if state.Manifest.Internal && !enabled {
 		return state, ErrInternalPluginDisable
@@ -806,7 +806,7 @@ func (m *PluginManager) AgentToolsWithGroupOverrides(enabledOverrides map[string
 	for _, item := range providers {
 		provided, err := item.plugin.AgentTools(item.settings)
 		if err != nil {
-			return nil, fmt.Errorf("chatbot: plugin %q agent tools: %w", item.id, err)
+			return nil, fmt.Errorf("diana: plugin %q agent tools: %w", item.id, err)
 		}
 		tools = append(tools, provided...)
 	}
@@ -890,7 +890,7 @@ func safeHandlePlugin(ctx context.Context, id string, plugin Plugin, req PluginR
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			resp = nil
-			err = fmt.Errorf("chatbot: plugin %q panicked: %v", id, recovered)
+			err = fmt.Errorf("diana: plugin %q panicked: %v", id, recovered)
 		}
 	}()
 	return plugin.Handle(ctx, req)
@@ -925,22 +925,23 @@ func savedStateDisabled(states map[string]PluginState, id string) bool {
 }
 
 const (
-	resolverSettingFetchTitle       = "fetch_title"
-	resolverSettingMaxLinks         = "max_links"
-	resolverSettingTimeoutSeconds   = "timeout_seconds"
-	resolverSettingBrowserRender    = "browser_render"
-	resolverSettingBrowserCDPURL    = "browser_cdp_url"
-	resolverSettingEnabledPlatforms = "enabled_platforms"
-	resolverSettingSummaryMaxRunes  = "summary_max_runes"
-	resolverSettingCacheTTLMinutes  = "cache_ttl_minutes"
-	resolverSettingUserAgent        = "user_agent"
-	resolverSettingDownloadMedia    = "download_media"
-	resolverSettingMaxVideoMB       = "max_video_mb"
-	resolverSettingMaxDuration      = "max_video_duration_seconds"
-	resolverSettingMaxImages        = "max_images"
-	resolverSettingFollowUpComment  = "follow_up_comment"
-	resolverSettingMergedForward    = "merged_forward"
-	resolverSettingMaxVideoHeight   = "max_video_height"
+	resolverSettingFetchTitle         = "fetch_title"
+	resolverSettingMaxLinks           = "max_links"
+	resolverSettingTimeoutSeconds     = "timeout_seconds"
+	resolverSettingBrowserRender      = "browser_render"
+	resolverSettingBrowserCDPURL      = "browser_cdp_url"
+	resolverSettingEnabledPlatforms   = "enabled_platforms"
+	resolverSettingSummaryMaxRunes    = "summary_max_runes"
+	resolverSettingCacheTTLMinutes    = "cache_ttl_minutes"
+	resolverSettingUserAgent          = "user_agent"
+	resolverSettingDownloadMedia      = "download_media"
+	resolverSettingMaxVideoMB         = "max_video_mb"
+	resolverSettingMaxDuration        = "max_video_duration_seconds"
+	resolverSettingMaxImages          = "max_images"
+	resolverSettingFollowUpComment    = "follow_up_comment"
+	resolverSettingMergedForward      = "merged_forward"
+	resolverSettingMaxVideoHeight     = "max_video_height"
+	resolverSettingPlatformLevelRules = "platform_level_rules"
 	// 凭据类设置。这些值最容易过期、最需要频繁更换，只靠环境变量意味着
 	// Docker 用户改一次 Cookie 就得重启容器。
 	resolverSettingBiliSessdata = "bili_sessdata"
@@ -995,7 +996,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.2.1",
+		Version:     "0.3.0",
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频。",
 		Official:    true,
 		BuiltIn:     true,
@@ -1062,6 +1063,18 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 				Max:         settingRange(20),
 				Step:        1,
 				Unit:        "张",
+			},
+			{
+				Key:         resolverSettingPlatformLevelRules,
+				Label:       "平台群等级规则",
+				Description: "按平台限制 QQ 群成员触发链接解析的最低群等级；规则从上到下匹配。",
+				Type:        PluginSettingTypePlatformLevelRules,
+				Default: []map[string]any{{
+					"platform": "x", "minimum_level": defaultTwitterMinimumGroupLevel,
+					"unknown_policy": LevelUnknownDeny, "owner_bypass": true,
+					"mention_bypass": false, "enabled": true,
+				}},
+				Options: resolverPlatformOptions(),
 			},
 			{
 				Key:   resolverSettingMaxVideoHeight,
@@ -1296,8 +1309,10 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	maxImages := req.Settings.Int(resolverSettingMaxImages, 9)
 	legacyResolver := p.videoDownloader != nil || p.twitterPostFetcher != nil || p.twitterMediaDownloader != nil
 	for _, raw := range urls {
+		platform := ""
 		if parsed, err := url.Parse(raw); err == nil {
 			key, label := platformKeyAndLabel(parsed.Hostname())
+			platform = key
 			if key != "" && !slices.Contains(opts.enabledPlatforms, key) {
 				// 未启用的平台整条跳过，不进上下文。跳过必须留痕，否则用户
 				// 只看到「链接没反应」，无法区分是开关没勾还是解析失败。
@@ -1305,10 +1320,10 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 				continue
 			}
 		}
+		if platform != "" && !resolverPlatformRequestAllowed(mediaCtx, req, platform) {
+			continue
+		}
 		if legacyResolver && isKnownResolverPlatformURL(raw) {
-			if isTwitterURL(raw) && !twitterResolverRequestAllowed(mediaCtx, req) {
-				continue
-			}
 			media := p.resolveKnownPlatform(mediaCtx, req, raw)
 			if strings.TrimSpace(media.Context) != "" {
 				parts = append(parts, media.Context)

@@ -324,10 +324,14 @@ func (c *DingTalkChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 		c.mu.RLock()
 		client := c.client
 		c.mu.RUnlock()
-		_, err := platformJSONRequest(ctx, client, http.MethodPost, webhook, nil, map[string]any{
+		payload := map[string]any{
 			"msgtype": "text",
 			"text":    map[string]string{"content": text},
-		})
+		}
+		if markdown, ok := dingTalkMarkdownPayload(text); ok {
+			payload = markdown
+		}
+		_, err := platformJSONRequest(ctx, client, http.MethodPost, webhook, nil, payload)
 		if err == nil {
 			return nil
 		}
@@ -350,7 +354,15 @@ func (c *DingTalkChannel) sendViaOpenAPI(ctx context.Context, msg OutgoingMessag
 	robotCode := firstNonEmpty(strings.TrimSpace(c.cfg.RobotCode), strings.TrimSpace(c.cfg.ClientID))
 	c.mu.RUnlock()
 
-	content, err := json.Marshal(map[string]string{"content": text})
+	// 主动推送用 msgKey 选消息模板：sampleMarkdown 的参数是 title + text，
+	// sampleText 只有 content，两者的 msgParam 结构不一样。
+	msgKey := "sampleText"
+	param := map[string]string{"content": text}
+	if markdown := downgradeMarkdownFor(text, dingTalkMarkdownFeatures); platformTextHasMarkdown(text) {
+		msgKey = "sampleMarkdown"
+		param = map[string]string{"title": dingTalkMarkdownTitle(text), "text": markdown}
+	}
+	content, err := json.Marshal(param)
 	if err != nil {
 		return err
 	}
@@ -358,7 +370,7 @@ func (c *DingTalkChannel) sendViaOpenAPI(ctx context.Context, msg OutgoingMessag
 	body := map[string]any{
 		"robotCode": robotCode,
 		"userIds":   []string{strings.TrimSpace(msg.UserID)},
-		"msgKey":    "sampleText",
+		"msgKey":    msgKey,
 		"msgParam":  string(content),
 	}
 	if group := strings.TrimSpace(msg.GroupID); group != "" {
@@ -366,7 +378,7 @@ func (c *DingTalkChannel) sendViaOpenAPI(ctx context.Context, msg OutgoingMessag
 		body = map[string]any{
 			"robotCode":          robotCode,
 			"openConversationId": group,
-			"msgKey":             "sampleText",
+			"msgKey":             msgKey,
 			"msgParam":           string(content),
 		}
 	}
@@ -540,4 +552,45 @@ func dingTalkEventFromCallback(data []byte, selfID string) (MessageEvent, string
 		event.MessageType = "private"
 	}
 	return event, strings.TrimSpace(callback.SessionWebhook), true
+}
+
+// dingTalkMarkdownFeatures 是钉钉 Markdown 消息认的子集：标题、粗体、斜体、链接、
+// 引用和列表。它不渲染代码块、行内代码、删除线和表格，那几样由 downgradeMarkdownFor
+// 就地降级，不会以字面量漏出去。
+var dingTalkMarkdownFeatures = platformMarkdownFeatures{
+	Headings: true,
+	Bold:     true,
+	Italic:   true,
+	Links:    true,
+	Quote:    true,
+	Lists:    true,
+}
+
+// dingTalkMarkdownPayload 在文本确实带 Markdown 时构造富文本消息体，否则回落纯文本。
+func dingTalkMarkdownPayload(text string) (map[string]any, bool) {
+	if !platformTextHasMarkdown(text) {
+		return nil, false
+	}
+	return map[string]any{
+		"msgtype": "markdown",
+		"markdown": map[string]string{
+			"title": dingTalkMarkdownTitle(text),
+			"text":  downgradeMarkdownFor(text, dingTalkMarkdownFeatures),
+		},
+	}, true
+}
+
+// dingTalkMarkdownTitle 取第一行有内容的文字当标题。
+//
+// 钉钉要求 markdown 消息必须带 title，但它只出现在通知栏预览里、正文并不显示，
+// 所以拿正文开头去填最贴切——通知里看到的就是这条消息的开头。
+func dingTalkMarkdownTitle(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#>-*+ "))
+		if line == "" {
+			continue
+		}
+		return truncateForChat(line, 20)
+	}
+	return "消息"
 }

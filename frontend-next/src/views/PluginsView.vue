@@ -327,16 +327,23 @@
         </div>
       </template>
       <div v-if="!isGitHubSettings && !isMusicSettings" class="stack plugin-settings-form">
-        <PluginSettingField
-          v-for="spec in visibleSettingsSpecs"
-          :key="spec.key"
-          :spec="spec"
-          :form="settingsForm"
-          :clearing="clearSecrets.includes(spec.key)"
-          :secret-configured="secretConfigured(spec.key)"
-          :secret-placeholder="secretPlaceholder(spec.key)"
-          @toggle-clear="toggleClearSecret"
-        />
+        <template v-for="spec in visibleSettingsSpecs" :key="spec.key">
+          <PlatformLevelRulesField
+            v-if="spec.type === 'platform_level_rules'"
+            :spec="spec"
+            :model-value="settingsForm[spec.key]"
+            @update:model-value="settingsForm[spec.key] = $event"
+          />
+          <PluginSettingField
+            v-else
+            :spec="spec"
+            :form="settingsForm"
+            :clearing="clearSecrets.includes(spec.key)"
+            :secret-configured="secretConfigured(spec.key)"
+            :secret-placeholder="secretPlaceholder(spec.key)"
+            @toggle-clear="toggleClearSecret"
+          />
+        </template>
       </div>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
@@ -446,6 +453,7 @@ import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
+import PlatformLevelRulesField from "../components/PlatformLevelRulesField.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";

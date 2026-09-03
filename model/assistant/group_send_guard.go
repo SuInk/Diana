@@ -16,10 +16,10 @@ import (
 )
 
 var (
-	errOutboundSend            = errors.New("chatbot: outbound send failed")
-	errGroupSendUnavailable    = errors.New("chatbot: group send target is unavailable")
-	errOutboundDeliveryDropped = errors.New("chatbot: outbound delivery dropped after backoff")
-	errOutboundChannelOffline  = errors.New("chatbot: outbound send deferred while the channel is offline")
+	errOutboundSend            = errors.New("diana: outbound send failed")
+	errGroupSendUnavailable    = errors.New("diana: group send target is unavailable")
+	errOutboundDeliveryDropped = errors.New("diana: outbound delivery dropped after backoff")
+	errOutboundChannelOffline  = errors.New("diana: outbound send deferred while the channel is offline")
 )
 
 const (
@@ -321,7 +321,7 @@ func outboundBackoffDelay(event MessageEvent, action string, failures int, polic
 func offlineOutboundSendError(groupID string) error {
 	return &outboundSendError{
 		GroupID:        groupID,
-		Cause:          fmt.Errorf("chatbot: channel offline while sending to group %s; delivery deferred for durable retry", groupID),
+		Cause:          fmt.Errorf("diana: channel offline while sending to group %s; delivery deferred for durable retry", groupID),
 		ChannelOffline: true,
 	}
 }
@@ -333,7 +333,7 @@ func droppedOutboundSendError(groupID, cause string) error {
 	}
 	return &outboundSendError{
 		GroupID:         groupID,
-		Cause:           fmt.Errorf("chatbot: dropped outbound delivery for group %s: %s", groupID, cause),
+		Cause:           fmt.Errorf("diana: dropped outbound delivery for group %s: %s", groupID, cause),
 		DeliveryDropped: true,
 	}
 }
@@ -350,7 +350,7 @@ func (r *Runtime) enterOutboundDropCooldown(event MessageEvent, action string, g
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.outbound_delivery_dropped",
+		Action:  "diana.outbound_delivery_dropped",
 		Message: "群消息连续发送失败，已丢弃等待结果并进入冷却",
 		Detail:  gate.lastError,
 		Actor:   oneBotEventActor(event),
@@ -376,7 +376,7 @@ func (r *Runtime) recordOutboundDeliveryBackoff(event MessageEvent, action strin
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.outbound_delivery_backoff",
+		Action:  "diana.outbound_delivery_backoff",
 		Message: "群消息发送失败，已按指数退避等待下次尝试",
 		Detail:  cause.Error(),
 		Actor:   oneBotEventActor(event),
@@ -401,7 +401,7 @@ func (r *Runtime) recordOutboundDeliveryRecovered(event MessageEvent, action str
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.outbound_delivery_recovered",
+		Action:  "diana.outbound_delivery_recovered",
 		Message: "群消息发送已恢复，后续消息将连续放行",
 		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
@@ -518,7 +518,7 @@ func (r *Runtime) blockedGroupSendError(event MessageEvent) error {
 	}
 	return &outboundSendError{
 		GroupID:          groupID,
-		Cause:            fmt.Errorf("chatbot: sending to group %s is disabled: %s", groupID, reason),
+		Cause:            fmt.Errorf("diana: sending to group %s is disabled: %s", groupID, reason),
 		GroupUnavailable: true,
 	}
 }
@@ -556,7 +556,7 @@ func (r *Runtime) markGroupSendUnavailable(ctx context.Context, event MessageEve
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "chatbot.group_send_disabled",
+		Action:  "diana.group_send_disabled",
 		Message: "群发送目标失效，已停止向该群发送后续消息",
 		Detail:  reason,
 		Actor:   oneBotEventActor(event),

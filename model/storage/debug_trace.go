@@ -37,10 +37,12 @@ WHERE id = ?
 	}
 	var source assistant.MessageEvent
 	_ = json.Unmarshal([]byte(payload), &source)
+	// 动作名历史上改过两轮（assistant -> chatbot -> diana），旧库里存的还是旧名字。
+	// 这里把用过的名字都列上，否则升级之后历史调试轨迹会整段查不出来。
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, kind, level, action, message, detail, actor, target, metadata, created_at
 FROM app_logs
-WHERE kind = ? AND action IN ('chatbot.debug_trace') AND target = ?
+WHERE kind = ? AND action IN ('diana.debug_trace', 'chatbot.debug_trace') AND target = ?
 ORDER BY created_at ASC, id ASC
 `, string(LogKindDebug), messageID)
 	if err != nil {

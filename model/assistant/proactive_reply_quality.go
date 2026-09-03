@@ -334,7 +334,7 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 		if need.Quality {
 			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
 		}
-		log.Printf("chatbot reply audit skipped: %v", err)
+		log.Printf("diana reply audit skipped: %v", err)
 		return replyControlIntent{}, nil
 	}
 	intent := replyControlIntentFromAudit(decision)

@@ -160,7 +160,7 @@ func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	}
 	var relationshipLog *applog.Entry
 	for index := range logs.entries {
-		if logs.entries[index].Action == "chatbot.relationship_evaluation" {
+		if logs.entries[index].Action == "diana.relationship_evaluation" {
 			relationshipLog = &logs.entries[index]
 			break
 		}

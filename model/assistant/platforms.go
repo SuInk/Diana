@@ -58,15 +58,24 @@ type PlatformDefinition struct {
 	// CallbackPath 是 InboundCallback 平台在本机监听的回调路径，供 WebUI 拼出
 	// 完整地址让用户填到对方后台。
 	CallbackPath string `json:"callback_path,omitempty"`
+	// RichText 表示这个平台的出站适配器能把 Markdown 渲染出来。
+	//
+	// 判据是「Diana 实际发得出富文本」，不是「平台文档里写了支持」：标成 true 而
+	// 适配器还在发纯文本 msgtype，只会让 ** 和 # 以字面量漏进聊天窗口。所以新增
+	// 平台时先把出站改成发富文本，再来翻这个字段。
+	//
+	// 各家认的 Markdown 子集并不一样（钉钉不认代码块、企业微信不认斜体、飞书不认
+	// 标题，三家都不认表格），差异由各自适配器的 platformMarkdownFeatures 抹平。
+	RichText bool `json:"rich_text,omitempty"`
 }
 
 var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "统一的 OneBot v11 反向 WebSocket 接入", Inbound: InboundReverseWS},
-	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound},
+	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound},
-	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound},
-	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath},
-	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath},
+	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
+	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath, RichText: true},
+	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath, RichText: true},
 }
 
 // IsOneBotPlatform 判断平台是否走 OneBot 反向 WebSocket 适配器。
@@ -108,6 +117,13 @@ func PlatformInboundMode(id string) PlatformInbound {
 		return InboundOutbound
 	}
 	return def.Inbound
+}
+
+// PlatformSupportsRichText 判断平台的出站适配器能不能渲染 Markdown。
+// 未知平台按不能处理：宁可多降级一次，也不要把标记以字面量发出去。
+func PlatformSupportsRichText(id string) bool {
+	def, ok := PlatformByID(id)
+	return ok && def.RichText
 }
 
 // PlatformNeedsCallback 判断平台是否要求本机暴露公网回调地址。
@@ -176,7 +192,7 @@ func PlatformByID(id string) (PlatformDefinition, bool) {
 // ValidatePlatform 校验平台是否有可用适配器。
 func ValidatePlatform(id string) error {
 	if _, ok := PlatformByID(id); !ok {
-		return fmt.Errorf("chatbot: unsupported platform %q", id)
+		return fmt.Errorf("diana: unsupported platform %q", id)
 	}
 	return nil
 }

@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -476,15 +475,32 @@ func twitterMetaText(nickname string, post twitterPost) string {
 	return strings.Join(lines, "\n")
 }
 
-func twitterResolverRequestAllowed(ctx context.Context, req PluginRequest) bool {
+type resolverPlatformLevelRule struct {
+	Platform      string
+	MinimumLevel  int
+	UnknownPolicy string
+	OwnerBypass   bool
+	MentionBypass bool
+	Enabled       bool
+}
+
+func resolverPlatformRequestAllowed(ctx context.Context, req PluginRequest, platform string) bool {
 	if req.Event.Kind != EventKindGroup {
 		return true
 	}
-	if ownerID := strings.TrimSpace(req.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(req.Event.UserID) {
+	if eventPlatform := strings.TrimSpace(req.Event.Platform); eventPlatform != "" && !IsOneBotPlatform(eventPlatform) {
 		return true
 	}
-	minimum := twitterMinimumGroupLevel()
-	if minimum <= 0 {
+	rule, matched := resolverPlatformLevelRuleFor(req.Settings, platform)
+	if !matched || !rule.Enabled || rule.MinimumLevel <= 0 {
+		return true
+	}
+	if rule.OwnerBypass {
+		if ownerID := strings.TrimSpace(req.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(req.Event.UserID) {
+			return true
+		}
+	}
+	if rule.MentionBypass && req.Event.ToMe {
 		return true
 	}
 	level, ok := 0, false
@@ -505,19 +521,44 @@ func twitterResolverRequestAllowed(ctx context.Context, req PluginRequest) bool 
 			level, ok = parseOneBotGroupLevel(oneBotGroupMemberInfoFromData(req.Event.GroupID, data).Level)
 		}
 	}
-	return ok && level >= minimum
+	if !ok {
+		return rule.UnknownPolicy == LevelUnknownAllow
+	}
+	return level >= rule.MinimumLevel
 }
 
-func twitterMinimumGroupLevel() int {
-	value := strings.TrimSpace(os.Getenv("DIANA_TWITTER_MIN_GROUP_LEVEL"))
-	if value == "" {
-		return defaultTwitterMinimumGroupLevel
+func resolverPlatformLevelRuleFor(settings SettingValues, platform string) (resolverPlatformLevelRule, bool) {
+	platform = strings.TrimSpace(strings.ToLower(platform))
+	raw := settings[resolverSettingPlatformLevelRules]
+	if raw == nil && platform == "x" {
+		return resolverPlatformLevelRule{Platform: "x", MinimumLevel: defaultTwitterMinimumGroupLevel, UnknownPolicy: LevelUnknownDeny, OwnerBypass: true, Enabled: true}, true
 	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 0 {
-		return defaultTwitterMinimumGroupLevel
+	items, ok := raw.([]map[string]any)
+	if !ok {
+		if generic, genericOK := raw.([]any); genericOK {
+			items = make([]map[string]any, 0, len(generic))
+			for _, item := range generic {
+				if rule, ruleOK := item.(map[string]any); ruleOK {
+					items = append(items, rule)
+				}
+			}
+		}
 	}
-	return parsed
+	for _, item := range items {
+		candidate, _ := item["platform"].(string)
+		if strings.TrimSpace(strings.ToLower(candidate)) != platform {
+			continue
+		}
+		return resolverPlatformLevelRule{
+			Platform:      platform,
+			MinimumLevel:  SettingValues(item).Int("minimum_level", 0),
+			UnknownPolicy: SettingValues(item).String("unknown_policy", LevelUnknownDeny),
+			OwnerBypass:   boolValueFromMap(item, "owner_bypass", true),
+			MentionBypass: boolValueFromMap(item, "mention_bypass", false),
+			Enabled:       boolValueFromMap(item, "enabled", true),
+		}, true
+	}
+	return resolverPlatformLevelRule{}, false
 }
 
 func downloadTwitterMediaFile(ctx context.Context, media twitterMedia) string {
