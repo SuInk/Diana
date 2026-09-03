@@ -550,3 +550,109 @@ func TestShrinkContextForRetryHalvesDownToTheFloor(t *testing.T) {
 		t.Fatalf("final budget = %d, want the floor %d", last, contextOverflowFloorTokens)
 	}
 }
+
+// 「llm: provider request failed: ... 403 Forbidden」不说明是哪个配置档在拒绝，
+// 配了好几个的时候看不出该去改哪一个。上游调用失败要带上配置档、provider 和模型。
+func TestProviderFailureNamesTheProfileAndModel(t *testing.T) {
+	failing := &fixedRetryErrorProvider{err: errors.New(`llm: provider request failed: POST "https://gateway.test/v1": 403 Forbidden`)}
+	provider, err := newProfileFailoverLLMProvider([]llm.Profile{{
+		ID:     "first",
+		Name:   "主力中转",
+		Group:  "default",
+		Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-5.6-terra"},
+	}}, func(llm.ProviderConfig) (LLMProvider, error) {
+		return failing, nil
+	}, false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = provider.Generate(context.Background(), llm.GenerateRequest{})
+	if err == nil {
+		t.Fatal("want the provider failure to surface")
+	}
+	for _, want := range []string{"主力中转", string(llm.ProviderOpenAICompatible), "gpt-5.6-terra", "403 Forbidden"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%q must mention %q", err.Error(), want)
+		}
+	}
+	// 标注只是包了一层给人看的身份，原始错误的判定不能因此改变。
+	if !shouldFailoverLLMError(err) {
+		t.Fatal("a 403 must still be treated as a failover-worthy provider error")
+	}
+}
+
+// 请求自带的模型优先于配置档默认模型：报出来的要是这次真正调用的那个。
+func TestProviderFailureNamesTheRequestedModel(t *testing.T) {
+	failing := &fixedRetryErrorProvider{err: errors.New("llm: provider request failed: 500 Internal Server Error")}
+	provider, err := newProfileFailoverLLMProvider([]llm.Profile{{
+		ID:     "first",
+		Name:   "主力中转",
+		Group:  "default",
+		Config: llm.ProviderConfig{Provider: llm.ProviderAnthropic, Model: "profile-default"},
+	}}, func(llm.ProviderConfig) (LLMProvider, error) {
+		return failing, nil
+	}, false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = provider.Generate(context.Background(), llm.GenerateRequest{Model: "claude-sonnet-4-5"})
+	if err == nil || !strings.Contains(err.Error(), "claude-sonnet-4-5") {
+		t.Fatalf("err=%v must name the model the request actually asked for", err)
+	}
+	if strings.Contains(err.Error(), "profile-default") {
+		t.Fatalf("err=%v must not name the unused profile default model", err)
+	}
+}
+
+// 内容安全拒绝不是「上游坏了」，标上配置档只会让人以为是配置问题。
+func TestContentPolicyRejectionIsNotLabelledAsAProviderFault(t *testing.T) {
+	failing := &fixedRetryErrorProvider{err: errors.New("content_policy_violation: blocked")}
+	provider, err := newProfileFailoverLLMProvider([]llm.Profile{{
+		ID:     "first",
+		Name:   "主力中转",
+		Group:  "default",
+		Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-5.6-terra"},
+	}}, func(llm.ProviderConfig) (LLMProvider, error) {
+		return failing, nil
+	}, false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = provider.Generate(context.Background(), llm.GenerateRequest{})
+	if !errors.Is(err, errContentPolicyRejection) {
+		t.Fatalf("err=%v, want content policy rejection", err)
+	}
+	if strings.Contains(err.Error(), "配置档") {
+		t.Fatalf("err=%q must not be labelled with a profile", err.Error())
+	}
+}
+
+// 超时提示改写过正文，身份要单独补回去，否则又只剩「上游超时了」。
+func TestTimeoutNoticeStillNamesTheProfile(t *testing.T) {
+	failing := &fixedRetryErrorProvider{err: fmt.Errorf("llm: response header timeout after 60s: %w", context.DeadlineExceeded)}
+	provider, err := newProfileFailoverLLMProvider([]llm.Profile{{
+		ID:     "first",
+		Name:   "主力中转",
+		Group:  "default",
+		Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-5-mini"},
+	}}, func(llm.ProviderConfig) (LLMProvider, error) {
+		return failing, nil
+	}, false, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = provider.Generate(context.Background(), llm.GenerateRequest{})
+	notice := publicChatErrorMessage(err)
+	if !strings.HasPrefix(notice, "上游模型服务请求超时") {
+		t.Fatalf("notice=%q, want the rewritten timeout message", notice)
+	}
+	for _, want := range []string{"主力中转", "gpt-5-mini"} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("notice=%q must mention %q", notice, want)
+		}
+	}
+}

@@ -50,15 +50,25 @@ func publicChatErrorMessage(err error) string {
 	}
 	if strings.Contains(lower, "client.timeout exceeded while awaiting headers") ||
 		strings.Contains(lower, "timeout awaiting response headers") {
-		return "上游模型服务响应超时，请稍后重试。"
+		return withProviderAttemptLabel("上游模型服务响应超时，请稍后重试。", err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(lower, "context deadline exceeded") {
-		return "上游模型服务请求超时，请稍后重试。"
+		return withProviderAttemptLabel("上游模型服务请求超时，请稍后重试。", err)
 	}
 	if strings.Contains(lower, "output is empty") {
-		return "上游模型服务暂时没有返回有效内容，请稍后重试。"
+		return withProviderAttemptLabel("上游模型服务暂时没有返回有效内容，请稍后重试。", err)
 	}
 	return sanitizePublicErrorDetail(raw)
+}
+
+// withProviderAttemptLabel 把「哪个配置档、哪个模型」补回那些改写过正文的提示。
+// 这几条提示原本只说「上游超时了」，配了多个配置档时看不出该去查哪一个。
+func withProviderAttemptLabel(message string, err error) string {
+	label := strings.TrimSpace(llmProviderAttemptLabel(err))
+	if label == "" {
+		return message
+	}
+	return message + "（" + sanitizePublicErrorDetail(label) + "）"
 }
 
 func publicImageMediaErrorMessage(err error) string {
