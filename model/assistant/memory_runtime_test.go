@@ -134,8 +134,9 @@ func TestStructuredMemoryRankingExcludesUnrelatedFacts(t *testing.T) {
 	if !strings.Contains(contextText, "稳定事实") || !strings.Contains(contextText, "Alice的猫叫小白") || strings.Contains(contextText, "舞萌DX") {
 		t.Fatalf("compiled memory context = %s", contextText)
 	}
-	if !strings.Contains(contextText, "依据") || ranked[0].RetrievalReason == "" {
-		t.Fatalf("retrieval explanation missing: ranked=%#v context=%s", ranked, contextText)
+	// 检索依据只留在排序结果里给排障看，不再写进提示词：模型用不上，每条白付十几个 token。
+	if ranked[0].RetrievalReason == "" || strings.Contains(contextText, "依据 ") || strings.Contains(contextText, "置信 ") {
+		t.Fatalf("retrieval explanation misplaced: ranked=%#v context=%s", ranked, contextText)
 	}
 }
 

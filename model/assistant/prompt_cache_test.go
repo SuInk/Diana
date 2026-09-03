@@ -81,19 +81,18 @@ func TestAgentVideoHistoryLineCarriesCachedFrameDescriptions(t *testing.T) {
 
 	text := agentImageHistoryPromptTextWithDescriptions(event, 1120, []string{"视频关键帧1摘要=桌面上放着一台笔记本电脑"})
 	for _, want := range []string{
-		"message_id=video-message-1",
-		"video_count=1",
-		"video_frame_count=1",
-		"audio_count=0",
-		"file_count=0",
+		"【媒体 message_id=video-message-1：视频×1、视频关键帧×1】",
 		"视频关键帧1摘要=桌面上放着一台笔记本电脑",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("video history line missing %q: %q", want, text)
 		}
 	}
-	if !strings.Contains(text, dianaHistoryImagesToolName) {
-		t.Fatalf("video history must advertise the historical media tool: %q", text)
+	// 为零的种类和工具调用说明不再逐行重复：那些在 system 头部只说一次。
+	for _, stale := range []string{"语音", "文件", "count=", dianaHistoryImagesToolName, "当前未附加"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("video history line carries boilerplate %q: %q", stale, text)
+		}
 	}
 }
 
@@ -108,15 +107,15 @@ func TestAgentImageHistoryLineCarriesCachedDescriptions(t *testing.T) {
 	}
 
 	bare := agentImageHistoryPromptTextWithDescriptions(event, 1120, nil)
-	if !strings.Contains(bare, "message_id=image-message-1；image_count=1；video_count=0；video_frame_count=0；audio_count=0；file_count=0；当前未附加原图、视频帧或其他媒体原件") {
+	if !strings.Contains(bare, "【媒体 message_id=image-message-1：图片×1】") {
 		t.Fatalf("bare line = %q", bare)
 	}
-	if strings.Contains(bare, "报纸与干花") || !strings.Contains(bare, dianaHistoryImagesToolName) {
+	if strings.Contains(bare, "报纸与干花") {
 		t.Fatalf("bare line should not invent a description: %q", bare)
 	}
 
 	described := agentImageHistoryPromptTextWithDescriptions(event, 1120, []string{"图片1摘要=报纸与干花拼贴的二次元人物"})
-	if !strings.Contains(described, "image_count=1") {
+	if !strings.Contains(described, "图片×1") {
 		t.Fatalf("described line lost the image count: %q", described)
 	}
 	if !strings.Contains(described, "图片1摘要=报纸与干花拼贴的二次元人物") {
@@ -136,8 +135,7 @@ func TestAgentHistoryLineCarriesVoiceAndSupportedFileDescriptions(t *testing.T) 
 	descriptions := historicalNonImageMediaDescriptions(event.Segments)
 	text := agentImageHistoryPromptTextWithDescriptions(event, 0, descriptions)
 	for _, want := range []string{
-		"audio_count=1",
-		"file_count=2",
+		"【媒体 message_id=media-message-1：语音×1、文件×2】",
 		"语音1转写=明天下午三点开会",
 		"文件1摘要=文件名：会议纪要.pdf；格式：pdf；正文尚未解析",
 		"文件2摘要=文件名：数据.csv；格式：csv；内容摘要：本月订单共 42 条",

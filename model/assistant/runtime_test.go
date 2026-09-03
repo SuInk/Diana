@@ -2386,7 +2386,7 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 		t.Fatalf("history images were eagerly attached to first request: %#v", firstRequest.Messages)
 	}
 	firstText := requestTextContent(firstRequest)
-	for _, want := range []string{"message_id=img-1", "message_id=img-2", "message_id=img-3", "当前未附加原图"} {
+	for _, want := range []string{"message_id=img-1", "message_id=img-2", "message_id=img-3", "图片×1"} {
 		if !strings.Contains(firstText, want) {
 			t.Fatalf("first request missing %q: %#v", want, firstRequest.Messages)
 		}
