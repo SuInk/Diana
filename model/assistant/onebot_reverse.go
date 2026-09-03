@@ -357,8 +357,8 @@ func (s *OneBotReverseServer) handleFrame(data []byte) error {
 		s.updateAccountStatus(envelope.Status)
 		return nil
 	}
-	if envelope.PostType != "message" && envelope.PostType != "notice" {
-		// request/meta 等其它事件目前不触发机器人回复。
+	if envelope.PostType != "message" && envelope.PostType != "notice" && envelope.PostType != "request" {
+		// 未知事件目前不触发机器人处理。
 		return nil
 	}
 

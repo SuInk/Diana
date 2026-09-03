@@ -23,6 +23,7 @@ const (
 	EventKindPrivate EventKind = "private"
 	EventKindGroup   EventKind = "group"
 	EventKindNotice  EventKind = "notice"
+	EventKindRequest EventKind = "request"
 	EventKindMeta    EventKind = "meta"
 )
 
@@ -146,6 +147,7 @@ type MessageEvent struct {
 	historyRecallCandidate bool
 	userProfile            UserMemoryProfile
 	userProfileLoaded      bool
+	oneBotRequest          *OneBotRequestEvent
 }
 
 // ExternalEvent is trusted host-generated context. It is persisted in the

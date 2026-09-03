@@ -56,7 +56,7 @@ func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          capabilityKnowledgePluginID,
 		Name:        "能力知识库",
-		Version:     "0.1.1",
+		Version:     "0.1.2",
 		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
 		Official:    true,
 		BuiltIn:     true,
@@ -214,7 +214,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:voice", Title: "配置音色语音回复", Content: "用户明确要求语音回复、朗读或念出文字时，可调用 diana.tts 通过语音合成插件生成已配置音色并直接发送 语音；普通文字回复不会自动转语音。", Source: "core", Enabled: true},
 	{ID: "core:ocr", Title: "文件与 OCR", Content: "能解析 PDF 和文件；macOS 使用 PDFKit/Vision，本地原生路径不可用时回退 PDFium 与视觉 LLM。", Source: "core", Enabled: true, Required: "熟悉"},
 	{ID: "core:group", Title: "群资料与成员", Content: "通过 diana.onebot_group 获取群名、群成员列表、成员昵称、群头像和成员头像，可查找并真实 @ 一名或多名成员。", Source: "core", Enabled: true},
-	{ID: "core:onebot-v11", Title: "OneBot v11 协议技能", Content: "通过 diana.onebot_v11 调用当前连接的 OneBot v11 标准动作及实现扩展；主人拥有完整调用权限，普通成员只可调用后端固定的标准只读白名单，凭据、修改和未知动作默认拒绝。", Source: "core", Enabled: true},
+	{ID: "core:onebot-v11", Title: "OneBot v11 协议技能", Content: "通过 diana.onebot_v11 调用当前连接的 OneBot v11 标准动作及实现扩展；主人拥有完整调用权限，普通成员只可调用后端固定的标准只读白名单，凭据、修改和未知动作默认拒绝。好友请求、成员入群申请和机器人群邀请会持久化并私聊通知主人，由主人通过 diana.onebot_requests 批准或拒绝。", Source: "core", Enabled: true},
 	{ID: "core:runtime-model", Title: "自己在用什么模型", Content: "通过 diana.runtime_model 读出本轮实际生效的模型 ID、Provider 名称、接口协议和模型分组（对话/视觉理解等）；同一次对话里换了用途也会跟着变。它只读不改；主人要换模型时由 diana.llm_config 改模型分配里的对话、视觉理解、意图识别或图片生成四档之一。", Source: "core", Enabled: true},
 	{ID: "core:version", Title: "自己的版本与更新状态", Content: "通过 diana.version 报出当前版本号、是正式发布版还是源码构建、这台机器上这个版本什么时候装上的、本次运行了多久、跑在什么系统架构上，以及项目的开源地址、最新发布版本、有没有新版本可用、这台机器能不能自更新。", Source: "core", Enabled: true},
 	{ID: "core:notebook", Title: "笔记本与梗记忆", Content: "通过 diana.notebook 维护群里的梗、黑话、缩写和内部称呼：记下新说法、更新变了的释义、作废不再成立的条目，删错了还能恢复。当前消息里出现已收录的说法时，释义会自动进入回复上下文。", Source: "core", Enabled: true},
