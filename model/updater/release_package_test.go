@@ -628,6 +628,38 @@ func TestServiceSupervisorRestartCommands(t *testing.T) {
 	}
 }
 
+func TestSystemdReleaseHelperRunsInIndependentTransientUnit(t *testing.T) {
+	supervisor := serviceSupervisor{Kind: supervisorSystemd, Label: "diana.service", Domain: "user"}
+	if !releaseHelperNeedsSystemdUnit("linux", supervisor) {
+		t.Fatal("managed Linux systemd install did not select a transient helper unit")
+	}
+	if releaseHelperNeedsSystemdUnit("darwin", supervisor) || releaseHelperNeedsSystemdUnit("linux", serviceSupervisor{}) {
+		t.Fatal("non-systemd install selected a transient helper unit")
+	}
+
+	args := systemdReleaseHelperArgs(supervisor, "diana-release-update-1", "/opt/diana/helper", "/opt/diana/plan.json", "/opt/diana/update.log")
+	joined := strings.Join(args, "\n")
+	for _, want := range []string{
+		"--user",
+		"--collect",
+		"--unit=diana-release-update-1",
+		"--property=Type=exec",
+		"--property=WorkingDirectory=/opt/diana",
+		"--property=StandardOutput=append:/opt/diana/update.log",
+		"--property=StandardError=append:/opt/diana/update.log",
+		"/opt/diana/helper",
+		InternalReleaseApplyCommand,
+		"/opt/diana/plan.json",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("systemd-run args missing %q: %#v", want, args)
+		}
+	}
+	if systemArgs := systemdReleaseHelperArgs(serviceSupervisor{Kind: supervisorSystemd, Label: "diana.service", Domain: "system"}, "unit", "/helper", "/plan", "/log"); len(systemArgs) > 0 && systemArgs[0] == "--user" {
+		t.Fatalf("system service incorrectly used --user: %#v", systemArgs)
+	}
+}
+
 func TestSystemdUnitFromCgroup(t *testing.T) {
 	cases := map[string]string{
 		"0::/user.slice/user-501.slice/user@501.service/app.slice/diana.service\n":         "diana.service",
