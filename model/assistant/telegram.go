@@ -683,14 +683,28 @@ func (c *TelegramChannel) resolveIncomingMedia(ctx context.Context, event Messag
 }
 
 func (c *TelegramChannel) downloadIncomingFile(ctx context.Context, event MessageEvent, segment MessageSegment) (string, error) {
-	fileID := strings.TrimSpace(segment.Data["file_id"])
-	result, err := c.CallAPI(ctx, "getFile", map[string]any{"file_id": fileID})
+	body, remotePath, err := c.downloadFileByID(ctx, strings.TrimSpace(segment.Data["file_id"]), telegramMaxUploadBytes)
 	if err != nil {
 		return "", err
 	}
+	return writeTelegramHistoryMedia(event, segment, remotePath, body)
+}
+
+// downloadFileByID 把 file_id 换成文件内容。下载地址里带着 Bot Token
+// （/file/bot<token>/...），所以这个 URL 只能留在进程内部，任何情况下都不能
+// 交给浏览器去请求。
+func (c *TelegramChannel) downloadFileByID(ctx context.Context, fileID string, maxBytes int) ([]byte, string, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return nil, "", fmt.Errorf("telegram: file id is required")
+	}
+	result, err := c.CallAPI(ctx, "getFile", map[string]any{"file_id": fileID})
+	if err != nil {
+		return nil, "", err
+	}
 	remotePath := strings.TrimSpace(stringFromAny(result["file_path"]))
 	if remotePath == "" {
-		return "", fmt.Errorf("getFile returned no file_path")
+		return nil, "", fmt.Errorf("getFile returned no file_path")
 	}
 	c.mu.RLock()
 	cfg := c.cfg
@@ -706,24 +720,24 @@ func (c *TelegramChannel) downloadIncomingFile(ctx context.Context, event Messag
 	downloadURL := base + "/file/bot" + strings.TrimSpace(cfg.BotToken) + "/" + strings.TrimLeft(remotePath, "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("file download HTTP %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("file download HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, telegramMaxUploadBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
-	if len(body) == 0 || len(body) > telegramMaxUploadBytes {
-		return "", fmt.Errorf("downloaded media size is invalid")
+	if len(body) == 0 || len(body) > maxBytes {
+		return nil, "", fmt.Errorf("downloaded media size is invalid")
 	}
-	return writeTelegramHistoryMedia(event, segment, remotePath, body)
+	return body, remotePath, nil
 }
 
 func writeTelegramHistoryMedia(event MessageEvent, segment MessageSegment, remotePath string, body []byte) (string, error) {
