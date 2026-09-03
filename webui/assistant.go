@@ -104,6 +104,11 @@ type pluginSettingsPayload struct {
 	ClearSecrets []string `json:"clear_secrets,omitempty"`
 }
 
+type musicConnectionTestPayload struct {
+	Settings     map[string]any `json:"settings"`
+	ClearSecrets []string       `json:"clear_secrets,omitempty"`
+}
+
 type groupTestPayload struct {
 	GroupID string `json:"group_id"`
 	Message string `json:"message"`
@@ -282,6 +287,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
 	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
 	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
+	router.POST(base+"/plugins/music/test", h.testMusicConnections)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
 	router.GET(base+"/plugins/repository-publish/drafts", h.listRepositoryIssueDrafts)
 	router.POST(base+"/group-admin/challenge", h.startGroupAdminChallenge)
@@ -785,6 +791,34 @@ func (h *BotHandler) updatePluginSettings(c *gin.Context) {
 	h.persistState()
 	recordRequestOperation(c, h.logs, "assistant.plugin.settings", "机器人插件设置已更新", state.Manifest.ID, pluginLogMetadata(state))
 	c.JSON(http.StatusOK, state.Redacted())
+}
+
+func (h *BotHandler) testMusicConnections(c *gin.Context) {
+	var payload musicConnectionTestPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.plugin.music.test", err, "official.music", nil)
+		return
+	}
+	plugin, settings, ok := h.runtime.Plugins().PluginForConfiguration("official.music")
+	if !ok {
+		h.writeError(c, http.StatusNotFound, "assistant.plugin.music.test", assistant.ErrPluginNotFound, "official.music", nil)
+		return
+	}
+	music, ok := plugin.(*assistant.MusicPlugin)
+	if !ok {
+		h.writeError(c, http.StatusInternalServerError, "assistant.plugin.music.test", errors.New("music plugin has unexpected implementation"), "official.music", nil)
+		return
+	}
+	for key, value := range payload.Settings {
+		if text, secret := value.(string); secret && strings.TrimSpace(text) == "" && strings.HasSuffix(key, "_cookie") {
+			continue
+		}
+		settings[key] = value
+	}
+	for _, key := range payload.ClearSecrets {
+		delete(settings, strings.TrimSpace(key))
+	}
+	c.JSON(http.StatusOK, gin.H{"sources": music.TestConnections(c.Request.Context(), settings)})
 }
 
 // writePluginError 按插件错误类型返回合适的 HTTP 状态码。

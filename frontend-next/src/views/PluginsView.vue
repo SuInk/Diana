@@ -183,7 +183,7 @@
     <Modal
       v-if="settingsTarget"
       :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
-      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID"
+      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID"
       @close="closeSettings"
     >
       <!-- 依赖多数时候是齐的，默认折叠把弹窗顶部让给真正要改的设置项；
@@ -286,7 +286,47 @@
           <ArrowRight :size="14" aria-hidden="true" />
         </button>
       </template>
-      <div v-if="!isGitHubSettings" class="stack plugin-settings-form">
+      <template v-if="isMusicSettings">
+        <div class="plugin-settings-section-head">
+          <h3>曲库与会员能力</h3>
+          <p>不配置凭据也能尝试公开试听；会员歌曲需要对应平台登录态。凭据只写入服务器，页面不会回显原文。</p>
+        </div>
+        <div class="music-platform-grid">
+          <section v-for="platform in musicPlatforms" :key="platform.key" class="music-platform-card">
+            <div class="music-platform-head">
+              <div>
+                <h4>{{ platform.label }}</h4>
+                <span class="hint">{{ musicPlatformSummary(platform.key) }}</span>
+              </div>
+              <span class="badge" :class="musicStatusClass(platform.key)">{{ musicStatusLabel(platform.key) }}</span>
+            </div>
+            <p class="music-platform-guide">{{ platform.guide }}</p>
+            <PluginSettingField
+              v-for="spec in musicSpecsFor(platform.key)"
+              :key="spec.key"
+              :spec="spec"
+              :form="settingsForm"
+              :clearing="clearSecrets.includes(spec.key)"
+              :secret-configured="secretConfigured(spec.key)"
+              :secret-placeholder="secretPlaceholder(spec.key)"
+              @toggle-clear="toggleClearSecret"
+            />
+            <p v-if="musicCredentialHint(platform.key)" class="music-credential-hint">{{ musicCredentialHint(platform.key) }}</p>
+          </section>
+        </div>
+        <button class="btn music-test-button" type="button" :disabled="testingMusic" @click="testMusicSettings">
+          <RefreshCw :size="15" :class="{ spin: testingMusic }" aria-hidden="true" />
+          {{ testingMusic ? "正在测试三家曲库" : "测试连接与播放能力" }}
+        </button>
+        <div class="plugin-settings-section-head plugin-settings-subsection">
+          <h3>播放设置</h3>
+          <p>下面这些设置同时作用于所有已启用曲库。</p>
+        </div>
+        <div class="stack plugin-settings-form">
+          <PluginSettingField v-for="spec in musicGeneralSpecs" :key="spec.key" :spec="spec" :form="settingsForm" />
+        </div>
+      </template>
+      <div v-if="!isGitHubSettings && !isMusicSettings" class="stack plugin-settings-form">
         <PluginSettingField
           v-for="spec in visibleSettingsSpecs"
           :key="spec.key"
@@ -392,12 +432,14 @@ import {
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
+  testMusicConnections,
   listPluginDependencies,
   listBotGroups,
   type PluginSettingSpec,
   type PluginState,
   type ResolverDependency,
-  type BotGroupSummary
+  type BotGroupSummary,
+  type MusicConnectionStatus
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -422,6 +464,7 @@ const groupRelationsPluginID = "group_relations";
 const repositoryWatchPluginID = "official.repository-watch";
 const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
+const musicPluginID = "official.music";
 // 依赖按插件 ID 分组：链接解析要 yt-dlp/ffmpeg/node，网页渲染要一个
 // Chrome/Chromium，以后再有别的插件也不必再往模板里加一个 id 判断。
 const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
@@ -513,6 +556,66 @@ const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.
 const repositoryPublishTarget = computed(() => plugins.value.find((plugin) => plugin.manifest.id === repositoryPublishPluginID) ?? null);
 const repositoryPublishSpecs = computed<PluginSettingSpec[]>(() => repositoryPublishTarget.value?.manifest.settings ?? []);
 const isGitHubSettings = computed(() => settingsTarget.value?.manifest.id === repositoryWatchPluginID);
+const isMusicSettings = computed(() => settingsTarget.value?.manifest.id === musicPluginID);
+const testingMusic = ref(false);
+const musicTestResults = ref<Record<string, MusicConnectionStatus>>({});
+const musicPlatforms = [
+  { key: "netease", label: "网易云音乐", guide: "公开试听可直接使用；会员歌曲建议填写自建 NeteaseCloudMusicApi，并从浏览器登录 Cookie 中复制 MUSIC_U 的值。" },
+  { key: "qq", label: "QQ 音乐", guide: "可直接填写浏览器登录后的完整 Cookie；通常应包含 uin 或 qqmusic_uin，以及 qm_keyst 或 qqmusic_key。自建 API 可选。" },
+  { key: "kugou", label: "酷狗音乐", guide: "公开搜索无需配置。会员歌曲需要同时填写自建 KuGouMusicApi 地址和完整 Cookie，Cookie 建议包含 token、userid、dfid。" },
+] as const;
+const musicCredentialKeys = new Set(musicPlatforms.flatMap((item) => [`${item.key}_api_base`, `${item.key}_cookie`]));
+const musicGeneralSpecs = computed(() => settingsSpecs.value.filter((spec) => !musicCredentialKeys.has(spec.key)));
+
+function musicSpecsFor(source: string): PluginSettingSpec[] {
+  return settingsSpecs.value.filter((spec) => spec.key === `${source}_api_base` || spec.key === `${source}_cookie`);
+}
+
+function musicPlatformSummary(source: string): string {
+  const cookieKey = `${source}_cookie`;
+  const apiKey = `${source}_api_base`;
+  const cookie = !clearSecrets.value.includes(cookieKey) && (secretConfigured(cookieKey) || String(settingsForm.value[cookieKey] ?? "").trim() !== "");
+  const api = String(settingsForm.value[apiKey] ?? "").trim() !== "";
+  if (source === "kugou" && cookie && !api) return "已填凭据，但会员能力还缺自建 API";
+  if (cookie && api) return "自建服务与登录态均已配置";
+  if (cookie) return "已配置登录态";
+  if (api) return "已配置自建服务，尚未配置登录态";
+  return "当前使用公开接口";
+}
+
+function musicCredentialHint(source: string): string {
+  const raw = String(settingsForm.value[`${source}_cookie`] ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  if (source === "qq" && !(raw.includes("uin=") || raw.includes("qqmusic_uin="))) return "当前输入中未发现 uin 或 qqmusic_uin，QQ 会员请求可能无法识别账号。";
+  if (source === "qq" && !(raw.includes("qm_keyst=") || raw.includes("qqmusic_key="))) return "当前输入中未发现 qm_keyst 或 qqmusic_key，登录态可能不完整。";
+  if (source === "kugou" && !["token=", "userid=", "dfid="].every((key) => raw.includes(key))) return "当前输入中缺少 token、userid 或 dfid，酷狗会员能力可能不可用。";
+  return "凭据格式包含所需字段；仍建议点击下方按钮实际测试。";
+}
+
+function musicStatusClass(source: string): string {
+  const result = musicTestResults.value[source];
+  if (!result) return "";
+  return result.playable ? "accent" : result.search_ok ? "warn" : "danger";
+}
+
+function musicStatusLabel(source: string): string {
+  const result = musicTestResults.value[source];
+  return result?.message ?? "尚未测试";
+}
+
+async function testMusicSettings(): Promise<void> {
+  testingMusic.value = true;
+  try {
+    const response = await testMusicConnections(buildSettingsPayload(), clearSecrets.value);
+    musicTestResults.value = Object.fromEntries(response.sources.map((item) => [item.source, item]));
+    const playable = response.sources.filter((item) => item.playable).length;
+    playable > 0 ? toastSuccess(`${playable} 家曲库可正常取得播放地址`) : toastError("没有曲库能取得播放地址，请按卡片提示检查配置");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "音乐连接测试失败");
+  } finally {
+    testingMusic.value = false;
+  }
+}
 const repositoryPublishAuthSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_auth_mode"));
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
@@ -645,6 +748,7 @@ function openSettings(plugin: PluginState): void {
   clearSecrets.value = [];
   credentialTokenDrafts.value = {};
   settingsTarget.value = plugin;
+  musicTestResults.value = {};
   githubSettingsTab.value = "config";
   openedSnapshot.value = settingsSnapshot();
   if (isGitHubSettings.value) void loadJoinedGroups();

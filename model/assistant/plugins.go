@@ -368,6 +368,24 @@ func (m *PluginManager) PluginWithSettings(id string, overrides map[string]bool)
 	return m.PluginWithSettingsForGroup(id, overrides, nil)
 }
 
+// PluginForConfiguration returns an installed plugin and its effective global
+// settings even when the plugin is disabled. Settings pages use this for
+// diagnostics: a user should be able to test credentials before enabling the
+// capability.
+func (m *PluginManager) PluginForConfiguration(id string) (Plugin, SettingValues, bool) {
+	if m == nil {
+		return nil, nil, false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	plugin, ok := m.catalog[id]
+	state := m.states[id]
+	if !ok || !state.Installed {
+		return nil, nil, false
+	}
+	return plugin, effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil), true
+}
+
 // PluginWithSettingsForGroup returns one plugin with settings resolved in the
 // order defaults -> global overrides -> group overrides.
 func (m *PluginManager) PluginWithSettingsForGroup(id string, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) (Plugin, SettingValues, bool) {
