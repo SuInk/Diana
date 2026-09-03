@@ -14,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"google.golang.org/genai"
 )
 
 // TestOpenAIResponsesInputMapsRoles 验证对应功能场景。
@@ -1432,6 +1435,56 @@ func TestAnthropicCachesStablePrefix(t *testing.T) {
 	}
 	if control := converted[2].Content[0].GetCacheControl(); control != nil && control.Type == "ephemeral" {
 		t.Fatalf("unmarked message must not be cached: %#v", converted[2].Content[0])
+	}
+}
+
+// TestTrailingSystemMessagesStayInPlace 覆盖前缀缓存的关键约束：历史之后的 system
+// 消息（时钟、发言者身份）必须留在原位，而不是被并进开头的 system 字段。
+func TestTrailingSystemMessagesStayInPlace(t *testing.T) {
+	messages := []Message{
+		{Role: RoleSystem, Content: "人设"},
+		{Role: RoleUser, Content: "历史 1"},
+		{Role: RoleAssistant, Content: "回复 1"},
+		{Role: RoleSystem, Content: "当前运行时钟：2026-09-03 12:00:00"},
+		{Role: RoleUser, Content: "当前消息"},
+	}
+	system, chat := splitSystemPrompt(messages)
+	if system != "人设" {
+		t.Fatalf("system = %q", system)
+	}
+
+	converted := anthropicMessages(chat, nil)
+	if len(converted) != 4 {
+		t.Fatalf("anthropic messages=%#v", converted)
+	}
+	clock := converted[2]
+	if clock.Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("anthropic inline system role=%q", clock.Role)
+	}
+	if text := clock.Content[0].OfText; text == nil || !strings.HasPrefix(text.Text, inlineSystemPromptPrefix) || !strings.Contains(text.Text, "当前运行时钟") {
+		t.Fatalf("anthropic inline system text=%#v", clock.Content[0])
+	}
+
+	contents := geminiContents(chat, nil)
+	if len(contents) != 4 || contents[2].Role != genai.RoleUser || !strings.HasPrefix(contents[2].Parts[0].Text, inlineSystemPromptPrefix) {
+		t.Fatalf("gemini contents=%#v", contents)
+	}
+
+	input := openAIResponsesInput(chat, nil)
+	if len(input) != 4 {
+		t.Fatalf("responses input=%#v", input)
+	}
+	encoded, err := json.Marshal(input[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"role":"system"`) || strings.Contains(string(encoded), inlineSystemPromptPrefix) {
+		t.Fatalf("responses inline system item=%s", encoded)
+	}
+
+	chatMessages := openAIChatCompletionMessages(messages, nil)
+	if len(chatMessages) != 5 || chatMessages[3].Role != "system" || chatMessages[3].Content != "当前运行时钟：2026-09-03 12:00:00" {
+		t.Fatalf("chat completion messages=%#v", chatMessages)
 	}
 }
 

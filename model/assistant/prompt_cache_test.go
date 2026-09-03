@@ -6,6 +6,7 @@ package assistant
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCoarseRelativeTimingIsStableAcrossNearbyTurns(t *testing.T) {
@@ -28,6 +29,42 @@ func TestCoarseRelativeTimingIsStableAcrossNearbyTurns(t *testing.T) {
 	second := contextMessageTiming(1000, 1110)
 	if first != second {
 		t.Fatalf("history timing drifted between turns: %q vs %q", first, second)
+	}
+}
+
+// 同一条历史在相邻两轮里必须渲染成同一个字符串，否则整段历史无法命中前缀缓存。
+func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
+	event := MessageEvent{
+		Time:       1000,
+		SenderName: "轩诺",
+		MessageID:  "m-1",
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "旧问题"}}},
+	}
+	first := historyPromptTextAt(event, 1100)
+	second := historyPromptTextAt(event, 90000)
+	if first != second {
+		t.Fatalf("history line drifted between turns: %q vs %q", first, second)
+	}
+	want := "[历史 " + time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05") + "] 轩诺: 旧问题"
+	if first != want {
+		t.Fatalf("history line = %q, want %q", first, want)
+	}
+	if strings.Contains(first, "距当前") {
+		t.Fatalf("history line must not carry request-relative timing: %q", first)
+	}
+	cross := event
+	cross.crossGroupContext = true
+	if got := historyPromptTextAt(cross, 1100); !strings.HasPrefix(got, "[跨群历史 ") {
+		t.Fatalf("cross-group history line = %q", got)
+	}
+	media := agentImageHistoryPromptTextWithDescriptions(MessageEvent{
+		Time:       1000,
+		SenderName: "轩诺",
+		MessageID:  "m-2",
+		Segments:   []MessageSegment{{Type: "image", Data: map[string]string{}}},
+	}, 1100, nil)
+	if !strings.HasPrefix(media, "[历史 ") || strings.Contains(media, "距当前") {
+		t.Fatalf("media history line = %q", media)
 	}
 }
 

@@ -179,6 +179,11 @@ func geminiContents(messages []Message, definitions []ToolDefinition) []*genai.C
 			out = append(out, &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{part}})
 			continue
 		}
+		if msg.Role == RoleSystem {
+			// 历史之后的补充指令：Gemini 只有开头的 systemInstruction，这里落成
+			// 带标记的 user 文本，保持位置不动（理由见 splitSystemPrompt）。
+			msg = inlineSystemMessage(msg)
+		}
 		var role genai.Role = genai.RoleUser
 		if msg.Role == RoleAssistant {
 			// Gemini SDK 用 model 表示 assistant 历史消息。
