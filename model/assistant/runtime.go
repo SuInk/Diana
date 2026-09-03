@@ -1186,7 +1186,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 			cfg = profile.WithDefaults()
 		}
 	}
-	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || r.groupConfigs == nil {
+	if (event.Kind != EventKindGroup && event.Kind != EventKindNotice) || strings.TrimSpace(event.GroupID) == "" || r.groupConfigs == nil {
 		return cfg
 	}
 	groupCfg, ok := r.groupConfigs.ConfigForGroup(strings.TrimSpace(event.ProfileID), event.GroupID)
@@ -2013,6 +2013,21 @@ func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
 	}
 	if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return false
+	}
+	return r.replyGateAllows(cfg, event)
+}
+
+// admitsNotice applies the same local admission boundary to notice-triggered
+// output as ordinary messages. Notice keeps its own event kind, but a notice
+// carrying GroupID still belongs to that group's policy scope.
+func (r *Runtime) admitsNotice(cfg BotConfig, event MessageEvent) bool {
+	if r.isUserDisabled(event.UserID) {
+		return false
+	}
+	if strings.TrimSpace(event.GroupID) != "" {
+		if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+			return false
+		}
 	}
 	return r.replyGateAllows(cfg, event)
 }
@@ -9073,7 +9088,7 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType != "group_increase" || event.GroupID == "" || event.UserID == "" {
 		return nil
 	}
-	if r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+	if !r.admitsNotice(cfg, event) {
 		return nil
 	}
 	// 只处理群成员增加通知，避免把其它 notice 类型误当作可回复消息。
@@ -11234,7 +11249,7 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 	if !gate.WithinActiveHours(r.clock()) {
 		return false
 	}
-	if event.Kind == EventKindGroup && gate.MinGroupLevel > 0 && IsOneBotPlatform(cfg.Platform) {
+	if strings.TrimSpace(event.GroupID) != "" && gate.MinGroupLevel > 0 && IsOneBotPlatform(cfg.Platform) {
 		level, known := r.members.LevelFor(event)
 		return gate.LevelAllows(level, known)
 	}
