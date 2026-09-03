@@ -56,6 +56,27 @@ func TestParseTwitterPostResponseKeepsLegacyDataURL(t *testing.T) {
 	}
 }
 
+func TestParseTwitterPostResponseIncludesQuotedMedia(t *testing.T) {
+	post, ok := parseTwitterPostResponse([]byte(`{
+		"tweet": {
+			"text": "顶层转推说明",
+			"author": {"name": "宝玉", "screen_name": "dotey"},
+			"quote": {
+				"text": "被引用的原帖",
+				"media": {"all": [
+					{"type": "video", "url": "https://video.twimg.com/quoted.mp4", "thumbnail_url": "https://pbs.twimg.com/quoted.jpg"}
+				]}
+			}
+		}
+	}`))
+	if !ok || len(post.Media) != 1 {
+		t.Fatalf("post = %#v, ok = %v", post, ok)
+	}
+	if post.Media[0].Type != "video" || post.Media[0].URL != "https://video.twimg.com/quoted.mp4" {
+		t.Fatalf("quoted media = %#v", post.Media[0])
+	}
+}
+
 func TestTwitterMetadataAPIURLCanBeConfigured(t *testing.T) {
 	raw := "https://x.com/example/status/123456?ref=share"
 	t.Setenv("DIANA_TWITTER_METADATA_API", "https://resolver.example/status/{id}")

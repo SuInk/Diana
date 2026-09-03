@@ -62,6 +62,7 @@ type twitterPostPayload struct {
 	Caption     string                `json:"caption"`
 	Author      json.RawMessage       `json:"author"`
 	User        json.RawMessage       `json:"user"`
+	Quote       json.RawMessage       `json:"quote"`
 	Media       json.RawMessage       `json:"media"`
 	Images      []twitterMediaPayload `json:"images"`
 	Videos      []twitterMediaPayload `json:"videos"`
@@ -201,6 +202,10 @@ func parseTwitterPostResponse(data []byte) (twitterPost, bool) {
 }
 
 func parseTwitterPostPayload(data []byte) (twitterPost, bool) {
+	return parseTwitterPostPayloadDepth(data, 0)
+}
+
+func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 	var payload twitterPostPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return twitterPost{}, false
@@ -224,6 +229,13 @@ func parseTwitterPostPayload(data []byte) (twitterPost, bool) {
 	}
 	if len(post.Media) == 0 && looksLikeTwitterMediaURL(payload.URL) {
 		post.Media = append(post.Media, twitterMediaFromPayload(twitterMediaPayload{URL: payload.URL}, ""))
+	}
+	// FXTwitter 把引用推文的图片和视频放在 tweet.quote.media，而顶层
+	// tweet.media 可能为空。引用内容仍是这条分享可见的一部分，应一并转发。
+	if depth < 2 && len(payload.Quote) > 0 && string(payload.Quote) != "null" {
+		if quoted, ok := parseTwitterPostPayloadDepth(payload.Quote, depth+1); ok {
+			post.Media = append(post.Media, quoted.Media...)
+		}
 	}
 	post.Media = dedupeTwitterMedia(post.Media)
 	return post, twitterPostHasContent(post)
