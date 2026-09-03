@@ -31,3 +31,15 @@ func TestGeminiOutputTokenLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeGeminiBaseURLAcceptsRootAndVersionedPaths(t *testing.T) {
+	for input, want := range map[string]string{
+		"https://example.com":                "https://example.com",
+		"https://example.com/v1beta":         "https://example.com",
+		"https://example.com/v1beta/models/": "https://example.com",
+	} {
+		if got := normalizeGeminiBaseURL(input); got != want {
+			t.Fatalf("normalizeGeminiBaseURL(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

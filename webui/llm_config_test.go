@@ -228,6 +228,9 @@ func TestLLMConfigHandlerAppliesProviderDefaults(t *testing.T) {
 		Model:    "old-model",
 	})
 	handler := NewLLMConfigHandler(store)
+	handler.SetModelListFactory(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		return []llm.ModelInfo{{ID: llm.DefaultGeminiModel}}, nil
+	})
 	router := testRouter(handler)
 
 	body := []byte(`{"name":"Gemini","provider":"gemini","api_key":"valid-key-123"}`)

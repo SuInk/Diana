@@ -878,20 +878,16 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
   try {
     const payload = formToPayload();
     const result = await listLLMModels(payload);
-    // 合并而不是覆盖：手动补充的模型不该被一次刷新冲掉。
-    const merged = [...result.models];
-    const fetched = new Set(result.models.map((model) => model.id));
-    for (const model of modelOptions.value) {
-      if (!fetched.has(model.id)) merged.push(model);
-    }
-    modelOptions.value = merged;
     if (result.models.length === 0) {
       toastError("该提供商未返回模型列表");
       return false;
     } else {
+	  // “同步”必须准确反映服务端当前返回，不能把旧缓存或内置默认混进成功结果。
+	  modelOptions.value = [...result.models];
       if (selectFirst && !form.value.model.trim()) {
         form.value.model = result.models[0].id;
       }
+	  toastSuccess(`成功同步 ${result.models.length} 个模型`);
     }
     return true;
   } catch (error) {

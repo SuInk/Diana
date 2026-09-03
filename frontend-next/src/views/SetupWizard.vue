@@ -401,9 +401,9 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
       toastError("服务平台没有返回可用模型");
       return false;
     }
-    // 合并而不是覆盖：手填进来的模型（中转站上同步不到的那些）不能被一次同步冲掉。
-    const fetched = new Set(result.models.map((model) => model.id));
-    modelOptions.value = [...result.models, ...modelOptions.value.filter((model) => !fetched.has(model.id))];
+	// 同步结果只显示服务端真实返回；手填模型可在同步后重新添加。
+	modelOptions.value = [...result.models];
+	toastSuccess(`成功同步 ${result.models.length} 个模型`);
     return true;
   } catch (error) {
     // 和 LLM 配置页一致：报错原文进 toast，该回去改的那一格标红。
