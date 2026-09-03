@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -38,6 +39,64 @@ func (c *multiChannelProbe) CallAPI(context.Context, string, map[string]any) (ma
 
 func (c *multiChannelProbe) Status() ChannelStatus { return c.status }
 func (c *multiChannelProbe) Close() error          { return nil }
+
+type reconnectingChannelProbe struct {
+	multiChannelProbe
+	mu       sync.Mutex
+	attempts int
+	started  chan int
+}
+
+func (c *reconnectingChannelProbe) Connect(ctx context.Context, _ EventHandler) error {
+	c.mu.Lock()
+	c.attempts++
+	attempt := c.attempts
+	c.mu.Unlock()
+	c.started <- attempt
+	if attempt == 1 {
+		return errors.New("initial handshake failed")
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestMultiChannelRetriesFailedBindingUntilItRecovers(t *testing.T) {
+	flaky := &reconnectingChannelProbe{started: make(chan int, 2)}
+	channel := NewMultiChannel([]ChannelBinding{{
+		ProfileID: "telegram-profile",
+		Platform:  PlatformTelegram,
+		Name:      "Telegram",
+		Channel:   flaky,
+	}})
+	channel.reconnectInitialDelay = 5 * time.Millisecond
+	channel.reconnectMaxDelay = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- channel.Connect(ctx, func(context.Context, MessageEvent) error { return nil })
+	}()
+
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-flaky.started:
+			if got != want {
+				t.Fatalf("connect attempt = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("connect attempt %d did not start", want)
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Connect error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("multi channel did not stop after recovery")
+	}
+}
 
 func TestMultiChannelRoutesRepliesToSourceProfile(t *testing.T) {
 	oneBot := &multiChannelProbe{status: ChannelStatus{Connected: true, SelfID: "onebot"}}

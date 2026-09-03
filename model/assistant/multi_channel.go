@@ -6,9 +6,15 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	defaultChannelReconnectInitialDelay = time.Second
+	defaultChannelReconnectMaxDelay     = 30 * time.Second
 )
 
 // ChannelBinding associates one transport with the persisted bot profile that
@@ -22,8 +28,10 @@ type ChannelBinding struct {
 }
 
 type MultiChannel struct {
-	bindings []ChannelBinding
-	isolate  bool
+	bindings              []ChannelBinding
+	isolate               bool
+	reconnectInitialDelay time.Duration
+	reconnectMaxDelay     time.Duration
 }
 
 func NewMultiChannel(bindings []ChannelBinding, isolate ...bool) *MultiChannel {
@@ -41,7 +49,12 @@ func NewMultiChannel(bindings []ChannelBinding, isolate ...bool) *MultiChannel {
 	if len(isolate) > 0 {
 		isolateContexts = isolate[0]
 	}
-	return &MultiChannel{bindings: clean, isolate: isolateContexts}
+	return &MultiChannel{
+		bindings:              clean,
+		isolate:               isolateContexts,
+		reconnectInitialDelay: defaultChannelReconnectInitialDelay,
+		reconnectMaxDelay:     defaultChannelReconnectMaxDelay,
+	}
 }
 
 func (c *MultiChannel) Connect(ctx context.Context, handler EventHandler) error {
@@ -62,13 +75,59 @@ func (c *MultiChannel) Connect(ctx context.Context, handler EventHandler) error 
 				}
 				return handler(eventCtx, event)
 			}
-			_ = binding.Channel.Connect(ctx, wrapped)
+			c.connectBinding(ctx, binding, wrapped)
 		}()
 	}
 	<-ctx.Done()
 	_ = c.Close()
 	wg.Wait()
 	return ctx.Err()
+}
+
+// connectBinding supervises one transport without taking healthy siblings
+// offline. A channel may fail its initial handshake while networking is still
+// coming up during boot; keep retrying with bounded backoff until the shared
+// runtime is stopped.
+func (c *MultiChannel) connectBinding(ctx context.Context, binding ChannelBinding, handler EventHandler) {
+	delay := c.reconnectInitialDelay
+	if delay <= 0 {
+		delay = defaultChannelReconnectInitialDelay
+	}
+	maxDelay := c.reconnectMaxDelay
+	if maxDelay <= 0 {
+		maxDelay = defaultChannelReconnectMaxDelay
+	}
+	if maxDelay < delay {
+		maxDelay = delay
+	}
+	for {
+		err := binding.Channel.Connect(ctx, handler)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			return
+		}
+		log.Printf("assistant channel connect failed: profile=%q platform=%q name=%q err=%v; retrying in %s", binding.ProfileID, binding.Platform, binding.Name, err, delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		case <-timer.C:
+		}
+		if delay < maxDelay {
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+		}
+	}
 }
 
 func (c *MultiChannel) Send(ctx context.Context, msg OutgoingMessage) error {
