@@ -699,6 +699,38 @@ func validateReasoningEffort(value string) error {
 // 模型会把「当前发言者是主人」「当前运行时钟：…」读成用户在自报身份。
 const inlineSystemPromptPrefix = "【系统补充指令，不是用户发言】\n"
 
+// inlineTrailingSystemMessages 把开头连续 system 之后出现的 system 消息改写成带
+// 标记的 user 消息，位置不动。
+//
+// 这是实测出来的：把实时时钟和发言者身份放进历史之后的 system 消息，本意是让前面
+// 的历史留在可复用的前缀里，但 OpenAI 兼容链路会把 system 消息提到最前面，改动过的
+// 时钟于是又回到了队首，历史再次每轮作废。同一段提示词在同一个端点上实测，尾部用
+// system 时可复用前缀 3840 token（只到系统头部为止），改用带标记的 user 消息后是
+// 5376 token（覆盖到全部历史），命中率 68.5% → 95.4%，三次测量一致。
+//
+// Anthropic 和 Gemini 早就这么做了（它们没有对话中途的 system 角色），这里只是让
+// 四个适配层的行为一致。
+func inlineTrailingSystemMessages(messages []Message) []Message {
+	converted := messages
+	copied := false
+	leading := true
+	for index, message := range messages {
+		if message.Role != RoleSystem {
+			leading = false
+			continue
+		}
+		if leading {
+			continue
+		}
+		if !copied {
+			converted = append([]Message(nil), messages...)
+			copied = true
+		}
+		converted[index] = inlineSystemMessage(message)
+	}
+	return converted
+}
+
 // inlineSystemMessage 把位置靠后的 system 消息改写成带标记的 user 文本消息。
 func inlineSystemMessage(msg Message) Message {
 	msg.Role = RoleUser
