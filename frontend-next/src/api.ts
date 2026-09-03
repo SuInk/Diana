@@ -278,7 +278,7 @@ export interface PluginSettingSpec {
   key: string;
   label: string;
   description?: string;
-  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size";
+  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules";
   default: unknown;
   min?: number;
   max?: number;
