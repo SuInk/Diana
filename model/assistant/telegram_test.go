@@ -232,6 +232,11 @@ func TestTelegramGroupMessageMapping(t *testing.T) {
 	if event.GroupID != "-100999" {
 		t.Fatalf("GroupID 错误：%q", event.GroupID)
 	}
+	// Bot API 没有「列出我加入的群」，群名只能从消息里带出来；丢了它，
+	// 控制台的群管理页就只能显示一串群号。
+	if event.GroupName != "测试群" {
+		t.Fatalf("GroupName 错误：%q", event.GroupName)
+	}
 	if event.UserID != "42" {
 		t.Fatalf("UserID 错误：%q", event.UserID)
 	}

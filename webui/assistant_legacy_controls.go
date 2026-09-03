@@ -71,6 +71,9 @@ type botAutoGroupInfo struct {
 	GroupName      string `json:"group_name,omitempty"`
 	MemberCount    int    `json:"member_count,omitempty"`
 	MaxMemberCount int    `json:"max_member_count,omitempty"`
+	// QQAvatar 表示这个群适用 QQ 的群头像地址规则。只有 OneBot 平台成立；
+	// 其余平台按这个规则拼出来的既是死链，也会把群号送去腾讯的服务器。
+	QQAvatar bool `json:"-"`
 }
 
 type botTasksResponse struct {

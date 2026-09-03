@@ -578,6 +578,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 			MessageID:   strconv.FormatInt(msg.MessageID, 10),
 			MessageType: "notice",
 			GroupID:     strconv.FormatInt(msg.Chat.ID, 10),
+			GroupName:   strings.TrimSpace(msg.Chat.Title),
 			UserID:      strconv.FormatInt(joined.ID, 10),
 			SenderName:  telegramDisplayName(&joined),
 		}
@@ -634,6 +635,9 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		event.Kind = EventKindGroup
 		event.MessageType = "group"
 		event.GroupID = strconv.FormatInt(msg.Chat.ID, 10)
+		// Bot API 没有「列出我加入的群」，控制台只能从消息里认识这个群，
+		// 群名也只有这一个来源。
+		event.GroupName = strings.TrimSpace(msg.Chat.Title)
 	default:
 		return MessageEvent{}
 	}
