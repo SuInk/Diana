@@ -21,8 +21,14 @@ import (
 // 拿不到 sink（不在回复轮次里，例如后台任务直接调工具）时退回原来的立即发送，
 // 那些场景本来就没有 final 回复来兜底。
 type imageAnnouncementSink struct {
-	mu   sync.Mutex
-	text string
+	mu      sync.Mutex
+	text    string
+	pending []imageDeferredTask
+}
+
+type imageDeferredTask struct {
+	start  func()
+	cancel func()
 }
 
 type imageAnnouncementSinkKey struct{}
@@ -60,6 +66,45 @@ func (s *imageAnnouncementSink) drain() string {
 	text := s.text
 	s.text = ""
 	return text
+}
+
+func (s *imageAnnouncementSink) deferTask(start, cancel func()) {
+	if s == nil || start == nil {
+		return
+	}
+	s.mu.Lock()
+	s.pending = append(s.pending, imageDeferredTask{start: start, cancel: cancel})
+	s.mu.Unlock()
+}
+
+// startPending 只能在本轮主回复发送成功后调用。这样即使图片任务立即失败，失败通知
+// 也一定排在“开始处理/在画了”之后。
+func (s *imageAnnouncementSink) startPending() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	pending := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+	for _, task := range pending {
+		task.start()
+	}
+}
+
+func (s *imageAnnouncementSink) cancelPending() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	pending := s.pending
+	s.pending = nil
+	s.mu.Unlock()
+	for _, task := range pending {
+		if task.cancel != nil {
+			task.cancel()
+		}
+	}
 }
 
 // drainPendingImageAnnouncement 取走本轮攒下的开场白，供空回复时兜底。

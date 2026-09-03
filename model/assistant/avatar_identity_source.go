@@ -5,8 +5,11 @@ package assistant
 
 import (
 	"context"
+	"regexp"
 	"strings"
 )
+
+var explicitQQAccountPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
 
 // 图片编辑要用到的头像来源。
 //
@@ -21,6 +24,7 @@ import (
 // 只负责把 id 换成头像地址，并核对这个人在当前会话里确实存在。
 const (
 	avatarSourceGroup        = "group_avatar"
+	avatarSourceGroupPrefix  = "group_avatar:"
 	avatarSourceBot          = "bot_avatar"
 	avatarSourceSender       = "sender_avatar"
 	avatarSourceMemberPrefix = "member_avatar:"
@@ -50,6 +54,16 @@ func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEven
 		case id == avatarSourceGroup:
 			if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
 				out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(event.GroupID))
+			}
+		case strings.HasPrefix(id, avatarSourceGroupPrefix):
+			groupID := strings.TrimSpace(strings.TrimPrefix(id, avatarSourceGroupPrefix))
+			if groupID == "" {
+				continue
+			}
+			if event.Kind == EventKindGroup && groupID == strings.TrimSpace(event.GroupID) {
+				out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(groupID))
+			} else if event.Kind == EventKindPrivate && explicitAccountIDs(event.Segments)[groupID] {
+				out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(groupID))
 			}
 		case id == avatarSourceBot:
 			if botID != "" {
@@ -86,6 +100,14 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 	for _, userID := range mentionedUserIDs(event.Segments) {
 		reachable[strings.TrimSpace(userID)] = true
 	}
+	// 私聊没有群成员名单可供核验，但用户在当前消息里明确写出的 QQ 号同样是
+	// 结构化、可审计的身份指向。只放行消息中逐字出现的号码，避免模型凭空选择
+	// 一个不相关账号；群聊仍以真实成员名单为准。
+	if event.Kind == EventKindPrivate {
+		for userID := range explicitAccountIDs(event.Segments) {
+			reachable[userID] = true
+		}
+	}
 	if event.Quoted != nil {
 		if userID := strings.TrimSpace(event.Quoted.UserID); userID != "" {
 			reachable[userID] = true
@@ -104,6 +126,19 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 		}
 	}
 	return func(userID string) bool { return reachable[strings.TrimSpace(userID)] }
+}
+
+func explicitAccountIDs(segments []MessageSegment) map[string]bool {
+	ids := map[string]bool{}
+	for _, segment := range segments {
+		if segment.Type != "text" {
+			continue
+		}
+		for _, id := range explicitQQAccountPattern.FindAllString(segment.Data["text"], -1) {
+			ids[id] = true
+		}
+	}
+	return ids
 }
 
 // defaultAvatarIdentitySources 是模型没有点名时的兜底：只取被 @ 的成员。@ 是用户

@@ -167,7 +167,8 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 		properties["identity_sources"] = toolStringArrayParam(
 			`operation="edit" 且要编辑的是某人或本群的头像时，在这里点名头像来源；当前消息或引用消息本身带图时不要填。` +
 				`可选值："` + avatarSourceSender + `"（本条消息的发送者）、"` + avatarSourceBot + `"（机器人自己）、"` +
-				avatarSourceGroup + `"（本群的群头像）、"` + avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 用真实 QQ 号）。` +
+				avatarSourceGroup + `"（本群的群头像）、"` + avatarSourceGroupPrefix + `<group_id>"（私聊里用户明确给出群号时的群头像）、"` +
+				avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 用真实 QQ 号）。` +
 				`用户按名字或昵称指人时，先从上下文或群成员工具里查出对应 user_id 再填，不要编造；最多 ` +
 				strconv.Itoa(maxAvatarImageSources) + ` 个。`)
 	}
@@ -325,7 +326,14 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	result := dianaImageToolResult{OK: true, Queued: true, Action: request.Operation, Caption: request.Caption}
 	if len(reservation.reserved) > 0 {
 		result.TaskID = reservation.reserved[0].id
-		t.runtime.startPluginTaskReservation(reservation)
+		if sink := imageAnnouncementSinkFrom(ctx); sink != nil {
+			sink.deferTask(
+				func() { t.runtime.startPluginTaskReservation(reservation) },
+				func() { t.runtime.cancelPluginTaskReservation(reservation) },
+			)
+		} else {
+			t.runtime.startPluginTaskReservation(reservation)
+		}
 		return result, nil
 	}
 	if len(reservation.duplicates) > 0 {

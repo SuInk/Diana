@@ -21,14 +21,18 @@ const (
 	defaultTwitterMinimumGroupLevel = 40
 	defaultResolverImageMaxMB       = 25
 	maximumTwitterMediaItems        = 8
+	maximumTwitterThreadReplies     = 8
 	defaultTwitterMetadataAPI       = "https://api.fxtwitter.com/status/{id}"
+	defaultTwitterThreadAPI         = "https://api.fxtwitter.com/2/thread/{id}"
 )
 
 type twitterPost struct {
+	ID           string
 	Text         string
 	AuthorName   string
 	AuthorHandle string
 	Media        []twitterMedia
+	Replies      []twitterPost
 }
 
 type twitterMedia struct {
@@ -47,12 +51,14 @@ type twitterMediaFormat struct {
 }
 
 type twitterResponseEnvelope struct {
-	Tweet  json.RawMessage `json:"tweet"`
-	Status json.RawMessage `json:"status"`
-	Data   json.RawMessage `json:"data"`
+	Tweet  json.RawMessage   `json:"tweet"`
+	Status json.RawMessage   `json:"status"`
+	Data   json.RawMessage   `json:"data"`
+	Thread []json.RawMessage `json:"thread"`
 }
 
 type twitterPostPayload struct {
+	ID          string                `json:"id"`
 	URL         string                `json:"url"`
 	Text        string                `json:"text"`
 	FullText    string                `json:"full_text"`
@@ -62,6 +68,7 @@ type twitterPostPayload struct {
 	Caption     string                `json:"caption"`
 	Author      json.RawMessage       `json:"author"`
 	User        json.RawMessage       `json:"user"`
+	Quote       json.RawMessage       `json:"quote"`
 	Media       json.RawMessage       `json:"media"`
 	Images      []twitterMediaPayload `json:"images"`
 	Videos      []twitterMediaPayload `json:"videos"`
@@ -96,6 +103,7 @@ func fetchTwitterPost(ctx context.Context, raw string) (twitterPost, bool) {
 		if body, ok := fetchResolverBody(ctx, apiURL, twitterResolverHeaders()); ok {
 			if post, parsed := parseTwitterPostResponse([]byte(body)); parsed {
 				if twitterPostHasStructuredMetadata(post) {
+					post.Replies = fetchTwitterThreadReplies(ctx, raw, post)
 					return post, true
 				}
 				legacy = post
@@ -109,11 +117,48 @@ func fetchTwitterPost(ctx context.Context, raw string) (twitterPost, bool) {
 				if len(post.Media) == 0 && len(legacy.Media) > 0 {
 					post.Media = legacy.Media
 				}
+				post.Replies = fetchTwitterThreadReplies(ctx, raw, post)
 				return post, true
 			}
 		}
 	}
 	return legacy, twitterPostHasContent(legacy)
+}
+
+func fetchTwitterThreadReplies(ctx context.Context, raw string, root twitterPost) []twitterPost {
+	id := twitterStatusID(raw)
+	if id == "" {
+		return nil
+	}
+	apiURL := strings.ReplaceAll(defaultTwitterThreadAPI, "{id}", url.PathEscape(id))
+	body, ok := fetchResolverBody(ctx, apiURL, twitterResolverHeaders())
+	if !ok {
+		return nil
+	}
+	var envelope twitterResponseEnvelope
+	if json.Unmarshal([]byte(body), &envelope) != nil {
+		return nil
+	}
+	return twitterThreadReplies(envelope.Thread, id, root.AuthorHandle)
+}
+
+func twitterThreadReplies(thread []json.RawMessage, rootID, rootAuthorHandle string) []twitterPost {
+	rootHandle := strings.TrimPrefix(strings.TrimSpace(rootAuthorHandle), "@")
+	replies := make([]twitterPost, 0, min(len(thread), maximumTwitterThreadReplies))
+	for _, item := range thread {
+		post, parsed := parseTwitterPostPayload(item)
+		if !parsed || post.ID == rootID || strings.TrimSpace(post.Text) == "" {
+			continue
+		}
+		if rootHandle != "" && !strings.EqualFold(strings.TrimPrefix(post.AuthorHandle, "@"), rootHandle) {
+			continue
+		}
+		replies = append(replies, post)
+		if len(replies) >= maximumTwitterThreadReplies {
+			break
+		}
+	}
+	return replies
 }
 
 func twitterResolverHeaders() map[string]string {
@@ -201,11 +246,16 @@ func parseTwitterPostResponse(data []byte) (twitterPost, bool) {
 }
 
 func parseTwitterPostPayload(data []byte) (twitterPost, bool) {
+	return parseTwitterPostPayloadDepth(data, 0)
+}
+
+func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 	var payload twitterPostPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return twitterPost{}, false
 	}
 	post := twitterPost{
+		ID: strings.TrimSpace(payload.ID),
 		Text: firstNonEmpty(
 			strings.TrimSpace(payload.Text),
 			strings.TrimSpace(payload.FullText),
@@ -224,6 +274,13 @@ func parseTwitterPostPayload(data []byte) (twitterPost, bool) {
 	}
 	if len(post.Media) == 0 && looksLikeTwitterMediaURL(payload.URL) {
 		post.Media = append(post.Media, twitterMediaFromPayload(twitterMediaPayload{URL: payload.URL}, ""))
+	}
+	// FXTwitter 把引用推文的图片和视频放在 tweet.quote.media，而顶层
+	// tweet.media 可能为空。引用内容仍是这条分享可见的一部分，应一并转发。
+	if depth < 2 && len(payload.Quote) > 0 && string(payload.Quote) != "null" {
+		if quoted, ok := parseTwitterPostPayloadDepth(payload.Quote, depth+1); ok {
+			post.Media = append(post.Media, quoted.Media...)
+		}
 	}
 	post.Media = dedupeTwitterMedia(post.Media)
 	return post, twitterPostHasContent(post)

@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,40 @@ func TestParseTwitterPostResponseKeepsLegacyDataURL(t *testing.T) {
 	}
 	if post.Media[0].Type != "photo" || post.Media[0].URL != "https://pbs.twimg.com/media/legacy.jpg?name=orig" {
 		t.Fatalf("legacy media = %#v", post.Media[0])
+	}
+}
+
+func TestParseTwitterPostResponseIncludesQuotedMedia(t *testing.T) {
+	post, ok := parseTwitterPostResponse([]byte(`{
+		"tweet": {
+			"text": "顶层转推说明",
+			"author": {"name": "宝玉", "screen_name": "dotey"},
+			"quote": {
+				"text": "被引用的原帖",
+				"media": {"all": [
+					{"type": "video", "url": "https://video.twimg.com/quoted.mp4", "thumbnail_url": "https://pbs.twimg.com/quoted.jpg"}
+				]}
+			}
+		}
+	}`))
+	if !ok || len(post.Media) != 1 {
+		t.Fatalf("post = %#v, ok = %v", post, ok)
+	}
+	if post.Media[0].Type != "video" || post.Media[0].URL != "https://video.twimg.com/quoted.mp4" {
+		t.Fatalf("quoted media = %#v", post.Media[0])
+	}
+}
+
+func TestTwitterThreadRepliesKeepsOnlyAuthorFollowUps(t *testing.T) {
+	thread := []json.RawMessage{
+		json.RawMessage(`{"id":"root","text":"主推","author":{"screen_name":"dotey"}}`),
+		json.RawMessage(`{"id":"reply-1","text":"第一条补充","author":{"screen_name":"dotey"}}`),
+		json.RawMessage(`{"id":"other","text":"路人评论","author":{"screen_name":"someone"}}`),
+		json.RawMessage(`{"id":"reply-2","text":"第二条补充","author":{"screen_name":"DOTEY"}}`),
+	}
+	replies := twitterThreadReplies(thread, "root", "dotey")
+	if len(replies) != 2 || replies[0].Text != "第一条补充" || replies[1].Text != "第二条补充" {
+		t.Fatalf("replies = %#v", replies)
 	}
 }
 

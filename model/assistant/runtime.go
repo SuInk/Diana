@@ -2912,6 +2912,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
+	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
+	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
+	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
+	defer imageAnnouncements.cancelPending()
 
 	chatTriggered := r.shouldHandleChat(event, text)
 	resolverTriggered := r.shouldHandleResolver(event, text)
@@ -3533,13 +3537,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
 	// 保证发图前只出现一条文字（见 image_announcement.go）。
-	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		if pending := imageAnnouncements.drain(); pending != "" {
 			// 生成失败也要让用户知道图在画：任务已经受理了。
 			if sendErr := r.send(ctx, event, pending); sendErr != nil {
 				log.Printf("chatbot image announcement fallback failed: %v", sendErr)
+			} else {
+				imageAnnouncements.startPending()
 			}
 		}
 		return "", err
@@ -3610,6 +3615,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if recallReplyShouldAutoDelete(cfg, pluginResponses) {
 			r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 		}
+		imageAnnouncements.startPending()
 		return reply, nil
 	}
 	var sentMessageIDs []string
@@ -3625,6 +3631,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if err != nil {
 		return "", err
 	}
+	imageAnnouncements.startPending()
 	if recallReplyShouldAutoDelete(cfg, pluginResponses) {
 		r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 	}
