@@ -712,7 +712,29 @@ func metadataGroupID(meta map[string]any) string {
 // InboundEventGroup 是某个范围内出现过事件的一个群，用于给筛选器列选项。
 type InboundEventGroup struct {
 	GroupID string `json:"group_id"`
-	Events  int64  `json:"events"`
+	// GroupName 取自最近一条事件里平台给出的群名。没有「列出我加入的群」接口的
+	// 平台（Telegram、钉钉等）只能这样拿到名字，否则控制台只能显示一串 ID。
+	GroupName string `json:"group_name,omitempty"`
+	// BotProfileID 是最近一条事件所属的机器人配置档。控制台靠它判断这个群属于
+	// 哪个平台——比如该不该按 QQ 的规则去拼群头像地址。
+	BotProfileID string `json:"bot_profile_id,omitempty"`
+	Events       int64  `json:"events"`
+}
+
+// groupNameFromEventPayload 从事件 payload 里取群名。payload 是完整事件的 JSON，
+// 这里只关心一个字段，解析失败或没有该字段都按「没有名字」处理——群名只是显示
+// 用的，不该让一条格式异常的历史事件把整个群列表拖垮。
+func groupNameFromEventPayload(payload string) string {
+	if strings.TrimSpace(payload) == "" {
+		return ""
+	}
+	var envelope struct {
+		GroupName string `json:"group_name"`
+	}
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.GroupName)
 }
 
 // ListInboundEventGroups 列出这个时间范围里有事件的群，按事件数从多到少。
@@ -730,14 +752,33 @@ func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Tim
 	if !since.IsZero() {
 		sinceUnix = since.Unix()
 	}
-	scopeCondition := ""
-	args := []any{sinceUnix}
-	if botProfileID = strings.TrimSpace(botProfileID); botProfileID != "" {
+	// 参数顺序跟着 SQL 走：两个子查询（取群名、取归属机器人）在 SELECT 列表里，
+	// 先于外层 WHERE 求值。
+	scopeCondition, scopeCondition2, scopeCondition3 := "", "", ""
+	botProfileID = strings.TrimSpace(botProfileID)
+	if botProfileID != "" {
 		scopeCondition = " AND COALESCE(i.profile_id, '') = ?"
-		args = append(args, botProfileID)
+		scopeCondition2 = " AND COALESCE(j.profile_id, '') = ?"
+		scopeCondition3 = " AND COALESCE(k.profile_id, '') = ?"
 	}
+	args := []any{}
+	for range 3 {
+		args = append(args, sinceUnix)
+		if botProfileID != "" {
+			args = append(args, botProfileID)
+		}
+	}
+	// 群名取自事件 payload：没有单独的列，也不值得为它做一次迁移——payload 本来
+	// 就是完整事件，而且这样连历史数据都能直接用上。同一个群可能改过名字，取
+	// event_time 最大的那条，也就是最近一次见到的名字。
 	rows, err := s.db.QueryContext(ctx, `
-SELECT i.group_id, COUNT(*)
+SELECT i.group_id, COUNT(*),
+  (SELECT j.payload FROM inbound_events AS j
+   WHERE j.group_id = i.group_id AND j.event_time >= ?`+scopeCondition2+`
+   ORDER BY j.event_time DESC, j.id DESC LIMIT 1),
+  (SELECT COALESCE(k.profile_id, '') FROM inbound_events AS k
+   WHERE k.group_id = i.group_id AND k.event_time >= ?`+scopeCondition3+`
+   ORDER BY k.event_time DESC, k.id DESC LIMIT 1)
 FROM inbound_events AS i
 WHERE i.event_time >= ? AND COALESCE(TRIM(i.group_id), '') != ''`+scopeCondition+`
 GROUP BY i.group_id
@@ -749,9 +790,12 @@ ORDER BY COUNT(*) DESC, i.group_id ASC
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var group InboundEventGroup
-		if err := rows.Scan(&group.GroupID, &group.Events); err != nil {
+		var payload, profileID sql.NullString
+		if err := rows.Scan(&group.GroupID, &group.Events, &payload, &profileID); err != nil {
 			return nil, fmt.Errorf("scan inbound event group: %w", err)
 		}
+		group.GroupName = groupNameFromEventPayload(payload.String)
+		group.BotProfileID = strings.TrimSpace(profileID.String)
 		groups = append(groups, group)
 	}
 	if err := rows.Err(); err != nil {
