@@ -67,7 +67,10 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	now := time.Now()
+	// 固定在当地午后：DashboardStatsForDay 的窗口是「本地零点 -> now」，用 time.Now()
+	// 会在午夜前后一分钟内把条目甩到前一天去。
+	local := time.Now()
+	now := time.Date(local.Year(), local.Month(), local.Day(), 14, 0, 0, 0, time.Local)
 	for _, action := range []string{"diana.llm_usage", "chatbot.llm_usage", "assistant.llm_usage"} {
 		if err := store.AppendLog(ctx, applog.Entry{
 			Action:    action,
@@ -86,5 +89,56 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 	// 三个名字各记一条，一条都不能漏。
 	if stats.LLMCalls != 3 || stats.LLMInputTokens != 30 || stats.LLMOutputTokens != 15 {
 		t.Fatalf("totals = calls:%d input:%d output:%d, want 3/30/15", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens)
+	}
+}
+
+// created_at 以 RFC3339 文本入库，查询又是拿字符串做范围比较，所以写入时区必须统一。
+//
+// 调用方传本地时间是很自然的写法（webui/system_update.go 就传 time.Now()），而带
+// +08:00 偏移的那一行和按 UTC 拼出来的边界做字典序比较时日期和小时位对不上，那条
+// 日志就会在仪表盘和用量统计里凭空消失——界面上看着像「没统计到」，不像 Bug。
+func TestAppendLogNormalizesCreatedAtToUTC(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "created-at-zone.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// 固定在当地午后，避开跨日边界——这里要验的是时区归一化，不是跨日。
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Skipf("时区库不可用：%v", err)
+	}
+	now := time.Now().In(shanghai)
+	noon := time.Date(now.Year(), now.Month(), now.Day(), 14, 0, 0, 0, shanghai)
+
+	if err := store.AppendLog(ctx, applog.Entry{
+		Action:    "diana.llm_usage",
+		Target:    "message-local-zone",
+		CreatedAt: noon.Add(-time.Hour),
+		Metadata:  map[string]any{"input_tokens": 7, "output_tokens": 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := store.DashboardStatsForDay(ctx, noon, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.LLMCalls != 1 || stats.LLMInputTokens != 7 || stats.LLMOutputTokens != 3 {
+		t.Fatalf("带本地时区写入的日志没被统计到：calls=%d input=%d output=%d，期望 1/7/3", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens)
+	}
+
+	// 落库的文本必须是 UTC 形态，否则按字符串排序的查询迟早还会踩坑。
+	entries, err := store.ListLogs(ctx, applog.Filter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("日志条数 = %d", len(entries))
+	}
+	if _, offset := entries[0].CreatedAt.Zone(); offset != 0 {
+		t.Fatalf("created_at 不是 UTC：%s", entries[0].CreatedAt.Format(time.RFC3339Nano))
 	}
 }
