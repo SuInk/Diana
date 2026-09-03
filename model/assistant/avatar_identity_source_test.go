@@ -53,6 +53,23 @@ func TestAvatarIdentityImageURLsRejectsUnreachableMember(t *testing.T) {
 	}
 }
 
+func TestAvatarIdentityImageURLsPrivateGroupRequiresExplicitID(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindPrivate,
+		Segments: []MessageSegment{
+			{Type: "text", Data: map[string]string{"text": "把 123456789 的群头像改一下"}},
+		},
+	}
+	got := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceGroupPrefix + "123456789"})
+	if len(got) != 1 || got[0] != OneBotGroupAvatarURL("123456789") {
+		t.Fatalf("explicit group avatar = %#v", got)
+	}
+	if got := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceGroupPrefix + "987654321"}); len(got) != 0 {
+		t.Fatalf("unmentioned group avatar resolved: %#v", got)
+	}
+}
+
 // 没点名时只按 @ 兜底，机器人自己不算。
 func TestDefaultAvatarIdentitySourcesUsesMentionsOnly(t *testing.T) {
 	event := MessageEvent{
