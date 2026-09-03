@@ -17,6 +17,8 @@ import (
 
 const defaultBrowserRenderURLLimit = 2
 
+const browserRenderWindowModeSetting = "window_mode"
+
 type SandboxedBrowserRenderPlugin struct {
 	renderer agent.PageRenderer
 	maxURLs  int
@@ -24,13 +26,10 @@ type SandboxedBrowserRenderPlugin struct {
 
 // NewSandboxedBrowserRenderPlugin creates the official disposable-browser renderer.
 func NewSandboxedBrowserRenderPlugin() *SandboxedBrowserRenderPlugin {
-	return newSandboxedBrowserRenderPlugin(agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{}))
+	return newSandboxedBrowserRenderPlugin(nil)
 }
 
 func newSandboxedBrowserRenderPlugin(renderer agent.PageRenderer) *SandboxedBrowserRenderPlugin {
-	if renderer == nil {
-		renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{})
-	}
 	return &SandboxedBrowserRenderPlugin{renderer: renderer, maxURLs: defaultBrowserRenderURLLimit}
 }
 
@@ -38,15 +37,36 @@ func (p *SandboxedBrowserRenderPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          sandboxedBrowserPluginID,
 		Name:        "网页渲染",
-		Version:     "0.2.1",
-		Description: "在一次性隔离配置的无头 Chrome/Chromium 中执行 JavaScript，持续检测跳转和 DOM 变化，稳定后把完整页面链作为不可信上下文交给模型。",
+		Version:     "0.3.0",
+		Description: "优先使用系统 Chrome/Chromium，在一次性隔离配置中执行 JavaScript；机器没有浏览器时自动使用轻量 Obscura。可选择无头或显示调试窗口。",
 		Official:    true,
 		BuiltIn:     true,
-		Permissions: []string{"message:read", "network:http", "browser:headless", "sandbox:ephemeral"},
+		Permissions: []string{"message:read", "network:http", "browser:render", "sandbox:ephemeral"},
+		Settings: []PluginSettingSpec{{
+			Key:         browserRenderWindowModeSetting,
+			Label:       "Chrome 窗口模式",
+			Type:        PluginSettingTypeSelect,
+			Default:     "auto",
+			Description: "自动和无头都在后台运行；可见窗口会打开独立临时 Chrome 窗口，不会读取日常浏览器的登录态。Obscura 始终在后台运行。",
+			Options: []PluginSettingOption{
+				{Value: "auto", Label: "自动（推荐）"},
+				{Value: "headless", Label: "始终无头"},
+				{Value: "visible", Label: "显示隔离窗口"},
+			},
+		}},
 	}
 }
 
+func (p *SandboxedBrowserRenderPlugin) rendererFor(settings SettingValues) agent.PageRenderer {
+	if p.renderer != nil {
+		return p.renderer
+	}
+	headless := strings.ToLower(strings.TrimSpace(settings.String(browserRenderWindowModeSetting, "auto"))) != "visible"
+	return agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Headless: &headless})
+}
+
 func (p *SandboxedBrowserRenderPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
+	renderer := p.rendererFor(req.Settings)
 	urls := extractBrowserRenderURLs(req)
 	if len(urls) == 0 {
 		return nil, nil
@@ -57,7 +77,7 @@ func (p *SandboxedBrowserRenderPlugin) Handle(ctx context.Context, req PluginReq
 	}
 	parts := make([]string, 0, limit)
 	for _, rawURL := range urls[:limit] {
-		page, err := p.renderer.Render(ctx, rawURL)
+		page, err := renderer.Render(ctx, rawURL)
 		recordBrowserRenderLog(ctx, req, rawURL, page, err)
 		if err != nil {
 			parts = append(parts, fmt.Sprintf("- 网页：%s\n  状态：%s", rawURL, browserRenderFailureText(err)))
@@ -75,8 +95,8 @@ func (p *SandboxedBrowserRenderPlugin) Handle(ctx context.Context, req PluginReq
 }
 
 // AgentTools exposes the same renderer to the Agent only while this plugin is enabled.
-func (p *SandboxedBrowserRenderPlugin) AgentTools() []agent.Tool {
-	return []agent.Tool{agent.NewBrowserRenderTool(p.renderer)}
+func (p *SandboxedBrowserRenderPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {
+	return []agent.Tool{agent.NewBrowserRenderTool(p.rendererFor(settings))}, nil
 }
 
 func extractBrowserRenderURLs(req PluginRequest) []string {

@@ -9,11 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/chromedp"
 )
 
 // 把一段自包含的 HTML 截成 PNG。
@@ -59,7 +63,14 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 	}
 	executable, err := findHeadlessBrowserExecutable(req.Executable)
 	if err != nil {
-		return nil, fmt.Errorf("screenshot: %w", err)
+		obscura, obscuraErr := findObscuraExecutable(req.Executable)
+		if obscuraErr != nil {
+			return nil, fmt.Errorf("screenshot: %w", err)
+		}
+		return captureHTMLScreenshotWithObscura(ctx, obscura, req)
+	}
+	if looksLikeObscuraExecutable(executable) {
+		return captureHTMLScreenshotWithObscura(ctx, executable, req)
 	}
 
 	dirs, err := newBrowserSandboxDirs("diana-screenshot-")
@@ -143,6 +154,101 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 				return pngBytes, nil
 			}
 			return nil, fmt.Errorf("screenshot: 渲染超时（%s）：%s", req.Timeout, screenshotDiagnostics(diagnosticsPath))
+		}
+	}
+}
+
+func captureHTMLScreenshotWithObscura(ctx context.Context, executable string, req ScreenshotRequest) ([]byte, error) {
+	dirs, err := newBrowserSandboxDirs("diana-obscura-screenshot-")
+	if err != nil {
+		return nil, err
+	}
+	defer dirs.remove()
+	pagePath := filepath.Join(dirs.root, "page.html")
+	if err := os.WriteFile(pagePath, []byte(req.HTML), 0o600); err != nil {
+		return nil, err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	args := []string{
+		"serve", "--host", "127.0.0.1", "--port", fmt.Sprintf("%d", port),
+		"--allow-private-network",
+		"--allow-file-access",
+		"--quiet",
+	}
+	command := exec.CommandContext(runCtx, executable, args...)
+	diagnostics := &cappedBuffer{limit: 32 * 1024}
+	command.Stdout = diagnostics
+	command.Stderr = diagnostics
+	if err := command.Start(); err != nil {
+		return nil, fmt.Errorf("screenshot: 启动 Obscura 失败：%w", err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- command.Wait() }()
+	defer func() {
+		if command.Process != nil {
+			_ = command.Process.Kill()
+		}
+		select {
+		case <-waited:
+		case <-time.After(2 * time.Second):
+		}
+	}()
+	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/devtools/browser", port)
+	if err := waitForObscuraCDP(runCtx, port, waited); err != nil {
+		return nil, fmt.Errorf("screenshot: Obscura CDP 启动失败：%w：%s", err, compactBrowserError(diagnostics.String()))
+	}
+	allocatorCtx, cancelAllocator := chromedp.NewRemoteAllocator(runCtx, endpoint, chromedp.NoModifyURL)
+	defer cancelAllocator()
+	browserCtx, cancelBrowser := chromedp.NewContext(allocatorCtx)
+	defer cancelBrowser()
+	var pngBytes []byte
+	actions := []chromedp.Action{
+		emulation.SetDeviceMetricsOverride(int64(req.Width), int64(req.Height), 1, false),
+		chromedp.Navigate("file://" + pagePath),
+	}
+	if wait := min(req.VirtualTimeBudget, 2*time.Second); wait > 0 {
+		actions = append(actions, chromedp.Sleep(wait))
+	}
+	actions = append(actions, chromedp.CaptureScreenshot(&pngBytes))
+	if err := chromedp.Run(browserCtx, actions...); err != nil {
+		return nil, fmt.Errorf("screenshot: Obscura 截图失败：%w：%s", err, compactBrowserError(diagnostics.String()))
+	}
+	if _, err := png.Decode(bytes.NewReader(pngBytes)); err != nil {
+		return nil, fmt.Errorf("screenshot: Obscura 返回了无效 PNG：%w", err)
+	}
+	return pngBytes, nil
+}
+
+func waitForObscuraCDP(ctx context.Context, port int, waited <-chan error) error {
+	ticker := time.NewTicker(40 * time.Millisecond)
+	defer ticker.Stop()
+	timer := time.NewTimer(min(5*time.Second, defaultScreenshotTimeout))
+	defer timer.Stop()
+	address := fmt.Sprintf("127.0.0.1:%d", port)
+	for {
+		select {
+		case err := <-waited:
+			if err == nil {
+				return errors.New("进程提前退出")
+			}
+			return fmt.Errorf("进程提前退出：%w", err)
+		case <-ticker.C:
+			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+			if err == nil {
+				_ = connection.Close()
+				return nil
+			}
+		case <-timer.C:
+			return errors.New("等待 CDP 端口超时")
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }
