@@ -521,7 +521,7 @@ func TestAgentHistoryPersistsNewImageFailureAndDoesNotRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(message.Content, "message_id=legacy-broken-image") || !strings.Contains(message.Content, "当前未附加原图") || strings.Contains(message.Content, "[图片]") {
+	if !strings.Contains(message.Content, "message_id=legacy-broken-image") || !strings.Contains(message.Content, "图片×1") || strings.Contains(message.Content, "[图片]") {
 		t.Fatalf("history media notice = %q", message.Content)
 	}
 	if got := len(channel.callsSnapshot()); got != 0 {

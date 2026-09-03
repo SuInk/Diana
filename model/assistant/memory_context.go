@@ -317,16 +317,12 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 	builder.WriteString(strconv.Itoa(profile.Favorability))
 	builder.WriteString("；关系等级：")
 	builder.WriteString(policy.Name)
-	builder.WriteString("；语气：")
-	builder.WriteString(policy.Tone)
 	// 不再列「已授权能力」：那份清单每个等级都一样，摆进上下文只会被复述成
-	// 本等级的特权。能力问题由 diana.capabilities 负责。
+	// 本等级的特权。能力问题由 diana.capabilities 负责。语气要求和恋爱关系同理
+	// 不在这里重复，它们由 relationshipPermissionContext 放在系统尾部（见
+	// formatUserMemoryContext 上的说明）。
 	builder.WriteString("；累计互动：")
 	builder.WriteString(strconv.Itoa(profile.MessageCount))
-	if line := romanceContextLine(policy); line != "" {
-		builder.WriteString("\n")
-		builder.WriteString(line)
-	}
 	// 画像和好感度、关系等级一样属于固定核心：它答的是「这个人是谁」，被预算
 	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
 	// 度可控，不参与下面各段的裁剪。
@@ -434,12 +430,9 @@ func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy Relationsh
 	if llm.EstimateTextTokens(text) <= tokenBudget {
 		return text
 	}
-	// Relationship, favorability and interaction count are the fixed core. A very
-	// small configured window may still require omitting the verbose tone as a
-	// dedicated degradation.
-	compactPolicy := policy
-	compactPolicy.Tone = ""
-	return formatUserMemoryContext(core, compactPolicy)
+	// Relationship, favorability and interaction count are the fixed core; the
+	// verbose tone lives in the system tail, so there is nothing left to shed.
+	return text
 }
 
 func formatStructuredMemoryLine(item StructuredMemoryItem) string {
@@ -455,12 +448,10 @@ func formatStructuredMemoryLine(item StructuredMemoryItem) string {
 	if !verified.IsZero() {
 		timeLabel = verified.Local().Format("2006-01-02")
 	}
-	reason := ""
-	if strings.TrimSpace(item.RetrievalReason) != "" {
-		reason = "｜依据 " + strings.TrimSpace(item.RetrievalReason)
-	}
-	return fmt.Sprintf("\n- [%s｜%s｜置信 %.2f｜重要 %.2f｜v%d｜%s%s] %s：%s",
-		memoryKindLabel(item.Kind), item.Topic, item.Confidence, item.Importance, item.Version, timeLabel, reason, subject, item.Content)
+	// 只给模型用得上的三样：类型、主题、核实日期。置信度已经由分段（低置信度单独
+	// 一段）表达过；重要度、版本号和检索依据是排序和排障用的内部字段，模型不需要，
+	// 每条多付十几个 token，二十几条记忆就是几百个。
+	return fmt.Sprintf("\n- [%s｜%s｜%s] %s：%s", memoryKindLabel(item.Kind), item.Topic, timeLabel, subject, item.Content)
 }
 
 func memoryKindLabel(kind MemoryKind) string {

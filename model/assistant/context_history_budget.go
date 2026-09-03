@@ -92,9 +92,9 @@ type historyContextTurn struct {
 // complete recent turns from newest to oldest. RecentContextLimit remains
 // available to legacy history tools, but no longer defines the normal prompt.
 func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []MessageEvent {
-	budget := recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg)
+	fullBudget := recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg)
 	// 就着眼前这张图问一句时收紧历史：答案几乎全在图里，长历史是白付的 prefill。
-	budget = visionFocusedHistoryBudget(budget, event, PlainText(event.Segments))
+	budget := visionFocusedHistoryBudget(fullBudget, event, PlainText(event.Segments))
 	candidateLimit := historyCandidateLimitForBudget(budget)
 	session := sessionKey(event)
 
@@ -124,7 +124,84 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 		}
 		history = filtered
 	}
-	return selectRecentHistoryTurns(history, event, cfg.BotAccount, budget)
+	return r.anchoredHistoryWindow(session, history, event, cfg.BotAccount, fullBudget, budget)
+}
+
+// historyWindowLowWatermarkPercent 是重新锚定时窗口占预算的比例。窗口从这里开始
+// 逐轮长到预算上限，再一次性回落，中间这段时间前缀逐字节不变。取 70%：回落
+// 一次丢掉三成最旧的历史，对话连贯性几乎不受影响，而重锚之间能隔上百条消息。
+const historyWindowLowWatermarkPercent int64 = 70
+
+// anchoredHistoryWindow 给近期历史窗口加滞回，让窗口的起点在多轮之间保持不动。
+//
+// 没有它时窗口是「从最新往回填满预算」：历史一旦顶到预算，每来一条新消息，最旧
+// 的一轮就被挤出去，窗口起点每轮前移一格。供应商的前缀缓存按字节前缀匹配，起点
+// 一动，整段历史从第一条起就对不上——活跃群里历史长期顶满预算，等于每轮都在为
+// 一万多 token 的历史付全价 prefill。
+//
+// 现在每个会话记住窗口起点（锚）。只要从锚到当前仍装得下预算，窗口就固定从锚
+// 开始、只在尾部增长；装不下了才把锚往前挪到低水位，让窗口重新有增长空间。
+// 历史全部装得下时不需要锚，也就不留状态。
+//
+// focusedBudget 是本轮临时收紧的预算（对着刚发的图问一句时不需要长历史）：只在
+// 锚定好的窗口上再取一段尾巴，不改锚本身，下一轮正常消息仍然沿用原窗口。
+func (r *Runtime) anchoredHistoryWindow(session string, history []MessageEvent, current MessageEvent, botAccount string, budget, focusedBudget int64) []MessageEvent {
+	window := selectRecentHistoryTurns(history, current, botAccount, budget)
+	switch {
+	case len(window) == 0:
+		r.setHistoryWindowAnchor(session, "")
+	case len(window) == len(history):
+		// 全部装得下：窗口起点就是历史起点，天然稳定。
+		r.setHistoryWindowAnchor(session, "")
+	default:
+		anchor := r.historyWindowAnchor(session)
+		if index := historyWindowAnchorIndex(window, anchor); index >= 0 {
+			window = window[index:]
+		} else {
+			if low := selectRecentHistoryTurns(window, current, botAccount, budget*historyWindowLowWatermarkPercent/100); len(low) > 0 {
+				window = low
+			}
+			r.setHistoryWindowAnchor(session, messageHistoryDedupeKey(window[0]))
+		}
+	}
+	if focusedBudget < budget {
+		window = selectRecentHistoryTurns(window, current, botAccount, focusedBudget)
+	}
+	return window
+}
+
+// historyWindowAnchorIndex 返回锚在窗口里的下标；锚为空或已经不在窗口里返回 -1。
+// 锚不在窗口里有两种情况：它比窗口起点还老（从锚到当前已经装不下预算），或者
+// 那条消息被撤回、被摘要折掉了。两种都该重新锚定。
+func historyWindowAnchorIndex(window []MessageEvent, anchor string) int {
+	if anchor == "" {
+		return -1
+	}
+	for index, event := range window {
+		if messageHistoryDedupeKey(event) == anchor {
+			return index
+		}
+	}
+	return -1
+}
+
+func (r *Runtime) historyWindowAnchor(session string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.historyWindowAnchors[session]
+}
+
+func (r *Runtime) setHistoryWindowAnchor(session string, anchor string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if anchor == "" {
+		delete(r.historyWindowAnchors, session)
+		return
+	}
+	if r.historyWindowAnchors == nil {
+		r.historyWindowAnchors = make(map[string]string)
+	}
+	r.historyWindowAnchors[session] = anchor
 }
 
 // promptContextWindowTokens 取本轮可能被选中的配置档里最小的那个请求上下文上限：

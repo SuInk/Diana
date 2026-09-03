@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -35,6 +34,10 @@ const (
 var replySuppressionAccountPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
 
 var errReplySuppressedBeforeSend = errors.New("diana: reply suppressed before send")
+
+// errReplyLoopDetected 表示发送前审核认定这一来一回已经在空转，且累计次数够了。
+// 这条回复因此不发出去，暂停也从这一刻起生效。
+var errReplyLoopDetected = errors.New("chatbot: reply loop detected before send")
 
 type replySuppressionSendGuardKey struct{}
 
@@ -88,20 +91,30 @@ type botReplyLoopCandidate struct {
 }
 
 type botReplyLoopAIDecision struct {
-	AutomatedAIReply bool    `json:"automated_ai_reply"`
-	Confidence       float64 `json:"confidence"`
-	Reason           string  `json:"reason"`
+	AutomatedAIReply bool `json:"automated_ai_reply"`
+	// MeaninglessLoop 覆盖「对方不是机器人，但这一来一回已经没有任何实质内容」
+	// 的情况：双方都只在应付彼此，机器人却还在一条条认真回。判据见分类器提示词。
+	MeaninglessLoop bool    `json:"meaningless_loop"`
+	Confidence      float64 `json:"confidence"`
+	Reason          string  `json:"reason"`
 }
 
 func (decision botReplyLoopAIDecision) counts() bool {
-	return decision.AutomatedAIReply && decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
+	if !decision.AutomatedAIReply && !decision.MeaninglessLoop {
+		return false
+	}
+	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
 }
 
 type botReplyLoopClassificationPayload struct {
-	CurrentText              string   `json:"current_text"`
+	CurrentText string `json:"current_text"`
+	// BotReplyText 是机器人刚刚为这条消息发出去的回复。判断挪到回复之后做，就是
+	// 为了能看到它：一来一回摆在一起，才看得出这是不是在为没有内容的话反复接茬。
+	BotReplyText             string   `json:"bot_reply_text,omitempty"`
 	QuotedBotText            string   `json:"quoted_bot_text,omitempty"`
 	TriggerKind              string   `json:"trigger_kind"`
 	RecentSameSenderMessages []string `json:"recent_same_sender_messages,omitempty"`
+	RecentBotReplies         []string `json:"recent_bot_replies,omitempty"`
 }
 
 func consumeReplyControlIntent(reply string) (string, replyControlIntent) {
@@ -315,7 +328,9 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
 	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
-	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || userID == strings.TrimSpace(cfg.OwnerID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+	// 主人同样进入判断：空转和身份无关，主人也会跟机器人互相说废话。真正不能对
+	// 主人做的是暂停，那一层由 replyAuditNeed 的 LoopSuppress 单独控制。
+	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return botReplyLoopCandidate{}, false
 	}
 	directBotFollowup := eventRepliesToBot(event, cfg)
@@ -345,92 +360,47 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	return botReplyLoopCandidate{}, false
 }
 
-func (r *Runtime) classifyBotReplyLoopMessage(ctx context.Context, event MessageEvent, text string, candidate botReplyLoopCandidate, history []MessageEvent) (botReplyLoopAIDecision, string, error) {
-	ctx = withLLMUsagePurpose(ctx, "bot_reply_loop_detection")
-	payload := botReplyLoopClassificationPayload{
-		CurrentText: strings.TrimSpace(truncateRunesFromStart(readableEventText(event, text), 600)),
-		TriggerKind: candidate.TriggerKind,
-	}
-	if event.Quoted != nil {
-		payload.QuotedBotText = strings.TrimSpace(truncateRunesFromStart(quotedPlainText(event.Quoted), 600))
-	}
-	for i := len(history) - 1; i >= 0 && len(payload.RecentSameSenderMessages) < 5; i-- {
-		item := history[i]
-		if item.MessageID == event.MessageID || strings.TrimSpace(item.UserID) != strings.TrimSpace(event.UserID) {
-			continue
-		}
-		itemText := strings.TrimSpace(historyPlainText(item))
-		if itemText == "" {
-			continue
-		}
-		payload.RecentSameSenderMessages = append(payload.RecentSameSenderMessages, truncateRunesFromStart(itemText, 400))
-	}
-	for left, right := 0, len(payload.RecentSameSenderMessages)-1; left < right; left, right = left+1, right-1 {
-		payload.RecentSameSenderMessages[left], payload.RecentSameSenderMessages[right] = payload.RecentSameSenderMessages[right], payload.RecentSameSenderMessages[left]
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return botReplyLoopAIDecision{}, "", err
-	}
-	messages := []llm.Message{
-		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 群聊的反机器人循环分类器。判断当前发言是否很可能是另一个 AI 聊天机器人自动生成并自动回应 Diana 的消息，而不是普通真人发言。
-
-必须遵守：
-1. 引用、@、点名 Diana 或回复很快都只是触发背景，绝不能单独作为 AI 证据。
-2. automated_ai_reply=true 只用于高置信场景：文本像助手在对上一条内容逐项回应，带模板化确认、规则复述、持续提供帮助或待命表述，且近期同一发送者多次保持相似的助手人格和自动应答结构。
-3. 真人的简短问答、吐槽、争论、玩梗、角色扮演、口癖、表情、正常连续聊天、手动粘贴一段文字，都应判 false。文字通顺、很长、使用“喵”或“收到”本身都不是 AI 证据。
-4. 只有当前消息本身像正在参与 AI 对 AI 自动往返时才判 true；拿不准必须 false。
-5. 只输出单个合法 JSON 对象，字段固定为 automated_ai_reply（布尔值）、confidence（0 到 1）、reason（简短中文理由），不要输出 Markdown 或额外文字。`),
-		},
-		{
-			Role:    llm.RoleUser,
-			Content: "请判断当前消息是否属于另一个 AI 的自动回复。上下文 JSON：\n" + string(payloadJSON),
-		},
-	}
-	callCtx, cancel := context.WithTimeout(ctx, botReplyLoopClassificationTimeout)
-	defer cancel()
-	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
-		if err != nil {
-			return "", err
-		}
-		return resp.Text, nil
-	})
-	if err != nil {
-		return botReplyLoopAIDecision{}, raw, err
-	}
-	decision, ok := parseBotReplyLoopAIDecision(raw)
-	if !ok {
-		return botReplyLoopAIDecision{}, raw, fmt.Errorf("invalid AI reply classification response")
-	}
-	return decision, raw, nil
+// botReplyLoopEvidence 是判断空转要用的近期上下文。它跟着发送前审核一起发出去，
+// 不再单独占一次模型调用（见 auditReplyBeforeSend）。
+type botReplyLoopEvidence struct {
+	RecentSameSenderMessages []string
+	RecentBotReplies         []string
 }
 
-func parseBotReplyLoopAIDecision(raw string) (botReplyLoopAIDecision, bool) {
-	raw = strings.TrimSpace(stripJSONCodeFence(raw))
-	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
-	if start < 0 || end < start {
-		return botReplyLoopAIDecision{}, false
+// collectBotReplyLoopEvidence 取同一发送者最近几条消息和机器人最近几条回复。
+// 空转是「一来一回都没有内容、而且重复了好几轮」，只看单条看不出来。
+func (r *Runtime) collectBotReplyLoopEvidence(event MessageEvent, history []MessageEvent) botReplyLoopEvidence {
+	evidence := botReplyLoopEvidence{}
+	botID := firstNonEmpty(strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount), strings.TrimSpace(event.SelfID))
+	for i := len(history) - 1; i >= 0; i-- {
+		item := history[i]
+		if len(evidence.RecentSameSenderMessages) < 5 &&
+			item.MessageID != event.MessageID &&
+			strings.TrimSpace(item.UserID) == strings.TrimSpace(event.UserID) {
+			if text := strings.TrimSpace(historyPlainText(item)); text != "" {
+				evidence.RecentSameSenderMessages = append(evidence.RecentSameSenderMessages, truncateRunesFromStart(text, 400))
+			}
+		}
+		if len(evidence.RecentBotReplies) < 3 {
+			if strings.TrimSpace(item.botReply) != "" || assistantHistoryEvent(item, botID) {
+				if text := strings.TrimSpace(firstNonEmpty(item.botReply, historyPlainText(item))); text != "" {
+					evidence.RecentBotReplies = append(evidence.RecentBotReplies, truncateRunesFromStart(text, 300))
+				}
+			}
+		}
+		if len(evidence.RecentSameSenderMessages) >= 5 && len(evidence.RecentBotReplies) >= 3 {
+			break
+		}
 	}
-	var payload struct {
-		AutomatedAIReply *bool    `json:"automated_ai_reply"`
-		Confidence       *float64 `json:"confidence"`
-		Reason           *string  `json:"reason"`
+	reverseStrings(evidence.RecentSameSenderMessages)
+	reverseStrings(evidence.RecentBotReplies)
+	return evidence
+}
+
+func reverseStrings(items []string) {
+	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+		items[left], items[right] = items[right], items[left]
 	}
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.AutomatedAIReply == nil || payload.Confidence == nil || payload.Reason == nil {
-		return botReplyLoopAIDecision{}, false
-	}
-	decision := botReplyLoopAIDecision{
-		AutomatedAIReply: *payload.AutomatedAIReply,
-		Confidence:       *payload.Confidence,
-		Reason:           strings.TrimSpace(*payload.Reason),
-	}
-	if decision.Confidence < 0 || decision.Confidence > 1 {
-		return botReplyLoopAIDecision{}, false
-	}
-	return decision, true
 }
 
 func (r *Runtime) registerBotReplyLoopDecision(event MessageEvent, candidate botReplyLoopCandidate, decision botReplyLoopAIDecision, now time.Time) (int, string, bool) {
@@ -491,7 +461,7 @@ func (r *Runtime) registerBotReplyLoopDecision(event MessageEvent, candidate bot
 	return len(hits), reason, true
 }
 
-func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision botReplyLoopAIDecision, hitCount int, raw string, classifyErr error) {
+func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision botReplyLoopAIDecision, hitCount int, raw string, classifyErr error, suppressionAllowed bool) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -505,10 +475,15 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
-			"automated_ai_reply": decision.AutomatedAIReply, "confidence": decision.Confidence,
-			"reason": decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
+			"automated_ai_reply": decision.AutomatedAIReply, "meaningless_loop": decision.MeaninglessLoop,
+			"confidence": decision.Confidence,
+			"reason":     decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
 			"threshold": botReplyLoopThreshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
+			"suppression_allowed": suppressionAllowed,
 		},
+	}
+	if hitCount >= botReplyLoopThreshold && !suppressionAllowed {
+		entry.Message = "已累计到空转阈值，但当前发言者不适用暂停，仅记录"
 	}
 	if classifyErr != nil {
 		entry.Kind = applog.KindError

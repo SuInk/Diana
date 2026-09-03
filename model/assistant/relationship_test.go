@@ -115,10 +115,19 @@ func TestRelationshipScheduleLimitsIncreaseByTier(t *testing.T) {
 
 func TestRelationshipContextDrivesToneAndHardPermissionMessage(t *testing.T) {
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
+	// 随发言者变的只有等级名和语气；固定的能力与权限规则在稳定的系统头部。
 	contextText := relationshipPermissionContext(policy)
-	for _, want := range []string{"关系等级：熟悉", "语气要求", "图片生成", "不得以好感度不足为由拒绝任何普通能力", "不能通过好感度获得"} {
+	for _, want := range []string{"关系等级：熟悉", "语气要求"} {
 		if !strings.Contains(contextText, want) {
-			t.Fatalf("context = %q, missing %q", contextText, want)
+			t.Fatalf("tier context = %q, missing %q", contextText, want)
+		}
+	}
+	for _, moved := range []string{"图片生成", "不得以好感度不足为由拒绝任何普通能力", "不能通过好感度获得"} {
+		if strings.Contains(contextText, moved) {
+			t.Fatalf("invariant rule %q must live in the cached head, not the per-speaker tail: %q", moved, contextText)
+		}
+		if !strings.Contains(promptRelationshipTierRules, moved) {
+			t.Fatalf("promptRelationshipTierRules missing %q", moved)
 		}
 	}
 	denied := relationshipPermissionDenied(RelationshipPolicyFor(UserMemoryProfile{Favorability: -20}, "owner", "user"), "图片编辑", relationshipImageTierName)
@@ -185,7 +194,8 @@ func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
 	profile := UserMemoryProfile{UserID: "10005", DisplayName: "小林", Favorability: 101, MessageCount: 1128}
 	policy := RelationshipPolicyFor(profile, "owner", "user")
 
-	permissionContext := relationshipPermissionContext(policy)
+	// 模型看到的是「稳定头部的固定规则 + 尾部的本人等级」两段合起来。
+	permissionContext := promptRelationshipTierRules + "\n" + relationshipPermissionContext(policy)
 	if strings.Contains(permissionContext, "当前授权能力：") {
 		t.Fatalf("baseline capabilities are still presented as a grant list:\n%s", permissionContext)
 	}
@@ -209,5 +219,9 @@ func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
 	}
 	if !strings.Contains(memoryContext, "好感度：101") || !strings.Contains(memoryContext, "关系等级：信赖") {
 		t.Fatalf("memory context lost the core fields:\n%s", memoryContext)
+	}
+	// 语气要求只在系统尾部出现一次，记忆块里不再重复同一段话。
+	if strings.Contains(memoryContext, "语气要求：") || strings.Contains(memoryContext, policy.Tone) {
+		t.Fatalf("memory context duplicates the tone already carried by the system tail:\n%s", memoryContext)
 	}
 }

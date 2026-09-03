@@ -179,6 +179,12 @@ func messagesHaveInputAudio(messages []Message) bool {
 func anthropicMessages(messages []Message, definitions []ToolDefinition) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(messages))
 	for _, msg := range messages {
+		if msg.Role == RoleSystem {
+			// 开头的 system 已经被 splitSystemPrompt 取走，走到这里的是历史之后的
+			// 补充指令（时钟、发言者身份等）。Anthropic 没有中途 system 角色，落成
+			// 带标记的 user 文本，位置不动，前面的历史前缀因此保持可缓存。
+			msg = inlineSystemMessage(msg)
+		}
 		blocks := anthropicContentBlocks(msg)
 		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
 			blocks = blocks[:0]

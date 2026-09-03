@@ -149,10 +149,21 @@ func newNotebookRuntime(t *testing.T, store NotebookStore) *Runtime {
 	return runtime
 }
 
+// newIsolatedNotebookRuntime 关掉「笔记本跟随机器人」，给按会话隔离那一档的用例用。
+func newIsolatedNotebookRuntime(t *testing.T, store NotebookStore) *Runtime {
+	t.Helper()
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "10000", NotebookSharedScopeEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	if store != nil {
+		runtime.SetNotebookStore(store)
+	}
+	return runtime
+}
+
 func notebookTestEvent(userID, text string) MessageEvent {
 	return MessageEvent{
 		Kind:      EventKindGroup,
 		SelfID:    "10000",
+		ProfileID: "qq",
 		UserID:    userID,
 		GroupID:   "20002",
 		MessageID: "m1",
@@ -268,7 +279,7 @@ func TestNotebookContextEmptyWithoutStore(t *testing.T) {
 // 同一个词第二次写入是修订，不是新建：笔记本要能一直被改。
 func TestDianaNotebookToolUpsertRevises(t *testing.T) {
 	store := newMemoryNotebookStore()
-	runtime := newNotebookRuntime(t, store)
+	runtime := newIsolatedNotebookRuntime(t, store)
 	event := notebookTestEvent("10005", "记一下")
 
 	result, err := runNotebookTool(t, runtime, event, false, map[string]any{
@@ -319,9 +330,39 @@ func TestDianaNotebookToolRejectsEmptyMeaning(t *testing.T) {
 }
 
 // 全局笔记本是主人特权：一个群的内部梗不该由一个人替所有群定义。
-func TestDianaNotebookToolRestrictsGlobalScope(t *testing.T) {
+// 默认笔记本跟随机器人：群聊和私聊里普通成员记的都进这台机器人的全局本，
+// 不用传 global，也不分群。
+func TestDianaNotebookToolFollowsBotByDefault(t *testing.T) {
 	store := newMemoryNotebookStore()
 	runtime := newNotebookRuntime(t, store)
+	group := notebookTestEvent("10005", "记一下")
+	group.ProfileID = "qq"
+	private := MessageEvent{Kind: EventKindPrivate, SelfID: "10000", UserID: "10006", MessageID: "m2", ProfileID: "qq"}
+
+	result, err := runNotebookTool(t, runtime, group, false, map[string]any{
+		"operation": "upsert", "term": "鸽", "meaning": "放鸽子",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Entry == nil || result.Entry.ScopeKey != NotebookScopeBotPrefix+"qq" {
+		t.Fatalf("group write scope = %+v", result)
+	}
+	result, err = runNotebookTool(t, runtime, private, false, map[string]any{
+		"operation": "get", "term": "鸽",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Entry == nil || result.Entry.Meaning != "放鸽子" {
+		t.Fatalf("private chat must read the same notebook: %+v", result)
+	}
+}
+
+// 关掉「跟随机器人」、按会话隔离时，global 才是主人特权。
+func TestDianaNotebookToolRestrictsGlobalScope(t *testing.T) {
+	store := newMemoryNotebookStore()
+	runtime := newIsolatedNotebookRuntime(t, store)
 	event := notebookTestEvent("10005", "记一下")
 
 	if _, err := runNotebookTool(t, runtime, event, false, map[string]any{
@@ -336,8 +377,102 @@ func TestDianaNotebookToolRestrictsGlobalScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Entry == nil || result.Entry.ScopeKey != NotebookScopeGlobal {
+	if result.Entry == nil || result.Entry.ScopeKey != NotebookScopeBotPrefix+"qq" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+// 「有人说不对」不能直接覆盖：不是主人也不是当初记它的人，说法只能作为补充并存；
+// 原记录者和主人才能改主释义。
+func TestDianaNotebookToolMergesCorrectionsFromOthersAsSupplements(t *testing.T) {
+	store := newMemoryNotebookStore()
+	runtime := newNotebookRuntime(t, store)
+	author := notebookTestEvent("10005", "记一下")
+	author.SenderName = "小明"
+	other := notebookTestEvent("10006", "不对")
+	other.SenderName = "小红"
+	other.GroupID = "30003"
+
+	if _, err := runNotebookTool(t, runtime, author, false, map[string]any{
+		"operation": "upsert", "term": "DXLS", "meaning": "带薪拉屎的缩写", "aliases": []any{"带薪拉屎"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runNotebookTool(t, runtime, other, false, map[string]any{
+		"operation": "upsert", "term": "dxls", "meaning": "我们群里指开会摸鱼", "aliases": []any{"摸鱼"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "supplemented" || result.Entry == nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if !strings.HasPrefix(result.Entry.Meaning, "带薪拉屎的缩写 补充说法（小红，") || !strings.HasSuffix(result.Entry.Meaning, "）：我们群里指开会摸鱼") {
+		t.Fatalf("meaning = %q", result.Entry.Meaning)
+	}
+	if len(result.Entry.Aliases) != 2 || !strings.Contains(result.Message, "小明") || !strings.Contains(result.Message, "没有覆盖") {
+		t.Fatalf("supplement result = %+v", result)
+	}
+
+	// 同一个人再说一遍同样的话不重复记。
+	again, err := runNotebookTool(t, runtime, other, false, map[string]any{
+		"operation": "upsert", "term": "DXLS", "meaning": "我们群里指开会摸鱼",
+	})
+	if err != nil || again.Action != "unchanged" {
+		t.Fatalf("repeat = %+v err=%v", again, err)
+	}
+
+	// 原记录者改，才是改主释义。
+	settled, err := runNotebookTool(t, runtime, author, false, map[string]any{
+		"operation": "upsert", "term": "DXLS", "meaning": "带薪拉屎，也有群用来指开会摸鱼", "note": "采纳小红的说法",
+	})
+	if err != nil || settled.Action != "updated" || settled.Entry.Meaning != "带薪拉屎，也有群用来指开会摸鱼" {
+		t.Fatalf("author revision = %+v err=%v", settled, err)
+	}
+	// 主人也可以直接改。
+	owner, err := runNotebookTool(t, runtime, notebookTestEvent("10001", "改一下"), true, map[string]any{
+		"operation": "upsert", "term": "DXLS", "meaning": "主人拍板的释义",
+	})
+	if err != nil || owner.Action != "updated" || owner.Entry.Meaning != "主人拍板的释义" {
+		t.Fatalf("owner revision = %+v err=%v", owner, err)
+	}
+}
+
+// 补充说法有条数和总长上限：主释义永远保留，超限先丢最老的补充。
+func TestMergeNotebookSupplementKeepsPrimaryAndCapsSupplements(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.Local)
+	meaning := "主释义"
+	for index := 0; index < notebookMaxSupplements+2; index++ {
+		meaning = mergeNotebookSupplement(meaning, "群友"+itoa(index), "说法"+itoa(index), now)
+	}
+	primary, supplements := splitNotebookMeaning(meaning)
+	if primary != "主释义" || len(supplements) != notebookMaxSupplements || supplements[0].Text != "说法2" || supplements[2].Editor != "群友4" {
+		t.Fatalf("merged = %q", meaning)
+	}
+	long := mergeNotebookSupplement("主释义", "甲", strings.Repeat("长", NotebookContentMaxRunes), now)
+	long = mergeNotebookSupplement(long, "乙", "短说法", now)
+	primary, supplements = splitNotebookMeaning(long)
+	if primary != "主释义" || len(supplements) != 1 || supplements[0].Editor != "乙" || len([]rune(long)) > NotebookContentMaxRunes {
+		t.Fatalf("long merge = %q", long)
+	}
+	if mergeNotebookSupplement("主释义", "甲", "主释义", now) != "主释义" {
+		t.Fatal("restating the primary meaning must be a no-op")
+	}
+}
+
+// 拿不到机器人身份的写入必须报错，不能悄悄落进升级前那本共用的 global。
+func TestDianaNotebookToolRejectsWriteWithoutBotIdentity(t *testing.T) {
+	store := newMemoryNotebookStore()
+	runtime := newNotebookRuntime(t, store)
+	event := notebookTestEvent("10005", "记一下")
+	event.ProfileID = ""
+	if _, err := runNotebookTool(t, runtime, event, true, map[string]any{
+		"operation": "upsert", "term": "鸽", "meaning": "放鸽子",
+	}); err == nil || !strings.Contains(err.Error(), "机器人身份") {
+		t.Fatalf("profileless write should fail, got %v", err)
+	}
+	if _, found, _ := store.NotebookEntryDetail(context.Background(), NotebookScopeGlobal, "鸽"); found {
+		t.Fatal("nothing may be written into the legacy global notebook")
 	}
 }
 
@@ -425,37 +560,45 @@ func TestSystemPromptInjectsNotebookRuleWithTool(t *testing.T) {
 	}
 }
 
-// 默认按会话隔离：一个群记下的梗只写进这个群的作用域，别的群查不到。
-func TestNotebookScopeKeyForWriteIsolatesBySessionByDefault(t *testing.T) {
-	cfg := DefaultBotConfig().WithDefaults()
+// 关掉「跟随机器人」后按会话隔离：一个群记下的梗只写进这个群的作用域，别的群查不到。
+func TestNotebookScopeKeyForWriteIsolatesBySessionWhenDisabled(t *testing.T) {
+	cfg := DefaultBotConfig()
+	cfg.NotebookSharedScopeEnabled = boolPointer(false)
+	cfg = cfg.WithDefaults()
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ContextNamespace: "profile-a"}
 
-	if got := notebookScopeKeyForWrite(event, cfg, false, false); got != "profile-a:group:123" {
-		t.Fatalf("default write scope = %q", got)
+	if got, err := notebookScopeKeyForWrite(event, cfg, false, false); err != nil || got != "profile-a:group:123" {
+		t.Fatalf("default write scope = %q err=%v", got, err)
 	}
 	// global 是主人特权：普通成员即使传 global 也只能写本群。
-	if got := notebookScopeKeyForWrite(event, cfg, true, false); got != "profile-a:group:123" {
-		t.Fatalf("non-owner global write scope = %q", got)
+	if got, err := notebookScopeKeyForWrite(event, cfg, true, false); err != nil || got != "profile-a:group:123" {
+		t.Fatalf("non-owner global write scope = %q err=%v", got, err)
 	}
-	if got := notebookScopeKeyForWrite(event, cfg, true, true); got != NotebookScopeGlobal {
-		t.Fatalf("owner global write scope = %q", got)
+	event.ProfileID = "qq"
+	if got, err := notebookScopeKeyForWrite(event, cfg, true, true); err != nil || got != NotebookScopeBotPrefix+"qq" {
+		t.Fatalf("owner global write scope = %q err=%v", got, err)
 	}
 }
 
-// 打开跨群共用之后所有条目都写进全局，不再按群分家。
+// 默认笔记本跟随机器人：群聊、私聊的条目都写进全局，不按会话分家。
 func TestNotebookScopeKeyForWriteSharedAcrossGroups(t *testing.T) {
-	cfg := DefaultBotConfig()
-	cfg.NotebookSharedScopeEnabled = boolPointer(true)
-	cfg = cfg.WithDefaults()
+	cfg := DefaultBotConfig().WithDefaults()
+	if !boolValue(cfg.NotebookSharedScopeEnabled, false) {
+		t.Fatal("notebook must follow the bot by default")
+	}
 
 	for _, event := range []MessageEvent{
-		{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ContextNamespace: "profile-a"},
-		{Kind: EventKindGroup, GroupID: "456", UserID: "20002"},
-		{Kind: EventKindPrivate, UserID: "30003"},
+		{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ContextNamespace: "profile-a", ProfileID: "qq"},
+		{Kind: EventKindGroup, GroupID: "456", UserID: "20002", ProfileID: "qq"},
+		{Kind: EventKindPrivate, UserID: "30003", ProfileID: "qq"},
 	} {
-		if got := notebookScopeKeyForWrite(event, cfg, false, false); got != NotebookScopeGlobal {
-			t.Fatalf("shared write scope for %#v = %q", event, got)
+		if got, err := notebookScopeKeyForWrite(event, cfg, false, false); err != nil || got != NotebookScopeBotPrefix+"qq" {
+			t.Fatalf("shared write scope for %#v = %q err=%v", event, got, err)
 		}
+	}
+	// 拿不到机器人身份就报错，不落进升级前那本共用的 global。
+	if _, err := notebookScopeKeyForWrite(MessageEvent{Kind: EventKindGroup, GroupID: "456", UserID: "20002"}, cfg, false, false); err == nil {
+		t.Fatal("profileless shared write must fail")
 	}
 }
 
@@ -477,14 +620,14 @@ func TestNotebookGlobalScopeIsPerBot(t *testing.T) {
 	qq := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ProfileID: "qq"}
 	tg := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ProfileID: "tg"}
 
-	qqScope := notebookScopeKeyForWrite(qq, cfg, true, true)
-	tgScope := notebookScopeKeyForWrite(tg, cfg, true, true)
+	qqScope, _ := notebookScopeKeyForWrite(qq, cfg, true, true)
+	tgScope, _ := notebookScopeKeyForWrite(tg, cfg, true, true)
 	if qqScope != NotebookScopeBotPrefix+"qq" || tgScope != NotebookScopeBotPrefix+"tg" {
 		t.Fatalf("owner global write scopes = %q / %q", qqScope, tgScope)
 	}
-	// 拿不到机器人身份时退回升级前那本共用笔记本，总比把条目写丢好。
-	if got := notebookScopeKeyForWrite(MessageEvent{Kind: EventKindGroup, GroupID: "123"}, cfg, true, true); got != NotebookScopeGlobal {
-		t.Fatalf("profileless owner global write scope = %q, want %q", got, NotebookScopeGlobal)
+	// 拿不到机器人身份时报错，不能写进升级前那本所有机器人共用的笔记本。
+	if _, err := notebookScopeKeyForWrite(MessageEvent{Kind: EventKindGroup, GroupID: "123"}, cfg, true, true); err == nil {
+		t.Fatal("profileless owner global write must fail")
 	}
 }
 
@@ -519,8 +662,9 @@ func TestNotebookScopeRejectsIdentitylessSession(t *testing.T) {
 		t.Fatalf("scope keys = %#v, want global only", got)
 	}
 	cfg := DefaultBotConfig().WithDefaults()
-	if got := notebookScopeKeyForWrite(empty, cfg, false, false); got != NotebookScopeGlobal {
-		t.Fatalf("identityless write scope = %q, want global", got)
+	// 没有身份的事件既没有会话也没有机器人，写入必须报错。
+	if _, err := notebookScopeKeyForWrite(empty, cfg, false, false); err == nil {
+		t.Fatal("identityless write must fail instead of landing in the legacy global notebook")
 	}
 	// 带命名空间但仍然没有身份，同样不能算一个会话。
 	if got := notebookSessionScope(MessageEvent{ContextNamespace: "profile-a"}); got != "" {

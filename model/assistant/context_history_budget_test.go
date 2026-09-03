@@ -47,6 +47,74 @@ func TestRecentHistoryUsesTokenWindowInsteadOfTwentyMessages(t *testing.T) {
 	}
 }
 
+// 历史顶到预算后，窗口起点必须在多轮之间保持不动，只在装不下时一次性回落；
+// 否则每来一条消息最旧的一轮就被挤掉，整段历史的前缀缓存每轮都断。
+func TestAnchoredHistoryWindowKeepsStartStableAcrossTurns(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	var history []MessageEvent
+	turn := func(index int) []MessageEvent {
+		return []MessageEvent{
+			{Kind: EventKindGroup, GroupID: "g", Time: int64(1000 + index*10), UserID: "user-1", MessageID: fmt.Sprintf("u-%d", index), SenderName: "Alice", RawMessage: fmt.Sprintf("第%d个很短的问题", index)},
+			{Kind: EventKindGroup, GroupID: "g", Time: int64(1001 + index*10), MessageID: fmt.Sprintf("a-%d", index), botReply: fmt.Sprintf("第%d个简短回答", index)},
+		}
+	}
+	for index := 0; index < 60; index++ {
+		history = append(history, turn(index)...)
+	}
+	const budget = int64(600)
+	current := func() MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "g", Time: history[len(history)-1].Time + 5}
+	}
+	full := selectRecentHistoryTurns(history, current(), "bot", budget)
+	if len(full) == len(history) {
+		t.Fatalf("test needs a truncated window, got all %d events", len(history))
+	}
+
+	first := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+	if len(first) == 0 || len(first) >= len(full) {
+		t.Fatalf("re-anchored window should sit below the full budget: %d vs %d", len(first), len(full))
+	}
+	anchor := first[0].MessageID
+	stableTurns := 0
+	for index := 60; index < 200; index++ {
+		history = append(history, turn(index)...)
+		window := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+		if window[len(window)-1].MessageID != fmt.Sprintf("a-%d", index) {
+			t.Fatalf("window must always end at the newest message: %q", window[len(window)-1].MessageID)
+		}
+		if window[0].MessageID == anchor {
+			stableTurns++
+			continue
+		}
+		if stableTurns < 3 {
+			t.Fatalf("anchor moved after only %d stable turns", stableTurns)
+		}
+		// 回落后窗口变短，起点前移到低水位。
+		if len(window) >= len(full) {
+			t.Fatalf("re-anchored window should shrink to the low watermark: %d vs %d", len(window), len(full))
+		}
+		anchor = window[0].MessageID
+		stableTurns = 0
+	}
+	if stableTurns == 0 && anchor == "" {
+		t.Fatal("anchor never settled")
+	}
+
+	// 临时收紧的预算只取尾巴，不动锚：下一轮正常预算仍从原起点开始。
+	before := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+	focused := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget/4)
+	after := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+	if len(focused) >= len(before) || before[0].MessageID != after[0].MessageID || len(before) != len(after) {
+		t.Fatalf("focused turn must not move the anchor: before=%d focused=%d after=%d", len(before), len(focused), len(after))
+	}
+
+	// 历史全部装得下时不需要锚。
+	short := history[len(history)-4:]
+	if window := runtime.anchoredHistoryWindow("s", short, current(), "bot", budget, budget); len(window) != len(short) || runtime.historyWindowAnchor("s") != "" {
+		t.Fatalf("fully fitting history must clear the anchor: %d / %q", len(window), runtime.historyWindowAnchor("s"))
+	}
+}
+
 func TestRecentHistoryStopsBeforeOversizedOlderTurn(t *testing.T) {
 	history := []MessageEvent{
 		{Kind: EventKindPrivate, Time: 1, UserID: "u", MessageID: "old-u", RawMessage: strings.Repeat("很长的旧问题", 500)},
