@@ -79,6 +79,12 @@ if [ "$install_scope" = "system" ] && [ -f /etc/systemd/system/diana.service ] &
   systemctl daemon-reload >/dev/null 2>&1 || true
 fi
 
+# 服务没了，免密授权也不该留下。只删安装器自己写的那份（按标记行认）。
+if [ "$install_scope" = "system" ] && [ -f /etc/sudoers.d/diana ] &&
+  grep -Fq 'Managed by the Diana installer' /etc/sudoers.d/diana 2>/dev/null; then
+  rm -f -- /etc/sudoers.d/diana
+fi
+
 unit="$service_home/.config/systemd/user/diana.service"
 if [ -f "$unit" ] && grep -F "$install_dir" "$unit" >/dev/null 2>&1; then
   if command -v systemctl >/dev/null 2>&1; then
