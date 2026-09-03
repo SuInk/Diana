@@ -63,7 +63,7 @@ func TestAssistantEventsEndpointReturnsDurableDecisionReasons(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
-		Action:    "chatbot.llm_usage",
+		Action:    "diana.llm_usage",
 		Target:    event.MessageID,
 		CreatedAt: time.Now().UTC(),
 		Metadata:  map[string]any{"input_tokens": 60, "output_tokens": 15},
@@ -380,7 +380,7 @@ func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
-		Kind: storage.LogKindDebug, Action: "chatbot.debug_trace", Target: event.MessageID, Message: "模型请求完成",
+		Kind: storage.LogKindDebug, Action: "diana.debug_trace", Target: event.MessageID, Message: "模型请求完成",
 		Metadata: map[string]any{
 			"phase": "model_request", "platform": event.Platform, "profile_id": event.ProfileID,
 			"kind": "group", "group_id": event.GroupID, "user_id": event.UserID, "message_id": event.MessageID,

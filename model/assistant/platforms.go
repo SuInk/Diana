@@ -192,7 +192,7 @@ func PlatformByID(id string) (PlatformDefinition, bool) {
 // ValidatePlatform 校验平台是否有可用适配器。
 func ValidatePlatform(id string) error {
 	if _, ok := PlatformByID(id); !ok {
-		return fmt.Errorf("chatbot: unsupported platform %q", id)
+		return fmt.Errorf("diana: unsupported platform %q", id)
 	}
 	return nil
 }

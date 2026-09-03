@@ -386,12 +386,12 @@ func (p *RepositoryPublishPlugin) MergeSecretSetting(key, previous, submitted st
 	}
 	var updates map[string]*string
 	if err := json.Unmarshal([]byte(submitted), &updates); err != nil {
-		return "", fmt.Errorf("chatbot: invalid user token update")
+		return "", fmt.Errorf("diana: invalid user token update")
 	}
 	for rawUserID, token := range updates {
 		userID := strings.TrimSpace(rawUserID)
 		if userID == "" {
-			return "", fmt.Errorf("chatbot: invalid user token update")
+			return "", fmt.Errorf("diana: invalid user token update")
 		}
 		if token == nil || strings.TrimSpace(*token) == "" {
 			delete(current, userID)
@@ -415,7 +415,7 @@ func repositoryPublishUserTokens(raw string) (map[string]string, error) {
 		return tokens, nil
 	}
 	if err := json.Unmarshal([]byte(raw), &tokens); err != nil {
-		return nil, fmt.Errorf("chatbot: invalid stored user tokens")
+		return nil, fmt.Errorf("diana: invalid stored user tokens")
 	}
 	for userID, token := range tokens {
 		trimmedID, trimmedToken := strings.TrimSpace(userID), strings.TrimSpace(token)
@@ -437,7 +437,7 @@ func repositoryPublishUserAuthModes(raw string) (map[string]string, error) {
 		return modes, nil
 	}
 	if err := json.Unmarshal([]byte(raw), &modes); err != nil {
-		return nil, fmt.Errorf("chatbot: invalid stored user auth modes")
+		return nil, fmt.Errorf("diana: invalid stored user auth modes")
 	}
 	for rawUserID, rawMode := range modes {
 		userID := strings.TrimSpace(rawUserID)
@@ -450,7 +450,7 @@ func repositoryPublishUserAuthModes(raw string) (map[string]string, error) {
 		case repositoryPublishUserAuthInherit, repositoryPublishAuthGH, repositoryPublishAuthToken:
 			modes[userID] = mode
 		default:
-			return nil, fmt.Errorf("chatbot: invalid stored user auth mode")
+			return nil, fmt.Errorf("diana: invalid stored user auth mode")
 		}
 	}
 	return modes, nil

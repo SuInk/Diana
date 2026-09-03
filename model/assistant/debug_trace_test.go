@@ -50,7 +50,7 @@ func TestDebugTraceRecordsModelContextOnlyWhenEnabled(t *testing.T) {
 				return
 			}
 			entry := entries[0]
-			if entry.Kind != applog.KindDebug || entry.Action != "chatbot.debug_trace" || entry.Target != event.MessageID {
+			if entry.Kind != applog.KindDebug || entry.Action != "diana.debug_trace" || entry.Target != event.MessageID {
 				t.Fatalf("entry = %#v", entry)
 			}
 			loggedRequest, ok := entry.Metadata["request"].(llm.GenerateRequest)

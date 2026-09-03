@@ -105,7 +105,7 @@ func (r *Runtime) greetRomanceMilestones(ctx context.Context, lister UserMemoryL
 		profiles, _, err := lister.ListUserMemories(listCtx, profileID, "", 100, offset)
 		cancel()
 		if err != nil {
-			log.Printf("chatbot romance greeting scan failed: %v", err)
+			log.Printf("diana romance greeting scan failed: %v", err)
 			return
 		}
 		if len(profiles) == 0 {
@@ -163,7 +163,7 @@ func (r *Runtime) deliverRomanceGreeting(ctx context.Context, cfg BotConfig, pro
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.romance_greeting",
+		Action:  "diana.romance_greeting",
 		Message: "纪念日问候已发送",
 		Actor:   oneBotEventActor(event),
 		Metadata: map[string]any{

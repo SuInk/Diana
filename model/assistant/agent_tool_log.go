@@ -32,22 +32,22 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		}
 		kind := applog.KindOperation
 		level := applog.LevelInfo
-		action := "chatbot.agent_run"
+		action := "diana.agent_run"
 		message := "Agent 运行状态已更新"
 		switch runEvent.Phase {
 		case agent.RunPhaseStarted:
 			message = "Agent 运行开始"
 		case agent.RunPhaseModelCompleted:
-			action = "chatbot.agent_model"
+			action = "diana.agent_model"
 			message = "Agent 模型轮次完成"
 		case agent.RunPhaseProtocolRepair:
-			action = "chatbot.agent_protocol"
+			action = "diana.agent_protocol"
 			message = "Agent 协议已自动修正"
 		case agent.RunPhaseToolStarted:
-			action = "chatbot.agent_tool"
+			action = "diana.agent_tool"
 			message = "Agent 工具调用开始"
 		case agent.RunPhaseToolCompleted:
-			action = "chatbot.agent_tool"
+			action = "diana.agent_tool"
 			message = "Agent 工具调用完成"
 			if runError != "" {
 				kind = applog.KindError
@@ -145,7 +145,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				"usage":           runEvent.Usage,
 			})
 		}
-		log.Printf("chatbot agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
+		log.Printf("diana agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
 			runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
 	}
 }
