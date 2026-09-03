@@ -31,6 +31,17 @@ func restartInstalledService(root, _ string) error {
 		}
 		return nil
 	}
+	systemUnit := "/etc/systemd/system/diana.service"
+	if fileContains(systemUnit, root) {
+		command := exec.Command("systemctl", "restart", "diana.service")
+		if os.Geteuid() != 0 {
+			command = exec.Command("sudo", "systemctl", "restart", "diana.service")
+		}
+		if output, err := command.CombinedOutput(); err != nil {
+			return fmt.Errorf("restart systemd system service: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		return nil
+	}
 	return fmt.Errorf("no installer-managed Diana service belongs to %s", root)
 }
 
