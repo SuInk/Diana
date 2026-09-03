@@ -468,13 +468,23 @@ func TestAgentHistorySummarizesImagesBeforeLazyToolSkipsBrokenImage(t *testing.T
 	if len(message.Parts) != 0 {
 		t.Fatalf("history summary eagerly attached images: %#v", message.Parts)
 	}
-	for _, want := range []string{"message_id=expired-bot-image", "message_id=new-user-image", "当前未附加原图", dianaHistoryImagesToolName} {
+	// 「摘要不等于看过原件」和「怎么取原件」已经收进 promptToolHistoryImages 里统一
+	// 说一次，不再逐条历史重复，因此这里只断言每条摘要必须自带的部分：message_id
+	// 和媒体计数——模型要靠它们决定调不调 diana.history_media、传哪些 ID。
+	for _, want := range []string{"message_id=expired-bot-image", "message_id=new-user-image", "图片×1"} {
 		if !strings.Contains(message.Content, want) {
 			t.Fatalf("history summary = %q, missing %q", message.Content, want)
 		}
 	}
 	if strings.Contains(message.Content, "[图片]") {
 		t.Fatalf("history media notice = %q", message.Content)
+	}
+	// 逐条摘要省掉这两句的前提，是系统提示里仍然说了一次。两处同时丢掉的话，模型
+	// 会把摘要当成看过原件，这里守住那个前提。
+	for _, want := range []string{"不代表你看过真实画面", dianaHistoryImagesToolName} {
+		if !strings.Contains(promptToolHistoryImages, want) {
+			t.Fatalf("promptToolHistoryImages = %q, missing %q", promptToolHistoryImages, want)
+		}
 	}
 	if calls := recordedCallsByAction(channel.callsSnapshot(), "get_image"); len(calls) != 0 {
 		t.Fatalf("history summary loaded media: %#v", calls)
@@ -987,8 +997,20 @@ func TestRuntimeCachesIncomingVideoThenRoutesFollowupToItsFrames(t *testing.T) {
 	if reply != "视频里是测试画面" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	if len(provider.requests) != 3 || requestImageCount(provider.requests[2]) != 4 {
-		t.Fatalf("selected video frames missing from final request: %#v", provider.requests)
+	// 断言「关键帧被附给了生成回复的那次调用」，而不是「一共发生了几次 LLM 调用」。
+	// 后者是实现细节：发送前审核、空转判断这类新增环节都会改变调用次数，却与本用例
+	// 要守的行为无关。这里只要求帧恰好被附上一次、数量为 4。
+	framedRequests := 0
+	for _, request := range provider.requests {
+		if count := requestImageCount(request); count > 0 {
+			framedRequests++
+			if count != 4 {
+				t.Fatalf("request carried %d frames, want 4: %#v", count, request)
+			}
+		}
+	}
+	if framedRequests != 1 {
+		t.Fatalf("cached video frames were attached to %d requests, want exactly 1: %#v", framedRequests, provider.requests)
 	}
 }
 
