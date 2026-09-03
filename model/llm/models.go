@@ -48,26 +48,10 @@ func DefaultModel(provider Provider) string {
 }
 
 // ModelPresets 返回 provider 的本地模型预设。
-// ModelPresets 是 gemini / anthropic 的起步样例：这两家我们没有接它们的模型列表
-// 接口，界面上得先有几个能选的。样例会过期——发新模型时记得跟着换，也可以在
-// 「手动添加模型 ID」里直接填新的，不必等这里更新。
+// ModelPresets 不再向界面暴露内置模型。模型列表只能来自上游实时同步或用户手填，
+// 否则默认值会被误解为已经验证可用。
 func ModelPresets(provider Provider) []ModelInfo {
-	switch provider {
-	case ProviderOpenAICompatible:
-		return nil
-	case ProviderGemini:
-		return []ModelInfo{
-			{ID: DefaultGeminiModel, Name: "Gemini 3.7 Flash"},
-			{ID: "gemini-3.5-flash", Name: "Gemini 3.5 Flash"},
-		}
-	case ProviderAnthropic:
-		return []ModelInfo{
-			{ID: DefaultAnthropicModel, Name: "Claude Sonnet 5"},
-			{ID: "claude-opus-5", Name: "Claude Opus 5"},
-		}
-	default:
-		return nil
-	}
+	return nil
 }
 
 // ListModels 读取指定 provider 的可用模型列表。
@@ -86,12 +70,84 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 	case ProviderOpenAICompatible:
 		// OpenAI-compatible 供应商差异最大，必须实时请求后端模型列表。
 		return listOpenAICompatibleModels(ctx, cfg, options.httpClient)
-	case ProviderGemini, ProviderAnthropic:
-		// 官方 SDK 暂未统一暴露简单模型列表接口，这里只给本项目支持的常用预设。
-		return ModelPresets(cfg.Provider), nil
+	case ProviderGemini:
+		return listGeminiModels(ctx, cfg, options.httpClient)
+	case ProviderAnthropic:
+		return nil, fmt.Errorf("llm: Anthropic 模型列表无法实时同步，请手动添加上游实际支持的模型 ID")
 	default:
 		return nil, fmt.Errorf("llm: model listing is not supported for provider %q", cfg.Provider)
 	}
+}
+
+func listGeminiModels(ctx context.Context, cfg ProviderConfig, client *http.Client) ([]ModelInfo, error) {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return nil, ErrMissingAPIKey
+	}
+	baseURL := normalizeGeminiBaseURL(cfg.BaseURL)
+	if baseURL == "" {
+		baseURL = "https://generativelanguage.googleapis.com"
+	}
+	models := make([]ModelInfo, 0, 32)
+	seen := map[string]bool{}
+	pageToken := ""
+	for page := 0; page < 100; page++ {
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1beta/models?pageSize=1000"
+		if pageToken != "" {
+			endpoint += "&pageToken=" + url.QueryEscape(pageToken)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("x-goog-api-key", cfg.APIKey)
+		if userAgent := cfg.UserAgentWithDefault(); userAgent != "" {
+			req.Header.Set("User-Agent", userAgent)
+		}
+		for key, value := range cfg.NormalizedHeaders() {
+			req.Header.Set(key, value)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, modelListHTTPError{statusCode: resp.StatusCode, requestURL: endpoint, contentType: resp.Header.Get("Content-Type"), body: string(body)}
+		}
+		var payload struct {
+			Models []struct {
+				Name             string   `json:"name"`
+				DisplayName      string   `json:"displayName"`
+				InputTokenLimit  int64    `json:"inputTokenLimit"`
+				OutputTokenLimit int64    `json:"outputTokenLimit"`
+				SupportedMethods []string `json:"supportedGenerationMethods"`
+			} `json:"models"`
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, modelListDecodeError{requestURL: endpoint, statusCode: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), body: string(body), cause: err}
+		}
+		for _, item := range payload.Models {
+			id := strings.TrimPrefix(strings.TrimSpace(item.Name), "models/")
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			models = append(models, ModelInfo{ID: id, Name: strings.TrimSpace(item.DisplayName), Object: "model", OwnedBy: "google", ContextWindowTokens: item.InputTokenLimit, MaxInputTokens: item.InputTokenLimit, MaxOutputTokens: item.OutputTokenLimit})
+		}
+		pageToken = strings.TrimSpace(payload.NextPageToken)
+		if pageToken == "" {
+			break
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("llm: Gemini model list response has no models")
+	}
+	return models, nil
 }
 
 // listOpenAICompatibleModels 从 OpenAI-compatible 后端读取模型列表。
