@@ -105,7 +105,8 @@ func (r *Runtime) auditForwardNodesSafety(ctx context.Context, event MessageEven
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	ctx = withLLMUsagePurpose(ctx, "forward_content_safety")
-	decision, err := r.runReplyAudit(ctx, event, readableEventText(event, event.RawMessage), text, cfg)
+	// 转发卡片只审账号安全，不判空转：它不是一来一回的对话。
+	decision, err := r.runReplyAudit(ctx, event, readableEventText(event, event.RawMessage), text, cfg, botReplyLoopEvidence{})
 	if err != nil {
 		log.Printf("chatbot forward content safety audit skipped: %v", err)
 		return nil
