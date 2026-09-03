@@ -43,28 +43,32 @@ type LLMClient interface {
 }
 
 type Config struct {
-	WorkDir               string
-	MaxSteps              int
-	MaxToolOutputChars    int
-	ReadFileMaxBytes      int
-	ListDirectoryLimit    int
-	SkillRoots            []string
-	ManagedSkillRoot      string
-	SkillsListBudget      int
-	MCPConfigPath         string
-	MCPStartupTimeoutMS   int
-	MCPToolTimeoutMS      int
-	ExtensionManagement   bool
-	BuiltinExtensions     []BuiltinExtension
-	BuiltinSkills         []SkillMetadata
-	ReservedSkillNames    []string
-	CommandAllowlist      []string
-	CommandTimeoutMS      int
-	BrowserCDPURL         string
-	BrowserTimeoutMS      int
-	ToolTimeoutMS         int
-	FinalizationReserveMS int
-	ProtocolRepairLimit   int
+	WorkDir             string
+	MaxSteps            int
+	MaxToolOutputChars  int
+	ReadFileMaxBytes    int
+	ListDirectoryLimit  int
+	SkillRoots          []string
+	ManagedSkillRoot    string
+	SkillsListBudget    int
+	MCPConfigPath       string
+	MCPStartupTimeoutMS int
+	MCPToolTimeoutMS    int
+	ExtensionManagement bool
+	BuiltinExtensions   []BuiltinExtension
+	BuiltinSkills       []SkillMetadata
+	ReservedSkillNames  []string
+	CommandAllowlist    []string
+	CommandTimeoutMS    int
+	// CommandSandbox 见 CommandSandbox* 常量，默认 auto。
+	CommandSandbox string
+	// CommandSandboxAllowNetwork 放开沙盒内的网络访问，默认关闭。
+	CommandSandboxAllowNetwork bool
+	BrowserCDPURL              string
+	BrowserTimeoutMS           int
+	ToolTimeoutMS              int
+	FinalizationReserveMS      int
+	ProtocolRepairLimit        int
 	// EvidenceLedgerAdvisory 让逐主张证据账本只记录不拦截：claims 仍然写进
 	// trace 和运行元数据，但不再因为证据绑定失败要求模型重写 final。
 	EvidenceLedgerAdvisory bool
@@ -179,6 +183,7 @@ func (cfg Config) WithDefaults() Config {
 		cfg.CommandTimeoutMS = MaxAllowedCommandTimeoutMS
 	}
 	cfg.CommandAllowlist = cleanStringList(cfg.CommandAllowlist)
+	cfg.CommandSandbox = normalizeCommandSandboxMode(cfg.CommandSandbox)
 	if cfg.BrowserTimeoutMS <= 0 {
 		cfg.BrowserTimeoutMS = DefaultBrowserTimeoutMS
 	}
