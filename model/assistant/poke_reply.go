@@ -158,7 +158,7 @@ func (r *Runtime) recordPokeReply(ctx context.Context, event MessageEvent, reply
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.poke_reply",
+		Action:  "diana.poke_reply",
 		Message: "戳一戳已回应",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,

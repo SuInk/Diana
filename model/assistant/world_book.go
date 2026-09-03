@@ -565,7 +565,7 @@ func (r *Runtime) worldBookContext(ctx context.Context, event MessageEvent, quer
 	tree, ok, err := store.LoadWorldBook(loadCtx)
 	cancel()
 	if err != nil {
-		log.Printf("chatbot world book load failed: %v", err)
+		log.Printf("diana world book load failed: %v", err)
 		return ""
 	}
 	if !ok {

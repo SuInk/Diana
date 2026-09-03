@@ -351,7 +351,7 @@ func (r *Runtime) recordPromptCacheDivergence(
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
-		Action:   "chatbot.prompt_cache.divergence",
+		Action:   "diana.prompt_cache.divergence",
 		Message:  "提示词前缀在 " + promptCacheSegmentLabel(divergence) + " 处与上一次请求分叉",
 		Actor:    oneBotEventActor(event),
 		Target:   event.MessageID,

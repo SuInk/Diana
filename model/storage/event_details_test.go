@@ -57,7 +57,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 	insert("old", now.Add(-40*24*time.Hour), inboundStatusDone, "ignored_stale", "很久以前", 0)
 	for _, entry := range []applog.Entry{
 		{
-			Action:    "chatbot.llm_usage",
+			Action:    "diana.llm_usage",
 			Target:    "replied",
 			CreatedAt: now.Add(-20 * time.Minute),
 			Metadata:  map[string]any{"input_tokens": 100, "output_tokens": 40, "total_tokens": 0, "cached_input_tokens": 75},
@@ -69,7 +69,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 			Metadata:  map[string]any{"input_tokens": 20, "output_tokens": 10, "total_tokens": 35},
 		},
 		{
-			Action:    "chatbot.llm_usage",
+			Action:    "diana.llm_usage",
 			Target:    "old",
 			CreatedAt: now.Add(-40 * 24 * time.Hour),
 			Metadata:  map[string]any{"input_tokens": 1000, "output_tokens": 1000},

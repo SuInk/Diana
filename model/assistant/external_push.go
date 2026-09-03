@@ -25,7 +25,7 @@ type ExternalMessageTarget struct {
 func (r *Runtime) PushExternalMessage(ctx context.Context, target ExternalMessageTarget, text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return fmt.Errorf("chatbot: message text is required")
+		return fmt.Errorf("diana: message text is required")
 	}
 	event := MessageEvent{
 		Kind:      EventKindPrivate,
@@ -38,7 +38,7 @@ func (r *Runtime) PushExternalMessage(ctx context.Context, target ExternalMessag
 		event.GroupID = groupID
 	}
 	if event.GroupID == "" && event.UserID == "" {
-		return fmt.Errorf("chatbot: either group_id or user_id is required")
+		return fmt.Errorf("diana: either group_id or user_id is required")
 	}
 	return r.sendNotification(ctx, event, text)
 }

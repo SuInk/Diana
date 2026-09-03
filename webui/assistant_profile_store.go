@@ -127,7 +127,7 @@ func (s *PersistentBotProfileStore) persist(set assistant.ProfileSet) error {
 		return nil
 	}
 	if err := s.store.SaveBotProfiles(s.ctx, set); err != nil {
-		return fmt.Errorf("persist chatbot profiles: %w", err)
+		return fmt.Errorf("persist diana profiles: %w", err)
 	}
 	return nil
 }

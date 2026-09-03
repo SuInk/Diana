@@ -11,11 +11,12 @@ import (
 
 // 插件设置项类型，WebUI 按类型渲染对应的表单控件。
 const (
-	PluginSettingTypeBool        = "bool"
-	PluginSettingTypeNumber      = "number"
-	PluginSettingTypeString      = "string"
-	PluginSettingTypeSelect      = "select"
-	PluginSettingTypeMultiSelect = "multi_select"
+	PluginSettingTypeBool               = "bool"
+	PluginSettingTypeNumber             = "number"
+	PluginSettingTypeString             = "string"
+	PluginSettingTypeSelect             = "select"
+	PluginSettingTypeMultiSelect        = "multi_select"
+	PluginSettingTypePlatformLevelRules = "platform_level_rules"
 	// PluginSettingTypeText 渲染为多行文本框，用于模板这类带换行的配置。
 	PluginSettingTypeText = "text"
 	// PluginSettingTypeSize 的值统一是字节数，WebUI 渲染成「数字 + 单位」，
@@ -130,7 +131,7 @@ func normalizePluginSettings(specs []PluginSettingSpec, values map[string]any) (
 	for key, raw := range values {
 		spec, ok := byKey[key]
 		if !ok {
-			return nil, fmt.Errorf("chatbot: unknown plugin setting %q", key)
+			return nil, fmt.Errorf("diana: unknown plugin setting %q", key)
 		}
 		value, err := normalizeSettingValue(spec, raw)
 		if err != nil {
@@ -174,7 +175,7 @@ func normalizeGroupPluginSettings(specs []PluginSettingSpec, values map[string]a
 	secrets := secretSettingKeys(specs)
 	for key := range values {
 		if secrets[key] {
-			return nil, fmt.Errorf("chatbot: secret plugin setting %q cannot be overridden per group", key)
+			return nil, fmt.Errorf("diana: secret plugin setting %q cannot be overridden per group", key)
 		}
 	}
 	return normalizePluginSettings(nonSecretPluginSettingSpecs(specs), values)
@@ -202,13 +203,13 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 	case PluginSettingTypeBool:
 		value, ok := raw.(bool)
 		if !ok {
-			return nil, fmt.Errorf("chatbot: setting %q expects a boolean", spec.Key)
+			return nil, fmt.Errorf("diana: setting %q expects a boolean", spec.Key)
 		}
 		return value, nil
 	case PluginSettingTypeNumber:
 		number, ok := numberValue(raw)
 		if !ok {
-			return nil, fmt.Errorf("chatbot: setting %q expects a number", spec.Key)
+			return nil, fmt.Errorf("diana: setting %q expects a number", spec.Key)
 		}
 		if spec.Min != nil && number < *spec.Min {
 			number = *spec.Min
@@ -233,24 +234,24 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 	case PluginSettingTypeString:
 		value, ok := raw.(string)
 		if !ok {
-			return nil, fmt.Errorf("chatbot: setting %q expects a string", spec.Key)
+			return nil, fmt.Errorf("diana: setting %q expects a string", spec.Key)
 		}
 		return strings.TrimSpace(value), nil
 	case PluginSettingTypeSelect:
 		value, ok := raw.(string)
 		if !ok {
-			return nil, fmt.Errorf("chatbot: setting %q expects a string option", spec.Key)
+			return nil, fmt.Errorf("diana: setting %q expects a string option", spec.Key)
 		}
 		for _, option := range spec.Options {
 			if option.Value == value {
 				return value, nil
 			}
 		}
-		return nil, fmt.Errorf("chatbot: setting %q got unsupported option %q", spec.Key, value)
+		return nil, fmt.Errorf("diana: setting %q got unsupported option %q", spec.Key, value)
 	case PluginSettingTypeMultiSelect:
 		items, err := stringSliceValue(raw)
 		if err != nil {
-			return nil, fmt.Errorf("chatbot: setting %q expects a string array", spec.Key)
+			return nil, fmt.Errorf("diana: setting %q expects a string array", spec.Key)
 		}
 		allowed := make(map[string]bool, len(spec.Options))
 		for _, option := range spec.Options {
@@ -260,7 +261,7 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 		seen := map[string]bool{}
 		for _, item := range items {
 			if !allowed[item] {
-				return nil, fmt.Errorf("chatbot: setting %q got unsupported option %q", spec.Key, item)
+				return nil, fmt.Errorf("diana: setting %q got unsupported option %q", spec.Key, item)
 			}
 			if !seen[item] {
 				seen[item] = true
@@ -268,9 +269,66 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 			}
 		}
 		return out, nil
+	case PluginSettingTypePlatformLevelRules:
+		return normalizePlatformLevelRules(spec, raw)
 	default:
-		return nil, fmt.Errorf("chatbot: setting %q has unsupported type %q", spec.Key, spec.Type)
+		return nil, fmt.Errorf("diana: setting %q has unsupported type %q", spec.Key, spec.Type)
 	}
+}
+
+func normalizePlatformLevelRules(spec PluginSettingSpec, raw any) ([]map[string]any, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		if typed, typedOK := raw.([]map[string]any); typedOK {
+			items = make([]any, len(typed))
+			for index := range typed {
+				items[index] = typed[index]
+			}
+		} else {
+			return nil, fmt.Errorf("diana: setting %q expects a rule array", spec.Key)
+		}
+	}
+	allowed := map[string]bool{}
+	for _, option := range spec.Options {
+		allowed[option.Value] = true
+	}
+	out := make([]map[string]any, 0, len(items))
+	for index, item := range items {
+		rule, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("diana: setting %q rule %d must be an object", spec.Key, index+1)
+		}
+		platform, _ := rule["platform"].(string)
+		platform = strings.TrimSpace(strings.ToLower(platform))
+		if !allowed[platform] {
+			return nil, fmt.Errorf("diana: setting %q rule %d has unsupported platform %q", spec.Key, index+1, platform)
+		}
+		minimum, ok := numberValue(rule["minimum_level"])
+		if !ok || minimum < 0 || minimum > maximumReplyMemberLevel {
+			return nil, fmt.Errorf("diana: setting %q rule %d minimum_level must be 0 to %d", spec.Key, index+1, maximumReplyMemberLevel)
+		}
+		unknown, _ := rule["unknown_policy"].(string)
+		unknown = strings.TrimSpace(strings.ToLower(unknown))
+		if unknown != LevelUnknownAllow && unknown != LevelUnknownDeny {
+			return nil, fmt.Errorf("diana: setting %q rule %d has invalid unknown_policy", spec.Key, index+1)
+		}
+		out = append(out, map[string]any{
+			"platform":       platform,
+			"minimum_level":  math.Round(minimum),
+			"unknown_policy": unknown,
+			"owner_bypass":   boolValueFromMap(rule, "owner_bypass", true),
+			"mention_bypass": boolValueFromMap(rule, "mention_bypass", false),
+			"enabled":        boolValueFromMap(rule, "enabled", true),
+		})
+	}
+	return out, nil
+}
+
+func boolValueFromMap(values map[string]any, key string, fallback bool) bool {
+	if value, ok := values[key].(bool); ok {
+		return value
+	}
+	return fallback
 }
 
 // effectivePluginSettings 用声明的默认值合并用户覆盖值，作为插件运行时读到的生效设置。

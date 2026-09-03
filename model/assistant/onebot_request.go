@@ -175,7 +175,7 @@ func (r *Runtime) handleOneBotRequest(ctx context.Context, event MessageEvent) e
 	if err := r.sendNotification(ctx, notifyEvent, oneBotRequestOwnerNotice(record)); err != nil {
 		// 请求已经安全落库，通知失败不能把同一平台事件变成未处理；主人之后仍可
 		// 通过 diana.onebot_requests list 找到它。
-		log.Printf("chatbot OneBot request owner notification failed: type=%s sub_type=%s request_id=%s: %v", record.RequestType, record.SubType, record.ID, err)
+		log.Printf("diana OneBot request owner notification failed: type=%s sub_type=%s request_id=%s: %v", record.RequestType, record.SubType, record.ID, err)
 		return nil
 	}
 	return nil

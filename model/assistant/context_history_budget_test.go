@@ -253,7 +253,7 @@ func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
 	}})
 
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "chatbot.context_budget" {
+	if len(entries) != 1 || entries[0].Action != "diana.context_budget" {
 		t.Fatalf("unexpected debug entries: %+v", entries)
 	}
 	metadata := entries[0].Metadata

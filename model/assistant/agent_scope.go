@@ -130,7 +130,7 @@ func (r *Runtime) prewarmAgentRegistries(ctx context.Context, configs []BotConfi
 		}
 		event := MessageEvent{Kind: EventKindPrivate, ProfileID: cfg.ID, UserID: cfg.OwnerID}
 		if _, err := r.sharedAgentRegistry(ctx, r.agentRegistryConfig(cfg, event, true)); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("chatbot agent extension prewarm failed for profile %q: %v", cfg.ID, err)
+			log.Printf("diana agent extension prewarm failed for profile %q: %v", cfg.ID, err)
 		}
 	}
 }
@@ -261,7 +261,7 @@ func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scop
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "chatbot.planner",
+		Action:  "diana.planner",
 		Message: "planner 已完成回复判断，工具和上下文建议仅供 Agent 参考",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,

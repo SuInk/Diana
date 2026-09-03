@@ -288,7 +288,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		SystemPromptChars:               len([]rune(cfg.SystemPrompt)),
 		ReplyReferenceMode:              replyReferenceMode(cfg),
 		MentionUserMode:                 mentionUserMode(cfg),
-		MarkdownToPlain:                 boolValue(cfg.MarkdownToPlain, true),
+		MarkdownToPlain:                 markdownToPlainForConfig(cfg),
 		ErrorNotifyEnabled:              boolValue(cfg.ErrorNotifyEnabled, true),
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
 		SendRetryAttempts:               cfg.SendRetryAttempts,

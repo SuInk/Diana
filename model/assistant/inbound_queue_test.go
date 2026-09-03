@@ -262,11 +262,11 @@ func TestRuntimeObservesConnectionEpochChangesWithoutDisconnectedEdge(t *testing
 	defer runtime.Stop()
 
 	waitForCondition(t, 2*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.connection_opened")
+		return hasAppLogAction(logs.entriesSnapshot(), "diana.connection_opened")
 	})
 	channel.bumpConnectionEpoch()
 	waitForCondition(t, 2*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.reconnected")
+		return hasAppLogAction(logs.entriesSnapshot(), "diana.reconnected")
 	})
 }
 
@@ -342,13 +342,13 @@ func TestRuntimeBackfillsWhenAccountRecoversWithoutWSReconnect(t *testing.T) {
 	defer runtime.Stop()
 
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_completed")
+		return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_completed")
 	})
 
 	// QQ 被风控：WS 连接保持，心跳报告账号离线。
 	channel.setAccountStatus(true, false, false)
 	waitForCondition(t, 2*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.account_offline")
+		return hasAppLogAction(logs.entriesSnapshot(), "diana.account_offline")
 	})
 	if runtime.inboundProcessingReady() {
 		t.Fatal("inbound processing stayed ready while the account was offline")
@@ -362,7 +362,7 @@ func TestRuntimeBackfillsWhenAccountRecoversWithoutWSReconnect(t *testing.T) {
 	// 解封：账号恢复在线，epoch 与连接状态均未变化。
 	channel.setAccountStatus(true, true, true)
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.account_recovered")
+		return hasAppLogAction(logs.entriesSnapshot(), "diana.account_recovered")
 	})
 	waitForCondition(t, 4*time.Second, func() bool {
 		return store.hasEvent("group:123:950")
@@ -382,7 +382,7 @@ func TestRuntimeManualBackfillRewindsWatermarkWithinWindow(t *testing.T) {
 	}
 	defer runtime.Stop()
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_completed")
+		return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_completed")
 	})
 
 	// 这条消息早于当前水位，常规回补不会再看它，只有手动回退水位才能找回。
@@ -393,7 +393,7 @@ func TestRuntimeManualBackfillRewindsWatermarkWithinWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_manual_requested")
+		return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_manual_requested")
 	})
 	waitForCondition(t, 4*time.Second, func() bool {
 		return store.hasEvent("group:123:960")
@@ -426,7 +426,7 @@ func TestRuntimeManualBackfillDoesNotReplyToDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, 4*time.Second, func() bool {
-		return countAppLogAction(logs.entriesSnapshot(), "chatbot.backfill_completed") >= 2
+		return countAppLogAction(logs.entriesSnapshot(), "diana.backfill_completed") >= 2
 	})
 	time.Sleep(500 * time.Millisecond)
 	if got := channel.sentCount(); got != 1 {
