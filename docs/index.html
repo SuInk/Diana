@@ -63,7 +63,7 @@
         <button class="install-tab" data-os="docker">Docker</button>
       </div>
       <div class="install-line">
-        <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
+        <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh</code>
         <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
         <!-- 首屏这条是速用式，只为「先跑起来」；生产部署建议用下面「快速开始」里的完整命令。 -->
         <code id="install-cmd-docker" data-os="docker" hidden>docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code>
@@ -154,7 +154,7 @@
       <div class="qs-card">
         <div class="qs-card-head">Linux / macOS<button class="copy-btn" data-copy="cmd-sh">复制</button></div>
         <pre id="cmd-sh"><span class="c"># 安装与升级用同一条命令</span>
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh</pre>
       </div>
       <div class="qs-card">
         <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">复制</button></div>

@@ -30,7 +30,7 @@
         </div>
         <div class="callout"><strong>下载加速</strong><p>直连 GitHub 拉不动时，「版本与更新」里可以选一条公共加速线路：<em>自动</em>会实测直连和各条镜像后挑一条（直连可用就优先直连），也可以固定选一条或强制直连。加速只用于安装包本身——校验清单始终优先直连，版本检查走 GitHub API 不经过镜像，安装前仍然逐字节核对 SHA-256。任何一条线路失败都会自动回落直连。</p></div>
         <pre><code># 一键安装的升级命令与首次安装相同
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code></pre>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh</code></pre>
         <div class="callout warn"><strong>更新前</strong><p>确认数据目录和备份目录有足够空间。数据库正在高频写入时，备份需同时保留 WAL/SHM，或先通过应用提供的备份流程生成一致快照。</p></div>
         <div class="callout"><strong>由服务管理器托管时</strong><p>launchd 的 <code>KeepAlive</code> 和 systemd 的 <code>Restart=</code> 会在服务退出后立刻把它拉起来。更新器识别到自己被托管后就不再自行启动新实例，改为在换完文件后请管理器重启一次（<code>launchctl kickstart -k</code> / <code>systemctl restart</code>），由管理器串行地停旧起新，避免两个实例抢同一个监听端口、后启动的报 <code>address already in use</code> 退出。一键安装脚本会把 <code>DIANA_SERVICE_MANAGER</code>、<code>DIANA_SERVICE_LABEL</code>、<code>DIANA_SERVICE_DOMAIN</code> 写进服务环境；自建部署可以自行设置，或设 <code>DIANA_SERVICE_MANAGER=none</code> 让更新器自己负责重启。</p></div>
       </section>

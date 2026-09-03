@@ -61,7 +61,7 @@
         <button class="install-tab" data-os="docker">Docker</button>
       </div>
       <div class="install-line">
-        <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
+        <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh</code>
         <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
         <!-- The hero command is the quick-try form; for production use the fuller command in Quick start below. -->
         <code id="install-cmd-docker" data-os="docker" hidden>docker run -d --name diana -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code>
@@ -149,7 +149,7 @@
       <div class="qs-card">
         <div class="qs-card-head">Linux / macOS<button class="copy-btn" data-copy="cmd-sh">Copy</button></div>
         <pre id="cmd-sh"><span class="c"># the same command installs and upgrades</span>
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh</pre>
       </div>
       <div class="qs-card">
         <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">Copy</button></div>
