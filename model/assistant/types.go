@@ -103,11 +103,15 @@ type MessageEvent struct {
 	SelfID           string    `json:"self_id,omitempty"`
 	UserID           string    `json:"user_id,omitempty"`
 	// TargetID 目前只有 poke 通知在用：被戳的是谁。
-	TargetID         string           `json:"target_id,omitempty"`
-	OperatorID       string           `json:"operator_id,omitempty"`
-	OperatorName     string           `json:"operator_name,omitempty"`
-	OperatorRole     string           `json:"operator_role,omitempty"`
-	GroupID          string           `json:"group_id,omitempty"`
+	TargetID     string `json:"target_id,omitempty"`
+	OperatorID   string `json:"operator_id,omitempty"`
+	OperatorName string `json:"operator_name,omitempty"`
+	OperatorRole string `json:"operator_role,omitempty"`
+	GroupID      string `json:"group_id,omitempty"`
+	// GroupName 是收到这条消息时平台给出的群名称。OneBot 可以随时用
+	// get_group_list 问到群名，Telegram、钉钉这些没有「列出我加入的群」的平台
+	// 只能靠消息自带的标题；控制台的群管理页要靠它显示名字而不是一串 ID。
+	GroupName        string           `json:"group_name,omitempty"`
 	MessageThreadID  string           `json:"message_thread_id,omitempty"`
 	MessageID        string           `json:"message_id,omitempty"`
 	MessageSeq       string           `json:"message_seq,omitempty"`
