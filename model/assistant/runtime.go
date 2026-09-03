@@ -5818,23 +5818,28 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
 		tail.WriteString("\n" + promptOwnerTaskTarget)
 	}
+	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
+	//（见 RelationshipPolicyFor），所以这几段对谁都注入，只随本轮注册了哪些工具
+	// 变化——和头部其余工具规则的性质完全一样。它们以前跟着「按好感度解锁」的
+	// 假设待在尾部，实测占尾部 436 token 里的绝大部分，等于每条消息都重发一遍
+	// 一段人人相同的文本，且永远命不中前缀缓存。
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.reminder") {
-		tail.WriteString("\n" + promptTaskReminder)
+		builder.WriteString("\n" + promptTaskReminder)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.schedule") {
-		tail.WriteString("\n" + promptTaskSchedule)
+		builder.WriteString("\n" + promptTaskSchedule)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.rss") {
-		tail.WriteString("\n" + promptTaskRSS)
+		builder.WriteString("\n" + promptTaskRSS)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.tasks") {
-		tail.WriteString("\n" + promptTaskList)
+		builder.WriteString("\n" + promptTaskList)
 	}
 	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
-		tail.WriteString("\n" + promptTaskRepositoryWatch)
+		builder.WriteString("\n" + promptTaskRepositoryWatch)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
-		tail.WriteString("\n" + promptTaskNoSubstitute)
+		builder.WriteString("\n" + promptTaskNoSubstitute)
 	}
 	if agentEnabled && hasTool(dianaRuntimeModelToolName) {
 		builder.WriteString("\n" + promptToolRuntimeModel)
