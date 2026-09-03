@@ -170,6 +170,8 @@ export interface BotProfileConfig {
   refusal_strategy?: RefusalStrategy;
   /** 语气跟随一天的时间变化（深夜话少、清早迷糊、晚上松弛）；不设等同关闭。 */
   daypart_tone_enabled?: boolean;
+  /** 流式调用模型，用于统计首 token 时间；回复仍是攒齐了再发。不设等同关闭。 */
+  llm_streaming_enabled?: boolean;
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
   group_admission?: GroupAdmission;
@@ -1590,6 +1592,9 @@ export interface AssistantEventDetail extends BotEvent {
   llm_duration_ms?: number;
   /** 输出 token 速率，由 output_tokens 和 llm_duration_ms 算出。 */
   output_tokens_per_second?: number;
+  /** 首 token 时延均值；只有流式跑通的调用才有样本。 */
+  avg_ttft_ms?: number;
+  ttft_calls?: number;
   decision: "replied" | "not_replied" | "pending" | "error" | string;
   reason: string;
   delivery_stage?: "generated" | "send_attempted" | "acknowledged" | "echo_persisted" | "failed" | string;
@@ -1648,6 +1653,8 @@ export interface AssistantEventsResponse {
   cached_input_tokens: number;
   llm_duration_ms: number;
   output_tokens_per_second: number;
+  avg_ttft_ms: number;
+  ttft_calls: number;
   page: number;
   limit: number;
   has_more: boolean;
