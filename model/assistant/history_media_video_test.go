@@ -997,8 +997,20 @@ func TestRuntimeCachesIncomingVideoThenRoutesFollowupToItsFrames(t *testing.T) {
 	if reply != "视频里是测试画面" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	if len(provider.requests) != 3 || requestImageCount(provider.requests[2]) != 4 {
-		t.Fatalf("selected video frames missing from final request: %#v", provider.requests)
+	// 断言「关键帧被附给了生成回复的那次调用」，而不是「一共发生了几次 LLM 调用」。
+	// 后者是实现细节：发送前审核、空转判断这类新增环节都会改变调用次数，却与本用例
+	// 要守的行为无关。这里只要求帧恰好被附上一次、数量为 4。
+	framedRequests := 0
+	for _, request := range provider.requests {
+		if count := requestImageCount(request); count > 0 {
+			framedRequests++
+			if count != 4 {
+				t.Fatalf("request carried %d frames, want 4: %#v", count, request)
+			}
+		}
+	}
+	if framedRequests != 1 {
+		t.Fatalf("cached video frames were attached to %d requests, want exactly 1: %#v", framedRequests, provider.requests)
 	}
 }
 
