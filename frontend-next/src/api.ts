@@ -567,6 +567,7 @@ export interface BotEvent {
   user_id?: string;
   sender_name?: string;
   group_id?: string;
+  group_name?: string;
   message_id?: string;
   text?: string;
   reply?: string;

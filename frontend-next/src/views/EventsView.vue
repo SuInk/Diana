@@ -162,7 +162,7 @@
                 <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                 <span class="badge">{{ eventKindLabel(event.kind) }}</span>
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
-                <span v-if="event.group_id" class="mono muted">群 {{ event.group_id }}</span>
+                <span v-if="event.group_id" class="muted">{{ displayEventGroup(event.group_id, event.group_name) }}</span>
                 <span v-if="displayChatIdentity(event.sender_name, event.user_id)" class="muted">{{ displayChatIdentity(event.sender_name, event.user_id) }}</span>
                 <span v-if="senderLevelLabel(event)" class="badge" :title="senderLevelTitle(event)">{{ senderLevelLabel(event) }}</span>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
@@ -667,6 +667,13 @@ const groupOptions = computed(() => {
   }
   return options;
 });
+
+function displayEventGroup(groupID?: string, eventName?: string): string {
+  const id = (groupID ?? "").trim();
+  const option = groupOptions.value.find((item) => item.value === id);
+  const name = (eventName ?? (option?.label.startsWith("群 ") ? "" : option?.label) ?? "").trim();
+  return name ? `${name}（${id}）` : `群 ${id}`;
+}
 
 // 群名当主标题、群号退到副行：一串纯数字认不出是哪个群，而名字可能重复或为空，
 // 所以号码不能省，只是不该占主位。

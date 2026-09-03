@@ -280,9 +280,15 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", fmt.Errorf("群号格式不正确"), groupID, nil)
 		return
 	}
+	profileID, profileName, err := h.consoleGroupProfile(payload.Config.BotProfileID)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
+		return
+	}
+	previous, _ := h.groupConfigs.ConfigForGroup(profileID, groupID)
 	cfg, err := h.sanitizeGroupConfigPayload(payload.Config, groupID)
 	// 群配置按机器人各存一份，保存时必须钉住是给哪一台配的。
-	cfg.BotProfileID = strings.TrimSpace(payload.Config.BotProfileID)
+	cfg.BotProfileID = profileID
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
 		return
@@ -292,6 +298,48 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.groups.save", "群配置已保存（控制台）", groupID, map[string]any{"group_id": groupID})
+	recordRequestOperation(c, h.logs, "assistant.groups.save", "群配置已保存（控制台）", groupID, groupConfigAuditMetadata(previous, saved, profileName))
 	c.JSON(http.StatusOK, gin.H{"config": h.groupConfigForAPI(saved.WithDefaults(groupID, h.runtime.Config()))})
+}
+
+func (h *BotHandler) consoleGroupProfile(requested string) (string, string, error) {
+	requested = strings.TrimSpace(requested)
+	if h.profiles == nil {
+		if requested == "" {
+			return "", "", fmt.Errorf("群配置必须选择具体机器人")
+		}
+		return requested, requested, nil
+	}
+	set := h.profiles.Profiles().WithDefaults()
+	if requested == "" && len(set.Profiles) == 1 {
+		requested = strings.TrimSpace(set.Profiles[0].ID)
+	}
+	if requested == "" {
+		return "", "", fmt.Errorf("群配置不能保存到“全部机器人”，请先选择具体机器人")
+	}
+	for _, profile := range set.Profiles {
+		if strings.TrimSpace(profile.ID) == requested {
+			return requested, assistant.NormalizeProfileName(profile.Name), nil
+		}
+	}
+	return "", "", fmt.Errorf("机器人配置 %q 不存在", requested)
+}
+
+func groupConfigAuditMetadata(before, after assistant.GroupConfig, profileName string) map[string]any {
+	metadata := map[string]any{
+		"group_id": after.GroupID, "bot_profile_id": after.BotProfileID, "bot_profile_name": profileName,
+	}
+	gateSummary := func(gate *assistant.ReplyGate) map[string]any {
+		if gate == nil {
+			return map[string]any{"user_admission": "inherit", "allowed_users": 0, "blocked_users": 0}
+		}
+		return map[string]any{
+			"user_admission": gate.UserAdmission,
+			"allowed_users":  len(gate.AllowedUsers),
+			"blocked_users":  len(gate.BlockedUsers),
+		}
+	}
+	metadata["reply_gate_before"] = gateSummary(before.ReplyGate)
+	metadata["reply_gate_after"] = gateSummary(after.ReplyGate)
+	return metadata
 }

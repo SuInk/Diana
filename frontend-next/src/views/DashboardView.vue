@@ -149,7 +149,7 @@
                 <div class="event-meta">
                   <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                   <span class="badge" :class="eventBadgeClass(event)">{{ eventKindLabel(event.kind) }}</span>
-                  <span v-if="event.group_id" class="muted mono">群 {{ event.group_id }}</span>
+                  <span v-if="event.group_id" class="muted">{{ displayGroupIdentity(event.group_id, event.group_name) }}</span>
                   <span v-if="displayChatIdentity(event.sender_name, event.user_id)" class="muted">{{ displayChatIdentity(event.sender_name, event.user_id) }}</span>
                   <span v-if="event.duration_ms" class="muted">{{ (event.duration_ms / 1000).toFixed(1) }}s</span>
                   <span v-if="event.decision" class="badge" :class="eventDecisionClass(event)">{{ eventDecisionLabel(event) }}</span>
@@ -171,7 +171,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
   Activity,
   ArrowRight,
@@ -184,7 +184,7 @@ import {
   TriangleAlert,
   Zap
 } from "@lucide/vue";
-import { getConfig, getBotStatus, getStats, startBot, stopBot, type StatsHourBucket } from "../api";
+import { getConfig, getBotStatus, getStats, listBotGroups, startBot, stopBot, type StatsHourBucket } from "../api";
 import { pushStatsSnapshot, pushStatusSnapshot, scopedStats, stream, type BotEvent } from "../stream";
 import { navigate } from "../router";
 import { botScope, matchesBotScope } from "../bot-scope";
@@ -197,6 +197,22 @@ import EmptyState from "../components/EmptyState.vue";
 
 const busy = ref(false);
 const setupNeeded = ref(false);
+const groupNames = ref<Record<string, string>>({});
+
+async function loadGroupNames(): Promise<void> {
+  try {
+    const response = await listBotGroups(false, botScope.value);
+    groupNames.value = Object.fromEntries(response.groups.filter((group) => group.group_name).map((group) => [group.group_id, group.group_name ?? ""]));
+  } catch {
+    groupNames.value = {};
+  }
+}
+
+function displayGroupIdentity(groupID?: string, eventName?: string): string {
+  const id = (groupID ?? "").trim();
+  const name = (eventName ?? groupNames.value[id] ?? "").trim();
+  return name ? `${name}（${id}）` : `群 ${id}`;
+}
 
 const status = computed(() => stream.status);
 // 总览跟着左上角的机器人开关走：切到哪台，收到、回复、错误的数字就是哪台的。
@@ -287,6 +303,7 @@ async function toggleBot(start: boolean): Promise<void> {
 }
 
 onMounted(() => {
+  void loadGroupNames();
   // SSE 建连有初始快照；这里再兜底拉一次，保证直接打开页面就有数据。
   if (stream.status && stream.stats) {
     void getConfig()
@@ -297,5 +314,9 @@ onMounted(() => {
     return;
   }
   void refresh();
+});
+
+watch(botScope, () => {
+  void loadGroupNames();
 });
 </script>
