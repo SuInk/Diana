@@ -185,7 +185,10 @@ func TestSandboxedBrowserPluginProvidesAgentTool(t *testing.T) {
 	plugin := newSandboxedBrowserRenderPlugin(agent.PageRendererFunc(func(_ context.Context, rawURL string) (agent.RenderedPage, error) {
 		return agent.RenderedPage{RequestedURL: rawURL, URL: rawURL, Title: "ok", Sandboxed: true}, nil
 	}))
-	tools := plugin.AgentTools()
+	tools, err := plugin.AgentTools(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(tools) != 1 || tools[0].Name() != "browser_render" {
 		t.Fatalf("tools = %#v", tools)
 	}
