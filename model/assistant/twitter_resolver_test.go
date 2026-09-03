@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,19 @@ func TestParseTwitterPostResponseIncludesQuotedMedia(t *testing.T) {
 	}
 	if post.Media[0].Type != "video" || post.Media[0].URL != "https://video.twimg.com/quoted.mp4" {
 		t.Fatalf("quoted media = %#v", post.Media[0])
+	}
+}
+
+func TestTwitterThreadRepliesKeepsOnlyAuthorFollowUps(t *testing.T) {
+	thread := []json.RawMessage{
+		json.RawMessage(`{"id":"root","text":"主推","author":{"screen_name":"dotey"}}`),
+		json.RawMessage(`{"id":"reply-1","text":"第一条补充","author":{"screen_name":"dotey"}}`),
+		json.RawMessage(`{"id":"other","text":"路人评论","author":{"screen_name":"someone"}}`),
+		json.RawMessage(`{"id":"reply-2","text":"第二条补充","author":{"screen_name":"DOTEY"}}`),
+	}
+	replies := twitterThreadReplies(thread, "root", "dotey")
+	if len(replies) != 2 || replies[0].Text != "第一条补充" || replies[1].Text != "第二条补充" {
+		t.Fatalf("replies = %#v", replies)
 	}
 }
 

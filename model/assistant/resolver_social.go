@@ -183,6 +183,17 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 	}
 	metaText := twitterMetaText(resolverNickname(), post)
 	nodes := []OutgoingMessage{{Text: metaText}}
+	for index, reply := range post.Replies {
+		text := strings.TrimSpace(reply.Text)
+		if text == "" {
+			continue
+		}
+		label := fmt.Sprintf("作者补充 %d：%s", index+1, text)
+		nodes = append(nodes, OutgoingMessage{Text: label})
+		metaText += "\n\n" + label
+		post.Media = append(post.Media, reply.Media...)
+	}
+	post.Media = dedupeTwitterMedia(post.Media)
 	if len(post.Media) == 0 {
 		return resolverSocialResult{Handled: true, Context: metaText, ForwardMessages: nodes}
 	}
