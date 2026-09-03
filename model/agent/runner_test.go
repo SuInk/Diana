@@ -964,6 +964,35 @@ func TestRunnerForcesFinalizeToolOnFinalizationTurn(t *testing.T) {
 	}
 }
 
+// 调用方在历史之后还会放记忆块、发言者身份和时钟这类逐轮变化的消息。它标出的
+// 稳定前缀末尾必须被沿用，否则断点落在易变消息上，前缀缓存每轮都要重写。
+func TestRunnerHonorsCallerCacheBreakpoint(t *testing.T) {
+	client := &scriptedClient{responses: []string{`{"action":"final","content":"好的"}`}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设"},
+		{Role: llm.RoleUser, Content: "历史"},
+		{Role: llm.RoleAssistant, Content: "历史回复", CacheBreakpoint: true},
+		{Role: llm.RoleUser, Content: "【当前发言者长期记忆】…"},
+		{Role: llm.RoleSystem, Content: "当前发言者是主人"},
+		{Role: llm.RoleUser, Content: "当前消息"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var marked []string
+	for _, message := range client.requests[0].Messages {
+		if message.CacheBreakpoint {
+			marked = append(marked, message.Content)
+		}
+	}
+	if len(marked) != 2 || marked[0] != "历史回复" || marked[1] != "当前消息" {
+		t.Fatalf("cache breakpoints=%#v", marked)
+	}
+}
+
 func TestRunnerMarksCacheBreakpointsAroundVolatilePrefix(t *testing.T) {
 	client := &scriptedClient{responses: []string{`{"action":"final","content":"好的"}`}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry())

@@ -112,9 +112,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 工具定义和已经定型的历史。
 	stableCacheIndex := -1
 	if split := len(req.Messages) - 1; split > 0 {
+		// 调用方最清楚自己的稳定前缀到哪为止：它可能在历史之后还放了逐条消息
+		// 变化的记忆块、发言者身份和时钟。它标了断点就用它的；没标就退到当前
+		// 消息之前最后一条非 system 消息——尾部的 system 消息按约定都是易变的。
+		stable := callerCacheBreakpoint(req.Messages[:split])
+		offset := len(messages)
 		messages = append(messages, req.Messages[:split]...)
-		stableCacheIndex = len(messages) - 1
-		messages[stableCacheIndex].CacheBreakpoint = true
+		for index := offset; index < len(messages); index++ {
+			messages[index].CacheBreakpoint = false
+		}
+		if stable >= 0 {
+			stableCacheIndex = offset + stable
+			messages[stableCacheIndex].CacheBreakpoint = true
+		}
 		messages = append(messages, volatile...)
 		messages = append(messages, req.Messages[split:]...)
 	} else {
@@ -627,6 +637,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		return finish("这次处理没有生成可发送的最终回复，请稍后再试。", finishReason), nil
 	}
 	return finish(lastText, finishReason), nil
+}
+
+// callerCacheBreakpoint 返回调用方标出的稳定前缀末尾；没标时取最后一条非
+// system 消息。全是 system（没有历史）时返回 -1：system 由适配层单独缓存。
+func callerCacheBreakpoint(messages []llm.Message) int {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].CacheBreakpoint {
+			return index
+		}
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role != llm.RoleSystem {
+			return index
+		}
+	}
+	return -1
 }
 
 // markLoopCacheBreakpoint 让最新一条消息上始终有一个滚动缓存断点，这样每个规划

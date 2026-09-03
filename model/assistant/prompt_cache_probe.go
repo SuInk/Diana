@@ -45,6 +45,10 @@ type promptCachePayloadObservation struct {
 	SegmentBytes []int
 	SystemBytes  int
 	ToolsBytes   int
+	// StableBoundary 是「本轮期望能复用到哪」的下标，取调用方标出的缓存断点
+	//（markStablePromptPrefix 打在历史末尾）。它之后的消息本来就每轮都变：
+	// 发言者尾部、实时时钟、当前消息。-1 表示调用方没标断点。
+	StableBoundary int
 	// 明文快照只活在内存里，用来算字节偏移；不落库、不进日志。
 	systemText  string
 	toolsText   string
@@ -63,10 +67,25 @@ type promptCacheDivergence struct {
 	ReusablePrefixBytes int
 	// PreviousTotalBytes 是上一次请求的分段总字节，配合上一项看损失比例。
 	PreviousTotalBytes int
+	// ToolsHash 标出这条记录属于哪一套工具集，方便按主人/成员分别看命中率。
+	ToolsHash string
 }
 
 // Clean 表示上一次请求是这一次的严格前缀，前缀缓存理论上可以完整复用。
 func (d promptCacheDivergence) Clean() bool { return d.Segment == "" }
+
+// Expected 表示分叉发生在本来就该每轮变化的尾部（发言者身份、实时时钟、当前消息），
+// 稳定前缀完好。这种情况不记日志——真机上它每条消息都会出现一次，记了就是噪声，
+// 反而把真正的前缀断裂淹掉。
+func (d promptCacheDivergence) Expected(previous promptCachePayloadObservation) bool {
+	if d.Clean() {
+		return true
+	}
+	if d.Segment != "messages" || previous.StableBoundary < 0 {
+		return false
+	}
+	return d.MessageIndex > previous.StableBoundary
+}
 
 func promptCacheHash(text string) string {
 	sum := sha256.Sum256([]byte(text))
@@ -114,21 +133,31 @@ func promptCacheCanonicalTools(tools []llm.ToolDefinition) string {
 }
 
 // observePromptCachePayload 计算一次请求的分段指纹。
+//
+// 只有开头连续的 system 消息算作 "system" 段——和适配层 splitSystemPrompt 的切法
+// 一致。靠后的 system 消息（发言者尾部、实时时钟）按原位置进消息序列：它们本来就
+// 每轮都变，混进 system 段会让探针每条消息都报「system 分叉、可复用前缀 0 字节」，
+// 而真实命中率有九成。这个误报是拿真机跑一轮 QQ 群聊才发现的。
 func observePromptCachePayload(req llm.GenerateRequest) promptCachePayloadObservation {
 	var systemBuilder strings.Builder
-	observation := promptCachePayloadObservation{}
+	observation := promptCachePayloadObservation{StableBoundary: -1}
+	leadingSystem := true
 	for _, message := range req.Messages {
-		if message.Role == llm.RoleSystem {
+		if message.Role == llm.RoleSystem && leadingSystem {
 			if systemBuilder.Len() > 0 {
 				systemBuilder.WriteString("\x1d")
 			}
 			systemBuilder.WriteString(promptCacheCanonicalMessage(message))
 			continue
 		}
+		leadingSystem = false
 		if len(observation.MessageHashes) >= promptCacheProbeMaxHashedMessages {
 			continue
 		}
 		text := promptCacheCanonicalMessage(message)
+		if message.CacheBreakpoint && observation.StableBoundary < 0 {
+			observation.StableBoundary = len(observation.MessageHashes)
+		}
 		observation.MessageHashes = append(observation.MessageHashes, promptCacheHash(text))
 		observation.SegmentBytes = append(observation.SegmentBytes, len(text))
 		observation.messageText = append(observation.messageText, text)
@@ -168,6 +197,7 @@ func comparePromptCachePayload(previous, current promptCachePayloadObservation) 
 		MessageIndex:       -1,
 		ByteOffset:         -1,
 		PreviousTotalBytes: previous.totalBytes(),
+		ToolsHash:          current.ToolsHash,
 	}
 	if previous.SystemHash != current.SystemHash {
 		divergence.Segment = "system"
@@ -233,12 +263,21 @@ func (s *promptCacheProbeStore) swap(key string, observation promptCachePayloadO
 	return previous, ok
 }
 
-func promptCacheProbeKey(event MessageEvent, purpose string) string {
+// promptCacheProbeKey 决定「这一次该和哪一次比」。
+//
+// 用途必须进键：意图路由、记忆抽取、主回复用的是完全不同的提示词，混在一起比对
+// 只会每次都报分叉，等于没有信号。
+//
+// 工具集指纹同样要进键。主人和普通成员拿到的工具不一样（真机实测 21 个 vs 44 个），
+// 工具声明排在缓存层级最前面，两者本来就是两条独立的缓存前缀，供应商侧并存。
+// 拿主人那轮去比成员那轮，必然报「system 从头就不同」——那不是故障，是两条线各自
+// 都在正常复用。不区分的话，一个爱说话的主人能让这份日志永远在报警。
+func promptCacheProbeKey(event MessageEvent, purpose string, toolsHash string) string {
 	purpose = strings.TrimSpace(purpose)
 	if purpose == "" {
 		purpose = "unknown"
 	}
-	return sessionKey(event) + "|" + purpose
+	return sessionKey(event) + "|" + purpose + "|" + toolsHash
 }
 
 // withPromptCacheProbeRun 把探针接进 provider 装饰链。
@@ -265,11 +304,11 @@ func (p *promptCacheProbeLLMProvider) Generate(ctx context.Context, req llm.Gene
 		purpose = debugModelPurpose(req)
 	}
 	observation := observePromptCachePayload(req)
-	previous, ok := p.runtime.promptCacheProbe.swap(promptCacheProbeKey(p.event, purpose), observation)
+	previous, ok := p.runtime.promptCacheProbe.swap(promptCacheProbeKey(p.event, purpose, observation.ToolsHash), observation)
 	response, err := p.provider.Generate(ctx, req)
 	if ok {
 		divergence := comparePromptCachePayload(previous, observation)
-		if !divergence.Clean() {
+		if !divergence.Expected(previous) {
 			p.runtime.recordPromptCacheDivergence(ctx, p.event, purpose, divergence, response)
 		}
 	}
@@ -290,6 +329,7 @@ func (r *Runtime) recordPromptCacheDivergence(
 		return
 	}
 	metadata := map[string]any{
+		"tools_hash":            divergence.ToolsHash,
 		"group_id":              event.GroupID,
 		"user_id":               event.UserID,
 		"message_id":            event.MessageID,

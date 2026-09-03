@@ -14,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"google.golang.org/genai"
 )
 
 // TestOpenAIResponsesInputMapsRoles 验证对应功能场景。
@@ -1432,6 +1435,71 @@ func TestAnthropicCachesStablePrefix(t *testing.T) {
 	}
 	if control := converted[2].Content[0].GetCacheControl(); control != nil && control.Type == "ephemeral" {
 		t.Fatalf("unmarked message must not be cached: %#v", converted[2].Content[0])
+	}
+}
+
+// TestTrailingSystemMessagesStayInPlace 覆盖前缀缓存的关键约束：历史之后的 system
+// 消息（时钟、发言者身份）必须留在原位，而不是被并进开头的 system 字段。
+func TestTrailingSystemMessagesStayInPlace(t *testing.T) {
+	messages := []Message{
+		{Role: RoleSystem, Content: "人设"},
+		{Role: RoleUser, Content: "历史 1"},
+		{Role: RoleAssistant, Content: "回复 1"},
+		{Role: RoleSystem, Content: "当前运行时钟：2026-09-03 12:00:00"},
+		{Role: RoleUser, Content: "当前消息"},
+	}
+	system, chat := splitSystemPrompt(messages)
+	if system != "人设" {
+		t.Fatalf("system = %q", system)
+	}
+
+	converted := anthropicMessages(chat, nil)
+	if len(converted) != 4 {
+		t.Fatalf("anthropic messages=%#v", converted)
+	}
+	clock := converted[2]
+	if clock.Role != anthropic.MessageParamRoleUser {
+		t.Fatalf("anthropic inline system role=%q", clock.Role)
+	}
+	if text := clock.Content[0].OfText; text == nil || !strings.HasPrefix(text.Text, inlineSystemPromptPrefix) || !strings.Contains(text.Text, "当前运行时钟") {
+		t.Fatalf("anthropic inline system text=%#v", clock.Content[0])
+	}
+
+	contents := geminiContents(chat, nil)
+	if len(contents) != 4 || contents[2].Role != genai.RoleUser || !strings.HasPrefix(contents[2].Parts[0].Text, inlineSystemPromptPrefix) {
+		t.Fatalf("gemini contents=%#v", contents)
+	}
+
+	input := openAIResponsesInput(chat, nil)
+	if len(input) != 4 {
+		t.Fatalf("responses input=%#v", input)
+	}
+	// 历史之后的 system 会被 OpenAI 兼容链路提到队首，把改动过的时钟又放回前缀里，
+	// 历史因此每轮作废（实测见 inlineTrailingSystemMessages）。这里必须落成带标记的
+	// user 消息，位置不动。
+	encoded, err := json.Marshal(input[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// JSON 会把前缀里的换行转义，所以只比对标记本身。
+	marker := strings.TrimSpace(inlineSystemPromptPrefix)
+	if strings.Contains(string(encoded), `"role":"system"`) || !strings.Contains(string(encoded), marker) {
+		t.Fatalf("responses inline system item=%s", encoded)
+	}
+
+	chatMessages := openAIChatCompletionMessages(messages, nil)
+	if len(chatMessages) != 5 {
+		t.Fatalf("chat completion messages=%#v", chatMessages)
+	}
+	if chatMessages[0].Role != "system" || chatMessages[0].Content != "人设" {
+		t.Fatalf("leading system must stay a system message: %#v", chatMessages[0])
+	}
+	if chatMessages[3].Role != "user" || chatMessages[3].Content != inlineSystemPromptPrefix+"当前运行时钟：2026-09-03 12:00:00" {
+		t.Fatalf("trailing system message=%#v", chatMessages[3])
+	}
+	// 转换不得改动调用方的切片：探针和预算层还会再读一遍同一批消息。
+	if messages[3].Role != RoleSystem {
+		t.Fatalf("caller messages were mutated: %#v", messages[3])
 	}
 }
 

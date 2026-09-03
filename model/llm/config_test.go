@@ -332,14 +332,18 @@ func TestListModelsReturnsLocalPresets(t *testing.T) {
 func TestSplitSystemPrompt(t *testing.T) {
 	system, messages := splitSystemPrompt([]Message{
 		{Role: RoleSystem, Content: "be brief"},
+		{Role: RoleSystem, Content: "persona"},
 		{Role: RoleUser, Content: "hello"},
-		{Role: RoleSystem, Content: "use zh"},
+		{Role: RoleSystem, Content: "clock: 12:00"},
+		{Role: RoleUser, Content: "current"},
 	})
 
-	if system != "be brief\n\nuse zh" {
+	// 只有开头连续的 system 消息进 system 字段；历史之后的时钟必须留在原地，
+	// 否则整段 system 每轮都变，前缀缓存永远命不中。
+	if system != "be brief\n\npersona" {
 		t.Fatalf("system = %q", system)
 	}
-	if len(messages) != 1 || messages[0].Role != RoleUser {
+	if len(messages) != 3 || messages[0].Role != RoleUser || messages[1].Role != RoleSystem || messages[1].Content != "clock: 12:00" || messages[2].Content != "current" {
 		t.Fatalf("messages = %#v", messages)
 	}
 }
