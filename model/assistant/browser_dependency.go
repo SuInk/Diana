@@ -22,7 +22,7 @@ var (
 	browserDepsCache []ResolverDependency
 )
 
-const browserDependencyName = "chrome"
+const browserDependencyName = "browser-renderer"
 
 const relationFontDependencyName = "cjk-font"
 
@@ -58,7 +58,7 @@ func probeBrowserDependencies() []ResolverDependency {
 	status := agent.ProbeHeadlessBrowserRendering(context.Background(), "")
 	dep := ResolverDependency{
 		Name:    browserDependencyName,
-		Purpose: "网页渲染：在一次性沙盒里执行页面 JS 后读取正文",
+		Purpose: "网页渲染：优先使用系统 Chrome/Chromium，没有时使用轻量 Obscura",
 	}
 	if status.Available {
 		dep.Available = true
@@ -67,33 +67,24 @@ func probeBrowserDependencies() []ResolverDependency {
 		return []ResolverDependency{dep}
 	}
 	dep.Detail = strings.TrimSpace(status.Detail)
-	// 和 yt-dlp / ffmpeg 一样能一键装。浏览器体积大，但装的过程同样是「一条包管理器
-	// 命令」，没理由让用户自己去查这个发行版对应的包名叫什么。
-	if plan, err := resolverDependencyInstallPlan(browserDependencyName, runtime.GOOS, lookResolverCommand); err == nil {
+	if _, ok := obscuraReleaseAssets[currentPlatformKey()]; ok {
 		dep.Installable = true
-		dep.Installer = plan.installer
+		dep.Installer = "Diana 下载 Obscura " + obscuraVersion
 	} else {
-		// 装不了的时候才需要教怎么装；能一键装时再写这句只会和按钮打架。
-		dep.Detail = strings.TrimSpace(dep.Detail + "。这台机器上没有可用的包管理器，需要自己装一个（Linux 上 chromium 或 google-chrome，macOS 上 Google Chrome）")
+		dep.Detail = strings.TrimSpace(dep.Detail + "。当前平台没有 Obscura 预编译包，请手动安装 Chrome/Chromium")
 	}
 	return []ResolverDependency{dep}
 }
 
-// installBrowserDependency 装浏览器，并用真正的探测确认装完能用。
-//
-// 装完还要复核，是因为「包管理器说成功了」不等于能用：Ubuntu 的 chromium-browser
-// 是个转发到 snap 的过渡包，容器里没有 snapd 就会装上一个跑不起来的壳子。复核这一步
-// 会把它照实说出来，而不是让用户在群里发链接时才撞见。
+// installBrowserDependency 在系统没有浏览器时下载固定版本的 Obscura。Diana 不再
+// 默认通过系统包管理器安装数 GB 的 Chrome；用户已经装过 Chrome 时仍优先复用它。
 func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallResult, error) {
 	deps := RefreshBrowserDependencies()
 	if dep, ok := resolverDependencyByName(deps, browserDependencyName); ok && dep.Available {
 		return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps)}, nil
 	}
-	plan, err := resolverDependencyInstallPlan(browserDependencyName, runtime.GOOS, lookResolverCommand)
+	path, err := installObscura(ctx)
 	if err != nil {
-		return ResolverDependencyInstallResult{}, err
-	}
-	if err := runDependencyInstallPlan(ctx, plan, browserDependencyName); err != nil {
 		return ResolverDependencyInstallResult{}, err
 	}
 	deps = RefreshBrowserDependencies()
@@ -103,10 +94,12 @@ func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallRes
 		if ok && strings.TrimSpace(dep.Detail) != "" {
 			detail = "：" + dep.Detail
 		}
-		return ResolverDependencyInstallResult{}, fmt.Errorf("%s 已执行，但浏览器仍然不可用%s", plan.installer, detail)
+		return ResolverDependencyInstallResult{}, fmt.Errorf("Obscura 已安装到 %s，但网页渲染仍然不可用%s", path, detail)
 	}
-	return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps), Installer: plan.installer}, nil
+	return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps), Installer: "Diana 下载 Obscura " + obscuraVersion}, nil
 }
+
+func currentPlatformKey() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
 func browserDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {
 	return map[string][]ResolverDependency{SandboxedBrowserPluginID: deps}
