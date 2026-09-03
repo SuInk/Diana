@@ -333,7 +333,9 @@ type Runtime struct {
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
 	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
 	// 摘要、又以完整原文进入同一个请求。
-	contextSummaryMarks   map[string]int64
+	contextSummaryMarks map[string]int64
+	// historyWindowAnchors 记录每个会话近期历史窗口的起点（见 anchoredHistoryWindow）。
+	historyWindowAnchors  map[string]string
 	recent                []EventRecord
 	activeMu              sync.Mutex
 	active                int
@@ -3221,22 +3223,28 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
-	systemPrompt := r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
-	if asyncImageTaskNotice != "" {
-		systemPrompt += "\n" + asyncImageTaskNotice
-	}
-	if mentionPrompt := r.replyMentionPrompt(cfg, event, replyHistory); mentionPrompt != "" {
-		systemPrompt += "\n" + mentionPrompt
-	}
+	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
+	// 图片任务通知和可提及成员名单都随这条消息变：并进尾部那条 system 消息。
+	systemTail = joinPromptSections(systemTail, asyncImageTaskNotice, r.replyMentionPrompt(cfg, event, replyHistory))
 	ruleDecision, ruleMatched := r.evaluateReplyRules(ctx, event, cleanText, replyHistory, cfg)
 	if ruleMatched && strings.TrimSpace(ruleDecision.Rule.LLMProfileID) != "" {
 		ctx = context.WithValue(ctx, replyRuleContextKey{}, strings.TrimSpace(ruleDecision.Rule.LLMProfileID))
 	}
-	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt, Priority: llm.MessagePrioritySystem}}
-	messages = append(messages, pluginContextMessages(ctx, pluginResponses)...)
+	// 请求按「稳定前缀在前、逐条消息变化的内容在后」排列：
+	//
+	//   system 头部 → 较早摘要 → 历史 → [缓存断点] → 逐消息上下文 → 同轮补充
+	//   → system 尾部（发言者）→ 时钟 → 装饰 → 当前消息
+	//
+	// 记忆检索、笔记本命中、指代解析、插件事实这些块每条消息都不一样，以前排在
+	// 历史前面：历史本身没变，但它前面的字节变了，供应商的前缀缓存到那里就断，
+	// 几千 token 的历史每轮都要重新 prefill。它们先攒在 volatile 里，等历史追加完
+	// 再统一放到后面——语义上它们就是「理解当前消息所需的背景」，离当前消息更近
+	// 反而更合适。预算裁剪按 Priority 走，不看位置，各层的让位顺序不受影响。
+	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemHead, Priority: llm.MessagePrioritySystem}}
+	volatile := pluginContextMessages(ctx, pluginResponses)
 	semanticReferenceContext := r.semanticReferenceContextBlock(ctx, event)
 	if semanticReferenceContext.Block != "" {
-		messages = append(messages, llm.Message{
+		volatile = append(volatile, llm.Message{
 			Role:     llm.RoleUser,
 			Content:  semanticReferenceContext.Block,
 			Priority: llm.MessagePriorityPlugin,
@@ -3245,7 +3253,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if !authoritativePluginContext {
 		contextPreload.wait()
 		if threadState := strings.TrimSpace(contextPreload.threadState); threadState != "" {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    threadState,
 				Priority:   llm.MessagePriorityPlugin,
@@ -3260,7 +3268,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			olderSummary = ""
 		}
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:     llm.RoleUser,
 				Content:  memoryContext,
 				Priority: llm.MessagePriorityMemory,
@@ -3269,7 +3277,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
 		// 被预算挤掉就等于没写——而它要防的恰恰是把上一轮内容重说一遍。
 		if hasPreviousTurn {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    consecutiveReplyContext(previousTurn),
 				Priority:   llm.MessagePriorityPlugin,
@@ -3279,7 +3287,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 世界观设定和长期记忆同级：都是「理解这条消息所需的背景」。常驻设定在
 		// 同一棵树不变时逐轮稳定，触发式设定随消息变化，和检索记忆的易变程度一致。
 		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    worldBookContext,
 				Priority:   llm.MessagePriorityMemory,
@@ -3288,7 +3296,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 群常用表达是风格参考，和记忆同级注入；没攒够门槛时它是空串，零开销。
 		if expressionContext := contextPreload.expressionContext; expressionContext != "" {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    expressionContext,
 				Priority:   llm.MessagePriorityMemory,
@@ -3298,7 +3306,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
 		// 一起让位给当前消息，而不是互相挤。
 		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    notebookContext,
 				Priority:   llm.MessagePriorityMemory,
@@ -3309,7 +3317,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 索引挂在历史优先级上：预算紧张时它跟着旧历史一起让位，不该挤掉当前
 			// 消息或长期要求。
 			if mediaIndex := contextPreload.mediaIndex; mediaIndex != "" {
-				messages = append(messages, llm.Message{
+				volatile = append(volatile, llm.Message{
 					Role:       llm.RoleUser,
 					Content:    mediaIndex,
 					Priority:   llm.MessagePriorityHistory,
@@ -3336,7 +3344,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				if threadUsage.SelectedTokens < threadUsage.CandidateTokens {
 					threadUsage.Reason = contextLayerReasonBudget
 				}
-				messages = append(messages, llm.Message{
+				volatile = append(volatile, llm.Message{
 					Role:       llm.RoleUser,
 					Content:    threadPrefix + thread,
 					Priority:   llm.MessagePrioritySummary,
@@ -3345,7 +3353,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 		}
 		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    linkPolicy,
 				Priority:   llm.MessagePriorityMemory,
@@ -3353,7 +3361,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			})
 		}
 		if sources := r.claimSourceContext(event); sources != "" {
-			messages = append(messages, llm.Message{
+			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    sources,
 				Priority:   llm.MessagePriorityMemory,
@@ -3440,6 +3448,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			messages = append(messages, historyMessage)
 		}
+		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
+		// 显式缓存的供应商（Anthropic）按它写入和读取，自动前缀缓存的供应商忽略。
+		messages = markStablePromptPrefix(messages)
+		messages = append(messages, volatile...)
+		volatile = nil
 		for _, candidate := range turnCandidates {
 			if strings.TrimSpace(candidate.Event.MessageID) == "" || candidate.Event.MessageID == event.MessageID {
 				continue
@@ -3467,6 +3480,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			messages = append(messages, turnMessage)
 		}
 	}
+	// 插件事实占据权威地位时没有历史那一段，攒下的块直接跟在 system 头部后面。
+	messages = append(messages, volatile...)
 	semanticContext := r.semanticReferenceContext(ctx, event)
 	if sourceMessage := semanticReferenceContextMessage(semanticContext); !runtimeLLMMessageEmpty(sourceMessage) {
 		messages = append(messages, sourceMessage)
@@ -3532,6 +3547,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	currentMessage = r.imageOCRAdjustMessage(ctx, event, currentMessage)
 	currentMessage.Priority = llm.MessagePriorityCurrent
+	if systemTail != "" {
+		messages = append(messages, llm.Message{
+			Role:     llm.RoleSystem,
+			Content:  systemTail,
+			Priority: llm.MessagePrioritySystem,
+		})
+	}
 	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
@@ -5710,12 +5732,32 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	return strings.TrimSpace(builder.String())
 }
 
+// systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者
+// 尾部），给只发一条 system 消息的旁路（定时订阅、后续评论）和测试用。主回复链路
+// 用 systemPromptPartsWithRelationshipAndAgentTools 把两段分开放。
 func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) string {
+	head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, registry)
+	return joinPromptSections(head, tail)
+}
+
+// systemPromptPartsWithRelationshipAndAgentTools 把系统提示词拆成两段：
+//
+//   - head 只依赖机器人配置、本群配置和本轮注册的工具：同一个群里不管谁说话、
+//     说什么，它逐字节相同。它作为第一条 system 消息发出，供应商的前缀缓存
+//     （tools → system → messages）从它开始命中，后面的历史才有机会一起命中。
+//   - tail 随「谁在说话、这条说了什么」变化：权限档位、主人专属工具规则、发言者
+//     昵称、命中的别名、时段与心情语气、语气锚点。它由调用方作为独立 system
+//     消息放在历史之后、当前消息之前。以前这段直接拼在同一条 system 里，换一个
+//     人说话整条 system 就变，Anthropic / Gemini / Responses 把 system 放在所有
+//     消息之前，system 一变，几千 token 的历史缓存也跟着全部作废。
+//
+// 语气锚点留在 tail 末尾的理由和以前一样：离生成越近越管用，现在它离得更近了。
+func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
 	cfg := r.effectiveConfigForEvent(event)
 	var builder strings.Builder
 	// tail 收集随发言者权限档位变化的段落（主人专属工具规则、按好感度解锁的日程
-	// 工具规则）。注入条件保持原样，只是不再按原位置写进 builder：夹在中间会让它
-	// 后面几千 token 的稳定规则永远命中不了供应商的前缀缓存，统一压到尾部拼接。
+	// 工具规则）。注入条件保持原样，只是不写进 head：夹在中间会让它后面几千 token
+	// 的稳定规则永远命中不了供应商的前缀缓存。
 	var tail strings.Builder
 	hasTool := func(name string) bool {
 		if registry == nil {
@@ -5831,6 +5873,7 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	builder.WriteString("\n" + promptLongTermMemory)
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy))
 	builder.WriteString("\n" + promptCurrentMessage)
+	builder.WriteString("\n" + promptHistoryFormat)
 	builder.WriteString("\n" + promptAdjacentSupplement)
 	if boolValue(cfg.PromptInjectPlaintextRules, true) {
 		appendPromptSection(&builder, cfg.PromptPlaintextRulesText)
@@ -5853,33 +5896,45 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 		builder.WriteString("\n" + promptPluginAuthority)
 		break
 	}
-	// 会变的内容统一压到尾部，并按易变程度从低到高排列：权限档位段落和发送者昵称
-	// 在同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。这样换人发言时
-	// 前缀缓存仍覆盖上面全部稳定规则，同一人连续发言时还能进一步覆盖到昵称为止——
-	// 实时时钟当初就是因为夹在中间导致整段提示词永远无法命中缓存而被挪出去的
-	//（见 runtimeClockPrompt），这里对剩下的逐消息内容沿用同一处理。
-	appendPromptSection(&builder, tail.String())
-	appendPromptSection(&builder, relationshipPermissionContext(relationship))
+	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
+	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
+	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
+	appendPromptSection(&tail, relationshipPermissionContext(relationship))
 	if event.Kind == EventKindGroup {
 		if boolValue(cfg.PromptInjectGroupSender, true) {
-			appendPromptSection(&builder, renderPromptTemplate(cfg.PromptGroupSenderTemplate, map[string]string{
+			appendPromptSection(&tail, renderPromptTemplate(cfg.PromptGroupSenderTemplate, map[string]string{
 				"sender": event.SenderNameOrID(),
 			}))
 		}
 		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" {
-			appendPromptSection(&builder, promptMatchedAliasPrefix+matched+promptMatchedAliasRule)
+			appendPromptSection(&tail, promptMatchedAliasPrefix+matched+promptMatchedAliasRule)
 		}
 	}
 	// 时段语气紧挨着锚点注入，理由和锚点一样：这两条都是「怎么说」，离生成越近
 	// 越管用。关掉时返回空串，appendPromptSection 会跳过。
-	appendPromptSection(&builder, dayPartToneForConfig(cfg, r.clock()))
-	// 心情语气和时段语气同一批：都描述「此刻怎么说」，几小时才变一档，
-	// 不会打散前缀缓存。
-	appendPromptSection(&builder, r.moodToneForConfig(cfg, event.ProfileID))
+	appendPromptSection(&tail, dayPartToneForConfig(cfg, r.clock()))
+	// 心情语气和时段语气同一批：都描述「此刻怎么说」。
+	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
-	appendPromptSection(&builder, cfg.ReplyStyle.closingAnchor())
-	appendPromptSection(&builder, actionDescriptionClosingAnchor(actionsEnabled))
+	appendPromptSection(&tail, cfg.ReplyStyle.closingAnchor())
+	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled))
+	return builder.String(), strings.TrimSpace(tail.String())
+}
+
+// joinPromptSections 用换行拼接非空段落。
+func joinPromptSections(sections ...string) string {
+	var builder strings.Builder
+	for _, section := range sections {
+		section = strings.TrimSpace(section)
+		if section == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(section)
+	}
 	return builder.String()
 }
 
@@ -6055,6 +6110,16 @@ func formatUTCOffset(offsetSeconds int) string {
 	hours := offsetSeconds / 3600
 	minutes := (offsetSeconds % 3600) / 60
 	return fmt.Sprintf("%s%02d:%02d", sign, hours, minutes)
+}
+
+// markStablePromptPrefix 在「历史之后、逐消息内容之前」标出缓存断点。只有 system
+// 头部一条时不标：那条由适配层单独缓存，没有历史就没有第二段可复用的前缀。
+func markStablePromptPrefix(messages []llm.Message) []llm.Message {
+	if len(messages) < 2 {
+		return messages
+	}
+	messages[len(messages)-1].CacheBreakpoint = true
+	return messages
 }
 
 func appendPromptSection(builder *strings.Builder, section string) {
@@ -7016,11 +7081,26 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	label := "【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】"
+	return historyLinePrefix(event) + event.SenderNameOrID() + ": " + text
+}
+
+// historyLinePrefix 是每条历史行的开头：「[历史 2026-09-03 14:05:00] 」，跨群来源
+// 换成「[跨群历史 …] 」。两种标记的含义由 promptHistoryFormat 在 system 头部说明一次。
+//
+// 以前每行都带一整句「历史参考消息，仅用于理解上下文，不要直接回复这条历史消息」
+// 外加「距当前：约 N 分钟」。前者是几十个 token 的固定开销，几百条历史下能吃掉
+// 历史预算的一小半；后者按当前时间算，每过一分钟最近一小时内的所有行都会变，
+// 整段历史因此永远无法命中前缀缓存。现在只标绝对时间：它不随请求时间变化，
+// 「离现在多久」由尾部的运行时钟给模型自己对照。
+func historyLinePrefix(event MessageEvent) string {
+	label := "[历史"
 	if event.crossGroupContext {
-		label = "【跨群参考：这条相关消息的原发言者也在当前群，仅用于衔接重合话题；不要透露来源群、不要转述其他群的旁支内容】"
+		label = "[跨群历史"
 	}
-	return fmt.Sprintf("%s%s%s: %s", label, contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
+	if event.Time > 0 {
+		label += " " + time.Unix(event.Time, 0).Local().Format("2006-01-02 15:04:05")
+	}
+	return label + "] "
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
@@ -7050,7 +7130,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if messageID == "" {
 		messageID = "不可用"
 	}
-	line := fmt.Sprintf("【历史参考消息，仅用于理解上下文，不要直接回复这条历史消息】%s%s", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID())
+	line := historyLinePrefix(event) + event.SenderNameOrID()
 	if text != "" {
 		line += ": " + text
 	}

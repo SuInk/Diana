@@ -694,6 +694,19 @@ func validateReasoningEffort(value string) error {
 	}
 }
 
+// inlineSystemPromptPrefix 标在「历史之后才出现的 system 消息」前面。Anthropic 和
+// Gemini 没有对话中途的 system 角色，这类消息只能落成 user 文本；不加标记的话，
+// 模型会把「当前发言者是主人」「当前运行时钟：…」读成用户在自报身份。
+const inlineSystemPromptPrefix = "【系统补充指令，不是用户发言】\n"
+
+// inlineSystemMessage 把位置靠后的 system 消息改写成带标记的 user 文本消息。
+func inlineSystemMessage(msg Message) Message {
+	msg.Role = RoleUser
+	msg.Content = inlineSystemPromptPrefix + messageTextContent(msg)
+	msg.Parts = nil
+	return msg
+}
+
 func messageTextContent(msg Message) string {
 	if text := strings.TrimSpace(msg.Content); text != "" {
 		return text
@@ -717,15 +730,27 @@ func messageTextContent(msg Message) string {
 }
 
 // splitSystemPrompt 将 system 消息和普通对话消息拆开。
+// splitSystemPrompt 把开头连续的 system 消息合成一段，交给 Gemini / Anthropic /
+// OpenAI Responses 各自的 system 字段；其余消息按原顺序返回。
+//
+// 只取开头那一段而不是全部 system 消息，是为了前缀缓存：调用方把实时时钟、
+// 本轮发言者身份、回复装饰这类逐条消息都会变的说明放在历史之后的独立 system
+// 消息里，就是要它们留在尾部。以前这里把所有 system 消息不分位置地并进同一个
+// system 字段，尾部时钟一并进来，整段 system 每秒都不一样——Anthropic 的缓存
+// 层级是 tools → system → messages，system 一变后面的历史也全部作废，等于每轮
+// 都在付缓存写入费却永远读不到。位置靠后的 system 消息现在原地保留，由各适配层
+// 按自己支持的角色渲染（Responses 有 system 输入项，Anthropic 和 Gemini 落成
+// user 文本），语义上仍是「历史之后、当前消息之前的补充指令」。
 func splitSystemPrompt(messages []Message) (string, []Message) {
-	// Gemini/Anthropic/OpenAI Responses 对 system prompt 的位置要求不同，这里统一拆出来。
 	var system []string
 	chat := make([]Message, 0, len(messages))
+	leading := true
 	for _, msg := range messages {
-		if msg.Role == RoleSystem {
+		if msg.Role == RoleSystem && leading {
 			system = append(system, messageTextContent(msg))
 			continue
 		}
+		leading = false
 		chat = append(chat, msg)
 	}
 	return strings.Join(system, "\n\n"), chat

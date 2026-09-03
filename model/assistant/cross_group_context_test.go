@@ -39,7 +39,7 @@ func TestCrossGroupContextMergesRelatedMessageWhenAuthorIsInTargetGroup(t *testi
 		t.Fatalf("cross-group event retained private linkage or media: %#v", cross)
 	}
 	prompt := historyPromptTextAt(cross, current.Time)
-	if !strings.Contains(prompt, "跨群参考") || strings.Contains(prompt, "shared") {
+	if !strings.HasPrefix(prompt, "[跨群历史 ") || strings.Contains(prompt, "shared") {
 		t.Fatalf("cross-group prompt=%q", prompt)
 	}
 	if !store.query.CrossSession || store.query.SessionPrefix != "bot-a:group:" || store.query.Session != "bot-a:group:current" {

@@ -127,9 +127,6 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		Content:  r.systemPrompt(source, nil),
 		Priority: llm.MessagePrioritySystem,
 	}}
-	if clockPrompt := r.runtimeClockPrompt(source); clockPrompt != "" {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: clockPrompt, Priority: llm.MessagePrioritySystem})
-	}
 	botID := firstNonEmpty(cfg.BotAccount, source.SelfID)
 	for _, historyEvent := range history {
 		content := strings.TrimSpace(historyPlainText(historyEvent))
@@ -141,6 +138,10 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 			role = llm.RoleAssistant
 		}
 		messages = append(messages, llm.Message{Role: role, Content: content, Priority: llm.MessagePriorityHistory})
+	}
+	// 时钟放在历史之后：它每秒都变，夹在人设和历史之间会让两者都命不中前缀缓存。
+	if clockPrompt := r.runtimeClockPrompt(source); clockPrompt != "" {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: clockPrompt, Priority: llm.MessagePrioritySystem})
 	}
 	mediaFrames := followUpPluginMediaFrames(ctx, pluginResponses)
 	defer cleanupVideoContextFrames(mediaFrames.videoFrames)

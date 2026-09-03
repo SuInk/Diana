@@ -3211,6 +3211,41 @@ func TestRuntimeCachesImagesWithoutHistoryPlugin(t *testing.T) {
 	}
 }
 
+// 同一个群里换一个人说话，system 头部必须逐字节相同：Anthropic / Gemini / Responses
+// 把 system 放在所有消息之前，头部一变，后面几千 token 的历史缓存全部作废。
+func TestSystemPromptHeadIsStableAcrossSpeakers(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := func(userID, name, text string) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: userID, SenderName: name, RawMessage: text, Time: 1000}
+	}
+	owner := event("10001", "主人", "Diana 在吗")
+	member := event("10002", "路人", "随便聊聊")
+	ownerHead, ownerTail := runtime.systemPromptPartsWithRelationshipAndAgentTools(owner, nil, false, RelationshipPolicyForConfig(runtime.effectiveConfigForEvent(owner), UserMemoryProfile{}, owner.UserID), true, nil)
+	memberHead, memberTail := runtime.systemPromptPartsWithRelationshipAndAgentTools(member, nil, false, RelationshipPolicyForConfig(runtime.effectiveConfigForEvent(member), UserMemoryProfile{}, member.UserID), true, nil)
+	if ownerHead != memberHead {
+		t.Fatalf("system head differs between speakers:\n%q\n%q", ownerHead, memberHead)
+	}
+	if ownerTail == memberTail {
+		t.Fatalf("speaker tail should differ between owner and member: %q", ownerTail)
+	}
+	for _, want := range []string{"主人", promptOwnerRelationshipTarget, "关系等级："} {
+		if !strings.Contains(ownerTail, want) {
+			t.Fatalf("owner tail missing %q: %q", want, ownerTail)
+		}
+	}
+	for _, leaked := range []string{"关系等级：", "路人"} {
+		if strings.Contains(memberHead, leaked) {
+			t.Fatalf("head must not carry speaker-specific text %q: %q", leaked, memberHead)
+		}
+	}
+	if strings.Contains(ownerHead, promptOwnerRelationshipTarget) || !strings.Contains(memberHead, promptHistoryFormat) {
+		t.Fatalf("head content misplaced: %q", ownerHead)
+	}
+	if joined := runtime.systemPromptWithRelationshipAndAgentTools(owner, nil, false, RelationshipPolicyForConfig(runtime.effectiveConfigForEvent(owner), UserMemoryProfile{}, owner.UserID), true, nil); joined != ownerHead+"\n"+ownerTail {
+		t.Fatalf("joined prompt = %q", joined)
+	}
+}
+
 // TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget 验证历史消息只作为参考，当前消息才是回复目标。
 func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 	channel := &recordingChannel{}
@@ -3249,17 +3284,42 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 	// 当前消息之前还夹着尾部时钟等 system 消息，历史行必须按内容定位而不是固定下标。
 	history := ""
 	for _, message := range provider.request.Messages {
-		if strings.Contains(message.Content, "【历史参考消息") {
+		if strings.HasPrefix(message.Content, "[历史 ") {
 			history = message.Content
 			break
 		}
 	}
 	current := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.Contains(history, "【历史参考消息") || !strings.Contains(history, "旧问题是什么") {
+	if !strings.HasPrefix(history, "[历史 "+time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05")+"] Alice: ") || !strings.Contains(history, "旧问题是什么") {
 		t.Fatalf("history content = %q", history)
 	}
-	if !strings.Contains(history, "【消息时间：") || !strings.Contains(history, "距当前：约 2 分钟") {
-		t.Fatalf("history timing = %q", history)
+	// 历史行只标绝对时间：「距当前」随请求时间变化，会让整段历史无法命中前缀缓存。
+	if strings.Contains(history, "距当前") || strings.Contains(history, "【消息时间：") {
+		t.Fatalf("history timing must be absolute only = %q", history)
+	}
+	// 历史行的写法只在稳定的 system 头部说明一次，不再逐行重复。
+	explained := false
+	historyIndex, tailIndex := -1, -1
+	for index, message := range provider.request.Messages {
+		if message.Role == llm.RoleSystem && strings.Contains(message.Content, promptHistoryFormat) {
+			explained = true
+		}
+		if strings.HasPrefix(message.Content, "[历史 ") {
+			historyIndex = index
+		}
+		if message.Role == llm.RoleSystem && strings.Contains(message.Content, "关系等级：") {
+			tailIndex = index
+		}
+	}
+	if !explained {
+		t.Fatalf("system head must explain the history line format: %#v", provider.request.Messages)
+	}
+	// 发言者相关的 system 尾部必须排在历史之后，历史末尾带缓存断点。
+	if historyIndex < 0 || tailIndex < historyIndex {
+		t.Fatalf("speaker tail must follow history: history=%d tail=%d", historyIndex, tailIndex)
+	}
+	if !provider.request.Messages[historyIndex].CacheBreakpoint {
+		t.Fatalf("last history message must carry the stable cache breakpoint: %#v", provider.request.Messages[historyIndex])
 	}
 	if strings.Contains(history, "【当前需要回复的消息】") {
 		t.Fatalf("history should not be marked current: %q", history)
