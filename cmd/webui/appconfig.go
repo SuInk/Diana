@@ -90,7 +90,9 @@ const configPathEnv = "DIANA_CONFIG"
 const defaultConfigFileName = "config.yaml"
 
 // resolveConfigPath 按 --config、DIANA_CONFIG、工作目录、可执行文件目录的顺序
-// 找配置文件。返回空字符串表示哪里都没有，此时全部走内置默认值。
+// 找配置文件。命令入口经常是 /usr/local/bin 或 ~/.local/bin 下的符号链接，
+// 所以还要检查链接指向的真实安装目录。返回空字符串表示哪里都没有，此时全部
+// 走内置默认值。
 func resolveConfigPath(args []string) string {
 	if explicit := configPathFromArgs(args); explicit != "" {
 		return explicit
@@ -102,8 +104,21 @@ func resolveConfigPath(args []string) string {
 		return defaultConfigFileName
 	}
 	if executable, err := os.Executable(); err == nil {
-		beside := filepath.Join(filepath.Dir(executable), defaultConfigFileName)
-		if _, err := os.Stat(beside); err == nil {
+		if path := configPathNearExecutable(executable); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func configPathNearExecutable(executable string) string {
+	candidates := []string{executable}
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil && resolved != executable {
+		candidates = append(candidates, resolved)
+	}
+	for _, candidate := range candidates {
+		beside := filepath.Join(filepath.Dir(candidate), defaultConfigFileName)
+		if info, err := os.Stat(beside); err == nil && info.Mode().IsRegular() {
 			return beside
 		}
 	}
