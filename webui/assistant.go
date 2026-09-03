@@ -44,6 +44,13 @@ type inPlaceConfigRuntime interface {
 	UpdateConfigInPlace(assistant.BotConfig) error
 }
 
+// groupInfoRuntime 让群管理页按群号问平台要这个群此刻的信息。做成可选接口而不是
+// 塞进 BotRuntime：只有 Telegram 这类「没有列出全部群的接口、但能按群号查」的平台
+// 用得上，测试里的假运行时不必为此实现一个空方法。
+type groupInfoRuntime interface {
+	GroupInfoForProfile(ctx context.Context, profileID, groupID string) (assistant.GroupInfo, bool)
+}
+
 // contextBudgetRuntime 让事件页拿到按群算好的上下文预算分配。做成可选接口而不是
 // 塞进 BotRuntime：它只服务一个页面，测试里的假运行时不必为此实现一个空方法。
 type contextBudgetRuntime interface {
@@ -84,6 +91,8 @@ type BotHandler struct {
 	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
 	liveGroupMu               sync.Mutex
 	liveGroupCache            liveGroupListCache
+	groupNameMu               sync.Mutex
+	groupNameCache            map[string]groupNameCacheEntry
 	userNameMu                sync.Mutex
 	userNameCache             map[string]userNameCacheEntry
 }
