@@ -83,7 +83,7 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	set := assistant.GroupConfigSet{Groups: h.groupConfigs.Groups().GroupsForProfile(profileID)}
 	refresh := queryBool(c.Query("refresh"))
 	liveGroups, liveAvailable, warning := h.consoleGroupSources(c.Request.Context(), profileID, refresh)
-	groups := mergeConsoleGroupItems(base, set, liveGroups)
+	groups := mergeConsoleGroupItems(base, set, liveGroups, h.isOneBotProfile)
 	for index := range groups {
 		groups[index].BotProfileID = profileID
 	}
@@ -105,9 +105,47 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 // 本地事件历史里聚合。选了「全部机器人」时沿用原来的行为，避免把两个平台的群混
 // 成一份看不出归属的清单。
 func (h *BotHandler) consoleGroupSources(ctx context.Context, profileID string, refresh bool) ([]botAutoGroupInfo, bool, string) {
-	if profileID == "" || h.isOneBotProfile(profileID) {
-		return h.liveConsoleGroups(ctx, refresh)
+	if profileID != "" && !h.isOneBotProfile(profileID) {
+		return h.localConsoleGroups(ctx, profileID)
 	}
+	live, liveAvailable, warning := h.liveConsoleGroups(ctx, refresh)
+	if profileID != "" {
+		return live, liveAvailable, warning
+	}
+	// 「全部机器人」以前只问 OneBot 的 get_group_list，于是非 OneBot 平台的群在
+	// 默认视图里一个都不出现——纯 Telegram 部署打开这页就是空的。这里把本地
+	// 事件里见过的群并进来，两边按群号去重。
+	local, localAvailable, localWarning := h.localConsoleGroups(ctx, "")
+	if !localAvailable {
+		if !liveAvailable && warning == "" {
+			warning = localWarning
+		}
+		return live, liveAvailable, warning
+	}
+	seen := make(map[string]struct{}, len(live))
+	for _, item := range live {
+		if id := strings.TrimSpace(item.GroupID); id != "" {
+			seen[id] = struct{}{}
+		}
+	}
+	for _, item := range local {
+		id := strings.TrimSpace(item.GroupID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		live = append(live, item)
+	}
+	return live, true, warning
+}
+
+// localConsoleGroups 从本地事件历史里聚合群列表。Telegram、钉钉这类平台的 Bot
+// API 没有「列出我加入的群」，机器人只有在群里收到过消息才知道自己在那儿。
+// profileID 为空表示不限机器人。
+func (h *BotHandler) localConsoleGroups(ctx context.Context, profileID string) ([]botAutoGroupInfo, bool, string) {
 	if h.sqlite == nil {
 		return nil, false, "当前存储不支持按机器人列出群，暂时只显示已保存的群配置"
 	}
@@ -117,7 +155,11 @@ func (h *BotHandler) consoleGroupSources(ctx context.Context, profileID string, 
 	}
 	groups := make([]botAutoGroupInfo, 0, len(seen))
 	for _, item := range seen {
-		groups = append(groups, botAutoGroupInfo{GroupID: item.GroupID})
+		groups = append(groups, botAutoGroupInfo{
+			GroupID:   item.GroupID,
+			GroupName: item.GroupName,
+			QQAvatar:  h.isOneBotProfile(item.BotProfileID),
+		})
 	}
 	return groups, true, ""
 }
@@ -193,6 +235,10 @@ func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]bot
 		return nil, false, warning
 	}
 	liveGroups := autoGroupsFromOneBotData(data)
+	// 这一份来自 OneBot 的 get_group_list，群号就是 QQ 群号，头像规则适用。
+	for index := range liveGroups {
+		liveGroups[index].QQAvatar = true
+	}
 	h.liveGroupMu.Lock()
 	h.liveGroupCache = liveGroupListCache{
 		groups:    cloneLiveGroups(liveGroups),
@@ -204,7 +250,11 @@ func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]bot
 	return liveGroups, true, ""
 }
 
-func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []botAutoGroupInfo) []consoleGroupItem {
+// qqAvatarForProfile 判断某台机器人的群能否套用 QQ 群头像地址规则。传函数而不是
+// 整个 handler，是为了让 mergeConsoleGroupItems 保持成可单测的纯函数。
+type qqAvatarForProfile func(profileID string) bool
+
+func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []botAutoGroupInfo, qqAvatar qqAvatarForProfile) []consoleGroupItem {
 	saved := make(map[string]assistant.GroupConfig, len(set.Groups))
 	for _, cfg := range set.Groups {
 		groupID := strings.TrimSpace(cfg.GroupID)
@@ -228,10 +278,14 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		if !configured {
 			cfg = assistant.DefaultGroupConfig(groupID, base)
 		}
+		avatarURL := ""
+		if live.QQAvatar {
+			avatarURL = assistant.OneBotGroupAvatarURL(groupID)
+		}
 		items = append(items, consoleGroupItem{
 			GroupConfig:    cfg.WithDefaults(groupID, base),
 			GroupName:      strings.TrimSpace(live.GroupName),
-			AvatarURL:      assistant.OneBotGroupAvatarURL(groupID),
+			AvatarURL:      avatarURL,
 			MemberCount:    live.MemberCount,
 			MaxMemberCount: live.MaxMemberCount,
 			Configured:     configured,
@@ -240,9 +294,14 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		delete(saved, groupID)
 	}
 	for groupID, cfg := range saved {
+		// 已保存的群配置自带归属机器人，据此判断能不能用 QQ 的头像规则。
+		avatarURL := ""
+		if qqAvatar == nil || qqAvatar(strings.TrimSpace(cfg.BotProfileID)) {
+			avatarURL = assistant.OneBotGroupAvatarURL(groupID)
+		}
 		items = append(items, consoleGroupItem{
 			GroupConfig: cfg,
-			AvatarURL:   assistant.OneBotGroupAvatarURL(groupID),
+			AvatarURL:   avatarURL,
 			Configured:  true,
 			Joined:      false,
 		})
