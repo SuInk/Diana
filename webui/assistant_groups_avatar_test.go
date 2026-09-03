@@ -32,8 +32,13 @@ func TestMergeConsoleGroupItemsSkipsQQAvatarForOtherPlatforms(t *testing.T) {
 		t.Fatalf("onebot group lost its avatar: %#v", qq)
 	}
 	telegram := byID["-1001"]
-	if telegram.AvatarURL != "" {
+	// 关键是不能指向腾讯：那既是死链，也会把 Telegram 群号发给第三方。
+	// 现在改走本机的鉴权代理，Bot Token 留在服务端。
+	if strings.Contains(telegram.AvatarURL, "qlogo.cn") {
 		t.Fatalf("telegram group got a QQ avatar URL: %q", telegram.AvatarURL)
+	}
+	if !strings.HasPrefix(telegram.AvatarURL, "/api/assistant/groups/") {
+		t.Fatalf("telegram group avatar should go through the local proxy: %q", telegram.AvatarURL)
 	}
 	if telegram.GroupName != "Telegram 读书会" {
 		t.Fatalf("telegram group name = %q", telegram.GroupName)
@@ -56,7 +61,13 @@ func TestMergeConsoleGroupItemsUsesProfileForSavedGroups(t *testing.T) {
 	if got := byID["111"]; !strings.Contains(got.AvatarURL, "qlogo.cn") {
 		t.Fatalf("saved onebot group = %#v", got)
 	}
-	if got := byID["-1001"]; got.AvatarURL != "" {
+	got := byID["-1001"]
+	if strings.Contains(got.AvatarURL, "qlogo.cn") {
 		t.Fatalf("saved telegram group got a QQ avatar URL: %q", got.AvatarURL)
+	}
+	// 已保存的群配置带着归属机器人，代理地址要把它一起传下去，
+	// 否则多机器人部署下不知道该问哪台机器人要头像。
+	if !strings.Contains(got.AvatarURL, "bot_profile_id=tg-profile") {
+		t.Fatalf("saved telegram group avatar lost its profile: %q", got.AvatarURL)
 	}
 }

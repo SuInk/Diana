@@ -51,6 +51,12 @@ type groupInfoRuntime interface {
 	GroupInfoForProfile(ctx context.Context, profileID, groupID string) (assistant.GroupInfo, bool)
 }
 
+// groupAvatarRuntime 让群管理页能取到群头像的原始字节。头像地址在有些平台上带着
+// 机器人凭据，只能由服务端取回后转发，因此这里传的是内容而不是 URL。
+type groupAvatarRuntime interface {
+	GroupAvatarForProfile(ctx context.Context, profileID, groupID string) (assistant.GroupAvatar, bool)
+}
+
 // contextBudgetRuntime 让事件页拿到按群算好的上下文预算分配。做成可选接口而不是
 // 塞进 BotRuntime：它只服务一个页面，测试里的假运行时不必为此实现一个空方法。
 type contextBudgetRuntime interface {
