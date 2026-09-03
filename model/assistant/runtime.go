@@ -9100,7 +9100,7 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 	if _, rest, ok := extractOutgoingReplyMarker(reply); ok {
 		reply = rest
 	}
-	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
+	chunks := splitForwardReply(reply, chatSplitLimitsFrom(cfg))
 	if len(chunks) == 0 {
 		return "", nil
 	}
@@ -11545,6 +11545,32 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	var out []string
 	for _, segment := range chatReplySegments(reply, limits) {
 		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
+		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
+			out = append(out, trimChatTrailingPeriod(chunk))
+		}
+	}
+	return restoreFencedCodeBlocks(out, fences, limits.ChunkSize)
+}
+
+// splitForwardReply 把已经确定要装进合并转发的回复切成节点。
+//
+// 普通气泡需要 MaxBubbles 防刷屏，合并转发本身已经把节点收进一张卡片，再拿同一个
+// 上限合并相邻行只会破坏模型原本的节奏。这里保留自然分条开关和单节点长度兜底，但
+// 不限制节点数量，也不额外按句号推断边界：模型明确换行或写标记的地方才新建节点。
+func splitForwardReply(reply string, limits chatSplitLimits) []string {
+	limits = limits.withDefaults()
+	reply, fences := maskFencedCodeBlocks(reply)
+	reply = collapseBlankLines(normalizeSplitMarkers(reply))
+	if reply == "" {
+		return nil
+	}
+	depth := splitAtLine
+	if limits.MarkerOnly {
+		depth = splitAtMarker
+	}
+	segments := splitChatReplyAtDepth(reply, limits, depth)
+	out := make([]string, 0, len(segments))
+	for _, segment := range segments {
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
 			out = append(out, trimChatTrailingPeriod(chunk))
 		}
