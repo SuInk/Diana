@@ -217,9 +217,41 @@ package_dir="$stage_dir/$package_name"
 
 legacy_install_dir="$service_home/.local/share/diana"
 new_system_install=false
+legacy_migrated_from=""
 if [ "$install_scope" = "system" ] && [ ! -e "$install_dir/.installed-version" ] && [ -e "$legacy_install_dir/.installed-version" ]; then
   new_system_install=true
 fi
+
+# 一台机器只能有一个 Diana 在跑：两个实例会抢同一个端口，更糟的是各写各的
+# 数据库，聊天记忆和配置从此分叉。迁移只复制数据，旧服务仍然注册着且是
+# enabled——光把进程 kill 掉，systemd/launchd 转头就会把它拉起来，所以这里必须
+# 把旧的服务单元一起退役。
+retire_legacy_service() {
+  legacy_retired=false
+  legacy_plist="$service_home/Library/LaunchAgents/com.suink.diana.plist"
+  if [ -f "$legacy_plist" ] && grep -F "$legacy_install_dir" "$legacy_plist" >/dev/null 2>&1; then
+    if command -v launchctl >/dev/null 2>&1; then
+      launchctl bootout "gui/$service_uid/com.suink.diana" >/dev/null 2>&1 || true
+    fi
+    mv -f "$legacy_plist" "$legacy_plist.migrated" 2>/dev/null || rm -f -- "$legacy_plist"
+    legacy_retired=true
+  fi
+  legacy_unit="$service_home/.config/systemd/user/diana.service"
+  if [ -f "$legacy_unit" ] && grep -F "$legacy_install_dir" "$legacy_unit" >/dev/null 2>&1; then
+    if command -v systemctl >/dev/null 2>&1; then
+      if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$service_user" -- systemctl --user disable --now diana.service >/dev/null 2>&1 || true
+      else
+        systemctl --user disable --now diana.service >/dev/null 2>&1 || true
+      fi
+    fi
+    mv -f "$legacy_unit" "$legacy_unit.migrated" 2>/dev/null || rm -f -- "$legacy_unit"
+    legacy_retired=true
+  fi
+  [ "$legacy_retired" = true ] &&
+    info "Migration → retired the previous per-user service; only one Diana runs per machine"
+  return 0
+}
 
 mkdir -p "$install_dir" "$install_dir/data" "$install_dir/logs" "$install_dir/.installer/backups"
 if [ "$new_system_install" = "true" ]; then
@@ -235,6 +267,12 @@ if [ "$new_system_install" = "true" ]; then
     fi
   done
   printf '%s\n' "$legacy_install_dir" >"$install_dir/.migrated-from"
+  legacy_migrated_from="$legacy_install_dir"
+fi
+# 每次系统级安装都退役一次旧的用户级服务：首装之后如果有人又跑了一遍旧的
+# 用户级安装，这里同样能把它收拾掉，而不是留两个实例互相抢端口。
+if [ "$install_scope" = "system" ] && [ "$install_dir" != "$legacy_install_dir" ]; then
+  retire_legacy_service
 fi
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
 backup_dir="$install_dir/.installer/backups/$timestamp"
@@ -800,6 +838,12 @@ else
 fi
 
 printf 'Installed: %s\n' "$install_dir"
+if [ -n "$legacy_migrated_from" ]; then
+  printf 'Migrated:  configuration, database and logs copied from %s\n' "$legacy_migrated_from"
+  printf '           That per-user installation was retired — one machine runs one Diana,\n'
+  printf '           otherwise two instances fight for the port and split the database.\n'
+  printf '           Its files are kept as a fallback; delete them once the new one looks good.\n'
+fi
 if [ -n "$command_dir" ]; then
   printf 'Command:   %s\n' "$command_dir/diana"
   if [ -n "$command_path_hint" ]; then
