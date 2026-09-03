@@ -154,9 +154,10 @@ func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			channel := &recordingChannel{}
 			provider := &sequenceLLMProvider{replies: []string{
-				`{"automated_ai_reply":false,"confidence":0.99,"reason":"普通真人直接发言"}`,
 				`{"action":"none","prompt":""}`,
 				"直接触发成功",
+				// 回复发出之后才跑的空转复盘，判普通对话。
+				`{"automated_ai_reply":false,"meaningless_loop":false,"confidence":0.99,"reason":"普通真人直接发言"}`,
 			}}
 			runtime := NewRuntime(BotConfig{BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
@@ -167,9 +168,14 @@ func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 			waitForCondition(t, time.Second, func() bool {
 				return len(channel.sentSnapshot()) == 1
 			})
-			requests := provider.requestsSnapshot()
 			sent := channel.sentSnapshot()
-			if len(requests) != 3 || sent[0].Text != "直接触发成功" {
+			if sent[0].Text != "直接触发成功" {
+				t.Fatalf("sent=%#v", sent)
+			}
+			// 回复前只有意图路由和正文生成两次调用；空转复盘在回复之后异步跑，
+			// 不占用户感知的延迟，所以这里不把它算进来。
+			requests := provider.requestsSnapshot()
+			if len(requests) < 2 {
 				t.Fatalf("requests=%d sent=%#v", len(requests), sent)
 			}
 			for _, request := range requests {
@@ -245,10 +251,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			provider := &sequenceLLMProvider{replies: []string{
-				`{"automated_ai_reply":false,"confidence":0.99,"reason":"普通真人追问"}`,
-				tt.routeReply,
-			}}
+			provider := &sequenceLLMProvider{replies: []string{tt.routeReply}}
 			runtime := NewRuntime(BotConfig{
 				BotAccount:              "42",
 				ProactiveReplyChance:    0.000001,
@@ -283,8 +286,9 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			if handled != tt.wantHandled || outcome != tt.wantOutcome {
 				t.Fatalf("handled=%v outcome=%q, want handled=%v outcome=%q", handled, outcome, tt.wantHandled, tt.wantOutcome)
 			}
-			if len(provider.requestsSnapshot()) != 2 {
-				t.Fatalf("LLM requests=%d, want loop classification plus answerability route", len(provider.requestsSnapshot()))
+			// 回复前只剩可答性路由一次调用：空转复盘已经挪到回复之后。
+			if len(provider.requestsSnapshot()) != 1 {
+				t.Fatalf("LLM requests=%d, want only the answerability route", len(provider.requestsSnapshot()))
 			}
 			runtime.proactiveBatchMu.Lock()
 			_, queued := runtime.proactiveBatches[sessionKey(event)]
