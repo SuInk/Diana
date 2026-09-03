@@ -665,6 +665,8 @@ export interface BotPlatform {
   inbound?: "reverse_ws" | "outbound" | "callback";
   /** inbound 为 callback 时，要填到对方后台的回调路径。 */
   callback_path?: string;
+  /** 出站适配器能不能把 Markdown 渲染出来；决定「Markdown 转纯文本」的默认值。 */
+  rich_text?: boolean;
 }
 
 const inflightRequests = new Map<string, Promise<unknown>>();

@@ -255,6 +255,13 @@ func (c *WeComChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 		"agentid": agentID,
 		"text":    map[string]string{"content": text},
 	}
+	if platformTextHasMarkdown(text) {
+		body = map[string]any{
+			"msgtype":  "markdown",
+			"agentid":  agentID,
+			"markdown": map[string]string{"content": downgradeMarkdownFor(text, weComMarkdownFeatures)},
+		}
+	}
 	if group := strings.TrimSpace(msg.GroupID); group != "" {
 		// 企业微信的应用消息发给群时用 chatid，走的是另一个接口。
 		body["chatid"] = group
@@ -492,4 +499,19 @@ func weComEventFromCallback(payload []byte, agentID string) (MessageEvent, bool)
 		event.MessageType = "private"
 	}
 	return event, true
+}
+
+// weComMarkdownFeatures 是企业微信 Markdown 消息认的子集。
+//
+// 它渲染标题、粗体、行内代码、代码块、链接、引用和列表，但不认斜体、删除线和表格。
+// 注意这种消息只在企业微信客户端里渲染，通过微信插件收到的仍是纯文本——真发出去
+// 长什么样由接收端决定，这里只保证不会漏出裸标记。
+var weComMarkdownFeatures = platformMarkdownFeatures{
+	Headings:   true,
+	Bold:       true,
+	InlineCode: true,
+	CodeFence:  true,
+	Links:      true,
+	Quote:      true,
+	Lists:      true,
 }
