@@ -30,6 +30,11 @@ type privacyAwareTestProvider struct {
 }
 
 func (p *privacyAwareTestProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	// 发送前审核不进脚本：这个 provider 按第几次调用发脚本，审核插在中间会把
+	// 后面的全部错位。用例关心的是被测那几次调用。
+	if isReplyAuditRequest(req) {
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: testReplyAuditPass}, nil
+	}
 	p.requests = append(p.requests, req)
 	if p.generate == nil {
 		return nil, fmt.Errorf("privacy test provider has no response for call %d", len(p.requests))

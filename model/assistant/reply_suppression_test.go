@@ -685,19 +685,62 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	}
 }
 
-// 空转复盘绝不能跑在回复之前：那条路径上每多一次模型调用，用户就多等一次。
-func TestBotReplyLoopReviewStaysOffTheReplyCriticalPath(t *testing.T) {
+// 空转判断不再单独占一次调用：它跟着发送前审核走，入站路由这一段不得因此多出
+// 任何模型调用。
+func TestBotReplyLoopJudgementCostsNoExtraCall(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":false,"confidence":0.99,"category":"none","directed_at_bot":true,"answerable":false,"reason":"不需要回复"}`,
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	prepareBotReplyLoopRound(t, runtime, "critical-path", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "喵～本喵一直在待命～")
-	for _, request := range provider.requestsSnapshot() {
-		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "空转复盘器") {
-			t.Fatal("空转复盘不该出现在回复前的关键路径上")
+	prepareBotReplyLoopRound(t, runtime, "no-extra-call", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "喵～本喵一直在待命～")
+	// 这条消息没有生成回复，也就没有发送前审核，入站阶段只有可答性路由那一次。
+	if len(provider.requestsSnapshot()) != 1 {
+		t.Fatalf("inbound routing made %d calls, want only the answerability route", len(provider.requestsSnapshot()))
+	}
+}
+
+// 主人同样进入空转判断，但永远不暂停：暂停会把操作员锁在自己的机器人外面，
+// 而解除暂停的命令恰恰要主人发。
+func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
+	loopVerdict := `{"should_send":true,"confidence":0.9,"account_safe":true,"count_refusal":false,` +
+		`"reply_loop_automated_ai":true,"reply_loop_meaningless":false,"reply_loop_confidence":0.98,"reply_loop_reason":"一直在空转"}`
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{auditReplies: []string{loopVerdict, loopVerdict, loopVerdict, loopVerdict}}
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	start := time.Now().Add(-25 * time.Minute).Truncate(time.Second)
+	for i := 0; i < botReplyLoopThreshold+1; i++ {
+		event := botReplyLoopEvent(runtime, "owner-loop", "10001", i, start.Add(time.Duration(i)*5*time.Minute), time.Minute, "在吗")
+		cfg := runtime.effectiveConfigForEvent(event)
+		need := runtime.replyAuditNeed(event, "在吗", cfg, false)
+		if !need.Loop {
+			t.Fatalf("owner round %d was not judged at all", i)
 		}
+		if need.LoopSuppress {
+			t.Fatalf("owner round %d would suppress the operator", i)
+		}
+		if _, err := runtime.auditReplyBeforeSend(context.Background(), event, "在吗", "在的", cfg, false); err != nil {
+			t.Fatalf("owner round %d blocked: %v", i, err)
+		}
+	}
+	if _, active := runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001"}, time.Now()); active {
+		t.Fatal("owner was suppressed")
+	}
+	if len(channel.sentSnapshot()) != 0 {
+		t.Fatalf("owner got a suppression notice: %#v", channel.sentSnapshot())
+	}
+	if len(provider.requestsSnapshot()) != botReplyLoopThreshold+1 {
+		t.Fatalf("owner audits = %d, want one per round", len(provider.requestsSnapshot()))
+	}
+
+	// 同一台机器人对普通成员仍然照常暂停。
+	memberEvent := botReplyLoopEvent(runtime, "member-loop", "20002", 0, start, time.Minute, "在吗")
+	member := runtime.replyAuditNeed(memberEvent, "在吗", runtime.effectiveConfigForEvent(memberEvent), false)
+	if !member.Loop || !member.LoopSuppress {
+		t.Fatalf("member need = %+v, want judged and suppressible", member)
 	}
 }
 

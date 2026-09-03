@@ -156,8 +156,6 @@ func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 			provider := &sequenceLLMProvider{replies: []string{
 				`{"action":"none","prompt":""}`,
 				"直接触发成功",
-				// 回复发出之后才跑的空转复盘，判普通对话。
-				`{"automated_ai_reply":false,"meaningless_loop":false,"confidence":0.99,"reason":"普通真人直接发言"}`,
 			}}
 			runtime := NewRuntime(BotConfig{BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
@@ -168,14 +166,10 @@ func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 			waitForCondition(t, time.Second, func() bool {
 				return len(channel.sentSnapshot()) == 1
 			})
-			sent := channel.sentSnapshot()
-			if sent[0].Text != "直接触发成功" {
-				t.Fatalf("sent=%#v", sent)
-			}
-			// 回复前只有意图路由和正文生成两次调用；空转复盘在回复之后异步跑，
-			// 不占用户感知的延迟，所以这里不把它算进来。
 			requests := provider.requestsSnapshot()
-			if len(requests) < 2 {
+			sent := channel.sentSnapshot()
+			// 意图路由 + 正文生成 + 发送前审核（这条消息够得上空转候选）。
+			if len(requests) != 3 || sent[0].Text != "直接触发成功" {
 				t.Fatalf("requests=%d sent=%#v", len(requests), sent)
 			}
 			for _, request := range requests {
@@ -5088,6 +5082,19 @@ func cloneGenerateRequestForTest(req llm.GenerateRequest) llm.GenerateRequest {
 		cloned.Temperature = &temperature
 	}
 	return cloned
+}
+
+// testReplyAuditPass 是发送前审核的默认放行结论，各 provider 共用。
+const testReplyAuditPass = `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核","account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"正常对话"}`
+
+// isReplyAuditRequest 判断这是不是发送前审核的调用。
+func isReplyAuditRequest(req llm.GenerateRequest) bool {
+	for _, message := range req.Messages {
+		if strings.Contains(message.Content, "should_send") {
+			return true
+		}
+	}
+	return false
 }
 
 type sequenceLLMProvider struct {

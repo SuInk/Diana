@@ -328,7 +328,9 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
 	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
-	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || userID == strings.TrimSpace(cfg.OwnerID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+	// 主人同样进入判断：空转和身份无关，主人也会跟机器人互相说废话。真正不能对
+	// 主人做的是暂停，那一层由 replyAuditNeed 的 LoopSuppress 单独控制。
+	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 		return botReplyLoopCandidate{}, false
 	}
 	directBotFollowup := eventRepliesToBot(event, cfg)
@@ -459,7 +461,7 @@ func (r *Runtime) registerBotReplyLoopDecision(event MessageEvent, candidate bot
 	return len(hits), reason, true
 }
 
-func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision botReplyLoopAIDecision, hitCount int, raw string, classifyErr error) {
+func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision botReplyLoopAIDecision, hitCount int, raw string, classifyErr error, suppressionAllowed bool) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -473,10 +475,15 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
-			"automated_ai_reply": decision.AutomatedAIReply, "confidence": decision.Confidence,
-			"reason": decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
+			"automated_ai_reply": decision.AutomatedAIReply, "meaningless_loop": decision.MeaninglessLoop,
+			"confidence": decision.Confidence,
+			"reason":     decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
 			"threshold": botReplyLoopThreshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
+			"suppression_allowed": suppressionAllowed,
 		},
+	}
+	if hitCount >= botReplyLoopThreshold && !suppressionAllowed {
+		entry.Message = "已累计到空转阈值，但当前发言者不适用暂停，仅记录"
 	}
 	if classifyErr != nil {
 		entry.Kind = applog.KindError
