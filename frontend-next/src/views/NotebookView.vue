@@ -9,8 +9,8 @@
         <p>
           机器人特意记下来、而且必须准确的东西：梗和黑话、群规和约定、谁的忌口、答应了还没做的事。
           这里可以改、可以作废，每次改动都留修订记录。随口聊到的内容由「记忆」自动收，不在这一页。
-          <template v-if="sharedScope">当前跨群共用一本，新条目都记进全局笔记本。</template>
-          <template v-else>当前按会话隔离，一个群记下的只在这个群生效；想共用可在「机器人 → 笔记本作用域」打开。</template>
+          <template v-if="sharedScope">当前笔记本跟随机器人，群聊私聊共用一本，新条目都记进全局笔记本。</template>
+          <template v-else>当前按会话隔离，一个群记下的只在这个群生效；想共用可在「机器人 → 笔记本作用域」打开「跟随机器人」。</template>
         </p>
       </div>
       <div class="view-actions">
@@ -210,7 +210,7 @@ const editing = ref(false);
 const creating = ref(false);
 const detail = ref<NotebookEntry | null>(null);
 const groupNames = ref<Record<string, string>>({});
-const sharedScope = ref(false);
+const sharedScope = ref(true);
 const profileNames = ref<Record<string, string>>({});
 
 const form = reactive({ kind: "term" as NotebookKind, term: "", meaning: "", aliases: "", example: "", note: "" });
@@ -342,7 +342,7 @@ async function loadScopeNames(): Promise<void> {
   }
   try {
     const config = await getBotProfileConfig();
-    sharedScope.value = config.notebook_shared_scope_enabled ?? false;
+    sharedScope.value = config.notebook_shared_scope_enabled ?? true;
     const names: Record<string, string> = {};
     for (const profile of config.profiles ?? []) {
       if (profile.id && profile.name) {

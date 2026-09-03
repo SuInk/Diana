@@ -149,6 +149,16 @@ func newNotebookRuntime(t *testing.T, store NotebookStore) *Runtime {
 	return runtime
 }
 
+// newIsolatedNotebookRuntime 关掉「笔记本跟随机器人」，给按会话隔离那一档的用例用。
+func newIsolatedNotebookRuntime(t *testing.T, store NotebookStore) *Runtime {
+	t.Helper()
+	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "10000", NotebookSharedScopeEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	if store != nil {
+		runtime.SetNotebookStore(store)
+	}
+	return runtime
+}
+
 func notebookTestEvent(userID, text string) MessageEvent {
 	return MessageEvent{
 		Kind:      EventKindGroup,
@@ -268,7 +278,7 @@ func TestNotebookContextEmptyWithoutStore(t *testing.T) {
 // 同一个词第二次写入是修订，不是新建：笔记本要能一直被改。
 func TestDianaNotebookToolUpsertRevises(t *testing.T) {
 	store := newMemoryNotebookStore()
-	runtime := newNotebookRuntime(t, store)
+	runtime := newIsolatedNotebookRuntime(t, store)
 	event := notebookTestEvent("10005", "记一下")
 
 	result, err := runNotebookTool(t, runtime, event, false, map[string]any{
@@ -319,9 +329,39 @@ func TestDianaNotebookToolRejectsEmptyMeaning(t *testing.T) {
 }
 
 // 全局笔记本是主人特权：一个群的内部梗不该由一个人替所有群定义。
-func TestDianaNotebookToolRestrictsGlobalScope(t *testing.T) {
+// 默认笔记本跟随机器人：群聊和私聊里普通成员记的都进这台机器人的全局本，
+// 不用传 global，也不分群。
+func TestDianaNotebookToolFollowsBotByDefault(t *testing.T) {
 	store := newMemoryNotebookStore()
 	runtime := newNotebookRuntime(t, store)
+	group := notebookTestEvent("10005", "记一下")
+	group.ProfileID = "qq"
+	private := MessageEvent{Kind: EventKindPrivate, SelfID: "10000", UserID: "10006", MessageID: "m2", ProfileID: "qq"}
+
+	result, err := runNotebookTool(t, runtime, group, false, map[string]any{
+		"operation": "upsert", "term": "鸽", "meaning": "放鸽子",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Entry == nil || result.Entry.ScopeKey != NotebookScopeBotPrefix+"qq" {
+		t.Fatalf("group write scope = %+v", result)
+	}
+	result, err = runNotebookTool(t, runtime, private, false, map[string]any{
+		"operation": "get", "term": "鸽",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Entry == nil || result.Entry.Meaning != "放鸽子" {
+		t.Fatalf("private chat must read the same notebook: %+v", result)
+	}
+}
+
+// 关掉「跟随机器人」、按会话隔离时，global 才是主人特权。
+func TestDianaNotebookToolRestrictsGlobalScope(t *testing.T) {
+	store := newMemoryNotebookStore()
+	runtime := newIsolatedNotebookRuntime(t, store)
 	event := notebookTestEvent("10005", "记一下")
 
 	if _, err := runNotebookTool(t, runtime, event, false, map[string]any{
@@ -425,9 +465,11 @@ func TestSystemPromptInjectsNotebookRuleWithTool(t *testing.T) {
 	}
 }
 
-// 默认按会话隔离：一个群记下的梗只写进这个群的作用域，别的群查不到。
-func TestNotebookScopeKeyForWriteIsolatesBySessionByDefault(t *testing.T) {
-	cfg := DefaultBotConfig().WithDefaults()
+// 关掉「跟随机器人」后按会话隔离：一个群记下的梗只写进这个群的作用域，别的群查不到。
+func TestNotebookScopeKeyForWriteIsolatesBySessionWhenDisabled(t *testing.T) {
+	cfg := DefaultBotConfig()
+	cfg.NotebookSharedScopeEnabled = boolPointer(false)
+	cfg = cfg.WithDefaults()
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ContextNamespace: "profile-a"}
 
 	if got := notebookScopeKeyForWrite(event, cfg, false, false); got != "profile-a:group:123" {
@@ -442,11 +484,12 @@ func TestNotebookScopeKeyForWriteIsolatesBySessionByDefault(t *testing.T) {
 	}
 }
 
-// 打开跨群共用之后所有条目都写进全局，不再按群分家。
+// 默认笔记本跟随机器人：群聊、私聊的条目都写进全局，不按会话分家。
 func TestNotebookScopeKeyForWriteSharedAcrossGroups(t *testing.T) {
-	cfg := DefaultBotConfig()
-	cfg.NotebookSharedScopeEnabled = boolPointer(true)
-	cfg = cfg.WithDefaults()
+	cfg := DefaultBotConfig().WithDefaults()
+	if !boolValue(cfg.NotebookSharedScopeEnabled, false) {
+		t.Fatal("notebook must follow the bot by default")
+	}
 
 	for _, event := range []MessageEvent{
 		{Kind: EventKindGroup, GroupID: "123", UserID: "10001", ContextNamespace: "profile-a"},

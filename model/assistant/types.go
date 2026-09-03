@@ -395,8 +395,9 @@ type BotConfig struct {
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
-	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
-	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
+	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
+	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
+	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
 	NotebookSharedScopeEnabled *bool           `json:"notebook_shared_scope_enabled,omitempty"`
 	PromptInjectTime           *bool           `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
@@ -684,8 +685,9 @@ type ConfigPayload struct {
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
-	// NotebookSharedScopeEnabled 让笔记本跨群共用一本：新条目写进全局作用域，
-	// 所有会话都能查到。默认关闭——一个群的内部梗默认不该泄漏到别的群。
+	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
+	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
+	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
 	NotebookSharedScopeEnabled *bool           `json:"notebook_shared_scope_enabled,omitempty"`
 	ProactiveReplyRouterPrompt string          `json:"proactive_reply_router_prompt,omitempty"`
 	ProactiveReplyPrompt       string          `json:"proactive_reply_prompt,omitempty"`
@@ -1218,7 +1220,7 @@ func DefaultBotConfig() BotConfig {
 		LLMIdentityMaskingEnabled:      boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
 		ReplyAccountSafetyAuditEnabled: boolPointer(false),
-		NotebookSharedScopeEnabled:     boolPointer(false),
+		NotebookSharedScopeEnabled:     boolPointer(true),
 		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
@@ -1408,7 +1410,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ReplyAccountSafetyAuditEnabled = boolPointer(false)
 	}
 	if cfg.NotebookSharedScopeEnabled == nil {
-		cfg.NotebookSharedScopeEnabled = boolPointer(false)
+		cfg.NotebookSharedScopeEnabled = boolPointer(true)
 	}
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)

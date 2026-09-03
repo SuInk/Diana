@@ -812,7 +812,7 @@
             <div class="card-header">
               <h2>笔记本作用域</h2>
               <span class="badge" :class="form.notebook_shared_scope_enabled ? 'accent' : ''">
-                {{ form.notebook_shared_scope_enabled ? "跨群共用" : "按会话隔离" }}
+                {{ form.notebook_shared_scope_enabled ? "跟随机器人" : "按会话隔离" }}
               </span>
             </div>
             <div class="card-body form-grid">
@@ -820,11 +820,12 @@
                 <label class="switch">
                   <input v-model="form.notebook_shared_scope_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">所有群共用一本笔记</span>
+                  <span class="switch-label">笔记本跟随机器人（群聊私聊共用一本）</span>
                 </label>
                 <span class="hint">
-                  默认按会话隔离：一个群记下的只在这个群生效，别的群查不到。打开后新记的一律写进全局笔记本，所有会话通用。
-                  打开之前各群已经记下的不会搬走，仍在自己群里优先生效，可以在「笔记本」页按作用域逐条改。
+                  默认打开：机器人只有一本笔记，在哪个群、哪个私聊里学到的梗和规矩都记进去，所有会话通用。
+                  关掉后按会话隔离：一个群记下的只在这个群生效，别的群查不到，只有主人能写全局笔记本。
+                  切换不会搬动已有条目，各会话里已经记下的仍在自己会话里优先生效，可以在「笔记本」页按作用域逐条改。
                 </span>
               </div>
             </div>
@@ -2585,7 +2586,7 @@ function setForm(config: BotProfileConfig): void {
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
-    notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? false,
+    notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     mention_user_mode: config.mention_user_mode ?? "auto",
