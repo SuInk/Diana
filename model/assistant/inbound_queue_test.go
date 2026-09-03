@@ -92,6 +92,63 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 	}
 }
 
+func TestHistoryBackfillDropsHistoricalPrivateOutsideRecentContacts(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	store.sessions = []HistorySession{
+		{Kind: EventKindGroup, ID: "123", LastEventTime: 10},
+		{Kind: EventKindPrivate, ID: "3083158904", LastEventTime: 10},
+	}
+	channel := newQueueTestChannel()
+	channel.responses["get_group_list"] = map[string]any{"items": []any{map[string]any{"group_id": "123"}}}
+	channel.responses["get_recent_contact"] = map[string]any{"items": []any{}}
+	runtime := newQueuedTestRuntime(channel, store, nil)
+
+	sessions, err := runtime.backfillInboundHistoryFromSessions(context.Background(), store, store.sessions, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if channel.callCount("get_friend_msg_history") != 0 {
+		t.Fatal("stale historical private session was fetched without a recent-contact match")
+	}
+	if len(sessions) != 1 || sessions[0].Kind != EventKindGroup || sessions[0].ID != "123" {
+		t.Fatalf("sessions=%#v", sessions)
+	}
+}
+
+func TestHistoryBackfillSkipsUnresolvableRecentPrivate(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	store.sessions = []HistorySession{{Kind: EventKindPrivate, ID: "3083158904", LastEventTime: 10}}
+	channel := newQueueTestChannel()
+	channel.responses["get_recent_contact"] = map[string]any{"items": []any{
+		map[string]any{"peerUin": "3083158904", "chatType": 1},
+	}}
+	channel.errors["get_friend_msg_history"] = fmt.Errorf("failed to resolve UID for UIN 3083158904")
+	runtime := newQueuedTestRuntime(channel, store, nil)
+
+	sessions, err := runtime.backfillInboundHistoryFromSessions(context.Background(), store, store.sessions, 10)
+	if err != nil {
+		t.Fatalf("permanent stale-private error blocked backfill: %v", err)
+	}
+	if len(sessions) != 1 || channel.callCount("get_friend_msg_history") != 1 {
+		t.Fatalf("sessions=%#v calls=%d", sessions, channel.callCount("get_friend_msg_history"))
+	}
+}
+
+func TestHistoryBackfillStillRetriesTransientPrivateFailure(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	store.sessions = []HistorySession{{Kind: EventKindPrivate, ID: "10001", LastEventTime: 10}}
+	channel := newQueueTestChannel()
+	channel.responses["get_recent_contact"] = map[string]any{"items": []any{
+		map[string]any{"peerUin": "10001", "chatType": 1},
+	}}
+	channel.errors["get_friend_msg_history"] = context.DeadlineExceeded
+	runtime := newQueuedTestRuntime(channel, store, nil)
+
+	if _, err := runtime.backfillInboundHistoryFromSessions(context.Background(), store, store.sessions, 10); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("transient error=%v", err)
+	}
+}
+
 func TestHistoryBackfillBindsActiveProfileContext(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	channel := NewMultiChannel([]ChannelBinding{{
@@ -1002,6 +1059,8 @@ type queueTestChannel struct {
 	accountGood   bool
 	sent          []OutgoingMessage
 	responses     map[string]map[string]any
+	errors        map[string]error
+	calls         map[string]int
 }
 
 func newQueueTestChannel() *queueTestChannel {
@@ -1014,6 +1073,8 @@ func newQueueTestChannel() *queueTestChannel {
 			"get_group_msg_history":  {"messages": []any{}},
 			"get_friend_msg_history": {"messages": []any{}},
 		},
+		errors: map[string]error{},
+		calls:  map[string]int{},
 	}
 }
 
@@ -1032,10 +1093,20 @@ func (c *queueTestChannel) Send(_ context.Context, msg OutgoingMessage) error {
 func (c *queueTestChannel) CallAPI(_ context.Context, action string, _ map[string]any) (map[string]any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.calls[action]++
+	if err := c.errors[action]; err != nil {
+		return nil, err
+	}
 	if response, ok := c.responses[action]; ok {
 		return response, nil
 	}
 	return map[string]any{}, nil
+}
+
+func (c *queueTestChannel) callCount(action string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls[action]
 }
 
 func (c *queueTestChannel) Status() ChannelStatus {

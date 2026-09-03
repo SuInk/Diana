@@ -969,13 +969,21 @@ func (r *Runtime) backfillInboundHistory(ctx context.Context, store InboundEvent
 }
 
 func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store InboundEventStore, sessions []HistorySession, fallbackWatermark int64) ([]HistorySession, error) {
+	known := make(map[string]HistorySession, len(sessions))
 	byKey := make(map[string]HistorySession, len(sessions))
 	globalWatermark := int64(0)
 	for _, session := range sessions {
 		if session.ID == "" {
 			continue
 		}
-		byKey[historySessionKey(session.Kind, session.ID)] = session
+		key := historySessionKey(session.Kind, session.ID)
+		known[key] = session
+		// Preserve the established group-history behavior. Private contacts are
+		// different because OneBot may permanently lose their UIN-to-UID mapping;
+		// those are admitted later only when current recent contacts still list them.
+		if session.Kind == EventKindGroup {
+			byKey[key] = session
+		}
 		if session.LastEventTime > globalWatermark {
 			globalWatermark = session.LastEventTime
 		}
@@ -990,6 +998,7 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 	var backfillErrors []error
 	if data, callErr := r.callBackfillAPI(ctx, "get_group_list", map[string]any{}); callErr != nil {
 		backfillErrors = append(backfillErrors, fmt.Errorf("get group list: %w", callErr))
+		addKnownHistorySessions(byKey, known, EventKindGroup)
 	} else {
 		for _, raw := range oneBotListItems(data) {
 			item, ok := raw.(map[string]any)
@@ -997,11 +1006,12 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 				continue
 			}
 			id := stringFromAny(item["group_id"])
-			addHistorySession(byKey, EventKindGroup, id, globalWatermark)
+			addDiscoveredHistorySession(byKey, known, EventKindGroup, id, globalWatermark)
 		}
 	}
 	if data, callErr := r.callBackfillAPI(ctx, "get_recent_contact", map[string]any{"count": 1000}); callErr != nil {
 		backfillErrors = append(backfillErrors, fmt.Errorf("get recent contacts: %w", callErr))
+		addKnownHistorySessions(byKey, known, EventKindPrivate)
 	} else {
 		for _, raw := range oneBotListItems(data) {
 			item, ok := raw.(map[string]any)
@@ -1011,9 +1021,9 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 			id := firstNonEmpty(stringFromAny(item["peerUin"]), stringFromAny(item["peer_uin"]))
 			switch intFromAny(item["chatType"]) {
 			case 2:
-				addHistorySession(byKey, EventKindGroup, id, globalWatermark)
+				addDiscoveredHistorySession(byKey, known, EventKindGroup, id, globalWatermark)
 			case 1, 99, 100:
-				addHistorySession(byKey, EventKindPrivate, id, globalWatermark)
+				addDiscoveredHistorySession(byKey, known, EventKindPrivate, id, globalWatermark)
 			}
 		}
 	}
@@ -1061,6 +1071,10 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 	close(results)
 	for result := range results {
 		if result.err != nil {
+			if permanentPrivateHistoryBackfillError(result.session, result.err) {
+				log.Printf("chatbot inbound history backfill skipped stale private %s: %v", result.session.ID, result.err)
+				continue
+			}
 			backfillErrors = append(backfillErrors, fmt.Errorf("%s %s: %w", result.session.Kind, result.session.ID, result.err))
 			continue
 		}
@@ -1109,6 +1123,51 @@ func addHistorySession(sessions map[string]HistorySession, kind EventKind, id st
 		return
 	}
 	sessions[key] = HistorySession{Kind: kind, ID: id, LastEventTime: fallbackWatermark}
+}
+
+func addDiscoveredHistorySession(target, known map[string]HistorySession, kind EventKind, id string, fallbackWatermark int64) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	key := historySessionKey(kind, id)
+	if session, ok := known[key]; ok {
+		target[key] = session
+		return
+	}
+	addHistorySession(target, kind, id, fallbackWatermark)
+}
+
+func addKnownHistorySessions(target, known map[string]HistorySession, kind EventKind) {
+	for key, session := range known {
+		if session.Kind == kind {
+			target[key] = session
+		}
+	}
+}
+
+// permanentPrivateHistoryBackfillError identifies contacts that the OneBot
+// bridge can no longer map to a current private-chat identity. Retrying these
+// stale sessions cannot recover messages and must not keep the whole reconnect
+// checkpoint in debt forever. Other transport and server failures still retry.
+func permanentPrivateHistoryBackfillError(session HistorySession, err error) bool {
+	if session.Kind != EventKindPrivate || err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"failed to resolve uid for uin",
+		"friend not found",
+		"not a friend",
+		"user not found",
+		"好友不存在",
+		"非好友",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func historySessionKey(kind EventKind, id string) string {
