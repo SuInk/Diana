@@ -45,9 +45,13 @@ type assistantEventsResponse struct {
 	OutputTokens      int64                  `json:"output_tokens"`
 	TotalTokens       int64                  `json:"total_tokens"`
 	CachedInputTokens int64                  `json:"cached_input_tokens"`
-	Page              int                    `json:"page"`
-	Limit             int                    `json:"limit"`
-	HasMore           bool                   `json:"has_more"`
+	// LLMDurationMS 是这个范围内所有模型调用的墙钟耗时之和；
+	// OutputTokensPerSecond 由它和输出 token 算出，不是各次调用速率的平均。
+	LLMDurationMS         int64   `json:"llm_duration_ms"`
+	OutputTokensPerSecond float64 `json:"output_tokens_per_second"`
+	Page                  int     `json:"page"`
+	Limit                 int     `json:"limit"`
+	HasMore               bool    `json:"has_more"`
 	// Group 是当前筛选的群号，Groups 是这个时间范围内可选的群。
 	Group  string                    `json:"group,omitempty"`
 	Groups []assistantEventGroupItem `json:"groups"`
@@ -329,11 +333,15 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		OutputTokens:      stored.OutputTokens,
 		TotalTokens:       stored.TotalTokens,
 		CachedInputTokens: stored.CachedInputTokens,
-		Page:              page,
-		Limit:             limit,
-		HasMore:           int64(page*limit) < stored.FilteredTotal,
-		Group:             groupID,
-		Groups:            []assistantEventGroupItem{},
+
+		LLMDurationMS:         stored.LLMDurationMS,
+		OutputTokensPerSecond: stored.OutputTokensPerSecond,
+
+		Page:    page,
+		Limit:   limit,
+		HasMore: int64(page*limit) < stored.FilteredTotal,
+		Group:   groupID,
+		Groups:  []assistantEventGroupItem{},
 	}
 	if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since, botProfileScope(c)); err == nil {
 		response.Groups = h.namedEventGroups(c.Request.Context(), botProfileScope(c), groups)

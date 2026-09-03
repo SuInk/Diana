@@ -78,6 +78,7 @@ func TestRuntimeRecordLLMUsageCalculatesMissingTotal(t *testing.T) {
 		"test-model",
 		llm.Usage{InputTokens: 12, OutputTokens: 8},
 		"reply",
+		2*time.Second,
 	)
 
 	entries := logs.entriesSnapshot()
