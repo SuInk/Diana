@@ -271,6 +271,7 @@ func main() {
 	botRuntime.SetUserMemoryStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetThreadStateStore(sqliteStore)
+	botRuntime.SetOneBotRequestStore(sqliteStore)
 	botRuntime.SetNotebookStore(sqliteStore)
 	botRuntime.SetWorldBookStore(sqliteStore)
 	botRuntime.SetExpressionStyleStore(sqliteStore)

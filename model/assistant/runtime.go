@@ -275,6 +275,7 @@ type Runtime struct {
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
 	threadStates              ThreadStateStore
+	oneBotRequests            OneBotRequestStore
 	notebook                  NotebookStore
 	worldBook                 WorldBookStore
 	expressionStyles          ExpressionStyleStore
@@ -1403,6 +1404,9 @@ func (r *Runtime) withFileParserVideoLimit(ctx context.Context, event MessageEve
 // HandleEvent 处理 OneBot 消息或通知事件。
 func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	event = r.bindInboundEventIdentity(event)
+	if event.Kind == EventKindRequest {
+		return r.handleOneBotRequest(ctx, event)
+	}
 	if isRecallNotice(event) && r.isBotOwnRecall(event) {
 		return nil
 	}
@@ -3090,6 +3094,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
+			}
+			if r.oneBotRequestStore() != nil && r.oneBotV11SkillEnabled(event) {
+				extraTools = append(extraTools, newDianaOneBotRequestsTool(r, event))
 			}
 			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
 			// 无头浏览器。插件停用时模型看不到这个工具。
@@ -5738,6 +5745,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	}
 	if agentEnabled && hasTool(dianaOneBotV11ToolName) {
 		builder.WriteString("\n" + promptToolOneBotV11)
+	}
+	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {
+		tail.WriteString("\n" + promptToolOneBotRequests)
 	}
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptToolHistoryImages)

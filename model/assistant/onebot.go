@@ -50,6 +50,9 @@ type oneBotEnvelope struct {
 	MessageType string          `json:"message_type,omitempty"`
 	SubType     string          `json:"sub_type,omitempty"`
 	NoticeType  string          `json:"notice_type,omitempty"`
+	RequestType string          `json:"request_type,omitempty"`
+	Comment     string          `json:"comment,omitempty"`
+	Flag        string          `json:"flag,omitempty"`
 	MessageID   any             `json:"message_id,omitempty"`
 	MessageSeq  any             `json:"message_seq,omitempty"`
 	UserID      any             `json:"user_id,omitempty"`
@@ -375,8 +378,8 @@ func (c *OneBotChannel) handleFrame(ctx context.Context, handler EventHandler, d
 		}
 		return nil
 	}
-	if envelope.PostType != "message" && envelope.PostType != "notice" {
-		// 其它 meta/request 类事件当前不需要进入机器人回复链路。
+	if envelope.PostType != "message" && envelope.PostType != "notice" && envelope.PostType != "request" {
+		// 其它未知事件当前不进入机器人处理链路。
 		return nil
 	}
 
@@ -499,6 +502,9 @@ func (c *OneBotChannel) setStatus(connected bool, selfID string, lastError strin
 
 // messageEventFromEnvelope 将 OneBot 原始 envelope 转换为内部事件。
 func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
+	if envelope.PostType == "request" {
+		return oneBotRequestMessageEvent(envelope)
+	}
 	if envelope.PostType == "notice" {
 		// notice 没有正文，只保留群/用户/子类型供欢迎语等逻辑判断。
 		subType := firstNonEmpty(envelope.NoticeType, envelope.SubType)
