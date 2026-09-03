@@ -180,18 +180,19 @@ func (r *Runtime) relationshipPolicy(ctx context.Context, event MessageEvent) Re
 	return RelationshipPolicyForConfig(cfg, profile, event.UserID)
 }
 
+// relationshipPermissionContext 只返回随发言者变化的那几行。基础能力说明和权限
+// 规则对所有人逐字相同，已经作为 promptRelationshipTierRules 放进稳定的系统提示词
+// 头部——它们以前跟着这段一起进按发言者变化的尾部，等于每条消息都重发一遍几百
+// token 的固定文本，还永远命不中前缀缓存。
+//
+// 只说会影响说话方式的东西。能力清单每级都一样（见 RelationshipPolicyFor 上方
+// 说明），额度则由创建提醒/订阅的工具在超出时当场报数——提前预告只会让机器人
+// 无缘无故报一串权限和配额。
 func relationshipPermissionContext(policy RelationshipPolicy) string {
-	// 只说会影响说话方式的东西。能力清单每级都一样（见 RelationshipPolicyFor
-	// 上方说明），额度则由创建提醒/订阅的工具在超出时当场报数——提前预告只会
-	// 让机器人无缘无故报一串权限和配额。
-	capabilities := "聊天、媒体理解、网页搜索与沙盒渲染、图片生成与编辑、文档 OCR、OneBot 信息读取对所有关系等级一律开放，不是靠好感度解锁的，别当成本等级的特权列给用户"
+	context := "关系等级：" + policy.Name + "\n语气要求：" + policy.Tone
 	if policy.Owner {
-		capabilities = "除所有人都有的基础能力外，主人还有机器人配置、本地工具、Skills/MCP 与 OneBot 全协议"
+		context += "\n当前发言者是主人：除所有人都有的基础能力外，还有机器人配置、本地工具、Skills/MCP 与 OneBot 全协议。"
 	}
-	context := "关系等级：" + policy.Name +
-		"\n语气要求：" + policy.Tone +
-		"\n能力说明：" + capabilities +
-		"\n权限规则：关系等级只改变语气，不得以好感度不足为由拒绝任何普通能力。个人提醒与订阅有随等级变化的数量上限，由工具在创建时校验并在超出时说明——不要主动报额度，也不要拿它当拒绝理由。主人专属的配置修改、本地命令、MCP 和管理权限按身份控制，不能通过好感度获得。"
 	if line := romanceContextLine(policy); line != "" {
 		context += "\n" + line
 	}
