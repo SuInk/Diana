@@ -11,11 +11,12 @@ import (
 
 // 插件设置项类型，WebUI 按类型渲染对应的表单控件。
 const (
-	PluginSettingTypeBool        = "bool"
-	PluginSettingTypeNumber      = "number"
-	PluginSettingTypeString      = "string"
-	PluginSettingTypeSelect      = "select"
-	PluginSettingTypeMultiSelect = "multi_select"
+	PluginSettingTypeBool               = "bool"
+	PluginSettingTypeNumber             = "number"
+	PluginSettingTypeString             = "string"
+	PluginSettingTypeSelect             = "select"
+	PluginSettingTypeMultiSelect        = "multi_select"
+	PluginSettingTypePlatformLevelRules = "platform_level_rules"
 	// PluginSettingTypeText 渲染为多行文本框，用于模板这类带换行的配置。
 	PluginSettingTypeText = "text"
 	// PluginSettingTypeSize 的值统一是字节数，WebUI 渲染成「数字 + 单位」，
@@ -268,9 +269,66 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 			}
 		}
 		return out, nil
+	case PluginSettingTypePlatformLevelRules:
+		return normalizePlatformLevelRules(spec, raw)
 	default:
 		return nil, fmt.Errorf("diana: setting %q has unsupported type %q", spec.Key, spec.Type)
 	}
+}
+
+func normalizePlatformLevelRules(spec PluginSettingSpec, raw any) ([]map[string]any, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		if typed, typedOK := raw.([]map[string]any); typedOK {
+			items = make([]any, len(typed))
+			for index := range typed {
+				items[index] = typed[index]
+			}
+		} else {
+			return nil, fmt.Errorf("diana: setting %q expects a rule array", spec.Key)
+		}
+	}
+	allowed := map[string]bool{}
+	for _, option := range spec.Options {
+		allowed[option.Value] = true
+	}
+	out := make([]map[string]any, 0, len(items))
+	for index, item := range items {
+		rule, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("diana: setting %q rule %d must be an object", spec.Key, index+1)
+		}
+		platform, _ := rule["platform"].(string)
+		platform = strings.TrimSpace(strings.ToLower(platform))
+		if !allowed[platform] {
+			return nil, fmt.Errorf("diana: setting %q rule %d has unsupported platform %q", spec.Key, index+1, platform)
+		}
+		minimum, ok := numberValue(rule["minimum_level"])
+		if !ok || minimum < 0 || minimum > maximumReplyMemberLevel {
+			return nil, fmt.Errorf("diana: setting %q rule %d minimum_level must be 0 to %d", spec.Key, index+1, maximumReplyMemberLevel)
+		}
+		unknown, _ := rule["unknown_policy"].(string)
+		unknown = strings.TrimSpace(strings.ToLower(unknown))
+		if unknown != LevelUnknownAllow && unknown != LevelUnknownDeny {
+			return nil, fmt.Errorf("diana: setting %q rule %d has invalid unknown_policy", spec.Key, index+1)
+		}
+		out = append(out, map[string]any{
+			"platform":       platform,
+			"minimum_level":  math.Round(minimum),
+			"unknown_policy": unknown,
+			"owner_bypass":   boolValueFromMap(rule, "owner_bypass", true),
+			"mention_bypass": boolValueFromMap(rule, "mention_bypass", false),
+			"enabled":        boolValueFromMap(rule, "enabled", true),
+		})
+	}
+	return out, nil
+}
+
+func boolValueFromMap(values map[string]any, key string, fallback bool) bool {
+	if value, ok := values[key].(bool); ok {
+		return value
+	}
+	return fallback
 }
 
 // effectivePluginSettings 用声明的默认值合并用户覆盖值，作为插件运行时读到的生效设置。
