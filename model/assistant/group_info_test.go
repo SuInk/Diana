@@ -62,3 +62,44 @@ func TestTelegramGroupInfoWithoutTitleYieldsEmptyName(t *testing.T) {
 		t.Fatalf("GroupName = %q, want empty", info.GroupName)
 	}
 }
+
+// 群头像要经过 getChat 拿 file_id、再 getFile 下载；返回的是字节而不是地址，
+// 因为 Telegram 的下载地址里带着 Bot Token。
+func TestTelegramGroupAvatarDownloadsPhoto(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0}
+	api := newFakeTelegramAPI(t, map[string]any{
+		"getChat": map[string]any{
+			"id":    -1001,
+			"title": "读书会",
+			"photo": map[string]any{"small_file_id": "small-1", "big_file_id": "big-1"},
+		},
+		"getFile":                   map[string]any{"file_path": "photos/small.png"},
+		"download:photos/small.png": png,
+	})
+
+	avatar, err := api.channel().GroupAvatar(context.Background(), "-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(avatar.Data) != len(png) {
+		t.Fatalf("avatar bytes = %d, want %d", len(avatar.Data), len(png))
+	}
+	if avatar.ContentType != "image/png" {
+		t.Fatalf("content type = %q", avatar.ContentType)
+	}
+	// 列表里显示的是小图，应该优先取 small_file_id。
+	calls := api.callsOf("getFile")
+	if len(calls) != 1 || stringFromAny(calls[0].Params["file_id"]) != "small-1" {
+		t.Fatalf("getFile calls = %#v", calls)
+	}
+}
+
+// 群没设头像时要如实报错，让调用方退回占位显示，而不是返回一张空图。
+func TestTelegramGroupAvatarWithoutPhoto(t *testing.T) {
+	api := newFakeTelegramAPI(t, map[string]any{
+		"getChat": map[string]any{"id": -1002, "title": "无头像群"},
+	})
+	if _, err := api.channel().GroupAvatar(context.Background(), "-1002"); err == nil {
+		t.Fatal("expected an error when the chat has no photo")
+	}
+}

@@ -74,6 +74,8 @@ type botAutoGroupInfo struct {
 	// QQAvatar 表示这个群适用 QQ 的群头像地址规则。只有 OneBot 平台成立；
 	// 其余平台按这个规则拼出来的既是死链，也会把群号送去腾讯的服务器。
 	QQAvatar bool `json:"-"`
+	// BotProfileID 是这个群归属的机器人配置档，用于拼出头像代理地址。
+	BotProfileID string `json:"-"`
 }
 
 type botTasksResponse struct {
