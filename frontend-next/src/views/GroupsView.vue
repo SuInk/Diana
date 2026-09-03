@@ -528,6 +528,8 @@ function hasOtherReplyGateRules(group: BotGroupConfig): boolean {
     return false;
   }
   return Boolean(
+    gate.user_admission === "whitelist" ||
+      (gate.allowed_users?.length ?? 0) > 0 ||
     (gate.min_group_level ?? 0) > 0 ||
       (gate.exempt_users?.length ?? 0) > 0 ||
       gate.owner_bypass === false ||
