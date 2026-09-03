@@ -4,9 +4,45 @@
 package storage
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/SuInk/diana/model/assistant"
 )
+
+func TestMigrateGroupConfigsDeduplicatesLegacyScopeByLatestUpdate(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "group-scope.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	profile := assistant.DefaultBotConfig()
+	profile.ID = "bot-a"
+	if err := store.SaveBotProfiles(context.Background(), assistant.ProfileSet{ActiveID: profile.ID, Profiles: []assistant.BotConfig{profile}}); err != nil {
+		t.Fatal(err)
+	}
+	oldAt := time.Now().Add(-time.Hour)
+	newAt := time.Now()
+	set := assistant.GroupConfigSet{Groups: []assistant.GroupConfig{
+		{BotProfileID: profile.ID, GroupID: "123", Enabled: true, ReplyGate: &assistant.ReplyGate{UserAdmission: assistant.UserAdmissionWhitelist, AllowedUsers: []string{"owner"}}, UpdatedAt: oldAt},
+		{GroupID: "123", Enabled: true, ReplyGate: nil, UpdatedAt: newAt},
+	}}
+	if err := store.SaveBotGroupConfigs(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.migrateGroupConfigsToBotScope(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.LoadBotGroupConfigs(context.Background())
+	if err != nil || !ok || len(got.Groups) != 1 {
+		t.Fatalf("groups=%#v ok=%v err=%v", got.Groups, ok, err)
+	}
+	if got.Groups[0].BotProfileID != profile.ID || got.Groups[0].ReplyGate != nil {
+		t.Fatalf("latest legacy config did not win: %#v", got.Groups[0])
+	}
+}
 
 // 建表语句必须一次到位。以前这些列和索引是靠启动时的 ALTER TABLE 补上的，
 // 迁移删掉之后如果 DDL 里漏了任何一项，新库就会静默缺列，直到写入那一刻才炸。
