@@ -671,7 +671,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">Markdown 转纯文本</span>
                 </label>
-                <span class="hint">OneBot v11 不渲染 Markdown，关闭后按模型原文发送。</span>
+                <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认保留标记；开启后改为发送纯文本。" : "当前平台只发纯文本，Markdown 标记会以字面量出现，所以默认转成纯文本。" }}</span>
               </div>
               <div class="field">
                 <label class="switch">
@@ -1617,6 +1617,13 @@ const editorTab = ref<EditorTab>("access");
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const platforms = ref<BotPlatform[]>([]);
+
+// 能不能渲染 Markdown 由后端的平台注册表说了算，前端不另维护一份清单——
+// 两处各写一份，新增平台时必然有一边忘记改。
+function platformSupportsRichText(id: string | undefined): boolean {
+  return platforms.value.find((item) => item.id === id)?.rich_text === true;
+}
+const richTextPlatform = computed(() => platformSupportsRichText(form.value?.platform));
 const page = ref<"list" | "edit">("list");
 
 // 表头吸顶之后（.view-header 全站生效），右侧状态卡的停靠位置要落在它下面。
@@ -2589,7 +2596,7 @@ function setForm(config: BotProfileConfig): void {
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     mention_user_mode: config.mention_user_mode ?? "auto",
-    markdown_to_plain: config.markdown_to_plain ?? true,
+    markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
@@ -2899,6 +2906,9 @@ function beginCreate(platform: BotPlatform): void {
     id: undefined,
     name: `新建 ${platform.name} 机器人`,
     platform: platform.id,
+    // 换平台就别把上一台的 Markdown 取舍带过来：能不能渲染是平台属性，
+    // 继承过来会让新建的 Telegram 机器人沿用 QQ 那台的降级设置。
+    markdown_to_plain: platform.id === source.platform ? source.markdown_to_plain : undefined,
     enabled: false,
     bot_account: "",
     owner_login_enabled: false

@@ -3825,7 +3825,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3837,7 +3837,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if err != nil {
 			return "", err
 		}
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	})
 }
 
@@ -3936,7 +3936,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3947,7 +3947,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	})
 }
 
@@ -11441,6 +11441,9 @@ func splitReply(reply string, chunkSize int) []string {
 // 反问被粘在陈述句后面就是这么来的。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
 	limits = limits.withDefaults()
+	// 围栏先摘出去再分条：分条和长度兜底都按行/按字数切，会把 ``` 切进不同气泡。
+	// 摘成占位符走完整条管线，最后再填回来。
+	reply, fences := maskFencedCodeBlocks(reply)
 	reply = collapseBlankLines(normalizeSplitMarkers(reply))
 	if reply == "" {
 		return nil
@@ -11452,7 +11455,7 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 			out = append(out, trimChatTrailingPeriod(chunk))
 		}
 	}
-	return out
+	return restoreFencedCodeBlocks(out, fences, limits.ChunkSize)
 }
 
 // replyMaxChatBubbles 是分条后允许的条数。按换行分出来超过这个数就不按换行分了：
