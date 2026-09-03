@@ -74,7 +74,10 @@ func (f PageRendererFunc) Render(ctx context.Context, rawURL string) (RenderedPa
 }
 
 type SandboxedBrowserConfig struct {
-	Executable        string
+	Executable string
+	// Headless 默认开启。显式设为 false 时仍使用一次性隔离 Profile，只是把
+	// Chrome 窗口显示出来，方便桌面机器调试和应对无头检测。
+	Headless          *bool
 	Timeout           time.Duration
 	MaxHTMLBytes      int
 	MaxTextChars      int
@@ -102,7 +105,11 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 	}
 	executable, err := findHeadlessBrowserExecutable(b.cfg.Executable)
 	if err != nil {
-		return RenderedPage{}, err
+		obscura, obscuraErr := findObscuraExecutable("")
+		if obscuraErr != nil {
+			return RenderedPage{}, err
+		}
+		return renderWithObscura(ctx, obscura, rawURL, b.cfg)
 	}
 
 	dirs, err := newBrowserSandboxDirs("diana-headless-browser-")
@@ -112,6 +119,10 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 	defer dirs.remove()
 
 	return b.renderObservable(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, rawURL)
+}
+
+func (c SandboxedBrowserConfig) headless() bool {
+	return c.Headless == nil || *c.Headless
 }
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
@@ -181,6 +192,7 @@ type HeadlessBrowserStatus struct {
 	Available bool
 	Path      string
 	Version   string
+	Engine    string
 	// Detail 在不可用时说明卡在哪一步，直接给用户看。
 	Detail string
 }
@@ -193,13 +205,17 @@ type HeadlessBrowserStatus struct {
 func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowserStatus {
 	path, err := findHeadlessBrowserExecutable(configured)
 	if err != nil {
-		return HeadlessBrowserStatus{Detail: headlessBrowserProbeDetail(configured)}
+		obscura, obscuraErr := findObscuraExecutable("")
+		if obscuraErr != nil {
+			return HeadlessBrowserStatus{Detail: headlessBrowserProbeDetail(configured)}
+		}
+		return probeObscura(ctx, obscura)
 	}
 	// Windows 上的 chrome.exe 是 GUI 子系统程序，--version 什么都不往标准输出写，
 	// 拿它判活会把装好的 Chrome 判成不可用。这里退回到「可执行文件存在」，
 	// 版本号留空。
 	if runtime.GOOS == "windows" {
-		return HeadlessBrowserStatus{Available: true, Path: path}
+		return HeadlessBrowserStatus{Available: true, Path: path, Engine: "chrome"}
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
 	defer cancel()
@@ -212,7 +228,7 @@ func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowse
 		return HeadlessBrowserStatus{Path: path, Detail: detail}
 	}
 	version := strings.TrimSpace(firstNonEmptyLine(string(output)))
-	return HeadlessBrowserStatus{Available: true, Path: path, Version: version}
+	return HeadlessBrowserStatus{Available: true, Path: path, Version: version, Engine: "chrome"}
 }
 
 // ProbeHeadlessBrowserRendering 在版本探测之后再完成一次真实的本地截图。
@@ -225,11 +241,15 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
 	defer cancel()
+	executable := status.Path
+	if status.Engine == "obscura" {
+		executable = ""
+	}
 	_, err := CaptureHTMLScreenshot(probeCtx, ScreenshotRequest{
 		HTML:       `<!doctype html><meta charset="utf-8"><title>Diana browser probe</title><body>ok</body>`,
 		Width:      64,
 		Height:     64,
-		Executable: status.Path,
+		Executable: executable,
 		Timeout:    headlessBrowserProbeTimeout,
 	})
 	if err != nil {
@@ -243,7 +263,7 @@ func headlessBrowserProbeDetail(configured string) string {
 	if strings.TrimSpace(configured) != "" {
 		return "配置的浏览器路径不存在：" + strings.TrimSpace(configured)
 	}
-	return "没有找到 Chrome/Chromium"
+	return "没有找到 Chrome/Chromium 或 Obscura"
 }
 
 func firstNonEmptyLine(value string) string {
@@ -370,8 +390,11 @@ func (d browserSandboxDirs) remove() {
 }
 
 func sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir string) []string {
-	return []string{
-		"--headless=new",
+	return sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, true)
+}
+
+func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headless bool) []string {
+	args := []string{
 		"--user-data-dir=" + profileDir,
 		"--disk-cache-dir=" + cacheDir,
 		"--crash-dumps-dir=" + crashDir,
@@ -406,10 +429,14 @@ func sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir string) []string {
 		"--disable-blink-features=AutomationControlled",
 		"--host-resolver-rules=MAP localhost ~NOTFOUND, MAP *.localhost ~NOTFOUND, MAP *.local ~NOTFOUND, MAP host.docker.internal ~NOTFOUND, MAP gateway.docker.internal ~NOTFOUND",
 	}
+	if headless {
+		args = append([]string{"--headless=new"}, args...)
+	}
+	return args
 }
 
 func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
-	return append(sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir),
+	return append(sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir, cfg.headless()),
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=0",
 		"--window-size=1280,960",

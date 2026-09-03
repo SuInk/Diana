@@ -129,7 +129,18 @@ let plugins: PluginState[] = [
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
-  { manifest: { id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.2.0", description: "在隔离浏览器中执行动态网页并把稳定页面交给模型。", official: true, built_in: true, permissions: ["网页渲染", "无头浏览器"] }, installed: true, enabled: true },
+  {
+    manifest: {
+      id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.3.0",
+      description: "优先使用系统浏览器，没有时使用轻量 Obscura，在隔离环境中执行动态网页。",
+      official: true, built_in: true, permissions: ["网页渲染", "隔离浏览器"],
+      settings: [{
+        key: "window_mode", label: "Chrome 窗口模式", type: "select", default: "auto",
+        options: [{ value: "auto", label: "自动（推荐）" }, { value: "headless", label: "始终无头" }, { value: "visible", label: "显示隔离窗口" }]
+      }]
+    },
+    installed: true, enabled: true
+  },
   { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.0", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。", official: true, built_in: true, default_disabled: true, permissions: ["message:read", "message:send"] }, installed: true, enabled: false }
 ];
 
@@ -400,12 +411,12 @@ const dependencies: ResolverDependency[] = [
 // 演示里故意让浏览器缺席：这一格就是要给人看「插件开着但其实跑不起来」长什么样。
 const browserDependencies: ResolverDependency[] = [
   {
-    name: "chrome",
-    purpose: "网页渲染：在一次性沙盒里执行页面 JS 后读取正文",
+    name: "browser-renderer",
+    purpose: "网页渲染：优先使用系统 Chrome/Chromium，没有时使用轻量 Obscura",
     available: false,
-    detail: "没有找到 Chrome/Chromium",
+    detail: "没有找到 Chrome/Chromium 或 Obscura",
     installable: true,
-    installer: "apt"
+    installer: "Diana 下载 Obscura v0.2.1"
   }
 ];
 

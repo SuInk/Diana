@@ -59,6 +59,20 @@ func TestSandboxedChromeArgsKeepChromeSandboxEnabled(t *testing.T) {
 	}
 }
 
+func TestVisibleChromeModeOmitsHeadlessFlag(t *testing.T) {
+	visible := false
+	args := sandboxedChromeArgs("/tmp/profile", "/tmp/cache", "/tmp/crash", SandboxedBrowserConfig{Headless: &visible})
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--headless") {
+		t.Fatalf("visible browser args still contain headless flag: %s", joined)
+	}
+	for _, want := range []string{"--remote-debugging-port=0", "--user-data-dir=/tmp/profile", "--disable-extensions"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("visible browser args missing %q: %s", want, joined)
+		}
+	}
+}
+
 func TestBrowserRenderToolUsesRenderer(t *testing.T) {
 	tool := NewBrowserRenderTool(PageRendererFunc(func(_ context.Context, rawURL string) (RenderedPage, error) {
 		return RenderedPage{RequestedURL: rawURL, URL: rawURL, Title: "Rendered", Text: "hello", Sandboxed: true}, nil

@@ -476,7 +476,7 @@ const permissionsTarget = ref<PluginState | null>(null);
 const dependencyHints: Record<string, string> = {
   [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
   [sandboxedBrowserPluginID]:
-    "这里会执行一次真实的本地截图，不再只检查 Chrome 是否安装。浏览器体积不小，安装会比其它依赖慢一些。",
+    "优先复用系统 Chrome/Chromium；没有浏览器时一键下载约 70–85 MB 的 Obscura，并在安装后执行一次真实截图验证。",
   [groupRelationsPluginID]:
     "关系图有直接字体渲染和浏览器截图两条路径；至少一条检测通过即可正常出图。"
 };
