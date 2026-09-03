@@ -107,8 +107,7 @@ func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 	if !strings.Contains(reply, "[CQ:at,qq=10002]") {
 		t.Fatalf("reply = %q", reply)
 	}
-	// 3 次 Agent 调用，外加一次发送前审核（这条消息够得上空转判断的候选）。
-	if len(provider.requests) != 4 || !requestMessagesContain(provider.requests[1].Messages, "diana.onebot_group") || !requestMessagesContain(provider.requests[2].Messages, `"mention": "[diana-at:`+targetAlias+`]"`) {
+	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "diana.onebot_group") || !requestMessagesContain(provider.requests[2].Messages, `"mention": "[diana-at:`+targetAlias+`]"`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
 	for _, req := range provider.requests {

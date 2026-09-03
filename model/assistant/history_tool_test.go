@@ -366,8 +366,7 @@ func TestRuntimeAgentCanQueryHistoryAroundCurrentQuote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 3 次 Agent 调用，外加一次发送前审核。
-	if !strings.Contains(reply, "项目版本") || len(provider.requests) != 4 {
+	if !strings.Contains(reply, "项目版本") || len(provider.requests) != 3 {
 		t.Fatalf("reply = %q requests = %d", reply, len(provider.requests))
 	}
 }

@@ -281,12 +281,11 @@ type replyAuditNeed struct {
 	// AccountSafety 和触发方式无关，由配置开关决定。
 	AccountSafety bool
 	// Loop 是空转判断，默认开启，只在这条消息够得上循环候选时才需要。
-	Loop      bool
-	candidate botReplyLoopCandidate
-}
-
-func (need replyAuditNeed) any() bool {
-	return need.Quality || need.AccountSafety || need.Loop
+	Loop bool
+	// LoopSuppress 决定判到空转后能不能真的开暂停。主人永远不能：暂停会把操作员
+	// 锁在自己的机器人外面，而解除暂停的命令恰恰要主人发。主人那边只记录不动作。
+	LoopSuppress bool
+	candidate    botReplyLoopCandidate
 }
 
 func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
@@ -302,11 +301,18 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 		return need
 	}
 	need.candidate, need.Loop = r.botReplyLoopCandidate(event, input)
+	if need.Loop {
+		owner := strings.TrimSpace(cfg.OwnerID)
+		need.LoopSuppress = owner == "" || strings.TrimSpace(event.UserID) != owner
+	}
 	return need
 }
 
 // auditReplyBeforeSend 是发送前的唯一一次审核：表达质量、账号安全、拒答计数和
 // 空转判断都由它一次做完。
+//
+// 三项里只要有一项需要就跑这一次，一项都不需要就完全跳过。空转判断默认开启，
+// 所以群里够得上循环候选的消息（含主人）都会走到这里。
 //
 // 审核失败按放行处理：模型不可用时让机器人集体哑火，比偶尔漏放一条更糟。主动
 // 插话是例外——那条路径本来就以「拿不准就别说」为准，失败即沉默。
@@ -315,7 +321,7 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 		return replyControlIntent{}, nil
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
-	if !need.any() {
+	if !need.Quality && !need.AccountSafety && !need.Loop {
 		return replyControlIntent{}, nil
 	}
 	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
@@ -333,12 +339,17 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 	}
 	intent := replyControlIntentFromAudit(decision)
 	if need.Loop {
-		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision); loopErr != nil {
+		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision, need.LoopSuppress); loopErr != nil {
 			return intent, loopErr
 		}
 	}
-	if safetyErr := accountSafetyError(decision); safetyErr != nil {
-		return intent, safetyErr
+	// 账号安全的一票否决：主动插话一直是无条件执行的，直接回复按开关。空转判断
+	// 会让审核在开关关着时也跑起来，这里必须按原来的条件判，不能因为「反正结论
+	// 已经有了」就顺手拦下一条本来会发出去的回复。
+	if need.Quality || need.AccountSafety {
+		if safetyErr := accountSafetyError(decision); safetyErr != nil {
+			return intent, safetyErr
+		}
 	}
 	if need.Quality {
 		if qualityErr := r.proactiveQualityError(event, decision, cfg); qualityErr != nil {
@@ -348,13 +359,17 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 	return intent, nil
 }
 
-// applyReplyLoopVerdict 把这一轮的空转结论并进计数器。够阈值时当场开启暂停并
-// 拦下这条回复——判断发生在发送之前，所以第一条空转回复就不会发出去。
-func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision proactiveReplyQualityDecision) error {
+// applyReplyLoopVerdict 把这一轮的空转结论并进计数器。够阈值且允许暂停时当场
+// 开启暂停并拦下这条回复——判断发生在发送之前，所以那条空转回复根本不会发出去。
+//
+// suppress=false（当前只有主人）时判断照常做、计数照常累，但不开暂停也不拦回复：
+// 判断本身没有副作用，值得留一份记录；暂停有，而且对主人的副作用是把操作员锁在
+// 自己的机器人外面。
+func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision proactiveReplyQualityDecision, suppress bool) error {
 	now := time.Now()
 	hitCount, loopReason, detected := r.registerBotReplyLoopDecision(event, candidate, decision.loopDecision(), now)
-	r.recordBotReplyLoopClassification(ctx, event, candidate, decision.loopDecision(), hitCount, decision.ReplyLoopReason, nil)
-	if !detected {
+	r.recordBotReplyLoopClassification(ctx, event, candidate, decision.loopDecision(), hitCount, decision.ReplyLoopReason, nil, suppress)
+	if !detected || !suppress {
 		return nil
 	}
 	restriction, activated := r.activateReplySuppression(event, loopReason, now)

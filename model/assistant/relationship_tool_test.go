@@ -204,7 +204,8 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	if !strings.Contains(reply, "[CQ:at,qq=10005]") || !strings.Contains(reply, "好感度是 5") || !strings.Contains(reply, "当前权限") {
 		t.Fatalf("reply = %q", reply)
 	}
-	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[2].Messages, `"favorability": 5`) {
+	// 3 次 Agent 调用，外加一次发送前审核（这条消息够得上空转候选）。
+	if len(provider.requests) != 4 || !requestMessagesContain(provider.requests[2].Messages, `"favorability": 5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
 	for _, want := range []string{"必须调用 diana.relationship", "operation=list", "不得以隐私", "不得编造"} {
