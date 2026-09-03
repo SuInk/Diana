@@ -76,17 +76,21 @@ docker run -d --name diana --restart unless-stopped \
 > $env:DIANA_HOST="0.0.0.0"; irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 > ```
 >
-> 装过了也不要紧，两条路任选：带着 `DIANA_HOST` 重跑一遍安装命令（顺带升级一次），或者直接把配置文件里 `server.host` 改成 `0.0.0.0` 再重启：
+> 装过了也不要紧，两条路任选：带着 `DIANA_HOST` 重跑一遍安装命令（顺带升级一次），或者直接把配置文件里 `server.host` 改成 `0.0.0.0` 再重启。
+>
+> 先编辑配置（系统级安装的配置文件归 root，需要 sudo）：
 >
 > ```sh
-> # Linux / macOS（系统级安装的配置文件需要 sudo 编辑；diana restart 会自行处理服务权限）
 > sudo vim "$(diana config path)"
-> diana restart
 > ```
 >
 > ```powershell
-> # Windows PowerShell
 > notepad (diana config path)
+> ```
+>
+> 改完重启，`diana restart` 会自行处理服务权限：
+>
+> ```sh
 > diana restart
 > ```
 >
