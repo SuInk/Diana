@@ -52,7 +52,6 @@ var (
 	tgItalicUnderscore = regexp.MustCompile(`(^|[^\w_])_([^\n_]+)_($|[^\w_])`)
 	tgLinkPattern      = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
 	tgHeadingPattern   = regexp.MustCompile(`(?m)^[ \t]*#{1,6}[ \t]+(.+)$`)
-	tgBulletPattern    = regexp.MustCompile(`(?m)^([ \t]*)[-*+][ \t]+`)
 	tgQuotePattern     = regexp.MustCompile(`(?m)^[ \t]*>[ \t]?`)
 	tgRulePattern      = regexp.MustCompile(`(?m)^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$\n?`)
 )
@@ -89,6 +88,13 @@ func telegramRichText(text string, mentions []dianaMentionSpan) (string, []teleg
 		return placeholder(len(blocks) - 1)
 	})
 
+	// 表格也当成等宽块：Telegram 没有表格 entity，原样发出去就是一片竖线和减号。
+	// 放在内联代码之后，这样代码块里的竖线不会被误认成表格。
+	text = convertMarkdownTables(text, func(body string) string {
+		blocks = append(blocks, codeBlock{body: body})
+		return placeholder(len(blocks) - 1)
+	})
+
 	// 行级标记先归一：它们不产生 entity（Telegram 没有标题类型），只改文本。
 	// 标题额外记下来，稍后整行加粗——这是它在 Telegram 上最接近的表达。
 	var headingBodies []string
@@ -98,7 +104,7 @@ func telegramRichText(text string, mentions []dianaMentionSpan) (string, []teleg
 		headingBodies = append(headingBodies, body)
 		return body
 	})
-	text = tgBulletPattern.ReplaceAllString(text, "$1• ")
+	text = normalizeListLines(text)
 	text = tgQuotePattern.ReplaceAllString(text, "")
 
 	// 内联标记按「删标记、记区间」的方式处理。每处理一种，后面的偏移都会变，
