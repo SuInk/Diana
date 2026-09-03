@@ -241,10 +241,13 @@
               <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
             </template>
             <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
-              <RefreshCw v-if="deploymentMode === 'release' && updateStatus?.download_ready" :size="15" aria-hidden="true" />
+              <RefreshCw v-if="deploymentMode === 'release' && downloadReadyForLatest" :size="15" aria-hidden="true" />
               <Download v-else :size="15" aria-hidden="true" />
-              {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : updateStatus?.download_ready ? "安装并重启" : "下载最新 Release" }}
+              {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : downloadReadyForLatest ? "安装并重启" : "下载最新 Release" }}
             </button>
+            <p v-if="staleDownloadedVersion" class="muted" style="font-size: 12.5px; margin: 0">
+              已下载 {{ updateStatus?.downloaded_version }}，但最新版本是 {{ latestVersion }}；下次下载会替换旧安装包。
+            </p>
             <div v-if="operationRunning && deploymentMode === 'release'" class="update-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="updatePercent">
               <div class="update-progress-label">
                 <span>{{ updatePhaseLabel }}</span>
@@ -328,6 +331,7 @@ import {
   revokeAuthSession,
   revokeOtherAuthSessions,
   getHealth,
+  checkForUpdate,
   getSystemVersion,
   getUpdateStatus,
 	installDownloadedSystemUpdate,
@@ -344,6 +348,7 @@ import {
   type AuthSession,
   type HealthResponse,
   type SystemVersion,
+  type UpdateCheckResponse,
   type UpdateStatus
 } from "../api";
 import { askConfirm } from "../confirm";
@@ -361,6 +366,7 @@ const tab = ref<(typeof settingsTabs)[number]["key"]>("security");
 const activeTabHint = computed(() => settingsTabs.find((item) => item.key === tab.value)?.hint ?? "");
 
 const updateStatus = ref<UpdateStatus | null>(null);
+const updateCheck = ref<UpdateCheckResponse | null>(null);
 const systemVersion = ref<SystemVersion | null>(null);
 const health = ref<HealthResponse | null>(null);
 const loading = ref(false);
@@ -396,6 +402,14 @@ const currentVersionLabel = computed(() => systemVersion.value?.version_label ||
 const backendVersionLabel = computed(() => currentVersionLabel.value || health.value?.version || "");
 // 源码构建不参与自动更新，只能在版本弹窗里显式切换到正式 Release。
 const sourceBuild = computed(() => deploymentMode.value === "release" && systemVersion.value?.build_type === "source");
+const latestVersion = computed(() => updateCheck.value?.latest_version || "");
+const downloadReadyForLatest = computed(() => updateStatus.value?.download_ready === true
+  && Boolean(updateStatus.value.downloaded_version)
+  && (!latestVersion.value || updateStatus.value.downloaded_version === latestVersion.value));
+const staleDownloadedVersion = computed(() => updateStatus.value?.download_ready === true
+  && Boolean(updateStatus.value.downloaded_version)
+  && Boolean(latestVersion.value)
+  && updateStatus.value?.downloaded_version !== latestVersion.value);
 let updateStatusPollTimer: number | undefined;
 
 async function loadAuthStatus(): Promise<void> {
@@ -573,15 +587,17 @@ const shortCommit = computed(() => {
 async function loadUpdates(): Promise<void> {
   loading.value = true;
   try {
-    const [versionResult, statusResult] = await Promise.all([
-      getSystemVersion(),
-      getUpdateStatus().catch(() => null)
-    ]);
+    const versionResult = await getSystemVersion();
     systemVersion.value = versionResult;
     deploymentMode.value = versionResult.deployment_mode;
-    updateStatus.value = versionResult.update_supported ? statusResult : null;
+    const [statusResult, checkResult] = versionResult.update_supported
+      ? await Promise.all([getUpdateStatus().catch(() => null), checkForUpdate().catch(() => null)])
+      : [null, null];
+    updateCheck.value = checkResult;
+    updateStatus.value = versionResult.update_supported ? (checkResult?.status ?? statusResult) : null;
   } catch {
     updateStatus.value = null;
+    updateCheck.value = null;
   } finally {
     loading.value = false;
   }
@@ -589,7 +605,7 @@ async function loadUpdates(): Promise<void> {
 
 async function runUpdate(): Promise<void> {
 	if (operationRunning.value) return;
-	const installingRelease = deploymentMode.value === "release" && updateStatus.value?.download_ready;
+	const installingRelease = deploymentMode.value === "release" && downloadReadyForLatest.value;
   const confirmed = await askConfirm({
 		title: installingRelease ? "安装已下载版本并重启？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : "安装最新稳定版本？",
 		message: deploymentMode.value === "release"

@@ -393,6 +393,78 @@ func TestSystemUpdateHandlerDownloadsThenInstallsCompleteReleasePackage(t *testi
 	}
 }
 
+func TestSystemUpdateHandlerReplacesStaleDownloadedRelease(t *testing.T) {
+	const assetName = "diana-webui-linux-amd64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v0.8.83","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]}]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		expected: assetName,
+		status: updater.Status{
+			Root:              "/opt/diana",
+			NearestTag:        "v0.8.81",
+			RunningCommit:     "v0.8.81",
+			ApplySupported:    true,
+			DownloadReady:     true,
+			DownloadedVersion: "v0.8.82",
+		},
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/system/update/download", strings.NewReader(`{"confirmation":"download-update"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if !releaseUpdater.downloaded || releaseUpdater.release.Tag != "v0.8.83" || releaseUpdater.status.DownloadedVersion != "v0.8.83" {
+		t.Fatalf("stale package was not replaced: %#v", releaseUpdater)
+	}
+}
+
+func TestSystemUpdateHandlerRejectsInstallingStaleDownloadedRelease(t *testing.T) {
+	const assetName = "diana-webui-linux-amd64.tar.gz"
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v0.8.83","assets":[{"name":"SHA256SUMS","browser_download_url":"https://example.test/SHA256SUMS"},{"name":"` + assetName + `","browser_download_url":"https://example.test/package.tar.gz"}]}]`))
+	}))
+	defer github.Close()
+
+	releaseUpdater := &recordingReleasePackageUpdater{
+		expected: assetName,
+		status: updater.Status{
+			Root:              "/opt/diana",
+			NearestTag:        "v0.8.81",
+			RunningCommit:     "v0.8.81",
+			ApplySupported:    true,
+			DownloadReady:     true,
+			DownloadedVersion: "v0.8.82",
+		},
+	}
+	handler := NewSystemUpdateHandler(fakeSystemUpdater{err: updater.ErrRepositoryNotFound})
+	handler.SetReleasePackageUpdater(releaseUpdater)
+	handler.githubAPIBase = github.URL
+	router := systemUpdateTestRouter(handler)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/system/update/install", strings.NewReader(`{"confirmation":"install-restart"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "v0.8.82") || !strings.Contains(recorder.Body.String(), "v0.8.83") {
+		t.Fatalf("install status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if releaseUpdater.installed {
+		t.Fatal("stale downloaded release must not be installed")
+	}
+}
+
 func TestSystemUpdateHandlerRollsBackCompleteReleasePackageWithinRecentFive(t *testing.T) {
 	const assetName = "diana-webui-darwin-arm64.tar.gz"
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

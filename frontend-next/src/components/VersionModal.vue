@@ -17,7 +17,8 @@
           <span v-else-if="installTracking" class="badge warn">升级并验证中</span>
           <span v-else-if="checkError" class="badge err">检查失败</span>
           <span v-else-if="status?.restart_required" class="badge warn">等待重启</span>
-          <span v-else-if="status?.download_ready" class="badge warn">已下载，待安装</span>
+          <span v-else-if="staleDownloadedVersion" class="badge warn">旧安装包待替换</span>
+          <span v-else-if="downloadReadyForLatest" class="badge warn">已下载，待安装</span>
           <span v-else-if="operationRunning" class="badge warn">正在下载并校验</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
           <span v-else-if="switchToRelease" class="badge accent">可切换到正式版</span>
@@ -55,7 +56,7 @@
         <p v-if="checkError" class="version-hero-error">{{ checkError }}</p>
       </header>
 
-      <div v-if="operationRunning && releaseSelfUpdate && !status?.download_ready" class="release-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="downloadPercent">
+      <div v-if="operationRunning && releaseSelfUpdate && !downloadReadyForLatest" class="release-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="downloadPercent">
         <div class="release-progress-label"><span>{{ downloadPhaseLabel }}</span><strong class="mono">{{ downloadPercent }}%</strong></div>
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
@@ -125,7 +126,7 @@
           {{ operationRunning ? "下载并校验中…" : "下载并校验" }}
         </button>
         <button
-          v-if="releaseSelfUpdate && (status?.download_ready || installTracking || status?.restart_required)"
+          v-if="releaseSelfUpdate && (downloadReadyForLatest || installTracking || status?.restart_required)"
           class="btn primary small"
           type="button"
           :disabled="operationRunning"
@@ -134,7 +135,7 @@
           <RefreshCcw :size="14" aria-hidden="true" />
           {{ installTracking ? "升级并重启中…" : operationRunning ? "升级中…" : "升级并重启" }}
         </button>
-        <button v-if="switchToRelease && !status?.download_ready" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
+        <button v-if="switchToRelease && !downloadReadyForLatest" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
           <Download :size="14" aria-hidden="true" />
           {{ operationRunning ? "下载并校验中…" : `切换到正式 ${checkResult?.latest_version || "版本"}` }}
         </button>
@@ -350,13 +351,20 @@ const switchToRelease = computed(() => sourceBuild.value
   && !checking.value
   && !checkError.value
   && checkResult.value?.switch_to_release_available === true);
+const downloadReadyForLatest = computed(() => status.value?.download_ready === true
+  && Boolean(status.value.downloaded_version)
+  && (!checkResult.value?.latest_version || status.value.downloaded_version === checkResult.value.latest_version));
+const staleDownloadedVersion = computed(() => status.value?.download_ready === true
+  && Boolean(status.value.downloaded_version)
+  && Boolean(checkResult.value?.latest_version)
+  && status.value?.downloaded_version !== checkResult.value?.latest_version);
 const canDownloadUpdate = computed(() => releaseSelfUpdate.value
   && !sourceBuild.value
   && !checkError.value
   && checkResult.value?.update_supported === true
   && checkResult.value.update_available
   && checkResult.value.checksum_available
-  && !status.value?.download_ready
+  && !downloadReadyForLatest.value
   // 安装一开始后端就把 download_ready 清掉了（包已交给 helper），但新版本还没起来，
   // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「升级并重启」，
   // 按钮就当场变回「下载并校验」，等超时解锁后还能真的再下一遍。
