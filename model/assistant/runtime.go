@@ -3825,7 +3825,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3837,7 +3837,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if err != nil {
 			return "", err
 		}
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	})
 }
 
@@ -3936,7 +3936,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -3947,7 +3947,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, boolValue(cfg.MarkdownToPlain, true)), nil
+		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
 	})
 }
 

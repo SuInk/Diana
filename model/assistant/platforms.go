@@ -58,11 +58,18 @@ type PlatformDefinition struct {
 	// CallbackPath 是 InboundCallback 平台在本机监听的回调路径，供 WebUI 拼出
 	// 完整地址让用户填到对方后台。
 	CallbackPath string `json:"callback_path,omitempty"`
+	// RichText 表示这个平台的出站适配器能把 Markdown 渲染出来。
+	//
+	// 判据是「Diana 实际发得出富文本」，不是「平台文档里写了支持」：钉钉、飞书、
+	// 企业微信协议上都有 markdown 消息类型，但当前适配器一律发纯文本 msgtype，
+	// 这里标成 true 只会让 ** 和 # 以字面量漏进聊天窗口。适配器改成发富文本时，
+	// 连同这个字段一起改。
+	RichText bool `json:"rich_text,omitempty"`
 }
 
 var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "统一的 OneBot v11 反向 WebSocket 接入", Inbound: InboundReverseWS},
-	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound},
+	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound},
 	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound},
 	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath},
@@ -108,6 +115,13 @@ func PlatformInboundMode(id string) PlatformInbound {
 		return InboundOutbound
 	}
 	return def.Inbound
+}
+
+// PlatformSupportsRichText 判断平台的出站适配器能不能渲染 Markdown。
+// 未知平台按不能处理：宁可多降级一次，也不要把标记以字面量发出去。
+func PlatformSupportsRichText(id string) bool {
+	def, ok := PlatformByID(id)
+	return ok && def.RichText
 }
 
 // PlatformNeedsCallback 判断平台是否要求本机暴露公网回调地址。

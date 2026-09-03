@@ -245,15 +245,17 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 		// text_mention entity 指向用户 id。这是 Telegram 给「没有 username 的人」
 		// 准备的提及方式——显示成可点击的名字，对方有通知，不依赖 username。
 		text, mentions := renderDianaMentions(text, msg.MentionNames)
+		// Markdown 走 entities 而不是 parse_mode：正文保持纯文本，格式挂在偏移量上，
+		// 因此不需要转义——模型随口写个句号或减号也不会让整条消息以 400 被拒。
+		// 上游按平台决定要不要保留 Markdown；到这里还带标记就说明要渲染。
+		text, entities := telegramRichText(text, mentions)
 		params := map[string]any{
-			"chat_id": chatID,
-			"text":    text,
-			// 统一发纯文本：机器人回复里的 * # ` 等符号不该被当成格式标记。
+			"chat_id":                  chatID,
+			"text":                     text,
 			"disable_web_page_preview": true,
 		}
-		// entities 和 parse_mode 是两条路，只传 entities 不会把正文当 Markdown 解析。
-		if entities := telegramMentionEntities(mentions); len(entities) > 0 {
-			params["entities"] = entities
+		if params2 := telegramEntityParams(entities); len(params2) > 0 {
+			params["entities"] = params2
 		}
 		if replyID := strings.TrimSpace(msg.ReplyMessageID); replyID != "" {
 			params["reply_to_message_id"] = replyID
