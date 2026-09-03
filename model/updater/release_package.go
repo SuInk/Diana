@@ -648,6 +648,18 @@ func (u *ReleasePackageUpdater) removePendingUpdate() {
 }
 
 func startDetachedReleaseHelper(executable, planPath, logPath string) error {
+	plan, err := readReleaseApplyPlan(planPath)
+	if err != nil {
+		return fmt.Errorf("read release helper plan: %w", err)
+	}
+	// setsid only detaches the process tree from the terminal. A helper spawned
+	// inside a systemd service remains in that service's cgroup and is killed by
+	// the default KillMode=control-group when Diana exits for the handoff. Start
+	// it as a separate transient unit so it survives long enough to replace the
+	// files and ask systemd to restart the managed service.
+	if releaseHelperNeedsSystemdUnit(runtime.GOOS, plan.Supervisor) {
+		return startSystemdReleaseHelper(executable, planPath, logPath, plan.Supervisor)
+	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return err
 	}
@@ -666,6 +678,57 @@ func startDetachedReleaseHelper(executable, planPath, logPath string) error {
 	}
 	_ = logFile.Close()
 	return cmd.Process.Release()
+}
+
+func releaseHelperNeedsSystemdUnit(goos string, supervisor serviceSupervisor) bool {
+	return goos == "linux" && supervisor.Kind == supervisorSystemd && supervisor.Managed()
+}
+
+func startSystemdReleaseHelper(executable, planPath, logPath string, supervisor serviceSupervisor) error {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		return err
+	}
+	// Validate writability before scheduling the transient unit. systemd opens
+	// the same path for the helper after the current process has exited.
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := logFile.Close(); err != nil {
+		return err
+	}
+	systemdRun, err := exec.LookPath("systemd-run")
+	if err != nil {
+		return fmt.Errorf("find systemd-run: %w", err)
+	}
+	unit := fmt.Sprintf("diana-release-update-%d-%d", os.Getpid(), time.Now().UnixNano())
+	args := systemdReleaseHelperArgs(supervisor, unit, executable, planPath, logPath)
+	output, err := exec.Command(systemdRun, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("start systemd release helper: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func systemdReleaseHelperArgs(supervisor serviceSupervisor, unit, executable, planPath, logPath string) []string {
+	args := make([]string, 0, 18)
+	if supervisor.Domain != "system" {
+		args = append(args, "--user")
+	}
+	args = append(args,
+		"--quiet",
+		"--collect",
+		"--unit="+unit,
+		"--property=Type=exec",
+		"--property=WorkingDirectory="+filepath.Dir(executable),
+		"--property=StandardOutput=append:"+logPath,
+		"--property=StandardError=append:"+logPath,
+		"--",
+		executable,
+		InternalReleaseApplyCommand,
+		planPath,
+	)
+	return args
 }
 
 // checksumSources 是校验清单的下载顺序：直连优先，镜像兜底。
