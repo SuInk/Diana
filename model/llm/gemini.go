@@ -24,7 +24,7 @@ const maxGeminiOutputTokens = int64(1<<31 - 1)
 func newGeminiClient(cfg ProviderConfig, httpClient *http.Client) (*geminiClient, error) {
 	httpOptions := genai.HTTPOptions{}
 	if cfg.BaseURL != "" {
-		httpOptions.BaseURL = cfg.BaseURL
+		httpOptions.BaseURL = normalizeGeminiBaseURL(cfg.BaseURL)
 	}
 	if cfg.Timeout > 0 {
 		httpOptions.Timeout = &cfg.Timeout
@@ -45,6 +45,17 @@ func newGeminiClient(cfg ProviderConfig, httpClient *http.Client) (*geminiClient
 		cfg:    cfg,
 		client: client,
 	}, nil
+}
+
+func normalizeGeminiBaseURL(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	for _, suffix := range []string{"/v1beta/models", "/v1beta"} {
+		if strings.HasSuffix(strings.ToLower(base), suffix) {
+			base = strings.TrimRight(base[:len(base)-len(suffix)], "/")
+			break
+		}
+	}
+	return base
 }
 
 // Generate 调用 Gemini 模型生成回复。

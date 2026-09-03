@@ -317,14 +317,10 @@ func TestProviderConfigWithDefaultsNormalizesModels(t *testing.T) {
 	}
 }
 
-// TestListModelsReturnsLocalPresets 验证对应功能场景。
-func TestListModelsReturnsLocalPresets(t *testing.T) {
+func TestAnthropicModelListingDoesNotReturnBuiltInPresets(t *testing.T) {
 	models, err := ListModels(context.Background(), ProviderConfig{Provider: ProviderAnthropic})
-	if err != nil {
-		t.Fatalf("ListModels() error = %v", err)
-	}
-	if len(models) == 0 || models[0].ID != DefaultAnthropicModel {
-		t.Fatalf("models = %#v", models)
+	if err == nil || len(models) != 0 || !strings.Contains(err.Error(), "手动添加") {
+		t.Fatalf("models = %#v, error = %v", models, err)
 	}
 }
 
