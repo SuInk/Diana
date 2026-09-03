@@ -4,10 +4,13 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +34,17 @@ func newFakeTelegramAPI(t *testing.T, replies map[string]any) *fakeTelegramAPI {
 	t.Helper()
 	api := &fakeTelegramAPI{replies: replies}
 	api.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/file/bot") {
+			api.mu.Lock()
+			body, _ := api.replies["download:"+strings.TrimPrefix(r.URL.Path, "/file/bottest-token/")].([]byte)
+			api.mu.Unlock()
+			if len(body) == 0 {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write(body)
+			return
+		}
 		// 路径形如 /bot<token>/<method>
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		method := parts[len(parts)-1]
@@ -84,6 +98,27 @@ func TestTelegramSendsTextToChat(t *testing.T) {
 	}
 	if calls[0].Params["text"] != "你好" {
 		t.Fatalf("text 错误：%v", calls[0].Params["text"])
+	}
+}
+
+func TestTelegramSendsRepliesIntoForumTopic(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	err := api.channel().Send(context.Background(), OutgoingMessage{
+		GroupID:         "-100123",
+		MessageThreadID: "77",
+		Text:            "话题内回复",
+		ImageURLs:       []string{"https://example.com/image.jpg"},
+	})
+	if err != nil {
+		t.Fatalf("发送失败：%v", err)
+	}
+	textParams := api.callsOf("sendMessage")[0].Params
+	if textParams["message_thread_id"] != "77" {
+		t.Fatalf("文本未保留话题 ID：%+v", textParams)
+	}
+	photoParams := api.callsOf("sendPhoto")[0].Params
+	if photoParams["message_thread_id"] != "77" {
+		t.Fatalf("图片未保留话题 ID：%+v", photoParams)
 	}
 }
 
@@ -247,6 +282,79 @@ func TestTelegramUsesCaptionWhenTextEmpty(t *testing.T) {
 	event := telegramMessageToEvent(msg, "", "diana_bot")
 	if event.RawMessage != "图片说明" {
 		t.Fatalf("纯图片消息应取 caption，实际 %q", event.RawMessage)
+	}
+}
+
+func TestTelegramCaptionMentionMarksGroupMessageToMe(t *testing.T) {
+	msg := &telegramMessage{
+		MessageID:       3,
+		MessageThreadID: 77,
+		Caption:         "@diana_bot 看图",
+		CaptionEntities: []telegramEntity{{Type: "mention", Offset: 0, Length: 10}},
+		From:            &telegramUser{ID: 5},
+		Chat:            &telegramChat{ID: -100999, Type: "supergroup"},
+	}
+	event := telegramMessageToEvent(msg, "8888", "diana_bot")
+	if !event.ToMe {
+		t.Fatal("caption_entities 中的 @机器人 应视为直接呼叫")
+	}
+	if event.MessageThreadID != "77" {
+		t.Fatalf("话题 ID 丢失：%q", event.MessageThreadID)
+	}
+	if routed := routeOutgoingToEvent(event, OutgoingMessage{Text: "收到"}); routed.MessageThreadID != "77" {
+		t.Fatalf("出站消息未继承话题 ID：%+v", routed)
+	}
+}
+
+func TestTelegramMapsAndCachesIncomingPhoto(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	body := tinyJPEGBytes(t)
+	api := newFakeTelegramAPI(t, map[string]any{
+		"getFile":               map[string]any{"file_path": "photos/a.jpg"},
+		"download:photos/a.jpg": body,
+	})
+	msg := &telegramMessage{
+		MessageID: 9,
+		Date:      1700000000,
+		Caption:   "miku 看图",
+		From:      &telegramUser{ID: 5},
+		Chat:      &telegramChat{ID: -100999, Type: "supergroup"},
+		Photo:     []telegramPhoto{{FileID: "small"}, {FileID: "largest", FileSize: int64(len(body))}},
+	}
+	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	if len(event.Segments) != 2 || event.Segments[1].Type != "image" || event.Segments[1].Data["file_id"] != "largest" {
+		t.Fatalf("photo mapping = %#v", event.Segments)
+	}
+	event = api.channel().resolveIncomingMedia(context.Background(), event, msg)
+	path := event.Segments[1].Data["cached_file"]
+	if !strings.Contains(filepath.ToSlash(path), "/telegram/") || !strings.Contains(filepath.ToSlash(path), "/image/group_-100999/9/") {
+		t.Fatalf("classified media path = %q", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("cached photo: bytes=%d err=%v", len(got), err)
+	}
+}
+
+func TestTelegramMapsAllSupportedIncomingMedia(t *testing.T) {
+	msg := &telegramMessage{
+		MessageID: 10,
+		Chat:      &telegramChat{ID: 5, Type: "private"},
+		Video:     &telegramFile{FileID: "video", FileName: "a.mp4"},
+		Animation: &telegramFile{FileID: "animation", FileName: "a.gif"},
+		Voice:     &telegramFile{FileID: "voice", MimeType: "audio/ogg"},
+		Audio:     &telegramFile{FileID: "audio", FileName: "a.mp3"},
+		Document:  &telegramFile{FileID: "document", FileName: "a.pdf"},
+	}
+	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	var kinds []string
+	for _, segment := range event.Segments {
+		if segment.Type != "text" {
+			kinds = append(kinds, segment.Type)
+		}
+	}
+	if got := strings.Join(kinds, ","); got != "video,video,record,record,file" {
+		t.Fatalf("media kinds = %q", got)
 	}
 }
 

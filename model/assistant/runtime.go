@@ -8078,6 +8078,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 	msg.ProfileID = event.ProfileID
 	if event.Kind == EventKindGroup {
 		msg.GroupID = event.GroupID
+		msg.MessageThreadID = event.MessageThreadID
 	} else {
 		msg.UserID = event.UserID
 	}
@@ -8544,7 +8545,7 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 	var sharedVideoResolved bool
 	event.Segments, sharedVideoResolved = resolveSharedVideoPaths(event.Segments, resolver)
 	var failures []error
-	event.Segments, failures = persistInlineImageSegments(string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
+	event.Segments, failures = persistInlineImageSegments(event.Platform, event.Time, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
 	var cacheFailures []error
 	event, cacheFailures = cacheMessageEventImagesDetailed(ctx, event)
 	failures = append(failures, cacheFailures...)
