@@ -7134,14 +7134,35 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if text != "" {
 		line += ": " + text
 	}
-	line += fmt.Sprintf("\n【历史媒体摘要】message_id=%s；image_count=%d；video_count=%d；video_frame_count=%d；audio_count=%d；file_count=%d；当前未附加原图、视频帧或其他媒体原件。", messageID, imageCount, videoCount, videoFrameCount, audioCount, fileCount)
+	// 只列有的媒体种类和数量。以前这一行把五种计数（多数是 0）、「当前未附加
+	// 原件」和一整句怎么调用 diana.history_media 都写一遍，每条带图的历史要多付
+	// 近百个 token——群里表情包一条接一条，这笔开销比正文还大。「摘要不等于看过
+	// 原件」和「怎么取原件」在 promptToolHistoryImages 里只说一次就够了。
+	line += "\n【媒体 message_id=" + messageID + "：" + historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount) + "】"
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	if messageID != "不可用" && imageCount+videoFrameCount > 0 {
-		line += fmt.Sprintf("\n需要核对图片或视频画面细节时调用 %s，并传入 message_ids=[%q]；涉及多条消息时一次传入全部 ID。", dianaHistoryImagesToolName, messageID)
-	}
 	return line
+}
+
+// historicalMediaSummary 把媒体计数压成「图片×2、语音×1」这种只列非零项的短句。
+func historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount int) string {
+	parts := make([]string, 0, 5)
+	for _, item := range []struct {
+		label string
+		count int
+	}{
+		{"图片", imageCount},
+		{"视频", videoCount},
+		{"视频关键帧", videoFrameCount},
+		{"语音", audioCount},
+		{"文件", fileCount},
+	} {
+		if item.count > 0 {
+			parts = append(parts, item.label+"×"+itoa(item.count))
+		}
+	}
+	return strings.Join(parts, "、")
 }
 
 func historicalStillImageCount(event MessageEvent) int {

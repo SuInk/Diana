@@ -455,12 +455,10 @@ func formatStructuredMemoryLine(item StructuredMemoryItem) string {
 	if !verified.IsZero() {
 		timeLabel = verified.Local().Format("2006-01-02")
 	}
-	reason := ""
-	if strings.TrimSpace(item.RetrievalReason) != "" {
-		reason = "｜依据 " + strings.TrimSpace(item.RetrievalReason)
-	}
-	return fmt.Sprintf("\n- [%s｜%s｜置信 %.2f｜重要 %.2f｜v%d｜%s%s] %s：%s",
-		memoryKindLabel(item.Kind), item.Topic, item.Confidence, item.Importance, item.Version, timeLabel, reason, subject, item.Content)
+	// 只给模型用得上的三样：类型、主题、核实日期。置信度已经由分段（低置信度单独
+	// 一段）表达过；重要度、版本号和检索依据是排序和排障用的内部字段，模型不需要，
+	// 每条多付十几个 token，二十几条记忆就是几百个。
+	return fmt.Sprintf("\n- [%s｜%s｜%s] %s：%s", memoryKindLabel(item.Kind), item.Topic, timeLabel, subject, item.Content)
 }
 
 func memoryKindLabel(kind MemoryKind) string {
