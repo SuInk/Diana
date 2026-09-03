@@ -112,10 +112,13 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
 	if len(cfg.CommandAllowlist) > 0 {
 		registry.Register(&RunCommandTool{
-			root:      root,
-			allowlist: commandAllowlistSet(cfg.CommandAllowlist),
-			timeout:   time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
-			maxBytes:  cfg.MaxToolOutputChars,
+			root:           root,
+			allowlist:      commandAllowlistSet(cfg.CommandAllowlist),
+			timeout:        time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
+			maxBytes:       cfg.MaxToolOutputChars,
+			sandboxMode:    cfg.CommandSandbox,
+			sandbox:        detectCommandSandbox(),
+			sandboxNetwork: cfg.CommandSandboxAllowNetwork,
 		})
 	}
 	registry.RegisterBrowserTools(root, cfg)
@@ -793,6 +796,10 @@ type RunCommandTool struct {
 	allowlist map[string]bool
 	timeout   time.Duration
 	maxBytes  int
+	// sandboxMode 见 CommandSandbox* 常量；sandbox 是当前平台探测到的实现。
+	sandboxMode    string
+	sandbox        commandSandbox
+	sandboxNetwork bool
 }
 
 // Name 返回命令执行工具名称。
@@ -838,7 +845,10 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	defer cancel()
 
 	args := stringSliceFromInput(input, "args")
-	cmd := exec.CommandContext(runCtx, command, args...)
+	cmd, sandboxKind, err := t.commandFor(runCtx, command, args)
+	if err != nil {
+		return "", err
+	}
 	cmd.Dir = cwd
 	commandOutput, err := os.CreateTemp("", "diana-agent-command-*")
 	if err != nil {
@@ -867,7 +877,7 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	if readErr != nil {
 		return "", readErr
 	}
-	body, err := json.MarshalIndent(map[string]any{
+	result := map[string]any{
 		"command":     command,
 		"args":        args,
 		"cwd":         relPathForOutput(t.root, cwd),
@@ -876,7 +886,16 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 		"duration_ms": duration.Milliseconds(),
 		"truncated":   truncated,
 		"output":      output,
-	}, "", "  ")
+	}
+	// 让「这次到底有没有被隔离」出现在结果里：排查写入失败或网络不通时，
+	// 第一个要确认的就是它。
+	if sandboxKind != "" {
+		result["sandbox"] = sandboxKind
+		result["sandbox_network"] = t.sandboxNetwork
+	} else {
+		result["sandbox"] = "none"
+	}
+	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -906,6 +925,22 @@ func readCommandOutput(file *os.File, maxBytes int, complete bool) (string, bool
 		data = data[:maxBytes]
 	}
 	return string(data), truncated, nil
+}
+
+// commandFor 按沙盒模式决定这条命令怎么起。require 模式下没有可用沙盒就直接拒绝，
+// 不能退回裸执行——那正是这个模式要防的事。
+func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []string) (*exec.Cmd, string, error) {
+	mode := normalizeCommandSandboxMode(t.sandboxMode)
+	if mode == CommandSandboxOff {
+		return exec.CommandContext(ctx, command, args...), "", nil
+	}
+	if !t.sandbox.available() {
+		if mode == CommandSandboxRequire {
+			return nil, "", fmt.Errorf("command sandbox is required but unavailable on this host: install bubblewrap (Linux) or run on macOS with sandbox-exec")
+		}
+		return exec.CommandContext(ctx, command, args...), "", nil
+	}
+	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, command, args), t.sandbox.kind, nil
 }
 
 func (t *RunCommandTool) commandAllowed(command string) bool {
