@@ -468,13 +468,23 @@ func TestAgentHistorySummarizesImagesBeforeLazyToolSkipsBrokenImage(t *testing.T
 	if len(message.Parts) != 0 {
 		t.Fatalf("history summary eagerly attached images: %#v", message.Parts)
 	}
-	for _, want := range []string{"message_id=expired-bot-image", "message_id=new-user-image", "当前未附加原图", dianaHistoryImagesToolName} {
+	// 「摘要不等于看过原件」和「怎么取原件」已经收进 promptToolHistoryImages 里统一
+	// 说一次，不再逐条历史重复，因此这里只断言每条摘要必须自带的部分：message_id
+	// 和媒体计数——模型要靠它们决定调不调 diana.history_media、传哪些 ID。
+	for _, want := range []string{"message_id=expired-bot-image", "message_id=new-user-image", "图片×1"} {
 		if !strings.Contains(message.Content, want) {
 			t.Fatalf("history summary = %q, missing %q", message.Content, want)
 		}
 	}
 	if strings.Contains(message.Content, "[图片]") {
 		t.Fatalf("history media notice = %q", message.Content)
+	}
+	// 逐条摘要省掉这两句的前提，是系统提示里仍然说了一次。两处同时丢掉的话，模型
+	// 会把摘要当成看过原件，这里守住那个前提。
+	for _, want := range []string{"不代表你看过真实画面", dianaHistoryImagesToolName} {
+		if !strings.Contains(promptToolHistoryImages, want) {
+			t.Fatalf("promptToolHistoryImages = %q, missing %q", promptToolHistoryImages, want)
+		}
 	}
 	if calls := recordedCallsByAction(channel.callsSnapshot(), "get_image"); len(calls) != 0 {
 		t.Fatalf("history summary loaded media: %#v", calls)
