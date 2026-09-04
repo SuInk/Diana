@@ -800,13 +800,24 @@ async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
       // fetch 只在网络层失败时抛：服务没起、端口不通、被拦下来了。
       throw new ApiError("连不上 Diana 后端服务", "offline");
     }
-    const data = (await response.json().catch(() => ({}))) as T & { error?: string; auth_required?: boolean };
+    const responseText = await response.text();
+    let data = {} as T & { error?: string; message?: string; auth_required?: boolean };
+    if (responseText) {
+      try {
+        data = JSON.parse(responseText) as T & { error?: string; message?: string; auth_required?: boolean };
+      } catch {
+        // 反向代理常用纯文本或 HTML 返回 5xx。HTML 不直接展示，避免把整页错误模板塞进 toast。
+        if (!responseText.trimStart().startsWith("<")) {
+          data = { error: responseText.trim() } as T & { error?: string; message?: string; auth_required?: boolean };
+        }
+      }
+    }
     if (!response.ok) {
       // 会话过期或未登录：广播事件让 App 切到登录界面，而不是每个视图各自报错。
       if (response.status === 401 && data.auth_required && !url.startsWith("/api/auth/")) {
         window.dispatchEvent(new CustomEvent("diana:unauthorized"));
       }
-      throw apiErrorForStatus(response.status, data.error ?? "");
+      throw apiErrorForStatus(response.status, data.error ?? data.message ?? "");
     }
     if (isMutatingRequest(method, path)) {
       invalidateAPICache();

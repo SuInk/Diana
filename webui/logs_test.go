@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -137,5 +138,66 @@ func TestLLMConfigHandlerWritesAppLogs(t *testing.T) {
 	}
 	if errors[0].Actor != "web:203.0.113.9" {
 		t.Fatalf("error actor = %q", errors[0].Actor)
+	}
+}
+
+func TestProviderTestReturnsAndLogsRedactedUpstreamError(t *testing.T) {
+	const apiKey = "super-secret-api-key"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("temporary upstream failure for " + apiKey))
+	}))
+	defer upstream.Close()
+
+	ctx := context.Background()
+	logStore, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = logStore.Close() }()
+
+	profileStore := NewMemoryLLMProfileStore(llm.ProviderConfig{
+		Provider:  llm.ProviderOpenAICompatible,
+		APIFormat: llm.APIFormatChatCompletions,
+		APIKey:    apiKey,
+		BaseURL:   upstream.URL,
+		Model:     "chat-model",
+	})
+	profile := profileStore.Profiles().Profiles[0]
+	handler := NewLLMConfigHandler(profileStore)
+	handler.SetLogStore(logStore)
+	router := testRouter(handler)
+
+	body := `{"providerId":"` + profile.ID + `","modelId":"` + profile.ID + `:chat-model","message":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/llm/providers/test", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "提供商测试失败") || !strings.Contains(rec.Body.String(), "temporary upstream failure") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), apiKey) {
+		t.Fatalf("response leaked API key: %s", rec.Body.String())
+	}
+
+	entries, err := logStore.ListLogs(ctx, storage.AppLogFilter{Kind: storage.LogKindError, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("error logs = %#v", entries)
+	}
+	entry := entries[0]
+	if entry.Action != "llm.providers.test" || entry.Target != profile.ID {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if entry.Metadata["provider_id"] != profile.ID || entry.Metadata["model_id"] != profile.ID+":chat-model" {
+		t.Fatalf("metadata = %#v", entry.Metadata)
+	}
+	if strings.Contains(entry.Detail, apiKey) {
+		t.Fatalf("log leaked API key: %s", entry.Detail)
 	}
 }
