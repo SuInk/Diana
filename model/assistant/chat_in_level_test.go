@@ -101,8 +101,8 @@ func TestNaturalInterjectionAllowsEveryValidReply(t *testing.T) {
 		t.Fatal("natural mode should allow a valid substantive reply without confidence gating")
 	}
 	notAnswerable, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":false,"substantive":true}`)
-	if notAnswerable.allows(0.1, settings) {
-		t.Fatal("natural mode must not answer when the router cannot support a reliable reply")
+	if !notAnswerable.allows(0.1, settings) {
+		t.Fatal("planner answerability must not preempt the send-time accuracy audit")
 	}
 	filler, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":true,"substantive":false}`)
 	if filler.allows(0.1, settings) {
