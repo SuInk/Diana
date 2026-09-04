@@ -1605,6 +1605,7 @@ export interface AssistantEventMemory {
 export interface AssistantEventTemporaryMemory {
   id?: string;
   kind: "session_thread" | "private_thread_state" | string;
+  scope?: "user" | "session" | string;
   task_kind?: string;
   topic?: string;
   content: unknown;

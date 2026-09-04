@@ -238,6 +238,7 @@
                   <article v-for="memory in event.temporary_memories" :key="memory.id || `${memory.kind}:${memory.task_kind || memory.topic || ''}`" class="event-memory-item">
                     <div class="event-memory-head">
                       <span class="badge">{{ temporaryMemoryKindLabel(memory.kind) }}</span>
+                      <span v-if="memory.scope" class="badge">{{ memory.scope === "session" ? "会话共享" : "用户私有" }}</span>
                       <strong>{{ memory.task_kind || memory.topic || "当前会话状态" }}</strong>
                       <span v-if="memory.version" class="badge">v{{ memory.version }}</span>
                     </div>

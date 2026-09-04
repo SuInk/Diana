@@ -19,10 +19,17 @@ const (
 	maximumThreadStateTTL          = 24 * time.Hour
 	maximumThreadStatePayloadBytes = 8 * 1024
 	maximumActiveThreadStates      = 4
-	privateThreadStateMarker       = "【私有临时线程状态，仅用于完成当前用户的多轮任务；不得复述、泄露或当作长期记忆；当前消息与任务无关时不要使用或提及】"
+	privateThreadStateMarker       = "【临时线程状态，仅用于完成当前多轮任务；scope=user 仅属于当前发言者，scope=session 由当前会话参与者共享；不得复述、泄露或当作长期记忆；当前消息与任务无关时不要使用或提及】"
 )
 
 var ErrThreadStateVersionConflict = errors.New("thread state version conflict")
+
+type ThreadStateScope string
+
+const (
+	ThreadStateScopeUser    ThreadStateScope = "user"
+	ThreadStateScopeSession ThreadStateScope = "session"
+)
 
 type ThreadStateStatus string
 
@@ -33,13 +40,15 @@ const (
 	ThreadStateExpired   ThreadStateStatus = "expired"
 )
 
-// ThreadState 是 Diana 自己创建、只在一个多轮任务内有效的私有状态。
-// 它不是用户画像或长期记忆：猜谜目标、临时计划和表单进度都应在任务结束后清理。
+// ThreadState 是 Diana 自己创建、只在一个多轮任务内有效的临时状态。
+// user 作用域用于私有猜谜、计划和表单；session 作用域用于多人棋局等共同任务。
+// 它不是用户画像或长期记忆，任务结束后必须清理。
 type ThreadState struct {
 	ID              string            `json:"id"`
 	ProfileID       string            `json:"profile_id,omitempty"`
 	Session         string            `json:"session"`
 	UserID          string            `json:"user_id"`
+	Scope           ThreadStateScope  `json:"scope"`
 	TaskKind        string            `json:"task_kind"`
 	State           json.RawMessage   `json:"state"`
 	Version         int               `json:"version"`
@@ -54,6 +63,7 @@ type ThreadStatePutRequest struct {
 	ProfileID       string
 	Session         string
 	UserID          string
+	Scope           ThreadStateScope
 	TaskKind        string
 	State           json.RawMessage
 	ExpectedVersion int
@@ -66,6 +76,7 @@ type ThreadStateEndRequest struct {
 	ProfileID       string
 	Session         string
 	UserID          string
+	Scope           ThreadStateScope
 	TaskKind        string
 	ExpectedVersion int
 	Status          ThreadStateStatus
@@ -115,16 +126,18 @@ func (r *Runtime) privateThreadStateContextDetailed(ctx context.Context, event M
 		return "", nil
 	}
 	type privateState struct {
-		ID        string          `json:"id"`
-		TaskKind  string          `json:"task_kind"`
-		State     json.RawMessage `json:"state"`
-		Version   int             `json:"version"`
-		ExpiresAt string          `json:"expires_at"`
+		ID        string           `json:"id"`
+		Scope     ThreadStateScope `json:"scope"`
+		TaskKind  string           `json:"task_kind"`
+		State     json.RawMessage  `json:"state"`
+		Version   int              `json:"version"`
+		ExpiresAt string           `json:"expires_at"`
 	}
 	payload := make([]privateState, 0, len(items))
 	for _, item := range items {
 		payload = append(payload, privateState{
 			ID:        item.ID,
+			Scope:     item.Scope,
 			TaskKind:  item.TaskKind,
 			State:     append(json.RawMessage(nil), item.State...),
 			Version:   item.Version,
@@ -150,16 +163,17 @@ func newDianaThreadStateTool(runtime *Runtime, event MessageEvent) *dianaThreadS
 func (*dianaThreadStateTool) Name() string { return dianaThreadStateToolName }
 
 func (*dianaThreadStateTool) Description() string {
-	return "保存、读取和结束 Diana 自己创建的私有多轮任务状态。需要先秘密选择一个目标、维持临时计划或跨消息保持中间状态时，必须先 set 成功再声称准备好；后续用同一 task_kind 读取或更新，完成、取消时及时清理。状态只属于当前发言者和当前会话，不得用长期记忆代替。"
+	return "保存、读取和结束 Diana 自己创建的多轮任务状态。默认 scope=user，只属于当前发言者；多人棋局、共同计划等需要群内参与者共享同一 canonical 状态时必须用 scope=session。更新时必须携带 expected_version，完成或取消时及时清理，不得用长期记忆代替。"
 }
 
 func (*dianaThreadStateTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation", "task_kind"}, map[string]any{
 		"operation": toolEnumParam("操作：set 创建或更新；get 读取；complete 正常结束；cancel 取消。", "set", "get", "complete", "cancel"),
 		"task_kind": toolStringParam("通用任务类型标识，使用小写字母、数字、点、横线或下划线，例如 guess.character、form.onboarding。不要把具体答案写进 task_kind。"),
+		"scope":     toolEnumParam("状态作用域：user 仅当前发言者可见（默认）；session 供当前私聊或群会话共享，适用于多人棋局和共同任务，不得存放任何参与者的秘密。", string(ThreadStateScopeUser), string(ThreadStateScopeSession)),
 		"state": map[string]any{
 			"type":                 "object",
-			"description":          "set 时必填的私有结构化状态。保存完成任务所需的 canonical target、约束和进度；最多 8 KiB。",
+			"description":          "set 时必填的结构化状态。保存完成任务所需的 canonical target、约束和进度；session 作用域不得放秘密；最多 8 KiB。",
 			"additionalProperties": true,
 		},
 		"expected_version": toolIntParam("更新或结束时可传当前版本，避免并发覆盖；首次创建和不做并发校验时省略。", 1, 1_000_000),
@@ -173,13 +187,18 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 	}
 	userID := strings.TrimSpace(t.event.UserID)
 	if userID == "" {
-		return "", fmt.Errorf("无法识别当前发言者，不能创建私有线程状态")
+		return "", fmt.Errorf("无法识别当前发言者，不能操作临时线程状态")
 	}
 	taskKind, err := normalizeThreadStateTaskKind(configToolString(input, "task_kind"))
 	if err != nil {
 		return "", err
 	}
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	scope, err := normalizeThreadStateScope(configToolString(input, "scope"))
+	if err != nil {
+		return "", err
+	}
+	stateUserID := threadStateScopeUserID(scope, userID)
 	expectedVersion := threadStateInputInt(input, "expected_version")
 	now := t.runtime.clock()
 	store := t.runtime.threadStateStore()
@@ -206,7 +225,8 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 		item, err := store.PutThreadState(ctx, ThreadStatePutRequest{
 			ProfileID:       strings.TrimSpace(t.event.ProfileID),
 			Session:         sessionKey(t.event),
-			UserID:          userID,
+			UserID:          stateUserID,
+			Scope:           scope,
 			TaskKind:        taskKind,
 			State:           state,
 			ExpectedVersion: expectedVersion,
@@ -225,7 +245,7 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 		}
 		filtered := items[:0]
 		for _, item := range items {
-			if item.TaskKind == taskKind {
+			if item.TaskKind == taskKind && item.Scope == scope {
 				filtered = append(filtered, item)
 			}
 		}
@@ -238,7 +258,8 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 		item, err := store.EndThreadState(ctx, ThreadStateEndRequest{
 			ProfileID:       strings.TrimSpace(t.event.ProfileID),
 			Session:         sessionKey(t.event),
-			UserID:          userID,
+			UserID:          stateUserID,
+			Scope:           scope,
 			TaskKind:        taskKind,
 			ExpectedVersion: expectedVersion,
 			Status:          status,
@@ -251,6 +272,24 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 	default:
 		return "", fmt.Errorf("不支持的 operation %q", operation)
 	}
+}
+
+func normalizeThreadStateScope(value string) (ThreadStateScope, error) {
+	scope := ThreadStateScope(strings.ToLower(strings.TrimSpace(value)))
+	if scope == "" {
+		return ThreadStateScopeUser, nil
+	}
+	if scope != ThreadStateScopeUser && scope != ThreadStateScopeSession {
+		return "", fmt.Errorf("scope 只能是 user 或 session")
+	}
+	return scope, nil
+}
+
+func threadStateScopeUserID(scope ThreadStateScope, userID string) string {
+	if scope == ThreadStateScopeSession {
+		return ""
+	}
+	return strings.TrimSpace(userID)
 }
 
 func normalizeThreadStateTaskKind(value string) (string, error) {
@@ -285,6 +324,7 @@ func threadStateInputInt(input map[string]any, key string) int {
 func marshalThreadStateToolResult(operation string, items []ThreadState) (string, error) {
 	type view struct {
 		ID        string            `json:"id"`
+		Scope     ThreadStateScope  `json:"scope"`
 		TaskKind  string            `json:"task_kind"`
 		State     json.RawMessage   `json:"state,omitempty"`
 		Version   int               `json:"version"`
@@ -302,7 +342,7 @@ func marshalThreadStateToolResult(operation string, items []ThreadState) (string
 			state = nil
 		}
 		result.Items = append(result.Items, view{
-			ID: item.ID, TaskKind: item.TaskKind, State: state, Version: item.Version,
+			ID: item.ID, Scope: item.Scope, TaskKind: item.TaskKind, State: state, Version: item.Version,
 			Status: item.Status, ExpiresAt: item.ExpiresAt.Format(time.RFC3339),
 		})
 	}

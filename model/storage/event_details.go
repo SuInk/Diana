@@ -111,6 +111,7 @@ type InboundEventMemory struct {
 type InboundEventTemporaryMemory struct {
 	ID              string `json:"id,omitempty"`
 	Kind            string `json:"kind"`
+	Scope           string `json:"scope,omitempty"`
 	TaskKind        string `json:"task_kind,omitempty"`
 	Topic           string `json:"topic,omitempty"`
 	Content         any    `json:"content"`
