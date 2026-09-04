@@ -2250,7 +2250,10 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	decision, parsed := parseProactiveReplyDecision(raw)
 	event, text = selectProactiveReplyCandidate(candidates, decision.TargetMessageID)
-	directedFollowupPromoted := parsed && promoteDirectedFollowup(&decision, event, text, cfg.ProactiveReplyThreshold, chatIn)
+	routePromoted := parsed && promoteDirectedFollowup(&decision, event, text, cfg.ProactiveReplyThreshold, chatIn)
+	if parsed && !routePromoted {
+		routePromoted = promoteRequestedResponse(&decision, event, cfg.ProactiveReplyThreshold, chatIn)
+	}
 	turn := selectProactiveReplyTurn(candidates, event.MessageID, decision.TurnMessageIDs)
 	decisionAllowed := parsed && decision.allows(cfg.ProactiveReplyThreshold, chatIn)
 	cooldownAllowed := true
@@ -2271,7 +2274,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// 质量审核、回复抑制或发送失败挡下来，那种情况不该白白吃掉一个冷却窗口。
 	event.proactiveReply = allowed
 	event.chatInReply = allowed && decision.chatIn()
-	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, directedFollowupPromoted, cfg, chatIn)
+	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, routePromoted, cfg, chatIn)
 	r.recordProactiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg, raw)
 	return event, text, turn, allowed
 }
@@ -2296,7 +2299,7 @@ func (r *Runtime) markChatInReplied(event MessageEvent) {
 	r.chatInLastReplyAt[sessionKey(event)] = time.Now()
 }
 
-func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, directedFollowupPromoted bool, cfg BotConfig, chatIn chatInSettings) string {
+func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, routePromoted bool, cfg BotConfig, chatIn chatInSettings) string {
 	if !parsed {
 		return "主动回复判断模型返回了无法解析的结果，已保持沉默"
 	}
@@ -2326,8 +2329,8 @@ func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decis
 		}
 	}
 	switch {
-	case allowed && directedFollowupPromoted:
-		return fmt.Sprintf("已确认用户正在明确追问机器人，交由正式回复与可用工具处理：%s（%s）", detail, metrics)
+	case allowed && routePromoted:
+		return fmt.Sprintf("已确认消息在要求回应，交由正式回复与发送前准确度审核处理：%s（%s）", detail, metrics)
 	case allowed:
 		return fmt.Sprintf("主动回复判断允许回复：%s（%s）", detail, metrics)
 	case decisionAllowed && !cooldownAllowed:
@@ -2340,8 +2343,6 @@ func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decis
 		return fmt.Sprintf("闲聊插话当前已关闭：%s（%s）", detail, metrics)
 	case decision.chatIn() && !decision.Substantive:
 		return fmt.Sprintf("主动回复判断认为这句插话没有实质内容：%s（%s）", detail, metrics)
-	case !decision.chatIn() && !decision.Answerable:
-		return fmt.Sprintf("主动回复判断认为现有信息不足以可靠回答：%s（%s）", detail, metrics)
 	case decision.Confidence < threshold:
 		return fmt.Sprintf("主动回复判断置信度低于阈值：%s（%s）", detail, metrics)
 	default:
@@ -2614,27 +2615,47 @@ func (decision proactiveReplyDecision) chatIn() bool {
 	return decision.normalizedCategory() == "chat_in"
 }
 
-// allows 判定是否放行。闲聊插话走独立阈值，因为它的门槛和“群友直接提问”本质不同：
-// 前者靠回复本身有没有实质内容把关，后者靠信息是否足够回答把关。
+// allows 只判断消息是否值得进入正式回复。事实准确性由生成后的
+// judgeProactiveReplyQuality 发送前审核负责，不能在尚未搜索或调用工具前先拦掉。
 func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSettings) bool {
 	if !decision.ShouldReply || decision.Confidence > 1 {
 		return false
 	}
 	switch decision.normalizedCategory() {
 	case "needs_response":
-		return decision.Confidence >= threshold && decision.Answerable
+		return decision.Confidence >= threshold
 	case "bot_related":
-		return decision.Confidence >= threshold && decision.DirectedAtBot && decision.Answerable
+		return decision.Confidence >= threshold && decision.DirectedAtBot
 	case "chat_in":
-		// substantive 始终是内容闸门；自然模式还要求 answerable，避免把“能接一句”
-		// 误解成可以猜测或追问。
 		if chatIn.Natural {
-			return chatIn.Enabled && decision.Answerable && decision.Substantive
+			return chatIn.Enabled && decision.Substantive
 		}
 		return chatIn.Enabled && decision.Substantive && decision.Confidence >= chatIn.Threshold
 	default:
 		return false
 	}
+}
+
+func promoteRequestedResponse(decision *proactiveReplyDecision, event MessageEvent, threshold float64, chatIn chatInSettings) bool {
+	if decision == nil || decision.allows(threshold, chatIn) || !decision.RequestsResponse || decision.Confidence < threshold {
+		return false
+	}
+	if decision.Blocker != proactiveBlockerMissingInfo && decision.Blocker != proactiveBlockerNoCapability {
+		return false
+	}
+	originalReason := strings.TrimSpace(decision.Reason)
+	decision.ShouldReply = true
+	decision.Category = "needs_response"
+	decision.Substantive = true
+	decision.TargetMessageID = strings.TrimSpace(event.MessageID)
+	if decision.TargetMessageID != "" {
+		decision.TurnMessageIDs = []string{decision.TargetMessageID}
+	}
+	decision.Reason = "明确请求交由正式回复与发送前准确度审核处理"
+	if originalReason != "" {
+		decision.Reason += "；planner 原判断：" + originalReason
+	}
+	return true
 }
 
 func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEvent, text string, threshold float64, chatIn chatInSettings) bool {
@@ -2666,8 +2687,8 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：直接引用或语义承接机器人回复的追问属于 bot_related 候选；只要它确实需要继续回应，就应优先识别为 directed_at_bot=true。没有点名机器人不等于不需要回复：面向全群提出的定义、解释、辨析或求助问题（例如“X 是什么”“X 怎么理解”），只要能可靠回答，就应使用 needs_response，不得仅因句子短、没有问号、没有 @ 或没有点名对象而归为 none。notebook_context 是本地笔记本对当前消息的可信释义；命中时必须按释义理解消息，不能再称它为未解释缩写、私人暗语或 missing_context。若缩写按笔记本展开后本身是在公开提问或请求（例如 zgm=在干嘛），应按展开后的完整含义判断 requests_response、answerable 和 needs_response。笔记本命中只解决语义，不代表普通名词必须回复，仍要判断展开后的消息是否确实需要回应。围绕上下文中可识别的话题出现的短语，即使省略问号或谓语，只要机器人能补充具体的新信息，也应按 chat_in 判断 substantive；若群友顺着 recent_messages 或 last_bot_message 轻松调侃、反问或接梗，机器人能给出贴合上下文的新回应，也可以按 chat_in 放行。例如机器人刚建议看离线小说，群友说“你不是最喜欢看小说吗”，这是围绕群聊话题的闲聊，不是直接向机器人提问：directed_at_bot=false，但可以使用 chat_in。不能仅因句子含“你”或采用反问句式就归为 bot_related。若短语在承接或重复 recent_messages 中尚未回答的公开问题，应视为该问题仍在等待回答并使用 needs_response，而不是降级为随机插话。只有 notebook_context 没有解释、且无法从其他上下文确定含义的私人昵称、暗语或残缺指代才算信息不足。available_reply_tools 列出了正式回复阶段已注册的工具；其中列出的工具可读取或执行的能力必须计入 answerable，不能因为结果尚未出现在短上下文里就声称不可访问或没有工具。若其中列出 diana.onebot_group，它能实时读取当前群资料、成员列表和成员总数，查询“群里现在几个人”等问题应 answerable=true。若其中列出 diana.image，系统已经具备图片生成与编辑能力；具体用户权限由正式回复阶段校验，路由器不得声称系统没有绘图工具。无论 category 是 bot_related 还是 needs_response，只有现有上下文、稳定知识、可用工具或公开检索能够支持具体可靠的回答时，answerable 才能为 true。缺少关键前提、只能猜测、回答可信度不足时必须 should_reply=false、answerable=false；不要用泛泛附和、编造答案或仅为追问而追问来代替可靠回答。`
-	const expressiveChatInGuard = `风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
+	const answerabilityGuard = `运行时强制约束：planner 只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
+	const expressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard
 	configured = strings.TrimSpace(configured)
