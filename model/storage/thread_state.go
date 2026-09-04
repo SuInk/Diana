@@ -21,7 +21,12 @@ func (s *SQLiteStore) PutThreadState(ctx context.Context, request assistant.Thre
 	request.Session = strings.TrimSpace(request.Session)
 	request.UserID = strings.TrimSpace(request.UserID)
 	request.TaskKind = strings.TrimSpace(request.TaskKind)
-	if request.Session == "" || request.UserID == "" || request.TaskKind == "" {
+	var err error
+	request.Scope, request.UserID, err = normalizeThreadStateStorageScope(request.Scope, request.UserID)
+	if err != nil {
+		return assistant.ThreadState{}, err
+	}
+	if request.Session == "" || request.TaskKind == "" {
 		return assistant.ThreadState{}, fmt.Errorf("thread state scope is incomplete")
 	}
 	if !json.Valid(request.State) {
@@ -57,6 +62,9 @@ WHERE profile_id = ? AND session = ? AND user_id = ? AND task_kind = ? AND statu
 `, request.ProfileID, request.Session, request.UserID, request.TaskKind).Scan(&id, &version, &createdAtNS)
 	switch {
 	case err == nil:
+		if request.Scope == assistant.ThreadStateScopeSession && request.ExpectedVersion <= 0 {
+			return assistant.ThreadState{}, fmt.Errorf("%w: session scope update requires expected_version (current=%d)", assistant.ErrThreadStateVersionConflict, version)
+		}
 		if request.ExpectedVersion > 0 && request.ExpectedVersion != version {
 			return assistant.ThreadState{}, fmt.Errorf("%w: current=%d expected=%d", assistant.ErrThreadStateVersionConflict, version, request.ExpectedVersion)
 		}
@@ -98,6 +106,7 @@ INSERT INTO thread_states (
 	}
 	return assistant.ThreadState{
 		ID: id, ProfileID: request.ProfileID, Session: request.Session, UserID: request.UserID,
+		Scope:    request.Scope,
 		TaskKind: request.TaskKind, State: append(json.RawMessage(nil), request.State...), Version: version,
 		Status: assistant.ThreadStateActive, SourceMessageID: request.SourceMessageID,
 		CreatedAt: time.Unix(0, createdAtNS), UpdatedAt: request.Now, ExpiresAt: request.ExpiresAt,
@@ -137,7 +146,7 @@ WHERE status = 'active' AND expires_at <= ?
 SELECT id, profile_id, session, user_id, task_kind, state_json, version, status,
        COALESCE(source_message_id, ''), created_at, updated_at, expires_at
 FROM thread_states
-WHERE profile_id = ? AND session = ? AND user_id = ? AND status = 'active' AND expires_at > ?
+WHERE profile_id = ? AND session = ? AND (user_id = ? OR user_id = '') AND status = 'active' AND expires_at > ?
 ORDER BY updated_at DESC, id DESC
 LIMIT ?
 `, profileID, session, userID, nowNS, limit)
@@ -161,6 +170,11 @@ func (s *SQLiteStore) EndThreadState(ctx context.Context, request assistant.Thre
 	request.Session = strings.TrimSpace(request.Session)
 	request.UserID = strings.TrimSpace(request.UserID)
 	request.TaskKind = strings.TrimSpace(request.TaskKind)
+	var err error
+	request.Scope, request.UserID, err = normalizeThreadStateStorageScope(request.Scope, request.UserID)
+	if err != nil {
+		return assistant.ThreadState{}, err
+	}
 	if request.Status != assistant.ThreadStateCompleted && request.Status != assistant.ThreadStateCancelled {
 		return assistant.ThreadState{}, fmt.Errorf("invalid terminal thread state status %q", request.Status)
 	}
@@ -192,6 +206,9 @@ WHERE profile_id = ? AND session = ? AND user_id = ? AND task_kind = ? AND statu
 	}
 	if err != nil {
 		return assistant.ThreadState{}, err
+	}
+	if request.Scope == assistant.ThreadStateScopeSession && request.ExpectedVersion <= 0 {
+		return assistant.ThreadState{}, fmt.Errorf("%w: session scope completion requires expected_version (current=%d)", assistant.ErrThreadStateVersionConflict, item.Version)
 	}
 	if request.ExpectedVersion > 0 && request.ExpectedVersion != item.Version {
 		return assistant.ThreadState{}, fmt.Errorf("%w: current=%d expected=%d", assistant.ErrThreadStateVersionConflict, item.Version, request.ExpectedVersion)
@@ -236,9 +253,31 @@ func scanThreadState(scanner threadStateScanner) (assistant.ThreadState, error) 
 		return assistant.ThreadState{}, err
 	}
 	item.State = json.RawMessage(stateJSON)
+	item.Scope = assistant.ThreadStateScopeUser
+	if strings.TrimSpace(item.UserID) == "" {
+		item.Scope = assistant.ThreadStateScopeSession
+	}
 	item.Status = assistant.ThreadStateStatus(status)
 	item.CreatedAt = time.Unix(0, createdAtNS)
 	item.UpdatedAt = time.Unix(0, updatedAtNS)
 	item.ExpiresAt = time.Unix(0, expiresAtNS)
 	return item, nil
+}
+
+func normalizeThreadStateStorageScope(scope assistant.ThreadStateScope, userID string) (assistant.ThreadStateScope, string, error) {
+	userID = strings.TrimSpace(userID)
+	if scope == "" {
+		scope = assistant.ThreadStateScopeUser
+	}
+	switch scope {
+	case assistant.ThreadStateScopeUser:
+		if userID == "" {
+			return "", "", fmt.Errorf("thread state user scope requires user id")
+		}
+		return scope, userID, nil
+	case assistant.ThreadStateScopeSession:
+		return scope, "", nil
+	default:
+		return "", "", fmt.Errorf("invalid thread state scope %q", scope)
+	}
 }
