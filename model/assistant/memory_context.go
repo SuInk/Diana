@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -116,7 +117,8 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	}
 	ranked := rankStructuredMemories(items, event, queryText, time.Now())
 	r.touchRetrievedMemories(ctx, store, ranked)
-	text, usage := formatStructuredMemoryContextWithTokenBudget(profile, policy, ranked, memoryBudget)
+	text, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, ranked, memoryBudget)
+	r.recordRetrievedMemoryContext(ctx, event, selected)
 	// 候选是存储层捞回来的全部，排序阶段（相关性门槛 + MMR 条数上限）先砍一刀，
 	// token 配额再砍一刀。两刀以前都不留痕，于是「记忆没提到某件事」既可能是没
 	// 检索到，也可能是检索到了但没装下，日志里分不出来。
@@ -128,6 +130,28 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 		usage.Reason = contextLayerReasonRankCap
 	}
 	return text, usage
+}
+
+func (r *Runtime) recordRetrievedMemoryContext(ctx context.Context, event MessageEvent, items []StructuredMemoryItem) {
+	writer := r.appLogWriter()
+	if writer == nil || strings.TrimSpace(event.MessageID) == "" || len(items) == 0 {
+		return
+	}
+	memories := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		memories = append(memories, map[string]any{
+			"id": item.ID, "kind": item.Kind, "topic": item.Topic, "entity": item.Entity,
+			"content": item.Content, "source_type": item.SourceType, "scope_key": item.ScopeKey,
+			"source_group_id": item.SourceGroupID, "source_message_id": item.SourceMessageID,
+			"visibility": item.Visibility, "sensitive": item.Sensitive,
+			"confidence": item.Confidence, "importance": item.Importance,
+			"retrieval_score": item.RetrievalScore, "retrieval_reason": item.RetrievalReason,
+		})
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindDebug, Level: applog.LevelInfo, Action: "diana.memory.retrieved", Message: "长期记忆已进入本轮上下文", Target: event.MessageID, Metadata: map[string]any{
+		"platform": event.Platform, "profile_id": event.ProfileID, "group_id": event.GroupID,
+		"user_id": event.UserID, "message_id": event.MessageID, "memories": memories,
+	}})
 }
 
 // touchRetrievedMemories 把命中回写成 last_verified_at。回写失败不影响本轮回复，
@@ -300,6 +324,11 @@ func formatStructuredMemoryContext(profile UserMemoryProfile, policy Relationshi
 }
 
 func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage) {
+	text, usage, _ := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, items, tokenBudget)
+	return text, usage
+}
+
+func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage, []StructuredMemoryItem) {
 	var builder strings.Builder
 	displayName := strings.TrimSpace(profile.DisplayName)
 	if displayName == "" {
@@ -358,6 +387,7 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 		RankedItems: len(items),
 		Reason:      contextLayerReasonFits,
 	}
+	selected := make([]StructuredMemoryItem, 0, len(items))
 	cutAtSection := -1
 sectionsLoop:
 	for sectionIndex, section := range sections {
@@ -378,6 +408,7 @@ sectionsLoop:
 			}
 			builder.WriteString(line)
 			usage.SelectedItems++
+			selected = append(selected, item)
 		}
 	}
 	// 分段有固定顺序，前面几条长记忆就能让后面整段一条不剩。日志里「这段本来
@@ -403,7 +434,7 @@ sectionsLoop:
 	usage.CandidateTokens = usage.RankedTokens
 	text := strings.TrimSpace(builder.String())
 	usage.SelectedTokens = llm.EstimateTextTokens(text)
-	return text, usage
+	return text, usage, selected
 }
 
 func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, tokenBudget int64) string {

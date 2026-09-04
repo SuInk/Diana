@@ -140,6 +140,17 @@ func TestStructuredMemoryRankingExcludesUnrelatedFacts(t *testing.T) {
 	}
 }
 
+func TestStructuredMemoryDetailedFormatterReturnsOnlyInjectedItems(t *testing.T) {
+	items := []StructuredMemoryItem{
+		{ID: "short", Kind: MemoryKindFact, Topic: "饮食", Content: "喜欢清淡口味", Confidence: 0.95},
+		{ID: "long", Kind: MemoryKindFact, Topic: "超长", Content: strings.Repeat("很长的记忆内容", 500), Confidence: 0.95},
+	}
+	_, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(UserMemoryProfile{UserID: "user-1"}, RelationshipPolicy{Name: "初识"}, items, 300)
+	if usage.SelectedItems != 1 || len(selected) != 1 || selected[0].ID != "short" {
+		t.Fatalf("usage=%#v selected=%#v", usage, selected)
+	}
+}
+
 func TestStructuredMemoryRankingDoesNotInjectUnrelatedSafetyEpisode(t *testing.T) {
 	now := time.Now()
 	items := []StructuredMemoryItem{

@@ -157,6 +157,36 @@ WHERE id = 'ignored'
 	}
 }
 
+func TestAttachInboundEventMemoriesMatchesExactBotAndConversation(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	for _, entry := range []applog.Entry{
+		{Action: "diana.memory.retrieved", Target: "same-message", Metadata: map[string]any{
+			"message_id": "same-message", "profile_id": "bot-a", "group_id": "group-1", "user_id": "user-1",
+			"memories": []map[string]any{{"id": "memory-a", "kind": "fact", "topic": "住址", "content": "住在杭州", "confidence": 0.96}},
+		}},
+		{Action: "diana.memory.retrieved", Target: "same-message", Metadata: map[string]any{
+			"message_id": "same-message", "profile_id": "bot-b", "group_id": "group-1", "user_id": "user-1",
+			"memories": []map[string]any{{"id": "memory-b", "kind": "fact", "content": "不应串到另一台机器人"}},
+		}},
+	} {
+		if err := store.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events := []InboundEventDetail{{MessageID: "same-message", ProfileID: "bot-a", GroupID: "group-1", UserID: "user-1"}}
+	if err := store.attachInboundEventMemories(ctx, events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events[0].Memories) != 1 || events[0].Memories[0].ID != "memory-a" || events[0].Memories[0].Content != "住在杭州" {
+		t.Fatalf("memories = %#v", events[0].Memories)
+	}
+}
+
 func TestListInboundEventDetailsRendersStructuredImagesInsteadOfCQText(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-images.db"))
