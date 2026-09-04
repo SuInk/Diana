@@ -840,8 +840,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === "/api/assistant/events") {
     const result = url.searchParams.get("result") ?? "all";
-    const events = demoEvents.filter((event) => result === "all" || (result === "replied" && event.decision === "replied") || (result === "not_replied" && event.decision === "not_replied") || event.decision === result);
-    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: 652, filtered_total: result === "all" ? 652 : result === "replied" ? 50 : result === "not_replied" ? 602 : 0, replied: 50, not_replied: 602, pending: 0, errors: 0, llm_calls: 49, input_tokens: 232_773, output_tokens: 10_732, total_tokens: 243_505, page: 1, limit: 50, has_more: false,
+    const keyword = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+    const events = demoEvents
+      .filter((event) => result === "all" || (result === "replied" && event.decision === "replied") || (result === "not_replied" && event.decision === "not_replied") || event.decision === result)
+      // 演示里也让搜索可用，否则输入框看着能用、敲下去却毫无反应。
+      .filter((event) => keyword === "" || [event.text, event.reply, event.sender_name, event.message_id].some((field) => (field ?? "").toLowerCase().includes(keyword)));
+    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: keyword ? events.length : 652, filtered_total: keyword ? events.length : (result === "all" ? 652 : result === "replied" ? 50 : result === "not_replied" ? 602 : 0),
+      // 搜索之后各项计数要跟着这批结果走，否则会出现「1 条事件、回复率 5000%」
+      // 这种一眼假的数字。
+      replied: keyword ? events.filter((event) => event.decision === "replied").length : 50,
+      not_replied: keyword ? events.filter((event) => event.decision === "not_replied").length : 602,
+      pending: 0, errors: 0, llm_calls: 49, input_tokens: 232_773, output_tokens: 10_732, total_tokens: 243_505, page: 1, limit: 50, has_more: false,
       // 演示里也带上会话筛选器：以前这里没有 groups，下拉框永远只有「全部会话」，
       // 看不出真实排版。
       group: url.searchParams.get("group") ?? "",
@@ -853,6 +862,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       })),
       // 私聊也要出现在会话筛选器里：它们没有群号，以前整类都进不了这个下拉。
       user: url.searchParams.get("user") ?? "",
+      query: url.searchParams.get("q") ?? "",
       private_chats: [
         { user_id: "880024", user_name: "Demo User", events: 46, bot_profile_id: "bot-telegram" },
         { user_id: "100200711", user_name: "青禾", events: 12, bot_profile_id: "bot-onebot" }

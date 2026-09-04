@@ -142,3 +142,65 @@ VALUES (?, ?, ?, 'tg-profile', ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?)
 		}
 	}
 }
+
+// 事件多起来之后翻页找一条消息是不现实的，搜索要能覆盖正文、回复和消息号。
+func TestListInboundEventDetailsSearch(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-search.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+	insert := func(id, payload, reply string) {
+		t.Helper()
+		if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, available_at, attempts, status, reply_text, created_at, updated_at)
+VALUES (?, 'group:1', 'group', 'p1', '1', 'u1', ?, ?, ?, 0, ?, 0, ?, ?, ?, ?)
+`, id, id, now.Unix(), payload, now.Unix(), inboundStatusDone, reply, now.Unix(), now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("msg-alpha", `{"text":"帮我看看发布变更","sender_name":"青禾"}`, "已整理今天的变更")
+	insert("msg-beta", `{"text":"今天天气不错","sender_name":"栖迟"}`, "确实")
+	insert("msg-pct", `{"text":"命中率 100% 了","sender_name":"远野"}`, "")
+
+	search := func(term string) []string {
+		t.Helper()
+		page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Search: term})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(page.Events))
+		for _, event := range page.Events {
+			ids = append(ids, event.MessageID)
+		}
+		return ids
+	}
+
+	if got := search("发布变更"); len(got) != 1 || got[0] != "msg-alpha" {
+		t.Fatalf("search by message text = %v", got)
+	}
+	if got := search("青禾"); len(got) != 1 || got[0] != "msg-alpha" {
+		t.Fatalf("search by sender name = %v", got)
+	}
+	if got := search("已整理"); len(got) != 1 || got[0] != "msg-alpha" {
+		t.Fatalf("search by reply text = %v", got)
+	}
+	if got := search("msg-beta"); len(got) != 1 || got[0] != "msg-beta" {
+		t.Fatalf("search by message id = %v", got)
+	}
+	if got := search("不存在的词"); len(got) != 0 {
+		t.Fatalf("search with no match = %v", got)
+	}
+
+	// % 和 _ 是 LIKE 的通配符：不转义的话「100%」会退化成「以 100 开头」，
+	// 把不该匹配的事件也捞出来。
+	if got := search("100%"); len(got) != 1 || got[0] != "msg-pct" {
+		t.Fatalf("search with a literal percent sign = %v", got)
+	}
+	if got := search("%"); len(got) != 1 || got[0] != "msg-pct" {
+		t.Fatalf("a bare percent must match only the event that contains one, got %v", got)
+	}
+}

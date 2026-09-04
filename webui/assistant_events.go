@@ -58,6 +58,8 @@ type assistantEventsResponse struct {
 	// Group 是当前筛选的群号，Groups 是这个时间范围内可选的群。
 	Group  string                    `json:"group,omitempty"`
 	Groups []assistantEventGroupItem `json:"groups"`
+	// Query 是当前的搜索词，回传给前端用于保持输入框与结果一致。
+	Query string `json:"query,omitempty"`
 	// User 是当前筛选的私聊对象，PrivateChats 是这个时间范围内可选的私聊。
 	// 会话筛选器原来只有群，私聊事件在里面完全没有入口。
 	User         string                            `json:"user,omitempty"`
@@ -239,6 +241,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 	}
 	groupID := strings.TrimSpace(c.Query("group"))
 	userID := strings.TrimSpace(c.Query("user"))
+	search := strings.TrimSpace(c.Query("q"))
 	profileID := strings.TrimSpace(c.Query("profile"))
 	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), storage.InboundEventQuery{
 		Since:     since,
@@ -247,6 +250,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Result:    resultFilter,
 		GroupID:   groupID,
 		UserID:    userID,
+		Search:    search,
 		ProfileID: profileID,
 	})
 	if err != nil {
@@ -354,6 +358,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Group:        groupID,
 		Groups:       []assistantEventGroupItem{},
 		User:         userID,
+		Query:        search,
 		PrivateChats: []storage.InboundEventPrivateChat{},
 	}
 	if chats, err := h.sqlite.ListInboundEventPrivateChats(c.Request.Context(), since, botProfileScope(c)); err == nil {

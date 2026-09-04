@@ -33,6 +33,18 @@
               @update:model-value="(value) => selectGroup(String(value))"
             />
           </div>
+          <div class="event-filter-chip event-search">
+            <Search :size="15" aria-hidden="true" />
+            <input
+              v-model="searchDraft"
+              type="search"
+              class="input event-search-input"
+              placeholder="搜索消息、回复或消息号"
+              aria-label="搜索事件"
+              @keyup.enter="applySearch"
+              @search="applySearch"
+            />
+          </div>
           <button class="btn event-filter-refresh" type="button" :disabled="loading" @click="load(true)">
             <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
             刷新
@@ -396,6 +408,7 @@ import {
   MessageCircleOff,
   MessageCircleReply,
   RefreshCw,
+  Search,
   Sigma,
   Send,
   TimerReset,
@@ -444,6 +457,10 @@ const resultOptions: Array<{ value: AssistantEventResultFilter; label: string }>
 const selectedRange = ref<AssistantEventRange>("24h");
 const selectedResult = ref<AssistantEventResultFilter>("all");
 const selectedGroup = ref("");
+// 搜索按回车提交，不做输入即查：事件表没有全文索引，每敲一个字就查一次
+// 既慢又会把结果刷得跳来跳去。
+const searchDraft = ref("");
+const searchTerm = ref("");
 
 // 换了机器人就重新拉：事件按 profile 在服务端过滤，前端筛没有意义（分页会漏）。
 watch(botScope, () => {
@@ -699,6 +716,7 @@ async function load(reset: boolean): Promise<void> {
   const requestedRange = selectedRange.value;
   const requestedResult = selectedResult.value;
   const requestedGroup = selectedGroup.value;
+  const requestedSearch = searchTerm.value;
   if (reset) {
     loading.value = true;
     page.value = 1;
@@ -714,7 +732,8 @@ async function load(reset: boolean): Promise<void> {
       50,
       requestedGroup.startsWith(USER_PREFIX) ? "" : requestedGroup.replace(GROUP_PREFIX, ""),
       botScope.value,
-      requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : ""
+      requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : "",
+      requestedSearch
     );
     if (generation !== loadGeneration) return;
     response.value = next;
@@ -748,6 +767,15 @@ function selectRange(value: AssistantEventRange): void {
 function selectResult(value: AssistantEventResultFilter): void {
   if (selectedResult.value === value) return;
   selectedResult.value = value;
+  events.value = [];
+  response.value = null;
+  void load(true);
+}
+
+function applySearch(): void {
+  const next = searchDraft.value.trim();
+  if (next === searchTerm.value) return;
+  searchTerm.value = next;
   events.value = [];
   response.value = null;
   void load(true);
@@ -1152,7 +1180,8 @@ async function syncLiveEvents(): Promise<void> {
       50,
       selectedGroup.value.startsWith(USER_PREFIX) ? "" : selectedGroup.value.replace(GROUP_PREFIX, ""),
       botScope.value,
-      selectedGroup.value.startsWith(USER_PREFIX) ? selectedSessionID.value : ""
+      selectedGroup.value.startsWith(USER_PREFIX) ? selectedSessionID.value : "",
+      searchTerm.value
     );
     if (currentView.value !== "events" || isReadingBelowTop()) {
       pendingLiveEvents.value = true;
@@ -1223,6 +1252,19 @@ onBeforeUnmount(() => {
 .event-filter-chip > svg {
   flex: none;
   color: var(--muted);
+}
+
+.event-search {
+  flex: 1 1 200px;
+  max-width: 320px;
+}
+
+.event-search-input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .event-filter-refresh {
