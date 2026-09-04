@@ -93,17 +93,23 @@
         </div>
       </section>
 
-      <div class="stat-grid event-stats">
-        <StatCard label="范围内事件" :value="formatNumber(summary.total)" :foot="eventBreakdown">
-          <template #icon><MessageCircle :size="14" aria-hidden="true" /></template>
-        </StatCard>
-        <StatCard label="Token 总量" :value="formatNumber(summary.total_tokens)" :foot="tokenBreakdown">
-          <template #icon><Sigma :size="14" aria-hidden="true" /></template>
-        </StatCard>
-        <StatCard label="生成速率" :value="throughputText" :foot="throughputFoot">
-          <template #icon><Gauge :size="14" aria-hidden="true" /></template>
-        </StatCard>
-      </div>
+      <p class="event-stats-line">
+        <span>
+          <MessageCircle :size="13" aria-hidden="true" />
+          <strong>{{ formatNumber(summary.total) }}</strong> 条事件
+          <span class="muted">{{ eventBreakdown }}</span>
+        </span>
+        <span>
+          <Sigma :size="13" aria-hidden="true" />
+          Token <strong>{{ formatNumber(summary.total_tokens) }}</strong>
+          <span class="muted">{{ tokenBreakdown }}</span>
+        </span>
+        <span>
+          <Gauge :size="13" aria-hidden="true" />
+          <strong>{{ throughputText }}</strong>
+          <span class="muted">{{ throughputFoot }}</span>
+        </span>
+      </p>
 
       <section class="card event-detail-card">
         <div class="card-header">
@@ -416,7 +422,6 @@ import { currentView } from "../router";
 import { stream } from "../stream";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
-import StatCard from "../components/StatCard.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 
 const rangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
@@ -1182,40 +1187,34 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
-/* 卡片被拉得很宽，内容却全挤在左上角，右边一大片空着。字号和内边距保持原样，
-   改成数值与脚注同行：横向空白被脚注填上，卡片也随之变矮，首屏能多留给事件。 */
-.event-stats :deep(.stat-card) {
-  display: grid;
-  grid-template-areas:
-    "label label"
-    "value foot";
-  grid-template-columns: auto minmax(0, 1fr);
+/* 这几个数字是参考值，卡片给它们的分量太重了：一张卡就要一百多像素高，
+   而首屏本来该留给下面的事件列表。压成一行文字，需要时扫一眼就够。 */
+.event-stats-line {
+  display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  column-gap: 12px;
+  margin: 0;
+  gap: 4px 18px;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
-.event-stats :deep(.stat-label) {
-  grid-area: label;
+.event-stats-line > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
 }
 
-.event-stats :deep(.stat-value) {
-  grid-area: value;
+.event-stats-line svg {
+  align-self: center;
+  flex: none;
+  color: var(--muted);
 }
 
-.event-stats :deep(.stat-foot) {
-  grid-area: foot;
-  line-height: 1.45;
-}
-
-/* 窄屏放不下并排，退回上下堆叠，别把脚注挤成一列字。 */
-@media (max-width: 900px) {
-  .event-stats :deep(.stat-card) {
-    grid-template-areas:
-      "label"
-      "value"
-      "foot";
-    grid-template-columns: minmax(0, 1fr);
-  }
+.event-stats-line strong {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
 }
 
 .event-group-filter {
