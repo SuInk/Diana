@@ -112,29 +112,14 @@
       </section>
 
       <div class="stat-grid event-stats">
-        <StatCard label="范围内事件" :value="formatNumber(summary.total)" :foot="rangeDescription">
+        <StatCard label="范围内事件" :value="formatNumber(summary.total)" :foot="eventBreakdown">
           <template #icon><MessageCircle :size="14" aria-hidden="true" /></template>
-        </StatCard>
-        <StatCard label="已回复" :value="formatNumber(summary.replied)" :foot="replyRate">
-          <template #icon><MessageCircleReply :size="14" aria-hidden="true" /></template>
-        </StatCard>
-        <StatCard label="未回复" :value="formatNumber(summary.not_replied)" :foot="`${formatNumber(summary.pending)} 条等待处理`">
-          <template #icon><MessageCircleOff :size="14" aria-hidden="true" /></template>
-        </StatCard>
-        <StatCard label="处理异常" :value="formatNumber(summary.errors)" foot="包含处理失败与投递失败">
-          <template #icon><TriangleAlert :size="14" aria-hidden="true" /></template>
-        </StatCard>
-        <StatCard label="通知事件" :value="formatNumber(summary.notices)" foot="包含群聊与私聊撤回">
-          <template #icon><Bell :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="Token 总量" :value="formatNumber(summary.total_tokens)" :foot="tokenBreakdown">
           <template #icon><Sigma :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="生成速率" :value="throughputText" :foot="throughputFoot">
           <template #icon><Gauge :size="14" aria-hidden="true" /></template>
-        </StatCard>
-        <StatCard label="缓存命中率" :value="cacheHitRateText" :foot="cacheHitFoot">
-          <template #icon><DatabaseZap :size="14" aria-hidden="true" /></template>
         </StatCard>
       </div>
 
@@ -413,12 +398,10 @@ import { botScope } from "../bot-scope";
 import type { Component } from "vue";
 import {
   Activity,
-  Bell,
   Bug,
   CheckCircle2,
   ChevronDown,
   Clock3,
-  DatabaseZap,
   Gauge,
   Filter,
   ImageOff,
@@ -561,14 +544,25 @@ const resultCountText = computed(() => {
   return `${prefix} ${formatNumber(events.value.length)} / ${formatNumber(filteredTotal.value)}`;
 });
 const emptyStateTitle = computed(() => selectedResult.value === "all" ? "当前范围没有事件" : `当前范围没有${selectedResultLabel.value}事件`);
-const replyRate = computed(() => {
+// 按状态拆开的计数（已回复 / 未回复 / 等待处理 / 异常 / 通知）在上面的筛选标签里
+// 已经逐项列出，而且点了还能筛。这里只补标签给不出的东西：统计范围和回复率。
+const eventBreakdown = computed(() => {
   const messageTotal = summary.value.total - summary.value.notices;
-  if (messageTotal <= 0) return "暂无处理记录";
-  return `回复率 ${Math.round((summary.value.replied / messageTotal) * 100)}%`;
+  if (messageTotal <= 0) return `${rangeDescription.value} · 暂无处理记录`;
+  const rate = Math.round((summary.value.replied / messageTotal) * 100);
+  const parts = [rangeDescription.value, `回复率 ${rate}%`];
+  if (summary.value.pending > 0) parts.push(`${formatNumber(summary.value.pending)} 条等待处理`);
+  return parts.join(" · ");
 });
-const tokenBreakdown = computed(() =>
-  `输入 ${formatNumber(summary.value.input_tokens)} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用`
-);
+const tokenBreakdown = computed(() => {
+  const cached = cacheHitRate(summary.value.cached_input_tokens, summary.value.input_tokens);
+  // 缓存命中率原本独占一张卡，但它的分母就是这里的「输入」，拆成两张只是把同一个
+  // 数字写两遍。挂在输入后面，命中多少一眼就能对上。
+  const input = cached === null
+    ? `输入 ${formatNumber(summary.value.input_tokens)}`
+    : `输入 ${formatNumber(summary.value.input_tokens)}（缓存命中 ${Math.round(cached * 100)}%）`;
+  return `${input} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用`;
+});
 
 // 速率算的是输出 token / 模型墙钟耗时。这里不叫 TTFT——回复链路走的是非流式
 // Generate，整份回复一次到达，没有「首 token」这个时刻可测。
@@ -579,7 +573,8 @@ const throughputText = computed(() => {
 
 const throughputFoot = computed(() => {
   if (summary.value.llm_duration_ms <= 0) return "当前范围没有模型调用";
-  const base = `模型耗时 ${formatDurationMS(summary.value.llm_duration_ms)} · 输出 ${formatNumber(summary.value.output_tokens)} token`;
+  // 输出 token 总量在上一张卡里，这里不再重复，只留速率本身的分母和 TTFT。
+  const base = `模型耗时 ${formatDurationMS(summary.value.llm_duration_ms)}`;
   // TTFT 只有开了流式、且底层没退化成非流式时才有样本；没样本就不提，
   // 免得显示成「首 token 0ms」这种看着正常实际是缺数据的东西。
   if (summary.value.ttft_calls > 0) {
@@ -605,18 +600,6 @@ function cacheHitRate(cached: number, input: number): number | null {
   if (input <= 0) return null;
   return Math.min(1, cached / input);
 }
-
-const cacheHitRateText = computed(() => {
-  const rate = cacheHitRate(summary.value.cached_input_tokens, summary.value.input_tokens);
-  if (rate === null) return "—";
-  return `${Math.round(rate * 100)}%`;
-});
-
-const cacheHitFoot = computed(() => {
-  if (summary.value.input_tokens <= 0) return "当前范围没有模型调用";
-  if (summary.value.cached_input_tokens <= 0) return "当前范围没有命中前缀缓存";
-  return `命中 ${formatNumber(summary.value.cached_input_tokens)} / 输入 ${formatNumber(summary.value.input_tokens)}`;
-});
 
 function eventCacheHitText(event: AssistantEventDetail): string {
   const rate = cacheHitRate(event.cached_input_tokens || 0, event.input_tokens || 0);
