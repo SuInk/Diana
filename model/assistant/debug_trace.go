@@ -175,6 +175,7 @@ func sanitizeDebugThreadStateToolCalls(calls []llm.ToolCall) []llm.ToolCall {
 		}
 		cloned[index].Arguments = map[string]any{
 			"operation": strings.TrimSpace(configToolString(call.Arguments, "operation")),
+			"scope":     strings.TrimSpace(configToolString(call.Arguments, "scope")),
 			"task_kind": strings.TrimSpace(configToolString(call.Arguments, "task_kind")),
 		}
 	}

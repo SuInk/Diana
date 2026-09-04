@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,5 +113,74 @@ func TestThreadStateIsolationAndExpiry(t *testing.T) {
 	}
 	if status != string(assistant.ThreadStateExpired) || stateJSON != "{}" {
 		t.Fatalf("expired row status=%q state=%q", status, stateJSON)
+	}
+}
+
+func TestThreadStateSessionScopeSharesGomokuAcrossPlayers(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "thread-state-shared-gomoku.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	now := time.Unix(1_788_506_520, 0)
+	created, err := store.PutThreadState(context.Background(), assistant.ThreadStatePutRequest{
+		ProfileID: "bot-1", Session: "group:1", UserID: "player-a", Scope: assistant.ThreadStateScopeSession,
+		TaskKind: "game.gomoku", State: json.RawMessage(`{"moves":[{"color":"black","point":"H8"}],"next":"white"}`),
+		Now: now, ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Scope != assistant.ThreadStateScopeSession || created.UserID != "" || created.Version != 1 {
+		t.Fatalf("created shared state = %#v", created)
+	}
+
+	items, err := store.ListActiveThreadStates(context.Background(), "bot-1", "group:1", "player-b", now.Add(time.Minute), 4)
+	if err != nil || len(items) != 1 || items[0].ID != created.ID || !strings.Contains(string(items[0].State), `"point":"H8"`) {
+		t.Fatalf("player B shared state = %#v, err=%v", items, err)
+	}
+	updated, err := store.PutThreadState(context.Background(), assistant.ThreadStatePutRequest{
+		ProfileID: "bot-1", Session: "group:1", UserID: "player-b", Scope: assistant.ThreadStateScopeSession,
+		TaskKind: "game.gomoku", State: json.RawMessage(`{"moves":[{"color":"black","point":"H8"},{"color":"white","point":"I8"}],"next":"black"}`),
+		ExpectedVersion: 1, Now: now.Add(2 * time.Minute), ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil || updated.ID != created.ID || updated.Version != 2 {
+		t.Fatalf("player B update = %#v, err=%v", updated, err)
+	}
+	_, err = store.PutThreadState(context.Background(), assistant.ThreadStatePutRequest{
+		ProfileID: "bot-1", Session: "group:1", UserID: "player-c", Scope: assistant.ThreadStateScopeSession,
+		TaskKind: "game.gomoku", State: json.RawMessage(`{"moves":[]}`),
+		Now: now.Add(3 * time.Minute), ExpiresAt: now.Add(time.Hour),
+	})
+	if !errors.Is(err, assistant.ErrThreadStateVersionConflict) {
+		t.Fatalf("unversioned shared update error = %v", err)
+	}
+	_, err = store.PutThreadState(context.Background(), assistant.ThreadStatePutRequest{
+		ProfileID: "bot-1", Session: "group:1", UserID: "player-c", Scope: assistant.ThreadStateScopeSession,
+		TaskKind: "game.gomoku", State: json.RawMessage(`{"moves":[]}`), ExpectedVersion: 1,
+		Now: now.Add(4 * time.Minute), ExpiresAt: now.Add(time.Hour),
+	})
+	if !errors.Is(err, assistant.ErrThreadStateVersionConflict) {
+		t.Fatalf("stale shared update error = %v", err)
+	}
+	ended, err := store.EndThreadState(context.Background(), assistant.ThreadStateEndRequest{
+		ProfileID: "bot-1", Session: "group:1", UserID: "player-c", Scope: assistant.ThreadStateScopeSession,
+		TaskKind: "game.gomoku", ExpectedVersion: 2, Status: assistant.ThreadStateCompleted, Now: now.Add(5 * time.Minute),
+	})
+	if err != nil || ended.ID != created.ID || ended.Status != assistant.ThreadStateCompleted {
+		t.Fatalf("player C complete = %#v, err=%v", ended, err)
+	}
+	for _, player := range []string{"player-a", "player-b", "player-c"} {
+		items, err = store.ListActiveThreadStates(context.Background(), "bot-1", "group:1", player, now.Add(6*time.Minute), 4)
+		if err != nil || len(items) != 0 {
+			t.Fatalf("completed shared state visible to %s: %#v, err=%v", player, items, err)
+		}
+	}
+	var rows int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM thread_states WHERE session='group:1' AND task_kind='game.gomoku'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		t.Fatalf("gomoku created %d parallel state rows", rows)
 	}
 }
