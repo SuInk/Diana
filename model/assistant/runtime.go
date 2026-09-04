@@ -5341,6 +5341,27 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 	if !ok {
 		return nil, nil
 	}
+	routes := append([]ModelRole{role}, role.Fallbacks...)
+	profiles := make([]llm.Profile, 0, len(routes))
+	seen := map[string]bool{}
+	for _, route := range routes {
+		candidates, err := profilesForModelRole(set, route)
+		if err != nil {
+			return nil, err
+		}
+		for _, profile := range candidates {
+			key := profile.ID + "\x00" + profile.Config.Model
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			profiles = append(profiles, profile)
+		}
+	}
+	return profiles, nil
+}
+
+func profilesForModelRole(set llm.ProfileSet, role ModelRole) ([]llm.Profile, error) {
 	if role.Group != "" {
 		profiles := set.GroupProfiles(role.Group)
 		if len(profiles) == 0 {
@@ -5362,6 +5383,10 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 			return nil, fmt.Errorf("diana: model role group %q has no provider supporting model %q (incompatible profiles: %s)", role.Group, role.Model, strings.Join(skipped, ", "))
 		}
 		return candidates, nil
+	}
+	if role.ProviderID != "" && role.ModelID != "" {
+		role.ProfileID = role.ProviderID
+		role.Model = role.ModelID
 	}
 	for _, profile := range set.Profiles {
 		if profile.ID != role.ProfileID {

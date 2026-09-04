@@ -489,9 +489,34 @@
                   :options="modelOptionsFor(role.key)"
                   @update:model-value="(value) => setRoleModel(role.key, value)"
                 />
+                <button
+                  class="btn icon ghost"
+                  type="button"
+                  title="添加后备路由"
+                  :disabled="!roleForm[role.key]"
+                  @click="addRoleFallback(role.key)"
+                >
+                  <Plus :size="16" aria-hidden="true" />
+                </button>
+                <template v-for="(fallback, index) in roleForm[role.key]?.fallbacks ?? []" :key="`${role.key}-fallback-${index}`">
+                  <span class="model-role-label muted">后备 {{ index + 1 }}</span>
+                  <AppSelect
+                    :model-value="routeSelectionValue(fallback)"
+                    :options="channelOptionsFor(role.key)"
+                    @update:model-value="(value) => setFallbackChannel(role.key, index, value)"
+                  />
+                  <AppSelect
+                    :model-value="fallback.model"
+                    :options="modelOptionsFor(role.key, fallback)"
+                    @update:model-value="(value) => setFallbackModel(role.key, index, value)"
+                  />
+                  <button class="btn icon ghost" type="button" title="删除后备路由" @click="removeRoleFallback(role.key, index)">
+                    <Trash2 :size="16" aria-hidden="true" />
+                  </button>
+                </template>
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                视觉理解与意图识别未分配时跟随「对话」；图片生成未分配时使用对话提供商的生图配置。
+                主路由故障时按后备顺序切换；后备可使用不同分组和模型。视觉理解与意图识别未分配时跟随「对话」。
               </p>
             </div>
           </section>
@@ -2258,6 +2283,8 @@ async function updateContextIsolation(enabled: boolean): Promise<void> {
 
 // —— 模型分配 ——
 type RoleKey = "chat" | "vision" | "intent" | "image";
+type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string };
+type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
 const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
   { key: "chat", label: "对话", fallbackHint: "使用「提供商」页的激活配置" },
   { key: "vision", label: "视觉理解", fallbackHint: "跟随对话模型" },
@@ -2265,7 +2292,7 @@ const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
   { key: "image", label: "图片生成", fallbackHint: "跟随对话提供商的生图模型" }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
-const roleForm = ref<Partial<Record<RoleKey, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>>>({});
+const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
 
 // 下拉里分组选项用 group: 前缀编码，与单渠道的 profile id 区分。
 const GROUP_PREFIX = "group:";
@@ -2367,8 +2394,7 @@ function modelHint(model: LLMModelInfo, compatibility: ModelCompatibility, prefi
   return [prefix, capability].filter(Boolean).join(" · ");
 }
 
-function modelsForRole(profile: LLMConfig, role: RoleKey): { model: LLMModelInfo; compatibility: ModelCompatibility }[] {
-  const current = roleForm.value[role];
+function modelsForRole(profile: LLMConfig, role: RoleKey, current: RoleRoute | undefined = roleForm.value[role]): { model: LLMModelInfo; compatibility: ModelCompatibility }[] {
   const profileIsSelected = current?.group
     ? (profile.group?.trim() || "default") === current.group
     : Boolean(current?.profile_id && profile.id === current.profile_id);
@@ -2414,8 +2440,7 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   return base;
 }
 
-function selectedRoleProfiles(role: RoleKey): LLMConfig[] {
-  const selection = roleForm.value[role];
+function selectedRoleProfiles(role: RoleKey, selection: RoleRoute | undefined = roleForm.value[role]): LLMConfig[] {
   if (!selection) return [];
   if (selection.group) {
     return llmChannels.value.filter((channel) => (channel.group?.trim() || "default") === selection.group);
@@ -2449,15 +2474,15 @@ function crossProviderModelOptions(role: RoleKey): AppSelectOption[] {
   return options;
 }
 
-function modelOptionsFor(role: RoleKey): AppSelectOption[] {
-  const profiles = selectedRoleProfiles(role);
+function modelOptionsFor(role: RoleKey, selection: RoleRoute | undefined = roleForm.value[role]): AppSelectOption[] {
+  const profiles = selectedRoleProfiles(role, selection);
   if (profiles.length === 0) {
     return crossProviderModelOptions(role);
   }
   const models = new Map<string, { model: LLMModelInfo; compatibility: ModelCompatibility }>();
   for (const profile of profiles) {
     const seen = new Set<string>();
-    for (const { model, compatibility } of modelsForRole(profile, role)) {
+    for (const { model, compatibility } of modelsForRole(profile, role, selection)) {
       if (seen.has(model.id)) continue;
       seen.add(model.id);
       const current = models.get(model.id);
@@ -2527,11 +2552,12 @@ function roleModelValue(role: RoleKey): string {
 }
 
 function roleSelectionValue(role: RoleKey): string {
-  const current = roleForm.value[role];
-  if (!current) {
-    return "";
-  }
-  return current.group ? GROUP_PREFIX + current.group : (current.profile_id ?? "");
+  return routeSelectionValue(roleForm.value[role]);
+}
+
+function routeSelectionValue(route?: RoleRoute): string {
+  if (!route) return "";
+  return route.group ? GROUP_PREFIX + route.group : (route.profile_id ?? "");
 }
 
 function setRoleChannel(role: RoleKey, value: string): void {
@@ -2539,16 +2565,57 @@ function setRoleChannel(role: RoleKey, value: string): void {
     delete roleForm.value[role];
     return;
   }
-  const model = roleForm.value[role]?.model ?? "";
+  const current = roleForm.value[role];
+  const model = current?.model ?? "";
+  const fallbacks = current?.fallbacks;
   if (value.startsWith(GROUP_PREFIX)) {
-    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model };
+    roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks };
   } else {
-    roleForm.value[role] = { profile_id: value, model };
+    roleForm.value[role] = { profile_id: value, model, fallbacks };
   }
   const options = modelOptionsFor(role).filter((option) => option.value !== "");
   if (!roleModelIsSelectable(role, model)) {
     roleForm.value[role]!.model = options.find((option) => roleModelIsSelectable(role, option.value))?.value ?? "";
   }
+}
+
+function addRoleFallback(role: RoleKey): void {
+  const assignment = roleForm.value[role];
+  if (!assignment) return;
+  assignment.fallbacks ??= [];
+  assignment.fallbacks.push({ model: "" });
+}
+
+function removeRoleFallback(role: RoleKey, index: number): void {
+  roleForm.value[role]?.fallbacks?.splice(index, 1);
+}
+
+function setFallbackChannel(role: RoleKey, index: number, value: string): void {
+  const route = roleForm.value[role]?.fallbacks?.[index];
+  if (!route) return;
+  delete route.profile_id;
+  delete route.group;
+  delete route.provider_id;
+  delete route.model_id;
+  if (value.startsWith(GROUP_PREFIX)) route.group = value.slice(GROUP_PREFIX.length);
+  else route.profile_id = value;
+  const options = modelOptionsFor(role, route).filter((option) => option.value !== "");
+  if (!selectedRoleProfiles(role, route).some((profile) => profileCanRouteRoleModel(profile, role, route.model))) {
+    route.model = options[0]?.value ?? "";
+  }
+}
+
+function setFallbackModel(role: RoleKey, index: number, value: string): void {
+  const route = roleForm.value[role]?.fallbacks?.[index];
+  if (!route) return;
+  if (value.includes(MODEL_PAIR_SEP)) {
+    const [profileID, model] = value.split(MODEL_PAIR_SEP);
+    route.profile_id = profileID;
+    delete route.group;
+    route.model = model;
+    return;
+  }
+  route.model = value;
 }
 
 function roleModelIsSelectable(role: RoleKey, modelID: string): boolean {
@@ -2569,7 +2636,7 @@ function setRoleModel(role: RoleKey, value: string): void {
   if (value.includes(MODEL_PAIR_SEP)) {
     // 跨 Provider 选择：一次确定 Provider 和模型。
     const [profileID, model] = value.split(MODEL_PAIR_SEP);
-    roleForm.value[role] = { profile_id: profileID, model };
+    roleForm.value[role] = { profile_id: profileID, model, fallbacks: roleForm.value[role]?.fallbacks };
     return;
   }
   if (!value) {
@@ -2637,7 +2704,14 @@ function setForm(config: BotProfileConfig): void {
   tokenRevealed.value = emptyRevealState();
   const roles: typeof roleForm.value = {};
   for (const [key, role] of Object.entries(config.model_roles ?? {})) {
-		roles[key as RoleKey] = { profile_id: role.profile_id, group: role.group, model: role.model, provider_id: role.provider_id, model_id: role.model_id };
+		roles[key as RoleKey] = {
+      profile_id: role.profile_id,
+      group: role.group,
+      model: role.model,
+      provider_id: role.provider_id,
+      model_id: role.model_id,
+      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
+    };
   }
   roleForm.value = roles;
 }
@@ -2781,13 +2855,30 @@ async function save(): Promise<void> {
       toastError(`${row.label}模型 ${role.model.trim()} 与当前提供商配置不兼容，请重新选择`);
       return;
     }
+    for (const [index, fallback] of (role.fallbacks ?? []).entries()) {
+      if ((!fallback.profile_id && !fallback.group && !(fallback.provider_id && fallback.model_id)) || !fallback.model.trim()) {
+        toastError(`${row.label}后备 ${index + 1} 尚未完整选择`);
+        return;
+      }
+      if (!fallback.provider_id && !fallback.model_id && !selectedRoleProfiles(row.key, fallback).some((profile) => profileCanRouteRoleModel(profile, row.key, fallback.model.trim()))) {
+        toastError(`${row.label}后备 ${index + 1} 的模型与所选提供商不兼容`);
+        return;
+      }
+    }
   }
   busy.value = true;
   try {
     const modelRoles: BotProfileConfig["model_roles"] = {};
     for (const [key, role] of Object.entries(roleForm.value)) {
 		if (role && (role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()) {
-			modelRoles[key] = { profile_id: role.profile_id, group: role.group, model: role.model.trim(), provider_id: role.provider_id, model_id: role.model_id };
+			modelRoles[key] = {
+        profile_id: role.profile_id,
+        group: role.group,
+        model: role.model.trim(),
+        provider_id: role.provider_id,
+        model_id: role.model_id,
+        fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() }))
+      };
       }
     }
     // 草稿为空表示「没改过」，字段留空提交，后端会沿用已存的那份；填了才覆盖。
