@@ -259,6 +259,55 @@ func TestRegistryModelRoleGroupKeepsStreamingDuringFailover(t *testing.T) {
 	}
 }
 
+func TestRegistryModelRolesKeepDifferentProvidersAcrossGroups(t *testing.T) {
+	chat := &retryRegistryAdapter{succeedAt: 1, response: "chat provider"}
+	intent := &retryRegistryAdapter{succeedAt: 1, response: "intent provider"}
+	registry := llm.NewProviderRegistry()
+	for _, item := range []struct {
+		providerID string
+		modelID    string
+		adapter    llm.LLMAdapter
+	}{
+		{providerID: "chat-provider", modelID: "chat-model", adapter: chat},
+		{providerID: "intent-provider", modelID: "intent-model", adapter: intent},
+	} {
+		if err := registry.RegisterProvider(llm.ProviderDefinition{ID: item.providerID, Name: item.providerID, Protocol: llm.ProtocolOpenAIResponses, Enabled: true}, item.adapter); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterModel(llm.ModelDefinition{ID: item.providerID + ":" + item.modelID, ProviderID: item.providerID, ModelID: item.modelID, Name: item.modelID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profiles := llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "chat-provider", Group: "chat-route", Config: llm.ProviderConfig{Model: "chat-model", Models: []llm.ModelInfo{{ID: "chat-model"}}}},
+		{ID: "intent-provider", Group: "intent-route", Config: llm.ProviderConfig{Model: "intent-model", Models: []llm.ModelInfo{{ID: "intent-model"}}}},
+	}}
+	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
+		"chat":   {Group: "chat-route", Model: "chat-model"},
+		"intent": {Group: "intent-route", Model: "intent-model"},
+	}}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: profiles}, nil, nil, nil)
+	runtime.SetLLMProviderRegistry(registry)
+
+	run := func(provider LLMProvider) (string, error) {
+		response, err := provider.Generate(context.Background(), llm.GenerateRequest{})
+		if err != nil {
+			return "", err
+		}
+		return response.Text, nil
+	}
+	chatResult, err := runtime.runLLMProvider(context.Background(), run)
+	if err != nil || chatResult != "chat provider" {
+		t.Fatalf("chat result=%q err=%v", chatResult, err)
+	}
+	intentResult, err := runtime.runLLMRouterProviderOnce(context.Background(), run)
+	if err != nil || intentResult != "intent provider" {
+		t.Fatalf("intent result=%q err=%v", intentResult, err)
+	}
+	if chat.calls != 1 || intent.calls != 1 {
+		t.Fatalf("chat calls=%d intent calls=%d", chat.calls, intent.calls)
+	}
+}
+
 func TestRegistryRouterRetryPolicyHonorsCallerMode(t *testing.T) {
 	t.Run("retry", func(t *testing.T) {
 		adapter := &retryRegistryAdapter{succeedAt: 2}
