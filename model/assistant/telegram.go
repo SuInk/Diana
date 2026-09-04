@@ -241,12 +241,31 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 
 // Send 把统一的出站消息翻译成 Bot API 调用。
 func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
+	_, err := c.SendWithResult(ctx, msg)
+	return err
+}
+
+// SendWithResult 发送消息并把 Telegram 返回的 Message 交回上层。
+//
+// 上层靠这个返回值拿到平台侧的 message_id，把 Diana 自己这条发言连同 ID 记进历史
+// （见 rememberOutgoingWithMessageID）。不实现这个接口的话，出站消息会以空 ID 入库，
+// 于是别人「引用 Diana 刚说的那句话」时按 ID 回查必然落空——Diana 完全看不到自己
+// 被引用了什么。
+func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
 	chatID := strings.TrimSpace(msg.GroupID)
 	if chatID == "" {
 		chatID = strings.TrimSpace(msg.UserID)
 	}
 	if chatID == "" {
-		return fmt.Errorf("telegram: missing chat id")
+		return nil, fmt.Errorf("telegram: missing chat id")
+	}
+	// 一次投递可能发出正文和若干媒体。回查引用时对得上的是正文那条，所以以它为准；
+	// 纯媒体消息才退而用第一条媒体的返回值。
+	var first map[string]any
+	keep := func(result map[string]any) {
+		if first == nil && len(result) > 0 {
+			first = result
+		}
 	}
 
 	if text := strings.TrimSpace(msg.Text); text != "" {
@@ -274,22 +293,28 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 			// 被回复的消息可能已删除，这时仍然把消息发出去。
 			params["allow_sending_without_reply"] = true
 		}
-		if _, err := c.CallAPI(ctx, "sendMessage", params); err != nil {
-			return err
+		result, err := c.CallAPI(ctx, "sendMessage", params)
+		if err != nil {
+			return nil, err
 		}
+		keep(result)
 	}
 
 	for _, image := range msg.ImageURLs {
-		if err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendPhoto", "photo", image); err != nil {
-			return err
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendPhoto", "photo", image)
+		if err != nil {
+			return nil, err
 		}
+		keep(result)
 	}
 	for _, video := range msg.VideoURLs {
-		if err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendVideo", "video", video); err != nil {
-			return err
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendVideo", "video", video)
+		if err != nil {
+			return nil, err
 		}
+		keep(result)
 	}
-	return nil
+	return first, nil
 }
 
 // SendTextDraft uses Telegram's native draft API. Telegram currently exposes
@@ -336,10 +361,10 @@ func (c *TelegramChannel) SendChatAction(ctx context.Context, msg OutgoingMessag
 
 // sendMedia 发送单个媒体。远程 URL 直接交给 Telegram 去拉，本地文件走
 // multipart 上传——Telegram 拉不到我们本机的 /media/resolver 地址。
-func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string) error {
+func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string) (map[string]any, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
-		return nil
+		return nil, nil
 	}
 	path := telegramLocalPath(source)
 	if path == "" {
@@ -347,15 +372,14 @@ func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, metho
 		if threadID = strings.TrimSpace(threadID); threadID != "" {
 			params["message_thread_id"] = threadID
 		}
-		_, err := c.CallAPI(ctx, method, params)
-		return err
+		return c.CallAPI(ctx, method, params)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("telegram: read media: %w", err)
+		return nil, fmt.Errorf("telegram: read media: %w", err)
 	}
 	if info.Size() > telegramMaxUploadBytes {
-		return fmt.Errorf("telegram: 媒体 %.1fMB 超过 Bot API 50MB 上传限制", float64(info.Size())/(1<<20))
+		return nil, fmt.Errorf("telegram: 媒体 %.1fMB 超过 Bot API 50MB 上传限制", float64(info.Size())/(1<<20))
 	}
 	return c.uploadMedia(ctx, method, chatID, threadID, field, path)
 }
@@ -377,45 +401,52 @@ func telegramLocalPath(source string) string {
 	return ""
 }
 
-func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threadID, field, path string) error {
+func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threadID, field, path string) (map[string]any, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("telegram: open media: %w", err)
+		return nil, fmt.Errorf("telegram: open media: %w", err)
 	}
 	defer file.Close()
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	if err := writer.WriteField("chat_id", chatID); err != nil {
-		return err
+		return nil, err
 	}
 	if threadID = strings.TrimSpace(threadID); threadID != "" {
 		if err := writer.WriteField("message_thread_id", threadID); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	part, err := writer.CreateFormFile(field, filepath.Base(path))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := io.Copy(part, file); err != nil {
-		return err
+		return nil, err
 	}
 	if err := writer.Close(); err != nil {
-		return err
+		return nil, err
 	}
 
 	endpoint, err := c.methodURL(method)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	_, err = c.do(req)
-	return err
+	raw, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{}
+	if len(raw) == 0 || json.Unmarshal(raw, &out) != nil {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // CallAPI 透传任意 Bot API 方法，返回 result 字段解出的 map。
@@ -725,6 +756,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		MessageThreadID: telegramOptionalID(msg.MessageThreadID),
 		RawMessage:      text,
 		Segments:        segments,
+		Quoted:          telegramQuotedMessage(msg.ReplyTo),
 	}
 
 	switch msg.Chat.Type {
@@ -927,4 +959,47 @@ func telegramMentionEntities(mentions []dianaMentionSpan) []map[string]any {
 		return nil
 	}
 	return entities
+}
+
+// telegramQuotedMessage 把 reply_to_message 里内联的引用内容直接填成 Quoted。
+//
+// OneBot 只给一个消息 id，引用内容得回头再查一次（get_msg）；Telegram 不一样，
+// 它在同一条更新里就把被引用消息的正文和发送者一并送来了。上游此前只取了 id、
+// 把内容丢掉，于是引用还原完全依赖「这条消息 Diana 以前见过并存过」——被引用的
+// 是重启前的旧消息、或超出保留范围的消息时就还原不出来，模型自然没法针对引用
+// 做语义分析。既然内容是白给的，就不该扔掉再去查。
+func telegramQuotedMessage(reply *telegramMessage) *QuotedMessage {
+	if reply == nil || reply.MessageID == 0 {
+		return nil
+	}
+	text := reply.Text
+	if text == "" {
+		text = reply.Caption
+	}
+	quoted := &QuotedMessage{
+		MessageID:  strconv.FormatInt(reply.MessageID, 10),
+		SenderName: telegramDisplayName(reply.From),
+		RawMessage: text,
+	}
+	if reply.From != nil {
+		quoted.UserID = strconv.FormatInt(reply.From.ID, 10)
+	}
+	if reply.Chat != nil && reply.Chat.Type != "private" {
+		quoted.GroupID = strconv.FormatInt(reply.Chat.ID, 10)
+	}
+	if text != "" {
+		quoted.Segments = append(quoted.Segments, MessageSegment{Type: "text", Data: map[string]string{"text": text}})
+	}
+	// 引用的是图片时留下一个可见的占位，否则模型只看到空引用，会以为对方引了个寂寞。
+	if len(reply.Photo) > 0 {
+		photo := reply.Photo[len(reply.Photo)-1]
+		quoted.Segments = append(quoted.Segments, MessageSegment{Type: "image", Data: map[string]string{
+			"file_id":   photo.FileID,
+			"file_size": strconv.FormatInt(photo.FileSize, 10),
+		}})
+	}
+	if len(quoted.Segments) == 0 && quoted.RawMessage == "" && quoted.SenderName == "" {
+		return nil
+	}
+	return quoted
 }
