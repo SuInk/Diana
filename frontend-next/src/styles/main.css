@@ -326,6 +326,8 @@ code {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+  /* 窄栏位里放长群名时，没有这个会把箭头挤出按钮外面。 */
+  min-width: 0;
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius, 10px);
@@ -341,7 +343,18 @@ code {
   border-color: var(--accent);
 }
 
+/* 选中项太长时截断，而不是把按钮撑破。完整名字在展开的菜单里看得到。 */
+.app-select-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app-select-chevron {
+  flex: 0 0 auto;
   color: var(--muted);
   transition: transform 0.15s ease;
 }
@@ -351,11 +364,11 @@ code {
 }
 
 .app-select-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  z-index: 60;
+  /* 定位交给组件按触发器位置算：菜单挂在 body 上，脱离了会裁剪它的滚动容器。
+     z-index 必须压过 .modal-backdrop(80)，否则在弹窗里会被盖住。 */
+  position: fixed;
+  z-index: 120;
+  width: max-content;
   display: flex;
   flex-direction: column;
   padding: 4px;
@@ -372,6 +385,7 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 7px 10px;
   border: none;
   border-radius: calc(var(--radius, 10px) - 4px);
@@ -400,6 +414,14 @@ code {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  min-width: 0;
+}
+
+.app-select-item-text,
+.app-select-item-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-select-item-label small {

@@ -64,7 +64,7 @@ function selectProfile(index: number, profileID: string): void {
   update(index, { profile_id: profileID, platform: String(profile?.platform ?? ""), target_id: "" });
 }
 function groupOptions(profileID: string) { return (groups.value[profileID] ?? []).filter(item => item.joined).map(item => ({ value: item.group_id, label: item.group_name ? `${item.group_name} · ${item.group_id}` : item.group_id })); }
-function platformLabel(platform: string): string { return ({ onebot_v11: "QQ", telegram: "Telegram", "qq-official": "QQ 官方", dingtalk: "钉钉", feishu: "飞书", wecom: "企业微信" } as Record<string, string>)[platform] ?? platform; }
+function platformLabel(platform: string): string { return ({ "onebot-v11": "QQ", telegram: "Telegram", "qq-official": "QQ 官方", dingtalk: "钉钉", feishu: "飞书", wecom: "企业微信" } as Record<string, string>)[platform] ?? platform; }
 </script>
 
 <style scoped>
