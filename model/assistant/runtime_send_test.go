@@ -390,6 +390,48 @@ func TestSystemPromptInjectsRulesTimeAndSender(t *testing.T) {
 	}
 }
 
+func TestSystemPromptInjectsOnlyCurrentPlatformOutputRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform string
+		want     string
+		unwanted string
+	}{
+		{name: "onebot", platform: PlatformOneBotV11, want: "OneBot v11 消息不渲染 Markdown", unwanted: "不要声称当前窗口不支持 Markdown"},
+		{name: "telegram", platform: PlatformTelegram, want: "当前聊天平台是 Telegram", unwanted: "OneBot v11 消息不渲染 Markdown"},
+		{name: "dingtalk", platform: PlatformDingTalk, want: "当前聊天平台是 钉钉", unwanted: "OneBot v11 消息不渲染 Markdown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := NewRuntime(BotConfig{Platform: test.platform}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
+			if !strings.Contains(prompt, test.want) || strings.Contains(prompt, test.unwanted) {
+				t.Fatalf("platform prompt mismatch:\n%s", prompt)
+			}
+		})
+	}
+}
+
+func TestSystemPromptUsesPlaintextOverrideOnlyWhenEnabled(t *testing.T) {
+	on, off := true, false
+	for _, test := range []struct {
+		name string
+		flag *bool
+		want bool
+	}{
+		{name: "enabled", flag: &on, want: true},
+		{name: "disabled", flag: &off, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := NewRuntime(BotConfig{Platform: PlatformTelegram, MarkdownToPlain: test.flag, PromptPlaintextRulesText: "只发自定义纯文本"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
+			if got := strings.Contains(prompt, "只发自定义纯文本"); got != test.want {
+				t.Fatalf("custom plaintext present=%t, want %t:\n%s", got, test.want, prompt)
+			}
+		})
+	}
+}
+
 func TestSystemPromptUsesCustomTemplates(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		SystemPrompt:              "自定义人设",

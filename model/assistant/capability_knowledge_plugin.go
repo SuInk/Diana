@@ -31,7 +31,9 @@ type CapabilityKnowledgePlugin struct {
 }
 
 type dianaCapabilitiesTool struct {
-	plugin *CapabilityKnowledgePlugin
+	plugin        *CapabilityKnowledgePlugin
+	platform      string
+	platformRules string
 }
 
 type capabilityDocument struct {
@@ -56,7 +58,7 @@ func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          capabilityKnowledgePluginID,
 		Name:        "能力知识库",
-		Version:     "0.1.2",
+		Version:     "0.1.3",
 		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
 		Official:    true,
 		BuiltIn:     true,
@@ -76,14 +78,38 @@ func (p *CapabilityKnowledgePlugin) AgentTools() []agent.Tool {
 	return []agent.Tool{&dianaCapabilitiesTool{plugin: p}}
 }
 
+func capabilityToolForConfig(tool agent.Tool, cfg BotConfig) agent.Tool {
+	capabilities, ok := tool.(*dianaCapabilitiesTool)
+	if !ok {
+		return tool
+	}
+	clone := *capabilities
+	clone.platform = NormalizePlatformID(cfg.Platform)
+	clone.platformRules = platformOutputRulesForConfig(cfg)
+	return &clone
+}
+
 func (p *CapabilityKnowledgePlugin) setPluginStateProvider(provider func() []PluginState) {
 	p.mu.Lock()
 	p.stateProvider = provider
 	p.mu.Unlock()
 }
 
-func (p *CapabilityKnowledgePlugin) documents() []capabilityDocument {
+func (p *CapabilityKnowledgePlugin) documents(platform, platformRules string) []capabilityDocument {
 	documents := append([]capabilityDocument(nil), coreCapabilityDocuments...)
+	if platform = NormalizePlatformID(platform); platform != "" {
+		name := platform
+		if def, ok := PlatformByID(platform); ok {
+			name = def.Name
+		}
+		documents = append(documents, capabilityDocument{
+			ID:      "runtime:platform-output",
+			Title:   "当前聊天平台与消息格式",
+			Content: fmt.Sprintf("当前会话运行在 %s。%s", name, strings.TrimSpace(platformRules)),
+			Source:  "runtime",
+			Enabled: true,
+		})
+	}
 	p.mu.RLock()
 	provider := p.stateProvider
 	p.mu.RUnlock()
@@ -91,10 +117,20 @@ func (p *CapabilityKnowledgePlugin) documents() []capabilityDocument {
 		return documents
 	}
 	for _, state := range provider() {
+		if platform != "" && !pluginSupportsPlatform(state.Manifest, platform) {
+			continue
+		}
+		note := ""
+		if state.Manifest.PlatformNotes != nil {
+			note = strings.TrimSpace(state.Manifest.PlatformNotes[platform])
+		}
+		if note != "" {
+			note = " 当前平台说明：" + note
+		}
 		documents = append(documents, capabilityDocument{
 			ID:      "plugin:" + state.Manifest.ID,
 			Title:   state.Manifest.Name,
-			Content: fmt.Sprintf("插件 %s，版本 %s。%s。权限：%s。安装=%t，启用=%t。", state.Manifest.ID, state.Manifest.Version, state.Manifest.Description, strings.Join(state.Manifest.Permissions, "、"), state.Installed, state.Enabled),
+			Content: fmt.Sprintf("插件 %s，版本 %s。%s。权限：%s。安装=%t，启用=%t。%s", state.Manifest.ID, state.Manifest.Version, state.Manifest.Description, strings.Join(state.Manifest.Permissions, "、"), state.Installed, state.Enabled, note),
 			Source:  "plugin_manifest",
 			Enabled: state.Installed && state.Enabled,
 		})
@@ -134,7 +170,7 @@ func (t *dianaCapabilitiesTool) Run(_ context.Context, input map[string]any) (st
 	if limit > maximumCapabilityResultLimit {
 		limit = maximumCapabilityResultLimit
 	}
-	hits := retrieveCapabilityDocuments(query, t.plugin.documents(), limit)
+	hits := retrieveCapabilityDocuments(query, t.plugin.documents(t.platform, t.platformRules), limit)
 	body, err := json.MarshalIndent(map[string]any{
 		"ok":      true,
 		"action":  "retrieved",

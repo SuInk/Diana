@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -72,4 +73,24 @@ func markdownToPlainForConfig(cfg BotConfig) bool {
 		return *cfg.MarkdownToPlain
 	}
 	return !PlatformSupportsRichText(cfg.Platform)
+}
+
+// platformOutputRulesForConfig 只描述当前机器人实际采用的出站格式，避免把另一平台
+// 的限制塞进模型上下文。自定义纯文本规则仍然保留，但只在本轮确实会降级时注入。
+func platformOutputRulesForConfig(cfg BotConfig) string {
+	if markdownToPlainForConfig(cfg) {
+		return strings.TrimSpace(cfg.PromptPlaintextRulesText)
+	}
+	def, ok := PlatformByID(cfg.Platform)
+	if ok && def.RichText {
+		return fmt.Sprintf("当前聊天平台是 %s，出站适配器会把支持的 Markdown 转成平台富文本；可以自然使用加粗、斜体、标题、列表、链接和代码等格式，具体不兼容项会由适配器自动降级。不要声称当前窗口不支持 Markdown。", def.Name)
+	}
+	name := strings.TrimSpace(cfg.Platform)
+	if ok {
+		name = def.Name
+	}
+	if name == "" {
+		name = "当前平台"
+	}
+	return fmt.Sprintf("当前聊天平台是 %s，当前配置会保留 Markdown 原始标记并交给下游客户端处理；不要把其他平台的 Markdown 规则套到这里。", name)
 }

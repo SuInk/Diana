@@ -94,6 +94,12 @@
           <!-- 别的内置插件装好就在跑，这张卡片的开关却是关的。不说一句，
                看起来就像是它坏了。 -->
           <span v-if="plugin.manifest.default_disabled" class="badge">默认关闭</span>
+          <span
+            v-for="platform in pluginPlatformBadges(plugin)"
+            :key="platform.id"
+            class="badge"
+            :title="platform.note || `支持 ${platform.label}`"
+          >{{ platform.label }}</span>
           <span class="badge mono">v{{ plugin.manifest.version }}</span>
         </div>
 
@@ -809,6 +815,28 @@ function pluginDisplayName(plugin: PluginState): string {
 function pluginDisplayDescription(plugin: PluginState): string {
   if (plugin.manifest.id !== repositoryWatchPluginID) return plugin.manifest.description;
   return "统一管理 GitHub Token、仓库更新订阅和按仓库的 Issue 能力；草稿与运行记录在设置中的“运行记录”页查看。";
+}
+
+const pluginPlatformLabels: Record<string, string> = {
+  "onebot-v11": "OneBot",
+  telegram: "Telegram",
+  "qq-official": "QQ 官方",
+  dingtalk: "钉钉",
+  feishu: "飞书",
+  wecom: "企业微信"
+};
+
+function pluginPlatformBadges(plugin: PluginState): Array<{ id: string; label: string; note: string }> {
+  const platforms = plugin.manifest.platforms ?? [];
+  if (platforms.length === 0) return [];
+  if (platforms.length === Object.keys(pluginPlatformLabels).length) {
+    return [{ id: "all", label: "全平台", note: "支持当前已接入的全部聊天平台" }];
+  }
+  return platforms.map((id) => ({
+    id,
+    label: pluginPlatformLabels[id] ?? id,
+    note: plugin.manifest.platform_notes?.[id] ?? ""
+  }));
 }
 
 type PluginLayout = "tiles" | "rows";

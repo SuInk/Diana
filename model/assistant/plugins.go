@@ -41,9 +41,68 @@ type PluginManifest struct {
 	// DefaultDisabled 标记「随包发布但默认不开」的内置插件。内置只说明它跟着
 	// 程序一起装好、不能卸载，不代表所有人都想要它——会自己开口说话的功能尤其
 	// 如此，装完就生效等于替用户做了决定。用户开过一次之后由存下来的状态说了算。
-	DefaultDisabled bool                `json:"default_disabled,omitempty"`
-	Permissions     []string            `json:"permissions,omitempty"`
-	Settings        []PluginSettingSpec `json:"settings,omitempty"`
+	DefaultDisabled bool `json:"default_disabled,omitempty"`
+	// Platforms 是插件完整支持的聊天平台。空值表示未声明，供旧版和第三方插件
+	// 保持兼容；内置插件必须显式列出，WebUI 和能力知识库据此展示当前平台能力。
+	Platforms     []string            `json:"platforms,omitempty"`
+	PlatformNotes map[string]string   `json:"platform_notes,omitempty"`
+	Permissions   []string            `json:"permissions,omitempty"`
+	Settings      []PluginSettingSpec `json:"settings,omitempty"`
+}
+
+func allPluginPlatforms() []string {
+	platforms := SupportedPlatforms()
+	ids := make([]string, 0, len(platforms))
+	for _, platform := range platforms {
+		ids = append(ids, platform.ID)
+	}
+	return ids
+}
+
+func pluginSupportsPlatform(manifest PluginManifest, platform string) bool {
+	if len(manifest.Platforms) == 0 {
+		return true
+	}
+	return slices.Contains(manifest.Platforms, NormalizePlatformID(platform))
+}
+
+func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
+	if !manifest.BuiltIn || len(manifest.Platforms) > 0 {
+		return manifest
+	}
+	manifest.Platforms = allPluginPlatforms()
+	switch manifest.ID {
+	case oneBotV11PluginID, musicPluginID, voiceTTSPluginID:
+		manifest.Platforms = []string{PlatformOneBotV11}
+	}
+	switch manifest.ID {
+	case messageHistoryPluginID:
+		manifest.PlatformNotes = map[string]string{
+			PlatformOneBotV11: "支持历史、引用、撤回和原始合并转发恢复。",
+			PlatformTelegram:  "支持历史和引用；撤回通知及 OneBot 合并转发恢复不可用。",
+		}
+	case fileParserPluginID:
+		manifest.PlatformNotes = map[string]string{
+			PlatformOneBotV11: "支持普通附件及仅提供 file_id 的群文件。",
+			PlatformTelegram:  "支持带可下载地址的 Telegram 附件。",
+		}
+	case resolverPluginID:
+		manifest.PlatformNotes = map[string]string{
+			PlatformOneBotV11: "支持媒体直发和合并转发。",
+			PlatformTelegram:  "支持图片、视频和文字直发，不使用 OneBot 合并转发。",
+		}
+	case voiceSTTPluginID:
+		manifest.PlatformNotes = map[string]string{
+			PlatformOneBotV11: "支持 OneBot record 语音段。",
+			PlatformTelegram:  "支持已转换为 record 段的 Telegram 语音消息。",
+		}
+	case stickerPluginID:
+		manifest.PlatformNotes = map[string]string{
+			PlatformOneBotV11: "支持历史图片和表情素材。",
+			PlatformTelegram:  "支持 Telegram sticker 媒体入库与发送。",
+		}
+	}
+	return manifest
 }
 
 type PluginState struct {
@@ -225,7 +284,7 @@ func NewPluginManager(plugins ...Plugin) *PluginManager {
 		states:  map[string]PluginState{},
 	}
 	for _, plugin := range plugins {
-		manifest := plugin.Manifest()
+		manifest := withBuiltinPlatformSupport(plugin.Manifest())
 		manager.catalog[manifest.ID] = plugin
 		// 内置插件默认安装并启用，普通插件后续可以通过安装接口改变状态。
 		// 声明了 DefaultDisabled 的内置插件照样装好，但初始是关的。
@@ -517,7 +576,7 @@ func (m *PluginManager) Install(id string) (PluginState, error) {
 		return PluginState{}, ErrPluginNotFound
 	}
 	state := m.states[id]
-	state.Manifest = plugin.Manifest()
+	state.Manifest = withBuiltinPlatformSupport(plugin.Manifest())
 	if state.Manifest.BuiltIn {
 		return state, ErrBuiltInPluginAction
 	}
@@ -536,7 +595,7 @@ func (m *PluginManager) Uninstall(id string) (PluginState, error) {
 		return PluginState{}, ErrPluginNotFound
 	}
 	state := m.states[id]
-	state.Manifest = plugin.Manifest()
+	state.Manifest = withBuiltinPlatformSupport(plugin.Manifest())
 	if state.Manifest.BuiltIn {
 		return state, ErrBuiltInPluginAction
 	}
@@ -564,7 +623,7 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 	if !ok {
 		return PluginState{}, ErrPluginNotFound
 	}
-	manifest := plugin.Manifest()
+	manifest := withBuiltinPlatformSupport(plugin.Manifest())
 	if len(manifest.Settings) == 0 {
 		return PluginState{}, fmt.Errorf("diana: plugin %q has no configurable settings", id)
 	}
@@ -618,7 +677,7 @@ func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error)
 		return PluginState{}, ErrPluginNotFound
 	}
 	state := m.states[id]
-	state.Manifest = plugin.Manifest()
+	state.Manifest = withBuiltinPlatformSupport(plugin.Manifest())
 	if !state.Installed {
 		return state, fmt.Errorf("diana: plugin %q is not installed", id)
 	}
@@ -647,7 +706,7 @@ func (m *PluginManager) CanAskAgent(id string, enabledOverrides map[string]bool,
 	if override, overridden := enabledOverrides[id]; overridden {
 		enabled = override
 	}
-	manifest := plugin.Manifest()
+	manifest := withBuiltinPlatformSupport(plugin.Manifest())
 	settings := effectivePluginSettingsForGroup(manifest.Settings, state.Settings, settingOverrides[id])
 	return state.Installed && enabled && manifest.CanAskAgent && settings.Bool(pluginSettingAskAgent, true)
 }
@@ -679,7 +738,7 @@ func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginReq
 		if override, ok := enabledOverrides[id]; ok {
 			enabled = override
 		}
-		if state.Installed && enabled {
+		if state.Installed && enabled && pluginSupportsPlatform(state.Manifest, req.Event.Platform) {
 			plugins = append(plugins, runnable{
 				id:      id,
 				builtIn: state.Manifest.BuiltIn,
@@ -753,7 +812,7 @@ func (m *PluginManager) RunOneWithGroupOverrides(ctx context.Context, id string,
 	}
 	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id])
 	m.mu.RUnlock()
-	if !ok || !state.Installed || !enabled {
+	if !ok || !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, req.Event.Platform) {
 		return nil, nil
 	}
 	req.Settings = settings
@@ -769,6 +828,11 @@ func (m *PluginManager) AgentToolsWithOverrides(overrides map[string]bool) ([]ag
 // AgentToolsWithGroupOverrides resolves plugin settings for the current
 // conversation before constructing event-bound tools.
 func (m *PluginManager) AgentToolsWithGroupOverrides(enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) ([]agent.Tool, error) {
+	return m.AgentToolsForPlatformWithGroupOverrides("", enabledOverrides, settingOverrides)
+}
+
+// AgentToolsForPlatformWithGroupOverrides 只注册当前聊天平台可用的插件工具。
+func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) ([]agent.Tool, error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -790,7 +854,7 @@ func (m *PluginManager) AgentToolsWithGroupOverrides(enabledOverrides map[string
 		if override, ok := enabledOverrides[id]; ok {
 			enabled = override
 		}
-		if !state.Installed || !enabled {
+		if !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, platform) {
 			continue
 		}
 		providers = append(providers, provider{
@@ -823,7 +887,7 @@ func (m *PluginManager) AgentToolsWithGroupOverrides(enabledOverrides map[string
 		if override, overridden := enabledOverrides[id]; overridden {
 			enabled = override
 		}
-		if state.Installed && enabled {
+		if state.Installed && enabled && pluginSupportsPlatform(state.Manifest, platform) {
 			legacyProviders = append(legacyProviders, provider)
 		}
 	}
