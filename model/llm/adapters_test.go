@@ -1143,6 +1143,47 @@ func TestOpenAICompatibleResponsesAPIAcceptsEventStream(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleResponsesStreamRecoversFunctionNameFromOutputItem(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.output_item.added\n"))
+		_, _ = w.Write([]byte(`data: {"type":"response.output_item.added","output_index":0,"sequence_number":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"agent_x2e_finalize","arguments":"","status":"in_progress"}}` + "\n\n"))
+		_, _ = w.Write([]byte("event: response.function_call_arguments.done\n"))
+		// 复现 Sub2API：done 事件有完整参数，但缺少标准要求的 name。
+		_, _ = w.Write([]byte(`data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"sequence_number":2,"arguments":"{\"content\":\"完成\"}"}` + "\n\n"))
+		_, _ = w.Write([]byte("event: response.completed\n"))
+		_, _ = w.Write([]byte(`data: {"type":"response.completed","sequence_number":3,"response":{"id":"resp_1","object":"response","created_at":1,"model":"gpt-test","output":[],"status":"completed","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}` + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider: ProviderOpenAICompatible,
+		APIKey:   "test-key",
+		BaseURL:  server.URL + "/v1",
+		Model:    "gpt-test",
+	}, server.Client())
+	events, err := client.Stream(context.Background(), GenerateRequest{
+		Messages: []Message{{Role: RoleUser, Content: "finish"}},
+		Tools:    []ToolDefinition{{Name: "agent.finalize", Parameters: map[string]any{"type": "object"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var call *ToolCall
+	for event := range events {
+		if event.Type == ChatEventError {
+			t.Fatalf("stream error: %s", event.Error)
+		}
+		if event.Type == ChatEventToolCall {
+			call = event.ToolCall
+		}
+	}
+	if call == nil || call.Name != "agent.finalize" || call.Arguments["content"] != "完成" {
+		t.Fatalf("tool call = %#v", call)
+	}
+}
+
 // TestOpenAICompatibleResponsesAPIAcceptsChatCompletionEventStream 验证兼容 Chat Completions 风格 SSE。
 func TestOpenAICompatibleResponsesAPIAcceptsChatCompletionEventStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
