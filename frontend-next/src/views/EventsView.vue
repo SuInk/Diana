@@ -178,63 +178,6 @@
                 </template>
               </div>
 
-              <section v-if="event.memories?.length" class="event-memories" aria-label="本轮调用的长期记忆">
-                <button
-                  class="event-memory-toggle"
-                  type="button"
-                  :aria-expanded="memoriesOpen[event.id] ? 'true' : 'false'"
-                  @click="toggleMemories(event.id)"
-                >
-                  <ChevronDown :size="13" :class="{ 'trace-chevron-open': memoriesOpen[event.id] }" aria-hidden="true" />
-                  本轮调用的长期记忆（{{ event.memories.length }}）
-                  <span v-if="!memoriesOpen[event.id]" class="event-memory-peek muted">{{ memoryPeek(event.memories) }}</span>
-                </button>
-                <div v-if="memoriesOpen[event.id]" class="event-memory-list">
-                  <article v-for="memory in event.memories" :key="memory.id || `${memory.kind}:${memory.content}`" class="event-memory-item">
-                    <div class="event-memory-head">
-                      <span class="badge">{{ memoryKindLabel(memory.kind) }}</span>
-                      <strong>{{ memory.topic || memory.entity || "未命名记忆" }}</strong>
-                      <span v-if="memory.sensitive" class="badge warn">敏感</span>
-                    </div>
-                    <p>{{ memory.content }}</p>
-                    <div class="event-memory-meta muted mono">
-                      <span v-if="memory.source_type">来源 {{ memory.source_type }}</span>
-                      <span v-if="memory.visibility">可见性 {{ memory.visibility }}</span>
-                      <span v-if="memory.source_group_id">来源群 {{ memory.source_group_id }}</span>
-                      <span v-if="memory.confidence">置信度 {{ formatMemoryScore(memory.confidence) }}</span>
-                      <span v-if="memory.retrieval_score">召回分 {{ memory.retrieval_score.toFixed(3) }}</span>
-                    </div>
-                  </article>
-                </div>
-              </section>
-
-              <section v-if="event.temporary_memories?.length" class="event-memories temporary" aria-label="本轮调用的临时记忆">
-                <button
-                  class="event-memory-toggle"
-                  type="button"
-                  :aria-expanded="temporaryMemoriesOpen[event.id] ? 'true' : 'false'"
-                  @click="toggleTemporaryMemories(event.id)"
-                >
-                  <ChevronDown :size="13" :class="{ 'trace-chevron-open': temporaryMemoriesOpen[event.id] }" aria-hidden="true" />
-                  本轮调用的临时记忆（{{ event.temporary_memories.length }}）
-                </button>
-                <div v-if="temporaryMemoriesOpen[event.id]" class="event-memory-list">
-                  <article v-for="memory in event.temporary_memories" :key="memory.id || `${memory.kind}:${memory.task_kind || memory.topic || ''}`" class="event-memory-item">
-                    <div class="event-memory-head">
-                      <span class="badge">{{ temporaryMemoryKindLabel(memory.kind) }}</span>
-                      <span v-if="memory.scope" class="badge">{{ memory.scope === "session" ? "会话共享" : "用户私有" }}</span>
-                      <strong>{{ memory.task_kind || memory.topic || "当前会话状态" }}</strong>
-                      <span v-if="memory.version" class="badge">v{{ memory.version }}</span>
-                    </div>
-                    <pre>{{ temporaryMemoryContent(memory.content) }}</pre>
-                    <div class="event-memory-meta muted mono">
-                      <span v-if="memory.expires_at">到期 {{ formatDate(memory.expires_at) }}</span>
-                      <span v-if="memory.source_message_id">来源消息 {{ memory.source_message_id }}</span>
-                    </div>
-                  </article>
-                </div>
-              </section>
-
               <div v-if="!isNoticeEvent(event)" class="event-decision" :class="decisionClass(event)">
                 <component :is="decisionIcon(event)" :size="16" aria-hidden="true" />
                 <div>
@@ -293,6 +236,62 @@
                 </button>
 
                 <div v-if="traceOpen[event.id]" class="debug-trace-panel">
+                  <section v-if="event.memories?.length" class="event-memories" aria-label="本轮调用的长期记忆">
+                    <button
+                      class="event-memory-toggle"
+                      type="button"
+                      :aria-expanded="memoriesOpen[event.id] ? 'true' : 'false'"
+                      @click="toggleMemories(event.id)"
+                    >
+                      <ChevronDown :size="13" :class="{ 'trace-chevron-open': memoriesOpen[event.id] }" aria-hidden="true" />
+                      本轮调用的长期记忆（{{ event.memories.length }}）
+                      <span v-if="!memoriesOpen[event.id]" class="event-memory-peek muted">{{ memoryPeek(event.memories) }}</span>
+                    </button>
+                    <div v-if="memoriesOpen[event.id]" class="event-memory-list">
+                      <article v-for="memory in event.memories" :key="memory.id || `${memory.kind}:${memory.content}`" class="event-memory-item">
+                        <div class="event-memory-head">
+                          <span class="badge">{{ memoryKindLabel(memory.kind) }}</span>
+                          <strong>{{ memory.topic || memory.entity || "未命名记忆" }}</strong>
+                          <span v-if="memory.sensitive" class="badge warn">敏感</span>
+                        </div>
+                        <p>{{ memory.content }}</p>
+                        <div class="event-memory-meta muted mono">
+                          <span v-if="memory.source_type">来源 {{ memory.source_type }}</span>
+                          <span v-if="memory.visibility">可见性 {{ memory.visibility }}</span>
+                          <span v-if="memory.source_group_id">来源群 {{ memory.source_group_id }}</span>
+                          <span v-if="memory.confidence">置信度 {{ formatMemoryScore(memory.confidence) }}</span>
+                          <span v-if="memory.retrieval_score">召回分 {{ memory.retrieval_score.toFixed(3) }}</span>
+                        </div>
+                      </article>
+                    </div>
+                  </section>
+
+                  <section v-if="event.temporary_memories?.length" class="event-memories temporary" aria-label="本轮调用的临时记忆">
+                    <button
+                      class="event-memory-toggle"
+                      type="button"
+                      :aria-expanded="temporaryMemoriesOpen[event.id] ? 'true' : 'false'"
+                      @click="toggleTemporaryMemories(event.id)"
+                    >
+                      <ChevronDown :size="13" :class="{ 'trace-chevron-open': temporaryMemoriesOpen[event.id] }" aria-hidden="true" />
+                      本轮调用的临时记忆（{{ event.temporary_memories.length }}）
+                    </button>
+                    <div v-if="temporaryMemoriesOpen[event.id]" class="event-memory-list">
+                      <article v-for="memory in event.temporary_memories" :key="memory.id || `${memory.kind}:${memory.task_kind || memory.topic || ''}`" class="event-memory-item">
+                        <div class="event-memory-head">
+                          <span class="badge">{{ temporaryMemoryKindLabel(memory.kind) }}</span>
+                          <span v-if="memory.scope" class="badge">{{ memory.scope === "session" ? "会话共享" : "用户私有" }}</span>
+                          <strong>{{ memory.task_kind || memory.topic || "当前会话状态" }}</strong>
+                          <span v-if="memory.version" class="badge">v{{ memory.version }}</span>
+                        </div>
+                        <pre>{{ temporaryMemoryContent(memory.content) }}</pre>
+                        <div class="event-memory-meta muted mono">
+                          <span v-if="memory.expires_at">到期 {{ formatDate(memory.expires_at) }}</span>
+                          <span v-if="memory.source_message_id">来源消息 {{ memory.source_message_id }}</span>
+                        </div>
+                      </article>
+                    </div>
+                  </section>
                   <div v-if="traceLoading[event.id]" class="debug-trace-empty muted">正在读取调试记录</div>
                   <div v-else-if="(traceSteps[event.id]?.length ?? 0) === 0" class="debug-trace-empty muted">
                     这条事件没有调试记录。调试模式默认关闭，开启后仅记录新事件。
@@ -1183,19 +1182,40 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
-/* 这一页的主角是下面的事件列表，统计只是参考值：压掉多余的留白和字号，
-   把首屏高度让给事件本身。 */
+/* 卡片被拉得很宽，内容却全挤在左上角，右边一大片空着。字号和内边距保持原样，
+   改成数值与脚注同行：横向空白被脚注填上，卡片也随之变矮，首屏能多留给事件。 */
 .event-stats :deep(.stat-card) {
-  padding: 10px 12px;
-  gap: 4px;
+  display: grid;
+  grid-template-areas:
+    "label label"
+    "value foot";
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 12px;
+}
+
+.event-stats :deep(.stat-label) {
+  grid-area: label;
 }
 
 .event-stats :deep(.stat-value) {
-  font-size: 19px;
+  grid-area: value;
 }
 
 .event-stats :deep(.stat-foot) {
+  grid-area: foot;
   line-height: 1.45;
+}
+
+/* 窄屏放不下并排，退回上下堆叠，别把脚注挤成一列字。 */
+@media (max-width: 900px) {
+  .event-stats :deep(.stat-card) {
+    grid-template-areas:
+      "label"
+      "value"
+      "foot";
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .event-group-filter {
