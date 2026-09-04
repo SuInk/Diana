@@ -212,8 +212,17 @@
               </div>
 
               <section v-if="event.memories?.length" class="event-memories" aria-label="本轮调用的长期记忆">
-                <strong>本轮调用的长期记忆（{{ event.memories.length }}）</strong>
-                <div class="event-memory-list">
+                <button
+                  class="event-memory-toggle"
+                  type="button"
+                  :aria-expanded="memoriesOpen[event.id] ? 'true' : 'false'"
+                  @click="toggleMemories(event.id)"
+                >
+                  <ChevronDown :size="13" :class="{ 'trace-chevron-open': memoriesOpen[event.id] }" aria-hidden="true" />
+                  本轮调用的长期记忆（{{ event.memories.length }}）
+                  <span v-if="!memoriesOpen[event.id]" class="event-memory-peek muted">{{ memoryPeek(event.memories) }}</span>
+                </button>
+                <div v-if="memoriesOpen[event.id]" class="event-memory-list">
                   <article v-for="memory in event.memories" :key="memory.id || `${memory.kind}:${memory.content}`" class="event-memory-item">
                     <div class="event-memory-head">
                       <span class="badge">{{ memoryKindLabel(memory.kind) }}</span>
@@ -233,8 +242,16 @@
               </section>
 
               <section v-if="event.temporary_memories?.length" class="event-memories temporary" aria-label="本轮调用的临时记忆">
-                <strong>本轮调用的临时记忆（{{ event.temporary_memories.length }}）</strong>
-                <div class="event-memory-list">
+                <button
+                  class="event-memory-toggle"
+                  type="button"
+                  :aria-expanded="temporaryMemoriesOpen[event.id] ? 'true' : 'false'"
+                  @click="toggleTemporaryMemories(event.id)"
+                >
+                  <ChevronDown :size="13" :class="{ 'trace-chevron-open': temporaryMemoriesOpen[event.id] }" aria-hidden="true" />
+                  本轮调用的临时记忆（{{ event.temporary_memories.length }}）
+                </button>
+                <div v-if="temporaryMemoriesOpen[event.id]" class="event-memory-list">
                   <article v-for="memory in event.temporary_memories" :key="memory.id || `${memory.kind}:${memory.task_kind || memory.topic || ''}`" class="event-memory-item">
                     <div class="event-memory-head">
                       <span class="badge">{{ temporaryMemoryKindLabel(memory.kind) }}</span>
@@ -422,6 +439,7 @@ import {
   getAssistantEvents,
   type AppLogEntry,
   type AssistantEventDetail,
+  type AssistantEventMemory,
   type AssistantEventDelivery,
   type AssistantEventSubtask,
   type AssistantEventRange,
@@ -495,6 +513,9 @@ function temporaryMemoryContent(content: unknown): string {
 function formatMemoryScore(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
+// 记忆块默认收起：一条消息动辄召回十来条长期记忆，全展开会把事件本身挤出屏幕。
+const memoriesOpen = ref<Record<string, boolean>>({});
+const temporaryMemoriesOpen = ref<Record<string, boolean>>({});
 const traceOpen = ref<Record<string, boolean>>({});
 const traceLoading = ref<Record<string, boolean>>({});
 const traceLoaded = ref<Record<string, boolean>>({});
@@ -1003,6 +1024,24 @@ function formatDuration(durationMS: number): string {
   return `${(durationMS / 1000).toFixed(1)}s`;
 }
 
+function toggleMemories(eventID: string): void {
+  memoriesOpen.value = { ...memoriesOpen.value, [eventID]: !memoriesOpen.value[eventID] };
+}
+
+function toggleTemporaryMemories(eventID: string): void {
+  temporaryMemoriesOpen.value = { ...temporaryMemoriesOpen.value, [eventID]: !temporaryMemoriesOpen.value[eventID] };
+}
+
+// 收起时给一行提要，让人不展开也知道这轮召回的大致是什么。
+function memoryPeek(memories: AssistantEventMemory[]): string {
+  const titles = memories
+    .map((memory) => (memory.topic || memory.entity || "").trim())
+    .filter((title) => title !== "");
+  if (titles.length === 0) return "";
+  const shown = titles.slice(0, 3).join("、");
+  return titles.length > 3 ? `${shown} 等` : shown;
+}
+
 async function toggleTrace(event: AssistantEventDetail): Promise<void> {
   if (traceOpen.value[event.id]) {
     traceOpen.value = { ...traceOpen.value, [event.id]: false };
@@ -1503,13 +1542,43 @@ onBeforeUnmount(() => {
   color: var(--muted);
 }
 
+/* 收起时整块只占一行；展开后才让出空间给条目。 */
+.event-memory-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.event-memory-toggle:hover {
+  color: var(--text);
+}
+
+.event-memory-peek {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .event-memory-list {
   display: grid;
-  gap: 8px;
+  margin-top: 8px;
+  gap: 6px;
 }
 
 .event-memory-item {
-  padding: 9px 10px;
+  padding: 7px 9px;
   border-left: 3px solid var(--accent);
   border-radius: 4px;
   background: var(--surface-1);
@@ -1528,8 +1597,8 @@ onBeforeUnmount(() => {
 }
 
 .event-memory-item p {
-  margin: 7px 0 6px;
-  line-height: 1.55;
+  margin: 5px 0 4px;
+  line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
