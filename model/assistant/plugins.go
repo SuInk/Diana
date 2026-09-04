@@ -192,9 +192,18 @@ type PluginResponse struct {
 
 // PluginTask describes work that should outlive the incoming message request.
 type PluginTask struct {
-	Kind           string
-	Name           string
-	Key            string
+	Kind string
+	Name string
+	Key  string
+	// SupersedeKey groups tasks where only the newest result remains useful.
+	// Reserving a newer task cancels queued/running older tasks in the group.
+	SupersedeKey string
+	// ReuseFor keeps a completed task key reusable for a short time, preventing
+	// repeated messages for the same canonical state from launching it again.
+	ReuseFor time.Duration
+	// Validate is checked before work starts and again before any result is sent.
+	// It lets state-backed tasks discard results that became stale while running.
+	Validate       func(context.Context) error
 	StartedMessage string
 	Timeout        time.Duration
 	Run            func(context.Context, PluginTaskServices) (PluginTaskResult, error)
