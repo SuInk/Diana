@@ -105,6 +105,59 @@ func TestDirectReplyMergesSameUserFollowUpAndRegenerates(t *testing.T) {
 	}
 }
 
+func TestDirectReplyMergesNewDirectedFollowUpWithoutDroppingRegeneratedReply(t *testing.T) {
+	disabled := false
+	provider := &directReplyMergeProvider{firstStarted: make(chan struct{}), releaseFirst: make(chan struct{})}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{
+		BotAccount: "42", AgentEnabled: false, BotReplyLoopDetectionEnabled: &disabled,
+	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+
+	root := directedGroupMessage("root", "user-1", "解释下 stdout")
+	runtime.noteDirectedInbound(root)
+	runtime.remember(root)
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "root-turn"), root, root.RawMessage, "replied")
+		done <- err
+	}()
+	select {
+	case <-provider.firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first reply generation did not start")
+	}
+
+	followUp := directedGroupMessage("follow-up", "user-1", "再说下 yjx 是什么意思")
+	runtime.noteDirectedInbound(followUp)
+	_, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), followUp)
+	if handled || outcome != "merged_into_reply" {
+		t.Fatalf("directed follow-up handled=%v outcome=%q", handled, outcome)
+	}
+	close(provider.releaseFirst)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("merged directed reply did not finish")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || sent[0].Text != "两条一起回答" {
+		t.Fatalf("sent=%#v", sent)
+	}
+	requests := provider.requestsSnapshot()
+	if len(requests) != 4 {
+		t.Fatalf("provider calls=%d, want first draft plus one regeneration", len(requests))
+	}
+	joined := ""
+	for _, message := range requests[3].Messages {
+		joined += "\n" + message.Content
+	}
+	if !strings.Contains(joined, "当前同轮补充消息") || !strings.Contains(joined, "再说下 yjx 是什么意思") {
+		t.Fatalf("regenerated prompt missed directed follow-up: %s", joined)
+	}
+}
+
 func TestDescribeMergedIntoReplyOutcome(t *testing.T) {
 	decision, reason, handled := DescribeEventOutcome("merged_into_reply")
 	if decision != "not_replied" || handled || !strings.Contains(reason, "已并入") {
