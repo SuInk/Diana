@@ -17,6 +17,8 @@ const (
 	PluginSettingTypeSelect             = "select"
 	PluginSettingTypeMultiSelect        = "multi_select"
 	PluginSettingTypePlatformLevelRules = "platform_level_rules"
+	// PluginSettingTypeRelayEndpoints 配置一组参与双向消息互通的会话端点。
+	PluginSettingTypeRelayEndpoints = "relay_endpoints"
 	// PluginSettingTypeText 渲染为多行文本框，用于模板这类带换行的配置。
 	PluginSettingTypeText = "text"
 	// PluginSettingTypeSize 的值统一是字节数，WebUI 渲染成「数字 + 单位」，
@@ -271,9 +273,57 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 		return out, nil
 	case PluginSettingTypePlatformLevelRules:
 		return normalizePlatformLevelRules(spec, raw)
+	case PluginSettingTypeRelayEndpoints:
+		return normalizeRelayEndpoints(spec, raw)
 	default:
 		return nil, fmt.Errorf("diana: setting %q has unsupported type %q", spec.Key, spec.Type)
 	}
+}
+
+func normalizeRelayEndpoints(spec PluginSettingSpec, raw any) ([]map[string]any, error) {
+	items, ok := raw.([]any)
+	if !ok {
+		if typed, typedOK := raw.([]map[string]any); typedOK {
+			items = make([]any, len(typed))
+			for i := range typed {
+				items[i] = typed[i]
+			}
+		} else {
+			return nil, fmt.Errorf("diana: setting %q expects an endpoint array", spec.Key)
+		}
+	}
+	out := make([]map[string]any, 0, len(items))
+	seen := map[string]bool{}
+	for index, item := range items {
+		endpoint, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("diana: setting %q endpoint %d must be an object", spec.Key, index+1)
+		}
+		profileID, _ := endpoint["profile_id"].(string)
+		platform, _ := endpoint["platform"].(string)
+		kind, _ := endpoint["kind"].(string)
+		targetID, _ := endpoint["target_id"].(string)
+		profileID = strings.TrimSpace(profileID)
+		platform = NormalizePlatformID(platform)
+		kind = strings.TrimSpace(strings.ToLower(kind))
+		targetID = strings.TrimSpace(targetID)
+		if profileID == "" || platform == "" || targetID == "" {
+			return nil, fmt.Errorf("diana: setting %q endpoint %d is incomplete", spec.Key, index+1)
+		}
+		if _, ok := PlatformByID(platform); !ok {
+			return nil, fmt.Errorf("diana: setting %q endpoint %d has unsupported platform %q", spec.Key, index+1, platform)
+		}
+		if kind != "group" && kind != "private" {
+			return nil, fmt.Errorf("diana: setting %q endpoint %d has invalid kind", spec.Key, index+1)
+		}
+		key := strings.Join([]string{profileID, platform, kind, targetID}, "\x00")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, map[string]any{"profile_id": profileID, "platform": platform, "kind": kind, "target_id": targetID})
+	}
+	return out, nil
 }
 
 func normalizePlatformLevelRules(spec PluginSettingSpec, raw any) ([]map[string]any, error) {

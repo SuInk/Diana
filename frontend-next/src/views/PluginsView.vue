@@ -334,6 +334,12 @@
             :model-value="settingsForm[spec.key]"
             @update:model-value="settingsForm[spec.key] = $event"
           />
+          <RelayEndpointsField
+            v-else-if="spec.type === 'relay_endpoints'"
+            :spec="spec"
+            :model-value="settingsForm[spec.key]"
+            @update:model-value="settingsForm[spec.key] = $event"
+          />
           <PluginSettingField
             v-else
             :spec="spec"
@@ -454,6 +460,7 @@ import EmptyState from "../components/EmptyState.vue";
 import AppSelect from "../components/AppSelect.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
 import PlatformLevelRulesField from "../components/PlatformLevelRulesField.vue";
+import RelayEndpointsField from "../components/RelayEndpointsField.vue";
 import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";

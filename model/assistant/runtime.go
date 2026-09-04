@@ -1614,6 +1614,17 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
 		event = r.plugins.ObserveEvent(ctx, event)
+		// 消息互通发生在回复判断之前：即使 planner 最终选择不回复，原消息也应
+		// 被桥接。转发走独立短超时，不把目标平台的网络延迟叠到本轮回复上。
+		relayEvent := event
+		r.mu.RLock()
+		relayChannel := r.channel
+		r.mu.RUnlock()
+		go func() {
+			relayCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			r.plugins.RelayEvent(relayCtx, PluginRequest{Event: relayEvent, Text: PlainText(relayEvent.Segments), Channel: relayChannel, AppLogs: r.appLogWriter()}, r.pluginOverridesForEvent(relayEvent), r.pluginSettingOverridesForEvent(relayEvent))
+		}()
 	}
 	text := PlainText(event.Segments)
 	if text == "" {
