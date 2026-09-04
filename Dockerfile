@@ -22,7 +22,10 @@ FROM alpine:3.22
 WORKDIR /app
 # data/logs 预建并交给运行用户，容器不挂卷也能直接跑（SQLite 与日志有处可写）。
 # tesseract 及中英语言包供图片文字识别插件的本地离线后端使用。
-RUN apk add --no-cache ffmpeg nodejs yt-dlp tesseract-ocr tesseract-ocr-data-chi_sim tesseract-ocr-data-eng \
+# bubblewrap 是 Agent 执行本地命令时的沙盒。装了它不代表一定能用——容器默认的
+# seccomp 或 AppArmor 策略常常禁掉非特权用户命名空间，运行时会实际试跑一次再决定
+# 用不用；但不装则连试的机会都没有，命令只能以主进程权限裸跑。
+RUN apk add --no-cache ffmpeg nodejs yt-dlp bubblewrap tesseract-ocr tesseract-ocr-data-chi_sim tesseract-ocr-data-eng \
     && adduser -D -H -u 10001 diana \
     && mkdir -p /app/data /app/logs \
     && chown -R diana:diana /app/data /app/logs

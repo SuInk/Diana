@@ -232,6 +232,9 @@ func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, st
 	}
 }
 
+// NormalizeCommandSandboxMode 是给上层配置用的归一化入口。
+func NormalizeCommandSandboxMode(value string) string { return normalizeCommandSandboxMode(value) }
+
 // normalizeCommandSandboxMode 把配置值归一到三个已知模式，未知值按最安全的
 // auto 处理（有沙盒就用），而不是静默关掉。
 func normalizeCommandSandboxMode(value string) string {
