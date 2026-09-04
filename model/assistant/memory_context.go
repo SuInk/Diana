@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -116,7 +117,8 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	}
 	ranked := rankStructuredMemories(items, event, queryText, time.Now())
 	r.touchRetrievedMemories(ctx, store, ranked)
-	text, usage := formatStructuredMemoryContextWithTokenBudget(profile, policy, ranked, memoryBudget)
+	text, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, ranked, memoryBudget)
+	r.recordRetrievedMemoryContext(ctx, event, selected)
 	// 候选是存储层捞回来的全部，排序阶段（相关性门槛 + MMR 条数上限）先砍一刀，
 	// token 配额再砍一刀。两刀以前都不留痕，于是「记忆没提到某件事」既可能是没
 	// 检索到，也可能是检索到了但没装下，日志里分不出来。
@@ -128,6 +130,28 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 		usage.Reason = contextLayerReasonRankCap
 	}
 	return text, usage
+}
+
+func (r *Runtime) recordRetrievedMemoryContext(ctx context.Context, event MessageEvent, items []StructuredMemoryItem) {
+	writer := r.appLogWriter()
+	if writer == nil || strings.TrimSpace(event.MessageID) == "" || len(items) == 0 {
+		return
+	}
+	memories := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		memories = append(memories, map[string]any{
+			"id": item.ID, "kind": item.Kind, "topic": item.Topic, "entity": item.Entity,
+			"content": item.Content, "source_type": item.SourceType, "scope_key": item.ScopeKey,
+			"source_group_id": item.SourceGroupID, "source_message_id": item.SourceMessageID,
+			"visibility": item.Visibility, "sensitive": item.Sensitive,
+			"confidence": item.Confidence, "importance": item.Importance,
+			"retrieval_score": item.RetrievalScore, "retrieval_reason": item.RetrievalReason,
+		})
+	}
+	_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindDebug, Level: applog.LevelInfo, Action: "diana.memory.retrieved", Message: "长期记忆已进入本轮上下文", Target: event.MessageID, Metadata: map[string]any{
+		"platform": event.Platform, "profile_id": event.ProfileID, "group_id": event.GroupID,
+		"user_id": event.UserID, "message_id": event.MessageID, "memories": memories,
+	}})
 }
 
 // touchRetrievedMemories 把命中回写成 last_verified_at。回写失败不影响本轮回复，
@@ -300,6 +324,11 @@ func formatStructuredMemoryContext(profile UserMemoryProfile, policy Relationshi
 }
 
 func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage) {
+	text, usage, _ := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, items, tokenBudget)
+	return text, usage
+}
+
+func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage, []StructuredMemoryItem) {
 	var builder strings.Builder
 	displayName := strings.TrimSpace(profile.DisplayName)
 	if displayName == "" {
@@ -358,6 +387,7 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 		RankedItems: len(items),
 		Reason:      contextLayerReasonFits,
 	}
+	selected := make([]StructuredMemoryItem, 0, len(items))
 	cutAtSection := -1
 sectionsLoop:
 	for sectionIndex, section := range sections {
@@ -378,6 +408,7 @@ sectionsLoop:
 			}
 			builder.WriteString(line)
 			usage.SelectedItems++
+			selected = append(selected, item)
 		}
 	}
 	// 分段有固定顺序，前面几条长记忆就能让后面整段一条不剩。日志里「这段本来
@@ -403,7 +434,7 @@ sectionsLoop:
 	usage.CandidateTokens = usage.RankedTokens
 	text := strings.TrimSpace(builder.String())
 	usage.SelectedTokens = llm.EstimateTextTokens(text)
-	return text, usage
+	return text, usage, selected
 }
 
 func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, tokenBudget int64) string {
@@ -744,15 +775,20 @@ func uniqueMemoryReasons(reasons []string) []string {
 // sessionThreadNote 读取当前会话的线程便签。它不参加相关性检索，也不受当前消息
 // 影响：会话线程是「我们聊到哪了」的状态，跟这句话像不像无关，取到就注入。
 func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) string {
+	text, _ := r.sessionThreadNoteDetailed(ctx, event)
+	return text
+}
+
+func (r *Runtime) sessionThreadNoteDetailed(ctx context.Context, event MessageEvent) (string, *StructuredMemoryItem) {
 	cfg := r.effectiveConfigForEvent(event)
 	if !boolValue(cfg.LongTermMemoryEnabled, true) {
-		return ""
+		return "", nil
 	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()
 	if store == nil {
-		return ""
+		return "", nil
 	}
 	session := sessionKey(event)
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -770,7 +806,7 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 	cancel()
 	if err != nil {
 		log.Printf("diana session thread load failed: %v", err)
-		return ""
+		return "", nil
 	}
 	// 不能拿 ThreadMemoryKey(session) 来做精确比较：写入侧会过 normalizeMemoryKey，
 	// 它只保留字母数字、把 . - _ 和空白折成 '.'，冒号直接丢掉且不补分隔符。于是
@@ -781,10 +817,11 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 	// 修的是读取侧不是归一化：改归一化会让已经落库的行全部失联。
 	for _, item := range items {
 		if content := strings.TrimSpace(item.Content); content != "" {
-			return content
+			selected := item
+			return content, &selected
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // fitSessionThreadToBudget 把线程便签压进配额。它天然只有几百字，超限说明模型把
