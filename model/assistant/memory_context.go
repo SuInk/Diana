@@ -775,15 +775,20 @@ func uniqueMemoryReasons(reasons []string) []string {
 // sessionThreadNote 读取当前会话的线程便签。它不参加相关性检索，也不受当前消息
 // 影响：会话线程是「我们聊到哪了」的状态，跟这句话像不像无关，取到就注入。
 func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) string {
+	text, _ := r.sessionThreadNoteDetailed(ctx, event)
+	return text
+}
+
+func (r *Runtime) sessionThreadNoteDetailed(ctx context.Context, event MessageEvent) (string, *StructuredMemoryItem) {
 	cfg := r.effectiveConfigForEvent(event)
 	if !boolValue(cfg.LongTermMemoryEnabled, true) {
-		return ""
+		return "", nil
 	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()
 	if store == nil {
-		return ""
+		return "", nil
 	}
 	session := sessionKey(event)
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -801,7 +806,7 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 	cancel()
 	if err != nil {
 		log.Printf("diana session thread load failed: %v", err)
-		return ""
+		return "", nil
 	}
 	// 不能拿 ThreadMemoryKey(session) 来做精确比较：写入侧会过 normalizeMemoryKey，
 	// 它只保留字母数字、把 . - _ 和空白折成 '.'，冒号直接丢掉且不补分隔符。于是
@@ -812,10 +817,11 @@ func (r *Runtime) sessionThreadNote(ctx context.Context, event MessageEvent) str
 	// 修的是读取侧不是归一化：改归一化会让已经落库的行全部失联。
 	for _, item := range items {
 		if content := strings.TrimSpace(item.Content); content != "" {
-			return content
+			selected := item
+			return content, &selected
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // fitSessionThreadToBudget 把线程便签压进配额。它天然只有几百字，超限说明模型把

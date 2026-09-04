@@ -94,18 +94,25 @@ func (r *Runtime) threadStateStore() ThreadStateStore {
 }
 
 func (r *Runtime) privateThreadStateContext(ctx context.Context, event MessageEvent) string {
+	text, _ := r.privateThreadStateContextDetailed(ctx, event)
+	return text
+}
+
+// privateThreadStateContextDetailed 同时返回真正注入的状态条目，供管理员事件审计
+// 展示。本地状态仍不会进入公开回复或普通操作日志。
+func (r *Runtime) privateThreadStateContextDetailed(ctx context.Context, event MessageEvent) (string, []ThreadState) {
 	store := r.threadStateStore()
 	if store == nil || strings.TrimSpace(event.UserID) == "" {
-		return ""
+		return "", nil
 	}
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	items, err := store.ListActiveThreadStates(loadCtx, strings.TrimSpace(event.ProfileID), sessionKey(event), strings.TrimSpace(event.UserID), r.clock(), maximumActiveThreadStates)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	if len(items) == 0 {
-		return ""
+		return "", nil
 	}
 	type privateState struct {
 		ID        string          `json:"id"`
@@ -126,9 +133,9 @@ func (r *Runtime) privateThreadStateContext(ctx context.Context, event MessageEv
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return ""
+		return "", nil
 	}
-	return privateThreadStateMarker + "\n" + string(encoded)
+	return privateThreadStateMarker + "\n" + string(encoded), append([]ThreadState(nil), items...)
 }
 
 type dianaThreadStateTool struct {
