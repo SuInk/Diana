@@ -39,12 +39,21 @@ type fixedRetryErrorProvider struct {
 type retryRegistryAdapter struct {
 	calls     int
 	succeedAt int
+	response  string
+	err       error
 }
 
 func (a *retryRegistryAdapter) Generate(context.Context, llm.ModelDefinition, llm.ChatRequest) (llm.ChatResponse, error) {
 	a.calls++
+	if a.err != nil {
+		return llm.ChatResponse{}, a.err
+	}
 	if a.succeedAt > 0 && a.calls >= a.succeedAt {
-		return llm.ChatResponse{Text: "ok"}, nil
+		text := a.response
+		if text == "" {
+			text = "ok"
+		}
+		return llm.ChatResponse{Text: text}, nil
 	}
 	return llm.ChatResponse{}, fmt.Errorf("registry request failed: %w", context.DeadlineExceeded)
 }
@@ -144,6 +153,48 @@ func TestRegistryChatRetriesTransientFailure(t *testing.T) {
 	})
 	if err != nil || result != "ok" || adapter.calls != 2 {
 		t.Fatalf("result=%q err=%v calls=%d, want successful retry on second call", result, err, adapter.calls)
+	}
+}
+
+func TestRegistryModelRoleGroupFailsOverAcrossProviders(t *testing.T) {
+	primary := &retryRegistryAdapter{err: errors.New("503 service unavailable")}
+	backup := &retryRegistryAdapter{succeedAt: 1, response: "backup ok"}
+	registry := llm.NewProviderRegistry()
+	for _, item := range []struct {
+		id      string
+		adapter llm.LLMAdapter
+	}{
+		{id: "primary", adapter: primary},
+		{id: "backup", adapter: backup},
+	} {
+		if err := registry.RegisterProvider(llm.ProviderDefinition{ID: item.id, Name: item.id, Protocol: llm.ProtocolOpenAIResponses, Enabled: true}, item.adapter); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterModel(llm.ModelDefinition{ID: item.id + ":shared-model", ProviderID: item.id, ModelID: "shared-model", Name: "shared-model"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profiles := llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "primary", Group: "robot-chat", Config: llm.ProviderConfig{Model: "old-primary", Models: []llm.ModelInfo{{ID: "shared-model"}}}},
+		{ID: "backup", Group: "robot-chat", Config: llm.ProviderConfig{Model: "old-backup", Models: []llm.ModelInfo{{ID: "shared-model"}}}},
+	}}
+	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
+		"chat": {Group: "robot-chat", Model: "shared-model"},
+	}}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: profiles}, nil, nil, nil)
+	runtime.SetLLMProviderRegistry(registry)
+
+	result, err := runtime.runLLMProvider(context.Background(), func(provider LLMProvider) (string, error) {
+		response, generateErr := provider.Generate(context.Background(), llm.GenerateRequest{})
+		if generateErr != nil {
+			return "", generateErr
+		}
+		return response.Text, nil
+	})
+	if err != nil || result != "backup ok" {
+		t.Fatalf("result=%q err=%v", result, err)
+	}
+	if primary.calls != 2 || backup.calls != 1 {
+		t.Fatalf("primary calls=%d backup calls=%d, want retry then failover", primary.calls, backup.calls)
 	}
 }
 
