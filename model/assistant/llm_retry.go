@@ -201,6 +201,166 @@ type profileFailoverLLMProvider struct {
 	clientLoaded   []bool
 }
 
+type registryFailoverCandidate struct {
+	profile   llm.Profile
+	selection llm.AgentModelConfig
+}
+
+// registryFailoverLLMProvider keeps the ProviderRegistry routing contract while
+// applying the same ordered profile failover used by the legacy client path.
+type registryFailoverLLMProvider struct {
+	mu             sync.Mutex
+	registry       *llm.ProviderRegistry
+	candidates     []registryFailoverCandidate
+	retryTransient bool
+	wrapGroupError bool
+	group          string
+	current        int
+}
+
+func newRegistryFailoverLLMProvider(registry *llm.ProviderRegistry, profiles []llm.Profile, retryTransient bool, wrapGroupError bool) (*registryFailoverLLMProvider, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("diana: llm provider registry is not configured")
+	}
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("diana: no llm profile is configured")
+	}
+	candidates := make([]registryFailoverCandidate, 0, len(profiles))
+	for _, profile := range profiles {
+		selection := profileRegistrySelection(registry, profile)
+		model, ok := registry.Model(selection.ModelID)
+		if !ok || model.ProviderID != selection.ProviderID {
+			continue
+		}
+		candidates = append(candidates, registryFailoverCandidate{profile: profile, selection: selection})
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("diana: no registered llm model matches the configured profiles")
+	}
+	return &registryFailoverLLMProvider{
+		registry:       registry,
+		candidates:     candidates,
+		retryTransient: retryTransient,
+		wrapGroupError: wrapGroupError,
+		group:          llm.NormalizeProfileGroup(candidates[0].profile.Group),
+	}, nil
+}
+
+func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var lastErr error
+	for offset := 0; offset < len(p.candidates); offset++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		index := (p.current + offset) % len(p.candidates)
+		candidate := p.candidates[index]
+		client := llm.RegistryClient{Registry: p.registry, Selection: candidate.selection}
+		resp, err := generateWithTransientRetryTimeout(ctx, client, req, p.retryTransient, candidate.profile.Config.Timeout)
+		if err == nil {
+			p.current = index
+			return resp, nil
+		}
+		failover := shouldFailoverLLMError(err)
+		lastErr = annotateLLMProviderAttempt(err, candidate.profile, req)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if !failover {
+			return nil, lastErr
+		}
+		if offset+1 < len(p.candidates) {
+			next := p.candidates[(p.current+offset+1)%len(p.candidates)]
+			log.Printf(
+				"diana llm provider failover: group=%q model=%q from=%q to=%q err=%v",
+				p.group,
+				candidate.profile.Config.Model,
+				candidate.profile.ID,
+				next.profile.ID,
+				lastErr,
+			)
+		}
+	}
+	if p.wrapGroupError && len(p.candidates) > 1 {
+		return nil, fmt.Errorf("diana: llm profiles in group %q are unavailable: %w", p.group, lastErr)
+	}
+	return nil, lastErr
+}
+
+// Stream preserves the registry streaming path while applying ordered
+// provider failover to failures that happen before a stream is established.
+// Errors emitted after the channel starts are handled by streamingLLMProvider:
+// it discards the buffered failed stream and retries through Generate, which
+// keeps partial output from leaking or being duplicated.
+func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
+	p.mu.Lock()
+	start := p.current
+	p.mu.Unlock()
+
+	var lastErr error
+	for offset := 0; offset < len(p.candidates); offset++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		index := (start + offset) % len(p.candidates)
+		candidate := p.candidates[index]
+		client := llm.RegistryClient{Registry: p.registry, Selection: candidate.selection}
+		var events <-chan llm.ChatEvent
+		var err error
+		attempts := 1
+		if p.retryTransient {
+			attempts += llmTransientMaxRetries
+		}
+		for attempt := 0; attempt < attempts; attempt++ {
+			events, err = client.Stream(ctx, req)
+			if err == nil && events != nil {
+				break
+			}
+			if err == nil {
+				err = fmt.Errorf("diana: llm provider returned a nil stream")
+			}
+			if attempt+1 >= attempts || !shouldFailoverLLMError(err) {
+				break
+			}
+			timer := time.NewTimer(llmTransientRetryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		if err == nil && events != nil {
+			p.mu.Lock()
+			p.current = index
+			p.mu.Unlock()
+			return events, nil
+		}
+		failover := shouldFailoverLLMError(err)
+		lastErr = annotateLLMProviderAttempt(err, candidate.profile, req)
+		if !failover {
+			return nil, lastErr
+		}
+		if offset+1 < len(p.candidates) {
+			next := p.candidates[(start+offset+1)%len(p.candidates)]
+			log.Printf(
+				"diana llm stream provider failover: group=%q model=%q from=%q to=%q err=%v",
+				p.group,
+				candidate.profile.Config.Model,
+				candidate.profile.ID,
+				next.profile.ID,
+				lastErr,
+			)
+		}
+	}
+	if p.wrapGroupError && len(p.candidates) > 1 {
+		return nil, fmt.Errorf("diana: llm streams in group %q are unavailable: %w", p.group, lastErr)
+	}
+	return nil, lastErr
+}
+
 func newProfileFailoverLLMProvider(
 	profiles []llm.Profile,
 	factory LLMProviderConfigFactory,
