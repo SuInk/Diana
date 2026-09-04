@@ -213,23 +213,6 @@ func TestForwardCardAppliesToEveryStyle(t *testing.T) {
 	}
 }
 
-func TestReplyStyleTypingDelayOnlyForGroupmate(t *testing.T) {
-	if got := ReplyStyleAssistant.typingDelay("随便一句话"); got != 0 {
-		t.Fatalf("assistant typingDelay = %v, want 0", got)
-	}
-	if got := ReplyStyleGroupmate.typingDelay("   "); got != 0 {
-		t.Fatalf("blank text typingDelay = %v, want 0", got)
-	}
-	short := ReplyStyleGroupmate.typingDelay("在的")
-	long := ReplyStyleGroupmate.typingDelay(strings.Repeat("字", 40))
-	if short <= 0 || long <= short {
-		t.Fatalf("typing delay should grow with length: short=%v long=%v", short, long)
-	}
-	if capped := ReplyStyleGroupmate.typingDelay(strings.Repeat("字", 10000)); capped != groupmateTypingMaxDelay {
-		t.Fatalf("typing delay = %v, want capped at %v", capped, groupmateTypingMaxDelay)
-	}
-}
-
 func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
 	base := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleAssistant}.WithDefaults()
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

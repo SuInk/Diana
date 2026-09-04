@@ -146,6 +146,30 @@ func (c *MultiChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) 
 	return nil, binding.Channel.Send(ctx, msg)
 }
 
+func (c *MultiChannel) SendTextDraft(ctx context.Context, msg OutgoingMessage, draftID int64) error {
+	binding, err := c.bindingFor(msg.ProfileID, msg.Platform)
+	if err != nil {
+		return err
+	}
+	channel, ok := binding.Channel.(TextDraftChannel)
+	if !ok {
+		return fmt.Errorf("assistant: channel %q does not support text drafts", binding.Platform)
+	}
+	return channel.SendTextDraft(ctx, msg, draftID)
+}
+
+func (c *MultiChannel) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
+	binding, err := c.bindingFor(msg.ProfileID, msg.Platform)
+	if err != nil {
+		return err
+	}
+	channel, ok := binding.Channel.(ChatActionChannel)
+	if !ok {
+		return fmt.Errorf("assistant: channel %q does not support chat actions", binding.Platform)
+	}
+	return channel.SendChatAction(ctx, msg, action)
+}
+
 // OneBotBinding 返回负责 OneBot 的那条绑定。
 //
 // 「哪台机器人是 OneBot」和「当前激活的是哪台」是两件事。反连监听器是进程内共享的

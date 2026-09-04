@@ -177,6 +177,43 @@ func TestTelegramFallsBackToUserIDForPrivateChat(t *testing.T) {
 	}
 }
 
+func TestTelegramSendsPrivateTextDraft(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	err := api.channel().SendTextDraft(context.Background(), OutgoingMessage{UserID: "555", Text: "正在生成"}, 73)
+	if err != nil {
+		t.Fatalf("发送草稿失败：%v", err)
+	}
+	calls := api.callsOf("sendMessageDraft")
+	if len(calls) != 1 {
+		t.Fatalf("应调用一次 sendMessageDraft，实际 %+v", calls)
+	}
+	if calls[0].Params["chat_id"] != "555" || calls[0].Params["draft_id"].(float64) != 73 || calls[0].Params["text"] != "正在生成" {
+		t.Fatalf("草稿参数错误：%+v", calls[0].Params)
+	}
+}
+
+func TestTelegramSkipsGroupTextDraft(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	if err := api.channel().SendTextDraft(context.Background(), OutgoingMessage{GroupID: "-1001", Text: "draft"}, 1); err != nil {
+		t.Fatalf("群聊草稿应无操作而非报错：%v", err)
+	}
+	if calls := api.callsOf("sendMessageDraft"); len(calls) != 0 {
+		t.Fatalf("Telegram 群聊不应调用 sendMessageDraft：%+v", calls)
+	}
+}
+
+func TestTelegramSendsTypingActionToTopic(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	err := api.channel().SendChatAction(context.Background(), OutgoingMessage{GroupID: "-1001", MessageThreadID: "88"}, "typing")
+	if err != nil {
+		t.Fatalf("发送输入状态失败：%v", err)
+	}
+	calls := api.callsOf("sendChatAction")
+	if len(calls) != 1 || calls[0].Params["chat_id"] != "-1001" || calls[0].Params["action"] != "typing" || calls[0].Params["message_thread_id"] != "88" {
+		t.Fatalf("输入状态参数错误：%+v", calls)
+	}
+}
+
 // 被回复的消息可能已删除，必须允许降级为普通发送，否则整条回复会丢。
 func TestTelegramReplyAllowsMissingTarget(t *testing.T) {
 	api := newFakeTelegramAPI(t, nil)
