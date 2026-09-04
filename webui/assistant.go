@@ -254,6 +254,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/clone", h.cloneProfile)
 	router.POST(base+"/config/delete", h.deleteProfile)
 	router.POST(base+"/config/context-isolation", h.setContextIsolation)
+	router.POST(base+"/config/message-relays", h.setMessageRelays)
 	router.GET(base+"/features", h.featuresStatus)
 	router.GET(base+"/status", h.status)
 	router.GET(base+"/auto-info", h.autoInfo)
@@ -509,6 +510,33 @@ func (h *BotHandler) setContextIsolation(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.context_isolation.update", "平台上下文隔离设置已更新", "", map[string]any{"enabled": payload.Enabled})
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+}
+
+type messageRelayPayload struct {
+	Relays []assistant.MessageRelayPair `json:"relays"`
+}
+
+// setMessageRelays 整体替换消息互通链路。
+//
+// 整体替换而不是逐条增删：链路是两端一对的小对象，前端本来就是拿着完整列表在
+// 编辑，一次提交也省掉了并发改动时半新半旧的中间状态。
+func (h *BotHandler) setMessageRelays(c *gin.Context) {
+	var payload messageRelayPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.message_relays.update", err, "", nil)
+		return
+	}
+	next := h.profiles.Profiles().WithMessageRelays(payload.Relays)
+	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		h.writeError(c, http.StatusBadRequest, "assistant.message_relays.update", err, "", nil)
+		return
+	}
+	if err := h.profiles.SaveProfiles(next); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.message_relays.update", err, "", map[string]any{"relays": len(next.MessageRelays)})
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.message_relays.update", "消息互通链路已更新", "", map[string]any{"relays": len(next.MessageRelays)})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
 

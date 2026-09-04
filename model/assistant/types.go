@@ -636,45 +636,47 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
-	ID                                string          `json:"id,omitempty"`
-	Name                              string          `json:"name,omitempty"`
-	Platform                          string          `json:"platform,omitempty"`
-	AvatarURL                         string          `json:"avatar_url,omitempty"`
-	ActiveProfileID                   string          `json:"active_profile_id,omitempty"`
-	Profiles                          []ConfigPayload `json:"profiles,omitempty"`
-	IsolatePlatformContexts           *bool           `json:"isolate_platform_contexts,omitempty"`
-	Enabled                           bool            `json:"enabled"`
-	OneBotReverseWSEndpoint           string          `json:"onebot_reverse_ws_endpoint"`
-	OneBotAccessToken                 string          `json:"onebot_access_token,omitempty"`
-	OneBotAccessTokenConfigured       bool            `json:"onebot_access_token_configured,omitempty"`
-	TelegramBotToken                  string          `json:"telegram_bot_token,omitempty"`
-	TelegramBotTokenConfigured        bool            `json:"telegram_bot_token_configured,omitempty"`
-	TelegramAPIBaseURL                string          `json:"telegram_api_base_url,omitempty"`
-	TelegramProxyURL                  string          `json:"telegram_proxy_url,omitempty"`
-	QQAppID                           string          `json:"qq_app_id,omitempty"`
-	QQAppSecret                       string          `json:"qq_app_secret,omitempty"`
-	QQAppSecretConfigured             bool            `json:"qq_app_secret_configured,omitempty"`
-	QQSandbox                         bool            `json:"qq_sandbox,omitempty"`
-	DingTalkClientID                  string          `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret              string          `json:"dingtalk_client_secret,omitempty"`
-	DingTalkClientSecretConfigured    bool            `json:"dingtalk_client_secret_configured,omitempty"`
-	DingTalkRobotCode                 string          `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                       string          `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret                   string          `json:"feishu_app_secret,omitempty"`
-	FeishuAppSecretConfigured         bool            `json:"feishu_app_secret_configured,omitempty"`
-	FeishuVerificationToken           string          `json:"feishu_verification_token,omitempty"`
-	FeishuVerificationTokenConfigured bool            `json:"feishu_verification_token_configured,omitempty"`
-	FeishuEncryptKey                  string          `json:"feishu_encrypt_key,omitempty"`
-	FeishuEncryptKeyConfigured        bool            `json:"feishu_encrypt_key_configured,omitempty"`
-	FeishuAPIBaseURL                  string          `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                       string          `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                      string          `json:"wecom_agent_id,omitempty"`
-	WeComSecret                       string          `json:"wecom_secret,omitempty"`
-	WeComSecretConfigured             bool            `json:"wecom_secret_configured,omitempty"`
-	WeComToken                        string          `json:"wecom_token,omitempty"`
-	WeComTokenConfigured              bool            `json:"wecom_token_configured,omitempty"`
-	WeComEncodingAESKey               string          `json:"wecom_encoding_aes_key,omitempty"`
-	WeComEncodingAESKeyConfigured     bool            `json:"wecom_encoding_aes_key_configured,omitempty"`
+	ID                      string          `json:"id,omitempty"`
+	Name                    string          `json:"name,omitempty"`
+	Platform                string          `json:"platform,omitempty"`
+	AvatarURL               string          `json:"avatar_url,omitempty"`
+	ActiveProfileID         string          `json:"active_profile_id,omitempty"`
+	Profiles                []ConfigPayload `json:"profiles,omitempty"`
+	IsolatePlatformContexts *bool           `json:"isolate_platform_contexts,omitempty"`
+	// MessageRelays 是跨机器人的消息互通链路，读接口一并回传给 WebUI。
+	MessageRelays                     []MessageRelayPair `json:"message_relays,omitempty"`
+	Enabled                           bool               `json:"enabled"`
+	OneBotReverseWSEndpoint           string             `json:"onebot_reverse_ws_endpoint"`
+	OneBotAccessToken                 string             `json:"onebot_access_token,omitempty"`
+	OneBotAccessTokenConfigured       bool               `json:"onebot_access_token_configured,omitempty"`
+	TelegramBotToken                  string             `json:"telegram_bot_token,omitempty"`
+	TelegramBotTokenConfigured        bool               `json:"telegram_bot_token_configured,omitempty"`
+	TelegramAPIBaseURL                string             `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL                  string             `json:"telegram_proxy_url,omitempty"`
+	QQAppID                           string             `json:"qq_app_id,omitempty"`
+	QQAppSecret                       string             `json:"qq_app_secret,omitempty"`
+	QQAppSecretConfigured             bool               `json:"qq_app_secret_configured,omitempty"`
+	QQSandbox                         bool               `json:"qq_sandbox,omitempty"`
+	DingTalkClientID                  string             `json:"dingtalk_client_id,omitempty"`
+	DingTalkClientSecret              string             `json:"dingtalk_client_secret,omitempty"`
+	DingTalkClientSecretConfigured    bool               `json:"dingtalk_client_secret_configured,omitempty"`
+	DingTalkRobotCode                 string             `json:"dingtalk_robot_code,omitempty"`
+	FeishuAppID                       string             `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret                   string             `json:"feishu_app_secret,omitempty"`
+	FeishuAppSecretConfigured         bool               `json:"feishu_app_secret_configured,omitempty"`
+	FeishuVerificationToken           string             `json:"feishu_verification_token,omitempty"`
+	FeishuVerificationTokenConfigured bool               `json:"feishu_verification_token_configured,omitempty"`
+	FeishuEncryptKey                  string             `json:"feishu_encrypt_key,omitempty"`
+	FeishuEncryptKeyConfigured        bool               `json:"feishu_encrypt_key_configured,omitempty"`
+	FeishuAPIBaseURL                  string             `json:"feishu_api_base_url,omitempty"`
+	WeComCorpID                       string             `json:"wecom_corp_id,omitempty"`
+	WeComAgentID                      string             `json:"wecom_agent_id,omitempty"`
+	WeComSecret                       string             `json:"wecom_secret,omitempty"`
+	WeComSecretConfigured             bool               `json:"wecom_secret_configured,omitempty"`
+	WeComToken                        string             `json:"wecom_token,omitempty"`
+	WeComTokenConfigured              bool               `json:"wecom_token_configured,omitempty"`
+	WeComEncodingAESKey               string             `json:"wecom_encoding_aes_key,omitempty"`
+	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
 	CallbackPath                 string               `json:"callback_path,omitempty"`
 	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
@@ -1045,6 +1047,9 @@ type ProfileSet struct {
 	ActiveID                string      `json:"active_id"`
 	Profiles                []BotConfig `json:"profiles"`
 	IsolatePlatformContexts *bool       `json:"isolate_platform_contexts,omitempty"`
+	// MessageRelays 是「消息互通」的链路表。它跨机器人，不属于任何一台，所以
+	// 放在配置集这一层而不是单台机器人的配置里。
+	MessageRelays []MessageRelayPair `json:"message_relays,omitempty"`
 }
 
 var (
@@ -1083,6 +1088,12 @@ func (s ProfileSet) PlatformContextsIsolated() bool {
 
 func (s ProfileSet) WithPlatformContextIsolation(enabled bool) ProfileSet {
 	s.IsolatePlatformContexts = &enabled
+	return s.WithDefaults()
+}
+
+// WithMessageRelays 换一整份互通配置。
+func (s ProfileSet) WithMessageRelays(pairs []MessageRelayPair) ProfileSet {
+	s.MessageRelays = pairs
 	return s.WithDefaults()
 }
 
@@ -1153,6 +1164,9 @@ func (s ProfileSet) Delete(id string) ProfileSet {
 		next = append(next, profile)
 	}
 	s.Profiles = next
+	// 机器人没了，指向它的互通链路也就断了。留着只会让转发一直往一个不存在的
+	// 机器人发，然后每条消息都在日志里失败一次。
+	s.MessageRelays = messageRelaysWithoutProfile(s.MessageRelays, id)
 	if len(s.Profiles) == 0 {
 		s.ActiveID = ""
 		return s
@@ -1169,6 +1183,7 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 		isolate := true
 		s.IsolatePlatformContexts = &isolate
 	}
+	s.MessageRelays = NormalizeMessageRelays(s.MessageRelays)
 	if len(s.Profiles) > 0 {
 		profiles := make([]BotConfig, len(s.Profiles))
 		copy(profiles, s.Profiles)
@@ -1798,6 +1813,7 @@ func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload
 	payload := convert(current)
 	payload.ActiveProfileID = set.ActiveID
 	payload.IsolatePlatformContexts = copyBoolPointer(set.IsolatePlatformContexts)
+	payload.MessageRelays = append([]MessageRelayPair(nil), set.MessageRelays...)
 	payload.Profiles = make([]ConfigPayload, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {
 		payload.Profiles = append(payload.Profiles, convert(profile))
