@@ -126,6 +126,92 @@ func TestSubagentTaskDeduplicatesActiveWork(t *testing.T) {
 	waitForCondition(t, time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
 }
 
+func TestSubagentTaskSupersedesOlderWorkAndDropsItsResult(t *testing.T) {
+	channel := &concurrentRecordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "message-1"}
+	oldStarted := make(chan struct{})
+	oldTask := PluginTask{
+		Kind: "image", Name: "旧棋盘", Key: "board:v1", SupersedeKey: "board:game-1",
+		Run: func(ctx context.Context, _ PluginTaskServices) (PluginTaskResult, error) {
+			close(oldStarted)
+			<-ctx.Done()
+			return PluginTaskResult{Reply: "不应发送的旧棋盘"}, ctx.Err()
+		},
+	}
+	newTask := PluginTask{
+		Kind: "image", Name: "新棋盘", Key: "board:v2", SupersedeKey: "board:game-1",
+		Run: func(context.Context, PluginTaskServices) (PluginTaskResult, error) {
+			return PluginTaskResult{Reply: "最新棋盘"}, nil
+		},
+	}
+
+	if _, handled, err := runtime.launchPluginTasks(context.Background(), event, []PluginTask{oldTask}); err != nil || !handled {
+		t.Fatalf("old launch: handled=%v err=%v", handled, err)
+	}
+	select {
+	case <-oldStarted:
+	case <-time.After(time.Second):
+		t.Fatal("old task did not start")
+	}
+	if _, handled, err := runtime.launchPluginTasks(context.Background(), event, []PluginTask{newTask}); err != nil || !handled {
+		t.Fatalf("new launch: handled=%v err=%v", handled, err)
+	}
+	waitForCondition(t, time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
+	for _, message := range channel.messages() {
+		if strings.Contains(message.Text, "不应发送") || strings.Contains(message.Text, "执行失败") {
+			t.Fatalf("superseded task leaked a message: %#v", channel.messages())
+		}
+	}
+	if got := channel.messages()[len(channel.messages())-1].Text; got != "最新棋盘" {
+		t.Fatalf("last message = %q", got)
+	}
+}
+
+func TestSubagentTaskReusesRecentlyCompletedWork(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, &concurrentRecordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "message-1"}
+	var runs atomic.Int64
+	task := PluginTask{Kind: "image", Name: "棋盘", Key: "board:v7", ReuseFor: time.Minute, Run: func(context.Context, PluginTaskServices) (PluginTaskResult, error) {
+		runs.Add(1)
+		return PluginTaskResult{Delivered: true}, nil
+	}}
+	reservation := runtime.reservePluginTasks(event, []PluginTask{task})
+	runtime.startPluginTaskReservation(reservation)
+	waitForCondition(t, time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
+	second := runtime.reservePluginTasks(event, []PluginTask{task})
+	if len(second.reserved) != 0 || len(second.duplicates) != 1 || runs.Load() != 1 {
+		t.Fatalf("second reservation = %#v, runs=%d", second, runs.Load())
+	}
+}
+
+func TestSubagentTaskValidatesAgainBeforeDelivery(t *testing.T) {
+	channel := &concurrentRecordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "message-1"}
+	valid := atomic.Bool{}
+	valid.Store(true)
+	release := make(chan struct{})
+	task := PluginTask{Kind: "image", Name: "棋盘", Key: "board:v1", Validate: func(context.Context) error {
+		if !valid.Load() {
+			return context.Canceled
+		}
+		return nil
+	}, Run: func(context.Context, PluginTaskServices) (PluginTaskResult, error) {
+		<-release
+		return PluginTaskResult{Reply: "过期棋盘"}, nil
+	}}
+	reservation := runtime.reservePluginTasks(event, []PluginTask{task})
+	runtime.startPluginTaskReservation(reservation)
+	waitForCondition(t, time.Second, func() bool { return runtime.activeSubagentTaskCount() == 1 })
+	valid.Store(false)
+	close(release)
+	waitForCondition(t, time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
+	if channel.count() != 0 {
+		t.Fatalf("stale result was delivered: %#v", channel.messages())
+	}
+}
+
 func TestSubagentTaskReservationStartsOnlyAfterExplicitStart(t *testing.T) {
 	channel := &concurrentRecordingChannel{}
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)

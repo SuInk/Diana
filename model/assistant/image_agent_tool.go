@@ -293,11 +293,25 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	if request.Operation == "edit" {
 		name = "图片编辑"
 	}
+	stateGuard := t.runtime.imageThreadStateGuard(ctx, t.event, request)
+	taskKey := dianaImageTaskKey(t.event, request)
+	supersedeKey := ""
+	reuseFor := time.Duration(0)
+	var validate func(context.Context) error
+	if stateGuard != nil {
+		taskKey = fmt.Sprintf("image-state:%s:v%d", stateGuard.id, stateGuard.version)
+		supersedeKey = "image-state:" + stateGuard.id
+		reuseFor = 30 * time.Minute
+		validate = stateGuard.validate
+	}
 	task := PluginTask{
-		Kind:    "image",
-		Name:    name,
-		Key:     dianaImageTaskKey(t.event, request),
-		Timeout: t.taskTimeout(),
+		Kind:         "image",
+		Name:         name,
+		Key:          taskKey,
+		SupersedeKey: supersedeKey,
+		ReuseFor:     reuseFor,
+		Validate:     validate,
+		Timeout:      t.taskTimeout(),
 		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
 			output, err := t.execute(ctx, request, services)
 			if err != nil {
@@ -342,6 +356,57 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 		return result, nil
 	}
 	return dianaImageToolResult{}, fmt.Errorf("图片任务无法启动")
+}
+
+type imageThreadStateVersionGuard struct {
+	runtime  *Runtime
+	event    MessageEvent
+	id       string
+	version  int
+	taskKind string
+}
+
+func (g *imageThreadStateVersionGuard) validate(ctx context.Context) error {
+	store := g.runtime.threadStateStore()
+	if store == nil {
+		return fmt.Errorf("关联的临时状态存储不可用")
+	}
+	items, err := store.ListActiveThreadStates(ctx, strings.TrimSpace(g.event.ProfileID), sessionKey(g.event), strings.TrimSpace(g.event.UserID), g.runtime.clock(), maximumActiveThreadStates)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID == g.id && item.TaskKind == g.taskKind && item.Version == g.version && item.Status == ThreadStateActive {
+			return nil
+		}
+	}
+	return fmt.Errorf("棋局状态已更新，丢弃过期图片结果")
+}
+
+// imageThreadStateGuard automatically binds board-image work to the current
+// canonical gomoku state. This keeps the model-facing image API simple while
+// ensuring a late image can never overtake a newer move in the same game.
+func (r *Runtime) imageThreadStateGuard(ctx context.Context, event MessageEvent, request dianaImageToolRequest) *imageThreadStateVersionGuard {
+	prompt := strings.ToLower(request.Prompt)
+	if !strings.Contains(prompt, "五子棋") && !strings.Contains(prompt, "gomoku") && !strings.Contains(prompt, "棋盘") {
+		return nil
+	}
+	store := r.threadStateStore()
+	if store == nil || strings.TrimSpace(event.UserID) == "" {
+		return nil
+	}
+	items, err := store.ListActiveThreadStates(ctx, strings.TrimSpace(event.ProfileID), sessionKey(event), strings.TrimSpace(event.UserID), r.clock(), maximumActiveThreadStates)
+	if err != nil {
+		return nil
+	}
+	for _, item := range items {
+		kind := strings.ToLower(item.TaskKind)
+		if item.Scope != ThreadStateScopeSession || (!strings.Contains(kind, "gomoku") && !strings.Contains(kind, "五子棋")) {
+			continue
+		}
+		return &imageThreadStateVersionGuard{runtime: r, event: event, id: item.ID, version: item.Version, taskKind: item.TaskKind}
+	}
+	return nil
 }
 
 func (t *dianaImageTool) taskTimeout() time.Duration {

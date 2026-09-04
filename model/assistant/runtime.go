@@ -356,6 +356,7 @@ type Runtime struct {
 	inboundInit           bool
 	subagentMu            sync.Mutex
 	subagentTasks         map[string]activeSubagentTask
+	subagentRecent        map[string]SubagentTaskStatus
 	subagentSem           chan struct{}
 	subagentLLMSem        chan struct{}
 	replySuppressMu       sync.Mutex
@@ -580,6 +581,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		inboundManualBackfill:  make(chan time.Duration, 1),
 		memoryWake:             make(chan struct{}, 1),
 		subagentTasks:          map[string]activeSubagentTask{},
+		subagentRecent:         map[string]SubagentTaskStatus{},
 		subagentSem:            make(chan struct{}, defaultSubagentTaskConcurrency),
 		subagentLLMSem:         make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
 	}
