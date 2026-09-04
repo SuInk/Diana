@@ -198,7 +198,14 @@ export interface BotProfileConfig {
   send_retry_attempts?: number;
   send_chunk_interval_ms?: number;
   /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
-  model_roles?: Record<string, { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
+  model_roles?: Record<string, {
+    profile_id?: string;
+    group?: string;
+    model: string;
+    provider_id?: string;
+    model_id?: string;
+    fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string }>;
+  }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
   /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
