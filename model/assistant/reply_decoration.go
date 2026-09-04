@@ -146,7 +146,14 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		if len(preview) > 40 {
 			preview = append(preview[:40], '…')
 		}
-		builder.WriteString("发送者刚连发了多条消息,上一条「" + string(preview) + "」你还没有回复。这一轮把它们一起接住:先明确回应那一条,再回应当前这条,别让对方觉得前一条被跳过。")
+		builder.WriteString("发送者刚连发了多条消息,上一条「" + string(preview) + "」你还没有回复。")
+		currentText := strings.TrimSpace(readableEventText(event, ""))
+		botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
+		if bareWakeMention(event, currentText, botID, cfg.GroupTriggers) {
+			builder.WriteString("当前这条只是再次叫你一声,应把它理解为催你回应上一条:直接自然回答上一条的实质内容,不要另外输出“在的”“怎么了”“你喊我有什么事”等唤醒回应,也不要在回答前后重复打招呼。")
+		} else {
+			builder.WriteString("这一轮把它们一起接住:先明确回应那一条,再回应当前这条,别让对方觉得前一条被跳过。")
+		}
 	}
 	justAnswered := botJustAnsweredSender(history, event)
 	if justAnswered {
