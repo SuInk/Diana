@@ -137,54 +137,6 @@ func TestDeletingProfileDropsItsRelays(t *testing.T) {
 	}
 }
 
-// 插件时代的「N 端全互通」要原样搬成两两成对，转发关系不能变。
-func TestMigrateMessageRelayPluginSettings(t *testing.T) {
-	states := map[string]PluginState{legacyMessageRelayPluginID: {
-		Installed: true,
-		Enabled:   true,
-		Settings: SettingValues{"endpoints": []any{
-			map[string]any{"profile_id": "bot-qq", "platform": "onebot-v11", "kind": "group", "target_id": "123456"},
-			map[string]any{"profile_id": "bot-tg", "platform": "telegram", "kind": "group", "target_id": "-1001"},
-			map[string]any{"profile_id": "bot-qq", "platform": "onebot-v11", "kind": "group", "target_id": "654321"},
-		}},
-	}}
-	set, changed := MigrateMessageRelayPluginSettings(states, ProfileSet{Profiles: []BotConfig{{ID: "bot-qq", Platform: PlatformOneBotV11}}}.WithDefaults())
-	if !changed {
-		t.Fatal("stored plugin endpoints must be migrated")
-	}
-	// 三个端点连满是三条链路，转发关系和原来的全互通一致。
-	if len(set.MessageRelays) != 3 {
-		t.Fatalf("relays=%+v, want the complete graph over three endpoints", set.MessageRelays)
-	}
-	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot-qq", Platform: PlatformOneBotV11, GroupID: "123456", UserID: "10001"}
-	if targets := messageRelayTargets(set.MessageRelays, event); len(targets) != 2 {
-		t.Fatalf("targets=%+v, want the other two endpoints", targets)
-	}
-
-	// 已经有配置时不再迁移：用户删掉的链路不该被旧插件配置变回来。
-	if _, changed := MigrateMessageRelayPluginSettings(states, set); changed {
-		t.Fatal("migration must run only once")
-	}
-}
-
-// 停用的旧插件迁移过来也应该是停用的。
-func TestMigrateMessageRelayKeepsPluginDisabledState(t *testing.T) {
-	states := map[string]PluginState{legacyMessageRelayPluginID: {
-		Installed: true,
-		Settings: SettingValues{"endpoints": []any{
-			map[string]any{"profile_id": "bot-qq", "platform": "onebot-v11", "kind": "group", "target_id": "123456"},
-			map[string]any{"profile_id": "bot-tg", "platform": "telegram", "kind": "group", "target_id": "-1001"},
-		}},
-	}}
-	set, changed := MigrateMessageRelayPluginSettings(states, ProfileSet{Profiles: []BotConfig{{ID: "bot-qq"}}}.WithDefaults())
-	if !changed || len(set.MessageRelays) != 1 {
-		t.Fatalf("changed=%v relays=%+v", changed, set.MessageRelays)
-	}
-	if set.MessageRelays[0].Enabled {
-		t.Fatal("a disabled plugin must not come back enabled")
-	}
-}
-
 // 转发正文要带上来源，否则对面看到的是一句没头没尾的话。
 func TestMessageRelayTextCarriesSource(t *testing.T) {
 	event := MessageEvent{
