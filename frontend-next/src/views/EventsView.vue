@@ -572,7 +572,11 @@ const throughputText = computed(() => {
 });
 
 const throughputFoot = computed(() => {
-  if (summary.value.llm_duration_ms <= 0) return "当前范围没有模型调用";
+  if (summary.value.llm_duration_ms <= 0) {
+    // 判的是「没有耗时数据」，不是「没有调用」。调用次数就在旁边那张卡上，
+    // 这里再说一句「没有模型调用」会自相矛盾。
+    return summary.value.llm_calls > 0 ? "暂无耗时样本" : "当前范围没有模型调用";
+  }
   // 输出 token 总量在上一张卡里，这里不再重复，只留速率本身的分母和 TTFT。
   const base = `模型耗时 ${formatDurationMS(summary.value.llm_duration_ms)}`;
   // TTFT 只有开了流式、且底层没退化成非流式时才有样本；没样本就不提，
