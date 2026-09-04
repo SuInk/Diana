@@ -218,8 +218,8 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 	if !runtime.shouldConsiderProactiveReply(event, text) || !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
 		t.Fatal("reliable direct follow-up should pass semantic routing without proactive sampling")
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "回答可信度不足时必须 should_reply=false") {
-		t.Fatalf("router prompt missing runtime answerability guard: %#v", provider.request.Messages)
+	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "不得作为 should_reply 的前置条件") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
+		t.Fatalf("router prompt missing deferred accuracy guard: %#v", provider.request.Messages)
 	}
 }
 
@@ -322,7 +322,7 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 	if !allowed || !routed.proactiveReply || len(turn) != 1 {
 		t.Fatalf("route event=%#v turn=%#v allowed=%v", routed, turn, allowed)
 	}
-	if !strings.Contains(routed.routingReason, "交由正式回复与可用工具处理") {
+	if !strings.Contains(routed.routingReason, "交由正式回复与发送前准确度审核处理") {
 		t.Fatalf("routing reason = %q", routed.routingReason)
 	}
 	if len(provider.request.Messages) < 2 {
@@ -373,6 +373,20 @@ func TestRuntimePromotesClearDirectedQuestionDespiteRouterAnswerabilityMistake(t
 		t.Fatalf("clear directed question was not promoted: %#v", decision)
 	}
 	if !decision.ShouldReply || !decision.Answerable || decision.Category != "bot_related" {
+		t.Fatalf("promoted decision = %#v", decision)
+	}
+}
+
+func TestRuntimePromotesPublicQuestionDespitePlannerAccuracyMistake(t *testing.T) {
+	decision := proactiveReplyDecision{
+		Confidence: 0.96, RequestsResponse: true, Answerable: false,
+		Blocker: proactiveBlockerMissingInfo, Reason: "dasd 指代不明，无法可靠判断",
+	}
+	event := MessageEvent{Kind: EventKindGroup, MessageID: "dasd-question"}
+	if !promoteRequestedResponse(&decision, event, 0.9, chatInSettings{}) {
+		t.Fatalf("public question was not promoted: %#v", decision)
+	}
+	if !decision.ShouldReply || decision.Category != "needs_response" || decision.TargetMessageID != "dasd-question" {
 		t.Fatalf("promoted decision = %#v", decision)
 	}
 }
@@ -2580,7 +2594,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		t.Fatal("proactive router did not call the LLM")
 	}
 	systemPrompt := provider.request.Messages[0].Content
-	for _, want := range []string{"默认保持沉默", "directed_at_bot", "answerable", "不等于在问机器人", "只能是“不知道”", "last_bot_addressed_current_sender", "要求机器人安静或停止回复", "主动介入能提供明显价值", "回答可信度不足"} {
+	for _, want := range []string{"默认保持沉默", "directed_at_bot", "answerable", "不等于在问机器人", "不负责事实准确度审核", "发送前准确度审核", "不得作为 should_reply 的前置条件"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}
@@ -3086,10 +3100,10 @@ func TestProactiveReplyDecisionRequiresStrictThresholdAndCategory(t *testing.T) 
 	}{
 		{name: "clear request above threshold", raw: `{"should_reply":true,"confidence":0.96,"category":"needs_response","directed_at_bot":false,"answerable":true}`, threshold: 0.9, want: true},
 		{name: "bot related at threshold", raw: "```json\n{\"should_reply\":true,\"confidence\":0.9,\"category\":\"bot_related\",\"directed_at_bot\":true,\"answerable\":true}\n```", threshold: 0.9, want: true},
-		{name: "unanswerable bot follow-up", raw: `{"should_reply":true,"confidence":0.99,"category":"bot_related","directed_at_bot":true,"answerable":false}`, threshold: 0.9, want: false},
+		{name: "bot follow-up accuracy deferred to send audit", raw: `{"should_reply":true,"confidence":0.99,"category":"bot_related","directed_at_bot":true,"answerable":false}`, threshold: 0.9, want: true},
 		{name: "low confidence bot follow-up", raw: `{"should_reply":true,"confidence":0.89,"category":"bot_related","directed_at_bot":true,"answerable":true}`, threshold: 0.9, want: false},
 		{name: "below threshold", raw: `{"should_reply":true,"confidence":0.89,"category":"needs_response","directed_at_bot":false,"answerable":true}`, threshold: 0.9, want: false},
-		{name: "unanswerable group question", raw: `{"should_reply":true,"confidence":0.99,"category":"needs_response","directed_at_bot":false,"answerable":false}`, threshold: 0.9, want: false},
+		{name: "group question accuracy deferred to send audit", raw: `{"should_reply":true,"confidence":0.99,"category":"needs_response","directed_at_bot":false,"answerable":false}`, threshold: 0.9, want: true},
 		{name: "unrelated bot category", raw: `{"should_reply":true,"confidence":0.99,"category":"bot_related","directed_at_bot":false,"answerable":true}`, threshold: 0.9, want: false},
 		{name: "unapproved category", raw: `{"should_reply":true,"confidence":0.99,"category":"casual_chat"}`, threshold: 0.9, want: false},
 		{name: "negative decision", raw: `{"should_reply":false,"confidence":0.99,"category":"none"}`, threshold: 0.9, want: false},
