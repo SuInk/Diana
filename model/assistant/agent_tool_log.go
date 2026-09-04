@@ -153,6 +153,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 func sanitizeThreadStateDebugToolCall(input map[string]any, output string) (map[string]any, string) {
 	redacted := map[string]any{
 		"operation":  strings.TrimSpace(configToolString(input, "operation")),
+		"scope":      strings.TrimSpace(configToolString(input, "scope")),
 		"task_kind":  strings.TrimSpace(configToolString(input, "task_kind")),
 		"input_keys": sortedMapKeys(input),
 	}
