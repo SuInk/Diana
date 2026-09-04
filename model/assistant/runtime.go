@@ -1677,12 +1677,10 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// Clear batches left by a runtime started before immediate proactive routing was enabled.
 		r.cancelProactiveReplyBatch(event)
 	}
-	if !handled {
-		if rootMessageID, merged := r.mergeIntoActiveDirectReply(ctx, event, text); merged {
-			event.routingReason = fmt.Sprintf("已并入同一用户正在生成的回复（触发消息 %s），不再单独判断或发送", rootMessageID)
-			r.record(r.decisionEventRecord(event, text, "merged_into_reply"))
-			return finishWithoutReply("merged_into_reply")
-		}
+	if rootMessageID, merged := r.mergeIntoActiveDirectReply(ctx, event, text); merged {
+		event.routingReason = fmt.Sprintf("已并入同一用户正在生成的回复（触发消息 %s），不再单独判断或发送", rootMessageID)
+		r.record(r.decisionEventRecord(event, text, "merged_into_reply"))
+		return finishWithoutReply("merged_into_reply")
 	}
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {

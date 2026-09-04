@@ -109,6 +109,29 @@ func (r *Runtime) directReplyHasNewSupplements(ctx context.Context) bool {
 	return active != nil && active.token == run.token && active.generation > run.generation
 }
 
+func (r *Runtime) directReplyIncludesMessage(ctx context.Context, messageID string) bool {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return false
+	}
+	run, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
+	if !ok {
+		return false
+	}
+	r.replyInterruptMu.Lock()
+	defer r.replyInterruptMu.Unlock()
+	active := r.activeDirectReplies[run.key]
+	if active == nil || active.token != run.token {
+		return false
+	}
+	for _, supplement := range active.supplements {
+		if strings.TrimSpace(supplement.Event.MessageID) == messageID {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runtime) sealDirectReply(ctx context.Context) {
 	run, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext)
 	if !ok {
