@@ -849,7 +849,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         events: [291, 272, 170, 11][index] ?? 0,
         group_name: group.group_name,
         avatar_url: group.avatar_url
-      }))
+      })),
+      // 私聊也要出现在会话筛选器里：它们没有群号，以前整类都进不了这个下拉。
+      user: url.searchParams.get("user") ?? "",
+      private_chats: [
+        { user_id: "880024", user_name: "Demo User", events: 46, bot_profile_id: "bot-telegram" },
+        { user_id: "100200711", user_name: "青禾", events: 12, bot_profile_id: "bot-onebot" }
+      ]
     });
   }
   const traceMatch = path.match(/^\/api\/assistant\/events\/([^/]+)\/trace$/);
