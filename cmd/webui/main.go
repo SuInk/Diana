@@ -237,12 +237,23 @@ func main() {
 	systemHandler.StartAutoUpdate(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
 	plugins := assistant.NewDefaultPluginManager()
-	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
+	savedPluginStates, hasPluginStates, err := sqliteStore.LoadPluginStates(ctx)
+	if err != nil {
 		log.Fatal(err)
-	} else if ok {
+	}
+	if hasPluginStates {
 		plugins.Restore(savedPluginStates)
 	}
 	botSet := botProfileStore.Profiles()
+	// 「消息互通」以前是插件，配置存在插件设置里。搬到机器人配置集之后，老用户
+	// 那份端点得跟着搬过来，否则升级完互通就悄悄停了。
+	if migrated, changed := assistant.MigrateMessageRelayPluginSettings(savedPluginStates, botSet); changed {
+		if err := botProfileStore.SaveProfiles(migrated); err != nil {
+			log.Printf("diana failed to migrate message relay settings: %v", err)
+		} else {
+			botSet = migrated
+		}
+	}
 	botCfg, ok := botSet.RuntimeConfig()
 	if !ok {
 		botCfg = botProfileStore.Current()

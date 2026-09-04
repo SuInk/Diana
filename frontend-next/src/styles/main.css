@@ -2020,7 +2020,7 @@ a.nav-action {
   color: inherit;
 }
 
-.context-isolation-band {
+.settings-band {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
@@ -2030,7 +2030,12 @@ a.nav-action {
   border-bottom: 1px solid var(--border);
 }
 
-.context-isolation-icon {
+/* 两条设置带挨在一起时中间只留一条线，不然是两条挨着的边框。 */
+.settings-band + .settings-band {
+  border-top: none;
+}
+
+.settings-band-icon {
   display: grid;
   place-items: center;
   width: 34px;
@@ -2040,24 +2045,24 @@ a.nav-action {
   color: var(--accent);
 }
 
-.context-isolation-copy {
+.settings-band-copy {
   display: flex;
   flex-direction: column;
   min-width: 0;
   gap: 3px;
 }
 
-.context-isolation-copy strong {
+.settings-band-copy strong {
   font-size: 13px;
 }
 
-.context-isolation-copy span {
+.settings-band-copy span {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
 }
 
-.context-isolation-switch {
+.settings-band-switch {
   white-space: nowrap;
 }
 
@@ -4825,12 +4830,12 @@ a.nav-action {
     gap: 6px;
   }
 
-  .context-isolation-band {
+  .settings-band {
     grid-template-columns: 34px minmax(0, 1fr);
     align-items: start;
   }
 
-  .context-isolation-switch {
+  .settings-band-switch {
     grid-column: 2;
     justify-self: start;
   }
