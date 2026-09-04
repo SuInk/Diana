@@ -43,7 +43,7 @@ func (t *dianaRenderTool) Name() string { return dianaRenderToolName }
 
 func (t *dianaRenderTool) Description() string {
 	return `把内容渲染成一张图片直接发到当前会话：聊天窗口不渲染 Markdown，表格会散成一堆竖线，流程和结构只能用文字硬描。` +
-		`适合多行多列的表格、对比清单、流程图、时序图、状态机、树形结构、以及需要对齐才看得懂的排版。` +
+		`适合多行多列的表格、对比清单、流程图、时序图、状态机、树形结构、坐标棋盘，以及任何要求位置、文字、数量确定且可复现的画面；五子棋盘优先使用 svg 精确绘制。` +
 		`format 选 markdown（表格、清单、代码，用 GitHub 风格 Markdown）、mermaid（流程图/时序图/状态图等，写 mermaid 源码）或 svg（自己画的矢量图，必须以 <svg> 开头）。` +
 		`一两句话说得清的东西别用它——出图要起一次浏览器，比直接说话慢得多，读者也不方便复制。` +
 		`图由运行时发送，你在调用后用一句话交代就行，不要复述图里的内容。`
