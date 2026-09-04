@@ -12,8 +12,22 @@
          会把它裁掉，靠底部的下拉只能看见头一两项。 -->
     <Teleport to="body">
       <div v-if="open" ref="menuRef" class="app-select-menu" role="listbox" :style="menuStyle">
+        <div v-if="searchable" class="app-select-search">
+          <Search :size="13" aria-hidden="true" />
+          <input
+            ref="searchRef"
+            v-model="keyword"
+            type="text"
+            :placeholder="searchPlaceholder || '搜索'"
+            :aria-label="searchPlaceholder || '搜索选项'"
+            @keydown.escape.stop="close"
+          />
+        </div>
+        <p v-if="visibleGroups.length === 0" class="app-select-empty muted">没有匹配的选项</p>
+        <template v-for="section in visibleGroups" :key="section.name || '_'">
+        <p v-if="section.name" class="app-select-group">{{ section.name }}</p>
         <button
-          v-for="option in options"
+          v-for="option in section.options"
           :key="option.value"
           type="button"
           class="app-select-item"
@@ -30,6 +44,7 @@
             <small v-if="option.hint" class="muted">{{ option.hint }}</small>
           </span>
         </button>
+        </template>
       </div>
     </Teleport>
   </div>
@@ -37,7 +52,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Check, ChevronDown } from "@lucide/vue";
+import { Check, ChevronDown, Search } from "@lucide/vue";
 
 export interface AppSelectOption {
   value: string;
@@ -45,6 +60,8 @@ export interface AppSelectOption {
   hint?: string;
   /** 可选头像。取不到图时自动隐藏，不留破图占位。 */
   avatar?: string;
+  /** 分段标题。相邻的同名选项归到一段，留空表示不分段。 */
+  group?: string;
 }
 
 const props = defineProps<{
@@ -52,11 +69,47 @@ const props = defineProps<{
   options: AppSelectOption[];
   id?: string;
   disabled?: boolean;
+  /** 选项多到需要翻找时打开：菜单顶部出现搜索框，按标签和 hint 过滤。 */
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }>();
 const emit = defineEmits<{ "update:modelValue": [string] }>();
 
 const open = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
+const searchRef = ref<HTMLInputElement | null>(null);
+const keyword = ref("");
+
+// 过滤同时看标签和 hint：hint 里放的是群号和条数，按号找群的人不必先想起名字。
+const filteredOptions = computed(() => {
+  const term = keyword.value.trim().toLowerCase();
+  if (!term) return props.options;
+  return props.options.filter((option) => `${option.label} ${option.hint ?? ""}`.toLowerCase().includes(term));
+});
+
+// 按 group 归段，保持选项本身的顺序；没有 group 的归到无标题段。
+const visibleGroups = computed(() => {
+  const sections: Array<{ name: string; options: AppSelectOption[] }> = [];
+  for (const option of filteredOptions.value) {
+    const name = option.group ?? "";
+    const last = sections[sections.length - 1];
+    if (last && last.name === name) {
+      last.options.push(option);
+      continue;
+    }
+    sections.push({ name, options: [option] });
+  }
+  return sections;
+});
+
+// 每次打开都从空关键词开始并聚焦搜索框：留着上次的词会让人以为选项变少了。
+watch(open, (value) => {
+  if (!value) {
+    keyword.value = "";
+    return;
+  }
+  if (props.searchable) void nextTick(() => searchRef.value?.focus());
+});
 const triggerRef = ref<HTMLElement | null>(null);
 const menuRef = ref<HTMLElement | null>(null);
 
@@ -110,6 +163,10 @@ function placeMenu(): void {
   menuStyle.value = style;
 }
 
+function close(): void {
+  open.value = false;
+}
+
 function toggle(): void {
   open.value = !open.value;
 }
@@ -134,10 +191,11 @@ function onKeydown(event: KeyboardEvent): void {
   // 上下键在选项间移动，无需展开也能快速切换。
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
-    const index = props.options.findIndex((option) => option.value === props.modelValue);
+    const list = filteredOptions.value;
+    const index = list.findIndex((option) => option.value === props.modelValue);
     const next = event.key === "ArrowDown" ? index + 1 : index - 1;
-    if (next >= 0 && next < props.options.length) {
-      emit("update:modelValue", props.options[next].value);
+    if (next >= 0 && next < list.length) {
+      emit("update:modelValue", list[next].value);
     }
   }
 }
@@ -168,6 +226,39 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.app-select-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.app-select-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.app-select-group {
+  margin: 0;
+  padding: 6px 10px 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.app-select-empty {
+  margin: 0;
+  padding: 10px;
+  font-size: 12px;
+}
+
 /* 头像只是辨识用的小图，不该把行高撑起来。 */
 .app-select-avatar {
   flex: 0 0 auto;
