@@ -292,6 +292,48 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 	return nil
 }
 
+// SendTextDraft uses Telegram's native draft API. Telegram currently exposes
+// drafts only for private chats; group replies keep the ordinary final-send
+// behavior instead of simulating streaming with a trail of edited messages.
+func (c *TelegramChannel) SendTextDraft(ctx context.Context, msg OutgoingMessage, draftID int64) error {
+	chatID := strings.TrimSpace(msg.UserID)
+	text := strings.TrimSpace(msg.Text)
+	if chatID == "" || text == "" || strings.TrimSpace(msg.GroupID) != "" {
+		return nil
+	}
+	text, mentions := renderDianaMentions(text, msg.MentionNames)
+	text, entities := telegramRichText(text, mentions)
+	params := map[string]any{
+		"chat_id":  chatID,
+		"draft_id": draftID,
+		"text":     text,
+	}
+	if threadID := strings.TrimSpace(msg.MessageThreadID); threadID != "" {
+		params["message_thread_id"] = threadID
+	}
+	if entityParams := telegramEntityParams(entities); len(entityParams) > 0 {
+		params["entities"] = entityParams
+	}
+	_, err := c.CallAPI(ctx, "sendMessageDraft", params)
+	return err
+}
+
+func (c *TelegramChannel) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
+	chatID := strings.TrimSpace(msg.GroupID)
+	if chatID == "" {
+		chatID = strings.TrimSpace(msg.UserID)
+	}
+	if chatID == "" || strings.TrimSpace(action) == "" {
+		return nil
+	}
+	params := map[string]any{"chat_id": chatID, "action": strings.TrimSpace(action)}
+	if threadID := strings.TrimSpace(msg.MessageThreadID); threadID != "" {
+		params["message_thread_id"] = threadID
+	}
+	_, err := c.CallAPI(ctx, "sendChatAction", params)
+	return err
+}
+
 // sendMedia 发送单个媒体。远程 URL 直接交给 Telegram 去拉，本地文件走
 // multipart 上传——Telegram 拉不到我们本机的 /media/resolver 地址。
 func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string) error {

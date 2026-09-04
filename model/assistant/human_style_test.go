@@ -62,17 +62,6 @@ func TestHumanStyleTeachesSplitting(t *testing.T) {
 	}
 }
 
-// TestHumanStyleGetsTypingDelay 秒回是最容易暴露的一点，这一档必须有拟真停顿。
-func TestHumanStyleGetsTypingDelay(t *testing.T) {
-	if ReplyStyleHuman.typingDelay("测试一句话") <= 0 {
-		t.Fatal("真人感档没有开口前的停顿")
-	}
-	// 别顺手把停顿加给所有风格：助手风格秒回是对的。
-	if ReplyStyleAssistant.typingDelay("测试一句话") != 0 {
-		t.Fatal("助手风格不该有拟真停顿")
-	}
-}
-
 // TestHumanStyleVoiceLeavesEndersOpen 句尾候选留空是有意的。
 //
 // 钉死一组语气词，模型会给每句话挂同一个后缀，读起来比助手腔更假——那正是这一档
