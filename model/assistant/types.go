@@ -512,34 +512,21 @@ type BotConfig struct {
 }
 
 type ModelRole struct {
-	ProfileID  string `json:"profile_id,omitempty"`
-	Group      string `json:"group,omitempty"`
-	Model      string `json:"model"`
-	ProviderID string `json:"provider_id,omitempty"`
-	ModelID    string `json:"model_id,omitempty"`
+	ProfileID  string      `json:"profile_id,omitempty"`
+	Group      string      `json:"group,omitempty"`
+	Model      string      `json:"model"`
+	ProviderID string      `json:"provider_id,omitempty"`
+	ModelID    string      `json:"model_id,omitempty"`
+	Fallbacks  []ModelRole `json:"fallbacks,omitempty"`
 }
 
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 	out := map[string]ModelRole{}
 	for key, role := range roles {
 		key = strings.ToLower(strings.TrimSpace(key))
-		role.ProfileID = strings.TrimSpace(role.ProfileID)
-		role.Group = strings.TrimSpace(role.Group)
-		role.Model = strings.TrimSpace(role.Model)
-		role.ProviderID = strings.TrimSpace(role.ProviderID)
-		role.ModelID = strings.TrimSpace(role.ModelID)
-		if role.ProviderID != "" || role.ModelID != "" {
-			role.ProfileID = ""
-			role.Group = ""
-			if role.Model == "" {
-				role.Model = role.ModelID
-			}
-		}
-		if role.Group != "" {
-			role.ProfileID = ""
-		}
+		role = normalizeModelRole(role)
 		// 可绑定的键从 4 个扩到「5 个分组 + 17 个用途」，见 model_binding.go。
-		if isModelBindingKey(key) && ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != "" {
+		if isModelBindingKey(key) && modelRoleConfigured(role) {
 			out[key] = role
 		}
 	}
@@ -547,6 +534,38 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 		return nil
 	}
 	return out
+}
+
+func normalizeModelRole(role ModelRole) ModelRole {
+	role.ProfileID = strings.TrimSpace(role.ProfileID)
+	role.Group = strings.TrimSpace(role.Group)
+	role.Model = strings.TrimSpace(role.Model)
+	role.ProviderID = strings.TrimSpace(role.ProviderID)
+	role.ModelID = strings.TrimSpace(role.ModelID)
+	if role.ProviderID != "" || role.ModelID != "" {
+		role.ProfileID = ""
+		role.Group = ""
+		if role.Model == "" {
+			role.Model = role.ModelID
+		}
+	}
+	if role.Group != "" {
+		role.ProfileID = ""
+	}
+	fallbacks := make([]ModelRole, 0, len(role.Fallbacks))
+	for _, fallback := range role.Fallbacks {
+		fallback.Fallbacks = nil
+		fallback = normalizeModelRole(fallback)
+		if modelRoleConfigured(fallback) {
+			fallbacks = append(fallbacks, fallback)
+		}
+	}
+	role.Fallbacks = fallbacks
+	return role
+}
+
+func modelRoleConfigured(role ModelRole) bool {
+	return ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != ""
 }
 
 type ReplyRuleAction string

@@ -288,7 +288,7 @@ code {
 /* 模型分配行 */
 .model-role-row {
   display: grid;
-  grid-template-columns: 72px minmax(150px, 220px) 1fr;
+  grid-template-columns: 72px minmax(150px, 220px) minmax(180px, 1fr) 34px;
   align-items: center;
   gap: 10px;
 }

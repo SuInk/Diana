@@ -109,3 +109,26 @@ func TestEveryPurposeIsBindable(t *testing.T) {
 		t.Fatalf("未知键被写进了绑定表: %#v", got)
 	}
 }
+
+func TestNormalizeModelRolesKeepsOrderedCrossGroupFallbacks(t *testing.T) {
+	roles := normalizeModelRoles(map[string]ModelRole{
+		"chat": {
+			Group: " fast ", Model: " primary-model ",
+			Fallbacks: []ModelRole{
+				{Group: " reliable ", Model: " backup-model "},
+				{ProfileID: " final ", Model: " final-model ", Fallbacks: []ModelRole{{Group: "ignored", Model: "ignored"}}},
+				{},
+			},
+		},
+	})
+	role := roles["chat"]
+	if role.Group != "fast" || role.Model != "primary-model" || len(role.Fallbacks) != 2 {
+		t.Fatalf("role = %#v", role)
+	}
+	if role.Fallbacks[0].Group != "reliable" || role.Fallbacks[0].Model != "backup-model" {
+		t.Fatalf("first fallback = %#v", role.Fallbacks[0])
+	}
+	if role.Fallbacks[1].ProfileID != "final" || len(role.Fallbacks[1].Fallbacks) != 0 {
+		t.Fatalf("second fallback = %#v", role.Fallbacks[1])
+	}
+}
