@@ -144,6 +144,29 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 	}
 }
 
+func TestPendingEarlierMessageTreatsBareWakeAsNudgeWithoutGreeting(t *testing.T) {
+	cfg := BotConfig{BotAccount: "42", GroupTriggers: []string{"Diana"}}.WithDefaults()
+	earlier := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u1", MessageID: "111", Time: 9995,
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "缓存率和记忆功能需要真实模型测试"}}}}
+
+	for _, current := range []MessageEvent{
+		{Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "u1", MessageID: "222", Time: 10000,
+			Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}}},
+		{Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "u1", MessageID: "333", Time: 10000,
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana"}}}},
+	} {
+		prompt := replyDecorationPrompt(cfg, current, []MessageEvent{earlier, current})
+		for _, want := range []string{"理解为催你回应上一条", "直接自然回答上一条的实质内容", "不要另外输出“在的”"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("裸唤醒补答缺少 %q: %s", want, prompt)
+			}
+		}
+		if strings.Contains(prompt, "再回应当前这条") {
+			t.Fatalf("裸唤醒不应被当成第二个实质问题: %s", prompt)
+		}
+	}
+}
+
 // 订阅推送和聊天回复对 @ 的诉求相反：聊天里每句都 @ 很烦人，所以有 auto/off；
 // 但提醒和订阅是过了很久之后主动找某个人，正文是模板或后台任务生成的，没有模型
 // 帮它写 @，被那个开关连坐的结果就是订阅者在群里永远收不到点名。
