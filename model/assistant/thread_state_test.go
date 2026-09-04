@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,9 +29,16 @@ func (s *memoryThreadStateStore) PutThreadState(_ context.Context, request Threa
 	if s.err != nil {
 		return ThreadState{}, s.err
 	}
+	if request.Scope == "" {
+		request.Scope = ThreadStateScopeUser
+	}
+	request.UserID = threadStateScopeUserID(request.Scope, request.UserID)
 	for index := range s.items {
 		item := &s.items[index]
 		if item.ProfileID == request.ProfileID && item.Session == request.Session && item.UserID == request.UserID && item.TaskKind == request.TaskKind && item.Status == ThreadStateActive {
+			if request.Scope == ThreadStateScopeSession && request.ExpectedVersion <= 0 {
+				return ThreadState{}, ErrThreadStateVersionConflict
+			}
 			if request.ExpectedVersion > 0 && request.ExpectedVersion != item.Version {
 				return ThreadState{}, ErrThreadStateVersionConflict
 			}
@@ -43,7 +51,7 @@ func (s *memoryThreadStateStore) PutThreadState(_ context.Context, request Threa
 	}
 	item := ThreadState{
 		ID: fmt.Sprintf("state-%d", len(s.items)+1), ProfileID: request.ProfileID, Session: request.Session,
-		UserID: request.UserID, TaskKind: request.TaskKind, State: append(json.RawMessage(nil), request.State...),
+		UserID: request.UserID, Scope: request.Scope, TaskKind: request.TaskKind, State: append(json.RawMessage(nil), request.State...),
 		Version: 1, Status: ThreadStateActive, CreatedAt: request.Now, UpdatedAt: request.Now, ExpiresAt: request.ExpiresAt,
 	}
 	s.items = append(s.items, item)
@@ -58,7 +66,7 @@ func (s *memoryThreadStateStore) ListActiveThreadStates(_ context.Context, profi
 	}
 	out := make([]ThreadState, 0, limit)
 	for _, item := range s.items {
-		if item.ProfileID == profileID && item.Session == session && item.UserID == userID && item.Status == ThreadStateActive && item.ExpiresAt.After(now) {
+		if item.ProfileID == profileID && item.Session == session && (item.UserID == userID || item.Scope == ThreadStateScopeSession) && item.Status == ThreadStateActive && item.ExpiresAt.After(now) {
 			item.State = append(json.RawMessage(nil), item.State...)
 			out = append(out, item)
 			if len(out) >= limit {
@@ -75,9 +83,16 @@ func (s *memoryThreadStateStore) EndThreadState(_ context.Context, request Threa
 	if s.err != nil {
 		return ThreadState{}, s.err
 	}
+	if request.Scope == "" {
+		request.Scope = ThreadStateScopeUser
+	}
+	request.UserID = threadStateScopeUserID(request.Scope, request.UserID)
 	for index := range s.items {
 		item := &s.items[index]
 		if item.ProfileID == request.ProfileID && item.Session == request.Session && item.UserID == request.UserID && item.TaskKind == request.TaskKind && item.Status == ThreadStateActive {
+			if request.Scope == ThreadStateScopeSession && request.ExpectedVersion <= 0 {
+				return ThreadState{}, ErrThreadStateVersionConflict
+			}
 			if request.ExpectedVersion > 0 && request.ExpectedVersion != item.Version {
 				return ThreadState{}, ErrThreadStateVersionConflict
 			}
@@ -89,6 +104,79 @@ func (s *memoryThreadStateStore) EndThreadState(_ context.Context, request Threa
 		}
 	}
 	return ThreadState{}, fmt.Errorf("not found")
+}
+
+func TestThreadStateSharedGomokuKeepsOneCanonicalBoard(t *testing.T) {
+	store := &memoryThreadStateStore{}
+	now := time.Date(2026, 9, 4, 15, 22, 0, 0, time.Local)
+	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.now = func() time.Time { return now }
+	runtime.SetThreadStateStore(store)
+
+	eventA := MessageEvent{ProfileID: "bot-1", Kind: EventKindGroup, GroupID: "group-1", UserID: "player-a", MessageID: "m1"}
+	toolA := newDianaThreadStateTool(runtime, eventA)
+	if _, err := toolA.Run(context.Background(), map[string]any{
+		"operation": "set", "scope": "session", "task_kind": "game.gomoku",
+		"state": map[string]any{
+			"board_size": 15,
+			"moves":      []any{map[string]any{"color": "black", "point": "H8"}},
+			"next":       "white",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	eventB := eventA
+	eventB.UserID = "player-b"
+	eventB.MessageID = "m2"
+	contextB := runtime.privateThreadStateContext(context.Background(), eventB)
+	if !strings.Contains(contextB, `"scope":"session"`) || !strings.Contains(contextB, `"point":"H8"`) {
+		t.Fatalf("player B did not receive the shared board: %q", contextB)
+	}
+	toolB := newDianaThreadStateTool(runtime, eventB)
+	updated, err := toolB.Run(context.Background(), map[string]any{
+		"operation": "set", "scope": "session", "task_kind": "game.gomoku", "expected_version": 1,
+		"state": map[string]any{
+			"board_size": 15,
+			"moves": []any{
+				map[string]any{"color": "black", "point": "H8"},
+				map[string]any{"color": "white", "point": "I8"},
+			},
+			"next": "black",
+		},
+	})
+	if err != nil || !strings.Contains(updated, `"version":2`) {
+		t.Fatalf("player B update = %q, err=%v", updated, err)
+	}
+
+	eventC := eventA
+	eventC.UserID = "player-c"
+	eventC.MessageID = "m3"
+	toolC := newDianaThreadStateTool(runtime, eventC)
+	if _, err := toolC.Run(context.Background(), map[string]any{
+		"operation": "set", "scope": "session", "task_kind": "game.gomoku", "expected_version": 1,
+		"state": map[string]any{"moves": []any{map[string]any{"color": "black", "point": "G9"}}},
+	}); !errors.Is(err, ErrThreadStateVersionConflict) {
+		t.Fatalf("stale parallel move error = %v", err)
+	}
+	contextC := runtime.privateThreadStateContext(context.Background(), eventC)
+	if !strings.Contains(contextC, `"version":2`) || !strings.Contains(contextC, `"point":"I8"`) {
+		t.Fatalf("player C did not receive canonical version 2: %q", contextC)
+	}
+
+	if _, err := toolC.Run(context.Background(), map[string]any{
+		"operation": "complete", "scope": "session", "task_kind": "game.gomoku", "expected_version": 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []MessageEvent{eventA, eventB, eventC} {
+		if got := runtime.privateThreadStateContext(context.Background(), event); got != "" {
+			t.Fatalf("completed shared game still visible to %s: %q", event.UserID, got)
+		}
+	}
+	if len(store.items) != 1 || store.items[0].UserID != "" || store.items[0].Scope != ThreadStateScopeSession || store.items[0].Status != ThreadStateCompleted {
+		t.Fatalf("gomoku split into parallel states: %#v", store.items)
+	}
 }
 
 func TestThreadStateToolPersistsAndInjectsPrivateContext(t *testing.T) {
