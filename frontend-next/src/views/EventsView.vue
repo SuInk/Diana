@@ -29,7 +29,9 @@
               class="event-group-filter"
               :model-value="selectedGroup"
               :options="groupOptions"
-              aria-label="按群聊筛选事件"
+              searchable
+              search-placeholder="搜索群聊或私聊"
+              aria-label="按会话筛选事件"
               @update:model-value="(value) => selectGroup(String(value))"
             />
           </div>
@@ -798,11 +800,12 @@ const USER_PREFIX = "u:";
 
 const groupOptions = computed(() => {
   const options: AppSelectOption[] = [{ value: "", label: "全部会话" }];
+  // 群聊和私聊分开列：两类会话的编号体系不一样，混在一条长列表里很难扫。
   for (const group of response.value?.groups ?? []) {
-    options.push(groupOption(group.group_id, group.events, group.group_name, group.avatar_url));
+    options.push({ ...groupOption(group.group_id, group.events, group.group_name, group.avatar_url), group: "群聊" });
   }
   for (const chat of response.value?.private_chats ?? []) {
-    options.push(privateChatOption(chat.user_id, chat.events, chat.user_name));
+    options.push({ ...privateChatOption(chat.user_id, chat.events, chat.user_name), group: "私聊" });
   }
   // 选中的会话这一轮可能已经没有事件了（换了更短的时间范围），选项要留着，
   // 否则下拉框显示空白、也没法切回去。
@@ -844,7 +847,7 @@ function privateChatOption(userID: string, events: number, name?: string): AppSe
   const label = (name ?? "").trim();
   return {
     value: USER_PREFIX + userID,
-    label: label ? `${label}（私聊）` : `私聊 ${userID}`,
+    label: label || `私聊 ${userID}`,
     hint: label ? `${userID} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`
   };
 }
