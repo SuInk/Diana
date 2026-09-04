@@ -133,7 +133,7 @@
           @click="confirmInstall"
         >
           <RefreshCcw :size="14" aria-hidden="true" />
-          {{ installTracking ? "升级并重启中…" : operationRunning ? "升级中…" : "升级并重启" }}
+          {{ installTracking ? "重启并更新中…" : operationRunning ? "更新中…" : "重启并更新" }}
         </button>
         <button v-if="switchToRelease && !downloadReadyForLatest" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
           <Download :size="14" aria-hidden="true" />
@@ -366,7 +366,7 @@ const canDownloadUpdate = computed(() => releaseSelfUpdate.value
   && checkResult.value.checksum_available
   && !downloadReadyForLatest.value
   // 安装一开始后端就把 download_ready 清掉了（包已交给 helper），但新版本还没起来，
-  // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「升级并重启」，
+  // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「重启并更新」，
   // 按钮就当场变回「下载并校验」，等超时解锁后还能真的再下一遍。
   && !installTracking.value
   && !status.value?.restart_required);
@@ -458,12 +458,28 @@ async function load(): Promise<void> {
   } catch {
     version.value = null;
   }
-  const [statusResult, changelogResult] = await Promise.allSettled([
-    deploymentMode.value === "git" || version.value?.update_supported ? getUpdateStatus() : Promise.resolve(null),
+  // 打开面板就把「有没有新版本」一并问出来：以前要再点一次「检查更新」才知道，
+  // 而检查接口本身就带回 status 和 policy，单独取一次 status 纯属多跑一趟。
+  const supportsUpdate = deploymentMode.value === "git" || Boolean(version.value?.update_supported);
+  checking.value = supportsUpdate;
+  const [updateResult, changelogResult] = await Promise.allSettled([
+    supportsUpdate ? checkForUpdate() : Promise.resolve(null),
     getChangelog()
   ]);
-  if (statusResult.status === "fulfilled") {
-    status.value = statusResult.value;
+  checking.value = false;
+  if (updateResult.status === "fulfilled" && updateResult.value) {
+    checkResult.value = updateResult.value;
+    status.value = updateResult.value.status ?? null;
+    policy.value = updateResult.value.policy ?? policy.value;
+    if (status.value) applyPersistedUpdateResult(status.value);
+    emit("checked", updateResult.value.update_available);
+  } else if (supportsUpdate) {
+    // 检查失败（离线、被限流）时退回本地状态：至少让面板显示当前部署信息，
+    // 用户仍可手动点「检查更新」重试。
+    checkError.value = updateResult.status === "rejected" && updateResult.reason instanceof Error
+      ? updateResult.reason.message
+      : "";
+    status.value = await getUpdateStatus().catch(() => null);
     if (status.value) applyPersistedUpdateResult(status.value);
   } else {
     status.value = null;
@@ -732,7 +748,11 @@ async function pollInstallResult(): Promise<void> {
       status.value = checkResult.value.status ?? nextStatus;
       installTracking.value = false;
       emit("checked", checkResult.value.update_available);
-      toastSuccess(`${nextStatus.last_update_version || installTarget || "新版本"} 升级成功`);
+      toastSuccess(`${nextStatus.last_update_version || installTarget || "新版本"} 更新成功，正在重新载入界面…`);
+      // 后端已经换成新版本，但这个页面跑的还是升级前那份 JS：不重载的话，
+      // 用户会对着旧界面用新后端，直到自己想起来刷新。index.html 是
+      // no-cache + ETag，重载就会取到新构建，带哈希的资源自然跟着换。
+      window.setTimeout(() => window.location.reload(), 1200);
     } else if (nextStatus.last_update_status === "rolled_back" || nextStatus.last_update_status === "failed") {
       installTracking.value = false;
       version.value = await getSystemVersion(true).catch(() => version.value);
