@@ -707,7 +707,15 @@ async function load(reset: boolean): Promise<void> {
     loadingMore.value = true;
   }
   try {
-    const next = await getAssistantEvents(requestedRange, requestedResult, requestedPage, 50, requestedGroup, botScope.value);
+    const next = await getAssistantEvents(
+      requestedRange,
+      requestedResult,
+      requestedPage,
+      50,
+      requestedGroup.startsWith(USER_PREFIX) ? "" : requestedGroup.replace(GROUP_PREFIX, ""),
+      botScope.value,
+      requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : ""
+    );
     if (generation !== loadGeneration) return;
     response.value = next;
     if (reset) {
@@ -755,17 +763,34 @@ function selectGroup(value: string): void {
 
 // 群选项跟着时间范围走，只列这段时间里真有事件的群：机器人可能进了几十个群，
 // 绝大多数一条事件都没有，全列出来反而找不到要看的那个。
+// 会话筛选器同时列群和私聊。值带前缀区分二者：私聊没有群号，后端也要按不同
+// 字段筛，混在一起会把「群 123」和「用户 123」当成同一个会话。
+const GROUP_PREFIX = "g:";
+const USER_PREFIX = "u:";
+
 const groupOptions = computed(() => {
   const options: AppSelectOption[] = [{ value: "", label: "全部会话" }];
   for (const group of response.value?.groups ?? []) {
     options.push(groupOption(group.group_id, group.events, group.group_name, group.avatar_url));
   }
-  // 选中的群这一轮可能已经没有事件了（换了更短的时间范围），选项要留着，
+  for (const chat of response.value?.private_chats ?? []) {
+    options.push(privateChatOption(chat.user_id, chat.events, chat.user_name));
+  }
+  // 选中的会话这一轮可能已经没有事件了（换了更短的时间范围），选项要留着，
   // 否则下拉框显示空白、也没法切回去。
   if (selectedGroup.value && !options.some((option) => option.value === selectedGroup.value)) {
-    options.push(groupOption(selectedGroup.value, 0));
+    const id = selectedSessionID.value;
+    options.push(selectedGroup.value.startsWith(USER_PREFIX) ? privateChatOption(id, 0) : groupOption(id, 0));
   }
   return options;
+});
+
+// selectedSessionID 去掉前缀，拿到真正的群号或账号。
+const selectedSessionID = computed(() => {
+  const value = selectedGroup.value;
+  if (value.startsWith(GROUP_PREFIX)) return value.slice(GROUP_PREFIX.length);
+  if (value.startsWith(USER_PREFIX)) return value.slice(USER_PREFIX.length);
+  return value;
 });
 
 function displayEventGroup(groupID?: string, eventName?: string): string {
@@ -780,10 +805,19 @@ function displayEventGroup(groupID?: string, eventName?: string): string {
 function groupOption(groupID: string, events: number, name?: string, avatar?: string): AppSelectOption {
   const label = (name ?? "").trim();
   return {
-    value: groupID,
+    value: GROUP_PREFIX + groupID,
     label: label || `群 ${groupID}`,
     hint: label ? `${groupID} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`,
     avatar
+  };
+}
+
+function privateChatOption(userID: string, events: number, name?: string): AppSelectOption {
+  const label = (name ?? "").trim();
+  return {
+    value: USER_PREFIX + userID,
+    label: label ? `${label}（私聊）` : `私聊 ${userID}`,
+    hint: label ? `${userID} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`
   };
 }
 
@@ -1111,7 +1145,15 @@ async function syncLiveEvents(): Promise<void> {
     return;
   }
   try {
-    const next = await getAssistantEvents(selectedRange.value, selectedResult.value, 1, 50, selectedGroup.value, botScope.value);
+    const next = await getAssistantEvents(
+      selectedRange.value,
+      selectedResult.value,
+      1,
+      50,
+      selectedGroup.value.startsWith(USER_PREFIX) ? "" : selectedGroup.value.replace(GROUP_PREFIX, ""),
+      botScope.value,
+      selectedGroup.value.startsWith(USER_PREFIX) ? selectedSessionID.value : ""
+    );
     if (currentView.value !== "events" || isReadingBelowTop()) {
       pendingLiveEvents.value = true;
       return;

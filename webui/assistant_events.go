@@ -58,6 +58,10 @@ type assistantEventsResponse struct {
 	// Group 是当前筛选的群号，Groups 是这个时间范围内可选的群。
 	Group  string                    `json:"group,omitempty"`
 	Groups []assistantEventGroupItem `json:"groups"`
+	// User 是当前筛选的私聊对象，PrivateChats 是这个时间范围内可选的私聊。
+	// 会话筛选器原来只有群，私聊事件在里面完全没有入口。
+	User         string                            `json:"user,omitempty"`
+	PrivateChats []storage.InboundEventPrivateChat `json:"private_chats"`
 	// ContextBudget 只在筛了具体某个群时给出：预算是按群算的，全部事件混在
 	// 一起没有一个「这个群的预算」可言。
 	ContextBudget *assistant.ContextBudgetBreakdown `json:"context_budget,omitempty"`
@@ -234,6 +238,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		limit = 100
 	}
 	groupID := strings.TrimSpace(c.Query("group"))
+	userID := strings.TrimSpace(c.Query("user"))
 	profileID := strings.TrimSpace(c.Query("profile"))
 	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), storage.InboundEventQuery{
 		Since:     since,
@@ -241,6 +246,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Offset:    (page - 1) * limit,
 		Result:    resultFilter,
 		GroupID:   groupID,
+		UserID:    userID,
 		ProfileID: profileID,
 	})
 	if err != nil {
@@ -342,11 +348,16 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		AvgTTFTMS:             stored.AvgTTFTMS,
 		TTFTCalls:             stored.TTFTCalls,
 
-		Page:    page,
-		Limit:   limit,
-		HasMore: int64(page*limit) < stored.FilteredTotal,
-		Group:   groupID,
-		Groups:  []assistantEventGroupItem{},
+		Page:         page,
+		Limit:        limit,
+		HasMore:      int64(page*limit) < stored.FilteredTotal,
+		Group:        groupID,
+		Groups:       []assistantEventGroupItem{},
+		User:         userID,
+		PrivateChats: []storage.InboundEventPrivateChat{},
+	}
+	if chats, err := h.sqlite.ListInboundEventPrivateChats(c.Request.Context(), since, botProfileScope(c)); err == nil {
+		response.PrivateChats = chats
 	}
 	if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since, botProfileScope(c)); err == nil {
 		response.Groups = h.namedEventGroups(c.Request.Context(), botProfileScope(c), groups)
