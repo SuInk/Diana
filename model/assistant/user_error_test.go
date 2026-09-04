@@ -148,6 +148,29 @@ func TestReplyAndRecordSendsSanitizedErrorButKeepsDiagnostic(t *testing.T) {
 	}
 }
 
+func TestReplyAndRecordKeepsErrorSilentWhenErrorNotificationsDisabled(t *testing.T) {
+	channel := &recordingChannel{}
+	disabled := false
+	rawErr := errors.New("empty_finalize: 模型收尾时未提供任何正文")
+	runtime := NewRuntime(BotConfig{ErrorNotifyEnabled: &disabled}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return failingLLMProvider{err: rawErr}, nil
+	})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "silent-error"}
+	outcome, err := runtime.replyAndRecord(context.Background(), event, "测试", "replied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "error_silent" {
+		t.Fatalf("outcome = %q, want error_silent", outcome)
+	}
+	if len(channel.sent) != 0 {
+		t.Fatalf("disabled error notification sent messages: %#v", channel.sent)
+	}
+	if !strings.Contains(runtime.Status().LastError, "empty_finalize") {
+		t.Fatalf("diagnostic error was not retained: %q", runtime.Status().LastError)
+	}
+}
+
 func TestReplyAndRecordClassifiesContentPolicyAndSanitizesDiagnostic(t *testing.T) {
 	channel := &recordingChannel{}
 	rawErr := errors.New(`content_policy_violation from https://relay.private.example/v1: Authorization: Bearer owner-token`)
