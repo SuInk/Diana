@@ -452,7 +452,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 			cfg = usedCfg
 			sourceCount += len(batch)
 			if streaming {
-				shared, localPaths, shareErr := t.runtime.shareAgentImages(resp.Images)
+				shared, localPaths, shareErr := t.runtime.shareAgentImages(ctx, t.event.Platform, resp.Images)
 				if shareErr == nil && len(shared) > 0 {
 					if len(localPaths) > 0 {
 						cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
@@ -492,7 +492,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		return dianaImageTaskOutput{}, fmt.Errorf("图片接口没有返回图片")
 	}
 
-	sharedImages, localPaths, err := t.runtime.shareAgentImages(images)
+	sharedImages, localPaths, err := t.runtime.shareAgentImages(ctx, t.event.Platform, images)
 	if err != nil {
 		return dianaImageTaskOutput{}, err
 	}
@@ -563,11 +563,11 @@ func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent,
 	return tool.enqueue(ctx, request)
 }
 
-func (r *Runtime) shareAgentImages(images []string) ([]string, []string, error) {
+func (r *Runtime) shareAgentImages(ctx context.Context, platform string, images []string) ([]string, []string, error) {
 	sharedImages := make([]string, 0, len(images))
 	localPaths := make([]string, 0, len(images))
 	for _, image := range images {
-		shared, localPath, err := r.shareAgentImage(image)
+		shared, localPath, err := r.shareAgentImage(ctx, platform, image)
 		if err != nil {
 			for _, path := range localPaths {
 				cleanupLocalMediaFile(path)
@@ -582,10 +582,22 @@ func (r *Runtime) shareAgentImages(images []string) ([]string, []string, error) 
 	return sharedImages, localPaths, nil
 }
 
-func (r *Runtime) shareAgentImage(image string) (string, string, error) {
+func (r *Runtime) shareAgentImage(ctx context.Context, platform, image string) (string, string, error) {
 	image = strings.TrimSpace(image)
 	if parsed, err := url.Parse(image); err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https") {
-		return image, "", nil
+		if NormalizePlatformID(platform) != PlatformTelegram {
+			return image, "", nil
+		}
+		data, mediaType, err := downloadImageBytesWithLimit(ctx, image, dianaImageMaxDecodedSize)
+		if err != nil {
+			return "", "", fmt.Errorf("Telegram 发送前下载生成图片失败: %w", err)
+		}
+		extension := ".png"
+		if extensions, extErr := mime.ExtensionsByType(mediaType); extErr == nil && len(extensions) > 0 {
+			extension = extensions[0]
+		}
+		path, cleanupPath, err := r.cacheAgentImage(data, mediaType, extension)
+		return path, cleanupPath, err
 	}
 	mediaType, encoded, ok := strings.Cut(image, ",")
 	mediaType = strings.TrimPrefix(mediaType, "data:")
@@ -607,6 +619,9 @@ func (r *Runtime) shareAgentImage(image string) (string, string, error) {
 	path, cleanupPath, err := r.cacheAgentImage(data, mediaType, extension)
 	if err != nil {
 		return "", "", err
+	}
+	if NormalizePlatformID(platform) == PlatformTelegram {
+		return path, cleanupPath, nil
 	}
 	r.mu.RLock()
 	sharer := r.localMedia
