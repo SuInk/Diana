@@ -164,6 +164,12 @@ func (r *Runtime) inboundTriggerSuperseded(ctx context.Context, event MessageEve
 	if !ok || mark.messageID == messageID || time.Since(mark.at) > replyInterruptRetention {
 		return false
 	}
+	// A newer directed message may already have been folded into this active
+	// direct-reply run. In that case regeneration covers the newer trigger, so
+	// treating it as an external superseding turn would discard the merged reply.
+	if r.directReplyIncludesMessage(ctx, mark.messageID) {
+		return false
+	}
 	if r.shouldHandleChatTrigger(event, directedInboundText(event)) {
 		return true
 	}
