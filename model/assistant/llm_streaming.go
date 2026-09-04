@@ -42,6 +42,27 @@ type ttftCollector struct {
 
 type ttftCollectorKey struct{}
 
+type textDeltaObserverKey struct{}
+
+type textDeltaObserver interface {
+	ObserveTextDelta(ctx context.Context, text string)
+}
+
+func withTextDeltaObserver(ctx context.Context, observer textDeltaObserver) context.Context {
+	if ctx == nil || observer == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, textDeltaObserverKey{}, observer)
+}
+
+func textDeltaObserverFromContext(ctx context.Context) textDeltaObserver {
+	if ctx == nil {
+		return nil
+	}
+	observer, _ := ctx.Value(textDeltaObserverKey{}).(textDeltaObserver)
+	return observer
+}
+
 func withTTFTCollector(ctx context.Context) (context.Context, *ttftCollector) {
 	collector := &ttftCollector{}
 	return context.WithValue(ctx, ttftCollectorKey{}, collector), collector
@@ -110,6 +131,7 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 // accumulateChatEvents 把事件流攒成一个完整响应，顺便记下首 token 时刻。
 func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*llm.GenerateResponse, error) {
 	collector := ttftCollectorFromContext(ctx)
+	observer := textDeltaObserverFromContext(ctx)
 	var text strings.Builder
 	var toolCalls []llm.ToolCall
 	var usage llm.Usage
@@ -122,6 +144,9 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 			}
 			collector.observeDelta(time.Now())
 			text.WriteString(event.Text)
+			if observer != nil {
+				observer.ObserveTextDelta(ctx, text.String())
+			}
 		case llm.ChatEventReasoning:
 			// GenerateResponse 没有放推理内容的地方，非流式那条路同样丢掉它。
 			// 这里跟着丢，保证两条路的返回值一模一样。

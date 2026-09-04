@@ -2943,6 +2943,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
+	stopTyping := r.startTelegramTyping(ctx, event)
+	defer stopTyping()
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
@@ -3594,6 +3596,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
 	// 保证发图前只出现一条文字（见 image_announcement.go）。
+	if draft := r.telegramReplyDraft(event, replyCfg); draft != nil {
+		ctx = withTextDeltaObserver(ctx, draft)
+	}
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	if err != nil {
 		if pending := imageAnnouncements.drain(); pending != "" {
@@ -5062,6 +5067,10 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
+	// Streaming must be the last wrapper added so it sits closest to the real
+	// provider. The other decorators expose Generate only and would otherwise
+	// hide the provider's Stream method.
+	run = r.withLLMStreamingRun(ctx, run)
 	return r.runRawLLMProviderForGroup(ctx, group, run)
 }
 
@@ -5076,6 +5085,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
+	run = r.withLLMStreamingRun(ctx, run)
 	_, _ = run(provider)
 	if wrapped == nil {
 		return provider
@@ -8395,11 +8405,6 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 		}
 		// Some OneBot implementations do not support merged forwards. Continue
 		// through the normal chunk path so long replies are still delivered.
-	}
-	// 开口前先停一下：秒回比措辞更容易暴露。生成本身花掉的时间已经算进去了，
-	// 模型慢的时候不再额外空等。风格不需要时返回 0。
-	if delay := cfg.ReplyStyle.remainingTypingDelay(reply, replyTurnElapsed(ctx)); delay > 0 && !sleepContext(ctx, delay) {
-		return nil, ctx.Err()
 	}
 	return r.deliverChunks(ctx, event, chunks, cfg, decoration)
 }

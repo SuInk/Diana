@@ -312,6 +312,19 @@ type ResultChannel interface {
 	SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error)
 }
 
+// TextDraftChannel exposes a platform-native draft message used while an LLM
+// response is still being generated. Drafts are previews only; the ordinary
+// Send path remains responsible for the final, audited reply.
+type TextDraftChannel interface {
+	SendTextDraft(ctx context.Context, msg OutgoingMessage, draftID int64) error
+}
+
+// ChatActionChannel exposes short-lived platform status such as Telegram's
+// "typing" indicator while a reply is being prepared.
+type ChatActionChannel interface {
+	SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error
+}
+
 type ChannelStatus struct {
 	ProfileID            string `json:"profile_id,omitempty"`
 	Platform             string `json:"platform,omitempty"`
