@@ -396,6 +396,7 @@ const groupResponseModeOptions: AppSelectOption[] = [
   { value: "quiet", label: "安静模式" },
   { value: "standard", label: "标准模式" },
   { value: "active", label: "活跃模式" },
+  { value: "super_active", label: "超级活跃模式", hint: "几乎每条群消息都会尝试接话" },
   { value: "custom", label: "自定义" }
 ];
 
@@ -502,7 +503,7 @@ function truncate(text: string, max: number): string {
 }
 
 function responseModeLabel(mode: BotGroupConfig["response_mode"]): string {
-  return ({ quiet: "安静模式", standard: "标准模式", active: "活跃模式", custom: "自定义回复" } as const)[mode as "quiet" | "standard" | "active" | "custom"] ?? "";
+  return ({ quiet: "安静模式", standard: "标准模式", active: "活跃模式", super_active: "超级活跃模式", custom: "自定义回复" } as const)[mode as "quiet" | "standard" | "active" | "super_active" | "custom"] ?? "";
 }
 
 function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
