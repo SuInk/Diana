@@ -1743,6 +1743,8 @@ export interface AssistantEventsResponse {
   has_more: boolean;
   group?: string;
   groups: AssistantEventGroup[];
+  user?: string;
+  private_chats: AssistantEventPrivateChat[];
   context_budget?: AssistantContextBudget;
 }
 
@@ -1751,6 +1753,13 @@ export interface AssistantEventGroup {
   events: number;
   group_name?: string;
   avatar_url?: string;
+}
+
+export interface AssistantEventPrivateChat {
+  user_id: string;
+  events: number;
+  user_name?: string;
+  bot_profile_id?: string;
 }
 
 export interface AssistantContextBudgetLayer {
@@ -1777,10 +1786,12 @@ export function getAssistantEvents(
   page = 1,
   limit = 50,
   group = "",
-  profile = ""
+  profile = "",
+  user = ""
 ): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
   if (group) params.set("group", group);
+  if (user) params.set("user", user);
   if (profile) params.set("profile", profile);
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
 }

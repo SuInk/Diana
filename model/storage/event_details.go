@@ -209,6 +209,9 @@ type InboundEventQuery struct {
 	Result InboundEventResultFilter
 	// GroupID 只看这一个群，留空表示不限。
 	GroupID string
+	// UserID 只看和这个人的私聊，留空表示不限。私聊没有群号，光靠 GroupID
+	// 筛不出来，控制台的会话筛选器因此一直漏掉私聊。
+	UserID string
 	// ProfileID 只看这一台机器人，留空表示不限。多机器人部署里，控制台的
 	// 「当前机器人」切换靠它生效。
 	ProfileID string
@@ -249,6 +252,11 @@ func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query Inbound
 	if groupID := strings.TrimSpace(query.GroupID); groupID != "" {
 		groupCondition = " AND i.group_id = ?"
 		scopeArgs = append(scopeArgs, groupID)
+	} else if userID := strings.TrimSpace(query.UserID); userID != "" {
+		// 私聊：按对方账号筛，并且必须排掉群消息——同一个人在群里发的消息
+		// 不属于这段私聊会话。
+		groupCondition = " AND i.user_id = ? AND COALESCE(TRIM(i.group_id), '') = ''"
+		scopeArgs = append(scopeArgs, userID)
 	}
 	// 机器人筛选和群筛选一样要同时作用在计数和列表上，否则顶部统计与下面的
 	// 列表说的不是同一批事件。
@@ -885,6 +893,87 @@ func groupNameFromEventPayload(payload string) string {
 		return ""
 	}
 	return strings.TrimSpace(envelope.GroupName)
+}
+
+// InboundEventPrivateChat 是一段私聊会话在筛选器里的样子。
+type InboundEventPrivateChat struct {
+	UserID string `json:"user_id"`
+	// UserName 取自最近一条事件里的发送者昵称，没有就只能显示账号。
+	UserName     string `json:"user_name,omitempty"`
+	BotProfileID string `json:"bot_profile_id,omitempty"`
+	Events       int64  `json:"events"`
+}
+
+// ListInboundEventPrivateChats 列出这段时间里有私聊事件的对话人。
+//
+// 控制台的会话筛选器原来只列群（ListInboundEventGroups 明确排掉了空群号），
+// 于是「全部会话」里从来看不到私聊，也没法只看某个人的私聊。私聊没有群号，
+// 只能按对方账号聚合。
+func (s *SQLiteStore) ListInboundEventPrivateChats(ctx context.Context, since time.Time, botProfileID string) ([]InboundEventPrivateChat, error) {
+	chats := []InboundEventPrivateChat{}
+	if s == nil || s.db == nil {
+		return chats, nil
+	}
+	sinceUnix := int64(0)
+	if !since.IsZero() {
+		sinceUnix = since.Unix()
+	}
+	scopeCondition, scopeCondition2 := "", ""
+	botProfileID = strings.TrimSpace(botProfileID)
+	if botProfileID != "" {
+		scopeCondition = " AND COALESCE(i.profile_id, '') = ?"
+		scopeCondition2 = " AND COALESCE(j.profile_id, '') = ?"
+	}
+	args := []any{}
+	for range 2 {
+		args = append(args, sinceUnix)
+		if botProfileID != "" {
+			args = append(args, botProfileID)
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT i.user_id, COUNT(*),
+  (SELECT j.payload FROM inbound_events AS j
+   WHERE j.user_id = i.user_id AND COALESCE(TRIM(j.group_id), '') = '' AND j.event_time >= ?`+scopeCondition2+`
+   ORDER BY j.event_time DESC, j.id DESC LIMIT 1)
+FROM inbound_events AS i
+WHERE i.event_time >= ? AND COALESCE(TRIM(i.group_id), '') = '' AND COALESCE(TRIM(i.user_id), '') != ''`+scopeCondition+`
+GROUP BY i.user_id
+ORDER BY COUNT(*) DESC, i.user_id ASC
+`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list inbound event private chats: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var chat InboundEventPrivateChat
+		var payload sql.NullString
+		if err := rows.Scan(&chat.UserID, &chat.Events, &payload); err != nil {
+			return nil, fmt.Errorf("scan inbound event private chat: %w", err)
+		}
+		chat.UserName, chat.BotProfileID = privateChatIdentityFromEventPayload(payload.String)
+		chats = append(chats, chat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate inbound event private chats: %w", err)
+	}
+	return chats, nil
+}
+
+// privateChatIdentityFromEventPayload 从事件 payload 里取发送者昵称和归属机器人。
+// 解析失败按「只有账号」处理：昵称只用于显示，不该让一条异常事件拖垮整个列表。
+func privateChatIdentityFromEventPayload(payload string) (string, string) {
+	if strings.TrimSpace(payload) == "" {
+		return "", ""
+	}
+	var envelope struct {
+		SenderName string `json:"sender_name"`
+		ProfileID  string `json:"profile_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		return "", ""
+	}
+	return strings.TrimSpace(envelope.SenderName), strings.TrimSpace(envelope.ProfileID)
 }
 
 // ListInboundEventGroups 列出这个时间范围里有事件的群，按事件数从多到少。
