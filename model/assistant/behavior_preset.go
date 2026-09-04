@@ -11,10 +11,11 @@ import (
 type ResponseMode string
 
 const (
-	ResponseModeQuiet    ResponseMode = "quiet"
-	ResponseModeStandard ResponseMode = "standard"
-	ResponseModeActive   ResponseMode = "active"
-	ResponseModeCustom   ResponseMode = "custom"
+	ResponseModeQuiet       ResponseMode = "quiet"
+	ResponseModeStandard    ResponseMode = "standard"
+	ResponseModeActive      ResponseMode = "active"
+	ResponseModeSuperActive ResponseMode = "super_active"
+	ResponseModeCustom      ResponseMode = "custom"
 )
 
 func (mode ResponseMode) Normalized() ResponseMode {
@@ -25,6 +26,8 @@ func (mode ResponseMode) Normalized() ResponseMode {
 		return ResponseModeStandard
 	case "active":
 		return ResponseModeActive
+	case "super_active", "super-active", "superactive":
+		return ResponseModeSuperActive
 	case "custom":
 		return ResponseModeCustom
 	default:
@@ -43,6 +46,14 @@ func (mode ResponseMode) apply(cfg *BotConfig) {
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelHigh
 		cfg.NaturalInterjectionEnabled = boolPointer(false)
+		clearChatInFineTuning(cfg)
+	case ResponseModeSuperActive:
+		// 等价于参考实现 routing_p=1、sampling_cooldown_ms=0：每条合格的
+		// 人类消息都获得回应机会。自然插话仍会过滤机器人消息、回复循环、
+		// 禁用群和确实没有内容可说的情况。
+		cfg.ChatInEnabled = boolPointer(true)
+		cfg.ChatInLevel = ChatInLevelMax
+		cfg.NaturalInterjectionEnabled = boolPointer(true)
 		clearChatInFineTuning(cfg)
 	case ResponseModeStandard:
 		cfg.ChatInEnabled = boolPointer(true)
