@@ -211,6 +211,46 @@
                 </template>
               </div>
 
+              <section v-if="event.memories?.length" class="event-memories" aria-label="本轮调用的长期记忆">
+                <strong>本轮调用的长期记忆（{{ event.memories.length }}）</strong>
+                <div class="event-memory-list">
+                  <article v-for="memory in event.memories" :key="memory.id || `${memory.kind}:${memory.content}`" class="event-memory-item">
+                    <div class="event-memory-head">
+                      <span class="badge">{{ memoryKindLabel(memory.kind) }}</span>
+                      <strong>{{ memory.topic || memory.entity || "未命名记忆" }}</strong>
+                      <span v-if="memory.sensitive" class="badge warn">敏感</span>
+                    </div>
+                    <p>{{ memory.content }}</p>
+                    <div class="event-memory-meta muted mono">
+                      <span v-if="memory.source_type">来源 {{ memory.source_type }}</span>
+                      <span v-if="memory.visibility">可见性 {{ memory.visibility }}</span>
+                      <span v-if="memory.source_group_id">来源群 {{ memory.source_group_id }}</span>
+                      <span v-if="memory.confidence">置信度 {{ formatMemoryScore(memory.confidence) }}</span>
+                      <span v-if="memory.retrieval_score">召回分 {{ memory.retrieval_score.toFixed(3) }}</span>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <section v-if="event.temporary_memories?.length" class="event-memories temporary" aria-label="本轮调用的临时记忆">
+                <strong>本轮调用的临时记忆（{{ event.temporary_memories.length }}）</strong>
+                <div class="event-memory-list">
+                  <article v-for="memory in event.temporary_memories" :key="memory.id || `${memory.kind}:${memory.task_kind || memory.topic || ''}`" class="event-memory-item">
+                    <div class="event-memory-head">
+                      <span class="badge">{{ temporaryMemoryKindLabel(memory.kind) }}</span>
+                      <span v-if="memory.scope" class="badge">{{ memory.scope === "session" ? "会话共享" : "用户私有" }}</span>
+                      <strong>{{ memory.task_kind || memory.topic || "当前会话状态" }}</strong>
+                      <span v-if="memory.version" class="badge">v{{ memory.version }}</span>
+                    </div>
+                    <pre>{{ temporaryMemoryContent(memory.content) }}</pre>
+                    <div class="event-memory-meta muted mono">
+                      <span v-if="memory.expires_at">到期 {{ formatDate(memory.expires_at) }}</span>
+                      <span v-if="memory.source_message_id">来源消息 {{ memory.source_message_id }}</span>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
               <div v-if="!isNoticeEvent(event)" class="event-decision" :class="decisionClass(event)">
                 <component :is="decisionIcon(event)" :size="16" aria-hidden="true" />
                 <div>
@@ -428,6 +468,33 @@ const response = ref<AssistantEventsResponse | null>(null);
 const page = ref(1);
 const loading = ref(false);
 const loadingMore = ref(false);
+
+function memoryKindLabel(kind?: string): string {
+  const labels: Record<string, string> = {
+    fact: "事实", preference: "偏好", episode: "情景", instruction: "长期要求",
+    summary: "摘要", thread: "会话状态"
+  };
+  return labels[kind ?? ""] ?? kind ?? "记忆";
+}
+
+function temporaryMemoryKindLabel(kind?: string): string {
+  if (kind === "private_thread_state") return "私有任务状态";
+  if (kind === "session_thread") return "会话线程便签";
+  return kind || "临时记忆";
+}
+
+function temporaryMemoryContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  try {
+    return JSON.stringify(content, null, 2);
+  } catch {
+    return String(content ?? "");
+  }
+}
+
+function formatMemoryScore(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
 const traceOpen = ref<Record<string, boolean>>({});
 const traceLoading = ref<Record<string, boolean>>({});
 const traceLoaded = ref<Record<string, boolean>>({});
@@ -1419,6 +1486,73 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
+}
+
+.event-memories {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.event-memories > strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.event-memory-list {
+  display: grid;
+  gap: 8px;
+}
+
+.event-memory-item {
+  padding: 9px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--surface-1);
+}
+
+.event-memory-head,
+.event-memory-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.event-memory-head strong {
+  font-size: 13px;
+}
+
+.event-memory-item p {
+  margin: 7px 0 6px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.event-memory-item pre {
+  margin: 7px 0 6px;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.event-memories.temporary .event-memory-item {
+  border-left-color: var(--warn);
+}
+
+.event-memory-meta {
+  font-size: 11px;
 }
 
 .event-image-preview {
