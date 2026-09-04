@@ -156,7 +156,7 @@ func TestRegistryChatRetriesTransientFailure(t *testing.T) {
 	}
 }
 
-func TestRegistryModelRoleGroupFailsOverAcrossProviders(t *testing.T) {
+func TestRegistryModelRoleFallbacksCanCrossGroupsAndModels(t *testing.T) {
 	primary := &retryRegistryAdapter{err: errors.New("503 service unavailable")}
 	backup := &retryRegistryAdapter{succeedAt: 1, response: "backup ok"}
 	registry := llm.NewProviderRegistry()
@@ -170,16 +170,23 @@ func TestRegistryModelRoleGroupFailsOverAcrossProviders(t *testing.T) {
 		if err := registry.RegisterProvider(llm.ProviderDefinition{ID: item.id, Name: item.id, Protocol: llm.ProtocolOpenAIResponses, Enabled: true}, item.adapter); err != nil {
 			t.Fatal(err)
 		}
-		if err := registry.RegisterModel(llm.ModelDefinition{ID: item.id + ":shared-model", ProviderID: item.id, ModelID: "shared-model", Name: "shared-model"}); err != nil {
+		modelID := "primary-model"
+		if item.id == "backup" {
+			modelID = "backup-model"
+		}
+		if err := registry.RegisterModel(llm.ModelDefinition{ID: item.id + ":" + modelID, ProviderID: item.id, ModelID: modelID, Name: modelID}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	profiles := llm.ProfileSet{Profiles: []llm.Profile{
-		{ID: "primary", Group: "robot-chat", Config: llm.ProviderConfig{Model: "old-primary", Models: []llm.ModelInfo{{ID: "shared-model"}}}},
-		{ID: "backup", Group: "robot-chat", Config: llm.ProviderConfig{Model: "old-backup", Models: []llm.ModelInfo{{ID: "shared-model"}}}},
+		{ID: "primary", Group: "fast", Config: llm.ProviderConfig{Model: "old-primary", Models: []llm.ModelInfo{{ID: "primary-model"}}}},
+		{ID: "backup", Group: "reliable", Config: llm.ProviderConfig{Model: "old-backup", Models: []llm.ModelInfo{{ID: "backup-model"}}}},
 	}}
 	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
-		"chat": {Group: "robot-chat", Model: "shared-model"},
+		"chat": {
+			Group: "fast", Model: "primary-model",
+			Fallbacks: []ModelRole{{Group: "reliable", Model: "backup-model"}},
+		},
 	}}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: profiles}, nil, nil, nil)
 	runtime.SetLLMProviderRegistry(registry)
 
