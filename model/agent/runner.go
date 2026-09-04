@@ -878,6 +878,9 @@ func (r *Runner) systemPrompt() string {
 	if hasTool("diana.image") {
 		rules = append(rules, "- diana.image 返回 queued=true 只表示任务已受理、正在后台生成，不表示图片已经完成或发送；此后调用 agent.finalize 时必须携带 task_state=\"pending\"，正文说明已开始生成，完成后由运行时自动补发。")
 	}
+	if hasTool("diana.image") && hasTool("diana.render") {
+		rules = append(rules, "- 在 diana.render 与 diana.image 之间选择时：坐标棋盘、表格、流程图、状态图、时间线和其他要求位置/文字/数量精确的结构化画面，优先用 diana.render（通常使用静态 SVG）；人物、风景、质感、艺术风格和其他开放式视觉创作使用 diana.image。用户明确指定某一种时遵从用户。五子棋等已有 canonical 任务状态的盘面更新默认用 diana.render，不要为了木纹或写实感牺牲落子准确性。")
+	}
 	if hasAnyTool("diana.reminder", "diana.schedule") {
 		rules = append(rules, "- 禁止使用命令、sleep、脚本或后台进程实现计时、提醒和周期任务；必须调用当前已提供的持久化任务工具。")
 	}

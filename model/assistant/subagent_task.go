@@ -64,6 +64,8 @@ type SubagentTaskStatus struct {
 
 type activeSubagentTask struct {
 	status           SubagentTaskStatus
+	supersedeKey     string
+	cancel           context.CancelFunc
 	lastNotification time.Time
 	lastMessage      string
 }
@@ -145,9 +147,30 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 		if key == "" {
 			key = task.Kind + ":" + uuid.NewString()
 		}
+		for recentKey, recent := range r.subagentRecent {
+			if now.Sub(recent.UpdatedAt) > 30*time.Minute {
+				delete(r.subagentRecent, recentKey)
+			}
+		}
+		if recent, ok := r.subagentRecent[key]; ok && task.ReuseFor > 0 && now.Sub(recent.UpdatedAt) <= task.ReuseFor {
+			duplicates = append(duplicates, recent)
+			continue
+		}
 		if active, ok := r.subagentTasks[key]; ok {
 			duplicates = append(duplicates, active.status)
 			continue
+		}
+		supersedeKey := strings.TrimSpace(task.SupersedeKey)
+		if supersedeKey != "" {
+			for activeKey, active := range r.subagentTasks {
+				if active.supersedeKey != supersedeKey {
+					continue
+				}
+				if active.cancel != nil {
+					active.cancel()
+				}
+				delete(r.subagentTasks, activeKey)
+			}
 		}
 		id := shortSubagentTaskID(task.Kind)
 		status := SubagentTaskStatus{
@@ -158,7 +181,7 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 			StartedAt: now,
 			UpdatedAt: now,
 		}
-		r.subagentTasks[key] = activeSubagentTask{status: status}
+		r.subagentTasks[key] = activeSubagentTask{status: status, supersedeKey: supersedeKey}
 		reserved = append(reserved, reservedSubagentTask{id: id, key: key, task: task, event: event, eventID: turnID})
 	}
 	r.subagentMu.Unlock()
@@ -251,6 +274,16 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	}
 	ctx, cancel := context.WithTimeout(rootCtx, timeout)
 	defer cancel()
+	if !r.attachSubagentTaskCancel(item.key, item.id, cancel) {
+		return
+	}
+	if item.task.Validate != nil {
+		if err := item.task.Validate(ctx); err != nil {
+			r.persistSubagentTask(item, "cancelled", PluginTaskProgress{}, err, true)
+			r.removeSubagentTask(item.key, item.id)
+			return
+		}
+	}
 	r.updateSubagentTask(item.key, item.id, PluginTaskProgress{Phase: "running"})
 	r.recordSubagentTaskLog(ctx, item, applog.KindOperation, applog.LevelInfo, "后台任务已开始", "")
 	r.persistSubagentTask(item, "running", PluginTaskProgress{}, nil, false)
@@ -264,12 +297,20 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 			r.reportSubagentProgress(ctx, item, progress)
 		},
 		Send: func(sendCtx context.Context, message OutgoingMessage) error {
+			if item.task.Validate != nil {
+				if err := item.task.Validate(sendCtx); err != nil {
+					return err
+				}
+			}
 			message = routeOutgoingToEvent(item.event, message)
 			return r.sendOutgoing(sendCtx, item.event, message)
 		},
 	}
 	result, err := runPluginTaskSafely(ctx, item.task, services)
 	if err != nil {
+		if !r.isSubagentTaskActive(item.key, item.id) {
+			return
+		}
 		if ctx.Err() == nil || rootCtx.Err() == nil {
 			message := fmt.Sprintf("后台任务「%s」执行失败：%s", item.task.Name, publicChatErrorMessage(err))
 			_ = r.sendSubagentFollowup(rootCtx, item.event, message)
@@ -278,6 +319,13 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 		}
 		r.removeSubagentTask(item.key, item.id)
 		return
+	}
+	if item.task.Validate != nil {
+		if err := item.task.Validate(rootCtx); err != nil {
+			r.persistSubagentTask(item, "cancelled", PluginTaskProgress{}, err, true)
+			r.removeSubagentTask(item.key, item.id)
+			return
+		}
 	}
 
 	sent := result.Delivered
@@ -307,7 +355,38 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	}
 	r.recordSubagentTaskLog(context.Background(), item, applog.KindOperation, applog.LevelInfo, "后台任务已完成", "")
 	r.persistSubagentTask(item, "completed", PluginTaskProgress{}, nil, true)
+	r.rememberCompletedSubagentTask(item)
 	r.removeSubagentTask(item.key, item.id)
+}
+
+func (r *Runtime) attachSubagentTaskCancel(key, id string, cancel context.CancelFunc) bool {
+	r.subagentMu.Lock()
+	defer r.subagentMu.Unlock()
+	active, ok := r.subagentTasks[key]
+	if !ok || active.status.ID != id {
+		cancel()
+		return false
+	}
+	active.cancel = cancel
+	r.subagentTasks[key] = active
+	return true
+}
+
+func (r *Runtime) isSubagentTaskActive(key, id string) bool {
+	r.subagentMu.Lock()
+	defer r.subagentMu.Unlock()
+	active, ok := r.subagentTasks[key]
+	return ok && active.status.ID == id
+}
+
+func (r *Runtime) rememberCompletedSubagentTask(item reservedSubagentTask) {
+	if item.task.ReuseFor <= 0 {
+		return
+	}
+	r.subagentMu.Lock()
+	defer r.subagentMu.Unlock()
+	status := SubagentTaskStatus{ID: item.id, Kind: item.task.Kind, Name: item.task.Name, Phase: "completed", StartedAt: time.Now(), UpdatedAt: time.Now()}
+	r.subagentRecent[item.key] = status
 }
 
 func runPluginTaskSafely(ctx context.Context, task PluginTask, services PluginTaskServices) (result PluginTaskResult, err error) {
