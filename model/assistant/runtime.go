@@ -8087,6 +8087,11 @@ func (r *Runtime) resolveOutgoingLocalImages(msg OutgoingMessage) OutgoingMessag
 	if len(msg.ImageURLs) == 0 {
 		return msg
 	}
+	// TelegramChannel 与后端在同一进程，绝对路径应直接走 multipart 上传；换成
+	// WebUI 分享 URL 后 Telegram 服务器可能拿到登录页或代理错误页并报媒体类型错误。
+	if NormalizePlatformID(msg.Platform) == PlatformTelegram {
+		return msg
+	}
 	resolved := make([]string, 0, len(msg.ImageURLs))
 	changed := false
 	for _, imageURL := range msg.ImageURLs {
@@ -8608,6 +8613,50 @@ func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDelive
 }
 
 func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
+	if NormalizePlatformID(msg.Platform) == PlatformTelegram && (strings.TrimSpace(msg.Text) != "" || len(msg.ImageURLs)+len(msg.VideoURLs) > 1) && len(msg.ImageURLs)+len(msg.VideoURLs) > 0 {
+		return r.sendTelegramStepsWithRetry(ctx, msg, attempts)
+	}
+	return r.sendChannelPayloadWithRetry(ctx, msg, attempts)
+}
+
+func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
+	var result map[string]any
+	if strings.TrimSpace(msg.Text) != "" {
+		text := msg
+		text.ImageURLs = nil
+		text.VideoURLs = nil
+		var err error
+		result, err = r.sendChannelPayloadWithRetry(ctx, text, attempts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, image := range msg.ImageURLs {
+		part := msg
+		part.Text = ""
+		part.ReplyMessageID = ""
+		part.MentionUserID = ""
+		part.ImageURLs = []string{image}
+		part.VideoURLs = nil
+		if _, err := r.sendChannelPayloadWithRetry(ctx, part, attempts); err != nil {
+			return result, err
+		}
+	}
+	for _, video := range msg.VideoURLs {
+		part := msg
+		part.Text = ""
+		part.ReplyMessageID = ""
+		part.MentionUserID = ""
+		part.ImageURLs = nil
+		part.VideoURLs = []string{video}
+		if _, err := r.sendChannelPayloadWithRetry(ctx, part, attempts); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
 	if attempts <= 0 {
 		attempts = sendRetryAttempts
 	}

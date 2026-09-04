@@ -287,6 +287,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 			r.setError(err.Error())
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务结果发送失败", err.Error())
 			r.persistSubagentTask(item, "failed", PluginTaskProgress{}, err, true)
+			_ = r.sendSubagentFollowup(rootCtx, item.event, fmt.Sprintf("后台任务「%s」已经完成，但结果发送失败：%s", item.task.Name, publicChatErrorMessage(err)))
 			r.removeSubagentTask(item.key, item.id)
 			return
 		}
