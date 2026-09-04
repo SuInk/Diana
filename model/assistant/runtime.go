@@ -220,6 +220,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "error", "回复生成失败；错误说明已发起发送，但没有收到可核验的发送 ACK", false
 	case "error_notice_merged":
 		return "error", "回复生成失败；该会话正处于连续失败中，这条并入稍后的一条汇总说明，不单独发错误提示", false
+	case "error_silent":
+		return "error", "回复生成失败；当前机器人已关闭错误提示，错误仅记录到事件与日志", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
 	case "ignored_member_level":
@@ -1847,6 +1849,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			setEventRecordOutcome(&record, "processing_error")
 			r.record(record)
 			return "", ctx.Err()
+		}
+		// 错误提示开关控制所有面向聊天的诊断消息。关闭后仍保留完整事件、
+		// LastError 和应用日志，但不把 LLM、Agent、工具或协议错误发进群聊/私聊。
+		if !boolValue(r.effectiveConfigForEvent(event).ErrorNotifyEnabled, true) {
+			setEventRecordOutcome(&record, "error_silent")
+			r.record(record)
+			return "error_silent", nil
 		}
 		publicDetail := publicChatErrorMessage(err)
 		// 同一会话正在连续失败时，这条并进稍后那条汇总，不再单独刷一遍报错。
