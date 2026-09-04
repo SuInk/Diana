@@ -6,7 +6,9 @@ package assistant
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,27 @@ import (
 	"testing"
 	"time"
 )
+
+type telegramPartialFailureChannel struct {
+	mu    sync.Mutex
+	calls []OutgoingMessage
+}
+
+func (c *telegramPartialFailureChannel) Connect(context.Context, EventHandler) error { return nil }
+func (c *telegramPartialFailureChannel) Close() error                                { return nil }
+func (c *telegramPartialFailureChannel) Status() ChannelStatus                       { return ChannelStatus{Connected: true} }
+func (c *telegramPartialFailureChannel) CallAPI(context.Context, string, map[string]any) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+func (c *telegramPartialFailureChannel) Send(_ context.Context, msg OutgoingMessage) error {
+	c.mu.Lock()
+	c.calls = append(c.calls, msg)
+	c.mu.Unlock()
+	if len(msg.ImageURLs)+len(msg.VideoURLs) > 0 {
+		return fmt.Errorf("media rejected")
+	}
+	return nil
+}
 
 // fakeTelegramAPI 是一个最小的 Bot API 桩，按方法名返回预置结果并记录调用。
 type fakeTelegramAPI struct {
@@ -165,6 +188,53 @@ func TestTelegramSendsMediaByURL(t *testing.T) {
 	}
 	if videos := api.callsOf("sendVideo"); len(videos) != 1 || videos[0].Params["video"] != "https://example.com/b.mp4" {
 		t.Fatalf("视频发送错误：%+v", videos)
+	}
+}
+
+func TestTelegramRetryDoesNotResendSuccessfulText(t *testing.T) {
+	channel := &telegramPartialFailureChannel{}
+	runtime := NewRuntime(BotConfig{Platform: PlatformTelegram}, channel, NewPluginManager(), nil, nil, nil, nil)
+	_, err := runtime.sendChannelWithRetry(context.Background(), OutgoingMessage{
+		Platform:  PlatformTelegram,
+		UserID:    "5",
+		Text:      "图片生成完成",
+		ImageURLs: []string{"/tmp/generated.png"},
+	}, 3)
+	if err == nil {
+		t.Fatal("media failure should be returned")
+	}
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	if len(channel.calls) != 4 {
+		t.Fatalf("calls = %#v", channel.calls)
+	}
+	if channel.calls[0].Text != "图片生成完成" || len(channel.calls[0].ImageURLs) != 0 {
+		t.Fatalf("first step = %#v", channel.calls[0])
+	}
+	for index, call := range channel.calls[1:] {
+		if call.Text != "" || len(call.ImageURLs) != 1 {
+			t.Fatalf("media retry %d = %#v", index, call)
+		}
+	}
+}
+
+func TestTelegramGeneratedBase64ImageUsesLocalUploadPath(t *testing.T) {
+	runtime := NewRuntime(BotConfig{Platform: PlatformTelegram}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	encoded := base64.StdEncoding.EncodeToString(tinyJPEGBytes(t))
+	images, cleanup, err := runtime.shareAgentImages(context.Background(), PlatformTelegram, []string{"data:image/jpeg;base64," + encoded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, path := range cleanup {
+			cleanupLocalMediaFile(path)
+		}
+	}()
+	if len(images) != 1 || !filepath.IsAbs(images[0]) {
+		t.Fatalf("images = %#v", images)
+	}
+	if _, err := os.Stat(images[0]); err != nil {
+		t.Fatalf("local upload file = %q: %v", images[0], err)
 	}
 }
 
