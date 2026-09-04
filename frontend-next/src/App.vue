@@ -526,7 +526,15 @@ async function retryBackend(): Promise<void> {
     // 版本变了就说清楚刚才那下是升级重启，而不是让人以为服务出过问题。
     const now = systemVersion.value?.version_label ?? "";
     if (versionBeforeOutage && now && now !== versionBeforeOutage) {
-      toastSuccess(`后端已升级到 ${now}，刚才的短暂断线是升级重启`);
+      toastSuccess(`后端已更新到 ${now}，正在重新载入界面…`);
+      versionBeforeOutage = "";
+      // 后端换了版本，这个页面跑的却还是更新前那份 JS。前端产物的文件名带内容
+      // 哈希，只有整页重载才会取到新的那份，否则用户会拿旧界面对着新后端。
+      if (autoReloadAllowed()) {
+        markAutoReloaded();
+        window.setTimeout(() => window.location.reload(), 1200);
+      }
+      return;
     }
     versionBeforeOutage = "";
     return;
