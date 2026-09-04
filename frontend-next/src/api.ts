@@ -1584,6 +1584,24 @@ export interface AssistantEventImage {
   unavailable?: boolean;
 }
 
+export interface AssistantEventMemory {
+  id?: string;
+  kind?: string;
+  topic?: string;
+  entity?: string;
+  content: string;
+  source_type?: string;
+  scope_key?: string;
+  source_group_id?: string;
+  source_message_id?: string;
+  visibility?: string;
+  sensitive?: boolean;
+  confidence?: number;
+  importance?: number;
+  retrieval_score?: number;
+  retrieval_reason?: string;
+}
+
 export interface AssistantEventDetail extends BotEvent {
   id: string;
   sender_name?: string;
@@ -1620,6 +1638,8 @@ export interface AssistantEventDetail extends BotEvent {
   self_echo_at?: string;
   delivery_error?: string;
   images?: AssistantEventImage[];
+  /** 实际进入本轮模型上下文的长期记忆；仅管理员事件接口返回。 */
+  memories?: AssistantEventMemory[];
   /** 这条消息触发的后台子任务。图片是任务跑完后异步发出去的。 */
   subtasks?: AssistantEventSubtask[];
   /** 这一轮实际发出去的内容概览。reply 只是文本，说不出还发了卡片和媒体。 */
