@@ -212,6 +212,9 @@ type InboundEventQuery struct {
 	// UserID 只看和这个人的私聊，留空表示不限。私聊没有群号，光靠 GroupID
 	// 筛不出来，控制台的会话筛选器因此一直漏掉私聊。
 	UserID string
+	// Search 按关键词过滤，留空表示不限。匹配消息正文、回复内容、发送者昵称和
+	// 消息号——事件多起来之后，翻页找一条消息是不现实的。
+	Search string
 	// ProfileID 只看这一台机器人，留空表示不限。多机器人部署里，控制台的
 	// 「当前机器人」切换靠它生效。
 	ProfileID string
@@ -263,6 +266,15 @@ func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query Inbound
 	if profileID := strings.TrimSpace(query.ProfileID); profileID != "" {
 		groupCondition += " AND COALESCE(i.profile_id, '') = ?"
 		scopeArgs = append(scopeArgs, profileID)
+	}
+	// 搜索同样要作用在计数和列表两处。payload 是完整事件的 JSON，正文和发送者
+	// 昵称都在里面；回复内容单独存在 reply_text 列，两个都要看。
+	// LIKE 里的 % 和 _ 是通配符，用户搜这两个字符时得转义，否则「100%」会变成
+	// 匹配任意内容。
+	if search := strings.TrimSpace(query.Search); search != "" {
+		pattern := "%" + escapeSQLiteLike(search) + "%"
+		groupCondition += ` AND (i.payload LIKE ? ESCAPE '\' OR COALESCE(i.reply_text, '') LIKE ? ESCAPE '\' OR COALESCE(i.message_id, '') LIKE ? ESCAPE '\')`
+		scopeArgs = append(scopeArgs, pattern, pattern, pattern)
 	}
 
 	if err := s.db.QueryRowContext(ctx, `
@@ -902,6 +914,13 @@ type InboundEventPrivateChat struct {
 	UserName     string `json:"user_name,omitempty"`
 	BotProfileID string `json:"bot_profile_id,omitempty"`
 	Events       int64  `json:"events"`
+}
+
+// escapeSQLiteLike 转义 LIKE 模式里的通配符。不转义的话，用户搜「100%」会被
+// 当成「以 100 开头的任意内容」，搜「a_b」会匹配到「axb」。
+func escapeSQLiteLike(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+	return replacer.Replace(value)
 }
 
 // ListInboundEventPrivateChats 列出这段时间里有私聊事件的对话人。
