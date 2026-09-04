@@ -78,8 +78,12 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		ReservedSkillNames:  []string{"onebot-v11"},
 		CommandAllowlist:    cfg.AgentCommandAllowlist,
 		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
-		BrowserCDPURL:       cfg.AgentBrowserCDPURL,
-		BrowserTimeoutMS:    cfg.AgentBrowserTimeoutMS,
+		// 这两项以前在 agent.Config 里存在但没人赋值，于是永远是 auto，
+		// require 模式接不上。现在由机器人配置说了算。
+		CommandSandbox:             cfg.AgentCommandSandbox,
+		CommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
+		BrowserCDPURL:              cfg.AgentBrowserCDPURL,
+		BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 	}
 }
 
@@ -122,7 +126,49 @@ func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*a
 	return registry, nil
 }
 
+// logCommandExecutionPosture 在启动时把「命令执行这条路现在是什么状态」写进日志。
+//
+// 这两件事以前都不可见，而它们决定了一台机器上命令执行的全部风险：
+// 白名单为空时 run_command 根本不注册（于是「让机器人执行指令」表现为静默无反应），
+// 沙盒不可用时命令直接以主进程身份裸跑（而白名单只管「跑哪个程序」，不管它能碰什么）。
+// 部署方有权在启动时就知道自己处在哪一种。
+func logCommandExecutionPosture(configs []BotConfig) {
+	logged := map[string]bool{}
+	for _, cfg := range configs {
+		cfg = cfg.WithDefaults()
+		if !cfg.Enabled || !cfg.AgentEnabled {
+			continue
+		}
+		if len(cfg.AgentCommandAllowlist) == 0 {
+			log.Printf("diana agent: 配置 %q 未设置命令白名单，run_command 不会注册（机器人无法执行任何本地命令）", cfg.ID)
+			continue
+		}
+		status := agent.DescribeCommandSandbox(cfg.AgentCommandSandbox)
+		key := status.Mode + "\x00" + status.Effective() + "\x00" + status.Reason
+		switch status.Effective() {
+		case "sandboxed":
+			log.Printf("diana agent: 配置 %q 的命令执行已沙盒化（%s，网络 %s）", cfg.ID, status.Kind, allowedOrBlocked(cfg.AgentCommandSandboxAllowNetwork))
+		case "blocked":
+			log.Printf("diana agent: 配置 %q 要求沙盒但本机不可用，命令执行会被拒绝：%s", cfg.ID, status.Reason)
+		default:
+			if logged[key] {
+				continue
+			}
+			logged[key] = true
+			log.Printf("diana agent: 命令执行未被沙盒隔离，将以本进程权限直接运行（%s）。白名单只限制能跑哪个程序，不限制它能读写什么；生产环境建议安装 bubblewrap 并把沙盒模式设为 require", status.Reason)
+		}
+	}
+}
+
+func allowedOrBlocked(allowed bool) string {
+	if allowed {
+		return "放行"
+	}
+	return "切断"
+}
+
 func (r *Runtime) prewarmAgentRegistries(ctx context.Context, configs []BotConfig) {
+	logCommandExecutionPosture(configs)
 	for _, cfg := range configs {
 		cfg = cfg.WithDefaults()
 		if !cfg.Enabled || !cfg.AgentEnabled || strings.TrimSpace(cfg.OwnerID) == "" {
