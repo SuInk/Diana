@@ -159,3 +159,48 @@ func TestRuntimeModelToolSeparatesModelIDFromConfigName(t *testing.T) {
 		t.Fatalf("reply guidance = %q", identity.ReplyGuidance)
 	}
 }
+
+// 模型分组配上后备路由之后走的是 registryFailoverLLMProvider。这个分支以前不在
+// 类型 switch 里，于是用户问「你是什么模型」只会得到「当前 Provider 未公开模型身份」，
+// 而身份其实就存在当前候选里。
+func TestRuntimeModelToolReadsRegistryFailoverSelection(t *testing.T) {
+	registry := llm.NewProviderRegistry()
+	for _, item := range []struct{ id, model string }{{"primary", "gpt-fast"}, {"backup", "gpt-stable"}} {
+		if err := registry.RegisterProvider(llm.ProviderDefinition{
+			ID: item.id, Name: "供应商-" + item.id, Protocol: llm.ProtocolOpenAIResponses, Enabled: true,
+		}, &retryRegistryAdapter{succeedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterModel(llm.ModelDefinition{
+			ID: item.id + ":" + item.model, ProviderID: item.id, ModelID: item.model, Name: item.model,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failover, err := newRegistryFailoverLLMProvider(registry, []llm.Profile{
+		{ID: "primary", Group: llm.GroupChat, Config: llm.ProviderConfig{Model: "gpt-fast"}},
+		{ID: "backup", Group: llm.GroupChat, Config: llm.ProviderConfig{Model: "gpt-stable"}},
+	}, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &runtimeAgentLLMProvider{providers: map[string]LLMProvider{llm.GroupChat: failover}, lastGroup: llm.GroupChat}
+	result, err := newDianaRuntimeModelTool(provider).Run(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("主路由的模型身份读不出来：%v", err)
+	}
+	if !strings.Contains(result, `"model_id":"gpt-fast"`) {
+		t.Fatalf("result = %q，期望报告主路由 gpt-fast", result)
+	}
+
+	// 切到后备之后要报告后备那条，而不是继续念主路由。
+	failover.current = 1
+	result, err = newDianaRuntimeModelTool(provider).Run(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("后备路由的模型身份读不出来：%v", err)
+	}
+	if !strings.Contains(result, `"model_id":"gpt-stable"`) || !strings.Contains(result, `"provider":"backup"`) {
+		t.Fatalf("result = %q，期望报告后备路由 gpt-stable/backup", result)
+	}
+}

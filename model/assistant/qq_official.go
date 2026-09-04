@@ -367,13 +367,23 @@ func (c *QQOfficialChannel) gatewayURL(ctx context.Context) (string, error) {
 // 开放平台的主动推送有严格额度，被动回复（带上收到那条消息的 msg_id）不占额度，
 // 所以这里只要拿得到 ReplyMessageID 就一定带上。
 func (c *QQOfficialChannel) Send(ctx context.Context, msg OutgoingMessage) error {
+	_, err := c.SendWithResult(ctx, msg)
+	return err
+}
+
+// SendWithResult 发送消息并把开放平台返回的消息 id 交回上层。
+//
+// 上层靠它把 Diana 自己这条发言连同平台 ID 记进历史；别人引用这条消息时，入站事件
+// 的 message_reference.message_id 与之同属一个空间，回查才对得上。不实现的话出站
+// 消息以空 ID 入库，引用 Diana 必然还原不出内容。
+func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
 	target, isGroup := platformChatTarget(msg)
 	if target == "" {
-		return fmt.Errorf("qq: 缺少会话标识")
+		return nil, fmt.Errorf("qq: 缺少会话标识")
 	}
 	text := platformOutboundText(msg)
 	if text == "" && len(msg.ImageURLs) == 0 {
-		return nil
+		return nil, nil
 	}
 	endpoint := c.apiBase() + "/v2/users/" + target + "/messages"
 	if isGroup {
@@ -381,7 +391,7 @@ func (c *QQOfficialChannel) Send(ctx context.Context, msg OutgoingMessage) error
 	}
 	auth, err := c.authHeader(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	body := map[string]any{
 		"content": text,
@@ -402,16 +412,20 @@ func (c *QQOfficialChannel) Send(ctx context.Context, msg OutgoingMessage) error
 		if strings.Contains(err.Error(), "http 401") {
 			c.tokens.Invalidate()
 		}
-		return fmt.Errorf("qq: 发送失败: %w", err)
+		return nil, fmt.Errorf("qq: 发送失败: %w", err)
 	}
 	var envelope struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
+		ID      string `json:"id"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Code != 0 {
-		return fmt.Errorf("qq: 发送被拒绝: %s (code %d)", envelope.Message, envelope.Code)
+		return nil, fmt.Errorf("qq: 发送被拒绝: %s (code %d)", envelope.Message, envelope.Code)
 	}
-	return nil
+	if id := strings.TrimSpace(envelope.ID); id != "" {
+		return map[string]any{"message_id": id}, nil
+	}
+	return nil, nil
 }
 
 // CallAPI 透传开放平台的 REST 接口，action 形如 "GET /users/@me/guilds"。

@@ -260,21 +260,31 @@ func (c *FeishuChannel) ServeCallback(w http.ResponseWriter, r *http.Request) {
 
 // Send 发送消息。
 func (c *FeishuChannel) Send(ctx context.Context, msg OutgoingMessage) error {
+	_, err := c.SendWithResult(ctx, msg)
+	return err
+}
+
+// SendWithResult 发送消息并把飞书返回的 message_id 交回上层。
+//
+// 上层靠它把 Diana 自己这条发言连同平台 ID 记进历史；别人引用这条消息时，入站
+// 事件里的 ParentID 与之同属 om_ 空间，回查才对得上。不实现的话出站消息以空 ID
+// 入库，引用 Diana 必然还原不出内容。
+func (c *FeishuChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
 	text := platformOutboundText(msg)
 	if text == "" {
-		return nil
+		return nil, nil
 	}
 	target, isGroup := platformChatTarget(msg)
 	if target == "" {
-		return fmt.Errorf("feishu: 缺少会话标识")
+		return nil, fmt.Errorf("feishu: 缺少会话标识")
 	}
 	token, err := c.tokens.Get(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	content, err := json.Marshal(map[string]string{"text": text})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.mu.RLock()
 	cfg := c.cfg
@@ -308,16 +318,22 @@ func (c *FeishuChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 		if strings.Contains(err.Error(), "http 401") {
 			c.tokens.Invalidate()
 		}
-		return fmt.Errorf("feishu: 发送失败: %w", err)
+		return nil, fmt.Errorf("feishu: 发送失败: %w", err)
 	}
 	var envelope struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
+		Data struct {
+			MessageID string `json:"message_id"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.Code != 0 {
-		return fmt.Errorf("feishu: 发送被拒绝: %s (code %d)", envelope.Msg, envelope.Code)
+		return nil, fmt.Errorf("feishu: 发送被拒绝: %s (code %d)", envelope.Msg, envelope.Code)
 	}
-	return nil
+	if id := strings.TrimSpace(envelope.Data.MessageID); id != "" {
+		return map[string]any{"message_id": id}, nil
+	}
+	return nil, nil
 }
 
 // feishuReceiveIDType 按标识前缀判断该用哪种 receive_id_type。
