@@ -1401,3 +1401,41 @@ func TestDianaLLMConfigToolBindsNonChatRoleWithoutTouchingChat(t *testing.T) {
 		t.Fatalf("provider config changed: %#v", got)
 	}
 }
+
+func TestBuiltinPluginsDeclarePlatformSupport(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	states := manager.List()
+	for _, state := range states {
+		if state.Manifest.BuiltIn && len(state.Manifest.Platforms) == 0 {
+			t.Fatalf("built-in plugin %s has no platform metadata", state.Manifest.ID)
+		}
+	}
+	for _, id := range []string{oneBotV11PluginID, musicPluginID, voiceTTSPluginID} {
+		state, ok := manager.Get(id)
+		if !ok || len(state.Manifest.Platforms) != 1 || state.Manifest.Platforms[0] != PlatformOneBotV11 {
+			t.Fatalf("%s platforms = %#v", id, state.Manifest.Platforms)
+		}
+	}
+	resolver, ok := manager.Get(resolverPluginID)
+	if !ok || !pluginSupportsPlatform(resolver.Manifest, PlatformTelegram) || !pluginSupportsPlatform(resolver.Manifest, PlatformOneBotV11) {
+		t.Fatalf("resolver platforms = %#v", resolver.Manifest.Platforms)
+	}
+}
+
+func TestAgentToolsAreFilteredByCurrentPlatform(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	tools, err := manager.AgentToolsForPlatformWithGroupOverrides(PlatformTelegram, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		names[tool.Name()] = true
+	}
+	if names["diana.music"] || names["diana.tts"] || names[dianaOneBotV11ToolName] {
+		t.Fatalf("OneBot-only tools exposed on Telegram: %#v", names)
+	}
+	if !names["diana.capabilities"] || !names["web_search.search"] {
+		t.Fatalf("cross-platform tools missing on Telegram: %#v", names)
+	}
+}

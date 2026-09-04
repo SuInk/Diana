@@ -3079,12 +3079,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		var pluginTools []agent.Tool
 		if r.plugins != nil {
 			var pluginToolsErr error
-			pluginTools, pluginToolsErr = r.plugins.AgentToolsWithGroupOverrides(overrides, settingOverrides)
+			pluginTools, pluginToolsErr = r.plugins.AgentToolsForPlatformWithGroupOverrides(cfg.Platform, overrides, settingOverrides)
 			if pluginToolsErr != nil {
 				return "", pluginToolsErr
 			}
 		}
 		pluginTools = ensureWebSearchAgentTool(pluginTools)
+		for index, tool := range pluginTools {
+			pluginTools[index] = capabilityToolForConfig(tool, cfg)
+		}
 		if r.oneBotV11SkillEnabled(event) {
 			pluginTools = append(pluginTools, newDianaOneBotV11Tool(r, event))
 		}
@@ -5892,7 +5895,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	builder.WriteString("\n" + promptHistoryFormat)
 	builder.WriteString("\n" + promptAdjacentSupplement)
 	if boolValue(cfg.PromptInjectPlaintextRules, true) {
-		appendPromptSection(&builder, cfg.PromptPlaintextRulesText)
+		appendPromptSection(&builder, platformOutputRulesForConfig(cfg))
 	}
 	if proactiveTriggered {
 		builder.WriteString("\n")
