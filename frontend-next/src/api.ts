@@ -300,6 +300,8 @@ export interface PluginManifest {
   built_in: boolean;
   default_disabled?: boolean;
   permissions?: string[];
+  platforms?: string[];
+  platform_notes?: Record<string, string>;
   settings?: PluginSettingSpec[];
 }
 
