@@ -1744,6 +1744,7 @@ export interface AssistantEventsResponse {
   group?: string;
   groups: AssistantEventGroup[];
   user?: string;
+  query?: string;
   private_chats: AssistantEventPrivateChat[];
   context_budget?: AssistantContextBudget;
 }
@@ -1787,11 +1788,13 @@ export function getAssistantEvents(
   limit = 50,
   group = "",
   profile = "",
-  user = ""
+  user = "",
+  query = ""
 ): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
   if (group) params.set("group", group);
   if (user) params.set("user", user);
+  if (query) params.set("q", query);
   if (profile) params.set("profile", profile);
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
 }
