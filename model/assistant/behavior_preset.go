@@ -5,17 +5,17 @@ package assistant
 
 import (
 	"strings"
-	"time"
 )
 
 // ResponseMode controls how readily the bot joins an unaddressed group chat.
 type ResponseMode string
 
 const (
-	ResponseModeQuiet    ResponseMode = "quiet"
-	ResponseModeStandard ResponseMode = "standard"
-	ResponseModeActive   ResponseMode = "active"
-	ResponseModeCustom   ResponseMode = "custom"
+	ResponseModeQuiet       ResponseMode = "quiet"
+	ResponseModeStandard    ResponseMode = "standard"
+	ResponseModeActive      ResponseMode = "active"
+	ResponseModeSuperActive ResponseMode = "super_active"
+	ResponseModeCustom      ResponseMode = "custom"
 )
 
 func (mode ResponseMode) Normalized() ResponseMode {
@@ -26,6 +26,8 @@ func (mode ResponseMode) Normalized() ResponseMode {
 		return ResponseModeStandard
 	case "active":
 		return ResponseModeActive
+	case "super_active", "super-active", "superactive":
+		return ResponseModeSuperActive
 	case "custom":
 		return ResponseModeCustom
 	default:
@@ -44,6 +46,14 @@ func (mode ResponseMode) apply(cfg *BotConfig) {
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelHigh
 		cfg.NaturalInterjectionEnabled = boolPointer(false)
+		clearChatInFineTuning(cfg)
+	case ResponseModeSuperActive:
+		// 等价于参考实现 routing_p=1、sampling_cooldown_ms=0：每条合格的
+		// 人类消息都获得回应机会。自然插话仍会过滤机器人消息、回复循环、
+		// 禁用群和确实没有内容可说的情况。
+		cfg.ChatInEnabled = boolPointer(true)
+		cfg.ChatInLevel = ChatInLevelMax
+		cfg.NaturalInterjectionEnabled = boolPointer(true)
 		clearChatInFineTuning(cfg)
 	case ResponseModeStandard:
 		cfg.ChatInEnabled = boolPointer(true)
@@ -479,14 +489,6 @@ const (
 	chatSendChunkIntervalMS = 1200
 )
 
-// 群友风格的打字节奏：开口前要有想和打的时间。这几项配置里没有对应项，
-// 只有风格自己知道，所以留在风格里。
-const (
-	groupmateTypingBaseDelay = 900 * time.Millisecond
-	groupmateTypingPerRune   = 55 * time.Millisecond
-	groupmateTypingMaxDelay  = 5 * time.Second
-)
-
 // 表达风格不再改动任何 BotConfig 字段。
 //
 // 它曾经有个 apply：群友风格在那里把引用和 @ 按成「从不」，把每条长度钳到 400、
@@ -496,48 +498,12 @@ const (
 // 改风格的默认值也到不了这些人手上。
 //
 // 现在这些都只由配置决定，风格对应的取值搬进了 DefaultBotConfig 当默认值。风格
-// 只保留配置里没有对应项、prompt 也管不到的部分：开口前的拟真停顿。
+// 风格只影响表达，不再额外延迟消息投递。
 //
 // 合并转发卡片也不再由风格决定。群友风格曾经完全不用卡片（理由是真人不会发这种
 // 机器人专属控件），代价是「合并转发字数」和「合并转发块数」这两个配置项在它底下
 // 静默失效——填了不生效，界面上又只在一行提示里带过，实际表现就是长回复一口气刷
 // 十几条。现在所有风格一视同仁，卡片只看这两个阈值。
-
-// remainingTypingDelay 返回还需要补多少停顿。拟真的目标是「别秒回」，而不是
-// 「在已经想了很久之后再多等一会儿」——生成本身耗掉的时间同样算数。模型慢的
-// 时候这里直接返回 0，停顿不再是白加在延迟上的一笔。
-func (style ReplyStyle) remainingTypingDelay(text string, elapsed time.Duration) time.Duration {
-	delay := style.typingDelay(text)
-	if delay <= 0 {
-		return 0
-	}
-	if elapsed <= 0 {
-		return delay
-	}
-	if elapsed >= delay {
-		return 0
-	}
-	return delay - elapsed
-}
-
-// typingDelay 返回开口前的拟真停顿：秒回是最容易暴露的一点。
-// 按字数线性增长并封顶，避免长回复把人晾太久。
-func (style ReplyStyle) typingDelay(text string) time.Duration {
-	switch style.Normalized() {
-	case ReplyStyleGroupmate, ReplyStyleHuman:
-	default:
-		return 0
-	}
-	runes := len([]rune(strings.TrimSpace(text)))
-	if runes == 0 {
-		return 0
-	}
-	delay := groupmateTypingBaseDelay + time.Duration(runes)*groupmateTypingPerRune
-	if delay > groupmateTypingMaxDelay {
-		return groupmateTypingMaxDelay
-	}
-	return delay
-}
 
 // closingAnchor 是拼在整条 system prompt 末尾的语气锚点。前面几千字工具规则、权限
 // 说明和拒答流程都是公文体，会稀释语域；这一句负责把「怎么说话」重新拉回生成位置。

@@ -180,7 +180,7 @@ export interface BotProfileConfig {
   welcome_enabled?: boolean;
   welcome_message?: string;
   system_prompt?: string;
-  response_mode?: "quiet" | "standard" | "active" | "custom";
+  response_mode?: "quiet" | "standard" | "active" | "super_active" | "custom";
   reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   action_description_enabled?: boolean;
   /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
@@ -401,7 +401,7 @@ export interface BotGroupConfig {
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
   /** 留空时跟随机器人全局回复模式。 */
-  response_mode?: "" | "quiet" | "standard" | "active" | "custom";
+  response_mode?: "" | "quiet" | "standard" | "active" | "super_active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
   reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 本群是否穿插括号动作；不设表示跟随机器人。 */

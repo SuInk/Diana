@@ -22,6 +22,11 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 		{ResponseModeQuiet, false, ChatInLevelOff},
 		{ResponseModeStandard, true, ChatInLevelLow},
 		{ResponseModeActive, true, ChatInLevelHigh},
+		{ResponseModeSuperActive, true, ChatInLevelMax},
+	}
+	superActive := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
+	if !boolValue(superActive.NaturalInterjectionEnabled, false) {
+		t.Fatal("super active mode should enable natural interjection")
 	}
 	for _, test := range tests {
 		cfg := BotConfig{ResponseMode: test.mode}.WithDefaults()
@@ -210,23 +215,6 @@ func TestForwardCardAppliesToEveryStyle(t *testing.T) {
 		if shouldUseForwardReply(short, []string{short}, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 			t.Fatalf("风格 %q 下 100 字不该触发合并转发", style)
 		}
-	}
-}
-
-func TestReplyStyleTypingDelayOnlyForGroupmate(t *testing.T) {
-	if got := ReplyStyleAssistant.typingDelay("随便一句话"); got != 0 {
-		t.Fatalf("assistant typingDelay = %v, want 0", got)
-	}
-	if got := ReplyStyleGroupmate.typingDelay("   "); got != 0 {
-		t.Fatalf("blank text typingDelay = %v, want 0", got)
-	}
-	short := ReplyStyleGroupmate.typingDelay("在的")
-	long := ReplyStyleGroupmate.typingDelay(strings.Repeat("字", 40))
-	if short <= 0 || long <= short {
-		t.Fatalf("typing delay should grow with length: short=%v long=%v", short, long)
-	}
-	if capped := ReplyStyleGroupmate.typingDelay(strings.Repeat("字", 10000)); capped != groupmateTypingMaxDelay {
-		t.Fatalf("typing delay = %v, want capped at %v", capped, groupmateTypingMaxDelay)
 	}
 }
 
