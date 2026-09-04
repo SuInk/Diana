@@ -6,6 +6,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -233,10 +234,42 @@ func (h *LLMConfigHandler) providerTest(c *gin.Context) {
 	}
 	response, err := registry.Generate(c.Request.Context(), llm.AgentModelConfig{ProviderID: payload.ProviderID, ModelID: payload.ModelID}, llm.ChatRequest{Messages: []llm.ChatMessage{{Role: llm.RoleUser, Content: payload.Message}}})
 	if err != nil {
-		h.writeError(c, 502, "llm.providers.test", err, payload.ModelID, nil)
+		publicErr := h.providerTestError(payload.ProviderID, err)
+		metadata := map[string]any{
+			"provider_id": strings.TrimSpace(payload.ProviderID),
+			"model_id":    strings.TrimSpace(payload.ModelID),
+		}
+		if provider, ok := registry.Provider(payload.ProviderID); ok {
+			metadata["protocol"] = provider.Protocol
+			if provider.BaseURL != "" {
+				metadata["base_url"] = provider.BaseURL
+			}
+		}
+		log.Printf("llm provider test failed: provider=%q model=%q err=%v", payload.ProviderID, payload.ModelID, publicErr)
+		h.writeError(c, 502, "llm.providers.test", publicErr, payload.ProviderID, metadata)
 		return
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *LLMConfigHandler) providerTestError(providerID string, err error) error {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	for _, profile := range h.store.Profiles().Profiles {
+		if strings.TrimSpace(profile.ID) != strings.TrimSpace(providerID) {
+			continue
+		}
+		if secret := strings.TrimSpace(profile.Config.APIKey); secret != "" {
+			message = strings.ReplaceAll(message, secret, "***")
+		}
+		break
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "上游没有返回错误详情"
+	}
+	return fmt.Errorf("提供商测试失败：%s", message)
 }
 
 // getConfig 处理提供商配置读取请求。
