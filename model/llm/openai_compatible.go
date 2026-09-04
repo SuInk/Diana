@@ -229,9 +229,24 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
+		// 标准 Responses 流会先通过 output_item.added 给出函数名，再发送参数
+		// 墫量和 done。部分兼容网关（例如 Sub2API）在 arguments.done 里省略
+		// name，因此必须按 item id 聚合，不能把缺失字段误当成空名称工具调用。
+		functionNames := map[string]string{}
 		for stream.Next() {
 			event := stream.Current()
 			switch event.Type {
+			case "response.output_item.added", "response.output_item.done":
+				call := event.Item.AsFunctionCall()
+				name := strings.TrimSpace(call.Name)
+				if name != "" {
+					if id := strings.TrimSpace(call.ID); id != "" {
+						functionNames[id] = name
+					}
+					if id := strings.TrimSpace(call.CallID); id != "" {
+						functionNames[id] = name
+					}
+				}
 			case "response.output_text.delta":
 				if event.Delta != "" {
 					out <- ChatEvent{Type: ChatEventTextDelta, Text: event.Delta}
@@ -248,7 +263,15 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 						return
 					}
 				}
-				call := ToolCall{ID: event.ItemID, Name: nativeToolName(event.Name, req.Tools), Arguments: arguments}
+				name := strings.TrimSpace(event.Name)
+				if name == "" {
+					name = functionNames[strings.TrimSpace(event.ItemID)]
+				}
+				if name == "" {
+					out <- ChatEvent{Type: ChatEventError, Error: "llm: malformed responses stream: function call name is missing"}
+					return
+				}
+				call := ToolCall{ID: event.ItemID, Name: nativeToolName(name, req.Tools), Arguments: arguments}
 				out <- ChatEvent{Type: ChatEventToolCall, ToolCall: &call}
 			case "error", "response.failed", "response.incomplete":
 				message := event.Message
