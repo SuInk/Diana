@@ -115,6 +115,33 @@ func (p *runtimeAgentLLMProvider) currentModelIdentity() (dianaRuntimeModelResul
 			GroupLabel:    runtimeModelGroupLabel(group),
 			ReplyGuidance: dianaRuntimeModelReplyGuidance,
 		}, nil
+	case *registryFailoverLLMProvider:
+		// 走注册表且有多个候选时用的就是这个包装。它和上面的 RegistryClient 一样握着
+		// 完整的模型身份，只是身份藏在当前候选里——漏掉这个分支，模型分组一配上后备
+		// 路由，Diana 就答不出自己是什么模型了。
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		if len(client.candidates) == 0 || client.current < 0 || client.current >= len(client.candidates) {
+			return dianaRuntimeModelResult{}, fmt.Errorf("当前 Registry 模型不可用")
+		}
+		selection := client.candidates[client.current].selection
+		model, ok := client.registry.Model(selection.ModelID)
+		if !ok {
+			return dianaRuntimeModelResult{}, fmt.Errorf("当前 Registry 模型 %q 不存在", selection.ModelID)
+		}
+		definition, ok := client.registry.Provider(model.ProviderID)
+		if !ok {
+			return dianaRuntimeModelResult{}, fmt.Errorf("当前 Registry Provider %q 不存在", model.ProviderID)
+		}
+		return dianaRuntimeModelResult{
+			ModelID:       model.ModelID,
+			Provider:      definition.ID,
+			ConfigName:    strings.TrimSpace(definition.Name),
+			Protocol:      string(definition.Protocol),
+			Group:         group,
+			GroupLabel:    runtimeModelGroupLabel(group),
+			ReplyGuidance: dianaRuntimeModelReplyGuidance,
+		}, nil
 	case *profileFailoverLLMProvider:
 		client.mu.Lock()
 		defer client.mu.Unlock()
