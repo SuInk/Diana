@@ -237,6 +237,13 @@ type EventObserverPlugin interface {
 	Observe(ctx context.Context, event MessageEvent) MessageEvent
 }
 
+// EventRelayPlugin receives every prepared inbound message before Diana decides
+// whether to reply. It is intended for transport side effects such as a chat
+// bridge and must not alter the conversational reply flow.
+type EventRelayPlugin interface {
+	RelayEvent(ctx context.Context, req PluginRequest) error
+}
+
 // AgentToolPlugin is implemented by plugins that add tools to the model's
 // tool-calling loop. It is intentionally optional so ordinary context/reply
 // plugins keep the smaller Plugin contract.
@@ -320,10 +327,43 @@ func NewDefaultPluginManager() *PluginManager {
 		NewStickerPlugin(),
 		NewStatusCommandPlugin(),
 		NewOpenAPIPlugin(),
+		NewMessageRelayPlugin(),
 		capabilities,
 	)
 	capabilities.setPluginStateProvider(manager.List)
 	return manager
+}
+
+func (m *PluginManager) RelayEvent(ctx context.Context, req PluginRequest, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) {
+	if m == nil {
+		return
+	}
+	type entry struct {
+		id       string
+		relay    EventRelayPlugin
+		settings SettingValues
+	}
+	m.mu.RLock()
+	entries := make([]entry, 0)
+	for id, plugin := range m.catalog {
+		state := m.states[id]
+		enabled := state.Enabled
+		if override, ok := enabledOverrides[id]; ok {
+			enabled = override
+		}
+		relay, ok := plugin.(EventRelayPlugin)
+		if state.Installed && enabled && ok {
+			entries = append(entries, entry{id, relay, effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id])})
+		}
+	}
+	m.mu.RUnlock()
+	for _, item := range entries {
+		itemReq := req
+		itemReq.Settings = item.settings
+		if err := item.relay.RelayEvent(ctx, itemReq); err != nil {
+			recordPluginFailure(ctx, itemReq, item.id, err)
+		}
+	}
 }
 
 func (m *PluginManager) ShouldHandleWithOverrides(event MessageEvent, text string, overrides map[string]bool) bool {
