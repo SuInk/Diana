@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -425,7 +426,15 @@ func (c *TelegramChannel) do(req *http.Request) (json.RawMessage, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		// net/http wraps transport failures in url.Error, whose Error method
+		// includes the request URL. Telegram puts the bot token in that URL's
+		// path, so returning the wrapper would leak the credential into status
+		// responses and reconnect logs.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Err != nil {
+			return nil, fmt.Errorf("telegram: request failed: %w", urlErr.Err)
+		}
+		return nil, fmt.Errorf("telegram: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))

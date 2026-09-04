@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -103,6 +104,25 @@ func (a *fakeTelegramAPI) callsOf(method string) []telegramCall {
 		}
 	}
 	return out
+}
+
+func TestTelegramTransportErrorDoesNotLeakBotToken(t *testing.T) {
+	const token = "super-secret-telegram-token"
+	channel := NewTelegramChannel(TelegramConfig{BotToken: token})
+	channel.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network unavailable")
+	})}
+
+	_, err := channel.CallAPI(context.Background(), "getMe", nil)
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "/bot"+token) {
+		t.Fatalf("transport error leaked bot token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "network unavailable") {
+		t.Fatalf("transport error lost its cause: %v", err)
+	}
 }
 
 func TestTelegramSendsTextToChat(t *testing.T) {
