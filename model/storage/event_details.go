@@ -70,6 +70,9 @@ type InboundEventDetail struct {
 	TTFTCalls int64                `json:"ttft_calls,omitempty"`
 	Images    []InboundEventImage  `json:"images,omitempty"`
 	Memories  []InboundEventMemory `json:"memories,omitempty"`
+	// TemporaryMemories 是本轮实际进入模型上下文的短期状态：会话线程便签和
+	// diana.thread_state 私有任务状态。它们只通过管理员事件接口返回。
+	TemporaryMemories []InboundEventTemporaryMemory `json:"temporary_memories,omitempty"`
 	// Subtasks 是这条消息触发的后台子任务（生成图片、文档 OCR 等）。图片是任务跑完
 	// 之后异步发出去的，事件详情里只有一句文字回复时看不出它从哪来。
 	Subtasks []assistant.InboundEventSubtask `json:"subtasks,omitempty"`
@@ -103,6 +106,17 @@ type InboundEventMemory struct {
 	Importance      float64 `json:"importance,omitempty"`
 	RetrievalScore  float64 `json:"retrieval_score,omitempty"`
 	RetrievalReason string  `json:"retrieval_reason,omitempty"`
+}
+
+type InboundEventTemporaryMemory struct {
+	ID              string `json:"id,omitempty"`
+	Kind            string `json:"kind"`
+	TaskKind        string `json:"task_kind,omitempty"`
+	Topic           string `json:"topic,omitempty"`
+	Content         any    `json:"content"`
+	Version         int    `json:"version,omitempty"`
+	ExpiresAt       string `json:"expires_at,omitempty"`
+	SourceMessageID string `json:"source_message_id,omitempty"`
 }
 
 type InboundEventDetailPage struct {
@@ -439,42 +453,81 @@ func (s *SQLiteStore) attachInboundEventMemories(ctx context.Context, events []I
 	for index, id := range messageIDs {
 		args[index] = id
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT target, metadata FROM app_logs WHERE action = 'diana.memory.retrieved' AND target IN (`+placeholders(len(args))+`) ORDER BY created_at ASC`, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT action, target, metadata FROM app_logs WHERE action IN ('diana.memory.retrieved', 'diana.memory.temporary') AND target IN (`+placeholders(len(args))+`) ORDER BY created_at ASC`, args...)
 	if err != nil {
 		return fmt.Errorf("load inbound event memories: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	type trace struct {
-		ProfileID string               `json:"profile_id"`
-		GroupID   string               `json:"group_id"`
-		UserID    string               `json:"user_id"`
-		MessageID string               `json:"message_id"`
-		Memories  []InboundEventMemory `json:"memories"`
+	type traceIdentity struct {
+		ProfileID string `json:"profile_id"`
+		GroupID   string `json:"group_id"`
+		UserID    string `json:"user_id"`
+		MessageID string `json:"message_id"`
+	}
+	type retrievedTrace struct {
+		traceIdentity
+		Memories []InboundEventMemory `json:"memories"`
+	}
+	type temporaryTrace struct {
+		traceIdentity
+		Memories []InboundEventTemporaryMemory `json:"memories"`
 	}
 	byKey := map[string][]InboundEventMemory{}
+	temporaryByKey := map[string][]InboundEventTemporaryMemory{}
 	for rows.Next() {
-		var target, raw string
-		if err := rows.Scan(&target, &raw); err != nil {
+		var action, target, raw string
+		if err := rows.Scan(&action, &target, &raw); err != nil {
 			return err
 		}
-		var item trace
-		if json.Unmarshal([]byte(raw), &item) != nil {
-			continue
+		switch action {
+		case "diana.memory.retrieved":
+			var item retrievedTrace
+			if json.Unmarshal([]byte(raw), &item) != nil {
+				continue
+			}
+			if item.MessageID == "" {
+				item.MessageID = target
+			}
+			key := eventMemoryTraceKey(item.MessageID, item.ProfileID, item.GroupID, item.UserID)
+			byKey[key] = appendUniqueInboundEventMemories(byKey[key], item.Memories...)
+		case "diana.memory.temporary":
+			var item temporaryTrace
+			if json.Unmarshal([]byte(raw), &item) != nil {
+				continue
+			}
+			if item.MessageID == "" {
+				item.MessageID = target
+			}
+			key := eventMemoryTraceKey(item.MessageID, item.ProfileID, item.GroupID, item.UserID)
+			temporaryByKey[key] = appendUniqueInboundEventTemporaryMemories(temporaryByKey[key], item.Memories...)
 		}
-		if item.MessageID == "" {
-			item.MessageID = target
-		}
-		key := eventMemoryTraceKey(item.MessageID, item.ProfileID, item.GroupID, item.UserID)
-		byKey[key] = appendUniqueInboundEventMemories(byKey[key], item.Memories...)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
 	for index := range events {
 		event := &events[index]
-		event.Memories = byKey[eventMemoryTraceKey(event.MessageID, event.ProfileID, event.GroupID, event.UserID)]
+		key := eventMemoryTraceKey(event.MessageID, event.ProfileID, event.GroupID, event.UserID)
+		event.Memories = byKey[key]
+		event.TemporaryMemories = temporaryByKey[key]
 	}
 	return nil
+}
+
+func appendUniqueInboundEventTemporaryMemories(existing []InboundEventTemporaryMemory, items ...InboundEventTemporaryMemory) []InboundEventTemporaryMemory {
+	seen := make(map[string]bool, len(existing))
+	for _, item := range existing {
+		seen[item.ID+"\x00"+item.Kind+"\x00"+item.TaskKind] = true
+	}
+	for _, item := range items {
+		key := item.ID + "\x00" + item.Kind + "\x00" + item.TaskKind
+		if item.Content == nil || seen[key] {
+			continue
+		}
+		seen[key] = true
+		existing = append(existing, item)
+	}
+	return existing
 }
 
 func eventMemoryTraceKey(messageID, profileID, groupID, userID string) string {

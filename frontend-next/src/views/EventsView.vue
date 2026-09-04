@@ -232,6 +232,24 @@
                 </div>
               </section>
 
+              <section v-if="event.temporary_memories?.length" class="event-memories temporary" aria-label="本轮调用的临时记忆">
+                <strong>本轮调用的临时记忆（{{ event.temporary_memories.length }}）</strong>
+                <div class="event-memory-list">
+                  <article v-for="memory in event.temporary_memories" :key="memory.id || `${memory.kind}:${memory.task_kind || memory.topic || ''}`" class="event-memory-item">
+                    <div class="event-memory-head">
+                      <span class="badge">{{ temporaryMemoryKindLabel(memory.kind) }}</span>
+                      <strong>{{ memory.task_kind || memory.topic || "当前会话状态" }}</strong>
+                      <span v-if="memory.version" class="badge">v{{ memory.version }}</span>
+                    </div>
+                    <pre>{{ temporaryMemoryContent(memory.content) }}</pre>
+                    <div class="event-memory-meta muted mono">
+                      <span v-if="memory.expires_at">到期 {{ formatDate(memory.expires_at) }}</span>
+                      <span v-if="memory.source_message_id">来源消息 {{ memory.source_message_id }}</span>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
               <div v-if="!isNoticeEvent(event)" class="event-decision" :class="decisionClass(event)">
                 <component :is="decisionIcon(event)" :size="16" aria-hidden="true" />
                 <div>
@@ -456,6 +474,21 @@ function memoryKindLabel(kind?: string): string {
     summary: "摘要", thread: "会话状态"
   };
   return labels[kind ?? ""] ?? kind ?? "记忆";
+}
+
+function temporaryMemoryKindLabel(kind?: string): string {
+  if (kind === "private_thread_state") return "私有任务状态";
+  if (kind === "session_thread") return "会话线程便签";
+  return kind || "临时记忆";
+}
+
+function temporaryMemoryContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  try {
+    return JSON.stringify(content, null, 2);
+  } catch {
+    return String(content ?? "");
+  }
 }
 
 function formatMemoryScore(value: number): string {
@@ -1498,6 +1531,23 @@ onBeforeUnmount(() => {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.event-memory-item pre {
+  margin: 7px 0 6px;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.event-memories.temporary .event-memory-item {
+  border-left-color: var(--warn);
 }
 
 .event-memory-meta {

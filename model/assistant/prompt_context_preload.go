@@ -19,9 +19,11 @@ import (
 type promptContextPreload struct {
 	wg sync.WaitGroup
 
-	sessionThread string
-	threadState   string
-	memoryContext string
+	sessionThread       string
+	sessionThreadMemory *StructuredMemoryItem
+	threadState         string
+	threadStates        []ThreadState
+	memoryContext       string
 	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
 	memoryUsage       contextLayerUsage
 	notebookContext   string
@@ -45,11 +47,11 @@ func (r *Runtime) startPromptContextPreload(
 	preload.wg.Add(6)
 	go func() {
 		defer preload.wg.Done()
-		preload.sessionThread = r.sessionThreadNote(ctx, event)
+		preload.sessionThread, preload.sessionThreadMemory = r.sessionThreadNoteDetailed(ctx, event)
 	}()
 	go func() {
 		defer preload.wg.Done()
-		preload.threadState = r.privateThreadStateContext(ctx, event)
+		preload.threadState, preload.threadStates = r.privateThreadStateContextDetailed(ctx, event)
 	}()
 	go func() {
 		defer preload.wg.Done()

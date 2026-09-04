@@ -173,6 +173,10 @@ func TestAttachInboundEventMemoriesMatchesExactBotAndConversation(t *testing.T) 
 			"message_id": "same-message", "profile_id": "bot-b", "group_id": "group-1", "user_id": "user-1",
 			"memories": []map[string]any{{"id": "memory-b", "kind": "fact", "content": "不应串到另一台机器人"}},
 		}},
+		{Action: "diana.memory.temporary", Target: "same-message", Metadata: map[string]any{
+			"message_id": "same-message", "profile_id": "bot-a", "group_id": "group-1", "user_id": "user-1",
+			"memories": []map[string]any{{"id": "state-a", "kind": "private_thread_state", "task_kind": "guess.character", "content": map[string]any{"target": "DIO"}, "version": 2}},
+		}},
 	} {
 		if err := store.AppendLog(ctx, entry); err != nil {
 			t.Fatal(err)
@@ -184,6 +188,9 @@ func TestAttachInboundEventMemoriesMatchesExactBotAndConversation(t *testing.T) 
 	}
 	if len(events[0].Memories) != 1 || events[0].Memories[0].ID != "memory-a" || events[0].Memories[0].Content != "住在杭州" {
 		t.Fatalf("memories = %#v", events[0].Memories)
+	}
+	if len(events[0].TemporaryMemories) != 1 || events[0].TemporaryMemories[0].TaskKind != "guess.character" {
+		t.Fatalf("temporary memories = %#v", events[0].TemporaryMemories)
 	}
 }
 

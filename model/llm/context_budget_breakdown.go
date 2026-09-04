@@ -116,6 +116,19 @@ func PlanContextBudget(messages []Message, contextWindow, outputReserve int64) C
 	return breakdown
 }
 
+// FitMessagesToContextBudget returns the exact prompt messages that survive the
+// same budget pass used by providers. It is intended for local diagnostics that
+// must distinguish context merely considered from context actually sent.
+func FitMessagesToContextBudget(messages []Message, contextWindow, outputReserve int64) []Message {
+	if contextWindow <= 0 {
+		contextWindow = DefaultContextWindowTokens
+	}
+	if outputReserve <= 0 {
+		outputReserve = DefaultMaxOutputTokens
+	}
+	return fitMessagesToTokenBudget(append([]Message(nil), messages...), InputTokenBudget(contextWindow, outputReserve))
+}
+
 func contextBudgetDropReason(priority MessagePriority, usage ContextBudgetCategoryUsage) string {
 	switch {
 	case usage.DroppedMessages > 0 && priority <= MessagePriorityHistory:
