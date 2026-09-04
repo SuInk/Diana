@@ -43,7 +43,7 @@ func (r *Runtime) recordTemporaryMemoryContext(ctx context.Context, event Messag
 			}
 			items = append(items, map[string]any{
 				"id": state.ID, "kind": "private_thread_state", "task_kind": state.TaskKind,
-				"content": payload, "version": state.Version, "expires_at": state.ExpiresAt,
+				"scope": state.Scope, "content": payload, "version": state.Version, "expires_at": state.ExpiresAt,
 				"source_message_id": state.SourceMessageID,
 			})
 		}
