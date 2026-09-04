@@ -107,6 +107,24 @@ export type AliasTriggerMode = "loose" | "smart" | "strict";
 /** 拒答话术：决定机器人不正面回答时说什么。见后端 RefusalStrategy。 */
 export type RefusalStrategy = "smart" | "rewrite" | "explain" | "vague";
 
+export type MessageRelayKind = "group" | "private";
+
+/** 互通链路的一端：某台机器人上的某个群聊或某个人。 */
+export interface MessageRelayEndpoint {
+  profile_id: string;
+  platform?: string;
+  kind: MessageRelayKind;
+  target_id: string;
+}
+
+/** 一条互通链路恒为两端，两端之间双向转发。 */
+export interface MessageRelayPair {
+  id: string;
+  name?: string;
+  enabled: boolean;
+  endpoints: MessageRelayEndpoint[];
+}
+
 export interface BotProfileConfig {
   id?: string;
   name?: string;
@@ -116,6 +134,8 @@ export interface BotProfileConfig {
   profiles?: BotProfileConfig[];
   /** 默认开启；关闭后不同平台可复用相同会话键中的上下文。 */
   isolate_platform_contexts?: boolean;
+  /** 跨机器人的消息互通链路，一条链路连两个会话。 */
+  message_relays?: MessageRelayPair[];
   enabled: boolean;
   onebot_reverse_ws_endpoint: string;
   onebot_access_token?: string;
@@ -285,7 +305,7 @@ export interface PluginSettingSpec {
   key: string;
   label: string;
   description?: string;
-  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules" | "relay_endpoints";
+  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules";
   default: unknown;
   min?: number;
   max?: number;
@@ -1110,6 +1130,13 @@ export function setBotContextIsolation(enabled: boolean): Promise<BotProfileConf
   return requestJSON<BotProfileConfig>("/api/assistant/config/context-isolation", {
     method: "POST",
     body: JSON.stringify({ enabled })
+  });
+}
+
+export function saveMessageRelays(relays: MessageRelayPair[]): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config/message-relays", {
+    method: "POST",
+    body: JSON.stringify({ relays })
   });
 }
 

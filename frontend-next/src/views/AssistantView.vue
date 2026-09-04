@@ -70,13 +70,13 @@
         </button>
       </div>
 
-      <section class="context-isolation-band" aria-label="跨平台上下文设置">
-        <span class="context-isolation-icon"><Layers3 :size="17" aria-hidden="true" /></span>
-        <div class="context-isolation-copy">
+      <section class="settings-band" aria-label="跨平台上下文设置">
+        <span class="settings-band-icon"><Layers3 :size="17" aria-hidden="true" /></span>
+        <div class="settings-band-copy">
           <strong>平台上下文隔离</strong>
           <span>开启后 OneBot v11 与 Telegram 分别保存会话历史；关闭后允许共享相同会话键的上下文。</span>
         </div>
-        <label class="switch context-isolation-switch">
+        <label class="switch settings-band-switch">
           <input
             type="checkbox"
             :checked="contextIsolationEnabled"
@@ -86,6 +86,18 @@
           <span class="track" aria-hidden="true"></span>
           <span class="switch-label">{{ contextIsolationEnabled ? "已隔离" : "允许共享" }}</span>
         </label>
+      </section>
+
+      <section class="settings-band" aria-label="消息互通设置">
+        <span class="settings-band-icon"><Shuffle :size="17" aria-hidden="true" /></span>
+        <div class="settings-band-copy">
+          <strong>消息互通</strong>
+          <span>{{ relaySummary }}</span>
+        </div>
+        <button class="btn small" type="button" :disabled="busy" @click="relayManagerOpen = true">
+          <Settings2 :size="13" aria-hidden="true" />
+          配置
+        </button>
       </section>
 
       <div class="bot-profile-grid">
@@ -1399,12 +1411,20 @@
         </div>
       </section>
     </div>
+
+    <MessageRelayManager
+      v-if="relayManagerOpen"
+      :profiles="profiles"
+      :relays="messageRelays"
+      @close="relayManagerOpen = false"
+      @saved="onMessageRelaysSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
-import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -1416,6 +1436,7 @@ import {
   requestBotBackfill,
   saveBotProfileConfig,
   setBotContextIsolation,
+  type MessageRelayPair,
   startBot,
   stopBot,
   type LLMConfig,
@@ -1446,6 +1467,7 @@ import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
+import MessageRelayManager from "../components/MessageRelayManager.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import SecretField from "../components/SecretField.vue";
 import { pushStatusSnapshot, stream } from "../stream";
@@ -2226,6 +2248,14 @@ const status = computed(() => stream.status);
 const profiles = computed<BotProfileConfig[]>(() => profileSet.value?.profiles ?? []);
 const activeProfileID = computed(() => profileSet.value?.active_profile_id);
 const contextIsolationEnabled = computed(() => profileSet.value?.isolate_platform_contexts ?? true);
+const relayManagerOpen = ref(false);
+const messageRelays = computed<MessageRelayPair[]>(() => profileSet.value?.message_relays ?? []);
+const relaySummary = computed(() => {
+  const total = messageRelays.value.length;
+  if (total === 0) return "把两个会话连起来，两边的消息互相转发。还没有配置链路。";
+  const active = messageRelays.value.filter((pair) => pair.enabled).length;
+  return active === total ? `已配置 ${total} 条链路，全部在转发。` : `已配置 ${total} 条链路，其中 ${active} 条在转发。`;
+});
 const channelStatuses = computed<readonly BotChannelStatus[]>(() => status.value?.channels ?? (status.value?.channel ? [status.value.channel] : []));
 const visibleChannels = computed(() => {
   const profileID = form.value?.id;
@@ -2267,6 +2297,12 @@ function profileState(profile: BotProfileConfig): { label: string; tone: string 
   if (channel?.last_error) return { label: "连接失败", tone: "error" };
   if (status.value?.running) return { label: "连接中", tone: "pending" };
   return { label: "已停止", tone: "idle" };
+}
+
+function onMessageRelaysSaved(config: BotProfileConfig): void {
+  applyConfig(config);
+  relayManagerOpen.value = false;
+  toastSuccess("消息互通链路已保存");
 }
 
 async function updateContextIsolation(enabled: boolean): Promise<void> {

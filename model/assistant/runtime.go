@@ -265,9 +265,11 @@ type Runtime struct {
 	mu sync.RWMutex
 	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
 	// 自带锁，不受 mu 保护。
-	promptCacheProbe          promptCacheProbeStore
-	cfg                       BotConfig
-	profileConfigs            map[string]BotConfig
+	promptCacheProbe promptCacheProbeStore
+	cfg              BotConfig
+	profileConfigs   map[string]BotConfig
+	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
+	relayPairs                []MessageRelayPair
 	channel                   Channel
 	bridge                    *NoneBotBridge
 	plugins                   *PluginManager
@@ -599,6 +601,7 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles
+	r.relayPairs = set.MessageRelays
 	r.mu.Unlock()
 }
 
@@ -1618,16 +1621,14 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
 		event = r.plugins.ObserveEvent(ctx, event)
-		// 消息互通发生在回复判断之前：即使 planner 最终选择不回复，原消息也应
-		// 被桥接。转发走独立短超时，不把目标平台的网络延迟叠到本轮回复上。
-		relayEvent := event
-		r.mu.RLock()
-		relayChannel := r.channel
-		r.mu.RUnlock()
+	}
+	// 消息互通发生在回复判断之前：即使 planner 最终选择不回复，原消息也应被
+	// 搬到对端。转发走独立短超时，不把目标平台的网络延迟叠到本轮回复上。
+	if relayEvent := event; len(r.messageRelays()) > 0 {
 		go func() {
-			relayCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			relayCtx, cancel := context.WithTimeout(context.Background(), messageRelayTimeout)
 			defer cancel()
-			r.plugins.RelayEvent(relayCtx, PluginRequest{Event: relayEvent, Text: PlainText(relayEvent.Segments), Channel: relayChannel, AppLogs: r.appLogWriter()}, r.pluginOverridesForEvent(relayEvent), r.pluginSettingOverridesForEvent(relayEvent))
+			r.relayInboundEvent(relayCtx, relayEvent)
 		}()
 	}
 	text := PlainText(event.Segments)

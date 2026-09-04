@@ -558,6 +558,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(assistantConfig);
   }
   if (path === "/api/assistant/config/context-isolation") { assistantConfig.isolate_platform_contexts = Boolean(body.enabled); return json(assistantConfig); }
+  if (path === "/api/assistant/config/message-relays") { assistantConfig.message_relays = Array.isArray(body.relays) ? body.relays : []; return json(assistantConfig); }
   if (path.startsWith("/api/assistant/config/") && method === "POST") return json(assistantConfig);
   if (path === "/api/assistant/status") return json(demoStatus);
   if (path === "/api/assistant/start") { demoStatus.running = true; return json(demoStatus); }
