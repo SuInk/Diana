@@ -3,27 +3,13 @@
 
 <template>
   <div>
-    <header class="view-header event-view-header">
-      <div class="view-title">
-        <h1>事件明细</h1>
-        <p>查看消息处理结果、回复决策与平台通知</p>
-      </div>
-      <div class="view-actions">
-        <button class="btn" type="button" :disabled="loading" @click="load(true)">
-          <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
-          刷新
-        </button>
-      </div>
-    </header>
 
     <div class="stack">
       <section class="event-filter-band" aria-label="事件筛选">
-        <div class="event-filter-row">
-          <div class="event-filter-copy">
-            <Clock3 :size="16" aria-hidden="true" />
-            <span>时间范围</span>
-          </div>
-          <div class="segmented event-range" role="radiogroup" aria-label="按时间筛选事件">
+        <div class="event-filter-lead">
+          <div class="event-filter-chip">
+            <Clock3 :size="15" aria-hidden="true" />
+            <div class="segmented event-range" role="radiogroup" aria-label="按时间筛选事件">
             <button
               v-for="option in rangeOptions"
               :key="option.value"
@@ -34,28 +20,25 @@
               @click="selectRange(option.value)"
             >
               {{ option.label }}
-            </button>
+              </button>
+            </div>
           </div>
+          <div class="event-filter-chip">
+            <Users :size="15" aria-hidden="true" />
+            <AppSelect
+              class="event-group-filter"
+              :model-value="selectedGroup"
+              :options="groupOptions"
+              aria-label="按群聊筛选事件"
+              @update:model-value="(value) => selectGroup(String(value))"
+            />
+          </div>
+          <button class="btn event-filter-refresh" type="button" :disabled="loading" @click="load(true)">
+            <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
+            刷新
+          </button>
         </div>
-        <div class="event-filter-row">
-          <div class="event-filter-copy">
-            <Users :size="16" aria-hidden="true" />
-            <span>会话</span>
-          </div>
-          <AppSelect
-            class="event-group-filter"
-            :model-value="selectedGroup"
-            :options="groupOptions"
-            aria-label="按群聊筛选事件"
-            @update:model-value="(value) => selectGroup(String(value))"
-          />
-        </div>
-        <div class="event-filter-row">
-          <div class="event-filter-copy">
-            <Filter :size="16" aria-hidden="true" />
-            <span>处理结果</span>
-          </div>
-          <div class="segmented event-result-filter" role="radiogroup" aria-label="按处理结果筛选事件">
+        <div class="segmented event-result-filter" role="radiogroup" aria-label="按处理结果筛选事件">
             <button
               v-for="option in resultOptions"
               :key="option.value"
@@ -66,9 +49,8 @@
               @click="selectResult(option.value)"
             >
               <span>{{ option.label }}</span>
-              <span class="event-filter-count">{{ formatNumber(resultOptionCount(option.value)) }}</span>
-            </button>
-          </div>
+            <span class="event-filter-count">{{ formatNumber(resultOptionCount(option.value)) }}</span>
+          </button>
         </div>
       </section>
 
@@ -403,7 +385,6 @@ import {
   ChevronDown,
   Clock3,
   Gauge,
-  Filter,
   ImageOff,
   LoaderCircle,
   MessageCircle,
@@ -1167,33 +1148,54 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.event-view-header {
-  align-items: flex-end;
-}
-
+/* 筛选压成一条工具栏：原来三行各带一个文字标签，光筛选就吃掉 130px，
+   首屏留给事件本身的高度还不到四分之一。控件形态本身已经说明了它筛的是什么，
+   标签只留图标，语义交给 aria-label。 */
 .event-filter-band {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
-.event-filter-row {
+.event-filter-lead {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
+  gap: 8px 10px;
   min-width: 0;
 }
 
-.event-filter-copy {
+/* 图标和它说明的控件绑成一组，换行时一起走，不会把图标孤零零留在上一行末尾。 */
+.event-filter-chip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.event-filter-chip > svg {
+  flex: none;
   color: var(--muted);
-  font-size: 13px;
-  white-space: nowrap;
+}
+
+.event-filter-refresh {
+  margin-left: auto;
+}
+
+/* 这一页的主角是下面的事件列表，统计只是参考值：压掉多余的留白和字号，
+   把首屏高度让给事件本身。 */
+.event-stats :deep(.stat-card) {
+  padding: 10px 12px;
+  gap: 4px;
+}
+
+.event-stats :deep(.stat-value) {
+  font-size: 19px;
+}
+
+.event-stats :deep(.stat-foot) {
+  line-height: 1.45;
 }
 
 .event-group-filter {
