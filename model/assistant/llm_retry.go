@@ -289,6 +289,78 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 	return nil, lastErr
 }
 
+// Stream preserves the registry streaming path while applying ordered
+// provider failover to failures that happen before a stream is established.
+// Errors emitted after the channel starts are handled by streamingLLMProvider:
+// it discards the buffered failed stream and retries through Generate, which
+// keeps partial output from leaking or being duplicated.
+func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
+	p.mu.Lock()
+	start := p.current
+	p.mu.Unlock()
+
+	var lastErr error
+	for offset := 0; offset < len(p.candidates); offset++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		index := (start + offset) % len(p.candidates)
+		candidate := p.candidates[index]
+		client := llm.RegistryClient{Registry: p.registry, Selection: candidate.selection}
+		var events <-chan llm.ChatEvent
+		var err error
+		attempts := 1
+		if p.retryTransient {
+			attempts += llmTransientMaxRetries
+		}
+		for attempt := 0; attempt < attempts; attempt++ {
+			events, err = client.Stream(ctx, req)
+			if err == nil && events != nil {
+				break
+			}
+			if err == nil {
+				err = fmt.Errorf("diana: llm provider returned a nil stream")
+			}
+			if attempt+1 >= attempts || !shouldFailoverLLMError(err) {
+				break
+			}
+			timer := time.NewTimer(llmTransientRetryDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		if err == nil && events != nil {
+			p.mu.Lock()
+			p.current = index
+			p.mu.Unlock()
+			return events, nil
+		}
+		failover := shouldFailoverLLMError(err)
+		lastErr = annotateLLMProviderAttempt(err, candidate.profile, req)
+		if !failover {
+			return nil, lastErr
+		}
+		if offset+1 < len(p.candidates) {
+			next := p.candidates[(start+offset+1)%len(p.candidates)]
+			log.Printf(
+				"diana llm stream provider failover: group=%q model=%q from=%q to=%q err=%v",
+				p.group,
+				candidate.profile.Config.Model,
+				candidate.profile.ID,
+				next.profile.ID,
+				lastErr,
+			)
+		}
+	}
+	if p.wrapGroupError && len(p.candidates) > 1 {
+		return nil, fmt.Errorf("diana: llm streams in group %q are unavailable: %w", p.group, lastErr)
+	}
+	return nil, lastErr
+}
+
 func newProfileFailoverLLMProvider(
 	profiles []llm.Profile,
 	factory LLMProviderConfigFactory,

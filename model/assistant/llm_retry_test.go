@@ -43,6 +43,31 @@ type retryRegistryAdapter struct {
 	err       error
 }
 
+type streamFailoverRegistryAdapter struct {
+	streamCalls   int
+	generateCalls int
+	streamErr     error
+	events        []llm.ChatEvent
+}
+
+func (a *streamFailoverRegistryAdapter) Generate(context.Context, llm.ModelDefinition, llm.ChatRequest) (llm.ChatResponse, error) {
+	a.generateCalls++
+	return llm.ChatResponse{}, fmt.Errorf("unexpected Generate call")
+}
+
+func (a *streamFailoverRegistryAdapter) Stream(context.Context, llm.ModelDefinition, llm.ChatRequest) (<-chan llm.ChatEvent, error) {
+	a.streamCalls++
+	if a.streamErr != nil {
+		return nil, a.streamErr
+	}
+	ch := make(chan llm.ChatEvent, len(a.events))
+	for _, event := range a.events {
+		ch <- event
+	}
+	close(ch)
+	return ch, nil
+}
+
 func (a *retryRegistryAdapter) Generate(context.Context, llm.ModelDefinition, llm.ChatRequest) (llm.ChatResponse, error) {
 	a.calls++
 	if a.err != nil {
@@ -195,6 +220,42 @@ func TestRegistryModelRoleGroupFailsOverAcrossProviders(t *testing.T) {
 	}
 	if primary.calls != 2 || backup.calls != 1 {
 		t.Fatalf("primary calls=%d backup calls=%d, want retry then failover", primary.calls, backup.calls)
+	}
+}
+
+func TestRegistryModelRoleGroupKeepsStreamingDuringFailover(t *testing.T) {
+	primary := &streamFailoverRegistryAdapter{streamErr: errors.New("503 service unavailable")}
+	backup := &streamFailoverRegistryAdapter{events: []llm.ChatEvent{
+		{Type: llm.ChatEventTextDelta, Text: "backup "},
+		{Type: llm.ChatEventTextDelta, Text: "stream"},
+		{Type: llm.ChatEventDone},
+	}}
+	registry := llm.NewProviderRegistry()
+	for _, item := range []struct {
+		id      string
+		adapter llm.LLMAdapter
+	}{{"primary", primary}, {"backup", backup}} {
+		if err := registry.RegisterProvider(llm.ProviderDefinition{ID: item.id, Name: item.id, Protocol: llm.ProtocolOpenAIResponses, Enabled: true}, item.adapter); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterModel(llm.ModelDefinition{ID: item.id + ":shared-model", ProviderID: item.id, ModelID: "shared-model", Name: "shared-model"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profiles := []llm.Profile{
+		{ID: "primary", Group: "robot-chat", Config: llm.ProviderConfig{Model: "shared-model"}},
+		{ID: "backup", Group: "robot-chat", Config: llm.ProviderConfig{Model: "shared-model"}},
+	}
+	provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&streamingLLMProvider{provider: provider}).Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || response.Text != "backup stream" {
+		t.Fatalf("response=%#v err=%v", response, err)
+	}
+	if primary.streamCalls != 2 || backup.streamCalls != 1 || primary.generateCalls != 0 || backup.generateCalls != 0 {
+		t.Fatalf("primary stream/generate=%d/%d backup=%d/%d", primary.streamCalls, primary.generateCalls, backup.streamCalls, backup.generateCalls)
 	}
 }
 
