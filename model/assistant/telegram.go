@@ -517,6 +517,7 @@ type telegramMessage struct {
 	Photo           []telegramPhoto  `json:"photo"`
 	Video           *telegramFile    `json:"video,omitempty"`
 	Animation       *telegramFile    `json:"animation,omitempty"`
+	Sticker         *telegramSticker `json:"sticker,omitempty"`
 	Audio           *telegramFile    `json:"audio,omitempty"`
 	Voice           *telegramFile    `json:"voice,omitempty"`
 	Document        *telegramFile    `json:"document,omitempty"`
@@ -546,6 +547,19 @@ type telegramEntity struct {
 type telegramPhoto struct {
 	FileID   string `json:"file_id"`
 	FileSize int64  `json:"file_size,omitempty"`
+}
+
+type telegramSticker struct {
+	FileID       string         `json:"file_id"`
+	FileUniqueID string         `json:"file_unique_id"`
+	Type         string         `json:"type,omitempty"`
+	Emoji        string         `json:"emoji,omitempty"`
+	SetName      string         `json:"set_name,omitempty"`
+	IsAnimated   bool           `json:"is_animated,omitempty"`
+	IsVideo      bool           `json:"is_video,omitempty"`
+	FileSize     int64          `json:"file_size,omitempty"`
+	Thumbnail    *telegramPhoto `json:"thumbnail,omitempty"`
+	Thumb        *telegramPhoto `json:"thumb,omitempty"`
 }
 
 type telegramFile struct {
@@ -604,6 +618,41 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		photo := msg.Photo[len(msg.Photo)-1]
 		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"file_id": photo.FileID, "file_size": strconv.FormatInt(photo.FileSize, 10)}})
 	}
+	appendTelegramStickerSegment := func(sticker *telegramSticker) {
+		if sticker == nil || strings.TrimSpace(sticker.FileID) == "" {
+			return
+		}
+		fileID := sticker.FileID
+		fileSize := sticker.FileSize
+		name := "sticker.webp"
+		mime := "image/webp"
+		// 动画贴纸（TGS）和视频贴纸（WebM）不能直接交给图片模型。Telegram
+		// 同时提供静态 thumbnail，用它作为可识别、可入表情库的画面预览。
+		if sticker.IsAnimated || sticker.IsVideo {
+			thumbnail := sticker.Thumbnail
+			if thumbnail == nil {
+				// 兼容较旧 Bot API server 使用的 thumb 字段。
+				thumbnail = sticker.Thumb
+			}
+			if thumbnail == nil || strings.TrimSpace(thumbnail.FileID) == "" {
+				return
+			}
+			fileID = thumbnail.FileID
+			fileSize = thumbnail.FileSize
+			name = "sticker-preview.webp"
+		}
+		summary := strings.TrimSpace(sticker.Emoji)
+		if summary == "" {
+			summary = "Telegram 贴纸"
+		}
+		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{
+			"file_id": fileID, "file_size": strconv.FormatInt(fileSize, 10), "name": name, "mime": mime,
+			"sub_type": "telegram_sticker", "summary": summary, "emoji": strings.TrimSpace(sticker.Emoji),
+			"sticker_set": strings.TrimSpace(sticker.SetName), "sticker_type": strings.TrimSpace(sticker.Type),
+			"sticker_file_id": sticker.FileID, "sticker_unique_id": strings.TrimSpace(sticker.FileUniqueID),
+		}})
+	}
+	appendTelegramStickerSegment(msg.Sticker)
 	appendFile := func(kind string, media *telegramFile) {
 		if media == nil || strings.TrimSpace(media.FileID) == "" {
 			return

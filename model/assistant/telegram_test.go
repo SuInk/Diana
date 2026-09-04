@@ -411,6 +411,60 @@ func TestTelegramMapsAndCachesIncomingPhoto(t *testing.T) {
 	}
 }
 
+func TestTelegramMapsAndCachesStaticStickerAsImage(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	body := tinyJPEGBytes(t)
+	api := newFakeTelegramAPI(t, map[string]any{
+		"getFile":                    map[string]any{"file_path": "stickers/cat.webp"},
+		"download:stickers/cat.webp": body,
+	})
+	msg := &telegramMessage{
+		MessageID: 11,
+		Date:      1700000000,
+		From:      &telegramUser{ID: 5},
+		Chat:      &telegramChat{ID: -100999, Type: "supergroup"},
+		Sticker: &telegramSticker{
+			FileID: "sticker-file", FileUniqueID: "sticker-unique", Emoji: "😾", SetName: "cats", Type: "regular", FileSize: int64(len(body)),
+		},
+	}
+	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	if len(event.Segments) != 2 {
+		t.Fatalf("sticker mapping = %#v", event.Segments)
+	}
+	segment := event.Segments[1]
+	if segment.Type != "image" || segment.Data["file_id"] != "sticker-file" || segment.Data["sub_type"] != "telegram_sticker" || segment.Data["summary"] != "😾" {
+		t.Fatalf("sticker segment = %#v", segment)
+	}
+	if label, ok := StickerSegmentLabel(segment); !ok || label != "😾" {
+		t.Fatalf("sticker label = %q, %v", label, ok)
+	}
+	event = api.channel().resolveIncomingMedia(context.Background(), event, msg)
+	path := event.Segments[1].Data["cached_file"]
+	if !strings.Contains(filepath.ToSlash(path), "/image/group_-100999/11/") {
+		t.Fatalf("cached sticker path = %q", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("cached sticker: bytes=%d err=%v", len(got), err)
+	}
+}
+
+func TestTelegramUsesAnimatedStickerThumbnailForVision(t *testing.T) {
+	msg := &telegramMessage{
+		MessageID: 12,
+		Chat:      &telegramChat{ID: 5, Type: "private"},
+		Sticker: &telegramSticker{
+			FileID: "animated-tgs", FileUniqueID: "animated-unique", IsAnimated: true, Emoji: "🥺",
+			Thumbnail: &telegramPhoto{FileID: "animated-preview", FileSize: 123},
+		},
+	}
+	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	segment := event.Segments[1]
+	if segment.Type != "image" || segment.Data["file_id"] != "animated-preview" || segment.Data["sticker_file_id"] != "animated-tgs" {
+		t.Fatalf("animated sticker preview = %#v", segment)
+	}
+}
+
 func TestTelegramMapsAllSupportedIncomingMedia(t *testing.T) {
 	msg := &telegramMessage{
 		MessageID: 10,
