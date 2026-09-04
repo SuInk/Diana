@@ -51,7 +51,7 @@
         <section v-for="group in filteredGroups" :key="group.group_id" class="group-card">
           <div class="group-card-head">
             <div class="group-identity">
-              <img :src="group.avatar_url || groupAvatarURL(group.group_id)" :alt="group.group_name || `群 ${group.group_id}`" @error="hideBrokenAvatar" />
+              <img v-if="group.avatar_url" :src="group.avatar_url" :alt="group.group_name || `群 ${group.group_id}`" @error="hideBrokenAvatar" />
               <div class="group-identity-copy">
                 <h2>{{ group.group_name || `群 ${group.group_id}` }}</h2>
                 <span class="mono">{{ group.group_id }}</span>
@@ -627,11 +627,6 @@ function groupConfigOf(group: BotGroupConfig): BotGroupConfig {
   return config as BotGroupConfig;
 }
 
-function groupAvatarURL(groupID: string): string {
-  const encoded = encodeURIComponent(groupID.trim());
-  return encoded ? `https://p.qlogo.cn/gh/${encoded}/${encoded}/640` : "";
-}
-
 function hideBrokenAvatar(event: Event): void {
   (event.currentTarget as HTMLImageElement).hidden = true;
 }
@@ -726,9 +721,10 @@ function upsert(config: BotGroupConfig): void {
   if (index >= 0) {
     groups.value[index] = { ...groups.value[index], ...config, configured: true };
   } else {
+    // 头像地址由后端按平台决定（QQ 直链或本机代理），前端不再自己拼；
+    // 这里先留空，下一次拉取列表时补上。
     groups.value.push({
       ...config,
-      avatar_url: groupAvatarURL(config.group_id),
       configured: true,
       joined: false
     });

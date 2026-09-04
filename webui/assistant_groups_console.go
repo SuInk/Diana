@@ -255,12 +255,23 @@ func (h *BotHandler) isOneBotProfile(profileID string) bool {
 	if h.profiles == nil {
 		return true
 	}
-	for _, profile := range h.profiles.Profiles().Profiles {
+	profiles := h.profiles.Profiles().Profiles
+	profileID = strings.TrimSpace(profileID)
+	for _, profile := range profiles {
 		if strings.TrimSpace(profile.ID) == profileID {
 			return assistant.IsOneBotPlatform(profile.Platform)
 		}
 	}
-	return true
+	// 认不出这个配置档时（单机器人部署的事件里 profile_id 往往是空的，老数据也
+	// 可能对不上），不能一律当成 OneBot：那会给 Telegram 群拼出 QQ 的头像地址，
+	// 图必然加载失败，看起来就是「没有头像」。只要当前没有任何 OneBot 机器人，
+	// 就可以确定这个群不属于 OneBot。
+	for _, profile := range profiles {
+		if assistant.IsOneBotPlatform(profile.Platform) {
+			return true
+		}
+	}
+	return len(profiles) == 0
 }
 
 var (

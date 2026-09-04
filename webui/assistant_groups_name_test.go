@@ -91,10 +91,28 @@ func TestResolveGroupNameCachesLookups(t *testing.T) {
 // OneBot 侧有 get_group_list 那条权威路径，不该再为每个群多打一次查询。
 func TestResolveGroupNameSkipsOneBotProfiles(t *testing.T) {
 	runtime := &groupInfoStubRuntime{name: "不该用到", found: true}
-	handler := newGroupNameHandler(runtime)
-	// 未登记的配置档按 OneBot 处理（老部署的事件里 profile_id 本来就是空的）。
-	if got := handler.resolveGroupName(context.Background(), "", "111", "QQ 群"); got != "QQ 群" {
+	onebot := assistant.DefaultBotConfig()
+	onebot.ID = "qq-profile"
+	onebot.Platform = "onebot-v11"
+	telegram := assistant.DefaultBotConfig()
+	telegram.ID = "tg-profile"
+	telegram.Platform = "telegram"
+	store := NewMemoryBotProfileStore(onebot)
+	_ = store.SaveProfiles(assistant.ProfileSet{
+		ActiveID: "qq-profile",
+		Profiles: []assistant.BotConfig{onebot, telegram},
+	})
+	handler := &BotHandler{
+		runtime:        runtime,
+		profiles:       store,
+		groupNameCache: map[string]groupNameCacheEntry{},
+	}
+	if got := handler.resolveGroupName(context.Background(), "qq-profile", "111", "QQ 群"); got != "QQ 群" {
 		t.Fatalf("name = %q", got)
+	}
+	// 混合部署里认不出归属的事件仍按 OneBot 处理，同样不该触发查询。
+	if got := handler.resolveGroupName(context.Background(), "", "222", "老 QQ 群"); got != "老 QQ 群" {
+		t.Fatalf("legacy name = %q", got)
 	}
 	if runtime.calls != 0 {
 		t.Fatalf("onebot profile triggered %d lookups", runtime.calls)
