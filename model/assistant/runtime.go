@@ -5138,13 +5138,36 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 	}
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profileID, _ := replyRuleLLMProfileID(ctx)
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), group, profileID)
-		if err != nil {
-			return "", err
+		var profiles []llm.Profile
+		if profileID, ok := replyRuleLLMProfileID(ctx); ok {
+			for _, profile := range set.Profiles {
+				if strings.TrimSpace(profile.ID) == profileID {
+					profiles = []llm.Profile{profile}
+					break
+				}
+			}
+			if len(profiles) == 0 {
+				return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
+			}
+		} else {
+			var roleErr error
+			profiles, roleErr = r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group)
+			if roleErr != nil {
+				return "", roleErr
+			}
+			if len(profiles) == 0 {
+				profiles = llmProfilesInGroup(set, llm.NormalizeProfileGroup(group))
+			}
+			if len(profiles) == 0 {
+				profiles = fallbackProfilesForGroup(set, group)
+			}
 		}
-		if ok {
-			return run(registryLLMProvider(registry, selection, true))
+		if len(profiles) > 0 {
+			provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1)
+			if err != nil {
+				return "", err
+			}
+			return run(provider)
 		}
 	}
 
