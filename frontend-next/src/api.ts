@@ -1844,6 +1844,7 @@ export interface UserRomanceState {
 }
 
 export interface UserMemoryProfile {
+	bot_profile_id?: string;
   user_id: string;
   display_name?: string;
   favorability: number;
@@ -1945,8 +1946,18 @@ export function listAssistantUsers(
 }
 
 export function getAssistantUser(userID: string, profile = ""): Promise<AssistantUserDetailResponse> {
-  const suffix = profile ? `?profile=${encodeURIComponent(profile)}` : "";
+  const suffix = `?profile=${encodeURIComponent(profile)}`;
   return requestJSON<AssistantUserDetailResponse>(`/api/assistant/users/${encodeURIComponent(userID)}${suffix}`);
+}
+
+export function saveAssistantUser(profile: UserMemoryProfile, remove = false): Promise<{ ok: boolean }> {
+  return requestJSON(`/api/assistant/users/${encodeURIComponent(profile.user_id)}?profile=${encodeURIComponent(profile.bot_profile_id ?? "")}`, {
+    method: remove ? "DELETE" : "PUT", body: JSON.stringify({ profile })
+  });
+}
+
+export function deleteBotGroup(groupID: string, profile = ""): Promise<{ ok: boolean }> {
+  return requestJSON(`/api/assistant/groups/${encodeURIComponent(groupID)}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" });
 }
 
 export interface AssistantUserNamesResponse {
