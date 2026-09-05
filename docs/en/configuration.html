@@ -221,6 +221,10 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <article><h3>MCP and skills</h3><p>External extensions are discovered from configuration and constrained by working directory, allow lists, permissions and timeouts.</p></article>
           <article><h3>Image tools</h3><p>Recognition, generation and editing are authorised separately; image generation is health-checked with a real generation request.</p></article>
         </div>
+        <h3>Host metrics</h3>
+        <p><code>diana.host_stats</code> lets the bot answer "how much memory is in use", "is the CPU busy", "how hot is it right now": CPU model and load, load average, memory, disk, Diana's own usage, plus whatever temperature, power and battery readings the machine exposes. Read-only, no parameters, and it shares its collector with the console dashboard.</p>
+        <p>Temperatures come from <code>/sys/class/hwmon</code>, power from the RAPL energy counters, battery from <code>/sys/class/power_supply</code> — no dependency on <code>lm-sensors</code> or any other external command, and a container only needs <code>/sys</code> mounted. RAPL exposes cumulative energy rather than instantaneous power, so power needs the difference between two samples; the first call says so instead of inventing a number. On macOS <code>powermetrics</code> needs root and Windows has no general interface, so both report temperature and power as unavailable — <strong>a fabricated number is worse than no number</strong>. That holds for every field: anything that cannot be read is reported with the reason, never as a zero.</p>
+        <p>This tool is owner-only too: hostname, disk paths and hardware models should not be visible to everyone in a group.</p>
         <h3>Local files and commands: read / write / execute</h3>
         <p>Every local tool is confined to <code>workspace</code> under the data directory. The path is fixed and not configurable; absolute paths and <code>../</code> are rejected. The three tiers are independent:</p>
         <div class="table-wrap"><table><thead><tr><th>Tier</th><th>Tools</th><th>Default</th><th>Switch</th></tr></thead><tbody>
