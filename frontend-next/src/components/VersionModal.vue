@@ -66,8 +66,8 @@
         <label class="mirror-field">
           <span>下载加速</span>
           <select v-model="mirrorMode" :disabled="savingPolicy" @change="persistPolicy('mirror')">
-            <option value="auto">自动选择镜像加速</option>
             <option value="direct">直连 GitHub</option>
+            <option value="auto">自动选择镜像加速</option>
           </select>
         </label>
         <p class="mirror-hint">自动模式下载前会自己挑一条快的镜像，直连够快就走直连。加速只用于下载安装包，校验清单始终直连，安装前都要对上 SHA-256。</p>
