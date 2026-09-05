@@ -108,7 +108,11 @@ func extractBrowserRenderURLs(req PluginRequest) []string {
 		for rawURL := range browserMediaTransportURLSet(req.Event.Quoted.Segments) {
 			mediaURLs[rawURL] = struct{}{}
 		}
-		if quotedBotError(req.Event) {
+		// 引用的是机器人自己的消息时，剔掉里面的模型服务接口地址：那只可能来自它
+		// 转述的上游报错，用户引用它说「重试下」不是要渲染 /v1/responses。以前还要求
+		// 那条消息以「出错了：」开头才剔，前缀写死且多余——机器人正常发言里本来就
+		// 不会出现可渲染的接口地址。
+		if botID := strings.TrimSpace(req.Event.SelfID); botID != "" && strings.TrimSpace(req.Event.Quoted.UserID) == botID {
 			quotedURLs = removeServiceAPIURLs(quotedURLs)
 		}
 		urls = append(urls, quotedURLs...)
@@ -154,18 +158,6 @@ func browserMediaTransportURL(rawURL string, mediaURLs map[string]struct{}) bool
 		}
 	}
 	return false
-}
-
-func quotedBotError(event MessageEvent) bool {
-	if event.Quoted == nil {
-		return false
-	}
-	botID := strings.TrimSpace(event.SelfID)
-	if botID == "" || strings.TrimSpace(event.Quoted.UserID) != botID {
-		return false
-	}
-	text := strings.TrimSpace(firstNonEmpty(event.Quoted.RawMessage, PlainText(event.Quoted.Segments)))
-	return strings.HasPrefix(text, "出错了：") || strings.HasPrefix(strings.ToLower(text), "error:")
 }
 
 func removeServiceAPIURLs(urls []string) []string {

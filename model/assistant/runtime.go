@@ -1884,7 +1884,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "error_notice_merged", nil
 		}
-		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, "出错了："+publicDetail)
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, r.effectiveConfigForEvent(event).ErrorReplyPrefix+publicDetail)
 		if sendErr != nil {
 			// 这条提示自己也没发出去，本轮就不算已经交代过，留给汇总兜底。
 			r.noteErrorNoticeSendFailed(event, publicDetail)
@@ -3576,10 +3576,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if turnMessageIDs[strings.TrimSpace(historyEvent.MessageID)] {
 				continue
 			}
+			// 机器人自己发的错误提示也是它说过的话，照样留在历史里：模型看到「上一轮
+			// 出错了」才能接住「重试一下」。以前按「出错了：」前缀把它们剔掉，前缀还是
+			// 写死的，用户改了 error_reply_prefix 就认不出来了。
 			if strings.TrimSpace(historyEvent.botReply) != "" {
-				if semanticErrorWrapperText(historyEvent.botReply) {
-					continue
-				}
 				messages = append(messages, llm.Message{
 					Role:         llm.RoleAssistant,
 					Content:      historyEvent.botReply,
@@ -3590,9 +3590,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))) {
 				if botText := strings.TrimSpace(historyPlainText(historyEvent)); botText != "" {
-					if semanticErrorWrapperText(botText) {
-						continue
-					}
 					messages = append(messages, llm.Message{
 						Role:         llm.RoleAssistant,
 						Content:      botText,
@@ -7283,9 +7280,6 @@ func mergeContextSummary(existing string, events []MessageEvent) string {
 }
 
 func compactContextEvent(event MessageEvent) string {
-	if semanticErrorWrapperText(firstNonEmpty(strings.TrimSpace(event.botReply), strings.TrimSpace(historyPlainText(event)))) {
-		return ""
-	}
 	text := PlainText(event.Segments)
 	if strings.TrimSpace(text) == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(event.RawMessage)
@@ -7321,9 +7315,6 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 		text = event.RawMessage
 	}
 	text = strings.TrimSpace(text)
-	if semanticErrorWrapperText(text) {
-		return ""
-	}
 	if text == "" {
 		return ""
 	}
