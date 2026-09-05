@@ -68,7 +68,7 @@ type UpdatePolicy struct {
 }
 
 func DefaultUpdatePolicy() UpdatePolicy {
-	return UpdatePolicy{AutoDownload: true, AutoInstall: false, GitHubMirror: ghmirror.ModeAuto}
+	return UpdatePolicy{AutoDownload: true, AutoInstall: false, GitHubMirror: ghmirror.ModeDirect}
 }
 
 type pendingReleaseUpdate struct {

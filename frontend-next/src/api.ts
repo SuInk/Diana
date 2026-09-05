@@ -1331,36 +1331,6 @@ export function saveUpdateGitHubToken(token: string, clear = false): Promise<Upd
 	});
 }
 
-export interface GitHubMirror {
-	name: string;
-	base_url: string;
-}
-
-export interface GitHubMirrorProbe {
-	name: string;
-	base_url?: string;
-	direct?: boolean;
-	ok: boolean;
-	latency_ms?: number;
-	speed_kbps?: number;
-	error?: string;
-}
-
-export interface GitHubMirrorStatus {
-	mode: string;
-	mirrors: GitHubMirror[];
-	resolved?: string;
-	last_probe?: GitHubMirrorProbe[];
-}
-
-export function getUpdateMirrors(): Promise<GitHubMirrorStatus> {
-	return requestJSON<GitHubMirrorStatus>("/api/system/update/mirrors");
-}
-
-export function testUpdateMirrors(): Promise<GitHubMirrorStatus> {
-	return requestJSON<GitHubMirrorStatus>("/api/system/update/mirrors/test", { method: "POST" });
-}
-
 export function getUpdatePolicy(): Promise<UpdatePolicy> {
 	return requestJSON<UpdatePolicy>("/api/system/update/policy");
 }

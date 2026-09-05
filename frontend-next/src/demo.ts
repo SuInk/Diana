@@ -421,19 +421,8 @@ const browserDependencies: ResolverDependency[] = [
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
-let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "auto" };
-const demoMirrors = [
-  { name: "ghfast.top", base_url: "https://ghfast.top" },
-  { name: "gh-proxy.com", base_url: "https://gh-proxy.com" },
-  { name: "gh-proxy.net", base_url: "https://gh-proxy.net" }
-];
-// 演示数据刻意排成「握手最快的那条速度最慢」：这正是只看延时会选错的情形。
-const demoMirrorProbe = [
-  { name: "直连 GitHub", direct: true, ok: true, latency_ms: 1840, speed_kbps: 2360 },
-  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402, speed_kbps: 1180 },
-  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168, speed_kbps: 74 },
-  { name: "gh-proxy.net", base_url: "https://gh-proxy.net", ok: false, error: "context deadline exceeded（演示数据）" }
-];
+let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "direct" };
+let demoUpdateTokenConfigured = false;
 
 const logs: AppLogEntry[] = [
   { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
@@ -910,16 +899,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     updatePolicy = {
       auto_download: Boolean(next.auto_download || next.auto_install),
       auto_install: Boolean(next.auto_install),
-      github_mirror: next.github_mirror || "auto"
+      github_mirror: next.github_mirror || "direct"
     };
     return json(updatePolicy);
   }
-  // 这两条要排在下面那个 /api/system/update 前缀兜底之前，否则测速会被当成下载。
-  if (path === "/api/system/update/mirrors" && method === "GET") {
-    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, last_probe: demoMirrorProbe });
-  }
-  if (path === "/api/system/update/mirrors/test") {
-    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, resolved: "https://ghfast.top", last_probe: demoMirrorProbe });
+  if (path === "/api/system/update/github-token") {
+    if (method === "PUT") { demoUpdateTokenConfigured = !JSON.parse(String(init?.body ?? "{}")).clear && Boolean(JSON.parse(String(init?.body ?? "{}")).token); }
+    return json({ configured: demoUpdateTokenConfigured, source: demoUpdateTokenConfigured ? "stored" : "" });
   }
   if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });
