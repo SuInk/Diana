@@ -3347,6 +3347,14 @@ a.nav-action {
   align-items: center;
 }
 
+/* RSS 订阅的来源行只有「一个输入框 + 删除」，比通知对象少一列。 */
+.rss-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 /* 私聊对象那一格要摞一行昵称，撑高的是这一格，同行的下拉和删除按钮仍居中对齐。 */
 .target-user {
   display: grid;
