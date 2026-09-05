@@ -130,7 +130,7 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, consoleGroupsResponse{
 		Groups:        groups,
-		Plugins:       assistant.RedactStates(h.runtime.Plugins().ListVisible()),
+		Plugins:       assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profileID)),
 		LiveAvailable: liveAvailable,
 		Warning:       warning,
 	})

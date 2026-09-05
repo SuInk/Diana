@@ -1,6 +1,8 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
+import { trackScopeRequest } from "./scope-transition";
+
 export type Provider = "openai_compatible" | "gemini" | "anthropic";
 
 export interface LLMRoleBinding {
@@ -340,6 +342,7 @@ export interface PluginManifest {
 }
 
 export interface PluginState {
+  profile_enabled?: Record<string, boolean>;
   manifest: PluginManifest;
   installed: boolean;
   enabled: boolean;
@@ -805,6 +808,15 @@ function apiErrorForStatus(status: number, message: string): ApiError {
 }
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const finish = trackScopeRequest();
+  try {
+    return await performRequestJSON<T>(url, init);
+  } finally {
+    finish();
+  }
+}
+
+async function performRequestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const path = requestPath(url);
   const key = requestCacheKey(method, url, init?.body);
@@ -1182,8 +1194,8 @@ export function sendOneBotGroupTest(groupID: string, message: string): Promise<O
   });
 }
 
-export function listPlugins(): Promise<PluginState[]> {
-  return requestJSON<PluginState[]>("/api/assistant/plugins");
+export function listPlugins(profile = ""): Promise<PluginState[]> {
+  return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
 export function installPlugin(id: string): Promise<PluginState> {
@@ -1194,8 +1206,8 @@ export function uninstallPlugin(id: string): Promise<PluginState> {
   return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/uninstall`, { method: "POST" });
 }
 
-export function setPluginEnabled(id: string, enabled: boolean): Promise<PluginState> {
-  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/enabled`, {
+export function setPluginEnabled(id: string, enabled: boolean, profile = ""): Promise<PluginState> {
+  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/enabled?profile=${encodeURIComponent(profile)}`, {
     method: "POST",
     body: JSON.stringify({ enabled })
   });
