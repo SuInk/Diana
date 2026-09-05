@@ -34,9 +34,11 @@
           <section class="card">
           <div class="card-header">
             <h2>访问安全</h2>
-            <span class="badge" :class="authRequired ? 'ok' : 'warn'">{{ authRequired ? "已开启密码保护" : "未设置密码" }}</span>
+            <SkeletonBlock v-if="authLoading" width="120px" height="21px" />
+            <span v-else class="badge" :class="authRequired ? 'ok' : 'warn'">{{ authRequired ? "已开启密码保护" : "未设置密码" }}</span>
           </div>
-          <div class="card-body form-grid">
+          <div v-if="authLoading" class="card-body"><LoadingSkeleton kind="form" :count="3" label="正在加载访问安全设置" /></div>
+          <div v-else class="card-body form-grid">
             <p v-if="!authRequired" class="muted field wide" style="margin: 0; font-size: 13px">
               当前控制台无需登录即可访问。部署在公网或局域网前，请务必设置管理密码。
             </p>
@@ -96,13 +98,13 @@
         </section>
 
           <!-- 登录会话 -->
-          <section v-if="authRequired" class="card">
+          <section v-if="authRequired || authLoading" class="card">
           <div class="card-header">
             <h2>登录会话</h2>
             <span class="card-sub">机器人发来异常登录提醒时，在这里把对应设备踢下线</span>
           </div>
           <div class="card-body stack">
-            <p v-if="sessionsLoading && sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">加载中…</p>
+            <LoadingSkeleton v-if="sessionsLoading && sessions.length === 0" kind="sessions" :count="2" label="正在加载登录会话" />
             <p v-else-if="sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">当前没有活跃会话。</p>
             <ul v-else class="session-list">
               <li v-for="session in sessions" :key="session.id" class="session-item">
@@ -144,7 +146,8 @@
           <section class="card">
           <div class="card-header">
             <h2>对外 API</h2>
-            <span class="badge" :class="openAPIPluginEnabled ? 'ok' : 'warn'">{{ openAPIPluginEnabled ? "插件已启用" : "插件未启用" }}</span>
+            <SkeletonBlock v-if="pluginLoading" width="90px" height="21px" />
+            <span v-else class="badge" :class="openAPIPluginEnabled ? 'ok' : 'warn'">{{ openAPIPluginEnabled ? "插件已启用" : "插件未启用" }}</span>
             <span class="card-sub">让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息</span>
           </div>
           <div class="card-body stack">
@@ -171,7 +174,7 @@
                 <button class="btn small ghost" type="button" @click="createdToken = ''">我已保存</button>
               </div>
             </div>
-            <p v-if="apiKeysLoading && apiKeys.length === 0" class="muted" style="margin: 0; font-size: 13px">加载中…</p>
+            <LoadingSkeleton v-if="apiKeysLoading && apiKeys.length === 0" kind="sessions" :count="2" label="正在加载 API 密钥" />
             <p v-else-if="apiKeys.length === 0" class="muted" style="margin: 0; font-size: 13px">还没有密钥。创建后外部系统才能调用推送接口。</p>
             <ul v-else class="session-list">
               <li v-for="key in apiKeys" :key="key.id" class="session-item">
@@ -215,12 +218,25 @@
         <section class="card">
           <div class="card-header">
             <h2>系统更新</h2>
-            <span class="badge">{{ deploymentMode === "git" ? "源码更新" : systemVersion?.update_supported ? "Release 自更新" : "Docker" }}</span>
+            <SkeletonBlock v-if="loading && !systemVersion" width="90px" height="21px" />
+            <span v-else class="badge">{{ deploymentMode === "git" ? "源码更新" : systemVersion?.update_supported ? "Release 自更新" : "Docker" }}</span>
             <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
           </div>
-          <div class="card-body stack" style="gap: 10px; font-size: 13px">
+          <div v-if="loading && !systemVersion" class="card-body stack" style="gap: 10px" role="status" aria-label="正在加载更新状态">
+            <div class="cluster" style="justify-content: space-between"><SkeletonBlock width="64px" height="20px" /><SkeletonBlock width="80px" height="20px" /></div>
+            <SkeletonBlock width="85%" height="19px" />
+            <SkeletonBlock height="38px" />
+            <hr class="divider" style="margin: 4px 0" />
+            <div class="field"><SkeletonBlock width="120px" height="20px" /><SkeletonBlock height="37px" /></div>
+            <SkeletonBlock width="90px" height="30px" />
+            <SkeletonBlock width="85%" height="19px" />
+            <hr class="divider" style="margin: 4px 0" />
+            <SkeletonBlock height="38px" />
+            <SkeletonBlock width="75%" height="19px" />
+          </div>
+          <div v-else class="card-body stack" style="gap: 10px; font-size: 13px">
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">当前版本</span>
               <span class="cluster" style="gap: 6px">
@@ -283,7 +299,6 @@
               {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
             </button>
             <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
-            <div v-if="loading" class="skeleton" style="height: 72px"></div>
           </div>
         </section>
 
@@ -295,11 +310,13 @@
           <div class="card-body stack" style="gap: 8px; font-size: 13px">
             <div class="info-row">
               <span class="muted info-label">运行时长</span>
-              <span class="info-value">{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
+              <SkeletonBlock v-if="healthLoading" width="80px" height="18px" />
+              <span v-else class="info-value">{{ health ? formatUptime(health.uptime_seconds) : "—" }}</span>
             </div>
             <div class="info-row">
               <span class="muted info-label">启动时间</span>
-              <span class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
+              <SkeletonBlock v-if="healthLoading" width="140px" height="18px" />
+              <span v-else class="mono info-value">{{ health ? formatTime(health.started_at) : "—" }}</span>
             </div>
           </div>
         </section>
@@ -344,6 +361,8 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw, RotateCw } from "@lucide/vue";
 import {
   changeCredentials,
@@ -392,7 +411,10 @@ const updateStatus = ref<UpdateStatus | null>(null);
 const updateCheck = ref<UpdateCheckResponse | null>(null);
 const systemVersion = ref<SystemVersion | null>(null);
 const health = ref<HealthResponse | null>(null);
-const loading = ref(false);
+const loading = ref(true);
+const authLoading = ref(true);
+const healthLoading = ref(true);
+const pluginLoading = ref(true);
 const updating = ref(false);
 const updateFailed = ref(false);
 const restarting = ref(false);
@@ -410,10 +432,10 @@ const showNewPassword = ref(false);
 const savingPassword = ref(false);
 const deploymentMode = ref<"git" | "release">("release");
 const sessions = ref<AuthSession[]>([]);
-const sessionsLoading = ref(false);
+const sessionsLoading = ref(true);
 const revokingID = ref("");
 const apiKeys = ref<OpenAPIKey[]>([]);
-const apiKeysLoading = ref(false);
+const apiKeysLoading = ref(true);
 const creatingKey = ref(false);
 const newKeyName = ref("");
 const createdToken = ref("");
@@ -446,6 +468,8 @@ async function loadAuthStatus(): Promise<void> {
     username.value = status.username || "";
   } catch {
     /* 状态读取失败保持默认展示 */
+  } finally {
+    authLoading.value = false;
   }
 }
 
@@ -472,6 +496,7 @@ async function saveCredentials(): Promise<void> {
 async function loadSessions(): Promise<void> {
   if (!authRequired.value) {
     sessions.value = [];
+    sessionsLoading.value = false;
     return;
   }
   sessionsLoading.value = true;
@@ -531,6 +556,8 @@ async function loadOpenAPIPlugin(): Promise<void> {
     openAPIPlugin.value = plugins.find((item) => item.manifest.id === OPEN_API_PLUGIN_ID) ?? null;
   } catch {
     /* 拉不到插件状态时按未知处理，开关按钮保持禁用 */
+  } finally {
+    pluginLoading.value = false;
   }
 }
 
@@ -765,7 +792,8 @@ onMounted(() => {
     })
     .catch(() => {
       health.value = null;
-    });
+    })
+    .finally(() => { healthLoading.value = false; });
 	updateStatusPollTimer = window.setInterval(() => {
 		if (!operationRunning.value || deploymentMode.value !== "release") return;
 		void getUpdateStatus().then((status) => { updateStatus.value = status; }).catch(() => undefined);

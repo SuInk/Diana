@@ -49,3 +49,19 @@ func TestReminderDeliveryTargetsForWebSkipsEmptyEntries(t *testing.T) {
 		t.Fatalf("空对象没有被跳过：%#v", targets)
 	}
 }
+
+func TestRepositoryWatchTargetsAlwaysUseSourceProfileNamespace(t *testing.T) {
+	profile := assistant.BotConfig{ID: "tg", Platform: assistant.PlatformTelegram}
+	targets := repositoryWatchTargetsFromPayload([]repositoryWatchTargetPayload{
+		{Destination: "group", GroupID: "100"},
+		{Destination: "private", UserID: "200"},
+	}, profile)
+	if len(targets) != 2 {
+		t.Fatalf("targets=%#v", targets)
+	}
+	for _, target := range targets {
+		if target.ContextNamespace != profile.ID || target.ProfileID != profile.ID || target.Platform != profile.Platform {
+			t.Fatalf("target lost its source profile: %#v", target)
+		}
+	}
+}

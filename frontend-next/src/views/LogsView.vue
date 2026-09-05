@@ -31,7 +31,8 @@
           <div class="input-group" style="flex: 1; max-width: 360px">
             <input v-model="query" class="input" placeholder="按动作 / 内容 / 操作人过滤…" />
           </div>
-          <span class="muted" style="font-size: 12.5px">{{ filteredLogs.length }} 条</span>
+          <SkeletonBlock v-if="loading && !logs.length" width="48px" height="18px" />
+          <span v-else class="muted" style="font-size: 12.5px">{{ filteredLogs.length }} 条</span>
         </div>
 
         <div v-if="filteredLogs.length > 0">
@@ -49,10 +50,7 @@
           </article>
         </div>
         <EmptyState v-else-if="!loading" :title="query ? '没有匹配的日志' : '暂无日志'" />
-        <div v-else class="stack">
-          <div class="skeleton" style="height: 48px"></div>
-          <div class="skeleton" style="height: 48px"></div>
-        </div>
+        <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载日志" />
       </div>
     </section>
   </div>
@@ -66,10 +64,12 @@ import { formatTime } from "../format";
 import { displayChatIdentity } from "../message-display";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const kind = ref<AppLogKind>("operation");
 const logs = ref<AppLogEntry[]>([]);
-const loading = ref(false);
+const loading = ref(true);
 const query = ref("");
 const autoRefresh = ref(false);
 
