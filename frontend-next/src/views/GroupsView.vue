@@ -132,14 +132,6 @@
       </template>
     </Modal>
 
-    <Modal v-if="pendingDelete" title="删除群配置" @close="!deleting && (pendingDelete = null)">
-      <p>删除 {{ pendingDelete.group_name || pendingDelete.group_id }} 的独立配置？删除后恢复全局规则（可能重新启用回复），不会退出群聊或删除聊天记录。已加入的群仍会显示。</p>
-      <template #footer>
-        <button class="btn ghost" :disabled="deleting" @click="pendingDelete = null">取消</button>
-        <button class="btn" :disabled="deleting" @click="removeGroup"><Trash2 :size="15" />{{ deleting ? "删除中…" : "删除配置" }}</button>
-      </template>
-    </Modal>
-
     <!-- 群配置编辑弹窗 -->
     <Modal
       v-if="relationsGroupID"
