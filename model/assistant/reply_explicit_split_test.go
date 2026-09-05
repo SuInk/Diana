@@ -3,7 +3,45 @@ package assistant
 import (
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
+
+func TestReplyPromptsUseTheActualEventSplitMode(t *testing.T) {
+	for _, natural := range []bool{true, false} {
+		cfg := BotConfig{NaturalReplySplitEnabled: boolPointer(natural)}.WithDefaults()
+		r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		for _, event := range []MessageEvent{
+			{Kind: EventKindGroup},
+			{Kind: EventKindGroup, proactiveReply: true},
+			{Kind: EventKindGroup, proactiveReply: true, chatInReply: true},
+			{Kind: EventKindPrivate},
+		} {
+			wantsNatural := natural && !(event.Kind == EventKindGroup && event.chatInReply)
+			mainPrompt := r.systemPromptWithMode(event, nil, event.proactiveReply)
+			persona := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: "test"}})
+			for _, prompt := range []string{mainPrompt, persona[0].Content} {
+				if strings.Contains(prompt, replySegmentationRule) != wantsNatural || strings.Contains(prompt, replySegmentationMarkerOnlyRule) == wantsNatural {
+					t.Fatalf("natural=%v kind=%s casual=%v prompt disagrees with delivery", natural, event.Kind, event.chatInReply)
+				}
+			}
+		}
+	}
+}
+
+func TestCasualChatUsesMarkersForIndependentUtterances(t *testing.T) {
+	parts := []string{"唔……在呢喵", "这么晚了还没睡呀，怎么啦喵？", "本喵有点困困的，正慢吞吞听着呢喵~"}
+	event := MessageEvent{Kind: EventKindGroup, proactiveReply: true, chatInReply: true}
+	got := splitEventChatReply(strings.Join(parts, notificationSplitMarker), BotConfig{}.WithDefaults(), event)
+	if len(got) != len(parts) || strings.Join(got, "\n") != strings.Join(parts, "\n") {
+		t.Fatalf("explicit utterances were joined or altered: %q", got)
+	}
+	list := "1. 检查连接\n2. 查看日志"
+	got = splitEventChatReply(list, BotConfig{}.WithDefaults(), event)
+	if len(got) != 1 || got[0] != list {
+		t.Fatalf("list layout was flattened or split: %q", got)
+	}
+}
 
 func TestProactiveRepliesHonorExplicitMarkers(t *testing.T) {
 	for _, natural := range []bool{true, false} {
