@@ -109,7 +109,9 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 
 **Docker:** an image is published with every release (`ghcr.io/suink/diana:latest` plus version tags). OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), mount your `config.yaml` read-only at `/app/config.yaml`; the repo also ships a `docker-compose.yml` for local builds. To upgrade, pull the new image and recreate the container — your data lives in the mounted `data/` directory.
 
-**Manual download:** grab the **full package** for your platform (`.tar.gz` / `.zip`, includes frontend assets and launch scripts) from [Releases](https://github.com/SuInk/Diana/releases), verify `SHA256SUMS`, then run `run.sh` / `run.bat`. The bare binaries don't include the frontend; they're for custom deployments.
+**Manual download:** grab the **full package** for your platform (`.tar.gz` / `.zip`, includes the backend, prebuilt WebUI and launch scripts) from [Releases](https://github.com/SuInk/Diana/releases), verify `SHA256SUMS`, extract it, then run `run.sh` / `run.bat`. No separate WebUI deployment or Node.js installation is needed. Releases no longer provide standalone binaries; for custom deployments, extract the executable and frontend assets from the full package.
+
+**Package name migration:** new archives use `diana-<os>-<arch>.tar.gz` (`.zip` on Windows), for example `diana-macos-arm64.tar.gz`. Older consoles that only recognize `diana-webui-…` archives cannot self-update directly to the renamed packages. For the first upgrade, rerun the one-click installer above or manually install a full package. The new installer and updater still accept legacy archive names. Executables inside packages remain `diana-webui` / `diana-webui.exe`, so existing service configuration does not need renaming.
 
 **From source:** requires Go 1.26+ and Node.js 22.
 

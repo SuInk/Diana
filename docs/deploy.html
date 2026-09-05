@@ -65,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 
       <section class="section searchable" id="manual-release">
         <div class="section-heading"><p class="eyebrow">备用方式</p><h2>手工安装完整 Release 包</h2></div>
-        <p>离线环境或需要人工变更审批时，可手动下载匹配平台的 <code>.tar.gz</code>/<code>.zip</code> 和同一 Release 的 <code>SHA256SUMS</code>。普通运行不要只下载裸二进制，因为裸二进制不包含 WebUI。</p>
+        <p>离线环境或需要人工变更审批时，可手动下载匹配平台的完整包 <code>.tar.gz</code>/<code>.zip</code> 和同一 Release 的 <code>SHA256SUMS</code>。完整包包含后端、编译好的 WebUI 和启动脚本，无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。</p>
         <pre><code># macOS Apple Silicon 示例
 shasum -a 256 diana-webui-darwin-arm64.tar.gz
 tar -xzf diana-webui-darwin-arm64.tar.gz

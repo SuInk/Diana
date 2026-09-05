@@ -175,7 +175,10 @@ case "$version" in
   *) fail "invalid release version: $version" ;;
 esac
 
-package_name="diana-webui-$os-$arch"
+package_os="$os"
+[ "$package_os" != "darwin" ] || package_os="macos"
+package_name="diana-$package_os-$arch"
+compat_binary_name="diana-webui-$os-$arch"
 binary_name="diana-webui"
 archive_name="$package_name.tar.gz"
 base_url="https://github.com/$repo/releases/download/$version"
@@ -189,14 +192,20 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-download "Download → Diana $version for $os/$arch" "$base_url/$archive_name" "$archive_path"
 download "Download → SHA256SUMS" "$base_url/SHA256SUMS" "$sums_path"
 
 expected=$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; exit }' "$sums_path")
+if [ -z "$expected" ]; then
+  package_name="$compat_binary_name"
+  archive_name="$package_name.tar.gz"
+  archive_path="$temp_dir/$archive_name"
+  expected=$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; exit }' "$sums_path")
+fi
 case "$expected" in
   ""|*[!0-9a-fA-F]*) fail "SHA-256 entry for $archive_name was not found" ;;
 esac
 [ "${#expected}" -eq 64 ] || fail "invalid SHA-256 entry for $archive_name"
+download "Download → Diana $version for $os/$arch" "$base_url/$archive_name" "$archive_path"
 
 if command -v sha256sum >/dev/null 2>&1; then
   actual=$(sha256sum "$archive_path" | awk '{print $1}')
@@ -284,7 +293,7 @@ backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
 
 had_previous=false
-for item in "$binary_name" "$package_name" run.sh uninstall.sh frontend-next; do
+for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next; do
   if [ -e "$install_dir/$item" ]; then
     had_previous=true
     mv "$install_dir/$item" "$backup_dir/runtime/$item"
@@ -816,7 +825,7 @@ EOF
 restore_previous() {
   [ "$had_previous" = "true" ] || return 0
   stop_service
-  for item in "$binary_name" "$package_name" run.sh uninstall.sh frontend-next; do
+  for item in "$binary_name" "$compat_binary_name" run.sh uninstall.sh frontend-next; do
     if [ -e "$backup_dir/runtime/$item" ]; then
       rm -rf -- "$install_dir/$item"
       mv "$backup_dir/runtime/$item" "$install_dir/$item"

@@ -171,21 +171,20 @@ jobs:
           runtime_name="diana-webui"
           package_suffix="${{ matrix.suffix }}"
           package_suffix="${package_suffix%.exe}"
-          package_name="diana-webui-${package_suffix}"
+          package_suffix="${package_suffix/darwin-/macos-}"
+          package_name="diana-${package_suffix}"
           package_dir="release/package/${package_name}"
 
           if [[ "${{ matrix.goos }}" == "windows" ]]; then
             runtime_name="diana-webui.exe"
           fi
 
-          go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "dist/${binary_name}" ./cmd/webui
-
           # Release 包带齐运行时前端，下载后不需要 Go、Node 或源码。
           mkdir -p "${package_dir}/frontend-next/dist"
-          cp "dist/${binary_name}" "${package_dir}/${runtime_name}"
+          go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "${package_dir}/${runtime_name}" ./cmd/webui
           # Keep one compatibility copy so pre-migration updaters can install
           # the first package that introduces the stable runtime name.
-          cp "dist/${binary_name}" "${package_dir}/${binary_name}"
+          cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"
           cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
           printf '%s\n' \
             "Diana ${BUILD_VERSION}" \
@@ -222,8 +221,10 @@ jobs:
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: diana-webui-${{ matrix.suffix }}
-          path: dist/*
+          name: diana-package-${{ matrix.suffix }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
 
   docker:
@@ -281,16 +282,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download binaries
+      - name: Download complete packages
         uses: actions/download-artifact@v4
         with:
-          pattern: diana-webui-*
+          pattern: diana-package-*
           path: release
           merge-multiple: true
 
       - name: Generate SHA-256 checksums
         working-directory: release
-        run: sha256sum diana-* > SHA256SUMS
+        run: sha256sum diana-*.tar.gz diana-*.zip > SHA256SUMS
 
       - name: Generate static update manifest
         working-directory: release
@@ -299,7 +300,7 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           assets='[]'
-          for file in diana-* SHA256SUMS; do
+          for file in diana-*.tar.gz diana-*.zip SHA256SUMS; do
             assets=$(jq --arg name "$file" --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${file}" --argjson size "$(stat -c %s "$file")" '. + [{name: $name, url: $url, size: $size}]' <<<"$assets")
           done
           jq -n \
@@ -315,4 +316,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: release/*
+          files: |
+            release/*.tar.gz
+            release/*.zip
+            release/SHA256SUMS
+            release/latest.json

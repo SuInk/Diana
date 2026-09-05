@@ -109,7 +109,9 @@ docker run -d --name diana --restart unless-stopped \
 
 **Docker：** 镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；仓库里也有 `docker-compose.yml` 可以本地构建。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
 
-**手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含前端资源和启动脚本），校验 `SHA256SUMS` 后运行 `run.sh` / `run.bat`。裸二进制不含前端，是给自定义部署用的。
+**手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
+
+**包名迁移：** 新完整包统一命名为 `diana-<系统>-<架构>.tar.gz`（Windows 为 `.zip`），例如 `diana-macos-arm64.tar.gz`。仍只识别 `diana-webui-…` 包名的旧版控制台不能直接自更新到新包名版本，首次需重跑上方一键安装命令或手动安装完整包；新版安装器和自更新器仍兼容旧包名。包内可执行文件保持 `diana-webui` / `diana-webui.exe`，已有服务配置不必改名。
 
 **从源码：** 需要 Go 1.26+ 与 Node.js 22。
 
