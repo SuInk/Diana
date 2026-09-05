@@ -1665,6 +1665,8 @@ export interface AssistantEventDetail extends BotEvent {
   memories?: AssistantEventMemory[];
   /** 实际进入本轮模型上下文的短期会话状态；仅管理员事件接口返回。 */
   temporary_memories?: AssistantEventTemporaryMemory[];
+  /** 发送者头像地址；只有 QQ 系给得出，其余平台为空，界面退回首字母占位。 */
+  sender_avatar_url?: string;
   /** 这条消息触发的后台子任务。图片是任务跑完后异步发出去的。 */
   subtasks?: AssistantEventSubtask[];
   /** 这一轮实际发出去的内容概览。reply 只是文本，说不出还发了卡片和媒体。 */
