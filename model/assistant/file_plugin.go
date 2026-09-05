@@ -43,6 +43,7 @@ type FileParserPlugin struct {
 }
 
 type fileRef struct {
+	MD5       string
 	Name      string
 	URL       string
 	LocalPath string
@@ -209,6 +210,9 @@ func collectFileRefs(req PluginRequest) []fileRef {
 				URL:     raw,
 				Trusted: true,
 			}
+			if req.Event.Platform == PlatformOneBotV11 {
+				ref.MD5 = explicitMediaMD5(segment.Data)
+			}
 			if normalizedFileURL(raw) != "" {
 				ref.URL = raw
 			} else if isSupportedLocalFile(raw) {
@@ -302,8 +306,19 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 func (p *FileParserPlugin) readRef(ctx context.Context, ref fileRef, maxBytes int64) ([]byte, string, string, error) {
 	if ref.URL != "" {
 		client := p.client
+		scope := "public"
 		if ref.Trusted && p.trustedClient != nil {
 			client = p.trustedClient
+			scope = "adapter"
+		}
+		if ref.Trusted {
+			path, contentType, release, err := acquireMediaDownload(ctx, client, ref.URL, ref.Name, ref.MD5, scope, maxBytes)
+			defer release()
+			if err != nil {
+				return nil, ref.URL, "", err
+			}
+			data, _, err := p.readLocal(path, maxBytes)
+			return data, ref.URL, contentType, err
 		}
 		data, contentType, err := p.readURLWithClient(ctx, client, ref.URL, maxBytes)
 		return data, ref.URL, contentType, err
@@ -447,6 +462,13 @@ func oneBotFileResolveRequests(ref fileRef) []oneBotFileResolveRequest {
 }
 
 func fileRefFromOneBotData(base fileRef, data map[string]any) fileRef {
+	digests := make(map[string]string)
+	for _, key := range []string{"md5", "file_md5", "fileMd5"} {
+		digests[key] = stringFromAny(data[key])
+	}
+	if digest := explicitMediaMD5(digests); digest != "" {
+		base.MD5 = digest
+	}
 	for _, key := range []string{"name", "file_name", "filename"} {
 		if value := stringFromAny(data[key]); strings.TrimSpace(value) != "" && base.Name == "" {
 			base.Name = value

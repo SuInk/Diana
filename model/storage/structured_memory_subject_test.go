@@ -12,7 +12,7 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
-// 控制台人员页按人取长期记忆：不带会话作用域，只要这个人身上还生效的那些。
+// 控制台人员页可以跨同一命名空间下的会话读取长期记忆。
 func TestListStructuredMemoriesBySubject(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
@@ -61,7 +61,7 @@ func TestListStructuredMemoriesBySubject(t *testing.T) {
 		Confidence: 0.95, Importance: 0.9, Visibility: assistant.MemoryVisibilityUser,
 	}, "m4")
 
-	items, err := store.ListStructuredMemoriesBySubject(ctx, "10001", 50)
+	items, err := store.ListStructuredMemoriesBySubject(ctx, "", "10001", 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +81,11 @@ func TestListStructuredMemoriesBySubject(t *testing.T) {
 		}
 	}
 
-	if empty, err := store.ListStructuredMemoriesBySubject(ctx, "  ", 50); err != nil || len(empty) != 0 {
+	if empty, err := store.ListStructuredMemoriesBySubject(ctx, "", "  ", 50); err != nil || len(empty) != 0 {
 		t.Fatalf("blank user = %#v err=%v", empty, err)
 	}
 
-	counts, err := store.CountStructuredMemoriesBySubjects(ctx, []string{"10001", "10001", "10002", "  ", "10003"})
+	counts, err := store.CountStructuredMemoriesBySubjects(ctx, "", []string{"10001", "10001", "10002", "  ", "10003"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestListStructuredMemoriesBySubject(t *testing.T) {
 	if _, listed := counts["10003"]; listed {
 		t.Fatalf("counts should omit users without memories: %#v", counts)
 	}
-	if counts, err := store.CountStructuredMemoriesBySubjects(ctx, nil); err != nil || len(counts) != 0 {
+	if counts, err := store.CountStructuredMemoriesBySubjects(ctx, "", nil); err != nil || len(counts) != 0 {
 		t.Fatalf("empty request = %#v err=%v", counts, err)
 	}
 }

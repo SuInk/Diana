@@ -214,6 +214,52 @@
       </div>
 
       <div v-show="tab === 'system'" class="settings-section-body">
+        <section class="download-cache-settings">
+          <div class="card-header">
+            <h2>下载缓存</h2>
+            <button class="btn small ghost" type="button" :disabled="cacheLoading || cacheSaving" title="刷新缓存设置" aria-label="刷新缓存设置" @click="loadCachePolicy">
+              <RefreshCw :size="14" aria-hidden="true" />
+            </button>
+          </div>
+          <form class="card-body" @submit.prevent="saveCachePolicy">
+            <div v-if="cacheLoading && !cachePolicy" class="cache-policy-fields form-grid" role="status" aria-label="正在加载缓存设置">
+              <div v-for="n in 2" :key="n" class="field"><SkeletonBlock width="90px" height="20px" /><SkeletonBlock height="37px" /></div>
+              <div class="field wide"><SkeletonBlock width="150px" height="22px" /></div>
+              <div class="field wide"><SkeletonBlock width="140px" height="38px" /></div>
+            </div>
+            <p v-if="cacheError" class="error" role="alert">{{ cacheError }}</p>
+            <fieldset v-if="!cacheLoading || cachePolicy" class="cache-policy-fields form-grid" :disabled="cacheLoading || cacheSaving || !cachePolicy">
+              <div class="field">
+                <label for="cache-cleanup-mode">清理策略</label>
+                <select id="cache-cleanup-mode" v-model="cacheMode" class="input">
+                  <option value="days">按闲置天数清理</option>
+                  <option value="capacity">仅按容量清理</option>
+                  <option value="never">永不自动清理</option>
+                </select>
+              </div>
+              <div v-if="cacheMode === 'days'" class="field">
+                <label for="cache-retention-days">闲置保留天数</label>
+                <input id="cache-retention-days" v-model.number="cacheDays" class="input" type="number" min="1" max="36500" step="1" required />
+              </div>
+              <div v-if="cacheMode === 'days'" class="field wide">
+                <label class="cache-capacity-toggle">
+                  <input v-model="cacheLimitEnabled" type="checkbox" />
+                  同时限制缓存容量
+                </label>
+              </div>
+              <div v-if="cacheMode === 'capacity' || (cacheMode === 'days' && cacheLimitEnabled)" class="field">
+                <label for="cache-max-mb">容量上限（MiB）</label>
+                <input id="cache-max-mb" v-model.number="cacheMaxMB" class="input" type="number" min="1" max="1048576" step="1" required />
+              </div>
+              <div class="field wide">
+                <button class="btn primary" type="submit" :disabled="!cacheDraftValid || !cacheDirty">
+                  <Save :size="15" aria-hidden="true" />
+                  {{ cacheSaving ? "保存中…" : "保存缓存设置" }}
+                </button>
+              </div>
+            </fieldset>
+          </form>
+        </section>
         <!-- 系统更新 -->
         <section class="card">
           <div class="card-header">
@@ -363,7 +409,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw, RotateCw } from "@lucide/vue";
+import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw, RotateCw, Save } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -380,6 +426,9 @@ import {
 	downloadSystemUpdate,
   pullFromGitHub,
   restartSystem,
+  getMediaCachePolicy,
+  saveMediaCachePolicy,
+  type MediaCachePolicy,
   listOpenAPIKeys,
   createOpenAPIKey,
   revokeOpenAPIKey,
@@ -406,6 +455,63 @@ const settingsTabs = [
 
 const tab = ref<(typeof settingsTabs)[number]["key"]>("security");
 const activeTabHint = computed(() => settingsTabs.find((item) => item.key === tab.value)?.hint ?? "");
+
+const cachePolicy = ref<MediaCachePolicy | null>(null);
+const cacheMode = ref<"days" | "capacity" | "never">("days");
+const cacheDays = ref(7);
+const cacheMaxMB = ref(1024);
+const cacheLimitEnabled = ref(false);
+const cacheLoading = ref(true);
+const cacheSaving = ref(false);
+const cacheError = ref("");
+const cacheDraft = computed<MediaCachePolicy>(() => ({
+  retention_days: cacheMode.value === "days" ? Number(cacheDays.value) : -1,
+  max_mb: cacheMode.value === "capacity" || (cacheMode.value === "days" && cacheLimitEnabled.value) ? Number(cacheMaxMB.value) : 0
+}));
+const cacheDraftValid = computed(() => {
+  const { retention_days: days, max_mb: capacity } = cacheDraft.value;
+  return (cacheMode.value !== "days" || (Number.isInteger(days) && days >= 1 && days <= 36500))
+    && Number.isInteger(capacity) && capacity >= 0 && capacity <= 1048576
+    && (!(cacheMode.value === "capacity" || (cacheMode.value === "days" && cacheLimitEnabled.value)) || capacity > 0);
+});
+const cacheDirty = computed(() => cachePolicy.value !== null && (
+  cachePolicy.value.retention_days !== cacheDraft.value.retention_days || cachePolicy.value.max_mb !== cacheDraft.value.max_mb
+));
+
+function applyCachePolicy(policy: MediaCachePolicy) {
+  cachePolicy.value = policy;
+  cacheMode.value = policy.retention_days > 0 ? "days" : policy.max_mb > 0 ? "capacity" : "never";
+  cacheDays.value = policy.retention_days > 0 ? policy.retention_days : 7;
+  cacheLimitEnabled.value = policy.max_mb > 0;
+  cacheMaxMB.value = policy.max_mb > 0 ? policy.max_mb : 1024;
+}
+
+async function loadCachePolicy() {
+  cacheLoading.value = true;
+  cacheError.value = "";
+  try {
+    applyCachePolicy(await getMediaCachePolicy());
+  } catch (error) {
+    cacheError.value = error instanceof Error ? error.message : "缓存设置加载失败";
+  } finally {
+    cacheLoading.value = false;
+  }
+}
+
+async function saveCachePolicy() {
+  if (!cacheDraftValid.value || !cacheDirty.value || cacheSaving.value || cacheLoading.value) return;
+  cacheSaving.value = true;
+  cacheError.value = "";
+  try {
+    applyCachePolicy(await saveMediaCachePolicy(cacheDraft.value));
+    toastSuccess("缓存设置已保存并立即生效");
+  } catch (error) {
+    cacheError.value = error instanceof Error ? error.message : "缓存设置保存失败";
+    toastError(cacheError.value);
+  } finally {
+    cacheSaving.value = false;
+  }
+}
 
 const updateStatus = ref<UpdateStatus | null>(null);
 const updateCheck = ref<UpdateCheckResponse | null>(null);
@@ -781,6 +887,7 @@ async function doRestart(): Promise<void> {
 }
 
 onMounted(() => {
+  void loadCachePolicy();
   void loadUpdates();
   void loadGitHubTokenStatus();
   void loadAuthStatus().then(() => loadSessions());
@@ -817,6 +924,49 @@ onBeforeUnmount(() => {
 
 .update-token-actions {
   gap: 8px;
+}
+
+.download-cache-settings {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cache-policy-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  max-width: 640px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cache-policy-fields .cache-capacity-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.cache-capacity-toggle input {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.cache-policy-fields .btn {
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+}
+
+@media (max-width: 520px) {
+  .cache-policy-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
+.cache-policy-fields .input {
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* 只有三档，铺满整行反而显得空；靠左按内容宽度排。 */

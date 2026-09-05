@@ -275,6 +275,11 @@ if [ "$install_scope" = "system" ] && [ "$install_dir" != "$legacy_install_dir" 
   retire_legacy_service
 fi
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
+# Keep only this attempt's backup; abort before copying if cleanup fails.
+for old_backup in "$install_dir/.installer/backups/"*; do
+  [ -d "$old_backup" ] || continue
+  rm -rf -- "$old_backup"
+done
 backup_dir="$install_dir/.installer/backups/$timestamp"
 mkdir -p "$backup_dir/runtime" "$backup_dir/data"
 
@@ -860,6 +865,11 @@ if [ "$start_after_install" = "true" ]; then
     fail "health check failed; the previous runtime was restored when available. See $install_dir/logs"
   fi
   info "Diana is healthy at http://$health_host:$port"
+  if rm -rf -- "$backup_dir"; then
+    backup_dir=""
+  else
+    printf 'Warning: Diana is healthy, but backup cleanup failed: %s\n' "$backup_dir" >&2
+  fi
   printf 'Service: %s\n' "$service_kind"
   if [ "$service_control_granted" = true ]; then
     printf 'Control:   %s may run `diana restart` without a password (/etc/sudoers.d/diana).\n' "$service_user"
@@ -897,7 +907,11 @@ if [ -n "$command_dir" ]; then
     printf 'PATH:      %s\n' "$command_path_hint"
   fi
 fi
-printf 'Backup:    %s\n' "$backup_dir"
+if [ -n "$backup_dir" ]; then
+  printf 'Backup:    %s\n' "$backup_dir"
+else
+  printf 'Backup:    removed after successful health check\n'
+fi
 if [ -n "$generated_password" ]; then
   printf 'Username:  %s\n' "$username"
   printf 'Password:  %s\n' "$generated_password"

@@ -66,26 +66,21 @@ func cacheVideoFrames(ctx context.Context, platform string, eventTime int64, tar
 		return segments
 	}
 	videoSegments := make([]MessageSegment, 0, 1)
+	// Preserve metadata for MP4 file segments as well as ordinary videos.
 	for _, segment := range segments {
-		if segment.Type == "video" && len(videoSourceCandidates([]MessageSegment{segment})) > 0 {
+		if videoFileSegment(segment) && len(videoSourceCandidates([]MessageSegment{segment})) > 0 {
 			videoSegments = append(videoSegments, segment)
 		}
 	}
 	if len(videoSegments) == 0 {
-		// QQ 也会把 mp4 作为 file 段投递。它没有合并转发节点元数据，但仍要维持
-		// 原有的视频理解能力；按解析出的每个源构造独立媒体项即可。
-		for _, source := range videoSourceCandidates(segments) {
-			videoSegments = append(videoSegments, MessageSegment{Type: "video", Data: map[string]string{"url": source}})
-		}
-		if len(videoSegments) == 0 {
-			return segments
-		}
+		return segments
 	}
 	out := append([]MessageSegment(nil), segments...)
 	frameCount := 0
 	for videoIndex, video := range videoSegments {
 		videoURLs := videoSourceCandidates([]MessageSegment{video})
-		frames := extractVideoContextFramesAfterReady(ctx, videoURLs, historyMediaReadyTimeout)
+		videoCtx := withVideoMediaIdentities(ctx, platform, []MessageSegment{video})
+		frames := extractVideoContextFramesAfterReady(videoCtx, videoURLs, historyMediaReadyTimeout)
 		defer cleanupVideoContextFrames(frames)
 		for frameIndex, frame := range frames {
 			if frameCount >= maxVideoContextFrames {
@@ -188,7 +183,7 @@ func cacheImageSegmentsDetailed(ctx context.Context, platform string, eventTime 
 		var sourceErrors []error
 		cached := false
 		for _, source := range imageSourceCandidates(segment) {
-			body, contentType, err := readHistoryImageSource(ctx, source, historyMediaReadyTimeout)
+			body, contentType, err := readPlatformHistoryImage(ctx, platform, segment, source)
 			if err != nil {
 				sourceErrors = append(sourceErrors, err)
 				continue
@@ -213,6 +208,9 @@ func cacheImageSegmentsDetailed(ctx context.Context, platform string, eventTime 
 			cause := errors.Join(sourceErrors...)
 			if cause == nil {
 				cause = fmt.Errorf("image source is unavailable")
+			}
+			if segment.Data["forward_id"] != "" {
+				cause = errors.Join(errForwardMediaUnavailable, cause)
 			}
 			failures = append(failures, fmt.Errorf("message %s image %d: %w", firstNonEmpty(messageID, "unknown"), i+1, cause))
 		}
@@ -415,7 +413,18 @@ func readHistoryImageSource(ctx context.Context, source string, wait time.Durati
 		return decodeInlineHistoryImage(source)
 	}
 	if remote := normalizedHTTPURL(source); remote != "" {
-		return downloadImageBytesWithLimit(ctx, remote, maxHistoryImageBytes)
+		dir, err := historyMediaDir()
+		if err != nil {
+			return nil, "", err
+		}
+		path, err := fetchMediaContent(ctx, dir, "image:"+remote, maxHistoryImageBytes, func(ctx context.Context) ([]byte, string, string, error) {
+			body, contentType, err := downloadImageBytesWithLimit(ctx, remote, maxHistoryImageBytes)
+			return body, contentType, "", err
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		return readHistoryImageSource(ctx, path, 0)
 	}
 	path := waitForLocalMediaPath(ctx, source, wait, maxHistoryImageBytes)
 	if path == "" {

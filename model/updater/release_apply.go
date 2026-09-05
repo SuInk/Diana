@@ -58,6 +58,7 @@ type releaseUpdateState struct {
 	FailureCount   int       `json:"failure_count,omitempty"`
 	BackupRoot     string    `json:"backup_root,omitempty"`
 	DatabaseBackup string    `json:"database_backup,omitempty"`
+	CleanupError   string    `json:"cleanup_error,omitempty"`
 	Error          string    `json:"error,omitempty"`
 	At             time.Time `json:"at"`
 }
@@ -224,10 +225,11 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 		return fmt.Errorf("wait for old Diana process: %w", err)
 	}
 	backupsRoot := filepath.Dir(plan.BackupRoot)
-	// 本次备份也计入保留上限。先腾出一个位置，避免连续失败时在创建
-	// 第四份数据库副本的过程中才耗尽磁盘；退出时再覆盖所有失败路径。
-	pruneReleaseBackups(backupsRoot, 2)
-	defer pruneReleaseBackups(backupsRoot, 3)
+	// Only the current attempt may have a backup. Do not start another copy
+	// if deleting an older backup fails (for example because of permissions).
+	if err := pruneReleaseBackups(backupsRoot, 0); err != nil {
+		return restartPreviousRelease(plan, hooks, fmt.Errorf("remove previous update backups: %w", err), "")
+	}
 	if err := os.MkdirAll(plan.BackupRoot, 0o700); err != nil {
 		return restartPreviousRelease(plan, hooks, fmt.Errorf("create update backup: %w", err), "")
 	}
@@ -267,14 +269,25 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 		if err := process.Release(); err != nil {
 			return fmt.Errorf("release updated process: %w", err)
 		}
-		_ = writeReleaseState(plan, releaseUpdateState{
+		state := releaseUpdateState{
 			TargetVersion:  plan.TargetVersion,
 			Previous:       plan.CurrentVersion,
 			Status:         "healthy",
 			BackupRoot:     plan.BackupRoot,
 			DatabaseBackup: databaseBackup,
 			At:             time.Now(),
-		})
+		}
+		if err := os.RemoveAll(plan.BackupRoot); err != nil {
+			// A cleanup failure must not roll back a healthy installation.
+			state.CleanupError = err.Error()
+			log.Printf("updater: updated Diana is healthy but backup cleanup failed: %v", err)
+		} else {
+			state.BackupRoot = ""
+			state.DatabaseBackup = ""
+		}
+		if err := writeReleaseState(plan, state); err != nil {
+			log.Printf("updater: record healthy update state: %v", err)
+		}
 		_ = os.RemoveAll(plan.WorkRoot)
 		return nil
 	}
@@ -575,10 +588,13 @@ func readReleaseState(installRoot string) (releaseUpdateState, bool) {
 	return state, true
 }
 
-func pruneReleaseBackups(backupsRoot string, keep int) {
+func pruneReleaseBackups(backupsRoot string, keep int) error {
 	entries, err := os.ReadDir(backupsRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		return
+		return err
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -588,7 +604,10 @@ func pruneReleaseBackups(backupsRoot string, keep int) {
 	}
 	sort.Strings(names)
 	for len(names) > keep {
-		_ = os.RemoveAll(filepath.Join(backupsRoot, names[0]))
+		if err := os.RemoveAll(filepath.Join(backupsRoot, names[0])); err != nil {
+			return err
+		}
 		names = names[1:]
 	}
+	return nil
 }

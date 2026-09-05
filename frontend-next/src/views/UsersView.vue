@@ -118,10 +118,10 @@
             <input :id="`trait-${index}`" v-model="trait.value" class="input" maxlength="1000" @input="trait.source = 'manual'" />
             <button class="btn ghost small" :aria-label="`删除画像 ${trait.label}`" title="删除画像" @click="draft.portrait?.splice(index, 1)"><Trash2 :size="15" /></button>
           </div>
-          <h3 class="detail-section-title">长期记忆</h3>
+          <h3 class="detail-section-title">最近发言（排查缓冲）</h3>
           <div v-for="(memory, index) in draft.memories" :key="index" class="edit-row">
-            <textarea v-model="memory.text" class="textarea" :aria-label="`记忆 ${index + 1}`" rows="2" maxlength="1000" />
-            <button class="btn ghost small" aria-label="删除记忆" title="删除记忆" @click="draft.memories?.splice(index, 1)"><Trash2 :size="15" /></button>
+            <textarea v-model="memory.text" class="textarea" :aria-label="`最近发言 ${index + 1}`" rows="2" maxlength="1000" />
+            <button class="btn ghost small" aria-label="删除最近发言" title="删除最近发言" @click="draft.memories?.splice(index, 1)"><Trash2 :size="15" /></button>
           </div>
         </fieldset>
         <template v-else>
@@ -244,7 +244,7 @@
       </template>
     </Modal>
     <Modal v-if="confirmDelete && detail" title="删除人员记录" @close="!saving && (confirmDelete = false)">
-      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、长期记忆、好感度历史和恋人状态？不会删除聊天记录或踢出群聊。后续互动可能重新建立人员记录。</p>
+      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史和恋人状态？结构化长期记忆和聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录。</p>
       <template #footer>
         <button class="btn ghost" :disabled="saving" @click="confirmDelete = false">取消</button>
         <button class="btn" :disabled="saving" @click="saveUser(true)"><Trash2 :size="15" />{{ saving ? "删除中…" : "删除人员" }}</button>
