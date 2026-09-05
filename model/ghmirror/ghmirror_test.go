@@ -44,16 +44,17 @@ func TestRewriteOnlyTouchesGitHubDownloads(t *testing.T) {
 
 func TestNormalizeMode(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"", ModeAuto},
+		// 没设过就直连：镜像是第三方转发，默认换掉更新包的来源不是能替用户做的决定。
+		{"", ModeDirect},
+		{"direct", ModeDirect},
 		{"auto", ModeAuto},
 		{" AUTO ", ModeAuto},
-		{"direct", ModeDirect},
 		{"https://ghfast.top", "https://ghfast.top"},
 		{"https://ghfast.top/", "https://ghfast.top"},
-		// 坏地址退回自动，而不是让更新流程带着它跑。
-		{"http://ghfast.top", ModeAuto},
-		{"https://ghfast.top/?token=x", ModeAuto},
-		{"随便写的", ModeAuto},
+		// 坏地址退回直连，而不是让更新流程带着它跑。
+		{"http://ghfast.top", ModeDirect},
+		{"https://ghfast.top/?token=x", ModeDirect},
+		{"随便写的", ModeDirect},
 	} {
 		if got := NormalizeMode(tc.in); got != tc.want {
 			t.Fatalf("NormalizeMode(%q) = %q, want %q", tc.in, got, tc.want)
@@ -73,6 +74,7 @@ func TestSelectorFallsBackToMirrorWhenDirectFails(t *testing.T) {
 		{Name: "坏线路", BaseURL: "https://mirror-down.invalid"},
 		{Name: "好线路", BaseURL: mirror.URL},
 	})
+	selector.SetMode(ModeAuto)
 	// 直连指向一个不存在的主机，必然失败。
 	base := selector.Base(context.Background(), "https://github.com/SuInk/Diana/releases/download/v1/SHA256SUMS")
 	if base != mirror.URL {
@@ -127,6 +129,7 @@ func TestSelectorModeChangeInvalidatesCache(t *testing.T) {
 	}))
 	defer mirror.Close()
 	selector := newTestSelector([]Mirror{{Name: "镜像", BaseURL: mirror.URL}})
+	selector.SetMode(ModeAuto)
 	probeURL := "https://github.com/SuInk/Diana/releases/download/v1/SHA256SUMS"
 	if base := selector.Base(context.Background(), probeURL); base != mirror.URL {
 		t.Fatalf("首次选择 = %q", base)

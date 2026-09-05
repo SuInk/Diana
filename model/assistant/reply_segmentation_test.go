@@ -595,6 +595,71 @@ func TestGroupLevelSplitAndForwardOverridesReachEffectiveConfig(t *testing.T) {
 	}
 }
 
+func TestGroupNaturalSplitInheritanceSurvivesBotChanges(t *testing.T) {
+	base := BotConfig{NaturalReplySplitEnabled: boolPointer(true)}.WithDefaults()
+	store := &stubGroupConfigStore{configs: map[string]GroupConfig{
+		"inherited": (GroupConfig{GroupID: "inherited"}).WithDefaults("inherited", base),
+		"default":   DefaultGroupConfig("default", base),
+		"on":        {GroupID: "on", NaturalReplySplitEnabled: boolPointer(true)},
+		"off":       {GroupID: "off", NaturalReplySplitEnabled: boolPointer(false)},
+	}}
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(store)
+	for _, enabled := range []bool{false, true, false} {
+		cfg := base
+		cfg.NaturalReplySplitEnabled = boolPointer(enabled)
+		if err := runtime.UpdateConfigInPlace(cfg); err != nil {
+			t.Fatal(err)
+		}
+		for _, groupID := range []string{"inherited", "default", "on", "off", "unconfigured"} {
+			event := MessageEvent{Kind: EventKindGroup, GroupID: groupID}
+			effective := runtime.effectiveConfigForEvent(event)
+			want := enabled
+			if groupID == "on" {
+				want = true
+			} else if groupID == "off" {
+				want = false
+			}
+			if got := boolValue(effective.NaturalReplySplitEnabled, true); got != want {
+				t.Errorf("bot=%v group=%s: natural split=%v, want %v", enabled, groupID, got, want)
+			}
+			chunks := splitChatReply("First thought\nSecond thought", chatSplitLimitsFrom(effective))
+			wantChunks := 1
+			if want {
+				wantChunks = 2
+			}
+			if len(chunks) != wantChunks {
+				t.Errorf("bot=%v group=%s: chunks=%q, want %d", enabled, groupID, chunks, wantChunks)
+			}
+		}
+	}
+}
+
+func TestGroupNaturalSplitInheritsEventProfile(t *testing.T) {
+	base := BotConfig{ID: "first", NaturalReplySplitEnabled: boolPointer(true)}.WithDefaults()
+	other := base
+	other.ID = "second"
+	other.NaturalReplySplitEnabled = boolPointer(false)
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"shared": (GroupConfig{GroupID: "shared"}).WithDefaults("shared", base),
+	}})
+	for _, enabled := range []bool{false, true, false} {
+		other.NaturalReplySplitEnabled = boolPointer(enabled)
+		runtime.SetProfiles(ProfileSet{ActiveID: base.ID, Profiles: []BotConfig{base, other}})
+		for _, profile := range []BotConfig{base, other} {
+			cfg := runtime.effectiveConfigForEvent(MessageEvent{
+				ProfileID: profile.ID,
+				Kind:      EventKindGroup,
+				GroupID:   "shared",
+			})
+			if got := boolValue(cfg.NaturalReplySplitEnabled, true); got != *profile.NaturalReplySplitEnabled {
+				t.Errorf("profile=%s: natural split=%v, want %v", profile.ID, got, *profile.NaturalReplySplitEnabled)
+			}
+		}
+	}
+}
+
 // 分号是句内的并列分隔，不是句末。按它分条会把后半句单独扔成一条消息，读起来是
 // 话说了一半。
 func TestSemicolonIsNotASentenceBoundary(t *testing.T) {

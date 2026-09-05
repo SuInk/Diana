@@ -138,9 +138,21 @@
       </header>
 
       <main class="app-content">
-        <KeepAlive :max="8">
-          <component :is="activeView" :key="currentView" />
-        </KeepAlive>
+        <section class="scope-context" aria-label="当前平台与机器人">
+          <div class="scope-identity">
+            <span class="badge">{{ scopePlatform }}</span>
+            <strong>{{ scopeProfile?.name || (botScope ? "未命名机器人" : "全部机器人") }}</strong>
+            <span v-if="scopeProfile" class="scope-account">账号 <span class="mono">{{ scopeAccount || "未获取" }}</span></span>
+            <span v-if="scopeProfile" class="scope-profile-id">Bot ID <span class="mono">{{ scopeProfile.id }}</span></span>
+          </div>
+          <span v-if="scopeSwitching" class="scope-loading-label" role="status">正在切换…</span>
+          <div v-if="scopeSwitching" class="scope-progress" role="progressbar" aria-label="正在加载当前机器人数据"><span /></div>
+        </section>
+        <div :aria-busy="scopeSwitching" :inert="scopeSwitching" :class="{ 'scope-content-pending': scopeSwitching }">
+          <KeepAlive :key="botScope" :max="8">
+            <component :is="activeView" :key="currentView" />
+          </KeepAlive>
+        </div>
       </main>
     </div>
 
@@ -179,6 +191,7 @@ import {
 } from "@lucide/vue";
 import { currentView, navItemForView, navSections, navigate, type ViewID } from "./router";
 import { ALL_PROFILES, botScope, reconcileBotScope, setBotScope } from "./bot-scope";
+import { scopeSwitching } from "./scope-transition";
 import AppSelect from "./components/AppSelect.vue";
 import { startEventStream, stream } from "./stream";
 import { theme } from "./theme";
@@ -309,12 +322,25 @@ const viewTitles: Record<ViewID, string> = {
 };
 
 const botProfiles = ref<BotProfileConfig[]>([]);
+const scopeProfile = computed(() => botProfiles.value.find((profile) => profile.id === botScope.value));
+const scopePlatform = computed(() => {
+  const platform = scopeProfile.value?.platform;
+  if (!platform) return botScope.value ? "未知平台" : "全部平台";
+  return ({ "onebot-v11": "OneBot v11", telegram: "Telegram", qq: "QQ", dingtalk: "钉钉", feishu: "飞书", discord: "Discord" } as Record<string, string>)[platform] || platform;
+});
+const scopeAccount = computed(() => {
+  const channel = stream.status?.channels?.find((channel) => channel.profile_id === botScope.value);
+  return channel?.self_id || scopeProfile.value?.bot_account;
+});
 
 async function loadBotProfiles(): Promise<void> {
   try {
     const config = await getBotProfileConfig();
     botProfiles.value = config.profiles?.length ? config.profiles : [config];
     reconcileBotScope(botProfiles.value);
+    if (botProfiles.value.length === 1 && botProfiles.value[0]?.id && botScope.value === ALL_PROFILES) {
+      setBotScope(botProfiles.value[0].id);
+    }
     ensureConcreteGroupScope();
   } catch {
     // 取不到配置档时切换器不显示，不影响其它功能。
