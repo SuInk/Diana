@@ -7,9 +7,7 @@
     <div class="stack">
       <section class="event-filter-band" aria-label="事件筛选">
         <div class="event-filter-lead">
-          <div class="event-filter-chip">
-            <Clock3 :size="15" aria-hidden="true" />
-            <div class="segmented event-range" role="radiogroup" aria-label="按时间筛选事件">
+          <div class="segmented event-range" role="radiogroup" aria-label="按时间筛选事件">
             <button
               v-for="option in rangeOptions"
               :key="option.value"
@@ -20,23 +18,19 @@
               @click="selectRange(option.value)"
             >
               {{ option.label }}
-              </button>
-            </div>
+            </button>
           </div>
-          <div class="event-filter-chip">
-            <Users :size="15" aria-hidden="true" />
-            <AppSelect
-              class="event-group-filter"
-              :model-value="selectedGroup"
-              :options="groupOptions"
-              searchable
-              search-placeholder="搜索群聊或私聊"
-              aria-label="按会话筛选事件"
-              @update:model-value="(value) => selectGroup(String(value))"
-            />
-          </div>
-          <div class="event-filter-chip event-search">
-            <Search :size="15" aria-hidden="true" />
+          <AppSelect
+            class="event-group-filter"
+            :model-value="selectedGroup"
+            :options="groupOptions"
+            searchable
+            search-placeholder="搜索群聊或私聊"
+            aria-label="按会话筛选事件"
+            @update:model-value="(value) => selectGroup(String(value))"
+          />
+          <div class="event-search">
+            <Search :size="14" class="event-search-icon" aria-hidden="true" />
             <input
               v-model="searchDraft"
               type="search"
@@ -402,7 +396,6 @@ import {
   Bug,
   CheckCircle2,
   ChevronDown,
-  Clock3,
   Gauge,
   ImageOff,
   LoaderCircle,
@@ -415,7 +408,6 @@ import {
   Send,
   TimerReset,
   TriangleAlert,
-  Users,
   X
 } from "@lucide/vue";
 import {
@@ -1244,29 +1236,30 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-/* 图标和它说明的控件绑成一组，换行时一起走，不会把图标孤零零留在上一行末尾。 */
-.event-filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.event-filter-chip > svg {
-  flex: none;
-  color: var(--muted);
-}
-
+/* 搜索图标画进输入框里。之前每个控件前面都挂一个裸图标，它们不属于任何一个
+   控件的边框，浮在背景上显得突兀；时间和会话两处的图标直接去掉——一排时间
+   按钮和一个写着「全部会话」的下拉，本来就不需要再标注。 */
 .event-search {
-  flex: 1 1 200px;
-  max-width: 320px;
+  position: relative;
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 280px;
+}
+
+.event-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  color: var(--muted);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .event-search-input {
   width: 100%;
   min-width: 0;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 10px 0 28px;
   font-size: 12px;
 }
 
@@ -1305,7 +1298,9 @@ onBeforeUnmount(() => {
 }
 
 .event-group-filter {
-  min-width: 220px;
+  min-width: 180px;
+  /* 不封顶的话它会一路撑开，三个控件正好占满一行，刷新只能掉到下一行。 */
+  max-width: 240px;
   max-width: 320px;
 }
 
