@@ -25,8 +25,8 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 		{ResponseModeSuperActive, true, ChatInLevelMax},
 	}
 	superActive := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
-	if !boolValue(superActive.NaturalInterjectionEnabled, false) {
-		t.Fatal("super active mode should enable natural interjection")
+	if boolValue(superActive.NaturalInterjectionEnabled, false) || !superActive.chatInSettings().SuperActive {
+		t.Fatal("super active mode must not depend on the legacy natural interjection switch")
 	}
 	for _, test := range tests {
 		cfg := BotConfig{ResponseMode: test.mode}.WithDefaults()

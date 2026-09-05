@@ -31,12 +31,13 @@ const defaultChatInLevel = ChatInLevelLow
 
 // chatInSettings 是某个事件最终生效的插话判定参数。
 type chatInSettings struct {
-	Enabled   bool
-	Natural   bool
-	Level     ChatInLevel
-	Threshold float64
-	Chance    float64
-	Cooldown  time.Duration
+	Enabled     bool
+	Natural     bool
+	SuperActive bool
+	Level       ChatInLevel
+	Threshold   float64
+	Chance      float64
+	Cooldown    time.Duration
 }
 
 type chatInLevelPreset struct {
@@ -155,6 +156,9 @@ func clampChatInRatio(value float64) float64 {
 // chatInSettings 返回本条配置生效的闲聊插话参数。
 func (cfg BotConfig) chatInSettings() chatInSettings {
 	settings := chatInSettingsFrom(cfg.ChatInEnabled, cfg.ChatInLevel, cfg.ChatInThreshold, cfg.ChatInChance, cfg.ChatInCooldownSeconds)
+	if cfg.ResponseMode.Normalized() == ResponseModeSuperActive {
+		return chatInSettings{Enabled: true, SuperActive: true, Level: ChatInLevelMax, Threshold: 0.5, Chance: 1}
+	}
 	// 「关闭」是硬开关：自然插话模式不能把它重新打开，否则档位说明里的
 	// 「从不主动插话」会变成比最高档还激进。
 	if settings.Level == ChatInLevelOff {
@@ -169,3 +173,5 @@ func (cfg BotConfig) chatInSettings() chatInSettings {
 	}
 	return settings
 }
+
+const superActiveReplyPrompt = `本次是超级活跃模式下的主动接话。像一个很愿意参与聊天的群友，顺着当前话题简短回应、接梗、表达感受或自然追问即可，不要求每句话都增加事实或新知识。遵循原有人设，不要复读、套话刷屏、接管话题或强行评价。用户要求安静、话题已经结束、没有相关回应可说时仍保持沉默；不确定的事实交给工具确认，不能编造。`
