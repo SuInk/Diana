@@ -219,6 +219,10 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <article><h3>MCP 与 Skills</h3><p>按配置发现外部扩展，受工作目录、允许列表、权限和超时限制。</p></article>
           <article><h3>图片工具</h3><p>识别、生成和编辑分别授权；图片生成使用真实生图请求做健康测试。</p></article>
         </div>
+        <h3>本机运行状态</h3>
+        <p><code>diana.host_stats</code> 让机器人回答「内存占了多少」「CPU 忙不忙」「现在多少度」这类问题：CPU 型号与占用、平均负载、内存、磁盘、Diana 自身占用，以及这台机器能提供的温度、功率和电池。只读、无参数，采集与控制台总览页共用同一份实现。</p>
+        <p>温度走 <code>/sys/class/hwmon</code>，功率走 RAPL 的能量计数，电池走 <code>/sys/class/power_supply</code>，都不依赖 <code>lm-sensors</code> 之类的外部命令；容器里只要挂了 <code>/sys</code> 就能读。RAPL 给的是累计能量而非瞬时功率，所以功率要两次采样之间的差值才算得出来，第一次调用会如实说明这一点。macOS 的 <code>powermetrics</code> 需要 root、Windows 缺少通用接口，这两个平台的温度与功率直接报「读不到」——<strong>报一个编出来的数比不报更糟</strong>。这条对所有项都成立：读不到的项不会填 0，而是带上读不到的原因。</p>
+        <p>这个工具同样只对主人开放：主机名、磁盘路径和硬件型号不该对群里所有人可见。</p>
         <h3>本地文件与命令：读 / 写 / 执行三档</h3>
         <p>本地那几个工具全部锁在数据目录下的 <code>workspace</code> 里，路径固定不可配置，绝对路径和 <code>../</code> 一律拒绝。三档权限各自独立：</p>
         <div class="table-wrap"><table><thead><tr><th>档位</th><th>工具</th><th>默认</th><th>开关</th></tr></thead><tbody>
