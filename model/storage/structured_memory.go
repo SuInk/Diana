@@ -707,3 +707,98 @@ WHERE status = 'active' AND id IN (`+strings.Join(placeholders, ",")+`)
 `, args...)
 	return err
 }
+
+// ListStructuredMemoriesBySubject 按人取这个人身上还生效的长期记忆，供控制台人员
+// 页展示。
+//
+// 和 ListStructuredMemories 的区别是它不按会话检索：人员页问的是「机器人到底记住
+// 了这个人什么」，而不是「这一轮该召回什么」，所以没有 session 作用域，也不做相关
+// 性打分，只按重要度和时间排。
+//
+// memory_items 没有 bot_profile_id 列——记忆是跟着人走的，不跟着机器人分身走——
+// 所以这里不接受机器人作用域参数。
+func (s *SQLiteStore) ListStructuredMemoriesBySubject(ctx context.Context, userID string, limit int) ([]assistant.StructuredMemoryItem, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return []assistant.StructuredMemoryItem{}, nil
+	}
+	if limit <= 0 {
+		limit = defaultStructuredMemoryCandidates
+	}
+	if limit > maxStructuredMemoryCandidates {
+		limit = maxStructuredMemoryCandidates
+	}
+	rows, err := s.db.QueryContext(ctx, structuredMemorySelect+`
+WHERE status = 'active'
+  AND subject_user_id = ?
+  AND kind != 'thread'
+  AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?)
+ORDER BY importance DESC, confidence DESC, source_event_time DESC, updated_at DESC
+LIMIT ?
+`, userID, time.Now().UTC().Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]assistant.StructuredMemoryItem, 0, limit)
+	for rows.Next() {
+		item, err := scanStructuredMemory(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// CountStructuredMemoriesBySubjects 一次数完多个人的长期记忆条数，人员列表用它。
+// 逐个 COUNT 会把一页 50 人变成 50 次查询。
+func (s *SQLiteStore) CountStructuredMemoriesBySubjects(ctx context.Context, userIDs []string) (map[string]int, error) {
+	counts := map[string]int{}
+	if s == nil || s.db == nil || len(userIDs) == 0 {
+		return counts, nil
+	}
+	placeholders := make([]string, 0, len(userIDs))
+	args := []any{time.Now().UTC().Unix()}
+	seen := map[string]struct{}{}
+	for _, userID := range userIDs {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			continue
+		}
+		if _, duplicate := seen[userID]; duplicate {
+			continue
+		}
+		seen[userID] = struct{}{}
+		placeholders = append(placeholders, "?")
+		args = append(args, userID)
+	}
+	if len(placeholders) == 0 {
+		return counts, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT subject_user_id, COUNT(*)
+FROM memory_items
+WHERE status = 'active'
+  AND kind != 'thread'
+  AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?)
+  AND subject_user_id IN (`+strings.Join(placeholders, ",")+`)
+GROUP BY subject_user_id
+`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var userID string
+		var count int
+		if err := rows.Scan(&userID, &count); err != nil {
+			return nil, err
+		}
+		counts[userID] = count
+	}
+	return counts, rows.Err()
+}

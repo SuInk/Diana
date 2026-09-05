@@ -9608,15 +9608,6 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	return profile, true
 }
 
-func (r *Runtime) userMemoryContext(ctx context.Context, event MessageEvent) string {
-	profile, ok := r.loadUserMemoryProfile(ctx, event)
-	if !ok {
-		return ""
-	}
-	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
-	return formatUserMemoryContext(profile, policy)
-}
-
 func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent) (UserMemoryProfile, bool) {
 	userID := strings.TrimSpace(event.UserID)
 	if userID == "" {
@@ -9675,21 +9666,11 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)
 	}
-	if len(profile.Memories) > 0 {
-		builder.WriteString("\n最近记忆：")
-		memories := profile.Memories
-		if len(memories) > 8 {
-			memories = memories[len(memories)-8:]
-		}
-		for _, item := range memories {
-			text := strings.TrimSpace(item.Text)
-			if text == "" {
-				continue
-			}
-			builder.WriteString("\n- ")
-			builder.WriteString(text)
-		}
-	}
+	// 这里不再列 profile.Memories。那份东西是原始发言的环形缓冲，不是长期记忆：
+	// 没有模型参与，不做相关性检索，@ 和回复标记也原样留着。同群聊天时它和最近
+	// 历史逐条重复，跨群带过去的也只是几句原话。真正的长期记忆由结构化记忆检索
+	// 负责（见 formatStructuredMemoryContextWithTokenBudgetDetailed），这条兜底
+	// 路径只保留关系核心和画像。
 	return truncateRunesFromStart(builder.String(), 1800)
 }
 
