@@ -111,8 +111,10 @@
           :disabled="operationRunning"
           @click="confirmInstall"
         >
-          <RefreshCcw :size="14" aria-hidden="true" />
-          {{ installTracking ? "重启并更新中…" : operationRunning ? "更新中…" : "重启并更新" }}
+          <!-- 加载态只换图标不换文字：文案一变长按钮就变宽，整排按钮跟着跳。 -->
+          <LoaderCircle v-if="operationRunning" class="spin" :size="14" aria-hidden="true" />
+          <RefreshCcw v-else :size="14" aria-hidden="true" />
+          重启并安装
         </button>
         <button v-if="switchToRelease && !downloadReadyForLatest" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
           <Download :size="14" aria-hidden="true" />
@@ -339,7 +341,7 @@ const canDownloadUpdate = computed(() => releaseSelfUpdate.value
   && checkResult.value.checksum_available
   && !downloadReadyForLatest.value
   // 安装一开始后端就把 download_ready 清掉了（包已交给 helper），但新版本还没起来，
-  // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「重启并更新」，
+  // update_available 仍是 true。不排除 installTracking 的话，用户刚点完「重启并安装」，
   // 按钮就当场变回「下载并校验」，等超时解锁后还能真的再下一遍。
   && !installTracking.value
   && !status.value?.restart_required);
