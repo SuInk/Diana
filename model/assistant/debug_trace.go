@@ -222,8 +222,8 @@ func debugModelPurpose(req llm.GenerateRequest) string {
 	}
 	prompt := system.String()
 	switch {
-	case strings.Contains(prompt, "planner"):
-		return "planner"
+	case strings.Contains(prompt, "Intent Recognition"), strings.Contains(prompt, "planner"):
+		return "intent_recognition"
 	case strings.Contains(prompt, "主动回复路由器"):
 		return "proactive_reply_router"
 	case strings.Contains(prompt, "选择本轮上下文和工具"):
