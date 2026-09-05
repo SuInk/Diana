@@ -274,6 +274,8 @@ export interface BotProfileConfig {
   max_context_tokens?: number;
   recent_history_token_budget?: number;
   recent_context_limit?: number;
+  /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
+  history_backfill_message_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
   long_term_memory_enabled?: boolean;
   /** 允许在同一机器人下检索其他群的非敏感记忆和聊天历史；缺省关闭。 */

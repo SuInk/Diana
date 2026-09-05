@@ -1186,12 +1186,17 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 	}
 
 	eventsByID := map[string]MessageEvent{}
+	messageLimit := r.Config().WithDefaults().HistoryBackfillMessageLimit
 	cursor := ""
 	seenCursors := map[string]struct{}{}
 	for {
+		pageSize := historyPageSize
+		if messageLimit > 0 && messageLimit < pageSize {
+			pageSize = messageLimit
+		}
 		params := map[string]any{
 			idParam:           oneBotIDParam(session.ID),
-			"count":           historyPageSize,
+			"count":           pageSize,
 			"reverse_order":   cursor != "",
 			"disable_get_url": true,
 		}
@@ -1244,7 +1249,7 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 			}
 			eventsByID[key] = event
 		}
-		if reachedWatermark || len(items) < historyPageSize {
+		if reachedWatermark || len(eventsByID) >= messageLimit || len(items) < pageSize {
 			break
 		}
 		oldest := page[0]
@@ -1269,6 +1274,9 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 		}
 		return events[i].Time < events[j].Time
 	})
+	if messageLimit > 0 && len(events) > messageLimit {
+		events = events[len(events)-messageLimit:]
+	}
 	return events, nil
 }
 
