@@ -82,7 +82,7 @@ npm run build
 # 文档预览（站点用无扩展名地址，需要支持 clean URL 的服务器）
 cd ..
 npx serve docs</code></pre>
-        <p>CI 覆盖 Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker。版本发布从已合并的默认分支打标签，Release 同时生成完整包、裸二进制和 <code>SHA256SUMS</code>。Release 说明必须写清更新点、兼容影响、验证方式与升级注意事项。</p>
+        <p>CI 覆盖 Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker。版本发布从已合并的默认分支打标签，Release 仅提供各平台完整包、<code>SHA256SUMS</code> 和自更新清单 <code>latest.json</code>，不再单独上传裸二进制。Release 说明必须写清更新点、兼容影响、验证方式与升级注意事项。</p>
         <h3>GitHub Pages</h3>
         <p>站点位于 <code>docs/</code>，没有构建时依赖。默认分支的文档或一键脚本更新后，GitHub Actions 上传静态 artifact 并部署 Pages。页面之间用无扩展名地址（<code>/deploy</code> 而不是 <code>/deploy.html</code>），GitHub Pages 会自动解析到对应的 <code>.html</code>；本地预览要用支持这一行为的服务器，<code>python3 -m http.server</code> 会 404。</p>
       </section>

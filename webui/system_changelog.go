@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/updater"
 )
 
 // ChangelogEntry 是 GitHub 提交日志里的一条记录。
@@ -51,6 +53,9 @@ func (r ReleaseEntry) asset(name string) (ReleaseAsset, bool) {
 		if asset.Name == name && strings.TrimSpace(asset.URL) != "" {
 			return asset, true
 		}
+	}
+	if legacy := updater.LegacyReleaseAssetName(name); legacy != "" {
+		return r.asset(legacy)
 	}
 	return ReleaseAsset{}, false
 }

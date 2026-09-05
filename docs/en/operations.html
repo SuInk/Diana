@@ -85,7 +85,7 @@ npm run build
 # preview the docs (the site uses clean URLs, so the server must support them)
 cd ..
 npx serve docs</code></pre>
-        <p>CI covers Linux amd64/arm64, Darwin amd64/arm64, Windows amd64 and Docker. Releases are tagged from the merged default branch, and each one produces full archives, bare binaries and <code>SHA256SUMS</code>. Release notes must state what changed, any compatibility impact, how it was verified and anything to watch when upgrading.</p>
+        <p>CI covers Linux amd64/arm64, Darwin amd64/arm64, Windows amd64 and Docker. Releases are tagged from the merged default branch and provide only full platform archives, <code>SHA256SUMS</code> and the update manifest <code>latest.json</code>, not standalone binaries. Release notes must state what changed, any compatibility impact, how it was verified and anything to watch when upgrading.</p>
         <h3>GitHub Pages</h3>
         <p>The site lives in <code>docs/</code> with no build step. When the docs or the install script change on the default branch, GitHub Actions uploads the static artifact and deploys Pages. Pages link to each other without a file extension (<code>/deploy</code> rather than <code>/deploy.html</code>) and GitHub Pages resolves those to the matching <code>.html</code>; a local preview needs a server that does the same, as <code>python3 -m http.server</code> returns 404 for them.</p>
       </section>
