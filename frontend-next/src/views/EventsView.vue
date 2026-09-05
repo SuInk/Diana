@@ -319,6 +319,10 @@
                         <span v-if="traceDuration(step)" class="muted">{{ traceDuration(step) }}</span>
                       </div>
                       <p v-if="traceSummary(step)" class="debug-step-summary">{{ traceSummary(step) }}</p>
+                      <div v-if="step.action === 'diana.cross_group_context' && traceJSON(step, 'selected_messages')" class="debug-payload">
+                        <span>补入历史的消息</span>
+                        <pre>{{ traceJSON(step, "selected_messages") }}</pre>
+                      </div>
                       <div v-if="traceJSON(step, 'request')" class="debug-payload">
                         <span>模型请求上下文</span>
                         <pre>{{ traceJSON(step, "request") }}</pre>
@@ -1111,6 +1115,19 @@ function tracePhaseLabel(step: AppLogEntry): string {
 
 function traceSummary(step: AppLogEntry): string {
   const metadata = traceMetadata(step);
+  if (step.action === "diana.cross_group_context") {
+    const parts = [String(metadata.search_range ?? "历史检索")];
+    if (metadata.skip_reason) parts.push(String(metadata.skip_reason));
+    parts.push(`文字候选 ${Number(metadata.keyword_candidates ?? 0)}`, `语义候选 ${Number(metadata.semantic_candidates ?? 0)}`, `补入历史 ${Number(metadata.selected ?? 0)}`);
+    if (metadata.keyword_status) parts.push(`文字：${String(metadata.keyword_status)}`);
+    if (metadata.semantic_status) parts.push(`语义：${String(metadata.semantic_status)}`);
+    const dropped = metadata.dropped as Record<string, unknown> | undefined;
+    const labels: Record<string, string> = { same_group: "同群或身份不完整", outbound: "机器人发言", platform: "平台不符", topic: "相关性不足", text: "无可用文本", membership: "成员校验未通过", limit: "条数限制", time: "时间无效" };
+    if (dropped) for (const [key, label] of Object.entries(labels)) {
+      if (Number(dropped[key]) > 0) parts.push(`${label} ${Number(dropped[key])}`);
+    }
+    return parts.join(" · ");
+  }
   const parts: string[] = [];
   if (metadata.purpose) parts.push(`用途：${String(metadata.purpose)}`);
   if (metadata.provider) parts.push(`提供商：${String(metadata.provider)}`);

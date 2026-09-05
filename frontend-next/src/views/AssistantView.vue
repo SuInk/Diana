@@ -636,11 +636,17 @@
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
-                  <input v-model="form.cross_group_memory_enabled" type="checkbox" :disabled="!form.long_term_memory_enabled" />
+                  <input v-model="form.cross_group_memory_enabled" type="checkbox" :disabled="!form.long_term_memory_enabled" title="公共事实和摘要按相关性跨群召回，无需共同成员；原始聊天仍要求原发言者也在当前群" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">跨群记忆</span>
                 </label>
-                <span class="hint">话题重合且原发言者也在当前群时，允许衔接其他共同群的相关信息；敏感内容始终留在原群。</span>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
+                  <input v-model="form.cross_platform_memory_enabled" type="checkbox" :disabled="!form.long_term_memory_enabled || !contextIsolationEnabled" title="需要长期记忆、平台上下文隔离及双方机器人启用；仅共享非敏感群公共记忆" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">跨平台记忆</span>
+                </label>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
@@ -2823,6 +2829,7 @@ function setForm(config: BotProfileConfig): void {
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
     debug_mode_enabled: config.debug_mode_enabled ?? false,
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
+    cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
     romance_enabled: config.romance_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
