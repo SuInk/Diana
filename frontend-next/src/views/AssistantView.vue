@@ -2278,8 +2278,8 @@ const replyStyleOptions: AppSelectOption[] = [
 
 const responseModeOptions: AppSelectOption[] = [
   { value: "quiet", label: "安静模式" },
-  { value: "standard", label: "标准模式" },
   { value: "assistant", label: "助手模式", hint: "优先帮助解决问题，低欲望参与闲聊" },
+  { value: "standard", label: "标准模式" },
   { value: "active", label: "活跃模式" },
   { value: "super_active", label: "超级活跃模式", hint: "几乎每条群消息都会尝试接话" },
   { value: "custom", label: "自定义" }
