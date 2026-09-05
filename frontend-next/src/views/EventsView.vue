@@ -436,7 +436,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { botScope } from "../bot-scope";
 import type { Component } from "vue";
 import {
@@ -507,7 +507,7 @@ const searchTerm = ref("");
 
 // 换了机器人就重新拉：事件按 profile 在服务端过滤，前端筛没有意义（分页会漏）。
 watch(botScope, () => {
-  void load(true);
+  if (currentView.value === "events") void load(true);
 });
 const events = ref<AssistantEventDetail[]>([]);
 const response = ref<AssistantEventsResponse | null>(null);
@@ -551,17 +551,7 @@ const traceSteps = ref<Record<string, AppLogEntry[]>>({});
 const failedImages = ref<Record<string, boolean>>({});
 const activeImage = ref<{ url: string; alt: string } | null>(null);
 const pendingLiveEvents = ref(false);
-let refreshTimer: number | null = null;
 let loadGeneration = 0;
-const LIVE_SYNC_TOP_PX = 96;
-
-function pageScrollTop(): number {
-  return window.scrollY || document.documentElement.scrollTop || 0;
-}
-
-function isReadingBelowTop(): boolean {
-  return pageScrollTop() > LIVE_SYNC_TOP_PX;
-}
 
 const summary = computed(() => ({
   total: response.value?.total ?? 0,
@@ -1244,54 +1234,6 @@ function traceDuration(step: AppLogEntry): string {
   return value > 0 ? formatDuration(value) : "";
 }
 
-function mergeLiveEvents(incoming: AssistantEventDetail[]): void {
-  if (events.value.length === 0) {
-    events.value = incoming;
-    return;
-  }
-  const existingIndex = new Map(events.value.map((item, index) => [item.id, index]));
-  const next = [...events.value];
-  const prepend: AssistantEventDetail[] = [];
-  for (const item of incoming) {
-    const index = existingIndex.get(item.id);
-    if (index === undefined) {
-      prepend.push(item);
-      continue;
-    }
-    next[index] = item;
-  }
-  events.value = prepend.length > 0 ? [...prepend, ...next] : next;
-}
-
-async function syncLiveEvents(): Promise<void> {
-  if (loading.value || loadingMore.value) return;
-  if (currentView.value !== "events" || isReadingBelowTop()) {
-    pendingLiveEvents.value = true;
-    return;
-  }
-  try {
-    const next = await getAssistantEvents(
-      selectedRange.value,
-      selectedResult.value,
-      1,
-      50,
-      selectedGroup.value.startsWith(USER_PREFIX) ? "" : selectedGroup.value.replace(GROUP_PREFIX, ""),
-      botScope.value,
-      selectedGroup.value.startsWith(USER_PREFIX) ? selectedSessionID.value : "",
-      searchTerm.value
-    );
-    if (currentView.value !== "events" || isReadingBelowTop()) {
-      pendingLiveEvents.value = true;
-      return;
-    }
-    response.value = next;
-    mergeLiveEvents(next.events);
-    pendingLiveEvents.value = false;
-  } catch {
-    /* 实时同步失败时不打断正在阅读的列表 */
-  }
-}
-
 function showLatestEvents(): void {
   pendingLiveEvents.value = false;
   window.scrollTo(0, 0);
@@ -1302,19 +1244,24 @@ watch(
   () => stream.lastEventAt,
   (value) => {
     if (!value) return;
-    if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(() => {
-      void syncLiveEvents();
-    }, 2500);
+    pendingLiveEvents.value = true;
   }
 );
 
 onMounted(() => {
   document.addEventListener("keydown", onImageKeydown);
+});
+onActivated(() => {
   void load(true);
 });
+onDeactivated(() => {
+  // Ignore requests started before leaving this cached view.
+  loadGeneration++;
+  loading.value = false;
+  loadingMore.value = false;
+});
 onBeforeUnmount(() => {
-  if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+  loadGeneration++;
   document.removeEventListener("keydown", onImageKeydown);
 });
 </script>

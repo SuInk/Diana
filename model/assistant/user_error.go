@@ -75,6 +75,8 @@ func publicImageMediaErrorMessage(err error) string {
 	raw := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(raw)
 	switch {
+	case errors.Is(err, errForwardMediaUnavailable):
+		return "合并转发中的媒体读取失败：机器人未能取得其中部分图片或视频的可用副本，这不代表 QQ 中的原内容无法查看。请将需要分析的图片或视频从转发记录中单独发送；若仍失败，请管理员检查转发媒体解析日志。"
 	case errors.Is(err, errLLMImageSourceTooLarge):
 		return "图片处理失败：原图超过 32 MiB 源文件上限。请压缩图片或降低分辨率后重试。"
 	case errors.Is(err, errLLMImageDimensions):
@@ -92,7 +94,7 @@ func publicImageMediaErrorMessage(err error) string {
 	case strings.Contains(lower, "not an image"), strings.Contains(lower, "unknown format"):
 		return "图片读取失败：取得的内容不是可识别的图片格式。请重新发送标准 JPEG、PNG、GIF 或 WebP 文件。"
 	case strings.Contains(lower, "source is unavailable"), strings.Contains(lower, "contains no image"), strings.Contains(lower, "has no onebot message"):
-		return "图片读取失败：消息中没有可用的本地文件或下载地址，OneBot v11 回退也未返回图片。请重新发送原图后重试。"
+		return "图片读取失败：机器人暂未取得可读取的图片副本，不能据此判断原图是否可用。请单独发送该图片后重试；若仍失败，请管理员检查媒体解析日志。"
 	default:
 		return "图片读取失败，具体原因：" + sanitizePublicErrorDetail(raw) + "。请根据上述原因处理后重试。"
 	}

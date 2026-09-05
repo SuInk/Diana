@@ -451,7 +451,7 @@ func TestTelegramMapsAndCachesIncomingPhoto(t *testing.T) {
 		Caption:   "miku 看图",
 		From:      &telegramUser{ID: 5},
 		Chat:      &telegramChat{ID: -100999, Type: "supergroup"},
-		Photo:     []telegramPhoto{{FileID: "small"}, {FileID: "largest", FileSize: int64(len(body))}},
+		Photo:     []telegramPhoto{{FileID: "small"}, {FileID: "largest", FileUniqueID: "stable-photo", FileSize: int64(len(body))}},
 	}
 	event := telegramMessageToEvent(msg, "8888", "mikuabot")
 	if len(event.Segments) != 2 || event.Segments[1].Type != "image" || event.Segments[1].Data["file_id"] != "largest" {
@@ -459,12 +459,23 @@ func TestTelegramMapsAndCachesIncomingPhoto(t *testing.T) {
 	}
 	event = api.channel().resolveIncomingMedia(context.Background(), event, msg)
 	path := event.Segments[1].Data["cached_file"]
-	if !strings.Contains(filepath.ToSlash(path), "/telegram/") || !strings.Contains(filepath.ToSlash(path), "/image/group_-100999/9/") {
-		t.Fatalf("classified media path = %q", path)
+	if filepath.Base(filepath.Dir(path)) != imageBytesSHA256(body) {
+		t.Fatalf("content-addressed media path = %q", path)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(got, body) {
 		t.Fatalf("cached photo: bytes=%d err=%v", len(got), err)
+	}
+	// A fresh channel and changed download ID reuse the durable unique-id index.
+	msg.MessageID++
+	msg.Photo[1].FileID = "largest-refreshed"
+	again := telegramMessageToEvent(msg, "8888", "mikuabot")
+	again = api.channel().resolveIncomingMedia(context.Background(), again, msg)
+	if again.Segments[1].Data["cached_file"] != path || len(api.callsOf("getFile")) != 1 {
+		t.Fatalf("repeated Telegram file downloaded again: %#v", again.Segments)
+	}
+	if again.Segments[1].Data[imageContentSHA256Key] != imageBytesSHA256(body) {
+		t.Fatal("Telegram media is missing its content hash")
 	}
 }
 
@@ -497,7 +508,7 @@ func TestTelegramMapsAndCachesStaticStickerAsImage(t *testing.T) {
 	}
 	event = api.channel().resolveIncomingMedia(context.Background(), event, msg)
 	path := event.Segments[1].Data["cached_file"]
-	if !strings.Contains(filepath.ToSlash(path), "/image/group_-100999/11/") {
+	if filepath.Base(filepath.Dir(path)) != imageBytesSHA256(body) {
 		t.Fatalf("cached sticker path = %q", path)
 	}
 	got, err := os.ReadFile(path)

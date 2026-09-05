@@ -99,6 +99,8 @@ executable_swapped=false
 frontend_swapped=false
 
 rollback() {
+	status=$?
+	trap - ERR
 	set +e
 	if [[ "$frontend_swapped" == "true" ]]; then
 		rm -rf "$FRONTEND_TARGET"
@@ -112,6 +114,7 @@ rollback() {
 		rm -f "$TARGET_EXECUTABLE"
 		[[ -z "$EXECUTABLE_BACKUP" || ! -e "$EXECUTABLE_BACKUP" ]] || mv "$EXECUTABLE_BACKUP" "$TARGET_EXECUTABLE"
 	fi
+	exit "$status"
 }
 trap rollback ERR
 
@@ -121,18 +124,18 @@ if [[ -n "$TARGET_APP" ]]; then
 	if [[ -e "$TARGET_APP" ]]; then
 		mv "$TARGET_APP" "$APP_BACKUP"
 	fi
+	app_swapped=true
 	mv "$STAGED_APP" "$TARGET_APP"
 	STAGED_APP=""
-	app_swapped=true
 else
 	EXECUTABLE_BACKUP="$TARGET_EXECUTABLE.backup"
 	rm -f "$EXECUTABLE_BACKUP"
 	if [[ -e "$TARGET_EXECUTABLE" ]]; then
 		mv "$TARGET_EXECUTABLE" "$EXECUTABLE_BACKUP"
 	fi
+	executable_swapped=true
 	mv "$STAGED_EXECUTABLE" "$TARGET_EXECUTABLE"
 	STAGED_EXECUTABLE=""
-	executable_swapped=true
 fi
 
 rm -rf "$FRONTEND_BACKUP"
@@ -144,5 +147,13 @@ mv "$STAGED_FRONTEND" "$FRONTEND_TARGET"
 STAGED_FRONTEND=""
 
 trap - ERR
+# File replacement has completed. Cleanup errors must not trigger a rollback
+# after part of the backup set has already been removed.
+for backup in "$APP_BACKUP" "$EXECUTABLE_BACKUP" "$FRONTEND_BACKUP"; do
+	[[ -n "$backup" ]] || continue
+	if ! rm -rf -- "$backup"; then
+		echo "Warning: update applied, but backup cleanup failed: $backup" >&2
+	fi
+done
 trap - EXIT
 echo "Update applied at commit $TARGET_COMMIT. Restart Diana to run the new version."

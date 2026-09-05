@@ -180,6 +180,12 @@ try {
 
     New-Item -ItemType Directory -Force -Path $installDir, (Join-Path $installDir "data"), (Join-Path $installDir "logs") | Out-Null
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
+    $backupsRoot = Join-Path $installDir ".installer\backups"
+    if (Test-Path -LiteralPath $backupsRoot) {
+        Get-ChildItem -LiteralPath $backupsRoot -Directory -Force | ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+        }
+    }
     $backupDir = Join-Path $installDir ".installer\backups\$timestamp"
     $runtimeBackup = Join-Path $backupDir "runtime"
     $dataBackup = Join-Path $backupDir "data"
@@ -309,6 +315,12 @@ try {
             throw "Health check failed. The previous runtime was restored when available. See $backupDir."
         }
         Write-Host "==> Diana is healthy at http://${healthHost}:$port"
+        try {
+            Remove-Item -LiteralPath $backupDir -Recurse -Force -ErrorAction Stop
+            $backupDir = $null
+        } catch {
+            Write-Warning "Diana is healthy, but backup cleanup failed: $_"
+        }
         if ($bindHost -in @("127.0.0.1", "localhost", "::1")) {
             # 只绑回环是「装完打不开」的头号原因。默认不改,但要让人知道开关在哪。
             Write-Host "Access:    local only (bound to $bindHost)."
@@ -327,7 +339,11 @@ try {
 
     Write-Host "Installed: $installDir"
     if (Test-Path $commandShim) { Write-Host "Command:   diana" }
-    Write-Host "Backup:    $backupDir"
+    if ($backupDir) {
+        Write-Host "Backup:    $backupDir"
+    } else {
+        Write-Host "Backup:    removed after successful health check"
+    }
     if ($generatedPassword) {
         Write-Host "Username:  $username"
         Write-Host "Password:  $generatedPassword"

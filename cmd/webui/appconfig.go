@@ -53,6 +53,13 @@ type serverConfig struct {
 
 type storageConfig struct {
 	DBPath string `yaml:"db_path"`
+	// Zero uses defaults; -1 keeps logs indefinitely.
+	DebugLogRetentionDays int `yaml:"debug_log_retention_days"`
+	LogRetentionDays      int `yaml:"log_retention_days"`
+	// YAML fallback until a WebUI cache policy is saved. Zero days uses seven
+	// days; -1 disables expiry. Zero MB disables the cap.
+	DownloadCacheRetentionDays int   `yaml:"download_cache_retention_days"`
+	DownloadCacheMaxMB         int64 `yaml:"download_cache_max_mb"`
 	// LogPath 为空表示只写标准输出。
 	LogPath string `yaml:"log_path"`
 	// MediaDir 为空表示放在数据库同级目录。
@@ -156,6 +163,16 @@ func loadAppConfig(path string) (appConfig, error) {
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if cfg.Storage.DebugLogRetentionDays < -1 || cfg.Storage.DebugLogRetentionDays > 36500 ||
+		cfg.Storage.LogRetentionDays < -1 || cfg.Storage.LogRetentionDays > 36500 {
+		return cfg, fmt.Errorf("storage log retention days must be between -1 and 36500")
+	}
+	if cfg.Storage.DownloadCacheRetentionDays < -1 || cfg.Storage.DownloadCacheRetentionDays > 36500 {
+		return cfg, fmt.Errorf("storage download_cache_retention_days must be between -1 and 36500")
+	}
+	if cfg.Storage.DownloadCacheMaxMB < 0 || cfg.Storage.DownloadCacheMaxMB > 1<<20 {
+		return cfg, fmt.Errorf("storage download_cache_max_mb must be between 0 and 1048576")
 	}
 	cfg.path = path
 	return cfg, nil

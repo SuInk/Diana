@@ -628,8 +628,9 @@ type telegramEntity struct {
 }
 
 type telegramPhoto struct {
-	FileID   string `json:"file_id"`
-	FileSize int64  `json:"file_size,omitempty"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	FileID       string `json:"file_id"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 type telegramSticker struct {
@@ -646,10 +647,11 @@ type telegramSticker struct {
 }
 
 type telegramFile struct {
-	FileID   string `json:"file_id"`
-	FileName string `json:"file_name,omitempty"`
-	MimeType string `json:"mime_type,omitempty"`
-	FileSize int64  `json:"file_size,omitempty"`
+	FileUniqueID string `json:"file_unique_id,omitempty"`
+	FileID       string `json:"file_id"`
+	FileName     string `json:"file_name,omitempty"`
+	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 // telegramMessageToEvent 把 Bot API 消息映射成统一事件。
@@ -699,13 +701,14 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 	segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": text}})
 	if len(msg.Photo) > 0 {
 		photo := msg.Photo[len(msg.Photo)-1]
-		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"file_id": photo.FileID, "file_size": strconv.FormatInt(photo.FileSize, 10)}})
+		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"file_id": photo.FileID, "file_unique_id": photo.FileUniqueID, "file_size": strconv.FormatInt(photo.FileSize, 10)}})
 	}
 	appendTelegramStickerSegment := func(sticker *telegramSticker) {
 		if sticker == nil || strings.TrimSpace(sticker.FileID) == "" {
 			return
 		}
 		fileID := sticker.FileID
+		fileUniqueID := sticker.FileUniqueID
 		fileSize := sticker.FileSize
 		name := "sticker.webp"
 		mime := "image/webp"
@@ -721,6 +724,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 				return
 			}
 			fileID = thumbnail.FileID
+			fileUniqueID = thumbnail.FileUniqueID
 			fileSize = thumbnail.FileSize
 			name = "sticker-preview.webp"
 		}
@@ -729,7 +733,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 			summary = "Telegram 贴纸"
 		}
 		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{
-			"file_id": fileID, "file_size": strconv.FormatInt(fileSize, 10), "name": name, "mime": mime,
+			"file_id": fileID, "file_unique_id": fileUniqueID, "file_size": strconv.FormatInt(fileSize, 10), "name": name, "mime": mime,
 			"sub_type": "telegram_sticker", "summary": summary, "emoji": strings.TrimSpace(sticker.Emoji),
 			"sticker_set": strings.TrimSpace(sticker.SetName), "sticker_type": strings.TrimSpace(sticker.Type),
 			"sticker_file_id": sticker.FileID, "sticker_unique_id": strings.TrimSpace(sticker.FileUniqueID),
@@ -741,7 +745,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 			return
 		}
 		segments = append(segments, MessageSegment{Type: kind, Data: map[string]string{
-			"file_id": media.FileID, "name": media.FileName, "mime": media.MimeType, "file_size": strconv.FormatInt(media.FileSize, 10),
+			"file_id": media.FileID, "file_unique_id": media.FileUniqueID, "name": media.FileName, "mime": media.MimeType, "file_size": strconv.FormatInt(media.FileSize, 10),
 		}})
 	}
 	appendFile("video", msg.Video)
@@ -812,17 +816,36 @@ func (c *TelegramChannel) resolveIncomingMedia(ctx context.Context, event Messag
 		data := cloneSegmentData(segment.Data)
 		data["cached_file"] = path
 		data["file"] = path
+		data[imageContentSHA256Key] = filepath.Base(filepath.Dir(path))
 		event.Segments[index].Data = data
 	}
 	return event
 }
 
 func (c *TelegramChannel) downloadIncomingFile(ctx context.Context, event MessageEvent, segment MessageSegment) (string, error) {
-	body, remotePath, err := c.downloadFileByID(ctx, strings.TrimSpace(segment.Data["file_id"]), telegramMaxUploadBytes)
+	dir, err := historyMediaDir()
 	if err != nil {
 		return "", err
 	}
-	return writeTelegramHistoryMedia(event, segment, remotePath, body)
+	c.mu.RLock()
+	key := "telegram:" + c.cfg.APIBaseURL + ":" + c.cfg.BotToken + ":" + strings.TrimSpace(segment.Data["file_id"])
+	base := firstNonEmpty(strings.TrimRight(strings.TrimSpace(c.cfg.APIBaseURL), "/"), telegramDefaultAPIBase)
+	c.mu.RUnlock()
+	legacyKey := key
+	if uniqueID := strings.TrimSpace(segment.Data["file_unique_id"]); uniqueID != "" {
+		key = "telegram-unique:" + base + ":" + uniqueID
+	}
+	return fetchMediaContent(ctx, dir, key, telegramMaxUploadBytes, func(ctx context.Context) ([]byte, string, string, error) {
+		// Upgrade existing file-id entries without downloading their content again.
+		if key != legacyKey {
+			if path := cachedMediaSource(dir, legacyKey, telegramMaxUploadBytes); path != "" {
+				body, err := os.ReadFile(path)
+				return body, segment.Data["mime"], filepath.Base(path), err
+			}
+		}
+		body, remotePath, err := c.downloadFileByID(ctx, strings.TrimSpace(segment.Data["file_id"]), telegramMaxUploadBytes)
+		return body, segment.Data["mime"], filepath.Base(firstNonEmpty(segment.Data["name"], remotePath, "media")), err
+	})
 }
 
 // downloadFileByID 把 file_id 换成文件内容。下载地址里带着 Bot Token

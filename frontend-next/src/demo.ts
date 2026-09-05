@@ -459,6 +459,8 @@ let demoApiKeys: OpenAPIKey[] = [
   { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
 ];
 
+let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -467,6 +469,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const method = (init?.method ?? "GET").toUpperCase();
   const body = bodyOf(init);
   const path = url.pathname;
+
+  if (path === "/api/system/media-cache") {
+    if (method === "POST") {
+      demoMediaCachePolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
+    }
+    return json(demoMediaCachePolicy);
+  }
 
   if (path === "/api/auth/status") return json({ auth_required: true, authenticated: true, username: "demo" });
   // 演示里也给几条会话：这张卡原本永远停在「加载中…」，看不出真实排版。

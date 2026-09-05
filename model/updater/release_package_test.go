@@ -273,25 +273,40 @@ func TestValidReleaseHealthURLRequiresLoopback(t *testing.T) {
 
 func TestApplyReleasePlanBacksUpAndSwitchesHealthyPackage(t *testing.T) {
 	plan := releaseApplyFixture(t)
+	backupsRoot := filepath.Dir(plan.BackupRoot)
+	writeUpdaterTestFile(t, filepath.Join(backupsRoot, "previous", "database", "diana.db"), "previous-database", 0o600)
 	process := &fakeReleaseProcess{}
 	err := applyReleasePlan(plan, releaseApplyHooks{
 		waitForParent: func(int, time.Duration) error { return nil },
 		launch:        func(releaseApplyPlan) (releaseManagedProcess, error) { return process, nil },
-		health:        func(context.Context, string) error { return nil },
+		health: func(context.Context, string) error {
+			assertUpdaterTestContent(t, filepath.Join(plan.BackupRoot, "package", filepath.Base(plan.ExecutablePath)), "old-binary")
+			assertUpdaterTestContent(t, filepath.Join(plan.BackupRoot, "database", filepath.Base(plan.DatabasePath)), "old-database")
+			entries, err := os.ReadDir(backupsRoot)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("during health check: backups=%d err=%v", len(entries), err)
+			}
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertUpdaterTestContent(t, plan.ExecutablePath, "new-binary")
 	assertUpdaterTestContent(t, filepath.Join(plan.FrontendPath, "index.html"), "new-frontend")
-	assertUpdaterTestContent(t, filepath.Join(plan.BackupRoot, "package", filepath.Base(plan.ExecutablePath)), "old-binary")
-	assertUpdaterTestContent(t, filepath.Join(plan.BackupRoot, "database", filepath.Base(plan.DatabasePath)), "old-database")
+	entries, err := os.ReadDir(backupsRoot)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("after success: backups=%d err=%v", len(entries), err)
+	}
 	if !process.released || process.stopped {
 		t.Fatalf("process = %#v", process)
 	}
 	state, ok := readReleaseState(plan.InstallRoot)
 	if !ok || state.Status != "healthy" || state.TargetVersion != "v0.5.0" {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
+	}
+	if state.BackupRoot != "" || state.DatabaseBackup != "" || state.CleanupError != "" {
+		t.Fatalf("healthy state references removed backup: %#v", state)
 	}
 }
 
@@ -341,16 +356,40 @@ func TestApplyReleasePlanRestoresPackageAndDatabaseAfterFailedHealthCheck(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 3 {
-		t.Fatalf("backup count = %d, want 3", len(entries))
+	if len(entries) != 1 {
+		t.Fatalf("backup count = %d, want 1", len(entries))
 	}
-	for _, name := range []string{"20260101-old", "20260201-old"} {
+	for _, name := range []string{"20260101-old", "20260201-old", "20260301-old", "20260401-old"} {
 		if _, err := os.Stat(filepath.Join(backupsRoot, name)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("old backup %s was not pruned: %v", name, err)
 		}
 	}
 	if _, err := os.Stat(plan.BackupRoot); err != nil {
 		t.Fatalf("current rollback backup missing: %v", err)
+	}
+}
+
+func TestApplyReleasePlanAbortsWhenBackupCleanupFails(t *testing.T) {
+	plan := releaseApplyFixture(t)
+	// A file where the backup directory should be gives a deterministic I/O
+	// error even when the test process can bypass directory permissions.
+	writeUpdaterTestFile(t, filepath.Dir(plan.BackupRoot), "not-a-directory", 0o600)
+	process := &fakeReleaseProcess{}
+	err := applyReleasePlan(plan, releaseApplyHooks{
+		waitForParent: func(int, time.Duration) error { return nil },
+		launch: func(releaseApplyPlan) (releaseManagedProcess, error) {
+			assertUpdaterTestContent(t, plan.ExecutablePath, "old-binary")
+			return process, nil
+		},
+		health: func(context.Context, string) error { return nil },
+	})
+	if !errors.Is(err, errReleaseUpdateRolledBack) || !strings.Contains(err.Error(), "remove previous update backups") {
+		t.Fatalf("cleanup failure: %v", err)
+	}
+	assertUpdaterTestContent(t, plan.DatabasePath, "old-database")
+	assertUpdaterTestContent(t, filepath.Dir(plan.BackupRoot), "not-a-directory")
+	if !process.released {
+		t.Fatal("previous version was not restarted")
 	}
 }
 
