@@ -1434,7 +1434,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if strings.TrimSpace(cfg.ProactiveReplyRouterPrompt) == "" {
 		cfg.ProactiveReplyRouterPrompt = defaults.ProactiveReplyRouterPrompt
 	}
-	if strings.TrimSpace(cfg.ProactiveReplyPrompt) == "" {
+	if strings.TrimSpace(cfg.ProactiveReplyPrompt) == "" || strings.TrimSpace(cfg.ProactiveReplyPrompt) == legacySingleMessageProactiveReplyPrompt {
 		cfg.ProactiveReplyPrompt = defaults.ProactiveReplyPrompt
 	}
 	if cfg.ChatInEnabled == nil {
@@ -2187,7 +2187,10 @@ func isLegacyPromptPlaintextRules(text string) bool {
 	return false
 }
 
-const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
+// Only replace this exact legacy default; custom prompts remain user-owned.
+const legacySingleMessageProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
+
+const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 <dianabr>，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
 const (
 	defaultProactiveReplyChance    = 1.0
