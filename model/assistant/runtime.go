@@ -1949,12 +1949,55 @@ func (r *Runtime) decisionEventRecord(event MessageEvent, text string, outcome s
 		UserID:    event.UserID,
 		GroupID:   event.GroupID,
 		MessageID: event.MessageID,
-		Text:      text,
+		Text:      r.eventRecordDisplayText(event, text),
 		Handled:   handled,
 		Outcome:   strings.TrimSpace(outcome),
 		Decision:  decision,
 		Reason:    reason,
 	}
+}
+
+// eventRecordDisplayText 把首页实时事件流和状态快照里的正文换成给人看的写法：@ 补
+// 昵称，引用写成「回复 某人：原话」，而不是 [diana-reply:数字ID]。事件页是读的时候
+// 重新渲染的（见 storage.ListInboundEventDetails），首页这两处只有 EventRecord 这
+// 一份文本，所以要在记录的时候就渲染好。
+//
+// 只在 text 正好是 PlainText 的原样输出时才替换。路由途中换过正文的地方——比如控制
+// 台登录配对只记一个「[控制台登录配对]」占位，正文里是配对码——必须保持原样。
+func (r *Runtime) eventRecordDisplayText(event MessageEvent, text string) string {
+	if len(event.Segments) == 0 || strings.TrimSpace(text) != strings.TrimSpace(PlainText(event.Segments)) {
+		return text
+	}
+	rendered := DisplaySegmentsText(event.Segments, event.Quoted, r.eventDisplayNameResolver(event))
+	if rendered == "" {
+		return text
+	}
+	return rendered
+}
+
+// eventDisplayNameResolver 给实时事件流补 @ 昵称，只翻内存里的近期会话历史：被 @ 的
+// 人多半刚在同一个会话里说过话。翻不到就照旧显示号码——这条在回复热路径上，为了一
+// 个展示字段去查库不值当，事件页读的时候会做完整的批量补名。
+func (r *Runtime) eventDisplayNameResolver(event MessageEvent) AtMentionNameResolver {
+	session := sessionKey(event)
+	r.mu.RLock()
+	history := r.history[session]
+	names := make(map[string]string, len(history))
+	for _, item := range history {
+		userID := strings.TrimSpace(item.UserID)
+		name := strings.TrimSpace(item.SenderName)
+		// 没拿到昵称的事件会把 SenderName 退化成账号本身，照它渲染会写出
+		// 「@10004（10004）」这种重复。
+		if userID == "" || name == "" || name == userID {
+			continue
+		}
+		names[userID] = name
+	}
+	r.mu.RUnlock()
+	if len(names) == 0 {
+		return nil
+	}
+	return func(userID string) string { return names[strings.TrimSpace(userID)] }
 }
 
 func setEventRecordOutcome(record *EventRecord, outcome string) {
@@ -9630,15 +9673,6 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	return profile, true
 }
 
-func (r *Runtime) userMemoryContext(ctx context.Context, event MessageEvent) string {
-	profile, ok := r.loadUserMemoryProfile(ctx, event)
-	if !ok {
-		return ""
-	}
-	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
-	return formatUserMemoryContext(profile, policy)
-}
-
 func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent) (UserMemoryProfile, bool) {
 	userID := strings.TrimSpace(event.UserID)
 	if userID == "" {
@@ -9697,21 +9731,11 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)
 	}
-	if len(profile.Memories) > 0 {
-		builder.WriteString("\n最近记忆：")
-		memories := profile.Memories
-		if len(memories) > 8 {
-			memories = memories[len(memories)-8:]
-		}
-		for _, item := range memories {
-			text := strings.TrimSpace(item.Text)
-			if text == "" {
-				continue
-			}
-			builder.WriteString("\n- ")
-			builder.WriteString(text)
-		}
-	}
+	// 这里不再列 profile.Memories。那份东西是原始发言的环形缓冲，不是长期记忆：
+	// 没有模型参与，不做相关性检索，@ 和回复标记也原样留着。同群聊天时它和最近
+	// 历史逐条重复，跨群带过去的也只是几句原话。真正的长期记忆由结构化记忆检索
+	// 负责（见 formatStructuredMemoryContextWithTokenBudgetDetailed），这条兜底
+	// 路径只保留关系核心和画像。
 	return truncateRunesFromStart(builder.String(), 1800)
 }
 

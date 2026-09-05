@@ -72,7 +72,7 @@
                 <span v-if="user.romance?.active" class="badge accent">恋人</span>
               </div>
               <p class="log-detail">
-                画像 {{ user.portrait_count ?? 0 }} 条 · 记忆 {{ user.memory_count ?? 0 }} 条 · 消息 {{ formatNumber(user.message_count) }} 条
+                画像 {{ user.portrait_count ?? 0 }} 条 · 长期记忆 {{ user.structured_memory_count ?? 0 }} 条 · 消息 {{ formatNumber(user.message_count) }} 条
                 <template v-if="user.last_seen_at"> · 最近活跃 {{ formatRelative(user.last_seen_at) }}</template>
               </p>
             </div>
@@ -132,18 +132,58 @@
         </section>
 
         <section>
-          <h3 class="detail-section-title">长期记忆（{{ detail.profile.memories?.length ?? 0 }} 条）</h3>
-          <div v-if="detail.profile.memories && detail.profile.memories.length > 0" class="stack" style="gap: 8px">
-            <article v-for="(memory, index) in detail.profile.memories" :key="index" class="memory-item">
-              <p class="memory-text">{{ memory.text }}</p>
+          <h3 class="detail-section-title">长期记忆（{{ structuredMemories.length }} 条）</h3>
+          <div v-if="structuredMemories.length > 0" class="stack" style="gap: 8px">
+            <article v-for="memory in structuredMemories" :key="memory.id" class="memory-item">
+              <div class="cluster" style="gap: 6px">
+                <span class="badge">{{ memoryKindLabel(memory.kind) }}</span>
+                <strong style="font-size: 13px">{{ memory.topic || memory.entity || "未命名记忆" }}</strong>
+                <span v-if="memory.sensitive" class="badge warn">敏感</span>
+                <span v-if="memory.source_type === 'inferred'" class="badge" title="机器人根据聊天推断，不是本人明说">推断</span>
+              </div>
+              <p class="memory-text" style="margin-top: 4px">{{ memory.content }}</p>
               <p class="log-detail">
-                <template v-if="memory.at">{{ formatTime(memory.at) }}</template>
-                <template v-if="memory.group_id"> · 群 {{ memory.group_id }}</template>
-                <template v-if="memory.source"> · {{ memorySourceLabel(memory.source) }}</template>
+                置信 {{ formatScore(memory.confidence) }} · 重要度 {{ formatScore(memory.importance) }}
+                <template v-if="memory.source_group_id"> · 群 {{ memory.source_group_id }}</template>
+                <template v-if="memory.source_event_time"> · {{ formatTime(memory.source_event_time) }}</template>
+                <template v-if="memory.expires_at"> · {{ formatTime(memory.expires_at) }} 过期</template>
               </p>
             </article>
           </div>
-          <EmptyState v-else title="还没有记忆条目" description="有实质内容的发言会被摘录成长期记忆。" />
+          <EmptyState
+            v-else
+            title="还没有长期记忆"
+            description="聊天里出现值得长期记住的事实、偏好或长期要求时，才会被单独提炼成一条记进这里；普通问答和寒暄不记。"
+          />
+        </section>
+
+        <section v-if="detail.profile.memories && detail.profile.memories.length > 0">
+          <h3 class="detail-section-title">
+            <button
+              class="recent-toggle"
+              type="button"
+              :aria-expanded="recentOpen ? 'true' : 'false'"
+              @click="recentOpen = !recentOpen"
+            >
+              <ChevronDown :size="13" :class="{ 'recent-chevron-open': recentOpen }" aria-hidden="true" />
+              最近发言（{{ detail.profile.memories.length }} 条）
+            </button>
+          </h3>
+          <template v-if="recentOpen">
+            <p class="muted" style="font-size: 12px; margin: 0 0 8px">
+              这个人最近说过的话，只留最近 20 条，@ 和引用已还原成昵称；不进模型上下文，只用于排查。
+            </p>
+            <div class="stack" style="gap: 8px">
+              <article v-for="(memory, index) in detail.profile.memories" :key="index" class="memory-item">
+                <p class="memory-text">{{ memory.text }}</p>
+                <p class="log-detail">
+                  <template v-if="memory.at">{{ formatTime(memory.at) }}</template>
+                  <template v-if="memory.group_id"> · 群 {{ memory.group_id }}</template>
+                  <template v-if="memory.source"> · {{ memorySourceLabel(memory.source) }}</template>
+                </p>
+              </article>
+            </div>
+          </template>
         </section>
 
         <section>
@@ -183,7 +223,8 @@ import {
   type AssistantUsersOrder,
   type AssistantUsersSort,
   type UserMemoryProfile,
-  type UserPortraitTrait
+  type UserPortraitTrait,
+  type UserStructuredMemory
 } from "../api";
 import { formatNumber, formatRelative, formatTime } from "../format";
 import { toastError } from "../toast";
@@ -209,6 +250,10 @@ const order = ref<AssistantUsersOrder>("desc");
 const selected = ref<UserMemoryProfile | null>(null);
 const detail = ref<AssistantUserDetailResponse | null>(null);
 const detailLoading = ref(false);
+// 最近发言默认收起：它是排查用的原始缓冲，展开后会把画像和长期记忆挤出屏幕。
+const recentOpen = ref(false);
+
+const structuredMemories = computed<UserStructuredMemory[]>(() => detail.value?.structured_memories ?? []);
 
 const hasMore = computed(() => users.value.length < total.value);
 
@@ -273,6 +318,7 @@ function loadMore(): void {
 async function openDetail(user: UserMemoryProfile): Promise<void> {
   selected.value = user;
   detail.value = null;
+  recentOpen.value = false;
   detailLoading.value = true;
   try {
     detail.value = await getAssistantUser(user.user_id, botScope.value);
@@ -293,6 +339,22 @@ function favorabilityClass(score: number): string {
   if (score >= 50) return "ok";
   if (score < 0) return "err";
   return "";
+}
+
+function memoryKindLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    fact: "事实",
+    preference: "偏好",
+    episode: "情景",
+    instruction: "长期要求",
+    summary: "摘要",
+    thread: "会话状态"
+  };
+  return labels[kind] ?? (kind || "记忆");
+}
+
+function formatScore(value: number): string {
+  return `${Math.round((value ?? 0) * 100)}%`;
 }
 
 function memorySourceLabel(source: string): string {
@@ -409,5 +471,21 @@ onMounted(() => {
   font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.recent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.recent-chevron-open {
+  transform: rotate(180deg);
 }
 </style>
