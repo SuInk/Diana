@@ -292,7 +292,7 @@ const checkError = ref("");
 const checking = ref(false);
 const updating = ref(false);
 const savingPolicy = ref(false);
-const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false, github_mirror: "auto" });
+const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false, github_mirror: "direct" });
 const operationError = ref("");
 let statusPollTimer: number | undefined;
 const installTracking = ref(false);
@@ -501,9 +501,11 @@ async function check(notify = true): Promise<void> {
   }
 }
 
-// mirrorMode 单独包一层：后端允许空值（按 auto 处理），下拉框需要一个确定的值。
+// mirrorMode 单独包一层：后端允许空值（按直连处理），下拉框需要一个确定的值。
+// 配置里钉死了某条镜像时显示成「自动」——两个选项装不下第三种状态，而它确实是
+// 在走加速；用户在下拉里另选一次才会覆盖那条固定地址。
 const mirrorMode = computed({
-  get: () => policy.value.github_mirror || "auto",
+  get: () => (policy.value.github_mirror === "direct" || !policy.value.github_mirror ? "direct" : "auto"),
   set: (value: string) => { policy.value.github_mirror = value; }
 });
 

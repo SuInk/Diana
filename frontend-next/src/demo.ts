@@ -421,7 +421,7 @@ const browserDependencies: ResolverDependency[] = [
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
-let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "auto" };
+let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "direct" };
 let demoUpdateTokenConfigured = false;
 
 const logs: AppLogEntry[] = [
@@ -891,7 +891,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     updatePolicy = {
       auto_download: Boolean(next.auto_download || next.auto_install),
       auto_install: Boolean(next.auto_install),
-      github_mirror: next.github_mirror || "auto"
+      github_mirror: next.github_mirror || "direct"
     };
     return json(updatePolicy);
   }
