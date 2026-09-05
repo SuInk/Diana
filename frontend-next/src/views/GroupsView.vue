@@ -83,7 +83,6 @@
             <span v-if="group.configured && group.reply_style" class="badge">{{ replyStyleLabel(group.reply_style) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
-            <span v-if="group.configured && group.social_reply_enabled" class="badge accent">社交性回应</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
               回复 {{ group.reply_gate.active_start }}–{{ group.reply_gate.active_end }}
             </span>
@@ -285,17 +284,6 @@
         <div v-if="editing.response_mode === 'custom'" class="field">
           <label for="group-proactive-threshold">主动回复置信度阈值</label>
           <input id="group-proactive-threshold" v-model.number="editing.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
-        </div>
-        <div class="field wide">
-          <label class="switch">
-            <input v-model="editing.social_reply_enabled" type="checkbox" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">本群社交性回应</span>
-          </label>
-          <span class="hint">
-            群友直接对机器人打招呼、夸奖、调侃或轻微评价（「笨笨」「你好可爱」「早」）时也回一句，哪怕没有具体问题。
-            只放行冲着机器人来的那一类：别人之间的闲聊、要机器人安静、同一轮已经回过，仍然沉默。
-          </span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -516,7 +504,6 @@ const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
   { value: "on", label: "开启" },
   { value: "off", label: "关闭" }
 ]);
-const defaultSocialReplyEnabled = ref(false);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
@@ -598,7 +585,6 @@ async function load(showFeedback = false): Promise<void> {
         ["", current.natural_reply_split_enabled ?? true],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
       ]);
-      defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
@@ -626,7 +612,6 @@ function addGroup(): void {
       group_id: groupID,
       enabled: true,
       group_triggers: [],
-      social_reply_enabled: defaultSocialReplyEnabled.value,
       recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
       recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
       plugin_overrides: {},
@@ -641,7 +626,6 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
-  config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
   config.reply_style ??= "";

@@ -58,7 +58,7 @@ func TestSuperActiveIntentAllowsSocialRepliesAndQuestions(t *testing.T) {
 
 func TestSuperActivePromptsAndQuality(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
-	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, cfg.chatInSettings(), false)
+	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, cfg.chatInSettings())
 	if prompt != superActiveIntentPrompt {
 		t.Fatal("super active must use its own intent policy")
 	}

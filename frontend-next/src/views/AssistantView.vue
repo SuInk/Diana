@@ -1039,18 +1039,6 @@
                 <input id="bot-proactive-threshold" v-model.number="form.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
                 <span class="hint">越高越克制；默认 0.9。</span>
               </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.social_reply_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">社交性回应</span>
-                </label>
-                <span class="hint">
-                  群友直接对机器人打招呼、夸奖、调侃或轻微评价（「笨笨」「你好可爱」「早」）时也回一句，
-                  哪怕没有具体问题。陪聊型人设建议开；助手型人设开了只会多出没信息量的应答。
-                  只放行冲着机器人来的那一类：别人之间的闲聊、要机器人安静、同一轮已经回过，仍然沉默。
-                </span>
-              </div>
             </div>
           </section>
 
@@ -2782,7 +2770,6 @@ function setForm(config: BotProfileConfig): void {
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
-    social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,

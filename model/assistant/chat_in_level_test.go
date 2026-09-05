@@ -112,11 +112,11 @@ func TestChatInRouterPromptReflectsSwitch(t *testing.T) {
 	enabled := chatInSettingsFrom(boolPointer(true), ChatInLevelHigh, 0, 0, 0)
 	disabled := chatInSettingsFrom(boolPointer(false), ChatInLevelHigh, 0, 0, 0)
 
-	onPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", enabled, false)
+	onPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", enabled)
 	if !strings.Contains(onPrompt, "当前闲聊插话档位") || !strings.Contains(onPrompt, string(ChatInLevelHigh)) {
 		t.Fatalf("enabled prompt missing level: %q", onPrompt)
 	}
-	offPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", disabled, false)
+	offPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", disabled)
 	if !strings.Contains(offPrompt, "禁止使用 category=chat_in") {
 		t.Fatalf("disabled prompt should ban the category: %q", offPrompt)
 	}
@@ -127,8 +127,8 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 	disabled := chatInSettingsFrom(boolPointer(false), ChatInLevelLow, 0, 0, 0)
 
 	for _, prompt := range []string{
-		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled, false),
-		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", disabled, false),
+		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled),
+		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", disabled),
 	} {
 		for _, want := range []string{
 			"没有点名机器人不等于不需要回复",
@@ -142,7 +142,7 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 		}
 	}
 
-	onPrompt := proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled, false)
+	onPrompt := proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled)
 	for _, want := range []string{
 		"围绕上下文中可识别的话题",
 		"按 chat_in 判断 substantive",
@@ -293,62 +293,6 @@ func TestChatInCooldownIsNotConsumedByRoutingAlone(t *testing.T) {
 	}
 }
 
-// TestSocialReplyGuardOnlyAppearsWhenEnabled 盯住社交性回应这条规则的注入。
-//
-// 线上现象：群友说一句「笨笨」，路由判成 directed_at_bot=true、answerable=true、
-// substantive=false，于是 category=none 保持沉默。对助手型人设这是对的，对陪聊型
-// 人设就是装死。开关打开时才补这条规则，关着不能污染默认提示词。
-func TestSocialReplyGuardOnlyAppearsWhenEnabled(t *testing.T) {
-	chatIn := chatInSettings{Enabled: true, Level: ChatInLevelMedium, Threshold: 0.9}
-
-	off := proactiveReplyRouterPromptForChatIn("", chatIn, false)
-	if strings.Contains(off, socialReplyGuard) {
-		t.Fatalf("开关关着却注入了社交性回应规则：\n%s", off)
-	}
-
-	on := proactiveReplyRouterPromptForChatIn("", chatIn, true)
-	if !strings.Contains(on, socialReplyGuard) {
-		t.Fatalf("开关打开却没有注入社交性回应规则：\n%s", on)
-	}
-	// 打开之后原有的守则一条都不能少：这条是加法，不是换一套提示词。
-	if !strings.Contains(on, "当前闲聊插话档位") {
-		t.Fatalf("注入社交规则时丢掉了闲聊档位说明：\n%s", on)
-	}
-
-	// 规则本身必须写清楚放行边界，否则「被搭话就回」会退化成什么都回。
-	for _, want := range []string{"directed_at_bot=true", "不是对机器人说的话", "别再说话", "已经回过"} {
-		if !strings.Contains(socialReplyGuard, want) {
-			t.Fatalf("社交性回应规则缺少边界约束 %q：%s", want, socialReplyGuard)
-		}
-	}
-}
-
-// TestSocialReplyEnabledFlowsFromGroupConfig 群级开关要真的生效。GroupConfig 里
-// 存了却没拷回生效配置，就是又一个「填了不生效」的输入框。
-func TestSocialReplyEnabledFlowsFromGroupConfig(t *testing.T) {
-	base := BotConfig{ResponseMode: ResponseModeStandard}.WithDefaults()
-	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"social": {GroupID: "social", SocialReplyEnabled: boolPointer(true)},
-		"quiet":  {GroupID: "quiet", SocialReplyEnabled: boolPointer(false)},
-	}})
-
-	social := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "social"})
-	if !boolValue(social.SocialReplyEnabled, false) {
-		t.Fatal("群级打开的社交性回应没有生效")
-	}
-	quiet := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "quiet"})
-	if boolValue(quiet.SocialReplyEnabled, false) {
-		t.Fatal("群级关掉的社交性回应没有生效")
-	}
-}
-
-// 自然插话模式已经删掉。它当年的作用是让 chat_in 绕开置信度、采样率和冷却，只看
-// substantive；五个回复模式预设早就全部强制关掉它，界面上也只在自定义模式下才露脸，
-// 留着只会让人以为还能开。
-//
-// 这里盯两件事：老配置里残留的那个键不能把行为带回来，以及任何档位下 chat_in 都要
-// 过置信度门槛。
 func TestNaturalInterjectionIsGone(t *testing.T) {
 	// 存量配置是 JSON，删字段之后这个键会被直接忽略，不需要迁移。
 	var cfg BotConfig
@@ -368,7 +312,31 @@ func TestNaturalInterjectionIsGone(t *testing.T) {
 	}
 
 	// 路由器提示词也不该再提它。
-	if prompt := proactiveReplyRouterPromptForChatIn("路由器提示词", settings, false); strings.Contains(prompt, "自然插话") {
+	if prompt := proactiveReplyRouterPromptForChatIn("路由器提示词", settings); strings.Contains(prompt, "自然插话") {
 		t.Fatalf("router prompt = %q", prompt)
+	}
+}
+
+// 社交性回应也删掉了。它当年往路由器提示词里追加一条规则，把「笨笨」「早」这类冲着
+// 机器人来的搭话从 category=none 抬成 bot_related。现在这类判断完全交给回复模式各自
+// 的意图策略。
+//
+// 和自然插话一样，盯住老配置里残留的键不能把它带回来，提示词里也不能再出现那段规则。
+func TestSocialReplyIsGone(t *testing.T) {
+	var cfg BotConfig
+	raw := `{"chat_in_enabled":true,"chat_in_level":"medium","social_reply_enabled":true}`
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	settings := cfg.WithDefaults().chatInSettings()
+	prompt := proactiveReplyRouterPromptForChatIn("", settings)
+	for _, gone := range []string{"社交性回应", "笨笨", "你好可爱"} {
+		if strings.Contains(prompt, gone) {
+			t.Fatalf("路由器提示词里还留着社交性回应的痕迹 %q：\n%s", gone, prompt)
+		}
+	}
+	// 原有的档位说明不能被这次删除顺手带走。
+	if !strings.Contains(prompt, "当前闲聊插话档位") {
+		t.Fatalf("闲聊档位说明丢了：\n%s", prompt)
 	}
 }

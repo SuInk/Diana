@@ -257,7 +257,6 @@ export interface BotProfileConfig {
   max_reply_chars?: number;
   /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
   natural_reply_split_enabled?: boolean;
-  social_reply_enabled?: boolean;
   /** 最多分几条；分出来超过它就退回粗一档，退到底就整条发。 */
   reply_max_bubbles?: number;
   direct_reply_chunk_size?: number;
@@ -463,8 +462,6 @@ export interface BotGroupConfig {
   forward_reply_chunk_threshold?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
-  /** 本群是否开启社交性回应；不设表示跟随机器人。 */
-  social_reply_enabled?: boolean;
   minimum_reply_member_level?: number;
   /** 查看撤回消息后的回复是否自动撤回。 */
   recall_reply_auto_delete_enabled?: boolean;

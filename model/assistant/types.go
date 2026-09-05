@@ -482,7 +482,6 @@ type BotConfig struct {
 	MaxInputChars              int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
-	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
@@ -683,7 +682,6 @@ type GroupConfig struct {
 	ChatInThreshold              float64                `json:"chat_in_threshold,omitempty"`
 	ChatInChance                 float64                `json:"chat_in_chance,omitempty"`
 	ChatInCooldownSeconds        int                    `json:"chat_in_cooldown_seconds,omitempty"`
-	SocialReplyEnabled           *bool                  `json:"social_reply_enabled,omitempty"`
 	MinimumReplyMemberLevel      int                    `json:"minimum_reply_member_level,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                  `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                    `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
@@ -796,7 +794,6 @@ type ConfigPayload struct {
 	MaxInputChars              int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
-	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
 	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
@@ -883,7 +880,6 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		ChatInThreshold:              base.ChatInThreshold,
 		ChatInChance:                 base.ChatInChance,
 		ChatInCooldownSeconds:        base.ChatInCooldownSeconds,
-		SocialReplyEnabled:           copyBoolPointer(base.SocialReplyEnabled),
 		MinimumReplyMemberLevel:      0,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(base.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:        base.RecallReplyTTLSeconds,
@@ -963,9 +959,6 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	}
 	if cfg.ChatInEnabled == nil {
 		cfg.ChatInEnabled = defaults.ChatInEnabled
-	}
-	if cfg.SocialReplyEnabled == nil {
-		cfg.SocialReplyEnabled = copyBoolPointer(defaults.SocialReplyEnabled)
 	}
 	if !cfg.ChatInLevel.Valid() {
 		cfg.ChatInLevel = defaults.ChatInLevel
@@ -1788,7 +1781,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxInputChars:                     cfg.MaxInputChars,
 		MaxReplyChars:                     cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
-		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:              cfg.DirectReplyChunkSize,
@@ -1964,7 +1956,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxInputChars:                   payload.MaxInputChars,
 		MaxReplyChars:                   payload.MaxReplyChars,
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
-		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
 		DirectReplyChunkSize:            payload.DirectReplyChunkSize,

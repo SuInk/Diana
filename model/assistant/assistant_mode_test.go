@@ -28,9 +28,9 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 			t.Fatalf("decision %#v allowed=%v", d, got)
 		}
 	}
-	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, settings, true)
-	if !strings.Contains(prompt, assistantIntentPrompt) || !strings.Contains(prompt, socialReplyGuard) {
-		t.Fatal("assistant mode must retain configured social replies")
+	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, settings)
+	if !strings.Contains(prompt, assistantIntentPrompt) {
+		t.Fatal("assistant mode did not append its own intent policy")
 	}
 	restored := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
 	if restored.ResponseMode != ResponseModeAssistant || !restored.chatInSettings().Assistant {
