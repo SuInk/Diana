@@ -159,6 +159,13 @@ func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyCo
 	return replyControlIntent{RefuseCurrent: decision.CountRefusal && decision.RefusalConfidence >= replyRefusalAuditConfidence}
 }
 
+func replyQualityPromptForConfig(cfg BotConfig) string {
+	if cfg.chatInSettings().SuperActive {
+		return proactiveReplyQualityPrompt + "\n当前为超级活跃模式：正常的寒暄、简短情绪回应、接梗和自然追问都是有效聊天，不得仅因没有新增事实、没有被点名或信息量少而拒发。只有机械复读、空转、明显无关或其它明确缺陷才拒发；账号安全和循环判断规则保持不变。"
+	}
+	return proactiveReplyQualityPrompt
+}
+
 // proactiveQualityError 判断主动插话的表达质量是否够格发出去。
 func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveReplyQualityDecision, cfg BotConfig) error {
 	threshold := cfg.ProactiveReplyThreshold
@@ -167,6 +174,10 @@ func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveRe
 	}
 	if threshold <= 0 || threshold > 1 {
 		threshold = defaultProactiveReplyThreshold
+	}
+	if cfg.chatInSettings().SuperActive {
+		// 表达质量与参与意愿分开；保留审核否决，不再回退到旧的 90% 门槛。
+		threshold = 0.5
 	}
 	if decision.ShouldSend && decision.Confidence >= threshold {
 		return nil
@@ -237,7 +248,7 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	raw, err := r.runLLMRouterProvider(auditCtx, func(client LLMProvider) (string, error) {
 		resp, generateErr := client.Generate(auditCtx, llm.GenerateRequest{
 			Messages: []llm.Message{
-				{Role: llm.RoleSystem, Content: proactiveReplyQualityPrompt},
+				{Role: llm.RoleSystem, Content: replyQualityPromptForConfig(cfg)},
 				{Role: llm.RoleUser, Content: "请审核以下回复：\n" + string(payload)},
 			},
 		})
