@@ -6,7 +6,7 @@
     <header class="view-header plugins-view-header">
       <div class="view-title">
         <h1>插件</h1>
-        <p>管理内置能力的启停与详细设置</p>
+        <p>{{ botScope ? "当前机器人开关" : "全局默认开关" }} · 共享插件设置</p>
       </div>
       <div class="view-actions">
         <div class="plugin-search">
@@ -62,7 +62,15 @@
       </div>
     </header>
 
-    <div v-if="visiblePlugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
+    <div v-if="loading" class="plugin-loading" role="status">
+      <div class="scope-progress" role="progressbar" aria-label="正在加载插件"><span /></div>
+      正在加载插件…
+    </div>
+    <div v-else-if="loadError" class="plugin-load-error" role="alert">
+      <span>{{ loadError }}</span>
+      <button class="btn" type="button" @click="reload"><RefreshCw :size="15" />重试</button>
+    </div>
+    <div v-else-if="visiblePlugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
       <article
         v-for="plugin in visiblePlugins"
         :key="plugin.manifest.id"
@@ -182,9 +190,6 @@
       hint="换个关键词，或把筛选切回「全部」。"
     />
     <EmptyState v-else-if="!loading" title="没有可用插件" />
-    <div v-else class="plugin-grid">
-      <div v-for="n in 3" :key="n" class="skeleton" style="height: 190px; border-radius: var(--radius-lg)"></div>
-    </div>
 
     <Modal
       v-if="settingsTarget"
@@ -436,7 +441,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { ArrowRight, ChevronDown, ExternalLink, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
@@ -467,9 +472,11 @@ import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
+import { botScope } from "../bot-scope";
 
 const plugins = ref<PluginState[]>([]);
 const loading = ref(false);
+const loadError = ref("");
 const busyID = ref("");
 
 const resolverPluginID = "official.nonebot-plugin-resolver-go";
@@ -665,18 +672,28 @@ const repositoryWatchTokenConfigured = computed(() => {
   return secretConfigured(key);
 });
 
-function upsert(state: PluginState): void {
+function upsert(state: PluginState, scope = botScope.value): void {
+  if (scope !== botScope.value) return;
+  if (scope && state.manifest.id !== "official.open-api") {
+    state = { ...state, enabled: state.profile_enabled?.[scope] ?? state.enabled };
+  }
   const index = plugins.value.findIndex((plugin) => plugin.manifest.id === state.manifest.id);
   if (index >= 0) {
     plugins.value[index] = state;
   }
 }
 
+let reloadID = 0;
 async function reload(): Promise<void> {
+  const requestID = ++reloadID;
+  const scope = botScope.value;
   loading.value = true;
+  loadError.value = "";
   void loadDependencies();
   try {
-    plugins.value = await listPlugins();
+    const states = await listPlugins(scope);
+    if (requestID !== reloadID || scope !== botScope.value) return;
+    plugins.value = states;
     const requestedSettings = viewQuery().get("settings");
     if (!settingsTarget.value && requestedSettings) {
       const target = plugins.value.find((plugin) => plugin.manifest.id === requestedSettings && plugin.installed);
@@ -685,19 +702,22 @@ async function reload(): Promise<void> {
       }
     }
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "加载插件失败");
+    if (requestID !== reloadID || scope !== botScope.value) return;
+    loadError.value = error instanceof Error ? error.message : "加载插件失败";
   } finally {
-    loading.value = false;
+    if (requestID === reloadID) loading.value = false;
   }
 }
 
 async function toggleEnabled(plugin: PluginState): Promise<void> {
+  const scope = botScope.value;
+  const togglePublish = plugin.manifest.id === repositoryWatchPluginID && repositoryPublishTarget.value?.installed;
   busyID.value = plugin.manifest.id;
   const nextEnabled = !pluginEnabled(plugin);
   try {
-    upsert(await setPluginEnabled(plugin.manifest.id, nextEnabled));
-    if (plugin.manifest.id === repositoryWatchPluginID && repositoryPublishTarget.value?.installed) {
-      upsert(await setPluginEnabled(repositoryPublishPluginID, nextEnabled));
+    upsert(await setPluginEnabled(plugin.manifest.id, nextEnabled, scope), scope);
+    if (togglePublish) {
+      upsert(await setPluginEnabled(repositoryPublishPluginID, nextEnabled, scope), scope);
     }
     toastSuccess(nextEnabled ? `已启用 ${pluginDisplayName(plugin)}` : `已停用 ${pluginDisplayName(plugin)}`);
   } catch (error) {
@@ -1103,6 +1123,14 @@ async function installDependency(dependency: ResolverDependency): Promise<void> 
     busyDependency.value = "";
   }
 }
+
+watch(botScope, () => {
+  settingsTarget.value = null;
+  permissionsTarget.value = null;
+  dependenciesTarget.value = null;
+  plugins.value = [];
+  void reload();
+});
 
 onMounted(() => {
   void reload();

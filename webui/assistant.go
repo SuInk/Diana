@@ -750,7 +750,26 @@ func (h *BotHandler) sendGroupTest(c *gin.Context) {
 
 // listPlugins 返回机器人插件列表。
 func (h *BotHandler) listPlugins(c *gin.Context) {
-	c.JSON(http.StatusOK, assistant.RedactStates(h.runtime.Plugins().ListVisible()))
+	profileID, ok := h.pluginProfileScope(c)
+	if !ok {
+		return
+	}
+	states := h.runtime.Plugins().ListVisibleForProfile(profileID)
+	c.JSON(http.StatusOK, assistant.RedactStates(states))
+}
+
+func (h *BotHandler) pluginProfileScope(c *gin.Context) (string, bool) {
+	profileID := strings.TrimSpace(c.Query("profile"))
+	if profileID == "" {
+		return "", true
+	}
+	for _, profile := range h.profiles.Profiles().Profiles {
+		if profile.ID == profileID {
+			return profileID, true
+		}
+	}
+	c.JSON(http.StatusNotFound, gin.H{"error": "robot profile not found"})
+	return "", false
 }
 
 // pluginDependencies 返回各插件外部依赖的探测结果，让控制台能直接看出
@@ -824,18 +843,24 @@ func (h *BotHandler) uninstallPlugin(c *gin.Context) {
 
 // setPluginEnabled 处理插件启用状态变更请求。
 func (h *BotHandler) setPluginEnabled(c *gin.Context) {
+	profileID, ok := h.pluginProfileScope(c)
+	if !ok {
+		return
+	}
 	var payload pluginEnabledPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.plugin.enabled", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
 		return
 	}
-	state, err := h.runtime.Plugins().SetEnabled(c.Param("id"), payload.Enabled)
+	state, err := h.runtime.Plugins().SetEnabledForProfile(c.Param("id"), profileID, payload.Enabled)
 	if err != nil {
 		h.writePluginError(c, "assistant.plugin.enabled", err, c.Param("id"))
 		return
 	}
 	h.persistState()
-	recordRequestOperation(c, h.logs, "assistant.plugin.enabled", "机器人插件开关已更新", state.Manifest.ID, pluginLogMetadata(state))
+	metadata := pluginLogMetadata(state)
+	metadata["profile_id"] = profileID
+	recordRequestOperation(c, h.logs, "assistant.plugin.enabled", "机器人插件开关已更新", state.Manifest.ID, metadata)
 	c.JSON(http.StatusOK, state.Redacted())
 }
 

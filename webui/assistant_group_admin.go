@@ -187,7 +187,7 @@ func (h *BotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 		Token:     token,
 		ExpiresAt: expiresAt,
 		Config:    config,
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisible()),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(h.runtime.Config().ID)),
 	})
 }
 
@@ -202,7 +202,7 @@ func (h *BotHandler) getGroupAdminConfig(c *gin.Context) {
 		UserID:    session.userID,
 		ExpiresAt: session.expiresAt,
 		Config:    h.groupConfigForResponse(session.groupID),
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisible()),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(h.runtime.Config().ID)),
 	})
 }
 
@@ -233,7 +233,7 @@ func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 		UserID:    session.userID,
 		ExpiresAt: session.expiresAt,
 		Config:    h.groupConfigForAPI(saved.WithDefaults(session.groupID, h.runtime.Config())),
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisible()),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(h.runtime.Config().ID)),
 	})
 }
 

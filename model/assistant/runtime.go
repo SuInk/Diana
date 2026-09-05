@@ -1314,11 +1314,15 @@ func (r *Runtime) sandboxedBrowserEnabled(event MessageEvent) bool {
 }
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
+	profileID := strings.TrimSpace(event.ProfileID)
+	if profileID == "" {
+		profileID = r.Config().ID
+	}
+	out := r.plugins.ProfileOverrides(profileID)
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
-		return nil
+		return out
 	}
-	out := make(map[string]bool, len(groupCfg.PluginOverrides))
 	for id, enabled := range groupCfg.PluginOverrides {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -1445,7 +1449,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 			r.noteRecalledInbound(event)
 		}
 		if r.plugins != nil {
-			event = r.plugins.ObserveEvent(ctx, event)
+			event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 		}
 		if isRecallNotice(event) {
 			r.persistMessageEvent(event)
@@ -1622,7 +1626,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	}
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
-		event = r.plugins.ObserveEvent(ctx, event)
+		event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 	}
 	// 消息互通发生在回复判断之前：即使 planner 最终选择不回复，原消息也应被
 	// 搬到对端。转发走独立短超时，不把目标平台的网络延迟叠到本轮回复上。
@@ -2008,7 +2012,7 @@ func (r *Runtime) observeSelfMessage(ctx context.Context, event MessageEvent) {
 	}
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
-		event = r.plugins.ObserveEvent(ctx, event)
+		event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 	}
 	r.remember(event)
 	r.enqueueHistoryImageDescriptions(event)
@@ -8894,7 +8898,7 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 		event = cacheMessageEventVideos(ctx, event)
 	}
 	if r.plugins != nil {
-		event = r.plugins.ObserveEvent(ctx, event)
+		event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 	}
 	r.remember(event)
 	r.enqueueHistoryImageDescriptions(event)

@@ -2,6 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { ref } from "vue";
+import { beginScopeTransition } from "./scope-transition";
 import type { BotProfileConfig } from "./api";
 
 // 控制台的「当前机器人」作用域。
@@ -32,6 +33,7 @@ export function setBotScope(profileID: string): void {
   if (botScope.value === next) {
     return;
   }
+  beginScopeTransition();
   botScope.value = next;
   try {
     if (next === ALL_PROFILES) {
