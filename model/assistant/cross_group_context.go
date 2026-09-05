@@ -242,7 +242,7 @@ func crossGroupTopicOverlaps(queryTerms []string, candidate MessageEvent) bool {
 
 func crossGroupTextContext(event MessageEvent) (MessageEvent, bool) {
 	text := strings.TrimSpace(historyPlainText(event))
-	if text == "" || semanticErrorWrapperText(text) {
+	if text == "" {
 		return MessageEvent{}, false
 	}
 	event.MessageID = ""

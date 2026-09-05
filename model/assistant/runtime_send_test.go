@@ -287,15 +287,34 @@ func TestPrivateOutgoingHistoryKeepsPeerSessionAndAssistantRole(t *testing.T) {
 	}
 }
 
-func TestErrorWrapperDoesNotEnterModelHistory(t *testing.T) {
+// 机器人发出的错误提示是它自己说过的话，留在历史里：模型看到上一轮出错了，才能
+// 接住「重试一下」。以前按「出错了：」前缀把它剔掉，前缀写死，改了配置就认不出来。
+func TestErrorReplyStaysInModelHistory(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "source"}
 	runtime.rememberReply(event, "出错了：图片读取失败，请重新发送图片后再试。")
-	if got := historyPromptText(runtime.contextHistory(event)[0]); got != "" {
-		t.Fatalf("error wrapper leaked into history prompt: %q", got)
+	if got := historyPromptText(runtime.contextHistory(event)[0]); !strings.Contains(got, "图片读取失败") {
+		t.Fatalf("error reply missing from history prompt: %q", got)
 	}
-	if got := compactContextEvent(runtime.contextHistory(event)[0]); got != "" {
-		t.Fatalf("error wrapper leaked into context summary: %q", got)
+	if got := compactContextEvent(runtime.contextHistory(event)[0]); !strings.Contains(got, "图片读取失败") {
+		t.Fatalf("error reply missing from context summary: %q", got)
+	}
+}
+
+// error_reply_prefix 是控制台上的设置项，发出去的错误提示必须真的用它，而不是写死
+// 「出错了：」。
+func TestErrorNoticeUsesConfiguredPrefix(t *testing.T) {
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{ErrorReplyPrefix: "嘉然翻车了："}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return failingLLMProvider{err: errors.New("boom")}, nil
+	})
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "prefixed-error"}
+	outcome, err := runtime.replyAndRecord(context.Background(), event, "测试", "replied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "error_replied" || len(channel.sent) != 1 || !strings.HasPrefix(channel.sent[0].Text, "嘉然翻车了：") {
+		t.Fatalf("outcome=%q sent=%#v, want configured error prefix", outcome, channel.sent)
 	}
 }
 

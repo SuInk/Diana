@@ -299,10 +299,7 @@ type promptCacheProbeLLMProvider struct {
 }
 
 func (p *promptCacheProbeLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	purpose := llmUsagePurposeFromContext(ctx)
-	if purpose == "" {
-		purpose = debugModelPurpose(req)
-	}
+	purpose := llmCallPurpose(ctx)
 	observation := observePromptCachePayload(req)
 	previous, ok := p.runtime.promptCacheProbe.swap(promptCacheProbeKey(p.event, purpose, observation.ToolsHash), observation)
 	response, err := p.provider.Generate(ctx, req)
