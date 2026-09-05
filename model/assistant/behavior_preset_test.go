@@ -20,6 +20,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 		level   ChatInLevel
 	}{
 		{ResponseModeQuiet, false, ChatInLevelOff},
+		{ResponseModeAssistant, true, ChatInLevelLow},
 		{ResponseModeStandard, true, ChatInLevelLow},
 		{ResponseModeActive, true, ChatInLevelHigh},
 		{ResponseModeSuperActive, true, ChatInLevelMax},

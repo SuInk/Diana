@@ -2271,8 +2271,11 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	decision, parsed := parseProactiveReplyDecision(raw)
 	event, text = selectProactiveReplyCandidate(candidates, decision.TargetMessageID)
-	if chatIn.SuperActive {
+	if chatIn.SuperActive || chatIn.Assistant {
 		cfg.ProactiveReplyThreshold = chatIn.Threshold
+		if chatIn.Assistant {
+			cfg.ProactiveReplyThreshold = assistantRequestThreshold
+		}
 		cfg.ProactiveReplyChance = 1
 	}
 	routePromoted := parsed && promoteDirectedFollowup(&decision, event, text, cfg.ProactiveReplyThreshold, chatIn)
@@ -2648,13 +2651,19 @@ func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSe
 	}
 	switch decision.normalizedCategory() {
 	case "needs_response":
-		if chatIn.SuperActive {
+		if chatIn.SuperActive || chatIn.Assistant {
 			threshold = chatIn.Threshold
+		}
+		if chatIn.Assistant {
+			threshold = assistantRequestThreshold
 		}
 		return decision.Confidence >= threshold
 	case "bot_related":
-		if chatIn.SuperActive {
+		if chatIn.SuperActive || chatIn.Assistant {
 			threshold = chatIn.Threshold
+		}
+		if chatIn.Assistant {
+			threshold = assistantRequestThreshold
 		}
 		return decision.Confidence >= threshold && decision.DirectedAtBot
 	case "chat_in":
@@ -2752,6 +2761,9 @@ const superActiveIntentPrompt = `你是 Intent Recognition（意图识别）模�
 分类：对机器人说的话用 bot_related 且 directed_at_bot=true；公开问题或求助用 needs_response；其它适合接话的交流用 chat_in；不回复用 none。requests_response 描述用户是否要求回应；blocker 只用 none、missing_context、no_capability、not_addressed、low_value。
 只输出单个 JSON 对象，confidence 为 0 到 1 的回复意图置信度，reason 简短说明原因。格式：{"should_reply":true,"confidence":0.8,"category":"chat_in","target_message_id":"候选消息ID","turn_message_ids":["候选消息ID"],"directed_at_bot":false,"answerable":true,"substantive":false,"requests_response":false,"blocker":"none","reason":"群友在分享心情，适合自然接话"}。不回复时 should_reply=false，不要强行填写回复目标。`
 
+const assistantIntentPrompt = `当前回复模式为助手模式：优先帮助解决问题，也可以参与闲聊，只是主动接话欲望较低，不是只答问题。公开提问、求助、排错、请求解释或建议，以及对机器人答案的实质追问，都属于需要回应，即使没有 @ 机器人也可使用 needs_response；明确向机器人提出的请求用 bot_related、directed_at_bot=true。不要因为需要工具、缺少上下文或暂时不知道答案而在意图识别阶段拦截求助，后续 Agent 会独立处理。
+普通闲聊有贴合话题的回应、轻松调侃或接梗时，可以使用 category=chat_in；保持克制，不强行加入每段对话，不复读或抢话，运行时按低欲望档位抽样和冷却。停止请求、重复回应和转发材料边界仍需遵守。只改变参与意愿，不改变人设、表达风格、事实准确性要求或原有的证据校验设置。`
+
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
 // 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
 func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
@@ -2764,6 +2776,9 @@ func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSetting
 	}
 	if social {
 		prompt += "\n\n" + socialReplyGuard
+	}
+	if chatIn.Assistant {
+		return prompt + "\n\n" + assistantIntentPrompt
 	}
 	if chatIn.Natural {
 		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"

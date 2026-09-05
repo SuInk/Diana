@@ -10,8 +10,11 @@ import (
 // ResponseMode controls how readily the bot joins an unaddressed group chat.
 type ResponseMode string
 
+const assistantRequestThreshold = 0.7
+
 const (
 	ResponseModeQuiet       ResponseMode = "quiet"
+	ResponseModeAssistant   ResponseMode = "assistant"
 	ResponseModeStandard    ResponseMode = "standard"
 	ResponseModeActive      ResponseMode = "active"
 	ResponseModeSuperActive ResponseMode = "super_active"
@@ -22,6 +25,8 @@ func (mode ResponseMode) Normalized() ResponseMode {
 	switch strings.ToLower(strings.TrimSpace(string(mode))) {
 	case "quiet":
 		return ResponseModeQuiet
+	case "assistant":
+		return ResponseModeAssistant
 	case "standard", "":
 		return ResponseModeStandard
 	case "active":
@@ -37,6 +42,11 @@ func (mode ResponseMode) Normalized() ResponseMode {
 
 func (mode ResponseMode) apply(cfg *BotConfig) {
 	switch mode.Normalized() {
+	case ResponseModeAssistant:
+		cfg.ChatInEnabled = boolPointer(true)
+		cfg.ChatInLevel = ChatInLevelLow
+		cfg.NaturalInterjectionEnabled = boolPointer(false)
+		clearChatInFineTuning(cfg)
 	case ResponseModeQuiet:
 		cfg.ChatInEnabled = boolPointer(false)
 		cfg.ChatInLevel = ChatInLevelOff
