@@ -295,6 +295,8 @@ export interface BotProfileConfig {
   /** auto / require / off；留空即 auto。 */
   agent_command_sandbox?: string;
   agent_command_sandbox_allow_network?: boolean;
+  /** 打开 write_file / edit_file，默认关闭。 */
+  agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;
   agent_browser_timeout_ms?: number;
 }
