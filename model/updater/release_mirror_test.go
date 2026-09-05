@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/ghmirror"
 )
 
 const (
@@ -172,3 +174,11 @@ func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 var errTransportDown = errors.New("链路不通")
+
+// 默认走直连：镜像是第三方转发，默认把更新包的来源换掉不是能替用户做的决定。
+// 要加速的人在界面上选一次「自动选择镜像加速」。
+func TestDefaultUpdatePolicyPrefersDirectDownload(t *testing.T) {
+	if mode := DefaultUpdatePolicy().GitHubMirror; mode != ghmirror.ModeDirect {
+		t.Fatalf("default github mirror = %q, want %q", mode, ghmirror.ModeDirect)
+	}
+}

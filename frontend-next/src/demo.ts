@@ -15,6 +15,7 @@ import type {
   NotebookEntry,
   NotebookScopeSummary,
   ResolverDependency,
+  RSSWatchSource,
   StatsHourBucket,
   StatsSnapshot,
   UpdateStatus,
@@ -126,7 +127,7 @@ let plugins: PluginState[] = [
     installed: true, enabled: true, settings: { default_interval_seconds: 60 }, secrets_configured: { github_token: true }
   },
   {
-    manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
+    manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.2.0", description: "按条件监控 RSS 或社交动态，一条订阅可同时盯多个账号或 Feed，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
   {
@@ -421,19 +422,8 @@ const browserDependencies: ResolverDependency[] = [
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
-let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "auto" };
-const demoMirrors = [
-  { name: "ghfast.top", base_url: "https://ghfast.top" },
-  { name: "gh-proxy.com", base_url: "https://gh-proxy.com" },
-  { name: "gh-proxy.net", base_url: "https://gh-proxy.net" }
-];
-// 演示数据刻意排成「握手最快的那条速度最慢」：这正是只看延时会选错的情形。
-const demoMirrorProbe = [
-  { name: "直连 GitHub", direct: true, ok: true, latency_ms: 1840, speed_kbps: 2360 },
-  { name: "gh-proxy.com", base_url: "https://gh-proxy.com", ok: true, latency_ms: 402, speed_kbps: 1180 },
-  { name: "ghfast.top", base_url: "https://ghfast.top", ok: true, latency_ms: 168, speed_kbps: 74 },
-  { name: "gh-proxy.net", base_url: "https://gh-proxy.net", ok: false, error: "context deadline exceeded（演示数据）" }
-];
+let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "direct" };
+let demoUpdateTokenConfigured = false;
 
 const logs: AppLogEntry[] = [
   { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
@@ -473,7 +463,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
   if (!url.pathname.startsWith("/api/") && !url.pathname.startsWith("/onebot/")) return window.__dianaOriginalFetch!(input, init);
-  await new Promise((resolve) => window.setTimeout(resolve, 60));
+  await new Promise((resolve) => window.setTimeout(resolve, Math.max(60, Number(import.meta.env.VITE_DEMO_LATENCY_MS) || 60)));
   const method = (init?.method ?? "GET").toUpperCase();
   const body = bodyOf(init);
   const path = url.pathname;
@@ -583,7 +573,10 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
-  if (path === "/api/assistant/plugins") return json(plugins);
+  if (path === "/api/assistant/plugins") {
+    const profile = url.searchParams.get("profile") ?? "";
+    return json(plugins.map((plugin) => ({ ...plugin, enabled: plugin.profile_enabled?.[profile] ?? plugin.enabled })));
+  }
   if (path === "/api/assistant/plugins/repository-publish/drafts") {
     const drafts = [{
       id: "draft-demo-01", platform: "onebot-v11", profile_id: "bot-main", group_id: "100200301",
@@ -616,7 +609,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (!plugin) return json({ error: "演示插件不存在" }, 404);
     if (pluginMatch[2] === "install") plugin.installed = true;
     if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; }
-    if (pluginMatch[2] === "enabled") plugin.enabled = Boolean(body.enabled);
+    if (pluginMatch[2] === "enabled") {
+      const profile = url.searchParams.get("profile") ?? "";
+      if (profile && plugin.manifest.id !== "official.open-api") {
+        plugin.profile_enabled = { ...plugin.profile_enabled, [profile]: Boolean(body.enabled) };
+      } else {
+        plugin.enabled = Boolean(body.enabled);
+      }
+    }
     if (pluginMatch[2] === "settings") plugin.settings = { ...((body.settings as Record<string, unknown>) ?? {}) };
     plugins = [...plugins]; demoStatus.plugins = plugins; return json(plugin);
   }
@@ -625,13 +625,23 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;
     const index = groups.findIndex((group) => group.group_id === config.group_id);
-    if (index >= 0) groups[index] = { ...groups[index], ...config, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
+    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
   }
 
   if (path === "/api/assistant/users") {
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
+    const sort = url.searchParams.get("sort") ?? "updated";
+    const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
+    const sortKeys: Record<string, (user: (typeof demoUsers)[number]) => number> = {
+      updated: (user) => Date.parse(user.updated_at ?? "") || 0,
+      last_seen: (user) => Date.parse(user.last_seen_at ?? "") || 0,
+      favorability: (user) => user.favorability ?? 0,
+      messages: (user) => user.message_count ?? 0
+    };
+    const keyOf = sortKeys[sort] ?? sortKeys.updated;
+    matched.sort((a, b) => (order === "asc" ? keyOf(a) - keyOf(b) : keyOf(b) - keyOf(a)));
     const users = matched.map((user) => ({
       ...user,
       memories: undefined,
@@ -639,7 +649,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       memory_count: user.memories?.length ?? 0,
       portrait_count: user.portrait?.length ?? 0
     }));
-    return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
+    return json({ users, total: matched.length, query: keyword || undefined, sort, order, limit: 50, offset: 0 });
   }
   if (path === "/api/assistant/user-names") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
@@ -883,7 +893,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/tasks") return json({ items: tasks });
   if ((path.endsWith("/repository-watches") || path.endsWith("/rss-watches")) && method === "POST") {
     const repository = path.endsWith("/repository-watches");
-    const task: AssistantTask = { id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? body.feed_url ?? body.twitter_handle ?? "演示订阅"), status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_pull_requests: repository ? Boolean(body.watch_pull_requests) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, watch_stars: repository ? Boolean(body.watch_stars) : undefined, last_star_count: repository ? 128 : undefined, feed_url: repository ? undefined : String(body.feed_url ?? ""), feed_handle: repository ? undefined : String(body.twitter_handle ?? ""), feed_source: repository ? undefined : body.twitter_handle ? "twitter" : "rss", feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
+    // 一条 RSS 订阅可以带多个来源，演示数据也按来源列表拼，别只认单数字段。
+    const demoHandles = [...(Array.isArray(body.twitter_handles) ? body.twitter_handles : []), body.twitter_handle].map((value) => String(value ?? "").trim()).filter(Boolean);
+    const demoFeeds = [...(Array.isArray(body.feed_urls) ? body.feed_urls : []), body.feed_url].map((value) => String(value ?? "").trim()).filter(Boolean);
+    const demoSources: RSSWatchSource[] = [...demoHandles.map((handle) => ({ feed_url: `https://x.com/${handle}`, source: "twitter" as const, handle })), ...demoFeeds.map((feed_url) => ({ feed_url, source: "rss" as const }))];
+    const task: AssistantTask = { id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? demoSources.map((item) => item.handle ? `@${item.handle}` : item.feed_url).join("、") ?? "") || "演示订阅", status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_pull_requests: repository ? Boolean(body.watch_pull_requests) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, watch_stars: repository ? Boolean(body.watch_stars) : undefined, last_star_count: repository ? 128 : undefined, feed_url: repository ? undefined : demoSources[0]?.feed_url ?? "", feed_handle: repository ? undefined : demoSources[0]?.handle ?? "", feed_source: repository ? undefined : demoSources[0]?.source ?? "rss", feed_sources: repository ? undefined : demoSources, feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
     tasks = [task, ...tasks]; return json(task);
   }
   if (path.includes("/repository-watches/") || path.includes("/rss-watches/")) {
@@ -910,16 +924,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     updatePolicy = {
       auto_download: Boolean(next.auto_download || next.auto_install),
       auto_install: Boolean(next.auto_install),
-      github_mirror: next.github_mirror || "auto"
+      github_mirror: next.github_mirror || "direct"
     };
     return json(updatePolicy);
   }
-  // 这两条要排在下面那个 /api/system/update 前缀兜底之前，否则测速会被当成下载。
-  if (path === "/api/system/update/mirrors" && method === "GET") {
-    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, last_probe: demoMirrorProbe });
-  }
-  if (path === "/api/system/update/mirrors/test") {
-    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors, resolved: "https://ghfast.top", last_probe: demoMirrorProbe });
+  if (path === "/api/system/update/github-token") {
+    if (method === "PUT") { demoUpdateTokenConfigured = !JSON.parse(String(init?.body ?? "{}")).clear && Boolean(JSON.parse(String(init?.body ?? "{}")).token); }
+    return json({ configured: demoUpdateTokenConfigured, source: demoUpdateTokenConfigured ? "stored" : "" });
   }
   if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });

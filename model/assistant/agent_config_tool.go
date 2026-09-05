@@ -95,6 +95,7 @@ type dianaBotConfigSnapshot struct {
 	ContextSummaryThreshold         int                      `json:"context_summary_threshold"`
 	LongTermMemoryEnabled           bool                     `json:"long_term_memory_enabled"`
 	CrossGroupMemoryEnabled         bool                     `json:"cross_group_memory_enabled"`
+	CrossPlatformMemoryEnabled      bool                     `json:"cross_platform_memory_enabled"`
 	WorldBookEnabled                bool                     `json:"world_book_enabled"`
 	RomanceEnabled                  bool                     `json:"romance_enabled"`
 	MoodEnabled                     bool                     `json:"mood_enabled"`
@@ -320,6 +321,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:           boolValue(cfg.LongTermMemoryEnabled, true),
 		CrossGroupMemoryEnabled:         boolValue(cfg.CrossGroupMemoryEnabled, false),
+		CrossPlatformMemoryEnabled:      boolValue(cfg.CrossPlatformMemoryEnabled, false),
 		WorldBookEnabled:                boolValue(cfg.WorldBookEnabled, true),
 		RomanceEnabled:                  boolValue(cfg.RomanceEnabled, false),
 		MoodEnabled:                     boolValue(cfg.MoodEnabled, false),

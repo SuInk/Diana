@@ -208,6 +208,7 @@ go test ./...   # 后端测试
 | [部署](https://suink.github.io/Diana/deploy.html) | 各种安装方式、服务器部署、首次登录 |
 | [配置](https://suink.github.io/Diana/configuration.html) | 通道接入、模型分配、群策略、内置能力、安全边界 |
 | [实现](https://suink.github.io/Diana/implementation.html) | 架构、消息决策链路、记忆分层 |
+| [记忆检索](docs/memory-recall.md) | 长期与跨平台召回、关联扩展、按需查阅和隐私边界 |
 | [运维](https://suink.github.io/Diana/operations.html) | 更新回滚、日志备份、故障排查 |
 | [在线演示](https://suink.github.io/Diana/demo/) | 真实控制台 + 模拟数据，随便点 |
 

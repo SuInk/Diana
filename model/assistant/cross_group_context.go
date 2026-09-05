@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	crossGroupContextLookback       = 72 * time.Hour
 	crossGroupContextSearchLimit    = 40
 	crossGroupContextResultLimit    = 4
 	crossGroupMembershipCheckBudget = 3 * time.Second
@@ -59,7 +58,7 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 		}
 		trace.SampleTerms = append([]string(nil), sample...)
 	}
-	if !crossGroupQueryHasSignal(terms) {
+	if !crossGroupQueryHasSignal(terms) && !r.semanticSearchActive(cfg) {
 		return finish(nil, "查询词信号不足：需要至少一个 3 字词或两个 2 字词")
 	}
 	throughTime := event.Time
@@ -68,23 +67,48 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 	}
 	loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	candidates, _, err := searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
-		Session:       sessionKey(event),
-		SessionPrefix: groupHistorySessionPrefix(event),
-		Text:          queryText,
-		Terms:         terms,
-		FromTime:      throughTime - int64(crossGroupContextLookback/time.Second),
-		ThroughTime:   throughTime,
-		Limit:         crossGroupContextSearchLimit,
-		CrossSession:  true,
+		ExcludeSession: sessionKey(event),
+		Session:        sessionKey(event),
+		SessionPrefix:  groupHistorySessionPrefix(event),
+		Text:           queryText,
+		Terms:          terms,
+		FromTime:       0,
+		ThroughTime:    throughTime,
+		Limit:          crossGroupContextSearchLimit,
+		CrossSession:   true,
 	})
 	cancel()
+	trace.KeywordCandidates = len(candidates)
 	if err != nil {
-		return finish(nil, "检索失败："+err.Error())
+		trace.KeywordStatus = "文字检索失败或超时"
+		candidates = nil
+	} else {
+		trace.KeywordStatus = "已执行"
+	}
+	semantic, semanticStatus := r.crossGroupSemanticEvents(event, store, queryText, throughTime)
+	trace.SemanticStatus, trace.SemanticCandidates = semanticStatus, len(semantic)
+	semanticKeys := make(map[string]bool)
+	scores := make(map[string]float64)
+	for rank, item := range candidates {
+		scores[crossGroupCandidateKey(item)] += 1 / float64(61+rank)
+	}
+	for rank, item := range semantic {
+		key := crossGroupCandidateKey(item)
+		semanticKeys[key] = true
+		scores[key] += 1 / float64(61+rank)
+	}
+	candidates = mergeSearchResultsRRF(candidates, semantic, 2*crossGroupContextSearchLimit)
+	if err != nil && len(candidates) == 0 {
+		return finish(nil, "文字检索失败，语义检索未返回可用结果")
 	}
 	trace.Candidates = len(candidates)
 
 	candidatesByAuthor := make(map[string][]MessageEvent)
 	for _, candidate := range candidates {
+		if candidate.Time > throughTime || candidate.Time < 0 {
+			trace.DroppedTime++
+			continue
+		}
 		groupID := strings.TrimSpace(candidate.GroupID)
 		authorID := strings.TrimSpace(candidate.UserID)
 		if candidate.Kind != EventKindGroup || groupID == "" || groupID == event.GroupID || authorID == "" {
@@ -99,16 +123,33 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 			trace.DroppedPlatform++
 			continue
 		}
-		if !crossGroupTopicOverlaps(terms, candidate) {
+		exactQuery := len([]rune(queryText)) >= semanticMinTextRunes && strings.Contains(strings.ToLower(historyPlainText(candidate)), strings.ToLower(queryText))
+		if !exactQuery && !crossGroupTopicOverlaps(terms, candidate) && !semanticKeys[crossGroupCandidateKey(candidate)] {
 			trace.DroppedTopic++
 			continue
 		}
-		clean, ok := crossGroupTextContext(candidate)
+		_, ok := crossGroupTextContext(candidate)
 		if !ok {
 			trace.DroppedText++
 			continue
 		}
-		candidatesByAuthor[authorID] = append(candidatesByAuthor[authorID], clean)
+		// Relevance dominates; recency is only a small bonus, not an expiry.
+		hits, total := 0, 0
+		text := strings.ToLower(historyPlainText(candidate))
+		for _, term := range terms {
+			weight := len([]rune(term))
+			total += weight
+			if strings.Contains(text, strings.ToLower(term)) {
+				hits += weight
+			}
+		}
+		key := crossGroupCandidateKey(candidate)
+		if total > 0 {
+			scores[key] += 0.015 * float64(hits) / float64(total)
+		}
+		ageDays := float64(throughTime-candidate.Time) / (24 * 60 * 60)
+		scores[key] += 0.0015 / (1 + ageDays/30)
+		candidatesByAuthor[authorID] = append(candidatesByAuthor[authorID], candidate)
 	}
 	trace.Authors = len(candidatesByAuthor)
 	if len(candidatesByAuthor) == 0 {
@@ -124,13 +165,35 @@ func (r *Runtime) crossGroupContextEvents(event MessageEvent, store MessageHisto
 	for authorID, events := range candidatesByAuthor {
 		if allowed[authorID] {
 			selected = append(selected, events...)
+		} else {
+			trace.DroppedMembership += len(events)
 		}
 	}
-	sort.SliceStable(selected, func(left, right int) bool { return selected[left].Time > selected[right].Time })
+	sort.SliceStable(selected, func(left, right int) bool {
+		l, rr := scores[crossGroupCandidateKey(selected[left])], scores[crossGroupCandidateKey(selected[right])]
+		if l != rr {
+			return l > rr
+		}
+		if selected[left].Time != selected[right].Time {
+			return selected[left].Time > selected[right].Time
+		}
+		return crossGroupCandidateKey(selected[left]) < crossGroupCandidateKey(selected[right])
+	})
 	if len(selected) > crossGroupContextResultLimit {
+		trace.DroppedLimit = len(selected) - crossGroupContextResultLimit
 		selected = selected[:crossGroupContextResultLimit]
 	}
 	sort.SliceStable(selected, func(left, right int) bool { return selected[left].Time < selected[right].Time })
+	for index, item := range selected {
+		if traced {
+			route := "文字"
+			if semanticKeys[crossGroupCandidateKey(item)] {
+				route = "语义或混合"
+			}
+			trace.SelectedMessages = append(trace.SelectedMessages, map[string]any{"message_id": item.MessageID, "group_id": item.GroupID, "time": item.Time, "route": route, "score": scores[crossGroupCandidateKey(item)]})
+		}
+		selected[index], _ = crossGroupTextContext(item)
+	}
 	return finish(selected, "")
 }
 
@@ -179,7 +242,7 @@ func crossGroupTopicOverlaps(queryTerms []string, candidate MessageEvent) bool {
 
 func crossGroupTextContext(event MessageEvent) (MessageEvent, bool) {
 	text := strings.TrimSpace(historyPlainText(event))
-	if text == "" || semanticErrorWrapperText(text) {
+	if text == "" {
 		return MessageEvent{}, false
 	}
 	event.MessageID = ""
@@ -202,7 +265,9 @@ func (r *Runtime) crossGroupCurrentMembers(event MessageEvent, candidatesByAutho
 		authorID := authorID
 		if r.members != nil {
 			if _, cached := r.members.lookup(event.GroupID, authorID); cached {
+				mu.Lock()
 				allowed[authorID] = true
+				mu.Unlock()
 				continue
 			}
 		}

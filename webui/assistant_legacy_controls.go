@@ -133,21 +133,34 @@ type repositoryWatchUpdatePayload struct {
 }
 
 type rssWatchCreatePayload struct {
-	FeedURL         string `json:"feed_url,omitempty"`
-	TwitterHandle   string `json:"twitter_handle,omitempty"`
-	JudgePrompt     string `json:"judge_prompt"`
-	IntervalSeconds int64  `json:"interval_seconds"`
-	ProfileID       string `json:"profile_id"`
-	Destination     string `json:"destination"`
-	GroupID         string `json:"group_id,omitempty"`
-	UserID          string `json:"user_id,omitempty"`
+	FeedURL       string `json:"feed_url,omitempty"`
+	TwitterHandle string `json:"twitter_handle,omitempty"`
+	// 多来源写法：一条订阅盯一批账号或 Feed，共用同一套判断规则。
+	FeedURLs        []string `json:"feed_urls,omitempty"`
+	TwitterHandles  []string `json:"twitter_handles,omitempty"`
+	JudgePrompt     string   `json:"judge_prompt"`
+	IntervalSeconds int64    `json:"interval_seconds"`
+	ProfileID       string   `json:"profile_id"`
+	Destination     string   `json:"destination"`
+	GroupID         string   `json:"group_id,omitempty"`
+	UserID          string   `json:"user_id,omitempty"`
 }
 
 type rssWatchUpdatePayload struct {
-	FeedURL         *string `json:"feed_url,omitempty"`
-	TwitterHandle   *string `json:"twitter_handle,omitempty"`
-	JudgePrompt     *string `json:"judge_prompt,omitempty"`
-	IntervalSeconds int64   `json:"interval_seconds,omitempty"`
+	FeedURL         *string   `json:"feed_url,omitempty"`
+	TwitterHandle   *string   `json:"twitter_handle,omitempty"`
+	FeedURLs        *[]string `json:"feed_urls,omitempty"`
+	TwitterHandles  *[]string `json:"twitter_handles,omitempty"`
+	JudgePrompt     *string   `json:"judge_prompt,omitempty"`
+	IntervalSeconds int64     `json:"interval_seconds,omitempty"`
+}
+
+// rssWatchSourcePayload 是一条 RSS 订阅里的单个来源。
+type rssWatchSourcePayload struct {
+	FeedURL string `json:"feed_url"`
+	Source  string `json:"source,omitempty"`
+	Handle  string `json:"handle,omitempty"`
+	Name    string `json:"name,omitempty"`
 }
 
 type botTaskPayload struct {
@@ -190,11 +203,14 @@ type botTaskPayload struct {
 	FeedSource            string    `json:"feed_source,omitempty"`
 	FeedHandle            string    `json:"feed_handle,omitempty"`
 	FeedJudgePrompt       string    `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID        string    `json:"last_feed_item_id,omitempty"`
-	LastFeedPublishedAt   time.Time `json:"last_feed_published_at,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	ConsumesQuota         bool      `json:"consumes_quota"`
-	NotificationEnabled   bool      `json:"notification_enabled,omitempty"`
+	// FeedSources 让编辑框读得回多来源订阅的完整名单，只有 feed_url 的话
+	// 一打开就只剩第一个来源，保存等于把其余的人删掉。
+	FeedSources         []rssWatchSourcePayload `json:"feed_sources,omitempty"`
+	LastFeedItemID      string                  `json:"last_feed_item_id,omitempty"`
+	LastFeedPublishedAt time.Time               `json:"last_feed_published_at,omitempty"`
+	CreatedAt           time.Time               `json:"created_at"`
+	ConsumesQuota       bool                    `json:"consumes_quota"`
+	NotificationEnabled bool                    `json:"notification_enabled,omitempty"`
 	// 响应必须和请求用同一个形状：存储层的 ReminderDeliveryTarget 只有 group_id/user_id，
 	// 没有 destination，直接回给前端会让编辑框读不出通知对象类型，一打开全是空行。
 	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
@@ -694,7 +710,8 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		}
 	}
 	item, err := manager.CreateRSSWatch(c.Request.Context(), assistant.RSSWatchCreateInput{
-		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle, JudgePrompt: payload.JudgePrompt,
+		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
 		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
 		ContextNamespace: repositoryWatchContextNamespace(set, profile.ID),
@@ -724,7 +741,8 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 		return
 	}
 	item, err := manager.UpdateRSSWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RSSWatchUpdateInput{
-		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle, JudgePrompt: payload.JudgePrompt,
+		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 	})
 	if err != nil {
@@ -847,8 +865,26 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
 		FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
+		FeedSources:         rssWatchSourcesForWeb(item),
 		NotificationEnabled: item.NotificationEnabled, NotificationTargets: reminderDeliveryTargetsForWeb(item),
 	}
+}
+
+// rssWatchSourcesForWeb 把订阅的来源列表转成前端形状。老记录没有来源列表，
+// assistant.ReminderFeedSources 会按单来源字段回落，这里不用另外兼容。
+func rssWatchSourcesForWeb(item assistant.Reminder) []rssWatchSourcePayload {
+	if item.Kind != assistant.ReminderKindRSSWatch {
+		return nil
+	}
+	stored := assistant.ReminderFeedSources(item)
+	if len(stored) == 0 {
+		return nil
+	}
+	sources := make([]rssWatchSourcePayload, 0, len(stored))
+	for _, source := range stored {
+		sources = append(sources, rssWatchSourcePayload{FeedURL: source.FeedURL, Source: source.Source, Handle: source.Handle, Name: source.Name})
+	}
+	return sources
 }
 
 func reminderDeliveryTargetsForWeb(item assistant.Reminder) []repositoryWatchTargetPayload {
