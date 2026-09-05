@@ -3178,6 +3178,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
 				newDianaRenderTool(r, event),
+				// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
+				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
+				newDianaHostStatsTool(r, event),
 			}
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))

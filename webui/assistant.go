@@ -255,6 +255,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/delete", h.deleteProfile)
 	router.POST(base+"/config/context-isolation", h.setContextIsolation)
 	router.POST(base+"/config/message-relays", h.setMessageRelays)
+	router.GET(base+"/agent-defaults", h.agentDefaults)
 	router.GET(base+"/features", h.featuresStatus)
 	router.GET(base+"/status", h.status)
 	router.GET(base+"/auto-info", h.autoInfo)
@@ -326,6 +327,25 @@ func (h *BotHandler) getConfig(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles()))
+}
+
+// agentDefaults 返回新建机器人时用的 Agent 推荐默认值。
+//
+// 存在的理由是「装完就能用」这件事对存量部署不成立：默认值只作用于新建配置，
+// 已经在跑的部署升级后不会凭空多出命令执行和文件写入（那是静默扩权）。于是
+// 老部署想要这些能力，就得知道该往白名单里填什么——这个接口把那份清单给出来，
+// 控制台据此提供一次「填入推荐默认值」，填完仍需用户自己点保存。
+//
+// 只读，不改任何东西：真正的授权动作发生在用户点保存的那一刻。
+func (h *BotHandler) agentDefaults(c *gin.Context) {
+	defaults := assistant.DefaultBotConfig()
+	c.JSON(http.StatusOK, gin.H{
+		"agent_command_allowlist":  defaults.AgentCommandAllowlist,
+		"agent_file_write_enabled": defaults.AgentFileWriteEnabled,
+		"agent_command_sandbox":    defaults.AgentCommandSandbox,
+		"agent_max_steps":          defaults.AgentMaxSteps,
+		"agent_command_timeout_ms": defaults.AgentCommandTimeoutMS,
+	})
 }
 
 // featuresStatus 返回当前 WebUI 暴露的 OneBot v11 机器人测试能力。
