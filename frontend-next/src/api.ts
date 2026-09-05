@@ -1855,9 +1855,15 @@ export interface AssistantUsersResponse {
   users: UserMemoryProfile[];
   total: number;
   query?: string;
+  /** 后端收敛后的排序键与方向；传了不认识的值会回落到最近更新倒序。 */
+  sort?: AssistantUsersSort;
+  order?: AssistantUsersOrder;
   limit: number;
   offset: number;
 }
+
+export type AssistantUsersSort = "updated" | "last_seen" | "favorability" | "messages";
+export type AssistantUsersOrder = "asc" | "desc";
 
 export interface AssistantUserDetailResponse {
   profile: UserMemoryProfile;
@@ -1865,8 +1871,15 @@ export interface AssistantUserDetailResponse {
   portrait_fields: PortraitFieldSpec[];
 }
 
-export function listAssistantUsers(query = "", limit = 50, offset = 0, profile = ""): Promise<AssistantUsersResponse> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+export function listAssistantUsers(
+  query = "",
+  limit = 50,
+  offset = 0,
+  profile = "",
+  sort: AssistantUsersSort = "updated",
+  order: AssistantUsersOrder = "desc"
+): Promise<AssistantUsersResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset), sort, order });
   if (query) {
     params.set("q", query);
   }

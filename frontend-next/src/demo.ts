@@ -621,6 +621,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/users") {
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
+    const sort = url.searchParams.get("sort") ?? "updated";
+    const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
+    const sortKeys: Record<string, (user: (typeof demoUsers)[number]) => number> = {
+      updated: (user) => Date.parse(user.updated_at ?? "") || 0,
+      last_seen: (user) => Date.parse(user.last_seen_at ?? "") || 0,
+      favorability: (user) => user.favorability ?? 0,
+      messages: (user) => user.message_count ?? 0
+    };
+    const keyOf = sortKeys[sort] ?? sortKeys.updated;
+    matched.sort((a, b) => (order === "asc" ? keyOf(a) - keyOf(b) : keyOf(b) - keyOf(a)));
     const users = matched.map((user) => ({
       ...user,
       memories: undefined,
@@ -628,7 +638,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       memory_count: user.memories?.length ?? 0,
       portrait_count: user.portrait?.length ?? 0
     }));
-    return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
+    return json({ users, total: matched.length, query: keyword || undefined, sort, order, limit: 50, offset: 0 });
   }
   if (path === "/api/assistant/user-names") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,6 +24,8 @@ type assistantUsersResponse struct {
 	Users  []assistantUserSummary `json:"users"`
 	Total  int                    `json:"total"`
 	Query  string                 `json:"query,omitempty"`
+	Sort   string                 `json:"sort"`
+	Order  string                 `json:"order"`
 	Limit  int                    `json:"limit"`
 	Offset int                    `json:"offset"`
 }
@@ -44,7 +47,9 @@ func (h *BotHandler) listAssistantUsers(c *gin.Context) {
 	query := strings.TrimSpace(c.Query("q"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	profiles, total, err := h.sqlite.ListUserMemories(c.Request.Context(), botProfileScope(c), query, limit, offset)
+	// 排序参数先收敛再用，非法值当默认排序处理，不给前端报错。
+	sort, order := storage.NormalizeUserMemorySort(c.Query("sort"), c.Query("order"))
+	profiles, total, err := h.sqlite.ListUserMemoriesSorted(c.Request.Context(), botProfileScope(c), query, sort, order, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -65,6 +70,8 @@ func (h *BotHandler) listAssistantUsers(c *gin.Context) {
 		Users:  users,
 		Total:  total,
 		Query:  query,
+		Sort:   sort,
+		Order:  order,
 		Limit:  limit,
 		Offset: offset,
 	})
