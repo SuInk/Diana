@@ -231,6 +231,11 @@ code {
   pointer-events: none;
 }
 
+.scope-content-pending .loading-skeleton,
+.scope-content-pending .skeleton,
+.scope-content-pending .event-detail-list[role="status"] {
+  visibility: visible;
+}
 .scope-progress {
   position: absolute;
   inset: auto 0 0;
@@ -1047,6 +1052,15 @@ code {
 .btn.ghost:hover:not(:disabled) {
   background: var(--surface-2);
   color: var(--text);
+}
+
+.btn.ghost.danger {
+  color: var(--err);
+}
+
+.btn.ghost.danger:hover:not(:disabled) {
+  background: var(--err-soft);
+  color: var(--err);
 }
 
 .btn.small {
@@ -2128,10 +2142,6 @@ a.nav-action {
   line-height: 1.45;
 }
 
-.settings-band-switch {
-  white-space: nowrap;
-}
-
 .bot-profile-grid {
   display: grid;
   /* auto-fit 让空轨道塌陷：只有一个机器人时卡片不会被挤在左边一小格。 */
@@ -2256,9 +2266,10 @@ a.nav-action {
   background: var(--bg-raised);
 }
 
-.bot-profile-configure {
+.bot-profile-actions .btn {
   flex: none;
-  width: auto;
+  min-width: 68px;
+  min-height: 30px;
 }
 
 /* 新增入口和机器人卡片同一网格，不额外套一层容器。 */
@@ -2603,7 +2614,7 @@ a.nav-action {
   display: grid;
   /* 每列至少 320px，且最多四列：再宽卡片也没有更多信息可放，
      只会把名称和右边的开关拉得越来越远。 */
-  grid-template-columns: repeat(auto-fill, minmax(clamp(320px, calc((100% - 3 * 14px) / 4), 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, max(320px, calc((100% - 3 * 14px) / 4))), 1fr));
   gap: 14px;
 }
 
@@ -4714,6 +4725,86 @@ a.nav-action {
   animation: shimmer 1.4s infinite;
 }
 
+.skeleton-block {
+  display: block;
+  flex: none;
+  max-width: 100%;
+  min-width: 0;
+  border-radius: 4px;
+}
+
+.skeleton-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.skeleton-text {
+  color: transparent !important;
+  user-select: none;
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.loading-skeleton {
+  min-width: 0;
+}
+
+.skeleton-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.loading-skeleton .bot-profile-select {
+  cursor: default;
+}
+
+.loading-skeleton .spark-bars .skeleton-block {
+  flex: 1;
+}
+
+.loading-skeleton .log-row > .skeleton-block {
+  align-self: center;
+}
+
+.loading-skeleton .group-header > .skeleton-block:last-child {
+  flex: 0 1 220px;
+}
+
+.skeleton-mobile-line {
+  display: none;
+}
+
+@media (max-width: 520px) {
+  .skeleton-mobile-line {
+    display: block;
+  }
+
+  .loading-skeleton .log-main > .skeleton-mobile-line {
+    margin-top: 3px;
+  }
+
+  .provider-view .row-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .provider-view .row-item .row-actions {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
 @keyframes shimmer {
   0% {
     background-position: 200% 0;
@@ -4909,7 +5000,7 @@ a.nav-action {
     align-items: start;
   }
 
-  .settings-band-switch {
+  .settings-band > .btn {
     grid-column: 2;
     justify-self: start;
   }

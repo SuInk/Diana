@@ -700,13 +700,12 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
-	ID                      string          `json:"id,omitempty"`
-	Name                    string          `json:"name,omitempty"`
-	Platform                string          `json:"platform,omitempty"`
-	AvatarURL               string          `json:"avatar_url,omitempty"`
-	ActiveProfileID         string          `json:"active_profile_id,omitempty"`
-	Profiles                []ConfigPayload `json:"profiles,omitempty"`
-	IsolatePlatformContexts *bool           `json:"isolate_platform_contexts,omitempty"`
+	ID              string          `json:"id,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	Platform        string          `json:"platform,omitempty"`
+	AvatarURL       string          `json:"avatar_url,omitempty"`
+	ActiveProfileID string          `json:"active_profile_id,omitempty"`
+	Profiles        []ConfigPayload `json:"profiles,omitempty"`
 	// MessageRelays 是跨机器人的消息互通链路，读接口一并回传给 WebUI。
 	MessageRelays                     []MessageRelayPair `json:"message_relays,omitempty"`
 	Enabled                           bool               `json:"enabled"`
@@ -1110,9 +1109,8 @@ const (
 )
 
 type ProfileSet struct {
-	ActiveID                string      `json:"active_id"`
-	Profiles                []BotConfig `json:"profiles"`
-	IsolatePlatformContexts *bool       `json:"isolate_platform_contexts,omitempty"`
+	ActiveID string      `json:"active_id"`
+	Profiles []BotConfig `json:"profiles"`
 	// MessageRelays 是「消息互通」的链路表。它跨机器人，不属于任何一台，所以
 	// 放在配置集这一层而不是单台机器人的配置里。
 	MessageRelays []MessageRelayPair `json:"message_relays,omitempty"`
@@ -1138,23 +1136,10 @@ var (
 func NewProfileSet(cfg BotConfig) ProfileSet {
 	profile := cfg.WithDefaults()
 	profile.ID = uuid.NewString()
-	isolate := true
 	return ProfileSet{
-		ActiveID:                profile.ID,
-		Profiles:                []BotConfig{profile},
-		IsolatePlatformContexts: &isolate,
+		ActiveID: profile.ID,
+		Profiles: []BotConfig{profile},
 	}
-}
-
-// PlatformContextsIsolated reports whether each bot profile gets its own
-// conversation namespace. Older profile sets default to isolation.
-func (s ProfileSet) PlatformContextsIsolated() bool {
-	return s.IsolatePlatformContexts == nil || *s.IsolatePlatformContexts
-}
-
-func (s ProfileSet) WithPlatformContextIsolation(enabled bool) ProfileSet {
-	s.IsolatePlatformContexts = &enabled
-	return s.WithDefaults()
 }
 
 // WithMessageRelays 换一整份互通配置。
@@ -1245,10 +1230,6 @@ func (s ProfileSet) Delete(id string) ProfileSet {
 
 // WithDefaults 补齐机器人配置集的默认字段、唯一 ID 和激活项。
 func (s ProfileSet) WithDefaults() ProfileSet {
-	if s.IsolatePlatformContexts == nil {
-		isolate := true
-		s.IsolatePlatformContexts = &isolate
-	}
 	s.MessageRelays = NormalizeMessageRelays(s.MessageRelays)
 	if len(s.Profiles) > 0 {
 		profiles := make([]BotConfig, len(s.Profiles))
@@ -1909,7 +1890,6 @@ func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload
 	}
 	payload := convert(current)
 	payload.ActiveProfileID = set.ActiveID
-	payload.IsolatePlatformContexts = copyBoolPointer(set.IsolatePlatformContexts)
 	payload.MessageRelays = append([]MessageRelayPair(nil), set.MessageRelays...)
 	payload.Profiles = make([]ConfigPayload, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {

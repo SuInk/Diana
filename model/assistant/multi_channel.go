@@ -18,8 +18,7 @@ const (
 )
 
 // ChannelBinding associates one transport with the persisted bot profile that
-// owns it. Isolation only affects conversation keys; routing always uses the
-// source profile so replies cannot cross platforms.
+// owns it. Conversation keys and reply routing always use the source profile.
 type ChannelBinding struct {
 	ProfileID string
 	Platform  string
@@ -29,12 +28,11 @@ type ChannelBinding struct {
 
 type MultiChannel struct {
 	bindings              []ChannelBinding
-	isolate               bool
 	reconnectInitialDelay time.Duration
 	reconnectMaxDelay     time.Duration
 }
 
-func NewMultiChannel(bindings []ChannelBinding, isolate ...bool) *MultiChannel {
+func NewMultiChannel(bindings []ChannelBinding) *MultiChannel {
 	clean := make([]ChannelBinding, 0, len(bindings))
 	for _, binding := range bindings {
 		if binding.Channel == nil {
@@ -45,13 +43,8 @@ func NewMultiChannel(bindings []ChannelBinding, isolate ...bool) *MultiChannel {
 		binding.Name = strings.TrimSpace(binding.Name)
 		clean = append(clean, binding)
 	}
-	isolateContexts := true
-	if len(isolate) > 0 {
-		isolateContexts = isolate[0]
-	}
 	return &MultiChannel{
 		bindings:              clean,
-		isolate:               isolateContexts,
 		reconnectInitialDelay: defaultChannelReconnectInitialDelay,
 		reconnectMaxDelay:     defaultChannelReconnectMaxDelay,
 	}
@@ -70,9 +63,7 @@ func (c *MultiChannel) Connect(ctx context.Context, handler EventHandler) error 
 			wrapped := func(eventCtx context.Context, event MessageEvent) error {
 				event.Platform = binding.Platform
 				event.ProfileID = binding.ProfileID
-				if c.isolate && event.ContextNamespace == "" {
-					event.ContextNamespace = binding.ProfileID
-				}
+				event.ContextNamespace = binding.ProfileID
 				return handler(eventCtx, event)
 			}
 			c.connectBinding(ctx, binding, wrapped)

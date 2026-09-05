@@ -166,7 +166,11 @@
           </span>
         </div>
         <p v-if="changelogError" class="muted" style="font-size: 13px; margin: 0">{{ changelogError }}</p>
-        <div v-else-if="!loaded" class="skeleton" style="height: 80px"></div>
+        <ul v-else-if="!loaded" class="changelog-list release-list version-history-list" role="status" aria-label="正在加载版本历史">
+          <li v-for="n in 5" :key="n" class="release-item" aria-hidden="true">
+            <div class="release-row"><SkeletonBlock width="80px" height="20px" /><SkeletonBlock width="140px" height="18px" /></div>
+          </li>
+        </ul>
 
         <template v-else-if="kind === 'releases'">
           <p v-if="!releases.length" class="muted" style="font-size: 12.5px; margin: 0">暂无 Release 记录。</p>
@@ -255,6 +259,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ArrowRight, ChevronDown, Container, Copy, Download, History, LoaderCircle, RefreshCcw, RefreshCw, ShieldAlert, ShieldCheck } from "@lucide/vue";
 import Modal from "./Modal.vue";
+import SkeletonBlock from "./SkeletonBlock.vue";
 import {
   checkForUpdate,
   downloadSystemUpdate,

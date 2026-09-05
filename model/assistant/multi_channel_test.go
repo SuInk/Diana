@@ -118,25 +118,29 @@ func TestMultiChannelRoutesRepliesToSourceProfile(t *testing.T) {
 	}
 }
 
-func TestMultiChannelCanIsolateOrShareConversationKeys(t *testing.T) {
+func TestMultiChannelAlwaysIsolatesConversationKeys(t *testing.T) {
 	tests := []struct {
-		name     string
-		isolate  bool
-		wantSame bool
+		name      string
+		platform  string
+		kind      EventKind
+		namespace string
 	}{
-		{name: "isolated by default", isolate: true, wantSame: false},
-		{name: "shared when disabled", isolate: false, wantSame: true},
+		{name: "cross-platform groups", platform: PlatformTelegram, kind: EventKindGroup},
+		{name: "same-platform groups", platform: PlatformOneBotV11, kind: EventKindGroup},
+		{name: "cross-platform private chats", platform: PlatformTelegram, kind: EventKindPrivate},
+		{name: "same-platform private chats", platform: PlatformOneBotV11, kind: EventKindPrivate},
+		{name: "shared namespace cannot bypass isolation", platform: PlatformTelegram, kind: EventKindGroup, namespace: "shared"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			oneBot := &multiChannelProbe{event: MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "200", MessageID: "onebot-message"}}
-			tg := &multiChannelProbe{event: MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "200", MessageID: "tg-message"}}
+			oneBot := &multiChannelProbe{event: MessageEvent{Kind: tt.kind, GroupID: "100", UserID: "200", MessageID: "first-message", ContextNamespace: tt.namespace}}
+			other := &multiChannelProbe{event: MessageEvent{Kind: tt.kind, GroupID: "100", UserID: "200", MessageID: "second-message", ContextNamespace: tt.namespace}}
 			channel := NewMultiChannel([]ChannelBinding{
 				{ProfileID: "onebot-profile", Platform: PlatformOneBotV11, Channel: oneBot},
-				{ProfileID: "tg-profile", Platform: PlatformTelegram, Channel: tg},
-			}, tt.isolate)
+				{ProfileID: "other-profile", Platform: tt.platform, Channel: other},
+			})
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			events := make(chan MessageEvent, 2)
 			done := make(chan error, 1)
@@ -146,21 +150,45 @@ func TestMultiChannelCanIsolateOrShareConversationKeys(t *testing.T) {
 					return nil
 				})
 			}()
-			first := <-events
-			second := <-events
+			received := make([]MessageEvent, 0, 2)
+			for len(received) < 2 {
+				select {
+				case event := <-events:
+					received = append(received, event)
+				case <-ctx.Done():
+					t.Fatal("channels did not deliver both events")
+				}
+			}
+			first, second := received[0], received[1]
 			cancel()
 			select {
 			case <-done:
 			case <-time.After(time.Second):
 				t.Fatal("multi channel did not stop")
 			}
-			if first.Platform == second.Platform || first.ProfileID == second.ProfileID {
+			if first.ProfileID == second.ProfileID || first.ContextNamespace != first.ProfileID || second.ContextNamespace != second.ProfileID {
 				t.Fatalf("source metadata missing: %#v %#v", first, second)
 			}
-			if gotSame := sessionKey(first) == sessionKey(second); gotSame != tt.wantSame {
-				t.Fatalf("session keys %q and %q, same=%v want %v", sessionKey(first), sessionKey(second), gotSame, tt.wantSame)
+			if sessionKey(first) == sessionKey(second) {
+				t.Fatalf("conversation keys must differ: %q and %q", sessionKey(first), sessionKey(second))
 			}
 		})
+	}
+}
+
+func TestRuntimeBindsConversationNamespaceToSourceProfile(t *testing.T) {
+	runtime := NewRuntime(BotConfig{ID: "qq", Platform: PlatformOneBotV11}, NewMultiChannel([]ChannelBinding{
+		{ProfileID: "qq", Platform: PlatformOneBotV11, Channel: &recordingChannel{}},
+		{ProfileID: "tg", Platform: PlatformTelegram, Channel: &recordingChannel{}},
+	}), NewPluginManager(), nil, nil, nil, nil)
+	for _, namespace := range []string{"", "shared", "qq", "tg"} {
+		event := runtime.bindInboundEventIdentity(MessageEvent{
+			Kind: EventKindGroup, GroupID: "100", UserID: "200",
+			Platform: PlatformTelegram, ProfileID: "tg", ContextNamespace: namespace,
+		})
+		if event.ContextNamespace != "tg" || event.ProfileID != "tg" || event.Platform != PlatformTelegram {
+			t.Fatalf("namespace %q changed source identity: %#v", namespace, event)
+		}
 	}
 }
 

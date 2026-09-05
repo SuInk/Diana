@@ -23,7 +23,8 @@
             <input v-model="query" class="input" placeholder="按账号 / 昵称搜索…" @keydown.enter="search" />
           </div>
           <button class="btn ghost small" type="button" :disabled="loading" @click="search">搜索</button>
-          <span class="muted" style="font-size: 12.5px">共 {{ total }} 人</span>
+          <SkeletonBlock v-if="loading && !users.length" width="64px" height="18px" />
+          <span v-else class="muted" style="font-size: 12.5px">共 {{ total }} 人</span>
 
           <div class="cluster user-sort">
             <div class="segmented" role="radiogroup" aria-label="人员列表排序">
@@ -89,18 +90,17 @@
           :title="query ? '没有匹配的人员' : '暂无人员画像'"
           :description="query ? '换个关键词试试。' : '机器人开始和大家聊天后，会在这里沉淀每个人的长期记忆。'"
         />
-        <div v-else class="stack">
-          <div class="skeleton" style="height: 48px"></div>
-          <div class="skeleton" style="height: 48px"></div>
-          <div class="skeleton" style="height: 48px"></div>
-        </div>
+        <LoadingSkeleton v-else kind="users" :count="6" label="正在加载人员" />
       </div>
     </section>
 
     <Modal v-if="selected" :title="detailTitle" wide @close="closeDetail">
-      <div v-if="detailLoading" class="stack">
-        <div class="skeleton" style="height: 48px"></div>
-        <div class="skeleton" style="height: 120px"></div>
+      <div v-if="detailLoading" class="stack" role="status" aria-label="正在加载人员详情">
+        <div class="cluster"><SkeletonBlock v-for="n in 3" :key="n" width="80px" height="22px" /></div>
+        <SkeletonBlock width="140px" height="20px" />
+        <LoadingSkeleton kind="users" :count="3" />
+        <SkeletonBlock width="140px" height="20px" />
+        <LoadingSkeleton kind="notebook" :count="2" />
       </div>
       <div v-else-if="detail" class="stack" style="gap: 16px">
         <fieldset v-if="draft" class="stack user-editor" :disabled="saving">
@@ -271,6 +271,8 @@ import {
 import { formatNumber, formatRelative, formatTime } from "../format";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import Modal from "../components/Modal.vue";
 
 const PAGE_SIZE = 50;
@@ -286,7 +288,7 @@ const users = ref<UserMemoryProfile[]>([]);
 const total = ref(0);
 const query = ref("");
 const activeQuery = ref("");
-const loading = ref(false);
+const loading = ref(true);
 const sortBy = ref<AssistantUsersSort>("updated");
 const order = ref<AssistantUsersOrder>("desc");
 const selected = ref<UserMemoryProfile | null>(null);
@@ -489,7 +491,6 @@ onMounted(() => {
     width: 100%;
   }
 }
-
 .user-row {
   display: flex;
   align-items: center;

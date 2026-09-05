@@ -23,12 +23,15 @@
       </div>
     </header>
 
-    <div v-if="loaded">
+    <div :aria-busy="!loaded || undefined">
       <div class="group-list-toolbar">
         <div class="group-list-summary">
+          <SkeletonBlock v-if="!loaded" width="210px" height="27px" />
+          <template v-else>
           <strong>{{ liveAvailable ? joinedCount : groups.length }}</strong>
           <span>{{ liveAvailable ? "个已加入群" : "个已保存配置" }}</span>
           <span class="muted">· {{ configuredCount }} 个独立配置</span>
+          </template>
         </div>
         <div class="group-list-actions">
           <label class="group-search">
@@ -47,7 +50,8 @@
         <span>{{ syncWarning }}</span>
       </div>
 
-      <div v-if="filteredGroups.length > 0" class="group-grid">
+      <LoadingSkeleton v-if="!loaded" kind="groups" label="正在加载群列表" />
+      <div v-else-if="filteredGroups.length > 0" class="group-grid">
         <section v-for="group in filteredGroups" :key="group.group_id" class="group-card">
           <div class="group-card-head">
             <div class="group-identity">
@@ -119,10 +123,14 @@
       />
       <EmptyState v-else title="机器人还没有加入群" hint="机器人加入群后会自动显示在这里，也可以输入群号预先创建配置。" />
     </div>
-    <div v-else class="group-grid">
-      <div class="skeleton" style="height: 180px"></div>
-      <div class="skeleton" style="height: 180px"></div>
-    </div>
+
+    <Modal v-if="pendingDelete" title="删除群配置" @close="!deleting && (pendingDelete = null)">
+      <p>删除 {{ pendingDelete.group_name || pendingDelete.group_id }} 的独立配置？删除后恢复全局规则（可能重新启用回复），不会退出群聊或删除聊天记录。已加入的群仍会显示。</p>
+      <template #footer>
+        <button class="btn ghost" :disabled="deleting" @click="pendingDelete = null">取消</button>
+        <button class="btn" :disabled="deleting" @click="removeGroup"><Trash2 :size="15" />{{ deleting ? "删除中…" : "删除配置" }}</button>
+      </template>
+    </Modal>
 
     <Modal v-if="pendingDelete" title="删除群配置" @close="!deleting && (pendingDelete = null)">
       <p>删除 {{ pendingDelete.group_name || pendingDelete.group_id }} 的独立配置？删除后恢复全局规则（可能重新启用回复），不会退出群聊或删除聊天记录。已加入的群仍会显示。</p>
@@ -375,6 +383,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { botScope } from "../bot-scope";
 import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
 import {

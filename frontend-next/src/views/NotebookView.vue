@@ -88,10 +88,7 @@
                 : '也可以直接点「新增笔记」手动记一条。'
           "
         />
-        <div v-else class="stack">
-          <div class="skeleton" style="height: 48px"></div>
-          <div class="skeleton" style="height: 48px"></div>
-        </div>
+        <LoadingSkeleton v-else kind="notebook" :count="5" label="正在加载笔记本" />
       </div>
     </section>
 
@@ -197,6 +194,7 @@ import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import AppSelect from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import Modal from "../components/Modal.vue";
 
 const scopes = ref<NotebookScopeSummary[]>([]);
@@ -204,7 +202,7 @@ const entries = ref<NotebookEntry[]>([]);
 const scope = ref("");
 const query = ref("");
 const includeDeleted = ref(false);
-const loading = ref(false);
+const loading = ref(true);
 const saving = ref(false);
 const editing = ref(false);
 const creating = ref(false);

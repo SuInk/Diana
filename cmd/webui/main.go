@@ -101,7 +101,7 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer) func(a
 			// 日志里看得见原因,而不是一个对不上任何配置的神秘 401。
 			oneBotServer.SetConfig(assistant.OneBotConfig{})
 		}
-		return assistant.NewMultiChannel(bindings, set.PlatformContextsIsolated())
+		return assistant.NewMultiChannel(bindings)
 	}
 }
 

@@ -2,14 +2,14 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <div>
+  <div class="provider-view">
     <header class="view-header">
       <div class="view-title">
         <h1>提供商</h1>
         <p>管理提供商、凭据、分组与可用模型；机器人按用途选择提供商和模型</p>
       </div>
       <div class="view-actions">
-        <button class="btn" type="button" @click="exportProfiles">
+        <button class="btn" type="button" :disabled="!profileSet" @click="exportProfiles">
           <Download :size="15" aria-hidden="true" />
           导出
         </button>
@@ -33,6 +33,7 @@
           <span v-if="profileSet" class="badge">{{ profiles.length }} 套</span>
         </div>
         <div class="card-body stack" style="gap: 14px">
+          <LoadingSkeleton v-if="loading && !profileSet" kind="providers" label="正在加载提供商" />
           <div v-for="section in groupedProfiles" :key="section.group" class="stack" style="gap: 6px">
             <div class="group-header">
               <span>{{ groupLabel(section.group) }}</span>
@@ -87,7 +88,10 @@
             </div>
             </div>
           </div>
-          <EmptyState v-if="profiles.length === 0" title="还没有配置档" hint="点击右上角「新建配置」开始" />
+          <EmptyState v-if="!loading && loadError && !profileSet" title="暂时无法加载提供商" :hint="loadError">
+            <button class="btn" type="button" @click="reload().catch(() => undefined)"><RefreshCw :size="15" aria-hidden="true" />重试</button>
+          </EmptyState>
+          <EmptyState v-else-if="!loading && profiles.length === 0" title="还没有配置档" hint="点击右上角「新建配置」开始" />
         </div>
       </section>
 
@@ -356,6 +360,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import LLMOAuthPicker from "../components/LLMOAuthPicker.vue";
 import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload, X } from "@lucide/vue";
 import {
@@ -425,6 +430,8 @@ const emptyForm: LLMFormState = {
 };
 
 const profileSet = ref<LLMConfig | null>(null);
+const loading = ref(true);
+const loadError = ref("");
 const busy = ref(false);
 const editorOpen = ref(false);
 const editingID = ref<string | undefined>(undefined);
@@ -567,7 +574,16 @@ function providerLabel(provider: Provider): string {
 }
 
 async function reload(): Promise<void> {
-  profileSet.value = await getConfig();
+  loading.value = true;
+  loadError.value = "";
+  try {
+    profileSet.value = await getConfig();
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : "加载配置失败";
+    throw error;
+  } finally {
+    loading.value = false;
+  }
 }
 
 function startCreate(): void {

@@ -432,36 +432,31 @@ func TestBotPlatforms(t *testing.T) {
 	}
 }
 
-func TestBotContextIsolationEndpointPersistsAndRebuildsChannels(t *testing.T) {
+func TestBotContextIsolationEndpointRemoved(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	profiles := NewMemoryBotProfileStore(assistant.DefaultBotConfig())
 	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
 	handler.SetProfileStore(profiles)
-	var rebuilt assistant.ProfileSet
-	handler.SetChannelSetFactory(func(set assistant.ProfileSet) assistant.Channel {
-		rebuilt = set
+	rebuilt := false
+	handler.SetChannelSetFactory(func(assistant.ProfileSet) assistant.Channel {
+		rebuilt = true
 		return fakeChannel{}
 	})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/assistant/config/context-isolation", bytes.NewReader([]byte(`{"enabled":false}`)))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	for _, body := range []string{`{"enabled":false}`, `{"enabled":true}`} {
+		req := httptest.NewRequest(http.MethodPost, "/api/assistant/config/context-isolation", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
 	}
-	if profiles.Profiles().PlatformContextsIsolated() || rebuilt.PlatformContextsIsolated() {
-		t.Fatalf("stored=%v rebuilt=%v, want both false", profiles.Profiles().PlatformContextsIsolated(), rebuilt.PlatformContextsIsolated())
-	}
-	var payload assistant.ConfigPayload
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload.IsolatePlatformContexts == nil || *payload.IsolatePlatformContexts {
-		t.Fatalf("response isolation=%#v, want false", payload.IsolatePlatformContexts)
+	if rebuilt {
+		t.Fatal("removed endpoint must not rebuild channels")
 	}
 }
 
