@@ -34,6 +34,7 @@ type chatInSettings struct {
 	Enabled     bool
 	Natural     bool
 	SuperActive bool
+	Assistant   bool
 	Level       ChatInLevel
 	Threshold   float64
 	Chance      float64
@@ -156,6 +157,11 @@ func clampChatInRatio(value float64) float64 {
 // chatInSettings 返回本条配置生效的闲聊插话参数。
 func (cfg BotConfig) chatInSettings() chatInSettings {
 	settings := chatInSettingsFrom(cfg.ChatInEnabled, cfg.ChatInLevel, cfg.ChatInThreshold, cfg.ChatInChance, cfg.ChatInCooldownSeconds)
+	if cfg.ResponseMode.Normalized() == ResponseModeAssistant {
+		settings = chatInSettingsFrom(boolPointer(true), ChatInLevelLow, 0, 0, 0)
+		settings.Assistant = true
+		return settings
+	}
 	if cfg.ResponseMode.Normalized() == ResponseModeSuperActive {
 		return chatInSettings{Enabled: true, SuperActive: true, Level: ChatInLevelMax, Threshold: 0.5, Chance: 1}
 	}
