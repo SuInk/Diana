@@ -145,6 +145,8 @@ export interface BotProfileConfig {
   telegram_bot_token_configured?: boolean;
   telegram_api_base_url?: string;
   telegram_proxy_url?: string;
+  /** 默认抑制其他 Bot 的群消息；语义判断提到本机器人时放行。 */
+  telegram_suppress_bot_messages?: boolean;
   /** QQ 开放平台机器人，出站 WebSocket 网关。 */
   qq_app_id?: string;
   qq_app_secret?: string;
