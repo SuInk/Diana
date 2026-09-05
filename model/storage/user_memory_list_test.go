@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -166,5 +167,77 @@ VALUES ('u1', '老用户', 42, 7, '[]', '', '2026-08-24T00:00:00Z')`); err != ni
 	}
 	if _, ok, err := store.GetUserMemory(ctx, "bot-telegram", "u1"); err != nil || ok {
 		t.Fatalf("另一台机器人不该凭空拿到这段关系: ok=%v err=%v", ok, err)
+	}
+}
+
+// 列表排序由 SQL 做：前端只能看到当前页，页内排序等于排了个假的。空的活跃时间
+// 不管正序倒序都得沉底，否则「最早活跃」榜首全是从没说过话的人。
+func TestSQLiteStoreListUserMemoriesSorting(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sort.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	seed := func(userID string, favorability int, messages int, at int64) {
+		for i := 0; i < messages; i++ {
+			event := assistant.MessageEvent{
+				Kind:       assistant.EventKindGroup,
+				GroupID:    "20001",
+				UserID:     userID,
+				SenderName: userID,
+				MessageID:  fmt.Sprintf("%s-m%d", userID, i),
+				RawMessage: fmt.Sprintf("%s 的第 %d 条发言", userID, i),
+				Time:       at,
+			}
+			if _, err := store.UpdateUserMemory(ctx, event, assistant.UserMemoryUpdate{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		score := favorability
+		admin := assistant.MessageEvent{Kind: assistant.EventKindGroup, GroupID: "20001", UserID: userID, SenderName: userID}
+		if _, err := store.UpdateUserMemory(ctx, admin, assistant.UserMemoryUpdate{SetFavorability: &score, Administrative: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("u-chatty", 10, 3, 1_700_000_100)
+	seed("u-liked", 50, 1, 1_700_000_050)
+	seed("u-silent", 30, 0, 0)
+
+	ids := func(sort, order string) []string {
+		profiles, _, err := store.ListUserMemoriesSorted(ctx, "", "", sort, order, 10, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(profiles))
+		for _, profile := range profiles {
+			out = append(out, profile.UserID)
+		}
+		return out
+	}
+
+	if got := ids("favorability", "desc"); !reflect.DeepEqual(got, []string{"u-liked", "u-silent", "u-chatty"}) {
+		t.Fatalf("好感度倒序 = %v", got)
+	}
+	if got := ids("favorability", "asc"); !reflect.DeepEqual(got, []string{"u-chatty", "u-silent", "u-liked"}) {
+		t.Fatalf("好感度正序 = %v", got)
+	}
+	if got := ids("messages", "desc"); !reflect.DeepEqual(got, []string{"u-chatty", "u-liked", "u-silent"}) {
+		t.Fatalf("消息数倒序 = %v", got)
+	}
+	if got := ids("last_seen", "desc"); !reflect.DeepEqual(got, []string{"u-chatty", "u-liked", "u-silent"}) {
+		t.Fatalf("最近活跃倒序 = %v", got)
+	}
+	if got := ids("last_seen", "asc"); !reflect.DeepEqual(got, []string{"u-liked", "u-chatty", "u-silent"}) {
+		t.Fatalf("最早活跃正序 = %v", got)
+	}
+	// 不认识的排序键回落到「最近更新 · 倒序」，不能报错也不能把参数拼进 SQL。
+	injected := ids("favorability; DROP TABLE user_profiles", "desc")
+	if len(injected) != 3 {
+		t.Fatalf("非法排序键没有回落到默认排序: %v", injected)
+	}
+	if sort, order := NormalizeUserMemorySort("FAVORABILITY", "ASC"); sort != "favorability" || order != "asc" {
+		t.Fatalf("NormalizeUserMemorySort 大小写不敏感失败: %s/%s", sort, order)
 	}
 }
