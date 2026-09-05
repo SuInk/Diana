@@ -579,7 +579,8 @@
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.natural_reply_split_enabled" type="checkbox" />
-                  <span>自然分条</span>
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自然分条</span>
                 </label>
                 <span class="hint">
                   按模型排的换行、以及句号边界，把一条回复分成几条发，像真人连发那样。
