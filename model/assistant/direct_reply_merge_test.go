@@ -22,6 +22,14 @@ type directReplyMergeProvider struct {
 }
 
 func (p *directReplyMergeProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	for _, message := range req.Messages {
+		if strings.Contains(message.Content, directReplyTopicPrompt) {
+			return &llm.GenerateResponse{Text: `{"relation":"supplement","confidence":0.99}`}, nil
+		}
+		if strings.Contains(message.Content, "你是机器人回复的发送前审核器") {
+			return &llm.GenerateResponse{Text: `{"should_send":true,"confidence":0.99,"account_safe":true,"count_refusal":false}`}, nil
+		}
+	}
 	p.mu.Lock()
 	p.calls++
 	call := p.calls
@@ -127,7 +135,7 @@ func TestDirectReplyMergesNewDirectedFollowUpWithoutDroppingRegeneratedReply(t *
 		t.Fatal("first reply generation did not start")
 	}
 
-	followUp := directedGroupMessage("follow-up", "user-1", "再说下 yjx 是什么意思")
+	followUp := directedGroupMessage("follow-up", "user-1", "再举一个 stdout 的例子")
 	runtime.noteDirectedInbound(followUp)
 	_, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), followUp)
 	if handled || outcome != "merged_into_reply" {
@@ -153,7 +161,7 @@ func TestDirectReplyMergesNewDirectedFollowUpWithoutDroppingRegeneratedReply(t *
 	for _, message := range requests[3].Messages {
 		joined += "\n" + message.Content
 	}
-	if !strings.Contains(joined, "当前同轮补充消息") || !strings.Contains(joined, "再说下 yjx 是什么意思") {
+	if !strings.Contains(joined, "当前同轮补充消息") || !strings.Contains(joined, "再举一个 stdout 的例子") {
 		t.Fatalf("regenerated prompt missed directed follow-up: %s", joined)
 	}
 }
