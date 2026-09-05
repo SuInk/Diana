@@ -208,3 +208,90 @@ func TestEventRecordTextKeepsSubstitutedText(t *testing.T) {
 		t.Fatalf("record text = %q", record.Text)
 	}
 }
+
+// QQ 的分享卡片 PlainText 一个字都不写，控制台上只剩一个 [CQ:json,...]。显示层要从
+// 卡片里挖出标题和来源。
+func TestDisplayEventTextRendersCards(t *testing.T) {
+	cases := []struct {
+		name  string
+		event MessageEvent
+		want  string
+	}{
+		{
+			name: "转发的图文卡片取 meta 里的标题和来源",
+			event: MessageEvent{Segments: []MessageSegment{{Type: "json", Data: map[string]string{
+				"data": `{"app":"com.tencent.structmsg","prompt":"[分享]哥几个这期我是真想退出了","meta":{"news":{"tag":"哔哩哔哩","title":"哥几个这期我是真想退出了","desc":"UP主：渡梦如夏","jumpUrl":"https://b23.tv/x"}}}`,
+			}}}},
+			want: "[卡片·哔哩哔哩] 哥几个这期我是真想退出了 — UP主：渡梦如夏",
+		},
+		{
+			name: "meta 容器名认不完，按键名排序挨个试，取第一个解得出标题的",
+			event: MessageEvent{Segments: []MessageSegment{{Type: "json", Data: map[string]string{
+				"data": `{"app":"com.tencent.miniapp_01","meta":{"detail_1":{"title":"某小程序","desc":"点开看看"},"zzz_other":{"title":"不该取到这个"}}}`,
+			}}}},
+			want: "[卡片] 某小程序 — 点开看看",
+		},
+		{
+			name: "标题和描述一样时不重复写",
+			event: MessageEvent{Segments: []MessageSegment{{Type: "json", Data: map[string]string{
+				"data": `{"meta":{"news":{"title":"同一句话","desc":"同一句话"}}}`,
+			}}}},
+			want: "[卡片] 同一句话",
+		},
+		{
+			name: "meta 解不出来时退回 QQ 自己的一行摘要",
+			event: MessageEvent{Segments: []MessageSegment{{Type: "json", Data: map[string]string{
+				"data": `{"app":"com.tencent.qqav.groupvideo","prompt":"[群视频]邀请你加入","meta":{}}`,
+			}}}},
+			want: "[卡片] [群视频]邀请你加入",
+		},
+		{
+			name: "卡片解析不了时不写出半截 JSON",
+			event: MessageEvent{Segments: []MessageSegment{
+				{Type: "json", Data: map[string]string{"data": "{不是合法 JSON"}},
+				textSegment("看看这个"),
+			}},
+			want: "[卡片] 看看这个",
+		},
+		{
+			name: "xml 卡片取 brief——那就是客户端在聊天列表里显示的那句",
+			event: MessageEvent{Segments: []MessageSegment{{Type: "xml", Data: map[string]string{
+				"data": `<?xml version="1.0"?><msg serviceID="1" title="通用" brief="[聊天记录]群友们的对话"><item/></msg>`,
+			}}}},
+			want: "[卡片] [聊天记录]群友们的对话",
+		},
+		{
+			name: "合并转发不再摊出那串 resid",
+			event: MessageEvent{Segments: []MessageSegment{{Type: "forward", Data: map[string]string{
+				"id": "WpH3vkLdEPC7uJdgryfQ0/wjIKA1TybbBHXwIeJDTiOv9grWdElUZL9zn+jeVaES",
+			}}}},
+			want: "[合并转发]",
+		},
+		{
+			name: "合并转发带摘要时用摘要",
+			event: MessageEvent{Segments: []MessageSegment{{Type: "forward", Data: map[string]string{
+				"id": "WpH3vk", "summary": "群聊的聊天记录",
+			}}}},
+			want: "群聊的聊天记录",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := DisplayEventText(testCase.event, nil); got != testCase.want {
+				t.Fatalf("text = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+// 给模型的正文不受影响：卡片内容由链接解析那条路负责，合并转发的 resid 也照旧。
+func TestPlainTextLeavesCardsAndForwardsAlone(t *testing.T) {
+	event := MessageEvent{Segments: []MessageSegment{
+		{Type: "json", Data: map[string]string{"data": `{"meta":{"news":{"title":"标题"}}}`}},
+		{Type: "forward", Data: map[string]string{"id": "WpH3vk"}},
+	}}
+	if got := PlainText(event.Segments); got != "[合并转发:WpH3vk]" {
+		t.Fatalf("plain text = %q", got)
+	}
+}
