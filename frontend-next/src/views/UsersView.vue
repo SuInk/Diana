@@ -144,7 +144,7 @@
           </h3>
           <template v-if="recentOpen">
             <p class="muted" style="font-size: 12px; margin: 0 0 8px">
-              这个人最近说过的原话，原样留存最近 20 条，不进模型上下文，只用于排查。
+              这个人最近说过的话，只留最近 20 条，@ 和引用已还原成昵称；不进模型上下文，只用于排查。
             </p>
             <div class="stack" style="gap: 8px">
               <article v-for="(memory, index) in detail.profile.memories" :key="index" class="memory-item">

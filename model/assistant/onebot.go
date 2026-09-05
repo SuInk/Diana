@@ -650,8 +650,25 @@ func AtMentionText(qq, name string) string {
 	return "@" + name + "（" + qq + "）"
 }
 
+// AtMentionNameResolver 给没带昵称的 at 段补一个名字。平台自己在 at 段里给了名字
+// 时不会被调用，查不到名字返回空串即可。
+type AtMentionNameResolver func(userID string) string
+
+// plainTextOptions 调整两处标记的渲染方式。零值等于 PlainText 的原行为：at 段只有
+// 号码时就写号码，引用段写成给模型看的 [diana-reply:ID]。
+type plainTextOptions struct {
+	// resolveName 只在 at 段自己没带昵称时被调用。
+	resolveName AtMentionNameResolver
+	// renderReply 换掉引用段的渲染。返回空串表示这一段不写出来。
+	renderReply func(messageID string) string
+}
+
 // PlainText 将 OneBot segment 列表转换为可读纯文本。
 func PlainText(segments []MessageSegment) string {
+	return plainTextWithOptions(segments, plainTextOptions{})
+}
+
+func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) string {
 	var builder strings.Builder
 	for _, segment := range segments {
 		switch segment.Type {
@@ -659,7 +676,11 @@ func PlainText(segments []MessageSegment) string {
 			builder.WriteString(segment.Data["text"])
 		case "at":
 			if qq := segment.Data["qq"]; qq != "" && qq != "all" {
-				builder.WriteString(AtMentionText(qq, AtMentionName(segment)))
+				name := AtMentionName(segment)
+				if name == "" && options.resolveName != nil {
+					name = strings.TrimSpace(options.resolveName(qq))
+				}
+				builder.WriteString(AtMentionText(qq, name))
 				builder.WriteString(" ")
 			}
 		case "image":
@@ -684,6 +705,10 @@ func PlainText(segments []MessageSegment) string {
 			builder.WriteString("]")
 		case "reply":
 			if id := segment.Data["id"]; id != "" {
+				if options.renderReply != nil {
+					builder.WriteString(options.renderReply(id))
+					break
+				}
 				builder.WriteString(replyMarkerPrefix)
 				builder.WriteString(id)
 				builder.WriteString("]")

@@ -1007,3 +1007,73 @@ VALUES (?, 'group:765205730', 'group', ?, '765205730', '494942782', ?, ?, ?, 0, 
 		t.Fatalf("计数 %d 和列表 %d 对不上", page.FilteredTotal, len(page.Events))
 	}
 }
+
+// 事件列表的正文要把 at 和引用都渲染成人能读的样子：@ 补昵称由 applyMentionNames
+// 负责，引用标记则要靠事件里带的被引用消息写成「回复 某人：原话」。
+func TestListInboundEventDetailsRendersMentionsAndReplies(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-markers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	for _, seed := range []struct{ userID, displayName string }{
+		{"3129583166", "小明"},
+		{"10002", "阿花"},
+	} {
+		if _, err := store.db.ExecContext(ctx, `
+INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES (?, ?, 0, 0, '[]', ?)
+`, seed.userID, seed.displayName, now.Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	event := assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "10003", MessageID: "message-1",
+		SenderName: "阿强", Time: now.Unix(),
+		Segments: []assistant.MessageSegment{
+			{Type: "reply", Data: map[string]string{"id": "message-0"}},
+			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "text", Data: map[string]string{"text": "你也去吗"}},
+		},
+		Quoted: &assistant.QuotedMessage{
+			MessageID: "message-0", UserID: "10002",
+			Segments: []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "下周要去上海出差"}}},
+		},
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+VALUES ('markers', 'group:20001', 'group', '20001', '10003', 'message-1', '阿强', ?, ?, ?, ?)
+`, now.Unix(), "[diana-reply:message-0]@3129583166 你也去吗", string(payload), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES ('markers', 'group:20001', 'group', '20001', '10003', 'message-1', ?, ?, 0,
+  'done', 0, ?, 'replied', ?, ?, ?)
+`, now.Unix(), string(payload), now.UnixNano(), now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Minute), Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[回复 阿花：下周要去上海出差] @小明（3129583166） 你也去吗"
+	if len(page.Events) != 1 {
+		t.Fatalf("events = %#v", page.Events)
+	}
+	if page.Events[0].Text != want {
+		t.Fatalf("text = %q, want %q", page.Events[0].Text, want)
+	}
+}
