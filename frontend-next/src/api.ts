@@ -1329,21 +1329,6 @@ export function saveUpdateGitHubToken(token: string, clear = false): Promise<Upd
 	});
 }
 
-export interface GitHubMirror {
-	name: string;
-	base_url: string;
-}
-
-export interface GitHubMirrorStatus {
-	mode: string;
-	mirrors: GitHubMirror[];
-	resolved?: string;
-}
-
-export function getUpdateMirrors(): Promise<GitHubMirrorStatus> {
-	return requestJSON<GitHubMirrorStatus>("/api/system/update/mirrors");
-}
-
 export function getUpdatePolicy(): Promise<UpdatePolicy> {
 	return requestJSON<UpdatePolicy>("/api/system/update/policy");
 }

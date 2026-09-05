@@ -422,11 +422,6 @@ const browserDependencies: ResolverDependency[] = [
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
 let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "auto" };
-const demoMirrors = [
-  { name: "ghfast.top", base_url: "https://ghfast.top" },
-  { name: "gh-proxy.com", base_url: "https://gh-proxy.com" },
-  { name: "gh-proxy.net", base_url: "https://gh-proxy.net" }
-];
 let demoUpdateTokenConfigured = false;
 
 const logs: AppLogEntry[] = [
@@ -903,10 +898,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/system/update/github-token") {
     if (method === "PUT") { demoUpdateTokenConfigured = !JSON.parse(String(init?.body ?? "{}")).clear && Boolean(JSON.parse(String(init?.body ?? "{}")).token); }
     return json({ configured: demoUpdateTokenConfigured, source: demoUpdateTokenConfigured ? "stored" : "" });
-  }
-  // 这条要排在下面那个 /api/system/update 前缀兜底之前，否则会被当成下载请求。
-  if (path === "/api/system/update/mirrors" && method === "GET") {
-    return json({ mode: updatePolicy.github_mirror, mirrors: demoMirrors });
   }
   if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });
