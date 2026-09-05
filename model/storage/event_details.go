@@ -382,6 +382,12 @@ LIMIT ? OFFSET ?
 			item.OperatorID = strings.TrimSpace(source.OperatorID)
 			item.OperatorName = strings.TrimSpace(source.OperatorName)
 			item.OperatorRole = strings.TrimSpace(source.OperatorRole)
+			// SQL 那边只找过 message_events.sender_name 和画像里的显示名，两处都空
+			// 时列表上就只剩一串账号。payload 里存着这条消息发出去那一刻的群名片，
+			// 而且已经解析出来了，白放着不用。
+			if item.SenderName == "" {
+				item.SenderName = strings.TrimSpace(source.SenderName)
+			}
 			item.SenderRole = strings.TrimSpace(source.SenderRole)
 			item.SenderLevel = source.SenderLevel
 			item.SenderLevelLabel = strings.TrimSpace(source.SenderLevelLabel)

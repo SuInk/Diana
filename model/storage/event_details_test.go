@@ -1077,3 +1077,49 @@ VALUES ('markers', 'group:20001', 'group', '20001', '10003', 'message-1', ?, ?, 
 		t.Fatalf("text = %q, want %q", page.Events[0].Text, want)
 	}
 }
+
+// message_events.sender_name 和画像的显示名都空时，列表上不该只剩一串账号：payload
+// 里存着这条消息发出去那一刻的群名片。
+func TestListInboundEventDetailsFallsBackToPayloadSenderName(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "event-payload-name.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	event := assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "1255848531", MessageID: "message-1",
+		SenderName: "吊图吧群友", Time: now.Unix(),
+		Segments: []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "昨天打手打了十几个小时"}}},
+	}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
+VALUES ('payload-name', 'group:20001', 'group', '20001', '1255848531', 'message-1', '', ?, ?, ?, ?)
+`, now.Unix(), "昨天打手打了十几个小时", string(payload), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO inbound_events (
+  id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
+  status, attempts, available_at, outcome, created_at, updated_at, completed_at
+)
+VALUES ('payload-name', 'group:20001', 'group', '20001', '1255848531', 'message-1', ?, ?, 0,
+  'done', 0, ?, 'ignored', ?, ?, ?)
+`, now.Unix(), string(payload), now.UnixNano(), now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Minute), Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 1 || page.Events[0].SenderName != "吊图吧群友" {
+		t.Fatalf("events = %#v, want payload sender name", page.Events)
+	}
+}
