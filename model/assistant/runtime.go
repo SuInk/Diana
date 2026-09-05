@@ -228,6 +228,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "发送者群等级低于该群设置的最低回复等级", false
 	case "ignored_response_suppression":
 		return "not_replied", "该用户处于临时响应限制期，消息被回复抑制规则拦截", false
+	case "ignored_bot_message":
+		return "not_replied", "其他机器人消息未被语义判断为提到本机器人，已保持静默", false
 	case "ignored_ai_reply_loop":
 		return "not_replied", "发送前审核认定这一来一回已在空转（对方是自动回复，或双方都只在应付没有内容），为避免继续接茬而没有发送", false
 	case "ignored_no_natural_reply":
@@ -1672,6 +1674,13 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.updateUserMemory(event, 0)
 		r.record(r.decisionEventRecord(event, text, "ignored_video"))
 		return finishWithoutReply("ignored_video")
+	}
+	if r.requiresTelegramBotMentionJudgment(event) {
+		if !r.telegramBotMessageMentionsSelf(ctx, event, text) {
+			r.record(r.decisionEventRecord(event, text, "ignored_bot_message"))
+			return finishWithoutReply("ignored_bot_message")
+		}
+		event.ToMe = true
 	}
 	// Long-term extraction is durable and asynchronous. It never blocks reply
 	// routing and resolver/video-only messages do not enter the LLM memory gate.

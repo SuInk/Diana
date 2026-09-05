@@ -140,6 +140,24 @@ func TestBotReplyLoopDetectionSettingDefaultsAndRoundTripsThroughPayload(t *test
 	}
 }
 
+func TestTelegramBotMessageSuppressionDefaultsAndRoundTripsThroughPayload(t *testing.T) {
+	defaultPayload := PayloadFromConfig(BotConfig{})
+	if defaultPayload.TelegramSuppressBotMessages == nil || !*defaultPayload.TelegramSuppressBotMessages {
+		t.Fatalf("default setting = %#v, want true", defaultPayload.TelegramSuppressBotMessages)
+	}
+
+	disabled := false
+	existing := BotConfig{TelegramSuppressBotMessages: &disabled}
+	payload := PayloadFromConfig(existing)
+	if payload.TelegramSuppressBotMessages == nil || *payload.TelegramSuppressBotMessages {
+		t.Fatalf("payload setting = %#v, want false", payload.TelegramSuppressBotMessages)
+	}
+	restored := ConfigFromPayload(payload, existing)
+	if restored.TelegramSuppressBotMessages == nil || *restored.TelegramSuppressBotMessages {
+		t.Fatalf("restored setting = %#v, want false", restored.TelegramSuppressBotMessages)
+	}
+}
+
 func TestProfileSetPlatformContextIsolationDefaultsOnAndCanBeDisabled(t *testing.T) {
 	set := ProfileSet{Profiles: []BotConfig{{ID: "qq", Platform: PlatformOneBotV11}}}.WithDefaults()
 	if !set.PlatformContextsIsolated() {

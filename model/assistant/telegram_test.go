@@ -620,6 +620,70 @@ func TestTelegramDispatchesUpdatesToHandler(t *testing.T) {
 	}
 }
 
+func TestTelegramPassesBotIdentityToSemanticReplyGate(t *testing.T) {
+	ch := NewTelegramChannel(TelegramConfig{})
+	ch.botUsername = "diana_bot"
+	var got []MessageEvent
+	ch.handler = func(_ context.Context, event MessageEvent) error {
+		got = append(got, event)
+		return nil
+	}
+
+	ch.dispatch(context.Background(), telegramUpdate{Message: &telegramMessage{
+		MessageID: 1,
+		Text:      "机器人自动播报",
+		From:      &telegramUser{ID: 42, IsBot: true, Username: "other_bot"},
+		Chat:      &telegramChat{ID: -1001, Type: "supergroup"},
+	}})
+
+	if len(got) != 1 || !got[0].SenderIsBot || got[0].Platform != PlatformTelegram {
+		t.Fatalf("Bot 消息应携带身份进入语义判断，实际 %+v", got)
+	}
+}
+
+func TestTelegramAllowsBotGroupMessageWhenExplicitlyMentioned(t *testing.T) {
+	ch := NewTelegramChannel(TelegramConfig{})
+	ch.botUsername = "diana_bot"
+	var got []MessageEvent
+	ch.handler = func(_ context.Context, event MessageEvent) error {
+		got = append(got, event)
+		return nil
+	}
+
+	ch.dispatch(context.Background(), telegramUpdate{Message: &telegramMessage{
+		MessageID: 2,
+		Text:      "@diana_bot 请处理",
+		Entities:  []telegramEntity{{Type: "mention", Offset: 0, Length: 10}},
+		From:      &telegramUser{ID: 42, IsBot: true, Username: "other_bot"},
+		Chat:      &telegramChat{ID: -1001, Type: "supergroup"},
+	}})
+
+	if len(got) != 1 || !got[0].ToMe {
+		t.Fatalf("明确提及本机器人的 Bot 群消息应放行，实际 %+v", got)
+	}
+}
+
+func TestTelegramDoesNotClassifyAnonymousSenderAsBot(t *testing.T) {
+	ch := NewTelegramChannel(TelegramConfig{})
+	var got []MessageEvent
+	ch.handler = func(_ context.Context, event MessageEvent) error {
+		got = append(got, event)
+		return nil
+	}
+
+	ch.dispatch(context.Background(), telegramUpdate{Message: &telegramMessage{
+		MessageID:  3,
+		SenderChat: &telegramChat{ID: -1001, Type: "supergroup"},
+		Text:       "机器人自动播报",
+		From:       &telegramUser{ID: 42, IsBot: true, Username: "other_bot"},
+		Chat:       &telegramChat{ID: -1001, Type: "supergroup"},
+	}})
+
+	if len(got) != 1 || got[0].SenderIsBot {
+		t.Fatalf("匿名发送者不应被识别为 Bot，实际 %+v", got)
+	}
+}
+
 func TestTelegramLocalPathDetection(t *testing.T) {
 	if telegramLocalPath("https://example.com/a.jpg") != "" {
 		t.Fatal("远程 URL 不该当成本地文件")
