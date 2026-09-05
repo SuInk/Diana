@@ -98,7 +98,7 @@ func TestSaveUpdatePolicyRejectsInvalidMirror(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("save policy = %d %s", recorder.Code, recorder.Body.String())
 	}
-	if store.policy.GitHubMirror != ghmirror.ModeAuto {
+	if store.policy.GitHubMirror != ghmirror.ModeDirect {
 		t.Fatalf("坏地址被存下来了：%q", store.policy.GitHubMirror)
 	}
 }
