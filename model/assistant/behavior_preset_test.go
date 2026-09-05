@@ -26,8 +26,8 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 		{ResponseModeSuperActive, true, ChatInLevelMax},
 	}
 	superActive := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
-	if boolValue(superActive.NaturalInterjectionEnabled, false) || !superActive.chatInSettings().SuperActive {
-		t.Fatal("super active mode must not depend on the legacy natural interjection switch")
+	if !superActive.chatInSettings().SuperActive {
+		t.Fatal("super active mode did not turn on its own chat-in policy")
 	}
 	for _, test := range tests {
 		cfg := BotConfig{ResponseMode: test.mode}.WithDefaults()
@@ -36,8 +36,9 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 		}
 	}
 
-	legacy := BotConfig{ChatInEnabled: boolPointer(true), ChatInLevel: ChatInLevelMax, NaturalInterjectionEnabled: boolPointer(true)}.WithDefaults()
-	if legacy.ResponseMode != ResponseModeCustom || legacy.ChatInLevel != ChatInLevelMax || !boolValue(legacy.NaturalInterjectionEnabled, false) {
+	// 没选预设、只手调过档位的老配置仍然落到 custom，档位原样保留。
+	legacy := BotConfig{ChatInEnabled: boolPointer(true), ChatInLevel: ChatInLevelMax}.WithDefaults()
+	if legacy.ResponseMode != ResponseModeCustom || legacy.ChatInLevel != ChatInLevelMax {
 		t.Fatalf("legacy settings were not preserved: %#v", legacy)
 	}
 }

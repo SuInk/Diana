@@ -176,11 +176,10 @@ func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
-		"operation":                    "set_reply_policy",
-		"proactive_reply_chance":       0.4,
-		"proactive_reply_threshold":    0.93,
-		"minimum_reply_member_level":   15,
-		"natural_interjection_enabled": true,
+		"operation":                  "set_reply_policy",
+		"proactive_reply_chance":     0.4,
+		"proactive_reply_threshold":  0.93,
+		"minimum_reply_member_level": 15,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,11 +188,11 @@ func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.OperatorRole != "bot_owner" || result.ReplyPolicy == nil || result.ReplyPolicy.MinimumReplyMemberLevel != 15 || !result.ReplyPolicy.NaturalInterjectionEnabled {
+	if result.OperatorRole != "bot_owner" || result.ReplyPolicy == nil || result.ReplyPolicy.MinimumReplyMemberLevel != 15 {
 		t.Fatalf("result = %#v", result)
 	}
 	saved, ok := store.ConfigForGroup("", "123")
-	if !ok || saved.ProactiveReplyChance != 0.4 || saved.ProactiveReplyThreshold != 0.93 || saved.MinimumReplyMemberLevel != 15 || saved.NaturalInterjectionEnabled == nil || !*saved.NaturalInterjectionEnabled {
+	if !ok || saved.ProactiveReplyChance != 0.4 || saved.ProactiveReplyThreshold != 0.93 || saved.MinimumReplyMemberLevel != 15 {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}
 }

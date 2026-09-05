@@ -32,7 +32,6 @@ const defaultChatInLevel = ChatInLevelLow
 // chatInSettings 是某个事件最终生效的插话判定参数。
 type chatInSettings struct {
 	Enabled     bool
-	Natural     bool
 	SuperActive bool
 	Assistant   bool
 	Level       ChatInLevel
@@ -164,18 +163,6 @@ func (cfg BotConfig) chatInSettings() chatInSettings {
 	}
 	if cfg.ResponseMode.Normalized() == ResponseModeSuperActive {
 		return chatInSettings{Enabled: true, SuperActive: true, Level: ChatInLevelMax, Threshold: 0.5, Chance: 1}
-	}
-	// 「关闭」是硬开关：自然插话模式不能把它重新打开，否则档位说明里的
-	// 「从不主动插话」会变成比最高档还激进。
-	if settings.Level == ChatInLevelOff {
-		return settings
-	}
-	if boolValue(cfg.NaturalInterjectionEnabled, false) {
-		settings.Enabled = true
-		settings.Natural = true
-		settings.Threshold = 0
-		settings.Chance = 1
-		settings.Cooldown = 0
 	}
 	return settings
 }

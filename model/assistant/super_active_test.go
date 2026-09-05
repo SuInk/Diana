@@ -27,7 +27,7 @@ func TestSuperActiveRoutingIgnoresOldSamplingAndCooldown(t *testing.T) {
 func TestSuperActiveIntentAllowsSocialRepliesAndQuestions(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
 	settings := cfg.chatInSettings()
-	if !settings.Enabled || settings.Natural || settings.Chance != 1 || settings.Cooldown != 0 {
+	if !settings.Enabled || settings.Chance != 1 || settings.Cooldown != 0 {
 		t.Fatalf("settings = %#v", settings)
 	}
 	for _, category := range []string{"chat_in", "needs_response", "bot_related"} {
@@ -59,7 +59,7 @@ func TestSuperActiveIntentAllowsSocialRepliesAndQuestions(t *testing.T) {
 func TestSuperActivePromptsAndQuality(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
 	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, cfg.chatInSettings(), false)
-	if prompt != superActiveIntentPrompt || strings.Contains(prompt, "当前群已开启自然插话模式") {
+	if prompt != superActiveIntentPrompt {
 		t.Fatal("super active must use its own intent policy")
 	}
 	if !strings.Contains(replyQualityPromptForConfig(cfg), "正常的寒暄") {

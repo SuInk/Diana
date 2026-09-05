@@ -1039,14 +1039,6 @@
                 <input id="bot-proactive-threshold" v-model.number="form.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
                 <span class="hint">越高越克制；默认 0.9。</span>
               </div>
-              <div v-if="form.response_mode === 'custom'" class="field wide">
-                <label class="switch">
-                  <input v-model="form.natural_interjection_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自然插话模式</span>
-                </label>
-                <span class="hint">开启后，普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；仍遵守群禁用、成员门槛和响应限制。</span>
-              </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.social_reply_enabled" type="checkbox" />
@@ -2816,7 +2808,6 @@ function setForm(config: BotProfileConfig): void {
     expression_learning_enabled: config.expression_learning_enabled ?? false,
     dict_segment_enabled: config.dict_segment_enabled ?? false,
     semantic_search_enabled: config.semantic_search_enabled ?? false,
-    natural_interjection_enabled: config.natural_interjection_enabled ?? false,
     response_mode: config.response_mode ?? "custom",
     reply_style: config.reply_style ?? "assistant",
     action_description_enabled: config.action_description_enabled ?? false,

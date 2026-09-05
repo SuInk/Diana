@@ -218,15 +218,14 @@ func (r *Runtime) recordGroupReplyPolicyChanged(ctx context.Context, event Messa
 		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
 		Metadata: map[string]any{
-			"group_id":                     event.GroupID,
-			"user_id":                      event.UserID,
-			"operator_role":                role,
-			"proactive_reply_chance":       cfg.ProactiveReplyChance,
-			"proactive_reply_threshold":    cfg.ProactiveReplyThreshold,
-			"minimum_reply_member_level":   cfg.MinimumReplyMemberLevel,
-			"chat_in_enabled":              boolValue(cfg.ChatInEnabled, true),
-			"chat_in_level":                string(cfg.ChatInLevel),
-			"natural_interjection_enabled": boolValue(cfg.NaturalInterjectionEnabled, false),
+			"group_id":                   event.GroupID,
+			"user_id":                    event.UserID,
+			"operator_role":              role,
+			"proactive_reply_chance":     cfg.ProactiveReplyChance,
+			"proactive_reply_threshold":  cfg.ProactiveReplyThreshold,
+			"minimum_reply_member_level": cfg.MinimumReplyMemberLevel,
+			"chat_in_enabled":            boolValue(cfg.ChatInEnabled, true),
+			"chat_in_level":              string(cfg.ChatInLevel),
 		},
 	})
 }
