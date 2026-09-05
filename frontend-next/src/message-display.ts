@@ -45,9 +45,16 @@ function readableCQ(payload: string): string {
   return `[${cqLabels[type] ?? `消息组件:${type || "未知"}`}]`;
 }
 
+// [diana-reply:ID] 是入站给模型、出站给适配器用的引用标记，不该出现在界面上。事件
+// 列表的正文由后端渲染成「[回复 某人：原话]」，但实时事件流和早先存下的正文里还会
+// 带着它——这里只能退回一个「[回复]」：手上只有一个消息 ID，说不出回的是谁。
+const replyMarkerPattern = /\[(?:diana-reply|回复):(-?[0-9]{4,19})\]/g;
+
 export function displayMessageText(value?: string): string {
   if (!value) return "";
-  const rendered = value.replace(/\[CQ:([^\]]+)\]/gi, (_match, payload: string) => readableCQ(payload));
+  const rendered = value
+    .replace(/\[CQ:([^\]]+)\]/gi, (_match, payload: string) => readableCQ(payload))
+    .replace(replyMarkerPattern, "[回复] ");
   return decodeEntities(rendered)
     .replace(/[ \t]+\n/g, "\n")
     .replace(/[ \t]{2,}/g, " ")

@@ -393,7 +393,8 @@ LIMIT ? OFFSET ?
 			item.Images = inboundEventImages(segments)
 			// 正文留到补齐 @ 昵称之后再渲染：昵称要查库，攒成一批比逐行查快得多。
 			collectMentionIDs(segments, mentionIDs)
-			pending = append(pending, pendingMentionText{index: len(page.Events), segments: segments})
+			collectQuotedMentionIDs(source.Quoted, mentionIDs)
+			pending = append(pending, pendingMentionText{index: len(page.Events), segments: segments, quoted: source.Quoted})
 		}
 		if item.DurationMS <= 0 && completedAt > createdAt && createdAt > 0 {
 			item.DurationMS = (completedAt - createdAt) / int64(time.Millisecond)
@@ -409,7 +410,12 @@ LIMIT ? OFFSET ?
 	}
 	for _, item := range pending {
 		applyMentionNames(item.segments, mentionNames)
-		if displayText := strings.TrimSpace(assistant.PlainText(item.segments)); displayText != "" || len(page.Events[item.index].Images) > 0 {
+		if item.quoted != nil {
+			applyMentionNames(item.quoted.Segments, mentionNames)
+		}
+		// 昵称已经写回 segment，所以这里不再传解析器；引用标记则要靠 quoted 才能
+		// 写成「回复 某人：原话」，否则控制台上只有一串消息 ID。
+		if displayText := assistant.DisplaySegmentsText(item.segments, item.quoted, quotedSenderNameResolver(item.quoted, mentionNames)); displayText != "" || len(page.Events[item.index].Images) > 0 {
 			// A CQ-only image message has no textual body. Clearing the raw CQ
 			// code lets the WebUI render the structured image instead.
 			page.Events[item.index].Text = displayText
@@ -642,10 +648,12 @@ func inboundEventDisplaySegments(event assistant.MessageEvent, fallbackText stri
 	return assistant.CQToSegments(raw)
 }
 
-// pendingMentionText 记住一条事件的 segment，等昵称查回来后再渲染正文。
+// pendingMentionText 记住一条事件的 segment，等昵称查回来后再渲染正文。quoted 是
+// 这条消息引用的原消息，渲染引用标记时要用它写清回的是谁的哪句话。
 type pendingMentionText struct {
 	index    int
 	segments []assistant.MessageSegment
+	quoted   *assistant.QuotedMessage
 }
 
 // collectMentionIDs 收出 at 段里还没有昵称的账号。已经带昵称的（部分 OneBot 实现
@@ -661,6 +669,30 @@ func collectMentionIDs(segments []assistant.MessageSegment, into map[string]stru
 		}
 		into[qq] = struct{}{}
 	}
+}
+
+// collectQuotedMentionIDs 把被引用消息里的 at 和它的发送者一起收进待查名单：引用
+// 标记要写出「回复 某人」，被引用的正文里也可能提到别人。
+func collectQuotedMentionIDs(quoted *assistant.QuotedMessage, into map[string]struct{}) {
+	if quoted == nil {
+		return
+	}
+	collectMentionIDs(quoted.Segments, into)
+	if strings.TrimSpace(quoted.SenderName) != "" {
+		return
+	}
+	if userID := strings.TrimSpace(quoted.UserID); userID != "" {
+		into[userID] = struct{}{}
+	}
+}
+
+// quotedSenderNameResolver 只为被引用消息的发送者供一个昵称。段里的 at 昵称已经由
+// applyMentionNames 写回去了，这里不必再兜一遍。
+func quotedSenderNameResolver(quoted *assistant.QuotedMessage, names map[string]string) assistant.AtMentionNameResolver {
+	if quoted == nil || len(names) == 0 {
+		return nil
+	}
+	return func(userID string) string { return strings.TrimSpace(names[strings.TrimSpace(userID)]) }
 }
 
 // applyMentionNames 把查到的昵称写回 at 段，PlainText 随后就能渲染成「@昵称（账号）」。

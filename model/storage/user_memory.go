@@ -82,7 +82,7 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if !update.Administrative {
 		profile.MessageCount++
 		profile.LastSeenAt = userMemoryEventTime(event)
-		if item, ok := userMemoryItemFromEvent(event); ok {
+		if item, ok := userMemoryItemFromEvent(event, s.userMemoryNameResolver(ctx, botProfileID)); ok {
 			profile.Memories = appendUserMemory(profile.Memories, item)
 		}
 	}
@@ -385,8 +385,8 @@ func userMemoryEventTime(event assistant.MessageEvent) time.Time {
 	return time.Now().UTC()
 }
 
-func userMemoryItemFromEvent(event assistant.MessageEvent) (assistant.UserMemoryItem, bool) {
-	text := userMemoryEventText(event)
+func userMemoryItemFromEvent(event assistant.MessageEvent, resolve assistant.AtMentionNameResolver) (assistant.UserMemoryItem, bool) {
+	text := assistant.DisplayEventText(event, resolve)
 	if !usefulUserMemoryText(text) {
 		return assistant.UserMemoryItem{}, false
 	}
@@ -399,12 +399,46 @@ func userMemoryItemFromEvent(event assistant.MessageEvent) (assistant.UserMemory
 	}, true
 }
 
-func userMemoryEventText(event assistant.MessageEvent) string {
-	text := strings.TrimSpace(assistant.PlainText(event.Segments))
-	if text == "" {
-		text = strings.TrimSpace(event.RawMessage)
+// userMemoryNameResolver 从已有档案里查昵称，给「最近发言」里光秃秃的 @号码 补上
+// 名字。只查本地 user_profiles：这是给人看的展示文本，为它去平台拉一次昵称不值当，
+// 查不到就照旧显示号码。
+//
+// 一条消息里 at 通常只有一两个，但同一个号可能被 at 多次，所以带一层记忆化。返回的
+// 闭包只在这一次写入里用，不跨消息缓存——昵称会改。
+func (s *SQLiteStore) userMemoryNameResolver(ctx context.Context, botProfileID string) assistant.AtMentionNameResolver {
+	if s == nil || s.db == nil {
+		return nil
 	}
-	return strings.Join(strings.Fields(text), " ")
+	cache := map[string]string{}
+	scopeCondition, scopeArgs := userProfileScopeCondition(botProfileID)
+	return func(userID string) string {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			return ""
+		}
+		if name, known := cache[userID]; known {
+			return name
+		}
+		var displayName sql.NullString
+		err := s.db.QueryRowContext(ctx, `
+SELECT display_name
+FROM user_profiles
+WHERE user_id = ?`+scopeCondition+`
+ORDER BY updated_at DESC
+LIMIT 1
+`, append([]any{userID}, scopeArgs...)...).Scan(&displayName)
+		name := strings.TrimSpace(displayName.String)
+		if err != nil {
+			name = ""
+		}
+		// 没拿到昵称的档案会把 DisplayName 退化成账号本身，照这个渲染会写出
+		// 「@10002（10002）」这种重复。当成查不到处理。
+		if name == userID {
+			name = ""
+		}
+		cache[userID] = name
+		return name
+	}
 }
 
 func usefulUserMemoryText(text string) bool {
