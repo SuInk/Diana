@@ -4,14 +4,69 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
+
+func (h *BotHandler) editAssistantUser(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "人员画像存储未配置"})
+		return
+	}
+	var payload struct {
+		Profile assistant.UserMemoryProfile `json:"profile"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil || payload.Profile.UpdatedAt.IsZero() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少有效的人员记录版本"})
+		return
+	}
+	p := payload.Profile
+	if scope, supplied := c.GetQuery("profile"); !supplied || strings.TrimSpace(scope) != p.BotProfileID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "必须指定人员记录所属机器人"})
+		return
+	}
+	remove := c.Request.Method == http.MethodDelete
+	if !remove {
+		if p.Favorability < -100 || p.Favorability > 200 || len([]rune(p.DisplayName)) > 200 || len(p.Memories) > 20 || len(p.Portrait) > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "昵称、好感度或记忆条数超出限制"})
+			return
+		}
+		for _, item := range p.Memories {
+			if strings.TrimSpace(item.Text) == "" || len([]rune(item.Text)) > 1000 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "记忆内容不能为空且最多 1000 字"})
+				return
+			}
+		}
+		for _, trait := range p.Portrait {
+			if _, ok := assistant.NormalizePortraitField(string(trait.Field)); !ok || strings.TrimSpace(trait.Value) == "" || len([]rune(trait.Value)) > 1000 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "画像栏目或内容无效"})
+				return
+			}
+		}
+	}
+	err := h.sqlite.EditUserMemory(c.Request.Context(), p.BotProfileID, strings.TrimSpace(c.Param("id")), p, remove)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, storage.ErrUserMemoryConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	action, message := "assistant.users.save", "人员记录已修改"
+	if remove {
+		action, message = "assistant.users.delete", "人员记录已删除"
+	}
+	recordRequestOperation(c, h.logs, action, message, c.Param("id"), map[string]any{"bot_profile_id": p.BotProfileID})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
 
 type assistantUserSummary struct {
 	assistant.UserMemoryProfile
@@ -78,6 +133,9 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 	}
 	userID := strings.TrimSpace(c.Param("id"))
 	profile, found, err := h.sqlite.GetUserMemory(c.Request.Context(), botProfileScope(c), userID)
+	if _, supplied := c.GetQuery("profile"); supplied {
+		profile, found, err = h.sqlite.GetUserMemoryExact(c.Request.Context(), botProfileScope(c), userID)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -86,7 +144,7 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "人员不存在或还没有画像记录"})
 		return
 	}
-	changes, err := h.sqlite.ListUserFavorabilityChanges(c.Request.Context(), botProfileScope(c), userID, 50)
+	changes, err := h.sqlite.ListUserFavorabilityChangesExact(c.Request.Context(), profile.BotProfileID, userID, 50)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

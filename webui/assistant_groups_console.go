@@ -46,8 +46,29 @@ type consoleGroupSavePayload struct {
 func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	router.GET("/api/assistant/groups", h.listConsoleGroups)
 	router.POST("/api/assistant/groups", h.saveConsoleGroup)
+	router.DELETE("/api/assistant/groups/:id", h.deleteConsoleGroup)
 	router.GET("/api/assistant/groups/:id/relations", h.groupRelationGraph)
 	router.GET("/api/assistant/groups/:id/avatar", h.groupAvatar)
+}
+
+func (h *BotHandler) deleteConsoleGroup(c *gin.Context) {
+	profileID, supplied := c.GetQuery("profile")
+	if !supplied {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "必须指定群配置所属机器人"})
+		return
+	}
+	groupID := strings.TrimSpace(c.Param("id"))
+	found, err := h.groupConfigs.DeleteGroupConfig(strings.TrimSpace(profileID), groupID)
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.groups.delete", err, groupID, nil)
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "群配置不存在"})
+		return
+	}
+	recordRequestOperation(c, h.logs, "assistant.groups.delete", "群配置已删除，恢复全局规则", groupID, map[string]any{"bot_profile_id": profileID})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // groupAvatar 把群头像从平台取回来再转发给控制台。
@@ -122,9 +143,6 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	refresh := queryBool(c.Query("refresh"))
 	liveGroups, liveAvailable, warning := h.consoleGroupSources(c.Request.Context(), profileID, refresh)
 	groups := mergeConsoleGroupItems(base, set, liveGroups, h.isOneBotProfile)
-	for index := range groups {
-		groups[index].BotProfileID = profileID
-	}
 	for index := range groups {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
 	}
