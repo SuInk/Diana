@@ -292,6 +292,9 @@ export interface BotProfileConfig {
   agent_max_steps?: number;
   agent_command_allowlist?: string[];
   agent_command_timeout_ms?: number;
+  /** auto / require / off；留空即 auto。 */
+  agent_command_sandbox?: string;
+  agent_command_sandbox_allow_network?: boolean;
   agent_browser_cdp_url?: string;
   agent_browser_timeout_ms?: number;
 }
