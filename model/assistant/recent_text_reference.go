@@ -122,7 +122,7 @@ func recentTextReferenceHistoryCandidates(event MessageEvent, history []MessageE
 			continue
 		}
 		if sameConversationSender(item, event) {
-			if reply := strings.TrimSpace(item.botReply); reply != "" && !semanticErrorWrapperText(reply) {
+			if reply := strings.TrimSpace(item.botReply); reply != "" {
 				candidates = append(candidates, recentTextCandidatesFromSource(reply, key, recentTextReferenceCandidate{
 					SourceMessageID: strings.TrimSpace(item.MessageID), Method: "assistant_reply", Score: 800 + recency,
 				})...)

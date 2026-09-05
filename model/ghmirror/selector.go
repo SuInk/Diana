@@ -99,7 +99,7 @@ func NewSelector(client *http.Client) *Selector {
 		ttl:          defaultCacheTTL,
 		probeTimeout: defaultProbeTimeout,
 		now:          time.Now,
-		mode:         ModeAuto,
+		mode:         ModeDirect,
 	}
 }
 

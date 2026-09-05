@@ -265,7 +265,11 @@ type Reminder struct {
 	FeedJudgePrompt     string    `json:"feed_judge_prompt,omitempty"`
 	LastFeedItemID      string    `json:"last_feed_item_id,omitempty"`
 	LastFeedPublishedAt time.Time `json:"last_feed_published_at,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
+	// FeedSourcesJSON 保存一条订阅盯着的全部来源：同一套判断规则可以一次管好几个
+	// Twitter 账号或几个 Feed。上面的单来源字段跟着第一个来源走，老记录和只认单
+	// 来源的读取方仍然读得到东西。
+	FeedSourcesJSON string    `json:"feed_sources,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // ReminderDeliveryTarget is an additional destination for recurring watch
@@ -297,6 +301,49 @@ func decodeReminderDeliveryTargets(raw string) []ReminderDeliveryTarget {
 
 func ReminderDeliveryTargets(raw string) []ReminderDeliveryTarget {
 	return decodeReminderDeliveryTargets(raw)
+}
+
+// ReminderFeedSource 是 RSS 订阅里的一个来源。多来源订阅共用一套判断规则，游标
+// 却必须一人一个：合用一个游标的话，更新快的来源会把慢的顶过去，慢的那条新内容
+// 永远等不到判断。
+type ReminderFeedSource struct {
+	FeedURL         string    `json:"feed_url"`
+	Source          string    `json:"source,omitempty"`
+	Handle          string    `json:"handle,omitempty"`
+	Name            string    `json:"name,omitempty"`
+	LastItemID      string    `json:"last_item_id,omitempty"`
+	LastPublishedAt time.Time `json:"last_published_at,omitempty"`
+}
+
+func encodeReminderFeedSources(sources []ReminderFeedSource) string {
+	if len(sources) == 0 {
+		return ""
+	}
+	body, _ := json.Marshal(sources)
+	return string(body)
+}
+
+func decodeReminderFeedSources(raw string) []ReminderFeedSource {
+	var sources []ReminderFeedSource
+	if strings.TrimSpace(raw) == "" || json.Unmarshal([]byte(raw), &sources) != nil {
+		return nil
+	}
+	return sources
+}
+
+// ReminderFeedSources 读出订阅的全部来源。多来源之前存的记录只有单来源字段，
+// 按它回落成一条，升级后不用迁移数据也能继续跑。
+func ReminderFeedSources(item Reminder) []ReminderFeedSource {
+	if sources := decodeReminderFeedSources(item.FeedSourcesJSON); len(sources) > 0 {
+		return sources
+	}
+	if strings.TrimSpace(item.FeedURL) == "" {
+		return nil
+	}
+	return []ReminderFeedSource{{
+		FeedURL: item.FeedURL, Source: item.FeedSource, Handle: item.FeedHandle,
+		LastItemID: item.LastFeedItemID, LastPublishedAt: item.LastFeedPublishedAt,
+	}}
 }
 
 type Channel interface {
@@ -465,11 +512,12 @@ type BotConfig struct {
 	// 群消息可能是十几 token 的表情占位，也可能是三千 token 的长粘贴——按条数配，
 	// 实际开销会在一个数量级的区间里飘。RecentContextLimit 仍按条数配，因为它管的
 	// 是路由、指代和记忆门控这些「往回数 N 条」的旁路，那里条数才是对的单位。
-	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold  int   `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled    *bool `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled  *bool `json:"cross_group_memory_enabled,omitempty"`
+	RecentHistoryTokenBudget   int64 `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit         int   `json:"recent_context_limit,omitempty"`
+	ContextSummaryThreshold    int   `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled      *bool `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled    *bool `json:"cross_group_memory_enabled,omitempty"`
+	CrossPlatformMemoryEnabled *bool `json:"cross_platform_memory_enabled,omitempty"`
 	// WorldBookEnabled 控制这台机器人要不要带上世界书（世界观设定库）。树是
 	// 全局一棵，这里只决定用不用；树是空的时候开着也不注入任何内容，所以默认开。
 	WorldBookEnabled *bool `json:"world_book_enabled,omitempty"`
@@ -619,6 +667,7 @@ type GroupConfig struct {
 	MaxReplyChars            int              `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
+	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
 	NaturalReplySplitEnabled     *bool                  `json:"natural_reply_split_enabled,omitempty"`
 	ReplyMaxBubbles              int                    `json:"reply_max_bubbles,omitempty"`
 	DirectReplyChunkSize         int                    `json:"direct_reply_chunk_size,omitempty"`
@@ -774,6 +823,7 @@ type ConfigPayload struct {
 	ContextSummaryThreshold         int         `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled           *bool       `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled         *bool       `json:"cross_group_memory_enabled,omitempty"`
+	CrossPlatformMemoryEnabled      *bool       `json:"cross_platform_memory_enabled,omitempty"`
 	WorldBookEnabled                *bool       `json:"world_book_enabled,omitempty"`
 	RomanceEnabled                  *bool       `json:"romance_enabled,omitempty"`
 	MoodEnabled                     *bool       `json:"mood_enabled,omitempty"`
@@ -821,7 +871,6 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		RecentHistoryTokenBudget:     base.RecentHistoryTokenBudget,
 		RecentContextLimit:           base.RecentContextLimit,
 		MaxReplyChars:                base.MaxReplyChars,
-		NaturalReplySplitEnabled:     copyBoolPointer(base.NaturalReplySplitEnabled),
 		ReplyMaxBubbles:              base.ReplyMaxBubbles,
 		DirectReplyChunkSize:         base.DirectReplyChunkSize,
 		ForwardReplyThreshold:        base.ForwardReplyThreshold,
@@ -887,9 +936,6 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	}
 	if cfg.MaxReplyChars <= 0 {
 		cfg.MaxReplyChars = defaults.MaxReplyChars
-	}
-	if cfg.NaturalReplySplitEnabled == nil {
-		cfg.NaturalReplySplitEnabled = copyBoolPointer(defaults.NaturalReplySplitEnabled)
 	}
 	if cfg.ReplyMaxBubbles <= 0 {
 		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
@@ -1294,25 +1340,26 @@ func DefaultBotConfig() BotConfig {
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
-		RecentContextLimit:        40,
-		ContextSummaryThreshold:   100,
-		LongTermMemoryEnabled:     boolPointer(true),
-		CrossGroupMemoryEnabled:   boolPointer(false),
-		WorldBookEnabled:          boolPointer(true),
-		RomanceEnabled:            boolPointer(false),
-		MoodEnabled:               boolPointer(false),
-		PokeReplyEnabled:          boolPointer(false),
-		ExpressionLearningEnabled: boolPointer(false),
-		DictSegmentEnabled:        boolPointer(false),
-		SemanticSearchEnabled:     boolPointer(false),
-		ProactiveReplyChance:      defaultProactiveReplyChance,
-		ProactiveReplyThreshold:   defaultProactiveReplyThreshold,
-		ReplyRules:                []ReplyRule{},
-		MaxBotConcurrency:         8,
-		RequestTimeout:            180 * time.Second,
-		AgentEnabled:              true,
-		AgentMaxSteps:             agent.DefaultMaxSteps,
-		AgentSkillRoots:           []string{},
+		RecentContextLimit:         40,
+		ContextSummaryThreshold:    100,
+		LongTermMemoryEnabled:      boolPointer(true),
+		CrossGroupMemoryEnabled:    boolPointer(false),
+		CrossPlatformMemoryEnabled: boolPointer(false),
+		WorldBookEnabled:           boolPointer(true),
+		RomanceEnabled:             boolPointer(false),
+		MoodEnabled:                boolPointer(false),
+		PokeReplyEnabled:           boolPointer(false),
+		ExpressionLearningEnabled:  boolPointer(false),
+		DictSegmentEnabled:         boolPointer(false),
+		SemanticSearchEnabled:      boolPointer(false),
+		ProactiveReplyChance:       defaultProactiveReplyChance,
+		ProactiveReplyThreshold:    defaultProactiveReplyThreshold,
+		ReplyRules:                 []ReplyRule{},
+		MaxBotConcurrency:          8,
+		RequestTimeout:             180 * time.Second,
+		AgentEnabled:               true,
+		AgentMaxSteps:              agent.DefaultMaxSteps,
+		AgentSkillRoots:            []string{},
 		// 新建配置直接带上一组只读诊断命令，装完就能用。
 		//
 		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
@@ -1515,6 +1562,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
+	}
+	if cfg.CrossPlatformMemoryEnabled == nil {
+		cfg.CrossPlatformMemoryEnabled = boolPointer(false)
 	}
 	if cfg.WorldBookEnabled == nil {
 		cfg.WorldBookEnabled = boolPointer(true)
@@ -1774,6 +1824,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ContextSummaryThreshold:           cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:             copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
+		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
@@ -1950,6 +2001,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ContextSummaryThreshold:         payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:           copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:         copyBoolPointer(payload.CrossGroupMemoryEnabled),
+		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),

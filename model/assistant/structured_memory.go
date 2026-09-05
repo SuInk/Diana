@@ -87,34 +87,37 @@ type MemoryCandidate struct {
 // StructuredMemoryItem is a derived view over immutable message events.
 // Superseded entries remain queryable in SQLite for audit and conflict repair.
 type StructuredMemoryItem struct {
-	ID              string           `json:"id"`
-	ScopeKey        string           `json:"scope_key"`
-	SubjectUserID   string           `json:"subject_user_id,omitempty"`
-	SubjectName     string           `json:"subject_name,omitempty"`
-	Key             string           `json:"key"`
-	Kind            MemoryKind       `json:"kind"`
-	Topic           string           `json:"topic"`
-	Entity          string           `json:"entity,omitempty"`
-	Content         string           `json:"content"`
-	Evidence        string           `json:"evidence,omitempty"`
-	SourceType      MemorySourceType `json:"source_type"`
-	SourceSession   string           `json:"source_session"`
-	SourceGroupID   string           `json:"source_group_id,omitempty"`
-	SourceMessageID string           `json:"source_message_id,omitempty"`
-	SourceEventTime time.Time        `json:"source_event_time,omitempty"`
-	Confidence      float64          `json:"confidence"`
-	Importance      float64          `json:"importance"`
-	Visibility      MemoryVisibility `json:"visibility"`
-	Sensitive       bool             `json:"sensitive"`
-	ExpiresAt       time.Time        `json:"expires_at,omitempty"`
-	LastVerifiedAt  time.Time        `json:"last_verified_at,omitempty"`
-	Version         int              `json:"version"`
-	SupersedesID    string           `json:"supersedes_id,omitempty"`
-	Status          MemoryStatus     `json:"status"`
-	CreatedAt       time.Time        `json:"created_at"`
-	UpdatedAt       time.Time        `json:"updated_at"`
-	RetrievalScore  float64          `json:"retrieval_score,omitempty"`
-	RetrievalReason string           `json:"retrieval_reason,omitempty"`
+	ID               string           `json:"id"`
+	ScopeKey         string           `json:"scope_key"`
+	SubjectUserID    string           `json:"subject_user_id,omitempty"`
+	SubjectName      string           `json:"subject_name,omitempty"`
+	Key              string           `json:"key"`
+	Kind             MemoryKind       `json:"kind"`
+	Topic            string           `json:"topic"`
+	Entity           string           `json:"entity,omitempty"`
+	Content          string           `json:"content"`
+	Evidence         string           `json:"evidence,omitempty"`
+	SourceType       MemorySourceType `json:"source_type"`
+	SourceSession    string           `json:"source_session"`
+	SourceGroupID    string           `json:"source_group_id,omitempty"`
+	SourceMessageID  string           `json:"source_message_id,omitempty"`
+	SourceEventTime  time.Time        `json:"source_event_time,omitempty"`
+	Confidence       float64          `json:"confidence"`
+	Importance       float64          `json:"importance"`
+	Visibility       MemoryVisibility `json:"visibility"`
+	Sensitive        bool             `json:"sensitive"`
+	ExpiresAt        time.Time        `json:"expires_at,omitempty"`
+	LastVerifiedAt   time.Time        `json:"last_verified_at,omitempty"`
+	Version          int              `json:"version"`
+	SupersedesID     string           `json:"supersedes_id,omitempty"`
+	Status           MemoryStatus     `json:"status"`
+	CreatedAt        time.Time        `json:"created_at"`
+	UpdatedAt        time.Time        `json:"updated_at"`
+	RetrievalScore   float64          `json:"retrieval_score,omitempty"`
+	RetrievalReason  string           `json:"retrieval_reason,omitempty"`
+	AssociationScore float64          `json:"-"`
+	AssociationLabel string           `json:"-"`
+	CompactRecall    bool             `json:"-"`
 }
 
 type MemoryWriteRequest struct {
@@ -129,19 +132,28 @@ type MemoryWriteRequest struct {
 }
 
 type StructuredMemoryQuery struct {
-	SubjectUserID string
-	Session       string
-	GroupID       string
-	Text          string
-	SearchTerms   []string
-	Now           time.Time
-	MaxCandidates int
-	Kinds         []MemoryKind
+	IDs             []string
+	RelatedEntities []string
+	RelatedTopics   []string
+	SubjectUserID   string
+	Session         string
+	GroupID         string
+	Text            string
+	SearchTerms     []string
+	Now             time.Time
+	MaxCandidates   int
+	Kinds           []MemoryKind
 	// ExcludeKinds 剔除指定类型。回复提示词用它排掉 thread：那一层由专门的通道
 	// 常驻注入，再被相关性检索捞一次就成了重复注入。
 	ExcludeKinds       []MemoryKind
 	CrossGroup         bool
 	GroupSessionPrefix string
+	// Explicitly opted-in foreign profile namespaces. Only non-personal,
+	// non-sensitive group memories may be selected through these prefixes.
+	CrossPlatformGroupPrefixes []string
+	// SharedPublicOnly reserves candidate space for related facts/summaries
+	// outside the current conversation. It never performs membership checks.
+	SharedPublicOnly bool
 	// CurrentSessionOnly 只保留当前会话作用域的记忆，连当前发言者自己的
 	// visibility=user 记忆也一并排除。它与 CrossGroup 是两件事：后者控制的是
 	// 其他群的会话记忆。回复提示词不要设这一项，否则长期记忆会整类失效。

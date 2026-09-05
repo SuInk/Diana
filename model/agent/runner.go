@@ -32,11 +32,9 @@ const (
 	maxWebSearchCallsPerAgentRun = 3
 )
 
-var (
-	pendingToolCommitmentZH     = regexp.MustCompile(`(?:下一步|接下来|然后|这次)(?:我|应|应该|会|要|将|直接|先|需|需要|必须|得|就|仍|再|立即|马上|现在|[\s，,:：]){0,16}(?:联网|搜索|查询|检索|核对|调用|执行|读取|获取|确认|操作)`)
-	pendingToolCommitmentEN     = regexp.MustCompile(`(?i)\b(?:next|then|now)\s+(?:i\s+)?(?:should|will|must|need to|am going to)\s+(?:search|query|look up|verify|call|run|execute|read|fetch|check)\b`)
-	internalProtocolTermPattern = regexp.MustCompile(`(?i)证据账本|逐主张|candidate_sources|rendered_sources|claim_updates|claim_ids|not_searched|stop_reason|\bclaim[ _-]?c[0-9]+\b`)
-)
+// internalProtocolTermPattern 是证据账本协议里的固定字段名和术语。它们是代码定义的
+// 协议词，不是自然语言，按字面拦截是准确的。
+var internalProtocolTermPattern = regexp.MustCompile(`(?i)证据账本|逐主张|candidate_sources|rendered_sources|claim_updates|claim_ids|not_searched|stop_reason|\bclaim[ _-]?c[0-9]+\b`)
 
 // internalProtocolLeak 返回正文里泄漏的内部协议词；证据账本只用于内部校验，
 // 不能出现在发给用户的回复里，靠提示词约束兜不住，需要在出口再拦一次。
@@ -311,18 +309,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
-			if toolCalls < r.cfg.MaxSteps && len(r.registry.Names()) > 0 && finalDefersAvailableTool(action.Content) {
-				protocolRepairs++
-				reason := "最终答复仍在承诺下一步调用工具，但本轮尚未执行该操作"
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。不要把待执行步骤发给用户；现在立即调用完成当前任务所需的可用工具。若没有适用工具或工具失败，只能如实说明限制，不得承诺稍后执行。"})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
+			// 以前这里还会用两条正则扫正文，找「接下来我会调用/搜索/查询」这类句子，命中就
+			// 当作模型在承诺下一步调工具却没调，退回去修一轮。那是拿关键词判断语义意图：
+			// 正则只认得测试里那两句的形状，「让我查查」「我这就去搜」全漏，「接下来我会读取
+			// 你这段话里的情绪」反而误中，每次误中都白烧一次修复预算。「预算没用完就别停下来
+			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
+			// 由代码回头猜正文。
 			if reason, valid := claimLedger.validateFinal(action.Claims); !valid {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
@@ -911,11 +903,6 @@ func (r *Runner) systemPrompt() string {
 	}
 	sections = append(sections, "规则：\n"+strings.Join(rules, "\n"))
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
-}
-
-func finalDefersAvailableTool(content string) bool {
-	content = strings.TrimSpace(content)
-	return content != "" && (pendingToolCommitmentZH.MatchString(content) || pendingToolCommitmentEN.MatchString(content))
 }
 
 func imageToolResultQueued(output string) bool {

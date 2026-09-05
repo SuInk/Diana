@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
@@ -106,6 +107,96 @@ func TestAssistantUsersListAndDetail(t *testing.T) {
 	}
 	if len(detail.FavorabilityChanges) != 1 || detail.FavorabilityChanges[0].Delta != 2 {
 		t.Fatalf("changes=%#v", detail.FavorabilityChanges)
+	}
+}
+
+// 人员页的「长期记忆」要显示门控器写出来的结构化记忆，而不是原始发言缓冲。两者
+// 条数分别记账：memory_count 是缓冲，structured_memory_count 才是长期记忆。
+func TestAssistantUsersCarryStructuredMemories(t *testing.T) {
+	ctx := context.Background()
+	store, router := newAssistantUsersTestRouter(t)
+
+	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "10001", SenderName: "小明",
+		MessageID: "m1", RawMessage: "我最喜欢打羽毛球了", Time: 1_700_000_000,
+	}, assistant.UserMemoryUpdate{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
+		SubjectUserID:   "10001",
+		SubjectName:     "小明",
+		Session:         "group:20001",
+		EventKind:       assistant.EventKindGroup,
+		GroupID:         "20001",
+		SourceMessageID: "m1",
+		SourceEventTime: time.Unix(1_700_000_000, 0),
+		Candidates: []assistant.MemoryCandidate{{
+			Key: "preference.sport", Kind: assistant.MemoryKindPreference, Topic: "运动偏好",
+			Content: "小明喜欢打羽毛球", SourceType: assistant.MemorySourceExplicit,
+			Confidence: 0.95, Importance: 0.7, Visibility: assistant.MemoryVisibilityUser,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant/users", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResp assistantUsersResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(listResp.Users) != 1 {
+		t.Fatalf("users=%#v", listResp.Users)
+	}
+	if listResp.Users[0].StructuredMemoryCount != 1 || listResp.Users[0].MemoryCount != 1 {
+		t.Fatalf("counts structured=%d raw=%d", listResp.Users[0].StructuredMemoryCount, listResp.Users[0].MemoryCount)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/assistant/users/10001", nil)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var detail assistantUserDetailResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.StructuredMemories) != 1 || detail.StructuredMemories[0].Content != "小明喜欢打羽毛球" {
+		t.Fatalf("structured memories=%#v", detail.StructuredMemories)
+	}
+	if detail.StructuredMemories[0].Topic != "运动偏好" {
+		t.Fatalf("topic=%q", detail.StructuredMemories[0].Topic)
+	}
+	// 原始发言缓冲还在，只是改口叫「最近发言」，留给排查。
+	if len(detail.Profile.Memories) != 1 || detail.Profile.Memories[0].Text != "我最喜欢打羽毛球了" {
+		t.Fatalf("recent messages=%#v", detail.Profile.Memories)
+	}
+}
+
+// 一条结构化记忆都没有的人照常返回，长期记忆是空列表而不是 null。
+func TestAssistantUserWithoutStructuredMemoriesReturnsEmptyList(t *testing.T) {
+	ctx := context.Background()
+	store, router := newAssistantUsersTestRouter(t)
+	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "10001", SenderName: "小明",
+		MessageID: "m1", RawMessage: "在的", Time: 1_700_000_000,
+	}, assistant.UserMemoryUpdate{}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/assistant/users/10001", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"structured_memories":[]`) {
+		t.Fatalf("body=%s", rec.Body.String())
 	}
 }
 

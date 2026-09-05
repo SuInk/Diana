@@ -106,19 +106,22 @@ func NormalizeBase(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-// NormalizeMode 把用户提交的策略收敛成可用值：auto、direct，或者一条通过
-// 校验的镜像地址。无法识别的值退回 auto，而不是让更新流程带着坏地址跑。
+// NormalizeMode 把用户提交的策略收敛成可用值：direct、auto，或者一条通过校验
+// 的镜像地址。
+//
+// 没设过和认不出来的值都退回直连：镜像是第三方转发，默认把更新包的来源换掉不
+// 是能替用户做的决定；带着坏地址跑更不行。要加速的人自己选一次 auto。
 func NormalizeMode(raw string) string {
 	value := strings.TrimSpace(raw)
 	switch {
-	case value == "" || strings.EqualFold(value, ModeAuto):
-		return ModeAuto
-	case strings.EqualFold(value, ModeDirect):
+	case value == "" || strings.EqualFold(value, ModeDirect):
 		return ModeDirect
+	case strings.EqualFold(value, ModeAuto):
+		return ModeAuto
 	}
 	base, err := NormalizeBase(value)
 	if err != nil {
-		return ModeAuto
+		return ModeDirect
 	}
 	return base
 }

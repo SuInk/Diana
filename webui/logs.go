@@ -31,8 +31,21 @@ type AppLogHandler struct {
 	store AppLogStore
 }
 
+// appLogActorNamer 是日志存储的可选能力：把账号换成昵称。测试里的内存实现没有它，
+// 拿不到就照旧只显示账号。
+type appLogActorNamer interface {
+	ResolveUserDisplayNames(ctx context.Context, userIDs []string) (map[string]string, error)
+}
+
+// appLogEntry 在存储行之外补一个昵称。日志里的 actor 形如 "qq:1255848531"，
+// 光一串号码认不出是谁——和事件列表是同一个问题。
+type appLogEntry struct {
+	storage.AppLogEntry
+	ActorName string `json:"actor_name,omitempty"`
+}
+
 type appLogsResponse struct {
-	Logs []storage.AppLogEntry `json:"logs"`
+	Logs []appLogEntry `json:"logs"`
 }
 
 // NewAppLogHandler 创建 AppLogHandler 实例。
@@ -59,7 +72,7 @@ func (h *AppLogHandler) list(c *gin.Context) {
 	}
 	// 日志存储不可用时返回空列表，前端日志页仍可正常打开。
 	if h.store == nil {
-		c.JSON(http.StatusOK, appLogsResponse{Logs: []storage.AppLogEntry{}})
+		c.JSON(http.StatusOK, appLogsResponse{Logs: []appLogEntry{}})
 		return
 	}
 	logs, err := h.store.ListLogs(c.Request.Context(), storage.AppLogFilter{
@@ -70,7 +83,59 @@ func (h *AppLogHandler) list(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, appLogsResponse{Logs: logs})
+	c.JSON(http.StatusOK, appLogsResponse{Logs: h.namedAppLogs(c.Request.Context(), logs)})
+}
+
+// namedAppLogs 给日志行补上 actor 的昵称。一次查完整页，不逐行查库。查不到昵称、
+// 或者存储不支持这次查询，都只是少一个名字，日志照常返回。
+func (h *AppLogHandler) namedAppLogs(ctx context.Context, logs []storage.AppLogEntry) []appLogEntry {
+	entries := make([]appLogEntry, 0, len(logs))
+	for _, entry := range logs {
+		entries = append(entries, appLogEntry{AppLogEntry: entry})
+	}
+	namer, ok := h.store.(appLogActorNamer)
+	if !ok {
+		return entries
+	}
+	userIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if userID := appLogActorUserID(entry.Actor); userID != "" {
+			userIDs = append(userIDs, userID)
+		}
+	}
+	if len(userIDs) == 0 {
+		return entries
+	}
+	names, err := namer.ResolveUserDisplayNames(ctx, userIDs)
+	if err != nil {
+		log.Printf("resolve app log actor names failed: %v", err)
+		return entries
+	}
+	for index := range entries {
+		entries[index].ActorName = names[appLogActorUserID(entries[index].Actor)]
+	}
+	return entries
+}
+
+// appLogActorUserID 从 actor 里取出聊天账号。写法有两种：带命名空间的 "qq:123456"
+// 和早先直接写账号的 "123456"。控制台操作者的 actor 不是纯数字，不会被误认。
+func appLogActorUserID(actor string) string {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return ""
+	}
+	if _, rest, found := strings.Cut(actor, ":"); found {
+		actor = strings.TrimSpace(rest)
+	}
+	if actor == "" {
+		return ""
+	}
+	for _, char := range actor {
+		if char < '0' || char > '9' {
+			return ""
+		}
+	}
+	return actor
 }
 
 // parseLogLimit 解析日志列表接口的 limit 参数。

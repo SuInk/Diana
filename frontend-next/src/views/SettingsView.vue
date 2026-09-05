@@ -257,6 +257,27 @@
             </div>
             <pre v-if="updateOutput" class="mono update-output" :class="{ error: updateFailed }">{{ updateOutput }}</pre>
             <hr class="divider" style="margin: 4px 0" />
+            <!-- Token 只影响查询版本时的 API 限额，装不装都能更新，所以放在这里
+                 而不是更新面板上：更新面板要的是「点一下就更新」。 -->
+            <label class="field update-token-field">
+              <span class="muted">GitHub Token（可选）</span>
+              <input
+                v-model="githubToken"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="githubTokenFromEnvironment ? '已由环境变量提供' : githubTokenConfigured ? '已配置，留空保持不变' : '提高版本查询的 API 限额'"
+                :disabled="githubTokenFromEnvironment"
+              />
+            </label>
+            <div class="cluster update-token-actions">
+              <button class="btn small" type="button" :disabled="savingToken || !githubToken || githubTokenFromEnvironment" @click="persistGitHubToken(false)">保存 Token</button>
+              <button v-if="githubTokenConfigured && !githubTokenFromEnvironment" class="btn ghost small" type="button" :disabled="savingToken" @click="persistGitHubToken(true)">清除</button>
+            </div>
+            <p class="muted" style="font-size: 12.5px; margin: 0">
+              匿名查询 GitHub 版本有限额，用得频繁时容易被限流；填一个只读 Token 就够，不填也能正常更新。也可以改用环境变量
+              <code>DIANA_GITHUB_TOKEN</code>。
+            </p>
+            <hr class="divider" style="margin: 4px 0" />
             <button class="btn" type="button" :disabled="restarting" @click="doRestart">
               <RotateCw :size="15" aria-hidden="true" />
               {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
@@ -333,7 +354,9 @@ import {
   getHealth,
   checkForUpdate,
   getSystemVersion,
+  getUpdateGitHubToken,
   getUpdateStatus,
+  saveUpdateGitHubToken,
 	installDownloadedSystemUpdate,
 	downloadSystemUpdate,
   pullFromGitHub,
@@ -373,6 +396,10 @@ const loading = ref(false);
 const updating = ref(false);
 const updateFailed = ref(false);
 const restarting = ref(false);
+const savingToken = ref(false);
+const githubToken = ref("");
+const githubTokenConfigured = ref(false);
+const githubTokenFromEnvironment = ref(false);
 const updateOutput = ref("");
 const authRequired = ref(false);
 const username = ref("");
@@ -584,6 +611,32 @@ const shortCommit = computed(() => {
   return commit ? commit.slice(0, 10) : "—";
 });
 
+async function loadGitHubTokenStatus(): Promise<void> {
+  try {
+    const status = await getUpdateGitHubToken();
+    githubTokenConfigured.value = status.configured;
+    githubTokenFromEnvironment.value = status.source === "environment";
+  } catch {
+    githubTokenConfigured.value = false;
+    githubTokenFromEnvironment.value = false;
+  }
+}
+
+async function persistGitHubToken(clear: boolean): Promise<void> {
+  savingToken.value = true;
+  try {
+    const status = await saveUpdateGitHubToken(githubToken.value, clear);
+    githubTokenConfigured.value = status.configured;
+    githubTokenFromEnvironment.value = status.source === "environment";
+    githubToken.value = "";
+    toastSuccess(clear ? "GitHub Token 已清除" : "GitHub Token 已保存");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存 GitHub Token 失败");
+  } finally {
+    savingToken.value = false;
+  }
+}
+
 async function loadUpdates(): Promise<void> {
   loading.value = true;
   try {
@@ -702,6 +755,7 @@ async function doRestart(): Promise<void> {
 
 onMounted(() => {
   void loadUpdates();
+  void loadGitHubTokenStatus();
   void loadAuthStatus().then(() => loadSessions());
   void loadApiKeys();
   void loadOpenAPIPlugin();
@@ -724,6 +778,19 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.update-token-field {
+  display: grid;
+  gap: 4px;
+}
+
+.update-token-field input {
+  width: 100%;
+}
+
+.update-token-actions {
+  gap: 8px;
+}
+
 /* 只有三档，铺满整行反而显得空；靠左按内容宽度排。 */
 .settings-tabs {
   display: inline-flex;

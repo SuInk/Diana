@@ -163,6 +163,10 @@ func (r *Runtime) handleOneBotRequest(ctx context.Context, event MessageEvent) e
 		Text: oneBotRequestSummary(request.RequestType, request.SubType), Handled: true,
 		Outcome: "onebot_request_pending", Decision: "pending", Reason: "OneBot 请求已持久化并等待主人处理",
 	})
+	// 群申请和邀请只留待主动查询，不再私聊推送给主人。
+	if request.RequestType == "group" {
+		return nil
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	ownerID := strings.TrimSpace(cfg.OwnerID)
 	if ownerID == "" {
