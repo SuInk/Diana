@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -84,46 +85,6 @@ func TestChatInDecisionRequiresSubstantiveContent(t *testing.T) {
 	lowConfidence, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":0.89,"category":"chat_in","directed_at_bot":false,"answerable":true,"substantive":true}`)
 	if lowConfidence.allows(0.99, enabled) != (0.89 >= enabled.Threshold) {
 		t.Fatalf("chat-in should use its own threshold %.2f: %#v", enabled.Threshold, lowConfidence)
-	}
-}
-
-func TestNaturalInterjectionAllowsEveryValidReply(t *testing.T) {
-	cfg := DefaultBotConfig()
-	cfg.ChatInEnabled = boolPointer(false)
-	cfg.NaturalInterjectionEnabled = boolPointer(true)
-	settings := cfg.chatInSettings()
-	if !settings.Enabled || !settings.Natural || settings.Threshold != 0 || settings.Chance != 1 || settings.Cooldown != 0 {
-		t.Fatalf("natural interjection settings = %#v", settings)
-	}
-
-	valid, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":0.01,"category":"chat_in","answerable":true,"substantive":true}`)
-	if !valid.allows(0.99, settings) {
-		t.Fatal("natural mode should allow a valid substantive reply without confidence gating")
-	}
-	notAnswerable, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":false,"substantive":true}`)
-	if !notAnswerable.allows(0.1, settings) {
-		t.Fatal("planner answerability must not preempt the send-time accuracy audit")
-	}
-	filler, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":true,"substantive":false}`)
-	if filler.allows(0.1, settings) {
-		t.Fatal("natural mode must not send filler")
-	}
-	if prompt := proactiveReplyRouterPromptForChatIn("路由器提示词", settings, false); !strings.Contains(prompt, "自然插话模式") || !strings.Contains(prompt, "有实质内容") {
-		t.Fatalf("natural router prompt = %q", prompt)
-	}
-}
-
-func TestNaturalInterjectionCanBeConfiguredPerGroup(t *testing.T) {
-	runtime := NewRuntime(BotConfig{NaturalInterjectionEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"natural": {GroupID: "natural", NaturalInterjectionEnabled: boolPointer(true)},
-		"quiet":   {GroupID: "quiet", NaturalInterjectionEnabled: boolPointer(false)},
-	}})
-	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); !settings.Natural {
-		t.Fatalf("natural group settings = %#v", settings)
-	}
-	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "quiet"}).chatInSettings(); settings.Natural {
-		t.Fatalf("quiet group settings = %#v", settings)
 	}
 }
 
@@ -218,12 +179,11 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 func TestChatInSurvivesConfigPayloadRoundTrip(t *testing.T) {
 	// WebUI 存一次配置就会走这条来回转换；漏字段会静默把开关和档位重置成默认值。
 	cfg := BotConfig{
-		ChatInEnabled:              boolPointer(false),
-		ChatInLevel:                ChatInLevelHigh,
-		ChatInThreshold:            0.77,
-		ChatInChance:               0.42,
-		ChatInCooldownSeconds:      90,
-		NaturalInterjectionEnabled: boolPointer(true),
+		ChatInEnabled:         boolPointer(false),
+		ChatInLevel:           ChatInLevelHigh,
+		ChatInThreshold:       0.77,
+		ChatInChance:          0.42,
+		ChatInCooldownSeconds: 90,
 	}
 	got := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
 	if got.ChatInEnabled == nil || *got.ChatInEnabled {
@@ -234,9 +194,6 @@ func TestChatInSurvivesConfigPayloadRoundTrip(t *testing.T) {
 	}
 	if got.ChatInThreshold != 0.77 || got.ChatInChance != 0.42 || got.ChatInCooldownSeconds != 90 {
 		t.Fatalf("chat-in overrides lost in round trip: %#v", got)
-	}
-	if got.NaturalInterjectionEnabled == nil || !*got.NaturalInterjectionEnabled {
-		t.Fatalf("natural interjection switch lost in round trip: %#v", got.NaturalInterjectionEnabled)
 	}
 }
 
@@ -286,26 +243,6 @@ func TestChatInReplyPromptOnlyAppearsForInterjections(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("chat-in prompt missing %q: %q", want, prompt)
 		}
-	}
-}
-
-func TestChatInOffIsNotResurrectedByNaturalInterjection(t *testing.T) {
-	settings := BotConfig{
-		ResponseMode:               ResponseModeCustom,
-		ChatInLevel:                ChatInLevelOff,
-		NaturalInterjectionEnabled: boolPointer(true),
-	}.chatInSettings()
-	if settings.Enabled || settings.Natural {
-		t.Fatalf("chat-in off was reopened by natural mode: %#v", settings)
-	}
-	// 其余档位仍然可以切到自然插话。
-	on := BotConfig{
-		ResponseMode:               ResponseModeCustom,
-		ChatInLevel:                ChatInLevelLow,
-		NaturalInterjectionEnabled: boolPointer(true),
-	}.chatInSettings()
-	if !on.Enabled || !on.Natural || on.Cooldown != 0 {
-		t.Fatalf("natural mode did not apply on an open level: %#v", on)
 	}
 }
 
@@ -403,5 +340,35 @@ func TestSocialReplyEnabledFlowsFromGroupConfig(t *testing.T) {
 	quiet := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "quiet"})
 	if boolValue(quiet.SocialReplyEnabled, false) {
 		t.Fatal("群级关掉的社交性回应没有生效")
+	}
+}
+
+// 自然插话模式已经删掉。它当年的作用是让 chat_in 绕开置信度、采样率和冷却，只看
+// substantive；五个回复模式预设早就全部强制关掉它，界面上也只在自定义模式下才露脸，
+// 留着只会让人以为还能开。
+//
+// 这里盯两件事：老配置里残留的那个键不能把行为带回来，以及任何档位下 chat_in 都要
+// 过置信度门槛。
+func TestNaturalInterjectionIsGone(t *testing.T) {
+	// 存量配置是 JSON，删字段之后这个键会被直接忽略，不需要迁移。
+	var cfg BotConfig
+	raw := `{"chat_in_enabled":true,"chat_in_level":"low","natural_interjection_enabled":true}`
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	settings := cfg.WithDefaults().chatInSettings()
+	if settings.Threshold <= 0 || settings.Chance <= 0 {
+		t.Fatalf("旧键把档位参数清零了，等于自然插话又活了：%#v", settings)
+	}
+
+	// 有实质内容但置信度低于档位阈值：自然插话时代会放行，现在必须挡住。
+	lowConfidence, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":0.01,"category":"chat_in","answerable":true,"substantive":true}`)
+	if lowConfidence.allows(0.99, settings) {
+		t.Fatalf("chat_in 绕过了置信度门槛：%#v", settings)
+	}
+
+	// 路由器提示词也不该再提它。
+	if prompt := proactiveReplyRouterPromptForChatIn("路由器提示词", settings, false); strings.Contains(prompt, "自然插话") {
+		t.Fatalf("router prompt = %q", prompt)
 	}
 }

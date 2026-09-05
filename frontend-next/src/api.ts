@@ -253,8 +253,6 @@ export interface BotProfileConfig {
   proactive_reply_chance?: number;
   /** 主动回复最低置信度，范围 0~1，默认 0.9。 */
   proactive_reply_threshold?: number;
-  /** 普通群聊只要能生成有效内容就允许自然插话。 */
-  natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
   /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
@@ -465,8 +463,6 @@ export interface BotGroupConfig {
   forward_reply_chunk_threshold?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
-  /** 本群是否开启自然插话模式。 */
-  natural_interjection_enabled?: boolean;
   /** 本群是否开启社交性回应；不设表示跟随机器人。 */
   social_reply_enabled?: boolean;
   minimum_reply_member_level?: number;

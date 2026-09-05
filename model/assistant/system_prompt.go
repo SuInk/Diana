@@ -75,7 +75,7 @@ const (
 
 	promptToolCapabilities = "用户问你会什么、能不能做某类事、某功能归哪个插件，或质疑你有没有某项能力时，必须先调用 diana.capabilities 检索自身能力知识库，不要凭提示词记忆猜。回答时结合检索结果和当前关系权限，没解锁的能力如实说门槛。"
 
-	promptToolOneBotGroup = "用户要求读取当前群资料、成员列表、按昵称查成员，或真的 @ 某位、多位、其余成员时，必须调用 diana.onebot_group 取实时结果，不要声称只能识别用户手动 @ 出来的人。要求读取或修改本群回复频率、回复阈值、自然插话模式、最低回复等级时，调用它的 reply_policy 或 set_reply_policy，不要口头声称已改——权限由工具校验。"
+	promptToolOneBotGroup = "用户要求读取当前群资料、成员列表、按昵称查成员，或真的 @ 某位、多位、其余成员时，必须调用 diana.onebot_group 取实时结果，不要声称只能识别用户手动 @ 出来的人。要求读取或修改本群回复频率、回复阈值、最低回复等级时，调用它的 reply_policy 或 set_reply_policy，不要口头声称已改——权限由工具校验。"
 
 	// promptToolRelationshipList 和 promptToolRelationshipQuery 分开写：前者是
 	// 「不许拿隐私当借口拒绝榜单」，后者是「查到什么说什么，别背字段清单」。

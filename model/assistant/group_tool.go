@@ -44,16 +44,15 @@ type dianaOneBotGroupResult struct {
 }
 
 type dianaOneBotGroupReplyPolicy struct {
-	ProactiveReplyChance       float64 `json:"proactive_reply_chance"`
-	ProactiveReplyThreshold    float64 `json:"proactive_reply_threshold"`
-	MinimumReplyMemberLevel    int     `json:"minimum_reply_member_level"`
-	ChatInEnabled              bool    `json:"chat_in_enabled"`
-	ChatInLevel                string  `json:"chat_in_level"`
-	ChatInLevelLabel           string  `json:"chat_in_level_label"`
-	ChatInThreshold            float64 `json:"chat_in_threshold"`
-	ChatInChance               float64 `json:"chat_in_chance"`
-	ChatInCooldownSeconds      int     `json:"chat_in_cooldown_seconds"`
-	NaturalInterjectionEnabled bool    `json:"natural_interjection_enabled"`
+	ProactiveReplyChance    float64 `json:"proactive_reply_chance"`
+	ProactiveReplyThreshold float64 `json:"proactive_reply_threshold"`
+	MinimumReplyMemberLevel int     `json:"minimum_reply_member_level"`
+	ChatInEnabled           bool    `json:"chat_in_enabled"`
+	ChatInLevel             string  `json:"chat_in_level"`
+	ChatInLevelLabel        string  `json:"chat_in_level_label"`
+	ChatInThreshold         float64 `json:"chat_in_threshold"`
+	ChatInChance            float64 `json:"chat_in_chance"`
+	ChatInCooldownSeconds   int     `json:"chat_in_cooldown_seconds"`
 }
 
 type dianaOneBotGroupMemberItem struct {
@@ -104,7 +103,6 @@ func (t *dianaOneBotGroupTool) InputSchema() map[string]any {
 			minimumReplyChance, maximumReplyChance),
 		"chat_in_cooldown_seconds": toolIntParam("覆盖档位预设的插话冷却秒数，需要精细调节时才用。",
 			0, maximumChatInCooldownSecond),
-		"natural_interjection_enabled": toolBoolParam("自然插话模式：置 true 后只要能生成可靠且有实质内容的回复就放行，不再受置信度、采样率和冷却限制。用户说「只要有话能回就回复」时开启，说「恢复原来的插话频率」时关闭。"),
 	})
 }
 
@@ -194,10 +192,6 @@ func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string
 		cfg.ChatInEnabled = boolPointer(groupToolBool(input, "chat_in_enabled"))
 		changed, chatInChanged = true, true
 	}
-	if _, present := input["natural_interjection_enabled"]; present {
-		cfg.NaturalInterjectionEnabled = boolPointer(groupToolBool(input, "natural_interjection_enabled"))
-		changed, chatInChanged = true, true
-	}
 	if value, present := input["chat_in_level"]; present {
 		level := ChatInLevel(fmt.Sprintf("%v", value)).Normalized()
 		if level == "" {
@@ -265,23 +259,21 @@ func dianaOneBotGroupReplyPolicyFromConfig(cfg GroupConfig) dianaOneBotGroupRepl
 	resolved := BotConfig{
 		ChatInEnabled: cfg.ChatInEnabled, ChatInLevel: cfg.ChatInLevel, ChatInThreshold: cfg.ChatInThreshold,
 		ChatInChance: cfg.ChatInChance, ChatInCooldownSeconds: cfg.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled: cfg.NaturalInterjectionEnabled,
 	}
 	if strings.TrimSpace(string(cfg.ResponseMode)) != "" {
 		cfg.ResponseMode.Normalized().apply(&resolved)
 	}
 	chatIn := resolved.chatInSettings()
 	return dianaOneBotGroupReplyPolicy{
-		ProactiveReplyChance:       cfg.ProactiveReplyChance,
-		ProactiveReplyThreshold:    cfg.ProactiveReplyThreshold,
-		MinimumReplyMemberLevel:    cfg.MinimumReplyMemberLevel,
-		ChatInEnabled:              chatIn.Enabled,
-		ChatInLevel:                string(chatIn.Level),
-		ChatInLevelLabel:           chatIn.Level.Label(),
-		ChatInThreshold:            chatIn.Threshold,
-		ChatInChance:               chatIn.Chance,
-		ChatInCooldownSeconds:      int(chatIn.Cooldown / time.Second),
-		NaturalInterjectionEnabled: chatIn.Natural,
+		ProactiveReplyChance:    cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold: cfg.ProactiveReplyThreshold,
+		MinimumReplyMemberLevel: cfg.MinimumReplyMemberLevel,
+		ChatInEnabled:           chatIn.Enabled,
+		ChatInLevel:             string(chatIn.Level),
+		ChatInLevelLabel:        chatIn.Level.Label(),
+		ChatInThreshold:         chatIn.Threshold,
+		ChatInChance:            chatIn.Chance,
+		ChatInCooldownSeconds:   int(chatIn.Cooldown / time.Second),
 	}
 }
 

@@ -236,7 +236,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_ai_reply_loop":
 		return "not_replied", "发送前审核认定这一来一回已在空转（对方是自动回复，或双方都只在应付没有内容），为避免继续接茬而没有发送", false
 	case "ignored_no_natural_reply":
-		return "not_replied", "自然插话的最终生成没有得到有效回复，已保持静默", false
+		return "not_replied", "闲聊插话的最终生成没有得到有效回复，已保持静默", false
 	case "ignored_proactive_reply_quality":
 		return "not_replied", "主动回复生成后未通过准确度审核，已保持沉默", false
 	case "ignored_video":
@@ -1269,7 +1269,6 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ChatInThreshold = groupCfg.ChatInThreshold
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
-	cfg.NaturalInterjectionEnabled = copyBoolPointer(groupCfg.NaturalInterjectionEnabled)
 	cfg.SocialReplyEnabled = copyBoolPointer(groupCfg.SocialReplyEnabled)
 	if groupResponseModeOverridden {
 		cfg.ResponseMode.apply(&cfg)
@@ -2410,11 +2409,7 @@ func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decis
 		decision.Substantive,
 	)
 	if decision.chatIn() {
-		if chatIn.Natural {
-			metrics += "，自然插话模式已开启"
-		} else {
-			metrics += fmt.Sprintf("，闲聊插话档位 %s", chatIn.Level)
-		}
+		metrics += fmt.Sprintf("，闲聊插话档位 %s", chatIn.Level)
 	}
 	switch {
 	case allowed && routePromoted:
@@ -2730,9 +2725,6 @@ func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSe
 		if chatIn.SuperActive {
 			return chatIn.Enabled && decision.Confidence >= chatIn.Threshold
 		}
-		if chatIn.Natural {
-			return chatIn.Enabled && decision.Substantive
-		}
 		return chatIn.Enabled && decision.Substantive && decision.Confidence >= chatIn.Threshold
 	default:
 		return false
@@ -2839,9 +2831,6 @@ func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSetting
 	}
 	if chatIn.Assistant {
 		return prompt + "\n\n" + assistantIntentPrompt
-	}
-	if chatIn.Natural {
-		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
 	}
 	if chatIn.Enabled {
 		return prompt + fmt.Sprintf("\n\n当前闲聊插话档位：%s（%s）。档位只影响运行时的放行松紧，不放宽 substantive 的判断标准：任何档位下附和、复读和寒暄都必须 substantive=false。", chatIn.Level, chatIn.Level.Label())

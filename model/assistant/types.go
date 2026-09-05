@@ -543,24 +543,23 @@ type BotConfig struct {
 	DictSegmentEnabled *bool `json:"dict_segment_enabled,omitempty"`
 	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
 	// 词面结果融合。需要 embedding 分组的提供商配置档,默认关。
-	SemanticSearchEnabled      *bool         `json:"semantic_search_enabled,omitempty"`
-	ProactiveReplyChance       float64       `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold    float64       `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled              *bool         `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                ChatInLevel   `json:"chat_in_level,omitempty"`
-	ChatInThreshold            float64       `json:"chat_in_threshold,omitempty"`
-	ChatInChance               float64       `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds      int           `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled *bool         `json:"natural_interjection_enabled,omitempty"`
-	ReplyRules                 []ReplyRule   `json:"reply_rules,omitempty"`
-	MaxBotConcurrency          int           `json:"max_bot_concurrency,omitempty"`
-	RequestTimeout             time.Duration `json:"request_timeout,omitempty"`
-	AgentEnabled               bool          `json:"agent_enabled,omitempty"`
-	AgentMaxSteps              int           `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots            []string      `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath         string        `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist      []string      `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS      int           `json:"agent_command_timeout_ms,omitempty"`
+	SemanticSearchEnabled   *bool         `json:"semantic_search_enabled,omitempty"`
+	ProactiveReplyChance    float64       `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold float64       `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled           *bool         `json:"chat_in_enabled,omitempty"`
+	ChatInLevel             ChatInLevel   `json:"chat_in_level,omitempty"`
+	ChatInThreshold         float64       `json:"chat_in_threshold,omitempty"`
+	ChatInChance            float64       `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds   int           `json:"chat_in_cooldown_seconds,omitempty"`
+	ReplyRules              []ReplyRule   `json:"reply_rules,omitempty"`
+	MaxBotConcurrency       int           `json:"max_bot_concurrency,omitempty"`
+	RequestTimeout          time.Duration `json:"request_timeout,omitempty"`
+	AgentEnabled            bool          `json:"agent_enabled,omitempty"`
+	AgentMaxSteps           int           `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots         []string      `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath      string        `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist   []string      `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS   int           `json:"agent_command_timeout_ms,omitempty"`
 	// AgentCommandSandbox 见 agent.CommandSandbox* 常量：auto 有沙盒就用、
 	// require 没有就拒绝执行、off 完全不套。留空按 auto。
 	AgentCommandSandbox string `json:"agent_command_sandbox,omitempty"`
@@ -684,7 +683,6 @@ type GroupConfig struct {
 	ChatInThreshold              float64                `json:"chat_in_threshold,omitempty"`
 	ChatInChance                 float64                `json:"chat_in_chance,omitempty"`
 	ChatInCooldownSeconds        int                    `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled   *bool                  `json:"natural_interjection_enabled,omitempty"`
 	SocialReplyEnabled           *bool                  `json:"social_reply_enabled,omitempty"`
 	MinimumReplyMemberLevel      int                    `json:"minimum_reply_member_level,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool                  `json:"recall_reply_auto_delete_enabled,omitempty"`
@@ -842,7 +840,6 @@ type ConfigPayload struct {
 	ChatInThreshold                 float64     `json:"chat_in_threshold,omitempty"`
 	ChatInChance                    float64     `json:"chat_in_chance,omitempty"`
 	ChatInCooldownSeconds           int         `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled      *bool       `json:"natural_interjection_enabled,omitempty"`
 	ReplyRules                      []ReplyRule `json:"reply_rules,omitempty"`
 	MaxBotConcurrency               int         `json:"max_bot_concurrency,omitempty"`
 	RequestTimeoutMS                int64       `json:"request_timeout_ms,omitempty"`
@@ -886,7 +883,6 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		ChatInThreshold:              base.ChatInThreshold,
 		ChatInChance:                 base.ChatInChance,
 		ChatInCooldownSeconds:        base.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:   copyBoolPointer(base.NaturalInterjectionEnabled),
 		SocialReplyEnabled:           copyBoolPointer(base.SocialReplyEnabled),
 		MinimumReplyMemberLevel:      0,
 		RecallReplyAutoDeleteEnabled: copyBoolPointer(base.RecallReplyAutoDeleteEnabled),
@@ -980,9 +976,6 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	cfg.ChatInChance = clampChatInRatio(cfg.ChatInChance)
 	if cfg.ChatInCooldownSeconds < 0 {
 		cfg.ChatInCooldownSeconds = 0
-	}
-	if cfg.NaturalInterjectionEnabled == nil {
-		cfg.NaturalInterjectionEnabled = copyBoolPointer(defaults.NaturalInterjectionEnabled)
 	}
 	if cfg.MinimumReplyMemberLevel < 0 {
 		cfg.MinimumReplyMemberLevel = 0
@@ -1304,7 +1297,6 @@ func DefaultBotConfig() BotConfig {
 		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
 		ChatInEnabled:                  boolPointer(true),
 		ChatInLevel:                    defaultChatInLevel,
-		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
 		ReplyMaxBubbles:                replyMaxChatBubbles,
@@ -1449,9 +1441,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.ChatInChance = clampChatInRatio(cfg.ChatInChance)
 	if cfg.ChatInCooldownSeconds < 0 {
 		cfg.ChatInCooldownSeconds = 0
-	}
-	if cfg.NaturalInterjectionEnabled == nil {
-		cfg.NaturalInterjectionEnabled = copyBoolPointer(defaults.NaturalInterjectionEnabled)
 	}
 	if hasResponseMode {
 		cfg.ResponseMode.apply(&cfg)
@@ -1833,7 +1822,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ChatInThreshold:                   cfg.ChatInThreshold,
 		ChatInChance:                      cfg.ChatInChance,
 		ChatInCooldownSeconds:             cfg.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:        copyBoolPointer(cfg.NaturalInterjectionEnabled),
 		ReplyRules:                        append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:                 cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                  cfg.RequestTimeout.Milliseconds(),
@@ -2010,7 +1998,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ChatInThreshold:                 payload.ChatInThreshold,
 		ChatInChance:                    payload.ChatInChance,
 		ChatInCooldownSeconds:           payload.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:      copyBoolPointer(payload.NaturalInterjectionEnabled),
 		ReplyRules:                      append([]ReplyRule(nil), payload.ReplyRules...),
 		MaxBotConcurrency:               payload.MaxBotConcurrency,
 		RequestTimeout:                  time.Duration(payload.RequestTimeoutMS) * time.Millisecond,

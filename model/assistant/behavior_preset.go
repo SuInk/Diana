@@ -45,28 +45,22 @@ func (mode ResponseMode) apply(cfg *BotConfig) {
 	case ResponseModeAssistant:
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelLow
-		cfg.NaturalInterjectionEnabled = boolPointer(false)
 		clearChatInFineTuning(cfg)
 	case ResponseModeQuiet:
 		cfg.ChatInEnabled = boolPointer(false)
 		cfg.ChatInLevel = ChatInLevelOff
-		cfg.NaturalInterjectionEnabled = boolPointer(false)
 		clearChatInFineTuning(cfg)
 	case ResponseModeActive:
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelHigh
-		cfg.NaturalInterjectionEnabled = boolPointer(false)
 		clearChatInFineTuning(cfg)
 	case ResponseModeSuperActive:
-		// 回复欲望由模式直接控制，不再依赖旧的自然插话开关。
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelMax
-		cfg.NaturalInterjectionEnabled = boolPointer(false)
 		clearChatInFineTuning(cfg)
 	case ResponseModeStandard:
 		cfg.ChatInEnabled = boolPointer(true)
 		cfg.ChatInLevel = ChatInLevelLow
-		cfg.NaturalInterjectionEnabled = boolPointer(false)
 		clearChatInFineTuning(cfg)
 	case ResponseModeCustom:
 		// Keep the detailed chat-in controls untouched.

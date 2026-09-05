@@ -236,7 +236,7 @@ func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 	handler.SetGroupConfigStore(store)
 	router := botTestRouter(handler)
 
-	body := `{"config":{"group_id":"50005","enabled":true,"enabled_set":true,"natural_interjection_enabled":true,"recall_reply_auto_delete_enabled":true,"recall_reply_auto_delete_delay_seconds":90}}`
+	body := `{"config":{"group_id":"50005","enabled":true,"enabled_set":true,"recall_reply_auto_delete_enabled":true,"recall_reply_auto_delete_delay_seconds":90}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -250,11 +250,11 @@ func TestConsoleGroupsSavesRecallReplyAutoDeletePolicy(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Config.NaturalInterjectionEnabled == nil || !*response.Config.NaturalInterjectionEnabled || response.Config.RecallReplyAutoDeleteEnabled == nil || !*response.Config.RecallReplyAutoDeleteEnabled || response.Config.RecallReplyTTLSeconds != 90 {
+	if response.Config.RecallReplyAutoDeleteEnabled == nil || !*response.Config.RecallReplyAutoDeleteEnabled || response.Config.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("response config = %#v", response.Config)
 	}
 	saved, ok := store.ConfigForGroup(response.Config.BotProfileID, "50005")
-	if !ok || saved.NaturalInterjectionEnabled == nil || !*saved.NaturalInterjectionEnabled || saved.RecallReplyAutoDeleteEnabled == nil || !*saved.RecallReplyAutoDeleteEnabled || saved.RecallReplyTTLSeconds != 90 {
+	if !ok || saved.RecallReplyAutoDeleteEnabled == nil || !*saved.RecallReplyAutoDeleteEnabled || saved.RecallReplyTTLSeconds != 90 {
 		t.Fatalf("saved config = %#v, ok = %v", saved, ok)
 	}
 }
