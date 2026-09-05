@@ -134,8 +134,6 @@ export interface BotProfileConfig {
   avatar_url?: string;
   active_profile_id?: string;
   profiles?: BotProfileConfig[];
-  /** 默认开启；关闭后不同平台可复用相同会话键中的上下文。 */
-  isolate_platform_contexts?: boolean;
   /** 跨机器人的消息互通链路，一条链路连两个会话。 */
   message_relays?: MessageRelayPair[];
   enabled: boolean;
@@ -1147,13 +1145,6 @@ export function deleteBotProfile(id: string): Promise<BotProfileConfig> {
   return requestJSON<BotProfileConfig>("/api/assistant/config/delete", {
     method: "POST",
     body: JSON.stringify({ id })
-  });
-}
-
-export function setBotContextIsolation(enabled: boolean): Promise<BotProfileConfig> {
-  return requestJSON<BotProfileConfig>("/api/assistant/config/context-isolation", {
-    method: "POST",
-    body: JSON.stringify({ enabled })
   });
 }
 

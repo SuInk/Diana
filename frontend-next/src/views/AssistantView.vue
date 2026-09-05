@@ -45,9 +45,12 @@
       </div>
     </header>
 
-    <div v-if="form && page === 'list'" class="stack">
+    <div v-if="page === 'list' && (form || loading)" class="stack">
       <!-- 平台筛选：默认全选，点标签可以只看某个平台。 -->
-      <div v-if="platformFilters.length > 1" class="platform-filters">
+      <div v-if="!form" class="platform-filters" role="status" aria-label="正在加载平台筛选">
+        <SkeletonBlock v-for="width in ['76px', '68px', '105px']" :key="width" :width="width" height="34px" rounded />
+      </div>
+      <div v-else-if="platformFilters.length > 1" class="platform-filters">
         <button
           type="button"
           class="platform-filter"
@@ -70,37 +73,20 @@
         </button>
       </div>
 
-      <section class="settings-band" aria-label="跨平台上下文设置">
-        <span class="settings-band-icon"><Layers3 :size="17" aria-hidden="true" /></span>
-        <div class="settings-band-copy">
-          <strong>平台上下文隔离</strong>
-          <span>开启后 OneBot v11 与 Telegram 分别保存会话历史；关闭后允许共享相同会话键的上下文。</span>
-        </div>
-        <label class="switch settings-band-switch">
-          <input
-            type="checkbox"
-            :checked="contextIsolationEnabled"
-            :disabled="busy"
-            @change="updateContextIsolation(($event.target as HTMLInputElement).checked)"
-          />
-          <span class="track" aria-hidden="true"></span>
-          <span class="switch-label">{{ contextIsolationEnabled ? "已隔离" : "允许共享" }}</span>
-        </label>
-      </section>
-
       <section class="settings-band" aria-label="消息互通设置">
         <span class="settings-band-icon"><Shuffle :size="17" aria-hidden="true" /></span>
         <div class="settings-band-copy">
           <strong>消息互通</strong>
-          <span>{{ relaySummary }}</span>
+          <span :class="{ 'skeleton skeleton-text': !form }" :aria-hidden="!form || undefined">{{ relaySummary }}</span>
         </div>
-        <button class="btn small" type="button" :disabled="busy" @click="relayManagerOpen = true">
+        <button class="btn small" type="button" :disabled="busy || !form" @click="relayManagerOpen = true">
           <Settings2 :size="13" aria-hidden="true" />
           配置
         </button>
       </section>
 
-      <div class="bot-profile-grid">
+      <LoadingSkeleton v-if="!form" kind="bots" :count="2" label="正在加载机器人" />
+      <div v-else class="bot-profile-grid">
         <article
           v-for="profile in filteredProfiles"
           :key="profile.id ?? profile.name"
@@ -122,20 +108,20 @@
               <span class="bot-profile-account">{{ profile.bot_account || accountPlaceholder(profile) }}</span>
             </span>
           </button>
-          <!-- 卡片主体已经能点进编辑；底部只放紧凑的配置和删除，避免大按钮抢视觉。 -->
           <div class="bot-profile-actions">
-            <button class="btn small bot-profile-configure" type="button" :disabled="busy" @click="editProfile(profile)">
-              <Settings2 :size="13" aria-hidden="true" />
+            <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
+              <Settings2 :size="14" aria-hidden="true" />
               配置
             </button>
             <button
-              class="btn ghost icon-only small danger"
+              class="btn small danger"
               type="button"
               :disabled="busy || profiles.length <= 1"
-              title="删除机器人"
+              :title="profiles.length <= 1 ? '至少保留一个机器人' : '删除机器人'"
               @click="removeProfile(profile)"
             >
               <Trash2 :size="14" aria-hidden="true" />
+              删除
             </button>
           </div>
         </article>
@@ -147,7 +133,7 @@
       </div>
 
       <EmptyState
-        v-if="filteredProfiles.length === 0"
+        v-if="form && filteredProfiles.length === 0"
         title="没有匹配的机器人"
         hint="当前筛选条件下没有机器人，点「全部」查看所有。"
       />
@@ -648,7 +634,7 @@
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
-                  <input v-model="form.cross_platform_memory_enabled" type="checkbox" :disabled="!form.long_term_memory_enabled || !contextIsolationEnabled" title="需要长期记忆、平台上下文隔离及双方机器人启用；仅共享非敏感群公共记忆" />
+                  <input v-model="form.cross_platform_memory_enabled" type="checkbox" :disabled="!form.long_term_memory_enabled" title="需要双方机器人启用长期记忆和跨平台记忆；仅共享非敏感群公共记忆，不合并会话上下文" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">跨平台记忆</span>
                 </label>
@@ -1462,10 +1448,9 @@
       </div>
     </div>
 
-    <div v-else-if="!form" class="stack">
-      <div class="skeleton" style="height: 200px"></div>
-      <div class="skeleton" style="height: 320px"></div>
-    </div>
+    <EmptyState v-else-if="!form && !loading" title="暂时无法加载机器人">
+      <button class="btn" type="button" @click="load"><RefreshCw :size="15" aria-hidden="true" />重试</button>
+    </EmptyState>
 
     <div v-if="platformPickerOpen" class="modal-backdrop" @click.self="platformPickerOpen = false">
       <section class="modal platform-picker" role="dialog" aria-modal="true" aria-labelledby="platform-picker-title">
@@ -1510,7 +1495,9 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, type Ref } from "vue";
-import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Layers3, Plus, Power, PowerOff, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
+import { ArrowLeft, BookmarkPlus, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -1521,7 +1508,6 @@ import {
   listLLMModels,
   requestBotBackfill,
   saveBotProfileConfig,
-  setBotContextIsolation,
   type MessageRelayPair,
   startBot,
   stopBot,
@@ -1563,6 +1549,7 @@ import { toastError, toastSuccess } from "../toast";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
 const form = ref<BotProfileConfig | null>(null);
+const loading = ref(true);
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
 const personaBusy = ref(false);
@@ -2368,7 +2355,6 @@ const globalGate = computed({
 const status = computed(() => stream.status);
 const profiles = computed<BotProfileConfig[]>(() => profileSet.value?.profiles ?? []);
 const activeProfileID = computed(() => profileSet.value?.active_profile_id);
-const contextIsolationEnabled = computed(() => profileSet.value?.isolate_platform_contexts ?? true);
 const relayManagerOpen = ref(false);
 const messageRelays = computed<MessageRelayPair[]>(() => profileSet.value?.message_relays ?? []);
 const relaySummary = computed(() => {
@@ -2424,18 +2410,6 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
   applyConfig(config);
   relayManagerOpen.value = false;
   toastSuccess("消息互通链路已保存");
-}
-
-async function updateContextIsolation(enabled: boolean): Promise<void> {
-  busy.value = true;
-  try {
-    applyConfig(await setBotContextIsolation(enabled));
-    toastSuccess(enabled ? "OneBot v11 与 Telegram 上下文已隔离" : "OneBot v11 与 Telegram 现在可以共享上下文");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "隔离设置保存失败");
-  } finally {
-    busy.value = false;
-  }
 }
 
 // —— 模型分配 ——
@@ -3217,8 +3191,8 @@ onBeforeUnmount(() => {
   headerResizeObserver = null;
 });
 
-onMounted(async () => {
-  trackHeaderHeight();
+async function load(): Promise<void> {
+  loading.value = true;
   // 人设库和世界书单独拉，不放进下面那组 Promise.all：它们只是素材库，
   // 慢一点或者读不出来都不该拖住机器人配置本身的加载。
   void loadPersonaLibrary();
@@ -3242,5 +3216,11 @@ onMounted(async () => {
   if (channels.length > 0) {
     void refreshLLMChannelCapabilities(channels);
   }
+  loading.value = false;
+}
+
+onMounted(() => {
+  trackHeaderHeight();
+  void load();
 });
 </script>

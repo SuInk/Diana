@@ -1556,7 +1556,7 @@ func (r *Runtime) bindInboundEventIdentityForPlatform(event MessageEvent, source
 	if strings.TrimSpace(event.Platform) == "" {
 		event.Platform = platform
 	}
-	if multi, ok := channel.(*MultiChannel); ok && multi.isolate && strings.TrimSpace(event.ContextNamespace) == "" {
+	if _, ok := channel.(*MultiChannel); ok {
 		event.ContextNamespace = event.ProfileID
 	}
 	return event

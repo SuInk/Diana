@@ -94,7 +94,8 @@ https://HOST/api/channels/wecom/callback</code></pre>
         </ul>
 
         <h3>Context across channels</h3>
-        <p>Each bot keeps its own platform, account, owner, persona and model assignments. With several platforms running, replies always go back to the source channel. Sessions and memory are isolated by default; turning isolation off shares long-term facts that are allowed to cross channels, without changing where messages are sent.</p>
+        <p>Each bot keeps its own platform, account, owner, persona and model assignments. Replies always go back to the source channel. Conversation context is always isolated by bot profile; matching group or user IDs never merge sessions. Message relays remain available. Cross-platform memory is a separate opt-in on both bots and only retrieves non-sensitive public group facts and summaries, not raw conversations or personal memories.</p>
+        <p>The legacy <code>isolate_platform_contexts</code> setting is ignored and its endpoint has been removed. Previously shared history is retained in its original namespace, without automatic reassignment to individual bots. New messages use each bot's isolated sessions.</p>
       </section>
 
       <section class="section searchable" id="models">

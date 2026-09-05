@@ -253,7 +253,6 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/activate", h.activateProfile)
 	router.POST(base+"/config/clone", h.cloneProfile)
 	router.POST(base+"/config/delete", h.deleteProfile)
-	router.POST(base+"/config/context-isolation", h.setContextIsolation)
 	router.POST(base+"/config/message-relays", h.setMessageRelays)
 	router.GET(base+"/agent-defaults", h.agentDefaults)
 	router.GET(base+"/features", h.featuresStatus)
@@ -512,29 +511,6 @@ func (h *BotHandler) deleteProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
 
-type contextIsolationPayload struct {
-	Enabled bool `json:"enabled"`
-}
-
-func (h *BotHandler) setContextIsolation(c *gin.Context) {
-	var payload contextIsolationPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.context_isolation.update", err, "", nil)
-		return
-	}
-	next := h.profiles.Profiles().WithPlatformContextIsolation(payload.Enabled)
-	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.context_isolation.update", err, "", nil)
-		return
-	}
-	if err := h.profiles.SaveProfiles(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.context_isolation.update", err, "", map[string]any{"enabled": payload.Enabled})
-		return
-	}
-	recordRequestOperation(c, h.logs, "assistant.context_isolation.update", "平台上下文隔离设置已更新", "", map[string]any{"enabled": payload.Enabled})
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
-}
-
 type messageRelayPayload struct {
 	Relays []assistant.MessageRelayPair `json:"relays"`
 }
@@ -602,9 +578,6 @@ type botTransportConfig struct {
 func profileSetRequiresReconnect(previous, next assistant.ProfileSet) bool {
 	previous = previous.WithDefaults()
 	next = next.WithDefaults()
-	if previous.PlatformContextsIsolated() != next.PlatformContextsIsolated() {
-		return true
-	}
 	previousRuntime, previousOK := previous.RuntimeConfig()
 	nextRuntime, nextOK := next.RuntimeConfig()
 	if previousOK != nextOK || (previousOK && previousRuntime.MaxBotConcurrency != nextRuntime.MaxBotConcurrency) {

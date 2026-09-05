@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "test": "node --test src/assistant-switches.test.mjs",
+    "test": "node --experimental-strip-types --test src/*.test.mjs",
     "prebuild": "npm test",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1"
