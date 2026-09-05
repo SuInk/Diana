@@ -3,7 +3,7 @@
 
 //go:build windows
 
-package webui
+package hostinfo
 
 import (
 	"fmt"
@@ -56,7 +56,7 @@ func windowsTotalCPUUsagePercent() (float64, error) {
 	totalDelta := totalAfter - totalBefore
 	idleDelta := idleAfter - min(idleAfter, idleBefore)
 	busyDelta := totalDelta - min(idleDelta, totalDelta)
-	return clampPercent(roundPercent(float64(busyDelta) / float64(totalDelta) * 100)), nil
+	return ClampPercent(RoundPercent(float64(busyDelta) / float64(totalDelta) * 100)), nil
 }
 
 func windowsCPUTimes() (idleTicks, totalTicks uint64, err error) {
