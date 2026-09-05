@@ -467,9 +467,13 @@ type BotConfig struct {
 	// 是路由、指代和记忆门控这些「往回数 N 条」的旁路，那里条数才是对的单位。
 	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
 	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold  int   `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled    *bool `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled  *bool `json:"cross_group_memory_enabled,omitempty"`
+	// HistoryBackfillMessageLimit limits how many newest messages each
+	// conversation may enqueue after reconnect or restart. Keeping this small
+	// prevents a media-heavy backlog from starting many image/video jobs at once.
+	HistoryBackfillMessageLimit int   `json:"history_backfill_message_limit,omitempty"`
+	ContextSummaryThreshold     int   `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled       *bool `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled     *bool `json:"cross_group_memory_enabled,omitempty"`
 	// WorldBookEnabled 控制这台机器人要不要带上世界书（世界观设定库）。树是
 	// 全局一棵，这里只决定用不用；树是空的时候开着也不注入任何内容，所以默认开。
 	WorldBookEnabled *bool `json:"world_book_enabled,omitempty"`
@@ -771,6 +775,7 @@ type ConfigPayload struct {
 	MaxContextTokens                int64       `json:"max_context_tokens,omitempty"`
 	RecentHistoryTokenBudget        int64       `json:"recent_history_token_budget,omitempty"`
 	RecentContextLimit              int         `json:"recent_context_limit,omitempty"`
+	HistoryBackfillMessageLimit     int         `json:"history_backfill_message_limit,omitempty"`
 	ContextSummaryThreshold         int         `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled           *bool       `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled         *bool       `json:"cross_group_memory_enabled,omitempty"`
@@ -1294,25 +1299,26 @@ func DefaultBotConfig() BotConfig {
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
-		RecentContextLimit:        40,
-		ContextSummaryThreshold:   100,
-		LongTermMemoryEnabled:     boolPointer(true),
-		CrossGroupMemoryEnabled:   boolPointer(false),
-		WorldBookEnabled:          boolPointer(true),
-		RomanceEnabled:            boolPointer(false),
-		MoodEnabled:               boolPointer(false),
-		PokeReplyEnabled:          boolPointer(false),
-		ExpressionLearningEnabled: boolPointer(false),
-		DictSegmentEnabled:        boolPointer(false),
-		SemanticSearchEnabled:     boolPointer(false),
-		ProactiveReplyChance:      defaultProactiveReplyChance,
-		ProactiveReplyThreshold:   defaultProactiveReplyThreshold,
-		ReplyRules:                []ReplyRule{},
-		MaxBotConcurrency:         8,
-		RequestTimeout:            180 * time.Second,
-		AgentEnabled:              true,
-		AgentMaxSteps:             agent.DefaultMaxSteps,
-		AgentSkillRoots:           []string{},
+		RecentContextLimit:          40,
+		HistoryBackfillMessageLimit: 3,
+		ContextSummaryThreshold:     100,
+		LongTermMemoryEnabled:       boolPointer(true),
+		CrossGroupMemoryEnabled:     boolPointer(false),
+		WorldBookEnabled:            boolPointer(true),
+		RomanceEnabled:              boolPointer(false),
+		MoodEnabled:                 boolPointer(false),
+		PokeReplyEnabled:            boolPointer(false),
+		ExpressionLearningEnabled:   boolPointer(false),
+		DictSegmentEnabled:          boolPointer(false),
+		SemanticSearchEnabled:       boolPointer(false),
+		ProactiveReplyChance:        defaultProactiveReplyChance,
+		ProactiveReplyThreshold:     defaultProactiveReplyThreshold,
+		ReplyRules:                  []ReplyRule{},
+		MaxBotConcurrency:           8,
+		RequestTimeout:              180 * time.Second,
+		AgentEnabled:                true,
+		AgentMaxSteps:               agent.DefaultMaxSteps,
+		AgentSkillRoots:             []string{},
 		// 新建配置直接带上一组只读诊断命令，装完就能用。
 		//
 		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
@@ -1503,6 +1509,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.RecentContextLimit < 0 {
 		cfg.RecentContextLimit = defaults.RecentContextLimit
+	}
+	if cfg.HistoryBackfillMessageLimit <= 0 {
+		cfg.HistoryBackfillMessageLimit = defaults.HistoryBackfillMessageLimit
+	}
+	if cfg.HistoryBackfillMessageLimit > 100 {
+		cfg.HistoryBackfillMessageLimit = 100
 	}
 	if cfg.ContextSummaryThreshold <= 0 {
 		cfg.ContextSummaryThreshold = defaults.ContextSummaryThreshold
@@ -1771,6 +1783,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxContextTokens:                  cfg.MaxContextTokens,
 		RecentHistoryTokenBudget:          cfg.RecentHistoryTokenBudget,
 		RecentContextLimit:                cfg.RecentContextLimit,
+		HistoryBackfillMessageLimit:       cfg.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:           cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:             copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
@@ -1947,6 +1960,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxContextTokens:                payload.MaxContextTokens,
 		RecentHistoryTokenBudget:        payload.RecentHistoryTokenBudget,
 		RecentContextLimit:              payload.RecentContextLimit,
+		HistoryBackfillMessageLimit:     payload.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:         payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:           copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:         copyBoolPointer(payload.CrossGroupMemoryEnabled),

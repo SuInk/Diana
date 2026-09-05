@@ -92,6 +92,28 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 	}
 }
 
+func TestHistoryBackfillLimitsEachSessionToNewestConfiguredMessages(t *testing.T) {
+	channel := newQueueTestChannel()
+	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
+		historyTestMessage(900, 900, "oldest"),
+		historyTestMessage(901, 901, "older"),
+		historyTestMessage(902, 902, "newer"),
+		historyTestMessage(903, 903, "newest"),
+	}}
+	runtime := NewRuntime(BotConfig{HistoryBackfillMessageLimit: 3}, channel, NewPluginManager(), nil, nil, nil, nil)
+
+	events, err := runtime.fetchHistorySince(context.Background(), HistorySession{Kind: EventKindGroup, ID: "123", LastEventTime: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events=%d, want 3", len(events))
+	}
+	if events[0].MessageID != "901" || events[2].MessageID != "903" {
+		t.Fatalf("limited events=%#v", events)
+	}
+}
+
 func TestHistoryBackfillDropsHistoricalPrivateOutsideRecentContacts(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	store.sessions = []HistorySession{
