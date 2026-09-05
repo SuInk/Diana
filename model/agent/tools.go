@@ -110,6 +110,15 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验。
 	registry.Register(&ListFilesTool{root: root, limit: cfg.ListDirectoryLimit})
 	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
+	// 检索和按名字找文件与 read_file 同级：都只读，都锁在工作目录内。
+	// 没有它们的话，模型定位一个文件只能靠 list_files 一层层翻或者猜路径。
+	registry.Register(&GrepTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
+	registry.Register(&FindFilesTool{root: root})
+	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
+	if cfg.FileWriteEnabled {
+		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes})
+		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes})
+	}
 	if len(cfg.CommandAllowlist) > 0 {
 		registry.Register(&RunCommandTool{
 			root:           root,

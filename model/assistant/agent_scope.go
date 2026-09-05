@@ -82,6 +82,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		// require 模式接不上。现在由机器人配置说了算。
 		CommandSandbox:             cfg.AgentCommandSandbox,
 		CommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
+		FileWriteEnabled:           cfg.AgentFileWriteEnabled,
 		BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 		BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 	}
