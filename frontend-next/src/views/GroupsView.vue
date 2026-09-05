@@ -96,6 +96,9 @@
           <div class="group-card-foot">
             <span class="muted">{{ group.enabled ? "机器人已启用" : "机器人已停用" }}</span>
             <div class="cluster" style="gap: 8px">
+              <button v-if="group.configured" class="btn small ghost" type="button" title="删除群配置" aria-label="删除群配置" :disabled="deleting" @click="pendingDelete = group">
+                <Trash2 :size="14" aria-hidden="true" />
+              </button>
               <button class="btn small ghost" type="button" @click="openRelations(group, group.group_name)">
                 <Share2 :size="13" aria-hidden="true" />
                 关系图
@@ -120,6 +123,14 @@
       <div class="skeleton" style="height: 180px"></div>
       <div class="skeleton" style="height: 180px"></div>
     </div>
+
+    <Modal v-if="pendingDelete" title="删除群配置" @close="!deleting && (pendingDelete = null)">
+      <p>删除 {{ pendingDelete.group_name || pendingDelete.group_id }} 的独立配置？删除后恢复全局规则（可能重新启用回复），不会退出群聊或删除聊天记录。已加入的群仍会显示。</p>
+      <template #footer>
+        <button class="btn ghost" :disabled="deleting" @click="pendingDelete = null">取消</button>
+        <button class="btn" :disabled="deleting" @click="removeGroup"><Trash2 :size="15" />{{ deleting ? "删除中…" : "删除配置" }}</button>
+      </template>
+    </Modal>
 
     <!-- 群配置编辑弹窗 -->
     <Modal
@@ -365,12 +376,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { botScope } from "../bot-scope";
-import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Users, WifiOff } from "@lucide/vue";
+import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
 import {
   getBotProfileConfig,
   getBotPlatforms,
   listBotGroups,
   saveBotGroup,
+  deleteBotGroup,
   getGroupRelations,
   type PluginState,
   type BotGroupConfig,
@@ -421,6 +433,22 @@ const groupActionDescriptionOptions: AppSelectOption[] = [
 import { toastError, toastSuccess } from "../toast";
 
 const groups = ref<BotGroupSummary[]>([]);
+const pendingDelete = ref<BotGroupSummary | null>(null);
+const deleting = ref(false);
+
+async function removeGroup(): Promise<void> {
+  const group = pendingDelete.value;
+  if (!group || deleting.value) return;
+  deleting.value = true;
+  try {
+    await deleteBotGroup(group.group_id, group.bot_profile_id ?? "");
+    pendingDelete.value = null;
+    toastSuccess("群配置已删除，恢复全局规则");
+    await load();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "删除失败");
+  } finally { deleting.value = false; }
+}
 // 群等级只有 OneBot v11 有；按当前激活的机器人平台决定要不要显示这一项。
 const supportsGroupLevel = ref(true);
 const plugins = ref<PluginState[]>([]);
@@ -753,6 +781,8 @@ function upsert(config: BotGroupConfig): void {
 
 // 换了机器人，群列表和每个群的配置都是另一套。
 watch(botScope, () => {
+  editing.value = null;
+  pendingDelete.value = null;
   void load();
 });
 
