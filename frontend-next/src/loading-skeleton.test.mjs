@@ -13,7 +13,11 @@ let LoadingSkeleton;
 let StatCard;
 
 before(async () => {
-  server = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+  server = await createServer({
+    server: { middlewareMode: true },
+    appType: "custom",
+    optimizeDeps: { noDiscovery: true, include: [] }
+  });
   LoadingSkeleton = (await server.ssrLoadModule("/src/components/LoadingSkeleton.vue")).default;
   StatCard = (await server.ssrLoadModule("/src/components/StatCard.vue")).default;
 });
