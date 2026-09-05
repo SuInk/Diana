@@ -119,6 +119,7 @@ type MessageEvent struct {
 	RawMessage       string           `json:"raw_message,omitempty"`
 	Segments         []MessageSegment `json:"segments,omitempty"`
 	SenderName       string           `json:"sender_name,omitempty"`
+	SenderIsBot      bool             `json:"sender_is_bot,omitempty"`
 	SenderRole       string           `json:"sender_role,omitempty"`
 	SenderLevel      int              `json:"sender_level,omitempty"`
 	SenderLevelLabel string           `json:"sender_level_label,omitempty"`
@@ -363,6 +364,7 @@ type BotConfig struct {
 	TelegramBotToken             string               `json:"telegram_bot_token,omitempty"`
 	TelegramAPIBaseURL           string               `json:"telegram_api_base_url,omitempty"`
 	TelegramProxyURL             string               `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages  *bool                `json:"telegram_suppress_bot_messages,omitempty"`
 	QQAppID                      string               `json:"qq_app_id,omitempty"`
 	QQAppSecret                  string               `json:"qq_app_secret,omitempty"`
 	QQSandbox                    bool                 `json:"qq_sandbox,omitempty"`
@@ -662,6 +664,7 @@ type ConfigPayload struct {
 	TelegramBotTokenConfigured        bool               `json:"telegram_bot_token_configured,omitempty"`
 	TelegramAPIBaseURL                string             `json:"telegram_api_base_url,omitempty"`
 	TelegramProxyURL                  string             `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages       *bool              `json:"telegram_suppress_bot_messages,omitempty"`
 	QQAppID                           string             `json:"qq_app_id,omitempty"`
 	QQAppSecret                       string             `json:"qq_app_secret,omitempty"`
 	QQAppSecretConfigured             bool               `json:"qq_app_secret_configured,omitempty"`
@@ -1284,6 +1287,7 @@ func DefaultBotConfig() BotConfig {
 		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      boolPointer(true),
 		BotReplyLoopDetectionEnabled:   boolPointer(true),
+		TelegramSuppressBotMessages:    boolPointer(true),
 		ReplyAccountSafetyAuditEnabled: boolPointer(false),
 		NotebookSharedScopeEnabled:     boolPointer(true),
 		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
@@ -1488,6 +1492,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.BotReplyLoopDetectionEnabled == nil {
 		cfg.BotReplyLoopDetectionEnabled = boolPointer(true)
 	}
+	if cfg.TelegramSuppressBotMessages == nil {
+		cfg.TelegramSuppressBotMessages = boolPointer(true)
+	}
 	if cfg.MaxContextTokens < 0 {
 		cfg.MaxContextTokens = 0
 	}
@@ -1681,6 +1688,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		TelegramBotTokenConfigured:  cfg.TelegramBotToken != "",
 		TelegramAPIBaseURL:          cfg.TelegramAPIBaseURL,
 		TelegramProxyURL:            cfg.TelegramProxyURL,
+		TelegramSuppressBotMessages: copyBoolPointer(cfg.TelegramSuppressBotMessages),
 		// 密钥一律只回 configured 标志。AppID/CorpID 这类公开标识可以回显，
 		// 方便用户核对填的是不是同一个应用。
 		QQAppID:                           cfg.QQAppID,
@@ -1859,6 +1867,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		TelegramBotToken:                payload.TelegramBotToken,
 		TelegramAPIBaseURL:              payload.TelegramAPIBaseURL,
 		TelegramProxyURL:                payload.TelegramProxyURL,
+		TelegramSuppressBotMessages:     copyBoolPointer(payload.TelegramSuppressBotMessages),
 		QQAppID:                         payload.QQAppID,
 		QQAppSecret:                     payload.QQAppSecret,
 		QQSandbox:                       payload.QQSandbox,

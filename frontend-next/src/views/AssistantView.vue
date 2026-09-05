@@ -236,6 +236,14 @@
                   />
                   <span class="hint">部署了本地 Bot API server 时填写，可绕过 50MB 上传限制。</span>
                 </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.telegram_suppress_bot_messages" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">抑制其他机器人消息</span>
+                  </label>
+                  <span class="hint">默认开启。由模型结合上下文判断其他 Bot 是否提到了自己，不要求 @；未提到或无法确认时保持静默。</span>
+                </div>
               </template>
 
               <template v-else-if="currentPlatform === 'qq-official'">
@@ -2798,6 +2806,7 @@ function setForm(config: BotProfileConfig): void {
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
+    telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
