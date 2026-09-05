@@ -3,11 +3,14 @@
 #
 # 复制为 config.yaml 使用。进程按 --config、DIANA_CONFIG、工作目录、可执行文件
 # 同级目录的顺序查找；一个都没有就全部走内置默认值，直接打开 WebUI 走安装向导。
+# 本文件不支持热加载：修改 YAML 后需要重启服务，仍遵循下面的数据库优先规则。
 #
 # 这份文件分两层，边界是「这项能不能在 WebUI 里改」：
 #
 #   server / storage / admin / update / napcat —— 基础设施，WebUI 里没有入口，
 #     这里是唯一来源，每次启动都读。
+#     例外：storage.download_cache_* 可在「设置 → 系统 → 下载缓存」修改；
+#     WebUI 保存后数据库优先于 YAML，保存立即生效。
 #
 #   bot / llm —— 业务配置，唯一真相源是数据库，WebUI 随时可改。这两段只在数据库
 #     为空时用作首启播种，给无人值守部署用。数据库里已经有配置了，这两段就不会
@@ -28,8 +31,21 @@ server:
 storage:
   # 留空则放在默认数据目录。
   db_path: data/diana.db
-  # 留空表示只写标准输出。
+  # 留空表示只写标准输出。文件每 20 MiB 轮转，保留 5 份备份。
   log_path: logs/diana.log
+  # 数据库日志在启动后及每 24 小时分批清理。0 使用默认值，-1 永久保留。
+  # 用量统计日志不删除；聊天记录、长期记忆、配置和历史媒体不受影响。
+  debug_log_retention_days: 7
+  log_retention_days: 30
+  # 清理后数据库空闲页供后续写入复用，已有 .db 文件不会立即缩小。
+  # 视频与附件下载缓存：按最后使用时间保留，0 使用默认 7 天，-1 不按天数清理。
+  # 以下两项仅在 WebUI 尚未保存缓存设置时生效；日常修改使用 WebUI，无需重启。
+  # 修改这里的 YAML 值需要重启；WebUI 已保存时，即使重启也不会覆盖数据库设置。
+  # 启动时、每 24 小时及任务释放后检查；正在使用的缓存不会删除。
+  download_cache_retention_days: 7
+  # 可选容量限制，单位 MiB；0 不限制容量，默认只按天数清理。
+  download_cache_max_mb: 0
+  # 永不清理：download_cache_retention_days 设为 -1，download_cache_max_mb 保持 0。
   # 入站图片落盘目录，留空则跟随数据库所在目录。
   media_dir: ""
   # 0 表示用内置默认值。

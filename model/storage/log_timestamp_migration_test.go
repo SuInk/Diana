@@ -149,7 +149,7 @@ func TestMigrateLogTimestampsLeavesUnparseableValuesAlone(t *testing.T) {
 	}
 }
 
-// 标记落下之后不该再扫表——app_logs 没有清理策略，会一直增长。
+// 标记落下之后不该再扫表，避免对永久保留的日志反复扫描。
 func TestMigrateLogTimestampsRunsOnce(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "log-tz-once.db")

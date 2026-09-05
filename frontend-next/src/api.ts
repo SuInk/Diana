@@ -1357,6 +1357,22 @@ export function restartSystem(): Promise<{ ok: boolean }> {
   });
 }
 
+export interface MediaCachePolicy {
+  retention_days: number;
+  max_mb: number;
+}
+
+export function getMediaCachePolicy(): Promise<MediaCachePolicy> {
+  return requestJSON<MediaCachePolicy>("/api/system/media-cache");
+}
+
+export function saveMediaCachePolicy(policy: MediaCachePolicy): Promise<MediaCachePolicy> {
+  return requestJSON<MediaCachePolicy>("/api/system/media-cache", {
+    method: "POST",
+    body: JSON.stringify(policy)
+  });
+}
+
 export interface SystemVersion {
   build_version: string;
   build_type?: BuildType;

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,6 +44,12 @@ func (r *Runtime) enrichMediaReferencesDetailed(ctx context.Context, event Messa
 }
 
 func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event MessageEvent, segments []MessageSegment) ([]MessageSegment, []error) {
+	r.mu.RLock()
+	resolver, _ := r.localMedia.(LocalMediaPathResolver)
+	r.mu.RUnlock()
+	segments = resolveSharedImagePaths(segments, resolver)
+	segments, _ = resolveSharedVideoPaths(segments, resolver)
+	segments = r.refreshForwardMedia(ctx, event, segments, resolver)
 	out := append([]MessageSegment(nil), segments...)
 	var failures []error
 	for index, segment := range out {
@@ -50,16 +57,21 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 			continue
 		}
 		if segment.Type == "image" {
-			needsFallback := strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true")
+			needsFallback := strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") ||
+				(segment.Data["forward_id"] != "" && forwardMediaNeedsRefresh(segment))
 			if !needsFallback && segmentHasMediaSource(segment) {
 				continue
 			}
-		} else if segmentHasMediaSource(segment) {
+		} else if segmentHasMediaSource(segment) && !(segment.Data["forward_id"] != "" && forwardMediaNeedsRefresh(segment)) {
 			continue
 		}
 		data := cloneSegmentData(segment.Data)
 		sourceGroupID := firstNonEmpty(data["source_group_id"], event.GroupID)
-		sourceMessageIDs := uniqueNonEmptyStrings(data["source_message_id"], event.MessageID)
+		sourceMessageIDs := usableOneBotMessageIDs(data["source_message_id"], event.MessageID)
+		if data["forward_id"] != "" {
+			// The outer message identifies the card, not a media item in its nodes.
+			sourceMessageIDs = usableOneBotMessageIDs(data["source_message_id"])
+		}
 		var requests []oneBotFileResolveRequest
 		if segment.Type == "image" {
 			file := imageFileToken(data)
@@ -263,6 +275,9 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 	case map[string]any:
 		segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(item["type"])))
 		if segmentType == "image" || segmentType == "video" || segmentType == "file" || segmentType == "record" {
+			if segmentType != target.Type {
+				return ""
+			}
 			if segmentData, ok := item["data"].(map[string]any); ok {
 				if mediaSegmentMatchesAny(target, segmentData) {
 					return imageFileTokenAny(segmentData)
@@ -284,6 +299,9 @@ func mediaFileTokenFromOneBotValue(value any, target MessageSegment) string {
 
 func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (string, string) {
 	if segmentType := strings.ToLower(strings.TrimSpace(stringFromAny(data["type"]))); segmentType == "image" || segmentType == "video" || segmentType == "file" || segmentType == "record" {
+		if segmentType != target.Type {
+			return "", ""
+		}
 		if segmentData, ok := data["data"].(map[string]any); ok {
 			if !mediaSegmentMatchesAny(target, segmentData) {
 				return "", ""
@@ -331,6 +349,17 @@ func mediaSourceFromOneBotData(data map[string]any, target MessageSegment) (stri
 		}
 	}
 	return "", ""
+}
+
+func usableOneBotMessageIDs(values ...string) []string {
+	var out []string
+	for _, value := range uniqueNonEmptyStrings(values...) {
+		if id, err := strconv.ParseInt(value, 10, 64); err == nil && id == 0 {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
 }
 
 func mediaSegmentMatchesAny(segment MessageSegment, data map[string]any) bool {

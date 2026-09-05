@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -85,7 +86,7 @@ func TestMediaStoreStoresGeneratedImageByContent(t *testing.T) {
 	if again != path {
 		t.Fatalf("相同内容应复用同一缓存文件，%q vs %q", path, again)
 	}
-	if filepath.Dir(path) != store.Dir() {
+	if !strings.HasPrefix(path, filepath.Join(store.Dir(), "objects")+string(filepath.Separator)) {
 		t.Fatalf("生成图片未写入 MediaStore：%q", path)
 	}
 	got, err := os.ReadFile(path)
@@ -131,7 +132,7 @@ func TestMediaStoreReturnsAbsoluteGeneratedImagePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Dir(resolvedPath) != resolvedCacheDir {
+	if !strings.HasPrefix(resolvedPath, resolvedCacheDir+string(filepath.Separator)) {
 		t.Fatalf("缓存路径超出配置目录：%q", path)
 	}
 }
@@ -253,9 +254,8 @@ func TestMediaStoreDedupesConcurrentFetches(t *testing.T) {
 
 // 持久化不等于无限增长：超过总量上限要淘汰最旧的。
 func TestMediaStoreEvictsOverCap(t *testing.T) {
-	body := bytes.Repeat([]byte("y"), 1000)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(body)
+		_, _ = w.Write(bytes.Repeat([]byte(r.URL.Path), 500))
 	}))
 	defer server.Close()
 
@@ -270,19 +270,25 @@ func TestMediaStoreEvictsOverCap(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	entries, err := os.ReadDir(store.Dir())
-	if err != nil {
-		t.Fatalf("读取目录失败：%v", err)
-	}
 	var total int64
 	kept := 0
-	for _, entry := range entries {
+	err := filepath.WalkDir(filepath.Join(store.Dir(), "objects"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
 		if strings.HasPrefix(entry.Name(), ".partial-") {
-			continue
+			return nil
 		}
 		info, _ := entry.Info()
 		total += info.Size()
 		kept++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if total > 2500 {
 		t.Fatalf("总量应被压到上限以内，实际 %d 字节", total)
@@ -291,7 +297,7 @@ func TestMediaStoreEvictsOverCap(t *testing.T) {
 		t.Fatal("不该把文件全删光")
 	}
 	// 最后一个下载的必须还在。
-	if _, err := os.Stat(store.pathFor(server.URL + "/3")); err != nil {
+	if cachedMediaSource(store.Dir(), "image:"+server.URL+"/3", 2500) == "" {
 		t.Fatal("最近使用的文件不该被淘汰")
 	}
 }

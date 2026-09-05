@@ -20,8 +20,8 @@ const logTimestampUTCMigrationKey = "storage.app_logs.created_at_utc_migrated"
 
 // migrateLogTimestampsToUTC 重写历史日志里带时区偏移的 created_at。
 //
-// 用 app_state 里的标记记住做过了，而不是每次启动都扫一遍：app_logs 没有清理策略、
-// 会一直增长，而「没有需要修的行」这个结论恰恰只能靠全表扫描得出，代价随表增长。
+// 用 app_state 里的标记记住做过了，而不是每次启动都扫一遍：日志可以配置为永久保留，
+// 而「没有需要修的行」这个结论恰恰只能靠全表扫描得出，代价随表增长。
 func (s *SQLiteStore) migrateLogTimestampsToUTC() error {
 	if s == nil || s.db == nil {
 		return nil

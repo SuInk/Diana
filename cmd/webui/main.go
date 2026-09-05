@@ -158,6 +158,16 @@ func main() {
 	defer func() {
 		_ = sqliteStore.Close()
 	}()
+	mediaCacheHandler, err := webui.NewMediaCacheHandler(ctx, sqliteStore, assistant.MediaDownloadCachePolicy{
+		RetentionDays: appCfg.Storage.DownloadCacheRetentionDays,
+		MaxMB:         appCfg.Storage.DownloadCacheMaxMB,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	mediaCacheHandler.SetLogStore(sqliteStore)
+	stopStorageMaintenance := startStorageMaintenance(ctx, sqliteStore, appCfg.Storage)
+	defer stopStorageMaintenance()
 
 	store, err := webui.NewPersistentLLMProfileStore(ctx, sqliteStore, llmSeed)
 	if err != nil {
@@ -295,6 +305,9 @@ func main() {
 		"http://"+net.JoinHostPort(displayHost(host), port)+"/media/resolver",
 	)
 	localMediaStore := assistant.NewLocalMediaStore(localMediaBaseURL)
+	if err := localMediaStore.SetIndexDir(filepath.Join(filepath.Dir(sqliteStore.Path()), "local-media-shares")); err != nil {
+		log.Fatalf("local media share index: %v", err)
+	}
 	if configuredMediaBaseURL == "" {
 		// 未显式配置媒体基址时，按反向 ws 握手时客户端使用的地址动态拼
 		// 媒体 URL：桥在容器或别的机器上时（如 host.docker.internal），
@@ -422,6 +435,7 @@ func main() {
 	}
 	handler.Register(router)
 	systemHandler.Register(router)
+	mediaCacheHandler.Register(router)
 	botHandler.Register(router)
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)
 	ownerLoginHandler.SetLogStore(sqliteStore)
@@ -566,20 +580,16 @@ func setupLogging(logPath string) (io.Writer, func()) {
 		log.Printf("create log directory skipped: %v", err)
 		return os.Stdout, func() {}
 	}
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := newRotatingLogWriter(logPath, 20<<20, 5)
 	if err != nil {
 		log.Printf("open log file skipped: %v", err)
-		return os.Stdout, func() {}
-	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		log.Printf("secure log file skipped: %v", err)
 		return os.Stdout, func() {}
 	}
 	writer := io.MultiWriter(os.Stdout, file)
 	log.SetOutput(writer)
 	log.Printf("logging to %s", logPath)
 	return writer, func() {
+		log.SetOutput(os.Stdout)
 		_ = file.Close()
 	}
 }

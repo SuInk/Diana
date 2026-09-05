@@ -783,13 +783,9 @@ WHERE status = 'active' AND id IN (`+strings.Join(placeholders, ",")+`)
 // ListStructuredMemoriesBySubject 按人取这个人身上还生效的长期记忆，供控制台人员
 // 页展示。
 //
-// 和 ListStructuredMemories 的区别是它不按会话检索：人员页问的是「机器人到底记住
-// 了这个人什么」，而不是「这一轮该召回什么」，所以没有 session 作用域，也不做相关
-// 性打分，只按重要度和时间排。
-//
-// memory_items 没有 bot_profile_id 列——记忆是跟着人走的，不跟着机器人分身走——
-// 所以这里不接受机器人作用域参数。
-func (s *SQLiteStore) ListStructuredMemoriesBySubject(ctx context.Context, userID string, limit int) ([]assistant.StructuredMemoryItem, error) {
+// 可以跨同一机器人的会话展示，但必须保留来源命名空间边界。
+// 空 profileID 只匹配无命名空间的旧记录，不表示全部机器人。
+func (s *SQLiteStore) ListStructuredMemoriesBySubject(ctx context.Context, profileID, userID string, limit int) ([]assistant.StructuredMemoryItem, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -803,14 +799,16 @@ func (s *SQLiteStore) ListStructuredMemoriesBySubject(ctx context.Context, userI
 	if limit > maxStructuredMemoryCandidates {
 		limit = maxStructuredMemoryCandidates
 	}
+	groupPrefix, privatePrefix := memoryProfileSessionPrefixes(profileID)
 	rows, err := s.db.QueryContext(ctx, structuredMemorySelect+`
 WHERE status = 'active'
   AND subject_user_id = ?
   AND kind != 'thread'
   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?)
+  AND (substr(source_session, 1, length(?)) = ? OR substr(source_session, 1, length(?)) = ?)
 ORDER BY importance DESC, confidence DESC, source_event_time DESC, updated_at DESC
 LIMIT ?
-`, userID, time.Now().UTC().Unix(), limit)
+`, userID, time.Now().UTC().Unix(), groupPrefix, groupPrefix, privatePrefix, privatePrefix, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -828,13 +826,14 @@ LIMIT ?
 
 // CountStructuredMemoriesBySubjects 一次数完多个人的长期记忆条数，人员列表用它。
 // 逐个 COUNT 会把一页 50 人变成 50 次查询。
-func (s *SQLiteStore) CountStructuredMemoriesBySubjects(ctx context.Context, userIDs []string) (map[string]int, error) {
+func (s *SQLiteStore) CountStructuredMemoriesBySubjects(ctx context.Context, profileID string, userIDs []string) (map[string]int, error) {
 	counts := map[string]int{}
 	if s == nil || s.db == nil || len(userIDs) == 0 {
 		return counts, nil
 	}
 	placeholders := make([]string, 0, len(userIDs))
-	args := []any{time.Now().UTC().Unix()}
+	groupPrefix, privatePrefix := memoryProfileSessionPrefixes(profileID)
+	args := []any{time.Now().UTC().Unix(), groupPrefix, groupPrefix, privatePrefix, privatePrefix}
 	seen := map[string]struct{}{}
 	for _, userID := range userIDs {
 		userID = strings.TrimSpace(userID)
@@ -857,6 +856,7 @@ FROM memory_items
 WHERE status = 'active'
   AND kind != 'thread'
   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?)
+  AND (substr(source_session, 1, length(?)) = ? OR substr(source_session, 1, length(?)) = ?)
   AND subject_user_id IN (`+strings.Join(placeholders, ",")+`)
 GROUP BY subject_user_id
 `, args...)

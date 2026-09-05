@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -149,12 +148,12 @@ func extractVideoContextFramesDetailed(ctx context.Context, sources []string, wa
 func materializeVideoContextSource(ctx context.Context, source string, wait time.Duration) (string, func(), error) {
 	maxBytes := videoContextMaxBytes(ctx)
 	if remote := normalizedHTTPURL(source); remote != "" {
-		path, dir, err := downloadVideoContextSource(ctx, remote)
+		path, release, err := downloadVideoContextSource(ctx, remote)
 		if err != nil {
 			log.Printf("diana video download failed: %v", err)
 			return "", func() {}, fmt.Errorf("视频下载失败（%s）。", describeVideoContextError(err, maxBytes))
 		}
-		return path, func() { _ = os.RemoveAll(dir) }, nil
+		return path, release, nil
 	}
 	path := waitForLocalMediaPath(ctx, source, wait, maxBytes)
 	if path == "" {
@@ -190,51 +189,12 @@ func formatVideoContextSize(maxBytes int64) string {
 	return fmt.Sprintf("%d MB", maxBytes/(1024*1024))
 }
 
-func downloadVideoContextSource(ctx context.Context, source string) (string, string, error) {
-	workDir, err := os.MkdirTemp("", "diana-video-download-*")
-	if err != nil {
-		return "", "", err
-	}
-	cleanup := func(err error) (string, string, error) {
-		_ = os.RemoveAll(workDir)
-		return "", "", err
-	}
+func downloadVideoContextSource(ctx context.Context, source string) (string, func(), error) {
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, source, nil)
-	if err != nil {
-		return cleanup(err)
-	}
-	req.Header.Set("User-Agent", "Diana/0.1")
-	resp, err := netguard.NewPublicHTTPClient(30 * time.Second).Do(req)
-	if err != nil {
-		return cleanup(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return cleanup(fmt.Errorf("HTTP %d", resp.StatusCode))
-	}
-	maxBytes := videoContextMaxBytes(ctx)
-	if resp.ContentLength > maxBytes {
-		return cleanup(fmt.Errorf("video exceeds file parser limit: %d > %d bytes", resp.ContentLength, maxBytes))
-	}
-	path := filepath.Join(workDir, "source.mp4")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		return cleanup(err)
-	}
-	written, copyErr := io.Copy(file, io.LimitReader(resp.Body, maxBytes+1))
-	closeErr := file.Close()
-	if copyErr != nil {
-		return cleanup(copyErr)
-	}
-	if closeErr != nil {
-		return cleanup(closeErr)
-	}
-	if written <= 0 || written > maxBytes {
-		return cleanup(fmt.Errorf("video exceeds file parser limit: %d > %d bytes", written, maxBytes))
-	}
-	return path, workDir, nil
+	identities, _ := ctx.Value(videoMediaIdentitiesKey{}).(map[string]string)
+	path, _, release, err := acquireMediaDownload(callCtx, netguard.NewPublicHTTPClient(30*time.Second), source, "source.mp4", identities[source], "public", videoContextMaxBytes(ctx))
+	return path, release, err
 }
 
 func waitForLocalMediaPath(ctx context.Context, source string, wait time.Duration, maxBytes int64) string {

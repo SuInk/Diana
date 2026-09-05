@@ -14,6 +14,8 @@ import (
 
 var errImageMediaUnavailable = errors.New("assistant: image media unavailable")
 
+var errForwardMediaUnavailable = errors.New("assistant: forwarded media unavailable")
+
 type imageMediaUnavailableError struct {
 	count int
 	cause error
@@ -83,6 +85,43 @@ func (r *Runtime) prepareEventImages(ctx context.Context, event MessageEvent) Me
 	}
 	event.imageLoadErr = newImageMediaUnavailableErrorWithDiagnostics(loadFailures, diagnostics)
 	r.recordImageLoadError(ctx, event, event.imageLoadErr)
+	event = continueWithAvailableForwardMedia(ctx, event)
+	return event
+}
+
+func continueWithAvailableForwardMedia(ctx context.Context, event MessageEvent) MessageEvent {
+	missing := 0
+	for _, segment := range event.Segments {
+		if segment.Type != "image" || segment.Data[imageUnavailableKey] != "true" {
+			continue
+		}
+		if segment.Data["forward_id"] == "" {
+			return event
+		}
+		missing++
+	}
+	if missing == 0 || event.Quoted != nil {
+		return event
+	}
+	// Count only cached media, not the mere presence of a URL in a forward.
+	available := false
+	for _, segment := range event.Segments {
+		if segment.Type == "image" && segment.Data[imageUnavailableKey] != "true" && usableLocalMediaPath(segment.Data["cached_file"]) {
+			available = true
+		}
+	}
+	if !available && hasVideoSegment(event.Segments) {
+		event = cacheMessageEventVideos(ctx, event)
+		available = len(cachedVideoFrameURLs(event.Segments)) > 0
+	}
+	if !available {
+		return event
+	}
+	event.imageLoadErr = nil
+	event.Segments = append(event.Segments, MessageSegment{Type: "text", Data: map[string]string{
+		"source_type": "media_warning",
+		"text":        fmt.Sprintf("\n[媒体读取状态] 合并转发中有 %d 张图片未能读取。只能依据已提供的图片或视频画面作答，必须说明有图片未读取，不得推测缺失图片的内容。", missing),
+	}})
 	return event
 }
 

@@ -243,7 +243,7 @@ func TestGitUpdaterRejectsConcurrentUpdate(t *testing.T) {
 	}
 }
 
-func TestApplyUpdateScriptBuildsFrontendNextAndKeepsBackups(t *testing.T) {
+func TestApplyUpdateScriptBuildsFrontendNextAndRemovesBackups(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is unavailable")
 	}
@@ -310,9 +310,34 @@ chmod 700 "$out"
 		t.Fatalf("apply-update.sh: %v\n%s", err, output)
 	}
 	assertRestoredFileContent(t, executable, "new-binary")
-	assertRestoredFileContent(t, executable+".backup", "old-binary")
 	assertRestoredFileContent(t, filepath.Join(frontend, "index.html"), "new-frontend")
-	assertRestoredFileContent(t, filepath.Join(frontend+".backup", "index.html"), "old-frontend")
+	for _, backup := range []string{executable + ".backup", frontend + ".backup"} {
+		if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("successful source update left backup %s: %v", backup, err)
+		}
+	}
+
+	// Force the next attempt to fail during the frontend switch, after the
+	// executable has already been replaced. Backups must still support rollback.
+	if err := os.WriteFile(executable, []byte("previous-binary"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("previous-frontend"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeRestoredExecutable(t, filepath.Join(binDir, "mv"), `#!/bin/sh
+case "$1" in
+  */.diana-frontend.new.*) exit 99 ;;
+esac
+exec /bin/mv "$@"
+`)
+	failed := exec.Command("bash", script)
+	failed.Env = cmd.Env
+	if output, err := failed.CombinedOutput(); err == nil {
+		t.Fatalf("expected frontend replacement failure: %s", output)
+	}
+	assertRestoredFileContent(t, executable, "previous-binary")
+	assertRestoredFileContent(t, filepath.Join(frontend, "index.html"), "previous-frontend")
 }
 
 func TestGitUpdaterRestoredApplyHelper(t *testing.T) {
