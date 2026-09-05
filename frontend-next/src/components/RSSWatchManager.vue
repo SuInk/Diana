@@ -21,14 +21,26 @@
           </div>
         </div>
         <div v-if="form.source === 'twitter'" class="field wide">
-          <label for="rss-watch-handle">Twitter 用户</label>
-          <input id="rss-watch-handle" v-model.trim="form.twitter_handle" class="input" type="text" placeholder="@tibo、tibo 或用户主页链接" />
-          <span class="hint">直接填就行，默认读取 X 的公开时间线，不需要额外部署。想换成自建 RSSHub 等其他来源，可在「插件 → RSS 订阅」里填 Twitter RSS 模板。</span>
+          <label for="rss-watch-handle-0">Twitter 用户</label>
+          <div class="target-list">
+            <div v-for="(_, index) in form.twitter_handles" :key="`handle-${index}`" class="rss-source-row">
+              <input :id="`rss-watch-handle-${index}`" v-model.trim="form.twitter_handles[index]" class="input" type="text" placeholder="@tibo、tibo 或用户主页链接" :aria-label="`Twitter 用户 ${index + 1}`" />
+              <button v-if="form.twitter_handles.length > 1" class="btn small ghost danger icon-only" type="button" title="移除这个账号" aria-label="移除这个账号" @click="removeSource('twitter', index)"><Trash2 :size="14" aria-hidden="true" /></button>
+            </div>
+            <button v-if="form.twitter_handles.length < maximumSources" class="btn small ghost" type="button" @click="addSource('twitter')"><Plus :size="14" aria-hidden="true" />添加账号</button>
+          </div>
+          <span class="hint">直接填就行，默认读取 X 的公开时间线，不需要额外部署。可以一次填多个账号，它们共用下面这一套规则，命中的内容会合成一条通知发出，最多 {{ maximumSources }} 个。</span>
         </div>
         <div v-else class="field wide">
-          <label for="rss-watch-url">Feed URL</label>
-          <input id="rss-watch-url" v-model.trim="form.feed_url" class="input" type="url" placeholder="https://example.com/feed.xml" />
-          <span class="hint">支持 RSS 2.0 与 Atom，只允许公网 http/https 地址。</span>
+          <label for="rss-watch-url-0">Feed URL</label>
+          <div class="target-list">
+            <div v-for="(_, index) in form.feed_urls" :key="`feed-${index}`" class="rss-source-row">
+              <input :id="`rss-watch-url-${index}`" v-model.trim="form.feed_urls[index]" class="input" type="url" placeholder="https://example.com/feed.xml" :aria-label="`Feed URL ${index + 1}`" />
+              <button v-if="form.feed_urls.length > 1" class="btn small ghost danger icon-only" type="button" title="移除这个 Feed" aria-label="移除这个 Feed" @click="removeSource('rss', index)"><Trash2 :size="14" aria-hidden="true" /></button>
+            </div>
+            <button v-if="form.feed_urls.length < maximumSources" class="btn small ghost" type="button" @click="addSource('rss')"><Plus :size="14" aria-hidden="true" />添加 Feed</button>
+          </div>
+          <span class="hint">支持 RSS 2.0 与 Atom，只允许公网 http/https 地址。可以一次填多个 Feed，它们共用下面这一套规则，最多 {{ maximumSources }} 个。</span>
         </div>
         <div class="field wide">
           <label for="rss-watch-judge">判断与回复规则</label>
@@ -72,9 +84,9 @@
     <div v-else-if="watches.length" class="repository-watch-manager-list">
       <article v-for="task in watches" :key="task.id" class="repository-watch-manager-item">
         <div class="repository-watch-manager-main">
-          <div class="cluster"><strong>{{ task.feed_source === 'twitter' ? `@${task.feed_handle}` : task.message }}</strong><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
+          <div class="cluster"><strong>{{ watchTitle(task) }}</strong><span v-if="sourceCount(task) > 1" class="badge">{{ sourceCount(task) }} 个来源</span><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
           <p class="rss-watch-rule-summary">{{ task.feed_judge_prompt }}</p>
-          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><span v-if="task.group_id">群 <strong class="mono">{{ task.group_id }}</strong></span><span v-else>私聊 <strong class="mono">{{ task.user_id || '—' }}</strong></span><a v-if="task.feed_url" :href="task.feed_url" target="_blank" rel="noreferrer">打开 Feed</a></div>
+          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><span v-if="task.group_id">群 <strong class="mono">{{ task.group_id }}</strong></span><span v-else>私聊 <strong class="mono">{{ task.user_id || '—' }}</strong></span><a v-for="source in taskSources(task)" :key="source.feed_url" :href="source.feed_url" target="_blank" rel="noreferrer">{{ sourceLabel(source) }}</a></div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
         <div class="repository-watch-manager-actions">
@@ -91,7 +103,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
-import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, listBotGroups, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type BotGroupSummary } from "../api";
+import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, listBotGroups, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type BotGroupSummary, type RSSWatchSource } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import AccountNameHint from "./AccountNameHint.vue";
@@ -101,7 +113,9 @@ const props = defineProps<{ prepareAccess?: () => Promise<void> }>();
 const minimumIntervalSeconds = 5 * 60;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = 15 * 60;
-const emptyForm = () => ({ source: "twitter" as "twitter" | "rss", twitter_handle: "", feed_url: "", judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
+// 和后端 maximumRSSWatchSources 保持一致：再多就该拆成两条订阅。
+const maximumSources = 10;
+const emptyForm = () => ({ source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -129,7 +143,29 @@ function markEditorClean(): void { editorSnapshot.value = JSON.stringify(form.va
 function editorDirty(): boolean { return editing.value && JSON.stringify(form.value) !== editorSnapshot.value; }
 
 defineExpose({ hasUnsavedChanges: editorDirty });
-function startEdit(task: AssistantTask): void { editingTask.value = task; form.value = { source: task.feed_source ?? "rss", twitter_handle: task.feed_handle ?? "", feed_url: task.feed_url ?? "", judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" }; editing.value = true; markEditorClean(); }
+function taskSources(task: AssistantTask): RSSWatchSource[] {
+  // 老任务没有 feed_sources，按单来源字段回落，编辑框不会一打开就空一格。
+  if (task.feed_sources?.length) return task.feed_sources;
+  return task.feed_url ? [{ feed_url: task.feed_url, source: task.feed_source, handle: task.feed_handle }] : [];
+}
+function sourceCount(task: AssistantTask): number { return taskSources(task).length; }
+function sourceLabel(source: RSSWatchSource): string { return source.source === "twitter" && source.handle ? `@${source.handle}` : source.name || source.feed_url; }
+function watchTitle(task: AssistantTask): string { const sources = taskSources(task); return sources.length > 1 ? sources.map(sourceLabel).join("、") : sources.length === 1 ? sourceLabel(sources[0]) : task.message; }
+function addSource(kind: "twitter" | "rss"): void { const list = kind === "twitter" ? form.value.twitter_handles : form.value.feed_urls; if (list.length < maximumSources) list.push(""); }
+function removeSource(kind: "twitter" | "rss", index: number): void { const list = kind === "twitter" ? form.value.twitter_handles : form.value.feed_urls; if (list.length > 1) list.splice(index, 1); }
+function filledSources(values: string[]): string[] { return values.map((value) => value.trim()).filter((value) => value !== ""); }
+function startEdit(task: AssistantTask): void {
+  editingTask.value = task;
+  const sources = taskSources(task);
+  // 编辑框按订阅来源的类型决定看到哪一栏：混着填两种来源的订阅极少见，
+  // 以第一个来源为准，另一栏留一个空行。
+  const kind = sources[0]?.source === "twitter" ? "twitter" : "rss";
+  const handles = sources.filter((source) => source.source === "twitter").map((source) => source.handle ?? "");
+  const urls = sources.filter((source) => source.source !== "twitter").map((source) => source.feed_url);
+  form.value = { source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" };
+  editing.value = true;
+  markEditorClean();
+}
 async function stopEditing(): Promise<void> {
   if (saving.value) return;
   if (editorDirty() && !(await askConfirm({ title: "放弃未保存的订阅配置？", message: "这条 RSS 订阅的改动还没保存，关闭后会丢失。", confirmLabel: "放弃改动", danger: true }))) return;
@@ -138,8 +174,10 @@ async function stopEditing(): Promise<void> {
   editorSnapshot.value = "";
 }
 async function save(): Promise<void> {
-  if (form.value.source === "twitter" && !form.value.twitter_handle) return toastError("请填写 Twitter 用户");
-  if (form.value.source === "rss" && !form.value.feed_url) return toastError("请填写 Feed URL");
+  const handles = filledSources(form.value.twitter_handles);
+  const urls = filledSources(form.value.feed_urls);
+  if (form.value.source === "twitter" && !handles.length) return toastError("请填写 Twitter 用户");
+  if (form.value.source === "rss" && !urls.length) return toastError("请填写 Feed URL");
   if (!form.value.judge_prompt) return toastError("请填写判断与回复规则");
   if (form.value.interval_seconds < minimumIntervalSeconds || form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期必须在 5 分钟到 365 天之间");
   if (!editingTask.value && !form.value.profile_id) return toastError("请选择发送机器人");
@@ -148,14 +186,14 @@ async function save(): Promise<void> {
   saving.value = true;
   try {
     await props.prepareAccess?.();
-    const source = form.value.source === "twitter" ? { twitter_handle: form.value.twitter_handle } : { feed_url: form.value.feed_url };
+    const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: urls, twitter_handles: [] };
     const common = { ...source, judge_prompt: form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
     if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.profile_id, destination: form.value.destination, group_id: form.value.destination === "group" ? form.value.group_id : undefined, user_id: form.value.destination === "private" ? form.value.user_id : undefined });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅保存失败"); } finally { saving.value = false; }
 }
-async function cancel(task: AssistantTask): Promise<void> { if (!await askConfirm({ title: "取消 RSS 订阅", message: `停止 ${task.feed_handle ? `@${task.feed_handle}` : task.message} 的订阅？`, confirmLabel: "取消订阅", danger: true })) return; busyID.value = task.id; try { await cancelRSSWatch(task.id); toastSuccess("RSS 订阅已取消"); await load(); } catch (error) { toastError(error instanceof Error ? error.message : "取消失败"); } finally { busyID.value = ""; } }
-async function remove(task: AssistantTask): Promise<void> { if (!await askConfirm({ title: "删除 RSS 订阅", message: `永久删除 ${task.feed_handle ? `@${task.feed_handle}` : task.message} 的订阅记录？`, confirmLabel: "删除", danger: true })) return; busyID.value = task.id; try { await deleteRSSWatch(task.id); toastSuccess("RSS 订阅已删除"); await load(); } catch (error) { toastError(error instanceof Error ? error.message : "删除失败"); } finally { busyID.value = ""; } }
+async function cancel(task: AssistantTask): Promise<void> { if (!await askConfirm({ title: "取消 RSS 订阅", message: `停止 ${watchTitle(task)} 的订阅？`, confirmLabel: "取消订阅", danger: true })) return; busyID.value = task.id; try { await cancelRSSWatch(task.id); toastSuccess("RSS 订阅已取消"); await load(); } catch (error) { toastError(error instanceof Error ? error.message : "取消失败"); } finally { busyID.value = ""; } }
+async function remove(task: AssistantTask): Promise<void> { if (!await askConfirm({ title: "删除 RSS 订阅", message: `永久删除 ${watchTitle(task)} 的订阅记录？`, confirmLabel: "删除", danger: true })) return; busyID.value = task.id; try { await deleteRSSWatch(task.id); toastSuccess("RSS 订阅已删除"); await load(); } catch (error) { toastError(error instanceof Error ? error.message : "删除失败"); } finally { busyID.value = ""; } }
 function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value; }
 function statusTone(value: AssistantTaskStatus): string { return value === "active" ? "ok" : value === "retrying" ? "warn" : value === "cancelled" ? "err" : ""; }
 function formatInterval(seconds: number): string { return seconds % 86400 === 0 ? `${seconds / 86400} 天` : seconds % 3600 === 0 ? `${seconds / 3600} 小时` : seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`; }
