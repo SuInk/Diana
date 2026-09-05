@@ -165,3 +165,46 @@ func TestPlainTextKeepsReplyMarkerForTheModel(t *testing.T) {
 		t.Fatalf("plain text = %q", got)
 	}
 }
+
+// 首页的实时事件流只有 EventRecord 这一份文本，事件页那套读时重渲染帮不到它，所以
+// 要在记录的时候就把 @ 和引用渲染好。
+func TestEventRecordTextRendersMentionsAndReplies(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "20001", UserID: "10003", MessageID: "m2", SenderName: "阿强",
+		Segments: []MessageSegment{
+			{Type: "reply", Data: map[string]string{"id": "m1"}},
+			atSegment("10002", ""),
+			textSegment("你也去吗"),
+		},
+		Quoted: &QuotedMessage{
+			MessageID: "m1", UserID: "10002", SenderName: "阿花",
+			Segments: []MessageSegment{textSegment("下周要去上海出差")},
+		},
+	}
+	// 被 @ 的人刚在同一个会话里说过话，昵称从内存历史里就能翻到。
+	runtime.remember(MessageEvent{
+		Kind: EventKindGroup, GroupID: "20001", UserID: "10002", MessageID: "m1", SenderName: "阿花",
+		Segments: []MessageSegment{textSegment("下周要去上海出差")},
+	})
+
+	record := runtime.decisionEventRecord(event, PlainText(event.Segments), "replied")
+	want := "[回复 阿花：下周要去上海出差] @阿花（10002） 你也去吗"
+	if record.Text != want {
+		t.Fatalf("record text = %q, want %q", record.Text, want)
+	}
+}
+
+// 路由途中换过正文的地方要保持原样：控制台登录配对只记一个占位，正文里是配对码，
+// 按 segment 重渲染会把它泄到首页事件流上。
+func TestEventRecordTextKeepsSubstitutedText(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind: EventKindPrivate, UserID: "10003", MessageID: "m1",
+		Segments: []MessageSegment{textSegment("配对码 123456")},
+	}
+	record := runtime.decisionEventRecord(event, "[控制台登录配对]", "replied")
+	if record.Text != "[控制台登录配对]" {
+		t.Fatalf("record text = %q", record.Text)
+	}
+}
