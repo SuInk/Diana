@@ -661,6 +661,9 @@ type plainTextOptions struct {
 	resolveName AtMentionNameResolver
 	// renderReply 换掉引用段的渲染。返回空串表示这一段不写出来。
 	renderReply func(messageID string) string
+	// renderSegment 兜住 PlainText 本身不渲染的段（json/xml 卡片）和需要换写法的段
+	// （合并转发）。返回空串表示这一段不写出来，保持 PlainText 的原行为。
+	renderSegment func(segment MessageSegment) string
 }
 
 // PlainText 将 OneBot segment 列表转换为可读纯文本。
@@ -714,6 +717,10 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 				builder.WriteString("]")
 			}
 		case "forward":
+			if options.renderSegment != nil {
+				builder.WriteString(options.renderSegment(segment))
+				break
+			}
 			if summary := strings.TrimSpace(segment.Data["summary"]); summary != "" {
 				builder.WriteString(summary)
 			} else if id := firstNonEmpty(segment.Data["id"], segment.Data["resid"], segment.Data["forward_id"]); id != "" {
@@ -722,6 +729,12 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 				builder.WriteString("]")
 			} else {
 				builder.WriteString("[合并转发]")
+			}
+		case "json", "xml":
+			// PlainText 本身不渲染卡片：给模型的正文里，卡片内容由链接解析那条路
+			// 负责。控制台没有那条路，只能自己从卡片里挖一行摘要出来。
+			if options.renderSegment != nil {
+				builder.WriteString(options.renderSegment(segment))
 			}
 		}
 	}
