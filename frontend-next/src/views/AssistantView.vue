@@ -1282,6 +1282,7 @@
                   <span class="hint" :class="{ danger: commandAllowlistIsWildcard }">
                     <template v-if="!commandAllowlistEnabled">
                       当前为空：命令执行整体关闭，机器人拿不到这个工具。要开放就填具体命令，例如 <code>uptime,free,df</code>。
+                      （新建的机器人会自带一组只读诊断命令；这一栏被清空过的话不会自动填回来。）
                     </template>
                     <template v-else-if="commandAllowlistIsWildcard">
                       <code>*</code> 放行任意程序。白名单是命令执行唯一按名字生效的限制，填 <code>*</code> 等于放弃它。
@@ -1293,6 +1294,18 @@
                 </div>
                 <!-- 读 / 写 / 执行三档分开：读错文件浪费一次调用，写错文件改的是磁盘，
                      执行则连「程序能碰什么」都要另一层来管。 -->
+                <!-- 存量部署升级后不会凭空拿到这些能力（那是静默扩权），所以给一次
+                     显式的「填入」：只改表单，仍然要用户自己点保存。 -->
+                <div class="field wide">
+                  <div class="cluster" style="gap: 8px">
+                    <button class="btn small ghost" type="button" :disabled="applyingAgentDefaults" @click="applyAgentDefaults">
+                      {{ applyingAgentDefaults ? "读取中…" : "填入推荐默认值" }}
+                    </button>
+                  </div>
+                  <span class="hint">
+                    把命令白名单、写入开关和沙盒模式填成新建机器人时的推荐值。只改这张表单，点「保存配置」才生效。
+                  </span>
+                </div>
                 <div class="field wide">
                   <label class="switch">
                     <input v-model="form.agent_file_write_enabled" type="checkbox" />
@@ -1300,7 +1313,8 @@
                     <span class="switch-label">允许写入文件（write_file / edit_file）</span>
                   </label>
                   <span class="hint">
-                    默认关闭。读取、检索、按名字找文件不受这个开关影响，始终可用。写入同样锁在 workspace 内，不能写到别处。
+                    新建的机器人默认打开：写入锁在数据目录下的 workspace 内，碰不到配置和数据库。
+                    读取、检索、按名字找文件不受这个开关影响，始终可用。
                   </span>
                 </div>
                 <div class="field">
@@ -1513,7 +1527,8 @@ import {
   WORLD_BOOK_EXPORT_VERSION,
   type WorldBookNode,
   type WorldBookImportResult,
-  listBotGroups
+  listBotGroups,
+  getAgentDefaults
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -1546,6 +1561,26 @@ const commandAllowlistEnabled = computed(() => commandAllowlistEntries.value.len
 const commandAllowlistIsWildcard = computed(() => commandAllowlistEntries.value.includes("*"));
 
 // AppSelect 要一个确定的值，而配置里这一项是可选的：留空按 auto。
+// 推荐默认值从后端要，不在前端抄一份——抄一份迟早和 DefaultBotConfig 对不上。
+const applyingAgentDefaults = ref(false);
+async function applyAgentDefaults(): Promise<void> {
+  if (!form.value) return;
+  applyingAgentDefaults.value = true;
+  try {
+    const defaults = await getAgentDefaults();
+    allowlistDraft.value = (defaults.agent_command_allowlist ?? []).join(",");
+    form.value.agent_file_write_enabled = defaults.agent_file_write_enabled;
+    form.value.agent_command_sandbox = defaults.agent_command_sandbox;
+    form.value.agent_max_steps = defaults.agent_max_steps;
+    form.value.agent_command_timeout_ms = defaults.agent_command_timeout_ms;
+    toastSuccess("已填入推荐默认值，点「保存配置」后生效");
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : String(err));
+  } finally {
+    applyingAgentDefaults.value = false;
+  }
+}
+
 const commandSandboxMode = computed<string>({
   get: () => form.value?.agent_command_sandbox || "auto",
   set: (value) => {

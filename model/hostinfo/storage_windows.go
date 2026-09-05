@@ -3,7 +3,7 @@
 
 //go:build windows
 
-package webui
+package hostinfo
 
 import (
 	"fmt"
@@ -11,7 +11,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func storageUsage(path string) (total, used, available uint64, err error) {
+// StorageUsage 返回该路径所在文件系统的容量、已用和可用字节数。
+func StorageUsage(path string) (total, used, available uint64, err error) {
 	directory, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("encode storage path: %w", err)
