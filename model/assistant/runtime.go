@@ -1755,7 +1755,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
-	if successOutcome == "replied" || successOutcome == "replied_direct_followup" {
+	if successOutcome == "replied" || successOutcome == "replied_direct_followup" || event.proactiveReply || event.chatInReply {
 		var finish func()
 		replyCtx, finish = r.beginDirectReply(replyCtx, event)
 		defer finish()
@@ -3192,7 +3192,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
 				newDianaSubtaskTool(r, event),
-				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaNotebookTool(r, event, relationship),
 				newDianaVersionTool(r),
@@ -3205,6 +3204,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
 				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
 				newDianaHostStatsTool(r, event),
+			}
+			if supportsOneBotGroupTool(cfg, event) {
+				extraTools = append(extraTools, newDianaOneBotGroupTool(r, event))
 			}
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
@@ -6061,6 +6063,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if proactiveTriggered {
 		builder.WriteString("\n")
 		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
+		builder.WriteString("\n" + proactiveReplyPacingPrompt)
 	}
 	if event.chatInReply {
 		if cfg.chatInSettings().SuperActive {
@@ -8543,7 +8546,7 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
+	chunks := splitEventChatReply(reply, cfg, event)
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
