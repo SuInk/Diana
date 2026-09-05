@@ -625,7 +625,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;
     const index = groups.findIndex((group) => group.group_id === config.group_id);
-    if (index >= 0) groups[index] = { ...groups[index], ...config, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
+    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
   }
 

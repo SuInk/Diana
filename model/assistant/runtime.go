@@ -1252,8 +1252,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
-	// 空值在 GroupConfig.WithDefaults 里已经从机器人配置继承过，这里直接拷。
-	cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
+	if groupCfg.NaturalReplySplitEnabled != nil {
+		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
+	}
 	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
 	cfg.DirectReplyChunkSize = groupCfg.DirectReplyChunkSize
 	cfg.ForwardReplyThreshold = groupCfg.ForwardReplyThreshold

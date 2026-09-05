@@ -236,11 +236,13 @@
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
-          <label class="switch">
-            <input v-model="editing.natural_reply_split_enabled" type="checkbox" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">本群自然分条</span>
-          </label>
+          <label for="group-natural-split">本群自然分条</label>
+          <AppSelect
+            id="group-natural-split"
+            :model-value="editing.natural_reply_split_enabled == null ? '' : editing.natural_reply_split_enabled ? 'on' : 'off'"
+            :options="groupNaturalReplySplitOptions"
+            @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
+          />
           <span class="hint">
             按模型排的换行、以及句号边界，把一条回复分成几条发。关掉后只认模型显式写的分条标记，
             下面的「最多分几条」随之失效，「分段发送长度」和合并转发不受影响。
@@ -248,7 +250,7 @@
         </div>
         <div class="field">
           <label for="group-maxbubbles">最多分几条</label>
-          <input id="group-maxbubbles" :disabled="!editing.natural_reply_split_enabled" v-model.number="editing.reply_max_bubbles" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <input id="group-maxbubbles" :disabled="!(editing.natural_reply_split_enabled ?? defaultNaturalReplySplitEnabled)" v-model.number="editing.reply_max_bubbles" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
           <span class="hint">分出来超过它就退回粗一档（先不按句号、再不按换行），退到底把相邻段均分成这么多条。</span>
         </div>
         <div class="field">
@@ -483,7 +485,17 @@ const togglingGroupID = ref("");
 const defaultRecallReplyAutoDeleteEnabled = ref(false);
 const defaultNaturalInterjectionEnabled = ref(false);
 // 自然分条默认是开的，跟机器人配置那边的缺省一致。
-const defaultNaturalReplySplitEnabled = ref(true);
+const naturalReplySplitDefaults = ref<Record<string, boolean>>({});
+const defaultNaturalReplySplitEnabled = computed(() =>
+  naturalReplySplitDefaults.value[editing.value?.bot_profile_id || botScope.value]
+    ?? naturalReplySplitDefaults.value[""]
+    ?? true
+);
+const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
+  { value: "", label: `跟随机器人（${defaultNaturalReplySplitEnabled.value ? "开启" : "关闭"}）` },
+  { value: "on", label: "开启" },
+  { value: "off", label: "关闭" }
+]);
 const defaultSocialReplyEnabled = ref(false);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
@@ -563,7 +575,10 @@ async function load(showFeedback = false): Promise<void> {
       const current = active ?? config;
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       defaultNaturalInterjectionEnabled.value = current.natural_interjection_enabled ?? false;
-      defaultNaturalReplySplitEnabled.value = current.natural_reply_split_enabled ?? true;
+      naturalReplySplitDefaults.value = Object.fromEntries([
+        ["", current.natural_reply_split_enabled ?? true],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
+      ]);
       defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
@@ -593,7 +608,6 @@ function addGroup(): void {
       enabled: true,
       group_triggers: [],
       natural_interjection_enabled: defaultNaturalInterjectionEnabled.value,
-      natural_reply_split_enabled: defaultNaturalReplySplitEnabled.value,
       social_reply_enabled: defaultSocialReplyEnabled.value,
       recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
       recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
@@ -610,7 +624,6 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
   config.natural_interjection_enabled ??= defaultNaturalInterjectionEnabled.value;
-  config.natural_reply_split_enabled ??= defaultNaturalReplySplitEnabled.value;
   config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
@@ -720,7 +733,13 @@ async function saveEditing(): Promise<void> {
 function upsert(config: BotGroupConfig): void {
   const index = groups.value.findIndex((group) => group.group_id === config.group_id);
   if (index >= 0) {
-    groups.value[index] = { ...groups.value[index], ...config, configured: true };
+    groups.value[index] = {
+      ...groups.value[index],
+      ...config,
+      // 恢复继承时响应会省略这个字段，不能保留列表里先前的显式开关。
+      natural_reply_split_enabled: config.natural_reply_split_enabled,
+      configured: true
+    };
   } else {
     // 头像地址由后端按平台决定（QQ 直链或本机代理），前端不再自己拼；
     // 这里先留空，下一次拉取列表时补上。
