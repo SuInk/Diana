@@ -347,16 +347,25 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 	if !strings.Contains(prompt, "示例——") || !strings.Contains(prompt, "用户：") {
 		t.Fatalf("catgirl prompt has no worked examples: %q", prompt)
 	}
-	// 「每句加喵」和「句末不打句号」必须一起说：只说前者，模型会写成「……了喵。」，
-	// 句号跟在后面，读起来还是助理腔。示例里也一个句号都不能有，否则规则和样例
-	// 自相矛盾，模型跟样例走。
-	if !strings.Contains(prompt, "每句话结尾都加「喵」") || !strings.Contains(prompt, "句末不要「。」") {
-		t.Fatalf("catgirl prompt does not pin the sentence ending: %q", prompt)
+	// Optional mannerisms must not relax the independent punctuation rule.
+	if !strings.Contains(prompt, "普通句子可以不用") || !strings.Contains(prompt, "句末不要「。」") {
+		t.Fatalf("catgirl prompt lost optional voice or punctuation guidance: %q", prompt)
 	}
+	withEnder, withoutEnder := false, false
 	for _, line := range strings.Split(prompt, "\n") {
 		if strings.HasPrefix(line, "你：") && strings.Contains(line, "。") {
 			t.Fatalf("catgirl example still ends sentences with a full stop: %q", line)
 		}
+		if strings.HasPrefix(line, "你：") {
+			if strings.Contains(line, "喵") {
+				withEnder = true
+			} else {
+				withoutEnder = true
+			}
+		}
+	}
+	if !withEnder || !withoutEnder {
+		t.Fatal("catgirl examples must demonstrate both using and omitting mannerisms")
 	}
 	// 曾经教过「句尾一个孤零零的『（』」当语气词，现在不教了：发送前的审核器把
 	// 「括号没闭合」当成截断特征，整条回复会被判成半截话拦下来。提示词和审核规则
@@ -441,9 +450,9 @@ func TestPersonaVoicePromptAsksModelToPickByTone(t *testing.T) {
 		t.Fatalf("没声明覆盖关系：%s", prompt)
 	}
 
-	// 只有一个候选就是固定句尾，不该再说「挑」。
-	if single := personaVoiceFrom("", "喵").prompt(); strings.Contains(single, "按当下语气挑") {
-		t.Fatalf("单个候选不该说挑：%s", single)
+	// A single configured ender is still optional, not a fixed suffix.
+	if single := personaVoiceFrom("", "喵").prompt(); !strings.Contains(single, "只有一个候选也不必每句添加") {
+		t.Fatalf("single ender was made mandatory: %s", single)
 	}
 }
 
@@ -454,6 +463,51 @@ func TestPersonaVoiceEmptyLeavesStylePromptUntouched(t *testing.T) {
 	}
 	if ReplyStyleCatgirl.prompt(true, personaVoice{}) != ReplyStyleCatgirl.prompt(true, personaVoiceFrom("  ", " ")) {
 		t.Fatal("空白字段应当和完全没填一样")
+	}
+}
+
+func TestPersonaVoicePreferencesStayOptionalAcrossPromptPaths(t *testing.T) {
+	for _, style := range []ReplyStyle{ReplyStyleCatgirl, ReplyStyleAssistant, ReplyStyleGroupmate, ReplyStyleHuman} {
+		for _, voice := range []personaVoice{
+			personaVoiceFrom("本喵", ""),
+			personaVoiceFrom("", "呀"),
+			personaVoiceFrom("本喵", "呀,呢"),
+		} {
+			cfg := BotConfig{ReplyStyle: style, SelfReference: voice.SelfReference, SentenceEnders: strings.Join(voice.Enders, ",")}.WithDefaults()
+			runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "200"}
+			persona := runtime.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: "在吗"}})
+			for _, prompt := range []string{runtime.systemPrompt(event, nil), persona[0].Content} {
+				for _, forbidden := range []string{"每句话结尾加「", "每句话结尾都加「", "每句结尾加「", "结尾就用「"} {
+					if strings.Contains(prompt, forbidden) {
+						t.Fatalf("style=%s prompt still mandates a suffix: %s", style, forbidden)
+					}
+				}
+				if !strings.Contains(prompt, "不是逐句必选项") || !strings.Contains(prompt, "也可以都省略") {
+					t.Fatalf("style=%s optional voice guidance is missing", style)
+				}
+				if voice.SelfReference != "" && (!strings.Contains(prompt, "自称偏好是「本喵」") || !strings.Contains(prompt, "用「我」或省略主语")) {
+					t.Fatal("self-reference preference lost its natural alternatives")
+				}
+				for _, ender := range voice.Enders {
+					if !strings.Contains(prompt, "「"+ender+"」") {
+						t.Fatalf("configured candidate %q is missing", ender)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestPersonaVoiceDoesNotRewritePlainRepliesOrConfiguration(t *testing.T) {
+	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl, SelfReference: "本喵", SentenceEnders: "喵,喵~"}.WithDefaults()
+	roundTrip := ConfigFromPayload(PayloadFromConfig(cfg), cfg).WithDefaults()
+	if roundTrip.SelfReference != cfg.SelfReference || roundTrip.SentenceEnders != cfg.SentenceEnders {
+		t.Fatal("optional voice guidance must not change saved preferences")
+	}
+	got := splitEventChatReply("在的<dianabr>怎么了？", cfg, MessageEvent{Kind: EventKindGroup, chatInReply: true})
+	if len(got) != 2 || got[0] != "在的" || got[1] != "怎么了？" {
+		t.Fatalf("delivery inserted a configured self-reference or suffix: %q", got)
 	}
 }
 
