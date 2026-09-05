@@ -135,8 +135,8 @@ func TestFormatPortraitLinesMarksInferredValues(t *testing.T) {
 	}
 }
 
-// 画像要进提示词，否则记下来也没人用；而且它比「最近说过的话」更值钱，被预算
-// 挤的时候要留到最后。
+// 画像要进提示词，否则记下来也没人用；而且它是固定核心的一部分，只有实在装不下
+// 时才让位。原始发言缓冲则一条都不该出现。
 func TestUserMemoryContextCarriesPortrait(t *testing.T) {
 	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	profile := UserMemoryProfile{
@@ -160,15 +160,31 @@ func TestUserMemoryContextCarriesPortrait(t *testing.T) {
 		t.Fatalf("portrait missing from structured memory prompt: %s", structured)
 	}
 
-	// 预算只够核心加画像时，先丢最近记忆，画像留着。
-	withoutMemories := profile
-	withoutMemories.Memories = nil
-	budget := llm.EstimateTextTokens(formatUserMemoryContext(withoutMemories, policy))
-	trimmed := fitUserMemoryCoreToTokenBudget(profile, policy, budget)
-	if strings.Contains(trimmed, "上周问过怎么配置反向代理") {
-		t.Fatalf("recent memories should be dropped first: %s", trimmed)
+	// 原始发言缓冲不进提示词，预算再宽也不该露出来。
+	if strings.Contains(text, "上周问过怎么配置反向代理") {
+		t.Fatalf("raw message buffer leaked into prompt: %s", text)
 	}
+	if strings.Contains(structured, "上周问过怎么配置反向代理") {
+		t.Fatalf("raw message buffer leaked into structured prompt: %s", structured)
+	}
+
+	// 预算够核心加画像时，画像留着。
+	budget := llm.EstimateTextTokens(text)
+	trimmed := fitUserMemoryCoreToTokenBudget(profile, policy, budget)
 	if !strings.Contains(trimmed, "住在杭州") {
-		t.Fatalf("portrait should outlive recent memories: %s", trimmed)
+		t.Fatalf("portrait should survive a budget that fits it: %s", trimmed)
+	}
+
+	// 预算连画像都装不下时，才轮到画像让位，关系核心留到最后。
+	tight := llm.EstimateTextTokens(formatUserMemoryContext(UserMemoryProfile{
+		UserID: profile.UserID, DisplayName: profile.DisplayName,
+		Favorability: profile.Favorability, MessageCount: profile.MessageCount,
+	}, policy))
+	squeezed := fitUserMemoryCoreToTokenBudget(profile, policy, tight)
+	if strings.Contains(squeezed, "住在杭州") {
+		t.Fatalf("portrait should be dropped when it does not fit: %s", squeezed)
+	}
+	if !strings.Contains(squeezed, "好感度：30") {
+		t.Fatalf("relationship core should outlive the portrait: %s", squeezed)
 	}
 }

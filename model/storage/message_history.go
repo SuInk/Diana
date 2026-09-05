@@ -330,6 +330,10 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 		args = append(args, query.Session)
 	}
 	terms := historySearchTerms(query)
+	if strings.TrimSpace(query.ExcludeSession) != "" {
+		where += ` AND session != ?`
+		args = append(args, strings.TrimSpace(query.ExcludeSession))
+	}
 	if s.historyFTS {
 		if events, total, ok, err := s.searchMessageEventsFTS(ctx, where, args, terms, limit); ok {
 			return events, total, err

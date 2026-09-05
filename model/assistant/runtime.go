@@ -92,14 +92,15 @@ type MessageTimelineStore interface {
 }
 
 type MessageHistorySearchQuery struct {
-	Session       string
-	SessionPrefix string
-	Text          string
-	Terms         []string
-	FromTime      int64
-	ThroughTime   int64
-	Limit         int
-	CrossSession  bool
+	ExcludeSession string
+	Session        string
+	SessionPrefix  string
+	Text           string
+	Terms          []string
+	FromTime       int64
+	ThroughTime    int64
+	Limit          int
+	CrossSession   bool
 }
 
 type MessageHistorySearchStore interface {
@@ -113,14 +114,16 @@ type MessageSearchExtraStore interface {
 }
 
 type MessageHistoryVectorQuery struct {
-	Session       string
-	SessionPrefix string
-	Vector        []float32
-	Model         string
-	FromTime      int64
-	ThroughTime   int64
-	Limit         int
-	CrossSession  bool
+	ExcludeSession string
+	MinSimilarity  float64
+	Session        string
+	SessionPrefix  string
+	Vector         []float32
+	Model          string
+	FromTime       int64
+	ThroughTime    int64
+	Limit          int
+	CrossSession   bool
 }
 
 // MessageHistoryVectorStore 是语义检索的可选存储能力:向量随消息异步入库,
@@ -1252,8 +1255,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.RecentHistoryTokenBudget = groupCfg.RecentHistoryTokenBudget
 	cfg.RecentContextLimit = groupCfg.RecentContextLimit
 	cfg.MaxReplyChars = groupCfg.MaxReplyChars
-	// 空值在 GroupConfig.WithDefaults 里已经从机器人配置继承过，这里直接拷。
-	cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
+	if groupCfg.NaturalReplySplitEnabled != nil {
+		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
+	}
 	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
 	cfg.DirectReplyChunkSize = groupCfg.DirectReplyChunkSize
 	cfg.ForwardReplyThreshold = groupCfg.ForwardReplyThreshold
@@ -1314,11 +1318,15 @@ func (r *Runtime) sandboxedBrowserEnabled(event MessageEvent) bool {
 }
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
+	profileID := strings.TrimSpace(event.ProfileID)
+	if profileID == "" {
+		profileID = r.Config().ID
+	}
+	out := r.plugins.ProfileOverrides(profileID)
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
-		return nil
+		return out
 	}
-	out := make(map[string]bool, len(groupCfg.PluginOverrides))
 	for id, enabled := range groupCfg.PluginOverrides {
 		id = strings.TrimSpace(id)
 		if id == "" {
@@ -1445,7 +1453,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 			r.noteRecalledInbound(event)
 		}
 		if r.plugins != nil {
-			event = r.plugins.ObserveEvent(ctx, event)
+			event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 		}
 		if isRecallNotice(event) {
 			r.persistMessageEvent(event)
@@ -1622,7 +1630,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	}
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
-		event = r.plugins.ObserveEvent(ctx, event)
+		event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 	}
 	// 消息互通发生在回复判断之前：即使 planner 最终选择不回复，原消息也应被
 	// 搬到对端。转发走独立短超时，不把目标平台的网络延迟叠到本轮回复上。
@@ -1755,7 +1763,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
 	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
-	if successOutcome == "replied" || successOutcome == "replied_direct_followup" {
+	if successOutcome == "replied" || successOutcome == "replied_direct_followup" || event.proactiveReply || event.chatInReply {
 		var finish func()
 		replyCtx, finish = r.beginDirectReply(replyCtx, event)
 		defer finish()
@@ -1876,7 +1884,7 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "error_notice_merged", nil
 		}
-		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, "出错了："+publicDetail)
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, r.effectiveConfigForEvent(event).ErrorReplyPrefix+publicDetail)
 		if sendErr != nil {
 			// 这条提示自己也没发出去，本轮就不算已经交代过，留给汇总兜底。
 			r.noteErrorNoticeSendFailed(event, publicDetail)
@@ -1941,12 +1949,55 @@ func (r *Runtime) decisionEventRecord(event MessageEvent, text string, outcome s
 		UserID:    event.UserID,
 		GroupID:   event.GroupID,
 		MessageID: event.MessageID,
-		Text:      text,
+		Text:      r.eventRecordDisplayText(event, text),
 		Handled:   handled,
 		Outcome:   strings.TrimSpace(outcome),
 		Decision:  decision,
 		Reason:    reason,
 	}
+}
+
+// eventRecordDisplayText 把首页实时事件流和状态快照里的正文换成给人看的写法：@ 补
+// 昵称，引用写成「回复 某人：原话」，而不是 [diana-reply:数字ID]。事件页是读的时候
+// 重新渲染的（见 storage.ListInboundEventDetails），首页这两处只有 EventRecord 这
+// 一份文本，所以要在记录的时候就渲染好。
+//
+// 只在 text 正好是 PlainText 的原样输出时才替换。路由途中换过正文的地方——比如控制
+// 台登录配对只记一个「[控制台登录配对]」占位，正文里是配对码——必须保持原样。
+func (r *Runtime) eventRecordDisplayText(event MessageEvent, text string) string {
+	if len(event.Segments) == 0 || strings.TrimSpace(text) != strings.TrimSpace(PlainText(event.Segments)) {
+		return text
+	}
+	rendered := DisplaySegmentsText(event.Segments, event.Quoted, r.eventDisplayNameResolver(event))
+	if rendered == "" {
+		return text
+	}
+	return rendered
+}
+
+// eventDisplayNameResolver 给实时事件流补 @ 昵称，只翻内存里的近期会话历史：被 @ 的
+// 人多半刚在同一个会话里说过话。翻不到就照旧显示号码——这条在回复热路径上，为了一
+// 个展示字段去查库不值当，事件页读的时候会做完整的批量补名。
+func (r *Runtime) eventDisplayNameResolver(event MessageEvent) AtMentionNameResolver {
+	session := sessionKey(event)
+	r.mu.RLock()
+	history := r.history[session]
+	names := make(map[string]string, len(history))
+	for _, item := range history {
+		userID := strings.TrimSpace(item.UserID)
+		name := strings.TrimSpace(item.SenderName)
+		// 没拿到昵称的事件会把 SenderName 退化成账号本身，照它渲染会写出
+		// 「@10004（10004）」这种重复。
+		if userID == "" || name == "" || name == userID {
+			continue
+		}
+		names[userID] = name
+	}
+	r.mu.RUnlock()
+	if len(names) == 0 {
+		return nil
+	}
+	return func(userID string) string { return names[strings.TrimSpace(userID)] }
 }
 
 func setEventRecordOutcome(record *EventRecord, outcome string) {
@@ -2008,7 +2059,7 @@ func (r *Runtime) observeSelfMessage(ctx context.Context, event MessageEvent) {
 	}
 	event = cacheMessageEventVideos(ctx, event)
 	if r.plugins != nil {
-		event = r.plugins.ObserveEvent(ctx, event)
+		event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 	}
 	r.remember(event)
 	r.enqueueHistoryImageDescriptions(event)
@@ -3192,7 +3243,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
 				newDianaSubtaskTool(r, event),
-				newDianaOneBotGroupTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaNotebookTool(r, event, relationship),
 				newDianaVersionTool(r),
@@ -3206,8 +3256,19 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
 				newDianaHostStatsTool(r, event),
 			}
+			if supportsOneBotGroupTool(cfg, event) {
+				extraTools = append(extraTools, newDianaOneBotGroupTool(r, event))
+			}
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
+			}
+			if boolValue(cfg.LongTermMemoryEnabled, true) {
+				r.mu.RLock()
+				memoryAvailable := r.structuredMemory != nil
+				r.mu.RUnlock()
+				if memoryAvailable {
+					extraTools = append(extraTools, &dianaMemoryTool{runtime: r, event: event})
+				}
 			}
 			if r.oneBotRequestStore() != nil && r.oneBotV11SkillEnabled(event) {
 				extraTools = append(extraTools, newDianaOneBotRequestsTool(r, event))
@@ -3515,10 +3576,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if turnMessageIDs[strings.TrimSpace(historyEvent.MessageID)] {
 				continue
 			}
+			// 机器人自己发的错误提示也是它说过的话，照样留在历史里：模型看到「上一轮
+			// 出错了」才能接住「重试一下」。以前按「出错了：」前缀把它们剔掉，前缀还是
+			// 写死的，用户改了 error_reply_prefix 就认不出来了。
 			if strings.TrimSpace(historyEvent.botReply) != "" {
-				if semanticErrorWrapperText(historyEvent.botReply) {
-					continue
-				}
 				messages = append(messages, llm.Message{
 					Role:         llm.RoleAssistant,
 					Content:      historyEvent.botReply,
@@ -3529,9 +3590,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))) {
 				if botText := strings.TrimSpace(historyPlainText(historyEvent)); botText != "" {
-					if semanticErrorWrapperText(botText) {
-						continue
-					}
 					messages = append(messages, llm.Message{
 						Role:         llm.RoleAssistant,
 						Content:      botText,
@@ -5979,6 +6037,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptToolHistoryImages)
 	}
+	if agentEnabled && hasTool(dianaMemoryToolName) {
+		builder.WriteString("\n长期记忆摘要不够时，先用 diana.memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。")
+	}
 	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptInternalIdentifiers)
 		// 引用被管理员关掉时不教这一手：那是「永不带引用」的明确配置。
@@ -6061,6 +6122,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if proactiveTriggered {
 		builder.WriteString("\n")
 		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
+		builder.WriteString("\n" + proactiveReplyPacingPrompt)
 	}
 	if event.chatInReply {
 		if cfg.chatInSettings().SuperActive {
@@ -7218,9 +7280,6 @@ func mergeContextSummary(existing string, events []MessageEvent) string {
 }
 
 func compactContextEvent(event MessageEvent) string {
-	if semanticErrorWrapperText(firstNonEmpty(strings.TrimSpace(event.botReply), strings.TrimSpace(historyPlainText(event)))) {
-		return ""
-	}
 	text := PlainText(event.Segments)
 	if strings.TrimSpace(text) == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(event.RawMessage)
@@ -7256,9 +7315,6 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 		text = event.RawMessage
 	}
 	text = strings.TrimSpace(text)
-	if semanticErrorWrapperText(text) {
-		return ""
-	}
 	if text == "" {
 		return ""
 	}
@@ -8543,7 +8599,7 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
 	cfg := r.effectiveConfigForEvent(event)
-	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
+	chunks := splitEventChatReply(reply, cfg, event)
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
@@ -8891,7 +8947,7 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 		event = cacheMessageEventVideos(ctx, event)
 	}
 	if r.plugins != nil {
-		event = r.plugins.ObserveEvent(ctx, event)
+		event = r.plugins.ObserveEventWithOverrides(ctx, event, r.pluginOverridesForEvent(event))
 	}
 	r.remember(event)
 	r.enqueueHistoryImageDescriptions(event)
@@ -9608,15 +9664,6 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	return profile, true
 }
 
-func (r *Runtime) userMemoryContext(ctx context.Context, event MessageEvent) string {
-	profile, ok := r.loadUserMemoryProfile(ctx, event)
-	if !ok {
-		return ""
-	}
-	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
-	return formatUserMemoryContext(profile, policy)
-}
-
 func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent) (UserMemoryProfile, bool) {
 	userID := strings.TrimSpace(event.UserID)
 	if userID == "" {
@@ -9675,21 +9722,11 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)
 	}
-	if len(profile.Memories) > 0 {
-		builder.WriteString("\n最近记忆：")
-		memories := profile.Memories
-		if len(memories) > 8 {
-			memories = memories[len(memories)-8:]
-		}
-		for _, item := range memories {
-			text := strings.TrimSpace(item.Text)
-			if text == "" {
-				continue
-			}
-			builder.WriteString("\n- ")
-			builder.WriteString(text)
-		}
-	}
+	// 这里不再列 profile.Memories。那份东西是原始发言的环形缓冲，不是长期记忆：
+	// 没有模型参与，不做相关性检索，@ 和回复标记也原样留着。同群聊天时它和最近
+	// 历史逐条重复，跨群带过去的也只是几句原话。真正的长期记忆由结构化记忆检索
+	// 负责（见 formatStructuredMemoryContextWithTokenBudgetDetailed），这条兜底
+	// 路径只保留关系核心和画像。
 	return truncateRunesFromStart(builder.String(), 1800)
 }
 

@@ -94,10 +94,7 @@ func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.Gener
 	if response == nil {
 		return response, err
 	}
-	purpose := llmUsagePurposeFromContext(ctx)
-	if purpose == "" {
-		purpose = debugModelPurpose(req)
-	}
+	purpose := llmCallPurpose(ctx)
 	p.runtime.recordLLMUsage(ctx, p.state.event, response.Provider, response.Model, response.Usage, purpose, elapsed, ttft)
 	return response, err
 }

@@ -175,7 +175,7 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 		}
 		scopeKey := request.Session
 		if candidate.Visibility == assistant.MemoryVisibilityUser {
-			scopeKey = "user:" + strings.TrimSpace(request.SubjectUserID)
+			scopeKey = memorySessionNamespace(request.Session) + "user:" + strings.TrimSpace(request.SubjectUserID)
 		}
 		key := candidate.Key
 		if candidate.Kind == assistant.MemoryKindEpisode && candidate.Action == assistant.MemoryActionUpsert {
@@ -192,6 +192,17 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 		active, found, err := findActiveMemory(ctx, tx, scopeKey, request.SubjectUserID, key)
 		if err != nil {
 			return nil, err
+		}
+		// Older user memories used a global key. Keep update/forget working only
+		// for their original namespace, never for a same-ID user elsewhere.
+		if !found && candidate.Visibility == assistant.MemoryVisibilityUser && memorySessionNamespace(request.Session) != "" {
+			legacy, exists, err := findActiveMemory(ctx, tx, "user:"+strings.TrimSpace(request.SubjectUserID), request.SubjectUserID, key)
+			if err != nil {
+				return nil, err
+			}
+			if exists && memorySessionNamespace(legacy.SourceSession) == memorySessionNamespace(request.Session) {
+				active, found = legacy, true
+			}
 		}
 		if candidate.Action == assistant.MemoryActionForget {
 			if !found {
@@ -306,18 +317,43 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 	args := []any{now.Unix(), strings.TrimSpace(query.Session)}
 	scopeClause := `scope_key = ?`
 	if !query.CurrentSessionOnly {
-		scopeClause = `(` + scopeClause + ` OR (subject_user_id = ? AND visibility = 'user'))`
-		args = append(args, subjectUserID)
+		scopeClause = `(` + scopeClause + ` OR (subject_user_id = ? AND visibility = 'user'
+			AND (source_session LIKE ? ESCAPE '\' OR source_session LIKE ? ESCAPE '\')))`
+		prefix := memorySessionNamespace(query.Session)
+		args = append(args, subjectUserID, escapeMessageHistoryLike(prefix+"group:")+"%", escapeMessageHistoryLike(prefix+"private:")+"%")
 	}
 	if query.CrossGroup && strings.TrimSpace(query.GroupSessionPrefix) != "" {
 		scopeClause = `(` + scopeClause + ` OR (
 		visibility = 'session' AND sensitive = 0 AND COALESCE(source_group_id, '') != ''
 		AND source_session LIKE ? ESCAPE '\'
-		AND (subject_user_id = '' OR subject_user_id = ?)
+		AND ((subject_user_id = '' AND kind IN ('fact', 'summary')) OR (subject_user_id != '' AND subject_user_id = ?))
 	))`
 		args = append(args, escapeMessageHistoryLike(strings.TrimSpace(query.GroupSessionPrefix))+"%", subjectUserID)
 	}
 	kindClause := ""
+	if len(query.CrossPlatformGroupPrefixes) > 0 {
+		var namespaces []string
+		for _, prefix := range query.CrossPlatformGroupPrefixes {
+			prefix = strings.TrimSpace(prefix)
+			if prefix == "" || prefix == "group:" || !strings.HasSuffix(prefix, ":group:") {
+				continue
+			}
+			namespaces = append(namespaces, `source_session LIKE ? ESCAPE '\'`)
+			args = append(args, escapeMessageHistoryLike(prefix)+"%")
+		}
+		if len(namespaces) > 0 {
+			scopeClause = `(` + scopeClause + ` OR (
+				visibility = 'session' AND sensitive = 0 AND COALESCE(subject_user_id, '') = ''
+				AND COALESCE(source_group_id, '') != '' AND kind IN ('fact', 'summary')
+				AND (` + strings.Join(namespaces, " OR ") + `)
+			))`
+		}
+	}
+	if query.SharedPublicOnly {
+		publicClause, publicArgs := sharedPublicMemoryScope(query)
+		scopeClause = publicClause
+		args = append([]any{now.Unix()}, publicArgs...)
+	}
 	if len(query.Kinds) > 0 {
 		placeholders := make([]string, 0, len(query.Kinds))
 		for _, kind := range query.Kinds {
@@ -335,6 +371,42 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 		kindClause += " AND kind NOT IN (" + strings.Join(placeholders, ",") + ")"
 	}
 	searchTerms := query.SearchTerms
+	if len(query.IDs) > 0 {
+		ids := query.IDs
+		if len(ids) > 20 {
+			ids = ids[:20]
+		}
+		kindClause += " AND id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, strings.TrimSpace(id))
+		}
+	}
+	if len(query.RelatedEntities) > 0 || len(query.RelatedTopics) > 0 {
+		var links []string
+		for _, field := range []struct {
+			name   string
+			values []string
+		}{{"entity", query.RelatedEntities}, {"topic", query.RelatedTopics}} {
+			for _, value := range field.values {
+				value = strings.TrimSpace(value)
+				if len([]rune(value)) < 2 || len([]rune(value)) > 80 {
+					continue
+				}
+				links = append(links, "LOWER(TRIM("+field.name+")) = ?")
+				args = append(args, strings.ToLower(value))
+				if len(links) >= 6 {
+					break
+				}
+			}
+			if len(links) >= 6 {
+				break
+			}
+		}
+		if len(links) == 0 {
+			return nil, nil
+		}
+		kindClause += " AND sensitive = 0 AND COALESCE(subject_user_id, '') = '' AND visibility = 'session' AND COALESCE(source_group_id, '') != '' AND kind IN ('fact', 'summary') AND (" + strings.Join(links, " OR ") + ")"
+	}
 	if len(searchTerms) == 0 && strings.TrimSpace(query.Text) != "" {
 		searchTerms = strings.Fields(strings.ToLower(query.Text))
 		if len(searchTerms) == 0 {
@@ -706,4 +778,99 @@ SET last_verified_at = ?
 WHERE status = 'active' AND id IN (`+strings.Join(placeholders, ",")+`)
 `, args...)
 	return err
+}
+
+// ListStructuredMemoriesBySubject 按人取这个人身上还生效的长期记忆，供控制台人员
+// 页展示。
+//
+// 和 ListStructuredMemories 的区别是它不按会话检索：人员页问的是「机器人到底记住
+// 了这个人什么」，而不是「这一轮该召回什么」，所以没有 session 作用域，也不做相关
+// 性打分，只按重要度和时间排。
+//
+// memory_items 没有 bot_profile_id 列——记忆是跟着人走的，不跟着机器人分身走——
+// 所以这里不接受机器人作用域参数。
+func (s *SQLiteStore) ListStructuredMemoriesBySubject(ctx context.Context, userID string, limit int) ([]assistant.StructuredMemoryItem, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return []assistant.StructuredMemoryItem{}, nil
+	}
+	if limit <= 0 {
+		limit = defaultStructuredMemoryCandidates
+	}
+	if limit > maxStructuredMemoryCandidates {
+		limit = maxStructuredMemoryCandidates
+	}
+	rows, err := s.db.QueryContext(ctx, structuredMemorySelect+`
+WHERE status = 'active'
+  AND subject_user_id = ?
+  AND kind != 'thread'
+  AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?)
+ORDER BY importance DESC, confidence DESC, source_event_time DESC, updated_at DESC
+LIMIT ?
+`, userID, time.Now().UTC().Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]assistant.StructuredMemoryItem, 0, limit)
+	for rows.Next() {
+		item, err := scanStructuredMemory(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// CountStructuredMemoriesBySubjects 一次数完多个人的长期记忆条数，人员列表用它。
+// 逐个 COUNT 会把一页 50 人变成 50 次查询。
+func (s *SQLiteStore) CountStructuredMemoriesBySubjects(ctx context.Context, userIDs []string) (map[string]int, error) {
+	counts := map[string]int{}
+	if s == nil || s.db == nil || len(userIDs) == 0 {
+		return counts, nil
+	}
+	placeholders := make([]string, 0, len(userIDs))
+	args := []any{time.Now().UTC().Unix()}
+	seen := map[string]struct{}{}
+	for _, userID := range userIDs {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			continue
+		}
+		if _, duplicate := seen[userID]; duplicate {
+			continue
+		}
+		seen[userID] = struct{}{}
+		placeholders = append(placeholders, "?")
+		args = append(args, userID)
+	}
+	if len(placeholders) == 0 {
+		return counts, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT subject_user_id, COUNT(*)
+FROM memory_items
+WHERE status = 'active'
+  AND kind != 'thread'
+  AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?)
+  AND subject_user_id IN (`+strings.Join(placeholders, ",")+`)
+GROUP BY subject_user_id
+`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var userID string
+		var count int
+		if err := rows.Scan(&userID, &count); err != nil {
+			return nil, err
+		}
+		counts[userID] = count
+	}
+	return counts, rows.Err()
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -106,14 +107,41 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 }
 
 type PluginState struct {
-	Manifest  PluginManifest `json:"manifest"`
-	Installed bool           `json:"installed"`
-	Enabled   bool           `json:"enabled"`
+	Manifest       PluginManifest  `json:"manifest"`
+	Installed      bool            `json:"installed"`
+	Enabled        bool            `json:"enabled"`
+	ProfileEnabled map[string]bool `json:"profile_enabled,omitempty"`
 	// Settings 只保存用户显式覆盖的值，默认值以 Manifest.Settings 声明为准。
 	Settings map[string]any `json:"settings,omitempty"`
 	// SecretsConfigured 只在脱敏后的响应里出现，标记哪些凭据已经配置过。
 	// 明文永远不出现在读接口里。
 	SecretsConfigured map[string]bool `json:"secrets_configured,omitempty"`
+}
+
+// ForProfile applies a bot's switch without changing the legacy global default.
+// OpenAPI is a process-wide HTTP service, not an event-bound bot capability.
+func (s PluginState) ForProfile(profileID string) PluginState {
+	if s.Manifest.ID != OpenAPIPluginID && !s.Manifest.Internal {
+		if enabled, ok := s.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" {
+			s.Enabled = enabled
+		}
+	}
+	return s
+}
+
+func (m *PluginManager) ProfileOverrides(profileID string) map[string]bool {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[string]bool{}
+	for id, state := range m.states {
+		if enabled, ok := state.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" && id != OpenAPIPluginID && !state.Manifest.Internal {
+			out[id] = enabled
+		}
+	}
+	return out
 }
 
 // Redacted 返回可以安全交给 WebUI 的副本：凭据类设置抹掉明文，
@@ -396,6 +424,14 @@ func (m *PluginManager) ListVisible() []PluginState {
 	return out
 }
 
+func (m *PluginManager) ListVisibleForProfile(profileID string) []PluginState {
+	states := m.ListVisible()
+	for i := range states {
+		states[i] = states[i].ForProfile(profileID)
+	}
+	return states
+}
+
 // Get 按 ID 返回单个插件状态。
 func (m *PluginManager) Get(id string) (PluginState, bool) {
 	m.mu.RLock()
@@ -543,6 +579,7 @@ func (m *PluginManager) Snapshot() map[string]PluginState {
 	// 返回副本，避免外部持久化逻辑反向修改 manager 内部状态。
 	out := make(map[string]PluginState, len(m.states))
 	for id, state := range m.states {
+		state.ProfileEnabled = maps.Clone(state.ProfileEnabled)
 		out[id] = state
 	}
 	return out
@@ -558,6 +595,7 @@ func (m *PluginManager) Restore(states map[string]PluginState) {
 		if saved, ok := states[id]; ok {
 			current.Installed = saved.Installed
 			current.Enabled = saved.Enabled
+			current.ProfileEnabled = maps.Clone(saved.ProfileEnabled)
 			// 历史数据可能包含已下线的设置键或非法值，恢复时按当前声明清洗。
 			current.Settings = sanitizePluginSettings(current.Manifest.Settings, saved.Settings)
 		}
@@ -679,6 +717,10 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 
 // SetEnabled 更新指定插件启用状态。
 func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error) {
+	return m.SetEnabledForProfile(id, "", enabled)
+}
+
+func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool) (PluginState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	plugin, ok := m.catalog[id]
@@ -693,9 +735,19 @@ func (m *PluginManager) SetEnabled(id string, enabled bool) (PluginState, error)
 	if state.Manifest.Internal && !enabled {
 		return state, ErrInternalPluginDisable
 	}
-	state.Enabled = enabled
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" || id == OpenAPIPluginID {
+		state.Enabled = enabled
+	} else {
+		// Copy on write keeps previously returned snapshots stable during saves.
+		state.ProfileEnabled = maps.Clone(state.ProfileEnabled)
+		if state.ProfileEnabled == nil {
+			state.ProfileEnabled = map[string]bool{}
+		}
+		state.ProfileEnabled[profileID] = enabled
+	}
 	m.states[id] = state
-	return state, nil
+	return state.ForProfile(profileID), nil
 }
 
 // CanAskAgent reports whether an installed, enabled plugin may turn a
@@ -925,6 +977,10 @@ func (m *PluginManager) SetLocalMediaSharer(sharer LocalMediaSharer) {
 }
 
 func (m *PluginManager) ObserveEvent(ctx context.Context, event MessageEvent) MessageEvent {
+	return m.ObserveEventWithOverrides(ctx, event, m.ProfileOverrides(event.ProfileID))
+}
+
+func (m *PluginManager) ObserveEventWithOverrides(ctx context.Context, event MessageEvent, overrides map[string]bool) MessageEvent {
 	if m == nil {
 		return event
 	}
@@ -937,7 +993,11 @@ func (m *PluginManager) ObserveEvent(ctx context.Context, event MessageEvent) Me
 	for id, plugin := range m.catalog {
 		state := m.states[id]
 		observer, ok := plugin.(EventObserverPlugin)
-		if state.Installed && state.Enabled && ok {
+		enabled := state.Enabled
+		if override, exists := overrides[id]; exists && !state.Manifest.Internal {
+			enabled = override
+		}
+		if state.Installed && (enabled || state.Manifest.Internal) && ok {
 			observers = append(observers, observerEntry{id: id, observer: observer})
 		}
 	}
