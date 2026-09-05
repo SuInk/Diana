@@ -45,6 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
           <div><strong>应用日志</strong><code>logs/diana.log</code><span>支持控制台筛选和下载。</span></div>
           <div><strong>SQLite</strong><code>data/diana.db</code><span>配置、消息、记忆、任务与审计主库。</span></div>
         </div>
+        <p>升级临时备份最多保留本次的一份，创建前清除旧备份，健康检查成功后自动删除；失败或安装后未启动时保留。源码更新脚本在构建和文件替换成功后删除临时备份，仍需手动重启。清理失败会记录警告。下表指自行维护的数据备份，不属于自动清理范围。</p>
         <h3>建议备份周期</h3>
         <div class="table-wrap"><table><thead><tr><th>范围</th><th>周期</th><th>保留</th></tr></thead><tbody>
           <tr><td>SQLite 一致性快照</td><td>每日，并在每次更新前</td><td>至少 7 个日备份和 4 个周备份</td></tr>

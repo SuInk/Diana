@@ -96,11 +96,11 @@ func positiveLineCount(value string) (int, error) {
 }
 
 func printLogTail(path string, lines int, follow bool, output io.Writer) error {
-	file, err := os.Open(path)
+	file, err := openFollowedLog(path)
 	if err != nil {
 		return fmt.Errorf("open Diana log %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	content, offset, err := readLastLines(file, lines)
 	if err != nil {
 		return fmt.Errorf("read Diana log %s: %w", path, err)
@@ -131,7 +131,42 @@ func printLogTail(path string, lines int, follow bool, output io.Writer) error {
 			return readErr
 		}
 		time.Sleep(400 * time.Millisecond)
+		file, err = refreshFollowedLog(file, path)
+		if err != nil {
+			return err
+		}
 	}
+}
+
+// Follow the filename across rotation, and rewind after external truncation.
+func refreshFollowedLog(file *os.File, path string) (*os.File, error) {
+	current, err := file.Stat()
+	if err != nil {
+		return file, err
+	}
+	named, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return file, nil // The writer may be between rename and open.
+	}
+	if err != nil {
+		return file, err
+	}
+	if !os.SameFile(current, named) {
+		next, err := openFollowedLog(path)
+		if os.IsNotExist(err) {
+			return file, nil
+		}
+		if err != nil {
+			return file, err
+		}
+		_ = file.Close()
+		return next, nil
+	}
+	offset, err := file.Seek(0, io.SeekCurrent)
+	if err == nil && named.Size() < offset {
+		_, err = file.Seek(0, io.SeekStart)
+	}
+	return file, err
 }
 
 func readLastLines(file *os.File, lines int) ([]byte, int64, error) {

@@ -16,6 +16,91 @@ import (
 	"time"
 )
 
+func TestLocalMediaStorePersistentShareStillExpires(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(t.TempDir(), "media.mp4")
+	if err := os.WriteFile(file, []byte("video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	store := NewLocalMediaStore("http://localhost/media/resolver")
+	store.now = func() time.Time { return now }
+	if err := store.SetIndexDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	shared, ok := store.Share(file, time.Minute)
+	if !ok {
+		t.Fatal("share failed")
+	}
+	token := path.Base(shared)
+	restarted := NewLocalMediaStore("http://localhost/media/resolver")
+	restarted.now = func() time.Time { return now }
+	if err := restarted.SetIndexDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := restarted.ResolveSharedPath(shared); !ok || got != file {
+		t.Fatalf("restored path = %q, %v", got, ok)
+	}
+	live := httptest.NewRecorder()
+	restarted.ServeToken(live, httptest.NewRequest(http.MethodGet, shared, nil), token)
+	if live.Code != http.StatusOK || live.Body.String() != "video" {
+		t.Fatalf("restored HTTP response = %d %q", live.Code, live.Body.String())
+	}
+	now = now.Add(2 * time.Minute)
+	if _, ok := restarted.ResolveSharedPath(shared); ok {
+		t.Fatal("expired share was restored")
+	}
+	recorder := httptest.NewRecorder()
+	restarted.ServeToken(recorder, httptest.NewRequest(http.MethodGet, shared, nil), token)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expired HTTP status = %d", recorder.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, token+".json")); !os.IsNotExist(err) {
+		t.Fatalf("expired index retained: %v", err)
+	}
+	if _, ok := restarted.ResolveSharedPath("http://localhost/media/resolver/..%2Fsecret"); ok {
+		t.Fatal("accepted traversal token")
+	}
+}
+
+func TestLocalMediaStorePersistentMissingAndExpiredFiles(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(t.TempDir(), "media.mp4")
+	if err := os.WriteFile(file, []byte("video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	store := NewLocalMediaStore("http://localhost/media/resolver")
+	store.now = func() time.Time { return now }
+	if err := store.SetIndexDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	shared, ok := store.Share(file, time.Minute)
+	if !ok {
+		t.Fatal("share failed")
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewLocalMediaStore("http://localhost/media/resolver")
+	if err := restarted.SetIndexDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	restarted.ServeToken(rec, httptest.NewRequest(http.MethodGet, shared, nil), path.Base(shared))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing source status = %d", rec.Code)
+	}
+	restarted.now = func() time.Time { return now.Add(2 * time.Minute) }
+	if err := restarted.SetIndexDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("expired indexes not cleaned: %v %v", entries, err)
+	}
+}
+
 func TestLocalMediaStoreServesSharedFile(t *testing.T) {
 	tempDir := t.TempDir()
 	videoPath := filepath.Join(tempDir, "video.mp4")

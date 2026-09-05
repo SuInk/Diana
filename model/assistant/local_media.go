@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"encoding/json"
+	"log"
 	"mime"
 	"net/http"
 	neturl "net/url"
@@ -30,7 +32,33 @@ type LocalMediaStore struct {
 	basePath       string
 	originProvider func() string
 	items          map[string]localMediaItem
+	indexDir       string
 	now            func() time.Time
+}
+
+// SetIndexDir preserves unexpired share mappings across process restarts.
+func (s *LocalMediaStore) SetIndexDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		var item localMediaItem
+		path := filepath.Join(dir, entry.Name())
+		if body, err := os.ReadFile(path); err == nil && json.Unmarshal(body, &item) == nil && s.now().After(item.ExpiresAt) {
+			_ = os.Remove(path)
+		}
+	}
+	s.mu.Lock()
+	s.indexDir = dir
+	s.mu.Unlock()
+	return nil
 }
 
 type localMediaItem struct {
@@ -100,11 +128,19 @@ func (s *LocalMediaStore) Share(path string, ttl time.Duration) (string, bool) {
 
 	s.mu.Lock()
 	s.cleanupExpiredLocked(now)
-	s.items[token] = localMediaItem{
+	item := localMediaItem{
 		Path:      path,
 		Name:      filepath.Base(path),
 		ExpiresAt: now.Add(ttl),
 	}
+	if s.indexDir != "" {
+		if err := s.persistItemLocked(token, item); err != nil {
+			s.mu.Unlock()
+			log.Printf("diana persist local media share failed: %v", err)
+			return "", false
+		}
+	}
+	s.items[token] = item
 	s.mu.Unlock()
 
 	return baseURL + "/" + neturl.PathEscape(token), true
@@ -175,11 +211,26 @@ func (s *LocalMediaStore) lookup(token string) (localMediaItem, bool) {
 	now := s.now()
 	s.mu.RLock()
 	item, ok := s.items[token]
+	dir := s.indexDir
 	s.mu.RUnlock()
+	if !ok && dir != "" {
+		// Tokens are opaque UUIDs, never filesystem paths supplied by a message.
+		parsed, err := uuid.Parse(token)
+		if err != nil || parsed.String() != token {
+			return localMediaItem{}, false
+		}
+		body, err := os.ReadFile(filepath.Join(dir, token+".json"))
+		if err == nil && json.Unmarshal(body, &item) == nil {
+			ok = true
+		}
+	}
 	if !ok {
 		return localMediaItem{}, false
 	}
 	if now.After(item.ExpiresAt) {
+		if dir != "" {
+			_ = os.Remove(filepath.Join(dir, token+".json"))
+		}
 		s.mu.Lock()
 		if current, ok := s.items[token]; ok && now.After(current.ExpiresAt) {
 			delete(s.items, token)
@@ -190,10 +241,33 @@ func (s *LocalMediaStore) lookup(token string) (localMediaItem, bool) {
 	return item, true
 }
 
+func (s *LocalMediaStore) persistItemLocked(token string, item localMediaItem) error {
+	body, err := json.Marshal(item)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(s.indexDir, ".share-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.Write(body); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), filepath.Join(s.indexDir, token+".json"))
+}
+
 func (s *LocalMediaStore) cleanupExpiredLocked(now time.Time) {
 	for token, item := range s.items {
 		if now.After(item.ExpiresAt) {
 			delete(s.items, token)
+			if s.indexDir != "" {
+				_ = os.Remove(filepath.Join(s.indexDir, token+".json"))
+			}
 		}
 	}
 }

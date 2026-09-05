@@ -48,6 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
           <div><strong>Application log</strong><code>logs/diana.log</code><span>Filterable and downloadable from the console.</span></div>
           <div><strong>SQLite</strong><code>data/diana.db</code><span>The main store for configuration, messages, memory, tasks and audit.</span></div>
         </div>
+        <p>Temporary update backups are limited to the current attempt: old backups are removed before creating a new one, and the current backup is deleted after a successful health check. Failed updates and installations that skip startup retain their backup. Source updates remove temporary backups after a successful build and file replacement; a manual restart is still required. Cleanup failures are logged. The schedule below concerns separately managed data backups, which are not automatically deleted.</p>
         <h3>A backup schedule worth following</h3>
         <div class="table-wrap"><table><thead><tr><th>Scope</th><th>Frequency</th><th>Retention</th></tr></thead><tbody>
           <tr><td>Consistent SQLite snapshot</td><td>Daily, and before every update</td><td>At least 7 daily and 4 weekly copies.</td></tr>

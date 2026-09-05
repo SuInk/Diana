@@ -98,7 +98,7 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	if len(sharedPaths) != 1 {
 		t.Fatalf("shared paths = %#v", sharedPaths)
 	}
-	if filepath.Dir(sharedPaths[0]) != mediaCache.Dir() {
+	if !strings.HasPrefix(sharedPaths[0], filepath.Join(mediaCache.Dir(), "objects")+string(filepath.Separator)) {
 		t.Fatalf("generated image did not use media cache: %q", sharedPaths[0])
 	}
 	data, err := os.ReadFile(sharedPaths[0])
@@ -335,7 +335,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	if len(sharedPaths) != 1 {
 		t.Fatalf("shared paths = %#v", sharedPaths)
 	}
-	if filepath.Dir(sharedPaths[0]) != mediaCache.Dir() {
+	if !strings.HasPrefix(sharedPaths[0], filepath.Join(mediaCache.Dir(), "objects")+string(filepath.Separator)) {
 		t.Fatalf("generated image did not use media cache: %q", sharedPaths[0])
 	}
 	wantTargets := map[string]bool{"web_search.search": false, dianaImageToolName: false}

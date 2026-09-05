@@ -114,22 +114,24 @@ func (h *BotHandler) listAssistantUsers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	userIDs := make([]string, 0, len(profiles))
+	userIDsByProfile := make(map[string][]string)
 	for _, profile := range profiles {
-		userIDs = append(userIDs, profile.UserID)
+		userIDsByProfile[profile.BotProfileID] = append(userIDsByProfile[profile.BotProfileID], profile.UserID)
 	}
-	// 一次数完整页人的长期记忆条数：逐个 COUNT 会把一页 50 人变成 50 次查询。
-	// 数不出来不算致命，列表照常显示，长期记忆一栏显示 0。
-	memoryCounts, err := h.sqlite.CountStructuredMemoriesBySubjects(c.Request.Context(), userIDs)
-	if err != nil {
-		memoryCounts = map[string]int{}
+	// 按机器人批量统计；相同账号在不同机器人下不能共用计数。
+	memoryCounts := make(map[string]map[string]int)
+	for profileID, userIDs := range userIDsByProfile {
+		counts, err := h.sqlite.CountStructuredMemoriesBySubjects(c.Request.Context(), profileID, userIDs)
+		if err == nil {
+			memoryCounts[profileID] = counts
+		}
 	}
 	users := make([]assistantUserSummary, 0, len(profiles))
 	for _, profile := range profiles {
 		summary := assistantUserSummary{
 			UserMemoryProfile:     profile,
 			MemoryCount:           len(profile.Memories),
-			StructuredMemoryCount: memoryCounts[profile.UserID],
+			StructuredMemoryCount: memoryCounts[profile.BotProfileID][profile.UserID],
 			PortraitCount:         len(profile.Portrait),
 		}
 		// 列表只要条数，正文放在详情接口，避免人员多时响应过大。
@@ -181,9 +183,7 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 	if profile.Portrait == nil {
 		profile.Portrait = []assistant.UserPortraitTrait{}
 	}
-	// 长期记忆不跟着机器人分身走（memory_items 没有 bot_profile_id 列），所以这里
-	// 不传作用域。
-	memories, err := h.sqlite.ListStructuredMemoriesBySubject(c.Request.Context(), userID, 100)
+	memories, err := h.sqlite.ListStructuredMemoriesBySubject(c.Request.Context(), profile.BotProfileID, userID, 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

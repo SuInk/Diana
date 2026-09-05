@@ -7818,9 +7818,9 @@ func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Me
 	}
 
 	text = strings.TrimSpace(text)
-	imageURLs := ImageURLs(event.Segments)
+	imageURLs := availableImageURLs(event.Segments)
 	if event.Quoted != nil {
-		imageURLs = append(imageURLs, ImageURLs(event.Quoted.Segments)...)
+		imageURLs = append(imageURLs, availableImageURLs(event.Quoted.Segments)...)
 	}
 	if len(imageURLs) == 0 {
 		return llm.Message{Role: llm.RoleUser, Content: text}
@@ -7852,6 +7852,11 @@ func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event Messa
 }
 
 func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
+	groups := [][]MessageSegment{event.Segments}
+	if event.Quoted != nil {
+		groups = append(groups, event.Quoted.Segments)
+	}
+	ctx = withVideoMediaIdentities(ctx, event.Platform, groups...)
 	videoURLs := videoSourceCandidates(event.Segments)
 	cachedFrames := cachedVideoFrameURLs(event.Segments)
 	quotedVideo := false
@@ -7988,9 +7993,9 @@ func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event 
 
 func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
 	text = strings.TrimSpace(text)
-	imageURLs := ImageURLs(event.Segments)
+	imageURLs := availableImageURLs(event.Segments)
 	if event.Quoted != nil {
-		imageURLs = append(imageURLs, ImageURLs(event.Quoted.Segments)...)
+		imageURLs = append(imageURLs, availableImageURLs(event.Quoted.Segments)...)
 	}
 	imageURLs = append(imageURLs, extraImageURLs...)
 	imageGroups, failures := loadLLMImageURLGroupsDetailed(ctx, imageURLs)
