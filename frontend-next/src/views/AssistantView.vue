@@ -1282,6 +1282,7 @@
                   <span class="hint" :class="{ danger: commandAllowlistIsWildcard }">
                     <template v-if="!commandAllowlistEnabled">
                       当前为空：命令执行整体关闭，机器人拿不到这个工具。要开放就填具体命令，例如 <code>uptime,free,df</code>。
+                      （新建的机器人会自带一组只读诊断命令；这一栏被清空过的话不会自动填回来。）
                     </template>
                     <template v-else-if="commandAllowlistIsWildcard">
                       <code>*</code> 放行任意程序。白名单是命令执行唯一按名字生效的限制，填 <code>*</code> 等于放弃它。
@@ -1300,7 +1301,8 @@
                     <span class="switch-label">允许写入文件（write_file / edit_file）</span>
                   </label>
                   <span class="hint">
-                    默认关闭。读取、检索、按名字找文件不受这个开关影响，始终可用。写入同样锁在 workspace 内，不能写到别处。
+                    新建的机器人默认打开：写入锁在数据目录下的 workspace 内，碰不到配置和数据库。
+                    读取、检索、按名字找文件不受这个开关影响，始终可用。
                   </span>
                 </div>
                 <div class="field">
