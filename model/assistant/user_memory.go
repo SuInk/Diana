@@ -36,6 +36,7 @@ type UserFavorabilityChange struct {
 }
 
 type UserMemoryProfile struct {
+	BotProfileID string           `json:"bot_profile_id"`
 	UserID       string           `json:"user_id"`
 	DisplayName  string           `json:"display_name,omitempty"`
 	Favorability int              `json:"favorability"`
