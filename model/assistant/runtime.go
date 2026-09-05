@@ -10367,18 +10367,34 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if message == "" {
 		return startedAt, fmt.Errorf("RSS 判断器要求通知，但回复内容为空")
 	}
-	label := change.FeedName
-	if item.FeedSource == "twitter" && item.FeedHandle != "" {
-		label = "@" + item.FeedHandle
-	}
-	if label == "" {
-		label = item.FeedURL
-	}
-	message = fmt.Sprintf("RSS 订阅 %s：%s"+notificationSplitMarker+"%s", item.ID, label, message)
+	message = fmt.Sprintf("%s\n%s\n订阅 %s", rssWatchNoticeHeader(item, change.FeedName), message, item.ID)
 	if err := r.storeRSSWatchProgress(item.ID, change.Snapshot, message); err != nil {
 		return startedAt, err
 	}
 	return startedAt, r.sendSubscriberNotice(ctx, source, message)
+}
+
+// rssWatchNoticeHeader 拼通知抬头：这条推送是哪个平台、哪个号来的。
+//
+// 以前抬头是「RSS 订阅 <ID>：<来源>」，而且单独占一条消息发。三个问题：平台明
+// 明存在 FeedSource 里却没写出来，推特订阅也显示成「RSS 订阅」；订阅 ID 是退订
+// 时才用得上的东西，却顶在最显眼的位置；一条通知拆成两条刷屏。现在平台和账号
+// 放抬头，ID 退到末行，正文接在抬头后面同一条发出。
+func rssWatchNoticeHeader(item Reminder, feedName string) string {
+	feedName = strings.TrimSpace(feedName)
+	if handle := strings.TrimSpace(item.FeedHandle); item.FeedSource == "twitter" && handle != "" {
+		mention := "@" + handle
+		// Feed 标题里常常已经带着 @handle（RSSHub、Nitter 的标题格式各不相同），
+		// 带了就不再重复一遍。
+		if feedName == "" || strings.Contains(feedName, mention) {
+			return "Twitter " + firstNonEmpty(feedName, mention)
+		}
+		return "Twitter " + feedName + " " + mention
+	}
+	if feedName != "" {
+		return "RSS " + feedName
+	}
+	return "RSS " + strings.TrimSpace(item.FeedURL)
 }
 
 func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWatchChange) (rssJudgeDecision, error) {
