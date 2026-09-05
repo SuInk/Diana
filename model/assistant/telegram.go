@@ -591,6 +591,7 @@ type telegramMessage struct {
 	Text            string           `json:"text"`
 	Caption         string           `json:"caption"`
 	From            *telegramUser    `json:"from"`
+	SenderChat      *telegramChat    `json:"sender_chat"`
 	Chat            *telegramChat    `json:"chat"`
 	NewChatMembers  []telegramUser   `json:"new_chat_members,omitempty"`
 	ReplyTo         *telegramMessage `json:"reply_to_message"`
@@ -750,6 +751,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 	appendFile("file", msg.Document)
 
 	event := MessageEvent{
+		Platform:        PlatformTelegram,
 		Time:            msg.Date,
 		SelfID:          selfID,
 		MessageID:       strconv.FormatInt(msg.MessageID, 10),
@@ -775,6 +777,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 	}
 
 	if msg.From != nil {
+		event.SenderIsBot = msg.From.IsBot && msg.SenderChat == nil
 		event.UserID = strconv.FormatInt(msg.From.ID, 10)
 		event.SenderName = telegramDisplayName(msg.From)
 	}
