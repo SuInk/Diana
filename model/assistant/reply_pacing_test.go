@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-func TestProactiveReplyUsesOneBubbleWithoutLosingText(t *testing.T) {
+func TestCasualReplyWithoutMarkersUsesOneBubbleWithoutLosingText(t *testing.T) {
 	cfg := BotConfig{DirectReplyChunkSize: 8, ReplyMaxBubbles: 4}.WithDefaults()
-	text := "第一句回应。\n第二句补充。<dianabr>第三句。<botbr>第四句。"
+	text := "第一句回应。\n第二句补充。\n第三句。\n第四句。"
 	for _, event := range []MessageEvent{
-		{Kind: EventKindGroup, proactiveReply: true},
+		{Kind: EventKindGroup, proactiveReply: true, chatInReply: true},
 		{Kind: EventKindGroup, chatInReply: true},
 	} {
 		got := splitEventChatReply(text, cfg, event)
@@ -38,7 +38,7 @@ func TestDirectedReplyKeepsConfiguredSplitting(t *testing.T) {
 
 func TestProactiveReplyTransportLimitDoesNotTruncate(t *testing.T) {
 	text := strings.Repeat("测", notificationChunkSize*2+50)
-	got := splitEventChatReply(text, BotConfig{}.WithDefaults(), MessageEvent{Kind: EventKindGroup, proactiveReply: true})
+	got := splitEventChatReply(text, BotConfig{}.WithDefaults(), MessageEvent{Kind: EventKindGroup, proactiveReply: true, chatInReply: true})
 	if len(got) < 2 || strings.Join(got, "") != text {
 		t.Fatalf("transport splitting lost content: chunks=%d", len(got))
 	}

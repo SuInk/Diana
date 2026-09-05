@@ -5931,7 +5931,7 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
 	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.promptWithActions(boolValue(cfg.NaturalReplySplitEnabled, true), voice, actionsEnabled) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.promptWithActions(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, voice, actionsEnabled) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
 	if persona == "" {
 		return messages
 	}
@@ -6008,7 +6008,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	appendPromptSection(&builder, cfg.ReplyStyle.promptWithActions(boolValue(cfg.NaturalReplySplitEnabled, true), personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), actionsEnabled))
+	appendPromptSection(&builder, cfg.ReplyStyle.promptWithActions(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), actionsEnabled))
 	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
@@ -6122,9 +6122,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if proactiveTriggered {
 		builder.WriteString("\n")
 		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
-		builder.WriteString("\n" + proactiveReplyPacingPrompt)
+		builder.WriteString("\n" + proactiveReplyToolResultPrompt)
 	}
 	if event.chatInReply {
+		builder.WriteString("\n" + proactiveReplyPacingPrompt)
 		if cfg.chatInSettings().SuperActive {
 			builder.WriteString("\n" + superActiveReplyPrompt)
 		} else {
