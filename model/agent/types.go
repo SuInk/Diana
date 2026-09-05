@@ -46,6 +46,25 @@ type LLMClient interface {
 	Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error)
 }
 
+// DefaultCommandAllowlist 是新建配置带的命令白名单：一组只报状态、不碰数据的命令。
+//
+// 收进来的标准有三条，缺一不可：不读任意路径的文件、不出网、不改任何东西。
+// 因为白名单里的程序在没有可用沙盒时就是以本进程权限直接跑的，它能碰什么完全
+// 由它自己决定，白名单只管得到「能不能跑」。
+//
+// 于是这些都被刻意排除在外：
+//   - cat / ls / head / tail / find —— 能读任意路径，包括 config.yaml 和数据库；
+//     工作目录内的读取已经有 read_file / grep / find_files，它们锁在 workspace 里。
+//   - curl / wget / nc —— 读到的东西能被发出去，这一层白名单挡不住。
+//   - ps —— 进程列表会带上别的进程的完整命令行，那里面可能有别人的密钥。
+//     Diana 自己的 CPU 和内存 diana.host_stats 已经给了，不需要靠它。
+//   - git / 包管理器 / 任何写操作 —— 会改磁盘。
+//
+// 想要更多就自己往里加，那是明确的一次授权动作。
+func DefaultCommandAllowlist() []string {
+	return []string{"uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"}
+}
+
 type Config struct {
 	WorkDir             string
 	MaxSteps            int
