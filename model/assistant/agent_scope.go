@@ -308,8 +308,8 @@ func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scop
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.planner",
-		Message: "planner 已完成回复判断，工具和上下文建议仅供 Agent 参考",
+		Action:  "diana.intent_recognition",
+		Message: "Intent Recognition 已完成意图识别，工具和上下文建议仅供 Agent 参考",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
