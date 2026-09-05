@@ -197,7 +197,6 @@ func (h *SystemUpdateHandler) Register(router gin.IRouter) {
 	router.POST("/api/system/update/install", h.installDownloaded)
 	router.GET("/api/system/update/policy", h.getPolicy)
 	router.GET("/api/system/update/mirrors", h.mirrors)
-	router.POST("/api/system/update/mirrors/test", h.testMirrors)
 	router.PUT("/api/system/update/policy", h.savePolicy)
 	router.GET("/api/system/update/github-token", h.getGitHubToken)
 	router.PUT("/api/system/update/github-token", h.saveGitHubToken)
