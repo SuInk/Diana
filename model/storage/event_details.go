@@ -1099,3 +1099,31 @@ ORDER BY COUNT(*) DESC, i.group_id ASC
 	}
 	return groups, nil
 }
+
+// ResolveUserDisplayNames 批量把账号换成昵称，供控制台里那些「只剩一串号码」的地方
+// 回显。查不到昵称的号不出现在结果里，调用方照旧显示号码。
+//
+// 昵称等于账号本身的也当查不到：没拿到名字的档案会把 display_name 退化成账号，照它
+// 渲染只会写出「10004（10004）」这种重复。
+func (s *SQLiteStore) ResolveUserDisplayNames(ctx context.Context, userIDs []string) (map[string]string, error) {
+	if s == nil || s.db == nil || len(userIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	ids := make(map[string]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID = strings.TrimSpace(userID); userID != "" {
+			ids[userID] = struct{}{}
+		}
+	}
+	names, err := s.resolveMentionNames(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	resolved := make(map[string]string, len(names))
+	for userID, name := range names {
+		if name != userID {
+			resolved[userID] = name
+		}
+	}
+	return resolved, nil
+}

@@ -40,7 +40,7 @@
             <div class="log-main">
               <div class="cluster" style="gap: 6px; margin-bottom: 2px">
                 <span class="badge" :class="log.level === 'error' ? 'err' : 'ok'">{{ log.action }}</span>
-                <span v-if="log.actor" class="muted mono" style="font-size: 11.5px">{{ log.actor }}</span>
+                <span v-if="log.actor" class="muted" style="font-size: 11.5px" :title="log.actor">{{ actorLabel(log) }}</span>
                 <span v-if="log.target" class="muted mono" style="font-size: 11.5px">→ {{ log.target }}</span>
               </div>
               <p class="log-message">{{ log.message }}</p>
@@ -63,6 +63,7 @@ import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, 
 import { RefreshCw } from "@lucide/vue";
 import { listAppLogs, type AppLogEntry, type AppLogKind } from "../api";
 import { formatTime } from "../format";
+import { displayChatIdentity } from "../message-display";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 
@@ -74,13 +75,28 @@ const autoRefresh = ref(false);
 
 let timer: number | undefined;
 
+// 日志里的 actor 形如 qq:1255848531，光一串号码认不出是谁。查到昵称就显示
+// 「昵称（账号）」，原样的 actor 退到悬浮提示里。
+function actorLabel(log: AppLogEntry): string {
+  const actor = (log.actor ?? "").trim();
+  const name = (log.actor_name ?? "").trim();
+  if (!name) return actor;
+  return displayChatIdentity(name, actorAccount(actor)) || actor;
+}
+
+function actorAccount(actor: string): string {
+  const separator = actor.indexOf(":");
+  return separator < 0 ? actor : actor.slice(separator + 1).trim();
+}
+
 const filteredLogs = computed<AppLogEntry[]>(() => {
   const keyword = query.value.trim().toLowerCase();
   if (!keyword) {
     return logs.value;
   }
   return logs.value.filter((log) => {
-    return [log.action, log.message, log.detail, log.actor, log.target]
+    // 昵称也要能搜到：日志页上显示的是昵称，搜不到会让人以为没这条记录。
+    return [log.action, log.message, log.detail, log.actor, log.actor_name, log.target]
       .filter((field): field is string => Boolean(field))
       .some((field) => field.toLowerCase().includes(keyword));
   });
