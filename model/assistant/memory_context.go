@@ -21,6 +21,7 @@ import (
 const (
 	structuredMemoryContextBudget = 3200
 	structuredMemoryLoadLimit     = 120
+	sharedPublicMemoryLoadLimit   = 40
 	// maximumCoreMemoryItems 限制常驻档条数。它不参加相关性排序，配额必须小而固定，
 	// 否则「一直带着」的东西会越攒越多。
 	maximumCoreMemoryItems = 8
@@ -92,28 +93,42 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 
 	queryText = memoryRetrievalText(event, queryText)
 	crossGroup := boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup
+	crossPlatformPrefixes := r.crossPlatformMemoryPrefixes(event, cfg)
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	items, err := store.ListStructuredMemories(loadCtx, StructuredMemoryQuery{
-		SubjectUserID: event.UserID,
-		Session:       sessionKey(event),
-		GroupID:       event.GroupID,
-		Text:          queryText,
-		SearchTerms:   structuredMemorySearchTerms(queryText, 48),
-		Now:           time.Now(),
-		MaxCandidates: structuredMemoryLoadLimit,
-		// thread 由 sessionThreadNote 常驻注入，检索再捞一次就是重复注入。
-		ExcludeKinds:       []MemoryKind{MemoryKindThread},
-		CrossGroup:         crossGroup,
-		GroupSessionPrefix: groupHistorySessionPrefix(event),
-		// 跨群记忆开关管的是「别的群的会话记忆」。当前发言者自己的 visibility=user
-		// 记忆本来就是跨会话的稳定事实，不该被这个开关连坐——否则它们写得进库、
-		// 门控器也查得到，却永远进不了回复提示词。
-	})
-	cancel()
+	query := r.memoryQueryForEvent(event, queryText, structuredMemoryLoadLimit)
+	items, err := store.ListStructuredMemories(loadCtx, query)
 	if err != nil {
+		cancel()
 		log.Printf("diana structured memory load failed: %v", err)
 		text, usage := formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
 		return text, usage
+	}
+	if crossGroup || len(crossPlatformPrefixes) > 0 {
+		// A busy local conversation must not exhaust the entire SQL candidate
+		// window before public memories from another group reach the ranker.
+		sharedQuery := query
+		sharedQuery.SharedPublicOnly = true
+		sharedQuery.MaxCandidates = sharedPublicMemoryLoadLimit
+		shared, sharedErr := store.ListStructuredMemories(loadCtx, sharedQuery)
+		if sharedErr != nil {
+			log.Printf("diana shared public memory load failed: %v", sharedErr)
+		} else {
+			items = mergeRetrievedMemoryCandidates(items, shared)
+		}
+	}
+	items = r.expandMemoryAssociations(loadCtx, store, query, event, items)
+	cancel()
+	for index := range items {
+		items[index].CompactRecall = cfg.AgentEnabled
+		if crossGroup && items[index].SubjectUserID == "" && items[index].SourceSession != sessionKey(event) && strings.HasPrefix(items[index].SourceSession, groupHistorySessionPrefix(event)) {
+			items[index].SubjectName = "其他群公共记忆"
+		}
+		for _, prefix := range crossPlatformPrefixes {
+			if strings.HasPrefix(items[index].SourceSession, prefix) && items[index].SubjectUserID == "" {
+				items[index].SubjectName = "其他平台群公共记忆"
+				break
+			}
+		}
 	}
 	ranked := rankStructuredMemories(items, event, queryText, time.Now())
 	r.touchRetrievedMemories(ctx, store, ranked)
@@ -130,6 +145,24 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 		usage.Reason = contextLayerReasonRankCap
 	}
 	return text, usage
+}
+
+func mergeRetrievedMemoryCandidates(current, additional []StructuredMemoryItem) []StructuredMemoryItem {
+	result := make([]StructuredMemoryItem, 0, len(current)+len(additional))
+	seen := make(map[string]bool)
+	for _, batch := range [][]StructuredMemoryItem{current, additional} {
+		for _, item := range batch {
+			key := item.ID
+			if key == "" {
+				key = item.ScopeKey + "\x00" + item.Key + "\x00" + item.Content
+			}
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, item)
+			}
+		}
+	}
+	return result
 }
 
 func (r *Runtime) recordRetrievedMemoryContext(ctx context.Context, event MessageEvent, items []StructuredMemoryItem) {
@@ -260,14 +293,23 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 			}
 		}
 
-		relatedEpisode := lexical >= 0.08 || exactField != ""
+		associated := item.AssociationScore > 0 && lexical < 0.08 && exactField == ""
+		if associated {
+			score = item.AssociationScore
+			reasons = append(reasons, "关联主题："+item.AssociationLabel)
+		}
+		relatedEpisode := lexical >= 0.08 || exactField != "" || associated
 		if recollection && !relatedEpisode {
 			continue
 		}
 		coreCurrentMemory := item.SubjectUserID == event.UserID && item.Confidence >= 0.9 &&
 			((item.Kind != MemoryKindEpisode && item.Kind != MemoryKindSummary && item.Importance >= 0.9) ||
 				(item.Kind == MemoryKindInstruction && item.Importance >= 0.55))
-		if !coreCurrentMemory && score < 0.38 {
+		threshold := 0.38
+		if associated {
+			threshold = 0.2
+		}
+		if !coreCurrentMemory && score < threshold {
 			continue
 		}
 		item.RetrievalScore = score
@@ -482,7 +524,11 @@ func formatStructuredMemoryLine(item StructuredMemoryItem) string {
 	// 只给模型用得上的三样：类型、主题、核实日期。置信度已经由分段（低置信度单独
 	// 一段）表达过；重要度、版本号和检索依据是排序和排障用的内部字段，模型不需要，
 	// 每条多付十几个 token，二十几条记忆就是几百个。
-	return fmt.Sprintf("\n- [%s｜%s｜%s] %s：%s", memoryKindLabel(item.Kind), item.Topic, timeLabel, subject, item.Content)
+	content := item.Content
+	if item.CompactRecall && item.ID != "" && item.SubjectUserID == "" && (item.Kind == MemoryKindFact || item.Kind == MemoryKindSummary) && len([]rune(content)) > 180 {
+		content = truncateRunesPlain(content, 180) + "... [memory_id=" + item.ID + "]"
+	}
+	return fmt.Sprintf("\n- [%s｜%s｜%s] %s：%s", memoryKindLabel(item.Kind), item.Topic, timeLabel, subject, content)
 }
 
 func memoryKindLabel(kind MemoryKind) string {

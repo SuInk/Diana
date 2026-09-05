@@ -92,14 +92,15 @@ type MessageTimelineStore interface {
 }
 
 type MessageHistorySearchQuery struct {
-	Session       string
-	SessionPrefix string
-	Text          string
-	Terms         []string
-	FromTime      int64
-	ThroughTime   int64
-	Limit         int
-	CrossSession  bool
+	ExcludeSession string
+	Session        string
+	SessionPrefix  string
+	Text           string
+	Terms          []string
+	FromTime       int64
+	ThroughTime    int64
+	Limit          int
+	CrossSession   bool
 }
 
 type MessageHistorySearchStore interface {
@@ -113,14 +114,16 @@ type MessageSearchExtraStore interface {
 }
 
 type MessageHistoryVectorQuery struct {
-	Session       string
-	SessionPrefix string
-	Vector        []float32
-	Model         string
-	FromTime      int64
-	ThroughTime   int64
-	Limit         int
-	CrossSession  bool
+	ExcludeSession string
+	MinSimilarity  float64
+	Session        string
+	SessionPrefix  string
+	Vector         []float32
+	Model          string
+	FromTime       int64
+	ThroughTime    int64
+	Limit          int
+	CrossSession   bool
 }
 
 // MessageHistoryVectorStore 是语义检索的可选存储能力:向量随消息异步入库,
@@ -3209,6 +3212,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
 			}
+			if boolValue(cfg.LongTermMemoryEnabled, true) {
+				r.mu.RLock()
+				memoryAvailable := r.structuredMemory != nil
+				r.mu.RUnlock()
+				if memoryAvailable {
+					extraTools = append(extraTools, &dianaMemoryTool{runtime: r, event: event})
+				}
+			}
 			if r.oneBotRequestStore() != nil && r.oneBotV11SkillEnabled(event) {
 				extraTools = append(extraTools, newDianaOneBotRequestsTool(r, event))
 			}
@@ -5978,6 +5989,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptToolHistoryImages)
+	}
+	if agentEnabled && hasTool(dianaMemoryToolName) {
+		builder.WriteString("\n长期记忆摘要不够时，先用 diana.memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。")
 	}
 	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptInternalIdentifiers)
