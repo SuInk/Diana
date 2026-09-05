@@ -582,7 +582,7 @@ func (r *Runtime) historicalRecallImageDescriptions(ctx context.Context, event M
 			continue
 		}
 		description := recallDescriptionMessageText(item)
-		if description == "" || semanticErrorWrapperText(description) {
+		if description == "" {
 			continue
 		}
 		sourceIDs := append(eventSemanticSourceMessageIDs(item), replyReferenceIDs(item.Segments)...)

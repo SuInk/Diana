@@ -765,8 +765,13 @@ func TestRuntimeAddsUserMemoryContextToLLMPrompt(t *testing.T) {
 			break
 		}
 	}
-	if !strings.Contains(memoryPrompt, "好感度：16") || !strings.Contains(memoryPrompt, "我最近在看漫展") {
+	if !strings.Contains(memoryPrompt, "好感度：16") || !strings.Contains(memoryPrompt, "关系等级：") {
 		t.Fatalf("memory prompt = %q", memoryPrompt)
+	}
+	// 原始发言缓冲不再进提示词：它和最近历史逐条重复，真正的长期记忆走结构化
+	// 记忆检索。
+	if strings.Contains(memoryPrompt, "我最近在看漫展") {
+		t.Fatalf("raw message buffer leaked into prompt: %q", memoryPrompt)
 	}
 	if provider.request.Messages[0].Priority != llm.MessagePrioritySystem {
 		t.Fatalf("system priority = %d", provider.request.Messages[0].Priority)

@@ -135,10 +135,11 @@
         </div>
 
         <div v-if="events.length > 0" class="event-detail-list">
-          <article v-for="event in events" :key="event.id" class="event-detail-row">
+          <template v-for="(event, index) in events" :key="event.id">
+            <div v-if="showDateSeparator(index)" class="event-date-separator">{{ formatDate(event.at) }}</div>
+            <article class="event-detail-row">
             <div class="event-detail-time">
               <strong>{{ formatClock(event.at) }}</strong>
-              <span>{{ formatDate(event.at) }}</span>
             </div>
 
             <div class="event-detail-main">
@@ -146,9 +147,25 @@
                 <span v-if="event.platform" class="badge">{{ platformLabel(event.platform) }}</span>
                 <span class="badge">{{ eventKindLabel(event.kind) }}</span>
                 <span class="badge" :class="decisionClass(event)">{{ decisionLabel(event) }}</span>
-                <span v-if="event.group_id" class="muted">{{ displayEventGroup(event.group_id, event.group_name) }}</span>
-                <span v-if="displayChatIdentity(event.sender_name, event.user_id)" class="muted">{{ displayChatIdentity(event.sender_name, event.user_id) }}</span>
+                <span class="event-sender" :title="senderTitle(event)">
+                  <img
+                    v-if="event.sender_avatar_url && !failedAvatars[event.id]"
+                    class="event-avatar"
+                    :src="event.sender_avatar_url"
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    @error="markAvatarFailed(event)"
+                  />
+                  <span v-else class="event-avatar event-avatar-fallback" aria-hidden="true">{{ senderInitial(event) }}</span>
+                  <span class="event-sender-name">{{ senderDisplayName(event) }}</span>
+                  <span v-if="event.sender_name && event.user_id" class="event-sender-id mono">{{ event.user_id }}</span>
+                </span>
                 <span v-if="senderLevelLabel(event)" class="badge" :title="senderLevelTitle(event)">{{ senderLevelLabel(event) }}</span>
+                <template v-if="event.group_id">
+                  <span class="event-meta-sep" aria-hidden="true">·</span>
+                  <span class="muted event-meta-group" :title="displayEventGroup(event.group_id, event.group_name)">{{ groupShortName(event) }}</span>
+                </template>
                 <span v-if="event.duration_ms" class="muted">{{ formatDuration(event.duration_ms) }}</span>
               </div>
 
@@ -319,6 +336,10 @@
                         <span v-if="traceDuration(step)" class="muted">{{ traceDuration(step) }}</span>
                       </div>
                       <p v-if="traceSummary(step)" class="debug-step-summary">{{ traceSummary(step) }}</p>
+                      <div v-if="step.action === 'diana.cross_group_context' && traceJSON(step, 'selected_messages')" class="debug-payload">
+                        <span>补入历史的消息</span>
+                        <pre>{{ traceJSON(step, "selected_messages") }}</pre>
+                      </div>
                       <div v-if="traceJSON(step, 'request')" class="debug-payload">
                         <span>模型请求上下文</span>
                         <pre>{{ traceJSON(step, "request") }}</pre>
@@ -348,7 +369,8 @@
                 </div>
               </div>
             </div>
-          </article>
+            </article>
+          </template>
         </div>
 
         <div v-else-if="loading" class="event-loading">
@@ -816,6 +838,47 @@ const selectedSessionID = computed(() => {
   return value;
 });
 
+// 头像取不回来（号码注销、外网被挡）时退回首字母占位，不要留一个碎图标。
+const failedAvatars = ref<Record<string, boolean>>({});
+
+function markAvatarFailed(event: AssistantEventDetail): void {
+  failedAvatars.value = { ...failedAvatars.value, [event.id]: true };
+}
+
+function senderDisplayName(event: AssistantEventDetail): string {
+  return (event.sender_name ?? "").trim() || (event.user_id ?? "").trim() || "未知发送者";
+}
+
+function senderInitial(event: AssistantEventDetail): string {
+  return [...senderDisplayName(event)][0] ?? "?";
+}
+
+// 昵称那段整体挂一个悬浮：昵称可能被省略号截断，账号也未必都摆在外面。
+function senderTitle(event: AssistantEventDetail): string {
+  const identity = displayChatIdentity(event.sender_name, event.user_id);
+  return identity || senderDisplayName(event);
+}
+
+// 群名单独显示，群号退到悬浮里：一行里群号和账号两串数字挨着，眼睛分不开它们，
+// 而群号本身很少是要扫的目标。
+function groupShortName(event: AssistantEventDetail): string {
+  const id = (event.group_id ?? "").trim();
+  const full = displayEventGroup(id, event.group_name);
+  const name = full.endsWith(`（${id}）`) ? full.slice(0, -(id.length + 2)) : full;
+  return name.trim() || `群 ${id}`;
+}
+
+// 同一天的日期没必要每行重复，只在换天的地方插一条分隔。
+function showDateSeparator(index: number): boolean {
+  if (index === 0) return true;
+  return dateKey(events.value[index].at) !== dateKey(events.value[index - 1].at);
+}
+
+function dateKey(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toDateString();
+}
+
 function displayEventGroup(groupID?: string, eventName?: string): string {
   const id = (groupID ?? "").trim();
   const option = groupOptions.value.find((item) => item.value === id);
@@ -919,12 +982,11 @@ function decisionIcon(event: AssistantEventDetail): Component {
   return MessageCircleOff;
 }
 
+// 结论已经写在 badge 上了，这行只说「原因」就够，省下的宽度留给原因本身。
 function decisionReasonLabel(event: AssistantEventDetail): string {
-  if (event.outcome === "merged_into_reply") return "合并状态";
-  if (event.decision === "replied" || event.handled) return "回复原因";
-  if (event.decision === "pending") return "当前状态";
-  if (event.decision === "error") return "异常原因";
-  return "未回复原因";
+  if (event.outcome === "merged_into_reply") return "状态";
+  if (event.decision === "pending") return "状态";
+  return "原因";
 }
 
 function fallbackDecisionReason(event: AssistantEventDetail): string {
@@ -1111,6 +1173,19 @@ function tracePhaseLabel(step: AppLogEntry): string {
 
 function traceSummary(step: AppLogEntry): string {
   const metadata = traceMetadata(step);
+  if (step.action === "diana.cross_group_context") {
+    const parts = [String(metadata.search_range ?? "历史检索")];
+    if (metadata.skip_reason) parts.push(String(metadata.skip_reason));
+    parts.push(`文字候选 ${Number(metadata.keyword_candidates ?? 0)}`, `语义候选 ${Number(metadata.semantic_candidates ?? 0)}`, `补入历史 ${Number(metadata.selected ?? 0)}`);
+    if (metadata.keyword_status) parts.push(`文字：${String(metadata.keyword_status)}`);
+    if (metadata.semantic_status) parts.push(`语义：${String(metadata.semantic_status)}`);
+    const dropped = metadata.dropped as Record<string, unknown> | undefined;
+    const labels: Record<string, string> = { same_group: "同群或身份不完整", outbound: "机器人发言", platform: "平台不符", topic: "相关性不足", text: "无可用文本", membership: "成员校验未通过", limit: "条数限制", time: "时间无效" };
+    if (dropped) for (const [key, label] of Object.entries(labels)) {
+      if (Number(dropped[key]) > 0) parts.push(`${label} ${Number(dropped[key])}`);
+    }
+    return parts.join(" · ");
+  }
   const parts: string[] = [];
   if (metadata.purpose) parts.push(`用途：${String(metadata.purpose)}`);
   if (metadata.provider) parts.push(`提供商：${String(metadata.provider)}`);
@@ -1477,6 +1552,71 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
+}
+
+/* 发送者是排错时最先要认的东西，整块连在一起，别被 flex 的 gap 拆散。 */
+.event-sender {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.event-avatar {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-raised);
+}
+
+.event-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1;
+}
+
+.event-sender-name {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-sender-id {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.event-meta-sep {
+  color: var(--border-strong);
+}
+
+.event-meta-group {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+/* 一屏里基本都是同一天，日期每行重复只是噪声，换天时给一条就够。 */
+.event-date-separator {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 0 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .event-debug-trace {

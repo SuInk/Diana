@@ -57,6 +57,15 @@ func (p *directReplyMergeProvider) requestsSnapshot() []llm.GenerateRequest {
 }
 
 func TestDirectReplyMergesSameUserFollowUpAndRegenerates(t *testing.T) {
+	testReplyMergesSameUserFollowUp(t, false)
+}
+
+func TestProactiveReplyMergesSameUserFollowUpAndRegenerates(t *testing.T) {
+	testReplyMergesSameUserFollowUp(t, true)
+}
+
+func testReplyMergesSameUserFollowUp(t *testing.T, proactive bool) {
+	t.Helper()
 	disabled := false
 	provider := &directReplyMergeProvider{firstStarted: make(chan struct{}), releaseFirst: make(chan struct{})}
 	channel := &recordingChannel{}
@@ -68,10 +77,16 @@ func TestDirectReplyMergesSameUserFollowUpAndRegenerates(t *testing.T) {
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "root", ToMe: true,
 		RawMessage: "中午听嘉然的", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "中午听嘉然的"}}},
 	}
+	outcomeName := "replied"
+	if proactive {
+		root.ToMe = false
+		root.proactiveReply = true
+		outcomeName = "replied_proactive"
+	}
 	runtime.remember(root)
 	done := make(chan error, 1)
 	go func() {
-		_, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "root-turn"), root, root.RawMessage, "replied")
+		_, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "root-turn"), root, root.RawMessage, outcomeName)
 		done <- err
 	}()
 	select {
