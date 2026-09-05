@@ -57,7 +57,7 @@
               @click="selectResult(option.value)"
             >
               <span>{{ option.label }}</span>
-            <span class="event-filter-count">{{ formatNumber(resultOptionCount(option.value)) }}</span>
+            <span class="event-filter-count"><SkeletonBlock v-if="loading && !response" width="2ch" inline /><template v-else>{{ formatNumber(resultOptionCount(option.value)) }}</template></span>
           </button>
         </div>
       </section>
@@ -101,7 +101,12 @@
         </div>
       </section>
 
-      <p class="event-stats-line">
+      <div v-if="loading && !response" class="event-stats-line" role="status" aria-label="正在加载事件统计">
+        <SkeletonBlock width="180px" height="22px" />
+        <span class="event-token-skeleton"><SkeletonBlock width="110px" height="22px" /><span class="skeleton skeleton-text" aria-hidden="true">输入 000,000（缓存命中 00%） / 输出 00,000 · 00 次调用</span></span>
+        <SkeletonBlock width="130px" height="22px" />
+      </div>
+      <p v-else class="event-stats-line">
         <span>
           <MessageCircle :size="13" aria-hidden="true" />
           <strong>{{ formatNumber(summary.total) }}</strong> 条事件
@@ -125,13 +130,14 @@
             <h2>事件记录</h2>
             <span class="badge" :class="stream.connected ? 'ok' : 'warn'">
               <span class="status-dot" :class="{ pulse: stream.connected }" aria-hidden="true" />
-              {{ stream.connected ? "实时更新" : "实时连接中断" }}
+              {{ stream.connected ? "实时连接" : "实时连接中断" }}
             </span>
-            <button v-if="pendingLiveEvents" class="btn small" type="button" @click="showLatestEvents">
+            <button v-if="pendingLiveEvents" class="btn small" type="button" :disabled="loading" @click="showLatestEvents">
               有新事件
             </button>
           </div>
-          <span class="muted event-result-count">{{ resultCountText }}</span>
+          <SkeletonBlock v-if="loading && !response" width="90px" height="18px" />
+          <span v-else class="muted event-result-count">{{ resultCountText }}</span>
         </div>
 
         <div v-if="events.length > 0" class="event-detail-list">
@@ -373,9 +379,29 @@
           </template>
         </div>
 
-        <div v-else-if="loading" class="event-loading">
-          <LoaderCircle :size="20" class="spin" aria-hidden="true" />
-          正在加载事件
+        <div v-else-if="loading" class="event-detail-list" role="status" aria-label="正在加载事件">
+          <div class="event-date-separator" aria-hidden="true"><SkeletonBlock width="48px" height="18px" /></div>
+          <article v-for="n in 4" :key="n" class="event-detail-row" aria-hidden="true">
+            <div class="event-detail-time"><SkeletonBlock width="64px" height="20px" /></div>
+            <div class="event-detail-main">
+              <div class="event-detail-meta">
+                <SkeletonBlock v-for="badge in 3" :key="badge" width="58px" height="22px" />
+                <span class="event-sender"><SkeletonBlock width="20px" height="20px" rounded /><SkeletonBlock width="120px" height="20px" /></span>
+                <SkeletonBlock width="96px" height="20px" />
+              </div>
+              <div class="event-detail-message"><SkeletonBlock width="70%" height="23px" /></div>
+              <div class="event-decision">
+                <SkeletonBlock width="16px" height="16px" />
+                <div class="skeleton-copy"><SkeletonBlock width="80px" height="18px" /><SkeletonBlock width="90%" height="20px" /><SkeletonBlock class="skeleton-mobile-line" width="65%" height="20px" /></div>
+              </div>
+              <div v-if="n % 2" class="event-detail-reply event-reply-skeleton skeleton-copy">
+                <SkeletonBlock width="80px" height="18px" /><SkeletonBlock width="85%" height="20px" /><SkeletonBlock class="skeleton-mobile-line" width="70%" height="20px" />
+              </div>
+              <div v-if="n % 2" class="event-delivery quiet"><SkeletonBlock width="14px" height="14px" /><SkeletonBlock width="100px" height="18px" /></div>
+              <div class="event-technical"><SkeletonBlock v-for="item in 3" :key="item" width="120px" height="17px" /></div>
+              <div class="event-debug-trace"><SkeletonBlock width="205px" height="36px" /></div>
+            </div>
+          </article>
         </div>
         <EmptyState v-else :title="emptyStateTitle" hint="切换处理结果或时间范围，或等待机器人收到新消息">
           <template #icon><Activity :size="20" aria-hidden="true" /></template>
@@ -451,6 +477,7 @@ import { currentView } from "../router";
 import { stream } from "../stream";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 
 const rangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
@@ -485,7 +512,7 @@ watch(botScope, () => {
 const events = ref<AssistantEventDetail[]>([]);
 const response = ref<AssistantEventsResponse | null>(null);
 const page = ref(1);
-const loading = ref(false);
+const loading = ref(true);
 const loadingMore = ref(false);
 
 function memoryKindLabel(kind?: string): string {
@@ -1365,6 +1392,15 @@ onBeforeUnmount(() => {
   align-self: center;
   flex: none;
   color: var(--muted);
+}
+
+.event-stats-line .event-token-skeleton {
+  flex: 0 1 480px;
+  align-items: flex-start;
+}
+
+.event-detail-reply.event-reply-skeleton {
+  border-left-color: var(--border-strong);
 }
 
 .event-stats-line strong {

@@ -23,15 +23,15 @@
         <div class="segmented plugin-status-filter" role="radiogroup" aria-label="按状态筛选">
           <button type="button" role="radio" :aria-checked="status === 'all'" :class="{ active: status === 'all' }" @click="status = 'all'">
             <span>全部</span>
-            <span class="plugin-filter-count">{{ displayPlugins.length }}</span>
+            <span class="plugin-filter-count"><SkeletonBlock v-if="loading && !plugins.length" width="2ch" inline /><template v-else>{{ displayPlugins.length }}</template></span>
           </button>
           <button type="button" role="radio" :aria-checked="status === 'on'" :class="{ active: status === 'on' }" @click="status = 'on'">
             <span>已启用</span>
-            <span class="plugin-filter-count">{{ enabledCount }}</span>
+            <span class="plugin-filter-count"><SkeletonBlock v-if="loading && !plugins.length" width="2ch" inline /><template v-else>{{ enabledCount }}</template></span>
           </button>
           <button type="button" role="radio" :aria-checked="status === 'off'" :class="{ active: status === 'off' }" @click="status = 'off'">
             <span>已停用</span>
-            <span class="plugin-filter-count">{{ displayPlugins.length - enabledCount }}</span>
+            <span class="plugin-filter-count"><SkeletonBlock v-if="loading && !plugins.length" width="2ch" inline /><template v-else>{{ displayPlugins.length - enabledCount }}</template></span>
           </button>
         </div>
         <div class="segmented plugin-layout-switch" role="group" aria-label="插件排列方式">
@@ -62,15 +62,12 @@
       </div>
     </header>
 
-    <div v-if="loading" class="plugin-loading" role="status">
-      <div class="scope-progress" role="progressbar" aria-label="正在加载插件"><span /></div>
-      正在加载插件…
-    </div>
-    <div v-else-if="loadError" class="plugin-load-error" role="alert">
+    <div v-if="loadError" class="plugin-load-error" role="alert">
       <span>{{ loadError }}</span>
       <button class="btn" type="button" @click="reload"><RefreshCw :size="15" />重试</button>
     </div>
-    <div v-else-if="visiblePlugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
+    <LoadingSkeleton v-if="loading && !plugins.length" kind="plugins" :layout="layout" :count="8" label="正在加载插件" />
+    <div v-else-if="visiblePlugins.length > 0" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'" :aria-busy="loading || undefined">
       <article
         v-for="plugin in visiblePlugins"
         :key="plugin.manifest.id"
@@ -189,7 +186,7 @@
       title="没有匹配的插件"
       hint="换个关键词，或把筛选切回「全部」。"
     />
-    <EmptyState v-else-if="!loading" title="没有可用插件" />
+    <EmptyState v-else-if="!loading && !loadError" title="没有可用插件" />
 
     <Modal
       v-if="settingsTarget"
@@ -462,6 +459,8 @@ import {
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AppSelect from "../components/AppSelect.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
 import PlatformLevelRulesField from "../components/PlatformLevelRulesField.vue";
@@ -475,7 +474,7 @@ import { navigate, viewQuery } from "../router";
 import { botScope } from "../bot-scope";
 
 const plugins = ref<PluginState[]>([]);
-const loading = ref(false);
+const loading = ref(true);
 const loadError = ref("");
 const busyID = ref("");
 

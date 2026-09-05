@@ -18,6 +18,7 @@
         :class="stepClass(index)"
         type="button"
         :aria-current="step === index ? 'step' : undefined"
+        :disabled="loading"
         @click="step = index"
       >
         <span class="step-index">
@@ -29,7 +30,11 @@
     </div>
 
     <!-- 第 1 步：提供商 -->
-    <section v-if="step === 0" class="card">
+    <section v-if="loading" class="card">
+      <div class="card-header"><SkeletonBlock width="112px" height="23px" /></div>
+      <div class="card-body"><LoadingSkeleton kind="form" :count="6" label="正在加载配置向导" /></div>
+    </section>
+    <section v-else-if="step === 0" class="card">
       <div class="card-header">
         <h2>配置提供商</h2>
         <span v-if="llmConfigured" class="badge ok">已配置</span>
@@ -248,11 +253,11 @@
     </section>
 
     <div class="wizard-nav">
-      <button class="btn wizard-nav-button" type="button" :disabled="step === 0" @click="step = Math.max(0, step - 1)">
+      <button class="btn wizard-nav-button" type="button" :disabled="loading || step === 0" @click="step = Math.max(0, step - 1)">
         <ChevronLeft :size="15" aria-hidden="true" />
         上一步
       </button>
-      <button v-if="step < 2" class="btn wizard-nav-button" type="button" @click="step = step + 1">
+      <button v-if="step < 2" class="btn wizard-nav-button" type="button" :disabled="loading" @click="step = step + 1">
         跳过此步
         <ChevronRight :size="15" aria-hidden="true" />
       </button>
@@ -262,6 +267,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { CheckCircle2, ChevronLeft, ChevronRight, Copy, LayoutGrid, MessageCircle, Plus, Power, RefreshCw, X, Zap } from "@lucide/vue";
 import {
   getConfig,
@@ -292,6 +299,7 @@ import {
 } from "../llm-presets";
 
 const step = ref(0);
+const loading = ref(true);
 const busy = ref(false);
 const stepLabels = ["配置提供商", "接入 OneBot v11", "启动验证"];
 const SETUP_COMPLETE_KEY = "dqb-next:setup-completed";
@@ -550,6 +558,8 @@ onMounted(async () => {
     }
   } catch {
     /* 初次加载失败保持第一步 */
+  } finally {
+    loading.value = false;
   }
 });
 

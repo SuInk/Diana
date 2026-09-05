@@ -17,7 +17,7 @@
           <PowerOff :size="15" aria-hidden="true" />
           停止机器人
         </button>
-        <button class="btn" type="button" :disabled="busy" @click="refresh">
+        <button class="btn" type="button" :disabled="busy || refreshing" @click="refresh">
           <RefreshCw :size="15" aria-hidden="true" />
           刷新
         </button>
@@ -42,18 +42,18 @@
 
       <!-- 统计卡片 -->
       <div class="stat-grid dashboard-stats">
-        <StatCard label="今日消息" :value="formatNumber(stats?.today_events ?? 0)" :foot="inboundFoot">
+        <StatCard label="今日消息" :loading="initialLoading" :value="formatNumber(stats?.today_events ?? 0)" :foot="inboundFoot">
           <template #icon><MessageCircle :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="今日已回复" :value="formatNumber(stats?.today_handled ?? 0)" :foot="`累计 ${formatNumber(stats?.handled_events ?? 0)}`">
+        <StatCard label="今日已回复" :loading="initialLoading" :value="formatNumber(stats?.today_handled ?? 0)" :foot="`累计 ${formatNumber(stats?.handled_events ?? 0)}`">
           <template #icon><CheckCircle2 :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="今日错误" :value="formatNumber(stats?.today_errors ?? 0)" :foot="`累计 ${formatNumber(stats?.error_events ?? 0)}`">
+        <StatCard label="今日错误" :loading="initialLoading" :value="formatNumber(stats?.today_errors ?? 0)" :foot="`累计 ${formatNumber(stats?.error_events ?? 0)}`">
           <template #icon><TriangleAlert :size="14" aria-hidden="true" /></template>
         </StatCard>
         <!-- 队列积压和后台子任务并发是排查「机器人怎么不理我」最直接的两个指标，
              后端一直在算，前端此前没有读。 -->
-        <StatCard label="平均响应" :value="stats && stats.avg_reply_ms > 0 ? `${(stats.avg_reply_ms / 1000).toFixed(1)}s` : '—'" :foot="`回复并发 ${status?.active_workers ?? 0} / 后台任务 ${status?.active_subagent_tasks ?? 0}`">
+        <StatCard label="平均响应" :loading="initialLoading" :value="stats && stats.avg_reply_ms > 0 ? `${(stats.avg_reply_ms / 1000).toFixed(1)}s` : '—'" :foot="`回复并发 ${status?.active_workers ?? 0} / 后台任务 ${status?.active_subagent_tasks ?? 0}`">
           <template #icon><Zap :size="14" aria-hidden="true" /></template>
         </StatCard>
       </div>
@@ -66,7 +66,8 @@
             <span v-if="stats?.last_event_at" class="badge">最近事件 {{ formatRelative(stats.last_event_at) }}</span>
           </div>
           <div class="card-body">
-            <HourlyBars v-if="stats" :buckets="hourlyBuckets" />
+            <LoadingSkeleton v-if="initialLoading" kind="chart" label="正在加载消息统计" />
+            <HourlyBars v-else-if="stats" :buckets="hourlyBuckets" />
             <EmptyState v-else title="暂无统计数据" hint="机器人处理消息后这里会出现走势" />
           </div>
         </section>
@@ -78,11 +79,13 @@
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
             <div class="info-row">
               <span class="muted info-label">运行时长</span>
-              <span class="info-value">{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
+              <SkeletonBlock v-if="initialLoading" width="72px" height="18px" />
+              <span v-else class="info-value">{{ stats ? formatUptime(stats.uptime_seconds) : "—" }}</span>
             </div>
             <div class="info-row">
               <span class="muted info-label">插件</span>
-              <span class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
+              <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
+              <span v-else class="info-value">{{ stats ? `${stats.bot.plugins_enabled} / ${stats.bot.plugins_total}` : "—" }}</span>
             </div>
             <div class="info-row">
               <span class="muted info-label">实时</span>
@@ -112,15 +115,18 @@
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">CPU</span>
-              <span>{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
+              <SkeletonBlock v-if="initialLoading" width="48px" height="18px" />
+              <span v-else>{{ processMetricsReady ? formatPercent(stats?.server?.process_cpu_percent) : "—" }}</span>
             </div>
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">内存</span>
-              <span>{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
+              <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
+              <span v-else>{{ processMetricsReady ? formatBytes(stats?.server?.process_memory_bytes) : "—" }}</span>
             </div>
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">存储</span>
-              <span>{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
+              <SkeletonBlock v-if="initialLoading" width="64px" height="18px" />
+              <span v-else>{{ stats?.server?.process_storage_bytes ? formatBytes(stats.server.process_storage_bytes) : "统计中…" }}</span>
             </div>
           </div>
         </section>
@@ -161,6 +167,7 @@
               </div>
             </article>
           </div>
+          <LoadingSkeleton v-else-if="initialLoading" kind="feed" label="正在加载实时事件" />
           <EmptyState v-else title="还没有事件" hint="机器人收到消息后会实时显示在这里">
             <template #icon><Activity :size="20" aria-hidden="true" /></template>
           </EmptyState>
@@ -194,8 +201,12 @@ import { toastError, toastSuccess } from "../toast";
 import StatCard from "../components/StatCard.vue";
 import HourlyBars from "../components/HourlyBars.vue";
 import EmptyState from "../components/EmptyState.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 
 const busy = ref(false);
+const refreshing = ref(false);
+const pending = ref(true);
 const setupNeeded = ref(false);
 const groupNames = ref<Record<string, string>>({});
 
@@ -218,6 +229,7 @@ const status = computed(() => stream.status);
 // 总览跟着左上角的机器人开关走：切到哪台，收到、回复、错误的数字就是哪台的。
 // 运行时长、服务器占用这类进程级指标不分机器人，本来就只有一份。
 const stats = computed(() => scopedStats(botScope.value));
+const initialLoading = computed(() => pending.value && !stats.value);
 
 // 队列积压和后台子任务并发是排查「机器人怎么不理我」最直接的两个指标，后端一直在
 // 算，前端此前没有读过。积压为 0 时不显示，免得平时多一串没信息量的文字。
@@ -279,6 +291,7 @@ function formatPercent(value: number | undefined): string {
 }
 
 async function refresh(): Promise<void> {
+  refreshing.value = true;
   try {
     const [statusResult, statsResult, llmConfig] = await Promise.all([getBotStatus(), getStats(), getConfig()]);
     pushStatusSnapshot(statusResult);
@@ -286,6 +299,9 @@ async function refresh(): Promise<void> {
     setupNeeded.value = !llmConfig.model || !llmConfig.api_key_configured;
   } catch (error) {
     toastError(error instanceof Error ? error.message : "刷新失败");
+  } finally {
+    pending.value = false;
+    refreshing.value = false;
   }
 }
 
@@ -306,6 +322,7 @@ onMounted(() => {
   void loadGroupNames();
   // SSE 建连有初始快照；这里再兜底拉一次，保证直接打开页面就有数据。
   if (stream.status && stream.stats) {
+    pending.value = false;
     void getConfig()
       .then((llmConfig) => {
         setupNeeded.value = !llmConfig.model || !llmConfig.api_key_configured;

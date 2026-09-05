@@ -3,7 +3,10 @@
 
 package assistant
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 // 归一化本身是当前功能：配置、路由和存储都靠它把写法收敛到注册表里的值。
 func TestNormalizePlatformIDCollapsesSpellingVariants(t *testing.T) {
@@ -158,18 +161,40 @@ func TestTelegramBotMessageSuppressionDefaultsAndRoundTripsThroughPayload(t *tes
 	}
 }
 
-func TestProfileSetPlatformContextIsolationDefaultsOnAndCanBeDisabled(t *testing.T) {
-	set := ProfileSet{Profiles: []BotConfig{{ID: "qq", Platform: PlatformOneBotV11}}}.WithDefaults()
-	if !set.PlatformContextsIsolated() {
-		t.Fatal("profile sets must default to isolated contexts")
-	}
-	payload := PayloadFromProfileSet(set)
-	if payload.IsolatePlatformContexts == nil || !*payload.IsolatePlatformContexts {
-		t.Fatalf("payload isolation=%#v, want true", payload.IsolatePlatformContexts)
-	}
-	set = set.WithPlatformContextIsolation(false)
-	if set.PlatformContextsIsolated() {
-		t.Fatal("context isolation should be disabled")
+func TestProfileSetIgnoresLegacyContextIsolationSetting(t *testing.T) {
+	for _, setting := range []any{nil, true, false} {
+		legacy := map[string]any{
+			"active_id": "qq",
+			"profiles":  []BotConfig{{ID: "qq", Platform: PlatformOneBotV11}},
+		}
+		if setting != nil {
+			legacy["isolate_platform_contexts"] = setting
+		}
+		data, err := json.Marshal(legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var set ProfileSet
+		if err := json.Unmarshal(data, &set); err != nil {
+			t.Fatal(err)
+		}
+		set = set.WithDefaults()
+		if set.ActiveID != "qq" || len(set.Profiles) != 1 || set.Profiles[0].ID != "qq" {
+			t.Fatalf("legacy setting %v changed profile identity: %#v", setting, set)
+		}
+		for _, value := range []any{set, PayloadFromProfileSet(set)} {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := fields["isolate_platform_contexts"]; exists {
+				t.Fatalf("removed setting is still serialized for %T", value)
+			}
+		}
 	}
 }
 

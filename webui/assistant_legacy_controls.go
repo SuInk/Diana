@@ -467,7 +467,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, "", nil)
 		return
 	}
-	profile, set, err := h.repositoryWatchProfile(payload.ProfileID)
+	profile, err := h.repositoryWatchProfile(payload.ProfileID)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
 		return
@@ -480,7 +480,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("destination 必须是 private 或 group"), payload.Repository, nil)
 		return
 	}
-	targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile, set)
+	targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile)
 	notificationEnabled := payload.NotificationEnabled == nil || *payload.NotificationEnabled
 	if len(targets) == 0 && (notificationEnabled || strings.TrimSpace(payload.GroupID) != "" || strings.TrimSpace(payload.UserID) != "") {
 		groupID, userID := "", ""
@@ -493,7 +493,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("启用通知时至少填写一个群聊或私聊发送对象"), payload.Repository, nil)
 			return
 		}
-		targets = []assistant.ReminderDeliveryTarget{{Platform: profile.Platform, ProfileID: profile.ID, ContextNamespace: repositoryWatchContextNamespace(set, profile.ID), GroupID: groupID, UserID: userID}}
+		targets = []assistant.ReminderDeliveryTarget{{Platform: profile.Platform, ProfileID: profile.ID, ContextNamespace: strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID}}
 	}
 	groupID, userID := "", ""
 	if len(targets) > 0 {
@@ -507,7 +507,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
 		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
-		ContextNamespace:    repositoryWatchContextNamespace(set, profile.ID),
+		ContextNamespace:    strings.TrimSpace(profile.ID),
 		NotificationEnabled: notificationEnabled, NotificationTargets: targets,
 	})
 	if err != nil {
@@ -544,12 +544,12 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 	}
 	if deliveryRequested {
-		profile, set, profileErr := h.repositoryWatchProfile(payload.ProfileID)
+		profile, profileErr := h.repositoryWatchProfile(payload.ProfileID)
 		if profileErr != nil {
 			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", profileErr, c.Param("id"), nil)
 			return
 		}
-		targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile, set)
+		targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile)
 		if len(targets) == 0 && payload.NotificationEnabled != nil && *payload.NotificationEnabled {
 			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("启用通知时至少填写一个群聊或私聊对象"), c.Param("id"), nil)
 			return
@@ -585,7 +585,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		updateInput.Delivery = true
 		updateInput.Platform = profile.Platform
 		updateInput.ProfileID = profile.ID
-		updateInput.ContextNamespace = repositoryWatchContextNamespace(set, profile.ID)
+		updateInput.ContextNamespace = strings.TrimSpace(profile.ID)
 		updateInput.OwnerID = "webui:" + strings.TrimSpace(profile.ID)
 		updateInput.GroupID = groupID
 		updateInput.UserID = userID
@@ -682,7 +682,7 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, "", nil)
 		return
 	}
-	profile, set, err := h.repositoryWatchProfile(payload.ProfileID)
+	profile, err := h.repositoryWatchProfile(payload.ProfileID)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, payload.FeedURL, nil)
 		return
@@ -714,7 +714,7 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
 		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
-		ContextNamespace: repositoryWatchContextNamespace(set, profile.ID),
+		ContextNamespace: strings.TrimSpace(profile.ID),
 	})
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, firstNonEmptyWeb(payload.TwitterHandle, payload.FeedURL), nil)
@@ -806,7 +806,7 @@ func firstNonEmptyWeb(values ...string) string {
 	return ""
 }
 
-func (h *BotHandler) repositoryWatchProfile(profileID string) (assistant.BotConfig, assistant.ProfileSet, error) {
+func (h *BotHandler) repositoryWatchProfile(profileID string) (assistant.BotConfig, error) {
 	set := h.profiles.Profiles().WithDefaults()
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" {
@@ -814,17 +814,10 @@ func (h *BotHandler) repositoryWatchProfile(profileID string) (assistant.BotConf
 	}
 	for _, profile := range set.Profiles {
 		if profile.ID == profileID {
-			return profile.WithDefaults(), set, nil
+			return profile.WithDefaults(), nil
 		}
 	}
-	return assistant.BotConfig{}, set, fmt.Errorf("机器人配置 %s 不存在", profileID)
-}
-
-func repositoryWatchContextNamespace(set assistant.ProfileSet, profileID string) string {
-	if set.PlatformContextsIsolated() {
-		return strings.TrimSpace(profileID)
-	}
-	return ""
+	return assistant.BotConfig{}, fmt.Errorf("机器人配置 %s 不存在", profileID)
 }
 
 func (h *BotHandler) repositoryWatchOwner(id string) (string, error) {
@@ -906,11 +899,11 @@ func reminderDeliveryTargetsForWeb(item assistant.Reminder) []repositoryWatchTar
 	return targets
 }
 
-func repositoryWatchTargetsFromPayload(values []repositoryWatchTargetPayload, profile assistant.BotConfig, set assistant.ProfileSet) []assistant.ReminderDeliveryTarget {
+func repositoryWatchTargetsFromPayload(values []repositoryWatchTargetPayload, profile assistant.BotConfig) []assistant.ReminderDeliveryTarget {
 	targets := make([]assistant.ReminderDeliveryTarget, 0, len(values))
 	for _, value := range values {
 		destination := strings.ToLower(strings.TrimSpace(value.Destination))
-		target := assistant.ReminderDeliveryTarget{Platform: profile.Platform, ProfileID: profile.ID, ContextNamespace: repositoryWatchContextNamespace(set, profile.ID)}
+		target := assistant.ReminderDeliveryTarget{Platform: profile.Platform, ProfileID: profile.ID, ContextNamespace: strings.TrimSpace(profile.ID)}
 		if destination == "group" {
 			target.GroupID = strings.TrimSpace(value.GroupID)
 		} else {

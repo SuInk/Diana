@@ -18,16 +18,16 @@
 
     <div class="stack">
       <div class="stat-grid task-stats">
-        <StatCard label="全部任务" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${scheduleCount} 个周期查询 / ${repositoryWatchCount} 个仓库订阅 / ${rssWatchCount} 个 RSS 订阅`">
+        <StatCard label="全部任务" :loading="initialLoading" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${scheduleCount} 个周期查询 / ${repositoryWatchCount} 个仓库订阅 / ${rssWatchCount} 个 RSS 订阅`">
           <template #icon><ListTodo :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="运行中" :value="formatNumber(activeCount)" :foot="`${retryingCount} 个正在重试`">
+        <StatCard label="运行中" :loading="initialLoading" :value="formatNumber(activeCount)" :foot="`${retryingCount} 个正在重试`">
           <template #icon><Clock3 :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="占用额度" :value="formatNumber(quotaCount)" foot="已完成或取消后释放">
+        <StatCard label="占用额度" :loading="initialLoading" :value="formatNumber(quotaCount)" foot="已完成或取消后释放">
           <template #icon><Gauge :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="已结束" :value="formatNumber(finishedCount)" :foot="`${usedCount} 个已执行 / ${cancelledCount} 个已取消`">
+        <StatCard label="已结束" :loading="initialLoading" :value="formatNumber(finishedCount)" :foot="`${usedCount} 个已执行 / ${cancelledCount} 个已取消`">
           <template #icon><CircleCheck :size="14" aria-hidden="true" /></template>
         </StatCard>
       </div>
@@ -77,7 +77,8 @@
         <div class="card-header">
           <div class="cluster">
             <h2>任务明细</h2>
-            <span class="badge">{{ filteredTasks.length }} 条</span>
+            <SkeletonBlock v-if="initialLoading" width="40px" height="21px" />
+            <span v-else class="badge">{{ filteredTasks.length }} 条</span>
           </div>
           <span v-if="lastLoadedAt" class="muted task-updated">更新于 {{ formatClock(lastLoadedAt) }}</span>
         </div>
@@ -190,10 +191,7 @@
           </article>
         </div>
 
-        <div v-else-if="loading" class="task-loading">
-          <LoaderCircle :size="20" class="spin" aria-hidden="true" />
-          正在加载任务
-        </div>
+        <LoadingSkeleton v-else-if="initialLoading || loading" kind="tasks" :count="4" label="正在加载任务" />
         <EmptyState v-else :title="tasks.length === 0 ? '还没有提醒或订阅' : '没有匹配的任务'" :hint="tasks.length === 0 ? '仓库订阅可在插件设置中创建，聊天中的提醒和周期查询也会显示在这里' : '调整类型、状态或搜索条件'">
           <template #icon><CalendarClock :size="20" aria-hidden="true" /></template>
         </EmptyState>
@@ -239,6 +237,8 @@ import { formatClock, formatNumber, formatTime } from "../format";
 import { navigate } from "../router";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
+import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import SkeletonBlock from "../components/SkeletonBlock.vue";
 import StatCard from "../components/StatCard.vue";
 
 type KindFilter = "all" | AssistantTaskKind;
@@ -269,6 +269,7 @@ const kind = ref<KindFilter>("all");
 const status = ref<StatusFilter>("all");
 const query = ref("");
 const loading = ref(false);
+const initialLoading = ref(true);
 const lastLoadedAt = ref<string | null>(null);
 let refreshTimer: number | undefined;
 
@@ -343,6 +344,7 @@ async function load(opts?: { silent?: boolean }): Promise<void> {
       toastError(error instanceof Error ? error.message : "任务加载失败");
     }
   } finally {
+    initialLoading.value = false;
     if (!silent) loading.value = false;
   }
 }
