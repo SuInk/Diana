@@ -57,7 +57,7 @@ func (p *debugTraceLLMProvider) Generate(ctx context.Context, req llm.GenerateRe
 	response, err := p.provider.Generate(ctx, req)
 	metadata := map[string]any{
 		"phase":       "model_request",
-		"purpose":     debugModelPurpose(req),
+		"purpose":     llmCallPurpose(ctx),
 		"request":     sanitizeDebugGenerateRequest(req),
 		"duration_ms": time.Since(startedAt).Milliseconds(),
 	}
@@ -212,27 +212,19 @@ func oneBotV11DebugProtocolMessage(message llm.Message) bool {
 	return message.Role == llm.RoleUser && strings.Contains(message.Content, "工具 "+dianaOneBotV11ToolName+" 执行")
 }
 
-func debugModelPurpose(req llm.GenerateRequest) string {
-	var system strings.Builder
-	for _, message := range req.Messages {
-		if message.Role == llm.RoleSystem {
-			system.WriteString(message.Content)
-			system.WriteByte('\n')
-		}
+// llmUnlabeledPurpose 是调用点没有打用途标签时记账和调试轨迹里落的桶。
+//
+// 以前没标签就扫 system prompt 里的子串猜：「Intent Recognition」算意图识别、
+// 「主动回复路由器」算主动回复路由……提示词一改措辞就猜错——路由器提示词改名之后
+// 那条分支就再也命中不了，而普通聊天提示词里的「机器人自动回复」倒被当成了回环
+// 检测。用途是调用点自己最清楚的事，由 withLLMUsagePurpose 显式标；漏标的调用
+// 记成 unlabeled，在用量报表里一眼能看见，补标签就好，不该由代码去读提示词。
+const llmUnlabeledPurpose = "unlabeled"
+
+// llmCallPurpose 返回本次模型调用的用途标签，未标注时返回 unlabeled。
+func llmCallPurpose(ctx context.Context) string {
+	if purpose := llmUsagePurposeFromContext(ctx); purpose != "" {
+		return purpose
 	}
-	prompt := system.String()
-	switch {
-	case strings.Contains(prompt, "Intent Recognition"), strings.Contains(prompt, "planner"):
-		return "intent_recognition"
-	case strings.Contains(prompt, "主动回复路由器"):
-		return "proactive_reply_router"
-	case strings.Contains(prompt, "选择本轮上下文和工具"):
-		return "agent_scope_router"
-	case strings.Contains(prompt, "action") && strings.Contains(prompt, "tool"):
-		return "agent_model"
-	case strings.Contains(prompt, "机器人自动回复"):
-		return "bot_reply_detection"
-	default:
-		return "chat_completion"
-	}
+	return llmUnlabeledPurpose
 }

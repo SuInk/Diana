@@ -102,8 +102,8 @@ func TestLLMUsageAccountingSkipsWithoutMessageContext(t *testing.T) {
 	}
 }
 
-// 调用点没打标签时退回按请求形状推断，不能记成空 purpose。
-func TestLLMUsageAccountingFallsBackToInferredPurpose(t *testing.T) {
+// 调用点没打标签时记成 unlabeled，不能记成空 purpose，也不再去读提示词猜。
+func TestLLMUsageAccountingRecordsUnlabeledPurpose(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
@@ -121,7 +121,7 @@ func TestLLMUsageAccountingFallsBackToInferredPurpose(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries = %#v", entries)
 	}
-	if purpose, _ := entries[0]["purpose"].(string); purpose == "" {
-		t.Fatalf("purpose must never be empty: %#v", entries[0])
+	if purpose, _ := entries[0]["purpose"].(string); purpose != llmUnlabeledPurpose {
+		t.Fatalf("purpose = %q, want %q: %#v", purpose, llmUnlabeledPurpose, entries[0])
 	}
 }
