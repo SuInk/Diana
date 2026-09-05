@@ -52,6 +52,7 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 		}
 	}
 	previousFavorability := profile.Favorability
+	profile.BotProfileID = botProfileID
 	if name := strings.TrimSpace(event.SenderName); name != "" {
 		profile.DisplayName = name
 	}
@@ -146,6 +147,14 @@ INSERT INTO user_favorability_changes (
 
 // ListUserFavorabilityChanges returns the newest real score changes first.
 func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int) ([]assistant.UserFavorabilityChange, error) {
+	return s.listUserFavorabilityChanges(ctx, botProfileID, userID, limit, false)
+}
+
+func (s *SQLiteStore) ListUserFavorabilityChangesExact(ctx context.Context, botProfileID, userID string, limit int) ([]assistant.UserFavorabilityChange, error) {
+	return s.listUserFavorabilityChanges(ctx, botProfileID, userID, limit, true)
+}
+
+func (s *SQLiteStore) listUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int, exact bool) ([]assistant.UserFavorabilityChange, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -157,6 +166,9 @@ func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, botProfil
 		limit = 100
 	}
 	scopeCondition, scopeArgs := favorabilityScopeCondition(botProfileID)
+	if exact {
+		scopeCondition, scopeArgs = " AND bot_profile_id = ?", []any{botProfileID}
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
 FROM user_favorability_changes
@@ -267,7 +279,7 @@ func (s *SQLiteStore) ListUserMemoriesSorted(ctx context.Context, botProfileID, 
 		return nil, 0, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
+SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles`+where+`
 ORDER BY `+userMemoryOrderBy(sort, order)+`
 LIMIT ? OFFSET ?
@@ -283,7 +295,7 @@ LIMIT ? OFFSET ?
 		var memoriesRaw string
 		var portraitRaw, romanceRaw sql.NullString
 		var lastSeenRaw, updatedRaw sql.NullString
-		if err := rows.Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &romanceRaw, &lastSeenRaw, &updatedRaw); err != nil {
+		if err := rows.Scan(&profile.BotProfileID, &profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &romanceRaw, &lastSeenRaw, &updatedRaw); err != nil {
 			return nil, 0, err
 		}
 		profile.DisplayName = displayName.String
@@ -327,6 +339,14 @@ func escapeUserMemoryLike(value string) string {
 // botProfileID 留空表示「不限机器人」：控制台在「全部机器人」视图下查一个人时用
 // 它，取最近更新的那一份，好过报「查不到」。
 func (s *SQLiteStore) GetUserMemory(ctx context.Context, botProfileID, userID string) (assistant.UserMemoryProfile, bool, error) {
+	return s.getUserMemory(ctx, botProfileID, userID, false)
+}
+
+func (s *SQLiteStore) GetUserMemoryExact(ctx context.Context, botProfileID, userID string) (assistant.UserMemoryProfile, bool, error) {
+	return s.getUserMemory(ctx, botProfileID, userID, true)
+}
+
+func (s *SQLiteStore) getUserMemory(ctx context.Context, botProfileID, userID string, exact bool) (assistant.UserMemoryProfile, bool, error) {
 	var profile assistant.UserMemoryProfile
 	if s == nil || s.db == nil {
 		return profile, false, nil
@@ -341,13 +361,16 @@ func (s *SQLiteStore) GetUserMemory(ctx context.Context, botProfileID, userID st
 	var lastSeenRaw sql.NullString
 	var updatedRaw sql.NullString
 	scopeCondition, scopeArgs := userProfileScopeCondition(botProfileID)
+	if exact {
+		scopeCondition, scopeArgs = " AND bot_profile_id = ?", []any{botProfileID}
+	}
 	err := s.db.QueryRowContext(ctx, `
-SELECT user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
+SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles
 WHERE user_id = ?`+scopeCondition+`
 ORDER BY updated_at DESC
 LIMIT 1
-`, append([]any{userID}, scopeArgs...)...).Scan(&profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &romanceRaw, &lastSeenRaw, &updatedRaw)
+`, append([]any{userID}, scopeArgs...)...).Scan(&profile.BotProfileID, &profile.UserID, &displayName, &profile.Favorability, &profile.MessageCount, &memoriesRaw, &portraitRaw, &romanceRaw, &lastSeenRaw, &updatedRaw)
 	if err == sql.ErrNoRows {
 		return assistant.UserMemoryProfile{}, false, nil
 	}
