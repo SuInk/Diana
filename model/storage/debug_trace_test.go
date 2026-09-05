@@ -56,3 +56,27 @@ func TestInboundEventDebugTraceIsScopedToExactEvent(t *testing.T) {
 		t.Fatalf("missing found=%v err=%v", found, err)
 	}
 }
+
+func TestCrossGroupRetrievalTraceIsScopedToExactProfile(t *testing.T) {
+	ctx := context.Background()
+	s, err := NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	event := assistant.MessageEvent{Kind: assistant.EventKindGroup, Platform: assistant.PlatformOneBotV11, ProfileID: "bot", GroupID: "g", UserID: "u", MessageID: "m", Time: time.Now().Unix()}
+	id, _, err := s.EnqueueInboundEvent(ctx, "bot:group:g", event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []string{"bot", "other"} {
+		err := s.AppendLog(ctx, applog.Entry{Kind: applog.KindDebug, Action: "diana.cross_group_context", Target: "m", Message: "retrieval", Metadata: map[string]any{"kind": "group", "platform": event.Platform, "profile_id": profile, "group_id": "g", "user_id": "u", "selected": 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, steps, found, err := s.InboundEventDebugTrace(ctx, id)
+	if err != nil || !found || len(steps) != 1 || steps[0].Action != "diana.cross_group_context" {
+		t.Fatalf("retrieval trace not correlated correctly: %v %v", steps, err)
+	}
+}

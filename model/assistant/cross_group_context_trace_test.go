@@ -41,6 +41,14 @@ func TestCrossGroupTraceReportsWeakQuerySignal(t *testing.T) {
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
 	})
 	metadata := crossGroupTraceEntry(t, logs)
+	if metadata["kind"] != "group" {
+		t.Fatalf("trace cannot be correlated with event kind: %v", metadata)
+	}
+	for _, entry := range logs.entriesSnapshot() {
+		if entry.Action == "diana.cross_group_context" && entry.Target != "m1" {
+			t.Fatal("trace missing event target")
+		}
+	}
 	reason, _ := metadata["skip_reason"].(string)
 	if !strings.Contains(reason, "信号不足") {
 		t.Fatalf("应当记录词信号不足，实际 skip_reason=%q", reason)

@@ -10,7 +10,28 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestCrossGroupMixedMembershipCacheIsRaceFree(t *testing.T) {
+	for attempt := 0; attempt < 5; attempt++ {
+		channel := &crossGroupMembershipChannel{allowed: make(map[string]bool)}
+		r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, nil)
+		candidates := make(map[string][]MessageEvent)
+		for i := 0; i < 200; i++ {
+			id := fmt.Sprint(i)
+			channel.allowed["target|"+id] = true
+			candidates[id] = nil
+			if i%2 == 0 {
+				r.members.store("target", id, memberInfo{At: time.Now()})
+			}
+		}
+		allowed := r.crossGroupCurrentMembers(MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "target", UserID: "requester"}, candidates)
+		if len(allowed) != len(candidates) {
+			t.Fatalf("allowed=%d, want %d", len(allowed), len(candidates))
+		}
+	}
+}
 
 func TestCrossGroupContextMergesRelatedMessageWhenAuthorIsInTargetGroup(t *testing.T) {
 	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}}
