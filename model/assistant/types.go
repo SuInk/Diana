@@ -1309,11 +1309,18 @@ func DefaultBotConfig() BotConfig {
 		AgentEnabled:              true,
 		AgentMaxSteps:             agent.DefaultMaxSteps,
 		AgentSkillRoots:           []string{},
-		AgentCommandAllowlist:     []string{},
-		AgentCommandTimeoutMS:     agent.DefaultCommandTimeoutMS,
-		AgentCommandSandbox:       agent.CommandSandboxAuto,
-		AgentBrowserCDPURL:        "http://127.0.0.1:9222",
-		AgentBrowserTimeoutMS:     agent.DefaultBrowserTimeoutMS,
+		// 新建配置直接带上一组只读诊断命令，装完就能用。
+		//
+		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
+		// 所以已经在跑的部署升级后不会凭空多出这两项能力——当初特意留空的仍然是空的。
+		// 这两件事必须分开：默认值是给新用户的便利，不该变成对存量部署的静默扩权。
+		AgentCommandAllowlist: agent.DefaultCommandAllowlist(),
+		AgentCommandTimeoutMS: agent.DefaultCommandTimeoutMS,
+		AgentCommandSandbox:   agent.CommandSandboxAuto,
+		// 写入锁在数据目录下的 workspace 里，碰不到配置和数据库，所以默认打开。
+		AgentFileWriteEnabled: true,
+		AgentBrowserCDPURL:    "http://127.0.0.1:9222",
+		AgentBrowserTimeoutMS: agent.DefaultBrowserTimeoutMS,
 	}
 }
 
