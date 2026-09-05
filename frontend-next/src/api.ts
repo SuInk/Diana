@@ -295,7 +295,7 @@ export interface BotProfileConfig {
   /** auto / require / off；留空即 auto。 */
   agent_command_sandbox?: string;
   agent_command_sandbox_allow_network?: boolean;
-  /** 打开 write_file / edit_file，默认关闭。 */
+  /** 打开 write_file / edit_file。新建配置默认打开。 */
   agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;
   agent_browser_timeout_ms?: number;
@@ -2363,6 +2363,19 @@ export interface GroupRelationGraph {
 export interface GroupRelationResponse {
   range: AssistantEventRange;
   graph: GroupRelationGraph;
+}
+
+/** 新建机器人时用的 Agent 推荐默认值。只读，不改任何东西。 */
+export interface AgentRecommendedDefaults {
+  agent_command_allowlist: string[];
+  agent_file_write_enabled: boolean;
+  agent_command_sandbox: string;
+  agent_max_steps: number;
+  agent_command_timeout_ms: number;
+}
+
+export function getAgentDefaults(): Promise<AgentRecommendedDefaults> {
+  return requestJSON<AgentRecommendedDefaults>("/api/assistant/agent-defaults");
 }
 
 export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {
