@@ -57,13 +57,15 @@ type dianaTask struct {
 	LastReleaseTag        string    `json:"last_release_tag,omitempty"`
 	LastStarCount         int       `json:"last_star_count,omitempty"`
 	LastNotifiedStarCount int       `json:"last_notified_star_count,omitempty"`
-	FeedURL               string    `json:"feed_url,omitempty"`
-	FeedSource            string    `json:"feed_source,omitempty"`
-	FeedHandle            string    `json:"feed_handle,omitempty"`
-	FeedJudgePrompt       string    `json:"feed_judge_prompt,omitempty"`
-	LastFeedItemID        string    `json:"last_feed_item_id,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	ConsumesQuota         bool      `json:"consumes_quota"`
+	// FeedSources 是多来源订阅盯的全部账号或 Feed；单来源时和 feed_url 一致。
+	FeedSources     []string  `json:"feed_sources,omitempty"`
+	FeedURL         string    `json:"feed_url,omitempty"`
+	FeedSource      string    `json:"feed_source,omitempty"`
+	FeedHandle      string    `json:"feed_handle,omitempty"`
+	FeedJudgePrompt string    `json:"feed_judge_prompt,omitempty"`
+	LastFeedItemID  string    `json:"last_feed_item_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	ConsumesQuota   bool      `json:"consumes_quota"`
 }
 
 func newDianaTasksTool(runtime *Runtime, event MessageEvent) *dianaTasksTool {
@@ -218,6 +220,7 @@ func taskForTool(item Reminder) dianaTask {
 		LastReleaseTag:        item.LastReleaseTag,
 		LastStarCount:         item.LastStarCount,
 		LastNotifiedStarCount: item.LastNotifiedStarCount,
+		FeedSources:           rssWatchSourceLabels(item),
 		FeedURL:               item.FeedURL,
 		FeedSource:            item.FeedSource,
 		FeedHandle:            item.FeedHandle,

@@ -10,42 +10,42 @@ import (
 func TestRSSWatchNoticeHeaderNamesPlatformAndAccount(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		item     Reminder
+		source   ReminderFeedSource
 		feedName string
 		want     string
 	}{
 		{
 			name:     "推特带显示名",
-			item:     Reminder{FeedSource: "twitter", FeedHandle: "thsottiaux"},
+			source:   ReminderFeedSource{Source: "twitter", Handle: "thsottiaux"},
 			feedName: "Thomas Sottiaux",
 			want:     "Twitter Thomas Sottiaux @thsottiaux",
 		},
 		{
 			// RSSHub、Nitter 的标题格式各不相同，标题里已经带 @handle 时不重复。
 			name:     "标题已含 handle",
-			item:     Reminder{FeedSource: "twitter", FeedHandle: "thsottiaux"},
+			source:   ReminderFeedSource{Source: "twitter", Handle: "thsottiaux"},
 			feedName: "Thomas Sottiaux / @thsottiaux",
 			want:     "Twitter Thomas Sottiaux / @thsottiaux",
 		},
 		{
-			name: "推特没有标题",
-			item: Reminder{FeedSource: "twitter", FeedHandle: "thsottiaux"},
-			want: "Twitter @thsottiaux",
+			name:   "推特没有标题",
+			source: ReminderFeedSource{Source: "twitter", Handle: "thsottiaux"},
+			want:   "Twitter @thsottiaux",
 		},
 		{
 			name:     "普通 RSS 用 Feed 标题",
-			item:     Reminder{FeedSource: "rss", FeedURL: "https://example.test/feed.xml"},
+			source:   ReminderFeedSource{Source: "rss", FeedURL: "https://example.test/feed.xml"},
 			feedName: "少数派",
 			want:     "RSS 少数派",
 		},
 		{
-			name: "连标题都没有就退回地址",
-			item: Reminder{FeedSource: "rss", FeedURL: "https://example.test/feed.xml"},
-			want: "RSS https://example.test/feed.xml",
+			name:   "连标题都没有就退回地址",
+			source: ReminderFeedSource{Source: "rss", FeedURL: "https://example.test/feed.xml"},
+			want:   "RSS https://example.test/feed.xml",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := rssWatchNoticeHeader(tc.item, tc.feedName); got != tc.want {
+			if got := rssWatchNoticeHeader(tc.source, tc.feedName); got != tc.want {
 				t.Fatalf("header = %q, want %q", got, tc.want)
 			}
 		})
