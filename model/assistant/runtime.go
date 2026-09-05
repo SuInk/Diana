@@ -2244,7 +2244,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	routeUserMessage := llmMessageFromEventWithImagesForContext(
 		routeCtx,
 		event,
-		"请从本批群消息中判断机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 planner，只负责回复判断，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"+string(payloadJSON),
+		"请从本批群消息中识别机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 Intent Recognition（意图识别）模块，只负责识别回复意图，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"+string(payloadJSON),
 		nil,
 	)
 	messages := []llm.Message{
@@ -2674,7 +2674,7 @@ func promoteRequestedResponse(decision *proactiveReplyDecision, event MessageEve
 	}
 	decision.Reason = "明确请求交由正式回复与发送前准确度审核处理"
 	if originalReason != "" {
-		decision.Reason += "；planner 原判断：" + originalReason
+		decision.Reason += "；Intent Recognition 原判断：" + originalReason
 	}
 	return true
 }
@@ -2708,7 +2708,7 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：planner 只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
+	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
 	const expressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard
@@ -2716,6 +2716,8 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 	if configured == "" {
 		return runtimeGuard
 	}
+	configured = strings.ReplaceAll(configured, "planner", "Intent Recognition")
+	configured = strings.ReplaceAll(configured, "严格主动回复路由器", "Intent Recognition（意图识别）")
 	return configured + "\n\n" + runtimeGuard
 }
 

@@ -173,7 +173,7 @@ func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 				t.Fatalf("requests=%d sent=%#v", len(requests), sent)
 			}
 			for _, request := range requests {
-				if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "严格主动回复路由器") {
+				if len(request.Messages) > 0 && strings.Contains(request.Messages[0].Content, "Intent Recognition") {
 					t.Fatalf("direct trigger unexpectedly entered proactive router: %#v", request.Messages)
 				}
 			}
