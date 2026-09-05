@@ -1866,9 +1866,15 @@ export interface AssistantUsersResponse {
   users: UserMemoryProfile[];
   total: number;
   query?: string;
+  /** 后端收敛后的排序键与方向；传了不认识的值会回落到最近更新倒序。 */
+  sort?: AssistantUsersSort;
+  order?: AssistantUsersOrder;
   limit: number;
   offset: number;
 }
+
+export type AssistantUsersSort = "updated" | "last_seen" | "favorability" | "messages";
+export type AssistantUsersOrder = "asc" | "desc";
 
 /**
  * 门控器筛出来的一条长期记忆。和 UserMemoryItem 的区别是它由模型判定值不值得记、
@@ -1907,8 +1913,15 @@ export interface AssistantUserDetailResponse {
   structured_memories: UserStructuredMemory[];
 }
 
-export function listAssistantUsers(query = "", limit = 50, offset = 0, profile = ""): Promise<AssistantUsersResponse> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+export function listAssistantUsers(
+  query = "",
+  limit = 50,
+  offset = 0,
+  profile = "",
+  sort: AssistantUsersSort = "updated",
+  order: AssistantUsersOrder = "desc"
+): Promise<AssistantUsersResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset), sort, order });
   if (query) {
     params.set("q", query);
   }
@@ -2249,6 +2262,7 @@ export interface AssistantTask {
   feed_url?: string;
   feed_source?: "rss" | "twitter";
   feed_handle?: string;
+  feed_sources?: RSSWatchSource[];
   feed_judge_prompt?: string;
   last_feed_item_id?: string;
   last_feed_published_at?: string;
@@ -2288,9 +2302,19 @@ export interface RepositoryWatchInput {
   notification_targets?: RepositoryWatchTarget[];
 }
 
+// 一条订阅可以盯多个来源，它们共用同一套判断规则。
+export interface RSSWatchSource {
+  feed_url: string;
+  source?: "rss" | "twitter";
+  handle?: string;
+  name?: string;
+}
+
 export interface RSSWatchInput {
   feed_url?: string;
   twitter_handle?: string;
+  feed_urls?: string[];
+  twitter_handles?: string[];
   judge_prompt: string;
   interval_seconds: number;
   profile_id?: string;
@@ -2333,7 +2357,7 @@ export function createRSSWatch(input: RSSWatchInput): Promise<AssistantTask> {
   return requestJSON<AssistantTask>("/api/assistant/tasks/rss-watches", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "judge_prompt" | "interval_seconds">>): Promise<AssistantTask> {
+export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "feed_urls" | "twitter_handles" | "judge_prompt" | "interval_seconds">>): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) });
 }
 

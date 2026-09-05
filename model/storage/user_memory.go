@@ -201,10 +201,38 @@ func favorabilityChangeRequested(update assistant.UserMemoryUpdate) bool {
 	return update.SetFavorability != nil || update.FavorabilityDelta != 0
 }
 
+// userMemorySortColumns 是人员列表允许的排序键，值直接拼进 SQL，所以只认这张表
+// 里的写法，控制台传别的一律回落到默认排序。
+var userMemorySortColumns = map[string]string{
+	"updated":      "updated_at",
+	"last_seen":    "NULLIF(last_seen_at, '')",
+	"favorability": "favorability",
+	"messages":     "message_count",
+}
+
+// NormalizeUserMemorySort 把控制台传来的排序参数收敛到受支持的取值，非法值回落
+// 到「最近更新 · 倒序」。
+func NormalizeUserMemorySort(sort, order string) (string, string) {
+	sort = strings.ToLower(strings.TrimSpace(sort))
+	if _, ok := userMemorySortColumns[sort]; !ok {
+		sort = "updated"
+	}
+	if strings.EqualFold(strings.TrimSpace(order), "asc") {
+		return sort, "asc"
+	}
+	return sort, "desc"
+}
+
 // ListUserMemories returns long-term user profiles ordered by most recently
 // updated. query filters by user ID or display name; the second return value
 // is the total row count matching the same filter.
 func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
+	return s.ListUserMemoriesSorted(ctx, botProfileID, query, "", "", limit, offset)
+}
+
+// ListUserMemoriesSorted 是带排序的列表查询：sort 取 NormalizeUserMemorySort 认
+// 的键，order 取 asc/desc，两者留空等于「最近更新 · 倒序」。
+func (s *SQLiteStore) ListUserMemoriesSorted(ctx context.Context, botProfileID, query, sort, order string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
 	if s == nil || s.db == nil {
 		return []assistant.UserMemoryProfile{}, 0, nil
 	}
@@ -241,7 +269,7 @@ func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles`+where+`
-ORDER BY updated_at DESC
+ORDER BY `+userMemoryOrderBy(sort, order)+`
 LIMIT ? OFFSET ?
 `, append(args, limit, offset)...)
 	if err != nil {
@@ -275,6 +303,18 @@ LIMIT ? OFFSET ?
 		profiles = append(profiles, profile)
 	}
 	return profiles, total, rows.Err()
+}
+
+// userMemoryOrderBy 拼出 ORDER BY 子句：没值的活跃时间永远排在最后，正序时也不
+// 该顶到最前；末尾按 user_id 兜底，分数相同的人翻页时顺序才不会抖。
+func userMemoryOrderBy(sort, order string) string {
+	sort, order = NormalizeUserMemorySort(sort, order)
+	column := userMemorySortColumns[sort]
+	direction := "DESC"
+	if order == "asc" {
+		direction = "ASC"
+	}
+	return column + " IS NULL, " + column + " " + direction + ", user_id ASC"
 }
 
 func escapeUserMemoryLike(value string) string {

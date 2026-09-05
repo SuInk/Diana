@@ -15,6 +15,7 @@ import type {
   NotebookEntry,
   NotebookScopeSummary,
   ResolverDependency,
+  RSSWatchSource,
   StatsHourBucket,
   StatsSnapshot,
   UpdateStatus,
@@ -126,7 +127,7 @@ let plugins: PluginState[] = [
     installed: true, enabled: true, settings: { default_interval_seconds: 60 }, secrets_configured: { github_token: true }
   },
   {
-    manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.1.0", description: "按条件监控 RSS 或社交动态，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
+    manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.2.0", description: "按条件监控 RSS 或社交动态，一条订阅可同时盯多个账号或 Feed，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
   {
@@ -621,6 +622,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/users") {
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
+    const sort = url.searchParams.get("sort") ?? "updated";
+    const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
+    const sortKeys: Record<string, (user: (typeof demoUsers)[number]) => number> = {
+      updated: (user) => Date.parse(user.updated_at ?? "") || 0,
+      last_seen: (user) => Date.parse(user.last_seen_at ?? "") || 0,
+      favorability: (user) => user.favorability ?? 0,
+      messages: (user) => user.message_count ?? 0
+    };
+    const keyOf = sortKeys[sort] ?? sortKeys.updated;
+    matched.sort((a, b) => (order === "asc" ? keyOf(a) - keyOf(b) : keyOf(b) - keyOf(a)));
     const users = matched.map((user) => ({
       ...user,
       memories: undefined,
@@ -628,7 +639,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       memory_count: user.memories?.length ?? 0,
       portrait_count: user.portrait?.length ?? 0
     }));
-    return json({ users, total: matched.length, query: keyword || undefined, limit: 50, offset: 0 });
+    return json({ users, total: matched.length, query: keyword || undefined, sort, order, limit: 50, offset: 0 });
   }
   if (path === "/api/assistant/user-names") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
@@ -872,7 +883,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/tasks") return json({ items: tasks });
   if ((path.endsWith("/repository-watches") || path.endsWith("/rss-watches")) && method === "POST") {
     const repository = path.endsWith("/repository-watches");
-    const task: AssistantTask = { id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? body.feed_url ?? body.twitter_handle ?? "演示订阅"), status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_pull_requests: repository ? Boolean(body.watch_pull_requests) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, watch_stars: repository ? Boolean(body.watch_stars) : undefined, last_star_count: repository ? 128 : undefined, feed_url: repository ? undefined : String(body.feed_url ?? ""), feed_handle: repository ? undefined : String(body.twitter_handle ?? ""), feed_source: repository ? undefined : body.twitter_handle ? "twitter" : "rss", feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
+    // 一条 RSS 订阅可以带多个来源，演示数据也按来源列表拼，别只认单数字段。
+    const demoHandles = [...(Array.isArray(body.twitter_handles) ? body.twitter_handles : []), body.twitter_handle].map((value) => String(value ?? "").trim()).filter(Boolean);
+    const demoFeeds = [...(Array.isArray(body.feed_urls) ? body.feed_urls : []), body.feed_url].map((value) => String(value ?? "").trim()).filter(Boolean);
+    const demoSources: RSSWatchSource[] = [...demoHandles.map((handle) => ({ feed_url: `https://x.com/${handle}`, source: "twitter" as const, handle })), ...demoFeeds.map((feed_url) => ({ feed_url, source: "rss" as const }))];
+    const task: AssistantTask = { id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? demoSources.map((item) => item.handle ? `@${item.handle}` : item.feed_url).join("、") ?? "") || "演示订阅", status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_pull_requests: repository ? Boolean(body.watch_pull_requests) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, watch_stars: repository ? Boolean(body.watch_stars) : undefined, last_star_count: repository ? 128 : undefined, feed_url: repository ? undefined : demoSources[0]?.feed_url ?? "", feed_handle: repository ? undefined : demoSources[0]?.handle ?? "", feed_source: repository ? undefined : demoSources[0]?.source ?? "rss", feed_sources: repository ? undefined : demoSources, feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
     tasks = [task, ...tasks]; return json(task);
   }
   if (path.includes("/repository-watches/") || path.includes("/rss-watches/")) {

@@ -65,20 +65,6 @@ func TestParseRSSAndAtom(t *testing.T) {
 	}
 }
 
-func TestTwitterFeedURLUsesConfigurableTemplate(t *testing.T) {
-	settings := SettingValues{rssWatchSettingTwitterTemplate: "https://rss.example.test/x/{handle}/feed"}
-	got, err := twitterFeedURL("https://x.com/Tibo", settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "https://rss.example.test/x/Tibo/feed" {
-		t.Fatalf("url=%q", got)
-	}
-	if _, err := twitterFeedURL("bad/name", settings); err == nil {
-		t.Fatal("invalid handle should fail")
-	}
-}
-
 func TestRSSWatchBaselineAndChangeOrdering(t *testing.T) {
 	feed := &mutableFeed{body: rssTestBody(rssTestItem("1", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"))}
 	server := httptest.NewServer(http.HandlerFunc(feed.serve))
@@ -185,7 +171,7 @@ func TestFeedFetchStatusErrorExplainsRetiredRoute(t *testing.T) {
 	}
 
 	err := feedFetchStatusError("https://rsshub.app/twitter/user/someone", redirected("https://google.com/404"))
-	if err == nil || !strings.Contains(err.Error(), "公共 RSSHub") || !strings.Contains(err.Error(), "Twitter RSS 模板") {
+	if err == nil || !strings.Contains(err.Error(), "公共 RSSHub") || !strings.Contains(err.Error(), "按 Twitter 用户订阅") {
 		t.Fatalf("public RSSHub 404 should name the retired route and the fix: %v", err)
 	}
 
@@ -206,10 +192,10 @@ func TestFeedFetchStatusErrorExplainsRetiredRoute(t *testing.T) {
 	}
 }
 
-// Twitter 订阅默认直接读 X 公开时间线，不需要任何额外部署；填了模板才走模板。
-func TestTwitterFeedURLDefaultsToPublicTimeline(t *testing.T) {
+// Twitter 订阅直接读 X 公开时间线，不需要任何额外部署，也没有模板可配。
+func TestTwitterFeedURLUsesPublicTimeline(t *testing.T) {
 	for _, input := range []string{"someone", "@someone", "https://x.com/someone", "https://twitter.com/someone/"} {
-		got, err := twitterFeedURL(input, SettingValues{})
+		got, err := twitterFeedURL(input)
 		if err != nil {
 			t.Fatalf("twitterFeedURL(%q) error = %v", input, err)
 		}
@@ -217,9 +203,8 @@ func TestTwitterFeedURLDefaultsToPublicTimeline(t *testing.T) {
 			t.Fatalf("twitterFeedURL(%q) = %q", input, got)
 		}
 	}
-	got, err := twitterFeedURL("someone", SettingValues{rssWatchSettingTwitterTemplate: "https://rss.example.com/twitter/user/{handle}"})
-	if err != nil || got != "https://rss.example.com/twitter/user/someone" {
-		t.Fatalf("configured template = %q, err = %v", got, err)
+	if _, err := twitterFeedURL("bad/name"); err == nil {
+		t.Fatal("invalid handle should fail")
 	}
 }
 
@@ -267,5 +252,173 @@ func TestLooksLikeJSONDocument(t *testing.T) {
 	}
 	if looksLikeJSONDocument([]byte(`<?xml version="1.0"?><rss></rss>`)) {
 		t.Fatal("XML must not be treated as JSON")
+	}
+}
+
+func rssTestNamedBody(title string, items ...string) string {
+	return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>` + title + `</title>` + strings.Join(items, "") + `</channel></rss>`
+}
+
+// 一条订阅盯多个来源：每个来源各自记游标，命中的内容合成一条消息发出。
+func TestRuntimeRSSWatchCoversSeveralSourcesWithOneRule(t *testing.T) {
+	first := &mutableFeed{body: rssTestNamedBody("站点甲", rssTestItem("a-base", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"))}
+	second := &mutableFeed{body: rssTestNamedBody("站点乙", rssTestItem("b-base", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"))}
+	firstServer := httptest.NewServer(http.HandlerFunc(first.serve))
+	defer firstServer.Close()
+	secondServer := httptest.NewServer(http.HandlerFunc(second.serve))
+	defer secondServer.Close()
+	store := &stubReminderStore{}
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{
+		`{"notify":true,"reply":"站点甲宣布额度重置"}`,
+		`{"notify":true,"reply":"站点乙宣布额度重置"}`,
+	}}
+	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(NewRSSWatchPlugin(firstServer.Client())), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
+	item, err := runtime.CreateRSSWatch(context.Background(), RSSWatchCreateInput{
+		FeedURLs: []string{firstServer.URL, secondServer.URL}, JudgePrompt: "只在重置额度时通知",
+		UserID: "owner", OwnerID: "owner", Interval: 15 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := ReminderFeedSources(item)
+	if len(sources) != 2 || sources[0].LastItemID != "a-base" || sources[1].LastItemID != "b-base" {
+		t.Fatalf("sources=%#v", sources)
+	}
+	first.set(rssTestNamedBody("站点甲",
+		rssTestItem("a-new", "Quota reset", "reset", "Fri, 14 Aug 2026 11:00:00 +0800"),
+		rssTestItem("a-base", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"),
+	))
+	second.set(rssTestNamedBody("站点乙",
+		rssTestItem("b-new", "Quota reset", "reset", "Fri, 14 Aug 2026 11:30:00 +0800"),
+		rssTestItem("b-base", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"),
+	))
+	store.items[0].TriggerAt = time.Now().Add(-time.Second)
+	runtime.fireDueReminders(context.Background())
+	if len(channel.sent) != 1 {
+		t.Fatalf("sent=%#v", channel.sent)
+	}
+	notice := channel.sent[0].Text
+	if !strings.Contains(notice, "RSS 站点甲") || !strings.Contains(notice, "RSS 站点乙") || strings.Count(notice, "订阅 "+item.ID) != 1 {
+		t.Fatalf("notice=%q", notice)
+	}
+	stored := ReminderFeedSources(store.items[0])
+	if len(stored) != 2 || stored[0].LastItemID != "a-new" || stored[1].LastItemID != "b-new" || store.items[0].ConsecutiveFailures != 0 {
+		t.Fatalf("stored=%#v item=%#v", stored, store.items[0])
+	}
+}
+
+// 一个来源抓不动，不能连累另一个来源的通知：能发的照发，游标只推进抓成功的那个。
+func TestRuntimeRSSWatchKeepsGoingWhenOneSourceFails(t *testing.T) {
+	healthy := &mutableFeed{body: rssTestNamedBody("站点甲",
+		rssTestItem("a-new", "Quota reset", "reset", "Fri, 14 Aug 2026 11:00:00 +0800"),
+		rssTestItem("a-base", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"),
+	)}
+	healthyServer := httptest.NewServer(http.HandlerFunc(healthy.serve))
+	defer healthyServer.Close()
+	brokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	defer brokenServer.Close()
+	sources := []ReminderFeedSource{
+		{FeedURL: healthyServer.URL, Source: "rss", Name: "站点甲", LastItemID: "a-base"},
+		{FeedURL: brokenServer.URL, Source: "rss", Name: "站点乙", LastItemID: "b-base"},
+	}
+	store := &stubReminderStore{items: []Reminder{{
+		ID: "rss-multi", Kind: ReminderKindRSSWatch, OwnerID: "owner", UserID: "owner",
+		FeedURL: healthyServer.URL, FeedSource: "rss", FeedSourcesJSON: encodeReminderFeedSources(sources),
+		FeedJudgePrompt: "只在重置额度时通知", LastFeedItemID: "a-base",
+		TriggerAt: time.Now().Add(-time.Second), IntervalSeconds: 900,
+	}}}
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{`{"notify":true,"reply":"站点甲宣布额度重置"}`}}
+	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(NewRSSWatchPlugin(healthyServer.Client())), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime.fireDueReminders(context.Background())
+	stored := ReminderFeedSources(store.items[0])
+	if len(channel.sent) != 1 || !strings.Contains(channel.sent[0].Text, "站点甲") {
+		t.Fatalf("sent=%#v", channel.sent)
+	}
+	// 通知已经发出去，这轮不能记成失败，否则待投递内容会被下一轮重发一遍。
+	if store.items[0].PendingDelivery != "" || store.items[0].ConsecutiveFailures != 0 {
+		t.Fatalf("item=%#v", store.items[0])
+	}
+	if len(stored) != 2 || stored[0].LastItemID != "a-new" || stored[1].LastItemID != "b-base" {
+		t.Fatalf("stored=%#v", stored)
+	}
+}
+
+// 判断失败的来源不能推进游标，否则这批新条目再也没人看。
+func TestRuntimeRSSWatchKeepsCursorWhenJudgeFails(t *testing.T) {
+	feed := &mutableFeed{body: rssTestNamedBody("站点甲",
+		rssTestItem("a-new", "Quota reset", "reset", "Fri, 14 Aug 2026 11:00:00 +0800"),
+		rssTestItem("a-base", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"),
+	)}
+	server := httptest.NewServer(http.HandlerFunc(feed.serve))
+	defer server.Close()
+	sources := []ReminderFeedSource{{FeedURL: server.URL, Source: "rss", Name: "站点甲", LastItemID: "a-base"}}
+	store := &stubReminderStore{items: []Reminder{{
+		ID: "rss-judge", Kind: ReminderKindRSSWatch, OwnerID: "owner", UserID: "owner",
+		FeedURL: server.URL, FeedSource: "rss", FeedSourcesJSON: encodeReminderFeedSources(sources),
+		FeedJudgePrompt: "只在重置额度时通知", LastFeedItemID: "a-base",
+		TriggerAt: time.Now().Add(-time.Second), IntervalSeconds: 900,
+	}}}
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{"这不是 JSON"}}
+	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, channel, NewPluginManager(NewRSSWatchPlugin(server.Client())), nil, store, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime.fireDueReminders(context.Background())
+	stored := ReminderFeedSources(store.items[0])
+	if len(channel.sent) != 0 || len(stored) != 1 || stored[0].LastItemID != "a-base" || store.items[0].ConsecutiveFailures != 1 {
+		t.Fatalf("sent=%#v stored=%#v item=%#v", channel.sent, stored, store.items[0])
+	}
+}
+
+func TestResolveRSSWatchSourcesDedupesAndLimits(t *testing.T) {
+	sources, err := resolveRSSWatchSources(
+		[]string{"https://example.test/feed.xml", "https://example.test/feed.xml", ""},
+		[]string{"tibo", "https://x.com/tibo", "@nadia"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 3 || sources[0].Handle != "tibo" || sources[1].Handle != "nadia" || sources[2].Source != "rss" {
+		t.Fatalf("sources=%#v", sources)
+	}
+	if _, err := resolveRSSWatchSources(nil, nil); err == nil {
+		t.Fatal("空来源应当报错")
+	}
+	handles := make([]string, 0, maximumRSSWatchSources+1)
+	for index := 0; index <= maximumRSSWatchSources; index++ {
+		handles = append(handles, fmt.Sprintf("user%d", index))
+	}
+	if _, err := resolveRSSWatchSources(nil, handles); err == nil || !strings.Contains(err.Error(), "最多") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+// 改订阅时留下来的来源保持自己的游标，只有新加进来的来源才重新建基线。
+func TestUpdateRSSWatchKeepsCursorsOfKeptSources(t *testing.T) {
+	kept := &mutableFeed{body: rssTestNamedBody("站点甲", rssTestItem("a-base", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"))}
+	added := &mutableFeed{body: rssTestNamedBody("站点乙", rssTestItem("b-latest", "Initial", "old", "Fri, 14 Aug 2026 10:00:00 +0800"))}
+	keptServer := httptest.NewServer(http.HandlerFunc(kept.serve))
+	defer keptServer.Close()
+	addedServer := httptest.NewServer(http.HandlerFunc(added.serve))
+	defer addedServer.Close()
+	store := &stubReminderStore{}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(NewRSSWatchPlugin(keptServer.Client())), nil, store, nil, nil)
+	item, err := runtime.CreateRSSWatch(context.Background(), RSSWatchCreateInput{
+		FeedURL: keptServer.URL, JudgePrompt: "只在重置额度时通知", UserID: "owner", OwnerID: "owner", Interval: 15 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	urls := []string{keptServer.URL, addedServer.URL}
+	updated, err := runtime.UpdateRSSWatch(context.Background(), "owner", item.ID, RSSWatchUpdateInput{FeedURLs: &urls})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := ReminderFeedSources(updated)
+	if len(sources) != 2 || sources[0].LastItemID != "a-base" || sources[1].LastItemID != "b-latest" {
+		t.Fatalf("sources=%#v", sources)
+	}
+	if !strings.Contains(updated.Message, "站点甲") || !strings.Contains(updated.Message, "站点乙") {
+		t.Fatalf("message=%q", updated.Message)
 	}
 }
