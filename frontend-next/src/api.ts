@@ -592,6 +592,8 @@ export interface AppLogEntry {
   message: string;
   detail?: string;
   actor?: string;
+  /** actor 对应的昵称；形如 qq:123456 的 actor 才查得到，查不到时缺省。 */
+  actor_name?: string;
   target?: string;
   metadata?: Record<string, unknown>;
   created_at: string;
@@ -1678,6 +1680,8 @@ export interface AssistantEventDetail extends BotEvent {
   memories?: AssistantEventMemory[];
   /** 实际进入本轮模型上下文的短期会话状态；仅管理员事件接口返回。 */
   temporary_memories?: AssistantEventTemporaryMemory[];
+  /** 发送者头像地址；只有 QQ 系给得出，其余平台为空，界面退回首字母占位。 */
+  sender_avatar_url?: string;
   /** 这条消息触发的后台子任务。图片是任务跑完后异步发出去的。 */
   subtasks?: AssistantEventSubtask[];
   /** 这一轮实际发出去的内容概览。reply 只是文本，说不出还发了卡片和媒体。 */
@@ -1799,6 +1803,10 @@ export function getAssistantEventTrace(eventID: string): Promise<AssistantEventT
   return requestJSON<AssistantEventTraceResponse>(`/api/assistant/events/${encodeURIComponent(eventID)}/trace`);
 }
 
+/**
+ * 一条原始发言缓冲。它不是长期记忆：入库时没有模型参与，只按「至少两个字」过滤，
+ * 每人只留最近 20 条。控制台按「最近发言」显示，只给排查用。
+ */
 export interface UserMemoryItem {
   text: string;
   source?: string;
@@ -1840,11 +1848,14 @@ export interface UserMemoryProfile {
   display_name?: string;
   favorability: number;
   message_count: number;
+  /** 原始发言缓冲，不是长期记忆；见 UserMemoryItem。 */
   memories?: UserMemoryItem[];
   portrait?: UserPortraitTrait[];
   romance?: UserRomanceState;
-  /** 列表接口不带记忆和画像正文，只带条数；详情接口带完整内容。 */
+  /** 列表接口不带正文，只带条数；详情接口带完整内容。 */
   memory_count?: number;
+  /** 门控器写出来的长期记忆条数，和 memory_count 不是一回事。 */
+  structured_memory_count?: number;
   portrait_count?: number;
   last_seen_at?: string;
   updated_at?: string;
@@ -1878,10 +1889,41 @@ export interface AssistantUsersResponse {
 export type AssistantUsersSort = "updated" | "last_seen" | "favorability" | "messages";
 export type AssistantUsersOrder = "asc" | "desc";
 
+/**
+ * 门控器筛出来的一条长期记忆。和 UserMemoryItem 的区别是它由模型判定值不值得记、
+ * 带主题和置信度、按相关性被检索进提示词。
+ */
+export interface UserStructuredMemory {
+  id: string;
+  subject_user_id?: string;
+  subject_name?: string;
+  key: string;
+  kind: string;
+  topic: string;
+  entity?: string;
+  content: string;
+  evidence?: string;
+  source_type: string;
+  source_group_id?: string;
+  source_message_id?: string;
+  source_event_time?: string;
+  confidence: number;
+  importance: number;
+  visibility: string;
+  sensitive: boolean;
+  expires_at?: string;
+  last_verified_at?: string;
+  version: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AssistantUserDetailResponse {
   profile: UserMemoryProfile;
   favorability_changes: UserFavorabilityChange[];
   portrait_fields: PortraitFieldSpec[];
+  structured_memories: UserStructuredMemory[];
 }
 
 export function listAssistantUsers(

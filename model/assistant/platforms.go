@@ -89,6 +89,31 @@ func SupportedPlatforms() []PlatformDefinition {
 	return append([]PlatformDefinition(nil), supportedPlatforms...)
 }
 
+// MemberAvatarURL 返回某个平台上一个账号的公开头像地址，取不到就返回空串。
+//
+// 目前只有 QQ 系（OneBot v11）有不需要凭据、浏览器能直接取的头像地址。Telegram 的
+// 头像要带 Bot Token 下载，只能走服务端代理（见 Runtime.GroupAvatarForProfile 那条
+// 路），这里不冒充支持——控制台拿到空串就退回首字母占位。
+//
+// 平台留空时不猜：老记录可能根本没存平台，按 QQ 处理会给别的平台的数字账号配上一
+// 张陌生人的头像。
+func MemberAvatarURL(platform, userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || strings.TrimSpace(platform) == "" {
+		return ""
+	}
+	if NormalizePlatformID(platform) != PlatformOneBotV11 {
+		return ""
+	}
+	// qlogo 只认数字 QQ 号，别的形状拿回来的是一张统一的默认头像，不如不显示。
+	for _, char := range userID {
+		if char < '0' || char > '9' {
+			return ""
+		}
+	}
+	return OneBotMemberAvatarURL(userID)
+}
+
 // NormalizePlatformID 归一化平台 ID：大小写、空白和常见写法都收敛到注册表里的
 // 那一个值，空值按默认平台处理。调用方遍布配置、路由和存储，不能直接比较字符串。
 func NormalizePlatformID(value string) string {

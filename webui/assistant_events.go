@@ -26,6 +26,9 @@ type assistantEventDetail struct {
 	storage.InboundEventDetail
 	Handled   bool   `json:"handled"`
 	GroupName string `json:"group_name,omitempty"`
+	// SenderAvatarURL 是发送者的公开头像地址，只有 QQ 系有；其余平台留空，控制台
+	// 退回首字母占位。
+	SenderAvatarURL string `json:"sender_avatar_url,omitempty"`
 }
 
 type assistantEventsResponse struct {
@@ -328,6 +331,8 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 				detail.Error = live.Error
 			}
 		}
+		// 头像放在这里算：上面那段可能刚从实时记录里补上 platform，早算会漏掉。
+		detail.SenderAvatarURL = assistant.MemberAvatarURL(detail.Platform, detail.UserID)
 		events = append(events, detail)
 	}
 	response := assistantEventsResponse{

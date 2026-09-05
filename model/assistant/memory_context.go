@@ -481,23 +481,12 @@ sectionsLoop:
 
 func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, tokenBudget int64) string {
 	core := profile
-	memories := core.Memories
-	if len(memories) > 8 {
-		memories = memories[len(memories)-8:]
-	}
-	for drop := 0; drop <= len(memories); drop++ {
-		core.Memories = memories[drop:]
-		text := formatUserMemoryContext(core, policy)
-		if llm.EstimateTextTokens(text) <= tokenBudget {
-			return text
-		}
-	}
-	core.Memories = nil
+	// 原始发言缓冲已经不进提示词了（见 formatUserMemoryContext），这里只剩画像
+	// 可以让。逐条丢弃最近发言那一轮循环随之删掉。
 	text := formatUserMemoryContext(core, policy)
 	if llm.EstimateTextTokens(text) <= tokenBudget {
 		return text
 	}
-	// 画像比最近说过的话更值钱，所以排在它们后面才被丢掉。
 	core.Portrait = nil
 	text = formatUserMemoryContext(core, policy)
 	if llm.EstimateTextTokens(text) <= tokenBudget {

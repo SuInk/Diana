@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/storage"
 
@@ -199,5 +200,73 @@ func TestProviderTestReturnsAndLogsRedactedUpstreamError(t *testing.T) {
 	}
 	if strings.Contains(entry.Detail, apiKey) {
 		t.Fatalf("log leaked API key: %s", entry.Detail)
+	}
+}
+
+// 日志里的 actor 形如 qq:1255848531，光一串号码认不出是谁——和事件列表是同一个问题。
+func TestAppLogsResolveActorNames(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "logs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "1255848531", SenderName: "吊图吧群友",
+		MessageID: "m1", RawMessage: "在的", Time: 1_700_000_000,
+	}, assistant.UserMemoryUpdate{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []storage.AppLogEntry{
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "diana.test.named", Message: "有名字的", Actor: "qq:1255848531"},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "diana.test.unknown", Message: "查不到名字的", Actor: "qq:99999999"},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "diana.test.console", Message: "控制台操作者", Actor: "webui:admin"},
+	} {
+		if err := store.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	router := gin.New()
+	NewAppLogHandler(store).Register(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/logs?kind=operation&limit=10", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp appLogsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, entry := range resp.Logs {
+		names[entry.Action] = entry.ActorName
+	}
+	if names["diana.test.named"] != "吊图吧群友" {
+		t.Fatalf("actor names = %#v", names)
+	}
+	// 查不到昵称、以及控制台操作者这种不是账号的 actor，都不该硬凑一个名字出来。
+	if names["diana.test.unknown"] != "" || names["diana.test.console"] != "" {
+		t.Fatalf("actor names = %#v", names)
+	}
+}
+
+func TestAppLogActorUserID(t *testing.T) {
+	cases := map[string]string{
+		"qq:1255848531": "1255848531",
+		"1255848531":    "1255848531",
+		" qq:123 ":      "123",
+		"qq:unknown":    "",
+		"webui:admin":   "",
+		"admin":         "",
+		"":              "",
+		"qq:":           "",
+	}
+	for actor, want := range cases {
+		if got := appLogActorUserID(actor); got != want {
+			t.Fatalf("appLogActorUserID(%q) = %q, want %q", actor, got, want)
+		}
 	}
 }
