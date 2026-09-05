@@ -29,7 +29,7 @@
         <div v-if="users.length > 0">
           <article
             v-for="user in users"
-            :key="user.user_id"
+            :key="`${user.bot_profile_id}:${user.user_id}`"
             class="log-row user-row"
             role="button"
             tabindex="0"
@@ -41,6 +41,7 @@
               <div class="cluster" style="gap: 6px; margin-bottom: 2px">
                 <strong>{{ user.display_name || "（未记录昵称）" }}</strong>
                 <span class="muted mono" style="font-size: 11.5px">{{ user.user_id }}</span>
+                <span v-if="!botScope" class="badge">{{ user.bot_profile_id || "旧版记录" }}</span>
                 <span class="badge" :class="favorabilityClass(user.favorability)">好感 {{ user.favorability }}</span>
                 <span v-if="user.romance?.active" class="badge accent">恋人</span>
               </div>
@@ -75,6 +76,28 @@
         <div class="skeleton" style="height: 120px"></div>
       </div>
       <div v-else-if="detail" class="stack" style="gap: 16px">
+        <fieldset v-if="draft" class="stack user-editor" :disabled="saving">
+          <div class="field">
+            <label for="user-name">昵称</label>
+            <input id="user-name" v-model="draft.display_name" class="input" maxlength="200" />
+          </div>
+          <div class="field">
+            <label for="user-score">好感度</label>
+            <input id="user-score" v-model.number="draft.favorability" class="input" type="number" min="-100" max="200" step="1" />
+          </div>
+          <h3 class="detail-section-title">人员画像</h3>
+          <div v-for="(trait, index) in draft.portrait" :key="index" class="edit-row">
+            <label :for="`trait-${index}`">{{ trait.label }}</label>
+            <input :id="`trait-${index}`" v-model="trait.value" class="input" maxlength="1000" @input="trait.source = 'manual'" />
+            <button class="btn ghost small" :aria-label="`删除画像 ${trait.label}`" title="删除画像" @click="draft.portrait?.splice(index, 1)"><Trash2 :size="15" /></button>
+          </div>
+          <h3 class="detail-section-title">长期记忆</h3>
+          <div v-for="(memory, index) in draft.memories" :key="index" class="edit-row">
+            <textarea v-model="memory.text" class="textarea" :aria-label="`记忆 ${index + 1}`" rows="2" maxlength="1000" />
+            <button class="btn ghost small" aria-label="删除记忆" title="删除记忆" @click="draft.memories?.splice(index, 1)"><Trash2 :size="15" /></button>
+          </div>
+        </fieldset>
+        <template v-else>
         <div class="cluster" style="gap: 8px">
           <span class="badge" :class="favorabilityClass(detail.profile.favorability)">好感度 {{ detail.profile.favorability }}</span>
           <span v-if="detail.profile.romance?.active" class="badge accent" :title="detail.profile.romance.since ? `确立于 ${formatTime(detail.profile.romance.since)}` : undefined">恋人</span>
@@ -140,7 +163,25 @@
           </div>
           <EmptyState v-else title="暂无好感度变更记录" />
         </section>
+        </template>
       </div>
+      <template #footer>
+        <template v-if="detail && !detailLoading">
+          <button class="btn ghost" :disabled="saving" @click="confirmDelete = true"><Trash2 :size="15" />删除人员</button>
+          <button v-if="!draft" class="btn primary" @click="draft = JSON.parse(JSON.stringify(detail.profile))"><Pencil :size="15" />修改</button>
+          <template v-else>
+            <button class="btn ghost" :disabled="saving" @click="draft = null">取消修改</button>
+            <button class="btn primary" :disabled="saving" @click="saveUser()"><Save :size="15" />{{ saving ? "保存中…" : "保存" }}</button>
+          </template>
+        </template>
+      </template>
+    </Modal>
+    <Modal v-if="confirmDelete && detail" title="删除人员记录" @close="!saving && (confirmDelete = false)">
+      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、长期记忆、好感度历史和恋人状态？不会删除聊天记录或踢出群聊。后续互动可能重新建立人员记录。</p>
+      <template #footer>
+        <button class="btn ghost" :disabled="saving" @click="confirmDelete = false">取消</button>
+        <button class="btn" :disabled="saving" @click="saveUser(true)"><Trash2 :size="15" />{{ saving ? "删除中…" : "删除人员" }}</button>
+      </template>
     </Modal>
   </div>
 </template>
@@ -148,16 +189,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { botScope } from "../bot-scope";
-import { ChevronRight, RefreshCw } from "@lucide/vue";
+import { ChevronRight, Pencil, RefreshCw, Save, Trash2 } from "@lucide/vue";
 import {
   getAssistantUser,
   listAssistantUsers,
+  saveAssistantUser,
   type AssistantUserDetailResponse,
   type UserMemoryProfile,
   type UserPortraitTrait
 } from "../api";
 import { formatNumber, formatRelative, formatTime } from "../format";
-import { toastError } from "../toast";
+import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 
@@ -171,6 +213,29 @@ const loading = ref(false);
 const selected = ref<UserMemoryProfile | null>(null);
 const detail = ref<AssistantUserDetailResponse | null>(null);
 const detailLoading = ref(false);
+const draft = ref<UserMemoryProfile | null>(null);
+const saving = ref(false);
+const confirmDelete = ref(false);
+let listRequest = 0;
+
+async function saveUser(remove = false): Promise<void> {
+  const profile = remove ? detail.value?.profile : draft.value;
+  if (!profile || saving.value) return;
+  if (!remove && (!Number.isInteger(profile.favorability) || profile.favorability < -100 || profile.favorability > 200)) {
+    toastError("好感度请输入 -100 到 200 之间的整数");
+    return;
+  }
+  saving.value = true;
+  try {
+    await saveAssistantUser(profile, remove);
+    saving.value = false;
+    closeDetail();
+    toastSuccess(remove ? "人员记录已删除" : "人员记录已保存");
+    reload();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally { saving.value = false; }
+}
 
 const hasMore = computed(() => users.value.length < total.value);
 
@@ -196,15 +261,17 @@ const detailTitle = computed(() => {
 });
 
 async function fetchUsers(offset: number): Promise<void> {
+  const requestID = ++listRequest;
   loading.value = true;
   try {
     const response = await listAssistantUsers(activeQuery.value, PAGE_SIZE, offset, botScope.value);
+    if (requestID !== listRequest) return;
     users.value = offset === 0 ? response.users : [...users.value, ...response.users];
     total.value = response.total;
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载人员列表失败");
   } finally {
-    loading.value = false;
+    if (requestID === listRequest) loading.value = false;
   }
 }
 
@@ -222,20 +289,27 @@ function loadMore(): void {
 }
 
 async function openDetail(user: UserMemoryProfile): Promise<void> {
+  draft.value = null;
   selected.value = user;
   detail.value = null;
   detailLoading.value = true;
   try {
-    detail.value = await getAssistantUser(user.user_id, botScope.value);
+    const response = await getAssistantUser(user.user_id, user.bot_profile_id ?? "");
+    if (selected.value !== user) return;
+    detail.value = response;
   } catch (error) {
+    if (selected.value !== user) return;
     toastError(error instanceof Error ? error.message : "加载人员详情失败");
     selected.value = null;
   } finally {
-    detailLoading.value = false;
+    if (selected.value === user) detailLoading.value = false;
   }
 }
 
 function closeDetail(): void {
+  if (saving.value) return;
+  draft.value = null;
+  confirmDelete.value = false;
   selected.value = null;
   detail.value = null;
 }
@@ -262,6 +336,9 @@ function changeSourceLabel(source: string): string {
 
 // 换了机器人，画像和好感度都是另一份，列表和详情一起重置。
 watch(botScope, () => {
+  selected.value = null;
+  draft.value = null;
+  confirmDelete.value = false;
   detail.value = null;
   reload();
 });
@@ -272,6 +349,9 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.user-editor { border: 0; padding: 0; margin: 0; min-width: 0; }
+.edit-row { display: flex; align-items: center; gap: 8px; }
+.edit-row .input, .edit-row .textarea { flex: 1; min-width: 0; }
 .user-row {
   display: flex;
   align-items: center;

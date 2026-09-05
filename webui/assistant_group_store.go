@@ -16,6 +16,7 @@ type BotGroupConfigStore interface {
 	ConfigForGroupAnyProfile(groupID string) (assistant.GroupConfig, bool)
 	Groups() assistant.GroupConfigSet
 	SaveGroupConfig(assistant.GroupConfig, assistant.BotConfig) (assistant.GroupConfig, error)
+	DeleteGroupConfig(botProfileID, groupID string) (bool, error)
 }
 
 type MemoryBotGroupConfigStore struct {
@@ -25,6 +26,41 @@ type MemoryBotGroupConfigStore struct {
 
 func NewMemoryBotGroupConfigStore() *MemoryBotGroupConfigStore {
 	return &MemoryBotGroupConfigStore{data: assistant.GroupConfigSet{}}
+}
+
+func withoutGroupConfig(set assistant.GroupConfigSet, profileID, groupID string) (assistant.GroupConfigSet, bool) {
+	next := set
+	next.Groups = make([]assistant.GroupConfig, 0, len(set.Groups))
+	for _, cfg := range set.Groups {
+		if cfg.BotProfileID != profileID || cfg.GroupID != groupID {
+			next.Groups = append(next.Groups, cfg)
+		}
+	}
+	return next, len(next.Groups) != len(set.Groups)
+}
+
+func (s *MemoryBotGroupConfigStore) DeleteGroupConfig(profileID, groupID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, found := withoutGroupConfig(s.data, profileID, groupID)
+	s.data = next
+	return found, nil
+}
+
+func (s *PersistentBotGroupConfigStore) DeleteGroupConfig(profileID, groupID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, found := withoutGroupConfig(s.data, profileID, groupID)
+	if !found {
+		return false, nil
+	}
+	if s.store != nil {
+		if err := s.store.SaveBotGroupConfigs(s.ctx, next); err != nil {
+			return false, err
+		}
+	}
+	s.data = next
+	return true, nil
 }
 
 func (s *MemoryBotGroupConfigStore) ConfigForGroup(botProfileID, groupID string) (assistant.GroupConfig, bool) {
@@ -96,14 +132,14 @@ func (s *PersistentBotGroupConfigStore) Groups() assistant.GroupConfigSet {
 func (s *PersistentBotGroupConfigStore) SaveGroupConfig(cfg assistant.GroupConfig, base assistant.BotConfig) (assistant.GroupConfig, error) {
 	cfg = cfg.WithDefaults(cfg.GroupID, base)
 	s.mu.Lock()
-	s.data = s.data.WithDefaults(base).Upsert(cfg, base)
-	set := s.data
+	defer s.mu.Unlock()
+	set := s.data.WithDefaults(base).Upsert(cfg, base)
 	saved, _ := set.ConfigForGroup(cfg.BotProfileID, cfg.GroupID)
-	s.mu.Unlock()
 	if s.store != nil {
 		if err := s.store.SaveBotGroupConfigs(s.ctx, set); err != nil {
 			return saved, err
 		}
 	}
+	s.data = set
 	return saved, nil
 }
