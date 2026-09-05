@@ -463,7 +463,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
   if (!url.pathname.startsWith("/api/") && !url.pathname.startsWith("/onebot/")) return window.__dianaOriginalFetch!(input, init);
-  await new Promise((resolve) => window.setTimeout(resolve, 60));
+  await new Promise((resolve) => window.setTimeout(resolve, Math.max(60, Number(import.meta.env.VITE_DEMO_LATENCY_MS) || 60)));
   const method = (init?.method ?? "GET").toUpperCase();
   const body = bodyOf(init);
   const path = url.pathname;
@@ -573,7 +573,10 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
-  if (path === "/api/assistant/plugins") return json(plugins);
+  if (path === "/api/assistant/plugins") {
+    const profile = url.searchParams.get("profile") ?? "";
+    return json(plugins.map((plugin) => ({ ...plugin, enabled: plugin.profile_enabled?.[profile] ?? plugin.enabled })));
+  }
   if (path === "/api/assistant/plugins/repository-publish/drafts") {
     const drafts = [{
       id: "draft-demo-01", platform: "onebot-v11", profile_id: "bot-main", group_id: "100200301",
@@ -606,7 +609,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (!plugin) return json({ error: "演示插件不存在" }, 404);
     if (pluginMatch[2] === "install") plugin.installed = true;
     if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; }
-    if (pluginMatch[2] === "enabled") plugin.enabled = Boolean(body.enabled);
+    if (pluginMatch[2] === "enabled") {
+      const profile = url.searchParams.get("profile") ?? "";
+      if (profile && plugin.manifest.id !== "official.open-api") {
+        plugin.profile_enabled = { ...plugin.profile_enabled, [profile]: Boolean(body.enabled) };
+      } else {
+        plugin.enabled = Boolean(body.enabled);
+      }
+    }
     if (pluginMatch[2] === "settings") plugin.settings = { ...((body.settings as Record<string, unknown>) ?? {}) };
     plugins = [...plugins]; demoStatus.plugins = plugins; return json(plugin);
   }

@@ -559,7 +559,7 @@ async function load(showFeedback = false): Promise<void> {
     }
     if (configAndPlatforms) {
       const [config, platformList] = configAndPlatforms;
-      const active = config.profiles?.[0];
+      const active = config.profiles?.find((profile) => profile.id === botScope.value) ?? config.profiles?.[0];
       const current = active ?? config;
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       defaultNaturalInterjectionEnabled.value = current.natural_interjection_enabled ?? false;
