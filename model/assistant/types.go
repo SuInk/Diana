@@ -666,6 +666,7 @@ type GroupConfig struct {
 	MaxReplyChars            int              `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
+	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
 	NaturalReplySplitEnabled     *bool                  `json:"natural_reply_split_enabled,omitempty"`
 	ReplyMaxBubbles              int                    `json:"reply_max_bubbles,omitempty"`
 	DirectReplyChunkSize         int                    `json:"direct_reply_chunk_size,omitempty"`
@@ -868,7 +869,6 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		RecentHistoryTokenBudget:     base.RecentHistoryTokenBudget,
 		RecentContextLimit:           base.RecentContextLimit,
 		MaxReplyChars:                base.MaxReplyChars,
-		NaturalReplySplitEnabled:     copyBoolPointer(base.NaturalReplySplitEnabled),
 		ReplyMaxBubbles:              base.ReplyMaxBubbles,
 		DirectReplyChunkSize:         base.DirectReplyChunkSize,
 		ForwardReplyThreshold:        base.ForwardReplyThreshold,
@@ -934,9 +934,6 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	}
 	if cfg.MaxReplyChars <= 0 {
 		cfg.MaxReplyChars = defaults.MaxReplyChars
-	}
-	if cfg.NaturalReplySplitEnabled == nil {
-		cfg.NaturalReplySplitEnabled = copyBoolPointer(defaults.NaturalReplySplitEnabled)
 	}
 	if cfg.ReplyMaxBubbles <= 0 {
 		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
