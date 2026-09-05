@@ -3,7 +3,7 @@
 
 //go:build !windows
 
-package webui
+package hostinfo
 
 import "fmt"
 
