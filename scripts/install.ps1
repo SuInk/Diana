@@ -149,7 +149,8 @@ if ($version -notmatch '^v\d') {
     throw "Invalid release version: $version"
 }
 
-$packageName = "diana-webui-windows-amd64"
+$packageName = "diana-windows-amd64"
+$compatBinaryName = "diana-webui-windows-amd64.exe"
 $binaryName = "diana-webui.exe"
 $archiveName = "$packageName.zip"
 $baseUrl = "https://github.com/$repository/releases/download/$version"
@@ -160,15 +161,25 @@ $stageDir = Join-Path $tempDir "stage"
 
 try {
     New-Item -ItemType Directory -Force -Path $tempDir, $stageDir | Out-Null
-    Get-DianaDownload "$baseUrl/$archiveName" $archivePath "Diana $version for windows/amd64"
     Get-DianaDownload "$baseUrl/SHA256SUMS" $sumsPath "SHA256SUMS"
 
     $checksumLine = Get-Content $sumsPath | Where-Object {
         $parts = $_ -split '\s+', 2
         $parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $archiveName
     } | Select-Object -First 1
+    if (-not $checksumLine) {
+        $packageName = "diana-webui-windows-amd64"
+        $archiveName = "$packageName.zip"
+        $archivePath = Join-Path $tempDir $archiveName
+        $checksumLine = Get-Content $sumsPath | Where-Object {
+            $parts = $_ -split '\s+', 2
+            $parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $archiveName
+        } | Select-Object -First 1
+    }
     if (-not $checksumLine) { throw "SHA-256 entry for $archiveName was not found." }
     $expected = ($checksumLine -split '\s+')[0].ToLowerInvariant()
+    if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid SHA-256 entry for $archiveName." }
+    Get-DianaDownload "$baseUrl/$archiveName" $archivePath "Diana $version for windows/amd64"
     $actual = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { throw "SHA-256 verification failed for $archiveName." }
     Write-Host "==> SHA-256 verified"
@@ -192,7 +203,7 @@ try {
     New-Item -ItemType Directory -Force -Path $runtimeBackup, $dataBackup | Out-Null
 
     $hadPrevious = $false
-    foreach ($item in @($binaryName, "$packageName.exe", "run.bat", "uninstall.ps1", "frontend-next")) {
+    foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next")) {
         $current = Join-Path $installDir $item
         if (Test-Path $current) {
             $hadPrevious = $true
@@ -259,7 +270,7 @@ try {
     if ($startAfterInstall) {
         Write-Host "==> Start -> enforcing one Diana instance"
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq $binaryName -or $_.Name -eq "$packageName.exe" -or $_.Name -like "diana-webui-*.exe" } |
+            Where-Object { $_.Name -eq $binaryName -or $_.Name -eq $compatBinaryName -or $_.Name -like "diana-webui-*.exe" } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
         $occupied = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
@@ -289,7 +300,7 @@ try {
         if (-not $healthy) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             if ($hadPrevious) {
-                foreach ($item in @($binaryName, "$packageName.exe", "run.bat", "uninstall.ps1", "frontend-next")) {
+                foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next")) {
                     $current = Join-Path $installDir $item
                     $backup = Join-Path $runtimeBackup $item
                     if (Test-Path $current) { Remove-Item -Recurse -Force $current }
@@ -301,7 +312,7 @@ try {
                 }
                 $restoredExecutable = Join-Path $installDir $binaryName
                 if (-not (Test-Path $restoredExecutable)) {
-                    $restoredExecutable = Join-Path $installDir "$packageName.exe"
+                    $restoredExecutable = Join-Path $installDir $compatBinaryName
                 }
                 $restored = Start-Process -FilePath $restoredExecutable -WorkingDirectory $installDir -WindowStyle Hidden -PassThru
                 Set-Content -Encoding ASCII -Path (Join-Path $installDir ".diana.pid") -Value $restored.Id
