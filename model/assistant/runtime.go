@@ -6122,9 +6122,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if proactiveTriggered {
 		builder.WriteString("\n")
 		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
-		builder.WriteString("\n" + proactiveReplyPacingPrompt)
+		builder.WriteString("\n" + proactiveReplyToolResultPrompt)
 	}
 	if event.chatInReply {
+		builder.WriteString("\n" + proactiveReplyPacingPrompt)
 		if cfg.chatInSettings().SuperActive {
 			builder.WriteString("\n" + superActiveReplyPrompt)
 		} else {
