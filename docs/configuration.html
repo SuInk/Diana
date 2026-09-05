@@ -219,13 +219,20 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <article><h3>MCP 与 Skills</h3><p>按配置发现外部扩展，受工作目录、允许列表、权限和超时限制。</p></article>
           <article><h3>图片工具</h3><p>识别、生成和编辑分别授权；图片生成使用真实生图请求做健康测试。</p></article>
         </div>
+        <h3>本机运行状态</h3>
+        <p><code>diana.host_stats</code> 让机器人回答「内存占了多少」「CPU 忙不忙」「现在多少度」这类问题：CPU 型号与占用、平均负载、内存、磁盘、Diana 自身占用，以及这台机器能提供的温度、功率和电池。只读、无参数，采集与控制台总览页共用同一份实现。</p>
+        <p>温度走 <code>/sys/class/hwmon</code>，功率走 RAPL 的能量计数，电池走 <code>/sys/class/power_supply</code>，都不依赖 <code>lm-sensors</code> 之类的外部命令；容器里只要挂了 <code>/sys</code> 就能读。RAPL 给的是累计能量而非瞬时功率，所以功率要两次采样之间的差值才算得出来，第一次调用会如实说明这一点。macOS 的 <code>powermetrics</code> 需要 root、Windows 缺少通用接口，这两个平台的温度与功率直接报「读不到」——<strong>报一个编出来的数比不报更糟</strong>。这条对所有项都成立：读不到的项不会填 0，而是带上读不到的原因。</p>
+        <p>这个工具同样只对主人开放：主机名、磁盘路径和硬件型号不该对群里所有人可见。</p>
         <h3>本地文件与命令：读 / 写 / 执行三档</h3>
         <p>本地那几个工具全部锁在数据目录下的 <code>workspace</code> 里，路径固定不可配置，绝对路径和 <code>../</code> 一律拒绝。三档权限各自独立：</p>
         <div class="table-wrap"><table><thead><tr><th>档位</th><th>工具</th><th>默认</th><th>开关</th></tr></thead><tbody>
           <tr><td>读</td><td><code>read_file</code>、<code>list_files</code>、<code>grep</code>、<code>find_files</code></td><td>开</td><td>跟随「内置 Agent」总开关</td></tr>
-          <tr><td>写</td><td><code>write_file</code>、<code>edit_file</code></td><td>关</td><td>「允许写入文件」</td></tr>
-          <tr><td>执行</td><td><code>run_command</code></td><td>关</td><td>命令白名单非空才注册</td></tr>
+          <tr><td>写</td><td><code>write_file</code>、<code>edit_file</code></td><td>新建配置默认开</td><td>「允许写入文件」</td></tr>
+          <tr><td>执行</td><td><code>run_command</code></td><td>新建配置带只读白名单</td><td>命令白名单非空才注册</td></tr>
         </tbody></table></div>
+        <p>新建的机器人装完即可用：写入默认打开（锁在数据目录下的 <code>workspace</code> 内，碰不到配置和数据库），命令白名单预置一组只报状态、不碰数据的命令——<code>uptime</code>、<code>free</code>、<code>df</code>、<code>uname</code>、<code>nproc</code>、<code>date</code>、<code>hostname</code>、<code>whoami</code>。</p>
+        <p>收进这份默认白名单的标准有三条，缺一不可：不读任意路径的文件、不出网、不改任何东西。因为没有可用沙盒时，白名单里的程序就是以 Diana 自己的进程权限直接跑的——白名单只管得到「能不能跑」，管不到「能碰什么」。所以 <code>cat</code>、<code>ls</code>、<code>find</code>（能读任意路径）、<code>curl</code>、<code>wget</code>（能出网）、<code>ps</code>（会带上别的进程的完整命令行，那里面可能有别人的密钥）都被刻意排除；工作目录内的读取用 <code>read_file</code> / <code>grep</code> / <code>find_files</code>，它们锁在 <code>workspace</code> 里。</p>
+        <div class="callout"><strong>默认值只作用于新建配置</strong><p>已经在跑的部署升级后不会凭空多出命令执行和文件写入：当初留空的白名单仍然是空的，关着的写入开关仍然关着。默认值是给新用户的便利，不该变成对存量部署的静默扩权。老部署想要这些能力，用同一张表单上的「填入推荐默认值」把推荐值填进来——它只改表单，点「保存配置」才生效，授权动作是你自己做的。</p></div>
         <p><code>edit_file</code> 的每个替换必须在原文件里唯一命中一处，命中多处或找不到都整批拒绝而不是改错地方；多个替换都按原文件定位，不是依次生效——依次生效会让后一个替换命中前一个刚写进去的内容，而那种改动从调用方的输入上完全看不出来。</p>
         <div class="callout"><strong>身份挡不住提示注入</strong><p>这三档只对主人开放，但「调用发生在主人的会话里」不等于「这次调用是主人要的」：群里其他人的消息和主人的消息在同一个上下文里，模型是读完那些之后才决定调用工具的。所以真正的边界是这里的开关和白名单，而不是身份判断——需要哪一档就开哪一档，不需要的保持关闭。</p></div>
       </section>
