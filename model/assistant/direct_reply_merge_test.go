@@ -22,6 +22,11 @@ type directReplyMergeProvider struct {
 }
 
 func (p *directReplyMergeProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	for _, message := range req.Messages {
+		if strings.Contains(message.Content, "你是机器人回复的发送前审核器") {
+			return &llm.GenerateResponse{Text: `{"should_send":true,"confidence":0.99,"account_safe":true,"count_refusal":false}`}, nil
+		}
+	}
 	p.mu.Lock()
 	p.calls++
 	call := p.calls
@@ -49,6 +54,15 @@ func (p *directReplyMergeProvider) requestsSnapshot() []llm.GenerateRequest {
 }
 
 func TestDirectReplyMergesSameUserFollowUpAndRegenerates(t *testing.T) {
+	testReplyMergesSameUserFollowUp(t, false)
+}
+
+func TestProactiveReplyMergesSameUserFollowUpAndRegenerates(t *testing.T) {
+	testReplyMergesSameUserFollowUp(t, true)
+}
+
+func testReplyMergesSameUserFollowUp(t *testing.T, proactive bool) {
+	t.Helper()
 	disabled := false
 	provider := &directReplyMergeProvider{firstStarted: make(chan struct{}), releaseFirst: make(chan struct{})}
 	channel := &recordingChannel{}
@@ -60,10 +74,16 @@ func TestDirectReplyMergesSameUserFollowUpAndRegenerates(t *testing.T) {
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "root", ToMe: true,
 		RawMessage: "中午听嘉然的", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "中午听嘉然的"}}},
 	}
+	outcomeName := "replied"
+	if proactive {
+		root.ToMe = false
+		root.proactiveReply = true
+		outcomeName = "replied_proactive"
+	}
 	runtime.remember(root)
 	done := make(chan error, 1)
 	go func() {
-		_, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "root-turn"), root, root.RawMessage, "replied")
+		_, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "root-turn"), root, root.RawMessage, outcomeName)
 		done <- err
 	}()
 	select {

@@ -136,7 +136,35 @@ func TestOneBotChannelsDispatchRequestEvents(t *testing.T) {
 	}
 }
 
-func TestRuntimePersistsRequestAndNotifiesOwnerOnce(t *testing.T) {
+func TestRuntimePersistsGroupRequestsWithoutNotifyingOwner(t *testing.T) {
+	for _, subType := range []string{"add", "invite"} {
+		t.Run(subType, func(t *testing.T) {
+			store := &memoryOneBotRequestStore{}
+			channel := &recordingChannel{}
+			runtime := NewRuntime(BotConfig{
+				ID: "bot-1", Platform: PlatformOneBotV11, BotAccount: "42", OwnerID: "owner",
+			}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+			runtime.SetOneBotRequestStore(store)
+			event := messageEventFromEnvelope(oneBotEnvelope{
+				Time: 123, SelfID: "42", PostType: "request", RequestType: "group", SubType: subType,
+				UserID: "10001", GroupID: "20002", Flag: "flag-1",
+			})
+			for i := 0; i < 2; i++ {
+				if err := runtime.HandleEvent(context.Background(), event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(store.items) != 1 || store.items[0].Status != OneBotRequestPending {
+				t.Fatalf("stored requests = %#v", store.items)
+			}
+			if sent := channel.sentSnapshot(); len(sent) != 0 {
+				t.Fatalf("unexpected owner notification = %#v", sent)
+			}
+		})
+	}
+}
+
+func TestRuntimePersistsFriendRequestAndNotifiesOwnerOnce(t *testing.T) {
 	store := &memoryOneBotRequestStore{}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
@@ -144,8 +172,8 @@ func TestRuntimePersistsRequestAndNotifiesOwnerOnce(t *testing.T) {
 	}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetOneBotRequestStore(store)
 	event := messageEventFromEnvelope(oneBotEnvelope{
-		Time: 123, SelfID: "42", PostType: "request", RequestType: "group", SubType: "invite",
-		UserID: "10001", GroupID: "20002", Comment: "邀请加入", Flag: "flag-1",
+		Time: 123, SelfID: "42", PostType: "request", RequestType: "friend",
+		UserID: "10001", Flag: "flag-1",
 	})
 	if err := runtime.HandleEvent(context.Background(), event); err != nil {
 		t.Fatal(err)
@@ -157,7 +185,7 @@ func TestRuntimePersistsRequestAndNotifiesOwnerOnce(t *testing.T) {
 		t.Fatalf("stored requests = %#v", store.items)
 	}
 	sent := channel.sentSnapshot()
-	if len(sent) != 1 || sent[0].UserID != "owner" || !strings.Contains(sent[0].Text, "机器人群邀请") || !strings.Contains(sent[0].Text, "request-1") {
+	if len(sent) != 1 || sent[0].UserID != "owner" || !strings.Contains(sent[0].Text, "好友请求") || !strings.Contains(sent[0].Text, "request-1") {
 		t.Fatalf("owner notification = %#v", sent)
 	}
 	if strings.Contains(sent[0].Text, "flag-1") {

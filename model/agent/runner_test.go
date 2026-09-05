@@ -315,32 +315,23 @@ func TestRunnerFailsWithEmptyFinalizeAfterRepairsExhausted(t *testing.T) {
 	}
 }
 
-func TestRunnerRepairsFinalThatDefersAvailableTool(t *testing.T) {
+// 最终答复的正文不再被扫描：模型说「接下来我会查询」也按它的原话发出去，不退回去
+// 修。判断一句话是不是在承诺调工具是语义问题，正则只认得固定句式，误中误漏都有。
+func TestRunnerDoesNotRepairFinalByScanningItsText(t *testing.T) {
 	tool := &countingTool{name: "lookup"}
 	client := &scriptedClient{responses: []string{
-		`{"action":"final","content":"我已经接上上下文了；下一步应直接联网查询，不该再把问题踢回给你。"}`,
-		`{"action":"tool","tool":"lookup","input":{"query":"当前版本"}}`,
-		`{"action":"final","content":"查到了：这是当前结果。"}`,
+		`{"action":"final","content":"接下来我会调用你给的那个比喻来解释一下这道题。"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry(tool))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "那你再来一次"}}})
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "换个说法讲讲"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Text != "查到了：这是当前结果。" || tool.calls != 1 || len(resp.Steps) != 1 || len(client.requests) != 3 {
+	if resp.Text != "接下来我会调用你给的那个比喻来解释一下这道题。" || tool.calls != 0 || len(client.requests) != 1 {
 		t.Fatalf("resp=%#v tool.calls=%d requests=%d", resp, tool.calls, len(client.requests))
-	}
-}
-
-func TestFinalToolCommitmentDoesNotMistakeUserInstructions(t *testing.T) {
-	if finalDefersAvailableTool("下一步你可以查询设置页里的运行状态。") {
-		t.Fatal("instruction to the user should not be treated as an agent tool commitment")
-	}
-	if !finalDefersAvailableTool("接下来我会调用搜索工具核对。") {
-		t.Fatal("agent tool commitment was not detected")
 	}
 }
 

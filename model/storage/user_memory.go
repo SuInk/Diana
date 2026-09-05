@@ -82,7 +82,7 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if !update.Administrative {
 		profile.MessageCount++
 		profile.LastSeenAt = userMemoryEventTime(event)
-		if item, ok := userMemoryItemFromEvent(event); ok {
+		if item, ok := userMemoryItemFromEvent(event, s.userMemoryNameResolver(ctx, botProfileID)); ok {
 			profile.Memories = appendUserMemory(profile.Memories, item)
 		}
 	}
@@ -201,10 +201,38 @@ func favorabilityChangeRequested(update assistant.UserMemoryUpdate) bool {
 	return update.SetFavorability != nil || update.FavorabilityDelta != 0
 }
 
+// userMemorySortColumns 是人员列表允许的排序键，值直接拼进 SQL，所以只认这张表
+// 里的写法，控制台传别的一律回落到默认排序。
+var userMemorySortColumns = map[string]string{
+	"updated":      "updated_at",
+	"last_seen":    "NULLIF(last_seen_at, '')",
+	"favorability": "favorability",
+	"messages":     "message_count",
+}
+
+// NormalizeUserMemorySort 把控制台传来的排序参数收敛到受支持的取值，非法值回落
+// 到「最近更新 · 倒序」。
+func NormalizeUserMemorySort(sort, order string) (string, string) {
+	sort = strings.ToLower(strings.TrimSpace(sort))
+	if _, ok := userMemorySortColumns[sort]; !ok {
+		sort = "updated"
+	}
+	if strings.EqualFold(strings.TrimSpace(order), "asc") {
+		return sort, "asc"
+	}
+	return sort, "desc"
+}
+
 // ListUserMemories returns long-term user profiles ordered by most recently
 // updated. query filters by user ID or display name; the second return value
 // is the total row count matching the same filter.
 func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
+	return s.ListUserMemoriesSorted(ctx, botProfileID, query, "", "", limit, offset)
+}
+
+// ListUserMemoriesSorted 是带排序的列表查询：sort 取 NormalizeUserMemorySort 认
+// 的键，order 取 asc/desc，两者留空等于「最近更新 · 倒序」。
+func (s *SQLiteStore) ListUserMemoriesSorted(ctx context.Context, botProfileID, query, sort, order string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
 	if s == nil || s.db == nil {
 		return []assistant.UserMemoryProfile{}, 0, nil
 	}
@@ -241,7 +269,7 @@ func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles`+where+`
-ORDER BY updated_at DESC
+ORDER BY `+userMemoryOrderBy(sort, order)+`
 LIMIT ? OFFSET ?
 `, append(args, limit, offset)...)
 	if err != nil {
@@ -275,6 +303,18 @@ LIMIT ? OFFSET ?
 		profiles = append(profiles, profile)
 	}
 	return profiles, total, rows.Err()
+}
+
+// userMemoryOrderBy 拼出 ORDER BY 子句：没值的活跃时间永远排在最后，正序时也不
+// 该顶到最前；末尾按 user_id 兜底，分数相同的人翻页时顺序才不会抖。
+func userMemoryOrderBy(sort, order string) string {
+	sort, order = NormalizeUserMemorySort(sort, order)
+	column := userMemorySortColumns[sort]
+	direction := "DESC"
+	if order == "asc" {
+		direction = "ASC"
+	}
+	return column + " IS NULL, " + column + " " + direction + ", user_id ASC"
 }
 
 func escapeUserMemoryLike(value string) string {
@@ -385,8 +425,8 @@ func userMemoryEventTime(event assistant.MessageEvent) time.Time {
 	return time.Now().UTC()
 }
 
-func userMemoryItemFromEvent(event assistant.MessageEvent) (assistant.UserMemoryItem, bool) {
-	text := userMemoryEventText(event)
+func userMemoryItemFromEvent(event assistant.MessageEvent, resolve assistant.AtMentionNameResolver) (assistant.UserMemoryItem, bool) {
+	text := assistant.DisplayEventText(event, resolve)
 	if !usefulUserMemoryText(text) {
 		return assistant.UserMemoryItem{}, false
 	}
@@ -399,12 +439,46 @@ func userMemoryItemFromEvent(event assistant.MessageEvent) (assistant.UserMemory
 	}, true
 }
 
-func userMemoryEventText(event assistant.MessageEvent) string {
-	text := strings.TrimSpace(assistant.PlainText(event.Segments))
-	if text == "" {
-		text = strings.TrimSpace(event.RawMessage)
+// userMemoryNameResolver 从已有档案里查昵称，给「最近发言」里光秃秃的 @号码 补上
+// 名字。只查本地 user_profiles：这是给人看的展示文本，为它去平台拉一次昵称不值当，
+// 查不到就照旧显示号码。
+//
+// 一条消息里 at 通常只有一两个，但同一个号可能被 at 多次，所以带一层记忆化。返回的
+// 闭包只在这一次写入里用，不跨消息缓存——昵称会改。
+func (s *SQLiteStore) userMemoryNameResolver(ctx context.Context, botProfileID string) assistant.AtMentionNameResolver {
+	if s == nil || s.db == nil {
+		return nil
 	}
-	return strings.Join(strings.Fields(text), " ")
+	cache := map[string]string{}
+	scopeCondition, scopeArgs := userProfileScopeCondition(botProfileID)
+	return func(userID string) string {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			return ""
+		}
+		if name, known := cache[userID]; known {
+			return name
+		}
+		var displayName sql.NullString
+		err := s.db.QueryRowContext(ctx, `
+SELECT display_name
+FROM user_profiles
+WHERE user_id = ?`+scopeCondition+`
+ORDER BY updated_at DESC
+LIMIT 1
+`, append([]any{userID}, scopeArgs...)...).Scan(&displayName)
+		name := strings.TrimSpace(displayName.String)
+		if err != nil {
+			name = ""
+		}
+		// 没拿到昵称的档案会把 DisplayName 退化成账号本身，照这个渲染会写出
+		// 「@10002（10002）」这种重复。当成查不到处理。
+		if name == userID {
+			name = ""
+		}
+		cache[userID] = name
+		return name
+	}
 }
 
 func usefulUserMemoryText(text string) bool {

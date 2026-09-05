@@ -476,7 +476,9 @@ func TestSemanticReferenceFindsPersistedImageBeyondShortContext(t *testing.T) {
 		t.Fatalf("routing requests = %d", len(provider.requests))
 	}
 	prompt := provider.requests[0].Messages[1].Content
-	for _, want := range []string{`"message_id":"target-image"`, `"semantic_source_message_id":"target-image"`, `"is_error_wrapper":true`, "我把图片发出来了"} {
+	// 引用的那条报错原文照样进候选：是不是「只是一条错误提示」由模型读 text 判断，
+	// 代码不再按前缀替它打标。
+	for _, want := range []string{`"message_id":"target-image"`, `"semantic_source_message_id":"target-image"`, `"is_bot_message":true`, "出错了：请求处理超时", "我把图片发出来了"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("routing prompt missing %q: %s", want, prompt)
 		}

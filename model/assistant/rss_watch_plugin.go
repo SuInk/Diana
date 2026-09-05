@@ -28,16 +28,15 @@ import (
 const (
 	rssWatchPluginID = "official.rss-watch"
 
-	rssWatchSettingTwitterTemplate = "twitter_rss_template"
-	rssWatchSettingTimeout         = "timeout_seconds"
-	rssWatchSettingItemLimit       = "judge_item_limit"
+	rssWatchSettingTimeout   = "timeout_seconds"
+	rssWatchSettingItemLimit = "judge_item_limit"
 
-	// Twitter 订阅默认直接走 FxTwitter 的公开时间线接口，不需要任何额外部署。
+	// Twitter 订阅直接走 FxTwitter 的公开时间线接口，不需要任何额外部署。
 	// 这和链接解析抓单条推文用的是同一个上游，只是换成 v2 的 profile 路由。
-	// 公共 RSSHub 已经不再提供 X/Twitter 路由（所有请求 302 到 google.com/404），
-	// 所以它不能再当默认值；自建 RSSHub 仍可通过模板设置覆盖。
+	// 以前这里还有一个「Twitter RSS 模板」设置项，默认能用之后它就只剩下被填错
+	// 的份（公共 RSSHub 早已下线 X/Twitter 路由），所以整个删掉：想换别的来源，
+	// 直接把那个来源的 Feed 地址当普通 RSS 订阅填进去就行。
 	defaultTwitterStatusesAPI = "https://api.fxtwitter.com/2/profile/{handle}/statuses"
-	exampleTwitterRSSTemplate = "https://rss.example.com/twitter/user/{handle}"
 	maximumRSSBodyBytes       = 4 << 20
 )
 
@@ -84,18 +83,12 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          rssWatchPluginID,
 		Name:        "RSS 订阅",
-		Version:     "0.1.0",
-		Description: "订阅 RSS/Atom 或指定 X (Twitter) 用户；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
+		Version:     "0.2.0",
+		Description: "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；发现新内容后由 LLM 判断是否需要通知，并生成实际回复。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:https", "task:persistent", "message:send", "llm:generate"},
 		Settings: []PluginSettingSpec{
-			{
-				Key:         rssWatchSettingTwitterTemplate,
-				Label:       "Twitter RSS 模板",
-				Description: "留空即可：默认直接读取 X 的公开时间线，不需要额外部署。只有想改用自建 RSSHub 等其他来源时才填，把 {handle} 替换为用户名，例如 " + exampleTwitterRSSTemplate + "。公共 RSSHub 实例已不再提供 X/Twitter 路由，不要填它。",
-				Type:        PluginSettingTypeString,
-			},
 			{
 				Key:         rssWatchSettingTimeout,
 				Label:       "抓取超时",
@@ -141,19 +134,12 @@ func normalizeTwitterHandle(raw string) (string, error) {
 	return raw, nil
 }
 
-func twitterFeedURL(handle string, settings SettingValues) (string, error) {
+func twitterFeedURL(handle string) (string, error) {
 	handle, err := normalizeTwitterHandle(handle)
 	if err != nil {
 		return "", err
 	}
-	template := strings.TrimSpace(settings.String(rssWatchSettingTwitterTemplate, ""))
-	if template == "" {
-		template = defaultTwitterStatusesAPI
-	}
-	if !strings.Contains(template, "{handle}") {
-		return "", fmt.Errorf("Twitter RSS 模板必须包含 {handle}")
-	}
-	raw := strings.ReplaceAll(template, "{handle}", url.PathEscape(handle))
+	raw := strings.ReplaceAll(defaultTwitterStatusesAPI, "{handle}", url.PathEscape(handle))
 	return normalizeRSSURL(raw)
 }
 
@@ -242,7 +228,7 @@ func feedFetchStatusError(requestedURL string, resp *http.Response) error {
 		if redirectedOffHost(requestedURL, resp) {
 			hint = "：整条路由已被上游下线（请求被重定向到了别的站点），换用户名或重试都不会生效"
 			if isPublicRSSHubHost(requestedURL) {
-				hint = "：公共 RSSHub 实例已经不再提供 X/Twitter 路由，请在插件设置里把「Twitter RSS 模板」改成自建 RSSHub 或其他可用的 Feed 地址"
+				hint = "：公共 RSSHub 实例已经不再提供 X/Twitter 路由，请改成按 Twitter 用户订阅（默认直接读 X 的公开时间线），或换成自建 RSSHub 等仍然可用的 Feed 地址"
 			}
 		} else {
 			hint = "：确认用户名或 Feed 地址是否正确"
