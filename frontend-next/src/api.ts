@@ -1786,6 +1786,10 @@ export function getAssistantEventTrace(eventID: string): Promise<AssistantEventT
   return requestJSON<AssistantEventTraceResponse>(`/api/assistant/events/${encodeURIComponent(eventID)}/trace`);
 }
 
+/**
+ * 一条原始发言缓冲。它不是长期记忆：入库时没有模型参与，只按「至少两个字」过滤，
+ * 每人只留最近 20 条。控制台按「最近发言」显示，只给排查用。
+ */
 export interface UserMemoryItem {
   text: string;
   source?: string;
@@ -1827,11 +1831,14 @@ export interface UserMemoryProfile {
   display_name?: string;
   favorability: number;
   message_count: number;
+  /** 原始发言缓冲，不是长期记忆；见 UserMemoryItem。 */
   memories?: UserMemoryItem[];
   portrait?: UserPortraitTrait[];
   romance?: UserRomanceState;
-  /** 列表接口不带记忆和画像正文，只带条数；详情接口带完整内容。 */
+  /** 列表接口不带正文，只带条数；详情接口带完整内容。 */
   memory_count?: number;
+  /** 门控器写出来的长期记忆条数，和 memory_count 不是一回事。 */
+  structured_memory_count?: number;
   portrait_count?: number;
   last_seen_at?: string;
   updated_at?: string;
@@ -1859,10 +1866,41 @@ export interface AssistantUsersResponse {
   offset: number;
 }
 
+/**
+ * 门控器筛出来的一条长期记忆。和 UserMemoryItem 的区别是它由模型判定值不值得记、
+ * 带主题和置信度、按相关性被检索进提示词。
+ */
+export interface UserStructuredMemory {
+  id: string;
+  subject_user_id?: string;
+  subject_name?: string;
+  key: string;
+  kind: string;
+  topic: string;
+  entity?: string;
+  content: string;
+  evidence?: string;
+  source_type: string;
+  source_group_id?: string;
+  source_message_id?: string;
+  source_event_time?: string;
+  confidence: number;
+  importance: number;
+  visibility: string;
+  sensitive: boolean;
+  expires_at?: string;
+  last_verified_at?: string;
+  version: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AssistantUserDetailResponse {
   profile: UserMemoryProfile;
   favorability_changes: UserFavorabilityChange[];
   portrait_fields: PortraitFieldSpec[];
+  structured_memories: UserStructuredMemory[];
 }
 
 export function listAssistantUsers(query = "", limit = 50, offset = 0, profile = ""): Promise<AssistantUsersResponse> {
