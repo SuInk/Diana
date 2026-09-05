@@ -24,6 +24,33 @@
           </div>
           <button class="btn ghost small" type="button" :disabled="loading" @click="search">搜索</button>
           <span class="muted" style="font-size: 12.5px">共 {{ total }} 人</span>
+
+          <div class="cluster user-sort">
+            <div class="segmented" role="radiogroup" aria-label="人员列表排序">
+              <button
+                v-for="option in SORT_OPTIONS"
+                :key="option.value"
+                type="button"
+                role="radio"
+                :aria-checked="sortBy === option.value"
+                :class="{ active: sortBy === option.value }"
+                :disabled="loading"
+                @click="selectSort(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <button
+              class="btn ghost small"
+              type="button"
+              :disabled="loading"
+              :aria-label="order === 'desc' ? '当前从大到小，点击改为从小到大' : '当前从小到大，点击改为从大到小'"
+              @click="toggleOrder"
+            >
+              <component :is="order === 'desc' ? ChevronDown : ChevronUp" :size="14" aria-hidden="true" />
+              {{ order === "desc" ? "降序" : "升序" }}
+            </button>
+          </div>
         </div>
 
         <div v-if="users.length > 0">
@@ -188,11 +215,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { botScope } from "../bot-scope";
-import { ChevronDown, ChevronRight, RefreshCw } from "@lucide/vue";
+import { ChevronDown, ChevronRight, ChevronUp, RefreshCw } from "@lucide/vue";
 import {
   getAssistantUser,
   listAssistantUsers,
   type AssistantUserDetailResponse,
+  type AssistantUsersOrder,
+  type AssistantUsersSort,
   type UserMemoryProfile,
   type UserPortraitTrait,
   type UserStructuredMemory
@@ -203,12 +232,21 @@ import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 
 const PAGE_SIZE = 50;
+// 排序交给后端做：列表是分页的，只排当前这一页等于排了个假的。
+const SORT_OPTIONS: { value: AssistantUsersSort; label: string }[] = [
+  { value: "updated", label: "最近更新" },
+  { value: "last_seen", label: "最近活跃" },
+  { value: "favorability", label: "好感度" },
+  { value: "messages", label: "消息数" }
+];
 
 const users = ref<UserMemoryProfile[]>([]);
 const total = ref(0);
 const query = ref("");
 const activeQuery = ref("");
 const loading = ref(false);
+const sortBy = ref<AssistantUsersSort>("updated");
+const order = ref<AssistantUsersOrder>("desc");
 const selected = ref<UserMemoryProfile | null>(null);
 const detail = ref<AssistantUserDetailResponse | null>(null);
 const detailLoading = ref(false);
@@ -243,7 +281,7 @@ const detailTitle = computed(() => {
 async function fetchUsers(offset: number): Promise<void> {
   loading.value = true;
   try {
-    const response = await listAssistantUsers(activeQuery.value, PAGE_SIZE, offset, botScope.value);
+    const response = await listAssistantUsers(activeQuery.value, PAGE_SIZE, offset, botScope.value, sortBy.value, order.value);
     users.value = offset === 0 ? response.users : [...users.value, ...response.users];
     total.value = response.total;
   } catch (error) {
@@ -259,6 +297,17 @@ function reload(): void {
 
 function search(): void {
   activeQuery.value = query.value.trim();
+  void fetchUsers(0);
+}
+
+function selectSort(value: AssistantUsersSort): void {
+  if (sortBy.value === value) return;
+  sortBy.value = value;
+  void fetchUsers(0);
+}
+
+function toggleOrder(): void {
+  order.value = order.value === "desc" ? "asc" : "desc";
   void fetchUsers(0);
 }
 
@@ -334,6 +383,33 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* 排序控件靠右站在搜索框那一行；窄屏放不下就整块换行占满，标签始终保持单行，
+   不能被挤成一列竖排的字。 */
+.user-sort {
+  margin-left: auto;
+}
+
+.user-sort .segmented {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.user-sort .segmented::-webkit-scrollbar {
+  display: none;
+}
+
+.user-sort .segmented button {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .user-sort {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
 .user-row {
   display: flex;
   align-items: center;

@@ -113,7 +113,7 @@ const (
 
 	promptTaskReminder = "用户要求过一段时间提醒一次时，调用 diana.reminder 并传 delay；用户指定今晚七点、明天下午三点等绝对时间点时传 at（RFC3339），不要把绝对时间换算成 delay；取消或删除单项提醒也用它。"
 	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知时，调用 diana.schedule；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控不走这个工具。"
-	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 diana.rss，judge_prompt 里写清通知条件和回复要求。"
+	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 diana.rss，judge_prompt 里写清通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
 	promptTaskList     = "查询当前用户的全部提醒和订阅时，必须调用 diana.tasks。"
 	// 订阅是配置，不是记忆：口头答应「以后合并了告诉你」，重启后什么都不剩。
 	promptTaskRepositoryWatch = "用户要求订阅某个 GitHub 仓库的更新，或要改、暂停、删除已有的仓库订阅（包括只收 PR/Issue 的某几种动态、换分支、改检查间隔）时，调用 diana.repository_watch，不要口头答应。"
