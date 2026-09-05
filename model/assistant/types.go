@@ -465,11 +465,12 @@ type BotConfig struct {
 	// 群消息可能是十几 token 的表情占位，也可能是三千 token 的长粘贴——按条数配，
 	// 实际开销会在一个数量级的区间里飘。RecentContextLimit 仍按条数配，因为它管的
 	// 是路由、指代和记忆门控这些「往回数 N 条」的旁路，那里条数才是对的单位。
-	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold  int   `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled    *bool `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled  *bool `json:"cross_group_memory_enabled,omitempty"`
+	RecentHistoryTokenBudget   int64 `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit         int   `json:"recent_context_limit,omitempty"`
+	ContextSummaryThreshold    int   `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled      *bool `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled    *bool `json:"cross_group_memory_enabled,omitempty"`
+	CrossPlatformMemoryEnabled *bool `json:"cross_platform_memory_enabled,omitempty"`
 	// WorldBookEnabled 控制这台机器人要不要带上世界书（世界观设定库）。树是
 	// 全局一棵，这里只决定用不用；树是空的时候开着也不注入任何内容，所以默认开。
 	WorldBookEnabled *bool `json:"world_book_enabled,omitempty"`
@@ -774,6 +775,7 @@ type ConfigPayload struct {
 	ContextSummaryThreshold         int         `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled           *bool       `json:"long_term_memory_enabled,omitempty"`
 	CrossGroupMemoryEnabled         *bool       `json:"cross_group_memory_enabled,omitempty"`
+	CrossPlatformMemoryEnabled      *bool       `json:"cross_platform_memory_enabled,omitempty"`
 	WorldBookEnabled                *bool       `json:"world_book_enabled,omitempty"`
 	RomanceEnabled                  *bool       `json:"romance_enabled,omitempty"`
 	MoodEnabled                     *bool       `json:"mood_enabled,omitempty"`
@@ -1294,25 +1296,26 @@ func DefaultBotConfig() BotConfig {
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
-		RecentContextLimit:        40,
-		ContextSummaryThreshold:   100,
-		LongTermMemoryEnabled:     boolPointer(true),
-		CrossGroupMemoryEnabled:   boolPointer(false),
-		WorldBookEnabled:          boolPointer(true),
-		RomanceEnabled:            boolPointer(false),
-		MoodEnabled:               boolPointer(false),
-		PokeReplyEnabled:          boolPointer(false),
-		ExpressionLearningEnabled: boolPointer(false),
-		DictSegmentEnabled:        boolPointer(false),
-		SemanticSearchEnabled:     boolPointer(false),
-		ProactiveReplyChance:      defaultProactiveReplyChance,
-		ProactiveReplyThreshold:   defaultProactiveReplyThreshold,
-		ReplyRules:                []ReplyRule{},
-		MaxBotConcurrency:         8,
-		RequestTimeout:            180 * time.Second,
-		AgentEnabled:              true,
-		AgentMaxSteps:             agent.DefaultMaxSteps,
-		AgentSkillRoots:           []string{},
+		RecentContextLimit:         40,
+		ContextSummaryThreshold:    100,
+		LongTermMemoryEnabled:      boolPointer(true),
+		CrossGroupMemoryEnabled:    boolPointer(false),
+		CrossPlatformMemoryEnabled: boolPointer(false),
+		WorldBookEnabled:           boolPointer(true),
+		RomanceEnabled:             boolPointer(false),
+		MoodEnabled:                boolPointer(false),
+		PokeReplyEnabled:           boolPointer(false),
+		ExpressionLearningEnabled:  boolPointer(false),
+		DictSegmentEnabled:         boolPointer(false),
+		SemanticSearchEnabled:      boolPointer(false),
+		ProactiveReplyChance:       defaultProactiveReplyChance,
+		ProactiveReplyThreshold:    defaultProactiveReplyThreshold,
+		ReplyRules:                 []ReplyRule{},
+		MaxBotConcurrency:          8,
+		RequestTimeout:             180 * time.Second,
+		AgentEnabled:               true,
+		AgentMaxSteps:              agent.DefaultMaxSteps,
+		AgentSkillRoots:            []string{},
 		// 新建配置直接带上一组只读诊断命令，装完就能用。
 		//
 		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
@@ -1515,6 +1518,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
+	}
+	if cfg.CrossPlatformMemoryEnabled == nil {
+		cfg.CrossPlatformMemoryEnabled = boolPointer(false)
 	}
 	if cfg.WorldBookEnabled == nil {
 		cfg.WorldBookEnabled = boolPointer(true)
@@ -1774,6 +1780,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ContextSummaryThreshold:           cfg.ContextSummaryThreshold,
 		LongTermMemoryEnabled:             copyBoolPointer(cfg.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
+		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
@@ -1950,6 +1957,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ContextSummaryThreshold:         payload.ContextSummaryThreshold,
 		LongTermMemoryEnabled:           copyBoolPointer(payload.LongTermMemoryEnabled),
 		CrossGroupMemoryEnabled:         copyBoolPointer(payload.CrossGroupMemoryEnabled),
+		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),

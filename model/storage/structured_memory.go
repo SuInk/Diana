@@ -175,7 +175,7 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 		}
 		scopeKey := request.Session
 		if candidate.Visibility == assistant.MemoryVisibilityUser {
-			scopeKey = "user:" + strings.TrimSpace(request.SubjectUserID)
+			scopeKey = memorySessionNamespace(request.Session) + "user:" + strings.TrimSpace(request.SubjectUserID)
 		}
 		key := candidate.Key
 		if candidate.Kind == assistant.MemoryKindEpisode && candidate.Action == assistant.MemoryActionUpsert {
@@ -192,6 +192,17 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 		active, found, err := findActiveMemory(ctx, tx, scopeKey, request.SubjectUserID, key)
 		if err != nil {
 			return nil, err
+		}
+		// Older user memories used a global key. Keep update/forget working only
+		// for their original namespace, never for a same-ID user elsewhere.
+		if !found && candidate.Visibility == assistant.MemoryVisibilityUser && memorySessionNamespace(request.Session) != "" {
+			legacy, exists, err := findActiveMemory(ctx, tx, "user:"+strings.TrimSpace(request.SubjectUserID), request.SubjectUserID, key)
+			if err != nil {
+				return nil, err
+			}
+			if exists && memorySessionNamespace(legacy.SourceSession) == memorySessionNamespace(request.Session) {
+				active, found = legacy, true
+			}
 		}
 		if candidate.Action == assistant.MemoryActionForget {
 			if !found {
@@ -306,18 +317,43 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 	args := []any{now.Unix(), strings.TrimSpace(query.Session)}
 	scopeClause := `scope_key = ?`
 	if !query.CurrentSessionOnly {
-		scopeClause = `(` + scopeClause + ` OR (subject_user_id = ? AND visibility = 'user'))`
-		args = append(args, subjectUserID)
+		scopeClause = `(` + scopeClause + ` OR (subject_user_id = ? AND visibility = 'user'
+			AND (source_session LIKE ? ESCAPE '\' OR source_session LIKE ? ESCAPE '\')))`
+		prefix := memorySessionNamespace(query.Session)
+		args = append(args, subjectUserID, escapeMessageHistoryLike(prefix+"group:")+"%", escapeMessageHistoryLike(prefix+"private:")+"%")
 	}
 	if query.CrossGroup && strings.TrimSpace(query.GroupSessionPrefix) != "" {
 		scopeClause = `(` + scopeClause + ` OR (
 		visibility = 'session' AND sensitive = 0 AND COALESCE(source_group_id, '') != ''
 		AND source_session LIKE ? ESCAPE '\'
-		AND (subject_user_id = '' OR subject_user_id = ?)
+		AND ((subject_user_id = '' AND kind IN ('fact', 'summary')) OR (subject_user_id != '' AND subject_user_id = ?))
 	))`
 		args = append(args, escapeMessageHistoryLike(strings.TrimSpace(query.GroupSessionPrefix))+"%", subjectUserID)
 	}
 	kindClause := ""
+	if len(query.CrossPlatformGroupPrefixes) > 0 {
+		var namespaces []string
+		for _, prefix := range query.CrossPlatformGroupPrefixes {
+			prefix = strings.TrimSpace(prefix)
+			if prefix == "" || prefix == "group:" || !strings.HasSuffix(prefix, ":group:") {
+				continue
+			}
+			namespaces = append(namespaces, `source_session LIKE ? ESCAPE '\'`)
+			args = append(args, escapeMessageHistoryLike(prefix)+"%")
+		}
+		if len(namespaces) > 0 {
+			scopeClause = `(` + scopeClause + ` OR (
+				visibility = 'session' AND sensitive = 0 AND COALESCE(subject_user_id, '') = ''
+				AND COALESCE(source_group_id, '') != '' AND kind IN ('fact', 'summary')
+				AND (` + strings.Join(namespaces, " OR ") + `)
+			))`
+		}
+	}
+	if query.SharedPublicOnly {
+		publicClause, publicArgs := sharedPublicMemoryScope(query)
+		scopeClause = publicClause
+		args = append([]any{now.Unix()}, publicArgs...)
+	}
 	if len(query.Kinds) > 0 {
 		placeholders := make([]string, 0, len(query.Kinds))
 		for _, kind := range query.Kinds {
@@ -335,6 +371,42 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 		kindClause += " AND kind NOT IN (" + strings.Join(placeholders, ",") + ")"
 	}
 	searchTerms := query.SearchTerms
+	if len(query.IDs) > 0 {
+		ids := query.IDs
+		if len(ids) > 20 {
+			ids = ids[:20]
+		}
+		kindClause += " AND id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, strings.TrimSpace(id))
+		}
+	}
+	if len(query.RelatedEntities) > 0 || len(query.RelatedTopics) > 0 {
+		var links []string
+		for _, field := range []struct {
+			name   string
+			values []string
+		}{{"entity", query.RelatedEntities}, {"topic", query.RelatedTopics}} {
+			for _, value := range field.values {
+				value = strings.TrimSpace(value)
+				if len([]rune(value)) < 2 || len([]rune(value)) > 80 {
+					continue
+				}
+				links = append(links, "LOWER(TRIM("+field.name+")) = ?")
+				args = append(args, strings.ToLower(value))
+				if len(links) >= 6 {
+					break
+				}
+			}
+			if len(links) >= 6 {
+				break
+			}
+		}
+		if len(links) == 0 {
+			return nil, nil
+		}
+		kindClause += " AND sensitive = 0 AND COALESCE(subject_user_id, '') = '' AND visibility = 'session' AND COALESCE(source_group_id, '') != '' AND kind IN ('fact', 'summary') AND (" + strings.Join(links, " OR ") + ")"
+	}
 	if len(searchTerms) == 0 && strings.TrimSpace(query.Text) != "" {
 		searchTerms = strings.Fields(strings.ToLower(query.Text))
 		if len(searchTerms) == 0 {

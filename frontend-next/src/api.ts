@@ -276,6 +276,7 @@ export interface BotProfileConfig {
   long_term_memory_enabled?: boolean;
   /** 允许在同一机器人下检索其他群的非敏感记忆和聊天历史；缺省关闭。 */
   cross_group_memory_enabled?: boolean;
+  cross_platform_memory_enabled?: boolean;
   /** 这台机器人要不要带上世界书（世界观设定库）；缺省开启，树为空时开着也不注入。 */
   world_book_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */

@@ -136,6 +136,10 @@ func (s *SQLiteStore) SearchMessageEventsByVector(ctx context.Context, query ass
 		where += ` AND e.session = ?`
 		args = append(args, query.Session)
 	}
+	if strings.TrimSpace(query.ExcludeSession) != "" {
+		where += ` AND e.session != ?`
+		args = append(args, strings.TrimSpace(query.ExcludeSession))
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT e.payload, v.vector
 FROM `+messageHistoryVectorTable+` AS v
@@ -159,7 +163,7 @@ WHERE `+where, args...)
 			return nil, err
 		}
 		score := dotMessageVectors(queryVector, decodeMessageVector(blob))
-		if score <= 0 {
+		if score <= 0 || score < query.MinSimilarity {
 			continue
 		}
 		hits = append(hits, scored{payload: payload, score: score})
