@@ -546,6 +546,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
 
   if (path === "/api/assistant/platforms") return json({ platforms });
+  if (path === "/api/assistant/agent-defaults")
+    return json({
+      agent_command_allowlist: ["uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"],
+      agent_file_write_enabled: true,
+      agent_command_sandbox: "auto",
+      agent_max_steps: 8,
+      agent_command_timeout_ms: 10000
+    });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
   if (path === "/api/assistant/config" && method === "POST") {
     const incoming = body as unknown as BotProfileConfig;

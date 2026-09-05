@@ -232,7 +232,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
         </tbody></table></div>
         <p>新建的机器人装完即可用：写入默认打开（锁在数据目录下的 <code>workspace</code> 内，碰不到配置和数据库），命令白名单预置一组只报状态、不碰数据的命令——<code>uptime</code>、<code>free</code>、<code>df</code>、<code>uname</code>、<code>nproc</code>、<code>date</code>、<code>hostname</code>、<code>whoami</code>。</p>
         <p>收进这份默认白名单的标准有三条，缺一不可：不读任意路径的文件、不出网、不改任何东西。因为没有可用沙盒时，白名单里的程序就是以 Diana 自己的进程权限直接跑的——白名单只管得到「能不能跑」，管不到「能碰什么」。所以 <code>cat</code>、<code>ls</code>、<code>find</code>（能读任意路径）、<code>curl</code>、<code>wget</code>（能出网）、<code>ps</code>（会带上别的进程的完整命令行，那里面可能有别人的密钥）都被刻意排除；工作目录内的读取用 <code>read_file</code> / <code>grep</code> / <code>find_files</code>，它们锁在 <code>workspace</code> 里。</p>
-        <div class="callout"><strong>默认值只作用于新建配置</strong><p>已经在跑的部署升级后不会凭空多出命令执行和文件写入：当初留空的白名单仍然是空的，关着的写入开关仍然关着。默认值是给新用户的便利，不该变成对存量部署的静默扩权——要开就自己在这一页打开。</p></div>
+        <div class="callout"><strong>默认值只作用于新建配置</strong><p>已经在跑的部署升级后不会凭空多出命令执行和文件写入：当初留空的白名单仍然是空的，关着的写入开关仍然关着。默认值是给新用户的便利，不该变成对存量部署的静默扩权。老部署想要这些能力，用同一张表单上的「填入推荐默认值」把推荐值填进来——它只改表单，点「保存配置」才生效，授权动作是你自己做的。</p></div>
         <p><code>edit_file</code> 的每个替换必须在原文件里唯一命中一处，命中多处或找不到都整批拒绝而不是改错地方；多个替换都按原文件定位，不是依次生效——依次生效会让后一个替换命中前一个刚写进去的内容，而那种改动从调用方的输入上完全看不出来。</p>
         <div class="callout"><strong>身份挡不住提示注入</strong><p>这三档只对主人开放，但「调用发生在主人的会话里」不等于「这次调用是主人要的」：群里其他人的消息和主人的消息在同一个上下文里，模型是读完那些之后才决定调用工具的。所以真正的边界是这里的开关和白名单，而不是身份判断——需要哪一档就开哪一档，不需要的保持关闭。</p></div>
       </section>
