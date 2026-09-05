@@ -23,7 +23,16 @@ import (
 )
 
 func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
+	t.Run("current name", func(t *testing.T) { testReleasePackageUpdaterStagesVerifiedArchive(t, false) })
+	t.Run("legacy name", func(t *testing.T) { testReleasePackageUpdaterStagesVerifiedArchive(t, true) })
+}
+
+func testReleasePackageUpdaterStagesVerifiedArchive(t *testing.T, legacy bool) {
+	t.Helper()
 	assetName := ExpectedReleaseAssetName(runtime.GOOS, runtime.GOARCH)
+	if legacy {
+		assetName = LegacyReleaseAssetName(assetName)
+	}
 	if !strings.HasSuffix(assetName, ".tar.gz") {
 		t.Skip("tar package fixture is for Unix platforms")
 	}

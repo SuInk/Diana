@@ -165,11 +165,30 @@ func (u *ReleasePackageUpdater) endOperation() {
 
 // ExpectedReleaseAssetName returns the complete-package asset for a platform.
 func ExpectedReleaseAssetName(goos, goarch string) string {
-	base := "diana-webui-" + strings.TrimSpace(goos) + "-" + strings.TrimSpace(goarch)
+	packageOS := strings.TrimSpace(goos)
+	if packageOS == "darwin" {
+		packageOS = "macos"
+	}
+	base := "diana-" + packageOS + "-" + strings.TrimSpace(goarch)
 	if goos == "windows" {
 		return base + ".zip"
 	}
 	return base + ".tar.gz"
+}
+
+// LegacyReleaseAssetName is only used to read historical releases. New releases
+// publish one archive per platform, without a second legacy-named asset.
+func LegacyReleaseAssetName(name string) string {
+	for _, platform := range [][2]string{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "amd64"}, {"darwin", "arm64"}, {"windows", "amd64"}} {
+		if name == ExpectedReleaseAssetName(platform[0], platform[1]) {
+			base := "diana-webui-" + platform[0] + "-" + platform[1]
+			if platform[0] == "windows" {
+				return base + ".zip"
+			}
+			return base + ".tar.gz"
+		}
+	}
+	return ""
 }
 
 func expectedReleaseBinaryName(goos, _ string) string {
@@ -393,7 +412,8 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if !releaseTagPattern.MatchString(release.Tag) {
 		return Result{}, fmt.Errorf("updater: invalid release tag %q", release.Tag)
 	}
-	if release.Archive.Name != u.assetName || strings.TrimSpace(release.Archive.URL) == "" {
+	assetName := release.Archive.Name
+	if (assetName != u.assetName && (assetName == "" || assetName != LegacyReleaseAssetName(u.assetName))) || strings.TrimSpace(release.Archive.URL) == "" {
 		return Result{}, fmt.Errorf("%w: %s", ErrReleaseAssetMissing, u.assetName)
 	}
 	if release.Checksums.Name != "SHA256SUMS" || strings.TrimSpace(release.Checksums.URL) == "" {
@@ -443,21 +463,21 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err != nil {
 		return Result{}, err
 	}
-	wantDigest, err := checksumForAsset(manifest, u.assetName)
+	wantDigest, err := checksumForAsset(manifest, assetName)
 	if err != nil {
 		return Result{}, err
 	}
-	archivePath := filepath.Join(workRoot, u.assetName)
+	archivePath := filepath.Join(workRoot, assetName)
 	u.setProgress("downloading", 0, release.Archive.Size)
 	// 包体几十上百 MB，这才是加速真正要救的东西：镜像优先，失败再回落直连。
 	gotDigest, err := downloadReleaseFile(ctx, u.httpClient, archiveSources(release.Archive.URL, mirrorBase), archivePath, maxReleasePackageBytes, func(done, total int64) {
 		u.setProgress("downloading", done, total)
 	})
 	if err != nil {
-		return Result{}, fmt.Errorf("download %s: %w", u.assetName, err)
+		return Result{}, fmt.Errorf("download %s: %w", assetName, err)
 	}
 	if !strings.EqualFold(gotDigest, wantDigest) {
-		return Result{}, fmt.Errorf("%w: %s expected %s, got %s", ErrChecksumMismatch, u.assetName, wantDigest, gotDigest)
+		return Result{}, fmt.Errorf("%w: %s expected %s, got %s", ErrChecksumMismatch, assetName, wantDigest, gotDigest)
 	}
 	archiveSize := release.Archive.Size
 	if info, statErr := os.Stat(archivePath); statErr == nil && archiveSize <= 0 {
@@ -472,7 +492,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err := extractReleaseArchive(archivePath, extractRoot); err != nil {
 		return Result{}, err
 	}
-	packageRoot := filepath.Join(extractRoot, releasePackageDirectory(u.assetName))
+	packageRoot := filepath.Join(extractRoot, releasePackageDirectory(assetName))
 	stagedExecutable := filepath.Join(packageRoot, u.binaryName)
 	stagedFrontend := filepath.Join(packageRoot, "frontend-next", "dist")
 	if !regularFileExists(stagedExecutable) || !regularFileExists(filepath.Join(stagedFrontend, "index.html")) {
@@ -548,7 +568,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		Downloaded:     true,
 		PreviousCommit: u.currentVersion,
 		TargetCommit:   release.Tag,
-		Output:         fmt.Sprintf("Downloaded and verified %s with SHA-256; %s is ready to install.", u.assetName, release.Tag),
+		Output:         fmt.Sprintf("Downloaded and verified %s with SHA-256; %s is ready to install.", assetName, release.Tag),
 		At:             time.Now(),
 	}, nil
 }
