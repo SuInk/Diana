@@ -623,7 +623,7 @@ func TestGroupNaturalSplitInheritanceSurvivesBotChanges(t *testing.T) {
 			if got := boolValue(effective.NaturalReplySplitEnabled, true); got != want {
 				t.Errorf("bot=%v group=%s: natural split=%v, want %v", enabled, groupID, got, want)
 			}
-			chunks := splitChatReply("First thought\nSecond thought", chatSplitLimitsFrom(effective))
+			chunks := splitEventChatReply("First thought\nSecond thought", effective, event)
 			wantChunks := 1
 			if want {
 				wantChunks = 2
