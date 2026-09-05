@@ -180,7 +180,7 @@ const replySegmentationRule = "回复包含多个意群时，在意群边界换�
 // 两边必须说同一件事：关掉之后换行不再分条，提示词却还写着「换行就会分成两三条」，
 // 模型按它排的版就全落空了——分条位置又变回看模型的排版习惯，正是这条链路翻过车的
 // 那个形状。所以这一档只教标记，并明说换行只是排版。
-const replySegmentationMarkerOnlyRule = "要把回复分成几条消息发，只能在边界写 " + notificationSplitMarker + "，换行不会分条、只是同一条消息里的排版。同一段论述、编号或项目符号列表、一组步骤、代码和报错原文都放在同一条消息里，不要在每个列表项前写 " + notificationSplitMarker + "。"
+const replySegmentationMarkerOnlyRule = "要把回复分成几条消息发，只能在边界写 " + notificationSplitMarker + "，换行不会分条、只是同一条消息里的排版。普通聊天的一条消息写成连续的一段，不要每说一句就换行，也不要用换行模拟几条消息的聊天节奏；确实是几次独立发言时，在它们之间写 " + notificationSplitMarker + "。同一段论述不要机械拆碎。编号或项目符号列表、一组步骤、代码和报错原文保留必要的换行，作为一个整体放在同一条消息里，不要在每个列表项前写 " + notificationSplitMarker + "。"
 
 // replyProportionRule 同样对所有风格生效。联网查证过的回答特别容易写成小评测:
 // 背景、口碑、优缺点、结论、末尾再罗列参考链接——群里随口一句「好看吗」换来

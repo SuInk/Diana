@@ -3,10 +3,15 @@ package assistant
 // Only casual interjections suppress inferred splits. Explicit model markers
 // and transport length limits still apply; routed requests use normal settings.
 func splitEventChatReply(reply string, cfg BotConfig, event MessageEvent) []string {
+	return splitChatReply(reply, chatSplitLimitsForEvent(cfg, event))
+}
+
+// Prompt construction and delivery must agree on whether a newline splits.
+func chatSplitLimitsForEvent(cfg BotConfig, event MessageEvent) chatSplitLimits {
 	if event.Kind != EventKindGroup || !event.chatInReply {
-		return splitChatReply(reply, chatSplitLimitsFrom(cfg))
+		return chatSplitLimitsFrom(cfg)
 	}
-	return splitChatReply(reply, chatSplitLimits{ChunkSize: notificationChunkSize, MaxBubbles: 1, MarkerOnly: true})
+	return chatSplitLimits{ChunkSize: notificationChunkSize, MaxBubbles: 1, MarkerOnly: true}
 }
 
 func supportsOneBotGroupTool(cfg BotConfig, event MessageEvent) bool {
