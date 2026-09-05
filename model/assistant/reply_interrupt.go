@@ -150,6 +150,11 @@ func (r *Runtime) noteDirectedInbound(event MessageEvent) {
 // 直接叫我了」。让位之后由直呼那一轮一并回答，pendingEarlierMessage 会让它
 // 明确承接前一条，不会显得前一条被跳过。
 func (r *Runtime) inboundTriggerSuperseded(ctx context.Context, event MessageEvent) bool {
+	// These turns only regenerate for semantically accepted supplements. A new
+	// directed message on another topic must never cancel their pending answer.
+	if _, ok := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext); ok {
+		return false
+	}
 	if event.Kind == EventKindPrivate {
 		return false
 	}
@@ -186,6 +191,7 @@ func (r *Runtime) interruptedReplyError(ctx context.Context, event MessageEvent)
 	// 看不到成功，而随后那一轮会因为草稿已被消费而报告失败，最后呈现为
 	// 「创建成功却提示失败」。
 	if hasExternalSideEffect(ctx) {
+		r.sealDirectReply(ctx)
 		return nil
 	}
 	if r.directReplyHasNewSupplements(ctx) {
