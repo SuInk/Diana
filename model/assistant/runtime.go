@@ -10403,29 +10403,84 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if !enabled || !ok {
 		return startedAt, fmt.Errorf("RSS 与社交订阅插件已停用，无法检查 %s", item.FeedURL)
 	}
-	change, err := plugin.check(ctx, item.FeedURL, item.LastFeedItemID, item.LastFeedPublishedAt, settings)
-	if err != nil {
+	sources := ReminderFeedSources(item)
+	if len(sources) == 0 {
+		return startedAt, fmt.Errorf("RSS 订阅 %s 没有可检查的来源", item.ID)
+	}
+	notices, failures := make([]string, 0, len(sources)), make([]string, 0, len(sources))
+	for index := range sources {
+		if ctx.Err() != nil {
+			break
+		}
+		notice, err := r.checkRSSWatchSource(ctx, item, &sources[index], plugin, settings)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", rssWatchSourceLabel(sources[index]), err))
+			continue
+		}
+		if notice != "" {
+			notices = append(notices, notice)
+		}
+	}
+	// 多个来源命中也只发一条：抬头分段写清是谁，末行留一个订阅 ID。
+	message := ""
+	if len(notices) > 0 {
+		message = strings.Join(notices, "\n\n") + "\n订阅 " + item.ID
+	}
+	if err := r.storeRSSWatchProgress(item.ID, sources, message); err != nil {
 		return startedAt, err
 	}
+	if message == "" {
+		if len(failures) > 0 {
+			return startedAt, errors.New(strings.Join(failures, "；"))
+		}
+		return startedAt, nil
+	}
+	if err := r.sendSubscriberNotice(ctx, source, message); err != nil {
+		return startedAt, err
+	}
+	// 通知已经发出去了，这轮就算成功：再把个别来源的抓取失败当成整轮失败上报，
+	// PendingDelivery 会被留下来，下一轮把同一条内容重发一遍。失败只记进日志。
+	if len(failures) > 0 {
+		r.setError(strings.Join(failures, "；"))
+	}
+	return startedAt, nil
+}
+
+// checkRSSWatchSource 检查单个来源，返回这个来源要发的通知段落（不通知就是空）。
+// 游标只在判断成功后推进：判断失败还推进的话，这批新条目就再也没人看了。
+func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source *ReminderFeedSource, plugin *RSSWatchPlugin, settings SettingValues) (string, error) {
+	change, err := plugin.check(ctx, source.FeedURL, source.LastItemID, source.LastPublishedAt, settings)
+	if err != nil {
+		return "", err
+	}
+	advance := func() {
+		if strings.TrimSpace(change.FeedName) != "" {
+			source.Name = change.FeedName
+		}
+		if change.Snapshot.ItemID != "" {
+			source.LastItemID = change.Snapshot.ItemID
+		}
+		if !change.Snapshot.PublishedAt.IsZero() {
+			source.LastPublishedAt = change.Snapshot.PublishedAt
+		}
+	}
 	if len(change.Items) == 0 {
-		return startedAt, r.storeRSSWatchProgress(item.ID, change.Snapshot, "")
+		advance()
+		return "", nil
 	}
 	decision, err := r.judgeRSSWatch(ctx, item, change)
 	if err != nil {
-		return startedAt, err
+		return "", err
 	}
+	advance()
 	if !decision.Notify {
-		return startedAt, r.storeRSSWatchProgress(item.ID, change.Snapshot, "")
+		return "", nil
 	}
-	message := strings.TrimSpace(decision.Reply)
-	if message == "" {
-		return startedAt, fmt.Errorf("RSS 判断器要求通知，但回复内容为空")
+	reply := strings.TrimSpace(decision.Reply)
+	if reply == "" {
+		return "", fmt.Errorf("RSS 判断器要求通知，但回复内容为空")
 	}
-	message = fmt.Sprintf("%s\n%s\n订阅 %s", rssWatchNoticeHeader(item, change.FeedName), message, item.ID)
-	if err := r.storeRSSWatchProgress(item.ID, change.Snapshot, message); err != nil {
-		return startedAt, err
-	}
-	return startedAt, r.sendSubscriberNotice(ctx, source, message)
+	return rssWatchNoticeHeader(*source, change.FeedName) + "\n" + reply, nil
 }
 
 // rssWatchNoticeHeader 拼通知抬头：这条推送是哪个平台、哪个号来的。
@@ -10433,10 +10488,11 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 // 以前抬头是「RSS 订阅 <ID>：<来源>」，而且单独占一条消息发。三个问题：平台明
 // 明存在 FeedSource 里却没写出来，推特订阅也显示成「RSS 订阅」；订阅 ID 是退订
 // 时才用得上的东西，却顶在最显眼的位置；一条通知拆成两条刷屏。现在平台和账号
-// 放抬头，ID 退到末行，正文接在抬头后面同一条发出。
-func rssWatchNoticeHeader(item Reminder, feedName string) string {
+// 放抬头，ID 退到末行，正文接在抬头后面同一条发出。多来源订阅每段各带一个抬头，
+// 这样一条消息里也分得清哪段是谁发的。
+func rssWatchNoticeHeader(source ReminderFeedSource, feedName string) string {
 	feedName = strings.TrimSpace(feedName)
-	if handle := strings.TrimSpace(item.FeedHandle); item.FeedSource == "twitter" && handle != "" {
+	if handle := strings.TrimSpace(source.Handle); source.Source == "twitter" && handle != "" {
 		mention := "@" + handle
 		// Feed 标题里常常已经带着 @handle（RSSHub、Nitter 的标题格式各不相同），
 		// 带了就不再重复一遍。
@@ -10448,7 +10504,7 @@ func rssWatchNoticeHeader(item Reminder, feedName string) string {
 	if feedName != "" {
 		return "RSS " + feedName
 	}
-	return "RSS " + strings.TrimSpace(item.FeedURL)
+	return "RSS " + strings.TrimSpace(source.FeedURL)
 }
 
 func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWatchChange) (rssJudgeDecision, error) {
@@ -10524,7 +10580,7 @@ func parseRSSJudgeDecision(raw string) (rssJudgeDecision, error) {
 	return decision, nil
 }
 
-func (r *Runtime) storeRSSWatchProgress(id string, snapshot rssWatchSnapshot, pending string) error {
+func (r *Runtime) storeRSSWatchProgress(id string, sources []ReminderFeedSource, pending string) error {
 	if r.reminders == nil {
 		return fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -10536,12 +10592,7 @@ func (r *Runtime) storeRSSWatchProgress(id string, snapshot rssWatchSnapshot, pe
 		if item.ID != id || !reminderIsRSSWatch(*item) {
 			continue
 		}
-		if snapshot.ItemID != "" {
-			item.LastFeedItemID = snapshot.ItemID
-		}
-		if !snapshot.PublishedAt.IsZero() {
-			item.LastFeedPublishedAt = snapshot.PublishedAt
-		}
+		applyRSSWatchSources(item, sources)
 		item.PendingDelivery = strings.TrimSpace(pending)
 		if item.PendingDelivery != "" {
 			item.PendingSince = time.Now()
