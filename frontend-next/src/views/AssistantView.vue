@@ -625,6 +625,11 @@
                 <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
                 <span class="hint">意图路由、指代消解和记忆门控这些旁路往回看几条，不影响正式回复的历史长度。</span>
               </div>
+              <div class="field">
+                <label for="bot-backfill-limit">断线回补条数</label>
+                <input id="bot-backfill-limit" v-model.number="form.history_backfill_message_limit" class="input" inputmode="numeric" min="1" max="100" placeholder="3" />
+                <span class="hint">重启或断线重连后，每个会话最多补处理最近多少条消息。默认 3，媒体较多的群建议保持较小。</span>
+              </div>
               <div class="field wide memory-settings">
                 <label class="switch">
                   <input v-model="form.long_term_memory_enabled" type="checkbox" />
