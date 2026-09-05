@@ -15,6 +15,9 @@ const (
 	DefaultMaxSteps           = 8
 	DefaultMaxToolOutputChars = 8000
 	DefaultReadFileMaxBytes   = 64 * 1024
+	// DefaultFileWriteMaxBytes 是单次写入的默认上限。比读的上限大一些：模型生成
+	// 一个完整文件时经常一次写下去，卡太死会让它退化成反复追加。
+	DefaultFileWriteMaxBytes = 256 * 1024
 	// 读文件默认一次多少行。工具结果统一被截到 MaxToolOutputChars，一次读太多
 	// 只会在截断处白白丢掉，不如让模型按需要翻页。
 	defaultReadFileLines            = 200
@@ -31,6 +34,7 @@ const (
 	MaxAllowedSteps                 = 8
 	MaxAllowedToolOutputChars       = 20000
 	MaxAllowedReadFileMaxBytes      = 512 * 1024
+	MaxAllowedFileWriteMaxBytes     = 2 << 20
 	MaxAllowedCommandTimeoutMS      = 60_000
 	MaxAllowedBrowserTimeoutMS      = 60_000
 	MaxAllowedToolTimeoutMS         = 120_000
@@ -58,8 +62,13 @@ type Config struct {
 	BuiltinExtensions   []BuiltinExtension
 	BuiltinSkills       []SkillMetadata
 	ReservedSkillNames  []string
-	CommandAllowlist    []string
-	CommandTimeoutMS    int
+	// FileWriteEnabled 打开 write_file / edit_file。默认关闭：读错文件浪费一次
+	// 调用，写错文件改的是磁盘，这一档该由部署方显式点头。
+	FileWriteEnabled bool
+	// FileWriteMaxBytes 是单次写入的字节上限，留空按 DefaultFileWriteMaxBytes。
+	FileWriteMaxBytes int
+	CommandAllowlist  []string
+	CommandTimeoutMS  int
 	// CommandSandbox 见 CommandSandbox* 常量，默认 auto。
 	CommandSandbox string
 	// CommandSandboxAllowNetwork 放开沙盒内的网络访问，默认关闭。
@@ -159,6 +168,12 @@ func (cfg Config) WithDefaults() Config {
 	}
 	if cfg.ReadFileMaxBytes <= 0 {
 		cfg.ReadFileMaxBytes = DefaultReadFileMaxBytes
+	}
+	if cfg.FileWriteMaxBytes <= 0 {
+		cfg.FileWriteMaxBytes = DefaultFileWriteMaxBytes
+	}
+	if cfg.FileWriteMaxBytes > MaxAllowedFileWriteMaxBytes {
+		cfg.FileWriteMaxBytes = MaxAllowedFileWriteMaxBytes
 	}
 	if cfg.ReadFileMaxBytes > MaxAllowedReadFileMaxBytes {
 		// 文件读取限制按字节控制，防止工具误读大文件。

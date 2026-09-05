@@ -221,6 +221,15 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <article><h3>MCP and skills</h3><p>External extensions are discovered from configuration and constrained by working directory, allow lists, permissions and timeouts.</p></article>
           <article><h3>Image tools</h3><p>Recognition, generation and editing are authorised separately; image generation is health-checked with a real generation request.</p></article>
         </div>
+        <h3>Local files and commands: read / write / execute</h3>
+        <p>Every local tool is confined to <code>workspace</code> under the data directory. The path is fixed and not configurable; absolute paths and <code>../</code> are rejected. The three tiers are independent:</p>
+        <div class="table-wrap"><table><thead><tr><th>Tier</th><th>Tools</th><th>Default</th><th>Switch</th></tr></thead><tbody>
+          <tr><td>Read</td><td><code>read_file</code>, <code>list_files</code>, <code>grep</code>, <code>find_files</code></td><td>on</td><td>follows the "built-in agent" switch</td></tr>
+          <tr><td>Write</td><td><code>write_file</code>, <code>edit_file</code></td><td>off</td><td>"allow file writes"</td></tr>
+          <tr><td>Execute</td><td><code>run_command</code></td><td>off</td><td>registered only when the command allowlist is non-empty</td></tr>
+        </tbody></table></div>
+        <p>Each <code>edit_file</code> replacement must match exactly one place in the original file; several matches or none rejects the whole batch rather than editing the wrong spot. All replacements are located against the original file, not applied one after another — applying them in sequence would let a later replacement match what an earlier one just wrote, and that edit is invisible in the caller's input.</p>
+        <div class="callout"><strong>Identity does not stop prompt injection</strong><p>These tiers are owner-only, but "the call happened in the owner's conversation" is not "the owner asked for this call": other people's messages share the context with the owner's, and the model decides to call a tool after reading them. The real boundary is these switches and the allowlist, not the identity check — open the tier you need and leave the rest closed.</p></div>
       </section>
 
       <section class="section searchable" id="security">

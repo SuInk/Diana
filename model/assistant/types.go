@@ -512,9 +512,12 @@ type BotConfig struct {
 	AgentCommandSandbox string `json:"agent_command_sandbox,omitempty"`
 	// AgentCommandSandboxAllowNetwork 放开沙盒内的网络。默认切断——命令能联网
 	// 就意味着读到的东西能被发出去，白名单挡不住这一层。
-	AgentCommandSandboxAllowNetwork bool   `json:"agent_command_sandbox_allow_network,omitempty"`
-	AgentBrowserCDPURL              string `json:"agent_browser_cdp_url,omitempty"`
-	AgentBrowserTimeoutMS           int    `json:"agent_browser_timeout_ms,omitempty"`
+	AgentCommandSandboxAllowNetwork bool `json:"agent_command_sandbox_allow_network,omitempty"`
+	// AgentFileWriteEnabled 打开 write_file / edit_file，默认关闭。
+	// 读和写是两档权限：读错文件浪费一次调用，写错文件改的是磁盘。
+	AgentFileWriteEnabled bool   `json:"agent_file_write_enabled,omitempty"`
+	AgentBrowserCDPURL    string `json:"agent_browser_cdp_url,omitempty"`
+	AgentBrowserTimeoutMS int    `json:"agent_browser_timeout_ms,omitempty"`
 }
 
 type ModelRole struct {
@@ -762,42 +765,41 @@ type ConfigPayload struct {
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
-	MaxContextTokens           int64       `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget   int64       `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit         int         `json:"recent_context_limit,omitempty"`
-	ContextSummaryThreshold    int         `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled      *bool       `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled    *bool       `json:"cross_group_memory_enabled,omitempty"`
-	WorldBookEnabled           *bool       `json:"world_book_enabled,omitempty"`
-	RomanceEnabled             *bool       `json:"romance_enabled,omitempty"`
-	MoodEnabled                *bool       `json:"mood_enabled,omitempty"`
-	PokeReplyEnabled           *bool       `json:"poke_reply_enabled,omitempty"`
-	ExpressionLearningEnabled  *bool       `json:"expression_learning_enabled,omitempty"`
-	DictSegmentEnabled         *bool       `json:"dict_segment_enabled,omitempty"`
-	SemanticSearchEnabled      *bool       `json:"semantic_search_enabled,omitempty"`
-	ProactiveReplyChance       float64     `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold    float64     `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled              *bool       `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                ChatInLevel `json:"chat_in_level,omitempty"`
-	ChatInThreshold            float64     `json:"chat_in_threshold,omitempty"`
-	ChatInChance               float64     `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds      int         `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled *bool       `json:"natural_interjection_enabled,omitempty"`
-	ReplyRules                 []ReplyRule `json:"reply_rules,omitempty"`
-	MaxBotConcurrency          int         `json:"max_bot_concurrency,omitempty"`
-	RequestTimeoutMS           int64       `json:"request_timeout_ms,omitempty"`
-	AgentEnabled               bool        `json:"agent_enabled,omitempty"`
-	AgentMaxSteps              int         `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots            []string    `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath         string      `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist      []string    `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS      int         `json:"agent_command_timeout_ms,omitempty"`
-
-	AgentCommandSandbox             string `json:"agent_command_sandbox,omitempty"`
-	AgentCommandSandboxAllowNetwork bool   `json:"agent_command_sandbox_allow_network,omitempty"`
-
-	AgentBrowserCDPURL    string `json:"agent_browser_cdp_url,omitempty"`
-	AgentBrowserTimeoutMS int    `json:"agent_browser_timeout_ms,omitempty"`
+	MaxContextTokens                int64       `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget        int64       `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit              int         `json:"recent_context_limit,omitempty"`
+	ContextSummaryThreshold         int         `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled           *bool       `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled         *bool       `json:"cross_group_memory_enabled,omitempty"`
+	WorldBookEnabled                *bool       `json:"world_book_enabled,omitempty"`
+	RomanceEnabled                  *bool       `json:"romance_enabled,omitempty"`
+	MoodEnabled                     *bool       `json:"mood_enabled,omitempty"`
+	PokeReplyEnabled                *bool       `json:"poke_reply_enabled,omitempty"`
+	ExpressionLearningEnabled       *bool       `json:"expression_learning_enabled,omitempty"`
+	DictSegmentEnabled              *bool       `json:"dict_segment_enabled,omitempty"`
+	SemanticSearchEnabled           *bool       `json:"semantic_search_enabled,omitempty"`
+	ProactiveReplyChance            float64     `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold         float64     `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled                   *bool       `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                     ChatInLevel `json:"chat_in_level,omitempty"`
+	ChatInThreshold                 float64     `json:"chat_in_threshold,omitempty"`
+	ChatInChance                    float64     `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds           int         `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled      *bool       `json:"natural_interjection_enabled,omitempty"`
+	ReplyRules                      []ReplyRule `json:"reply_rules,omitempty"`
+	MaxBotConcurrency               int         `json:"max_bot_concurrency,omitempty"`
+	RequestTimeoutMS                int64       `json:"request_timeout_ms,omitempty"`
+	AgentEnabled                    bool        `json:"agent_enabled,omitempty"`
+	AgentMaxSteps                   int         `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots                 []string    `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath              string      `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist           []string    `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS           int         `json:"agent_command_timeout_ms,omitempty"`
+	AgentCommandSandbox             string      `json:"agent_command_sandbox,omitempty"`
+	AgentCommandSandboxAllowNetwork bool        `json:"agent_command_sandbox_allow_network,omitempty"`
+	AgentFileWriteEnabled           bool        `json:"agent_file_write_enabled,omitempty"`
+	AgentBrowserCDPURL              string      `json:"agent_browser_cdp_url,omitempty"`
+	AgentBrowserTimeoutMS           int         `json:"agent_browser_timeout_ms,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -1783,6 +1785,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentCommandTimeoutMS:             cfg.AgentCommandTimeoutMS,
 		AgentCommandSandbox:               cfg.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork:   cfg.AgentCommandSandboxAllowNetwork,
+		AgentFileWriteEnabled:             cfg.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
 	}
@@ -1957,6 +1960,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentCommandTimeoutMS:           payload.AgentCommandTimeoutMS,
 		AgentCommandSandbox:             payload.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: payload.AgentCommandSandboxAllowNetwork,
+		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,
 	}.WithDefaults()

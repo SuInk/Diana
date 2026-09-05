@@ -1264,7 +1264,9 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">启用工具循环（文件读写 / 命令 / 浏览器）</span>
                 </label>
-                <span class="hint">Agent 只能在数据目录下的 workspace 里执行白名单命令，路径固定不可配置；生产环境请谨慎放开。</span>
+                <span class="hint">
+                  本地工具全部锁在数据目录下的 workspace 里，路径固定不可配置。读取和检索随这个开关一起生效，写入和命令执行各自还要单独打开。
+                </span>
               </div>
               <template v-if="form.agent_enabled">
                 <div class="field">
@@ -1287,6 +1289,18 @@
                     <template v-else>
                       只有列出的程序能被执行；命令名不能带路径，也不经过 shell 解析。
                     </template>
+                  </span>
+                </div>
+                <!-- 读 / 写 / 执行三档分开：读错文件浪费一次调用，写错文件改的是磁盘，
+                     执行则连「程序能碰什么」都要另一层来管。 -->
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_file_write_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许写入文件（write_file / edit_file）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。读取、检索、按名字找文件不受这个开关影响，始终可用。写入同样锁在 workspace 内，不能写到别处。
                   </span>
                 </div>
                 <div class="field">
@@ -2753,6 +2767,7 @@ function setForm(config: BotProfileConfig): void {
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
+    agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
