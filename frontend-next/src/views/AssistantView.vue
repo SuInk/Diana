@@ -1271,9 +1271,47 @@
                   <label for="agent-steps">最大工具步数（≤8）</label>
                   <input id="agent-steps" v-model.number="form.agent_max_steps" class="input" inputmode="numeric" />
                 </div>
+                <!-- 白名单为空时 run_command 根本不注册。这不是「什么都不许跑」，
+                     是模型手里没有这个工具——以前界面上没有任何地方这么说，于是
+                     「让机器人执行指令」表现为它只用嘴回你，看不出是没开。 -->
                 <div class="field wide">
                   <label for="agent-allow">命令白名单（逗号分隔，* 表示全部）</label>
-                  <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="ls,cat,git" />
+                  <input id="agent-allow" v-model="allowlistDraft" class="input" placeholder="留空 = 不开放命令执行" />
+                  <span class="hint" :class="{ danger: commandAllowlistIsWildcard }">
+                    <template v-if="!commandAllowlistEnabled">
+                      当前为空：命令执行整体关闭，机器人拿不到这个工具。要开放就填具体命令，例如 <code>uptime,free,df</code>。
+                    </template>
+                    <template v-else-if="commandAllowlistIsWildcard">
+                      <code>*</code> 放行任意程序。白名单是命令执行唯一按名字生效的限制，填 <code>*</code> 等于放弃它。
+                    </template>
+                    <template v-else>
+                      只有列出的程序能被执行；命令名不能带路径，也不经过 shell 解析。
+                    </template>
+                  </span>
+                </div>
+                <div class="field">
+                  <label for="agent-sandbox">命令沙盒</label>
+                  <AppSelect
+                    id="agent-sandbox"
+                    v-model="commandSandboxMode"
+                    :options="[
+                      { value: 'auto', label: '自动（有沙盒就用，没有就直接执行）' },
+                      { value: 'require', label: '强制（没有可用沙盒时拒绝执行）' },
+                      { value: 'off', label: '关闭（始终直接执行）' }
+                    ]"
+                  />
+                  <span class="hint">
+                    白名单管的是「能跑哪个程序」，沙盒管的是「这个程序能碰什么」——放行了 <code>cat</code>，它照样读得到配置和数据库。
+                    Linux 需要 <code>bubblewrap</code>，macOS 用系统自带的 <code>sandbox-exec</code>。
+                  </span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_command_sandbox_allow_network" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许沙盒内的命令联网</span>
+                  </label>
+                  <span class="hint">默认切断。命令能联网就意味着它读到的东西能被发出去，这一层白名单挡不住。</span>
                 </div>
                 <div class="field">
                   <label for="agent-cdp">浏览器 CDP 地址</label>
@@ -1487,6 +1525,19 @@ const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const allowlistDraft = ref("");
+
+// 白名单为空 = 命令执行整体关闭，这一点要在界面上直接说出来，见模板里的说明。
+const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));
+const commandAllowlistEnabled = computed(() => commandAllowlistEntries.value.length > 0);
+const commandAllowlistIsWildcard = computed(() => commandAllowlistEntries.value.includes("*"));
+
+// AppSelect 要一个确定的值，而配置里这一项是可选的：留空按 auto。
+const commandSandboxMode = computed<string>({
+  get: () => form.value?.agent_command_sandbox || "auto",
+  set: (value) => {
+    if (form.value) form.value.agent_command_sandbox = value;
+  }
+});
 const allowedGroups = ref<string[]>([]);
 const telegramTokenDraft = ref("");
 const qqSecretDraft = ref("");
@@ -2699,6 +2750,9 @@ function setForm(config: BotProfileConfig): void {
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
+    // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
+    agent_command_sandbox: config.agent_command_sandbox ?? "auto",
+    agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),

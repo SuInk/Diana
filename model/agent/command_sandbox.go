@@ -6,10 +6,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 )
 
 // 命令沙盒模式。白名单挡的是「能跑哪个程序」，挡不住「这个程序能碰什么」——
@@ -32,21 +35,129 @@ type commandSandbox struct {
 	wrap func(ctx context.Context, root string, allowNetwork bool, name string, args []string) *exec.Cmd
 }
 
-// detectCommandSandbox 按平台挑选沙盒实现。macOS 用系统自带的 sandbox-exec，
-// Linux 用 bubblewrap；两者都不需要 root，也不需要预先准备镜像。
+// CommandSandboxStatus 描述这台机器上的沙盒到底能不能用。
+//
+// 「装没装」和「能不能用」是两件事，而运行时只有后者算数，所以这个结构体是
+// 探测结果而不是配置回显。
+type CommandSandboxStatus struct {
+	// Mode 是归一化后的配置值。
+	Mode string `json:"mode"`
+	// Kind 是探测到的实现名，不可用时为空。
+	Kind string `json:"kind,omitempty"`
+	// Available 表示这次真的能把命令关进沙盒。
+	Available bool `json:"available"`
+	// Reason 说明为什么不可用，可用时为空。
+	Reason string `json:"reason,omitempty"`
+}
+
+// Effective 返回这台机器上命令实际会怎么跑：sandboxed / unsandboxed / blocked。
+func (s CommandSandboxStatus) Effective() string {
+	switch {
+	case s.Mode == CommandSandboxOff:
+		return "unsandboxed"
+	case s.Available:
+		return "sandboxed"
+	case s.Mode == CommandSandboxRequire:
+		return "blocked"
+	default:
+		return "unsandboxed"
+	}
+}
+
+// DescribeCommandSandbox 给上层（启动日志、控制台、诊断工具）一份可读的沙盒状态。
+func DescribeCommandSandbox(mode string) CommandSandboxStatus {
+	status := CommandSandboxStatus{Mode: normalizeCommandSandboxMode(mode)}
+	if status.Mode == CommandSandboxOff {
+		status.Reason = "配置为 off"
+		return status
+	}
+	sandbox := detectCommandSandbox()
+	if sandbox.available() {
+		status.Kind = sandbox.kind
+		status.Available = true
+		return status
+	}
+	status.Reason = commandSandboxUnavailableReason()
+	return status
+}
+
+var (
+	sandboxOnce      sync.Once
+	sandboxDetected  commandSandbox
+	sandboxUnusable  string
+	sandboxProbeExec = runSandboxProbe
+)
+
+// detectCommandSandbox 按平台挑选沙盒实现，并且真的试跑一次。
+//
+// 只看 exec.LookPath 是不够的：bwrap 装了不等于能用——非特权用户命名空间被内核
+// 或 AppArmor 关掉时（Debian 系的 kernel.unprivileged_userns_clone=0、Ubuntu 24.04
+// 之后的默认 AppArmor 策略、大部分未加 --privileged 的容器），它照样在 PATH 里，
+// 但每次调用都直接失败。那种情况下 auto 模式会把每条命令都变成执行失败，而
+// auto 承诺的是「没有沙盒就照常执行」。所以探测一次真实调用，探不通就当作没有。
+//
+// 探测只做一次，结果连同失败原因一起缓存：这是进程级的环境事实，不会中途变化。
 func detectCommandSandbox() commandSandbox {
+	sandboxOnce.Do(func() {
+		sandboxDetected, sandboxUnusable = probeCommandSandbox()
+	})
+	return sandboxDetected
+}
+
+func commandSandboxUnavailableReason() string {
+	detectCommandSandbox()
+	return sandboxUnusable
+}
+
+// sandboxCandidateFn 是「这个平台上装了哪个沙盒」，与「它能不能用」分开，
+// 好让测试单独驱动探测失败那一支。
+var sandboxCandidateFn = sandboxCandidate
+
+func sandboxCandidate() (commandSandbox, string) {
 	switch runtime.GOOS {
 	case "darwin":
-		if path, err := exec.LookPath("sandbox-exec"); err == nil {
-			return commandSandbox{kind: "sandbox-exec", wrap: wrapWithSandboxExec(path)}
+		path, err := exec.LookPath("sandbox-exec")
+		if err != nil {
+			return commandSandbox{}, "这台机器上找不到 sandbox-exec"
 		}
+		return commandSandbox{kind: "sandbox-exec", wrap: wrapWithSandboxExec(path)}, ""
 	case "linux":
-		if path, err := exec.LookPath("bwrap"); err == nil {
-			return commandSandbox{kind: "bubblewrap", wrap: wrapWithBubblewrap(path)}
+		path, err := exec.LookPath("bwrap")
+		if err != nil {
+			return commandSandbox{}, "这台机器上没有安装 bubblewrap（bwrap）"
 		}
+		return commandSandbox{kind: "bubblewrap", wrap: wrapWithBubblewrap(path)}, ""
+	default:
+		return commandSandbox{}, fmt.Sprintf("%s 上没有可用的沙盒实现", runtime.GOOS)
 	}
-	return commandSandbox{}
 }
+
+func probeCommandSandbox() (commandSandbox, string) {
+	candidate, reason := sandboxCandidateFn()
+	if !candidate.available() {
+		return commandSandbox{}, reason
+	}
+	if err := sandboxProbeExec(candidate); err != nil {
+		return commandSandbox{}, fmt.Sprintf("%s 已安装但试运行失败（%v）；常见原因是内核或容器策略禁用了非特权用户命名空间", candidate.kind, err)
+	}
+	return candidate, ""
+}
+
+// runSandboxProbe 在临时目录里跑一条最无害的命令，只看它能不能起来。
+func runSandboxProbe(sandbox commandSandbox) error {
+	ctx, cancel := context.WithTimeout(context.Background(), sandboxProbeTimeout)
+	defer cancel()
+	root, err := os.MkdirTemp("", "diana-sandbox-probe-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(root) }()
+	cmd := sandbox.wrap(ctx, root, false, "true", nil)
+	cmd.Dir = root
+	return cmd.Run()
+}
+
+const sandboxProbeTimeout = 5 * time.Second
 
 func (s commandSandbox) available() bool { return s.wrap != nil }
 
@@ -120,6 +231,9 @@ func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, st
 		return exec.CommandContext(ctx, bwrapPath, full...)
 	}
 }
+
+// NormalizeCommandSandboxMode 是给上层配置用的归一化入口。
+func NormalizeCommandSandboxMode(value string) string { return normalizeCommandSandboxMode(value) }
 
 // normalizeCommandSandboxMode 把配置值归一到三个已知模式，未知值按最安全的
 // auto 处理（有沙盒就用），而不是静默关掉。
