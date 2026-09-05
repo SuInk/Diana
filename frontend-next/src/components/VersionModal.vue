@@ -66,12 +66,11 @@
         <label class="mirror-field">
           <span>下载加速</span>
           <select v-model="mirrorMode" :disabled="savingPolicy" @change="persistPolicy('mirror')">
-            <option value="auto">自动（实测挑最快的线路）</option>
+            <option value="auto">自动选择镜像加速</option>
             <option value="direct">直连 GitHub</option>
-            <option v-for="mirror in mirrors" :key="mirror.base_url" :value="mirror.base_url">{{ mirror.name }}</option>
           </select>
         </label>
-        <p class="mirror-hint">自动模式下载前会自己挑一条快的线路，直连够快就走直连。加速只用于下载安装包，校验清单始终直连，安装前都要对上 SHA-256。</p>
+        <p class="mirror-hint">自动模式下载前会自己挑一条快的镜像，直连够快就走直连。加速只用于下载安装包，校验清单始终直连，安装前都要对上 SHA-256。</p>
       </div>
 
       <!-- 开关在左，操作按钮靠右，窄屏自动换行。 -->
@@ -261,14 +260,13 @@ import {
   downloadSystemUpdate,
   getChangelog,
   getSystemVersion,
+  getUpdatePolicy,
   getUpdateStatus,
   installDownloadedSystemUpdate,
-  getUpdateMirrors,
   pullFromGitHub,
   rollbackSystem,
   saveUpdatePolicy,
   type ChangelogEntry,
-  type GitHubMirror,
   type ReleaseEntry,
   type SystemVersion,
   type UpdateCheckResponse,
@@ -295,7 +293,6 @@ const checking = ref(false);
 const updating = ref(false);
 const savingPolicy = ref(false);
 const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false, github_mirror: "auto" });
-const mirrors = ref<GitHubMirror[]>([]);
 const operationError = ref("");
 let statusPollTimer: number | undefined;
 const installTracking = ref(false);
@@ -525,14 +522,13 @@ async function persistPolicy(changed: "download" | "install" | "mirror"): Promis
   }
 }
 
-async function loadMirrors(): Promise<void> {
+// 检查更新那次请求也会带回 policy，但它依赖外网；离线或被限流时就拿不到，
+// 下拉框会停在默认的「自动」上，和实际存着的设置对不上。这里单独取一次本地策略。
+async function loadPolicy(): Promise<void> {
   try {
-    const status = await getUpdateMirrors();
-    mirrors.value = status.mirrors ?? [];
-    if (status.mode) policy.value.github_mirror = status.mode;
+    policy.value = await getUpdatePolicy();
   } catch {
-    // 线路列表拿不到不影响更新本身，界面退回只有「自动 / 直连」两项。
-    mirrors.value = [];
+    // 取不到就沿用默认值，不影响更新本身。
   }
 }
 
@@ -806,7 +802,7 @@ async function copyImageTag(tag: string): Promise<void> {
 
 onMounted(() => {
   void load();
-  void loadMirrors();
+  void loadPolicy();
   window.addEventListener("resize", measureNoteOverflow);
   statusPollTimer = window.setInterval(() => {
     if (installTracking.value) {
