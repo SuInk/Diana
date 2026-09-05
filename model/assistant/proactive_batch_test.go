@@ -586,7 +586,7 @@ type proactiveBatchReplyFailureProvider struct {
 
 func (p *proactiveBatchReplyFailureProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	switch {
-	case requestMessagesContain(req.Messages, "严格主动回复路由器"):
+	case requestMessagesContain(req.Messages, "Intent Recognition"):
 		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","directed_at_bot":false,"answerable":true}`}, nil
 	case requestMessagesContain(req.Messages, "功能路由器"):
 		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"action":"none","prompt":""}`}, nil
@@ -617,7 +617,7 @@ func (p *proactiveReplyRerouteProvider) Generate(_ context.Context, req llm.Gene
 	switch {
 	case requestMessagesContain(req.Messages, "should_send"):
 		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
-	case requestMessagesContain(req.Messages, "严格主动回复路由器"):
+	case requestMessagesContain(req.Messages, "Intent Recognition"):
 		p.routeCalls++
 		p.lastRoutePayload = req.Messages[len(req.Messages)-1].Content
 		target := "message-1"
@@ -647,7 +647,7 @@ func (p *proactiveReplyRerouteProvider) Generate(_ context.Context, req llm.Gene
 
 func (p *proactiveRouteSuppressionProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.calls++
-	if !requestMessagesContain(req.Messages, "严格主动回复路由器") {
+	if !requestMessagesContain(req.Messages, "Intent Recognition") {
 		return nil, errors.New("suppressed proactive candidate reached reply generation")
 	}
 	p.runtime.activateReplySuppression(p.event, "test threshold reached", time.Now())
