@@ -50,11 +50,17 @@ function readableCQ(payload: string): string {
 // 带着它——这里只能退回一个「[回复]」：手上只有一个消息 ID，说不出回的是谁。
 const replyMarkerPattern = /\[(?:diana-reply|回复):(-?[0-9]{4,19})\]/g;
 
+// 早先存下的正文里，合并转发写成「[合并转发:<一长串 base64 resid>]」。那串东西没有
+// 任何一处会再读它，在列表里只是把正文挤出屏幕。新写入的正文后端已经渲染成「[合并
+// 转发]」了，这里只管旧数据。
+const forwardMarkerPattern = /\[合并转发:[^\]]{8,}\]/g;
+
 export function displayMessageText(value?: string): string {
   if (!value) return "";
   const rendered = value
     .replace(/\[CQ:([^\]]+)\]/gi, (_match, payload: string) => readableCQ(payload))
-    .replace(replyMarkerPattern, "[回复] ");
+    .replace(replyMarkerPattern, "[回复] ")
+    .replace(forwardMarkerPattern, "[合并转发]");
   return decodeEntities(rendered)
     .replace(/[ \t]+\n/g, "\n")
     .replace(/[ \t]{2,}/g, " ")

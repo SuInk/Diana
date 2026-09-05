@@ -251,7 +251,7 @@ func TestDisplayEventTextRendersCards(t *testing.T) {
 				{Type: "json", Data: map[string]string{"data": "{不是合法 JSON"}},
 				textSegment("看看这个"),
 			}},
-			want: "[卡片] 看看这个",
+			want: "看看这个",
 		},
 		{
 			name: "xml 卡片取 brief——那就是客户端在聊天列表里显示的那句",
@@ -285,13 +285,29 @@ func TestDisplayEventTextRendersCards(t *testing.T) {
 	}
 }
 
-// 给模型的正文不受影响：卡片内容由链接解析那条路负责，合并转发的 resid 也照旧。
-func TestPlainTextLeavesCardsAndForwardsAlone(t *testing.T) {
+// 卡片现在也进给模型的正文：以前它一个字都不写，链接解析没命中的卡片（小程序、
+// 群视频邀请、音乐分享）模型那边就是一片空白。合并转发的 resid 则维持原样，那是
+// PlainText 的既有行为，只有控制台换写法。
+func TestPlainTextCarriesCardsAndKeepsForwardID(t *testing.T) {
 	event := MessageEvent{Segments: []MessageSegment{
-		{Type: "json", Data: map[string]string{"data": `{"meta":{"news":{"title":"标题"}}}`}},
+		{Type: "json", Data: map[string]string{"data": `{"meta":{"news":{"title":"标题","tag":"哔哩哔哩"}}}`}},
 		{Type: "forward", Data: map[string]string{"id": "WpH3vk"}},
 	}}
-	if got := PlainText(event.Segments); got != "[合并转发:WpH3vk]" {
+	if got := PlainText(event.Segments); got != "[卡片·哔哩哔哩] 标题 [合并转发:WpH3vk]" {
 		t.Fatalf("plain text = %q", got)
+	}
+}
+
+// 卡片里什么都挖不出来时保持原样不写：一个空的「[卡片]」只是噪声，还会把本来算
+// 空正文的消息变成非空，连带影响触发判断。
+func TestPlainTextSkipsUnreadableCard(t *testing.T) {
+	event := MessageEvent{Segments: []MessageSegment{
+		{Type: "json", Data: map[string]string{"data": "{不是合法 JSON"}},
+	}}
+	if got := PlainText(event.Segments); got != "" {
+		t.Fatalf("plain text = %q, want empty", got)
+	}
+	if got := DisplayEventText(event, nil); got != "" {
+		t.Fatalf("display text = %q, want empty", got)
 	}
 }

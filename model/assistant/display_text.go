@@ -37,7 +37,7 @@ func DisplaySegmentsText(segments []MessageSegment, quoted *QuotedMessage, resol
 		renderReply: func(messageID string) string {
 			return quotedDisplayLabel(quoted, messageID, resolve)
 		},
-		renderSegment: displaySegmentLabel,
+		renderForward: forwardDisplayLabel,
 	}))
 	return strings.Join(strings.Fields(text), " ")
 }
@@ -60,7 +60,7 @@ func quotedDisplayLabel(quoted *QuotedMessage, messageID string, resolve AtMenti
 		resolveName: resolve,
 		// 被引用的消息如果自己也是条回复，只写「[回复]」，不再往下展开一层。
 		renderReply:   func(string) string { return "[回复] " },
-		renderSegment: displaySegmentLabel,
+		renderForward: forwardDisplayLabel,
 	}))
 	if preview == "" {
 		preview = strings.TrimSpace(quoted.RawMessage)
@@ -94,25 +94,31 @@ const (
 	maxDisplayCardTitleRunes = 40
 )
 
-// displaySegmentLabel 渲染 PlainText 不写出来、或者写出来不能看的那几种段。
-//
-// json/xml 是 QQ 的分享卡片，PlainText 一个字都不写——给模型的正文里卡片内容由链接
-// 解析那条路负责，控制台没有那条路，于是列表上只剩一个 [CQ:json,...] 或者前端兜底的
-// 「[卡片消息]」。forward 则会把一长串 base64 resid 摊在正文里，那串东西没有任何一处
-// 会再读它，纯粹占地方。
-func displaySegmentLabel(segment MessageSegment) string {
+// cardSegmentLabel 把一张分享卡片渲染成一行摘要。挖不出任何东西时返回空串，让这一段
+// 像以前一样不写出来——写一个空的「[卡片]」出去只是噪声。
+func cardSegmentLabel(segment MessageSegment) string {
+	var summary cardSummary
 	switch segment.Type {
-	case "forward":
-		if summary := strings.TrimSpace(segment.Data["summary"]); summary != "" {
-			return summary
-		}
-		return "[合并转发]"
 	case "json":
-		return cardDisplayLabel(jsonCardSummary(segment.Data["data"]))
+		summary = jsonCardSummary(segment.Data["data"])
 	case "xml":
-		return cardDisplayLabel(xmlCardSummary(segment.Data["data"]))
+		summary = xmlCardSummary(segment.Data["data"])
+	default:
+		return ""
 	}
-	return ""
+	if summary.Tag == "" && summary.Title == "" && summary.Desc == "" {
+		return ""
+	}
+	return cardDisplayLabel(summary)
+}
+
+// forwardDisplayLabel 是合并转发在控制台上的写法。PlainText 会把一长串 base64 resid
+// 摊在正文里，那串东西没有任何一处会再读它，在列表上纯粹占地方。
+func forwardDisplayLabel(segment MessageSegment) string {
+	if summary := strings.TrimSpace(segment.Data["summary"]); summary != "" {
+		return summary
+	}
+	return "[合并转发]"
 }
 
 // cardSummary 是从一张卡片里挖出来的可显示部分。三样都空表示没挖到。

@@ -661,9 +661,9 @@ type plainTextOptions struct {
 	resolveName AtMentionNameResolver
 	// renderReply 换掉引用段的渲染。返回空串表示这一段不写出来。
 	renderReply func(messageID string) string
-	// renderSegment 兜住 PlainText 本身不渲染的段（json/xml 卡片）和需要换写法的段
-	// （合并转发）。返回空串表示这一段不写出来，保持 PlainText 的原行为。
-	renderSegment func(segment MessageSegment) string
+	// renderForward 换掉合并转发段的渲染。留空时保持 PlainText 的原行为——正文里
+	// 摊出那串 resid。
+	renderForward func(segment MessageSegment) string
 }
 
 // PlainText 将 OneBot segment 列表转换为可读纯文本。
@@ -717,8 +717,8 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 				builder.WriteString("]")
 			}
 		case "forward":
-			if options.renderSegment != nil {
-				builder.WriteString(options.renderSegment(segment))
+			if options.renderForward != nil {
+				builder.WriteString(options.renderForward(segment))
 				break
 			}
 			if summary := strings.TrimSpace(segment.Data["summary"]); summary != "" {
@@ -731,11 +731,13 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 				builder.WriteString("[合并转发]")
 			}
 		case "json", "xml":
-			// PlainText 本身不渲染卡片：给模型的正文里，卡片内容由链接解析那条路
-			// 负责。控制台没有那条路，只能自己从卡片里挖一行摘要出来。
-			if options.renderSegment != nil {
-				builder.WriteString(options.renderSegment(segment))
-			}
+			// 分享卡片以前一个字都不写：卡片内容全靠链接解析那条路从原始串里抠 URL
+			// 再去抓。链接解析没命中的卡片——小程序、群视频邀请、音乐分享——模型那边
+			// 就是一片空白，只知道「有人说了句什么」。这里挖一行标题出来。
+			//
+			// 摘要里只放标题、描述和来源，不放 jumpUrl：正文里多一个链接会连带影响
+			// 链接解析的命中判断，也容易被模型照抄进回复。
+			builder.WriteString(cardSegmentLabel(segment))
 		}
 	}
 	return strings.TrimSpace(builder.String())
