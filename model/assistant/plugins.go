@@ -1100,6 +1100,7 @@ type browserFetchFunc func(ctx context.Context, cdpURL string, pageURL string) (
 type ResolverPlugin struct {
 	client          *http.Client
 	cache           resolverCache
+	socialCache     resolverSocialCache
 	browserFetch    browserFetchFunc
 	mediaDownloader func(context.Context, string) string
 	// videoDownloader is the legacy injection point retained for the complete
@@ -1129,7 +1130,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频。",
 		Official:    true,
 		BuiltIn:     true,
@@ -1474,7 +1475,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 			continue
 		}
 		if downloadMedia {
-			if media := p.resolveSocialMedia(mediaCtx, req, raw, maxImages); media.Suppressed {
+			if media := p.resolveSocialMedia(mediaCtx, req, raw, maxImages, opts.cacheTTL); media.Suppressed {
 				continue
 			} else if media.Handled {
 				media.ForwardMessages = resolverSocialForwardMessages(media)
