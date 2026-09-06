@@ -3743,12 +3743,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
-	if proactiveTriggered {
-		// Proactive routing decides whether the bot should speak, not how much of
-		// an otherwise complete answer may be delivered. The send layer already
-		// handles long replies with chunks or merged forwards.
-		replyCfg.MaxReplyChars = 0
-	}
 	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
 	// 保证发图前只出现一条文字（见 image_announcement.go）。
 	if draft := r.telegramReplyDraft(event, replyCfg); draft != nil {
@@ -3773,6 +3767,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		pluginResponses = append(pluginResponses, applyRecallReplyMode(disclosures, cfg.RecallReplyMode)...)
 	}
 	reply, controlIntent := consumeReplyControlIntent(reply)
+	event.replyDeliveryMode = controlIntent.DeliveryMode
+	reply, event = prepareReplyDelivery(reply, event)
 	if event.chatInReply && (reply == "" || controlIntent.RefuseCurrent || controlIntent.SuppressCurrentUser) {
 		return "", errChatInReplyDeclined
 	}
@@ -4023,20 +4019,24 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
+		return r.prepareGeneratedReply(ctx, cfg, resp.Text)
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
 	ctx = withLLMUsagePurpose(ctx, "reply")
-	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
+	raw, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}
-		return normalizeReplyPreservingControlIntent(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
+		return resp.Text, nil
 	})
+	if err != nil {
+		return "", err
+	}
+	return r.prepareGeneratedReply(ctx, cfg, raw)
 }
 
 type runtimeAgentLLMProvider struct {
@@ -4137,19 +4137,23 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
+		return r.prepareGeneratedReply(ctx, cfg, resp.Text)
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
 		group = llm.GroupVision
 	}
-	return r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
+	raw, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}
-		return normalizeReply(resp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
+		return resp.Text, nil
 	})
+	if err != nil {
+		return "", err
+	}
+	return r.prepareGeneratedReply(ctx, cfg, raw)
 }
 
 type replyRuleDecision struct {
@@ -8604,12 +8608,13 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
+	reply, event = prepareReplyDelivery(reply, event)
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitEventChatReply(reply, cfg, event)
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if event.replyDeliveryMode != replyDeliverySingle && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -9390,11 +9395,12 @@ func (r *Runtime) sendForwardReply(ctx context.Context, event MessageEvent, repl
 }
 
 func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageEvent, reply string, cfg BotConfig) (string, error) {
+	reply, event = prepareReplyDelivery(reply, event)
 	// 合并转发的节点承载不了 reply 段，标记只能剥掉，免得作为文本进转发卡片。
 	if _, rest, ok := extractOutgoingReplyMarker(reply); ok {
 		reply = rest
 	}
-	chunks := splitForwardReply(reply, chatSplitLimitsFrom(cfg))
+	chunks := splitForwardReply(reply, chatSplitLimitsForEvent(cfg, event))
 	if len(chunks) == 0 {
 		return "", nil
 	}
@@ -11860,6 +11866,11 @@ func splitReply(reply string, chunkSize int) []string {
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
+	reply, mode := consumeReplyDeliveryMode(reply)
+	limits = replyDeliveryLimits(limits, mode)
+	if limits.SingleMessage {
+		return singleChatReply(reply, limits.ChunkSize)
+	}
 	// 一份行程、清单或方案不按行分条，按小节分（见 splitDocumentSections）。
 	// 显式标记和长度兜底仍然优先。
 	limits.Document = isDocumentReply(reply)
@@ -11884,6 +11895,11 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 //
 // 不限制节点数量，也不额外按句号推断边界：模型明确换行或写标记的地方才新建节点。
 func splitForwardReply(reply string, limits chatSplitLimits) []string {
+	reply, mode := consumeReplyDeliveryMode(reply)
+	limits = replyDeliveryLimits(limits, mode)
+	if limits.SingleMessage {
+		return singleChatReply(reply, limits.ChunkSize)
+	}
 	limits.Document = isDocumentReply(reply)
 	reply, fences := maskFencedCodeBlocks(reply)
 	reply = collapseBlankLines(reply)
@@ -11917,8 +11933,9 @@ const replyMaxChatBubbles = 5
 // chatSplitLimits 是分条用到的几个阈值。它们全都来自机器人配置，凑成一个结构体
 // 是因为一路往下传五个 int 参数没人认得住哪个是哪个。
 type chatSplitLimits struct {
-	ChunkSize  int // 单条消息的硬上限，撞上了在最近的标点处切开
-	MaxBubbles int // 分出来最多几条，超了就退回粗一档
+	SingleMessage bool // 本轮用户要求一条发送，优先于自然分条和显式分条标记。
+	ChunkSize     int  // 单条消息的硬上限，撞上了在最近的标点处切开
+	MaxBubbles    int  // 分出来最多几条，超了就退回粗一档
 	// MarkerOnly 关掉自然分条：只认模型显式写的 [diana-br]，换行只当排版。
 	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
 	MarkerOnly bool

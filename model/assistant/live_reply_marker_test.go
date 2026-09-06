@@ -177,19 +177,26 @@ func runLiveMarkerCasesWithStyle(t *testing.T, style ReplyStyle, cases []liveMar
 					chatNewlines++
 				}
 				t.Logf("input=%q chars=%d finalize=%d marker=%v newline=%v output=%q", tc.text, len([]rune(text)), probe.finalCalls, hasMarker, hasNewline, text)
-				t.Logf("delivered_bubbles=%q", parts)
+				for i, part := range parts {
+					t.Logf("bubble[%d/%d] chars=%d text=%q", i+1, len(parts), len([]rune(part)), part)
+				}
 				if strings.Contains(strings.Join(parts, "\n"), "diana-br") {
 					t.Error("marker leaked into delivered text")
 				}
 				switch tc.kind {
 				case "document":
-					// 两个方向都要防：既不能每个时间点一条，也不能一千字挤成一个气泡。
-					if len(parts) > 8 {
-						t.Errorf("document fragmented into %d messages", len(parts))
-					}
-					for _, part := range parts {
-						if len([]rune(part)) > 700 {
-							t.Errorf("document section is a %d-character wall", len([]rune(part)))
+					// There is no product length/count quota. Check the observed
+					// regression instead: automatic splitting must not orphan a title.
+					for i, part := range parts {
+						if hasMarker || i == len(parts)-1 {
+							continue
+						}
+						onlyHeadings := true
+						for _, line := range strings.Split(part, "\n") {
+							onlyHeadings = onlyHeadings && isDocumentSectionLabel(line)
+						}
+						if onlyHeadings {
+							t.Errorf("bubble %d contains headings without their body: %q", i+1, part)
 						}
 					}
 				case "chat":

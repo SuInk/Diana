@@ -89,7 +89,7 @@ func TestHumanStyleDoesNotForceShortBubbles(t *testing.T) {
 	if !strings.Contains(human, "不按字数强行拆消息") {
 		t.Fatal("真人感档仍可能按字数强行拆成碎片")
 	}
-	if !strings.Contains(human, "同一件事先用一条说清楚") {
+	if !strings.Contains(human, "尽量少发几条") {
 		t.Fatal("缺少减少闲聊分条的要求")
 	}
 	if strings.Contains(human, "二十字往上就该拆开") {

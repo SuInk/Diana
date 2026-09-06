@@ -3025,10 +3025,11 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 }
 
-func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
+func TestRuntimeProactiveReplyCompressesCompleteAnswer(t *testing.T) {
 	channel := &recordingChannel{}
-	completeReply := strings.Repeat("很", 240)
-	provider := &capturingLLMProvider{reply: completeReply}
+	completeReply := strings.Repeat("先检查端口占用，再看启动日志。", 20)
+	compressedReply := "先查端口占用，再看启动日志"
+	provider := &compressionTestProvider{capturingLLMProvider: capturingLLMProvider{reply: completeReply}, outputs: []string{compressedReply}}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:         false,
 		MaxReplyChars:        120,
@@ -3054,8 +3055,8 @@ func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
 	if len(provider.request.Messages) == 0 || !strings.Contains(allPrompts, "custom concise proactive instruction") {
 		t.Fatalf("system prompt = %#v", provider.request.Messages)
 	}
-	if reply != completeReply {
-		t.Fatalf("proactive reply was truncated: got %d runes, want %d", len([]rune(reply)), len([]rune(completeReply)))
+	if reply != compressedReply || len(provider.requests) != 1 {
+		t.Fatalf("proactive reply was not compressed: %q", reply)
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
 		t.Fatalf("sent = %#v reply=%q", channel.sent, reply)

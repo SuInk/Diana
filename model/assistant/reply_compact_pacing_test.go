@@ -9,6 +9,15 @@ func TestEveryStylePrefersCompactChatWithoutHardLimit(t *testing.T) {
 	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl, ReplyStyleHuman, ""} {
 		for _, natural := range []bool{false, true} {
 			prompt := style.prompt(natural, personaVoice{})
+			combined := prompt + style.closingAnchor()
+			for _, obsolete := range []string{"默认一条", "默认写成一段", "同一条末尾", "追问也留在同一条", "同一件事先用一条"} {
+				if strings.Contains(combined, obsolete) {
+					t.Errorf("style=%q natural=%v still forces one message: %s", style, natural, obsolete)
+				}
+			}
+			if !strings.Contains(prompt, "尽量少发几条") || !strings.Contains(prompt, "不预设条数") {
+				t.Fatal("missing flexible pacing preference")
+			}
 			if !strings.Contains(prompt, replyCompactPacingRule) {
 				t.Errorf("style=%q natural=%v missing pacing", style, natural)
 			}
