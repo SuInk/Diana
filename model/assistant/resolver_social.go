@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SuInk/diana/model/applog"
 )
@@ -23,6 +24,61 @@ type resolverSocialResult struct {
 	VideoURLs       []string
 	ForwardMessages []OutgoingMessage
 	ResourceKeys    []string
+}
+
+type resolverSocialCacheEntry struct {
+	result  resolverSocialResult
+	expires time.Time
+}
+
+type resolverSocialCache struct {
+	mu      sync.Mutex
+	entries map[string]resolverSocialCacheEntry
+}
+
+func cloneResolverSocialResult(result resolverSocialResult) resolverSocialResult {
+	result.ImageURLs = append([]string(nil), result.ImageURLs...)
+	result.VideoURLs = append([]string(nil), result.VideoURLs...)
+	result.ForwardMessages = append([]OutgoingMessage(nil), result.ForwardMessages...)
+	result.ResourceKeys = append([]string(nil), result.ResourceKeys...)
+	return result
+}
+
+func (c *resolverSocialCache) get(raw string, now time.Time) (resolverSocialResult, bool) {
+	key := resolverURLDedupeKey(raw)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, found := c.entries[key]
+	if !found || !entry.expires.After(now) {
+		if found {
+			delete(c.entries, key)
+		}
+		return resolverSocialResult{}, false
+	}
+	for _, mediaURL := range entry.result.VideoURLs {
+		mediaURL = strings.TrimSpace(mediaURL)
+		if mediaURL == "" || strings.HasPrefix(mediaURL, "http://") || strings.HasPrefix(mediaURL, "https://") {
+			continue
+		}
+		if _, err := os.Stat(mediaURL); err != nil {
+			delete(c.entries, key)
+			return resolverSocialResult{}, false
+		}
+	}
+	return cloneResolverSocialResult(entry.result), true
+}
+
+func (c *resolverSocialCache) put(raw string, result resolverSocialResult, now time.Time, ttl time.Duration) {
+	if ttl <= 0 || !result.Handled || result.Suppressed || len(result.ResourceKeys) == 0 || strings.TrimSpace(result.Context) == "" {
+		return
+	}
+	key := resolverURLDedupeKey(raw)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil || len(c.entries) >= resolverCacheMaxEntries {
+		c.entries = map[string]resolverSocialCacheEntry{}
+	}
+	c.entries[key] = resolverSocialCacheEntry{result: cloneResolverSocialResult(result), expires: now.Add(ttl)}
 }
 
 // resolverSocialForwardMessages restores the merged-forward contract for the
@@ -76,7 +132,21 @@ func hasKnownResolverMediaURL(event MessageEvent, text string) bool {
 	return false
 }
 
-func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
+func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginRequest, raw string, maxImages int, cacheTTL time.Duration) resolverSocialResult {
+	now := time.Now()
+	if cacheTTL > 0 {
+		if cached, found := p.socialCache.get(raw, now); found {
+			cached.ImageURLs = limitStrings(cached.ImageURLs, maxImages)
+			recordResolverMediaLog(ctx, req, raw, platformNameFromURL(raw), true, "cache_hit")
+			return cached
+		}
+	}
+	result := p.resolveSocialMediaFresh(ctx, req, raw, maxImages)
+	p.socialCache.put(raw, result, now, cacheTTL)
+	return result
+}
+
+func (p *ResolverPlugin) resolveSocialMediaFresh(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return resolverSocialResult{}
@@ -107,6 +177,15 @@ func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginReque
 		}
 	}
 	return result
+}
+
+func platformNameFromURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "social"
+	}
+	key, _ := platformKeyAndLabel(parsed.Hostname())
+	return firstNonEmpty(key, "social")
 }
 
 func resolverPlatformResourcePrefix(platform string) string {
