@@ -30,6 +30,9 @@ func publicChatErrorMessage(err error) string {
 	if errors.Is(err, errImageMediaUnavailable) {
 		return publicImageMediaErrorMessage(err)
 	}
+	if errors.Is(err, errReplyCompression) {
+		return "回复超过字数上限，暂时没能压缩完成，请提高上限或稍后重试。"
+	}
 	raw := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(raw)
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {

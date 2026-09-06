@@ -121,13 +121,19 @@ func isDocumentItemLine(line string) bool {
 //
 // 其余一律留在同一条：清单、表格、代码围栏和连续的说明段落都是一个整体。
 func splitDocumentSections(reply string) []string {
+	// Markers remain hard boundaries. Within a marked document, only explicit
+	// Markdown peer headings can repair an omitted boundary; bold labels and
+	// prose transitions must not fragment the model's messages.
+	if !strings.Contains(reply, notificationSplitMarker) {
+		return documentSectionBlocks(reply, false)
+	}
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		out = append(out, documentSectionBlocks(part)...)
+		out = append(out, documentSectionBlocks(part, true)...)
 	}
 	return out
 }
@@ -154,43 +160,84 @@ func classifyDocumentLine(line string) documentLineKind {
 	return documentProse
 }
 
-func documentSectionBlocks(part string) []string {
+func documentHeadingLevel(line string) int {
+	if replyDocumentHeading.MatchString(line) {
+		return len(line) - len(strings.TrimLeft(line, "#"))
+	}
+	// Bold and plain labels carry no explicit hierarchy.
+	return 7
+}
+
+func documentSectionBlocks(part string, markdownOnly bool) []string {
 	var lines []string
 	var kinds []documentLineKind
-	for _, line := range strings.Split(part, "\n") {
-		if line = strings.TrimSpace(line); line == "" {
+	var levels []int
+	rootHeadings := map[int]int{}
+	if markdownOnly {
+		document := replyMarkdownParser.Parse(text.NewReader([]byte(part)))
+		for node := document.FirstChild(); node != nil; node = node.NextSibling() {
+			if heading, ok := node.(*ast.Heading); ok && heading.Lines().Len() > 0 {
+				lineIndex := strings.Count(part[:heading.Lines().At(0).Start], "\n")
+				rootHeadings[lineIndex] = heading.Level
+			}
+		}
+	}
+	for lineIndex, line := range strings.Split(part, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
-		lines = append(lines, line)
-		kinds = append(kinds, classifyDocumentLine(line))
+		kind := classifyDocumentLine(trimmed)
+		level := documentHeadingLevel(trimmed)
+		if markdownOnly {
+			level = rootHeadings[lineIndex]
+			if kind == documentLabel && (level == 0 || !replyDocumentHeading.MatchString(trimmed)) {
+				kind = documentProse
+			}
+		}
+		lines = append(lines, strings.TrimRight(line, " \t"))
+		kinds = append(kinds, kind)
+		levels = append(levels, level)
 	}
 	if len(lines) == 0 {
 		return []string{part}
 	}
 	var out, current []string
+	hasBody, headingLevel := false, 0
 	flush := func() {
 		if len(current) > 0 {
 			out = append(out, strings.Join(current, "\n"))
 			current = nil
 		}
+		hasBody, headingLevel = false, 0
 	}
 	previousItem := false
 	for index, line := range lines {
 		switch kinds[index] {
 		case documentLabel:
-			flush()
+			level := levels[index]
+			if hasBody && (headingLevel == 0 || level <= headingLevel) {
+				flush()
+			}
+			// Consecutive headings belong with the first body, never alone.
+			if headingLevel == 0 || level < headingLevel {
+				headingLevel = level
+			}
 			previousItem = false
 		case documentItem:
 			previousItem = true
+			hasBody = true
 		case documentProse:
 			// 一串条目之后重新开始的说明，要成段才另起一条。行程里穿插一句
 			// 「中午回市区吃饭」仍属于这一天，末尾那几句提醒才是给整份文档的。
-			if previousItem && documentProseRun(kinds, index) >= 2 {
+			if !markdownOnly && previousItem && documentProseRun(kinds, index) >= 2 {
 				flush()
 			}
 			previousItem = false
+			hasBody = true
 		case documentFence:
 			// 围栏跟着上下文走，不改变条目状态。
+			hasBody = true
 		}
 		current = append(current, line)
 	}

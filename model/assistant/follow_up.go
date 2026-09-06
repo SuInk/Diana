@@ -170,10 +170,15 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		if llmErr != nil {
 			return "", llmErr
 		}
-		return normalizeReply(llmResp.Text, cfg.MaxReplyChars, markdownToPlainForConfig(cfg)), nil
+		return llmResp.Text, nil
 	})
 	if err != nil {
 		r.recordFollowUpFailure(ctx, kind, source, "generate", err)
+		return ""
+	}
+	comment, err = r.prepareGeneratedReply(ctx, cfg, comment)
+	if err != nil {
+		r.recordFollowUpFailure(ctx, kind, source, "compress", err)
 		return ""
 	}
 	comment = strings.TrimSpace(comment)

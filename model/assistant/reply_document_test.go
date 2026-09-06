@@ -81,13 +81,99 @@ func TestDocumentRepliesStayWholeWhenNaturalSplitIsOff(t *testing.T) {
 	}
 }
 
+func TestDocumentHeadingBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "live travel consecutive bold titles",
+			input: "Intro\n\n**Day 1 | City**\n\n**Morning**\n- Park\n\n**Afternoon**\n- Museum\n\n**Day 2 | Return**\n\n**Morning**\n- Breakfast\n\n**Preparation**\n- Tickets",
+			want:  []string{"Intro", "**Day 1 | City**\n**Morning**\n- Park", "**Afternoon**\n- Museum", "**Day 2 | Return**\n**Morning**\n- Breakfast", "**Preparation**\n- Tickets"},
+		},
+		{
+			name:  "markdown hierarchy",
+			input: "Intro\n## Day 1\n### Morning\n- Park\n### Afternoon\n- Museum\n## Day 2\n### Morning\n- Breakfast",
+			want:  []string{"Intro", "## Day 1\n### Morning\n- Park\n### Afternoon\n- Museum", "## Day 2\n### Morning\n- Breakfast"},
+		},
+		{
+			name:  "siblings still split",
+			input: "### Backup\nCopy files\n### Restore\nVerify files",
+			want:  []string{"### Backup\nCopy files", "### Restore\nVerify files"},
+		},
+		{
+			name:  "code counts as body",
+			input: "## Inspect\n```sh\nprintf 'ok'\n```\n## Finish\nDone",
+			want:  []string{"## Inspect\n```sh\nprintf 'ok'\n```", "## Finish\nDone"},
+		},
+		{
+			name:  "explicit marker overrides consecutive headings",
+			input: "## Parent" + notificationSplitMarker + "### Child\nBody",
+			want:  []string{"## Parent", "### Child\nBody"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for name, split := range map[string]func(string, chatSplitLimits) []string{"chat": splitChatReply, "forward": splitForwardReply} {
+				got := split(tc.input, chatSplitLimits{})
+				if !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("%s got %q, want %q", name, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestExplicitDocumentMessagesAreNotSplitAgain(t *testing.T) {
+	want := []string{
+		"Intro",
+		"## Day 1\n### Morning\n- Walk\n  - Keep this nested item\n### Evening\n- Dinner",
+		"## Day 2\n### Morning\n```python\nprint(1)\nprint(2)\n```\n### Evening\nReturn",
+		"## Preparation\n1. Tickets\n2. Documents",
+	}
+	input := strings.Join(want, notificationSplitMarker)
+	for name, split := range map[string]func(string, chatSplitLimits) []string{"chat": splitChatReply, "forward": splitForwardReply} {
+		for _, markerOnly := range []bool{false, true} {
+			if got := split(input, chatSplitLimits{MarkerOnly: markerOnly}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s markerOnly=%v: got %q, want %q", name, markerOnly, got, want)
+			}
+		}
+	}
+	// The real model omitted the marker between two peer main headings.
+	missingBoundary := want[0] + notificationSplitMarker + want[1] + "\n" + want[2] + notificationSplitMarker + want[3]
+	for name, split := range map[string]func(string, chatSplitLimits) []string{"chat": splitChatReply, "forward": splitForwardReply} {
+		if got := split(missingBoundary, chatSplitLimits{}); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s failed to repair a missing main-section boundary: %q", name, got)
+		}
+		// Turning natural splitting off disables the structural fallback too.
+		if got := split(missingBoundary, chatSplitLimits{MarkerOnly: true}); len(got) != 3 {
+			t.Fatalf("%s ignored marker-only mode: %q", name, got)
+		}
+	}
+	for _, style := range KnownReplyStyles() {
+		for _, natural := range []bool{false, true} {
+			if !strings.Contains(style.prompt(natural, personaVoice{}), replyDocumentDeliveryRule) {
+				t.Fatalf("style=%s natural=%v missing document guidance", style, natural)
+			}
+		}
+	}
+}
+
+func TestMarkedDocumentKeepsHeadingsInsideListItems(t *testing.T) {
+	part := "## Instructions\n- Step\n  ## Nested heading\n  Body\n- Finish"
+	want := []string{"Intro", part, "Done"}
+	if got := splitChatReply(strings.Join(want, notificationSplitMarker), chatSplitLimits{}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("nested list heading became a message boundary: %q", got)
+	}
+}
+
 func TestDocumentGuardPreservesChatAndExplicitMarkers(t *testing.T) {
 	chat := "终于修好了\n原来少了个等号\n这下能下班了"
 	if isDocumentReply(chat) || len(splitChatReply(chat, chatSplitLimits{})) != 3 {
 		t.Fatal("ordinary chat collapsed")
 	}
-	// 文档本身分成三个小节，显式标记再加一条。
-	if got := splitChatReply(travelDocumentRegression+notificationSplitMarker+"补充一句", chatSplitLimits{}); len(got) != 4 || got[3] != "补充一句" {
+	// 模型给出显式消息边界后，不再把边界内部的文档二次拆开。
+	if got := splitChatReply(travelDocumentRegression+notificationSplitMarker+"补充一句", chatSplitLimits{}); len(got) != 2 || got[1] != "补充一句" {
 		t.Fatalf("explicit boundary lost: %q", got)
 	}
 	if got := splitChatReply(chat, chatSplitLimits{MarkerOnly: true}); len(got) != 1 {
