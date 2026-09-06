@@ -3714,7 +3714,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 		}
 	}
-	currentMessage = r.imageOCRAdjustMessage(ctx, event, currentMessage)
+	currentMessage, event.replyAuditImageContext = r.imageOCRAdjustMessageWithContext(ctx, event, currentMessage)
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	if systemTail != "" {
 		messages = append(messages, llm.Message{
