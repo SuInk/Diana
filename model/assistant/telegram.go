@@ -67,6 +67,7 @@ func NewTelegramChannel(cfg TelegramConfig) *TelegramChannel {
 		cfg:    cfg,
 		client: telegramHTTPClient(cfg.ProxyURL),
 		status: ChannelStatus{
+			Platform:  PlatformTelegram,
 			Endpoint:  telegramEndpointLabel(cfg),
 			UpdatedAt: time.Now(),
 		},
@@ -277,6 +278,9 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		// 因此不需要转义——模型随口写个句号或减号也不会让整条消息以 400 被拒。
 		// 上游按平台决定要不要保留 Markdown；到这里还带标记就说明要渲染。
 		text, entities := telegramRichText(text, mentions)
+		if utf16Length(text) > telegramTextLimit {
+			return nil, fmt.Errorf("telegram: 文本超过单条消息上限，请降低回复字符上限或允许分条")
+		}
 		params := map[string]any{
 			"chat_id":                  chatID,
 			"text":                     text,

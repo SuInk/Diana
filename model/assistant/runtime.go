@@ -858,33 +858,27 @@ func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[s
 	if channel == nil {
 		return nil, fmt.Errorf("diana: channel is not configured")
 	}
-	if _, multi := channel.(*MultiChannel); multi && IsOneBotPlatform(cfg.Platform) {
-		return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, action, params)
+	if multi, ok := channel.(*MultiChannel); ok && !IsOneBotPlatform(cfg.Platform) {
+		// Explicit global OneBot administration may select the QQ binding even
+		// when the active profile is TG. Never fall back to a TG-only transport.
+		binding, found := multi.OneBotBinding()
+		if !found {
+			return nil, fmt.Errorf("diana: no OneBot channel is configured")
+		}
+		return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: binding.ProfileID, Platform: binding.Platform}, action, params)
 	}
-	return channel.CallAPI(ctx, action, params)
+	return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, action, params)
 }
 
 // callOneBotAPIForEvent routes a request back to the exact profile that
 // produced the message. This matters when one Runtime serves multiple bots.
 func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent, action string, params map[string]any) (map[string]any, error) {
-	if r == nil {
-		return nil, fmt.Errorf("diana: runtime is not configured")
+	channel, platform, err := r.outboundChannelForEvent(event)
+	if err != nil {
+		return nil, err
 	}
-	r.mu.RLock()
-	channel := r.channel
-	r.mu.RUnlock()
-	if channel == nil {
-		return nil, fmt.Errorf("diana: channel is not configured")
-	}
-	if multi, ok := channel.(*MultiChannel); ok {
-		binding, err := multi.bindingFor(event.ProfileID, event.Platform)
-		if err != nil {
-			return nil, err
-		}
-		if !IsOneBotPlatform(binding.Platform) {
-			return nil, fmt.Errorf("diana: profile %q is not a OneBot platform", binding.ProfileID)
-		}
-		return binding.Channel.CallAPI(ctx, action, params)
+	if !IsOneBotPlatform(platform) {
+		return nil, fmt.Errorf("diana: platform %q does not support OneBot API", platform)
 	}
 	return channel.CallAPI(ctx, action, params)
 }
@@ -8610,6 +8604,11 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 }
 
 func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply string, decoration outboundDecoration) ([]string, error) {
+	platform, platformErr := r.outboundPlatformForEvent(event)
+	if platformErr != nil {
+		return nil, platformErr
+	}
+	event.Platform = platform
 	reply, event = prepareReplyDelivery(reply, event)
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitEventChatReply(reply, cfg, event)
@@ -8617,6 +8616,19 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	defer releaseBatch()
 
 	if event.replyDeliveryMode != replyDeliverySingle && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+		if platform == PlatformTelegram {
+			merged := strings.Join(chunks, "\n\n")
+			message := r.resolveOutgoingMentionNames(event, OutgoingMessage{Text: merged})
+			rendered, mentions := renderDianaMentions(merged, message.MentionNames)
+			rendered, _ = telegramRichText(rendered, mentions)
+			if utf16Length(rendered) <= telegramTextLimit {
+				chunks = []string{merged}
+			}
+			return r.deliverChunks(ctx, event, chunks, cfg, decoration)
+		}
+		if !IsOneBotPlatform(platform) {
+			return r.deliverChunks(ctx, event, chunks, cfg, decoration)
+		}
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -9312,6 +9324,13 @@ func (r *Runtime) sendForwardNodes(ctx context.Context, event MessageEvent, node
 }
 
 func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageEvent, nodes []map[string]any) (map[string]any, error) {
+	platform, platformErr := r.outboundPlatformForEvent(event)
+	if platformErr != nil {
+		return nil, platformErr
+	}
+	if !IsOneBotPlatform(platform) {
+		return nil, fmt.Errorf("diana: platform %q does not support OneBot merged forwards", platform)
+	}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
