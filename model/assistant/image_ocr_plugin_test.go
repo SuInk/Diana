@@ -351,6 +351,40 @@ func TestImageOCRTextOnlyCombinesDescriptionAndTranscript(t *testing.T) {
 	}
 }
 
+func TestImageRecognitionTextIsReusedByReplyAudit(t *testing.T) {
+	for _, delivery := range []string{imageOCRDeliveryText, imageOCRDeliveryAttach} {
+		t.Run(delivery, func(t *testing.T) {
+			responses := []string{"包装上写着四川藏茶"}
+			if delivery == imageOCRDeliveryText {
+				responses = append([]string{"画面是一包茶叶"}, responses...)
+			}
+			recognitionCalls := len(responses)
+			responses = append(responses, `{"should_send":true,"confidence":0.98,"account_safe":true}`)
+			provider := &imageOCRFakeProvider{responses: responses}
+			rt := newImageOCRTestRuntime(t, provider, map[string]any{"backend": imageOCRBackendLLM, "delivery": delivery})
+			event := MessageEvent{Kind: EventKindGroup, RawMessage: "[CQ:image,file=tea.jpg]", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file": "tea.jpg"}}}}
+			message, recognition := rt.imageOCRAdjustMessageWithContext(context.Background(), event, imageOCRTestMessage("data:image/png;base64,AAA"))
+			if recognition == "" || !strings.Contains(message.Content, recognition) {
+				t.Fatal("recognition context differs from generation input")
+			}
+			event.replyAuditImageContext = recognition
+			if _, err := rt.runReplyAudit(context.Background(), event, "", "这是一款黑茶", rt.Config(), botReplyLoopEvidence{}); err != nil {
+				t.Fatal(err)
+			}
+			if provider.calls.Load() != int32(recognitionCalls+1) {
+				t.Fatal("audit caused an extra recognition request")
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(provider.lastReq.Messages[1].Content, "请审核以下回复：\n")), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["image_context"] != recognition || messagesContainImages(provider.lastReq.Messages) {
+				t.Fatal("audit did not receive recognition text only")
+			}
+		})
+	}
+}
+
 // 仅文字模式 + 关闭画面描述 = 纯 OCR：只烧一次转写调用。
 func TestImageOCRTextOnlyOCROnly(t *testing.T) {
 	provider := &imageOCRFakeProvider{response: "只有转写文字"}
@@ -411,7 +445,10 @@ func TestImageOCRTextOnlyKeepsPlaceholderOnFailure(t *testing.T) {
 		"backend": imageOCRBackendLLM, "delivery": imageOCRDeliveryText,
 	})
 
-	adjusted := runtime.imageOCRAdjustMessage(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("data:image/png;base64,EEE"))
+	adjusted, recognition := runtime.imageOCRAdjustMessageWithContext(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage("data:image/png;base64,EEE"))
+	if recognition != "" {
+		t.Fatal("recognition failure placeholder must not masquerade as evidence")
+	}
 	if llmMessageHasImages(adjusted) {
 		t.Fatal("images not stripped on failure")
 	}

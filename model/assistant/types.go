@@ -142,6 +142,7 @@ type MessageEvent struct {
 	// chatInReply 表示本次主动回复来自闲聊插话路径，回复阶段据此收敛语气和长度。
 	chatInReply            bool
 	replyDeliveryMode      replyDeliveryMode
+	replyAuditImageContext string
 	imageResolutionRun     bool
 	imageLoadErr           error
 	imageContextNotice     string

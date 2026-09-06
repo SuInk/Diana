@@ -289,22 +289,31 @@ func imageOCRMessageImageURLs(cfg imageOCRConfig, message llm.Message) (urls []s
 // 文字转写；「仅文字」模式把图片从消息里摘掉，换成画面描述与转写文本，让不
 // 支持看图的对话模型也能处理图片消息。识别失败只影响对应图片，绝不阻断回复。
 func (r *Runtime) imageOCRAdjustMessage(ctx context.Context, event MessageEvent, message llm.Message) llm.Message {
+	adjusted, _ := r.imageOCRAdjustMessageWithContext(ctx, event, message)
+	return adjusted
+}
+
+// Return the recognition text separately so the send audit can reuse it without
+// another vision/OCR request or treating the candidate answer as evidence.
+func (r *Runtime) imageOCRAdjustMessageWithContext(ctx context.Context, event MessageEvent, message llm.Message) (llm.Message, string) {
 	plugin, cfg, ok := r.imageOCRActiveConfig(event)
 	if !ok {
-		return message
+		return message, ""
 	}
 	if !cfg.textOnly() {
-		if notice := r.imageOCRAttachNotice(ctx, event, plugin, cfg, message); notice != "" {
+		notice := r.imageOCRAttachNotice(ctx, event, plugin, cfg, message)
+		if notice != "" {
 			message = appendLLMMessageText(message, notice)
 		}
-		return message
+		return message, notice
 	}
 
 	imageURLs, total := imageOCRMessageImageURLs(cfg, message)
 	if total == 0 {
-		return message
+		return message, ""
 	}
 	var lines []string
+	hasRecognition := false
 	for index, imageURL := range imageURLs {
 		var segments []string
 		if cfg.DescribeEnabled {
@@ -318,6 +327,7 @@ func (r *Runtime) imageOCRAdjustMessage(ctx context.Context, event MessageEvent,
 			}
 		}
 		entry := strings.Join(segments, "\n")
+		hasRecognition = hasRecognition || entry != ""
 		if entry == "" {
 			// 识别不出来也要占位：模型至少要知道这里有一张图，别凭空脑补。
 			entry = "（未能识别出这张图的内容）"
@@ -333,9 +343,13 @@ func (r *Runtime) imageOCRAdjustMessage(ctx context.Context, event MessageEvent,
 	}
 	// 结尾这句是必须的：识别文本本身长得就像一段现成的答复，模型很容易原样发出去，
 	// 用户发张表情包只会收到一段图解。
-	block := "【图片消息】对话模型未直接查看图片，以下为机器识别内容（可能有误），只供你理解这张图，不要复述、转述或改写给用户：\n" + strings.Join(lines, "\n\n")
+	recognition := strings.Join(lines, "\n\n")
+	block := "【图片消息】对话模型未直接查看图片，以下为机器识别内容（可能有误），只供你理解这张图，不要复述、转述或改写给用户：\n" + recognition
 	message = stripLLMImageParts(message)
-	return appendLLMMessageText(message, block)
+	if !hasRecognition {
+		return appendLLMMessageText(message, block), ""
+	}
+	return appendLLMMessageText(message, block), recognition
 }
 
 // stripLLMImageParts 把消息里的图片段全部去掉（含视频抽帧），文本等其他段保留。
