@@ -3951,7 +3951,7 @@ func directPluginReply(resp PluginResponse) string {
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
-	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars)
+	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars, cfg.Platform)
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
@@ -4014,7 +4014,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
-		return r.prepareGeneratedReply(ctx, cfg, resp.Text)
+		return r.prepareGeneratedReply(ctx, cfg, resp.Text, event)
 	}
 	group := llm.GroupChat
 	if messagesContainImages(messages) || messagesContainAudio(messages) {
@@ -4031,7 +4031,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	if err != nil {
 		return "", err
 	}
-	return r.prepareGeneratedReply(ctx, cfg, raw)
+	return r.prepareGeneratedReply(ctx, cfg, raw, event)
 }
 
 type runtimeAgentLLMProvider struct {
@@ -4091,7 +4091,7 @@ func (p *runtimeAgentLLMProvider) providerForGroup(group string) (LLMProvider, e
 // tools remain callable even when the full local Agent surface is disabled.
 func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig, messages []llm.Message, extraTools []agent.Tool) (string, error) {
 	cfg = cfg.WithDefaults()
-	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars)
+	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars, cfg.Platform)
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
 			WorkDir:                    AgentWorkspaceDir(),
@@ -8615,20 +8615,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if event.replyDeliveryMode != replyDeliverySingle && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
-		if platform == PlatformTelegram {
-			merged := strings.Join(chunks, "\n\n")
-			message := r.resolveOutgoingMentionNames(event, OutgoingMessage{Text: merged})
-			rendered, mentions := renderDianaMentions(merged, message.MentionNames)
-			rendered, _ = telegramRichText(rendered, mentions)
-			if utf16Length(rendered) <= telegramTextLimit {
-				chunks = []string{merged}
-			}
-			return r.deliverChunks(ctx, event, chunks, cfg, decoration)
-		}
-		if !IsOneBotPlatform(platform) {
-			return r.deliverChunks(ctx, event, chunks, cfg, decoration)
-		}
+	if IsOneBotPlatform(platform) && event.replyDeliveryMode != replyDeliverySingle && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {

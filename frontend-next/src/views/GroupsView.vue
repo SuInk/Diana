@@ -243,7 +243,7 @@
           <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
         </div>
         <div class="field">
-          <label for="group-maxreply">回复上限（字符）</label>
+          <label for="group-maxreply">单条回复上限（字符）</label>
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
@@ -254,17 +254,13 @@
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">
-            按模型排的换行、以及句号边界，把一条回复分成几条发。关掉后只认模型显式写的分条标记，
-            合并转发不受影响。
-          </span>
         </div>
-        <div class="field">
+        <div v-if="supportsGroupLevel" class="field">
           <label for="group-forward-len">合并转发字数</label>
           <input id="group-forward-len" v-model.number="editing.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
           <span class="hint">正文超过这个字数改用合并转发卡片。留空或填 0 表示无上限。</span>
         </div>
-        <div class="field">
+        <div v-if="supportsGroupLevel" class="field">
           <label for="group-forward-chunks">合并转发块数</label>
           <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
           <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>

@@ -165,7 +165,7 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 	}
 	// 和上面的脱敏同理：定时轮询进来的 ctx 没带用量上下文，补上才记得到账。
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, source), kind.usageTag())
-	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars)
+	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars, cfg.Platform)
 	comment, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
 		llmResp, llmErr := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
 		if llmErr != nil {
@@ -177,7 +177,7 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		r.recordFollowUpFailure(ctx, kind, source, "generate", err)
 		return ""
 	}
-	comment, err = r.prepareGeneratedReply(ctx, cfg, comment)
+	comment, err = r.prepareGeneratedReply(ctx, cfg, comment, source)
 	if err != nil {
 		r.recordFollowUpFailure(ctx, kind, source, "compress", err)
 		return ""
