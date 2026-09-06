@@ -3957,6 +3957,7 @@ func directPluginReply(resp PluginResponse) string {
 }
 
 func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
+	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars)
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
@@ -4096,6 +4097,7 @@ func (p *runtimeAgentLLMProvider) providerForGroup(group string) (LLMProvider, e
 // tools remain callable even when the full local Agent surface is disabled.
 func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig, messages []llm.Message, extraTools []agent.Tool) (string, error) {
 	cfg = cfg.WithDefaults()
+	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars)
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
 			WorkDir:                    AgentWorkspaceDir(),
