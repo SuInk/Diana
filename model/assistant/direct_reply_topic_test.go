@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -40,6 +41,11 @@ func TestDirectReplyTopicFailsClosed(t *testing.T) {
 		merge        bool
 	}{
 		{"supplement", `{"relation":"supplement","confidence":0.99}`, nil, true},
+		{"repeat", `{"relation":"repeat","confidence":0.99}`, nil, true},
+		{"correction", `{"relation":"correction","confidence":0.99}`, nil, true},
+		{"independent", `{"relation":"independent","confidence":0.99}`, nil, false},
+		{"uncertain", `{"relation":"uncertain","confidence":0.99}`, nil, false},
+		{"repeat low confidence", `{"relation":"repeat","confidence":0.89}`, nil, false},
 		{"separate", `{"relation":"separate","confidence":0.99}`, nil, false},
 		{"unknown", `{"relation":"unknown","confidence":0.99}`, nil, false},
 		{"low confidence", `{"relation":"supplement","confidence":0.89}`, nil, false},
@@ -61,6 +67,99 @@ func TestDirectReplyTopicFailsClosed(t *testing.T) {
 				t.Fatalf("merged=%v, want %v", merged, tc.merge)
 			}
 		})
+	}
+}
+
+func TestDirectReplyRepeatReusesPendingGeneration(t *testing.T) {
+	for _, proactive := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "proactive"}[proactive], func(t *testing.T) {
+			base := &directReplyMergeProvider{firstStarted: make(chan struct{}), releaseFirst: make(chan struct{})}
+			p := &topicTestProvider{base: base, result: `{"relation":"repeat","confidence":0.98,"reason":"同一请求仅增加点名"}`}
+			r := topicTestRuntime(p)
+			root := directedGroupMessage("root", "user", "茯砖茶是啥")
+			outcome := "replied"
+			if proactive {
+				root.ToMe = false
+				root.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": root.RawMessage}}}
+				root.proactiveReply = true
+				outcome = "replied_proactive"
+			}
+			r.remember(root)
+			done := make(chan error, 1)
+			go func() {
+				_, err := r.replyAndRecord(context.Background(), root, root.RawMessage, outcome)
+				done <- err
+			}()
+			defer func() {
+				close(base.releaseFirst)
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Error(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Error("pending reply did not finish")
+				}
+				if sent := r.channel.(*recordingChannel).sentSnapshot(); len(sent) != 1 || sent[0].Text != "只回答第一条" {
+					t.Errorf("repeat changed delivery: %#v", sent)
+				}
+				if calls := len(base.requestsSnapshot()); calls != 2 {
+					t.Errorf("repeat regenerated: %d calls", calls)
+				}
+			}()
+			select {
+			case <-base.firstStarted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("generation did not start")
+			}
+			r.noteRecalledInbound(root)
+			p.onTopic = func(req llm.GenerateRequest) {
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(req.Messages[1].Content), &payload); err != nil {
+					t.Fatal(err)
+				}
+				for _, key := range []string{"same_sender", "same_session", "original_recalled"} {
+					if payload[key] != true {
+						t.Errorf("missing state %s: %#v", key, payload)
+					}
+				}
+				if payload["original_reply_sent"] != false {
+					t.Error("missing unsent state")
+				}
+			}
+			follow := directedGroupMessage("follow", "user", "茯砖茶是啥@机器人")
+			r.noteDirectedInbound(follow)
+			_, _, handled, result := r.prepareMessageEvent(context.Background(), follow)
+			if handled || result != "merged_into_reply" {
+				t.Fatalf("handled=%v outcome=%s", handled, result)
+			}
+		})
+	}
+}
+
+func TestDirectReplyRepeatDoesNotMaskCorrection(t *testing.T) {
+	p := &topicTestProvider{result: `{"relation":"repeat","confidence":0.99}`}
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "user", "安排两天行程")
+	ctx, finish := r.beginDirectReply(context.Background(), root)
+	defer finish()
+	repeat := directedGroupMessage("repeat", "user", "安排两天行程@机器人")
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, repeat, repeat.RawMessage); !merged {
+		t.Fatal("repeat not merged")
+	}
+	if !r.directReplyIncludesMessage(ctx, "repeat") {
+		t.Fatal("repeat identity not retained")
+	}
+	if run := ctx.Value(directReplyRunContextKey{}).(directReplyRunContext); run.active.generation != 0 {
+		t.Fatal("repeat invalidated generation")
+	}
+	p.result = `{"relation":"correction","confidence":0.99}`
+	correction := directedGroupMessage("correction", "user", "改成三天")
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, correction, correction.RawMessage); !merged {
+		t.Fatal("correction not merged")
+	}
+	if !r.directReplyHasNewSupplements(ctx) {
+		t.Fatal("correction did not invalidate generation")
 	}
 }
 
