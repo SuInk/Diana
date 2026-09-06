@@ -143,6 +143,7 @@ func TestReplyCompressionDoesNotRegenerateTheAnswer(t *testing.T) {
 	if err != nil || got != "简洁结论" || len(p.requests) != 1 || p.generationCalls != 1 {
 		t.Fatalf("generation/compression did not remain separate: %q %v", got, err)
 	}
+	assertGenerationBudget(t, p.requestSnapshot(), 10)
 }
 
 func TestReplyCompressionPreservesAutoModeAndDraftLimit(t *testing.T) {
