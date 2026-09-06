@@ -507,6 +507,7 @@ func TestReplySuppressionMarkerSurvivesReplyLimit(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
 		strings.Repeat("较长拒绝说明", 20) + replySuppressionMarker,
+		"暂停自动回复",
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", MaxReplyChars: 12}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -522,7 +523,7 @@ func TestReplySuppressionMarkerSurvivesReplyLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(reply, replySuppressionMarker) || len(channel.sent) != 1 || strings.Contains(channel.sent[0].Text, replySuppressionMarker) {
-		t.Fatalf("marker leaked after truncation: reply=%q sent=%#v", reply, channel.sent)
+		t.Fatalf("marker leaked after compression: reply=%q sent=%#v", reply, channel.sent)
 	}
 	if _, active := runtime.activeReplySuppression(event, time.Now()); !active {
 		t.Fatal("reply limit discarded the response suppression marker")

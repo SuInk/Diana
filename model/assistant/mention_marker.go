@@ -11,7 +11,7 @@ import (
 
 // 提及用平台中立的标记，不再让模型直接写 OneBot 的 CQ 码。
 //
-// Diana 自己的另外两个标记早就是中立的：<dianabr> 在 splitReply 里就消化掉了，
+// Diana 自己的另外两个标记早就是中立的：[diana-br] 在 splitReply 里就消化掉了，
 // [diana-reply:ID] 由 applyOutgoingReplyMarker 抽成 ReplyMessageID，两个平台各自
 // 映射。只有 @ 还在教方言——而 replyMentionPrompt 只看 event.Kind 是不是群聊、
 // 不看平台，于是 Telegram 群里它同样教模型写 [CQ:at,qq=…]，而 TelegramChannel.Send

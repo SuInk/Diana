@@ -29,11 +29,11 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	}
 }
 
-// 分条是投递机制，不能只在某一种表达风格里教：splitReply 只认 <dianabr>，模型
+// 分条是投递机制，不能只在某一种表达风格里教：splitReply 只认 [diana-br]，模型
 // 不写标记就一定发成一整条。每种风格的提示词都必须带上这条规则。
 func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {
 	for _, style := range []ReplyStyle{
-		ReplyStyleAssistant, ReplyStyleGroupmate, ReplyStyleGentle,
+		ReplyStyleAssistant, ReplyStyleHuman, ReplyStyleGentle,
 		ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl, ReplyStyle(""),
 	} {
 		prompt := style.prompt(true, personaVoice{})

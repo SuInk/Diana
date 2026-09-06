@@ -280,7 +280,7 @@ func TestFollowUpPromptUsesGlobalReplyStyleWithoutSkipGate(t *testing.T) {
 
 func TestPluginFollowUpHonorsGlobalReplyLength(t *testing.T) {
 	channel := &recordingChannel{}
-	provider := &sequenceLLMProvider{replies: []string{strings.Repeat("啰", 200)}}
+	provider := &sequenceLLMProvider{replies: []string{strings.Repeat("啰", 200), "压缩后的跟评"}}
 	runtime := NewRuntime(
 		BotConfig{BotAccount: "42", MaxReplyChars: 12},
 		channel, NewPluginManager(), nil, nil, nil,
@@ -291,10 +291,12 @@ func TestPluginFollowUpHonorsGlobalReplyLength(t *testing.T) {
 
 	waitForCondition(t, time.Second, func() bool { return len(channel.sentSnapshot()) == 1 })
 	sent := channel.sentSnapshot()
-	// normalizeReply 截断后会补省略号，所以上限是全局配置值加上那个记号。
-	limit := 12 + len([]rune("..."))
+	limit := 12
 	if runes := []rune(sent[0].Text); len(runes) > limit {
-		t.Fatalf("跟评没有按配置截断，长度 %d：%q", len(runes), sent[0].Text)
+		t.Fatalf("跟评没有按配置压缩，长度 %d：%q", len(runes), sent[0].Text)
+	}
+	if sent[0].Text != "压缩后的跟评" || len(provider.requestsSnapshot()) != 2 {
+		t.Fatal("follow-up did not use the compressed reply")
 	}
 }
 

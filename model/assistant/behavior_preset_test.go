@@ -43,7 +43,7 @@ func TestResponseModePresetsAndLegacyCustomSettings(t *testing.T) {
 }
 
 func TestReplyStylePromptIsSpecificAndBounded(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl} {
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleCatgirl} {
 		prompt := style.prompt(true, personaVoice{})
 		if prompt == "" || !strings.Contains(prompt, "默认表达风格") {
 			t.Fatalf("style %q prompt = %q", style, prompt)
@@ -86,9 +86,13 @@ func TestBehaviorPresetsSurviveConfigPayloadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestReplyStyleNormalizedHandlesGroupmateAndUnknown(t *testing.T) {
+func TestReplyStyleNormalizedMapsLegacyGroupmateAndUnknownToAssistant(t *testing.T) {
+	// 群友档已删除，老配置里的值回落到助手，导入时也不当成拼错。
 	for _, raw := range []string{"groupmate", "Groupmate", " groupmate "} {
-		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleGroupmate {
+		if !knownReplyStyle(raw) {
+			t.Fatalf("legacy style %q should still import", raw)
+		}
+		if got := ReplyStyle(raw).Normalized(); got != ReplyStyleAssistant {
 			t.Fatalf("Normalized(%q) = %q", raw, got)
 		}
 	}
@@ -100,34 +104,34 @@ func TestReplyStyleNormalizedHandlesGroupmateAndUnknown(t *testing.T) {
 }
 
 func TestReplyStyleClosingAnchorIsAlwaysPresent(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate} {
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleHuman} {
 		if anchor := strings.TrimSpace(style.closingAnchor()); anchor == "" {
 			t.Fatalf("style %q has an empty closing anchor", style)
 		}
 	}
 }
 
-func TestGroupmateReplyStylePromptCarriesExamples(t *testing.T) {
-	prompt := ReplyStyleGroupmate.prompt(true, personaVoice{})
+func TestHumanReplyStylePromptCarriesExamples(t *testing.T) {
+	prompt := ReplyStyleHuman.prompt(true, personaVoice{})
 	if !strings.Contains(prompt, "示例") || !strings.Contains(prompt, "用户：") {
-		t.Fatalf("groupmate prompt is missing examples: %q", prompt)
+		t.Fatalf("human prompt is missing examples: %q", prompt)
 	}
 }
 
 func TestSystemPromptEndsWithReplyStyleClosingAnchor(t *testing.T) {
-	base := BotConfig{ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
+	base := BotConfig{ReplyStyle: ReplyStyleHuman}.WithDefaults()
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
 	relationship := RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, event.UserID)
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, true, relationship, true, nil)
-	anchor := ReplyStyleGroupmate.closingAnchor()
+	anchor := ReplyStyleHuman.closingAnchor()
 	if !strings.HasSuffix(prompt, anchor) {
 		t.Fatalf("system prompt does not end with the closing anchor: %q", prompt)
 	}
 }
 
 func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
-	base := BotConfig{BotAccount: "42", ReplyStyle: ReplyStyleGroupmate}.WithDefaults()
+	base := BotConfig{BotAccount: "42", ReplyStyle: ReplyStyleHuman}.WithDefaults()
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "9"}
 
@@ -136,7 +140,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{ReplyStyleGroupmate.prompt(true, personaVoice{}), ReplyStyleGroupmate.closingAnchor()} {
+	for _, want := range []string{ReplyStyleHuman.prompt(true, personaVoice{}), ReplyStyleHuman.closingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -154,7 +158,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 // 保存过一次配置之后，风格填的「从不」和用户亲手选的「从不」再也分不开——
 // 「用户选过就尊重用户」名存实亡，之后改风格的默认值也到不了这些人手上。
 func TestReplyDecorationModesAreNotStyleDriven(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleGroupmate, ReplyStyleAssistant, ReplyStyleCatgirl} {
+	for _, style := range []ReplyStyle{ReplyStyleHuman, ReplyStyleAssistant, ReplyStyleCatgirl} {
 		cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: style}.WithDefaults()
 		if replyReferenceMode(cfg) != ReplyDecorationAuto || mentionUserMode(cfg) != ReplyDecorationAuto {
 			t.Fatalf("风格 %s 改动了装饰件默认值：引用=%s @=%s", style, replyReferenceMode(cfg), mentionUserMode(cfg))
@@ -163,7 +167,7 @@ func TestReplyDecorationModesAreNotStyleDriven(t *testing.T) {
 	// 显式选过的值任何风格都不许动。
 	explicit := BotConfig{
 		ResponseMode:       ResponseModeStandard,
-		ReplyStyle:         ReplyStyleGroupmate,
+		ReplyStyle:         ReplyStyleHuman,
 		ReplyReferenceMode: ReplyDecorationOn,
 		MentionUserMode:    ReplyDecorationOff,
 	}.WithDefaults()
@@ -175,7 +179,7 @@ func TestReplyDecorationModesAreNotStyleDriven(t *testing.T) {
 // 投递方式只由配置决定：填了就照填的来，没填才用默认值。风格不参与。
 func TestDeliverySettingsAreConfigOnly(t *testing.T) {
 	// 没填：所有风格拿到同一份聊天体量的默认值。
-	for _, style := range []ReplyStyle{ReplyStyleGroupmate, ReplyStyleAssistant, ReplyStyleCatgirl} {
+	for _, style := range []ReplyStyle{ReplyStyleHuman, ReplyStyleAssistant, ReplyStyleCatgirl} {
 		cfg := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: style}.WithDefaults()
 		if cfg.DirectReplyChunkSize != chatReplyChunkSize || cfg.SendChunkIntervalMS != chatSendChunkIntervalMS {
 			t.Fatalf("风格 %s 的默认投递 = %d/%d，want %d/%d",
@@ -183,12 +187,12 @@ func TestDeliverySettingsAreConfigOnly(t *testing.T) {
 		}
 	}
 
-	// 填了：两个方向都照填的来。以前更铺张的值会被群友风格压回去——那正是
+	// 填了：两个方向都照填的来。以前更铺张的值会被风格压回去——那正是
 	// 「WebUI 里改了不生效」的来源。
 	for _, want := range []struct{ chunk, interval int }{{80, 2000}, {900, 300}} {
 		cfg := BotConfig{
 			ResponseMode:         ResponseModeStandard,
-			ReplyStyle:           ReplyStyleGroupmate,
+			ReplyStyle:           ReplyStyleHuman,
 			DirectReplyChunkSize: want.chunk,
 			SendChunkIntervalMS:  want.interval,
 		}.WithDefaults()
@@ -206,9 +210,9 @@ func TestForwardCardAppliesToEveryStyle(t *testing.T) {
 	chunks := []string{long}
 	for _, style := range []ReplyStyle{
 		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively,
-		ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyleCatgirl,
+		ReplyStyleConcise, ReplyStyleHuman, ReplyStyleCatgirl,
 	} {
-		cfg := BotConfig{ReplyStyle: style}.WithDefaults()
+		cfg := BotConfig{ReplyStyle: style, ForwardReplyThreshold: 900}.WithDefaults()
 		if !shouldUseForwardReply(long, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 			t.Fatalf("风格 %q 下 1200 字没有触发合并转发", style)
 		}
@@ -219,21 +223,21 @@ func TestForwardCardAppliesToEveryStyle(t *testing.T) {
 	}
 }
 
-func TestReplyStyleGroupmateAppliesPerGroup(t *testing.T) {
+func TestReplyStyleAppliesPerGroup(t *testing.T) {
 	base := BotConfig{ResponseMode: ResponseModeStandard, ReplyStyle: ReplyStyleAssistant}.WithDefaults()
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleGroupmate},
+		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleHuman, ForwardReplyThreshold: 900},
 	}})
 	casual := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "casual"})
-	if casual.ReplyStyle.Normalized() != ReplyStyleGroupmate {
+	if casual.ReplyStyle.Normalized() != ReplyStyleHuman {
 		t.Fatalf("group-level style did not take effect: %#v", casual)
 	}
 	// 风格按群生效的是措辞和打字节奏，投递配置不归它管——卡片阈值也一样，
-	// 群级换成群友风格不会把它关掉。
+	// 群级换风格不会把它关掉。
 	long := strings.Repeat("字", 1200)
 	if !shouldUseForwardReply(long, []string{long}, casual.ForwardReplyThreshold, casual.ForwardReplyChunkThreshold) {
-		t.Fatalf("群级群友风格把合并转发关掉了：%#v", casual)
+		t.Fatalf("群级风格把合并转发关掉了：%#v", casual)
 	}
 }
 
@@ -387,7 +391,7 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 // 任何风格都不该动投递方式的四项配置——它们在 WebUI 里各有一个输入框，
 // 风格再改一遍就有了两个来源。
 func TestReplyStyleDoesNotChangeDeliveryConfig(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleCatgirl, ReplyStyleGroupmate, ReplyStyleLively, ReplyStyleConcise} {
+	for _, style := range []ReplyStyle{ReplyStyleCatgirl, ReplyStyleHuman, ReplyStyleLively, ReplyStyleConcise} {
 		filled := BotConfig{
 			ReplyStyle:           style,
 			DirectReplyChunkSize: 777,
@@ -467,7 +471,7 @@ func TestPersonaVoiceEmptyLeavesStylePromptUntouched(t *testing.T) {
 }
 
 func TestPersonaVoicePreferencesStayOptionalAcrossPromptPaths(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleCatgirl, ReplyStyleAssistant, ReplyStyleGroupmate, ReplyStyleHuman} {
+	for _, style := range []ReplyStyle{ReplyStyleCatgirl, ReplyStyleAssistant, ReplyStyleHuman} {
 		for _, voice := range []personaVoice{
 			personaVoiceFrom("本喵", ""),
 			personaVoiceFrom("", "呀"),
@@ -505,7 +509,7 @@ func TestPersonaVoiceDoesNotRewritePlainRepliesOrConfiguration(t *testing.T) {
 	if roundTrip.SelfReference != cfg.SelfReference || roundTrip.SentenceEnders != cfg.SentenceEnders {
 		t.Fatal("optional voice guidance must not change saved preferences")
 	}
-	got := splitEventChatReply("在的<dianabr>怎么了？", cfg, MessageEvent{Kind: EventKindGroup, chatInReply: true})
+	got := splitEventChatReply("在的"+notificationSplitMarker+"怎么了？", cfg, MessageEvent{Kind: EventKindGroup, chatInReply: true})
 	if len(got) != 2 || got[0] != "在的" || got[1] != "怎么了？" {
 		t.Fatalf("delivery inserted a configured self-reference or suffix: %q", got)
 	}
@@ -520,7 +524,7 @@ func TestDefaultPersonaVoiceForCatgirl(t *testing.T) {
 	if got := parsePersonaEnders(enders); len(got) < 2 {
 		t.Fatalf("猫娘应当给出多个候选：%v", got)
 	}
-	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGroupmate, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise} {
+	for _, style := range []ReplyStyle{ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise} {
 		if self, ends := DefaultPersonaVoice(style); self != "" || ends != "" {
 			t.Fatalf("%s 不该对自称和句尾有主张：%q %q", style, self, ends)
 		}
@@ -535,13 +539,14 @@ func TestDefaultPersonaVoiceForCatgirl(t *testing.T) {
 //
 // 以前这里发的是十几条普通消息——风格把整条卡片分支短路掉了，「合并转发字数」
 // 填多少都没用。
-func TestRuntimeGroupmateLongReplyUsesForwardCard(t *testing.T) {
+func TestRuntimeHumanStyleLongReplyUsesForwardCard(t *testing.T) {
 	channel := &recordingChannel{}
 	long := strings.Repeat("刘翔在雅典夺冠那年的事说来话长喵。", 80) // 远超 900 字
 	botRuntime := NewRuntime(BotConfig{
-		GroupTriggers: []string{"Diana"},
-		BotAccount:    "42",
-		ReplyStyle:    ReplyStyleGroupmate,
+		GroupTriggers:         []string{"Diana"},
+		BotAccount:            "42",
+		ReplyStyle:            ReplyStyleHuman,
+		ForwardReplyThreshold: 900,
 	}.WithDefaults(), channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &capturingLLMProvider{reply: long}, nil
 	})
@@ -559,7 +564,7 @@ func TestRuntimeGroupmateLongReplyUsesForwardCard(t *testing.T) {
 	if err := botRuntime.HandleEvent(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
-	// 等得比群友风格的打字停顿上限（5 秒）还宽：走卡片时会在停顿之前就返回，
+	// 等得比打字停顿上限（5 秒）还宽：走卡片时会在停顿之前就返回，
 	// 所以正常路径是秒过；等这么久是为了万一退回散装时能数出条数，而不是超时
 	// 了事——「一条没发」和「刷了十几条」是两种完全不同的故障。
 	waitForCondition(t, 10*time.Second, func() bool {
