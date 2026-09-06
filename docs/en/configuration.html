@@ -134,6 +134,7 @@ https://HOST/api/channels/wecom/callback</code></pre>
           <article><h3>Muted accounts</h3><p>The group list and the global list are a union: adding someone here never drops the global mute list. Level and hours, by contrast, are taken over wholesale by "set reply rules for this group".</p></article>
           <article><h3>Persona and context</h3><p>Group-level prompts, history depth and reply length can override the bot defaults. The reply character limit applies to the whole generated reply, not each bubble, and is included in the generation prompt so the model can stay within budget on its first response. Replies that still exceed the limit are compressed by the chat model with at most one corrective attempt, never hard-truncated. A failed compression does not send the oversized original, and the current single-message or automatic-splitting choice is preserved.</p></article>
           <article><h3>Tool overrides</h3><p>Each group can follow the global setting, or force a specific tool or plugin on or off.</p></article>
+          <article><h3>Combined delivery</h3><p>When a merge threshold is exceeded, OneBot uses a merged-forward card. Telegram combines the parts into an ordinary rich-text message when it fits; otherwise it keeps the original parts. An individual part that is still too long is rejected locally, never truncated. Other platforms do not attempt OneBot forwarding. An explicit single-message choice bypasses automatic merging but remains subject to platform limits.</p></article>
         </div>
       </section>
 
