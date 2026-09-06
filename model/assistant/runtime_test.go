@@ -3025,14 +3025,14 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 }
 
-func TestRuntimeProactiveReplyCompressesCompleteAnswer(t *testing.T) {
+func TestRuntimeProactiveReplySplitsBeforeCompression(t *testing.T) {
 	channel := &recordingChannel{}
 	completeReply := strings.Repeat("先检查端口占用，再看启动日志。", 20)
-	compressedReply := "先查端口占用，再看启动日志"
-	provider := &compressionTestProvider{capturingLLMProvider: capturingLLMProvider{reply: completeReply}, outputs: []string{compressedReply}}
+	provider := &compressionTestProvider{capturingLLMProvider: capturingLLMProvider{reply: completeReply}}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:         false,
 		MaxReplyChars:        120,
+		SendChunkIntervalMS:  1,
 		ProactiveReplyPrompt: "custom concise proactive instruction",
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -3055,11 +3055,18 @@ func TestRuntimeProactiveReplyCompressesCompleteAnswer(t *testing.T) {
 	if len(provider.request.Messages) == 0 || !strings.Contains(allPrompts, "custom concise proactive instruction") {
 		t.Fatalf("system prompt = %#v", provider.request.Messages)
 	}
-	if reply != compressedReply || len(provider.requests) != 1 {
-		t.Fatalf("proactive reply was not compressed: %q", reply)
+	if len(provider.requests) != 0 {
+		t.Fatal("natural sentence boundaries should avoid compression calls")
 	}
-	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
-		t.Fatalf("sent = %#v reply=%q", channel.sent, reply)
+	var delivered []string
+	for _, message := range channel.sent {
+		if replyCompressionRunes(message.Text) > 120 {
+			t.Fatal("proactive part exceeds its limit")
+		}
+		delivered = append(delivered, message.Text)
+	}
+	if len(delivered) < 2 || strings.ReplaceAll(strings.Join(delivered, ""), "。", "") != strings.ReplaceAll(completeReply, "。", "") {
+		t.Fatalf("proactive answer lost content: reply=%q sent=%q", reply, delivered)
 	}
 }
 

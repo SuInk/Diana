@@ -114,13 +114,13 @@ func TestReplyCompressionFailureNeverReturnsOversizedOrTruncatedText(t *testing.
 func TestReplyCompressionProtectsCodeAndMedia(t *testing.T) {
 	code := "```python\nprint(1)\n```"
 	p := &compressionTestProvider{outputs: []string{"已处理", code}}
-	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 40, MarkdownToPlain: boolPointer(false)}, strings.Repeat("说明", 30)+"\n"+code)
-	if err != nil || got != code || len(p.requests) != 2 {
+	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 40, MarkdownToPlain: boolPointer(false)}, replySingleMarker+strings.Repeat("说明", 30)+"\n"+code)
+	if err != nil || got != replySingleMarker+code || len(p.requests) != 2 {
 		t.Fatalf("protected code changed: %q %v", got, err)
 	}
 	p = &compressionTestProvider{outputs: []string{"已处理", code}}
-	got, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 10, MarkdownToPlain: boolPointer(true)}, strings.Repeat("说明", 30)+"\n"+code)
-	if err != nil || got != "print(1)" || len(p.requests) != 2 {
+	got, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 10, MarkdownToPlain: boolPointer(true)}, replySingleMarker+strings.Repeat("说明", 30)+"\n"+code)
+	if err != nil || got != replySingleMarker+"print(1)" || len(p.requests) != 2 {
 		t.Fatalf("plain-text conversion lost protected code: %q %v", got, err)
 	}
 	p = &compressionTestProvider{}

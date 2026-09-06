@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestTelegramMergeThresholdUsesOrdinaryMessagesWithoutAudit(t *testing.T) {
+func TestTelegramIgnoresForwardThresholdWithoutAudit(t *testing.T) {
 	withFastSendTiming(t)
 	for _, multi := range []bool{false, true} {
 		for _, kind := range []EventKind{EventKindGroup, EventKindPrivate} {
@@ -15,11 +15,11 @@ func TestTelegramMergeThresholdUsesOrdinaryMessagesWithoutAudit(t *testing.T) {
 				threshold  int
 				want       []string
 			}{
-				{"merge", "第一条" + notificationSplitMarker + "第二条", 1, []string{"第一条\n\n第二条"}},
+				{"threshold ignored", "第一条" + notificationSplitMarker + "第二条", 1, []string{"第一条", "第二条"}},
 				{"no merge", "第一条" + notificationSplitMarker + "第二条", 0, []string{"第一条", "第二条"}},
 				{"single", replySingleMarker + "第一条" + notificationSplitMarker + "第二条", 1, []string{"第一条\n第二条"}},
 				{"over capacity", strings.Repeat("甲", 3000) + notificationSplitMarker + strings.Repeat("乙", 3000), 1, []string{strings.Repeat("甲", 3000), strings.Repeat("乙", 3000)}},
-				{"rich text", "**标题**" + notificationSplitMarker + "\n```python\nprint(1)\n```", 1, []string{"标题\n\nprint(1)"}},
+				{"rich text", "**标题**" + notificationSplitMarker + "\n```python\nprint(1)\n```", 1, []string{"标题", "print(1)"}},
 				{"mention capacity", strings.Repeat("甲", 2050) + "[diana-at:10001]" + notificationSplitMarker + strings.Repeat("乙", 2020), 1, []string{strings.Repeat("甲", 2050) + "@" + strings.Repeat("名", 60), strings.Repeat("乙", 2020)}},
 			} {
 				t.Run(tc.name+map[bool]string{false: "/direct", true: "/multi"}[multi]+"/"+string(kind), func(t *testing.T) {
@@ -57,9 +57,11 @@ func TestTelegramMergeThresholdUsesOrdinaryMessagesWithoutAudit(t *testing.T) {
 						}
 					}
 					if tc.name == "rich text" {
-						entities, _ := calls[0].Params["entities"].([]any)
-						if len(entities) != 2 {
-							t.Fatalf("lost bold/code entities: %v", entities)
+						for i, kind := range []string{"bold", "pre"} {
+							entities, _ := calls[i].Params["entities"].([]any)
+							if len(entities) != 1 || entities[0].(map[string]any)["type"] != kind {
+								t.Fatalf("lost %s entity: %v", kind, entities)
+							}
 						}
 					}
 				})
