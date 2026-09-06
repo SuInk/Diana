@@ -20,14 +20,14 @@ var (
 	mdHeadingPattern    = regexp.MustCompile(`(?m)^\s*#{1,6}\s+`)
 	mdLinkPattern       = regexp.MustCompile(`!?\[([^\]\n]*)\]\(([^)\n]+)\)`)
 	// dianaMarkerLabelPattern 认出 Diana 自己的方括号标记，它们不参与 Markdown 降级。
-	dianaMarkerLabelPattern = regexp.MustCompile(`^(?:diana-at|diana-reply|回复):`)
+	dianaMarkerLabelPattern = regexp.MustCompile(`^(?:diana-at|diana-reply|回复):|^diana-br$`)
 	mdBulletPattern         = regexp.MustCompile(`(?m)^(\s*)[-*+]\s+`)
 	mdQuotePattern          = regexp.MustCompile(`(?m)^\s*>\s?`)
 	mdRulePattern           = regexp.MustCompile(`(?m)^\s*(?:-{3,}|\*{3,}|_{3,})\s*$\n?`)
 	mdExtraBlankPattern     = regexp.MustCompile(`\n{3,}`)
 )
 
-// markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 <dianabr> 分段标记。
+// markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 [diana-br] 分段标记。
 func markdownToPlain(text string) string {
 	if !strings.ContainsAny(text, "*#`[]_->") {
 		return text

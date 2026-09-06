@@ -256,28 +256,18 @@
           />
           <span class="hint">
             按模型排的换行、以及句号边界，把一条回复分成几条发。关掉后只认模型显式写的分条标记，
-            下面的「最多分几条」随之失效，「分段发送长度」和合并转发不受影响。
+            合并转发不受影响。
           </span>
         </div>
         <div class="field">
-          <label for="group-maxbubbles">最多分几条</label>
-          <input id="group-maxbubbles" :disabled="!(editing.natural_reply_split_enabled ?? defaultNaturalReplySplitEnabled)" v-model.number="editing.reply_max_bubbles" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">分出来超过它就退回粗一档（先不按句号、再不按换行），退到底把相邻段均分成这么多条。</span>
-        </div>
-        <div class="field">
-          <label for="group-chunk">分段发送长度</label>
-          <input id="group-chunk" v-model.number="editing.direct_reply_chunk_size" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">单条聊天消息最多多少字，撞上了会在最近的标点处切开。这是硬上限，不受自然分条开关约束。</span>
-        </div>
-        <div class="field">
           <label for="group-forward-len">合并转发字数</label>
-          <input id="group-forward-len" v-model.number="editing.forward_reply_threshold" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。</span>
+          <input id="group-forward-len" v-model.number="editing.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
+          <span class="hint">正文超过这个字数改用合并转发卡片。留空或填 0 表示无上限。</span>
         </div>
         <div class="field">
           <label for="group-forward-chunks">合并转发块数</label>
-          <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">切出超过这么多块也改用合并转发卡片。</span>
+          <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
+          <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>
         </div>
         <div v-if="editing.response_mode === 'custom'" class="field">
           <label for="group-proactive-chance">主动回复采样率</label>
@@ -419,7 +409,6 @@ const groupResponseModeOptions: AppSelectOption[] = [
 
 const groupReplyStyleOptions: AppSelectOption[] = [
   { value: "", label: "跟随全局" },
-  { value: "groupmate", label: "群友" },
   { value: "assistant", label: "助手" },
   { value: "gentle", label: "温柔" },
   { value: "lively", label: "活泼" },
@@ -550,8 +539,8 @@ function responseModeLabel(mode: BotGroupConfig["response_mode"]): string {
 }
 
 function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
-  return ({ groupmate: "群友风格", assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", catgirl: "猫娘风格", roleplay: "扮演风格" } as const)[
-    style as "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay"
+  return ({ assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", catgirl: "猫娘风格", roleplay: "扮演风格" } as const)[
+    style as "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay"
   ] ?? "";
 }
 
@@ -741,6 +730,8 @@ async function saveEditing(): Promise<void> {
   try {
     const payload: BotGroupConfig = {
       ...current,
+      forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,

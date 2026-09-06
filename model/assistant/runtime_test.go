@@ -1611,19 +1611,6 @@ func forwardCallContainsText(call recordingAPICall, want string) bool {
 	return false
 }
 
-func TestSplitReplyTreatsBotbrAsMessageBreak(t *testing.T) {
-	got := splitReply("abc<dianabr>def", 20)
-	want := []string{"abc", "def"}
-	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
 func TestSplitReplyHonorsChunkSize(t *testing.T) {
 	got := splitReply("abcdefg", 3)
 	want := []string{"abc", "def", "g"}
@@ -1704,7 +1691,7 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 	}
 }
 
-// 空行只是排版：收掉，不分条。分条只认模型显式写的 <dianabr>。
+// 空行只是排版：收掉，不分条。分条只认模型显式写的 [diana-br]。
 func TestSplitReplyTreatsBlankLinesAsLayout(t *testing.T) {
 	got := splitReply("第一段\n仍是第一段\n\n第二段", 100)
 	want := []string{"第一段\n仍是第一段\n第二段"}
@@ -1727,7 +1714,7 @@ func TestRuntimeBotbrReplySendsMultipleMessages(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "刚刚撤回的是两条：<dianabr>1. A<dianabr>2. B")
+	}, "刚刚撤回的是两条："+notificationSplitMarker+"1. A"+notificationSplitMarker+"2. B")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -1758,7 +1745,7 @@ func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "abcdef")
+	}, "abc"+notificationSplitMarker+"def")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -1779,9 +1766,9 @@ func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 func TestRuntimeMoreThanFiveReplyChunksUseForwardMessage(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		Name:                 "Diana",
-		BotAccount:           "42",
-		DirectReplyChunkSize: 1,
+		Name:                       "Diana",
+		BotAccount:                 "42",
+		ForwardReplyChunkThreshold: 5,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 
 	err := runtime.send(context.Background(), MessageEvent{
@@ -1789,7 +1776,7 @@ func TestRuntimeMoreThanFiveReplyChunksUseForwardMessage(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "abcdef")
+	}, "a\nb\nc\nd\ne\nf")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -1839,7 +1826,7 @@ func TestRuntimeLongGroupReplyUsesForwardMessage(t *testing.T) {
 		t.Fatalf("api call = %#v", call)
 	}
 	nodes, ok := call.params["messages"].([]map[string]any)
-	if !ok || len(nodes) != 2 {
+	if !ok || len(nodes) != 1 {
 		t.Fatalf("messages = %#v", call.params["messages"])
 	}
 	data, ok := nodes[0]["data"].(map[string]any)

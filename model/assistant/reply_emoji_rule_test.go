@@ -11,7 +11,7 @@ import (
 func TestEveryReplyStyleCarriesTheEmojiRule(t *testing.T) {
 	// emoji 规则必须对所有风格生效：用户切了风格不等于想看 😂。
 	for _, style := range []ReplyStyle{
-		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, "",
+		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleHuman, "",
 	} {
 		if !strings.Contains(style.prompt(true, personaVoice{}), replyEmojiRule) {
 			t.Errorf("风格 %q 的提示词没有带上 emoji 规则", style)
@@ -23,21 +23,10 @@ func TestEveryReplyStyleCarriesTheBlankLineRule(t *testing.T) {
 	// 空行规则必须对所有风格生效：运行时把空行当分条信号，模型却当段落间距，
 	// 从源头上不让它输出空行，两边就不会再对不上。
 	for _, style := range []ReplyStyle{
-		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, "",
+		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleHuman, "",
 	} {
 		if !strings.Contains(style.prompt(true, personaVoice{}), replyBlankLineRule) {
 			t.Errorf("风格 %q 的提示词没有带上空行规则", style)
-		}
-	}
-}
-
-func TestGroupmateStyleDropsFillerWordQuota(t *testing.T) {
-	// 语气词和颜文字的计数约束已经去掉：那是「最多一个」的上限，反而暗示可以带，
-	// 而且「颜文字」说的是字符拼的表情，管不到 emoji。
-	prompt := ReplyStyleGroupmate.prompt(true, personaVoice{})
-	for _, dropped := range []string{"语气词", "颜文字"} {
-		if strings.Contains(prompt, dropped) {
-			t.Errorf("群友风格提示词里仍然保留了 %q 的计数约束", dropped)
 		}
 	}
 }
@@ -47,15 +36,15 @@ func TestReplyStylePromptKeepsStyleGuidance(t *testing.T) {
 	if !strings.Contains(ReplyStyleConcise.prompt(true, personaVoice{}), "默认表达风格为简洁") {
 		t.Fatal("风格本身的提示词丢了")
 	}
-	if !strings.Contains(ReplyStyleGroupmate.prompt(true, personaVoice{}), "像群里一个熟悉的普通朋友那样说话") {
-		t.Fatal("群友风格的提示词丢了")
+	if !strings.Contains(ReplyStyleHuman.prompt(true, personaVoice{}), "情绪是外放的") {
+		t.Fatal("真人感风格的提示词丢了")
 	}
 }
 
 // 篇幅规则对所有风格生效:闲聊一句话问的,即使联网查证过也不要写成小评测,
 // 更不要在回复里罗列参考链接。
 func TestEveryReplyStyleForbidsEssayAndLinkDump(t *testing.T) {
-	for _, style := range []ReplyStyle{ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, ReplyStyle("")} {
+	for _, style := range []ReplyStyle{ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleHuman, ReplyStyle("")} {
 		prompt := style.prompt(true, personaVoice{})
 		if !strings.Contains(prompt, replyProportionRule) {
 			t.Fatalf("风格 %q 缺少篇幅与链接规则", style)
@@ -67,7 +56,7 @@ func TestEveryReplyStyleForbidsEssayAndLinkDump(t *testing.T) {
 // 真人不这么打字。
 func TestEveryReplyStyleCarriesTheTrailingPunctuationRule(t *testing.T) {
 	for _, style := range []ReplyStyle{
-		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleGroupmate, "",
+		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise, ReplyStyleHuman, "",
 	} {
 		if !strings.Contains(style.prompt(true, personaVoice{}), replyTrailingPunctuationRule) {
 			t.Errorf("风格 %q 的提示词没有带上末尾标点规则", style)

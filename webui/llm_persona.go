@@ -34,7 +34,6 @@ type personaGeneratePayload struct {
 
 // personaGenerateStyleHints 把界面上的风格选项翻译成一句写作要求。
 var personaGenerateStyleHints = map[string]string{
-	"groupmate": "说话像群里的普通朋友：短句、口语、不端着，不要用客服或助理腔。",
 	"assistant": "说话像可靠的助理：条理清楚、用词稳，但不啰嗦。",
 	"gentle":    "语气温柔耐心，多一点体谅和安抚，但不腻。",
 	"lively":    "语气活泼跳脱，有梗有情绪，但不要吵闹到掩盖信息。",

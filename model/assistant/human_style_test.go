@@ -20,17 +20,17 @@ func TestHumanStyleNormalizes(t *testing.T) {
 	}
 }
 
-// TestHumanStyleDiffersFromGroupmate 两档的提示词不能一样，也不能只差几个字。
-func TestHumanStyleDiffersFromGroupmate(t *testing.T) {
+// TestHumanStyleDiffersFromAssistant 两档的提示词不能一样，也不能只差几个字。
+func TestHumanStyleDiffersFromAssistant(t *testing.T) {
 	human := ReplyStyleHuman.stylePrompt()
-	groupmate := ReplyStyleGroupmate.stylePrompt()
-	if human == groupmate {
-		t.Fatal("真人感和群友拿到了同一份提示词")
+	assistant := ReplyStyleAssistant.stylePrompt()
+	if human == assistant {
+		t.Fatal("真人感和助手拿到了同一份提示词")
 	}
 	if !strings.Contains(human, "情绪是外放的") {
-		t.Fatal("真人感档没有写明情绪外放——那正是它区别于群友的地方")
+		t.Fatal("真人感档没有写明情绪外放——那正是它区别于助手的地方")
 	}
-	if ReplyStyleHuman.closingAnchor() == ReplyStyleGroupmate.closingAnchor() {
+	if ReplyStyleHuman.closingAnchor() == ReplyStyleAssistant.closingAnchor() {
 		t.Fatal("两档的语气锚点是同一句")
 	}
 }
@@ -51,14 +51,22 @@ func TestHumanStyleStaysOutOfRoleplay(t *testing.T) {
 	}
 }
 
-// TestHumanStyleTeachesSplitting 分条是这一档拟真的主要手段。
+// TestHumanStyleTeachesSplitting 示例要同时示范两件事：确实另起一次发言时写标记，
+// 同一件事的回应加追问留在一条里。示例比规则管用，只留连发示例会把节奏规则顶回去。
 func TestHumanStyleTeachesSplitting(t *testing.T) {
 	human := ReplyStyleHuman.stylePrompt()
-	if !strings.Contains(human, "<dianabr>") {
+	if !strings.Contains(human, notificationSplitMarker) {
 		t.Fatal("真人感档没有教分条标记")
 	}
-	if strings.Count(human, "<dianabr>") < 3 {
-		t.Fatal("示例里没有把连发的密度示范出来，只讲规则模型学不会")
+	for _, merged := range []string{"你：在的，怎么啦", "你：这么快？厉害啊你"} {
+		if !strings.Contains(human, merged) {
+			t.Fatalf("缺少把回应和追问放在同一条里的示例：%s", merged)
+		}
+	}
+	for _, fragment := range []string{"在的" + notificationSplitMarker + "怎么啦", "这么快？" + notificationSplitMarker + "厉害", "哪一轮啊" + notificationSplitMarker} {
+		if strings.Contains(human, fragment) {
+			t.Fatalf("示例仍把同一件事拆成碎片连发：%s", fragment)
+		}
 	}
 }
 
@@ -76,19 +84,16 @@ func TestHumanStyleVoiceLeavesEndersOpen(t *testing.T) {
 	}
 }
 
-// TestHumanStyleGivesConcreteMessageLength 每条消息的长度要给具体数字。
-//
-// 抽象的「句子短」教不会长度——猫娘那一档的注释已经写过同一个教训：语气靠具体的
-// 词和示例教，形容词教不会。这里的数字说的是「每一条」，不是「这一轮总共」。
-func TestHumanStyleGivesConcreteMessageLength(t *testing.T) {
+func TestHumanStyleDoesNotForceShortBubbles(t *testing.T) {
 	human := ReplyStyleHuman.stylePrompt()
-	if !strings.Contains(human, "十几个字") {
-		t.Fatal("真人感档没有给出每条消息的具体长度")
+	if !strings.Contains(human, "不按字数强行拆消息") {
+		t.Fatal("真人感档仍可能按字数强行拆成碎片")
 	}
-	// 必须写明这是「每条」而不是「总共」：MaxReplyChars 截的是整条回复，
-	// 两个概念混起来会让模型把一轮压成一句。
-	if !strings.Contains(human, "这说的是每一条的长度，不是这一轮总共能说多少") {
-		t.Fatal("没有区分「每条长度」和「单轮总量」，模型会把一轮压成一句")
+	if !strings.Contains(human, "同一件事先用一条说清楚") {
+		t.Fatal("缺少减少闲聊分条的要求")
+	}
+	if strings.Contains(human, "二十字往上就该拆开") {
+		t.Fatal("旧版强制连发规则回归")
 	}
 }
 

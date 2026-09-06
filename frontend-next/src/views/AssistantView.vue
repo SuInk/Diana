@@ -570,32 +570,18 @@
                 </label>
                 <span class="hint">
                   按模型排的换行、以及句号边界，把一条回复分成几条发，像真人连发那样。
-                  关掉后只认模型显式写的分条标记，换行和句号都只当排版——下面的「最多分几条」随之失效，
-                  「分段发送长度」和「合并转发」不受影响。
-                </span>
-              </div>
-              <div class="field">
-                <label for="bot-maxbubbles">最多分几条</label>
-                <input id="bot-maxbubbles" :disabled="!form.natural_reply_split_enabled" v-model.number="form.reply_max_bubbles" class="input" inputmode="numeric" placeholder="5" />
-                <span class="hint">
-                  分出来不超过它就照分；超过就退回粗一档（先不按句号、再不按换行），退到底整条发。
-                  再长的交给下面的合并转发。留空按 5。
+                  关掉后只认模型显式写的分条标记，换行和句号都只当排版，合并转发不受影响。
                 </span>
               </div>
               <div class="field">
                 <label for="bot-forward-len">合并转发字数</label>
-                <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" inputmode="numeric" placeholder="900" />
-                <span class="hint">正文超过这个字数改用合并转发卡片，不再逐条发。留空或填 0 都按 900。所有表达风格一视同仁，包括群友。</span>
+                <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
+                <span class="hint">正文超过这个字数改用合并转发卡片。留空或填 0 表示无上限。</span>
               </div>
               <div class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
-                <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" inputmode="numeric" placeholder="5" />
-                <span class="hint">切出超过这么多块也改用合并转发卡片。留空按 5，也就是 6 块起。</span>
-              </div>
-              <div class="field">
-                <label for="bot-chunk">分段发送长度</label>
-                <input id="bot-chunk" v-model.number="form.direct_reply_chunk_size" class="input" inputmode="numeric" placeholder="400" />
-                <span class="hint">单条聊天消息最多多少字，超出的部分另发一条。这是硬上限，撞上了会在最近的标点处切开。留空按 400；表达风格不会改动这一项。</span>
+                <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
+                <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>
               </div>
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
@@ -1828,7 +1814,7 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-type ReplyStyleKey = "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl";
+type ReplyStyleKey = "assistant" | "gentle" | "lively" | "concise" | "catgirl";
 
 // 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
@@ -2280,7 +2266,6 @@ async function importWorldBookFile(event: Event): Promise<void> {
 
 // 每个风格自带的自称和句尾候选，和后端 DefaultPersonaVoice 保持一致。
 const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence_enders: string }> = {
-  groupmate: { self_reference: "", sentence_enders: "" },
   assistant: { self_reference: "", sentence_enders: "" },
   gentle: { self_reference: "", sentence_enders: "" },
   lively: { self_reference: "", sentence_enders: "" },
@@ -2309,7 +2294,6 @@ function applyReplyStyle(value: ReplyStyleKey): void {
 }
 
 const replyStyleOptions: AppSelectOption[] = [
-  { value: "groupmate", label: "群友" },
   { value: "human", label: "真人感" },
   { value: "assistant", label: "助手" },
   { value: "gentle", label: "温柔" },
@@ -3025,6 +3009,8 @@ async function save(): Promise<void> {
     }
     const payload: BotProfileConfig = {
       ...current,
+      forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       agent_command_allowlist: splitList(allowlistDraft.value),
