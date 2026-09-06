@@ -131,7 +131,7 @@ func TestSendOnlyFirstChunkCarriesReplyAndAt(t *testing.T) {
 		ReplyReferenceMode: ReplyDecorationOn, MentionUserMode: ReplyDecorationOn}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "m1"}
 
-	if err := runtime.send(context.Background(), event, "一二三四五六七"); err != nil {
+	if err := runtime.send(context.Background(), event, "一二三四"+notificationSplitMarker+"五六七"); err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
 	if len(channel.sent) != 2 {
@@ -513,10 +513,10 @@ func TestErrorNoticeIsNotChunkedByPersonaStyle(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
 		ResponseMode: ResponseModeStandard,
-		ReplyStyle:   ReplyStyleGroupmate,
+		ReplyStyle:   ReplyStyleHuman,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 	if size := runtime.Config().DirectReplyChunkSize; size != chatReplyChunkSize {
-		t.Fatalf("fixture needs the groupmate chunk size, got %d", size)
+		t.Fatalf("fixture needs the chat chunk size, got %d", size)
 	}
 
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "m1"}

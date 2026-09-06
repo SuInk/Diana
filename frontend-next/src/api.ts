@@ -203,7 +203,7 @@ export interface BotProfileConfig {
   welcome_message?: string;
   system_prompt?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
-  reply_style?: "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  reply_style?: "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   action_description_enabled?: boolean;
   /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
   self_reference?: string;
@@ -257,15 +257,16 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
-  /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 <dianabr>；缺省等价于开启。 */
+  /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 [diana-br]；缺省等价于开启。 */
   natural_reply_split_enabled?: boolean;
   social_reply_enabled?: boolean;
-  /** 最多分几条；分出来超过它就退回粗一档，退到底就整条发。 */
+  /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
+  /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
   direct_reply_chunk_size?: number;
-  /** 正文超过多少字改用合并转发卡片。 */
+  /** 正文超过多少字改用合并转发卡片；未设置或 0 表示无上限。 */
   forward_reply_threshold?: number;
-  /** 切出超过多少块改用合并转发卡片。 */
+  /** 切出超过多少块改用合并转发卡片；未设置或 0 表示无上限。 */
   forward_reply_chunk_threshold?: number;
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
@@ -441,7 +442,7 @@ export interface BotGroupConfig {
   /** 留空时跟随机器人全局回复模式。 */
   response_mode?: "" | "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
-  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  reply_style?: "" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 本群是否穿插括号动作；不设表示跟随机器人。 */
   action_description_enabled?: boolean;
   /** 留空时跟随机器人全局设置。 */
@@ -455,13 +456,13 @@ export interface BotGroupConfig {
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
   natural_reply_split_enabled?: boolean;
-  /** 本群最多分几条。 */
+  /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
-  /** 本群单条聊天消息的字数硬上限。 */
+  /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
   direct_reply_chunk_size?: number;
-  /** 本群正文超过多少字改用合并转发卡片。 */
+  /** 本群正文超过多少字改用合并转发卡片；未设置或 0 表示无上限。 */
   forward_reply_threshold?: number;
-  /** 本群切出超过多少块改用合并转发卡片。 */
+  /** 本群切出超过多少块改用合并转发卡片；未设置或 0 表示无上限。 */
   forward_reply_chunk_threshold?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
@@ -1987,7 +1988,7 @@ export interface Persona {
   id: string;
   name: string;
   system_prompt?: string;
-  reply_style?: "" | "groupmate" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  reply_style?: "" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   action_description_enabled?: boolean;
   self_reference?: string;
   sentence_enders?: string;
