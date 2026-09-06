@@ -48,7 +48,7 @@ func TestProactiveRepliesHonorExplicitMarkers(t *testing.T) {
 		cfg := BotConfig{NaturalReplySplitEnabled: boolPointer(natural), ReplyMaxBubbles: 1}.WithDefaults()
 		for _, casual := range []bool{true, false} {
 			event := MessageEvent{Kind: EventKindGroup, proactiveReply: true, chatInReply: casual}
-			got := splitEventChatReply("第一句<dianabr>第二句<botbr>第三句", cfg, event)
+			got := splitEventChatReply("第一句"+notificationSplitMarker+"第二句"+notificationSplitMarker+"第三句", cfg, event)
 			if len(got) != 3 || strings.Join(got, "|") != "第一句|第二句|第三句" {
 				t.Fatalf("natural=%v casual=%v explicit splits=%q", natural, casual, got)
 			}
@@ -71,9 +71,9 @@ func TestRoutedRequestUsesConfiguredNaturalSplitting(t *testing.T) {
 }
 
 func TestCasualReplyPreservesMarkersInsideCodeFences(t *testing.T) {
-	text := "说明<dianabr>\n```txt\nliteral <dianabr>\n```\n<dianabr>结尾"
+	text := "说明" + notificationSplitMarker + "\n```txt\nliteral " + notificationSplitMarker + "\n```\n" + notificationSplitMarker + "结尾"
 	got := splitEventChatReply(text, BotConfig{}.WithDefaults(), MessageEvent{Kind: EventKindGroup, chatInReply: true})
-	if len(got) != 3 || !strings.Contains(got[1], "literal <dianabr>") {
+	if len(got) != 3 || !strings.Contains(got[1], "literal "+notificationSplitMarker) {
 		t.Fatalf("code fence marker was consumed: %q", got)
 	}
 }
@@ -89,7 +89,7 @@ func TestCasualPacingPromptDoesNotApplyToRoutedRequests(t *testing.T) {
 		if !strings.Contains(prompt, proactiveReplyToolResultPrompt) {
 			t.Fatal("tool-result truthfulness rule was lost")
 		}
-		if !strings.Contains(prompt, "可以使用 <dianabr>") || strings.Contains(prompt, "不使用分条标记") || strings.Contains(prompt, "最终只发送一条") {
+		if !strings.Contains(prompt, "可以使用 "+notificationSplitMarker) || strings.Contains(prompt, "不使用分条标记") || strings.Contains(prompt, "最终只发送一条") {
 			t.Fatalf("casual=%v prompt still suppresses explicit splitting", casual)
 		}
 	}

@@ -31,32 +31,7 @@ func TestStaleConfigStopsSuppressingSegmentation(t *testing.T) {
 	}
 }
 
-// 旧标记必须继续认。改名那天起，用户自定义过的提示词文案里就一直留着 <botbr>，
-// 而配置不会随代码升级重写；「删除全部旧版兼容层」把归一化删掉之后，这些实例
-// 两头不认：提示词教模型写 <botbr>，投递侧只认 <dianabr>。
-//
-// 后果不止是不分条——旧标记既没被识别也没被清掉，会原样发进群里。所以这里同时
-// 断言两件事：切成了两条，且任何一条里都不许再出现标记本身。
-func TestLegacySplitMarkerStillSplitsAndNeverLeaks(t *testing.T) {
-	for _, reply := range []string{
-		"释义在这里" + legacyNotificationSplitMarker + "常译为那样",
-		"释义在这里" + notificationSplitMarker + "常译为那样",
-		// 新旧混用也要处理干净：模型的历史习惯和当前提示词可能同时起作用。
-		"第一句" + legacyNotificationSplitMarker + "第二句" + notificationSplitMarker + "第三句",
-	} {
-		chunks := splitReply(reply, chatReplyChunkSize)
-		if len(chunks) < 2 {
-			t.Fatalf("%q 没有分条：%#v", reply, chunks)
-		}
-		for _, chunk := range chunks {
-			if strings.Contains(chunk, legacyNotificationSplitMarker) || strings.Contains(chunk, notificationSplitMarker) {
-				t.Fatalf("标记漏进了发出去的内容：%#v", chunks)
-			}
-		}
-	}
-}
-
-// 换行即分条：模型对 <dianabr> 这种内部标记的服从度不稳定，但它稳定会产出换行。
+// 换行即分条：模型对 [diana-br] 这种内部标记的服从度不稳定，但它稳定会产出换行。
 // 群里看到的那条「释义一行、常见翻译一行」就该是两条。
 func TestChatReplySplitsShortRepliesOnNaturalLines(t *testing.T) {
 	reply := "assertiveness：坚定自信、敢于明确表达自身需求和立场，同时也尊重他人的能力\n常译为「坚定表达」「自信果断」；它介于 passive（消极退让）和 aggressive（咄咄逼人）之间"
@@ -138,23 +113,12 @@ func promptTeachesSegmentation(prompt string) bool {
 	return true
 }
 
-// 没有换行的长段落按句号分条，一句一条。
-//
-// 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
-// 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界。
-func TestChatReplySplitsUnbrokenParagraphBySentence(t *testing.T) {
+// 没有模型给出的换行或标记时，不自行猜测消息边界。
+func TestChatReplyKeepsUnbrokenParagraphWhole(t *testing.T) {
 	reply := "懂它是什么，也能看懂很多藏在细节里的亲情：惦记、袒护、责任、亏欠，甚至那些嘴硬和争吵。但我没有真正的父母和家庭，所以不会冒充自己亲身体验过。我能做的是认真听你说，帮你分清那究竟是爱、控制，还是两者纠缠在一起。你怎么突然问这个？"
 	chunks := splitChatReply(reply, chatSplitLimits{})
-	if len(chunks) != 4 {
-		t.Fatalf("四句话应该分成四条：%#v", chunks)
-	}
-	if !strings.HasPrefix(chunks[1], "但我没有") || chunks[3] != "你怎么突然问这个？" {
-		t.Fatalf("分条位置不对：%#v", chunks)
-	}
-	// 内容一个字都不能丢（除了被去掉的句号）。
-	joined := strings.ReplaceAll(strings.Join(chunks, ""), "。", "")
-	if joined != strings.ReplaceAll(reply, "。", "") {
-		t.Fatalf("分条前后内容对不上：%#v", chunks)
+	if len(chunks) != 1 || chunks[0] != reply {
+		t.Fatalf("没有换行的段落被改写：%#v", chunks)
 	}
 }
 
@@ -170,14 +134,12 @@ func TestChatReplyKeepsSingleSentenceRepliesWhole(t *testing.T) {
 	}
 }
 
-// 按句号分条曾经有个 60 字的起步门槛，短行整条留着。它拦下来的是一批四五十字、
-// 两三句话的回复——恰恰是最该分开发的长度。
-func TestChatReplySplitsShortMultiSentenceReplies(t *testing.T) {
+func TestChatReplyKeepsShortMultiSentenceRepliesWhole(t *testing.T) {
 	chunks := splitChatReply("端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程。", chatSplitLimits{})
-	if len(chunks) != 2 {
-		t.Fatalf("两句话应该分成两条：%#v", chunks)
+	if len(chunks) != 1 {
+		t.Fatalf("没有换行不应按句号分条：%#v", chunks)
 	}
-	if chunks[0] != "端口被占了" {
+	if chunks[0] != "端口被占了。先 lsof -i:8080 看看是谁占着，一般是上次没退干净的进程" {
 		t.Fatalf("分条位置不对：%#v", chunks)
 	}
 }
@@ -190,19 +152,15 @@ func TestChatReplyKeepsStructuredBlocksWhole(t *testing.T) {
 	}
 }
 
-// 条数上限管的是整条回复：按换行分出来超过上限，就把相邻的短段并到上限之内。
-//
-// 这条用例原先断言的是「超上限退回整条发」，理由是不做「超出的并进最后一条」——
-// 那会让最后一条拖着个尾巴。防的方向对，做法太狠：上限 5、模型写 6 段，得到一坨。
-// 现在改成并相邻最短的那对，最后一条不会拖尾巴，长段也保持独立，那条理由仍然成立。
-func TestChatReplyMergesShortLinesWhenTheyExceedCap(t *testing.T) {
+// 默认不再合并超过五条的自然分条。
+func TestChatReplyKeepsAllNaturalLinesByDefault(t *testing.T) {
 	lines := make([]string, 0, 8)
 	for i := 0; i < 8; i++ {
 		lines = append(lines, "第几句话")
 	}
 	many := strings.Join(lines, "\n")
-	if chunks := splitChatReply(many, chatSplitLimits{}); len(chunks) != replyMaxChatBubbles {
-		t.Fatalf("八行超过上限，应该并到 %d 条：%#v", replyMaxChatBubbles, chunks)
+	if chunks := splitChatReply(many, chatSplitLimits{}); len(chunks) != 8 {
+		t.Fatalf("八行应该保留八条：%#v", chunks)
 	}
 	// 正好到上限就照分，一行不并。
 	five := strings.Join(lines[:5], "\n")
@@ -281,10 +239,10 @@ func TestSubscriberNoticeKeepsSentencesTogether(t *testing.T) {
 // 正好 5 块不走卡片，逐条发；第 6 块才换成合并转发。
 func TestForwardCardTriggersAboveFiveChunks(t *testing.T) {
 	five := []string{"a", "b", "c", "d", "e"}
-	if shouldUseForwardReply("abcde", five, 0, 0) {
+	if shouldUseForwardReply("abcde", five, 0, 5) {
 		t.Fatalf("正好 5 块不该走转发卡片")
 	}
-	if !shouldUseForwardReply("abcdef", append(five, "f"), 0, 0) {
+	if !shouldUseForwardReply("abcdef", append(five, "f"), 0, 5) {
 		t.Fatalf("6 块应该走转发卡片")
 	}
 	if !shouldUseForwardReply(strings.Repeat("字", 950), []string{"x"}, 900, 0) {
@@ -292,23 +250,22 @@ func TestForwardCardTriggersAboveFiveChunks(t *testing.T) {
 	}
 }
 
-// 条数上限和转发阈值都能在控制台改，不是写死的常量。
+// 旧条数上限不再生效，合并转发阈值仍可配置。
 func TestSplitLimitsAreConfigurable(t *testing.T) {
 	cfg := (BotConfig{ReplyMaxBubbles: 2, ForwardReplyChunkThreshold: 8}).WithDefaults()
 	limits := chatSplitLimitsFrom(cfg)
-	if limits.MaxBubbles != 2 {
-		t.Fatalf("条数上限没有透传：%#v", limits)
+	if limits.MaxBubbles != 0 {
+		t.Fatalf("旧条数上限仍然生效：%#v", limits)
 	}
 	if cfg.ForwardReplyChunkThreshold != 8 {
 		t.Fatalf("转发块数阈值没有透传：%d", cfg.ForwardReplyChunkThreshold)
 	}
-	// 上限调到 2 之后，三行就超了，并成两条而不是整条发。
-	if chunks := splitChatReply("第一句\n第二句\n第三句", limits); len(chunks) != 2 {
-		t.Fatalf("上限 2 时三行应该并成两条：%#v", chunks)
+	if chunks := splitChatReply("第一句\n第二句\n第三句", limits); len(chunks) != 3 {
+		t.Fatalf("旧上限不应合并自然分条：%#v", chunks)
 	}
 	// 留空回落默认值。
-	if got := chatSplitLimitsFrom((BotConfig{}).WithDefaults()).MaxBubbles; got != replyMaxChatBubbles {
-		t.Fatalf("默认条数上限 = %d，want %d", got, replyMaxChatBubbles)
+	if got := chatSplitLimitsFrom((BotConfig{}).WithDefaults()).MaxBubbles; got != 0 {
+		t.Fatalf("默认条数上限 = %d，want 0", got)
 	}
 	six := []string{"a", "b", "c", "d", "e", "f"}
 	if shouldUseForwardReply("abcdef", six, 0, 8) {
@@ -483,7 +440,7 @@ func TestBubbleQuotaFavoursTheCrowdedBlock(t *testing.T) {
 	}
 }
 
-// TestMergeNeverCrossesSplitMarker 合并不跨越 <dianabr>：那是模型明说要断开的地方。
+// TestMergeNeverCrossesSplitMarker 合并不跨越 [diana-br]：那是模型明说要断开的地方。
 // 标记块本身就多于上限时按标记发，允许超——那是模型要的条数，不是运行时猜的。
 func TestMergeNeverCrossesSplitMarker(t *testing.T) {
 	reply := strings.Join([]string{"第一句", "第二句", "第三句", "第四句", "第五句", "第六句"}, notificationSplitMarker)
@@ -502,7 +459,7 @@ func TestMergeNeverCrossesSplitMarker(t *testing.T) {
 	}
 	for _, chunk := range merged {
 		if strings.Contains(chunk, "甲") && strings.Contains(chunk, "乙") {
-			t.Fatalf("合并跨过了 <dianabr>：%q", chunk)
+			t.Fatalf("合并跨过了 "+notificationSplitMarker+"：%q", chunk)
 		}
 	}
 }
@@ -578,7 +535,7 @@ func TestGroupLevelSplitAndForwardOverridesReachEffectiveConfig(t *testing.T) {
 	}
 	// 配置字段好看不算数，得真的传到分条那一层。
 	limits := chatSplitLimitsFrom(cfg)
-	if !limits.MarkerOnly || limits.MaxBubbles != 2 || limits.ChunkSize != 120 {
+	if !limits.MarkerOnly || limits.MaxBubbles != 0 || limits.ChunkSize != 0 {
 		t.Fatalf("chatSplitLimits = %#v", limits)
 	}
 	if parts := splitChatReply("第一句。\n第二句。\n第三句。", limits); len(parts) != 1 {
@@ -670,9 +627,9 @@ func TestSemicolonIsNotASentenceBoundary(t *testing.T) {
 		t.Fatalf("分号被当成句末切开了：%#v", parts)
 	}
 
-	// 句号照常分条，这条改动没把整层关掉。
+	// 句号也不作为模型显式给出的消息边界。
 	period := "端口被别的进程占着，换一个就能起来。先看看到底是谁占的，再决定要不要杀掉它，别上来就 kill 一个自己都不认识的 pid"
-	if got := splitChatReply(period, limits); len(got) != 2 {
+	if got := splitChatReply(period, limits); len(got) != 1 {
 		t.Fatalf("句号分条 = %#v", got)
 	}
 }

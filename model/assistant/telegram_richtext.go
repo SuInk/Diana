@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// Use the same UTF-16 coordinate system as entities, conservatively bounding
+// rendered text before submitting it to the Bot API.
+const telegramTextLimit = 4096
+
 // Telegram 的富文本有两条路：parse_mode 让平台自己解析，或者发纯文本外加一份
 // entities 描述哪一段是什么格式。这里走后者。
 //

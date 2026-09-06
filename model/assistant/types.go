@@ -141,6 +141,8 @@ type MessageEvent struct {
 	proactiveReply bool
 	// chatInReply 表示本次主动回复来自闲聊插话路径，回复阶段据此收敛语气和长度。
 	chatInReply            bool
+	replyDeliveryMode      replyDeliveryMode
+	replyAuditImageContext string
 	imageResolutionRun     bool
 	imageLoadErr           error
 	imageContextNotice     string
@@ -947,12 +949,8 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
 	}
-	if cfg.ForwardReplyThreshold <= 0 {
-		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
-	}
-	if cfg.ForwardReplyChunkThreshold <= 0 {
-		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
-	}
+	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
+	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
 	if cfg.ProactiveReplyChance <= 0 {
 		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}
@@ -1308,9 +1306,9 @@ func DefaultBotConfig() BotConfig {
 		MaxInputChars:                  2000,
 		MaxReplyChars:                  3500,
 		ReplyMaxBubbles:                replyMaxChatBubbles,
-		ForwardReplyChunkThreshold:     forwardReplyChunkCountThreshold,
+		ForwardReplyChunkThreshold:     0,
 		DirectReplyChunkSize:           chatReplyChunkSize,
-		ForwardReplyThreshold:          900,
+		ForwardReplyThreshold:          0,
 		RecallReplyMode:                RecallReplyModeOriginalForward,
 		RefusalStrategy:                RefusalStrategySmart,
 		DaypartToneEnabled:             boolPointer(false),
@@ -2169,9 +2167,10 @@ const (
 // 前端「恢复内置提示词」也曾写入过自己那份副本，所以两侧的旧文案都列在这里。
 var legacyPromptPlaintextRules = []string{
 	// 当前默认值的上一版：分条规则还写在这个文本框里，现在由内置规则接管，留着会重复。
-	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。回复较长、包含多个意群时（例如先给结论、再讲理由、最后补提醒），在意群边界写 " + notificationSplitMarker + " 拆成两三条消息，像真人连发几条那样，不要把好几段内容挤进同一条消息。一个编号或项目符号列表、一组步骤是一个整体，放在同一条消息里，严禁在每个列表项前使用 " + notificationSplitMarker + "。",
+	// 这里是逐字的历史文案，标记写死为当年的 <dianabr>，不跟随 notificationSplitMarker 改名。
+	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。回复较长、包含多个意群时（例如先给结论、再讲理由、最后补提醒），在意群边界写 <dianabr> 拆成两三条消息，像真人连发几条那样，不要把好几段内容挤进同一条消息。一个编号或项目符号列表、一组步骤是一个整体，放在同一条消息里，严禁在每个列表项前使用 <dianabr>。",
 	// 再往前两版：明确要求「都必须放在同一条消息里」，这才是分条彻底失效的那份。
-	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 " + notificationSplitMarker + "。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 " + notificationSplitMarker + "。",
+	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <dianabr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <dianabr>。",
 	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <botbr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <botbr>。",
 	"QQ 消息不渲染 Markdown。QQ 默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 QQ 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <botbr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <botbr>。",
 }
@@ -2190,7 +2189,7 @@ func isLegacyPromptPlaintextRules(text string) bool {
 // Only replace this exact legacy default; custom prompts remain user-owned.
 const legacySingleMessageProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
-const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 <dianabr>，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
+const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 " + notificationSplitMarker + "，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
 const (
 	defaultProactiveReplyChance    = 1.0

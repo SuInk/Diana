@@ -53,7 +53,7 @@ func TestImportReportsUnknownStyles(t *testing.T) {
 func TestKnownReplyStylesCoversEveryStyle(t *testing.T) {
 	for _, style := range []ReplyStyle{
 		ReplyStyleAssistant, ReplyStyleGentle, ReplyStyleLively, ReplyStyleConcise,
-		ReplyStyleGroupmate, ReplyStyleCatgirl, ReplyStyleRoleplay, ReplyStyleHuman,
+		ReplyStyleCatgirl, ReplyStyleRoleplay, ReplyStyleHuman,
 	} {
 		if !knownReplyStyle(string(style)) {
 			t.Fatalf("KnownReplyStyles 漏了 %q", style)

@@ -105,7 +105,7 @@ func hasBlankLine(text string) bool {
 func TestLivePromptKeepsRepliesEmojiFree(t *testing.T) {
 	client := liveLLMClient(t)
 	// 报喜类消息最容易勾出 emoji。
-	replies := liveReplies(t, client, ReplyStyleGroupmate, "我今天升职了！")
+	replies := liveReplies(t, client, ReplyStyleHuman, "我今天升职了！")
 	violations := 0
 	for i, reply := range replies {
 		if containsEmoji(reply) {
@@ -122,7 +122,7 @@ func TestLivePromptKeepsRepliesEmojiFree(t *testing.T) {
 func TestLivePromptKeepsRepliesFreeOfBlankLines(t *testing.T) {
 	client := liveLLMClient(t)
 	// 清单类问题最容易勾出空行段距。
-	replies := liveReplies(t, client, ReplyStyleGroupmate, "周末想在市区随便逛逛，推荐四五个地方，说说各自适合干嘛")
+	replies := liveReplies(t, client, ReplyStyleHuman, "周末想在市区随便逛逛，推荐四五个地方，说说各自适合干嘛")
 	violations := 0
 	for i, reply := range replies {
 		if hasBlankLine(reply) {
@@ -186,7 +186,7 @@ func livePaddingTurns(turns int) []llm.Message {
 
 func TestLivePromptRulesSurviveLongConversation(t *testing.T) {
 	client := liveLLMClient(t)
-	systemPrompt := defaultSystemPrompt + "\n" + ReplyStyleGroupmate.prompt(true, personaVoice{}) + "\n" + ReplyStyleGroupmate.closingAnchor()
+	systemPrompt := defaultSystemPrompt + "\n" + ReplyStyleHuman.prompt(true, personaVoice{}) + "\n" + ReplyStyleHuman.closingAnchor()
 
 	emojiViolations, blankViolations := 0, 0
 	for i := 0; i < livePromptSamples; i++ {

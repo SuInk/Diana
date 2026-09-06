@@ -20,9 +20,10 @@ const (
 var telegramDraftSequence atomic.Int64
 
 type telegramReplyDraft struct {
-	channel TextDraftChannel
-	message OutgoingMessage
-	draftID int64
+	channel  TextDraftChannel
+	message  OutgoingMessage
+	draftID  int64
+	maxRunes int
 
 	mu       sync.Mutex
 	lastSent time.Time
@@ -44,10 +45,15 @@ func (r *Runtime) telegramReplyDraft(event MessageEvent, cfg BotConfig) *telegra
 	if draftID <= 0 {
 		draftID = telegramDraftSequence.Add(1)
 	}
+	maxRunes := telegramDraftMaxRunes
+	if cfg.MaxReplyChars > 0 && cfg.MaxReplyChars < maxRunes {
+		maxRunes = cfg.MaxReplyChars
+	}
 	return &telegramReplyDraft{
-		channel: channel,
-		message: routeOutgoingToEvent(event, OutgoingMessage{UserID: event.UserID}),
-		draftID: draftID,
+		channel:  channel,
+		message:  routeOutgoingToEvent(event, OutgoingMessage{UserID: event.UserID}),
+		draftID:  draftID,
+		maxRunes: maxRunes,
 	}
 }
 
@@ -57,12 +63,17 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 	}
 	text, _ = consumeReplyControlIntent(text)
 	text = strings.TrimSpace(text)
-	if text == "" {
+	// Hold an incomplete metadata prefix until it can be stripped safely.
+	if text == "" || strings.HasPrefix(replySingleMarker, text) || strings.HasPrefix(replyAutoMarker, text) {
 		return
 	}
 	runes := []rune(text)
-	if len(runes) > telegramDraftMaxRunes {
-		text = string(runes[:telegramDraftMaxRunes])
+	limit := d.maxRunes
+	if limit <= 0 {
+		limit = telegramDraftMaxRunes
+	}
+	if len(runes) > limit {
+		text = string(runes[:limit])
 	}
 
 	d.mu.Lock()

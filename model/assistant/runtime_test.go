@@ -1611,19 +1611,6 @@ func forwardCallContainsText(call recordingAPICall, want string) bool {
 	return false
 }
 
-func TestSplitReplyTreatsBotbrAsMessageBreak(t *testing.T) {
-	got := splitReply("abc<dianabr>def", 20)
-	want := []string{"abc", "def"}
-	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d: %#v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("got[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
 func TestSplitReplyHonorsChunkSize(t *testing.T) {
 	got := splitReply("abcdefg", 3)
 	want := []string{"abc", "def", "g"}
@@ -1704,7 +1691,7 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 	}
 }
 
-// 空行只是排版：收掉，不分条。分条只认模型显式写的 <dianabr>。
+// 空行只是排版：收掉，不分条。分条只认模型显式写的 [diana-br]。
 func TestSplitReplyTreatsBlankLinesAsLayout(t *testing.T) {
 	got := splitReply("第一段\n仍是第一段\n\n第二段", 100)
 	want := []string{"第一段\n仍是第一段\n第二段"}
@@ -1727,7 +1714,7 @@ func TestRuntimeBotbrReplySendsMultipleMessages(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "刚刚撤回的是两条：<dianabr>1. A<dianabr>2. B")
+	}, "刚刚撤回的是两条："+notificationSplitMarker+"1. A"+notificationSplitMarker+"2. B")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -1758,7 +1745,7 @@ func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "abcdef")
+	}, "abc"+notificationSplitMarker+"def")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -1779,9 +1766,9 @@ func TestRuntimeGroupSplitReplyQuotesOnlyFirstChunk(t *testing.T) {
 func TestRuntimeMoreThanFiveReplyChunksUseForwardMessage(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{
-		Name:                 "Diana",
-		BotAccount:           "42",
-		DirectReplyChunkSize: 1,
+		Name:                       "Diana",
+		BotAccount:                 "42",
+		ForwardReplyChunkThreshold: 5,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 
 	err := runtime.send(context.Background(), MessageEvent{
@@ -1789,7 +1776,7 @@ func TestRuntimeMoreThanFiveReplyChunksUseForwardMessage(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "abcdef")
+	}, "a\nb\nc\nd\ne\nf")
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
@@ -1839,7 +1826,7 @@ func TestRuntimeLongGroupReplyUsesForwardMessage(t *testing.T) {
 		t.Fatalf("api call = %#v", call)
 	}
 	nodes, ok := call.params["messages"].([]map[string]any)
-	if !ok || len(nodes) != 2 {
+	if !ok || len(nodes) != 1 {
 		t.Fatalf("messages = %#v", call.params["messages"])
 	}
 	data, ok := nodes[0]["data"].(map[string]any)
@@ -3038,13 +3025,14 @@ func TestRuntimeProactiveReplyUsesRoutingProfile(t *testing.T) {
 	}
 }
 
-func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
+func TestRuntimeProactiveReplySplitsBeforeCompression(t *testing.T) {
 	channel := &recordingChannel{}
-	completeReply := strings.Repeat("很", 240)
-	provider := &capturingLLMProvider{reply: completeReply}
+	completeReply := strings.Repeat("先检查端口占用，再看启动日志。", 20)
+	provider := &compressionTestProvider{capturingLLMProvider: capturingLLMProvider{reply: completeReply}}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:         false,
 		MaxReplyChars:        120,
+		SendChunkIntervalMS:  1,
 		ProactiveReplyPrompt: "custom concise proactive instruction",
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -3067,11 +3055,18 @@ func TestRuntimeProactiveReplyPreservesCompleteAnswer(t *testing.T) {
 	if len(provider.request.Messages) == 0 || !strings.Contains(allPrompts, "custom concise proactive instruction") {
 		t.Fatalf("system prompt = %#v", provider.request.Messages)
 	}
-	if reply != completeReply {
-		t.Fatalf("proactive reply was truncated: got %d runes, want %d", len([]rune(reply)), len([]rune(completeReply)))
+	if len(provider.requests) != 0 {
+		t.Fatal("natural sentence boundaries should avoid compression calls")
 	}
-	if len(channel.sent) != 1 || channel.sent[0].Text != reply {
-		t.Fatalf("sent = %#v reply=%q", channel.sent, reply)
+	var delivered []string
+	for _, message := range channel.sent {
+		if replyCompressionRunes(message.Text) > 120 {
+			t.Fatal("proactive part exceeds its limit")
+		}
+		delivered = append(delivered, message.Text)
+	}
+	if len(delivered) < 2 || strings.ReplaceAll(strings.Join(delivered, ""), "。", "") != strings.ReplaceAll(completeReply, "。", "") {
+		t.Fatalf("proactive answer lost content: reply=%q sent=%q", reply, delivered)
 	}
 }
 
