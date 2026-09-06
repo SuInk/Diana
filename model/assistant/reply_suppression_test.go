@@ -58,7 +58,9 @@ func TestReplySuppressionPromptLeavesAccountControlToSendAudit(t *testing.T) {
 		replyRefusalMarker,
 		replySuppressionMarker,
 		"已停用",
-		"发送前审核和运行时独立决定",
+		"明确拒绝当前请求时，必须在回复末尾追加一次",
+		"不向用户展示",
+		"暂停账号由运行时按短时间内的拒答次数决定",
 		"严禁输出",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -72,7 +74,7 @@ func TestReplySuppressionPromptLeavesAccountControlToSendAudit(t *testing.T) {
 	}
 }
 
-func TestReplyRefusalThirdSuccessfulSendShowsCooldownForGroupAndPrivate(t *testing.T) {
+func TestReplyRefusalFourthSuccessfulSendShowsCooldownForGroupAndPrivate(t *testing.T) {
 	tests := []struct {
 		name  string
 		kind  EventKind
@@ -87,6 +89,7 @@ func TestReplyRefusalThirdSuccessfulSendShowsCooldownForGroupAndPrivate(t *testi
 				"这条消息我不回答，我们换个话题吧。" + replyRefusalMarker,
 				"这个请求我先拒绝。" + replyRefusalMarker,
 				"这次我仍然不能答应。" + replyRefusalMarker,
+				"这个请求我还是不能回答。" + replyRefusalMarker,
 			}}
 			channel := &recordingChannel{}
 			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -112,7 +115,7 @@ func TestReplyRefusalThirdSuccessfulSendShowsCooldownForGroupAndPrivate(t *testi
 				t.Fatalf("main requests=%d visual requests=%d", provider.mainRequests, provider.visualRequests)
 			}
 			if len(channel.sent) != replyRefusalThreshold+1 {
-				t.Fatalf("sent=%#v, want three refusals and one cooldown notice", channel.sent)
+				t.Fatalf("sent=%#v, want four refusals and one cooldown notice", channel.sent)
 			}
 			for index, sent := range channel.sent[:replyRefusalThreshold] {
 				if strings.TrimSpace(sent.Text) == "" || strings.Contains(sent.Text, replyRefusalMarker) {
@@ -121,7 +124,7 @@ func TestReplyRefusalThirdSuccessfulSendShowsCooldownForGroupAndPrivate(t *testi
 			}
 			notice := channel.sent[replyRefusalThreshold]
 			if notice.ReplyMessageID != "" || notice.MentionUserID != "" ||
-				!strings.Contains(notice.Text, "累计拒绝 3 次") ||
+				!strings.Contains(notice.Text, "累计拒绝 4 次") ||
 				!strings.Contains(notice.Text, "暂停响应此账号约 30 分钟") ||
 				!strings.Contains(notice.Text, "不会在到期后补发") {
 				t.Fatalf("cooldown notice=%#v", notice)
@@ -338,12 +341,31 @@ func TestReplyRefusalCounterIsGlobalPerAccountAndDeduplicatesPerSessionMessage(t
 		t.Fatalf("cross-session refusal count=%d reached=%v", count, reached)
 	}
 	third := refusalTestEvent(EventKindGroup, "group-b", "user", "group-b-id")
-	if count, reason, reached := runtime.registerReplyRefusal(third, t0.Add(3*time.Minute)); count != 3 || !reached || !strings.Contains(reason, "累计 3 次") {
+	if count, _, reached := runtime.registerReplyRefusal(third, t0.Add(3*time.Minute)); count != 3 || reached {
+		t.Fatalf("third refusal count=%d reached=%v", count, reached)
+	}
+	fourth := refusalTestEvent(EventKindPrivate, "", "user", "fourth-id")
+	if count, reason, reached := runtime.registerReplyRefusal(fourth, t0.Add(4*time.Minute)); count != 4 || !reached || !strings.Contains(reason, "累计 4 次") {
 		t.Fatalf("global threshold count=%d reached=%v reason=%q", count, reached, reason)
 	}
 	other := refusalTestEvent(EventKindPrivate, "", "other-user", "other-id")
 	if count, _, reached := runtime.registerReplyRefusal(other, t0.Add(3*time.Minute)); count != 1 || reached {
 		t.Fatalf("different user count=%d reached=%v", count, reached)
+	}
+}
+
+func TestReplyRefusalWindowExpiresOldHits(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	t0 := time.Date(2026, time.September, 7, 9, 0, 0, 0, time.UTC)
+	for index := 0; index < 3; index++ {
+		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("old-%d", index))
+		if count, _, reached := runtime.registerReplyRefusal(event, t0); count != index+1 || reached {
+			t.Fatalf("refusal %d count=%d reached=%v", index, count, reached)
+		}
+	}
+	event := refusalTestEvent(EventKindPrivate, "", "user", "new")
+	if count, _, reached := runtime.registerReplyRefusal(event, t0.Add(replyRefusalWindow+time.Nanosecond)); count != 1 || reached {
+		t.Fatalf("expired hits retained: count=%d reached=%v", count, reached)
 	}
 }
 
