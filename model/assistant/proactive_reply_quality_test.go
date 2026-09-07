@@ -176,6 +176,37 @@ func TestReplyAuditReceivesImageDescriptionWithoutFabricatingUserText(t *testing
 	}
 }
 
+func TestDirectImageReplyAlwaysRequiresGroundingAudit(t *testing.T) {
+	runtime := NewRuntime(BotConfig{
+		ReplyAccountSafetyAuditEnabled: boolPointer(false),
+		BotReplyLoopDetectionEnabled:   boolPointer(false),
+	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}}}
+	need := runtime.replyAuditNeed(event, "看图", runtime.Config(), false)
+	if !need.ImageGrounding || need.Quality || need.AccountSafety || need.Loop {
+		t.Fatalf("audit need = %#v", need)
+	}
+}
+
+func TestReplyAuditFallsBackToOriginalImageWhenDescriptionIsUnavailable(t *testing.T) {
+	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.98,"account_safe":true}`}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	event := MessageEvent{
+		Kind: EventKindGroup, RawMessage: "[CQ:image,file=tea.jpg]",
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}},
+	}
+	if _, err := runtime.runReplyAudit(context.Background(), event, "看下这个", "这是一款黑茶", runtime.Config(), botReplyLoopEvidence{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) != 1 || len(provider.requests[0].Messages) != 2 {
+		t.Fatalf("requests = %#v", provider.requests)
+	}
+	parts := provider.requests[0].Messages[1].Parts
+	if len(parts) < 2 || parts[0].Type != llm.ContentPartText || parts[1].Type != llm.ContentPartImageURL {
+		t.Fatalf("audit fallback parts = %#v", parts)
+	}
+}
+
 // 线上真实误杀：一条完整的猫娘口吻回复，末尾是「折磨喵（」——那个「（」是语气词，
 // 审核器按「括号没闭合」判成截断，整条被拦下。截断这一条必须把聊天口语的收尾方式
 // 排除掉，否则风格提示词和审核提示词会互相打架，代价是用户少收到一条回复。

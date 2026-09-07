@@ -290,11 +290,21 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	}
 	auditCtx, cancel := context.WithTimeout(ctx, proactiveReplyQualityTimeout(cfg))
 	defer cancel()
+	auditText := "请审核以下回复：\n" + string(payload)
+	auditMessage := llm.Message{Role: llm.RoleUser, Content: auditText}
+	if imageContext == "" && replyAuditHasImage(event) {
+		// The durable description can still be unavailable after its bounded
+		// foreground wait. Let the audit model inspect the original image rather
+		// than approving a generic "这个说法" request with no visual evidence.
+		if withImage, failures := llmMessageFromEventWithImagesForContextDiagnostics(auditCtx, event, auditText, nil); len(withImage.Parts) > 0 && len(failures) == 0 {
+			auditMessage = withImage
+		}
+	}
 	raw, err := r.runLLMRouterProvider(auditCtx, func(client LLMProvider) (string, error) {
 		resp, generateErr := client.Generate(auditCtx, llm.GenerateRequest{
 			Messages: []llm.Message{
 				{Role: llm.RoleSystem, Content: replyQualityPromptForConfig(cfg)},
-				{Role: llm.RoleUser, Content: "请审核以下回复：\n" + string(payload)},
+				auditMessage,
 			},
 		})
 		if generateErr != nil {
@@ -334,6 +344,9 @@ func (r *Runtime) auditReplyAccountSafety(ctx context.Context, event MessageEven
 type replyAuditNeed struct {
 	// Quality 保留现有触发范围，仅对主动回复执行准确性门禁。
 	Quality bool
+	// ImageGrounding ensures direct image replies are checked against the image,
+	// even when proactive quality and account-safety checks are both disabled.
+	ImageGrounding bool
 	// AccountSafety 和触发方式无关，由配置开关决定。
 	AccountSafety bool
 	// Loop 是空转判断，默认开启，只在这条消息够得上循环候选时才需要。
@@ -351,8 +364,9 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 		accountSafety = *cfg.groupReplyAccountSafetyAuditOverride
 	}
 	need := replyAuditNeed{
-		Quality:       proactive,
-		AccountSafety: accountSafety,
+		Quality:        proactive,
+		ImageGrounding: replyAuditHasImage(event),
+		AccountSafety:  accountSafety,
 	}
 	if !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
 		return need
@@ -382,7 +396,7 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 		return replyControlIntent{}, nil
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
-	if !need.Quality && !need.AccountSafety && !need.Loop {
+	if !need.Quality && !need.ImageGrounding && !need.AccountSafety && !need.Loop {
 		return replyControlIntent{}, nil
 	}
 	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
@@ -392,8 +406,12 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 	}
 	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg, evidence)
 	if err != nil {
-		if need.Quality {
-			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
+		if need.Quality || need.ImageGrounding {
+			label := "主动回复答案"
+			if need.ImageGrounding && !need.Quality {
+				label = "图片回复"
+			}
+			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("%s审核失败，已保持沉默：%v", label, err)}
 		}
 		log.Printf("diana reply audit skipped: %v", err)
 		return replyControlIntent{}, nil
@@ -412,12 +430,32 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 			return intent, safetyErr
 		}
 	}
-	if need.Quality {
+	if need.Quality || need.ImageGrounding {
 		if qualityErr := r.proactiveQualityError(event, decision, cfg); qualityErr != nil {
+			if need.ImageGrounding && !need.Quality {
+				reason := strings.TrimPrefix(qualityErr.Error(), "主动回复答案")
+				return intent, &proactiveReplyQualityRejectedError{reason: "图片回复" + reason}
+			}
 			return intent, qualityErr
 		}
 	}
 	return intent, nil
+}
+
+func replyAuditHasImage(event MessageEvent) bool {
+	if replyAuditHasStillImageSegment(event.Segments) {
+		return true
+	}
+	return event.Quoted != nil && replyAuditHasStillImageSegment(event.Quoted.Segments)
+}
+
+func replyAuditHasStillImageSegment(segments []MessageSegment) bool {
+	for _, segment := range segments {
+		if segment.Type == "image" && !strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame") {
+			return true
+		}
+	}
+	return false
 }
 
 // applyReplyLoopVerdict 把这一轮的空转结论并进计数器。够阈值且允许暂停时当场
