@@ -351,8 +351,8 @@ func TestCatgirlReplyStyleKeepsBrakesAndGlobalRules(t *testing.T) {
 	if !strings.Contains(prompt, "示例——") || !strings.Contains(prompt, "用户：") {
 		t.Fatalf("catgirl prompt has no worked examples: %q", prompt)
 	}
-	// Optional mannerisms must not relax the independent punctuation rule.
-	if !strings.Contains(prompt, "普通句子可以不用") || !strings.Contains(prompt, "句末不要「。」") {
+	// Optional mannerisms must keep punctuation semantic instead of banning it.
+	if !strings.Contains(prompt, "普通句子可以不用") || !strings.Contains(prompt, "标点按语义自然使用") {
 		t.Fatalf("catgirl prompt lost optional voice or punctuation guidance: %q", prompt)
 	}
 	withEnder, withoutEnder := false, false

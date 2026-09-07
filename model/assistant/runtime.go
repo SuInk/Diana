@@ -11702,7 +11702,7 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 	}
 	// 收尾的句号在这里就去掉，不留到切分之后：这样返回值、聊天历史、事件详情和群里
 	// 实际收到的是同一份文本。只有分条切出来的中间那几条才需要在切分后再处理一次。
-	return trimChatTrailingPeriod(reply)
+	return reply
 }
 
 // replyBoundaryRunes 是可以安全断句的位置：在这些字符之后收尾，读起来仍然是一句
@@ -11920,10 +11920,40 @@ const (
 func normalizeExplicitReplyLayout(text string) string {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(text, "\n")
-	for index := range lines {
-		lines[index] = strings.TrimSpace(lines[index])
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			kept = append(kept, line)
+		}
 	}
-	return strings.TrimSpace(strings.Join(lines, " "))
+	if len(kept) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(kept[0])
+	for _, line := range kept[1:] {
+		builder.WriteString(replySoftLineSeparator(builder.String(), line))
+		builder.WriteString(line)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func replySoftLineSeparator(left, right string) string {
+	leftRunes, rightRunes := []rune(strings.TrimSpace(left)), []rune(strings.TrimSpace(right))
+	if len(leftRunes) == 0 || len(rightRunes) == 0 {
+		return ""
+	}
+	last, first := leftRunes[len(leftRunes)-1], rightRunes[0]
+	if strings.ContainsRune(".,;:!?", last) && first <= 127 {
+		return " "
+	}
+	if strings.ContainsRune("，,、；;：:。！？!?…", last) || strings.ContainsRune("，,、；;：:。！？!?…)]}）】》」』”", first) {
+		return ""
+	}
+	if last <= 127 && first <= 127 {
+		return ". "
+	}
+	return "，"
 }
 
 func restoreExplicitReplyLines(text string) string {
@@ -11988,7 +12018,7 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 		}
 		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, trimChatTrailingPeriod(chunk))
+			out = append(out, chunk)
 		}
 	}
 	return out
@@ -12014,7 +12044,7 @@ func splitForwardReply(reply string, limits chatSplitLimits) []string {
 			continue
 		}
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, trimChatTrailingPeriod(chunk))
+			out = append(out, chunk)
 		}
 	}
 	return out
@@ -12092,21 +12122,7 @@ func boundaryPositions(runes []rune, match func(rune) bool) []int {
 //   - 英文句点在缩写、域名、版本号里到处都是，v1.0 和 example.com. 分不清，不碰
 //   - 收在引号、括号里的句号属于被引用的内容，不是这条消息自己的句读
 //   - 删完变成空的就不删
-func trimChatTrailingPeriod(text string) string {
-	trimmed := strings.TrimRight(text, " \t")
-	runes := []rune(trimmed)
-	if len(runes) < 2 || runes[len(runes)-1] != '。' {
-		return text
-	}
-	if prev := runes[len(runes)-2]; prev == '…' || prev == '。' {
-		return text
-	}
-	if hasUnclosedQuote(runes) {
-		return text
-	}
-	return string(runes[:len(runes)-1])
-}
-
+//
 // hasUnclosedQuote 判断末尾的标点是不是落在没闭合的引号或括号里。
 func hasUnclosedQuote(runes []rune) bool {
 	depth := 0
