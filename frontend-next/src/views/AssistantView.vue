@@ -798,14 +798,22 @@
           <section class="card">
             <div class="card-header">
               <h2>发送前审核</h2>
-              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
-                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
+              <span class="badge" :class="form.reply_account_safety_audit_master_enabled ? 'accent' : ''">
+                {{ !form.reply_account_safety_audit_master_enabled ? "已关闭" : form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
               </span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
+                  <input v-model="form.reply_account_safety_audit_master_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">启用账号安全审核</span>
+                </label>
+                <span class="hint">关闭后，这台机器人所有主动和直接回复都不做账号安全审核；群配置可单独覆盖。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" :disabled="!form.reply_account_safety_audit_master_enabled" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">直接回复也做统一发送前审核</span>
                 </label>
@@ -2779,6 +2787,7 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
+    reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
