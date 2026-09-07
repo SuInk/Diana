@@ -695,6 +695,7 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 func (h *SystemUpdateHandler) StartAutoUpdate(ctx context.Context) {
 	h.updateSchedulerOnce.Do(func() {
 		go func() {
+			defer recoverGoroutinePanic("system_update.go:697")
 			timer := time.NewTimer(updateCheckDelay)
 			defer timer.Stop()
 			select {

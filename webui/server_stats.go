@@ -148,6 +148,7 @@ func dataDirectorySize(dir string) uint64 {
 	if stale && !entry.measuring {
 		entry.measuring = true
 		go func() {
+			defer recoverGoroutinePanic("server_stats.go:150")
 			measured := walkDirectorySize(dir)
 			dashboardDataSizeCache.Lock()
 			entry.bytes = measured

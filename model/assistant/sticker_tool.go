@@ -398,6 +398,7 @@ func (t *dianaStickerTool) enrichCandidateDescriptions(ctx context.Context, cand
 	for worker := 0; worker < workerCount; worker++ {
 		workers.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("sticker_tool.go:400")
 			defer workers.Done()
 			for index := range jobs {
 				candidate := &candidates[index]

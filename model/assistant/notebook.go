@@ -528,6 +528,7 @@ func (r *Runtime) touchNotebookEntries(ctx context.Context, store NotebookStore,
 	}
 	now := time.Now()
 	go func() {
+		defer recoverGoroutinePanic("notebook.go:530")
 		touchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notebookLookupTimeout)
 		defer cancel()
 		if err := store.TouchNotebookEntries(touchCtx, ids, now); err != nil {

@@ -325,6 +325,7 @@ func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req Ch
 	out := make(chan ChatEvent, 2)
 	go func() {
 		defer close(out)
+		defer recoverChatStreamPanic(ctx, out, "adapter")
 		response, err := a.Generate(ctx, model, req)
 		if err != nil {
 			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
