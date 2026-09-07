@@ -230,6 +230,8 @@ export interface BotProfileConfig {
   }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
+  /** 机器人级账号安全审核总开关；关闭后主动和直接回复都不审核。 */
+  reply_account_safety_audit_master_enabled?: boolean;
   /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
   reply_account_safety_audit_enabled?: boolean;
   /** 自定义账号风险范围；留空使用内置规则。 */

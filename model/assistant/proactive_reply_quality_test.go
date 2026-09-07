@@ -338,6 +338,26 @@ func TestGroupAccountSafetyOverrideControlsProactiveAndDirectReplies(t *testing.
 	}
 }
 
+func TestRobotAccountSafetyMasterSwitchDisablesAllReplies(t *testing.T) {
+	runtime := NewRuntime(BotConfig{
+		ReplyAccountSafetyAuditMasterEnabled: boolPointer(false),
+		ReplyAccountSafetyAuditEnabled:       boolPointer(true),
+	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	for _, proactive := range []bool{false, true} {
+		event := MessageEvent{Kind: EventKindGroup, GroupID: "inherit", UserID: "u"}
+		if need := runtime.replyAuditNeed(event, "普通消息", runtime.effectiveConfigForEvent(event), proactive); need.AccountSafety {
+			t.Fatalf("master off still audits proactive=%v", proactive)
+		}
+	}
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"on": {GroupID: "on", ReplyAccountSafetyAuditEnabled: boolPointer(true)},
+	}})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "on", UserID: "u"}
+	if need := runtime.replyAuditNeed(event, "普通消息", runtime.effectiveConfigForEvent(event), false); !need.AccountSafety {
+		t.Fatal("explicit group on did not override robot master off")
+	}
+}
+
 func TestGroupAccountSafetyPromptOverridesRobotPrompt(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ReplyAccountSafetyAuditPrompt: "机器人规则"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
