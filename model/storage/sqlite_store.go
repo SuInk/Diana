@@ -378,6 +378,7 @@ CREATE TABLE IF NOT EXISTS app_logs (
 
 CREATE INDEX IF NOT EXISTS idx_app_logs_kind_created_at ON app_logs(kind, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_logs_created_at ON app_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_logs_action_created_at ON app_logs(action, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, target, created_at ASC);
 `)
 	if err != nil {
