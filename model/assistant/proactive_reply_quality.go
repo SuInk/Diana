@@ -170,10 +170,17 @@ func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyCo
 }
 
 func replyQualityPromptForConfig(cfg BotConfig) string {
-	if cfg.chatInSettings().SuperActive {
-		return proactiveReplyQualityPrompt + "\n当前为超级活跃模式：正常的寒暄、简短情绪回应、接梗和自然追问不等于准确性错误。仍只检查可见的准确性与完整性问题，不重新判断是否需要回复；账号安全和独立的循环判断规则保持不变。"
+	prompt := proactiveReplyQualityPrompt
+	if policy := strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt); policy != "" {
+		prompt += "\n\n【管理员配置的账号安全审核规则】\n" + policy + `
+这段规则替代上文默认的账号安全风险范围；只影响 account_safe、account_risk 和
+account_risk_reason，不得改变准确度、拒答、空转判断或 JSON 输出格式。未被这段
+规则明确列为风险的内容应判 account_safe=true。`
 	}
-	return proactiveReplyQualityPrompt
+	if cfg.chatInSettings().SuperActive {
+		prompt += "\n当前为超级活跃模式：正常的寒暄、简短情绪回应、接梗和自然追问不等于准确性错误。仍只检查可见的准确性与完整性问题，不重新判断是否需要回复；账号安全和独立的循环判断规则保持不变。"
+	}
+	return prompt
 }
 
 // proactiveQualityError 执行现有主动回复的准确性门禁。
@@ -338,9 +345,14 @@ type replyAuditNeed struct {
 }
 
 func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
+	accountSafety := boolValue(cfg.ReplySafetyMasterEnabled, true) &&
+		(proactive || boolValue(cfg.ReplyAccountSafetyAuditEnabled, false))
+	if cfg.groupReplyAccountSafetyAuditOverride != nil {
+		accountSafety = *cfg.groupReplyAccountSafetyAuditOverride
+	}
 	need := replyAuditNeed{
 		Quality:       proactive,
-		AccountSafety: boolValue(cfg.ReplyAccountSafetyAuditEnabled, false),
+		AccountSafety: accountSafety,
 	}
 	if !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
 		return need
@@ -395,7 +407,7 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 	// 账号安全的一票否决：主动插话一直是无条件执行的，直接回复按开关。空转判断
 	// 会让审核在开关关着时也跑起来，这里必须按原来的条件判，不能因为「反正结论
 	// 已经有了」就顺手拦下一条本来会发出去的回复。
-	if need.Quality || need.AccountSafety {
+	if need.AccountSafety {
 		if safetyErr := accountSafetyError(decision); safetyErr != nil {
 			return intent, safetyErr
 		}

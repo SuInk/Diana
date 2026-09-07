@@ -1290,6 +1290,14 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
+	if groupCfg.ReplyAccountSafetyAuditEnabled != nil {
+		cfg.ReplyAccountSafetyAuditEnabled = copyBoolPointer(groupCfg.ReplyAccountSafetyAuditEnabled)
+		// 群级开关是完整覆盖：主动回复也服从关闭，而机器人级旧开关仍只扩展到直接回复。
+		cfg.groupReplyAccountSafetyAuditOverride = copyBoolPointer(groupCfg.ReplyAccountSafetyAuditEnabled)
+	}
+	if strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt) != "" {
+		cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt)
+	}
 	if groupCfg.ReplyGate != nil {
 		// 门槛整份用群里的（界面上那个「为本群单独设置回复规则」开关就是这个意思），
 		// 但名单要并上机器人级的：否则任何一个群开了自定义门禁，全局黑名单在那个

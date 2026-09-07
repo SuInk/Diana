@@ -798,14 +798,22 @@
           <section class="card">
             <div class="card-header">
               <h2>发送前审核</h2>
-              <span class="badge" :class="form.reply_account_safety_audit_enabled ? 'accent' : ''">
-                {{ form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
+              <span class="badge" :class="form.reply_account_safety_audit_master_enabled ? 'accent' : ''">
+                {{ !form.reply_account_safety_audit_master_enabled ? "已关闭" : form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
               </span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
                 <label class="switch">
-                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" />
+                  <input v-model="form.reply_account_safety_audit_master_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">启用账号安全审核</span>
+                </label>
+                <span class="hint">关闭后，这台机器人所有主动和直接回复都不做账号安全审核；群配置可单独覆盖。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" :disabled="!form.reply_account_safety_audit_master_enabled" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">直接回复也做统一发送前审核</span>
                 </label>
@@ -813,6 +821,17 @@
                   一次审核同时判断内容安全和是否属于明确拒答；主动回复还会使用其中的表达质量结论。涉政、露骨和其他可能导致账号被处置的内容会被拦下不发，
                   高置信拒答仅在发送成功后累计。打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
                 </span>
+              </div>
+              <div class="field wide">
+                <label for="bot-account-safety-prompt">账号安全审核规则（留空使用内置规则）</label>
+                <textarea
+                  id="bot-account-safety-prompt"
+                  v-model="form.reply_account_safety_audit_prompt"
+                  class="textarea"
+                  rows="5"
+                  placeholder="例如：只拦截可能导致当前平台账号处罚的明确内容；新闻事实中性转述放行。"
+                ></textarea>
+                <span class="hint">填写后替代内置账号风险范围，只影响账号安全结论，不改变准确度、拒答和防循环审核。</span>
               </div>
               <div class="field wide">
                 <label for="bot-refusal-strategy">拒答话术</label>
@@ -2768,6 +2787,7 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
+    reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,

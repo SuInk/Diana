@@ -230,8 +230,12 @@ export interface BotProfileConfig {
   }>;
   /** 用模型识别其他机器人的自动回复并阻断机器人互聊；缺省等价于开启。 */
   bot_reply_loop_detection_enabled?: boolean;
+  /** 机器人级账号安全审核总开关；关闭后主动和直接回复都不审核。 */
+  reply_account_safety_audit_master_enabled?: boolean;
   /** 直接回复是否也做发送前账号安全审核；主动回复始终审核，不受此开关影响。 */
   reply_account_safety_audit_enabled?: boolean;
+  /** 自定义账号风险范围；留空使用内置规则。 */
+  reply_account_safety_audit_prompt?: string;
   /** 笔记本是否跨群共用一本；默认按会话隔离。 */
   notebook_shared_scope_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
@@ -475,6 +479,10 @@ export interface BotGroupConfig {
   recall_reply_auto_delete_enabled?: boolean;
   /** 自动撤回前的保留时间，单位为秒。 */
   recall_reply_auto_delete_delay_seconds?: number;
+  /** 本群账号安全审核；不设表示跟随机器人，false 会同时关闭主动与直接回复审核。 */
+  reply_account_safety_audit_enabled?: boolean;
+  /** 本群自定义账号安全规则；留空跟随机器人。 */
+  reply_account_safety_audit_prompt?: string;
   plugin_overrides?: Record<string, boolean>;
   /** 按插件、按字段保存的群级非密钥设置覆盖；缺失字段沿用全局。 */
   plugin_setting_overrides?: Record<string, Record<string, unknown>>;
