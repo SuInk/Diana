@@ -215,6 +215,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "replied", "群聊主动回复路由判断这条消息值得回答", true
 	case "merged_into_reply":
 		return "not_replied", "消息已并入同一用户正在生成的回复，不再单独回答", false
+	case "ignored_duplicate_reply":
+		return "not_replied", "发送前语义检查确认内容已在近期成功发送，本轮无新增内容", false
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
 	case "error_replied_content_policy":
@@ -305,6 +307,8 @@ type Runtime struct {
 	llmCfgFactory             LLMProviderConfigFactory
 	llmRegistry               *llm.ProviderRegistry
 	replyInterruptMu          sync.Mutex
+	semanticReplyMu           sync.Mutex
+	semanticReplies           map[string]*semanticReplyGate
 	recalledInbound           map[string]time.Time
 	latestDirectedInbound     map[string]directedInboundMark
 	directReplySeq            uint64
@@ -1787,6 +1791,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	// 只写「处理异常」会让人以为什么都没发。
 	record.Delivery = outboundTurnFromContext(replyCtx).delivery()
 	if err != nil {
+		if errors.Is(err, errDuplicateReply) {
+			setEventRecordOutcome(&record, "ignored_duplicate_reply")
+			r.record(record)
+			return "ignored_duplicate_reply", nil
+		}
 		if errors.Is(err, errChatInReplyDeclined) {
 			setEventRecordOutcome(&record, "ignored_no_natural_reply")
 			r.record(record)
@@ -3782,6 +3791,21 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			reply = "我这边没有生成有效回复。"
 		}
 	}
+	var semanticGate *semanticReplyGate
+	// Tool results and disclosure deliveries must not be hidden as repeated prose.
+	if !hasExternalSideEffect(ctx) && len(pluginResponses) == 0 && !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
+		var release func()
+		semanticGate, release, err = r.lockSemanticReply(ctx, event)
+		if err != nil {
+			return "", err
+		}
+		defer release()
+		reply, err = r.deduplicateReply(ctx, event, cleanText, reply, cfg, semanticGate)
+		if err != nil {
+			return "", err
+		}
+	}
+	semanticText := reply
 	if proactiveTriggered {
 		// 主动回复走完整审核：表达质量 + 账号安全。
 		auditIntent, err := r.evaluateProactiveReplyQuality(ctx, event, cleanText, reply, cfg)
@@ -3837,6 +3861,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	})
 	if err != nil {
 		return "", err
+	}
+	if semanticGate != nil {
+		_, acknowledged, _ := r.deliveryEvidence(event, sentMessageIDs)
+		if acknowledged {
+			semanticGate.remember(readableEventText(event, cleanText), semanticText, event.UserID)
+		}
 	}
 	imageAnnouncements.startPending()
 	if recallReplyShouldAutoDelete(cfg, pluginResponses) {
@@ -7570,7 +7600,7 @@ func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentT
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return fmt.Sprintf("【当前同轮补充消息，必须与最后的当前消息合并理解并一并回答】%s%s: %s", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
+	return fmt.Sprintf("【当前同轮补充消息，必须与最后的当前消息合并理解并一并回答；若本消息明确纠正原要求，以纠正后的条件为准，保留未被修改的要求】%s%s: %s", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
 }
 
 func currentPromptText(event MessageEvent, text string) string {
