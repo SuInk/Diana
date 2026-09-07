@@ -994,7 +994,7 @@ func TestRuntimeCachesIncomingVideoThenRoutesFollowupToItsFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "视频里是测试画面" || len(channel.sent) != 1 {
+	if reply != "视频里是测试画面。" || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	// 断言「关键帧被附给了生成回复的那次调用」，而不是「一共发生了几次 LLM 调用」。
