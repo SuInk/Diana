@@ -8,13 +8,15 @@ func splitEventChatReply(reply string, cfg BotConfig, event MessageEvent) []stri
 
 // Prompt construction and delivery must agree on whether a newline splits.
 func chatSplitLimitsForEvent(cfg BotConfig, event MessageEvent) chatSplitLimits {
+	limits := chatSplitLimitsFrom(cfg)
 	if event.replyDeliveryMode != "" {
-		return replyDeliveryLimits(chatSplitLimitsFrom(cfg), event.replyDeliveryMode)
+		return replyDeliveryLimits(limits, event.replyDeliveryMode)
 	}
 	if event.Kind != EventKindGroup || !event.chatInReply {
-		return chatSplitLimitsFrom(cfg)
+		return limits
 	}
-	return chatSplitLimits{MarkerOnly: true}
+	limits.MarkerOnly = true
+	return limits
 }
 
 func supportsOneBotGroupTool(cfg BotConfig, event MessageEvent) bool {
