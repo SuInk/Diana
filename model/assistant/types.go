@@ -143,6 +143,7 @@ type MessageEvent struct {
 	chatInReply            bool
 	replyDeliveryMode      replyDeliveryMode
 	replyAuditImageContext string
+	avatarMatchContext     string
 	imageResolutionRun     bool
 	imageLoadErr           error
 	imageContextNotice     string
