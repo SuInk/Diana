@@ -489,6 +489,7 @@ func main() {
 		MaxHeaderBytes:    1 << 20,
 	}
 	go func() {
+		defer recoverGoroutinePanic("main.go:491")
 		<-ctx.Done()
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()

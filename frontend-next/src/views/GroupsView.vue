@@ -91,6 +91,8 @@
             <span v-if="group.configured && group.recall_reply_auto_delete_enabled" class="badge">
               撤回回复保留 {{ group.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds }} 秒
             </span>
+            <span v-if="group.configured && group.reply_account_safety_audit_enabled === false" class="badge">本群关闭安全审核</span>
+            <span v-else-if="group.configured && group.reply_account_safety_audit_enabled === true" class="badge accent">本群开启安全审核</span>
             <span v-if="group.configured && blockedUserCount(group) > 0" class="badge">屏蔽 {{ blockedUserCount(group) }} 人</span>
             <span v-if="group.configured && hasOtherReplyGateRules(group)" class="badge">专属回复规则</span>
           </div>
@@ -254,6 +256,28 @@
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
+        </div>
+        <div class="field wide">
+          <label for="group-account-safety">本群账号安全审核</label>
+          <AppSelect
+            id="group-account-safety"
+            :model-value="editing.reply_account_safety_audit_enabled == null ? '' : editing.reply_account_safety_audit_enabled ? 'on' : 'off'"
+            :options="groupAccountSafetyOptions"
+            @update:model-value="(value) => { if (editing) editing.reply_account_safety_audit_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">关闭后，本群主动插话和直接回复都不做账号安全审核；准确度审核和防机器人循环不受影响。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-account-safety-prompt">本群账号安全审核规则（留空跟随机器人）</label>
+          <textarea
+            id="group-account-safety-prompt"
+            v-model="editing.reply_account_safety_audit_prompt"
+            class="textarea"
+            rows="5"
+            maxlength="8000"
+            placeholder="填写本群需要拦截的内容范围"
+          ></textarea>
+          <span class="hint">填写后替代机器人级或内置风险范围，仅用于本群。</span>
         </div>
         <div v-if="supportsGroupLevel" class="field">
           <label for="group-forward-len">合并转发字数</label>
@@ -511,6 +535,11 @@ const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
   { value: "on", label: "开启" },
   { value: "off", label: "关闭" }
 ]);
+const groupAccountSafetyOptions: AppSelectOption[] = [
+  { value: "", label: "跟随机器人" },
+  { value: "on", label: "开启（主动和直接回复）" },
+  { value: "off", label: "关闭（主动和直接回复）" }
+];
 const defaultSocialReplyEnabled = ref(false);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;

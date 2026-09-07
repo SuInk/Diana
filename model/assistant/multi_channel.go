@@ -59,6 +59,7 @@ func (c *MultiChannel) Connect(ctx context.Context, handler EventHandler) error 
 		binding := binding
 		wg.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("multi_channel.go:61")
 			defer wg.Done()
 			wrapped := func(eventCtx context.Context, event MessageEvent) error {
 				event.Platform = binding.Platform

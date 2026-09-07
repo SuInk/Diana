@@ -267,6 +267,7 @@ func ocrPDFDocument(ctx context.Context, services PluginTaskServices, renderer p
 		session := session
 		wg.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("document_ocr.go:269")
 			defer wg.Done()
 			for pageIndex := range jobs {
 				if workCtx.Err() != nil {
@@ -296,6 +297,7 @@ func ocrPDFDocument(ctx context.Context, services PluginTaskServices, renderer p
 	}
 
 	go func() {
+		defer recoverGoroutinePanic("document_ocr.go:298")
 		defer close(jobs)
 		for pageIndex := 0; pageIndex < processedPages; pageIndex++ {
 			select {
@@ -407,6 +409,7 @@ func reduceOCRContext(ctx context.Context, services PluginTaskServices, prompt s
 	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("document_ocr.go:409")
 			defer wg.Done()
 			for index := range jobs {
 				callCtx, callCancel := context.WithTimeout(ctx, defaultOCRReduceTimeout)
@@ -443,6 +446,7 @@ func reduceOCRContext(ctx context.Context, services PluginTaskServices, prompt s
 		}()
 	}
 	go func() {
+		defer recoverGoroutinePanic("document_ocr.go:445")
 		defer close(jobs)
 		for index := range chunks {
 			select {

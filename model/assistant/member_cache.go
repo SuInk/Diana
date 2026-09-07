@@ -202,6 +202,7 @@ func (c *memberCache) refreshAsync(event MessageEvent) {
 	c.mu.Unlock()
 
 	go func() {
+		defer recoverGoroutinePanic("member_cache.go:204")
 		defer func() {
 			c.mu.Lock()
 			delete(c.inflight, key)

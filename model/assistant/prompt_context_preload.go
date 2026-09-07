@@ -46,32 +46,39 @@ func (r *Runtime) startPromptContextPreload(
 
 	preload.wg.Add(6)
 	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:48")
 		defer preload.wg.Done()
 		preload.sessionThread, preload.sessionThreadMemory = r.sessionThreadNoteDetailed(ctx, event)
 	}()
 	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:52")
 		defer preload.wg.Done()
 		preload.threadState, preload.threadStates = r.privateThreadStateContextDetailed(ctx, event)
 	}()
 	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:56")
 		defer preload.wg.Done()
 		preload.memoryContext, preload.memoryUsage = r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
 	}()
 	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:60")
 		defer preload.wg.Done()
 		preload.notebookContext = r.notebookContext(ctx, event, queryText)
 	}()
 	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:64")
 		defer preload.wg.Done()
 		preload.worldBookContext = r.worldBookContext(ctx, event, queryText)
 	}()
 	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:68")
 		defer preload.wg.Done()
 		preload.expressionContext = r.expressionStyleContext(ctx, event)
 	}()
 	if wantMediaIndex {
 		preload.wg.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("prompt_context_preload.go:74")
 			defer preload.wg.Done()
 			preload.mediaIndex = r.durableMediaIndex(ctx, event)
 		}()

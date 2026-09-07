@@ -328,6 +328,10 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 	cfg.GroupID = strings.TrimSpace(groupID)
 	cfg.GroupTriggers = trimStringSlice(cfg.GroupTriggers)
 	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)
+	cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt)
+	if len([]rune(cfg.ReplyAccountSafetyAuditPrompt)) > 8000 {
+		return assistant.GroupConfig{}, fmt.Errorf("账号安全审核规则不能超过 8000 字")
+	}
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
 	}

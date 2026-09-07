@@ -203,6 +203,7 @@ func (p *ResolverPlugin) resolveTwitter(ctx context.Context, req PluginRequest, 
 		index := index
 		downloads.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("resolver_legacy.go:205")
 			defer downloads.Done()
 			resolved[index] = downloadMedia(ctx, post.Media[index])
 		}()
