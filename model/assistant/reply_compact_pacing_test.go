@@ -29,7 +29,7 @@ func TestEveryStylePrefersCompactChatWithoutHardLimit(t *testing.T) {
 					t.Errorf("style=%q still encourages excessive splitting: %s", style, obsolete)
 				}
 			}
-			if !strings.Contains(prompt, "不是硬性条数或长度限制") || !strings.Contains(prompt, "代码及引用原文保留格式") {
+			if !strings.Contains(prompt, "不是硬性条数或长度限制") || !strings.Contains(prompt, notificationLineMarker) {
 				t.Fatal("pacing must preserve complete answers and structured formatting")
 			}
 			if strings.Contains(prompt, replySegmentationRule) != natural {

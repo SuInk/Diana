@@ -49,7 +49,7 @@ func TestPluginFollowUpAddsNaturalComment(t *testing.T) {
 
 func TestPluginFollowUpUsesNaturalChatSegmentation(t *testing.T) {
 	withFastSendTiming(t)
-	reply := "先核对更新包校验和版本匹配喵\n失败时还要确认能够回退到旧版本喵"
+	reply := "先核对更新包校验和版本匹配喵" + notificationSplitMarker + "失败时还要确认能够回退到旧版本喵"
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{reply}}
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {

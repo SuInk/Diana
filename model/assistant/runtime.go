@@ -11,7 +11,6 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
-	"math"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -3888,7 +3887,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 		}
 		imageAnnouncements.startPending()
-		return reply, nil
+		return strings.Join(splitEventChatReply(reply, cfg, event), "\n"), nil
 	}
 	var sentMessageIDs []string
 	err = r.withReplySuppressionOutboundGate(sendBaseCtx, event, func(sendCtx context.Context) error {
@@ -3913,7 +3912,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if recallReplyShouldAutoDelete(cfg, pluginResponses) {
 		r.scheduleMessageDeletes(event, sentMessageIDs, recallReplyAutoDeleteDelay(cfg))
 	}
-	return reply, nil
+	return strings.Join(splitEventChatReply(reply, cfg, event), "\n"), nil
 }
 
 func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent, text string) (string, error) {
@@ -8704,7 +8703,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行
-// 与 [diana-br] 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
+// 与 [diana-msg] 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
 // 160 字）会把一张卡片拦腰截断，把链接甩到下一条里。所以这里只按平台长度兜底。
 func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text string) error {
 	_, err := r.sendNotificationWithIDs(ctx, event, text)
@@ -9191,6 +9190,7 @@ func shouldUseForwardReply(reply string, chunks []string, threshold int, chunkTh
 		return false
 	}
 	text := strings.TrimSpace(strings.ReplaceAll(reply, notificationSplitMarker, "\n"))
+	text = strings.ReplaceAll(text, notificationLineMarker, "\n")
 	return len([]rune(text)) > threshold
 }
 
@@ -11905,18 +11905,39 @@ func chunkOverflowAllowance(chunkSize int) int {
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
 //
 // 用方括号而不是尖括号：尖括号标记会把模型带进 HTML 语境，它写到一半常先冒出一个
-// [diana-br] 再补上标记，或者整个转义成实体。方括号和 [diana-at:ID] 是同一家族的标记，
+// [diana-msg] 再补上标记，或者整个转义成实体。方括号和 [diana-at:ID] 是同一家族的标记，
 // 模型已经在按字面写它们。不兼容更早的写法：旧标记只会原样发出去，不再归一化。
-const notificationSplitMarker = "[diana-br]"
+const (
+	notificationSplitMarker = "[diana-msg]"
+	notificationLineMarker  = "[diana-line]"
+)
 
-// splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 [diana-br]，
+// normalizeExplicitReplyLayout consumes the only layout protocol accepted from
+// model output. Literal CR/LF is not a layout instruction: another chat bubble
+// must use [diana-msg], and a line break inside that bubble must use
+// [diana-line]. Folding raw newlines makes violations deterministic instead of
+// reviving the old heuristic splitter.
+func normalizeExplicitReplyLayout(text string) string {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(text, "\n")
+	for index := range lines {
+		lines[index] = strings.TrimSpace(lines[index])
+	}
+	return strings.TrimSpace(strings.Join(lines, " "))
+}
+
+func restoreExplicitReplyLines(text string) string {
+	return strings.ReplaceAll(text, notificationLineMarker, "\n")
+}
+
+// splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 [diana-msg]，
 // 再按长度兜底。错误提示和结构化通知走这一套——它们是一条完整的诊断或一张事实
 // 卡片，换行是卡片自己的排版（仓库订阅那张就是紧凑两行），拆开就没法读了。
 // 聊天发言另走 splitChatReply。
 //
 // 空行不是分条信号。模型按 Markdown 习惯用空行做段落间距，运行时却曾把它当成消息
 // 边界——同一个符号两边理解不一样，分条位置就全看模型的排版习惯。提示词已经从源头
-// 要求「不要出现空行，要分条就写 [diana-br]」（见 replyBlankLineRule），这里把残留的
+// 要求「不要出现空行，要分条就写 [diana-msg]」（见 replyBlankLineRule），这里把残留的
 // 空行按排版收掉，不再据此分条。
 //
 // 这一版之前还有一套「清单识别」：扫到三行以上的项目符号、编号或「短标签：内容」
@@ -11935,20 +11956,15 @@ func splitReply(reply string, chunkSize int) []string {
 	}
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
-		out = append(out, chunkTextByLength(part, chunkSize)...)
+		out = append(out, chunkTextByLength(restoreExplicitReplyLines(part), chunkSize)...)
 	}
 	return out
 }
 
 // splitChatReply 是聊天发言的分条：把一条回复切成几次发言。
 //
-// 只认 [diana-br] 的问题是它把分条押在模型愿不愿意写一个内部标记上。模型对这种元
-// 标记的服从度本来就不稳定，因此同时接收模型实际写出的换行：
-//
-//	标记  模型明说要分       无条件
-//	换行  模型自己排的版     照做
-//
-// 不按句号推断边界；没有换行或标记的一段话保持一条。
+// 模型输出不允许用真实换行表达布局。消息边界只认 [diana-msg]，同一消息内的
+// 排版换行只认 [diana-line]；真实 CR/LF 一律折叠成软空格。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
@@ -11957,27 +11973,22 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	if limits.SingleMessage {
 		return singleChatReply(reply, limits.ChunkSize)
 	}
-	// 一份行程、清单或方案不按行分条，按小节分（见 splitDocumentSections）。
-	// 显式标记和长度兜底仍然优先。
-	limits.Document = isDocumentReply(reply)
-	// 围栏先摘出去再分条：分条和长度兜底都按行/按字数切，会把 ``` 切进不同气泡。
-	// 摘成占位符走完整条管线，最后再填回来。
-	reply, fences := maskFencedCodeBlocks(reply)
-	reply = collapseBlankLines(reply)
+	reply = normalizeExplicitReplyLayout(reply)
 	if reply == "" {
 		return nil
 	}
 	var out []string
-	for _, segment := range chatReplySegments(reply, limits) {
-		if !limits.PreserveSoftNewlines {
-			segment = normalizeChatBubbleNewlines(segment, limits.Document)
+	for _, segment := range strings.Split(reply, notificationSplitMarker) {
+		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
+		if segment == "" {
+			continue
 		}
 		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
 			out = append(out, trimChatTrailingPeriod(chunk))
 		}
 	}
-	return restoreFencedCodeBlocks(out, fences, limits.ChunkSize)
+	return out
 }
 
 // splitForwardReply 把已经确定要装进合并转发的回复切成节点。
@@ -11989,32 +12000,21 @@ func splitForwardReply(reply string, limits chatSplitLimits) []string {
 	if limits.SingleMessage {
 		return singleChatReply(reply, limits.ChunkSize)
 	}
-	limits.Document = isDocumentReply(reply)
-	reply, fences := maskFencedCodeBlocks(reply)
-	reply = collapseBlankLines(reply)
+	reply = normalizeExplicitReplyLayout(reply)
 	if reply == "" {
 		return nil
 	}
-	// 卡片不受条数上限约束：它已经把节点收进一张卡片，再合并只会破坏模型的节奏。
-	var segments []string
-	switch {
-	case limits.MarkerOnly:
-		segments = splitChatReplyAtDepth(reply, limits, splitAtMarker)
-	case limits.Document:
-		segments = splitDocumentSections(reply)
-	default:
-		segments = splitChatReplyAtDepth(reply, limits, splitAtLine)
-	}
-	out := make([]string, 0, len(segments))
-	for _, segment := range segments {
-		if !limits.PreserveSoftNewlines {
-			segment = normalizeChatBubbleNewlines(segment, limits.Document)
+	var out []string
+	for _, segment := range strings.Split(reply, notificationSplitMarker) {
+		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
+		if segment == "" {
+			continue
 		}
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
 			out = append(out, trimChatTrailingPeriod(chunk))
 		}
 	}
-	return restoreFencedCodeBlocks(out, fences, limits.ChunkSize)
+	return out
 }
 
 // replyMaxChatBubbles 是分条后允许的条数。按换行分出来超过这个数就不按换行分了：
@@ -12028,7 +12028,7 @@ type chatSplitLimits struct {
 	SingleMessage bool // 本轮用户要求一条发送，优先于自然分条和显式分条标记。
 	ChunkSize     int  // 单条消息的硬上限，撞上了在最近的标点处切开
 	MaxBubbles    int  // 分出来最多几条，超了就退回粗一档
-	// MarkerOnly 关掉自然分条：只认模型显式写的 [diana-br]，换行只当排版。
+	// MarkerOnly 关掉自然分条：只认模型显式写的 [diana-msg]，换行只当排版。
 	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
 	MarkerOnly bool
 	// PreserveSoftNewlines 关闭发送层的软换行整理。它跟自然分条开关一起变化，
@@ -12047,229 +12047,14 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 	}
 }
 
-// chatReplySplitDepth 是分条的精细程度，由细到粗。
-type chatReplySplitDepth int
-
-const (
-	splitAtSentence chatReplySplitDepth = iota // 标记 + 换行 + 句号
-	splitAtLine                                // 标记 + 换行
-	splitAtMarker                              // 只认标记
-)
-
-// chatReplySegments 先按换行分，分不进条数上限就把相邻的短段并起来。
-//
-// 「要么分好，要么别分」曾经是这里的规矩：分不进上限就退回只认标记，等于整条发。
-// 它防的是「超出的并进最后一条」——那会让最后一条拖着个大尾巴，反问被粘在陈述句
-// 后面就是这么来的。防的方向对，做法太狠了：上限设 5、模型写了 6 段，得到的是一坨
-// 三百字，比 6 条更难读。用户设「最多 5 条」的本意是别刷屏，不是别分条。
-//
-// 现在超上限时改成合并，但不是往最后一条塞：每次挑「合起来最短」的那对相邻段并掉，
-// 长段因此始终保持独立，被并的都是碎片。模型显式写的 [diana-br] 是硬边界，合并不跨
-// 越它——那是它明说要分开的地方。
-func chatReplySegments(reply string, limits chatSplitLimits) []string {
-	// 关掉自然分条之后只认标记。模型显式写的 [diana-br] 仍然照做——那是它明说要分，
-	// 关掉的是运行时自己去猜边界这件事，不是把模型的话也一起吞掉。
-	if limits.MarkerOnly {
-		return splitChatReplyAtDepth(reply, limits, splitAtMarker)
-	}
-	// 文档按小节分，不受条数上限影响：小节数就是它本来的条数。
-	if limits.Document {
-		return splitDocumentSections(reply)
-	}
-	if limits.MaxBubbles <= 0 {
-		return splitChatReplyAtDepth(reply, limits, splitAtLine)
-	}
-	if parts := splitChatReplyAtDepth(reply, limits, splitAtLine); len(parts) <= limits.MaxBubbles {
-		return parts
-	}
-	return mergeChatSegmentsToLimit(reply, limits)
-}
-
-// mergeChatSegmentsToLimit 按行分好之后，把相邻的段并到条数上限之内，并且让并出来的
-// 几条长度尽量接近。
-//
-// 「挑最短的那对并掉」也能压进上限，但压出来的结果很难看：长段各自独立、碎段全堆在
-// 一处，八段并成五条会得到一条两百字加四条十来个字。均分才是「最多五条」该有的样子。
-//
-// 合并只在同一个 [diana-br] 块内部进行：块之间是模型明说要断开的地方，跨过去就是把
-// 它的话改了。所以标记块本身多于上限时，就按标记发，允许超——那是模型要求的条数，
-// 不是运行时猜出来的。
-func mergeChatSegmentsToLimit(reply string, limits chatSplitLimits) []string {
-	blocks := make([][]string, 0, 4)
-	for _, part := range strings.Split(reply, notificationSplitMarker) {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		blocks = append(blocks, splitReplyLines(part))
-	}
-	if len(blocks) == 0 {
-		return nil
-	}
-
-	quotas := allocateBubbleQuota(blocks, limits.MaxBubbles)
-	out := make([]string, 0, limits.MaxBubbles)
-	for index, block := range blocks {
-		out = append(out, balanceSegments(block, quotas[index])...)
-	}
-	return out
-}
-
-// allocateBubbleQuota 把条数名额分给各个 [diana-br] 块。
-//
-// 每块至少一条——块与块之间不能合并，少给了也没法压。剩下的名额一个一个发，每次发给
-// 「当前平均每条最长」的那块：它是眼下最挤的，多一条收益最大。块内段数用完就封顶，
-// 名额转给别人。
-func allocateBubbleQuota(blocks [][]string, limit int) []int {
-	quotas := make([]int, len(blocks))
-	weights := make([]int, len(blocks))
-	for index, block := range blocks {
-		quotas[index] = 1
-		for _, line := range block {
-			weights[index] += len([]rune(line))
-		}
-	}
-	for remaining := limit - len(blocks); remaining > 0; remaining-- {
-		best, bestLoad := -1, 0
-		for index, block := range blocks {
-			if quotas[index] >= len(block) {
-				continue
-			}
-			if load := weights[index] / quotas[index]; best < 0 || load > bestLoad {
-				best, bestLoad = index, load
-			}
-		}
-		if best < 0 {
-			// 每块都已经一段一条，再多的名额没处放。
-			break
-		}
-		quotas[best]++
-	}
-	return quotas
-}
-
-// balanceSegments 把若干段连续地并成 count 条，让最长的那条尽量短。
-//
-// 就是「连续分割数组、最小化最大子段和」那道题：段的顺序不能动（那是话的顺序），
-// 只能选在哪几个缝隙上断开。段数最多几十、条数最多个位数，直接 DP。
-func balanceSegments(lines []string, count int) []string {
-	if count >= len(lines) {
-		return lines
-	}
-	if count <= 1 {
-		return []string{strings.Join(lines, "\n")}
-	}
-
-	lengths := make([]int, len(lines)+1)
-	for index, line := range lines {
-		lengths[index+1] = lengths[index] + len([]rune(line))
-	}
-	span := func(from, to int) int { return lengths[to] - lengths[from] }
-
-	// best[j][i]：前 i 段分成 j 条时，最长那条的最小值。split 记住最后一刀切在哪。
-	const unreachable = math.MaxInt32
-	best := make([][]int, count+1)
-	split := make([][]int, count+1)
-	for j := range best {
-		best[j] = make([]int, len(lines)+1)
-		split[j] = make([]int, len(lines)+1)
-		for i := range best[j] {
-			best[j][i] = unreachable
-		}
-	}
-	best[0][0] = 0
-	for j := 1; j <= count; j++ {
-		for i := j; i <= len(lines); i++ {
-			for cut := j - 1; cut < i; cut++ {
-				if best[j-1][cut] == unreachable {
-					continue
-				}
-				candidate := max(best[j-1][cut], span(cut, i))
-				if candidate < best[j][i] {
-					best[j][i], split[j][i] = candidate, cut
-				}
-			}
-		}
-	}
-
-	cuts := make([]int, count+1)
-	cuts[count] = len(lines)
-	for j := count; j >= 1; j-- {
-		cuts[j-1] = split[j][cuts[j]]
-	}
-	out := make([]string, 0, count)
-	for j := 1; j <= count; j++ {
-		out = append(out, strings.Join(lines[cuts[j-1]:cuts[j]], "\n"))
-	}
-	return out
-}
-
-func splitChatReplyAtDepth(reply string, limits chatSplitLimits, depth chatReplySplitDepth) []string {
-	var out []string
-	for _, part := range strings.Split(reply, notificationSplitMarker) {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if depth == splitAtMarker {
-			out = append(out, part)
-			continue
-		}
-		for _, line := range splitReplyLines(part) {
-			if depth == splitAtSentence {
-				out = append(out, splitLineIntoSentences(line)...)
-				continue
-			}
-			out = append(out, line)
-		}
-	}
-	return out
-}
-
-// splitLineIntoSentences 把一行按句号分成几次发言，一句一条。
-//
-// 换行是模型给的信号，但它不一定肯换——一段解释、一句界限、一句反问写成一整段是
-// 常事。这一层不依赖模型配合：句号本来就是它自己写出来的边界，一个句子就是一次
-// 发言。条数由上层的 MaxBubbles 兜着，分出来太多就整层退回。
-//
-// 这里曾经有个 60 字的起步门槛，短行整条留着。它防的是「端口被占了。先 lsof 看看
-// 是谁占着。」被拆成两条，但那两条本来就是真人会连发的样子；而门槛真正拦下来的是
-// 一批四五十字、两三句话的回复——恰恰是最该分开发的长度。上层的条数上限已经在管
-// 刷屏了，这道门槛只是把短回复排除在外，去掉。
-func splitLineIntoSentences(line string) []string {
-	runes := []rune(line)
-	ends := boundaryPositions(runes, isSentenceEnd)
-	if len(ends) == 0 {
-		return []string{line}
-	}
-	var out []string
-	start := 0
-	for _, end := range ends {
-		if end >= len(runes) {
-			break
-		}
-		if text := strings.TrimSpace(string(runes[start:end])); text != "" {
-			out = append(out, text)
-			start = end
-		}
-	}
-	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
-		out = append(out, tail)
-	}
-	if len(out) < 2 {
-		return []string{line}
-	}
-	return out
-}
-
-// boundaryPositions 返回每个句末标点之后的位置。引号括号里的句号不算边界：
-// 「他说「我不去。」然后走了」拆开就散架了；连着的标点（「？！」）算一个。
-// 方括号一并计入深度，CQ 码不会被从中间切开。
+// boundaryPositions returns positions immediately after top-level matching
+// punctuation. Length fallback still needs this syntax helper; unlike the
+// removed newline splitter, it never creates a message boundary by itself.
 func boundaryPositions(runes []rune, match func(rune) bool) []int {
 	var out []int
 	depth := 0
-	for i, r := range runes {
-		switch r {
+	for index, value := range runes {
+		switch value {
 		case '「', '『', '（', '(', '【', '《', '“', '[':
 			depth++
 		case '」', '』', '）', ')', '】', '》', '”', ']':
@@ -12277,87 +12062,15 @@ func boundaryPositions(runes []rune, match func(rune) bool) []int {
 				depth--
 			}
 		}
-		if depth > 0 || !match(r) {
+		if depth > 0 || !match(value) {
 			continue
 		}
-		if i+1 < len(runes) && match(runes[i+1]) {
+		if index+1 < len(runes) && match(runes[index+1]) {
 			continue
 		}
-		out = append(out, i+1)
+		out = append(out, index+1)
 	}
 	return out
-}
-
-// splitReplyLines 按换行分段。成块的内容（清单、步骤、代码）整块发，折了行的半句
-// 话跟着上一行走——那不是说完了一句，是排版换的行。
-func splitReplyLines(part string) []string {
-	if !strings.Contains(part, "\n") {
-		return []string{part}
-	}
-	if looksStructuredBlock(part) {
-		return []string{part}
-	}
-	var out []string
-	pending := ""
-	var quoted []string
-	flushQuoted := func() {
-		if len(quoted) > 0 {
-			out = append(out, strings.Join(quoted, "\n"))
-			quoted = nil
-		}
-	}
-	lines := strings.Split(part, "\n")
-	for index, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, ">") {
-			if pending != "" {
-				out = append(out, pending)
-				pending = ""
-			}
-			quoted = append(quoted, line)
-			continue
-		}
-		flushQuoted()
-		if pending != "" {
-			line = pending + "\n" + line
-			pending = ""
-		}
-		if endsMidSentence(line) && !endsWithBracketTone(line, lines[index+1:]) {
-			pending = line
-			continue
-		}
-		out = append(out, line)
-	}
-	flushQuoted()
-	if pending != "" {
-		out = append(out, pending)
-	}
-	if len(out) == 0 {
-		return []string{part}
-	}
-	return out
-}
-
-// looksStructuredBlock 判断这几行是不是一份清单、一组步骤这类整体。结构化行需要
-// 占多数才算：少量「短标签：内容」在普通聊天里太常见，不该因此堵掉分条。
-func looksStructuredBlock(text string) bool {
-	structured := 0
-	total := 0
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		total++
-		if isStructuredReplyLine(strings.TrimSpace(line)) {
-			structured++
-		}
-	}
-	// 偶尔出现两行「标签：内容」不代表整段是清单。要求结构化行占多数，
-	// 这样普通解释里的少量冒号仍能按换行自然分条。
-	return structured >= 2 && structured*2 >= total
 }
 
 // trimChatTrailingPeriod 去掉聊天消息末尾那个句号。

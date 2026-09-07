@@ -1691,7 +1691,7 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 	}
 }
 
-// 空行只是排版：收掉，不分条。分条只认模型显式写的 [diana-br]。
+// 空行只是排版：收掉，不分条。分条只认模型显式写的 [diana-msg]。
 func TestSplitReplyTreatsBlankLinesAsLayout(t *testing.T) {
 	got := splitReply("第一段\n仍是第一段\n\n第二段", 100)
 	want := []string{"第一段\n仍是第一段\n第二段"}
@@ -1776,7 +1776,7 @@ func TestRuntimeMoreThanFiveReplyChunksUseForwardMessage(t *testing.T) {
 		GroupID:   "123456",
 		UserID:    "10001",
 		MessageID: "msg-1",
-	}, "a\nb\nc\nd\ne\nf")
+	}, strings.Join([]string{"a", "b", "c", "d", "e", "f"}, notificationSplitMarker))
 	if err != nil {
 		t.Fatalf("send() error = %v", err)
 	}

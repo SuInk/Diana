@@ -261,7 +261,7 @@ export interface BotProfileConfig {
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
-  /** 自然分条：按模型自己排的换行把回复分成几条发。关掉后只认 [diana-br]；缺省等价于开启。 */
+  /** 自然分条：模型用 [diana-msg] 开始下一条、[diana-line] 在当前消息内换行；真实换行不参与布局。 */
   natural_reply_split_enabled?: boolean;
   social_reply_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */

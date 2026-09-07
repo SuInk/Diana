@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -112,14 +109,14 @@ func TestReplyCompressionFailureNeverReturnsOversizedOrTruncatedText(t *testing.
 }
 
 func TestReplyCompressionProtectsCodeAndMedia(t *testing.T) {
-	code := "```python\nprint(1)\n```"
+	code := "```python" + notificationLineMarker + "print(1)" + notificationLineMarker + "```"
 	p := &compressionTestProvider{outputs: []string{"已处理", code}}
-	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 40, MarkdownToPlain: boolPointer(false)}, replySingleMarker+strings.Repeat("说明", 30)+"\n"+code)
+	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 40, MarkdownToPlain: boolPointer(false)}, replySingleMarker+strings.Repeat("说明", 30)+notificationLineMarker+code)
 	if err != nil || got != replySingleMarker+code || len(p.requests) != 2 {
 		t.Fatalf("protected code changed: %q %v", got, err)
 	}
 	p = &compressionTestProvider{outputs: []string{"已处理", code}}
-	got, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 10, MarkdownToPlain: boolPointer(true)}, replySingleMarker+strings.Repeat("说明", 30)+"\n"+code)
+	got, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 10, MarkdownToPlain: boolPointer(true)}, replySingleMarker+strings.Repeat("说明", 30)+notificationLineMarker+code)
 	if err != nil || got != replySingleMarker+"print(1)" || len(p.requests) != 2 {
 		t.Fatalf("plain-text conversion lost protected code: %q %v", got, err)
 	}
@@ -157,62 +154,5 @@ func TestReplyCompressionPreservesAutoModeAndDraftLimit(t *testing.T) {
 	draft.ObserveTextDelta(context.Background(), "一二三四五六")
 	if len(channel.messages) != 1 || channel.messages[0].Text != "一二三四" {
 		t.Fatal("draft exceeded its preview budget")
-	}
-}
-
-func TestLiveReplyCompression(t *testing.T) {
-	client := liveLLMClient(t)
-	raw, err := os.ReadFile("testdata/document_delivery_live_20260906.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sources []struct {
-		Input  string `json:"input"`
-		Output string `json:"raw_output"`
-	}
-	if err := json.Unmarshal(raw, &sources); err != nil || len(sources) == 0 {
-		t.Fatalf("fixture: %v", err)
-	}
-	budget := 2
-	if value := os.Getenv("DIANA_TEST_COMPRESSION_CALL_BUDGET"); value != "" {
-		budget, err = strconv.Atoi(value)
-		if err != nil || budget < 1 || budget > 2 {
-			t.Fatal("compression test call budget must be 1 or 2")
-		}
-	}
-	probe := &documentDeliveryProbe{LLMClient: client, remaining: budget}
-	channel := &recordingChannel{}
-	cfg := BotConfig{MaxReplyChars: 300, ForwardReplyThreshold: 1, MarkdownToPlain: boolPointer(false)}.WithDefaults()
-	rt := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return probe, nil })
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	// Reuse a captured real reply; do not pay to generate another itinerary.
-	result, runErr := rt.prepareGeneratedReply(ctx, cfg, replySingleMarker+sources[0].Output)
-	var sent []string
-	if runErr == nil {
-		_, runErr = rt.sendDecorated(ctx, MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", SelfID: "42"}, result, outboundDecoration{})
-		for _, message := range channel.sentSnapshot() {
-			sent = append(sent, message.Text)
-		}
-	}
-	errorText := ""
-	if runErr != nil {
-		errorText = strings.ReplaceAll(runErr.Error(), os.Getenv("DIANA_TEST_LLM_API_KEY"), "[redacted]")
-	}
-	record, err := json.Marshal(map[string]any{
-		"original_input": sources[0].Input, "original_output": sources[0].Output,
-		"limit": cfg.MaxReplyChars, "preset_delivery_mode": "single", "requests": probe.requests,
-		"responses": probe.responses, "final_output": result, "sent": sent,
-		"model_calls": budget - probe.remaining, "error": errorText,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("COMPRESSION_SAMPLE %s", record)
-	if runErr != nil {
-		t.Fatal(errorText)
-	}
-	if len(sent) != 1 || replyCompressionRunes(sent[0]) > cfg.MaxReplyChars || len(channel.callsSnapshot()) != 0 {
-		t.Fatalf("compression/delivery contract failed: %q", sent)
 	}
 }

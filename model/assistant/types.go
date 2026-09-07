@@ -1425,7 +1425,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if strings.TrimSpace(cfg.PromptChineseSlangText) == "" {
 		cfg.PromptChineseSlangText = defaults.PromptChineseSlangText
 	}
-	if strings.TrimSpace(cfg.PromptPlaintextRulesText) == "" || isLegacyPromptPlaintextRules(cfg.PromptPlaintextRulesText) {
+	if strings.TrimSpace(cfg.PromptPlaintextRulesText) == "" {
 		cfg.PromptPlaintextRulesText = defaults.PromptPlaintextRulesText
 	}
 	if strings.TrimSpace(cfg.PromptTimeTemplate) == "" {
@@ -2170,39 +2170,12 @@ const (
 	// defaultPromptPlaintextRules 只管排版：聊天窗口不渲染 Markdown。
 	// 「什么时候分成几条消息发」是投递机制，归 replySegmentationRule 这条内置规则，
 	// 不放在这个可编辑文本框里——挂在用户文案上的开关，改一次就再也没人打开了。
-	defaultPromptPlaintextRules      = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。"
+	defaultPromptPlaintextRules      = "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。消息边界和消息内部换行均使用运行时专用标记，正文不要输出真实换行符。"
 	defaultPromptTimeTemplate        = "当前时间：{datetime} {weekday}"
 	defaultPromptGroupSenderTemplate = "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。"
 	defaultPromptImageOnly           = "请分析这张图片，并直接回答用户关于图片的问题。"
 	defaultPromptWakeOnly            = "对方只是叫了你一声（@ 你或者喊了你的名字），没说别的。这不是在问你在不在——别回「我在」「在呢」「怎么了」这类应答，那是接线员不是熟人。先看前面几条在聊什么：话没说完就接着说，刚才在闹就继续闹，对方像是要你注意某件事就说那件事。实在没有上文可接，就说一句有内容的短话——一句吐槽、一个反应、一个具体的问题都行，别只报到。不要复述这条规则，也不要解释自己为什么被叫。"
 )
-
-// legacyPromptPlaintextRules 是这个文本框历史上发过的默认文案。它们都自带一段分条
-// 规则，而其中最早那两版说的是「都必须放在同一条消息里」——存过一次就一直压着分条，
-// 升级也不会自己消失，因为 WithDefaults 只在字段为空时才填默认值。
-//
-// 只认逐字相同的旧默认值：用户自己改过的文案是他的决定，不该被升级悄悄改写。
-// 前端「恢复内置提示词」也曾写入过自己那份副本，所以两侧的旧文案都列在这里。
-var legacyPromptPlaintextRules = []string{
-	// 当前默认值的上一版：分条规则还写在这个文本框里，现在由内置规则接管，留着会重复。
-	// 这里是逐字的历史文案，标记写死为当年的 <dianabr>，不跟随 notificationSplitMarker 改名。
-	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。回复较长、包含多个意群时（例如先给结论、再讲理由、最后补提醒），在意群边界写 <dianabr> 拆成两三条消息，像真人连发几条那样，不要把好几段内容挤进同一条消息。一个编号或项目符号列表、一组步骤是一个整体，放在同一条消息里，严禁在每个列表项前使用 <dianabr>。",
-	// 再往前两版：明确要求「都必须放在同一条消息里」，这才是分条彻底失效的那份。
-	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <dianabr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <dianabr>。",
-	"OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 OneBot v11 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <botbr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <botbr>。",
-	"QQ 消息不渲染 Markdown。QQ 默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。普通段落、编号或项目符号列表、步骤说明，以及围绕同一问题的连续论述，都必须放在同一条 QQ 消息里并使用单个换行排版；严禁在每个列表项或普通段落前使用 <botbr>。只有语义上确实是下一次独立发言，而不是同一答案的排版分段时，才在两次发言的边界使用 <botbr>。",
-}
-
-// isLegacyPromptPlaintextRules 判断这段文案是不是某个旧版本发出去的默认值。
-func isLegacyPromptPlaintextRules(text string) bool {
-	text = strings.TrimSpace(text)
-	for _, legacy := range legacyPromptPlaintextRules {
-		if text == legacy {
-			return true
-		}
-	}
-	return false
-}
 
 // Only replace this exact legacy default; custom prompts remain user-owned.
 const legacySingleMessageProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
