@@ -114,6 +114,31 @@ func TestHistoryBackfillLimitsEachSessionToNewestConfiguredMessages(t *testing.T
 	}
 }
 
+func TestHistoryBackfillDoesNotSendTelegramSessionsToOneBot(t *testing.T) {
+	store := newMemoryInboundEventStore()
+	store.sessions = []HistorySession{{
+		Kind: EventKindGroup, ID: "-5425672870", Platform: PlatformTelegram,
+		ProfileID: "telegram-bot", LastEventTime: 10,
+	}}
+	channel := newQueueTestChannel()
+	runtime := NewRuntime(BotConfig{Platform: PlatformOneBotV11}, channel, NewPluginManager(), nil, nil, nil, nil)
+
+	sessions, err := runtime.backfillInboundHistoryFromSessions(context.Background(), store, store.sessions, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("Telegram sessions entered OneBot backfill: %#v", sessions)
+	}
+	// Runtime-wide OneBot discovery may still list its own groups, but the
+	// Telegram session itself must never reach a OneBot history endpoint.
+	for _, action := range []string{"get_group_msg_history", "get_friend_msg_history"} {
+		if calls := channel.callCount(action); calls != 0 {
+			t.Fatalf("%s called %d times for Telegram history", action, calls)
+		}
+	}
+}
+
 func TestHistoryBackfillDropsHistoricalPrivateOutsideRecentContacts(t *testing.T) {
 	store := newMemoryInboundEventStore()
 	store.sessions = []HistorySession{

@@ -68,6 +68,8 @@ type InboundQueueItem struct {
 type HistorySession struct {
 	Kind          EventKind
 	ID            string
+	Platform      string
+	ProfileID     string
 	LastEventTime int64
 }
 
@@ -971,6 +973,17 @@ func (r *Runtime) backfillInboundHistory(ctx context.Context, store InboundEvent
 }
 
 func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store InboundEventStore, sessions []HistorySession, fallbackWatermark int64) ([]HistorySession, error) {
+	// This backfill protocol is made of OneBot/NapCat APIs. Persisted sessions
+	// from Telegram and other transports must keep their own signed/string IDs
+	// and must never be replayed through OneBot's positive numeric group rules.
+	oneBotSessions := sessions[:0]
+	for _, session := range sessions {
+		platform := NormalizePlatformID(session.Platform)
+		if platform == "" || platform == PlatformOneBotV11 {
+			oneBotSessions = append(oneBotSessions, session)
+		}
+	}
+	sessions = oneBotSessions
 	known := make(map[string]HistorySession, len(sessions))
 	byKey := make(map[string]HistorySession, len(sessions))
 	globalWatermark := int64(0)
@@ -1207,7 +1220,13 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 			params["message_seq"] = cursor
 		}
 		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		data, err := r.CallOneBotAPI(callCtx, action, params)
+		event := MessageEvent{Kind: session.Kind, ProfileID: session.ProfileID, Platform: session.Platform}
+		if session.Kind == EventKindGroup {
+			event.GroupID = session.ID
+		} else {
+			event.UserID = session.ID
+		}
+		data, err := r.callOneBotAPIForEvent(callCtx, event, action, params)
 		cancel()
 		if err != nil {
 			if strings.Contains(err.Error(), "不存在") {

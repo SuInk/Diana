@@ -437,18 +437,24 @@ func (s *SQLiteStore) ListHistorySessions(ctx context.Context) ([]assistant.Hist
 		return nil, errors.New("list history sessions: sqlite store is not configured")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT kind, session_id, MAX(event_time)
+SELECT kind, session_id, platform, profile_id, MAX(event_time)
 FROM (
-  SELECT kind, group_id AS session_id, event_time
+  SELECT kind, group_id AS session_id,
+         COALESCE(json_extract(payload, '$.platform'), '') AS platform,
+         COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') AS profile_id,
+         event_time
   FROM message_events
   WHERE kind = ? AND group_id IS NOT NULL AND group_id != ''
   UNION ALL
-  SELECT kind, user_id AS session_id, event_time
+  SELECT kind, user_id AS session_id,
+         COALESCE(json_extract(payload, '$.platform'), '') AS platform,
+         COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') AS profile_id,
+         event_time
   FROM message_events
   WHERE kind = ? AND user_id IS NOT NULL AND user_id != ''
 )
-GROUP BY kind, session_id
-ORDER BY kind ASC, session_id ASC
+GROUP BY kind, session_id, platform, profile_id
+ORDER BY platform ASC, profile_id ASC, kind ASC, session_id ASC
 `, string(assistant.EventKindGroup), string(assistant.EventKindPrivate))
 	if err != nil {
 		return nil, fmt.Errorf("list history sessions: %w", err)
@@ -459,7 +465,7 @@ ORDER BY kind ASC, session_id ASC
 	for rows.Next() {
 		var kind string
 		var item assistant.HistorySession
-		if err := rows.Scan(&kind, &item.ID, &item.LastEventTime); err != nil {
+		if err := rows.Scan(&kind, &item.ID, &item.Platform, &item.ProfileID, &item.LastEventTime); err != nil {
 			return nil, fmt.Errorf("scan history session: %w", err)
 		}
 		item.Kind = assistant.EventKind(kind)
