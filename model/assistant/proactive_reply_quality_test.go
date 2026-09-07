@@ -72,17 +72,15 @@ func TestNormalizeReplyTruncatesAtSentenceBoundary(t *testing.T) {
 	first := strings.Repeat("甲", 19) + "。"
 	reply := first + strings.Repeat("乙", 30) + "。"
 	got := normalizeReply(reply, 30)
-	// 这条测的是「在句尾收束而不是硬切」；收尾那个句号由 normalizeReply 一并去掉，
-	// 聊天消息不带句号收尾（见 trimChatTrailingPeriod）。
-	if want := strings.TrimSuffix(first, "。"); got != want {
+	// 这条测的是「在句尾收束而不是硬切」；自然句号应当保留。
+	if want := first; got != want {
 		t.Fatalf("reply = %q, want %q", got, want)
 	}
 	if strings.HasSuffix(got, "...") {
 		t.Fatalf("boundary truncation should not append an ellipsis: %q", got)
 	}
-	// 句号被去掉之后，「没切在半句上」要换个方式验证：截断点后面紧跟的就该是句号，
-	// 说明这一刀正好落在句尾。
-	if !strings.HasPrefix(reply, got+"。") {
+	// 保留句号后，截断结果应当就是原回复的完整前缀。
+	if !strings.HasPrefix(reply, got) {
 		t.Fatalf("reply was cut mid-sentence: %q", got)
 	}
 	if len([]rune(got)) > 30 {
@@ -212,7 +210,7 @@ func TestReplyAuditFallsBackToOriginalImageWhenDescriptionIsUnavailable(t *testi
 // 排除掉，否则风格提示词和审核提示词会互相打架，代价是用户少收到一条回复。
 func TestProactiveReplyQualityPromptDoesNotTreatChatStyleEndingAsTruncation(t *testing.T) {
 	prompt := proactiveReplyQualityPrompt
-	for _, must := range []string{"别把风格当截断", "句末不打句号", "语气词收尾", "不闭合的「(」或「（」", "不算截断"} {
+	for _, must := range []string{"别把风格当截断", "句末标点按语气自然变化", "语气词收尾", "不闭合的「(」或「（」", "不算截断"} {
 		if !strings.Contains(prompt, must) {
 			t.Fatalf("截断判据没有排除聊天口语的收尾方式，缺 %q：%s", must, prompt)
 		}
