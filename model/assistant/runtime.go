@@ -2366,9 +2366,20 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		}
 		cfg.ProactiveReplyChance = 1
 	}
+	newImageEvidence := parsed && imageEvidenceNewSinceLastBot(event, r.contextHistory(event), cfg.BotAccount)
 	routePromoted := parsed && promoteDirectedFollowup(&decision, event, text, cfg.ProactiveReplyThreshold, chatIn)
 	if parsed && !routePromoted {
 		routePromoted = promoteRequestedResponse(&decision, event, cfg.ProactiveReplyThreshold, chatIn)
+	}
+	if parsed && !routePromoted {
+		routePromoted = promoteNewImageEvidence(&decision, event, newImageEvidence, cfg.ProactiveReplyThreshold, chatIn)
+	}
+	if newImageEvidence && decision.ShouldReply && decision.RequestsResponse {
+		matchCtx, matchCancel := context.WithTimeout(ctx, avatarMatchTimeout)
+		if match, matchErr := r.matchCurrentGroupMemberAvatar(matchCtx, event); matchErr == nil && match.Matched {
+			event.avatarMatchContext = fmt.Sprintf("本地图片模式匹配确认：当前图片与本群成员「%s」的当前头像一致（相似度 %.3f，第二候选 %.3f）。这是运行时比对结果，不是视觉模型猜测。", match.DisplayName, match.Score, match.RunnerUpScore)
+		}
+		matchCancel()
 	}
 	turn := selectProactiveReplyTurn(candidates, event.MessageID, decision.TurnMessageIDs)
 	decisionAllowed := parsed && decision.allows(cfg.ProactiveReplyThreshold, chatIn)
@@ -2573,7 +2584,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	}
 	if cfg.AgentEnabled && event.Kind == EventKindGroup {
 		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-			"diana.onebot_group：可实时读取当前群资料、完整成员列表和成员总数",
+			"diana.onebot_group：可实时读取当前群资料、完整成员列表和成员总数，并以本地图片模式匹配当前图片是否为群成员头像",
 		)
 		if r.llmStore != nil {
 			payload.AvailableReplyTools = append(payload.AvailableReplyTools,
@@ -2789,6 +2800,29 @@ func promoteRequestedResponse(decision *proactiveReplyDecision, event MessageEve
 	return true
 }
 
+func promoteNewImageEvidence(decision *proactiveReplyDecision, event MessageEvent, newImageEvidence bool, threshold float64, chatIn chatInSettings) bool {
+	if decision == nil || decision.allows(threshold, chatIn) || !decision.RequestsResponse || decision.Confidence < threshold {
+		return false
+	}
+	if decision.Blocker != proactiveBlockerLowValue || !newImageEvidence {
+		return false
+	}
+	originalReason := strings.TrimSpace(decision.Reason)
+	decision.ShouldReply = true
+	decision.Category = "needs_response"
+	decision.Answerable = true
+	decision.Substantive = true
+	decision.TargetMessageID = strings.TrimSpace(event.MessageID)
+	if decision.TargetMessageID != "" {
+		decision.TurnMessageIDs = []string{decision.TargetMessageID}
+	}
+	decision.Reason = "当前请求附带了此前回答中不存在的新图片证据，不能按文字重复忽略"
+	if originalReason != "" {
+		decision.Reason += "；Intent Recognition 原判断：" + originalReason
+	}
+	return true
+}
+
 func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEvent, text string, threshold float64, chatIn chatInSettings) bool {
 	if decision == nil || decision.allows(threshold, chatIn) || !decision.DirectedAtBot || decision.Confidence < threshold {
 		return false
@@ -2818,7 +2852,7 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
+	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；diana.onebot_group 可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
 	const expressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard
@@ -3757,6 +3791,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// small-text screenshots so the chat model cannot silently replace their
 		// topic with an unrelated but searchable hypothesis.
 		currentMessage = appendLLMMessageText(currentMessage, "【当前图片的独立视觉描述，可能有识别误差；请与原图共同核对主题，搜索词必须来自这张图，不得改换成无关话题】\n"+currentImageGrounding)
+	}
+	if avatarMatch := strings.TrimSpace(event.avatarMatchContext); avatarMatch != "" {
+		currentMessage = appendLLMMessageText(currentMessage, "【群成员头像匹配】\n"+avatarMatch)
 	}
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	if systemTail != "" {
