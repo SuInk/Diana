@@ -79,11 +79,10 @@
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
             </span>
             <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
-            <span v-if="group.configured && group.response_mode" class="badge accent">{{ responseModeLabel(group.response_mode) }}</span>
+            <span v-if="group.configured && groupReplyDesireValue(group)" class="badge accent">回复欲望 {{ replyDesireLabel(groupReplyDesireValue(group)) }}</span>
             <span v-if="group.configured && group.reply_style" class="badge">{{ replyStyleLabel(group.reply_style) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
-            <span v-if="group.configured && group.natural_interjection_enabled" class="badge accent">自然插话</span>
             <span v-if="group.configured && group.social_reply_enabled" class="badge accent">社交性回应</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
               回复 {{ group.reply_gate.active_start }}–{{ group.reply_gate.active_end }}
@@ -194,14 +193,14 @@
           ></textarea>
         </div>
         <div class="field">
-          <label for="group-response-mode">回复模式</label>
+          <label for="group-reply-desire">回复欲望</label>
           <AppSelect
-            id="group-response-mode"
-            :model-value="editing.response_mode ?? ''"
-            :options="groupResponseModeOptions"
-            @update:model-value="(value) => { if (editing) editing.response_mode = value as typeof editing.response_mode; }"
+            id="group-reply-desire"
+            :model-value="groupReplyDesireValue(editing)"
+            :options="groupReplyDesireOptions"
+            @update:model-value="setGroupReplyDesire"
           />
-          <span class="hint">控制本群中机器人主动接话的频率。</span>
+          <span class="hint">统一控制本群中机器人主动接话的概率、门槛和冷却；关闭后不主动插话。</span>
         </div>
         <div class="field">
           <label for="group-reply-style">表达风格</label>
@@ -288,22 +287,6 @@
           <label for="group-forward-chunks">合并转发块数</label>
           <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
           <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>
-        </div>
-        <div v-if="editing.response_mode === 'custom'" class="field">
-          <label for="group-proactive-chance">主动回复采样率</label>
-          <input id="group-proactive-chance" v-model.number="editing.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
-        </div>
-        <div v-if="editing.response_mode === 'custom'" class="field">
-          <label for="group-proactive-threshold">主动回复置信度阈值</label>
-          <input id="group-proactive-threshold" v-model.number="editing.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
-        </div>
-        <div v-if="editing.response_mode === 'custom'" class="field wide">
-          <label class="switch">
-            <input v-model="editing.natural_interjection_enabled" type="checkbox" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">本群开启自然插话模式</span>
-          </label>
-          <span class="hint">普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；关闭时使用现有置信度、概率和冷却规则。</span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -417,14 +400,13 @@ const groupTriggerModeOptions: AppSelectOption[] = [
   { value: "loose", label: "宽松" }
 ];
 
-const groupResponseModeOptions: AppSelectOption[] = [
+const groupReplyDesireOptions: AppSelectOption[] = [
   { value: "", label: "跟随全局" },
-  { value: "quiet", label: "安静模式" },
-  { value: "assistant", label: "助手模式", hint: "优先帮助解决问题，低欲望参与闲聊" },
-  { value: "standard", label: "标准模式" },
-  { value: "active", label: "活跃模式" },
-  { value: "super_active", label: "超级活跃模式", hint: "几乎每条群消息都会尝试接话" },
-  { value: "custom", label: "自定义" }
+  { value: "off", label: "关闭" },
+  { value: "low", label: "低", hint: "35% 采样，10 分钟冷却" },
+  { value: "medium", label: "中", hint: "60% 采样，5 分钟冷却" },
+  { value: "high", label: "高", hint: "85% 采样，2 分钟冷却" },
+  { value: "max", label: "极高", hint: "100% 采样，30 秒冷却，容易刷屏" }
 ];
 
 const groupReplyStyleOptions: AppSelectOption[] = [
@@ -522,7 +504,6 @@ const triggersDraft = ref("");
 const saving = ref(false);
 const togglingGroupID = ref("");
 const defaultRecallReplyAutoDeleteEnabled = ref(false);
-const defaultNaturalInterjectionEnabled = ref(false);
 // 自然分条默认是开的，跟机器人配置那边的缺省一致。
 const naturalReplySplitDefaults = ref<Record<string, boolean>>({});
 const defaultNaturalReplySplitEnabled = computed(() =>
@@ -559,8 +540,33 @@ function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + "…" : text;
 }
 
-function responseModeLabel(mode: BotGroupConfig["response_mode"]): string {
-  return ({ quiet: "安静模式", assistant: "助手模式", standard: "标准模式", active: "活跃模式", super_active: "超级活跃模式", custom: "自定义回复" } as const)[mode as "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom"] ?? "";
+function groupReplyDesireValue(config: BotGroupConfig): string {
+  if (config.natural_interjection_enabled) return "max";
+  if (config.chat_in_level) return config.chat_in_level;
+  return ({ quiet: "off", assistant: "low", standard: "low", active: "high", super_active: "max" } as Record<string, string>)[config.response_mode ?? ""] ?? "";
+}
+
+function replyDesireLabel(level: string): string {
+  return ({ off: "关闭", low: "低", medium: "中", high: "高", max: "极高" } as Record<string, string>)[level] ?? "";
+}
+
+function setGroupReplyDesire(value: string): void {
+  if (!editing.value) return;
+  editing.value.natural_interjection_enabled = false;
+  editing.value.proactive_reply_chance = 0;
+  editing.value.proactive_reply_threshold = 0;
+  editing.value.chat_in_threshold = 0;
+  editing.value.chat_in_chance = 0;
+  editing.value.chat_in_cooldown_seconds = 0;
+  if (value === "") {
+    editing.value.response_mode = "";
+    editing.value.chat_in_enabled = undefined;
+    editing.value.chat_in_level = undefined;
+    return;
+  }
+  editing.value.response_mode = "custom";
+  editing.value.chat_in_enabled = value !== "off";
+  editing.value.chat_in_level = value as NonNullable<BotGroupConfig["chat_in_level"]>;
 }
 
 function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
@@ -618,7 +624,6 @@ async function load(showFeedback = false): Promise<void> {
       const active = config.profiles?.find((profile) => profile.id === botScope.value) ?? config.profiles?.[0];
       const current = active ?? config;
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
-      defaultNaturalInterjectionEnabled.value = current.natural_interjection_enabled ?? false;
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
@@ -651,7 +656,6 @@ function addGroup(): void {
       group_id: groupID,
       enabled: true,
       group_triggers: [],
-      natural_interjection_enabled: defaultNaturalInterjectionEnabled.value,
       social_reply_enabled: defaultSocialReplyEnabled.value,
       recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
       recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
@@ -667,7 +671,6 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
-  config.natural_interjection_enabled ??= defaultNaturalInterjectionEnabled.value;
   config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";

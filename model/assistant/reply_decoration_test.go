@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,48 @@ func TestSendAutoModeLeavesReferenceAndMentionToModel(t *testing.T) {
 	}
 	if channel.sent[0].ReplyMessageID != "" || channel.sent[0].MentionUserID != "" {
 		t.Fatalf("auto mode still decorated the reply: %#v", channel.sent[0])
+	}
+}
+
+func TestSendAutoModeReferencesOriginalAfterConversationMovesOn(t *testing.T) {
+	withFastSendTiming(t)
+	channel := &scriptedChannel{}
+	runtime := NewRuntime(BotConfig{ReplyReferenceMode: ReplyDecorationAuto}, channel, NewPluginManager(), nil, nil, nil, nil)
+	trigger := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "trigger", RawMessage: "帮我看一下"}
+	runtime.remember(trigger)
+	for index := 0; index < autoReplyReferenceBacklogMessages; index++ {
+		runtime.remember(MessageEvent{
+			Kind:       EventKindGroup,
+			GroupID:    trigger.GroupID,
+			UserID:     "other",
+			MessageID:  fmt.Sprintf("newer-%d", index),
+			RawMessage: "后续群消息",
+		})
+	}
+
+	if err := runtime.send(context.Background(), trigger, "处理好了"); err != nil {
+		t.Fatalf("send() error = %v", err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].ReplyMessageID != trigger.MessageID {
+		t.Fatalf("backlogged auto reply did not reference its trigger: %#v", channel.sent)
+	}
+}
+
+func TestSendReferenceOffWinsEvenWhenConversationMovesOn(t *testing.T) {
+	withFastSendTiming(t)
+	channel := &scriptedChannel{}
+	runtime := NewRuntime(BotConfig{ReplyReferenceMode: ReplyDecorationOff}, channel, NewPluginManager(), nil, nil, nil, nil)
+	trigger := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "trigger", RawMessage: "帮我看一下"}
+	runtime.remember(trigger)
+	for index := 0; index < autoReplyReferenceBacklogMessages; index++ {
+		runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: trigger.GroupID, UserID: "other", MessageID: fmt.Sprintf("newer-%d", index), RawMessage: "后续群消息"})
+	}
+
+	if err := runtime.send(context.Background(), trigger, "处理好了"); err != nil {
+		t.Fatalf("send() error = %v", err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].ReplyMessageID != "" {
+		t.Fatalf("reply reference off was ignored: %#v", channel.sent)
 	}
 }
 

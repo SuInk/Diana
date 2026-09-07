@@ -15,14 +15,6 @@ import (
 const (
 	defaultOneBotGroupMemberLimit = 50
 	maximumOneBotGroupMemberLimit = 100
-
-	// 回复策略的取值边界。schema 文案和下面的校验都引用这里，避免同一个数字
-	// 在散文、参数声明和校验代码里各写一份然后各自漂移。
-	minimumReplyChance          = 0.05
-	maximumReplyChance          = 1.0
-	minimumReplyThreshold       = 0.5
-	maximumReplyThreshold       = 1.0
-	maximumChatInCooldownSecond = 3600
 )
 
 type dianaOneBotGroupTool struct {
@@ -45,16 +37,15 @@ type dianaOneBotGroupResult struct {
 }
 
 type dianaOneBotGroupReplyPolicy struct {
-	ProactiveReplyChance       float64 `json:"proactive_reply_chance"`
-	ProactiveReplyThreshold    float64 `json:"proactive_reply_threshold"`
-	MinimumReplyMemberLevel    int     `json:"minimum_reply_member_level"`
-	ChatInEnabled              bool    `json:"chat_in_enabled"`
-	ChatInLevel                string  `json:"chat_in_level"`
-	ChatInLevelLabel           string  `json:"chat_in_level_label"`
-	ChatInThreshold            float64 `json:"chat_in_threshold"`
-	ChatInChance               float64 `json:"chat_in_chance"`
-	ChatInCooldownSeconds      int     `json:"chat_in_cooldown_seconds"`
-	NaturalInterjectionEnabled bool    `json:"natural_interjection_enabled"`
+	ProactiveReplyChance    float64 `json:"proactive_reply_chance"`
+	ProactiveReplyThreshold float64 `json:"proactive_reply_threshold"`
+	MinimumReplyMemberLevel int     `json:"minimum_reply_member_level"`
+	ChatInEnabled           bool    `json:"chat_in_enabled"`
+	ChatInLevel             string  `json:"chat_in_level"`
+	ChatInLevelLabel        string  `json:"chat_in_level_label"`
+	ChatInThreshold         float64 `json:"chat_in_threshold"`
+	ChatInChance            float64 `json:"chat_in_chance"`
+	ChatInCooldownSeconds   int     `json:"chat_in_cooldown_seconds"`
 }
 
 type dianaOneBotGroupMemberItem struct {
@@ -90,22 +81,10 @@ func (t *dianaOneBotGroupTool) InputSchema() map[string]any {
 		"exclude_current_sender": toolBoolParam("members 专用：排除当前发言者，用户说「其他人」「除了我」时置 true。"),
 		"exclude_user_ids":       toolStringArrayParam("members 专用：排除指定账号。"),
 		"limit":                  toolIntParam("members 专用：返回条数，默认 "+itoa(defaultOneBotGroupMemberLimit)+"。", 1, maximumOneBotGroupMemberLimit),
-		"proactive_reply_chance": toolNumberParam("主动回复采样率：判断放行后实际回复的比例。",
-			minimumReplyChance, maximumReplyChance),
-		"proactive_reply_threshold": toolNumberParam("主动回复置信度阈值，越高越克制。",
-			minimumReplyThreshold, maximumReplyThreshold),
 		"minimum_reply_member_level": toolIntParam("最低回复群等级；低于该等级的成员只有主动 @ 机器人时才会被回复。",
 			0, maximumReplyMemberLevel),
-		"chat_in_enabled": toolBoolParam("闲聊插话总开关：没人 @ 机器人时是否主动接话。"),
-		"chat_in_level": toolEnumParam("闲聊插话档位，越高越爱说话；日常调节改这一项就够，不必动下面三个细项。",
+		"chat_in_level": toolEnumParam("回复欲望，统一控制没人 @ 机器人时主动接话的概率、门槛和冷却；off 表示关闭。",
 			string(ChatInLevelOff), string(ChatInLevelLow), string(ChatInLevelMedium), string(ChatInLevelHigh), string(ChatInLevelMax)),
-		"chat_in_threshold": toolNumberParam("覆盖档位预设的插话置信度阈值，需要精细调节时才用。",
-			minimumReplyThreshold, maximumReplyThreshold),
-		"chat_in_chance": toolNumberParam("覆盖档位预设的插话采样率，需要精细调节时才用。",
-			minimumReplyChance, maximumReplyChance),
-		"chat_in_cooldown_seconds": toolIntParam("覆盖档位预设的插话冷却秒数，需要精细调节时才用。",
-			0, maximumChatInCooldownSecond),
-		"natural_interjection_enabled": toolBoolParam("自然插话模式：置 true 后只要能生成可靠且有实质内容的回复就放行，不再受置信度、采样率和冷却限制。用户说「只要有话能回就回复」时开启，说「恢复原来的插话频率」时关闭。"),
 	})
 }
 
@@ -176,24 +155,6 @@ func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string
 	}
 
 	changed := false
-	if chance, present, err := groupToolFloat(input, "proactive_reply_chance"); err != nil {
-		return "", err
-	} else if present {
-		if chance < minimumReplyChance || chance > maximumReplyChance {
-			return "", fmt.Errorf("proactive_reply_chance 必须在 %g 到 %g 之间", minimumReplyChance, maximumReplyChance)
-		}
-		cfg.ProactiveReplyChance = chance
-		changed = true
-	}
-	if threshold, present, err := groupToolFloat(input, "proactive_reply_threshold"); err != nil {
-		return "", err
-	} else if present {
-		if threshold < minimumReplyThreshold || threshold > maximumReplyThreshold {
-			return "", fmt.Errorf("proactive_reply_threshold 必须在 %g 到 %g 之间", minimumReplyThreshold, maximumReplyThreshold)
-		}
-		cfg.ProactiveReplyThreshold = threshold
-		changed = true
-	}
 	if value, present := input["minimum_reply_member_level"]; present {
 		level, err := groupToolInteger(value)
 		if err != nil || level < 0 || level > maximumReplyMemberLevel {
@@ -203,57 +164,33 @@ func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string
 		changed = true
 	}
 	chatInChanged := false
-	if _, present := input["chat_in_enabled"]; present {
-		cfg.ChatInEnabled = boolPointer(groupToolBool(input, "chat_in_enabled"))
-		changed, chatInChanged = true, true
-	}
-	if _, present := input["natural_interjection_enabled"]; present {
-		cfg.NaturalInterjectionEnabled = boolPointer(groupToolBool(input, "natural_interjection_enabled"))
-		changed, chatInChanged = true, true
-	}
 	if value, present := input["chat_in_level"]; present {
 		level := ChatInLevel(fmt.Sprintf("%v", value)).Normalized()
 		if level == "" {
 			return "", fmt.Errorf("chat_in_level 必须是 off、low、medium、high 或 max 之一")
 		}
 		cfg.ChatInLevel = level
-		changed, chatInChanged = true, true
-	}
-	if threshold, present, err := groupToolFloat(input, "chat_in_threshold"); err != nil {
-		return "", err
-	} else if present {
-		if threshold < minimumReplyThreshold || threshold > maximumReplyThreshold {
-			return "", fmt.Errorf("chat_in_threshold 必须在 %g 到 %g 之间", minimumReplyThreshold, maximumReplyThreshold)
-		}
-		cfg.ChatInThreshold = threshold
-		changed, chatInChanged = true, true
-	}
-	if chance, present, err := groupToolFloat(input, "chat_in_chance"); err != nil {
-		return "", err
-	} else if present {
-		if chance < minimumReplyChance || chance > maximumReplyChance {
-			return "", fmt.Errorf("chat_in_chance 必须在 %g 到 %g 之间", minimumReplyChance, maximumReplyChance)
-		}
-		cfg.ChatInChance = chance
-		changed, chatInChanged = true, true
-	}
-	if value, present := input["chat_in_cooldown_seconds"]; present {
-		seconds, err := groupToolInteger(value)
-		if err != nil || seconds < 0 || seconds > maximumChatInCooldownSecond {
-			return "", fmt.Errorf("chat_in_cooldown_seconds 必须是 0 到 %d 的整数", maximumChatInCooldownSecond)
-		}
-		cfg.ChatInCooldownSeconds = seconds
+		cfg.ChatInEnabled = boolPointer(level != ChatInLevelOff)
+		cfg.ChatInThreshold = 0
+		cfg.ChatInChance = 0
+		cfg.ChatInCooldownSeconds = 0
+		cfg.ProactiveReplyChance = 0
+		cfg.ProactiveReplyThreshold = 0
+		cfg.NaturalInterjectionEnabled = boolPointer(false)
 		changed, chatInChanged = true, true
 	}
 	if !changed {
 		return "", fmt.Errorf("至少提供一项要修改的回复策略")
 	}
 	message := "已更新本群回复策略。"
+	if chatInChanged {
+		message = "已更新本群回复欲望。"
+	}
 	// 预设回复模式会在运行时重新套用自己的插话档位，把这里刚写进去的值覆盖掉。
 	// 既然调用方明确要求改插话，就把本群切到自定义，让修改真正生效。
 	if chatInChanged && cfg.ResponseMode.Normalized() != ResponseModeCustom && strings.TrimSpace(string(cfg.ResponseMode)) != "" {
 		cfg.ResponseMode = ResponseModeCustom
-		message = "已更新本群回复策略，并把本群回复模式切换为自定义，否则预设模式会覆盖插话设置。"
+		message = "已更新本群回复欲望。"
 	}
 	saved, err := t.runtime.saveGroupConfig(cfg)
 	if err != nil {
@@ -285,16 +222,15 @@ func dianaOneBotGroupReplyPolicyFromConfig(cfg GroupConfig) dianaOneBotGroupRepl
 	}
 	chatIn := resolved.chatInSettings()
 	return dianaOneBotGroupReplyPolicy{
-		ProactiveReplyChance:       cfg.ProactiveReplyChance,
-		ProactiveReplyThreshold:    cfg.ProactiveReplyThreshold,
-		MinimumReplyMemberLevel:    cfg.MinimumReplyMemberLevel,
-		ChatInEnabled:              chatIn.Enabled,
-		ChatInLevel:                string(chatIn.Level),
-		ChatInLevelLabel:           chatIn.Level.Label(),
-		ChatInThreshold:            chatIn.Threshold,
-		ChatInChance:               chatIn.Chance,
-		ChatInCooldownSeconds:      int(chatIn.Cooldown / time.Second),
-		NaturalInterjectionEnabled: chatIn.Natural,
+		ProactiveReplyChance:    cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold: cfg.ProactiveReplyThreshold,
+		MinimumReplyMemberLevel: cfg.MinimumReplyMemberLevel,
+		ChatInEnabled:           chatIn.Enabled,
+		ChatInLevel:             string(chatIn.Level),
+		ChatInLevelLabel:        chatIn.Level.Label(),
+		ChatInThreshold:         chatIn.Threshold,
+		ChatInChance:            chatIn.Chance,
+		ChatInCooldownSeconds:   int(chatIn.Cooldown / time.Second),
 	}
 }
 
@@ -373,18 +309,6 @@ func groupToolBool(input map[string]any, key string) bool {
 	default:
 		return false
 	}
-}
-
-func groupToolFloat(input map[string]any, key string) (float64, bool, error) {
-	value, present := input[key]
-	if !present {
-		return 0, false, nil
-	}
-	parsed, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(value)), 64)
-	if err != nil {
-		return 0, true, fmt.Errorf("%s 必须是数字", key)
-	}
-	return parsed, true, nil
 }
 
 func groupToolInteger(value any) (int, error) {

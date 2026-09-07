@@ -87,29 +87,13 @@ func TestChatInDecisionRequiresSubstantiveContent(t *testing.T) {
 	}
 }
 
-func TestNaturalInterjectionAllowsEveryValidReply(t *testing.T) {
+func TestLegacyNaturalInterjectionMigratesToMaxReplyDesire(t *testing.T) {
 	cfg := DefaultBotConfig()
-	cfg.ChatInEnabled = boolPointer(false)
 	cfg.NaturalInterjectionEnabled = boolPointer(true)
 	settings := cfg.chatInSettings()
-	if !settings.Enabled || !settings.Natural || settings.Threshold != 0 || settings.Chance != 1 || settings.Cooldown != 0 {
-		t.Fatalf("natural interjection settings = %#v", settings)
-	}
-
-	valid, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":0.01,"category":"chat_in","answerable":true,"substantive":true}`)
-	if !valid.allows(0.99, settings) {
-		t.Fatal("natural mode should allow a valid substantive reply without confidence gating")
-	}
-	notAnswerable, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":false,"substantive":true}`)
-	if !notAnswerable.allows(0.1, settings) {
-		t.Fatal("planner answerability must not preempt the send-time accuracy audit")
-	}
-	filler, _ := parseProactiveReplyDecision(`{"should_reply":true,"confidence":1,"category":"chat_in","answerable":true,"substantive":false}`)
-	if filler.allows(0.1, settings) {
-		t.Fatal("natural mode must not send filler")
-	}
-	if prompt := proactiveReplyRouterPromptForChatIn("路由器提示词", settings, false); !strings.Contains(prompt, "自然插话模式") || !strings.Contains(prompt, "有实质内容") {
-		t.Fatalf("natural router prompt = %q", prompt)
+	preset := chatInLevelPresets[ChatInLevelMax]
+	if !settings.Enabled || settings.Natural || settings.Level != ChatInLevelMax || settings.Threshold != preset.Threshold || settings.Chance != preset.Chance || settings.Cooldown != preset.Cooldown {
+		t.Fatalf("legacy natural interjection settings = %#v", settings)
 	}
 }
 
@@ -119,7 +103,7 @@ func TestNaturalInterjectionCanBeConfiguredPerGroup(t *testing.T) {
 		"natural": {GroupID: "natural", NaturalInterjectionEnabled: boolPointer(true)},
 		"quiet":   {GroupID: "quiet", NaturalInterjectionEnabled: boolPointer(false)},
 	}})
-	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); !settings.Natural {
+	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); settings.Level != ChatInLevelMax || settings.Cooldown != 30*time.Second {
 		t.Fatalf("natural group settings = %#v", settings)
 	}
 	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "quiet"}).chatInSettings(); settings.Natural {
@@ -298,14 +282,14 @@ func TestChatInOffIsNotResurrectedByNaturalInterjection(t *testing.T) {
 	if settings.Enabled || settings.Natural {
 		t.Fatalf("chat-in off was reopened by natural mode: %#v", settings)
 	}
-	// 其余档位仍然可以切到自然插话。
+	// 其余档位的旧开关迁移成极高回复欲望，但仍保留频率限制。
 	on := BotConfig{
 		ResponseMode:               ResponseModeCustom,
 		ChatInLevel:                ChatInLevelLow,
 		NaturalInterjectionEnabled: boolPointer(true),
 	}.chatInSettings()
-	if !on.Enabled || !on.Natural || on.Cooldown != 0 {
-		t.Fatalf("natural mode did not apply on an open level: %#v", on)
+	if !on.Enabled || on.Natural || on.Level != ChatInLevelMax || on.Cooldown != 30*time.Second {
+		t.Fatalf("legacy natural mode did not migrate to max desire: %#v", on)
 	}
 }
 
