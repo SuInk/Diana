@@ -180,8 +180,9 @@ func runLiveMarkerCasesWithStyle(t *testing.T, style ReplyStyle, cases []liveMar
 				for i, part := range parts {
 					t.Logf("bubble[%d/%d] chars=%d text=%q", i+1, len(parts), len([]rune(part)), part)
 				}
-				if strings.Contains(strings.Join(parts, "\n"), "diana-br") {
-					t.Error("marker leaked into delivered text")
+				joined := strings.Join(parts, "\n")
+				if strings.Contains(joined, notificationSplitMarker) || strings.Contains(joined, notificationLineMarker) {
+					t.Error("layout marker leaked into delivered text")
 				}
 				switch tc.kind {
 				case "document":

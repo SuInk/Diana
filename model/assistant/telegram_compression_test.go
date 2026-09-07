@@ -64,16 +64,16 @@ func TestTelegramSafePartsDoNotTriggerCompression(t *testing.T) {
 }
 
 func TestTelegramCompressionCanRegroupWholeCodeBlocks(t *testing.T) {
-	first := "```text\n" + strings.Repeat("a", 2500) + "\n```"
-	second := "```text\n" + strings.Repeat("b", 2500) + "\n```"
-	p := &compressionTestProvider{outputs: []string{first + "\n" + notificationSplitMarker + "\n" + second}}
+	first := "```text" + notificationLineMarker + strings.Repeat("a", 2500) + notificationLineMarker + "```"
+	second := "```text" + notificationLineMarker + strings.Repeat("b", 2500) + notificationLineMarker + "```"
+	p := &compressionTestProvider{outputs: []string{first + notificationSplitMarker + second}}
 	cfg := BotConfig{Platform: PlatformTelegram, MaxReplyChars: 8000}
-	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), cfg, first+"\n"+second)
+	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), cfg, first+notificationSplitMarker+second)
 	if err != nil || len(splitChatReply(got, chatSplitLimits{})) != 2 || len(p.requests) != 0 {
 		t.Fatalf("code blocks could not be regrouped safely: %v", err)
 	}
 	p = &compressionTestProvider{}
-	_, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), cfg, "```text\n"+strings.Repeat("\U0001f600", 2100)+"\n```")
+	_, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), cfg, "```text"+notificationLineMarker+strings.Repeat("\U0001f600", 2100)+notificationLineMarker+"```")
 	if !errors.Is(err, errReplyCompression) || len(p.requests) != 0 {
 		t.Fatal("indivisible oversized code should not be rewritten")
 	}

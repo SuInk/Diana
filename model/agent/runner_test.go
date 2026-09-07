@@ -893,7 +893,7 @@ func (c *nativeFinalizeClient) Generate(_ context.Context, req llm.GenerateReque
 		}, nil
 	}
 	return &llm.GenerateResponse{
-		Text:      "文件内容是\n第二行「带引号」的正文",
+		Text:      "文件内容是[diana-line]第二行「带引号」的正文",
 		ToolCalls: []llm.ToolCall{{ID: "call-2", Name: finalizeToolName, Arguments: map[string]any{}}},
 	}, nil
 }
@@ -909,11 +909,39 @@ func TestRunnerTakesFinalReplyFromTextWhenFinalizeCarriesNoContent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Text != "文件内容是\n第二行「带引号」的正文" || response.FinishReason != "final" {
+	if response.Text != "文件内容是[diana-line]第二行「带引号」的正文" || response.FinishReason != "final" {
 		t.Fatalf("response=%#v", response)
 	}
 	if tool.calls != 1 || len(client.requests) != 2 {
 		t.Fatalf("calls=%d requests=%d", tool.calls, len(client.requests))
+	}
+}
+
+type finalizeLayoutRepairClient struct{ calls int }
+
+func (c *finalizeLayoutRepairClient) Generate(_ context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.calls++
+	content := "第一行\n第二行"
+	if c.calls > 1 {
+		content = "第一行[diana-line]第二行"
+	}
+	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{
+		ID: "final", Name: finalizeToolName, Arguments: map[string]any{"content": content},
+	}}}, nil
+}
+
+func TestRunnerRepairsLiteralNewlinesInFinalizeContent(t *testing.T) {
+	client := &finalizeLayoutRepairClient{}
+	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(&countingTool{name: "unused"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "reply"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.calls != 2 || response.Text != "第一行[diana-line]第二行" {
+		t.Fatalf("calls=%d response=%#v", client.calls, response)
 	}
 }
 

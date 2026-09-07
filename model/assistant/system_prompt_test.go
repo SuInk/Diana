@@ -29,7 +29,7 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	}
 }
 
-// 分条是投递机制，不能只在某一种表达风格里教：splitReply 只认 [diana-br]，模型
+// 分条是投递机制，不能只在某一种表达风格里教：splitReply 只认 [diana-msg]，模型
 // 不写标记就一定发成一整条。每种风格的提示词都必须带上这条规则。
 func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {
 	for _, style := range []ReplyStyle{
@@ -43,15 +43,7 @@ func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {
 	}
 }
 
-// 旧版本发出去的默认文案里带着「都必须放在同一条消息里」，存进配置就一直压着
-// 分条；升级时把逐字相同的旧默认值换成新的，用户自己改过的文案不动。
-func TestLegacyPlaintextRulesAreReplacedButCustomTextIsKept(t *testing.T) {
-	for _, legacy := range legacyPromptPlaintextRules {
-		got := BotConfig{PromptPlaintextRulesText: legacy}.WithDefaults().PromptPlaintextRulesText
-		if got != defaultPromptPlaintextRules {
-			t.Fatalf("legacy plaintext rules survived the upgrade: %q", got)
-		}
-	}
+func TestCustomPlaintextRulesAreKept(t *testing.T) {
 	const custom = "只用短句，不要列点。"
 	if got := (BotConfig{PromptPlaintextRulesText: custom}).WithDefaults().PromptPlaintextRulesText; got != custom {
 		t.Fatalf("custom plaintext rules were overwritten: %q", got)

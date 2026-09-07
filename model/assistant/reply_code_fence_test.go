@@ -35,7 +35,7 @@ func TestSplitChatReplyKeepsCodeFenceWhole(t *testing.T) {
 
 // 围栏保住之后还要能被 Telegram 渲染成代码块，否则只是换个地方漏标记。
 func TestSplitChatReplyCodeFenceRendersAsPre(t *testing.T) {
-	parts := splitChatReply("看这段：\n```go\nname := *ptr\n```\n就这样", chatSplitLimits{})
+	parts := splitChatReply("看这段："+notificationLineMarker+"```go"+notificationLineMarker+"name := *ptr"+notificationLineMarker+"```"+notificationLineMarker+"就这样", chatSplitLimits{})
 	for _, part := range parts {
 		if !strings.Contains(part, "```") {
 			continue
@@ -54,7 +54,7 @@ func TestSplitChatReplyCodeFenceRendersAsPre(t *testing.T) {
 
 // 代码块里的空行是排版的一部分，不能被 collapseBlankLines 抹掉。
 func TestSplitChatReplyKeepsBlankLinesInsideFence(t *testing.T) {
-	parts := splitChatReply("```go\nfunc a() {}\n\nfunc b() {}\n```", chatSplitLimits{})
+	parts := splitChatReply("```go"+notificationLineMarker+"func a() {}"+notificationLineMarker+notificationLineMarker+"func b() {}"+notificationLineMarker+"```", chatSplitLimits{})
 	if len(parts) != 1 || !strings.Contains(parts[0], "}\n\nfunc b") {
 		t.Fatalf("代码块里的空行被抹掉了：%#v", parts)
 	}

@@ -20,12 +20,13 @@ max_characters 为正数时，全部正文合计不得超过该 Unicode 字符�
 若提供 platform_max_utf16_units，每条消息渲染后还必须满足该 UTF-16 容量上限，非 BMP 字符通常占两个码元。single_message=true 时必须精简为一条，不得靠分条绕过容量限制。
 保留原文的核心结论、重要数字、专有名词、条件、必要步骤和风险提醒，不添加原文没有的事实。
 先删除重复、寒暄和不必要的小结，再精简措辞；不要截断句子或只保留开头。
-保留原文语气；分条标记 [diana-br] 可按压缩后的内容调整，但不要输出其他控制标记。
+保留原文语气；消息边界使用 [diana-msg]，同一消息内换行使用 [diana-line]，不得输出真实换行符或其他控制标记。可按压缩后的内容调整边界。
 代码围栏及其内容、CQ 消息段和提及必须原样保留，不得新增或丢弃。
 只输出压缩后的正文，不要输出解释或额外的 JSON 包装。无法在上限内保留必要内容时返回空字符串。`
 
 // Count text as delivered, not protocol prefixes or non-text CQ payloads.
 func replyCompressionRunes(reply string) int {
+	reply = restoreExplicitReplyLines(reply)
 	masked, fences := maskFencedCodeBlocks(reply)
 	masked = strings.ReplaceAll(masked, notificationSplitMarker, "\n")
 	var text strings.Builder
@@ -38,6 +39,7 @@ func replyCompressionRunes(reply string) int {
 }
 
 func replyCompressionNonText(reply string) []MessageSegment {
+	reply = restoreExplicitReplyLines(reply)
 	masked, _ := maskFencedCodeBlocks(reply)
 	var out []MessageSegment
 	for _, segment := range TextToOneBotSegments(masked) {
@@ -52,8 +54,8 @@ func compressionCandidateIssue(original, candidate string, limit int, markdownPl
 	if strings.TrimSpace(candidate) == "" {
 		return "压缩结果为空"
 	}
-	_, originalCode := maskFencedCodeBlocks(original)
-	_, candidateCode := maskFencedCodeBlocks(candidate)
+	_, originalCode := maskFencedCodeBlocks(restoreExplicitReplyLines(original))
+	_, candidateCode := maskFencedCodeBlocks(restoreExplicitReplyLines(candidate))
 	if !reflect.DeepEqual(originalCode, candidateCode) {
 		return "代码块被修改、丢弃或新增"
 	}
@@ -88,8 +90,9 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 	}
 	event.replyDeliveryMode = intent.DeliveryMode
 	body = normalizeReply(body, 0)
+	body = normalizeExplicitReplyLayout(body)
 	if intent.DeliveryMode == replyDeliverySingle {
-		body = strings.Join(singleChatReply(body, 0), "\n")
+		body = strings.ReplaceAll(body, notificationSplitMarker, notificationLineMarker)
 	}
 	plain := markdownToPlainForConfig(cfg)
 	if r.replyLengthIssue(cfg, event, body) == "" {
@@ -155,8 +158,9 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 			}
 			candidate, _ = consumeReplyControlIntent(candidate)
 			candidate = normalizeReply(candidate, 0)
+			candidate = normalizeExplicitReplyLayout(candidate)
 			if intent.DeliveryMode == replyDeliverySingle {
-				candidate = strings.Join(singleChatReply(candidate, 0), "\n")
+				candidate = strings.ReplaceAll(candidate, notificationSplitMarker, notificationLineMarker)
 			}
 			issue = compressionCandidateIssue(part, candidate, 0)
 			if issue != "" {
@@ -190,7 +194,12 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 }
 
 func joinReplyLengthPlan(parts []string) string {
-	return strings.Join(parts, "\n"+notificationSplitMarker+"\n")
+	encoded := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.ReplaceAll(strings.ReplaceAll(part, "\r\n", "\n"), "\r", "\n")
+		encoded = append(encoded, strings.ReplaceAll(part, "\n", notificationLineMarker))
+	}
+	return strings.Join(encoded, notificationSplitMarker)
 }
 
 func (r *Runtime) replyLengthIssue(cfg BotConfig, event MessageEvent, body string) string {
@@ -208,7 +217,7 @@ func (r *Runtime) replyLengthIssue(cfg BotConfig, event MessageEvent, body strin
 }
 
 func (r *Runtime) protectedReplyPartError(cfg BotConfig, event MessageEvent, part string) error {
-	_, blocks := maskFencedCodeBlocks(part)
+	_, blocks := maskFencedCodeBlocks(restoreExplicitReplyLines(part))
 	codeRunes, codeUnits := 0, 0
 	for _, block := range blocks {
 		if issue := r.replyPartLimitIssue(cfg, event, block); issue != "" {

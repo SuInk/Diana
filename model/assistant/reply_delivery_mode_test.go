@@ -31,8 +31,8 @@ func TestReplyDeliveryModeOnlyConsumesLeadingMetadata(t *testing.T) {
 }
 
 func TestSingleReplyPreservesLayoutAndCodeButIgnoresBoundaries(t *testing.T) {
-	body := "## 第一天\n### 上午\n- 安排\n  - 补充\n\n## 第二天\n安排" + notificationSplitMarker + "补充\n```text\nliteral " + notificationSplitMarker + "\n\n  indentation\n```"
-	want := strings.Replace(body, "安排"+notificationSplitMarker+"补充", "安排\n补充", 1)
+	body := "## 第一天" + notificationLineMarker + "### 上午" + notificationLineMarker + "- 安排" + notificationLineMarker + "  - 补充" + notificationLineMarker + notificationLineMarker + "## 第二天" + notificationLineMarker + "安排" + notificationSplitMarker + "补充" + notificationLineMarker + "```text" + notificationLineMarker + "literal" + notificationLineMarker + notificationLineMarker + "  indentation" + notificationLineMarker + "```"
+	want := restoreExplicitReplyLines(strings.ReplaceAll(body, notificationSplitMarker, notificationLineMarker))
 	for name, split := range map[string]func(string, chatSplitLimits) []string{"chat": splitChatReply, "forward": splitForwardReply} {
 		got := split(replySingleMarker+body, chatSplitLimits{})
 		if !reflect.DeepEqual(got, []string{want}) {
@@ -59,7 +59,7 @@ func TestSingleDeliveryOverridesDefaultsWithoutPersisting(t *testing.T) {
 			channel := &recordingChannel{}
 			rt := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
 			event := MessageEvent{Kind: kind, GroupID: "123456", UserID: "10001", SelfID: "42"}
-			body := "## 第一部分\n正文\n## 第二部分\n正文" + notificationSplitMarker + "结尾"
+			body := "## 第一部分" + notificationLineMarker + "正文" + notificationLineMarker + "## 第二部分" + notificationLineMarker + "正文" + notificationSplitMarker + "结尾"
 			if _, err := rt.sendDecorated(context.Background(), event, replySingleMarker+body, outboundDecoration{}); err != nil {
 				t.Fatal(err)
 			}
@@ -70,14 +70,10 @@ func TestSingleDeliveryOverridesDefaultsWithoutPersisting(t *testing.T) {
 			if event.replyDeliveryMode != "" || boolValue(rt.effectiveConfigForEvent(event).NaturalReplySplitEnabled, true) != natural {
 				t.Fatal("per-turn choice mutated event or configuration")
 			}
-			want := 1
-			if natural {
-				want = 2
-			}
-			if got := splitEventChatReply("第一句\n第二句", cfg, event); len(got) != want {
+			if got := splitEventChatReply("第一句\n第二句", cfg, event); len(got) != 1 {
 				t.Fatal("single-message choice leaked to the next reply")
 			}
-			if got := splitEventChatReply(replyAutoMarker+"第一句\n第二句", cfg, event); len(got) != 2 {
+			if got := splitEventChatReply(replyAutoMarker+"第一句"+notificationSplitMarker+"第二句", cfg, event); len(got) != 2 {
 				t.Fatal("explicit auto choice did not override the default")
 			}
 		}
@@ -110,7 +106,7 @@ func TestReplyToCarriesSingleModeWithoutLeakingIntoHistory(t *testing.T) {
 }
 
 func TestNonAgentReplyRetainsUserDeliveryChoice(t *testing.T) {
-	provider := &capturingLLMProvider{reply: replySingleMarker + "第一段\n第二段"}
+	provider := &capturingLLMProvider{reply: replySingleMarker + "第一段" + notificationLineMarker + "第二段"}
 	channel := &recordingChannel{}
 	rt := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
@@ -156,7 +152,7 @@ func TestDeliveryChoiceDoesNotLeakInStreamingDrafts(t *testing.T) {
 func testReplyToSingleMode(t *testing.T, agentEnabled bool) {
 	t.Helper()
 	channel := &recordingChannel{}
-	provider := &deliveryModeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: replySingleMarker + "## 第一部分\n内容" + notificationSplitMarker + "## 第二部分\n内容"}}
+	provider := &deliveryModeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: replySingleMarker + "## 第一部分" + notificationLineMarker + "内容" + notificationSplitMarker + "## 第二部分" + notificationLineMarker + "内容"}}
 	rt := NewRuntime(BotConfig{AgentEnabled: agentEnabled, ForwardReplyThreshold: 1}.WithDefaults(), channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	input := "请放在一条消息里发完，不要分条"
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "single-choice", RawMessage: input}

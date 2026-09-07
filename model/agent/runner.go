@@ -309,6 +309,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
+			if reason := finalizeContentLayoutIssue(action.Content); reason != "" {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请保持正文内容、task_state 和 claims 不变，重新调用 agent.finalize：下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]，content 中不得出现真实换行符。"})
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
 			// 以前这里还会用两条正则扫正文，找「接下来我会调用/搜索/查询」这类句子，命中就
 			// 当作模型在承诺下一步调工具却没调，退回去修一轮。那是拿关键词判断语义意图：
 			// 正则只认得测试里那两句的形状，「让我查查」「我这就去搜」全漏，「接下来我会读取
@@ -583,6 +594,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	})
 	if len(resp.ToolCalls) > 0 && resp.ToolCalls[0].Name == finalizeToolName {
 		action := finalizeAction(resp.ToolCalls[0], finalText)
+		if issue := finalizeContentLayoutIssue(action.Content); issue != "" {
+			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
+		}
 		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
 			return finish(claimLedger.groundedFallback(), finishReason), nil
 		}
@@ -598,6 +612,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		return finish(action.Content, finishReason), nil
 	}
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
+		if issue := finalizeContentLayoutIssue(action.Content); issue != "" {
+			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
+		}
 		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
 			return finish(claimLedger.groundedFallback(), finishReason), nil
 		}
@@ -891,7 +908,7 @@ func (r *Runner) systemPrompt() string {
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
-		"不再需要工具时调用 agent.finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state、claims 这类元数据按需一并携带。正文不要写成 JSON，也不要出现协议字段。",
+		"不再需要工具时调用 agent.finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state、claims 这类元数据按需一并携带。content 禁止真实 CR/LF；下一条消息写 [diana-msg]，同一消息内换行写 [diana-line]。正文不要写成 JSON。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 		"可用工具（完整说明和参数以请求中的工具定义为准）：\n" + r.registry.SystemPromptCatalog(),
 	}
