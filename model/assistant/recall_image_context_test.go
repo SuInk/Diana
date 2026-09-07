@@ -129,6 +129,37 @@ func TestRecallImageDescriptionUsesPersistentCacheWithoutLLM(t *testing.T) {
 	}
 }
 
+func TestEnsureReplyImageDescriptionWaitsAndPersistsGrounding(t *testing.T) {
+	imagePath, hash := writeRecallImageFixture(t)
+	store := newRecallImageTestStore()
+	provider := &recallImageVisionProvider{}
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetMessageHistoryStore(store)
+	event := recallImageEvent("current-image", imagePath)
+	event.Segments[0].Data[imageContentSHA256Key] = hash
+
+	enriched, description := runtime.ensureReplyImageDescription(context.Background(), event)
+	if description == "" || !strings.Contains(description, "请求命中率为 63%") {
+		t.Fatalf("description = %q", description)
+	}
+	if provider.callCount() != 1 || store.saves != 1 {
+		t.Fatalf("vision calls=%d saves=%d", provider.callCount(), store.saves)
+	}
+	if enriched.Segments[0].Data[recallImageDescriptionKey] == "" {
+		t.Fatalf("enriched segment = %#v", enriched.Segments[0].Data)
+	}
+	if record, ok, err := store.GetImageDescription(context.Background(), hash); err != nil || !ok || record.Description != description {
+		t.Fatalf("cached record = %#v ok=%v err=%v", record, ok, err)
+	}
+
+	_, again := runtime.ensureReplyImageDescription(context.Background(), enriched)
+	if again != description || provider.callCount() != 1 {
+		t.Fatalf("cached retry description=%q calls=%d", again, provider.callCount())
+	}
+}
+
 func TestRecallImageDescriptionBackfillsHistoricalSemanticReply(t *testing.T) {
 	imagePath, hash := writeRecallImageFixture(t)
 	store := newRecallImageTestStore()
