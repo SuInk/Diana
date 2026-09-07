@@ -209,6 +209,7 @@ func (p *ImageSourcePlugin) search(ctx context.Context, cfg imageSourceConfig, i
 	results := make(chan outcome, len(providers))
 	for _, provider := range providers {
 		go func(run func(context.Context) outcome) {
+			defer recoverGoroutinePanic("image_source_plugin.go:211")
 			results <- run(ctx)
 		}(provider)
 	}
