@@ -688,7 +688,6 @@ async function reload(): Promise<void> {
   const scope = botScope.value;
   loading.value = true;
   loadError.value = "";
-  void loadDependencies();
   try {
     const states = await listPlugins(scope);
     if (requestID !== reloadID || scope !== botScope.value) return;
@@ -1133,5 +1132,12 @@ watch(botScope, () => {
 
 onMounted(() => {
   void reload();
+  // 依赖探测会启动多个本地命令，放到浏览器空闲期，不与插件列表首屏争资源。
+  const idleWindow = window as typeof window & { requestIdleCallback?: Window["requestIdleCallback"] };
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(() => void loadDependencies(), { timeout: 3000 });
+  } else {
+    window.setTimeout(() => void loadDependencies(), 1500);
+  }
 });
 </script>

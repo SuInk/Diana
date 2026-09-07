@@ -514,6 +514,9 @@ const response = ref<AssistantEventsResponse | null>(null);
 const page = ref(1);
 const loading = ref(true);
 const loadingMore = ref(false);
+const EVENT_PAGE_SIZE = 30;
+const REACTIVATE_REFRESH_INTERVAL_MS = 30_000;
+let lastLoadedAt = 0;
 
 function memoryKindLabel(kind?: string): string {
   const labels: Record<string, string> = {
@@ -751,7 +754,8 @@ async function load(reset: boolean): Promise<void> {
   const requestedGroup = selectedGroup.value;
   const requestedSearch = searchTerm.value;
   if (reset) {
-    loading.value = true;
+    // 已有列表时静默刷新，切页回来不再闪回骨架屏。
+    loading.value = events.value.length === 0;
     page.value = 1;
     pendingLiveEvents.value = false;
   } else {
@@ -762,7 +766,7 @@ async function load(reset: boolean): Promise<void> {
       requestedRange,
       requestedResult,
       requestedPage,
-      50,
+      EVENT_PAGE_SIZE,
       requestedGroup.startsWith(USER_PREFIX) ? "" : requestedGroup.replace(GROUP_PREFIX, ""),
       botScope.value,
       requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : "",
@@ -772,6 +776,7 @@ async function load(reset: boolean): Promise<void> {
     response.value = next;
     if (reset) {
       events.value = next.events;
+      lastLoadedAt = Date.now();
     } else {
       const seen = new Set(events.value.map((item) => item.id));
       events.value = [...events.value, ...next.events.filter((item) => !seen.has(item.id))];
@@ -1252,7 +1257,10 @@ onMounted(() => {
   document.addEventListener("keydown", onImageKeydown);
 });
 onActivated(() => {
-  void load(true);
+  const stale = Date.now() - lastLoadedAt >= REACTIVATE_REFRESH_INTERVAL_MS;
+  if (events.value.length === 0 || pendingLiveEvents.value || stale) {
+    void load(true);
+  }
 });
 onDeactivated(() => {
   // Ignore requests started before leaving this cached view.

@@ -149,7 +149,7 @@
           <div v-if="scopeSwitching" class="scope-progress" role="progressbar" aria-label="正在加载当前机器人数据"><span /></div>
         </section>
         <div :aria-busy="scopeSwitching" :inert="scopeSwitching" :class="{ 'scope-content-pending': scopeSwitching }">
-          <KeepAlive :key="botScope" :max="8">
+          <KeepAlive :key="botScope" :max="VIEW_CACHE_LIMIT">
             <component :is="activeView" :key="currentView" />
           </KeepAlive>
         </div>
@@ -167,7 +167,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, KeepAlive, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, KeepAlive, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import {
   Bot,
@@ -206,15 +206,20 @@ import { autoReloadAllowed, clearUpdateInstalling, markAutoReloaded, updateInsta
 import BackendDownView from "./views/BackendDownView.vue";
 import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
-import RecordsView from "./views/RecordsView.vue";
-import TasksView from "./views/TasksView.vue";
-import SetupWizard from "./views/SetupWizard.vue";
-import LLMView from "./views/LLMView.vue";
-import AssistantView from "./views/AssistantView.vue";
-import PluginsView from "./views/PluginsView.vue";
-import GroupsView from "./views/GroupsView.vue";
-import MemoryView from "./views/MemoryView.vue";
-import SettingsView from "./views/SettingsView.vue";
+
+// 总览是默认首屏，保持同步加载；其它页面首次打开时才下载代码。异步组件引用
+// 保持稳定，配合 KeepAlive 后只挂载一次，切页回来直接复用已有 DOM 和数据。
+const RecordsView = defineAsyncComponent(() => import("./views/RecordsView.vue"));
+const TasksView = defineAsyncComponent(() => import("./views/TasksView.vue"));
+const SetupWizard = defineAsyncComponent(() => import("./views/SetupWizard.vue"));
+const LLMView = defineAsyncComponent(() => import("./views/LLMView.vue"));
+const AssistantView = defineAsyncComponent(() => import("./views/AssistantView.vue"));
+const PluginsView = defineAsyncComponent(() => import("./views/PluginsView.vue"));
+const GroupsView = defineAsyncComponent(() => import("./views/GroupsView.vue"));
+const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
+const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
+
+const VIEW_CACHE_LIMIT = 16;
 
 const viewComponents: Record<ViewID, Component> = {
   dashboard: DashboardView,

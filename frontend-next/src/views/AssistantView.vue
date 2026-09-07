@@ -3214,9 +3214,8 @@ async function load(): Promise<void> {
   }
   const channels = llmConfig?.profiles ?? [];
   llmChannels.value = channels;
-  if (channels.length > 0) {
-    void refreshLLMChannelCapabilities(channels);
-  }
+  // 模型清单由提供商配置页维护。机器人页只用已保存结果，不再为每个提供商
+  // 自动发一次远程模型请求；账号多时这曾是页面打开后最大的网络开销。
   loading.value = false;
 }
 

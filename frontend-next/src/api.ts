@@ -757,16 +757,16 @@ function cacheTTL(method: string, url: string): number {
     case "/api/llm/config":
     case "/api/assistant/config":
     case "/api/assistant/plugins":
-      return 4_000;
+      return 30_000;
     case "/api/assistant/plugins/dependencies":
-      return 15_000;
+      return 5 * 60_000;
     case "/api/assistant/groups":
-      return 8_000;
+      return 20_000;
     // 昵称基本不变，缓存久一点，编辑器里几行私聊对象就不用各打一次请求了。
     case "/api/assistant/user-names":
       return 60_000;
     case "/api/assistant/tasks":
-      return 3_000;
+      return 15_000;
     case "/api/assistant/status":
     case "/api/stats":
       return 2_000;
