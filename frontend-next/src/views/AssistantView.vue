@@ -984,14 +984,14 @@
                 <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
               </div>
               <div class="field">
-                <label for="bot-response-mode">回复模式</label>
+                <label for="bot-response-mode">回复欲望</label>
                 <AppSelect
                   id="bot-response-mode"
-                  :model-value="form.response_mode ?? 'standard'"
-                  :options="responseModeOptions"
-                  @update:model-value="(value) => { if (form) form.response_mode = value as 'quiet' | 'assistant' | 'standard' | 'active' | 'super_active' | 'custom'; }"
+                  :model-value="form.chat_in_level ?? 'low'"
+                  :options="replyDesireOptions"
+                  @update:model-value="setReplyDesire"
                 />
-                <span class="hint">控制机器人在没人点名时主动参与群聊的欲望。</span>
+                <span class="hint">控制没人点名时主动参与群聊的频率；直接提问和 @ 不受影响。</span>
               </div>
               <div class="field wide">
                 <div class="field-head">
@@ -1014,7 +1014,7 @@
                     <button class="btn primary small" type="button" :disabled="personaBusy || !personaDraft.trim()" @click="runPersonaGenerate">
                       {{ personaBusy ? "生成中…" : form.system_prompt?.trim() ? "按需求改写" : "生成人设" }}
                     </button>
-                    <span class="hint">用当前启用的模型生成，会跟随上面选的表达风格和回复模式。已有人设时是在它基础上改写，不会推倒重来。</span>
+                    <span class="hint">用当前启用的模型生成，会跟随上面选的表达风格和回复欲望。已有人设时是在它基础上改写，不会推倒重来。</span>
                   </div>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
@@ -1029,24 +1029,6 @@
                    关掉只会让回复变差（QQ 冒出 Markdown 记号、答错日期），所以不再摆到
                    界面上；字段仍在配置里，需要时可通过 API 调整，「恢复内置默认」也会
                    把它们一并复位。 -->
-              <div v-if="form.response_mode === 'custom'" class="field">
-                <label for="bot-proactive-chance">主动回复采样率</label>
-                <input id="bot-proactive-chance" v-model.number="form.proactive_reply_chance" class="input" type="number" min="0.05" max="1" step="0.05" />
-                <span class="hint">路由判断放行后实际回复的比例，1 表示全部执行。</span>
-              </div>
-              <div v-if="form.response_mode === 'custom'" class="field">
-                <label for="bot-proactive-threshold">主动回复置信度阈值</label>
-                <input id="bot-proactive-threshold" v-model.number="form.proactive_reply_threshold" class="input" type="number" min="0.5" max="1" step="0.01" />
-                <span class="hint">越高越克制；默认 0.9。</span>
-              </div>
-              <div v-if="form.response_mode === 'custom'" class="field wide">
-                <label class="switch">
-                  <input v-model="form.natural_interjection_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自然插话模式</span>
-                </label>
-                <span class="hint">开启后，普通群聊只要模型能生成具体、可靠且有实质内容的回复就可以插话；仍遵守群禁用、成员门槛和响应限制。</span>
-              </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.social_reply_enabled" type="checkbox" />
@@ -2316,14 +2298,32 @@ const replyStyleOptions: AppSelectOption[] = [
   { value: "catgirl", label: "猫娘" }
 ];
 
-const responseModeOptions: AppSelectOption[] = [
-  { value: "quiet", label: "安静模式" },
-  { value: "assistant", label: "助手模式", hint: "优先帮助解决问题，低欲望参与闲聊" },
-  { value: "standard", label: "标准模式" },
-  { value: "active", label: "活跃模式" },
-  { value: "super_active", label: "超级活跃模式", hint: "几乎每条群消息都会尝试接话" },
-  { value: "custom", label: "自定义" }
+const replyDesireOptions: AppSelectOption[] = [
+  { value: "off", label: "关闭" },
+  { value: "low", label: "低", hint: "35% 采样，10 分钟冷却" },
+  { value: "medium", label: "中", hint: "60% 采样，5 分钟冷却" },
+  { value: "high", label: "高", hint: "85% 采样，2 分钟冷却" },
+  { value: "max", label: "极高", hint: "100% 采样，30 秒冷却，容易刷屏" }
 ];
+
+type ReplyDesire = "off" | "low" | "medium" | "high" | "max";
+
+function replyDesireFromConfig(config: BotProfileConfig): ReplyDesire {
+  if (config.natural_interjection_enabled) return "max";
+  if (config.chat_in_level) return config.chat_in_level;
+  return ({ quiet: "off", active: "high", super_active: "max" } as Partial<Record<NonNullable<BotProfileConfig["response_mode"]>, ReplyDesire>>)[config.response_mode ?? "standard"] ?? "low";
+}
+
+function setReplyDesire(value: string): void {
+  if (!form.value) return;
+  form.value.response_mode = "custom";
+  form.value.chat_in_level = value as ReplyDesire;
+  form.value.chat_in_enabled = value !== "off";
+  form.value.natural_interjection_enabled = false;
+  form.value.chat_in_threshold = 0;
+  form.value.chat_in_chance = 0;
+  form.value.chat_in_cooldown_seconds = 0;
+}
 
 const admissionModeOptions: AppSelectOption[] = [
   { value: "blacklist", label: "黑名单（默认）", hint: "除禁用群外都工作" },
@@ -2815,8 +2815,9 @@ function setForm(config: BotProfileConfig): void {
     expression_learning_enabled: config.expression_learning_enabled ?? false,
     dict_segment_enabled: config.dict_segment_enabled ?? false,
     semantic_search_enabled: config.semantic_search_enabled ?? false,
-    natural_interjection_enabled: config.natural_interjection_enabled ?? false,
-    response_mode: config.response_mode ?? "custom",
+    natural_interjection_enabled: false,
+    chat_in_level: replyDesireFromConfig(config),
+    response_mode: "custom",
     reply_style: config.reply_style ?? "assistant",
     action_description_enabled: config.action_description_enabled ?? false,
     daypart_tone_enabled: config.daypart_tone_enabled ?? false,

@@ -171,11 +171,8 @@ func (cfg BotConfig) chatInSettings() chatInSettings {
 		return settings
 	}
 	if boolValue(cfg.NaturalInterjectionEnabled, false) {
-		settings.Enabled = true
-		settings.Natural = true
-		settings.Threshold = 0
-		settings.Chance = 1
-		settings.Cooldown = 0
+		// 旧「自然插话」迁移为明确的极高回复欲望，不再绕过全部频率限制。
+		settings = chatInSettingsFrom(boolPointer(true), ChatInLevelMax, 0, 0, 0)
 	}
 	return settings
 }

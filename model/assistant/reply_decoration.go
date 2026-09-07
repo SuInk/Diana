@@ -53,6 +53,49 @@ func mentionUserMode(cfg BotConfig) ReplyDecorationMode {
 // pendingEarlierMessageWindow 限定「连发」的判定窗口。隔了几分钟的两条消息
 // 是两个话题,不该被绑在一轮里点名承接。
 const pendingEarlierMessageWindow = 3 * time.Minute
+const autoReplyReferenceBacklogMessages = 3
+
+// autoReferenceBackloggedReply 判断生成期间群聊是否已经向后滚动太多。这里直接读
+// 会话内存，不走给 LLM 用的历史条数上限；否则恰好在最拥挤、最需要引用时，触发
+// 消息反而可能已被裁出上下文而判定失败。
+func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.MessageID) == "" {
+		return false
+	}
+	r.mu.RLock()
+	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
+	r.mu.RUnlock()
+	found, newer := false, 0
+	for _, item := range history {
+		if !found {
+			found = strings.TrimSpace(item.MessageID) == strings.TrimSpace(event.MessageID)
+			continue
+		}
+		if !item.Outbound && strings.TrimSpace(item.MessageID) != "" {
+			newer++
+			if newer >= autoReplyReferenceBacklogMessages {
+				return true
+			}
+		}
+	}
+	// 正在生成的触发消息理论上会留在内存历史里；仍给恢复现场和极端裁剪留一个
+	// 次序兜底，避免“越积压越不引用”。
+	if !found {
+		newer = 0
+		for _, item := range history {
+			if item.Outbound || strings.TrimSpace(item.MessageID) == "" {
+				continue
+			}
+			if event.Time > 0 && item.Time >= event.Time && item.MessageID != event.MessageID {
+				newer++
+				if newer >= autoReplyReferenceBacklogMessages {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
 
 // pendingEarlierMessage 找出发送者紧挨着当前消息之前、机器人还没有回复过的
 // 那条消息。追发合并(superseded_follow_up)后,合并回复只有一条,视觉上没有
