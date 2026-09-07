@@ -106,6 +106,7 @@ func (r *Runtime) startTelegramTyping(ctx context.Context, event MessageEvent) f
 	typingCtx, cancel := context.WithCancel(ctx)
 	msg := routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID})
 	go func() {
+		defer recoverGoroutinePanic("telegram_streaming.go:108")
 		_ = channel.SendChatAction(typingCtx, msg, "typing")
 		ticker := time.NewTicker(telegramTypingRenewInterval)
 		defer ticker.Stop()

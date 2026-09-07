@@ -205,6 +205,7 @@ func (r *Runtime) touchRetrievedMemories(ctx context.Context, store StructuredMe
 	}
 	now := time.Now()
 	go func() {
+		defer recoverGoroutinePanic("memory_context.go:207")
 		touchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
 		if err := toucher.TouchStructuredMemories(touchCtx, ids, now); err != nil {

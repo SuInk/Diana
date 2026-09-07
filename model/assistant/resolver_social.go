@@ -284,6 +284,7 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 		index := index
 		downloads.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("resolver_social.go:286")
 			defer downloads.Done()
 			resolved[index] = downloadMedia(ctx, post.Media[index])
 		}()

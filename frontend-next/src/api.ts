@@ -782,12 +782,14 @@ export type ApiErrorKind = "offline" | "server" | "auth" | "request";
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status: number;
+  readonly responseBody: string;
 
-  constructor(message: string, kind: ApiErrorKind, status = 0) {
+  constructor(message: string, kind: ApiErrorKind, status = 0, responseBody = "") {
     super(message);
     this.name = "ApiError";
     this.kind = kind;
     this.status = status;
+    this.responseBody = responseBody;
   }
 
   // unreachable 表示这次请求压根没拿到后端的判断：网络层没通，或者网关替它回了话。
@@ -801,14 +803,14 @@ export function isBackendUnreachable(err: unknown): boolean {
   return err instanceof ApiError && err.unreachable;
 }
 
-function apiErrorForStatus(status: number, message: string): ApiError {
+function apiErrorForStatus(status: number, message: string, responseBody = ""): ApiError {
   if (status >= 500) {
-    return new ApiError(message || `后端出错（HTTP ${status}）`, "server", status);
+    return new ApiError(message || `后端出错（HTTP ${status}）`, "server", status, responseBody);
   }
   if (status === 401 || status === 403) {
-    return new ApiError(message || `HTTP ${status}`, "auth", status);
+    return new ApiError(message || `HTTP ${status}`, "auth", status, responseBody);
   }
-  return new ApiError(message || `HTTP ${status}`, "request", status);
+  return new ApiError(message || `HTTP ${status}`, "request", status, responseBody);
 }
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
@@ -867,7 +869,7 @@ async function performRequestJSON<T>(url: string, init?: RequestInit): Promise<T
       if (response.status === 401 && data.auth_required && !url.startsWith("/api/auth/")) {
         window.dispatchEvent(new CustomEvent("diana:unauthorized"));
       }
-      throw apiErrorForStatus(response.status, data.error ?? data.message ?? "");
+      throw apiErrorForStatus(response.status, data.error ?? data.message ?? "", responseText.trim());
     }
     if (isMutatingRequest(method, path)) {
       invalidateAPICache();

@@ -241,7 +241,10 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 
 	sessionCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	go c.heartbeatLoop(sessionCtx, conn, interval)
+	go func() {
+		defer recoverGoroutinePanic("qqOfficial.heartbeatLoop")
+		c.heartbeatLoop(sessionCtx, conn, interval)
+	}()
 
 	for {
 		if ctx.Err() != nil {

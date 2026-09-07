@@ -126,7 +126,10 @@ func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 	// 旧实现只等 Wait，最后在超时时把已经写好的 PNG 一起丢掉。这里以「文件已完整且
 	// 能解码」为完成信号；拿到图片后结束这次一次性浏览器，不再依赖它自行收尾。
 	waited := make(chan error, 1)
-	go func() { waited <- command.Wait() }()
+	go func() {
+		defer recoverGoroutinePanic("headless_screenshot.go:129")
+		waited <- command.Wait()
+	}()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -190,7 +193,10 @@ func captureHTMLScreenshotWithObscura(ctx context.Context, executable string, re
 		return nil, fmt.Errorf("screenshot: 启动 Obscura 失败：%w", err)
 	}
 	waited := make(chan error, 1)
-	go func() { waited <- command.Wait() }()
+	go func() {
+		defer recoverGoroutinePanic("headless_screenshot.go:193")
+		waited <- command.Wait()
+	}()
 	defer func() {
 		if command.Process != nil {
 			_ = command.Process.Kill()

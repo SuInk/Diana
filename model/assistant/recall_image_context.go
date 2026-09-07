@@ -287,7 +287,10 @@ func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
 			}
 			jobEvent := historyImageDescriptionQueueEvent(sourceEvent)
 			jobEvent.Segments = []MessageSegment{stripImageSegmentForQueue(segment)}
-			go r.runHistoryImageDescription(jobEvent, historyImageDescriptionQueueEvent(sourceEvent), hash, source)
+			go func() {
+				defer recoverGoroutinePanic("recallImageContext.runHistoryImageDescription")
+				r.runHistoryImageDescription(jobEvent, historyImageDescriptionQueueEvent(sourceEvent), hash, source)
+			}()
 		}
 	}
 }
@@ -698,6 +701,7 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 	for i := 0; i < workerCount; i++ {
 		workers.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("recall_image_context.go:700")
 			defer workers.Done()
 			for target := range jobs {
 				description, err := r.describeRecallImage(ctx, event, target.imageSource)
@@ -706,6 +710,7 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 		}()
 	}
 	go func() {
+		defer recoverGoroutinePanic("recall_image_context.go:708")
 		for _, target := range pending {
 			jobs <- target
 		}

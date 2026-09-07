@@ -199,6 +199,7 @@ func callPDFiumWithContext[T any](ctx context.Context, instance pdfium.Pdfium, c
 	}
 	done := make(chan struct{})
 	go func() {
+		defer recoverGoroutinePanic("pdf_renderer.go:201")
 		select {
 		case <-ctx.Done():
 			_ = instance.Kill()

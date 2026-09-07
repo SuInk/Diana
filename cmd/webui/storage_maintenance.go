@@ -18,6 +18,7 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	go func() {
+		defer recoverGoroutinePanic("storage_maintenance.go:20")
 		defer close(done)
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
