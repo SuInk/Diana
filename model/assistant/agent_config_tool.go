@@ -110,7 +110,6 @@ type dianaBotConfigSnapshot struct {
 	ChatInThreshold                 float64                  `json:"chat_in_threshold"`
 	ChatInChance                    float64                  `json:"chat_in_chance"`
 	ChatInCooldownSeconds           int                      `json:"chat_in_cooldown_seconds"`
-	NaturalInterjectionEnabled      bool                     `json:"natural_interjection_enabled"`
 	ReplyRules                      []ReplyRule              `json:"reply_rules,omitempty"`
 	MaxBotConcurrency               int                      `json:"max_bot_concurrency"`
 	RequestTimeoutMS                int64                    `json:"request_timeout_ms"`
@@ -336,7 +335,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ChatInThreshold:                 chatIn.Threshold,
 		ChatInChance:                    chatIn.Chance,
 		ChatInCooldownSeconds:           int(chatIn.Cooldown / time.Second),
-		NaturalInterjectionEnabled:      chatIn.Natural,
 		ReplyRules:                      append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:               cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),

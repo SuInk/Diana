@@ -257,7 +257,14 @@ export interface BotProfileConfig {
   proactive_reply_chance?: number;
   /** 主动回复最低置信度，范围 0~1，默认 0.9。 */
   proactive_reply_threshold?: number;
-  /** 普通群聊只要能生成有效内容就允许自然插话。 */
+  /** 闲聊插话总开关。 */
+  chat_in_enabled?: boolean;
+  /** 回复欲望档位。 */
+  chat_in_level?: "off" | "low" | "medium" | "high" | "max";
+  chat_in_threshold?: number;
+  chat_in_chance?: number;
+  chat_in_cooldown_seconds?: number;
+  /** @deprecated 仅兼容历史配置，读取时迁移为极高回复欲望。 */
   natural_interjection_enabled?: boolean;
   max_input_chars?: number;
   max_reply_chars?: number;
@@ -443,7 +450,7 @@ export interface BotGroupConfig {
   group_trigger_mode?: AliasTriggerMode | "";
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
-  /** 留空时跟随机器人全局回复模式。 */
+  /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
   response_mode?: "" | "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
   reply_style?: "" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
@@ -470,7 +477,14 @@ export interface BotGroupConfig {
   forward_reply_chunk_threshold?: number;
   proactive_reply_chance?: number;
   proactive_reply_threshold?: number;
-  /** 本群是否开启自然插话模式。 */
+  /** 本群闲聊插话总开关；不设表示跟随机器人。 */
+  chat_in_enabled?: boolean;
+  /** 本群回复欲望；不设表示跟随机器人。 */
+  chat_in_level?: "off" | "low" | "medium" | "high" | "max";
+  chat_in_threshold?: number;
+  chat_in_chance?: number;
+  chat_in_cooldown_seconds?: number;
+  /** @deprecated 仅兼容历史配置，读取时迁移为极高回复欲望。 */
   natural_interjection_enabled?: boolean;
   /** 本群是否开启社交性回应；不设表示跟随机器人。 */
   social_reply_enabled?: boolean;

@@ -8759,7 +8759,9 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 				// 运行时再补一遍就又变成每条都带。
 				// 原消息已撤回时不挂引用：引用一条不存在的消息要么发送失败，
 				// 要么在界面上渲染成怪东西。回复本身照常发出。
-				if decoration.ReplyToCurrent && replyReferenceMode(cfg) == ReplyDecorationOn && !r.inboundTriggerRecalled(event) {
+				mode := replyReferenceMode(cfg)
+				forceBacklogReference := mode == ReplyDecorationAuto && r.autoReferenceBackloggedReply(event)
+				if decoration.ReplyToCurrent && (mode == ReplyDecorationOn || forceBacklogReference) && !r.inboundTriggerRecalled(event) {
 					msg.ReplyMessageID = event.MessageID
 				}
 				if decoration.mentionEnabled(cfg) {
