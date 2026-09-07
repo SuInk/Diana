@@ -9,7 +9,7 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-func TestReleaseWorkflowPublishesCompletePackagesOnly(t *testing.T) {
+func TestReleaseWorkflowPublishesCompletePackagesAndStandaloneBinaries(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/ci.yml")
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +75,8 @@ func TestReleaseWorkflowPublishesCompletePackagesOnly(t *testing.T) {
 		if !matches(uploadPatterns, "dist/"+archive) || !matches(publishPatterns, "release/"+archive) {
 			t.Errorf("updater archive %s is not published", archive)
 		}
-		if matches(uploadPatterns, "dist/"+binary) || matches(publishPatterns, "release/"+binary) {
-			t.Errorf("standalone binary %s is published", binary)
+		if !matches(uploadPatterns, "dist/"+binary) || !matches(publishPatterns, "release/"+binary) {
+			t.Errorf("standalone binary %s is not published", binary)
 		}
 	}
 	for _, name := range []string{"SHA256SUMS", "latest.json"} {
@@ -96,11 +96,11 @@ func TestReleaseWorkflowPublishesCompletePackagesOnly(t *testing.T) {
 			t.Errorf("missing package requirement: %s", fragment)
 		}
 	}
-	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-*.zip > SHA256SUMS") {
-		t.Fatal("checksums must cover archives only")
+	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-*.zip diana-webui-* > SHA256SUMS") {
+		t.Fatal("checksums must cover complete packages and standalone binaries")
 	}
-	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-*.zip SHA256SUMS; do") {
-		t.Fatal("update manifest must list packages and checksums only")
+	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-*.zip diana-webui-* SHA256SUMS; do") {
+		t.Fatal("update manifest must list packages, standalone binaries and checksums")
 	}
 }
 
