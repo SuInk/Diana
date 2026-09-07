@@ -340,8 +340,8 @@ func TestGroupAccountSafetyOverrideControlsProactiveAndDirectReplies(t *testing.
 
 func TestRobotAccountSafetyMasterSwitchDisablesAllReplies(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		ReplyAccountSafetyAuditMasterEnabled: boolPointer(false),
-		ReplyAccountSafetyAuditEnabled:       boolPointer(true),
+		ReplySafetyMasterEnabled:       boolPointer(false),
+		ReplyAccountSafetyAuditEnabled: boolPointer(true),
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, proactive := range []bool{false, true} {
 		event := MessageEvent{Kind: EventKindGroup, GroupID: "inherit", UserID: "u"}
