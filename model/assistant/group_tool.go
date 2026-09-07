@@ -37,6 +37,7 @@ type dianaOneBotGroupResult struct {
 	Group        *OneBotGroupInfo             `json:"group,omitempty"`
 	Members      []dianaOneBotGroupMemberItem `json:"members,omitempty"`
 	ReplyPolicy  *dianaOneBotGroupReplyPolicy `json:"reply_policy,omitempty"`
+	AvatarMatch  *groupMemberAvatarMatch      `json:"avatar_match,omitempty"`
 	OperatorRole string                       `json:"operator_role,omitempty"`
 	Total        int                          `json:"total,omitempty"`
 	GroupTotal   int                          `json:"group_total,omitempty"`
@@ -77,14 +78,14 @@ func (t *dianaOneBotGroupTool) Name() string {
 }
 
 func (t *dianaOneBotGroupTool) Description() string {
-	return `读取当前群的真实群资料、成员名单和回复策略，也可修改回复策略。用户要查群人数、群名、成员、群名片、昵称、账号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用，不要反过来要求用户先手动 @。reply_policy 与 set_reply_policy 只对机器人主人、群主和群管理员开放，工具会实时校验权限。`
+	return `读取当前群的真实群资料、成员名单和回复策略，也可用本地图片模式匹配判断当前图片是否为某位群成员头像。用户要查群人数、群名、成员、群名片、昵称、账号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用，不要反过来要求用户先手动 @。头像身份不得靠视觉模型猜测，使用 match_avatar。reply_policy 与 set_reply_policy 只对机器人主人、群主和群管理员开放，工具会实时校验权限。`
 }
 
 // InputSchema 声明参数契约。取值范围引用与校验同一份常量。
 func (t *dianaOneBotGroupTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：info 读群资料；members 获取或检索成员；reply_policy 读取本群回复策略；set_reply_policy 修改回复策略（支持局部更新，只传要改的项）。",
-			"info", "members", "reply_policy", "set_reply_policy"),
+		"operation": toolEnumParam("要执行的操作：info 读群资料；members 获取或检索成员；match_avatar 将当前图片与群成员头像做本地模式匹配；reply_policy 读取本群回复策略；set_reply_policy 修改回复策略（支持局部更新，只传要改的项）。",
+			"info", "members", "match_avatar", "reply_policy", "set_reply_policy"),
 		"query":                  toolStringParam("members 专用：按群名片、昵称或账号筛选成员。"),
 		"exclude_current_sender": toolBoolParam("members 专用：排除当前发言者，用户说「其他人」「除了我」时置 true。"),
 		"exclude_user_ids":       toolStringArrayParam("members 专用：排除指定账号。"),
@@ -133,12 +134,24 @@ func (t *dianaOneBotGroupTool) Run(ctx context.Context, input map[string]any) (s
 		})
 	case "members", "list", "search", "resolve":
 		return t.listMembers(ctx, input)
+	case "match_avatar", "avatar_match":
+		match, err := t.runtime.matchCurrentGroupMemberAvatar(ctx, t.event)
+		if err != nil {
+			return "", err
+		}
+		message := "当前图片未达到可靠的群成员头像匹配阈值。"
+		if match.Matched {
+			message = fmt.Sprintf("当前图片与群成员 %s 的头像匹配。", match.DisplayName)
+		}
+		return marshalDianaOneBotGroupResult(dianaOneBotGroupResult{
+			OK: true, Action: "match_avatar", Message: message, AvatarMatch: &match,
+		})
 	case "reply_policy", "policy":
 		return t.replyPolicy(ctx, input, false)
 	case "set_reply_policy", "update_reply_policy":
 		return t.replyPolicy(ctx, input, true)
 	default:
-		return "", fmt.Errorf("operation 必须是 info、members、reply_policy 或 set_reply_policy")
+		return "", fmt.Errorf("operation 必须是 info、members、match_avatar、reply_policy 或 set_reply_policy")
 	}
 }
 
