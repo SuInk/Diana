@@ -21,7 +21,7 @@ const (
 	replySuppressionDuration          = 30 * time.Minute
 	replySuppressionMarker            = "[[DIANA_IGNORE_CURRENT_USER_30M]]"
 	replyRefusalMarker                = "[[DIANA_REFUSE_CURRENT]]"
-	replyRefusalThreshold             = 3
+	replyRefusalThreshold             = 4
 	replyRefusalWindow                = 30 * time.Minute
 	botReplyLoopThreshold             = 3
 	botReplyLoopWindow                = 30 * time.Minute
@@ -120,8 +120,7 @@ type botReplyLoopClassificationPayload struct {
 
 func consumeReplyControlIntent(reply string) (string, replyControlIntent) {
 	reply, deliveryMode := consumeReplyDeliveryMode(reply)
-	// 保留旧版输出的兼容解码，避免滚动升级期间旧提示生成的标记泄漏。
-	// 新提示明确禁止模型输出这些标记，正常控制结论来自发送前审核。
+	// 拒答标志参与计数但不展示；账号处置标志仅保留旧版兼容解码。
 	intent := replyControlIntent{
 		RefuseCurrent:       strings.Contains(reply, replyRefusalMarker),
 		SuppressCurrentUser: strings.Contains(reply, replySuppressionMarker),
