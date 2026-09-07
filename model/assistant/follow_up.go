@@ -17,12 +17,9 @@ import (
 // 链接解析和仓库订阅都走这里：两边各写一份提示词、各自硬编码一个长度，
 // 结果是同一个功能在两个入口下语气和长度不一样，改一处也修不到另一处。
 
-// followUpTimeout 是跟评自己的时间预算。
-//
 // 跟评以前直接复用上游任务的 ctx：链接解析的 ctx 是整条回复链路的超时，
 // 仓库轮询的 ctx 会在这一轮检查结束时取消。解析或轮询稍慢一点，跟评就还没
 // 开口就被取消掉了——看起来像"跟评时灵时不灵"，其实是预算被上游吃光了。
-const followUpTimeout = 30 * time.Second
 
 const (
 	followUpReferenceMinRunes = 800
@@ -53,8 +50,11 @@ func (kind followUpKind) label() string {
 
 // detachFollowUpContext 让跟评脱离上游任务的取消信号，只保留 ctx 上的值
 // （身份脱敏状态等），并给它自己的超时。
-func detachFollowUpContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), followUpTimeout)
+func detachFollowUpContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = DefaultBotConfig().WithDefaults().RequestTimeout
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
 // sendFollowUp 投递所有由模型生成的自然跟评。插件跟评紧接当前消息，沿用普通聊天

@@ -3996,7 +3996,8 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	// 跟评有自己的时间预算：解析慢一点就把整条回复链路的超时吃光，
 	// 跟着上游 ctx 一起被取消的话，跟评会毫无规律地时有时无。
-	ctx, cancel := detachFollowUpContext(ctx)
+	timeout := r.effectiveConfigForEvent(event).WithDefaults().RequestTimeout
+	ctx, cancel := detachFollowUpContext(ctx, timeout)
 	defer cancel()
 
 	// 历史可能在发送之前就缓存过，这里强制重读，否则看不到自己刚发的那条。
@@ -11007,20 +11008,18 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	}
 	// 轮询的 ctx 在这一轮检查结束时就会取消，跟评必须有自己的预算，
 	// 否则仓库拉取慢一点跟评就永远赶不上开口。
-	ctx, cancel := detachFollowUpContext(ctx)
-	defer cancel()
-
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		if ctx.Err() != nil {
-			return
-		}
-		comment := r.followUpCommentWithReference(ctx, followUpKindRepositoryWatch, target, notification, reference)
+		timeout := r.effectiveConfigForEvent(target).WithDefaults().RequestTimeout
+		followCtx, cancel := detachFollowUpContext(ctx, timeout)
+		comment := r.followUpCommentWithReference(followCtx, followUpKindRepositoryWatch, target, notification, reference)
 		if comment == "" {
+			cancel()
 			continue
 		}
-		if err := r.sendFollowUp(ctx, followUpKindRepositoryWatch, target, comment); err != nil {
-			r.recordFollowUpFailure(ctx, followUpKindRepositoryWatch, target, "send", err)
+		if err := r.sendFollowUp(followCtx, followUpKindRepositoryWatch, target, comment); err != nil {
+			r.recordFollowUpFailure(followCtx, followUpKindRepositoryWatch, target, "send", err)
 		}
+		cancel()
 	}
 }
 

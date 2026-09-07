@@ -320,6 +320,20 @@ func TestPluginFollowUpSurvivesCancelledUpstreamContext(t *testing.T) {
 	}
 }
 
+func TestFollowUpUsesConfiguredRequestTimeout(t *testing.T) {
+	const timeout = 73 * time.Second
+	ctx, cancel := detachFollowUpContext(context.Background(), timeout)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("follow-up context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining < timeout-time.Second || remaining > timeout {
+		t.Fatalf("follow-up timeout = %s, want %s", remaining, timeout)
+	}
+}
+
 // 跟评对用户是静默失败的，但不该连运行日志都查不到。
 func TestFollowUpFailureIsAudited(t *testing.T) {
 	channel := &recordingChannel{}
