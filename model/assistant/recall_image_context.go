@@ -31,6 +31,7 @@ const (
 	historyImageDescriptionTimeout      = 90 * time.Second
 	historyImageDescriptionRetryBackoff = 10 * time.Minute
 	historyImageDescriptionIdlePoll     = 250 * time.Millisecond
+	replyImageGroundingTimeout          = 20 * time.Second
 	// historyImageDescriptionMaxAge 限定「自动补描述」的时间窗。
 	//
 	// 库里有近两万条带图消息，识图是单并发、每张最多等 90 秒。真要顺着回填
@@ -38,6 +39,28 @@ const (
 	// 的老图。窗口之外的图不自动补，等真被引用时再补。
 	historyImageDescriptionMaxAge = 24 * time.Hour
 )
+
+// ensureReplyImageDescription makes the durable description a foreground
+// dependency of an image reply. Background indexing deliberately yields while
+// a visible reply is running, so merely polling the cache here would deadlock
+// until after the send audit. Promote the current image to a synchronous vision
+// description instead; the background job will observe the saved cache later.
+func (r *Runtime) ensureReplyImageDescription(ctx context.Context, event MessageEvent) (MessageEvent, string) {
+	if description := r.messageImageDescriptionText(ctx, event); description != "" {
+		return event, description
+	}
+	if !hasImageSegment(event.Segments) || r.recallImageDescriptionStore() == nil {
+		return event, ""
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
+	defer cancel()
+	enriched := r.enrichRecallImageDescriptions(waitCtx, event, []MessageEvent{event})
+	if len(enriched) == 0 {
+		return event, ""
+	}
+	event.Segments = enriched[0].Segments
+	return event, r.messageImageDescriptionText(waitCtx, event)
+}
 
 // withinHistoryImageDescriptionWindow 判断这条消息是否新到值得自动补描述。
 // 没有时间戳的合成事件当作当前消息处理，不因为缺字段被挡掉。

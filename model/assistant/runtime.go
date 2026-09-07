@@ -3112,6 +3112,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event = r.prepareEventImages(ctx, event)
 		}
 	}
+	currentImageGrounding := strings.TrimSpace(event.replyAuditImageContext)
+	if cfg.AgentEnabled && hasImageSegment(event.Segments) && currentImageGrounding == "" {
+		event, currentImageGrounding = r.ensureReplyImageDescription(ctx, event)
+		if currentImageGrounding != "" {
+			event.replyAuditImageContext = currentImageGrounding
+		}
+	}
 	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withIdentityPrivacyContext(ctx, event, replyHistory)
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
@@ -3743,7 +3750,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 		}
 	}
-	currentMessage, event.replyAuditImageContext = r.imageOCRAdjustMessageWithContext(ctx, event, currentMessage)
+	currentMessage, imageOCRContext := r.imageOCRAdjustMessageWithContext(ctx, event, currentMessage)
+	if imageOCRContext != "" {
+		event.replyAuditImageContext = imageOCRContext
+	} else if currentImageGrounding != "" {
+		// The raw image is still attached. The independent description anchors
+		// small-text screenshots so the chat model cannot silently replace their
+		// topic with an unrelated but searchable hypothesis.
+		currentMessage = appendLLMMessageText(currentMessage, "【当前图片的独立视觉描述，可能有识别误差；请与原图共同核对主题，搜索词必须来自这张图，不得改换成无关话题】\n"+currentImageGrounding)
+	}
 	currentMessage.Priority = llm.MessagePriorityCurrent
 	if systemTail != "" {
 		messages = append(messages, llm.Message{
