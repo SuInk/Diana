@@ -3,7 +3,11 @@
 
 package llm
 
-import "testing"
+import (
+	"testing"
+
+	"google.golang.org/genai"
+)
 
 func TestGeminiOutputTokenLimit(t *testing.T) {
 	t.Parallel()
@@ -41,5 +45,35 @@ func TestNormalizeGeminiBaseURLAcceptsRootAndVersionedPaths(t *testing.T) {
 		if got := normalizeGeminiBaseURL(input); got != want {
 			t.Fatalf("normalizeGeminiBaseURL(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestGeminiUsageToleratesMissingMetadata(t *testing.T) {
+	t.Parallel()
+
+	for name, response := range map[string]*genai.GenerateContentResponse{
+		"nil response": nil,
+		"nil metadata": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := geminiUsage(response); got != (Usage{}) {
+				t.Fatalf("geminiUsage() = %#v, want zero usage", got)
+			}
+		})
+	}
+}
+
+func TestGeminiUsageReadsMetadata(t *testing.T) {
+	t.Parallel()
+
+	response := &genai.GenerateContentResponse{UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount:        11,
+		CandidatesTokenCount:    7,
+		TotalTokenCount:         18,
+		CachedContentTokenCount: 3,
+	}}
+	want := Usage{InputTokens: 11, OutputTokens: 7, TotalTokens: 18, CachedInputTokens: 3}
+	if got := geminiUsage(response); got != want {
+		t.Fatalf("geminiUsage() = %#v, want %#v", got, want)
 	}
 }

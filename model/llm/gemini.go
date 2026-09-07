@@ -90,6 +90,9 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
+	if resp == nil {
+		return nil, fmt.Errorf("llm: gemini returned an empty response")
+	}
 
 	text := strings.TrimSpace(resp.Text())
 	toolCalls := geminiToolCalls(resp, req.Tools)
@@ -102,12 +105,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 		Model:     req.Model,
 		Text:      text,
 		ToolCalls: toolCalls,
-		Usage: Usage{
-			InputTokens:       int64(resp.UsageMetadata.PromptTokenCount),
-			OutputTokens:      int64(resp.UsageMetadata.CandidatesTokenCount),
-			TotalTokens:       int64(resp.UsageMetadata.TotalTokenCount),
-			CachedInputTokens: int64(resp.UsageMetadata.CachedContentTokenCount),
-		},
+		Usage:     geminiUsage(resp),
 	}, nil
 }
 
@@ -144,6 +142,10 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 				out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
 				return
 			}
+			if response == nil {
+				out <- ChatEvent{Type: ChatEventError, Error: "llm: gemini returned an empty stream response"}
+				return
+			}
 			text := response.Text()
 			if text != "" {
 				out <- ChatEvent{Type: ChatEventTextDelta, Text: text}
@@ -155,12 +157,27 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 				call := ToolCall{ID: functionCall.ID, Name: nativeToolName(functionCall.Name, req.Tools), Arguments: functionCall.Args}
 				out <- ChatEvent{Type: ChatEventToolCall, ToolCall: &call}
 			}
-			last = Usage{InputTokens: int64(response.UsageMetadata.PromptTokenCount), OutputTokens: int64(response.UsageMetadata.CandidatesTokenCount), TotalTokens: int64(response.UsageMetadata.TotalTokenCount), CachedInputTokens: int64(response.UsageMetadata.CachedContentTokenCount)}
+			if response.UsageMetadata != nil {
+				last = geminiUsage(response)
+			}
 		}
 		out <- ChatEvent{Type: ChatEventUsage, Usage: &last}
 		out <- ChatEvent{Type: ChatEventDone}
 	}()
 	return out, nil
+}
+
+func geminiUsage(response *genai.GenerateContentResponse) Usage {
+	if response == nil || response.UsageMetadata == nil {
+		return Usage{}
+	}
+	metadata := response.UsageMetadata
+	return Usage{
+		InputTokens:       int64(metadata.PromptTokenCount),
+		OutputTokens:      int64(metadata.CandidatesTokenCount),
+		TotalTokens:       int64(metadata.TotalTokenCount),
+		CachedInputTokens: int64(metadata.CachedContentTokenCount),
+	}
 }
 
 func geminiOutputTokenLimit(value int64) (int32, error) {
