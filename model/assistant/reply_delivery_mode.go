@@ -49,8 +49,10 @@ func replyDeliveryLimits(limits chatSplitLimits, mode replyDeliveryMode) chatSpl
 	switch mode {
 	case replyDeliverySingle:
 		limits.SingleMessage = true
+		limits.PreserveSoftNewlines = true
 	case replyDeliveryAuto:
 		limits.SingleMessage, limits.MarkerOnly = false, false
+		limits.PreserveSoftNewlines = false
 	}
 	return limits
 }

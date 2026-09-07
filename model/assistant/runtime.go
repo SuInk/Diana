@@ -11921,6 +11921,9 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	}
 	var out []string
 	for _, segment := range chatReplySegments(reply, limits) {
+		if !limits.PreserveSoftNewlines {
+			segment = normalizeChatBubbleNewlines(segment, limits.Document)
+		}
 		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
 			out = append(out, trimChatTrailingPeriod(chunk))
@@ -11956,6 +11959,9 @@ func splitForwardReply(reply string, limits chatSplitLimits) []string {
 	}
 	out := make([]string, 0, len(segments))
 	for _, segment := range segments {
+		if !limits.PreserveSoftNewlines {
+			segment = normalizeChatBubbleNewlines(segment, limits.Document)
+		}
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
 			out = append(out, trimChatTrailingPeriod(chunk))
 		}
@@ -11977,14 +11983,19 @@ type chatSplitLimits struct {
 	// MarkerOnly 关掉自然分条：只认模型显式写的 [diana-br]，换行只当排版。
 	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
 	MarkerOnly bool
+	// PreserveSoftNewlines 关闭发送层的软换行整理。它跟自然分条开关一起变化，
+	// 也会被用户本轮的「一条发送 / 按内容分条」选择临时覆盖。
+	PreserveSoftNewlines bool
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
+	natural := boolValue(cfg.NaturalReplySplitEnabled, true)
 	return chatSplitLimits{
 		// 旧配置中的分条数和分段长度不再限制聊天回复。
-		MarkerOnly: !boolValue(cfg.NaturalReplySplitEnabled, true),
+		MarkerOnly:           !natural,
+		PreserveSoftNewlines: !natural,
 	}
 }
 
