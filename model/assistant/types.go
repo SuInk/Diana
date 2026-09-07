@@ -403,65 +403,65 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
-	ID                                   string               `json:"id,omitempty"`
-	Name                                 string               `json:"name,omitempty"`
-	Platform                             string               `json:"platform,omitempty"`
-	AvatarURL                            string               `json:"avatar_url,omitempty"`
-	Enabled                              bool                 `json:"enabled"`
-	OneBotReverseWSEndpoint              string               `json:"onebot_reverse_ws_endpoint"`
-	OneBotAccessToken                    string               `json:"onebot_access_token,omitempty"`
-	TelegramBotToken                     string               `json:"telegram_bot_token,omitempty"`
-	TelegramAPIBaseURL                   string               `json:"telegram_api_base_url,omitempty"`
-	TelegramProxyURL                     string               `json:"telegram_proxy_url,omitempty"`
-	TelegramSuppressBotMessages          *bool                `json:"telegram_suppress_bot_messages,omitempty"`
-	QQAppID                              string               `json:"qq_app_id,omitempty"`
-	QQAppSecret                          string               `json:"qq_app_secret,omitempty"`
-	QQSandbox                            bool                 `json:"qq_sandbox,omitempty"`
-	DingTalkClientID                     string               `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret                 string               `json:"dingtalk_client_secret,omitempty"`
-	DingTalkRobotCode                    string               `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                          string               `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret                      string               `json:"feishu_app_secret,omitempty"`
-	FeishuVerificationToken              string               `json:"feishu_verification_token,omitempty"`
-	FeishuEncryptKey                     string               `json:"feishu_encrypt_key,omitempty"`
-	FeishuAPIBaseURL                     string               `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                          string               `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                         string               `json:"wecom_agent_id,omitempty"`
-	WeComSecret                          string               `json:"wecom_secret,omitempty"`
-	WeComToken                           string               `json:"wecom_token,omitempty"`
-	WeComEncodingAESKey                  string               `json:"wecom_encoding_aes_key,omitempty"`
-	NoneBotBridgeEnabled                 bool                 `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint                string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken                   string               `json:"nonebot_bridge_token,omitempty"`
-	BotAccount                           string               `json:"bot_account,omitempty"`
-	OwnerID                              string               `json:"owner_id,omitempty"`
-	OwnerLoginEnabled                    bool                 `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled                *bool                `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers                        []string             `json:"group_triggers,omitempty"`
-	GroupTriggerMode                     AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
-	DisabledGroups                       []string             `json:"disabled_groups,omitempty"`
-	DisabledUsers                        []string             `json:"disabled_users,omitempty"`
-	GroupAdmission                       GroupAdmission       `json:"group_admission,omitempty"`
-	ReplyGate                            *ReplyGate           `json:"reply_gate,omitempty"`
-	WelcomeEnabled                       bool                 `json:"welcome_enabled,omitempty"`
-	WelcomeMessage                       string               `json:"welcome_message,omitempty"`
-	SystemPrompt                         string               `json:"system_prompt,omitempty"`
-	ResponseMode                         ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                           ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled             *bool                `json:"action_description_enabled,omitempty"`
-	SelfReference                        string               `json:"self_reference,omitempty"`
-	SentenceEnders                       string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled                     bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode                   ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	MentionUserMode                      ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain                      *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled                   *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix                     string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts                    int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS                  int                  `json:"send_chunk_interval_ms,omitempty"`
-	ModelRoles                           map[string]ModelRole `json:"model_roles,omitempty"`
-	BotReplyLoopDetectionEnabled         *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplyAccountSafetyAuditMasterEnabled *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	ID                           string               `json:"id,omitempty"`
+	Name                         string               `json:"name,omitempty"`
+	Platform                     string               `json:"platform,omitempty"`
+	AvatarURL                    string               `json:"avatar_url,omitempty"`
+	Enabled                      bool                 `json:"enabled"`
+	OneBotReverseWSEndpoint      string               `json:"onebot_reverse_ws_endpoint"`
+	OneBotAccessToken            string               `json:"onebot_access_token,omitempty"`
+	TelegramBotToken             string               `json:"telegram_bot_token,omitempty"`
+	TelegramAPIBaseURL           string               `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL             string               `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages  *bool                `json:"telegram_suppress_bot_messages,omitempty"`
+	QQAppID                      string               `json:"qq_app_id,omitempty"`
+	QQAppSecret                  string               `json:"qq_app_secret,omitempty"`
+	QQSandbox                    bool                 `json:"qq_sandbox,omitempty"`
+	DingTalkClientID             string               `json:"dingtalk_client_id,omitempty"`
+	DingTalkClientSecret         string               `json:"dingtalk_client_secret,omitempty"`
+	DingTalkRobotCode            string               `json:"dingtalk_robot_code,omitempty"`
+	FeishuAppID                  string               `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret              string               `json:"feishu_app_secret,omitempty"`
+	FeishuVerificationToken      string               `json:"feishu_verification_token,omitempty"`
+	FeishuEncryptKey             string               `json:"feishu_encrypt_key,omitempty"`
+	FeishuAPIBaseURL             string               `json:"feishu_api_base_url,omitempty"`
+	WeComCorpID                  string               `json:"wecom_corp_id,omitempty"`
+	WeComAgentID                 string               `json:"wecom_agent_id,omitempty"`
+	WeComSecret                  string               `json:"wecom_secret,omitempty"`
+	WeComToken                   string               `json:"wecom_token,omitempty"`
+	WeComEncodingAESKey          string               `json:"wecom_encoding_aes_key,omitempty"`
+	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
+	BotAccount                   string               `json:"bot_account,omitempty"`
+	OwnerID                      string               `json:"owner_id,omitempty"`
+	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers                []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
+	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
+	DisabledUsers                []string             `json:"disabled_users,omitempty"`
+	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
+	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
+	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
+	WelcomeMessage               string               `json:"welcome_message,omitempty"`
+	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
+	SelfReference                string               `json:"self_reference,omitempty"`
+	SentenceEnders               string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled           *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix             string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts            int                  `json:"send_retry_attempts,omitempty"`
+	SendChunkIntervalMS          int                  `json:"send_chunk_interval_ms,omitempty"`
+	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
+	ReplySafetyMasterEnabled     *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
@@ -752,50 +752,50 @@ type ConfigPayload struct {
 	WeComEncodingAESKey               string             `json:"wecom_encoding_aes_key,omitempty"`
 	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
-	CallbackPath                         string               `json:"callback_path,omitempty"`
-	NoneBotBridgeEnabled                 bool                 `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint                string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken                   string               `json:"nonebot_bridge_token,omitempty"`
-	NoneBotBridgeTokenConfigured         bool                 `json:"nonebot_bridge_token_configured,omitempty"`
-	BotAccount                           string               `json:"bot_account,omitempty"`
-	OwnerID                              string               `json:"owner_id,omitempty"`
-	OwnerLoginEnabled                    bool                 `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled                *bool                `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers                        []string             `json:"group_triggers,omitempty"`
-	GroupTriggerMode                     AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
-	DisabledGroups                       []string             `json:"disabled_groups,omitempty"`
-	DisabledUsers                        []string             `json:"disabled_users,omitempty"`
-	GroupAdmission                       GroupAdmission       `json:"group_admission,omitempty"`
-	ReplyGate                            *ReplyGate           `json:"reply_gate,omitempty"`
-	WelcomeEnabled                       bool                 `json:"welcome_enabled,omitempty"`
-	WelcomeMessage                       string               `json:"welcome_message,omitempty"`
-	SystemPrompt                         string               `json:"system_prompt,omitempty"`
-	ResponseMode                         ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                           ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled             *bool                `json:"action_description_enabled,omitempty"`
-	SelfReference                        string               `json:"self_reference,omitempty"`
-	SentenceEnders                       string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled                     bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode                   ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	MentionUserMode                      ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain                      *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled                   *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix                     string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts                    int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS                  int                  `json:"send_chunk_interval_ms,omitempty"`
-	PromptInjectTime                     *bool                `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules           *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender              *bool                `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint               *bool                `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText               string               `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText             string               `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate                   string               `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate            string               `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText                  string               `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText                   string               `json:"prompt_wake_only_text,omitempty"`
-	ModelRoles                           map[string]ModelRole `json:"model_roles,omitempty"`
-	BotReplyLoopDetectionEnabled         *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplyAccountSafetyAuditMasterEnabled *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	CallbackPath                 string               `json:"callback_path,omitempty"`
+	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
+	NoneBotBridgeTokenConfigured bool                 `json:"nonebot_bridge_token_configured,omitempty"`
+	BotAccount                   string               `json:"bot_account,omitempty"`
+	OwnerID                      string               `json:"owner_id,omitempty"`
+	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers                []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
+	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
+	DisabledUsers                []string             `json:"disabled_users,omitempty"`
+	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
+	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
+	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
+	WelcomeMessage               string               `json:"welcome_message,omitempty"`
+	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
+	SelfReference                string               `json:"self_reference,omitempty"`
+	SentenceEnders               string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled           *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix             string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts            int                  `json:"send_retry_attempts,omitempty"`
+	SendChunkIntervalMS          int                  `json:"send_chunk_interval_ms,omitempty"`
+	PromptInjectTime             *bool                `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules   *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender      *bool                `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint       *bool                `json:"prompt_chinese_slang_hint,omitempty"`
+	PromptChineseSlangText       string               `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText     string               `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate           string               `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate    string               `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText          string               `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
+	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
+	ReplySafetyMasterEnabled     *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
@@ -1307,31 +1307,31 @@ func DefaultBotConfig() BotConfig {
 		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
 		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
 		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
-		SendChunkIntervalMS:                  chatSendChunkIntervalMS,
-		ProactiveReplyRouterPrompt:           defaultProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:                 defaultProactiveReplyPrompt,
-		ChatInEnabled:                        boolPointer(true),
-		ChatInLevel:                          defaultChatInLevel,
-		NaturalInterjectionEnabled:           boolPointer(false),
-		MaxInputChars:                        2000,
-		MaxReplyChars:                        3500,
-		ReplyMaxBubbles:                      replyMaxChatBubbles,
-		ForwardReplyChunkThreshold:           0,
-		DirectReplyChunkSize:                 chatReplyChunkSize,
-		ForwardReplyThreshold:                0,
-		RecallReplyMode:                      RecallReplyModeOriginalForward,
-		RefusalStrategy:                      RefusalStrategySmart,
-		DaypartToneEnabled:                   boolPointer(false),
-		LLMStreamingEnabled:                  boolPointer(false),
-		RecallReplyAutoDeleteEnabled:         boolPointer(false),
-		RecallReplyTTLSeconds:                defaultRecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:            boolPointer(true),
-		BotReplyLoopDetectionEnabled:         boolPointer(true),
-		ReplyAccountSafetyAuditMasterEnabled: boolPointer(true),
-		TelegramSuppressBotMessages:          boolPointer(true),
-		ReplyAccountSafetyAuditEnabled:       boolPointer(false),
-		NotebookSharedScopeEnabled:           boolPointer(true),
-		RecentHistoryTokenBudget:             DefaultRecentHistoryTokenBudget,
+		SendChunkIntervalMS:            chatSendChunkIntervalMS,
+		ProactiveReplyRouterPrompt:     defaultProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
+		ChatInEnabled:                  boolPointer(true),
+		ChatInLevel:                    defaultChatInLevel,
+		NaturalInterjectionEnabled:     boolPointer(false),
+		MaxInputChars:                  2000,
+		MaxReplyChars:                  3500,
+		ReplyMaxBubbles:                replyMaxChatBubbles,
+		ForwardReplyChunkThreshold:     0,
+		DirectReplyChunkSize:           chatReplyChunkSize,
+		ForwardReplyThreshold:          0,
+		RecallReplyMode:                RecallReplyModeOriginalForward,
+		RefusalStrategy:                RefusalStrategySmart,
+		DaypartToneEnabled:             boolPointer(false),
+		LLMStreamingEnabled:            boolPointer(false),
+		RecallReplyAutoDeleteEnabled:   boolPointer(false),
+		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:      boolPointer(true),
+		BotReplyLoopDetectionEnabled:   boolPointer(true),
+		ReplySafetyMasterEnabled:       boolPointer(true),
+		TelegramSuppressBotMessages:    boolPointer(true),
+		ReplyAccountSafetyAuditEnabled: boolPointer(false),
+		NotebookSharedScopeEnabled:     boolPointer(true),
+		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
@@ -1529,8 +1529,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyAccountSafetyAuditEnabled == nil {
 		cfg.ReplyAccountSafetyAuditEnabled = boolPointer(false)
 	}
-	if cfg.ReplyAccountSafetyAuditMasterEnabled == nil {
-		cfg.ReplyAccountSafetyAuditMasterEnabled = boolPointer(true)
+	if cfg.ReplySafetyMasterEnabled == nil {
+		cfg.ReplySafetyMasterEnabled = boolPointer(true)
 	}
 	if cfg.NotebookSharedScopeEnabled == nil {
 		cfg.NotebookSharedScopeEnabled = boolPointer(true)
@@ -1746,122 +1746,122 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		TelegramSuppressBotMessages: copyBoolPointer(cfg.TelegramSuppressBotMessages),
 		// 密钥一律只回 configured 标志。AppID/CorpID 这类公开标识可以回显，
 		// 方便用户核对填的是不是同一个应用。
-		QQAppID:                              cfg.QQAppID,
-		QQAppSecretConfigured:                cfg.QQAppSecret != "",
-		QQSandbox:                            cfg.QQSandbox,
-		DingTalkClientID:                     cfg.DingTalkClientID,
-		DingTalkClientSecretConfigured:       cfg.DingTalkClientSecret != "",
-		DingTalkRobotCode:                    cfg.DingTalkRobotCode,
-		FeishuAppID:                          cfg.FeishuAppID,
-		FeishuAppSecretConfigured:            cfg.FeishuAppSecret != "",
-		FeishuVerificationTokenConfigured:    cfg.FeishuVerificationToken != "",
-		FeishuEncryptKeyConfigured:           cfg.FeishuEncryptKey != "",
-		FeishuAPIBaseURL:                     cfg.FeishuAPIBaseURL,
-		WeComCorpID:                          cfg.WeComCorpID,
-		WeComAgentID:                         cfg.WeComAgentID,
-		WeComSecretConfigured:                cfg.WeComSecret != "",
-		WeComTokenConfigured:                 cfg.WeComToken != "",
-		WeComEncodingAESKeyConfigured:        cfg.WeComEncodingAESKey != "",
-		CallbackPath:                         CallbackPathFor(cfg.Platform),
-		NoneBotBridgeEnabled:                 cfg.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:                cfg.NoneBotBridgeEndpoint,
-		NoneBotBridgeTokenConfigured:         cfg.NoneBotBridgeToken != "",
-		BotAccount:                           cfg.BotAccount,
-		OwnerID:                              cfg.OwnerID,
-		OwnerLoginEnabled:                    cfg.OwnerLoginEnabled,
-		OwnerLLMConfigEnabled:                copyBoolPointer(cfg.OwnerLLMConfigEnabled),
-		GroupTriggers:                        append([]string(nil), cfg.GroupTriggers...),
-		GroupTriggerMode:                     cfg.GroupTriggerMode,
-		DisabledGroups:                       append([]string(nil), cfg.DisabledGroups...),
-		DisabledUsers:                        append([]string(nil), cfg.DisabledUsers...),
-		GroupAdmission:                       cfg.GroupAdmission.WithDefaults(),
-		ReplyGate:                            cfg.ReplyGate.Clone(),
-		WelcomeEnabled:                       cfg.WelcomeEnabled,
-		WelcomeMessage:                       cfg.WelcomeMessage,
-		SystemPrompt:                         cfg.SystemPrompt,
-		ResponseMode:                         cfg.ResponseMode,
-		ReplyStyle:                           cfg.ReplyStyle,
-		ActionDescriptionEnabled:             copyBoolPointer(cfg.ActionDescriptionEnabled),
-		SelfReference:                        cfg.SelfReference,
-		SentenceEnders:                       cfg.SentenceEnders,
-		DebugModeEnabled:                     cfg.DebugModeEnabled,
-		ReplyReferenceMode:                   cfg.ReplyReferenceMode,
-		MentionUserMode:                      cfg.MentionUserMode,
-		MarkdownToPlain:                      copyBoolPointer(cfg.MarkdownToPlain),
-		ErrorNotifyEnabled:                   copyBoolPointer(cfg.ErrorNotifyEnabled),
-		ErrorReplyPrefix:                     cfg.ErrorReplyPrefix,
-		SendRetryAttempts:                    cfg.SendRetryAttempts,
-		SendChunkIntervalMS:                  cfg.SendChunkIntervalMS,
-		PromptInjectTime:                     copyBoolPointer(cfg.PromptInjectTime),
-		PromptInjectPlaintextRules:           copyBoolPointer(cfg.PromptInjectPlaintextRules),
-		PromptInjectGroupSender:              copyBoolPointer(cfg.PromptInjectGroupSender),
-		PromptChineseSlangHint:               copyBoolPointer(cfg.PromptChineseSlangHint),
-		PromptChineseSlangText:               cfg.PromptChineseSlangText,
-		PromptPlaintextRulesText:             cfg.PromptPlaintextRulesText,
-		PromptTimeTemplate:                   cfg.PromptTimeTemplate,
-		PromptGroupSenderTemplate:            cfg.PromptGroupSenderTemplate,
-		PromptImageOnlyText:                  cfg.PromptImageOnlyText,
-		PromptWakeOnlyText:                   cfg.PromptWakeOnlyText,
-		ModelRoles:                           normalizeModelRoles(cfg.ModelRoles),
-		BotReplyLoopDetectionEnabled:         copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
-		ReplyAccountSafetyAuditMasterEnabled: copyBoolPointer(cfg.ReplyAccountSafetyAuditMasterEnabled),
-		ReplyAccountSafetyAuditEnabled:       copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
-		ReplyAccountSafetyAuditPrompt:        strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
-		NotebookSharedScopeEnabled:           copyBoolPointer(cfg.NotebookSharedScopeEnabled),
-		ProactiveReplyRouterPrompt:           cfg.ProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:                 cfg.ProactiveReplyPrompt,
-		MaxInputChars:                        cfg.MaxInputChars,
-		MaxReplyChars:                        cfg.MaxReplyChars,
-		NaturalReplySplitEnabled:             copyBoolPointer(cfg.NaturalReplySplitEnabled),
-		SocialReplyEnabled:                   copyBoolPointer(cfg.SocialReplyEnabled),
-		ReplyMaxBubbles:                      cfg.ReplyMaxBubbles,
-		ForwardReplyChunkThreshold:           cfg.ForwardReplyChunkThreshold,
-		DirectReplyChunkSize:                 cfg.DirectReplyChunkSize,
-		ForwardReplyThreshold:                cfg.ForwardReplyThreshold,
-		RecallReplyMode:                      cfg.RecallReplyMode,
-		RefusalStrategy:                      cfg.RefusalStrategy,
-		DaypartToneEnabled:                   copyBoolPointer(cfg.DaypartToneEnabled),
-		LLMStreamingEnabled:                  copyBoolPointer(cfg.LLMStreamingEnabled),
-		RecallReplyAutoDeleteEnabled:         copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
-		RecallReplyTTLSeconds:                cfg.RecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:            copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
-		MaxContextTokens:                     cfg.MaxContextTokens,
-		RecentHistoryTokenBudget:             cfg.RecentHistoryTokenBudget,
-		RecentContextLimit:                   cfg.RecentContextLimit,
-		HistoryBackfillMessageLimit:          cfg.HistoryBackfillMessageLimit,
-		ContextSummaryThreshold:              cfg.ContextSummaryThreshold,
-		LongTermMemoryEnabled:                copyBoolPointer(cfg.LongTermMemoryEnabled),
-		CrossGroupMemoryEnabled:              copyBoolPointer(cfg.CrossGroupMemoryEnabled),
-		CrossPlatformMemoryEnabled:           copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
-		WorldBookEnabled:                     copyBoolPointer(cfg.WorldBookEnabled),
-		RomanceEnabled:                       copyBoolPointer(cfg.RomanceEnabled),
-		MoodEnabled:                          copyBoolPointer(cfg.MoodEnabled),
-		PokeReplyEnabled:                     copyBoolPointer(cfg.PokeReplyEnabled),
-		ExpressionLearningEnabled:            copyBoolPointer(cfg.ExpressionLearningEnabled),
-		DictSegmentEnabled:                   copyBoolPointer(cfg.DictSegmentEnabled),
-		SemanticSearchEnabled:                copyBoolPointer(cfg.SemanticSearchEnabled),
-		ProactiveReplyChance:                 cfg.ProactiveReplyChance,
-		ProactiveReplyThreshold:              cfg.ProactiveReplyThreshold,
-		ChatInEnabled:                        copyBoolPointer(cfg.ChatInEnabled),
-		ChatInLevel:                          cfg.ChatInLevel,
-		ChatInThreshold:                      cfg.ChatInThreshold,
-		ChatInChance:                         cfg.ChatInChance,
-		ChatInCooldownSeconds:                cfg.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:           copyBoolPointer(cfg.NaturalInterjectionEnabled),
-		ReplyRules:                           append([]ReplyRule(nil), cfg.ReplyRules...),
-		MaxBotConcurrency:                    cfg.MaxBotConcurrency,
-		RequestTimeoutMS:                     cfg.RequestTimeout.Milliseconds(),
-		AgentEnabled:                         cfg.AgentEnabled,
-		AgentMaxSteps:                        cfg.AgentMaxSteps,
-		AgentSkillRoots:                      append([]string(nil), cfg.AgentSkillRoots...),
-		AgentMCPConfigPath:                   cfg.AgentMCPConfigPath,
-		AgentCommandAllowlist:                append([]string(nil), cfg.AgentCommandAllowlist...),
-		AgentCommandTimeoutMS:                cfg.AgentCommandTimeoutMS,
-		AgentCommandSandbox:                  cfg.AgentCommandSandbox,
-		AgentCommandSandboxAllowNetwork:      cfg.AgentCommandSandboxAllowNetwork,
-		AgentFileWriteEnabled:                cfg.AgentFileWriteEnabled,
-		AgentBrowserCDPURL:                   cfg.AgentBrowserCDPURL,
-		AgentBrowserTimeoutMS:                cfg.AgentBrowserTimeoutMS,
+		QQAppID:                           cfg.QQAppID,
+		QQAppSecretConfigured:             cfg.QQAppSecret != "",
+		QQSandbox:                         cfg.QQSandbox,
+		DingTalkClientID:                  cfg.DingTalkClientID,
+		DingTalkClientSecretConfigured:    cfg.DingTalkClientSecret != "",
+		DingTalkRobotCode:                 cfg.DingTalkRobotCode,
+		FeishuAppID:                       cfg.FeishuAppID,
+		FeishuAppSecretConfigured:         cfg.FeishuAppSecret != "",
+		FeishuVerificationTokenConfigured: cfg.FeishuVerificationToken != "",
+		FeishuEncryptKeyConfigured:        cfg.FeishuEncryptKey != "",
+		FeishuAPIBaseURL:                  cfg.FeishuAPIBaseURL,
+		WeComCorpID:                       cfg.WeComCorpID,
+		WeComAgentID:                      cfg.WeComAgentID,
+		WeComSecretConfigured:             cfg.WeComSecret != "",
+		WeComTokenConfigured:              cfg.WeComToken != "",
+		WeComEncodingAESKeyConfigured:     cfg.WeComEncodingAESKey != "",
+		CallbackPath:                      CallbackPathFor(cfg.Platform),
+		NoneBotBridgeEnabled:              cfg.NoneBotBridgeEnabled,
+		NoneBotBridgeEndpoint:             cfg.NoneBotBridgeEndpoint,
+		NoneBotBridgeTokenConfigured:      cfg.NoneBotBridgeToken != "",
+		BotAccount:                        cfg.BotAccount,
+		OwnerID:                           cfg.OwnerID,
+		OwnerLoginEnabled:                 cfg.OwnerLoginEnabled,
+		OwnerLLMConfigEnabled:             copyBoolPointer(cfg.OwnerLLMConfigEnabled),
+		GroupTriggers:                     append([]string(nil), cfg.GroupTriggers...),
+		GroupTriggerMode:                  cfg.GroupTriggerMode,
+		DisabledGroups:                    append([]string(nil), cfg.DisabledGroups...),
+		DisabledUsers:                     append([]string(nil), cfg.DisabledUsers...),
+		GroupAdmission:                    cfg.GroupAdmission.WithDefaults(),
+		ReplyGate:                         cfg.ReplyGate.Clone(),
+		WelcomeEnabled:                    cfg.WelcomeEnabled,
+		WelcomeMessage:                    cfg.WelcomeMessage,
+		SystemPrompt:                      cfg.SystemPrompt,
+		ResponseMode:                      cfg.ResponseMode,
+		ReplyStyle:                        cfg.ReplyStyle,
+		ActionDescriptionEnabled:          copyBoolPointer(cfg.ActionDescriptionEnabled),
+		SelfReference:                     cfg.SelfReference,
+		SentenceEnders:                    cfg.SentenceEnders,
+		DebugModeEnabled:                  cfg.DebugModeEnabled,
+		ReplyReferenceMode:                cfg.ReplyReferenceMode,
+		MentionUserMode:                   cfg.MentionUserMode,
+		MarkdownToPlain:                   copyBoolPointer(cfg.MarkdownToPlain),
+		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
+		ErrorReplyPrefix:                  cfg.ErrorReplyPrefix,
+		SendRetryAttempts:                 cfg.SendRetryAttempts,
+		SendChunkIntervalMS:               cfg.SendChunkIntervalMS,
+		PromptInjectTime:                  copyBoolPointer(cfg.PromptInjectTime),
+		PromptInjectPlaintextRules:        copyBoolPointer(cfg.PromptInjectPlaintextRules),
+		PromptInjectGroupSender:           copyBoolPointer(cfg.PromptInjectGroupSender),
+		PromptChineseSlangHint:            copyBoolPointer(cfg.PromptChineseSlangHint),
+		PromptChineseSlangText:            cfg.PromptChineseSlangText,
+		PromptPlaintextRulesText:          cfg.PromptPlaintextRulesText,
+		PromptTimeTemplate:                cfg.PromptTimeTemplate,
+		PromptGroupSenderTemplate:         cfg.PromptGroupSenderTemplate,
+		PromptImageOnlyText:               cfg.PromptImageOnlyText,
+		PromptWakeOnlyText:                cfg.PromptWakeOnlyText,
+		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
+		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
+		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
+		ReplyAccountSafetyAuditEnabled:    copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
+		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
+		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
+		ProactiveReplyRouterPrompt:        cfg.ProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:              cfg.ProactiveReplyPrompt,
+		MaxInputChars:                     cfg.MaxInputChars,
+		MaxReplyChars:                     cfg.MaxReplyChars,
+		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
+		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
+		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
+		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
+		DirectReplyChunkSize:              cfg.DirectReplyChunkSize,
+		ForwardReplyThreshold:             cfg.ForwardReplyThreshold,
+		RecallReplyMode:                   cfg.RecallReplyMode,
+		RefusalStrategy:                   cfg.RefusalStrategy,
+		DaypartToneEnabled:                copyBoolPointer(cfg.DaypartToneEnabled),
+		LLMStreamingEnabled:               copyBoolPointer(cfg.LLMStreamingEnabled),
+		RecallReplyAutoDeleteEnabled:      copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:             cfg.RecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:         copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
+		MaxContextTokens:                  cfg.MaxContextTokens,
+		RecentHistoryTokenBudget:          cfg.RecentHistoryTokenBudget,
+		RecentContextLimit:                cfg.RecentContextLimit,
+		HistoryBackfillMessageLimit:       cfg.HistoryBackfillMessageLimit,
+		ContextSummaryThreshold:           cfg.ContextSummaryThreshold,
+		LongTermMemoryEnabled:             copyBoolPointer(cfg.LongTermMemoryEnabled),
+		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
+		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
+		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
+		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
+		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
+		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
+		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
+		DictSegmentEnabled:                copyBoolPointer(cfg.DictSegmentEnabled),
+		SemanticSearchEnabled:             copyBoolPointer(cfg.SemanticSearchEnabled),
+		ProactiveReplyChance:              cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold:           cfg.ProactiveReplyThreshold,
+		ChatInEnabled:                     copyBoolPointer(cfg.ChatInEnabled),
+		ChatInLevel:                       cfg.ChatInLevel,
+		ChatInThreshold:                   cfg.ChatInThreshold,
+		ChatInChance:                      cfg.ChatInChance,
+		ChatInCooldownSeconds:             cfg.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:        copyBoolPointer(cfg.NaturalInterjectionEnabled),
+		ReplyRules:                        append([]ReplyRule(nil), cfg.ReplyRules...),
+		MaxBotConcurrency:                 cfg.MaxBotConcurrency,
+		RequestTimeoutMS:                  cfg.RequestTimeout.Milliseconds(),
+		AgentEnabled:                      cfg.AgentEnabled,
+		AgentMaxSteps:                     cfg.AgentMaxSteps,
+		AgentSkillRoots:                   append([]string(nil), cfg.AgentSkillRoots...),
+		AgentMCPConfigPath:                cfg.AgentMCPConfigPath,
+		AgentCommandAllowlist:             append([]string(nil), cfg.AgentCommandAllowlist...),
+		AgentCommandTimeoutMS:             cfg.AgentCommandTimeoutMS,
+		AgentCommandSandbox:               cfg.AgentCommandSandbox,
+		AgentCommandSandboxAllowNetwork:   cfg.AgentCommandSandboxAllowNetwork,
+		AgentFileWriteEnabled:             cfg.AgentFileWriteEnabled,
+		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
+		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
 	}
 }
 
@@ -1915,132 +1915,132 @@ func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	cfg := BotConfig{
-		ID:                                   strings.TrimSpace(payload.ID),
-		Name:                                 payload.Name,
-		Platform:                             payload.Platform,
-		AvatarURL:                            strings.TrimSpace(payload.AvatarURL),
-		Enabled:                              payload.Enabled,
-		OneBotReverseWSEndpoint:              payload.OneBotReverseWSEndpoint,
-		OneBotAccessToken:                    payload.OneBotAccessToken,
-		TelegramBotToken:                     payload.TelegramBotToken,
-		TelegramAPIBaseURL:                   payload.TelegramAPIBaseURL,
-		TelegramProxyURL:                     payload.TelegramProxyURL,
-		TelegramSuppressBotMessages:          copyBoolPointer(payload.TelegramSuppressBotMessages),
-		QQAppID:                              payload.QQAppID,
-		QQAppSecret:                          payload.QQAppSecret,
-		QQSandbox:                            payload.QQSandbox,
-		DingTalkClientID:                     payload.DingTalkClientID,
-		DingTalkClientSecret:                 payload.DingTalkClientSecret,
-		DingTalkRobotCode:                    payload.DingTalkRobotCode,
-		FeishuAppID:                          payload.FeishuAppID,
-		FeishuAppSecret:                      payload.FeishuAppSecret,
-		FeishuVerificationToken:              payload.FeishuVerificationToken,
-		FeishuEncryptKey:                     payload.FeishuEncryptKey,
-		FeishuAPIBaseURL:                     payload.FeishuAPIBaseURL,
-		WeComCorpID:                          payload.WeComCorpID,
-		WeComAgentID:                         payload.WeComAgentID,
-		WeComSecret:                          payload.WeComSecret,
-		WeComToken:                           payload.WeComToken,
-		WeComEncodingAESKey:                  payload.WeComEncodingAESKey,
-		NoneBotBridgeEnabled:                 payload.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:                payload.NoneBotBridgeEndpoint,
-		NoneBotBridgeToken:                   payload.NoneBotBridgeToken,
-		BotAccount:                           payload.BotAccount,
-		OwnerID:                              payload.OwnerID,
-		OwnerLoginEnabled:                    payload.OwnerLoginEnabled,
-		OwnerLLMConfigEnabled:                copyBoolPointer(payload.OwnerLLMConfigEnabled),
-		GroupTriggers:                        payload.GroupTriggers,
-		GroupTriggerMode:                     payload.GroupTriggerMode,
-		DisabledGroups:                       payload.DisabledGroups,
-		DisabledUsers:                        payload.DisabledUsers,
-		GroupAdmission:                       payload.GroupAdmission,
-		ReplyGate:                            payload.ReplyGate.Clone(),
-		WelcomeEnabled:                       payload.WelcomeEnabled,
-		WelcomeMessage:                       payload.WelcomeMessage,
-		SystemPrompt:                         payload.SystemPrompt,
-		ResponseMode:                         payload.ResponseMode,
-		ReplyStyle:                           payload.ReplyStyle,
-		ActionDescriptionEnabled:             copyBoolPointer(payload.ActionDescriptionEnabled),
-		SelfReference:                        payload.SelfReference,
-		SentenceEnders:                       payload.SentenceEnders,
-		DebugModeEnabled:                     payload.DebugModeEnabled,
-		ReplyReferenceMode:                   payload.ReplyReferenceMode,
-		MentionUserMode:                      payload.MentionUserMode,
-		MarkdownToPlain:                      copyBoolPointer(payload.MarkdownToPlain),
-		ErrorNotifyEnabled:                   copyBoolPointer(payload.ErrorNotifyEnabled),
-		ErrorReplyPrefix:                     payload.ErrorReplyPrefix,
-		SendRetryAttempts:                    payload.SendRetryAttempts,
-		SendChunkIntervalMS:                  payload.SendChunkIntervalMS,
-		PromptInjectTime:                     copyBoolPointer(payload.PromptInjectTime),
-		PromptInjectPlaintextRules:           copyBoolPointer(payload.PromptInjectPlaintextRules),
-		PromptInjectGroupSender:              copyBoolPointer(payload.PromptInjectGroupSender),
-		PromptChineseSlangHint:               copyBoolPointer(payload.PromptChineseSlangHint),
-		PromptChineseSlangText:               payload.PromptChineseSlangText,
-		PromptPlaintextRulesText:             payload.PromptPlaintextRulesText,
-		PromptTimeTemplate:                   payload.PromptTimeTemplate,
-		PromptGroupSenderTemplate:            payload.PromptGroupSenderTemplate,
-		PromptImageOnlyText:                  payload.PromptImageOnlyText,
-		PromptWakeOnlyText:                   payload.PromptWakeOnlyText,
-		ModelRoles:                           normalizeModelRoles(payload.ModelRoles),
-		BotReplyLoopDetectionEnabled:         copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
-		ReplyAccountSafetyAuditMasterEnabled: copyBoolPointer(payload.ReplyAccountSafetyAuditMasterEnabled),
-		ReplyAccountSafetyAuditEnabled:       copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
-		ReplyAccountSafetyAuditPrompt:        strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
-		NotebookSharedScopeEnabled:           copyBoolPointer(payload.NotebookSharedScopeEnabled),
-		ProactiveReplyRouterPrompt:           payload.ProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:                 payload.ProactiveReplyPrompt,
-		MaxInputChars:                        payload.MaxInputChars,
-		MaxReplyChars:                        payload.MaxReplyChars,
-		NaturalReplySplitEnabled:             copyBoolPointer(payload.NaturalReplySplitEnabled),
-		SocialReplyEnabled:                   copyBoolPointer(payload.SocialReplyEnabled),
-		ReplyMaxBubbles:                      payload.ReplyMaxBubbles,
-		ForwardReplyChunkThreshold:           payload.ForwardReplyChunkThreshold,
-		DirectReplyChunkSize:                 payload.DirectReplyChunkSize,
-		ForwardReplyThreshold:                payload.ForwardReplyThreshold,
-		RecallReplyMode:                      payload.RecallReplyMode,
-		RefusalStrategy:                      payload.RefusalStrategy,
-		DaypartToneEnabled:                   copyBoolPointer(payload.DaypartToneEnabled),
-		LLMStreamingEnabled:                  copyBoolPointer(payload.LLMStreamingEnabled),
-		RecallReplyAutoDeleteEnabled:         copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
-		RecallReplyTTLSeconds:                payload.RecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:            copyBoolPointer(payload.LLMIdentityMaskingEnabled),
-		MaxContextTokens:                     payload.MaxContextTokens,
-		RecentHistoryTokenBudget:             payload.RecentHistoryTokenBudget,
-		RecentContextLimit:                   payload.RecentContextLimit,
-		HistoryBackfillMessageLimit:          payload.HistoryBackfillMessageLimit,
-		ContextSummaryThreshold:              payload.ContextSummaryThreshold,
-		LongTermMemoryEnabled:                copyBoolPointer(payload.LongTermMemoryEnabled),
-		CrossGroupMemoryEnabled:              copyBoolPointer(payload.CrossGroupMemoryEnabled),
-		CrossPlatformMemoryEnabled:           copyBoolPointer(payload.CrossPlatformMemoryEnabled),
-		WorldBookEnabled:                     copyBoolPointer(payload.WorldBookEnabled),
-		RomanceEnabled:                       copyBoolPointer(payload.RomanceEnabled),
-		MoodEnabled:                          copyBoolPointer(payload.MoodEnabled),
-		PokeReplyEnabled:                     copyBoolPointer(payload.PokeReplyEnabled),
-		ExpressionLearningEnabled:            copyBoolPointer(payload.ExpressionLearningEnabled),
-		DictSegmentEnabled:                   copyBoolPointer(payload.DictSegmentEnabled),
-		SemanticSearchEnabled:                copyBoolPointer(payload.SemanticSearchEnabled),
-		ProactiveReplyChance:                 payload.ProactiveReplyChance,
-		ProactiveReplyThreshold:              payload.ProactiveReplyThreshold,
-		ChatInEnabled:                        copyBoolPointer(payload.ChatInEnabled),
-		ChatInLevel:                          payload.ChatInLevel,
-		ChatInThreshold:                      payload.ChatInThreshold,
-		ChatInChance:                         payload.ChatInChance,
-		ChatInCooldownSeconds:                payload.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:           copyBoolPointer(payload.NaturalInterjectionEnabled),
-		ReplyRules:                           append([]ReplyRule(nil), payload.ReplyRules...),
-		MaxBotConcurrency:                    payload.MaxBotConcurrency,
-		RequestTimeout:                       time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
-		AgentEnabled:                         payload.AgentEnabled,
-		AgentMaxSteps:                        payload.AgentMaxSteps,
-		AgentSkillRoots:                      append([]string(nil), payload.AgentSkillRoots...),
-		AgentMCPConfigPath:                   payload.AgentMCPConfigPath,
-		AgentCommandAllowlist:                append([]string(nil), payload.AgentCommandAllowlist...),
-		AgentCommandTimeoutMS:                payload.AgentCommandTimeoutMS,
-		AgentCommandSandbox:                  payload.AgentCommandSandbox,
-		AgentCommandSandboxAllowNetwork:      payload.AgentCommandSandboxAllowNetwork,
-		AgentFileWriteEnabled:                payload.AgentFileWriteEnabled,
-		AgentBrowserCDPURL:                   payload.AgentBrowserCDPURL,
-		AgentBrowserTimeoutMS:                payload.AgentBrowserTimeoutMS,
+		ID:                              strings.TrimSpace(payload.ID),
+		Name:                            payload.Name,
+		Platform:                        payload.Platform,
+		AvatarURL:                       strings.TrimSpace(payload.AvatarURL),
+		Enabled:                         payload.Enabled,
+		OneBotReverseWSEndpoint:         payload.OneBotReverseWSEndpoint,
+		OneBotAccessToken:               payload.OneBotAccessToken,
+		TelegramBotToken:                payload.TelegramBotToken,
+		TelegramAPIBaseURL:              payload.TelegramAPIBaseURL,
+		TelegramProxyURL:                payload.TelegramProxyURL,
+		TelegramSuppressBotMessages:     copyBoolPointer(payload.TelegramSuppressBotMessages),
+		QQAppID:                         payload.QQAppID,
+		QQAppSecret:                     payload.QQAppSecret,
+		QQSandbox:                       payload.QQSandbox,
+		DingTalkClientID:                payload.DingTalkClientID,
+		DingTalkClientSecret:            payload.DingTalkClientSecret,
+		DingTalkRobotCode:               payload.DingTalkRobotCode,
+		FeishuAppID:                     payload.FeishuAppID,
+		FeishuAppSecret:                 payload.FeishuAppSecret,
+		FeishuVerificationToken:         payload.FeishuVerificationToken,
+		FeishuEncryptKey:                payload.FeishuEncryptKey,
+		FeishuAPIBaseURL:                payload.FeishuAPIBaseURL,
+		WeComCorpID:                     payload.WeComCorpID,
+		WeComAgentID:                    payload.WeComAgentID,
+		WeComSecret:                     payload.WeComSecret,
+		WeComToken:                      payload.WeComToken,
+		WeComEncodingAESKey:             payload.WeComEncodingAESKey,
+		NoneBotBridgeEnabled:            payload.NoneBotBridgeEnabled,
+		NoneBotBridgeEndpoint:           payload.NoneBotBridgeEndpoint,
+		NoneBotBridgeToken:              payload.NoneBotBridgeToken,
+		BotAccount:                      payload.BotAccount,
+		OwnerID:                         payload.OwnerID,
+		OwnerLoginEnabled:               payload.OwnerLoginEnabled,
+		OwnerLLMConfigEnabled:           copyBoolPointer(payload.OwnerLLMConfigEnabled),
+		GroupTriggers:                   payload.GroupTriggers,
+		GroupTriggerMode:                payload.GroupTriggerMode,
+		DisabledGroups:                  payload.DisabledGroups,
+		DisabledUsers:                   payload.DisabledUsers,
+		GroupAdmission:                  payload.GroupAdmission,
+		ReplyGate:                       payload.ReplyGate.Clone(),
+		WelcomeEnabled:                  payload.WelcomeEnabled,
+		WelcomeMessage:                  payload.WelcomeMessage,
+		SystemPrompt:                    payload.SystemPrompt,
+		ResponseMode:                    payload.ResponseMode,
+		ReplyStyle:                      payload.ReplyStyle,
+		ActionDescriptionEnabled:        copyBoolPointer(payload.ActionDescriptionEnabled),
+		SelfReference:                   payload.SelfReference,
+		SentenceEnders:                  payload.SentenceEnders,
+		DebugModeEnabled:                payload.DebugModeEnabled,
+		ReplyReferenceMode:              payload.ReplyReferenceMode,
+		MentionUserMode:                 payload.MentionUserMode,
+		MarkdownToPlain:                 copyBoolPointer(payload.MarkdownToPlain),
+		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),
+		ErrorReplyPrefix:                payload.ErrorReplyPrefix,
+		SendRetryAttempts:               payload.SendRetryAttempts,
+		SendChunkIntervalMS:             payload.SendChunkIntervalMS,
+		PromptInjectTime:                copyBoolPointer(payload.PromptInjectTime),
+		PromptInjectPlaintextRules:      copyBoolPointer(payload.PromptInjectPlaintextRules),
+		PromptInjectGroupSender:         copyBoolPointer(payload.PromptInjectGroupSender),
+		PromptChineseSlangHint:          copyBoolPointer(payload.PromptChineseSlangHint),
+		PromptChineseSlangText:          payload.PromptChineseSlangText,
+		PromptPlaintextRulesText:        payload.PromptPlaintextRulesText,
+		PromptTimeTemplate:              payload.PromptTimeTemplate,
+		PromptGroupSenderTemplate:       payload.PromptGroupSenderTemplate,
+		PromptImageOnlyText:             payload.PromptImageOnlyText,
+		PromptWakeOnlyText:              payload.PromptWakeOnlyText,
+		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
+		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
+		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
+		ReplyAccountSafetyAuditEnabled:  copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
+		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
+		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
+		ProactiveReplyRouterPrompt:      payload.ProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:            payload.ProactiveReplyPrompt,
+		MaxInputChars:                   payload.MaxInputChars,
+		MaxReplyChars:                   payload.MaxReplyChars,
+		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
+		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
+		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
+		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
+		DirectReplyChunkSize:            payload.DirectReplyChunkSize,
+		ForwardReplyThreshold:           payload.ForwardReplyThreshold,
+		RecallReplyMode:                 payload.RecallReplyMode,
+		RefusalStrategy:                 payload.RefusalStrategy,
+		DaypartToneEnabled:              copyBoolPointer(payload.DaypartToneEnabled),
+		LLMStreamingEnabled:             copyBoolPointer(payload.LLMStreamingEnabled),
+		RecallReplyAutoDeleteEnabled:    copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:           payload.RecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:       copyBoolPointer(payload.LLMIdentityMaskingEnabled),
+		MaxContextTokens:                payload.MaxContextTokens,
+		RecentHistoryTokenBudget:        payload.RecentHistoryTokenBudget,
+		RecentContextLimit:              payload.RecentContextLimit,
+		HistoryBackfillMessageLimit:     payload.HistoryBackfillMessageLimit,
+		ContextSummaryThreshold:         payload.ContextSummaryThreshold,
+		LongTermMemoryEnabled:           copyBoolPointer(payload.LongTermMemoryEnabled),
+		CrossGroupMemoryEnabled:         copyBoolPointer(payload.CrossGroupMemoryEnabled),
+		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
+		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
+		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
+		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
+		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
+		ExpressionLearningEnabled:       copyBoolPointer(payload.ExpressionLearningEnabled),
+		DictSegmentEnabled:              copyBoolPointer(payload.DictSegmentEnabled),
+		SemanticSearchEnabled:           copyBoolPointer(payload.SemanticSearchEnabled),
+		ProactiveReplyChance:            payload.ProactiveReplyChance,
+		ProactiveReplyThreshold:         payload.ProactiveReplyThreshold,
+		ChatInEnabled:                   copyBoolPointer(payload.ChatInEnabled),
+		ChatInLevel:                     payload.ChatInLevel,
+		ChatInThreshold:                 payload.ChatInThreshold,
+		ChatInChance:                    payload.ChatInChance,
+		ChatInCooldownSeconds:           payload.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:      copyBoolPointer(payload.NaturalInterjectionEnabled),
+		ReplyRules:                      append([]ReplyRule(nil), payload.ReplyRules...),
+		MaxBotConcurrency:               payload.MaxBotConcurrency,
+		RequestTimeout:                  time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
+		AgentEnabled:                    payload.AgentEnabled,
+		AgentMaxSteps:                   payload.AgentMaxSteps,
+		AgentSkillRoots:                 append([]string(nil), payload.AgentSkillRoots...),
+		AgentMCPConfigPath:              payload.AgentMCPConfigPath,
+		AgentCommandAllowlist:           append([]string(nil), payload.AgentCommandAllowlist...),
+		AgentCommandTimeoutMS:           payload.AgentCommandTimeoutMS,
+		AgentCommandSandbox:             payload.AgentCommandSandbox,
+		AgentCommandSandboxAllowNetwork: payload.AgentCommandSandboxAllowNetwork,
+		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
+		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
+		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,
 	}.WithDefaults()
 	if cfg.OneBotAccessToken == "" {
 		// 前端留空 token 表示沿用旧值，不表示删除鉴权。
