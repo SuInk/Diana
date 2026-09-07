@@ -166,6 +166,14 @@ func main() {
 		log.Fatal(err)
 	}
 	mediaCacheHandler.SetLogStore(sqliteStore)
+	historyMediaHandler, err := webui.NewHistoryMediaHandler(ctx, sqliteStore, assistant.HistoryMediaRetentionPolicy{
+		RetentionDays: appCfg.Storage.HistoryMediaRetentionDays,
+		MaxMB:         appCfg.Storage.HistoryMediaMaxMB,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	historyMediaHandler.SetLogStore(sqliteStore)
 	stopStorageMaintenance := startStorageMaintenance(ctx, sqliteStore, appCfg.Storage)
 	defer stopStorageMaintenance()
 
@@ -436,6 +444,7 @@ func main() {
 	handler.Register(router)
 	systemHandler.Register(router)
 	mediaCacheHandler.Register(router)
+	historyMediaHandler.Register(router)
 	botHandler.Register(router)
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)
 	ownerLoginHandler.SetLogStore(sqliteStore)

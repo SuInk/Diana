@@ -260,6 +260,16 @@
             </fieldset>
           </form>
         </section>
+        <section class="download-cache-settings">
+          <div class="card-header"><h2>历史媒体原件</h2><button class="btn small ghost" type="button" :disabled="historyMediaLoading || historyMediaSaving" @click="loadHistoryMediaPolicy"><RefreshCw :size="14" /></button></div>
+          <form class="card-body form-grid" @submit.prevent="saveHistoryMedia">
+            <p v-if="historyMediaError" class="error field wide">{{ historyMediaError }}</p>
+            <div class="field"><label for="history-media-days">保留天数</label><input id="history-media-days" v-model.number="historyMediaDays" class="input" type="number" min="-1" max="36500" /><span class="hint">-1 表示不按时间删除。</span></div>
+            <div class="field"><label for="history-media-max">容量上限（MiB）</label><input id="history-media-max" v-model.number="historyMediaMaxMB" class="input" type="number" min="0" max="1048576" /><span class="hint">0 表示不限制容量。</span></div>
+            <p class="hint field wide">清理只删除图片、视频、音频、PDF 等历史原件；聊天文字、媒体类型和已有摘要保留。删除后历史记录会显示原件不可用。</p>
+            <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
+          </form>
+        </section>
         <!-- 系统更新 -->
         <section class="card">
           <div class="card-header">
@@ -429,6 +439,9 @@ import {
   getMediaCachePolicy,
   saveMediaCachePolicy,
   type MediaCachePolicy,
+  getHistoryMediaPolicy,
+  saveHistoryMediaPolicy,
+  type HistoryMediaPolicy,
   listOpenAPIKeys,
   createOpenAPIKey,
   revokeOpenAPIKey,
@@ -457,6 +470,31 @@ const tab = ref<(typeof settingsTabs)[number]["key"]>("security");
 const activeTabHint = computed(() => settingsTabs.find((item) => item.key === tab.value)?.hint ?? "");
 
 const cachePolicy = ref<MediaCachePolicy | null>(null);
+const historyMediaDays = ref(-1);
+const historyMediaMaxMB = ref(0);
+const historyMediaLoading = ref(true);
+const historyMediaSaving = ref(false);
+const historyMediaError = ref("");
+const historyMediaValid = computed(() => Number.isInteger(historyMediaDays.value) && historyMediaDays.value >= -1 && historyMediaDays.value <= 36500 && Number.isInteger(historyMediaMaxMB.value) && historyMediaMaxMB.value >= 0 && historyMediaMaxMB.value <= 1048576);
+async function loadHistoryMediaPolicy() {
+  historyMediaLoading.value = true; historyMediaError.value = "";
+  try { const policy: HistoryMediaPolicy = await getHistoryMediaPolicy(); historyMediaDays.value = policy.retention_days; historyMediaMaxMB.value = policy.max_mb; }
+  catch (error) { historyMediaError.value = error instanceof Error ? error.message : "历史媒体设置加载失败"; }
+  finally { historyMediaLoading.value = false; }
+}
+async function saveHistoryMedia() {
+  if (!historyMediaValid.value || historyMediaSaving.value) return;
+  if (!(await askConfirm({
+    title: "保存历史媒体策略",
+    message: "保存后会立即删除超过保留天数或容量上限的历史原件。聊天文字和摘要会保留，但已删除原件无法恢复。",
+    confirmLabel: "保存并清理",
+    danger: true
+  }))) return;
+  historyMediaSaving.value = true; historyMediaError.value = "";
+  try { await saveHistoryMediaPolicy({ retention_days: historyMediaDays.value, max_mb: historyMediaMaxMB.value }); toastSuccess("历史媒体策略已保存并完成清理"); }
+  catch (error) { historyMediaError.value = error instanceof Error ? error.message : "历史媒体设置保存失败"; toastError(historyMediaError.value); }
+  finally { historyMediaSaving.value = false; }
+}
 const cacheMode = ref<"days" | "capacity" | "never">("days");
 const cacheDays = ref(7);
 const cacheMaxMB = ref(1024);
@@ -888,6 +926,7 @@ async function doRestart(): Promise<void> {
 
 onMounted(() => {
   void loadCachePolicy();
+  void loadHistoryMediaPolicy();
   void loadUpdates();
   void loadGitHubTokenStatus();
   void loadAuthStatus().then(() => loadSessions());
