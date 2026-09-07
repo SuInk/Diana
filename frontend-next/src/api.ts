@@ -1384,6 +1384,12 @@ export function saveMediaCachePolicy(policy: MediaCachePolicy): Promise<MediaCac
   });
 }
 
+export interface HistoryMediaPolicy { retention_days: number; max_mb: number; }
+export function getHistoryMediaPolicy(): Promise<HistoryMediaPolicy> { return requestJSON<HistoryMediaPolicy>("/api/system/history-media"); }
+export function saveHistoryMediaPolicy(policy: HistoryMediaPolicy): Promise<HistoryMediaPolicy> {
+  return requestJSON<HistoryMediaPolicy>("/api/system/history-media", { method: "POST", body: JSON.stringify(policy) });
+}
+
 export interface SystemVersion {
   build_version: string;
   build_type?: BuildType;
