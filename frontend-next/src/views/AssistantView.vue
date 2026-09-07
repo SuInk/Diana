@@ -815,6 +815,17 @@
                 </span>
               </div>
               <div class="field wide">
+                <label for="bot-account-safety-prompt">账号安全审核规则（留空使用内置规则）</label>
+                <textarea
+                  id="bot-account-safety-prompt"
+                  v-model="form.reply_account_safety_audit_prompt"
+                  class="textarea"
+                  rows="5"
+                  placeholder="例如：只拦截可能导致当前平台账号处罚的明确内容；新闻事实中性转述放行。"
+                ></textarea>
+                <span class="hint">填写后替代内置账号风险范围，只影响账号安全结论，不改变准确度、拒答和防循环审核。</span>
+              </div>
+              <div class="field wide">
                 <label for="bot-refusal-strategy">拒答话术</label>
                 <AppSelect
                   id="bot-refusal-strategy"
