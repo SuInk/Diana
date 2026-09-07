@@ -1299,6 +1299,7 @@ func cleanupLocalMediaFilesLater(paths []string, delay time.Duration) <-chan str
 		return done
 	}
 	go func() {
+		defer recoverGoroutinePanic("resolver_media.go:1301")
 		defer close(done)
 		time.Sleep(delay)
 		for _, path := range local {

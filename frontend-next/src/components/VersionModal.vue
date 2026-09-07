@@ -56,7 +56,7 @@
         <p v-if="checkError" class="version-hero-error">{{ checkError }}</p>
       </header>
 
-      <div v-if="operationRunning && releaseSelfUpdate && !downloadReadyForLatest" class="release-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="downloadPercent">
+      <div v-if="operationRunning && releaseSelfUpdate && !downloadReadyForLatest && !installTracking && !status?.restart_required" class="release-progress" role="progressbar" aria-label="Release 下载进度" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="downloadPercent">
         <div class="release-progress-label"><span>{{ downloadPhaseLabel }}</span><strong class="mono">{{ downloadPercent }}%</strong></div>
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>

@@ -171,7 +171,10 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	s.status.UpdatedAt = now
 	s.connMu.Unlock()
 
-	go s.readLoop(conn)
+	go func() {
+		defer recoverGoroutinePanic("onebotReverse.readLoop")
+		s.readLoop(conn)
+	}()
 }
 
 // Send 通过反向 OneBot 连接发送消息。
@@ -382,6 +385,7 @@ func (s *OneBotReverseServer) handleFrame(data []byte) error {
 		ctx = context.Background()
 	}
 	go func() {
+		defer recoverGoroutinePanic("onebot_reverse.go:384")
 		if err := handler(ctx, event); err != nil {
 			s.setStatus(s.Status().Connected, s.Status().SelfID, err.Error())
 		}

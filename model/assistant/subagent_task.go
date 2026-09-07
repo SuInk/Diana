@@ -200,7 +200,11 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 func (r *Runtime) startPluginTaskReservation(reservation pluginTaskReservation) {
 	rootCtx := r.subagentRootContext()
 	for _, item := range reservation.reserved {
-		go r.runPluginTask(rootCtx, item)
+		item := item
+		go func() {
+			defer recoverGoroutinePanic("subagentTask.runPluginTask")
+			r.runPluginTask(rootCtx, item)
+		}()
 	}
 }
 

@@ -113,6 +113,7 @@ func (h *EventStreamHandler) StartWatcher(ctx context.Context, interval time.Dur
 		interval = 2 * time.Second
 	}
 	go func() {
+		defer recoverGoroutinePanic("events.go:115")
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		var lastSignature string

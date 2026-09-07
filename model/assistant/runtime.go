@@ -697,14 +697,30 @@ func (r *Runtime) Start(parent context.Context) error {
 	}
 	r.mu.Unlock()
 	r.setInboundReady(false)
-	go r.prewarmAgentRegistries(ctx, prewarmConfigs)
+	go func() {
+		defer recoverGoroutinePanic("runtime.prewarmAgentRegistries")
+		r.prewarmAgentRegistries(ctx, prewarmConfigs)
+	}()
 
 	go func() {
+		defer recoverGoroutinePanic("runtime.go:702")
 		// 提醒循环、NoneBot 桥接和 OneBot 主连接共享同一个启动生命周期。
-		go r.runReminderLoop(ctx)
-		go r.runRomanceGreetingLoop(ctx)
-		go r.runInboundCoordinator(ctx, leaseOwner, cfg.MaxBotConcurrency, releaseStaleLeases, inboundDone)
-		go r.runMemoryCoordinator(ctx, leaseOwner+"-memory", releaseStaleLeases, memoryDone)
+		go func() {
+			defer recoverGoroutinePanic("runtime.reminderLoop")
+			r.runReminderLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.romanceGreetingLoop")
+			r.runRomanceGreetingLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.inboundCoordinator")
+			r.runInboundCoordinator(ctx, leaseOwner, cfg.MaxBotConcurrency, releaseStaleLeases, inboundDone)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.memoryCoordinator")
+			r.runMemoryCoordinator(ctx, leaseOwner+"-memory", releaseStaleLeases, memoryDone)
+		}()
 		r.bridge.Start(ctx)
 		err := r.channel.Connect(ctx, r.HandleEvent)
 		if err != nil && ctx.Err() == nil {
@@ -1642,6 +1658,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	// 搬到对端。转发走独立短超时，不把目标平台的网络延迟叠到本轮回复上。
 	if relayEvent := event; len(r.messageRelays()) > 0 {
 		go func() {
+			defer recoverGoroutinePanic("runtime.go:1636")
 			relayCtx, cancel := context.WithTimeout(context.Background(), messageRelayTimeout)
 			defer cancel()
 			r.relayInboundEvent(relayCtx, relayEvent)
@@ -1753,6 +1770,7 @@ func (r *Runtime) startReplyWorker(ctx context.Context, event MessageEvent, text
 		return ctx.Err()
 	}
 	go func() {
+		defer recoverGoroutinePanic("runtime.go:1747")
 		// 回复生成放到 goroutine，避免 OneBot read loop 被慢模型调用卡住。
 		defer func() {
 			<-r.sem
@@ -9497,6 +9515,7 @@ func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string
 		delay = 0
 	}
 	go func() {
+		defer recoverGoroutinePanic("runtime.go:9491")
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		<-timer.C
@@ -10001,7 +10020,10 @@ func (r *Runtime) record(record EventRecord) {
 		cancel()
 	}
 	if listener != nil {
-		go listener(record)
+		go func() {
+			defer recoverGoroutinePanic("runtime.eventListener")
+			listener(record)
+		}()
 	}
 }
 
@@ -10360,7 +10382,10 @@ func (r *Runtime) runReminderLoop(ctx context.Context) {
 func (r *Runtime) dispatchDueReminders(ctx context.Context) {
 	for _, item := range r.claimDueReminders(time.Now()) {
 		item := item
-		go r.executeClaimedReminder(ctx, item)
+		go func() {
+			defer recoverGoroutinePanic("runtime.executeClaimedReminder")
+			r.executeClaimedReminder(ctx, item)
+		}()
 	}
 }
 
