@@ -2341,7 +2341,13 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
 	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imageBody)
-	if len(provider.requests) != 3 || !requestHasImageURL(provider.requests[2], wantImageURL) {
+	requestsWithImage := 0
+	for _, request := range provider.requests {
+		if requestHasImageURL(request, wantImageURL) {
+			requestsWithImage++
+		}
+	}
+	if requestsWithImage != 2 {
 		t.Fatalf("requests missing selected image url: %#v", provider.requests)
 	}
 }
