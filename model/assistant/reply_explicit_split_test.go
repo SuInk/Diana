@@ -60,7 +60,7 @@ func TestRoutedRequestRequiresExplicitSplitting(t *testing.T) {
 	for _, natural := range []bool{true, false} {
 		cfg := BotConfig{NaturalReplySplitEnabled: boolPointer(natural), ReplyMaxBubbles: 4}.WithDefaults()
 		got := splitEventChatReply("先给结论\n再补充理由", cfg, MessageEvent{Kind: EventKindGroup, proactiveReply: true})
-		if len(got) != 1 || got[0] != "先给结论 再补充理由" {
+		if len(got) != 1 || got[0] != "先给结论，再补充理由" {
 			t.Fatalf("natural=%v raw newline controlled delivery: %q", natural, got)
 		}
 	}

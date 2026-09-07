@@ -3996,7 +3996,8 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	// 跟评有自己的时间预算：解析慢一点就把整条回复链路的超时吃光，
 	// 跟着上游 ctx 一起被取消的话，跟评会毫无规律地时有时无。
-	ctx, cancel := detachFollowUpContext(ctx)
+	timeout := r.effectiveConfigForEvent(event).WithDefaults().RequestTimeout
+	ctx, cancel := detachFollowUpContext(ctx, timeout)
 	defer cancel()
 
 	// 历史可能在发送之前就缓存过，这里强制重读，否则看不到自己刚发的那条。
@@ -11007,20 +11008,18 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	}
 	// 轮询的 ctx 在这一轮检查结束时就会取消，跟评必须有自己的预算，
 	// 否则仓库拉取慢一点跟评就永远赶不上开口。
-	ctx, cancel := detachFollowUpContext(ctx)
-	defer cancel()
-
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		if ctx.Err() != nil {
-			return
-		}
-		comment := r.followUpCommentWithReference(ctx, followUpKindRepositoryWatch, target, notification, reference)
+		timeout := r.effectiveConfigForEvent(target).WithDefaults().RequestTimeout
+		followCtx, cancel := detachFollowUpContext(ctx, timeout)
+		comment := r.followUpCommentWithReference(followCtx, followUpKindRepositoryWatch, target, notification, reference)
 		if comment == "" {
+			cancel()
 			continue
 		}
-		if err := r.sendFollowUp(ctx, followUpKindRepositoryWatch, target, comment); err != nil {
-			r.recordFollowUpFailure(ctx, followUpKindRepositoryWatch, target, "send", err)
+		if err := r.sendFollowUp(followCtx, followUpKindRepositoryWatch, target, comment); err != nil {
+			r.recordFollowUpFailure(followCtx, followUpKindRepositoryWatch, target, "send", err)
 		}
+		cancel()
 	}
 }
 
@@ -11702,7 +11701,7 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 	}
 	// 收尾的句号在这里就去掉，不留到切分之后：这样返回值、聊天历史、事件详情和群里
 	// 实际收到的是同一份文本。只有分条切出来的中间那几条才需要在切分后再处理一次。
-	return trimChatTrailingPeriod(reply)
+	return reply
 }
 
 // replyBoundaryRunes 是可以安全断句的位置：在这些字符之后收尾，读起来仍然是一句
@@ -11920,10 +11919,40 @@ const (
 func normalizeExplicitReplyLayout(text string) string {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(text, "\n")
-	for index := range lines {
-		lines[index] = strings.TrimSpace(lines[index])
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			kept = append(kept, line)
+		}
 	}
-	return strings.TrimSpace(strings.Join(lines, " "))
+	if len(kept) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString(kept[0])
+	for _, line := range kept[1:] {
+		builder.WriteString(replySoftLineSeparator(builder.String(), line))
+		builder.WriteString(line)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func replySoftLineSeparator(left, right string) string {
+	leftRunes, rightRunes := []rune(strings.TrimSpace(left)), []rune(strings.TrimSpace(right))
+	if len(leftRunes) == 0 || len(rightRunes) == 0 {
+		return ""
+	}
+	last, first := leftRunes[len(leftRunes)-1], rightRunes[0]
+	if strings.ContainsRune(".,;:!?", last) && first <= 127 {
+		return " "
+	}
+	if strings.ContainsRune("，,、；;：:。！？!?…", last) || strings.ContainsRune("，,、；;：:。！？!?…)]}）】》」』”", first) {
+		return ""
+	}
+	if last <= 127 && first <= 127 {
+		return ". "
+	}
+	return "，"
 }
 
 func restoreExplicitReplyLines(text string) string {
@@ -11980,12 +12009,15 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	var out []string
 	for _, segment := range strings.Split(reply, notificationSplitMarker) {
 		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
+		if !limits.PreserveBlankLines {
+			segment = collapseReplyBlankLinesOutsideCode(segment)
+		}
 		if segment == "" {
 			continue
 		}
 		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, trimChatTrailingPeriod(chunk))
+			out = append(out, chunk)
 		}
 	}
 	return out
@@ -12011,7 +12043,7 @@ func splitForwardReply(reply string, limits chatSplitLimits) []string {
 			continue
 		}
 		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, trimChatTrailingPeriod(chunk))
+			out = append(out, chunk)
 		}
 	}
 	return out
@@ -12034,6 +12066,9 @@ type chatSplitLimits struct {
 	// PreserveSoftNewlines 关闭发送层的软换行整理。它跟自然分条开关一起变化，
 	// 也会被用户本轮的「一条发送 / 按内容分条」选择临时覆盖。
 	PreserveSoftNewlines bool
+	// PreserveBlankLines keeps Markdown paragraph spacing on rich-text
+	// transports. Plain-text chat bubbles collapse repeated blank lines.
+	PreserveBlankLines bool
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
 }
@@ -12044,6 +12079,7 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 		// 旧配置中的分条数和分段长度不再限制聊天回复。
 		MarkerOnly:           !natural,
 		PreserveSoftNewlines: !natural,
+		PreserveBlankLines:   PlatformSupportsRichText(cfg.Platform),
 	}
 }
 
@@ -12085,21 +12121,7 @@ func boundaryPositions(runes []rune, match func(rune) bool) []int {
 //   - 英文句点在缩写、域名、版本号里到处都是，v1.0 和 example.com. 分不清，不碰
 //   - 收在引号、括号里的句号属于被引用的内容，不是这条消息自己的句读
 //   - 删完变成空的就不删
-func trimChatTrailingPeriod(text string) string {
-	trimmed := strings.TrimRight(text, " \t")
-	runes := []rune(trimmed)
-	if len(runes) < 2 || runes[len(runes)-1] != '。' {
-		return text
-	}
-	if prev := runes[len(runes)-2]; prev == '…' || prev == '。' {
-		return text
-	}
-	if hasUnclosedQuote(runes) {
-		return text
-	}
-	return string(runes[:len(runes)-1])
-}
-
+//
 // hasUnclosedQuote 判断末尾的标点是不是落在没闭合的引号或括号里。
 func hasUnclosedQuote(runes []rune) bool {
 	depth := 0

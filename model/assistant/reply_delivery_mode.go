@@ -60,7 +60,7 @@ func replyDeliveryLimits(limits chatSplitLimits, mode replyDeliveryMode) chatSpl
 func singleChatReply(reply string, chunkSize int) []string {
 	reply = normalizeExplicitReplyLayout(reply)
 	reply = strings.ReplaceAll(reply, notificationSplitMarker, notificationLineMarker)
-	reply = trimChatTrailingPeriod(strings.TrimSpace(restoreExplicitReplyLines(reply)))
+	reply = strings.TrimSpace(restoreExplicitReplyLines(reply))
 	return chunkTextByLength(reply, chunkSize)
 }
 

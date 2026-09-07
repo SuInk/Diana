@@ -60,6 +60,26 @@ func TestSplitChatReplyKeepsBlankLinesInsideFence(t *testing.T) {
 	}
 }
 
+func TestPlainTextPlatformCollapsesMarkdownParagraphSpacing(t *testing.T) {
+	reply := "第一段" + notificationLineMarker + notificationLineMarker + "第二段"
+	oneBot := splitEventChatReply(reply, BotConfig{Platform: PlatformOneBotV11}.WithDefaults(), MessageEvent{Kind: EventKindGroup})
+	if len(oneBot) != 1 || oneBot[0] != "第一段\n第二段" {
+		t.Fatalf("OneBot blank paragraph = %#v", oneBot)
+	}
+	telegram := splitEventChatReply(reply, BotConfig{Platform: PlatformTelegram}.WithDefaults(), MessageEvent{Kind: EventKindGroup})
+	if len(telegram) != 1 || telegram[0] != "第一段\n\n第二段" {
+		t.Fatalf("Telegram Markdown paragraph = %#v", telegram)
+	}
+}
+
+func TestPlainTextBlankLineCollapseDoesNotChangeCode(t *testing.T) {
+	reply := "说明" + notificationLineMarker + notificationLineMarker + "```go" + notificationLineMarker + "func a() {}" + notificationLineMarker + notificationLineMarker + "func b() {}" + notificationLineMarker + "```"
+	parts := splitEventChatReply(reply, BotConfig{Platform: PlatformOneBotV11}.WithDefaults(), MessageEvent{Kind: EventKindGroup})
+	if len(parts) != 1 || strings.Contains(parts[0], "说明\n\n```") || !strings.Contains(parts[0], "}\n\nfunc b") {
+		t.Fatalf("plain-text code layout = %#v", parts)
+	}
+}
+
 // 超长代码块必须拆成几个各自完整的围栏，而不是硬切出半个。
 func TestSplitFencedBlockSealsEveryPiece(t *testing.T) {
 	body := strings.Repeat("line of code here\n", 40)
