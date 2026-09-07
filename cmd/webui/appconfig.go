@@ -60,6 +60,9 @@ type storageConfig struct {
 	// days; -1 disables expiry. Zero MB disables the cap.
 	DownloadCacheRetentionDays int   `yaml:"download_cache_retention_days"`
 	DownloadCacheMaxMB         int64 `yaml:"download_cache_max_mb"`
+	// 历史原件默认不自动删除；显式设置后按最后使用时间和容量淘汰。
+	HistoryMediaRetentionDays int   `yaml:"history_media_retention_days"`
+	HistoryMediaMaxMB         int64 `yaml:"history_media_max_mb"`
 	// LogPath 为空表示只写标准输出。
 	LogPath string `yaml:"log_path"`
 	// MediaDir 为空表示放在数据库同级目录。
@@ -170,6 +173,9 @@ func loadAppConfig(path string) (appConfig, error) {
 	}
 	if cfg.Storage.DownloadCacheRetentionDays < -1 || cfg.Storage.DownloadCacheRetentionDays > 36500 {
 		return cfg, fmt.Errorf("storage download_cache_retention_days must be between -1 and 36500")
+	}
+	if cfg.Storage.HistoryMediaRetentionDays < -1 || cfg.Storage.HistoryMediaRetentionDays > 36500 || cfg.Storage.HistoryMediaMaxMB < 0 || cfg.Storage.HistoryMediaMaxMB > 1<<20 {
+		return cfg, fmt.Errorf("storage history media retention days or capacity is invalid")
 	}
 	if cfg.Storage.DownloadCacheMaxMB < 0 || cfg.Storage.DownloadCacheMaxMB > 1<<20 {
 		return cfg, fmt.Errorf("storage download_cache_max_mb must be between 0 and 1048576")

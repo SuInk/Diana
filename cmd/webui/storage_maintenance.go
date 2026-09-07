@@ -29,6 +29,11 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 			if err := assistant.CleanupMediaDownloadCache(); err != nil {
 				log.Printf("storage maintenance: download cache cleanup: %v", err)
 			}
+			if result, err := assistant.CleanupHistoryMedia(); err != nil {
+				log.Printf("storage maintenance: history media cleanup: %v", err)
+			} else if result.DeletedFiles > 0 {
+				log.Printf("storage maintenance: deleted %d history media files (%d bytes)", result.DeletedFiles, result.DeletedBytes)
+			}
 			now := time.Now()
 			runCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
 			count, err := store.PruneLogs(runCtx,
