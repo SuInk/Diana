@@ -277,3 +277,27 @@ func TestSQLiteStorePersistsAppLogs(t *testing.T) {
 		t.Fatalf("operation logs = %#v", operations)
 	}
 }
+
+func TestSQLiteStoreCreatesEventPageQueryIndexes(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	for _, name := range []string{
+		"idx_app_logs_action_created_at",
+		"idx_inbound_events_time",
+	} {
+		var count int
+		if err := store.db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`,
+			name,
+		).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("index %q count = %d, want 1", name, count)
+		}
+	}
+}
