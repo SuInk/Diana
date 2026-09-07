@@ -831,6 +831,7 @@ func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginReq
 	for index, item := range plugins {
 		wg.Add(1)
 		go func(index int, item runnable) {
+			defer recoverGoroutinePanic("plugins.go:833")
 			defer wg.Done()
 			pluginReq := req
 			pluginReq.Settings = item.settings

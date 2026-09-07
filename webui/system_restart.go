@@ -46,6 +46,7 @@ func (h *RestartHandler) restart(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 	// 延迟触发，先让本次响应完整送达客户端。
 	go func() {
+		defer recoverGoroutinePanic("system_restart.go:48")
 		time.Sleep(500 * time.Millisecond)
 		h.trigger()
 	}()

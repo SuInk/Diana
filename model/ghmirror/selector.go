@@ -192,6 +192,7 @@ func (s *Selector) probeReachability(ctx context.Context, probeURL string) []Pro
 	for i, candidate := range candidates {
 		wg.Add(1)
 		go func(index int, mirror Mirror) {
+			defer recoverGoroutinePanic("selector.go:194")
 			defer wg.Done()
 			result := ProbeResult{Name: mirror.Name, BaseURL: mirror.BaseURL, Direct: mirror.BaseURL == ""}
 			elapsed, err := s.measureLatency(ctx, Rewrite(mirror.BaseURL, probeURL))

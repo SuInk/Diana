@@ -221,6 +221,7 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 	}
 	r.relationshipEvalWG.Add(1)
 	go func() {
+		defer recoverGoroutinePanic("relationship_evaluator.go:223")
 		defer r.relationshipEvalWG.Done()
 		defer close(done)
 		defer func() { <-r.relationshipEvalSem }()
@@ -247,6 +248,7 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 func (r *Runtime) waitForRelationshipEvaluations(ctx context.Context) bool {
 	done := make(chan struct{})
 	go func() {
+		defer recoverGoroutinePanic("relationship_evaluator.go:249")
 		r.relationshipEvalWG.Wait()
 		close(done)
 	}()

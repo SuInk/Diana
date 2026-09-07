@@ -102,6 +102,7 @@ func loadLLMImageURLGroupsDetailed(ctx context.Context, imageURLs []string) ([][
 	workers.Add(workerCount)
 	for worker := 0; worker < workerCount; worker++ {
 		go func(offset int) {
+			defer recoverGoroutinePanic("llm_images.go:104")
 			defer workers.Done()
 			for index := offset; index < len(inputs); index += workerCount {
 				imageURL := inputs[index]

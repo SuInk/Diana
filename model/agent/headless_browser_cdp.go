@@ -316,9 +316,15 @@ func launchSandboxedChrome(ctx context.Context, executable, root, profileDir, ca
 	}
 
 	wsURL := make(chan string, 1)
-	go scanChromeDiagnostics(stderr, diagnostics, wsURL)
+	go func() {
+		defer recoverGoroutinePanic("headless_browser_cdp.scanChromeDiagnostics")
+		scanChromeDiagnostics(stderr, diagnostics, wsURL)
+	}()
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		defer recoverGoroutinePanic("headless_browser_cdp.go:321")
+		done <- cmd.Wait()
+	}()
 
 	timer := time.NewTimer(browserStartupTimeout)
 	defer timer.Stop()
@@ -489,6 +495,7 @@ func handlePausedBrowserDocument(ctx context.Context, tracker *browserActivityTr
 	requestID := event.RequestID
 	rawURL := event.Request.URL
 	go func() {
+		defer recoverGoroutinePanic("headless_browser_cdp.go:491")
 		browserContext := chromedp.FromContext(ctx)
 		if browserContext == nil || browserContext.Target == nil {
 			return
