@@ -70,6 +70,49 @@ func TestDirectReplyTopicFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDirectReplyTopicCarriesQuotedMessageAsCurrentRequest(t *testing.T) {
+	var captured map[string]any
+	p := &topicTestProvider{
+		result: `{"relation":"correction","confidence":0.99}`,
+		onTopic: func(req llm.GenerateRequest) {
+			if err := json.Unmarshal([]byte(req.Messages[1].Content), &captured); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "winter", "mba自带的充电器是45w的")
+	follow := MessageEvent{
+		Kind: EventKindGroup, GroupID: root.GroupID, UserID: "winter", MessageID: "follow",
+		Segments: []MessageSegment{
+			{Type: "reply", Data: map[string]string{"id": "quoted"}},
+			{Type: "at", Data: map[string]string{"qq": "42"}},
+		},
+		Quoted: &QuotedMessage{
+			MessageID: "quoted", UserID: "milk", SenderName: "MilkSU",
+			Segments: []MessageSegment{
+				{Type: "at", Data: map[string]string{"qq": "winter"}},
+				{Type: "text", Data: map[string]string{"text": "按80w算吧"}},
+			},
+		},
+	}
+	if got := r.classifyDirectReplyTopic(context.Background(), root, nil, follow, ""); got != "correction" {
+		t.Fatalf("relation=%q", got)
+	}
+	quoted, ok := captured["new_message_quoted"].(map[string]any)
+	if !ok {
+		t.Fatalf("quoted context missing: %#v", captured)
+	}
+	quotedText, _ := quoted["text"].(string)
+	if !strings.Contains(quotedText, "按80w算吧") || quoted["sender"] != "MilkSU" {
+		t.Fatalf("quoted context=%#v", quoted)
+	}
+	mentions, _ := quoted["mentioned_user_ids"].([]any)
+	if len(mentions) != 1 || mentions[0] != "winter" {
+		t.Fatalf("quoted mentions=%#v", mentions)
+	}
+}
+
 func TestDirectReplyRepeatReusesPendingGeneration(t *testing.T) {
 	for _, proactive := range []bool{false, true} {
 		t.Run(map[bool]string{false: "direct", true: "proactive"}[proactive], func(t *testing.T) {
