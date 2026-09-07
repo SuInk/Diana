@@ -36,9 +36,9 @@ func TestCasualChatUsesMarkersForIndependentUtterances(t *testing.T) {
 	if len(got) != len(parts) || strings.Join(got, "\n") != strings.Join(parts, "\n") {
 		t.Fatalf("explicit utterances were joined or altered: %q", got)
 	}
-	list := "1. 检查连接\n2. 查看日志"
+	list := "1. 检查连接" + notificationLineMarker + "2. 查看日志"
 	got = splitEventChatReply(list, BotConfig{}.WithDefaults(), event)
-	if len(got) != 1 || got[0] != list {
+	if len(got) != 1 || got[0] != "1. 检查连接\n2. 查看日志" {
 		t.Fatalf("list layout was flattened or split: %q", got)
 	}
 }
@@ -56,25 +56,21 @@ func TestProactiveRepliesHonorExplicitMarkers(t *testing.T) {
 	}
 }
 
-func TestRoutedRequestUsesConfiguredNaturalSplitting(t *testing.T) {
+func TestRoutedRequestRequiresExplicitSplitting(t *testing.T) {
 	for _, natural := range []bool{true, false} {
 		cfg := BotConfig{NaturalReplySplitEnabled: boolPointer(natural), ReplyMaxBubbles: 4}.WithDefaults()
 		got := splitEventChatReply("先给结论\n再补充理由", cfg, MessageEvent{Kind: EventKindGroup, proactiveReply: true})
-		want := 1
-		if natural {
-			want = 2
-		}
-		if len(got) != want {
-			t.Fatalf("natural=%v splits=%q, want %d", natural, got, want)
+		if len(got) != 1 || got[0] != "先给结论 再补充理由" {
+			t.Fatalf("natural=%v raw newline controlled delivery: %q", natural, got)
 		}
 	}
 }
 
-func TestCasualReplyPreservesMarkersInsideCodeFences(t *testing.T) {
-	text := "说明" + notificationSplitMarker + "\n```txt\nliteral " + notificationSplitMarker + "\n```\n" + notificationSplitMarker + "结尾"
+func TestCasualReplyUsesLineMarkersInsideCodeFences(t *testing.T) {
+	text := "说明" + notificationSplitMarker + "```txt" + notificationLineMarker + "literal" + notificationLineMarker + "```" + notificationSplitMarker + "结尾"
 	got := splitEventChatReply(text, BotConfig{}.WithDefaults(), MessageEvent{Kind: EventKindGroup, chatInReply: true})
-	if len(got) != 3 || !strings.Contains(got[1], "literal "+notificationSplitMarker) {
-		t.Fatalf("code fence marker was consumed: %q", got)
+	if len(got) != 3 || got[1] != "```txt\nliteral\n```" {
+		t.Fatalf("code layout marker was not restored: %q", got)
 	}
 }
 
@@ -89,7 +85,7 @@ func TestCasualPacingPromptDoesNotApplyToRoutedRequests(t *testing.T) {
 		if !strings.Contains(prompt, proactiveReplyToolResultPrompt) {
 			t.Fatal("tool-result truthfulness rule was lost")
 		}
-		if !strings.Contains(prompt, "可以使用 "+notificationSplitMarker) || strings.Contains(prompt, "不使用分条标记") || strings.Contains(prompt, "最终只发送一条") {
+		if !strings.Contains(prompt, notificationSplitMarker) || !strings.Contains(prompt, notificationLineMarker) || strings.Contains(prompt, "不使用分条标记") || strings.Contains(prompt, "最终只发送一条") {
 			t.Fatalf("casual=%v prompt still suppresses explicit splitting", casual)
 		}
 	}

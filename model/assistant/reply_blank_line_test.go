@@ -76,7 +76,7 @@ func TestStructuredReplyRespectsConfiguredChunkSize(t *testing.T) {
 	}
 }
 
-// [diana-br] 是模型显式要求的分条，任何情况下都保留；收空行不能把它一起吃掉。
+// [diana-msg] 是模型显式要求的分条，任何情况下都保留；收空行不能把它一起吃掉。
 func TestExplicitBreakStillSplitsReply(t *testing.T) {
 	reply := "1. 甲\n2. 乙\n3. 丙\n" + notificationSplitMarker + "\n对了，你带伞了吗。"
 	parts := splitReply(reply, 900)

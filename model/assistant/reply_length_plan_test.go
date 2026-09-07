@@ -22,9 +22,9 @@ func TestReplyLengthLimitIsPerMessageOnAllPlatforms(t *testing.T) {
 
 func TestReplyLengthSplitsNaturallyWithoutCompression(t *testing.T) {
 	for _, original := range []string{
-		strings.Repeat("甲", 40) + "。" + strings.Repeat("乙", 40) + "。" + strings.Repeat("丙", 40),
-		"## 计划\n### 第一阶段\n- " + strings.Repeat("甲", 50) + "\n### 第二阶段\n- " + strings.Repeat("乙", 50),
-		"```text\n" + strings.Repeat("a", 50) + "\n```\n```text\n" + strings.Repeat("b", 50) + "\n```",
+		strings.Repeat("甲", 40) + notificationSplitMarker + strings.Repeat("乙", 40),
+		"## 第一阶段" + notificationLineMarker + "- " + strings.Repeat("甲", 50) + notificationSplitMarker + "## 第二阶段" + notificationLineMarker + "- " + strings.Repeat("乙", 50),
+		"```text" + notificationLineMarker + strings.Repeat("a", 50) + notificationLineMarker + "```" + notificationSplitMarker + "```text" + notificationLineMarker + strings.Repeat("b", 50) + notificationLineMarker + "```",
 	} {
 		p := &compressionTestProvider{err: errors.New("must not compress")}
 		cfg := BotConfig{MaxReplyChars: 90, MarkdownToPlain: boolPointer(false)}
@@ -36,11 +36,6 @@ func TestReplyLengthSplitsNaturallyWithoutCompression(t *testing.T) {
 		parts := splitChatReply(got, chatSplitLimits{})
 		if len(parts) != 2 || rt.replyLengthIssue(cfg, MessageEvent{}, got) != "" {
 			t.Fatalf("bad grouping: %q", parts)
-		}
-		for _, part := range parts {
-			if isDocumentSectionLabel(part) && !strings.Contains(part, "\n") {
-				t.Fatal("orphan heading")
-			}
 		}
 		if compressionCandidateIssue(original, got, 0) != "" {
 			t.Fatal("natural grouping changed protected content")

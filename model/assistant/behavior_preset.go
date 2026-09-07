@@ -157,11 +157,9 @@ func knownReplyStyle(raw string) bool {
 // (╹◡╹) 这类字符拼的表情，模型不会认为它管得着 😂。
 const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类彩色表情符号），一个都不要，包括用来表达情绪反应或缓和语气的场合。需要表达情绪就用文字说。"
 
-// replyBlankLineRule 同样对所有风格生效。模型按训练里的 Markdown 习惯用空行做
-// 段落间距，而运行时把空行当分条信号——同一个符号两边理解不一样，于是空行落在
-// 哪儿全看模型的排版习惯，投递出来的分条位置就显得莫名其妙。这里从源头上让它
-// 别输出空行；真要分条有 [diana-br]，语义明确。
-const replyBlankLineRule = "普通聊天不逐句换行，也不留纯排版用的空行；需要另起发言时按分条规则处理。清单和步骤按需使用单个换行，代码及引用原文保留格式。不要仅为了排版把一轮短回复拆成多个段落。"
+// replyBlankLineRule 同样对所有风格生效。真实 CR/LF 不再承载输出布局语义：
+// 气泡边界和气泡内换行分别使用两个不会混淆的控制标记。
+const replyBlankLineRule = "回复正文中不得输出真实换行符（CR 或 LF），也不要用空行排版。开始下一条消息写 " + notificationSplitMarker + "；同一条消息内部需要换行写 " + notificationLineMarker + "。除这两个标记外，正文连续输出。"
 
 const replyCompactPacingRule = "聊天节奏：尽量少发几条，按内容的完整性和自然停顿决定在哪里分条，不预设条数。相关的回应和解释放在一起，独立补充或话题转折可以另起发言，不逐句拆分，也不为了少发而把长篇挤成一条。这是表达偏好，不是硬性条数或长度限制；用户明确要详细说明、多个问题或完整步骤时按需答全。精简时先删掉重复安慰、泛泛建议和不必要的小结，不省略必要内容，也不为了多发几条添话。"
 
@@ -169,29 +167,26 @@ const replyConversationalIntentRule = "先判断对方是在聊天还是求助�
 
 // replySegmentationRule 同样对所有风格生效，而且必须是内置规则。
 //
-// splitReply 只认 [diana-br]：模型不写这个标记，回复就一定是一整条。而教它写标记的
+// splitReply 只认 [diana-msg]：模型不写这个标记，回复就一定是一整条。而教它写标记的
 // 话此前只存在于两个地方——群友风格的风格提示，和用户可编辑的「纯文本规则」文本框。
 // 前者只对一种风格生效，后者是一份可以被改掉、关掉、或者停留在旧版默认值上的配置：
 // 早期版本的默认文案写的是「都必须放在同一条消息里」，存过一次就一直在提示词里和
 // 分条唱反调。一个投递机制的开关不该挂在用户文案上，所以挪到这里。
 //
-// 措辞要和 splitChatReply 认的边界一字不差地对上：换行会分条，清单、步骤、代码
-// 整块发。两边理解不一样的话，分条位置就又变回看模型的排版习惯了——「空行分条」
-// 当年就是这么被删掉的。
+// 措辞要和 splitChatReply 认的边界一字不差地对上：真实换行无效，两个显式标记
+// 分别表达消息边界和消息内部排版。
 //
 // 规则写得具体，而且给一个真实例子。运行时不再自己推断句子边界之后，一条回复分不
 // 分得开只剩「模型肯不肯换行」这一个杠杆；抽象地说「按意群分段」模型照样会写成一
 // 整段，示例比形容词管用——各档的语气也都是靠示例教会的。
-const replySegmentationRule = "当前开启自然分条：意群边界换行会变成另一条消息，所以只有确实要另起一次发言时才换行，不要每出现一个意群就换行。也可以写 " + notificationSplitMarker + " 明确另起消息，但不要为使用标记而拆分。编号或项目符号清单、一组步骤、代码和引用原文保留必要换行并整块发出去，不在每个列表项前写 " + notificationSplitMarker + "。"
+const replySegmentationRule = "当前开启自然分条：需要另起一次独立发言时写 " + notificationSplitMarker + "，同一条消息里的清单、步骤、代码或引用需要换行时写 " + notificationLineMarker + "。真实换行符禁止输出，发送层只执行这两个标记。不要逐句拆消息；一个完整意群放在同一条。示例：结论" + notificationSplitMarker + "配置如下：" + notificationLineMarker + "1. 第一项" + notificationLineMarker + "2. 第二项" + notificationSplitMarker + "最后补充。"
 
-const replyDocumentDeliveryRule = "详细长文的消息组织：先分清主要部分，再写正文。不同的主要部分之间写 " + notificationSplitMarker + "；每个主要部分内部的标题、段落、列表和代码属于同一条消息，不再逐小节分条。多天详细行程按‘必要的开场说明 / 第一天完整行程 / 第二天完整行程 / 其余各天 / 共用交通与准备事项’组织：每天的上午、下午、晚上和当天交通写在该天同一条里，不逐时段发送，也不把整份多天行程塞进一条。开场和共用事项没有必要就省略，不为凑条数添加内容。方案或教程同样按能独立阅读的主要阶段分组，标题必须带着正文。格式示例（只示范消息边界，不是让你缩写内容）：出行假设" + notificationSplitMarker + "## 第一天\n### 上午\n当天安排与交通\n### 下午和晚上\n当天安排与交通" + notificationSplitMarker + "## 第二天\n当天完整安排与交通" + notificationSplitMarker + "## 共用准备\n预约、证件等必要事项。只有详细长文采用这种分组，简短问答和闲聊仍按自然节奏回答。"
+const replyDocumentDeliveryRule = "详细长文的消息组织：先分清主要部分，再写正文。不同的主要部分之间写 " + notificationSplitMarker + "；每个主要部分内部的标题、段落、列表和代码使用 " + notificationLineMarker + " 排版，不再逐小节分条。多天详细行程按‘必要的开场说明 / 第一天完整行程 / 第二天完整行程 / 其余各天 / 共用交通与准备事项’组织：每天的上午、下午、晚上和当天交通写在该天同一条里，不逐时段发送，也不把整份多天行程塞进一条。开场和共用事项没有必要就省略，不为凑条数添加内容。方案或教程同样按能独立阅读的主要阶段分组，标题必须带着正文。格式示例：出行假设" + notificationSplitMarker + "## 第一天" + notificationLineMarker + "### 上午" + notificationLineMarker + "当天安排与交通" + notificationLineMarker + "### 下午和晚上" + notificationLineMarker + "当天安排与交通" + notificationSplitMarker + "## 第二天" + notificationLineMarker + "当天完整安排与交通" + notificationSplitMarker + "## 共用准备" + notificationLineMarker + "预约、证件等必要事项。只有详细长文采用这种分组，简短问答和闲聊仍按自然节奏回答。"
 
 // replySegmentationMarkerOnlyRule 是关掉自然分条之后的版本。
 //
-// 两边必须说同一件事：关掉之后换行不再分条，提示词却还写着「换行就会分成两三条」，
-// 模型按它排的版就全落空了——分条位置又变回看模型的排版习惯，正是这条链路翻过车的
-// 那个形状。所以这一档只教标记，并明说换行只是排版。
-const replySegmentationMarkerOnlyRule = "要把回复分成几条消息发，只能在边界写 " + notificationSplitMarker + "，换行不会分条、只是同一条消息里的排版。普通聊天的一条消息写成连续的一段，不要每说一句就换行，也不要用换行模拟几条消息的聊天节奏；确实是几次独立发言时，在它们之间写 " + notificationSplitMarker + "。同一段论述不要机械拆碎。编号或项目符号列表、一组步骤、代码和报错原文保留必要的换行，作为一个整体放在同一条消息里，不要在每个列表项前写 " + notificationSplitMarker + "。"
+// 关闭自然分条时同样只接受显式协议，但默认把内容组织成一条消息。
+const replySegmentationMarkerOnlyRule = "默认只发送一条消息；确实必须另起消息时写 " + notificationSplitMarker + "。同一条消息内部的清单、步骤、代码和引用需要换行时写 " + notificationLineMarker + "。正文不得输出真实换行符，发送层不会把真实换行当作任何布局指令。"
 
 // replyProportionRule 同样对所有风格生效。联网查证过的回答特别容易写成小评测:
 // 背景、口碑、优缺点、结论、末尾再罗列参考链接——群里随口一句「好看吗」换来

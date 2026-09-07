@@ -46,6 +46,7 @@ func liveLLMClient(t *testing.T) llm.LLMClient {
 		APIKey:   apiKey,
 		BaseURL:  strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_BASE_URL")),
 		Model:    model,
+		APIStyle: llm.APIStyle(strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_API_STYLE"))),
 		Timeout:  90 * time.Second,
 	})
 	if err != nil {

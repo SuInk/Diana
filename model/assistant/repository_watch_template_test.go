@@ -74,7 +74,7 @@ func TestRepositoryWatchTemplatesFallBackToDefaultsWhenBlank(t *testing.T) {
 	}
 }
 
-// 分条符仍然可用：自定义模板里写一行 [diana-br] 就从那里分成下一条消息。
+// 分条符仍然可用：自定义模板里写一行 [diana-msg] 就从那里分成下一条消息。
 func TestRepositoryWatchTemplateKeepsExplicitSplitMarker(t *testing.T) {
 	message := composeRepositoryWatchMessageWithTemplate(
 		"【{repository}】\n"+notificationSplitMarker+"\n{body}", "SuInk/Diana", "明细")
