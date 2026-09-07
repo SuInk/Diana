@@ -11980,6 +11980,9 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	var out []string
 	for _, segment := range strings.Split(reply, notificationSplitMarker) {
 		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
+		if !limits.PreserveBlankLines {
+			segment = collapseReplyBlankLinesOutsideCode(segment)
+		}
 		if segment == "" {
 			continue
 		}
@@ -12034,6 +12037,9 @@ type chatSplitLimits struct {
 	// PreserveSoftNewlines 关闭发送层的软换行整理。它跟自然分条开关一起变化，
 	// 也会被用户本轮的「一条发送 / 按内容分条」选择临时覆盖。
 	PreserveSoftNewlines bool
+	// PreserveBlankLines keeps Markdown paragraph spacing on rich-text
+	// transports. Plain-text chat bubbles collapse repeated blank lines.
+	PreserveBlankLines bool
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
 }
@@ -12044,6 +12050,7 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 		// 旧配置中的分条数和分段长度不再限制聊天回复。
 		MarkerOnly:           !natural,
 		PreserveSoftNewlines: !natural,
+		PreserveBlankLines:   PlatformSupportsRichText(cfg.Platform),
 	}
 }
 

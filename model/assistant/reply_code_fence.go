@@ -92,6 +92,17 @@ func restoreFencedCodeBlocks(segments, blocks []string, chunkSize int) []string 
 	return out
 }
 
+// collapseReplyBlankLinesOutsideCode adapts Markdown paragraph spacing to
+// plain-text chat bubbles while leaving code samples byte-for-byte intact.
+func collapseReplyBlankLinesOutsideCode(text string) string {
+	masked, blocks := maskFencedCodeBlocks(text)
+	masked = collapseBlankLines(masked)
+	for index, block := range blocks {
+		masked = strings.ReplaceAll(masked, codeFencePlaceholder(index), block)
+	}
+	return masked
+}
+
 // expandCodeFences 展开一条消息里的占位符。围栏本身放得下就跟正文待在同一条；
 // 放不下的拆成几条，每条都是自成一体的完整围栏，并且和正文分开发。
 func expandCodeFences(segment string, blocks []string, chunkSize int) []string {
