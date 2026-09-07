@@ -2897,7 +2897,7 @@ const promptDefaults = {
   // 不在这里重复——这份副本曾经停在一版「都必须放在同一条消息里」的旧文案上，
   // 点一次「恢复内置提示词」就把分条按死了。
   prompt_plaintext_rules_text:
-    "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。单条消息内部用单个换行排版。",
+    "OneBot v11 消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。消息边界和单条内部换行由运行时的专用标记控制。",
   prompt_time_template: "当前时间：{datetime} {weekday}",
   prompt_group_sender_template:
     "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。",

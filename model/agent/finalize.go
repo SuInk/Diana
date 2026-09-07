@@ -17,12 +17,19 @@ const finalizeToolName = "agent.finalize"
 // 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。
 var errEmptyFinalize = errors.New("empty_finalize: 模型收尾时未提供任何正文")
 
+func finalizeContentLayoutIssue(content string) string {
+	if strings.ContainsAny(content, "\r\n") {
+		return "agent.finalize 的 content 含有真实 CR/LF"
+	}
+	return ""
+}
+
 // finalizeToolDefinition 构造本轮的结构化收尾工具。content 必填：部分供应商在调用
 // 工具的同一轮里不会输出普通文本，正文若允许留在信封之外，就会出现完全为空的
 // 收尾（见 errEmptyFinalize）。Runner 解码时仍接受写在调用之外的正文作为兼容。
 func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.ToolDefinition {
 	properties := map[string]any{
-		"content": toolStringParam("给用户看的最终自然语言回复，必填且不能为空。不要写成 JSON，也不要出现内部协议字段。"),
+		"content": toolStringParam("给用户看的最终自然语言回复，必填且不能为空。正文禁止真实 CR/LF；下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]。不要写成 JSON。"),
 	}
 	required := []string{"content"}
 	if imagePending {
@@ -39,7 +46,7 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.
 	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
-		Description: "结束本轮并提交最终答复。不再需要其他工具时调用它，不要把最终回复写成 JSON 信封。",
+		Description: "结束本轮并提交最终答复。不再需要其他工具时调用它。content 禁止真实换行，只能用 [diana-msg] 表示下一条消息、[diana-line] 表示当前消息内换行。",
 		Parameters:  toolObjectSchema(required, properties),
 		// 畸形的收尾是唯一一种必然要花掉一整轮修复的协议错误，值得在解码层约束。
 		Strict: true,

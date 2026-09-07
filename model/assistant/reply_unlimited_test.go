@@ -25,7 +25,7 @@ func TestForwardThresholdsDefaultToUnlimitedAndCanBeCleared(t *testing.T) {
 func TestUnlimitedChatIgnoresLegacyLengthAndBubbleSettings(t *testing.T) {
 	cfg := BotConfig{ReplyMaxBubbles: 2, DirectReplyChunkSize: 10}.WithDefaults()
 	long := strings.Repeat("字", 5000)
-	reply := strings.Repeat("一句回应\n", 10) + long
+	reply := strings.Repeat("一句回应"+notificationSplitMarker, 10) + long
 	limits := chatSplitLimitsFrom(cfg)
 	for name, split := range map[string]func(string, chatSplitLimits) []string{
 		"chat": splitChatReply, "forward": splitForwardReply,
@@ -40,8 +40,8 @@ func TestUnlimitedChatIgnoresLegacyLengthAndBubbleSettings(t *testing.T) {
 	if shouldUseForwardReply(reply, splitChatReply(reply, limits), 0, 0) {
 		t.Fatal("unset thresholds triggered forwarding")
 	}
-	code := "```text\n" + long + "\n```"
-	if got := splitChatReply(code, limits); len(got) != 1 || got[0] != code {
+	code := "```text" + notificationLineMarker + long + notificationLineMarker + "```"
+	if got := splitChatReply(code, limits); len(got) != 1 || got[0] != "```text\n"+long+"\n```" {
 		t.Fatal("unlimited fenced code block was split or altered")
 	}
 }

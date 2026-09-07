@@ -55,13 +55,13 @@ func TestRunnerPreservesSupportedClaimWhenAnotherIsUnconfirmed(t *testing.T) {
 
 func TestRunnerUnwrapsReplyCompatibilityJSONAfterSearch(t *testing.T) {
 	tool := &recordingSearchTool{output: "湖南和江西米粉资料"}
-	completeReply := "简单说：湖南米粉更突出汤和码子，江西米粉更突出粉本身和拌炒风味。\n" +
-		"1. 湖南常见汤粉、盖码粉。\n" +
-		"2. 江西常见拌粉、炒粉和汤粉。\n" +
+	completeReply := "简单说：湖南米粉更突出汤和码子，江西米粉更突出粉本身和拌炒风味。[diana-line]" +
+		"1. 湖南常见汤粉、盖码粉。[diana-line]" +
+		"2. 江西常见拌粉、炒粉和汤粉。[diana-line]" +
 		"3. 两省内部都有很多地方流派，不能用单一口味概括。"
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"web_search.search","input":{"query":"湖南米粉 江西米粉 区别"}}`,
-		`{"reply":"` + strings.ReplaceAll(completeReply, "\n", `\n`) + `"}`,
+		`{"reply":"` + completeReply + `"}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
 	if err != nil {

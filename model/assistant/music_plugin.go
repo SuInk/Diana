@@ -441,7 +441,7 @@ func musicVoiceReply(cfg musicConfig, item song, record string) string {
 	if title == "" {
 		return record
 	}
-	return "🎵 " + title + "\n" + record
+	return "🎵 " + title + notificationSplitMarker + record
 }
 
 // musicVoiceUnavailableReason 返回不发语音的原因，可以发就返回空串。

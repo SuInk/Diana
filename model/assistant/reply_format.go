@@ -20,16 +20,24 @@ var (
 	mdHeadingPattern    = regexp.MustCompile(`(?m)^\s*#{1,6}\s+`)
 	mdLinkPattern       = regexp.MustCompile(`!?\[([^\]\n]*)\]\(([^)\n]+)\)`)
 	// dianaMarkerLabelPattern 认出 Diana 自己的方括号标记，它们不参与 Markdown 降级。
-	dianaMarkerLabelPattern = regexp.MustCompile(`^(?:diana-at|diana-reply|回复):|^diana-br$`)
+	dianaMarkerLabelPattern = regexp.MustCompile(`^(?:diana-at|diana-reply|回复):|^diana-(?:msg|line)$`)
 	mdBulletPattern         = regexp.MustCompile(`(?m)^(\s*)[-*+]\s+`)
 	mdQuotePattern          = regexp.MustCompile(`(?m)^\s*>\s?`)
 	mdRulePattern           = regexp.MustCompile(`(?m)^\s*(?:-{3,}|\*{3,}|_{3,})\s*$\n?`)
 	mdExtraBlankPattern     = regexp.MustCompile(`\n{3,}`)
 )
 
-// markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 [diana-br] 分段标记。
+// markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 [diana-msg] 分段标记。
 func markdownToPlain(text string) string {
+	explicitLayout := strings.Contains(text, notificationSplitMarker) || strings.Contains(text, notificationLineMarker)
+	if explicitLayout {
+		text = restoreExplicitReplyLines(text)
+		text = strings.ReplaceAll(text, notificationSplitMarker, "\n"+notificationSplitMarker+"\n")
+	}
 	if !strings.ContainsAny(text, "*#`[]_->") {
+		if explicitLayout {
+			return encodeExplicitMarkdownLayout(text)
+		}
 		return text
 	}
 	// 分隔线要在列表符号之前处理，避免 "---" 被当成列表项。
@@ -57,6 +65,21 @@ func markdownToPlain(text string) string {
 	text = mdBulletPattern.ReplaceAllString(text, "$1• ")
 	text = mdQuotePattern.ReplaceAllString(text, "")
 	text = mdExtraBlankPattern.ReplaceAllString(text, "\n\n")
+	if explicitLayout {
+		text = encodeExplicitMarkdownLayout(text)
+	}
+	return text
+}
+
+func encodeExplicitMarkdownLayout(text string) string {
+	text = strings.ReplaceAll(text, "\n", notificationLineMarker)
+	text = strings.ReplaceAll(text, notificationLineMarker+notificationSplitMarker+notificationLineMarker, notificationSplitMarker)
+	for strings.HasPrefix(text, notificationLineMarker) {
+		text = strings.TrimPrefix(text, notificationLineMarker)
+	}
+	for strings.HasSuffix(text, notificationLineMarker) {
+		text = strings.TrimSuffix(text, notificationLineMarker)
+	}
 	return text
 }
 
