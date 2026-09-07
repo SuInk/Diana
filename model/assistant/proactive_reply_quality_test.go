@@ -316,6 +316,40 @@ func TestAuditReplyAccountSafetyIsOptInForDirectReplies(t *testing.T) {
 	}
 }
 
+func TestGroupAccountSafetyOverrideControlsProactiveAndDirectReplies(t *testing.T) {
+	runtime := NewRuntime(BotConfig{ReplyAccountSafetyAuditEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"off": {GroupID: "off", ReplyAccountSafetyAuditEnabled: boolPointer(false)},
+		"on":  {GroupID: "on", ReplyAccountSafetyAuditEnabled: boolPointer(true)},
+	}})
+	for _, test := range []struct {
+		group           string
+		proactive, want bool
+	}{
+		{group: "off", proactive: true, want: false}, {group: "off", proactive: false, want: false},
+		{group: "on", proactive: true, want: true}, {group: "on", proactive: false, want: true},
+		{group: "inherit", proactive: true, want: true}, {group: "inherit", proactive: false, want: false},
+	} {
+		event := MessageEvent{Kind: EventKindGroup, GroupID: test.group, UserID: "u"}
+		need := runtime.replyAuditNeed(event, "普通消息", runtime.effectiveConfigForEvent(event), test.proactive)
+		if need.AccountSafety != test.want {
+			t.Fatalf("group=%s proactive=%v account safety=%v, want %v", test.group, test.proactive, need.AccountSafety, test.want)
+		}
+	}
+}
+
+func TestGroupAccountSafetyPromptOverridesRobotPrompt(t *testing.T) {
+	runtime := NewRuntime(BotConfig{ReplyAccountSafetyAuditPrompt: "机器人规则"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"custom": {GroupID: "custom", ReplyAccountSafetyAuditPrompt: "本群只拦截明确诈骗引流"},
+	}})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "custom", UserID: "u"}
+	prompt := replyQualityPromptForConfig(runtime.effectiveConfigForEvent(event))
+	if !strings.Contains(prompt, "本群只拦截明确诈骗引流") || strings.Contains(prompt, "机器人规则") {
+		t.Fatalf("group audit prompt = %q", prompt)
+	}
+}
+
 // 审核本身失败时放行：模型不可用不该让机器人整个哑掉。
 func TestAuditReplyAccountSafetyFailsOpen(t *testing.T) {
 	provider := &qualityTestProvider{reply: "not json at all"}

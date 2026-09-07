@@ -544,5 +544,7 @@ func groupConfigAuditMetadata(before, after assistant.GroupConfig, profileName s
 	}
 	metadata["reply_gate_before"] = gateSummary(before.ReplyGate)
 	metadata["reply_gate_after"] = gateSummary(after.ReplyGate)
+	metadata["account_safety_before"] = map[string]any{"enabled": before.ReplyAccountSafetyAuditEnabled, "custom_rules": strings.TrimSpace(before.ReplyAccountSafetyAuditPrompt) != ""}
+	metadata["account_safety_after"] = map[string]any{"enabled": after.ReplyAccountSafetyAuditEnabled, "custom_rules": strings.TrimSpace(after.ReplyAccountSafetyAuditPrompt) != ""}
 	return metadata
 }

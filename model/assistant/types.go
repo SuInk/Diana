@@ -465,6 +465,10 @@ type BotConfig struct {
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
 	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
+	// ReplyAccountSafetyAuditPrompt 是账号安全判断的自定义规则。留空使用内置范围；
+	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
+	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
+	groupReplyAccountSafetyAuditOverride *bool
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
@@ -674,27 +678,30 @@ type GroupConfig struct {
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
-	NaturalReplySplitEnabled     *bool                  `json:"natural_reply_split_enabled,omitempty"`
-	ReplyMaxBubbles              int                    `json:"reply_max_bubbles,omitempty"`
-	DirectReplyChunkSize         int                    `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int                    `json:"forward_reply_threshold,omitempty"`
-	ForwardReplyChunkThreshold   int                    `json:"forward_reply_chunk_threshold,omitempty"`
-	ProactiveReplyChance         float64                `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold      float64                `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled                *bool                  `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                  ChatInLevel            `json:"chat_in_level,omitempty"`
-	ChatInThreshold              float64                `json:"chat_in_threshold,omitempty"`
-	ChatInChance                 float64                `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds        int                    `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled   *bool                  `json:"natural_interjection_enabled,omitempty"`
-	SocialReplyEnabled           *bool                  `json:"social_reply_enabled,omitempty"`
-	MinimumReplyMemberLevel      int                    `json:"minimum_reply_member_level,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool                  `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int                    `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	PluginOverrides              map[string]bool        `json:"plugin_overrides,omitempty"`
-	PluginSettingOverrides       PluginSettingOverrides `json:"plugin_setting_overrides,omitempty"`
-	ReplyGate                    *ReplyGate             `json:"reply_gate,omitempty"`
-	UpdatedAt                    time.Time              `json:"updated_at,omitempty"`
+	NaturalReplySplitEnabled     *bool       `json:"natural_reply_split_enabled,omitempty"`
+	ReplyMaxBubbles              int         `json:"reply_max_bubbles,omitempty"`
+	DirectReplyChunkSize         int         `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int         `json:"forward_reply_threshold,omitempty"`
+	ForwardReplyChunkThreshold   int         `json:"forward_reply_chunk_threshold,omitempty"`
+	ProactiveReplyChance         float64     `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold      float64     `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled                *bool       `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                  ChatInLevel `json:"chat_in_level,omitempty"`
+	ChatInThreshold              float64     `json:"chat_in_threshold,omitempty"`
+	ChatInChance                 float64     `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds        int         `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled   *bool       `json:"natural_interjection_enabled,omitempty"`
+	SocialReplyEnabled           *bool       `json:"social_reply_enabled,omitempty"`
+	MinimumReplyMemberLevel      int         `json:"minimum_reply_member_level,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool       `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int         `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	// nil 跟随机器人；true/false 在本群对主动和直接回复统一开启/关闭账号安全审核。
+	ReplyAccountSafetyAuditEnabled *bool                  `json:"reply_account_safety_audit_enabled,omitempty"`
+	ReplyAccountSafetyAuditPrompt  string                 `json:"reply_account_safety_audit_prompt,omitempty"`
+	PluginOverrides                map[string]bool        `json:"plugin_overrides,omitempty"`
+	PluginSettingOverrides         PluginSettingOverrides `json:"plugin_setting_overrides,omitempty"`
+	ReplyGate                      *ReplyGate             `json:"reply_gate,omitempty"`
+	UpdatedAt                      time.Time              `json:"updated_at,omitempty"`
 }
 
 type GroupConfigSet struct {
@@ -790,7 +797,8 @@ type ConfigPayload struct {
 	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
-	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
+	ReplyAccountSafetyAuditEnabled *bool  `json:"reply_account_safety_audit_enabled,omitempty"`
+	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
@@ -1791,6 +1799,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled:    copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
+		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:        cfg.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:              cfg.ProactiveReplyPrompt,
@@ -1968,6 +1977,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplyAccountSafetyAuditEnabled:  copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
+		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:      payload.ProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:            payload.ProactiveReplyPrompt,
