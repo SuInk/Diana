@@ -88,6 +88,7 @@ func (r *Runtime) runMemoryCoordinator(ctx context.Context, leaseOwner string, r
 	for index := 0; index < memoryWorkerCount; index++ {
 		workers.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("memory_runtime.go:90")
 			defer workers.Done()
 			r.runMemoryWorker(ctx, leaseOwner, store)
 		}()

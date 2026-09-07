@@ -394,6 +394,7 @@ func (c *OneBotChannel) handleFrame(ctx context.Context, handler EventHandler, d
 		return nil
 	}
 	go func() {
+		defer recoverGoroutinePanic("onebot.go:396")
 		if err := handler(ctx, event); err != nil {
 			c.setStatus(c.Status().Connected, c.Status().SelfID, err.Error())
 		}

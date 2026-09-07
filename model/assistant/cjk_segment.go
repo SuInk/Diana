@@ -50,6 +50,7 @@ func applyCJKSegmentConfig(cfg BotConfig) {
 func startCJKSegmenterWarmup() {
 	cjkSegmentWarmOnce.Do(func() {
 		go func() {
+			defer recoverGoroutinePanic("cjk_segment.go:52")
 			cjkSegmenter.SkipLog = true
 			// 只装简体词典:全量词典（含繁体）常驻内存约 197MB,简体版约
 			// 129MB、加载也快一半。QQ 场景几乎全是简体,繁体和词典没收录的

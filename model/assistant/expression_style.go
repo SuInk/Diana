@@ -129,6 +129,7 @@ func (r *Runtime) observeGroupExpression(event MessageEvent, text string) {
 	scope := expressionScopeKey(event)
 	seenAt := time.Now()
 	go func() {
+		defer recoverGoroutinePanic("expression_style.go:131")
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := store.BumpGroupExpression(ctx, scope, phrase, userID, seenAt); err != nil {

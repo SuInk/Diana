@@ -273,6 +273,7 @@ func (r *Runtime) crossGroupCurrentMembers(event MessageEvent, candidatesByAutho
 		}
 		wg.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("cross_group_context.go:275")
 			defer wg.Done()
 			member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, authorID)
 			if err != nil || strings.TrimSpace(member.UserID) != authorID {

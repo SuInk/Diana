@@ -225,6 +225,7 @@ func (c *WeComChannel) ServeCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
+		defer recoverGoroutinePanic("wecom.go:227")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		_ = handler(ctx, event)
