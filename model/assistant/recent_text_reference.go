@@ -125,15 +125,25 @@ func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event Messag
 	messageStore := r.messageStore
 	r.mu.RUnlock()
 	if searchStore, ok := messageStore.(MessageHistorySearchStore); ok {
-		searchCtx, stop := context.WithTimeout(ctx, 2*time.Second)
-		matched, _, searchErr := searchStore.SearchMessageEvents(searchCtx, MessageHistorySearchQuery{
-			Session: sessionKey(event), Text: text, Terms: structuredMemorySearchTerms(text, 16),
-			FromTime: 0, ThroughTime: currentTime, Limit: semanticTextReferenceLimit,
-		})
-		stop()
-		if searchErr == nil {
+		queries := structuredMemorySearchTerms(text, 8)
+		if len(queries) == 0 {
+			queries = []string{text}
+		}
+		for _, query := range queries {
+			searchCtx, stop := context.WithTimeout(ctx, 2*time.Second)
+			matched, _, searchErr := searchStore.SearchMessageEvents(searchCtx, MessageHistorySearchQuery{
+				Session: sessionKey(event), Text: query, Terms: []string{query},
+				FromTime: 0, ThroughTime: currentTime, Limit: semanticTextReferenceLimit,
+			})
+			stop()
+			if searchErr != nil {
+				continue
+			}
 			for _, item := range matched {
-				appendCandidate(item, "keyword")
+				if strings.TrimSpace(item.MessageID) == strings.TrimSpace(event.MessageID) {
+					continue
+				}
+				appendCandidate(item, "keyword:"+query)
 			}
 		}
 	}

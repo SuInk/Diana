@@ -100,6 +100,47 @@ func TestSemanticTextReferenceAllowsCrossUserClarificationWithoutMergingReplies(
 	}
 }
 
+func TestSemanticTextReferenceSearchesFullSessionAndExcludesCurrentMessage(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.98,"resolved":"询问 Tibo 给 Codex 的 full banked reset 是否会在今天或明天到账","source_message_ids":["old-reset"],"reason":"全历史命中同群重置公告"}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	store := &semanticTextReferenceSearchStore{currentID: "current", result: textReferenceEvent(10, "user-a", "old-reset", "Tibo 宣布 Codex full banked reset 将在 end of day 落地")}
+	runtime.SetMessageHistoryStore(store)
+	event := textReferenceEvent(1_000_000, "user-a", "current", "今天或者明天会重置吗？")
+	event.Kind, event.GroupID, event.ToMe = EventKindGroup, "group", true
+
+	reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, []MessageEvent{textReferenceEvent(999_999, "user-b", "noise", "午饭吃什么")})
+	if reference == nil || !strings.Contains(reference.Canonical, "Tibo") || !strings.Contains(reference.Canonical, "Codex") {
+		t.Fatalf("reference=%#v", reference)
+	}
+	if store.calls == 0 {
+		t.Fatal("full-session search was not called")
+	}
+	request := provider.requestSnapshot()
+	if !requestMessagesContain(request.Messages, "old-reset") {
+		t.Fatalf("full-history candidate missing from reranker request: %#v", request)
+	}
+}
+
+type semanticTextReferenceSearchStore struct {
+	calls     int
+	currentID string
+	result    MessageEvent
+}
+
+func (s *semanticTextReferenceSearchStore) AppendMessageEvent(context.Context, string, MessageEvent) error {
+	return nil
+}
+func (s *semanticTextReferenceSearchStore) ListRecentMessageEvents(context.Context, string, int) ([]MessageEvent, error) {
+	return nil, nil
+}
+func (s *semanticTextReferenceSearchStore) SearchMessageEvents(_ context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.calls++
+	if strings.Contains(query.Text, "重置") {
+		return []MessageEvent{s.result}, 1, nil
+	}
+	return nil, 0, nil
+}
+
 func semanticReferenceTestConfig() BotConfig {
 	return BotConfig{ModelRoles: map[string]ModelRole{
 		"intent": {ProfileID: "router", Model: "router-model"},
