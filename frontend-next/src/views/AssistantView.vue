@@ -91,7 +91,6 @@
           v-for="profile in filteredProfiles"
           :key="profile.id ?? profile.name"
           class="bot-profile-tile"
-          :class="{ active: profile.id === activeProfileID }"
         >
           <button class="bot-profile-select" type="button" :disabled="busy" @click="editProfile(profile)">
             <span class="bot-profile-head">
