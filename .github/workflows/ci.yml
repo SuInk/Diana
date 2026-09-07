@@ -182,6 +182,7 @@ jobs:
           # Release 包带齐运行时前端，下载后不需要 Go、Node 或源码。
           mkdir -p "${package_dir}/frontend-next/dist"
           go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "${package_dir}/${runtime_name}" ./cmd/webui
+          cp "${package_dir}/${runtime_name}" "dist/${binary_name}"
           # Keep one compatibility copy so pre-migration updaters can install
           # the first package that introduces the stable runtime name.
           cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"
@@ -225,6 +226,7 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/diana-webui-*
           if-no-files-found: error
 
   docker:
@@ -291,7 +293,7 @@ jobs:
 
       - name: Generate SHA-256 checksums
         working-directory: release
-        run: sha256sum diana-*.tar.gz diana-*.zip > SHA256SUMS
+        run: sha256sum diana-*.tar.gz diana-*.zip diana-webui-* > SHA256SUMS
 
       - name: Generate static update manifest
         working-directory: release
@@ -300,7 +302,7 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           assets='[]'
-          for file in diana-*.tar.gz diana-*.zip SHA256SUMS; do
+          for file in diana-*.tar.gz diana-*.zip diana-webui-* SHA256SUMS; do
             assets=$(jq --arg name "$file" --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${file}" --argjson size "$(stat -c %s "$file")" '. + [{name: $name, url: $url, size: $size}]' <<<"$assets")
           done
           jq -n \
@@ -319,5 +321,6 @@ jobs:
           files: |
             release/*.tar.gz
             release/*.zip
+            release/diana-webui-*
             release/SHA256SUMS
             release/latest.json
