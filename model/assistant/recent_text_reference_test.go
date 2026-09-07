@@ -68,6 +68,44 @@ func TestRecentTextReferenceReportsGenuineAmbiguity(t *testing.T) {
 	}
 }
 
+func TestSemanticTextReferenceRestoresOmittedTopic(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.97,"resolved":"询问 Tibo 宣布给 Codex 的 banked reset 会在今天还是明天到账","source_message_ids":["topic"],"reason":"当前问重置时间，历史仍在讨论 Tibo 的 Codex reset"}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := []MessageEvent{textReferenceEvent(100, "user-a", "topic", "Tibo 说会给 Codex 做一次 banked reset")}
+	event := textReferenceEvent(120, "user-b", "current", "今天或者明天会重置吗？")
+	event.ToMe = true
+
+	reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history)
+	if reference == nil || reference.Method != "semantic_context" || !strings.Contains(reference.Canonical, "Tibo") || !strings.Contains(reference.Canonical, "Codex") {
+		t.Fatalf("reference=%#v", reference)
+	}
+}
+
+func TestSemanticTextReferenceAllowsCrossUserClarificationWithoutMergingReplies(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.99,"resolved":"继续回答大眼小手尚未解决的问题：Tibo 给 Codex 的 banked reset 是今天还是明天到账","source_message_ids":["question","clarification"],"reason":"当前成员在回答机器人上一轮的澄清问题"}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := []MessageEvent{
+		textReferenceEvent(100, "user-a", "question", "今天或者明天会重置吗？"),
+		textReferenceEvent(105, "bot", "clarification", "你指 Astra、Codex 还是别的？"),
+	}
+	event := textReferenceEvent(110, "user-b", "current", "codex")
+	event.ToMe = true
+
+	reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history)
+	if reference == nil || !strings.Contains(reference.Canonical, "尚未解决") || !strings.Contains(reference.Canonical, "Codex") {
+		t.Fatalf("reference=%#v", reference)
+	}
+	if keyA, keyB := directReplyMergeKey(history[0]), directReplyMergeKey(event); keyA == keyB {
+		t.Fatal("cross-user clarification unexpectedly entered active reply merge identity")
+	}
+}
+
+func semanticReferenceTestConfig() BotConfig {
+	return BotConfig{ModelRoles: map[string]ModelRole{
+		"intent": {ProfileID: "router", Model: "router-model"},
+	}}
+}
+
 func TestRecentTextReferenceExplicitQuoteWins(t *testing.T) {
 	history := []MessageEvent{textReferenceEvent(110, "user-a", "near", "App 5.3 的界面变化")}
 	event := textReferenceEvent(120, "user-a", "current", "5.3 怎么样？")
