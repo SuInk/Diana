@@ -83,7 +83,10 @@ func (b *NoneBotBridge) Start(parent context.Context) {
 	b.mu.Lock()
 	b.cancel = cancel
 	b.mu.Unlock()
-	go b.run(ctx)
+	go func() {
+		defer recoverGoroutinePanic("nonebotBridge.run")
+		b.run(ctx)
+	}()
 }
 
 // Stop 停止 NoneBot bridge 并关闭连接。

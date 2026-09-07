@@ -145,6 +145,7 @@
           />
         </div>
         <div v-if="testReply" class="event-reply" style="margin: 0">{{ testReply }}</div>
+        <pre v-if="testError" class="operation-error mono llm-test-error" aria-live="assertive">{{ testError }}</pre>
         <p v-if="testUsage" class="muted" style="font-size: 12px; margin: 0">{{ testUsage }}</p>
       </div>
     </Modal>
@@ -385,6 +386,7 @@ import Modal from "../components/Modal.vue";
 import AppSelect from "../components/AppSelect.vue";
 import type { AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
+import { describeLLMTestError, randomTestModel, testModelIDs } from "../llm-test";
 import {
   defaultPresetForProvider,
   detectLLMService,
@@ -463,6 +465,7 @@ const testModel = ref("");
 const testReply = ref("");
 const testUsage = ref("");
 const testImages = ref<string[]>([]);
+const testError = ref("");
 const isImageTest = computed(() => testTarget.value !== null && groupOf(testTarget.value) === "image");
 
 // 测试用的模型候选＝这套配置存下来的模型列表。profile.model 单独并进去：
@@ -470,15 +473,7 @@ const isImageTest = computed(() => testTarget.value !== null && groupOf(testTarg
 const testModelOptions = computed<AppSelectOption[]>(() => {
   const target = testTarget.value;
   if (!target) return [];
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  for (const id of [target.model ?? "", ...(target.models ?? []).map((model) => model.id)]) {
-    const trimmed = (id ?? "").trim();
-    if (trimmed === "" || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    ids.push(trimmed);
-  }
-  return ids.map((id) => ({ value: id, label: id }));
+  return testModelIDs(target).map((id) => ({ value: id, label: id }));
 });
 const providerKindOptions = llmProviderKinds.map((kind) => ({
   value: kind.id,
@@ -952,11 +947,12 @@ function removeModel(id: string): void {
 
 function openTest(profile: LLMConfig): void {
   testTarget.value = profile;
-  testModel.value = (profile.model ?? "").trim() || (profile.models ?? [])[0]?.id || "";
+  testModel.value = randomTestModel(profile);
   testMessage.value = defaultTestMessage(profile);
   testReply.value = "";
   testUsage.value = "";
   testImages.value = [];
+  testError.value = "";
 }
 
 async function runTest(): Promise<void> {
@@ -965,6 +961,7 @@ async function runTest(): Promise<void> {
   testReply.value = "";
   testUsage.value = "";
   testImages.value = [];
+  testError.value = "";
   try {
     // 带上目标配置（含 id），后端会自动复用该配置已保存的 API Key，无需先激活。
     // model 用弹窗里选的那个覆盖：后端 /api/llm/test 直接认请求体里的 model，
@@ -982,7 +979,8 @@ async function runTest(): Promise<void> {
       testUsage.value = `输入 ${result.usage.input_tokens ?? 0} / 输出 ${result.usage.output_tokens ?? 0} tokens`;
     }
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "测试失败");
+    testError.value = describeLLMTestError(error, target ? providerLabel(target.provider) : "", testModel.value);
+    toastError(testError.value);
   } finally {
     busy.value = false;
   }
@@ -1040,5 +1038,17 @@ onMounted(() => {
   margin: 2px 0 0;
   padding-left: 16px;
   list-style: disc;
+}
+
+.llm-test-error {
+  margin: 0;
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--err);
+  border: 1px solid var(--err);
+  border-radius: 8px;
+  background: var(--err-soft);
+  font-size: 11.5px;
 }
 </style>

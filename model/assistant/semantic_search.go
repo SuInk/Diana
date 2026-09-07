@@ -99,7 +99,10 @@ func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
 	}
 	r.semanticIndexOnce.Do(func() {
 		r.semanticIndexQueue = make(chan semanticIndexItem, semanticIndexQueueSize)
-		go r.runSemanticIndexer()
+		go func() {
+			defer recoverGoroutinePanic("semanticSearch.indexer")
+			r.runSemanticIndexer()
+		}()
 	})
 	select {
 	case r.semanticIndexQueue <- semanticIndexItem{session: sessionKey(event), messageID: event.MessageID, text: text}:

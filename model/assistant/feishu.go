@@ -252,6 +252,7 @@ func (c *FeishuChannel) ServeCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// 回调协程不能持有请求的 ctx——响应已经写回去了，ctx 随即取消。
 	go func() {
+		defer recoverGoroutinePanic("feishu.go:254")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		_ = handler(ctx, event)

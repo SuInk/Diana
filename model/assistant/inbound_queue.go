@@ -221,6 +221,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		checkedAt := time.Now().Unix()
 		backfillWG.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("inbound_queue.go:223")
 			defer backfillWG.Done()
 			var sessions []HistorySession
 			var err error
@@ -238,6 +239,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	for i := 0; i < workers; i++ {
 		workerWG.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("inbound_queue.go:240")
 			defer workerWG.Done()
 			r.runInboundWorker(ctx, leaseOwner, store)
 		}()
@@ -1060,6 +1062,7 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 	for i := 0; i < workerCount; i++ {
 		fetchWG.Add(1)
 		go func() {
+			defer recoverGoroutinePanic("inbound_queue.go:1062")
 			defer fetchWG.Done()
 			for session := range jobs {
 				events, fetchErr := r.fetchHistorySince(ctx, session)

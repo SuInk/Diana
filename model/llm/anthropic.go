@@ -119,6 +119,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (<-ch
 	out := make(chan ChatEvent, 4)
 	go func() {
 		defer close(out)
+		defer recoverChatStreamPanic(ctx, out, "anthropic")
 		var usage Usage
 		var activeTools = map[int64]*ToolCall{}
 		var toolArguments = map[int64]string{}

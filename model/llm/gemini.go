@@ -136,6 +136,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 	out := make(chan ChatEvent, 4)
 	go func() {
 		defer close(out)
+		defer recoverChatStreamPanic(ctx, out, "gemini")
 		var last Usage
 		for response, err := range iterator {
 			if err != nil {

@@ -111,6 +111,7 @@ func (c *openAICompatibleClient) Stream(ctx context.Context, req GenerateRequest
 		out := make(chan ChatEvent, 2)
 		go func() {
 			defer close(out)
+			defer recoverChatStreamPanic(ctx, out, "openai-compatible fallback")
 			response, err := c.Generate(ctx, req)
 			if err != nil {
 				out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
@@ -148,6 +149,7 @@ func (c *openAICompatibleClient) Stream(ctx context.Context, req GenerateRequest
 	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
+		defer recoverChatStreamPanic(ctx, out, "openai-compatible chat completions")
 		defer cancel()
 		defer resp.Body.Close()
 		scanner := bufio.NewScanner(resp.Body)
@@ -229,6 +231,7 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
+		defer recoverChatStreamPanic(ctx, out, "openai-compatible responses")
 		// 标准 Responses 流会先通过 output_item.added 给出函数名，再发送参数
 		// 墫量和 done。部分兼容网关（例如 Sub2API）在 arguments.done 里省略
 		// name，因此必须按 item id 聚合，不能把缺失字段误当成空名称工具调用。
@@ -1282,6 +1285,7 @@ func readOpenAIResponseBodyWithIdleTimeout(
 	activity := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
+		defer recoverBackgroundLLMPanic(done, timeoutKind+" reader")
 		done <- read(openAIActivityReader{reader: body, activity: activity})
 	}()
 
