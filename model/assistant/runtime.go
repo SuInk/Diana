@@ -3720,6 +3720,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		WakeGuidance: cfg.PromptWakeOnlyText,
 		TriggerWords: cfg.GroupTriggers,
 	})
+	currentText = updatedReplyRequestText(currentText, r.pendingReplyRequestContexts(r.directReplySupplements(ctx), event))
 	if directAgentDecision {
 		// 只为「确实没取到原图」的引用来源补一句文字摘要；原图已经附上的不再重复描述，
 		// 否则模型会同时看到图和一句「尚无缓存描述」，自相矛盾。
@@ -3905,7 +3906,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if semanticGate != nil {
 		_, acknowledged, _ := r.deliveryEvidence(event, sentMessageIDs)
 		if acknowledged {
-			semanticGate.remember(readableEventText(event, cleanText), semanticText, event.UserID)
+			supplements := r.pendingReplyRequestContexts(append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...), event)
+			semanticGate.rememberRequest(requestContextForReply(event, cleanText), supplements, semanticText)
 		}
 	}
 	imageAnnouncements.startPending()
