@@ -221,7 +221,9 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "error_replied":
 		return "replied", "生成回复时发生错误，机器人已发送错误说明", true
 	case "error_replied_content_policy":
-		return "replied", "上游模型拒绝了高风险内容，机器人已发送安全错误说明", true
+		return "replied", "上游报告内容拦截，机器人已发送错误说明", true
+	case "error_replied_upstream_rejection":
+		return "replied", "上游返回拦截提示但原因未确认，机器人已发送错误说明", true
 	case "error_send_unconfirmed":
 		return "error", "回复生成失败；错误说明已发起发送，但没有收到可核验的发送 ACK", false
 	case "error_notice_merged":
@@ -2003,6 +2005,9 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			return "error_send_unconfirmed", nil
 		}
 		outcome := "error_replied"
+		if errors.Is(err, llm.ErrUnverifiedRejection) {
+			outcome = "error_replied_upstream_rejection"
+		}
 		if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
 			outcome = "error_replied_content_policy"
 		}
@@ -6016,8 +6021,8 @@ func shouldFailoverLLMError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
-		return true
+	if errors.Is(err, llm.ErrUnverifiedRejection) || errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+		return false
 	}
 	if isModelUnavailableLLMError(err) {
 		return true

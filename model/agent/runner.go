@@ -202,6 +202,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
 		resp, err := r.client.Generate(planningCtx, llm.GenerateRequest{Messages: messages, Tools: definitions})
+		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
+			err = llm.RejectionNoticeError(resp.Text)
+		}
 		cancel()
 		modelTurns++
 		modelDuration := time.Since(modelStartedAt)
@@ -574,6 +577,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	modelStartedAt := time.Now()
 	resp, err := r.client.Generate(ctx, finalizationRequest)
+	if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
+		err = llm.RejectionNoticeError(resp.Text)
+	}
 	modelTurns++
 	if err != nil {
 		return fail(err)
