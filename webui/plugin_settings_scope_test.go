@@ -44,14 +44,14 @@ func TestPluginProfileSettingsHTTPAndPersistence(t *testing.T) {
 			t.Fatal("secret leaked")
 		}
 	}
-	post("", `{"settings":{"max_images":4,"douyin_cookie":"test-secret-default"}}`, 400)
+	post("", `{"settings":{"max_images":4,"douyin_cookie":"test-secret-default"}}`, 200)
 	post("a", `{"settings":{"max_images":6,"douyin_cookie":"test-secret-a"}}`, 200)
 	post("b", `{"settings":{"max_images":8}}`, 200)
 	post("missing", `{"settings":{"max_images":10}}`, 404)
 	for _, tc := range []struct {
 		profile string
 		images  float64
-	}{{"a", 6}, {"b", 8}} {
+	}{{"a", 8}, {"b", 8}} {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/plugins?profile="+tc.profile, nil))
 		if strings.Contains(rec.Body.String(), "test-secret") || strings.Contains(rec.Body.String(), "profile_settings") {
@@ -77,7 +77,7 @@ func TestPluginProfileSettingsHTTPAndPersistence(t *testing.T) {
 		t.Fatal("SQLite migration marker lost")
 	}
 	_, newSettings, _ := restored.PluginWithSettingsForProfile(id, "new")
-	if newSettings.String("douyin_cookie", "") != "" || newSettings.Int("max_images", 0) != 9 {
+	if newSettings.String("douyin_cookie", "") != "test-secret-a" || newSettings.Int("max_images", 0) != 8 {
 		t.Fatal("new profile inherited settings")
 	}
 	_, settings, _ := restored.PluginWithSettingsForProfile(id, "a")
@@ -93,8 +93,15 @@ func TestPluginProfileSettingsHTTPAndPersistence(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/plugins", nil))
 	var systemPlugins []assistant.PluginState
-	if err := json.Unmarshal(rec.Body.Bytes(), &systemPlugins); err != nil || len(systemPlugins) != 1 || systemPlugins[0].Manifest.ID != assistant.OpenAPIPluginID {
-		t.Fatal("unscoped list exposes robot configuration")
+	if err := json.Unmarshal(rec.Body.Bytes(), &systemPlugins); err != nil || len(systemPlugins) < 2 {
+		t.Fatal("unscoped list did not expose shared configuration")
+	}
+	foundOpenAPI := false
+	for _, plugin := range systemPlugins {
+		foundOpenAPI = foundOpenAPI || plugin.Manifest.ID == assistant.OpenAPIPluginID
+	}
+	if !foundOpenAPI {
+		t.Fatal("system settings lost the OpenAPI configuration")
 	}
 }
 

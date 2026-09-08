@@ -10749,7 +10749,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
-		return startedAt, r.sendSubscriberNotice(ctx, source, pending)
+		return startedAt, r.sendRSSWatchTargets(ctx, item, pending)
 	}
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(rssWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source))
 	plugin, ok := pluginValue.(*RSSWatchPlugin)
@@ -10788,7 +10788,8 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 		}
 		return startedAt, nil
 	}
-	if err := r.sendSubscriberNotice(ctx, source, message); err != nil {
+	item.PendingDeliveredTargets = nil
+	if err := r.sendRSSWatchTargets(ctx, item, message); err != nil {
 		return startedAt, err
 	}
 	// 通知已经发出去了，这轮就算成功：再把个别来源的抓取失败当成整轮失败上报，
@@ -10947,6 +10948,7 @@ func (r *Runtime) storeRSSWatchProgress(id string, sources []ReminderFeedSource,
 			continue
 		}
 		applyRSSWatchSources(item, sources)
+		item.PendingDeliveredTargets = nil
 		item.PendingDelivery = strings.TrimSpace(pending)
 		if item.PendingDelivery != "" {
 			item.PendingSince = time.Now()

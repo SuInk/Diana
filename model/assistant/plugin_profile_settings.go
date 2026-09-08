@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -75,12 +76,32 @@ func (m *PluginManager) MigrateProfileConfigurations(profiles []BotConfig) bool 
 	defer m.mu.Unlock()
 	changed := false
 	for id, state := range m.states {
+		if state.ProfileConfigMigrated && !state.SharedConfigMigrated {
+			// Keep old per-robot values as a backup. Pick a whole configuration,
+			// never combine credentials belonging to different accounts.
+			backupIDs := make([]string, 0, len(state.ProfileSettings))
+			for profileID := range state.ProfileSettings {
+				backupIDs = append(backupIDs, profileID)
+			}
+			sort.Strings(backupIDs)
+			for _, profileID := range append(append([]string{}, ids...), backupIDs...) {
+				if values := state.ProfileSettings[profileID]; len(values) > 0 {
+					state.Settings = clonePluginValues(values)
+					state.SharedConfigSource = profileID
+					break
+				}
+			}
+			state.SharedConfigMigrated = true
+			m.states[id] = state
+			changed = true
+		}
+		if !state.SharedConfigMigrated {
+			state.SharedConfigMigrated = true
+			m.states[id] = state
+			changed = true
+		}
 		if id == OpenAPIPluginID || state.ProfileConfigMigrated {
 			continue
-		}
-		state.ProfileSettings = cloneProfileSettings(state.ProfileSettings)
-		if state.ProfileSettings == nil {
-			state.ProfileSettings = map[string]map[string]any{}
 		}
 		legacy := state.Settings
 		if id == resolverPluginID {
@@ -91,14 +112,11 @@ func (m *PluginManager) MigrateProfileConfigurations(profiles []BotConfig) bool 
 			state.ProfileEnabled = map[string]bool{}
 		}
 		for _, id := range ids {
-			if _, ok := state.ProfileSettings[id]; !ok {
-				state.ProfileSettings[id] = clonePluginValues(legacy)
-			}
 			if _, ok := state.ProfileEnabled[id]; !ok {
 				state.ProfileEnabled[id] = state.Enabled
 			}
 		}
-		state.Settings = nil
+		state.Settings = clonePluginValues(legacy)
 		state.Enabled = !state.Manifest.DefaultDisabled
 		state.ProfileConfigMigrated = true
 		m.states[id] = state

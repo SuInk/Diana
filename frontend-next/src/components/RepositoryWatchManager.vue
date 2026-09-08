@@ -43,7 +43,7 @@
           <AppSelect id="plugin-watch-credential" v-model="selectedCredential" :options="credentialOptions" :disabled="!repositoryKey(form.repository ?? '')" />
           <span class="hint">这个仓库的更新检查和 Issue 操作都走选中的凭据；留空则使用公共 Token。凭据在「Token」标签页里管理。</span>
         </div>
-        <div class="field wide">
+        <div v-if="!form.notification_enabled" class="field wide">
           <label for="plugin-watch-profile">发送机器人</label>
           <AppSelect id="plugin-watch-profile" v-model="form.profile_id" :options="profileOptions" />
         </div>
@@ -98,20 +98,7 @@
           <!-- 群列表拉不到时下拉框只会变成空的，不说一声用户会以为自己没进群。 -->
           <p v-if="form.notification_enabled && groupsLoading" class="hint">正在读取已加入的群聊…</p>
           <p v-else-if="form.notification_enabled && groupsWarning" class="hint warn-text">{{ groupsWarning }}</p>
-          <div v-if="form.notification_enabled" class="target-list" role="group" aria-labelledby="watch-notify-title">
-            <div v-for="(target, index) in form.notification_targets" :key="`target-${index}`" class="target-row">
-              <AppSelect v-model="target.destination" :options="destinationOptions" aria-label="通知对象类型" />
-              <AppSelect v-if="target.destination === 'group' && groupOptions.length" :model-value="target.group_id ?? ''" :options="groupOptions" aria-label="通知群聊" @update:model-value="target.group_id = String($event ?? '')" />
-              <input v-else-if="target.destination === 'group'" v-model.trim="target.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="通知群号或 Chat ID" />
-              <div v-else class="target-user">
-                <input v-model.trim="target.user_id" class="input" type="text" placeholder="私聊对象 ID" aria-label="通知私聊对象 ID" />
-                <AccountNameHint :user-id="target.user_id" :profile="form.profile_id" />
-              </div>
-              <button class="btn small ghost danger icon-only" type="button" title="移除通知对象" aria-label="移除通知对象" @click="removeTarget(index)"><Trash2 :size="14" aria-hidden="true" /></button>
-            </div>
-            <button class="btn small ghost" type="button" @click="addTarget"><Plus :size="14" aria-hidden="true" />添加通知对象</button>
-            <p v-if="!form.notification_targets.length" class="hint">至少添加一个通知对象。</p>
-          </div>
+          <SubscriptionTargetsEditor v-if="form.notification_enabled" v-model="form.notification_targets" :profiles="profiles" :groups="joinedGroups" :default-profile="form.profile_id" />
         </div>
         <div class="field wide repository-notification-settings">
           <div class="repository-section-title"><span id="watch-issue-title">Issue 管理</span><label class="switch"><input v-model="form.issue_enabled" type="checkbox" aria-labelledby="watch-issue-title" /><span class="track" aria-hidden="true"></span></label></div>
@@ -177,6 +164,7 @@
             <span v-if="task.repository_branch">分支 <strong class="mono">{{ task.repository_branch }}</strong></span>
             <span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span>
             <span>通知 <strong>{{ task.notification_enabled === false ? "已关闭" : (task.notification_targets?.length || (task.group_id || task.user_id ? 1 : 0)) + " 个对象" }}</strong></span>
+            <SubscriptionDestination v-for="(target, index) in task.notification_targets || []" :key="index" :platform="target.platform || profiles.find(p => p.id === target.profile_id)?.platform" :profile-id="target.profile_id" :profile-name="profiles.find(p => p.id === target.profile_id)?.name" :group-id="target.group_id" :user-id="target.user_id" />
             <span>{{ watchScopeLabel(task) }}</span>
             <span class="repository-access-fact">{{ issueFactLabel(task) }}</span>
           </div>
@@ -222,6 +210,8 @@ import {
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
+import SubscriptionDestination from "./SubscriptionDestination.vue";
+import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
 import AccountNameHint from "./AccountNameHint.vue";
 import AppSelect from "./AppSelect.vue";
 
@@ -253,7 +243,7 @@ const emit = defineEmits<{
   "update:manager-group-access": [string];
 }>();
 
-type IssueMember = { destination: "private" | "group"; group_id?: string; user_id?: string };
+type IssueMember = { profile_id?: string; destination: "private" | "group"; group_id?: string; user_id?: string };
 const authenticatedIntervalSeconds = 60;
 const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
@@ -295,10 +285,10 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups().catch(() => ({ groups: [] }))]);
-    watches.value = tasks.items.filter((task) => task.kind === "repository_watch" && (!props.profileId || task.profile_id === props.profileId));
-    profiles.value = (config.profiles?.length ? config.profiles : [config]).filter((profile) => !props.profileId || profile.id === props.profileId);
+    watches.value = tasks.items.filter((task) => task.kind === "repository_watch" && (!props.profileId || task.profile_id === props.profileId || task.notification_targets?.some(target => target.profile_id === props.profileId)));
+    profiles.value = (config.profiles?.length ? config.profiles : [config]);
     joinedGroups.value = groups.groups;
-    if (!form.value.profile_id) form.value.profile_id = profiles.value[0]?.id || "";
+    if (!form.value.profile_id) form.value.profile_id = props.profileId || profiles.value[0]?.id || "";
   } catch (error) {
     toastError(error instanceof Error ? error.message : "仓库订阅加载失败");
   } finally {
@@ -307,7 +297,7 @@ async function load(): Promise<void> {
 }
 
 function startCreate(): void {
-  const profileID = form.value.profile_id || profiles.value[0]?.id || "";
+  const profileID = props.profileId || form.value.profile_id || profiles.value[0]?.id || "";
   form.value = { ...emptyForm(), profile_id: profileID };
   editingTask.value = null;
   editing.value = true;
@@ -428,8 +418,8 @@ function issueFactLabel(task: AssistantTask): string {
 function startEdit(task: AssistantTask): void {
   editingTask.value = task;
   const repository = task.repository ?? "";
-  const legacyTarget = task.group_id ? [{ destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ destination: "private" as const, user_id: task.user_id }] : [];
-  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? [])], issue_events: [...(task.watch_issue_events ?? [])], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
+  const legacyTarget = task.group_id ? [{ profile_id: task.profile_id, destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ profile_id: task.profile_id, destination: "private" as const, user_id: task.user_id }] : [];
+  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? [])], issue_events: [...(task.watch_issue_events ?? [])], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ profile_id: target.profile_id || task.profile_id, destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
   editing.value = true;
   markEditorClean();
 }
@@ -443,6 +433,7 @@ async function stopEditing(): Promise<void> {
 }
 
 async function save(): Promise<void> {
+	if (form.value.notification_enabled && form.value.notification_targets[0]?.profile_id) form.value.profile_id = form.value.notification_targets[0].profile_id;
   if (!form.value.repository) return toastError("请填写 GitHub 仓库");
   if (form.value.interval_seconds < minimumIntervalSeconds) return toastError("检查周期不能低于 30 秒");
   if (form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期不能超过 365 天");
@@ -450,7 +441,7 @@ async function save(): Promise<void> {
   const starMilestones = parseStarMilestones(form.value.star_milestones_text);
   if (form.value.watch_stars && form.value.star_notify_mode === "milestone" && !starMilestones.length) return toastError("里程碑模式至少填写一个有效 Star 数");
   if (!form.value.profile_id) return toastError("请选择发送机器人");
-  if (form.value.notification_enabled && !form.value.notification_targets.some((target) => target.destination === "group" ? target.group_id : target.user_id)) return toastError("请至少添加一个通知对象");
+  if (form.value.notification_enabled && (!form.value.notification_targets.length || form.value.notification_targets.some(target => !target.profile_id || !(target.destination === "group" ? target.group_id : target.user_id)))) return toastError("请至少添加一个通知对象");
   const managerUserIDs = issueMemberIDs(form.value.issue_managers, "private");
   const managerGroupIDs = issueMemberIDs(form.value.issue_managers, "group");
   const drafterUserIDs = issueMemberIDs(form.value.issue_drafters, "private");
@@ -492,8 +483,6 @@ async function save(): Promise<void> {
   }
 }
 
-function addTarget(): void { form.value.notification_targets.push({ destination: "private", user_id: "" }); }
-function removeTarget(index: number): void { form.value.notification_targets.splice(index, 1); }
 
 async function runNow(task: AssistantTask): Promise<void> {
   busyID.value = task.id;

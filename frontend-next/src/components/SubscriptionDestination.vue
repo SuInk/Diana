@@ -1,5 +1,6 @@
 <template>
   <span class="subscription-destination">
+    <strong v-if="profileName">{{ profileName }}</strong>
     <span>{{ subscriptionPlatformLabel(platform) }} · {{ groupId ? "群聊" : "私聊" }}</span>
     <strong v-if="name">{{ name }}</strong>
     <span class="mono">（{{ groupId || userId || "—" }}）</span>
@@ -11,7 +12,7 @@ import { onBeforeUnmount, ref, watch } from "vue";
 import { fetchAssistantUserNames, listBotGroups } from "../api";
 import { subscriptionPlatformLabel } from "../rss-display";
 
-const props = defineProps<{ platform?: string; profileId?: string; groupId?: string; userId?: string }>();
+const props = defineProps<{ platform?: string; profileId?: string; profileName?: string; groupId?: string; userId?: string }>();
 const name = ref("");
 let generation = 0;
 watch(() => [props.profileId, props.platform, props.groupId, props.userId], async () => {
