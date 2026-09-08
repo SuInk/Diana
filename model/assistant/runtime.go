@@ -4183,7 +4183,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			ownsRegistry = true
 		}
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
-		registry.Register(newDianaRuntimeModelTool(agentClient))
+		registry.Register(newDianaRuntimeModelTool(agentClient, event))
 		agentRunner, err := agent.NewRunner(agentClient, agentCfg, registry)
 		if err != nil {
 			if ownsRegistry {
@@ -9015,7 +9015,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		if replySuppressionSendGuardEnabled(ctx) || event.Kind == EventKindGroup || r.outboundBackoffEnabled() {
 			attempts = 1
 		}
-		return r.sendChannelWithRetry(callCtx, msg, attempts)
+		return r.sendChannelWithRetry(callCtx, msg, attempts, event)
 	})
 	if err != nil {
 		r.recordInboundDelivery(event, OutboundDeliveryFailed, "", err.Error())
@@ -9026,6 +9026,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		r.recordInboundDelivery(event, OutboundDeliveryAcknowledged, messageID, "")
 	}
 	r.recordOutboundStep(ctx, stepKey, messageID)
+	if !telegramMessageNeedsSteps(msg) {
+		r.rememberImageModels(event, msg, messageID)
+	}
 	outboundTurnFromContext(ctx).recordSentMessage(msg)
 	r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
 	return result, nil
@@ -9064,14 +9067,18 @@ func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDelive
 	}
 }
 
-func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
-	if NormalizePlatformID(msg.Platform) == PlatformTelegram && (strings.TrimSpace(msg.Text) != "" || len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 1) && len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 0 {
-		return r.sendTelegramStepsWithRetry(ctx, msg, attempts)
+func telegramMessageNeedsSteps(msg OutgoingMessage) bool {
+	return NormalizePlatformID(msg.Platform) == PlatformTelegram && (strings.TrimSpace(msg.Text) != "" || len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 1) && len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 0
+}
+
+func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage, attempts int, events ...MessageEvent) (map[string]any, error) {
+	if telegramMessageNeedsSteps(msg) {
+		return r.sendTelegramStepsWithRetry(ctx, msg, attempts, events...)
 	}
 	return r.sendChannelPayloadWithRetry(ctx, msg, attempts)
 }
 
-func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
+func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMessage, attempts int, events ...MessageEvent) (map[string]any, error) {
 	var result map[string]any
 	if strings.TrimSpace(msg.Text) != "" {
 		text := msg
@@ -9084,16 +9091,24 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 			return nil, err
 		}
 	}
-	for _, image := range msg.ImageURLs {
+	for index, image := range msg.ImageURLs {
 		part := msg
 		part.AudioURLs = nil
 		part.Text = ""
 		part.ReplyMessageID = ""
 		part.MentionUserID = ""
 		part.ImageURLs = []string{image}
+		part.GeneratedImageModels = nil
+		if index < len(msg.GeneratedImageModels) {
+			part.GeneratedImageModels = msg.GeneratedImageModels[index : index+1]
+		}
 		part.VideoURLs = nil
-		if _, err := r.sendChannelPayloadWithRetry(ctx, part, attempts); err != nil {
+		imageResult, err := r.sendChannelPayloadWithRetry(ctx, part, attempts)
+		if err != nil {
 			return result, err
+		}
+		if len(events) > 0 {
+			r.rememberImageModels(events[0], part, apiMessageID(imageResult))
 		}
 	}
 	for _, video := range msg.VideoURLs {
