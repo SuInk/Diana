@@ -43,18 +43,24 @@ type RepositoryWatchPlugin struct {
 }
 
 type repositoryWatchSnapshot struct {
-	CommitSHA         string
-	PullRequestCursor string
-	IssueCursor       string
-	ReleaseTag        string
-	StarCount         int
-	HasStarCount      bool
+	CommitSHA          string
+	PullRequestCursor  string
+	IssueCursor        string
+	ReleaseTag         string
+	ReleasePublishedAt time.Time
+	ReleaseID          int64
+	StarCount          int
+	HasStarCount       bool
 	// StarEventID 是最近一条已处理的 WatchEvent id，空串表示还没初始化过。
 	StarEventID string
 	// StarEventAt 是那条事件的 GitHub 时间，只在 id 被挤出事件窗口时当兜底用。
 	StarEventAt          time.Time
 	StarNotifiedCount    int
 	HasStarNotifiedCount bool
+	previous             *repositoryWatchSnapshot
+	repository           string
+	branch               string
+	selection            repositoryWatchSelection
 }
 
 // repositoryWatchStarState 是 Star 监控这一轮要写回的游标。
@@ -407,7 +413,8 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
 		return repositoryWatchChange{}, fmt.Errorf("repository watch: at least one update type must be enabled")
 	}
-	change := repositoryWatchChange{Repository: repository, Branch: branch}
+	cursor.previous = nil
+	change := repositoryWatchChange{Repository: repository, Branch: branch, Snapshot: repositoryWatchSnapshot{previous: &cursor, repository: repository, branch: branch, selection: selection}}
 	var errs []error
 	if selection.Commits {
 		commits, snapshot, truncated, err := p.fetchCommits(ctx, repository, branch, cursor.CommitSHA, settings)
@@ -441,12 +448,14 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.Releases {
-		releases, snapshot, err := p.fetchReleases(ctx, repository, cursor.ReleaseTag, settings)
+		releases, snapshot, err := p.fetchReleases(ctx, repository, cursor, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
 			change.Releases = releases
-			change.Snapshot.ReleaseTag = snapshot
+			change.Snapshot.ReleaseTag = snapshot.ReleaseTag
+			change.Snapshot.ReleasePublishedAt = snapshot.ReleasePublishedAt
+			change.Snapshot.ReleaseID = snapshot.ReleaseID
 		}
 	}
 	if selection.Stars {
@@ -566,31 +575,40 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	if strings.TrimSpace(branch) != "" {
 		query.Set("sha", strings.TrimSpace(branch))
 	}
-	var payload []struct {
-		SHA     string `json:"sha"`
-		HTMLURL string `json:"html_url"`
-		Commit  struct {
-			Message string `json:"message"`
-			Author  struct {
-				Name string    `json:"name"`
-				Date time.Time `json:"date"`
-			} `json:"author"`
-		} `json:"commit"`
-		Author *struct {
-			Login string `json:"login"`
-		} `json:"author"`
-	}
+	var payload []repositoryCommitRecord
 	if err := p.getJSON(ctx, "/repos/"+repository+"/commits?"+query.Encode(), settings, &payload); err != nil {
 		return nil, "", false, fmt.Errorf("读取 %s commits: %w", repository, err)
 	}
 	if len(payload) == 0 {
+		if strings.TrimSpace(cursor) != "" {
+			logRepositoryOpaqueCursorRetained(repository, "commit", cursor, "", "empty_response")
+			return nil, cursor, false, nil
+		}
 		return nil, "", false, fmt.Errorf("仓库 %s 没有可监控的 commit", repository)
 	}
 	latest := strings.TrimSpace(payload[0].SHA)
+	if latest == "" {
+		return nil, cursor, false, fmt.Errorf("仓库 %s 返回了没有 SHA 的 commit", repository)
+	}
 	if strings.TrimSpace(cursor) == "" {
 		return nil, latest, false, nil
 	}
+	found := false
+	for _, item := range payload {
+		if item.SHA == cursor {
+			found = true
+			break
+		}
+	}
 	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
+	verifiedTotal := 0
+	if !found {
+		verified, total, forward, err := p.forwardCommitRange(ctx, repository, cursor, latest, limit, settings)
+		if err != nil || !forward {
+			return nil, cursor, false, err
+		}
+		payload, verifiedTotal = verified, total
+	}
 	commits := make([]repositoryWatchCommit, 0, min(limit, len(payload)))
 	newCommitCount := 0
 	for _, item := range payload {
@@ -613,7 +631,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 			PushedAt: item.Commit.Author.Date,
 		})
 	}
-	return commits, latest, newCommitCount > limit, nil
+	return commits, latest, max(newCommitCount, verifiedTotal) > limit, nil
 }
 
 func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
@@ -1047,47 +1065,6 @@ func commitsWithoutPullRequestMerges(commits []repositoryWatchCommit, pullReques
 	return filtered
 }
 
-func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository, cursor string, settings SettingValues) ([]repositoryWatchRelease, string, error) {
-	var payload []struct {
-		Tag         string    `json:"tag_name"`
-		Name        string    `json:"name"`
-		Body        string    `json:"body"`
-		HTMLURL     string    `json:"html_url"`
-		PublishedAt time.Time `json:"published_at"`
-		Draft       bool      `json:"draft"`
-	}
-	if err := p.getJSON(ctx, "/repos/"+repository+"/releases?per_page=50", settings, &payload); err != nil {
-		return nil, "", fmt.Errorf("读取 %s releases: %w", repository, err)
-	}
-	latest := ""
-	result := make([]repositoryWatchRelease, 0, 4)
-	for _, item := range payload {
-		if item.Draft {
-			continue
-		}
-		if latest == "" {
-			latest = item.Tag
-		}
-		if cursor == "" || item.Tag == cursor {
-			if item.Tag == cursor {
-				break
-			}
-			continue
-		}
-		result = append(result, repositoryWatchRelease{
-			Tag:         item.Tag,
-			Name:        item.Name,
-			Body:        truncateRunes(strings.TrimSpace(item.Body), 4000),
-			URL:         item.HTMLURL,
-			PublishedAt: item.PublishedAt,
-		})
-	}
-	if latest == "" {
-		latest = repositoryWatchNoReleaseCursor
-	}
-	return result, latest, nil
-}
-
 // repositoryWatchNoStarEvent 表示「已经初始化过，只是那时仓库还没有 star 事件」。
 // 必须和空串（从没查过）分开：混在一起的话，仓库第一次被 star 会被当成初始化而静默吞掉。
 const repositoryWatchNoStarEvent = "__none__"
@@ -1115,9 +1092,24 @@ func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository strin
 	if err != nil {
 		return nil, repositoryWatchStarState{}, err
 	}
-	state := repositoryWatchStarState{Count: repo.StargazersCount, EventID: repositoryWatchNoStarEvent}
-	if len(events) > 0 {
-		state.EventID, state.EventAt = events[0].ID, events[0].StarredAt
+	state := repositoryWatchStarState{Count: repo.StargazersCount, EventID: strings.TrimSpace(cursor.StarEventID), EventAt: cursor.StarEventAt}
+	if state.EventID == "" {
+		state.EventID = repositoryWatchNoStarEvent
+	}
+	for _, item := range events {
+		if item.ID == state.EventID {
+			state.EventID, state.EventAt = advanceStarCursor(state.EventID, state.EventAt, item)
+		}
+	}
+	for _, item := range events {
+		state.EventID, state.EventAt = advanceStarCursor(state.EventID, state.EventAt, item)
+	}
+	if state.EventID == cursor.StarEventID && cursor.StarEventID != "" && cursor.StarEventID != repositoryWatchNoStarEvent && (len(events) == 0 || events[0].ID != state.EventID) {
+		observed := repositoryWatchNoStarEvent
+		if len(events) > 0 {
+			observed = events[0].ID
+		}
+		logRepositoryOpaqueCursorRetained(repository, "star", cursor.StarEventID, observed, "empty_or_older_response")
 	}
 	// 首轮只记游标：把仓库历史上的 star 一次性全播出去毫无意义。
 	if strings.TrimSpace(cursor.StarEventID) == "" {
@@ -1174,42 +1166,6 @@ func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository 
 		})
 	}
 	return events, nil
-}
-
-// starEventsAfter 取出游标之后的 star 事件，按时间正序返回（读起来是「谁先点的」）。
-// events 是 GitHub 给的顺序，新的在前。
-func starEventsAfter(events []repositoryWatchStargazer, cursorID string, cursorAt time.Time) []repositoryWatchStargazer {
-	cursorID = strings.TrimSpace(cursorID)
-	fresh := events
-	matched := false
-	if cursorID != "" && cursorID != repositoryWatchNoStarEvent {
-		for index, item := range events {
-			if item.ID == cursorID {
-				fresh, matched = events[:index], true
-				break
-			}
-		}
-	}
-	if !matched {
-		// 游标那条已经被挤出窗口，或者上一轮仓库还没有 star 事件。退回按事件时间筛：
-		// 两边都是 GitHub 的时钟，不存在本机时钟快慢的问题。
-		if cursorAt.IsZero() {
-			fresh = events
-		} else {
-			filtered := make([]repositoryWatchStargazer, 0, len(events))
-			for _, item := range events {
-				if item.StarredAt.After(cursorAt) {
-					filtered = append(filtered, item)
-				}
-			}
-			fresh = filtered
-		}
-	}
-	out := make([]repositoryWatchStargazer, 0, len(fresh))
-	for index := len(fresh) - 1; index >= 0; index-- {
-		out = append(out, fresh[index])
-	}
-	return out
 }
 
 func (p *RepositoryWatchPlugin) getJSON(ctx context.Context, path string, settings SettingValues, target any) error {

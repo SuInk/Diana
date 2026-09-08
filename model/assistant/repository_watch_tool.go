@@ -466,6 +466,8 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		LastPullRequestCursor:   baseline.PullRequestCursor,
 		LastIssueCursor:         baseline.IssueCursor,
 		LastReleaseTag:          baseline.ReleaseTag,
+		LastReleasePublishedAt:  baseline.ReleasePublishedAt,
+		LastReleaseID:           baseline.ReleaseID,
 		LastStarCount:           baseline.StarCount,
 		LastNotifiedStarCount:   baseline.StarCount,
 		LastStarEventID:         baseline.StarEventID,
@@ -689,6 +691,8 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		}
 		if baselineSelection.Releases {
 			item.LastReleaseTag = baseline.ReleaseTag
+			item.LastReleasePublishedAt = baseline.ReleasePublishedAt
+			item.LastReleaseID = baseline.ReleaseID
 		}
 		if baselineSelection.Stars {
 			item.LastStarCount = baseline.StarCount
