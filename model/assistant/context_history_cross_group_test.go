@@ -58,3 +58,21 @@ func TestContextHistoryStillSearchesCrossGroupOnFirstLoad(t *testing.T) {
 		t.Fatalf("首次加载应当检索一次跨群上下文，实际 %d 次", store.searches)
 	}
 }
+
+func TestPromptHistoryPreservesCachedCrossGroupIdentityWithoutSearching(t *testing.T) {
+	store := &crossGroupSearchCounter{memoryMessageHistoryStore: newMemoryMessageHistoryStore()}
+	cfg := BotConfig{OwnerID: "100001", CrossGroupMemoryEnabled: boolPointer(true)}.WithDefaults()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	event := crossGroupProbeEvent()
+	event.replyHistoryLoaded = true
+	event.replyHistory = []MessageEvent{{Kind: EventKindGroup, GroupID: "other", UserID: "100001", SenderName: "old owner card", RawMessage: "相关历史", Time: 100, crossGroupContext: true}}
+	history := runtime.promptContextHistory(event, cfg)
+	if len(history) != 1 || !history[0].crossGroupContext || history[0].UserID != cfg.OwnerID || store.searches != 0 {
+		t.Fatalf("cached reference lost or searched again: history=%+v searches=%d", history, store.searches)
+	}
+	cfg.CrossGroupMemoryEnabled = boolPointer(false)
+	if history := runtime.promptContextHistory(event, cfg); len(history) != 0 {
+		t.Fatal("disabled cross-group memory retained cached reference")
+	}
+}

@@ -335,7 +335,7 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 		args = append(args, strings.TrimSpace(query.ExcludeSession))
 	}
 	if s.historyFTS {
-		if events, total, ok, err := s.searchMessageEventsFTS(ctx, where, args, terms, limit); ok {
+		if events, total, ok, err := s.searchMessageEventsFTS(ctx, where, args, terms, limit, query.Sort, query.Offset); ok {
 			return events, total, err
 		}
 	}
@@ -361,13 +361,18 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 		scoreArgs = append(scoreArgs, "%"+escapeMessageHistoryLike(term)+"%")
 	}
 	rowArgs := append(append([]any(nil), args...), scoreArgs...)
-	rowArgs = append(rowArgs, limit)
+	order := `(` + strings.Join(scoreParts, ` + `) + `) DESC, event_time DESC, created_at DESC, id DESC`
+	if query.Sort == "oldest" || query.Sort == "newest" {
+		order = historyChronologicalOrder(query.Sort, "")
+		rowArgs = append([]any(nil), args...)
+	}
+	rowArgs = append(rowArgs, limit, max(0, query.Offset))
 	rows, err := s.db.QueryContext(ctx, `
 SELECT payload
 FROM message_events
 WHERE `+where+`
-ORDER BY (`+strings.Join(scoreParts, ` + `)+`) DESC, event_time DESC, created_at DESC, id DESC
-LIMIT ?`, rowArgs...)
+ORDER BY `+order+`
+LIMIT ? OFFSET ?`, rowArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -529,7 +534,7 @@ func normalizeMessageHistoryLimit(limit int) int {
 // 按 BM25 排前面，只靠短词命中的按时间排在后面。
 //
 // 第三个返回值为 false 表示这次用不了索引，调用方回退到原来的 LIKE 检索。
-func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, args []any, terms []string, limit int) ([]assistant.MessageEvent, int, bool, error) {
+func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, args []any, terms []string, limit int, order string, offset int) ([]assistant.MessageEvent, int, bool, error) {
 	match := messageHistoryFTSQuery(terms)
 	if match == "" {
 		return nil, 0, false, nil
@@ -554,12 +559,16 @@ FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?
 	}
 
 	rowArgs := append(append([]any(nil), hitArgs...), args...)
-	rowArgs = append(rowArgs, limit)
+	rowArgs = append(rowArgs, limit, max(0, offset))
+	ordering := "h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC"
+	if order == "oldest" || order == "newest" {
+		ordering = historyChronologicalOrder(order, "e.")
+	}
 	rows, err := s.db.QueryContext(ctx, hits+`
 SELECT e.payload `+from+`
 WHERE `+hit+` AND `+scopedWhere+`
-ORDER BY h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC
-LIMIT ?`, rowArgs...)
+ORDER BY `+ordering+`
+LIMIT ? OFFSET ?`, rowArgs...)
 	if err != nil {
 		return nil, 0, false, nil
 	}
@@ -572,7 +581,7 @@ LIMIT ?`, rowArgs...)
 		}
 		var event assistant.MessageEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			continue
+			return nil, 0, true, fmt.Errorf("decode message event: %w", err)
 		}
 		events = append(events, event)
 	}
@@ -580,6 +589,14 @@ LIMIT ?`, rowArgs...)
 		return nil, 0, true, err
 	}
 	return events, total, true, nil
+}
+
+func historyChronologicalOrder(order, prefix string) string {
+	direction := " DESC"
+	if order == "oldest" {
+		direction = " ASC"
+	}
+	return prefix + "event_time" + direction + ", " + prefix + "created_at" + direction + ", " + prefix + "id" + direction
 }
 
 // prefixMessageHistoryColumns 给 where 子句里的列名加上 e. 前缀。
