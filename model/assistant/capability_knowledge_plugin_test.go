@@ -65,7 +65,7 @@ func TestCapabilityKnowledgeFiltersUnsupportedPluginsForPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(raw, `"id": "plugin:`+musicPluginID+`"`) || strings.Contains(raw, `"id": "plugin:`+voiceTTSPluginID+`"`) {
+	if strings.Contains(raw, `"id": "plugin:`+voiceTTSPluginID+`"`) {
 		t.Fatalf("OneBot-only plugin leaked into Telegram capability result: %s", raw)
 	}
 }

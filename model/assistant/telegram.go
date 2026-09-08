@@ -253,6 +253,9 @@ func (c *TelegramChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 // 于是别人「引用 Diana 刚说的那句话」时按 ID 回查必然落空——Diana 完全看不到自己
 // 被引用了什么。
 func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
+	if strings.Contains(msg.Text, "[CQ:record") {
+		return nil, fmt.Errorf("telegram: 未转换的 CQ 音频消息，拒绝按文本发送")
+	}
 	chatID := strings.TrimSpace(msg.GroupID)
 	if chatID == "" {
 		chatID = strings.TrimSpace(msg.UserID)
@@ -318,6 +321,13 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		}
 		keep(result)
 	}
+	for _, audio := range msg.AudioURLs {
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendAudio", "audio", audio, msg.ReplyMessageID)
+		if err != nil {
+			return nil, err
+		}
+		keep(result)
+	}
 	return first, nil
 }
 
@@ -365,7 +375,7 @@ func (c *TelegramChannel) SendChatAction(ctx context.Context, msg OutgoingMessag
 
 // sendMedia 发送单个媒体。远程 URL 直接交给 Telegram 去拉，本地文件走
 // multipart 上传——Telegram 拉不到我们本机的 /media/resolver 地址。
-func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string) (map[string]any, error) {
+func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, method, field, source string, replyIDs ...string) (map[string]any, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return nil, nil
@@ -373,6 +383,10 @@ func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, metho
 	path := telegramLocalPath(source)
 	if path == "" {
 		params := map[string]any{"chat_id": chatID, field: source}
+		if len(replyIDs) > 0 && strings.TrimSpace(replyIDs[0]) != "" {
+			params["reply_to_message_id"] = strings.TrimSpace(replyIDs[0])
+			params["allow_sending_without_reply"] = true
+		}
 		if threadID = strings.TrimSpace(threadID); threadID != "" {
 			params["message_thread_id"] = threadID
 		}
@@ -385,7 +399,7 @@ func (c *TelegramChannel) sendMedia(ctx context.Context, chatID, threadID, metho
 	if info.Size() > telegramMaxUploadBytes {
 		return nil, fmt.Errorf("telegram: 媒体 %.1fMB 超过 Bot API 50MB 上传限制", float64(info.Size())/(1<<20))
 	}
-	return c.uploadMedia(ctx, method, chatID, threadID, field, path)
+	return c.uploadMedia(ctx, method, chatID, threadID, field, path, replyIDs...)
 }
 
 // telegramLocalPath 判断出站地址是否指向本机文件；不是则返回空串。
@@ -405,7 +419,7 @@ func telegramLocalPath(source string) string {
 	return ""
 }
 
-func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threadID, field, path string) (map[string]any, error) {
+func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threadID, field, path string, replyIDs ...string) (map[string]any, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("telegram: open media: %w", err)
@@ -414,6 +428,14 @@ func (c *TelegramChannel) uploadMedia(ctx context.Context, method, chatID, threa
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
+	if len(replyIDs) > 0 && strings.TrimSpace(replyIDs[0]) != "" {
+		if err := writer.WriteField("reply_to_message_id", strings.TrimSpace(replyIDs[0])); err != nil {
+			return nil, err
+		}
+		if err := writer.WriteField("allow_sending_without_reply", "true"); err != nil {
+			return nil, err
+		}
+	}
 	if err := writer.WriteField("chat_id", chatID); err != nil {
 		return nil, err
 	}

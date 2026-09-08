@@ -243,7 +243,7 @@ func TestMusicPluginFallsBackToTextOffOneBot(t *testing.T) {
 	plugin := newMusicTestPlugin(server)
 	plugin.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/netease-token"})
 
-	resp, err := plugin.Handle(context.Background(), musicTestRequest(server, PlatformTelegram))
+	resp, err := plugin.Handle(context.Background(), musicTestRequest(server, PlatformFeishu))
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}
@@ -253,7 +253,7 @@ func TestMusicPluginFallsBackToTextOffOneBot(t *testing.T) {
 	if strings.Contains(resp.Reply, "[CQ:") {
 		t.Fatalf("CQ code leaked to a non-OneBot platform: %q", resp.Reply)
 	}
-	if !strings.Contains(resp.Reply, "雾里") || !strings.Contains(resp.Reply, "不支持发送语音") {
+	if !strings.Contains(resp.Reply, "雾里") || !strings.Contains(resp.Reply, "https://music.163.com/song?id=") {
 		t.Fatalf("reply = %q", resp.Reply)
 	}
 }

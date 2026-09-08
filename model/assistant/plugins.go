@@ -73,10 +73,19 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 	}
 	manifest.Platforms = allPluginPlatforms()
 	switch manifest.ID {
-	case oneBotV11PluginID, musicPluginID, voiceTTSPluginID:
+	case oneBotV11PluginID, voiceTTSPluginID:
 		manifest.Platforms = []string{PlatformOneBotV11}
 	}
 	switch manifest.ID {
+	case musicPluginID:
+		manifest.PlatformNotes = map[string]string{
+			PlatformOneBotV11:  "发送 QQ 语音。",
+			PlatformTelegram:   "上传 MP3，使用 Telegram 原生音乐播放器；音频准备失败时明确报错。",
+			PlatformQQOfficial: "发送歌曲来源链接。",
+			PlatformDingTalk:   "发送歌曲来源链接。",
+			PlatformFeishu:     "发送歌曲来源链接。",
+			PlatformWeCom:      "发送歌曲来源链接。",
+		}
 	case messageHistoryPluginID:
 		manifest.PlatformNotes = map[string]string{
 			PlatformOneBotV11: "支持历史、引用、撤回和原始合并转发恢复。",
@@ -286,6 +295,10 @@ type EventObserverPlugin interface {
 // plugins keep the smaller Plugin contract.
 type AgentToolPlugin interface {
 	AgentTools(settings SettingValues) ([]agent.Tool, error)
+}
+
+type PlatformAgentToolPlugin interface {
+	AgentToolsForPlatform(platform string, settings SettingValues) ([]agent.Tool, error)
 }
 
 type AgentToolProviderPlugin interface {
@@ -973,7 +986,13 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 
 	var tools []agent.Tool
 	for _, item := range providers {
-		provided, err := item.plugin.AgentTools(item.settings)
+		var provided []agent.Tool
+		var err error
+		if scoped, ok := item.plugin.(PlatformAgentToolPlugin); ok {
+			provided, err = scoped.AgentToolsForPlatform(platform, item.settings)
+		} else {
+			provided, err = item.plugin.AgentTools(item.settings)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("diana: plugin %q agent tools: %w", item.id, err)
 		}

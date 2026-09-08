@@ -151,8 +151,8 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.2.1",
-		Description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐、酷狗并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。",
+		Version:     "0.2.2",
+		Description: "支持网易云、QQ 音乐和酷狗点歌及链接解析。OneBot QQ 发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
@@ -162,7 +162,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Label:       "允许点歌",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
-				Description: "开启后模型可以按用户要求搜歌并直接发出语音。关掉只保留链接解析。",
+				Description: "开启后模型可以按用户要求搜歌，按平台发送语音、原生音乐或歌曲链接。关掉只保留链接解析。",
 			},
 			{
 				Key:         musicSettingSources,
@@ -320,10 +320,14 @@ func (p *MusicPlugin) share(path string) (string, bool) {
 }
 
 func (p *MusicPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {
+	return p.AgentToolsForPlatform("", settings)
+}
+
+func (p *MusicPlugin) AgentToolsForPlatform(platform string, settings SettingValues) ([]agent.Tool, error) {
 	if !settings.Bool(musicSettingRequestSong, true) {
 		return nil, nil
 	}
-	return []agent.Tool{&dianaMusicTool{plugin: p, settings: settings}}, nil
+	return []agent.Tool{&dianaMusicTool{plugin: p, settings: settings, platform: platform}}, nil
 }
 
 func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
@@ -342,25 +346,24 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 		// 连歌名都拿不到就别抢这条消息，让链接解析去抓标题。
 		return nil, nil
 	}
+	if !IsOneBotPlatform(req.Event.Platform) && NormalizePlatformID(req.Event.Platform) != PlatformTelegram {
+		return &PluginResponse{Handled: true, Reply: musicLinkReply(found)}, nil
+	}
 	if reason := musicVoiceUnavailableReason(cfg, found); reason != "" {
 		return musicNoticeResponse(found, reason), nil
-	}
-	if !IsOneBotPlatform(req.Event.Platform) {
-		// 只有 OneBot v11 有 record 段。别的平台硬发 CQ 码会变成一行乱字符。
-		return musicNoticeResponse(found, "当前平台不支持发送语音"), nil
 	}
 	playable, ok := p.playableSong(ctx, cfg, found)
 	if !ok {
 		return musicNoticeResponse(found, "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"), nil
 	}
-	record, err := p.prepareSongVoice(ctx, cfg, playable)
+	record, err := p.prepareSongVoice(ctx, cfg, playable, req.Event.Platform)
 	if err != nil {
 		return musicNoticeResponse(playable, err.Error()), nil
 	}
 	return &PluginResponse{
 		Handled: true,
 		Reply:   musicVoiceReply(cfg, playable, record),
-		Context: musicSongContext(p, playable, "已作为语音发送"),
+		Context: musicSongContext(p, playable, "已准备音频，按当前平台发送"),
 	}, nil
 }
 
@@ -454,7 +457,7 @@ func musicVoiceUnavailableReason(cfg musicConfig, item song) string {
 
 // prepareSongVoice 把一首歌做成可以直接发出去的 CQ record，下载、转码、共享
 // 都在这里，链接解析和点歌走的是同一条路。
-func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, item song) (string, error) {
+func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, item song, platforms ...string) (string, error) {
 	if strings.TrimSpace(item.PlayURL) == "" {
 		return "", fmt.Errorf("拿不到可播放的音频")
 	}
@@ -463,7 +466,16 @@ func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, ite
 		log.Printf("music download failed: source=%s song=%s: %v", item.Source, item.ID, err)
 		return "", fmt.Errorf("下载音频失败")
 	}
-	if encoded, encodeErr := p.encodeSilkIfConfigured(ctx, cfg, path); encodeErr != nil {
+	if len(platforms) > 0 && NormalizePlatformID(platforms[0]) == PlatformTelegram {
+		encoded := path + ".telegram.mp3"
+		if _, err := p.runCommand(ctx, cfg.FFmpegPath, "-hide_banner", "-loglevel", "error", "-y", "-i", path, "-vn", "-codec:a", "libmp3lame", "-q:a", "3", "-metadata", "title="+item.Name, "-metadata", "artist="+item.Artists, encoded); err != nil {
+			cleanupLocalMediaFile(path)
+			cleanupLocalMediaFile(encoded)
+			return "", fmt.Errorf("转换 Telegram 音频失败，请检查 ffmpeg")
+		}
+		cleanupLocalMediaFile(path)
+		path = encoded
+	} else if encoded, encodeErr := p.encodeSilkIfConfigured(ctx, cfg, path); encodeErr != nil {
 		log.Printf("music silk encode failed: song=%s: %v", item.ID, encodeErr)
 	} else if encoded != path {
 		cleanupLocalMediaFile(path)
@@ -563,6 +575,7 @@ func formatSongDuration(d time.Duration) string {
 type dianaMusicTool struct {
 	plugin   *MusicPlugin
 	settings SettingValues
+	platform string
 }
 
 type musicToolResult struct {
@@ -577,7 +590,7 @@ type musicToolResult struct {
 func (t *dianaMusicTool) Name() string { return musicToolName }
 
 func (t *dianaMusicTool) Description() string {
-	return `按歌名或歌手依次搜索已启用的网易云、QQ 音乐和酷狗曲库，把第一首可播放的匹配歌曲下载成语音直接发出去（点歌）。仅当用户要求放歌、点歌、来一首，或指名要听某首歌时调用；只是聊到某首歌、讨论音乐话题、问歌词或歌手信息时严禁调用。调用后工具会直接完成本次回复，不要再发送重复文字。语音只在 QQ（OneBot v11）上能正常播放。input: {"query":"搜索词，尽量写成「歌名 歌手」，例如「稻香 周杰伦」"}`
+	return `按歌名或歌手搜索并点播歌曲。OneBot QQ 发送语音；Telegram 上传歌曲，使用原生音乐播放器；其他平台仅发送歌曲来源链接。仅当用户要求放歌、点歌、来一首，或指名要听某首歌时调用；讨论音乐、问歌词或歌手信息时不要调用。工具会完成本次回复，不要重复发送文字。没有可用音频时如实说明，不能声称播放成功。`
 }
 
 func (t *dianaMusicTool) InputSchema() map[string]any {
@@ -616,10 +629,14 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 		}
 		return "", fmt.Errorf("各家曲库都没搜到能放的《%s》，换个歌名或补上歌手再试", query)
 	}
+	if !IsOneBotPlatform(t.platform) && NormalizePlatformID(t.platform) != PlatformTelegram {
+		body, err := json.Marshal(musicToolResult{OK: true, Action: "song_link", Song: found.Title(), Source: found.Source, Reply: musicLinkReply(found)})
+		return string(body), err
+	}
 	if reason := musicVoiceUnavailableReason(cfg, found); reason != "" {
 		return "", fmt.Errorf("《%s》%s", found.Title(), reason)
 	}
-	record, err := t.plugin.prepareSongVoice(ctx, cfg, found)
+	record, err := t.plugin.prepareSongVoice(ctx, cfg, found, t.platform)
 	if err != nil {
 		return "", fmt.Errorf("《%s》%s", found.Title(), err.Error())
 	}
@@ -644,10 +661,11 @@ func (t *dianaMusicTool) TerminalResult(output string) (string, bool) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		return "", false
 	}
-	if !result.OK || strings.TrimSpace(result.CQRecord) == "" {
+	if !result.OK || (strings.TrimSpace(result.CQRecord) == "" && result.Action != "song_link") {
 		return "", false
 	}
-	return firstNonEmpty(strings.TrimSpace(result.Reply), result.CQRecord), true
+	reply := firstNonEmpty(strings.TrimSpace(result.Reply), result.CQRecord)
+	return reply, strings.TrimSpace(reply) != ""
 }
 
 func musicConfigFromSettings(settings SettingValues) musicConfig {

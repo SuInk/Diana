@@ -111,6 +111,7 @@ func (t *outboundTurn) delivery() OutboundDelivery {
 func outgoingMediaCounts(msg OutgoingMessage) (images, videos, audios int) {
 	images = len(msg.ImageURLs)
 	videos = len(msg.VideoURLs)
+	audios = len(msg.AudioURLs)
 	for _, segment := range msg.Segments {
 		switch strings.ToLower(strings.TrimSpace(segment.Type)) {
 		case "image":
@@ -160,6 +161,7 @@ func outgoingMessageFingerprint(msg OutgoingMessage) string {
 		"mention=" + msg.MentionUserID,
 		"images=" + strings.Join(msg.ImageURLs, "|"),
 		"videos=" + strings.Join(msg.VideoURLs, "|"),
+		"audios=" + strings.Join(msg.AudioURLs, "|"),
 	}
 	for _, segment := range msg.Segments {
 		parts = append(parts, "segment="+segment.Type+":"+segmentFingerprint(segment))
