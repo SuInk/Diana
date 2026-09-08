@@ -2466,22 +2466,12 @@ func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decis
 	if !parsed {
 		return "主动回复判断模型返回了无法解析的结果，已保持沉默"
 	}
-	if decision.Scores != nil && decision.Scores.valid() {
-		result := "总分未达到发言门槛"
-		if allowed {
-			result = "达到发言门槛"
-		}
-		if decisionAllowed && !cooldownAllowed {
-			result = fmt.Sprintf("达到发言门槛，但仍在 %d 秒主动闲聊冷却内", int(chatIn.Cooldown/time.Second))
-		}
-		return fmt.Sprintf("发言评分 %.1f/100，门槛 %.0f：%s。%s", decision.Scores.average(), participationScoreThreshold, result, decision.Scores.description())
-	}
 	if chatIn.Participation != nil {
 		p := chatIn.Participation
 		if decisionAllowed && !cooldownAllowed {
 			return fmt.Sprintf("模型判断适合接话，但本群仍在 %d 秒主动闲聊冷却内：%s", p.CooldownSeconds, decision.Reason)
 		}
-		return fmt.Sprintf("发言偏好判断：允许回复 %t；%s（主动参与 %d，闲聊接话 %d，连续跟进 %d，介入克制 %d，新增信息要求 %d）", allowed, decision.Reason, p.Desire, p.Social, p.Followup, p.Restraint, p.Information)
+		return fmt.Sprintf("接话判断（%s）：允许回复 %t；%s", p.replyLevel().Label(), allowed, decision.Reason)
 	}
 	detail := strings.TrimSpace(decision.Reason)
 	if detail == "" {
@@ -2753,15 +2743,14 @@ func proactiveReplyMessageAge(currentTime int64, previousTime int64) *int64 {
 }
 
 type proactiveReplyDecision struct {
-	Scores          participationScores `json:"scores,omitempty"`
-	ShouldReply     bool                `json:"should_reply"`
-	Confidence      float64             `json:"confidence"`
-	Category        string              `json:"category"`
-	TargetMessageID string              `json:"target_message_id,omitempty"`
-	TurnMessageIDs  []string            `json:"turn_message_ids,omitempty"`
-	DirectedAtBot   bool                `json:"directed_at_bot"`
-	Answerable      bool                `json:"answerable"`
-	Substantive     bool                `json:"substantive"`
+	ShouldReply     bool     `json:"should_reply"`
+	Confidence      float64  `json:"confidence"`
+	Category        string   `json:"category"`
+	TargetMessageID string   `json:"target_message_id,omitempty"`
+	TurnMessageIDs  []string `json:"turn_message_ids,omitempty"`
+	DirectedAtBot   bool     `json:"directed_at_bot"`
+	Answerable      bool     `json:"answerable"`
+	Substantive     bool     `json:"substantive"`
 	// RequestsResponse 表示发言者这句话本身在要求得到回应。它和 ShouldReply 是两
 	// 件事：后者是路由器的最终结论，前者只描述用户的诉求，用来在结论保守过头时
 	// 把明确的追问救回来。以前这件事是拿「帮我/请你/闭嘴/好的」之类的词表在代码
@@ -2799,13 +2788,10 @@ func (decision proactiveReplyDecision) chatIn() bool {
 // allows 只判断消息是否值得进入正式回复。事实准确性由生成后的
 // judgeProactiveReplyQuality 发送前审核负责，不能在尚未搜索或调用工具前先拦掉。
 func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSettings) bool {
-	if decision.Scores != nil {
-		return decision.Scores.valid() && decision.Scores.average() >= participationScoreThreshold
-	}
 	if chatIn.Participation != nil {
 		category := decision.normalizedCategory()
 		return decision.ShouldReply && decision.Confidence >= 0 && decision.Confidence <= 1 &&
-			(category == "chat_in" || category == "needs_response" || category == "bot_related" && decision.DirectedAtBot)
+			(category == "chat_in" && chatIn.Enabled || category == "needs_response" && chatIn.Enabled || category == "bot_related" && decision.DirectedAtBot)
 	}
 	if !decision.ShouldReply || decision.Confidence < 0 || decision.Confidence > 1 {
 		return false
@@ -3001,18 +2987,17 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 		return proactiveReplyDecision{}, false
 	}
 	var payload struct {
-		Scores           json.RawMessage `json:"scores"`
-		ShouldReply      *bool           `json:"should_reply"`
-		Confidence       *float64        `json:"confidence"`
-		Category         *string         `json:"category"`
-		TargetMessageID  *string         `json:"target_message_id"`
-		TurnMessageIDs   []string        `json:"turn_message_ids"`
-		DirectedAtBot    *bool           `json:"directed_at_bot"`
-		Answerable       *bool           `json:"answerable"`
-		Substantive      *bool           `json:"substantive"`
-		RequestsResponse *bool           `json:"requests_response"`
-		Blocker          *string         `json:"blocker"`
-		Reason           *string         `json:"reason"`
+		ShouldReply      *bool    `json:"should_reply"`
+		Confidence       *float64 `json:"confidence"`
+		Category         *string  `json:"category"`
+		TargetMessageID  *string  `json:"target_message_id"`
+		TurnMessageIDs   []string `json:"turn_message_ids"`
+		DirectedAtBot    *bool    `json:"directed_at_bot"`
+		Answerable       *bool    `json:"answerable"`
+		Substantive      *bool    `json:"substantive"`
+		RequestsResponse *bool    `json:"requests_response"`
+		Blocker          *string  `json:"blocker"`
+		Reason           *string  `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil {
 		return proactiveReplyDecision{}, false
@@ -3023,22 +3008,11 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	decision := proactiveReplyDecision{
 		Category: *payload.Category,
 	}
-	if payload.Scores != nil {
-		if err := json.Unmarshal(payload.Scores, &decision.Scores); err != nil || !decision.Scores.valid() {
-			return proactiveReplyDecision{}, false
-		}
-		switch decision.normalizedCategory() {
-		case "chat_in", "needs_response", "bot_related":
-		default:
-			return proactiveReplyDecision{}, false
-		}
-		decision.ShouldReply = decision.Scores.average() >= participationScoreThreshold
-	} else {
-		// Compatibility for older router providers; new prompts only request scores.
-		if payload.ShouldReply == nil || payload.Confidence == nil {
-			return proactiveReplyDecision{}, false
-		}
-		decision.ShouldReply = *payload.ShouldReply
+	if payload.ShouldReply == nil || (payload.Confidence == nil && (payload.Reason == nil || strings.TrimSpace(*payload.Reason) == "")) {
+		return proactiveReplyDecision{}, false
+	}
+	decision.ShouldReply = *payload.ShouldReply
+	if payload.Confidence != nil {
 		decision.Confidence = *payload.Confidence
 	}
 	if payload.TargetMessageID != nil {
@@ -3070,10 +3044,11 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	if decision.Confidence < 0 || decision.Confidence > 1 {
 		return proactiveReplyDecision{}, false
 	}
-	if decision.Scores != nil {
+	if payload.DirectedAtBot == nil && payload.Confidence == nil {
 		decision.DirectedAtBot = decision.normalizedCategory() == "bot_related"
+	}
+	if payload.RequestsResponse == nil && payload.Confidence == nil {
 		decision.RequestsResponse = decision.normalizedCategory() != "chat_in"
-		decision.Reason = decision.Scores.description()
 	}
 	return decision, true
 }
@@ -3140,18 +3115,6 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 	if writer == nil {
 		return
 	}
-	if decision.Scores != nil && decision.Scores.valid() {
-		_ = writer.AppendLog(ctx, applog.Entry{
-			Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "diana.proactive_reply_route", Message: "模型已完成五项发言评分", Actor: oneBotEventActor(event), Target: event.MessageID,
-			Metadata: map[string]any{
-				"group_id": event.GroupID, "user_id": event.UserID, "parsed": parsed, "scores": decision.Scores,
-				"reply_score": decision.Scores.average(), "score_threshold": participationScoreThreshold, "participation": cfg.participationPreferences(),
-				"category": decision.Category, "target_message_id": decision.TargetMessageID, "turn_message_ids": decision.TurnMessageIDs,
-				"decision_allowed": decisionAllowed, "allowed": allowed, "reason": event.routingReason, "raw": raw,
-			},
-		})
-		return
-	}
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
@@ -3166,16 +3129,15 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 			"should_reply":      decision.ShouldReply,
 			"requests_response": decision.RequestsResponse,
 			"blocker":           decision.Blocker,
-			"confidence":        decision.Confidence,
+			"reply_level":       cfg.participationPreferences().replyLevel(),
 			"category":          decision.Category,
 			"target_message_id": decision.TargetMessageID,
 			"turn_message_ids":  append([]string(nil), decision.TurnMessageIDs...),
 			"directed_at_bot":   decision.DirectedAtBot,
 			"answerable":        decision.Answerable,
 			"reason":            truncateRunesFromStart(decision.Reason, 160),
-			"participation":     cfg.participationPreferences(),
+			"cooldown_seconds":  cfg.participationPreferences().CooldownSeconds,
 			"decision_allowed":  decisionAllowed,
-			"sample_allowed":    sampleAllowed,
 			"allowed":           allowed,
 			"raw":               truncateRunesFromStart(strings.TrimSpace(raw), 240),
 		},

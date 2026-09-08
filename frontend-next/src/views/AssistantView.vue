@@ -2298,7 +2298,6 @@ function setReplyDesire(value: string): void {
   form.value.natural_interjection_enabled = false;
   form.value.chat_in_threshold = 0;
   form.value.chat_in_chance = 0;
-  form.value.chat_in_cooldown_seconds = 0;
 }
 
 function setParticipation(value: ParticipationPreferences | undefined): void {

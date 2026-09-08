@@ -91,7 +91,7 @@ func TestLegacyNaturalInterjectionMigratesToMaxReplyDesire(t *testing.T) {
 	cfg := DefaultBotConfig()
 	cfg.NaturalInterjectionEnabled = boolPointer(true)
 	settings := cfg.chatInSettings()
-	if !settings.Enabled || settings.Participation.Desire != 100 || settings.Chance != 1 || settings.Cooldown != 0 {
+	if !settings.Enabled || settings.Participation.Desire != 100 || settings.Chance != 1 || settings.Cooldown != 30*time.Second {
 		t.Fatalf("legacy natural interjection settings = %#v", settings)
 	}
 }
@@ -102,7 +102,7 @@ func TestNaturalInterjectionCanBeConfiguredPerGroup(t *testing.T) {
 		"natural": {GroupID: "natural", NaturalInterjectionEnabled: boolPointer(true)},
 		"quiet":   {GroupID: "quiet", NaturalInterjectionEnabled: boolPointer(false)},
 	}})
-	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); settings.Participation.Desire != 100 || settings.Cooldown != 0 {
+	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); settings.Participation.Desire != 100 || settings.Cooldown != 30*time.Second {
 		t.Fatalf("natural group settings = %#v", settings)
 	}
 	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "quiet"}).chatInSettings(); settings.Natural {
@@ -281,7 +281,7 @@ func TestChatInOffIsNotResurrectedByNaturalInterjection(t *testing.T) {
 		ChatInLevel:                ChatInLevelLow,
 		NaturalInterjectionEnabled: boolPointer(true),
 	}.chatInSettings()
-	if !on.Enabled || on.Participation.Desire != 100 || on.Cooldown != 0 {
+	if !on.Enabled || on.Participation.Desire != 100 || on.Cooldown != 30*time.Second {
 		t.Fatalf("legacy natural mode did not migrate to max desire: %#v", on)
 	}
 }
@@ -296,7 +296,7 @@ func TestResponseModePresetClearsChatInFineTuning(t *testing.T) {
 	if preset.ChatInLevel != ChatInLevelLow {
 		t.Fatalf("preset level = %q", preset.ChatInLevel)
 	}
-	if preset.ChatInThreshold != 0 || preset.ChatInChance != 0 || preset.ChatInCooldownSeconds != 0 {
+	if preset.ChatInThreshold != 0 || preset.ChatInChance != 0 || preset.ChatInCooldownSeconds != 5 {
 		t.Fatalf("preset kept stale fine-tuning: %#v", preset)
 	}
 	if settings := preset.chatInSettings(); settings.Participation.Desire != 25 || settings.Threshold != 0 {
