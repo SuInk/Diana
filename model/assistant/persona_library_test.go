@@ -26,7 +26,7 @@ func TestPersonaExpressionBundlePreservesDaypartAndExistingEntries(t *testing.T)
 		t.Fatal(err)
 	}
 	old, ok := restored.Find("diana")
-	if !ok || old.SystemPrompt != original.SystemPrompt || old.ReplyStyle != ReplyStyleHuman || !boolValue(old.DaypartToneEnabled, false) {
+	if !ok || old.SystemPrompt != original.Normalized().SystemPrompt || old.ReplyStyle != "" || !boolValue(old.DaypartToneEnabled, false) {
 		t.Fatal("existing persona changed")
 	}
 	copy, ok := restored.Find(saved.ID)
@@ -72,7 +72,7 @@ func TestPersonaSelectionPersistsCustomWithoutRewriting(t *testing.T) {
 
 func TestLegacyRoleplayPersonaMigratesToAssistantWithActions(t *testing.T) {
 	persona := (Persona{Name: "旧扮演", ReplyStyle: ReplyStyleRoleplay}).Normalized()
-	if persona.ReplyStyle != ReplyStyleAssistant {
+	if persona.ReplyStyle != "" {
 		t.Fatalf("旧人设迁移后的表达风格 = %q", persona.ReplyStyle)
 	}
 	if !boolValue(persona.ActionDescriptionEnabled, false) {
@@ -103,7 +103,7 @@ func TestPersonaSetSaveAddsAndUpdates(t *testing.T) {
 	if len(set.Personas) != 1 {
 		t.Fatalf("update created a duplicate: %#v", set.Personas)
 	}
-	if updated.SystemPrompt != "你是一只猫" || !updated.UpdatedAt.After(saved.UpdatedAt) {
+	if !strings.HasPrefix(updated.SystemPrompt, "你是一只猫\n\n") || !updated.UpdatedAt.After(saved.UpdatedAt) {
 		t.Fatalf("updated = %#v", updated)
 	}
 }

@@ -207,11 +207,10 @@ export interface BotProfileConfig {
   welcome_message?: string;
   system_prompt?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
-  reply_style?: "human" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   action_description_enabled?: boolean;
-  /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
+  /** 机器人怎么称呼自己；留空跟随人设。 */
   self_reference?: string;
-  /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随表达风格。 */
+  /** 句尾语气词候选，逗号分隔。填多个由模型按当下语气挑，留空跟随人设。 */
   sentence_enders?: string;
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;
@@ -458,8 +457,6 @@ export interface BotGroupConfig {
   system_prompt?: string;
   /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
   response_mode?: "" | "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
-  /** 留空时跟随机器人全局表达风格。 */
-  reply_style?: "" | "human" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 本群是否穿插括号动作；不设表示跟随机器人。 */
   action_description_enabled?: boolean;
   /** 留空时跟随机器人全局设置。 */
@@ -1098,7 +1095,7 @@ export function generatePersona(
   description: string,
   name?: string,
   current?: string,
-  options?: { reply_style?: string; response_mode?: string; profile_id?: string; group?: string; model?: string }
+  options?: { response_mode?: string; profile_id?: string; group?: string; model?: string }
 ): Promise<PersonaGenerateResponse> {
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
@@ -2027,7 +2024,6 @@ export interface Persona {
   id: string;
   name: string;
   system_prompt?: string;
-  reply_style?: "" | "human" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   action_description_enabled?: boolean;
   daypart_tone_enabled?: boolean;
   self_reference?: string;
@@ -2058,7 +2054,7 @@ export interface PersonaImportResult {
   skipped: number;
   renamed: number;
   dropped: number;
-  /** 文件里写了但这一版不认识的表达风格；它们会被退回「助手」。 */
+  /** 旧文件中无法识别的表达风格；忽略该字段并保留人设正文。 */
   unknown_styles?: string[];
 }
 

@@ -3464,13 +3464,6 @@ a.nav-action {
   align-items: center;
 }
 
-.persona-selector {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-}
-
 .persona-saver .input {
   flex: 1 1 auto;
   min-width: 0;
@@ -3484,13 +3477,16 @@ a.nav-action {
   border-radius: 10px;
   background: var(--surface);
   overflow: hidden;
+  max-width: 100%;
 }
 
-.persona-chip:hover {
+.persona-chip:hover,
+.persona-chip.is-active {
   border-color: var(--accent);
 }
 
 .persona-chip-apply {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -3511,6 +3507,7 @@ a.nav-action {
 }
 
 .persona-chip-name {
+  overflow-wrap: anywhere;
   font-size: 13px;
   font-weight: 600;
 }
