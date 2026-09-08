@@ -29,6 +29,9 @@ func (r *Runtime) outboundChannelForEvent(event MessageEvent) (Channel, string, 
 		if err != nil {
 			return nil, "", err
 		}
+		if profile := strings.TrimSpace(event.ProfileID); profile != "" && binding.ProfileID != profile {
+			return nil, "", fmt.Errorf("diana: outbound profile %q is not configured", profile)
+		}
 		platform = binding.Platform
 		target = binding.Channel
 	}

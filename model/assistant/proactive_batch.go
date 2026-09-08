@@ -335,14 +335,14 @@ func (r *Runtime) cancelProactiveReplyBatch(event MessageEvent) {
 	r.proactiveBatchMu.Unlock()
 }
 
-func (r *Runtime) cancelProactiveReplyBatchesForGroup(groupID string) {
-	groupID = strings.TrimSpace(groupID)
-	if groupID == "" {
+func (r *Runtime) cancelProactiveReplyBatchesForGroup(event MessageEvent) {
+	if strings.TrimSpace(event.GroupID) == "" {
 		return
 	}
+	groupKey := r.outboundGroupKey(event)
 	r.proactiveBatchMu.Lock()
 	for key, batch := range r.proactiveBatches {
-		if len(batch.items) == 0 || strings.TrimSpace(batch.items[0].Event.GroupID) != groupID {
+		if len(batch.items) == 0 || r.outboundGroupKey(batch.items[0].Event) != groupKey {
 			continue
 		}
 		if batch.timer != nil {
