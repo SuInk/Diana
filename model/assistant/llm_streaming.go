@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -117,13 +118,24 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 		return p.provider.Generate(ctx, req)
 	}
 	events, err := streamer.Stream(ctx, req)
+	if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
+		return nil, err
+	}
 	if err != nil || events == nil {
 		// 起流失败就走老路。流式是为了一个诊断指标，不值得让它决定回复发不发得出去。
 		return p.provider.Generate(ctx, req)
 	}
 	response, err := accumulateChatEvents(ctx, events)
+	if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
+		return nil, err
+	}
 	if err != nil {
 		return p.provider.Generate(ctx, req)
+	}
+	if response != nil && len(response.ToolCalls) == 0 {
+		if notice := llm.RejectionNoticeError(response.Text); notice != nil {
+			return nil, notice
+		}
 	}
 	return response, nil
 }
