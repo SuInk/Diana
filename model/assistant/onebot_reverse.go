@@ -185,7 +185,7 @@ func (s *OneBotReverseServer) Send(ctx context.Context, msg OutgoingMessage) err
 
 // SendWithResult sends a message and preserves the OneBot response message_id.
 func (s *OneBotReverseServer) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
-	if strings.TrimSpace(msg.Text) == "" && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 {
+	if strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
 		return nil, nil
 	}
 	params := map[string]any{"message": buildOutgoingSegments(msg)}
