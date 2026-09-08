@@ -91,7 +91,7 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 					if _, err := r.getGroupMemberInfoForEvent(matchCtx, event, event.GroupID, member.UserID); err != nil {
 						continue
 					}
-					avatar, err := provider.MemberAvatar(matchCtx, member.UserID)
+					avatar, err := provider.MemberAvatar(withDirectoryEvent(matchCtx, event), member.UserID)
 					if err != nil {
 						continue
 					}

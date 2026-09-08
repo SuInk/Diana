@@ -50,6 +50,7 @@ func (c *TelegramChannel) MemberAvatar(ctx context.Context, userID string) (Grou
 }
 
 func (r *Runtime) avatarSourceURL(ctx context.Context, event MessageEvent, id string, group bool) string {
+	ctx = withDirectoryEvent(ctx, event)
 	if r.currentPlatform(event) == PlatformOneBotV11 {
 		if group {
 			return OneBotGroupAvatarURL(id)

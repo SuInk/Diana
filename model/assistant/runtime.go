@@ -970,6 +970,7 @@ func (r *Runtime) GetGroupInfo(ctx context.Context, groupID string) (OneBotGroup
 }
 
 func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, groupID string) (OneBotGroupInfo, error) {
+	ctx = withDirectoryEvent(ctx, event)
 	if provider, ok := eventChannelFor[GroupInfoChannel](r, event); ok {
 		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
@@ -1007,6 +1008,7 @@ func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID
 }
 
 func (r *Runtime) getGroupMemberInfoForEvent(ctx context.Context, event MessageEvent, groupID string, userID string) (OneBotGroupMemberInfo, error) {
+	ctx = withDirectoryEvent(ctx, event)
 	if provider, ok := eventChannelFor[GroupMemberChannel](r, event); ok {
 		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
@@ -8682,6 +8684,8 @@ func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEve
 
 func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
 	msg.Platform = event.Platform
+	msg.PlatformScope = event.PlatformScope
+	msg.GuildID = event.GuildID
 	msg.ProfileID = event.ProfileID
 	if event.Kind == EventKindGroup {
 		msg.GroupID = event.GroupID

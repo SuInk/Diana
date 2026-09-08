@@ -63,13 +63,17 @@
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
       <!-- 国内直连 GitHub 常常卡在几十 KB/s，这里挑一条快的下载线路。 -->
       <div v-if="releaseSelfUpdate && !sourceBuild" class="mirror-bar">
-        <label class="mirror-field">
-          <span>下载加速</span>
-          <select v-model="mirrorMode" :disabled="savingPolicy" @change="persistPolicy('mirror')">
-            <option value="direct">直连 GitHub</option>
-            <option value="auto">自动选择镜像加速</option>
-          </select>
-        </label>
+        <div class="mirror-field">
+          <label for="version-download-mirror">下载加速</label>
+          <AppSelect
+            id="version-download-mirror"
+            class="mirror-select"
+            :model-value="mirrorMode"
+            :options="mirrorOptions"
+            :disabled="savingPolicy"
+            @update:model-value="setMirrorMode"
+          />
+        </div>
         <p class="mirror-hint">自动模式下载前会自己挑一条快的镜像，直连够快就走直连。加速只用于下载安装包，校验清单始终直连，安装前都要对上 SHA-256。</p>
       </div>
 
@@ -261,6 +265,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ArrowRight, ChevronDown, Container, Copy, Download, History, LoaderCircle, RefreshCcw, RefreshCw, ShieldAlert, ShieldCheck } from "@lucide/vue";
 import Modal from "./Modal.vue";
+import AppSelect from "./AppSelect.vue";
 import SkeletonBlock from "./SkeletonBlock.vue";
 import {
   checkForUpdate,
@@ -515,6 +520,16 @@ const mirrorMode = computed({
   get: () => (policy.value.github_mirror === "direct" || !policy.value.github_mirror ? "direct" : "auto"),
   set: (value: string) => { policy.value.github_mirror = value; }
 });
+
+const mirrorOptions = [
+  { value: "direct", label: "直连 GitHub" },
+  { value: "auto", label: "自动选择镜像加速" }
+];
+
+function setMirrorMode(value: string): void {
+  mirrorMode.value = value;
+  void persistPolicy("mirror");
+}
 
 async function persistPolicy(changed: "download" | "install" | "mirror"): Promise<void> {
   if (changed === "install" && policy.value.auto_install) policy.value.auto_download = true;
@@ -954,19 +969,15 @@ a.version-hero-integrity:hover {
 .mirror-field {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
   color: var(--text-muted);
 }
 
-.mirror-field select {
-  max-width: 260px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
+.mirror-select {
+  width: 260px;
+  max-width: 100%;
 }
 
 .mirror-hint {

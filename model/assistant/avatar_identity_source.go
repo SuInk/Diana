@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -95,20 +94,19 @@ func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEven
 }
 
 func (r *Runtime) privateGroupAvatarAllowed(ctx context.Context, event MessageEvent, groupID string) bool {
-	if r.currentPlatform(event) != PlatformTelegram {
+	if IsOneBotPlatform(r.currentPlatform(event)) {
 		return explicitAccountIDs(event.Segments)[groupID]
 	}
-	id, err := strconv.ParseInt(groupID, 10, 64)
-	if err != nil || id >= 0 {
+	if groupID == "" {
 		return false
 	}
 	// A private Telegram group ID is negative. Knowing its ID alone does not
 	// authorize an outsider to see its avatar through the bot.
-	pattern := regexp.MustCompile(`(?:^|[^0-9])` + regexp.QuoteMeta(groupID) + `(?:[^0-9]|$)`)
+	pattern := regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(groupID) + `(?:[^A-Za-z0-9_-]|$)`)
 	if !pattern.MatchString(PlainText(event.Segments)) {
 		return false
 	}
-	_, err = r.getGroupMemberInfoForEvent(ctx, event, groupID, event.UserID)
+	_, err := r.getGroupMemberInfoForEvent(ctx, event, groupID, event.UserID)
 	return err == nil
 }
 
@@ -135,7 +133,7 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 	if userID := strings.TrimSpace(event.UserID); userID != "" {
 		reachable[userID] = true
 	}
-	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && r.currentPlatform(event) != PlatformTelegram {
+	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && IsOneBotPlatform(r.currentPlatform(event)) {
 		if members, err := r.getGroupMemberListForEvent(ctx, event, event.GroupID); err == nil {
 			for _, member := range members {
 				if userID := strings.TrimSpace(member.UserID); userID != "" {
@@ -149,7 +147,7 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 		if reachable[userID] {
 			return true
 		}
-		if r.currentPlatform(event) == PlatformTelegram && event.Kind == EventKindGroup {
+		if !IsOneBotPlatform(r.currentPlatform(event)) && event.Kind == EventKindGroup {
 			_, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
 			return err == nil
 		}

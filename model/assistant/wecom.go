@@ -311,10 +311,14 @@ func (c *WeComChannel) CallAPI(ctx context.Context, action string, params map[st
 	if err != nil {
 		return nil, err
 	}
-	separator := "?"
-	if strings.Contains(path, "?") {
-		separator = "&"
+	endpoint, err := platformRequestURL(weComAPIBase, path, method, params)
+	if err != nil {
+		return nil, err
 	}
+	u, _ := url.Parse(endpoint)
+	q := u.Query()
+	q.Set("access_token", token)
+	u.RawQuery = q.Encode()
 	c.mu.RLock()
 	client := c.client
 	c.mu.RUnlock()
@@ -322,7 +326,7 @@ func (c *WeComChannel) CallAPI(ctx context.Context, action string, params map[st
 	if len(params) > 0 && method != http.MethodGet {
 		payload = params
 	}
-	raw, err := platformJSONRequest(ctx, client, method, weComAPIBase+path+separator+"access_token="+url.QueryEscape(token), nil, payload)
+	raw, err := platformJSONRequest(ctx, client, method, u.String(), nil, payload)
 	if err != nil {
 		return nil, err
 	}

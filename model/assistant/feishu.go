@@ -382,7 +382,11 @@ func (c *FeishuChannel) CallAPI(ctx context.Context, action string, params map[s
 	if len(params) > 0 && method != http.MethodGet {
 		payload = params
 	}
-	raw, err := platformJSONRequest(ctx, client, method, feishuAPIBase(cfg)+path, map[string]string{
+	endpoint, err := platformRequestURL(feishuAPIBase(cfg), path, method, params)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := platformJSONRequest(ctx, client, method, endpoint, map[string]string{
 		"Authorization": "Bearer " + token,
 	}, payload)
 	if err != nil {
@@ -548,7 +552,15 @@ func feishuEventFromCallback(payload []byte, appID string) (MessageEvent, bool) 
 	}
 
 	quoted := strings.TrimSpace(message.ParentID)
+	idType := "open_id"
+	if callback.Event.Sender.SenderID.OpenID == "" {
+		idType = "user_id"
+		if callback.Event.Sender.SenderID.UserID == "" {
+			idType = "union_id"
+		}
+	}
 	event := MessageEvent{
+		UserIDType: idType,
 		Time:       platformEventTime(firstParsableEventTime(message.CreateTime, callback.Header.CreateTime)),
 		SelfID:     appID,
 		MessageID:  message.MessageID,

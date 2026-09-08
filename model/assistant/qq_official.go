@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -44,11 +45,13 @@ const (
 // 本机主动出站建连，和 Telegram 长轮询一样不需要公网地址和证书，家庭或内网
 // 部署可以直接用。
 type QQOfficialChannel struct {
-	mu      sync.RWMutex
-	cfg     QQOfficialConfig
-	handler EventHandler
-	client  *http.Client
-	cancel  context.CancelFunc
+	guildChannels map[string]string
+	avatarURLs    map[string]string
+	mu            sync.RWMutex
+	cfg           QQOfficialConfig
+	handler       EventHandler
+	client        *http.Client
+	cancel        context.CancelFunc
 
 	statusMu sync.RWMutex
 	status   ChannelStatus
@@ -83,6 +86,8 @@ func qqOfficialEndpointLabel(cfg QQOfficialConfig) string {
 // SetConfig 更新连接配置并丢弃已缓存的 token。
 func (c *QQOfficialChannel) SetConfig(cfg QQOfficialConfig) {
 	c.mu.Lock()
+	c.guildChannels = nil
+	c.avatarURLs = nil
 	c.cfg = cfg
 	c.mu.Unlock()
 	c.tokens.Invalidate()
@@ -332,6 +337,21 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 	if !ok {
 		return
 	}
+	c.mu.Lock()
+	if event.GuildID != "" {
+		if c.guildChannels == nil {
+			c.guildChannels = map[string]string{}
+		}
+		c.guildChannels[event.GroupID] = event.GuildID
+	}
+	var source qqOfficialMessage
+	if json.Unmarshal(payload.Data, &source) == nil && source.Author.Avatar != "" {
+		if c.avatarURLs == nil {
+			c.avatarURLs = map[string]string{}
+		}
+		c.avatarURLs[event.GroupID+"\x00"+event.UserID] = source.Author.Avatar
+	}
+	c.mu.Unlock()
 	c.mu.RLock()
 	handler := c.handler
 	c.mu.RUnlock()
@@ -389,8 +409,15 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		return nil, nil
 	}
 	endpoint := c.apiBase() + "/v2/users/" + target + "/messages"
+	c.mu.RLock()
+	knownGuild := c.guildChannels[target]
+	c.mu.RUnlock()
+	isGuild := isGroup && (msg.PlatformScope == "qq_guild" || knownGuild != "")
 	if isGroup {
 		endpoint = c.apiBase() + "/v2/groups/" + target + "/messages"
+	}
+	if isGuild {
+		endpoint = c.apiBase() + "/channels/" + url.PathEscape(target) + "/messages"
 	}
 	auth, err := c.authHeader(ctx)
 	if err != nil {
@@ -403,6 +430,9 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	}
 	if replyID := strings.TrimSpace(msg.ReplyMessageID); replyID != "" {
 		body["msg_id"] = replyID
+	}
+	if isGuild {
+		delete(body, "msg_type")
 	}
 	c.mu.RLock()
 	client := c.client
@@ -454,7 +484,11 @@ func (c *QQOfficialChannel) CallAPI(ctx context.Context, action string, params m
 	if len(params) > 0 && method != http.MethodGet {
 		payload = params
 	}
-	raw, err := platformJSONRequest(ctx, client, method, c.apiBase()+path, map[string]string{
+	endpoint, err := platformRequestURL(c.apiBase(), path, method, params)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := platformJSONRequest(ctx, client, method, endpoint, map[string]string{
 		"Authorization": auth,
 	}, payload)
 	if err != nil {
@@ -554,7 +588,8 @@ type qqOfficialMessage struct {
 	GuildID   string `json:"guild_id"`
 	Timestamp any    `json:"timestamp"`
 	Author    struct {
-		ID string `json:"id"`
+		Avatar string `json:"avatar,omitempty"`
+		ID     string `json:"id"`
 		// UserOpenID 是单聊里的用户标识；MemberOpenID 是群里的。
 		UserOpenID   string `json:"user_openid"`
 		MemberOpenID string `json:"member_openid"`
@@ -604,6 +639,7 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 
 	switch eventType {
 	case "GROUP_AT_MESSAGE_CREATE":
+		event.PlatformScope = "qq_group"
 		event.Kind = EventKindGroup
 		event.MessageType = "group"
 		event.GroupID = msg.GroupOpenID
@@ -613,6 +649,8 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 		event.MessageType = "private"
 		event.UserID = firstNonEmpty(msg.Author.UserOpenID, msg.Author.ID)
 	case "AT_MESSAGE_CREATE":
+		event.PlatformScope = "qq_guild"
+		event.GuildID = msg.GuildID
 		event.Kind = EventKindGroup
 		event.MessageType = "group"
 		event.GroupID = msg.ChannelID
