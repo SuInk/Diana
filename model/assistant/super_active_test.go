@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestSuperActiveRoutingIgnoresOldSamplingAndCooldown(t *testing.T) {
+func TestSuperActiveRoutingKeepsIndependentCooldown(t *testing.T) {
 	for _, category := range []string{"chat_in", "needs_response", "bot_related"} {
 		t.Run(category, func(t *testing.T) {
 			provider := &capturingLLMProvider{reply: fmt.Sprintf(`{"should_reply":true,"confidence":0.78,"category":%q,"target_message_id":"msg","directed_at_bot":true,"substantive":false}`, category)}
@@ -16,7 +17,8 @@ func TestSuperActiveRoutingIgnoresOldSamplingAndCooldown(t *testing.T) {
 			r.markChatInReplied(event)
 			for i := 0; i < 10; i++ {
 				routed, _, _, allowed := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
-				if !allowed || !routed.proactiveReply {
+				want := category != "chat_in"
+				if allowed != want || routed.proactiveReply != want {
 					t.Fatalf("route rejected: %s", routed.routingReason)
 				}
 			}
@@ -27,7 +29,7 @@ func TestSuperActiveRoutingIgnoresOldSamplingAndCooldown(t *testing.T) {
 func TestSuperActiveIntentAllowsSocialRepliesAndQuestions(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
 	settings := cfg.chatInSettings()
-	if !settings.Enabled || settings.Natural || settings.Chance != 1 || settings.Cooldown != 0 {
+	if !settings.Enabled || settings.Natural || settings.Chance != 1 || settings.Cooldown != 30*time.Second {
 		t.Fatalf("settings = %#v", settings)
 	}
 	for _, category := range []string{"chat_in", "needs_response", "bot_related"} {
@@ -59,7 +61,7 @@ func TestSuperActiveIntentAllowsSocialRepliesAndQuestions(t *testing.T) {
 func TestSuperActivePromptsAndQuality(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
 	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, cfg.chatInSettings(), false)
-	if !strings.Contains(prompt, "主动参与=100") || strings.Contains(prompt, "当前群已开启自然插话模式") {
+	if !strings.Contains(prompt, "本轮档位：max") || strings.Contains(prompt, "当前群已开启自然插话模式") {
 		t.Fatal("super active must use its own intent policy")
 	}
 	if !strings.Contains(replyQualityPromptForConfig(cfg), "正常的寒暄") {

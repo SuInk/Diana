@@ -29,7 +29,7 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 		}
 	}
 	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, settings, true)
-	if !strings.Contains(prompt, "主动参与=25") || !strings.Contains(prompt, "闲聊接话=25") {
+	if !strings.Contains(prompt, "本轮档位：low") || !strings.Contains(prompt, "明确向机器人提出的请求应正常回应") {
 		t.Fatal("assistant mode must retain configured social replies")
 	}
 	restored := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
@@ -99,7 +99,7 @@ func TestAssistantModeRoutesPublicHelpAndGroupOverride(t *testing.T) {
 	if !allowed || !routed.proactiveReply || routed.chatInReply {
 		t.Fatalf("public help blocked: %s", routed.routingReason)
 	}
-	if !strings.Contains(provider.requestSnapshot().Messages[0].Content, "主动参与=25") {
+	if !strings.Contains(provider.requestSnapshot().Messages[0].Content, "本轮档位：low") {
 		t.Fatal("routing request missing assistant policy")
 	}
 }

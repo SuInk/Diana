@@ -46,6 +46,42 @@ func TestParticipationRoundTripAndGroupInheritance(t *testing.T) {
 	}
 }
 
+func TestParticipationIndependentCooldownDefaults(t *testing.T) {
+	for _, level := range ChatInLevels() {
+		if got := (BotConfig{ChatInLevel: level}).participationPreferences().CooldownSeconds; got != 30 {
+			t.Fatalf("level=%s cooldown=%d", level, got)
+		}
+	}
+	for _, tc := range []struct {
+		input string
+		want  int
+	}{
+		{`{"desire":100}`, 30},
+		{`{"desire":100,"cooldown_seconds":0}`, 0},
+		{`{"desire":100,"cooldown_seconds":45}`, 45},
+	} {
+		var preferences ParticipationPreferences
+		if err := json.Unmarshal([]byte(tc.input), &preferences); err != nil {
+			t.Fatal(err)
+		}
+		if preferences.CooldownSeconds != tc.want {
+			t.Fatalf("input=%s cooldown=%d want=%d", tc.input, preferences.CooldownSeconds, tc.want)
+		}
+		data, err := json.Marshal(PayloadFromConfig(BotConfig{Participation: &preferences}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload ConfigPayload
+		if err := json.Unmarshal(data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		cfg := ConfigFromPayload(payload, BotConfig{}).WithDefaults()
+		if got := cfg.participationPreferences().CooldownSeconds; got != tc.want {
+			t.Fatalf("round trip cooldown=%d want=%d", got, tc.want)
+		}
+	}
+}
+
 func TestParticipationIsSoleIntentGate(t *testing.T) {
 	cfg := BotConfig{ChatInLevel: ChatInLevelMax, ProactiveReplyChance: .01, ChatInThreshold: 1, ChatInCooldownSeconds: 600}.WithDefaults()
 	settings := cfg.chatInSettings()
@@ -58,7 +94,7 @@ func TestParticipationIsSoleIntentGate(t *testing.T) {
 		t.Fatal("model silence overridden")
 	}
 	prompt := proactiveReplyRouterPromptForChatIn("旧规则：没有新信息不能发言", settings, false)
-	if strings.Contains(prompt, "旧规则") || !strings.Contains(prompt, "主动参与=100") {
+	if strings.Contains(prompt, "旧规则") || !strings.Contains(prompt, "本轮档位：max") {
 		t.Fatal(prompt)
 	}
 	if got := copyParticipation(&ParticipationPreferences{Desire: -1, Social: 101}); got.Desire != 0 || got.Social != 100 {
@@ -125,7 +161,7 @@ func TestLiveParticipationPreferences(t *testing.T) {
 		{"off_tea", `{"candidates":[{"message_id":"105766","user_id":"u1","text":"今天把之前买得200g茉莉花茶"},{"message_id":"105767","user_id":"u1","text":"喝完了"}],"recent_messages":[],"last_bot_message":""}`, ChatInLevelOff, false, nil},
 		{"max_stop", `{"candidates":[{"message_id":"3","user_id":"u1","text":"Diana，先别回复了，让我们自己聊。"}]}`, ChatInLevelMax, false, nil},
 		{"off_direct_request", `{"candidates":[{"message_id":"4","user_id":"u1","text":"Diana，帮我解释一下茉莉花茶为什么有花香。","mentioned_bot":true}]}`, ChatInLevelOff, true, nil},
-		{"custom_tea", `{"candidates":[{"message_id":"105766","user_id":"u1","text":"今天把之前买得200g茉莉花茶"},{"message_id":"105767","user_id":"u1","text":"喝完了"}],"recent_messages":[],"last_bot_message":""}`, ChatInLevelMax, false, &ParticipationPreferences{Desire: 100, Social: 0, Followup: 0, Restraint: 100, Information: 100}},
+		{"legacy_custom_tea", `{"candidates":[{"message_id":"105766","user_id":"u1","text":"今天把之前买得200g茉莉花茶"},{"message_id":"105767","user_id":"u1","text":"喝完了"}],"recent_messages":[],"last_bot_message":""}`, ChatInLevelMax, true, &ParticipationPreferences{Desire: 100, Social: 0, Followup: 0, Restraint: 100, Information: 100}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := BotConfig{ChatInLevel: tc.level, Participation: tc.preferences}.WithDefaults()
@@ -135,7 +171,7 @@ func TestLiveParticipationPreferences(t *testing.T) {
 				t.Fatal("real model failed; see redacted log")
 			}
 			d, ok := parseProactiveReplyDecision(resp.Text)
-			if !ok || d.Scores == nil || d.allows(1, cfg.chatInSettings()) != tc.want {
+			if !ok || d.allows(1, cfg.chatInSettings()) != tc.want {
 				t.Fatalf("decision=%+v parsed=%t want=%t", d, ok, tc.want)
 			}
 		})

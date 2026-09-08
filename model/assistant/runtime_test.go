@@ -218,7 +218,7 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 	if !runtime.shouldConsiderProactiveReply(event, text) || !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
 		t.Fatal("reliable direct follow-up should pass semantic routing without proactive sampling")
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "不得作为发言评分的前置条件") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
+	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "需要搜索或工具才能回答，不是保持沉默的理由") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
 		t.Fatalf("router prompt missing deferred accuracy guard: %#v", provider.request.Messages)
 	}
 }
@@ -2583,7 +2583,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 	if !allowed {
 		t.Fatal("qualified bot follow-up should pass the semantic router")
 	}
-	for _, want := range []string{"允许回复", "明确承接了机器人上一条回复", "主动参与 25", "闲聊接话 25"} {
+	for _, want := range []string{"允许回复", "明确承接了机器人上一条回复", "接话判断"} {
 		if !strings.Contains(routed.routingReason, want) {
 			t.Fatalf("routing reason %q missing %q", routed.routingReason, want)
 		}
@@ -2592,7 +2592,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		t.Fatal("proactive router did not call the LLM")
 	}
 	systemPrompt := provider.request.Messages[0].Content
-	for _, want := range []string{"主动参与=25", "scores", "五项", "不等于在问机器人", "不负责事实准确度审核", "发送前准确度审核", "不得作为发言评分的前置条件"} {
+	for _, want := range []string{"本轮档位：low", "should_reply", "只作接话决定", "不要把别人对其他人的提问冒认", "需要搜索或工具才能回答，不是保持沉默的理由"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}
@@ -2601,7 +2601,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		t.Fatalf("route logs = %#v", logs.entries)
 	}
 	metadata := logs.entries[0].Metadata
-	if metadata["allowed"] != true || metadata["parsed"] != true || metadata["confidence"] != 0.82 || metadata["participation"] == nil || metadata["threshold"] != nil || metadata["directed_at_bot"] != true {
+	if metadata["allowed"] != true || metadata["parsed"] != true || metadata["reply_level"] != ChatInLevelLow || metadata["confidence"] != nil || metadata["threshold"] != nil || metadata["directed_at_bot"] != true {
 		t.Fatalf("route metadata = %#v", metadata)
 	}
 }

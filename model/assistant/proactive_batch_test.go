@@ -86,7 +86,7 @@ func TestProactiveReplyBatchReplacesLegacyRouterPrompt(t *testing.T) {
 	if len(provider.requests) != 1 || len(provider.requests[0].Messages) == 0 {
 		t.Fatalf("router requests = %#v", provider.requests)
 	}
-	if got := provider.requests[0].Messages[0].Content; strings.Contains(got, "custom proactive router prompt") || !strings.Contains(got, "主动参与=25") {
+	if got := provider.requests[0].Messages[0].Content; strings.Contains(got, "custom proactive router prompt") || !strings.Contains(got, "本轮档位：low") {
 		t.Fatalf("router prompt = %q", got)
 	}
 }
