@@ -93,6 +93,9 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 	if resp == nil {
 		return nil, fmt.Errorf("llm: gemini returned an empty response")
 	}
+	if err := geminiContentBlock(resp); err != nil {
+		return nil, err
+	}
 
 	text := strings.TrimSpace(resp.Text())
 	toolCalls := geminiToolCalls(resp, req.Tools)
@@ -147,6 +150,10 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 				out <- ChatEvent{Type: ChatEventError, Error: "llm: gemini returned an empty stream response"}
 				return
 			}
+			if err := geminiContentBlock(response); err != nil {
+				out <- ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCode: err.Reason, ErrorCause: err}
+				return
+			}
 			text := response.Text()
 			if text != "" {
 				out <- ChatEvent{Type: ChatEventTextDelta, Text: text}
@@ -166,6 +173,25 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 		out <- ChatEvent{Type: ChatEventDone}
 	}()
 	return out, nil
+}
+
+func geminiContentBlock(response *genai.GenerateContentResponse) *ContentBlockedError {
+	if feedback := response.PromptFeedback; feedback != nil {
+		switch feedback.BlockReason {
+		case genai.BlockedReasonSafety, genai.BlockedReasonBlocklist, genai.BlockedReasonProhibitedContent, genai.BlockedReasonImageSafety:
+			return &ContentBlockedError{Provider: ProviderGemini, Stage: "prompt", Reason: string(feedback.BlockReason), Message: feedback.BlockReasonMessage}
+		}
+	}
+	for _, candidate := range response.Candidates {
+		if candidate == nil {
+			continue
+		}
+		switch candidate.FinishReason {
+		case genai.FinishReasonSafety, genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent, genai.FinishReasonSPII, genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent:
+			return &ContentBlockedError{Provider: ProviderGemini, Stage: "candidate", Reason: string(candidate.FinishReason)}
+		}
+	}
+	return nil
 }
 
 func geminiUsage(response *genai.GenerateContentResponse) Usage {

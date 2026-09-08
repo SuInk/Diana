@@ -136,6 +136,7 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 	var toolCalls []llm.ToolCall
 	var usage llm.Usage
 	streamErr := ""
+	var streamCause error
 	for event := range events {
 		switch event.Type {
 		case llm.ChatEventTextDelta:
@@ -160,10 +161,11 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 			}
 		case llm.ChatEventError:
 			streamErr = event.Error
+			streamCause = event.ErrorCause
 		}
 	}
 	if streamErr != "" {
-		return nil, &streamingFailedError{reason: streamErr}
+		return nil, &streamingFailedError{reason: streamErr, cause: streamCause}
 	}
 	return &llm.GenerateResponse{
 		Text:      text.String(),
@@ -172,7 +174,12 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 	}, nil
 }
 
-type streamingFailedError struct{ reason string }
+type streamingFailedError struct {
+	reason string
+	cause  error
+}
+
+func (e *streamingFailedError) Unwrap() error { return e.cause }
 
 func (e *streamingFailedError) Error() string {
 	if e == nil || strings.TrimSpace(e.reason) == "" {

@@ -44,6 +44,9 @@ func isContentPolicyRejection(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, llm.ErrContentBlocked) {
+		return true
+	}
 	text := strings.ToLower(err.Error())
 	for _, marker := range []string{
 		"content_policy_violation",

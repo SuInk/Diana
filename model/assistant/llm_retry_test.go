@@ -449,14 +449,14 @@ func TestContentPolicyRejectionKeepsOriginalErrorAndStopsRetry(t *testing.T) {
 	if provider.calls != 1 {
 		t.Fatalf("calls=%d, want one request without retry", provider.calls)
 	}
-	if shouldFailoverLLMError(err) {
-		t.Fatal("content policy rejection must not fail over to another provider")
+	if !shouldFailoverLLMError(err) {
+		t.Fatal("content policy rejection should try the configured fallback")
 	}
 }
 
-func TestContentPolicyRejectionStopsProfileFailover(t *testing.T) {
+func TestContentPolicyRejectionUsesProfileFailover(t *testing.T) {
 	first := &fixedRetryErrorProvider{err: errors.New("content_policy_violation: blocked")}
-	second := &capturingLLMProvider{reply: "unexpected"}
+	second := &capturingLLMProvider{reply: "备用模型回复"}
 	secondFactoryCalls := 0
 	provider, err := newProfileFailoverLLMProvider([]llm.Profile{
 		{ID: "first", Group: "default", Config: llm.ProviderConfig{Model: "model-a"}},
@@ -471,11 +471,11 @@ func TestContentPolicyRejectionStopsProfileFailover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Generate(context.Background(), llm.GenerateRequest{})
-	if !errors.Is(err, errContentPolicyRejection) {
-		t.Fatalf("err=%v, want content policy rejection", err)
+	response, err := provider.Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || response == nil || response.Text != "备用模型回复" {
+		t.Fatalf("response=%+v err=%v", response, err)
 	}
-	if first.calls != 1 || secondFactoryCalls != 0 {
+	if first.calls != 1 || secondFactoryCalls != 1 {
 		t.Fatalf("first calls=%d second factory calls=%d", first.calls, secondFactoryCalls)
 	}
 }
