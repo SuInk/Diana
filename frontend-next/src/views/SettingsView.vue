@@ -153,7 +153,7 @@
           <div class="card-body stack">
             <div class="cluster" style="gap: 8px; align-items: center">
               <p class="muted" style="margin: 0; font-size: 13px; flex: 1">
-                总开关是「对外 API」内置插件：未启用时外部调用一律 403，密钥可以先备好再开闸；限流等参数在「插件」页调整。
+                未启用时外部调用一律 403。密钥、限流和启停统一在此管理，不属于任何机器人的插件配置。
               </p>
               <button class="btn small" type="button" :disabled="togglingPlugin || openAPIPlugin === null" @click="toggleOpenAPIPlugin">
                 {{ togglingPlugin ? "处理中…" : openAPIPluginEnabled ? "停用" : "启用" }}
@@ -166,6 +166,10 @@
               多通道部署时再带上 <code class="mono">platform</code> 或 <code class="mono">profile_id</code> 指路。
               <code class="mono">GET /openapi/v1/status</code> 可探活并列出可投递的通道。
             </p>
+            <div v-if="openAPIPlugin" class="stack">
+              <PluginSettingField v-for="spec in openAPIPlugin.manifest.settings ?? []" :key="spec.key" :spec="spec" :form="openAPISettings" />
+              <button class="btn small" type="button" :disabled="savingOpenAPISettings" @click="saveOpenAPISettings"><Save :size="14" aria-hidden="true" />保存接口参数</button>
+            </div>
             <div v-if="createdToken" class="openapi-token">
               <p class="openapi-token-hint">密钥只显示这一次，请立即复制保存：</p>
               <div class="cluster" style="gap: 8px; flex-wrap: wrap">
@@ -419,6 +423,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import PluginSettingField from "../components/PluginSettingField.vue";
 import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw, RotateCw, Save } from "@lucide/vue";
 import {
   changeCredentials,
@@ -447,6 +452,7 @@ import {
   revokeOpenAPIKey,
   listPlugins,
   setPluginEnabled,
+  updatePluginSettings,
   type PluginState,
   type OpenAPIKey,
   type AuthSession,
@@ -585,6 +591,8 @@ const newKeyName = ref("");
 const createdToken = ref("");
 const revokingKeyID = ref("");
 const openAPIPlugin = ref<PluginState | null>(null);
+const openAPISettings = ref<Record<string, unknown>>({});
+const savingOpenAPISettings = ref(false);
 const togglingPlugin = ref(false);
 const openAPIPluginEnabled = computed(() => openAPIPlugin.value?.enabled === true);
 const OPEN_API_PLUGIN_ID = "official.open-api";
@@ -698,6 +706,7 @@ async function loadOpenAPIPlugin(): Promise<void> {
   try {
     const plugins = await listPlugins();
     openAPIPlugin.value = plugins.find((item) => item.manifest.id === OPEN_API_PLUGIN_ID) ?? null;
+    if (openAPIPlugin.value) openAPISettings.value = Object.fromEntries((openAPIPlugin.value.manifest.settings ?? []).map((spec) => [spec.key, openAPIPlugin.value?.settings?.[spec.key] ?? spec.default]));
   } catch {
     /* 拉不到插件状态时按未知处理，开关按钮保持禁用 */
   } finally {
@@ -717,6 +726,15 @@ async function toggleOpenAPIPlugin(): Promise<void> {
   } finally {
     togglingPlugin.value = false;
   }
+}
+
+async function saveOpenAPISettings(): Promise<void> {
+  savingOpenAPISettings.value = true;
+  try {
+    openAPIPlugin.value = await updatePluginSettings(OPEN_API_PLUGIN_ID, openAPISettings.value);
+    toastSuccess("接口参数已保存");
+  } catch (error) { toastError(error instanceof Error ? error.message : "保存失败"); }
+  finally { savingOpenAPISettings.value = false; }
 }
 
 async function loadApiKeys(): Promise<void> {

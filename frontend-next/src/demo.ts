@@ -71,6 +71,19 @@ const telegramProfile: BotProfileConfig = {
 
 let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "bot-onebot", profiles: [oneBotProfile, telegramProfile] };
 
+const demoPluginProfileSettings: Record<string, Record<string, Record<string, unknown>>> = {};
+
+function demoPluginForProfile(plugin: PluginState, profile: string): PluginState {
+  const own = plugin.manifest.id !== "official.open-api" && profile ? demoPluginProfileSettings[plugin.manifest.id]?.[profile] : undefined;
+  const settings = { ...(plugin.manifest.id === "official.open-api" ? plugin.settings : own) };
+  const secrets: Record<string, boolean> = {};
+  for (const spec of plugin.manifest.settings ?? []) if (spec.secret) {
+    secrets[spec.key] = Boolean(settings[spec.key]);
+    delete settings[spec.key];
+  }
+  return { ...plugin, enabled: plugin.profile_enabled?.[profile] ?? plugin.enabled, settings, secrets_configured: secrets };
+}
+
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
   { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
@@ -145,6 +158,13 @@ let plugins: PluginState[] = [
   { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.0", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认关闭。", official: true, built_in: true, default_disabled: true, permissions: ["message:read", "message:send"] }, installed: true, enabled: false }
 ];
 
+for (const plugin of plugins) if (plugin.manifest.id !== "official.open-api") {
+  demoPluginProfileSettings[plugin.manifest.id] = Object.fromEntries((assistantConfig.profiles ?? []).map((profile) => [profile.id!, structuredClone(plugin.settings ?? {})]));
+  plugin.profile_enabled = Object.fromEntries((assistantConfig.profiles ?? []).map((profile) => [profile.id!, plugin.enabled]));
+  plugin.settings = undefined;
+  plugin.enabled = !plugin.manifest.default_disabled;
+}
+
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
     <rect width="128" height="128" rx="24" fill="#7057d9"/>
@@ -163,7 +183,7 @@ const groups: BotGroupSummary[] = [
 
 // 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
 // 都没有，用这张表补上画像里没有的号。
-const demoAccountNames: Record<string, string> = { "100200001": "阿墨" };
+const demoAccountNames: Record<string, string> = { "100200001": "阿墨", "880024": "小林（演示）" };
 
 const demoPersonas = [
   { id: "persona-1", name: "猫娘", system_prompt: "你是一只会说话的猫娘，好奇心重，喜欢待在群里听大家聊天。", reply_style: "catgirl", self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" },
@@ -395,7 +415,7 @@ let tasks: AssistantTask[] = [
   { id: "task-reminder-01", kind: "reminder", platform: "onebot-v11", owner_id: "100200301", user_id: "100200301", message: "15:30 提醒提交周报", status: "active", trigger_at: after(70), created_at: before(20), consumes_quota: true },
   { id: "task-schedule-02", kind: "schedule", platform: "telegram", owner_id: "880024", user_id: "880024", message: "每天整理 AI 行业资讯并附来源", status: "active", trigger_at: after(180), interval_seconds: 86400, last_run_at: before(1260), created_at: before(4800), consumes_quota: true },
   { id: "task-repo-03", kind: "repository_watch", platform: "onebot-v11", owner_id: "", group_id: "100200301", message: "Diana 仓库动态", status: "active", trigger_at: after(1), interval_seconds: 60, last_run_at: before(1), repository: "SuInk/Diana", repository_branch: "main", watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, last_commit_sha: "26ebc1bed07e9e5b", last_release_tag: "v0.8.6", last_star_count: 128, created_at: before(3800), consumes_quota: true },
-  { id: "task-rss-04", kind: "rss_watch", platform: "telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
+  { id: "task-rss-04", kind: "rss_watch", platform: "telegram", profile_id: "bot-telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_sources: [{ feed_url: "https://github.com/SuInk/Diana/releases.atom", source: "rss", name: "Diana Release Feed" }], feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
 ];
 
 const platforms: BotPlatform[] = [
@@ -560,7 +580,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const saved = { ...incoming, id: incoming.id || `bot-${Date.now()}` };
     const index = profiles.findIndex((profile) => profile.id === saved.id);
     if (index >= 0) profiles[index] = saved; else profiles.push(saved);
-    assistantConfig = { ...assistantConfig, profiles, active_profile_id: assistantConfig.active_profile_id || saved.id };
+    assistantConfig = { ...assistantConfig, ...saved, profiles, active_profile_id: saved.id };
     demoStatus.config = assistantConfig;
     return json(assistantConfig);
   }
@@ -583,7 +603,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
   if (path === "/api/assistant/plugins") {
     const profile = url.searchParams.get("profile") ?? "";
-    return json(plugins.map((plugin) => ({ ...plugin, enabled: plugin.profile_enabled?.[profile] ?? plugin.enabled })));
+    return json(plugins.filter((plugin) => profile ? plugin.manifest.id !== "official.open-api" : plugin.manifest.id === "official.open-api").map((plugin) => demoPluginForProfile(plugin, profile)));
   }
   if (path === "/api/assistant/plugins/repository-publish/drafts") {
     const drafts = [{
@@ -615,6 +635,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (pluginMatch) {
     const plugin = plugins.find((item) => item.manifest.id === decodeURIComponent(pluginMatch[1]));
     if (!plugin) return json({ error: "演示插件不存在" }, 404);
+    if (["settings", "enabled"].includes(pluginMatch[2]) && plugin.manifest.id !== "official.open-api" && !url.searchParams.get("profile")) return json({ error: "请选择具体机器人" }, 400);
+    if (body.inherit) return json({ error: "插件配置不再支持继承" }, 400);
     if (pluginMatch[2] === "install") plugin.installed = true;
     if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; }
     if (pluginMatch[2] === "enabled") {
@@ -625,8 +647,22 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         plugin.enabled = Boolean(body.enabled);
       }
     }
-    if (pluginMatch[2] === "settings") plugin.settings = { ...((body.settings as Record<string, unknown>) ?? {}) };
-    plugins = [...plugins]; demoStatus.plugins = plugins; return json(plugin);
+    const profile = url.searchParams.get("profile") ?? "";
+    if (pluginMatch[2] === "settings") {
+      const scoped = Boolean(profile && plugin.manifest.id !== "official.open-api");
+      const saved = demoPluginProfileSettings[plugin.manifest.id] ??= {};
+      {
+        const previous = (scoped ? saved[profile] : plugin.settings) ?? {};
+        const next = { ...((body.settings as Record<string, unknown>) ?? {}) };
+        const cleared = new Set((body.clear_secrets as string[]) ?? []);
+        for (const spec of plugin.manifest.settings ?? []) if (spec.secret) {
+          if (cleared.has(spec.key)) delete next[spec.key];
+          else if (!next[spec.key] && previous[spec.key]) next[spec.key] = previous[spec.key];
+        }
+        if (scoped) saved[profile] = next; else plugin.settings = next;
+      }
+    }
+    plugins = [...plugins]; demoStatus.plugins = plugins; return json(demoPluginForProfile(plugin, profile));
   }
 
   if (path === "/api/assistant/groups" && method === "GET") return json({ groups, plugins, live_available: true });

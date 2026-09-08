@@ -442,11 +442,14 @@ type BotConfig struct {
 	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
 	DisabledUsers                []string             `json:"disabled_users,omitempty"`
+	MarkedBotIDs                 []string             `json:"marked_bot_ids,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
 	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	PersonaID                    string               `json:"persona_id,omitempty"`
+	CustomPersona                *Persona             `json:"custom_persona,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
 	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
@@ -551,24 +554,25 @@ type BotConfig struct {
 	DictSegmentEnabled *bool `json:"dict_segment_enabled,omitempty"`
 	// 语义检索:消息经 embedding 模型转成向量,检索时按余弦相似度召回并与
 	// 词面结果融合。需要 embedding 分组的提供商配置档,默认关。
-	SemanticSearchEnabled      *bool         `json:"semantic_search_enabled,omitempty"`
-	ProactiveReplyChance       float64       `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold    float64       `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled              *bool         `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                ChatInLevel   `json:"chat_in_level,omitempty"`
-	ChatInThreshold            float64       `json:"chat_in_threshold,omitempty"`
-	ChatInChance               float64       `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds      int           `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled *bool         `json:"natural_interjection_enabled,omitempty"`
-	ReplyRules                 []ReplyRule   `json:"reply_rules,omitempty"`
-	MaxBotConcurrency          int           `json:"max_bot_concurrency,omitempty"`
-	RequestTimeout             time.Duration `json:"request_timeout,omitempty"`
-	AgentEnabled               bool          `json:"agent_enabled,omitempty"`
-	AgentMaxSteps              int           `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots            []string      `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath         string        `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist      []string      `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS      int           `json:"agent_command_timeout_ms,omitempty"`
+	SemanticSearchEnabled      *bool                     `json:"semantic_search_enabled,omitempty"`
+	ProactiveReplyChance       float64                   `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold    float64                   `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled              *bool                     `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                ChatInLevel               `json:"chat_in_level,omitempty"`
+	Participation              *ParticipationPreferences `json:"participation,omitempty"`
+	ChatInThreshold            float64                   `json:"chat_in_threshold,omitempty"`
+	ChatInChance               float64                   `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds      int                       `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled *bool                     `json:"natural_interjection_enabled,omitempty"`
+	ReplyRules                 []ReplyRule               `json:"reply_rules,omitempty"`
+	MaxBotConcurrency          int                       `json:"max_bot_concurrency,omitempty"`
+	RequestTimeout             time.Duration             `json:"request_timeout,omitempty"`
+	AgentEnabled               bool                      `json:"agent_enabled,omitempty"`
+	AgentMaxSteps              int                       `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots            []string                  `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath         string                    `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist      []string                  `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS      int                       `json:"agent_command_timeout_ms,omitempty"`
 	// AgentCommandSandbox 见 agent.CommandSandbox* 常量：auto 有沙盒就用、
 	// require 没有就拒绝执行、off 完全不套。留空按 auto。
 	AgentCommandSandbox string `json:"agent_command_sandbox,omitempty"`
@@ -656,6 +660,7 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
+	MarkedBotIDs []string `json:"marked_bot_ids,omitempty"`
 	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
 	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
 	// 归给当时的当前配置档。
@@ -680,23 +685,24 @@ type GroupConfig struct {
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
-	NaturalReplySplitEnabled     *bool       `json:"natural_reply_split_enabled,omitempty"`
-	ReplyMaxBubbles              int         `json:"reply_max_bubbles,omitempty"`
-	DirectReplyChunkSize         int         `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int         `json:"forward_reply_threshold,omitempty"`
-	ForwardReplyChunkThreshold   int         `json:"forward_reply_chunk_threshold,omitempty"`
-	ProactiveReplyChance         float64     `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold      float64     `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled                *bool       `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                  ChatInLevel `json:"chat_in_level,omitempty"`
-	ChatInThreshold              float64     `json:"chat_in_threshold,omitempty"`
-	ChatInChance                 float64     `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds        int         `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled   *bool       `json:"natural_interjection_enabled,omitempty"`
-	SocialReplyEnabled           *bool       `json:"social_reply_enabled,omitempty"`
-	MinimumReplyMemberLevel      int         `json:"minimum_reply_member_level,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool       `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int         `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	NaturalReplySplitEnabled     *bool                     `json:"natural_reply_split_enabled,omitempty"`
+	ReplyMaxBubbles              int                       `json:"reply_max_bubbles,omitempty"`
+	DirectReplyChunkSize         int                       `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int                       `json:"forward_reply_threshold,omitempty"`
+	ForwardReplyChunkThreshold   int                       `json:"forward_reply_chunk_threshold,omitempty"`
+	ProactiveReplyChance         float64                   `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled                *bool                     `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                  ChatInLevel               `json:"chat_in_level,omitempty"`
+	Participation                *ParticipationPreferences `json:"participation,omitempty"`
+	ChatInThreshold              float64                   `json:"chat_in_threshold,omitempty"`
+	ChatInChance                 float64                   `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds        int                       `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled   *bool                     `json:"natural_interjection_enabled,omitempty"`
+	SocialReplyEnabled           *bool                     `json:"social_reply_enabled,omitempty"`
+	MinimumReplyMemberLevel      int                       `json:"minimum_reply_member_level,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool                     `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int                       `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	// nil 跟随机器人；true/false 在本群对主动和直接回复统一开启/关闭账号安全审核。
 	ReplyAccountSafetyAuditEnabled *bool                  `json:"reply_account_safety_audit_enabled,omitempty"`
 	ReplyAccountSafetyAuditPrompt  string                 `json:"reply_account_safety_audit_prompt,omitempty"`
@@ -766,11 +772,14 @@ type ConfigPayload struct {
 	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
 	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
 	DisabledUsers                []string             `json:"disabled_users,omitempty"`
+	MarkedBotIDs                 []string             `json:"marked_bot_ids,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
 	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
+	PersonaID                    string               `json:"persona_id,omitempty"`
+	CustomPersona                *Persona             `json:"custom_persona,omitempty"`
 	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
 	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
@@ -833,43 +842,44 @@ type ConfigPayload struct {
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
-	MaxContextTokens                int64       `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget        int64       `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit              int         `json:"recent_context_limit,omitempty"`
-	HistoryBackfillMessageLimit     int         `json:"history_backfill_message_limit,omitempty"`
-	ContextSummaryThreshold         int         `json:"context_summary_threshold,omitempty"`
-	LongTermMemoryEnabled           *bool       `json:"long_term_memory_enabled,omitempty"`
-	CrossGroupMemoryEnabled         *bool       `json:"cross_group_memory_enabled,omitempty"`
-	CrossPlatformMemoryEnabled      *bool       `json:"cross_platform_memory_enabled,omitempty"`
-	WorldBookEnabled                *bool       `json:"world_book_enabled,omitempty"`
-	RomanceEnabled                  *bool       `json:"romance_enabled,omitempty"`
-	MoodEnabled                     *bool       `json:"mood_enabled,omitempty"`
-	PokeReplyEnabled                *bool       `json:"poke_reply_enabled,omitempty"`
-	ExpressionLearningEnabled       *bool       `json:"expression_learning_enabled,omitempty"`
-	DictSegmentEnabled              *bool       `json:"dict_segment_enabled,omitempty"`
-	SemanticSearchEnabled           *bool       `json:"semantic_search_enabled,omitempty"`
-	ProactiveReplyChance            float64     `json:"proactive_reply_chance,omitempty"`
-	ProactiveReplyThreshold         float64     `json:"proactive_reply_threshold,omitempty"`
-	ChatInEnabled                   *bool       `json:"chat_in_enabled,omitempty"`
-	ChatInLevel                     ChatInLevel `json:"chat_in_level,omitempty"`
-	ChatInThreshold                 float64     `json:"chat_in_threshold,omitempty"`
-	ChatInChance                    float64     `json:"chat_in_chance,omitempty"`
-	ChatInCooldownSeconds           int         `json:"chat_in_cooldown_seconds,omitempty"`
-	NaturalInterjectionEnabled      *bool       `json:"natural_interjection_enabled,omitempty"`
-	ReplyRules                      []ReplyRule `json:"reply_rules,omitempty"`
-	MaxBotConcurrency               int         `json:"max_bot_concurrency,omitempty"`
-	RequestTimeoutMS                int64       `json:"request_timeout_ms,omitempty"`
-	AgentEnabled                    bool        `json:"agent_enabled,omitempty"`
-	AgentMaxSteps                   int         `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots                 []string    `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath              string      `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist           []string    `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS           int         `json:"agent_command_timeout_ms,omitempty"`
-	AgentCommandSandbox             string      `json:"agent_command_sandbox,omitempty"`
-	AgentCommandSandboxAllowNetwork bool        `json:"agent_command_sandbox_allow_network,omitempty"`
-	AgentFileWriteEnabled           bool        `json:"agent_file_write_enabled,omitempty"`
-	AgentBrowserCDPURL              string      `json:"agent_browser_cdp_url,omitempty"`
-	AgentBrowserTimeoutMS           int         `json:"agent_browser_timeout_ms,omitempty"`
+	MaxContextTokens                int64                     `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget        int64                     `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit              int                       `json:"recent_context_limit,omitempty"`
+	HistoryBackfillMessageLimit     int                       `json:"history_backfill_message_limit,omitempty"`
+	ContextSummaryThreshold         int                       `json:"context_summary_threshold,omitempty"`
+	LongTermMemoryEnabled           *bool                     `json:"long_term_memory_enabled,omitempty"`
+	CrossGroupMemoryEnabled         *bool                     `json:"cross_group_memory_enabled,omitempty"`
+	CrossPlatformMemoryEnabled      *bool                     `json:"cross_platform_memory_enabled,omitempty"`
+	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
+	RomanceEnabled                  *bool                     `json:"romance_enabled,omitempty"`
+	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
+	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
+	ExpressionLearningEnabled       *bool                     `json:"expression_learning_enabled,omitempty"`
+	DictSegmentEnabled              *bool                     `json:"dict_segment_enabled,omitempty"`
+	SemanticSearchEnabled           *bool                     `json:"semantic_search_enabled,omitempty"`
+	ProactiveReplyChance            float64                   `json:"proactive_reply_chance,omitempty"`
+	ProactiveReplyThreshold         float64                   `json:"proactive_reply_threshold,omitempty"`
+	ChatInEnabled                   *bool                     `json:"chat_in_enabled,omitempty"`
+	ChatInLevel                     ChatInLevel               `json:"chat_in_level,omitempty"`
+	Participation                   *ParticipationPreferences `json:"participation,omitempty"`
+	ChatInThreshold                 float64                   `json:"chat_in_threshold,omitempty"`
+	ChatInChance                    float64                   `json:"chat_in_chance,omitempty"`
+	ChatInCooldownSeconds           int                       `json:"chat_in_cooldown_seconds,omitempty"`
+	NaturalInterjectionEnabled      *bool                     `json:"natural_interjection_enabled,omitempty"`
+	ReplyRules                      []ReplyRule               `json:"reply_rules,omitempty"`
+	MaxBotConcurrency               int                       `json:"max_bot_concurrency,omitempty"`
+	RequestTimeoutMS                int64                     `json:"request_timeout_ms,omitempty"`
+	AgentEnabled                    bool                      `json:"agent_enabled,omitempty"`
+	AgentMaxSteps                   int                       `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots                 []string                  `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath              string                    `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist           []string                  `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS           int                       `json:"agent_command_timeout_ms,omitempty"`
+	AgentCommandSandbox             string                    `json:"agent_command_sandbox,omitempty"`
+	AgentCommandSandboxAllowNetwork bool                      `json:"agent_command_sandbox_allow_network,omitempty"`
+	AgentFileWriteEnabled           bool                      `json:"agent_file_write_enabled,omitempty"`
+	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
+	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -911,6 +921,8 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
+	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
+	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultGroupConfig(groupID, base)
 	if strings.EqualFold(strings.TrimSpace(string(cfg.ReplyStyle)), string(ReplyStyleRoleplay)) {
 		cfg.ReplyStyle = ReplyStyleAssistant
@@ -1374,6 +1386,8 @@ func DefaultBotConfig() BotConfig {
 
 // WithDefaults 补齐 OneBot v11 机器人配置默认值。
 func (cfg BotConfig) WithDefaults() BotConfig {
+	cfg.CustomPersona = copyCustomPersona(cfg.CustomPersona)
+	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultBotConfig()
 	hasResponseMode := strings.TrimSpace(string(cfg.ResponseMode)) != ""
 	legacyRoleplay := strings.EqualFold(strings.TrimSpace(string(cfg.ReplyStyle)), string(ReplyStyleRoleplay))
@@ -1646,6 +1660,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	cfg.DisabledGroups = cleanStrings(cfg.DisabledGroups)
 	cfg.DisabledUsers = cleanStrings(cfg.DisabledUsers)
+	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.ReplyRules = normalizeReplyRules(cfg.ReplyRules)
 	cfg.ModelRoles = normalizeModelRoles(cfg.ModelRoles)
 	return cfg
@@ -1775,11 +1790,14 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		GroupTriggerMode:                  cfg.GroupTriggerMode,
 		DisabledGroups:                    append([]string(nil), cfg.DisabledGroups...),
 		DisabledUsers:                     append([]string(nil), cfg.DisabledUsers...),
+		MarkedBotIDs:                      append([]string(nil), cfg.MarkedBotIDs...),
 		GroupAdmission:                    cfg.GroupAdmission.WithDefaults(),
 		ReplyGate:                         cfg.ReplyGate.Clone(),
 		WelcomeEnabled:                    cfg.WelcomeEnabled,
 		WelcomeMessage:                    cfg.WelcomeMessage,
 		SystemPrompt:                      cfg.SystemPrompt,
+		PersonaID:                         cfg.PersonaID,
+		CustomPersona:                     copyCustomPersona(cfg.CustomPersona),
 		ResponseMode:                      cfg.ResponseMode,
 		ReplyStyle:                        cfg.ReplyStyle,
 		ActionDescriptionEnabled:          copyBoolPointer(cfg.ActionDescriptionEnabled),
@@ -1845,6 +1863,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ProactiveReplyThreshold:           cfg.ProactiveReplyThreshold,
 		ChatInEnabled:                     copyBoolPointer(cfg.ChatInEnabled),
 		ChatInLevel:                       cfg.ChatInLevel,
+		Participation:                     copyParticipation(cfg.Participation),
 		ChatInThreshold:                   cfg.ChatInThreshold,
 		ChatInChance:                      cfg.ChatInChance,
 		ChatInCooldownSeconds:             cfg.ChatInCooldownSeconds,
@@ -1954,11 +1973,14 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		GroupTriggerMode:                payload.GroupTriggerMode,
 		DisabledGroups:                  payload.DisabledGroups,
 		DisabledUsers:                   payload.DisabledUsers,
+		MarkedBotIDs:                    append([]string(nil), payload.MarkedBotIDs...),
 		GroupAdmission:                  payload.GroupAdmission,
 		ReplyGate:                       payload.ReplyGate.Clone(),
 		WelcomeEnabled:                  payload.WelcomeEnabled,
 		WelcomeMessage:                  payload.WelcomeMessage,
 		SystemPrompt:                    payload.SystemPrompt,
+		PersonaID:                       payload.PersonaID,
+		CustomPersona:                   copyCustomPersona(payload.CustomPersona),
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		ActionDescriptionEnabled:        copyBoolPointer(payload.ActionDescriptionEnabled),
@@ -2024,6 +2046,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ProactiveReplyThreshold:         payload.ProactiveReplyThreshold,
 		ChatInEnabled:                   copyBoolPointer(payload.ChatInEnabled),
 		ChatInLevel:                     payload.ChatInLevel,
+		Participation:                   copyParticipation(payload.Participation),
 		ChatInThreshold:                 payload.ChatInThreshold,
 		ChatInChance:                    payload.ChatInChance,
 		ChatInCooldownSeconds:           payload.ChatInCooldownSeconds,

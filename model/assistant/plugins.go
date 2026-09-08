@@ -107,10 +107,12 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 }
 
 type PluginState struct {
-	Manifest       PluginManifest  `json:"manifest"`
-	Installed      bool            `json:"installed"`
-	Enabled        bool            `json:"enabled"`
-	ProfileEnabled map[string]bool `json:"profile_enabled,omitempty"`
+	Manifest              PluginManifest            `json:"manifest"`
+	Installed             bool                      `json:"installed"`
+	Enabled               bool                      `json:"enabled"`
+	ProfileEnabled        map[string]bool           `json:"profile_enabled,omitempty"`
+	ProfileSettings       map[string]map[string]any `json:"profile_settings,omitempty"`
+	ProfileConfigMigrated bool                      `json:"profile_config_migrated,omitempty"`
 	// Settings 只保存用户显式覆盖的值，默认值以 Manifest.Settings 声明为准。
 	Settings map[string]any `json:"settings,omitempty"`
 	// SecretsConfigured 只在脱敏后的响应里出现，标记哪些凭据已经配置过。
@@ -118,9 +120,12 @@ type PluginState struct {
 	SecretsConfigured map[string]bool `json:"secrets_configured,omitempty"`
 }
 
-// ForProfile applies a bot's switch without changing the legacy global default.
+// ForProfile selects only this robot's settings; missing values use manifest defaults.
 // OpenAPI is a process-wide HTTP service, not an event-bound bot capability.
 func (s PluginState) ForProfile(profileID string) PluginState {
+	if s.Manifest.ID != OpenAPIPluginID && (profileID != "" || s.ProfileConfigMigrated) {
+		s.Settings = clonePluginValues(s.ProfileSettings[strings.TrimSpace(profileID)])
+	}
 	if s.Manifest.ID != OpenAPIPluginID && !s.Manifest.Internal {
 		if enabled, ok := s.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" {
 			s.Enabled = enabled
@@ -147,6 +152,8 @@ func (m *PluginManager) ProfileOverrides(profileID string) map[string]bool {
 // Redacted 返回可以安全交给 WebUI 的副本：凭据类设置抹掉明文，
 // 只保留「是否已配置」的标记。所有对外返回 PluginState 的接口都必须走这里。
 func (s PluginState) Redacted() PluginState {
+	// Never expose other robots' settings or credentials in API responses.
+	s.ProfileSettings = nil
 	secrets := secretSettingKeys(s.Manifest.Settings)
 	if len(secrets) == 0 {
 		return s
@@ -472,11 +479,11 @@ func (m *PluginManager) PluginWithSettings(id string, overrides map[string]bool)
 	return m.PluginWithSettingsForGroup(id, overrides, nil)
 }
 
-// PluginForConfiguration returns an installed plugin and its effective global
+// PluginForConfiguration returns an installed plugin and its scoped
 // settings even when the plugin is disabled. Settings pages use this for
 // diagnostics: a user should be able to test credentials before enabling the
 // capability.
-func (m *PluginManager) PluginForConfiguration(id string) (Plugin, SettingValues, bool) {
+func (m *PluginManager) PluginForConfiguration(id string, profiles ...string) (Plugin, SettingValues, bool) {
 	if m == nil {
 		return nil, nil, false
 	}
@@ -486,6 +493,9 @@ func (m *PluginManager) PluginForConfiguration(id string) (Plugin, SettingValues
 	state := m.states[id]
 	if !ok || !state.Installed {
 		return nil, nil, false
+	}
+	if len(profiles) > 0 {
+		state = state.ForProfile(profiles[0])
 	}
 	return plugin, effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, nil), true
 }
@@ -507,7 +517,7 @@ func (m *PluginManager) PluginWithSettingsForGroup(id string, enabledOverrides m
 	if !ok || !state.Installed || !enabled {
 		return nil, nil, false
 	}
-	return plugin, effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id]), true
+	return plugin, scopedPluginSettings(state, settingOverrides), true
 }
 
 // ValidateGroupSettingOverrides validates and normalizes explicit per-group
@@ -580,6 +590,8 @@ func (m *PluginManager) Snapshot() map[string]PluginState {
 	out := make(map[string]PluginState, len(m.states))
 	for id, state := range m.states {
 		state.ProfileEnabled = maps.Clone(state.ProfileEnabled)
+		state.ProfileSettings = cloneProfileSettings(state.ProfileSettings)
+		state.Settings = clonePluginValues(state.Settings)
 		out[id] = state
 	}
 	return out
@@ -596,8 +608,13 @@ func (m *PluginManager) Restore(states map[string]PluginState) {
 			current.Installed = saved.Installed
 			current.Enabled = saved.Enabled
 			current.ProfileEnabled = maps.Clone(saved.ProfileEnabled)
+			current.ProfileConfigMigrated = saved.ProfileConfigMigrated
 			// 历史数据可能包含已下线的设置键或非法值，恢复时按当前声明清洗。
 			current.Settings = sanitizePluginSettings(current.Manifest.Settings, saved.Settings)
+			current.ProfileSettings = make(map[string]map[string]any, len(saved.ProfileSettings))
+			for profile, settings := range saved.ProfileSettings {
+				current.ProfileSettings[profile] = sanitizePluginSettings(current.Manifest.Settings, settings)
+			}
 		}
 		if current.Manifest.BuiltIn {
 			// 内置插件不能被彻底卸载，但允许用户在 WebUI 里关闭启用状态。
@@ -664,6 +681,10 @@ func (m *PluginManager) UpdateSettings(id string, values map[string]any) (Plugin
 // 整个键都不提交（值等于默认值时会被过滤掉）。这两种都必须视为「没改动」，
 // 否则用户改一下超时时间就会把 Cookie 弄丢；真要清除只能走 clear 参数。
 func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]any, clear []string) (PluginState, error) {
+	return m.UpdateSettingsForProfile(id, "", values, clear)
+}
+
+func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values map[string]any, clear []string) (PluginState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	plugin, ok := m.catalog[id]
@@ -680,6 +701,17 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 	}
 	state := m.states[id]
 	state.Manifest = manifest
+	profileID = strings.TrimSpace(profileID)
+	if id == OpenAPIPluginID {
+		profileID = ""
+	}
+	if profileID == "" && id != OpenAPIPluginID && state.ProfileConfigMigrated {
+		return PluginState{}, fmt.Errorf("插件设置必须指定机器人")
+	}
+	previousSettings := state.Settings
+	if profileID != "" {
+		previousSettings = state.ForProfile(profileID).Settings
+	}
 	cleared := map[string]bool{}
 	for _, key := range clear {
 		cleared[strings.TrimSpace(key)] = true
@@ -692,7 +724,7 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 		// 空串和「整个键没提交」都表示没改动，沿用已存的值。
 		if text, _ := normalized[key].(string); strings.TrimSpace(text) != "" {
 			if merger, ok := plugin.(SecretSettingMerger); ok {
-				previous, _ := state.Settings[key].(string)
+				previous, _ := previousSettings[key].(string)
 				merged, err := merger.MergeSecretSetting(key, previous, text)
 				if err != nil {
 					return PluginState{}, err
@@ -701,7 +733,7 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 			}
 			continue
 		}
-		if previous, ok := state.Settings[key]; ok {
+		if previous, ok := previousSettings[key]; ok {
 			if normalized == nil {
 				normalized = map[string]any{}
 			}
@@ -710,9 +742,17 @@ func (m *PluginManager) UpdateSettingsWithClears(id string, values map[string]an
 			delete(normalized, key)
 		}
 	}
-	state.Settings = normalized
+	if profileID == "" {
+		state.Settings = normalized
+	} else {
+		state.ProfileSettings = cloneProfileSettings(state.ProfileSettings)
+		if state.ProfileSettings == nil {
+			state.ProfileSettings = map[string]map[string]any{}
+		}
+		state.ProfileSettings[profileID] = clonePluginValues(normalized)
+	}
 	m.states[id] = state
-	return state, nil
+	return state.ForProfile(profileID), nil
 }
 
 // SetEnabled 更新指定插件启用状态。
@@ -737,6 +777,9 @@ func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool)
 	}
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" || id == OpenAPIPluginID {
+		if profileID == "" && id != OpenAPIPluginID && state.ProfileConfigMigrated {
+			return PluginState{}, fmt.Errorf("插件开关必须指定机器人")
+		}
 		state.Enabled = enabled
 	} else {
 		// Copy on write keeps previously returned snapshots stable during saves.
@@ -768,7 +811,7 @@ func (m *PluginManager) CanAskAgent(id string, enabledOverrides map[string]bool,
 		enabled = override
 	}
 	manifest := withBuiltinPlatformSupport(plugin.Manifest())
-	settings := effectivePluginSettingsForGroup(manifest.Settings, state.Settings, settingOverrides[id])
+	settings := scopedPluginSettings(state, settingOverrides)
 	return state.Installed && enabled && manifest.CanAskAgent && settings.Bool(pluginSettingAskAgent, true)
 }
 
@@ -805,7 +848,7 @@ func (m *PluginManager) RunWithGroupOverrides(ctx context.Context, req PluginReq
 				builtIn: state.Manifest.BuiltIn,
 				plugin:  plugin,
 				// 生效设置在锁内合并成快照，插件执行期间的设置变更不影响本次请求。
-				settings: effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id]),
+				settings: scopedPluginSettings(state, settingOverrides),
 			})
 		}
 	}
@@ -872,7 +915,7 @@ func (m *PluginManager) RunOneWithGroupOverrides(ctx context.Context, id string,
 	if override, overridden := enabledOverrides[id]; overridden {
 		enabled = override
 	}
-	settings := effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id])
+	settings := scopedPluginSettings(state, settingOverrides)
 	m.mu.RUnlock()
 	if !ok || !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, req.Event.Platform) {
 		return nil, nil
@@ -922,7 +965,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		providers = append(providers, provider{
 			id:       id,
 			plugin:   toolPlugin,
-			settings: effectivePluginSettingsForGroup(state.Manifest.Settings, state.Settings, settingOverrides[id]),
+			settings: scopedPluginSettings(state, settingOverrides),
 		})
 	}
 	m.mu.RUnlock()
@@ -1078,11 +1121,12 @@ const (
 	resolverSettingPlatformLevelRules = "platform_level_rules"
 	// 凭据类设置。这些值最容易过期、最需要频繁更换，只靠环境变量意味着
 	// Docker 用户改一次 Cookie 就得重启容器。
-	resolverSettingBiliSessdata = "bili_sessdata"
-	resolverSettingDouyinCookie = "douyin_cookie"
-	resolverSettingXHSCookie    = "xhs_cookie"
-	resolverSettingYTDLPCookies = "ytdlp_cookies_path"
-	resolverSettingProxyURL     = "proxy_url"
+	resolverSettingBiliSessdata   = "bili_sessdata"
+	resolverSettingDouyinCookie   = "douyin_cookie"
+	resolverSettingXHSCookie      = "xhs_cookie"
+	resolverSettingYTDLPCookies   = "ytdlp_cookies_path"
+	resolverSettingCookiesBrowser = "ytdlp_cookies_from_browser"
+	resolverSettingProxyURL       = "proxy_url"
 
 	defaultResolverMaxLinks        = 5
 	defaultResolverTimeoutSeconds  = 8
@@ -1100,8 +1144,8 @@ type browserFetchFunc func(ctx context.Context, cdpURL string, pageURL string) (
 
 type ResolverPlugin struct {
 	client          *http.Client
-	cache           resolverCache
-	socialCache     resolverSocialCache
+	sharedSocial    sharedResultCache[resolverSocialResult]
+	sharedPages     sharedResultCache[pageMeta]
 	browserFetch    browserFetchFunc
 	mediaDownloader func(context.Context, string) string
 	// videoDownloader is the legacy injection point retained for the complete
@@ -1309,7 +1353,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingBiliSessdata,
 				Label:       "B 站 SESSDATA",
-				Description: "B 站登录 Cookie 中的 SESSDATA，用于需要登录态的内容。留空则沿用 DIANA_BILI_SESSDATA 环境变量。",
+				Description: "当前机器人使用的 B 站 SESSDATA。留空不使用登录凭据。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1317,7 +1361,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingDouyinCookie,
 				Label:       "抖音 Cookie",
-				Description: "抖音解析必需，不配置无法解析。留空则沿用 DIANA_DOUYIN_CK 环境变量。",
+				Description: "当前机器人使用的抖音 Cookie。不配置时无法解析需要登录的内容。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1325,7 +1369,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingXHSCookie,
 				Label:       "小红书 Cookie",
-				Description: "小红书解析必需，不配置无法解析。留空则沿用 DIANA_XHS_CK 环境变量。",
+				Description: "当前机器人使用的小红书 Cookie。不配置时无法解析需要登录的内容。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1333,17 +1377,18 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingYTDLPCookies,
 				Label:       "yt-dlp Cookie 文件路径",
-				Description: "Netscape 格式 Cookie 文件路径，供 YouTube/X 等需要登录的内容使用。留空则沿用 DIANA_YTDLP_COOKIES 环境变量。",
+				Description: "当前机器人的 Netscape 格式 Cookie 文件路径，留空不自动使用共享 Cookie 文件。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
 			{
 				Key:         resolverSettingProxyURL,
 				Label:       "解析代理",
-				Description: "社交媒体解析与 yt-dlp 使用的代理地址，例如 http://127.0.0.1:7890。留空则沿用 DIANA_RESOLVER_PROXY 环境变量。",
+				Description: "当前机器人解析与 yt-dlp 使用的代理地址，例如 http://127.0.0.1:7890。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
+			{Key: resolverSettingCookiesBrowser, Label: "yt-dlp 浏览器凭据来源", Description: "仅此机器人使用的 yt-dlp 浏览器名称或配置档；留空不读取浏览器 Cookie。", Type: PluginSettingTypeString, Default: ""},
 		},
 	}
 }
@@ -1361,24 +1406,25 @@ func resolverMaxHeightFromSetting(settings SettingValues) int {
 	return height
 }
 
-// resolverCredentials 是一次解析用到的凭据与代理，由插件设置注入、
-// 缺省时回落环境变量，这样现有部署不改任何东西也不会坏。
+// resolverCredentials contains this robot's credentials, including explicit empties.
 type resolverCredentials struct {
-	BiliSessdata string
-	DouyinCookie string
-	XHSCookie    string
-	YTDLPCookies string
-	ProxyURL     string
+	BiliSessdata   string
+	DouyinCookie   string
+	XHSCookie      string
+	YTDLPCookies   string
+	CookiesBrowser string
+	ProxyURL       string
 }
 
-// resolverCredentialsFromSettings 读取插件设置，未配置的项留空交给环境变量兜底。
+// Missing credentials stay empty; process environment is read only during migration.
 func resolverCredentialsFromSettings(settings SettingValues) resolverCredentials {
 	return resolverCredentials{
-		BiliSessdata: strings.TrimSpace(settings.String(resolverSettingBiliSessdata, "")),
-		DouyinCookie: strings.TrimSpace(settings.String(resolverSettingDouyinCookie, "")),
-		XHSCookie:    strings.TrimSpace(settings.String(resolverSettingXHSCookie, "")),
-		YTDLPCookies: strings.TrimSpace(settings.String(resolverSettingYTDLPCookies, "")),
-		ProxyURL:     strings.TrimSpace(settings.String(resolverSettingProxyURL, "")),
+		BiliSessdata:   strings.TrimSpace(settings.String(resolverSettingBiliSessdata, "")),
+		DouyinCookie:   strings.TrimSpace(settings.String(resolverSettingDouyinCookie, "")),
+		XHSCookie:      strings.TrimSpace(settings.String(resolverSettingXHSCookie, "")),
+		YTDLPCookies:   strings.TrimSpace(settings.String(resolverSettingYTDLPCookies, "")),
+		CookiesBrowser: strings.TrimSpace(settings.String(resolverSettingCookiesBrowser, "")),
+		ProxyURL:       strings.TrimSpace(settings.String(resolverSettingProxyURL, "")),
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 func TestAssistantModeIntentPolicy(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeAssistant, ReplyStyle: ReplyStyleGentle, NaturalInterjectionEnabled: boolPointer(true)}.WithDefaults()
 	settings := cfg.chatInSettings()
-	if !settings.Assistant || !settings.Enabled || settings.Natural || cfg.ReplyStyle != ReplyStyleGentle {
+	if settings.Participation.Desire != 25 || !settings.Enabled || cfg.ReplyStyle != ReplyStyleGentle {
 		t.Fatalf("assistant settings = %#v", settings)
 	}
 	for _, tc := range []struct {
@@ -20,7 +20,7 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 		{"bot_related", true, true, true},
 		{"bot_related", false, true, true},
 		{"bot_related", true, false, false},
-		{"chat_in", true, false, false},
+		{"chat_in", true, false, true},
 		{"none", false, false, false},
 	} {
 		d := proactiveReplyDecision{ShouldReply: true, Confidence: 0.8, Category: tc.category, RequestsResponse: tc.request, DirectedAtBot: tc.directed, Substantive: true}
@@ -29,11 +29,11 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 		}
 	}
 	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, settings, true)
-	if !strings.Contains(prompt, assistantIntentPrompt) || !strings.Contains(prompt, socialReplyGuard) {
+	if !strings.Contains(prompt, "主动参与=25") || !strings.Contains(prompt, "闲聊接话=25") {
 		t.Fatal("assistant mode must retain configured social replies")
 	}
 	restored := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
-	if restored.ResponseMode != ResponseModeAssistant || !restored.chatInSettings().Assistant {
+	if restored.ResponseMode != ResponseModeAssistant || restored.chatInSettings().Participation.Desire != 25 {
 		t.Fatal("assistant mode lost in config round trip")
 	}
 }
@@ -66,7 +66,7 @@ func TestAssistantModeDoesNotInjectSilencePolicy(t *testing.T) {
 func TestAssistantModeCanChatAtLowDesire(t *testing.T) {
 	settings := BotConfig{ResponseMode: ResponseModeAssistant}.WithDefaults().chatInSettings()
 	active := BotConfig{ResponseMode: ResponseModeActive}.WithDefaults().chatInSettings()
-	if settings.Level != ChatInLevelLow || settings.Chance >= active.Chance || settings.Cooldown <= active.Cooldown {
+	if settings.Level != ChatInLevelLow || settings.Participation.Desire >= active.Participation.Desire {
 		t.Fatalf("assistant=%#v active=%#v", settings, active)
 	}
 	d := proactiveReplyDecision{ShouldReply: true, Confidence: 0.99, Category: "chat_in", Substantive: true}
@@ -74,13 +74,13 @@ func TestAssistantModeCanChatAtLowDesire(t *testing.T) {
 		t.Fatal("assistant must allow contextual chat")
 	}
 	d.Substantive = false
-	if d.allows(0.7, settings) {
-		t.Fatal("assistant must not send empty filler")
+	if !d.allows(0.7, settings) {
+		t.Fatal("substantive must not override the model")
 	}
 	d.Substantive = true
 	d.Confidence = 0.8
-	if d.allows(0.7, settings) {
-		t.Fatal("help threshold must not lower casual chat threshold")
+	if !d.allows(0.7, settings) {
+		t.Fatal("confidence must not override the model")
 	}
 }
 
@@ -92,14 +92,14 @@ func TestAssistantModeRoutesPublicHelpAndGroupOverride(t *testing.T) {
 	}})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "help-group", UserID: "u", MessageID: "help", RawMessage: "这个编译错误怎么解决"}
 	settings := r.effectiveConfigForEvent(event).chatInSettings()
-	if !settings.Assistant || settings.SuperActive {
+	if settings.Participation.Desire != 25 {
 		t.Fatalf("group override = %#v", settings)
 	}
 	routed, _, _, allowed := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
 	if !allowed || !routed.proactiveReply || routed.chatInReply {
 		t.Fatalf("public help blocked: %s", routed.routingReason)
 	}
-	if !strings.Contains(provider.requestSnapshot().Messages[0].Content, assistantIntentPrompt) {
+	if !strings.Contains(provider.requestSnapshot().Messages[0].Content, "主动参与=25") {
 		t.Fatal("routing request missing assistant policy")
 	}
 }

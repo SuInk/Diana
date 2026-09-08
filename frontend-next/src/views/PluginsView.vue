@@ -6,7 +6,7 @@
     <header class="view-header plugins-view-header">
       <div class="view-title">
         <h1>插件</h1>
-        <p>{{ botScope ? "当前机器人开关" : "全局默认开关" }} · 共享插件设置</p>
+        <p>{{ botScope ? "当前机器人的独立开关、参数与凭据" : "请先选择要配置的机器人" }} · OpenAPI 位于系统设置</p>
       </div>
       <div class="view-actions">
         <div class="plugin-search">
@@ -186,7 +186,7 @@
       title="没有匹配的插件"
       hint="换个关键词，或把筛选切回「全部」。"
     />
-    <EmptyState v-else-if="!loading && !loadError" title="没有可用插件" />
+    <EmptyState v-else-if="!loading && !loadError" :title="botScope ? '没有可用插件' : '请在左侧选择具体机器人'" />
 
     <Modal
       v-if="settingsTarget"
@@ -194,8 +194,8 @@
       :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID"
       @close="closeSettings"
     >
-      <!-- 依赖多数时候是齐的，默认折叠把弹窗顶部让给真正要改的设置项；
-           缺依赖时自动展开，那才是需要立刻处理的状态。 -->
+      <p class="hint">设置和凭据仅用于当前机器人；恢复默认只恢复插件内置默认值。</p>
+      <!-- Dependencies expand only when attention is needed. -->
       <details
         v-if="dependenciesFor(settingsTarget.manifest.id).length"
         class="plugin-settings-section-head plugin-settings-collapsible"
@@ -354,7 +354,8 @@
         </template>
       </div>
       <RepositoryWatchManager
-        v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
+        v-if="isGitHubSettings && githubSettingsTab === 'repositories' && botScope"
+        :profile-id="botScope"
         ref="repositoryWatchRef"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
@@ -379,6 +380,7 @@
         @update:manager-user-access="repositoryPublishForm.issue_manager_user_access = $event"
         @update:manager-group-access="repositoryPublishForm.issue_manager_group_access = $event"
       />
+      <p v-if="!botScope && (isGitHubSettings || settingsTarget.manifest.id === rssWatchPluginID)" class="hint">选择具体机器人后管理其订阅；全部订阅仍可在任务页查看。</p>
       <div v-if="isGitHubSettings && githubSettingsTab === 'records'" class="github-run-records">
         <div class="plugin-settings-section-head">
           <h3>运行记录</h3>
@@ -390,7 +392,8 @@
         </div>
       </div>
       <RSSWatchManager
-        v-if="settingsTarget.manifest.id === rssWatchPluginID"
+        v-if="settingsTarget.manifest.id === rssWatchPluginID && botScope"
+        :profile-id="botScope"
         ref="rssWatchRef"
         :prepare-access="saveSettingsForSubscription"
       />
@@ -626,7 +629,7 @@ function musicStatusLabel(source: string): string {
 async function testMusicSettings(): Promise<void> {
   testingMusic.value = true;
   try {
-    const response = await testMusicConnections(buildSettingsPayload(), clearSecrets.value);
+    const response = await testMusicConnections(buildSettingsPayload(), clearSecrets.value, botScope.value);
     musicTestResults.value = Object.fromEntries(response.sources.map((item) => [item.source, item]));
     const playable = response.sources.filter((item) => item.playable).length;
     playable > 0 ? toastSuccess(`${playable} 家曲库可正常取得播放地址`) : toastError("没有曲库能取得播放地址，请按卡片提示检查配置");
@@ -688,6 +691,7 @@ async function reload(): Promise<void> {
   const scope = botScope.value;
   loading.value = true;
   loadError.value = "";
+  if (!scope) { plugins.value = []; loading.value = false; return; }
   try {
     const states = await listPlugins(scope);
     if (requestID !== reloadID || scope !== botScope.value) return;
@@ -741,7 +745,7 @@ async function install(plugin: PluginState): Promise<void> {
 async function uninstall(plugin: PluginState): Promise<void> {
   const ok = await askConfirm({
     title: "卸载插件",
-    message: `确定卸载「${plugin.manifest.name}」吗？插件设置会保留，重新安装后仍然可用。`,
+    message: `确定卸载「${plugin.manifest.name}」吗？卸载影响所有机器人；各机器人的设置会保留，重新安装后仍然可用。`,
     confirmLabel: "卸载",
     danger: true
   });
@@ -1016,7 +1020,13 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
     return;
   }
   savingSettings.value = true;
+  const scope = botScope.value;
+  const github = isGitHubSettings.value;
   try {
+    const publishPayload = github && repositoryPublishTarget.value ? buildSettingsPayload(repositoryPublishSpecs.value, repositoryPublishForm.value) : null;
+    const sharedToken = String(settingsForm.value.github_token ?? "").trim();
+    if (publishPayload && sharedToken) publishPayload.github_token = sharedToken;
+    const publishClears = clearSecrets.value.includes("github_token") ? ["github_token"] : [];
     const payload = buildSettingsPayload();
     if (isGitHubSettings.value) {
       // 只提交本次真的输入了的 Token；后端按凭据 ID 合并，没提交的沿用已存值。
@@ -1030,29 +1040,27 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
       }
       payload.github_credential_ids = configured.size ? JSON.stringify([...configured]) : "";
     }
-    const updated = await updatePluginSettings(target.manifest.id, payload, clearSecrets.value);
-    upsert(updated);
-    settingsTarget.value = updated;
-    if (isGitHubSettings.value && repositoryPublishTarget.value) {
-      const publishPayload = buildSettingsPayload(repositoryPublishSpecs.value, repositoryPublishForm.value);
-      const sharedToken = String(settingsForm.value.github_token ?? "").trim();
-      if (sharedToken) publishPayload.github_token = sharedToken;
-      const publishClears = clearSecrets.value.includes("github_token") ? ["github_token"] : [];
+    const updated = await updatePluginSettings(target.manifest.id, payload, [...clearSecrets.value], scope);
+    upsert(updated, scope);
+    if (publishPayload) {
       let publishUpdated;
       try {
-        publishUpdated = await updatePluginSettings(repositoryPublishPluginID, publishPayload, publishClears);
+        publishUpdated = await updatePluginSettings(repositoryPublishPluginID, publishPayload, publishClears, scope);
       } catch (error) {
         // 两次请求没有事务：第一次已经落库了，这里失败会留下半保存状态。
         // 与其只弹一句「保存失败」，不如说清楚哪半边生效了，并把界面刷成真实状态。
-        plugins.value = await listPlugins().catch(() => plugins.value);
+        if (scope === botScope.value) await reload();
         const reason = error instanceof Error ? error.message : "未知错误";
         throw new Error(`Token 与仓库检查设置已保存，但 Issue 权限部分没保存成功：${reason}。请重新打开设置检查 Issue 相关配置。`);
       }
-      upsert(publishUpdated);
+      upsert(publishUpdated, scope);
+      if (scope !== botScope.value) return;
       for (const spec of repositoryPublishSpecs.value) {
         if (spec.secret) repositoryPublishForm.value[spec.key] = "";
       }
     }
+    if (scope !== botScope.value) return;
+    settingsTarget.value = updated;
     for (const spec of settingsSpecs.value) {
       if (spec.secret) settingsForm.value[spec.key] = "";
     }
@@ -1076,6 +1084,7 @@ async function saveSettings(): Promise<void> {
     toastError(error instanceof Error ? error.message : "保存设置失败");
   }
 }
+
 
 async function saveSettingsForSubscription(): Promise<void> {
   await persistSettings(false);

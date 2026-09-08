@@ -91,8 +91,7 @@ func TestLegacyNaturalInterjectionMigratesToMaxReplyDesire(t *testing.T) {
 	cfg := DefaultBotConfig()
 	cfg.NaturalInterjectionEnabled = boolPointer(true)
 	settings := cfg.chatInSettings()
-	preset := chatInLevelPresets[ChatInLevelMax]
-	if !settings.Enabled || settings.Natural || settings.Level != ChatInLevelMax || settings.Threshold != preset.Threshold || settings.Chance != preset.Chance || settings.Cooldown != preset.Cooldown {
+	if !settings.Enabled || settings.Participation.Desire != 100 || settings.Chance != 1 || settings.Cooldown != 0 {
 		t.Fatalf("legacy natural interjection settings = %#v", settings)
 	}
 }
@@ -103,7 +102,7 @@ func TestNaturalInterjectionCanBeConfiguredPerGroup(t *testing.T) {
 		"natural": {GroupID: "natural", NaturalInterjectionEnabled: boolPointer(true)},
 		"quiet":   {GroupID: "quiet", NaturalInterjectionEnabled: boolPointer(false)},
 	}})
-	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); settings.Level != ChatInLevelMax || settings.Cooldown != 30*time.Second {
+	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "natural"}).chatInSettings(); settings.Participation.Desire != 100 || settings.Cooldown != 0 {
 		t.Fatalf("natural group settings = %#v", settings)
 	}
 	if settings := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "quiet"}).chatInSettings(); settings.Natural {
@@ -257,15 +256,9 @@ func TestChatInReplyPromptOnlyAppearsForInterjections(t *testing.T) {
 	prompt := runtime.systemPrompt(event, nil)
 	for _, want := range []string{
 		"本次回复是主动插话",
-		"风格化表达本身也可以是内容",
-		"比喻、拟人、意象、节奏感或角色口吻",
-		"一次集中使用一两个最贴切的手法",
-		"不要堆形容词、套网感模板",
-		"事实、技术和操作内容仍以清楚准确为先",
-		"不与事实和用户明确要求冲突",
-		"优先遵循已配置的人设与口吻",
-		"不要复述别人刚说过的内容",
-		"控制在一到两句",
+		"已根据用户发言偏好决定参与",
+		"不要求增加新知识",
+		"不复读、不编造事实",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("chat-in prompt missing %q: %q", want, prompt)
@@ -288,7 +281,7 @@ func TestChatInOffIsNotResurrectedByNaturalInterjection(t *testing.T) {
 		ChatInLevel:                ChatInLevelLow,
 		NaturalInterjectionEnabled: boolPointer(true),
 	}.chatInSettings()
-	if !on.Enabled || on.Natural || on.Level != ChatInLevelMax || on.Cooldown != 30*time.Second {
+	if !on.Enabled || on.Participation.Desire != 100 || on.Cooldown != 0 {
 		t.Fatalf("legacy natural mode did not migrate to max desire: %#v", on)
 	}
 }
@@ -306,7 +299,7 @@ func TestResponseModePresetClearsChatInFineTuning(t *testing.T) {
 	if preset.ChatInThreshold != 0 || preset.ChatInChance != 0 || preset.ChatInCooldownSeconds != 0 {
 		t.Fatalf("preset kept stale fine-tuning: %#v", preset)
 	}
-	if settings := preset.chatInSettings(); settings.Threshold != chatInLevelPresets[ChatInLevelLow].Threshold {
+	if settings := preset.chatInSettings(); settings.Participation.Desire != 25 || settings.Threshold != 0 {
 		t.Fatalf("effective threshold = %v, want the level preset", settings.Threshold)
 	}
 	// 自定义模式下这三项仍然是用户说了算。

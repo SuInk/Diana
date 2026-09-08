@@ -206,10 +206,14 @@ func ytDLPFullVideoDownloadArgs(ctx context.Context, outputPattern, raw string) 
 func appendYTDLPResolverArgs(ctx context.Context, args []string, raw string) []string {
 	if cookies := resolverYTDLPCookies(ctx); cookies != "" {
 		args = append(args, "--cookies", cookies)
-	} else if cookies := defaultYTDLPCookiesPath(); cookies != "" {
+	} else if cookies := defaultYTDLPCookiesPath(); cookies != "" && !hasResolverCredentials(ctx) {
 		args = append(args, "--cookies", cookies)
 	}
-	if browser := strings.TrimSpace(os.Getenv("DIANA_YTDLP_COOKIES_FROM_BROWSER")); browser != "" {
+	browser := credentialFromContext(ctx, func(c resolverCredentials) string { return c.CookiesBrowser })
+	if !hasResolverCredentials(ctx) {
+		browser = strings.TrimSpace(os.Getenv("DIANA_YTDLP_COOKIES_FROM_BROWSER"))
+	}
+	if browser != "" {
 		args = append(args, "--cookies-from-browser", browser)
 	}
 	if proxy := resolverProxyURL(ctx); proxy != "" {
@@ -224,32 +228,32 @@ func appendYTDLPResolverArgs(ctx context.Context, args []string, raw string) []s
 	return args
 }
 
-// 以下几个取值统一遵循「插件设置优先，环境变量兜底」，
-// 这样 WebUI 里填了就立刻生效，没填的现有部署行为不变。
+// Robot contexts never inherit environment credentials. The context-free path
+// remains available for one-time legacy migration and standalone helpers.
 
 func resolverYTDLPCookies(ctx context.Context) string {
-	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.YTDLPCookies }); value != "" {
+	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.YTDLPCookies }); value != "" || hasResolverCredentials(ctx) {
 		return value
 	}
 	return strings.TrimSpace(os.Getenv("DIANA_YTDLP_COOKIES"))
 }
 
 func resolverProxyURL(ctx context.Context) string {
-	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.ProxyURL }); value != "" {
+	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.ProxyURL }); value != "" || hasResolverCredentials(ctx) {
 		return value
 	}
 	return firstNonEmpty(os.Getenv("DIANA_RESOLVER_PROXY"), os.Getenv("RESOLVER_PROXY"))
 }
 
 func resolverDouyinCookie(ctx context.Context) string {
-	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.DouyinCookie }); value != "" {
+	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.DouyinCookie }); value != "" || hasResolverCredentials(ctx) {
 		return value
 	}
 	return strings.TrimSpace(firstNonEmpty(os.Getenv("DIANA_DOUYIN_CK"), os.Getenv("DOUYIN_CK"), os.Getenv("douyin_ck")))
 }
 
 func resolverXHSCookie(ctx context.Context) string {
-	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.XHSCookie }); value != "" {
+	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.XHSCookie }); value != "" || hasResolverCredentials(ctx) {
 		return value
 	}
 	return strings.TrimSpace(firstNonEmpty(os.Getenv("DIANA_XHS_CK"), os.Getenv("XHS_CK"), os.Getenv("xhs_ck")))
@@ -749,7 +753,7 @@ func bilibiliDownloadHeaders(ctx context.Context, base map[string]string) map[st
 }
 
 func bilibiliSessdata(ctx context.Context) string {
-	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.BiliSessdata }); value != "" {
+	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.BiliSessdata }); value != "" || hasResolverCredentials(ctx) {
 		return value
 	}
 	return firstNonEmpty(os.Getenv("DIANA_BILI_SESSDATA"), os.Getenv("BILI_SESSDATA"))
@@ -1231,12 +1235,19 @@ func ytDLPFormatSelector(maxHeight int) string {
 
 type resolverCredentialsKey struct{}
 
+func hasResolverCredentials(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	_, ok := ctx.Value(resolverCredentialsKey{}).(resolverCredentials)
+	return ok
+}
+
 func withResolverCredentials(ctx context.Context, creds resolverCredentials) context.Context {
 	return context.WithValue(ctx, resolverCredentialsKey{}, creds)
 }
 
-// credentialFromContext 取插件设置里的凭据；没配就返回空串，
-// 由各调用点回落到对应的环境变量。
+// credentialFromContext returns this robot's value, including an explicit empty value.
 func credentialFromContext(ctx context.Context, pick func(resolverCredentials) string) string {
 	if ctx == nil {
 		return ""

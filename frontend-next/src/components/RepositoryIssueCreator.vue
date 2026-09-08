@@ -113,6 +113,7 @@ import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 
 const props = defineProps<{
+  profileId?: string;
   prepareAccess?: () => Promise<void>;
 }>();
 
@@ -161,11 +162,13 @@ async function confirmDuplicate(): Promise<void> {
 }
 
 async function create(allowDuplicate: boolean): Promise<void> {
+  const scope = props.profileId ?? "";
   const confirmation = pendingConfirmation.value;
   const candidate = confirmation?.candidates?.[0];
   submitting.value = true;
   try {
     await props.prepareAccess?.();
+    if (scope !== (props.profileId ?? "")) return;
     const result = await createRepositoryIssue({
       repository: form.repository,
       title: form.title,
@@ -174,7 +177,7 @@ async function create(allowDuplicate: boolean): Promise<void> {
       allow_duplicate: allowDuplicate || undefined,
       confirmation_token: allowDuplicate ? confirmation?.confirmation_token : undefined,
       candidate_number: allowDuplicate ? candidate?.number : undefined
-    });
+    }, scope);
     if (result.requires_confirmation && result.candidates?.length) {
       pendingConfirmation.value = result;
       await nextTick();

@@ -128,7 +128,7 @@
               </div>
 
               <div v-if="task.kind === 'rss_watch'" class="task-facts">
-                <span><Rss :size="13" aria-hidden="true" />来源 <strong>{{ task.feed_source === "twitter" ? `@${task.feed_handle}` : task.message }}</strong></span>
+                <span v-for="source in rssSources(task)" :key="source.feed_url" style="overflow-wrap: anywhere; max-width: 100%"><Rss :size="13" aria-hidden="true" />来源 <strong>{{ rssSourceLabel(source) }}</strong></span>
                 <span v-if="task.last_feed_item_id">游标 <strong class="mono">{{ task.last_feed_item_id.slice(0, 28) }}</strong></span>
                 <a v-if="task.feed_url" :href="task.feed_url" target="_blank" rel="noreferrer">打开 Feed</a>
               </div>
@@ -139,11 +139,12 @@
                   <UserRound :size="13" aria-hidden="true" />
                   用户 <strong class="mono">{{ task.owner_id || task.user_id || "—" }}</strong>
                 </span>
+                <SubscriptionDestination v-else-if="task.kind === 'rss_watch'" :platform="task.platform" :profile-id="task.profile_id" :group-id="task.group_id" :user-id="task.user_id" />
                 <span v-else-if="task.user_id && !task.group_id">
                   <UserRound :size="13" aria-hidden="true" />
                   私聊对象 <strong class="mono">{{ task.user_id }}</strong>
                 </span>
-                <span v-if="task.group_id">
+                <span v-if="task.group_id && task.kind !== 'rss_watch'">
                   <UsersRound :size="13" aria-hidden="true" />
                   群 <strong class="mono">{{ task.group_id }}</strong>
                 </span>
@@ -240,6 +241,8 @@ import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import StatCard from "../components/StatCard.vue";
+import SubscriptionDestination from "../components/SubscriptionDestination.vue";
+import { rssSources, rssSourceLabel } from "../rss-display";
 
 type KindFilter = "all" | AssistantTaskKind;
 type StatusFilter = "all" | AssistantTaskStatus;

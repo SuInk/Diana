@@ -128,6 +128,10 @@ export interface MessageRelayPair {
 }
 
 export interface BotProfileConfig {
+  persona_id?: string;
+  custom_persona?: Persona;
+  marked_bot_ids?: string[];
+  participation?: import("./participation").ParticipationPreferences;
   id?: string;
   name?: string;
   platform?: string;
@@ -203,7 +207,7 @@ export interface BotProfileConfig {
   welcome_message?: string;
   system_prompt?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
-  reply_style?: "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  reply_style?: "human" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   action_description_enabled?: boolean;
   /** 机器人怎么称呼自己；留空跟随表达风格自带的说法。 */
   self_reference?: string;
@@ -441,6 +445,8 @@ export interface ResolverDependencyInstallResponse {
 }
 
 export interface BotGroupConfig {
+  marked_bot_ids?: string[];
+  participation?: import("./participation").ParticipationPreferences;
   bot_profile_id?: string;
   group_id: string;
   enabled: boolean;
@@ -453,7 +459,7 @@ export interface BotGroupConfig {
   /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
   response_mode?: "" | "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 留空时跟随机器人全局表达风格。 */
-  reply_style?: "" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  reply_style?: "" | "human" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   /** 本群是否穿插括号动作；不设表示跟随机器人。 */
   action_description_enabled?: boolean;
   /** 留空时跟随机器人全局设置。 */
@@ -553,6 +559,7 @@ export interface BotGroupAdminChallengeResponse {
 }
 
 export interface BotGroupAdminConfigResponse {
+  profile_id?: string;
   group_id: string;
   user_id?: string;
   token?: string;
@@ -1237,9 +1244,10 @@ export function setPluginEnabled(id: string, enabled: boolean, profile = ""): Pr
 export function updatePluginSettings(
   id: string,
   settings: Record<string, unknown>,
-  clearSecrets: string[] = []
+  clearSecrets: string[] = [],
+  profileID = ""
 ): Promise<PluginState> {
-  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/settings`, {
+  return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/settings?profile=${encodeURIComponent(profileID)}`, {
     method: "POST",
     body: JSON.stringify({ settings, clear_secrets: clearSecrets })
   });
@@ -1257,16 +1265,17 @@ export interface MusicConnectionStatus {
 
 export function testMusicConnections(
   settings: Record<string, unknown>,
-  clearSecrets: string[] = []
+  clearSecrets: string[] = [],
+  profileID = ""
 ): Promise<{ sources: MusicConnectionStatus[] }> {
-  return requestJSON<{ sources: MusicConnectionStatus[] }>("/api/assistant/plugins/music/test", {
+  return requestJSON<{ sources: MusicConnectionStatus[] }>(`/api/assistant/plugins/music/test?profile=${encodeURIComponent(profileID)}`, {
     method: "POST",
     body: JSON.stringify({ settings, clear_secrets: clearSecrets })
   });
 }
 
-export function createRepositoryIssue(input: RepositoryIssueCreateInput): Promise<RepositoryIssueCreateResult> {
-  return requestJSON<RepositoryIssueCreateResult>("/api/assistant/plugins/repository-publish/issues", {
+export function createRepositoryIssue(input: RepositoryIssueCreateInput, profileID = ""): Promise<RepositoryIssueCreateResult> {
+  return requestJSON<RepositoryIssueCreateResult>(`/api/assistant/plugins/repository-publish/issues?profile=${encodeURIComponent(profileID)}`, {
     method: "POST",
     body: JSON.stringify(input)
   });
@@ -1288,17 +1297,17 @@ export function installResolverDependency(name: string): Promise<ResolverDepende
   );
 }
 
-export function requestBotGroupAdminChallenge(groupID: string, userID: string): Promise<BotGroupAdminChallengeResponse> {
+export function requestBotGroupAdminChallenge(groupID: string, userID: string, profileID = ""): Promise<BotGroupAdminChallengeResponse> {
   return requestJSON<BotGroupAdminChallengeResponse>("/api/assistant/group-admin/challenge", {
     method: "POST",
-    body: JSON.stringify({ group_id: groupID, user_id: userID })
+    body: JSON.stringify({ group_id: groupID, user_id: userID, profile_id: profileID })
   });
 }
 
-export function verifyBotGroupAdmin(groupID: string, userID: string, code: string): Promise<BotGroupAdminConfigResponse> {
+export function verifyBotGroupAdmin(groupID: string, userID: string, code: string, profileID = ""): Promise<BotGroupAdminConfigResponse> {
   return requestJSON<BotGroupAdminConfigResponse>("/api/assistant/group-admin/verify", {
     method: "POST",
-    body: JSON.stringify({ group_id: groupID, user_id: userID, code })
+    body: JSON.stringify({ group_id: groupID, user_id: userID, code, profile_id: profileID })
   });
 }
 
@@ -2018,8 +2027,9 @@ export interface Persona {
   id: string;
   name: string;
   system_prompt?: string;
-  reply_style?: "" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
+  reply_style?: "" | "human" | "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay";
   action_description_enabled?: boolean;
+  daypart_tone_enabled?: boolean;
   self_reference?: string;
   sentence_enders?: string;
   updated_at?: string;

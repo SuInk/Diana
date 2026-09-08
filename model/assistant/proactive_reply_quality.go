@@ -177,24 +177,15 @@ func replyQualityPromptForConfig(cfg BotConfig) string {
 account_risk_reason，不得改变准确度、拒答、空转判断或 JSON 输出格式。未被这段
 规则明确列为风险的内容应判 account_safe=true。`
 	}
-	if cfg.chatInSettings().SuperActive {
-		prompt += "\n当前为超级活跃模式：正常的寒暄、简短情绪回应、接梗和自然追问不等于准确性错误。仍只检查可见的准确性与完整性问题，不重新判断是否需要回复；账号安全和独立的循环判断规则保持不变。"
-	}
+	prompt += "\n正常的寒暄、简短情绪回应、接梗和自然追问不等于准确性错误。仍只检查可见的准确性与完整性问题，不重新判断是否需要回复；账号安全和独立的循环判断规则保持不变。"
 	return prompt
 }
 
 // proactiveQualityError 执行现有主动回复的准确性门禁。
 func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveReplyQualityDecision, cfg BotConfig) error {
 	threshold := cfg.ProactiveReplyThreshold
-	if event.chatInReply {
-		threshold = cfg.chatInSettings().Threshold
-	}
 	if threshold <= 0 || threshold > 1 {
 		threshold = defaultProactiveReplyThreshold
-	}
-	if cfg.chatInSettings().SuperActive {
-		// 保留超级活跃模式已有的门槛，不在本次职责收窄中改变配置含义。
-		threshold = 0.5
 	}
 	if decision.ShouldSend && decision.Confidence >= threshold {
 		return nil

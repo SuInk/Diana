@@ -5,8 +5,6 @@ package assistant
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,46 +24,6 @@ func TestResolverAttachDownloadedVideoReturnsMedia(t *testing.T) {
 	)
 	if len(result.VideoURLs) != 1 || result.VideoURLs[0] != "/tmp/diana-test-video.mp4" {
 		t.Fatalf("VideoURLs = %#v", result.VideoURLs)
-	}
-}
-
-func TestResolverSocialCacheReusesOnlySuccessfulResults(t *testing.T) {
-	var cache resolverSocialCache
-	now := time.Now()
-	videoPath := filepath.Join(t.TempDir(), "video.mp4")
-	if err := os.WriteFile(videoPath, []byte("video"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	success := resolverSocialResult{
-		Handled: true, Context: "[抖音] 已识别内容",
-		VideoURLs: []string{videoPath}, ResourceKeys: []string{"douyin:123"},
-	}
-	cache.put("https://v.douyin.com/example/", success, now, 10*time.Minute)
-
-	got, found := cache.get("https://v.douyin.com/example/#fragment", now.Add(time.Minute))
-	if !found || got.Context != success.Context || len(got.VideoURLs) != 1 || len(got.ResourceKeys) != 1 {
-		t.Fatalf("cached result = %#v found=%v", got, found)
-	}
-	got.VideoURLs[0] = "mutated"
-	again, _ := cache.get("https://v.douyin.com/example/", now.Add(time.Minute))
-	if again.VideoURLs[0] != videoPath {
-		t.Fatalf("cache result was mutated through caller: %#v", again)
-	}
-
-	cache.put("https://v.douyin.com/failure/", resolverSocialResult{Handled: true, Context: "解析失败"}, now, 10*time.Minute)
-	if _, found := cache.get("https://v.douyin.com/failure/", now); found {
-		t.Fatal("failed result must not enter successful media cache")
-	}
-	if _, found := cache.get("https://v.douyin.com/example/", now.Add(11*time.Minute)); found {
-		t.Fatal("expired social result remained cached")
-	}
-
-	cache.put("https://v.douyin.com/missing-media/", success, now, 10*time.Minute)
-	if err := os.Remove(videoPath); err != nil {
-		t.Fatal(err)
-	}
-	if _, found := cache.get("https://v.douyin.com/missing-media/", now.Add(time.Minute)); found {
-		t.Fatal("cache with missing local media should fall back to fresh resolution")
 	}
 }
 

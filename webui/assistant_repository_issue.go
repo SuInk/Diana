@@ -41,7 +41,11 @@ func (h *BotHandler) createRepositoryIssue(c *gin.Context) {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_issue.create", fmt.Errorf("插件管理器不可用"), payload.Repository, nil)
 		return
 	}
-	pluginValue, settings, enabled := h.runtime.Plugins().PluginWithSettings(assistant.RepositoryPublishPluginID, nil)
+	profileID, ok := h.pluginProfileScope(c)
+	if !ok {
+		return
+	}
+	pluginValue, settings, enabled := h.runtime.Plugins().PluginWithSettingsForProfile(assistant.RepositoryPublishPluginID, profileID)
 	plugin, ok := pluginValue.(*assistant.RepositoryPublishPlugin)
 	if !enabled || !ok {
 		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_issue.create", fmt.Errorf("仓库 Issue 发布插件未启用"), payload.Repository, nil)

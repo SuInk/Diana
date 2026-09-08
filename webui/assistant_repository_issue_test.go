@@ -93,14 +93,17 @@ func TestBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, manager, nil, nil, nil, nil)
+	runtime := assistant.NewRuntime(assistant.BotConfig{ID: "issue-bot"}, fakeChannel{}, manager, nil, nil, nil, nil)
 	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel {
 		return fakeChannel{}
 	})
 	router := botTestRouter(handler)
 
 	body := []byte(`{"repository":"acme/demo","title":"WebUI issue","body":"details","labels":["bug"]}`)
-	request := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repository-publish/issues", bytes.NewReader(body))
+	if err := handler.profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "issue-bot", Profiles: []assistant.BotConfig{runtime.Config()}}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repository-publish/issues?profile=issue-bot", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)

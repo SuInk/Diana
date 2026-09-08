@@ -308,7 +308,7 @@ func TestRestoredRuntimeTriggersSupportedSocialLinksOnly(t *testing.T) {
 	if runtime.shouldHandle(event, "https://example.com/article") {
 		t.Fatal("ordinary link should not trigger a group reply")
 	}
-	if _, err := runtime.plugins.SetEnabled(resolverPluginID, false); err != nil {
+	if _, err := runtime.plugins.SetEnabledForProfile(resolverPluginID, runtime.Config().ID, false); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
 	if runtime.shouldHandle(event, "https://youtu.be/example") {

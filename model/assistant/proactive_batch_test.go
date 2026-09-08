@@ -62,7 +62,7 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 	}
 }
 
-func TestProactiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
+func TestProactiveReplyBatchReplacesLegacyRouterPrompt(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
 	}}
@@ -86,7 +86,7 @@ func TestProactiveReplyBatchUsesConfiguredRouterPrompt(t *testing.T) {
 	if len(provider.requests) != 1 || len(provider.requests[0].Messages) == 0 {
 		t.Fatalf("router requests = %#v", provider.requests)
 	}
-	if got := provider.requests[0].Messages[0].Content; !strings.Contains(got, "custom proactive router prompt") {
+	if got := provider.requests[0].Messages[0].Content; strings.Contains(got, "custom proactive router prompt") || !strings.Contains(got, "主动参与=25") {
 		t.Fatalf("router prompt = %q", got)
 	}
 }

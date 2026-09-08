@@ -218,7 +218,7 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 	if !runtime.shouldConsiderProactiveReply(event, text) || !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
 		t.Fatal("reliable direct follow-up should pass semantic routing without proactive sampling")
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "不得作为 should_reply 的前置条件") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
+	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "不得作为发言评分的前置条件") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
 		t.Fatalf("router prompt missing deferred accuracy guard: %#v", provider.request.Messages)
 	}
 }
@@ -239,8 +239,8 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 		{
 			name:        "router mistakes tool-readable data for missing information",
 			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"missing_context","reason":"缺少所指文件，无法可靠回答"}`,
-			wantHandled: true,
-			wantOutcome: "replied_proactive",
+			wantHandled: false,
+			wantOutcome: "ignored",
 		},
 	}
 	for _, tt := range tests {
@@ -294,7 +294,7 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 	}
 }
 
-func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
+func TestRuntimeDoesNotOverrideModelSilenceForDirectedFollowup(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":false,"confidence":0.99,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"no_capability","reason":"群成员实时人数属于不可访问的群内数据"}`}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:            true,
@@ -319,10 +319,10 @@ func TestRuntimePromotesDirectedGroupCountFollowupToReplyAgent(t *testing.T) {
 	}
 
 	routed, _, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
-	if !allowed || !routed.proactiveReply || len(turn) != 1 {
+	if allowed || routed.proactiveReply || len(turn) != 1 {
 		t.Fatalf("route event=%#v turn=%#v allowed=%v", routed, turn, allowed)
 	}
-	if !strings.Contains(routed.routingReason, "交由正式回复与发送前准确度审核处理") {
+	if !strings.Contains(routed.routingReason, "允许回复 false") {
 		t.Fatalf("routing reason = %q", routed.routingReason)
 	}
 	if len(provider.request.Messages) < 2 {
@@ -2583,7 +2583,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 	if !allowed {
 		t.Fatal("qualified bot follow-up should pass the semantic router")
 	}
-	for _, want := range []string{"允许回复", "明确承接了机器人上一条回复", "置信度 82%", "指向机器人 true", "可回答 true"} {
+	for _, want := range []string{"允许回复", "明确承接了机器人上一条回复", "主动参与 25", "闲聊接话 25"} {
 		if !strings.Contains(routed.routingReason, want) {
 			t.Fatalf("routing reason %q missing %q", routed.routingReason, want)
 		}
@@ -2592,7 +2592,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		t.Fatal("proactive router did not call the LLM")
 	}
 	systemPrompt := provider.request.Messages[0].Content
-	for _, want := range []string{"默认保持沉默", "directed_at_bot", "answerable", "不等于在问机器人", "不负责事实准确度审核", "发送前准确度审核", "不得作为 should_reply 的前置条件"} {
+	for _, want := range []string{"主动参与=25", "scores", "五项", "不等于在问机器人", "不负责事实准确度审核", "发送前准确度审核", "不得作为发言评分的前置条件"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}
@@ -2601,7 +2601,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		t.Fatalf("route logs = %#v", logs.entries)
 	}
 	metadata := logs.entries[0].Metadata
-	if metadata["allowed"] != true || metadata["parsed"] != true || metadata["confidence"] != 0.82 || metadata["threshold"] != 0.8 || metadata["directed_at_bot"] != true {
+	if metadata["allowed"] != true || metadata["parsed"] != true || metadata["confidence"] != 0.82 || metadata["participation"] == nil || metadata["threshold"] != nil || metadata["directed_at_bot"] != true {
 		t.Fatalf("route metadata = %#v", metadata)
 	}
 }
@@ -2747,7 +2747,7 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 	if len(request.Messages) < 2 {
 		t.Fatalf("router request = %#v", request.Messages)
 	}
-	if !strings.Contains(request.Messages[0].Content, "不是直接向机器人提问") || !strings.Contains(request.Messages[0].Content, "directed_at_bot=false") {
+	if !strings.Contains(request.Messages[0].Content, "不是直接向机器人提问") || !strings.Contains(request.Messages[0].Content, "chat_in") {
 		t.Fatalf("router prompt missing contextual chat-in guidance: %q", request.Messages[0].Content)
 	}
 	for _, want := range []string{"流量不够了能玩什么", "离线小说", `"images":1`, "你不是最喜欢看小说吗"} {
