@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -200,5 +201,26 @@ func TestPlatformTransportErrorsHideCredentials(t *testing.T) {
 	}
 	if _, err := platformAvatar(context.Background(), "file:///etc/passwd"); err == nil {
 		t.Fatal("local file used as avatar")
+	}
+}
+
+func TestPlatformAvatarRedirectDoesNotTransmitCredentialsOrReferer(t *testing.T) {
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "1")
+	requests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Header.Get("Referer") != "" {
+			t.Error("avatar redirect leaked source URL")
+		}
+		_, _ = w.Write([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a})
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer source.Close()
+	if _, err := platformAvatar(context.Background(), source.URL+"?access_token=secret"); err == nil || requests != 0 {
+		t.Fatal("authenticated avatar followed redirect")
+	}
+	if avatar, err := platformAvatar(context.Background(), source.URL+"?image=public"); err != nil || avatar.ContentType != "image/png" || requests != 1 {
+		t.Fatalf("public avatar redirect failed: %v", err)
 	}
 }

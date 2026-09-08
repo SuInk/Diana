@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 func platformRequestURL(base, path, method string, params map[string]any) (string, error) {
@@ -98,10 +102,33 @@ func platformAvatar(ctx context.Context, source string) (GroupAvatar, error) {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
 		return GroupAvatar{}, fmt.Errorf("平台未返回可访问的头像地址")
 	}
-	body, mime, err := downloadImageBytesWithLimit(ctx, u.String(), telegramGroupAvatarMaxBytes)
+	client := netguard.NewPublicHTTPClient(15 * time.Second)
+	checkRedirect := client.CheckRedirect
+	credentialed := u.Query().Get("access_token") != "" || u.Query().Get("token") != ""
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if credentialed {
+			return http.ErrUseLastResponse
+		}
+		req.Header.Del("Referer")
+		return checkRedirect(req, via)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return GroupAvatar{}, fmt.Errorf("无效头像请求")
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return GroupAvatar{}, fmt.Errorf("平台头像下载失败")
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return GroupAvatar{}, fmt.Errorf("平台头像下载 HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, telegramGroupAvatarMaxBytes+1))
+	if err != nil || len(body) == 0 || len(body) > telegramGroupAvatarMaxBytes {
+		return GroupAvatar{}, fmt.Errorf("平台头像下载失败")
+	}
+	mime := http.DetectContentType(body)
 	if !strings.HasPrefix(mime, "image/") {
 		return GroupAvatar{}, fmt.Errorf("平台头像不是图片")
 	}
