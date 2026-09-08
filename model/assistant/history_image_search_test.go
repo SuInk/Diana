@@ -180,7 +180,7 @@ func TestOutgoingMarkerQuotesHistoryMessage(t *testing.T) {
 	// 指向本会话里不存在的消息时只去掉标记，正文照发，不会发送失败。
 	missing := runtime.applyOutgoingReplyMarker(context.Background(), event,
 		OutgoingMessage{Text: replyMarkerPrefix + "999999] 找不到了", ReplyMessageID: event.MessageID})
-	if missing.ReplyMessageID != event.MessageID || missing.Text != "找不到了" {
+	if missing.ReplyMessageID != "" || missing.Text != "找不到了" {
 		t.Fatalf("missing target = %#v", missing)
 	}
 }
