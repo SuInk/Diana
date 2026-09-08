@@ -83,6 +83,12 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 		}
 		resp, err := provider.Generate(attemptCtx, req)
 		cancel()
+		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
+			err = llm.RejectionNoticeError(resp.Text)
+			if err != nil {
+				resp = nil
+			}
+		}
 		err = classifyLLMError(err)
 		// 上下文窗口在目录没给出时是按模型名推断的，推断偏大就会被供应商判为
 		// 超限。这类错误重发原请求没有意义，收缩预算再试一次才有：逐次减半，

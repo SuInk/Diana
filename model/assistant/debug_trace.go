@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -71,6 +72,20 @@ func (p *debugTraceLLMProvider) Generate(ctx context.Context, req llm.GenerateRe
 	if err != nil {
 		message = "模型请求失败"
 		metadata["error"] = err.Error()
+		if errors.Is(err, llm.ErrUnverifiedRejection) {
+			metadata["error_category"] = "unverified_upstream_rejection"
+		} else if isContentPolicyRejection(err) {
+			metadata["error_category"] = "content_policy_rejection"
+		} else if shouldFailoverLLMError(err) {
+			metadata["error_category"] = "provider_failure"
+		}
+		metadata["failover_eligible"] = shouldFailoverLLMError(err)
+		var blocked *llm.ContentBlockedError
+		if errors.As(err, &blocked) {
+			metadata["upstream_block_provider"] = blocked.Provider
+			metadata["upstream_block_stage"] = blocked.Stage
+			metadata["upstream_block_reason"] = blocked.Reason
+		}
 	}
 	p.runtime.recordDebugTrace(p.state, message, metadata)
 	return response, err
