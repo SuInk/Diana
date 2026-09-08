@@ -190,6 +190,7 @@ type OutgoingMessage struct {
 	Segments        []MessageSegment
 	ImageURLs       []string
 	VideoURLs       []string
+	AudioURLs       []string
 	ImagesFirst     bool
 	ReplyMessageID  string
 	MentionUserID   string
