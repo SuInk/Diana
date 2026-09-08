@@ -72,8 +72,12 @@ func (s *repositoryWatchTestGitHub) handler(w http.ResponseWriter, r *http.Reque
 	}
 	if strings.Contains(r.URL.Path, "/compare/") {
 		s.diffCalls++
+		commits := slices.Clone(s.commits)
+		slices.Reverse(commits)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"total_commits": 1,
+			"status":        "ahead",
+			"total_commits": len(commits),
+			"commits":       commits,
 			"ahead_by":      1,
 			"files": []map[string]any{{
 				"filename": "model/assistant/runtime.go", "status": "modified",
@@ -175,10 +179,15 @@ func repositoryWatchCommitPayload(sha, title string) map[string]any {
 }
 
 func repositoryWatchReleasePayload(tag, name string) map[string]any {
+	id, published := 1, "2026-08-13T00:00:00Z"
+	if tag == "v1.1.0" {
+		id, published = 2, "2026-08-14T00:00:00Z"
+	}
 	return map[string]any{
+		"id":       id,
 		"tag_name": tag, "name": name, "body": "完整更新说明",
 		"html_url":     "https://github.com/acme/demo/releases/tag/" + tag,
-		"published_at": "2026-08-13T00:00:00Z", "draft": false,
+		"published_at": published, "draft": false,
 	}
 }
 

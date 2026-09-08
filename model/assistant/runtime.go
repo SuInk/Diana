@@ -10992,6 +10992,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		repositoryWatchSnapshot{
 			CommitSHA: item.LastCommitSHA, PullRequestCursor: item.LastPullRequestCursor,
 			IssueCursor: item.LastIssueCursor, ReleaseTag: item.LastReleaseTag,
+			ReleasePublishedAt: item.LastReleasePublishedAt, ReleaseID: item.LastReleaseID,
 			StarCount: item.LastStarCount, HasStarCount: item.WatchStars,
 			StarEventID: item.LastStarEventID, StarEventAt: item.LastStarEventAt,
 		},
@@ -11678,6 +11679,11 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		if item.ID != id || !reminderIsRepositoryWatch(*item) {
 			continue
 		}
+		if err := validateRepositoryWatchProgress(*item, snapshot); err != nil {
+			return err
+		}
+		previousCommit, previousRelease, previousStar := item.LastCommitSHA, item.LastReleaseTag, item.LastStarEventID
+		previousReleaseAt, previousReleaseID, previousStarAt := item.LastReleasePublishedAt, item.LastReleaseID, item.LastStarEventAt
 		previousPullCursor, previousIssueCursor := item.LastPullRequestCursor, item.LastIssueCursor
 		if item.WatchCommits && strings.TrimSpace(snapshot.CommitSHA) != "" {
 			item.LastCommitSHA = snapshot.CommitSHA
@@ -11689,12 +11695,17 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 			item.LastIssueCursor = observedRepositoryWatchCursor(item.Repository, "issue", item.LastIssueCursor, snapshot.IssueCursor)
 		}
 		if item.WatchReleases {
-			item.LastReleaseTag = snapshot.ReleaseTag
+			applyRepositoryReleaseCursor(item, snapshot)
 		}
 		if item.WatchStars && snapshot.HasStarCount {
 			item.LastStarCount = snapshot.StarCount
-			item.LastStarEventID = snapshot.StarEventID
-			item.LastStarEventAt = snapshot.StarEventAt
+			if snapshot.previous != nil {
+				item.LastStarEventID, item.LastStarEventAt = snapshot.StarEventID, snapshot.StarEventAt
+			} else if item.LastStarEventID == "" && snapshot.StarEventID == repositoryWatchNoStarEvent {
+				item.LastStarEventID = repositoryWatchNoStarEvent
+			} else {
+				item.LastStarEventID, item.LastStarEventAt = advanceStarCursor(item.LastStarEventID, item.LastStarEventAt, repositoryWatchStargazer{ID: snapshot.StarEventID, StarredAt: snapshot.StarEventAt})
+			}
 		}
 		if item.WatchStars && snapshot.HasStarNotifiedCount {
 			item.LastNotifiedStarCount = snapshot.StarNotifiedCount
@@ -11710,8 +11721,8 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		if err := r.reminders.SaveReminders(items); err != nil {
 			return fmt.Errorf("保存仓库更新订阅游标: %w", err)
 		}
-		if item.LastPullRequestCursor != previousPullCursor || item.LastIssueCursor != previousIssueCursor {
-			log.Printf("diana repository_watch cursor saved: id=%s repository=%q pr_before=%q pr_after=%q issue_before=%q issue_after=%q", id, item.Repository, previousPullCursor, item.LastPullRequestCursor, previousIssueCursor, item.LastIssueCursor)
+		if item.LastPullRequestCursor != previousPullCursor || item.LastIssueCursor != previousIssueCursor || item.LastCommitSHA != previousCommit || item.LastReleaseTag != previousRelease || item.LastStarEventID != previousStar || !item.LastReleasePublishedAt.Equal(previousReleaseAt) || item.LastReleaseID != previousReleaseID || !item.LastStarEventAt.Equal(previousStarAt) {
+			log.Printf("diana repository_watch cursor saved: id=%s repository=%q commit_before=%q commit_after=%q pr_before=%q pr_after=%q issue_before=%q issue_after=%q release_before=%q release_after=%q release_at_before=%s release_at_after=%s release_id_before=%d release_id_after=%d star_before=%q star_after=%q star_at_before=%s star_at_after=%s", id, item.Repository, previousCommit, item.LastCommitSHA, previousPullCursor, item.LastPullRequestCursor, previousIssueCursor, item.LastIssueCursor, previousRelease, item.LastReleaseTag, previousReleaseAt.UTC().Format(time.RFC3339Nano), item.LastReleasePublishedAt.UTC().Format(time.RFC3339Nano), previousReleaseID, item.LastReleaseID, previousStar, item.LastStarEventID, previousStarAt.UTC().Format(time.RFC3339Nano), item.LastStarEventAt.UTC().Format(time.RFC3339Nano))
 		}
 		return nil
 	}

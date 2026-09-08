@@ -257,6 +257,8 @@ type Reminder struct {
 	LastPullRequestCursor  string    `json:"last_pull_request_cursor,omitempty"`
 	LastIssueCursor        string    `json:"last_issue_cursor,omitempty"`
 	LastReleaseTag         string    `json:"last_release_tag,omitempty"`
+	LastReleasePublishedAt time.Time `json:"last_release_published_at,omitempty"`
+	LastReleaseID          int64     `json:"last_release_id,omitempty"`
 	LastStarCount          int       `json:"last_star_count,omitempty"`
 	LastNotifiedStarCount  int       `json:"last_notified_star_count,omitempty"`
 	LastStarEventID        string    `json:"last_star_event_id,omitempty"`
