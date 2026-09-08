@@ -5,7 +5,9 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -24,61 +26,6 @@ type resolverSocialResult struct {
 	VideoURLs       []string
 	ForwardMessages []OutgoingMessage
 	ResourceKeys    []string
-}
-
-type resolverSocialCacheEntry struct {
-	result  resolverSocialResult
-	expires time.Time
-}
-
-type resolverSocialCache struct {
-	mu      sync.Mutex
-	entries map[string]resolverSocialCacheEntry
-}
-
-func cloneResolverSocialResult(result resolverSocialResult) resolverSocialResult {
-	result.ImageURLs = append([]string(nil), result.ImageURLs...)
-	result.VideoURLs = append([]string(nil), result.VideoURLs...)
-	result.ForwardMessages = append([]OutgoingMessage(nil), result.ForwardMessages...)
-	result.ResourceKeys = append([]string(nil), result.ResourceKeys...)
-	return result
-}
-
-func (c *resolverSocialCache) get(raw string, now time.Time) (resolverSocialResult, bool) {
-	key := resolverURLDedupeKey(raw)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, found := c.entries[key]
-	if !found || !entry.expires.After(now) {
-		if found {
-			delete(c.entries, key)
-		}
-		return resolverSocialResult{}, false
-	}
-	for _, mediaURL := range entry.result.VideoURLs {
-		mediaURL = strings.TrimSpace(mediaURL)
-		if mediaURL == "" || strings.HasPrefix(mediaURL, "http://") || strings.HasPrefix(mediaURL, "https://") {
-			continue
-		}
-		if _, err := os.Stat(mediaURL); err != nil {
-			delete(c.entries, key)
-			return resolverSocialResult{}, false
-		}
-	}
-	return cloneResolverSocialResult(entry.result), true
-}
-
-func (c *resolverSocialCache) put(raw string, result resolverSocialResult, now time.Time, ttl time.Duration) {
-	if ttl <= 0 || !result.Handled || result.Suppressed || len(result.ResourceKeys) == 0 || strings.TrimSpace(result.Context) == "" {
-		return
-	}
-	key := resolverURLDedupeKey(raw)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.entries == nil || len(c.entries) >= resolverCacheMaxEntries {
-		c.entries = map[string]resolverSocialCacheEntry{}
-	}
-	c.entries[key] = resolverSocialCacheEntry{result: cloneResolverSocialResult(result), expires: now.Add(ttl)}
 }
 
 // resolverSocialForwardMessages restores the merged-forward contract for the
@@ -133,17 +80,70 @@ func hasKnownResolverMediaURL(event MessageEvent, text string) bool {
 }
 
 func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginRequest, raw string, maxImages int, cacheTTL time.Duration) resolverSocialResult {
-	now := time.Now()
-	if cacheTTL > 0 {
-		if cached, found := p.socialCache.get(raw, now); found {
-			cached.ImageURLs = limitStrings(cached.ImageURLs, maxImages)
-			recordResolverMediaLog(ctx, req, raw, platformNameFromURL(raw), true, "cache_hit")
-			return cached
+	credentials := resolverCredentials{
+		BiliSessdata: bilibiliSessdata(ctx), DouyinCookie: resolverDouyinCookie(ctx),
+		XHSCookie: resolverXHSCookie(ctx), YTDLPCookies: resolverYTDLPCookies(ctx),
+		ProxyURL:       resolverProxyURL(ctx),
+		CookiesBrowser: credentialFromContext(ctx, func(c resolverCredentials) string { return c.CookiesBrowser }),
+	}
+	if !hasResolverCredentials(ctx) {
+		credentials.CookiesBrowser = os.Getenv("DIANA_YTDLP_COOKIES_FROM_BROWSER")
+		credentials.YTDLPCookies = firstNonEmpty(credentials.YTDLPCookies, defaultYTDLPCookiesPath())
+	}
+	cookieFingerprint, stableCookies := resolverCookieFileFingerprint(credentials.YTDLPCookies)
+	key := sharedResultKey([]any{"social-v1", resolverURLDedupeKey(raw), req.Settings, credentials, cookieFingerprint, maxImages, resolverVideoMaxHeight(ctx), resolverVideoDownloadMaxMB(ctx), resolverNickname()})
+	if !stableCookies || credentials.CookiesBrowser != "" {
+		key = ""
+	}
+	if p.client != nil && p.client.Jar != nil {
+		key = ""
+	}
+	valid := func(value resolverSocialResult) bool {
+		current, stable := resolverCookieFileFingerprint(credentials.YTDLPCookies)
+		return validSharedSocialResult(value) && stable && current == cookieFingerprint
+	}
+	result, err := p.sharedSocial.load(ctx, key, cacheTTL, 2*time.Minute, valid, func(loadCtx context.Context) (resolverSocialResult, error) {
+		value := p.resolveSocialMediaFresh(loadCtx, req, raw, maxImages)
+		return value, loadCtx.Err()
+	})
+	if err != nil {
+		return resolverSocialResult{}
+	}
+	return result
+}
+
+func resolverCookieFileFingerprint(path string) (string, bool) {
+	if path == "" {
+		return "", true
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > sharedCacheMaxEntryBytes {
+		return "", false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, sharedCacheMaxEntryBytes+1))
+	if err != nil || len(data) > sharedCacheMaxEntryBytes {
+		return "", false
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), true
+}
+
+func validSharedSocialResult(result resolverSocialResult) bool {
+	if !result.Handled || result.Suppressed || len(result.ResourceKeys) == 0 || strings.TrimSpace(result.Context) == "" {
+		return false
+	}
+	for _, path := range result.VideoURLs {
+		if path != "" && !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+			if _, err := os.Stat(path); err != nil {
+				return false
+			}
 		}
 	}
-	result := p.resolveSocialMediaFresh(ctx, req, raw, maxImages)
-	p.socialCache.put(raw, result, now, cacheTTL)
-	return result
+	return true
 }
 
 func (p *ResolverPlugin) resolveSocialMediaFresh(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {

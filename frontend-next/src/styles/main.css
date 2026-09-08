@@ -3448,6 +3448,13 @@ a.nav-action {
   align-items: center;
 }
 
+.persona-selector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .persona-saver .input {
   flex: 1 1 auto;
   min-width: 0;

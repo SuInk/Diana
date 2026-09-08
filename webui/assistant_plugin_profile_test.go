@@ -40,7 +40,7 @@ func TestBotHandlerPluginProfileIsolationPersists(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("toggle: %d %s", rec.Code, rec.Body.String())
 	}
-	for _, profile := range []string{"qq-a", "qq-b", "tg", ""} {
+	for _, profile := range []string{"qq-a", "qq-b", "tg"} {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/plugins?profile="+profile, nil))
 		if rec.Code != http.StatusOK {

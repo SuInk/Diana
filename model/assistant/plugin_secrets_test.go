@@ -174,9 +174,9 @@ func TestResolverCredentialsPreferSettings(t *testing.T) {
 	if got := resolverDouyinCookie(ctx); got != "from-settings" {
 		t.Fatalf("插件设置应优先，实际 %q", got)
 	}
-	// 设置里没填的项仍然回落环境变量。
-	if got := bilibiliSessdata(ctx); got != "env-sessdata" {
-		t.Fatalf("未填写的项应回落环境变量，实际 %q", got)
+	// A robot with an empty credential must not inherit the process environment.
+	if got := bilibiliSessdata(ctx); got != "" {
+		t.Fatalf("机器人未填写的凭据应保持为空，实际 %q", got)
 	}
 }
 

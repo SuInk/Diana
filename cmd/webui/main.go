@@ -261,6 +261,11 @@ func main() {
 		plugins.Restore(savedPluginStates)
 	}
 	botSet := botProfileStore.Profiles()
+	if plugins.MigrateProfileConfigurations(botSet.Profiles) {
+		if err := sqliteStore.SavePluginStates(ctx, plugins.Snapshot()); err != nil {
+			log.Fatal(err)
+		}
+	}
 	botCfg, ok := botSet.RuntimeConfig()
 	if !ok {
 		botCfg = botProfileStore.Current()

@@ -42,6 +42,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	}
 	if relationship.Owner {
 		registry.Register(newDianaConfigTool(r))
+		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
 	}
 	for _, tool := range extraTools {
 		registry.Register(tool)

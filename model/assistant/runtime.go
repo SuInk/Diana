@@ -307,6 +307,8 @@ type Runtime struct {
 	llmFactory                LLMProviderFactory
 	llmCfgFactory             LLMProviderConfigFactory
 	llmRegistry               *llm.ProviderRegistry
+	llmReuseEpoch             uint64
+	rssJudgments              sharedResultCache[rssJudgeDecision]
 	replyInterruptMu          sync.Mutex
 	semanticReplyMu           sync.Mutex
 	semanticReplies           map[string]*semanticReplyGate
@@ -414,6 +416,7 @@ func (r *Runtime) SetLLMProviderConfigFactory(factory LLMProviderConfigFactory) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.llmCfgFactory = factory
+	r.llmReuseEpoch++
 }
 
 // SetLLMProviderRegistry enables the providerId/modelId architecture while
@@ -421,6 +424,7 @@ func (r *Runtime) SetLLMProviderConfigFactory(factory LLMProviderConfigFactory) 
 func (r *Runtime) SetLLMProviderRegistry(registry *llm.ProviderRegistry) {
 	r.mu.Lock()
 	r.llmRegistry = registry
+	r.llmReuseEpoch++
 	r.mu.Unlock()
 }
 
@@ -543,6 +547,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	if plugins == nil {
 		plugins = NewDefaultPluginManager()
 	}
+	plugins.MigrateProfileConfigurations([]BotConfig{cfg})
 	// 词典分词按配置启用;加载要几秒,后台预热,别让第一条消息扛这个延迟。
 	applyCJKSegmentConfig(cfg)
 	runtime := &Runtime{
@@ -605,6 +610,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 // channel that produced each event while keeping one shared worker pipeline.
 func (r *Runtime) SetProfiles(set ProfileSet) {
 	set = set.WithDefaults()
+	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
 	for _, profile := range set.Profiles {
 		profiles[strings.TrimSpace(profile.ID)] = profile.WithDefaults()
@@ -889,6 +895,11 @@ func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[s
 		return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: binding.ProfileID, Platform: binding.Platform}, action, params)
 	}
 	return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, action, params)
+}
+
+// CallOneBotAPIForProfile keeps scoped administration on its selected robot.
+func (r *Runtime) CallOneBotAPIForProfile(ctx context.Context, profileID, action string, params map[string]any) (map[string]any, error) {
+	return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: profileID, Platform: PlatformOneBotV11}, action, params)
 }
 
 // callOneBotAPIForEvent routes a request back to the exact profile that
@@ -1237,6 +1248,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		return cfg
 	}
 	groupCfg = groupCfg.WithDefaults(event.GroupID, cfg)
+	cfg.MarkedBotIDs = cleanStrings(append(cfg.MarkedBotIDs, groupCfg.MarkedBotIDs...))
 	groupResponseModeOverridden := groupCfg.ResponseMode != ""
 	cfg.GroupTriggers = append([]string(nil), groupCfg.GroupTriggers...)
 	if strings.TrimSpace(string(groupCfg.GroupTriggerMode)) != "" {
@@ -1281,6 +1293,11 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
 	cfg.ChatInEnabled = groupCfg.ChatInEnabled
 	cfg.ChatInLevel = groupCfg.ChatInLevel
+	if groupCfg.Participation != nil {
+		cfg.Participation = copyParticipation(groupCfg.Participation)
+	} else if groupResponseModeOverridden {
+		cfg.Participation = nil
+	}
 	cfg.ChatInThreshold = groupCfg.ChatInThreshold
 	cfg.ChatInChance = groupCfg.ChatInChance
 	cfg.ChatInCooldownSeconds = groupCfg.ChatInCooldownSeconds
@@ -1419,14 +1436,18 @@ func (r *Runtime) claimSourceRecallEnabled(event MessageEvent) bool {
 }
 
 func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
+	profileID := strings.TrimSpace(event.ProfileID)
+	if profileID == "" {
+		profileID = r.Config().ID
+	}
+	out := PluginSettingOverrides{pluginSettingsProfileKey: map[string]any{"profile_id": profileID}}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginSettingOverrides) == 0 {
-		return nil
+		return out
 	}
-	out := make(PluginSettingOverrides, len(groupCfg.PluginSettingOverrides))
 	for id, values := range groupCfg.PluginSettingOverrides {
 		id = strings.TrimSpace(id)
-		if id == "" || len(values) == 0 {
+		if id == "" || id == pluginSettingsProfileKey || len(values) == 0 {
 			continue
 		}
 		copied := make(map[string]any, len(values))
@@ -1709,6 +1730,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	}
 	if r.requiresTelegramBotMentionJudgment(event) {
 		if !r.telegramBotMessageMentionsSelf(ctx, event, text) {
+			event.routingReason = "发送者已识别或手动标记为机器人，未确认在向本机接话，已自动抑制"
 			r.record(r.decisionEventRecord(event, text, "ignored_bot_message"))
 			return finishWithoutReply("ignored_bot_message")
 		}
@@ -2361,21 +2383,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	decision, parsed := parseProactiveReplyDecision(raw)
 	event, text = selectProactiveReplyCandidate(candidates, decision.TargetMessageID)
-	if chatIn.SuperActive || chatIn.Assistant {
-		cfg.ProactiveReplyThreshold = chatIn.Threshold
-		if chatIn.Assistant {
-			cfg.ProactiveReplyThreshold = assistantRequestThreshold
-		}
-		cfg.ProactiveReplyChance = 1
-	}
 	newImageEvidence := parsed && imageEvidenceNewSinceLastBot(event, r.contextHistory(event), cfg.BotAccount)
-	routePromoted := parsed && promoteDirectedFollowup(&decision, event, text, cfg.ProactiveReplyThreshold, chatIn)
-	if parsed && !routePromoted {
-		routePromoted = promoteRequestedResponse(&decision, event, cfg.ProactiveReplyThreshold, chatIn)
-	}
-	if parsed && !routePromoted {
-		routePromoted = promoteNewImageEvidence(&decision, event, newImageEvidence, cfg.ProactiveReplyThreshold, chatIn)
-	}
 	if newImageEvidence && decision.ShouldReply && decision.RequestsResponse {
 		matchCtx, matchCancel := context.WithTimeout(ctx, avatarMatchTimeout)
 		if match, matchErr := r.matchCurrentGroupMemberAvatar(matchCtx, event); matchErr == nil && match.Matched {
@@ -2385,36 +2393,26 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	turn := selectProactiveReplyTurn(candidates, event.MessageID, decision.TurnMessageIDs)
 	decisionAllowed := parsed && decision.allows(cfg.ProactiveReplyThreshold, chatIn)
-	cooldownAllowed := true
-	if decisionAllowed && decision.chatIn() {
-		// 冷却只对闲聊插话生效：被直接提问时不该因为刚插过话就装死。
-		cooldownAllowed = r.chatInCooldownAllows(event, chatIn.Cooldown)
-	}
-	sampleAllowed := true
-	if decisionAllowed && cooldownAllowed && !decision.qualifiedBotFollowup() {
-		chance := cfg.ProactiveReplyChance
-		if decision.chatIn() {
-			chance = chatIn.Chance
-		}
-		sampleAllowed = proactiveReplySampleAllows(event, text, chance)
-	}
-	allowed := decisionAllowed && cooldownAllowed && sampleAllowed
-	// 冷却在真正发出去之后才记（见 replyAndRecord）：路由放行之后，回复仍可能被
-	// 质量审核、回复抑制或发送失败挡下来，那种情况不该白白吃掉一个冷却窗口。
+	cooldownAllowed := !decision.chatIn() || r.chatInCooldownAllows(event, chatIn.Cooldown)
+	allowed := decisionAllowed && cooldownAllowed
 	event.proactiveReply = allowed
 	event.chatInReply = allowed && decision.chatIn()
-	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, routePromoted, cfg, chatIn)
-	r.recordProactiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, sampleAllowed, allowed, cfg, raw)
+	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, true, allowed, false, cfg, chatIn)
+	r.recordProactiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, true, allowed, cfg, raw)
 	return event, text, turn, allowed
 }
 
 // chatInCooldownAllows 判断本群距上次闲聊插话是否已过冷却。
+func chatInCooldownKey(event MessageEvent) string {
+	return fmt.Sprintf("%q/%q/%q", event.Platform, firstNonEmpty(event.ProfileID, event.SelfID), sessionKey(event))
+}
+
 func (r *Runtime) chatInCooldownAllows(event MessageEvent, cooldown time.Duration) bool {
 	if cooldown <= 0 {
 		return true
 	}
 	r.mu.RLock()
-	last, ok := r.chatInLastReplyAt[sessionKey(event)]
+	last, ok := r.chatInLastReplyAt[chatInCooldownKey(event)]
 	r.mu.RUnlock()
 	return !ok || time.Since(last) >= cooldown
 }
@@ -2425,12 +2423,29 @@ func (r *Runtime) markChatInReplied(event MessageEvent) {
 	if r.chatInLastReplyAt == nil {
 		r.chatInLastReplyAt = map[string]time.Time{}
 	}
-	r.chatInLastReplyAt[sessionKey(event)] = time.Now()
+	r.chatInLastReplyAt[chatInCooldownKey(event)] = time.Now()
 }
 
 func proactiveReplyDecisionReason(decision proactiveReplyDecision, parsed, decisionAllowed, cooldownAllowed, sampleAllowed, allowed, routePromoted bool, cfg BotConfig, chatIn chatInSettings) string {
 	if !parsed {
 		return "主动回复判断模型返回了无法解析的结果，已保持沉默"
+	}
+	if decision.Scores != nil && decision.Scores.valid() {
+		result := "总分未达到发言门槛"
+		if allowed {
+			result = "达到发言门槛"
+		}
+		if decisionAllowed && !cooldownAllowed {
+			result = fmt.Sprintf("达到发言门槛，但仍在 %d 秒主动闲聊冷却内", int(chatIn.Cooldown/time.Second))
+		}
+		return fmt.Sprintf("发言评分 %.1f/100，门槛 %.0f：%s。%s", decision.Scores.average(), participationScoreThreshold, result, decision.Scores.description())
+	}
+	if chatIn.Participation != nil {
+		p := chatIn.Participation
+		if decisionAllowed && !cooldownAllowed {
+			return fmt.Sprintf("模型判断适合接话，但本群仍在 %d 秒主动闲聊冷却内：%s", p.CooldownSeconds, decision.Reason)
+		}
+		return fmt.Sprintf("发言偏好判断：允许回复 %t；%s（主动参与 %d，闲聊接话 %d，连续跟进 %d，介入克制 %d，新增信息要求 %d）", allowed, decision.Reason, p.Desire, p.Social, p.Followup, p.Restraint, p.Information)
 	}
 	detail := strings.TrimSpace(decision.Reason)
 	if detail == "" {
@@ -2702,14 +2717,15 @@ func proactiveReplyMessageAge(currentTime int64, previousTime int64) *int64 {
 }
 
 type proactiveReplyDecision struct {
-	ShouldReply     bool     `json:"should_reply"`
-	Confidence      float64  `json:"confidence"`
-	Category        string   `json:"category"`
-	TargetMessageID string   `json:"target_message_id,omitempty"`
-	TurnMessageIDs  []string `json:"turn_message_ids,omitempty"`
-	DirectedAtBot   bool     `json:"directed_at_bot"`
-	Answerable      bool     `json:"answerable"`
-	Substantive     bool     `json:"substantive"`
+	Scores          participationScores `json:"scores,omitempty"`
+	ShouldReply     bool                `json:"should_reply"`
+	Confidence      float64             `json:"confidence"`
+	Category        string              `json:"category"`
+	TargetMessageID string              `json:"target_message_id,omitempty"`
+	TurnMessageIDs  []string            `json:"turn_message_ids,omitempty"`
+	DirectedAtBot   bool                `json:"directed_at_bot"`
+	Answerable      bool                `json:"answerable"`
+	Substantive     bool                `json:"substantive"`
 	// RequestsResponse 表示发言者这句话本身在要求得到回应。它和 ShouldReply 是两
 	// 件事：后者是路由器的最终结论，前者只描述用户的诉求，用来在结论保守过头时
 	// 把明确的追问救回来。以前这件事是拿「帮我/请你/闭嘴/好的」之类的词表在代码
@@ -2747,6 +2763,14 @@ func (decision proactiveReplyDecision) chatIn() bool {
 // allows 只判断消息是否值得进入正式回复。事实准确性由生成后的
 // judgeProactiveReplyQuality 发送前审核负责，不能在尚未搜索或调用工具前先拦掉。
 func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSettings) bool {
+	if decision.Scores != nil {
+		return decision.Scores.valid() && decision.Scores.average() >= participationScoreThreshold
+	}
+	if chatIn.Participation != nil {
+		category := decision.normalizedCategory()
+		return decision.ShouldReply && decision.Confidence >= 0 && decision.Confidence <= 1 &&
+			(category == "chat_in" || category == "needs_response" || category == "bot_related" && decision.DirectedAtBot)
+	}
 	if !decision.ShouldReply || decision.Confidence < 0 || decision.Confidence > 1 {
 		return false
 	}
@@ -2891,6 +2915,9 @@ const assistantIntentPrompt = `当前回复模式为助手模式：优先帮助�
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
 // 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
 func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
+	if chatIn.Participation != nil {
+		return chatIn.Participation.prompt()
+	}
 	prompt := proactiveReplyRouterSystemPrompt(configured)
 	if chatIn.SuperActive {
 		if strings.TrimSpace(configured) == "" || strings.TrimSpace(configured) == defaultProactiveReplyRouterPrompt {
@@ -2938,28 +2965,45 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 		return proactiveReplyDecision{}, false
 	}
 	var payload struct {
-		ShouldReply      *bool    `json:"should_reply"`
-		Confidence       *float64 `json:"confidence"`
-		Category         *string  `json:"category"`
-		TargetMessageID  *string  `json:"target_message_id"`
-		TurnMessageIDs   []string `json:"turn_message_ids"`
-		DirectedAtBot    *bool    `json:"directed_at_bot"`
-		Answerable       *bool    `json:"answerable"`
-		Substantive      *bool    `json:"substantive"`
-		RequestsResponse *bool    `json:"requests_response"`
-		Blocker          *string  `json:"blocker"`
-		Reason           *string  `json:"reason"`
+		Scores           json.RawMessage `json:"scores"`
+		ShouldReply      *bool           `json:"should_reply"`
+		Confidence       *float64        `json:"confidence"`
+		Category         *string         `json:"category"`
+		TargetMessageID  *string         `json:"target_message_id"`
+		TurnMessageIDs   []string        `json:"turn_message_ids"`
+		DirectedAtBot    *bool           `json:"directed_at_bot"`
+		Answerable       *bool           `json:"answerable"`
+		Substantive      *bool           `json:"substantive"`
+		RequestsResponse *bool           `json:"requests_response"`
+		Blocker          *string         `json:"blocker"`
+		Reason           *string         `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil {
 		return proactiveReplyDecision{}, false
 	}
-	if payload.ShouldReply == nil || payload.Confidence == nil || payload.Category == nil {
+	if payload.Category == nil {
 		return proactiveReplyDecision{}, false
 	}
 	decision := proactiveReplyDecision{
-		ShouldReply: *payload.ShouldReply,
-		Confidence:  *payload.Confidence,
-		Category:    *payload.Category,
+		Category: *payload.Category,
+	}
+	if payload.Scores != nil {
+		if err := json.Unmarshal(payload.Scores, &decision.Scores); err != nil || !decision.Scores.valid() {
+			return proactiveReplyDecision{}, false
+		}
+		switch decision.normalizedCategory() {
+		case "chat_in", "needs_response", "bot_related":
+		default:
+			return proactiveReplyDecision{}, false
+		}
+		decision.ShouldReply = decision.Scores.average() >= participationScoreThreshold
+	} else {
+		// Compatibility for older router providers; new prompts only request scores.
+		if payload.ShouldReply == nil || payload.Confidence == nil {
+			return proactiveReplyDecision{}, false
+		}
+		decision.ShouldReply = *payload.ShouldReply
+		decision.Confidence = *payload.Confidence
 	}
 	if payload.TargetMessageID != nil {
 		decision.TargetMessageID = strings.TrimSpace(*payload.TargetMessageID)
@@ -2989,6 +3033,11 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	}
 	if decision.Confidence < 0 || decision.Confidence > 1 {
 		return proactiveReplyDecision{}, false
+	}
+	if decision.Scores != nil {
+		decision.DirectedAtBot = decision.normalizedCategory() == "bot_related"
+		decision.RequestsResponse = decision.normalizedCategory() != "chat_in"
+		decision.Reason = decision.Scores.description()
 	}
 	return decision, true
 }
@@ -3055,6 +3104,18 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 	if writer == nil {
 		return
 	}
+	if decision.Scores != nil && decision.Scores.valid() {
+		_ = writer.AppendLog(ctx, applog.Entry{
+			Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "diana.proactive_reply_route", Message: "模型已完成五项发言评分", Actor: oneBotEventActor(event), Target: event.MessageID,
+			Metadata: map[string]any{
+				"group_id": event.GroupID, "user_id": event.UserID, "parsed": parsed, "scores": decision.Scores,
+				"reply_score": decision.Scores.average(), "score_threshold": participationScoreThreshold, "participation": cfg.participationPreferences(),
+				"category": decision.Category, "target_message_id": decision.TargetMessageID, "turn_message_ids": decision.TurnMessageIDs,
+				"decision_allowed": decisionAllowed, "allowed": allowed, "reason": event.routingReason, "raw": raw,
+			},
+		})
+		return
+	}
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
@@ -3076,7 +3137,7 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 			"directed_at_bot":   decision.DirectedAtBot,
 			"answerable":        decision.Answerable,
 			"reason":            truncateRunesFromStart(decision.Reason, 160),
-			"threshold":         cfg.ProactiveReplyThreshold,
+			"participation":     cfg.participationPreferences(),
 			"decision_allowed":  decisionAllowed,
 			"sample_allowed":    sampleAllowed,
 			"allowed":           allowed,
@@ -6240,11 +6301,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if event.chatInReply {
 		builder.WriteString("\n" + proactiveReplyPacingPrompt)
-		if cfg.chatInSettings().SuperActive {
-			builder.WriteString("\n" + superActiveReplyPrompt)
-		} else {
-			builder.WriteString("\n" + chatInReplyPrompt)
-		}
+		builder.WriteString("\n本次回复是主动插话，已根据用户发言偏好决定参与。顺着当前话题自然回应，可以接梗、表达感受或回答问题，不要求增加新知识。遵守人设和用户要求，不复读、不编造事实。")
 	}
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
@@ -10713,21 +10770,22 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 		},
 	}
 	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), "rss_watch_judge")
-	raw, err := r.runLLMProviderForGroup(taskCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(taskCtx, llm.GenerateRequest{Messages: messages})
+	return r.reuseRSSJudgment(taskCtx, source, messages, func(judgeCtx context.Context) (rssJudgeDecision, error) {
+		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
+			resp, err := client.Generate(judgeCtx, llm.GenerateRequest{Messages: messages})
+			if err != nil {
+				return "", err
+			}
+			if resp == nil {
+				return "", fmt.Errorf("RSS judgment response is empty")
+			}
+			return strings.TrimSpace(resp.Text), nil
+		})
 		if err != nil {
-			return "", err
+			return rssJudgeDecision{}, err
 		}
-		return strings.TrimSpace(resp.Text), nil
+		return parseRSSJudgeDecision(raw)
 	})
-	if err != nil {
-		return rssJudgeDecision{}, err
-	}
-	decision, err := parseRSSJudgeDecision(raw)
-	if err != nil {
-		return rssJudgeDecision{}, err
-	}
-	return decision, nil
 }
 
 func parseRSSJudgeDecision(raw string) (rssJudgeDecision, error) {

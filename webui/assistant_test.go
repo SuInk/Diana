@@ -81,7 +81,7 @@ func TestBotHandlerPluginInstallAndEnable(t *testing.T) {
 	})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/enabled", bytes.NewReader([]byte(`{"enabled":false}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/enabled?profile="+handler.profiles.Profiles().Profiles[0].ID, bytes.NewReader([]byte(`{"enabled":false}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -160,7 +160,7 @@ func TestBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	})
 	router := botTestRouter(handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/settings", bytes.NewReader([]byte(`{"settings":{"fetch_title":false,"max_links":8}}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/settings?profile="+handler.profiles.Profiles().Profiles[0].ID, bytes.NewReader([]byte(`{"settings":{"fetch_title":false,"max_links":8}}`)))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -176,7 +176,7 @@ func TestBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	}
 
 	// 未知设置键返回 400。
-	req = httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/settings", bytes.NewReader([]byte(`{"settings":{"bogus":1}}`)))
+	req = httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/official.nonebot-plugin-resolver-go/settings?profile="+handler.profiles.Profiles().Profiles[0].ID, bytes.NewReader([]byte(`{"settings":{"bogus":1}}`)))
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -184,7 +184,7 @@ func TestBotHandlerPluginSettingsUpdateAndReject(t *testing.T) {
 	}
 
 	// 不存在的插件返回 404。
-	req = httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/missing/settings", bytes.NewReader([]byte(`{"settings":{}}`)))
+	req = httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/missing/settings?profile="+handler.profiles.Profiles().Profiles[0].ID, bytes.NewReader([]byte(`{"settings":{}}`)))
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
