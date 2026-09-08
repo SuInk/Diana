@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -133,6 +134,9 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 func shouldFailoverWithoutSameProfileRetry(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+		return true
 	}
 	text := strings.ToLower(err.Error())
 	for _, marker := range []string{
@@ -321,7 +325,7 @@ func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.Genera
 			if err == nil {
 				err = fmt.Errorf("diana: llm provider returned a nil stream")
 			}
-			if attempt+1 >= attempts || !shouldFailoverLLMError(err) {
+			if attempt+1 >= attempts || !shouldFailoverLLMError(err) || shouldFailoverWithoutSameProfileRetry(err) {
 				break
 			}
 			timer := time.NewTimer(llmTransientRetryDelay)

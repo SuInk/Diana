@@ -6016,7 +6016,7 @@ func shouldFailoverLLMError(err error) bool {
 		return false
 	}
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
-		return false
+		return true
 	}
 	if isModelUnavailableLLMError(err) {
 		return true

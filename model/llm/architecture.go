@@ -78,12 +78,14 @@ const (
 )
 
 type ChatEvent struct {
-	Type      ChatEventType `json:"type"`
-	Text      string        `json:"text,omitempty"`
-	Reasoning string        `json:"reasoning,omitempty"`
-	ToolCall  *ToolCall     `json:"toolCall,omitempty"`
-	Usage     *Usage        `json:"usage,omitempty"`
-	Error     string        `json:"error,omitempty"`
+	Type       ChatEventType `json:"type"`
+	Text       string        `json:"text,omitempty"`
+	Reasoning  string        `json:"reasoning,omitempty"`
+	ToolCall   *ToolCall     `json:"toolCall,omitempty"`
+	Usage      *Usage        `json:"usage,omitempty"`
+	Error      string        `json:"error,omitempty"`
+	ErrorCode  string        `json:"errorCode,omitempty"`
+	ErrorCause error         `json:"-"`
 }
 
 type ToolResult struct {
