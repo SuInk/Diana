@@ -1164,12 +1164,22 @@ func (r *Runtime) SendGroupMessage(ctx context.Context, groupID string, text str
 	if err != nil {
 		return nil, fmt.Errorf("diana: invalid group id %q", groupID)
 	}
-	event := MessageEvent{Kind: EventKindGroup, GroupID: groupID}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: groupID, Platform: PlatformOneBotV11}
+	r.mu.RLock()
+	channel := r.channel
+	r.mu.RUnlock()
+	if multi, ok := channel.(*MultiChannel); ok {
+		binding, found := multi.OneBotBinding()
+		if !found {
+			return nil, fmt.Errorf("diana: no OneBot channel is configured")
+		}
+		event.ProfileID = binding.ProfileID
+	}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
 	return r.executeOutboundCall(ctx, event, "send_group_msg", func(callCtx context.Context) (map[string]any, error) {
-		return r.CallOneBotAPI(callCtx, "send_group_msg", map[string]any{
+		return r.callOneBotAPIForEvent(callCtx, event, "send_group_msg", map[string]any{
 			"group_id": parsedGroupID,
 			"message":  buildOutgoingSegments(OutgoingMessage{Text: text}),
 		})
@@ -8291,6 +8301,22 @@ type resolverVideoDelivery struct {
 }
 
 func (r *Runtime) sendDirectPluginResponse(ctx context.Context, event MessageEvent, reply string, imageURLs []string, videoURLs []string) error {
+	platform, err := r.outboundPlatformForEvent(event)
+	if err != nil {
+		return err
+	}
+	if !IsOneBotPlatform(platform) {
+		event.Platform = platform
+		msg := routeOutgoingToEvent(event, OutgoingMessage{Text: reply, ImageURLs: imageURLs, VideoURLs: videoURLs})
+		if event.Kind == EventKindGroup {
+			msg.ReplyMessageID = event.MessageID
+		}
+		if err := r.sendOutgoing(ctx, event, msg); err != nil {
+			return err
+		}
+		cleanupLocalMediaFilesLater(videoURLs, resolverLocalMediaTTL)
+		return nil
+	}
 	delivery := r.prepareResolverVideoDelivery(videoURLs)
 	msg := OutgoingMessage{
 		Text:      reply,
@@ -8391,6 +8417,18 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			ImageURLs: append([]string(nil), resp.ImageURLs...),
 			VideoURLs: append([]string(nil), resp.VideoURLs...),
 		}}
+	}
+	platform, err := r.outboundPlatformForEvent(event)
+	if err != nil {
+		return err
+	}
+	if !IsOneBotPlatform(platform) {
+		event.Platform = platform
+		if err := r.sendResolverMessagesDirect(ctx, event, messages); err != nil {
+			return err
+		}
+		cleanupLocalMediaFilesLater(resolverPluginResponseVideoURLs(resp, messages), resolverLocalMediaTTL)
+		return nil
 	}
 	forwardMessages, uploadVideos, sharedUploads := r.prepareForwardResolverVideoDelivery(messages)
 	forwardMessageID := ""
@@ -8682,6 +8720,14 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 }
 
 func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEvent, upload resolverVideoUpload) error {
+	platform, err := r.outboundPlatformForEvent(event)
+	if err != nil {
+		return err
+	}
+	if !IsOneBotPlatform(platform) {
+		event.Platform = platform
+		return r.sendOutgoing(ctx, event, routeOutgoingToEvent(event, OutgoingMessage{VideoURLs: []string{upload.Path}}))
+	}
 	if r.channel == nil {
 		return fmt.Errorf("diana: channel is not configured")
 	}
@@ -8713,7 +8759,7 @@ func (r *Runtime) uploadResolverVideoFile(ctx context.Context, event MessageEven
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return blockedErr
 	}
-	_, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
+	_, err = r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
 	return err
@@ -9015,7 +9061,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	r.recordInboundDelivery(event, OutboundDeliverySendAttempted, "", "")
 	result, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
 		attempts := r.effectiveConfigForEvent(event).SendRetryAttempts
-		if replySuppressionSendGuardEnabled(ctx) || event.Kind == EventKindGroup || r.outboundBackoffEnabled() {
+		if replySuppressionSendGuardEnabled(ctx) || event.Kind == EventKindGroup || r.outboundBackoffEnabled(event) {
 			attempts = 1
 		}
 		return r.sendChannelWithRetry(callCtx, msg, attempts, event)
@@ -9385,6 +9431,13 @@ func shouldUseForwardReply(reply string, chunks []string, threshold int, chunkTh
 }
 
 func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEvent, messages []OutgoingMessage, cfg BotConfig) (string, error) {
+	platform, routeErr := r.outboundPlatformForEvent(event)
+	if routeErr != nil {
+		return "", routeErr
+	}
+	if !IsOneBotPlatform(platform) {
+		return "", fmt.Errorf("diana: platform %q does not support OneBot merged forwards", platform)
+	}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return "", blockedErr
 	}
@@ -9448,6 +9501,15 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 }
 
 func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse, summary string, cfg BotConfig) ([]string, error) {
+	platform, routeErr := r.outboundPlatformForEvent(event)
+	if routeErr != nil {
+		return nil, routeErr
+	}
+	if !IsOneBotPlatform(platform) {
+		// These platforms already fall back to the summary; skip unsupported
+		// forward attempts while preserving message IDs for scheduled cleanup.
+		return r.sendWithMessageIDs(ctx, event, strings.TrimSpace(summary))
+	}
 	if r.channel == nil {
 		return nil, fmt.Errorf("diana: channel is not configured")
 	}
