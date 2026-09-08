@@ -144,25 +144,44 @@ func alternativeOutboundDelivery(ctx context.Context) bool {
 	return alternative
 }
 
-func (r *Runtime) outboundBackoffEnabled() bool {
-	r.mu.RLock()
-	channel := r.channel
-	r.mu.RUnlock()
+func (r *Runtime) outboundBackoffEnabled(event MessageEvent) bool {
+	channel, _, err := r.outboundChannelForEvent(event)
+	if err != nil {
+		return false
+	}
 	capable, ok := channel.(outboundBackoffChannel)
 	return ok && capable.OutboundBackoffEnabled()
 }
 
-func (r *Runtime) groupOutboundDelivery(groupID string) *groupOutboundDelivery {
-	groupID = strings.TrimSpace(groupID)
+func (r *Runtime) outboundGroupKey(event MessageEvent) string {
+	profile := strings.TrimSpace(event.ProfileID)
+	r.mu.RLock()
+	channel := r.channel
+	r.mu.RUnlock()
+	if multi, ok := channel.(*MultiChannel); ok {
+		if binding, err := multi.bindingFor(event.ProfileID, event.Platform); err == nil && (profile == "" || profile == binding.ProfileID) {
+			profile = binding.ProfileID
+			event.Platform = binding.Platform
+		}
+	}
+	platform, err := r.outboundPlatformForEvent(event)
+	if err != nil {
+		platform = r.currentPlatform(event)
+	}
+	return platform + "\x00" + profile + "\x00" + strings.TrimSpace(event.GroupID)
+}
+
+func (r *Runtime) groupOutboundDelivery(event MessageEvent) *groupOutboundDelivery {
+	key := r.outboundGroupKey(event)
 	r.outboundDeliveryMu.Lock()
 	defer r.outboundDeliveryMu.Unlock()
 	if r.outboundDeliveries == nil {
 		r.outboundDeliveries = make(map[string]*groupOutboundDelivery)
 	}
-	gate := r.outboundDeliveries[groupID]
+	gate := r.outboundDeliveries[key]
 	if gate == nil {
 		gate = &groupOutboundDelivery{}
-		r.outboundDeliveries[groupID] = gate
+		r.outboundDeliveries[key] = gate
 	}
 	return gate
 }
@@ -173,16 +192,19 @@ func (r *Runtime) executeOutboundCall(
 	action string,
 	call func(context.Context) (map[string]any, error),
 ) (map[string]any, error) {
+	if _, _, err := r.outboundChannelForEvent(event); err != nil {
+		return nil, err
+	}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
 	groupID := strings.TrimSpace(event.GroupID)
-	if event.Kind != EventKindGroup || groupID == "" || !r.outboundBackoffEnabled() {
+	if event.Kind != EventKindGroup || groupID == "" || !r.outboundBackoffEnabled(event) {
 		result, err := call(ctx)
 		return result, r.wrapOutboundSendError(ctx, event, err)
 	}
 
-	gate := r.groupOutboundDelivery(groupID)
+	gate := r.groupOutboundDelivery(event)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	policy := outboundDeliveryPolicyFromContext(ctx)
@@ -200,7 +222,11 @@ func (r *Runtime) executeOutboundCall(
 		// An offline transport or bot account cannot deliver anything. Fail fast
 		// without consuming the failure window or blocking the worker's lease;
 		// the durable queue retries the whole reply after the channel recovers.
-		if !channelEffectivelyOnline(r.channelStatus()) {
+		channel, _, routeErr := r.outboundChannelForEvent(event)
+		if routeErr != nil {
+			return nil, routeErr
+		}
+		if !channelEffectivelyOnline(channel.Status()) {
 			return nil, offlineOutboundSendError(groupID)
 		}
 		now := time.Now()
@@ -423,7 +449,7 @@ func (r *Runtime) wrapOutboundSendError(ctx context.Context, event MessageEvent,
 	if event.Kind == EventKindGroup && groupID != "" {
 		// NapCat error wording is not a stable protocol. Confirm terminal group
 		// failures against its structured group list instead of matching text.
-		unavailable, _ = r.groupMissingFromOneBot(groupID)
+		unavailable, _ = r.groupMissingFromOneBot(event)
 	}
 	wrapped := &outboundSendError{
 		GroupID:          groupID,
@@ -436,19 +462,14 @@ func (r *Runtime) wrapOutboundSendError(ctx context.Context, event MessageEvent,
 	return wrapped
 }
 
-func (r *Runtime) groupMissingFromOneBot(groupID string) (missing bool, verified bool) {
-	groupID = strings.TrimSpace(groupID)
+func (r *Runtime) groupMissingFromOneBot(event MessageEvent) (missing bool, verified bool) {
+	groupID := strings.TrimSpace(event.GroupID)
 	if groupID == "" {
 		return false, false
 	}
-	// 断连或账号风控期间 NapCat 的群列表不可信，不能据此判定退群。
-	if !channelEffectivelyOnline(r.channelStatus()) {
-		return false, false
-	}
-	r.mu.RLock()
-	channel := r.channel
-	r.mu.RUnlock()
-	if channel == nil {
+	// Only the exact OneBot account's complete list can establish absence.
+	channel, platform, err := r.outboundChannelForEvent(event)
+	if err != nil || !IsOneBotPlatform(platform) || !channelEffectivelyOnline(channel.Status()) {
 		return false, false
 	}
 	checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -466,16 +487,22 @@ func (r *Runtime) groupMissingFromOneBot(groupID string) (missing bool, verified
 	if len(items) == 0 {
 		return false, false
 	}
+	valid := true
 	for _, raw := range items {
 		item, ok := raw.(map[string]any)
 		if !ok {
+			valid = false
 			continue
 		}
-		if strings.TrimSpace(stringFromAny(item["group_id"])) == groupID {
+		id := strings.TrimSpace(stringFromAny(item["group_id"]))
+		if id == "" {
+			valid = false
+		}
+		if id == groupID {
 			return false, true
 		}
 	}
-	return true, true
+	return valid, valid
 }
 
 func structuredGroupListItems(data map[string]any) ([]any, bool) {
@@ -506,8 +533,9 @@ func (r *Runtime) blockedGroupSendError(event MessageEvent) error {
 	if groupID == "" {
 		return nil
 	}
+	key := r.outboundGroupKey(event)
 	r.unavailableGroupMu.RLock()
-	state, blocked := r.unavailableGroups[groupID]
+	state, blocked := r.unavailableGroups[key]
 	r.unavailableGroupMu.RUnlock()
 	if !blocked {
 		return nil
@@ -529,6 +557,7 @@ func (r *Runtime) markGroupSendUnavailable(ctx context.Context, event MessageEve
 		return
 	}
 	now := time.Now()
+	key := r.outboundGroupKey(event)
 	reason := strings.TrimSpace(cause.Error())
 	if len([]rune(reason)) > 500 {
 		reason = string([]rune(reason)[:500])
@@ -537,13 +566,13 @@ func (r *Runtime) markGroupSendUnavailable(ctx context.Context, event MessageEve
 	if r.unavailableGroups == nil {
 		r.unavailableGroups = make(map[string]unavailableGroupSend)
 	}
-	_, alreadyBlocked := r.unavailableGroups[groupID]
+	_, alreadyBlocked := r.unavailableGroups[key]
 	if !alreadyBlocked {
-		r.unavailableGroups[groupID] = unavailableGroupSend{BlockedAt: now, Reason: reason}
+		r.unavailableGroups[key] = unavailableGroupSend{BlockedAt: now, Reason: reason}
 	}
 	r.unavailableGroupMu.Unlock()
 
-	r.cancelProactiveReplyBatchesForGroup(groupID)
+	r.cancelProactiveReplyBatchesForGroup(event)
 	if alreadyBlocked {
 		return
 	}
@@ -580,8 +609,9 @@ func (r *Runtime) ignoreUnavailableGroupEvent(event MessageEvent) bool {
 	if groupID == "" {
 		return false
 	}
+	key := r.outboundGroupKey(event)
 	r.unavailableGroupMu.RLock()
-	state, blocked := r.unavailableGroups[groupID]
+	state, blocked := r.unavailableGroups[key]
 	r.unavailableGroupMu.RUnlock()
 	if !blocked {
 		return false
@@ -591,9 +621,9 @@ func (r *Runtime) ignoreUnavailableGroupEvent(event MessageEvent) bool {
 	}
 
 	r.unavailableGroupMu.Lock()
-	current, stillBlocked := r.unavailableGroups[groupID]
+	current, stillBlocked := r.unavailableGroups[key]
 	if stillBlocked && current.BlockedAt.Equal(state.BlockedAt) {
-		delete(r.unavailableGroups, groupID)
+		delete(r.unavailableGroups, key)
 	}
 	r.unavailableGroupMu.Unlock()
 	return false
