@@ -1296,13 +1296,10 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ResponseMode != "" {
 		cfg.ResponseMode = groupCfg.ResponseMode.Normalized()
 	}
-	if groupCfg.ReplyStyle != "" {
-		cfg.ReplyStyle = groupCfg.ReplyStyle.Normalized()
-	}
 	if groupCfg.ActionDescriptionEnabled != nil {
 		cfg.ActionDescriptionEnabled = copyBoolPointer(groupCfg.ActionDescriptionEnabled)
 	}
-	// 空串表示这个群不覆盖，沿用机器人级的设置，和 ReplyStyle 同一套语义。
+	// 空串表示这个群不覆盖，沿用机器人级的设置。
 	if strings.TrimSpace(groupCfg.SelfReference) != "" {
 		cfg.SelfReference = strings.TrimSpace(groupCfg.SelfReference)
 	}
@@ -6145,7 +6142,7 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
 	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + cfg.ReplyStyle.promptWithActions(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, voice, actionsEnabled) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + cfg.ReplyStyle.closingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, voice) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
 	if persona == "" {
 		return messages
 	}
@@ -6222,7 +6219,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	appendPromptSection(&builder, cfg.ReplyStyle.promptWithActions(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), actionsEnabled))
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
 	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
@@ -6374,7 +6371,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
-	appendPromptSection(&tail, cfg.ReplyStyle.closingAnchor())
+	appendPromptSection(&tail, personaClosingAnchor())
 	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled))
 	return builder.String(), strings.TrimSpace(tail.String())
 }

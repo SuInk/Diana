@@ -60,11 +60,11 @@ func TestGroupBehaviorPresetOverridesAndInherits(t *testing.T) {
 	}})
 
 	active := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "active"})
-	if active.ResponseMode != ResponseModeActive || active.ChatInLevel != ChatInLevelHigh || active.ReplyStyle != ReplyStyleGentle {
+	if active.ResponseMode != ResponseModeActive || active.ChatInLevel != ChatInLevelHigh || active.ReplyStyle != "" || !strings.Contains(active.SystemPrompt, ReplyStyleGentle.stylePrompt()) {
 		t.Fatalf("active group config = %#v", active)
 	}
 	inherit := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "inherit"})
-	if inherit.ResponseMode != ResponseModeStandard || inherit.ChatInLevel != ChatInLevelLow || inherit.ReplyStyle != ReplyStyleAssistant {
+	if inherit.ResponseMode != ResponseModeStandard || inherit.ChatInLevel != ChatInLevelLow || inherit.ReplyStyle != "" || inherit.SystemPrompt != base.SystemPrompt {
 		t.Fatalf("inherited group config = %#v", inherit)
 	}
 	if prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindGroup, GroupID: "active", UserID: "1"}, nil); !strings.Contains(prompt, "默认表达风格为温柔") {
@@ -77,11 +77,11 @@ func TestBehaviorPresetsSurviveConfigPayloadRoundTrip(t *testing.T) {
 	original.ResponseMode = ResponseModeActive
 	original.ReplyStyle = ReplyStyleLively
 	payload := PayloadFromConfig(original)
-	if payload.ResponseMode != ResponseModeActive || payload.ReplyStyle != ReplyStyleLively {
+	if payload.ResponseMode != ResponseModeActive || payload.ReplyStyle != "" || !strings.Contains(payload.SystemPrompt, ReplyStyleLively.stylePrompt()) {
 		t.Fatalf("payload lost presets: %#v", payload)
 	}
 	restored := ConfigFromPayload(payload, BotConfig{})
-	if restored.ResponseMode != ResponseModeActive || restored.ChatInLevel != ChatInLevelHigh || restored.ReplyStyle != ReplyStyleLively {
+	if restored.ResponseMode != ResponseModeActive || restored.ChatInLevel != ChatInLevelHigh || restored.ReplyStyle != "" || restored.SystemPrompt != payload.SystemPrompt {
 		t.Fatalf("round trip config = %#v", restored)
 	}
 }
@@ -124,7 +124,7 @@ func TestSystemPromptEndsWithReplyStyleClosingAnchor(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
 	relationship := RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, event.UserID)
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, true, relationship, true, nil)
-	anchor := ReplyStyleHuman.closingAnchor()
+	anchor := personaClosingAnchor()
 	if !strings.HasSuffix(prompt, anchor) {
 		t.Fatalf("system prompt does not end with the closing anchor: %q", prompt)
 	}
@@ -140,7 +140,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{ReplyStyleHuman.prompt(true, personaVoice{}), ReplyStyleHuman.closingAnchor()} {
+	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true, personaVoice{}), personaClosingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -230,7 +230,7 @@ func TestReplyStyleAppliesPerGroup(t *testing.T) {
 		"casual": {GroupID: "casual", ReplyStyle: ReplyStyleHuman, ForwardReplyThreshold: 900},
 	}})
 	casual := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "casual"})
-	if casual.ReplyStyle.Normalized() != ReplyStyleHuman {
+	if casual.ReplyStyle != "" || !strings.Contains(casual.SystemPrompt, ReplyStyleHuman.stylePrompt()) {
 		t.Fatalf("group-level style did not take effect: %#v", casual)
 	}
 	// 风格按群生效的是措辞和打字节奏，投递配置不归它管——卡片阈值也一样，
@@ -320,7 +320,7 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		if !strings.Contains(item, promptRelationshipTierRules) || !strings.Contains(item, "关系等级：") {
 			t.Fatal("relationship permission context missing from the prompt")
 		}
-		if !strings.HasSuffix(item, base.ReplyStyle.closingAnchor()) {
+		if !strings.HasSuffix(item, personaClosingAnchor()) {
 			t.Fatal("closing anchor must stay last")
 		}
 	}
@@ -678,7 +678,7 @@ func TestCatgirlSystemPromptEndsWithMandatoryActionAnchor(t *testing.T) {
 
 func TestLegacyRoleplayConfigMigratesToAssistantWithActions(t *testing.T) {
 	cfg := (BotConfig{ReplyStyle: ReplyStyleRoleplay}).WithDefaults()
-	if cfg.ReplyStyle != ReplyStyleAssistant {
+	if cfg.ReplyStyle != "" {
 		t.Fatalf("旧扮演风格迁移后的表达风格 = %q", cfg.ReplyStyle)
 	}
 	if !boolValue(cfg.ActionDescriptionEnabled, false) {

@@ -60,10 +60,11 @@ func copyCustomPersona(persona *Persona) *Persona {
 	copy := *persona
 	copy.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
 	copy.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
+	copy.SystemPrompt = migratePersonaStyle(copy.SystemPrompt, &copy.ReplyStyle, &copy.ActionDescriptionEnabled)
 	return &copy
 }
 
-// Normalized 清洗单套人设：补 ID、裁长度、归一化风格。
+// Normalized 清洗单套人设：补 ID、迁移旧风格、裁长度。
 func (persona Persona) Normalized() Persona {
 	persona.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
 	persona.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
@@ -72,16 +73,7 @@ func (persona Persona) Normalized() Persona {
 		persona.ID = uuid.NewString()
 	}
 	persona.Name = truncateRunesPlain(strings.TrimSpace(persona.Name), personaNameMaxRunes)
-	persona.SystemPrompt = truncateRunesPlain(strings.TrimSpace(persona.SystemPrompt), personaPromptMaxRunes)
-	if strings.EqualFold(strings.TrimSpace(string(persona.ReplyStyle)), string(ReplyStyleRoleplay)) {
-		persona.ReplyStyle = ReplyStyleAssistant
-		if persona.ActionDescriptionEnabled == nil {
-			persona.ActionDescriptionEnabled = boolPointer(true)
-		}
-	}
-	if strings.TrimSpace(string(persona.ReplyStyle)) != "" {
-		persona.ReplyStyle = persona.ReplyStyle.Normalized()
-	}
+	persona.SystemPrompt = truncateRunesPlain(migratePersonaStyle(persona.SystemPrompt, &persona.ReplyStyle, &persona.ActionDescriptionEnabled), personaPromptMaxRunes)
 	persona.SelfReference = strings.TrimSpace(persona.SelfReference)
 	persona.SentenceEnders = strings.TrimSpace(persona.SentenceEnders)
 	return persona
@@ -208,12 +200,7 @@ type PersonaImportResult struct {
 	Renamed int `json:"renamed"`
 	// Dropped 是没名字、没内容、或者超出库容量装不下的。
 	Dropped int `json:"dropped"`
-	// UnknownStyles 是文件里写了、但不是本版本认识的表达风格。
-	//
-	// Normalized() 会把它们静默退回「助手」。对导出文件来说这没问题（值是本机
-	// 写出去的），但人设文件是可以手写的，也会从别的版本导过来——静默降级的话，
-	// 用户看到的是「导入成功」，跑起来却完全不是那个语气，而且没有任何线索
-	// 指向拼错的那个词。去重后原样带出来，界面上点名。
+	// UnknownStyles reports unsupported legacy styles; persona text is preserved.
 	UnknownStyles []string `json:"unknown_styles,omitempty"`
 }
 
@@ -221,7 +208,6 @@ type PersonaImportResult struct {
 // 存的、在别人机器上是什么 ID 无关。
 func (persona Persona) sameContent(other Persona) bool {
 	return persona.SystemPrompt == other.SystemPrompt &&
-		persona.ReplyStyle.Normalized() == other.ReplyStyle.Normalized() &&
 		boolValue(persona.ActionDescriptionEnabled, false) == boolValue(other.ActionDescriptionEnabled, false) &&
 		(persona.DaypartToneEnabled == nil) == (other.DaypartToneEnabled == nil) &&
 		boolValue(persona.DaypartToneEnabled, false) == boolValue(other.DaypartToneEnabled, false) &&

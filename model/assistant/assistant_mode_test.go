@@ -9,7 +9,7 @@ import (
 func TestAssistantModeIntentPolicy(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeAssistant, ReplyStyle: ReplyStyleGentle, NaturalInterjectionEnabled: boolPointer(true)}.WithDefaults()
 	settings := cfg.chatInSettings()
-	if settings.Participation.Desire != 25 || !settings.Enabled || cfg.ReplyStyle != ReplyStyleGentle {
+	if settings.Participation.Desire != 25 || !settings.Enabled || cfg.ReplyStyle != "" || !strings.Contains(cfg.SystemPrompt, ReplyStyleGentle.stylePrompt()) {
 		t.Fatalf("assistant settings = %#v", settings)
 	}
 	for _, tc := range []struct {

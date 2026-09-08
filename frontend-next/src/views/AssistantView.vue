@@ -677,7 +677,7 @@
                   :options="replyReferenceModeOptions"
                   @update:model-value="(value) => { if (form) form.reply_reference_mode = value as 'on' | 'off' | 'auto'; }"
                 />
-                <span class="hint">默认「让模型自己决定」：只有话题跳转或隔轮回应时才引用。表达风格不会改动这一项。</span>
+                <span class="hint">默认「让模型自己决定」：只有话题跳转或隔轮回应时才引用。</span>
               </div>
               <div class="field">
                 <label for="bot-mention-user-mode">群聊 @ 发送者</label>
@@ -687,7 +687,7 @@
                   :options="mentionUserModeOptions"
                   @update:model-value="(value) => { if (form) form.mention_user_mode = value as 'on' | 'off' | 'auto'; }"
                 />
-                <span class="hint">默认「让模型自己决定」：群里还有别人在说话时才 @，一对一接话时不带。表达风格不会改动这一项。</span>
+                <span class="hint">默认「让模型自己决定」：群里还有别人在说话时才 @，一对一接话时不带。</span>
               </div>
               <div class="field">
                 <label class="switch">
@@ -737,7 +737,7 @@
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
                 <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。表达风格不会改动这一项。</span>
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
               </div>
             </div>
           </section>
@@ -906,16 +906,11 @@
                     </button>
                     <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
                       <component :is="personaSaverOpen ? X : Plus" :size="14" aria-hidden="true" />
-                      {{ personaSaverOpen ? "取消" : "添加人设" }}
+                      {{ personaSaverOpen ? "取消" : "存为人设" }}
                     </button>
                   </div>
                 </div>
                 <input ref="personaFileInput" type="file" accept="application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
-                <div class="persona-selector">
-                  <AppSelect aria-label="当前人设" :model-value="selectedPersonaID" :options="personaOptions" @update:model-value="choosePersona" />
-                  <button class="btn icon" type="button" aria-label="导出所选人设" title="导出所选人设" :disabled="!selectedPersona" @click="selectedPersona && exportPersona(selectedPersona)"><Download :size="16" /></button>
-                  <button class="btn icon" type="button" aria-label="删除所选人设" title="删除所选人设" :disabled="!selectedPersona || personaLibraryBusy" @click="selectedPersona && removePersona(selectedPersona)"><Trash2 :size="16" /></button>
-                </div>
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -930,6 +925,28 @@
                     {{ personaSaverExisting ? "另存副本" : "保存" }}
                   </button>
                 </div>
+                <div class="persona-library">
+                  <div class="persona-chip" :class="{ 'is-active': selectedPersonaID === 'custom' }">
+                    <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === 'custom'" @click="choosePersona('custom')">
+                      <span class="persona-chip-name">自定义</span>
+                    </button>
+                  </div>
+                  <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip" :class="{ 'is-active': selectedPersonaID === persona.id }">
+                    <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === persona.id" :title="personaSummary(persona)" @click="choosePersona(persona.id)">
+                      <span class="persona-chip-name">{{ persona.name }}</span>
+                      <small class="muted">{{ personaSummary(persona) }}</small>
+                    </button>
+                    <span class="persona-chip-actions">
+                      <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
+                        <Download :size="13" aria-hidden="true" />
+                      </button>
+                      <button type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
+                        <X :size="13" aria-hidden="true" />
+                      </button>
+                    </span>
+                  </div>
+                </div>
+                <span v-if="!personaLibrary.length" class="hint">还没存过人设。调整下方设置后，点「存为人设」保存。</span>
               </div>
               <div class="field wide">
                 <div class="field-head">
@@ -952,7 +969,7 @@
                     <button class="btn primary small" type="button" :disabled="personaBusy || !personaDraft.trim()" @click="runPersonaGenerate">
                       {{ personaBusy ? "生成中…" : form.system_prompt?.trim() ? "按需求改写" : "生成人设" }}
                     </button>
-                    <span class="hint">用当前启用的模型、表达风格和回复欲望生成；已有人设时在原文基础上改写。</span>
+                    <span class="hint">用当前启用的模型和回复欲望生成；已有人设时在原文基础上改写。</span>
                   </div>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
@@ -961,16 +978,6 @@
                   <span class="hint">保存后才会生效，不满意可以撤回上一版。</span>
                 </div>
                 <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。</span>
-              </div>
-              <div class="field">
-                <label for="bot-reply-style">表达风格</label>
-                <AppSelect
-                  id="bot-reply-style"
-                  :model-value="form.reply_style ?? 'assistant'"
-                  :options="replyStyleOptions"
-                  @update:model-value="(value) => applyReplyStyle(value as ReplyStyleKey)"
-                />
-                <span class="hint">与基础人设叠加，不会覆盖自定义角色设定。</span>
               </div>
               <div class="field wide">
                 <label>回复欲望</label>
@@ -982,7 +989,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">动作描写</span>
                 </label>
-                <span class="hint">保留当前人设和表达风格，只在台词前后自然穿插括号动作。</span>
+                <span class="hint">保留当前人设，只在台词前后自然穿插括号动作。</span>
               </div>
               <div class="field">
                 <label class="switch">
@@ -992,17 +999,17 @@
                 </label>
                 <span class="hint">
                   深夜话少、句子更短、反应慢半拍；清早刚醒有点迷糊；晚上更松弛爱闲聊。白天是基线，不额外注入。
-                  只调精力和节奏，不改口癖和身份，对所有表达风格生效。时区取「准入控制」里回复时段那一份。
+                  只调精力和节奏，不改口癖和身份，对所有人设生效。时区取「准入控制」里回复时段那一份。
                 </span>
               </div>
               <div class="field">
                 <label for="bot-self-reference">自称</label>
-                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随表达风格，例如 我 / 本喵 / 咱" />
+                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随人设，例如 我 / 本喵 / 咱" />
                 <span class="hint">机器人怎么称呼自己。</span>
               </div>
               <div class="field wide">
                 <label for="bot-sentence-enders">句尾语气词</label>
-                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随表达风格，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
+                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随人设，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
                 <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
               </div>
               <div class="field wide">
@@ -1787,15 +1794,12 @@ const mentionUserModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-type ReplyStyleKey = "assistant" | "gentle" | "lively" | "concise" | "catgirl";
 
 // 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
 const personaLibrary = ref<Persona[]>([]);
 const personaLibraryLoaded = ref(false);
 const selectedPersonaID = computed(() => form.value ? currentPersonaSelection(form.value, personaLibrary.value) : "custom");
-const selectedPersona = computed(() => personaLibrary.value.find(p => p.id === selectedPersonaID.value));
-const personaOptions = computed<AppSelectOption[]>(() => [{ value: "custom", label: "自定义" }, ...personaLibrary.value.map(p => ({ value: p.id, label: p.name, hint: personaSummary(p) }))]);
 
 function choosePersona(id: string): void {
   if (!form.value) return;
@@ -1818,16 +1822,13 @@ const personaHasContent = computed(() => {
     current.system_prompt?.trim() ||
       current.self_reference?.trim() ||
       current.sentence_enders?.trim() ||
-      (current.reply_style && current.reply_style !== "assistant")
-      || current.action_description_enabled
+      current.action_description_enabled
       || current.daypart_tone_enabled
   );
 });
 
 function personaSummary(persona: Persona): string {
   const parts: string[] = [];
-  const styleLabel = replyStyleOptions.find((option) => option.value === persona.reply_style)?.label;
-  if (styleLabel) parts.push(styleLabel);
   if (persona.action_description_enabled) parts.push("动作描写");
   if (persona.daypart_tone_enabled) parts.push("时段语气");
   if (persona.self_reference) parts.push(`自称${persona.self_reference}`);
@@ -1899,7 +1900,6 @@ function personaExportPayload(personas: Persona[]): string {
       personas: personas.map((persona) => ({
         name: persona.name,
         system_prompt: persona.system_prompt ?? "",
-        reply_style: persona.reply_style ?? "",
         action_description_enabled: persona.action_description_enabled ?? false,
         daypart_tone_enabled: persona.daypart_tone_enabled,
         self_reference: persona.self_reference ?? "",
@@ -2008,7 +2008,7 @@ async function importPersonaFile(event: Event): Promise<void> {
     // 认不出来的风格单独说：它不算失败，导入照常成功，但那几套的语气会退回
     // 「助手」。混在上面那串数字里说，用户不会注意到自己拼错了。
     if (result.unknown_styles?.length) {
-      toastError(`表达风格无法识别，已按「助手」导入：${result.unknown_styles.join("、")}`);
+      toastError(`旧表达风格无法识别，已保留人设正文导入：${result.unknown_styles.join("、")}`);
     }
   } catch (error) {
     toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
@@ -2238,44 +2238,6 @@ async function importWorldBookFile(event: Event): Promise<void> {
     worldBookBusy.value = false;
   }
 }
-
-// 每个风格自带的自称和句尾候选，和后端 DefaultPersonaVoice 保持一致。
-const replyStyleVoices: Record<ReplyStyleKey, { self_reference: string; sentence_enders: string }> = {
-  assistant: { self_reference: "", sentence_enders: "" },
-  gentle: { self_reference: "", sentence_enders: "" },
-  lively: { self_reference: "", sentence_enders: "" },
-  concise: { self_reference: "", sentence_enders: "" },
-  catgirl: { self_reference: "我", sentence_enders: "喵,喵~,喵？,喵……" }
-};
-
-// 切换风格时把这两个框填上，而不是运行时暗中套用：填进去用户看得见、能改。
-// 只覆盖空的、或还停留在上一个风格默认值的——用户自己改过的不动，否则来回切
-// 两下风格就把人家写的东西冲没了。
-function applyReplyStyle(value: ReplyStyleKey): void {
-  if (!form.value) return;
-  const previous = replyStyleVoices[(form.value.reply_style ?? "assistant") as ReplyStyleKey];
-  const next = replyStyleVoices[value];
-  form.value.reply_style = value;
-  const untouched = (current: string | undefined, wasDefault: string) => {
-    const trimmed = (current ?? "").trim();
-    return trimmed === "" || trimmed === wasDefault;
-  };
-  if (untouched(form.value.self_reference, previous?.self_reference ?? "")) {
-    form.value.self_reference = next.self_reference;
-  }
-  if (untouched(form.value.sentence_enders, previous?.sentence_enders ?? "")) {
-    form.value.sentence_enders = next.sentence_enders;
-  }
-}
-
-const replyStyleOptions: AppSelectOption[] = [
-  { value: "human", label: "真人感" },
-  { value: "assistant", label: "助手" },
-  { value: "gentle", label: "温柔" },
-  { value: "lively", label: "活泼" },
-  { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" }
-];
 
 type ReplyDesire = "off" | "low" | "medium" | "high" | "max";
 
@@ -2798,7 +2760,6 @@ function setForm(config: BotProfileConfig): void {
     natural_interjection_enabled: false,
     chat_in_level: replyDesireFromConfig(config),
     response_mode: "custom",
-    reply_style: config.reply_style ?? "assistant",
     action_description_enabled: config.action_description_enabled ?? false,
     daypart_tone_enabled: config.daypart_tone_enabled ?? false,
     llm_streaming_enabled: config.llm_streaming_enabled ?? false,
@@ -2902,7 +2863,6 @@ async function runPersonaGenerate(): Promise<void> {
     const current = form.value.system_prompt?.trim() || "";
     const chatRole = roleForm.value.chat;
     const result = await generatePersona(description, form.value.name, current, {
-      reply_style: form.value.reply_style,
       response_mode: form.value.response_mode,
       profile_id: chatRole?.profile_id || chatRole?.provider_id,
       group: chatRole?.group,
