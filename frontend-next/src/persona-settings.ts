@@ -4,7 +4,6 @@ export function personaFromSettings(current: BotProfileConfig, name: string) {
   return {
     name,
     system_prompt: current.system_prompt ?? "",
-    reply_style: current.reply_style || "assistant",
     action_description_enabled: current.action_description_enabled ?? false,
     daypart_tone_enabled: current.daypart_tone_enabled ?? false,
     self_reference: current.self_reference ?? "",
@@ -17,7 +16,6 @@ export function applyPersonaSettings(current: BotProfileConfig, persona: Persona
   return {
     ...current,
     system_prompt: prompt.trim() && (replacePrompt || !current.system_prompt?.trim()) ? prompt : current.system_prompt,
-    reply_style: persona.reply_style || "assistant",
     action_description_enabled: persona.action_description_enabled ?? false,
     daypart_tone_enabled: persona.daypart_tone_enabled ?? current.daypart_tone_enabled,
     self_reference: persona.self_reference ?? "",

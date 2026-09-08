@@ -80,7 +80,6 @@
             </span>
             <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
             <span v-if="group.configured && groupReplyDesireValue(group)" class="badge accent">回复欲望 {{ replyDesireLabel(groupReplyDesireValue(group)) }}</span>
-            <span v-if="group.configured && group.reply_style" class="badge">{{ replyStyleLabel(group.reply_style) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
@@ -198,15 +197,6 @@
         <div class="field wide">
           <label>本群补充标记的机器人</label>
           <BotMarkerList :key="`${editing.bot_profile_id}:${editing.group_id}`" v-model="editing.marked_bot_ids" :inherited-ids="markedBotDefaults[editing.bot_profile_id || botScope || '']" />
-        </div>
-        <div class="field">
-          <label for="group-reply-style">表达风格</label>
-          <AppSelect
-            id="group-reply-style"
-            :model-value="editing.reply_style ?? ''"
-            :options="groupReplyStyleOptions"
-            @update:model-value="(value) => { if (editing) editing.reply_style = value as typeof editing.reply_style; }"
-          />
         </div>
         <div class="field">
           <label for="group-action-description">动作描写</label>
@@ -389,14 +379,6 @@ const groupTriggerModeOptions: AppSelectOption[] = [
   { value: "loose", label: "宽松" }
 ];
 
-const groupReplyStyleOptions: AppSelectOption[] = [
-  { value: "", label: "跟随全局" },
-  { value: "assistant", label: "助手" },
-  { value: "gentle", label: "温柔" },
-  { value: "lively", label: "活泼" },
-  { value: "concise", label: "简洁" },
-  { value: "catgirl", label: "猫娘" }
-];
 
 const groupActionDescriptionOptions: AppSelectOption[] = [
   { value: "", label: "跟随全局" },
@@ -540,7 +522,6 @@ function setGroupReplyDesire(value: string): void {
   editing.value.proactive_reply_threshold = 0;
   editing.value.chat_in_threshold = 0;
   editing.value.chat_in_chance = 0;
-  editing.value.chat_in_cooldown_seconds = 0;
   if (value === "") {
     editing.value.response_mode = "";
     editing.value.chat_in_enabled = undefined;
@@ -558,11 +539,6 @@ function setGroupParticipation(value: ParticipationPreferences | undefined): voi
   editing.value.participation = value;
 }
 
-function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
-  return ({ assistant: "助手风格", gentle: "温柔风格", lively: "活泼风格", concise: "简洁风格", catgirl: "猫娘风格", roleplay: "扮演风格" } as const)[
-    style as "assistant" | "gentle" | "lively" | "concise" | "catgirl" | "roleplay"
-  ] ?? "";
-}
 
 function overrideCount(group: BotGroupConfig): number {
   return new Set([
@@ -672,7 +648,6 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
-  config.reply_style ??= "";
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;

@@ -934,12 +934,6 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultGroupConfig(groupID, base)
-	if strings.EqualFold(strings.TrimSpace(string(cfg.ReplyStyle)), string(ReplyStyleRoleplay)) {
-		cfg.ReplyStyle = ReplyStyleAssistant
-		if cfg.ActionDescriptionEnabled == nil {
-			cfg.ActionDescriptionEnabled = boolPointer(true)
-		}
-	}
 	cfg.GroupID = strings.TrimSpace(cfg.GroupID)
 	if cfg.GroupID == "" {
 		cfg.GroupID = defaults.GroupID
@@ -948,8 +942,13 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if strings.TrimSpace(string(cfg.ResponseMode)) != "" {
 		cfg.ResponseMode = cfg.ResponseMode.Normalized()
 	}
-	if strings.TrimSpace(string(cfg.ReplyStyle)) != "" {
-		cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
+	// Bulk normalization may receive another profile as base. Defer inherited
+	// persona migration until this group is read with its own robot configuration.
+	if cfg.SystemPrompt != "" || cfg.BotProfileID == "" || cfg.BotProfileID == base.ID {
+		if knownReplyStyle(string(cfg.ReplyStyle)) && cfg.SystemPrompt == "" {
+			cfg.SystemPrompt = inheritedPersonaForStyleMigration(base.SystemPrompt)
+		}
+		cfg.SystemPrompt = migratePersonaStyle(cfg.SystemPrompt, &cfg.ReplyStyle, &cfg.ActionDescriptionEnabled)
 	}
 	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
 	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
@@ -1317,7 +1316,6 @@ func DefaultBotConfig() BotConfig {
 		WelcomeMessage:            "欢迎加入本群，可以直接 @我 开始聊天。",
 		SystemPrompt:              defaultSystemPrompt,
 		ResponseMode:              ResponseModeStandard,
-		ReplyStyle:                ReplyStyleAssistant,
 		ActionDescriptionEnabled:  boolPointer(false),
 		PromptChineseSlangText:    defaultPromptChineseSlang,
 		PromptPlaintextRulesText:  defaultPromptPlaintextRules,
@@ -1400,13 +1398,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultBotConfig()
 	hasResponseMode := strings.TrimSpace(string(cfg.ResponseMode)) != ""
-	legacyRoleplay := strings.EqualFold(strings.TrimSpace(string(cfg.ReplyStyle)), string(ReplyStyleRoleplay))
-	if legacyRoleplay {
-		cfg.ReplyStyle = ReplyStyleAssistant
-		if cfg.ActionDescriptionEnabled == nil {
-			cfg.ActionDescriptionEnabled = boolPointer(true)
-		}
-	}
 	// WithDefaults 会补齐运行所需的安全默认值，同时清理重复触发词/禁用群。
 	cfg.Name = NormalizeProfileName(cfg.Name)
 	cfg.Platform = NormalizePlatformID(cfg.Platform)
@@ -1441,7 +1432,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		// Existing installations may already have hand-tuned chat-in values.
 		cfg.ResponseMode = ResponseModeCustom
 	}
-	cfg.ReplyStyle = cfg.ReplyStyle.Normalized()
+	cfg.SystemPrompt = migratePersonaStyle(cfg.SystemPrompt, &cfg.ReplyStyle, &cfg.ActionDescriptionEnabled)
 	if cfg.ActionDescriptionEnabled == nil {
 		cfg.ActionDescriptionEnabled = copyBoolPointer(defaults.ActionDescriptionEnabled)
 	}

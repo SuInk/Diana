@@ -8,7 +8,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestGeminiBlockCodeFallsBackWithoutSameModelRetry(t *testing.T) {
+func TestGeminiBlockCodeStopsWithoutRetryOrFailover(t *testing.T) {
 	blocked := &llm.ContentBlockedError{Provider: llm.ProviderGemini, Stage: "prompt", Reason: "BLOCKLIST", Message: "任意语言，不依赖这段文字"}
 	for _, stream := range []bool{false, true} {
 		registry := llm.NewProviderRegistry()
@@ -42,14 +42,14 @@ func TestGeminiBlockCodeFallsBackWithoutSameModelRetry(t *testing.T) {
 		} else {
 			response, err = provider.Generate(context.Background(), request)
 		}
-		if err != nil || response == nil || response.Text != "备用回复" {
+		if !errors.Is(err, llm.ErrContentBlocked) || response != nil {
 			t.Fatalf("stream=%t response=%+v err=%v", stream, response, err)
 		}
 		if stream {
-			if primaryStream.streamCalls != 1 || backupStream.streamCalls != 1 {
+			if primaryStream.streamCalls != 1 || backupStream.streamCalls != 0 {
 				t.Fatal("stream retries wrong")
 			}
-		} else if primary.calls != 1 || backup.calls != 1 {
+		} else if primary.calls != 1 || backup.calls != 0 {
 			t.Fatal("generate retries wrong")
 		}
 	}

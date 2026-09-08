@@ -160,7 +160,7 @@ func clampChatInRatio(value float64) float64 {
 // chatInSettings 返回本条配置生效的闲聊插话参数。
 func (cfg BotConfig) chatInSettings() chatInSettings {
 	p := cfg.participationPreferences()
-	return chatInSettings{Participation: &p, Enabled: p.Desire > 0, Level: p.presetLevel(), Chance: 1, Cooldown: time.Duration(p.CooldownSeconds) * time.Second}
+	return chatInSettings{Participation: &p, Enabled: p.Desire > 0, Level: p.replyLevel(), Chance: 1, Cooldown: time.Duration(p.CooldownSeconds) * time.Second}
 }
 
 const superActiveReplyPrompt = `本次是超级活跃模式下的主动接话。像一个很愿意参与聊天的群友，顺着当前话题简短回应、接梗、表达感受或自然追问即可，不要求每句话都增加事实或新知识。遵循原有人设，不要复读、套话刷屏、接管话题或强行评价。用户要求安静、话题已经结束、没有相关回应可说时仍保持沉默；不确定的事实交给工具确认，不能编造。`

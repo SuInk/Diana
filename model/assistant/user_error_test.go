@@ -68,7 +68,7 @@ func TestPublicChatErrorMessageMapsEmptyModelOutput(t *testing.T) {
 func TestPublicChatErrorMessageMapsContentPolicyRejection(t *testing.T) {
 	err := classifyLLMError(errors.New("400 Bad Request: request was rejected because it was considered high risk"))
 	got := publicChatErrorMessage(err)
-	for _, want := range []string{"上游模型因内容安全策略拒绝了这次请求", "上游说明：", "high risk"} {
+	for _, want := range []string{"上游报告内容安全拦截", "不代表已经确认你的请求违规"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("message = %q, missing %q", got, want)
 		}
@@ -185,7 +185,7 @@ func TestReplyAndRecordClassifiesContentPolicyAndSanitizesDiagnostic(t *testing.
 		t.Fatalf("outcome=%q sent=%#v", outcome, channel.sent)
 	}
 	message := channel.sent[0].Text
-	if !strings.Contains(message, "content_policy_violation") || !strings.Contains(message, "[REDACTED_URL]") {
+	if !strings.Contains(message, "上游报告内容安全拦截") {
 		t.Fatalf("message lost useful diagnostic: %q", message)
 	}
 	for _, leaked := range []string{"relay.private.example", "owner-token"} {

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 var (
@@ -34,9 +36,12 @@ func publicChatErrorMessage(err error) string {
 		return "回复超过字数上限，暂时没能压缩完成，请提高上限或稍后重试。"
 	}
 	raw := strings.TrimSpace(err.Error())
+	if errors.Is(err, llm.ErrUnverifiedRejection) {
+		return "上游返回了请求被拦截的提示，这次未能完成处理。暂时无法确认是模型还是中转服务拒绝，请管理员查看日志。"
+	}
 	lower := strings.ToLower(raw)
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
-		return "上游模型因内容安全策略拒绝了这次请求；这不表示连接或配置故障，请调整问题表述后再试。上游说明：" + sanitizePublicErrorDetail(raw)
+		return "上游报告内容安全拦截，这次未能完成处理。该结果不代表已经确认你的请求违规，请管理员查看拦截记录。"
 	}
 	if strings.Contains(lower, "github") {
 		for _, marker := range []string{"请求额度", "rate limit", "限流", "too many requests"} {
