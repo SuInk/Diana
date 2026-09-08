@@ -57,9 +57,10 @@ func identityAliasRoleList() string {
 }
 
 var (
-	identityPrivacyJSONIDPattern = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
-	identityPrivacyCQIDPattern   = regexp.MustCompile(`(?i)\[CQ:(?:at|contact),[^\]]*(?:qq|id)=([1-9][0-9]{4,13})`)
-	identityPrivacyLabelPattern  = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
+	identityPrivacyAliasTokenPattern = regexp.MustCompile(`im_[A-Za-z0-9_]+`)
+	identityPrivacyJSONIDPattern     = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
+	identityPrivacyCQIDPattern       = regexp.MustCompile(`(?i)\[CQ:(?:at|contact),[^\]]*(?:qq|id)=([1-9][0-9]{4,13})`)
+	identityPrivacyLabelPattern      = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
 	// 消息 ID 单独匹配：它允许负号，长度范围也和 QQ 号不同。
 	identityPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
 	identityPrivacyReplyMarkerPattern = regexp.MustCompile(`\[(?:diana-reply|回复):(-?[0-9]{4,19})\]`)
@@ -474,16 +475,15 @@ func (s *identityPrivacyScope) restoreText(text string) string {
 		return text
 	}
 	s.mu.Lock()
-	pairs := make([][2]string, 0, len(s.aliasToReal))
-	for alias, realID := range s.aliasToReal {
-		pairs = append(pairs, [2]string{alias, realID})
-	}
-	s.mu.Unlock()
-	sort.Slice(pairs, func(i, j int) bool { return len(pairs[i][0]) > len(pairs[j][0]) })
-	for _, pair := range pairs {
-		text = strings.ReplaceAll(text, pair[0], pair[1])
-	}
-	return text
+	defer s.mu.Unlock()
+	// A valid alias followed by extra digits is a different, unknown identifier.
+	// Substring replacement would turn that typo into a different numeric ID.
+	return identityPrivacyAliasTokenPattern.ReplaceAllStringFunc(text, func(alias string) string {
+		if realID, ok := s.aliasToReal[alias]; ok {
+			return realID
+		}
+		return alias
+	})
 }
 
 func replaceNumericIdentifier(text string, identifier string, replacement string) string {
