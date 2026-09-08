@@ -88,7 +88,7 @@ func platformJSONRequest(ctx context.Context, client *http.Client, method, endpo
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid platform request URL")
 	}
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -99,9 +99,11 @@ func platformJSONRequest(ctx context.Context, client *http.Client, method, endpo
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
+	requestClient := *client
+	requestClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := requestClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, safePlatformError(err, endpoint, headers)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, platformHTTPResponseLimit))
@@ -109,8 +111,8 @@ func platformJSONRequest(ctx context.Context, client *http.Client, method, endpo
 		return nil, err
 	}
 	// 4xx/5xx 时响应体通常仍是平台的错误 JSON，一并带回去便于定位。
-	if resp.StatusCode >= 400 {
-		return raw, fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(truncateForError(string(raw))))
+	if resp.StatusCode >= 300 {
+		return raw, safePlatformError(fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(truncateForError(string(raw)))), endpoint, headers)
 	}
 	return raw, nil
 }

@@ -81,7 +81,7 @@ func (t *dianaOneBotGroupTool) Name() string {
 }
 
 func (t *dianaOneBotGroupTool) Description() string {
-	if NormalizePlatformID(t.event.Platform) == PlatformTelegram {
+	if !IsOneBotPlatform(t.event.Platform) {
 		return groupToolPrompt(t.event) + " reply_policy/set_reply_policy 可查询或修改回复策略，权限由运行时校验。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
 	}
 	return `读取当前群的真实群资料、成员名单和回复策略，也可用本地图片模式匹配判断当前图片是否为某位群成员头像。用户要查群人数、群名、成员、群名片、昵称、账号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用，不要反过来要求用户先手动 @。头像身份不得靠视觉模型猜测，使用 match_avatar。reply_policy 与 set_reply_policy 只对机器人主人、群主和群管理员开放，工具会实时校验权限。`
@@ -161,9 +161,9 @@ func (t *dianaOneBotGroupTool) Run(ctx context.Context, input map[string]any) (s
 }
 
 func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string]any, update bool) (string, error) {
-	if t.runtime.currentPlatform(t.event) == PlatformTelegram && update {
+	if !IsOneBotPlatform(t.runtime.currentPlatform(t.event)) && update {
 		if _, ok := input["minimum_reply_member_level"]; ok {
-			return "", fmt.Errorf("Telegram 不提供 QQ 群等级，不能设置最低回复群等级")
+			return "", fmt.Errorf("当前平台不提供 QQ 群等级，不能设置最低回复群等级")
 		}
 	}
 	role, err := t.runtime.canConfigureGroup(ctx, t.event)
@@ -304,7 +304,7 @@ func (t *dianaOneBotGroupTool) listMembers(ctx context.Context, input map[string
 	}
 	message := fmt.Sprintf("已读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items))
 	if !directory.Complete {
-		message += " 这是管理员和已知账号候选，不是完整成员名单；membership_verified 未标为 true 的账号可能已离群，不能据此判断权限或声称已 @ 全部成员。核验指定账号请调用 member。"
+		message += " 这是当前接口可见的成员候选，不是完整成员名单；membership_verified 未标为 true 的账号可能已离群，不能据此判断权限或声称已 @ 全部成员。核验指定账号请调用 member。"
 	}
 	return marshalDianaOneBotGroupResult(dianaOneBotGroupResult{
 		OK:                 true,
