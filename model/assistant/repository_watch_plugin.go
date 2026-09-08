@@ -655,9 +655,16 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		}
 	}
 	if len(filtered) == 0 {
-		return nil, repositoryWatchNoPullCursor, nil
+		return nil, observedRepositoryWatchCursor(repository, "pull_request", cursor, repositoryWatchNoPullCursor), nil
 	}
-	latest := repositoryWatchPullCursor(filtered[0].UpdatedAt, filtered[0].Number)
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt) || filtered[i].UpdatedAt.Equal(filtered[j].UpdatedAt) && filtered[i].Number > filtered[j].Number
+	})
+	observed := repositoryWatchNoPullCursor
+	for _, item := range filtered {
+		observed = advanceRepositoryWatchCursor(observed, repositoryWatchPullCursor(item.UpdatedAt, item.Number))
+	}
+	latest := observedRepositoryWatchCursor(repository, "pull_request", cursor, observed)
 	if strings.TrimSpace(cursor) == "" {
 		return nil, latest, nil
 	}
@@ -883,19 +890,12 @@ func repositoryWatchPullCursor(updatedAt time.Time, number int) string {
 func repositoryWatchPullAfterCursor(updatedAt time.Time, number int, cursor string) bool {
 	cursor = strings.TrimSpace(cursor)
 	if cursor == repositoryWatchNoPullCursor {
-		return true
+		return number > 0
 	}
-	separator := strings.LastIndex(cursor, "#")
-	if separator <= 0 || separator == len(cursor)-1 {
-		return repositoryWatchPullCursor(updatedAt, number) != cursor
-	}
-	cursorTime, err := time.Parse(time.RFC3339Nano, cursor[:separator])
-	if err != nil {
-		return repositoryWatchPullCursor(updatedAt, number) != cursor
-	}
-	var cursorNumber int
-	if _, err := fmt.Sscanf(cursor[separator+1:], "%d", &cursorNumber); err != nil {
-		return repositoryWatchPullCursor(updatedAt, number) != cursor
+	cursorTime, cursorNumber, valid := parseRepositoryWatchCursor(cursor)
+	if !valid || number <= 0 {
+		// A malformed checkpoint establishes a fresh baseline without replay.
+		return false
 	}
 	return updatedAt.After(cursorTime) || updatedAt.Equal(cursorTime) && number > cursorNumber
 }
@@ -932,9 +932,16 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 		}
 	}
 	if len(filtered) == 0 {
-		return nil, repositoryWatchNoIssueCursor, nil
+		return nil, observedRepositoryWatchCursor(repository, "issue", cursor, repositoryWatchNoIssueCursor), nil
 	}
-	latest := repositoryWatchPullCursor(filtered[0].UpdatedAt, filtered[0].Number)
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt) || filtered[i].UpdatedAt.Equal(filtered[j].UpdatedAt) && filtered[i].Number > filtered[j].Number
+	})
+	observed := repositoryWatchNoIssueCursor
+	for _, item := range filtered {
+		observed = advanceRepositoryWatchCursor(observed, repositoryWatchPullCursor(item.UpdatedAt, item.Number))
+	}
+	latest := observedRepositoryWatchCursor(repository, "issue", cursor, observed)
 	if strings.TrimSpace(cursor) == "" {
 		return nil, latest, nil
 	}
