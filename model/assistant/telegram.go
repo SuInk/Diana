@@ -56,7 +56,8 @@ type TelegramChannel struct {
 	client *http.Client
 	cancel context.CancelFunc
 	// botUsername 来自 getMe，用于精确判断 @提及。
-	botUsername string
+	botUsername  string
+	knownMembers map[string]map[int64]telegramKnownMember
 	// offset 是下一次 getUpdates 的起点，保证已处理的更新不会重复投递。
 	offset int64
 }
@@ -78,13 +79,30 @@ func NewTelegramChannel(cfg TelegramConfig) *TelegramChannel {
 func (c *TelegramChannel) SetConfig(cfg TelegramConfig) {
 	c.mu.Lock()
 	proxyChanged := c.cfg.ProxyURL != cfg.ProxyURL
+	identityChanged := c.cfg.BotToken != cfg.BotToken || c.cfg.APIBaseURL != cfg.APIBaseURL
+	if identityChanged {
+		if c.cancel != nil {
+			c.cancel()
+			c.cancel = nil
+		}
+		c.knownMembers = nil
+		c.offset = 0
+		c.botUsername = ""
+	}
 	c.cfg = cfg
 	if proxyChanged || c.client == nil {
 		c.client = telegramHTTPClient(cfg.ProxyURL)
 	}
 	c.mu.Unlock()
-	c.setStatus(false, c.Status().SelfID, "")
+	selfID := c.Status().SelfID
+	if identityChanged {
+		selfID = ""
+	}
+	c.setStatus(false, selfID, "")
 	c.statusMu.Lock()
+	if identityChanged {
+		c.status.SelfID = ""
+	}
 	c.status.Endpoint = telegramEndpointLabel(cfg)
 	c.statusMu.Unlock()
 }
@@ -181,7 +199,7 @@ func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, e
 	params := map[string]any{
 		"timeout": telegramPollTimeoutSeconds,
 		// 只订阅消息类更新，避免拉回大量无关事件。
-		"allowed_updates": []string{"message", "edited_message", "channel_post", "edited_channel_post"},
+		"allowed_updates": []string{"message", "edited_message", "channel_post", "edited_channel_post", "chat_member", "my_chat_member"},
 	}
 	c.mu.RLock()
 	offset := c.offset
@@ -197,6 +215,9 @@ func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, e
 	if err := json.Unmarshal(raw, &updates); err != nil {
 		return nil, fmt.Errorf("telegram: decode updates: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	for _, update := range updates {
 		if update.UpdateID >= offset {
 			offset = update.UpdateID + 1
@@ -209,6 +230,11 @@ func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, e
 }
 
 func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
+	if ctx.Err() != nil {
+		return
+	}
+	c.observeMemberUpdate(update.ChatMember, false)
+	c.observeMemberUpdate(update.MyChatMember, true)
 	message := update.Message
 	if message == nil {
 		message = update.EditedMessage
@@ -222,6 +248,7 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 	if message == nil {
 		return
 	}
+	c.observeMemberMessage(message)
 	c.mu.RLock()
 	handler := c.handler
 	username := c.botUsername
@@ -603,11 +630,13 @@ func (c *TelegramChannel) Close() error {
 // —— Bot API 数据结构（只保留用得到的字段） ——
 
 type telegramUpdate struct {
-	UpdateID          int64            `json:"update_id"`
-	Message           *telegramMessage `json:"message,omitempty"`
-	EditedMessage     *telegramMessage `json:"edited_message,omitempty"`
-	ChannelPost       *telegramMessage `json:"channel_post,omitempty"`
-	EditedChannelPost *telegramMessage `json:"edited_channel_post,omitempty"`
+	ChatMember        *telegramMemberUpdate `json:"chat_member,omitempty"`
+	MyChatMember      *telegramMemberUpdate `json:"my_chat_member,omitempty"`
+	UpdateID          int64                 `json:"update_id"`
+	Message           *telegramMessage      `json:"message,omitempty"`
+	EditedMessage     *telegramMessage      `json:"edited_message,omitempty"`
+	ChannelPost       *telegramMessage      `json:"channel_post,omitempty"`
+	EditedChannelPost *telegramMessage      `json:"edited_channel_post,omitempty"`
 }
 
 type telegramMessage struct {
@@ -620,6 +649,7 @@ type telegramMessage struct {
 	SenderChat      *telegramChat    `json:"sender_chat"`
 	Chat            *telegramChat    `json:"chat"`
 	NewChatMembers  []telegramUser   `json:"new_chat_members,omitempty"`
+	LeftChatMember  *telegramUser    `json:"left_chat_member,omitempty"`
 	ReplyTo         *telegramMessage `json:"reply_to_message"`
 	Entities        []telegramEntity `json:"entities"`
 	CaptionEntities []telegramEntity `json:"caption_entities"`
@@ -654,6 +684,8 @@ type telegramEntity struct {
 }
 
 type telegramPhoto struct {
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
 	FileUniqueID string `json:"file_unique_id,omitempty"`
 	FileID       string `json:"file_id"`
 	FileSize     int64  `json:"file_size,omitempty"`
@@ -904,11 +936,17 @@ func (c *TelegramChannel) downloadFileByID(ctx context.Context, fileID string, m
 	downloadURL := base + "/file/bot" + strings.TrimSpace(cfg.BotToken) + "/" + strings.TrimLeft(remotePath, "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("telegram: invalid file request")
 	}
-	resp, err := client.Do(req)
+	downloadClient := *client
+	downloadClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := downloadClient.Do(req)
 	if err != nil {
-		return nil, "", err
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Err != nil {
+			err = urlErr.Err
+		}
+		return nil, "", fmt.Errorf("telegram: file download failed: %s", strings.ReplaceAll(err.Error(), cfg.BotToken, "[redacted]"))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

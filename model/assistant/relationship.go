@@ -124,6 +124,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaThreadStateToolName: true,
 		dianaStickerToolName:     true,
 		"diana.onebot_group":     true,
+		"diana.group":            true,
 		dianaOneBotV11ToolName:   true,
 		dianaImageToolName:       true,
 		"diana.reminder":         true,

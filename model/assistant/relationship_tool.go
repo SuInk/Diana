@@ -30,6 +30,7 @@ type dianaRelationshipTool struct {
 }
 
 type dianaRelationshipResult struct {
+	Limited bool                        `json:"limited,omitempty"`
 	OK      bool                        `json:"ok"`
 	Action  string                      `json:"action"`
 	Message string                      `json:"message,omitempty"`
@@ -142,10 +143,15 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
+		message := fmt.Sprintf("已读取当前群内 %d 位有互动记录成员的关系数据；榜单只有统计，要看某个人的画像用 operation=get 单查。", len(items))
+		if t.runtime.currentPlatform(t.event) == PlatformTelegram {
+			message += " 仅覆盖已知且能实时核验的成员，不是全群榜单。"
+		}
 		return marshalDianaRelationshipResult(dianaRelationshipResult{
 			OK:      true,
 			Action:  "listed",
-			Message: fmt.Sprintf("已读取当前群内 %d 位有互动记录成员的关系数据；榜单只有统计，要看某个人的画像用 operation=get 单查。", len(items)),
+			Limited: t.runtime.currentPlatform(t.event) == PlatformTelegram,
+			Message: message,
 			Items:   items,
 		})
 	case "set", "adjust":
@@ -539,7 +545,15 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 		return nil, fmt.Errorf("读取群成员列表失败: %w", err)
 	}
 	items := make([]dianaRelationshipSnapshot, 0, len(members))
+	if t.runtime.currentPlatform(t.event) == PlatformTelegram {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 6*time.Second)
+		defer cancel()
+	}
 	for _, member := range members {
+		if ctx.Err() != nil {
+			break
+		}
 		// 榜单不带画像，理由是体积不是权限：一次最多列 50 人，每人七栏画像会把
 		// 结果撑到十几 KB，而「谁好感度最高」根本用不到。要看某个人的画像，
 		// 用 operation=get 单查，那条路谁都走得通。
@@ -549,6 +563,11 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 		}
 		if !item.HasHistory {
 			continue
+		}
+		if t.runtime.currentPlatform(t.event) == PlatformTelegram {
+			if _, err := t.runtime.getGroupMemberInfoForEvent(ctx, t.event, t.event.GroupID, member.UserID); err != nil {
+				continue
+			}
 		}
 		items = append(items, item)
 	}

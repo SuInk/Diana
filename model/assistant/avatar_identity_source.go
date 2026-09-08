@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -53,7 +54,7 @@ func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEven
 		switch {
 		case id == avatarSourceGroup:
 			if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
-				out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(event.GroupID))
+				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, event.GroupID, true))
 			}
 		case strings.HasPrefix(id, avatarSourceGroupPrefix):
 			groupID := strings.TrimSpace(strings.TrimPrefix(id, avatarSourceGroupPrefix))
@@ -61,17 +62,17 @@ func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEven
 				continue
 			}
 			if event.Kind == EventKindGroup && groupID == strings.TrimSpace(event.GroupID) {
-				out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(groupID))
-			} else if event.Kind == EventKindPrivate && explicitAccountIDs(event.Segments)[groupID] {
-				out = appendImageEditSourceImages(out, OneBotGroupAvatarURL(groupID))
+				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, groupID, true))
+			} else if event.Kind == EventKindPrivate && r.privateGroupAvatarAllowed(ctx, event, groupID) {
+				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, groupID, true))
 			}
 		case id == avatarSourceBot:
 			if botID != "" {
-				out = appendImageEditSourceImages(out, OneBotMemberAvatarURL(botID))
+				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, botID, false))
 			}
 		case id == avatarSourceSender:
 			if userID := strings.TrimSpace(event.UserID); userID != "" {
-				out = appendImageEditSourceImages(out, OneBotMemberAvatarURL(userID))
+				out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, userID, false))
 			}
 		case strings.HasPrefix(id, avatarSourceMemberPrefix):
 			userID := strings.TrimSpace(strings.TrimPrefix(id, avatarSourceMemberPrefix))
@@ -84,13 +85,31 @@ func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEven
 			if !memberCheck(userID) {
 				continue
 			}
-			out = appendImageEditSourceImages(out, OneBotMemberAvatarURL(userID))
+			out = appendImageEditSourceImages(out, r.avatarSourceURL(ctx, event, userID, false))
 		}
 		if len(out) >= maxAvatarImageSources {
 			break
 		}
 	}
 	return out
+}
+
+func (r *Runtime) privateGroupAvatarAllowed(ctx context.Context, event MessageEvent, groupID string) bool {
+	if r.currentPlatform(event) != PlatformTelegram {
+		return explicitAccountIDs(event.Segments)[groupID]
+	}
+	id, err := strconv.ParseInt(groupID, 10, 64)
+	if err != nil || id >= 0 {
+		return false
+	}
+	// A private Telegram group ID is negative. Knowing its ID alone does not
+	// authorize an outsider to see its avatar through the bot.
+	pattern := regexp.MustCompile(`(?:^|[^0-9])` + regexp.QuoteMeta(groupID) + `(?:[^0-9]|$)`)
+	if !pattern.MatchString(PlainText(event.Segments)) {
+		return false
+	}
+	_, err = r.getGroupMemberInfoForEvent(ctx, event, groupID, event.UserID)
+	return err == nil
 }
 
 // reachableAvatarUserIDs 返回一个判定函数：这个 user_id 是不是当前会话里真实可见
@@ -116,7 +135,7 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 	if userID := strings.TrimSpace(event.UserID); userID != "" {
 		reachable[userID] = true
 	}
-	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
+	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && r.currentPlatform(event) != PlatformTelegram {
 		if members, err := r.getGroupMemberListForEvent(ctx, event, event.GroupID); err == nil {
 			for _, member := range members {
 				if userID := strings.TrimSpace(member.UserID); userID != "" {
@@ -125,7 +144,17 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 			}
 		}
 	}
-	return func(userID string) bool { return reachable[strings.TrimSpace(userID)] }
+	return func(userID string) bool {
+		userID = strings.TrimSpace(userID)
+		if reachable[userID] {
+			return true
+		}
+		if r.currentPlatform(event) == PlatformTelegram && event.Kind == EventKindGroup {
+			_, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
+			return err == nil
+		}
+		return false
+	}
 }
 
 func explicitAccountIDs(segments []MessageSegment) map[string]bool {

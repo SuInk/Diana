@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,9 +13,10 @@ import (
 
 // GroupInfo 是控制台展示一个群所需的最小信息。
 type GroupInfo struct {
-	GroupID     string
-	GroupName   string
-	MemberCount int
+	MemberCountKnown bool
+	GroupID          string
+	GroupName        string
+	MemberCount      int
 }
 
 // GroupInfoChannel 由「知道自己在哪个群里、但没有『列出全部群』接口」的通道实现。
@@ -45,6 +47,13 @@ func (c *TelegramChannel) GroupInfo(ctx context.Context, groupID string) (GroupI
 		fields = nested
 	}
 	info.GroupName = strings.TrimSpace(stringFromAny(fields["title"]))
+	if raw, countErr := c.callRaw(ctx, "getChatMemberCount", map[string]any{"chat_id": groupID}); countErr == nil {
+		var count *int
+		if json.Unmarshal(raw, &count) == nil && count != nil && *count >= 0 {
+			info.MemberCount = *count
+			info.MemberCountKnown = true
+		}
+	}
 	return info, nil
 }
 
@@ -95,7 +104,11 @@ func (c *TelegramChannel) GroupAvatar(ctx context.Context, groupID string) (Grou
 		return GroupAvatar{}, err
 	}
 	// 内容类型按实际字节判定，不信任文件名后缀。
-	return GroupAvatar{Data: body, ContentType: http.DetectContentType(body)}, nil
+	mime := http.DetectContentType(body)
+	if !strings.HasPrefix(mime, "image/") {
+		return GroupAvatar{}, fmt.Errorf("telegram: group photo is not an image")
+	}
+	return GroupAvatar{Data: body, ContentType: mime}, nil
 }
 
 // GroupAvatarForProfile 找到这台机器人对应的通道，取某个群的头像。

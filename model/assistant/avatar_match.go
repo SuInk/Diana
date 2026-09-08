@@ -27,12 +27,13 @@ const (
 )
 
 type groupMemberAvatarMatch struct {
-	Matched       bool    `json:"matched"`
-	UserID        string  `json:"user_id,omitempty"`
-	DisplayName   string  `json:"display_name,omitempty"`
-	Score         float64 `json:"score,omitempty"`
-	RunnerUpScore float64 `json:"runner_up_score,omitempty"`
-	Compared      int     `json:"compared"`
+	CandidatesComplete bool    `json:"candidates_complete"`
+	Matched            bool    `json:"matched"`
+	UserID             string  `json:"user_id,omitempty"`
+	DisplayName        string  `json:"display_name,omitempty"`
+	Score              float64 `json:"score,omitempty"`
+	RunnerUpScore      float64 `json:"runner_up_score,omitempty"`
+	Compared           int     `json:"compared"`
 }
 
 type avatarMatchCandidate struct {
@@ -64,10 +65,12 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 	if err != nil {
 		return groupMemberAvatarMatch{}, fmt.Errorf("解析当前图片失败: %w", err)
 	}
-	members, err := r.getGroupMemberListForEvent(ctx, event, event.GroupID)
+	directory, err := r.groupDirectoryForEvent(ctx, event, event.GroupID)
 	if err != nil {
 		return groupMemberAvatarMatch{}, fmt.Errorf("读取群成员失败: %w", err)
 	}
+	members := directory.Members
+	complete := directory.Complete && len(members) <= avatarMatchMaximumMembers
 	if len(members) > avatarMatchMaximumMembers {
 		members = members[:avatarMatchMaximumMembers]
 	}
@@ -84,6 +87,21 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 			defer recoverGoroutinePanic("avatar_match.worker")
 			defer wg.Done()
 			for member := range jobs {
+				if provider, ok := eventChannelFor[MemberAvatarChannel](r, event); ok {
+					if _, err := r.getGroupMemberInfoForEvent(matchCtx, event, event.GroupID, member.UserID); err != nil {
+						continue
+					}
+					avatar, err := provider.MemberAvatar(matchCtx, member.UserID)
+					if err != nil {
+						continue
+					}
+					fingerprint, err := avatarFingerprint(avatar.Data)
+					if err != nil {
+						continue
+					}
+					results <- avatarMatchCandidate{member: member, score: avatarSimilarity(source, fingerprint)}
+					continue
+				}
 				avatarURL := strings.TrimSpace(member.AvatarURL)
 				if avatarURL == "" {
 					continue
@@ -129,7 +147,7 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 		candidates = append(candidates, candidate)
 	}
 	sort.Slice(candidates, func(left, right int) bool { return candidates[left].score > candidates[right].score })
-	result := groupMemberAvatarMatch{Compared: len(candidates)}
+	result := groupMemberAvatarMatch{Compared: len(candidates), CandidatesComplete: complete && len(candidates) == len(members)}
 	if len(candidates) == 0 {
 		return result, nil
 	}

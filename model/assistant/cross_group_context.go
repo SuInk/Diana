@@ -263,7 +263,7 @@ func (r *Runtime) crossGroupCurrentMembers(event MessageEvent, candidatesByAutho
 	var wg sync.WaitGroup
 	for authorID := range candidatesByAuthor {
 		authorID := authorID
-		if r.members != nil {
+		if r.members != nil && r.currentPlatform(event) != PlatformTelegram {
 			if _, cached := r.members.lookup(event.GroupID, authorID); cached {
 				mu.Lock()
 				allowed[authorID] = true
