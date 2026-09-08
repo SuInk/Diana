@@ -71,6 +71,7 @@ type dianaImageToolRequest struct {
 type dianaImageTaskOutput struct {
 	Caption   string
 	ImageURLs []string
+	Models    []GeneratedImageModel
 	// Delivered 表示图片已在执行过程中逐张发出,Caption 只剩失败/超限说明
 	//（可能为空）,调用方不要再做一次汇总投递。
 	Delivered bool
@@ -316,7 +317,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 				}
 				return result, nil
 			}
-			message := OutgoingMessage{Text: output.Caption, ImageURLs: output.ImageURLs}
+			message := OutgoingMessage{Text: output.Caption, ImageURLs: output.ImageURLs, GeneratedImageModels: output.Models}
 			if t.event.Kind == EventKindGroup {
 				message.ReplyMessageID = t.event.MessageID
 			}
@@ -369,6 +370,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	var (
 		cfg         llm.ProviderConfig
 		images      []string
+		models      []GeneratedImageModel
 		sourceCount int
 		action      string
 		message     string
@@ -389,6 +391,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		}
 		cfg = usedCfg
 		images = resp.Images
+		models = generatedImageModels(usedCfg, operation, len(resp.Images), resp)
 		action = "diana.image.generate"
 		message = "Agent 图片生成已完成"
 	case "edit":
@@ -461,7 +464,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 					if len(localPaths) > 0 {
 						cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
 					}
-					outgoing := OutgoingMessage{ImageURLs: shared}
+					outgoing := OutgoingMessage{ImageURLs: shared, GeneratedImageModels: generatedImageModels(usedCfg, operation, len(shared), resp)}
 					// 有标注就每张带上「这是谁的」;没有标注时第一张带整体说明。
 					if label := labelByURL[batch[0]]; label != "" {
 						outgoing.Text = label
@@ -480,6 +483,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 				// 分享或发送失败就把这张并回攒总,任务结束时统一投递,不丢图。
 			}
 			images = append(images, resp.Images...)
+			models = append(models, generatedImageModels(usedCfg, operation, len(resp.Images), resp)...)
 		}
 		if streamed > 0 && len(images) == 0 {
 			t.runtime.recordImageOperation(ctx, t.event, "diana.image.edit", "Agent 图片编辑已完成", prompt, submittedPrompt, cfg.ImageModelWithDefault(), streamed, sourceCount)
@@ -507,6 +511,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	return dianaImageTaskOutput{
 		Caption:   dianaImageResultCaption(request.Caption, len(sharedImages), dropped, failed),
 		ImageURLs: sharedImages,
+		Models:    models,
 	}, nil
 }
 
