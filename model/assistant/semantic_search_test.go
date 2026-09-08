@@ -89,7 +89,7 @@ func TestHistorySearchMergesSemanticResults(t *testing.T) {
 	event := semanticTestEvent(100, "trigger", "有什么吃的推荐")
 
 	tool := &dianaChatHistoryTool{runtime: runtime, event: event}
-	result, err := tool.search(context.Background(), map[string]any{"query": "有什么吃的推荐"})
+	result, err := tool.search(context.Background(), map[string]any{"query": "有什么吃的推荐", "order": "relevance"})
 	if err != nil {
 		t.Fatal(err)
 	}
