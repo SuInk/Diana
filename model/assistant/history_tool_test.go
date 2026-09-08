@@ -38,7 +38,7 @@ func TestDianaChatHistoryToolRecentKeepsNewestEventsWhenMemoryExceedsLimit(t *te
 	}
 }
 
-func TestDianaChatHistoryToolSearchIncludesNearbyAnswerWithoutQueryKeyword(t *testing.T) {
+func TestDianaChatHistoryToolSearchDefersNearbyAnswerToAround(t *testing.T) {
 	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
@@ -72,11 +72,18 @@ func TestDianaChatHistoryToolSearchIncludesNearbyAnswerWithoutQueryKeyword(t *te
 			praise = item
 		}
 	}
-	if got := strings.Join(historyMessageIDsFromItems(praise.ContextAfter), ","); got != "comparison,question,answer" {
-		t.Fatalf("context after = %q, want comparison,question,answer", got)
+	if len(praise.ContextBefore)+len(praise.ContextAfter) != 0 {
+		t.Fatal("search eagerly included surrounding messages")
 	}
-	if praise.ContextAfter[2].Text != "维也纳" {
-		t.Fatalf("nearby answer = %#v", praise.ContextAfter)
+	raw, err = newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(context.Background(), map[string]any{"operation": "around", "message_id": praise.MessageID, "before": 0, "after": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 4 || result.Items[3].Text != "维也纳" {
+		t.Fatalf("expanded answer = %#v", result.Items)
 	}
 }
 

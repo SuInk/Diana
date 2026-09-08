@@ -61,7 +61,9 @@ func TestAnchoredHistoryWindowKeepsStartStableAcrossTurns(t *testing.T) {
 	for index := 0; index < 60; index++ {
 		history = append(history, turn(index)...)
 	}
-	const budget = int64(600)
+	// Size the fixture by complete turns so added identity metadata does not
+	// accidentally remove the growth room this anchoring test depends on.
+	budget := groupHistoryContextTurns(turn(0), 1005, "bot")[0].estimated * 20
 	current := func() MessageEvent {
 		return MessageEvent{Kind: EventKindGroup, GroupID: "g", Time: history[len(history)-1].Time + 5}
 	}

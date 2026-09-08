@@ -124,7 +124,23 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 		}
 		history = filtered
 	}
-	return r.anchoredHistoryWindow(session, history, event, cfg.BotAccount, fullBudget, budget)
+	selected := r.anchoredHistoryWindow(session, history, event, cfg.BotAccount, fullBudget, budget)
+	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
+		return selected
+	}
+	// The anchored window covers this session only. Preserve the cross-group
+	// references already selected during routing instead of silently losing them.
+	var crossGroup []MessageEvent
+	if event.replyHistoryLoaded {
+		for _, item := range event.replyHistory {
+			if item.crossGroupContext {
+				crossGroup = append(crossGroup, item)
+			}
+		}
+	} else if store != nil {
+		crossGroup = r.crossGroupContextEvents(event, store)
+	}
+	return mergeCrossGroupContextHistory(selected, crossGroup)
 }
 
 // historyWindowLowWatermarkPercent 是重新锚定时窗口占预算的比例。窗口从这里开始

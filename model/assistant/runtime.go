@@ -91,6 +91,8 @@ type MessageTimelineStore interface {
 }
 
 type MessageHistorySearchQuery struct {
+	Sort           string
+	Offset         int
 	ExcludeSession string
 	Session        string
 	SessionPrefix  string
@@ -3657,7 +3659,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 				continue
 			}
-			if assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))) {
+			// Cross-group self messages keep their historical nickname and explicit
+			// identity below; replaying only the text loses the nickname-to-self link.
+			if !historyEvent.crossGroupContext && assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))) {
 				if botText := strings.TrimSpace(historyPlainText(historyEvent)); botText != "" {
 					messages = append(messages, llm.Message{
 						Role:         llm.RoleAssistant,
@@ -3669,16 +3673,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
 					messages = append(messages, llm.Message{
 						Role:         llm.RoleUser,
-						Content:      agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent)),
+						Content:      agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent), cfg),
 						Priority:     historyPriority,
 						ContextGroup: historyGroup,
 					})
 				}
 				continue
 			}
-			historyText := historyPromptTextAt(historyEvent, event.Time)
+			historyText := historyPromptTextAt(historyEvent, event.Time, cfg)
 			if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
-				historyText = agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent))
+				historyText = agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent), cfg)
 			}
 			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: historyPriority, ContextGroup: historyGroup}
 			if runtimeLLMMessageEmpty(historyMessage) {
@@ -7405,7 +7409,7 @@ func compactContextEvent(event MessageEvent) string {
 	if sender == "" {
 		sender = "未知用户"
 	}
-	return sender + ": " + strings.Join(strings.Fields(text), " ")
+	return sender + ": " + strings.Join(strings.Fields(text), " ") + strings.ReplaceAll(historyIdentityPrompt(event), "\n", " ")
 }
 
 func truncateRunesFromStart(text string, maxRunes int) string {
@@ -7420,7 +7424,7 @@ func historyPromptText(event MessageEvent) string {
 	return historyPromptTextAt(event, 0)
 }
 
-func historyPromptTextAt(event MessageEvent, currentTime int64) string {
+func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotConfig) string {
 	text := PlainText(event.Segments)
 	if text == "" && !hasImageSegment(event.Segments) {
 		text = event.RawMessage
@@ -7432,7 +7436,7 @@ func historyPromptTextAt(event MessageEvent, currentTime int64) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return historyLinePrefix(event) + event.SenderNameOrID() + ": " + text
+	return historyLinePrefix(event) + event.SenderNameOrID() + ": " + text + historyIdentityPrompt(event, configs...)
 }
 
 // historyLinePrefix 是每条历史行的开头：「[历史 2026-09-03 14:05:00] 」，跨群来源
@@ -7460,7 +7464,7 @@ func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string
 
 // agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
 // 只有计数的占位行会让模型在被追问历史媒体时无内容可依，转而编造或退化成寒暄。
-func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string) string {
+func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string, configs ...BotConfig) string {
 	imageCount := historicalStillImageCount(event)
 	videoCount := historicalVideoCount(event)
 	videoFrameCount := historicalVideoFrameCount(event)
@@ -7493,7 +7497,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	return line
+	return line + historyIdentityPrompt(event, configs...)
 }
 
 // historicalMediaSummary 把媒体计数压成「图片×2、语音×1」这种只列非零项的短句。
@@ -7878,7 +7882,12 @@ func quotedPromptText(quoted *QuotedMessage) string {
 	if quoted.Semantic {
 		label = "指代判断选中的历史消息"
 	}
-	return fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
+	line := fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
+	if userID := strings.TrimSpace(quoted.UserID); userID != "" {
+		identity, _ := json.Marshal(map[string]string{"quoted_sender_user_id": userID})
+		line += "\n【引用发言者身份】" + string(identity)
+	}
+	return line
 }
 
 func eventHasSegmentType(event MessageEvent, segmentType string) bool {
