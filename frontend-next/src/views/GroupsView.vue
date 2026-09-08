@@ -540,7 +540,6 @@ function setGroupReplyDesire(value: string): void {
   editing.value.proactive_reply_threshold = 0;
   editing.value.chat_in_threshold = 0;
   editing.value.chat_in_chance = 0;
-  editing.value.chat_in_cooldown_seconds = 0;
   if (value === "") {
     editing.value.response_mode = "";
     editing.value.chat_in_enabled = undefined;
