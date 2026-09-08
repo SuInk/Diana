@@ -489,6 +489,7 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		return
 	}
 	previous, _ := h.groupConfigs.ConfigForGroup(profileID, groupID)
+	payload.Config.BotProfileID = profileID
 	cfg, err := h.sanitizeGroupConfigPayload(payload.Config, groupID)
 	// 群配置按机器人各存一份，保存时必须钉住是给哪一台配的。
 	cfg.BotProfileID = profileID

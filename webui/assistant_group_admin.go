@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ type groupAdminVerifier struct {
 }
 
 type groupAdminChallenge struct {
+	profileID string
 	groupID   string
 	userID    string
 	code      string
@@ -40,6 +42,7 @@ type groupAdminChallenge struct {
 }
 
 type groupAdminSession struct {
+	profileID string
 	groupID   string
 	userID    string
 	expiresAt time.Time
@@ -52,12 +55,42 @@ func newGroupAdminVerifier() *groupAdminVerifier {
 	}
 }
 
-func (v *groupAdminVerifier) CreateChallenge(groupID string, userID string) (string, time.Time, error) {
+func (h *BotHandler) groupAdminProfile(c *gin.Context, id string) (assistant.BotConfig, bool) {
+	id = strings.TrimSpace(id)
+	var candidates []assistant.BotConfig
+	for _, profile := range h.profiles.Profiles().Profiles {
+		if !assistant.IsOneBotPlatform(profile.Platform) {
+			continue
+		}
+		if id == profile.ID && id != "" {
+			return profile, true
+		}
+		candidates = append(candidates, profile)
+	}
+	if id == "" && len(candidates) == 1 {
+		return candidates[0], true
+	}
+	status := http.StatusBadRequest
+	message := "请选择要管理的 OneBot 机器人"
+	if id != "" {
+		status = http.StatusNotFound
+		message = "机器人不存在或不支持群管理员验证"
+	}
+	c.JSON(status, gin.H{"error": message})
+	return assistant.BotConfig{}, false
+}
+
+func (v *groupAdminVerifier) CreateChallenge(groupID string, userID string, profiles ...string) (string, time.Time, error) {
+	profileID := ""
+	if len(profiles) > 0 {
+		profileID = profiles[0]
+	}
 	code, err := randomDigits(6)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	challenge := groupAdminChallenge{
+		profileID: profileID,
 		groupID:   groupID,
 		userID:    userID,
 		code:      code,
@@ -66,13 +99,17 @@ func (v *groupAdminVerifier) CreateChallenge(groupID string, userID string) (str
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.cleanupLocked(time.Now())
-	v.challenges[groupAdminKey(groupID, userID)] = challenge
+	v.challenges[profileID+"|"+groupAdminKey(groupID, userID)] = challenge
 	return code, challenge.expiresAt, nil
 }
 
-func (v *groupAdminVerifier) Verify(groupID string, userID string, code string) (string, time.Time, error) {
+func (v *groupAdminVerifier) Verify(groupID string, userID string, code string, profiles ...string) (string, time.Time, error) {
+	profileID := ""
+	if len(profiles) > 0 {
+		profileID = profiles[0]
+	}
 	now := time.Now()
-	key := groupAdminKey(groupID, userID)
+	key := profileID + "|" + groupAdminKey(groupID, userID)
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.cleanupLocked(now)
@@ -95,6 +132,7 @@ func (v *groupAdminVerifier) Verify(groupID string, userID string, code string) 
 		return "", time.Time{}, err
 	}
 	session := groupAdminSession{
+		profileID: challenge.profileID,
 		groupID:   groupID,
 		userID:    userID,
 		expiresAt: now.Add(groupAdminSessionTTL),
@@ -140,17 +178,21 @@ func (h *BotHandler) startGroupAdminChallenge(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.challenge", err, groupID, nil)
 		return
 	}
-	if err := h.requireGroupAdmin(c.Request.Context(), groupID, userID); err != nil {
+	profile, ok := h.groupAdminProfile(c, payload.ProfileID)
+	if !ok {
+		return
+	}
+	if err := h.requireGroupAdmin(c.Request.Context(), groupID, userID, profile.ID); err != nil {
 		h.writeError(c, http.StatusForbidden, "assistant.group_admin.challenge", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
 		return
 	}
-	code, expiresAt, err := h.groupAdmin.CreateChallenge(groupID, userID)
+	code, expiresAt, err := h.groupAdmin.CreateChallenge(groupID, userID, profile.ID)
 	if err != nil {
 		h.writeError(c, http.StatusInternalServerError, "assistant.group_admin.challenge", err, groupID, nil)
 		return
 	}
 	message := fmt.Sprintf("Diana 群管理验证码：%s。10 分钟内有效，请勿转发。群：%s", code, groupID)
-	if err := h.sendPrivateMessage(c.Request.Context(), userID, message); err != nil {
+	if err := h.sendPrivateMessage(c.Request.Context(), userID, message, profile.ID); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.challenge", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
 		return
 	}
@@ -174,20 +216,25 @@ func (h *BotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.verify", err, groupID, nil)
 		return
 	}
-	token, expiresAt, err := h.groupAdmin.Verify(groupID, userID, payload.Code)
+	profile, ok := h.groupAdminProfile(c, payload.ProfileID)
+	if !ok {
+		return
+	}
+	token, expiresAt, err := h.groupAdmin.Verify(groupID, userID, payload.Code, profile.ID)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.verify", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
 		return
 	}
-	config := h.groupConfigForResponse(groupID)
+	config := h.groupConfigForProfile(groupID, profile)
 	recordRequestOperation(c, h.logs, "assistant.group_admin.verify", "群管理员验证通过", groupID, map[string]any{"group_id": groupID, "user_id": userID})
 	c.JSON(http.StatusOK, groupAdminConfigResponse{
 		GroupID:   groupID,
 		UserID:    userID,
 		Token:     token,
+		ProfileID: profile.ID,
 		ExpiresAt: expiresAt,
 		Config:    config,
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(h.runtime.Config().ID)),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profile.ID)),
 	})
 }
 
@@ -197,12 +244,17 @@ func (h *BotHandler) getGroupAdminConfig(c *gin.Context) {
 		h.writeError(c, http.StatusUnauthorized, "assistant.group_admin.config", fmt.Errorf("群管理登录已过期，请重新验证"), "", nil)
 		return
 	}
+	profile, ok := h.groupAdminProfile(c, session.profileID)
+	if !ok {
+		return
+	}
 	c.JSON(http.StatusOK, groupAdminConfigResponse{
 		GroupID:   session.groupID,
 		UserID:    session.userID,
 		ExpiresAt: session.expiresAt,
-		Config:    h.groupConfigForResponse(session.groupID),
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(h.runtime.Config().ID)),
+		ProfileID: profile.ID,
+		Config:    h.groupConfigForProfile(session.groupID, profile),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profile.ID)),
 	})
 }
 
@@ -217,12 +269,24 @@ func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, nil)
 		return
 	}
+	profile, ok := h.groupAdminProfile(c, session.profileID)
+	if !ok {
+		return
+	}
+	payload.Config.BotProfileID = profile.ID
+	current := h.groupConfigForProfile(session.groupID, profile)
+	if payload.Config.MarkedBotIDs == nil {
+		payload.Config.MarkedBotIDs = append([]string(nil), current.MarkedBotIDs...)
+	} else if session.userID != profile.OwnerID && !slices.Equal(payload.Config.MarkedBotIDs, current.MarkedBotIDs) {
+		h.writeError(c, http.StatusForbidden, "assistant.group_admin.config.save", fmt.Errorf("只有机器人主人可以修改机器人标记"), session.groupID, nil)
+		return
+	}
 	cfg, err := h.sanitizeGroupConfigPayload(payload.Config, session.groupID)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, map[string]any{"group_id": session.groupID})
 		return
 	}
-	saved, err := h.groupConfigs.SaveGroupConfig(cfg, h.runtime.Config())
+	saved, err := h.groupConfigs.SaveGroupConfig(cfg, profile)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, map[string]any{"group_id": session.groupID})
 		return
@@ -232,8 +296,9 @@ func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 		GroupID:   session.groupID,
 		UserID:    session.userID,
 		ExpiresAt: session.expiresAt,
-		Config:    h.groupConfigForAPI(saved.WithDefaults(session.groupID, h.runtime.Config())),
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(h.runtime.Config().ID)),
+		ProfileID: profile.ID,
+		Config:    h.groupConfigForAPI(saved.WithDefaults(session.groupID, profile)),
+		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profile.ID)),
 	})
 }
 
@@ -246,11 +311,14 @@ func (h *BotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminSes
 }
 
 func (h *BotHandler) groupConfigForResponse(groupID string) assistant.GroupConfig {
-	// 群管理员自助的会话里还没有机器人身份，先保持改造前的行为。
-	if cfg, ok := h.groupConfigs.ConfigForGroupAnyProfile(groupID); ok {
-		return h.groupConfigForAPI(cfg.WithDefaults(groupID, h.runtime.Config()))
+	return h.groupConfigForProfile(groupID, h.runtime.Config())
+}
+
+func (h *BotHandler) groupConfigForProfile(groupID string, profile assistant.BotConfig) assistant.GroupConfig {
+	if cfg, ok := h.groupConfigs.ConfigForGroup(profile.ID, groupID); ok {
+		return h.groupConfigForAPI(cfg.WithDefaults(groupID, profile))
 	}
-	return h.groupConfigForAPI(assistant.DefaultGroupConfig(groupID, h.runtime.Config()))
+	return h.groupConfigForAPI(assistant.DefaultGroupConfig(groupID, profile))
 }
 
 func (h *BotHandler) groupConfigForAPI(cfg assistant.GroupConfig) assistant.GroupConfig {
@@ -262,7 +330,11 @@ func (h *BotHandler) groupConfigForAPI(cfg assistant.GroupConfig) assistant.Grou
 	return cfg
 }
 
-func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, userID string) error {
+func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, userID string, profiles ...string) error {
+	profileID := h.runtime.Config().ID
+	if len(profiles) > 0 {
+		profileID = profiles[0]
+	}
 	group, err := strconv.ParseInt(groupID, 10, 64)
 	if err != nil {
 		return fmt.Errorf("群号格式不正确")
@@ -271,7 +343,7 @@ func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, user
 	if err != nil {
 		return fmt.Errorf("账号格式不正确")
 	}
-	data, err := h.runtime.CallOneBotAPI(ctx, "get_group_member_info", map[string]any{
+	data, err := h.callGroupAdminAPI(ctx, profileID, "get_group_member_info", map[string]any{
 		"group_id": group,
 		"user_id":  user,
 		"no_cache": true,
@@ -285,12 +357,16 @@ func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, user
 	return nil
 }
 
-func (h *BotHandler) sendPrivateMessage(ctx context.Context, userID string, text string) error {
+func (h *BotHandler) sendPrivateMessage(ctx context.Context, userID string, text string, profiles ...string) error {
+	profileID := h.runtime.Config().ID
+	if len(profiles) > 0 {
+		profileID = profiles[0]
+	}
 	parsed, err := strconv.ParseInt(userID, 10, 64)
 	if err != nil {
 		return fmt.Errorf("账号格式不正确")
 	}
-	_, err = h.runtime.CallOneBotAPI(ctx, "send_private_msg", map[string]any{
+	_, err = h.callGroupAdminAPI(ctx, profileID, "send_private_msg", map[string]any{
 		"user_id": parsed,
 		"message": []map[string]any{
 			{"type": "text", "data": map[string]string{"text": text}},
@@ -317,11 +393,23 @@ func normalizeGroupAdminIdentity(groupID string, userID string) (string, string,
 	return groupID, userID, nil
 }
 
+func (h *BotHandler) callGroupAdminAPI(ctx context.Context, profileID, action string, params map[string]any) (map[string]any, error) {
+	if scoped, ok := h.runtime.(interface {
+		CallOneBotAPIForProfile(context.Context, string, string, map[string]any) (map[string]any, error)
+	}); ok {
+		return scoped.CallOneBotAPIForProfile(ctx, profileID, action, params)
+	}
+	if h.runtime.Config().ID != profileID {
+		return nil, fmt.Errorf("机器人不支持指定配置的群管理调用")
+	}
+	return h.runtime.CallOneBotAPI(ctx, action, params)
+}
+
 func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, groupID string) (assistant.GroupConfig, error) {
 	// Older clients do not know this field. Omission preserves existing values;
 	// an explicit empty object from a current client resets all group overrides.
 	if cfg.PluginSettingOverrides == nil {
-		if existing, ok := h.groupConfigs.ConfigForGroupAnyProfile(groupID); ok {
+		if existing, ok := h.groupConfigs.ConfigForGroup(cfg.BotProfileID, groupID); ok {
 			cfg.PluginSettingOverrides = existing.PluginSettingOverrides
 		}
 	}

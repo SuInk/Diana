@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// ChatInLevel 是闲聊插话的回复欲望档位。它只决定判定的松紧，不改变“插话必须有实质
-// 内容”这条硬约束：任何档位下附和、复读和寒暄都不会被放行。
+// ChatInLevel 保留旧配置的档位标识，运行时折算成统一的语义发言偏好。
 type ChatInLevel string
 
 const (
@@ -31,14 +30,15 @@ const defaultChatInLevel = ChatInLevelLow
 
 // chatInSettings 是某个事件最终生效的插话判定参数。
 type chatInSettings struct {
-	Enabled     bool
-	Natural     bool
-	SuperActive bool
-	Assistant   bool
-	Level       ChatInLevel
-	Threshold   float64
-	Chance      float64
-	Cooldown    time.Duration
+	Participation *ParticipationPreferences
+	Enabled       bool
+	Natural       bool
+	SuperActive   bool
+	Assistant     bool
+	Level         ChatInLevel
+	Threshold     float64
+	Chance        float64
+	Cooldown      time.Duration
 }
 
 type chatInLevelPreset struct {
@@ -63,6 +63,9 @@ func ChatInLevels() []ChatInLevel {
 
 // Label 返回档位的中文说明。
 func (level ChatInLevel) Label() string {
+	if level == "custom" {
+		return "自定义"
+	}
 	switch level.Normalized() {
 	case ChatInLevelOff:
 		return "关闭：从不主动插话"
@@ -156,25 +159,8 @@ func clampChatInRatio(value float64) float64 {
 
 // chatInSettings 返回本条配置生效的闲聊插话参数。
 func (cfg BotConfig) chatInSettings() chatInSettings {
-	settings := chatInSettingsFrom(cfg.ChatInEnabled, cfg.ChatInLevel, cfg.ChatInThreshold, cfg.ChatInChance, cfg.ChatInCooldownSeconds)
-	if cfg.ResponseMode.Normalized() == ResponseModeAssistant {
-		settings = chatInSettingsFrom(boolPointer(true), ChatInLevelLow, 0, 0, 0)
-		settings.Assistant = true
-		return settings
-	}
-	if cfg.ResponseMode.Normalized() == ResponseModeSuperActive {
-		return chatInSettings{Enabled: true, SuperActive: true, Level: ChatInLevelMax, Threshold: 0.5, Chance: 1}
-	}
-	// 「关闭」是硬开关：自然插话模式不能把它重新打开，否则档位说明里的
-	// 「从不主动插话」会变成比最高档还激进。
-	if settings.Level == ChatInLevelOff {
-		return settings
-	}
-	if boolValue(cfg.NaturalInterjectionEnabled, false) {
-		// 旧「自然插话」迁移为明确的极高回复欲望，不再绕过全部频率限制。
-		settings = chatInSettingsFrom(boolPointer(true), ChatInLevelMax, 0, 0, 0)
-	}
-	return settings
+	p := cfg.participationPreferences()
+	return chatInSettings{Participation: &p, Enabled: p.Desire > 0, Level: p.presetLevel(), Chance: 1, Cooldown: time.Duration(p.CooldownSeconds) * time.Second}
 }
 
 const superActiveReplyPrompt = `本次是超级活跃模式下的主动接话。像一个很愿意参与聊天的群友，顺着当前话题简短回应、接梗、表达感受或自然追问即可，不要求每句话都增加事实或新知识。遵循原有人设，不要复读、套话刷屏、接管话题或强行评价。用户要求安静、话题已经结束、没有相关回应可说时仍保持沉默；不确定的事实交给工具确认，不能编造。`

@@ -4,10 +4,71 @@
 package assistant
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPersonaExpressionBundlePreservesDaypartAndExistingEntries(t *testing.T) {
+	original := Persona{ID: "diana", Name: "Diana", SystemPrompt: "已写好的 Diana 自定义提示词", ReplyStyle: ReplyStyleHuman, DaypartToneEnabled: boolPointer(true)}
+	set := PersonaSet{Personas: []Persona{original}}
+	next, saved, err := set.Save(Persona{Name: "Diana（副本）", SystemPrompt: original.SystemPrompt, ReplyStyle: ReplyStyleCatgirl, ActionDescriptionEnabled: boolPointer(true), DaypartToneEnabled: boolPointer(false)}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored PersonaSet
+	if err = json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	old, ok := restored.Find("diana")
+	if !ok || old.SystemPrompt != original.SystemPrompt || old.ReplyStyle != ReplyStyleHuman || !boolValue(old.DaypartToneEnabled, false) {
+		t.Fatal("existing persona changed")
+	}
+	copy, ok := restored.Find(saved.ID)
+	if !ok || copy.DaypartToneEnabled == nil || *copy.DaypartToneEnabled || !boolValue(copy.ActionDescriptionEnabled, false) {
+		t.Fatal("expression settings lost")
+	}
+	legacy := original
+	legacy.DaypartToneEnabled = nil
+	if legacy.sameContent(original) {
+		t.Fatal("import deduplicates different daypart behavior")
+	}
+	cloned := original.Normalized()
+	*cloned.DaypartToneEnabled = false
+	if !*original.DaypartToneEnabled {
+		t.Fatal("normalization aliases source setting")
+	}
+}
+
+func TestPersonaSelectionPersistsCustomWithoutRewriting(t *testing.T) {
+	custom := &Persona{ID: "custom", Name: "自定义", SystemPrompt: "已写好的自定义正文\n第二行", DaypartToneEnabled: boolPointer(true)}
+	cfg := BotConfig{PersonaID: "preset", SystemPrompt: "预设正文", CustomPersona: custom}.WithDefaults()
+	data, err := json.Marshal(PayloadFromConfig(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload ConfigPayload
+	if err = json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	restored := ConfigFromPayload(payload, BotConfig{}).WithDefaults()
+	if restored.PersonaID != "preset" || restored.CustomPersona.SystemPrompt != custom.SystemPrompt || restored.SystemPrompt != "预设正文" {
+		t.Fatal("persona selection or custom snapshot lost")
+	}
+	*restored.CustomPersona.DaypartToneEnabled = false
+	if !*custom.DaypartToneEnabled {
+		t.Fatal("custom snapshot aliases source")
+	}
+	legacy := BotConfig{SystemPrompt: "历史自定义提示词"}.WithDefaults()
+	if legacy.PersonaID != "" || legacy.SystemPrompt != "历史自定义提示词" {
+		t.Fatal("legacy config reclassified or rewritten")
+	}
+}
 
 func TestLegacyRoleplayPersonaMigratesToAssistantWithActions(t *testing.T) {
 	persona := (Persona{Name: "旧扮演", ReplyStyle: ReplyStyleRoleplay}).Normalized()

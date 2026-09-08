@@ -3,13 +3,17 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"slices"
 
 	"github.com/SuInk/diana/model/llm"
 )
 
 func (r *Runtime) requiresTelegramBotMentionJudgment(event MessageEvent) bool {
 	cfg := r.effectiveConfigForEvent(event)
-	return event.Platform == PlatformTelegram && event.Kind == EventKindGroup &&
+	if event.Kind != EventKindGroup {
+		return false
+	}
+	return slices.Contains(cfg.MarkedBotIDs, event.UserID) || event.Platform == PlatformTelegram &&
 		event.SenderIsBot && boolValue(cfg.TelegramSuppressBotMessages, true)
 }
 

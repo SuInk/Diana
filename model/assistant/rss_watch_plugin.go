@@ -44,6 +44,7 @@ var twitterHandlePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,15}$`)
 
 type RSSWatchPlugin struct {
 	client *http.Client
+	feeds  sharedResultCache[parsedFeed]
 }
 
 type rssWatchSnapshot struct {
@@ -156,10 +157,12 @@ func normalizeRSSURL(raw string) (string, error) {
 }
 
 func (p *RSSWatchPlugin) snapshot(ctx context.Context, feedURL string, settings SettingValues) (rssWatchSnapshot, string, error) {
-	feed, err := p.fetch(ctx, feedURL, settings)
+	// A new subscription establishes its baseline from a fresh snapshot.
+	feed, err := p.fetchFresh(ctx, feedURL, settings)
 	if err != nil {
 		return rssWatchSnapshot{}, "", err
 	}
+	p.feeds.invalidate()
 	if len(feed.Items) == 0 {
 		return rssWatchSnapshot{}, feed.Title, nil
 	}
@@ -260,6 +263,25 @@ func isPublicRSSHubHost(requestedURL string) bool {
 }
 
 func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings SettingValues) (parsedFeed, error) {
+	url, err := normalizeRSSURL(feedURL)
+	if err != nil {
+		return parsedFeed{}, err
+	}
+	options := clonePluginValues(settings)
+	if options == nil {
+		options = map[string]any{}
+	}
+	delete(options, rssWatchSettingItemLimit)
+	options[rssWatchSettingTimeout] = max(5, settings.Int(rssWatchSettingTimeout, 20))
+	key := sharedResultKey([]any{"rss-feed-v1", url, options})
+	// A mutable cookie jar has no stable credential fingerprint.
+	if p.client.Jar != nil {
+		key = ""
+	}
+	return p.feeds.load(ctx, key, 30*time.Second, 60*time.Second, nil, func(loadCtx context.Context) (parsedFeed, error) { return p.fetchFresh(loadCtx, url, settings) })
+}
+
+func (p *RSSWatchPlugin) fetchFresh(ctx context.Context, feedURL string, settings SettingValues) (parsedFeed, error) {
 	feedURL, err := normalizeRSSURL(feedURL)
 	if err != nil {
 		return parsedFeed{}, err

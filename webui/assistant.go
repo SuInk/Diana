@@ -112,6 +112,7 @@ type pluginEnabledPayload struct {
 }
 
 type pluginSettingsPayload struct {
+	Inherit bool `json:"inherit,omitempty"`
 	// Settings 是要保存的覆盖值全集，空 map 表示恢复默认。
 	Settings map[string]any `json:"settings"`
 	// ClearSecrets 列出要显式清除的凭据键。凭据不会因为没提交或提交空串
@@ -130,8 +131,9 @@ type groupTestPayload struct {
 }
 
 type groupAdminChallengePayload struct {
-	GroupID string `json:"group_id"`
-	UserID  string `json:"user_id"`
+	ProfileID string `json:"profile_id"`
+	GroupID   string `json:"group_id"`
+	UserID    string `json:"user_id"`
 }
 
 type groupAdminChallengeResponse struct {
@@ -142,9 +144,10 @@ type groupAdminChallengeResponse struct {
 }
 
 type groupAdminVerifyPayload struct {
-	GroupID string `json:"group_id"`
-	UserID  string `json:"user_id"`
-	Code    string `json:"code"`
+	ProfileID string `json:"profile_id"`
+	GroupID   string `json:"group_id"`
+	UserID    string `json:"user_id"`
+	Code      string `json:"code"`
 }
 
 type groupAdminSessionPayload struct {
@@ -153,6 +156,7 @@ type groupAdminSessionPayload struct {
 }
 
 type groupAdminConfigResponse struct {
+	ProfileID string                  `json:"profile_id,omitempty"`
 	GroupID   string                  `json:"group_id"`
 	UserID    string                  `json:"user_id,omitempty"`
 	Token     string                  `json:"token,omitempty"`
@@ -725,18 +729,41 @@ func (h *BotHandler) sendGroupTest(c *gin.Context) {
 
 // listPlugins 返回机器人插件列表。
 func (h *BotHandler) listPlugins(c *gin.Context) {
+	if strings.TrimSpace(c.Query("profile")) == "" {
+		state, ok := h.runtime.Plugins().Get(assistant.OpenAPIPluginID)
+		if !ok {
+			c.JSON(http.StatusOK, []assistant.PluginState{})
+			return
+		}
+		c.JSON(http.StatusOK, []assistant.PluginState{state.Redacted()})
+		return
+	}
 	profileID, ok := h.pluginProfileScope(c)
 	if !ok {
 		return
 	}
 	states := h.runtime.Plugins().ListVisibleForProfile(profileID)
-	c.JSON(http.StatusOK, assistant.RedactStates(states))
+	visible := make([]assistant.PluginState, 0, len(states))
+	for _, state := range states {
+		if state.Manifest.ID != assistant.OpenAPIPluginID {
+			visible = append(visible, state)
+		}
+	}
+	c.JSON(http.StatusOK, assistant.RedactStates(visible))
 }
 
 func (h *BotHandler) pluginProfileScope(c *gin.Context) (string, bool) {
 	profileID := strings.TrimSpace(c.Query("profile"))
 	if profileID == "" {
-		return "", true
+		if c.Param("id") == assistant.OpenAPIPluginID {
+			return "", true
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择具体机器人，插件不再支持全局配置"})
+		return "", false
+	}
+	if c.Param("id") == assistant.OpenAPIPluginID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "OpenAPI 请在系统设置中配置"})
+		return "", false
 	}
 	for _, profile := range h.profiles.Profiles().Profiles {
 		if profile.ID == profileID {
@@ -841,28 +868,45 @@ func (h *BotHandler) setPluginEnabled(c *gin.Context) {
 
 // updatePluginSettings 处理插件详细设置变更请求。
 func (h *BotHandler) updatePluginSettings(c *gin.Context) {
+	profileID, ok := h.pluginProfileScope(c)
+	if !ok {
+		return
+	}
 	var payload pluginSettingsPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.plugin.settings", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
 		return
 	}
-	state, err := h.runtime.Plugins().UpdateSettingsWithClears(c.Param("id"), payload.Settings, payload.ClearSecrets)
+	var state assistant.PluginState
+	var err error
+	if payload.Inherit {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "插件配置不再支持继承"})
+		return
+	} else {
+		state, err = h.runtime.Plugins().UpdateSettingsForProfile(c.Param("id"), profileID, payload.Settings, payload.ClearSecrets)
+	}
 	if err != nil {
 		h.writePluginError(c, "assistant.plugin.settings", err, c.Param("id"))
 		return
 	}
 	h.persistState()
-	recordRequestOperation(c, h.logs, "assistant.plugin.settings", "机器人插件设置已更新", state.Manifest.ID, pluginLogMetadata(state))
+	metadata := pluginLogMetadata(state)
+	metadata["profile_id"] = profileID
+	recordRequestOperation(c, h.logs, "assistant.plugin.settings", "机器人插件设置已更新", state.Manifest.ID, metadata)
 	c.JSON(http.StatusOK, state.Redacted())
 }
 
 func (h *BotHandler) testMusicConnections(c *gin.Context) {
+	profileID, scopeOK := h.pluginProfileScope(c)
+	if !scopeOK {
+		return
+	}
 	var payload musicConnectionTestPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.plugin.music.test", err, "official.music", nil)
 		return
 	}
-	plugin, settings, ok := h.runtime.Plugins().PluginForConfiguration("official.music")
+	plugin, settings, ok := h.runtime.Plugins().PluginForConfiguration("official.music", profileID)
 	if !ok {
 		h.writeError(c, http.StatusNotFound, "assistant.plugin.music.test", assistant.ErrPluginNotFound, "official.music", nil)
 		return

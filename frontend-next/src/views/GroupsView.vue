@@ -83,7 +83,6 @@
             <span v-if="group.configured && group.reply_style" class="badge">{{ replyStyleLabel(group.reply_style) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
-            <span v-if="group.configured && group.social_reply_enabled" class="badge accent">社交性回应</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
               回复 {{ group.reply_gate.active_start }}–{{ group.reply_gate.active_end }}
             </span>
@@ -194,13 +193,11 @@
         </div>
         <div class="field">
           <label for="group-reply-desire">回复欲望</label>
-          <AppSelect
-            id="group-reply-desire"
-            :model-value="groupReplyDesireValue(editing)"
-            :options="groupReplyDesireOptions"
-            @update:model-value="setGroupReplyDesire"
-          />
-          <span class="hint">统一控制本群中机器人主动接话的概率、门槛和冷却；关闭后不主动插话。</span>
+          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" inheritable @update:model-value="setGroupParticipation" />
+        </div>
+        <div class="field wide">
+          <label>本群补充标记的机器人</label>
+          <BotMarkerList :key="`${editing.bot_profile_id}:${editing.group_id}`" v-model="editing.marked_bot_ids" :inherited-ids="markedBotDefaults[editing.bot_profile_id || botScope || '']" />
         </div>
         <div class="field">
           <label for="group-reply-style">表达风格</label>
@@ -287,17 +284,6 @@
           <label for="group-forward-chunks">合并转发块数</label>
           <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
           <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>
-        </div>
-        <div class="field wide">
-          <label class="switch">
-            <input v-model="editing.social_reply_enabled" type="checkbox" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">本群社交性回应</span>
-          </label>
-          <span class="hint">
-            群友直接对机器人打招呼、夸奖、调侃或轻微评价（「笨笨」「你好可爱」「早」）时也回一句，哪怕没有具体问题。
-            只放行冲着机器人来的那一类：别人之间的闲聊、要机器人安静、同一轮已经回过，仍然沉默。
-          </span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -389,6 +375,9 @@ import EmptyState from "../components/EmptyState.vue";
 import GroupRelationChart from "../components/GroupRelationChart.vue";
 import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
+import ParticipationControls from "../components/ParticipationControls.vue";
+import BotMarkerList from "../components/BotMarkerList.vue";
+import { participationFromConfig, participationPresetName, type ParticipationPreferences } from "../participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 
@@ -398,15 +387,6 @@ const groupTriggerModeOptions: AppSelectOption[] = [
   { value: "smart", label: "智能" },
   { value: "strict", label: "严格" },
   { value: "loose", label: "宽松" }
-];
-
-const groupReplyDesireOptions: AppSelectOption[] = [
-  { value: "", label: "跟随全局" },
-  { value: "off", label: "关闭" },
-  { value: "low", label: "低", hint: "35% 采样，10 分钟冷却" },
-  { value: "medium", label: "中", hint: "60% 采样，5 分钟冷却" },
-  { value: "high", label: "高", hint: "85% 采样，2 分钟冷却" },
-  { value: "max", label: "极高", hint: "100% 采样，30 秒冷却，容易刷屏" }
 ];
 
 const groupReplyStyleOptions: AppSelectOption[] = [
@@ -522,6 +502,8 @@ const groupAccountSafetyOptions: AppSelectOption[] = [
   { value: "off", label: "关闭（主动和直接回复）" }
 ];
 const defaultSocialReplyEnabled = ref(false);
+const participationDefaults = ref<Record<string, ParticipationPreferences>>({});
+const markedBotDefaults = ref<Record<string,string[]>>({});
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
@@ -541,13 +523,14 @@ function truncate(text: string, max: number): string {
 }
 
 function groupReplyDesireValue(config: BotGroupConfig): string {
+  if (config.participation) return participationPresetName(config.participation);
   if (config.natural_interjection_enabled) return "max";
   if (config.chat_in_level) return config.chat_in_level;
   return ({ quiet: "off", assistant: "low", standard: "low", active: "high", super_active: "max" } as Record<string, string>)[config.response_mode ?? ""] ?? "";
 }
 
 function replyDesireLabel(level: string): string {
-  return ({ off: "关闭", low: "低", medium: "中", high: "高", max: "极高" } as Record<string, string>)[level] ?? "";
+  return ({ off: "关闭", low: "低", medium: "中", high: "高", max: "极高", custom: "自定义" } as Record<string, string>)[level] ?? "";
 }
 
 function setGroupReplyDesire(value: string): void {
@@ -567,6 +550,12 @@ function setGroupReplyDesire(value: string): void {
   editing.value.response_mode = "custom";
   editing.value.chat_in_enabled = value !== "off";
   editing.value.chat_in_level = value as NonNullable<BotGroupConfig["chat_in_level"]>;
+}
+
+function setGroupParticipation(value: ParticipationPreferences | undefined): void {
+  if (!editing.value) return;
+  setGroupReplyDesire(!value ? "" : value.desire === 0 ? "off" : participationPresetName(value) === "custom" ? "medium" : participationPresetName(value));
+  editing.value.participation = value;
 }
 
 function replyStyleLabel(style: BotGroupConfig["reply_style"]): string {
@@ -623,6 +612,14 @@ async function load(showFeedback = false): Promise<void> {
       const [config, platformList] = configAndPlatforms;
       const active = config.profiles?.find((profile) => profile.id === botScope.value) ?? config.profiles?.[0];
       const current = active ?? config;
+      markedBotDefaults.value = Object.fromEntries([
+        ["",current.marked_bot_ids ?? []],
+        ...(config.profiles ?? []).map(profile=>[profile.id,profile.marked_bot_ids ?? []])
+      ]);
+      participationDefaults.value = Object.fromEntries([
+        ["", participationFromConfig(current)],
+        ...(config.profiles ?? []).map(profile => [profile.id, participationFromConfig(profile)])
+      ]);
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
@@ -670,6 +667,7 @@ function addGroup(): void {
 function openEditor(group: BotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
+  if (!config.participation && groupReplyDesireValue(config)) config.participation = participationFromConfig(config);
   config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
   config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};

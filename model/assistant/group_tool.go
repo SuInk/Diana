@@ -37,15 +37,16 @@ type dianaOneBotGroupResult struct {
 }
 
 type dianaOneBotGroupReplyPolicy struct {
-	ProactiveReplyChance    float64 `json:"proactive_reply_chance"`
-	ProactiveReplyThreshold float64 `json:"proactive_reply_threshold"`
-	MinimumReplyMemberLevel int     `json:"minimum_reply_member_level"`
-	ChatInEnabled           bool    `json:"chat_in_enabled"`
-	ChatInLevel             string  `json:"chat_in_level"`
-	ChatInLevelLabel        string  `json:"chat_in_level_label"`
-	ChatInThreshold         float64 `json:"chat_in_threshold"`
-	ChatInChance            float64 `json:"chat_in_chance"`
-	ChatInCooldownSeconds   int     `json:"chat_in_cooldown_seconds"`
+	Participation           *ParticipationPreferences `json:"participation"`
+	ProactiveReplyChance    float64                   `json:"proactive_reply_chance"`
+	ProactiveReplyThreshold float64                   `json:"proactive_reply_threshold"`
+	MinimumReplyMemberLevel int                       `json:"minimum_reply_member_level"`
+	ChatInEnabled           bool                      `json:"chat_in_enabled"`
+	ChatInLevel             string                    `json:"chat_in_level"`
+	ChatInLevelLabel        string                    `json:"chat_in_level_label"`
+	ChatInThreshold         float64                   `json:"chat_in_threshold"`
+	ChatInChance            float64                   `json:"chat_in_chance"`
+	ChatInCooldownSeconds   int                       `json:"chat_in_cooldown_seconds"`
 }
 
 type dianaOneBotGroupMemberItem struct {
@@ -83,7 +84,7 @@ func (t *dianaOneBotGroupTool) InputSchema() map[string]any {
 		"limit":                  toolIntParam("members 专用：返回条数，默认 "+itoa(defaultOneBotGroupMemberLimit)+"。", 1, maximumOneBotGroupMemberLimit),
 		"minimum_reply_member_level": toolIntParam("最低回复群等级；低于该等级的成员只有主动 @ 机器人时才会被回复。",
 			0, maximumReplyMemberLevel),
-		"chat_in_level": toolEnumParam("回复欲望，统一控制没人 @ 机器人时主动接话的概率、门槛和冷却；off 表示关闭。",
+		"chat_in_level": toolEnumParam("发言偏好预设，由模型按偏好判断是否主动接话；off 表示不主动插话。选择预设会替换自定义滑杆。",
 			string(ChatInLevelOff), string(ChatInLevelLow), string(ChatInLevelMedium), string(ChatInLevelHigh), string(ChatInLevelMax)),
 	})
 }
@@ -170,6 +171,7 @@ func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string
 			return "", fmt.Errorf("chat_in_level 必须是 off、low、medium、high 或 max 之一")
 		}
 		cfg.ChatInLevel = level
+		cfg.Participation = nil
 		cfg.ChatInEnabled = boolPointer(level != ChatInLevelOff)
 		cfg.ChatInThreshold = 0
 		cfg.ChatInChance = 0
@@ -213,6 +215,7 @@ func dianaOneBotGroupReplyPolicyFromConfig(cfg GroupConfig) dianaOneBotGroupRepl
 	// 报告最终生效值，而不是原始字段：预设回复模式、档位预设和自定义覆盖依次合并
 	// 之后才是机器人真正的行为。少算预设那一层会把「已改成 max」这类假象报给用户。
 	resolved := BotConfig{
+		Participation: copyParticipation(cfg.Participation),
 		ChatInEnabled: cfg.ChatInEnabled, ChatInLevel: cfg.ChatInLevel, ChatInThreshold: cfg.ChatInThreshold,
 		ChatInChance: cfg.ChatInChance, ChatInCooldownSeconds: cfg.ChatInCooldownSeconds,
 		NaturalInterjectionEnabled: cfg.NaturalInterjectionEnabled,
@@ -222,6 +225,7 @@ func dianaOneBotGroupReplyPolicyFromConfig(cfg GroupConfig) dianaOneBotGroupRepl
 	}
 	chatIn := resolved.chatInSettings()
 	return dianaOneBotGroupReplyPolicy{
+		Participation:           chatIn.Participation,
 		ProactiveReplyChance:    cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold: cfg.ProactiveReplyThreshold,
 		MinimumReplyMemberLevel: cfg.MinimumReplyMemberLevel,

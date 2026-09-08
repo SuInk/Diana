@@ -5,11 +5,11 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
@@ -25,11 +25,6 @@ import (
 var resolverUserAgent = agent.BrowserUserAgent
 
 const (
-	// 抓取成功缓存 10 分钟，失败短缓存 2 分钟，同一链接被连续刷时不重复请求。
-	resolverCacheTTL        = 10 * time.Minute
-	resolverCacheFailureTTL = 2 * time.Minute
-	resolverCacheMaxEntries = 256
-
 	// 只读页面前 256KB，元数据都在 head 里，避免下载整页或大文件。
 	resolverReadLimit = 256 * 1024
 
@@ -40,42 +35,6 @@ type pageMeta struct {
 	Title       string
 	Description string
 	FinalURL    string
-}
-
-type resolverCacheEntry struct {
-	meta    pageMeta
-	ok      bool
-	expires time.Time
-}
-
-type resolverCache struct {
-	mu      sync.Mutex
-	entries map[string]resolverCacheEntry
-}
-
-// get 返回缓存的抓取结果；第三个返回值表示是否命中。
-func (c *resolverCache) get(key string, now time.Time) (pageMeta, bool, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, found := c.entries[key]
-	if !found || now.After(entry.expires) {
-		return pageMeta{}, false, false
-	}
-	return entry.meta, entry.ok, true
-}
-
-// put 写入抓取结果，容量超限时整体清空，避免慢速淘汰的复杂度。
-func (c *resolverCache) put(key string, meta pageMeta, ok bool, now time.Time, ttl time.Duration) {
-	if !ok && ttl > resolverCacheFailureTTL {
-		// 失败结果只短缓存，站点恢复后能尽快重试。
-		ttl = resolverCacheFailureTTL
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.entries == nil || len(c.entries) >= resolverCacheMaxEntries {
-		c.entries = map[string]resolverCacheEntry{}
-	}
-	c.entries[key] = resolverCacheEntry{meta: meta, ok: ok, expires: now.Add(ttl)}
 }
 
 // applyBrowserHeaders 为抓取请求设置常规浏览器头；ua 为空时使用内置 Chrome UA。
@@ -91,13 +50,24 @@ func applyBrowserHeaders(req *http.Request, ua string) {
 // fetchPageMeta 带缓存地抓取网页元数据：先走直接 HTTP，仍拿不到内容且开启
 // 浏览器渲染兜底时，再用本机 Chrome 渲染一次（可借用浏览器登录态过风控）。
 func (p *ResolverPlugin) fetchPageMeta(ctx context.Context, raw string, opts resolveOptions) (pageMeta, bool) {
-	now := time.Now()
-	// 缓存时长设为 0 表示完全关闭缓存。
-	if opts.cacheTTL > 0 {
-		if meta, ok, found := p.cache.get(raw, now); found {
-			return meta, ok
-		}
+	key := sharedResultKey([]any{"page-meta-v1", resolverURLDedupeKey(raw), opts.userAgent, opts.httpTimeout, opts.browserRender, opts.browserCDPURL})
+	// Browser sessions and cookie jars can change auth without changing settings.
+	if opts.browserRender || (p.client != nil && p.client.Jar != nil) {
+		key = ""
 	}
+	meta, err := p.sharedPages.load(ctx, key, opts.cacheTTL, 2*time.Minute, func(value pageMeta) bool { return value.Title != "" || value.Description != "" }, func(loadCtx context.Context) (pageMeta, error) {
+		fresh := opts
+		fresh.cacheTTL = 0
+		value, ok := p.fetchPageMetaFresh(loadCtx, raw, fresh)
+		if !ok {
+			return pageMeta{}, fmt.Errorf("page metadata unavailable")
+		}
+		return value, nil
+	})
+	return meta, err == nil
+}
+
+func (p *ResolverPlugin) fetchPageMetaFresh(ctx context.Context, raw string, opts resolveOptions) (pageMeta, bool) {
 
 	// 每个链接的直接抓取单独限时，避免慢站点吃满整条消息的处理时间。
 	httpCtx, cancel := context.WithTimeout(ctx, opts.httpTimeout)
@@ -136,9 +106,6 @@ func (p *ResolverPlugin) fetchPageMeta(ctx context.Context, raw string, opts res
 		}
 	}
 
-	if opts.cacheTTL > 0 {
-		p.cache.put(raw, meta, ok, now, opts.cacheTTL)
-	}
 	return meta, ok
 }
 

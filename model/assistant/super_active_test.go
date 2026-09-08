@@ -51,15 +51,15 @@ func TestSuperActiveIntentAllowsSocialRepliesAndQuestions(t *testing.T) {
 		}
 	}
 	standard := BotConfig{ResponseMode: ResponseModeStandard}.WithDefaults()
-	if (proactiveReplyDecision{ShouldReply: true, Confidence: 0.78, Category: "needs_response"}).allows(0.9, standard.chatInSettings()) {
-		t.Fatal("standard mode threshold changed")
+	if !(proactiveReplyDecision{ShouldReply: true, Confidence: 0.78, Category: "needs_response"}).allows(0.9, standard.chatInSettings()) {
+		t.Fatal("legacy threshold must not override model intent")
 	}
 }
 
 func TestSuperActivePromptsAndQuality(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
 	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, cfg.chatInSettings(), false)
-	if prompt != superActiveIntentPrompt || strings.Contains(prompt, "当前群已开启自然插话模式") {
+	if !strings.Contains(prompt, "主动参与=100") || strings.Contains(prompt, "当前群已开启自然插话模式") {
 		t.Fatal("super active must use its own intent policy")
 	}
 	if !strings.Contains(replyQualityPromptForConfig(cfg), "正常的寒暄") {
@@ -68,7 +68,7 @@ func TestSuperActivePromptsAndQuality(t *testing.T) {
 	r := &Runtime{}
 	for _, chatIn := range []bool{true, false} {
 		event := MessageEvent{chatInReply: chatIn}
-		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{ShouldSend: true, Confidence: 0.78}, cfg); err != nil {
+		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{ShouldSend: true, Confidence: 0.98}, cfg); err != nil {
 			t.Fatal(err)
 		}
 		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{ShouldSend: false, Confidence: 0.99}, cfg); err == nil {
@@ -85,7 +85,7 @@ func TestSuperActiveGroupOverride(t *testing.T) {
 	}})
 	for _, group := range []string{"quiet", "super", "inherit"} {
 		settings := r.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: group}).chatInSettings()
-		if settings.SuperActive != (group != "quiet") {
+		if (settings.Participation.Desire == 100) != (group != "quiet") {
 			t.Fatalf("group %s settings = %#v", group, settings)
 		}
 	}

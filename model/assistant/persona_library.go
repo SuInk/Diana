@@ -42,6 +42,7 @@ type Persona struct {
 	SystemPrompt             string     `json:"system_prompt,omitempty"`
 	ReplyStyle               ReplyStyle `json:"reply_style,omitempty"`
 	ActionDescriptionEnabled *bool      `json:"action_description_enabled,omitempty"`
+	DaypartToneEnabled       *bool      `json:"daypart_tone_enabled,omitempty"`
 	SelfReference            string     `json:"self_reference,omitempty"`
 	SentenceEnders           string     `json:"sentence_enders,omitempty"`
 	UpdatedAt                time.Time  `json:"updated_at,omitempty"`
@@ -52,8 +53,20 @@ type PersonaSet struct {
 	Personas []Persona `json:"personas"`
 }
 
+func copyCustomPersona(persona *Persona) *Persona {
+	if persona == nil {
+		return nil
+	}
+	copy := *persona
+	copy.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
+	copy.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
+	return &copy
+}
+
 // Normalized 清洗单套人设：补 ID、裁长度、归一化风格。
 func (persona Persona) Normalized() Persona {
+	persona.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
+	persona.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
 	persona.ID = strings.TrimSpace(persona.ID)
 	if persona.ID == "" {
 		persona.ID = uuid.NewString()
@@ -79,6 +92,7 @@ func (persona Persona) Empty() bool {
 	return strings.TrimSpace(persona.SystemPrompt) == "" &&
 		strings.TrimSpace(string(persona.ReplyStyle)) == "" &&
 		persona.ActionDescriptionEnabled == nil &&
+		persona.DaypartToneEnabled == nil &&
 		strings.TrimSpace(persona.SelfReference) == "" &&
 		strings.TrimSpace(persona.SentenceEnders) == ""
 }
@@ -209,6 +223,8 @@ func (persona Persona) sameContent(other Persona) bool {
 	return persona.SystemPrompt == other.SystemPrompt &&
 		persona.ReplyStyle.Normalized() == other.ReplyStyle.Normalized() &&
 		boolValue(persona.ActionDescriptionEnabled, false) == boolValue(other.ActionDescriptionEnabled, false) &&
+		(persona.DaypartToneEnabled == nil) == (other.DaypartToneEnabled == nil) &&
+		boolValue(persona.DaypartToneEnabled, false) == boolValue(other.DaypartToneEnabled, false) &&
 		persona.SelfReference == other.SelfReference &&
 		persona.SentenceEnders == other.SentenceEnders
 }

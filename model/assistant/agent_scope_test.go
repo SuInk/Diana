@@ -104,6 +104,10 @@ func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 			}
 			defer registry.Close()
 			_, gotTool := registry.Get("diana.llm_config")
+			_, gotMarkers := registry.Get("diana.bot_markers")
+			if gotMarkers != tt.wantTool {
+				t.Fatalf("bot marker tool visible=%v want=%v", gotMarkers, tt.wantTool)
+			}
 			if gotTool != tt.wantTool {
 				t.Fatalf("diana.llm_config visible = %v, want %v", gotTool, tt.wantTool)
 			}

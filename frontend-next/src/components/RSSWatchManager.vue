@@ -86,7 +86,7 @@
         <div class="repository-watch-manager-main">
           <div class="cluster"><strong>{{ watchTitle(task) }}</strong><span v-if="sourceCount(task) > 1" class="badge">{{ sourceCount(task) }} 个来源</span><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
           <p class="rss-watch-rule-summary">{{ task.feed_judge_prompt }}</p>
-          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><span v-if="task.group_id">群 <strong class="mono">{{ task.group_id }}</strong></span><span v-else>私聊 <strong class="mono">{{ task.user_id || '—' }}</strong></span><a v-for="source in taskSources(task)" :key="source.feed_url" :href="source.feed_url" target="_blank" rel="noreferrer">{{ sourceLabel(source) }}</a></div>
+          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><SubscriptionDestination :platform="task.platform || profiles.find((profile) => profile.id === task.profile_id)?.platform" :profile-id="task.profile_id" :group-id="task.group_id" :user-id="task.user_id" /><a v-for="source in taskSources(task)" :key="source.feed_url" :href="source.feed_url" target="_blank" rel="noreferrer" style="overflow-wrap: anywhere; max-width: 100%">{{ sourceLabel(source) }}</a></div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
         <div class="repository-watch-manager-actions">
@@ -108,8 +108,10 @@ import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
 import AccountNameHint from "./AccountNameHint.vue";
 import AppSelect from "./AppSelect.vue";
+import SubscriptionDestination from "./SubscriptionDestination.vue";
+import { rssSourceLabel, subscriptionPlatformLabel } from "../rss-display";
 
-const props = defineProps<{ prepareAccess?: () => Promise<void> }>();
+const props = defineProps<{ prepareAccess?: () => Promise<void>; profileId?: string }>();
 const minimumIntervalSeconds = 5 * 60;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = 15 * 60;
@@ -123,15 +125,15 @@ const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref
 const editingTask = ref<AssistantTask | null>(null);
 const editorSnapshot = ref("");
 const form = ref(emptyForm());
-const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
+const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: `${profile.name || '未命名机器人'}（${profile.bot_account || profile.id}）`, hint: subscriptionPlatformLabel(profile.platform) })).filter((option) => option.value));
 const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
-const groupOptions = computed(() => selectedProfile.value?.platform === "telegram" ? [] : joinedGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined })));
+const groupOptions = computed(() => joinedGroups.value.filter((group) => group.joined && (group.bot_profile_id === form.value.profile_id || (!group.bot_profile_id && props.profileId === form.value.profile_id))).map((group) => ({ value: group.group_id, label: group.group_name ? `${group.group_name}（${group.group_id}）` : group.group_id, hint: subscriptionPlatformLabel(selectedProfile.value?.platform) })));
 
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups().catch(() => ({ groups: [] }))]);
-    watches.value = tasks.items.filter((task) => task.kind === "rss_watch"); profiles.value = config.profiles?.length ? config.profiles : [config]; joinedGroups.value = groups.groups;
+    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups(false, props.profileId ?? "").catch(() => ({ groups: [] }))]);
+    watches.value = tasks.items.filter((task) => task.kind === "rss_watch" && (!props.profileId || task.profile_id === props.profileId)); profiles.value = (config.profiles?.length ? config.profiles : [config]).filter((profile) => !props.profileId || profile.id === props.profileId); joinedGroups.value = groups.groups;
     if (!form.value.profile_id) form.value.profile_id = profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }
 }
@@ -149,7 +151,7 @@ function taskSources(task: AssistantTask): RSSWatchSource[] {
   return task.feed_url ? [{ feed_url: task.feed_url, source: task.feed_source, handle: task.feed_handle }] : [];
 }
 function sourceCount(task: AssistantTask): number { return taskSources(task).length; }
-function sourceLabel(source: RSSWatchSource): string { return source.source === "twitter" && source.handle ? `@${source.handle}` : source.name || source.feed_url; }
+function sourceLabel(source: RSSWatchSource): string { return rssSourceLabel(source); }
 function watchTitle(task: AssistantTask): string { const sources = taskSources(task); return sources.length > 1 ? sources.map(sourceLabel).join("、") : sources.length === 1 ? sourceLabel(sources[0]) : task.message; }
 function addSource(kind: "twitter" | "rss"): void { const list = kind === "twitter" ? form.value.twitter_handles : form.value.feed_urls; if (list.length < maximumSources) list.push(""); }
 function removeSource(kind: "twitter" | "rss", index: number): void { const list = kind === "twitter" ? form.value.twitter_handles : form.value.feed_urls; if (list.length > 1) list.splice(index, 1); }
