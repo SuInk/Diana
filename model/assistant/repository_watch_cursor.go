@@ -56,3 +56,7 @@ func observedRepositoryWatchCursor(repository, kind, current, candidate string) 
 	}
 	return next
 }
+
+func logRepositoryOpaqueCursorRetained(repository, kind, current, candidate, reason string) {
+	log.Printf("diana repository_watch cursor retained: repository=%q kind=%s previous=%q observed=%q reason=%q", repository, kind, current, candidate, reason)
+}
