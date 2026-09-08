@@ -23,17 +23,21 @@ type dianaOneBotGroupTool struct {
 }
 
 type dianaOneBotGroupResult struct {
-	OK           bool                         `json:"ok"`
-	Action       string                       `json:"action"`
-	Message      string                       `json:"message,omitempty"`
-	Group        *OneBotGroupInfo             `json:"group,omitempty"`
-	Members      []dianaOneBotGroupMemberItem `json:"members,omitempty"`
-	ReplyPolicy  *dianaOneBotGroupReplyPolicy `json:"reply_policy,omitempty"`
-	AvatarMatch  *groupMemberAvatarMatch      `json:"avatar_match,omitempty"`
-	OperatorRole string                       `json:"operator_role,omitempty"`
-	Total        int                          `json:"total,omitempty"`
-	GroupTotal   int                          `json:"group_total,omitempty"`
-	Limited      bool                         `json:"limited,omitempty"`
+	MemberListComplete *bool                        `json:"member_list_complete,omitempty"`
+	MemberSource       string                       `json:"member_source,omitempty"`
+	MemberCountKnown   *bool                        `json:"member_count_known,omitempty"`
+	Warnings           []string                     `json:"warnings,omitempty"`
+	OK                 bool                         `json:"ok"`
+	Action             string                       `json:"action"`
+	Message            string                       `json:"message,omitempty"`
+	Group              *OneBotGroupInfo             `json:"group,omitempty"`
+	Members            []dianaOneBotGroupMemberItem `json:"members,omitempty"`
+	ReplyPolicy        *dianaOneBotGroupReplyPolicy `json:"reply_policy,omitempty"`
+	AvatarMatch        *groupMemberAvatarMatch      `json:"avatar_match,omitempty"`
+	OperatorRole       string                       `json:"operator_role,omitempty"`
+	Total              int                          `json:"total,omitempty"`
+	GroupTotal         int                          `json:"group_total,omitempty"`
+	Limited            bool                         `json:"limited,omitempty"`
 }
 
 type dianaOneBotGroupReplyPolicy struct {
@@ -50,34 +54,45 @@ type dianaOneBotGroupReplyPolicy struct {
 }
 
 type dianaOneBotGroupMemberItem struct {
-	UserID      string `json:"user_id"`
-	DisplayName string `json:"display_name"`
-	Nickname    string `json:"nickname,omitempty"`
-	Card        string `json:"card,omitempty"`
-	Role        string `json:"role,omitempty"`
-	Title       string `json:"title,omitempty"`
-	AvatarURL   string `json:"avatar_url,omitempty"`
+	Username           string `json:"username,omitempty"`
+	IsBot              bool   `json:"is_bot,omitempty"`
+	MembershipVerified bool   `json:"membership_verified"`
+	AvatarSource       string `json:"avatar_source,omitempty"`
+	UserID             string `json:"user_id"`
+	DisplayName        string `json:"display_name"`
+	Nickname           string `json:"nickname,omitempty"`
+	Card               string `json:"card,omitempty"`
+	Role               string `json:"role,omitempty"`
+	Title              string `json:"title,omitempty"`
+	AvatarURL          string `json:"avatar_url,omitempty"`
 	// Mention 是可以直接抄进回复的提及标记，出站时按平台翻译。
 	Mention string `json:"mention"`
 }
 
 func newDianaOneBotGroupTool(runtime *Runtime, event MessageEvent) *dianaOneBotGroupTool {
+	if runtime != nil {
+		event.Platform = firstNonEmpty(event.Platform, runtime.effectiveConfigForEvent(event).Platform)
+	}
 	return &dianaOneBotGroupTool{runtime: runtime, event: event}
 }
 
 func (t *dianaOneBotGroupTool) Name() string {
-	return "diana.onebot_group"
+	return groupToolName(t.event)
 }
 
 func (t *dianaOneBotGroupTool) Description() string {
+	if NormalizePlatformID(t.event.Platform) == PlatformTelegram {
+		return groupToolPrompt(t.event) + " reply_policy/set_reply_policy 可查询或修改回复策略，权限由运行时校验。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
+	}
 	return `读取当前群的真实群资料、成员名单和回复策略，也可用本地图片模式匹配判断当前图片是否为某位群成员头像。用户要查群人数、群名、成员、群名片、昵称、账号、头像，或要求真正 @ 某位/多位/其他所有成员时必须调用，不要反过来要求用户先手动 @。头像身份不得靠视觉模型猜测，使用 match_avatar。reply_policy 与 set_reply_policy 只对机器人主人、群主和群管理员开放，工具会实时校验权限。`
 }
 
 // InputSchema 声明参数契约。取值范围引用与校验同一份常量。
 func (t *dianaOneBotGroupTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：info 读群资料；members 获取或检索成员；match_avatar 将当前图片与群成员头像做本地模式匹配；reply_policy 读取本群回复策略；set_reply_policy 修改回复策略（支持局部更新，只传要改的项）。",
-			"info", "members", "match_avatar", "reply_policy", "set_reply_policy"),
+		"operation": toolEnumParam("要执行的操作：info 读群资料；members 获取或检索成员候选；member 按 user_id 实时核验成员；match_avatar 将当前图片与可用成员头像做本地模式匹配；reply_policy 读取本群回复策略；set_reply_policy 修改回复策略（支持局部更新，只传要改的项）。",
+			"info", "members", "member", "match_avatar", "reply_policy", "set_reply_policy"),
+		"user_id":                toolStringParam("member 专用：要实时核验的成员账号；不能凭昵称猜账号。"),
 		"query":                  toolStringParam("members 专用：按群名片、昵称或账号筛选成员。"),
 		"exclude_current_sender": toolBoolParam("members 专用：排除当前发言者，用户说「其他人」「除了我」时置 true。"),
 		"exclude_user_ids":       toolStringArrayParam("members 专用：排除指定账号。"),
@@ -101,6 +116,16 @@ func (t *dianaOneBotGroupTool) Run(ctx context.Context, input map[string]any) (s
 		operation = "members"
 	}
 	switch operation {
+	case "member":
+		id := strings.TrimSpace(configToolString(input, "user_id"))
+		if id == "" {
+			return "", fmt.Errorf("member 需要 user_id")
+		}
+		member, err := t.runtime.getGroupMemberInfoForEvent(ctx, t.event, t.event.GroupID, id)
+		if err != nil {
+			return "", err
+		}
+		return marshalDianaOneBotGroupResult(dianaOneBotGroupResult{OK: true, Action: "member", Message: "已按账号实时核验当前群成员。", Members: []dianaOneBotGroupMemberItem{groupMemberToolItem(member)}, Total: 1})
 	case "info", "group":
 		group, err := t.runtime.getGroupInfoForEvent(ctx, t.event, t.event.GroupID)
 		if err != nil {
@@ -109,7 +134,7 @@ func (t *dianaOneBotGroupTool) Run(ctx context.Context, input map[string]any) (s
 		return marshalDianaOneBotGroupResult(dianaOneBotGroupResult{
 			OK:      true,
 			Action:  "info",
-			Message: "已通过 OneBot v11 读取当前群资料。",
+			Message: "已读取当前群的实时资料。",
 			Group:   &group,
 		})
 	case "members", "list", "search", "resolve":
@@ -124,7 +149,7 @@ func (t *dianaOneBotGroupTool) Run(ctx context.Context, input map[string]any) (s
 			message = fmt.Sprintf("当前图片与群成员 %s 的头像匹配。", match.DisplayName)
 		}
 		return marshalDianaOneBotGroupResult(dianaOneBotGroupResult{
-			OK: true, Action: "match_avatar", Message: message, AvatarMatch: &match,
+			OK: true, Action: "match_avatar", Message: message, AvatarMatch: &match, Limited: !match.CandidatesComplete,
 		})
 	case "reply_policy", "policy":
 		return t.replyPolicy(ctx, input, false)
@@ -136,6 +161,11 @@ func (t *dianaOneBotGroupTool) Run(ctx context.Context, input map[string]any) (s
 }
 
 func (t *dianaOneBotGroupTool) replyPolicy(ctx context.Context, input map[string]any, update bool) (string, error) {
+	if t.runtime.currentPlatform(t.event) == PlatformTelegram && update {
+		if _, ok := input["minimum_reply_member_level"]; ok {
+			return "", fmt.Errorf("Telegram 不提供 QQ 群等级，不能设置最低回复群等级")
+		}
+	}
 	role, err := t.runtime.canConfigureGroup(ctx, t.event)
 	if err != nil {
 		return "", err
@@ -239,11 +269,12 @@ func dianaOneBotGroupReplyPolicyFromConfig(cfg GroupConfig) dianaOneBotGroupRepl
 }
 
 func (t *dianaOneBotGroupTool) listMembers(ctx context.Context, input map[string]any) (string, error) {
-	members, err := t.runtime.getGroupMemberListForEvent(ctx, t.event, t.event.GroupID)
+	directory, err := t.runtime.groupDirectoryForEvent(ctx, t.event, t.event.GroupID)
 	if err != nil {
 		return "", fmt.Errorf("读取群成员列表失败: %w", err)
 	}
-	query := strings.ToLower(strings.TrimSpace(configToolString(input, "query")))
+	members := directory.Members
+	query := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(configToolString(input, "query"))), "@")
 	excluded := make(map[string]bool)
 	if groupToolBool(input, "exclude_current_sender") {
 		excluded[strings.TrimSpace(t.event.UserID)] = true
@@ -269,25 +300,21 @@ func (t *dianaOneBotGroupTool) listMembers(ctx context.Context, input map[string
 		if len(items) >= limit {
 			continue
 		}
-		items = append(items, dianaOneBotGroupMemberItem{
-			UserID:      member.UserID,
-			DisplayName: member.DisplayName(),
-			Nickname:    member.Nickname,
-			Card:        member.Card,
-			Role:        member.Role,
-			Title:       member.Title,
-			AvatarURL:   member.AvatarURL,
-			Mention:     mentionMarkerFor(member.UserID),
-		})
+		items = append(items, groupMemberToolItem(member))
+	}
+	message := fmt.Sprintf("已读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items))
+	if !directory.Complete {
+		message += " 这是管理员和已知账号候选，不是完整成员名单；membership_verified 未标为 true 的账号可能已离群，不能据此判断权限或声称已 @ 全部成员。核验指定账号请调用 member。"
 	}
 	return marshalDianaOneBotGroupResult(dianaOneBotGroupResult{
-		OK:         true,
-		Action:     "members",
-		Message:    fmt.Sprintf("已通过 OneBot v11 读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items)),
+		OK:                 true,
+		Action:             "members",
+		Message:            message,
+		MemberListComplete: &directory.Complete, MemberSource: directory.Source, MemberCountKnown: &directory.TotalKnown, Warnings: directory.Warnings,
 		Members:    items,
 		Total:      matched,
-		GroupTotal: len(members),
-		Limited:    matched > len(items),
+		GroupTotal: directory.Total,
+		Limited:    !directory.Complete || matched > len(items),
 	})
 }
 
@@ -295,7 +322,7 @@ func oneBotGroupMemberMatches(member OneBotGroupMemberInfo, query string) bool {
 	if query == "" {
 		return true
 	}
-	for _, value := range []string{member.UserID, member.Card, member.Nickname, member.DisplayName()} {
+	for _, value := range []string{member.UserID, member.Username, member.Card, member.Nickname, member.DisplayName()} {
 		if strings.Contains(strings.ToLower(strings.TrimSpace(value)), query) {
 			return true
 		}

@@ -96,7 +96,7 @@ func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (st
 	if ownerID := strings.TrimSpace(cfg.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(event.UserID) {
 		return "bot_owner", nil
 	}
-	if role := NormalizeGroupRole(event.SenderRole); GroupRoleCanConfigure(role) {
+	if role := NormalizeGroupRole(event.SenderRole); GroupRoleCanConfigure(role) && r.currentPlatform(event) != PlatformTelegram {
 		return string(role), nil
 	}
 	member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
@@ -111,6 +111,9 @@ func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (st
 }
 
 func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event MessageEvent) (bool, groupReplyLevelDecision) {
+	if r.currentPlatform(event) == PlatformTelegram {
+		return false, groupReplyLevelDecision{Reason: "platform_has_no_member_levels"}
+	}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || groupCfg.MinimumReplyMemberLevel <= 0 {
 		return false, groupReplyLevelDecision{}

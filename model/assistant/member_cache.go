@@ -186,6 +186,9 @@ func (c *memberCache) LevelFor(event MessageEvent) (int, bool) {
 // 刻意不复用消息的 ctx：消息处理完 ctx 就被取消了，而这是 fire-and-forget
 // 的回填，必须有自己独立的生命周期和超时。
 func (c *memberCache) refreshAsync(event MessageEvent) {
+	if NormalizePlatformID(event.Platform) == PlatformTelegram {
+		return
+	}
 	if c == nil || c.call == nil {
 		return
 	}

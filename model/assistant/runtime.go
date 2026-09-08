@@ -918,25 +918,29 @@ func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent,
 type oneBotAPICaller func(context.Context, string, map[string]any) (map[string]any, error)
 
 type OneBotGroupInfo struct {
-	GroupID        string `json:"group_id"`
-	GroupName      string `json:"group_name,omitempty"`
-	AvatarURL      string `json:"avatar_url,omitempty"`
-	MemberCount    int    `json:"member_count,omitempty"`
-	MaxMemberCount int    `json:"max_member_count,omitempty"`
+	MemberCountKnown *bool  `json:"member_count_known,omitempty"`
+	GroupID          string `json:"group_id"`
+	GroupName        string `json:"group_name,omitempty"`
+	AvatarURL        string `json:"avatar_url,omitempty"`
+	MemberCount      int    `json:"member_count,omitempty"`
+	MaxMemberCount   int    `json:"max_member_count,omitempty"`
 }
 
 type OneBotGroupMemberInfo struct {
-	GroupID   string `json:"group_id,omitempty"`
-	UserID    string `json:"user_id"`
-	Nickname  string `json:"nickname,omitempty"`
-	Card      string `json:"card,omitempty"`
-	Role      string `json:"role,omitempty"`
-	Title     string `json:"title,omitempty"`
-	Sex       string `json:"sex,omitempty"`
-	Age       int    `json:"age,omitempty"`
-	Area      string `json:"area,omitempty"`
-	Level     string `json:"level,omitempty"`
-	AvatarURL string `json:"avatar_url,omitempty"`
+	Username           string `json:"username,omitempty"`
+	IsBot              bool   `json:"is_bot,omitempty"`
+	MembershipVerified bool   `json:"membership_verified,omitempty"`
+	GroupID            string `json:"group_id,omitempty"`
+	UserID             string `json:"user_id"`
+	Nickname           string `json:"nickname,omitempty"`
+	Card               string `json:"card,omitempty"`
+	Role               string `json:"role,omitempty"`
+	Title              string `json:"title,omitempty"`
+	Sex                string `json:"sex,omitempty"`
+	Age                int    `json:"age,omitempty"`
+	Area               string `json:"area,omitempty"`
+	Level              string `json:"level,omitempty"`
+	AvatarURL          string `json:"avatar_url,omitempty"`
 }
 
 func (m OneBotGroupMemberInfo) DisplayName() string {
@@ -961,10 +965,20 @@ func OneBotMemberAvatarURL(userID string) string {
 }
 
 func (r *Runtime) GetGroupInfo(ctx context.Context, groupID string) (OneBotGroupInfo, error) {
-	return r.getGroupInfo(ctx, groupID, r.CallOneBotAPI)
+	cfg := r.Config()
+	return r.getGroupInfoForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, groupID)
 }
 
 func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, groupID string) (OneBotGroupInfo, error) {
+	if provider, ok := eventChannelFor[GroupInfoChannel](r, event); ok {
+		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		info, err := provider.GroupInfo(ctx, groupID)
+		return OneBotGroupInfo{GroupID: info.GroupID, GroupName: info.GroupName, MemberCount: info.MemberCount, MemberCountKnown: &info.MemberCountKnown}, err
+	}
+	if !IsOneBotPlatform(r.currentPlatform(event)) {
+		return OneBotGroupInfo{}, fmt.Errorf("当前平台未提供群资料查询能力")
+	}
 	return r.getGroupInfo(ctx, groupID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
@@ -988,10 +1002,19 @@ func (r *Runtime) getGroupInfo(ctx context.Context, groupID string, call oneBotA
 }
 
 func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID string) (OneBotGroupMemberInfo, error) {
-	return r.getGroupMemberInfo(ctx, groupID, userID, r.CallOneBotAPI)
+	cfg := r.Config()
+	return r.getGroupMemberInfoForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, groupID, userID)
 }
 
 func (r *Runtime) getGroupMemberInfoForEvent(ctx context.Context, event MessageEvent, groupID string, userID string) (OneBotGroupMemberInfo, error) {
+	if provider, ok := eventChannelFor[GroupMemberChannel](r, event); ok {
+		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+		return provider.GroupMember(ctx, groupID, userID)
+	}
+	if !IsOneBotPlatform(r.currentPlatform(event)) {
+		return OneBotGroupMemberInfo{}, fmt.Errorf("当前平台未提供成员身份查询能力")
+	}
 	return r.getGroupMemberInfo(ctx, groupID, userID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
 		return r.callOneBotAPIForEvent(callCtx, event, action, params)
 	})
@@ -1017,13 +1040,13 @@ func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID
 }
 
 func (r *Runtime) GetGroupMemberList(ctx context.Context, groupID string) ([]OneBotGroupMemberInfo, error) {
-	return r.getGroupMemberList(ctx, groupID, r.CallOneBotAPI)
+	cfg := r.Config()
+	return r.getGroupMemberListForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, groupID)
 }
 
 func (r *Runtime) getGroupMemberListForEvent(ctx context.Context, event MessageEvent, groupID string) ([]OneBotGroupMemberInfo, error) {
-	return r.getGroupMemberList(ctx, groupID, func(callCtx context.Context, action string, params map[string]any) (map[string]any, error) {
-		return r.callOneBotAPIForEvent(callCtx, event, action, params)
-	})
+	directory, err := r.groupDirectoryForEvent(ctx, event, groupID)
+	return directory.Members, err
 }
 
 func (r *Runtime) getGroupMemberList(ctx context.Context, groupID string, call oneBotAPICaller) ([]OneBotGroupMemberInfo, error) {
@@ -1069,17 +1092,18 @@ func oneBotGroupInfoFromData(groupID string, data map[string]any) OneBotGroupInf
 func oneBotGroupMemberInfoFromData(groupID string, data map[string]any) OneBotGroupMemberInfo {
 	userID := firstNonEmpty(stringFromAny(data["user_id"]), stringFromAny(data["uin"]), stringFromAny(data["qq"]))
 	return OneBotGroupMemberInfo{
-		GroupID:   firstNonEmpty(stringFromAny(data["group_id"]), groupID),
-		UserID:    userID,
-		Nickname:  stringFromAny(data["nickname"]),
-		Card:      stringFromAny(data["card"]),
-		Role:      string(NormalizeGroupRole(stringFromAny(data["role"]))),
-		Title:     firstNonEmpty(stringFromAny(data["title"]), stringFromAny(data["special_title"])),
-		Sex:       stringFromAny(data["sex"]),
-		Age:       intFromAny(data["age"]),
-		Area:      stringFromAny(data["area"]),
-		Level:     stringFromAny(data["level"]),
-		AvatarURL: OneBotMemberAvatarURL(userID),
+		GroupID:            firstNonEmpty(stringFromAny(data["group_id"]), groupID),
+		UserID:             userID,
+		MembershipVerified: userID != "",
+		Nickname:           stringFromAny(data["nickname"]),
+		Card:               stringFromAny(data["card"]),
+		Role:               string(NormalizeGroupRole(stringFromAny(data["role"]))),
+		Title:              firstNonEmpty(stringFromAny(data["title"]), stringFromAny(data["special_title"])),
+		Sex:                stringFromAny(data["sex"]),
+		Age:                intFromAny(data["age"]),
+		Area:               stringFromAny(data["area"]),
+		Level:              stringFromAny(data["level"]),
+		AvatarURL:          OneBotMemberAvatarURL(userID),
 	}
 }
 
@@ -2601,7 +2625,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	}
 	if cfg.AgentEnabled && event.Kind == EventKindGroup {
 		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-			"diana.onebot_group：可实时读取当前群资料、完整成员列表和成员总数，并以本地图片模式匹配当前图片是否为群成员头像",
+			groupToolPrompt(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)}),
 		)
 		if r.llmStore != nil {
 			payload.AvailableReplyTools = append(payload.AvailableReplyTools,
@@ -2878,7 +2902,7 @@ func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEven
 }
 
 func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；diana.onebot_group 可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
+	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；群资料工具可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
 	const expressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
 	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard
@@ -5022,7 +5046,7 @@ func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event Me
 		}
 		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
 		if err != nil || member.UserID == "" {
-			lines = append(lines, "被@成员："+userID+"，头像："+OneBotMemberAvatarURL(userID))
+			lines = append(lines, "被@成员："+userID+"，头像："+MemberAvatarURL(r.currentPlatform(event), userID))
 			continue
 		}
 		lines = append(lines, "被@成员："+member.DisplayName()+" ("+member.UserID+")，头像："+member.AvatarURL)
@@ -6266,8 +6290,8 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool("diana.capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
 	}
-	if agentEnabled && hasTool("diana.onebot_group") {
-		builder.WriteString("\n" + promptToolOneBotGroup)
+	if agentEnabled && hasTool(groupToolName(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)})) {
+		builder.WriteString("\n" + groupToolPrompt(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)}))
 	}
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n" + promptToolRelationshipList)

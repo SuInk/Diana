@@ -168,7 +168,7 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 			`operation="edit" 且要编辑的是某人或本群的头像时，在这里点名头像来源；当前消息或引用消息本身带图时不要填。` +
 				`可选值："` + avatarSourceSender + `"（本条消息的发送者）、"` + avatarSourceBot + `"（机器人自己）、"` +
 				avatarSourceGroup + `"（本群的群头像）、"` + avatarSourceGroupPrefix + `<group_id>"（私聊里用户明确给出群号时的群头像）、"` +
-				avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 用真实 QQ 号）。` +
+				avatarSourceMemberPrefix + `<user_id>"（指定成员，user_id 使用当前平台的账号标识或其脱敏别名）。` +
 				`用户按名字或昵称指人时，先从上下文或群成员工具里查出对应 user_id 再填，不要编造；最多 ` +
 				strconv.Itoa(maxAvatarImageSources) + ` 个。`)
 	}
