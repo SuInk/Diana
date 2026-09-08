@@ -145,7 +145,7 @@ func (c *OneBotChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 
 // SendWithResult sends a message and preserves the OneBot response message_id.
 func (c *OneBotChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
-	if strings.TrimSpace(msg.Text) == "" && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 {
+	if strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
 		return nil, nil
 	}
 	params := map[string]any{"message": buildOutgoingSegments(msg)}
@@ -224,6 +224,11 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 			"type": "video",
 			"data": map[string]string{"file": videoURL},
 		})
+	}
+	for _, audio := range msg.AudioURLs {
+		if audio = strings.TrimSpace(audio); audio != "" {
+			segments = append(segments, map[string]any{"type": "record", "data": map[string]string{"file": audio}})
+		}
 	}
 	return segments
 }

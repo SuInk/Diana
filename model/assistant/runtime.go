@@ -8556,7 +8556,7 @@ func resolverPluginResponseVideoURLs(resp PluginResponse, messages []OutgoingMes
 }
 
 func outgoingMessageEmpty(msg OutgoingMessage) bool {
-	return strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0
+	return strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0
 }
 
 func nestedForwardPluginResponse(responses []PluginResponse) *PluginResponse {
@@ -8916,6 +8916,11 @@ func (r *Runtime) sendOutgoing(ctx context.Context, event MessageEvent, msg Outg
 
 func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent, msg OutgoingMessage) (map[string]any, error) {
 	msg = routeOutgoingToEvent(event, msg)
+	var audioErr error
+	msg, audioErr = r.prepareTelegramAudio(msg)
+	if audioErr != nil {
+		return nil, audioErr
+	}
 	msg = r.resolveOutgoingLocalImages(msg)
 	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
 	msg = r.resolveOutgoingMentionNames(event, msg)
@@ -9022,7 +9027,7 @@ func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDelive
 }
 
 func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage, attempts int) (map[string]any, error) {
-	if NormalizePlatformID(msg.Platform) == PlatformTelegram && (strings.TrimSpace(msg.Text) != "" || len(msg.ImageURLs)+len(msg.VideoURLs) > 1) && len(msg.ImageURLs)+len(msg.VideoURLs) > 0 {
+	if NormalizePlatformID(msg.Platform) == PlatformTelegram && (strings.TrimSpace(msg.Text) != "" || len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 1) && len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 0 {
 		return r.sendTelegramStepsWithRetry(ctx, msg, attempts)
 	}
 	return r.sendChannelPayloadWithRetry(ctx, msg, attempts)
@@ -9034,6 +9039,7 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 		text := msg
 		text.ImageURLs = nil
 		text.VideoURLs = nil
+		text.AudioURLs = nil
 		var err error
 		result, err = r.sendChannelPayloadWithRetry(ctx, text, attempts)
 		if err != nil {
@@ -9042,6 +9048,7 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 	}
 	for _, image := range msg.ImageURLs {
 		part := msg
+		part.AudioURLs = nil
 		part.Text = ""
 		part.ReplyMessageID = ""
 		part.MentionUserID = ""
@@ -9053,6 +9060,7 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 	}
 	for _, video := range msg.VideoURLs {
 		part := msg
+		part.AudioURLs = nil
 		part.Text = ""
 		part.ReplyMessageID = ""
 		part.MentionUserID = ""
@@ -9060,6 +9068,19 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 		part.VideoURLs = []string{video}
 		if _, err := r.sendChannelPayloadWithRetry(ctx, part, attempts); err != nil {
 			return result, err
+		}
+	}
+	for _, audio := range msg.AudioURLs {
+		part := msg
+		part.Text, part.MentionUserID = "", ""
+		part.ImageURLs, part.VideoURLs = nil, nil
+		part.AudioURLs = []string{audio}
+		sent, err := r.sendChannelPayloadWithRetry(ctx, part, attempts)
+		if err != nil {
+			return result, err
+		}
+		if result == nil {
+			result = sent
 		}
 	}
 	return result, nil
@@ -9230,6 +9251,11 @@ func outgoingSegmentsForHistory(msg OutgoingMessage) []MessageSegment {
 			Type: "video",
 			Data: map[string]string{"file": videoURL},
 		})
+	}
+	for _, audio := range msg.AudioURLs {
+		if strings.TrimSpace(audio) != "" {
+			segments = append(segments, MessageSegment{Type: "record", Data: map[string]string{"file": audio}})
+		}
 	}
 	return prependOutgoingReferenceSegments(segments, msg)
 }

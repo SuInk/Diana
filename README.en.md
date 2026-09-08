@@ -149,7 +149,7 @@ These ship with the binary — toggle and configure them in the console, no plug
 - **Web search** — time-sensitive questions get researched before answering; Exa first, Tavily as fallback.
 - **Link parsing** — videos and images from Bilibili / YouTube / X / Xiaohongshu / Douyin are resolved and posted right into the chat.
 - **File parsing** — group files, PDF, Office, and EPUB content is extracted and handed to the model.
-- **Song requests** — "play Sunny Day" gets you a voice message; NetEase Cloud Music, QQ Music, and Kugou are tried in turn.
+- **Song requests** — NetEase Cloud Music, QQ Music, and Kugou are tried in turn. OneBot QQ sends voice messages. Telegram uploads MP3 files with title and artist metadata for its native music player; no QQ music-card signing service is needed. Unavailable audio or preparation errors are reported as failures. QQ Official Bot, DingTalk, Feishu, and WeCom currently provide song-page links, not an in-chat player.
 - **Stickers** — picks a fitting sticker from the ones it has seen in the chat.
 - **Image understanding** — vision model + OCR (fully offline local options available), so even text-only models can "see" images.
 - **Rendered images** — tables, flowcharts, and sequence diagrams that plain text mangles get rendered to a picture when the model judges it worth it (Markdown / Mermaid / SVG; needs the headless browser from the "web rendering" plugin).

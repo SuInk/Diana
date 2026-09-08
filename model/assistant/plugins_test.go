@@ -1410,7 +1410,7 @@ func TestBuiltinPluginsDeclarePlatformSupport(t *testing.T) {
 			t.Fatalf("built-in plugin %s has no platform metadata", state.Manifest.ID)
 		}
 	}
-	for _, id := range []string{oneBotV11PluginID, musicPluginID, voiceTTSPluginID} {
+	for _, id := range []string{oneBotV11PluginID, voiceTTSPluginID} {
 		state, ok := manager.Get(id)
 		if !ok || len(state.Manifest.Platforms) != 1 || state.Manifest.Platforms[0] != PlatformOneBotV11 {
 			t.Fatalf("%s platforms = %#v", id, state.Manifest.Platforms)
@@ -1432,10 +1432,10 @@ func TestAgentToolsAreFilteredByCurrentPlatform(t *testing.T) {
 	for _, tool := range tools {
 		names[tool.Name()] = true
 	}
-	if names["diana.music"] || names["diana.tts"] || names[dianaOneBotV11ToolName] {
+	if names["diana.tts"] || names[dianaOneBotV11ToolName] {
 		t.Fatalf("OneBot-only tools exposed on Telegram: %#v", names)
 	}
-	if !names["diana.capabilities"] || !names["web_search.search"] {
+	if !names["diana.capabilities"] || !names["web_search.search"] || !names["diana.music"] {
 		t.Fatalf("cross-platform tools missing on Telegram: %#v", names)
 	}
 }
