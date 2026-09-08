@@ -363,6 +363,15 @@ CREATE TABLE IF NOT EXISTS app_state (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS image_model_records (
+  scope TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(scope, message_id)
+);
+CREATE INDEX IF NOT EXISTS image_model_records_recent ON image_model_records(scope, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_logs (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
