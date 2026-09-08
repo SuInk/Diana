@@ -52,27 +52,7 @@
           <div class="input-group"><input id="rss-watch-interval" v-model.number="form.interval_seconds" class="input" type="number" :min="minimumIntervalSeconds" :max="maximumIntervalSeconds" step="60" /><span class="repository-watch-unit">秒</span></div>
           <span class="hint">可设置 5 分钟至 365 天；默认 15 分钟。</span>
         </div>
-        <div v-if="!editingTask" class="field">
-          <label for="rss-watch-profile">发送机器人</label>
-          <AppSelect id="rss-watch-profile" v-model="form.profile_id" :options="profileOptions" />
-        </div>
-        <div v-if="!editingTask" class="field wide">
-          <label>通知位置</label>
-          <div class="segmented repository-watch-destination" role="radiogroup" aria-label="通知位置">
-            <button type="button" role="radio" :aria-checked="form.destination === 'private'" :class="{ active: form.destination === 'private' }" @click="form.destination = 'private'">私聊对象</button>
-            <button type="button" role="radio" :aria-checked="form.destination === 'group'" :class="{ active: form.destination === 'group' }" @click="form.destination = 'group'">群聊</button>
-          </div>
-        </div>
-        <div v-if="!editingTask && form.destination === 'group'" class="field wide">
-          <label for="rss-watch-group">群号 / Chat ID</label>
-          <AppSelect v-if="groupOptions.length" id="rss-watch-group" v-model="form.group_id" :options="groupOptions" />
-          <input v-else id="rss-watch-group" v-model.trim="form.group_id" class="input" type="text" placeholder="群号或 Telegram 群 Chat ID" />
-        </div>
-        <div v-if="!editingTask && form.destination === 'private'" class="field wide">
-          <label for="rss-watch-user">私聊对象 ID</label>
-          <input id="rss-watch-user" v-model.trim="form.user_id" class="input" type="text" placeholder="账号或 Telegram Chat ID" />
-          <AccountNameHint :user-id="form.user_id" :profile="form.profile_id" />
-        </div>
+        <div class="field wide"><label>通知目标</label><SubscriptionTargetsEditor v-model="form.notification_targets" :profiles="profiles" :groups="joinedGroups" :default-profile="form.profile_id" /></div>
       </div>
       <div class="repository-watch-editor-actions">
         <button class="btn small" type="button" :disabled="saving" @click="stopEditing">取消</button>
@@ -86,7 +66,7 @@
         <div class="repository-watch-manager-main">
           <div class="cluster"><strong>{{ watchTitle(task) }}</strong><span v-if="sourceCount(task) > 1" class="badge">{{ sourceCount(task) }} 个来源</span><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
           <p class="rss-watch-rule-summary">{{ task.feed_judge_prompt }}</p>
-          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><SubscriptionDestination :platform="task.platform || profiles.find((profile) => profile.id === task.profile_id)?.platform" :profile-id="task.profile_id" :group-id="task.group_id" :user-id="task.user_id" /><a v-for="source in taskSources(task)" :key="source.feed_url" :href="source.feed_url" target="_blank" rel="noreferrer" style="overflow-wrap: anywhere; max-width: 100%">{{ sourceLabel(source) }}</a></div>
+          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><SubscriptionDestination v-for="(target, index) in task.notification_targets?.length ? task.notification_targets : [{ profile_id: task.profile_id, platform: task.platform, group_id: task.group_id, user_id: task.user_id }]" :key="index" :platform="target.platform || profiles.find(p => p.id === target.profile_id)?.platform" :profile-id="target.profile_id" :profile-name="profiles.find(p => p.id === target.profile_id)?.name" :group-id="target.group_id" :user-id="target.user_id" /><a v-for="source in taskSources(task)" :key="source.feed_url" :href="source.feed_url" target="_blank" rel="noreferrer" style="overflow-wrap: anywhere; max-width: 100%">{{ sourceLabel(source) }}</a></div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
         <div class="repository-watch-manager-actions">
@@ -101,15 +81,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { CircleX, LoaderCircle, Pencil, Plus, Trash2 } from "@lucide/vue";
 import { cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, listBotGroups, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type BotGroupSummary, type RSSWatchSource } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
-import AccountNameHint from "./AccountNameHint.vue";
-import AppSelect from "./AppSelect.vue";
+import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
 import SubscriptionDestination from "./SubscriptionDestination.vue";
-import { rssSourceLabel, subscriptionPlatformLabel } from "../rss-display";
+import { rssSourceLabel } from "../rss-display";
 
 const props = defineProps<{ prepareAccess?: () => Promise<void>; profileId?: string }>();
 const minimumIntervalSeconds = 5 * 60;
@@ -117,7 +96,7 @@ const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = 15 * 60;
 // 和后端 maximumRSSWatchSources 保持一致：再多就该拆成两条订阅。
 const maximumSources = 10;
-const emptyForm = () => ({ source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "", destination: "private" as "private" | "group", group_id: "", user_id: "" });
+const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], judge_prompt: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -125,19 +104,16 @@ const loading = ref(false), saving = ref(false), busyID = ref(""), editing = ref
 const editingTask = ref<AssistantTask | null>(null);
 const editorSnapshot = ref("");
 const form = ref(emptyForm());
-const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: `${profile.name || '未命名机器人'}（${profile.bot_account || profile.id}）`, hint: subscriptionPlatformLabel(profile.platform) })).filter((option) => option.value));
-const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
-const groupOptions = computed(() => joinedGroups.value.filter((group) => group.joined && (group.bot_profile_id === form.value.profile_id || (!group.bot_profile_id && props.profileId === form.value.profile_id))).map((group) => ({ value: group.group_id, label: group.group_name ? `${group.group_name}（${group.group_id}）` : group.group_id, hint: subscriptionPlatformLabel(selectedProfile.value?.platform) })));
 
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups(false, props.profileId ?? "").catch(() => ({ groups: [] }))]);
-    watches.value = tasks.items.filter((task) => task.kind === "rss_watch" && (!props.profileId || task.profile_id === props.profileId)); profiles.value = (config.profiles?.length ? config.profiles : [config]).filter((profile) => !props.profileId || profile.id === props.profileId); joinedGroups.value = groups.groups;
-    if (!form.value.profile_id) form.value.profile_id = profiles.value[0]?.id || "";
+    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups(false).catch(() => ({ groups: [] }))]);
+    watches.value = tasks.items.filter((task) => task.kind === "rss_watch" && (!props.profileId || task.profile_id === props.profileId || task.notification_targets?.some(target => target.profile_id === props.profileId))); profiles.value = (config.profiles?.length ? config.profiles : [config]); joinedGroups.value = groups.groups;
+    if (!form.value.profile_id) form.value.profile_id = props.profileId || profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }
 }
-function startCreate(): void { const profileID = form.value.profile_id || profiles.value[0]?.id || ""; form.value = { ...emptyForm(), profile_id: profileID }; editingTask.value = null; editing.value = true; markEditorClean(); }
+function startCreate(): void { const profileID = props.profileId || form.value.profile_id || profiles.value[0]?.id || ""; form.value = { ...emptyForm(), profile_id: profileID }; editingTask.value = null; editing.value = true; markEditorClean(); }
 
 // 和仓库编辑器同样的处理：改动只在本地表单里，关掉之前必须问一次。
 function markEditorClean(): void { editorSnapshot.value = JSON.stringify(form.value); }
@@ -164,7 +140,7 @@ function startEdit(task: AssistantTask): void {
   const kind = sources[0]?.source === "twitter" ? "twitter" : "rss";
   const handles = sources.filter((source) => source.source === "twitter").map((source) => source.handle ?? "");
   const urls = sources.filter((source) => source.source !== "twitter").map((source) => source.feed_url);
-  form.value = { source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "", destination: task.group_id ? "group" : "private", group_id: task.group_id ?? "", user_id: task.user_id ?? "" };
+  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], judge_prompt: task.feed_judge_prompt ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
   editing.value = true;
   markEditorClean();
 }
@@ -182,15 +158,14 @@ async function save(): Promise<void> {
   if (form.value.source === "rss" && !urls.length) return toastError("请填写 Feed URL");
   if (!form.value.judge_prompt) return toastError("请填写判断与回复规则");
   if (form.value.interval_seconds < minimumIntervalSeconds || form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期必须在 5 分钟到 365 天之间");
-  if (!editingTask.value && !form.value.profile_id) return toastError("请选择发送机器人");
-  if (!editingTask.value && form.value.destination === "group" && !form.value.group_id) return toastError("请填写群号或 Chat ID");
-  if (!editingTask.value && form.value.destination === "private" && !form.value.user_id) return toastError("请填写私聊对象 ID");
+
+  if (!form.value.notification_targets.length || form.value.notification_targets.some(t => !t.profile_id || !(t.destination === "group" ? t.group_id : t.user_id))) return toastError("请为每个通知目标选择机器人并填写会话 ID");
   saving.value = true;
   try {
     await props.prepareAccess?.();
     const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: urls, twitter_handles: [] };
-    const common = { ...source, judge_prompt: form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
-    if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.profile_id, destination: form.value.destination, group_id: form.value.destination === "group" ? form.value.group_id : undefined, user_id: form.value.destination === "private" ? form.value.user_id : undefined });
+    const common = { notification_targets: form.value.notification_targets, ...source, judge_prompt: form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
+    if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.notification_targets[0]?.profile_id });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅保存失败"); } finally { saving.value = false; }
 }

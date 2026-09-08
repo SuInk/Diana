@@ -241,6 +241,7 @@ type Reminder struct {
 	FailureAlertedAt        time.Time    `json:"failure_alerted_at,omitempty"`
 	RecoveryNoticePending   bool         `json:"recovery_notice_pending,omitempty"`
 	PendingDelivery         string       `json:"pending_delivery,omitempty"`
+	PendingDeliveredTargets []string     `json:"pending_delivered_targets,omitempty"`
 	// PendingDeliveryReference 是仓库通知补投成功后生成跟评所需的私有参考资料。
 	// 它不发送到会话，只避免投递失败后丢失仓库简介、正文和 diff。
 	PendingDeliveryReference string    `json:"pending_delivery_reference,omitempty"`

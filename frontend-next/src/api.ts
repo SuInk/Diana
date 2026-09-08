@@ -358,6 +358,7 @@ export interface PluginManifest {
 }
 
 export interface PluginState {
+  shared_config_source?: string;
   profile_enabled?: Record<string, boolean>;
   manifest: PluginManifest;
   installed: boolean;
@@ -2341,6 +2342,8 @@ export interface AssistantTask {
 }
 
 export interface RepositoryWatchTarget {
+  profile_id?: string;
+  platform?: string;
   destination: "private" | "group";
   group_id?: string;
   user_id?: string;
@@ -2381,6 +2384,7 @@ export interface RSSWatchSource {
 }
 
 export interface RSSWatchInput {
+  notification_targets?: RepositoryWatchTarget[];
   feed_url?: string;
   twitter_handle?: string;
   feed_urls?: string[];

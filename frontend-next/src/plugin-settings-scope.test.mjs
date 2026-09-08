@@ -8,7 +8,7 @@ test("plugin settings preserve the request scope across asynchronous saves", asy
   assert.match(source, /updatePluginSettings\(repositoryPublishPluginID, publishPayload, publishClears, scope\)/);
   assert.match(source, /if \(scope !== botScope\.value\) return;/);
   assert.doesNotMatch(source, /跟随全局默认|全局默认开关|inheritPluginSettings|settings_inherited/);
-  assert.match(source, /if \(!scope\)/);
+  assert.match(source, /所有机器人共用此插件配置/);
   assert.doesNotMatch(source, /共享插件设置/);
 });
 
@@ -23,6 +23,7 @@ test("subscription editors use their parent robot profile", async () => {
   for (const view of ["RepositoryWatchManager", "RSSWatchManager"]) {
     const source = await readFile(new URL(`./components/${view}.vue`, import.meta.url), "utf8");
     assert.match(source, /task\.profile_id === props\.profileId/);
-    assert.match(source, /profile\.id === props\.profileId/);
+    assert.match(source, /SubscriptionTargetsEditor/);
+    assert.match(source, /target\.profile_id === props\.profileId/);
   }
 });

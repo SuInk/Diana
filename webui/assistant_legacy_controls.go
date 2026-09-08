@@ -105,6 +105,8 @@ type repositoryWatchCreatePayload struct {
 }
 
 type repositoryWatchTargetPayload struct {
+	ProfileID   string `json:"profile_id,omitempty"`
+	Platform    string `json:"platform,omitempty"`
 	Destination string `json:"destination"`
 	GroupID     string `json:"group_id,omitempty"`
 	UserID      string `json:"user_id,omitempty"`
@@ -133,8 +135,9 @@ type repositoryWatchUpdatePayload struct {
 }
 
 type rssWatchCreatePayload struct {
-	FeedURL       string `json:"feed_url,omitempty"`
-	TwitterHandle string `json:"twitter_handle,omitempty"`
+	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
+	FeedURL             string                         `json:"feed_url,omitempty"`
+	TwitterHandle       string                         `json:"twitter_handle,omitempty"`
 	// 多来源写法：一条订阅盯一批账号或 Feed，共用同一套判断规则。
 	FeedURLs        []string `json:"feed_urls,omitempty"`
 	TwitterHandles  []string `json:"twitter_handles,omitempty"`
@@ -147,12 +150,13 @@ type rssWatchCreatePayload struct {
 }
 
 type rssWatchUpdatePayload struct {
-	FeedURL         *string   `json:"feed_url,omitempty"`
-	TwitterHandle   *string   `json:"twitter_handle,omitempty"`
-	FeedURLs        *[]string `json:"feed_urls,omitempty"`
-	TwitterHandles  *[]string `json:"twitter_handles,omitempty"`
-	JudgePrompt     *string   `json:"judge_prompt,omitempty"`
-	IntervalSeconds int64     `json:"interval_seconds,omitempty"`
+	NotificationTargets *[]repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
+	FeedURL             *string                         `json:"feed_url,omitempty"`
+	TwitterHandle       *string                         `json:"twitter_handle,omitempty"`
+	FeedURLs            *[]string                       `json:"feed_urls,omitempty"`
+	TwitterHandles      *[]string                       `json:"twitter_handles,omitempty"`
+	JudgePrompt         *string                         `json:"judge_prompt,omitempty"`
+	IntervalSeconds     int64                           `json:"interval_seconds,omitempty"`
 }
 
 // rssWatchSourcePayload 是一条 RSS 订阅里的单个来源。
@@ -480,7 +484,11 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("destination 必须是 private 或 group"), payload.Repository, nil)
 		return
 	}
-	targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile)
+	targets, err := h.subscriptionTargets(payload.NotificationTargets, profile)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
+		return
+	}
 	notificationEnabled := payload.NotificationEnabled == nil || *payload.NotificationEnabled
 	if len(targets) == 0 && (notificationEnabled || strings.TrimSpace(payload.GroupID) != "" || strings.TrimSpace(payload.UserID) != "") {
 		groupID, userID := "", ""
@@ -549,7 +557,11 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", profileErr, c.Param("id"), nil)
 			return
 		}
-		targets := repositoryWatchTargetsFromPayload(payload.NotificationTargets, profile)
+		targets, err := h.subscriptionTargets(payload.NotificationTargets, profile)
+		if err != nil {
+			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
+			return
+		}
 		if len(targets) == 0 && payload.NotificationEnabled != nil && *payload.NotificationEnabled {
 			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("启用通知时至少填写一个群聊或私聊对象"), c.Param("id"), nil)
 			return
@@ -568,6 +580,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		if destination == "none" {
 			// Notification is intentionally disabled; retain no primary target.
 		} else if destination == "targets" {
+			profile.Platform, profile.ID = targets[0].Platform, targets[0].ProfileID
 			groupID, userID = targets[0].GroupID, targets[0].UserID
 		} else if destination == "group" {
 			groupID = strings.TrimSpace(payload.GroupID)
@@ -687,6 +700,18 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, payload.FeedURL, nil)
 		return
 	}
+	targets, err := h.subscriptionTargets(payload.NotificationTargets, profile)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, "", nil)
+		return
+	}
+	if len(targets) > 0 {
+		payload.GroupID, payload.UserID = targets[0].GroupID, targets[0].UserID
+		payload.Destination = "private"
+		if payload.GroupID != "" {
+			payload.Destination = "group"
+		}
+	}
 	destination := strings.ToLower(strings.TrimSpace(payload.Destination))
 	if destination == "" {
 		destination = "private"
@@ -710,7 +735,8 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		}
 	}
 	item, err := manager.CreateRSSWatch(c.Request.Context(), assistant.RSSWatchCreateInput{
-		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle,
+		NotificationTargets: targets,
+		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
 		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
 		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
@@ -740,8 +766,21 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.update", err, c.Param("id"), nil)
 		return
 	}
+	var targets *[]assistant.ReminderDeliveryTarget
+	if payload.NotificationTargets != nil {
+		values, err := h.subscriptionTargets(*payload.NotificationTargets, assistant.BotConfig{})
+		if err != nil || len(values) == 0 {
+			if err == nil {
+				err = fmt.Errorf("至少配置一个通知目标")
+			}
+			h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.update", err, c.Param("id"), nil)
+			return
+		}
+		targets = &values
+	}
 	item, err := manager.UpdateRSSWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RSSWatchUpdateInput{
-		FeedURL: payload.FeedURL, TwitterHandle: payload.TwitterHandle,
+		NotificationTargets: targets,
+		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
 		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, JudgePrompt: payload.JudgePrompt,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 	})
@@ -889,11 +928,11 @@ func reminderDeliveryTargetsForWeb(item assistant.Reminder) []repositoryWatchTar
 	for _, target := range stored {
 		// destination 由实际填了哪个 ID 反推，存储层不额外记一份，避免两处不一致。
 		if groupID := strings.TrimSpace(target.GroupID); groupID != "" {
-			targets = append(targets, repositoryWatchTargetPayload{Destination: "group", GroupID: groupID})
+			targets = append(targets, repositoryWatchTargetPayload{ProfileID: target.ProfileID, Platform: target.Platform, Destination: "group", GroupID: groupID})
 			continue
 		}
 		if userID := strings.TrimSpace(target.UserID); userID != "" {
-			targets = append(targets, repositoryWatchTargetPayload{Destination: "private", UserID: userID})
+			targets = append(targets, repositoryWatchTargetPayload{ProfileID: target.ProfileID, Platform: target.Platform, Destination: "private", UserID: userID})
 		}
 	}
 	return targets

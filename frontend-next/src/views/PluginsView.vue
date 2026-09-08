@@ -6,7 +6,7 @@
     <header class="view-header plugins-view-header">
       <div class="view-title">
         <h1>插件</h1>
-        <p>{{ botScope ? "当前机器人的独立开关、参数与凭据" : "请先选择要配置的机器人" }} · OpenAPI 位于系统设置</p>
+        <p>{{ botScope ? "当前机器人的插件开关与配置" : "共享插件配置" }} · OpenAPI 位于系统设置</p>
       </div>
       <div class="view-actions">
         <div class="plugin-search">
@@ -77,7 +77,7 @@
         <div class="plugin-card-head">
           <h2 class="plugin-card-name">{{ pluginDisplayName(plugin) }}</h2>
           <label
-            v-if="plugin.installed"
+            v-if="plugin.installed && botScope"
             class="switch"
             :title="pluginEnabled(plugin) ? '点击停用' : '点击启用'"
           >
@@ -194,7 +194,7 @@
       :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID"
       @close="closeSettings"
     >
-      <p class="hint">设置和凭据仅用于当前机器人；恢复默认只恢复插件内置默认值。</p>
+      <p class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
       <!-- Dependencies expand only when attention is needed. -->
       <details
         v-if="dependenciesFor(settingsTarget.manifest.id).length"
@@ -217,6 +217,8 @@
         />
       </details>
 
+      <p class="hint">所有机器人共用此插件配置，启用状态各自独立。</p>
+      <p v-if="settingsTarget.shared_config_source" class="hint">当前共享配置迁移自机器人 {{ settingsTarget.shared_config_source }}，旧的独立配置仍保留在存储中。</p>
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'config'" :class="{ active: githubSettingsTab === 'config' }" @click="githubSettingsTab = 'config'">配置信息</button>
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'repositories'" :class="{ active: githubSettingsTab === 'repositories' }" @click="githubSettingsTab = 'repositories'">仓库管理</button>
@@ -354,7 +356,7 @@
         </template>
       </div>
       <RepositoryWatchManager
-        v-if="isGitHubSettings && githubSettingsTab === 'repositories' && botScope"
+        v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
         :profile-id="botScope"
         ref="repositoryWatchRef"
         :prepare-access="saveSettingsForSubscription"
@@ -380,7 +382,6 @@
         @update:manager-user-access="repositoryPublishForm.issue_manager_user_access = $event"
         @update:manager-group-access="repositoryPublishForm.issue_manager_group_access = $event"
       />
-      <p v-if="!botScope && (isGitHubSettings || settingsTarget.manifest.id === rssWatchPluginID)" class="hint">选择具体机器人后管理其订阅；全部订阅仍可在任务页查看。</p>
       <div v-if="isGitHubSettings && githubSettingsTab === 'records'" class="github-run-records">
         <div class="plugin-settings-section-head">
           <h3>运行记录</h3>
@@ -392,7 +393,7 @@
         </div>
       </div>
       <RSSWatchManager
-        v-if="settingsTarget.manifest.id === rssWatchPluginID && botScope"
+        v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :profile-id="botScope"
         ref="rssWatchRef"
         :prepare-access="saveSettingsForSubscription"
@@ -691,11 +692,10 @@ async function reload(): Promise<void> {
   const scope = botScope.value;
   loading.value = true;
   loadError.value = "";
-  if (!scope) { plugins.value = []; loading.value = false; return; }
   try {
     const states = await listPlugins(scope);
     if (requestID !== reloadID || scope !== botScope.value) return;
-    plugins.value = states;
+    plugins.value = states.filter(plugin => plugin.manifest.id !== "official.open-api");
     const requestedSettings = viewQuery().get("settings");
     if (!settingsTarget.value && requestedSettings) {
       const target = plugins.value.find((plugin) => plugin.manifest.id === requestedSettings && plugin.installed);

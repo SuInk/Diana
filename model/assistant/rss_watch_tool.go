@@ -23,6 +23,7 @@ const (
 )
 
 type RSSWatchCreateInput struct {
+	NotificationTargets                 []ReminderDeliveryTarget
 	FeedURL, TwitterHandle, JudgePrompt string
 	// FeedURLs / TwitterHandles 是多来源写法，和单数字段合并后共用同一套规则。
 	FeedURLs, TwitterHandles                                        []string
@@ -31,6 +32,7 @@ type RSSWatchCreateInput struct {
 }
 
 type RSSWatchUpdateInput struct {
+	NotificationTargets                 *[]ReminderDeliveryTarget
 	FeedURL, TwitterHandle, JudgePrompt *string
 	FeedURLs, TwitterHandles            *[]string
 	Interval                            time.Duration
@@ -214,6 +216,15 @@ func parseRSSWatchInterval(raw string) (time.Duration, error) {
 }
 
 func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput) (Reminder, error) {
+	if len(input.NotificationTargets) > 0 {
+		input.NotificationTargets = normalizeReminderDeliveryTargets(input.NotificationTargets)
+		if len(input.NotificationTargets) == 0 {
+			return Reminder{}, fmt.Errorf("通知目标不能为空")
+		}
+		first := input.NotificationTargets[0]
+		input.Platform, input.ProfileID, input.ContextNamespace = first.Platform, first.ProfileID, first.ContextNamespace
+		input.GroupID, input.UserID = first.GroupID, first.UserID
+	}
 	event := MessageEvent{Platform: strings.TrimSpace(input.Platform), ProfileID: strings.TrimSpace(input.ProfileID), ContextNamespace: strings.TrimSpace(input.ContextNamespace), GroupID: strings.TrimSpace(input.GroupID), UserID: strings.TrimSpace(input.UserID)}
 	if event.GroupID != "" {
 		event.Kind = EventKindGroup
@@ -262,7 +273,7 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 		sources[index].Name = feedName
 		sources[index].LastItemID, sources[index].LastPublishedAt = baseline.ItemID, baseline.PublishedAt
 	}
-	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), judge, interval, sources)
+	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), judge, interval, sources, input.NotificationTargets...)
 }
 
 // resolveRSSWatchSources 把用户填的一堆用户名和 Feed 地址整理成来源列表。
@@ -348,7 +359,7 @@ func rssWatchMessage(sources []ReminderFeedSource) string {
 	return "监控 " + strings.Join(labels, "、")
 }
 
-func (r *Runtime) addRSSWatch(event MessageEvent, owner, judge string, interval time.Duration, sources []ReminderFeedSource) (Reminder, error) {
+func (r *Runtime) addRSSWatch(event MessageEvent, owner, judge string, interval time.Duration, sources []ReminderFeedSource, targets ...ReminderDeliveryTarget) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -356,7 +367,8 @@ func (r *Runtime) addRSSWatch(event MessageEvent, owner, judge string, interval 
 	defer r.reminderMu.Unlock()
 	now := time.Now()
 	item := Reminder{
-		ID: uuid.NewString()[:8], Kind: ReminderKindRSSWatch, Platform: event.Platform, ProfileID: event.ProfileID,
+		NotificationTargetsJSON: encodeReminderDeliveryTargets(normalizeReminderDeliveryTargets(targets)),
+		ID:                      uuid.NewString()[:8], Kind: ReminderKindRSSWatch, Platform: event.Platform, ProfileID: event.ProfileID,
 		ContextNamespace: event.ContextNamespace, OwnerID: owner, GroupID: event.GroupID, UserID: event.UserID,
 		Message: rssWatchMessage(sources), FeedJudgePrompt: judge,
 		TriggerAt: now.Add(interval), IntervalSeconds: int64(interval / time.Second), CreatedAt: now,
@@ -451,6 +463,17 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		sources[index].LastItemID, sources[index].LastPublishedAt = baseline.ItemID, baseline.PublishedAt
 	}
 	return r.mutateRSSWatch(owner, id, func(item *Reminder) error {
+		if input.NotificationTargets != nil {
+			targets := normalizeReminderDeliveryTargets(*input.NotificationTargets)
+			if len(targets) == 0 {
+				return fmt.Errorf("至少配置一个通知目标")
+			}
+			item.NotificationTargetsJSON = encodeReminderDeliveryTargets(targets)
+			first := targets[0]
+			item.Platform, item.ProfileID, item.ContextNamespace = first.Platform, first.ProfileID, first.ContextNamespace
+			item.GroupID, item.UserID = first.GroupID, first.UserID
+		}
+		item.PendingDeliveredTargets = nil
 		item.FeedJudgePrompt = judge
 		item.IntervalSeconds, item.TriggerAt = int64(interval/time.Second), time.Now().Add(interval)
 		item.PendingDelivery, item.PendingSince, item.LastError, item.ConsecutiveFailures = "", time.Time{}, "", 0
