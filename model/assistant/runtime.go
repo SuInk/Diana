@@ -11622,14 +11622,15 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		if item.ID != id || !reminderIsRepositoryWatch(*item) {
 			continue
 		}
+		previousPullCursor, previousIssueCursor := item.LastPullRequestCursor, item.LastIssueCursor
 		if item.WatchCommits && strings.TrimSpace(snapshot.CommitSHA) != "" {
 			item.LastCommitSHA = snapshot.CommitSHA
 		}
 		if item.WatchPullRequests && strings.TrimSpace(snapshot.PullRequestCursor) != "" {
-			item.LastPullRequestCursor = snapshot.PullRequestCursor
+			item.LastPullRequestCursor = observedRepositoryWatchCursor(item.Repository, "pull_request", item.LastPullRequestCursor, snapshot.PullRequestCursor)
 		}
 		if item.WatchIssues && strings.TrimSpace(snapshot.IssueCursor) != "" {
-			item.LastIssueCursor = snapshot.IssueCursor
+			item.LastIssueCursor = observedRepositoryWatchCursor(item.Repository, "issue", item.LastIssueCursor, snapshot.IssueCursor)
 		}
 		if item.WatchReleases {
 			item.LastReleaseTag = snapshot.ReleaseTag
@@ -11652,6 +11653,9 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		}
 		if err := r.reminders.SaveReminders(items); err != nil {
 			return fmt.Errorf("保存仓库更新订阅游标: %w", err)
+		}
+		if item.LastPullRequestCursor != previousPullCursor || item.LastIssueCursor != previousIssueCursor {
+			log.Printf("diana repository_watch cursor saved: id=%s repository=%q pr_before=%q pr_after=%q issue_before=%q issue_after=%q", id, item.Repository, previousPullCursor, item.LastPullRequestCursor, previousIssueCursor, item.LastIssueCursor)
 		}
 		return nil
 	}
