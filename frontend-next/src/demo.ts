@@ -71,11 +71,9 @@ const telegramProfile: BotProfileConfig = {
 
 let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "bot-onebot", profiles: [oneBotProfile, telegramProfile] };
 
-const demoPluginProfileSettings: Record<string, Record<string, Record<string, unknown>>> = {};
 
 function demoPluginForProfile(plugin: PluginState, profile: string): PluginState {
-  const own = plugin.manifest.id !== "official.open-api" && profile ? demoPluginProfileSettings[plugin.manifest.id]?.[profile] : undefined;
-  const settings = { ...(plugin.manifest.id === "official.open-api" ? plugin.settings : own) };
+  const settings = { ...plugin.settings };
   const secrets: Record<string, boolean> = {};
   for (const spec of plugin.manifest.settings ?? []) if (spec.secret) {
     secrets[spec.key] = Boolean(settings[spec.key]);
@@ -159,9 +157,7 @@ let plugins: PluginState[] = [
 ];
 
 for (const plugin of plugins) if (plugin.manifest.id !== "official.open-api") {
-  demoPluginProfileSettings[plugin.manifest.id] = Object.fromEntries((assistantConfig.profiles ?? []).map((profile) => [profile.id!, structuredClone(plugin.settings ?? {})]));
   plugin.profile_enabled = Object.fromEntries((assistantConfig.profiles ?? []).map((profile) => [profile.id!, plugin.enabled]));
-  plugin.settings = undefined;
   plugin.enabled = !plugin.manifest.default_disabled;
 }
 
@@ -414,7 +410,7 @@ export const demoStatus: BotStatus = {
 let tasks: AssistantTask[] = [
   { id: "task-reminder-01", kind: "reminder", platform: "onebot-v11", owner_id: "100200301", user_id: "100200301", message: "15:30 提醒提交周报", status: "active", trigger_at: after(70), created_at: before(20), consumes_quota: true },
   { id: "task-schedule-02", kind: "schedule", platform: "telegram", owner_id: "880024", user_id: "880024", message: "每天整理 AI 行业资讯并附来源", status: "active", trigger_at: after(180), interval_seconds: 86400, last_run_at: before(1260), created_at: before(4800), consumes_quota: true },
-  { id: "task-repo-03", kind: "repository_watch", platform: "onebot-v11", owner_id: "", group_id: "100200301", message: "Diana 仓库动态", status: "active", trigger_at: after(1), interval_seconds: 60, last_run_at: before(1), repository: "SuInk/Diana", repository_branch: "main", watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, last_commit_sha: "26ebc1bed07e9e5b", last_release_tag: "v0.8.6", last_star_count: 128, created_at: before(3800), consumes_quota: true },
+  { id: "task-repo-03", kind: "repository_watch", profile_id: "bot-onebot", platform: "onebot-v11", owner_id: "", group_id: "100200301", message: "Diana 仓库动态", status: "active", trigger_at: after(1), interval_seconds: 60, last_run_at: before(1), repository: "SuInk/Diana", repository_branch: "main", watch_commits: true, watch_pull_requests: true, watch_releases: true, watch_stars: true, last_commit_sha: "26ebc1bed07e9e5b", last_release_tag: "v0.8.6", last_star_count: 128, created_at: before(3800), consumes_quota: true },
   { id: "task-rss-04", kind: "rss_watch", platform: "telegram", profile_id: "bot-telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_sources: [{ feed_url: "https://github.com/SuInk/Diana/releases.atom", source: "rss", name: "Diana Release Feed" }], feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
 ];
 
@@ -603,7 +599,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
   if (path === "/api/assistant/plugins") {
     const profile = url.searchParams.get("profile") ?? "";
-    return json(plugins.filter((plugin) => profile ? plugin.manifest.id !== "official.open-api" : plugin.manifest.id === "official.open-api").map((plugin) => demoPluginForProfile(plugin, profile)));
+    return json(plugins.filter((plugin) => !profile || plugin.manifest.id !== "official.open-api").map((plugin) => demoPluginForProfile(plugin, profile)));
   }
   if (path === "/api/assistant/plugins/repository-publish/drafts") {
     const drafts = [{
@@ -635,7 +631,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (pluginMatch) {
     const plugin = plugins.find((item) => item.manifest.id === decodeURIComponent(pluginMatch[1]));
     if (!plugin) return json({ error: "演示插件不存在" }, 404);
-    if (["settings", "enabled"].includes(pluginMatch[2]) && plugin.manifest.id !== "official.open-api" && !url.searchParams.get("profile")) return json({ error: "请选择具体机器人" }, 400);
+    if (pluginMatch[2] === "enabled" && plugin.manifest.id !== "official.open-api" && !url.searchParams.get("profile")) return json({ error: "请选择具体机器人" }, 400);
     if (body.inherit) return json({ error: "插件配置不再支持继承" }, 400);
     if (pluginMatch[2] === "install") plugin.installed = true;
     if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; }
@@ -649,17 +645,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     const profile = url.searchParams.get("profile") ?? "";
     if (pluginMatch[2] === "settings") {
-      const scoped = Boolean(profile && plugin.manifest.id !== "official.open-api");
-      const saved = demoPluginProfileSettings[plugin.manifest.id] ??= {};
       {
-        const previous = (scoped ? saved[profile] : plugin.settings) ?? {};
+        const previous = plugin.settings ?? {};
         const next = { ...((body.settings as Record<string, unknown>) ?? {}) };
         const cleared = new Set((body.clear_secrets as string[]) ?? []);
         for (const spec of plugin.manifest.settings ?? []) if (spec.secret) {
           if (cleared.has(spec.key)) delete next[spec.key];
           else if (!next[spec.key] && previous[spec.key]) next[spec.key] = previous[spec.key];
         }
-        if (scoped) saved[profile] = next; else plugin.settings = next;
+        plugin.settings = next;
       }
     }
     plugins = [...plugins]; demoStatus.plugins = plugins; return json(demoPluginForProfile(plugin, profile));
@@ -941,7 +935,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const demoHandles = [...(Array.isArray(body.twitter_handles) ? body.twitter_handles : []), body.twitter_handle].map((value) => String(value ?? "").trim()).filter(Boolean);
     const demoFeeds = [...(Array.isArray(body.feed_urls) ? body.feed_urls : []), body.feed_url].map((value) => String(value ?? "").trim()).filter(Boolean);
     const demoSources: RSSWatchSource[] = [...demoHandles.map((handle) => ({ feed_url: `https://x.com/${handle}`, source: "twitter" as const, handle })), ...demoFeeds.map((feed_url) => ({ feed_url, source: "rss" as const }))];
-    const task: AssistantTask = { id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? demoSources.map((item) => item.handle ? `@${item.handle}` : item.feed_url).join("、") ?? "") || "演示订阅", status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_pull_requests: repository ? Boolean(body.watch_pull_requests) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, watch_stars: repository ? Boolean(body.watch_stars) : undefined, last_star_count: repository ? 128 : undefined, feed_url: repository ? undefined : demoSources[0]?.feed_url ?? "", feed_handle: repository ? undefined : demoSources[0]?.handle ?? "", feed_source: repository ? undefined : demoSources[0]?.source ?? "rss", feed_sources: repository ? undefined : demoSources, feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
+    const task: AssistantTask = { profile_id: String(body.profile_id || ""), notification_targets: (body.notification_targets || []) as import("./api").RepositoryWatchTarget[], id: `task-${Date.now()}`, kind: repository ? "repository_watch" : "rss_watch", platform: "onebot-v11", owner_id: "", group_id: String(body.group_id ?? ""), user_id: String(body.user_id ?? ""), message: String(body.repository ?? demoSources.map((item) => item.handle ? `@${item.handle}` : item.feed_url).join("、") ?? "") || "演示订阅", status: "active", trigger_at: after(1), interval_seconds: Number(body.interval_seconds ?? 60), repository: repository ? String(body.repository ?? "") : undefined, repository_branch: repository ? String(body.branch ?? "main") : undefined, watch_commits: repository ? Boolean(body.watch_commits) : undefined, watch_pull_requests: repository ? Boolean(body.watch_pull_requests) : undefined, watch_releases: repository ? Boolean(body.watch_releases) : undefined, watch_stars: repository ? Boolean(body.watch_stars) : undefined, last_star_count: repository ? 128 : undefined, feed_url: repository ? undefined : demoSources[0]?.feed_url ?? "", feed_handle: repository ? undefined : demoSources[0]?.handle ?? "", feed_source: repository ? undefined : demoSources[0]?.source ?? "rss", feed_sources: repository ? undefined : demoSources, feed_judge_prompt: repository ? undefined : String(body.judge_prompt ?? ""), created_at: new Date().toISOString(), consumes_quota: true };
     tasks = [task, ...tasks]; return json(task);
   }
   if (path.includes("/repository-watches/") || path.includes("/rss-watches/")) {
@@ -951,6 +945,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const task = tasks.find((item) => item.id === taskID) ?? tasks[0];
     if (method === "DELETE") { tasks = tasks.filter((item) => item.id !== taskID); return json({}); }
     if (path.endsWith("/cancel")) task.status = "cancelled";
+    else if (method === "PUT") Object.assign(task, body);
     return json(task);
   }
 

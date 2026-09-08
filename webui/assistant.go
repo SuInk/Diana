@@ -729,15 +729,6 @@ func (h *BotHandler) sendGroupTest(c *gin.Context) {
 
 // listPlugins 返回机器人插件列表。
 func (h *BotHandler) listPlugins(c *gin.Context) {
-	if strings.TrimSpace(c.Query("profile")) == "" {
-		state, ok := h.runtime.Plugins().Get(assistant.OpenAPIPluginID)
-		if !ok {
-			c.JSON(http.StatusOK, []assistant.PluginState{})
-			return
-		}
-		c.JSON(http.StatusOK, []assistant.PluginState{state.Redacted()})
-		return
-	}
 	profileID, ok := h.pluginProfileScope(c)
 	if !ok {
 		return
@@ -745,7 +736,7 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 	states := h.runtime.Plugins().ListVisibleForProfile(profileID)
 	visible := make([]assistant.PluginState, 0, len(states))
 	for _, state := range states {
-		if state.Manifest.ID != assistant.OpenAPIPluginID {
+		if profileID == "" || state.Manifest.ID != assistant.OpenAPIPluginID {
 			visible = append(visible, state)
 		}
 	}
@@ -755,10 +746,16 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 func (h *BotHandler) pluginProfileScope(c *gin.Context) (string, bool) {
 	profileID := strings.TrimSpace(c.Query("profile"))
 	if profileID == "" {
+		if c.Param("id") == "" {
+			return "", true
+		}
+		if !strings.HasSuffix(c.Request.URL.Path, "/enabled") {
+			return "", true
+		}
 		if c.Param("id") == assistant.OpenAPIPluginID {
 			return "", true
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择具体机器人，插件不再支持全局配置"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要切换插件启用状态的机器人"})
 		return "", false
 	}
 	if c.Param("id") == assistant.OpenAPIPluginID {

@@ -139,7 +139,7 @@
                   <UserRound :size="13" aria-hidden="true" />
                   用户 <strong class="mono">{{ task.owner_id || task.user_id || "—" }}</strong>
                 </span>
-                <SubscriptionDestination v-else-if="task.kind === 'rss_watch'" :platform="task.platform" :profile-id="task.profile_id" :group-id="task.group_id" :user-id="task.user_id" />
+                <template v-else-if="task.kind === 'rss_watch'"><SubscriptionDestination v-for="(target, index) in task.notification_targets?.length ? task.notification_targets : [{ platform: task.platform, profile_id: task.profile_id, group_id: task.group_id, user_id: task.user_id }]" :key="index" :platform="target.platform" :profile-id="target.profile_id" :group-id="target.group_id" :user-id="target.user_id" /></template>
                 <span v-else-if="task.user_id && !task.group_id">
                   <UserRound :size="13" aria-hidden="true" />
                   私聊对象 <strong class="mono">{{ task.user_id }}</strong>
@@ -339,7 +339,7 @@ async function load(opts?: { silent?: boolean }): Promise<void> {
       getBotStatus().catch(() => null)
     ]);
     // 任务接口一次返回全部，按当前机器人作用域在前端筛：没有分页，不会漏。
-    tasks.value = response.items.filter((task) => matchesBotScope(task.profile_id));
+    tasks.value = response.items.filter((task) => (matchesBotScope(task.profile_id) || task.notification_targets?.some(target => matchesBotScope(target.profile_id))));
     subagentTasks.value = status?.subagent_tasks ?? [];
     lastLoadedAt.value = new Date().toISOString();
   } catch (error) {

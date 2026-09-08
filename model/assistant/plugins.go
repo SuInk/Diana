@@ -122,6 +122,8 @@ type PluginState struct {
 	ProfileEnabled        map[string]bool           `json:"profile_enabled,omitempty"`
 	ProfileSettings       map[string]map[string]any `json:"profile_settings,omitempty"`
 	ProfileConfigMigrated bool                      `json:"profile_config_migrated,omitempty"`
+	SharedConfigMigrated  bool                      `json:"shared_config_migrated,omitempty"`
+	SharedConfigSource    string                    `json:"shared_config_source,omitempty"`
 	// Settings 只保存用户显式覆盖的值，默认值以 Manifest.Settings 声明为准。
 	Settings map[string]any `json:"settings,omitempty"`
 	// SecretsConfigured 只在脱敏后的响应里出现，标记哪些凭据已经配置过。
@@ -129,12 +131,9 @@ type PluginState struct {
 	SecretsConfigured map[string]bool `json:"secrets_configured,omitempty"`
 }
 
-// ForProfile selects only this robot's settings; missing values use manifest defaults.
+// ForProfile selects this robot's enabled state; settings are always shared.
 // OpenAPI is a process-wide HTTP service, not an event-bound bot capability.
 func (s PluginState) ForProfile(profileID string) PluginState {
-	if s.Manifest.ID != OpenAPIPluginID && (profileID != "" || s.ProfileConfigMigrated) {
-		s.Settings = clonePluginValues(s.ProfileSettings[strings.TrimSpace(profileID)])
-	}
 	if s.Manifest.ID != OpenAPIPluginID && !s.Manifest.Internal {
 		if enabled, ok := s.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" {
 			s.Enabled = enabled
@@ -622,6 +621,8 @@ func (m *PluginManager) Restore(states map[string]PluginState) {
 			current.Enabled = saved.Enabled
 			current.ProfileEnabled = maps.Clone(saved.ProfileEnabled)
 			current.ProfileConfigMigrated = saved.ProfileConfigMigrated
+			current.SharedConfigMigrated = saved.SharedConfigMigrated
+			current.SharedConfigSource = saved.SharedConfigSource
 			// 历史数据可能包含已下线的设置键或非法值，恢复时按当前声明清洗。
 			current.Settings = sanitizePluginSettings(current.Manifest.Settings, saved.Settings)
 			current.ProfileSettings = make(map[string]map[string]any, len(saved.ProfileSettings))
@@ -715,16 +716,7 @@ func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values ma
 	state := m.states[id]
 	state.Manifest = manifest
 	profileID = strings.TrimSpace(profileID)
-	if id == OpenAPIPluginID {
-		profileID = ""
-	}
-	if profileID == "" && id != OpenAPIPluginID && state.ProfileConfigMigrated {
-		return PluginState{}, fmt.Errorf("插件设置必须指定机器人")
-	}
 	previousSettings := state.Settings
-	if profileID != "" {
-		previousSettings = state.ForProfile(profileID).Settings
-	}
 	cleared := map[string]bool{}
 	for _, key := range clear {
 		cleared[strings.TrimSpace(key)] = true
@@ -755,15 +747,7 @@ func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values ma
 			delete(normalized, key)
 		}
 	}
-	if profileID == "" {
-		state.Settings = normalized
-	} else {
-		state.ProfileSettings = cloneProfileSettings(state.ProfileSettings)
-		if state.ProfileSettings == nil {
-			state.ProfileSettings = map[string]map[string]any{}
-		}
-		state.ProfileSettings[profileID] = clonePluginValues(normalized)
-	}
+	state.Settings = normalized
 	m.states[id] = state
 	return state.ForProfile(profileID), nil
 }
@@ -1372,7 +1356,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingBiliSessdata,
 				Label:       "B 站 SESSDATA",
-				Description: "当前机器人使用的 B 站 SESSDATA。留空不使用登录凭据。",
+				Description: "所有机器人共用的 B 站 SESSDATA。留空不使用登录凭据。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1380,7 +1364,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingDouyinCookie,
 				Label:       "抖音 Cookie",
-				Description: "当前机器人使用的抖音 Cookie。不配置时无法解析需要登录的内容。",
+				Description: "所有机器人共用的抖音 Cookie。不配置时无法解析需要登录的内容。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1388,7 +1372,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingXHSCookie,
 				Label:       "小红书 Cookie",
-				Description: "当前机器人使用的小红书 Cookie。不配置时无法解析需要登录的内容。",
+				Description: "所有机器人共用的小红书 Cookie。不配置时无法解析需要登录的内容。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -1396,18 +1380,18 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingYTDLPCookies,
 				Label:       "yt-dlp Cookie 文件路径",
-				Description: "当前机器人的 Netscape 格式 Cookie 文件路径，留空不自动使用共享 Cookie 文件。",
+				Description: "共享的 Netscape 格式 Cookie 文件路径。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
 			{
 				Key:         resolverSettingProxyURL,
 				Label:       "解析代理",
-				Description: "当前机器人解析与 yt-dlp 使用的代理地址，例如 http://127.0.0.1:7890。",
+				Description: "所有机器人解析与 yt-dlp 共用的代理地址，例如 http://127.0.0.1:7890。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
-			{Key: resolverSettingCookiesBrowser, Label: "yt-dlp 浏览器凭据来源", Description: "仅此机器人使用的 yt-dlp 浏览器名称或配置档；留空不读取浏览器 Cookie。", Type: PluginSettingTypeString, Default: ""},
+			{Key: resolverSettingCookiesBrowser, Label: "yt-dlp 浏览器凭据来源", Description: "所有机器人共用的 yt-dlp 浏览器名称或配置档；留空不读取浏览器 Cookie。", Type: PluginSettingTypeString, Default: ""},
 		},
 	}
 }
