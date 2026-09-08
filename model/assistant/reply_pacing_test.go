@@ -45,9 +45,9 @@ func TestProactiveReplyHasNoLengthLimit(t *testing.T) {
 }
 
 func TestOneBotGroupToolPlatformScope(t *testing.T) {
-	for _, platform := range []string{PlatformOneBotV11, PlatformTelegram, PlatformQQOfficial} {
+	for _, platform := range []string{PlatformOneBotV11, PlatformTelegram, PlatformQQOfficial, PlatformFeishu, PlatformDingTalk, PlatformWeCom} {
 		for _, kind := range []EventKind{EventKindGroup, EventKindPrivate} {
-			want := (platform == PlatformOneBotV11 || platform == PlatformTelegram) && kind == EventKindGroup
+			want := kind == EventKindGroup
 			if got := supportsOneBotGroupTool(BotConfig{Platform: platform}, MessageEvent{Kind: kind}); got != want {
 				t.Fatalf("platform=%s kind=%s: %v", platform, kind, got)
 			}

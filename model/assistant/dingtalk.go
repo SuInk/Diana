@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -424,7 +425,22 @@ func (c *DingTalkChannel) CallAPI(ctx context.Context, action string, params map
 	if len(params) > 0 && method != http.MethodGet {
 		payload = params
 	}
-	raw, err := platformJSONRequest(ctx, client, method, dingTalkOpenAPIBase+path, map[string]string{
+	base := dingTalkOpenAPIBase
+	if strings.HasPrefix(path, "/topapi/") {
+		base = "https://oapi.dingtalk.com"
+	}
+	endpoint, err := platformRequestURL(base, path, method, params)
+	if err != nil {
+		return nil, err
+	}
+	if base != dingTalkOpenAPIBase {
+		u, _ := url.Parse(endpoint)
+		q := u.Query()
+		q.Set("access_token", token)
+		u.RawQuery = q.Encode()
+		endpoint = u.String()
+	}
+	raw, err := platformJSONRequest(ctx, client, method, endpoint, map[string]string{
 		"x-acs-dingtalk-access-token": token,
 	}, payload)
 	if err != nil {
@@ -542,6 +558,10 @@ func dingTalkEventFromCallback(data []byte, selfID string) (MessageEvent, string
 	}
 	if callback.IsAdmin {
 		event.SenderRole = string(GroupRoleAdmin)
+	}
+	event.UserIDType = "dingtalk_userid"
+	if callback.SenderStaffID == "" {
+		event.UserIDType = "dingtalk_sender_id"
 	}
 	if callback.ConversationType == "2" {
 		event.Kind = EventKindGroup

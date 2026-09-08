@@ -144,13 +144,13 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 			return "", err
 		}
 		message := fmt.Sprintf("已读取当前群内 %d 位有互动记录成员的关系数据；榜单只有统计，要看某个人的画像用 operation=get 单查。", len(items))
-		if t.runtime.currentPlatform(t.event) == PlatformTelegram {
+		if !IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
 			message += " 仅覆盖已知且能实时核验的成员，不是全群榜单。"
 		}
 		return marshalDianaRelationshipResult(dianaRelationshipResult{
 			OK:      true,
 			Action:  "listed",
-			Limited: t.runtime.currentPlatform(t.event) == PlatformTelegram,
+			Limited: !IsOneBotPlatform(t.runtime.currentPlatform(t.event)),
 			Message: message,
 			Items:   items,
 		})
@@ -545,7 +545,7 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 		return nil, fmt.Errorf("读取群成员列表失败: %w", err)
 	}
 	items := make([]dianaRelationshipSnapshot, 0, len(members))
-	if t.runtime.currentPlatform(t.event) == PlatformTelegram {
+	if !IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 6*time.Second)
 		defer cancel()
@@ -564,7 +564,7 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context, limi
 		if !item.HasHistory {
 			continue
 		}
-		if t.runtime.currentPlatform(t.event) == PlatformTelegram {
+		if !IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
 			if _, err := t.runtime.getGroupMemberInfoForEvent(ctx, t.event, t.event.GroupID, member.UserID); err != nil {
 				continue
 			}

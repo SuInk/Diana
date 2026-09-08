@@ -93,6 +93,9 @@ type ImageDescriptionRecord struct {
 }
 
 type MessageEvent struct {
+	UserIDType       string    `json:"user_id_type,omitempty"`
+	PlatformScope    string    `json:"platform_scope,omitempty"`
+	GuildID          string    `json:"guild_id,omitempty"`
 	Platform         string    `json:"platform,omitempty"`
 	ProfileID        string    `json:"profile_id,omitempty"`
 	ContextNamespace string    `json:"context_namespace,omitempty"`
@@ -181,6 +184,8 @@ type QuotedMessage struct {
 }
 
 type OutgoingMessage struct {
+	PlatformScope        string
+	GuildID              string
 	Platform             string
 	ProfileID            string
 	GroupID              string
