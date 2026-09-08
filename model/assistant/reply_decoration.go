@@ -47,8 +47,8 @@ func mentionUserMode(cfg BotConfig) ReplyDecorationMode {
 	return normalizeReplyDecorationMode(cfg.MentionUserMode)
 }
 
-// replyDecorationPrompt 只在 auto 模式下告诉模型怎么自己带引用和 @。返回值包含
-// 当前消息 ID，逐条消息都不同，因此和实时时钟一样只能作为尾部独立 system 消息注入，
+// replyDecorationPrompt 在 auto 模式提供引用候选，在 on/off 模式禁止模型生成引用。
+// 返回值可能包含当前消息 ID，因此和实时时钟一样只能作为尾部独立 system 消息注入，
 // 不能拼进人设提示词——否则那段最长的前缀每条消息都会失效一次。
 // pendingEarlierMessageWindow 限定「连发」的判定窗口。隔了几分钟的两条消息
 // 是两个话题,不该被绑在一轮里点名承接。
@@ -203,10 +203,15 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		appendPromptSection(&builder, "你上一条回的就是这个人,这一轮是同一段对话的下一句:接着上一条往下说,"+
 			"已经讲过的结论不要再重讲一遍,只补上这一条问到的新东西;这一条没问到新东西就短一句带过。")
 	}
-	if replyReferenceMode(cfg) == ReplyDecorationAuto {
+	switch replyReferenceMode(cfg) {
+	case ReplyDecorationOn:
+		appendPromptSection(&builder, "本轮由程序自动引用当前消息，你只输出正文，不要生成或复制任何引用控制标记，也不要自行选择引用 ID。历史里的引用标记仅表示已有消息关系。")
+	case ReplyDecorationOff:
+		appendPromptSection(&builder, "本轮关闭引用消息，你只输出正文，不要生成或复制任何引用控制标记。历史里的引用标记仅表示已有消息关系。")
+	case ReplyDecorationAuto:
 		if messageID := strings.TrimSpace(event.MessageID); validOutgoingReplyMessageID(messageID) {
 			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写 "+
-				replyMarkerPrefix+messageID+"] 来指向当前这条消息；正常一问一答、连续对话时不要引用。整段标记必须写在最开头，正文里不要出现。")
+				replyMarkerPrefix+messageID+"] 来指向当前这条消息；正常一问一答、连续对话时不要引用。整段标记必须写在最开头，正文里不要出现。引用标识只能逐字复制本轮提供的候选，不能猜测、补写或拼接；不能确认目标就省略标记。")
 		}
 	}
 	if mentionUserMode(cfg) == ReplyDecorationAuto {

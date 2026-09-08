@@ -118,11 +118,11 @@ func TestSendAutoModeKeepsModelWrittenReplyMarker(t *testing.T) {
 
 func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "1244393238"}
-	// on 和 off 都是运行时说了算，不需要也不该告诉模型怎么判断。
+	// on/off 由程序控制，明确禁止模型再生成引用控制标记。
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
 		decided := BotConfig{ReplyReferenceMode: mode, MentionUserMode: mode}.WithDefaults()
-		if prompt := replyDecorationPrompt(decided, event, nil); prompt != "" {
-			t.Fatalf("mode %s should not emit decoration guidance: %q", mode, prompt)
+		if prompt := replyDecorationPrompt(decided, event, nil); !strings.Contains(prompt, "不要生成或复制任何引用控制标记") || strings.Contains(prompt, "本次是否引用原消息由你自己决定") {
+			t.Fatalf("mode %s must prohibit model-selected references: %q", mode, prompt)
 		}
 	}
 	// 默认就是 auto，所以默认配置反过来必须带上这份判断依据。

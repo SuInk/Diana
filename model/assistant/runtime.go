@@ -8583,15 +8583,29 @@ func dedupeStrings(values []string) []string {
 }
 
 // applyOutgoingReplyMarker 把模型写在正文开头的 [diana-reply:ID] 变成真正的 reply 段。
-// 模型指定的目标优先于默认的“回复当前消息”：用户要求引用旧图时，指的就是那条。
+// auto 模式接受模型指定的目标，on/off 模式由程序控制，不让模型覆盖。
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
 func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEvent, msg OutgoingMessage) OutgoingMessage {
-	id, rest, ok := extractOutgoingReplyMarker(msg.Text)
+	id, rest, ok := consumeOutgoingReplyControl(msg.Text)
 	if !ok {
 		return msg
 	}
 	msg.Text = rest
+	switch replyReferenceMode(r.effectiveConfigForEvent(event)) {
+	case ReplyDecorationOn:
+		return msg
+	case ReplyDecorationOff:
+		msg.ReplyMessageID = ""
+		return msg
+	}
+	msg.ReplyMessageID = ""
+	if scope := identityPrivacyScopeFromContext(ctx); scope != nil {
+		id = scope.restoreText(id)
+	}
+	if !validOutgoingReplyMessageID(id) {
+		return msg
+	}
 	// 指向当前这条消息时不必再查一次：它一定存在，而历史查询可能因为存储未接入或
 	// 消息尚未落库而落空，auto 档下会让模型自己写的引用悄悄失效。
 	if id != strings.TrimSpace(event.MessageID) && r.lookupQuotedMessage(ctx, event, id) == nil {
@@ -9584,7 +9598,7 @@ func (r *Runtime) sendForwardReply(ctx context.Context, event MessageEvent, repl
 func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageEvent, reply string, cfg BotConfig) (string, error) {
 	reply, event = prepareReplyDelivery(reply, event)
 	// 合并转发的节点承载不了 reply 段，标记只能剥掉，免得作为文本进转发卡片。
-	if _, rest, ok := extractOutgoingReplyMarker(reply); ok {
+	if _, rest, ok := consumeOutgoingReplyControl(reply); ok {
 		reply = rest
 	}
 	chunks := splitForwardReply(reply, chatSplitLimitsForEvent(cfg, event))

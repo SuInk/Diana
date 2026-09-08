@@ -618,8 +618,8 @@ func TestApplyOutgoingReplyMarkerIgnoresUnknownMessageID(t *testing.T) {
 		Text:           "[diana-reply:123456]原样发这句",
 		ReplyMessageID: "current-message",
 	})
-	if msg.ReplyMessageID != "current-message" {
-		t.Fatalf("ReplyMessageID = %q, want the default target kept", msg.ReplyMessageID)
+	if msg.ReplyMessageID != "" {
+		t.Fatalf("ReplyMessageID = %q, invalid auto reference must not fall back to another target", msg.ReplyMessageID)
 	}
 	if msg.Text != "原样发这句" {
 		t.Fatalf("Text = %q, want the marker stripped from the text", msg.Text)
