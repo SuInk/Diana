@@ -487,17 +487,20 @@
                 <AppSelect
                   :model-value="roleSelectionValue(role.key)"
                   :options="channelOptionsFor(role.key)"
+                  placeholder="请选择提供商 / 分组"
                   @update:model-value="(value) => setRoleChannel(role.key, value)"
                 />
                 <AppSelect
                   :model-value="roleModelValue(role.key)"
                   :options="modelOptionsFor(role.key)"
+                  placeholder="请选择模型（必填）"
                   @update:model-value="(value) => setRoleModel(role.key, value)"
                 />
                 <button
-                  class="btn icon ghost"
+                  class="btn icon-only ghost model-route-action"
                   type="button"
                   title="添加后备路由"
+                  :aria-label="`${role.label}：添加后备路由`"
                   :disabled="!roleForm[role.key]"
                   @click="addRoleFallback(role.key)"
                 >
@@ -508,20 +511,22 @@
                   <AppSelect
                     :model-value="routeSelectionValue(fallback)"
                     :options="channelOptionsFor(role.key)"
+                    placeholder="请选择提供商 / 分组"
                     @update:model-value="(value) => setFallbackChannel(role.key, index, value)"
                   />
                   <AppSelect
                     :model-value="fallback.model"
                     :options="modelOptionsFor(role.key, fallback)"
+                    placeholder="请选择后备模型"
                     @update:model-value="(value) => setFallbackModel(role.key, index, value)"
                   />
-                  <button class="btn icon ghost" type="button" title="删除后备路由" @click="removeRoleFallback(role.key, index)">
+                  <button class="btn icon-only ghost model-route-action" type="button" title="删除后备路由" :aria-label="`${role.label}：删除后备 ${index + 1}`" @click="removeRoleFallback(role.key, index)">
                     <Trash2 :size="16" aria-hidden="true" />
                   </button>
                 </template>
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                主路由故障时按后备顺序切换；后备可使用不同分组和模型。视觉理解与意图识别未分配时跟随「对话」。
+                每个用途必须明确选择提供商和模型。主路由故障时按后备顺序切换；后备可使用不同分组和模型。
               </p>
             </div>
           </section>
@@ -2391,11 +2396,11 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 type RoleKey = "chat" | "vision" | "intent" | "image";
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string };
 type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
-const modelRoleRows: { key: RoleKey; label: string; fallbackHint: string }[] = [
-  { key: "chat", label: "对话", fallbackHint: "使用「提供商」页的激活配置" },
-  { key: "vision", label: "视觉理解", fallbackHint: "跟随对话模型" },
-  { key: "intent", label: "意图识别", fallbackHint: "跟随对话模型" },
-  { key: "image", label: "图片生成", fallbackHint: "跟随对话提供商的生图模型" }
+const modelRoleRows: { key: RoleKey; label: string }[] = [
+  { key: "chat", label: "对话" },
+  { key: "vision", label: "视觉理解" },
+  { key: "intent", label: "意图识别" },
+  { key: "image", label: "图片生成" }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
@@ -2525,9 +2530,7 @@ function channelGroups(): { name: string; count: number }[] {
 }
 
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {
-  const base: AppSelectOption[] = [
-    { value: "", label: role === "chat" ? "未分配（用激活配置）" : "跟随对话" }
-  ];
+  const base: AppSelectOption[] = [];
   for (const group of channelGroups()) {
     base.push({
       value: GROUP_PREFIX + group.name,
@@ -2559,8 +2562,7 @@ function selectedRoleProfiles(role: RoleKey, selection: RoleRoute | undefined = 
 const MODEL_PAIR_SEP = "::";
 
 function crossProviderModelOptions(role: RoleKey): AppSelectOption[] {
-  const fallback = modelRoleRows.find((row) => row.key === role)?.fallbackHint ?? "跟随对话模型";
-  const options: AppSelectOption[] = [{ value: "", label: fallback }];
+  const options: AppSelectOption[] = [];
   const candidates: { option: AppSelectOption; compatibility: ModelCompatibility }[] = [];
   for (const channel of llmChannels.value) {
     const channelName = channel.name || llmProviderLabel(channel.provider);
@@ -2601,7 +2603,7 @@ function modelOptionsFor(role: RoleKey, selection: RoleRoute | undefined = roleF
       });
     }
   }
-  const options: AppSelectOption[] = [{ value: "", label: "选择模型" }];
+  const options: AppSelectOption[] = [];
   const candidates = [...models.values()].sort(
     (a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility)
   );
@@ -2668,7 +2670,6 @@ function routeSelectionValue(route?: RoleRoute): string {
 
 function setRoleChannel(role: RoleKey, value: string): void {
   if (!value) {
-    delete roleForm.value[role];
     return;
   }
   const current = roleForm.value[role];
@@ -2746,8 +2747,6 @@ function setRoleModel(role: RoleKey, value: string): void {
     return;
   }
   if (!value) {
-    // 选回「跟随/未分配」时清掉整条分配。
-    delete roleForm.value[role];
     return;
   }
   const current = roleForm.value[role];
@@ -2963,7 +2962,11 @@ async function save(): Promise<void> {
   }
   for (const row of modelRoleRows) {
     const role = roleForm.value[row.key];
-		if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) continue;
+    if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
+      editorTab.value = "model";
+      toastError(`${row.label}必须选择提供商和模型`);
+      return;
+    }
     if (!role.model.trim()) {
       toastError(`${row.label}模型尚未选择`);
       return;

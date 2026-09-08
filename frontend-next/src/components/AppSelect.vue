@@ -69,6 +69,7 @@ const props = defineProps<{
   options: AppSelectOption[];
   id?: string;
   disabled?: boolean;
+  placeholder?: string;
   /** 选项多到需要翻找时打开：菜单顶部出现搜索框，按标签和 hint 过滤。 */
   searchable?: boolean;
   searchPlaceholder?: string;
@@ -113,7 +114,7 @@ watch(open, (value) => {
 const triggerRef = ref<HTMLElement | null>(null);
 const menuRef = ref<HTMLElement | null>(null);
 
-const currentLabel = computed(() => props.options.find((option) => option.value === props.modelValue)?.label ?? props.modelValue);
+const currentLabel = computed(() => props.options.find((option) => option.value === props.modelValue)?.label ?? (props.modelValue || props.placeholder || ""));
 
 // 头像来自外部图床（QQ 的 qlogo 等），加载失败很常见：记下来直接不显示，
 // 让位置塌掉，好过留一个破图图标。
