@@ -1,6 +1,6 @@
 # 平台目录能力与边界
 
-OneBot 保留 `diana.onebot_group`；其他平台统一通过 `diana.group` 查询本平台可用的群资料、成员与身份。底层 GET 参数统一编码并保留已有查询参数，鉴权参数由通道管理。
+OneBot 按 `onebot-v11` 协议 skill 使用 `diana.onebot_v11` 查询群资料、成员和执行允许的管理动作；其他平台通过只读 `diana.group` 查询可用群资料、成员与身份。`diana.group` 在 OneBot 下仅保留本地头像匹配。Diana 自身的回复设置统一使用 `diana.bot_config`，原 `diana.onebot_group` 入口已删除。底层 GET 参数统一编码并保留已有查询参数，鉴权参数由通道管理。
 
 | 平台 | 已接入 | 必须保留的边界 |
 | --- | --- | --- |

@@ -49,7 +49,7 @@ export const navItems: NavItem[] = [
   { id: "dashboard", label: "总览", hint: "运行状态与实时事件" },
   { id: "provider", label: "提供商", hint: "提供商接入、凭据与模型分组", group: "setup" },
   { id: "bot", label: "机器人", hint: "OneBot v11 接入与行为", group: "setup" },
-  { id: "plugins", label: "插件", hint: "插件安装与设置", group: "setup" },
+  { id: "plugins", label: "扩展", hint: "插件、Skills 与 MCP", group: "setup" },
   { id: "groups", label: "群管理", hint: "群管理员自助配置", group: "operate" },
   { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },

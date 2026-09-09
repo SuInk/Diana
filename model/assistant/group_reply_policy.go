@@ -222,6 +222,8 @@ func (r *Runtime) recordGroupReplyPolicyChanged(ctx context.Context, event Messa
 		Target:  event.GroupID,
 		Metadata: map[string]any{
 			"group_id":                     event.GroupID,
+			"bot_profile_id":               event.ProfileID,
+			"participation":                cfg.Participation,
 			"user_id":                      event.UserID,
 			"operator_role":                role,
 			"proactive_reply_chance":       cfg.ProactiveReplyChance,

@@ -318,7 +318,7 @@ const viewTitles: Record<ViewID, string> = {
   setup: "配置向导",
   provider: "提供商",
   bot: "机器人",
-  plugins: "插件",
+  plugins: "扩展",
   groups: "群管理",
   users: "记忆",
   notebook: "记忆",

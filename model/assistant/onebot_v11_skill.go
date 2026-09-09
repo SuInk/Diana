@@ -62,7 +62,7 @@ func (p *OneBotV11SkillPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          oneBotV11PluginID,
 		Name:        "OneBot 协议",
-		Version:     "0.1.1",
+		Version:     "0.1.2",
 		Description: "官方内置 OneBot v11 结构化调用能力；主人可调用全部标准及实现扩展动作，普通成员仅可调用明确的标准只读动作。",
 		Official:    true,
 		BuiltIn:     true,
@@ -134,6 +134,15 @@ func (t *dianaOneBotV11Tool) Run(ctx context.Context, input map[string]any) (str
 
 	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if t.event.Kind == EventKindGroup && t.event.GroupID != "" {
+		switch oneBotV11BaseAction(action) {
+		case "get_group_info", "get_group_member_list", "get_group_member_info":
+			if _, provided := params["group_id"]; !provided {
+				params = clonePluginValues(params)
+				params["group_id"] = t.event.GroupID
+			}
+		}
+	}
 	data, err := t.runtime.callOneBotAPIForEvent(callCtx, t.event, action, params)
 	if err != nil {
 		wrapped := fmt.Errorf("OneBot v11 action %q failed: %w", action, err)
