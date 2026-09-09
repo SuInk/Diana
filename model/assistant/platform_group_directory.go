@@ -57,10 +57,7 @@ func (r *Runtime) groupDirectoryForEvent(ctx context.Context, event MessageEvent
 }
 
 func groupToolName(event MessageEvent) string {
-	if !IsOneBotPlatform(event.Platform) {
-		return "diana.group"
-	}
-	return "diana.onebot_group"
+	return "diana.group"
 }
 
 func groupToolPrompt(event MessageEvent) string {
@@ -77,6 +74,6 @@ func (r *Runtime) currentPlatform(event MessageEvent) string {
 	return NormalizePlatformID(firstNonEmpty(strings.TrimSpace(event.Platform), r.effectiveConfigForEvent(event).Platform))
 }
 
-func groupMemberToolItem(member OneBotGroupMemberInfo) dianaOneBotGroupMemberItem {
-	return dianaOneBotGroupMemberItem{UserID: member.UserID, DisplayName: member.DisplayName(), Nickname: member.Nickname, Card: member.Card, Role: member.Role, Title: member.Title, AvatarURL: member.AvatarURL, Mention: mentionMarkerFor(member.UserID), Username: member.Username, IsBot: member.IsBot, MembershipVerified: member.MembershipVerified, AvatarSource: avatarSourceMemberPrefix + member.UserID}
+func groupMemberToolItem(member OneBotGroupMemberInfo) dianaGroupMemberItem {
+	return dianaGroupMemberItem{UserID: member.UserID, DisplayName: member.DisplayName(), Nickname: member.Nickname, Card: member.Card, Role: member.Role, Title: member.Title, AvatarURL: member.AvatarURL, Mention: mentionMarkerFor(member.UserID), Username: member.Username, IsBot: member.IsBot, MembershipVerified: member.MembershipVerified, AvatarSource: avatarSourceMemberPrefix + member.UserID}
 }

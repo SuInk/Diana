@@ -303,6 +303,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 		router.POST(base+"/group-test/onebot", h.callGroupTestOneBot)
 	}
 	router.GET(base+"/plugins", h.listPlugins)
+	router.GET(base+"/extensions", h.extensions)
+	router.POST(base+"/extensions", h.extensions)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)

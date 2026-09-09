@@ -46,6 +46,7 @@ type ExtensionState struct {
 	Managed     bool          `json:"managed,omitempty"`
 	Installed   bool          `json:"installed"`
 	Enabled     bool          `json:"enabled"`
+	Available   *bool         `json:"available,omitempty"`
 	Source      string        `json:"source,omitempty"`
 	Transport   string        `json:"transport,omitempty"`
 	Tools       []string      `json:"tools,omitempty"`

@@ -17,6 +17,10 @@ Use `diana.onebot_v11` as the only protocol entry point. Do not emulate an actio
 
 ## Workflow
 
+Group information, member lookup and group moderation use the OneBot actions below. The old `diana.onebot_group` tool no longer exists. For local image-to-avatar comparison only, use the read-only `diana.group` operation `match_avatar`; do not identify a person by guessing from an image.
+
+Diana's own reply behavior is not a OneBot group property. Use `diana.bot_config` with `operation=get/update` and `scope=group/bot` for reply desire, score thresholds and cooldown. To stop unsolicited replies in this group, use `{"operation":"update","scope":"group","desire_level":"off"}`. This must write the current participation configuration, not mute the bot, change a protocol property, or merely promise silence. Only a successful saved result confirms the change. Group policy changes require the bot owner or a verified current group administrator; bot-wide changes require the bot owner.
+
 1. Confirm that the current user explicitly asked for the OneBot operation.
 2. Choose the narrowest action and parameters. Reuse IDs supplied by the user or trusted conversation context; never invent an ID.
 3. Call `diana.onebot_v11` with `{"action":"...","params":{...}}`.

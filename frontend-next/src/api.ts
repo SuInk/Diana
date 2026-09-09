@@ -1228,6 +1228,14 @@ export function listPlugins(profile = ""): Promise<PluginState[]> {
   return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
+export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; transport?: string; tools?: string[]; error?: string }
+export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
+  return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
+}
+export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown>): Promise<T> {
+  return requestJSON<T>("/api/assistant/extensions", {method:"POST", body:JSON.stringify(input)});
+}
+
 export function installPlugin(id: string): Promise<PluginState> {
   return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/install`, { method: "POST" });
 }

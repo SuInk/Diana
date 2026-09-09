@@ -84,19 +84,20 @@ type closeableTool interface {
 }
 
 type ToolRegistry struct {
-	mu             sync.RWMutex
-	tools          map[string]Tool
-	order          []string
-	closers        []closeableTool
-	skills         []SkillMetadata
-	skillsSet      bool
-	extensions     ExtensionCatalog
-	parent         *ToolRegistry
-	parentOnly     map[string]bool
-	hidden         map[string]bool
-	activeViews    int
-	closeRequested bool
-	closed         bool
+	mu                 sync.RWMutex
+	tools              map[string]Tool
+	order              []string
+	closers            []closeableTool
+	skills             []SkillMetadata
+	skillsSet          bool
+	extensions         ExtensionCatalog
+	parent             *ToolRegistry
+	parentOnly         map[string]bool
+	hidden             map[string]bool
+	extensionOverrides map[string]bool
+	activeViews        int
+	closeRequested     bool
+	closed             bool
 }
 
 // NewDefaultToolRegistry 创建 Agent 默认工具注册表。
@@ -227,6 +228,15 @@ func (r *ToolRegistry) SetSkills(skills []SkillMetadata) {
 	r.skillsSet = true
 }
 
+// RegisterBuiltinSkills exposes only embedded, trusted instructions. It does
+// not scan local skill roots or create MCP connections.
+func (r *ToolRegistry) RegisterBuiltinSkills(skills []SkillMetadata) {
+	r.SetSkills(normalizeBuiltinSkills(skills))
+	tools := newLiveSkillTools(r.Skills)
+	r.Register(tools.List)
+	r.Register(tools.Read)
+}
+
 // Skills 返回当前注册表关联的 skills。
 func (r *ToolRegistry) Skills() []SkillMetadata {
 	if r == nil {
@@ -340,12 +350,19 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	hidden := r.hidden[name]
 	r.mu.RUnlock()
 	if ok {
+		if !r.extensionToolAllowed(tool) {
+			return nil, false
+		}
 		return tool, true
 	}
 	if parent == nil || hidden || (allowed != nil && !allowed[name]) {
 		return nil, false
 	}
-	return parent.Get(name)
+	tool, ok = parent.Get(name)
+	if ok && !r.extensionToolAllowed(tool) {
+		return nil, false
+	}
+	return tool, ok
 }
 
 // Retain removes every tool not present in allowed. A nil allowlist keeps all
@@ -421,7 +438,7 @@ func (r *ToolRegistry) Names() []string {
 	hidden := cloneToolAllowlist(r.hidden)
 	r.mu.RUnlock()
 	if parent == nil {
-		return local
+		return r.filterExtensionToolNames(local)
 	}
 	seen := make(map[string]bool, len(local))
 	for _, name := range local {
@@ -435,7 +452,7 @@ func (r *ToolRegistry) Names() []string {
 		seen[name] = true
 	}
 	sort.Strings(local)
-	return local
+	return r.filterExtensionToolNames(local)
 }
 
 // Catalog returns a compact semantic routing catalog. Input schemas stay out of

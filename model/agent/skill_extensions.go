@@ -212,6 +212,11 @@ func (m *ExtensionManager) installSkill(ctx context.Context, req skillInstallReq
 			return SkillMetadata{}, fmt.Errorf("skill %q is reserved by Diana and cannot be replaced", skill.Name)
 		}
 	}
+	for _, existing := range m.Skills() {
+		if existing.Name == skill.Name && !existing.Managed {
+			return SkillMetadata{}, fmt.Errorf("skill %q is external/read-only and cannot be replaced", skill.Name)
+		}
+	}
 	metadataBody, err := json.MarshalIndent(skillInstallMetadata{
 		Source:      source,
 		InstalledAt: time.Now().UTC().Format(time.RFC3339),

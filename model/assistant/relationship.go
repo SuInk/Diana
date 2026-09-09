@@ -111,6 +111,8 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		return nil
 	}
 	allowed := map[string]bool{
+		"skills.list":              true,
+		"skills.read":              true,
 		"diana.capabilities":       true,
 		dianaChatHistoryToolName:   true,
 		dianaMemoryToolName:        true,
@@ -123,7 +125,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaVersionToolName:     true,
 		dianaThreadStateToolName: true,
 		dianaStickerToolName:     true,
-		"diana.onebot_group":     true,
+		"diana.bot_config":       true,
 		"diana.group":            true,
 		dianaOneBotV11ToolName:   true,
 		dianaImageToolName:       true,
