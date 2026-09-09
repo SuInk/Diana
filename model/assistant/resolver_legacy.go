@@ -177,6 +177,10 @@ func (p *ResolverPlugin) resolveXiaohongshu(ctx context.Context, req PluginReque
 }
 
 func (p *ResolverPlugin) resolveTwitter(ctx context.Context, req PluginRequest, raw string) resolverPlatformResult {
+	if handle := twitterProfileHandle(raw); handle != "" {
+		result := p.resolveTwitterProfile(ctx, req, raw, handle)
+		return resolverPlatformResult{Context: result.Context, ForwardMessages: []OutgoingMessage{{Text: result.Context}}}
+	}
 	if p.videoDownloader != nil && p.twitterPostFetcher == nil && p.twitterMediaDownloader == nil {
 		return p.resolveTwitterLegacy(ctx, req, raw)
 	}
