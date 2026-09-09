@@ -573,6 +573,11 @@
                   <span class="switch-label">自然分条</span>
                 </label>
               </div>
+              <div class="field">
+                <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
+                <input id="bot-reply-merge-confidence" v-model.number="form.reply_merge_confidence_percent" class="input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="75" />
+                <span class="hint">同一用户的补充、纠正或重复消息达到此置信度时，并入正在生成的回复。越低越容易合并；留空默认 75%。独立问题和无法确定的消息不会合并。</span>
+              </div>
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
@@ -2970,6 +2975,7 @@ async function save(): Promise<void> {
       ...(selectedPersonaID.value === "custom" ? { persona_id: "", custom_persona: asCustomPersona(current).custom_persona } : {}),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
+      reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       agent_command_allowlist: splitList(allowlistDraft.value),

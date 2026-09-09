@@ -273,6 +273,8 @@ export interface BotProfileConfig {
   max_reply_chars?: number;
   /** 自然分条：模型用 [diana-msg] 开始下一条、[diana-line] 在当前消息内换行；真实换行不参与布局。 */
   natural_reply_split_enabled?: boolean;
+  /** 连续消息合并置信度百分比，1–100；未设置时默认 75。 */
+  reply_merge_confidence_percent?: number;
   social_reply_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
@@ -471,6 +473,8 @@ export interface BotGroupConfig {
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
   natural_reply_split_enabled?: boolean;
+  /** 本群连续消息合并置信度百分比；未设置时跟随机器人。 */
+  reply_merge_confidence_percent?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */

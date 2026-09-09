@@ -414,6 +414,7 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
+	ReplyMergeConfidencePercent  int                  `json:"reply_merge_confidence_percent,omitempty"`
 	ID                           string               `json:"id,omitempty"`
 	Name                         string               `json:"name,omitempty"`
 	Platform                     string               `json:"platform,omitempty"`
@@ -670,7 +671,9 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
-	MarkedBotIDs []string `json:"marked_bot_ids,omitempty"`
+	// Zero follows the bot's current merge threshold.
+	ReplyMergeConfidencePercent int      `json:"reply_merge_confidence_percent,omitempty"`
+	MarkedBotIDs                []string `json:"marked_bot_ids,omitempty"`
 	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
 	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
 	// 归给当时的当前配置档。
@@ -727,12 +730,13 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
-	ID              string          `json:"id,omitempty"`
-	Name            string          `json:"name,omitempty"`
-	Platform        string          `json:"platform,omitempty"`
-	AvatarURL       string          `json:"avatar_url,omitempty"`
-	ActiveProfileID string          `json:"active_profile_id,omitempty"`
-	Profiles        []ConfigPayload `json:"profiles,omitempty"`
+	ReplyMergeConfidencePercent int             `json:"reply_merge_confidence_percent,omitempty"`
+	ID                          string          `json:"id,omitempty"`
+	Name                        string          `json:"name,omitempty"`
+	Platform                    string          `json:"platform,omitempty"`
+	AvatarURL                   string          `json:"avatar_url,omitempty"`
+	ActiveProfileID             string          `json:"active_profile_id,omitempty"`
+	Profiles                    []ConfigPayload `json:"profiles,omitempty"`
 	// MessageRelays 是跨机器人的消息互通链路，读接口一并回传给 WebUI。
 	MessageRelays                     []MessageRelayPair `json:"message_relays,omitempty"`
 	Enabled                           bool               `json:"enabled"`
@@ -931,6 +935,7 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
+	cfg.ReplyMergeConfidencePercent = max(0, min(100, cfg.ReplyMergeConfidencePercent))
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultGroupConfig(groupID, base)
@@ -1335,6 +1340,7 @@ func DefaultBotConfig() BotConfig {
 		ChatInLevel:                    defaultChatInLevel,
 		NaturalInterjectionEnabled:     boolPointer(false),
 		MaxInputChars:                  2000,
+		ReplyMergeConfidencePercent:    defaultReplyMergeConfidencePercent,
 		MaxReplyChars:                  3500,
 		ReplyMaxBubbles:                replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:     0,
@@ -1394,6 +1400,7 @@ func DefaultBotConfig() BotConfig {
 
 // WithDefaults 补齐 OneBot v11 机器人配置默认值。
 func (cfg BotConfig) WithDefaults() BotConfig {
+	cfg.ReplyMergeConfidencePercent = normalizeReplyMergeConfidencePercent(cfg.ReplyMergeConfidencePercent)
 	cfg.CustomPersona = copyCustomPersona(cfg.CustomPersona)
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultBotConfig()
@@ -1833,6 +1840,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxInputChars:                     cfg.MaxInputChars,
 		MaxReplyChars:                     cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
+		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
@@ -2016,6 +2024,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxInputChars:                   payload.MaxInputChars,
 		MaxReplyChars:                   payload.MaxReplyChars,
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
+		ReplyMergeConfidencePercent:     payload.ReplyMergeConfidencePercent,
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
