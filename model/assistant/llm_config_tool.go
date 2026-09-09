@@ -77,7 +77,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	recordLLMConfigSkillLog(ctx, PluginRequest{
 		Event:    t.event,
 		Text:     fmt.Sprintf("diana.llm_config role=%s provider=%s model=%s", command.Role, providerRaw, model),
-		OwnerID:  t.runtime.effectiveConfigForEvent(t.event).OwnerID,
+		OwnerID:  t.runtime.effectiveConfigForEvent(t.event).OwnerIDForEvent(t.event),
 		LLMStore: t.runtime.llmStore,
 		AppLogs:  t.runtime.appLogWriter(),
 	}, result, nil)
