@@ -20,6 +20,7 @@ import (
 
 type resolverSocialResult struct {
 	Handled         bool
+	Failed          bool
 	Suppressed      bool
 	Context         string
 	ImageURLs       []string
@@ -133,7 +134,7 @@ func resolverCookieFileFingerprint(path string) (string, bool) {
 }
 
 func validSharedSocialResult(result resolverSocialResult) bool {
-	if !result.Handled || result.Suppressed || len(result.ResourceKeys) == 0 || strings.TrimSpace(result.Context) == "" {
+	if !result.Handled || result.Failed || result.Suppressed || len(result.ResourceKeys) == 0 || strings.TrimSpace(result.Context) == "" {
 		return false
 	}
 	for _, path := range result.VideoURLs {
@@ -171,7 +172,7 @@ func (p *ResolverPlugin) resolveSocialMediaFresh(ctx context.Context, req Plugin
 	default:
 		return resolverSocialResult{}
 	}
-	if len(result.ResourceKeys) == 0 {
+	if !result.Failed && len(result.ResourceKeys) == 0 {
 		if key := resolverResourceKeyFromURL(platform, raw); key != "" {
 			result.ResourceKeys = []string{key}
 		}
@@ -217,6 +218,9 @@ func resolverResourceKeyFromURL(platform, raw string) string {
 		if id := twitterStatusID(raw); id != "" {
 			return "x:" + id
 		}
+		if handle := twitterProfileHandle(raw); handle != "" {
+			return "x:profile:" + strings.ToLower(handle)
+		}
 	case "youtube":
 		if id := youtubeVideoID(raw); id != "" {
 			return "youtube:" + id
@@ -245,6 +249,9 @@ func youtubeVideoID(raw string) string {
 }
 
 func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequest, raw string) resolverSocialResult {
+	if handle := twitterProfileHandle(raw); handle != "" {
+		return p.resolveTwitterProfile(ctx, req, raw, handle)
+	}
 	if p.videoDownloader != nil && p.twitterPostFetcher == nil && p.twitterMediaDownloader == nil {
 		result := resolverSocialResult{Handled: true, Context: fmt.Sprintf("%s识别：小蓝鸟学习版", resolverNickname())}
 		return p.attachDownloadedVideo(ctx, req, raw, "x", result)
