@@ -160,6 +160,7 @@ func outgoingMessageFingerprint(msg OutgoingMessage) string {
 		"reply=" + msg.ReplyMessageID,
 		"mention=" + msg.MentionUserID,
 		"images=" + strings.Join(msg.ImageURLs, "|"),
+		"image_album=" + strconv.FormatBool(msg.ImageAlbum),
 		"videos=" + strings.Join(msg.VideoURLs, "|"),
 		"audios=" + strings.Join(msg.AudioURLs, "|"),
 	}

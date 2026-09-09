@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	DefaultMaxSteps           = 8
+	DefaultMaxSteps           = 12
 	DefaultMaxToolOutputChars = 8000
 	DefaultReadFileMaxBytes   = 64 * 1024
 	// DefaultFileWriteMaxBytes 是单次写入的默认上限。比读的上限大一些：模型生成
@@ -31,7 +31,7 @@ const (
 	DefaultToolTimeoutMS            = 60_000
 	DefaultFinalizationReserveMS    = 20_000
 	DefaultProtocolRepairLimit      = 3
-	MaxAllowedSteps                 = 8
+	MaxAllowedSteps                 = 16
 	MaxAllowedToolOutputChars       = 20000
 	MaxAllowedReadFileMaxBytes      = 512 * 1024
 	MaxAllowedFileWriteMaxBytes     = 2 << 20
