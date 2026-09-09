@@ -4308,6 +4308,7 @@ a.nav-action {
 }
 
 .model-chip {
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -4320,6 +4321,7 @@ a.nav-action {
 }
 
 .model-chip-id {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4327,23 +4329,42 @@ a.nav-action {
 }
 
 .model-chip-remove {
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  line-height: 1;
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+}
+
+.model-chip-remove > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
 }
 
 .model-chip-remove:hover {
   background: var(--err-soft);
   color: var(--err);
+}
+
+.model-chip-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  background: var(--accent-soft);
+}
+
+@media (pointer: coarse) {
+  .model-chip-remove { width: 32px; height: 32px; }
 }
 
 /* 布局工具 */
