@@ -2379,6 +2379,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
 	for _, candidate := range candidates {
 		payload.Candidates = append(payload.Candidates, proactiveReplyCandidatePayload{
+			Addressing: addressingForEvent(candidate.Event, r.effectiveConfigForEvent(candidate.Event)),
 			MessageID:  strings.TrimSpace(candidate.Event.MessageID),
 			UserID:     strings.TrimSpace(candidate.Event.UserID),
 			Sender:     strings.TrimSpace(candidate.Event.SenderNameOrID()),
@@ -2588,6 +2589,7 @@ func proactiveReplyRouteTimeout(cfg BotConfig) time.Duration {
 }
 
 type proactiveReplyPayload struct {
+	Addressing                    messageAddressing                `json:"addressing"`
 	CurrentText                   string                           `json:"current_text"`
 	CurrentSender                 string                           `json:"current_sender,omitempty"`
 	CurrentImages                 int                              `json:"current_images"`
@@ -2596,7 +2598,7 @@ type proactiveReplyPayload struct {
 	QuotedText                    string                           `json:"quoted_text,omitempty"`
 	QuotedSender                  string                           `json:"quoted_sender,omitempty"`
 	QuotedImages                  int                              `json:"quoted_images,omitempty"`
-	QuotedIsBot                   bool                             `json:"quoted_is_bot,omitempty"`
+	QuotedIsBot                   bool                             `json:"quoted_is_bot"`
 	ContextGapSeconds             *int64                           `json:"context_gap_seconds,omitempty"`
 	LastBotMessage                *proactiveReplyHistoryItem       `json:"last_bot_message,omitempty"`
 	LastBotAddressedCurrentSender bool                             `json:"last_bot_addressed_current_sender"`
@@ -2609,29 +2611,32 @@ type proactiveReplyPayload struct {
 }
 
 type proactiveReplyCandidatePayload struct {
-	MessageID  string `json:"message_id"`
-	UserID     string `json:"user_id,omitempty"`
-	Sender     string `json:"sender,omitempty"`
-	Text       string `json:"text,omitempty"`
-	Images     int    `json:"images,omitempty"`
-	AgeSeconds *int64 `json:"age_seconds,omitempty"`
+	Addressing messageAddressing `json:"addressing"`
+	MessageID  string            `json:"message_id"`
+	UserID     string            `json:"user_id,omitempty"`
+	Sender     string            `json:"sender,omitempty"`
+	Text       string            `json:"text,omitempty"`
+	Images     int               `json:"images,omitempty"`
+	AgeSeconds *int64            `json:"age_seconds,omitempty"`
 }
 
 type proactiveReplyHistoryItem struct {
-	Sender     string `json:"sender,omitempty"`
-	Text       string `json:"text,omitempty"`
-	Images     int    `json:"images,omitempty"`
-	IsBot      bool   `json:"is_bot,omitempty"`
-	AgeSeconds *int64 `json:"age_seconds,omitempty"`
+	Addressing messageAddressing `json:"addressing"`
+	Sender     string            `json:"sender,omitempty"`
+	Text       string            `json:"text,omitempty"`
+	Images     int               `json:"images,omitempty"`
+	IsBot      bool              `json:"is_bot,omitempty"`
+	AgeSeconds *int64            `json:"age_seconds,omitempty"`
 }
 
 func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proactiveReplyPayload {
 	cfg := r.effectiveConfigForEvent(event)
 	payload := proactiveReplyPayload{
+		Addressing:       addressingForEvent(event, cfg),
 		CurrentText:      strings.TrimSpace(text),
 		CurrentSender:    strings.TrimSpace(event.SenderNameOrID()),
 		CurrentImages:    imageSegmentCount(event.Segments),
-		BotAccount:       strings.TrimSpace(cfg.BotAccount),
+		BotAccount:       firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
 		BotAliases:       append([]string(nil), cfg.GroupTriggers...),
 		RecentImageCount: len(r.localImageEditSourceImages(event)),
 	}
@@ -2654,7 +2659,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		payload.QuotedText = quotedPlainText(event.Quoted)
 		payload.QuotedSender = strings.TrimSpace(firstNonEmpty(event.Quoted.SenderName, event.Quoted.UserID))
 		payload.QuotedImages = imageSegmentCount(event.Quoted.Segments)
-		payload.QuotedIsBot = cfg.BotAccount != "" && event.Quoted.UserID == cfg.BotAccount
+		payload.QuotedIsBot = payload.Addressing.ReplyTarget == "self"
 	}
 	history := r.contextHistory(event)
 	for i := len(history) - 1; i >= 0; i-- {
@@ -2673,10 +2678,11 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			payload.ContextGapSeconds = &gap
 		}
 		historyItem := proactiveReplyHistoryItem{
+			Addressing: addressingForEvent(item, cfg),
 			Sender:     strings.TrimSpace(item.SenderNameOrID()),
 			Text:       truncateRunesFromStart(text, 180),
 			Images:     imageCount,
-			IsBot:      cfg.BotAccount != "" && item.UserID == cfg.BotAccount,
+			IsBot:      payload.BotAccount != "" && item.UserID == payload.BotAccount,
 			AgeSeconds: ageSeconds,
 		}
 		if historyItem.IsBot && payload.LastBotMessage == nil {
@@ -2925,7 +2931,7 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；群资料工具可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
 	const expressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
 	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
-	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard
+	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard + "\n" + messageAddressingRule
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		return runtimeGuard
@@ -6197,6 +6203,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 工具规则）。注入条件保持原样，只是不写进 head：夹在中间会让它后面几千 token
 	// 的稳定规则永远命中不了供应商的前缀缓存。
 	var tail strings.Builder
+	tail.WriteString(addressingPrompt(event, cfg))
 	hasTool := func(name string) bool {
 		if registry == nil {
 			return true

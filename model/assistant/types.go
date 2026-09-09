@@ -95,19 +95,20 @@ type ImageDescriptionRecord struct {
 type MessageEvent struct {
 	// SenderUsername is the platform-authenticated sender handle, not a display
 	// name or a handle found in message text, mentions or forwarded content.
-	SenderUsername   string    `json:"sender_username,omitempty"`
-	UserIDType       string    `json:"user_id_type,omitempty"`
-	PlatformScope    string    `json:"platform_scope,omitempty"`
-	GuildID          string    `json:"guild_id,omitempty"`
-	Platform         string    `json:"platform,omitempty"`
-	ProfileID        string    `json:"profile_id,omitempty"`
-	ContextNamespace string    `json:"context_namespace,omitempty"`
-	Kind             EventKind `json:"kind"`
-	SubType          string    `json:"sub_type,omitempty"`
-	Time             int64     `json:"time,omitempty"`
-	OriginalTime     int64     `json:"original_time,omitempty"`
-	SelfID           string    `json:"self_id,omitempty"`
-	UserID           string    `json:"user_id,omitempty"`
+	SenderUsername   string           `json:"sender_username,omitempty"`
+	MentionTargets   []MessageMention `json:"mention_targets,omitempty"`
+	UserIDType       string           `json:"user_id_type,omitempty"`
+	PlatformScope    string           `json:"platform_scope,omitempty"`
+	GuildID          string           `json:"guild_id,omitempty"`
+	Platform         string           `json:"platform,omitempty"`
+	ProfileID        string           `json:"profile_id,omitempty"`
+	ContextNamespace string           `json:"context_namespace,omitempty"`
+	Kind             EventKind        `json:"kind"`
+	SubType          string           `json:"sub_type,omitempty"`
+	Time             int64            `json:"time,omitempty"`
+	OriginalTime     int64            `json:"original_time,omitempty"`
+	SelfID           string           `json:"self_id,omitempty"`
+	UserID           string           `json:"user_id,omitempty"`
 	// TargetID 目前只有 poke 通知在用：被戳的是谁。
 	TargetID     string `json:"target_id,omitempty"`
 	OperatorID   string `json:"operator_id,omitempty"`
