@@ -2689,7 +2689,7 @@ func TestRuntimeProactiveReplyPayloadIdentifiesCorrectionToRecentBotReply(t *tes
 }
 
 func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.99,"category":"chat_in","target_message_id":"novel-remark","turn_message_ids":["novel-remark"],"directed_at_bot":false,"answerable":true,"substantive":true,"reason":"群友顺着机器人刚提到的离线小说轻松接话，可以自然回应"}`}
+	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.99,"category":"chat_in","scores":{"relevance":{"score":40,"reason":"仍在讨论离线小说"},"substance":{"score":80,"reason":"可补充提前缓存整本以免跳章联网的建议"}},"target_message_id":"novel-remark","turn_message_ids":["novel-remark"],"directed_at_bot":false,"answerable":true,"substantive":true,"reason":"可以补充离线阅读的具体省流量建议"}`}
 	runtime := NewRuntime(BotConfig{
 		BotAccount:            "42",
 		ChatInEnabled:         boolPointer(true),
