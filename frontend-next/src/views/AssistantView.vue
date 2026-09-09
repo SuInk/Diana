@@ -980,7 +980,7 @@
                     <button class="btn primary small" type="button" :disabled="personaBusy || !personaDraft.trim()" @click="runPersonaGenerate">
                       {{ personaBusy ? "生成中…" : form.system_prompt?.trim() ? "按需求改写" : "生成人设" }}
                     </button>
-                    <span class="hint">用当前启用的模型和回复欲望生成；已有人设时在原文基础上改写。</span>
+                    <span class="hint">用当前启用的模型和接话设置生成；已有人设时在原文基础上改写。</span>
                   </div>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
@@ -991,8 +991,8 @@
                 <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。</span>
               </div>
               <div class="field wide">
-                <label>回复欲望</label>
-                <ParticipationControls :key="form.id" :model-value="form.participation" :level="form.chat_in_level ?? 'low'" @update:model-value="setParticipation" />
+                <label>接话设置</label>
+                <ParticipationControls :key="form.id" :model-value="form.participation" @update:model-value="setParticipation" />
               </div>
               <div class="field">
                 <label class="switch">
@@ -1514,7 +1514,7 @@ import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
-import { participationFromConfig, participationPresetName, type ParticipationPreferences } from "../participation";
+import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -2250,27 +2250,14 @@ async function importWorldBookFile(event: Event): Promise<void> {
   }
 }
 
-type ReplyDesire = "off" | "low" | "medium" | "high" | "max";
-
-function replyDesireFromConfig(config: BotProfileConfig): ReplyDesire {
-  if (config.natural_interjection_enabled) return "max";
-  if (config.chat_in_level) return config.chat_in_level;
-  return ({ quiet: "off", active: "high", super_active: "max" } as Partial<Record<NonNullable<BotProfileConfig["response_mode"]>, ReplyDesire>>)[config.response_mode ?? "standard"] ?? "low";
-}
-
-function setReplyDesire(value: string): void {
-  if (!form.value) return;
-  form.value.response_mode = "custom";
-  form.value.chat_in_level = value as ReplyDesire;
-  form.value.chat_in_enabled = value !== "off";
-  form.value.natural_interjection_enabled = false;
-  form.value.chat_in_threshold = 0;
-  form.value.chat_in_chance = 0;
-}
-
 function setParticipation(value: ParticipationPreferences | undefined): void {
   if (!form.value || !value) return;
-  setReplyDesire(value.desire === 0 ? "off" : participationPresetName(value) === "custom" ? "medium" : participationPresetName(value));
+  form.value.response_mode = "custom";
+  form.value.chat_in_level = undefined;
+  form.value.chat_in_enabled = undefined;
+  form.value.natural_interjection_enabled = undefined;
+  form.value.chat_in_threshold = undefined;
+  form.value.chat_in_chance = undefined;
   form.value.participation = value;
 }
 
@@ -2761,8 +2748,11 @@ function setForm(config: BotProfileConfig): void {
     expression_learning_enabled: config.expression_learning_enabled ?? false,
     dict_segment_enabled: config.dict_segment_enabled ?? false,
     semantic_search_enabled: config.semantic_search_enabled ?? false,
-    natural_interjection_enabled: false,
-    chat_in_level: replyDesireFromConfig(config),
+    natural_interjection_enabled: undefined,
+    chat_in_level: undefined,
+    chat_in_enabled: undefined,
+    chat_in_threshold: undefined,
+    chat_in_chance: undefined,
     response_mode: "custom",
     action_description_enabled: config.action_description_enabled ?? false,
     daypart_tone_enabled: config.daypart_tone_enabled ?? false,

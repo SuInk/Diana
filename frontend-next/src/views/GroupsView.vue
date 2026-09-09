@@ -79,7 +79,7 @@
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
             </span>
             <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
-            <span v-if="group.configured && groupReplyDesireValue(group)" class="badge accent">回复欲望 {{ replyDesireLabel(groupReplyDesireValue(group)) }}</span>
+            <span v-if="group.configured && group.participation" class="badge accent">{{ participationSummary(group.participation) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
@@ -191,7 +191,7 @@
           ></textarea>
         </div>
         <div class="field">
-          <label for="group-reply-desire">回复欲望</label>
+          <label>接话设置</label>
           <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" inheritable @update:model-value="setGroupParticipation" />
         </div>
         <div class="field wide">
@@ -516,31 +516,20 @@ function groupReplyDesireValue(config: BotGroupConfig): string {
   return ({ quiet: "off", assistant: "low", standard: "low", active: "high", super_active: "max" } as Record<string, string>)[config.response_mode ?? ""] ?? "";
 }
 
-function replyDesireLabel(level: string): string {
-  return ({ off: "关闭", low: "低", medium: "中", high: "高", max: "极高", custom: "自定义" } as Record<string, string>)[level] ?? "";
-}
-
-function setGroupReplyDesire(value: string): void {
-  if (!editing.value) return;
-  editing.value.natural_interjection_enabled = false;
-  editing.value.proactive_reply_chance = 0;
-  editing.value.proactive_reply_threshold = 0;
-  editing.value.chat_in_threshold = 0;
-  editing.value.chat_in_chance = 0;
-  if (value === "") {
-    editing.value.response_mode = "";
-    editing.value.chat_in_enabled = undefined;
-    editing.value.chat_in_level = undefined;
-    return;
-  }
-  editing.value.response_mode = "custom";
-  editing.value.chat_in_enabled = value !== "off";
-  editing.value.chat_in_level = value as NonNullable<BotGroupConfig["chat_in_level"]>;
+function participationSummary(p: ParticipationPreferences): string {
+  const names: Record<string,string> = {off:"关",minimal:"极低",low:"低",medium:"中",high:"高",extreme:"极高",always:"总是"};
+  const legacy = participationPresetName(p);
+  return `相关度 ${names[p.relevance_level ?? (legacy === "off" ? "off" : "medium")]} · 闲聊 ${names[p.chat_level ?? (legacy === "max" ? "always" : legacy)]} · 可回答 ${names[p.answerability_level ?? "medium"]}`;
 }
 
 function setGroupParticipation(value: ParticipationPreferences | undefined): void {
   if (!editing.value) return;
-  setGroupReplyDesire(!value ? "" : value.desire === 0 ? "off" : participationPresetName(value) === "custom" ? "medium" : participationPresetName(value));
+  editing.value.response_mode = value ? "custom" : "";
+  editing.value.chat_in_level = undefined;
+  editing.value.chat_in_enabled = undefined;
+  editing.value.natural_interjection_enabled = undefined;
+  editing.value.chat_in_threshold = undefined;
+  editing.value.chat_in_chance = undefined;
   editing.value.participation = value;
 }
 

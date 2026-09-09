@@ -94,7 +94,7 @@ func TestParticipationIsSoleIntentGate(t *testing.T) {
 		t.Fatal("model silence overridden")
 	}
 	prompt := proactiveReplyRouterPromptForChatIn("旧规则：没有新信息不能发言", settings, false)
-	if strings.Contains(prompt, "旧规则") || !strings.Contains(prompt, "本轮档位：max") {
+	if strings.Contains(prompt, "旧规则") || !strings.Contains(prompt, "闲聊档位：always") {
 		t.Fatal(prompt)
 	}
 	if got := copyParticipation(&ParticipationPreferences{Desire: -1, Social: 101}); got.Desire != 0 || got.Social != 100 {
