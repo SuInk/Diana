@@ -27,6 +27,7 @@ const (
 
 // UpdateUserMemory updates one user's long-term profile without calling the LLM.
 func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.MessageEvent, update assistant.UserMemoryUpdate) (assistant.UserMemoryProfile, error) {
+	defer s.observeStorage(ctx, "UpdateUserMemory", "write")()
 	var profile assistant.UserMemoryProfile
 	if s == nil || s.db == nil {
 		return profile, nil
@@ -105,10 +106,11 @@ func (s *SQLiteStore) UpdateUserMemory(ctx context.Context, event assistant.Mess
 	if !profile.LastSeenAt.IsZero() {
 		lastSeen = profile.LastSeenAt.UTC().Format(time.RFC3339Nano)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWriteTx(ctx, "UpdateUserMemory")
 	if err != nil {
 		return assistant.UserMemoryProfile{}, err
 	}
+	defer observeTransaction("UpdateUserMemory")()
 	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at)
@@ -155,6 +157,7 @@ func (s *SQLiteStore) ListUserFavorabilityChangesExact(ctx context.Context, botP
 }
 
 func (s *SQLiteStore) listUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int, exact bool) ([]assistant.UserFavorabilityChange, error) {
+	defer s.observeStorage(ctx, "listUserFavorabilityChanges", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -169,7 +172,7 @@ func (s *SQLiteStore) listUserFavorabilityChanges(ctx context.Context, botProfil
 	if exact {
 		scopeCondition, scopeArgs = " AND bot_profile_id = ?", []any{botProfileID}
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT id, user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
 FROM user_favorability_changes
 WHERE user_id = ?`+scopeCondition+`
@@ -245,6 +248,7 @@ func (s *SQLiteStore) ListUserMemories(ctx context.Context, botProfileID, query 
 // ListUserMemoriesSorted 是带排序的列表查询：sort 取 NormalizeUserMemorySort 认
 // 的键，order 取 asc/desc，两者留空等于「最近更新 · 倒序」。
 func (s *SQLiteStore) ListUserMemoriesSorted(ctx context.Context, botProfileID, query, sort, order string, limit int, offset int) ([]assistant.UserMemoryProfile, int, error) {
+	defer s.observeStorage(ctx, "ListUserMemoriesSorted", "read")()
 	if s == nil || s.db == nil {
 		return []assistant.UserMemoryProfile{}, 0, nil
 	}
@@ -275,10 +279,10 @@ func (s *SQLiteStore) ListUserMemoriesSorted(ctx context.Context, botProfileID, 
 		args = append(args, pattern, pattern)
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM user_profiles"+where, args...).Scan(&total); err != nil {
+	if err := s.eventReader().QueryRowContext(ctx, "SELECT COUNT(*) FROM user_profiles"+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles`+where+`
 ORDER BY `+userMemoryOrderBy(sort, order)+`
@@ -347,6 +351,7 @@ func (s *SQLiteStore) GetUserMemoryExact(ctx context.Context, botProfileID, user
 }
 
 func (s *SQLiteStore) getUserMemory(ctx context.Context, botProfileID, userID string, exact bool) (assistant.UserMemoryProfile, bool, error) {
+	defer s.observeStorage(ctx, "getUserMemory", "read")()
 	var profile assistant.UserMemoryProfile
 	if s == nil || s.db == nil {
 		return profile, false, nil
@@ -364,7 +369,7 @@ func (s *SQLiteStore) getUserMemory(ctx context.Context, botProfileID, userID st
 	if exact {
 		scopeCondition, scopeArgs = " AND bot_profile_id = ?", []any{botProfileID}
 	}
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT bot_profile_id, user_id, display_name, favorability, message_count, memories, portrait, romance, last_seen_at, updated_at
 FROM user_profiles
 WHERE user_id = ?`+scopeCondition+`
@@ -469,6 +474,7 @@ func userMemoryItemFromEvent(event assistant.MessageEvent, resolve assistant.AtM
 // 一条消息里 at 通常只有一两个，但同一个号可能被 at 多次，所以带一层记忆化。返回的
 // 闭包只在这一次写入里用，不跨消息缓存——昵称会改。
 func (s *SQLiteStore) userMemoryNameResolver(ctx context.Context, botProfileID string) assistant.AtMentionNameResolver {
+	defer s.observeStorage(ctx, "userMemoryNameResolver", "read")()
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -483,7 +489,7 @@ func (s *SQLiteStore) userMemoryNameResolver(ctx context.Context, botProfileID s
 			return name
 		}
 		var displayName sql.NullString
-		err := s.db.QueryRowContext(ctx, `
+		err := s.eventReader().QueryRowContext(ctx, `
 SELECT display_name
 FROM user_profiles
 WHERE user_id = ?`+scopeCondition+`

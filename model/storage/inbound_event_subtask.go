@@ -80,7 +80,7 @@ func (s *SQLiteStore) LoadInboundEventSubtasks(ctx context.Context, eventIDs []s
 	if len(args) == 0 {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT event_id, task_id, kind, name, phase, completed, total,
        COALESCE(detail, ''), COALESCE(error, ''), started_at, updated_at, finished_at
 FROM inbound_event_subtasks

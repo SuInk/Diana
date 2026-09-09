@@ -289,6 +289,7 @@ type Runtime struct {
 	appLogs                   applog.Writer
 	messageStore              MessageHistoryStore
 	inboundStore              InboundEventStore
+	inboundFailedAt           time.Time
 	userMemory                UserMemoryStore
 	structuredMemory          StructuredMemoryStore
 	threadStates              ThreadStateStore
@@ -1579,7 +1580,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		_, _, err := inboundStore.EnqueueInboundEvent(ingestCtx, sessionKey(event), event, r.inboundPriority(event))
 		cancel()
 		if err != nil {
-			return fmt.Errorf("persist inbound event: %w", err)
+			return r.retainFailedInbound(event, err)
 		}
 		r.wakeInboundWorkers()
 		return nil

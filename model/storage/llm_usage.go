@@ -11,6 +11,7 @@ import (
 )
 
 func (s *SQLiteStore) LLMUsageSince(ctx context.Context, since, until time.Time) (applog.UsageSummary, error) {
+	defer s.observeStorage(ctx, "LLMUsageSince", "read")()
 	stats := applog.UsageSummary{Since: since, Until: until}
 	if s == nil || s.db == nil {
 		return stats, fmt.Errorf("usage storage unavailable")
@@ -21,7 +22,7 @@ func (s *SQLiteStore) LLMUsageSince(ctx context.Context, since, until time.Time)
 	// RFC3339Nano has variable fractional precision. Select enclosing seconds
 	// with the timestamp index, then enforce exact [since, until) in Go.
 	const seconds = "2006-01-02T15:04:05"
-	rows, err := s.db.QueryContext(ctx, `SELECT metadata, created_at FROM app_logs
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT metadata, created_at FROM app_logs
 WHERE created_at >= ? AND created_at < ?
 AND action IN ('diana.llm_usage', 'assistant.llm_usage', 'chatbot.llm_usage')`,
 		since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds))

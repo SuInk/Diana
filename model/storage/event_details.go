@@ -121,6 +121,7 @@ type InboundEventTemporaryMemory struct {
 }
 
 type InboundEventDetailPage struct {
+	HasMore           bool
 	Events            []InboundEventDetail
 	Total             int64
 	FilteredTotal     int64
@@ -203,10 +204,12 @@ func inboundEventResultCondition(filter InboundEventResultFilter) (string, bool)
 // 位置参数上堆，调用方读起来全是没有名字的值。条件写成结构体之后，加一维筛选
 // 不动签名，也不动只关心其中两三项的调用方。
 type InboundEventQuery struct {
-	Since  time.Time
-	Limit  int
-	Offset int
-	Result InboundEventResultFilter
+	Lightweight bool
+	SummaryOnly bool
+	Since       time.Time
+	Limit       int
+	Offset      int
+	Result      InboundEventResultFilter
 	// GroupID 只看这一个群，留空表示不限。
 	GroupID string
 	// UserID 只看和这个人的私聊，留空表示不限。私聊没有群号，光靠 GroupID
@@ -221,6 +224,7 @@ type InboundEventQuery struct {
 }
 
 func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query InboundEventQuery) (InboundEventDetailPage, error) {
+	defer s.observeStorage(ctx, "ListInboundEventDetails", "read")()
 	page := InboundEventDetailPage{Events: []InboundEventDetail{}}
 	if s == nil || s.db == nil {
 		return page, nil
@@ -264,7 +268,7 @@ func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query Inbound
 	// 机器人筛选和群筛选一样要同时作用在计数和列表上，否则顶部统计与下面的
 	// 列表说的不是同一批事件。
 	if profileID := strings.TrimSpace(query.ProfileID); profileID != "" {
-		groupCondition += " AND COALESCE(i.profile_id, '') = ?"
+		groupCondition += " AND i.profile_id = ?"
 		scopeArgs = append(scopeArgs, profileID)
 	}
 	// 搜索同样要作用在计数和列表两处。payload 是完整事件的 JSON，正文和发送者
@@ -277,7 +281,8 @@ func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query Inbound
 		scopeArgs = append(scopeArgs, pattern, pattern, pattern)
 	}
 
-	if err := s.db.QueryRowContext(ctx, `
+	if !query.Lightweight {
+		if err := s.eventReader().QueryRowContext(ctx, `
 SELECT
   COUNT(*),
 	COALESCE(SUM(CASE WHEN `+inboundEventRepliedCondition+` THEN 1 ELSE 0 END), 0),
@@ -288,17 +293,31 @@ SELECT
 FROM inbound_events AS i
 WHERE i.event_time >= ?`+groupCondition+`
 `, scopeArgs...).Scan(&page.Total, &page.Replied, &page.NotReplied, &page.Pending, &page.Errors, &page.Notices); err != nil {
-		return InboundEventDetailPage{}, fmt.Errorf("count inbound event details: %w", err)
-	}
-	page.FilteredTotal = page.Total
-	if resultFilter != InboundEventResultAll {
-		if err := s.db.QueryRowContext(ctx, `
+			return InboundEventDetailPage{}, fmt.Errorf("count inbound event details: %w", err)
+		}
+		page.FilteredTotal = page.Total
+		if resultFilter != InboundEventResultAll {
+			if err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM inbound_events AS i
 WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 `, scopeArgs...).Scan(&page.FilteredTotal); err != nil {
-			return InboundEventDetailPage{}, fmt.Errorf("count filtered inbound event details: %w", err)
+				return InboundEventDetailPage{}, fmt.Errorf("count filtered inbound event details: %w", err)
+			}
 		}
+
+	}
+	if query.SummaryOnly {
+		_, usage, err := s.inboundEventTokenUsage(ctx, query.Since, query.GroupID)
+		if err != nil {
+			return page, err
+		}
+		applyEventUsageSummary(&page, usage)
+		return page, nil
+	}
+	fetchLimit := limit
+	if query.Lightweight {
+		fetchLimit++
 	}
 
 	// 画像名用标量子查询取，不用 LEFT JOIN。
@@ -312,7 +331,7 @@ WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 	// 那个假设漂移造成的。标量子查询在结构上就只能返回一个值，加列、改键都不会再翻倍。
 	// IN (自己那台, '') 加上 ORDER BY 优先自己那台：多机器人之前写的画像 bot_profile_id
 	// 是空串，还能继续兜住，不会因为这次修改丢掉老数据的昵称。
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT
   i.id, i.event_time, i.kind, COALESCE(i.group_id, ''), COALESCE(i.user_id, ''),
   COALESCE(NULLIF(TRIM(m.sender_name), ''), NULLIF(TRIM((
@@ -333,7 +352,7 @@ LEFT JOIN message_events AS m ON m.id = i.id
 WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 ORDER BY i.event_time DESC, i.created_at DESC, i.id DESC
 LIMIT ? OFFSET ?
-`, append(append([]any(nil), scopeArgs...), limit, offset)...)
+`, append(append([]any(nil), scopeArgs...), fetchLimit, offset)...)
 	if err != nil {
 		return InboundEventDetailPage{}, fmt.Errorf("list inbound event details: %w", err)
 	}
@@ -410,6 +429,18 @@ LIMIT ? OFFSET ?
 	if err := rows.Err(); err != nil {
 		return InboundEventDetailPage{}, fmt.Errorf("iterate inbound event details: %w", err)
 	}
+	_ = rows.Close()
+	if query.Lightweight && len(page.Events) > limit {
+		page.HasMore = true
+		page.Events = page.Events[:limit]
+		kept := pending[:0]
+		for _, item := range pending {
+			if item.index < limit {
+				kept = append(kept, item)
+			}
+		}
+		pending = kept
+	}
 	mentionNames, err := s.resolveMentionNames(ctx, mentionIDs)
 	if err != nil {
 		return InboundEventDetailPage{}, err
@@ -438,22 +469,24 @@ LIMIT ? OFFSET ?
 	for index := range page.Events {
 		page.Events[index].Subtasks = subtasks[page.Events[index].ID]
 	}
-	if err := s.attachInboundEventMemories(ctx, page.Events); err != nil {
-		return InboundEventDetailPage{}, err
+	if !query.Lightweight {
+		if err := s.attachInboundEventMemories(ctx, page.Events); err != nil {
+			return InboundEventDetailPage{}, err
+		}
 	}
-	usageByMessage, usage, err := s.inboundEventTokenUsage(ctx, query.Since, query.GroupID)
+	var usageByMessage map[string]inboundEventTokenTotals
+	var usage inboundEventTokenTotals
+	if query.Lightweight {
+		usageByMessage, usage, err = s.inboundEventTokenUsageForPage(ctx, query.Since, query.GroupID, page.Events)
+	} else {
+		usageByMessage, usage, err = s.inboundEventTokenUsage(ctx, query.Since, query.GroupID)
+	}
 	if err != nil {
 		return InboundEventDetailPage{}, err
 	}
-	page.LLMCalls = usage.LLMCalls
-	page.InputTokens = usage.InputTokens
-	page.OutputTokens = usage.OutputTokens
-	page.TotalTokens = usage.TotalTokens
-	page.CachedInputTokens = usage.CachedInputTokens
-	page.LLMDurationMS = usage.DurationMS
-	page.OutputTokensPerSecond = usage.tokensPerSecond()
-	page.AvgTTFTMS = usage.avgTTFTMS()
-	page.TTFTCalls = usage.TTFTCalls
+	if !query.Lightweight {
+		applyEventUsageSummary(&page, usage)
+	}
 	for index := range page.Events {
 		if eventUsage, found := usageByMessage[strings.TrimSpace(page.Events[index].MessageID)]; found {
 			page.Events[index].LLMCalls = eventUsage.LLMCalls
@@ -471,6 +504,7 @@ LIMIT ? OFFSET ?
 }
 
 func (s *SQLiteStore) attachInboundEventMemories(ctx context.Context, events []InboundEventDetail) error {
+	defer s.observeStorage(ctx, "attachInboundEventMemories", "read")()
 	messageIDs := make([]string, 0, len(events))
 	seen := map[string]bool{}
 	for _, event := range events {
@@ -486,7 +520,7 @@ func (s *SQLiteStore) attachInboundEventMemories(ctx context.Context, events []I
 	for index, id := range messageIDs {
 		args[index] = id
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT action, target, metadata FROM app_logs WHERE action IN ('diana.memory.retrieved', 'diana.memory.temporary') AND target IN (`+placeholders(len(args))+`) ORDER BY created_at ASC`, args...)
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT action, target, metadata FROM app_logs WHERE action IN ('diana.memory.retrieved', 'diana.memory.temporary') AND target IN (`+placeholders(len(args))+`) ORDER BY created_at ASC`, args...)
 	if err != nil {
 		return fmt.Errorf("load inbound event memories: %w", err)
 	}
@@ -594,11 +628,12 @@ func unixNanoTimePointer(value int64) *time.Time {
 // InboundEventImageSegment returns one current-message image by its one-based
 // display index. It never exposes the containing event or media source path.
 func (s *SQLiteStore) InboundEventImageSegment(ctx context.Context, eventID string, imageIndex int) (assistant.MessageSegment, bool, error) {
+	defer s.observeStorage(ctx, "InboundEventImageSegment", "read")()
 	if s == nil || s.db == nil || strings.TrimSpace(eventID) == "" || imageIndex <= 0 {
 		return assistant.MessageSegment{}, false, nil
 	}
 	var payload, text string
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT COALESCE(m.payload, ''), COALESCE(m.text, '')
 FROM inbound_events AS i
 JOIN message_events AS m ON m.id = i.id
@@ -720,6 +755,7 @@ func applyMentionNames(segments []assistant.MessageSegment, names map[string]str
 // resolveMentionNames 批量解析被提及者的昵称。优先用最近一次发言时的群名片——那是
 // 群里其他人当时看到的称呼；没有发过言就退回全局资料里的显示名。
 func (s *SQLiteStore) resolveMentionNames(ctx context.Context, ids map[string]struct{}) (map[string]string, error) {
+	defer s.observeStorage(ctx, "resolveMentionNames", "read")()
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -730,7 +766,7 @@ func (s *SQLiteStore) resolveMentionNames(ctx context.Context, ids map[string]st
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(list)), ",")
 	names := make(map[string]string, len(list))
 
-	profiles, err := s.db.QueryContext(ctx, `
+	profiles, err := s.eventReader().QueryContext(ctx, `
 SELECT user_id, COALESCE(TRIM(display_name), '')
 FROM user_profiles
 WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(display_name, '')) <> ''
@@ -742,7 +778,7 @@ WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(display_name, '')) <> ''
 		return nil, err
 	}
 
-	cards, err := s.db.QueryContext(ctx, `
+	cards, err := s.eventReader().QueryContext(ctx, `
 SELECT user_id, sender_name
 FROM message_events
 WHERE user_id IN (`+placeholders+`) AND TRIM(COALESCE(sender_name, '')) <> ''
@@ -828,17 +864,35 @@ func (t inboundEventTokenTotals) tokensPerSecond() float64 {
 // 否则筛了一个群、token 数还是全站的，那个数就没法用来判断这个群贵不贵。
 // 用量日志的 metadata 里带 group_id，直接按它过滤，不用回表连 inbound_events。
 func (s *SQLiteStore) inboundEventTokenUsage(ctx context.Context, since time.Time, groupID string) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
+	return s.inboundEventTokenUsageForPage(ctx, since, groupID, nil)
+}
+
+func (s *SQLiteStore) inboundEventTokenUsageForPage(ctx context.Context, since time.Time, groupID string, events []InboundEventDetail) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
+	defer s.observeStorage(ctx, "inboundEventTokenUsageForPage", "read")()
 	groupID = strings.TrimSpace(groupID)
 	sinceText := time.Unix(0, 0).UTC().Format(time.RFC3339Nano)
 	if !since.IsZero() {
 		sinceText = since.UTC().Format(time.RFC3339Nano)
 	}
+	args := []any{sinceText}
+	targetCondition := ""
+	if events != nil {
+		if len(events) == 0 {
+			return map[string]inboundEventTokenTotals{}, inboundEventTokenTotals{}, nil
+		}
+		ids := make([]string, 0, len(events))
+		for _, event := range events {
+			ids = append(ids, event.MessageID)
+			args = append(args, event.MessageID)
+		}
+		targetCondition = " AND target IN (" + placeholders(len(ids)) + ")"
+	}
 	// 三个名字都要认：动作名改过两轮，少列一个就会让那段时间的用量统计凭空归零。
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT target, metadata
 FROM app_logs
 WHERE created_at >= ? AND action IN ('diana.llm_usage', 'chatbot.llm_usage', 'assistant.llm_usage')
-`, sinceText)
+`+targetCondition, args...)
 	if err != nil {
 		return nil, inboundEventTokenTotals{}, fmt.Errorf("query event token usage: %w", err)
 	}
@@ -967,6 +1021,7 @@ func escapeSQLiteLike(value string) string {
 // 于是「全部会话」里从来看不到私聊，也没法只看某个人的私聊。私聊没有群号，
 // 只能按对方账号聚合。
 func (s *SQLiteStore) ListInboundEventPrivateChats(ctx context.Context, since time.Time, botProfileID string) ([]InboundEventPrivateChat, error) {
+	defer s.observeStorage(ctx, "ListInboundEventPrivateChats", "read")()
 	chats := []InboundEventPrivateChat{}
 	if s == nil || s.db == nil {
 		return chats, nil
@@ -978,7 +1033,7 @@ func (s *SQLiteStore) ListInboundEventPrivateChats(ctx context.Context, since ti
 	scopeCondition, scopeCondition2 := "", ""
 	botProfileID = strings.TrimSpace(botProfileID)
 	if botProfileID != "" {
-		scopeCondition = " AND COALESCE(i.profile_id, '') = ?"
+		scopeCondition = " AND i.profile_id = ?"
 		scopeCondition2 = " AND COALESCE(j.profile_id, '') = ?"
 	}
 	args := []any{}
@@ -988,7 +1043,7 @@ func (s *SQLiteStore) ListInboundEventPrivateChats(ctx context.Context, since ti
 			args = append(args, botProfileID)
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT i.user_id, COUNT(*),
   (SELECT j.payload FROM inbound_events AS j
    WHERE j.user_id = i.user_id AND COALESCE(TRIM(j.group_id), '') = '' AND j.event_time >= ?`+scopeCondition2+`
@@ -1040,6 +1095,7 @@ func privateChatIdentityFromEventPayload(payload string) (string, string) {
 // 机器人见过的群——Telegram 的 Bot API 没有「列出我加入的群」这种接口，控制台
 // 只能靠本地事件推断它在哪些群里。
 func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Time, botProfileID string) ([]InboundEventGroup, error) {
+	defer s.observeStorage(ctx, "ListInboundEventGroups", "read")()
 	groups := []InboundEventGroup{}
 	if s == nil || s.db == nil {
 		return groups, nil
@@ -1053,7 +1109,7 @@ func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Tim
 	scopeCondition, scopeCondition2, scopeCondition3 := "", "", ""
 	botProfileID = strings.TrimSpace(botProfileID)
 	if botProfileID != "" {
-		scopeCondition = " AND COALESCE(i.profile_id, '') = ?"
+		scopeCondition = " AND i.profile_id = ?"
 		scopeCondition2 = " AND COALESCE(j.profile_id, '') = ?"
 		scopeCondition3 = " AND COALESCE(k.profile_id, '') = ?"
 	}
@@ -1067,7 +1123,7 @@ func (s *SQLiteStore) ListInboundEventGroups(ctx context.Context, since time.Tim
 	// 群名取自事件 payload：没有单独的列，也不值得为它做一次迁移——payload 本来
 	// 就是完整事件，而且这样连历史数据都能直接用上。同一个群可能改过名字，取
 	// event_time 最大的那条，也就是最近一次见到的名字。
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT i.group_id, COUNT(*),
   (SELECT j.payload FROM inbound_events AS j
    WHERE j.group_id = i.group_id AND j.event_time >= ?`+scopeCondition2+`
@@ -1126,4 +1182,16 @@ func (s *SQLiteStore) ResolveUserDisplayNames(ctx context.Context, userIDs []str
 		}
 	}
 	return resolved, nil
+}
+
+func applyEventUsageSummary(page *InboundEventDetailPage, usage inboundEventTokenTotals) {
+	page.LLMCalls = usage.LLMCalls
+	page.InputTokens = usage.InputTokens
+	page.OutputTokens = usage.OutputTokens
+	page.TotalTokens = usage.TotalTokens
+	page.CachedInputTokens = usage.CachedInputTokens
+	page.LLMDurationMS = usage.DurationMS
+	page.OutputTokensPerSecond = usage.tokensPerSecond()
+	page.AvgTTFTMS = usage.avgTTFTMS()
+	page.TTFTCalls = usage.TTFTCalls
 }

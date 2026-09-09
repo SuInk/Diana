@@ -834,6 +834,9 @@ VALUES ('legacy', 'group:g1', 'group', 'g1', 'u1', 'legacy', ?, ?, 0, 'done', 0,
 	if _, err := store.db.ExecContext(ctx, `UPDATE inbound_events SET profile_id = NULL`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.db.ExecContext(ctx, `DROP INDEX IF EXISTS idx_inbound_events_profile_order`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.db.ExecContext(ctx, `ALTER TABLE inbound_events DROP COLUMN profile_id`); err != nil {
 		t.Fatal(err)
 	}
