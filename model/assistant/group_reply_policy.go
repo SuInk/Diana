@@ -93,7 +93,7 @@ func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (st
 		return "", fmt.Errorf("群配置只能在 群聊中修改")
 	}
 	cfg := r.effectiveConfigForEvent(event)
-	if ownerID := strings.TrimSpace(cfg.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(event.UserID) {
+	if cfg.IsOwnerEvent(event) {
 		return "bot_owner", nil
 	}
 	if role := NormalizeGroupRole(event.SenderRole); GroupRoleCanConfigure(role) && IsOneBotPlatform(r.currentPlatform(event)) {
@@ -124,7 +124,7 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 		decision.Reason = "direct_mention"
 		return false, decision
 	}
-	if ownerID := strings.TrimSpace(cfg.OwnerID); ownerID != "" && ownerID == strings.TrimSpace(event.UserID) {
+	if cfg.IsOwnerEvent(event) {
 		// 主人和群主是两回事，这里借关系等级那个常量，两处永远说同一个词。
 		decision.Role = string(RelationshipOwner)
 		decision.Reason = "privileged_role"

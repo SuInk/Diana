@@ -3255,7 +3255,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if !event.userProfileLoaded {
 		userProfile, _ = r.loadUserMemoryProfile(ctx, event)
 	}
-	relationship := RelationshipPolicyForConfig(cfg, userProfile, event.UserID)
+	relationship := relationshipPolicyForEvent(cfg, userProfile, event)
 	event = r.enrichRecentTextReference(ctx, event, cleanText, replyHistory)
 	overrides := r.pluginOverridesForEvent(event)
 	settingOverrides := r.pluginSettingOverridesForEvent(event)
@@ -3269,7 +3269,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			RecentEvents:            history,
 			RecallEvents:            recallEvents,
 			Text:                    cleanText,
-			OwnerID:                 cfg.OwnerID,
+			OwnerID:                 cfg.OwnerIDForEvent(event),
 			SandboxedBrowserEnabled: r.plugins.EnabledWithOverrides(sandboxedBrowserPluginID, overrides),
 			Channel:                 r.channel,
 			LLMStore:                r.llmStore,
@@ -4031,7 +4031,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	resp, err := r.plugins.RunOneWithGroupOverrides(ctx, resolverPluginID, PluginRequest{
 		Event:          event,
 		Text:           text,
-		OwnerID:        r.effectiveConfigForEvent(event).OwnerID,
+		OwnerID:        r.effectiveConfigForEvent(event).OwnerIDForEvent(event),
 		Channel:        r.channel,
 		LLMStore:       r.llmStore,
 		LLMModelLister: r.llmModelLister(),
@@ -6091,7 +6091,7 @@ func (r *Runtime) systemPrompt(event MessageEvent, pluginResponses []PluginRespo
 }
 
 func (r *Runtime) systemPromptWithMode(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool) string {
-	return r.systemPromptWithRelationship(event, pluginResponses, proactiveTriggered, RelationshipPolicyFor(UserMemoryProfile{}, r.effectiveConfigForEvent(event).OwnerID, event.UserID))
+	return r.systemPromptWithRelationship(event, pluginResponses, proactiveTriggered, relationshipPolicyForEvent(r.effectiveConfigForEvent(event), UserMemoryProfile{}, event))
 }
 
 func (r *Runtime) systemPromptWithRelationship(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy) string {
@@ -9965,7 +9965,7 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	cfg := r.effectiveConfigForEvent(event)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	update.OwnerID = cfg.OwnerID
+	update.OwnerID = cfg.OwnerIDForEvent(event)
 	profile, err := store.UpdateUserMemory(ctx, event, update)
 	if err != nil {
 		log.Printf("diana user memory update failed: %v", err)
@@ -10299,7 +10299,7 @@ func sessionKey(event MessageEvent) string {
 // handleOwnerCommand 处理 owner 的强格式管理命令。
 func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
 	cfg := r.Config().WithDefaults()
-	if strings.TrimSpace(cfg.OwnerID) == "" || event.UserID != cfg.OwnerID {
+	if !cfg.IsOwnerEvent(event) {
 		return "", false
 	}
 
@@ -11981,7 +11981,7 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 	if gate == nil || strings.TrimSpace(gate.QuietReply) == "" || gate.WithinActiveHours(r.clock()) {
 		return
 	}
-	ownerID := strings.TrimSpace(cfg.OwnerID)
+	ownerID := cfg.OwnerIDForEvent(event)
 	if ownerID != "" && event.UserID == ownerID && gate.OwnerBypassEnabled() {
 		return
 	}
@@ -12015,7 +12015,7 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 	if gate == nil {
 		return true
 	}
-	ownerID := strings.TrimSpace(cfg.OwnerID)
+	ownerID := cfg.OwnerIDForEvent(event)
 	if ownerID != "" && event.UserID == ownerID && gate.OwnerBypassEnabled() {
 		return true
 	}

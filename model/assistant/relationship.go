@@ -179,7 +179,7 @@ func RelationshipPolicyForConfig(cfg BotConfig, profile UserMemoryProfile, userI
 func (r *Runtime) relationshipPolicy(ctx context.Context, event MessageEvent) RelationshipPolicy {
 	cfg := r.effectiveConfigForEvent(event)
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
-	return RelationshipPolicyForConfig(cfg, profile, event.UserID)
+	return relationshipPolicyForEvent(cfg, profile, event)
 }
 
 // relationshipPermissionContext 只返回随发言者变化的那几行。基础能力说明和权限

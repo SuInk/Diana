@@ -119,7 +119,7 @@ func (r *Runtime) claimPokeReply(profileID, userID string, now time.Time) bool {
 func (r *Runtime) generatePokeReply(ctx context.Context, event MessageEvent) (string, error) {
 	ctx = withLLMUsagePurpose(ctx, "poke_reply")
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
-	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
+	policy := relationshipPolicyForEvent(r.effectiveConfigForEvent(event), profile, event)
 	who := firstNonEmpty(strings.TrimSpace(profile.DisplayName), event.UserID)
 	scene := "私聊里"
 	if event.GroupID != "" {

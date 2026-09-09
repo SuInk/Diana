@@ -101,8 +101,10 @@ func (h *OwnerLoginHandler) availability() (assistant.BotConfig, error) {
 	if strings.TrimSpace(cfg.OwnerID) == "" {
 		return cfg, errors.New("未配置主人账号")
 	}
-	if _, _, err := ownerMessageDelivery(cfg, ""); err != nil {
-		return cfg, err
+	if cfg.Platform != assistant.PlatformTelegram || assistant.TelegramOwnerUsername(cfg.OwnerID) == "" {
+		if _, _, err := ownerMessageDelivery(cfg, ""); err != nil {
+			return cfg, err
+		}
 	}
 	return cfg, nil
 }
@@ -293,9 +295,10 @@ func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event ass
 	if err != nil {
 		return false
 	}
-	if strings.TrimSpace(event.UserID) != strings.TrimSpace(cfg.OwnerID) {
+	if !cfg.IsOwnerEvent(event) {
 		return false
 	}
+	cfg.OwnerID = cfg.OwnerIDForEvent(event)
 	match := ownerPairingCodePattern.FindStringSubmatch(strings.TrimSpace(text))
 	if len(match) != 2 {
 		return false

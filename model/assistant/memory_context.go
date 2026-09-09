@@ -56,7 +56,7 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 			DisplayName: strings.TrimSpace(event.SenderNameOrID()),
 		}
 	}
-	policy := RelationshipPolicyForConfig(cfg, profile, event.UserID)
+	policy := relationshipPolicyForEvent(cfg, profile, event)
 	text, _ := r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
 	return text
 }

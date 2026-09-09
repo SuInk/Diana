@@ -224,8 +224,7 @@ func (t *dianaRepositoryIssuesTool) Description() string {
 	// issue」），模型手里没有清单就只能反问一句完整的 owner/repo，白白多一轮。
 	// 这里只需要「是不是主人」，用配置里的 OwnerID 直接比即可；relationshipPolicy
 	// 还会去读用户记忆档案，构造工具描述时不值得为此多打一次库。
-	ownerID := strings.TrimSpace(t.runtime.effectiveConfigForEvent(t.event).OwnerID)
-	isOwner := ownerID != "" && ownerID == strings.TrimSpace(t.event.UserID)
+	isOwner := t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event)
 	repositories := repositoryPublishEventRepositories(t.event, isOwner, t.settings)
 	if len(repositories) == 0 {
 		return description + "\n当前会话没有任何已授权仓库，任何 repository 都会被拒绝；应说明尚未授权，不要让用户改用别的写法重试。"

@@ -140,7 +140,7 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 		scope = newIdentityPrivacyScope()
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
-	scope.register(cfg.OwnerID, "bot_owner")
+	scope.register(cfg.OwnerIDForEvent(event), "bot_owner")
 	scope.register(firstNonEmpty(cfg.BotAccount, event.SelfID), "bot")
 	scope.register(event.UserID, "current_user")
 	scope.register(event.GroupID, "group")
