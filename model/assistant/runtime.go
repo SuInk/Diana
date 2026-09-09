@@ -5759,6 +5759,9 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 }
 
 func profilesForModelRole(set llm.ProfileSet, role ModelRole) ([]llm.Profile, error) {
+	if role.FollowChat {
+		return nil, fmt.Errorf("视觉理解选择了跟随对话，但未配置有效的对话模型")
+	}
 	if role.Group != "" {
 		profiles := set.GroupProfiles(role.Group)
 		if len(profiles) == 0 {
