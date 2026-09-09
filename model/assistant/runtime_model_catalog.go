@@ -96,7 +96,7 @@ func (t *dianaRuntimeModelTool) configuredModelPurpose(key string) modelCatalogE
 			registry, _ = source.ProviderRegistry()
 		}
 	}
-	profiles, err := r.roleBoundProfiles(purpose, set, group)
+	profiles, err := r.roleBoundProfiles(purpose, set, group, r.modelRolesForContext(t.provider.ctx))
 	if err != nil {
 		entry.Note = "该用途的模型绑定无法解析"
 		return entry

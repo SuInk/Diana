@@ -350,7 +350,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 }
 
 func (t *dianaImageTool) taskTimeout() time.Duration {
-	configs := t.runtime.imageProviderConfigs()
+	configs := t.runtime.imageProviderConfigs(withModelConfigEvent(context.Background(), t.event))
 	if len(configs) == 0 {
 		return defaultSubagentTaskTimeout
 	}

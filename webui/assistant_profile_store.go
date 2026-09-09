@@ -107,18 +107,24 @@ func (s *PersistentBotProfileStore) Profiles() assistant.ProfileSet {
 func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
 	set = set.WithDefaults()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.persist(set); err != nil {
+		return err
+	}
 	s.data = set
-	s.mu.Unlock()
-	return s.persist(set)
+	return nil
 }
 
 // SaveCurrentConfig 把运行时当前配置回写到激活中的机器人配置档。
 func (s *PersistentBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) error {
 	s.mu.Lock()
-	s.data = upsertCurrentBotProfileSet(s.data, cfg)
-	set := s.data
-	s.mu.Unlock()
-	return s.persist(set)
+	defer s.mu.Unlock()
+	set := upsertCurrentBotProfileSet(s.data, cfg)
+	if err := s.persist(set); err != nil {
+		return err
+	}
+	s.data = set
+	return nil
 }
 
 // persist 把配置集写进存储。

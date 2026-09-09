@@ -272,7 +272,8 @@ type EventListener func(EventRecord)
 type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
-	mu sync.RWMutex
+	mu            sync.RWMutex
+	modelConfigMu sync.Mutex
 	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
@@ -2367,6 +2368,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	candidates = eligible
 	latest := candidates[len(candidates)-1]
 	event, text := latest.Event, latest.Text
+	ctx = withModelConfigEvent(ctx, event)
 	select {
 	case r.proactiveRouteSem <- struct{}{}:
 		defer func() { <-r.proactiveRouteSem }()
@@ -3230,6 +3232,7 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 // 具名返回值只为了让 defer 拿到这一轮最终说了什么（见 finishReplyTurn），
 // 各处 return 的写法不变。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (reply string, err error) {
+	ctx = withModelConfigEvent(ctx, event)
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
@@ -5466,12 +5469,12 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 }
 
 func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
+	roles := r.modelRolesForContext(ctx)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory
 	store := r.llmStore
 	registry := r.llmRegistry
-	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
 	if registry == nil {
 		if registryStore, ok := store.(LLMProviderRegistryStore); ok {
@@ -5493,7 +5496,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 		} else {
 			var roleErr error
-			profiles, roleErr = r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group)
+			profiles, roleErr = r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
 			if roleErr != nil {
 				return "", roleErr
 			}
@@ -5523,7 +5526,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			}
 			return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
 		}
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -5608,15 +5611,10 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 	}
 	var profiles []llm.Profile
 	if role := boundRole; hasBoundRole {
-		if role.Group != "" {
-			profiles = set.GroupProfiles(role.Group)
-		} else if role.ProfileID != "" {
-			for _, profile := range set.Profiles {
-				if profile.ID == role.ProfileID {
-					profiles = []llm.Profile{profile}
-					break
-				}
-			}
+		var err error
+		profiles, err = profilesForModelRole(set, role)
+		if err != nil {
+			return llm.AgentModelConfig{}, false, err
 		}
 	}
 	// 没有角色绑定就在本分组里按列表顺序取。聊天用途以前不走这一步，因为选哪个
@@ -5662,6 +5660,13 @@ func normalizeRegistrySelection(registry *llm.ProviderRegistry, providerID, mode
 	if _, ok := registry.Model(modelID); !ok {
 		if _, ok := registry.Model(providerID + ":" + modelID); ok {
 			modelID = providerID + ":" + modelID
+		} else {
+			for _, model := range registry.Models() {
+				if model.ProviderID == providerID && model.ModelID == modelID {
+					modelID = model.ID
+					break
+				}
+			}
 		}
 	}
 	return llm.AgentModelConfig{ProviderID: strings.TrimSpace(providerID), ModelID: strings.TrimSpace(modelID)}
@@ -5672,10 +5677,13 @@ func profileRegistrySelection(registry *llm.ProviderRegistry, profile llm.Profil
 	return normalizeRegistrySelection(registry, profile.ID, config.Model)
 }
 
-func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group string) ([]llm.Profile, error) {
+func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group string, scoped ...map[string]ModelRole) ([]llm.Profile, error) {
 	r.mu.RLock()
 	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
+	if len(scoped) > 0 {
+		roles = scoped[0]
+	}
 	if len(roles) == 0 {
 		return nil, nil
 	}
@@ -5728,7 +5736,7 @@ func profilesForModelRole(set llm.ProfileSet, role ModelRole) ([]llm.Profile, er
 	}
 	if role.ProviderID != "" && role.ModelID != "" {
 		role.ProfileID = role.ProviderID
-		role.Model = role.ModelID
+		role.Model = strings.TrimPrefix(role.ModelID, role.ProviderID+":")
 	}
 	for _, profile := range set.Profiles {
 		if profile.ID != role.ProfileID {
@@ -5760,11 +5768,14 @@ func profileSupportsRoleModel(profile llm.Profile, modelID string) (supported bo
 	return false, true
 }
 
-func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
+func (r *Runtime) imageProviderConfigs(contexts ...context.Context) []llm.ProviderConfig {
 	r.mu.RLock()
 	store := r.llmStore
 	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
+	if len(contexts) > 0 {
+		roles = r.modelRolesForContext(contexts[0])
+	}
 	if store == nil {
 		return nil
 	}
@@ -5772,6 +5783,10 @@ func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
 	role, explicitImageRole := roles["image"]
 	if !explicitImageRole {
 		role = roles["chat"]
+	}
+	if role.ProviderID != "" && role.ModelID != "" {
+		role.ProfileID = role.ProviderID
+		role.Model = strings.TrimPrefix(role.ModelID, role.ProviderID+":")
 	}
 	var profiles []llm.Profile
 	if role.Group != "" {
@@ -5801,7 +5816,7 @@ func (r *Runtime) imageProviderConfigs() []llm.ProviderConfig {
 }
 
 func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGenerateRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
-	configs := r.imageProviderConfigs()
+	configs := r.imageProviderConfigs(ctx)
 	if len(configs) == 0 {
 		return nil, llm.ProviderConfig{}, fmt.Errorf("diana: llm profile store is not configured")
 	}
@@ -5822,7 +5837,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 }
 
 func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
-	configs := r.imageProviderConfigs()
+	configs := r.imageProviderConfigs(ctx)
 	if len(configs) == 0 {
 		return nil, llm.ProviderConfig{}, fmt.Errorf("diana: llm profile store is not configured")
 	}
@@ -5906,6 +5921,7 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 }
 
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
+	roles := r.modelRolesForContext(ctx)
 	run = withEmojiSemanticsRun(run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
@@ -5925,9 +5941,6 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	}
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		r.mu.RLock()
-		roles := normalizeModelRoles(r.cfg.ModelRoles)
-		r.mu.RUnlock()
 		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
 		if err != nil {
 			return "", err
@@ -5939,7 +5952,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}

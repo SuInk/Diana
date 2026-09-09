@@ -260,6 +260,7 @@ func (r *Runtime) subagentRootContext() context.Context {
 }
 
 func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTask) {
+	rootCtx = withModelConfigEvent(rootCtx, item.event)
 	if item.debugTrace != nil {
 		rootCtx = context.WithValue(rootCtx, debugTraceContextKey{}, item.debugTrace)
 	}
