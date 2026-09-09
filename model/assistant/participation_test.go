@@ -85,7 +85,7 @@ func TestParticipationIndependentCooldownDefaults(t *testing.T) {
 func TestParticipationIsSoleIntentGate(t *testing.T) {
 	cfg := BotConfig{ChatInLevel: ChatInLevelMax, ProactiveReplyChance: .01, ChatInThreshold: 1, ChatInCooldownSeconds: 600}.WithDefaults()
 	settings := cfg.chatInSettings()
-	decision := proactiveReplyDecision{ShouldReply: true, Category: "chat_in", Confidence: .01, Substantive: false}
+	decision := proactiveReplyDecision{ShouldReply: true, Category: "chat_in", Scores: testParticipationScores(30, 80), Confidence: .01, Substantive: false}
 	if !decision.allows(.99, settings) || settings.Chance != 1 || settings.Cooldown != 600*time.Second {
 		t.Fatal("legacy gate still active")
 	}
@@ -103,7 +103,7 @@ func TestParticipationIsSoleIntentGate(t *testing.T) {
 }
 
 func TestParticipationCooldownRouting(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.72,"category":"chat_in","substantive":false,"target_message_id":"m","reason":"适合自然接话"}`}
+	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.72,"category":"chat_in","scores":{"relevance":{"score":30,"reason":"群友间的讨论"},"substance":{"score":80,"reason":"有具体信息补充"}},"substantive":false,"target_message_id":"m","reason":"适合自然接话"}`}
 	r := NewRuntime(BotConfig{Participation: &ParticipationPreferences{Desire: 100, CooldownSeconds: 30}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot-a", GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "茶喝完了"}
 	route := func(e MessageEvent) bool {
@@ -137,7 +137,7 @@ func TestParticipationCooldownRouting(t *testing.T) {
 	if !route(event) {
 		t.Fatal("cooldown blocked directed reply")
 	}
-	provider.reply = `{"should_reply":true,"confidence":0.72,"category":"chat_in","target_message_id":"m"}`
+	provider.reply = `{"should_reply":true,"confidence":0.72,"category":"chat_in","scores":{"relevance":{"score":30,"reason":"群友间的讨论"},"substance":{"score":80,"reason":"有具体信息补充"}},"target_message_id":"m"}`
 	r.mu.Lock()
 	r.chatInLastReplyAt[chatInCooldownKey(event)] = time.Now().Add(-31 * time.Second)
 	r.mu.Unlock()

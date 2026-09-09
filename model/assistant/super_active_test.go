@@ -26,14 +26,14 @@ func TestSuperActiveRoutingKeepsIndependentCooldown(t *testing.T) {
 	}
 }
 
-func TestSuperActiveIntentAllowsSocialRepliesAndQuestions(t *testing.T) {
+func TestSuperActiveIntentAllowsSubstantiveRepliesAndQuestions(t *testing.T) {
 	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
 	settings := cfg.chatInSettings()
 	if !settings.Enabled || settings.Natural || settings.Chance != 1 || settings.Cooldown != 30*time.Second {
 		t.Fatalf("settings = %#v", settings)
 	}
 	for _, category := range []string{"chat_in", "needs_response", "bot_related"} {
-		d := proactiveReplyDecision{ShouldReply: true, Confidence: 0.78, Category: category, DirectedAtBot: true}
+		d := proactiveReplyDecision{ShouldReply: true, Scores: testParticipationScores(80, 80), Confidence: 0.78, Category: category, DirectedAtBot: true}
 		if !d.allows(0.9, settings) {
 			t.Fatalf("super active rejected %s", category)
 		}

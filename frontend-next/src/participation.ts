@@ -5,9 +5,37 @@ export interface ParticipationPreferences {
   restraint: number;
   information: number;
   cooldown_seconds?: number;
+  relevance_threshold?: number;
+  substance_threshold?: number;
 }
 
 export const defaultParticipationCooldownSeconds = 30;
+export const defaultParticipationScoreThreshold = 60;
+
+export const participationThresholdOptions = [
+  { value: "low", label: "低", score: 40, hint: "较宽松，40 分起" },
+  { value: "medium", label: "中", score: 60, hint: "默认，60 分起" },
+  { value: "high", label: "高", score: 80, hint: "较严格，80 分起" },
+  { value: "max", label: "极高", score: 90, hint: "很严格，90 分起" },
+];
+
+export function participationThresholdLevel(value = defaultParticipationScoreThreshold): string {
+  return participationThresholdOptions.find(option => option.score === value)?.value ?? "custom";
+}
+
+export function changeParticipationThresholdLevel(current: ParticipationPreferences, key: "relevance_threshold" | "substance_threshold", level: string): ParticipationPreferences {
+  const option = participationThresholdOptions.find(option => option.value === level);
+  return option ? changeParticipationThreshold(current, key, option.score) : current;
+}
+
+export function changeParticipationLevel(current: ParticipationPreferences, level: string): ParticipationPreferences {
+  return { ...current, ...participationPreset(level, current.cooldown_seconds ?? defaultParticipationCooldownSeconds) };
+}
+
+export function changeParticipationThreshold(current: ParticipationPreferences, key: "relevance_threshold" | "substance_threshold", value: number): ParticipationPreferences {
+  if (!Number.isFinite(value)) return current;
+  return { ...current, [key]: Math.max(0, Math.min(100, Math.round(value))) };
+}
 
 export const participationLevelOptions = [
   { value: "low", label: "低", hint: "偶尔补充有用信息，尽量不打扰。" },
