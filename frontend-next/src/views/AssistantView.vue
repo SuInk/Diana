@@ -488,7 +488,8 @@
                 <AppSelect
                   :model-value="roleSelectionValue(role.key)"
                   :options="channelOptionsFor(role.key)"
-                  placeholder="请选择提供商 / 分组"
+				  :disabled="roleForm[role.key]?.follow_chat"
+                  :placeholder="roleForm[role.key]?.follow_chat ? '跟随对话提供商' : '请选择提供商 / 分组'"
                   @update:model-value="(value) => setRoleChannel(role.key, value)"
                 />
                 <AppSelect
@@ -502,7 +503,7 @@
                   type="button"
                   title="添加后备路由"
                   :aria-label="`${role.label}：添加后备路由`"
-                  :disabled="!roleForm[role.key]"
+                  :disabled="!roleForm[role.key] || roleForm[role.key]?.follow_chat"
                   @click="addRoleFallback(role.key)"
                 >
                   <Plus :size="16" aria-hidden="true" />
@@ -527,7 +528,7 @@
                 </template>
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                每个用途必须明确选择提供商和模型。主路由故障时按后备顺序切换；后备可使用不同分组和模型。
+                视觉理解可在模型列表选择“跟随对话”，使用当前对话模型及后备路由；也可指定独立视觉模型。其他用途须明确选择提供商和模型。
               </p>
             </div>
           </section>
@@ -2348,7 +2349,7 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 
 // —— 模型分配 ——
 type RoleKey = "chat" | "vision" | "intent" | "image";
-type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string };
+type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
 type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
 const modelRoleRows: { key: RoleKey; label: string }[] = [
   { key: "chat", label: "对话" },
@@ -2537,9 +2538,10 @@ function crossProviderModelOptions(role: RoleKey): AppSelectOption[] {
 }
 
 function modelOptionsFor(role: RoleKey, selection: RoleRoute | undefined = roleForm.value[role]): AppSelectOption[] {
-  const profiles = selectedRoleProfiles(role, selection);
-  if (profiles.length === 0) {
-    return crossProviderModelOptions(role);
+	const follow: AppSelectOption[] = role === "vision" && selection === roleForm.value[role] ? [{value:"__follow_chat__",label:"跟随对话",hint:"使用当前对话模型及后备路由；对话模型需要支持图片"}] : [];
+	const profiles = selectedRoleProfiles(role, selection);
+	if (profiles.length === 0) {
+		return [...follow,...crossProviderModelOptions(role)];
   }
   const models = new Map<string, { model: LLMModelInfo; compatibility: ModelCompatibility }>();
   for (const profile of profiles) {
@@ -2557,8 +2559,8 @@ function modelOptionsFor(role: RoleKey, selection: RoleRoute | undefined = roleF
       });
     }
   }
-  const options: AppSelectOption[] = [];
-  const candidates = [...models.values()].sort(
+	const options: AppSelectOption[] = [...follow];
+	const candidates = [...models.values()].sort(
     (a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility)
   );
   for (const { model, compatibility } of candidates) {
@@ -2610,6 +2612,7 @@ async function refreshLLMChannelCapabilities(channels: LLMConfig[]): Promise<voi
 }
 
 function roleModelValue(role: RoleKey): string {
+	if (roleForm.value[role]?.follow_chat) return "__follow_chat__";
   return roleForm.value[role]?.model ?? "";
 }
 
@@ -2694,6 +2697,10 @@ function profileCanRouteRoleModel(profile: LLMConfig, role: RoleKey, modelID: st
 }
 
 function setRoleModel(role: RoleKey, value: string): void {
+	if (role === "vision" && value === "__follow_chat__") {
+		roleForm.value[role] = {model:"",follow_chat:true};
+		return;
+	}
   if (value.includes(MODEL_PAIR_SEP)) {
     // 跨 Provider 选择：一次确定 Provider 和模型。
     const [profileID, model] = value.split(MODEL_PAIR_SEP);
@@ -2705,6 +2712,7 @@ function setRoleModel(role: RoleKey, value: string): void {
   }
   const current = roleForm.value[role];
   if (current) {
+	delete current.follow_chat;
     current.model = value;
   }
 }
@@ -2782,6 +2790,7 @@ function setForm(config: BotProfileConfig): void {
       model: role.model,
       provider_id: role.provider_id,
       model_id: role.model_id,
+	  follow_chat: role.follow_chat,
       fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
     };
   }
@@ -2917,6 +2926,7 @@ async function save(): Promise<void> {
   }
   for (const row of modelRoleRows) {
     const role = roleForm.value[row.key];
+	if (row.key === "vision" && role?.follow_chat) continue;
     if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
       editorTab.value = "model";
       toastError(`${row.label}必须选择提供商和模型`);
@@ -2945,6 +2955,7 @@ async function save(): Promise<void> {
   try {
     const modelRoles: BotProfileConfig["model_roles"] = {};
     for (const [key, role] of Object.entries(roleForm.value)) {
+		if (key === "vision" && role?.follow_chat) { modelRoles[key]={model:"",follow_chat:true};continue; }
 		if (role && (role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()) {
 			modelRoles[key] = {
         profile_id: role.profile_id,

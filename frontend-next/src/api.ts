@@ -224,6 +224,7 @@ export interface BotProfileConfig {
   send_chunk_interval_ms?: number;
   /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
   model_roles?: Record<string, {
+	 follow_chat?: boolean;
     profile_id?: string;
     group?: string;
     model: string;
