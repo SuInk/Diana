@@ -153,7 +153,7 @@ func browserMediaTransportURLSet(segments []MessageSegment) map[string]struct{} 
 func browserMediaTransportURL(rawURL string, mediaURLs map[string]struct{}) bool {
 	rawURL = normalizeResolverURL(rawURL)
 	for mediaURL := range mediaURLs {
-		if rawURL == mediaURL || strings.HasPrefix(rawURL, mediaURL+",") {
+		if rawURL == mediaURL || strings.HasPrefix(rawURL, mediaURL+",") || strings.HasPrefix(rawURL, mediaURL+"]") {
 			return true
 		}
 	}

@@ -198,6 +198,7 @@ type OutgoingMessage struct {
 	Text                 string
 	Segments             []MessageSegment
 	ImageURLs            []string
+	ImageAlbum           bool
 	GeneratedImageModels []GeneratedImageModel
 	VideoURLs            []string
 	AudioURLs            []string
