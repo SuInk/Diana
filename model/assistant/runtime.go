@@ -1840,6 +1840,12 @@ func (r *Runtime) startReplyWorker(ctx context.Context, event MessageEvent, text
 }
 
 func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text string, successOutcome string) (string, error) {
+	if explicitlyRepliesToBot(event, r.effectiveConfigForEvent(event)) {
+		event.proactiveReply, event.chatInReply = false, false
+		if successOutcome == "replied_proactive" {
+			successOutcome = "replied_direct_followup"
+		}
+	}
 	defer r.enqueueHistoryImageDescriptions(event)
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
@@ -3200,6 +3206,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	cfg := r.effectiveConfigForEvent(event)
+	directQuotedReply := explicitlyRepliesToBot(event, cfg)
+	if directQuotedReply {
+		event.chatInReply = false
+	}
 	if !event.imageResolutionRun {
 		switch {
 		case cfg.AgentEnabled && hasImageSegment(event.Segments):
@@ -3227,9 +3237,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
 	defer imageAnnouncements.cancelPending()
 
-	chatTriggered := r.shouldHandleChat(event, text)
+	chatTriggered := r.shouldHandleChat(event, text) || directQuotedReply
 	resolverTriggered := r.shouldHandleResolver(event, text)
-	proactiveTriggered := event.proactiveReply || len(proactiveReplyTurnFromContext(ctx)) > 0
+	proactiveTriggered := (event.proactiveReply || len(proactiveReplyTurnFromContext(ctx)) > 0) && !directQuotedReply
 	// 同一个人紧接着又说了一条时，把上一轮的痕迹取出来交给提示词，让这一轮当追问
 	// 接住而不是把同一件事重答一遍。登记必须在生成之前：并发的两路要能互相看见。
 	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
