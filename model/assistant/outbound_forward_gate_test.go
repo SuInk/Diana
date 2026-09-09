@@ -91,7 +91,7 @@ func TestAuditForwardNodesSafetySkipsEmpty(t *testing.T) {
 // 卡片审出问题就不发。这条走的是真的发送入口，不是直接调审核函数——
 // 原来的缺口正是「审核函数本身没错，只是这条路上没人调它」。
 func TestSendForwardNodesBlocksUnsafeCard(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"politics"}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"politics"}`}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil

@@ -27,7 +27,7 @@ func (p *directReplyMergeProvider) Generate(ctx context.Context, req llm.Generat
 			return &llm.GenerateResponse{Text: `{"relation":"supplement","confidence":0.99}`}, nil
 		}
 		if strings.Contains(message.Content, "你是机器人回复的发送前审核器") {
-			return &llm.GenerateResponse{Text: `{"should_send":true,"confidence":0.99,"account_safe":true,"count_refusal":false}`}, nil
+			return &llm.GenerateResponse{Text: `{"send_confidence":0.99,"account_safe":true,"count_refusal":false}`}, nil
 		}
 	}
 	p.mu.Lock()

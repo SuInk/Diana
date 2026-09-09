@@ -15,7 +15,7 @@ import (
 // decision: a message can be worth answering while the generated answer is
 // still inaccurate, evasive, or unrelated to the question.
 type proactiveReplyQualityDecision struct {
-	ShouldSend bool
+	// Confidence is always confidence in sending, never confidence in rejecting.
 	Confidence float64
 	Reason     string
 	// AccountSafe 是和表达质量相互独立的一票否决项。表达再自然，只要内容可能
@@ -98,6 +98,9 @@ original_text_available=false 或 original_message 为空,只表示本审核没�
 
 只按下面这些看得见的维度判断:
 - 明确矛盾:候选回复内部自相矛盾,或与输入明确提供的信息直接冲突。
+  先区分时间、语气和断言对象：过去的自述与未来的假设或调侃并不直接矛盾。
+  接梗、反讽、夸张、模仿和角色扮演不默认当作严肃事实断言；只有同一时间、
+  同一对象的事实陈述确实互相排斥，才按直接矛盾降低发送置信度。
 - 是否答非所问:有可用原消息且明确答错所问才算,只是展开了新角度不算;
   缺少原消息内容时不能据此拒绝。
 - 是否被截断:结尾停在半句上,话说到一半没了。
@@ -112,7 +115,7 @@ original_text_available=false 或 original_message 为空,只表示本审核没�
 这不等于你已经核实了不可见图片或历史里的全部事实。
 
 另外单独判断一项账号安全:这条回复发出去会不会让机器人账号被平台处置。
-这一项和准确性检查互相独立,判成不安全就一票否决,不看 confidence。只在回复
+这一项和准确性检查互相独立,判成不安全就一票否决,不看 send_confidence。只在回复
 「自己说出了」下面这些内容时才算不安全,别人说了什么不算:
 - 中国大陆涉政:只拦截对中国大陆现实政治人物、中国共产党与党政机构、敏感时政
   争议或政治事件的评价、立场表达、动员,以及影射这些内容的谐音和梗。单纯提到
@@ -155,9 +158,11 @@ reply_loop_meaningless —— 对方未必是机器人,但这一来一回已经�
 - 拿不准一律 false。这一项判成 true 会让机器人暂停响应该账号一段时间,宁可漏放。
 
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"should_send":true,"confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据"}
+{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据"}
 
-confidence 必须是 0 到 1 的数字,表示你对上述准确性与完整性放行结论的信心,
+send_confidence 必须是 0 到 1 的数字，唯一含义是“这条候选回复适合发送”的置信度。
+越高越建议发送：未发现明确问题时给高分，明确矛盾、答非所问或截断时给低分。
+不要输出发送与否的布尔字段，也不要输出“确信应当拒发”的高分；发送决定由运行时按阈值执行。
 不是对所有不可见事实已经查证的信心,不要仅因原消息或图片不可见而降低放行置信度。
 account_safe 为 false 时,account_risk 填命中的类别:politics / explicit / illegal,
 account_risk_reason 必须单独写清候选回复中触发账号风险的具体内容。reason 只能说明
@@ -187,14 +192,14 @@ func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveRe
 	if threshold <= 0 || threshold > 1 {
 		threshold = defaultProactiveReplyThreshold
 	}
-	if decision.ShouldSend && decision.Confidence >= threshold {
+	if decision.Confidence >= threshold {
 		return nil
 	}
 	reason := strings.TrimSpace(decision.Reason)
 	if reason == "" {
 		reason = "回复准确度不足"
 	}
-	return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核：%s（置信度 %.0f%%，阈值 %.0f%%）", reason, decision.Confidence*100, threshold*100)}
+	return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核：%s（发送置信度 %.0f%%，阈值 %.0f%%）", reason, decision.Confidence*100, threshold*100)}
 }
 
 func (r *Runtime) evaluateProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (replyControlIntent, error) {
@@ -486,8 +491,7 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		return proactiveReplyQualityDecision{}, false
 	}
 	var payload struct {
-		ShouldSend        *bool    `json:"should_send"`
-		Confidence        *float64 `json:"confidence"`
+		Confidence        *float64 `json:"send_confidence"`
 		Reason            *string  `json:"reason"`
 		AccountSafe       *bool    `json:"account_safe"`
 		AccountRisk       *string  `json:"account_risk"`
@@ -502,13 +506,13 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		ReplyLoopConfidence  *float64 `json:"reply_loop_confidence"`
 		ReplyLoopReason      *string  `json:"reply_loop_reason"`
 	}
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.ShouldSend == nil || payload.Confidence == nil {
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.Confidence == nil {
 		return proactiveReplyQualityDecision{}, false
 	}
 	if *payload.Confidence < 0 || *payload.Confidence > 1 {
 		return proactiveReplyQualityDecision{}, false
 	}
-	decision := proactiveReplyQualityDecision{ShouldSend: *payload.ShouldSend, Confidence: *payload.Confidence}
+	decision := proactiveReplyQualityDecision{Confidence: *payload.Confidence}
 	if payload.Reason != nil {
 		decision.Reason = strings.TrimSpace(*payload.Reason)
 	}
