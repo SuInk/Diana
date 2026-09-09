@@ -216,7 +216,7 @@ import AccountNameHint from "./AccountNameHint.vue";
 import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{
-  profileId?: string;
+  defaultProfileId?: string;
   prepareAccess?: () => Promise<void>;
   tokenConfigured?: boolean;
   issueEnabledRepositories?: string[];
@@ -285,10 +285,10 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups().catch(() => ({ groups: [] }))]);
-    watches.value = tasks.items.filter((task) => task.kind === "repository_watch" && (!props.profileId || task.profile_id === props.profileId || task.notification_targets?.some(target => target.profile_id === props.profileId)));
+    watches.value = tasks.items.filter((task) => task.kind === "repository_watch");
     profiles.value = (config.profiles?.length ? config.profiles : [config]);
     joinedGroups.value = groups.groups;
-    if (!form.value.profile_id) form.value.profile_id = props.profileId || profiles.value[0]?.id || "";
+    if (!form.value.profile_id) form.value.profile_id = props.defaultProfileId || profiles.value[0]?.id || "";
   } catch (error) {
     toastError(error instanceof Error ? error.message : "仓库订阅加载失败");
   } finally {
@@ -297,7 +297,7 @@ async function load(): Promise<void> {
 }
 
 function startCreate(): void {
-  const profileID = props.profileId || form.value.profile_id || profiles.value[0]?.id || "";
+  const profileID = props.defaultProfileId || form.value.profile_id || profiles.value[0]?.id || "";
   form.value = { ...emptyForm(), profile_id: profileID };
   editingTask.value = null;
   editing.value = true;

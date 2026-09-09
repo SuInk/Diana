@@ -90,7 +90,7 @@ import SubscriptionTargetsEditor from "./SubscriptionTargetsEditor.vue";
 import SubscriptionDestination from "./SubscriptionDestination.vue";
 import { rssSourceLabel } from "../rss-display";
 
-const props = defineProps<{ prepareAccess?: () => Promise<void>; profileId?: string }>();
+const props = defineProps<{ prepareAccess?: () => Promise<void>; defaultProfileId?: string }>();
 const minimumIntervalSeconds = 5 * 60;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = 15 * 60;
@@ -109,11 +109,11 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups(false).catch(() => ({ groups: [] }))]);
-    watches.value = tasks.items.filter((task) => task.kind === "rss_watch" && (!props.profileId || task.profile_id === props.profileId || task.notification_targets?.some(target => target.profile_id === props.profileId))); profiles.value = (config.profiles?.length ? config.profiles : [config]); joinedGroups.value = groups.groups;
-    if (!form.value.profile_id) form.value.profile_id = props.profileId || profiles.value[0]?.id || "";
+    watches.value = tasks.items.filter((task) => task.kind === "rss_watch"); profiles.value = (config.profiles?.length ? config.profiles : [config]); joinedGroups.value = groups.groups;
+    if (!form.value.profile_id) form.value.profile_id = props.defaultProfileId || profiles.value[0]?.id || "";
   } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅加载失败"); } finally { loading.value = false; }
 }
-function startCreate(): void { const profileID = props.profileId || form.value.profile_id || profiles.value[0]?.id || ""; form.value = { ...emptyForm(), profile_id: profileID }; editingTask.value = null; editing.value = true; markEditorClean(); }
+function startCreate(): void { const profileID = props.defaultProfileId || form.value.profile_id || profiles.value[0]?.id || ""; form.value = { ...emptyForm(), profile_id: profileID }; editingTask.value = null; editing.value = true; markEditorClean(); }
 
 // 和仓库编辑器同样的处理：改动只在本地表单里，关掉之前必须问一次。
 function markEditorClean(): void { editorSnapshot.value = JSON.stringify(form.value); }
