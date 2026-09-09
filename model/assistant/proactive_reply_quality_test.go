@@ -13,17 +13,17 @@ import (
 )
 
 func TestParseProactiveReplyQualityDecision(t *testing.T) {
-	decision, ok := parseProactiveReplyQualityDecision("```json\n{\"should_send\":true,\"confidence\":0.96,\"reason\":\"直接回答\"}\n```")
-	if !ok || !decision.ShouldSend || decision.Confidence != 0.96 || decision.Reason != "直接回答" {
+	decision, ok := parseProactiveReplyQualityDecision("```json\n{\"send_confidence\":0.96,\"reason\":\"直接回答\"}\n```")
+	if !ok || decision.Confidence != 0.96 || decision.Reason != "直接回答" {
 		t.Fatalf("decision = %#v, ok = %v", decision, ok)
 	}
-	if _, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":1.2}`); ok {
+	if _, ok := parseProactiveReplyQualityDecision(`{"send_confidence":1.2}`); ok {
 		t.Fatal("out-of-range confidence should be rejected")
 	}
 }
 
 func TestJudgeProactiveReplyQualityRejectsLowConfidence(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.72,"reason":"回答方向不够确定"}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.72,"reason":"回答方向不够确定"}`}
 	runtime := NewRuntime(BotConfig{
 		BotAccount:              "42",
 		ProactiveReplyThreshold: 0.9,
@@ -37,7 +37,7 @@ func TestJudgeProactiveReplyQualityRejectsLowConfidence(t *testing.T) {
 }
 
 func TestJudgeProactiveReplyQualityAllowsQualifiedReply(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.95,"reason":"回答直接且有依据"}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.95,"reason":"回答直接且有依据"}`}
 	runtime := NewRuntime(BotConfig{
 		BotAccount:              "42",
 		ProactiveReplyThreshold: 0.9,
@@ -133,7 +133,7 @@ func TestProactiveReplyQualityPromptJudgesOnlyObservableDimensions(t *testing.T)
 func TestReplyAuditReceivesImageDescriptionWithoutFabricatingUserText(t *testing.T) {
 	for _, source := range []string{"current_recognition", "cached_description", "missing"} {
 		t.Run(source, func(t *testing.T) {
-			provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.98,"account_safe":true}`}
+			provider := &qualityTestProvider{reply: `{"send_confidence":0.98,"account_safe":true}`}
 			rt := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 			event := MessageEvent{Kind: EventKindGroup, RawMessage: "[CQ:image,file=tea.jpg]", Segments: []MessageSegment{{Type: "image", Data: map[string]string{}}}}
 			description := "画面是一包茶，包装文字为四川藏茶"
@@ -187,7 +187,7 @@ func TestDirectImageReplyAlwaysRequiresGroundingAudit(t *testing.T) {
 }
 
 func TestReplyAuditFallsBackToOriginalImageWhenDescriptionIsUnavailable(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.98,"account_safe":true}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.98,"account_safe":true}`}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{
 		Kind: EventKindGroup, RawMessage: "[CQ:image,file=tea.jpg]",
@@ -235,7 +235,7 @@ func TestReplySafetyPromptScopesPoliticsToMainlandChina(t *testing.T) {
 
 // 账号安全是一票否决：表达质量再高、置信度再高也拦。
 func TestJudgeProactiveReplyRejectsAccountUnsafeContent(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"口吻自然","account_safe":false,"account_risk":"politics","account_risk_reason":"评价中国大陆现实政治人物"}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"口吻自然","account_safe":false,"account_risk":"politics","account_risk_reason":"评价中国大陆现实政治人物"}`}
 	runtime := NewRuntime(BotConfig{
 		BotAccount:              "42",
 		ProactiveReplyThreshold: 0.9,
@@ -259,7 +259,7 @@ func TestJudgeProactiveReplyRejectsAccountUnsafeContent(t *testing.T) {
 }
 
 func TestReplyAuditParsesDedicatedAccountRiskReason(t *testing.T) {
-	decision, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.95,"reason":"结构清晰","account_safe":false,"account_risk":"politics","account_risk_reason":"涉及中国大陆党政机构评价"}`)
+	decision, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.95,"reason":"结构清晰","account_safe":false,"account_risk":"politics","account_risk_reason":"涉及中国大陆党政机构评价"}`)
 	if !ok {
 		t.Fatal("decision did not parse")
 	}
@@ -273,7 +273,7 @@ func TestReplyAuditParsesDedicatedAccountRiskReason(t *testing.T) {
 }
 
 func TestReplyAuditParsesHighConfidenceRefusal(t *testing.T) {
-	decision, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.97,"account_safe":true,"count_refusal":true,"refusal_confidence":0.94,"refusal_reason":"明确拒绝当前请求"}`)
+	decision, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.97,"account_safe":true,"count_refusal":true,"refusal_confidence":0.94,"refusal_reason":"明确拒绝当前请求"}`)
 	if !ok {
 		t.Fatal("decision did not parse")
 	}
@@ -287,7 +287,7 @@ func TestReplyAuditParsesHighConfidenceRefusal(t *testing.T) {
 }
 
 func TestDirectReplyAuditReturnsRefusalControlWithSafetyResult(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"自然拒绝","account_safe":true,"count_refusal":true,"refusal_confidence":0.98,"refusal_reason":"明确拒绝当前请求"}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"自然拒绝","account_safe":true,"count_refusal":true,"refusal_confidence":0.98,"refusal_reason":"明确拒绝当前请求"}`}
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -307,7 +307,7 @@ func TestDirectReplyAuditReturnsRefusalControlWithSafetyResult(t *testing.T) {
 
 // 模型没返回 account_safe 时按安全处理：缺字段就拦会让机器人集体哑火。
 func TestReplyAuditTreatsMissingAccountSafeAsSafe(t *testing.T) {
-	decision, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.95}`)
+	decision, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.95}`)
 	if !ok {
 		t.Fatal("decision should still parse without the account fields")
 	}
@@ -321,7 +321,7 @@ func TestReplyAuditTreatsMissingAccountSafeAsSafe(t *testing.T) {
 
 // 直接回复的安全审核默认关闭：主动回复那次审核是顺带的，直接回复要额外一次调用。
 func TestAuditReplyAccountSafetyIsOptInForDirectReplies(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"explicit"}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"explicit"}`}
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

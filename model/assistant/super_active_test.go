@@ -70,10 +70,10 @@ func TestSuperActivePromptsAndQuality(t *testing.T) {
 	r := &Runtime{}
 	for _, chatIn := range []bool{true, false} {
 		event := MessageEvent{chatInReply: chatIn}
-		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{ShouldSend: true, Confidence: 0.98}, cfg); err != nil {
+		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{Confidence: 0.98}, cfg); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{ShouldSend: false, Confidence: 0.99}, cfg); err == nil {
+		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{Confidence: 0.01}, cfg); err == nil {
 			t.Fatal("explicit audit rejection must be preserved")
 		}
 	}
