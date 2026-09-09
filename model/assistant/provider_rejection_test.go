@@ -10,10 +10,13 @@ import (
 )
 
 func TestProviderRejectionClassification(t *testing.T) {
-	for _, err := range []error{llm.ErrUnverifiedRejection, &llm.ContentBlockedError{Provider: llm.ProviderGemini, Reason: "SAFETY"}, errors.New("403 content_policy_violation")} {
+	for _, err := range []error{&llm.ContentBlockedError{Provider: llm.ProviderGemini, Reason: "SAFETY"}, errors.New("403 content_policy_violation")} {
 		if shouldFailoverLLMError(err) || shouldRetryTransientLLMError(err) {
 			t.Fatalf("rejection retried: %v", err)
 		}
+	}
+	if !shouldFailoverLLMError(llm.ErrUnverifiedRejection) || shouldRetryTransientLLMError(llm.ErrUnverifiedRejection) {
+		t.Fatal("unverified notice should use failover, not same-provider retry")
 	}
 	for _, err := range []error{errors.New("403 Forbidden: provider permission denied"), errors.New("429 quota exceeded"), errors.New("503 service unavailable"), errors.New("model_not_found")} {
 		if !shouldFailoverLLMError(err) {
