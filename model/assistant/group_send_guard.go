@@ -192,6 +192,12 @@ func (r *Runtime) executeOutboundCall(
 	action string,
 	call func(context.Context) (map[string]any, error),
 ) (map[string]any, error) {
+	// Retry bridge media-validation failures briefly before trying a different
+	// representation. This is separate from the group's network backoff window.
+	originalCall := call
+	call = func(callCtx context.Context) (map[string]any, error) {
+		return retryOutboundPayloadRejection(callCtx, originalCall)
+	}
 	if _, _, err := r.outboundChannelForEvent(event); err != nil {
 		return nil, err
 	}
@@ -262,6 +268,15 @@ func (r *Runtime) executeOutboundCall(
 			}
 			return result, nil
 		}
+		if isOutboundPayloadRejection(err) {
+			// The short retry budget is exhausted. Leave the group available for
+			// another representation or later messages instead of locking it out.
+			gate.reset()
+			return nil, &outboundSendError{GroupID: groupID, Cause: err}
+		}
+		if ctx.Err() != nil && gate.failures == 0 {
+			return nil, ctx.Err()
+		}
 		wrapped := r.wrapOutboundSendError(ctx, event, err)
 		if errors.Is(wrapped, errGroupSendUnavailable) {
 			return nil, wrapped
@@ -287,6 +302,32 @@ func (r *Runtime) executeOutboundCall(
 			return nil, wrapped
 		}
 	}
+}
+
+const outboundPayloadMaxAttempts = 3
+
+func retryOutboundPayloadRejection(ctx context.Context, call func(context.Context) (map[string]any, error)) (map[string]any, error) {
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		result, err := call(ctx)
+		if !isOutboundPayloadRejection(err) || attempt >= outboundPayloadMaxAttempts {
+			return result, err
+		}
+		if err := waitForOutboundRetry(ctx, time.Duration(attempt)*sendRetryBackoff); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func isOutboundPayloadRejection(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "message element") && strings.Contains(message, "requires a file/url source") ||
+		strings.Contains(message, "unsupported forward node content")
 }
 
 func (r *Runtime) runtimeContextStopped() bool {
