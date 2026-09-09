@@ -640,7 +640,7 @@ func TestReplySuppressionPersistsAcrossRuntimeRestart(t *testing.T) {
 // 复盘在回复之后进行：回够三条才暂停，第四条才被拦下。
 func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	loopVerdict := func(confidence string, reason string) string {
-		return `{"should_send":true,"confidence":0.9,"account_safe":true,"count_refusal":false,` +
+		return `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,` +
 			`"reply_loop_automated_ai":true,"reply_loop_meaningless":false,` +
 			`"reply_loop_confidence":` + confidence + `,"reply_loop_reason":"` + reason + `"}`
 	}
@@ -727,7 +727,7 @@ func TestBotReplyLoopJudgementCostsNoExtraCall(t *testing.T) {
 // 主人同样进入空转判断，但永远不暂停：暂停会把操作员锁在自己的机器人外面，
 // 而解除暂停的命令恰恰要主人发。
 func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
-	loopVerdict := `{"should_send":true,"confidence":0.9,"account_safe":true,"count_refusal":false,` +
+	loopVerdict := `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,` +
 		`"reply_loop_automated_ai":true,"reply_loop_meaningless":false,"reply_loop_confidence":0.98,"reply_loop_reason":"一直在空转"}`
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{auditReplies: []string{loopVerdict, loopVerdict, loopVerdict, loopVerdict}}
@@ -777,13 +777,13 @@ func TestBotReplyLoopCountsMeaninglessExchanges(t *testing.T) {
 	if low.counts() {
 		t.Fatal("低置信度不该计数")
 	}
-	audit, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.9,"account_safe":true,"reply_loop_automated_ai":false,"reply_loop_meaningless":true,"reply_loop_confidence":0.93,"reply_loop_reason":"互相复读"}`)
+	audit, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_automated_ai":false,"reply_loop_meaningless":true,"reply_loop_confidence":0.93,"reply_loop_reason":"互相复读"}`)
 	parsed := audit.loopDecision()
 	if !ok || !parsed.MeaninglessLoop || parsed.AutomatedAIReply || !parsed.counts() {
 		t.Fatalf("parsed = %#v ok=%v", parsed, ok)
 	}
 	// 旧提示词没有空转三项，升级期间审核结论必须仍然可解，且当作没有空转。
-	legacyAudit, ok := parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.95,"account_safe":true,"count_refusal":false}`)
+	legacyAudit, ok := parseProactiveReplyQualityDecision(`{"send_confidence":0.95,"account_safe":true,"count_refusal":false}`)
 	legacy := legacyAudit.loopDecision()
 	if !ok || legacy.MeaninglessLoop || legacy.AutomatedAIReply || legacy.counts() {
 		t.Fatalf("legacy = %#v ok=%v", legacy, ok)
@@ -817,7 +817,7 @@ func TestBotReplyLoopDetectionCanBeDisabled(t *testing.T) {
 func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 	provider := &sequenceLLMProvider{}
 	for i := 0; i < botReplyLoopThreshold+2; i++ {
-		provider.auditReplies = append(provider.auditReplies, `{"should_send":true,"confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"普通真人连续聊天"}`)
+		provider.auditReplies = append(provider.auditReplies, `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"普通真人连续聊天"}`)
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
@@ -952,12 +952,12 @@ func TestBotReplyLoopNeverClassifiesOwner(t *testing.T) {
 }
 
 func TestParseReplyLoopVerdictFromAudit(t *testing.T) {
-	audit, ok := parseProactiveReplyQualityDecision("```json\n{\"should_send\":true,\"confidence\":0.9,\"account_safe\":true,\"reply_loop_automated_ai\":true,\"reply_loop_confidence\":0.95,\"reply_loop_reason\":\"模板化自动应答\"}\n```")
+	audit, ok := parseProactiveReplyQualityDecision("```json\n{\"send_confidence\":0.9,\"account_safe\":true,\"reply_loop_automated_ai\":true,\"reply_loop_confidence\":0.95,\"reply_loop_reason\":\"模板化自动应答\"}\n```")
 	decision := audit.loopDecision()
 	if !ok || !decision.counts() || decision.Reason == "" {
 		t.Fatalf("decision=%#v ok=%v", decision, ok)
 	}
-	audit, ok = parseProactiveReplyQualityDecision(`{"should_send":true,"confidence":0.9,"account_safe":true,"reply_loop_automated_ai":true,"reply_loop_confidence":0.89,"reply_loop_reason":"证据不足"}`)
+	audit, ok = parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_automated_ai":true,"reply_loop_confidence":0.89,"reply_loop_reason":"证据不足"}`)
 	if decision = audit.loopDecision(); !ok || decision.counts() {
 		t.Fatalf("low-confidence decision=%#v ok=%v", decision, ok)
 	}

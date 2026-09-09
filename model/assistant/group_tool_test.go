@@ -143,7 +143,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *tes
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"tool","tool":"diana.onebot_group","input":{"operation":"members"}}`,
 		`{"action":"final","content":"群里现在有 3 个人。"}`,
-		`{"should_send":true,"confidence":0.99,"reason":"准确回答群成员数量"}`,
+		`{"send_confidence":0.99,"reason":"准确回答群成员数量"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
 		AgentEnabled:  true,
