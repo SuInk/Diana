@@ -132,7 +132,7 @@ func (p *runtimeAgentLLMProvider) configuredImageModelIdentities() []dianaRuntim
 	if p == nil || p.runtime == nil {
 		return nil
 	}
-	configs := p.runtime.imageProviderConfigs()
+	configs := p.runtime.imageProviderConfigs(p.ctx)
 	models := make([]dianaRuntimeModelResult, 0, len(configs))
 	for _, cfg := range configs {
 		models = append(models, dianaRuntimeModelResult{
