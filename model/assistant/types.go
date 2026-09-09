@@ -603,6 +603,7 @@ type BotConfig struct {
 }
 
 type ModelRole struct {
+	FollowChat bool        `json:"follow_chat,omitempty"`
 	ProfileID  string      `json:"profile_id,omitempty"`
 	Group      string      `json:"group,omitempty"`
 	Model      string      `json:"model"`
@@ -615,6 +616,9 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 	out := map[string]ModelRole{}
 	for key, role := range roles {
 		key = strings.ToLower(strings.TrimSpace(key))
+		if role.FollowChat && key != "vision" {
+			role.FollowChat = false
+		}
 		role = normalizeModelRole(role)
 		// 可绑定的键从 4 个扩到「5 个分组 + 17 个用途」，见 model_binding.go。
 		if isModelBindingKey(key) && modelRoleConfigured(role) {
@@ -628,6 +632,9 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 }
 
 func normalizeModelRole(role ModelRole) ModelRole {
+	if role.FollowChat {
+		return ModelRole{FollowChat: true}
+	}
 	role.ProfileID = strings.TrimSpace(role.ProfileID)
 	role.Group = strings.TrimSpace(role.Group)
 	role.Model = strings.TrimSpace(role.Model)
@@ -645,6 +652,7 @@ func normalizeModelRole(role ModelRole) ModelRole {
 	}
 	fallbacks := make([]ModelRole, 0, len(role.Fallbacks))
 	for _, fallback := range role.Fallbacks {
+		fallback.FollowChat = false
 		fallback.Fallbacks = nil
 		fallback = normalizeModelRole(fallback)
 		if modelRoleConfigured(fallback) {
@@ -656,6 +664,9 @@ func normalizeModelRole(role ModelRole) ModelRole {
 }
 
 func modelRoleConfigured(role ModelRole) bool {
+	if role.FollowChat {
+		return true
+	}
 	return ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != ""
 }
 

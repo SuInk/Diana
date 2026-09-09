@@ -33,10 +33,28 @@ test("saving requires an explicit provider and model for each role", async () =>
 });
 
 test("provider and model menus do not offer an empty assignment", () => {
-  const context = vm.createContext({ llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::" });
+  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::" });
   loadFunction("crossProviderModelOptions", context);
   for (const name of ["channelOptionsFor", "crossProviderModelOptions", "modelOptionsFor"]) {
     const options = loadFunction(name, context)("vision", {});
     assert.equal(options.some(option => option.value === ""), false);
   }
+});
+
+test("vision model dropdown offers follow chat and stores a relationship", () => {
+  const roleForm = { value: { vision: { profile_id: "old", model: "old", fallbacks: [{profile_id:"backup",model:"old-backup"}] } } };
+  const context = vm.createContext({roleForm, MODEL_PAIR_SEP:"::",selectedRoleProfiles:()=>[],crossProviderModelOptions:()=>[{value:"p::real",label:"Real"}]});
+  const options = loadFunction("modelOptionsFor",context)("vision");
+  assert.equal(options[0].value,"__follow_chat__");
+  assert.equal(options[0].label,"跟随对话");
+  assert.equal(loadFunction("modelOptionsFor",context)("chat").some(o=>o.value==="__follow_chat__"),false);
+  assert.equal(loadFunction("modelOptionsFor",context)("vision",{model:""}).some(o=>o.value==="__follow_chat__"),false);
+  loadFunction("setRoleModel",context)("vision","__follow_chat__");
+  assert.equal(roleForm.value.vision.follow_chat,true);
+  assert.equal(roleForm.value.vision.profile_id,undefined);
+  assert.equal(roleForm.value.vision.fallbacks,undefined);
+  assert.equal(loadFunction("roleModelValue",context)("vision"),"__follow_chat__");
+  loadFunction("setRoleModel",context)("vision","p::real");
+  assert.equal(roleForm.value.vision.follow_chat,undefined);
+  assert.equal(roleForm.value.vision.model,"real");
 });
