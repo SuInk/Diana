@@ -173,21 +173,25 @@ func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaBotParticipationTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
-		"operation":                  "set_reply_policy",
-		"chat_in_level":              "high",
+		"operation":                  "update",
+		"desire_level":               "high",
 		"minimum_reply_member_level": 15,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result dianaOneBotGroupResult
+	var result struct {
+		OperatorRole            string                    `json:"operator_role"`
+		Participation           *ParticipationPreferences `json:"participation"`
+		MinimumReplyMemberLevel int                       `json:"minimum_reply_member_level"`
+	}
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.OperatorRole != "bot_owner" || result.ReplyPolicy == nil || result.ReplyPolicy.MinimumReplyMemberLevel != 15 || result.ReplyPolicy.ChatInLevel != string(ChatInLevelHigh) {
+	if result.OperatorRole != "bot_owner" || result.Participation == nil || result.MinimumReplyMemberLevel != 15 || result.Participation.replyLevel() != ChatInLevelHigh {
 		t.Fatalf("result = %#v", result)
 	}
 	saved, ok := store.ConfigForGroup("", "123")
@@ -202,10 +206,10 @@ func TestDianaOneBotGroupToolRejectsOrdinaryMemberReplyPolicyUpdate(t *testing.T
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "900"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&testWritableGroupConfigStore{})
-	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderRole: "member"})
+	tool := newDianaBotParticipationTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderRole: "member"})
 
 	_, err := tool.Run(context.Background(), map[string]any{
-		"operation":                  "set_reply_policy",
+		"operation":                  "update",
 		"minimum_reply_member_level": 20,
 	})
 	if err == nil || !strings.Contains(err.Error(), "只有机器人主人、群主或群管理员") {
@@ -233,16 +237,18 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	store := &testWritableGroupConfigStore{}
 	_, _ = store.SaveGroupConfig(GroupConfig{GroupID: "123", Enabled: true, EnabledSet: true, ResponseMode: ResponseModeStandard}, runtime.Config())
 	runtime.SetGroupConfigStore(store)
-	tool := newDianaOneBotGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
+	tool := newDianaBotParticipationTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
 	raw, err := tool.Run(context.Background(), map[string]any{
-		"operation":     "set_reply_policy",
-		"chat_in_level": "max",
+		"operation":    "update",
+		"desire_level": "max",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result dianaOneBotGroupResult
+	var result struct {
+		Participation *ParticipationPreferences `json:"participation"`
+	}
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
@@ -251,8 +257,8 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	if !ok || saved.ResponseMode != ResponseModeCustom || saved.ChatInLevel != ChatInLevelMax {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}
-	if result.ReplyPolicy == nil || result.ReplyPolicy.ChatInLevel != string(ChatInLevelMax) {
-		t.Fatalf("reported policy = %#v", result.ReplyPolicy)
+	if result.Participation == nil || result.Participation.replyLevel() != ChatInLevelMax {
+		t.Fatalf("reported policy = %#v", result.Participation)
 	}
 	effective := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
 	if effective.ChatInLevel != ChatInLevelMax {
@@ -260,18 +266,20 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	}
 }
 
-func TestDianaOneBotGroupReplyPolicyReportsThePresetInsteadOfTheRawLevel(t *testing.T) {
-	// 群仍是标准模式时，运行时用的是预设档位，报告也必须说预设值。
-	policy := dianaOneBotGroupReplyPolicyFromConfig(GroupConfig{
-		GroupID: "123", ResponseMode: ResponseModeStandard, ChatInLevel: ChatInLevelMax,
-	})
-	if policy.ChatInLevel != string(ChatInLevelLow) {
-		t.Fatalf("reported level = %q, want the standard preset", policy.ChatInLevel)
+func TestBotConfigGetReportsEffectiveInheritedPreferences(t *testing.T) {
+	r := NewRuntime(BotConfig{OwnerID: "owner", Participation: &ParticipationPreferences{Desire: 50, CooldownSeconds: 120}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r.SetGroupConfigStore(&testWritableGroupConfigStore{})
+	raw, err := newDianaBotParticipationTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"}).Run(context.Background(), map[string]any{"operation": "get"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	custom := dianaOneBotGroupReplyPolicyFromConfig(GroupConfig{
-		GroupID: "123", ResponseMode: ResponseModeCustom, ChatInLevel: ChatInLevelMax,
-	})
-	if custom.ChatInLevel != string(ChatInLevelMax) {
-		t.Fatalf("custom reported level = %q, want max", custom.ChatInLevel)
+	var result struct {
+		Participation ParticipationPreferences `json:"participation"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Participation.Desire != 50 || result.Participation.CooldownSeconds != 120 {
+		t.Fatalf("reported raw defaults instead of effective prefs: %s", raw)
 	}
 }

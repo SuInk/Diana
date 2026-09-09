@@ -19,7 +19,7 @@ func dianaAgentTools(t *testing.T) []agent.Tool {
 	return []agent.Tool{
 		newDianaChatHistoryTool(runtime, event),
 		newDianaHistoryImagesTool(runtime, event),
-		newDianaOneBotGroupTool(runtime, event),
+		newDianaGroupTool(runtime, event),
 		newDianaRelationshipTool(runtime, event),
 		newDianaImageTool(runtime, event, policy),
 		newDianaTasksTool(runtime, event),

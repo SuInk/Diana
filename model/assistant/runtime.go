@@ -3427,6 +3427,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaVersionTool(r),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
+				newDianaBotParticipationTool(r, event),
 				newDianaReminderTool(r, event),
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
@@ -3436,7 +3437,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaHostStatsTool(r, event),
 			}
 			if supportsOneBotGroupTool(cfg, event) {
-				extraTools = append(extraTools, newDianaOneBotGroupTool(r, event))
+				extraTools = append(extraTools, newDianaGroupTool(r, event))
 			}
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
@@ -6329,6 +6330,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && hasTool(groupToolName(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)})) {
 		builder.WriteString("\n" + groupToolPrompt(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)}))
+	}
+	if agentEnabled && hasTool(botParticipationToolName) {
+		builder.WriteString("\n修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 diana.bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。")
 	}
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n" + promptToolRelationshipList)

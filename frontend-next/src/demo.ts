@@ -1,6 +1,7 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
+import { extensionDemoResponse } from './extension-demo';
 import type {
   AppLogEntry,
   AssistantEventDetail,
@@ -597,6 +598,10 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
+  if (path === "/api/assistant/extensions") {
+    try { return json(extensionDemoResponse(method,url.searchParams.get('profile')||'',body)); }
+    catch(error) { return json({error:error instanceof Error?error.message:String(error)},400); }
+  }
   if (path === "/api/assistant/plugins") {
     const profile = url.searchParams.get("profile") ?? "";
     return json(plugins.filter((plugin) => !profile || plugin.manifest.id !== "official.open-api").map((plugin) => demoPluginForProfile(plugin, profile)));

@@ -36,18 +36,28 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		registry, err = base.NewView(agentCfg)
 	} else {
 		registry, err = agent.NewDefaultToolRegistry(agentCfg)
+		if err == nil {
+			registry.RegisterBuiltinSkills(agentCfg.BuiltinSkills)
+		}
 	}
 	if err != nil {
 		return nil, err
 	}
 	if relationship.Owner {
 		registry.Register(newDianaConfigTool(r))
+		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
 	}
 	for _, tool := range extraTools {
 		registry.Register(tool)
 	}
 	registry.Retain(r.allowedAgentToolNamesForEvent(event, relationship))
+	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), event.ProfileID)
+	if err != nil {
+		_ = registry.Close()
+		return nil, err
+	}
+	registry.ApplyExtensionOverrides(overrides)
 	return registry, nil
 }
 
@@ -68,15 +78,16 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 }
 
 func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {
+	global := r.Config()
 	return agent.Config{
 		WorkDir:             AgentWorkspaceDir(),
 		MaxSteps:            cfg.AgentMaxSteps,
-		SkillRoots:          cfg.AgentSkillRoots,
-		MCPConfigPath:       cfg.AgentMCPConfigPath,
+		SkillRoots:          global.AgentSkillRoots,
+		MCPConfigPath:       global.AgentMCPConfigPath,
 		ExtensionManagement: extensionManagement,
 		BuiltinExtensions:   r.agentBuiltinExtensions(event),
-		BuiltinSkills:       r.oneBotV11BuiltinSkills(event),
-		ReservedSkillNames:  []string{"onebot-v11"},
+		BuiltinSkills:       r.botProtocolBuiltinSkills(event),
+		ReservedSkillNames:  []string{"onebot-v11", "bot-protocol"},
 		CommandAllowlist:    cfg.AgentCommandAllowlist,
 		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
 		// 这两项以前在 agent.Config 里存在但没人赋值，于是永远是 auto，
@@ -91,6 +102,11 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 
 func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*agent.ToolRegistry, error) {
 	cfg = cfg.WithDefaults()
+	var pathErr error
+	cfg, pathErr = agent.GlobalExtensionPaths(cfg)
+	if pathErr != nil {
+		return nil, pathErr
+	}
 	// Built-in plugin state can vary per group override, but it does not change
 	// the underlying Skills/MCP processes. Request views overlay that state.
 	baseCfg := cfg

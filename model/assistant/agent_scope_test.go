@@ -54,6 +54,9 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer registry.Close()
+	if _, ok := registry.Get(dianaUsageToolName); !ok {
+		t.Fatal("owner usage tool is missing")
+	}
 	list, ok := registry.Get("extensions.list")
 	if !ok {
 		t.Fatal("extensions.list is missing for owner")
@@ -235,7 +238,7 @@ func TestSystemPromptOmitsUnselectedToolRules(t *testing.T) {
 		true,
 		registry,
 	)
-	for _, unexpected := range []string{"diana.config", "diana.llm_config", "diana.relationship", "diana.tasks", "diana.reminder", "diana.schedule", "diana.tts", "diana.onebot_group", dianaNotebookToolName} {
+	for _, unexpected := range []string{"diana.config", "diana.llm_config", "diana.relationship", "diana.tasks", "diana.reminder", "diana.schedule", "diana.tts", "diana.group", dianaNotebookToolName} {
 		if strings.Contains(prompt, unexpected) {
 			t.Fatalf("prompt unexpectedly contains unselected tool %q: %s", unexpected, prompt)
 		}

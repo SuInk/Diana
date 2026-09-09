@@ -50,7 +50,7 @@ func TestTelegramDirectoryIsExplicitlyPartialAndTracksUpdates(t *testing.T) {
 		t.Fatal("observed user treated as verified or lost username")
 	}
 	r := NewRuntime(BotConfig{Platform: PlatformTelegram}, c, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaOneBotGroupTool(r, MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-1001"})
+	tool := newDianaGroupTool(r, MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-1001"})
 	if tool.Name() != "diana.group" {
 		t.Fatal("TG still uses OneBot tool name")
 	}
@@ -58,7 +58,7 @@ func TestTelegramDirectoryIsExplicitlyPartialAndTracksUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var result dianaOneBotGroupResult
+	var result dianaGroupResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}

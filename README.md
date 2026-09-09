@@ -164,6 +164,12 @@ Telegram 主人账号支持数字 ID、用户名和 `@用户名`，按平台真�
 
 ## 日常管理
 
+“扩展”页统一管理插件、Skills 和 MCP，定义全局共享、机器人分别启用，详见[扩展管理](docs/extensions.md)。
+
+群查询和管理按平台协议 skill 执行，Diana 回复欲望与冷却使用独立配置工具，见[协议操作与回复设置](docs/bot-protocol.md)。
+
+主人可以在聊天中查询当前实例最近 24 小时的 Token 用量，包含输入、输出和缓存命中，见[用量查询](docs/llm-usage.md)。
+
 主人可通过聊天在已配置供应商之间切换当前机器人的模型用途，详见[聊天切换模型](docs/chat-model-switch.md)。
 
 装好之后 `diana` 命令就在 PATH 里：

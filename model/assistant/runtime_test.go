@@ -329,7 +329,7 @@ func TestRuntimeDoesNotOverrideModelSilenceForDirectedFollowup(t *testing.T) {
 		t.Fatalf("router request = %#v", provider.request.Messages)
 	}
 	prompt := provider.request.Messages[0].Content + "\n" + provider.request.Messages[1].Content
-	for _, want := range []string{"web_search.search", "始终注册", "diana.onebot_group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
+	for _, want := range []string{"web_search.search", "始终注册", "diana.group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}
