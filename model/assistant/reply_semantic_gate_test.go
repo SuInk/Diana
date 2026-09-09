@@ -34,7 +34,7 @@ func (p *semanticGateProvider) Generate(_ context.Context, req llm.GenerateReque
 		}
 		if strings.Contains(m.Content, "你是机器人回复的发送前审核器") {
 			p.audits = append(p.audits, req.Messages[len(req.Messages)-1].Content)
-			return &llm.GenerateResponse{Text: `{"should_send":true,"confidence":0.99,"account_safe":true}`}, nil
+			return &llm.GenerateResponse{Text: `{"send_confidence":0.99,"account_safe":true}`}, nil
 		}
 	}
 	return &llm.GenerateResponse{Text: "原有说明和新增信息"}, nil

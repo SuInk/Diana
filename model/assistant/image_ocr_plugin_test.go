@@ -359,7 +359,7 @@ func TestImageRecognitionTextIsReusedByReplyAudit(t *testing.T) {
 				responses = append([]string{"画面是一包茶叶"}, responses...)
 			}
 			recognitionCalls := len(responses)
-			responses = append(responses, `{"should_send":true,"confidence":0.98,"account_safe":true}`)
+			responses = append(responses, `{"send_confidence":0.98,"account_safe":true}`)
 			provider := &imageOCRFakeProvider{responses: responses}
 			rt := newImageOCRTestRuntime(t, provider, map[string]any{"backend": imageOCRBackendLLM, "delivery": delivery})
 			event := MessageEvent{Kind: EventKindGroup, RawMessage: "[CQ:image,file=tea.jpg]", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file": "tea.jpg"}}}}

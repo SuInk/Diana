@@ -91,8 +91,8 @@ func TestLiveTerraReceivesCurrentImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Luna audit: should_send=%v confidence=%.2f reason=%q", decision.ShouldSend, decision.Confidence, decision.Reason)
-	if decision.ShouldSend {
+	t.Logf("Luna audit: send_confidence=%.2f reason=%q", decision.Confidence, decision.Reason)
+	if auditRuntime.proactiveQualityError(enriched, decision, auditRuntime.Config()) == nil {
 		t.Fatal("Luna audit allowed an elevator answer for the Mormon screenshot")
 	}
 }

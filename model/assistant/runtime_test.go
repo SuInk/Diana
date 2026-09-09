@@ -5074,8 +5074,8 @@ type capturingLLMProvider struct {
 // Generate 记录请求并返回固定回复。
 func (p *capturingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "should_send") {
-			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
+		if strings.Contains(message.Content, "send_confidence") {
+			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"send_confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 		}
 	}
 	p.mu.Lock()
@@ -5105,12 +5105,12 @@ func cloneGenerateRequestForTest(req llm.GenerateRequest) llm.GenerateRequest {
 }
 
 // testReplyAuditPass 是发送前审核的默认放行结论，各 provider 共用。
-const testReplyAuditPass = `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核","account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"正常对话"}`
+const testReplyAuditPass = `{"send_confidence":0.99,"reason":"测试回复通过准确度审核","account_safe":true,"count_refusal":false,"reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.99,"reply_loop_reason":"正常对话"}`
 
 // isReplyAuditRequest 判断这是不是发送前审核的调用。
 func isReplyAuditRequest(req llm.GenerateRequest) bool {
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "should_send") {
+		if strings.Contains(message.Content, "send_confidence") {
 			return true
 		}
 	}
@@ -5131,7 +5131,7 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "should_send") {
+		if strings.Contains(message.Content, "send_confidence") {
 			// 发送前审核默认自动放行，不消耗 replies——绝大多数用例不关心它。
 			// 需要控制审核结论（例如空转判断）的用例填 auditReplies。
 			if len(p.auditReplies) > 0 {
@@ -5139,11 +5139,11 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 				p.auditReplies = p.auditReplies[1:]
 				return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: reply}, nil
 			}
-			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
+			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"send_confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 		}
 	}
 	if len(p.replies) == 0 {
-		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"should_send":true,"confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"send_confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 	}
 	reply := p.replies[0]
 	p.replies = p.replies[1:]
