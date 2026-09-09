@@ -218,7 +218,7 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 	if !runtime.shouldConsiderProactiveReply(event, text) || !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
 		t.Fatal("reliable direct follow-up should pass semantic routing without proactive sampling")
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "需要搜索或工具才能回答，不是保持沉默的理由") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
+	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "不是压低明确请求相关度的理由") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
 		t.Fatalf("router prompt missing deferred accuracy guard: %#v", provider.request.Messages)
 	}
 }
@@ -2592,7 +2592,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		t.Fatal("proactive router did not call the LLM")
 	}
 	systemPrompt := provider.request.Messages[0].Content
-	for _, want := range []string{"本轮档位：low", "should_reply", "只作接话决定", "不要把别人对其他人的提问冒认", "需要搜索或工具才能回答，不是保持沉默的理由"} {
+	for _, want := range []string{"闲聊档位：low", "relevance", "chat_in", "不把别人对其他人的问题冒认", "不是压低明确请求相关度的理由"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}
@@ -2747,7 +2747,7 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 	if len(request.Messages) < 2 {
 		t.Fatalf("router request = %#v", request.Messages)
 	}
-	if !strings.Contains(request.Messages[0].Content, "不是直接向机器人提问") || !strings.Contains(request.Messages[0].Content, "chat_in") {
+	if !strings.Contains(request.Messages[0].Content, "不把别人对其他人的问题冒认") || !strings.Contains(request.Messages[0].Content, "chat_in：") {
 		t.Fatalf("router prompt missing contextual chat-in guidance: %q", request.Messages[0].Content)
 	}
 	for _, want := range []string{"流量不够了能玩什么", "离线小说", `"images":1`, "你不是最喜欢看小说吗"} {

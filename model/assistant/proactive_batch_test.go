@@ -55,7 +55,7 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 		}
 	}
 	routePrompt := provider.requests[0].Messages[0].Content
-	for _, want := range []string{"最近 15 秒内最多 3 条候选", "不能仅凭同一发送者或时间相邻就合并", "turn_message_ids", "连续补充的多个问题", "禁止换一种说法重复回答"} {
+	for _, want := range []string{"只评估 current_text", "历史与候选供理解上下文", "不选择其他消息作为回复目标", "同一内容已经回答"} {
 		if !strings.Contains(routePrompt, want) {
 			t.Fatalf("batch route prompt missing %q: %s", want, routePrompt)
 		}
@@ -86,7 +86,7 @@ func TestProactiveReplyBatchReplacesLegacyRouterPrompt(t *testing.T) {
 	if len(provider.requests) != 1 || len(provider.requests[0].Messages) == 0 {
 		t.Fatalf("router requests = %#v", provider.requests)
 	}
-	if got := provider.requests[0].Messages[0].Content; strings.Contains(got, "custom proactive router prompt") || !strings.Contains(got, "本轮档位：low") {
+	if got := provider.requests[0].Messages[0].Content; strings.Contains(got, "custom proactive router prompt") || !strings.Contains(got, "闲聊档位：low") {
 		t.Fatalf("router prompt = %q", got)
 	}
 }
