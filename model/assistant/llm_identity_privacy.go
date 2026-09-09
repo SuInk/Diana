@@ -239,6 +239,9 @@ func (s *identityPrivacyScope) restoreValue(value any) any {
 }
 
 func (s *identityPrivacyScope) registerEvent(event MessageEvent) {
+	for _, mention := range event.MentionTargets {
+		s.register(mention.UserID, "user")
+	}
 	s.register(event.UserID, "user")
 	s.register(event.OperatorID, "user")
 	s.register(event.GroupID, "group")

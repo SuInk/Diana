@@ -814,6 +814,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 
 	event := MessageEvent{
 		Platform:        PlatformTelegram,
+		MentionTargets:  telegramMentionTargets(text, entities, selfID, botUsername),
 		Time:            msg.Date,
 		SelfID:          selfID,
 		MessageID:       strconv.FormatInt(msg.MessageID, 10),
