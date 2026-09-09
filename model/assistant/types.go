@@ -93,6 +93,9 @@ type ImageDescriptionRecord struct {
 }
 
 type MessageEvent struct {
+	// SenderUsername is the platform-authenticated sender handle, not a display
+	// name or a handle found in message text, mentions or forwarded content.
+	SenderUsername   string           `json:"sender_username,omitempty"`
 	MentionTargets   []MessageMention `json:"mention_targets,omitempty"`
 	UserIDType       string           `json:"user_id_type,omitempty"`
 	PlatformScope    string           `json:"platform_scope,omitempty"`

@@ -843,6 +843,9 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		event.SenderIsBot = msg.From.IsBot && msg.SenderChat == nil
 		event.UserID = strconv.FormatInt(msg.From.ID, 10)
 		event.SenderName = telegramDisplayName(msg.From)
+		if msg.SenderChat == nil && !msg.From.IsBot {
+			event.SenderUsername = msg.From.Username
+		}
 	}
 
 	// 私聊天然是对机器人说的；群里靠 @提及 判断。

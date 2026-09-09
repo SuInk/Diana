@@ -35,7 +35,7 @@ func TestTelegramIgnoresForwardThresholdWithoutAudit(t *testing.T) {
 						channel = NewMultiChannel([]ChannelBinding{{ProfileID: "tg", Platform: PlatformTelegram, Channel: channel}, {ProfileID: "qq", Platform: PlatformOneBotV11, Channel: onebot}})
 						event.ProfileID = "tg"
 					}
-					provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":0.99,"account_safe":true}`}
+					provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"account_safe":true}`}
 					// Default config is deliberately OneBot; the actual transport wins.
 					rt := NewRuntime(BotConfig{ForwardReplyThreshold: tc.threshold, SendChunkIntervalMS: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 					if _, err := rt.sendDecorated(context.Background(), event, tc.text, outboundDecoration{}); err != nil {

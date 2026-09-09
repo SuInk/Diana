@@ -121,7 +121,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 		return relationshipEvaluationDecision{}, UserMemoryProfile{}, false
 	}
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
-	policy := RelationshipPolicyForConfig(r.effectiveConfigForEvent(event), profile, event.UserID)
+	policy := relationshipPolicyForEvent(r.effectiveConfigForEvent(event), profile, event)
 	payload := relationshipEvaluationPayload{
 		Message:                       r.proactiveReplyPayload(event, r.cleanInput(event, text)),
 		CurrentScore:                  profile.Favorability,
