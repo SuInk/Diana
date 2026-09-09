@@ -354,6 +354,7 @@ type replyAuditNeed struct {
 }
 
 func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
+	proactive = proactive && !explicitlyRepliesToBot(event, cfg)
 	accountSafety := boolValue(cfg.ReplySafetyMasterEnabled, true) &&
 		(proactive || boolValue(cfg.ReplyAccountSafetyAuditEnabled, false))
 	if cfg.groupReplyAccountSafetyAuditOverride != nil {
