@@ -1321,6 +1321,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
 	}
 	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
+	if groupCfg.ReplyMergeConfidencePercent > 0 {
+		cfg.ReplyMergeConfidencePercent = groupCfg.ReplyMergeConfidencePercent
+	}
 	cfg.DirectReplyChunkSize = groupCfg.DirectReplyChunkSize
 	cfg.ForwardReplyThreshold = groupCfg.ForwardReplyThreshold
 	cfg.ForwardReplyChunkThreshold = groupCfg.ForwardReplyChunkThreshold

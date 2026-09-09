@@ -163,7 +163,7 @@ func TestInvalidImagePayloadRetriesThenLeavesGroupAvailable(t *testing.T) {
 
 func TestForwardSafetyRejectionDoesNotTryOtherDeliveryForms(t *testing.T) {
 	channel := resolverForwardChannel()
-	provider := &qualityTestProvider{reply: `{"should_send":true,"confidence":1,"reason":"test","account_safe":false,"account_risk":"other","account_risk_reason":"test block"}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":1,"reason":"test","account_safe":false,"account_risk":"other","account_risk_reason":"test block"}`}
 	r := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "42", MessageID: "blocked-forward"}
 	err := r.sendForwardPluginResponse(context.Background(), event, resolverForwardTestResponse(), r.Config())

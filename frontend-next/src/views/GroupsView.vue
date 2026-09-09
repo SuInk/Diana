@@ -243,6 +243,11 @@
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
         </div>
+        <div class="field">
+          <label for="group-reply-merge-confidence">合并回复置信度阈值（%）</label>
+          <input id="group-reply-merge-confidence" v-model.number="editing.reply_merge_confidence_percent" class="input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">只影响同一用户连续消息的合并，不改变主动接话档位。可填 1–100，越低越容易合并；留空跟随机器人当前设置。</span>
+        </div>
         <div class="field wide">
           <label for="group-account-safety">本群账号安全审核</label>
           <AppSelect
@@ -733,6 +738,7 @@ async function saveEditing(): Promise<void> {
       ...current,
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
+      reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,

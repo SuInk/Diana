@@ -17,6 +17,16 @@ import (
 
 const directReplyMergeRetention = 2 * time.Minute
 
+// Only semantically related messages can merge; confidence is a secondary gate.
+const defaultReplyMergeConfidencePercent = 75
+
+func normalizeReplyMergeConfidencePercent(value int) int {
+	if value <= 0 {
+		return defaultReplyMergeConfidencePercent
+	}
+	return min(100, value)
+}
+
 var errDirectReplySupplemented = errors.New("diana: direct reply received a same-turn supplement")
 
 type activeDirectReply struct {
@@ -280,8 +290,9 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 		Confidence float64 `json:"confidence"`
 		Reason     string  `json:"reason"`
 	}
+	threshold := float64(normalizeReplyMergeConfidencePercent(r.effectiveConfigForEvent(event).ReplyMergeConfidencePercent)) / 100
 	allowed := err == nil && json.Unmarshal([]byte(stripJSONCodeFence(raw)), &decision) == nil &&
-		(decision.Relation == "repeat" || decision.Relation == "supplement" || decision.Relation == "correction") && decision.Confidence >= 0.9 && decision.Confidence <= 1
+		(decision.Relation == "repeat" || decision.Relation == "supplement" || decision.Relation == "correction") && decision.Confidence >= threshold && decision.Confidence <= 1
 	if writer := r.appLogWriter(); writer != nil {
 		logCtx, cancelLog := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		defer cancelLog()
@@ -292,7 +303,8 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 			Metadata: map[string]any{
 				"root_message_id": root.MessageID, "relation": decision.Relation,
 				"confidence": decision.Confidence, "merge_allowed": allowed,
-				"reason": decision.Reason,
+				"merge_threshold": threshold,
+				"reason":          decision.Reason,
 			},
 		})
 	}
