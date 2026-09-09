@@ -38,7 +38,7 @@ func (t *dianaBotMarkersTool) Run(ctx context.Context, input map[string]any) (st
 	baseEvent.Kind = EventKindPrivate
 	baseEvent.GroupID = ""
 	base := r.effectiveConfigForEvent(baseEvent)
-	if base.OwnerID == "" || strings.TrimSpace(t.event.UserID) != strings.TrimSpace(base.OwnerID) {
+	if !base.IsOwnerEvent(t.event) {
 		return "", fmt.Errorf("只有本机主人可以管理机器人标记，群管理员无此权限")
 	}
 	scope := configToolString(input, "scope")

@@ -393,15 +393,16 @@
                   <span class="hint">{{ platformDescription(form.platform) }}</span>
                 </div>
                 <div class="field">
-                  <label for="bot-owner">{{ isOneBotPlatform ? "主人账号" : "主人用户 ID" }}</label>
+                  <label for="bot-owner">{{ isOneBotPlatform || form.platform === 'telegram' ? "主人账号" : "主人用户 ID" }}</label>
                   <input
                     id="bot-owner"
                     v-model="form.owner_id"
                     class="input"
-                    inputmode="numeric"
-                    :placeholder="isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : 'Telegram 数字用户 ID，用于管理指令'"
+                    :inputmode="isOneBotPlatform ? 'numeric' : 'text'"
+                    :placeholder="form.platform === 'telegram' ? '数字用户 ID 或 @用户名，例如 1061423117 / @ruaneko' : isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : '平台用户 ID，用于管理指令'"
                   />
                   <AccountNameHint :user-id="form.owner_id" :profile="form.id" />
+                  <span v-if="form.platform === 'telegram'" class="hint">支持数字 ID、用户名或 @用户名，不区分用户名大小写；按 Telegram 发送者账号核验，不按显示昵称。用户名变更后需更新此处。</span>
                   <span class="hint">不需要聊天内管理或管理员快速登录时可以留空。</span>
                 </div>
                 <div class="field wide">

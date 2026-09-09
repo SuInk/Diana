@@ -269,7 +269,7 @@ func (r *Runtime) activateReplySuppressionWithinOutboundGate(event MessageEvent,
 func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now time.Time) (ReplySuppression, bool) {
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotAccount) {
+	if userID == "" || cfg.IsOwnerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) {
 		return ReplySuppression{}, false
 	}
 	if now.IsZero() {
@@ -291,7 +291,7 @@ func (r *Runtime) activeReplySuppression(event MessageEvent, now time.Time) (Rep
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || userID == strings.TrimSpace(cfg.OwnerID) {
+	if userID == "" || cfg.IsOwnerEvent(event) {
 		return ReplySuppression{}, false
 	}
 	r.replySuppressMu.Lock()
@@ -524,7 +524,7 @@ func (r *Runtime) registerReplyRefusal(event MessageEvent, now time.Time) (int, 
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
-	if userID == "" || userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotAccount) {
+	if userID == "" || cfg.IsOwnerEvent(event) || userID == strings.TrimSpace(cfg.BotAccount) {
 		return 0, "", false
 	}
 	if now.IsZero() {
@@ -643,7 +643,7 @@ func (r *Runtime) listReplySuppressions(now time.Time) []ReplySuppression {
 
 func (r *Runtime) isOwnerReplySuppressionCommand(event MessageEvent, text string) bool {
 	cfg := r.effectiveConfigForEvent(event)
-	return strings.TrimSpace(cfg.OwnerID) != "" && event.UserID == cfg.OwnerID && replySuppressionOwnerCommandKind(text) != ""
+	return cfg.IsOwnerEvent(event) && replySuppressionOwnerCommandKind(text) != ""
 }
 
 func replySuppressionOwnerCommandKind(text string) string {
