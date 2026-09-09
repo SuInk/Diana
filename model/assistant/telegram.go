@@ -290,6 +290,9 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	if chatID == "" {
 		return nil, fmt.Errorf("telegram: missing chat id")
 	}
+	if msg.ImageAlbum {
+		return c.sendPhotoAlbum(ctx, msg, chatID)
+	}
 	// 一次投递可能发出正文和若干媒体。回查引用时对得上的是正文那条，所以以它为准；
 	// 纯媒体消息才退而用第一条媒体的返回值。
 	var first map[string]any
@@ -350,6 +353,16 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	}
 	for _, audio := range msg.AudioURLs {
 		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendAudio", "audio", audio, msg.ReplyMessageID)
+		if err != nil {
+			return nil, err
+		}
+		keep(result)
+	}
+	for _, segment := range msg.Segments {
+		if segment.Type != "file" {
+			continue
+		}
+		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendDocument", "document", segment.Data["file"], msg.ReplyMessageID)
 		if err != nil {
 			return nil, err
 		}

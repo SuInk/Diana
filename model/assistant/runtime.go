@@ -3421,6 +3421,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
+				newDianaRemoteImageTool(r, event),
+				&dianaTelegramImagesTool{runtime: r, event: event},
+				&dianaLocalAttachmentTool{runtime: r, event: event, view: true},
+				&dianaLocalAttachmentTool{runtime: r, event: event},
 				newDianaSubtaskTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaNotebookTool(r, event, relationship),
@@ -6075,7 +6079,10 @@ func shouldFailoverLLMError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, llm.ErrUnverifiedRejection) || errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+	if errors.Is(err, llm.ErrUnverifiedRejection) {
+		return true
+	}
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
 		return false
 	}
 	if isModelUnavailableLLMError(err) {
@@ -9109,7 +9116,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		r.rememberImageModels(event, msg, messageID)
 	}
 	outboundTurnFromContext(ctx).recordSentMessage(msg)
-	r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
+	if !r.rememberTelegramPhotoResults(ctx, event, msg, result) {
+		r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
+	}
 	return result, nil
 }
 
@@ -9147,6 +9156,9 @@ func (r *Runtime) recordInboundDelivery(event MessageEvent, stage OutboundDelive
 }
 
 func telegramMessageNeedsSteps(msg OutgoingMessage) bool {
+	if msg.ImageAlbum {
+		return false
+	}
 	return NormalizePlatformID(msg.Platform) == PlatformTelegram && (strings.TrimSpace(msg.Text) != "" || len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 1) && len(msg.ImageURLs)+len(msg.VideoURLs)+len(msg.AudioURLs) > 0
 }
 
@@ -11998,6 +12010,7 @@ func truncateForChat(text string, maxRunes int) string {
 // normalizeReply cleans and truncates a model reply. The optional flag keeps
 // the legacy two-argument API while supporting per-bot Markdown conversion.
 func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
+	reply = normalizeLegacyLayoutMarkers(reply)
 	if len(markdownPlain) > 0 && markdownPlain[0] {
 		reply = markdownToPlain(reply)
 	}
@@ -12223,6 +12236,7 @@ const (
 // [diana-line]. Folding raw newlines makes violations deterministic instead of
 // reviving the old heuristic splitter.
 func normalizeExplicitReplyLayout(text string) string {
+	text = normalizeLegacyLayoutMarkers(text)
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(text, "\n")
 	kept := make([]string, 0, len(lines))

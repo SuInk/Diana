@@ -37,7 +37,7 @@ func publicChatErrorMessage(err error) string {
 	}
 	raw := strings.TrimSpace(err.Error())
 	if errors.Is(err, llm.ErrUnverifiedRejection) {
-		return "上游返回了请求被拦截的提示，这次未能完成处理。暂时无法确认是模型还是中转服务拒绝，请管理员查看日志。"
+		return withProviderAttemptLabel("本次请求收到上游拦截提示，未能完成回复；该提示无法确认来自模型还是中转服务，也不能据此判断你的消息违规。", err)
 	}
 	lower := strings.ToLower(raw)
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {

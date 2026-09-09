@@ -141,6 +141,9 @@ func shouldFailoverWithoutSameProfileRetry(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, llm.ErrUnverifiedRejection) {
+		return true
+	}
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
 		return true
 	}
