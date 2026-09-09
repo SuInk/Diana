@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { participationFromConfig, participationPreset, participationPresetName, participationLevelOptions } from "./participation.ts";
+import { participationFromConfig, participationPreset, participationPresetName, participationLevelOptions, changeParticipationLevel, changeParticipationThresholdLevel, participationThresholdLevel, participationThresholdOptions } from "./participation.ts";
 
 test("reply desire offers only four named levels", () => {
   assert.deepEqual(participationLevelOptions.map(option => option.label), ["低", "中", "高", "极高"]);
@@ -35,4 +35,25 @@ test("switching desire retains cooldown and changing cooldown retains the preset
       assert.equal(participationPresetName(next),level);
     }
   }
+});
+
+test("score thresholds have four levels and remain independent of desire and cooldown", () => {
+  assert.deepEqual(participationThresholdOptions.map(option => [option.label, option.score]), [["低", 40], ["中", 60], ["高", 80], ["极高", 90]]);
+  const initial = { ...participationPreset("low", 120), relevance_threshold: 80, substance_threshold: 90 };
+  for (const level of ["low", "medium", "high", "max"]) {
+    const desire = changeParticipationLevel(initial, level);
+    assert.equal(desire.relevance_threshold, 80);
+    assert.equal(desire.substance_threshold, 90);
+    assert.equal(desire.cooldown_seconds, 120);
+    const threshold = changeParticipationThresholdLevel(initial, "substance_threshold", level);
+    assert.equal(participationThresholdLevel(threshold.substance_threshold), level);
+    assert.equal(threshold.relevance_threshold, 80);
+    assert.equal(threshold.desire, 25);
+    assert.equal(threshold.cooldown_seconds, 120);
+    assert.deepEqual(participationFromConfig({ participation: JSON.parse(JSON.stringify(threshold)) }), threshold);
+  }
+  assert.equal(participationThresholdLevel(), "medium");
+  assert.equal(participationThresholdLevel(65), "custom");
+  const legacy = { ...initial, substance_threshold: 65 };
+  assert.equal(changeParticipationLevel(legacy, "high").substance_threshold, 65);
 });

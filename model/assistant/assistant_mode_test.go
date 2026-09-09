@@ -23,7 +23,7 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 		{"chat_in", true, false, true},
 		{"none", false, false, false},
 	} {
-		d := proactiveReplyDecision{ShouldReply: true, Confidence: 0.8, Category: tc.category, RequestsResponse: tc.request, DirectedAtBot: tc.directed, Substantive: true}
+		d := proactiveReplyDecision{ShouldReply: true, Scores: testParticipationScores(80, 80), Confidence: 0.8, Category: tc.category, RequestsResponse: tc.request, DirectedAtBot: tc.directed, Substantive: true}
 		if got := d.allows(0.99, settings); got != tc.want {
 			t.Fatalf("decision %#v allowed=%v", d, got)
 		}
@@ -69,7 +69,7 @@ func TestAssistantModeCanChatAtLowDesire(t *testing.T) {
 	if settings.Level != ChatInLevelLow || settings.Participation.Desire >= active.Participation.Desire {
 		t.Fatalf("assistant=%#v active=%#v", settings, active)
 	}
-	d := proactiveReplyDecision{ShouldReply: true, Confidence: 0.99, Category: "chat_in", Substantive: true}
+	d := proactiveReplyDecision{ShouldReply: true, Scores: testParticipationScores(80, 80), Confidence: 0.99, Category: "chat_in", Substantive: true}
 	if !d.allows(0.7, settings) {
 		t.Fatal("assistant must allow contextual chat")
 	}
@@ -81,6 +81,10 @@ func TestAssistantModeCanChatAtLowDesire(t *testing.T) {
 	d.Confidence = 0.8
 	if !d.allows(0.7, settings) {
 		t.Fatal("confidence must not override the model")
+	}
+	d.Scores = testParticipationScores(100, 20)
+	if d.allows(0.7, settings) {
+		t.Fatal("related filler bypassed numeric substance requirement")
 	}
 }
 
