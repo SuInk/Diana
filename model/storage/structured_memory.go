@@ -27,6 +27,7 @@ const (
 )
 
 func (s *SQLiteStore) EnqueueMemoryJob(ctx context.Context, payload assistant.MemoryJobPayload) (string, bool, error) {
+	defer s.observeStorage(ctx, "EnqueueMemoryJob", "write")()
 	if s == nil || s.db == nil {
 		return "", false, nil
 	}
@@ -53,6 +54,7 @@ VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)
 }
 
 func (s *SQLiteStore) ClaimNextMemoryJob(ctx context.Context, leaseOwner string, leaseUntil time.Time) (assistant.MemoryJob, bool, error) {
+	defer s.observeStorage(ctx, "ClaimNextMemoryJob", "write")()
 	if s == nil || s.db == nil {
 		return assistant.MemoryJob{}, false, nil
 	}
@@ -60,10 +62,11 @@ func (s *SQLiteStore) ClaimNextMemoryJob(ctx context.Context, leaseOwner string,
 	if leaseOwner == "" {
 		return assistant.MemoryJob{}, false, fmt.Errorf("memory lease owner is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWriteTx(ctx, "ClaimNextMemoryJob")
 	if err != nil {
 		return assistant.MemoryJob{}, false, err
 	}
+	defer observeTransaction("ClaimNextMemoryJob")()
 	defer func() { _ = tx.Rollback() }()
 
 	var id, raw string
@@ -104,6 +107,7 @@ WHERE id = ? AND status = 'pending'
 }
 
 func (s *SQLiteStore) CompleteMemoryJob(ctx context.Context, id string, leaseOwner string) error {
+	defer s.observeStorage(ctx, "CompleteMemoryJob", "write")()
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -118,6 +122,7 @@ WHERE id = ? AND status = 'processing' AND lease_owner = ?
 }
 
 func (s *SQLiteStore) RetryMemoryJob(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string) error {
+	defer s.observeStorage(ctx, "RetryMemoryJob", "write")()
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -131,6 +136,7 @@ WHERE id = ? AND status = 'processing' AND lease_owner = ?
 }
 
 func (s *SQLiteStore) ReleaseMemoryJobLeases(ctx context.Context, leaseOwner string) error {
+	defer s.observeStorage(ctx, "ReleaseMemoryJobLeases", "write")()
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -149,14 +155,10 @@ WHERE status = 'processing'`
 }
 
 func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assistant.MemoryWriteRequest) ([]assistant.StructuredMemoryItem, error) {
+	defer s.observeStorage(ctx, "ApplyMemoryCandidates", "write")()
 	if s == nil || s.db == nil || strings.TrimSpace(request.Session) == "" {
 		return nil, nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	now := time.Now().UTC()
 	sourceTime := request.SourceEventTime.UTC()
@@ -167,12 +169,21 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 	if len(candidates) > maxMemoryCandidatesPerWrite {
 		candidates = candidates[:maxMemoryCandidatesPerWrite]
 	}
-	written := make([]assistant.StructuredMemoryItem, 0, len(candidates))
-	for _, rawCandidate := range candidates {
-		candidate, ok := normalizeMemoryCandidate(rawCandidate, request)
-		if !ok {
-			continue
+	normalized := make([]assistant.MemoryCandidate, 0, len(candidates))
+	for _, raw := range candidates {
+		if candidate, ok := normalizeMemoryCandidate(raw, request); ok {
+			normalized = append(normalized, candidate)
 		}
+	}
+	tx, err := s.beginWriteTx(ctx, "ApplyMemoryCandidates")
+	if err != nil {
+		return nil, err
+	}
+	defer observeTransaction("ApplyMemoryCandidates")()
+	defer func() { _ = tx.Rollback() }()
+
+	written := make([]assistant.StructuredMemoryItem, 0, len(normalized))
+	for _, candidate := range normalized {
 		scopeKey := request.Session
 		if candidate.Visibility == assistant.MemoryVisibilityUser {
 			scopeKey = memorySessionNamespace(request.Session) + "user:" + strings.TrimSpace(request.SubjectUserID)
@@ -299,6 +310,7 @@ UPDATE memory_items SET status = 'superseded', updated_at = ? WHERE id = ? AND s
 }
 
 func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistant.StructuredMemoryQuery) ([]assistant.StructuredMemoryItem, error) {
+	defer s.observeStorage(ctx, "ListStructuredMemories", "read")()
 	if s == nil || s.db == nil || strings.TrimSpace(query.Session) == "" {
 		return nil, nil
 	}
@@ -440,7 +452,7 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 		}
 	}
 	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT id, scope_key, subject_user_id, subject_name, memory_key, kind, topic, entity,
        content, evidence, source_type, source_session, source_group_id, source_message_id,
        source_event_time, confidence, importance, visibility, sensitive, expires_at,
@@ -752,6 +764,7 @@ func firstNonEmptyMemory(values ...string) string {
 // 它只动 last_verified_at，不碰 updated_at：后者表示内容变化，被读一次不算改动。
 // 命中回写是软遗忘的另一半——常被提起的旧事因此不会被龄期衰减压下去。
 func (s *SQLiteStore) TouchStructuredMemories(ctx context.Context, ids []string, at time.Time) error {
+	defer s.observeStorage(ctx, "TouchStructuredMemories", "write")()
 	if s == nil || s.db == nil || len(ids) == 0 {
 		return nil
 	}
@@ -786,6 +799,7 @@ WHERE status = 'active' AND id IN (`+strings.Join(placeholders, ",")+`)
 // 可以跨同一机器人的会话展示，但必须保留来源命名空间边界。
 // 空 profileID 只匹配无命名空间的旧记录，不表示全部机器人。
 func (s *SQLiteStore) ListStructuredMemoriesBySubject(ctx context.Context, profileID, userID string, limit int) ([]assistant.StructuredMemoryItem, error) {
+	defer s.observeStorage(ctx, "ListStructuredMemoriesBySubject", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -800,7 +814,7 @@ func (s *SQLiteStore) ListStructuredMemoriesBySubject(ctx context.Context, profi
 		limit = maxStructuredMemoryCandidates
 	}
 	groupPrefix, privatePrefix := memoryProfileSessionPrefixes(profileID)
-	rows, err := s.db.QueryContext(ctx, structuredMemorySelect+`
+	rows, err := s.eventReader().QueryContext(ctx, structuredMemorySelect+`
 WHERE status = 'active'
   AND subject_user_id = ?
   AND kind != 'thread'
@@ -827,6 +841,7 @@ LIMIT ?
 // CountStructuredMemoriesBySubjects 一次数完多个人的长期记忆条数，人员列表用它。
 // 逐个 COUNT 会把一页 50 人变成 50 次查询。
 func (s *SQLiteStore) CountStructuredMemoriesBySubjects(ctx context.Context, profileID string, userIDs []string) (map[string]int, error) {
+	defer s.observeStorage(ctx, "CountStructuredMemoriesBySubjects", "read")()
 	counts := map[string]int{}
 	if s == nil || s.db == nil || len(userIDs) == 0 {
 		return counts, nil
@@ -850,7 +865,7 @@ func (s *SQLiteStore) CountStructuredMemoriesBySubjects(ctx context.Context, pro
 	if len(placeholders) == 0 {
 		return counts, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT subject_user_id, COUNT(*)
 FROM memory_items
 WHERE status = 'active'

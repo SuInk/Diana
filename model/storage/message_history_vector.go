@@ -88,6 +88,7 @@ func dotMessageVectors(left, right []float32) float64 {
 // SaveMessageEventVector 记录一条消息的语义向量。消息必须已经落进
 // message_events(按 session+message_id 定位),没有 message_id 的事件跳过。
 func (s *SQLiteStore) SaveMessageEventVector(ctx context.Context, session string, messageID string, model string, vector []float32) error {
+	defer s.observeStorage(ctx, "SaveMessageEventVector", "write")()
 	if s == nil || s.db == nil || !s.historyVectors {
 		return nil
 	}
@@ -98,7 +99,7 @@ func (s *SQLiteStore) SaveMessageEventVector(ctx context.Context, session string
 		return nil
 	}
 	var id string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM message_events WHERE session = ? AND message_id = ? ORDER BY created_at DESC LIMIT 1`,
+	err := s.eventReader().QueryRowContext(ctx, `SELECT id FROM message_events WHERE session = ? AND message_id = ? ORDER BY created_at DESC LIMIT 1`,
 		session, messageID).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -114,6 +115,7 @@ ON CONFLICT(id) DO UPDATE SET model=excluded.model, vector=excluded.vector`,
 
 // SearchMessageEventsByVector 按余弦相似度检索历史消息。
 func (s *SQLiteStore) SearchMessageEventsByVector(ctx context.Context, query assistant.MessageHistoryVectorQuery) ([]assistant.MessageEvent, error) {
+	defer s.observeStorage(ctx, "SearchMessageEventsByVector", "read")()
 	if s == nil || s.db == nil || !s.historyVectors {
 		return nil, nil
 	}
@@ -140,7 +142,7 @@ func (s *SQLiteStore) SearchMessageEventsByVector(ctx context.Context, query ass
 		where += ` AND e.session != ?`
 		args = append(args, strings.TrimSpace(query.ExcludeSession))
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT e.payload, v.vector
 FROM `+messageHistoryVectorTable+` AS v
 JOIN message_events AS e ON e.id = v.id
