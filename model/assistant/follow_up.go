@@ -61,14 +61,41 @@ func detachFollowUpContext(ctx context.Context, timeout time.Duration) (context.
 // 的引用与 @ 规则；仓库订阅跟评是过了一段时间主动找订阅者，只在第一条强制 @，
 // 不引用创建订阅时的旧消息。两类都经 sendDecorated 进入自然分条和回复批次队列。
 func (r *Runtime) sendFollowUp(ctx context.Context, kind followUpKind, event MessageEvent, text string) error {
-	if kind == followUpKindRepositoryWatch {
-		_, err := r.sendDecorated(ctx, event, text, outboundDecoration{
-			MentionUserID: strings.TrimSpace(event.UserID),
-			MentionAlways: true,
-		})
-		return err
+	text, intent := consumeReplyControlIntent(text)
+	if intent.DeliveryMode != "" {
+		event.replyDeliveryMode = intent.DeliveryMode
 	}
-	return r.send(ctx, event, text)
+	if text == "" {
+		if intent.RefuseCurrent {
+			text = "这条内容我暂时不展开聊了。"
+		} else {
+			return nil
+		}
+	}
+	send := func(sendCtx context.Context) error {
+		var ids []string
+		var err error
+		if kind == followUpKindRepositoryWatch {
+			ids, err = r.sendDecorated(sendCtx, event, text, outboundDecoration{
+				MentionUserID: strings.TrimSpace(event.UserID),
+				MentionAlways: true,
+			})
+		} else {
+			ids, err = r.sendWithMessageIDs(sendCtx, event, text)
+		}
+		if err != nil {
+			return err
+		}
+		// A result-capable channel can still return no receipt for this send.
+		if len(ids) > 0 && (intent.RefuseCurrent || intent.SuppressCurrentUser) {
+			r.applyReplyControlAfterSend(sendCtx, event, text, intent)
+		}
+		return nil
+	}
+	if intent.RefuseCurrent || intent.SuppressCurrentUser {
+		return r.withReplySuppressionOutboundGate(withReplySuppressionSendGuard(ctx), event, send)
+	}
+	return send(ctx)
 }
 
 // followUpInstruction 是两个入口共用的那一段跟评要求。
