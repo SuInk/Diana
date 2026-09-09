@@ -6,7 +6,7 @@
     <header class="view-header plugins-view-header">
       <div class="view-title">
         <h1>插件</h1>
-        <p>{{ botScope ? "当前机器人的插件开关与配置" : "共享插件配置" }} · OpenAPI 位于系统设置</p>
+        <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置" }} · OpenAPI 位于系统设置</p>
       </div>
       <div class="view-actions">
         <div class="plugin-search">
@@ -357,7 +357,7 @@
       </div>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
-        :profile-id="botScope"
+        :default-profile-id="botScope"
         ref="repositoryWatchRef"
         :prepare-access="saveSettingsForSubscription"
         :token-configured="repositoryWatchTokenConfigured"
@@ -394,7 +394,7 @@
       </div>
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
-        :profile-id="botScope"
+        :default-profile-id="botScope"
         ref="rssWatchRef"
         :prepare-access="saveSettingsForSubscription"
       />
@@ -476,6 +476,7 @@ import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
 import { botScope } from "../bot-scope";
+import { pluginForBot } from "../plugin-settings";
 
 const plugins = ref<PluginState[]>([]);
 const loading = ref(true);
@@ -630,7 +631,7 @@ function musicStatusLabel(source: string): string {
 async function testMusicSettings(): Promise<void> {
   testingMusic.value = true;
   try {
-    const response = await testMusicConnections(buildSettingsPayload(), clearSecrets.value, botScope.value);
+    const response = await testMusicConnections(buildSettingsPayload(), clearSecrets.value);
     musicTestResults.value = Object.fromEntries(response.sources.map((item) => [item.source, item]));
     const playable = response.sources.filter((item) => item.playable).length;
     playable > 0 ? toastSuccess(`${playable} 家曲库可正常取得播放地址`) : toastError("没有曲库能取得播放地址，请按卡片提示检查配置");
@@ -677,9 +678,7 @@ const repositoryWatchTokenConfigured = computed(() => {
 
 function upsert(state: PluginState, scope = botScope.value): void {
   if (scope !== botScope.value) return;
-  if (scope && state.manifest.id !== "official.open-api") {
-    state = { ...state, enabled: state.profile_enabled?.[scope] ?? state.enabled };
-  }
+  state = pluginForBot(state, scope);
   const index = plugins.value.findIndex((plugin) => plugin.manifest.id === state.manifest.id);
   if (index >= 0) {
     plugins.value[index] = state;
@@ -693,9 +692,9 @@ async function reload(): Promise<void> {
   loading.value = true;
   loadError.value = "";
   try {
-    const states = await listPlugins(scope);
+    const states = await listPlugins();
     if (requestID !== reloadID || scope !== botScope.value) return;
-    plugins.value = states.filter(plugin => plugin.manifest.id !== "official.open-api");
+    plugins.value = states.filter(plugin => plugin.manifest.id !== "official.open-api").map(plugin => pluginForBot(plugin, scope));
     const requestedSettings = viewQuery().get("settings");
     if (!settingsTarget.value && requestedSettings) {
       const target = plugins.value.find((plugin) => plugin.manifest.id === requestedSettings && plugin.installed);
@@ -1040,12 +1039,12 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
       }
       payload.github_credential_ids = configured.size ? JSON.stringify([...configured]) : "";
     }
-    const updated = await updatePluginSettings(target.manifest.id, payload, [...clearSecrets.value], scope);
+    const updated = await updatePluginSettings(target.manifest.id, payload, [...clearSecrets.value]);
     upsert(updated, scope);
     if (publishPayload) {
       let publishUpdated;
       try {
-        publishUpdated = await updatePluginSettings(repositoryPublishPluginID, publishPayload, publishClears, scope);
+        publishUpdated = await updatePluginSettings(repositoryPublishPluginID, publishPayload, publishClears);
       } catch (error) {
         // 两次请求没有事务：第一次已经落库了，这里失败会留下半保存状态。
         // 与其只弹一句「保存失败」，不如说清楚哪半边生效了，并把界面刷成真实状态。
