@@ -26,15 +26,16 @@ func newDianaBotParticipationTool(r *Runtime, event MessageEvent) *dianaBotParti
 }
 func (*dianaBotParticipationTool) Name() string { return botParticipationToolName }
 func (*dianaBotParticipationTool) Description() string {
-	return "读取或修改 Diana 自身的回复欲望、相关度门槛、实质性门槛和主动闲聊冷却。get 读取，update 局部修改；scope=group 只改当前群（主人或实时核验的群管理员），scope=bot 改消息所属机器人（仅主人）。关闭话痨或主动插话用 desire_level=off，降低活跃程度用 low；不操作平台禁言、不修改插件或模型。"
+	return "读取或修改 Diana 的相关度、闲聊和可回答门槛及闲聊冷却。get 读取，update 局部修改；scope=group 只改当前群（主人或实时核验的群管理员），scope=bot 仅主人修改当前机器人。关闭所有主动接话同时设置 relevance_level=off 和 chat_level=off；只关闭闲聊设置 chat_level=off。可回答分必须达标，且相关度或闲聊分支满足条件；不操作平台禁言。"
 }
 func (*dianaBotParticipationTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation":                  toolEnumParam("读取或局部更新；只有保存成功才报告已修改。", "get", "update"),
 		"scope":                      toolEnumParam("群聊默认 group，私聊默认 bot。不能指定其他机器人或群。", "group", "bot"),
 		"desire_level":               toolEnumParam("回复欲望；off 关闭主动插话，明确请求仍可回复。仅修改欲望，保留门槛和冷却。", "off", "low", "medium", "high", "max"),
-		"relevance_level":            toolEnumParam("相关度门槛，低/中/高/极高对应 40/60/80/90 分。", "low", "medium", "high", "max"),
-		"substance_level":            toolEnumParam("闲聊实质性门槛，越高越严格。", "low", "medium", "high", "max"),
+		"relevance_level":            toolEnumParam("相关度档位：关、极低、低、中、高、极高、总是；门槛为 0.90/0.70/0.50/0.30/0.10。", "off", "minimal", "low", "medium", "high", "extreme", "always"),
+		"chat_level":                 toolEnumParam("闲聊档位，仍受闲聊冷却限制。", "off", "minimal", "low", "medium", "high", "extreme", "always"),
+		"answerability_level":        toolEnumParam("共同质量门槛，off 关闭此项检查。", "off", "minimal", "low", "medium", "high", "extreme", "always"),
 		"cooldown_seconds":           toolIntParam("主动闲聊冷却，0 关闭冷却。", 0, 3600),
 		"minimum_reply_member_level": toolIntParam("仅 OneBot 群支持的最低回复成员等级。", 0, maximumReplyMemberLevel),
 	})
@@ -91,7 +92,7 @@ func (t *dianaBotParticipationTool) Run(ctx context.Context, input map[string]an
 	prefs := effective.participationPreferences()
 	minimum := group.MinimumReplyMemberLevel
 	if op == "update" {
-		allowed := map[string]bool{"operation": true, "scope": true, "desire_level": true, "relevance_level": true, "substance_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true}
+		allowed := map[string]bool{"operation": true, "scope": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "answerability_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true}
 		for key := range input {
 			if !allowed[key] {
 				return "", fmt.Errorf("不支持配置项 %q", key)
@@ -108,12 +109,24 @@ func (t *dianaBotParticipationTool) Run(ctx context.Context, input map[string]an
 				return "", fmt.Errorf("无效回复欲望档位")
 			}
 			prefs.Desire = desire
+			if level == "off" {
+				prefs.RelevanceLevel = "off"
+				prefs.ChatLevel = "off"
+			} else {
+				prefs.ChatLevel = level
+				if level == "max" {
+					prefs.ChatLevel = "always"
+				}
+				if prefs.RelevanceLevel == "off" {
+					prefs.RelevanceLevel = "medium"
+				}
+			}
 			changed = true
 		}
 		for _, field := range []struct {
 			key    string
 			target **int
-		}{{"relevance_level", &prefs.RelevanceThreshold}, {"substance_level", &prefs.SubstanceThreshold}} {
+		}{{"substance_level", &prefs.SubstanceThreshold}} {
 			if raw, ok := input[field.key]; ok {
 				level, _ := raw.(string)
 				score, valid := map[string]int{"low": 40, "medium": 60, "high": 80, "max": 90}[level]
@@ -121,6 +134,20 @@ func (t *dianaBotParticipationTool) Run(ctx context.Context, input map[string]an
 					return "", fmt.Errorf("无效门槛档位 %s", field.key)
 				}
 				*field.target = &score
+				prefs.AnswerabilityLevel = map[string]string{"low": "high", "medium": "medium", "high": "low", "max": "minimal"}[level]
+				changed = true
+			}
+		}
+		for _, field := range []struct {
+			key    string
+			target *string
+		}{{"relevance_level", &prefs.RelevanceLevel}, {"chat_level", &prefs.ChatLevel}, {"answerability_level", &prefs.AnswerabilityLevel}} {
+			if raw, exists := input[field.key]; exists {
+				level, ok := raw.(string)
+				if !ok || !validParticipationLevel(level) {
+					return "", fmt.Errorf("无效评分档位 %s", field.key)
+				}
+				*field.target = level
 				changed = true
 			}
 		}
