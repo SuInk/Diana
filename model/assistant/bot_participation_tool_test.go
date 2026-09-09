@@ -10,7 +10,7 @@ import (
 
 func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 	r80, s90 := 80, 90
-	base := BotConfig{ID: "a", OwnerID: "owner", Participation: &ParticipationPreferences{Desire: 75, CooldownSeconds: 120, RelevanceThreshold: &r80, SubstanceThreshold: &s90}, ProactiveReplyThreshold: .93}
+	base := BotConfig{ID: "a", OwnerID: "owner", Participation: &ParticipationPreferences{Desire: 75, RelevanceLevel: "high", ChatLevel: "always", CooldownSeconds: 120, RelevanceThreshold: &r80, SubstanceThreshold: &s90}, ProactiveReplyThreshold: .93}
 	r := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.SetProfiles(ProfileSet{ActiveID: "a", Profiles: []BotConfig{base, {ID: "b", OwnerID: "other", Participation: &ParticipationPreferences{Desire: 100, CooldownSeconds: 30}}}})
 	store := &testWritableGroupConfigStore{}
@@ -31,6 +31,9 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 		t.Fatal("returned success without disabling participation")
 	}
 	actual := r.effectiveConfigForEvent(event).participationPreferences()
+	if a, b := actual.ratingLevels(); a != "off" || b != "off" {
+		t.Fatalf("new rating branches still enabled: %s %s", a, b)
+	}
 	if actual.Desire != 0 || actual.CooldownSeconds != 120 || actual.relevanceThreshold() != 80 || actual.substanceThreshold() != 90 {
 		t.Fatalf("effective preferences wrong: %+v", actual)
 	}
@@ -55,6 +58,13 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 	actual = r.effectiveConfigForEvent(event).participationPreferences()
 	if actual.Desire != 25 || actual.CooldownSeconds != 0 || actual.relevanceThreshold() != 80 || actual.substanceThreshold() != 80 {
 		t.Fatalf("partial update lost values: %+v", actual)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "relevance_level": "extreme", "chat_level": "off", "answerability_level": "minimal"}); err != nil {
+		t.Fatal(err)
+	}
+	actual = r.effectiveConfigForEvent(event).participationPreferences()
+	if actual.RelevanceLevel != "extreme" || actual.ChatLevel != "off" || actual.AnswerabilityLevel != "minimal" || actual.CooldownSeconds != 0 {
+		t.Fatalf("new fields not applied: %+v", actual)
 	}
 }
 
