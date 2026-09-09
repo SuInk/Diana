@@ -8446,6 +8446,10 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 		}
 		forwardMessageID, err = r.sendRealForwardMessages(forwardCtx, event, forwardMessages, cfg)
 		if err != nil {
+			var safetyErr *replyAccountSafetyRejectedError
+			if errors.As(err, &safetyErr) {
+				return err
+			}
 			if errors.Is(err, errGroupSendUnavailable) {
 				return err
 			}
@@ -8461,7 +8465,7 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			// resolver result is still delivered instead of losing the whole turn.
 			// 兜底散装是「合并转发看起来没生效」的唯一入口，必须留痕，否则用户
 			// 只看到刷屏、日志里什么都查不到。
-			log.Printf("diana resolver merged forward failed, delivered %d messages separately: %v", len(forwardMessages), err)
+			log.Printf("diana resolver merged forward failed, attempting %d messages separately: %v", len(forwardMessages), err)
 			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
 				return errors.Join(err, directErr)
 			}
@@ -9212,6 +9216,9 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 		if lastErr == nil {
 			return result, nil
 		}
+		if isOutboundPayloadRejection(lastErr) {
+			return nil, lastErr
+		}
 		if ctx.Err() != nil {
 			return nil, lastErr
 		}
@@ -9457,6 +9464,10 @@ func (r *Runtime) sendRealForwardMessages(ctx context.Context, event MessageEven
 		result, err := r.sendForwardNodesWithResult(ctx, event, nodes)
 		if err == nil {
 			return apiMessageID(result), nil
+		}
+		var safetyErr *replyAccountSafetyRejectedError
+		if errors.As(err, &safetyErr) {
+			return "", err
 		}
 		if errors.Is(err, errGroupSendUnavailable) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			// 超时的请求可能已经投递，不能再用暂存方式发第二遍。
