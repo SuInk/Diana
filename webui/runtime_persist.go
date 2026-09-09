@@ -4,10 +4,21 @@
 package webui
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/SuInk/diana/model/assistant"
 )
+
+func (p *RuntimePersistor) SaveModelRole(cfg assistant.BotConfig, role string, next assistant.ModelRole) (assistant.BotConfig, error) {
+	if p == nil || p.store == nil {
+		return assistant.BotConfig{}, fmt.Errorf("未接入机器人配置存储")
+	}
+	if store, ok := p.store.(assistant.ModelRoleConfigSaver); ok {
+		return store.SaveModelRole(cfg, role, next)
+	}
+	return assistant.BotConfig{}, fmt.Errorf("配置存储不支持按机器人更新模型分配")
+}
 
 type RuntimePersistor struct {
 	store BotProfileStore

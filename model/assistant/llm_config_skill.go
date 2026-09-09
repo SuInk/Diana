@@ -28,7 +28,7 @@ func (p *LLMConfigPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          llmConfigPluginID,
 		Name:        "提供商配置",
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Description: "官方内置提供商配置能力；自然语言由主 Agent 理解，配置修改仅通过主人专属结构化工具执行。",
 		Official:    true,
 		BuiltIn:     true,
@@ -45,9 +45,11 @@ func (p *LLMConfigPlugin) Handle(context.Context, PluginRequest) (*PluginRespons
 }
 
 type llmConfigCommand struct {
-	Provider    llm.Provider
-	ProviderSet bool
-	Model       string
+	Provider     llm.Provider
+	ProviderSet  bool
+	ProviderID   string
+	ProviderName string
+	Model        string
 	// Role 是要改的用途：chat / vision / intent / image。空表示对话。
 	Role string
 }
@@ -76,7 +78,7 @@ type llmConfigApplyResult struct {
 // 以前这里改的是激活配置的默认模型。只要配过模型分配，roleBoundProfiles 就会用
 // role.Model 覆盖它——回执说「已更新 Model：old -> new」，对话实际还在用旧模型。
 // 一个会说谎的成功回执比失败更难查。
-func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCommand, listModels LLMModelLister) llmConfigApplyResult {
+func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent, command llmConfigCommand, listModels LLMModelLister) llmConfigApplyResult {
 	r.mu.RLock()
 	store := r.llmStore
 	r.mu.RUnlock()
@@ -87,14 +89,45 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 		listModels = defaultLLMModelLister
 	}
 	set := store.Profiles().WithDefaults()
-	botCfg := r.Config().WithDefaults()
+	botCfg, configErr := r.modelConfigForEvent(event)
+	if configErr != nil {
+		return llmConfigApplyResult{Reply: "更新失败：" + configErr.Error()}
+	}
+	if !botCfg.IsOwnerEvent(event) || !boolValue(botCfg.OwnerLLMConfigEnabled, true) {
+		return llmConfigApplyResult{Reply: "当前发送者无权修改此机器人的模型分配"}
+	}
 	roles := normalizeModelRoles(botCfg.ModelRoles)
+	r.mu.RLock()
+	registry := r.llmRegistry
+	r.mu.RUnlock()
+	if registry == nil {
+		if source, ok := store.(LLMProviderRegistryStore); ok {
+			var err error
+			registry, err = source.ProviderRegistry()
+			if err != nil {
+				return llmConfigApplyResult{Reply: "无法读取供应商注册表，未修改模型分配"}
+			}
+		}
+	}
+	bindingRoles := normalizeModelRoles(roles)
+	if registry != nil {
+		for key, role := range bindingRoles {
+			if role.ProviderID != "" {
+				selection := normalizeRegistrySelection(registry, role.ProviderID, role.ModelID)
+				if definition, ok := registry.Model(selection.ModelID); ok && definition.ProviderID == role.ProviderID {
+					role.ModelID = definition.ModelID
+					role.Model = definition.ModelID
+					bindingRoles[key] = role
+				}
+			}
+		}
+	}
 	roleKey, ok := normalizeLLMConfigRole(command.Role)
 	if !ok {
 		return llmConfigApplyResult{Reply: "更新失败：不认识的用途 " + command.Role + "，只能是 chat、vision、intent、image。"}
 	}
 
-	boundProfile, boundModel, ok := modelRoleBinding(set, roles, roleKey)
+	boundProfile, boundModel, ok := modelRoleBinding(set, bindingRoles, roleKey)
 	if !ok {
 		return llmConfigApplyResult{Reply: "当前没有可用的提供商配置。"}
 	}
@@ -104,6 +137,18 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 	target, model, err := resolveLLMConfigTarget(set, boundProfile, boundModel, command)
 	if err != nil {
 		return llmConfigApplyResult{Reply: "更新失败：" + err.Error(), Role: roleKey, OldProvider: oldProvider, OldModel: oldModel}
+	}
+	if registry != nil {
+		provider, exists := registry.Provider(target.ID)
+		if !exists || !provider.Enabled {
+			return llmConfigApplyResult{Reply: "目标供应商未启用或不在注册表中，未修改模型分配"}
+		}
+		selection := normalizeRegistrySelection(registry, target.ID, model)
+		definition, exists := registry.Model(selection.ModelID)
+		if !exists || definition.ProviderID != target.ID {
+			return llmConfigApplyResult{Reply: "目标模型未登记到此供应商，请在 WebUI 同步模型列表后重试"}
+		}
+		model = definition.ModelID
 	}
 
 	probe := target.Config.WithDefaults()
@@ -134,7 +179,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, command llmConfigCo
 		OldModel:    oldModel,
 		NewModel:    model,
 	}
-	if err := r.saveModelRole(botCfg, roles, roleKey, target, model); err != nil {
+	if err := r.saveModelRole(botCfg, roles, roleKey, target, model, command.ProviderID != "" || command.ProviderName != ""); err != nil {
 		return llmConfigApplyResult{Reply: "更新失败：机器人配置没能保存（" + err.Error() + "）。"}
 	}
 	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s）。改的是机器人模型分配里的这一档，没有动提供商配置里的 provider 设置，其余用途各自的分配保持不变。%s%s",
@@ -226,6 +271,10 @@ func profilesForRole(set llm.ProfileSet, roles map[string]ModelRole, roleKey str
 	if !ok {
 		return llm.Profile{}, "", false
 	}
+	if role.ProviderID != "" {
+		role.ProfileID = role.ProviderID
+		role.Model = strings.TrimPrefix(role.ModelID, role.ProviderID+":")
+	}
 	var candidates []llm.Profile
 	if role.Group != "" {
 		candidates = set.GroupProfiles(role.Group)
@@ -255,12 +304,44 @@ func roleModelFromProfile(profile llm.Profile, roleKey string) string {
 func resolveLLMConfigTarget(set llm.ProfileSet, bound llm.Profile, boundModel string, command llmConfigCommand) (llm.Profile, string, error) {
 	target := bound
 	model := strings.TrimSpace(command.Model)
+	if command.ProviderID != "" || command.ProviderName != "" {
+		matches := []llm.Profile{}
+		for _, profile := range set.Profiles {
+			if command.ProviderID != "" && profile.ID != command.ProviderID {
+				continue
+			}
+			if command.ProviderName != "" && !strings.EqualFold(profile.Name, command.ProviderName) {
+				continue
+			}
+			matches = append(matches, profile)
+		}
+		if len(matches) != 1 {
+			return llm.Profile{}, "", fmt.Errorf("提供商未找到或名称不唯一，请先 list 并指定 provider_id")
+		}
+		target = matches[0]
+		if command.ProviderSet && target.Config.WithDefaults().Provider != command.Provider {
+			return llm.Profile{}, "", fmt.Errorf("provider 协议与指定供应商不一致")
+		}
+		if model == "" {
+			model = roleModelFromProfile(target, command.Role)
+		}
+		model = strings.TrimPrefix(model, target.ID+":")
+		return target, model, nil
+	}
 	if command.ProviderSet && command.Provider != bound.Config.Provider {
-		match, ok := firstProfileForProvider(set, command.Provider)
-		if !ok {
+		matches := []llm.Profile{}
+		for _, profile := range set.Profiles {
+			if profile.Config.WithDefaults().Provider == command.Provider {
+				matches = append(matches, profile)
+			}
+		}
+		if len(matches) == 0 {
 			return llm.Profile{}, "", fmt.Errorf("WebUI 里没有配置 %s 的 provider，请先添加再切换", command.Provider)
 		}
-		target = match
+		if len(matches) > 1 {
+			return llm.Profile{}, "", fmt.Errorf("同协议有多个供应商，请先 list 并指定 provider_id")
+		}
+		target = matches[0]
 		if model == "" {
 			model = llm.DefaultModel(command.Provider)
 		}
@@ -274,35 +355,26 @@ func resolveLLMConfigTarget(set llm.ProfileSet, bound llm.Profile, boundModel st
 	// 只报了模型名时，如果当前这套配置的模型清单里没有它、而别的配置有，就跟着换过去：
 	// 用户说的是模型，不该逼他先想清楚这个模型挂在哪套配置下。
 	if !command.ProviderSet && !profileOffersModel(target, model) {
-		if match, ok := profileOfferingModel(set, model); ok {
-			target = match
+		matches := []llm.Profile{}
+		for _, profile := range set.Profiles {
+			if supported, known := profileSupportsRoleModel(profile, model); known && supported {
+				matches = append(matches, profile)
+			}
+		}
+		if len(matches) > 1 {
+			return llm.Profile{}, "", fmt.Errorf("多个供应商提供模型 %s，请先 list 并指定 provider_id", model)
+		}
+		if len(matches) == 1 {
+			target = matches[0]
 		}
 	}
 	return target, model, nil
-}
-
-func firstProfileForProvider(set llm.ProfileSet, provider llm.Provider) (llm.Profile, bool) {
-	for _, profile := range set.Profiles {
-		if profile.Config.WithDefaults().Provider == provider {
-			return profile, true
-		}
-	}
-	return llm.Profile{}, false
 }
 
 // profileOffersModel 只看已经同步下来的模型清单；清单为空时不做判断（当作可能支持）。
 func profileOffersModel(profile llm.Profile, model string) bool {
 	supported, known := profileSupportsRoleModel(profile, model)
 	return !known || supported
-}
-
-func profileOfferingModel(set llm.ProfileSet, model string) (llm.Profile, bool) {
-	for _, profile := range set.Profiles {
-		if supported, known := profileSupportsRoleModel(profile, model); known && supported {
-			return profile, true
-		}
-	}
-	return llm.Profile{}, false
 }
 
 // llmConfigOutputTokenNote 在新模型的输出上限比配置里填的还小时给一句提醒。
@@ -315,7 +387,9 @@ func llmConfigOutputTokenNote(cfg llm.ProviderConfig, info llm.ModelInfo) string
 }
 
 // saveModelRole 只改指定用途的绑定，其余用途原样保留。
-func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, roleKey string, target llm.Profile, model string) error {
+func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, roleKey string, target llm.Profile, model string, explicitProvider bool) error {
+	r.modelConfigMu.Lock()
+	defer r.modelConfigMu.Unlock()
 	next := make(map[string]ModelRole, len(roles)+1)
 	for key, role := range roles {
 		next[key] = role
@@ -323,7 +397,7 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 	role := next[roleKey]
 	// 原来按分组绑定、而新配置仍在那个分组里时保留分组绑定，只换模型：
 	// 分组绑定带故障转移，改成单配置会把这个能力弄丢。
-	if role.Group != "" && profileInGroup(target, role.Group) {
+	if !explicitProvider && role.Group != "" && profileInGroup(target, role.Group) {
 		role.Model = model
 	} else {
 		role = ModelRole{ProfileID: target.ID, Model: model}
@@ -331,16 +405,48 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 	next[roleKey] = role
 	botCfg.ModelRoles = normalizeModelRoles(next)
 	botCfg = botCfg.WithDefaults()
-	r.mu.Lock()
-	r.cfg = botCfg
-	r.updatedAt = time.Now()
+	r.mu.RLock()
 	saver := r.configSaver
-	r.mu.Unlock()
+	r.mu.RUnlock()
 	if saver == nil {
 		return fmt.Errorf("当前部署没有接入机器人配置存储")
 	}
-	// 聊天里改的配置必须立刻落盘，否则重启就丢。
-	saver.SaveBotConfig(botCfg)
+	if scoped, ok := saver.(ModelRoleConfigSaver); ok {
+		saved, err := scoped.SaveModelRole(botCfg, roleKey, next[roleKey])
+		if err != nil {
+			return err
+		}
+		botCfg = saved
+	} else {
+		r.mu.RLock()
+		single := len(r.profileConfigs) <= 1 && r.cfg.ID == botCfg.ID
+		current := r.cfg.WithDefaults()
+		r.mu.RUnlock()
+		if !single {
+			return fmt.Errorf("配置存储不支持按机器人保存模型分配")
+		}
+		if current.OwnerID != botCfg.OwnerID || !boolValue(current.OwnerLLMConfigEnabled, true) {
+			return fmt.Errorf("主人权限或配置开关已变化，请重新请求")
+		}
+		currentRoles := normalizeModelRoles(current.ModelRoles)
+		if currentRoles == nil {
+			currentRoles = map[string]ModelRole{}
+		}
+		currentRoles[roleKey] = next[roleKey]
+		current.ModelRoles = currentRoles
+		botCfg = current
+		saver.SaveBotConfig(botCfg)
+	}
+	r.mu.Lock()
+	if r.cfg.ID == botCfg.ID {
+		r.cfg = botCfg
+	}
+	if r.profileConfigs == nil {
+		r.profileConfigs = map[string]BotConfig{}
+	}
+	r.profileConfigs[botCfg.ID] = botCfg
+	r.updatedAt = time.Now()
+	r.mu.Unlock()
 	return nil
 }
 
@@ -364,9 +470,10 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 		message = "聊天修改提供商配置成功"
 	}
 	metadata := map[string]any{
-		"user_id": req.Event.UserID,
-		"kind":    string(req.Event.Kind),
-		"command": req.Text,
+		"bot_profile_id": req.Event.ProfileID,
+		"user_id":        req.Event.UserID,
+		"kind":           string(req.Event.Kind),
+		"command":        req.Text,
 	}
 	if req.Event.GroupID != "" {
 		metadata["group_id"] = req.Event.GroupID
