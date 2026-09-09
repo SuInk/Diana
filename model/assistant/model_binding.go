@@ -125,6 +125,12 @@ func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (Mod
 	if len(roles) == 0 {
 		return ModelRole{}, false
 	}
+	if modelRoleKeyForGroup(group) == "vision" && roles["vision"].FollowChat {
+		if chat, ok := roles["chat"]; ok && !chat.FollowChat && modelRoleConfigured(chat) {
+			return chat, true
+		}
+		return ModelRole{FollowChat: true}, true
+	}
 	if purpose = strings.TrimSpace(purpose); purpose != "" {
 		if role, ok := roles[purpose]; ok {
 			return role, true
