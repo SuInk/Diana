@@ -37,7 +37,7 @@ func TestExplicitBotQuoteRequiresVerifiedIdentity(t *testing.T) {
 }
 
 func TestExplicitQuoteUsesDirectAuditPolicy(t *testing.T) {
-	provider := &qualityTestProvider{reply: `{"should_send":false,"confidence":0.94,"reason":"需要更正年份","account_safe":true}`}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.06,"reason":"需要更正年份","account_safe":true}`}
 	r := NewRuntime(BotConfig{BotAccount: "42", ReplyAccountSafetyAuditEnabled: boolPointer(true), BotReplyLoopDetectionEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", SelfID: "42", UserID: "u", Quoted: &QuotedMessage{MessageID: "old", UserID: "42"}, proactiveReply: true}
 	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "你上网查一下", "答复", r.Config()); err != nil {
@@ -48,7 +48,7 @@ func TestExplicitQuoteUsesDirectAuditPolicy(t *testing.T) {
 		t.Fatal("ordinary chat lost quality gate")
 	}
 	event.Quoted.UserID = "42"
-	provider.reply = `{"should_send":true,"confidence":0.99,"account_safe":false,"account_risk":"explicit","account_risk_reason":"命中账号安全规则"}`
+	provider.reply = `{"send_confidence":0.99,"account_safe":false,"account_risk":"explicit","account_risk_reason":"命中账号安全规则"}`
 	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "请求", "答复", r.Config()); err == nil {
 		t.Fatal("explicit quote bypassed configured account safety")
 	}
@@ -59,7 +59,7 @@ type quotedReplyProvider struct{}
 func (quotedReplyProvider) Generate(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	text := "这里是核对后的回答"
 	if llmUsagePurposeFromContext(ctx) == "reply_send_audit" {
-		text = `{"should_send":false,"confidence":0.94,"reason":"主动回复准确度不足","account_safe":true}`
+		text = `{"send_confidence":0.06,"reason":"主动回复准确度不足","account_safe":true}`
 	}
 	return &llm.GenerateResponse{Text: text}, nil
 }
