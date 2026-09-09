@@ -57,7 +57,7 @@
               @click="selectResult(option.value)"
             >
               <span>{{ option.label }}</span>
-            <span class="event-filter-count"><SkeletonBlock v-if="loading && !response" width="2ch" inline /><template v-else>{{ formatNumber(resultOptionCount(option.value)) }}</template></span>
+            <span class="event-filter-count"><SkeletonBlock v-if="summaryLoading" width="2ch" inline /><template v-else>{{ summaryResponse ? formatNumber(resultOptionCount(option.value)) : "—" }}</template></span>
           </button>
         </div>
       </section>
@@ -101,12 +101,12 @@
         </div>
       </section>
 
-      <div v-if="loading && !response" class="event-stats-line" role="status" aria-label="正在加载事件统计">
+      <div v-if="summaryLoading" class="event-stats-line" role="status" aria-label="正在加载事件统计">
         <SkeletonBlock width="180px" height="22px" />
         <span class="event-token-skeleton"><SkeletonBlock width="110px" height="22px" /><span class="skeleton skeleton-text" aria-hidden="true">输入 000,000（缓存命中 00%） / 输出 00,000 · 00 次调用</span></span>
         <SkeletonBlock width="130px" height="22px" />
       </div>
-      <p v-else class="event-stats-line">
+      <p v-else-if="summaryResponse" class="event-stats-line">
         <span>
           <MessageCircle :size="13" aria-hidden="true" />
           <strong>{{ formatNumber(summary.total) }}</strong> 条事件
@@ -511,6 +511,8 @@ watch(botScope, () => {
 });
 const events = ref<AssistantEventDetail[]>([]);
 const response = ref<AssistantEventsResponse | null>(null);
+const summaryResponse = ref<AssistantEventsResponse | null>(null);
+const summaryLoading = ref(false);
 const page = ref(1);
 const loading = ref(true);
 const loadingMore = ref(false);
@@ -555,31 +557,32 @@ const failedImages = ref<Record<string, boolean>>({});
 const activeImage = ref<{ url: string; alt: string } | null>(null);
 const pendingLiveEvents = ref(false);
 let loadGeneration = 0;
+let eventsAbort: AbortController | undefined;
 
 const summary = computed(() => ({
-  total: response.value?.total ?? 0,
-  replied: response.value?.replied ?? 0,
-  not_replied: response.value?.not_replied ?? 0,
-  pending: response.value?.pending ?? 0,
-  errors: response.value?.errors ?? 0,
-  notices: response.value?.notices ?? 0,
-  llm_calls: response.value?.llm_calls ?? 0,
-  input_tokens: response.value?.input_tokens ?? 0,
-  output_tokens: response.value?.output_tokens ?? 0,
-  total_tokens: response.value?.total_tokens ?? 0,
-  cached_input_tokens: response.value?.cached_input_tokens ?? 0,
-  llm_duration_ms: response.value?.llm_duration_ms ?? 0,
-  output_tokens_per_second: response.value?.output_tokens_per_second ?? 0,
-  avg_ttft_ms: response.value?.avg_ttft_ms ?? 0,
-  ttft_calls: response.value?.ttft_calls ?? 0
+  total: summaryResponse.value?.total ?? 0,
+  replied: summaryResponse.value?.replied ?? 0,
+  not_replied: summaryResponse.value?.not_replied ?? 0,
+  pending: summaryResponse.value?.pending ?? 0,
+  errors: summaryResponse.value?.errors ?? 0,
+  notices: summaryResponse.value?.notices ?? 0,
+  llm_calls: summaryResponse.value?.llm_calls ?? 0,
+  input_tokens: summaryResponse.value?.input_tokens ?? 0,
+  output_tokens: summaryResponse.value?.output_tokens ?? 0,
+  total_tokens: summaryResponse.value?.total_tokens ?? 0,
+  cached_input_tokens: summaryResponse.value?.cached_input_tokens ?? 0,
+  llm_duration_ms: summaryResponse.value?.llm_duration_ms ?? 0,
+  output_tokens_per_second: summaryResponse.value?.output_tokens_per_second ?? 0,
+  avg_ttft_ms: summaryResponse.value?.avg_ttft_ms ?? 0,
+  ttft_calls: summaryResponse.value?.ttft_calls ?? 0
 }));
 const hasMore = computed(() => response.value?.has_more ?? false);
-const filteredTotal = computed(() => response.value?.filtered_total ?? summary.value.total);
+const filteredTotal = computed(() => summaryResponse.value?.filtered_total ?? summary.value.total);
 const rangeDescription = computed(() => rangeOptions.find((item) => item.value === selectedRange.value)?.label ?? "当前范围");
 const selectedResultLabel = computed(() => resultOptions.find((item) => item.value === selectedResult.value)?.label ?? "全部");
 const resultCountText = computed(() => {
   const prefix = selectedResult.value === "all" ? "已显示" : selectedResultLabel.value;
-  return `${prefix} ${formatNumber(events.value.length)} / ${formatNumber(filteredTotal.value)}`;
+  return summaryResponse.value ? `${prefix} ${formatNumber(events.value.length)} / ${formatNumber(filteredTotal.value)}` : `${prefix} ${formatNumber(events.value.length)}`;
 });
 const emptyStateTitle = computed(() => selectedResult.value === "all" ? "当前范围没有事件" : `当前范围没有${selectedResultLabel.value}事件`);
 // 按状态拆开的计数（已回复 / 未回复 / 等待处理 / 异常 / 通知）在上面的筛选标签里
@@ -753,14 +756,22 @@ async function load(reset: boolean): Promise<void> {
   const requestedResult = selectedResult.value;
   const requestedGroup = selectedGroup.value;
   const requestedSearch = searchTerm.value;
+  const requestedProfile = botScope.value;
   if (reset) {
+    eventsAbort?.abort();
+    eventsAbort = new AbortController();
     // 已有列表时静默刷新，切页回来不再闪回骨架屏。
     loading.value = events.value.length === 0;
     page.value = 1;
     pendingLiveEvents.value = false;
+    summaryResponse.value = null;
+    summaryLoading.value = true;
+    traceLoaded.value = {};
+    traceOpen.value = {};
   } else {
     loadingMore.value = true;
   }
+  const signal = eventsAbort?.signal;
   try {
     const next = await getAssistantEvents(
       requestedRange,
@@ -768,12 +779,21 @@ async function load(reset: boolean): Promise<void> {
       requestedPage,
       EVENT_PAGE_SIZE,
       requestedGroup.startsWith(USER_PREFIX) ? "" : requestedGroup.replace(GROUP_PREFIX, ""),
-      botScope.value,
+      requestedProfile,
       requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : "",
-      requestedSearch
+      requestedSearch,
+      "list", signal
     );
     if (generation !== loadGeneration) return;
     response.value = next;
+    if (reset) {
+      void getAssistantEvents(requestedRange, requestedResult, 1, EVENT_PAGE_SIZE,
+        requestedGroup.startsWith(USER_PREFIX) ? "" : requestedGroup.replace(GROUP_PREFIX, ""), requestedProfile,
+        requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : "", requestedSearch, "summary", signal)
+        .then((stats) => { if (generation === loadGeneration) summaryResponse.value = stats; })
+        .catch((error) => { if (generation === loadGeneration) toastError(error instanceof Error ? error.message : "统计加载失败"); })
+        .finally(() => { if (generation === loadGeneration) summaryLoading.value = false; });
+    }
     if (reset) {
       events.value = next.events;
       lastLoadedAt = Date.now();
@@ -784,6 +804,7 @@ async function load(reset: boolean): Promise<void> {
     page.value = next.has_more ? next.page + 1 : next.page;
   } catch (error) {
     if (generation === loadGeneration) {
+      summaryLoading.value = false;
       toastError(error instanceof Error ? error.message : "事件加载失败");
     }
   } finally {
@@ -837,10 +858,10 @@ const USER_PREFIX = "u:";
 const groupOptions = computed(() => {
   const options: AppSelectOption[] = [{ value: "", label: "全部会话" }];
   // 群聊和私聊分开列：两类会话的编号体系不一样，混在一条长列表里很难扫。
-  for (const group of response.value?.groups ?? []) {
+  for (const group of summaryResponse.value?.groups ?? []) {
     options.push({ ...groupOption(group.group_id, group.events, group.group_name, group.avatar_url), group: "群聊" });
   }
-  for (const chat of response.value?.private_chats ?? []) {
+  for (const chat of summaryResponse.value?.private_chats ?? []) {
     options.push({ ...privateChatOption(chat.user_id, chat.events, chat.user_name), group: "私聊" });
   }
   // 选中的会话这一轮可能已经没有事件了（换了更短的时间范围），选项要留着，
@@ -1165,6 +1186,8 @@ async function toggleTrace(event: AssistantEventDetail): Promise<void> {
   traceLoading.value = { ...traceLoading.value, [event.id]: true };
   try {
     const result = await getAssistantEventTrace(event.id);
+    event.memories = result.memories ?? [];
+    event.temporary_memories = result.temporary_memories ?? [];
     traceSteps.value = { ...traceSteps.value, [event.id]: result.steps ?? [] };
     traceLoaded.value = { ...traceLoaded.value, [event.id]: true };
   } catch (error) {
@@ -1255,21 +1278,25 @@ watch(
 
 onMounted(() => {
   document.addEventListener("keydown", onImageKeydown);
+  void load(true);
 });
 onActivated(() => {
+  if (loading.value && loadGeneration > 0) return;
   const stale = Date.now() - lastLoadedAt >= REACTIVATE_REFRESH_INTERVAL_MS;
-  if (events.value.length === 0 || pendingLiveEvents.value || stale) {
+  if (events.value.length === 0 || !summaryResponse.value || pendingLiveEvents.value || stale) {
     void load(true);
   }
 });
 onDeactivated(() => {
   // Ignore requests started before leaving this cached view.
   loadGeneration++;
+  eventsAbort?.abort();
   loading.value = false;
   loadingMore.value = false;
 });
 onBeforeUnmount(() => {
   loadGeneration++;
+  eventsAbort?.abort();
   document.removeEventListener("keydown", onImageKeydown);
 });
 </script>

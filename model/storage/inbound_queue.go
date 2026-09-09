@@ -27,6 +27,7 @@ const (
 // available to the durable worker queue. Existing history rows remain
 // deduplicated so pre-queue chat history is never replayed after an upgrade.
 func (s *SQLiteStore) EnqueueInboundEvent(ctx context.Context, session string, event assistant.MessageEvent, priorities ...int) (string, bool, error) {
+	defer s.observeStorage(ctx, "EnqueueInboundEvent", "write")()
 	if s == nil || s.db == nil {
 		return "", false, errors.New("enqueue inbound event: sqlite store is not configured")
 	}
@@ -57,10 +58,11 @@ func (s *SQLiteStore) EnqueueInboundEvent(ctx context.Context, session string, e
 		text = strings.TrimSpace(event.RawMessage)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWriteTx(ctx, "EnqueueInboundEvent")
 	if err != nil {
 		return "", false, fmt.Errorf("begin inbound enqueue: %w", err)
 	}
+	defer observeTransaction("EnqueueInboundEvent")()
 	defer func() { _ = tx.Rollback() }()
 
 	if existingID, found, findErr := findDuplicateInboundHistory(ctx, tx, event); findErr != nil {
@@ -140,6 +142,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
 // RecordNoticeEvent adds a terminal audit row for a notice that must be visible
 // in the event timeline without sending it through the reply worker queue.
 func (s *SQLiteStore) RecordNoticeEvent(ctx context.Context, session string, event assistant.MessageEvent) error {
+	defer s.observeStorage(ctx, "RecordNoticeEvent", "write")()
 	if s == nil || s.db == nil {
 		return errors.New("record notice event: sqlite store is not configured")
 	}
@@ -234,6 +237,7 @@ func sameInboundTransport(current, stored assistant.MessageEvent) bool {
 // preserving FIFO order within each priority. Expired processing leases are
 // eligible for recovery by another worker.
 func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, groupConcurrency ...int) (assistant.InboundQueueItem, bool, error) {
+	defer s.observeStorage(ctx, "ClaimNextInboundEvent", "write")()
 	if s == nil || s.db == nil {
 		return assistant.InboundQueueItem{}, false, errors.New("claim inbound event: sqlite store is not configured")
 	}
@@ -315,6 +319,7 @@ func inboundGroupConcurrencyValue(values []int) int {
 // CompleteInboundEvent marks a leased event terminal without deleting its
 // audit record.
 func (s *SQLiteStore) CompleteInboundEvent(ctx context.Context, id string, leaseOwner string, outcome string) error {
+	defer s.observeStorage(ctx, "CompleteInboundEvent", "write")()
 	if s == nil || s.db == nil {
 		return errors.New("complete inbound event: sqlite store is not configured")
 	}
@@ -339,6 +344,7 @@ WHERE id = ? AND status = ? AND lease_owner = ?
 
 // RetryInboundEvent returns a leased event to the queue at the requested time.
 func (s *SQLiteStore) RetryInboundEvent(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string) error {
+	defer s.observeStorage(ctx, "RetryInboundEvent", "write")()
 	if s == nil || s.db == nil {
 		return errors.New("retry inbound event: sqlite store is not configured")
 	}
@@ -370,6 +376,7 @@ WHERE id = ? AND status = ? AND lease_owner = ?
 // ReleaseInboundLeases immediately returns every lease held by one worker to
 // the pending queue, for example during a graceful shutdown.
 func (s *SQLiteStore) ReleaseInboundLeases(ctx context.Context, leaseOwner string) error {
+	defer s.observeStorage(ctx, "ReleaseInboundLeases", "write")()
 	if s == nil || s.db == nil {
 		return errors.New("release inbound leases: sqlite store is not configured")
 	}
@@ -394,6 +401,7 @@ WHERE status = ?`
 // PendingInboundCount reports all non-terminal work, including currently
 // leased events.
 func (s *SQLiteStore) PendingInboundCount(ctx context.Context) (int, error) {
+	defer s.observeStorage(ctx, "PendingInboundCount", "write")()
 	if s == nil || s.db == nil {
 		return 0, errors.New("count pending inbound events: sqlite store is not configured")
 	}
@@ -409,6 +417,7 @@ SELECT COUNT(*) FROM inbound_events WHERE status IN (?, ?)
 // GroupHistoryWatermark returns the newest persisted event timestamp for one
 // group, including history that predates the durable queue migration.
 func (s *SQLiteStore) GroupHistoryWatermark(ctx context.Context, groupID string) (int64, bool, error) {
+	defer s.observeStorage(ctx, "GroupHistoryWatermark", "write")()
 	if s == nil || s.db == nil {
 		return 0, false, errors.New("load group history watermark: sqlite store is not configured")
 	}
@@ -433,6 +442,7 @@ WHERE kind = ? AND group_id = ?
 // ListHistorySessions returns each known group/private conversation and its
 // latest persisted event time for reconnect backfill.
 func (s *SQLiteStore) ListHistorySessions(ctx context.Context) ([]assistant.HistorySession, error) {
+	defer s.observeStorage(ctx, "ListHistorySessions", "write")()
 	if s == nil || s.db == nil {
 		return nil, errors.New("list history sessions: sqlite store is not configured")
 	}

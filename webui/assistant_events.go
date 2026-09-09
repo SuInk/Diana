@@ -106,9 +106,11 @@ func (h *BotHandler) namedEventGroups(ctx context.Context, profileID string, gro
 }
 
 type assistantEventTraceResponse struct {
-	EventID   string                `json:"event_id"`
-	MessageID string                `json:"message_id,omitempty"`
-	Steps     []storage.AppLogEntry `json:"steps"`
+	Memories          []storage.InboundEventMemory          `json:"memories,omitempty"`
+	TemporaryMemories []storage.InboundEventTemporaryMemory `json:"temporary_memories,omitempty"`
+	EventID           string                                `json:"event_id"`
+	MessageID         string                                `json:"message_id,omitempty"`
+	Steps             []storage.AppLogEntry                 `json:"steps"`
 }
 
 func (h *BotHandler) eventTrace(c *gin.Context) {
@@ -126,10 +128,17 @@ func (h *BotHandler) eventTrace(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "事件不存在"})
 		return
 	}
+	memories, err := h.sqlite.LoadEventMemories(c.Request.Context(), eventID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, assistantEventTraceResponse{
-		EventID:   eventID,
-		MessageID: messageID,
-		Steps:     steps,
+		Memories:          memories.Memories,
+		TemporaryMemories: memories.TemporaryMemories,
+		EventID:           eventID,
+		MessageID:         messageID,
+		Steps:             steps,
 	})
 }
 
@@ -226,6 +235,14 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
 		return
 	}
+	mode := c.DefaultQuery("mode", "full")
+	if mode != "full" && mode != "list" && mode != "summary" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mode 必须为 full、list 或 summary"})
+		return
+	}
+	queryCtx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	c.Request = c.Request.WithContext(queryCtx)
 	rangeID := strings.TrimSpace(c.DefaultQuery("range", "24h"))
 	since, ok := assistantEventsSince(rangeID, time.Now())
 	if !ok {
@@ -246,15 +263,24 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 	userID := strings.TrimSpace(c.Query("user"))
 	search := strings.TrimSpace(c.Query("q"))
 	profileID := strings.TrimSpace(c.Query("profile"))
+	cacheKey := c.Request.URL.Query().Encode()
+	if mode == "summary" {
+		if cached, ok := h.cachedEventSummary(cacheKey); ok {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
 	stored, err := h.sqlite.ListInboundEventDetails(c.Request.Context(), storage.InboundEventQuery{
-		Since:     since,
-		Limit:     limit,
-		Offset:    (page - 1) * limit,
-		Result:    resultFilter,
-		GroupID:   groupID,
-		UserID:    userID,
-		Search:    search,
-		ProfileID: profileID,
+		Lightweight: mode == "list",
+		SummaryOnly: mode == "summary",
+		Since:       since,
+		Limit:       limit,
+		Offset:      (page - 1) * limit,
+		Result:      resultFilter,
+		GroupID:     groupID,
+		UserID:      userID,
+		Search:      search,
+		ProfileID:   profileID,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -366,14 +392,19 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Query:        search,
 		PrivateChats: []storage.InboundEventPrivateChat{},
 	}
-	if chats, err := h.sqlite.ListInboundEventPrivateChats(c.Request.Context(), since, botProfileScope(c)); err == nil {
-		response.PrivateChats = chats
+	if mode == "list" {
+		response.HasMore = stored.HasMore
 	}
-	if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since, botProfileScope(c)); err == nil {
-		response.Groups = h.namedEventGroups(c.Request.Context(), botProfileScope(c), groups)
-	} else {
-		// 筛选器列不出来不该让整页打不开：事件本身已经查到了。
-		log.Printf("assistant events: list groups failed: %v", err)
+	if mode != "list" {
+		if chats, err := h.sqlite.ListInboundEventPrivateChats(c.Request.Context(), since, botProfileScope(c)); err == nil {
+			response.PrivateChats = chats
+		}
+		if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since, botProfileScope(c)); err == nil {
+			response.Groups = h.namedEventGroups(c.Request.Context(), botProfileScope(c), groups)
+		} else {
+			// 筛选器列不出来不该让整页打不开：事件本身已经查到了。
+			log.Printf("assistant events: list groups failed: %v", err)
+		}
 	}
 	if budgetRuntime, ok := h.runtime.(contextBudgetRuntime); ok && groupID != "" {
 		breakdown := budgetRuntime.ContextBudgetBreakdownForGroup(groupID)
@@ -381,6 +412,9 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 	}
 	if !since.IsZero() {
 		response.Since = &since
+	}
+	if mode == "summary" {
+		h.cacheEventSummary(cacheKey, response)
 	}
 	c.JSON(http.StatusOK, response)
 }

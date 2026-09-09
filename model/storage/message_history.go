@@ -27,6 +27,7 @@ const (
 
 // AppendMessageEvent persists an inbound message event for later context recovery.
 func (s *SQLiteStore) AppendMessageEvent(ctx context.Context, session string, event assistant.MessageEvent) error {
+	defer s.observeStorage(ctx, "AppendMessageEvent", "write")()
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -76,8 +77,9 @@ ON CONFLICT(id) DO UPDATE SET
 
 // messageSearchExtra 读取某条消息已有的检索附加文本。
 func (s *SQLiteStore) messageSearchExtra(ctx context.Context, id string) string {
+	defer s.observeStorage(ctx, "messageSearchExtra", "read")()
 	var extra sql.NullString
-	if err := s.db.QueryRowContext(ctx, `SELECT search_extra FROM message_events WHERE id = ?`, id).Scan(&extra); err != nil {
+	if err := s.eventReader().QueryRowContext(ctx, `SELECT search_extra FROM message_events WHERE id = ?`, id).Scan(&extra); err != nil {
 		return ""
 	}
 	return strings.TrimSpace(extra.String)
@@ -87,6 +89,7 @@ func (s *SQLiteStore) messageSearchExtra(ctx context.Context, id string) string 
 // 描述。描述由后台视觉调用异步生成，消息早就落库了，所以只能事后补写；写完立刻
 // 重建这一行的检索索引，否则新描述要等下次消息更新才进得去。
 func (s *SQLiteStore) SaveMessageSearchExtra(ctx context.Context, session, messageID, extra string) error {
+	defer s.observeStorage(ctx, "SaveMessageSearchExtra", "write")()
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -101,7 +104,7 @@ func (s *SQLiteStore) SaveMessageSearchExtra(ctx context.Context, session, messa
 		userID sql.NullString
 		text   sql.NullString
 	)
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT id, sender_name, user_id, text
 FROM message_events
 WHERE session = ? AND message_id = ?
@@ -123,6 +126,7 @@ LIMIT 1
 
 // ListRecentMessageEvents returns recent message events in chronological order.
 func (s *SQLiteStore) ListRecentMessageEvents(ctx context.Context, session string, limit int) ([]assistant.MessageEvent, error) {
+	defer s.observeStorage(ctx, "ListRecentMessageEvents", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -131,7 +135,7 @@ func (s *SQLiteStore) ListRecentMessageEvents(ctx context.Context, session strin
 		return nil, nil
 	}
 	limit = normalizeMessageHistoryLimit(limit)
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT payload
 FROM message_events
 WHERE session = ? AND kind != ?
@@ -210,8 +214,9 @@ func (s *SQLiteStore) ListRecentStickerEvents(ctx context.Context, query assista
 }
 
 func (s *SQLiteStore) queryRecentStickerEvents(ctx context.Context, where string, args []any, limit int) ([]assistant.MessageEvent, error) {
+	defer s.observeStorage(ctx, "queryRecentStickerEvents", "read")()
 	args = append(args, string(assistant.EventKindNotice), limit)
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT payload
 FROM message_events
 WHERE `+where+` AND kind != ?
@@ -248,6 +253,7 @@ LIMIT ?
 // semantic time window. Callers are responsible for ranking a bounded set of
 // candidates before sending anything to an LLM.
 func (s *SQLiteStore) ListMessageEventsBetween(ctx context.Context, session string, fromTime, throughTime int64) ([]assistant.MessageEvent, error) {
+	defer s.observeStorage(ctx, "ListMessageEventsBetween", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -264,7 +270,7 @@ func (s *SQLiteStore) ListMessageEventsBetween(ctx context.Context, session stri
 	if fromTime > throughTime {
 		fromTime, throughTime = throughTime, fromTime
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT payload
 FROM message_events
 WHERE session = ?
@@ -299,6 +305,7 @@ ORDER BY event_time ASC, created_at ASC, id ASC
 // history. Cross-session searches are restricted to an explicit session prefix
 // supplied by the runtime, so records from another bot namespace cannot leak in.
 func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.MessageHistorySearchQuery) ([]assistant.MessageEvent, int, error) {
+	defer s.observeStorage(ctx, "SearchMessageEvents", "read")()
 	if s == nil || s.db == nil {
 		return nil, 0, nil
 	}
@@ -347,7 +354,7 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 	where += ` AND (` + strings.Join(matchParts, ` OR `) + `)`
 
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM message_events WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM message_events WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	scoreParts := make([]string, 0, len(terms))
@@ -367,7 +374,7 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 		rowArgs = append([]any(nil), args...)
 	}
 	rowArgs = append(rowArgs, limit, max(0, query.Offset))
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT payload
 FROM message_events
 WHERE `+where+`
@@ -429,6 +436,7 @@ func escapeMessageHistoryLike(value string) string {
 
 // FindMessageEvent returns the persisted non-notice message with the given OneBot message ID.
 func (s *SQLiteStore) FindMessageEvent(ctx context.Context, session string, messageID string) (assistant.MessageEvent, bool, error) {
+	defer s.observeStorage(ctx, "FindMessageEvent", "read")()
 	if s == nil || s.db == nil {
 		return assistant.MessageEvent{}, false, nil
 	}
@@ -438,7 +446,7 @@ func (s *SQLiteStore) FindMessageEvent(ctx context.Context, session string, mess
 		return assistant.MessageEvent{}, false, nil
 	}
 	var raw string
-	err := s.db.QueryRowContext(ctx, `
+	err := s.eventReader().QueryRowContext(ctx, `
 SELECT payload
 FROM message_events
 WHERE session = ? AND message_id = ? AND kind != ?
@@ -460,6 +468,7 @@ LIMIT 1
 
 // ListGroupRecallEvents returns every persisted group recall, newest first.
 func (s *SQLiteStore) ListGroupRecallEvents(ctx context.Context, groupID string) ([]assistant.MessageEvent, error) {
+	defer s.observeStorage(ctx, "ListGroupRecallEvents", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -467,7 +476,7 @@ func (s *SQLiteStore) ListGroupRecallEvents(ctx context.Context, groupID string)
 	if groupID == "" {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT recall.payload,
        (SELECT original.event_time
         FROM message_events AS original
@@ -535,6 +544,7 @@ func normalizeMessageHistoryLimit(limit int) int {
 //
 // 第三个返回值为 false 表示这次用不了索引，调用方回退到原来的 LIKE 检索。
 func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, args []any, terms []string, limit int, order string, offset int) ([]assistant.MessageEvent, int, bool, error) {
+	defer s.observeStorage(ctx, "searchMessageEventsFTS", "read")()
 	match := messageHistoryFTSQuery(terms)
 	if match == "" {
 		return nil, 0, false, nil
@@ -552,7 +562,7 @@ FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?
 
 	countArgs := append(append([]any(nil), hitArgs...), args...)
 	var total int
-	if err := s.db.QueryRowContext(ctx,
+	if err := s.eventReader().QueryRowContext(ctx,
 		hits+` SELECT COUNT(*) `+from+` WHERE `+hit+` AND `+scopedWhere, countArgs...).Scan(&total); err != nil {
 		// 索引出问题时不要让检索整个失败，交回 LIKE 那一路。
 		return nil, 0, false, nil
@@ -564,7 +574,7 @@ FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?
 	if order == "oldest" || order == "newest" {
 		ordering = historyChronologicalOrder(order, "e.")
 	}
-	rows, err := s.db.QueryContext(ctx, hits+`
+	rows, err := s.eventReader().QueryContext(ctx, hits+`
 SELECT e.payload `+from+`
 WHERE `+hit+` AND `+scopedWhere+`
 ORDER BY `+ordering+`

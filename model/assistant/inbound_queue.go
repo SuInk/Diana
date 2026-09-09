@@ -207,6 +207,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	// advancing the baseline, so the queued rerun still covers the window.
 	pendingManualFloor := int64(0)
 	nextBackfillAt := time.Time{}
+	nextIngestRecoveryAt := time.Time{}
 	var observedConnectionEpoch uint64
 	var observedDuplicateConnections uint64
 	launchBackfill := func() {
@@ -238,6 +239,14 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			}
 		}()
 	}
+	if journal, ok := store.(InboundRetryStore); ok {
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			defer recoverGoroutinePanic("inbound.retry")
+			r.runInboundRetries(ctx, journal)
+		}()
+	}
 	for i := 0; i < workers; i++ {
 		workerWG.Add(1)
 		go func() {
@@ -259,7 +268,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			r.setInboundReady(false)
 			// A pending or running backfill means the missed window has not been
 			// persisted yet; advancing the checkpoint now would erase it on restart.
-			if connected && !backfillRunning && !backfillRequested && nextBackfillAt.IsZero() {
+			if connected && !backfillRunning && !backfillRequested && nextBackfillAt.IsZero() && !r.hasFailedInbound() {
 				saveRecoveryCheckpoint(time.Now())
 			}
 			workerWG.Wait()
@@ -344,10 +353,25 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 				r.setInboundReady(false)
 				continue
 			}
+			if connected && !now.Before(nextIngestRecoveryAt) {
+				if failedAt := r.takeFailedInbound(); !failedAt.IsZero() {
+					nextIngestRecoveryAt = now.Add(30 * time.Second)
+					cutoff := inboundReplayCutoff(failedAt, now)
+					if cutoff.Before(r.inboundReplayCutoffAt(now)) {
+						r.setInboundReplayCutoff(cutoff)
+					}
+					backfillBaseline = rewindHistoryBackfillBaseline(backfillBaseline, cutoff.Unix())
+					if backfillRunning && (pendingManualFloor == 0 || cutoff.Unix() < pendingManualFloor) {
+						pendingManualFloor = cutoff.Unix()
+					}
+					r.recordOneBotConnectionLifecycle(ctx, status, "backfill_ingest_recovery", "入队失败已自动安排消息回补", nil)
+					launchBackfill()
+				}
+			}
 			epochChanged := status.ConnectionEpoch != 0 && observedConnectionEpoch != 0 && status.ConnectionEpoch != observedConnectionEpoch
 			if connected && !epochChanged {
 				lastConnectedAt = now
-				recoveryDebt := backfillRunning || backfillRequested || !nextBackfillAt.IsZero()
+				recoveryDebt := backfillRunning || backfillRequested || !nextBackfillAt.IsZero() || r.hasFailedInbound()
 				if !recoveryDebt && (nextCheckpointAt.IsZero() || !now.Before(nextCheckpointAt)) {
 					saveRecoveryCheckpoint(now)
 					nextCheckpointAt = now.Add(inboundCheckpointPeriod)
@@ -695,6 +719,9 @@ func (r *Runtime) inboundEventIsStale(event MessageEvent, now time.Time) bool {
 	if event.Time <= 0 || now.IsZero() {
 		return false
 	}
+	if event.RetryRecovered {
+		return time.Unix(event.Time, 0).Before(now.Add(-InboundReplayWindow))
+	}
 	return time.Unix(event.Time, 0).Before(r.inboundReplayCutoffAt(now))
 }
 
@@ -845,6 +872,9 @@ func channelEffectivelyOnline(status ChannelStatus) bool {
 }
 
 func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status ChannelStatus, event string, message string, eventErr error) {
+	// Recovery must not wait indefinitely for the database it is recovering.
+	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
 	writer := r.appLogWriter()
 	if writer == nil {
 		return

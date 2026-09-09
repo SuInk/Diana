@@ -858,7 +858,7 @@ async function performRequestJSON<T>(url: string, init?: RequestInit): Promise<T
   const path = requestPath(url);
   const key = requestCacheKey(method, url, init?.body);
   const ttl = cacheTTL(method, url);
-  if (isCacheableRead(method, path)) {
+  if (isCacheableRead(method, path) && !init?.signal) {
     const cached = responseCache.get(key);
     if (cached && ttl > 0 && Date.now() - cached.at < ttl) {
       return cached.data as T;
@@ -910,13 +910,13 @@ async function performRequestJSON<T>(url: string, init?: RequestInit): Promise<T
     return data;
   })();
 
-  if (isCacheableRead(method, path)) {
+  if (isCacheableRead(method, path) && !init?.signal) {
     inflightRequests.set(key, pending);
   }
   try {
     return (await pending) as T;
   } finally {
-    inflightRequests.delete(key);
+    if (inflightRequests.get(key) === pending) inflightRequests.delete(key);
   }
 }
 
@@ -1842,17 +1842,22 @@ export function getAssistantEvents(
   group = "",
   profile = "",
   user = "",
-  query = ""
+  query = "",
+  mode: "full" | "list" | "summary" = "full",
+  signal?: AbortSignal
 ): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
+  params.set("mode", mode);
   if (group) params.set("group", group);
   if (user) params.set("user", user);
   if (query) params.set("q", query);
   if (profile) params.set("profile", profile);
-  return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`);
+  return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`, { signal });
 }
 
 export interface AssistantEventTraceResponse {
+  memories?: AssistantEventMemory[];
+  temporary_memories?: AssistantEventTemporaryMemory[];
   event_id: string;
   message_id?: string;
   steps: AppLogEntry[];

@@ -93,6 +93,8 @@ type ImageDescriptionRecord struct {
 }
 
 type MessageEvent struct {
+	// RetryRecovered marks an event restored from the local durable retry journal.
+	RetryRecovered bool `json:"retry_recovered,omitempty"`
 	// SenderUsername is the platform-authenticated sender handle, not a display
 	// name or a handle found in message text, mentions or forwarded content.
 	SenderUsername   string           `json:"sender_username,omitempty"`

@@ -185,6 +185,7 @@ func (s *SQLiteStore) hasTable(table string) (bool, error) {
 // 状态回到 active，旧内容进修订史。作废过的词又被重新解释时，它该复活而不是被
 // 当成新词——修订史是同一条线索。
 func (s *SQLiteStore) UpsertNotebookEntry(ctx context.Context, request assistant.NotebookUpsertRequest) (assistant.NotebookEntry, bool, error) {
+	defer s.observeStorage(ctx, "UpsertNotebookEntry", "write")()
 	if s == nil || s.db == nil {
 		return assistant.NotebookEntry{}, false, errors.New("notebook: store is not configured")
 	}
@@ -207,10 +208,11 @@ func (s *SQLiteStore) UpsertNotebookEntry(ctx context.Context, request assistant
 		return assistant.NotebookEntry{}, false, err
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWriteTx(ctx, "UpsertNotebookEntry")
 	if err != nil {
 		return assistant.NotebookEntry{}, false, err
 	}
+	defer observeTransaction("UpsertNotebookEntry")()
 	defer func() { _ = tx.Rollback() }()
 
 	existing, found, err := notebookEntryByTerm(ctx, tx, scope, normalized)
@@ -285,6 +287,7 @@ func (s *SQLiteStore) RestoreNotebookEntry(ctx context.Context, scopeKey, term, 
 }
 
 func (s *SQLiteStore) setNotebookStatus(ctx context.Context, scopeKey, term, editorUserID, editorName, note string, now time.Time, status, action string) (assistant.NotebookEntry, bool, error) {
+	defer s.observeStorage(ctx, "setNotebookStatus", "write")()
 	if s == nil || s.db == nil {
 		return assistant.NotebookEntry{}, false, errors.New("notebook: store is not configured")
 	}
@@ -298,10 +301,11 @@ func (s *SQLiteStore) setNotebookStatus(ctx context.Context, scopeKey, term, edi
 	}
 	stamp := now.UTC().UnixNano()
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWriteTx(ctx, "setNotebookStatus")
 	if err != nil {
 		return assistant.NotebookEntry{}, false, err
 	}
+	defer observeTransaction("setNotebookStatus")()
 	defer func() { _ = tx.Rollback() }()
 
 	existing, found, err := notebookEntryByTerm(ctx, tx, scope, normalized)
@@ -339,6 +343,7 @@ WHERE id = ?
 // LookupNotebookEntries 回答「这段话里出现了哪些条目」。匹配在 SQL 里用 instr 做：
 // 条目和别名都很短，而消息只有一条，反过来把整本笔记本读进内存才是浪费。
 func (s *SQLiteStore) LookupNotebookEntries(ctx context.Context, query assistant.NotebookQuery) ([]assistant.NotebookEntry, error) {
+	defer s.observeStorage(ctx, "LookupNotebookEntries", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -382,7 +387,7 @@ WHERE e.scope_key IN (` + placeholders(len(scopes)) + `) AND e.status = 'active'
 ORDER BY e.usage_count DESC, e.updated_at DESC
 LIMIT ?`
 	args = append(args, notebookQueryLimit(query.Limit, notebookLookupLimit))
-	entries, err := queryNotebookEntries(ctx, s.db, statement, args...)
+	entries, err := queryNotebookEntries(ctx, s.eventReader(), statement, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -392,6 +397,7 @@ LIMIT ?`
 
 // ListNotebookEntries 按作用域翻笔记本，Text 非空时按关键词过滤。
 func (s *SQLiteStore) ListNotebookEntries(ctx context.Context, query assistant.NotebookQuery) ([]assistant.NotebookEntry, error) {
+	defer s.observeStorage(ctx, "ListNotebookEntries", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -418,7 +424,7 @@ WHERE e.scope_key IN (` + placeholders(len(scopes)) + `)`
 	}
 	statement += ` ORDER BY e.usage_count DESC, e.updated_at DESC LIMIT ?`
 	args = append(args, notebookQueryLimit(query.Limit, notebookListLimit))
-	entries, err := queryNotebookEntries(ctx, s.db, statement, args...)
+	entries, err := queryNotebookEntries(ctx, s.eventReader(), statement, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -428,6 +434,7 @@ WHERE e.scope_key IN (` + placeholders(len(scopes)) + `)`
 
 // NotebookEntryDetail 返回单条条目及最近的修订记录。
 func (s *SQLiteStore) NotebookEntryDetail(ctx context.Context, scopeKey, term string) (assistant.NotebookEntry, bool, error) {
+	defer s.observeStorage(ctx, "NotebookEntryDetail", "read")()
 	if s == nil || s.db == nil {
 		return assistant.NotebookEntry{}, false, nil
 	}
@@ -436,11 +443,11 @@ func (s *SQLiteStore) NotebookEntryDetail(ctx context.Context, scopeKey, term st
 	if scope == "" || normalized == "" {
 		return assistant.NotebookEntry{}, false, nil
 	}
-	entry, found, err := notebookEntryByTerm(ctx, s.db, scope, normalized)
+	entry, found, err := notebookEntryByTerm(ctx, s.eventReader(), scope, normalized)
 	if err != nil || !found {
 		return assistant.NotebookEntry{}, false, err
 	}
-	revisions, err := notebookRevisions(ctx, s.db, entry.ID)
+	revisions, err := notebookRevisions(ctx, s.eventReader(), entry.ID)
 	if err != nil {
 		return assistant.NotebookEntry{}, false, err
 	}
@@ -450,6 +457,7 @@ func (s *SQLiteStore) NotebookEntryDetail(ctx context.Context, scopeKey, term st
 
 // TouchNotebookEntries 记一次命中：用得多的条目排前面，长期没人用的自然沉底。
 func (s *SQLiteStore) TouchNotebookEntries(ctx context.Context, ids []string, at time.Time) error {
+	defer s.observeStorage(ctx, "TouchNotebookEntries", "write")()
 	if s == nil || s.db == nil || len(ids) == 0 {
 		return nil
 	}
@@ -647,10 +655,11 @@ type NotebookScopeSummary struct {
 // ListNotebookScopes 列出所有存在条目的作用域。控制台要先知道有哪些群立过笔记本，
 // 才谈得上翻它——按作用域名字猜是猜不出来的。
 func (s *SQLiteStore) ListNotebookScopes(ctx context.Context) ([]NotebookScopeSummary, error) {
+	defer s.observeStorage(ctx, "ListNotebookScopes", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT scope_key,
        SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END),
        SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END),

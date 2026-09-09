@@ -120,6 +120,7 @@ func (s *SQLiteStore) DashboardEventStatsSnapshot(ctx context.Context, now time.
 // 合计，其余键是配置档 ID：控制台切到哪台，恢复出来的历史数字也得跟着切，
 // 否则重启之后那台机器人会顶着别人的历史量。
 func (s *SQLiteStore) DashboardEventStatsSnapshotByProfile(ctx context.Context, now time.Time) (map[string]DashboardEventStats, error) {
+	defer s.observeStorage(ctx, "DashboardEventStatsSnapshotByProfile", "read")()
 	total := DashboardEventStats{ByKind: map[string]int64{}}
 	if s == nil || s.db == nil {
 		return map[string]DashboardEventStats{"": total}, nil
@@ -128,7 +129,7 @@ func (s *SQLiteStore) DashboardEventStatsSnapshotByProfile(ctx context.Context, 
 		now = time.Now()
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT kind, event_time, outcome, created_at, completed_at, profile_id
 FROM (
   SELECT kind, event_time, COALESCE(outcome, '') AS outcome,
@@ -256,6 +257,7 @@ func dashboardOutcomeHandled(outcome string) bool {
 // DashboardStatsForDay 统计当天数据。botProfileID 非空时只算那台机器人收到和回复
 // 的消息；服务器资源、运行时长这类进程级指标不受作用域影响，本来就只有一份。
 func (s *SQLiteStore) DashboardStatsForDay(ctx context.Context, now time.Time, botProfileID string) (DashboardStats, error) {
+	defer s.observeStorage(ctx, "DashboardStatsForDay", "read")()
 	if s == nil || s.db == nil {
 		return DashboardStats{}, nil
 	}
@@ -277,7 +279,7 @@ func (s *SQLiteStore) DashboardStatsForDay(ctx context.Context, now time.Time, b
 	sinceUnix, untilUnix := since.Unix(), until.Unix()
 	sinceNano, untilNano := since.UnixNano(), until.UnixNano()
 	scope, scopeArgs := dashboardProfileScope(botProfileID)
-	if err := s.db.QueryRowContext(ctx, `
+	if err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM message_events
 WHERE kind IN ('group', 'private')
@@ -285,7 +287,7 @@ WHERE kind IN ('group', 'private')
 `, append([]any{sinceUnix, untilUnix}, scopeArgs...)...).Scan(&stats.ReceivedMessages); err != nil {
 		return DashboardStats{}, fmt.Errorf("count dashboard messages: %w", err)
 	}
-	if err := s.db.QueryRowContext(ctx, `
+	if err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(DISTINCT NULLIF(TRIM(user_id), ''))
 FROM message_events
 WHERE kind IN ('group', 'private')
@@ -293,7 +295,7 @@ WHERE kind IN ('group', 'private')
 `, append([]any{sinceUnix, untilUnix}, scopeArgs...)...).Scan(&stats.ActiveMembers); err != nil {
 		return DashboardStats{}, fmt.Errorf("count dashboard active members: %w", err)
 	}
-	if err := s.db.QueryRowContext(ctx, `
+	if err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM inbound_events
 WHERE outcome IN ('replied', 'error_replied')
@@ -301,10 +303,10 @@ WHERE outcome IN ('replied', 'error_replied')
 `, append([]any{sinceNano, untilNano}, scopeArgs...)...).Scan(&stats.RepliedMessages); err != nil {
 		return DashboardStats{}, fmt.Errorf("count dashboard replies: %w", err)
 	}
-	if err := fillDashboardMessageBuckets(ctx, s.db, stats.Hourly, since, until, sinceUnix, untilUnix, scope, scopeArgs); err != nil {
+	if err := fillDashboardMessageBuckets(ctx, s.eventReader(), stats.Hourly, since, until, sinceUnix, untilUnix, scope, scopeArgs); err != nil {
 		return DashboardStats{}, err
 	}
-	if err := fillDashboardReplyBuckets(ctx, s.db, stats.Hourly, since, until, sinceNano, untilNano, scope, scopeArgs); err != nil {
+	if err := fillDashboardReplyBuckets(ctx, s.eventReader(), stats.Hourly, since, until, sinceNano, untilNano, scope, scopeArgs); err != nil {
 		return DashboardStats{}, err
 	}
 	if err := s.fillDashboardLogStats(ctx, &stats, since, until); err != nil {
@@ -375,7 +377,8 @@ WHERE outcome IN ('replied', 'error_replied')
 }
 
 func (s *SQLiteStore) fillDashboardLogStats(ctx context.Context, stats *DashboardStats, since time.Time, until time.Time) error {
-	rows, err := s.db.QueryContext(ctx, `
+	defer s.observeStorage(ctx, "fillDashboardLogStats", "read")()
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT action, target, metadata, created_at
 FROM app_logs
 WHERE created_at >= ? AND created_at < ?

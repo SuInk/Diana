@@ -45,14 +45,16 @@ const (
 )
 
 type SQLiteStore struct {
-	db   *sql.DB
-	path string
+	db     *sql.DB
+	readDB *sql.DB
+	path   string
 	// historyFTS 表示历史检索能否走 FTS5 倒排索引。个别构建里 FTS5 不可用，
 	// 那时回退到 LIKE 检索：慢，但功能不中断。
 	historyFTS bool
 	// historyVectors 表示语义向量表是否可用。
 	historyVectors bool
 	userMemoryMu   sync.Mutex
+	retryMu        sync.Mutex
 }
 
 // NewSQLiteStore 打开 SQLite 数据库并执行迁移。
@@ -92,6 +94,10 @@ PRAGMA foreign_keys = ON;
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.openEventReader(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -109,7 +115,11 @@ func (s *SQLiteStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	var readErr error
+	if s.readDB != nil {
+		readErr = s.readDB.Close()
+	}
+	return errors.Join(readErr, s.db.Close())
 }
 
 // LoadLLMProfiles 读取提供商配置集。
@@ -424,8 +434,9 @@ ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAM
 
 // loadJSON 读取指定 key 的 JSON 并解码。
 func (s *SQLiteStore) loadJSON(ctx context.Context, key string, dest any) (bool, error) {
+	defer s.observeStorage(ctx, "loadJSON", "read")()
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, key).Scan(&raw)
+	err := s.eventReader().QueryRowContext(ctx, `SELECT value FROM app_state WHERE key = ?`, key).Scan(&raw)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// bool 返回值表示“没有保存过”，调用方据此使用 config.yaml 里的播种配置或内置默认值。

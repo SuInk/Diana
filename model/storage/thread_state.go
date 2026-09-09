@@ -17,6 +17,7 @@ import (
 )
 
 func (s *SQLiteStore) PutThreadState(ctx context.Context, request assistant.ThreadStatePutRequest) (assistant.ThreadState, error) {
+	defer s.observeStorage(ctx, "PutThreadState", "write")()
 	request.ProfileID = strings.TrimSpace(request.ProfileID)
 	request.Session = strings.TrimSpace(request.Session)
 	request.UserID = strings.TrimSpace(request.UserID)
@@ -38,10 +39,11 @@ func (s *SQLiteStore) PutThreadState(ctx context.Context, request assistant.Thre
 	if request.ExpiresAt.IsZero() || !request.ExpiresAt.After(request.Now) {
 		return assistant.ThreadState{}, fmt.Errorf("thread state expiry must be after now")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWriteTx(ctx, "PutThreadState")
 	if err != nil {
 		return assistant.ThreadState{}, err
 	}
+	defer observeTransaction("PutThreadState")()
 	defer func() { _ = tx.Rollback() }()
 	nowNS := request.Now.UnixNano()
 	if _, err := tx.ExecContext(ctx, `
@@ -114,6 +116,7 @@ INSERT INTO thread_states (
 }
 
 func (s *SQLiteStore) ListActiveThreadStates(ctx context.Context, profileID, session, userID string, now time.Time, limit int) ([]assistant.ThreadState, error) {
+	defer s.observeStorage(ctx, "ListActiveThreadStates", "write")()
 	profileID = strings.TrimSpace(profileID)
 	session = strings.TrimSpace(session)
 	userID = strings.TrimSpace(userID)
@@ -128,7 +131,7 @@ func (s *SQLiteStore) ListActiveThreadStates(ctx context.Context, profileID, ses
 	}
 	nowNS := now.UnixNano()
 	var expired bool
-	if err := s.db.QueryRowContext(ctx, `
+	if err := s.eventReader().QueryRowContext(ctx, `
 SELECT EXISTS(SELECT 1 FROM thread_states WHERE status = 'active' AND expires_at <= ?)
 `, nowNS).Scan(&expired); err != nil {
 		return nil, err
@@ -142,7 +145,7 @@ WHERE status = 'active' AND expires_at <= ?
 			return nil, err
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT id, profile_id, session, user_id, task_kind, state_json, version, status,
        COALESCE(source_message_id, ''), created_at, updated_at, expires_at
 FROM thread_states
@@ -166,6 +169,7 @@ LIMIT ?
 }
 
 func (s *SQLiteStore) EndThreadState(ctx context.Context, request assistant.ThreadStateEndRequest) (assistant.ThreadState, error) {
+	defer s.observeStorage(ctx, "EndThreadState", "write")()
 	request.ProfileID = strings.TrimSpace(request.ProfileID)
 	request.Session = strings.TrimSpace(request.Session)
 	request.UserID = strings.TrimSpace(request.UserID)
@@ -181,10 +185,11 @@ func (s *SQLiteStore) EndThreadState(ctx context.Context, request assistant.Thre
 	if request.Now.IsZero() {
 		request.Now = time.Now()
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginWriteTx(ctx, "EndThreadState")
 	if err != nil {
 		return assistant.ThreadState{}, err
 	}
+	defer observeTransaction("EndThreadState")()
 	defer func() { _ = tx.Rollback() }()
 	nowNS := request.Now.UnixNano()
 	if _, err := tx.ExecContext(ctx, `

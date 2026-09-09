@@ -83,6 +83,8 @@ type rssWatchRuntime interface {
 }
 
 type BotHandler struct {
+	eventSummaryMu            sync.Mutex
+	eventSummaryCache         map[string]eventSummaryCacheEntry
 	runtime                   BotRuntime
 	newChannel                BotChannelFactory
 	newChannelSet             BotChannelSetFactory

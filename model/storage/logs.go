@@ -43,6 +43,7 @@ const (
 
 // AppendLog 将审计日志追加到 SQLite。
 func (s *SQLiteStore) AppendLog(ctx context.Context, entry AppLogEntry) error {
+	defer s.observeStorage(ctx, "AppendLog", "write")()
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -65,6 +66,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
 // ListLogs 按筛选条件读取最近日志。
 func (s *SQLiteStore) ListLogs(ctx context.Context, filter AppLogFilter) ([]AppLogEntry, error) {
+	defer s.observeStorage(ctx, "ListLogs", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
@@ -89,7 +91,7 @@ FROM app_logs`
 	query += " ORDER BY created_at DESC, id DESC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.eventReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
