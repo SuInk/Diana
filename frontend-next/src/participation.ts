@@ -1,4 +1,7 @@
 export interface ParticipationPreferences {
+	 relevance_level?: string;
+	 chat_level?: string;
+	 answerability_level?: string;
   desire: number;
   social: number;
   followup: number;

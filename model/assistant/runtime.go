@@ -2384,6 +2384,13 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	chatIn := cfg.chatInSettings()
+	if chatIn.Participation != nil {
+		relatedLevel, chatLevel := chatIn.Participation.ratingLevels()
+		if relatedLevel == "off" && chatLevel == "off" {
+			event.routingReason = "相关度与闲聊均已关闭，不主动接话"
+			return event, text, nil, false
+		}
+	}
 	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
 	for _, candidate := range candidates {
 		payload.Candidates = append(payload.Candidates, proactiveReplyCandidatePayload{
@@ -2409,6 +2416,9 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		"请从本批群消息中识别机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 Intent Recognition（意图识别）模块，只负责识别回复意图，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"+string(payloadJSON),
 		nil,
 	)
+	if chatIn.Participation != nil {
+		routeUserMessage = llmMessageFromEventWithImagesForContext(routeCtx, event, "Intent Recognition：请为当前消息给出相关度、可回答分和闲聊适合度，各含 score 和 reason。上下文：\n"+string(payloadJSON), nil)
+	}
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
@@ -2430,6 +2440,27 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		r.recordProactiveReplyRouteError(ctx, event, err)
 		event.routingReason = "主动回复判断失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
+	}
+	// Old providers may still complete requests using the previous JSON contract.
+	// New rating responses never consult the legacy boolean fields.
+	if chatIn.Participation != nil && (chatIn.Participation.RelevanceLevel != "" || chatIn.Participation.ChatLevel != "" || chatIn.Participation.AnswerabilityLevel != "" || !strings.Contains(raw, `"should_reply"`) || strings.Contains(raw, `"relevance"`) && !strings.Contains(raw, `"scores"`)) {
+		ratings, parseErr := parseParticipationRatings(raw)
+		allowed, chatReply := false, false
+		cooldownAllowed := r.chatInCooldownAllows(event, chatIn.Cooldown)
+		if parseErr == nil {
+			allowed, chatReply = chatIn.Participation.ratingsAllow(ratings, cooldownAllowed)
+		}
+		event.proactiveReply, event.chatInReply = allowed, chatReply
+		if parseErr != nil {
+			event.routingReason = "接话评分格式无效，已保持沉默：" + parseErr.Error()
+		} else {
+			event.routingReason = fmt.Sprintf("相关度 %.2f：%s；可回答分 %.2f：%s；闲聊 %.2f：%s", *ratings.Relevance.Score, ratings.Relevance.Reason, *ratings.Answerability.Score, ratings.Answerability.Reason, *ratings.ChatIn.Score, ratings.ChatIn.Reason)
+			if !cooldownAllowed {
+				event.routingReason += "；闲聊冷却中，相关度分支仍独立判断"
+			}
+		}
+		r.recordParticipationRatings(ctx, event, ratings, parseErr == nil, allowed, cfg, raw)
+		return event, text, []proactiveReplyCandidate{{Event: event, Text: text}}, allowed
 	}
 	decision, parsed := parseProactiveReplyDecision(raw)
 	event, text = selectProactiveReplyCandidate(candidates, decision.TargetMessageID)

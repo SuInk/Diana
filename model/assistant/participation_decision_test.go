@@ -73,12 +73,12 @@ func TestParticipationDecisionRoutingAndCooldown(t *testing.T) {
 
 func TestParticipationLevelRulesReplaceDimensions(t *testing.T) {
 	rules := map[ChatInLevel]string{
-		ChatInLevelLow: "偶尔补充重要信息", ChatInLevelMedium: "答完收住",
-		ChatInLevelHigh: "主动参与闲聊", ChatInLevelMax: "不重复、不硬插",
+		ChatInLevelLow: "闲聊档位：low", ChatInLevelMedium: "闲聊档位：medium",
+		ChatInLevelHigh: "闲聊档位：high", ChatInLevelMax: "闲聊档位：always",
 	}
 	for level, want := range rules {
 		prompt := (BotConfig{ChatInLevel: level}).participationPreferences().prompt()
-		if !strings.Contains(prompt, want) || !strings.Contains(prompt, `"should_reply":true`) {
+		if !strings.Contains(prompt, want) || strings.Contains(prompt, "should_reply") {
 			t.Fatalf("level=%s rule missing", level)
 		}
 		for _, banned := range []string{"主动参与=", "闲聊接话=", "算术平均"} {
