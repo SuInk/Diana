@@ -128,6 +128,8 @@ go build -o dist/diana-webui ./cmd/webui
 
 ## 支持的平台
 
+Telegram 主人账号支持数字 ID、用户名和 `@用户名`，按平台真实发送者信息核验，参见[Telegram 主人账号](docs/telegram-owner.md)。
+
 启用的机器人配置会同时在线，回复始终回到消息来的那个通道。
 
 | 平台 | 要准备的凭据 | 连接方向 |

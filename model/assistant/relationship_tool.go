@@ -166,7 +166,7 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if targetID == "" {
 			return "", fmt.Errorf("修改好感度时必须提供有效的 target_user_id 或 @ 目标用户")
 		}
-		ownerID := strings.TrimSpace(t.runtime.effectiveConfigForEvent(t.event).OwnerID)
+		ownerID := t.runtime.effectiveConfigForEvent(t.event).OwnerIDForEvent(t.event)
 		if targetID == ownerID {
 			// 主人的好感度现在也照常记录，但只由日常互动攒出来。挡掉自己给自己
 			// 设分有两层理由：自己填的数不叫记录；而且主人说「给他加 5 分」时
@@ -500,7 +500,9 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 	if strings.TrimSpace(profile.DisplayName) == "" {
 		profile.DisplayName = firstNonEmpty(strings.TrimSpace(fallbackName), relationshipEventDisplayName(t.event, userID), userID)
 	}
-	policy := RelationshipPolicyForConfig(t.runtime.effectiveConfigForEvent(t.event), profile, userID)
+	policyConfig := t.runtime.effectiveConfigForEvent(t.event)
+	policyConfig.OwnerID = policyConfig.OwnerIDForEvent(t.event)
+	policy := RelationshipPolicyForConfig(policyConfig, profile, userID)
 	var recentChanges []UserFavorabilityChange
 	if historyLimit > 0 {
 		if historyStore, ok := store.(UserFavorabilityHistoryStore); ok {
