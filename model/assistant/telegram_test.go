@@ -802,6 +802,49 @@ func TestTelegramTextMentionMatchesBySelfID(t *testing.T) {
 	}
 }
 
+// /cmd@username 是 Telegram 群里指定机器人的写法，Bot API 只发 bot_command
+// entity；不认它的话，发给自己的命令会被路由当成「别人的指令」而忽略。
+func TestTelegramBotCommandAddressedToSelfCountsAsMention(t *testing.T) {
+	cases := []struct {
+		name     string
+		text     string
+		entities []telegramEntity
+		want     bool
+	}{
+		{"命令点名本机器人", "/status@diana_bot", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 17}}, true},
+		{"命令点名别的机器人", "/status@otherbot", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 16}}, false},
+		{"命令没点名", "/status", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 7}}, false},
+		{"大小写不敏感", "/Status@Diana_Bot", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 17}}, true},
+		{"中文前缀按 UTF-16 取位", "你好 /status@diana_bot", []telegramEntity{{Type: "bot_command", Offset: 3, Length: 17}}, true},
+		{"实体越界不误判", "/status@diana_bot", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 99}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := telegramMentionsBot(tc.text, tc.entities, "8888", "diana_bot"); got != tc.want {
+				t.Fatalf("%q 期望 %v，实际 %v", tc.text, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestTelegramGroupCommandToSelfSetsToMe(t *testing.T) {
+	msg := &telegramMessage{
+		MessageID: 113954,
+		Date:      1789054343,
+		Text:      "/status@mikuabot",
+		Entities:  []telegramEntity{{Type: "bot_command", Offset: 0, Length: 16}},
+		From:      &telegramUser{ID: 8082828784},
+		Chat:      &telegramChat{ID: -1004402809405, Type: "supergroup"},
+	}
+	event := telegramMessageToEvent(msg, "8738773088", "mikuabot")
+	if !event.ToMe {
+		t.Fatal("群里 /status@mikuabot 是发给本机器人的命令，应判为 ToMe")
+	}
+	if event.SelfUsername != "mikuabot" {
+		t.Fatalf("事件应带上本机器人用户名，实际 %q", event.SelfUsername)
+	}
+}
+
 // —— 入群通知 ——
 
 // 不映射 new_chat_members 的话，欢迎语在 Telegram 上永远不触发。

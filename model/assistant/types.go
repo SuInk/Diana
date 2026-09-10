@@ -110,7 +110,10 @@ type MessageEvent struct {
 	Time             int64            `json:"time,omitempty"`
 	OriginalTime     int64            `json:"original_time,omitempty"`
 	SelfID           string           `json:"self_id,omitempty"`
-	UserID           string           `json:"user_id,omitempty"`
+	// SelfUsername 是本机器人在平台上的用户名（Telegram 的 @xxx）。消息文本里
+	// 出现的是它而不是数字 ID，路由判断得靠它才认得出「这是在叫我」。
+	SelfUsername string `json:"self_username,omitempty"`
+	UserID       string `json:"user_id,omitempty"`
 	// TargetID 目前只有 poke 通知在用：被戳的是谁。
 	TargetID     string `json:"target_id,omitempty"`
 	OperatorID   string `json:"operator_id,omitempty"`

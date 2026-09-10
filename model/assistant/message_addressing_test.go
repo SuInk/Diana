@@ -84,6 +84,25 @@ func TestTelegramOtherBotMentionAndReplyRemainExplicit(t *testing.T) {
 	}
 }
 
+// /cmd@username 只有 bot_command entity，漏掉它的话发给自己的命令在
+// addressing 里一个提及都没有，路由只能靠猜。
+func TestTelegramBotCommandBecomesMentionTarget(t *testing.T) {
+	mine := telegramMentionTargets("/status@dianabot", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 16}}, "99999", "dianabot")
+	if len(mine) != 1 || mine[0].Target != "self" || mine[0].Username != "dianabot" || mine[0].UserID != "99999" {
+		t.Fatalf("命令点名本机器人应记成 self：%+v", mine)
+	}
+	theirs := telegramMentionTargets("/status@otherbot", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 16}}, "99999", "dianabot")
+	if len(theirs) != 1 || theirs[0].Target != "other" {
+		t.Fatalf("命令点名别的机器人应记成 other：%+v", theirs)
+	}
+	if bare := telegramMentionTargets("/status", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 7}}, "99999", "dianabot"); len(bare) != 0 {
+		t.Fatalf("没点名的命令不该产生提及：%+v", bare)
+	}
+	if bad := telegramMentionTargets("/status@dianabot", []telegramEntity{{Type: "bot_command", Offset: 0, Length: 99}}, "99999", "dianabot"); len(bad) != 0 {
+		t.Fatalf("越界实体不该产生提及：%+v", bad)
+	}
+}
+
 func TestAddressingReachesRoutingAndFinalPromptWithoutLeakingIDs(t *testing.T) {
 	cfg := BotConfig{BotAccount: "99999"}
 	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

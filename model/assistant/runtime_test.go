@@ -5429,3 +5429,26 @@ func TestSplitReplyStillChunksLongText(t *testing.T) {
 		}
 	}
 }
+
+// 路由模型只拿到数字账号时，认不出群消息里的 @username 就是自己。
+func TestBotAliasesIncludePlatformUsername(t *testing.T) {
+	cfg := BotConfig{BotAccount: "8738773088", GroupTriggers: []string{"miku"}}
+	aliases := botAliasesForEvent(MessageEvent{SelfUsername: "mikuabot"}, cfg)
+	if len(aliases) != 2 || aliases[0] != "miku" || aliases[1] != "@mikuabot" {
+		t.Fatalf("别名应带上平台用户名，实际 %#v", aliases)
+	}
+
+	if got := botAliasesForEvent(MessageEvent{}, cfg); len(got) != 1 || got[0] != "miku" {
+		t.Fatalf("没有平台用户名时别名不该变化，实际 %#v", got)
+	}
+
+	dup := BotConfig{GroupTriggers: []string{"@MikuaBot"}}
+	if got := botAliasesForEvent(MessageEvent{SelfUsername: "mikuabot"}, dup); len(got) != 1 {
+		t.Fatalf("已配置的同名别名不该重复，实际 %#v", got)
+	}
+
+	// GroupTriggers 是配置里的切片，别名拼接不能就地改写它。
+	if len(cfg.GroupTriggers) != 1 {
+		t.Fatalf("配置里的触发词被改写：%#v", cfg.GroupTriggers)
+	}
+}
