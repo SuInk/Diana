@@ -902,6 +902,7 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 }
 
 func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string, error) {
+	result.SourceNotice = "搜索结果可能来自转载或聚合页面，页面日期不一定是原始内容的真实发布时间。未核实原始来源时，不要据此断言发布时间或‘最新’。"
 	maxChars := t.maxBytes
 	if maxChars <= 0 {
 		maxChars = DefaultMaxToolOutputChars

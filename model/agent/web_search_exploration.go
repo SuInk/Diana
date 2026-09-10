@@ -63,6 +63,7 @@ type webSearchBudget struct {
 }
 
 type webSearchResult struct {
+	SourceNotice  string                    `json:"source_notice,omitempty"`
 	Status        string                    `json:"status"`
 	StopReason    string                    `json:"stop_reason"`
 	Strategy      string                    `json:"strategy"`
