@@ -96,15 +96,10 @@ function restoreCooldown(event: Event) {
             <p class="setting-help">{{ setting.description }}</p>
           </div>
           <AppSelect :id="id + '-' + setting.key" :aria-label="setting.label" :model-value="displayedLevel(setting.key)" :options="setting.options" @update:model-value="setRatingLevel(setting.key, $event)" />
-          <div v-if="setting.key === 'chat_level'" class="cooldown-setting">
-            <div class="setting-copy">
-              <label :for="id + '-cooldown'">冷却时间</label>
-              <p :id="id + '-cooldown-help'" class="setting-help">主动闲聊的最短间隔，默认 30 秒；填 0 不限制。</p>
-            </div>
-            <div class="cooldown-input">
-              <input :id="id + '-cooldown'" class="input" type="number" inputmode="numeric" min="0" max="3600" step="1" aria-label="主动闲聊冷却秒数" :aria-describedby="id + '-cooldown-help'" :value="cooldownSeconds" @input="updateCooldown" @blur="restoreCooldown" />
-              <span>秒</span>
-            </div>
+          <div v-if="setting.key === 'chat_level'" class="field wide cooldown-setting">
+            <label :for="id + '-cooldown'">闲聊冷却时间（秒）</label>
+            <input :id="id + '-cooldown'" class="input" type="number" inputmode="numeric" min="0" max="3600" step="1" aria-label="主动闲聊冷却秒数" :aria-describedby="id + '-cooldown-help'" :value="cooldownSeconds" @input="updateCooldown" @blur="restoreCooldown" />
+            <span :id="id + '-cooldown-help'" class="hint">主动闲聊的最短间隔，默认 30 秒；填 0 不限制。</span>
           </div>
         </section>
       </div>
@@ -124,19 +119,15 @@ function restoreCooldown(event: Event) {
 <style scoped>
 .participation-controls { container-type: inline-size; display: grid; gap: 12px; min-width: 0; }
 .participation-fields { display: grid; min-width: 0; }
-.participation-setting, .configuration-source, .cooldown-setting { display: grid; grid-template-columns: minmax(0, 1fr) 220px; align-items: center; gap: 12px 24px; min-width: 0; }
+.participation-setting, .configuration-source { display: grid; grid-template-columns: minmax(0, 1fr) 220px; align-items: center; gap: 12px 24px; min-width: 0; }
 .participation-setting { padding: 14px 0; border-bottom: 1px solid var(--border); }
 .participation-setting:first-child { padding-top: 4px; }
 .participation-setting:last-child { border-bottom: 0; }
 .setting-copy { display: grid; gap: 4px; min-width: 0; }
-.participation-controls label { display: block; margin: 0; color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }
+.setting-copy > label { display: block; margin: 0; color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }
 .participation-setting > .app-select, .configuration-source > .app-select { width: 220px; max-width: 100%; min-width: 0; }
 .setting-help { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.cooldown-setting { grid-column: 1 / -1; padding-left: 16px; margin-top: 2px; border-left: 2px solid var(--border); }
-.cooldown-setting label { font-size: 13px; font-weight: 500; }
-.cooldown-input { display: flex; align-items: center; gap: 8px; width: 160px; max-width: 100%; color: var(--muted); font-size: 13px; }
-.cooldown-input .input { width: 120px; min-width: 0; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel, transparent); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
-.cooldown-input .input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cooldown-setting { margin-top: 8px; }
 .participation-explanation { border-top: 1px solid var(--border); padding-top: 12px; min-width: 0; }
 .participation-explanation summary { width: fit-content; cursor: pointer; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .participation-explanation summary:hover { color: var(--text); }
@@ -144,8 +135,7 @@ function restoreCooldown(event: Event) {
 .explanation-body { max-width: 900px; color: var(--muted); font-size: 12px; line-height: 1.7; }
 .explanation-body p { margin: 10px 0 0; }
 @container (max-width: 520px) {
-  .participation-setting, .configuration-source, .cooldown-setting { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .participation-setting, .configuration-source { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .participation-setting > .app-select, .configuration-source > .app-select { width: 100%; }
-  .cooldown-setting { margin-top: 8px; padding-left: 12px; }
 }
 </style>
