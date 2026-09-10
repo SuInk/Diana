@@ -16,6 +16,15 @@ const (
 	// promptGroupScope 说明当前场景。群聊里不是每条消息都该接话。
 	promptGroupScope = "当前是群聊，只有用户提到你或触发别名时才回复。"
 
+	// promptGroupScopeProactive 是主动接话那一轮的版本。
+	//
+	// 主动插话时不能再说「只有被提到才回复」：这一轮恰恰没人提到你，同一段提示词
+	// 后面还写着「本次回复是主动插话」，两句话直接打架，模型只能在两条规则里随机取舍。
+	//
+	// 两个取值都是整串写死的常量，一个模式一串，头部仍然逐字节稳定，前缀缓存按
+	// 「触发回复」和「主动接话」各命中一份，不会因为这行字每轮都变而整段失效。
+	promptGroupScopeProactive = "当前是群聊，这一轮是你主动接话，没有人点名你；像群友顺口接一句。"
+
 	// promptGroupOwnerDistinction 只在群聊里注入：私聊没有群主，说了是白付 token。
 	// 它跟在 promptGroupScope 后面进稳定前缀，不随发言者变化，不影响前缀缓存。
 	//
@@ -191,4 +200,15 @@ func refusalStrategyPrompt(strategy RefusalStrategy) string {
 		body = promptRefusalVague
 	}
 	return promptRefusalBase + body + promptRefusalTail
+}
+
+// groupScopePrompt 选出这一轮群聊要用的场景说明。
+//
+// 主动插话和闲聊接话走同一句：从模型的角度看两者都是「没人叫我，我自己开的口」，
+// 分成两句写只会多一份要维护的文案，也多一份前缀缓存。
+func groupScopePrompt(event MessageEvent) string {
+	if event.proactiveReply || event.chatInReply {
+		return promptGroupScopeProactive
+	}
+	return promptGroupScope
 }

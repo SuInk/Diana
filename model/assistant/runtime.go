@@ -2418,15 +2418,13 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	routeCtx, cancel := context.WithTimeout(ctx, proactiveReplyRouteTimeout(cfg))
 	defer cancel()
-	routeUserMessage := llmMessageFromEventWithImagesForContext(
-		routeCtx,
-		event,
-		"请从本批群消息中识别机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 Intent Recognition（意图识别）模块，只负责识别回复意图，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"+string(payloadJSON),
-		nil,
-	)
+	// 先选好指令再拼消息：llmMessageFromEventWithImagesForContext 可能去抓图片，
+	// 以前这里先按旧契约构造一次，再在评分契约下整条覆盖，那次抓图完全是白做的。
+	routeInstruction := "请从本批群消息中识别机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 Intent Recognition（意图识别）模块，只负责识别回复意图，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"
 	if chatIn.Participation != nil {
-		routeUserMessage = llmMessageFromEventWithImagesForContext(routeCtx, event, "Intent Recognition：请为当前消息给出相关度、可回答分和闲聊适合度，各含 score 和 reason。上下文：\n"+string(payloadJSON), nil)
+		routeInstruction = "Intent Recognition：请为当前消息给出相关度、可回答分和闲聊适合度，各含 score 和 reason。上下文：\n"
 	}
+	routeUserMessage := llmMessageFromEventWithImagesForContext(routeCtx, event, routeInstruction+string(payloadJSON), nil)
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
@@ -2453,10 +2451,35 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// New rating responses never consult the legacy boolean fields.
 	if chatIn.Participation != nil && (chatIn.Participation.RelevanceLevel != "" || chatIn.Participation.ChatLevel != "" || chatIn.Participation.AnswerabilityLevel != "" || !strings.Contains(raw, `"should_reply"`) || strings.Contains(raw, `"relevance"`) && !strings.Contains(raw, `"scores"`)) {
 		ratings, parseErr := parseParticipationRatings(raw)
+		retried := false
+		if parseErr != nil {
+			// 宽松解析仍然失败时再问一次模型：同样的上下文，只在最前面多一条提醒。
+			// 第二次还是解析不出来才按沉默处理。
+			retried = true
+			retryMessages := append([]llm.Message{{Role: llm.RoleSystem, Content: participationRatingsRetryReminder}}, messages...)
+			retryRaw, retryErr := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
+				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages})
+				if err != nil {
+					return "", err
+				}
+				return resp.Text, nil
+			})
+			if retryErr == nil {
+				raw = retryRaw
+				ratings, parseErr = parseParticipationRatings(retryRaw)
+			}
+		}
 		allowed, chatReply := false, false
 		cooldownAllowed := r.chatInCooldownAllows(event, chatIn.Cooldown)
 		if parseErr == nil {
 			allowed, chatReply = chatIn.Participation.ratingsAllow(ratings, cooldownAllowed)
+		}
+		// 闲聊分支还要看机器人最近说了多少：占比过高时只留下相关度分支。
+		_, chatLevel := chatIn.Participation.ratingLevels()
+		botMessages, totalMessages := proactiveReplyBotShare(payload.RecentMessages, participationShareWindow)
+		shareBlocked := chatReply && participationBotShareBlocks(botMessages, totalMessages, chatLevel)
+		if shareBlocked {
+			allowed, chatReply = false, false
 		}
 		event.proactiveReply, event.chatInReply = allowed, chatReply
 		if parseErr != nil {
@@ -2466,8 +2489,11 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			if !cooldownAllowed {
 				event.routingReason += "；闲聊冷却中，相关度分支仍独立判断"
 			}
+			if shareBlocked {
+				event.routingReason += "；机器人近期发言占比过高，暂不插话"
+			}
 		}
-		r.recordParticipationRatings(ctx, event, ratings, parseErr == nil, allowed, cfg, raw)
+		r.recordParticipationRatings(ctx, event, ratings, parseErr == nil, allowed, retried, cfg, raw)
 		return event, text, []proactiveReplyCandidate{{Event: event, Text: text}}, allowed
 	}
 	decision, parsed := parseProactiveReplyDecision(raw)
@@ -2489,6 +2515,19 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	event.routingReason = proactiveReplyDecisionReason(decision, parsed, decisionAllowed, cooldownAllowed, true, allowed, false, cfg, chatIn)
 	r.recordProactiveReplyRouteDecision(ctx, event, decision, parsed, decisionAllowed, true, allowed, cfg, raw)
 	return event, text, turn, allowed
+}
+
+// proactiveReplyBotShare 统计路由上下文里最近 window 条消息中机器人自己发了几条。
+// recent_messages 是按时间倒序拼的，所以取前 window 条就是最近的那一段。
+func proactiveReplyBotShare(messages []proactiveReplyHistoryItem, window int) (int, int) {
+	total := min(len(messages), window)
+	bot := 0
+	for _, item := range messages[:total] {
+		if item.IsBot {
+			bot++
+		}
+	}
+	return bot, total
 }
 
 // chatInCooldownAllows 判断本群距上次闲聊插话是否已过冷却。
@@ -5678,6 +5717,10 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 			return llm.AgentModelConfig{}, false, err
 		}
 	}
+	// 绑定解析出来的这条不是回落，别让它去打下面那行日志。以前这里无条件打，
+	// 于是每次正常按绑定选中都报一句「has no bound provider」，指名的还恰好是
+	// 绑定里那条 provider。意图路由每条群消息跑一次，日志里就是几秒一条。
+	resolvedFromRole := len(profiles) > 0
 	// 没有角色绑定就在本分组里按列表顺序取。聊天用途以前不走这一步，因为选哪个
 	// 由「激活配置」定；那个概念去掉之后，聊天和别的用途没有区别了。
 	if len(profiles) == 0 {
@@ -5689,7 +5732,9 @@ func registrySelectionForGroup(registry *llm.ProviderRegistry, set llm.ProfileSe
 	if len(profiles) == 0 {
 		return llm.AgentModelConfig{}, false, nil
 	}
-	logUnboundGroupFallback(roles, group, profiles[0].ID)
+	if !resolvedFromRole {
+		logUnboundGroupFallback(roles, group, profiles[0].ID)
+	}
 	return profileRegistrySelection(registry, profiles[0]), true, nil
 }
 
@@ -6311,7 +6356,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		appendPromptSection(&builder, cfg.PromptChineseSlangText)
 	}
 	if event.Kind == EventKindGroup {
-		builder.WriteString("\n" + promptGroupScope)
+		// 场景说明分「被触发」和「主动接话」两串：后者那一轮没人点名机器人，
+		// 再说「只有被提到才回复」会和下面的主动插话说明当场打架。
+		builder.WriteString("\n" + groupScopePrompt(event))
 		builder.WriteString("\n" + promptGroupOwnerDistinction)
 		if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
 			builder.WriteString("\n" + promptGroupAliasPrefix + aliases + promptGroupAliasRule)

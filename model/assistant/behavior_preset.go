@@ -84,8 +84,13 @@ func clearChatInFineTuning(cfg *BotConfig) {
 // (╹◡╹) 这类字符拼的表情，模型不会认为它管得着 😂。
 const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类彩色表情符号），一个都不要，包括用来表达情绪反应或缓和语气的场合。需要表达情绪就用文字说。"
 
-// replyBlankLineRule 同样对所有风格生效。真实 CR/LF 不再承载输出布局语义：
-// 气泡边界和气泡内换行分别使用两个不会混淆的控制标记。
+// replyBlankLineRule 同样对所有风格生效，而且是这套换行协议的唯一出处。
+//
+// 真实 CR/LF 不再承载输出布局语义：气泡边界和气泡内换行分别使用两个不会混淆的
+// 控制标记。这三句话——不许真实换行、另起消息用哪个标记、消息内换行用哪个标记
+// ——以前在下面五条子规则里各写了一遍，措辞还各不相同；模型读到的是同一件事被
+// 反复叮嘱，占了篇幅还稀释注意力。现在只在这里说一次，其余子规则只讲自己那份
+// 独有的内容（什么时候另起一条、长文怎么分组、本轮用户要求怎么覆盖）。
 const replyBlankLineRule = "回复正文中不得输出真实换行符（CR 或 LF），也不要用空行排版。开始下一条消息写 " + notificationSplitMarker + "；同一条消息内部需要换行写 " + notificationLineMarker + "。除这两个标记外，正文连续输出。"
 
 const replyCompactPacingRule = "聊天节奏：尽量少发几条，按内容的完整性和自然停顿决定在哪里分条，不预设条数。相关的回应和解释放在一起，独立补充或话题转折可以另起发言，不逐句拆分，也不为了少发而把长篇挤成一条。这是表达偏好，不是硬性条数或长度限制；用户明确要详细说明、多个问题或完整步骤时按需答全。精简时先删掉重复安慰、泛泛建议和不必要的小结，不省略必要内容，也不为了多发几条添话。"
@@ -100,20 +105,22 @@ const replyConversationalIntentRule = "先判断对方是在聊天还是求助�
 // 早期版本的默认文案写的是「都必须放在同一条消息里」，存过一次就一直在提示词里和
 // 分条唱反调。一个投递机制的开关不该挂在用户文案上，所以挪到这里。
 //
-// 措辞要和 splitChatReply 认的边界一字不差地对上：真实换行无效，两个显式标记
-// 分别表达消息边界和消息内部排版。
+// 标记本身怎么写由 replyBlankLineRule 说，这里只管「在哪里断」这一个决定。
 //
 // 规则写得具体，而且给一个真实例子。运行时不再自己推断句子边界之后，一条回复分不
 // 分得开只剩「模型肯不肯换行」这一个杠杆；抽象地说「按意群分段」模型照样会写成一
 // 整段，示例比形容词管用——各档的语气也都是靠示例教会的。
-const replySegmentationRule = "当前开启自然分条：需要另起一次独立发言时写 " + notificationSplitMarker + "，同一条消息里的清单、步骤、代码或引用需要换行时写 " + notificationLineMarker + "。真实换行符禁止输出，发送层只执行这两个标记。不要逐句拆消息；一个完整意群放在同一条。示例：结论" + notificationSplitMarker + "配置如下：" + notificationLineMarker + "1. 第一项" + notificationLineMarker + "2. 第二项" + notificationSplitMarker + "最后补充。"
+const replySegmentationRule = "当前开启自然分条：按内容自己决定在哪里另起一次独立发言，一个完整意群放在同一条，不要逐句拆消息。示例：结论" + notificationSplitMarker + "配置如下：" + notificationLineMarker + "1. 第一项" + notificationLineMarker + "2. 第二项" + notificationSplitMarker + "最后补充。"
 
-const replyDocumentDeliveryRule = "详细长文的消息组织：先分清主要部分，再写正文。不同的主要部分之间写 " + notificationSplitMarker + "；每个主要部分内部的标题、段落、列表和代码使用 " + notificationLineMarker + " 排版，不再逐小节分条。多天详细行程按‘必要的开场说明 / 第一天完整行程 / 第二天完整行程 / 其余各天 / 共用交通与准备事项’组织：每天的上午、下午、晚上和当天交通写在该天同一条里，不逐时段发送，也不把整份多天行程塞进一条。开场和共用事项没有必要就省略，不为凑条数添加内容。方案或教程同样按能独立阅读的主要阶段分组，标题必须带着正文。格式示例：出行假设" + notificationSplitMarker + "## 第一天" + notificationLineMarker + "### 上午" + notificationLineMarker + "当天安排与交通" + notificationLineMarker + "### 下午和晚上" + notificationLineMarker + "当天安排与交通" + notificationSplitMarker + "## 第二天" + notificationLineMarker + "当天完整安排与交通" + notificationSplitMarker + "## 共用准备" + notificationLineMarker + "预约、证件等必要事项。只有详细长文采用这种分组，简短问答和闲聊仍按自然节奏回答。"
+// replyDocumentDeliveryRule 只讲长文怎么分组。示例收到两行：分组规律一行就看得
+// 出来，原来那份把第一天拆到「上午 / 下午和晚上」再加一段共用准备，例子本身比
+// 它要教的规则还长。
+const replyDocumentDeliveryRule = "详细长文的消息组织：先分清主要部分，再写正文。不同的主要部分之间另起一条消息，每个主要部分内部的标题、段落、列表和代码在同一条里换行排版，不再逐小节分条。多天详细行程按天分组：每天的上午、下午、晚上和当天交通写在该天同一条里，不逐时段发送，也不把整份多天行程塞进一条；开场说明和共用准备事项没有必要就省略，不为凑条数添加内容。方案或教程同样按能独立阅读的主要阶段分组，标题必须带着正文。格式示例：## 第一天" + notificationLineMarker + "当天完整安排与交通" + notificationSplitMarker + "## 第二天" + notificationLineMarker + "当天完整安排与交通。只有详细长文采用这种分组，简短问答和闲聊仍按自然节奏回答。"
 
 // replySegmentationMarkerOnlyRule 是关掉自然分条之后的版本。
 //
 // 关闭自然分条时同样只接受显式协议，但默认把内容组织成一条消息。
-const replySegmentationMarkerOnlyRule = "当前关闭多条发送：默认只发送一条消息，不写 " + notificationSplitMarker + "，超限时压缩且不自动合并转发。同一条消息内部的清单、步骤、代码和引用需要换行时写 " + notificationLineMarker + "。正文不得输出真实换行符；只有用户本轮明确要求多条发送时才通过发送方式前缀覆盖默认值。"
+const replySegmentationMarkerOnlyRule = "当前关闭多条发送：默认只发送一条消息，不写 " + notificationSplitMarker + "，超限时压缩且不自动合并转发；同一条消息内部照常按需换行。只有用户本轮明确要求多条发送时，才通过发送方式前缀覆盖默认值。"
 
 // replyProportionRule 同样对所有风格生效。联网查证过的回答特别容易写成小评测:
 // 背景、口碑、优缺点、结论、末尾再罗列参考链接——群里随口一句「好看吗」换来

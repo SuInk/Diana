@@ -721,3 +721,34 @@ func TestGroupSocialReplyOverridesAndInherits(t *testing.T) {
 		}
 	}
 }
+
+// 换行协议只说一次。
+//
+// 「不许真实换行、另起消息写 [diana-msg]、消息内换行写 [diana-line]」这三句以前在
+// 分条、单条、长文几条子规则里各写了一遍，措辞还各不相同：模型读到的是同一件事被
+// 反复叮嘱，占篇幅还稀释注意力。现在只由 replyBlankLineRule 说，其余子规则只讲
+// 自己那份独有的内容。
+func TestLayoutProtocolIsStatedOnce(t *testing.T) {
+	for _, natural := range []bool{true, false} {
+		if prompt := replyPresentationPrompt(natural, personaVoice{}); !strings.Contains(prompt, replyBlankLineRule) {
+			t.Fatalf("换行协议的出处不见了：%q", prompt)
+		}
+	}
+	for name, rule := range map[string]string{
+		"segmentation": replySegmentationRule,
+		"markerOnly":   replySegmentationMarkerOnlyRule,
+		"document":     replyDocumentDeliveryRule,
+	} {
+		if strings.Contains(rule, "真实换行") {
+			t.Fatalf("%s 又把换行协议重复了一遍：%q", name, rule)
+		}
+	}
+	// 长文示例最多两行：分组规律一行就看得出来，例子比它要教的规则还长就没意义了。
+	if got := strings.Count(replyDocumentDeliveryRule, notificationSplitMarker); got != 1 {
+		t.Fatalf("长文示例不是两行（%d 处分条标记）：%q", got, replyDocumentDeliveryRule)
+	}
+	// 标记本身和它们的语义一个字都不许动：发送层只认这两串。
+	if notificationSplitMarker != "[diana-msg]" || notificationLineMarker != "[diana-line]" {
+		t.Fatalf("投递标记被改了：%q %q", notificationSplitMarker, notificationLineMarker)
+	}
+}
