@@ -66,3 +66,50 @@ func TestVisionFollowChatUsesOnlyChatFallbackChain(t *testing.T) {
 		t.Fatalf("unexpected vision route: %+v", profiles)
 	}
 }
+
+// 「跟随对话」不再是视觉理解的特权：意图识别、图片生成这些用途选了跟随，也要解析
+// 到对话那一档的绑定，而不是被 normalizeModelRoles 悄悄抹掉。
+func TestFollowChatAppliesToEveryNonChatRole(t *testing.T) {
+	chat := ModelRole{ProfileID: "chat-provider", Model: "chat-model"}
+	for _, tc := range []struct {
+		key   string
+		group string
+	}{
+		{"vision", llm.GroupVision},
+		{"intent", llm.GroupIntent},
+		{"image", llm.GroupImage},
+		{"embedding", llm.GroupEmbedding},
+	} {
+		roles := normalizeModelRoles(map[string]ModelRole{
+			"chat": chat,
+			tc.key: {FollowChat: true},
+		})
+		if got, ok := roles[tc.key]; !ok || !got.FollowChat {
+			t.Fatalf("%s 的跟随对话被丢掉了：%+v", tc.key, roles)
+		}
+		got, ok := modelRoleFor(roles, "", tc.group)
+		if !ok || !reflect.DeepEqual(got, roles["chat"]) {
+			t.Fatalf("%s 没有跟随对话：%+v", tc.key, got)
+		}
+	}
+}
+
+// 单个用途（不是分组）也能选跟随对话：记忆抽取跟随时，解析结果就是对话的绑定，
+// 而不是它所属的意图分组。
+func TestFollowChatOnPurposeResolvesToChat(t *testing.T) {
+	chat := ModelRole{ProfileID: "chat-provider", Model: "chat-model"}
+	roles := normalizeModelRoles(map[string]ModelRole{
+		"chat":               chat,
+		"intent":             {ProfileID: "intent-provider", Model: "intent-model"},
+		PurposeMemoryExtract: {FollowChat: true},
+	})
+	got, ok := modelRoleFor(roles, PurposeMemoryExtract, llm.GroupIntent)
+	if !ok || !reflect.DeepEqual(got, roles["chat"]) {
+		t.Fatalf("用途级跟随对话没有解析到对话绑定：%+v", got)
+	}
+	// 没跟随的用途仍然走它自己的分组绑定，不受影响。
+	got, ok = modelRoleFor(roles, PurposeMemorySummary, llm.GroupIntent)
+	if !ok || got.Model != "intent-model" {
+		t.Fatalf("同分组的其他用途被带偏了：%+v", got)
+	}
+}

@@ -33,7 +33,7 @@ test("saving requires an explicit provider and model for each role", async () =>
 });
 
 test("provider and model menus do not offer an empty assignment", () => {
-  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::" });
+  const context = vm.createContext({ roleForm: {value:{}}, llmChannels: { value: [] }, channelGroups: () => [], selectedRoleProfiles: () => [], modelsForRole: () => [], modelRoleRows: [], GROUP_PREFIX: "group:", MODEL_PAIR_SEP: "::", FOLLOW_CHAT: "__follow_chat__" });
   loadFunction("crossProviderModelOptions", context);
   for (const name of ["channelOptionsFor", "crossProviderModelOptions", "modelOptionsFor"]) {
     const options = loadFunction(name, context)("vision", {});
@@ -41,20 +41,73 @@ test("provider and model menus do not offer an empty assignment", () => {
   }
 });
 
-test("vision model dropdown offers follow chat and stores a relationship", () => {
-  const roleForm = { value: { vision: { profile_id: "old", model: "old", fallbacks: [{profile_id:"backup",model:"old-backup"}] } } };
-  const context = vm.createContext({roleForm, MODEL_PAIR_SEP:"::",selectedRoleProfiles:()=>[],crossProviderModelOptions:()=>[{value:"p::real",label:"Real"}]});
-  const options = loadFunction("modelOptionsFor",context)("vision");
-  assert.equal(options[0].value,"__follow_chat__");
-  assert.equal(options[0].label,"跟随对话");
-  assert.equal(loadFunction("modelOptionsFor",context)("chat").some(o=>o.value==="__follow_chat__"),false);
-  assert.equal(loadFunction("modelOptionsFor",context)("vision",{model:""}).some(o=>o.value==="__follow_chat__"),false);
-  loadFunction("setRoleModel",context)("vision","__follow_chat__");
-  assert.equal(roleForm.value.vision.follow_chat,true);
-  assert.equal(roleForm.value.vision.profile_id,undefined);
-  assert.equal(roleForm.value.vision.fallbacks,undefined);
-  assert.equal(loadFunction("roleModelValue",context)("vision"),"__follow_chat__");
-  loadFunction("setRoleModel",context)("vision","p::real");
-  assert.equal(roleForm.value.vision.follow_chat,undefined);
-  assert.equal(roleForm.value.vision.model,"real");
+test("provider dropdown offers follow chat for every role except chat", () => {
+  const roleForm = { value: { vision: { profile_id: "old", model: "old", fallbacks: [{ profile_id: "backup", model: "old-backup" }] } } };
+  const context = vm.createContext({
+    roleForm,
+    GROUP_PREFIX: "group:",
+    MODEL_PAIR_SEP: "::",
+    FOLLOW_CHAT: "__follow_chat__",
+    llmChannels: { value: [] },
+    channelGroups: () => [],
+    modelsForRole: () => [],
+    selectedRoleProfiles: () => [],
+    crossProviderModelOptions: () => [{ value: "p::real", label: "Real" }],
+    roleModelIsSelectable: () => true
+  });
+  const channelOptionsFor = loadFunction("channelOptionsFor", context);
+  // 「跟随对话」搬到了提供商一栏，而且不再是视觉理解的特权。
+  for (const role of ["vision", "intent", "image"]) {
+    assert.equal(channelOptionsFor(role)[0].value, "__follow_chat__");
+    assert.equal(channelOptionsFor(role)[0].label, "跟随对话");
+  }
+  assert.equal(channelOptionsFor("chat").some(option => option.value === "__follow_chat__"), false);
+
+  loadFunction("modelOptionsFor", context);
+  loadFunction("setRoleChannel", context)("vision", "__follow_chat__");
+  // 跟随之后不留自己的提供商、模型和后备：这三样都从对话那一档现取。
+  assert.equal(roleForm.value.vision.follow_chat, true);
+  assert.equal(roleForm.value.vision.profile_id, undefined);
+  assert.equal(roleForm.value.vision.fallbacks, undefined);
+  assert.equal(loadFunction("routeSelectionValue", context)(roleForm.value.vision), "__follow_chat__");
+  // 模型一栏锁定：没有可选项，值留空让 placeholder 说明它跟着谁。
+  assert.equal(context.modelOptionsFor("vision").length, 0);
+  assert.equal(loadFunction("roleModelValue", context)("vision"), "");
+
+  // 切回具体提供商，跟随解除，模型重新可选。
+  context.setRoleChannel("vision", "p1");
+  assert.equal(roleForm.value.vision.follow_chat, undefined);
+  assert.equal(roleForm.value.vision.profile_id, "p1");
+});
+
+test("persona generator picks its own provider and model, defaulting to follow chat", () => {
+  const personaRoute = { value: undefined };
+  const context = vm.createContext({
+    personaRoute,
+    GROUP_PREFIX: "group:",
+    MODEL_PAIR_SEP: "::",
+    FOLLOW_CHAT: "__follow_chat__",
+    personaModelOptions: { value: [{ value: "m1" }, { value: "m2" }] }
+  });
+  const setPersonaChannel = loadFunction("setPersonaChannel", context);
+  loadFunction("setPersonaModel", context);
+
+  setPersonaChannel("p1");
+  assert.equal(personaRoute.value.profile_id, "p1");
+  // 原来没有模型，换提供商后就近挑一个能用的，不留空组合。
+  assert.equal(personaRoute.value.model, "m1");
+
+  context.setPersonaModel("m2");
+  assert.equal(personaRoute.value.model, "m2");
+
+  setPersonaChannel("group:default");
+  assert.equal(personaRoute.value.group, "default");
+  assert.equal(personaRoute.value.profile_id, undefined);
+
+  // 跟随对话用 undefined 表示，调用点据此回落到对话那一档。
+  setPersonaChannel("__follow_chat__");
+  assert.equal(personaRoute.value, undefined);
+  // 跟随时模型不可改。
+  context.setPersonaModel("m1");
+  assert.equal(personaRoute.value, undefined);
 });
