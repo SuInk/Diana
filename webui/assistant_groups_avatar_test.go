@@ -19,7 +19,7 @@ func TestMergeConsoleGroupItemsSkipsQQAvatarForOtherPlatforms(t *testing.T) {
 		{GroupID: "111", GroupName: "QQ 群", QQAvatar: true},
 		{GroupID: "-1001", GroupName: "Telegram 读书会"},
 	}
-	items := mergeConsoleGroupItems(base, set, live, func(string) bool { return true })
+	items := mergeConsoleGroupItems(base, set, live, func(string) bool { return true }, nil)
 	byID := map[string]consoleGroupItem{}
 	for _, item := range items {
 		byID[item.GroupID] = item
@@ -53,7 +53,7 @@ func TestMergeConsoleGroupItemsUsesProfileForSavedGroups(t *testing.T) {
 		{GroupID: "-1001", BotProfileID: "tg-profile"},
 	}
 	isOneBot := func(profileID string) bool { return profileID == "qq-profile" }
-	items := mergeConsoleGroupItems(assistant.BotConfig{}, set, nil, isOneBot)
+	items := mergeConsoleGroupItems(assistant.BotConfig{}, set, nil, isOneBot, nil)
 	byID := map[string]consoleGroupItem{}
 	for _, item := range items {
 		byID[item.GroupID] = item

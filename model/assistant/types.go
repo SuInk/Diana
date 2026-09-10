@@ -975,8 +975,9 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if strings.TrimSpace(string(cfg.ResponseMode)) != "" {
 		cfg.ResponseMode = cfg.ResponseMode.Normalized()
 	}
-	// Bulk normalization may receive another profile as base. Defer inherited
-	// persona migration until this group is read with its own robot configuration.
+	// 只有拿到这个群自己那台机器人的配置时才允许继承人设。批量归一化仍可能被
+	// 塞进另一台机器人的 base（例如「全部机器人」视图里的单群归一化），这时
+	// 宁可让人设留空、运行时按机器人解析，也不能把别人的人设抄进来。
 	if cfg.SystemPrompt != "" || cfg.BotProfileID == "" || cfg.BotProfileID == base.ID {
 		if knownReplyStyle(string(cfg.ReplyStyle)) && cfg.SystemPrompt == "" {
 			cfg.SystemPrompt = inheritedPersonaForStyleMigration(base.SystemPrompt)
@@ -1133,11 +1134,42 @@ func (s GroupConfigSet) GroupsForProfile(botProfileID string) []GroupConfig {
 	return out
 }
 
+// BotConfigResolver 按机器人档案 ID 找回它自己的配置。
+//
+// 群配置默认跟随它所属的那台机器人，可归一化和写入这两条路径拿到的往往只有
+// 「当前这台」。有了这个解析器，批量处理才能一条一条地问「这个群是谁的」，而
+// 不是把一台机器人的默认值糊到所有群上。返回 false 表示这个档案已经不在了，
+// 调用方回落到传进来的 base。
+type BotConfigResolver func(profileID string) (BotConfig, bool)
+
+// baseBot 挑出这条群配置真正该跟随的机器人。
+func (cfg GroupConfig) baseBot(base BotConfig, resolve BotConfigResolver) BotConfig {
+	profileID := strings.TrimSpace(cfg.BotProfileID)
+	if profileID == "" || resolve == nil {
+		return base
+	}
+	if owner, ok := resolve(profileID); ok {
+		return owner
+	}
+	return base
+}
+
+// WithDefaultsResolved 先按 bot_profile_id 找出这个群所属的机器人，再补默认值。
+// resolve 为空或找不到档案时退回 base，行为与 WithDefaults 一致。
+func (cfg GroupConfig) WithDefaultsResolved(groupID string, base BotConfig, resolve BotConfigResolver) GroupConfig {
+	return cfg.WithDefaults(groupID, cfg.baseBot(base, resolve))
+}
+
 // WithDefaults migrates and normalizes all persisted group policies.
 func (s GroupConfigSet) WithDefaults(base BotConfig) GroupConfigSet {
+	return s.WithDefaultsResolved(base, nil)
+}
+
+// WithDefaultsResolved 归一化整份群配置，每个群各自跟随自己那台机器人。
+func (s GroupConfigSet) WithDefaultsResolved(base BotConfig, resolve BotConfigResolver) GroupConfigSet {
 	groups := make([]GroupConfig, 0, len(s.Groups))
 	for _, cfg := range s.Groups {
-		groups = append(groups, cfg.WithDefaults(cfg.GroupID, base))
+		groups = append(groups, cfg.WithDefaultsResolved(cfg.GroupID, base, resolve))
 	}
 	s.Groups = groups
 	return s
@@ -1145,7 +1177,12 @@ func (s GroupConfigSet) WithDefaults(base BotConfig) GroupConfigSet {
 
 // Upsert 写入或替换指定群配置。
 func (s GroupConfigSet) Upsert(cfg GroupConfig, base BotConfig) GroupConfigSet {
-	cfg = cfg.WithDefaults(cfg.GroupID, base)
+	return s.UpsertResolved(cfg, base, nil)
+}
+
+// UpsertResolved 写入或替换指定群配置，按 bot_profile_id 决定跟随哪台机器人。
+func (s GroupConfigSet) UpsertResolved(cfg GroupConfig, base BotConfig, resolve BotConfigResolver) GroupConfigSet {
+	cfg = cfg.WithDefaultsResolved(cfg.GroupID, base, resolve)
 	cfg.EnabledSet = true
 	cfg.UpdatedAt = time.Now()
 	next := make([]GroupConfig, 0, len(s.Groups)+1)
@@ -1250,6 +1287,25 @@ func (s ProfileSet) RuntimeConfig() (BotConfig, bool) {
 		return current, true
 	}
 	return BotConfig{}, false
+}
+
+// ConfigForProfile 按 ID 取出这台机器人的配置。
+func (s ProfileSet) ConfigForProfile(id string) (BotConfig, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return BotConfig{}, false
+	}
+	for _, profile := range s.Profiles {
+		if strings.TrimSpace(profile.ID) == id {
+			return profile.WithDefaults(), true
+		}
+	}
+	return BotConfig{}, false
+}
+
+// Resolver 把配置集包成 BotConfigResolver，供群配置按机器人归一化使用。
+func (s ProfileSet) Resolver() BotConfigResolver {
+	return s.ConfigForProfile
 }
 
 // WithActive 返回切换 active_id 后的机器人配置集。
