@@ -59,6 +59,7 @@ func TestConsoleGroupNaturalSplitOverrideRoundTrip(t *testing.T) {
 				body, err := json.Marshal(consoleGroupSavePayload{Config: assistant.GroupConfig{
 					GroupID:                  "10001",
 					NaturalReplySplitEnabled: value,
+					ReplyPreserveLineBreaks:  value,
 				}})
 				if err != nil {
 					t.Fatal(err)
@@ -75,6 +76,7 @@ func TestConsoleGroupNaturalSplitOverrideRoundTrip(t *testing.T) {
 					t.Fatal(err)
 				}
 				assertSplit("save response", response.Config.NaturalReplySplitEnabled, value)
+				assertSplit("layout save response", response.Config.ReplyPreserveLineBreaks, value)
 				if persistent {
 					store, err = NewPersistentBotGroupConfigStore(ctx, db)
 					if err != nil {
@@ -87,6 +89,7 @@ func TestConsoleGroupNaturalSplitOverrideRoundTrip(t *testing.T) {
 					t.Fatal("saved group missing")
 				}
 				assertSplit("stored config", saved.NaturalReplySplitEnabled, value)
+				assertSplit("layout stored config", saved.ReplyPreserveLineBreaks, value)
 				rec = httptest.NewRecorder()
 				router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
 				if rec.Code != http.StatusOK {
@@ -100,6 +103,7 @@ func TestConsoleGroupNaturalSplitOverrideRoundTrip(t *testing.T) {
 					t.Fatalf("listed groups=%d, want 1", len(list.Groups))
 				}
 				assertSplit("list response", list.Groups[0].NaturalReplySplitEnabled, value)
+				assertSplit("layout list response", list.Groups[0].ReplyPreserveLineBreaks, value)
 			}
 		})
 	}

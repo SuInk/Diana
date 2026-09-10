@@ -235,13 +235,24 @@
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
-          <label for="group-natural-split">本群自然分条</label>
+          <label for="group-natural-split">本群允许多条发送</label>
           <AppSelect
             id="group-natural-split"
             :model-value="editing.natural_reply_split_enabled == null ? '' : editing.natural_reply_split_enabled ? 'on' : 'off'"
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
+          <span class="hint">换行不分条；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-preserve-lines">本群普通段落换行</label>
+          <AppSelect
+            id="group-preserve-lines"
+            :model-value="editing.reply_preserve_line_breaks == null ? '' : editing.reply_preserve_line_breaks ? 'on' : 'off'"
+            :options="[{ value: '', label: '跟随机器人' }, { value: 'on', label: '保留换行' }, { value: 'off', label: '收拢普通段落' }]"
+            @update:model-value="(value) => { if (editing) editing.reply_preserve_line_breaks = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">仅影响消息内部排版，不改变发送条数；列表、代码、表格保留结构，本轮排版要求优先。</span>
         </div>
         <div class="field">
           <label for="group-reply-merge-confidence">合并回复置信度阈值（%）</label>
@@ -273,12 +284,12 @@
         <div v-if="supportsGroupLevel" class="field">
           <label for="group-forward-len">合并转发字数</label>
           <input id="group-forward-len" v-model.number="editing.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-          <span class="hint">正文超过这个字数改用合并转发卡片。留空或填 0 表示无上限。</span>
+          <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
         </div>
         <div v-if="supportsGroupLevel" class="field">
           <label for="group-forward-chunks">合并转发块数</label>
           <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-          <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>
+          <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -755,6 +766,7 @@ function upsert(config: BotGroupConfig): void {
       ...config,
       // 恢复继承时响应会省略这个字段，不能保留列表里先前的显式开关。
       natural_reply_split_enabled: config.natural_reply_split_enabled,
+      reply_preserve_line_breaks: config.reply_preserve_line_breaks,
       configured: true
     };
   } else {
