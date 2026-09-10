@@ -206,9 +206,13 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
 	system, messages := splitSystemPrompt(req.Messages)
+	input := openAIResponsesInput(messages, req.Tools)
+	if len(input) == 0 {
+		return nil, fmt.Errorf("llm: Responses input is empty after context budgeting: %w", ErrMissingMessages)
+	}
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
-		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: openAIResponsesInput(messages, req.Tools)},
+		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
 	}
 	if system != "" {
 		params.Instructions = param.NewOpt(system)
@@ -590,11 +594,15 @@ func imageContentTypeForEdit(header string, body []byte) string {
 // generateResponse 使用 Responses API 生成回复。
 func (c *openAICompatibleClient) generateResponse(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
 	system, messages := splitSystemPrompt(req.Messages)
+	input := openAIResponsesInput(messages, req.Tools)
+	if len(input) == 0 {
+		return nil, fmt.Errorf("llm: Responses input is empty after context budgeting: %w", ErrMissingMessages)
+	}
 	// Responses API 把 system prompt 放到 Instructions，普通对话放 InputItemList。
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: openAIResponsesInput(messages, req.Tools),
+			OfInputItemList: input,
 		},
 	}
 	if system != "" {

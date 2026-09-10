@@ -50,11 +50,15 @@ type AgentModelConfig struct {
 }
 
 type ChatMessage struct {
-	Role       Role          `json:"role"`
-	Content    string        `json:"content,omitempty"`
-	Parts      []ContentPart `json:"parts,omitempty"`
-	ToolCalls  []ToolCall    `json:"toolCalls,omitempty"`
-	ToolResult *ToolResult   `json:"toolResult,omitempty"`
+	Priority        MessagePriority `json:"-"`
+	ContextGroup    string          `json:"-"`
+	AtomicText      bool            `json:"-"`
+	CacheBreakpoint bool            `json:"-"`
+	Role            Role            `json:"role"`
+	Content         string          `json:"content,omitempty"`
+	Parts           []ContentPart   `json:"parts,omitempty"`
+	ToolCalls       []ToolCall      `json:"toolCalls,omitempty"`
+	ToolResult      *ToolResult     `json:"toolResult,omitempty"`
 }
 
 type ChatRequest struct {
@@ -298,14 +302,7 @@ func (a clientAdapter) Generate(ctx context.Context, model ModelDefinition, req 
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	messages := make([]Message, 0, len(req.Messages))
-	for _, message := range req.Messages {
-		converted := Message{Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls}
-		if message.ToolResult != nil {
-			converted.ToolCallID, converted.ToolName, converted.Content = message.ToolResult.CallID, message.ToolResult.Name, message.ToolResult.Content
-		}
-		messages = append(messages, converted)
-	}
+	messages := chatMessagesToLegacy(req.Messages)
 	response, err := client.Generate(ctx, GenerateRequest{Model: model.ModelID, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools})
 	if err != nil {
 		return ChatResponse{}, err
@@ -350,7 +347,7 @@ func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req Ch
 func chatMessagesToLegacy(messages []ChatMessage) []Message {
 	out := make([]Message, 0, len(messages))
 	for _, message := range messages {
-		converted := Message{Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls}
+		converted := Message{Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls, Priority: message.Priority, ContextGroup: message.ContextGroup, AtomicText: message.AtomicText, CacheBreakpoint: message.CacheBreakpoint}
 		if message.ToolResult != nil {
 			converted.ToolCallID, converted.ToolName, converted.Content = message.ToolResult.CallID, message.ToolResult.Name, message.ToolResult.Content
 		}
@@ -362,7 +359,7 @@ func chatMessagesToLegacy(messages []ChatMessage) []Message {
 func legacyMessagesToChat(messages []Message) []ChatMessage {
 	out := make([]ChatMessage, 0, len(messages))
 	for _, message := range messages {
-		converted := ChatMessage{Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls}
+		converted := ChatMessage{Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls, Priority: message.Priority, ContextGroup: message.ContextGroup, AtomicText: message.AtomicText, CacheBreakpoint: message.CacheBreakpoint}
 		if message.Role == RoleTool {
 			converted.ToolResult = &ToolResult{CallID: message.ToolCallID, Name: message.ToolName, Content: message.Content}
 		}
@@ -479,14 +476,7 @@ func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*Gen
 	if c.Registry == nil {
 		return nil, fmt.Errorf("llm: provider registry is not configured")
 	}
-	messages := make([]ChatMessage, 0, len(req.Messages))
-	for _, message := range req.Messages {
-		converted := ChatMessage{Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls}
-		if message.Role == RoleTool {
-			converted.ToolResult = &ToolResult{CallID: message.ToolCallID, Name: message.ToolName, Content: message.Content}
-		}
-		messages = append(messages, converted)
-	}
+	messages := legacyMessagesToChat(req.Messages)
 	response, err := c.Registry.Generate(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools})
 	if err != nil {
 		return nil, err

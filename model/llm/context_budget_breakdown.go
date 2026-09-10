@@ -64,7 +64,7 @@ func PlanContextBudget(messages []Message, contextWindow, outputReserve int64) C
 		return breakdown
 	}
 
-	lastIndex := len(messages) - 1
+	lastIndex := currentInputIndex(messages)
 	_, selected := fitMessagesToTokenBudgetDetailed(append([]Message(nil), messages...), budget)
 	usage := map[MessagePriority]*ContextBudgetCategoryUsage{}
 	priorityOf := func(index int) MessagePriority {

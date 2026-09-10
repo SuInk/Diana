@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/SuInk/diana/model/llm"
@@ -10,6 +12,8 @@ import (
 
 const emojiSemanticsGroup = "emoji_semantics"
 const emojiSemanticsLimit = 32
+
+var emojiTextURL = regexp.MustCompile("https?://[^\\s<>\"）]+")
 
 func withEmojiSemanticsRun(run llmProviderRunFunc) llmProviderRunFunc {
 	return func(provider LLMProvider) (string, error) {
@@ -24,61 +28,55 @@ func (p *emojiSemanticsProvider) Generate(ctx context.Context, req llm.GenerateR
 }
 
 func requestWithEmojiSemantics(req llm.GenerateRequest) llm.GenerateRequest {
-	seen := map[string]bool{}
-	var names []emojinames.Name
-	collect := func(text string) {
-		found, err := emojinames.Find(text, emojiSemanticsLimit)
-		if err != nil {
-			return
-		}
-		for _, name := range found {
-			if !seen[name.Emoji] && len(names) < emojiSemanticsLimit {
-				seen[name.Emoji] = true
-				names = append(names, name)
-			}
-		}
-	}
-	// Prefer recent input. Do not treat model output or persona examples as user emoji.
-	for i := len(req.Messages) - 1; i >= 0 && len(names) < emojiSemanticsLimit; i-- {
-		message := req.Messages[i]
-		if message.Role != llm.RoleUser && message.Role != llm.RoleTool {
+	// Copy message and part slices: retries and Agent loops reuse the source request.
+	messages := make([]llm.Message, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		if message.ContextGroup == emojiSemanticsGroup {
 			continue
 		}
-		collect(message.Content)
-		for _, part := range message.Parts {
-			if part.Type == llm.ContentPartText {
-				collect(part.Text)
+		if message.Role == llm.RoleUser || message.Role == llm.RoleTool {
+			message.Content = annotateEmojiText(message.Content)
+			if message.Parts != nil {
+				message.Parts = append([]llm.ContentPart(nil), message.Parts...)
+				for i := range message.Parts {
+					if message.Parts[i].Type == llm.ContentPartText {
+						message.Parts[i].Text = annotateEmojiText(message.Parts[i].Text)
+					}
+				}
 			}
 		}
-	}
-	if len(names) == 0 {
-		stale := false
-		for _, message := range req.Messages {
-			stale = stale || message.ContextGroup == emojiSemanticsGroup
-		}
-		if !stale {
-			return req
-		}
-	}
-	// Copy before appending: Agent loops may reuse the original request backing array.
-	messages := make([]llm.Message, 0, len(req.Messages)+1)
-	for _, message := range req.Messages {
-		if message.ContextGroup != emojiSemanticsGroup {
-			messages = append(messages, message)
-		}
-	}
-	if len(names) > 0 {
-		var note strings.Builder
-		note.WriteString("【本轮表情释义】以下是输入中实际出现的 Unicode emoji 标准名称，仅供理解，不是用户原话，也不代表用户的情绪或行为。不要照抄释义；结合语境理解，不确定就不要编造具体含义，不必逐个回应表情。\n")
-		for _, name := range names {
-			note.WriteString(name.Emoji + "：")
-			if name.Chinese != "" {
-				note.WriteString(name.Chinese + " / ")
-			}
-			note.WriteString(name.English + "\n")
-		}
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: note.String(), ContextGroup: emojiSemanticsGroup, AtomicText: true})
+		messages = append(messages, message)
 	}
 	req.Messages = messages
 	return req
+}
+
+func annotateEmojiText(text string) string {
+	names, err := emojinames.Find(text, emojiSemanticsLimit)
+	if err != nil || len(names) == 0 {
+		return text
+	}
+	// Match complete ZWJ / skin-tone sequences before their shorter components.
+	sort.SliceStable(names, func(i, j int) bool { return len(names[i].Emoji) > len(names[j].Emoji) })
+	replacements := make([]string, 0, len(names)*4)
+	for _, name := range names {
+		label := name.English
+		if name.Chinese != "" {
+			label = name.Chinese + " / " + label
+		}
+		// An inline name may occur inside a JSON tool result or embedded payload.
+		label = strings.NewReplacer("\\", "", "\"", "’", "\n", " ").Replace(label)
+		annotated := name.Emoji + "（表情名称：" + label + "）"
+		replacements = append(replacements, annotated, annotated, name.Emoji, annotated)
+	}
+	replacer := strings.NewReplacer(replacements...)
+	var out strings.Builder
+	start := 0
+	for _, span := range emojiTextURL.FindAllStringIndex(text, -1) {
+		out.WriteString(replacer.Replace(text[start:span[0]]))
+		out.WriteString(text[span[0]:span[1]])
+		start = span[1]
+	}
+	out.WriteString(replacer.Replace(text[start:]))
+	return out.String()
 }
