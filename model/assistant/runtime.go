@@ -9135,7 +9135,17 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	}
 	r.recordInboundDelivery(event, OutboundDeliveryGenerated, "", "")
 	r.recordInboundDelivery(event, OutboundDeliverySendAttempted, "", "")
+	ctx = outboundMessageContext(ctx, msg)
+	refreshMedia, releaseMedia, err := r.leaseOutgoingMedia(msg)
+	if err != nil {
+		r.recordInboundDelivery(event, OutboundDeliveryFailed, "", err.Error())
+		return nil, err
+	}
+	defer releaseMedia()
 	result, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
+		if err := refreshMedia(); err != nil {
+			return nil, err
+		}
 		attempts := r.effectiveConfigForEvent(event).SendRetryAttempts
 		if replySuppressionSendGuardEnabled(ctx) || event.Kind == EventKindGroup || r.outboundBackoffEnabled(event) {
 			attempts = 1

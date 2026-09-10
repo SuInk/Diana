@@ -130,6 +130,7 @@ type musicConnectionTestPayload struct {
 type groupTestPayload struct {
 	GroupID string `json:"group_id"`
 	Message string `json:"message"`
+	OneShot bool   `json:"one_shot"`
 }
 
 type groupAdminChallengePayload struct {
@@ -708,7 +709,21 @@ func (h *BotHandler) sendGroupTest(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", fmt.Errorf("message is required"), groupID, map[string]any{"group_id": groupID})
 		return
 	}
-	sendResult, err := h.runtime.SendGroupMessage(c.Request.Context(), groupID, message)
+	var sendResult map[string]any
+	var err error
+	if payload.OneShot {
+		groupNumber, parseErr := strconv.ParseInt(groupID, 10, 64)
+		if parseErr != nil || groupNumber <= 0 {
+			h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", fmt.Errorf("valid group_id is required"), groupID, nil)
+			return
+		}
+		segments := assistant.TextToOneBotSegments(message)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		defer cancel()
+		sendResult, err = h.runtime.CallOneBotAPI(ctx, "send_group_msg", map[string]any{"group_id": groupNumber, "message": segments})
+	} else {
+		sendResult, err = h.runtime.SendGroupMessage(c.Request.Context(), groupID, message)
+	}
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", err, groupID, map[string]any{"group_id": groupID})
 		return
