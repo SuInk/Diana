@@ -1371,14 +1371,17 @@ code {
   gap: 12px;
 }
 
-.persona-composer {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
+/* 生成人设用哪个提供商和模型。两栏和「模型分配」同一套比例，看着是同一件事。 */
+.persona-composer-route {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(180px, 1fr);
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .persona-composer-route {
+    grid-template-columns: 1fr;
+  }
 }
 
 .prompt-advanced > summary {

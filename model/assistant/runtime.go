@@ -5791,7 +5791,7 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 
 func profilesForModelRole(set llm.ProfileSet, role ModelRole) ([]llm.Profile, error) {
 	if role.FollowChat {
-		return nil, fmt.Errorf("视觉理解选择了跟随对话，但未配置有效的对话模型")
+		return nil, fmt.Errorf("该用途选择了跟随对话，但未配置有效的对话模型")
 	}
 	if role.Group != "" {
 		profiles := set.GroupProfiles(role.Group)
@@ -6330,9 +6330,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if event.Kind == EventKindGroup {
 		builder.WriteString("\n" + promptGroupScope)
 		builder.WriteString("\n" + promptGroupOwnerDistinction)
-		if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
-			builder.WriteString("\n" + promptGroupAliasPrefix + aliases + promptGroupAliasRule)
-		}
+	}
+	// 称呼不分群聊私聊：私聊里没有触发这回事，但「别人怎么叫你」仍然是身份的一部分。
+	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
+		builder.WriteString("\n" + promptAliasPrefix + aliases + promptAliasRule)
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.llm_config") {
 		tail.WriteString("\n" + promptToolLLMConfig)
