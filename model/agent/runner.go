@@ -312,7 +312,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
-			if reason := finalizeContentLayoutIssue(action.Content); reason != "" {
+			if reason := finalizeLayoutIssue(action); reason != "" {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 				messages = appendAssistantEcho(messages, lastText)
@@ -598,9 +598,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		DurationMS:   time.Since(modelStartedAt).Milliseconds(),
 		Usage:        usage,
 	})
-	if len(resp.ToolCalls) > 0 && resp.ToolCalls[0].Name == finalizeToolName {
-		action := finalizeAction(resp.ToolCalls[0], finalText)
-		if issue := finalizeContentLayoutIssue(action.Content); issue != "" {
+	if call, found := findFinalizeCall(resp.ToolCalls); found {
+		action := finalizeAction(call, finalText)
+		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
 		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
@@ -618,7 +618,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		return finish(action.Content, finishReason), nil
 	}
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
-		if issue := finalizeContentLayoutIssue(action.Content); issue != "" {
+		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
 		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
@@ -1036,10 +1036,18 @@ type llmAction struct {
 	TaskState string         `json:"task_state,omitempty"`
 	Reply     *string        `json:"reply,omitempty"`
 	Claims    []ClaimUpdate  `json:"claims,omitempty"`
+	// Salvaged 标记正文是从被网关渲染坏的收尾信封里救回来的，不是模型按协议
+	// 写出来的 content。这种正文不再按信封的换行约定校验。模型不能自己声明。
+	Salvaged bool `json:"-"`
 }
 
 // parseAction 解析模型输出的 Agent JSON 动作。
 func parseAction(text string) (llmAction, bool) {
+	// 供应商把 function call 渲染成人话时既不是 JSON 动作也不是自然语言正文，
+	// 必须先认出来：收尾调用救回正文，其余交给协议修复，绝不当正文往下走。
+	if action, rendered := renderedToolCallAction(text); rendered {
+		return action, action.Action != ""
+	}
 	// 兼容模型把 JSON 包在 Markdown code fence 或前后带解释文本的情况。
 	candidate := extractJSON(text)
 	if strings.TrimSpace(candidate) == "" {
@@ -1078,6 +1086,11 @@ func parseAction(text string) (llmAction, bool) {
 	}
 	if action.Action == "" {
 		return llmAction{Action: "final", Content: strings.TrimSpace(text)}, false
+	}
+	// 兼容协议里 agent.finalize 被当成普通工具写进 JSON 的形态：它不在工具注册表
+	// 里，按 tool 往下走会撞上「工具不存在」，白烧一轮修复预算还可能漏出信封。
+	if action.Action == "tool" && action.Tool == finalizeToolName {
+		return finalizeAction(llm.ToolCall{Name: action.Tool, Arguments: action.Input}, ""), true
 	}
 	if action.Action == "final" {
 		action.Content = normalizeFinalContentNewlines(action.Content)
@@ -1139,6 +1152,9 @@ func decodeLenientJSONString(content string) string {
 }
 
 func looksLikeAgentAction(text string) bool {
+	if LooksLikeRenderedToolCall(text) {
+		return true
+	}
 	candidate := strings.ToLower(extractJSON(text))
 	return strings.Contains(candidate, `"action"`) || strings.Contains(candidate, `"type":"function_call"`) || strings.Contains(candidate, `"tool"`)
 }

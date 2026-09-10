@@ -17,6 +17,26 @@ const finalizeToolName = "agent.finalize"
 // 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。
 var errEmptyFinalize = errors.New("empty_finalize: 模型收尾时未提供任何正文")
 
+// findFinalizeCall 在一轮里挑出收尾调用。供应商可能把它和别的调用一起发回来，
+// 位置不保证在最前；只看第一个就会漏掉整轮正文，退到后面的兜底文案上。
+func findFinalizeCall(calls []llm.ToolCall) (llm.ToolCall, bool) {
+	for _, call := range calls {
+		if call.Name == finalizeToolName {
+			return call, true
+		}
+	}
+	return llm.ToolCall{}, false
+}
+
+// finalizeLayoutIssue 校验收尾正文的排版约定。从被网关渲染坏的信封里救回来的
+// 正文不受约束：它本来就没经过模型的 content 编码，真实换行按普通文本处理。
+func finalizeLayoutIssue(action llmAction) string {
+	if action.Salvaged {
+		return ""
+	}
+	return finalizeContentLayoutIssue(action.Content)
+}
+
 func finalizeContentLayoutIssue(content string) string {
 	if strings.ContainsAny(content, "\r\n") {
 		return "agent.finalize 的 content 含有真实 CR/LF"

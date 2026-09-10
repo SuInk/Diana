@@ -13,7 +13,7 @@
 
 只关闭本群闲聊使用 `{"operation":"update","scope":"group","chat_level":"off"}`；关闭两条主动接话分支时同时设置 `relevance_level=off` 和 `chat_level=off`。已进入直接回复流程的请求不受这两个主动分支开关影响。
 
-`relevance_level`、`chat_level`、`answerability_level` 均支持 `off/minimal/low/medium/high/extreme/always`（关/极低/低/中/高/极高/总是），数值门槛为 0.90/0.70/0.50/0.30/0.10。回复条件为可回答分达标，并且相关度达标或闲聊分达标且冷却结束。可回答门槛选关表示不检查质量分；总是跳过对应分数门槛，但不覆盖停止或重复循环。`cooldown_seconds` 为 0–3600，0 只表示关闭闲聊冷却。
+`relevance_level`、`chat_level`、`answerability_level` 均支持 `off/minimal/low/medium/high/extreme/always`（关/极低/低/中/高/极高/总是），数值门槛为 0.90/0.70/0.50/0.30/0.10。回复条件为可回答分达标，并且相关度达标或闲聊分达标且冷却结束。最近 20 条上下文里机器人自己的发言占比达到 35% 且闲聊档位不是总是时，闲聊分支直接不放行，相关度分支不受影响，路由原因会补充“机器人近期发言占比过高，暂不插话”。评分响应的 JSON 解析失败时自动重试一次，仍解析失败才按未放行处理。可回答门槛选关表示不检查质量分；总是跳过对应分数门槛，但不覆盖停止或重复循环。`cooldown_seconds` 为 0–3600，0 只表示关闭闲聊冷却。
 
 旧调用的 `desire_level=off` 同时关闭两条新评分分支；旧 `substance_level` 保留原字段并映射至最近的新可回答门槛档位。新调用应使用三个独立等级字段。
 
