@@ -48,7 +48,7 @@ func modelSwitchTestRuntime(t *testing.T) (*Runtime, *scopedRoleTestSaver, *stub
 		return []llm.ModelInfo{{ID: "shared"}, {ID: "other"}}, nil
 	})
 	r.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
-		return &capturingLLMProvider{reply: cfg.BaseURL + "|" + cfg.Model}, nil
+		return &modelSwitchTestClient{LLMProvider: &capturingLLMProvider{reply: cfg.BaseURL + "|" + cfg.Model}}, nil
 	})
 	return r, saver, store, MessageEvent{Kind: EventKindPrivate, ProfileID: "b", UserID: "22", MessageID: "m"}
 }

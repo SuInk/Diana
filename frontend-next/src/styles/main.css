@@ -3458,6 +3458,31 @@ a.nav-action {
   gap: 8px;
 }
 
+.persona-section > .card-header {
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.persona-section > .card-header > div { flex: 1 1 240px; min-width: 0; }
+.persona-section .field-head { flex-wrap: wrap; align-items: center; }
+.persona-section .field-head > .cluster { margin-left: auto; flex-wrap: wrap; }
+.persona-section .persona-library {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+  align-items: stretch;
+}
+.persona-section .persona-chip { min-width: 0; min-height: 68px; border-radius: 8px; }
+.persona-section .persona-chip-apply { flex: 1; max-width: none; justify-content: center; }
+.persona-section .persona-chip-actions { flex: 0 0 32px; }
+.persona-section .persona-chip-action { min-height: 32px; }
+.persona-section .cooldown-row > span:first-child { flex: 0 0 88px; }
+.persona-section .cooldown-row > .cooldown-label { flex-shrink: 0; }
+
+@media (max-width: 480px) {
+  .persona-section .field-head > .cluster { width: 100%; margin-left: 0; }
+  .persona-section .persona-saver { flex-wrap: wrap; }
+}
+
 .persona-saver {
   display: flex;
   gap: 8px;

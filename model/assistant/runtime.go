@@ -1322,6 +1322,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.NaturalReplySplitEnabled != nil {
 		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
 	}
+	if groupCfg.ReplyPreserveLineBreaks != nil {
+		cfg.ReplyPreserveLineBreaks = copyBoolPointer(groupCfg.ReplyPreserveLineBreaks)
+	}
 	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
 	if groupCfg.ReplyMergeConfidencePercent > 0 {
 		cfg.ReplyMergeConfidencePercent = groupCfg.ReplyMergeConfidencePercent
@@ -1982,7 +1985,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "error_notice_merged", nil
 		}
-		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, r.effectiveConfigForEvent(event).ErrorReplyPrefix+publicDetail)
+		notice := r.effectiveConfigForEvent(event).ErrorReplyPrefix + publicDetail
+		if rewritten, ok := r.rewriteRejectionNotice(replyCtx, event, err); ok {
+			notice = rewritten
+		}
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, notice)
 		if sendErr != nil {
 			// 这条提示自己也没发出去，本轮就不算已经交代过，留给汇总兜底。
 			r.noteErrorNoticeSendFailed(event, publicDetail)
@@ -3998,6 +4005,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	reply, controlIntent := consumeReplyControlIntent(reply)
 	event.replyDeliveryMode = controlIntent.DeliveryMode
+	event.replyLineBreakMode = controlIntent.LineBreakMode
 	reply, event = prepareReplyDelivery(reply, event)
 	if event.chatInReply && (reply == "" || controlIntent.RefuseCurrent || controlIntent.SuppressCurrentUser) {
 		return "", errChatInReplyDeclined
@@ -6216,7 +6224,7 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
 	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, voice) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, voice) + "\n" + replyLineBreakPrompt(cfg) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
 	if persona == "" {
 		return messages
 	}
@@ -6294,7 +6302,8 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).MarkerOnly, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
+	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
@@ -8961,7 +8970,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	releaseBatch := r.lockReplyBatch(event)
 	defer releaseBatch()
 
-	if IsOneBotPlatform(platform) && event.replyDeliveryMode != replyDeliverySingle && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
+	if IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold) {
 		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
 		if err == nil {
 			if messageID == "" {
@@ -9142,7 +9151,17 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	}
 	r.recordInboundDelivery(event, OutboundDeliveryGenerated, "", "")
 	r.recordInboundDelivery(event, OutboundDeliverySendAttempted, "", "")
+	ctx = outboundMessageContext(ctx, msg)
+	refreshMedia, releaseMedia, err := r.leaseOutgoingMedia(msg)
+	if err != nil {
+		r.recordInboundDelivery(event, OutboundDeliveryFailed, "", err.Error())
+		return nil, err
+	}
+	defer releaseMedia()
 	result, err := r.executeOutboundCall(ctx, event, action, func(callCtx context.Context) (map[string]any, error) {
+		if err := refreshMedia(); err != nil {
+			return nil, err
+		}
 		attempts := r.effectiveConfigForEvent(event).SendRetryAttempts
 		if replySuppressionSendGuardEnabled(ctx) || event.Kind == EventKindGroup || r.outboundBackoffEnabled(event) {
 			attempts = 1
@@ -12363,10 +12382,14 @@ func splitReply(reply string, chunkSize int) []string {
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
-	reply, mode := consumeReplyDeliveryMode(reply)
+	reply, mode, lines := consumeReplyFormatting(reply)
 	limits = replyDeliveryLimits(limits, mode)
+	if lines != "" {
+		limits.LineBreakMode = lines
+	}
 	if limits.SingleMessage {
-		return singleChatReply(reply, limits.ChunkSize)
+		body := strings.Join(singleChatReply(reply, 0), "\n")
+		return chunkTextByLength(formatReplyLineBreaks(body, limits.LineBreakMode), limits.ChunkSize)
 	}
 	reply = normalizeExplicitReplyLayout(reply)
 	if reply == "" {
@@ -12375,7 +12398,8 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	var out []string
 	for _, segment := range strings.Split(reply, notificationSplitMarker) {
 		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
-		if !limits.PreserveBlankLines {
+		segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
+		if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
 			segment = collapseReplyBlankLinesOutsideCode(segment)
 		}
 		if segment == "" {
@@ -12389,30 +12413,10 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 	return out
 }
 
-// splitForwardReply 把已经确定要装进合并转发的回复切成节点。
-//
-// 不限制节点数量，也不额外按句号推断边界：模型明确换行或写标记的地方才新建节点。
+// Forward cards package the same messages; they do not infer new boundaries.
 func splitForwardReply(reply string, limits chatSplitLimits) []string {
-	reply, mode := consumeReplyDeliveryMode(reply)
-	limits = replyDeliveryLimits(limits, mode)
-	if limits.SingleMessage {
-		return singleChatReply(reply, limits.ChunkSize)
-	}
-	reply = normalizeExplicitReplyLayout(reply)
-	if reply == "" {
-		return nil
-	}
-	var out []string
-	for _, segment := range strings.Split(reply, notificationSplitMarker) {
-		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
-		if segment == "" {
-			continue
-		}
-		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, chunk)
-		}
-	}
-	return out
+	limits.PreserveBlankLines = true
+	return splitChatReply(reply, limits)
 }
 
 // replyMaxChatBubbles 是分条后允许的条数。按换行分出来超过这个数就不按换行分了：
@@ -12423,6 +12427,7 @@ const replyMaxChatBubbles = 5
 // chatSplitLimits 是分条用到的几个阈值。它们全都来自机器人配置，凑成一个结构体
 // 是因为一路往下传五个 int 参数没人认得住哪个是哪个。
 type chatSplitLimits struct {
+	LineBreakMode replyLineBreakMode
 	SingleMessage bool // 本轮用户要求一条发送，优先于自然分条和显式分条标记。
 	ChunkSize     int  // 单条消息的硬上限，撞上了在最近的标点处切开
 	MaxBubbles    int  // 分出来最多几条，超了就退回粗一档
@@ -12444,6 +12449,8 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 	return chatSplitLimits{
 		// 旧配置中的分条数和分段长度不再限制聊天回复。
 		MarkerOnly:           !natural,
+		SingleMessage:        !natural,
+		LineBreakMode:        configuredReplyLineBreakMode(cfg),
 		PreserveSoftNewlines: !natural,
 		PreserveBlankLines:   PlatformSupportsRichText(cfg.Platform),
 	}

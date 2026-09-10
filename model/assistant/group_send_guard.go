@@ -171,8 +171,11 @@ func (r *Runtime) outboundGroupKey(event MessageEvent) string {
 	return platform + "\x00" + profile + "\x00" + strings.TrimSpace(event.GroupID)
 }
 
-func (r *Runtime) groupOutboundDelivery(event MessageEvent) *groupOutboundDelivery {
+func (r *Runtime) groupOutboundDelivery(event MessageEvent, lanes ...string) *groupOutboundDelivery {
 	key := r.outboundGroupKey(event)
+	if len(lanes) > 0 && lanes[0] != "" {
+		key += ":" + lanes[0]
+	}
 	r.outboundDeliveryMu.Lock()
 	defer r.outboundDeliveryMu.Unlock()
 	if r.outboundDeliveries == nil {
@@ -210,8 +213,14 @@ func (r *Runtime) executeOutboundCall(
 		return result, r.wrapOutboundSendError(ctx, event, err)
 	}
 
-	gate := r.groupOutboundDelivery(event)
-	gate.mu.Lock()
+	lane := ""
+	if media, _ := ctx.Value(outboundMediaContextKey{}).(bool); media || strings.Contains(action, "forward") {
+		lane = "media"
+	}
+	gate := r.groupOutboundDelivery(event, lane)
+	if err := lockOutboundDelivery(ctx, &gate.mu); err != nil {
+		return nil, err
+	}
 	defer gate.mu.Unlock()
 	policy := outboundDeliveryPolicyFromContext(ctx)
 	for {

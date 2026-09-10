@@ -572,8 +572,17 @@
                 <label class="switch">
                   <input v-model="form.natural_reply_split_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自然分条</span>
+                  <span class="switch-label">允许多条发送</span>
                 </label>
+                <span class="hint">仅显式分条标记另发消息；普通换行不分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_preserve_line_breaks" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">保留普通段落换行</span>
+                </label>
+                <span class="hint">关闭时收拢普通说明的换行，保留已有标点，缺少分隔时补逗号或空格；列表、代码、表格保留结构。本轮排版要求优先。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
@@ -583,12 +592,12 @@
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">正文超过这个字数改用合并转发卡片。留空或填 0 表示无上限。</span>
+                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
                 <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>
+                <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
               </div>
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
@@ -890,7 +899,7 @@
 
         <div v-show="editorTab === 'persona'" class="stack">
           <!-- 人设 -->
-          <section class="card">
+          <section class="card persona-section">
             <div class="card-header">
               <div>
                 <h2>人设</h2>
@@ -941,18 +950,19 @@
                   <div class="persona-chip" :class="{ 'is-active': selectedPersonaID === 'custom' }">
                     <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === 'custom'" @click="choosePersona('custom')">
                       <span class="persona-chip-name">自定义</span>
+                      <small class="muted">当前编辑</small>
                     </button>
                   </div>
                   <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip" :class="{ 'is-active': selectedPersonaID === persona.id }">
                     <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === persona.id" :title="personaSummary(persona)" @click="choosePersona(persona.id)">
                       <span class="persona-chip-name">{{ persona.name }}</span>
-                      <small class="muted">{{ personaSummary(persona) }}</small>
+                      <small class="muted">{{ isBuiltinPersona(persona) ? "内置 · " : "" }}{{ personaSummary(persona) }}</small>
                     </button>
                     <span class="persona-chip-actions">
                       <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
                         <Download :size="13" aria-hidden="true" />
                       </button>
-                      <button type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
+                      <button v-if="!isBuiltinPersona(persona)" type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
                         <X :size="13" aria-hidden="true" />
                       </button>
                     </span>
@@ -1473,6 +1483,7 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
+import { withBuiltinPersonas, isBuiltinPersona } from "../builtin-personas";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -1809,7 +1820,8 @@ const mentionUserModeOptions: AppSelectOption[] = [
 
 // 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
-const personaLibrary = ref<Persona[]>([]);
+const savedPersonaLibrary = ref<Persona[]>([]);
+const personaLibrary = computed(() => withBuiltinPersonas(savedPersonaLibrary.value));
 const personaLibraryLoaded = ref(false);
 const selectedPersonaID = computed(() => form.value ? currentPersonaSelection(form.value, personaLibrary.value) : "custom");
 
@@ -1851,11 +1863,11 @@ function personaSummary(persona: Persona): string {
 
 async function loadPersonaLibrary(): Promise<void> {
   try {
-    personaLibrary.value = (await listPersonas()).personas ?? [];
+    savedPersonaLibrary.value = (await listPersonas()).personas ?? [];
     personaLibraryLoaded.value = true;
   } catch {
     // 人设库读不出来不该挡住整个机器人页：它只是个快捷方式，缺了不影响配置本身。
-    personaLibrary.value = [];
+    savedPersonaLibrary.value = [];
   }
 }
 
@@ -1883,7 +1895,7 @@ async function storeCurrentPersona(): Promise<void> {
   personaLibraryBusy.value = true;
   try {
     const response = await savePersona(personaFromSettings(current, savedName));
-    personaLibrary.value = response.personas ?? [];
+    savedPersonaLibrary.value = response.personas ?? [];
     if (form.value === current) form.value = selectPersona(asCustomPersona(current), response.persona);
     personaSaverOpen.value = false;
     personaNameDraft.value = "";
@@ -1972,7 +1984,7 @@ function looksLikeCharacterCard(parsed: unknown): boolean {
 
 async function importCharacterCardFile(file: File): Promise<void> {
   const result = await importCharacterCard(await fileToBase64(file));
-  personaLibrary.value = result.personas ?? [];
+  savedPersonaLibrary.value = result.personas ?? [];
   if (result.nodes?.length) {
     worldBookNodes.value = result.nodes;
   }
@@ -2011,7 +2023,7 @@ async function importPersonaFile(event: Event): Promise<void> {
         ? (parsed as { personas: unknown[] }).personas
         : [parsed];
     const result = await importPersonas(list as Persona[]);
-    personaLibrary.value = result.personas ?? [];
+    savedPersonaLibrary.value = result.personas ?? [];
     const notes = [`导入 ${result.imported} 套`];
     if (result.renamed) notes.push(`${result.renamed} 套重名已改名`);
     if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
@@ -2035,7 +2047,7 @@ async function removePersona(persona: Persona): Promise<void> {
   }
   personaLibraryBusy.value = true;
   try {
-    personaLibrary.value = (await deletePersona(persona.id)).personas ?? [];
+    savedPersonaLibrary.value = (await deletePersona(persona.id)).personas ?? [];
     toastSuccess(`已删除人设「${persona.name}」`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "人设删除失败");
@@ -2730,6 +2742,7 @@ function setForm(config: BotProfileConfig): void {
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
+    reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
