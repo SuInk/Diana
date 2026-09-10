@@ -74,3 +74,52 @@ func TestSystemPromptTeachesNaturalImageReply(t *testing.T) {
 		t.Fatalf("quoted-image turn is missing the natural-reply rule: %q", prompt)
 	}
 }
+
+// 主动接话那一轮不能再说「只有被提到才回复」：同一段提示词后面就写着「本次回复
+// 是主动插话」，两句话正面打架，线上抓到的表现是模型一边接话一边解释自己不该说话。
+func TestGroupScopeFollowsWhoStartedTheTurn(t *testing.T) {
+	base := BotConfig{}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	relationship := RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, "1")
+	prompt := func(event MessageEvent) string {
+		return runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, relationship, true, nil)
+	}
+
+	triggered := prompt(MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", RawMessage: "Diana 在吗"})
+	if !strings.Contains(triggered, promptGroupScope) || strings.Contains(triggered, promptGroupScopeProactive) {
+		t.Fatalf("被点名那轮的场景说明不对：%q", triggered)
+	}
+
+	for name, event := range map[string]MessageEvent{
+		"chatIn":    {Kind: EventKindGroup, GroupID: "g", UserID: "1", chatInReply: true},
+		"proactive": {Kind: EventKindGroup, GroupID: "g", UserID: "1", proactiveReply: true},
+		"both":      {Kind: EventKindGroup, GroupID: "g", UserID: "1", proactiveReply: true, chatInReply: true},
+	} {
+		got := prompt(event)
+		if !strings.Contains(got, promptGroupScopeProactive) || strings.Contains(got, promptGroupScope) {
+			t.Fatalf("%s 那轮仍在说「只有被提到才回复」：%q", name, got)
+		}
+	}
+
+	// 私聊两串都不该出现：没有群，说了是白付 token。
+	private := prompt(MessageEvent{Kind: EventKindPrivate, UserID: "1", chatInReply: true})
+	if strings.Contains(private, promptGroupScope) || strings.Contains(private, promptGroupScopeProactive) {
+		t.Fatalf("私聊注入了群聊场景说明：%q", private)
+	}
+}
+
+// 头部要留得住前缀缓存：同一个模式下这行字必须逐字节固定，不随发言者或消息内容变。
+func TestGroupScopeIsOneStableStringPerMode(t *testing.T) {
+	for _, event := range []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "g", UserID: "1", RawMessage: "甲"},
+		{Kind: EventKindGroup, GroupID: "g", UserID: "2", RawMessage: "乙"},
+	} {
+		if got := groupScopePrompt(event); got != promptGroupScope {
+			t.Fatalf("触发回复的场景说明不稳定：%q", got)
+		}
+		event.chatInReply = true
+		if got := groupScopePrompt(event); got != promptGroupScopeProactive {
+			t.Fatalf("主动接话的场景说明不稳定：%q", got)
+		}
+	}
+}

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func floatPtr(v float64) *float64 { return &v }
@@ -74,10 +77,102 @@ func TestParticipationRatingsProtocol(t *testing.T) {
 	if _, err := parseParticipationRatings(good); err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range []string{`true`, `0.8`, `{"score":0.8,"reason":"x"}`, strings.Replace(good, "0.25", "1.25", 1), strings.Replace(good, "0.25", `"0.25"`, 1), good + " {}", good + " junk", strings.Replace(good, `"relevance":`, `"should_reply":true,"relevance":`, 1)} {
+	for _, raw := range []string{`true`, `0.8`, `{"score":0.8,"reason":"x"}`, strings.Replace(good, "0.25", "1.25", 1), strings.Replace(good, "0.25", `"0.25"`, 1)} {
 		if _, err := parseParticipationRatings(raw); err == nil {
 			t.Fatalf("accepted %s", raw)
 		}
+	}
+}
+
+// 线上 14 天里 139/1780 条评分因为这些形状被整条丢弃，全部按可解析处理。
+func TestParticipationRatingsLenientParsing(t *testing.T) {
+	body := `"relevance":{"score":0.31,"reason":"群友在延续话题"},"answerability":{"score":0.60,"reason":"能给出简短回应"},"chat_in":{"score":0.82,"reason":"顺着当前玩笑接一句很合适"}`
+	good := "{" + body + "}"
+	for _, tc := range []struct {
+		name, raw string
+		want      float64
+	}{
+		{"clean", good, 0.82},
+		{"trailing_devanagari", good + "િ", 0.82},
+		{"trailing_brace_and_words", good + "} krwar", 0.82},
+		{"trailing_prose", good + "\n以上是我的评分。", 0.82},
+		{"leading_prose", "好的，评分如下：\n" + good, 0.82},
+		{"code_fence", "```json\n" + good + "\n```", 0.82},
+		{"code_fence_bare", "```\n" + good + "\n```", 0.82},
+		{"truncated_outer_brace", "{" + body, 0.82},
+		// 中转把最后一个右花括号顶成了乱码：对象少一个闭合，尾巴上多出几个字符。
+		{"junk_replaces_outer_brace", "{" + body + "\u0ac7\u0aa3", 0.82},
+		{"junk_replaces_outer_brace_cjk", "{" + body + "】【。", 0.82},
+		// 零宽字符夹在最后两个右花括号之间：对象是配平的，但 JSON 解析当场报错。
+		{"zero_width_between_braces", "{" + body + "\u200c}", 0.82},
+		{"zero_width_inside_object", "{" + body[:len(body)-1] + "\u200c" + body[len(body)-1:] + "}", 0.82},
+		{"truncated_outer_brace_with_fence", "```json\n{" + body, 0.82},
+		{"unknown_fields", `{"should_reply":true,"category":"chat_in",` + body + `,"note":{"a":1}}`, 0.82},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ratings, err := parseParticipationRatings(tc.raw)
+			if err != nil {
+				t.Fatalf("rejected %q: %v", tc.raw, err)
+			}
+			if *ratings.ChatIn.Score != tc.want || *ratings.Relevance.Score != 0.31 || *ratings.Answerability.Score != 0.60 {
+				t.Fatalf("ratings=%+v", ratings)
+			}
+			if ratings.ChatIn.Reason != "顺着当前玩笑接一句很合适" {
+				t.Fatalf("reason=%q", ratings.ChatIn.Reason)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, raw string }{
+		{"empty", ""},
+		{"no_object", "抱歉，我无法评分。"},
+		{"truncated_mid_string", `{"relevance":{"score":0.31,"reason":"群友在延续`},
+		{"truncated_before_chat_in", `{"relevance":{"score":0.31,"reason":"群友"},"answerability":{"score":0.6,"reason":"可以"}`},
+		{"missing_reason", `{"relevance":{"score":0.31,"reason":" "},"answerability":{"score":0.6,"reason":"可以"},"chat_in":{"score":0.8,"reason":"接梗"}}`},
+		{"score_out_of_range", `{"relevance":{"score":1.31,"reason":"高"},"answerability":{"score":0.6,"reason":"可以"},"chat_in":{"score":0.8,"reason":"接梗"}}`},
+		{"first_object_is_not_ratings", `{"note":"thinking"} ` + good},
+	} {
+		t.Run("reject_"+tc.name, func(t *testing.T) {
+			if _, err := parseParticipationRatings(tc.raw); err == nil {
+				t.Fatalf("accepted %q", tc.raw)
+			}
+		})
+	}
+}
+
+func TestParticipationBotShareBlocksChatIn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		bot, total int
+		level      string
+		want       bool
+	}{
+		{"quiet_bot", 4, 20, "medium", false},
+		{"at_threshold", 7, 20, "medium", true},
+		{"just_below_threshold", 6, 20, "medium", false},
+		{"dominating_small_group", 12, 20, "low", true},
+		{"always_never_blocked", 18, 20, "always", false},
+		{"no_history", 0, 0, "medium", false},
+		{"bot_silent", 0, 20, "medium", false},
+		{"short_window", 3, 5, "medium", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := participationBotShareBlocks(tc.bot, tc.total, tc.level); got != tc.want {
+				t.Fatalf("bot=%d total=%d level=%s got=%v want=%v", tc.bot, tc.total, tc.level, got, tc.want)
+			}
+		})
+	}
+	messages := make([]proactiveReplyHistoryItem, 0, 30)
+	for i := 0; i < 30; i++ {
+		messages = append(messages, proactiveReplyHistoryItem{IsBot: i < 10})
+	}
+	if bot, total := proactiveReplyBotShare(messages, participationShareWindow); bot != 10 || total != 20 {
+		t.Fatalf("window bot=%d total=%d", bot, total)
+	}
+	if bot, total := proactiveReplyBotShare(messages[:3], participationShareWindow); bot != 3 || total != 3 {
+		t.Fatalf("short history bot=%d total=%d", bot, total)
+	}
+	if bot, total := proactiveReplyBotShare(nil, participationShareWindow); bot != 0 || total != 0 {
+		t.Fatalf("empty history bot=%d total=%d", bot, total)
 	}
 }
 
@@ -117,6 +212,108 @@ func TestParticipationRatingsRouting(t *testing.T) {
 		t.Fatal("chat cooldown blocked relevance branch")
 	}
 }
+
+// scriptedRouterProvider 按顺序返回预设回复，最后一条会一直重复。
+type scriptedRouterProvider struct {
+	mu      sync.Mutex
+	replies []string
+	calls   []llm.GenerateRequest
+}
+
+// Generate 记录请求并返回脚本里的下一条回复。
+func (p *scriptedRouterProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, req)
+	reply := ""
+	if len(p.replies) > 0 {
+		reply = p.replies[0]
+		if len(p.replies) > 1 {
+			p.replies = p.replies[1:]
+		}
+	}
+	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: reply}, nil
+}
+
+func (p *scriptedRouterProvider) callSnapshot() []llm.GenerateRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]llm.GenerateRequest(nil), p.calls...)
+}
+
+func requestContains(req llm.GenerateRequest, needle string) bool {
+	for _, message := range req.Messages {
+		if strings.Contains(message.Content, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func lastParticipationRatingLog(t *testing.T, logs *captureAppLogs) map[string]any {
+	t.Helper()
+	for _, entry := range logs.entriesSnapshot() {
+		if entry.Action == "diana.proactive_reply_route" && entry.Metadata["ratings"] != nil {
+			return entry.Metadata
+		}
+	}
+	t.Fatal("no participation rating log")
+	return nil
+}
+
+func TestParticipationRatingsRetryOnceOnParseFailure(t *testing.T) {
+	valid := `{"relevance":{"score":0.80,"reason":"直接问机器人"},"answerability":{"score":0.80,"reason":"能给出有内容的回答"},"chat_in":{"score":0.10,"reason":"不需要闲聊"}}`
+	newRuntime := func(replies ...string) (*Runtime, *scriptedRouterProvider, *captureAppLogs, MessageEvent) {
+		provider := &scriptedRouterProvider{replies: replies}
+		logs := &captureAppLogs{}
+		r := NewRuntime(BotConfig{Participation: &ParticipationPreferences{RelevanceLevel: "medium", ChatLevel: "medium", CooldownSeconds: 30}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+		r.SetAppLogWriter(logs)
+		return r, provider, logs, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "Diana 这个怎么弄"}
+	}
+
+	r, provider, logs, event := newRuntime("我先想想怎么打分。", valid)
+	routed, _, _, allowed := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+	if !allowed {
+		t.Fatalf("retry result ignored: %s", routed.routingReason)
+	}
+	calls := provider.callSnapshot()
+	if len(calls) != 2 {
+		t.Fatalf("calls=%d want 2", len(calls))
+	}
+	if requestContains(calls[0], participationRatingsRetryReminder) || !requestContains(calls[1], participationRatingsRetryReminder) {
+		t.Fatalf("reminder must appear only on the retry: %+v", calls[1].Messages)
+	}
+	if !requestContains(calls[1], "Diana 这个怎么弄") || !requestContains(calls[1], "接话评分模块") {
+		t.Fatal("retry dropped the original payload")
+	}
+	if metadata := lastParticipationRatingLog(t, logs); metadata["retried"] != true || metadata["parsed"] != true || metadata["allowed"] != true {
+		t.Fatalf("retry log: %+v", metadata)
+	}
+
+	r, provider, logs, event = newRuntime("我先想想怎么打分。", "还是想不好。")
+	routed, _, _, allowed = r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+	if allowed || !strings.Contains(routed.routingReason, "接话评分格式无效") {
+		t.Fatalf("second failure must stay silent: allowed=%t reason=%s", allowed, routed.routingReason)
+	}
+	if calls := provider.callSnapshot(); len(calls) != 2 {
+		t.Fatalf("retried more than once: calls=%d", len(calls))
+	}
+	if metadata := lastParticipationRatingLog(t, logs); metadata["retried"] != true || metadata["parsed"] != false {
+		t.Fatalf("failed retry log: %+v", metadata)
+	}
+
+	r, provider, logs, event = newRuntime(valid)
+	if _, _, _, allowed = r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}}); !allowed {
+		t.Fatal("valid rating rejected")
+	}
+	if calls := provider.callSnapshot(); len(calls) != 1 {
+		t.Fatalf("retried a parseable answer: calls=%d", len(calls))
+	}
+	if metadata := lastParticipationRatingLog(t, logs); metadata["retried"] != false {
+		t.Fatalf("unexpected retry flag: %+v", metadata)
+	}
+}
+
 func TestParticipationRatingsPromptAndConfig(t *testing.T) {
 	for _, level := range []string{"off", "low", "medium", "high", "always"} {
 		p := ParticipationPreferences{RelevanceLevel: level, ChatLevel: level}

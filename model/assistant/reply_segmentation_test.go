@@ -7,7 +7,8 @@ import (
 )
 
 func promptTeachesSegmentation(prompt string) bool {
-	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "真实换行符禁止输出"} {
+	// 「不许真实换行」现在只由 replyBlankLineRule 说一次，分条规则不再重复一遍。
+	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "不得输出真实换行符"} {
 		if !strings.Contains(prompt, want) {
 			return false
 		}

@@ -100,3 +100,28 @@ func TestSystemPromptCarriesDaypartTone(t *testing.T) {
 		t.Fatal("开关关着却注入了深夜语气")
 	}
 }
+
+// TestDayPartTextsOnlyChangeTone 时段语气只准动「怎么说」，不准动「说多少」。
+//
+// 晚上这一档覆盖 18:00–05:00，正好是群聊最热闹的时段。它以前写着「话可以多一点，
+// 更愿意闲聊和展开」，和群聊的简短要求、插话节奏的「一两句说完」直接对着干，线上
+// 主动插话中位数被推到 75 字、26% 超过两句。四档都不该出现这类篇幅主张。
+func TestDayPartTextsOnlyChangeTone(t *testing.T) {
+	lengthClaims := []string{"话可以多一点", "展开", "详细", "多说", "字数"}
+	for _, part := range []dayPart{dayPartLateNight, dayPartMorning, dayPartDaytime, dayPartEvening} {
+		text := part.prompt()
+		for _, claim := range lengthClaims {
+			if strings.Contains(text, claim) {
+				t.Fatalf("时段语气 %v 在要求更长的输出（%q）：%q", part, claim, text)
+			}
+		}
+	}
+	evening := dayPartEvening.prompt()
+	if !strings.Contains(evening, "回复长度照旧") {
+		t.Fatalf("晚上这一档没有把长度钉住：%q", evening)
+	}
+	// 「话比白天少、句子更短」是收敛，不是放开，深夜这条要留着。
+	if !strings.Contains(dayPartLateNight.prompt(), "话比白天少") {
+		t.Fatalf("深夜这一档丢了收敛语气：%q", dayPartLateNight.prompt())
+	}
+}
