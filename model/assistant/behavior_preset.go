@@ -113,7 +113,7 @@ const replyDocumentDeliveryRule = "详细长文的消息组织：先分清主要
 // replySegmentationMarkerOnlyRule 是关掉自然分条之后的版本。
 //
 // 关闭自然分条时同样只接受显式协议，但默认把内容组织成一条消息。
-const replySegmentationMarkerOnlyRule = "默认只发送一条消息；确实必须另起消息时写 " + notificationSplitMarker + "。同一条消息内部的清单、步骤、代码和引用需要换行时写 " + notificationLineMarker + "。正文不得输出真实换行符，发送层不会把真实换行当作任何布局指令。"
+const replySegmentationMarkerOnlyRule = "当前关闭多条发送：默认只发送一条消息，不写 " + notificationSplitMarker + "，超限时压缩且不自动合并转发。同一条消息内部的清单、步骤、代码和引用需要换行时写 " + notificationLineMarker + "。正文不得输出真实换行符；只有用户本轮明确要求多条发送时才通过发送方式前缀覆盖默认值。"
 
 // replyProportionRule 同样对所有风格生效。联网查证过的回答特别容易写成小评测:
 // 背景、口碑、优缺点、结论、末尾再罗列参考链接——群里随口一句「好看吗」换来
@@ -135,6 +135,7 @@ func replyPresentationPrompt(naturalSplit bool, voice personaVoice) string {
 		segmentation,
 		replyDocumentDeliveryRule,
 		replyDeliveryChoiceRule,
+		replyLineBreakChoiceRule,
 		replyProportionRule,
 		voice.prompt(),
 	}, "\n"))

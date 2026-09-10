@@ -17,7 +17,7 @@ func TestReplyPromptsUseTheActualEventSplitMode(t *testing.T) {
 			{Kind: EventKindGroup, proactiveReply: true, chatInReply: true},
 			{Kind: EventKindPrivate},
 		} {
-			wantsNatural := natural && !(event.Kind == EventKindGroup && event.chatInReply)
+			wantsNatural := natural
 			mainPrompt := r.systemPromptWithMode(event, nil, event.proactiveReply)
 			persona := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: "test"}})
 			for _, prompt := range []string{mainPrompt, persona[0].Content} {
@@ -49,6 +49,12 @@ func TestProactiveRepliesHonorExplicitMarkers(t *testing.T) {
 		for _, casual := range []bool{true, false} {
 			event := MessageEvent{Kind: EventKindGroup, proactiveReply: true, chatInReply: casual}
 			got := splitEventChatReply("第一句"+notificationSplitMarker+"第二句"+notificationSplitMarker+"第三句", cfg, event)
+			if !natural {
+				if len(got) != 1 || got[0] != "第一句\n第二句\n第三句" {
+					t.Fatalf("disabled multi-message: %q", got)
+				}
+				continue
+			}
 			if len(got) != 3 || strings.Join(got, "|") != "第一句|第二句|第三句" {
 				t.Fatalf("natural=%v casual=%v explicit splits=%q", natural, casual, got)
 			}
