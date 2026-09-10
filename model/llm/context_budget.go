@@ -339,6 +339,9 @@ func lowerProtectedImageDetailToFit(messages []Message, budget int64) []Message 
 	if estimateRequiredMessagesTokens(messages) <= budget {
 		return messages
 	}
+	if PlanInputBudget(GenerateRequest{Messages: messages}, budget).ImageExcess <= 0 {
+		return messages
+	}
 	out := append([]Message(nil), messages...)
 	lastIndex := currentInputIndex(out)
 	for index := range out {

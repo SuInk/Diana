@@ -62,12 +62,13 @@ type ChatMessage struct {
 }
 
 type ChatRequest struct {
-	Model           string           `json:"model,omitempty"`
-	Messages        []ChatMessage    `json:"messages"`
-	Temperature     *float64         `json:"temperature,omitempty"`
-	ReasoningEffort string           `json:"reasoningEffort,omitempty"`
-	MaxTokens       int64            `json:"maxTokens,omitempty"`
-	Tools           []ToolDefinition `json:"tools,omitempty"`
+	MaxContextTokens int64            `json:"-"`
+	Model            string           `json:"model,omitempty"`
+	Messages         []ChatMessage    `json:"messages"`
+	Temperature      *float64         `json:"temperature,omitempty"`
+	ReasoningEffort  string           `json:"reasoningEffort,omitempty"`
+	MaxTokens        int64            `json:"maxTokens,omitempty"`
+	Tools            []ToolDefinition `json:"tools,omitempty"`
 }
 
 type ChatEventType string
@@ -303,7 +304,7 @@ func (a clientAdapter) Generate(ctx context.Context, model ModelDefinition, req 
 		return ChatResponse{}, err
 	}
 	messages := chatMessagesToLegacy(req.Messages)
-	response, err := client.Generate(ctx, GenerateRequest{Model: model.ModelID, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools})
+	response, err := client.Generate(ctx, GenerateRequest{Model: model.ModelID, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, MaxContextTokens: req.MaxContextTokens})
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -315,7 +316,7 @@ func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req Ch
 	if err != nil {
 		return nil, err
 	}
-	legacy := GenerateRequest{Model: model.ModelID, Messages: chatMessagesToLegacy(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools}
+	legacy := GenerateRequest{Model: model.ModelID, Messages: chatMessagesToLegacy(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, MaxContextTokens: req.MaxContextTokens}
 	if streamable, ok := client.(interface {
 		Stream(context.Context, GenerateRequest) (<-chan ChatEvent, error)
 	}); ok {
@@ -469,7 +470,7 @@ func (c RegistryClient) Stream(ctx context.Context, req GenerateRequest) (<-chan
 	if c.Registry == nil {
 		return nil, fmt.Errorf("llm: provider registry is not configured")
 	}
-	return c.Registry.Stream(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: legacyMessagesToChat(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools})
+	return c.Registry.Stream(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: legacyMessagesToChat(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, MaxContextTokens: req.MaxContextTokens})
 }
 
 func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
@@ -477,7 +478,7 @@ func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*Gen
 		return nil, fmt.Errorf("llm: provider registry is not configured")
 	}
 	messages := legacyMessagesToChat(req.Messages)
-	response, err := c.Registry.Generate(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools})
+	response, err := c.Registry.Generate(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, MaxContextTokens: req.MaxContextTokens})
 	if err != nil {
 		return nil, err
 	}

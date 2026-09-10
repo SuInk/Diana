@@ -37,12 +37,10 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 			}
 		}
 	}
-	if images < 2 {
-		return p.provider.Generate(ctx, req)
-	}
 	window, reserve := p.runtime.imageRequestBudget(ctx, p.group, req)
 	budget := llm.InputTokenBudget(window, reserve)
-	if imageRequestTokens(req) <= budget {
+	before := llm.PlanInputBudget(req, budget)
+	if !before.OverBudget() {
 		return p.provider.Generate(ctx, req)
 	}
 	timeout := 20 * time.Second
@@ -57,9 +55,16 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	if usage := llmUsageFromContext(ctx); usage != nil {
 		event = usage.event
 	}
-	req = fitImagesWithDescriptions(describeCtx, req, budget, func(callCtx context.Context, source string) (string, error) {
-		return p.runtime.budgetImageDescription(callCtx, event, source)
-	})
+	textCalls := 0
+	req = fitBudgetText(describeCtx, req, budget, &textCalls, p.runtime.summarizeBudgetText)
+	if llm.PlanInputBudget(req, budget).ImageExcess > 0 {
+		req = fitImagesWithDescriptions(describeCtx, req, budget, func(callCtx context.Context, source string) (string, error) {
+			return p.runtime.budgetImageDescription(callCtx, event, source)
+		})
+	}
+	// Image descriptions consume text quota; account for them before proceeding.
+	req = fitBudgetText(describeCtx, req, budget, &textCalls, p.runtime.summarizeBudgetText)
+	req = lowerOverBudgetImageDetail(req, budget)
 	cancel()
 	retained := 0
 	for _, message := range req.Messages {
@@ -69,7 +74,11 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 			}
 		}
 	}
-	log.Printf("diana image budget: message_id=%s original_images=%d described_images=%d retained_images=%d input_budget=%d", event.MessageID, images, images-retained, retained, budget)
+	after := llm.PlanInputBudget(req, budget)
+	log.Printf("diana input budget: message_id=%s input_budget=%d text_share_percent=50 estimated_text_before=%d estimated_images_before=%d estimated_text_after=%d estimated_images_after=%d text_limit=%d image_limit=%d text_summary_calls=%d original_images=%d described_images=%d retained_images=%d", event.MessageID, budget, before.TextTokens, before.ImageTokens, after.TextTokens, after.ImageTokens, after.TextLimit, after.ImageLimit, textCalls, images, images-retained, retained)
+	if after.OverBudget() {
+		return nil, fmt.Errorf("diana: 无法在输入预算内保留本轮内容：预算 %d，估算文字 %d、图片 %d、其他 %d；压缩未能完成，未丢弃当前问题", budget, after.TextTokens, after.ImageTokens, after.OtherTokens)
+	}
 	return p.provider.Generate(ctx, req)
 }
 
@@ -119,11 +128,13 @@ func (r *Runtime) imageRequestBudget(ctx context.Context, group string, req llm.
 }
 
 func imageRequestTokens(req llm.GenerateRequest) int64 {
-	var total int64
-	for _, m := range req.Messages {
-		total += llm.EstimateMessageTokens(m)
-	}
-	return total
+	plan := llm.PlanInputBudget(req, 0)
+	return plan.TextTokens + plan.ImageTokens + plan.OtherTokens
+}
+
+func imageBudgetExceeded(req llm.GenerateRequest, budget int64) bool {
+	plan := llm.PlanInputBudget(req, budget)
+	return plan.OverBudget() && plan.ImageExcess > 0
 }
 
 type imageBudgetPosition struct {
@@ -134,7 +145,7 @@ type imageBudgetPosition struct {
 // Replace older attachments first, in place, keeping at least the newest image.
 // Failed descriptions leave their original attachment intact.
 func fitImagesWithDescriptions(ctx context.Context, req llm.GenerateRequest, budget int64, describe func(context.Context, string) (string, error)) llm.GenerateRequest {
-	if imageRequestTokens(req) <= budget {
+	if !imageBudgetExceeded(req, budget) {
 		return req
 	}
 	var positions []imageBudgetPosition
@@ -156,7 +167,7 @@ func fitImagesWithDescriptions(ctx context.Context, req llm.GenerateRequest, bud
 	}
 	// Identical attachments share a description within this request, even without a store.
 	cache := map[string]string{}
-	for offset := 0; offset < len(positions)-1 && imageRequestTokens(req) > budget && ctx.Err() == nil; {
+	for offset := 0; offset < len(positions)-1 && imageBudgetExceeded(req, budget) && ctx.Err() == nil; {
 		end := offset
 		needed := imageRequestTokens(req) - budget
 		for end < min(offset+recallImageDescriptionConcurrency, len(positions)-1) && needed > 0 {
@@ -193,7 +204,7 @@ func fitImagesWithDescriptions(ctx context.Context, req llm.GenerateRequest, bud
 			cache[source] = results[i]
 		}
 		for _, pos := range batch {
-			if imageRequestTokens(req) <= budget {
+			if !imageBudgetExceeded(req, budget) {
 				break
 			}
 			description := cache[pos.source]
