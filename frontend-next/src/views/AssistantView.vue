@@ -572,8 +572,17 @@
                 <label class="switch">
                   <input v-model="form.natural_reply_split_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">自然分条</span>
+                  <span class="switch-label">允许多条发送</span>
                 </label>
+                <span class="hint">仅显式分条标记另发消息；普通换行不分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_preserve_line_breaks" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">保留普通段落换行</span>
+                </label>
+                <span class="hint">关闭时收拢普通说明的换行，保留已有标点，缺少分隔时补逗号或空格；列表、代码、表格保留结构。本轮排版要求优先。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
@@ -583,12 +592,12 @@
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">正文超过这个字数改用合并转发卡片。留空或填 0 表示无上限。</span>
+                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
                 <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">自然分条超过这个块数改用合并转发卡片。留空或填 0 表示无上限。</span>
+                <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
               </div>
               <div class="field">
                 <label for="bot-history-budget">回复历史 token 预算</label>
@@ -2733,6 +2742,7 @@ function setForm(config: BotProfileConfig): void {
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
+    reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
     reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,

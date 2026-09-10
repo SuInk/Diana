@@ -89,6 +89,14 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 		intent.DeliveryMode = event.replyDeliveryMode
 	}
 	event.replyDeliveryMode = intent.DeliveryMode
+	if intent.LineBreakMode == "" {
+		intent.LineBreakMode = event.replyLineBreakMode
+	}
+	event.replyLineBreakMode = intent.LineBreakMode
+	if chatSplitLimitsForEvent(cfg, event).SingleMessage {
+		intent.DeliveryMode = replyDeliverySingle
+		event.replyDeliveryMode = replyDeliverySingle
+	}
 	body = normalizeReply(body, 0)
 	body = normalizeExplicitReplyLayout(body)
 	if intent.DeliveryMode == replyDeliverySingle {
