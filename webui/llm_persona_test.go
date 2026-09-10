@@ -155,3 +155,25 @@ func TestNormalizeGeneratedPersonaTruncatesOverlongOutput(t *testing.T) {
 		t.Fatalf("截断后长度 = %d，期望 %d", got, personaGenerateMaxOutput)
 	}
 }
+
+// 身份和外观是硬要求：运行时不会替人设补这两样。机器人配置上的「名称」只用于
+// 合并转发的显示名，从不进提示词；外观更是全项目没有第二个来源，人设不写，
+// 出图时每次画出来的都是另一个人。
+func TestPersonaGeneratePromptRequiresIdentityAndAppearance(t *testing.T) {
+	for _, want := range []string{"必须点明它是谁", "必须写清外观形象", "照着画出来"} {
+		if !strings.Contains(personaGenerateSystemPrompt, want) {
+			t.Fatalf("人设生成提示词缺少要求 %q", want)
+		}
+	}
+	// 给了名字就要求原样写进第一句，模型不能自己另起一个称呼。
+	prompt := personaGenerateUserPrompt("一个爱吐槽的技术群管理员", "嘉然", "", "")
+	for _, want := range []string{"「嘉然」", "必须原样写进人设第一句"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("用户提示词缺少 %q：%s", want, prompt)
+		}
+	}
+	// 没给名字时不编造这条要求。
+	if got := personaGenerateUserPrompt("一个爱吐槽的技术群管理员", "", "", ""); strings.Contains(got, "必须原样写进人设第一句") {
+		t.Fatalf("没有名字时不该要求写名字：%s", got)
+	}
+}

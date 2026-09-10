@@ -125,27 +125,45 @@ func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (Mod
 	if len(roles) == 0 {
 		return ModelRole{}, false
 	}
-	if modelRoleKeyForGroup(group) == "vision" && roles["vision"].FollowChat {
-		if chat, ok := roles["chat"]; ok && !chat.FollowChat && modelRoleConfigured(chat) {
-			return chat, true
-		}
-		return ModelRole{FollowChat: true}, true
+	groupKey := modelRoleKeyForGroup(group)
+	// 本次调用的分组声明了「跟随对话」时直接落到对话绑定，不再往下看用途：用途上
+	// 绑的多半是纯文本模型，套到这一轮（典型是带图的 vision 调用）上跑不通。
+	if groupKey != "chat" && roles[groupKey].FollowChat {
+		return resolveFollowChatRole(roles)
 	}
 	if purpose = strings.TrimSpace(purpose); purpose != "" {
 		if role, ok := roles[purpose]; ok {
-			return role, true
+			return resolveIfFollowChat(roles, role)
 		}
 	}
-	if role, ok := roles[modelRoleKeyForGroup(group)]; ok {
-		return role, true
+	if role, ok := roles[groupKey]; ok {
+		return resolveIfFollowChat(roles, role)
 	}
 	if purpose != "" {
 		if owner := ModelBindingGroupOf(purpose); owner != "" {
 			if role, ok := roles[owner]; ok {
-				return role, true
+				return resolveIfFollowChat(roles, role)
 			}
 		}
 	}
 	role, ok := roles["chat"]
 	return role, ok
+}
+
+// resolveIfFollowChat 把「跟随对话」翻成实际的对话绑定，其余原样返回。
+func resolveIfFollowChat(roles map[string]ModelRole, role ModelRole) (ModelRole, bool) {
+	if !role.FollowChat {
+		return role, true
+	}
+	return resolveFollowChatRole(roles)
+}
+
+// resolveFollowChatRole 返回对话那一档的绑定。对话本身没配好时原样返回 FollowChat，
+// 由 profilesForModelRole 报「选了跟随对话但没有可用的对话模型」——比在这里静默滑到
+// 全局激活配置好，那种滑动表现为「聊着聊着换了个模型」而日志看着一切正常。
+func resolveFollowChatRole(roles map[string]ModelRole) (ModelRole, bool) {
+	if chat, ok := roles["chat"]; ok && !chat.FollowChat && modelRoleConfigured(chat) {
+		return chat, true
+	}
+	return ModelRole{FollowChat: true}, true
 }

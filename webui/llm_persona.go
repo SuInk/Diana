@@ -36,18 +36,24 @@ var personaGenerateModeHints = map[string]string{
 	"active":   "性格外向，乐意主动参与群里的话题。",
 }
 
-// personaGenerateSystemPrompt 约束生成结果只写「它是谁、怎么说话」。
+// personaGenerateSystemPrompt 约束生成结果只写「它是谁、长什么样、怎么说话」。
 // 输出格式规范、时间注入这些是 WebUI 里独立的开关，写进人设只会重复且互相打架。
-const personaGenerateSystemPrompt = `你在为一个运行在 QQ 里的聊天机器人撰写基础人设，供它作为 system prompt 使用。
+//
+// 身份和外观是硬要求，因为运行时不会替人设补这两样：机器人配置上的「名称」字段
+// 从不进提示词（只用于合并转发的显示名），外观更是全项目没有第二个来源。人设不写，
+// 它就不知道自己叫什么、长什么样，出图时每次画出来的都是另一个人。
+const personaGenerateSystemPrompt = `你在为一个聊天机器人撰写基础人设，供它作为 system prompt 使用。
 
 要求：
 1. 用第二人称直接对机器人说话，例如「你是……」。
-2. 只写身份、性格、说话方式和该守的边界，不要写输出格式规范（纯文本、不用 Markdown、分条方式）——那些运行时会自动注入，重复写会互相打架。
-2.1 给出了已选的回复模式时，人设的搭话分寸必须和它一致，但不要把这些要求原样抄进去，要化成这个角色本来的性格。
-3. 不要写工具用法、权限规则、拒答流程、时间注入、群聊发言者标注，这些运行时会自动补。
-4. 写成连贯的一段话，不要分点、不要标题、不要 Markdown、不要代码围栏。
-5. 控制在 200 字以内，宁可精准也不要堆形容词。
-6. 只输出人设正文本身，不要任何前言、解释或引号包裹。`
+2. 开头必须点明它是谁：给出了名字就把名字原样写进第一句（「你是嘉然，……」）；没给名字就写清它的身份。人设是它唯一的身份来源，不写它就不知道自己叫什么。
+3. 必须写清外观形象，写到能照着画出来：发色发型、瞳色、常穿的衣服、随身或身上显眼的标志物，挑最有辨识度的几样。这段是它给自己出图、被问「你长什么样」时唯一的依据，缺了每次画出来的都是另一个人。
+4. 其余写性格、说话方式和该守的边界，不要写输出格式规范（纯文本、不用 Markdown、分条方式）——那些运行时会自动注入，重复写会互相打架。
+5. 给出了已选的回复模式时，人设的搭话分寸必须和它一致，但不要把这些要求原样抄进去，要化成这个角色本来的性格。
+6. 不要写工具用法、权限规则、拒答流程、时间注入、群聊发言者标注，这些运行时会自动补。
+7. 写成连贯的一段话，不要分点、不要标题、不要 Markdown、不要代码围栏。
+8. 控制在 280 字以内，宁可精准也不要堆形容词。
+9. 只输出人设正文本身，不要任何前言、解释或引号包裹。`
 
 // personaGenerate 用当前已配置的模型把一句话需求写成基础人设。
 func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
@@ -159,7 +165,7 @@ func personaTextProfile(profile llm.Profile) bool {
 func personaGenerateUserPrompt(description, name, current, responseMode string) string {
 	var builder strings.Builder
 	if name = strings.TrimSpace(name); name != "" {
-		builder.WriteString("机器人的名字是「" + name + "」。\n")
+		builder.WriteString("机器人的名字是「" + name + "」，必须原样写进人设第一句。\n")
 	}
 	if hint := personaGenerateModeHints[strings.ToLower(strings.TrimSpace(responseMode))]; hint != "" {
 		builder.WriteString("已选的回复模式：" + hint + "\n")

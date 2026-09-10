@@ -74,3 +74,39 @@ func TestSystemPromptTeachesNaturalImageReply(t *testing.T) {
 		t.Fatalf("quoted-image turn is missing the natural-reply rule: %q", prompt)
 	}
 }
+
+// 称呼不分群聊私聊：机器人配置上的「名称」字段从不进提示词，人设也不一定写了名字，
+// 触发别名要是再只在群聊注入，私聊里它就完全不知道自己叫什么。
+func TestAliasPromptReachesPrivateChatToo(t *testing.T) {
+	cfg := BotConfig{BotAccount: "10001", GroupTriggers: []string{"嘉然", "然然"}}.WithDefaults()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	for _, tc := range []struct {
+		label string
+		event MessageEvent
+	}{
+		{"群聊", MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1", SelfID: "10001"}},
+		{"私聊", MessageEvent{Kind: EventKindPrivate, UserID: "u1", MessageID: "m1", SelfID: "10001"}},
+	} {
+		prompt := runtime.systemPrompt(tc.event, nil)
+		if !strings.Contains(prompt, promptAliasPrefix) {
+			t.Fatalf("%s缺少称呼段：%q", tc.label, prompt)
+		}
+		for _, alias := range []string{`"嘉然"`, `"然然"`} {
+			if !strings.Contains(prompt, alias) {
+				t.Fatalf("%s没有列出别名 %s", tc.label, alias)
+			}
+		}
+	}
+	// 群聊独有的那两段不能跟着漏进私聊。
+	private := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "u1", MessageID: "m1"}, nil)
+	for _, groupOnly := range []string{promptGroupScope, promptGroupOwnerDistinction} {
+		if strings.Contains(private, groupOnly) {
+			t.Fatalf("群聊专用段落漏进了私聊：%q", groupOnly)
+		}
+	}
+	// 触发词列表为空时不注入这段，不要凭空编一个称呼出来。
+	// （WithDefaults 会补上默认触发词，所以这里直接验拼装函数。）
+	if quotedPromptItems(nil) != "" {
+		t.Fatal("空触发词列表不该拼出别名")
+	}
+}

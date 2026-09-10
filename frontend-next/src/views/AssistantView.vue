@@ -488,14 +488,14 @@
                 <AppSelect
                   :model-value="roleSelectionValue(role.key)"
                   :options="channelOptionsFor(role.key)"
-				  :disabled="roleForm[role.key]?.follow_chat"
-                  :placeholder="roleForm[role.key]?.follow_chat ? '跟随对话提供商' : '请选择提供商 / 分组'"
+                  placeholder="请选择提供商 / 分组"
                   @update:model-value="(value) => setRoleChannel(role.key, value)"
                 />
                 <AppSelect
                   :model-value="roleModelValue(role.key)"
                   :options="modelOptionsFor(role.key)"
-                  placeholder="请选择模型（必填）"
+                  :disabled="roleForm[role.key]?.follow_chat"
+                  :placeholder="roleForm[role.key]?.follow_chat ? '跟随对话模型' : '请选择模型（必填）'"
                   @update:model-value="(value) => setRoleModel(role.key, value)"
                 />
                 <button
@@ -528,7 +528,8 @@
                 </template>
               </div>
               <p class="muted" style="margin: 0; font-size: 12.5px">
-                视觉理解可在模型列表选择“跟随对话”，使用当前对话模型及后备路由；也可指定独立视觉模型。其他用途须明确选择提供商和模型。
+                除「对话」外，每个用途都可以在提供商一栏选「跟随对话」，直接沿用对话选定的提供商、模型和后备路由，模型一栏随之锁定；也可以单独指定提供商和模型。
+                图片生成选择跟随对话时，对话模型本身必须支持出图。
               </p>
             </div>
           </section>
@@ -973,26 +974,10 @@
               <div class="field wide">
                 <div class="field-head">
                   <label for="bot-prompt">基础人设</label>
-                  <button class="btn small" type="button" :disabled="personaBusy" @click="togglePersonaComposer">
+                  <button class="btn small" type="button" :disabled="personaBusy" @click="openPersonaComposer">
                     <Sparkles :size="14" aria-hidden="true" />
-                    {{ personaComposerOpen ? "收起生成器" : "AI 生成" }}
+                    AI 生成
                   </button>
-                </div>
-                <div v-if="personaComposerOpen" class="persona-composer">
-                  <textarea
-                    v-model="personaDraft"
-                    class="textarea"
-                    rows="2"
-                    placeholder="描述你想要的角色，例如：一个爱吐槽但很靠谱的技术群管理员"
-                    @keydown.ctrl.enter.prevent="runPersonaGenerate"
-                    @keydown.meta.enter.prevent="runPersonaGenerate"
-                  ></textarea>
-                  <div class="cluster">
-                    <button class="btn primary small" type="button" :disabled="personaBusy || !personaDraft.trim()" @click="runPersonaGenerate">
-                      {{ personaBusy ? "生成中…" : form.system_prompt?.trim() ? "按需求改写" : "生成人设" }}
-                    </button>
-                    <span class="hint">用当前启用的模型和接话设置生成；已有人设时在原文基础上改写。</span>
-                  </div>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
                 <div v-if="personaPrevious" class="cluster">
@@ -1474,6 +1459,57 @@
       @close="relayManagerOpen = false"
       @saved="onMessageRelaysSaved"
     />
+
+    <Modal
+      v-if="personaComposerOpen"
+      :title="form?.system_prompt?.trim() ? '按需求改写人设' : 'AI 生成人设'"
+      @close="closePersonaComposer"
+    >
+      <div class="stack" style="gap: 12px">
+        <div class="field">
+          <label for="persona-draft">想要什么样的角色</label>
+          <textarea
+            id="persona-draft"
+            ref="personaDraftInput"
+            v-model="personaDraft"
+            class="textarea"
+            rows="4"
+            placeholder="描述你想要的角色，例如：一个爱吐槽但很靠谱的技术群管理员"
+            @keydown.ctrl.enter.prevent="runPersonaGenerate"
+            @keydown.meta.enter.prevent="runPersonaGenerate"
+          ></textarea>
+          <span class="hint">
+            {{ form?.system_prompt?.trim() ? "已有人设，会在原文基础上按这句需求改写，仍然成立的部分保留。" : "写一句话就行，模型会补齐身份、性格和说话方式。" }}
+          </span>
+        </div>
+        <div class="field">
+          <label>用哪个模型写</label>
+          <div class="persona-composer-route">
+            <AppSelect
+              :model-value="personaChannelValue"
+              :options="personaChannelOptions"
+              placeholder="请选择提供商 / 分组"
+              @update:model-value="setPersonaChannel"
+            />
+            <AppSelect
+              :model-value="personaModelValue"
+              :options="personaModelOptions"
+              :disabled="!personaRoute"
+              :placeholder="personaRoute ? '请选择模型' : '跟随对话模型'"
+              @update:model-value="setPersonaModel"
+            />
+          </div>
+          <span class="hint">默认用对话那一档的提供商和模型；也可以单独指定一个更会写文案的来起草。</span>
+        </div>
+        <p class="muted" style="margin: 0; font-size: 12.5px">生成结果会填进「基础人设」，保存配置后才生效，不满意可以撤销。</p>
+      </div>
+      <template #footer>
+        <button class="btn small" type="button" :disabled="personaBusy" @click="closePersonaComposer">取消</button>
+        <button class="btn primary small" type="button" :disabled="personaBusy || !personaDraft.trim()" @click="runPersonaGenerate">
+          {{ personaBusy ? "生成中…" : form?.system_prompt?.trim() ? "按需求改写" : "生成人设" }}
+        </button>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -1530,6 +1566,7 @@ import { participationFromConfig, type ParticipationPreferences } from "../parti
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
+import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import SecretField from "../components/SecretField.vue";
 import { pushStatusSnapshot, stream } from "../stream";
@@ -1541,6 +1578,7 @@ const form = ref<BotProfileConfig | null>(null);
 const loading = ref(true);
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
+const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
 const personaBusy = ref(false);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const personaPrevious = ref("");
@@ -2372,8 +2410,59 @@ const modelRoleRows: { key: RoleKey; label: string }[] = [
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
 
+// 生成人设时用哪个提供商和模型。undefined 表示跟随对话那一档，和「模型分配」里的
+// 「跟随对话」是同一个意思，也是原来唯一的行为——想换一个更会写文案的模型来起草人设
+// 以前做不到，只能先把对话那一档改掉、生成完再改回去。
+const personaRoute = ref<RoleRoute | undefined>(undefined);
+
+const personaChannelOptions = computed<AppSelectOption[]>(() => [
+  { value: FOLLOW_CHAT, label: "跟随对话", hint: "用对话那一档的提供商和模型来写" },
+  ...channelOptionsFor("chat")
+]);
+
+const personaChannelValue = computed(() => (personaRoute.value ? routeSelectionValue(personaRoute.value) : FOLLOW_CHAT));
+
+const personaModelOptions = computed<AppSelectOption[]>(() =>
+  personaRoute.value ? modelOptionsFor("chat", personaRoute.value) : []
+);
+
+const personaModelValue = computed(() => personaRoute.value?.model ?? "");
+
+function setPersonaChannel(value: string): void {
+  if (!value) return;
+  if (value === FOLLOW_CHAT) {
+    personaRoute.value = undefined;
+    return;
+  }
+  const model = personaRoute.value?.model ?? "";
+  personaRoute.value = value.startsWith(GROUP_PREFIX)
+    ? { group: value.slice(GROUP_PREFIX.length), model }
+    : { profile_id: value, model };
+  // 换了提供商之后原来那个模型多半不在这一家里，就近挑一个能用的，别留着一个报错的组合。
+  const options = personaModelOptions.value.filter((option) => option.value);
+  if (!options.some((option) => option.value === model)) {
+    setPersonaModel(options[0]?.value ?? "");
+  }
+}
+
+function setPersonaModel(value: string): void {
+  if (!personaRoute.value) return;
+  if (value.includes(MODEL_PAIR_SEP)) {
+    const [profileID, model] = value.split(MODEL_PAIR_SEP);
+    personaRoute.value = { profile_id: profileID, model };
+    return;
+  }
+  personaRoute.value.model = value;
+}
+
 // 下拉里分组选项用 group: 前缀编码，与单渠道的 profile id 区分。
 const GROUP_PREFIX = "group:";
+
+// 「跟随对话」是提供商一栏的一个特殊值：选中后这一档不自己绑提供商和模型，运行时
+// 直接用对话那一档的绑定（含后备路由）。它以前藏在视觉理解的模型下拉里，只有那一
+// 个用途有；实际上每个用途都需要——不然「我就是要跟着对话走」这件事在界面上没法表达，
+// 只能靠「什么都不填」隐式回落，改了对话之后也看不出哪些用途跟着变了。
+const FOLLOW_CHAT = "__follow_chat__";
 
 function llmProviderLabel(provider: LLMConfig["provider"]): string {
   const labels: Record<LLMConfig["provider"], string> = {
@@ -2498,6 +2587,17 @@ function channelGroups(): { name: string; count: number }[] {
 
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   const base: AppSelectOption[] = [];
+  // 对话是被跟随的那一档，不能跟随自己。
+  if (role !== "chat") {
+    base.push({
+      value: FOLLOW_CHAT,
+      label: "跟随对话",
+      hint:
+        role === "image"
+          ? "沿用对话的提供商与模型；对话模型本身要支持出图"
+          : "沿用对话选定的提供商、模型和后备路由"
+    });
+  }
   for (const group of channelGroups()) {
     base.push({
       value: GROUP_PREFIX + group.name,
@@ -2550,10 +2650,11 @@ function crossProviderModelOptions(role: RoleKey): AppSelectOption[] {
 }
 
 function modelOptionsFor(role: RoleKey, selection: RoleRoute | undefined = roleForm.value[role]): AppSelectOption[] {
-	const follow: AppSelectOption[] = role === "vision" && selection === roleForm.value[role] ? [{value:"__follow_chat__",label:"跟随对话",hint:"使用当前对话模型及后备路由；对话模型需要支持图片"}] : [];
-	const profiles = selectedRoleProfiles(role, selection);
-	if (profiles.length === 0) {
-		return [...follow,...crossProviderModelOptions(role)];
+  // 跟随对话时模型由对话那一档决定，这里没有可选项。
+  if (selection?.follow_chat) return [];
+  const profiles = selectedRoleProfiles(role, selection);
+  if (profiles.length === 0) {
+    return crossProviderModelOptions(role);
   }
   const models = new Map<string, { model: LLMModelInfo; compatibility: ModelCompatibility }>();
   for (const profile of profiles) {
@@ -2571,7 +2672,7 @@ function modelOptionsFor(role: RoleKey, selection: RoleRoute | undefined = roleF
       });
     }
   }
-	const options: AppSelectOption[] = [...follow];
+  const options: AppSelectOption[] = [];
 	const candidates = [...models.values()].sort(
     (a, b) => compatibilityRank(a.compatibility) - compatibilityRank(b.compatibility)
   );
@@ -2624,7 +2725,8 @@ async function refreshLLMChannelCapabilities(channels: LLMConfig[]): Promise<voi
 }
 
 function roleModelValue(role: RoleKey): string {
-	if (roleForm.value[role]?.follow_chat) return "__follow_chat__";
+  // 跟随对话时模型一栏是锁定的，留空让 placeholder 说明它跟着谁走。
+  if (roleForm.value[role]?.follow_chat) return "";
   return roleForm.value[role]?.model ?? "";
 }
 
@@ -2634,6 +2736,7 @@ function roleSelectionValue(role: RoleKey): string {
 
 function routeSelectionValue(route?: RoleRoute): string {
   if (!route) return "";
+  if (route.follow_chat) return FOLLOW_CHAT;
   return route.group ? GROUP_PREFIX + route.group : (route.profile_id ?? "");
 }
 
@@ -2641,9 +2744,15 @@ function setRoleChannel(role: RoleKey, value: string): void {
   if (!value) {
     return;
   }
+  if (value === FOLLOW_CHAT) {
+    // 跟随对话不带自己的模型和后备：这两样都从对话那一档现取，留着只会在界面上
+    // 显示一份早就不生效的旧绑定。
+    roleForm.value[role] = { model: "", follow_chat: true };
+    return;
+  }
   const current = roleForm.value[role];
-  const model = current?.model ?? "";
-  const fallbacks = current?.fallbacks;
+  const model = current?.follow_chat ? "" : (current?.model ?? "");
+  const fallbacks = current?.follow_chat ? undefined : current?.fallbacks;
   if (value.startsWith(GROUP_PREFIX)) {
     roleForm.value[role] = { group: value.slice(GROUP_PREFIX.length), model, fallbacks };
   } else {
@@ -2709,10 +2818,6 @@ function profileCanRouteRoleModel(profile: LLMConfig, role: RoleKey, modelID: st
 }
 
 function setRoleModel(role: RoleKey, value: string): void {
-	if (role === "vision" && value === "__follow_chat__") {
-		roleForm.value[role] = {model:"",follow_chat:true};
-		return;
-	}
   if (value.includes(MODEL_PAIR_SEP)) {
     // 跨 Provider 选择：一次确定 Provider 和模型。
     const [profileID, model] = value.split(MODEL_PAIR_SEP);
@@ -2867,8 +2972,15 @@ const promptDefaults = {
     "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 };
 
-function togglePersonaComposer(): void {
-  personaComposerOpen.value = !personaComposerOpen.value;
+function openPersonaComposer(): void {
+  personaComposerOpen.value = true;
+  void nextTick(() => personaDraftInput.value?.focus());
+}
+
+function closePersonaComposer(): void {
+  // 生成中不让关：请求还在路上，关掉之后结果会填进一个用户以为已经放弃的表单。
+  if (personaBusy.value) return;
+  personaComposerOpen.value = false;
 }
 
 async function runPersonaGenerate(): Promise<void> {
@@ -2877,12 +2989,13 @@ async function runPersonaGenerate(): Promise<void> {
   personaBusy.value = true;
   try {
     const current = form.value.system_prompt?.trim() || "";
-    const chatRole = roleForm.value.chat;
+    // 没单独指定就跟随对话那一档，和界面上「跟随对话」那个选项对应。
+    const route = personaRoute.value ?? roleForm.value.chat;
     const result = await generatePersona(description, form.value.name, current, {
       response_mode: form.value.response_mode,
-      profile_id: chatRole?.profile_id || chatRole?.provider_id,
-      group: chatRole?.group,
-      model: chatRole?.model_id || chatRole?.model
+      profile_id: route?.profile_id || route?.provider_id,
+      group: route?.group,
+      model: route?.model_id || route?.model
     });
     const persona = result.persona?.trim();
     if (!persona) {
@@ -2939,7 +3052,8 @@ async function save(): Promise<void> {
   }
   for (const row of modelRoleRows) {
     const role = roleForm.value[row.key];
-	if (row.key === "vision" && role?.follow_chat) continue;
+    // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
+    if (row.key !== "chat" && role?.follow_chat) continue;
     if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
       editorTab.value = "model";
       toastError(`${row.label}必须选择提供商和模型`);
@@ -2968,9 +3082,12 @@ async function save(): Promise<void> {
   try {
     const modelRoles: BotProfileConfig["model_roles"] = {};
     for (const [key, role] of Object.entries(roleForm.value)) {
-		if (key === "vision" && role?.follow_chat) { modelRoles[key]={model:"",follow_chat:true};continue; }
-		if (role && (role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()) {
-			modelRoles[key] = {
+      if (key !== "chat" && role?.follow_chat) {
+        modelRoles[key] = { model: "", follow_chat: true };
+        continue;
+      }
+      if (role && (role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()) {
+        modelRoles[key] = {
         profile_id: role.profile_id,
         group: role.group,
         model: role.model.trim(),
