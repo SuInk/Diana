@@ -85,3 +85,46 @@ func TestLegacyPersonaImportIsIdempotent(t *testing.T) {
 		t.Fatal("normalizing a long persona changed its content again")
 	}
 }
+
+// 继承来的人设里那段旧风格模板，不能只靠逐字节后缀来摘。
+//
+// 追加进去的文案会落到用户手上的编辑框里，改一个标点就再也匹配不上；模板本身也
+// 会随版本改写，老配置里存的是上一版的正文。两种情况都会让群人设叠出两段
+// 「默认表达风格为……」——线上真的见到过。
+func TestInheritedPersonaStripsEditedAndStackedStyleTemplates(t *testing.T) {
+	const base = "你叫嘉然，喜欢音乐。"
+	template := func(style ReplyStyle) string {
+		return strings.ReplaceAll(style.stylePrompt(), catgirlNoActionRule+"\n", "")
+	}
+	edited := strings.Split(template(ReplyStyleHuman), "\n")
+	edited[1] += "（这句是我自己加的）"
+	editedHuman := strings.Join(edited, "\n")
+
+	// 逐字节没动过：老路径照旧。
+	if got := inheritedPersonaForStyleMigration(base + "\n\n" + template(ReplyStyleGentle)); got != base {
+		t.Fatalf("原样追加的模板没被摘掉：%q", got)
+	}
+	// 正文被改过一个字：首行还在，照样要摘掉。
+	if got := inheritedPersonaForStyleMigration(base + "\n\n" + editedHuman); got != base {
+		t.Fatalf("改过正文就摘不掉了：%q", got)
+	}
+	// 已经叠了两段的老配置：一趟清干净，否则修完还是两段。
+	for name, stacked := range map[string]string{
+		"改过的在里、原样的在外": base + "\n\n" + editedHuman + "\n\n" + template(ReplyStyleCatgirl),
+		"两段都原样":       base + "\n\n" + template(ReplyStyleLively) + "\n\n" + template(ReplyStyleConcise),
+	} {
+		if got := inheritedPersonaForStyleMigration(stacked); got != base {
+			t.Fatalf("%s 的两段模板没清干净：%q", name, got)
+		}
+	}
+
+	// 用户自己写的段落不能误伤，哪怕它谈的也是表达风格。
+	own := base + "\n\n默认表达风格为我自己定的那种：想怎么说就怎么说。"
+	if got := inheritedPersonaForStyleMigration(own); got != own {
+		t.Fatalf("误删了用户自己写的段落：%q", got)
+	}
+	// 整份人设就是一段模板时宁可原样返回：删干净只会留下空人设。
+	if only := template(ReplyStyleConcise); inheritedPersonaForStyleMigration(only) != only {
+		t.Fatalf("把整份人设删空了：%q", only)
+	}
+}

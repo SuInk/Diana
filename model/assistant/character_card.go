@@ -40,15 +40,23 @@ type CharacterCardImport struct {
 	BookName string
 }
 
+// CharacterCardData 是角色卡的文本字段集，字段名和 SillyTavern V2 的 data 一致。
+//
+// 导出它是为了让「生成人设」那条路走同一套拼装：模型交回来的也是一张卡，和导入
+// 进来的卡应当拼成同样形状的人设正文，而不是各写各的。
+type CharacterCardData struct {
+	Name         string `json:"name,omitempty"`
+	Description  string `json:"description,omitempty"`
+	Personality  string `json:"personality,omitempty"`
+	Scenario     string `json:"scenario,omitempty"`
+	FirstMes     string `json:"first_mes,omitempty"`
+	MesExample   string `json:"mes_example,omitempty"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
+}
+
 // sillyTavernCardData 是卡的字段集。V1 在顶层，V2/V3 在 data 下，字段名一致。
 type sillyTavernCardData struct {
-	Name          string `json:"name,omitempty"`
-	Description   string `json:"description,omitempty"`
-	Personality   string `json:"personality,omitempty"`
-	Scenario      string `json:"scenario,omitempty"`
-	FirstMes      string `json:"first_mes,omitempty"`
-	MesExample    string `json:"mes_example,omitempty"`
-	SystemPrompt  string `json:"system_prompt,omitempty"`
+	CharacterCardData
 	CharacterBook *struct {
 		Name    string          `json:"name,omitempty"`
 		Entries json.RawMessage `json:"entries,omitempty"`
@@ -100,6 +108,14 @@ func ParseSillyTavernCharacterCard(raw []byte) (CharacterCardImport, error) {
 		}
 	}
 	return result, nil
+}
+
+// ComposeCharacterCardPersona 把一张卡的文本字段拼成人设正文，供包外复用。
+//
+// 导入的卡和模型生成的卡走的是同一个拼装函数：两边拼出来的正文形状一致，用户
+// 在人设框里看到的东西才不会因为来路不同而两个样。
+func ComposeCharacterCardPersona(card CharacterCardData) string {
+	return composeCharacterCardPrompt(sillyTavernCardData{CharacterCardData: card})
 }
 
 // composeCharacterCardPrompt 把卡的文本字段拼成人设正文。
