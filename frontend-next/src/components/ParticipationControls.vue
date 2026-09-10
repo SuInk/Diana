@@ -18,13 +18,13 @@ const settings = [
     label: "回应提问",
     description: "多确定是在问你，才回应。",
     options: [
-      { value: "off", label: "关闭提问承接", hint: "关闭这一项判断；直接回复和主动闲聊仍按各自规则处理。" },
+      { value: "off", label: "从不回应", hint: "不通过提问相关度触发回应；直接回复和主动闲聊仍按各自规则处理。" },
       { value: "minimal", label: "仅明显指向我", hint: "提问对象非常明确时才承接。" },
       { value: "low", label: "较谨慎", hint: "较确定对方在向机器人提问时才承接。" },
       { value: "medium", label: "适中", hint: "正常承接指向机器人的提问和追问。" },
       { value: "high", label: "较积极", hint: "更容易接住不太明确的提问与追问。" },
       { value: "extreme", label: "很积极", hint: "只有较弱的提问指向，也可能回应。" },
-      { value: "always", label: "不限制相关度", hint: "跳过这一项的评分门槛，仍需满足回答质量要求。" },
+      { value: "always", label: "完全不限制", hint: "不设提问相关度门槛，仍需满足回答质量要求。" },
     ],
   },
   {
@@ -32,13 +32,13 @@ const settings = [
     label: "主动闲聊",
     description: "没人叫你时，多愿意插话。",
     options: [
-      { value: "off", label: "关闭主动闲聊", hint: "不主动插话，回应提问仍可独立生效。" },
+      { value: "off", label: "从不闲聊", hint: "不主动插话，回应提问仍可独立生效。" },
       { value: "minimal", label: "很少插话", hint: "非常适合参与时才开口。" },
       { value: "low", label: "偶尔接话", hint: "比较适合参与时才接一句。" },
       { value: "medium", label: "适度参与", hint: "有合适的话就自然加入。" },
       { value: "high", label: "积极参与", hint: "更容易参与分享和闲聊。" },
       { value: "extreme", label: "频繁参与", hint: "较弱的接话机会也可能开口。" },
-      { value: "always", label: "不限制闲聊评分", hint: "仍受冷却和回答质量要求限制，不是每条必回。" },
+      { value: "always", label: "完全不限制", hint: "不设闲聊评分门槛，仍受冷却和回答质量要求限制，不是每条必回。" },
     ],
   },
   {
