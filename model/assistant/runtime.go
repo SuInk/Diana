@@ -1982,7 +1982,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "error_notice_merged", nil
 		}
-		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, r.effectiveConfigForEvent(event).ErrorReplyPrefix+publicDetail)
+		notice := r.effectiveConfigForEvent(event).ErrorReplyPrefix + publicDetail
+		if rewritten, ok := r.rewriteRejectionNotice(replyCtx, event, err); ok {
+			notice = rewritten
+		}
+		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, notice)
 		if sendErr != nil {
 			// 这条提示自己也没发出去，本轮就不算已经交代过，留给汇总兜底。
 			r.noteErrorNoticeSendFailed(event, publicDetail)
