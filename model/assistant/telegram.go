@@ -830,6 +830,7 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		MentionTargets:  telegramMentionTargets(text, entities, selfID, botUsername),
 		Time:            msg.Date,
 		SelfID:          selfID,
+		SelfUsername:    strings.TrimSpace(botUsername),
 		MessageID:       strconv.FormatInt(msg.MessageID, 10),
 		MessageThreadID: telegramOptionalID(msg.MessageThreadID),
 		RawMessage:      text,
@@ -999,11 +1000,25 @@ func telegramMentionsBot(text string, entities []telegramEntity, selfID, botUser
 			if botUsername == "" {
 				continue
 			}
-			if entity.Offset < 0 || entity.Offset+entity.Length > len(units) {
+			mention, ok := telegramEntityText(units, entity)
+			if !ok {
 				continue
 			}
-			mention := string(utf16.Decode(units[entity.Offset : entity.Offset+entity.Length]))
 			if strings.EqualFold(strings.TrimPrefix(mention, "@"), botUsername) {
+				return true
+			}
+		case "bot_command":
+			// 群里 /cmd@username 是 Telegram 指定机器人的标准写法，但 Bot API
+			// 只给一个 bot_command entity，不会再补 mention。不认这里，发给
+			// 自己的命令就成了「别人的指令」，被当场忽略。
+			if botUsername == "" {
+				continue
+			}
+			command, ok := telegramEntityText(units, entity)
+			if !ok {
+				continue
+			}
+			if _, target, found := strings.Cut(command, "@"); found && strings.EqualFold(target, botUsername) {
 				return true
 			}
 		case "text_mention":
@@ -1014,6 +1029,14 @@ func telegramMentionsBot(text string, entities []telegramEntity, selfID, botUser
 		}
 	}
 	return false
+}
+
+// telegramEntityText 按 entity 的 UTF-16 偏移取原文，越界时返回 false。
+func telegramEntityText(units []uint16, entity telegramEntity) (string, bool) {
+	if entity.Offset < 0 || entity.Length < 0 || entity.Offset+entity.Length > len(units) {
+		return "", false
+	}
+	return string(utf16.Decode(units[entity.Offset : entity.Offset+entity.Length])), true
 }
 
 // telegramDisplayName 取「名 姓」，都没有时回落 username。

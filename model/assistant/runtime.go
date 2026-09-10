@@ -2676,6 +2676,23 @@ type proactiveReplyHistoryItem struct {
 	AgeSeconds *int64            `json:"age_seconds,omitempty"`
 }
 
+// botAliasesForEvent 把平台用户名一起交给路由模型：群消息里写的是
+// @username，只给数字账号的话模型会把发给自己的命令读成别人的。
+func botAliasesForEvent(event MessageEvent, cfg BotConfig) []string {
+	aliases := append([]string(nil), cfg.GroupTriggers...)
+	username := strings.TrimSpace(event.SelfUsername)
+	if username == "" {
+		return aliases
+	}
+	handle := "@" + strings.TrimPrefix(username, "@")
+	for _, alias := range aliases {
+		if strings.EqualFold(strings.TrimSpace(alias), handle) {
+			return aliases
+		}
+	}
+	return append(aliases, handle)
+}
+
 func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proactiveReplyPayload {
 	cfg := r.effectiveConfigForEvent(event)
 	payload := proactiveReplyPayload{
@@ -2684,7 +2701,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		CurrentSender:    strings.TrimSpace(event.SenderNameOrID()),
 		CurrentImages:    imageSegmentCount(event.Segments),
 		BotAccount:       firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
-		BotAliases:       append([]string(nil), cfg.GroupTriggers...),
+		BotAliases:       botAliasesForEvent(event, cfg),
 		RecentImageCount: len(r.localImageEditSourceImages(event)),
 	}
 	if event.Kind == EventKindGroup {
