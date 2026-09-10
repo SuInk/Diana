@@ -64,7 +64,7 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 	text, _ = consumeReplyControlIntent(text)
 	text = strings.TrimSpace(text)
 	// Hold an incomplete metadata prefix until it can be stripped safely.
-	if text == "" || strings.HasPrefix(replySingleMarker, text) || strings.HasPrefix(replyAutoMarker, text) {
+	if text == "" || strings.HasPrefix(replySingleMarker, text) || strings.HasPrefix(replyAutoMarker, text) || strings.HasPrefix(replyLinesPreserveMarker, text) || strings.HasPrefix(replyLinesCompactMarker, text) {
 		return
 	}
 	runes := []rune(text)

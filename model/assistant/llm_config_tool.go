@@ -29,6 +29,7 @@ func (t *dianaLLMConfigTool) Description() string {
 	return `切换 Diana 各个用途使用的模型：对话、视觉理解、意图识别、图片生成，由 role 指定，默认对话。` +
 		`只修改当前消息所属机器人。跨供应商切换时先 list 查看供应商 ID 与模型，再用 provider_id 精确选择；不要猜测同名供应商。` +
 		`改的是机器人的模型分配，不动 provider 的地址和密钥。` +
+		`更新前会实际测试目标模型，失败时保留原配置。图片生成用途会生成一张不发送到聊天的测试图。` +
 		`只有主人明确要求更改机器人自身配置时才能调用；讨论模型、推荐 API 中转、分析别人的 Agent 或模型、用户说「我用某模型」都不得调用。`
 }
 
@@ -100,6 +101,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 		"ok":             true,
 		"bot_profile_id": cfg.ID,
 		"action":         "updated",
+		"tested":         true,
 		"role":           result.Role,
 		"message":        result.Reply,
 		"profile_id":     result.ProfileID,

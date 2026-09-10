@@ -276,6 +276,7 @@ export interface BotProfileConfig {
   natural_reply_split_enabled?: boolean;
   /** 连续消息合并置信度百分比，1–100；未设置时默认 75。 */
   reply_merge_confidence_percent?: number;
+  reply_preserve_line_breaks?: boolean;
   social_reply_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
@@ -476,6 +477,7 @@ export interface BotGroupConfig {
   natural_reply_split_enabled?: boolean;
   /** 本群连续消息合并置信度百分比；未设置时跟随机器人。 */
   reply_merge_confidence_percent?: number;
+  reply_preserve_line_breaks?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */

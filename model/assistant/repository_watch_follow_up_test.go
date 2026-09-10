@@ -71,7 +71,7 @@ func TestRepositoryWatchFollowUpJudgesEachTargetSeparately(t *testing.T) {
 	}
 }
 
-func TestRepositoryWatchFollowUpUsesNaturalChatSegmentation(t *testing.T) {
+func TestRepositoryWatchFollowUpUsesExplicitChatSegmentation(t *testing.T) {
 	withFastSendTiming(t)
 	reply := "这次看起来是在把桌面端自动更新整套串起来喵，包含各平台的发布产物、更新提示和安装流程，Linux 还补了专门的应用逻辑喵" + notificationSplitMarker +
 		"范围不小，合并前最好重点过一遍更新包校验、版本匹配和失败回退这些边界喵"

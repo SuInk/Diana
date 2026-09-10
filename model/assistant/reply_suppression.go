@@ -52,6 +52,7 @@ type replyControlIntent struct {
 	RefuseCurrent       bool
 	SuppressCurrentUser bool
 	DeliveryMode        replyDeliveryMode
+	LineBreakMode       replyLineBreakMode
 }
 
 // ReplySuppression is a restart-safe temporary refusal to answer one chat user.
@@ -119,12 +120,13 @@ type botReplyLoopClassificationPayload struct {
 }
 
 func consumeReplyControlIntent(reply string) (string, replyControlIntent) {
-	reply, deliveryMode := consumeReplyDeliveryMode(reply)
+	reply, deliveryMode, lines := consumeReplyFormatting(reply)
 	// 拒答标志参与计数但不展示；账号处置标志仅保留旧版兼容解码。
 	intent := replyControlIntent{
 		RefuseCurrent:       strings.Contains(reply, replyRefusalMarker),
 		SuppressCurrentUser: strings.Contains(reply, replySuppressionMarker),
 		DeliveryMode:        deliveryMode,
+		LineBreakMode:       lines,
 	}
 	reply = strings.ReplaceAll(reply, replyRefusalMarker, "")
 	reply = strings.ReplaceAll(reply, replySuppressionMarker, "")
@@ -147,7 +149,7 @@ func restoreReplyControlIntent(reply string, intent replyControlIntent) string {
 	if intent.SuppressCurrentUser {
 		reply += replySuppressionMarker
 	}
-	return replyDeliveryMarker(intent.DeliveryMode) + reply
+	return replyDeliveryMarker(intent.DeliveryMode) + replyLineBreakMarker(intent.LineBreakMode) + reply
 }
 
 func withReplySuppressionSendGuard(ctx context.Context) context.Context {

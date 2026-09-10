@@ -1325,6 +1325,16 @@ func cleanupLocalMediaFile(path string) {
 	if path == "." || !filepath.IsAbs(path) {
 		return
 	}
+	mediaFileHolds.Lock()
+	defer mediaFileHolds.Unlock()
+	if hold := mediaFileHolds.files[path]; hold != nil {
+		hold.cleanup = true
+		return
+	}
+	removeLocalMediaFile(path)
+}
+
+func removeLocalMediaFile(path string) {
 	_ = os.Remove(path)
 
 	parent := filepath.Dir(path)

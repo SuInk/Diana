@@ -400,7 +400,7 @@ func TestRestoredLLMConfigUsesStructuredAgentTool(t *testing.T) {
 		return []llm.ModelInfo{{ID: "old-model"}, {ID: "gpt-4.1-mini"}}, nil
 	})
 
-	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
+	output, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
 	// 换模型改的是机器人的模型分配，LLM provider 配置保持原样。
 	if err != nil || !strings.Contains(output, "已把对话模型换成 gpt-4.1-mini") || store.Current().Model != "old-model" {
 		t.Fatalf("output=%q err=%v config=%#v", output, err, store.Current())

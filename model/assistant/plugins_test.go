@@ -734,7 +734,7 @@ func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 		return []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "example-pro-model", MaxOutputTokens: 8192}}, nil
 	})
 
-	output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"}).Run(
+	output, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"}).Run(
 		context.Background(), map[string]any{"operation": "update", "model": "example-pro-model"})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -785,7 +785,7 @@ func TestDianaLLMConfigToolRefusesUnconfiguredProvider(t *testing.T) {
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "gemini-2.5-pro"}}, nil
 	})
-	_, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+	_, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
 		context.Background(), map[string]any{"operation": "update", "provider": "gemini", "model": "gemini-2.5-pro"})
 	if err == nil || !strings.Contains(err.Error(), "没有配置 gemini 的 provider") {
 		t.Fatalf("err = %v", err)
@@ -816,7 +816,7 @@ func TestDianaLLMConfigToolFollowsModelToItsProfile(t *testing.T) {
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "claude-sonnet"}}, nil
 	})
-	if _, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+	if _, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
 		context.Background(), map[string]any{"operation": "update", "model": "claude-sonnet"}); err != nil {
 		t.Fatal(err)
 	}
@@ -847,7 +847,7 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "gpt-4.1-mini"}}, nil
 	})
-	output, err := newDianaLLMConfigTool(runtime, MessageEvent{UserID: "10001"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
+	output, err := newTestLLMConfigTool(runtime, MessageEvent{UserID: "10001"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -888,7 +888,7 @@ func TestDianaLLMConfigToolRejectsModelOutsideList(t *testing.T) {
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "example-chat-model"}}, nil
 	})
-	_, err := newDianaLLMConfigTool(runtime, MessageEvent{UserID: "10001"}).Run(context.Background(), map[string]any{"model": "gemini-9-ultra"})
+	_, err := newTestLLMConfigTool(runtime, MessageEvent{UserID: "10001"}).Run(context.Background(), map[string]any{"model": "gemini-9-ultra"})
 	if err == nil || !strings.Contains(err.Error(), "不在") {
 		t.Fatalf("error = %v", err)
 	}
@@ -909,7 +909,7 @@ func TestDianaLLMConfigToolRejectsNonOwner(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
-	_, err := newDianaLLMConfigTool(runtime, MessageEvent{UserID: "20002"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
+	_, err := newTestLLMConfigTool(runtime, MessageEvent{UserID: "20002"}).Run(context.Background(), map[string]any{"model": "gpt-4.1-mini"})
 	if err == nil || !strings.Contains(err.Error(), "只有主人") {
 		t.Fatalf("error = %v", err)
 	}
@@ -1349,7 +1349,7 @@ func TestDianaLLMConfigToolRebindsEveryModelRole(t *testing.T) {
 	}
 	for _, item := range cases {
 		runtime, _ := newRuntime()
-		output, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+		output, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
 			context.Background(), map[string]any{"operation": "update", "role": item.role, "model": item.model})
 		if err != nil {
 			t.Fatalf("role %s: %v", item.role, err)
@@ -1385,7 +1385,7 @@ func TestDianaLLMConfigToolBindsNonChatRoleWithoutTouchingChat(t *testing.T) {
 	runtime.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "chat-model"}, {ID: "see-model"}}, nil
 	})
-	if _, err := newDianaLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
+	if _, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}).Run(
 		context.Background(), map[string]any{"operation": "update", "role": "vision", "model": "see-model"}); err != nil {
 		t.Fatal(err)
 	}

@@ -151,6 +151,7 @@ type MessageEvent struct {
 	// chatInReply 表示本次主动回复来自闲聊插话路径，回复阶段据此收敛语气和长度。
 	chatInReply            bool
 	replyDeliveryMode      replyDeliveryMode
+	replyLineBreakMode     replyLineBreakMode
 	replyAuditImageContext string
 	avatarMatchContext     string
 	imageResolutionRun     bool
@@ -511,6 +512,7 @@ type BotConfig struct {
 	MaxInputChars              int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
+	ReplyPreserveLineBreaks    *bool           `json:"reply_preserve_line_breaks,omitempty"`
 	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -689,6 +691,7 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
+	ReplyPreserveLineBreaks *bool `json:"reply_preserve_line_breaks,omitempty"`
 	// Zero follows the bot's current merge threshold.
 	ReplyMergeConfidencePercent int      `json:"reply_merge_confidence_percent,omitempty"`
 	MarkedBotIDs                []string `json:"marked_bot_ids,omitempty"`
@@ -852,6 +855,7 @@ type ConfigPayload struct {
 	MaxInputChars              int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
+	ReplyPreserveLineBreaks    *bool           `json:"reply_preserve_line_breaks,omitempty"`
 	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -1859,6 +1863,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxReplyChars:                     cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
+		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
@@ -2043,6 +2048,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxReplyChars:                   payload.MaxReplyChars,
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:     payload.ReplyMergeConfidencePercent,
+		ReplyPreserveLineBreaks:         copyBoolPointer(payload.ReplyPreserveLineBreaks),
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
