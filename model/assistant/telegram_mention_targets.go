@@ -35,6 +35,25 @@ func telegramMentionTargets(text string, entities []telegramEntity, selfID, botU
 					m.UserID = selfID
 				}
 			}
+		case "bot_command":
+			// /cmd@username 是群里指定机器人的标准写法，Bot API 只给一个
+			// bot_command entity，不会再补 mention。
+			command, ok := telegramEntityText(units, e)
+			if !ok || e.Length <= 0 {
+				continue
+			}
+			_, username, found := strings.Cut(command, "@")
+			if !found || username == "" {
+				continue
+			}
+			m.Username = username
+			if botUsername != "" {
+				m.Target = "other"
+				if strings.EqualFold(m.Username, strings.TrimPrefix(botUsername, "@")) {
+					m.Target = "self"
+					m.UserID = selfID
+				}
+			}
 		default:
 			continue
 		}
