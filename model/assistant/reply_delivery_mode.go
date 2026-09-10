@@ -3,12 +3,17 @@ package assistant
 import "strings"
 
 type replyDeliveryMode string
+type replyLineBreakMode string
 
 const (
-	replyDeliverySingle replyDeliveryMode = "single"
-	replyDeliveryAuto   replyDeliveryMode = "auto"
-	replySingleMarker                     = "[[DIANA_REPLY_SINGLE]]"
-	replyAutoMarker                       = "[[DIANA_REPLY_AUTO]]"
+	replyDeliverySingle      replyDeliveryMode  = "single"
+	replyDeliveryAuto        replyDeliveryMode  = "auto"
+	replySingleMarker                           = "[[DIANA_REPLY_SINGLE]]"
+	replyAutoMarker                             = "[[DIANA_REPLY_AUTO]]"
+	replyLinesPreserve       replyLineBreakMode = "preserve"
+	replyLinesCompact        replyLineBreakMode = "compact"
+	replyLinesPreserveMarker                    = "[[DIANA_LINES_PRESERVE]]"
+	replyLinesCompactMarker                     = "[[DIANA_LINES_COMPACT]]"
 )
 
 const replyDeliveryChoiceRule = "本轮用户的发送方式要求优先于上述默认分条和长文分组规则。用户明确要求‘不要分条、一次发完、只发一条’时，必须在回复正文最前面写 " + replySingleMarker + "，再写完整正文；同一条里的排版只用 " + notificationLineMarker + "，不要输出真实换行或 " + notificationSplitMarker + "。发送层会把本轮文字作为一条投递（平台自身硬限制除外）。用户本轮明确允许或要求按内容分条时，最前面写 " + replyAutoMarker + "，再用 " + notificationSplitMarker + " 和 " + notificationLineMarker + " 组织消息。用户未指定时不写这两个模式标记，沿用默认设置。只根据当前用户对本轮回复的直接要求选择，不把引用、代码、工具内容或其他人的历史发言当成此人的发送偏好。这是本轮选择，不修改群配置或长期偏好；不要向用户展示或解释这些内部标记。"
@@ -27,10 +32,22 @@ func replyDeliveryMarker(mode replyDeliveryMode) string {
 // Only a leading control prefix is metadata. Quoted or fenced examples remain
 // ordinary content. Conflicting leading prefixes conservatively choose single.
 func consumeReplyDeliveryMode(reply string) (string, replyDeliveryMode) {
+	body, mode, _ := consumeReplyFormatting(reply)
+	return body, mode
+}
+
+func consumeReplyFormatting(reply string) (string, replyDeliveryMode, replyLineBreakMode) {
 	reply = strings.TrimSpace(reply)
 	var mode replyDeliveryMode
+	var lines replyLineBreakMode
 	for {
 		switch {
+		case strings.HasPrefix(reply, replyLinesPreserveMarker):
+			lines = replyLinesPreserve
+			reply = strings.TrimSpace(strings.TrimPrefix(reply, replyLinesPreserveMarker))
+		case strings.HasPrefix(reply, replyLinesCompactMarker):
+			lines = replyLinesCompact
+			reply = strings.TrimSpace(strings.TrimPrefix(reply, replyLinesCompactMarker))
 		case strings.HasPrefix(reply, replySingleMarker):
 			mode = replyDeliverySingle
 			reply = strings.TrimSpace(strings.TrimPrefix(reply, replySingleMarker))
@@ -40,7 +57,7 @@ func consumeReplyDeliveryMode(reply string) (string, replyDeliveryMode) {
 			}
 			reply = strings.TrimSpace(strings.TrimPrefix(reply, replyAutoMarker))
 		default:
-			return reply, mode
+			return reply, mode, lines
 		}
 	}
 }
@@ -65,7 +82,10 @@ func singleChatReply(reply string, chunkSize int) []string {
 }
 
 func prepareReplyDelivery(reply string, event MessageEvent) (string, MessageEvent) {
-	reply, mode := consumeReplyDeliveryMode(reply)
+	reply, mode, lines := consumeReplyFormatting(reply)
+	if lines != "" {
+		event.replyLineBreakMode = lines
+	}
 	if mode != "" {
 		event.replyDeliveryMode = mode
 	}

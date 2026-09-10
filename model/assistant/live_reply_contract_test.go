@@ -32,6 +32,7 @@ func replyContractRequest(array bool) llm.GenerateRequest {
 	prompt := defaultSystemPrompt + "\n" + ReplyStyleHuman.prompt(true, personaVoice{}) + "\n" + ReplyStyleHuman.closingAnchor()
 	// Preserve the earlier A/B experiment's prompt baseline.
 	prompt = strings.ReplaceAll(prompt, replyDocumentDeliveryRule, "")
+	prompt = strings.ReplaceAll(prompt, replyLineBreakChoiceRule, "")
 	prompt = strings.ReplaceAll(prompt, replyDeliveryChoiceRule, "")
 	field := "content"
 	property := map[string]any{"type": "string", "description": "给用户看的最终自然语言回复，必填且不能为空。不要写成 JSON，也不要出现内部协议字段。"}

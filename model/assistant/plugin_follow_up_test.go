@@ -47,7 +47,7 @@ func TestPluginFollowUpAddsNaturalComment(t *testing.T) {
 	}
 }
 
-func TestPluginFollowUpUsesNaturalChatSegmentation(t *testing.T) {
+func TestPluginFollowUpUsesExplicitChatSegmentation(t *testing.T) {
 	withFastSendTiming(t)
 	reply := "先核对更新包校验和版本匹配喵" + notificationSplitMarker + "失败时还要确认能够回退到旧版本喵"
 	channel := &recordingChannel{}
