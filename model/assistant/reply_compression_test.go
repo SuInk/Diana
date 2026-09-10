@@ -43,6 +43,32 @@ func compressionTestRuntime(provider *compressionTestProvider) *Runtime {
 	return NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 }
 
+// 出站最后一道闸：被渲染成人话的工具调用不是回复正文，宁可整轮按失败记账，也不能
+// 发出去。生产事故（2026-09-09 群聊）就是下面这一整行被当成回复发进了群。
+func TestRenderedToolCallNeverLeavesTheOutboundPath(t *testing.T) {
+	leaked := `调用工具：agent.finalize，参数：{"content":"对，确实会跳！\nWARP 用的本来就是 Cloudflare 的动态共享 IP 池，纯纯是负优化喵～"}`
+	for _, reply := range []string{leaked, replySingleMarker + leaked} {
+		p := &compressionTestProvider{err: errors.New("must not call")}
+		got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, reply)
+		if !errors.Is(err, errRenderedToolCallReply) {
+			t.Fatalf("渲染出来的工具调用应被拦下，实际 got=%q err=%v", got, err)
+		}
+		if got != "" {
+			t.Fatalf("拦截后不能带出任何正文：%q", got)
+		}
+	}
+}
+
+// 正常说到「调用工具」的句子不能被误拦。
+func TestNormalReplyMentioningToolsStillSends(t *testing.T) {
+	p := &compressionTestProvider{err: errors.New("must not call")}
+	reply := "我先调用工具查一下再回你喵～"
+	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, reply)
+	if err != nil || got != reply {
+		t.Fatalf("正常回复被误拦：%q %v", got, err)
+	}
+}
+
 func TestReplyCompressionSkipsWithinBudget(t *testing.T) {
 	for _, limit := range []int{0, 4, 10} {
 		p := &compressionTestProvider{err: errors.New("must not call")}
