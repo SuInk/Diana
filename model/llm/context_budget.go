@@ -75,7 +75,7 @@ func fitMessagesToTokenBudgetDetailed(messages []Message, budget int64) ([]Messa
 	}
 
 	candidates := make([]tokenBudgetCandidate, 0, len(messages))
-	lastIndex := len(messages) - 1
+	lastIndex := currentInputIndex(messages)
 	for index, message := range messages {
 		priority := effectiveMessagePriority(message, index == lastIndex)
 		candidates = append(candidates, tokenBudgetCandidate{index: index, priority: priority, cost: estimateMessageTokens(message)})
@@ -221,7 +221,7 @@ func candidatesWithPriority(candidates []tokenBudgetCandidate, minimum, maximum 
 func contextRetentionTargets(messages []Message, budget, available int64) (int64, int64) {
 	hasMemory := false
 	hasHistory := false
-	lastIndex := len(messages) - 1
+	lastIndex := currentInputIndex(messages)
 	for index, message := range messages {
 		switch effectiveMessagePriority(message, index == lastIndex) {
 		case MessagePriorityMemory:
@@ -339,8 +339,11 @@ func lowerProtectedImageDetailToFit(messages []Message, budget int64) []Message 
 	if estimateRequiredMessagesTokens(messages) <= budget {
 		return messages
 	}
+	if PlanInputBudget(GenerateRequest{Messages: messages}, budget).ImageExcess <= 0 {
+		return messages
+	}
 	out := append([]Message(nil), messages...)
-	lastIndex := len(out) - 1
+	lastIndex := currentInputIndex(out)
 	for index := range out {
 		if effectiveMessagePriority(out[index], index == lastIndex) < MessagePriorityPlugin {
 			continue
@@ -363,7 +366,7 @@ func lowerProtectedImageDetailToFit(messages []Message, budget int64) []Message 
 }
 
 func estimateRequiredMessagesTokens(messages []Message) int64 {
-	lastIndex := len(messages) - 1
+	lastIndex := currentInputIndex(messages)
 	var total int64
 	for index, message := range messages {
 		if effectiveMessagePriority(message, index == lastIndex) >= MessagePrioritySystem {
@@ -476,6 +479,16 @@ func selectRequiredMessagesProportionally(messages []Message, required []struct 
 		remainingCost -= item.cost
 	}
 	return budget
+}
+
+// Trailing system notes are context, not the current conversational input.
+func currentInputIndex(messages []Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == RoleUser || messages[i].Role == RoleTool {
+			return i
+		}
+	}
+	return -1
 }
 
 func effectiveMessagePriority(message Message, current bool) MessagePriority {
