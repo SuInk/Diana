@@ -1092,22 +1092,47 @@ export function testLLM(message: string, config?: LLMConfig): Promise<GenerateRe
   });
 }
 
+/** SillyTavern V2 角色卡的文本字段，和后端 assistant.CharacterCardData 一一对应。 */
+export interface CharacterCardData {
+  name: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  first_mes?: string;
+  mes_example?: string;
+  system_prompt?: string;
+}
+
+/** V2 角色卡封套：spec + data。生成接口按这个形状发回，导出的文件也是它。 */
+export interface CharacterCardV2 {
+  spec: string;
+  spec_version: string;
+  data: CharacterCardData;
+}
+
 export interface PersonaGenerateResponse {
   persona: string;
+  /** 生成正文用的那张卡；人设框里的正文是它拼出来的，导出和下次改写都要用它。 */
+  card?: CharacterCardV2;
   model?: string;
   provider?: string;
 }
 
-/** 用当前已配置的模型把一句话需求写成基础人设；带上 current 时是改写而不是重写。 */
+/**
+ * 用当前已配置的模型写一张角色卡，并把拼装后的人设正文一起返回；带上 current 时
+ * 是改写而不是重写。改写时把上一次那张卡（card）一起带上：正文是卡拼出来的结果，
+ * 段头和展开过的宏反推不回字段，没有卡模型只能照正文重写一张。
+ */
 export function generatePersona(
   description: string,
   name?: string,
   current?: string,
-  options?: { response_mode?: string; profile_id?: string; group?: string; model?: string }
+  options?: { response_mode?: string; profile_id?: string; group?: string; model?: string; card?: CharacterCardV2 | null }
 ): Promise<PersonaGenerateResponse> {
+  const { card, ...rest } = options ?? {};
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
-    body: JSON.stringify({ description, name, current, ...(options ?? {}) })
+    body: JSON.stringify({ description, name, current, ...rest, ...(card ? { card } : {}) })
   });
 }
 

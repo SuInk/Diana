@@ -205,16 +205,104 @@ func migratePersonaStyle(prompt string, style *ReplyStyle, actions **bool) strin
 	return strings.TrimSpace(prompt + "\n\n" + text)
 }
 
+// styleTemplateHeadPrefix 是所有预设风格模板首行共用的开头。先用它挡一道，
+// 免得为每个普通段落都去查一遍哈希表。
+const styleTemplateHeadPrefix = "默认表达风格为"
+
+// styleTemplateHeadLines 收集各档预设模板的首行。
+//
+// 只认首行的原因见 inheritedPersonaForStyleMigration：正文会被用户改、也会随版本
+// 改写，首行是「默认表达风格为 X：」这种标题句，改它等于换一档风格。
+func styleTemplateHeadLines() map[string]struct{} {
+	heads := make(map[string]struct{}, len(KnownReplyStyles()))
+	for _, style := range KnownReplyStyles() {
+		text := strings.ReplaceAll(style.stylePrompt(), catgirlNoActionRule+"\n", "")
+		head, _, _ := strings.Cut(text, "\n")
+		if head = strings.TrimSpace(head); head != "" {
+			heads[head] = struct{}{}
+		}
+	}
+	return heads
+}
+
+// styleTemplateParagraphStarts 返回每个「看起来是预设风格模板」的段落起始下标，
+// 按出现顺序排列。段落边界是空行，和 migratePersonaStyle 追加时用的分隔符一致。
+func styleTemplateParagraphStarts(prompt string) []int {
+	heads := styleTemplateHeadLines()
+	var starts []int
+	for offset := 0; offset < len(prompt); {
+		paragraph := prompt[offset:]
+		if end := strings.Index(paragraph, "\n\n"); end >= 0 {
+			paragraph = paragraph[:end]
+		}
+		head, _, _ := strings.Cut(paragraph, "\n")
+		head = strings.TrimSpace(head)
+		if strings.HasPrefix(head, styleTemplateHeadPrefix) {
+			if _, ok := heads[head]; ok {
+				starts = append(starts, offset)
+			}
+		}
+		next := strings.Index(prompt[offset:], "\n\n")
+		if next < 0 {
+			break
+		}
+		offset += next + 2
+		for offset < len(prompt) && prompt[offset] == '\n' {
+			offset++
+		}
+	}
+	return starts
+}
+
 // A legacy group style overrides the inherited style, while keeping the base
 // identity. Remove only a complete, previously appended legacy template.
+//
+// 先试逐字节后缀：那是刚追加完、一个字没被动过的情况，最常见也最安全。
+//
+// 但只有这一条路是不够的。追加进去的文案会落到用户手上的人设编辑框里，改一个
+// 标点就再也匹配不上；模板本身也会随版本改写，老配置里存的是上一版的正文。两种
+// 情况下继承来的人设都会带着一段旧模板进来，紧接着又被追加一段新的，同一份群人设
+// 里就会叠出两段「默认表达风格为……」。
+//
+// 所以退一步只认首行：正文可以随便改，「默认表达风格为 X：」这句标题一改就等于
+// 换了一档风格，不会误伤。找到最后一段这样的模板后，再往前把紧挨着的同类段落
+// 一并吃掉——已经叠出两段的老配置，这一趟要清干净，不然修完还是两段。
 func inheritedPersonaForStyleMigration(prompt string) string {
 	for _, style := range KnownReplyStyles() {
 		text := strings.ReplaceAll(style.stylePrompt(), catgirlNoActionRule+"\n", "")
 		if strings.HasSuffix(prompt, "\n\n"+text) {
-			return strings.TrimSuffix(prompt, "\n\n"+text)
+			// 摘掉一段之后再走一遍：叠了两段的老配置里，外面那段往往是逐字节
+			// 对得上的新模板，里面那段才是被改过的旧模板。只摘一次等于没修。
+			return inheritedPersonaForStyleMigration(strings.TrimSuffix(prompt, "\n\n"+text))
 		}
 	}
-	return prompt
+	starts := styleTemplateParagraphStarts(prompt)
+	if len(starts) == 0 {
+		return prompt
+	}
+	cut := starts[len(starts)-1]
+	for i := len(starts) - 2; i >= 0; i-- {
+		// 只并入紧挨着的前一段：中间隔着用户自己写的内容时，那段模板已经是人设
+		// 的一部分，不该顺手删掉。
+		if gap := prompt[starts[i]+len(paragraphAt(prompt, starts[i])) : cut]; strings.TrimSpace(gap) != "" {
+			break
+		}
+		cut = starts[i]
+	}
+	if cut == 0 {
+		// 整份人设就是一段模板，删干净会留下空人设，宁可原样返回。
+		return prompt
+	}
+	return strings.TrimRight(prompt[:cut], "\n")
+}
+
+// paragraphAt 取出从 offset 开始的那一段（到下一个空行为止）。
+func paragraphAt(prompt string, offset int) string {
+	paragraph := prompt[offset:]
+	if end := strings.Index(paragraph, "\n\n"); end >= 0 {
+		paragraph = paragraph[:end]
+	}
+	return paragraph
 }
 
 func personaClosingAnchor() string {

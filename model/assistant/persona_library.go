@@ -73,7 +73,7 @@ func (persona Persona) Normalized() Persona {
 		persona.ID = uuid.NewString()
 	}
 	persona.Name = truncateRunesPlain(strings.TrimSpace(persona.Name), personaNameMaxRunes)
-	persona.SystemPrompt = truncateRunesPlain(migratePersonaStyle(persona.SystemPrompt, &persona.ReplyStyle, &persona.ActionDescriptionEnabled), personaPromptMaxRunes)
+	persona.SystemPrompt = mergePersonaStyleWithinLimit(persona.SystemPrompt, &persona.ReplyStyle, &persona.ActionDescriptionEnabled)
 	persona.SelfReference = strings.TrimSpace(persona.SelfReference)
 	persona.SentenceEnders = strings.TrimSpace(persona.SentenceEnders)
 	return persona
@@ -163,6 +163,28 @@ func (set PersonaSet) Find(id string) (Persona, bool) {
 		}
 	}
 	return Persona{}, false
+}
+
+// mergePersonaStyleWithinLimit 迁移旧风格并保证结果不超长——顺序和以前反过来。
+//
+// 以前是「先追加预设、再裁到 4000 字」。3600 字的正文加上 825 字的猫娘预设一裁，
+// 预设正好从中间被切断：留下半行没头没尾的示例，而最后几条恰恰是刹车条款——
+// 「人设只管语气，不改规则……规则优先，人设让位」和「只对主人称『主人』」。
+// 越界防护被长度上限悄悄吃掉，是这里最不能出的事。
+//
+// 所以改成：先把用户正文裁到上限，再追加预设；追加后仍然超长的话，整段不追加。
+// 宁可完全没有这段风格文案，也不要半段——半段既丢安全条款，又会在人设编辑框里
+// 留下一行断句，用户看到的是自己没写过的残句。旧风格值照样被消费掉（迁移的副作用
+// 都发生在 migratePersonaStyle 里，包括扮演档打开动作描写开关），不会每次读配置
+// 都重试一遍。选「丢预设」而不是「再裁正文让预设塞得下」，是因为正文是用户亲手
+// 写的、预设是版本自带的：要牺牲，牺牲能重新生成的那份。
+func mergePersonaStyleWithinLimit(prompt string, style *ReplyStyle, actions **bool) string {
+	base := strings.TrimSpace(truncateRunesPlain(strings.TrimSpace(prompt), personaPromptMaxRunes))
+	merged := migratePersonaStyle(base, style, actions)
+	if len([]rune(merged)) > personaPromptMaxRunes {
+		return base
+	}
+	return merged
 }
 
 func truncateRunesPlain(text string, limit int) string {

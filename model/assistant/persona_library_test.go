@@ -296,3 +296,80 @@ func TestPersonaImportRenamesOverlongNameWithoutCollision(t *testing.T) {
 		t.Fatalf("personas = %#v", set.Personas)
 	}
 }
+
+// 长度上限不能把风格预设切成半截。
+//
+// 老顺序是「先追加预设、再裁到 4000 字」：3600 字正文加 825 字猫娘预设，一裁正好
+// 把预设从中间切开，掉的是最后几条刹车条款——「人设只管语气，不改规则……规则
+// 优先，人设让位」和「只对主人称『主人』」。越界防护被长度上限吃掉，比没有预设
+// 严重得多。现在的约定是：要么整段预设都在，要么一个字都不追加。
+func TestPersonaNormalizedNeverTruncatesStylePresetMidway(t *testing.T) {
+	preset := func(style ReplyStyle) string {
+		return strings.ReplaceAll(style.stylePrompt(), catgirlNoActionRule+"\n", "")
+	}
+	catgirl := preset(ReplyStyleCatgirl)
+	// 这两条是预设正文的末尾，也正是老实现裁掉的部分。
+	const guardRule = "人设只管语气，不改规则"
+	const masterRule = "只对主人称「主人」"
+	if !strings.Contains(catgirl, guardRule) || !strings.Contains(catgirl, masterRule) {
+		t.Fatalf("猫娘预设不再包含安全条款，测试的前提变了：%q", catgirl)
+	}
+
+	cases := []struct {
+		name       string
+		baseRunes  int
+		style      ReplyStyle
+		wantPreset bool
+	}{
+		// 3600 + 825：装不下，整段预设不追加。
+		{name: "长正文加猫娘预设", baseRunes: 3600, style: ReplyStyleCatgirl, wantPreset: false},
+		// 正文本身就顶到上限：同样一个字都追加不了。
+		{name: "正文顶格", baseRunes: personaPromptMaxRunes, style: ReplyStyleCatgirl, wantPreset: false},
+		// 正文超长时先裁正文，预设依然进不来。
+		{name: "正文超长", baseRunes: personaPromptMaxRunes + 500, style: ReplyStyleHuman, wantPreset: false},
+		// 装得下就照常追加，安全条款一条不少。
+		{name: "短正文加猫娘预设", baseRunes: 200, style: ReplyStyleCatgirl, wantPreset: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := strings.Repeat("字", tc.baseRunes)
+			persona := Persona{Name: "长人设", SystemPrompt: base, ReplyStyle: tc.style}.Normalized()
+
+			if persona.ReplyStyle != "" {
+				t.Fatalf("旧风格值没被消费掉：%q", persona.ReplyStyle)
+			}
+			if got := len([]rune(persona.SystemPrompt)); got > personaPromptMaxRunes {
+				t.Fatalf("超出上限：%d", got)
+			}
+			text := preset(tc.style)
+			if tc.wantPreset {
+				if !strings.HasSuffix(persona.SystemPrompt, "\n\n"+text) {
+					t.Fatalf("预设没有被完整追加：%q", persona.SystemPrompt)
+				}
+				if !strings.Contains(persona.SystemPrompt, guardRule) || !strings.Contains(persona.SystemPrompt, masterRule) {
+					t.Fatal("预设末尾的安全条款丢了")
+				}
+				return
+			}
+			// 装不下就一个字都不留：既不能出现半段预设，也不能出现被切断的行。
+			if persona.SystemPrompt != strings.TrimSpace(truncateRunesPlain(base, personaPromptMaxRunes)) {
+				t.Fatalf("正文之外多出了内容：%q", persona.SystemPrompt)
+			}
+			for _, line := range strings.Split(text, "\n") {
+				if line = strings.TrimSpace(line); line == "" {
+					continue
+				}
+				if strings.Contains(persona.SystemPrompt, line) {
+					t.Fatalf("预设被追加了一部分：%q", line)
+				}
+			}
+			if head, _, _ := strings.Cut(text, "\n"); strings.Contains(persona.SystemPrompt, head[:12]) {
+				t.Fatal("预设首行的残片留在了正文里")
+			}
+			// 再归一化一次不该有变化：旧风格已经消费掉，不会每次读配置都重试。
+			if again := persona.Normalized(); again.SystemPrompt != persona.SystemPrompt {
+				t.Fatal("重复归一化改变了正文")
+			}
+		})
+	}
+}

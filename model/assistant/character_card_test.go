@@ -131,12 +131,12 @@ func TestParseSillyTavernCharacterCardRejectsGarbage(t *testing.T) {
 
 func TestComposeCharacterCardPromptHonorsLengthBudget(t *testing.T) {
 	long := strings.Repeat("很长的设定。", 400) // 2400 字
-	prompt := composeCharacterCardPrompt(sillyTavernCardData{
+	prompt := composeCharacterCardPrompt(sillyTavernCardData{CharacterCardData: CharacterCardData{
 		Name:        "长话痨",
 		Description: long,
 		Personality: long,
 		Scenario:    "短场景。",
-	})
+	}})
 	if len([]rune(prompt)) > personaPromptMaxRunes {
 		t.Fatalf("prompt over budget: %d runes", len([]rune(prompt)))
 	}
@@ -147,5 +147,30 @@ func TestComposeCharacterCardPromptHonorsLengthBudget(t *testing.T) {
 	}
 	if strings.Contains(prompt, "场景与背景") && !strings.Contains(prompt, "性格与特质") {
 		t.Fatal("later section jumped over a dropped earlier section")
+	}
+}
+
+func TestComposeCharacterCardPersonaMatchesImportPath(t *testing.T) {
+	// 生成接口拿这个包装拼正文：它和导入那条路必须拼出同一份东西，否则同一张卡
+	// 「导进来」和「生成出来」会得到两种人设。
+	card := CharacterCardData{
+		Name:        "然然",
+		Description: "{{char}}是枝江的看板娘。",
+		Personality: "爱撒娇但正事靠谱",
+		Scenario:    "故事发生在虚构城市枝江。",
+		FirstMes:    "哇，是{{user}}！",
+		MesExample:  "<START>\n{{user}}: 今天好累。\n{{char}}: 那就歇一会嘛。",
+	}
+	got := ComposeCharacterCardPersona(card)
+	if want := composeCharacterCardPrompt(sillyTavernCardData{CharacterCardData: card}); got != want {
+		t.Fatalf("包装拼出的正文与内部函数不一致：\n%q\n%q", got, want)
+	}
+	for _, want := range []string{"你是然然。", "然然是枝江的看板娘。", "性格与特质：", "场景与背景：", "对话示例", "开场白参考"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("正文缺少 %q：%q", want, got)
+		}
+	}
+	if strings.Contains(got, "{{char}}") || strings.Contains(got, "{{user}}") || strings.Contains(strings.ToUpper(got), "<START>") {
+		t.Fatalf("宏或分隔符没有展开：%q", got)
 	}
 }

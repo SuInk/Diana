@@ -977,6 +977,10 @@
                     <Sparkles :size="14" aria-hidden="true" />
                     {{ personaComposerOpen ? "收起生成器" : "AI 生成" }}
                   </button>
+                  <button v-if="personaCardExportable" class="btn small" type="button" title="导出成 SillyTavern V2 角色卡 JSON" @click="exportPersonaCard">
+                    <Download :size="14" aria-hidden="true" />
+                    导出角色卡 JSON
+                  </button>
                 </div>
                 <div v-if="personaComposerOpen" class="persona-composer">
                   <textarea
@@ -991,15 +995,19 @@
                     <button class="btn primary small" type="button" :disabled="personaBusy || !personaDraft.trim()" @click="runPersonaGenerate">
                       {{ personaBusy ? "生成中…" : form.system_prompt?.trim() ? "按需求改写" : "生成人设" }}
                     </button>
-                    <span class="hint">用当前启用的模型和接话设置生成；已有人设时在原文基础上改写。</span>
+                    <span class="hint">用当前启用的模型和接话设置生成；已有人设时在原文基础上改写。生成的是一张标准角色卡，正文由它拼成。</span>
                   </div>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
+                <!-- 只提示不拦截：正文是用户写的，这里只负责说清「这条已经有开关管了」。 -->
+                <span v-for="(warning, index) in personaWarnings" :key="`${warning.code}-${index}`" class="hint warn-text">
+                  「{{ warning.match }}」——{{ warning.message }}
+                </span>
                 <div v-if="personaPrevious" class="cluster">
                   <button class="btn small" type="button" @click="undoPersonaGenerate">撤销生成</button>
                   <span class="hint">保存后才会生效，不满意可以撤回上一版。</span>
                 </div>
-                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。</span>
+                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。自称、句尾语气词、动作描写、分条和长短由下面的开关控制，人设正文只写角色本身，写进去会和开关打架。</span>
               </div>
               <div class="field wide">
                 <label>接话设置</label>
@@ -1510,6 +1518,7 @@ import {
   importPersonas,
   importCharacterCard,
   PERSONA_EXPORT_VERSION,
+  type CharacterCardV2,
   type Persona,
   listWorldBook,
   saveWorldBookNode,
@@ -1527,6 +1536,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
+import { personaLint } from "../persona-lint";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -1544,12 +1554,29 @@ const personaDraft = ref("");
 const personaBusy = ref(false);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const personaPrevious = ref("");
+// 生成正文用的那张角色卡。人设框里存的是拼装后的正文，卡本身没地方存——留在这里
+// 只到离开这个页面为止：可以导出成标准角色卡，也能在下一次改写时带回给模型，让它
+// 改字段而不是照着正文重写一张。
+const personaCard = ref<CharacterCardV2 | null>(null);
+// personaCardPrompt 是那张卡拼出来的正文原样。用户在框里改过字之后卡就不再对应
+// 这份正文，比对一下才知道还能不能拿卡当导出和改写的基准。
+const personaCardPrompt = ref("");
 const profileSet = ref<BotProfileConfig | null>(null);
 const busy = ref(false);
 const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
 const allowlistDraft = ref("");
+
+// 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架。纯前端提示，
+// 不改正文也不拦保存——判断靠正则，误伤了也只是多一行灰字。
+const personaWarnings = computed(() =>
+  personaLint(form.value?.system_prompt ?? "", {
+    sentenceEnders: form.value?.sentence_enders ?? "",
+    selfReference: form.value?.self_reference ?? "",
+    actionDescriptionEnabled: form.value?.action_description_enabled ?? false
+  })
+);
 
 // 白名单为空 = 命令执行整体关闭，这一点要在界面上直接说出来，见模板里的说明。
 const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));
@@ -2878,11 +2905,18 @@ async function runPersonaGenerate(): Promise<void> {
   try {
     const current = form.value.system_prompt?.trim() || "";
     const chatRole = roleForm.value.chat;
-    const result = await generatePersona(description, form.value.name, current, {
+    // 传群内触发名，不是 form.name——后者是控制台用来区分多个机器人的标签
+    // （「主群助手」「客服机器人」），拿它当角色名，生成出来的人设会自称「主群助手」。
+    // 触发名正在编辑时以输入框里的为准，还没填过就退回控制台标签。
+    const inChatName = splitList(triggersDraft.value)[0] || form.value.group_triggers?.[0]?.trim() || form.value.name;
+    const result = await generatePersona(description, inChatName, current, {
       response_mode: form.value.response_mode,
       profile_id: chatRole?.profile_id || chatRole?.provider_id,
       group: chatRole?.group,
-      model: chatRole?.model_id || chatRole?.model
+      model: chatRole?.model_id || chatRole?.model,
+      // 只有正文没被人工改过时才把卡带回去：改过的话卡和正文已经对不上，
+      // 拿旧卡当基准会把用户手打的那几句悄悄改回去。
+      card: personaCardMatchesPrompt(current) ? personaCard.value : null
     });
     const persona = result.persona?.trim();
     if (!persona) {
@@ -2890,6 +2924,8 @@ async function runPersonaGenerate(): Promise<void> {
       return;
     }
     personaPrevious.value = current;
+    personaCard.value = result.card ?? null;
+    personaCardPrompt.value = persona;
     form.value.system_prompt = persona;
     personaComposerOpen.value = false;
     personaDraft.value = "";
@@ -2905,6 +2941,23 @@ function undoPersonaGenerate(): void {
   if (!form.value) return;
   form.value.system_prompt = personaPrevious.value;
   personaPrevious.value = "";
+  // 退回上一版之后，那张卡拼出来的正文已经不在框里了，跟着一起丢掉。
+  personaCard.value = null;
+  personaCardPrompt.value = "";
+}
+
+function personaCardMatchesPrompt(prompt: string): boolean {
+  return Boolean(personaCard.value) && prompt.trim() === personaCardPrompt.value.trim();
+}
+
+const personaCardExportable = computed(() => personaCardMatchesPrompt(form.value?.system_prompt ?? ""));
+
+// 导出成一张标准的 SillyTavern V2 角色卡：这个文件酒馆认，Diana 自己的角色卡
+// 导入接口也认，等于生成一次就能到处用。
+function exportPersonaCard(): void {
+  const card = personaCard.value;
+  if (!card) return;
+  downloadPersonaFile(`${personaFileSlug(card.data?.name || "persona")}.card.json`, JSON.stringify(card, null, 2));
 }
 
 function resetPromptDefaults(): void {
