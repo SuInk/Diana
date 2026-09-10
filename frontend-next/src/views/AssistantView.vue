@@ -890,7 +890,7 @@
 
         <div v-show="editorTab === 'persona'" class="stack">
           <!-- 人设 -->
-          <section class="card">
+          <section class="card persona-section">
             <div class="card-header">
               <div>
                 <h2>人设</h2>
@@ -941,18 +941,19 @@
                   <div class="persona-chip" :class="{ 'is-active': selectedPersonaID === 'custom' }">
                     <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === 'custom'" @click="choosePersona('custom')">
                       <span class="persona-chip-name">自定义</span>
+                      <small class="muted">当前编辑</small>
                     </button>
                   </div>
                   <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip" :class="{ 'is-active': selectedPersonaID === persona.id }">
                     <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === persona.id" :title="personaSummary(persona)" @click="choosePersona(persona.id)">
                       <span class="persona-chip-name">{{ persona.name }}</span>
-                      <small class="muted">{{ personaSummary(persona) }}</small>
+                      <small class="muted">{{ isBuiltinPersona(persona) ? "内置 · " : "" }}{{ personaSummary(persona) }}</small>
                     </button>
                     <span class="persona-chip-actions">
                       <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
                         <Download :size="13" aria-hidden="true" />
                       </button>
-                      <button type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
+                      <button v-if="!isBuiltinPersona(persona)" type="button" class="persona-chip-action danger" :disabled="personaLibraryBusy" :aria-label="`删除人设 ${persona.name}`" :title="`删除人设 ${persona.name}`" @click="removePersona(persona)">
                         <X :size="13" aria-hidden="true" />
                       </button>
                     </span>
@@ -1473,6 +1474,7 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
+import { withBuiltinPersonas, isBuiltinPersona } from "../builtin-personas";
 import {
   activateBotProfile,
   deleteBotProfile,
@@ -1809,7 +1811,8 @@ const mentionUserModeOptions: AppSelectOption[] = [
 
 // 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
 // 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
-const personaLibrary = ref<Persona[]>([]);
+const savedPersonaLibrary = ref<Persona[]>([]);
+const personaLibrary = computed(() => withBuiltinPersonas(savedPersonaLibrary.value));
 const personaLibraryLoaded = ref(false);
 const selectedPersonaID = computed(() => form.value ? currentPersonaSelection(form.value, personaLibrary.value) : "custom");
 
@@ -1851,11 +1854,11 @@ function personaSummary(persona: Persona): string {
 
 async function loadPersonaLibrary(): Promise<void> {
   try {
-    personaLibrary.value = (await listPersonas()).personas ?? [];
+    savedPersonaLibrary.value = (await listPersonas()).personas ?? [];
     personaLibraryLoaded.value = true;
   } catch {
     // 人设库读不出来不该挡住整个机器人页：它只是个快捷方式，缺了不影响配置本身。
-    personaLibrary.value = [];
+    savedPersonaLibrary.value = [];
   }
 }
 
@@ -1883,7 +1886,7 @@ async function storeCurrentPersona(): Promise<void> {
   personaLibraryBusy.value = true;
   try {
     const response = await savePersona(personaFromSettings(current, savedName));
-    personaLibrary.value = response.personas ?? [];
+    savedPersonaLibrary.value = response.personas ?? [];
     if (form.value === current) form.value = selectPersona(asCustomPersona(current), response.persona);
     personaSaverOpen.value = false;
     personaNameDraft.value = "";
@@ -1972,7 +1975,7 @@ function looksLikeCharacterCard(parsed: unknown): boolean {
 
 async function importCharacterCardFile(file: File): Promise<void> {
   const result = await importCharacterCard(await fileToBase64(file));
-  personaLibrary.value = result.personas ?? [];
+  savedPersonaLibrary.value = result.personas ?? [];
   if (result.nodes?.length) {
     worldBookNodes.value = result.nodes;
   }
@@ -2011,7 +2014,7 @@ async function importPersonaFile(event: Event): Promise<void> {
         ? (parsed as { personas: unknown[] }).personas
         : [parsed];
     const result = await importPersonas(list as Persona[]);
-    personaLibrary.value = result.personas ?? [];
+    savedPersonaLibrary.value = result.personas ?? [];
     const notes = [`导入 ${result.imported} 套`];
     if (result.renamed) notes.push(`${result.renamed} 套重名已改名`);
     if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
@@ -2035,7 +2038,7 @@ async function removePersona(persona: Persona): Promise<void> {
   }
   personaLibraryBusy.value = true;
   try {
-    personaLibrary.value = (await deletePersona(persona.id)).personas ?? [];
+    savedPersonaLibrary.value = (await deletePersona(persona.id)).personas ?? [];
     toastSuccess(`已删除人设「${persona.name}」`);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "人设删除失败");
