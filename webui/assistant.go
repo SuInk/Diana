@@ -196,7 +196,7 @@ func NewBotHandler(ctx context.Context, runtime BotRuntime) *BotHandler {
 
 // NewBotHandlerWithFactory 创建 BotHandler 实例。
 func NewBotHandlerWithFactory(ctx context.Context, runtime BotRuntime, factory BotChannelFactory) *BotHandler {
-	return &BotHandler{
+	handler := &BotHandler{
 		runtime:                   runtime,
 		newChannel:                factory,
 		ctx:                       ctx,
@@ -206,6 +206,18 @@ func NewBotHandlerWithFactory(ctx context.Context, runtime BotRuntime, factory B
 		groupConfigs: NewMemoryBotGroupConfigStore(),
 		groupAdmin:   newGroupAdminVerifier(),
 	}
+	handler.linkGroupConfigProfiles()
+	return handler
+}
+
+// linkGroupConfigProfiles 把机器人配置来源交给群配置存储。群配置默认跟随所属
+// 机器人，存储归一化时得能自己查出「这个群是谁的」，否则只能拿当前这台顶上。
+func (h *BotHandler) linkGroupConfigProfiles() {
+	aware, ok := h.groupConfigs.(botGroupConfigProfileAware)
+	if !ok || h.profiles == nil {
+		return
+	}
+	aware.SetProfileSource(h.profiles)
 }
 
 // SetFeatureFlags 配置只应在显式测试环境开放的 WebUI 功能。
@@ -224,6 +236,7 @@ func (h *BotHandler) SetProfileStore(store BotProfileStore) {
 		return
 	}
 	h.profiles = store
+	h.linkGroupConfigProfiles()
 }
 
 // SetChannelSetFactory enables all configured transports to be rebuilt as one
@@ -238,6 +251,7 @@ func (h *BotHandler) SetGroupConfigStore(store BotGroupConfigStore) {
 		return
 	}
 	h.groupConfigs = store
+	h.linkGroupConfigProfiles()
 }
 
 // SetSQLiteStore 注入 SQLite，用于插件状态持久化和操作日志。

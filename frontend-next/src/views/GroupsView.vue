@@ -181,14 +181,19 @@
           <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
         </div>
         <div class="field wide">
-          <label for="group-prompt">本群专属人设（留空用全局系统提示词）</label>
+          <label for="group-prompt">本群专属人设（留空跟随{{ inheritedPersonaOwner }}的人设）</label>
           <textarea
             id="group-prompt"
             v-model="editing.system_prompt"
             class="textarea"
             rows="3"
-            placeholder="同一个机器人可以在不同群扮演不同角色"
+            :placeholder="personaPlaceholder"
           ></textarea>
+          <span class="hint">留空表示本群一直跟着{{ inheritedPersonaOwner }}走，改机器人人设时本群也跟着变；填了就只用这里的文字。</span>
+          <details v-if="inheritedPersona" class="inherited-persona">
+            <summary>{{ inheritedPersonaOwner }}当前的人设</summary>
+            <p>{{ inheritedPersona }}</p>
+          </details>
         </div>
         <div class="field">
           <label>接话设置</label>
@@ -502,6 +507,21 @@ const groupAccountSafetyOptions: AppSelectOption[] = [
 const defaultSocialReplyEnabled = ref(false);
 const participationDefaults = ref<Record<string, ParticipationPreferences>>({});
 const markedBotDefaults = ref<Record<string,string[]>>({});
+// 群人设默认跟随所属机器人，编辑框留空时得让人看见继承的是谁的哪段文字。
+const personaDefaults = ref<Record<string, { name: string; prompt: string }>>({});
+const inheritedPersonaProfile = computed(() =>
+  personaDefaults.value[editing.value?.bot_profile_id || botScope.value] ?? personaDefaults.value[""]
+);
+const inheritedPersona = computed(() => inheritedPersonaProfile.value?.prompt ?? "");
+const inheritedPersonaOwner = computed(() => {
+  const name = inheritedPersonaProfile.value?.name?.trim();
+  return name ? `「${name}」` : "所属机器人";
+});
+const personaPlaceholder = computed(() =>
+  inheritedPersona.value
+    ? `留空跟随${inheritedPersonaOwner.value}：${truncate(inheritedPersona.value, 40)}`
+    : `留空跟随${inheritedPersonaOwner.value}的人设；同一个机器人可以在不同群扮演不同角色`
+);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
@@ -600,6 +620,10 @@ async function load(showFeedback = false): Promise<void> {
       participationDefaults.value = Object.fromEntries([
         ["", participationFromConfig(current)],
         ...(config.profiles ?? []).map(profile => [profile.id, participationFromConfig(profile)])
+      ]);
+      personaDefaults.value = Object.fromEntries([
+        ["", { name: current.name ?? "", prompt: current.system_prompt ?? "" }],
+        ...(config.profiles ?? []).map((profile) => [profile.id, { name: profile.name ?? "", prompt: profile.system_prompt ?? "" }])
       ]);
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       naturalReplySplitDefaults.value = Object.fromEntries([
@@ -789,3 +813,19 @@ watch(botScope, () => {
 
 onMounted(() => load());
 </script>
+
+<style scoped>
+/* 跟 BotMarkerList 的「机器人范围」一样，是一行不抢眼的继承说明。 */
+.inherited-persona {
+  font-size: 12px;
+  color: var(--muted);
+}
+.inherited-persona > summary {
+  cursor: pointer;
+}
+.inherited-persona > p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>
