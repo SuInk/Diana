@@ -74,7 +74,7 @@ func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 	if !r.relationshipPolicy(context.Background(), event).Owner {
 		t.Fatal("username owner did not receive owner policy")
 	}
-	registry, err := r.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, r.relationshipPolicy(context.Background(), event), newDianaLLMConfigTool(r, event))
+	registry, err := r.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, r.relationshipPolicy(context.Background(), event), newTestLLMConfigTool(r, event))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 	if prompt := r.systemPrompt(event, nil); !strings.Contains(prompt, "当前发言者是主人") {
 		t.Fatal("model prompt still treats owner as ordinary member")
 	}
-	if _, err := newDianaLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "new"}); err != nil {
+	if _, err := newTestLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "new"}); err != nil {
 		t.Fatal(err)
 	}
 	if r.Config().ModelRoles["chat"].Model != "new" || r.Config().OwnerID != "@ruaneko" {
@@ -93,7 +93,7 @@ func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 	}
 	event.SenderUsername = "someone"
 	event.SenderName = "ruaneko"
-	if _, err := newDianaLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "old"}); err == nil {
+	if _, err := newTestLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "old"}); err == nil {
 		t.Fatal("display-name impostor changed model")
 	}
 }

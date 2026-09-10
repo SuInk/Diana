@@ -168,6 +168,20 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		}
 	}
 	notes := llmConfigOutputTokenNote(target.Config, modelInfo)
+	if err := r.probeModelSwitch(ctx, registry, target.ID, probe, roleKey); err != nil {
+		return llmConfigApplyResult{
+			Reply: "目标模型可用性测试失败，未修改模型分配：" + modelSwitchProbeError(probe, err),
+			Role:  roleKey, ProfileID: target.ID, ProfileName: target.Name,
+			OldProvider: oldProvider, NewProvider: probe.Provider, OldModel: oldModel, NewModel: model,
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return llmConfigApplyResult{Reply: "模型测试已取消，未修改模型分配。"}
+	}
+	current, err := r.modelConfigForEvent(event)
+	if err != nil || !current.IsOwnerEvent(event) || !boolValue(current.OwnerLLMConfigEnabled, true) {
+		return llmConfigApplyResult{Reply: "模型测试期间主人权限或配置状态已变化，未修改模型分配。"}
+	}
 
 	result := llmConfigApplyResult{
 		Updated:     true,
@@ -182,7 +196,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 	if err := r.saveModelRole(botCfg, roles, roleKey, target, model, command.ProviderID != "" || command.ProviderName != ""); err != nil {
 		return llmConfigApplyResult{Reply: "更新失败：机器人配置没能保存（" + err.Error() + "）。"}
 	}
-	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s）。改的是机器人模型分配里的这一档，没有动提供商配置里的 provider 设置，其余用途各自的分配保持不变。%s%s",
+	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s），目标模型可用性测试已通过。改的是机器人模型分配里的这一档，没有动提供商配置里的 provider 设置，其余用途各自的分配保持不变。%s%s",
 		llmConfigRoleLabel(roleKey), model, target.Name, llmConfigFollowChatNote(roleKey, roles), notes)
 	return result
 }
