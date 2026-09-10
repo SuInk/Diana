@@ -110,7 +110,10 @@ type MessageEvent struct {
 	Time             int64            `json:"time,omitempty"`
 	OriginalTime     int64            `json:"original_time,omitempty"`
 	SelfID           string           `json:"self_id,omitempty"`
-	UserID           string           `json:"user_id,omitempty"`
+	// SelfUsername 是本机器人在平台上的用户名（Telegram 的 @xxx）。消息文本里
+	// 出现的是它而不是数字 ID，路由判断得靠它才认得出「这是在叫我」。
+	SelfUsername string `json:"self_username,omitempty"`
+	UserID       string `json:"user_id,omitempty"`
 	// TargetID 目前只有 poke 通知在用：被戳的是谁。
 	TargetID     string `json:"target_id,omitempty"`
 	OperatorID   string `json:"operator_id,omitempty"`
@@ -620,7 +623,10 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 	out := map[string]ModelRole{}
 	for key, role := range roles {
 		key = strings.ToLower(strings.TrimSpace(key))
-		if role.FollowChat && key != "vision" {
+		// 「跟随对话」对每个用途都成立，唯独对话自己不能跟随自己——那会绕成死circle。
+		// 以前只有视觉理解允许跟随，别的用途要么单独绑，要么隐式落到 chat；隐式回落
+		// 在界面上看不出来，用户没法明确表达「这一档我就是要跟着对话走」。
+		if role.FollowChat && key == "chat" {
 			role.FollowChat = false
 		}
 		role = normalizeModelRole(role)

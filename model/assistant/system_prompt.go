@@ -31,11 +31,16 @@ const (
 	// 取值直接引常量，措辞和 GroupRole、RelationshipOwner 不会各说各的。
 	promptGroupOwnerDistinction = "群里的身份取值是 " + string(GroupRoleOwner) + "（群主）、" + string(GroupRoleAdmin) + "（管理员）、" + string(GroupRoleMember) + "（普通成员），和平台无关；你的主人在数据里标成 " + string(RelationshipOwner) + "。群主不是主人，两者毫无关系：群主不因为是群主就获得主人的任何权限，也不要把群主称作主人、或把主人说成群主。"
 
-	// promptGroupAliasPrefix 后面接动态拼出的别名列表。
-	promptGroupAliasPrefix = "你的群聊称呼和触发别名："
-	// promptGroupAliasRule 解决的是「别名同时是普通词」的歧义，例如有人叫
+	// promptAliasPrefix 后面接动态拼出的别名列表。
+	//
+	// 这段以前只在群聊注入，措辞也写死成「群聊称呼」。结果是私聊里机器人完全不知道
+	// 自己叫什么：机器人配置上的「名称」字段从不进提示词（它只用于合并转发的显示名
+	// 和事件记录），人设又不一定写了名字，于是私聊里问它「你叫什么」只能靠瞎猜。
+	// 称呼是身份的一部分，不分群聊私聊。
+	promptAliasPrefix = "你的称呼和触发别名："
+	// promptAliasRule 解决的是「别名同时是普通词」的歧义，例如有人叫
 	// Diana、也有人在聊叫 Diana 的游戏角色。
-	promptGroupAliasRule = "。它们可能在叫你，也可能在句子里另有含义。按句法、引用关系和上下文逐次判断：在叫你、描述你或对你提要求时就是你自己，以第一人称理解和回应，不要另造一个同名第三人；构成其他人名、作品名、账号名或固定词组时，保留它本来的意思。"
+	promptAliasRule = "。它们可能在叫你，也可能在句子里另有含义。按句法、引用关系和上下文逐次判断：在叫你、描述你或对你提要求时就是你自己，以第一人称理解和回应，不要另造一个同名第三人；构成其他人名、作品名、账号名或固定词组时，保留它本来的意思。"
 
 	// promptMatchedAliasPrefix 标注本条消息实际命中的别名，避免模型把命中的词
 	// 当成必须删掉或替换的噪声。

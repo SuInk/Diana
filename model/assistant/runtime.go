@@ -2715,6 +2715,23 @@ type proactiveReplyHistoryItem struct {
 	AgeSeconds *int64            `json:"age_seconds,omitempty"`
 }
 
+// botAliasesForEvent 把平台用户名一起交给路由模型：群消息里写的是
+// @username，只给数字账号的话模型会把发给自己的命令读成别人的。
+func botAliasesForEvent(event MessageEvent, cfg BotConfig) []string {
+	aliases := append([]string(nil), cfg.GroupTriggers...)
+	username := strings.TrimSpace(event.SelfUsername)
+	if username == "" {
+		return aliases
+	}
+	handle := "@" + strings.TrimPrefix(username, "@")
+	for _, alias := range aliases {
+		if strings.EqualFold(strings.TrimSpace(alias), handle) {
+			return aliases
+		}
+	}
+	return append(aliases, handle)
+}
+
 func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proactiveReplyPayload {
 	cfg := r.effectiveConfigForEvent(event)
 	payload := proactiveReplyPayload{
@@ -2723,7 +2740,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		CurrentSender:    strings.TrimSpace(event.SenderNameOrID()),
 		CurrentImages:    imageSegmentCount(event.Segments),
 		BotAccount:       firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
-		BotAliases:       append([]string(nil), cfg.GroupTriggers...),
+		BotAliases:       botAliasesForEvent(event, cfg),
 		RecentImageCount: len(r.localImageEditSourceImages(event)),
 	}
 	if event.Kind == EventKindGroup {
@@ -5819,7 +5836,7 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 
 func profilesForModelRole(set llm.ProfileSet, role ModelRole) ([]llm.Profile, error) {
 	if role.FollowChat {
-		return nil, fmt.Errorf("视觉理解选择了跟随对话，但未配置有效的对话模型")
+		return nil, fmt.Errorf("该用途选择了跟随对话，但未配置有效的对话模型")
 	}
 	if role.Group != "" {
 		profiles := set.GroupProfiles(role.Group)
@@ -6360,9 +6377,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		// 再说「只有被提到才回复」会和下面的主动插话说明当场打架。
 		builder.WriteString("\n" + groupScopePrompt(event))
 		builder.WriteString("\n" + promptGroupOwnerDistinction)
-		if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
-			builder.WriteString("\n" + promptGroupAliasPrefix + aliases + promptGroupAliasRule)
-		}
+	}
+	// 称呼不分群聊私聊：私聊里没有触发这回事，但「别人怎么叫你」仍然是身份的一部分。
+	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
+		builder.WriteString("\n" + promptAliasPrefix + aliases + promptAliasRule)
 	}
 	if agentEnabled && relationship.Owner && hasTool("diana.llm_config") {
 		tail.WriteString("\n" + promptToolLLMConfig)
