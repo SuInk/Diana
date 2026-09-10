@@ -5485,6 +5485,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = withEmojiSemanticsRun(run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
+	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
@@ -5502,8 +5503,13 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		return "", nil
 	}
 	run = withEmojiSemanticsRun(run)
+	group := ModelBindingGroupOf(llmUsagePurposeFromContext(ctx))
+	if group == "" {
+		group = llm.GroupChat
+	}
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
+	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
@@ -5975,6 +5981,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = withEmojiSemanticsRun(run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
+	run = r.withImageBudgetRun(llm.GroupIntent, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
