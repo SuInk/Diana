@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { participationFromConfig, participationPreset, participationPresetName, participationLevelOptions, changeParticipationLevel, changeParticipationThresholdLevel, participationThresholdLevel, participationThresholdOptions } from "./participation.ts";
+import { readFileSync } from "node:fs";
+import { participationFromConfig, participationPreset, participationPresetName, participationLevelOptions, changeParticipationLevel, changeParticipationThresholdLevel, participationThresholdLevel, participationThresholdOptions, participationLevelLabel, participationLevelThresholds } from "./participation.ts";
 
 test("reply desire offers only four named levels", () => {
   assert.deepEqual(participationLevelOptions.map(option => option.label), ["低", "中", "高", "极高"]);
@@ -56,4 +57,34 @@ test("score thresholds have four levels and remain independent of desire and coo
   assert.equal(participationThresholdLevel(65), "custom");
   const legacy = { ...initial, substance_threshold: 65 };
   assert.equal(changeParticipationLevel(legacy, "high").substance_threshold, 65);
+});
+
+test("每个参与度档位都标出后端的评分门槛", () => {
+  assert.deepEqual(["off", "minimal", "low", "medium", "high", "extreme", "always"].map(level => participationLevelLabel(level)), [
+    "关（不判断）",
+    "极低（≥0.90，最严）",
+    "低（≥0.70）",
+    "中（≥0.50）",
+    "高（≥0.30）",
+    "极高（≥0.10，最松）",
+    "总是（不看分数）",
+  ]);
+  // 摘要里省掉最严/最松，只留门槛本身。
+  assert.deepEqual(["off", "minimal", "medium", "extreme", "always"].map(level => participationLevelLabel(level, { compact: true })), ["关 不判断", "极低 ≥0.90", "中 ≥0.50", "极高 ≥0.10", "总是 不看分数"]);
+  // 选择器里用各自的文案，门槛照样跟着走。
+  assert.equal(participationLevelLabel("medium", { label: "适中" }), "适中（≥0.50）");
+  assert.equal(participationLevelLabel("always", { label: "完全不限制" }), "完全不限制（不看分数）");
+});
+
+test("门槛数字逐项对得上 ratingPasses", () => {
+  const source = readFileSync(new URL("../../model/assistant/participation_single_score.go", import.meta.url), "utf8");
+  const literal = source.match(/map\[string\]float64\{([^}]*)\}/);
+  assert.ok(literal, "ratingPasses 里应当有 map[string]float64 门槛表");
+  const backend = Object.fromEntries([...literal[1].matchAll(/"(\w+)":\s*([0-9.]+)/g)].map(([, level, score]) => [level, Number(score)]));
+  assert.deepEqual(backend, { minimal: 0.9, low: 0.7, medium: 0.5, high: 0.3, extreme: 0.1 });
+  for (const [level, threshold] of Object.entries(backend)) assert.equal(participationLevelThresholds[level], threshold);
+  // off 和 always 在 ratingPasses 里提前返回，前端用 null 表示「不走门槛」。
+  assert.equal(participationLevelThresholds.off, null);
+  assert.equal(participationLevelThresholds.always, null);
+  assert.deepEqual(Object.keys(participationLevelThresholds), ["off", ...Object.keys(backend), "always"]);
 });
