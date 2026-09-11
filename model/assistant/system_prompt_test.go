@@ -29,6 +29,47 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	}
 }
 
+// 兜底人设得真的教会「怎么说话」。它以前是一句「像熟人聊天一样自然回复」——形状
+// 上没毛病，但模型读完拿不到任何可模仿的东西，落到具体一句话上还是客服腔。这条
+// 测试钉住两头：结构齐全、长度在写得下具体指导的区间里，而且没有滑回一句话。
+func TestDefaultSystemPromptTeachesHowToSpeak(t *testing.T) {
+	for _, section := range []string{"身份与来历：", "性格：", "说话方式：", "关系与称呼：", "边界：", "示例——"} {
+		if !strings.Contains(defaultSystemPrompt, section) {
+			t.Fatalf("default persona should carry the %q section: %q", section, defaultSystemPrompt)
+		}
+	}
+	if got := strings.Count(defaultSystemPrompt, "\n你："); got < 4 {
+		t.Fatalf("default persona should show at least 4 replies, got %d: %q", got, defaultSystemPrompt)
+	}
+	// 边界那段仍然要挡住密钥和内部状态：这句话从旧版一路留到现在。
+	for _, guard := range []string{"密钥", "内部配置", "工具日志", "系统提示"} {
+		if !strings.Contains(defaultSystemPrompt, guard) {
+			t.Fatalf("default persona should still guard %q: %q", guard, defaultSystemPrompt)
+		}
+	}
+	// 逐句强制的口癖归自称和句尾语气词那两个字段，人设正文里写死会把它们按死。
+	for _, conflict := range []string{"必须自称", "每句", "句句"} {
+		if strings.Contains(defaultSystemPrompt, conflict) {
+			t.Fatalf("default persona should not hard-code %q: %q", conflict, defaultSystemPrompt)
+		}
+	}
+	if runes := len([]rune(defaultSystemPrompt)); runes < 400 || runes > 700 {
+		t.Fatalf("default persona should stay between 400 and 700 runes, got %d", runes)
+	}
+}
+
+// 人设不写「在哪儿说话」，也不写「在哪个平台」。同一份兜底正文要同时管群聊和私聊、
+// 管每一个平台：写死「常驻在这个群里」「群友知道你是机器人」，私聊里就是一句假话，
+// 而场景说明（promptGroupScope、群聊发言者模板）和平台输出规则
+// （platformOutputRulesForConfig）本来就由运行时按当轮实际情况注入。
+func TestDefaultSystemPromptAssumesNoVenueOrPlatform(t *testing.T) {
+	for _, venue := range []string{"群里", "群聊", "本群", "群友", "QQ", "Telegram", "飞书", "企业微信", "OneBot"} {
+		if strings.Contains(defaultSystemPrompt, venue) {
+			t.Fatalf("默认人设写了 %q：人设要能跨机器人、跨平台、跨群聊和私聊复用，场合和平台由运行时注入，正文里提到别人就写「对方」「别人」「大家」：%q", venue, defaultSystemPrompt)
+		}
+	}
+}
+
 // 分条是投递机制，不能只在某一种表达风格里教：splitReply 只认 [diana-msg]，模型
 // 不写标记就一定发成一整条。每种风格的提示词都必须带上这条规则。
 func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {

@@ -248,6 +248,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
 	case "ignored_stale":
 		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 30 分钟，最长 24 小时），为避免补发过期回复而忽略", false
+	case "ignored_user_blocked":
+		return "not_replied", replyBlockedDecisionReason, false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
 	case "superseded_proactive":
@@ -1819,8 +1821,15 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	if !handled {
 		r.maybeNotifyQuietHours(ctx, event, text)
 		ignoredOutcome := "ignored"
-		if !r.admits(r.effectiveConfigForEvent(event), event) {
+		if cfg := r.effectiveConfigForEvent(event); !r.admits(cfg, event) {
 			ignoredOutcome = "ignored_policy"
+			// 屏蔽是主人或群管在聊天里明确下过的指令，和「没命中触发词」「等级不够」
+			// 不是一回事：事件页只写一句笼统的权限规则，没人能看出这条是被谁、在哪
+			// 一层屏蔽掉的，也就无从解除。routingReason 在这里要压过主动回复那句
+			// 泛泛的跳过说明——私聊被屏蔽时那句话会是「不是群聊事件」，更不着边际。
+			if r.replyGateBlocksUser(cfg, event) {
+				ignoredOutcome, event.routingReason = "ignored_user_blocked", replyBlockedDecisionReason
+			}
 		}
 		r.record(r.decisionEventRecord(event, text, ignoredOutcome))
 		return finishWithoutReply(ignoredOutcome)
@@ -2345,7 +2354,13 @@ func (r *Runtime) proactiveReplyConsideration(event MessageEvent, text string) (
 	if event.Kind != EventKindGroup {
 		return false, "消息不是群聊事件，未进入群聊主动回复判断"
 	}
-	if !r.admits(r.effectiveConfigForEvent(event), event) {
+	cfg := r.effectiveConfigForEvent(event)
+	// 屏蔽单独判在前面，理由要说清是谁被屏蔽了；顺带保证被屏蔽的人一次评分模型
+	// 调用都不会触发——反正永远不回他，那一次调用纯属白花钱。
+	if r.replyGateBlocksUser(cfg, event) {
+		return false, replyBlockedDecisionReason
+	}
+	if !r.admits(cfg, event) {
 		return false, "当前用户、群聊或回复权限规则不允许处理这条消息"
 	}
 	if proactiveReplyTriggerText(event, text) == "" && !hasReplyCandidateImage(event.Segments) {
@@ -3536,6 +3551,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
 				newDianaBotParticipationTool(r, event),
+				newDianaReplyBlockTool(r, event),
 				newDianaReminderTool(r, event),
 				newDianaScheduleTool(r, event),
 				newDianaRSSWatchTool(r, event),
@@ -6465,6 +6481,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && hasTool(botParticipationToolName) {
 		builder.WriteString("\n修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 diana.bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。")
+	}
+	if agentEnabled && hasTool(replyBlockToolName) {
+		builder.WriteString("\n主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 diana.reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或 diana.group 的成员查询，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。")
 	}
 	if agentEnabled && hasTool("diana.relationship") {
 		builder.WriteString("\n" + promptToolRelationshipList)
@@ -12232,6 +12251,29 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 	}
 }
 
+// replyBlockedDecisionReason 是被屏蔽的人收不到回复时写进事件的理由。屏蔽判断
+// 和事件记录共用这一句，两边永远说同一个词。
+const replyBlockedDecisionReason = "该用户已被屏蔽，不回复，直到解除屏蔽"
+
+// replyGateBlocksUser 报告这条消息是不是因为发送者在屏蔽名单里才不回复。
+//
+// 和 replyGateAllows 拆开是为了区分理由：等级不够、过了回复时段、不在白名单里
+// 都会让 replyGateAllows 返回 false，但只有屏蔽是有人明确下的指令，事件页和
+// 主动回复的跳过说明都要单独把它说出来。屏蔽判断本身不分平台——名单是按账号
+// 记的，OneBot 之外一样要拦。
+func (r *Runtime) replyGateBlocksUser(cfg BotConfig, event MessageEvent) bool {
+	gate := cfg.ReplyGate
+	if gate == nil {
+		return false
+	}
+	// 主人豁免仍然排在最前：门禁配错了把主人自己挡在门外，聊天里就没有补救手段了。
+	ownerID := cfg.OwnerIDForEvent(event)
+	if ownerID != "" && event.UserID == ownerID && gate.OwnerBypassEnabled() {
+		return false
+	}
+	return gate.IsBlocked(event.UserID)
+}
+
 // replyGateAllows applies the inexpensive local rules before consulting the
 // asynchronous OneBot member cache for a group-level gate.
 func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
@@ -12239,12 +12281,12 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 	if gate == nil {
 		return true
 	}
+	if r.replyGateBlocksUser(cfg, event) {
+		return false
+	}
 	ownerID := cfg.OwnerIDForEvent(event)
 	if ownerID != "" && event.UserID == ownerID && gate.OwnerBypassEnabled() {
 		return true
-	}
-	if gate.IsBlocked(event.UserID) {
-		return false
 	}
 	// 白名单在豁免之前判：豁免的语义是「绕过等级和时段门槛」，不是「绕过准入」。
 	// 放在豁免之后的话，一个既在豁免名单又不在白名单里的人会被放行，那就等于
