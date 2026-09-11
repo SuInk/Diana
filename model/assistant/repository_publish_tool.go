@@ -45,6 +45,7 @@ const (
 
 var (
 	repositoryIssueCreateMarkerPattern          = regexp.MustCompile(`<!--\s*diana-operation:create:([a-f0-9]{64})(?::[a-f0-9]{64})?\s*-->`)
+	repositoryIssueAnyMarkerPattern             = regexp.MustCompile(`<!--\s*diana-operation:[a-z_]+:[a-f0-9]{64}(?::[a-f0-9]{64})?\s*-->`)
 	repositoryIssueCQPattern                    = regexp.MustCompile(`(?i)\[CQ:[^\]]+\]`)
 	repositoryIssueGitHubTokenPattern           = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}\b`)
 	repositoryIssueQuotedCredentialPattern      = regexp.MustCompile(`(?i)["'](` + repositoryIssueCredentialKey + `)["']\s*:\s*["'][^"'\r\n]+["']`)
@@ -78,25 +79,35 @@ type dianaRepositoryIssuesTool struct {
 }
 
 type repositoryIssueResult struct {
-	OK                   bool                       `json:"ok"`
-	Operation            string                     `json:"operation"`
-	Outcome              string                     `json:"outcome,omitempty"`
-	Repository           string                     `json:"repository,omitempty"`
-	RequestedNumber      int                        `json:"requested_number,omitempty"`
-	FailureCode          string                     `json:"failure_code,omitempty"`
-	Message              string                     `json:"message"`
-	Issue                *repositoryIssueSummary    `json:"issue,omitempty"`
-	Items                []repositoryIssueSummary   `json:"items,omitempty"`
-	CommentURL           string                     `json:"comment_url,omitempty"`
-	Fingerprint          string                     `json:"fingerprint,omitempty"`
-	Idempotent           bool                       `json:"idempotent,omitempty"`
-	Reconciled           bool                       `json:"reconciled,omitempty"`
-	RequiresConfirmation bool                       `json:"requires_confirmation,omitempty"`
-	ConfirmationToken    string                     `json:"confirmation_token,omitempty"`
-	RequiresApproval     bool                       `json:"requires_approval,omitempty"`
-	Draft                *repositoryIssueDraftView  `json:"draft,omitempty"`
-	Drafts               []repositoryIssueDraftView `json:"drafts,omitempty"`
-	Redactions           int                        `json:"redactions,omitempty"`
+	OK              bool                     `json:"ok"`
+	Operation       string                   `json:"operation"`
+	Outcome         string                   `json:"outcome,omitempty"`
+	Repository      string                   `json:"repository,omitempty"`
+	RequestedNumber int                      `json:"requested_number,omitempty"`
+	FailureCode     string                   `json:"failure_code,omitempty"`
+	Message         string                   `json:"message"`
+	Issue           *repositoryIssueSummary  `json:"issue,omitempty"`
+	Items           []repositoryIssueSummary `json:"items,omitempty"`
+	// RequestedNumbers 和 Failures 只在批量写入（numbers）时出现：Items 是成功的那些，
+	// Failures 逐条说明哪个编号为什么没写上。
+	RequestedNumbers []int                         `json:"requested_numbers,omitempty"`
+	Failures         []repositoryIssueBatchFailure `json:"failures,omitempty"`
+	CommentURL       string                        `json:"comment_url,omitempty"`
+	// IssueBody 和 Comments 只在 get 返回：update 是整段覆盖，模型不先看一眼原文
+	// 就没法安全地改；以前没有任何操作能把正文和评论读回来。
+	IssueBody            string                       `json:"issue_body,omitempty"`
+	IssueBodyTruncated   bool                         `json:"issue_body_truncated,omitempty"`
+	Comments             []repositoryIssueCommentView `json:"comments,omitempty"`
+	CommentsTruncated    bool                         `json:"comments_truncated,omitempty"`
+	Fingerprint          string                       `json:"fingerprint,omitempty"`
+	Idempotent           bool                         `json:"idempotent,omitempty"`
+	Reconciled           bool                         `json:"reconciled,omitempty"`
+	RequiresConfirmation bool                         `json:"requires_confirmation,omitempty"`
+	ConfirmationToken    string                       `json:"confirmation_token,omitempty"`
+	RequiresApproval     bool                         `json:"requires_approval,omitempty"`
+	Draft                *repositoryIssueDraftView    `json:"draft,omitempty"`
+	Drafts               []repositoryIssueDraftView   `json:"drafts,omitempty"`
+	Redactions           int                          `json:"redactions,omitempty"`
 }
 
 type RepositoryIssueDraft struct {
@@ -136,12 +147,16 @@ type repositoryIssueDraftView struct {
 	ID string `json:"id"`
 	// Operation 区分这份草稿要执行的写操作。历史草稿没有这个字段，读取时按
 	// create 处理。
-	Operation     string   `json:"operation,omitempty"`
-	IssueTarget   int      `json:"issue_target,omitempty"`
-	GroupID       string   `json:"group_id"`
-	Repository    string   `json:"repository"`
-	Title         string   `json:"title"`
-	Body          string   `json:"body,omitempty"`
+	Operation   string `json:"operation,omitempty"`
+	IssueTarget int    `json:"issue_target,omitempty"`
+	// IssueTargets 是批量草稿要改的全部编号；单个目标时只有 IssueTarget。
+	IssueTargets []int  `json:"issue_targets,omitempty"`
+	GroupID      string `json:"group_id"`
+	Repository   string `json:"repository"`
+	Title        string `json:"title"`
+	Body         string `json:"body,omitempty"`
+	// AppendBody 是 update 草稿里「追加到正文末尾」的那段，和整段覆盖的 Body 分开。
+	AppendBody    string   `json:"append_body,omitempty"`
 	Labels        []string `json:"labels,omitempty"`
 	Assignees     []string `json:"assignees,omitempty"`
 	Milestone     any      `json:"milestone,omitempty"`
@@ -182,8 +197,29 @@ type githubRepositoryIssue struct {
 }
 
 type githubIssueComment struct {
-	Body    string `json:"body"`
-	HTMLURL string `json:"html_url"`
+	Body      string    `json:"body"`
+	HTMLURL   string    `json:"html_url"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	User      *struct {
+		Login string `json:"login"`
+	} `json:"user,omitempty"`
+}
+
+// repositoryIssueBatchFailure 记录批量写入里没成功的那一条。
+type repositoryIssueBatchFailure struct {
+	Number      int    `json:"number"`
+	FailureCode string `json:"failure_code"`
+	Message     string `json:"message"`
+}
+
+// repositoryIssueCommentView 是 get 返回给模型看的评论：去掉了运行时对账用的
+// 隐藏标记，正文按上限截断。
+type repositoryIssueCommentView struct {
+	Author    string    `json:"author,omitempty"`
+	Body      string    `json:"body"`
+	Truncated bool      `json:"truncated,omitempty"`
+	URL       string    `json:"url,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 type repositoryIssueAPIError struct {
@@ -216,7 +252,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues。search 按关键词找，get 读回某个 Issue 的标题、正文和最近评论——要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -238,19 +274,21 @@ func (t *dianaRepositoryIssuesTool) Description() string {
 func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。",
-			"search", "create", "update", "comment", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
-		"repository": toolStringParam("目标仓库，写成 owner/repo。approve、cancel_draft、list_drafts 不需要。"),
-		"number":     toolIntParam("目标 Issue 编号；update、comment、close、reopen 必填。", 1, 1_000_000),
-		"query":      toolStringParam("search 专用：检索关键词。"),
-		"title":      toolStringParam("create 必填、update 可选：Issue 标题，最多 " + itoa(repositoryIssueTitleLimit) + " 字符。"),
-		"body":       toolStringParam("create 与 update 的正文，comment 的评论内容，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。"),
-		"labels":     toolStringArrayParam("要设置的标签；传空数组表示清空。"),
-		"assignees":  toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
-		"milestone":  toolStringParam("要设置的里程碑；传 null 表示清空。"),
-		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求立即执行这次写入。写操作必填 true。" +
-			"后端会拿用户消息原文核对目标：消息里必须只出现一个 owner/repo，update/comment/close/reopen 还必须只出现一个 Issue 编号，" +
-			"对不上会直接拒绝。至于内容，只有用户在消息里逐字写出 title/body 时才会立即写入；" +
-			"你自己组织措辞时会自动落成待审批草稿，把草稿内容复述给用户，等对方明确同意后再用 approve 提交。"),
+			"search", "get", "create", "update", "comment", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
+		"repository":  toolStringParam("目标仓库，写成 owner/repo。approve、cancel_draft、list_drafts 不需要。"),
+		"number":      toolIntParam("目标 Issue 编号；get 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
+		"numbers":     toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
+		"query":       toolStringParam("search 专用：检索关键词。"),
+		"title":       toolStringParam("create 必填、update 可选：Issue 标题，最多 " + itoa(repositoryIssueTitleLimit) + " 字符。"),
+		"body":        toolStringParam("create 的正文、comment 的评论内容；update 时整段覆盖原正文，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。"),
+		"append_body": toolStringParam("update 专用：追加到现有正文末尾的内容，原正文保持不动；给已有 Issue 补充信息（复现版本、补图说明）用它，不要用 body 重写整段。"),
+		"labels":      toolStringArrayParam("要设置的标签；传空数组表示清空。"),
+		"assignees":   toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
+		"milestone":   toolStringParam("要设置的里程碑；传 null 表示清空。"),
+		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求执行这次写入。写操作必填 true。" +
+			"写操作不会直接落到 GitHub：create/update/comment/close/reopen 都先存成待审批草稿并返回确认码，" +
+			"把草稿内容和确认码复述给用户，等有权限的人原样打出确认码后再用 approve 提交。" +
+			"后端不再按用户消息的措辞核对仓库或编号，只认确认码；对多个 Issue 做同样的改动用 numbers 合成一份草稿。"),
 		"operation_id":       toolStringParam("幂等标识：同一次写入重试时传相同值，避免重复发布。"),
 		"draft_id":           toolStringParam("approve 与 cancel_draft 必填：要审批或取消的草稿 ID，可用 list_drafts 查到。"),
 		"confirmation_token": toolStringParam("审批流程返回的确认令牌，按提示原样回传。"),
@@ -261,7 +299,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
-		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、create、update、comment、close、reopen、approve、cancel_draft 或 list_drafts。"))
+		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、get、create、update、comment、close、reopen、approve、cancel_draft 或 list_drafts。"))
 	}
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
 		return t.finish(ctx, result.fail("plugin_unavailable", "仓库 Issue 发布插件未正确配置。"))
@@ -293,12 +331,16 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	}
 	if operation != "create" && operation != "search" {
 		result.RequestedNumber = repositoryIssueNumber(input)
+		result.RequestedNumbers = repositoryIssueBatchTargets(input)
 	}
-	if operation == "search" {
+	if operation == "search" || operation == "get" {
 		if !owner {
 			if code, message := t.validateWriteAccess(repository, false); code != "" {
 				return t.finish(ctx, result.fail(code, message))
 			}
+		}
+		if operation == "get" {
+			return t.finish(ctx, t.get(ctx, repository, input))
 		}
 		return t.finish(ctx, t.search(ctx, repository, input))
 	}
@@ -315,6 +357,8 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 	switch strings.ToLower(strings.TrimSpace(operation)) {
 	case "search", "find", "list":
 		return "search"
+	case "get", "get_issue", "view", "read", "show":
+		return "get"
 	case "create", "create_issue", "new":
 		return "create"
 	case "update", "update_issue", "edit":
@@ -834,19 +878,58 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	body, bodyRedactions := sanitizeRepositoryIssueText(configToolString(input, "body"), repositoryIssueBodyLimit, false)
 	result.Redactions = redactions + bodyRedactions
 	if operation == "comment" {
-		number := repositoryIssueNumber(input)
-		if number <= 0 {
-			return result.fail("invalid_input", "评论草稿必须提供有效的 Issue number。")
-		}
 		if body == "" {
 			return result.fail("invalid_input", "评论草稿必须提供非空 body。")
 		}
-		result.RequestedNumber = number
+		result.RequestedNumber = repositoryIssueNumber(input)
 	} else if operation == "create" && title == "" {
 		return result.fail("invalid_input", "生成 Issue 草稿必须提供标题。")
 	}
-	if operation != "create" && repositoryIssueNumber(input) <= 0 {
-		return result.fail("invalid_input", "改动已有 Issue 必须提供 issue 编号。")
+	// 同标题的草稿不重复建。上一轮批准提交的结果还没进入这一轮的上下文时，模型会
+	// 把同一个 Issue 再起一份草稿：待审批的直接把原草稿和确认码再给一次，刚提交过
+	// 的直接报编号——用户明确要再建一份时传 allow_duplicate。
+	// 带了 operation_id 的调用方自己在管幂等，交给指纹那条路。
+	if operation == "create" && !boolInput(input, "allow_duplicate") && strings.TrimSpace(configToolString(input, "operation_id")) == "" {
+		if existing, kind := t.findSameTitleDraft(ctx, draftScope, repository, title); kind == "pending" {
+			result.OK = true
+			result.Outcome = "draft_pending"
+			result.RequiresApproval = true
+			result.Draft = repositoryIssueDraftViewFromDraft(existing)
+			result.Message = fmt.Sprintf(
+				"同标题的草稿已经在等待审批，没有重复建。把这份草稿的内容和确认码 %s 单独成行再告诉用户一次，"+
+					"等有权限的人自己打出确认码后用 operation=approve 和这个 draft_id 提交。",
+				repositoryIssueConfirmationCode(existing.ID))
+			return result
+		} else if kind == "created" {
+			result.OK = true
+			result.Outcome = "already_created"
+			result.Idempotent = true
+			result.RequestedNumber = existing.IssueNumber
+			result.Issue = &repositoryIssueSummary{Number: existing.IssueNumber, URL: existing.IssueURL, Title: configToolString(existing.Input, "title")}
+			result.Draft = repositoryIssueDraftViewFromDraft(existing)
+			result.Message = fmt.Sprintf(
+				"同标题的 Issue 刚刚已经提交成功（#%d %s），这次没有再建草稿，也不需要确认码。"+
+					"直接把这个编号和链接告诉用户；只有用户明确要再建一份时才带 allow_duplicate=true 重试。",
+				existing.IssueNumber, existing.IssueURL)
+			return result
+		}
+	}
+	numbers, code, message := repositoryIssueNumbers(input)
+	if code != "" {
+		return result.fail(code, message)
+	}
+	if operation != "create" && len(numbers) == 0 {
+		return result.fail("invalid_input", "改动已有 Issue 必须提供 issue 编号（number 或 numbers）。")
+	}
+	if operation == "create" && len(numbers) > 0 {
+		return result.fail("invalid_input", "create 不接受 number/numbers。")
+	}
+	result.RequestedNumbers = repositoryIssueBatchTargets(input)
+	appendBody, appendRedactions := sanitizeRepositoryIssueText(configToolString(input, "append_body"), repositoryIssueBodyLimit, false)
+	result.Redactions += appendRedactions
+	if operation == "update" && !repositoryIssueUpdateHasChanges(input, title, body, appendBody) {
+		// 空 update 以前要等到审批那一步才被拒，用户先确认了一个什么都不改的草稿。
+		return result.fail("invalid_input", "update 至少要提供 title、body、append_body、labels、assignees 或 milestone 中的一项。")
 	}
 	labels, _, code, message := repositoryIssueStringList(input, "labels", 20)
 	if code != "" {
@@ -861,8 +944,14 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	if _, present := input["body"]; present {
 		draftInput["body"] = body
 	}
-	if number := repositoryIssueNumber(input); number > 0 {
-		draftInput["number"] = number
+	if appendBody != "" {
+		draftInput["append_body"] = appendBody
+	}
+	// 单个目标仍然写 number，老草稿和执行路径都认它；多个目标才写 numbers。
+	if len(numbers) == 1 {
+		draftInput["number"] = numbers[0]
+	} else if len(numbers) > 1 {
+		draftInput["numbers"] = numbers
 	}
 	// 幂等键、去重放行和确认令牌都属于本次写操作的一部分，必须跟着草稿走，否则
 	// 确认之后执行的是一个丢了这些参数的请求。
@@ -966,22 +1055,20 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	// 执行草稿记录的那个操作，而不是一律当成 create：草稿现在也承载 update、comment
 	// 和开关状态。旧草稿没有 operation 字段，按 create 处理保持兼容。
 	operation := repositoryIssueDraftOperation(draft)
-	var executed repositoryIssueResult
-	switch operation {
-	case "create":
-		executed = t.create(ctx, draft.Repository, writeInput)
-	case "update":
-		executed = t.update(ctx, draft.Repository, writeInput)
-	case "comment":
-		executed = t.comment(ctx, draft.Repository, writeInput)
-	case "close", "reopen":
-		executed = t.setState(ctx, draft.Repository, writeInput, operation)
-	default:
+	if operation != "create" && operation != "update" && operation != "comment" && operation != "close" && operation != "reopen" {
 		return result.fail("invalid_operation", "草稿记录的操作无法执行。")
+	}
+	var executed repositoryIssueResult
+	if targets := repositoryIssueBatchTargets(writeInput); len(targets) > 1 {
+		executed = t.executeBatch(ctx, draft.Repository, operation, writeInput, targets)
+	} else {
+		executed = t.executeWrite(ctx, draft.Repository, operation, writeInput)
 	}
 	executed.Operation = "approve"
 	executed.Draft = repositoryIssueDraftViewFromDraft(draft)
-	if executed.OK {
+	// 批量里只要有一条写上了，草稿就算用掉：再批一次会把成功的那些重做一遍
+	// （update 不幂等）。没写上的编号在 Failures 里逐条列出，用户另起一份草稿。
+	if executed.OK || len(executed.Items) > 0 {
 		draft.Status = "created"
 		draft.ResolvedBy = strings.TrimSpace(t.event.UserID)
 		if executed.Issue != nil {
@@ -993,6 +1080,129 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 		}
 	}
 	return executed
+}
+
+// executeWrite 对单个目标执行草稿记录的写操作。
+func (t *dianaRepositoryIssuesTool) executeWrite(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
+	switch operation {
+	case "create":
+		return t.create(ctx, repository, input)
+	case "update":
+		return t.update(ctx, repository, input)
+	case "comment":
+		return t.comment(ctx, repository, input)
+	default:
+		return t.setState(ctx, repository, input, operation)
+	}
+}
+
+// executeBatch 把同一份改动逐个写到 targets 上。一条失败不拦后面的：用户要的是
+// 「这几个都改掉」，中途停下只会留下一半改了一半没改、还得自己数哪些成了。
+func (t *dianaRepositoryIssuesTool) executeBatch(ctx context.Context, repository, operation string, input map[string]any, targets []int) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: operation, Repository: repository, RequestedNumbers: targets}
+	for _, number := range targets {
+		single := make(map[string]any, len(input))
+		for key, value := range input {
+			if key == "numbers" {
+				continue
+			}
+			single[key] = value
+		}
+		single["number"] = number
+		one := t.executeWrite(ctx, repository, operation, single)
+		result.Redactions += one.Redactions
+		if !one.OK {
+			result.Failures = append(result.Failures, repositoryIssueBatchFailure{Number: number, FailureCode: one.FailureCode, Message: one.Message})
+			continue
+		}
+		if one.Issue != nil {
+			result.Items = append(result.Items, *one.Issue)
+		}
+	}
+	succeeded := len(targets) - len(result.Failures)
+	switch {
+	case succeeded == len(targets):
+		result.OK = true
+		result.Outcome = repositoryIssueBatchOutcome(operation)
+		result.Message = fmt.Sprintf("GitHub 已对 %d 个 Issue 完成 %s。", succeeded, operation)
+	case succeeded == 0:
+		result.Outcome = "failed"
+		result.FailureCode = result.Failures[0].FailureCode
+		result.Message = fmt.Sprintf("%d 个 Issue 全部未能完成 %s，见 failures。", len(targets), operation)
+	default:
+		result.Outcome = "partial"
+		result.FailureCode = "partial_failure"
+		result.Message = fmt.Sprintf("%d 个 Issue 完成了 %s，%d 个失败，见 failures；失败的编号需要另起草稿重试。", succeeded, operation, len(result.Failures))
+	}
+	return result
+}
+
+func repositoryIssueBatchOutcome(operation string) string {
+	switch operation {
+	case "update":
+		return "updated"
+	case "comment":
+		return "commented"
+	case "close":
+		return "closed"
+	case "reopen":
+		return "reopened"
+	}
+	return operation
+}
+
+const repositoryIssueBatchLimit = 20
+
+// repositoryIssueNumbers 汇总 number 与 numbers：去重、保序、全部必须是正整数。
+func repositoryIssueNumbers(input map[string]any) ([]int, string, string) {
+	seen := map[int]bool{}
+	var out []int
+	add := func(number int) {
+		if !seen[number] {
+			seen[number] = true
+			out = append(out, number)
+		}
+	}
+	if _, present := input["number"]; present {
+		number := repositoryIssueNumber(input)
+		if number <= 0 {
+			return nil, "invalid_input", "number 必须是正整数。"
+		}
+		add(number)
+	}
+	if raw, present := input["numbers"]; present && raw != nil {
+		var items []any
+		switch typed := raw.(type) {
+		case []any:
+			items = typed
+		case []int:
+			for _, item := range typed {
+				items = append(items, item)
+			}
+		default:
+			return nil, "invalid_input", "numbers 必须是 Issue 编号数组。"
+		}
+		for _, item := range items {
+			value, ok := numberValue(item)
+			if !ok || value <= 0 || value != float64(int(value)) {
+				return nil, "invalid_input", "numbers 里每一项都必须是正整数。"
+			}
+			add(int(value))
+		}
+	}
+	if len(out) > repositoryIssueBatchLimit {
+		return nil, "invalid_input", "一次最多改 " + itoa(repositoryIssueBatchLimit) + " 个 Issue。"
+	}
+	return out, "", ""
+}
+
+// repositoryIssueBatchTargets 只在确实是批量（两个及以上）时返回编号列表。
+func repositoryIssueBatchTargets(input map[string]any) []int {
+	numbers, code, _ := repositoryIssueNumbers(input)
+	if code != "" || len(numbers) < 2 {
+		return nil
+	}
+	return numbers
 }
 
 func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[string]any) repositoryIssueResult {
@@ -1018,19 +1228,49 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 	if !reachable && t.event.Kind == EventKindGroup {
 		reachable = len(draftGroups[groupID]) > 0 || len(managerGroups[groupID]) > 0
 	}
+	// 主人建得了也批得了，列表没理由把他拦在外面：这里以前只看名单，主人没把自己
+	// 写进名单就列不出草稿，而 create/approve 都是认主人的。
+	if !reachable && t.runtime.relationshipPolicy(ctx, t.event).Owner {
+		reachable = true
+	}
 	if err != nil || effectiveErr != nil || !reachable {
 		return result.fail("permission_denied", "当前会话没有任何已授权的 Issue 草稿仓库。")
 	}
 	status := strings.ToLower(strings.TrimSpace(configToolString(input, "status")))
 	if status == "" {
-		status = "pending"
+		status = "recent"
 	}
-	if status != "pending" && status != "created" && status != "cancelled" && status != "all" {
-		return result.fail("invalid_input", "status 必须是 pending、created、cancelled 或 all。")
+	if status != "recent" && status != "pending" && status != "created" && status != "cancelled" && status != "all" {
+		return result.fail("invalid_input", "status 必须是 recent、pending、created、cancelled 或 all。")
 	}
-	drafts, err := t.plugin.listDrafts(ctx, scope, status)
+	queryStatus := status
+	if status == "recent" {
+		queryStatus = "all"
+	}
+	drafts, err := t.plugin.listDrafts(ctx, scope, queryStatus)
 	if err != nil {
 		return result.fail("draft_store_failed", "读取 Issue 草稿列表失败。")
+	}
+	// 默认列表以前只有待审批的：一份草稿刚被批准提交，下一轮模型再 list 就看不到
+	// 它了，于是把「已经提交」读成「草稿丢了」，接着重新建一份、再要一次确认码。
+	// 今晚 #67 和 #70 都是这么重复出来的——上一轮的回复还没进入下一轮的上下文，
+	// 模型手里只有这份列表。所以默认把最近处理完的草稿也列出来，带着状态和编号。
+	resolved := 0
+	if status == "recent" {
+		kept := make([]repositoryIssueDraft, 0, len(drafts))
+		cutoff := time.Now().Add(-repositoryIssueRecentDraftWindow)
+		for _, draft := range drafts {
+			if draft.Status == "pending" {
+				kept = append(kept, draft)
+				continue
+			}
+			if resolved >= repositoryIssueRecentResolvedLimit || draft.UpdatedAt.Before(cutoff) {
+				continue
+			}
+			resolved++
+			kept = append(kept, draft)
+		}
+		drafts = kept
 	}
 	result.OK = true
 	result.Outcome = "listed"
@@ -1040,11 +1280,61 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 		"共找到 %d 条 Issue 草稿。逐条把标题和内容复述给用户；待审批的草稿要把它的 confirmation_code 原样写进回复——"+
 			"不发出来对方就没法确认。说明由有权限的人自己打出该确认码才会提交；在那之前不要调用 approve，"+
 			"也不要当作对方已经确认过。", len(drafts))
+	if resolved > 0 {
+		result.Message += fmt.Sprintf(" 其中 %d 条是最近已处理的：status=created 的已经写进 GitHub（issue_number/issue_url 就是结果），"+
+			"status=cancelled 的已被用户取消；这两种都不要再为同一件事重新建草稿或要确认码。", resolved)
+	}
 	result.Drafts = make([]repositoryIssueDraftView, 0, len(drafts))
 	for _, draft := range drafts {
 		result.Drafts = append(result.Drafts, *repositoryIssueDraftViewFromDraft(draft))
 	}
 	return result
+}
+
+const (
+	// repositoryIssueRecentDraftWindow 是默认草稿列表里保留已处理草稿的时长。
+	repositoryIssueRecentDraftWindow   = 12 * time.Hour
+	repositoryIssueRecentResolvedLimit = 10
+)
+
+// repositoryIssueDraftTitleKey 把标题归一成比对键：大小写、首尾和连续空白都不算差异。
+func repositoryIssueDraftTitleKey(title string) string {
+	return strings.ToLower(strings.Join(strings.Fields(title), " "))
+}
+
+// findSameTitleDraft 在当前会话范围里找同仓库、同标题的草稿：待审批的直接复用，
+// 最近刚提交成功的当成「已经建好」。返回的第二个值说明找到的是哪一种。
+func (t *dianaRepositoryIssuesTool) findSameTitleDraft(ctx context.Context, scope, repository, title string) (repositoryIssueDraft, string) {
+	key := repositoryIssueDraftTitleKey(title)
+	if key == "" {
+		return repositoryIssueDraft{}, ""
+	}
+	drafts, err := t.plugin.listDrafts(ctx, scope, "all")
+	if err != nil {
+		return repositoryIssueDraft{}, ""
+	}
+	cutoff := time.Now().Add(-repositoryIssueRecentDraftWindow)
+	var created repositoryIssueDraft
+	for _, draft := range drafts {
+		if !strings.EqualFold(draft.Repository, repository) || repositoryIssueDraftOperation(draft) != "create" {
+			continue
+		}
+		if repositoryIssueDraftTitleKey(configToolString(draft.Input, "title")) != key {
+			continue
+		}
+		switch draft.Status {
+		case "pending":
+			return draft, "pending"
+		case "created":
+			if created.ID == "" && draft.IssueNumber > 0 && !draft.UpdatedAt.Before(cutoff) {
+				created = draft
+			}
+		}
+	}
+	if created.ID != "" {
+		return created, "created"
+	}
+	return repositoryIssueDraft{}, ""
 }
 
 func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
@@ -1123,9 +1413,11 @@ func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIs
 	}
 	return &repositoryIssueDraftView{
 		ID: draft.ID, GroupID: draft.GroupID, Repository: draft.Repository, Operation: operation,
-		IssueTarget: repositoryIssueNumber(draft.Input),
-		Title:       configToolString(draft.Input, "title"),
-		Body:        configToolString(draft.Input, "body"), Labels: labels,
+		IssueTarget:  repositoryIssueNumber(draft.Input),
+		IssueTargets: repositoryIssueBatchTargets(draft.Input),
+		Title:        configToolString(draft.Input, "title"),
+		Body:         configToolString(draft.Input, "body"), Labels: labels,
+		AppendBody:  configToolString(draft.Input, "append_body"),
 		Assignees:   assignees,
 		Milestone:   draft.Input["milestone"],
 		State:       configToolString(draft.Input, "state"),
@@ -1283,6 +1575,20 @@ func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository strin
 		redactions += count
 		payload["body"] = preserveRepositoryIssueCreateMarker(body, current.Body)
 	}
+	if appendBody, count := sanitizeRepositoryIssueText(configToolString(input, "append_body"), repositoryIssueBodyLimit, false); appendBody != "" {
+		redactions += count
+		// 追加是在「当前要写入的正文」上做：没传 body 就是远端现有正文。对账标记
+		// 从正文里摘出来再补回末尾，免得新内容追加到隐藏注释后面。
+		base := current.Body
+		if replaced, ok := payload["body"].(string); ok {
+			base = replaced
+		}
+		combined := appendRepositoryIssueBody(base, appendBody)
+		if len(combined) > repositoryIssueBodyLimit {
+			return result.fail("invalid_input", "追加后的正文超过 "+itoa(repositoryIssueBodyLimit)+" 字符上限。")
+		}
+		payload["body"] = preserveRepositoryIssueCreateMarker(combined, current.Body)
+	}
 	for _, key := range []string{"labels", "assignees"} {
 		limit := 20
 		if key == "assignees" {
@@ -1309,7 +1615,7 @@ func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository strin
 	}
 	result.Redactions = redactions
 	if len(payload) == 0 {
-		return result.fail("invalid_input", "update 至少要提供 title、body、labels、assignees 或 milestone 中的一项。")
+		return result.fail("invalid_input", "update 至少要提供 title、body、append_body、labels、assignees 或 milestone 中的一项。")
 	}
 	var updated githubRepositoryIssue
 	if apiErr := t.doJSON(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/issues/%d", repository, number), payload, &updated); apiErr != nil {
@@ -1320,6 +1626,97 @@ func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository strin
 	result.Message = "GitHub 已更新 Issue。"
 	result.Issue = ptrRepositoryIssueSummary(repositoryIssueSummaryFromGitHub(updated))
 	return result
+}
+
+// get 把一个 Issue 的标题、正文和最近评论读回来。update 是整段覆盖，模型不先看
+// 原文就只能凭记忆重写，很容易把原内容冲掉；以前工具里没有任何操作能读正文。
+func (t *dianaRepositoryIssuesTool) get(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: "get", Repository: repository, RequestedNumber: repositoryIssueNumber(input)}
+	number := repositoryIssueNumber(input)
+	if number <= 0 {
+		return result.fail("invalid_input", "get 必须提供有效的 Issue number。")
+	}
+	issue, apiErr := t.getIssue(ctx, repository, number)
+	if apiErr != nil {
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+	}
+	if !validRepositoryIssueCanonicalURL(issue.HTMLURL, repository, "issues", issue.Number) {
+		return result.fail("invalid_response", "GitHub 返回了目标仓库之外的 Issue，结果已拒绝。")
+	}
+	values := url.Values{"per_page": {strconv.Itoa(repositoryIssueGetCommentLimit + 1)}}
+	var comments []githubIssueComment
+	if apiErr := t.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d/comments?%s", repository, number, values.Encode()), nil, &comments); apiErr != nil {
+		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+	}
+	result.OK = true
+	result.Outcome = "fetched"
+	result.Issue = ptrRepositoryIssueSummary(repositoryIssueSummaryFromGitHub(issue))
+	result.IssueBody, result.IssueBodyTruncated = repositoryIssueDisplayText(issue.Body, repositoryIssueGetBodyLimit)
+	if len(comments) > repositoryIssueGetCommentLimit {
+		comments = comments[:repositoryIssueGetCommentLimit]
+		result.CommentsTruncated = true
+	}
+	result.Comments = make([]repositoryIssueCommentView, 0, len(comments))
+	for _, comment := range comments {
+		view := repositoryIssueCommentView{URL: comment.HTMLURL, CreatedAt: comment.CreatedAt}
+		if comment.User != nil {
+			view.Author = comment.User.Login
+		}
+		view.Body, view.Truncated = repositoryIssueDisplayText(comment.Body, repositoryIssueGetCommentBodyLimit)
+		result.Comments = append(result.Comments, view)
+	}
+	result.Message = fmt.Sprintf("已读取 %s#%d 的正文和 %d 条评论。", repository, number, len(result.Comments))
+	return result
+}
+
+const (
+	repositoryIssueGetBodyLimit        = 8_000
+	repositoryIssueGetCommentLimit     = 20
+	repositoryIssueGetCommentBodyLimit = 2_000
+)
+
+// repositoryIssueDisplayText 去掉运行时对账用的隐藏标记并按上限截断，给模型看。
+func repositoryIssueDisplayText(text string, limit int) (string, bool) {
+	text = strings.TrimSpace(repositoryIssueAnyMarkerPattern.ReplaceAllString(text, ""))
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text, false
+	}
+	return string(runes[:limit]), true
+}
+
+// appendRepositoryIssueBody 把 addition 接到 base 正文末尾。base 里的对账标记先
+// 摘掉，由调用方在合并后重新补到末尾。
+func appendRepositoryIssueBody(base, addition string) string {
+	base = strings.TrimSpace(repositoryIssueCreateMarkerPattern.ReplaceAllString(base, ""))
+	addition = strings.TrimSpace(addition)
+	switch {
+	case base == "":
+		return addition
+	case addition == "":
+		return base
+	default:
+		return base + "\n\n" + addition
+	}
+}
+
+// repositoryIssueUpdateHasChanges 判断一份 update 请求到底有没有要改的东西。
+func repositoryIssueUpdateHasChanges(input map[string]any, title, body, appendBody string) bool {
+	if _, present := input["title"]; present && title != "" {
+		return true
+	}
+	if _, present := input["body"]; present && body != "" {
+		return true
+	}
+	if appendBody != "" {
+		return true
+	}
+	for _, key := range []string{"labels", "assignees", "milestone"} {
+		if _, present := input[key]; present {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
@@ -2385,6 +2782,10 @@ func (t *dianaRepositoryIssuesTool) audit(result repositoryIssueResult) {
 	target := result.Repository
 	if result.RequestedNumber > 0 {
 		metadata["issue_number"] = result.RequestedNumber
+	}
+	if len(result.RequestedNumbers) > 0 {
+		metadata["issue_numbers"] = result.RequestedNumbers
+		metadata["failed_count"] = len(result.Failures)
 	}
 	if result.Issue != nil {
 		metadata["issue_number"] = result.Issue.Number

@@ -60,6 +60,15 @@ func toolStringArrayParam(description string) map[string]any {
 	}
 }
 
+// toolIntArrayParam 描述整数数组，比如一批 Issue 编号。
+func toolIntArrayParam(description string, minimum, maximum int) map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"description": description,
+		"items":       map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum},
+	}
+}
+
 // toolEnumArrayParam 描述取值受限的字符串数组，比如「只收这几种动态」。
 func toolEnumArrayParam(description string, values ...string) map[string]any {
 	return map[string]any{
