@@ -2269,16 +2269,17 @@ func (r *Runtime) shouldHandleChatTrigger(event MessageEvent, text string) bool 
 	if r.isOwnerReplySuppressionCommand(event, text) {
 		return true
 	}
-	// NapCat can include both reply and at segments in one message. An actual
-	// at is an explicit direct trigger; only reply-only messages use the
-	// semantic answerability gate.
-	if eventExplicitlyMentionsBot(event, cfg) {
-		return true
-	}
-	if eventRepliesToBot(event, cfg) {
-		return false
-	}
-	if eventDirectlyMentionsBot(event, cfg) {
+	// @ 它、引用它、回复它的消息，都算直接在叫它，一律进回复流程。
+	//
+	// 纯引用以前走语义判定：@ 立即触发，只有引用的交给接话评分。于是「引用了机器人
+	// 却不理人」是可能的——评分里「用户明确要求停止」会让三项都记 0.00，而相关度和
+	// 闲聊双 0 在 ratingsAllow 里是一条硬否决，连「总是」档都压不过。群友引用机器人
+	// 怼一句「没人问你」，命中的就是这条路径。
+	//
+	// 代价是明确叫停也会被回复，这是权衡后的选择：被引用就该理人，比「被怼了装没
+	// 看见」更要紧。主人的静音命令不受影响，它在更前面由 isOwnerReplySuppressionCommand
+	// 单独接住；接话评分仍然管着没点名的那些消息。
+	if eventDirectlyMentionsBot(event, cfg) || eventRepliesToBot(event, cfg) {
 		return true
 	}
 	// 称呼匹配只做结构判断：词边界、是否被引号整个括起来、是否处在呼语位置。区分

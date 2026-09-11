@@ -181,7 +181,10 @@ func TestRuntimeDirectTriggersBypassProactiveRouter(t *testing.T) {
 	}
 }
 
-func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
+// 引用机器人的追问直接进回复流程，不再过可答性闸门：被引用就该理人。
+// 路由提示词里那两条「不因需要工具或暂时不知道答案而沉默」的约束仍然要在，
+// 它现在管的是没点名机器人的那些消息，所以用一条普通群聊消息来验。
+func TestRuntimeReplyToBotTriggersReplyDirectly(t *testing.T) {
 	event := MessageEvent{
 		Kind:       EventKindGroup,
 		GroupID:    "123456",
@@ -209,20 +212,28 @@ func TestRuntimeReplyToBotUsesReliableAnswerabilityGate(t *testing.T) {
 		return provider, nil
 	})
 	text := PlainText(event.Segments)
-	if runtime.shouldHandleChat(event, text) {
-		t.Fatal("replying to the bot must pass the semantic answerability gate")
+	if !runtime.shouldHandleChat(event, text) {
+		t.Fatal("引用机器人的追问应当直接进回复流程")
 	}
-	if proactiveReplySampleAllows(event, text, 0.000001) {
-		t.Fatal("test event unexpectedly passed ordinary proactive sampling")
+
+	// 没点名机器人的普通群聊仍旧走路由，顺便守住路由提示词里的那两条约束。
+	plain := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", SelfID: "42", MessageID: "plain-1",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个结论的依据是什么"}}}}
+	plainText := PlainText(plain.Segments)
+	if runtime.shouldHandleChat(plain, plainText) {
+		t.Fatal("没点名机器人的普通群聊不该直接触发回复")
 	}
-	if !runtime.shouldConsiderProactiveReply(event, text) || !runtime.shouldHandleProactiveReply(context.Background(), event, text) {
-		t.Fatal("reliable direct follow-up should pass semantic routing without proactive sampling")
+	if !runtime.shouldConsiderProactiveReply(plain, plainText) || !runtime.shouldHandleProactiveReply(context.Background(), plain, plainText) {
+		t.Fatal("公开提问应当通过语义路由")
 	}
 	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "不是压低明确请求相关度的理由") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
 		t.Fatalf("router prompt missing deferred accuracy guard: %#v", provider.request.Messages)
 	}
 }
 
+// 引用机器人的追问直接进回复流程，路由怎么判都不再影响它：这一条以前是
+// 「可靠就回、判不可答就沉默」，现在被引用一律理人。两种路由结论都跑一遍，
+// 断言结果一样，免得哪天又把闸门悄悄加回来。
 func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -234,13 +245,13 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			name:        "reliable follow-up",
 			routeReply:  `{"should_reply":true,"confidence":0.96,"category":"bot_related","target_message_id":"reply-1","turn_message_ids":["reply-1"],"directed_at_bot":true,"answerable":true,"reason":"上下文足够可靠回答"}`,
 			wantHandled: true,
-			wantOutcome: "replied_proactive",
+			wantOutcome: "replied",
 		},
 		{
-			name:        "router mistakes tool-readable data for missing information",
+			name:        "router would have called it unanswerable",
 			routeReply:  `{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":true,"answerable":false,"requests_response":true,"blocker":"missing_context","reason":"缺少所指文件，无法可靠回答"}`,
-			wantHandled: false,
-			wantOutcome: "ignored",
+			wantHandled: true,
+			wantOutcome: "replied",
 		},
 	}
 	for _, tt := range tests {
@@ -280,9 +291,10 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			if handled != tt.wantHandled || outcome != tt.wantOutcome {
 				t.Fatalf("handled=%v outcome=%q, want handled=%v outcome=%q", handled, outcome, tt.wantHandled, tt.wantOutcome)
 			}
-			// 回复前只剩可答性路由一次调用：空转复盘已经挪到回复之后。
-			if len(provider.requestsSnapshot()) != 1 {
-				t.Fatalf("LLM requests=%d, want only the answerability route", len(provider.requestsSnapshot()))
+			// 被引用直接触发，入站阶段一次模型调用都不该有：路由省掉了，
+			// 空转复盘本来就在回复之后。
+			if len(provider.requestsSnapshot()) != 0 {
+				t.Fatalf("LLM requests=%d, want no inbound routing call", len(provider.requestsSnapshot()))
 			}
 			runtime.proactiveBatchMu.Lock()
 			_, queued := runtime.proactiveBatches[sessionKey(event)]

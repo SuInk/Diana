@@ -638,7 +638,8 @@ func TestHistoryBackfillPaddingDoesNotExceedReplayCutoff(t *testing.T) {
 	}
 }
 
-func TestReplyToBotEntersSemanticAnswerabilityGate(t *testing.T) {
+// 引用机器人的消息直接进回复流程，不再交给接话评分：被引用就该理人。
+func TestReplyToBotTriggersReplyDirectly(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &capturingLLMProvider{}, nil
 	})
@@ -654,11 +655,8 @@ func TestReplyToBotEntersSemanticAnswerabilityGate(t *testing.T) {
 	if !event.ToMe {
 		t.Fatal("replying to the bot should remain addressed to the bot")
 	}
-	if runtime.shouldHandleChat(event, "再说一下") {
-		t.Fatal("replying to the bot must not bypass semantic answerability routing")
-	}
-	if !runtime.shouldConsiderProactiveReply(event, "再说一下") {
-		t.Fatal("replying to the bot should enter semantic answerability routing")
+	if !runtime.shouldHandleChat(event, "再说一下") {
+		t.Fatal("引用机器人的消息应当直接进回复流程")
 	}
 }
 
