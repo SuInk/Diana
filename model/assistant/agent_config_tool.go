@@ -68,6 +68,9 @@ type dianaBotConfigSnapshot struct {
 	ErrorReplyPrefix                string                    `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts               int                       `json:"send_retry_attempts"`
 	SendChunkIntervalMS             int                       `json:"send_chunk_interval_ms"`
+	PrivateClosingGrace             int                       `json:"private_closing_grace"`
+	InboundGroupConcurrency         int                       `json:"inbound_group_concurrency"`
+	InboundPrivateConcurrency       int                       `json:"inbound_private_concurrency"`
 	PromptInjectTime                bool                      `json:"prompt_inject_time"`
 	PromptInjectPlaintextRules      bool                      `json:"prompt_inject_plaintext_rules"`
 	PromptInjectGroupSender         bool                      `json:"prompt_inject_group_sender"`
@@ -294,6 +297,9 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
 		SendRetryAttempts:               cfg.SendRetryAttempts,
 		SendChunkIntervalMS:             cfg.SendChunkIntervalMS,
+		PrivateClosingGrace:             cfg.PrivateClosingGrace,
+		InboundGroupConcurrency:         cfg.InboundGroupConcurrency,
+		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,
 		PromptInjectTime:                boolValue(cfg.PromptInjectTime, true),
 		PromptInjectPlaintextRules:      boolValue(cfg.PromptInjectPlaintextRules, true),
 		PromptInjectGroupSender:         boolValue(cfg.PromptInjectGroupSender, true),

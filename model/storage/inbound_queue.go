@@ -236,7 +236,7 @@ func sameInboundTransport(current, stored assistant.MessageEvent) bool {
 // ClaimNextInboundEvent atomically leases the highest-priority available event,
 // preserving FIFO order within each priority. Expired processing leases are
 // eligible for recovery by another worker.
-func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, groupConcurrency ...int) (assistant.InboundQueueItem, bool, error) {
+func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, limits ...assistant.InboundConcurrency) (assistant.InboundQueueItem, bool, error) {
 	defer s.observeStorage(ctx, "ClaimNextInboundEvent", "write")()
 	if s == nil || s.db == nil {
 		return assistant.InboundQueueItem{}, false, errors.New("claim inbound event: sqlite store is not configured")
@@ -249,7 +249,7 @@ func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner stri
 	if leaseUntil.IsZero() || !leaseUntil.After(now) {
 		return assistant.InboundQueueItem{}, false, errors.New("claim inbound event: lease must expire in the future")
 	}
-	groupLimit := inboundGroupConcurrencyValue(groupConcurrency)
+	concurrency := inboundConcurrencyValue(limits)
 
 	var item assistant.InboundQueueItem
 	var payload string
@@ -265,7 +265,7 @@ WITH candidate AS (
       WHERE active.session = queued.session
         AND active.status = ?
         AND active.lease_until > ?
-    ) < CASE WHEN queued.kind = ? THEN ? ELSE 1 END
+    ) < CASE WHEN queued.kind = ? THEN ? ELSE ? END
   ORDER BY
     queued.priority DESC,
     queued.event_time ASC,
@@ -286,7 +286,8 @@ UPDATE inbound_events
 	    updated_at = ?
 WHERE id = (SELECT id FROM candidate)
 RETURNING id, session, payload, attempts, priority
-`, inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), string(assistant.EventKindGroup), groupLimit,
+`, inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), inboundStatusProcessing, now.UnixNano(),
+		string(assistant.EventKindGroup), concurrency.Group, concurrency.Private,
 		inboundStatusProcessing, leaseOwner, leaseUntil.UTC().UnixNano(), now.UnixNano()).Scan(
 		&item.ID, &item.Session, &payload, &item.Attempts, &item.Priority,
 	)
@@ -309,11 +310,20 @@ func inboundPriorityValue(values []int) int {
 	return values[0]
 }
 
-func inboundGroupConcurrencyValue(values []int) int {
-	if len(values) == 0 || values[0] <= 0 {
-		return 1
+// inboundConcurrencyValue 归一化调用方给的并发上限。没给或给了非正数时退回 1：
+// 认领查询按会话串行是最保守的行为，绝不能因为配置缺失变成无上限。
+func inboundConcurrencyValue(values []assistant.InboundConcurrency) assistant.InboundConcurrency {
+	limits := assistant.InboundConcurrency{}
+	if len(values) > 0 {
+		limits = values[0]
 	}
-	return values[0]
+	if limits.Group <= 0 {
+		limits.Group = 1
+	}
+	if limits.Private <= 0 {
+		limits.Private = 1
+	}
+	return limits
 }
 
 // CompleteInboundEvent marks a leased event terminal without deleting its

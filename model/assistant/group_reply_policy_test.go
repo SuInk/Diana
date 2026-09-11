@@ -18,6 +18,10 @@ func (s *testWritableGroupConfigStore) ConfigForGroup(botProfileID, groupID stri
 	return s.set.ConfigForGroup(botProfileID, groupID)
 }
 
+func (s *testWritableGroupConfigStore) Groups() GroupConfigSet {
+	return s.set
+}
+
 func (s *testWritableGroupConfigStore) SaveGroupConfig(cfg GroupConfig, base BotConfig) (GroupConfig, error) {
 	s.set = s.set.Upsert(cfg, base)
 	saved, _ := s.set.ConfigForGroup(cfg.BotProfileID, cfg.GroupID)

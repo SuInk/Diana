@@ -3,11 +3,13 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -37,6 +39,24 @@ type proactiveReplyQualityDecision struct {
 	ReplyLoopMeaningless bool
 	ReplyLoopConfidence  float64
 	ReplyLoopReason      string
+	// ConversationClosing / StopRequested 是私聊收尾判断，同样搭这一次调用的车。
+	// 判据要的正好是「原消息 + 候选回复」这一对：只看对方说了什么，分不清机器人
+	// 这句是在正经答话还是又道了一次别。
+	ConversationClosing bool
+	StopRequested       bool
+	ClosingConfidence   float64
+	ClosingReason       string
+}
+
+// closingCounts / stopCounts 给收尾两项加同一道置信度门槛。少答一句的代价
+// 远小于该答不答：宁可让模型拿不准时照常回复，也不要因为一个低置信的结论
+// 在私聊里突然闭嘴，更不要据此暂停一个账号半小时。
+func (decision proactiveReplyQualityDecision) closingCounts() bool {
+	return decision.ConversationClosing && decision.ClosingConfidence >= privateClosingAuditConfidence
+}
+
+func (decision proactiveReplyQualityDecision) stopCounts() bool {
+	return decision.StopRequested && decision.ClosingConfidence >= privateClosingAuditConfidence
 }
 
 // loopDecision 把审核结论里的空转部分转成计数器认识的形状。
@@ -157,8 +177,29 @@ reply_loop_meaningless —— 对方未必是机器人,但这一来一回已经�
   真人闲聊本来就允许没有信息量,只有明显机械空转时才判 true。
 - 拿不准一律 false。这一项判成 true 会让机器人暂停响应该账号一段时间,宁可漏放。
 
+最后再单独判断一项收尾。只有请求里带了 closing_check=true 时才判这一项,
+没带就两项都填 false、closing_confidence 填 0。这一项只看当前这一来一回,
+不得用它去判事实真伪、准确性或账号安全。
+
+conversation_closing —— 对方在结束这次对话,而候选回复除了再道一次别之外没有别的内容。
+- 必须同时成立:当前消息是收尾表达(道别、道晚安、说自己要去做别的事、
+  「回聊」「先这样」这类把话题收住的表达,或只剩一个表示收到的单音节),
+  并且候选回复也只是又一句告别、又一句祝福、又一句「快去吧」。
+- 候选回复里只要还有实质内容——回答了一个问题、提了一件新的事、给了信息——
+  一律 false。对方在道别但机器人正好在答刚才的问题,也是 false。
+- 判断的是这一来一回本身,不是它重复了几轮。累计几次由运行时自己数,
+  你不要去猜该不该停,也不要因为「只是第一次道别」就填 false。
+
+stop_requested —— 对方明确要求你不要再回。
+- 语义判断,不是找词:「别回了」「睡了别回我」「闭嘴」「再回我要收费了」
+  「这次真不回了」都算;说的是自己不回还是要你别回,按语境理解。
+- 只是说要走、要睡、要去忙,没有要求你停止回复的,填 false——那是
+  conversation_closing 管的范围。
+- 开玩笑地嫌你话多、吐槽你复读,但没有真的要求停下的,填 false。拿不准一律 false:
+  这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。
+
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据"}
+{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
 
 send_confidence 必须是 0 到 1 的数字，唯一含义是“这条候选回复适合发送”的置信度。
 越高越建议发送：未发现明确问题时给高分，明确矛盾、答非所问或截断时给低分。
@@ -168,7 +209,11 @@ account_safe 为 false 时,account_risk 填命中的类别:politics / explicit /
 account_risk_reason 必须单独写清候选回复中触发账号风险的具体内容。reason 只能说明
 可见的准确性或完整性问题,不得拿它代替账号风险理由或重新判断是否需要回复。refusal_confidence 必须是 0 到 1 的数字。
 reply_loop_confidence 必须是 0 到 1 的数字;两项空转都为 false 时,它表示你对
-「这是正常对话」的把握。reply_loop_reason 只解释空转判断。`
+「这是正常对话」的把握。reply_loop_reason 只解释空转判断。
+closing_confidence 必须是 0 到 1 的数字;两项收尾都为 false 时,它表示你对
+「这次对话还在继续」的把握。closing_reason 只解释收尾判断。
+sender_marked_as_bot=true 表示管理员在某个群里手动把这个账号标成了机器人。
+它只是判 reply_loop_automated_ai 时的一份佐证,不能单独成立,也不影响其他任何一项。`
 
 func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyControlIntent {
 	return replyControlIntent{RefuseCurrent: decision.CountRefusal && decision.RefusalConfidence >= replyRefusalAuditConfidence}
@@ -239,7 +284,7 @@ func accountRiskLabel(risk string) string {
 
 // runReplyAudit 做一次审核调用，同时拿回表达质量和账号安全两个结论。
 // 两者共用一次模型调用：主动回复本来就要审一次，直接回复只额外多这一次。
-func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, evidence botReplyLoopEvidence) (proactiveReplyQualityDecision, error) {
+func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, evidence botReplyLoopEvidence, need replyAuditNeed) (proactiveReplyQualityDecision, error) {
 	original := strings.TrimSpace(readableEventText(event, input))
 	fields := map[string]any{
 		"original_message":        original,
@@ -279,6 +324,14 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	}
 	if len(evidence.RecentBotReplies) > 0 {
 		fields["recent_bot_replies"] = evidence.RecentBotReplies
+	}
+	// 标记证据只在判空转时才带：不判这一项时多一个字段，只会让审核器拿它去
+	// 影响别的判断。
+	if need.Loop && need.MarkedBot {
+		fields["sender_marked_as_bot"] = true
+	}
+	if need.Closing {
+		fields["closing_check"] = true
 	}
 	payload, err := json.Marshal(fields)
 	if err != nil {
@@ -350,7 +403,16 @@ type replyAuditNeed struct {
 	// LoopSuppress 决定判到空转后能不能真的开暂停。主人永远不能：暂停会把操作员
 	// 锁在自己的机器人外面，而解除暂停的命令恰恰要主人发。主人那边只记录不动作。
 	LoopSuppress bool
-	candidate    botReplyLoopCandidate
+	// Closing 是私聊收尾判断。只在「机器人刚刚在这个会话里说过话」时才需要，
+	// 私聊里的第一句不为它多花一分钱。
+	Closing bool
+	// ClosingSuppress 和 LoopSuppress 同理：主人说「别回了」照样当场收声，
+	// 但不给主人开半小时的暂停。
+	ClosingSuppress bool
+	// MarkedBot 表示这个账号被管理员在某个群里标记成了机器人。它只作为空转
+	// 判断的佐证进入审核载荷。
+	MarkedBot bool
+	candidate botReplyLoopCandidate
 }
 
 func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
@@ -365,17 +427,23 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 		ImageGrounding: replyAuditHasImage(event),
 		AccountSafety:  accountSafety,
 	}
-	if !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
-		return need
-	}
 	// 已经在暂停期里就不用再判：这条本来也走不到发送。
 	if _, blocked := r.activeReplySuppression(event, time.Now()); blocked {
 		return need
 	}
+	nonOwner := strings.TrimSpace(cfg.OwnerID) == "" || strings.TrimSpace(event.UserID) != strings.TrimSpace(cfg.OwnerID)
+	// 收尾判断和空转开关无关：它管的是「对方已经在道别了」，不是「对方是不是机器人」。
+	if r.privateFollowUpAuditDue(event, time.Now()) {
+		need.Closing = true
+		need.ClosingSuppress = nonOwner
+	}
+	if !boolValue(cfg.BotReplyLoopDetectionEnabled, true) {
+		return need
+	}
 	need.candidate, need.Loop = r.botReplyLoopCandidate(event, input)
 	if need.Loop {
-		owner := strings.TrimSpace(cfg.OwnerID)
-		need.LoopSuppress = owner == "" || strings.TrimSpace(event.UserID) != owner
+		need.LoopSuppress = nonOwner
+		need.MarkedBot = r.accountMarkedAsBot(event)
 	}
 	return need
 }
@@ -393,7 +461,7 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 		return replyControlIntent{}, nil
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
-	if !need.Quality && !need.ImageGrounding && !need.AccountSafety && !need.Loop {
+	if !need.Quality && !need.ImageGrounding && !need.AccountSafety && !need.Loop && !need.Closing {
 		return replyControlIntent{}, nil
 	}
 	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
@@ -401,7 +469,7 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 	if need.Loop {
 		evidence = r.collectBotReplyLoopEvidence(event, r.contextHistory(event))
 	}
-	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg, evidence)
+	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
 	if err != nil {
 		if need.Quality || need.ImageGrounding {
 			label := "主动回复答案"
@@ -414,6 +482,13 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 		return replyControlIntent{}, nil
 	}
 	intent := replyControlIntentFromAudit(decision)
+	// 收尾判断排在最前：对方都开口说「别回了」了，再去纠结这条回复够不够准确
+	// 没有意义——无论审核的其他几项怎么判，这条都不该发。
+	if need.Closing {
+		if closingErr := r.applyPrivateClosingVerdict(ctx, event, decision, cfg, need.ClosingSuppress); closingErr != nil {
+			return intent, closingErr
+		}
+	}
 	if need.Loop {
 		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision, need.LoopSuppress); loopErr != nil {
 			return intent, loopErr
@@ -476,6 +551,51 @@ func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent,
 	return errReplyLoopDetected
 }
 
+// applyPrivateClosingVerdict 执行收尾结论：累计够了就不再追加告别，明确叫停
+// 则当场收声。
+//
+// 叫停额外复用现有的 30 分钟响应限制——对方说的是「别回了」，不是「这一条别回」。
+// 暂停本身对主人无效（newReplySuppression 一直把主人排除在外），所以主人那边
+// 只是这条不发，下一句照常回答。
+func (r *Runtime) applyPrivateClosingVerdict(ctx context.Context, event MessageEvent, decision proactiveReplyQualityDecision, cfg BotConfig, suppress bool) error {
+	now := time.Now()
+	err := r.privateClosingVerdict(event, decision, cfg, now)
+	if err == nil {
+		return nil
+	}
+	reason := err.Error()
+	r.recordPrivateClosingVerdict(ctx, event, decision, reason)
+	if !errors.Is(err, errStopRequested) || !suppress {
+		return err
+	}
+	restriction, activated := r.activateReplySuppression(event, reason, now)
+	if activated {
+		r.recordReplySuppressionBlocked(event, restriction)
+	}
+	return err
+}
+
+func (r *Runtime) recordPrivateClosingVerdict(ctx context.Context, event MessageEvent, decision proactiveReplyQualityDecision, reason string) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	logCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer stop()
+	_ = writer.AppendLog(logCtx, applog.Entry{
+		Kind: applog.KindOperation, Level: applog.LevelInfo,
+		Action: "diana.reply.private_closing", Message: "私聊收尾判断已拦下一条回复", Target: event.MessageID,
+		Metadata: map[string]any{
+			"user_id":              event.UserID,
+			"conversation_closing": decision.ConversationClosing,
+			"stop_requested":       decision.StopRequested,
+			"confidence":           decision.ClosingConfidence,
+			"model_reason":         decision.ClosingReason,
+			"reason":               reason,
+		},
+	})
+}
+
 func proactiveReplyQualityTimeout(cfg BotConfig) time.Duration {
 	const budget = 30 * time.Second
 	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < budget {
@@ -505,6 +625,12 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		ReplyLoopMeaningless *bool    `json:"reply_loop_meaningless"`
 		ReplyLoopConfidence  *float64 `json:"reply_loop_confidence"`
 		ReplyLoopReason      *string  `json:"reply_loop_reason"`
+		// 收尾四项同样按缺省当「没有收尾」：提示词漂移或换模型时宁可多答一句，
+		// 也不要因为少了个字段就在私聊里集体闭嘴。
+		ConversationClosing *bool    `json:"conversation_closing"`
+		StopRequested       *bool    `json:"stop_requested"`
+		ClosingConfidence   *float64 `json:"closing_confidence"`
+		ClosingReason       *string  `json:"closing_reason"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil || payload.Confidence == nil {
 		return proactiveReplyQualityDecision{}, false
@@ -541,6 +667,14 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	}
 	if payload.ReplyLoopReason != nil {
 		decision.ReplyLoopReason = strings.TrimSpace(*payload.ReplyLoopReason)
+	}
+	decision.ConversationClosing = payload.ConversationClosing != nil && *payload.ConversationClosing
+	decision.StopRequested = payload.StopRequested != nil && *payload.StopRequested
+	if payload.ClosingConfidence != nil && *payload.ClosingConfidence >= 0 && *payload.ClosingConfidence <= 1 {
+		decision.ClosingConfidence = *payload.ClosingConfidence
+	}
+	if payload.ClosingReason != nil {
+		decision.ClosingReason = strings.TrimSpace(*payload.ClosingReason)
 	}
 	return decision, true
 }

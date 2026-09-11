@@ -68,6 +68,18 @@ func (s *imageAnnouncementSink) drain() string {
 	return text
 }
 
+// hasPendingWork 报告这一轮还攒着必须交代的东西：一句还没发出去的图片开场白，
+// 或者一个等主回复发送成功才启动的后台生图任务。两者都要求本轮必须说话——
+// 模型这时候选择静默，用户那边就只剩一次凭空消失的请求。
+func (s *imageAnnouncementSink) hasPendingWork() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.text != "" || len(s.pending) > 0
+}
+
 func (s *imageAnnouncementSink) deferTask(start, cancel func()) {
 	if s == nil || start == nil {
 		return
