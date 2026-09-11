@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { participationFromConfig, participationPreset, participationPresetName, participationLevelOptions, changeParticipationLevel, changeParticipationThresholdLevel, participationThresholdLevel, participationThresholdOptions, participationLevelLabel, participationLevelThresholds } from "./participation.ts";
 
 test("reply desire offers only four named levels", () => {
@@ -76,8 +76,16 @@ test("每个参与度档位都标出后端的评分门槛", () => {
   assert.equal(participationLevelLabel("always", { label: "完全不限制" }), "完全不限制（不看分数）");
 });
 
-test("门槛数字逐项对得上 ratingPasses", () => {
-  const source = readFileSync(new URL("../../model/assistant/participation_single_score.go", import.meta.url), "utf8");
+test("门槛数字逐项对得上 ratingPasses", (t) => {
+  // 这条是跨语言校验，要读仓库里的 Go 源码。镜像构建的前端阶段只 COPY 了
+  // frontend-next，读不到就跳过：仓库 CI 跑的是完整检出，那里照跑不误，守的还是
+  // 同一件事。不跳过的话 npm run build 的 prebuild 会连累整个镜像构建。
+  const path = new URL("../../model/assistant/participation_single_score.go", import.meta.url);
+  if (!existsSync(path)) {
+    t.skip("Go 源码不在构建上下文里，跨语言校验交给仓库 CI");
+    return;
+  }
+  const source = readFileSync(path, "utf8");
   const literal = source.match(/map\[string\]float64\{([^}]*)\}/);
   assert.ok(literal, "ratingPasses 里应当有 map[string]float64 门槛表");
   const backend = Object.fromEntries([...literal[1].matchAll(/"(\w+)":\s*([0-9.]+)/g)].map(([, level, score]) => [level, Number(score)]));
