@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { participationFromConfig, participationPreset, participationPresetName, participationLevelOptions, changeParticipationLevel, changeParticipationThresholdLevel, participationThresholdLevel, participationThresholdOptions, participationLevelLabel, participationLevelThresholds } from "./participation.ts";
+import { participationFromConfig, participationPreset, participationPresetName, participationLevelOptions, changeParticipationLevel, changeParticipationThresholdLevel, participationThresholdLevel, participationThresholdOptions, participationLevelLabel } from "./participation.ts";
 
 test("reply desire offers only four named levels", () => {
   assert.deepEqual(participationLevelOptions.map(option => option.label), ["低", "中", "高", "极高"]);
@@ -76,23 +75,7 @@ test("每个参与度档位都标出后端的评分门槛", () => {
   assert.equal(participationLevelLabel("always", { label: "完全不限制" }), "完全不限制（不看分数）");
 });
 
-test("门槛数字逐项对得上 ratingPasses", (t) => {
-  // 这条是跨语言校验，要读仓库里的 Go 源码。镜像构建的前端阶段只 COPY 了
-  // frontend-next，读不到就跳过：仓库 CI 跑的是完整检出，那里照跑不误，守的还是
-  // 同一件事。不跳过的话 npm run build 的 prebuild 会连累整个镜像构建。
-  const path = new URL("../../model/assistant/participation_single_score.go", import.meta.url);
-  if (!existsSync(path)) {
-    t.skip("Go 源码不在构建上下文里，跨语言校验交给仓库 CI");
-    return;
-  }
-  const source = readFileSync(path, "utf8");
-  const literal = source.match(/map\[string\]float64\{([^}]*)\}/);
-  assert.ok(literal, "ratingPasses 里应当有 map[string]float64 门槛表");
-  const backend = Object.fromEntries([...literal[1].matchAll(/"(\w+)":\s*([0-9.]+)/g)].map(([, level, score]) => [level, Number(score)]));
-  assert.deepEqual(backend, { minimal: 0.9, low: 0.7, medium: 0.5, high: 0.3, extreme: 0.1 });
-  for (const [level, threshold] of Object.entries(backend)) assert.equal(participationLevelThresholds[level], threshold);
-  // off 和 always 在 ratingPasses 里提前返回，前端用 null 表示「不走门槛」。
-  assert.equal(participationLevelThresholds.off, null);
-  assert.equal(participationLevelThresholds.always, null);
-  assert.deepEqual(Object.keys(participationLevelThresholds), ["off", ...Object.keys(backend), "always"]);
-});
+// 门槛数字和后端 ratingPasses 的逐项对照在 model/assistant/frontend_parity_test.go：
+// 那条断言要同时读 participation.ts 和 participation_single_score.go，而这套前端测试
+// 还会在 Docker 的 frontend-next 构建阶段里跑（npm 的 prebuild），那一层只有
+// frontend-next/ 一个目录，读不到 model/assistant 下的 .go。
