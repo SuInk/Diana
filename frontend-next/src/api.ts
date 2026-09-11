@@ -222,6 +222,9 @@ export interface BotProfileConfig {
   error_reply_prefix?: string;
   send_retry_attempts?: number;
   send_chunk_interval_ms?: number;
+  private_closing_grace?: number;
+  inbound_group_concurrency?: number;
+  inbound_private_concurrency?: number;
   /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
   model_roles?: Record<string, {
 	 follow_chat?: boolean;

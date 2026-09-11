@@ -390,7 +390,7 @@ func TestInboundQueuePrioritizesTriggeredEvents(t *testing.T) {
 		t.Fatalf("enqueue triggered inserted=%v err=%v", inserted, err)
 	}
 
-	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker", time.Now().Add(time.Minute), 3)
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 1})
 	if err != nil || !ok {
 		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
@@ -413,19 +413,19 @@ func TestInboundQueueAllowsThreeGroupTasksButKeepsPrivateSerial(t *testing.T) {
 	claimed := make([]assistant.InboundQueueItem, 0, 3)
 	for index := 1; index <= 3; index++ {
 		owner := fmt.Sprintf("group-worker-%d", index)
-		item, ok, err := store.ClaimNextInboundEvent(ctx, owner, time.Now().Add(time.Minute), 3)
+		item, ok, err := store.ClaimNextInboundEvent(ctx, owner, time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 1})
 		if err != nil || !ok {
 			t.Fatalf("group claim %d item=%#v ok=%v err=%v", index, item, ok, err)
 		}
 		claimed = append(claimed, item)
 	}
-	if item, ok, err := store.ClaimNextInboundEvent(ctx, "group-worker-4", time.Now().Add(time.Minute), 3); err != nil || ok {
+	if item, ok, err := store.ClaimNextInboundEvent(ctx, "group-worker-4", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 1}); err != nil || ok {
 		t.Fatalf("fourth group task escaped limit: item=%#v ok=%v err=%v", item, ok, err)
 	}
 	if err := store.CompleteInboundEvent(ctx, claimed[0].ID, "group-worker-1", "done"); err != nil {
 		t.Fatal(err)
 	}
-	if item, ok, err := store.ClaimNextInboundEvent(ctx, "group-worker-4", time.Now().Add(time.Minute), 3); err != nil || !ok || item.Event.MessageID != "group-4" {
+	if item, ok, err := store.ClaimNextInboundEvent(ctx, "group-worker-4", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 1}); err != nil || !ok || item.Event.MessageID != "group-4" {
 		t.Fatalf("group task after release: item=%#v ok=%v err=%v", item, ok, err)
 	}
 
@@ -437,11 +437,11 @@ func TestInboundQueueAllowsThreeGroupTasksButKeepsPrivateSerial(t *testing.T) {
 			t.Fatalf("enqueue private %d inserted=%v err=%v", index, inserted, err)
 		}
 	}
-	private, ok, err := store.ClaimNextInboundEvent(ctx, "private-worker-1", time.Now().Add(time.Minute), 3)
+	private, ok, err := store.ClaimNextInboundEvent(ctx, "private-worker-1", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 1})
 	if err != nil || !ok || private.Event.MessageID != "private-1" {
 		t.Fatalf("private first claim=%#v ok=%v err=%v", private, ok, err)
 	}
-	if item, ok, err := store.ClaimNextInboundEvent(ctx, "private-worker-2", time.Now().Add(time.Minute), 3); err != nil || ok {
+	if item, ok, err := store.ClaimNextInboundEvent(ctx, "private-worker-2", time.Now().Add(time.Minute), assistant.InboundConcurrency{Group: 3, Private: 1}); err != nil || ok {
 		t.Fatalf("private session was not serial: item=%#v ok=%v err=%v", item, ok, err)
 	}
 }
@@ -548,4 +548,42 @@ func pendingInboundCount(t *testing.T, store *SQLiteStore) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+// TestInboundQueuePrivateConcurrencyIsConfigurable 私聊并发以前是认领 SQL 里
+// 写死的 1（ELSE 1）。现在它由配置决定，群那一侧照旧。
+func TestInboundQueuePrivateConcurrencyIsConfigurable(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "private-concurrency.db"))
+	defer func() { _ = store.Close() }()
+
+	for index := 1; index <= 3; index++ {
+		event := inboundTestEvent(fmt.Sprintf("private-%d", index), "private", int64(index))
+		event.Kind = assistant.EventKindPrivate
+		event.GroupID = ""
+		if _, inserted, err := store.EnqueueInboundEvent(ctx, "private:9", event); err != nil || !inserted {
+			t.Fatalf("enqueue private %d inserted=%v err=%v", index, inserted, err)
+		}
+	}
+	limits := assistant.InboundConcurrency{Group: 3, Private: 2}
+	for index := 1; index <= 2; index++ {
+		owner := fmt.Sprintf("private-worker-%d", index)
+		if item, ok, err := store.ClaimNextInboundEvent(ctx, owner, time.Now().Add(time.Minute), limits); err != nil || !ok {
+			t.Fatalf("private claim %d item=%#v ok=%v err=%v", index, item, ok, err)
+		}
+	}
+	if item, ok, err := store.ClaimNextInboundEvent(ctx, "private-worker-3", time.Now().Add(time.Minute), limits); err != nil || ok {
+		t.Fatalf("third private task escaped the configured limit: item=%#v ok=%v err=%v", item, ok, err)
+	}
+}
+
+// TestInboundConcurrencyValueFallsBackToSerial 配置缺失时按会话串行，绝不能
+// 变成无上限。
+func TestInboundConcurrencyValueFallsBackToSerial(t *testing.T) {
+	if got := inboundConcurrencyValue(nil); got.Group != 1 || got.Private != 1 {
+		t.Fatalf("inboundConcurrencyValue(nil) = %#v", got)
+	}
+	if got := inboundConcurrencyValue([]assistant.InboundConcurrency{{Group: -5}}); got.Group != 1 || got.Private != 1 {
+		t.Fatalf("inboundConcurrencyValue(negative) = %#v", got)
+	}
 }

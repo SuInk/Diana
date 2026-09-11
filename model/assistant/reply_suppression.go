@@ -264,6 +264,7 @@ func (r *Runtime) activateReplySuppressionWithinOutboundGate(event MessageEvent,
 	r.replySuppressMu.Unlock()
 	r.resetBotReplyLoopUser(userID)
 	r.resetReplyRefusalUser(userID)
+	r.resetPrivateClosingUser(userID)
 	r.recordReplySuppression(event, item, "diana.response_suppression.activated", "已限制该用户触发机器人回复", persistErr)
 	return item, true
 }
@@ -338,7 +339,26 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
 	// 主人同样进入判断：空转和身份无关，主人也会跟机器人互相说废话。真正不能对
 	// 主人做的是暂停，那一层由 replyAuditNeed 的 LoopSuppress 单独控制。
-	if event.Kind != EventKindGroup || userID == "" || botID == "" || userID == botID || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+	if userID == "" || botID == "" || userID == botID {
+		return botReplyLoopCandidate{}, false
+	}
+	switch event.Kind {
+	case EventKindGroup:
+		if r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+			return botReplyLoopCandidate{}, false
+		}
+	case EventKindPrivate:
+		// 私聊没有「群被停用」这一层，也没有触发词那一套：一条私聊天然就是在跟
+		// 机器人说话。以前这里直接按事件类型挡掉，于是那 57 条私聊里的空转判断
+		// 一次都没跑过——判据本身（一来一回都没有内容且重复了好几轮）在私聊里
+		// 同样成立，挡掉它没有道理。
+		//
+		// 但要跟着同一道时间门：空转说的是「这一来一回」，机器人刚才没说过话就
+		// 谈不上空转，私聊里的第一句也不该为此多付一次模型调用。
+		if !r.privateFollowUpAuditDue(event, time.Now()) {
+			return botReplyLoopCandidate{}, false
+		}
+	default:
 		return botReplyLoopCandidate{}, false
 	}
 	directBotFollowup := eventRepliesToBot(event, cfg)
@@ -347,6 +367,9 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	}
 	if r.shouldHandleResolver(event, text) {
 		return botReplyLoopCandidate{}, false
+	}
+	if event.Kind == EventKindPrivate {
+		return botReplyLoopCandidate{TriggerKind: "private"}, true
 	}
 	if event.Quoted != nil && strings.TrimSpace(event.Quoted.UserID) == botID {
 		return botReplyLoopCandidate{TriggerKind: "quote", QuotedMessageID: strings.TrimSpace(event.Quoted.MessageID)}, true

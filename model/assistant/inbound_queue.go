@@ -20,7 +20,6 @@ import (
 const (
 	inboundPollInterval     = 500 * time.Millisecond
 	inboundLeaseDuration    = 10 * time.Minute
-	inboundGroupConcurrency = 3
 	historyInitialDelay     = time.Second
 	historyRetryDelay       = 30 * time.Second
 	historyBaselineOverlap  = 5 * time.Second
@@ -49,11 +48,34 @@ const (
 	inboundMaxAttempts = 5
 	// inboundOutcomeRetriesExhausted 标记因重试次数用尽而停止的事件。
 	inboundOutcomeRetriesExhausted = "dropped_retries_exhausted"
+	// inboundOutcomeSendRejected 标记上游明确拒收、重试也不可能成功的事件。
+	// 它和上面那条的区别是「已经知道没救了」：不必再跑满五次。
+	inboundOutcomeSendRejected = "dropped_send_rejected"
 )
 
 // InboundReplayWindow is the maximum recovery window. Each reconnect normally
 // uses the observed offline duration plus inboundReplayPadding instead.
 const InboundReplayWindow = 24 * time.Hour
+
+// InboundConcurrency 是同一会话允许同时处理的入站事件数，按会话类型分开。
+// 以前这两个数是写死的（群 3，私聊在 SQL 里直接写成 1），现在由配置决定；
+// 零值仍然退回原来的默认，所以没配过的部署行为不变。
+type InboundConcurrency struct {
+	Group   int
+	Private int
+}
+
+// inboundConcurrencyForConfig 把配置翻译成队列认识的形状。
+func inboundConcurrencyForConfig(cfg BotConfig) InboundConcurrency {
+	limits := InboundConcurrency{Group: cfg.InboundGroupConcurrency, Private: cfg.InboundPrivateConcurrency}
+	if limits.Group <= 0 {
+		limits.Group = defaultInboundGroupConcurrency
+	}
+	if limits.Private <= 0 {
+		limits.Private = defaultInboundPrivateConcurrency
+	}
+	return limits
+}
 
 // InboundQueueItem is a persisted inbound message waiting to be processed.
 type InboundQueueItem struct {
@@ -76,7 +98,7 @@ type HistorySession struct {
 // InboundEventStore persists inbound messages before routing or reply generation.
 type InboundEventStore interface {
 	EnqueueInboundEvent(ctx context.Context, session string, event MessageEvent, priority ...int) (id string, inserted bool, err error)
-	ClaimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, groupConcurrency ...int) (InboundQueueItem, bool, error)
+	ClaimNextInboundEvent(ctx context.Context, leaseOwner string, leaseUntil time.Time, limits ...InboundConcurrency) (InboundQueueItem, bool, error)
 	CompleteInboundEvent(ctx context.Context, id string, leaseOwner string, outcome string) error
 	RetryInboundEvent(ctx context.Context, id string, leaseOwner string, availableAt time.Time, lastError string) error
 	ReleaseInboundLeases(ctx context.Context, leaseOwner string) error
@@ -431,7 +453,8 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 		}
 		for r.inboundProcessingReady() {
 			claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			item, ok, err := store.ClaimNextInboundEvent(claimCtx, leaseOwner, time.Now().Add(inboundLeaseDuration), inboundGroupConcurrency)
+			// 每轮重读配置：改并发不该要重启。
+			item, ok, err := store.ClaimNextInboundEvent(claimCtx, leaseOwner, time.Now().Add(inboundLeaseDuration), inboundConcurrencyForConfig(r.Config()))
 			cancel()
 			if err != nil {
 				if ctx.Err() == nil {
@@ -447,6 +470,15 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			switch {
 			case processErr == nil:
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, outcome)
+				r.clearOutboundSteps(item.ID)
+			case ctx.Err() == nil && isPermanentSendRejection(processErr):
+				// 上游已经说清楚这条永远发不出去（对方把机器人删了好友之类）。
+				// 再退避重试只会把同一条消息重新生成一遍回复、再被拒一遍：实测
+				// 一条消息因此烧掉五轮生成。直接落终态，原始错误留在
+				// processing_error 里等人看。
+				log.Printf("diana inbound event %s dropped on permanent send rejection: %v", item.ID, processErr)
+				r.recordInboundSendRejected(item, processErr)
+				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, inboundOutcomeSendRejected)
 				r.clearOutboundSteps(item.ID)
 			case ctx.Err() == nil && inboundRetriesExhausted(item.Attempts):
 				// 无限重试只会让同一条消息反复重发。到达上限后落终态，并把最后
@@ -783,6 +815,17 @@ func inboundRetriesExhausted(attempts int) bool {
 // WebUI 的事件明细据此显示为终态失败而不是仍在排队。
 func (r *Runtime) recordInboundDeliveryExhausted(item InboundQueueItem, processErr error) {
 	detail := fmt.Sprintf("连续 %d 次处理失败，已停止重试", item.Attempts)
+	if processErr != nil {
+		detail += "：" + processErr.Error()
+	}
+	r.recordInboundDelivery(item.Event, OutboundDeliveryFailed, "", detail)
+}
+
+// recordInboundSendRejected 把「上游明确拒收」写进这条事件的投递审计。
+// 原始错误本身已经由回复流程写进 processing_error（record.Error），这里只补上
+// 「所以我们不再重试了」这句话，免得事件页看起来像还在排队。
+func (r *Runtime) recordInboundSendRejected(item InboundQueueItem, processErr error) {
+	detail := "上游明确拒收这条消息，重试不可能成功，已停止重试"
 	if processErr != nil {
 		detail += "：" + processErr.Error()
 	}
