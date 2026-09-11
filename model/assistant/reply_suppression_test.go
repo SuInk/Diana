@@ -718,9 +718,10 @@ func TestBotReplyLoopJudgementCostsNoExtraCall(t *testing.T) {
 		return provider, nil
 	})
 	prepareBotReplyLoopRound(t, runtime, "no-extra-call", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "喵～本喵一直在待命～")
-	// 这条消息没有生成回复，也就没有发送前审核，入站阶段只有可答性路由那一次。
-	if len(provider.requestsSnapshot()) != 1 {
-		t.Fatalf("inbound routing made %d calls, want only the answerability route", len(provider.requestsSnapshot()))
+	// 引用机器人的消息直接触发回复，连可答性路由那一次也省了；空转判断跟着发送前
+	// 审核走，入站阶段一次模型调用都不该有。
+	if len(provider.requestsSnapshot()) != 0 {
+		t.Fatalf("inbound routing made %d calls, want none", len(provider.requestsSnapshot()))
 	}
 }
 
@@ -937,12 +938,14 @@ func TestBotReplyLoopNeverClassifiesOwner(t *testing.T) {
 	start := time.Now().Add(-time.Minute).Truncate(time.Second)
 	for i := 0; i < botReplyLoopThreshold+1; i++ {
 		handled, outcome := prepareBotReplyLoopRound(t, runtime, "owner", "10001", i, start.Add(time.Duration(i)*time.Minute), time.Minute, "主人正常回复")
-		if handled || outcome != "ignored" {
-			t.Fatalf("owner round %d handled=%v outcome=%q, want semantic silence", i+1, handled, outcome)
+		if !handled || outcome != "replied" {
+			t.Fatalf("owner round %d handled=%v outcome=%q, want a direct reply", i+1, handled, outcome)
 		}
 	}
-	if len(provider.requests) != botReplyLoopThreshold+1 {
-		t.Fatalf("owner route requests=%d, want %d", len(provider.requests), botReplyLoopThreshold+1)
+	// 主人引用机器人是直接触发，入站不再走路由；这里要守的是「不进空转分类器」，
+	// 那一条在下面逐条检查请求内容。
+	if len(provider.requests) != 0 {
+		t.Fatalf("owner inbound requests=%d, want none", len(provider.requests))
 	}
 	for _, request := range provider.requests {
 		if requestMessagesContain(request.Messages, "反机器人循环分类器") {
