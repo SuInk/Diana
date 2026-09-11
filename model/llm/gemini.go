@@ -16,6 +16,8 @@ import (
 type geminiClient struct {
 	cfg    ProviderConfig
 	client *genai.Client
+	// httpClient 供改图时下载源图用：genai 只收字节，拿 URL 得自己取。
+	httpClient *http.Client
 }
 
 const maxGeminiOutputTokens = int64(1<<31 - 1)
@@ -42,8 +44,9 @@ func newGeminiClient(cfg ProviderConfig, httpClient *http.Client) (*geminiClient
 	}
 
 	return &geminiClient{
-		cfg:    cfg,
-		client: client,
+		cfg:        cfg,
+		client:     client,
+		httpClient: httpClient,
 	}, nil
 }
 
