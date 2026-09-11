@@ -158,6 +158,36 @@ func (g ReplyGate) IsBlocked(userID string) bool {
 	return containsString(g.BlockedUsers, strings.TrimSpace(userID))
 }
 
+// WithBlockedUsers 返回换掉屏蔽名单的一份门禁，原来那份不动。
+// 接收者为 nil 时新建一份，只有屏蔽名单是填好的。
+func (g *ReplyGate) WithBlockedUsers(userIDs []string) *ReplyGate {
+	next := g.Clone()
+	if next == nil {
+		next = &ReplyGate{}
+	}
+	next.BlockedUsers = cleanStrings(userIDs)
+	normalized := next.WithDefaults()
+	return &normalized
+}
+
+// InheritedThresholds 复制上一层门禁的门槛部分，三个名单留空。
+//
+// 群里原本没有自定义门禁时，仅仅为了屏蔽一个人就新建一份空门禁，会把机器人级的
+// 等级门槛和回复时段在这个群一起清零——门槛是按群整份替换的（见 MergedWith），
+// 于是「屏蔽一个人」的副作用变成「这个群从此 24 小时开放、谁都能触发」。方向是
+// 越配越松，界面上还看不出来，所以新建时先把门槛照抄一份。
+//
+// 名单不抄：三个名单本来就走并集，抄过来只会让机器人级的条目混进本群那份，
+// 分不清哪些是这个群自己加的，也就说不清哪些能在本群解除。
+func (g *ReplyGate) InheritedThresholds() *ReplyGate {
+	next := g.Clone()
+	if next == nil {
+		return &ReplyGate{}
+	}
+	next.ExemptUsers, next.BlockedUsers, next.AllowedUsers = nil, nil, nil
+	return next
+}
+
 // WhitelistEnabled 报告这份门禁是不是「只回名单里的人」。
 func (g ReplyGate) WhitelistEnabled() bool {
 	return strings.EqualFold(strings.TrimSpace(g.UserAdmission), UserAdmissionWhitelist)

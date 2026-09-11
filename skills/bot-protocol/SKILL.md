@@ -27,4 +27,15 @@ Platform protocol actions do not change Diana's participation settings. Use `dia
 - Submit only requested fields. Changing desire must preserve score thresholds and cooldown. Do not submit legacy `chat_in_enabled`, `chat_in_level` or `natural_interjection_enabled` fields.
 - Report success only after a successful save, using returned `participation`. On failure, report the error; never just promise to stay silent as if configuration changed.
 
+## Blocking One Person
+
+Ignoring one person for good is not the same as lowering participation, and not the same as a platform mute. Use `diana.reply_block`:
+
+- `{"operation":"block","user_id":"123456"}` stops every reply to that account in the current group until it is unblocked. There is no timer; it is not the 30-minute automatic suppression.
+- `{"operation":"unblock","user_id":"123456"}` restores replies, and `{"operation":"list"}` shows the current list.
+- `scope=group` is the default inside a group and needs the owner or a backend-verified group administrator. `scope=bot` covers every group and private chat of this bot and is owner-only.
+- `blocked_users` were set at the requested scope. `inherited_blocked_users` come from the bot-level list: they apply here too, but only the owner can lift them with `scope=bot`.
+- Take `user_id` from an @ segment, from the quoted message's sender, or from a member lookup. Never guess it from a nickname. Blocking the bot owner or the bot's own account is refused.
+- Blocking never mutes, kicks or removes anyone on the platform, and never deletes messages. Report success only after a successful save.
+
 The skill describes the workflow. Backend authorization and persistence are authoritative.
