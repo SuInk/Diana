@@ -388,7 +388,7 @@ import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
-import { participationFromConfig, participationPresetName, type ParticipationPreferences } from "../participation";
+import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 
@@ -548,9 +548,10 @@ function groupReplyDesireValue(config: BotGroupConfig): string {
 }
 
 function participationSummary(p: ParticipationPreferences): string {
-  const names: Record<string,string> = {off:"关",minimal:"极低",low:"低",medium:"中",high:"高",extreme:"极高",always:"总是"};
+  // 档位名后面跟上评分门槛，门槛数字统一来自 participation.ts。
+  const name = (level: string) => participationLevelLabel(level, { compact: true });
   const legacy = participationPresetName(p);
-  return `相关度 ${names[p.relevance_level ?? (legacy === "off" ? "off" : "medium")]} · 闲聊 ${names[p.chat_level ?? (legacy === "max" ? "always" : legacy)]} · 可回答 ${names[p.answerability_level ?? "medium"]}`;
+  return `相关度 ${name(p.relevance_level ?? (legacy === "off" ? "off" : "medium"))} · 闲聊 ${name(p.chat_level ?? (legacy === "max" ? "always" : legacy))} · 可回答 ${name(p.answerability_level ?? "medium")}`;
 }
 
 function setGroupParticipation(value: ParticipationPreferences | undefined): void {

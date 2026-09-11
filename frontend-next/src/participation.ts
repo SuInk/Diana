@@ -15,6 +15,45 @@ export interface ParticipationPreferences {
 export const defaultParticipationCooldownSeconds = 30;
 export const defaultParticipationScoreThreshold = 60;
 
+// participationLevelThresholds 镜像 model/assistant/participation_single_score.go 里 ratingPasses
+// 的门槛表：模型给出的分数 >= 门槛才算这一项达标，off 不参与判断，always 跳过该项门槛。
+// 注意档位和门槛是反的：参与度档位越高，分数门槛越低，所以「极低」最严（0.90）、「极高」最松（0.10）。
+// 这里的数字是后端判断口径的复述，改动必须和 ratingPasses 同步，否则界面会骗人。
+export const participationLevelThresholds: Record<string, number | null> = {
+  off: null,
+  minimal: 0.9,
+  low: 0.7,
+  medium: 0.5,
+  high: 0.3,
+  extreme: 0.1,
+  always: null,
+};
+
+export const participationLevelNames: Record<string, string> = { off: "关", minimal: "极低", low: "低", medium: "中", high: "高", extreme: "极高", always: "总是" };
+
+// participationLevelNote 给出档位对应的分数门槛说明，例如「≥0.50」。
+// compact 用于一行摘要，省略最严/最松的补充。
+export function participationLevelNote(level: string, compact = false): string {
+  if (level === "off") return "不判断";
+  if (level === "always") return "不看分数";
+  const threshold = participationLevelThresholds[level];
+  if (threshold == null) return "";
+  const text = `≥${threshold.toFixed(2)}`;
+  if (compact) return text;
+  if (level === "minimal") return `${text}，最严`;
+  if (level === "extreme") return `${text}，最松`;
+  return text;
+}
+
+// participationLevelLabel 把档位渲染成带门槛的文案，例如「中（≥0.50）」「极低（≥0.90，最严）」。
+// label 用于覆盖默认的档位名称，compact 输出摘要用的「中 ≥0.50」。
+export function participationLevelLabel(level: string, options: { label?: string; compact?: boolean } = {}): string {
+  const name = options.label ?? participationLevelNames[level] ?? level;
+  const note = participationLevelNote(level, options.compact);
+  if (!note) return name;
+  return options.compact ? `${name} ${note}` : `${name}（${note}）`;
+}
+
 export const participationThresholdOptions = [
   { value: "low", label: "低", score: 40, hint: "较宽松，40 分起" },
   { value: "medium", label: "中", score: 60, hint: "默认，60 分起" },
