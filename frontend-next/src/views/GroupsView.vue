@@ -181,14 +181,19 @@
           <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
         </div>
         <div class="field wide">
-          <label for="group-prompt">本群专属人设（留空用全局系统提示词）</label>
+          <label for="group-prompt">本群专属人设（留空跟随{{ inheritedPersonaOwner }}的人设）</label>
           <textarea
             id="group-prompt"
             v-model="editing.system_prompt"
             class="textarea"
             rows="3"
-            placeholder="同一个机器人可以在不同群扮演不同角色"
+            :placeholder="personaPlaceholder"
           ></textarea>
+          <span class="hint">留空表示本群一直跟着{{ inheritedPersonaOwner }}走，改机器人人设时本群也跟着变；填了就只用这里的文字。</span>
+          <details v-if="inheritedPersona" class="inherited-persona">
+            <summary>{{ inheritedPersonaOwner }}当前的人设</summary>
+            <p>{{ inheritedPersona }}</p>
+          </details>
         </div>
         <div class="field">
           <label>接话设置</label>
@@ -383,7 +388,7 @@ import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
-import { participationFromConfig, participationPresetName, type ParticipationPreferences } from "../participation";
+import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 
@@ -502,6 +507,21 @@ const groupAccountSafetyOptions: AppSelectOption[] = [
 const defaultSocialReplyEnabled = ref(false);
 const participationDefaults = ref<Record<string, ParticipationPreferences>>({});
 const markedBotDefaults = ref<Record<string,string[]>>({});
+// 群人设默认跟随所属机器人，编辑框留空时得让人看见继承的是谁的哪段文字。
+const personaDefaults = ref<Record<string, { name: string; prompt: string }>>({});
+const inheritedPersonaProfile = computed(() =>
+  personaDefaults.value[editing.value?.bot_profile_id || botScope.value] ?? personaDefaults.value[""]
+);
+const inheritedPersona = computed(() => inheritedPersonaProfile.value?.prompt ?? "");
+const inheritedPersonaOwner = computed(() => {
+  const name = inheritedPersonaProfile.value?.name?.trim();
+  return name ? `「${name}」` : "所属机器人";
+});
+const personaPlaceholder = computed(() =>
+  inheritedPersona.value
+    ? `留空跟随${inheritedPersonaOwner.value}：${truncate(inheritedPersona.value, 40)}`
+    : `留空跟随${inheritedPersonaOwner.value}的人设；同一个机器人可以在不同群扮演不同角色`
+);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
@@ -528,9 +548,10 @@ function groupReplyDesireValue(config: BotGroupConfig): string {
 }
 
 function participationSummary(p: ParticipationPreferences): string {
-  const names: Record<string,string> = {off:"关",minimal:"极低",low:"低",medium:"中",high:"高",extreme:"极高",always:"总是"};
+  // 档位名后面跟上评分门槛，门槛数字统一来自 participation.ts。
+  const name = (level: string) => participationLevelLabel(level, { compact: true });
   const legacy = participationPresetName(p);
-  return `相关度 ${names[p.relevance_level ?? (legacy === "off" ? "off" : "medium")]} · 闲聊 ${names[p.chat_level ?? (legacy === "max" ? "always" : legacy)]} · 可回答 ${names[p.answerability_level ?? "medium"]}`;
+  return `相关度 ${name(p.relevance_level ?? (legacy === "off" ? "off" : "medium"))} · 闲聊 ${name(p.chat_level ?? (legacy === "max" ? "always" : legacy))} · 可回答 ${name(p.answerability_level ?? "medium")}`;
 }
 
 function setGroupParticipation(value: ParticipationPreferences | undefined): void {
@@ -600,6 +621,10 @@ async function load(showFeedback = false): Promise<void> {
       participationDefaults.value = Object.fromEntries([
         ["", participationFromConfig(current)],
         ...(config.profiles ?? []).map(profile => [profile.id, participationFromConfig(profile)])
+      ]);
+      personaDefaults.value = Object.fromEntries([
+        ["", { name: current.name ?? "", prompt: current.system_prompt ?? "" }],
+        ...(config.profiles ?? []).map((profile) => [profile.id, { name: profile.name ?? "", prompt: profile.system_prompt ?? "" }])
       ]);
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       naturalReplySplitDefaults.value = Object.fromEntries([
@@ -789,3 +814,19 @@ watch(botScope, () => {
 
 onMounted(() => load());
 </script>
+
+<style scoped>
+/* 跟 BotMarkerList 的「机器人范围」一样，是一行不抢眼的继承说明。 */
+.inherited-persona {
+  font-size: 12px;
+  color: var(--muted);
+}
+.inherited-persona > summary {
+  cursor: pointer;
+}
+.inherited-persona > p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>

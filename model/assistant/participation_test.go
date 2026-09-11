@@ -177,3 +177,49 @@ func TestLiveParticipationPreferences(t *testing.T) {
 		})
 	}
 }
+
+// v0.8.105 线上：群友只发了一张表情包（一个空文本段 + 一个图片段，没有任何配文），
+// 评分模型给出 chat_in 0.42 / answerability 0.52（理由是「能识别猫耳少女与南瓜图案
+// 并进行针对性吐槽」），闲聊分支放行，机器人主动描述了这张图，还以「单凭图我认不出
+// 具体是哪位角色」收尾。旧严格版路由本来有「单独图片通常不回复」的规则，改用评分后
+// 没人接手，提示词里反而留着一句「图片不自动低分」给它兜底。
+func TestParticipationPromptPinsBareImagesLow(t *testing.T) {
+	prompt := ParticipationPreferences{Desire: 50}.prompt()
+	// 纯图片压到和「只能附和/复述」同一档，并逐条列出真正该回的例外。
+	for _, want := range []string{
+		"只有图片、没文字也没问题的消息",
+		"chat_in 与 answerability 均不超过 0.30",
+		"机器人刚要求该发送者发图而这就是那张图",
+		"图里本身是问题或任务",
+		"随图文字在问什么",
+		"「我能看图并吐槽两句」不是给高 answerability 的理由",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("bare-image rule missing %q", want)
+		}
+	}
+	// answerability 那边给玩笑、角色扮演开了豁免，纯图片不能顺着豁免溜回去：
+	// 在一串玩梗中间甩一张没人问的表情包，机器人能做的仍然只是描述这张图。
+	for _, want := range []string{"玩梗中途发来的纯表情包同样算", "描述一张没人问的图不是接梗"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("banter carve-out swallows the bare-image rule, missing %q", want)
+		}
+	}
+	// 「短不等于没内容」的原意保留，但不再连带给独立图片发豁免。
+	if !strings.Contains(prompt, "普通情绪和短句不自动低分，短不等于没内容") {
+		t.Fatal("short-message protection lost")
+	}
+	for _, gone := range []string{"普通情绪、图片、表情、短句不自动低分", "图片、表情、短句不自动低分"} {
+		if strings.Contains(prompt, gone) {
+			t.Fatalf("blanket image protection still present: %q", gone)
+		}
+	}
+	// 豁免句里不能再出现「图片」——否则又会和上面的纯图片规则互相打架。
+	exempt := prompt[strings.Index(prompt, "普通情绪和短句"):]
+	if end := strings.Index(exempt, "\n"); end >= 0 {
+		exempt = exempt[:end]
+	}
+	if strings.Contains(exempt, "图") {
+		t.Fatalf("exemption sentence still covers images: %q", exempt)
+	}
+}
