@@ -87,7 +87,7 @@ func TestLiveTerraReceivesCurrentImage(t *testing.T) {
 	}
 	auditRuntime := NewRuntime(BotConfig{ProactiveReplyThreshold: 0.9}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return luna, nil })
 	enriched.replyAuditImageContext = description
-	decision, err := auditRuntime.runReplyAudit(context.Background(), enriched, "嘉然帮我查证一下这个说法", "杭州公交电梯里的老人主要因为省钱和锻炼不坐电梯", auditRuntime.Config(), botReplyLoopEvidence{})
+	decision, err := auditRuntime.runReplyAudit(context.Background(), enriched, "嘉然帮我查证一下这个说法", "杭州公交电梯里的老人主要因为省钱和锻炼不坐电梯", auditRuntime.Config(), botReplyLoopEvidence{}, replyAuditNeed{Quality: true})
 	if err != nil {
 		t.Fatal(err)
 	}

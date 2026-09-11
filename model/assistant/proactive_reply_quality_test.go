@@ -143,7 +143,7 @@ func TestReplyAuditReceivesImageDescriptionWithoutFabricatingUserText(t *testing
 				event.Segments[0].Data[recallImageDescriptionKey] = description
 			}
 			candidate := "这是一款黑茶"
-			if _, err := rt.runReplyAudit(context.Background(), event, "", candidate, rt.Config(), botReplyLoopEvidence{}); err != nil {
+			if _, err := rt.runReplyAudit(context.Background(), event, "", candidate, rt.Config(), botReplyLoopEvidence{}, replyAuditNeed{Quality: true}); err != nil {
 				t.Fatal(err)
 			}
 			if len(provider.requests) != 1 {
@@ -193,7 +193,7 @@ func TestReplyAuditFallsBackToOriginalImageWhenDescriptionIsUnavailable(t *testi
 		Kind: EventKindGroup, RawMessage: "[CQ:image,file=tea.jpg]",
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}},
 	}
-	if _, err := runtime.runReplyAudit(context.Background(), event, "看下这个", "这是一款黑茶", runtime.Config(), botReplyLoopEvidence{}); err != nil {
+	if _, err := runtime.runReplyAudit(context.Background(), event, "看下这个", "这是一款黑茶", runtime.Config(), botReplyLoopEvidence{}, replyAuditNeed{Quality: true}); err != nil {
 		t.Fatal(err)
 	}
 	if len(provider.requests) != 1 || len(provider.requests[0].Messages) != 2 {

@@ -425,69 +425,78 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
-	ReplyMergeConfidencePercent  int                  `json:"reply_merge_confidence_percent,omitempty"`
-	ID                           string               `json:"id,omitempty"`
-	Name                         string               `json:"name,omitempty"`
-	Platform                     string               `json:"platform,omitempty"`
-	AvatarURL                    string               `json:"avatar_url,omitempty"`
-	Enabled                      bool                 `json:"enabled"`
-	OneBotReverseWSEndpoint      string               `json:"onebot_reverse_ws_endpoint"`
-	OneBotAccessToken            string               `json:"onebot_access_token,omitempty"`
-	TelegramBotToken             string               `json:"telegram_bot_token,omitempty"`
-	TelegramAPIBaseURL           string               `json:"telegram_api_base_url,omitempty"`
-	TelegramProxyURL             string               `json:"telegram_proxy_url,omitempty"`
-	TelegramSuppressBotMessages  *bool                `json:"telegram_suppress_bot_messages,omitempty"`
-	QQAppID                      string               `json:"qq_app_id,omitempty"`
-	QQAppSecret                  string               `json:"qq_app_secret,omitempty"`
-	QQSandbox                    bool                 `json:"qq_sandbox,omitempty"`
-	DingTalkClientID             string               `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret         string               `json:"dingtalk_client_secret,omitempty"`
-	DingTalkRobotCode            string               `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                  string               `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret              string               `json:"feishu_app_secret,omitempty"`
-	FeishuVerificationToken      string               `json:"feishu_verification_token,omitempty"`
-	FeishuEncryptKey             string               `json:"feishu_encrypt_key,omitempty"`
-	FeishuAPIBaseURL             string               `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                  string               `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                 string               `json:"wecom_agent_id,omitempty"`
-	WeComSecret                  string               `json:"wecom_secret,omitempty"`
-	WeComToken                   string               `json:"wecom_token,omitempty"`
-	WeComEncodingAESKey          string               `json:"wecom_encoding_aes_key,omitempty"`
-	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
-	BotAccount                   string               `json:"bot_account,omitempty"`
-	OwnerID                      string               `json:"owner_id,omitempty"`
-	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers                []string             `json:"group_triggers,omitempty"`
-	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
-	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
-	DisabledUsers                []string             `json:"disabled_users,omitempty"`
-	MarkedBotIDs                 []string             `json:"marked_bot_ids,omitempty"`
-	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
-	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
-	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
-	WelcomeMessage               string               `json:"welcome_message,omitempty"`
-	SystemPrompt                 string               `json:"system_prompt,omitempty"`
-	PersonaID                    string               `json:"persona_id,omitempty"`
-	CustomPersona                *Persona             `json:"custom_persona,omitempty"`
-	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
-	SelfReference                string               `json:"self_reference,omitempty"`
-	SentenceEnders               string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled           *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix             string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts            int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS          int                  `json:"send_chunk_interval_ms,omitempty"`
-	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
-	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplySafetyMasterEnabled     *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	ReplyMergeConfidencePercent int                  `json:"reply_merge_confidence_percent,omitempty"`
+	ID                          string               `json:"id,omitempty"`
+	Name                        string               `json:"name,omitempty"`
+	Platform                    string               `json:"platform,omitempty"`
+	AvatarURL                   string               `json:"avatar_url,omitempty"`
+	Enabled                     bool                 `json:"enabled"`
+	OneBotReverseWSEndpoint     string               `json:"onebot_reverse_ws_endpoint"`
+	OneBotAccessToken           string               `json:"onebot_access_token,omitempty"`
+	TelegramBotToken            string               `json:"telegram_bot_token,omitempty"`
+	TelegramAPIBaseURL          string               `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL            string               `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages *bool                `json:"telegram_suppress_bot_messages,omitempty"`
+	QQAppID                     string               `json:"qq_app_id,omitempty"`
+	QQAppSecret                 string               `json:"qq_app_secret,omitempty"`
+	QQSandbox                   bool                 `json:"qq_sandbox,omitempty"`
+	DingTalkClientID            string               `json:"dingtalk_client_id,omitempty"`
+	DingTalkClientSecret        string               `json:"dingtalk_client_secret,omitempty"`
+	DingTalkRobotCode           string               `json:"dingtalk_robot_code,omitempty"`
+	FeishuAppID                 string               `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret             string               `json:"feishu_app_secret,omitempty"`
+	FeishuVerificationToken     string               `json:"feishu_verification_token,omitempty"`
+	FeishuEncryptKey            string               `json:"feishu_encrypt_key,omitempty"`
+	FeishuAPIBaseURL            string               `json:"feishu_api_base_url,omitempty"`
+	WeComCorpID                 string               `json:"wecom_corp_id,omitempty"`
+	WeComAgentID                string               `json:"wecom_agent_id,omitempty"`
+	WeComSecret                 string               `json:"wecom_secret,omitempty"`
+	WeComToken                  string               `json:"wecom_token,omitempty"`
+	WeComEncodingAESKey         string               `json:"wecom_encoding_aes_key,omitempty"`
+	NoneBotBridgeEnabled        bool                 `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint       string               `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken          string               `json:"nonebot_bridge_token,omitempty"`
+	BotAccount                  string               `json:"bot_account,omitempty"`
+	OwnerID                     string               `json:"owner_id,omitempty"`
+	OwnerLoginEnabled           bool                 `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled       *bool                `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers               []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode            AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
+	DisabledGroups              []string             `json:"disabled_groups,omitempty"`
+	DisabledUsers               []string             `json:"disabled_users,omitempty"`
+	MarkedBotIDs                []string             `json:"marked_bot_ids,omitempty"`
+	GroupAdmission              GroupAdmission       `json:"group_admission,omitempty"`
+	ReplyGate                   *ReplyGate           `json:"reply_gate,omitempty"`
+	WelcomeEnabled              bool                 `json:"welcome_enabled,omitempty"`
+	WelcomeMessage              string               `json:"welcome_message,omitempty"`
+	SystemPrompt                string               `json:"system_prompt,omitempty"`
+	PersonaID                   string               `json:"persona_id,omitempty"`
+	CustomPersona               *Persona             `json:"custom_persona,omitempty"`
+	ResponseMode                ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                  ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled    *bool                `json:"action_description_enabled,omitempty"`
+	SelfReference               string               `json:"self_reference,omitempty"`
+	SentenceEnders              string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled            bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode          ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	MentionUserMode             ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain             *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled          *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix            string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts           int                  `json:"send_retry_attempts,omitempty"`
+	SendChunkIntervalMS         int                  `json:"send_chunk_interval_ms,omitempty"`
+	ModelRoles                  map[string]ModelRole `json:"model_roles,omitempty"`
+	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
+	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
+	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
+	PrivateClosingGrace int `json:"private_closing_grace,omitempty"`
+	// InboundGroupConcurrency / InboundPrivateConcurrency 是同一会话可以同时
+	// 处理的入站事件数。以前是代码里的两个常量（群 3、私聊硬编码 1），现在提到
+	// 配置里，但默认值保持不变。
+	InboundGroupConcurrency      int   `json:"inbound_group_concurrency,omitempty"`
+	InboundPrivateConcurrency    int   `json:"inbound_private_concurrency,omitempty"`
+	BotReplyLoopDetectionEnabled *bool `json:"bot_reply_loop_detection_enabled,omitempty"`
+	ReplySafetyMasterEnabled     *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
 	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
 	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
@@ -834,6 +843,9 @@ type ConfigPayload struct {
 	ErrorReplyPrefix             string               `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts            int                  `json:"send_retry_attempts,omitempty"`
 	SendChunkIntervalMS          int                  `json:"send_chunk_interval_ms,omitempty"`
+	PrivateClosingGrace          int                  `json:"private_closing_grace,omitempty"`
+	InboundGroupConcurrency      int                  `json:"inbound_group_concurrency,omitempty"`
+	InboundPrivateConcurrency    int                  `json:"inbound_private_concurrency,omitempty"`
 	PromptInjectTime             *bool                `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules   *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
 	PromptInjectGroupSender      *bool                `json:"prompt_inject_group_sender,omitempty"`
@@ -1418,6 +1430,9 @@ func DefaultBotConfig() BotConfig {
 		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
 		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
 		SendChunkIntervalMS:            chatSendChunkIntervalMS,
+		PrivateClosingGrace:            defaultPrivateClosingGrace,
+		InboundGroupConcurrency:        defaultInboundGroupConcurrency,
+		InboundPrivateConcurrency:      defaultInboundPrivateConcurrency,
 		ProactiveReplyRouterPrompt:     defaultProactiveReplyRouterPrompt,
 		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
 		ChatInEnabled:                  boolPointer(true),
@@ -1595,6 +1610,26 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.SendChunkIntervalMS > 5000 {
 		cfg.SendChunkIntervalMS = 5000
+	}
+	// 0 表示没配过，用默认；负数是明显的错值，同样退回默认。想「第一声再见就
+	// 不回」的人把它设成 1，那是配置的自由，不是这里该纠正的。
+	if cfg.PrivateClosingGrace < 0 {
+		cfg.PrivateClosingGrace = 0
+	}
+	if cfg.PrivateClosingGrace == 0 {
+		cfg.PrivateClosingGrace = defaults.PrivateClosingGrace
+	}
+	if cfg.InboundGroupConcurrency <= 0 {
+		cfg.InboundGroupConcurrency = defaults.InboundGroupConcurrency
+	}
+	if cfg.InboundGroupConcurrency > maxInboundSessionConcurrency {
+		cfg.InboundGroupConcurrency = maxInboundSessionConcurrency
+	}
+	if cfg.InboundPrivateConcurrency <= 0 {
+		cfg.InboundPrivateConcurrency = defaults.InboundPrivateConcurrency
+	}
+	if cfg.InboundPrivateConcurrency > maxInboundSessionConcurrency {
+		cfg.InboundPrivateConcurrency = maxInboundSessionConcurrency
 	}
 	if cfg.MaxInputChars <= 0 {
 		cfg.MaxInputChars = defaults.MaxInputChars
@@ -1903,6 +1938,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ErrorReplyPrefix:                  cfg.ErrorReplyPrefix,
 		SendRetryAttempts:                 cfg.SendRetryAttempts,
 		SendChunkIntervalMS:               cfg.SendChunkIntervalMS,
+		PrivateClosingGrace:               cfg.PrivateClosingGrace,
+		InboundGroupConcurrency:           cfg.InboundGroupConcurrency,
+		InboundPrivateConcurrency:         cfg.InboundPrivateConcurrency,
 		PromptInjectTime:                  copyBoolPointer(cfg.PromptInjectTime),
 		PromptInjectPlaintextRules:        copyBoolPointer(cfg.PromptInjectPlaintextRules),
 		PromptInjectGroupSender:           copyBoolPointer(cfg.PromptInjectGroupSender),
@@ -2088,6 +2126,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ErrorReplyPrefix:                payload.ErrorReplyPrefix,
 		SendRetryAttempts:               payload.SendRetryAttempts,
 		SendChunkIntervalMS:             payload.SendChunkIntervalMS,
+		PrivateClosingGrace:             payload.PrivateClosingGrace,
+		InboundGroupConcurrency:         payload.InboundGroupConcurrency,
+		InboundPrivateConcurrency:       payload.InboundPrivateConcurrency,
 		PromptInjectTime:                copyBoolPointer(payload.PromptInjectTime),
 		PromptInjectPlaintextRules:      copyBoolPointer(payload.PromptInjectPlaintextRules),
 		PromptInjectGroupSender:         copyBoolPointer(payload.PromptInjectGroupSender),
@@ -2316,6 +2357,19 @@ const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可�
 const (
 	defaultProactiveReplyChance    = 1.0
 	defaultProactiveReplyThreshold = 0.9
+)
+
+const (
+	// defaultPrivateClosingGrace 是默认答完几轮告别就不再追加。2 来自
+	// 「第一声再见还会接一句，第二声也接得住，第三声就只剩复读」。
+	defaultPrivateClosingGrace = 2
+	// 这两个默认值和以前代码里的常量一致：群 3、私聊 1。本次只把它们搬到配置里，
+	// 不改默认。
+	defaultInboundGroupConcurrency   = 3
+	defaultInboundPrivateConcurrency = 1
+	// maxInboundSessionConcurrency 只挡明显的错值。同一会话真开到几十路并发，
+	// 回复顺序和上下文都会乱成一团，不是配置该允许的范围。
+	maxInboundSessionConcurrency = 16
 )
 
 const defaultProactiveReplyRouterPrompt = `你是群聊机器人 Diana 的 Intent Recognition（意图识别）模块。你的职责仅是判断 candidates 中是否存在需要回应或值得插话的消息，并选择目标；不要审核答案准确度，不要规划工具调用、工具参数或最终回答步骤。后续 Agent 会读取完整上下文、搜索或调用工具，候选答案生成后还有独立的发送前准确度审核。最多选择一条。默认保持沉默，但明确提问、求助、指派和继续追问不能因为当前不知道答案而被拦截。

@@ -47,9 +47,17 @@ func finalizeContentLayoutIssue(content string) string {
 // finalizeToolDefinition 构造本轮的结构化收尾工具。content 必填：部分供应商在调用
 // 工具的同一轮里不会输出普通文本，正文若允许留在信封之外，就会出现完全为空的
 // 收尾（见 errEmptyFinalize）。Runner 解码时仍接受写在调用之外的正文作为兼容。
+//
+// silent 是唯一一条「这一轮什么都不发」的正路。此前模型想闭嘴只能走
+// [[DIANA_REFUSE_CURRENT]]，那是拒答：仍然发一句看得见的话，还要计进拒答次数。
+// 「我这轮没什么要补的」和「我拒绝回答」是两件事，必须分开表达，否则模型只能在
+// 「硬凑一句」和「被记一次拒答」之间挑一个。silent 是工具调用上的字段，用户消息
+// 里写什么都到不了这里。
 func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.ToolDefinition {
 	properties := map[string]any{
-		"content": toolStringParam("给用户看的最终自然语言回复，必填且不能为空。正文禁止真实 CR/LF；下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]。不要写成 JSON。"),
+		"content":       toolStringParam("给用户看的最终自然语言回复，必填且不能为空（silent=true 时才可以留空）。正文禁止真实 CR/LF；下一条消息用 [diana-msg]，同一消息内换行用 [diana-line]。不要写成 JSON。"),
+		"silent":        toolBoolParam("这一轮不发任何消息时填 true，content 留空；写了也不会发出去。只在确实没有值得说的话、或对方已经在收尾且你们互相道过别时用。要拒绝就正常说出来，不要用它。"),
+		"silent_reason": toolStringParam("silent=true 时用一句话说明为什么不回复。只写进运行日志，不发给用户。"),
 	}
 	required := []string{"content"}
 	if imagePending {
@@ -66,7 +74,7 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.
 	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
-		Description: "结束本轮并提交最终答复。不再需要其他工具时调用它。content 禁止真实换行，只能用 [diana-msg] 表示下一条消息、[diana-line] 表示当前消息内换行。",
+		Description: "结束本轮并提交最终答复。不再需要其他工具时调用它。content 禁止真实换行，只能用 [diana-msg] 表示下一条消息、[diana-line] 表示当前消息内换行。这一轮决定不说话时填 silent=true 并留空 content。",
 		Parameters:  toolObjectSchema(required, properties),
 		// 畸形的收尾是唯一一种必然要花掉一整轮修复的协议错误，值得在解码层约束。
 		Strict: true,
@@ -80,18 +88,24 @@ func finalizeAction(call llm.ToolCall, text string) llmAction {
 	action := llmAction{Action: "final"}
 	if len(call.Arguments) > 0 {
 		var payload struct {
-			Content   string        `json:"content"`
-			TaskState string        `json:"task_state"`
-			Claims    []ClaimUpdate `json:"claims"`
+			Content      string        `json:"content"`
+			TaskState    string        `json:"task_state"`
+			Silent       bool          `json:"silent"`
+			SilentReason string        `json:"silent_reason"`
+			Claims       []ClaimUpdate `json:"claims"`
 		}
 		if raw, err := json.Marshal(call.Arguments); err == nil {
 			_ = json.Unmarshal(raw, &payload)
 		}
 		action.Content = strings.TrimSpace(payload.Content)
 		action.TaskState = strings.TrimSpace(payload.TaskState)
+		action.Silent = payload.Silent
+		action.SilentReason = strings.TrimSpace(payload.SilentReason)
 		action.Claims = payload.Claims
 	}
-	if action.Content == "" {
+	// 静默收尾不捡信封之外的正文：模型同一轮里随手写的思考不是这轮的回复，
+	// 捡回来就等于把它当成正文发出去，静默也就失效了。
+	if action.Content == "" && !action.Silent {
 		action.Content = strings.TrimSpace(text)
 	}
 	return action
