@@ -177,6 +177,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		})
 		return response
 	}
+	// finishSilent 收口一次静默结束：没有正文，也不该被下游兜底成任何文案。
+	// Text 保持为空，由 Silent 告诉调用方「这是模型的决定，不是生成失败」。
+	finishSilent := func(silentReason, reason string) *Response {
+		response := finish("", reason)
+		response.Silent = true
+		response.SilentReason = strings.TrimSpace(silentReason)
+		return response
+	}
 	fail := func(err error) (*Response, error) {
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,
@@ -312,6 +320,24 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
+			if action.Silent {
+				// 图片任务已经受理时不许闭嘴：这一轮必须让用户知道图在画。
+				if imageTaskQueued {
+					protocolRepairs++
+					reason := "图片任务仍在后台生成，这一轮不能静默收尾"
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+					messages = appendAssistantEcho(messages, lastText)
+					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请重新调用 agent.finalize，silent 填 false，携带 task_state=\"pending\"，正文说明任务已开始、完成后会自动发送。"})
+					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+						finishReason = "protocol_repair_exhausted"
+						break
+					}
+					continue
+				}
+				// 模型自己决定这一轮不说话：没有正文，也就没有排版、证据账本和
+				// 空收尾可校验——那几项校验的对象都是「要发出去的那句话」。
+				return finishSilent(action.SilentReason, "silent"), nil
+			}
 			if reason := finalizeLayoutIssue(action); reason != "" {
 				protocolRepairs++
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
@@ -600,6 +626,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	})
 	if call, found := findFinalizeCall(resp.ToolCalls); found {
 		action := finalizeAction(call, finalText)
+		if action.Silent && !imageTaskQueued {
+			return finishSilent(action.SilentReason, finishReason), nil
+		}
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
@@ -618,6 +647,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		return finish(action.Content, finishReason), nil
 	}
 	if action, ok := parseAction(finalText); ok && action.Action == "final" {
+		if action.Silent && !imageTaskQueued {
+			return finishSilent(action.SilentReason, finishReason), nil
+		}
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
@@ -915,6 +947,7 @@ func (r *Runner) systemPrompt() string {
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
 		"不再需要工具时调用 agent.finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state、claims 这类元数据按需一并携带。content 禁止真实 CR/LF；下一条消息写 [diana-msg]，同一消息内换行写 [diana-line]。正文不要写成 JSON。",
+		"这一轮确实不需要说话时，调用 agent.finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 		"可用工具（完整说明和参数以请求中的工具定义为准）：\n" + r.registry.SystemPromptCatalog(),
 	}
@@ -1036,6 +1069,12 @@ type llmAction struct {
 	TaskState string         `json:"task_state,omitempty"`
 	Reply     *string        `json:"reply,omitempty"`
 	Claims    []ClaimUpdate  `json:"claims,omitempty"`
+	// Silent 是模型自己决定「这一轮不发任何消息」。只有两种来源：原生
+	// agent.finalize 调用的 silent 字段，和文本兼容协议里那个完整的 final JSON
+	// 对象。任何把普通正文兜底成 final 的路径都不得置位——正文里出现 silent
+	// 这个词只是一个词，不是一次决定。
+	Silent       bool   `json:"silent,omitempty"`
+	SilentReason string `json:"silent_reason,omitempty"`
 	// Salvaged 标记正文是从被网关渲染坏的收尾信封里救回来的，不是模型按协议
 	// 写出来的 content。这种正文不再按信封的换行约定校验。模型不能自己声明。
 	Salvaged bool `json:"-"`

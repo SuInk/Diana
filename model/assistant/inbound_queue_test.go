@@ -936,12 +936,17 @@ func (s *memoryInboundEventStore) EnqueueInboundEvent(_ context.Context, session
 	return id, true, nil
 }
 
-func (s *memoryInboundEventStore) ClaimNextInboundEvent(_ context.Context, leaseOwner string, _ time.Time, groupConcurrency ...int) (InboundQueueItem, bool, error) {
+func (s *memoryInboundEventStore) ClaimNextInboundEvent(_ context.Context, leaseOwner string, _ time.Time, limits ...InboundConcurrency) (InboundQueueItem, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	groupLimit := 1
-	if len(groupConcurrency) > 0 && groupConcurrency[0] > 0 {
-		groupLimit = groupConcurrency[0]
+	concurrency := InboundConcurrency{Group: 1, Private: 1}
+	if len(limits) > 0 {
+		if limits[0].Group > 0 {
+			concurrency.Group = limits[0].Group
+		}
+		if limits[0].Private > 0 {
+			concurrency.Private = limits[0].Private
+		}
 	}
 	selectedID := ""
 	for _, id := range s.order {
@@ -949,9 +954,9 @@ func (s *memoryInboundEventStore) ClaimNextInboundEvent(_ context.Context, lease
 		if record.state != "pending" {
 			continue
 		}
-		limit := 1
+		limit := concurrency.Private
 		if record.item.Event.Kind == EventKindGroup {
-			limit = groupLimit
+			limit = concurrency.Group
 		}
 		active := 0
 		for _, candidate := range s.records {
@@ -1221,4 +1226,14 @@ func (c *blockingHistoryChannel) CallAPI(ctx context.Context, action string, par
 		}
 	}
 	return c.queueTestChannel.CallAPI(ctx, action, params)
+}
+
+func (s *memoryInboundEventStore) outcomeAndAttempts(id string) (string, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record := s.records[id]
+	if record == nil {
+		return "", 0
+	}
+	return record.outcome, record.item.Attempts
 }

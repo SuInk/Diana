@@ -339,6 +339,47 @@ func isOutboundPayloadRejection(err error) bool {
 		strings.Contains(message, "unsupported forward node content")
 }
 
+// permanentSendRejectionMarkers 是上游明说「这条永远发不出去」的那些回执。
+//
+// 这里匹配的是 OneBot 实现回给我们的错误正文，不是用户说了什么——和
+// isOutboundPayloadRejection 同一性质，跟「不许用关键词猜用户意图」那条规矩无关。
+//
+// 「请先添加对方为好友」（NapCat result=16）是实测那次的原话：对方把机器人删了
+// 好友，之后每一条私聊回复都被这句挡回来。重试五次的结果是同一条消息重新生成
+// 五遍回复、再被拒五次，除了烧钱什么也没换来。
+var permanentSendRejectionMarkers = []string{
+	"请先添加对方为好友",
+	"先添加对方为好友",
+	"好友不存在",
+	"非好友",
+	"not a friend",
+	"friend not found",
+	"user not found",
+	"failed to resolve uid for uin",
+	"blocked by target",
+	"被对方拉黑",
+}
+
+// isPermanentSendRejection 判断这次发送失败是不是重试也不可能成功。
+func isPermanentSendRejection(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// 只认「发送这一步失败」的错误（wrapOutboundSendError 会把它们都标成
+	// errOutboundSend）。同样一句话出现在别的环节——比如工具输出里引用了一条
+	// 报错——不该让整条消息落终态。
+	if !errors.Is(err, errOutboundSend) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range permanentSendRejectionMarkers {
+		if strings.Contains(message, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runtime) runtimeContextStopped() bool {
 	r.mu.RLock()
 	runCtx := r.runCtx

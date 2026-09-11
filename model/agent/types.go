@@ -119,6 +119,11 @@ type Response struct {
 	FinishReason string       `json:"finish_reason,omitempty"`
 	DurationMS   int64        `json:"duration_ms,omitempty"`
 	Claims       []ClaimTrace `json:"claims,omitempty"`
+	// Silent 表示模型调用 agent.finalize 时自己选择了不发消息。Text 为空但这不是
+	// 生成失败：调用方必须按「本轮不发送」处理，不要用任何兜底文案补一句。
+	Silent bool `json:"silent,omitempty"`
+	// SilentReason 是模型给出的一句原因，只用于事件记录和日志，不发给用户。
+	SilentReason string `json:"silent_reason,omitempty"`
 }
 
 type Step struct {

@@ -368,7 +368,7 @@ func TestImageRecognitionTextIsReusedByReplyAudit(t *testing.T) {
 				t.Fatal("recognition context differs from generation input")
 			}
 			event.replyAuditImageContext = recognition
-			if _, err := rt.runReplyAudit(context.Background(), event, "", "这是一款黑茶", rt.Config(), botReplyLoopEvidence{}); err != nil {
+			if _, err := rt.runReplyAudit(context.Background(), event, "", "这是一款黑茶", rt.Config(), botReplyLoopEvidence{}, replyAuditNeed{Quality: true}); err != nil {
 				t.Fatal(err)
 			}
 			if provider.calls.Load() != int32(recognitionCalls+1) {
