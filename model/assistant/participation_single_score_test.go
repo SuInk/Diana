@@ -147,13 +147,15 @@ func TestParticipationBotShareBlocksChatIn(t *testing.T) {
 		want       bool
 	}{
 		{"quiet_bot", 4, 20, "medium", false},
-		{"at_threshold", 7, 20, "medium", true},
-		{"just_below_threshold", 6, 20, "medium", false},
+		{"at_threshold", 5, 20, "medium", true},
+		{"just_below_threshold", 4, 17, "medium", false},
 		{"dominating_small_group", 12, 20, "low", true},
 		{"always_never_blocked", 18, 20, "always", false},
 		{"no_history", 0, 0, "medium", false},
 		{"bot_silent", 0, 20, "medium", false},
-		{"short_window", 3, 5, "medium", true},
+		// 安静群里一来一回的占比天然很高，机器人只说了两句就不算刷屏。
+		{"quiet_back_and_forth", 2, 4, "medium", false},
+		{"three_in_a_row", 3, 4, "medium", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := participationBotShareBlocks(tc.bot, tc.total, tc.level); got != tc.want {
@@ -161,18 +163,87 @@ func TestParticipationBotShareBlocksChatIn(t *testing.T) {
 			}
 		})
 	}
-	messages := make([]proactiveReplyHistoryItem, 0, 30)
-	for i := 0; i < 30; i++ {
+	messages := make([]proactiveReplyHistoryItem, 0, 40)
+	for i := 0; i < 40; i++ {
 		messages = append(messages, proactiveReplyHistoryItem{IsBot: i < 10})
 	}
-	if bot, total := proactiveReplyBotShare(messages, participationShareWindow); bot != 10 || total != 20 {
+	if bot, total := proactiveReplyBotShare(messages, participationShareWindow, 0); bot != 10 || total != 30 {
 		t.Fatalf("window bot=%d total=%d", bot, total)
 	}
-	if bot, total := proactiveReplyBotShare(messages[:3], participationShareWindow); bot != 3 || total != 3 {
+	if bot, total := proactiveReplyBotShare(messages[:3], participationShareWindow, 0); bot != 3 || total != 3 {
 		t.Fatalf("short history bot=%d total=%d", bot, total)
 	}
-	if bot, total := proactiveReplyBotShare(nil, participationShareWindow); bot != 0 || total != 0 {
+	if bot, total := proactiveReplyBotShare(nil, participationShareWindow, 0); bot != 0 || total != 0 {
 		t.Fatalf("empty history bot=%d total=%d", bot, total)
+	}
+	// 时间跨度之外的旧消息不参与统计：几小时前机器人说过多少条，不代表此刻在刷屏。
+	aged := make([]proactiveReplyHistoryItem, 0, 12)
+	for i := 0; i < 12; i++ {
+		age := int64(i) * 120
+		aged = append(aged, proactiveReplyHistoryItem{IsBot: i%2 == 0, AgeSeconds: &age})
+	}
+	bot, total := proactiveReplyBotShare(aged, participationShareWindow, participationShareSpanSeconds)
+	if bot != 3 || total != 6 {
+		t.Fatalf("span-limited bot=%d total=%d", bot, total)
+	}
+	if !participationBotShareBlocks(bot, total, "medium") {
+		t.Fatal("half of the last ten minutes is the bot and must pause the chat branch")
+	}
+	// 缺 age_seconds 的条目按刚发生处理，不会因为缺字段被悄悄漏掉。
+	if bot, total := proactiveReplyBotShare([]proactiveReplyHistoryItem{{IsBot: true}}, participationShareWindow, participationShareSpanSeconds); bot != 1 || total != 1 {
+		t.Fatalf("missing age bot=%d total=%d", bot, total)
+	}
+}
+
+// 线上 6% 的插话以「确实/没错」开头去附和一个无法核实的判断，评分模型却给了高
+// answerability：文字流畅贴题，但说不出任何依据。锚点必须把这种回复钉在低分区。
+func TestAnswerabilityAnchorsPushSycophancyLow(t *testing.T) {
+	prompt := ParticipationPreferences{Desire: 50}.prompt()
+	for _, want := range []string{
+		"只能附和对方的主观判断",
+		"只能为一个无法核实的说法补充听起来内行、其实没有依据的理由",
+		"流畅、贴题、像内行也不等于可回答，讲不出依据就压到 0.10 至 0.30",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("answerability anchors missing %q", want)
+		}
+	}
+	// 原有锚点结构保持不变，五个刻度都还在。
+	for _, want := range []string{"0.10 只能猜", "0.30 只能给空泛感想", "0.50 能给一句站得住的具体回应", "0.70 有明确可讲的内容或思路", "0.90 上下文已有能直接回答的具体信息"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("answerability anchor scale lost %q", want)
+		}
+	}
+}
+
+// answerability 是三条分支共用的门槛（见 ratingsAllow），把「讲不出依据就压低」写死之后
+// 接梗和角色扮演一起被判死：玩笑本来就没有依据可讲。回放 59 条线上评分时放行率从 66%
+// 掉到 10%，丢的正是群里在演课堂角色扮演、接机器人自己抛的梗、拿触发行为调侃机器人这
+// 几类。附和一个无法核实的事实判断是机器人撑不住的断言，接一个正在进行的玩笑没有断言，
+// 只问机器人手里有没有一句新词。提示词必须把这两件事分开。
+func TestAnswerabilityExemptsBanterFromEvidenceTest(t *testing.T) {
+	prompt := ParticipationPreferences{Desire: 50}.prompt()
+	for _, want := range []string{
+		// 依据标准的适用范围写成断言类型，不是「所有消息」。
+		"「讲不出依据就压低」只管对事实、原因、产品、人物和事件的断言",
+		"群里在玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言",
+		// 玩笑里换判据：有没有一句合梗的新话，而不是有没有依据。
+		"判据换成机器人有没有一句合这个梗的新话",
+		"有就 0.50 至 0.70",
+		// 复读和泛泛捧场仍然留在低分区，豁免不是给捧场用的。
+		"只能复读或泛泛捧场才回 0.10 至 0.30",
+		// 共用门槛之外，闲聊分也不该被依据标准带着一起塌。
+		"这类互动的 chat_in 照梗与调侃的锚点给，不跟着压低",
+		// 玩笑包装下的事实断言不能借豁免绕开依据标准。
+		"玩笑里顺带抛出的事实说法仍按依据算",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("banter carve-out missing %q", want)
+		}
+	}
+	// 豁免必须排在附和锚点之后，读起来才是「上面那条依据标准的例外」。
+	if strings.Index(prompt, "只能附和对方的主观判断") > strings.Index(prompt, "「讲不出依据就压低」只管") {
+		t.Fatal("banter carve-out must follow the sycophancy anchors it exempts")
 	}
 }
 

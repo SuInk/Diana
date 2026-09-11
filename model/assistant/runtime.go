@@ -2476,7 +2476,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		}
 		// 闲聊分支还要看机器人最近说了多少：占比过高时只留下相关度分支。
 		_, chatLevel := chatIn.Participation.ratingLevels()
-		botMessages, totalMessages := proactiveReplyBotShare(payload.RecentMessages, participationShareWindow)
+		botMessages, totalMessages := proactiveReplyBotShare(payload.RecentMessages, participationShareWindow, participationShareSpanSeconds)
 		shareBlocked := chatReply && participationBotShareBlocks(botMessages, totalMessages, chatLevel)
 		if shareBlocked {
 			allowed, chatReply = false, false
@@ -2517,12 +2517,20 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	return event, text, turn, allowed
 }
 
-// proactiveReplyBotShare 统计路由上下文里最近 window 条消息中机器人自己发了几条。
-// recent_messages 是按时间倒序拼的，所以取前 window 条就是最近的那一段。
-func proactiveReplyBotShare(messages []proactiveReplyHistoryItem, window int) (int, int) {
-	total := min(len(messages), window)
-	bot := 0
-	for _, item := range messages[:total] {
+// proactiveReplyBotShare 统计路由上下文里最近一段时间内机器人自己发了几条。
+// recent_messages 是按时间倒序拼的，所以取前 window 条就是最近的那一段；再按
+// age_seconds 只留下 spanSeconds 以内的，占比才反映「此刻的节奏」而不是几小时前的旧账。
+// spanSeconds <= 0 表示不限时间跨度；缺 age_seconds 的条目按刚发生处理。
+func proactiveReplyBotShare(messages []proactiveReplyHistoryItem, window int, spanSeconds int64) (int, int) {
+	if window > 0 && len(messages) > window {
+		messages = messages[:window]
+	}
+	bot, total := 0, 0
+	for _, item := range messages {
+		if spanSeconds > 0 && item.AgeSeconds != nil && *item.AgeSeconds > spanSeconds {
+			continue
+		}
+		total++
 		if item.IsBot {
 			bot++
 		}
@@ -6490,6 +6498,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if event.chatInReply {
 		builder.WriteString("\n" + proactiveReplyPacingPrompt)
 		builder.WriteString("\n本次回复是主动插话，已根据用户发言偏好决定参与。顺着当前话题自然回应，可以接梗、表达感受或回答问题，不要求增加新知识。遵守人设和用户要求，不复读、不编造事实。")
+		// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
+		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
+		builder.WriteString("\n如果这一轮唯一能做的事只是赞同一个你无法核实的判断，就别发：要么说出一件你确实知道的具体的事，要么放弃这次插话。不要用「确实」「没错」开头去附和一个无法核实的判断，也不要给它补充听起来内行但没有依据的理由。别人凭印象下的结论，你没有证据就是没有证据，说不清楚就直说不确定。")
 	}
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。

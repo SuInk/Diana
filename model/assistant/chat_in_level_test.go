@@ -259,6 +259,9 @@ func TestChatInReplyPromptOnlyAppearsForInterjections(t *testing.T) {
 		"已根据用户发言偏好决定参与",
 		"不要求增加新知识",
 		"不复读、不编造事实",
+		// 反附和：无法核实的判断不许用「确实」开头顺着往下编理由。
+		"不要用「确实」「没错」开头去附和一个无法核实的判断",
+		"也不要给它补充听起来内行但没有依据的理由",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("chat-in prompt missing %q: %q", want, prompt)
