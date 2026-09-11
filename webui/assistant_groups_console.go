@@ -142,7 +142,7 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	set := assistant.GroupConfigSet{Groups: h.groupConfigs.Groups().GroupsForProfile(profileID)}
 	refresh := queryBool(c.Query("refresh"))
 	liveGroups, liveAvailable, warning := h.consoleGroupSources(c.Request.Context(), profileID, refresh)
-	groups := mergeConsoleGroupItems(base, set, liveGroups, h.isOneBotProfile)
+	groups := mergeConsoleGroupItems(base, set, liveGroups, h.isOneBotProfile, h.botConfigResolver())
 	for index := range groups {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
 	}
@@ -394,12 +394,24 @@ func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]bot
 // 整个 handler，是为了让 mergeConsoleGroupItems 保持成可单测的纯函数。
 type qqAvatarForProfile func(profileID string) bool
 
-func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []botAutoGroupInfo, qqAvatar qqAvatarForProfile) []consoleGroupItem {
+// mergeConsoleGroupItems 汇总控制台群列表。「全部机器人」视图里 set 混着好几台
+// 机器人的群，resolve 让每个群各自跟自己那台取默认值，别把当前这台的人设显示
+// 成别人的——那份回显被前端一提交就会真的存进去。
+func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []botAutoGroupInfo, qqAvatar qqAvatarForProfile, resolve assistant.BotConfigResolver) []consoleGroupItem {
+	baseFor := func(profileID string) assistant.BotConfig {
+		if resolve == nil || strings.TrimSpace(profileID) == "" {
+			return base
+		}
+		if owner, ok := resolve(strings.TrimSpace(profileID)); ok {
+			return owner
+		}
+		return base
+	}
 	saved := make(map[string]assistant.GroupConfig, len(set.Groups))
 	for _, cfg := range set.Groups {
 		groupID := strings.TrimSpace(cfg.GroupID)
 		if groupID != "" {
-			saved[groupID] = cfg.WithDefaults(groupID, base)
+			saved[groupID] = cfg.WithDefaultsResolved(groupID, base, resolve)
 		}
 	}
 
@@ -416,7 +428,8 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		seen[groupID] = struct{}{}
 		cfg, configured := saved[groupID]
 		if !configured {
-			cfg = assistant.DefaultGroupConfig(groupID, base)
+			// 还没配过的群跟着它所在的那台机器人给默认值。
+			cfg = assistant.DefaultGroupConfig(groupID, baseFor(live.BotProfileID))
 		}
 		avatarURL := ""
 		if live.QQAvatar {
@@ -425,7 +438,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 			avatarURL = consoleGroupAvatarURL(groupID, live.BotProfileID)
 		}
 		items = append(items, consoleGroupItem{
-			GroupConfig:    cfg.WithDefaults(groupID, base),
+			GroupConfig:    cfg.WithDefaultsResolved(groupID, base, resolve),
 			GroupName:      strings.TrimSpace(live.GroupName),
 			AvatarURL:      avatarURL,
 			MemberCount:    live.MemberCount,
@@ -497,13 +510,36 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
-	saved, err := h.groupConfigs.SaveGroupConfig(cfg, h.runtime.Config())
+	// 群配置跟随它自己那台机器人：拿运行时当前配置当 base，会把另一台的人设和
+	// 默认值写进这个群。
+	base := h.botConfigForProfile(profileID)
+	saved, err := h.groupConfigs.SaveGroupConfig(cfg, base)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.groups.save", "群配置已保存（控制台）", groupID, groupConfigAuditMetadata(previous, saved, profileName))
-	c.JSON(http.StatusOK, gin.H{"config": h.groupConfigForAPI(saved.WithDefaults(groupID, h.runtime.Config()))})
+	c.JSON(http.StatusOK, gin.H{"config": h.groupConfigForAPI(saved.WithDefaults(groupID, base))})
+}
+
+// botConfigResolver 让群配置能按 bot_profile_id 找回自己那台机器人的配置。
+func (h *BotHandler) botConfigResolver() assistant.BotConfigResolver {
+	if h.profiles == nil {
+		return nil
+	}
+	return func(profileID string) (assistant.BotConfig, bool) {
+		return h.profiles.Profiles().ConfigForProfile(profileID)
+	}
+}
+
+// botConfigForProfile 取指定机器人的配置，档案不在时退回运行时当前配置。
+func (h *BotHandler) botConfigForProfile(profileID string) assistant.BotConfig {
+	if resolve := h.botConfigResolver(); resolve != nil {
+		if cfg, ok := resolve(profileID); ok {
+			return cfg
+		}
+	}
+	return h.runtime.Config()
 }
 
 func (h *BotHandler) consoleGroupProfile(requested string) (string, string, error) {
