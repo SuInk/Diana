@@ -290,6 +290,7 @@ CREATE TABLE IF NOT EXISTS repository_issue_drafts (
 
 CREATE INDEX IF NOT EXISTS idx_message_events_session_time ON message_events(session, event_time DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_message_events_kind_group_time ON message_events(kind, group_id, event_time DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_message_events_message_id ON message_events(message_id, kind);
 CREATE INDEX IF NOT EXISTS idx_message_events_text ON message_events(text);
 CREATE INDEX IF NOT EXISTS idx_message_events_user_time ON message_events(user_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_image_descriptions_source_message ON image_descriptions(source_session, source_message_id);
