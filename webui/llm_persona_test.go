@@ -514,3 +514,51 @@ func TestPersonaGeneratePromptRequiresIdentityAndAppearance(t *testing.T) {
 		t.Fatalf("没有名字时不该要求写名字：%s", got)
 	}
 }
+
+// personaVenueForbiddenTerms 是人设生成提示词里一个都不能出现的词。
+//
+// 前一半是平台名，后一半是场合词，禁的是同一件事：一张人设卡存在共享人设库里，
+// 会被应用到任意一个机器人配置上，而同一个机器人既在多人会话里说话，也在一对一
+// 私聊里说话。提示词里写「运行在 QQ 群里」，这张卡换到 Telegram 上就是错的；写
+// 「你活在群里」，这张卡被私聊用到时同样是错的。人设只管「它是谁、怎么说话」，
+// 「在哪儿说、对着谁说」是运行时上下文（promptGroupScope、发言者模板、
+// platformOutputRulesForConfig），运行时会自己补，人设抢着写只会写错。
+// 同一条道理见 assistant.identityAliasPrefix 那段注释。
+var personaVenueForbiddenTerms = []string{
+	"QQ", "Telegram", "飞书", "企业微信", "微信", "OneBot",
+	"群里", "群聊", "本群", "群友",
+}
+
+func TestPersonaGeneratePromptAssumesNoPlatformOrVenue(t *testing.T) {
+	// 用户自己的需求描述会原样进提示词，这里给的都是中立措辞，命中的只会是
+	// 我们自己写死的那部分。
+	rewriteBase := "你是嘉然，说话软乎乎的。"
+	prompts := map[string]string{
+		"系统提示词": personaGenerateSystemPrompt,
+		"从零生成":  personaGenerateUserPrompt("一个爱吐槽的猫娘", "嘉然", "", nil, string(assistant.ResponseModeActive)),
+		"改写":    personaGenerateUserPrompt("再毒舌一点", "嘉然", rewriteBase, nil, string(assistant.ResponseModeSuperActive)),
+	}
+	for label, prompt := range prompts {
+		for _, term := range personaVenueForbiddenTerms {
+			if strings.Contains(prompt, term) {
+				t.Errorf("%s里出现了 %q：人设要能跨配置、跨平台、跨群聊与私聊复用，"+
+					"提示词不能替角色认定它在哪个平台、什么场合说话——那是运行时注入的上下文。\n%s",
+					label, term, prompt)
+			}
+		}
+	}
+	// 回复模式说的是搭话分寸，不是「在哪儿搭话」，每一档都要经得起同样的检查。
+	for mode, hint := range personaGenerateModeHints {
+		for _, term := range personaVenueForbiddenTerms {
+			if strings.Contains(hint, term) {
+				t.Errorf("回复模式 %q 的说法里出现了 %q：分寸要写成怎么搭话，不要绑定场合", mode, term)
+			}
+		}
+	}
+	// 光是自己不写还不够，还要拦住模型顺手补一句「你住在某个群里」。
+	for _, want := range []string{"不要交代对话发生在哪儿", "不要写它待在哪儿", "「对方」「别人」「大家」"} {
+		if !strings.Contains(personaGenerateSystemPrompt, want) {
+			t.Errorf("系统提示词没有禁止模型自己编造场合：缺少 %q", want)
+		}
+	}
+}

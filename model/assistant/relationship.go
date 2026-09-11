@@ -128,14 +128,17 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaThreadStateToolName: true,
 		dianaStickerToolName:     true,
 		"diana.bot_config":       true,
-		"diana.group":            true,
-		dianaOneBotV11ToolName:   true,
-		dianaImageToolName:       true,
-		"diana.reminder":         true,
-		"diana.schedule":         true,
-		"diana.rss":              true,
-		"diana.tasks":            true,
-		"diana.tts":              true,
+		// 屏蔽名单和回复门槛一样按群管理：工具里自己核验主人或实时核验的群管理员，
+		// 名单外的人调用只会被拒绝。不收录的话群主想屏蔽人就得去找机器人主人。
+		replyBlockToolName:     true,
+		"diana.group":          true,
+		dianaOneBotV11ToolName: true,
+		dianaImageToolName:     true,
+		"diana.reminder":       true,
+		"diana.schedule":       true,
+		"diana.rss":            true,
+		"diana.tasks":          true,
+		"diana.tts":            true,
 		// 点歌是群里人人都会用的事，和语音合成同级：它不碰本地文件、命令或浏览器，
 		// 只是搜一首歌发出来。只留给主人的话这个功能等于没开。
 		musicToolName:           true,
