@@ -335,3 +335,14 @@ func directReplyQuotedContext(quoted *QuotedMessage) map[string]any {
 		"mentioned_user_ids": mentionedUserIDs(quoted.Segments),
 	}
 }
+
+// directReplySupplementEvents 取出追发合并里那几条消息本身，供媒体合并使用。
+// 合并的文字走 updatedReplyRequestText，图片和其它媒体走 attachInboundTurnMedia，
+// 两条路取的是同一批消息。
+func directReplySupplementEvents(supplements []proactiveReplyCandidate) []MessageEvent {
+	events := make([]MessageEvent, 0, len(supplements))
+	for _, supplement := range supplements {
+		events = append(events, supplement.Event)
+	}
+	return events
+}
