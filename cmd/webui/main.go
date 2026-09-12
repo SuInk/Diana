@@ -106,6 +106,13 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer) func(a
 }
 
 func main() {
+	// 编码任务的审批 hook：编码 CLI 以这个子命令回调 Diana 自己，问一句「这一步
+	// 能不能做」。它必须在任何配置加载之前处理掉——这是个短命的一问一答进程，
+	// 不该去连数据库，也不该往日志里写启动信息。
+	if len(os.Args) == 3 && os.Args[1] == assistant.CodingApprovalHookCommand {
+		os.Exit(assistant.RunCodingApprovalHook(os.Args[2], os.Stdin, os.Stdout, os.Stderr))
+	}
+
 	if len(os.Args) == 3 && os.Args[1] == updater.InternalReleaseApplyCommand {
 		if err := updater.RunReleaseApplyHelper(os.Args[2]); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "release update failed: %v\n", err)
