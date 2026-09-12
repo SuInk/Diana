@@ -664,10 +664,29 @@ func TestRuntimeReportsImageErrorWhenURLAndGetImageFail(t *testing.T) {
 	if err != nil || outcome != "error_replied" {
 		t.Fatalf("reply outcome = %q error = %v", outcome, err)
 	}
-	if len(provider.requestSnapshot().Messages) != 0 {
-		t.Fatalf("vision model received an unavailable image: %#v", provider.requestSnapshot())
+	// 这一轮唯一允许发生的模型调用是错误提示的改写，它只拿到已经脱敏的文案。
+	// 真正要守住的是「读不出来的图片绝不能进模型请求」，所以按图片部件判，
+	// 而不是按「一次调用都没有」——后者在提示改写之后已经不成立。
+	snapshot := provider.requestSnapshot()
+	for _, message := range snapshot.Messages {
+		for _, part := range message.Parts {
+			if part.ImageURL != "" || part.Type == llm.ContentPartImageURL {
+				t.Fatalf("unavailable image reached the model: %#v", snapshot)
+			}
+		}
+		if strings.Contains(message.Content, "[图片]") {
+			t.Fatalf("原始图片占位符进了模型请求: %#v", snapshot)
+		}
 	}
-	if len(channel.sent) != 1 || !strings.Contains(channel.sent[0].Text, "图片读取失败") || strings.Contains(channel.sent[0].Text, "[图片]") {
+	// 改写拿到的必须是那句可操作的说明，否则改出来的话会丢掉「重新发原图」这个动作。
+	rewriteInput := ""
+	if n := len(snapshot.Messages); n > 0 {
+		rewriteInput = snapshot.Messages[n-1].Content
+	}
+	if !strings.Contains(rewriteInput, "图片读取失败") || !strings.Contains(rewriteInput, "重新发送原图") {
+		t.Fatalf("改写没有拿到可操作的错误说明: %q", rewriteInput)
+	}
+	if len(channel.sent) != 1 || strings.Contains(channel.sent[0].Text, "[图片]") {
 		t.Fatalf("public error reply = %#v", channel.sent)
 	}
 	if len(recordedCallsByAction(channel.callsSnapshot(), "get_image")) == 0 {
