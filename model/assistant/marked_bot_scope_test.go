@@ -10,30 +10,49 @@ import (
 	"time"
 )
 
+// markedBotRuntime 里 380726517 标在机器人级：那是「这个账号在哪儿都是机器人」的
+// 表达，所以私聊也算。群里另标一个 700000001，它只在那个群生效，用来钉住作用域。
 func markedBotRuntime(t *testing.T, provider LLMProvider) *Runtime {
 	t.Helper()
 	store := &testWritableGroupConfigStore{}
 	if _, err := store.SaveGroupConfig(GroupConfig{
 		BotProfileID: "a", GroupID: "1049765710", Enabled: true, EnabledSet: true,
-		MarkedBotIDs: []string{"380726517"},
+		MarkedBotIDs: []string{"700000001"},
 	}, BotConfig{ID: "a", BotAccount: "42"}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := NewRuntime(BotConfig{ID: "a", BotAccount: "42", OwnerID: "owner"},
+	runtime := NewRuntime(BotConfig{ID: "a", BotAccount: "42", OwnerID: "owner", MarkedBotIDs: []string{"380726517"}},
 		nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.SetGroupConfigStore(store)
 	return runtime
 }
 
-// TestGroupMarkerAppliesInPrivateChat 群里标的机器人，进私聊也还是机器人。
-// 以前 effectiveConfigForEventLocked 只在群事件上合并群级标记（runtime.go:1293），
-// 机器人级那份又常常是空的，于是同一个账号一进私聊就变回了人。
-func TestGroupMarkerAppliesInPrivateChat(t *testing.T) {
+// 标记的作用域就是它被填在哪儿：机器人级那份到处生效，群里那份只管那个群。
+//
+// 这里一度是跨群汇总：任意一个群标下的账号，在这台机器人的所有会话里都算机器人。
+// 代价是标记串门——在 A 群标的账号到 B 群照样被抑制，而 B 群的编辑页两处都看不见
+// 它，管理员无从知道为什么不理人。
+func TestMarkerScopeFollowsWhereItWasSet(t *testing.T) {
 	runtime := markedBotRuntime(t, &capturingLLMProvider{reply: `{"needs_reply":false}`})
 
 	private := MessageEvent{Kind: EventKindPrivate, ProfileID: "a", UserID: "380726517", MessageID: "p1"}
 	if !runtime.accountMarkedAsBot(private) {
-		t.Fatal("group-level marker did not reach private chat")
+		t.Fatal("机器人级标记应当在私聊里也生效")
+	}
+	// 只标在某个群里的账号：那个群里算机器人，别的群和私聊都不算。
+	inGroup := MessageEvent{Kind: EventKindGroup, ProfileID: "a", GroupID: "1049765710", UserID: "700000001", MessageID: "g1"}
+	if !runtime.accountMarkedAsBot(inGroup) {
+		t.Fatal("群级标记应当在本群生效")
+	}
+	otherGroup := inGroup
+	otherGroup.GroupID = "791503570"
+	if runtime.accountMarkedAsBot(otherGroup) {
+		t.Fatal("群级标记串到了别的群")
+	}
+	privateOnlyGroupMarked := private
+	privateOnlyGroupMarked.UserID = "700000001"
+	if runtime.accountMarkedAsBot(privateOnlyGroupMarked) {
+		t.Fatal("群级标记串进了私聊")
 	}
 	if !runtime.requiresTelegramBotMentionJudgment(private) {
 		t.Fatal("marked bot in DM did not require the semantic gate")
@@ -44,12 +63,9 @@ func TestGroupMarkerAppliesInPrivateChat(t *testing.T) {
 	if runtime.accountMarkedAsBot(other) || runtime.requiresTelegramBotMentionJudgment(other) {
 		t.Fatal("unmarked account was treated as a bot")
 	}
-	// 另一台机器人的群配置不该污染这一台。
-	foreign := private
-	foreign.ProfileID = "b"
-	if runtime.accountMarkedAsBot(foreign) {
-		t.Fatal("marker leaked across bot profiles")
-	}
+	// 原先这里还验「另一台机器人的群配置不该污染这一台」。那条防的是跨群汇总时
+	// 按 bot_profile_id 过滤有没有做对；汇总去掉之后群标记根本不出本群，比按归属
+	// 过滤更强，这条断言也就没有对象了。
 }
 
 // TestMarkedBotPrivateMessageSuppressedUnlessAddressed 保留群里那条「语义上向
