@@ -1410,11 +1410,14 @@ func TestBuiltinPluginsDeclarePlatformSupport(t *testing.T) {
 			t.Fatalf("built-in plugin %s has no platform metadata", state.Manifest.ID)
 		}
 	}
-	for _, id := range []string{oneBotV11PluginID, voiceTTSPluginID} {
-		state, ok := manager.Get(id)
-		if !ok || len(state.Manifest.Platforms) != 1 || state.Manifest.Platforms[0] != PlatformOneBotV11 {
-			t.Fatalf("%s platforms = %#v", id, state.Manifest.Platforms)
-		}
+	state, ok := manager.Get(voiceTTSPluginID)
+	if !ok || len(state.Manifest.Platforms) != 1 || state.Manifest.Platforms[0] != PlatformOneBotV11 {
+		t.Fatalf("%s platforms = %#v", voiceTTSPluginID, state.Manifest.Platforms)
+	}
+	// 平台接口是跨平台内置能力，OneBot 和 Telegram 都要支持。
+	platformState, ok := manager.Get(platformInterfacePluginID)
+	if !ok || !pluginSupportsPlatform(platformState.Manifest, PlatformTelegram) || !pluginSupportsPlatform(platformState.Manifest, PlatformOneBotV11) {
+		t.Fatalf("platform interface platforms = %#v", platformState.Manifest.Platforms)
 	}
 	resolver, ok := manager.Get(resolverPluginID)
 	if !ok || !pluginSupportsPlatform(resolver.Manifest, PlatformTelegram) || !pluginSupportsPlatform(resolver.Manifest, PlatformOneBotV11) {
@@ -1432,7 +1435,7 @@ func TestAgentToolsAreFilteredByCurrentPlatform(t *testing.T) {
 	for _, tool := range tools {
 		names[tool.Name()] = true
 	}
-	if names["diana.tts"] || names[dianaOneBotV11ToolName] {
+	if names["diana.tts"] {
 		t.Fatalf("OneBot-only tools exposed on Telegram: %#v", names)
 	}
 	if !names["diana.capabilities"] || !names["web_search.search"] || !names["diana.music"] {
