@@ -130,15 +130,15 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		"diana.bot_config":       true,
 		// 屏蔽名单和回复门槛一样按群管理：工具里自己核验主人或实时核验的群管理员，
 		// 名单外的人调用只会被拒绝。不收录的话群主想屏蔽人就得去找机器人主人。
-		replyBlockToolName:     true,
-		"diana.group":          true,
-		dianaOneBotV11ToolName: true,
-		dianaImageToolName:     true,
-		"diana.reminder":       true,
-		"diana.schedule":       true,
-		"diana.rss":            true,
-		"diana.tasks":          true,
-		"diana.tts":            true,
+		replyBlockToolName:    true,
+		"diana.group":         true,
+		dianaPlatformToolName: true,
+		dianaImageToolName:    true,
+		"diana.reminder":      true,
+		"diana.schedule":      true,
+		"diana.rss":           true,
+		"diana.tasks":         true,
+		"diana.tts":           true,
 		// 点歌是群里人人都会用的事，和语音合成同级：它不碰本地文件、命令或浏览器，
 		// 只是搜一首歌发出来。只留给主人的话这个功能等于没开。
 		musicToolName:           true,
@@ -200,7 +200,7 @@ func (r *Runtime) relationshipPolicy(ctx context.Context, event MessageEvent) Re
 func relationshipPermissionContext(policy RelationshipPolicy) string {
 	context := "关系等级：" + policy.Name + "\n语气要求：" + policy.Tone
 	if policy.Owner {
-		context += "\n当前发言者是主人：除所有人都有的基础能力外，还有机器人配置、本地工具、Skills/MCP 与 OneBot 全协议。"
+		context += "\n当前发言者是主人：除所有人都有的基础能力外，还有机器人配置、本地工具、Skills/MCP，以及平台接口的群管理操作（禁言、解禁、踢人，需机器人为群管理员）。"
 	}
 	if line := romanceContextLine(policy); line != "" {
 		context += "\n" + line

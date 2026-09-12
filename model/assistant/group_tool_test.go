@@ -25,7 +25,7 @@ func TestDianaOneBotGroupToolListsOtherMembersWithMentions(t *testing.T) {
 			},
 		},
 	}}
-	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, channel, NewPluginManager(NewOneBotV11SkillPlugin()), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, nil)
 	tool := newDianaGroupTool(runtime, MessageEvent{
 		Kind:    EventKindGroup,
 		SelfID:  "10000",
@@ -71,9 +71,9 @@ func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 		case 1:
 			return `{"action":"none"}`, nil
 		case 2:
-			return `{"action":"tool","tool":"diana.onebot_v11","input":{"action":"get_group_member_list"}}`, nil
+			return `{"action":"tool","tool":"diana.platform","input":{"operation":"member_list"}}`, nil
 		case 3:
-			match := regexp.MustCompile(`"nickname"\s*:\s*"Alice"\s*,\s*"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"`).FindStringSubmatch(requestTextForPrivacyTest(req))
+			match := regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"Alice"`).FindStringSubmatch(requestTextForPrivacyTest(req))
 			if len(match) > 1 {
 				targetAlias = match[1]
 			}
@@ -89,7 +89,7 @@ func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 		BotAccount:    "10000",
 		AgentEnabled:  true,
 		AgentMaxSteps: 3,
-	}, channel, NewPluginManager(NewOneBotV11SkillPlugin()), nil, nil, nil, func() (LLMProvider, error) {
+	}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
@@ -111,7 +111,7 @@ func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 	if !strings.Contains(reply, "[CQ:at,qq=10002]") {
 		t.Fatalf("reply = %q", reply)
 	}
-	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "diana.onebot_v11") || !requestMessagesContain(provider.requests[2].Messages, targetAlias) {
+	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "diana.platform") || !requestMessagesContain(provider.requests[2].Messages, targetAlias) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
 	for _, req := range provider.requests {
@@ -145,7 +145,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *tes
 		},
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"action":"tool","tool":"diana.onebot_v11","input":{"action":"get_group_member_list"}}`,
+		`{"action":"tool","tool":"diana.platform","input":{"operation":"member_list"}}`,
 		`{"action":"final","content":"群里现在有 3 个人。"}`,
 		`{"send_confidence":0.99,"reason":"准确回答群成员数量"}`,
 	}}
@@ -153,7 +153,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *tes
 		AgentEnabled:  true,
 		AgentMaxSteps: 3,
 		BotAccount:    "42",
-	}, channel, NewPluginManager(NewOneBotV11SkillPlugin()), nil, nil, nil, func() (LLMProvider, error) {
+	}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{
@@ -177,7 +177,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *tes
 	if calls := channel.callsSnapshot(); len(calls) != 1 || calls[0].action != "get_group_member_list" {
 		t.Fatalf("OneBot calls=%#v", calls)
 	}
-	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "get_group_member_list") {
+	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "member_list") {
 		t.Fatalf("provider requests=%#v", provider.requests)
 	}
 }
@@ -191,7 +191,7 @@ func TestDianaOneBotGroupToolSearchesByCardOrNickname(t *testing.T) {
 			},
 		},
 	}}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(NewOneBotV11SkillPlugin()), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, nil)
 	raw, err := newDianaGroupTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "owner"}).listMembers(context.Background(), map[string]any{
 		"operation": "members",
 		"query":     "阿梨",

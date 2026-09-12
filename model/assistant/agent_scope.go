@@ -87,7 +87,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		ExtensionManagement: extensionManagement,
 		BuiltinExtensions:   r.agentBuiltinExtensions(event),
 		BuiltinSkills:       r.botProtocolBuiltinSkills(event),
-		ReservedSkillNames:  []string{"onebot-v11", "bot-protocol"},
+		ReservedSkillNames:  []string{"platform", "bot-protocol"},
 		CommandAllowlist:    cfg.AgentCommandAllowlist,
 		CommandTimeoutMS:    cfg.AgentCommandTimeoutMS,
 		// 这两项以前在 agent.Config 里存在但没人赋值，于是永远是 auto，
