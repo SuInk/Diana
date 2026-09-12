@@ -121,8 +121,8 @@ func sanitizeDebugGenerateRequest(req llm.GenerateRequest) llm.GenerateRequest {
 	cloned.Messages = make([]llm.Message, len(req.Messages))
 	for index, message := range req.Messages {
 		cloned.Messages[index] = message
-		if oneBotV11DebugProtocolMessage(message) {
-			cloned.Messages[index].Content = "[OneBot v11 Agent protocol payload omitted]"
+		if platformDebugProtocolMessage(message) {
+			cloned.Messages[index].Content = "[platform tool Agent protocol payload omitted]"
 		} else if privateThreadStateDebugMessage(message) {
 			cloned.Messages[index].Content = "[private thread state payload omitted]"
 		}
@@ -147,8 +147,8 @@ func sanitizeDebugGenerateResponse(req llm.GenerateRequest, response *llm.Genera
 	if responseContainsThreadStateToolCall(response) || strings.Contains(cloned.Text, dianaThreadStateToolName) {
 		cloned.Text = "[private thread state model payload omitted]"
 	}
-	if strings.Contains(cloned.Text, dianaOneBotV11ToolName) || requestContainsOneBotV11DebugProtocol(req) {
-		cloned.Text = "[OneBot v11 model payload omitted]"
+	if strings.Contains(cloned.Text, dianaPlatformToolName) || requestContainsPlatformDebugProtocol(req) {
+		cloned.Text = "[platform tool model payload omitted]"
 	}
 	return &cloned
 }
@@ -208,23 +208,23 @@ func cloneStringAnyMap(input map[string]any) map[string]any {
 	return out
 }
 
-func requestContainsOneBotV11DebugProtocol(req llm.GenerateRequest) bool {
+func requestContainsPlatformDebugProtocol(req llm.GenerateRequest) bool {
 	for _, message := range req.Messages {
-		if oneBotV11DebugProtocolMessage(message) {
+		if platformDebugProtocolMessage(message) {
 			return true
 		}
 	}
 	return false
 }
 
-func oneBotV11DebugProtocolMessage(message llm.Message) bool {
-	if !strings.Contains(message.Content, dianaOneBotV11ToolName) {
+func platformDebugProtocolMessage(message llm.Message) bool {
+	if !strings.Contains(message.Content, dianaPlatformToolName) {
 		return false
 	}
 	if message.Role == llm.RoleAssistant {
 		return true
 	}
-	return message.Role == llm.RoleUser && strings.Contains(message.Content, "工具 "+dianaOneBotV11ToolName+" 执行")
+	return message.Role == llm.RoleUser && strings.Contains(message.Content, "工具 "+dianaPlatformToolName+" 执行")
 }
 
 // llmUnlabeledPurpose 是调用点没有打用途标签时记账和调试轨迹里落的桶。

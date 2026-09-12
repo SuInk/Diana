@@ -1755,6 +1755,27 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	r.remember(event)
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	r.observeGroupExpression(event, text)
+	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
+	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
+	// 进历史（上面的 remember 已经落库并排了语义索引）、表达学习（上一行）和长期记忆，好让
+	// 群重新打开后上下文接得上；但所有要花模型 token 的环节全部跳过：contextHistory 里那次
+	// 跨群语义检索、Telegram 接话判定、主动回复路由、历史识图，以及回复生成本身。主人的
+	// 响应限制命令是本地控制指令、不花 token，放它照旧落到 shouldHandle 那条老路，不拦。
+	if cfg := r.effectiveConfigForEvent(event); event.Kind == EventKindGroup &&
+		!r.isOwnerReplySuppressionCommand(event, text) && !r.admitsGroupScope(cfg, event) {
+		r.enqueueEventMemory(event, memoryEventText(event))
+		if profile, stored := r.updateUserMemory(event, 0); stored {
+			event.userProfile = profile
+			event.userProfileLoaded = true
+		}
+		outcome := "ignored_policy"
+		if r.replyGateBlocksUser(cfg, event) {
+			outcome, event.routingReason = "ignored_user_blocked", replyBlockedDecisionReason
+		}
+		r.record(r.decisionEventRecord(event, text, outcome))
+		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
+		return event, text, false, outcome
+	}
 	history := r.contextHistory(event)
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
@@ -2262,10 +2283,20 @@ func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
 	if event.Kind != EventKindGroup {
 		return false
 	}
-	if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+	if !r.admitsGroupScope(cfg, event) {
 		return false
 	}
 	return r.replyGateAllows(cfg, event)
+}
+
+// admitsGroupScope reports whether this bot participates in the group at all:
+// the group is inside the admission list (black/whitelist) and has not been
+// switched off for this profile. It is the group-level half of admits and
+// admitsNotice, pulled out so prepareMessageEvent can ask it before spending a
+// single model token——关掉或不准入的群永远不会回复，那一轮跨群语义检索、Telegram
+// 接话判定和主动回复路由都是白花的钱。三处判据共用这一处，永远说同一句话。
+func (r *Runtime) admitsGroupScope(cfg BotConfig, event MessageEvent) bool {
+	return cfg.GroupAdmission.Allows(event.GroupID) && !r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID)
 }
 
 // admitsNotice applies the same local admission boundary to notice-triggered
@@ -2275,10 +2306,8 @@ func (r *Runtime) admitsNotice(cfg BotConfig, event MessageEvent) bool {
 	if r.isUserDisabled(event.UserID) {
 		return false
 	}
-	if strings.TrimSpace(event.GroupID) != "" {
-		if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
-			return false
-		}
+	if strings.TrimSpace(event.GroupID) != "" && !r.admitsGroupScope(cfg, event) {
+		return false
 	}
 	return r.replyGateAllows(cfg, event)
 }
@@ -3570,8 +3599,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		for index, tool := range pluginTools {
 			pluginTools[index] = capabilityToolForConfig(tool, cfg)
 		}
-		if r.oneBotV11SkillEnabled(event) {
-			pluginTools = append(pluginTools, newDianaOneBotV11Tool(r, event))
+		if r.platformInterfaceEnabled(event) {
+			pluginTools = append(pluginTools, newDianaPlatformTool(r, event))
 		}
 		if fullAgentEnabled {
 			extraTools := []agent.Tool{
@@ -3611,7 +3640,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					extraTools = append(extraTools, &dianaMemoryTool{runtime: r, event: event})
 				}
 			}
-			if r.oneBotRequestStore() != nil && r.oneBotV11SkillEnabled(event) {
+			if r.oneBotRequestStore() != nil && IsOneBotPlatform(r.currentPlatform(event)) && r.platformInterfaceEnabled(event) {
 				extraTools = append(extraTools, newDianaOneBotRequestsTool(r, event))
 			}
 			// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
@@ -6469,8 +6498,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaRepositoryIssuesToolName) {
 		builder.WriteString("\n" + promptToolRepositoryIssues)
 	}
-	if agentEnabled && hasTool(dianaOneBotV11ToolName) {
-		builder.WriteString("\n" + promptToolOneBotV11)
+	if agentEnabled && hasTool(dianaPlatformToolName) {
+		builder.WriteString("\n" + promptToolPlatform)
+	}
+	// 破坏性动作只对主人出现在工具 schema 里；提示词也只对主人注入，且必须进随发言者
+	// 变化的尾部，不能写进按前缀缓存的稳定头部（否则主人和普通成员的提示词会提前分叉）。
+	if agentEnabled && relationship.Owner && hasTool(dianaPlatformToolName) {
+		tail.WriteString("\n" + promptToolPlatformModeration)
 	}
 	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {
 		tail.WriteString("\n" + promptToolOneBotRequests)
