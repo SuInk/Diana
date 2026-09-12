@@ -77,7 +77,21 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	after := llm.PlanInputBudget(req, budget)
 	log.Printf("diana input budget: message_id=%s input_budget=%d text_share_percent=50 estimated_text_before=%d estimated_images_before=%d estimated_text_after=%d estimated_images_after=%d text_limit=%d image_limit=%d text_summary_calls=%d original_images=%d described_images=%d retained_images=%d", event.MessageID, budget, before.TextTokens, before.ImageTokens, after.TextTokens, after.ImageTokens, after.TextLimit, after.ImageLimit, textCalls, images, images-retained, retained)
 	if after.OverBudget() {
-		return nil, fmt.Errorf("diana: 无法在输入预算内保留本轮内容：预算 %d，估算文字 %d、图片 %d、其他 %d；压缩未能完成，未丢弃当前问题", budget, after.TextTokens, after.ImageTokens, after.OtherTokens)
+		// 压不进预算，先分清是「旧上下文太多」还是「这一轮本身就装不下」。
+		//
+		// 前者不该让整轮失败。线上抓到的多是差几十个 token：一次是限额 118656、
+		// 压完 118710，只超 54，用户却什么也收不到。摘要最多两次、每次还可能因为
+		// 略长被整条丢弃，凑不出那几十个 token 太容易了。供应商客户端发请求前本来
+		// 就会按自己的上下文上限裁剪（applyContextBudget → fitMessagesToTokenBudget，
+		// 四个 provider 都走这一步），丢的是最旧的历史，当前问题有优先级保护，
+		// 交给那一层远好过整轮报错。
+		//
+		// 后者仍旧要失败。裁剪保不住的东西只剩当前问题本身，放行等于把用户的问题
+		// 截断了再发出去，答出来的东西还不如不答。
+		if llm.PlanInputBudget(budgetProtectedRequest(req), budget).OverBudget() {
+			return nil, fmt.Errorf("diana: 无法在输入预算内保留本轮内容：预算 %d，估算文字 %d、图片 %d、其他 %d；当前问题本身就超出预算，未截断发出", budget, after.TextTokens, after.ImageTokens, after.OtherTokens)
+		}
+		log.Printf("diana input budget: message_id=%s compression fell short, deferring to provider trim: budget=%d text=%d images=%d other=%d", event.MessageID, budget, after.TextTokens, after.ImageTokens, after.OtherTokens)
 	}
 	return p.provider.Generate(ctx, req)
 }

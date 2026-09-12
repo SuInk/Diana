@@ -116,3 +116,29 @@ func lowerOverBudgetImageDetail(req llm.GenerateRequest, budget int64) llm.Gener
 	}
 	return req
 }
+
+// budgetProtectedRequest 只保留供应商裁剪不会丢的那部分：系统提示、当前这一轮的
+// 消息，以及标了当前优先级的消息。
+//
+// 用它把「超预算」分成两种：这部分还装得下，说明多出来的是旧上下文，交给供应商
+// 那层裁剪即可；这部分自己就装不下，说明当前问题本身太大，只能失败——放行等于把
+// 用户的问题截断了再发出去。
+func budgetProtectedRequest(req llm.GenerateRequest) llm.GenerateRequest {
+	current, lastUser := -1, -1
+	for i, message := range req.Messages {
+		if message.Role == llm.RoleUser || message.Role == llm.RoleTool {
+			current = i
+		}
+		if message.Role == llm.RoleUser {
+			lastUser = i
+		}
+	}
+	protected := make([]llm.Message, 0, len(req.Messages))
+	for i, message := range req.Messages {
+		if i == current || i == lastUser || message.Role == llm.RoleSystem || message.Priority >= llm.MessagePriorityCurrent {
+			protected = append(protected, message)
+		}
+	}
+	req.Messages = protected
+	return req
+}

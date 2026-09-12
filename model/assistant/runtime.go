@@ -4051,7 +4051,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		contextImageURLs = withoutMessageImageURLs(contextImageURLs, messages)
 	}
-	messageEvent := event
+	// 追发合并进来的那几条，图片也要一起带上。
+	//
+	// 下面 updatedReplyRequestText 只把补充消息的「文字」并进当前问题，图片段一直
+	// 留在各自的事件里没人取。于是「先发一张图、再补一张图问哪个好」这种一轮两图
+	// 的场景，模型只收到根消息那一张，而正文里明明写着两张——它既答不准，也说不清
+	// 该处理哪一张。媒体合并用入站那条同款规则去重，来源消息号照样标在段上。
+	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(r.directReplySupplements(ctx)))
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
 		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
 		WakeGuidance: cfg.PromptWakeOnlyText,
