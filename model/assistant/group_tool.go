@@ -68,13 +68,13 @@ func (t *dianaGroupTool) Description() string {
 	if !IsOneBotPlatform(t.event.Platform) {
 		return groupToolPrompt(t.event) + " 此工具只读；Diana 回复设置使用 diana.bot_config。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
 	}
-	return `使用 match_avatar 做本地群成员头像匹配，不凭视觉猜身份。OneBot 群资料、名单和成员查询按 onebot-v11 skill 使用 diana.onebot_v11；Diana 回复设置使用 diana.bot_config。此工具只读。`
+	return `使用 match_avatar 做本地群成员头像匹配，不凭视觉猜身份。OneBot 群资料、名单和成员查询使用 diana.platform；Diana 回复设置使用 diana.bot_config。此工具只读。`
 }
 
 // InputSchema 声明参数契约。取值范围引用与校验同一份常量。
 func (t *dianaGroupTool) InputSchema() map[string]any {
 	if IsOneBotPlatform(t.event.Platform) {
-		return toolObjectSchema([]string{"operation"}, map[string]any{"operation": toolEnumParam("本地头像匹配；原生群查询使用 diana.onebot_v11。", "match_avatar")})
+		return toolObjectSchema([]string{"operation"}, map[string]any{"operation": toolEnumParam("本地头像匹配；原生群查询使用 diana.platform。", "match_avatar")})
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作：info 读群资料；members 获取或检索成员候选；member 按 user_id 实时核验成员；match_avatar 将当前图片与可用成员头像做本地模式匹配。",
@@ -99,7 +99,7 @@ func (t *dianaGroupTool) Run(ctx context.Context, input map[string]any) (string,
 		operation = "members"
 	}
 	if IsOneBotPlatform(t.event.Platform) && operation != "match_avatar" && operation != "avatar_match" {
-		return "", fmt.Errorf("OneBot 群查询和平台操作请使用 diana.onebot_v11；回复设置请使用 diana.bot_config")
+		return "", fmt.Errorf("OneBot 群查询和平台操作请使用 diana.platform；回复设置请使用 diana.bot_config")
 	}
 	switch operation {
 	case "member":

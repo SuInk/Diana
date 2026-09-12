@@ -103,7 +103,7 @@ func TestAgentRunObserverKeepsWebSearchOperationLogsPrivate(t *testing.T) {
 	}
 }
 
-func TestAgentRunObserverRedactsOneBotV11DebugPayload(t *testing.T) {
+func TestAgentRunObserverRedactsPlatformDebugPayload(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{DebugModeEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(logs)
@@ -111,29 +111,29 @@ func TestAgentRunObserverRedactsOneBotV11DebugPayload(t *testing.T) {
 	ctx := runtime.withDebugTraceContext(context.Background(), event)
 	runtime.agentRunObserver(event)(ctx, agent.RunEvent{
 		Phase:      agent.RunPhaseToolCompleted,
-		Tool:       dianaOneBotV11ToolName,
-		InputKeys:  []string{"action", "params"},
-		ToolInput:  map[string]any{"action": "get_credentials", "params": map[string]any{"domain": "secret.example"}},
-		ToolOutput: `{"ok":true,"data":{"cookies":"owner-secret"}}`,
-		Error:      "adapter rejected owner-secret for secret.example",
+		Tool:       dianaPlatformToolName,
+		InputKeys:  []string{"operation", "user_id"},
+		ToolInput:  map[string]any{"operation": "kick", "user_id": "secret-target"},
+		ToolOutput: `{"ok":true,"data":{"note":"owner-secret"}}`,
+		Error:      "adapter rejected owner-secret for secret-target",
 	})
 	entries := logs.entriesSnapshot()
 	if len(entries) != 2 {
 		t.Fatalf("entries = %#v", entries)
 	}
 	debug := entries[1]
-	if strings.Contains(entries[0].Detail, "owner-secret") || strings.Contains(entries[0].Detail, "secret.example") {
-		t.Fatalf("operation log leaked OneBot error: %#v", entries[0])
+	if strings.Contains(entries[0].Detail, "owner-secret") || strings.Contains(entries[0].Detail, "secret-target") {
+		t.Fatalf("operation log leaked platform error: %#v", entries[0])
 	}
 	input, _ := debug.Metadata["tool_input"].(map[string]any)
-	if input["action"] != "get_credentials" || strings.Contains(debug.Metadata["tool_output"].(string), "owner-secret") {
+	if input["operation"] != "kick" || strings.Contains(debug.Metadata["tool_output"].(string), "owner-secret") {
 		t.Fatalf("debug payload = %#v", debug.Metadata)
 	}
-	if strings.Contains(strings.TrimSpace(debug.Metadata["tool_output"].(string)), "secret.example") {
+	if strings.Contains(strings.TrimSpace(debug.Metadata["tool_output"].(string)), "secret-target") {
 		t.Fatalf("debug payload leaked parameter value: %#v", debug.Metadata)
 	}
-	if strings.Contains(debug.Metadata["error"].(string), "owner-secret") || strings.Contains(debug.Metadata["error"].(string), "secret.example") {
-		t.Fatalf("debug payload leaked OneBot error: %#v", debug.Metadata)
+	if strings.Contains(debug.Metadata["error"].(string), "owner-secret") || strings.Contains(debug.Metadata["error"].(string), "secret-target") {
+		t.Fatalf("debug payload leaked platform error: %#v", debug.Metadata)
 	}
 }
 
@@ -257,11 +257,11 @@ func TestDebugToolCallSanitizersLeaveMissingOutputEmpty(t *testing.T) {
 	if got := repositoryIssueDebugOutcome("   "); got != "" {
 		t.Fatalf("空白输出不该给占位串：%q", got)
 	}
-	if _, got := sanitizeOneBotV11DebugToolCall(map[string]any{"action": "send_msg"}, ""); got != "" {
+	if _, got := sanitizePlatformDebugToolCall(map[string]any{"operation": "kick"}, ""); got != "" {
 		t.Fatalf("没有输出时不该给占位串：%q", got)
 	}
 	// 真的有输出时照旧挡住。
-	if _, got := sanitizeOneBotV11DebugToolCall(map[string]any{"action": "send_msg"}, `{"ok":true}`); got == "" {
+	if _, got := sanitizePlatformDebugToolCall(map[string]any{"operation": "kick"}, `{"ok":true}`); got == "" {
 		t.Fatal("有输出时必须挡住")
 	}
 }

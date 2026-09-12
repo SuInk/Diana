@@ -24,8 +24,8 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		runError := runEvent.Error
 		if runError != "" {
 			switch runEvent.Tool {
-			case dianaOneBotV11ToolName:
-				runError = "[OneBot v11 tool error omitted]"
+			case dianaPlatformToolName:
+				runError = "[platform tool error omitted]"
 			case dianaRepositoryIssuesToolName:
 				runError = "[repository issue tool error omitted]"
 			}
@@ -117,8 +117,8 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if runEvent.Phase != agent.RunPhaseModelCompleted {
 			toolOutput := runEvent.ToolOutput
 			toolInput := runEvent.ToolInput
-			if runEvent.Tool == dianaOneBotV11ToolName {
-				toolInput, toolOutput = sanitizeOneBotV11DebugToolCall(toolInput, toolOutput)
+			if runEvent.Tool == dianaPlatformToolName {
+				toolInput, toolOutput = sanitizePlatformDebugToolCall(toolInput, toolOutput)
 			} else if runEvent.Tool == dianaRepositoryIssuesToolName {
 				toolInput, toolOutput = sanitizeRepositoryIssuesDebugToolCall(toolInput, toolOutput)
 			} else if runEvent.Tool == dianaThreadStateToolName {
@@ -166,19 +166,17 @@ func sanitizeThreadStateDebugToolCall(input map[string]any, output string) (map[
 	return redacted, "[private thread state tool output omitted]"
 }
 
-func sanitizeOneBotV11DebugToolCall(input map[string]any, output string) (map[string]any, string) {
-	action := strings.TrimSpace(configToolString(input, "action"))
-	params, _ := input["params"].(map[string]any)
+func sanitizePlatformDebugToolCall(input map[string]any, output string) (map[string]any, string) {
 	redactedInput := map[string]any{
-		"action":     action,
-		"param_keys": sortedMapKeys(params),
+		"operation":  strings.TrimSpace(configToolString(input, "operation")),
+		"input_keys": sortedMapKeys(input),
 	}
 	// 还没有输出就别说「输出已省略」。调用开始和调用完成是同一次调用的两条记录，
 	// 开始那条的输出必然是空的，写上占位串会让人以为结果被挡掉了——实际是还没有。
 	if strings.TrimSpace(output) == "" {
 		return redactedInput, ""
 	}
-	return redactedInput, "[OneBot v11 tool output omitted]"
+	return redactedInput, "[platform tool output omitted]"
 }
 
 func sanitizeRepositoryIssuesDebugToolCall(input map[string]any, output string) (map[string]any, string) {

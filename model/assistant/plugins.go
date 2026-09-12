@@ -73,7 +73,7 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 	}
 	manifest.Platforms = allPluginPlatforms()
 	switch manifest.ID {
-	case oneBotV11PluginID, voiceTTSPluginID:
+	case voiceTTSPluginID:
 		manifest.Platforms = []string{PlatformOneBotV11}
 	}
 	switch manifest.ID {
@@ -361,7 +361,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewResolverPlugin(nil),
 		NewFileParserPlugin(nil),
 		NewLLMConfigPlugin(),
-		NewOneBotV11SkillPlugin(),
+		NewPlatformInterfacePlugin(),
 		NewSandboxedBrowserRenderPlugin(),
 		NewVoiceTTSPlugin(nil),
 		NewVoiceSTTPlugin(nil),

@@ -40,7 +40,7 @@ func TestRelationshipPolicyTiersRequireScoreAndInteractionCount(t *testing.T) {
 
 func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testing.T) {
 	initial := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "user")
-	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()["browser_render"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || !initial.allowedAgentToolNames()[dianaOneBotV11ToolName] || !initial.allowedAgentToolNames()[dianaImageToolName] || !initial.allowedAgentToolNames()["diana.reminder"] || !initial.AllowImageGeneration || !initial.AllowImageEditing || !initial.AllowDocumentOCR || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
+	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()["browser_render"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || !initial.allowedAgentToolNames()[dianaPlatformToolName] || !initial.allowedAgentToolNames()[dianaImageToolName] || !initial.allowedAgentToolNames()["diana.reminder"] || !initial.AllowImageGeneration || !initial.AllowImageEditing || !initial.AllowDocumentOCR || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
 		t.Fatalf("initial tools = %#v", initial.allowedAgentToolNames())
 	}
 	if initial.allowedAgentToolNames()[dianaRepositoryIssuesToolName] {
