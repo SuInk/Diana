@@ -549,3 +549,55 @@ func imageContentType(header string, body []byte) string {
 	}
 	return http.DetectContentType(body)
 }
+
+// budgetLowDetailLongSide 是按预算压缩时图片长边的目标像素。512 是各家「低细节」
+// 档位的惯例尺寸，缩到这个尺寸后估算表里那 1024 token 才对得上实际负载。
+const budgetLowDetailLongSide = 512
+
+// shrinkDataURLImageLongSide 把 data URI 图片按长边缩到 maxLongSide 并重新编码。
+//
+// 项目里原有的缩放（normalizeLLMImageBytes）是按字节和尺寸上限跑的，管的是「别把
+// 超大图原样塞进请求」；这一条按 token 预算跑，是在预算不够时进一步缩。两者目标
+// 不同，所以分开。
+//
+// 已经比目标还小的直接原样返回，第二个返回值为 false，调用方据此知道字节没变，
+// 不该声称省下了什么。
+func shrinkDataURLImageLongSide(imageURL string, maxLongSide int) (string, bool) {
+	if maxLongSide <= 0 {
+		return imageURL, false
+	}
+	decoded, err := decodeDataURLImage(imageURL)
+	if err != nil {
+		return imageURL, false
+	}
+	bounds := decoded.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return imageURL, false
+	}
+	if width <= maxLongSide && height <= maxLongSide {
+		return imageURL, false
+	}
+	targetWidth, targetHeight := width, height
+	if width >= height {
+		targetHeight = max(1, height*maxLongSide/width)
+		targetWidth = maxLongSide
+	} else {
+		targetWidth = max(1, width*maxLongSide/height)
+		targetHeight = maxLongSide
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	golangdraw.CatmullRom.Scale(canvas, canvas.Bounds(), decoded, bounds, draw.Src, nil)
+	// 统一压成 JPEG：预算不够时体积比透明通道重要，白底避免透明区域变黑。
+	flattened := image.NewRGBA(canvas.Bounds())
+	draw.Draw(flattened, flattened.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(flattened, flattened.Bounds(), canvas, image.Point{}, draw.Over)
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, flattened, &jpeg.Options{Quality: defaultLLMJPEGQuality}); err != nil {
+		return imageURL, false
+	}
+	// 只看像素、不看字节。图片的 token 成本由尺寸决定，不是由负载大小决定：
+	// 一张压得很好的大图字节可能比缩完的小图还小，但它照样按大尺寸计费。拿字节数
+	// 当否决条件会把该缩的图放过去。
+	return imageBytesAsDataURL(encoded.Bytes(), "image/jpeg"), true
+}

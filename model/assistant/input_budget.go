@@ -130,6 +130,15 @@ func (r *Runtime) summarizeBudgetText(ctx context.Context, text string, target i
 
 // Detail reduction remains a fallback for images that could not be described.
 // It is never used to compensate for a text-only overage.
+// lowerOverBudgetImageDetail 在图片超预算时把图真正缩小，缩不动的才退回只标低细节。
+//
+// 以前这里只改 detail 标签。估算表按标签查（low 1024、high 8192），标一下账面立刻
+// 少七千多，可 detail 只有 OpenAI 认——Gemini 的请求里根本没有这个字段，图片字节
+// 一个没少。于是预算算出来够了，实际发出去还是那么大，账面和实际脱节。
+//
+// 现在 data URI 的图先按长边缩到 512 再重编码，字节真的变小之后才标 low，那 1024
+// 的估算才对得上。远程链接改不动字节，仍旧只标标签：OpenAI 认这个字段，那条路上
+// 省是真省。两条都省不动就维持原样，让上层按超预算处理。
 func lowerOverBudgetImageDetail(req llm.GenerateRequest, budget int64) llm.GenerateRequest {
 	if llm.PlanInputBudget(req, budget).ImageExcess <= 0 {
 		return req
@@ -144,6 +153,13 @@ func lowerOverBudgetImageDetail(req llm.GenerateRequest, budget int64) llm.Gener
 			}
 			if p.Type != llm.ContentPartImageURL || p.ImageURL == "" || p.Detail == "low" {
 				continue
+			}
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(p.ImageURL)), "data:image/") {
+				shrunk, ok := shrinkDataURLImageLongSide(p.ImageURL, budgetLowDetailLongSide)
+				if !ok {
+					continue
+				}
+				parts[pi].ImageURL = shrunk
 			}
 			parts[pi].Detail = "low"
 			req.Messages[mi].Parts = parts
