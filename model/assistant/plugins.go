@@ -374,6 +374,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewRSSWatchPlugin(nil),
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
+		NewCodingAgentPlugin(),
 		NewStatusCommandPlugin(),
 		NewOpenAPIPlugin(),
 		capabilities,

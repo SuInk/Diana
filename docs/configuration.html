@@ -240,6 +240,48 @@ https://HOST/api/channels/wecom/callback</code></pre>
         <div class="callout"><strong>身份挡不住提示注入</strong><p>这三档只对主人开放，但「调用发生在主人的会话里」不等于「这次调用是主人要的」：群里其他人的消息和主人的消息在同一个上下文里，模型是读完那些之后才决定调用工具的。所以真正的边界是这里的开关和白名单，而不是身份判断——需要哪一档就开哪一档，不需要的保持关闭。</p></div>
       </section>
 
+      <section class="section searchable" id="coding-agent">
+        <div class="section-heading"><p class="eyebrow">编码代理</p><h2>把改代码的活交给 Claude Code / Codex，跑完回来汇报</h2></div>
+        <p>「编码代理」插件（<code>official.coding-agent</code>）让机器人把一件编码工作派给本机安装的编码 CLI：在持久工作区里改代码、跑测试、提交，几分钟到几小时都行，期间可以随时问进度，跑完机器人主动把结果发回派活的那个会话。<strong>默认不启用</strong>——它会在后台改代码还会自己开口，装完就生效等于替你做了决定。</p>
+        <p>工具是 <code>diana.coding</code>，只对主人开放，七个操作：<code>submit</code> 派活、<code>status</code> 查进度、<code>tail</code> 看最近几步动作、<code>cancel</code> 终止、<code>followup</code> 在原会话上追加指令、<code>list</code> 列历史任务、<code>workspaces</code> 列可用工作区。日常用法就是直接说「把刚才聊的那个换行 bug 在 diana 仓库里修掉」，然后隔一会儿问「跑到哪了」。</p>
+        <h3>设置项</h3>
+        <div class="table-wrap"><table><thead><tr><th>设置</th><th>说明</th></tr></thead><tbody>
+          <tr><td>后端 CLI</td><td><code>claude</code> / <code>codex</code> / 自定义命令。只有 Claude Code 的 <code>stream-json</code> 能被精确解析出会话 ID、逐步进度和结构化结果（含模型轮次和花费）；其余后端退化成按日志尾巴汇报。</td></tr>
+          <tr><td>可执行文件</td><td>留空按后端取默认名从 PATH 查找，不在 PATH 里就填绝对路径。</td></tr>
+          <tr><td>命令模板</td><td>留空用后端预置。占位符 <code>{{instruction}}</code>、<code>{{model}}</code>、<code>{{session}}</code>、<code>{{workspace}}</code>；取不到值的占位符连同紧挨在前面的标志一起丢掉，所以没配模型时不会留一个孤零零的 <code>--model</code>。参数不经过 shell，指令里的引号和分号只是普通字符。</td></tr>
+          <tr><td>工作区白名单</td><td>一行一个 <code>名字=本地路径</code> 或 <code>名字=git 仓库地址</code>。<strong>只有这里登记过的工作区能被派活。</strong>填仓库地址时首次使用会 clone 到 <code>workspace/coding/&lt;名字&gt;</code> 并常驻。</td></tr>
+          <tr><td>单次最长运行时间</td><td>默认 120 分钟，上限 1440。超时杀掉整个进程组，已完成的改动留在工作区里。</td></tr>
+          <tr><td>同时运行的任务数</td><td>全局并发上限。<strong>同一个工作区永远只允许一个任务</strong>，这条不可配置：两个代理同时改一份检出会互相覆盖。</td></tr>
+          <tr><td>API 密钥</td><td>按后端注入 <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code>。留空则依赖 CLI 自己已登录的凭据——注意那是<strong>跑 Diana 的那个系统用户</strong>的登录态，不是你本机的。</td></tr>
+        </tbody></table></div>
+        <h3>任务扛得住 Diana 重启</h3>
+        <p>编码 CLI 以独立会话（<code>setsid</code>）启动，脱离 Diana 的进程组，输出落进 <code>workspace/coding/.jobs/&lt;任务号&gt;.log</code>，任务记录是同目录下的 JSON。Diana 重启后扫这个目录接回：进程还活着就继续盯，已经结束的按日志收尾并把欠下的汇报补上，汇报成功才落已汇报标记——发失败时下次启动还会再试，比静默丢掉一小时的工作强。</p>
+        <p>PID 会被系统复用，所以接回时不只看 PID 是否存在：日志安静超过 30 分钟就不再认这个 PID，按中断收尾。Windows 上没有 <code>setsid</code> 这种完全脱离的语义，任务扛不住重启，只能按中断收尾。</p>
+        <h3>授权边界</h3>
+        <p>编码 CLI <strong>不走内置 Agent 那套命令白名单和沙盒</strong>：它需要出网、需要在整个仓库里写文件，塞进白名单等于把白名单的意义废掉。预置模板用 <code>--permission-mode auto</code>，也就是常规改动 CLI 自己放手做，要点头的操作走下面那套聊天里确认。真正的边界是四条：只有主人能调用（工具不在非主人白名单里，工具自身再校验一次身份）、只能在登记过的工作区里干活（工作区名不允许路径分隔符和 <code>..</code>）、危险操作要主人在聊天里回码放行、每次调用都写运行日志。</p>
+        <h3>聊天里确认危险操作</h3>
+        <p>派活是无人值守的，但「改完顺手推上去」这种事该有人点头。Diana 给编码 CLI 装一个 <code>PreToolUse</code> hook：CLI 每次要跑命令，hook 先问一句能不能做。不在危险清单里的直接放行，命中的就停下来，Diana 把这条发给主人：</p>
+        <pre><code>编码任务 code-3f2a1b（工作区 diana）要执行一个需要你点头的操作：
+Bash：git push origin main
+
+同意就回 7c1d9e，不同意回 b40f22。10 分钟内没人回我就当拒绝。</code></pre>
+        <p>主人在聊天里把码打出来，任务就继续；回拒绝码或者超时不回，这一步被拦掉，CLI 自己决定绕开还是报错收尾。查进度时 <code>status</code> 会带上 <code>awaiting_approval</code> 和两个码，所以那条消息刷过去了也能再问一次。</p>
+        <p><strong>为什么是确认码而不是「同意」两个字。</strong>和扩展变更确认码同一个思路：判断只剩一次结构匹配，不涉及任何语义推断，措辞怎么变都不会两头出错。更要紧的是码只出现在主人自己那条消息里——网页正文、工具输出、别人的发言即使写满「同意」也放行不了任何东西。码必须作为独立片段出现，被更长的哈希串包住不算命中；用过即作废，同一条消息重放第二次没有效果。</p>
+        <p>hook 进程和 Diana 之间走任务目录下的文件信箱（<code>.jobs/approvals/</code>），不开本地端口、不需要令牌：hook 是 CLI 的子进程，环境不由 Diana 决定，而这个目录一定拿得到。顺带来的好处是<strong>等待期间 Diana 重启也不丢</strong>——请求文件还在，hook 还在轮询，重启后接着问。hook 回调的是 Diana 自己的可执行文件（内部子命令 <code>__coding-approve</code>），不生成脚本，也就不用管可执行位和解释器路径在各平台上的差别。</p>
+        <div class="table-wrap"><table><thead><tr><th>设置</th><th>说明</th></tr></thead><tbody>
+          <tr><td>聊天里确认</td><td>「危险操作」（默认）只拦清单命中的命令；「所有写操作」连改一个文件都问一次，很吵，一般只在试水时用；「不确认」全程放手。</td></tr>
+          <tr><td>危险操作清单</td><td>一行一个命令片段，大小写不敏感，命中即要确认。默认收了 <code>git push</code>、<code>git reset --hard</code>、<code>git clean -f</code>、<code>git tag -d</code>、<code>gh pr merge</code>、<code>gh pr create</code>、<code>gh release</code>、<code>npm publish</code>、<code>docker push</code>、<code>rm -rf</code>、<code>sudo</code>。收进来的标准是：做完就收不回来，或者影响跑到工作区外面去。改文件、跑测试、本地提交不在其中——那些是派活时就默许的事。</td></tr>
+          <tr><td>等确认多久</td><td>默认 10 分钟，超时按拒绝。等待期间任务是停着的，这段时间也算在单次最长运行时间里，所以把等待调长的时候记得一起看看运行上限。</td></tr>
+        </tbody></table></div>
+        <p>这套只支持 Claude Code 后端——它依赖 <code>PreToolUse</code> hook，codex 和自定义命令没有等价机制。<strong>审批开着但后端做不到时，派活会当场报错而不是安静地全放行</strong>：安静地不审批等于骗人。</p>
+        <div class="callout"><strong><code>auto</code> 档拦下来的步骤，加进危险清单就能救</strong><p>hook 对清单外的操作不表态，那些仍然由 <code>--permission-mode auto</code> 自己裁决。非交互模式下没人能回答 CLI 的询问，所以 <code>auto</code> 认为需要确认的步骤会直接被拒，任务日志里会写明是哪一步。遇到这种情况把那个命令片段加进危险清单：命中清单的操作走聊天确认，主人回码之后 hook 给出的是<strong>明确放行</strong>，能越过 <code>auto</code> 的犹豫。不想一个个加就把模板里的权限档换成 <code>bypassPermissions</code>——注意那个档位在 root 下会被 Claude Code 自己拒掉，Docker 部署默认就是 root。</p></div>
+        <p>审批链路自身出故障（读不到策略文件之类）时 hook 选择放行，理由写进 Diana 的运行日志。这一档是刻意的：自己的辅助设施坏掉不该把任务卡死在半路。真正不想让它碰的东西靠工作区白名单挡，不靠审批。</p>
+        <div class="callout"><strong>身份挡不住提示注入</strong><p>和本地文件与命令那三档同理：「调用发生在主人的会话里」不等于「这次调用是主人要的」。群里其他人的消息和主人的消息在同一个上下文里。所以工作区白名单才是真正的闸门——只登记你愿意让它随便改的仓库，不要把生产配置或密钥仓库放进去。不想给推送权限的话，把模板里的权限档换成 <code>--permission-mode acceptEdits</code>，并在那些仓库上用 git hook 拦住 push。</p></div>
+        <h3>指令怎么写</h3>
+        <p>编码 CLI 看不到这里的聊天记录。需要依据聊天内容改代码时，模型会把相关原话摘进 <code>context</code> 参数，作为背景附在指令前面。指令最长 8000 字——它要落进 argv，系统对单个参数有长度上限；更长的材料该写进工作区里的文件让 CLI 自己读。</p>
+        <p>任务结束后如果拿到了会话 ID，可以用 <code>followup</code> 在同一个会话上继续，CLI 记得上一轮做过什么。运行中的任务不接受追加：非交互模式的编码 CLI 没有中途收指令的通道，硬插只会变成第二个进程同时改同一份检出。</p>
+      </section>
+
       <section class="section searchable" id="security">
         <div class="section-heading"><p class="eyebrow">安全边界</p><h2>公网部署必须增加 HTTPS 和来源限制</h2></div>
         <ul class="check-list">

@@ -156,6 +156,7 @@ These ship with the binary — toggle and configure them in the console, no plug
 - **Memory & notebook** — layered memory keeps token costs down; important things (group rules, dietary restrictions, promises) go into a notebook that's auditable, editable, and recoverable.
 - **Per-group policies** — reply hours, allow/deny lists, persona, and tool permissions, configured per group.
 - **Built-in agent** — a minimal tool loop with file, command, and browser tools; loads Skills and MCP servers on demand.
+- **Coding agent** — hand code changes to a Claude Code / Codex CLI on the host: long-running edits and test runs inside registered repositories, progress on request, a report when it finishes, and jobs that survive a Diana restart. Dangerous steps like pushing or publishing stop and ask you in chat, continuing only once you reply with the code. Owner-only, off by default.
 - **Outbound API** — let CI or monitoring scripts speak through your bot (off by default, Bearer-key auth).
 
 Full documentation for each ability is in the [configuration docs](https://suink.github.io/Diana/configuration.html).

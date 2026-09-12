@@ -314,6 +314,8 @@ type Runtime struct {
 	buildInfo                 BuildInfo
 	releaseStatus             ReleaseStatusProvider
 	reminders                 ReminderStore
+	codingJobsOnce            sync.Once
+	codingJobRegistry         *codingJobRegistry
 	groupConfigs              GroupConfigStore
 	configSaver               ConfigSaver
 	replySuppressions         ReplySuppressionStore
@@ -734,6 +736,12 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.reminderLoop")
 			r.runReminderLoop(ctx)
+		}()
+		// 编码任务是脱离进程组跑的，Diana 重启后要把上次留下的任务接回来：还活着的
+		// 继续盯，已经结束的把欠下的汇报补上。
+		go func() {
+			defer recoverGoroutinePanic("runtime.resumeCodingJobs")
+			r.ResumeCodingJobs(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.romanceGreetingLoop")
@@ -3674,6 +3682,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					}
 				}
 			}
+			// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
+			// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里
+			// 再按身份筛一次，两道闸都在。
+			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(codingAgentPluginID, event); enabled && relationship.Owner {
+				if _, ok := pluginValue.(*CodingAgentPlugin); ok {
+					extraTools = append(extraTools, newDianaCodingTool(r, event, settings))
+				}
+			}
 			if boolValue(cfg.OwnerLLMConfigEnabled, true) {
 				extraTools = append(extraTools, newDianaLLMConfigTool(r, event))
 			}
@@ -6559,6 +6575,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && hasTool(dianaNotebookToolName) {
 		builder.WriteString("\n" + promptToolNotebook)
+	}
+	if agentEnabled && hasTool(dianaCodingToolName) {
+		builder.WriteString("\n" + promptToolCoding)
 	}
 	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
 		builder.WriteString("\n" + promptToolThreadState)
@@ -10644,6 +10663,11 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	// 这些是强格式管理命令；自然语言切模型由机器人内建配置命令处理。
 	command := strings.TrimSpace(text)
 	if reply, handled := r.handleReplySuppressionOwnerCommand(event, command); handled {
+		return reply, true
+	}
+	// 编码任务的确认码。放在这里是因为它本来就只对主人有意义，而且必须在进入
+	// 模型那一轮之前就被认出来——等着放行的 CLI 进程正停在那儿。
+	if reply, handled := r.handleCodingApprovalReply(event, command); handled {
 		return reply, true
 	}
 	switch {
