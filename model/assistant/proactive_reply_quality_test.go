@@ -174,15 +174,22 @@ func TestReplyAuditReceivesImageDescriptionWithoutFabricatingUserText(t *testing
 	}
 }
 
-func TestDirectImageReplyAlwaysRequiresGroundingAudit(t *testing.T) {
+// 带图的直接回复以前会借 send_confidence 单独开一道图片可靠度门禁。审核模型把
+// 账号风险串进那个分数时（实测给过 0.02），整条回复被丢掉，用户只看到机器人装死。
+// 现在直接触发不再有任何一项能靠打分拦下回复。
+func TestDirectImageReplyNeedsNoGatingAudit(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		ReplyAccountSafetyAuditEnabled: boolPointer(false),
 		BotReplyLoopDetectionEnabled:   boolPointer(false),
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}}}
 	need := runtime.replyAuditNeed(event, "看图", runtime.Config(), false)
-	if !need.ImageGrounding || need.Quality || need.AccountSafety || need.Loop {
-		t.Fatalf("audit need = %#v", need)
+	if need.Quality || need.AccountSafety || need.Loop || need.Closing {
+		t.Fatalf("直接带图回复不该触发任何门禁项：%#v", need)
+	}
+	// 图片本身仍然要进审核载荷——取消的是门禁，不是事实核对。
+	if !replyAuditHasImage(event) {
+		t.Fatal("图片没有被识别进审核载荷")
 	}
 }
 
@@ -311,8 +318,8 @@ func TestReplyAuditTreatsMissingAccountSafeAsSafe(t *testing.T) {
 	if !ok {
 		t.Fatal("decision should still parse without the account fields")
 	}
-	if !decision.AccountSafe {
-		t.Fatal("missing account_safe must default to safe")
+	if decision.AccountSafeScore != 1 || !decision.accountSafe() {
+		t.Fatalf("missing account_safe must default to safe, score=%v", decision.AccountSafeScore)
 	}
 	if err := accountSafetyError(decision); err != nil {
 		t.Fatalf("safe decision produced an error: %v", err)
@@ -409,5 +416,68 @@ func TestAuditReplyAccountSafetyFailsOpen(t *testing.T) {
 	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
 	if err := runtime.auditReplyAccountSafety(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "在吗", "在的", cfg); err != nil {
 		t.Fatalf("unparsable audit result must fail open: %v", err)
+	}
+}
+
+// account_safe 是置信度而不是布尔。旧提示词和漂移的模型仍会给 true/false，
+// 两种写法都要收；读不出来的写法按放行，不能让一个字段把机器人变哑巴。
+func TestReplyAuditParsesAccountSafeConfidence(t *testing.T) {
+	for _, tc := range []struct {
+		raw       string
+		wantScore float64
+		wantSafe  bool
+	}{
+		{`{"send_confidence":0.99,"account_safe":0.98}`, 0.98, true},
+		{`{"send_confidence":0.99,"account_safe":0.10}`, 0.10, true},
+		{`{"send_confidence":0.99,"account_safe":0.09}`, 0.09, false},
+		{`{"send_confidence":0.99,"account_safe":0}`, 0, false},
+		// 旧布尔协议兼容
+		{`{"send_confidence":0.99,"account_safe":true}`, 1, true},
+		{`{"send_confidence":0.99,"account_safe":false}`, 0, false},
+		// 越界和垃圾值按放行，那是提示词漂移的征兆，不该顺手变成一次拦截
+		{`{"send_confidence":0.99,"account_safe":1.5}`, 1, true},
+		{`{"send_confidence":0.99,"account_safe":-1}`, 1, true},
+		{`{"send_confidence":0.99,"account_safe":"unsafe"}`, 1, true},
+		{`{"send_confidence":0.99,"account_safe":null}`, 1, true},
+	} {
+		decision, ok := parseProactiveReplyQualityDecision(tc.raw)
+		if !ok {
+			t.Fatalf("%s 解析失败", tc.raw)
+		}
+		if decision.AccountSafeScore != tc.wantScore || decision.accountSafe() != tc.wantSafe {
+			t.Fatalf("%s -> score=%v safe=%v，期望 score=%v safe=%v",
+				tc.raw, decision.AccountSafeScore, decision.accountSafe(), tc.wantScore, tc.wantSafe)
+		}
+		if err := accountSafetyError(decision); (err != nil) == tc.wantSafe {
+			t.Fatalf("%s 的拦截结论和置信度不一致：err=%v", tc.raw, err)
+		}
+	}
+}
+
+// 极低的 send_confidence 不再能拦下直接回复：审核模型会把账号风险串进这个分数，
+// 实测给过 0.02，一条只是涉政的回复就被整条丢掉。
+func TestLowSendConfidenceDoesNotBlockDirectReply(t *testing.T) {
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.02,"reason":"未发现冲突","account_safe":0.98}`}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	cfg := runtime.Config()
+	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}
+	if _, err := runtime.evaluateDirectReplyAudit(context.Background(), event, "问题", "候选回复", cfg); err != nil {
+		t.Fatalf("直接回复不该被发送置信度拦下：%v", err)
+	}
+}
+
+// 提示词必须把置信度协议和放行线讲清楚，否则模型会继续输出布尔。
+func TestReplyAuditPromptDeclaresAccountSafeConfidence(t *testing.T) {
+	for _, want := range []string{
+		"account_safe 必须是 0 到 1 的数字", "禁止输出 true/false",
+		"0.10 为放行线", "拿不准\n时倾向放行", `"account_safe":0.98`,
+	} {
+		want = strings.ReplaceAll(want, "\\n", "\n")
+		if !strings.Contains(proactiveReplyQualityPrompt, want) {
+			t.Fatalf("提示词缺少 %q", want)
+		}
 	}
 }

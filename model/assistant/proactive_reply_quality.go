@@ -20,9 +20,13 @@ type proactiveReplyQualityDecision struct {
 	// Confidence is always confidence in sending, never confidence in rejecting.
 	Confidence float64
 	Reason     string
-	// AccountSafe 是和表达质量相互独立的一票否决项。表达再自然，只要内容可能
-	// 让机器人账号被平台处置，这条就不能发。
-	AccountSafe bool
+	// AccountSafeScore 是和表达质量相互独立的账号安全置信度：越高越安全。
+	//
+	// 这一项以前是布尔。改成打分是因为审核模型会把「内容不安全」顺手表达成
+	// 极低的 send_confidence——两项本该互相独立的判断被串在了一起，结果一条
+	// 只是涉政的回复连准确度门禁一起触发。现在安全与否只看这个分数，而且
+	// 放行线压得很低：一般性的不确定不该让机器人闭嘴。
+	AccountSafeScore float64
 	// AccountRisk 说明命中的风险类别，用于事件详情里解释为什么没发。
 	AccountRisk string
 	// AccountRiskReason 只解释账号风险，不能复用表达质量的正面评价。
@@ -135,7 +139,8 @@ original_text_available=false 或 original_message 为空,只表示本审核没�
 这不等于你已经核实了不可见图片或历史里的全部事实。
 
 另外单独判断一项账号安全:这条回复发出去会不会让机器人账号被平台处置。
-这一项和准确性检查互相独立,判成不安全就一票否决,不看 send_confidence。只在回复
+这一项和准确性检查互相独立,单独打分、单独否决,不看 send_confidence,也不得把它的
+结论混进 send_confidence——那会让一条只是涉政的回复连准确度一起被判死。只在回复
 「自己说出了」下面这些内容时才算不安全,别人说了什么不算:
 - 中国大陆涉政:只拦截对中国大陆现实政治人物、中国共产党与党政机构、敏感时政
   争议或政治事件的评价、立场表达、动员,以及影射这些内容的谐音和梗。单纯提到
@@ -199,13 +204,16 @@ stop_requested —— 对方明确要求你不要再回。
   这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。
 
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":true,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
+{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
 
 send_confidence 必须是 0 到 1 的数字，唯一含义是“这条候选回复适合发送”的置信度。
 越高越建议发送：未发现明确问题时给高分，明确矛盾、答非所问或截断时给低分。
 不要输出发送与否的布尔字段，也不要输出“确信应当拒发”的高分；发送决定由运行时按阈值执行。
 不是对所有不可见事实已经查证的信心,不要仅因原消息或图片不可见而降低放行置信度。
-account_safe 为 false 时,account_risk 填命中的类别:politics / explicit / illegal,
+account_safe 必须是 0 到 1 的数字，唯一含义是“这条候选回复从账号安全角度适合发送”
+的置信度：越高越安全，禁止输出 true/false。未命中上面任何一类风险时给高分；拿不准
+时倾向放行，只有高度确信发出去会让账号被平台处置才给低于 0.10 的分数。运行时以
+0.10 为放行线。account_safe 低于 0.10 时,account_risk 填命中的类别:politics / explicit / illegal,
 account_risk_reason 必须单独写清候选回复中触发账号风险的具体内容。reason 只能说明
 可见的准确性或完整性问题,不得拿它代替账号风险理由或重新判断是否需要回复。refusal_confidence 必须是 0 到 1 的数字。
 reply_loop_confidence 必须是 0 到 1 的数字;两项空转都为 false 时,它表示你对
@@ -225,7 +233,7 @@ func replyQualityPromptForConfig(cfg BotConfig) string {
 		prompt += "\n\n【管理员配置的账号安全审核规则】\n" + policy + `
 这段规则替代上文默认的账号安全风险范围；只影响 account_safe、account_risk 和
 account_risk_reason，不得改变准确度、拒答、空转判断或 JSON 输出格式。未被这段
-规则明确列为风险的内容应判 account_safe=true。`
+规则明确列为风险的内容应给 account_safe 高分。`
 	}
 	prompt += "\n正常的寒暄、简短情绪回应、接梗和自然追问不等于准确性错误。仍只检查可见的准确性与完整性问题，不重新判断是否需要回复；账号安全和独立的循环判断规则保持不变。"
 	return prompt
@@ -256,9 +264,21 @@ func (r *Runtime) judgeProactiveReplyQuality(ctx context.Context, event MessageE
 	return err
 }
 
+// accountSafetyConfidenceThreshold 是账号安全的放行线。
+//
+// 刻意压到 0.10：模型对账号风险的把握本来就不稳，用 0.90 这种高线会把它一般性的
+// 犹豫也当成风险，等于让机器人在任何沾边话题上闭嘴。这里的取舍是「疑似风险仍
+// 放行，只有接近确定的不安全结论才拦」。
+const accountSafetyConfidenceThreshold = 0.10
+
+// accountSafe 按放行线把置信度化成通过与否。
+func (d proactiveReplyQualityDecision) accountSafe() bool {
+	return d.AccountSafeScore >= accountSafetyConfidenceThreshold
+}
+
 // accountSafetyError 把审核结论里的账号安全一项转成错误。
 func accountSafetyError(decision proactiveReplyQualityDecision) error {
-	if decision.AccountSafe {
+	if decision.accountSafe() {
 		return nil
 	}
 	risk := accountRiskLabel(decision.AccountRisk)
@@ -393,9 +413,6 @@ func (r *Runtime) auditReplyAccountSafety(ctx context.Context, event MessageEven
 type replyAuditNeed struct {
 	// Quality 保留现有触发范围，仅对主动回复执行准确性门禁。
 	Quality bool
-	// ImageGrounding ensures direct image replies are checked against the image,
-	// even when proactive quality and account-safety checks are both disabled.
-	ImageGrounding bool
 	// AccountSafety 和触发方式无关，由配置开关决定。
 	AccountSafety bool
 	// Loop 是空转判断，默认开启，只在这条消息够得上循环候选时才需要。
@@ -423,9 +440,8 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 		accountSafety = *cfg.groupReplyAccountSafetyAuditOverride
 	}
 	need := replyAuditNeed{
-		Quality:        proactive,
-		ImageGrounding: replyAuditHasImage(event),
-		AccountSafety:  accountSafety,
+		Quality:       proactive,
+		AccountSafety: accountSafety,
 	}
 	// 已经在暂停期里就不用再判：这条本来也走不到发送。
 	if _, blocked := r.activeReplySuppression(event, time.Now()); blocked {
@@ -461,7 +477,7 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 		return replyControlIntent{}, nil
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
-	if !need.Quality && !need.ImageGrounding && !need.AccountSafety && !need.Loop && !need.Closing {
+	if !need.Quality && !need.AccountSafety && !need.Loop && !need.Closing {
 		return replyControlIntent{}, nil
 	}
 	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
@@ -471,12 +487,8 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 	}
 	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
 	if err != nil {
-		if need.Quality || need.ImageGrounding {
-			label := "主动回复答案"
-			if need.ImageGrounding && !need.Quality {
-				label = "图片回复"
-			}
-			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("%s审核失败，已保持沉默：%v", label, err)}
+		if need.Quality {
+			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
 		}
 		log.Printf("diana reply audit skipped: %v", err)
 		return replyControlIntent{}, nil
@@ -502,12 +514,13 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 			return intent, safetyErr
 		}
 	}
-	if need.Quality || need.ImageGrounding {
+	// 发送置信度门禁只给主动插话。直接触发时它不该有一票否决权：被点着名在说话
+	// 却因为一个打分沉默，对方看到的就是装死。这条以前对带图的直接回复例外——
+	// 图片可靠度借 send_confidence 实现门禁，于是审核模型把账号风险串进这个分数
+	// 时（实测给过 0.02），一条只是涉政的图片回复被整条丢掉。图片的事实核对仍然
+	// 在审核载荷和提示词里，只是不再有权拦下直接回复。
+	if need.Quality {
 		if qualityErr := r.proactiveQualityError(event, decision, cfg); qualityErr != nil {
-			if need.ImageGrounding && !need.Quality {
-				reason := strings.TrimPrefix(qualityErr.Error(), "主动回复答案")
-				return intent, &proactiveReplyQualityRejectedError{reason: "图片回复" + reason}
-			}
 			return intent, qualityErr
 		}
 	}
@@ -604,6 +617,30 @@ func proactiveReplyQualityTimeout(cfg BotConfig) time.Duration {
 	return budget
 }
 
+// parseAccountSafeScore 读 account_safe。它现在是 0 到 1 的安全置信度，但旧提示词
+// 和漂移的模型仍可能给出 true/false，所以两种写法都收：true 当 1，false 当 0。
+//
+// 缺字段、null 和读不出来的写法一律当 1（放行），和原来的取舍一致：少一个字段就让
+// 机器人集体哑火，代价比偶尔漏放一条大得多。超出 0 到 1 的数字同样按放行处理，
+// 那是提示词漂移的征兆，不该顺手变成一次拦截。
+func parseAccountSafeScore(raw json.RawMessage) float64 {
+	if trimmed := strings.TrimSpace(string(raw)); trimmed == "" || trimmed == "null" {
+		return 1
+	}
+	var flag bool
+	if err := json.Unmarshal(raw, &flag); err == nil {
+		if flag {
+			return 1
+		}
+		return 0
+	}
+	var score float64
+	if err := json.Unmarshal(raw, &score); err != nil || score < 0 || score > 1 {
+		return 1
+	}
+	return score
+}
+
 func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecision, bool) {
 	raw = strings.TrimSpace(stripJSONCodeFence(raw))
 	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
@@ -611,14 +648,14 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		return proactiveReplyQualityDecision{}, false
 	}
 	var payload struct {
-		Confidence        *float64 `json:"send_confidence"`
-		Reason            *string  `json:"reason"`
-		AccountSafe       *bool    `json:"account_safe"`
-		AccountRisk       *string  `json:"account_risk"`
-		AccountRiskReason *string  `json:"account_risk_reason"`
-		CountRefusal      *bool    `json:"count_refusal"`
-		RefusalConfidence *float64 `json:"refusal_confidence"`
-		RefusalReason     *string  `json:"refusal_reason"`
+		Confidence        *float64        `json:"send_confidence"`
+		Reason            *string         `json:"reason"`
+		AccountSafe       json.RawMessage `json:"account_safe"`
+		AccountRisk       *string         `json:"account_risk"`
+		AccountRiskReason *string         `json:"account_risk_reason"`
+		CountRefusal      *bool           `json:"count_refusal"`
+		RefusalConfidence *float64        `json:"refusal_confidence"`
+		RefusalReason     *string         `json:"refusal_reason"`
 		// 空转三项是后加的，缺省当「没有空转」：升级期间旧提示词生成的回答
 		// 仍然可解，不至于整条审核结论作废。
 		ReplyLoopAutomatedAI *bool    `json:"reply_loop_automated_ai"`
@@ -642,9 +679,7 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	if payload.Reason != nil {
 		decision.Reason = strings.TrimSpace(*payload.Reason)
 	}
-	// 模型没给这一项时按安全处理。缺字段就拦，等于换了个模型或提示词漂移一下
-	// 机器人就集体哑火，代价比漏放一条大得多。
-	decision.AccountSafe = payload.AccountSafe == nil || *payload.AccountSafe
+	decision.AccountSafeScore = parseAccountSafeScore(payload.AccountSafe)
 	if payload.AccountRisk != nil {
 		decision.AccountRisk = strings.TrimSpace(*payload.AccountRisk)
 	}

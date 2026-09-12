@@ -25,6 +25,10 @@ var (
 
 // publicChatErrorMessage keeps operational details in logs while returning only
 // a safe, useful summary to chat users.
+// accountSafetyPublicNotice 是账号安全拦截唯一对外可见的说法。改写器会把它换成
+// 机器人自己的口吻，但两边说的是同一件事，也同样不提被拦下的是什么。
+const accountSafetyPublicNotice = "这条回复没通过账号安全检查，我就不发出来了。"
+
 func publicChatErrorMessage(err error) string {
 	if err == nil {
 		return "请求处理失败，请稍后重试。"
@@ -34,6 +38,13 @@ func publicChatErrorMessage(err error) string {
 	}
 	if errors.Is(err, errReplyCompression) {
 		return "回复超过字数上限，暂时没能压缩完成，请提高上限或稍后重试。"
+	}
+	// 账号安全拦截的内部理由里写着「候选回复直接评价了什么」——那正是被拦下来的
+	// 内容摘要。原样发进群等于把要拦的东西又说了一遍，所以对外只给一句中性说明；
+	// 完整理由仍然留在事件记录、LastError 和运行日志里。
+	var safetyErr *replyAccountSafetyRejectedError
+	if errors.As(err, &safetyErr) {
+		return accountSafetyPublicNotice
 	}
 	raw := strings.TrimSpace(err.Error())
 	if errors.Is(err, llm.ErrUnverifiedRejection) {

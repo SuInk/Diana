@@ -33,6 +33,11 @@ const (
 	PurposeReplyAccountSafety    = "reply_account_safety"
 	PurposeReplySuppression      = "reply_suppression_notice"
 	PurposeBotReplyLoop          = "bot_reply_loop_detection"
+	// 三种发送前提示的改写。它们以前只是散在代码里的字面量，没进这张表，
+	// 于是在模型绑定界面上看不见也指不了，只能跟着调用函数走。
+	PurposeUpstreamRejectionNotice = "upstream_rejection_notice"
+	PurposeAccountSafetyNotice     = "account_safety_notice"
+	PurposeErrorNotice             = "error_notice"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -58,6 +63,11 @@ var llmPurposeGroup = map[string]string{
 	PurposeReplyAccountSafety:    llm.GroupIntent,
 	PurposeReplySuppression:      llm.GroupIntent,
 	PurposeBotReplyLoop:          llm.GroupIntent,
+
+	// 改写只是把一句固定文案换个说法，和审核、路由同档，用便宜快的那个就够。
+	PurposeUpstreamRejectionNotice: llm.GroupIntent,
+	PurposeAccountSafetyNotice:     llm.GroupIntent,
+	PurposeErrorNotice:             llm.GroupIntent,
 }
 
 // modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批

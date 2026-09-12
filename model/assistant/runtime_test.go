@@ -2359,7 +2359,11 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 			requestsWithImage++
 		}
 	}
-	if requestsWithImage != 2 {
+	// 只剩生成回复那一次带图。直接带图回复以前会额外跑一次发送前审核并把原图
+	// 附上，那次调用的唯一作用是执行 send_confidence 门禁；门禁取消之后它没有
+	// 别的用处，就不再为它多付一次模型调用。审核因为账号安全、空转或收尾真的
+	// 需要跑时，图片照样会附上（见 auditReplyBeforeSend）。
+	if requestsWithImage != 1 {
 		t.Fatalf("requests missing selected image url: %#v", provider.requests)
 	}
 }
