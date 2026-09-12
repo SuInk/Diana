@@ -73,7 +73,7 @@ func TestSemanticGateRetainsCurrentPendingAndSentQuotes(t *testing.T) {
 	g.rememberRequest(requestContextForReply(root, ""), replyRequestContexts([]proactiveReplyCandidate{{Event: prior}}), "按80W计算")
 	current := directedGroupMessage("current", "user", "")
 	current.Quoted = &QuotedMessage{MessageID: "repeat", UserID: "user", RawMessage: "请完整重复一次"}
-	if _, err := r.deduplicateReply(ctx, current, "", "按80W计算", BotConfig{}, g); err != nil {
+	if _, err := r.deduplicateReply(ctx, current, "", "按80W计算", BotConfig{}, g, true); err != nil {
 		t.Fatal(err)
 	}
 	if len(p.requests) != 1 {
