@@ -11,6 +11,19 @@ func (r *Runtime) requiresTelegramBotMentionJudgment(event MessageEvent) bool {
 	cfg := r.effectiveConfigForEvent(event)
 	switch event.Kind {
 	case EventKindGroup:
+		// 明确 @ 了本机、或回复的就是本机那条消息，是结构事实，不需要判断。
+		//
+		// 这两件事的答案就在 event 自己身上，问模型只会多花一次调用，还可能答错：
+		// 线上抓到过一条以「@Diana（3129583166）」开头的群消息，语义判定回了
+		// 「没提到你」，整条被当成机器人噪音丢掉。被标记的账号仍然按机器人对待，
+		// 只是它明确点名本机时不再需要模型确认——这和普通群友那条「@ 或引用一律
+		// 进回复流程」是同一个判据。
+		//
+		// 反机器人循环的保护不在这里：它在发送前审核，另有本地暂停计数兜底，
+		// 少了这一步判断不受影响。
+		if eventExplicitlyMentionsBot(event, cfg) || eventRepliesToBot(event, cfg) {
+			return false
+		}
 		// 群里沿用原判据，只把「标记」的范围换成跨群汇总的那一份。
 		return r.accountMarkedAsBot(event) || event.Platform == PlatformTelegram &&
 			event.SenderIsBot && boolValue(cfg.TelegramSuppressBotMessages, true)
