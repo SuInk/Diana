@@ -96,7 +96,7 @@ quoted.source=explicit_quote 表示用户主动引用，正文仅有 @ 或催促
 不能为去重丢失不同条件、限定、风险或相反结论；无法确信就 keep。历史答复不等于事实依据，不用历史改写候选事实。
 代码块、媒体、提及、引用等非普通正文必须原样保留；无法保留时 keep。不要新增或更改内部控制标记；可保留已有分条标记。`
 
-func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, gate *semanticReplyGate) (string, error) {
+func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, gate *semanticReplyGate, allowDrop bool) (string, error) {
 	var recent []semanticSentReply
 	for _, item := range gate.sent {
 		if time.Since(item.SentAt) <= semanticReplyRetention {
@@ -164,6 +164,12 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 		// A supplement accepted while the judge was running still needs an answer.
 		if interruptErr := r.interruptedReplyError(ctx, event); interruptErr != nil {
 			return "", interruptErr
+		}
+		if !allowDrop {
+			// 直接触发只禁止静默丢弃，不改判断本身：模型的结论照样记进日志，
+			// 按 drop_blocked 单独计数，好看出这道闸在直接回复上到底想丢掉多少。
+			action = "drop_blocked"
+			return reply, nil
 		}
 		action = "drop"
 		return "", errDuplicateReply

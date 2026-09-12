@@ -29,7 +29,7 @@ func TestLiveQuotedReplyContext(t *testing.T) {
 					follow.Quoted.RawMessage = "请完整重复一次"
 					gate, release, _ := r.lockSemanticReply(context.Background(), follow)
 					gate.rememberRequest(requestContextForReply(root, ""), nil, "45W工作一小时耗电0.045度")
-					got, err := r.deduplicateReply(context.Background(), follow, "", "45W工作一小时耗电0.045度", BotConfig{}, gate)
+					got, err := r.deduplicateReply(context.Background(), follow, "", "45W工作一小时耗电0.045度", BotConfig{}, gate, true)
 					release()
 					t.Logf("FINAL_REPLY=%q ERROR=%v", got, err)
 					var decision struct {

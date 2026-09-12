@@ -28,7 +28,7 @@ func TestLiveSemanticReplyGate(t *testing.T) {
 			gate.remember("之前的问题", tc.previous, "u")
 			for i := 0; i < 2; i++ {
 				p.raw = ""
-				got, err := r.deduplicateReply(context.Background(), event, tc.request, tc.candidate, BotConfig{MaxReplyChars: 300}, gate)
+				got, err := r.deduplicateReply(context.Background(), event, tc.request, tc.candidate, BotConfig{MaxReplyChars: 300}, gate, true)
 				t.Logf("FINAL_OUTPUT=%q ERROR=%v", got, err)
 				var result struct {
 					Action string `json:"action"`

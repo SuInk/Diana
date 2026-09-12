@@ -4202,7 +4202,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			return "", err
 		}
 		defer release()
-		reply, err = r.deduplicateReply(ctx, event, cleanText, reply, cfg, semanticGate)
+		// 允许静默丢弃只给主动接话：那里沉默本来就是默认行为，少一句重复的插话
+		// 没有代价。直接触发不一样——私聊、@ 本机和引用机器人消息的更正都是对方
+		// 点着名在说话，这时候一个字不发，对方看到的就是装死。去重仍然跑，重复
+		// 内容照样被压成只讲新增的那部分，只是不再允许压成零。
+		reply, err = r.deduplicateReply(ctx, event, cleanText, reply, cfg, semanticGate, proactiveTriggered)
 		if err != nil {
 			return "", err
 		}

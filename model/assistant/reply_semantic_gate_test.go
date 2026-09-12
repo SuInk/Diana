@@ -66,7 +66,7 @@ func TestSemanticReplyDecisions(t *testing.T) {
 			defer release()
 			g.remember("原问题", "原有说明")
 			event.replyDeliveryMode = replyDeliverySingle
-			got, err := r.deduplicateReply(context.Background(), event, "新的问题", "原有说明和新增信息", BotConfig{MaxReplyChars: 300}, g)
+			got, err := r.deduplicateReply(context.Background(), event, "新的问题", "原有说明和新增信息", BotConfig{MaxReplyChars: 300}, g, true)
 			if got != tc.want || errors.Is(err, errDuplicateReply) != tc.drop {
 				t.Fatalf("got=%q err=%v", got, err)
 			}
@@ -112,38 +112,74 @@ func TestSemanticReplyWaitsForSuccessfulDelivery(t *testing.T) {
 	if len(g.sent) != 0 {
 		t.Fatal("leaked across sessions")
 	}
-	if got, err := r.deduplicateReply(context.Background(), other, "问题", "新内容", BotConfig{}, g); got != "新内容" || err != nil || len(p.requests) != 0 {
+	if got, err := r.deduplicateReply(context.Background(), other, "问题", "新内容", BotConfig{}, g, true); got != "新内容" || err != nil || len(p.requests) != 0 {
 		t.Fatalf("empty history used model: %q %v", got, err)
 	}
 }
 
+// proactiveGroupMessage 是主动接话那一侧的同类事件：没有 @ 本机，由主动路由挑中。
+// 语义去重在两条路径上的结论不同，所以两边都要有事件构造器。
+func proactiveGroupMessage(messageID, userID, text string) MessageEvent {
+	return MessageEvent{
+		Kind:           EventKindGroup,
+		GroupID:        "123456",
+		UserID:         userID,
+		MessageID:      messageID,
+		RawMessage:     text,
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
+		proactiveReply: true,
+	}
+}
+
 func TestSemanticReplyRuntimeDropAndRewrite(t *testing.T) {
-	for _, action := range []string{"drop", "rewrite"} {
-		t.Run(action, func(t *testing.T) {
-			p := &semanticGateProvider{result: `{"action":"` + action + `","confidence":0.99,"content":"新增信息"}`}
+	for _, tc := range []struct {
+		name, action string
+		proactive    bool
+		// wantSilent 表示这一轮什么都不发。只有主动接话允许这样：那里沉默本来
+		// 就是默认行为。直接触发是对方点着名在说话，静默等于装死。
+		wantSilent bool
+	}{
+		{"proactive_drop", "drop", true, true},
+		{"proactive_rewrite", "rewrite", true, false},
+		{"direct_drop", "drop", false, false},
+		{"direct_rewrite", "rewrite", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &semanticGateProvider{result: `{"action":"` + tc.action + `","confidence":0.99,"content":"新增信息"}`}
 			r := topicTestRuntime(p)
-			root := directedGroupMessage("first", "u", "原问题")
+			build := directedGroupMessage
+			if tc.proactive {
+				build = proactiveGroupMessage
+			}
+			root := build("first", "u", "原问题")
 			if _, err := r.replyAndRecord(context.Background(), root, root.RawMessage, "replied"); err != nil {
 				t.Fatal(err)
 			}
-			follow := directedGroupMessage("second", "u", "后来的问题")
+			follow := build("second", "u", "后来的问题")
 			outcome, err := r.replyAndRecord(context.Background(), follow, follow.RawMessage, "replied")
 			if err != nil {
 				t.Fatal(err)
 			}
 			sent := r.channel.(*recordingChannel).sentSnapshot()
-			if action == "drop" {
+			switch {
+			case tc.wantSilent:
 				if outcome != "ignored_duplicate_reply" || len(sent) != 1 {
 					t.Fatalf("outcome=%s sent=%#v", outcome, sent)
 				}
-			} else {
+			case tc.action == "rewrite":
 				if len(sent) != 2 || sent[1].Text != "新增信息" {
 					t.Fatalf("sent=%#v", sent)
 				}
 				if len(p.audits) == 0 || !strings.Contains(p.audits[len(p.audits)-1], "新增信息") {
 					t.Fatal("rewritten text bypassed audit")
 				}
+			default:
+				// 判定仍然是 drop，但直接触发不许静默丢弃，原候选照常发出去。
+				if outcome != "replied" || len(sent) != 2 || sent[1].Text != "原有说明和新增信息" {
+					t.Fatalf("outcome=%s sent=%#v", outcome, sent)
+				}
 			}
+			// 无论哪条路径，判定都真的跑过一次，而且上一轮发出去的内容进了去重依据。
 			if len(p.requests) != 1 {
 				t.Fatalf("dedup calls=%d", len(p.requests))
 			}
@@ -168,12 +204,12 @@ func TestSemanticReplyCancellationExpiryAndProtectedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.sent = []semanticSentReply{{Reply: "过期答复", SentAt: time.Now().Add(-3 * time.Minute)}}
-	if _, err := r.deduplicateReply(context.Background(), event, "问题", "正文", BotConfig{}, g); err != nil || len(p.requests) != 0 {
+	if _, err := r.deduplicateReply(context.Background(), event, "问题", "正文", BotConfig{}, g, true); err != nil || len(p.requests) != 0 {
 		t.Fatal("expired history used")
 	}
 	g.remember("问题", "已发送")
 	original := "正文\n```go\nprintln(1)\n```"
-	if got, err := r.deduplicateReply(context.Background(), event, "问题", original, BotConfig{}, g); got != original || err != nil {
+	if got, err := r.deduplicateReply(context.Background(), event, "问题", original, BotConfig{}, g, true); got != original || err != nil {
 		t.Fatalf("protected content changed: %q %v", got, err)
 	}
 	release()
@@ -226,7 +262,8 @@ func TestSemanticReplyConcurrentGenerationsDeliverOnce(t *testing.T) {
 	defer cancel()
 	done := make(chan string, 2)
 	run := func(id string) {
-		event := directedGroupMessage(id, "u", "问题")
+		// 丢弃只在主动接话这条路径上允许，这条用例钉的就是那里。
+		event := proactiveGroupMessage(id, "u", "问题")
 		outcome, err := r.replyAndRecord(ctx, event, event.RawMessage, "replied")
 		if err != nil {
 			done <- err.Error()
@@ -271,7 +308,7 @@ func TestSemanticReplyDropCannotConsumeNewSupplement(t *testing.T) {
 	g, release, _ := r.lockSemanticReply(ctx, event)
 	defer release()
 	g.remember("之前的问题", "已发送")
-	if _, err := r.deduplicateReply(ctx, event, "问题", "候选", BotConfig{}, g); !errors.Is(err, errDirectReplySupplemented) {
+	if _, err := r.deduplicateReply(ctx, event, "问题", "候选", BotConfig{}, g, true); !errors.Is(err, errDirectReplySupplemented) {
 		t.Fatalf("lost new supplement: %v", err)
 	}
 }
