@@ -8,37 +8,18 @@ import (
 	"strings"
 )
 
-// GroupConfigLister 能列出全部群配置。GroupConfigStore 只按群号查得到配置，
-// 回答不了「这个账号被标记在哪些群里」——而标记的是账号，不是群里的那个身份：
-// 同一个机器人换到私聊就不是机器人了，说不通。
-type GroupConfigLister interface {
-	Groups() GroupConfigSet
-}
-
-// profileMarkedBotIDs 汇总这台机器人能看见的全部机器人标记：机器人级的一份，
-// 加上它所在每个群各自标的那些。
+// profileMarkedBotIDs 返回这条消息所在范围内生效的机器人标记。
 //
-// effectiveConfigForEventLocked（runtime.go:1293）只在群事件上合并群级标记，
-// 所以私聊里 cfg.MarkedBotIDs 只剩机器人级的那一份——线上那份恰好是空的，
-// 于是一个在群里被标成机器人的账号，一进私聊就又变回了人。
+// 范围就是标记被填在哪儿：群配置里那份只在那个群生效，机器人配置里那份对这台
+// 机器人的所有会话生效。effectiveConfigForEventLocked（runtime.go:1306）已经在群
+// 事件上把本群那份并进 cfg.MarkedBotIDs，所以这里直接用它就是对的。
+//
+// 这里一度改成跨群汇总——把这台机器人名下每个群标过的账号并成一份到处生效。
+// 那样做的代价是标记会串门：在 A 群标下的账号，到 B 群照样被当成机器人抑制，
+// 而 B 群的编辑页上两处都看不见它，管理员无从知道为什么不理人。要全局生效就填
+// 机器人级那一份，那是明确表达「这个账号在哪儿都是机器人」的地方。
 func (r *Runtime) profileMarkedBotIDs(event MessageEvent) []string {
-	cfg := r.effectiveConfigForEvent(event)
-	ids := cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
-	r.mu.RLock()
-	lister, _ := r.groupConfigs.(GroupConfigLister)
-	r.mu.RUnlock()
-	if lister == nil {
-		return ids
-	}
-	profileID := strings.TrimSpace(event.ProfileID)
-	for _, group := range lister.Groups().Groups {
-		// 空 bot_profile_id 是没有分档的旧配置，仍然属于当前这台机器人。
-		if owner := strings.TrimSpace(group.BotProfileID); owner != "" && profileID != "" && owner != profileID {
-			continue
-		}
-		ids = append(ids, group.MarkedBotIDs...)
-	}
-	return cleanStrings(ids)
+	return cleanStrings(append([]string(nil), r.effectiveConfigForEvent(event).MarkedBotIDs...))
 }
 
 // accountMarkedAsBot 判断发信账号是不是被管理员标成了机器人——群聊私聊同一套。
