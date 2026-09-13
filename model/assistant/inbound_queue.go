@@ -29,6 +29,10 @@ const (
 	// concurrently. Serialize the small session set to keep backfill complete.
 	historyFetchWorkers = 1
 	historyPageSize     = 100
+	// historyBackfillScanLimit 是单个会话一次回补最多往回扫多少条。回补现在要一直翻到
+	// 断线前的水位线把漏掉的消息都补进历史，热闹的群一天能攒几千条；这里兜住上限，
+	// 更早的不再补。上下文窗口本来也用不了这么多，多出来的只会变成摘要任务。
+	historyBackfillScanLimit = 200
 	// InboundMediaMergeWindow gives adjacent media and an explicit textual
 	// follow-up enough time to become one durable turn before either can reply.
 	InboundMediaMergeWindow = 15 * time.Second
@@ -506,6 +510,18 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 }
 
 func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueueItem) (string, error) {
+	// 断线回补里没排上回复名额的消息在这里就收住，只补进上下文历史。它们不能走下面的
+	// 语音转写、媒体合并、图片处理、插件观察、消息中继和回复：回补设条数上限防的就是
+	// 一批积压消息同时开出一堆媒体任务，这些消息要是也走完整流程，上限等于没设。
+	// 放在过期检查之前：过期管的是「别回复太旧的消息」，不是「别记住它」。
+	if item.Event.BackfillHistoryOnly {
+		event := item.Event
+		r.remember(event)
+		record := r.decisionEventRecord(event, inboundEventPlainText(event), "backfill_history_only")
+		record.Reason = "断线回补：不在回复名额内，已补入上下文历史"
+		r.record(record)
+		return "backfill_history_only", nil
+	}
 	if r.inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
@@ -1279,10 +1295,9 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 	cursor := ""
 	seenCursors := map[string]struct{}{}
 	for {
+		// 名额只管进回复流程的条数，不管往回翻多远：按回复名额取页，名额是 3 就一次
+		// 只拿 3 条，永远翻不到第二页。
 		pageSize := historyPageSize
-		if messageLimit > 0 && messageLimit < pageSize {
-			pageSize = messageLimit
-		}
 		params := map[string]any{
 			idParam:           oneBotIDParam(session.ID),
 			"count":           pageSize,
@@ -1344,7 +1359,7 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 			}
 			eventsByID[key] = event
 		}
-		if reachedWatermark || len(eventsByID) >= messageLimit || len(items) < pageSize {
+		if reachedWatermark || len(eventsByID) >= historyBackfillScanLimit || len(items) < pageSize {
 			break
 		}
 		oldest := page[0]
@@ -1369,10 +1384,28 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 		}
 		return events[i].Time < events[j].Time
 	})
-	if messageLimit > 0 && len(events) > messageLimit {
-		events = events[len(events)-messageLimit:]
-	}
+	markBackfillReplyEligible(events, messageLimit, func(event MessageEvent) bool {
+		return !r.isSelfMessage(event) && r.shouldHandleChat(event, inboundEventPlainText(event))
+	})
 	return events, nil
+}
+
+// markBackfillReplyEligible 从最新往回挑出最多 limit 条会触发回复的消息留在回复流程
+// 里，其余一律标成只进上下文历史。events 必须已按时间升序排好。
+//
+// 以前这里直接截最新 limit 条，不看会不会触发：断线期间群里十条闲聊加一条 @ 机器人，
+// 只要那条 @ 不在最新三条里，它就既没人回、也进不了历史。名额现在只留给真会触发的
+// 消息（和正常入站同一个确定性判定：私聊、@ 本机、引用本机、称呼命中，不调模型）；
+// 没排上的照样补进上下文，机器人重连后仍然知道断线这段时间聊过什么。
+func markBackfillReplyEligible(events []MessageEvent, limit int, triggers func(MessageEvent) bool) {
+	remaining := limit
+	for index := len(events) - 1; index >= 0; index-- {
+		if remaining > 0 && triggers(events[index]) {
+			remaining--
+			continue
+		}
+		events[index].BackfillHistoryOnly = true
+	}
 }
 
 func oneBotHistoryItems(data map[string]any) []map[string]any {

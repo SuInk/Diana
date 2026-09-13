@@ -95,6 +95,10 @@ type ImageDescriptionRecord struct {
 type MessageEvent struct {
 	// RetryRecovered marks an event restored from the local durable retry journal.
 	RetryRecovered bool `json:"retry_recovered,omitempty"`
+	// BackfillHistoryOnly 标记断线回补拉回来、但没排上回复名额的消息：只补进上下文
+	// 历史，不跑语音转写、图片处理、插件、中继和回复。它要跟着事件一起落进入站队列，
+	// 所以是导出字段。
+	BackfillHistoryOnly bool `json:"backfill_history_only,omitempty"`
 	// SenderUsername is the platform-authenticated sender handle, not a display
 	// name or a handle found in message text, mentions or forwarded content.
 	SenderUsername   string           `json:"sender_username,omitempty"`
@@ -557,9 +561,9 @@ type BotConfig struct {
 	// 是路由、指代和记忆门控这些「往回数 N 条」的旁路，那里条数才是对的单位。
 	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
 	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
-	// HistoryBackfillMessageLimit limits how many newest messages each
-	// conversation may enqueue after reconnect or restart. Keeping this small
-	// prevents a media-heavy backlog from starting many image/video jobs at once.
+	// HistoryBackfillMessageLimit 是断线回补后每个会话最多进回复流程的消息条数，
+	// 只算会触发回复的消息。没排上名额的照样补进上下文历史，但不跑媒体处理和回复——
+	// 保持它小，防的是一批积压消息同时开出一堆图片视频任务。
 	HistoryBackfillMessageLimit int   `json:"history_backfill_message_limit,omitempty"`
 	ContextSummaryThreshold     int   `json:"context_summary_threshold,omitempty"`
 	LongTermMemoryEnabled       *bool `json:"long_term_memory_enabled,omitempty"`
