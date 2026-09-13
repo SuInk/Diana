@@ -154,12 +154,14 @@ func lowerOverBudgetImageDetail(req llm.GenerateRequest, budget int64) llm.Gener
 			if p.Type != llm.ContentPartImageURL || p.ImageURL == "" || p.Detail == "low" {
 				continue
 			}
+			// 能缩就先缩字节，缩不缩都标 low。缩不动有两种：图本来就不超过 512，
+			// 那它的尺寸本就在低细节档位内，标 low 不虚报；或者解不开，那和改之前一样
+			// 只标标签。上一版在缩不动时直接 continue，连标签也不打，小图于是一直按
+			// high 的 8192 计——线上一轮 12 张小图因此被判超预算整轮丢掉。
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(p.ImageURL)), "data:image/") {
-				shrunk, ok := shrinkDataURLImageLongSide(p.ImageURL, budgetLowDetailLongSide)
-				if !ok {
-					continue
+				if shrunk, ok := shrinkDataURLImageLongSide(p.ImageURL, budgetLowDetailLongSide); ok {
+					parts[pi].ImageURL = shrunk
 				}
-				parts[pi].ImageURL = shrunk
 			}
 			parts[pi].Detail = "low"
 			req.Messages[mi].Parts = parts
@@ -168,28 +170,60 @@ func lowerOverBudgetImageDetail(req llm.GenerateRequest, budget int64) llm.Gener
 	return req
 }
 
-// budgetProtectedRequest 只保留供应商裁剪不会丢的那部分：系统提示、当前这一轮的
-// 消息，以及标了当前优先级的消息。
+// budgetDroppedImagePlaceholder 替换被丢弃的图片。写明「有图但没送到」，模型才不会
+// 假装看过、也不会把后面图片的编号对错。
+const budgetDroppedImagePlaceholder = "【此处原有一张图片，因超出输入预算未发送；不要猜测它的内容】"
+
+// dropOverBudgetImages 丢图直到请求装进预算，返回丢了几张。
 //
-// 用它把「超预算」分成两种：这部分还装得下，说明多出来的是旧上下文，交给供应商
-// 那层裁剪即可；这部分自己就装不下，说明当前问题本身太大，只能失败——放行等于把
-// 用户的问题截断了再发出去。
-func budgetProtectedRequest(req llm.GenerateRequest) llm.GenerateRequest {
-	current, lastUser := -1, -1
+// 顺序：先丢旧消息里的图（从最早那条开始），再丢当前这条用户消息里的图，从最后
+// 一张往前丢——用户通常先发主图、后补辅助图。每张换成一句占位文字。
+func dropOverBudgetImages(req llm.GenerateRequest, budget int64) (llm.GenerateRequest, int) {
+	if !llm.PlanInputBudget(req, budget).OverBudget() {
+		return req, 0
+	}
+	lastUser := -1
 	for i, message := range req.Messages {
-		if message.Role == llm.RoleUser || message.Role == llm.RoleTool {
-			current = i
-		}
 		if message.Role == llm.RoleUser {
 			lastUser = i
 		}
 	}
-	protected := make([]llm.Message, 0, len(req.Messages))
-	for i, message := range req.Messages {
-		if i == current || i == lastUser || message.Role == llm.RoleSystem || message.Priority >= llm.MessagePriorityCurrent {
-			protected = append(protected, message)
+	type imageSlot struct{ message, part int }
+	var order []imageSlot
+	for mi, message := range req.Messages {
+		if mi == lastUser {
+			continue
+		}
+		for pi, part := range message.Parts {
+			if part.Type == llm.ContentPartImageURL && part.ImageURL != "" {
+				order = append(order, imageSlot{mi, pi})
+			}
 		}
 	}
-	req.Messages = protected
-	return req
+	if lastUser >= 0 {
+		parts := req.Messages[lastUser].Parts
+		for pi := len(parts) - 1; pi >= 0; pi-- {
+			if parts[pi].Type == llm.ContentPartImageURL && parts[pi].ImageURL != "" {
+				order = append(order, imageSlot{lastUser, pi})
+			}
+		}
+	}
+	if len(order) == 0 {
+		return req, 0
+	}
+	req.Messages = append([]llm.Message(nil), req.Messages...)
+	copied := make(map[int]bool)
+	dropped := 0
+	for _, slot := range order {
+		if !llm.PlanInputBudget(req, budget).OverBudget() {
+			break
+		}
+		if !copied[slot.message] {
+			req.Messages[slot.message].Parts = append([]llm.ContentPart(nil), req.Messages[slot.message].Parts...)
+			copied[slot.message] = true
+		}
+		req.Messages[slot.message].Parts[slot.part] = llm.ContentPart{Type: llm.ContentPartText, Text: budgetDroppedImagePlaceholder}
+		dropped++
+	}
+	return req, dropped
 }
