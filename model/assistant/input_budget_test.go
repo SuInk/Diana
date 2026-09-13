@@ -91,16 +91,20 @@ func TestBudgetSummaryFailurePreservesToolPairAndCurrentInput(t *testing.T) {
 	}
 }
 
-func TestUncompressibleCurrentTextFailsWithoutSendingPartialRequest(t *testing.T) {
+// 当前问题本身超预算也不再整轮失败，交给供应商客户端按上下文上限裁剪。
+//
+// 这条以前断言的是相反的事：宁可报错也不发半截请求。线上实际效果是用户只收到
+// 一句「超出输入预算，未能发出」，一个字的回答都没有；决定改成「还不行就丢」。
+func TestOversizedCurrentTextIsHandedToProviderTrim(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	provider := &privacyRequestProvider{reply: "must not send"}
+	provider := &privacyRequestProvider{reply: "ok"}
 	client := &imageBudgetProvider{runtime: runtime, provider: provider, group: llm.GroupChat}
 	req := llm.GenerateRequest{MaxContextTokens: 8000, Messages: []llm.Message{{Role: llm.RoleUser, Content: strings.Repeat("x", 40000)}}}
-	if _, err := client.Generate(context.Background(), req); err == nil {
-		t.Fatal("oversized current question sent")
+	if _, err := client.Generate(context.Background(), req); err != nil {
+		t.Fatalf("超预算不该让整轮失败：%v", err)
 	}
-	if len(provider.request.Messages) != 0 {
-		t.Fatal("partial request reached provider")
+	if len(provider.request.Messages) == 0 {
+		t.Fatal("请求没有交给供应商")
 	}
 }
 
