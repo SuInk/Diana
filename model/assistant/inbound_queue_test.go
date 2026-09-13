@@ -92,7 +92,28 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 	}
 }
 
-func TestHistoryBackfillLimitsEachSessionToNewestConfiguredMessages(t *testing.T) {
+// historyTestMention 是一条 @ 机器人（self_id=42）的群消息。
+func historyTestMention(messageID int64, eventTime int64, text string) map[string]any {
+	message := historyTestMessage(messageID, eventTime, text)
+	message["raw_message"] = "[CQ:at,qq=42] " + text
+	message["message"] = []any{
+		map[string]any{"type": "at", "data": map[string]any{"qq": "42"}},
+		map[string]any{"type": "text", "data": map[string]any{"text": " " + text}},
+	}
+	return message
+}
+
+func backfillEventsByID(events []MessageEvent) map[string]MessageEvent {
+	out := make(map[string]MessageEvent, len(events))
+	for _, event := range events {
+		out[event.MessageID] = event
+	}
+	return out
+}
+
+// 回补名额只管进回复流程的条数，不管往回翻多远：断线期间的消息全部补回来进上下文，
+// 没有一条会触发时就一条都不占名额。以前是直接截最新 N 条，更早的连历史都进不去。
+func TestHistoryBackfillKeepsWholeWindowButReservesReplySlotsForTriggers(t *testing.T) {
 	channel := newQueueTestChannel()
 	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
 		historyTestMessage(900, 900, "oldest"),
@@ -106,11 +127,135 @@ func TestHistoryBackfillLimitsEachSessionToNewestConfiguredMessages(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 3 {
-		t.Fatalf("events=%d, want 3", len(events))
+	if len(events) != 4 {
+		t.Fatalf("断线窗口里的消息都该补回来进历史：events=%d, want 4", len(events))
 	}
-	if events[0].MessageID != "901" || events[2].MessageID != "903" {
-		t.Fatalf("limited events=%#v", events)
+	if events[0].MessageID != "900" || events[3].MessageID != "903" {
+		t.Fatalf("回补结果没按时间排好：%#v", events)
+	}
+	for _, event := range events {
+		if !event.BackfillHistoryOnly {
+			t.Fatalf("没 @ 机器人的闲聊不该占回复名额：%s", event.MessageID)
+		}
+	}
+}
+
+// 就是这个场景：断线期间一条 @ 机器人之后又来了一串闲聊，那条 @ 不在最新三条里。
+// 旧逻辑截最新三条就停，它既没人回也进不了历史；现在要一直翻到它，把名额给它。
+func TestHistoryBackfillReachesTriggerBeyondNewestThree(t *testing.T) {
+	channel := newQueueTestChannel()
+	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
+		historyTestMention(900, 900, "帮我看看这个报错"),
+		historyTestMessage(901, 901, "哈哈"),
+		historyTestMessage(902, 902, "吃了吗"),
+		historyTestMessage(903, 903, "刚下班"),
+		historyTestMessage(904, 904, "今天好热"),
+		historyTestMessage(905, 905, "是啊"),
+	}}
+	runtime := NewRuntime(BotConfig{BotAccount: "42", HistoryBackfillMessageLimit: 3}, channel, NewPluginManager(), nil, nil, nil, nil)
+
+	events, err := runtime.fetchHistorySince(context.Background(), HistorySession{Kind: EventKindGroup, ID: "123", LastEventTime: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 6 {
+		t.Fatalf("events=%d, want 6", len(events))
+	}
+	byID := backfillEventsByID(events)
+	if byID["900"].BackfillHistoryOnly {
+		t.Fatal("最早那条 @ 机器人的消息应当拿到回复名额")
+	}
+	for _, id := range []string{"901", "902", "903", "904", "905"} {
+		if !byID[id].BackfillHistoryOnly {
+			t.Fatalf("闲聊 %s 应当只进历史", id)
+		}
+	}
+}
+
+// 会触发的消息超过名额时，只留最新的那几条进回复流程，更早的照样补进历史。
+func TestHistoryBackfillReservesOnlyNewestTriggers(t *testing.T) {
+	channel := newQueueTestChannel()
+	channel.responses["get_group_msg_history"] = map[string]any{"messages": []any{
+		historyTestMention(900, 900, "一"),
+		historyTestMention(901, 901, "二"),
+		historyTestMention(902, 902, "三"),
+		historyTestMention(903, 903, "四"),
+		historyTestMention(904, 904, "五"),
+	}}
+	runtime := NewRuntime(BotConfig{BotAccount: "42", HistoryBackfillMessageLimit: 3}, channel, NewPluginManager(), nil, nil, nil, nil)
+
+	events, err := runtime.fetchHistorySince(context.Background(), HistorySession{Kind: EventKindGroup, ID: "123", LastEventTime: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := backfillEventsByID(events)
+	for _, id := range []string{"902", "903", "904"} {
+		if byID[id].BackfillHistoryOnly {
+			t.Fatalf("最新的三条 @ 应当都拿到名额：%s", id)
+		}
+	}
+	for _, id := range []string{"900", "901"} {
+		if !byID[id].BackfillHistoryOnly {
+			t.Fatalf("名额外更早的 @ 应当只进历史：%s", id)
+		}
+	}
+}
+
+func TestMarkBackfillReplyEligibleWalksNewestFirst(t *testing.T) {
+	events := []MessageEvent{
+		{MessageID: "a"}, {MessageID: "b"}, {MessageID: "c"}, {MessageID: "d"},
+	}
+	triggers := map[string]bool{"a": true, "c": true, "d": false}
+	markBackfillReplyEligible(events, 1, func(event MessageEvent) bool { return triggers[event.MessageID] })
+	// 从最新往回找：d 不触发，c 触发拿走唯一的名额，a 虽然触发但名额已用完。
+	want := map[string]bool{"a": true, "b": true, "c": false, "d": true}
+	for _, event := range events {
+		if event.BackfillHistoryOnly != want[event.MessageID] {
+			t.Fatalf("%s history-only=%v, want %v", event.MessageID, event.BackfillHistoryOnly, want[event.MessageID])
+		}
+	}
+}
+
+// 只进历史的回补消息在 worker 开头就收住：进上下文，不调模型、不发消息。
+// 用一条本来会触发的 @ 来测，证明挡住它的是标记而不是触发判定。
+func TestBackfillHistoryOnlyEventEntersContextWithoutReplying(t *testing.T) {
+	channel := newQueueTestChannel()
+	provider := &capturingLLMProvider{reply: "不应该回复"}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "123", UserID: "10001", SelfID: "42",
+		MessageID: "history-only", Time: time.Now().Unix(),
+		RawMessage: "[CQ:at,qq=42] 在吗",
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "42"}},
+			{Type: "text", Data: map[string]string{"text": " 在吗"}},
+		},
+		BackfillHistoryOnly: true,
+	}
+
+	outcome, err := runtime.processInboundQueueItem(context.Background(), InboundQueueItem{ID: "q1", Event: event})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "backfill_history_only" {
+		t.Fatalf("outcome=%q", outcome)
+	}
+	if len(provider.requestSnapshot().Messages) != 0 {
+		t.Fatalf("只进历史的消息不该调模型：%#v", provider.requestSnapshot())
+	}
+	if calls := channel.callCount("send_group_msg"); calls != 0 {
+		t.Fatalf("只进历史的消息不该发消息：send_group_msg=%d", calls)
+	}
+	found := false
+	for _, item := range runtime.contextHistory(event) {
+		if item.MessageID == "history-only" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("消息没有进上下文历史")
 	}
 }
 
