@@ -307,27 +307,25 @@ RETURNING id, session, payload, attempts, priority, created_at
 	return item, true, nil
 }
 
-// InboundSenderHasNewerEvent 看同一会话里同一个发送者在这条之后有没有再发过消息，
-// 不管那条处理没处理完。
-func (s *SQLiteStore) InboundSenderHasNewerEvent(ctx context.Context, item assistant.InboundQueueItem) (bool, error) {
-	defer s.observeStorage(ctx, "InboundSenderHasNewerEvent", "read")()
+// InboundSessionHasNewerPending 看同一会话里在这条之后还有没有等着处理的消息。
+func (s *SQLiteStore) InboundSessionHasNewerPending(ctx context.Context, item assistant.InboundQueueItem) (bool, error) {
+	defer s.observeStorage(ctx, "InboundSessionHasNewerPending", "read")()
 	if s == nil || s.db == nil {
-		return false, errors.New("check newer inbound event: sqlite store is not configured")
+		return false, errors.New("check newer pending inbound event: sqlite store is not configured")
 	}
-	userID := strings.TrimSpace(item.Event.UserID)
-	if strings.TrimSpace(item.Session) == "" || userID == "" {
+	if strings.TrimSpace(item.Session) == "" {
 		return false, nil
 	}
 	var exists int
 	err := s.db.QueryRowContext(ctx, `
 SELECT EXISTS (
   SELECT 1 FROM inbound_events
-  WHERE session = ? AND user_id = ? AND id != ?
+  WHERE session = ? AND status = ? AND id != ?
     AND (event_time > ? OR (event_time = ? AND created_at > ?))
 )
-`, item.Session, userID, item.ID, item.Event.Time, item.Event.Time, item.EnqueuedAt.UnixNano()).Scan(&exists)
+`, item.Session, inboundStatusPending, item.ID, item.Event.Time, item.Event.Time, item.EnqueuedAt.UnixNano()).Scan(&exists)
 	if err != nil {
-		return false, fmt.Errorf("check newer inbound event: %w", err)
+		return false, fmt.Errorf("check newer pending inbound event: %w", err)
 	}
 	return exists == 1, nil
 }

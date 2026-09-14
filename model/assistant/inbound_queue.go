@@ -36,12 +36,6 @@ const (
 	// InboundMediaMergeWindow gives adjacent media and an explicit textual
 	// follow-up enough time to become one durable turn before either can reply.
 	InboundMediaMergeWindow = 15 * time.Second
-	// 在线时回复生成比消息进来的速度慢，队列就会越排越长，机器人开始对着十几分钟前的话接茬。
-	// 下面两个阈值管这件事：排队超过 inboundBacklogFollowUpWait 且同一个人后面又说了话，
-	// 这条就交给后面那条一起接；排队超过 inboundBacklogMaxWait 的一律不再回。两种都照常进
-	// 上下文历史，后面的回复看得到它们。
-	inboundBacklogFollowUpWait = 90 * time.Second
-	inboundBacklogMaxWait      = 5 * time.Minute
 )
 
 const (
@@ -128,11 +122,6 @@ type InboundMediaTurnStore interface {
 	PeekInboundMediaForTurn(ctx context.Context, currentID, session string, event MessageEvent, window time.Duration) ([]MessageEvent, error)
 	ClaimInboundMediaForTurn(ctx context.Context, currentID, session string, event MessageEvent, window time.Duration) ([]MessageEvent, error)
 	InboundEventSuperseded(ctx context.Context, event MessageEvent) (string, bool, error)
-}
-
-// InboundBacklogStore 回答「同一个人在这个会话里是不是已经又发了新消息」，供积压判断用。
-type InboundBacklogStore interface {
-	InboundSenderHasNewerEvent(ctx context.Context, item InboundQueueItem) (bool, error)
 }
 
 var errInboundTurnSuperseded = errors.New("diana: inbound turn superseded by correlated follow-up")
@@ -540,8 +529,9 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 		return "ignored_stale", nil
 	}
 	// 积压的消息不在这里直接收掉：插件观察、消息互通、历史和记忆这些不花回复 token 的环节
-	// 还得走，拦截放在 prepareMessageEvent 里决定回复之前。
-	item.Event.backlogReason = r.inboundBacklogReason(ctx, item, time.Now())
+	// 还得走。交接判断放到 prepareMessageEvent 里登记积压包之前那一刻，这里只把队列信息带过去。
+	probe := item
+	item.Event.backlogProbe = &probe
 	ctx = withLLMUsageContext(ctx, item.Event)
 	ctx = r.withDebugTraceContext(ctx, item.Event)
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(item.Event).MaxContextTokens)
@@ -609,7 +599,7 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 			return "", ctx.Err()
 		}
 	}
-	return r.replyAndRecord(ctx, event, text, outcome)
+	return r.replyAndRecord(withInboundReplyTurnContext(ctx, event), event, text, outcome)
 }
 
 func eventHasVoiceTranscript(event MessageEvent) bool {
@@ -778,56 +768,6 @@ func (r *Runtime) inboundPriority(event MessageEvent) int {
 		return InboundPriorityResolver
 	}
 	return InboundPriorityNormal
-}
-
-// inboundBacklogReason 判断一条在线消息是不是已经在队列里排得太久、不该再单独回复，
-// 返回写进事件记录的原因；空串表示照常处理。
-//
-// 只看第一次处理：重试的那条可能已经发出去一半，半路扔掉比晚到更糟，重试有自己的上限。
-// 主人的消息不管：确认码、响应限制这类指令晚到也得生效。
-func (r *Runtime) inboundBacklogReason(ctx context.Context, item InboundQueueItem, now time.Time) string {
-	if item.Attempts > 1 || item.EnqueuedAt.IsZero() || now.IsZero() {
-		return ""
-	}
-	wait := now.Sub(item.EnqueuedAt)
-	if wait < inboundBacklogFollowUpWait {
-		return ""
-	}
-	if r.effectiveConfigForEvent(item.Event).IsOwnerEvent(item.Event) {
-		return ""
-	}
-	if wait >= inboundBacklogMaxWait {
-		return fmt.Sprintf("消息在队列里排了 %s，超过 %s 的积压上限，已补入上下文历史，不再单独回复", formatQueueWait(wait), formatQueueWait(inboundBacklogMaxWait))
-	}
-	r.mu.RLock()
-	store, _ := r.inboundStore.(InboundBacklogStore)
-	r.mu.RUnlock()
-	if store == nil {
-		return ""
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	newer, err := store.InboundSenderHasNewerEvent(checkCtx, item)
-	if err != nil {
-		log.Printf("diana inbound backlog check failed: %v", err)
-		return ""
-	}
-	if !newer {
-		return ""
-	}
-	return fmt.Sprintf("消息在队列里排了 %s，同一个人之后又发了消息，已补入上下文历史，交给后面的消息一起接话", formatQueueWait(wait))
-}
-
-func formatQueueWait(wait time.Duration) string {
-	if wait < time.Minute {
-		return fmt.Sprintf("%d 秒", int(wait/time.Second))
-	}
-	minutes := int(wait / time.Minute)
-	seconds := int((wait % time.Minute) / time.Second)
-	if seconds == 0 {
-		return fmt.Sprintf("%d 分钟", minutes)
-	}
-	return fmt.Sprintf("%d 分 %d 秒", minutes, seconds)
 }
 
 func (r *Runtime) inboundEventIsStale(event MessageEvent, now time.Time) bool {

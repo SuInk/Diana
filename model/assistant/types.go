@@ -154,8 +154,15 @@ type MessageEvent struct {
 	// Persisted outgoing events still use the regular message fields above.
 	botReply      string
 	routingReason string
-	// backlogReason 非空表示这条消息在队列里积压太久，只补进上下文，不再回复。
-	backlogReason  string
+	// backlogProbe 是这条消息所在的队列项，用来判断它是不是积压了、该交给同会话后面的消息
+	// 一起接话。不走队列的消息没有它。
+	backlogProbe *InboundQueueItem
+	// backlogTurn 是积压合并后和这条一起作答的其他消息；backlogProactive 是积压包里
+	// 还要交给主动回复路由一起判断的候选。
+	backlogTurn      []proactiveReplyCandidate
+	backlogProactive []proactiveReplyCandidate
+	// backlogHeld 表示这条消息是从积压包里取出来当回复对象的，进包时已经记过长期记忆和用户画像。
+	backlogHeld    bool
 	proactiveReply bool
 	// chatInReply 表示本次主动回复来自闲聊插话路径，回复阶段据此收敛语气和长度。
 	chatInReply            bool

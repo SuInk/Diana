@@ -588,15 +588,14 @@ func TestInboundConcurrencyValueFallsBackToSerial(t *testing.T) {
 	}
 }
 
-// 认领时带出入队时间；「同一个人后面又说了话」只认同会话、同发送者、更晚的消息。
-func TestInboundSenderHasNewerEventAndClaimEnqueuedAt(t *testing.T) {
+// 认领时带出入队时间；「后面还有待处理消息」只认同会话、还没处理、更晚的消息，不管是谁发的。
+func TestInboundSessionHasNewerPendingAndClaimEnqueuedAt(t *testing.T) {
 	ctx := context.Background()
 	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "inbound.db"))
 	defer func() { _ = store.Close() }()
 
 	before := time.Now()
-	old := inboundTestEvent("old", "第一句", 100)
-	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", old); err != nil || !inserted {
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", inboundTestEvent("old", "第一句", 100)); err != nil || !inserted {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
 	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker-1", time.Now().Add(time.Minute))
@@ -606,36 +605,41 @@ func TestInboundSenderHasNewerEventAndClaimEnqueuedAt(t *testing.T) {
 	if item.EnqueuedAt.Before(before.Add(-time.Second)) || item.EnqueuedAt.After(time.Now().Add(time.Second)) {
 		t.Fatalf("EnqueuedAt=%v, want around %v", item.EnqueuedAt, before)
 	}
-
 	check := func(want bool) {
 		t.Helper()
-		got, err := store.InboundSenderHasNewerEvent(ctx, item)
+		got, err := store.InboundSessionHasNewerPending(ctx, item)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got != want {
-			t.Fatalf("InboundSenderHasNewerEvent=%v, want %v", got, want)
+			t.Fatalf("InboundSessionHasNewerPending=%v, want %v", got, want)
 		}
 	}
 	check(false)
 
-	other := inboundTestEvent("other-user", "别人说话", 101)
-	other.UserID = "3"
-	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", other); err != nil {
-		t.Fatal(err)
-	}
 	otherGroup := inboundTestEvent("other-group", "别的群", 102)
 	otherGroup.GroupID = "9"
 	if _, _, err := store.EnqueueInboundEvent(ctx, "group:9", otherGroup); err != nil {
 		t.Fatal(err)
 	}
-	earlier := inboundTestEvent("earlier", "更早的", 99)
-	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", earlier); err != nil {
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", inboundTestEvent("earlier", "更早的", 99)); err != nil {
 		t.Fatal(err)
 	}
 	check(false)
 
-	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", inboundTestEvent("new", "第二句", 103)); err != nil {
+	processing := inboundTestEvent("processing", "已经在处理", 101)
+	processingID, _, err := store.EnqueueInboundEvent(ctx, "group:1", processing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE inbound_events SET status = 'processing' WHERE id = ?`, processingID); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+
+	other := inboundTestEvent("other-user", "别人说话", 103)
+	other.UserID = "3"
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", other); err != nil {
 		t.Fatal(err)
 	}
 	check(true)
