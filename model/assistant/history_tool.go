@@ -308,7 +308,15 @@ func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any)
 	}
 	anchor, found := t.runtime.findSemanticReferenceEvent(ctx, t.event, messageID)
 	if !found {
-		return dianaChatHistoryResult{}, fmt.Errorf("当前会话中找不到消息 %s", messageID)
+		// 跨群检索的命中带着 group_id，模型想看前后文时经常忘了一起传，这里就会在当前群里
+		// 扑空。线上一次提问因此连报两次「找不到消息」，模型换了几轮关键词后放弃，转去网上
+		// 搜了个不相干的项目。消息明明在库里，只是在别的群：权限允许时直接去找。
+		if strings.TrimSpace(configToolString(input, "group_id")) == "" {
+			if result, located, err := t.aroundInOtherGroup(ctx, input, messageID); located {
+				return result, err
+			}
+		}
+		return dianaChatHistoryResult{}, fmt.Errorf("当前会话中找不到消息 %s；如果它来自 scope=all_groups 的检索结果，调用 around 时同时传该结果的 group_id", messageID)
 	}
 	before := chatHistoryBoundedInt(input, "before", defaultChatHistoryBefore, maximumChatHistoryAroundRadius)
 	after := chatHistoryBoundedInt(input, "after", defaultChatHistoryAfter, maximumChatHistoryAroundRadius)
@@ -826,6 +834,86 @@ func (t *dianaChatHistoryTool) crossGroupSearchError(ctx context.Context) error 
 		return fmt.Errorf("私聊里只有机器人主人能检索其他群；跨群记忆本身已开启")
 	}
 	return fmt.Errorf("当前会话类型不支持检索其他群")
+}
+
+// aroundInOtherGroup 在这个机器人所在的其他群里找当前会话里没有的消息，找到就读它的
+// 前后文。located=false 表示没找到或没有跨群权限，调用方按原来的报错处理。
+func (t *dianaChatHistoryTool) aroundInOtherGroup(ctx context.Context, input map[string]any, messageID string) (dianaChatHistoryResult, bool, error) {
+	if t.crossGroupSearchError(ctx) != nil {
+		return dianaChatHistoryResult{}, false, nil
+	}
+	groups := t.runtime.groupsContainingMessage(ctx, t.event, messageID)
+	switch len(groups) {
+	case 0:
+		return dianaChatHistoryResult{}, false, nil
+	case 1:
+	default:
+		return dianaChatHistoryResult{}, true, fmt.Errorf("消息 %s 在多个群里都有记录（group_id：%s），请从检索结果里取这条命中的 group_id 一起传给 around", messageID, strings.Join(groups, "、"))
+	}
+	scopedInput := make(map[string]any, len(input)+1)
+	for key, value := range input {
+		scopedInput[key] = value
+	}
+	scopedInput["group_id"] = groups[0]
+	result, err := t.around(ctx, scopedInput)
+	if err != nil {
+		return result, true, err
+	}
+	result.Message = fmt.Sprintf("消息 %s 不在当前会话，是群 %s 里的消息，已读取它在那个群里的前后文。", messageID, groups[0])
+	for index := range result.Items {
+		if result.Items[index].GroupID == "" {
+			result.Items[index].GroupID = groups[0]
+		}
+	}
+	return result, true, nil
+}
+
+// groupsContainingMessage 返回同一机器人命名空间下、当前会话以外含有这条消息的群。
+func (r *Runtime) groupsContainingMessage(ctx context.Context, event MessageEvent, messageID string) []string {
+	prefix := groupHistorySessionPrefix(event)
+	current := sessionKey(event)
+	found := map[string]bool{}
+	var groups []string
+	add := func(candidate MessageEvent, session string) {
+		if session == current || !strings.HasPrefix(session, prefix) {
+			return
+		}
+		groupID := strings.TrimSpace(candidate.GroupID)
+		if groupID == "" {
+			groupID = strings.TrimPrefix(session, prefix)
+		}
+		if groupID == "" || groupID == strings.TrimSpace(event.GroupID) || found[groupID] {
+			return
+		}
+		found[groupID] = true
+		groups = append(groups, groupID)
+	}
+	r.mu.RLock()
+	for session, history := range r.history {
+		if !strings.HasPrefix(session, prefix) || session == current {
+			continue
+		}
+		for index := len(history) - 1; index >= 0; index-- {
+			if history[index].MessageID == messageID {
+				add(history[index], session)
+				break
+			}
+		}
+	}
+	store := r.messageStore
+	r.mu.RUnlock()
+	if lookup, ok := store.(MessageEventPrefixLookupStore); ok {
+		loadCtx, cancel := context.WithTimeout(ctx, chatHistoryLookupTimeout)
+		events, err := lookup.FindMessageEventsBySessionPrefix(loadCtx, prefix, messageID, 5)
+		cancel()
+		if err == nil {
+			for _, candidate := range events {
+				add(candidate.Event, candidate.Session)
+			}
+		}
+	}
+	sort.Strings(groups)
+	return groups
 }
 
 func groupHistorySessionPrefix(event MessageEvent) string {

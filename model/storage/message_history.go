@@ -434,6 +434,55 @@ func escapeMessageHistoryLike(value string) string {
 	return replacer.Replace(value)
 }
 
+// FindMessageEventsBySessionPrefix 在 session 以 sessionPrefix 开头的会话里按消息编号查找，
+// 每个会话最多返回一条（最新那条），按时间倒序，最多 limit 条。
+func (s *SQLiteStore) FindMessageEventsBySessionPrefix(ctx context.Context, sessionPrefix string, messageID string, limit int) ([]assistant.SessionMessageEvent, error) {
+	defer s.observeStorage(ctx, "FindMessageEventsBySessionPrefix", "read")()
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	sessionPrefix = strings.TrimSpace(sessionPrefix)
+	messageID = strings.TrimSpace(messageID)
+	if sessionPrefix == "" || messageID == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.eventReader().QueryContext(ctx, `
+SELECT session, payload
+FROM message_events
+WHERE message_id = ? AND kind != ? AND session LIKE ? ESCAPE '\'
+ORDER BY event_time DESC, created_at DESC, id DESC
+LIMIT ?
+`, messageID, string(assistant.EventKindNotice), escapeMessageHistoryLike(sessionPrefix)+"%", limit*4)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	var events []assistant.SessionMessageEvent
+	for rows.Next() {
+		var session, raw string
+		if err := rows.Scan(&session, &raw); err != nil {
+			return nil, err
+		}
+		if seen[session] {
+			continue
+		}
+		var event assistant.MessageEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, fmt.Errorf("decode message event: %w", err)
+		}
+		seen[session] = true
+		events = append(events, assistant.SessionMessageEvent{Session: session, Event: event})
+		if len(events) >= limit {
+			break
+		}
+	}
+	return events, rows.Err()
+}
+
 // FindMessageEvent returns the persisted non-notice message with the given OneBot message ID.
 func (s *SQLiteStore) FindMessageEvent(ctx context.Context, session string, messageID string) (assistant.MessageEvent, bool, error) {
 	defer s.observeStorage(ctx, "FindMessageEvent", "read")()
