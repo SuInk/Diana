@@ -1382,3 +1382,109 @@ func (s *memoryInboundEventStore) outcomeAndAttempts(id string) (string, int) {
 	}
 	return record.outcome, record.item.Attempts
 }
+
+func (s *memoryInboundEventStore) InboundSenderHasNewerEvent(_ context.Context, item InboundQueueItem) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, record := range s.records {
+		other := record.item
+		if id == item.ID || other.Session != item.Session || other.Event.UserID != item.Event.UserID {
+			continue
+		}
+		if other.Event.Time > item.Event.Time {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// 在线积压：排队超过上限的消息哪怕是 @ 也不再回，但要进上下文历史。
+func TestInboundBacklogBeyondMaxWaitEntersContextWithoutReplying(t *testing.T) {
+	channel := newQueueTestChannel()
+	provider := &capturingLLMProvider{reply: "不应该回复"}
+	runtime := newQueuedTestRuntime(channel, newMemoryInboundEventStore(), provider)
+	event := queuedDirectTestEvent("backlogged", time.Now().Add(-inboundBacklogMaxWait-time.Minute).Unix())
+
+	outcome, err := runtime.processInboundQueueItem(context.Background(), InboundQueueItem{
+		ID: "group:123:backlogged", Session: "group:123", Event: event, Attempts: 1,
+		EnqueuedAt: time.Now().Add(-inboundBacklogMaxWait - time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "ignored_backlog_stale" {
+		t.Fatalf("outcome=%q, want ignored_backlog_stale", outcome)
+	}
+	if len(provider.requestSnapshot().Messages) != 0 {
+		t.Fatalf("积压消息不该调模型：%#v", provider.requestSnapshot())
+	}
+	if channel.sentCount() != 0 {
+		t.Fatal("积压消息不该发消息")
+	}
+	found := false
+	for _, item := range runtime.contextHistory(event) {
+		if item.MessageID == "backlogged" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("积压消息没有进上下文历史")
+	}
+}
+
+// 同一个人后面又说了话、这条也排了一阵，就交给后面那条接；换成别人说的话不算。
+func TestInboundBacklogReasonRules(t *testing.T) {
+	now := time.Now()
+	base := queuedDirectTestEvent("old", now.Add(-2*time.Minute).Unix())
+	cases := []struct {
+		name     string
+		item     InboundQueueItem
+		newer    *MessageEvent
+		owner    bool
+		wantSkip bool
+	}{
+		{name: "刚进队不管", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-30 * time.Second)}, newer: sameSender(base, "new"), wantSkip: false},
+		{name: "同一个人后面又说了话", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-2 * time.Minute)}, newer: sameSender(base, "new"), wantSkip: true},
+		{name: "后面是别人说的话", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-2 * time.Minute)}, newer: otherSender(base, "new"), wantSkip: false},
+		{name: "没有更新的消息", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-2 * time.Minute)}, wantSkip: false},
+		{name: "超过上限", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-inboundBacklogMaxWait)}, wantSkip: true},
+		{name: "重试不管", item: InboundQueueItem{Attempts: 2, EnqueuedAt: now.Add(-inboundBacklogMaxWait - time.Minute)}, wantSkip: false},
+		{name: "没有入队时间不管", item: InboundQueueItem{Attempts: 1}, wantSkip: false},
+		{name: "主人不管", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-inboundBacklogMaxWait - time.Minute)}, owner: true, wantSkip: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newMemoryInboundEventStore()
+			runtime := newQueuedTestRuntime(newQueueTestChannel(), store, nil)
+			if tc.owner {
+				runtime = NewRuntime(BotConfig{Enabled: true, BotAccount: "42", OwnerID: base.UserID}, newQueueTestChannel(), NewPluginManager(), nil, nil, nil, nil)
+				runtime.SetInboundEventStore(store)
+			}
+			item := tc.item
+			item.Event = base
+			item.Session = "group:123"
+			item.ID, _, _ = store.EnqueueInboundEvent(context.Background(), item.Session, base)
+			if tc.newer != nil {
+				if _, _, err := store.EnqueueInboundEvent(context.Background(), item.Session, *tc.newer); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reason := runtime.inboundBacklogReason(context.Background(), item, now)
+			if (reason != "") != tc.wantSkip {
+				t.Fatalf("reason=%q, wantSkip=%v", reason, tc.wantSkip)
+			}
+		})
+	}
+}
+
+func sameSender(event MessageEvent, messageID string) *MessageEvent {
+	event.MessageID = messageID
+	event.Time++
+	return &event
+}
+
+func otherSender(event MessageEvent, messageID string) *MessageEvent {
+	event = *sameSender(event, messageID)
+	event.UserID = "20002"
+	return &event
+}

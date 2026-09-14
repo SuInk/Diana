@@ -152,8 +152,10 @@ type MessageEvent struct {
 	SemanticSourceMessageIDs []string `json:"semantic_source_message_ids,omitempty"`
 	// botReply is an in-memory compatibility marker for assistant history entries.
 	// Persisted outgoing events still use the regular message fields above.
-	botReply       string
-	routingReason  string
+	botReply      string
+	routingReason string
+	// backlogReason 非空表示这条消息在队列里积压太久，只补进上下文，不再回复。
+	backlogReason  string
 	proactiveReply bool
 	// chatInReply 表示本次主动回复来自闲聊插话路径，回复阶段据此收敛语气和长度。
 	chatInReply            bool

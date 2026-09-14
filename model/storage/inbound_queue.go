@@ -253,6 +253,7 @@ func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner stri
 
 	var item assistant.InboundQueueItem
 	var payload string
+	var enqueuedAt int64
 	err := s.db.QueryRowContext(ctx, `
 WITH candidate AS (
   SELECT queued.id
@@ -285,11 +286,11 @@ UPDATE inbound_events
 	    duration_ms = NULL,
 	    updated_at = ?
 WHERE id = (SELECT id FROM candidate)
-RETURNING id, session, payload, attempts, priority
+RETURNING id, session, payload, attempts, priority, created_at
 `, inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), inboundStatusProcessing, now.UnixNano(),
 		string(assistant.EventKindGroup), concurrency.Group, concurrency.Private,
 		inboundStatusProcessing, leaseOwner, leaseUntil.UTC().UnixNano(), now.UnixNano()).Scan(
-		&item.ID, &item.Session, &payload, &item.Attempts, &item.Priority,
+		&item.ID, &item.Session, &payload, &item.Attempts, &item.Priority, &enqueuedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -300,7 +301,35 @@ RETURNING id, session, payload, attempts, priority
 	if err := json.Unmarshal([]byte(payload), &item.Event); err != nil {
 		return assistant.InboundQueueItem{}, false, fmt.Errorf("decode inbound event %q: %w", item.ID, err)
 	}
+	if enqueuedAt > 0 {
+		item.EnqueuedAt = time.Unix(0, enqueuedAt)
+	}
 	return item, true, nil
+}
+
+// InboundSenderHasNewerEvent 看同一会话里同一个发送者在这条之后有没有再发过消息，
+// 不管那条处理没处理完。
+func (s *SQLiteStore) InboundSenderHasNewerEvent(ctx context.Context, item assistant.InboundQueueItem) (bool, error) {
+	defer s.observeStorage(ctx, "InboundSenderHasNewerEvent", "read")()
+	if s == nil || s.db == nil {
+		return false, errors.New("check newer inbound event: sqlite store is not configured")
+	}
+	userID := strings.TrimSpace(item.Event.UserID)
+	if strings.TrimSpace(item.Session) == "" || userID == "" {
+		return false, nil
+	}
+	var exists int
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM inbound_events
+  WHERE session = ? AND user_id = ? AND id != ?
+    AND (event_time > ? OR (event_time = ? AND created_at > ?))
+)
+`, item.Session, userID, item.ID, item.Event.Time, item.Event.Time, item.EnqueuedAt.UnixNano()).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check newer inbound event: %w", err)
+	}
+	return exists == 1, nil
 }
 
 func inboundPriorityValue(values []int) int {

@@ -252,6 +252,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "主动回复生成后未通过准确度审核，已保持沉默", false
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
+	case "ignored_backlog_stale":
+		return "not_replied", "消息在队列里积压太久，已补入上下文历史，不再单独回复", false
 	case "ignored_stale":
 		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 30 分钟，最长 24 小时），为避免补发过期回复而忽略", false
 	case "ignored_user_blocked":
@@ -1783,6 +1785,18 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.record(r.decisionEventRecord(event, text, outcome))
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
+	}
+	// 队列积压：消息已经 remember 进历史、做过表达学习，这里补上长期记忆和用户画像后就收住，
+	// 跳过后面所有花模型 token 的环节。积压时最缺的就是时间，历史识图也一并省掉。
+	if reason := strings.TrimSpace(event.backlogReason); reason != "" {
+		r.enqueueEventMemory(event, memoryEventText(event))
+		if profile, stored := r.updateUserMemory(event, 0); stored {
+			event.userProfile = profile
+			event.userProfileLoaded = true
+		}
+		event.routingReason = reason
+		r.record(r.decisionEventRecord(event, text, "ignored_backlog_stale"))
+		return event, text, false, "ignored_backlog_stale"
 	}
 	history := r.contextHistory(event)
 	event.replyHistory = history

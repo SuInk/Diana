@@ -587,3 +587,56 @@ func TestInboundConcurrencyValueFallsBackToSerial(t *testing.T) {
 		t.Fatalf("inboundConcurrencyValue(negative) = %#v", got)
 	}
 }
+
+// 认领时带出入队时间；「同一个人后面又说了话」只认同会话、同发送者、更晚的消息。
+func TestInboundSenderHasNewerEventAndClaimEnqueuedAt(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "inbound.db"))
+	defer func() { _ = store.Close() }()
+
+	before := time.Now()
+	old := inboundTestEvent("old", "第一句", 100)
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:1", old); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker-1", time.Now().Add(time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	if item.EnqueuedAt.Before(before.Add(-time.Second)) || item.EnqueuedAt.After(time.Now().Add(time.Second)) {
+		t.Fatalf("EnqueuedAt=%v, want around %v", item.EnqueuedAt, before)
+	}
+
+	check := func(want bool) {
+		t.Helper()
+		got, err := store.InboundSenderHasNewerEvent(ctx, item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("InboundSenderHasNewerEvent=%v, want %v", got, want)
+		}
+	}
+	check(false)
+
+	other := inboundTestEvent("other-user", "别人说话", 101)
+	other.UserID = "3"
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", other); err != nil {
+		t.Fatal(err)
+	}
+	otherGroup := inboundTestEvent("other-group", "别的群", 102)
+	otherGroup.GroupID = "9"
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:9", otherGroup); err != nil {
+		t.Fatal(err)
+	}
+	earlier := inboundTestEvent("earlier", "更早的", 99)
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", earlier); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:1", inboundTestEvent("new", "第二句", 103)); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+}
