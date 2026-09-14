@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+// 改 PR 本身（改标题正文、关闭、重开）仍然只对 Issue 开放。评论 PR 已经放开，见
+// TestRepositoryPullRequestCommentAcceptsPullURL。
 func TestRepositoryIssueMutationsRejectPullRequestNumbers(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -25,7 +27,6 @@ func TestRepositoryIssueMutationsRejectPullRequestNumbers(t *testing.T) {
 		extraInput map[string]any
 	}{
 		{name: "update", message: "请修改 acme/demo 的 GitHub Issue #17 标题为 must not be written", operation: "update", state: "open", extraInput: map[string]any{"title": "must not be written"}},
-		{name: "comment", message: "请评论 acme/demo 的 GitHub Issue #17：must not be posted", operation: "comment", state: "open", extraInput: map[string]any{"body": "must not be posted"}},
 		{name: "close", message: "请关闭 acme/demo 的 GitHub Issue #17", operation: "close", state: "open"},
 		{name: "reopen", message: "请重新打开 acme/demo 的 GitHub Issue #17", operation: "reopen", state: "closed"},
 	}
