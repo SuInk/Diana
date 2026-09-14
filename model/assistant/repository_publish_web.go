@@ -56,7 +56,7 @@ type RepositoryIssueCreateResult struct {
 // authenticated WebUI confirmation is the explicit mutation authorization.
 func (p *RepositoryPublishPlugin) CreateIssueFromWeb(ctx context.Context, settings SettingValues, input RepositoryIssueCreateInput) RepositoryIssueCreateResult {
 	if p == nil || p.client == nil {
-		return repositoryIssueCreateResultFromInternal(repositoryIssueResult{Operation: "create"}.fail("plugin_unavailable", "仓库 Issue 发布插件未正确配置。"))
+		return repositoryIssueCreateResultFromInternal(repositoryIssueResult{Operation: "create"}.fail("plugin_unavailable", "GitHub Issue 与 PR 插件未正确配置。"))
 	}
 	repository, err := normalizeGitHubRepository(input.Repository)
 	if err != nil {

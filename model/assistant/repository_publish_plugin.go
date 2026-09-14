@@ -271,12 +271,12 @@ func (p *RepositoryPublishPlugin) listDrafts(ctx context.Context, groupID, statu
 func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
-		Name:        "Issue 发布",
-		Version:     "0.5.0",
-		Description: "群成员可生成 Issue 草稿，由群内具备仓库权限的授权用户确认后创建。",
+		Name:        "GitHub Issue 与 PR",
+		Version:     "0.6.0",
+		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。",
 		Official:    true,
 		BuiltIn:     true,
-		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"},
+		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "github:pull_requests:read", "github:pull_requests:write", "audit:write", "llm:tool"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         repositoryPublishSettingAuthMode,
@@ -292,8 +292,8 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key:         repositoryPublishSettingToken,
-				Label:       "GitHub Issues Token",
-				Description: "在“独立 Token”或“自动选择”模式下用于 Issue 读写；Fine-grained token 只授予白名单仓库的 Issues: read and write，Classic token 适合需要跨仓库或更多 GitHub API 权限的场景，保存后不回显。",
+				Label:       "GitHub Token",
+				Description: "在“独立 Token”或“自动选择”模式下用于 Issue 与 PR 读写；Fine-grained token 只授予白名单仓库的 Issues: read and write 和 Pull requests: read and write（只用 Issue 功能时可不给后者），Classic token 适合需要跨仓库或更多 GitHub API 权限的场景，保存后不回显。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -301,7 +301,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryPublishSettingAllowlist,
 				Label:       "允许操作的仓库",
-				Description: "Issue 的读写操作白名单，精确填写 owner/repo；多个仓库用逗号或换行分隔。留空时拒绝所有 Issue 操作。",
+				Description: "Issue 与 PR 的读写操作白名单，精确填写 owner/repo；多个仓库用逗号或换行分隔。留空时拒绝所有操作。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
