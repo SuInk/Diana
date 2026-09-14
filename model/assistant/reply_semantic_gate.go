@@ -106,7 +106,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 	if len(recent) == 0 {
 		return reply, nil
 	}
-	supplements := r.pendingReplyRequestContexts(append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...), event)
+	supplements := r.pendingReplyRequestContexts(r.replyTurnCandidates(ctx), event)
 	payload, err := json.Marshal(map[string]any{
 		"current_request": readableEventText(event, input), "current_user_id": event.UserID, "candidate": reply, "recent_sent": recent,
 		"current_request_context": requestContextForReply(event, input), "accepted_supplement_requests": supplements,

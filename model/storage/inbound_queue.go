@@ -253,6 +253,7 @@ func (s *SQLiteStore) ClaimNextInboundEvent(ctx context.Context, leaseOwner stri
 
 	var item assistant.InboundQueueItem
 	var payload string
+	var enqueuedAt int64
 	err := s.db.QueryRowContext(ctx, `
 WITH candidate AS (
   SELECT queued.id
@@ -285,11 +286,11 @@ UPDATE inbound_events
 	    duration_ms = NULL,
 	    updated_at = ?
 WHERE id = (SELECT id FROM candidate)
-RETURNING id, session, payload, attempts, priority
+RETURNING id, session, payload, attempts, priority, created_at
 `, inboundStatusPending, now.UnixNano(), inboundStatusProcessing, now.UnixNano(), inboundStatusProcessing, now.UnixNano(),
 		string(assistant.EventKindGroup), concurrency.Group, concurrency.Private,
 		inboundStatusProcessing, leaseOwner, leaseUntil.UTC().UnixNano(), now.UnixNano()).Scan(
-		&item.ID, &item.Session, &payload, &item.Attempts, &item.Priority,
+		&item.ID, &item.Session, &payload, &item.Attempts, &item.Priority, &enqueuedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -300,7 +301,33 @@ RETURNING id, session, payload, attempts, priority
 	if err := json.Unmarshal([]byte(payload), &item.Event); err != nil {
 		return assistant.InboundQueueItem{}, false, fmt.Errorf("decode inbound event %q: %w", item.ID, err)
 	}
+	if enqueuedAt > 0 {
+		item.EnqueuedAt = time.Unix(0, enqueuedAt)
+	}
 	return item, true, nil
+}
+
+// InboundSessionHasNewerPending 看同一会话里在这条之后还有没有等着处理的消息。
+func (s *SQLiteStore) InboundSessionHasNewerPending(ctx context.Context, item assistant.InboundQueueItem) (bool, error) {
+	defer s.observeStorage(ctx, "InboundSessionHasNewerPending", "read")()
+	if s == nil || s.db == nil {
+		return false, errors.New("check newer pending inbound event: sqlite store is not configured")
+	}
+	if strings.TrimSpace(item.Session) == "" {
+		return false, nil
+	}
+	var exists int
+	err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM inbound_events
+  WHERE session = ? AND status = ? AND id != ?
+    AND (event_time > ? OR (event_time = ? AND created_at > ?))
+)
+`, item.Session, inboundStatusPending, item.ID, item.Event.Time, item.Event.Time, item.EnqueuedAt.UnixNano()).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check newer pending inbound event: %w", err)
+	}
+	return exists == 1, nil
 }
 
 func inboundPriorityValue(values []int) int {

@@ -252,6 +252,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "主动回复生成后未通过准确度审核，已保持沉默", false
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
+	case "merged_into_backlog_turn":
+		return "not_replied", "消息在队列里积压，已补入上下文历史，交给同会话后面的消息合并成一轮回复", false
 	case "ignored_stale":
 		return "not_replied", "消息早于本次离线恢复窗口（按离线时长并额外覆盖 30 分钟，最长 24 小时），为避免补发过期回复而忽略", false
 	case "ignored_user_blocked":
@@ -290,48 +292,51 @@ type Runtime struct {
 	cfg              BotConfig
 	profileConfigs   map[string]BotConfig
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
-	relayPairs                []MessageRelayPair
-	channel                   Channel
-	bridge                    *NoneBotBridge
-	plugins                   *PluginManager
-	llmStore                  LLMProfileStore
-	modelLister               LLMModelLister
-	appLogs                   applog.Writer
-	messageStore              MessageHistoryStore
-	inboundStore              InboundEventStore
-	inboundFailedAt           time.Time
-	userMemory                UserMemoryStore
-	structuredMemory          StructuredMemoryStore
-	threadStates              ThreadStateStore
-	oneBotRequests            OneBotRequestStore
-	notebook                  NotebookStore
-	worldBook                 WorldBookStore
-	expressionStyles          ExpressionStyleStore
-	moodMu                    sync.Mutex
-	moods                     map[string]*moodState
-	pokeMu                    sync.Mutex
-	pokeLastReply             map[string]time.Time
-	buildInfo                 BuildInfo
-	releaseStatus             ReleaseStatusProvider
-	reminders                 ReminderStore
-	codingJobsOnce            sync.Once
-	codingJobRegistry         *codingJobRegistry
-	groupConfigs              GroupConfigStore
-	configSaver               ConfigSaver
-	replySuppressions         ReplySuppressionStore
-	localMedia                LocalMediaSharer
-	llmFactory                LLMProviderFactory
-	llmCfgFactory             LLMProviderConfigFactory
-	llmRegistry               *llm.ProviderRegistry
-	llmReuseEpoch             uint64
-	rssJudgments              sharedResultCache[rssJudgeDecision]
-	replyInterruptMu          sync.Mutex
-	semanticReplyMu           sync.Mutex
-	semanticReplies           map[string]*semanticReplyGate
-	recalledInbound           map[string]time.Time
-	latestDirectedInbound     map[string]directedInboundMark
-	directReplySeq            uint64
-	activeDirectReplies       map[string]*activeDirectReply
+	relayPairs            []MessageRelayPair
+	channel               Channel
+	bridge                *NoneBotBridge
+	plugins               *PluginManager
+	llmStore              LLMProfileStore
+	modelLister           LLMModelLister
+	appLogs               applog.Writer
+	messageStore          MessageHistoryStore
+	inboundStore          InboundEventStore
+	inboundFailedAt       time.Time
+	userMemory            UserMemoryStore
+	structuredMemory      StructuredMemoryStore
+	threadStates          ThreadStateStore
+	oneBotRequests        OneBotRequestStore
+	notebook              NotebookStore
+	worldBook             WorldBookStore
+	expressionStyles      ExpressionStyleStore
+	moodMu                sync.Mutex
+	moods                 map[string]*moodState
+	pokeMu                sync.Mutex
+	pokeLastReply         map[string]time.Time
+	buildInfo             BuildInfo
+	releaseStatus         ReleaseStatusProvider
+	reminders             ReminderStore
+	codingJobsOnce        sync.Once
+	codingJobRegistry     *codingJobRegistry
+	groupConfigs          GroupConfigStore
+	configSaver           ConfigSaver
+	replySuppressions     ReplySuppressionStore
+	localMedia            LocalMediaSharer
+	llmFactory            LLMProviderFactory
+	llmCfgFactory         LLMProviderConfigFactory
+	llmRegistry           *llm.ProviderRegistry
+	llmReuseEpoch         uint64
+	rssJudgments          sharedResultCache[rssJudgeDecision]
+	replyInterruptMu      sync.Mutex
+	semanticReplyMu       sync.Mutex
+	semanticReplies       map[string]*semanticReplyGate
+	recalledInbound       map[string]time.Time
+	latestDirectedInbound map[string]directedInboundMark
+	directReplySeq        uint64
+	activeDirectReplies   map[string]*activeDirectReply
+	// backlogMessages 按会话暂存在队列里积压、交给后面消息合并作答的消息。
+	backlogMu                 sync.Mutex
+	backlogMessages           map[string][]backlogMessage
 	cancel                    context.CancelFunc
 	runCtx                    context.Context
 	running                   bool
@@ -1784,6 +1789,26 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
 	}
+	// 队列积压：消息已经 remember 进历史、做过表达学习，这里补上长期记忆和用户画像，登记进
+	// 积压包后就收住，跳过后面所有花模型 token 的环节，由同会话后面那条一起接话。
+	// 判断和登记挨在一起：判断时后面那条还在排队，登记完它才可能来取，积压包不会落空。
+	if event.backlogProbe != nil && r.inboundBacklogShouldHandOver(ctx, *event.backlogProbe, now) {
+		r.enqueueEventMemory(event, memoryEventText(event))
+		if profile, stored := r.updateUserMemory(event, 0); stored {
+			event.userProfile = profile
+			event.userProfileLoaded = true
+		}
+		r.holdBacklogMessage(event, text, blocked, now)
+		event.routingReason = "消息在队列里积压，已补入上下文历史，交给同会话后面的消息合并成一轮回复"
+		r.record(r.decisionEventRecord(event, text, "merged_into_backlog_turn"))
+		return event, text, false, "merged_into_backlog_turn"
+	}
+	// 前面积压下来的消息在这里和当前这条合并。有直接触发的，回复对象可能换成积压包里
+	// 最新那条触发消息，后面的等级、响应限制等检查都对换过之后的回复对象做。
+	if held := r.takeBacklogMessages(event, now); len(held) > 0 {
+		event, text = r.mergeBacklogMessages(event, text, held)
+		restriction, blocked = r.activeReplySuppression(event, now)
+	}
 	history := r.contextHistory(event)
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
@@ -1841,14 +1866,32 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
 	}
-	if !handled && considerProactive {
+	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
+	if considerProactive {
+		proactiveCandidates = append(proactiveCandidates, proactiveReplyCandidate{Event: event, Text: text})
+	}
+	if !handled && len(proactiveCandidates) > 0 {
 		// Judge each candidate immediately. The semantic router already receives
 		// recent group context, so a debounce batch only adds latency and leaves the
 		// durable inbound outcome unresolved.
 		r.cancelProactiveReplyBatch(event)
-		event, text, _, handled = r.routeProactiveReplyBatch(ctx, []proactiveReplyCandidate{{Event: event, Text: text}})
-		if handled {
+		routed, routedText, turn, allowed := r.routeProactiveReplyBatch(ctx, proactiveCandidates)
+		if allowed && routed.MessageID != event.MessageID {
+			// 路由挑中的是积压包里的消息，它进积压包时还没做过响应限制检查。
+			if routedRestriction, routedBlocked := r.activeReplySuppression(routed, time.Now()); routedBlocked {
+				r.recordReplySuppressionBlocked(routed, routedRestriction)
+				allowed = false
+				routed.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
+			}
+		}
+		if allowed {
+			event, text, handled = routed, routedText, true
 			successOutcome = "replied_proactive"
+			if len(proactiveCandidates) > 1 {
+				event.backlogTurn = backlogRoutedTurn(proactiveCandidates, turn, event.MessageID)
+			}
+		} else {
+			event.routingReason = routed.routingReason
 		}
 	}
 	if !handled && strings.TrimSpace(event.routingReason) == "" {
@@ -3940,7 +3983,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				})
 			}
 		}
-		turnCandidates := append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...)
+		turnCandidates := r.replyTurnCandidates(ctx)
 		turnMessageIDs := make(map[string]bool, len(turnCandidates))
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
@@ -4073,13 +4116,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 留在各自的事件里没人取。于是「先发一张图、再补一张图问哪个好」这种一轮两图
 	// 的场景，模型只收到根消息那一张，而正文里明明写着两张——它既答不准，也说不清
 	// 该处理哪一张。媒体合并用入站那条同款规则去重，来源消息号照样标在段上。
-	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(r.directReplySupplements(ctx)))
+	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(append(r.directReplySupplements(ctx), backlogReplyTurnFromContext(ctx)...)))
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
 		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
 		WakeGuidance: cfg.PromptWakeOnlyText,
 		TriggerWords: cfg.GroupTriggers,
 	})
 	currentText = updatedReplyRequestText(currentText, r.pendingReplyRequestContexts(r.directReplySupplements(ctx), event))
+	currentText = backlogReplyRequestText(currentText, event, backlogReplyTurnFromContext(ctx))
 	if directAgentDecision {
 		// 只为「确实没取到原图」的引用来源补一句文字摘要；原图已经附上的不再重复描述，
 		// 否则模型会同时看到图和一句「尚无缓存描述」，自相矛盾。
@@ -4287,7 +4331,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if semanticGate != nil {
 		_, acknowledged, _ := r.deliveryEvidence(event, sentMessageIDs)
 		if acknowledged {
-			supplements := r.pendingReplyRequestContexts(append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...), event)
+			supplements := r.pendingReplyRequestContexts(r.replyTurnCandidates(ctx), event)
 			semanticGate.rememberRequest(requestContextForReply(event, cleanText), supplements, semanticText)
 		}
 	}
@@ -10296,10 +10340,18 @@ func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
 	event.replyHistoryLoaded = false
 	event.userProfile = UserMemoryProfile{}
 	event.userProfileLoaded = false
+	event.backlogProbe = nil
+	event.backlogTurn = nil
+	event.backlogProactive = nil
+	event.backlogHeld = false
 	return event
 }
 
 func (r *Runtime) updateUserMemory(event MessageEvent, favorabilityDelta int) (UserMemoryProfile, bool) {
+	// 从积压包里取出来当回复对象的消息，进包时已经记过这一次互动，别再数一遍。
+	if event.backlogHeld && favorabilityDelta == 0 && event.userProfileLoaded {
+		return event.userProfile, true
+	}
 	return r.writeUserMemory(event, UserMemoryUpdate{FavorabilityDelta: favorabilityDelta})
 }
 
