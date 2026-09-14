@@ -641,7 +641,7 @@ func TestReplySuppressionPersistsAcrossRuntimeRestart(t *testing.T) {
 func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	loopVerdict := func(confidence string, reason string) string {
 		return `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,` +
-			`"reply_loop_automated_ai":true,"reply_loop_meaningless":false,` +
+			`"reply_loop_automated_ai":true,"reply_loop_meaningless":true,` +
 			`"reply_loop_confidence":` + confidence + `,"reply_loop_reason":"` + reason + `"}`
 	}
 	provider := &sequenceLLMProvider{
@@ -679,7 +679,7 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	if !active {
 		t.Fatal("bot reply loop did not activate response suppression")
 	}
-	if !strings.Contains(item.Reason, "累计 3 次高置信度自动 AI 回复") {
+	if !strings.Contains(item.Reason, "累计 3 次高置信度空转") {
 		t.Fatalf("suppression reason = %q", item.Reason)
 	}
 	// 三次审核加一次暂停通知：空转判断没有单独占用调用，是跟着发送前审核走的。
@@ -729,7 +729,7 @@ func TestBotReplyLoopJudgementCostsNoExtraCall(t *testing.T) {
 // 而解除暂停的命令恰恰要主人发。
 func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
 	loopVerdict := `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,` +
-		`"reply_loop_automated_ai":true,"reply_loop_meaningless":false,"reply_loop_confidence":0.98,"reply_loop_reason":"一直在空转"}`
+		`"reply_loop_automated_ai":true,"reply_loop_meaningless":true,"reply_loop_confidence":0.98,"reply_loop_reason":"一直在空转"}`
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{auditReplies: []string{loopVerdict, loopVerdict, loopVerdict, loopVerdict}}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -841,8 +841,8 @@ func TestBotReplyLoopDoesNotCountHumanClassifiedMessages(t *testing.T) {
 func TestBotReplyLoopThresholdAndWindowBoundaries(t *testing.T) {
 	t0 := time.Date(2026, time.July, 18, 9, 0, 0, 0, time.UTC)
 	candidate := botReplyLoopCandidate{TriggerKind: "quote", QuotedMessageID: "bot-message"}
-	counted := botReplyLoopAIDecision{AutomatedAIReply: true, Confidence: botReplyLoopAIConfidenceThreshold, Reason: "high confidence"}
-	belowThreshold := botReplyLoopAIDecision{AutomatedAIReply: true, Confidence: botReplyLoopAIConfidenceThreshold - 0.0001, Reason: "below threshold"}
+	counted := botReplyLoopAIDecision{MeaninglessLoop: true, Confidence: botReplyLoopAIConfidenceThreshold, Reason: "high confidence"}
+	belowThreshold := botReplyLoopAIDecision{MeaninglessLoop: true, Confidence: botReplyLoopAIConfidenceThreshold - 0.0001, Reason: "below threshold"}
 	event := func(messageID string) MessageEvent {
 		return MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: messageID}
 	}
@@ -955,14 +955,19 @@ func TestBotReplyLoopNeverClassifiesOwner(t *testing.T) {
 }
 
 func TestParseReplyLoopVerdictFromAudit(t *testing.T) {
-	audit, ok := parseProactiveReplyQualityDecision("```json\n{\"send_confidence\":0.9,\"account_safe\":true,\"reply_loop_automated_ai\":true,\"reply_loop_confidence\":0.95,\"reply_loop_reason\":\"模板化自动应答\"}\n```")
+	audit, ok := parseProactiveReplyQualityDecision("```json\n{\"send_confidence\":0.9,\"account_safe\":true,\"reply_loop_purposeless\":true,\"reply_loop_confidence\":0.95,\"reply_loop_reason\":\"漫无目的地续写剧情\"}\n```")
 	decision := audit.loopDecision()
-	if !ok || !decision.counts() || decision.Reason == "" {
+	if !ok || !decision.PurposelessLoop || !decision.counts() || decision.Reason == "" {
 		t.Fatalf("decision=%#v ok=%v", decision, ok)
 	}
-	audit, ok = parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_automated_ai":true,"reply_loop_confidence":0.89,"reply_loop_reason":"证据不足"}`)
+	audit, ok = parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_purposeless":true,"reply_loop_confidence":0.89,"reply_loop_reason":"证据不足"}`)
 	if decision = audit.loopDecision(); !ok || decision.counts() {
 		t.Fatalf("low-confidence decision=%#v ok=%v", decision, ok)
+	}
+	// 只判出对方是自动 AI、却在正经做事，不算空转：下棋、做题的 AI 不该被停掉。
+	audit, ok = parseProactiveReplyQualityDecision(`{"send_confidence":0.9,"account_safe":true,"reply_loop_automated_ai":true,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.98,"reply_loop_reason":"对方是 AI，在报棋步"}`)
+	if decision = audit.loopDecision(); !ok || !decision.AutomatedAIReply || decision.counts() {
+		t.Fatalf("automated-but-purposeful decision=%#v ok=%v", decision, ok)
 	}
 }
 

@@ -252,6 +252,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "主动回复生成后未通过准确度审核，已保持沉默", false
 	case "ignored_video":
 		return "not_replied", "消息只有视频内容，当前没有可直接回答的文字或图片请求", false
+	case "ignored_reply_damping":
+		return "not_replied", "近期回复该账号过于频繁，已降低回复欲望，这条不再回复", false
 	case "merged_into_backlog_turn":
 		return "not_replied", "消息在队列里积压，已补入上下文历史，交给同会话后面的消息合并成一轮回复", false
 	case "ignored_stale":
@@ -401,6 +403,7 @@ type Runtime struct {
 	replyRefusalMu        sync.Mutex
 	replyRefusalByUser    map[string]replyRefusalState
 	botReplyLoopMu        sync.Mutex
+	replyDamping          replyDamping
 	botReplyLoopByKey     map[string]botReplyLoopState
 	// privateClosingBySession 记录每个私聊会话已经互相道别了几轮。只在内存里：
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
@@ -1841,6 +1844,11 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		return finishWithoutReply("ignored_video")
 	}
 	if r.requiresTelegramBotMentionJudgment(event) {
+		if reason, skip := r.replyDampingSkipsUnnamed(event, text, now); skip {
+			event.routingReason = reason
+			r.record(r.decisionEventRecord(event, text, "ignored_reply_damping"))
+			return finishWithoutReply("ignored_reply_damping")
+		}
 		if !r.markedBotMessageAddressesSelf(ctx, event, text) {
 			event.routingReason = "发送者已识别或手动标记为机器人，未确认在向本机接话，已自动抑制"
 			r.record(r.decisionEventRecord(event, text, "ignored_bot_message"))
@@ -1865,6 +1873,10 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	considerProactive, proactiveSkipReason := false, ""
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
+		// 已经回这个账号回得很密了，主动接话直接放掉，连路由模型也不必调。
+		if verdict := r.replyDampingJudge(event, text, true, time.Now()); considerProactive && verdict.Skip {
+			considerProactive, proactiveSkipReason = false, verdict.Reason
+		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
 	if considerProactive {
@@ -1918,6 +1930,15 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		}
 		r.record(r.decisionEventRecord(event, text, ignoredOutcome))
 		return finishWithoutReply(ignoredOutcome)
+	}
+	// 回复对象定下来之后再按回复密度过一遍：路由挑中的、积压合并换过来的都要算在内。
+	// 只管聊天回复，链接解析和插件指令不受影响。
+	if successOutcome == "replied_proactive" || r.shouldHandleChat(event, text) || explicitlyRepliesToBot(event, r.effectiveConfigForEvent(event)) {
+		if verdict := r.replyDampingJudge(event, text, successOutcome == "replied_proactive", time.Now()); verdict.Skip {
+			event.routingReason = verdict.Reason
+			r.record(r.decisionEventRecord(event, text, "ignored_reply_damping"))
+			return finishWithoutReply("ignored_reply_damping")
+		}
 	}
 	return event, text, true, successOutcome
 }

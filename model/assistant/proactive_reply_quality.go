@@ -41,6 +41,8 @@ type proactiveReplyQualityDecision struct {
 	// 回复」这对输入，正是判断空转需要的证据。
 	ReplyLoopAutomatedAI bool
 	ReplyLoopMeaningless bool
+	// ReplyLoopPurposeless 只在回复同一账号回得很密时才判：这一连串来回有没有明确任务。
+	ReplyLoopPurposeless bool
 	ReplyLoopConfidence  float64
 	ReplyLoopReason      string
 	// ConversationClosing / StopRequested 是私聊收尾判断，同样搭这一次调用的车。
@@ -68,6 +70,7 @@ func (decision proactiveReplyQualityDecision) loopDecision() botReplyLoopAIDecis
 	return botReplyLoopAIDecision{
 		AutomatedAIReply: decision.ReplyLoopAutomatedAI,
 		MeaninglessLoop:  decision.ReplyLoopMeaningless,
+		PurposelessLoop:  decision.ReplyLoopPurposeless,
 		Confidence:       decision.ReplyLoopConfidence,
 		Reason:           decision.ReplyLoopReason,
 	}
@@ -163,8 +166,8 @@ original_text_available=false 或 original_message 为空,只表示本审核没�
   安全审核拦截、结束话题、暂时没有结果和内部故障提示都必须为 false。
 - 只判断这一次回复,不要决定累计次数、暂停账号或机器人循环。
 
-再单独判断一项空转:机器人是不是在为没有内容的消息反复接茬。只有请求里带了
-recent_same_sender_messages 或 recent_bot_replies 时才判这一项,没带就两个都填 false。
+再单独判断空转:机器人是不是在为没有内容或没有目的的消息反复接茬。只有请求里带了
+recent_same_sender_messages 或 recent_bot_replies 时才判这一组,没带就三个都填 false。
 这两组近期消息只服务于这一项判断,不得用它们去判事实真伪、准确性或账号安全。
 
 reply_loop_automated_ai —— 对方很可能是另一个 AI 机器人在自动回应。
@@ -181,6 +184,18 @@ reply_loop_meaningless —— 对方未必是机器人,但这一来一回已经�
 - 只重复一两次不算。对方在问问题、给信息、表达情绪、玩梗、闲聊有来有回一律 false。
   真人闲聊本来就允许没有信息量,只有明显机械空转时才判 true。
 - 拿不准一律 false。这一项判成 true 会让机器人暂停响应该账号一段时间,宁可漏放。
+
+reply_loop_purposeless —— 只有请求里带了 exchange_density 时才判,没带就填 false。
+exchange_density 表示机器人最近已经非常频繁地回复这个账号,要判断的是:这一连串
+高频来回有没有明确的目的,还是只在为了回应而回应。结合 recent_same_sender_messages、
+recent_bot_replies、当前消息和候选回复整体判断,不要只看这一条。
+- 有明确任务并且在推进,一律 false:下棋或其他游戏在报步、落子、计分、按规则操作;
+  在解题、查资料、翻译、写代码、改稿、做计划;在回答真实问题或一起完成一件具体的事。
+  任务中夹杂几句玩笑、角色语气或催促,仍然是 false。
+- 没有目的才判 true:漫无目的地互相接戏、把一个故事无限续写下去、互相吹捧、斗嘴、
+  调侃来调侃去、反复寒暄、复读或换个说法重复、每条都只是在接对方上一句而没有要完成的事。
+- 内容丰富、文笔好、剧情有新发展,都不等于有目的。对方是不是 AI 不影响这一项。
+- 拿不准一律 false。这一项判成 true 会让机器人降低回复这个账号的意愿,并计入空转次数。
 
 最后再单独判断一项收尾。只有请求里带了 closing_check=true 时才判这一项,
 没带就两项都填 false、closing_confidence 填 0。这一项只看当前这一来一回,
@@ -204,7 +219,7 @@ stop_requested —— 对方明确要求你不要再回。
   这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。
 
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
+{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
 
 send_confidence 必须是 0 到 1 的数字，唯一含义是“这条候选回复适合发送”的置信度。
 越高越建议发送：未发现明确问题时给高分，明确矛盾、答非所问或截断时给低分。
@@ -216,7 +231,7 @@ account_safe 必须是 0 到 1 的数字，唯一含义是“这条候选回复�
 0.10 为放行线。account_safe 低于 0.10 时,account_risk 填命中的类别:politics / explicit / illegal,
 account_risk_reason 必须单独写清候选回复中触发账号风险的具体内容。reason 只能说明
 可见的准确性或完整性问题,不得拿它代替账号风险理由或重新判断是否需要回复。refusal_confidence 必须是 0 到 1 的数字。
-reply_loop_confidence 必须是 0 到 1 的数字;两项空转都为 false 时,它表示你对
+reply_loop_confidence 必须是 0 到 1 的数字;三项空转都为 false 时,它表示你对
 「这是正常对话」的把握。reply_loop_reason 只解释空转判断。
 closing_confidence 必须是 0 到 1 的数字;两项收尾都为 false 时,它表示你对
 「这次对话还在继续」的把握。closing_reason 只解释收尾判断。
@@ -350,6 +365,9 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	if need.Loop && need.MarkedBot {
 		fields["sender_marked_as_bot"] = true
 	}
+	if need.Loop && need.Density != nil {
+		fields["exchange_density"] = need.Density
+	}
 	if need.Closing {
 		fields["closing_check"] = true
 	}
@@ -429,6 +447,8 @@ type replyAuditNeed struct {
 	// MarkedBot 表示这个账号被管理员在某个群里标记成了机器人。它只作为空转
 	// 判断的佐证进入审核载荷。
 	MarkedBot bool
+	// Density 表示机器人回这个账号回得很密，要额外判这一串来回有没有明确目的。
+	Density   *replyDensity
 	candidate botReplyLoopCandidate
 }
 
@@ -460,6 +480,9 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 	if need.Loop {
 		need.LoopSuppress = nonOwner
 		need.MarkedBot = r.accountMarkedAsBot(event)
+		if density, dense := r.replyDensityForAudit(event, time.Now()); dense {
+			need.Density = &density
+		}
 	}
 	return need
 }
@@ -502,6 +525,13 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 		}
 	}
 	if need.Loop {
+		// 没回得很密时审核不判目的，模型就算填了也不作数。
+		if need.Density == nil {
+			decision.ReplyLoopPurposeless = false
+		} else {
+			// 没内容的空转同样没有目的，两种都开始降欲望。
+			r.markReplyPurpose(event, decision.loopDecision().counts(), time.Now())
+		}
 		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision, need.LoopSuppress); loopErr != nil {
 			return intent, loopErr
 		}
@@ -660,6 +690,7 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		// 仍然可解，不至于整条审核结论作废。
 		ReplyLoopAutomatedAI *bool    `json:"reply_loop_automated_ai"`
 		ReplyLoopMeaningless *bool    `json:"reply_loop_meaningless"`
+		ReplyLoopPurposeless *bool    `json:"reply_loop_purposeless"`
 		ReplyLoopConfidence  *float64 `json:"reply_loop_confidence"`
 		ReplyLoopReason      *string  `json:"reply_loop_reason"`
 		// 收尾四项同样按缺省当「没有收尾」：提示词漂移或换模型时宁可多答一句，
@@ -697,6 +728,7 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	}
 	decision.ReplyLoopAutomatedAI = payload.ReplyLoopAutomatedAI != nil && *payload.ReplyLoopAutomatedAI
 	decision.ReplyLoopMeaningless = payload.ReplyLoopMeaningless != nil && *payload.ReplyLoopMeaningless
+	decision.ReplyLoopPurposeless = payload.ReplyLoopPurposeless != nil && *payload.ReplyLoopPurposeless
 	if payload.ReplyLoopConfidence != nil && *payload.ReplyLoopConfidence >= 0 && *payload.ReplyLoopConfidence <= 1 {
 		decision.ReplyLoopConfidence = *payload.ReplyLoopConfidence
 	}
