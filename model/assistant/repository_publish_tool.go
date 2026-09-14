@@ -95,19 +95,27 @@ type repositoryIssueResult struct {
 	CommentURL       string                        `json:"comment_url,omitempty"`
 	// IssueBody 和 Comments 只在 get 返回：update 是整段覆盖，模型不先看一眼原文
 	// 就没法安全地改；以前没有任何操作能把正文和评论读回来。
-	IssueBody            string                       `json:"issue_body,omitempty"`
-	IssueBodyTruncated   bool                         `json:"issue_body_truncated,omitempty"`
-	Comments             []repositoryIssueCommentView `json:"comments,omitempty"`
-	CommentsTruncated    bool                         `json:"comments_truncated,omitempty"`
-	Fingerprint          string                       `json:"fingerprint,omitempty"`
-	Idempotent           bool                         `json:"idempotent,omitempty"`
-	Reconciled           bool                         `json:"reconciled,omitempty"`
-	RequiresConfirmation bool                         `json:"requires_confirmation,omitempty"`
-	ConfirmationToken    string                       `json:"confirmation_token,omitempty"`
-	RequiresApproval     bool                         `json:"requires_approval,omitempty"`
-	Draft                *repositoryIssueDraftView    `json:"draft,omitempty"`
-	Drafts               []repositoryIssueDraftView   `json:"drafts,omitempty"`
-	Redactions           int                          `json:"redactions,omitempty"`
+	IssueBody          string                       `json:"issue_body,omitempty"`
+	IssueBodyTruncated bool                         `json:"issue_body_truncated,omitempty"`
+	Comments           []repositoryIssueCommentView `json:"comments,omitempty"`
+	CommentsTruncated  bool                         `json:"comments_truncated,omitempty"`
+	// PullRequest、Reviews 只在 get 读到 PR 时返回；Files 只在 pull_files 返回。
+	PullRequest          *repositoryPullRequestView        `json:"pull_request,omitempty"`
+	Reviews              []repositoryPullRequestReviewView `json:"reviews,omitempty"`
+	ReviewsTruncated     bool                              `json:"reviews_truncated,omitempty"`
+	Files                []repositoryPullRequestFileView   `json:"files,omitempty"`
+	FilesTruncated       bool                              `json:"files_truncated,omitempty"`
+	ReviewURL            string                            `json:"review_url,omitempty"`
+	File                 *repositoryFileView               `json:"file,omitempty"`
+	Fingerprint          string                            `json:"fingerprint,omitempty"`
+	Idempotent           bool                              `json:"idempotent,omitempty"`
+	Reconciled           bool                              `json:"reconciled,omitempty"`
+	RequiresConfirmation bool                              `json:"requires_confirmation,omitempty"`
+	ConfirmationToken    string                            `json:"confirmation_token,omitempty"`
+	RequiresApproval     bool                              `json:"requires_approval,omitempty"`
+	Draft                *repositoryIssueDraftView         `json:"draft,omitempty"`
+	Drafts               []repositoryIssueDraftView        `json:"drafts,omitempty"`
+	Redactions           int                               `json:"redactions,omitempty"`
 }
 
 type RepositoryIssueDraft struct {
@@ -156,14 +164,16 @@ type repositoryIssueDraftView struct {
 	Title        string `json:"title"`
 	Body         string `json:"body,omitempty"`
 	// AppendBody 是 update 草稿里「追加到正文末尾」的那段，和整段覆盖的 Body 分开。
-	AppendBody    string   `json:"append_body,omitempty"`
-	Labels        []string `json:"labels,omitempty"`
-	Assignees     []string `json:"assignees,omitempty"`
-	Milestone     any      `json:"milestone,omitempty"`
-	State         string   `json:"state,omitempty"`
-	RequesterID   string   `json:"requester_id"`
-	RequesterName string   `json:"requester_name,omitempty"`
-	Status        string   `json:"status"`
+	AppendBody string `json:"append_body,omitempty"`
+	// ReviewComments 是 review 草稿里的行内评论，确认前要让人看到每条落在哪个文件哪一行。
+	ReviewComments []repositoryPullRequestReviewComment `json:"review_comments,omitempty"`
+	Labels         []string                             `json:"labels,omitempty"`
+	Assignees      []string                             `json:"assignees,omitempty"`
+	Milestone      any                                  `json:"milestone,omitempty"`
+	State          string                               `json:"state,omitempty"`
+	RequesterID    string                               `json:"requester_id"`
+	RequesterName  string                               `json:"requester_name,omitempty"`
+	Status         string                               `json:"status"`
 	// ConfirmationCode 是这份草稿的确认码，只对还等着审批的草稿给。草稿列表原先只
 	// 有 id，模型要自己去截前六位才能报出确认码——那是让它做字符串运算，不可靠；
 	// 报错了用户照着打也过不了校验。直接给出来。
@@ -252,7 +262,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues。search 按关键词找，get 读回某个 Issue 的标题、正文和最近评论——要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create 和 comment 的内容由你根据当前需求整理；只有用户在消息里逐字写出内容时才会立即写入 GitHub，你自己组织措辞时一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -273,20 +283,36 @@ func (t *dianaRepositoryIssuesTool) Description() string {
 // 的字段说明里——这是最容易踩的一条，放在参数旁边比埋在描述中段更显眼。
 func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。",
-			"search", "get", "create", "update", "comment", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
-		"repository":  toolStringParam("目标仓库，写成 owner/repo。approve、cancel_draft、list_drafts 不需要。"),
-		"number":      toolIntParam("目标 Issue 编号；get 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
-		"numbers":     toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
-		"query":       toolStringParam("search 专用：检索关键词。"),
+		"operation": toolEnumParam("要执行的操作。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。",
+			"search", "get", "pull_files", "read_file", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
+		"repository": toolStringParam("目标仓库，写成 owner/repo。approve、cancel_draft、list_drafts 不需要。"),
+		"number":     toolIntParam("目标 Issue 或 PR 编号；get、pull_files、review 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
+		"numbers":    toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
+		"query":      toolStringParam("search 专用：检索关键词。"),
+		"kind":       toolEnumParam("search 专用：搜 Issue（默认）、PR 还是两者都搜。", "issue", "pull_request", "all"),
+		"path":       toolStringParam("read_file 专用：仓库内文件路径。"),
+		"ref":        toolStringParam("read_file 可选：分支、标签或提交；传了 number 且不传 ref 时读 PR head。"),
+		"start_line": toolIntParam("read_file 可选：从第几行开始读，默认 1。", 1, 10_000_000),
+		"end_line":   toolIntParam("read_file 可选：读到第几行，默认往后 "+itoa(repositoryFileDefaultLines)+" 行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
+		"paths":      toolStringArrayParam("pull_files 专用：只读这些文件或目录的改动，patch 给得更完整；不传则列出全部文件、每个文件只给开头一段 patch。"),
+		"comments": map[string]any{
+			"type":        "array",
+			"description": "review 专用：行内评论，最多 " + itoa(repositoryPullRequestReviewCommentLimit) + " 条。line 必须是 pull_files 的 patch 里出现过的行号；side 为 RIGHT 指新代码（默认），LEFT 指被删掉的旧代码。",
+			"items": toolObjectSchema([]string{"path", "line", "body"}, map[string]any{
+				"path": toolStringParam("文件路径，和 pull_files 返回的 path 一致。"),
+				"line": toolIntParam("评论落在的行号。", 1, 1_000_000),
+				"side": toolEnumParam("RIGHT 新代码，LEFT 旧代码。", "RIGHT", "LEFT"),
+				"body": toolStringParam("这条行内评论的内容。"),
+			}),
+		},
 		"title":       toolStringParam("create 必填、update 可选：Issue 标题，最多 " + itoa(repositoryIssueTitleLimit) + " 字符。"),
-		"body":        toolStringParam("create 的正文、comment 的评论内容；update 时整段覆盖原正文，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。"),
+		"body":        toolStringParam("create 的正文、comment 的评论内容、review 的总体意见；update 时整段覆盖原正文，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。"),
 		"append_body": toolStringParam("update 专用：追加到现有正文末尾的内容，原正文保持不动；给已有 Issue 补充信息（复现版本、补图说明）用它，不要用 body 重写整段。"),
 		"labels":      toolStringArrayParam("要设置的标签；传空数组表示清空。"),
 		"assignees":   toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
 		"milestone":   toolStringParam("要设置的里程碑；传 null 表示清空。"),
 		"user_confirmed_write": toolBoolParam("确认当前这条用户消息就是在要求执行这次写入。写操作必填 true。" +
-			"写操作不会直接落到 GitHub：create/update/comment/close/reopen 都先存成待审批草稿并返回确认码，" +
+			"写操作不会直接落到 GitHub：create/update/comment/review/close/reopen 都先存成待审批草稿并返回确认码，" +
 			"把草稿内容和确认码复述给用户，等有权限的人原样打出确认码后再用 approve 提交。" +
 			"后端不再按用户消息的措辞核对仓库或编号，只认确认码；对多个 Issue 做同样的改动用 numbers 合成一份草稿。"),
 		"operation_id":       toolStringParam("幂等标识：同一次写入重试时传相同值，避免重复发布。"),
@@ -299,10 +325,10 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
-		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、get、create、update、comment、close、reopen、approve、cancel_draft 或 list_drafts。"))
+		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、get、pull_files、read_file、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
 	}
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
-		return t.finish(ctx, result.fail("plugin_unavailable", "仓库 Issue 发布插件未正确配置。"))
+		return t.finish(ctx, result.fail("plugin_unavailable", "GitHub Issue 与 PR 插件未正确配置。"))
 	}
 	if operation == "approve" {
 		return t.finish(ctx, t.approveDraft(ctx, input))
@@ -333,7 +359,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 		result.RequestedNumber = repositoryIssueNumber(input)
 		result.RequestedNumbers = repositoryIssueBatchTargets(input)
 	}
-	if operation == "search" || operation == "get" {
+	if operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file" {
 		if !owner {
 			if code, message := t.validateWriteAccess(repository, false); code != "" {
 				return t.finish(ctx, result.fail(code, message))
@@ -341,6 +367,12 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 		}
 		if operation == "get" {
 			return t.finish(ctx, t.get(ctx, repository, input))
+		}
+		if operation == "pull_files" {
+			return t.finish(ctx, t.pullFiles(ctx, repository, input))
+		}
+		if operation == "read_file" {
+			return t.finish(ctx, t.readFile(ctx, repository, input))
 		}
 		return t.finish(ctx, t.search(ctx, repository, input))
 	}
@@ -363,6 +395,12 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 		return "create"
 	case "update", "update_issue", "edit":
 		return "update"
+	case "pull_files", "files", "diff", "pull_diff", "get_pull_files":
+		return "pull_files"
+	case "read_file", "file", "get_file", "file_content":
+		return "read_file"
+	case "review", "review_pull", "pull_review":
+		return "review"
 	case "comment", "comment_issue", "reply":
 		return "comment"
 	case "close", "closed":
@@ -413,7 +451,7 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 		return false, false, "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
 	}
 	if !allowed[key] {
-		return false, false, "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的全局白名单中。"
+		return false, false, "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的全局白名单中。"
 	}
 	return directAllowed, draftAllowed, "", ""
 }
@@ -542,7 +580,7 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner
 		return "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
 	}
 	if !allowed[strings.ToLower(repository)] {
-		return "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的精确写入白名单中。"
+		return "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的精确写入白名单中。"
 	}
 	if !owner {
 		legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
@@ -641,7 +679,7 @@ func repositoryPublishValidateEventAccess(event MessageEvent, repository string,
 		return "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
 	}
 	if !allowed[strings.ToLower(repository)] {
-		return "repository_not_allowed", "目标仓库不在“仓库 Issue 发布”插件的全局白名单中。"
+		return "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的全局白名单中。"
 	}
 	return "", ""
 }
@@ -791,7 +829,19 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	if state != "open" && state != "closed" && state != "all" {
 		return result.fail("invalid_input", "state 必须是 open、closed 或 all。")
 	}
-	searchQuery := "repo:" + repository + " is:issue " + query
+	kind := strings.ToLower(strings.TrimSpace(configToolString(input, "kind")))
+	typeQualifier := " is:issue "
+	switch kind {
+	case "", "issue":
+		kind = "issue"
+	case "pull_request", "pr", "pull":
+		kind, typeQualifier = "pull_request", " is:pr "
+	case "all":
+		typeQualifier = " "
+	default:
+		return result.fail("invalid_input", "kind 必须是 issue、pull_request 或 all。")
+	}
+	searchQuery := "repo:" + repository + typeQualifier + query
 	if state != "all" {
 		searchQuery += " is:" + state
 	}
@@ -804,10 +854,10 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	}
 	items := make([]repositoryIssueSummary, 0, len(payload.Items))
 	for _, item := range payload.Items {
-		if item.PullRequest != nil {
+		if (kind == "issue" && item.PullRequest != nil) || (kind == "pull_request" && item.PullRequest == nil) {
 			continue
 		}
-		if !validRepositoryIssueCanonicalURL(item.HTMLURL, repository, "issues", item.Number) {
+		if !validRepositoryIssueCanonicalURL(item.HTMLURL, repository, repositoryIssueResource(item), item.Number) {
 			return result.fail("invalid_response", "GitHub 搜索返回了目标仓库之外的 Issue，结果已拒绝。")
 		}
 		items = append(items, repositoryIssueSummaryFromGitHub(item))
@@ -815,7 +865,8 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	result.OK = true
 	result.Outcome = "searched"
 	result.Items = items
-	result.Message = fmt.Sprintf("已在 %s 中找到 %d 个匹配 Issue。", repository, len(items))
+	label := map[string]string{"issue": "Issue", "pull_request": "Pull Request", "all": "Issue 或 Pull Request"}[kind]
+	result.Message = fmt.Sprintf("已在 %s 中找到 %d 个匹配的 %s。", repository, len(items), label)
 	return result
 }
 
@@ -877,11 +928,26 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	title, redactions := sanitizeRepositoryIssueText(configToolString(input, "title"), repositoryIssueTitleLimit, true)
 	body, bodyRedactions := sanitizeRepositoryIssueText(configToolString(input, "body"), repositoryIssueBodyLimit, false)
 	result.Redactions = redactions + bodyRedactions
-	if operation == "comment" {
+	var reviewComments []repositoryPullRequestReviewComment
+	if operation == "comment" || operation == "review" {
 		if body == "" {
+			if operation == "review" {
+				return result.fail("invalid_input", "review 草稿必须提供非空 body（总体意见）。")
+			}
 			return result.fail("invalid_input", "评论草稿必须提供非空 body。")
 		}
 		result.RequestedNumber = repositoryIssueNumber(input)
+		if operation == "review" {
+			if len(repositoryIssueBatchTargets(input)) > 0 {
+				return result.fail("invalid_input", "review 一次只能针对一个 PR，用 number。")
+			}
+			comments, commentRedactions, code, message := repositoryPullRequestReviewComments(input)
+			if code != "" {
+				return result.fail(code, message)
+			}
+			result.Redactions += commentRedactions
+			reviewComments = comments
+		}
 	} else if operation == "create" && title == "" {
 		return result.fail("invalid_input", "生成 Issue 草稿必须提供标题。")
 	}
@@ -946,6 +1012,9 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	}
 	if appendBody != "" {
 		draftInput["append_body"] = appendBody
+	}
+	if len(reviewComments) > 0 {
+		draftInput["comments"] = repositoryPullRequestReviewCommentsPayload(reviewComments)
 	}
 	// 单个目标仍然写 number，老草稿和执行路径都认它；多个目标才写 numbers。
 	if len(numbers) == 1 {
@@ -1055,7 +1124,7 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	// 执行草稿记录的那个操作，而不是一律当成 create：草稿现在也承载 update、comment
 	// 和开关状态。旧草稿没有 operation 字段，按 create 处理保持兼容。
 	operation := repositoryIssueDraftOperation(draft)
-	if operation != "create" && operation != "update" && operation != "comment" && operation != "close" && operation != "reopen" {
+	if operation != "create" && operation != "update" && operation != "comment" && operation != "review" && operation != "close" && operation != "reopen" {
 		return result.fail("invalid_operation", "草稿记录的操作无法执行。")
 	}
 	var executed repositoryIssueResult
@@ -1091,6 +1160,8 @@ func (t *dianaRepositoryIssuesTool) executeWrite(ctx context.Context, repository
 		return t.update(ctx, repository, input)
 	case "comment":
 		return t.comment(ctx, repository, input)
+	case "review":
+		return t.review(ctx, repository, input)
 	default:
 		return t.setState(ctx, repository, input, operation)
 	}
@@ -1417,11 +1488,12 @@ func repositoryIssueDraftViewFromDraft(draft repositoryIssueDraft) *repositoryIs
 		IssueTargets: repositoryIssueBatchTargets(draft.Input),
 		Title:        configToolString(draft.Input, "title"),
 		Body:         configToolString(draft.Input, "body"), Labels: labels,
-		AppendBody:  configToolString(draft.Input, "append_body"),
-		Assignees:   assignees,
-		Milestone:   draft.Input["milestone"],
-		State:       configToolString(draft.Input, "state"),
-		RequesterID: draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
+		AppendBody:     configToolString(draft.Input, "append_body"),
+		ReviewComments: repositoryPullRequestReviewCommentsForView(draft.Input),
+		Assignees:      assignees,
+		Milestone:      draft.Input["milestone"],
+		State:          configToolString(draft.Input, "state"),
+		RequesterID:    draft.RequesterID, RequesterName: draft.RequesterName, Status: draft.Status, CreatedAt: draft.CreatedAt,
 		// 只有待审批的草稿需要确认码：已提交和已取消的草稿再报一个码，只会让人以为
 		// 还能确认。
 		ConfirmationCode: confirmationCodeForPendingDraft(draft),
@@ -1636,11 +1708,11 @@ func (t *dianaRepositoryIssuesTool) get(ctx context.Context, repository string, 
 	if number <= 0 {
 		return result.fail("invalid_input", "get 必须提供有效的 Issue number。")
 	}
-	issue, apiErr := t.getIssue(ctx, repository, number)
+	issue, apiErr := t.getIssueOrPullRequest(ctx, repository, number)
 	if apiErr != nil {
 		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
-	if !validRepositoryIssueCanonicalURL(issue.HTMLURL, repository, "issues", issue.Number) {
+	if !validRepositoryIssueCanonicalURL(issue.HTMLURL, repository, repositoryIssueResource(issue), issue.Number) {
 		return result.fail("invalid_response", "GitHub 返回了目标仓库之外的 Issue，结果已拒绝。")
 	}
 	values := url.Values{"per_page": {strconv.Itoa(repositoryIssueGetCommentLimit + 1)}}
@@ -1666,6 +1738,12 @@ func (t *dianaRepositoryIssuesTool) get(ctx context.Context, repository string, 
 		result.Comments = append(result.Comments, view)
 	}
 	result.Message = fmt.Sprintf("已读取 %s#%d 的正文和 %d 条评论。", repository, number, len(result.Comments))
+	if issue.PullRequest != nil {
+		if apiErr := t.attachPullRequestDetails(ctx, repository, number, &result); apiErr != nil {
+			return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+		}
+		result.Message = fmt.Sprintf("已读取 Pull Request %s#%d 的描述、%d 条评论和 %d 条 review。这里没有代码改动，review 或评价代码前先用 pull_files 读 patch。", repository, number, len(result.Comments), len(result.Reviews))
+	}
 	return result
 }
 
@@ -1730,7 +1808,7 @@ func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository stri
 	if body == "" {
 		return result.fail("invalid_input", "comment 必须提供非空 body。")
 	}
-	issue, apiErr := t.getIssue(ctx, repository, number)
+	issue, apiErr := t.getIssueOrPullRequest(ctx, repository, number)
 	if apiErr != nil {
 		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
@@ -1773,6 +1851,9 @@ func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository stri
 		result.OK = true
 		result.Outcome = "commented"
 		result.Message = "GitHub 已添加 Issue 评论。"
+		if issue.PullRequest != nil {
+			result.Message = "GitHub 已添加 Pull Request 评论。"
+		}
 		result.Issue = ptrRepositoryIssueSummary(repositoryIssueSummaryFromGitHub(issue))
 		result.CommentURL = created.HTMLURL
 		return result
@@ -2367,6 +2448,16 @@ func (t *dianaRepositoryIssuesTool) doJSON(ctx context.Context, method, path str
 }
 
 func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, method, path string, payload any, target any) (http.Header, *repositoryIssueAPIError) {
+	return t.doJSONWithHeadersStatus(ctx, method, path, payload, target, 0)
+}
+
+// doJSONStatus 用于成功状态码不是默认值的接口：提交 PR review 成功返回 200 而不是 201。
+func (t *dianaRepositoryIssuesTool) doJSONStatus(ctx context.Context, method, path string, payload any, target any, expectedStatus int) *repositoryIssueAPIError {
+	_, apiErr := t.doJSONWithHeadersStatus(ctx, method, path, payload, target, expectedStatus)
+	return apiErr
+}
+
+func (t *dianaRepositoryIssuesTool) doJSONWithHeadersStatus(ctx context.Context, method, path string, payload any, target any, expectedStatus int) (http.Header, *repositoryIssueAPIError) {
 	requestCtx, cancel := context.WithTimeout(ctx, t.requestTimeout())
 	defer cancel()
 	var body io.Reader
@@ -2400,9 +2491,11 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, metho
 	}
 	defer resp.Body.Close()
 	headers := resp.Header.Clone()
-	expectedStatus := http.StatusOK
-	if method == http.MethodPost {
-		expectedStatus = http.StatusCreated
+	if expectedStatus == 0 {
+		expectedStatus = http.StatusOK
+		if method == http.MethodPost {
+			expectedStatus = http.StatusCreated
+		}
 	}
 	if resp.StatusCode != expectedStatus {
 		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -2590,7 +2683,9 @@ func validRepositoryIssueAPIResponse(method, path string, target any) bool {
 		expectedRepository := repositoryIssueRepositoryFromAPIPath(path)
 		expectedNumber := repositoryIssueNumberFromAPIPath(path)
 		if err != nil || parsed.RawQuery != "" || !strings.EqualFold(parsed.Scheme, "https") || !strings.EqualFold(parsed.Hostname(), "github.com") ||
-			!strings.EqualFold(strings.TrimRight(parsed.Path, "/"), "/"+expectedRepository+"/issues/"+strconv.Itoa(expectedNumber)) ||
+			// 评论 PR 走的也是 Issue 评论接口，但 GitHub 给的链接在 /pull/ 下。
+			(!strings.EqualFold(strings.TrimRight(parsed.Path, "/"), "/"+expectedRepository+"/issues/"+strconv.Itoa(expectedNumber)) &&
+				!strings.EqualFold(strings.TrimRight(parsed.Path, "/"), "/"+expectedRepository+"/pull/"+strconv.Itoa(expectedNumber))) ||
 			!strings.HasPrefix(parsed.Fragment, "issuecomment-") {
 			return false
 		}
@@ -2647,7 +2742,7 @@ func repositoryIssueFailureMessage(code string) string {
 	case "unauthorized":
 		return "当前 GitHub 凭据无效或已过期。"
 	case "permission_denied":
-		return "GitHub 拒绝了操作；请确认当前凭据对目标仓库具有 Issues 所需权限。"
+		return "GitHub 拒绝了操作；请确认当前凭据对目标仓库具有所需权限（Issue 需要 Issues 权限，PR 评论和 review 需要 Pull requests 权限）。"
 	case "token_required":
 		return "当前认证方式要求配置 GitHub Token，请在「GitHub 仓库 · 设置」里填写。"
 	case "gh_unavailable":
@@ -2662,7 +2757,9 @@ func repositoryIssueFailureMessage(code string) string {
 		// 通常更大，别让人以为是自己链接写错了。
 		return "GitHub 返回 404：仓库或 Issue 不存在，或当前 GitHub 凭据看不到它。私有仓库没有授权给该 Token 时同样是 404，请先确认 Token 覆盖了这个仓库。"
 	case "not_an_issue":
-		return "目标编号属于 Pull Request；本工具只允许修改 Issue。"
+		return "目标编号属于 Pull Request。update、close、reopen 只能用于 Issue；PR 可以用 get 读描述、pull_files 读改动、comment 评论、review 提交 review。"
+	case "not_a_pull_request":
+		return "目标编号不是 Pull Request；pull_files 和 review 只能用于 PR，Issue 请用 get 或 comment。"
 	case "gone":
 		return "GitHub 端点或资源已不可用。"
 	case "redirect_refused":
