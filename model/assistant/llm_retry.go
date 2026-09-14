@@ -307,6 +307,28 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 // Errors emitted after the channel starts are handled by streamingLLMProvider:
 // it discards the buffered failed stream and retries through Generate, which
 // keeps partial output from leaking or being duplicated.
+// skipRejectedCandidate 把当前候选往后挪一位，返回是否还有别的候选可切。它服务于
+// 流式路径：流在当前候选上正常打开，正文却是拦截，这时 current 正指着那个候选。
+func (p *registryFailoverLLMProvider) skipRejectedCandidate(cause error) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.candidates) < 2 {
+		return false
+	}
+	from := p.candidates[p.current]
+	p.current = (p.current + 1) % len(p.candidates)
+	to := p.candidates[p.current]
+	log.Printf(
+		"diana llm stream provider failover: group=%q model=%q from=%q to=%q err=%v",
+		p.group,
+		from.profile.Config.Model,
+		from.profile.ID,
+		to.profile.ID,
+		annotateLLMProviderAttempt(cause, from.profile, llm.GenerateRequest{}),
+	)
+	return true
+}
+
 func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
 	p.mu.Lock()
 	start := p.current
