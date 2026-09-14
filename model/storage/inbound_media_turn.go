@@ -20,6 +20,7 @@ const inboundMediaBatchSlack = 3 * time.Second
 // 少实现一个方法不会报错，只会让 runtime 里那个类型断言悄悄失败——连带把
 // InboundEventSuperseded 一起停掉。编译期钉住，别让它变成运行时才发现的事。
 var _ assistant.InboundMediaTurnStore = (*SQLiteStore)(nil)
+var _ assistant.InboundBacklogStore = (*SQLiteStore)(nil)
 
 type inboundMediaCandidate struct {
 	id        string

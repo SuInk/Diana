@@ -88,6 +88,9 @@ type InboundQueueItem struct {
 	Event    MessageEvent
 	Attempts int
 	Priority int
+	// EnqueuedAt 是这条消息进队列的时刻。积压判断看的是它排了多久，而不是消息本身发出多久：
+	// 断线回补的消息发出时间天然很早，但它们是刚进队的，不能被当成积压扔掉。
+	EnqueuedAt time.Time
 }
 
 // HistorySession identifies a conversation that can be backfilled from OneBot.
@@ -525,6 +528,10 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	if r.inboundEventIsStale(item.Event, time.Now()) {
 		return "ignored_stale", nil
 	}
+	// 积压的消息不在这里直接收掉：插件观察、消息互通、历史和记忆这些不花回复 token 的环节
+	// 还得走。交接判断放到 prepareMessageEvent 里登记积压包之前那一刻，这里只把队列信息带过去。
+	probe := item
+	item.Event.backlogProbe = &probe
 	ctx = withLLMUsageContext(ctx, item.Event)
 	ctx = r.withDebugTraceContext(ctx, item.Event)
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(item.Event).MaxContextTokens)
@@ -592,7 +599,7 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 			return "", ctx.Err()
 		}
 	}
-	return r.replyAndRecord(ctx, event, text, outcome)
+	return r.replyAndRecord(withInboundReplyTurnContext(ctx, event), event, text, outcome)
 }
 
 func eventHasVoiceTranscript(event MessageEvent) bool {
