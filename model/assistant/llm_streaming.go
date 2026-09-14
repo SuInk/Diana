@@ -127,17 +127,44 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 	}
 	response, err := accumulateChatEvents(ctx, events)
 	if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
-		return nil, err
+		return p.retryAfterStreamedRejection(ctx, req, err)
 	}
 	if err != nil {
 		return p.provider.Generate(ctx, req)
 	}
 	if response != nil && len(response.ToolCalls) == 0 {
 		if notice := llm.RejectionNoticeError(response.Text); notice != nil {
-			return nil, notice
+			return p.retryAfterStreamedRejection(ctx, req, notice)
 		}
 	}
 	return response, nil
+}
+
+// rejectedCandidateSkipper 由后备 provider 实现：流已经正常打开、正文却是拦截时，
+// 让它把刚才那个候选往后挪一位。
+type rejectedCandidateSkipper interface {
+	skipRejectedCandidate(cause error) bool
+}
+
+// retryAfterStreamedRejection 处理「流正常打开、正文却是上游拦截文案」。
+//
+// 后备切换只发生在打开流那一刻：429、502 这类打开时就失败的错误会切到下一个候选，
+// 可流一旦打开，候选就定下了。上游把拦截文案当成正常正文流回来时，这一层认出拦截
+// 只能原样报错——于是非流式路径会切后备、流式路径却不会，同一句话开不开流式结果
+// 不一样。这里把能切后备的拦截交回后备 provider，跳过刚被拦的候选再来一次，免得
+// 从同一个候选开始、白白再被拦一遍。
+//
+// 不能切后备的照旧原样返回：内容策略拦截和 Gemini 结构化拦截码是有意设计成不换
+// 模型重发的，判断复用 shouldFailoverLLMError，和非流式路径同一个口径。
+func (p *streamingLLMProvider) retryAfterStreamedRejection(ctx context.Context, req llm.GenerateRequest, cause error) (*llm.GenerateResponse, error) {
+	if !shouldFailoverLLMError(cause) {
+		return nil, cause
+	}
+	skipper, ok := p.provider.(rejectedCandidateSkipper)
+	if !ok || !skipper.skipRejectedCandidate(cause) {
+		return nil, cause
+	}
+	return p.provider.Generate(ctx, req)
 }
 
 // accumulateChatEvents 把事件流攒成一个完整响应，顺便记下首 token 时刻。
