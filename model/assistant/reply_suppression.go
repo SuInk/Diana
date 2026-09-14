@@ -96,13 +96,18 @@ type botReplyLoopAIDecision struct {
 	AutomatedAIReply bool `json:"automated_ai_reply"`
 	// MeaninglessLoop 覆盖「对方不是机器人，但这一来一回已经没有任何实质内容」
 	// 的情况：双方都只在应付彼此，机器人却还在一条条认真回。判据见分类器提示词。
-	MeaninglessLoop bool    `json:"meaningless_loop"`
+	MeaninglessLoop bool `json:"meaningless_loop"`
+	// PurposelessLoop 是「回得很密、而且这一连串来回没有明确任务」：漫无目的地互相接戏、
+	// 续剧情、斗嘴。下棋报步、解题、一起做事且在推进的不算。
+	PurposelessLoop bool    `json:"purposeless_loop"`
 	Confidence      float64 `json:"confidence"`
 	Reason          string  `json:"reason"`
 }
 
+// counts 决定这次结论算不算一次空转。只有「没内容」或「没目的」才算：对方是不是 AI
+// 只记录不计数——两台 AI 正经下棋、做题，不该因为对面是 AI 就被停掉。
 func (decision botReplyLoopAIDecision) counts() bool {
-	if !decision.AutomatedAIReply && !decision.MeaninglessLoop {
+	if !decision.MeaninglessLoop && !decision.PurposelessLoop {
 		return false
 	}
 	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
@@ -488,7 +493,7 @@ func (r *Runtime) registerBotReplyLoopDecision(event MessageEvent, candidate bot
 	}
 	delete(r.botReplyLoopByKey, key)
 	r.botReplyLoopMu.Unlock()
-	reason := fmt.Sprintf("AI 发言检测：%d 分钟内累计 %d 次高置信度自动 AI 回复，本次置信度 %.2f", int(botReplyLoopWindow/time.Minute), len(hits), decision.Confidence)
+	reason := fmt.Sprintf("空转检测：%d 分钟内累计 %d 次高置信度空转（无内容或无目的的来回），本次置信度 %.2f", int(botReplyLoopWindow/time.Minute), len(hits), decision.Confidence)
 	return len(hits), reason, true
 }
 
@@ -507,8 +512,9 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
 			"automated_ai_reply": decision.AutomatedAIReply, "meaningless_loop": decision.MeaninglessLoop,
-			"confidence": decision.Confidence,
-			"reason":     decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
+			"purposeless_loop": decision.PurposelessLoop,
+			"confidence":       decision.Confidence,
+			"reason":           decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
 			"threshold": botReplyLoopThreshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
 			"suppression_allowed": suppressionAllowed,
 		},
@@ -534,6 +540,7 @@ func (r *Runtime) resetBotReplyLoopUser(userID string) {
 	if r == nil || strings.TrimSpace(userID) == "" {
 		return
 	}
+	r.resetReplyDampingUser(userID)
 	r.botReplyLoopMu.Lock()
 	for key, state := range r.botReplyLoopByKey {
 		if state.UserID == userID {
@@ -610,6 +617,7 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 		return
 	}
 	now := time.Now()
+	r.recordReplyDampingSend(event, now)
 	if intent.SuppressCurrentUser {
 		r.activateReplySuppressionWithinOutboundGate(event, reply, now)
 		return
