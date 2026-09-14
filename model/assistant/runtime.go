@@ -86,6 +86,18 @@ type MessageEventLookupStore interface {
 	FindMessageEvent(ctx context.Context, session string, messageID string) (MessageEvent, bool, error)
 }
 
+// MessageEventPrefixLookupStore 在同一前缀下的所有会话里按消息编号找消息，
+// 用来定位跨群检索结果里其他群的消息。
+type MessageEventPrefixLookupStore interface {
+	FindMessageEventsBySessionPrefix(ctx context.Context, sessionPrefix string, messageID string, limit int) ([]SessionMessageEvent, error)
+}
+
+// SessionMessageEvent 是带着所在会话的一条历史消息。
+type SessionMessageEvent struct {
+	Session string
+	Event   MessageEvent
+}
+
 type MessageTimelineStore interface {
 	ListMessageEventsBetween(ctx context.Context, session string, fromTime, throughTime int64) ([]MessageEvent, error)
 }
