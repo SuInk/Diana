@@ -611,3 +611,79 @@ func TestDianaChatHistoryToolRangeTreatsDateOnlyThroughAsWholeDay(t *testing.T) 
 		t.Fatalf("date-only window missed the message: %+v", result)
 	}
 }
+
+func privateCrossGroupSearch(t *testing.T, cfg BotConfig, event MessageEvent) (*capturingHistorySearchStore, error) {
+	t.Helper()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &capturingHistorySearchStore{}
+	runtime.SetMessageHistoryStore(store)
+	_, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), map[string]any{
+		"operation": "search", "query": "长期记忆", "scope": "all_groups", "all_time": true,
+	})
+	return store, err
+}
+
+// 主人私聊机器人时可以跨群检索。以前私聊一律拒绝，不管开关开没开。
+func TestCrossGroupSearchAllowsOwnerInPrivateChat(t *testing.T) {
+	store, err := privateCrossGroupSearch(t,
+		BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)},
+		MessageEvent{Kind: EventKindPrivate, Time: 200, UserID: "owner", ContextNamespace: "bot-a"},
+	)
+	if err != nil {
+		t.Fatalf("主人私聊应当能跨群检索：%v", err)
+	}
+	// 私聊发起也只能搜同一机器人命名空间下的群，不能碰到别人的私聊。
+	if store.calls != 1 || !store.query.CrossSession || store.query.SessionPrefix != "bot-a:group:" {
+		t.Fatalf("captured query = %#v calls=%d", store.query, store.calls)
+	}
+}
+
+// 陌生人私聊不能跨群：检索范围是机器人所在的全部群，放开就能翻自己不在的群。
+func TestCrossGroupSearchRejectsNonOwnerInPrivateChat(t *testing.T) {
+	store, err := privateCrossGroupSearch(t,
+		BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)},
+		MessageEvent{Kind: EventKindPrivate, Time: 200, UserID: "stranger", ContextNamespace: "bot-a"},
+	)
+	if err == nil || store.calls != 0 {
+		t.Fatalf("非主人私聊不该跨群检索：err=%v calls=%d", err, store.calls)
+	}
+	if !strings.Contains(err.Error(), "只有机器人主人") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// 旧报错把「没开」和「不是群聊」并成一句，主人开了开关，机器人还说没开。两个原因要分开报。
+func TestCrossGroupSearchErrorNamesActualReason(t *testing.T) {
+	_, err := privateCrossGroupSearch(t,
+		BotConfig{OwnerID: "owner"},
+		MessageEvent{Kind: EventKindPrivate, Time: 200, UserID: "owner", ContextNamespace: "bot-a"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "未开启") {
+		t.Fatalf("开关关着时应当说没开：%v", err)
+	}
+	_, err = privateCrossGroupSearch(t,
+		BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)},
+		MessageEvent{Kind: EventKindPrivate, Time: 200, UserID: "stranger", ContextNamespace: "bot-a"},
+	)
+	if err == nil || strings.Contains(err.Error(), "未开启") {
+		t.Fatalf("开关开着、只是身份不够时，不能说成没开：%v", err)
+	}
+}
+
+// 线上现象：Telegram 机器人的主人填的是用户名 @ruaneko，私聊里发来的是数字 ID。
+// 主人判定要按用户名认出来，否则主人自己也会被挡。
+func TestCrossGroupSearchRecognizesTelegramUsernameOwner(t *testing.T) {
+	store, err := privateCrossGroupSearch(t,
+		BotConfig{Platform: PlatformTelegram, OwnerID: "ruaneko", CrossGroupMemoryEnabled: boolPointer(true)},
+		MessageEvent{
+			Kind: EventKindPrivate, Platform: PlatformTelegram, Time: 200,
+			UserID: "1061423117", SenderUsername: "ruaneko", ContextNamespace: "bot-tg",
+		},
+	)
+	if err != nil {
+		t.Fatalf("用户名主人私聊应当能跨群检索：%v", err)
+	}
+	if store.calls != 1 || store.query.SessionPrefix != "bot-tg:group:" {
+		t.Fatalf("captured query = %#v calls=%d", store.query, store.calls)
+	}
+}

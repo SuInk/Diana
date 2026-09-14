@@ -175,7 +175,7 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"group_id":     toolStringParam("around 可选：搜索命中的来源 group_id；跨群展开需要开启跨群记忆，仅可访问同一机器人命名空间。"),
 		"from_time":    toolStringParam(`range 与 search 的起始时间。接受 Unix 秒，也接受本地时间字符串 "2006-01-02 15:04" 或 "2006-01-02"。range 一次读不完时结果会给出 next_from_time，用它继续读完整个时间段再总结。`),
 		"through_time": toolStringParam(`range 与 search 的结束时间，写法同 from_time。`),
-		"scope": toolEnumParam("检索范围。current 仅当前会话；all_groups 只有 search 支持，且需要管理员已开启跨群记忆，并严格限定在同一机器人命名空间内。",
+		"scope": toolEnumParam("检索范围。current 仅当前会话；all_groups 只有 search 支持，且需要管理员已开启跨群记忆，并严格限定在同一机器人命名空间内。群聊里可用；私聊里只有机器人主人能用。",
 			"current", "all_groups"),
 		"hours":    toolIntParam("search 可选：只检索最近多少小时。", 1, 24*365),
 		"days":     toolIntParam("search 可选：只检索最近多少天。", 1, 365),
@@ -282,10 +282,13 @@ func evenlySampleChatHistory(events []MessageEvent, limit int) []MessageEvent {
 
 func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
 	if groupID := strings.TrimSpace(configToolString(input, "group_id")); groupID != "" && groupID != t.event.GroupID {
-		if t.event.Kind != EventKindGroup || !boolValue(t.runtime.effectiveConfigForEvent(t.event).CrossGroupMemoryEnabled, false) {
-			return dianaChatHistoryResult{}, fmt.Errorf("跨群展开需要在群聊中开启跨群记忆")
+		if err := t.crossGroupSearchError(ctx); err != nil {
+			return dianaChatHistoryResult{}, err
 		}
 		scoped := *t
+		// 从私聊跳过去时事件类型也要跟着换成群：会话键由 GroupID 定，但往下读引用、
+		// 回复链时还会看事件类型，留着私聊类型就会按私聊会话去找。
+		scoped.event.Kind = EventKindGroup
 		scoped.event.GroupID = groupID
 		scoped.event.replyHistory = nil
 		scoped.event.replyHistoryLoaded = false
@@ -407,9 +410,10 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	} else if scope != "current" {
 		return dianaChatHistoryResult{}, fmt.Errorf("scope 必须是 current 或 all_groups")
 	}
-	cfg := t.runtime.effectiveConfigForEvent(t.event)
-	if crossGroup && (t.event.Kind != EventKindGroup || !boolValue(cfg.CrossGroupMemoryEnabled, false)) {
-		return dianaChatHistoryResult{}, fmt.Errorf("跨群记忆尚未启用或当前不是群聊，不能检索其他群")
+	if crossGroup {
+		if err := t.crossGroupSearchError(ctx); err != nil {
+			return dianaChatHistoryResult{}, err
+		}
 	}
 	from, through := t.resolveWindow(input)
 	if order == "oldest" && !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
@@ -798,6 +802,30 @@ func chatHistoryItem(event MessageEvent, configs ...BotConfig) dianaChatHistoryI
 	}
 	sort.Strings(item.ContentTypes)
 	return item
+}
+
+// crossGroupSearchError 判断这一轮能不能检索其他群，不能时给出准确的原因。
+//
+// 检索范围是这个机器人所在的全部群。私聊以前一律拒绝：任何人私聊都能搜的话，陌生人
+// 就能翻自己不在的群。但主人本来就看得到全部配置和工具，把他也挡在外面没有意义。
+//
+// 旧报错把「跨群记忆没开」和「当前不是群聊」并成了一句，模型只能照着说「还没开」——
+// 主人在后台早就开了开关，机器人还一口咬定没开。两个原因现在分开报。
+func (t *dianaChatHistoryTool) crossGroupSearchError(ctx context.Context) error {
+	cfg := t.runtime.effectiveConfigForEvent(t.event)
+	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
+		return fmt.Errorf("跨群记忆未开启，不能检索其他群")
+	}
+	switch t.event.Kind {
+	case EventKindGroup:
+		return nil
+	case EventKindPrivate:
+		if t.runtime.relationshipPolicy(ctx, t.event).Owner {
+			return nil
+		}
+		return fmt.Errorf("私聊里只有机器人主人能检索其他群；跨群记忆本身已开启")
+	}
+	return fmt.Errorf("当前会话类型不支持检索其他群")
 }
 
 func groupHistorySessionPrefix(event MessageEvent) string {
