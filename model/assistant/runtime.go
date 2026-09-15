@@ -4309,6 +4309,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	var semanticGate *semanticReplyGate
+	var speculativeAudit chan preparedReplyAudit
 	// Tool results and disclosure deliveries must not be hidden as repeated prose.
 	if !hasExternalSideEffect(ctx) && len(pluginResponses) == 0 && !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
 		var release func()
@@ -4317,6 +4318,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			return "", err
 		}
 		defer release()
+		// 审核和去重同时开始：去重多数时候原样放行，这时审核结论可以直接用。
+		// 去重判定不发时提前返回，这时还没用上的审核调用一起取消。
+		auditCtx, cancelAudit := context.WithCancel(ctx)
+		defer cancelAudit()
+		speculativeAudit = make(chan preparedReplyAudit, 1)
+		go func(candidate string) {
+			defer recoverGoroutinePanic("runtime.speculativeReplyAudit")
+			speculativeAudit <- r.prepareReplyAudit(auditCtx, event, cleanText, candidate, cfg, proactiveTriggered)
+		}(reply)
 		// 允许静默丢弃只给主动接话：那里沉默本来就是默认行为，少一句重复的插话
 		// 没有代价。直接触发不一样——私聊、@ 本机和引用机器人消息的更正都是对方
 		// 点着名在说话，这时候一个字不发，对方看到的就是装死。去重仍然跑，重复
@@ -4327,21 +4337,20 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	semanticText := reply
-	if proactiveTriggered {
-		// 主动回复走完整审核：表达质量 + 账号安全。
-		auditIntent, err := r.evaluateProactiveReplyQuality(ctx, event, cleanText, reply, cfg)
-		if err != nil {
-			return "", err
-		}
-		controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
-	} else {
-		auditIntent, err := r.evaluateDirectReplyAudit(ctx, event, cleanText, reply, cfg)
-		if err != nil {
-			// 直接回复不以表达质量拦截；账号安全开关启用时仍是一票否决。
-			return "", err
-		}
-		controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
+	// 主动回复走完整审核（表达质量 + 账号安全）；直接回复不以表达质量拦截，账号安全
+	// 开关启用时仍是一票否决。两者的区别在 replyAuditNeed 里按 proactiveTriggered 决定。
+	var prepared preparedReplyAudit
+	if speculativeAudit != nil {
+		prepared = <-speculativeAudit
 	}
+	if speculativeAudit == nil || prepared.reply != reply {
+		prepared = r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
+	}
+	auditIntent, err := r.applyReplyAudit(ctx, event, cfg, prepared)
+	if err != nil {
+		return "", err
+	}
+	controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
 		if voiceErr != nil {
