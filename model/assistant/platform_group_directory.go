@@ -65,9 +65,9 @@ func groupToolPrompt(event MessageEvent) string {
 		return promptToolOneBotGroup + "可以读取当前群成员总数。"
 	}
 	if NormalizePlatformID(event.Platform) != PlatformTelegram {
-		return "查询群资料、人数、成员身份和头像来源使用 diana.group，members 的完整性看 member_list_complete、member_source 和 warnings，不得把有限分页当全群。member 按平台原始 user_id 核验当前成员；通讯录资料不等于在群，自定义角色名称不等于管理员权限。头像用 diana.image 的身份来源，由服务端读取，不拼 QQ 地址。飞书成员列表不含机器人；钉钉按企业内部群和应用授权查询，未证实管理角色时不授予配置权限；企微只查询获授权的应用群，群头像接口不可用；QQ 官方频道须有 guild_id，普通 QQ 群不能套用频道成员接口。"
+		return "查询群资料、人数、成员身份和头像来源使用 diana.group，members 的完整性看 member_list_complete、member_source 和 warnings，不得把有限分页当全群。member 按平台原始 user_id 核验当前成员；通讯录资料不等于在群，自定义角色名称不等于管理员权限。要看头像用 diana.remote_image 的 view_avatar，编辑头像用 diana.image 的身份来源，都由服务端读取，不拼 QQ 地址。飞书成员列表不含机器人；钉钉按企业内部群和应用授权查询，未证实管理角色时不授予配置权限；企微只查询获授权的应用群，群头像接口不可用；QQ 官方频道须有 guild_id，普通 QQ 群不能套用频道成员接口。"
 	}
-	return "用户查询群资料、群人数、成员身份、用户名或头像来源时调用 diana.group。info 获取实时群资料和人数；member 按 user_id 查询当前成员及角色；members 只返回管理员和已知账号候选，绝不是完整名单，不得据此声称已列出所有人或不在列表的人已退群。确定是否在群、是否管理员必须使用 member 实时校验。头像来源通过 diana.image 的 sender_avatar、bot_avatar、group_avatar、member_avatar:用户ID 指定，由运行时获取；不要编 QQ 头像链接或索取 Bot Token。"
+	return "用户查询群资料、群人数、成员身份、用户名或头像来源时调用 diana.group。info 获取实时群资料和人数；member 按 user_id 查询当前成员及角色；members 只返回管理员和已知账号候选，绝不是完整名单，不得据此声称已列出所有人或不在列表的人已退群。确定是否在群、是否管理员必须使用 member 实时校验。头像来源写作 sender_avatar、bot_avatar、group_avatar、member_avatar:用户ID，由运行时获取：要看头像（包括机器人自己的）用 diana.remote_image 的 view_avatar，编辑头像用 diana.image 的 identity_sources；不要编 QQ 头像链接或索取 Bot Token，也不要说看不到头像。"
 }
 
 func (r *Runtime) currentPlatform(event MessageEvent) string {
