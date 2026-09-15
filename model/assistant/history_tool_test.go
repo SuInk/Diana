@@ -318,7 +318,11 @@ func TestRuntimeAgentCanQueryHistoryAroundCurrentQuote(t *testing.T) {
 			// outside the short context must still leave history lookup available.
 			return `{"action":"none","tools":[],"context_message_ids":[],"keep_older_summary":false}`, nil
 		case 2:
-			if !requestMessagesContain(req.Messages, dianaChatHistoryToolName) {
+			hasTool := false
+			for _, tool := range req.Tools {
+				hasTool = hasTool || tool.Name == dianaChatHistoryToolName
+			}
+			if !hasTool && !requestMessagesContain(req.Messages, dianaChatHistoryToolName) {
 				return "", fmt.Errorf("history tool missing from Agent prompt")
 			}
 			return `{"action":"tool","tool":"diana.chat_history","input":{"operation":"around","before":3,"after":1}}`, nil

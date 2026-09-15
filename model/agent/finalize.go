@@ -128,5 +128,6 @@ func (r *Runner) turnDefinitions(ledger *claimEvidenceLedger, imagePending bool)
 			}
 		}
 	}
+	definitions = r.loader.filter(definitions)
 	return append(definitions, finalizeToolDefinition(ledger, imagePending))
 }
