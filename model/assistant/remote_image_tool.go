@@ -28,13 +28,15 @@ func newDianaRemoteImageTool(r *Runtime, event MessageEvent) *dianaRemoteImageTo
 func (t *dianaRemoteImageTool) Name() string { return dianaRemoteImageToolName }
 
 func (t *dianaRemoteImageTool) Description() string {
-	return "读取或发送网上现有图片，不生成图片。先用 action=view 和图片直链加载真实画面，附件会交给下一轮模型；网页文字、文件名不能证明图片内容。查看确认符合用户要求后，用 action=send 和返回的 image_id 发送单图；用 action=send_album 和 image_ids 将已查看的图片作为 Telegram 相册发送。不要只输出链接冒充发图。不能读取本机文件。"
+	return "读取或发送网上现有图片和头像，不生成图片。先用 action=view 和图片直链加载真实画面，附件会交给下一轮模型；网页文字、文件名不能证明图片内容。要看头像（包括机器人自己的头像）用 action=view_avatar 和 avatar_source，由运行时按平台取图，Telegram 等没有公开头像链接的平台也能看，不要编头像链接。查看确认符合用户要求后，用 action=send 和返回的 image_id 发送单图；用 action=send_album 和 image_ids 将已查看的图片作为 Telegram 相册发送。不要只输出链接冒充发图。不能读取本机文件。"
 }
 
 func (t *dianaRemoteImageTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action"}, map[string]any{
-		"action":    toolEnumParam("先看图，再发送已查看的图；send_album 将多图合成 Telegram 相册。", "view", "send", "send_album"),
-		"url":       toolStringParam("view 必填：公网 HTTP(S) 图片直链，不是网页地址。"),
+		"action": toolEnumParam("先看图，再发送已查看的图；view_avatar 看头像；send_album 将多图合成 Telegram 相册。", "view", "view_avatar", "send", "send_album"),
+		"url":    toolStringParam("view 必填：公网 HTTP(S) 图片直链，不是网页地址。"),
+		"avatar_source": toolStringParam(`view_avatar 必填：` + avatarSourceBot + `（机器人自己）、` + avatarSourceSender + `（本条消息发送者）、` +
+			avatarSourceGroup + `（本群群头像）或 ` + avatarSourceMemberPrefix + `<user_id>（当前会话里能核验的成员）。`),
 		"image_id":  toolStringParam("send 必填：本轮 view 返回的图片 ID。"),
 		"image_ids": toolStringArrayParam("send_album 必填：本轮 view 返回的 2 至 8 个图片 ID，按发送顺序排列。"),
 	})
@@ -58,6 +60,27 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 		t.images[id] = image
 		t.parts = []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: image, Detail: "high"}}
 		result, _ := json.Marshal(map[string]any{"image_id": id, "status": "loaded", "message": "真实画面已附加，请先检查内容再决定是否发送。"})
+		return string(result), nil
+	case "view_avatar":
+		if len(t.images) >= 8 {
+			return "", fmt.Errorf("本轮最多读取 8 张图片")
+		}
+		source := strings.TrimSpace(configToolString(input, "avatar_source"))
+		if source == "" {
+			return "", fmt.Errorf("view_avatar 需要 avatar_source")
+		}
+		urls := t.runtime.avatarIdentityImageURLs(ctx, t.event, []string{source})
+		if len(urls) == 0 {
+			return "", fmt.Errorf("取不到这个头像：来源无效、成员不在当前会话，或对方没有可见头像，不能据此描述画面")
+		}
+		ready, complete := loadLLMImageURLs(ctx, urls[:1])
+		if !complete || len(ready) == 0 {
+			return "", fmt.Errorf("头像读取或解码失败，不能据此描述画面")
+		}
+		id := fmt.Sprintf("remote_image_%d", len(t.images)+1)
+		t.images[id] = ready[0]
+		t.parts = []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: ready[0], Detail: "high"}}
+		result, _ := json.Marshal(map[string]any{"image_id": id, "status": "loaded", "avatar_source": source, "message": "头像真实画面已附加；需要发出去时用 action=send 和这个 image_id。"})
 		return string(result), nil
 	case "send", "send_album":
 		album := configToolString(input, "action") == "send_album"
@@ -93,7 +116,7 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 		}
 		return `{"status":"sent","message":"图片已发送到当前会话，不要重复发送。"}`, nil
 	default:
-		return "", fmt.Errorf("action 必须是 view、send 或 send_album")
+		return "", fmt.Errorf("action 必须是 view、view_avatar、send 或 send_album")
 	}
 }
 
