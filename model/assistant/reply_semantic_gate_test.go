@@ -312,3 +312,63 @@ func TestSemanticReplyDropCannotConsumeNewSupplement(t *testing.T) {
 		t.Fatalf("lost new supplement: %v", err)
 	}
 }
+
+// parallelAuditProvider 让去重判定等到审核请求已经发出才返回，用来证明两者同时进行。
+type parallelAuditProvider struct {
+	mu           sync.Mutex
+	auditStarted chan struct{}
+	startOnce    sync.Once
+	audits       int
+	sawParallel  bool
+}
+
+func (p *parallelAuditProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	for _, m := range req.Messages {
+		if strings.Contains(m.Content, semanticReplyPrompt) {
+			select {
+			case <-p.auditStarted:
+				p.mu.Lock()
+				p.sawParallel = true
+				p.mu.Unlock()
+			case <-time.After(2 * time.Second):
+			case <-ctx.Done():
+			}
+			return &llm.GenerateResponse{Text: `{"action":"keep","confidence":0.99}`}, nil
+		}
+		if strings.Contains(m.Content, "你是机器人回复的发送前审核器") {
+			p.mu.Lock()
+			p.audits++
+			p.mu.Unlock()
+			p.startOnce.Do(func() { close(p.auditStarted) })
+			return &llm.GenerateResponse{Text: `{"send_confidence":0.99,"account_safe":0.99}`}, nil
+		}
+	}
+	return &llm.GenerateResponse{Text: "原有说明和新增信息"}, nil
+}
+
+func TestReplyAuditRunsAlongsideSemanticDedup(t *testing.T) {
+	p := &parallelAuditProvider{auditStarted: make(chan struct{})}
+	r := topicTestRuntime(p)
+	root := proactiveGroupMessage("first", "u", "原问题")
+	if _, err := r.replyAndRecord(context.Background(), root, root.RawMessage, "replied"); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.audits = 0
+	p.mu.Unlock()
+	follow := proactiveGroupMessage("second", "u", "后来的问题")
+	if _, err := r.replyAndRecord(context.Background(), follow, follow.RawMessage, "replied"); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.sawParallel {
+		t.Fatal("audit did not start while semantic dedup was still running")
+	}
+	if p.audits != 1 {
+		t.Fatalf("kept reply was audited %d times, want 1", p.audits)
+	}
+	if sent := r.channel.(*recordingChannel).sentSnapshot(); len(sent) != 2 {
+		t.Fatalf("sent=%#v", sent)
+	}
+}

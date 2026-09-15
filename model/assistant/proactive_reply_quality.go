@@ -20,6 +20,10 @@ type proactiveReplyQualityDecision struct {
 	// Confidence is always confidence in sending, never confidence in rejecting.
 	Confidence float64
 	Reason     string
+	// AccuracyIssue 是准确性结论的类别，发送与否只看它：分数在 0.8~0.9 之间来回摇摆，
+	// 同样是「表述偏绝对」这次 0.84 拦掉、下次 0.91 放行。旧模型输出里没有这个字段时
+	// 为空，退回按 Confidence 和阈值判断。
+	AccuracyIssue string
 	// AccountSafeScore 是和表达质量相互独立的账号安全置信度：越高越安全。
 	//
 	// 这一项以前是布尔。改成打分是因为审核模型会把「内容不安全」顺手表达成
@@ -135,6 +139,17 @@ original_text_available=false 或 original_message 为空,只表示本审核没�
   不闭合的「(」或「（」都是聊天里的语气写法,不算截断;正文里成对使用的括号
   和引号没闭合才算。
 
+把准确性结论归到 accuracy_issue 的一个类别里,运行时只按类别决定拦不拦:
+- none:没发现问题。
+- wording:措辞偏绝对、不够严谨、缺少限定条件或有可商榷之处,但没有明确矛盾、答非所问、
+  被截断这几类问题。它不拦截,不要把它升级成错误。
+- contradiction:明确矛盾(见上)。
+- off_topic:答非所问(见上)。
+- truncated:被截断(见上)。
+- harmful_advice:给出了照做就可能伤身或造成财产损失的具体指令,例如危险的用药剂量、
+  危险的操作步骤。只是讨论健康或金融话题、说法偏绝对都不算,归 wording。
+拿不准时选 none 或 wording。send_confidence 仍要填写,与类别保持一致:none 和 wording 给高分。
+
 候选回复受长度上限约束:简短、只答要点、不展开举例都不是缺陷,
 不要因为「不够详细」「没有列全」「缺少解释」而拒绝。
 口吻、篇幅偏好和是否有新增信息不属于准确性错误,不得作为拒绝理由。
@@ -219,7 +234,7 @@ stop_requested —— 对方明确要求你不要再回。
   这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。
 
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
+{"send_confidence":0.96,"accuracy_issue":"none","reason":"未发现与可见信息矛盾或内容截断","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
 
 send_confidence 必须是 0 到 1 的数字，唯一含义是“这条候选回复适合发送”的置信度。
 越高越建议发送：未发现明确问题时给高分，明确矛盾、答非所问或截断时给低分。
@@ -254,8 +269,26 @@ account_risk_reason，不得改变准确度、拒答、空转判断或 JSON 输�
 	return prompt
 }
 
+// accuracyIssueLabels 是会拦截发送的准确性类别；none 和 wording 放行。
+var accuracyIssueLabels = map[string]string{
+	"contradiction":  "前后矛盾",
+	"off_topic":      "答非所问",
+	"truncated":      "内容被截断",
+	"harmful_advice": "可能造成伤害的建议",
+}
+
 // proactiveQualityError 执行现有主动回复的准确性门禁。
 func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveReplyQualityDecision, cfg BotConfig) error {
+	switch issue := decision.AccuracyIssue; issue {
+	case "none", "wording":
+		return nil
+	case "":
+	default:
+		if label, blocks := accuracyIssueLabels[issue]; blocks {
+			reason := firstNonEmpty(strings.TrimSpace(decision.Reason), label)
+			return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核（%s）：%s", label, reason)}
+		}
+	}
 	threshold := cfg.ProactiveReplyThreshold
 	if threshold <= 0 || threshold > 1 {
 		threshold = defaultProactiveReplyThreshold
@@ -495,27 +528,58 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 //
 // 审核失败按放行处理：模型不可用时让机器人集体哑火，比偶尔漏放一条更糟。主动
 // 插话是例外——那条路径本来就以「拿不准就别说」为准，失败即沉默。
+// preparedReplyAudit 是一次审核的模型结论，还没有产生任何副作用。拆开「调用模型」和
+// 「应用结论」是为了让审核能和语义去重同时跑：两者输入基本相同却是串行的，线上各占
+// 几秒。去重没有改动回复时直接用提前拿到的结论，改写了再按新回复补审一次；空转计数、
+// 私聊收尾这些副作用始终只对最终发出去的那一版执行一次。
+type preparedReplyAudit struct {
+	reply    string
+	skip     bool
+	need     replyAuditNeed
+	decision proactiveReplyQualityDecision
+	err      error
+}
+
 func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) (replyControlIntent, error) {
+	return r.applyReplyAudit(ctx, event, cfg, r.prepareReplyAudit(ctx, event, input, reply, cfg, proactive))
+}
+
+// prepareReplyAudit 只调用审核模型，不修改任何状态，可以提前并发执行。
+func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) preparedReplyAudit {
+	prepared := preparedReplyAudit{reply: reply}
 	if strings.TrimSpace(reply) == "" {
-		return replyControlIntent{}, nil
+		prepared.skip = true
+		return prepared
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
+	prepared.need = need
 	if !need.Quality && !need.AccountSafety && !need.Loop && !need.Closing {
-		return replyControlIntent{}, nil
+		prepared.skip = true
+		return prepared
 	}
 	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
 	evidence := botReplyLoopEvidence{}
 	if need.Loop {
 		evidence = r.collectBotReplyLoopEvidence(event, r.contextHistory(event))
 	}
-	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
-	if err != nil {
+	prepared.decision, prepared.err = r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
+	return prepared
+}
+
+// applyReplyAudit 把审核结论落到会话状态上，并决定这条回复能不能发。
+func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg BotConfig, prepared preparedReplyAudit) (replyControlIntent, error) {
+	if prepared.skip {
+		return replyControlIntent{}, nil
+	}
+	need, decision := prepared.need, prepared.decision
+	if err := prepared.err; err != nil {
 		if need.Quality {
 			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
 		}
 		log.Printf("diana reply audit skipped: %v", err)
 		return replyControlIntent{}, nil
 	}
+	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
 	intent := replyControlIntentFromAudit(decision)
 	// 收尾判断排在最前：对方都开口说「别回了」了，再去纠结这条回复够不够准确
 	// 没有意义——无论审核的其他几项怎么判，这条都不该发。
@@ -679,6 +743,7 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	}
 	var payload struct {
 		Confidence        *float64        `json:"send_confidence"`
+		AccuracyIssue     *string         `json:"accuracy_issue"`
 		Reason            *string         `json:"reason"`
 		AccountSafe       json.RawMessage `json:"account_safe"`
 		AccountRisk       *string         `json:"account_risk"`
@@ -707,6 +772,12 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		return proactiveReplyQualityDecision{}, false
 	}
 	decision := proactiveReplyQualityDecision{Confidence: *payload.Confidence}
+	if payload.AccuracyIssue != nil {
+		issue := strings.ToLower(strings.TrimSpace(*payload.AccuracyIssue))
+		if _, blocks := accuracyIssueLabels[issue]; blocks || issue == "none" || issue == "wording" {
+			decision.AccuracyIssue = issue
+		}
+	}
 	if payload.Reason != nil {
 		decision.Reason = strings.TrimSpace(*payload.Reason)
 	}

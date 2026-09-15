@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
@@ -99,5 +100,66 @@ func TestAgentToolBudgetDefaultsToTwelve(t *testing.T) {
 	}
 	if (BotConfig{AgentMaxSteps: 8}).WithDefaults().AgentMaxSteps != 8 {
 		t.Fatal("explicit budget overwritten")
+	}
+}
+
+// Telegram 头像没有公开链接，模型以前只能说「看不到自己的头像」。
+func TestRemoteImageViewAvatarShowsTelegramBotOwnAvatarAndSendsIt(t *testing.T) {
+	var avatar bytes.Buffer
+	if err := png.Encode(&avatar, image.NewRGBA(image.Rect(0, 0, 32, 32))); err != nil {
+		t.Fatal(err)
+	}
+	api := newFakeTelegramAPI(t, map[string]any{
+		"getUserProfilePhotos":    map[string]any{"photos": [][]any{{map[string]any{"file_id": "bot-photo", "width": 320, "height": 320}}}},
+		"getFile":                 map[string]any{"file_path": "photos/bot.png"},
+		"download:photos/bot.png": avatar.Bytes(),
+		"sendPhoto":               map[string]any{"message_id": 7},
+	})
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-100123", UserID: "22222"}
+	r := NewRuntime(BotConfig{Platform: PlatformTelegram, BotAccount: "12345"}, api.channel(), NewPluginManager(), nil, nil, nil, nil)
+	tool := newDianaRemoteImageTool(r, event)
+	ctx := context.Background()
+
+	output, err := tool.Run(ctx, map[string]any{"action": "view_avatar", "avatar_source": avatarSourceBot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	photos := api.callsOf("getUserProfilePhotos")
+	if len(photos) != 1 || stringFromAny(photos[0].Params["user_id"]) != "12345" {
+		t.Fatalf("bot avatar fetched for wrong user: %+v", photos)
+	}
+	parts := tool.ToolResultParts(output)
+	if len(parts) != 1 || !strings.HasPrefix(parts[0].ImageURL, "data:image/") || strings.Contains(parts[0].ImageURL, "test-token") {
+		t.Fatalf("avatar attachment = %+v", parts)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Run(ctx, map[string]any{"action": "send", "image_id": result["image_id"]}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.callsOf("sendPhoto")) != 1 {
+		t.Fatal("viewed avatar was not sent")
+	}
+}
+
+func TestRemoteImageViewAvatarRejectsUnavailableSource(t *testing.T) {
+	api := newFakeTelegramAPI(t, map[string]any{"getUserProfilePhotos": map[string]any{"photos": []any{}}})
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "22222"}
+	r := NewRuntime(BotConfig{Platform: PlatformTelegram, BotAccount: "12345"}, api.channel(), NewPluginManager(), nil, nil, nil, nil)
+	tool := newDianaRemoteImageTool(r, event)
+	for _, input := range []map[string]any{
+		{"action": "view_avatar"},
+		{"action": "view_avatar", "avatar_source": avatarSourceSender},
+		{"action": "view_avatar", "avatar_source": "https://example.com/a.png"},
+	} {
+		output, err := tool.Run(context.Background(), input)
+		if err == nil {
+			t.Fatalf("input %v accepted: %s", input, output)
+		}
+		if len(tool.ToolResultParts(output)) != 0 {
+			t.Fatalf("input %v attached an image", input)
+		}
 	}
 }
