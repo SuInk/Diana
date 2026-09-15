@@ -383,7 +383,9 @@ type Runtime struct {
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
-	contextSummaries   map[string]string
+	// recentToolCalls 记录最近几轮实际调用过的工具，见 tool_call_memory.go。
+	recentToolCalls  map[string][]toolCallRecord
+	contextSummaries map[string]string
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
 	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
 	// 摘要、又以完整原文进入同一个请求。
@@ -4014,6 +4016,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		if toolCalls := r.toolCallContext(event); toolCalls != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    toolCalls,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
 			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
@@ -4557,6 +4567,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
+		r.rememberToolCalls(event, resp.Steps)
 		if resp.Silent {
 			// 模型在 agent.finalize 上自己按下了静默。没有正文可整理，也不该被
 			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
