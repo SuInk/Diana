@@ -2379,10 +2379,11 @@ const (
 	// defaultPrivateClosingGrace 是默认答完几轮告别就不再追加。2 来自
 	// 「第一声再见还会接一句，第二声也接得住，第三声就只剩复读」。
 	defaultPrivateClosingGrace = 2
-	// 这两个默认值和以前代码里的常量一致：群 3、私聊 1。本次只把它们搬到配置里，
-	// 不改默认。
+	// 群 3、私聊 2。私聊以前是 1：那时私聊没有「并入正在生成的回复」这一层，并发只会让
+	// 两条回复同时生成、互相看不见。现在私聊也合并，第二条消息得在第一条还在生成时
+	// 就开始处理，才赶得上并进去；串行时它永远等到上一条发完，连发几句就回几遍。
 	defaultInboundGroupConcurrency   = 3
-	defaultInboundPrivateConcurrency = 1
+	defaultInboundPrivateConcurrency = 2
 	// maxInboundSessionConcurrency 只挡明显的错值。同一会话真开到几十路并发，
 	// 回复顺序和上下文都会乱成一团，不是配置该允许的范围。
 	maxInboundSessionConcurrency = 16
