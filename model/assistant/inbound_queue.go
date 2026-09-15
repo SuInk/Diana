@@ -226,6 +226,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	type historyBackfillResult struct {
 		err       error
 		sessions  []HistorySession
+		stats     historyBackfillStats
 		checkedAt int64
 	}
 	backfillResult := make(chan historyBackfillResult, 1)
@@ -236,6 +237,9 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	// advancing the baseline, so the queued rerun still covers the window.
 	pendingManualFloor := int64(0)
 	nextBackfillAt := time.Time{}
+	// followUps 是重连后还要补跑的整体回补时间点，followUpFloor 是补跑时水位退回到的位置。
+	var followUps []time.Time
+	followUpFloor := int64(0)
 	nextIngestRecoveryAt := time.Time{}
 	var observedConnectionEpoch uint64
 	var observedDuplicateConnections uint64
@@ -245,6 +249,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			return
 		}
 		backfillRunning = true
+		r.historyBackfillBusy.Store(true)
 		r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_started", "OneBot 断线消息回补已开始", nil)
 		cutoff := r.inboundReplayCutoffAt(time.Now())
 		baseline := historyBackfillBaselineWithPadding(backfillBaseline, cutoff)
@@ -256,14 +261,15 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			defer recoverGoroutinePanic("inbound_queue.go:223")
 			defer backfillWG.Done()
 			var sessions []HistorySession
+			var stats historyBackfillStats
 			var err error
 			if baselineReady {
-				sessions, err = r.backfillInboundHistoryFromSessions(ctx, store, baseline, fallbackWatermark)
+				sessions, stats, err = r.backfillInboundHistorySessions(ctx, store, baseline, fallbackWatermark)
 			} else {
-				err = r.backfillInboundHistory(ctx, store)
+				stats, err = r.backfillInboundHistoryWithStats(ctx, store)
 			}
 			select {
-			case backfillResult <- historyBackfillResult{err: err, sessions: sessions, checkedAt: checkedAt}:
+			case backfillResult <- historyBackfillResult{err: err, sessions: sessions, stats: stats, checkedAt: checkedAt}:
 			case <-ctx.Done():
 			}
 		}()
@@ -295,9 +301,10 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 		select {
 		case <-ctx.Done():
 			r.setInboundReady(false)
+			r.historyBackfillBusy.Store(false)
 			// A pending or running backfill means the missed window has not been
 			// persisted yet; advancing the checkpoint now would erase it on restart.
-			if connected && !backfillRunning && !backfillRequested && nextBackfillAt.IsZero() && !r.hasFailedInbound() {
+			if connected && !backfillRunning && !backfillRequested && nextBackfillAt.IsZero() && len(followUps) == 0 && r.seqGapActive.Load() == 0 && !r.hasFailedInbound() {
 				saveRecoveryCheckpoint(time.Now())
 			}
 			workerWG.Wait()
@@ -330,14 +337,18 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			}
 			r.recordOneBotConnectionLifecycle(ctx, status, "backfill_manual_requested", fmt.Sprintf("手动回补已触发，覆盖最近 %s 的消息", window), nil)
 			launchBackfill()
+		case probe := <-r.inboundSeqProbe:
+			r.startGroupSeqGapCheck(ctx, store, probe, &backfillWG)
 		case result := <-backfillResult:
 			backfillRunning = false
+			r.historyBackfillBusy.Store(false)
 			if result.err != nil && ctx.Err() == nil {
 				log.Printf("diana inbound history backfill incomplete: %v", result.err)
-				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_failed", "OneBot 断线消息回补失败", result.err)
+				r.recordOneBotConnectionLifecycleWithMetadata(ctx, r.channelStatus(), "backfill_failed", "OneBot 断线消息回补失败", result.err, result.stats.metadata())
 				nextBackfillAt = time.Now().Add(historyRetryDelay)
 			} else {
-				r.recordOneBotConnectionLifecycle(ctx, r.channelStatus(), "backfill_completed", "OneBot 断线消息回补已完成", nil)
+				r.recordOneBotConnectionLifecycleWithMetadata(ctx, r.channelStatus(), "backfill_completed",
+					fmt.Sprintf("OneBot 断线消息回补已完成：拉取 %d 条，新入库 %d 条", result.stats.Fetched, result.stats.Inserted), nil, result.stats.metadata())
 				nextBackfillAt = time.Time{}
 			}
 			if result.err == nil && len(result.sessions) > 0 {
@@ -400,13 +411,21 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			epochChanged := status.ConnectionEpoch != 0 && observedConnectionEpoch != 0 && status.ConnectionEpoch != observedConnectionEpoch
 			if connected && !epochChanged {
 				lastConnectedAt = now
-				recoveryDebt := backfillRunning || backfillRequested || !nextBackfillAt.IsZero() || r.hasFailedInbound()
+				recoveryDebt := backfillRunning || backfillRequested || !nextBackfillAt.IsZero() || len(followUps) > 0 || r.seqGapActive.Load() > 0 || r.hasFailedInbound()
 				if !recoveryDebt && (nextCheckpointAt.IsZero() || !now.Before(nextCheckpointAt)) {
 					saveRecoveryCheckpoint(now)
 					nextCheckpointAt = now.Add(inboundCheckpointPeriod)
 				}
 				if !nextBackfillAt.IsZero() && !now.Before(nextBackfillAt) {
 					nextBackfillAt = time.Time{}
+					launchBackfill()
+				}
+				// QQ 刚登录时离线消息可能还没同步到本地，第一次回补会「成功」地什么也拿不到。
+				// 按断线窗口再补跑几轮，已入库的消息由入站去重挡住。
+				if len(followUps) > 0 && !now.Before(followUps[0]) && !backfillRunning && !backfillRequested && nextBackfillAt.IsZero() {
+					followUps = followUps[1:]
+					backfillBaseline = rewindHistoryBackfillBaseline(backfillBaseline, followUpFloor)
+					r.recordOneBotConnectionLifecycle(ctx, status, "backfill_follow_up", "重连后补跑消息回补，接住登录后才同步到的离线消息", nil)
 					launchBackfill()
 				}
 				continue
@@ -418,7 +437,14 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 					disconnectedAt = now
 				}
 			}
-			r.setInboundReplayCutoff(inboundReplayCutoff(disconnectedAt, now))
+			reconnectCutoff := inboundReplayCutoff(disconnectedAt, now)
+			r.setInboundReplayCutoff(reconnectCutoff)
+			followUpFloor = reconnectCutoff.Unix()
+			followUps = followUps[:0]
+			for _, delay := range historyFollowUpDelays {
+				followUps = append(followUps, now.Add(delay))
+			}
+			r.armGroupSeqProbes()
 			connected = true
 			lastConnectedAt = now
 			disconnectedAt = now
@@ -441,6 +467,8 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 			if nextBackfillAt.IsZero() {
 				nextBackfillAt = now.Add(historyInitialDelay)
 			}
+			// 回补马上要跑，缺口复查先等它结束，免得刚连上就误报缺口。
+			r.historyBackfillBusy.Store(true)
 		}
 	}
 }
@@ -938,6 +966,10 @@ func channelEffectivelyOnline(status ChannelStatus) bool {
 }
 
 func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status ChannelStatus, event string, message string, eventErr error) {
+	r.recordOneBotConnectionLifecycleWithMetadata(ctx, status, event, message, eventErr, nil)
+}
+
+func (r *Runtime) recordOneBotConnectionLifecycleWithMetadata(ctx context.Context, status ChannelStatus, event string, message string, eventErr error, extra map[string]any) {
 	// Recovery must not wait indefinitely for the database it is recovering.
 	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
 	defer cancel()
@@ -972,6 +1004,9 @@ func (r *Runtime) recordOneBotConnectionLifecycle(ctx context.Context, status Ch
 	}
 	if status.LastRejectedClient != "" {
 		metadata["rejected_client"] = status.LastRejectedClient
+	}
+	for key, value := range extra {
+		metadata[key] = value
 	}
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:      kind,
@@ -1060,15 +1095,25 @@ func (r *Runtime) pendingInboundCount() int {
 }
 
 func (r *Runtime) backfillInboundHistory(ctx context.Context, store InboundEventStore) error {
-	sessions, err := store.ListHistorySessions(ctx)
-	if err != nil {
-		return fmt.Errorf("list history sessions: %w", err)
-	}
-	_, err = r.backfillInboundHistoryFromSessions(ctx, store, sessions, time.Now().Unix())
+	_, err := r.backfillInboundHistoryWithStats(ctx, store)
 	return err
 }
 
+func (r *Runtime) backfillInboundHistoryWithStats(ctx context.Context, store InboundEventStore) (historyBackfillStats, error) {
+	sessions, err := store.ListHistorySessions(ctx)
+	if err != nil {
+		return historyBackfillStats{}, fmt.Errorf("list history sessions: %w", err)
+	}
+	_, stats, err := r.backfillInboundHistorySessions(ctx, store, sessions, time.Now().Unix())
+	return stats, err
+}
+
 func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store InboundEventStore, sessions []HistorySession, fallbackWatermark int64) ([]HistorySession, error) {
+	ordered, _, err := r.backfillInboundHistorySessions(ctx, store, sessions, fallbackWatermark)
+	return ordered, err
+}
+
+func (r *Runtime) backfillInboundHistorySessions(ctx context.Context, store InboundEventStore, sessions []HistorySession, fallbackWatermark int64) ([]HistorySession, historyBackfillStats, error) {
 	// This backfill protocol is made of OneBot/NapCat APIs. Persisted sessions
 	// from Telegram and other transports must keep their own signed/string IDs
 	// and must never be replayed through OneBot's positive numeric group rules.
@@ -1174,13 +1219,14 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 			defer recoverGoroutinePanic("inbound_queue.go:1062")
 			defer fetchWG.Done()
 			for session := range jobs {
-				events, fetchErr := r.fetchHistorySince(ctx, session)
+				events, fetchErr := r.fetchHistorySerialized(ctx, session)
 				results <- historyFetchResult{session: session, events: events, err: fetchErr}
 			}
 		}()
 	}
 	fetchWG.Wait()
 	close(results)
+	stats := historyBackfillStats{Sessions: len(ordered)}
 	for result := range results {
 		if result.err != nil {
 			if permanentPrivateHistoryBackfillError(result.session, result.err) {
@@ -1190,33 +1236,56 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 			backfillErrors = append(backfillErrors, fmt.Errorf("%s %s: %w", result.session.Kind, result.session.ID, result.err))
 			continue
 		}
-		for _, event := range result.events {
-			if event.historyRecallCandidate {
-				recovered, recoverErr := r.recoverGroupRecallFromHistory(ctx, event)
-				if recoverErr != nil {
-					backfillErrors = append(backfillErrors, fmt.Errorf("recover backfilled recall %s: %w", event.MessageID, recoverErr))
-					continue
-				}
-				if recovered {
-					continue
-				}
-			}
-			if r.isSelfMessage(event) {
+		stats.Fetched += len(result.events)
+		inserted, enqueueErrs := r.enqueueBackfilledEvents(ctx, store, result.events)
+		stats.Inserted += inserted
+		backfillErrors = append(backfillErrors, enqueueErrs...)
+	}
+	return ordered, stats, errors.Join(backfillErrors...)
+}
+
+// enqueueBackfilledEvents 把历史接口拉回来的消息写进持久化入站队列，返回新入库的条数。
+func (r *Runtime) enqueueBackfilledEvents(ctx context.Context, store InboundEventStore, events []MessageEvent) (int, []error) {
+	var errs []error
+	insertedCount := 0
+	for _, event := range events {
+		if event.historyRecallCandidate {
+			recovered, recoverErr := r.recoverGroupRecallFromHistory(ctx, event)
+			if recoverErr != nil {
+				errs = append(errs, fmt.Errorf("recover backfilled recall %s: %w", event.MessageID, recoverErr))
 				continue
 			}
-			persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, inserted, persistErr := store.EnqueueInboundEvent(persistCtx, sessionKey(event), event, r.inboundPriority(event))
-			cancel()
-			if persistErr != nil {
-				backfillErrors = append(backfillErrors, fmt.Errorf("enqueue backfilled message %s: %w", event.MessageID, persistErr))
+			if recovered {
 				continue
-			}
-			if inserted {
-				r.wakeInboundWorkers()
 			}
 		}
+		if r.isSelfMessage(event) {
+			continue
+		}
+		persistCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, inserted, persistErr := store.EnqueueInboundEvent(persistCtx, sessionKey(event), event, r.inboundPriority(event))
+		cancel()
+		if persistErr != nil {
+			errs = append(errs, fmt.Errorf("enqueue backfilled message %s: %w", event.MessageID, persistErr))
+			continue
+		}
+		if inserted {
+			insertedCount++
+			r.wakeInboundWorkers()
+		}
 	}
-	return ordered, errors.Join(backfillErrors...)
+	return insertedCount, errs
+}
+
+// fetchHistorySerialized 让整体回补和各群的缺口复查排队拉历史：NapCat 同时处理几个
+// 大的历史请求时会卡住（见 historyFetchWorkers）。
+func (r *Runtime) fetchHistorySerialized(ctx context.Context, session HistorySession) ([]MessageEvent, error) {
+	r.historyFetchMu.Lock()
+	defer r.historyFetchMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.fetchHistorySince(ctx, session)
 }
 
 func (r *Runtime) callBackfillAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
