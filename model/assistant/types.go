@@ -293,6 +293,9 @@ type Reminder struct {
 	LastNotifiedStarCount  int       `json:"last_notified_star_count,omitempty"`
 	LastStarEventID        string    `json:"last_star_event_id,omitempty"`
 	LastStarEventAt        time.Time `json:"last_star_event_at,omitempty"`
+	// LastRepositoryCheckAt 是上一次仓库检查成功的开始时间。检查失败不更新，
+	// 所以不能用 LastRunAt 代替：失败的那一轮之前更新的记录仍要在下次成功时算新动态。
+	LastRepositoryCheckAt time.Time `json:"last_repository_check_at,omitempty"`
 	// WatchAnchorsJSON 记录每个投递目标里各 PR/Issue 首次宣布消息的 ID,
 	// 后续同一编号的更新推送引用它,把动态串成一条线。
 	WatchAnchorsJSON    string    `json:"watch_anchors,omitempty"`

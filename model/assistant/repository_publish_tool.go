@@ -1915,6 +1915,11 @@ func (t *dianaRepositoryIssuesTool) setState(ctx context.Context, repository str
 }
 
 func (t *dianaRepositoryIssuesTool) listRecentIssues(ctx context.Context, repository string) ([]githubRepositoryIssue, *repositoryIssueAPIError) {
+	// REST 的 issues 接口把 PR 混在一起返回，PR 多的仓库很快超过翻页上限，查重和防重复
+	// 就一直报「扫描不完整」。有凭据时用 GraphQL 只列 issue。
+	if issues, apiErr, used := t.listIssuesGraphQL(ctx, repository); used {
+		return issues, apiErr
+	}
 	readPage := func(page int) ([]githubRepositoryIssue, http.Header, *repositoryIssueAPIError) {
 		values := url.Values{
 			"state":     {"all"},
@@ -1952,6 +1957,88 @@ func (t *dianaRepositoryIssuesTool) listRecentIssues(ctx context.Context, reposi
 		}
 	}
 	return issues, nil
+}
+
+const repositoryPublishIssuesGraphQLQuery = `query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number title body state url updatedAt closedAt labels(first: 20) { nodes { name } } }
+    }
+  }
+}`
+
+// listIssuesGraphQL 用 GraphQL 列出仓库全部 issue（不含 PR）。used=false 表示没有可用凭据或
+// 查询失败，调用方退回 REST。
+func (t *dianaRepositoryIssuesTool) listIssuesGraphQL(ctx context.Context, repository string) ([]githubRepositoryIssue, *repositoryIssueAPIError, bool) {
+	if t == nil || t.plugin == nil || t.plugin.client == nil {
+		return nil, nil, false
+	}
+	owner, name, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || name == "" {
+		return nil, nil, false
+	}
+	token, credentialErr := t.repositoryPublishCredential(ctx, repository)
+	if credentialErr != nil || strings.TrimSpace(token) == "" {
+		return nil, nil, false
+	}
+	variables := map[string]any{"owner": owner, "name": name, "after": nil}
+	var issues []githubRepositoryIssue
+	for page := 1; page <= repositoryIssueListMaxPages; page++ {
+		var data struct {
+			Repository *struct {
+				Issues struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []struct {
+						Number    int        `json:"number"`
+						Title     string     `json:"title"`
+						Body      string     `json:"body"`
+						State     string     `json:"state"`
+						URL       string     `json:"url"`
+						UpdatedAt time.Time  `json:"updatedAt"`
+						ClosedAt  *time.Time `json:"closedAt"`
+						Labels    struct {
+							Nodes []struct {
+								Name string `json:"name"`
+							} `json:"nodes"`
+						} `json:"labels"`
+					} `json:"nodes"`
+				} `json:"issues"`
+			} `json:"repository"`
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, t.requestTimeout())
+		err := postGitHubGraphQL(requestCtx, t.plugin.client, t.plugin.baseURL, token, "Diana-Repository-Issues", repositoryPublishIssuesGraphQLQuery, variables, &data)
+		cancel()
+		if err != nil || data.Repository == nil {
+			return nil, nil, false
+		}
+		for _, node := range data.Repository.Issues.Nodes {
+			if !validRepositoryIssueCanonicalURL(node.URL, repository, "issues", node.Number) {
+				return nil, &repositoryIssueAPIError{Code: "invalid_response"}, true
+			}
+			issue := githubRepositoryIssue{
+				Number: node.Number, Title: node.Title, Body: node.Body, State: strings.ToLower(node.State),
+				HTMLURL: node.URL, UpdatedAt: node.UpdatedAt,
+			}
+			if node.ClosedAt != nil {
+				issue.ClosedAt = *node.ClosedAt
+			}
+			for _, label := range node.Labels.Nodes {
+				issue.Labels = append(issue.Labels, struct {
+					Name string `json:"name"`
+				}{Name: label.Name})
+			}
+			issues = append(issues, issue)
+		}
+		if !data.Repository.Issues.PageInfo.HasNextPage {
+			return issues, nil, true
+		}
+		variables["after"] = data.Repository.Issues.PageInfo.EndCursor
+	}
+	return nil, &repositoryIssueAPIError{Code: "idempotency_scan_incomplete"}, true
 }
 
 func (t *dianaRepositoryIssuesTool) getIssue(ctx context.Context, repository string, number int) (githubRepositoryIssue, *repositoryIssueAPIError) {

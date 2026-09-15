@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRepositoryWatchCursorOnlyAdvances(t *testing.T) {
@@ -72,6 +73,7 @@ func TestRepositoryWatchIssueAndPullCursorsSurviveEmptyAndStaleResponses(t *test
 				entry(36, "2026-06-15T00:59:57Z"), entry(16, "2026-06-10T03:52:11Z"),
 				entry(14, "2026-06-04T02:51:22Z"), entry(11, "2026-06-04T02:51:13Z"),
 			}
+			var previousCheck time.Time
 			poll := func(items []map[string]any, cursor string) ([]int, string) {
 				t.Helper()
 				mu.Lock()
@@ -82,13 +84,13 @@ func TestRepositoryWatchIssueAndPullCursorsSurviveEmptyAndStaleResponses(t *test
 				var err error
 				if kind == "issue" {
 					var found []repositoryWatchIssue
-					found, next, err = plugin.fetchIssues(context.Background(), "acme/demo", cursor, selection, settings)
+					found, next, err = plugin.fetchIssues(context.Background(), "acme/demo", cursor, previousCheck, selection, settings)
 					for _, item := range found {
 						numbers = append(numbers, item.Number)
 					}
 				} else {
 					var found []repositoryWatchPullRequest
-					found, next, err = plugin.fetchPullRequests(context.Background(), "acme/demo", "main", cursor, selection, settings)
+					found, next, err = plugin.fetchPullRequests(context.Background(), "acme/demo", "main", cursor, previousCheck, selection, settings)
 					for _, item := range found {
 						numbers = append(numbers, item.Number)
 					}
@@ -134,6 +136,8 @@ func TestRepositoryWatchIssueAndPullCursorsSurviveEmptyAndStaleResponses(t *test
 			if got, next := poll(nil, ""); len(got) != 0 || next != repositoryWatchNoIssueCursor {
 				t.Fatalf("initial empty repository changed: %v %q", got, next)
 			}
+			// 游标是 __none__ 时只认上次成功检查之后更新的记录：41 在上次检查之后更新，要通知。
+			previousCheck = time.Date(2026, 7, 31, 23, 0, 0, 0, time.UTC)
 			if got, _ := poll(fresh[1:2], repositoryWatchNoIssueCursor); !reflect.DeepEqual(got, []int{41}) {
 				t.Fatalf("first real record was swallowed: %v", got)
 			}

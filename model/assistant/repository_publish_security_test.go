@@ -920,7 +920,7 @@ func TestRepositoryIssueCreateFailsClosedWhenRecentIssueScanIsIncomplete(t *test
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/demo/issues":
 			w.Header().Set("Link", `<https://api.github.test/repos/acme/demo/issues?page=11>; rel="last"`)
 			_ = json.NewEncoder(w).Encode([]githubRepositoryIssue{})
-		case r.Method == http.MethodPost:
+		case r.Method == http.MethodPost && r.URL.Path != "/graphql":
 			posts.Add(1)
 			http.Error(w, `{"message":"unexpected"}`, http.StatusInternalServerError)
 		default:

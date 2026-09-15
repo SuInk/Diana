@@ -4,15 +4,18 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,10 +43,32 @@ const (
 type RepositoryWatchPlugin struct {
 	client  *http.Client
 	baseURL string
+	// now 只给测试注入时钟；为空时用 time.Now。
+	now func() time.Time
+}
+
+const (
+	// repositoryWatchCheckClockSkew：游标是 __none__ 时拿上次检查的本机时间和 GitHub 的
+	// updated_at 比较，留一点余量，免得本机时钟偏快把刚好卡在检查前后的记录漏掉。
+	repositoryWatchCheckClockSkew = time.Minute
+	// repositoryWatchIssueScanPages 是没有可用游标时，为了找到最新 issue 最多翻的页数。
+	repositoryWatchIssueScanPages = 5
+	// repositoryWatchEventPages 是仓库事件流最多翻的页数，GitHub 最多只给 300 条。
+	repositoryWatchEventPages = 3
+)
+
+func (p *RepositoryWatchPlugin) clock() time.Time {
+	if p != nil && p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 type repositoryWatchSnapshot struct {
-	CommitSHA          string
+	CommitSHA string
+	// CheckedAt 是这次检查开始的时间；作为输入时是上一次成功检查的开始时间。
+	// 游标是 __none__ 时，只有在它之后更新的记录才算新动态。
+	CheckedAt          time.Time
 	PullRequestCursor  string
 	IssueCursor        string
 	ReleaseTag         string
@@ -414,7 +439,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		return repositoryWatchChange{}, fmt.Errorf("repository watch: at least one update type must be enabled")
 	}
 	cursor.previous = nil
-	change := repositoryWatchChange{Repository: repository, Branch: branch, Snapshot: repositoryWatchSnapshot{previous: &cursor, repository: repository, branch: branch, selection: selection}}
+	change := repositoryWatchChange{Repository: repository, Branch: branch, Snapshot: repositoryWatchSnapshot{CheckedAt: p.clock(), previous: &cursor, repository: repository, branch: branch, selection: selection}}
 	var errs []error
 	if selection.Commits {
 		commits, snapshot, truncated, err := p.fetchCommits(ctx, repository, branch, cursor.CommitSHA, settings)
@@ -427,7 +452,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.PullRequests {
-		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, selection, settings)
+		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, cursor.CheckedAt, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -439,7 +464,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, settings)
 	}
 	if selection.Issues {
-		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, selection, settings)
+		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, cursor.CheckedAt, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -634,7 +659,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	return commits, latest, max(newCommitCount, verifiedTotal) > limit, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
+func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, previousCheckAt time.Time, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -661,6 +686,11 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		Head struct {
 			Ref string `json:"ref"`
 		} `json:"head"`
+	}
+	// 分支过滤交给服务端：本地从最近 100 条里挑的话，发往其他分支的 PR 一多，订阅分支的 PR
+	// 就被挤出去了。本地过滤仍保留，兼容不认 base 参数的实现。
+	if trimmedBranch := strings.TrimSpace(branch); trimmedBranch != "" {
+		query.Set("base", trimmedBranch)
 	}
 	if err := p.getJSON(ctx, "/repos/"+repository+"/pulls?"+query.Encode(), settings, &payload); err != nil {
 		return nil, "", fmt.Errorf("读取 %s pull requests: %w", repository, err)
@@ -689,7 +719,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	result := make([]repositoryWatchPullRequest, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
-		if !repositoryWatchPullAfterCursor(item.UpdatedAt, item.Number, cursor) {
+		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, previousCheckAt) {
 			continue
 		}
 		if len(result) >= limit {
@@ -905,6 +935,18 @@ func repositoryWatchPullCursor(updatedAt time.Time, number int) string {
 	return fmt.Sprintf("%s#%d", updatedAt.UTC().Format(time.RFC3339Nano), number)
 }
 
+// repositoryWatchRecordAfterCursor 判断一条记录是否算新动态。
+// 游标是 __none__ 时只认上次成功检查之后更新的记录，更早的静默成为基线。线上一个 PR 很多的
+// 仓库，最近 100 条全是 PR，issue 被挤出去，游标长期停在 __none__；某次返回里出现了几条
+// 旧 issue，就被全部当成新动态推进群里。检查周期由订阅自己设置，所以不能用固定时间窗口。
+// 不知道上次检查时间时只建基线。
+func repositoryWatchRecordAfterCursor(updatedAt time.Time, number int, cursor string, previousCheckAt time.Time) bool {
+	if strings.TrimSpace(cursor) == repositoryWatchNoIssueCursor {
+		return number > 0 && !previousCheckAt.IsZero() && updatedAt.After(previousCheckAt.Add(-repositoryWatchCheckClockSkew))
+	}
+	return repositoryWatchPullAfterCursor(updatedAt, number, cursor)
+}
+
 func repositoryWatchPullAfterCursor(updatedAt time.Time, number int, cursor string) bool {
 	cursor = strings.TrimSpace(cursor)
 	if cursor == repositoryWatchNoPullCursor {
@@ -918,38 +960,29 @@ func repositoryWatchPullAfterCursor(updatedAt time.Time, number int, cursor stri
 	return updatedAt.After(cursorTime) || updatedAt.Equal(cursorTime) && number > cursorNumber
 }
 
-func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchIssue, string, error) {
+func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, previousCheckAt time.Time, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchIssue, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
 		"direction": {"desc"},
 		"per_page":  {"100"},
 	}
-	var payload []struct {
-		Number      int        `json:"number"`
-		Title       string     `json:"title"`
-		Body        string     `json:"body"`
-		State       string     `json:"state"`
-		StateReason string     `json:"state_reason"`
-		HTMLURL     string     `json:"html_url"`
-		CreatedAt   time.Time  `json:"created_at"`
-		UpdatedAt   time.Time  `json:"updated_at"`
-		ClosedAt    *time.Time `json:"closed_at"`
-		User        struct {
-			Login string `json:"login"`
-		} `json:"user"`
-		PullRequest *json.RawMessage `json:"pull_request"`
+	// issues 接口会把 PR 一起返回。有可用游标时只拉游标之后更新过的，PR 再多也挤不掉 issue；
+	// 没有游标时最多翻几页找最新的 issue。
+	cursorTime := repositoryWatchPullCursorTime(cursor)
+	if !cursorTime.IsZero() {
+		query.Set("since", cursorTime.UTC().Format(time.RFC3339))
 	}
-	if err := p.getJSON(ctx, "/repos/"+repository+"/issues?"+query.Encode(), settings, &payload); err != nil {
-		return nil, "", fmt.Errorf("读取 %s issues: %w", repository, err)
-	}
-	filtered := payload[:0]
-	for _, item := range payload {
-		if item.PullRequest == nil {
-			filtered = append(filtered, item)
-		}
+	filtered, newestSeen, exhausted, reopenTimesFromQuery, err := p.collectIssues(ctx, repository, cursorTime, query, settings)
+	if err != nil {
+		return nil, "", err
 	}
 	if len(filtered) == 0 {
+		if !exhausted && cursorTime.IsZero() && !newestSeen.IsZero() {
+			// 翻了几页全是 PR：不能断定仓库没有 issue。记下已经扫过的时间当水位，之后只看
+			// 这个时间以后更新的记录；编号取 1，只用来组成合法游标。
+			return nil, observedRepositoryWatchCursor(repository, "issue", cursor, repositoryWatchPullCursor(newestSeen, 1)), nil
+		}
 		return nil, observedRepositoryWatchCursor(repository, "issue", cursor, repositoryWatchNoIssueCursor), nil
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
@@ -966,8 +999,13 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	watermark := repositoryWatchPullCursorTime(cursor)
 	// 事件列表按需拉，而且一轮只拉一次：多数轮询里没有重开过的 issue，不该白花一次请求。
+	// GraphQL 查询已经带回每个 issue 最近一次重新打开的时间时，直接用它，不再读事件流——
+	// 仓库级事件列表只看得到最近一页，事件一多重开记录就漏了。
 	var reopenTimesCache map[int]time.Time
 	reopenTimesReady := false
+	if reopenTimesFromQuery != nil {
+		reopenTimesCache, reopenTimesReady = reopenTimesFromQuery, true
+	}
 	reopenTimes := func() map[int]time.Time {
 		if reopenTimesCache == nil {
 			times, err := p.fetchIssueReopenTimes(ctx, repository, settings)
@@ -981,7 +1019,7 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 	}
 	result := make([]repositoryWatchIssue, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
-		if !repositoryWatchPullAfterCursor(item.UpdatedAt, item.Number, cursor) || len(result) >= limit {
+		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, previousCheckAt) || len(result) >= limit {
 			continue
 		}
 		status := "updated"
@@ -1023,6 +1061,151 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 
 // fetchIssueReopenTimes 读仓库级 issue 事件列表（新的在前），取出每个 issue 最近一次
 // 被重新打开的时间。仓库级只要一次请求，比逐个 issue 翻时间线便宜得多。
+// repositoryWatchIssueRecord 是两种来源（GraphQL、REST）统一后的 issue 记录。
+type repositoryWatchIssueRecord struct {
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	State       string     `json:"state"`
+	StateReason string     `json:"state_reason"`
+	HTMLURL     string     `json:"html_url"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	ClosedAt    *time.Time `json:"closed_at"`
+	User        struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	PullRequest *json.RawMessage `json:"pull_request"`
+}
+
+// collectIssues 取游标之后（没有游标时取最新）的 issue。有 Token 时用 GraphQL 直接查 issue：
+// REST 的 issues 接口会把 PR 混在一起返回，PR 多的仓库里 issue 会被挤出结果。GraphQL
+// 失败或没有 Token 时退回 REST 翻页。reopenTimes 非空表示重开时间已随查询取回。
+func (p *RepositoryWatchPlugin) collectIssues(ctx context.Context, repository string, cursorTime time.Time, query url.Values, settings SettingValues) ([]repositoryWatchIssueRecord, time.Time, bool, map[int]time.Time, error) {
+	if token := repositoryWatchToken(repository, settings); token != "" {
+		items, exhausted, reopenTimes, err := p.collectIssuesGraphQL(ctx, repository, cursorTime, token, settings)
+		if err == nil {
+			return items, time.Time{}, exhausted, reopenTimes, nil
+		}
+		log.Printf("diana repository_watch graphql issues failed, falling back to REST: repository=%q err=%v", repository, err)
+	}
+	var filtered []repositoryWatchIssueRecord
+	newestSeen := time.Time{}
+	exhausted := false
+	for page := 1; page <= repositoryWatchIssueScanPages; page++ {
+		query.Set("page", strconv.Itoa(page))
+		var payload []repositoryWatchIssueRecord
+		if err := p.getJSON(ctx, "/repos/"+repository+"/issues?"+query.Encode(), settings, &payload); err != nil {
+			return nil, time.Time{}, false, nil, fmt.Errorf("读取 %s issues: %w", repository, err)
+		}
+		for _, item := range payload {
+			if item.UpdatedAt.After(newestSeen) {
+				newestSeen = item.UpdatedAt
+			}
+			if item.PullRequest == nil {
+				filtered = append(filtered, item)
+			}
+		}
+		if len(payload) < 100 {
+			exhausted = true
+			break
+		}
+		// 没有游标时只需要找到最新那条 issue 来建基线，找到就不必再翻。
+		if cursorTime.IsZero() && len(filtered) > 0 {
+			break
+		}
+	}
+	return filtered, newestSeen, exhausted, nil, nil
+}
+
+const repositoryWatchIssuesGraphQLQuery = `query($owner: String!, $name: String!, $since: DateTime, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}, filterBy: {since: $since}) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number title body state stateReason url createdAt updatedAt closedAt
+        author { login }
+        timelineItems(last: 1, itemTypes: [REOPENED_EVENT]) { nodes { ... on ReopenedEvent { createdAt } } }
+      }
+    }
+  }
+}`
+
+func (p *RepositoryWatchPlugin) collectIssuesGraphQL(ctx context.Context, repository string, cursorTime time.Time, token string, settings SettingValues) ([]repositoryWatchIssueRecord, bool, map[int]time.Time, error) {
+	owner, name, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || name == "" {
+		return nil, false, nil, fmt.Errorf("仓库名无效：%s", repository)
+	}
+	variables := map[string]any{"owner": owner, "name": name, "since": nil, "after": nil}
+	if !cursorTime.IsZero() {
+		variables["since"] = cursorTime.UTC().Format(time.RFC3339)
+	}
+	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, 20)) * time.Second
+	var items []repositoryWatchIssueRecord
+	reopenTimes := map[int]time.Time{}
+	for page := 1; page <= repositoryWatchIssueScanPages; page++ {
+		var data struct {
+			Repository *struct {
+				Issues struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []struct {
+						Number      int        `json:"number"`
+						Title       string     `json:"title"`
+						Body        string     `json:"body"`
+						State       string     `json:"state"`
+						StateReason string     `json:"stateReason"`
+						URL         string     `json:"url"`
+						CreatedAt   time.Time  `json:"createdAt"`
+						UpdatedAt   time.Time  `json:"updatedAt"`
+						ClosedAt    *time.Time `json:"closedAt"`
+						Author      *struct {
+							Login string `json:"login"`
+						} `json:"author"`
+						TimelineItems struct {
+							Nodes []struct {
+								CreatedAt time.Time `json:"createdAt"`
+							} `json:"nodes"`
+						} `json:"timelineItems"`
+					} `json:"nodes"`
+				} `json:"issues"`
+			} `json:"repository"`
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := postGitHubGraphQL(requestCtx, p.client, p.baseURL, token, "Diana-Repository-Watch", repositoryWatchIssuesGraphQLQuery, variables, &data)
+		cancel()
+		if err != nil {
+			return nil, false, nil, err
+		}
+		if data.Repository == nil {
+			return nil, false, nil, fmt.Errorf("GitHub GraphQL 找不到仓库 %s", repository)
+		}
+		for _, node := range data.Repository.Issues.Nodes {
+			item := repositoryWatchIssueRecord{
+				Number: node.Number, Title: node.Title, Body: node.Body,
+				State: strings.ToLower(node.State), StateReason: strings.ToLower(node.StateReason),
+				HTMLURL: node.URL, CreatedAt: node.CreatedAt, UpdatedAt: node.UpdatedAt, ClosedAt: node.ClosedAt,
+			}
+			if node.Author != nil {
+				item.User.Login = node.Author.Login
+			}
+			if len(node.TimelineItems.Nodes) > 0 && !node.TimelineItems.Nodes[0].CreatedAt.IsZero() {
+				reopenTimes[node.Number] = node.TimelineItems.Nodes[0].CreatedAt
+			}
+			items = append(items, item)
+		}
+		info := data.Repository.Issues.PageInfo
+		// 没有游标时第一页已经是最新的 issue，够建基线；有游标时把游标之后的翻完。
+		if !info.HasNextPage || cursorTime.IsZero() {
+			return items, !info.HasNextPage, reopenTimes, nil
+		}
+		variables["after"] = info.EndCursor
+	}
+	return items, false, reopenTimes, nil
+}
+
 func (p *RepositoryWatchPlugin) fetchIssueReopenTimes(ctx context.Context, repository string, settings SettingValues) (map[int]time.Time, error) {
 	var payload []struct {
 		Event     string    `json:"event"`
@@ -1088,7 +1271,7 @@ func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository strin
 	if err := p.getJSON(ctx, "/repos/"+repository, settings, &repo); err != nil {
 		return nil, repositoryWatchStarState{}, fmt.Errorf("读取 %s stars: %w", repository, err)
 	}
-	events, err := p.fetchStarEvents(ctx, repository, settings)
+	events, err := p.fetchStarEvents(ctx, repository, strings.TrimSpace(cursor.StarEventID), settings)
 	if err != nil {
 		return nil, repositoryWatchStarState{}, err
 	}
@@ -1135,8 +1318,12 @@ func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository strin
 }
 
 // fetchStarEvents 从仓库事件流里挑出 star 事件，按 GitHub 的顺序（新的在前）返回。
-func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository string, settings SettingValues) ([]repositoryWatchStargazer, error) {
-	var payload []struct {
+//
+// 事件流是所有类型混在一起的（push、PR、评论……）。以前只看第一页 100 条，两次检查之间
+// 动态超过 100 条（比如服务停过一阵）时新 star 就漏了。现在往后翻，直到看到上次处理过的
+// 事件为止；GitHub 这个接口最多给 3 页。
+func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository, lastEventID string, settings SettingValues) ([]repositoryWatchStargazer, error) {
+	type eventPayload struct {
 		ID        string    `json:"id"`
 		Type      string    `json:"type"`
 		CreatedAt time.Time `json:"created_at"`
@@ -1147,8 +1334,27 @@ func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository 
 			Action string `json:"action"`
 		} `json:"payload"`
 	}
-	if err := p.getJSON(ctx, "/repos/"+repository+"/events?per_page=100", settings, &payload); err != nil {
-		return nil, fmt.Errorf("读取 %s 事件: %w", repository, err)
+	var payload []eventPayload
+	for page := 1; page <= repositoryWatchEventPages; page++ {
+		var batch []eventPayload
+		if err := p.getJSON(ctx, fmt.Sprintf("/repos/%s/events?per_page=100&page=%d", repository, page), settings, &batch); err != nil {
+			if page > 1 {
+				break
+			}
+			return nil, fmt.Errorf("读取 %s 事件: %w", repository, err)
+		}
+		payload = append(payload, batch...)
+		seenLast := false
+		for _, item := range batch {
+			if lastEventID != "" && item.ID == lastEventID {
+				seenLast = true
+				break
+			}
+		}
+		// 首轮（还没有游标）只记最新位置，第一页就够。
+		if len(batch) < 100 || seenLast || lastEventID == "" || lastEventID == repositoryWatchNoStarEvent {
+			break
+		}
 	}
 	events := make([]repositoryWatchStargazer, 0, 8)
 	for _, item := range payload {
@@ -1168,6 +1374,68 @@ func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository 
 	return events, nil
 }
 
+// repositoryWatchToken 取访问某个仓库用的 Token：仓库单独绑了凭据就用它，否则用公共 Token。
+func repositoryWatchToken(repository string, settings SettingValues) string {
+	token := strings.TrimSpace(settings.String(repositoryWatchSettingToken, ""))
+	if _, credentialToken, ok := repositoryCredentialFor(repository, settings); ok && credentialToken != "" {
+		token = credentialToken
+	}
+	return token
+}
+
+// githubGraphQLURL 由 REST 根地址推出 GraphQL 地址；GitHub Enterprise 的 REST 在 /api/v3 下。
+func githubGraphQLURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.HasSuffix(baseURL, "/api/v3") {
+		return strings.TrimSuffix(baseURL, "/api/v3") + "/api/graphql"
+	}
+	return baseURL + "/graphql"
+}
+
+// postGraphQL 发一次 GitHub GraphQL 查询。GraphQL 必须带 Token，调用方在没有 Token 时应走 REST。
+func postGitHubGraphQL(ctx context.Context, client *http.Client, baseURL, token, userAgent, query string, variables map[string]any, target any) error {
+	encoded, err := json.Marshal(map[string]any{"query": query, "variables": variables})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, githubGraphQLURL(baseURL), bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("GitHub GraphQL %s", resp.Status)
+	}
+	var envelope struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return fmt.Errorf("解析 GitHub GraphQL 响应: %w", err)
+	}
+	if len(envelope.Errors) > 0 {
+		return fmt.Errorf("GitHub GraphQL: %s", envelope.Errors[0].Message)
+	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return fmt.Errorf("GitHub GraphQL 没有返回数据")
+	}
+	return json.Unmarshal(envelope.Data, target)
+}
+
 func (p *RepositoryWatchPlugin) getJSON(ctx context.Context, path string, settings SettingValues, target any) error {
 	return p.getJSONAccept(ctx, path, settings, "application/vnd.github+json", target)
 }
@@ -1185,10 +1453,7 @@ func (p *RepositoryWatchPlugin) getJSONAccept(ctx context.Context, path string, 
 	req.Header.Set("User-Agent", "Diana-Repository-Watch")
 	// 仓库单独绑了凭据就用它，否则沿用公共 Token。gh 类型的凭据这里取不到 Token，
 	// 订阅轮询是后台任务、不便调用 gh，此时同样退回公共 Token。
-	token := strings.TrimSpace(settings.String(repositoryWatchSettingToken, ""))
-	if _, credentialToken, ok := repositoryCredentialFor(repositoryFromGitHubAPIPath(path), settings); ok && credentialToken != "" {
-		token = credentialToken
-	}
+	token := repositoryWatchToken(repositoryFromGitHubAPIPath(path), settings)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
