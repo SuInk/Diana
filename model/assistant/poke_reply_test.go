@@ -52,7 +52,7 @@ func pokeTestEvent() MessageEvent {
 
 func TestHandlePokeNoticeRepliesInPersona(t *testing.T) {
 	channel := &recordingChannel{}
-	provider := &capturingLLMProvider{reply: "干嘛戳我呀"}
+	provider := &capturingLLMProvider{reply: `{"action":"both","text":"干嘛戳我呀"}`}
 	runtime := NewRuntime(BotConfig{
 		BotAccount:       "10000",
 		PokeReplyEnabled: boolPointer(true),
@@ -66,6 +66,10 @@ func TestHandlePokeNoticeRepliesInPersona(t *testing.T) {
 	}
 	if len(channel.sent) != 1 || channel.sent[0].Text != "干嘛戳我呀" || channel.sent[0].GroupID != "20002" {
 		t.Fatalf("sent = %#v", channel.sent)
+	}
+	// 选了「戳回去再说一句」：先戳回去，再发文字。
+	if calls := recordedCallsByAction(channel.callsSnapshot(), "group_poke"); len(calls) != 1 || stringFromAny(calls[0].params["user_id"]) != "10005" {
+		t.Fatalf("poke back calls = %#v", calls)
 	}
 	// 旁路生成要带上人设。
 	request := provider.requestSnapshot()
@@ -84,7 +88,7 @@ func TestHandlePokeNoticeRepliesInPersona(t *testing.T) {
 
 func TestHandlePokeNoticeGates(t *testing.T) {
 	channel := &recordingChannel{}
-	provider := &capturingLLMProvider{reply: "嗯？"}
+	provider := &capturingLLMProvider{reply: `{"action":"text","text":"嗯？"}`}
 	factory := func() (LLMProvider, error) { return provider, nil }
 
 	// 开关默认关：一言不发。
@@ -138,5 +142,31 @@ func TestClaimPokeReplyCooldown(t *testing.T) {
 	}
 	if !runtime.claimPokeReply("bot", "10005", now.Add(pokeReplyCooldown+time.Second)) {
 		t.Fatal("expired cooldown still blocking")
+	}
+}
+
+func TestHandlePokeNoticeCanChooseToPokeBackOnlyOrIgnore(t *testing.T) {
+	for _, tc := range []struct {
+		reply     string
+		wantPokes int
+		wantSent  int
+	}{
+		{reply: `{"action":"poke"}`, wantPokes: 1, wantSent: 0},
+		{reply: `{"action":"none"}`, wantPokes: 0, wantSent: 0},
+	} {
+		channel := &recordingChannel{}
+		provider := &capturingLLMProvider{reply: tc.reply}
+		runtime := NewRuntime(BotConfig{BotAccount: "10000", PokeReplyEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+			return provider, nil
+		})
+		if err := runtime.handleNotice(context.Background(), pokeTestEvent()); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(recordedCallsByAction(channel.callsSnapshot(), "group_poke")); got != tc.wantPokes {
+			t.Fatalf("%s pokes = %d", tc.reply, got)
+		}
+		if len(channel.sent) != tc.wantSent {
+			t.Fatalf("%s sent = %#v", tc.reply, channel.sent)
+		}
 	}
 }
