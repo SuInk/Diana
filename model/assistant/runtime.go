@@ -4671,6 +4671,8 @@ var replyAgentCoreTools = []string{
 	dianaHistoryImagesToolName,
 	dianaImageToolName,
 	"browser_render",
+	// 戳一戳要顺手用：每次先多一轮 tools.load 就不自然了。它只在 OneBot 会话里注册。
+	dianaPokeToolName,
 }
 
 // generateReplyWithAgentTools retains the newer plugin-tool entry point. Plugin
