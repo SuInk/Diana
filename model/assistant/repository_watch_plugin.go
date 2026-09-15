@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +41,25 @@ const (
 type RepositoryWatchPlugin struct {
 	client  *http.Client
 	baseURL string
+	// now 只给测试注入时钟；为空时用 time.Now。
+	now func() time.Time
+}
+
+const (
+	// repositoryWatchNoneCursorWindow：游标是 __none__（上次检查时没看到任何记录）时，
+	// 只把最近这段时间里更新的记录当成新动态。线上一个 PR 很多的仓库，最近 100 条全是 PR，
+	// issue 被挤出去，游标长期停在 __none__；某次返回里出现了几条旧 issue，就被全部当成
+	// 新动态推进群里。仓库第一次出现 issue 仍然会在这个窗口内被通知。
+	repositoryWatchNoneCursorWindow = 15 * time.Minute
+	// repositoryWatchIssueScanPages 是没有可用游标时，为了找到最新 issue 最多翻的页数。
+	repositoryWatchIssueScanPages = 5
+)
+
+func (p *RepositoryWatchPlugin) clock() time.Time {
+	if p != nil && p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 type repositoryWatchSnapshot struct {
@@ -689,7 +709,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	result := make([]repositoryWatchPullRequest, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
-		if !repositoryWatchPullAfterCursor(item.UpdatedAt, item.Number, cursor) {
+		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, p.clock()) {
 			continue
 		}
 		if len(result) >= limit {
@@ -905,6 +925,15 @@ func repositoryWatchPullCursor(updatedAt time.Time, number int) string {
 	return fmt.Sprintf("%s#%d", updatedAt.UTC().Format(time.RFC3339Nano), number)
 }
 
+// repositoryWatchRecordAfterCursor 判断一条记录是否算新动态。游标是 __none__ 时只认最近更新的
+// 记录，更早的静默成为基线，见 repositoryWatchNoneCursorWindow。
+func repositoryWatchRecordAfterCursor(updatedAt time.Time, number int, cursor string, now time.Time) bool {
+	if strings.TrimSpace(cursor) == repositoryWatchNoIssueCursor {
+		return number > 0 && !updatedAt.Before(now.Add(-repositoryWatchNoneCursorWindow))
+	}
+	return repositoryWatchPullAfterCursor(updatedAt, number, cursor)
+}
+
 func repositoryWatchPullAfterCursor(updatedAt time.Time, number int, cursor string) bool {
 	cursor = strings.TrimSpace(cursor)
 	if cursor == repositoryWatchNoPullCursor {
@@ -925,7 +954,13 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 		"direction": {"desc"},
 		"per_page":  {"100"},
 	}
-	var payload []struct {
+	// issues 接口会把 PR 一起返回。有可用游标时只拉游标之后更新过的，PR 再多也挤不掉 issue；
+	// 没有游标时最多翻几页找最新的 issue。
+	cursorTime := repositoryWatchPullCursorTime(cursor)
+	if !cursorTime.IsZero() {
+		query.Set("since", cursorTime.UTC().Format(time.RFC3339))
+	}
+	type issuePayload struct {
 		Number      int        `json:"number"`
 		Title       string     `json:"title"`
 		Body        string     `json:"body"`
@@ -940,16 +975,38 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 		} `json:"user"`
 		PullRequest *json.RawMessage `json:"pull_request"`
 	}
-	if err := p.getJSON(ctx, "/repos/"+repository+"/issues?"+query.Encode(), settings, &payload); err != nil {
-		return nil, "", fmt.Errorf("读取 %s issues: %w", repository, err)
-	}
-	filtered := payload[:0]
-	for _, item := range payload {
-		if item.PullRequest == nil {
-			filtered = append(filtered, item)
+	var filtered []issuePayload
+	newestSeen := time.Time{}
+	exhausted := false
+	for page := 1; page <= repositoryWatchIssueScanPages; page++ {
+		query.Set("page", strconv.Itoa(page))
+		var payload []issuePayload
+		if err := p.getJSON(ctx, "/repos/"+repository+"/issues?"+query.Encode(), settings, &payload); err != nil {
+			return nil, "", fmt.Errorf("读取 %s issues: %w", repository, err)
+		}
+		for _, item := range payload {
+			if item.UpdatedAt.After(newestSeen) {
+				newestSeen = item.UpdatedAt
+			}
+			if item.PullRequest == nil {
+				filtered = append(filtered, item)
+			}
+		}
+		if len(payload) < 100 {
+			exhausted = true
+			break
+		}
+		// 没有游标时只需要找到最新那条 issue 来建基线，找到就不必再翻。
+		if cursorTime.IsZero() && len(filtered) > 0 {
+			break
 		}
 	}
 	if len(filtered) == 0 {
+		if !exhausted && cursorTime.IsZero() && !newestSeen.IsZero() {
+			// 翻了几页全是 PR：不能断定仓库没有 issue。记下已经扫过的时间当水位，之后只看
+			// 这个时间以后更新的记录；编号取 1，只用来组成合法游标。
+			return nil, observedRepositoryWatchCursor(repository, "issue", cursor, repositoryWatchPullCursor(newestSeen, 1)), nil
+		}
 		return nil, observedRepositoryWatchCursor(repository, "issue", cursor, repositoryWatchNoIssueCursor), nil
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
@@ -981,7 +1038,7 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 	}
 	result := make([]repositoryWatchIssue, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
-		if !repositoryWatchPullAfterCursor(item.UpdatedAt, item.Number, cursor) || len(result) >= limit {
+		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, p.clock()) || len(result) >= limit {
 			continue
 		}
 		status := "updated"

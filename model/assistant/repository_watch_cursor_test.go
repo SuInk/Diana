@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRepositoryWatchCursorOnlyAdvances(t *testing.T) {
@@ -134,6 +135,8 @@ func TestRepositoryWatchIssueAndPullCursorsSurviveEmptyAndStaleResponses(t *test
 			if got, next := poll(nil, ""); len(got) != 0 || next != repositoryWatchNoIssueCursor {
 				t.Fatalf("initial empty repository changed: %v %q", got, next)
 			}
+			// 游标是 __none__ 时只认最近更新的记录：41 在 5 分钟前更新，要通知。
+			plugin.now = func() time.Time { return time.Date(2026, 8, 1, 0, 5, 0, 0, time.UTC) }
 			if got, _ := poll(fresh[1:2], repositoryWatchNoIssueCursor); !reflect.DeepEqual(got, []int{41}) {
 				t.Fatalf("first real record was swallowed: %v", got)
 			}
