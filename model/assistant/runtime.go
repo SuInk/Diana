@@ -11479,7 +11479,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 		item.Repository,
 		item.RepositoryBranch,
 		repositoryWatchSnapshot{
-			CommitSHA: item.LastCommitSHA, PullRequestCursor: item.LastPullRequestCursor,
+			CommitSHA: item.LastCommitSHA, CheckedAt: repositoryWatchPreviousCheckAt(item), PullRequestCursor: item.LastPullRequestCursor,
 			IssueCursor: item.LastIssueCursor, ReleaseTag: item.LastReleaseTag,
 			ReleasePublishedAt: item.LastReleasePublishedAt, ReleaseID: item.LastReleaseID,
 			StarCount: item.LastStarCount, HasStarCount: item.WatchStars,
@@ -12198,6 +12198,9 @@ func (r *Runtime) storeRepositoryWatchProgress(id string, snapshot repositoryWat
 		}
 		if item.WatchStars && snapshot.HasStarNotifiedCount {
 			item.LastNotifiedStarCount = snapshot.StarNotifiedCount
+		}
+		if snapshot.CheckedAt.After(item.LastRepositoryCheckAt) {
+			item.LastRepositoryCheckAt = snapshot.CheckedAt
 		}
 		item.PendingDelivery = strings.TrimSpace(pending)
 		item.PendingDeliveryReference = strings.TrimSpace(reference)

@@ -65,6 +65,11 @@ func TestBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T) {
 	methods := make([]string, 0, 2)
 	authorizations := make([]string, 0, 2)
 	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		// 只模拟 REST：GraphQL 查询直接 404、不计入请求记录，工具会退回 REST。
+		if request.URL.Path == "/graphql" {
+			http.NotFound(w, request)
+			return
+		}
 		mu.Lock()
 		methods = append(methods, request.Method)
 		authorizations = append(authorizations, request.Header.Get("Authorization"))

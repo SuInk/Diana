@@ -472,6 +472,7 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		LastNotifiedStarCount:   baseline.StarCount,
 		LastStarEventID:         baseline.StarEventID,
 		LastStarEventAt:         baseline.StarEventAt,
+		LastRepositoryCheckAt:   baseline.CheckedAt,
 		TriggerAt:               now.Add(interval),
 		IntervalSeconds:         int64(interval / time.Second),
 		CreatedAt:               now,
