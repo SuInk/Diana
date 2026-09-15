@@ -495,27 +495,58 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 //
 // 审核失败按放行处理：模型不可用时让机器人集体哑火，比偶尔漏放一条更糟。主动
 // 插话是例外——那条路径本来就以「拿不准就别说」为准，失败即沉默。
+// preparedReplyAudit 是一次审核的模型结论，还没有产生任何副作用。拆开「调用模型」和
+// 「应用结论」是为了让审核能和语义去重同时跑：两者输入基本相同却是串行的，线上各占
+// 几秒。去重没有改动回复时直接用提前拿到的结论，改写了再按新回复补审一次；空转计数、
+// 私聊收尾这些副作用始终只对最终发出去的那一版执行一次。
+type preparedReplyAudit struct {
+	reply    string
+	skip     bool
+	need     replyAuditNeed
+	decision proactiveReplyQualityDecision
+	err      error
+}
+
 func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) (replyControlIntent, error) {
+	return r.applyReplyAudit(ctx, event, cfg, r.prepareReplyAudit(ctx, event, input, reply, cfg, proactive))
+}
+
+// prepareReplyAudit 只调用审核模型，不修改任何状态，可以提前并发执行。
+func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) preparedReplyAudit {
+	prepared := preparedReplyAudit{reply: reply}
 	if strings.TrimSpace(reply) == "" {
-		return replyControlIntent{}, nil
+		prepared.skip = true
+		return prepared
 	}
 	need := r.replyAuditNeed(event, input, cfg, proactive)
+	prepared.need = need
 	if !need.Quality && !need.AccountSafety && !need.Loop && !need.Closing {
-		return replyControlIntent{}, nil
+		prepared.skip = true
+		return prepared
 	}
 	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
 	evidence := botReplyLoopEvidence{}
 	if need.Loop {
 		evidence = r.collectBotReplyLoopEvidence(event, r.contextHistory(event))
 	}
-	decision, err := r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
-	if err != nil {
+	prepared.decision, prepared.err = r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
+	return prepared
+}
+
+// applyReplyAudit 把审核结论落到会话状态上，并决定这条回复能不能发。
+func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg BotConfig, prepared preparedReplyAudit) (replyControlIntent, error) {
+	if prepared.skip {
+		return replyControlIntent{}, nil
+	}
+	need, decision := prepared.need, prepared.decision
+	if err := prepared.err; err != nil {
 		if need.Quality {
 			return replyControlIntent{}, &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案审核失败，已保持沉默：%v", err)}
 		}
 		log.Printf("diana reply audit skipped: %v", err)
 		return replyControlIntent{}, nil
 	}
+	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
 	intent := replyControlIntentFromAudit(decision)
 	// 收尾判断排在最前：对方都开口说「别回了」了，再去纠结这条回复够不够准确
 	// 没有意义——无论审核的其他几项怎么判，这条都不该发。
