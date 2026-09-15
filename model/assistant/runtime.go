@@ -4503,6 +4503,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 			EvidenceLedgerAdvisory:     r.evidenceLedgerAdvisory(event),
+			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry
 		ownsRegistry := false
@@ -4621,6 +4622,18 @@ func (p *runtimeAgentLLMProvider) providerForGroup(group string) (LLMProvider, e
 	}
 	p.providers[group] = provider
 	return provider, nil
+}
+
+// replyAgentCoreTools 是主回复每一步都带完整定义的工具，其余按需加载（agent.Config.CoreTools）。
+// 取自近 7 天的调用统计：4642 次 Agent 运行里，搜索 338 次、历史媒体 71、聊天记录 63、
+// 线程状态 63、生图 59、网页渲染 32，其余每个工具最多 28 次。
+var replyAgentCoreTools = []string{
+	agent.WebSearchToolName,
+	dianaChatHistoryToolName,
+	dianaThreadStateToolName,
+	dianaHistoryImagesToolName,
+	dianaImageToolName,
+	"browser_render",
 }
 
 // generateReplyWithAgentTools retains the newer plugin-tool entry point. Plugin
