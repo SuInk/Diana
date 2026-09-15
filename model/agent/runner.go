@@ -22,6 +22,8 @@ type Runner struct {
 	client   LLMClient
 	cfg      Config
 	registry *ToolRegistry
+	// loader 是本次运行的按需加载状态；Run 开始时新建，一个 Runner 不并发执行 Run。
+	loader *deferredToolLoader
 }
 
 const (
@@ -72,6 +74,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		return nil, errors.New("agent: messages are required")
 	}
 	startedAt := time.Now()
+	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools)
 	traceID := strings.TrimSpace(req.TraceID)
 	if traceID == "" {
 		traceID = newRunTraceID()
@@ -410,6 +413,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			continue
 		}
 		tool, ok := r.registry.Get(action.Tool)
+		if !ok && r.loader != nil && action.Tool == ToolsLoadToolName {
+			tool, ok = r.loader, true
+		}
 		if !ok {
 			protocolRepairs++
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: "tool not found", Skipped: true})
@@ -949,7 +955,12 @@ func (r *Runner) systemPrompt() string {
 		"不再需要工具时调用 agent.finalize 结束本轮：给用户看的完整正文写进 content（必填，不能为空），task_state、claims 这类元数据按需一并携带。content 禁止真实 CR/LF；下一条消息写 [diana-msg]，同一消息内换行写 [diana-line]。正文不要写成 JSON。",
 		"这一轮确实不需要说话时，调用 agent.finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
-		"可用工具（完整说明和参数以请求中的工具定义为准）：\n" + r.registry.SystemPromptCatalog(),
+	}
+	if loader := newDeferredToolLoader(r.registry, r.cfg.CoreTools); loader != nil {
+		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 传入工具名，下一步即可调用）：\n"+loader.catalog())
+	} else {
+		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}
 	if skillsPrompt != "" {
 		sections = append(sections, skillsPrompt)

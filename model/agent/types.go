@@ -100,6 +100,9 @@ type Config struct {
 	// EvidenceLedgerAdvisory 让逐主张证据账本只记录不拦截：claims 仍然写进
 	// trace 和运行元数据，但不再因为证据绑定失败要求模型重写 final。
 	EvidenceLedgerAdvisory bool
+	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
+	// 留空时全部工具都带完整定义。
+	CoreTools []string
 }
 
 type Request struct {
