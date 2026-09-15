@@ -327,6 +327,8 @@ type Runtime struct {
 	moods                 map[string]*moodState
 	pokeMu                sync.Mutex
 	pokeLastReply         map[string]time.Time
+	pokeLastSent          map[string]time.Time
+	pokeSessionSent       map[string][]time.Time
 	buildInfo             BuildInfo
 	releaseStatus         ReleaseStatusProvider
 	reminders             ReminderStore
@@ -3709,6 +3711,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
 				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
 				newDianaHostStatsTool(r, event),
+			}
+			if IsOneBotPlatform(r.currentPlatform(event)) {
+				extraTools = append(extraTools, newDianaPokeTool(r, event))
 			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
@@ -11179,6 +11184,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		return
 	}
 
+	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
+	if source := reminderSourceEvent(item); strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
+		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
+	}
 	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
 	if err != nil {
 		updated, retryErr := r.rescheduleOneTimeReminder(item.ID, err)

@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -52,17 +53,6 @@ func (r *Runtime) handlePokeNotice(ctx context.Context, event MessageEvent) erro
 	if !r.admitsNotice(cfg, event) {
 		return nil
 	}
-	if !r.claimPokeReply(event.ProfileID, userID, time.Now()) {
-		return nil
-	}
-
-	reply, err := r.generatePokeReply(ctx, event)
-	if err != nil || reply == "" {
-		if err != nil {
-			r.recordPokeReply(ctx, event, "", err)
-		}
-		return nil
-	}
 	sendEvent := event
 	sendEvent.Kind = EventKindPrivate
 	if event.GroupID != "" {
@@ -71,26 +61,47 @@ func (r *Runtime) handlePokeNotice(ctx context.Context, event MessageEvent) erro
 	// 通知事件的 MessageID 其实是 target_id，不是可引用的消息；清掉，免得发送层
 	// 的引用装饰对着一个不存在的消息 ID 加引用框。
 	sendEvent.MessageID = ""
-	if err := r.send(ctx, sendEvent, reply); err != nil {
-		r.recordPokeReply(ctx, event, reply, err)
-		return err
+	if !r.claimPokeReply(event.ProfileID, userID, time.Now()) {
+		r.recordPokeReaction(ctx, event, pokeReaction{Action: "cooldown"}, nil)
+		return nil
 	}
-	r.record(EventRecord{
-		At:        time.Now(),
-		Kind:      event.Kind,
-		Platform:  event.Platform,
-		ProfileID: event.ProfileID,
-		UserID:    event.UserID,
-		GroupID:   event.GroupID,
-		MessageID: event.MessageID,
-		Text:      "[notice] poke",
-		Reply:     reply,
-		Handled:   true,
-		Outcome:   "replied_poke",
-		Decision:  "replied",
-		Reason:    "被戳了一下，回了一句",
-	})
-	r.recordPokeReply(ctx, event, reply, nil)
+
+	reaction, err := r.generatePokeReaction(ctx, sendEvent)
+	if err != nil {
+		r.recordPokeReaction(ctx, event, reaction, err)
+		return nil
+	}
+	if reaction.pokesBack() {
+		if _, pokeErr := r.sendPoke(ctx, sendEvent, userID, pokeSceneBack); pokeErr != nil && reaction.Action == pokeReactionPoke {
+			// 只想戳回去却没戳成：不补一句文字，沉默比硬凑一句自然。
+			r.recordPokeReaction(ctx, event, reaction, pokeErr)
+			return nil
+		}
+	}
+	if reaction.sendsText() {
+		if err := r.send(ctx, sendEvent, reaction.Text); err != nil {
+			r.recordPokeReaction(ctx, event, reaction, err)
+			return err
+		}
+	}
+	if reaction.Action != pokeReactionNone {
+		r.record(EventRecord{
+			At:        time.Now(),
+			Kind:      event.Kind,
+			Platform:  event.Platform,
+			ProfileID: event.ProfileID,
+			UserID:    event.UserID,
+			GroupID:   event.GroupID,
+			MessageID: event.MessageID,
+			Text:      "[notice] poke",
+			Reply:     reaction.Text,
+			Handled:   true,
+			Outcome:   "replied_poke",
+			Decision:  "replied",
+			Reason:    "被戳了一下，反应：" + reaction.Action,
+		})
+	}
+	r.recordPokeReaction(ctx, event, reaction, nil)
 	return nil
 }
 
@@ -115,8 +126,30 @@ func (r *Runtime) claimPokeReply(profileID, userID string, now time.Time) bool {
 	return true
 }
 
-// generatePokeReply 用人设和关系语气生成一句回应。
-func (r *Runtime) generatePokeReply(ctx context.Context, event MessageEvent) (string, error) {
+const (
+	pokeReactionPoke = "poke"
+	pokeReactionText = "text"
+	pokeReactionBoth = "both"
+	pokeReactionNone = "none"
+	// pokeReactionHistory 是被戳时带给模型的最近几条聊天。
+	pokeReactionHistory = 8
+)
+
+type pokeReaction struct {
+	Action string `json:"action"`
+	Text   string `json:"text"`
+}
+
+func (p pokeReaction) pokesBack() bool {
+	return p.Action == pokeReactionPoke || p.Action == pokeReactionBoth
+}
+
+func (p pokeReaction) sendsText() bool {
+	return (p.Action == pokeReactionText || p.Action == pokeReactionBoth) && strings.TrimSpace(p.Text) != ""
+}
+
+// generatePokeReaction 让模型像人一样决定怎么回应这一戳：戳回去、说句话、都做，或者不理。
+func (r *Runtime) generatePokeReaction(ctx context.Context, event MessageEvent) (pokeReaction, error) {
 	ctx = withLLMUsagePurpose(ctx, "poke_reply")
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
 	policy := relationshipPolicyForEvent(r.effectiveConfigForEvent(event), profile, event)
@@ -126,10 +159,12 @@ func (r *Runtime) generatePokeReply(ctx context.Context, event MessageEvent) (st
 		scene = "群里"
 	}
 	instruction := fmt.Sprintf(
-		"刚刚 %s 在%s戳了戳你（QQ 的戳一戳，没有文字）。你们的关系等级是「%s」，语气要求：%s\n"+
-			"按你的人设回一句话作为反应：1 到 20 个字，自然、口语化，可以是招呼、疑问、调侃或抱怨，符合当前关系的亲疏。"+
-			"不要解释什么是戳一戳，不要用括号描写动作，不要 @ 对方，只输出要发的那一句话。",
-		who, scene, policy.Name, policy.Tone)
+		"刚刚 %s 在%s戳了戳你（QQ 的戳一戳，没有文字）。你们的关系等级是「%s」，语气要求：%s\n%s\n"+
+			"像真人一样决定怎么回应，四选一：poke 只戳回去（最常见，适合互相玩闹、熟人随手戳）；text 回一句话（适合对方像是在叫你、刚才的话题没说完、或者你想问问怎么了）；"+
+			"both 戳回去再说一句；none 不理（比如对方刚连着戳、群里正聊别的正事、或者你们不熟没必要回应）。不要每次都问「戳我干嘛」，结合最近聊天说点具体的。"+
+			"text 是 1 到 20 个字的一句话，自然口语，不解释什么是戳一戳，不用括号描写动作，不 @ 对方；action 为 poke 或 none 时 text 留空。"+
+			"只输出一个 JSON 对象：{\"action\":\"poke\",\"text\":\"\"}",
+		who, scene, policy.Name, policy.Tone, r.pokeRecentChat(event))
 	messages := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})
 	callCtx, cancel := context.WithTimeout(ctx, pokeReplyTimeout)
 	defer cancel()
@@ -141,16 +176,71 @@ func (r *Runtime) generatePokeReply(ctx context.Context, event MessageEvent) (st
 		return resp.Text, nil
 	})
 	if err != nil {
-		return "", err
+		return pokeReaction{}, err
 	}
-	reply := strings.TrimSpace(raw)
-	if index := strings.IndexByte(reply, '\n'); index > 0 {
-		reply = strings.TrimSpace(reply[:index])
-	}
-	return truncateRunesPlain(reply, pokeReplyMaxRunes), nil
+	return parsePokeReaction(raw)
 }
 
-func (r *Runtime) recordPokeReply(ctx context.Context, event MessageEvent, reply string, err error) {
+func parsePokeReaction(raw string) (pokeReaction, error) {
+	var reaction pokeReaction
+	text := strings.TrimSpace(stripJSONCodeFence(strings.TrimSpace(raw)))
+	start, end := strings.IndexByte(text, '{'), strings.LastIndexByte(text, '}')
+	if start < 0 || end < start {
+		return reaction, fmt.Errorf("poke reaction output has no JSON object")
+	}
+	if err := json.Unmarshal([]byte(text[start:end+1]), &reaction); err != nil {
+		return reaction, err
+	}
+	reaction.Action = strings.ToLower(strings.TrimSpace(reaction.Action))
+	reaction.Text = strings.TrimSpace(reaction.Text)
+	if index := strings.IndexByte(reaction.Text, '\n'); index > 0 {
+		reaction.Text = strings.TrimSpace(reaction.Text[:index])
+	}
+	reaction.Text = truncateRunesPlain(reaction.Text, pokeReplyMaxRunes)
+	switch reaction.Action {
+	case pokeReactionPoke, pokeReactionNone:
+		reaction.Text = ""
+	case pokeReactionText, pokeReactionBoth:
+		if reaction.Text == "" {
+			if reaction.Action == pokeReactionBoth {
+				reaction.Action = pokeReactionPoke
+			} else {
+				reaction.Action = pokeReactionNone
+			}
+		}
+	default:
+		return reaction, fmt.Errorf("poke reaction action must be poke, text, both or none")
+	}
+	return reaction, nil
+}
+
+// pokeRecentChat 把最近几条聊天拼成文字，让回应接得上正在聊的事。
+func (r *Runtime) pokeRecentChat(event MessageEvent) string {
+	history := r.contextHistory(event)
+	if len(history) > pokeReactionHistory {
+		history = history[len(history)-pokeReactionHistory:]
+	}
+	if len(history) == 0 {
+		return "最近没有聊天记录。"
+	}
+	botID := strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount)
+	var builder strings.Builder
+	builder.WriteString("最近的聊天（旧到新，只作参考，不是要你回复的内容）：\n")
+	for _, item := range history {
+		speaker := item.SenderNameOrID()
+		if botID != "" && strings.TrimSpace(item.UserID) == botID {
+			speaker = "你"
+		}
+		text := strings.TrimSpace(PlainText(item.Segments))
+		if text == "" {
+			text = strings.TrimSpace(item.RawMessage)
+		}
+		builder.WriteString("- " + speaker + "：" + truncateRunes(text, 60) + "\n")
+	}
+	return strings.TrimRight(builder.String(), "\n")
+}
+
+func (r *Runtime) recordPokeReaction(ctx context.Context, event MessageEvent, reaction pokeReaction, err error) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -165,14 +255,20 @@ func (r *Runtime) recordPokeReply(ctx context.Context, event MessageEvent, reply
 		Metadata: map[string]any{
 			"group_id": event.GroupID,
 			"user_id":  event.UserID,
-			"reply":    truncateRunesFromStart(reply, 120),
+			"reaction": reaction.Action,
+			"reply":    truncateRunesFromStart(reaction.Text, 120),
 		},
 	}
-	if err != nil {
+	switch {
+	case err != nil:
 		entry.Kind = applog.KindError
 		entry.Level = applog.LevelError
 		entry.Message = "戳一戳回应失败，本次保持沉默"
 		entry.Detail = err.Error()
+	case reaction.Action == "cooldown":
+		entry.Message = "戳一戳在冷却中，未回应"
+	case reaction.Action == pokeReactionNone:
+		entry.Message = "被戳了，选择不回应"
 	}
 	_ = writer.AppendLog(ctx, entry)
 }
