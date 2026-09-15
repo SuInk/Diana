@@ -524,6 +524,54 @@ ORDER BY platform ASC, profile_id ASC, kind ASC, session_id ASC
 	return sessions, nil
 }
 
+// GroupSeqGap 比较重连后收到的实时群消息和库里这个群上一条带 seq 的消息，算出中间缺了
+// 几条。机器人自己发的消息本地不带 seq，但同样占号，按条数扣掉。
+func (s *SQLiteStore) GroupSeqGap(ctx context.Context, query assistant.GroupSeqGapQuery) (assistant.GroupSeqGap, error) {
+	defer s.observeStorage(ctx, "GroupSeqGap", "read")()
+	if s == nil || s.db == nil {
+		return assistant.GroupSeqGap{}, errors.New("group seq gap: sqlite store is not configured")
+	}
+	groupID := strings.TrimSpace(query.GroupID)
+	if groupID == "" || query.Seq <= 1 {
+		return assistant.GroupSeqGap{}, nil
+	}
+	profileID := strings.TrimSpace(query.ProfileID)
+	var previousSeq, previousTime int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT seq, event_time
+FROM (
+  SELECT CAST(json_extract(payload, '$.message_seq') AS INTEGER) AS seq, event_time
+  FROM message_events
+  WHERE kind = ? AND group_id = ? AND event_time >= ? AND event_time <= ?
+    AND (? = '' OR COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') IN (?, ''))
+)
+WHERE seq > 0 AND seq < ?
+ORDER BY seq DESC
+LIMIT 1
+`, string(assistant.EventKindGroup), groupID, query.Since, query.EventTime, profileID, profileID, query.Seq).Scan(&previousSeq, &previousTime)
+	if errors.Is(err, sql.ErrNoRows) {
+		return assistant.GroupSeqGap{}, nil
+	}
+	if err != nil {
+		return assistant.GroupSeqGap{}, fmt.Errorf("group seq gap %q: %w", groupID, err)
+	}
+	gap := assistant.GroupSeqGap{Known: true, PreviousSeq: previousSeq, PreviousTime: previousTime}
+	if selfID := strings.TrimSpace(query.SelfID); selfID != "" {
+		if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM message_events
+WHERE kind = ? AND group_id = ? AND user_id = ? AND event_time >= ? AND event_time <= ?
+`, string(assistant.EventKindGroup), groupID, selfID, previousTime, query.EventTime).Scan(&gap.SelfMessages); err != nil {
+			return assistant.GroupSeqGap{}, fmt.Errorf("group seq gap %q: count self messages: %w", groupID, err)
+		}
+	}
+	gap.Missing = int(query.Seq-previousSeq-1) - gap.SelfMessages
+	if gap.Missing < 0 {
+		gap.Missing = 0
+	}
+	return gap, nil
+}
+
 func stableInboundEventID(session string, event assistant.MessageEvent) (string, error) {
 	if strings.TrimSpace(event.MessageID) != "" {
 		return persistedMessageID(session, event), nil

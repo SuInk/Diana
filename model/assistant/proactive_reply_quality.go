@@ -20,6 +20,10 @@ type proactiveReplyQualityDecision struct {
 	// Confidence is always confidence in sending, never confidence in rejecting.
 	Confidence float64
 	Reason     string
+	// AccuracyIssue 是准确性结论的类别，发送与否只看它：分数在 0.8~0.9 之间来回摇摆，
+	// 同样是「表述偏绝对」这次 0.84 拦掉、下次 0.91 放行。旧模型输出里没有这个字段时
+	// 为空，退回按 Confidence 和阈值判断。
+	AccuracyIssue string
 	// AccountSafeScore 是和表达质量相互独立的账号安全置信度：越高越安全。
 	//
 	// 这一项以前是布尔。改成打分是因为审核模型会把「内容不安全」顺手表达成
@@ -135,6 +139,17 @@ original_text_available=false 或 original_message 为空,只表示本审核没�
   不闭合的「(」或「（」都是聊天里的语气写法,不算截断;正文里成对使用的括号
   和引号没闭合才算。
 
+把准确性结论归到 accuracy_issue 的一个类别里,运行时只按类别决定拦不拦:
+- none:没发现问题。
+- wording:措辞偏绝对、不够严谨、缺少限定条件或有可商榷之处,但没有明确矛盾、答非所问、
+  被截断这几类问题。它不拦截,不要把它升级成错误。
+- contradiction:明确矛盾(见上)。
+- off_topic:答非所问(见上)。
+- truncated:被截断(见上)。
+- harmful_advice:给出了照做就可能伤身或造成财产损失的具体指令,例如危险的用药剂量、
+  危险的操作步骤。只是讨论健康或金融话题、说法偏绝对都不算,归 wording。
+拿不准时选 none 或 wording。send_confidence 仍要填写,与类别保持一致:none 和 wording 给高分。
+
 候选回复受长度上限约束:简短、只答要点、不展开举例都不是缺陷,
 不要因为「不够详细」「没有列全」「缺少解释」而拒绝。
 口吻、篇幅偏好和是否有新增信息不属于准确性错误,不得作为拒绝理由。
@@ -219,7 +234,7 @@ stop_requested —— 对方明确要求你不要再回。
   这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。
 
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"send_confidence":0.96,"reason":"","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":""}
+{"send_confidence":0.96,"accuracy_issue":"none","reason":"","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":""}
 
 理由只写发现的问题:某一项没有发现问题时,对应的 reason、account_risk_reason、refusal_reason、
 reply_loop_reason、closing_reason 一律填空字符串,不要写「未发现问题」「正常回答」这类说明。
@@ -258,8 +273,26 @@ account_risk_reason，不得改变准确度、拒答、空转判断或 JSON 输�
 	return prompt
 }
 
+// accuracyIssueLabels 是会拦截发送的准确性类别；none 和 wording 放行。
+var accuracyIssueLabels = map[string]string{
+	"contradiction":  "前后矛盾",
+	"off_topic":      "答非所问",
+	"truncated":      "内容被截断",
+	"harmful_advice": "可能造成伤害的建议",
+}
+
 // proactiveQualityError 执行现有主动回复的准确性门禁。
 func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveReplyQualityDecision, cfg BotConfig) error {
+	switch issue := decision.AccuracyIssue; issue {
+	case "none", "wording":
+		return nil
+	case "":
+	default:
+		if label, blocks := accuracyIssueLabels[issue]; blocks {
+			reason := firstNonEmpty(strings.TrimSpace(decision.Reason), label)
+			return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核（%s）：%s", label, reason)}
+		}
+	}
 	threshold := cfg.ProactiveReplyThreshold
 	if threshold <= 0 || threshold > 1 {
 		threshold = defaultProactiveReplyThreshold
@@ -683,6 +716,7 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 	}
 	var payload struct {
 		Confidence        *float64        `json:"send_confidence"`
+		AccuracyIssue     *string         `json:"accuracy_issue"`
 		Reason            *string         `json:"reason"`
 		AccountSafe       json.RawMessage `json:"account_safe"`
 		AccountRisk       *string         `json:"account_risk"`
@@ -711,6 +745,12 @@ func parseProactiveReplyQualityDecision(raw string) (proactiveReplyQualityDecisi
 		return proactiveReplyQualityDecision{}, false
 	}
 	decision := proactiveReplyQualityDecision{Confidence: *payload.Confidence}
+	if payload.AccuracyIssue != nil {
+		issue := strings.ToLower(strings.TrimSpace(*payload.AccuracyIssue))
+		if _, blocks := accuracyIssueLabels[issue]; blocks || issue == "none" || issue == "wording" {
+			decision.AccuracyIssue = issue
+		}
+	}
 	if payload.Reason != nil {
 		decision.Reason = strings.TrimSpace(*payload.Reason)
 	}

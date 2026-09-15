@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -382,7 +383,9 @@ type Runtime struct {
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
-	contextSummaries   map[string]string
+	// recentToolCalls 记录最近几轮实际调用过的工具，见 tool_call_memory.go。
+	recentToolCalls  map[string][]toolCallRecord
+	contextSummaries map[string]string
 	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
 	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
 	// 摘要、又以完整原文进入同一个请求。
@@ -396,27 +399,36 @@ type Runtime struct {
 	activeReminders       map[string]struct{}
 	inboundWake           chan struct{}
 	inboundManualBackfill chan time.Duration
-	inboundDone           chan struct{}
-	memoryWake            chan struct{}
-	memoryDone            chan struct{}
-	inboundReadyMu        sync.RWMutex
-	inboundReady          bool
-	inboundReplayCutoff   time.Time
-	inboundInit           bool
-	subagentMu            sync.Mutex
-	subagentTasks         map[string]activeSubagentTask
-	subagentRecent        map[string]SubagentTaskStatus
-	subagentSem           chan struct{}
-	subagentLLMSem        chan struct{}
-	replySuppressMu       sync.Mutex
-	replySuppressByUser   map[string]ReplySuppression
-	replyOutboundGateMu   sync.Mutex
-	replyOutboundGates    map[string]*replySuppressionOutboundGate
-	replyRefusalMu        sync.Mutex
-	replyRefusalByUser    map[string]replyRefusalState
-	botReplyLoopMu        sync.Mutex
-	replyDamping          replyDamping
-	botReplyLoopByKey     map[string]botReplyLoopState
+	// 重连后 seq 缺口检测的状态，见 inbound_gap.go。
+	inboundSeqProbe     chan groupSeqProbe
+	seqProbeMu          sync.Mutex
+	seqProbeArmed       bool
+	seqProbed           map[string]struct{}
+	seqGapRunning       map[string]struct{}
+	seqGapActive        atomic.Int32
+	historyBackfillBusy atomic.Bool
+	historyFetchMu      sync.Mutex
+	inboundDone         chan struct{}
+	memoryWake          chan struct{}
+	memoryDone          chan struct{}
+	inboundReadyMu      sync.RWMutex
+	inboundReady        bool
+	inboundReplayCutoff time.Time
+	inboundInit         bool
+	subagentMu          sync.Mutex
+	subagentTasks       map[string]activeSubagentTask
+	subagentRecent      map[string]SubagentTaskStatus
+	subagentSem         chan struct{}
+	subagentLLMSem      chan struct{}
+	replySuppressMu     sync.Mutex
+	replySuppressByUser map[string]ReplySuppression
+	replyOutboundGateMu sync.Mutex
+	replyOutboundGates  map[string]*replySuppressionOutboundGate
+	replyRefusalMu      sync.Mutex
+	replyRefusalByUser  map[string]replyRefusalState
+	botReplyLoopMu      sync.Mutex
+	replyDamping        replyDamping
+	botReplyLoopByKey   map[string]botReplyLoopState
 	// privateClosingBySession 记录每个私聊会话已经互相道别了几轮。只在内存里：
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
 	privateClosingMu        sync.Mutex
@@ -637,6 +649,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		resolverDeliveries:      map[string]resolverDeliveryReservation{},
 		inboundWake:             make(chan struct{}, 1),
 		inboundManualBackfill:   make(chan time.Duration, 1),
+		inboundSeqProbe:         make(chan groupSeqProbe, 256),
 		memoryWake:              make(chan struct{}, 1),
 		subagentTasks:           map[string]activeSubagentTask{},
 		subagentRecent:          map[string]SubagentTaskStatus{},
@@ -1628,6 +1641,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		if err != nil {
 			return r.retainFailedInbound(event, err)
 		}
+		r.observeLiveGroupSeq(event)
 		r.wakeInboundWorkers()
 		return nil
 	}
@@ -4002,6 +4016,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		if toolCalls := r.toolCallContext(event); toolCalls != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    toolCalls,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
 			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
@@ -4545,6 +4567,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Claims)
+		r.rememberToolCalls(event, resp.Steps)
 		if resp.Silent {
 			// 模型在 agent.finalize 上自己按下了静默。没有正文可整理，也不该被
 			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。

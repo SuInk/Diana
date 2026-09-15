@@ -644,3 +644,47 @@ func TestInboundSessionHasNewerPendingAndClaimEnqueuedAt(t *testing.T) {
 	}
 	check(true)
 }
+
+func TestGroupSeqGapCountsMissingMessagesExcludingBotReplies(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "seq-gap.db"))
+	defer func() { _ = store.Close() }()
+
+	withSeq := func(seq int64, eventTime int64, userID string) assistant.MessageEvent {
+		event := inboundTestEvent(fmt.Sprintf("m-%d", seq), "hello", eventTime)
+		event.UserID = userID
+		event.MessageSeq = fmt.Sprint(seq)
+		event.ProfileID = "profile-a"
+		return event
+	}
+	for _, event := range []assistant.MessageEvent{
+		withSeq(100, 1000, "2"),
+		withSeq(101, 1010, "2"),
+		// 机器人自己的回复：不带 seq，但占号。
+		{Kind: assistant.EventKindGroup, GroupID: "1", UserID: "42", MessageID: "self-1", Time: 1020, RawMessage: "reply"},
+		// 其他机器人配置下同一个群号的消息不能拿来比较。
+		func() assistant.MessageEvent { e := withSeq(104, 1030, "2"); e.ProfileID = "profile-b"; return e }(),
+	} {
+		if err := store.AppendMessageEvent(ctx, "group:1", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gap, err := store.GroupSeqGap(ctx, assistant.GroupSeqGapQuery{
+		ProfileID: "profile-a", GroupID: "1", SelfID: "42", Seq: 106, EventTime: 1100, Since: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 106 和 101 之间有 102~105 四个号，扣掉机器人的一条回复还缺 3 条。
+	if !gap.Known || gap.PreviousSeq != 101 || gap.PreviousTime != 1010 || gap.SelfMessages != 1 || gap.Missing != 3 {
+		t.Fatalf("gap = %#v", gap)
+	}
+
+	unknown, err := store.GroupSeqGap(ctx, assistant.GroupSeqGapQuery{
+		ProfileID: "profile-a", GroupID: "1", SelfID: "42", Seq: 106, EventTime: 1100, Since: 1050,
+	})
+	if err != nil || unknown.Known {
+		t.Fatalf("gap outside window = %#v err=%v", unknown, err)
+	}
+}
