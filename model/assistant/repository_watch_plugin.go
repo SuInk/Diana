@@ -48,11 +48,9 @@ type RepositoryWatchPlugin struct {
 }
 
 const (
-	// repositoryWatchNoneCursorWindow：游标是 __none__（上次检查时没看到任何记录）时，
-	// 只把最近这段时间里更新的记录当成新动态。线上一个 PR 很多的仓库，最近 100 条全是 PR，
-	// issue 被挤出去，游标长期停在 __none__；某次返回里出现了几条旧 issue，就被全部当成
-	// 新动态推进群里。仓库第一次出现 issue 仍然会在这个窗口内被通知。
-	repositoryWatchNoneCursorWindow = 15 * time.Minute
+	// repositoryWatchCheckClockSkew：游标是 __none__ 时拿上次检查的本机时间和 GitHub 的
+	// updated_at 比较，留一点余量，免得本机时钟偏快把刚好卡在检查前后的记录漏掉。
+	repositoryWatchCheckClockSkew = time.Minute
 	// repositoryWatchIssueScanPages 是没有可用游标时，为了找到最新 issue 最多翻的页数。
 	repositoryWatchIssueScanPages = 5
 	// repositoryWatchEventPages 是仓库事件流最多翻的页数，GitHub 最多只给 300 条。
@@ -67,7 +65,10 @@ func (p *RepositoryWatchPlugin) clock() time.Time {
 }
 
 type repositoryWatchSnapshot struct {
-	CommitSHA          string
+	CommitSHA string
+	// CheckedAt 是这次检查开始的时间；作为输入时是上一次成功检查的开始时间。
+	// 游标是 __none__ 时，只有在它之后更新的记录才算新动态。
+	CheckedAt          time.Time
 	PullRequestCursor  string
 	IssueCursor        string
 	ReleaseTag         string
@@ -438,7 +439,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		return repositoryWatchChange{}, fmt.Errorf("repository watch: at least one update type must be enabled")
 	}
 	cursor.previous = nil
-	change := repositoryWatchChange{Repository: repository, Branch: branch, Snapshot: repositoryWatchSnapshot{previous: &cursor, repository: repository, branch: branch, selection: selection}}
+	change := repositoryWatchChange{Repository: repository, Branch: branch, Snapshot: repositoryWatchSnapshot{CheckedAt: p.clock(), previous: &cursor, repository: repository, branch: branch, selection: selection}}
 	var errs []error
 	if selection.Commits {
 		commits, snapshot, truncated, err := p.fetchCommits(ctx, repository, branch, cursor.CommitSHA, settings)
@@ -451,7 +452,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.PullRequests {
-		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, selection, settings)
+		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, cursor.CheckedAt, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -463,7 +464,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, settings)
 	}
 	if selection.Issues {
-		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, selection, settings)
+		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, cursor.CheckedAt, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -658,7 +659,7 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	return commits, latest, max(newCommitCount, verifiedTotal) > limit, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
+func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, previousCheckAt time.Time, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -718,7 +719,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	result := make([]repositoryWatchPullRequest, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
-		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, p.clock()) {
+		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, previousCheckAt) {
 			continue
 		}
 		if len(result) >= limit {
@@ -934,11 +935,14 @@ func repositoryWatchPullCursor(updatedAt time.Time, number int) string {
 	return fmt.Sprintf("%s#%d", updatedAt.UTC().Format(time.RFC3339Nano), number)
 }
 
-// repositoryWatchRecordAfterCursor 判断一条记录是否算新动态。游标是 __none__ 时只认最近更新的
-// 记录，更早的静默成为基线，见 repositoryWatchNoneCursorWindow。
-func repositoryWatchRecordAfterCursor(updatedAt time.Time, number int, cursor string, now time.Time) bool {
+// repositoryWatchRecordAfterCursor 判断一条记录是否算新动态。
+// 游标是 __none__ 时只认上次成功检查之后更新的记录，更早的静默成为基线。线上一个 PR 很多的
+// 仓库，最近 100 条全是 PR，issue 被挤出去，游标长期停在 __none__；某次返回里出现了几条
+// 旧 issue，就被全部当成新动态推进群里。检查周期由订阅自己设置，所以不能用固定时间窗口。
+// 不知道上次检查时间时只建基线。
+func repositoryWatchRecordAfterCursor(updatedAt time.Time, number int, cursor string, previousCheckAt time.Time) bool {
 	if strings.TrimSpace(cursor) == repositoryWatchNoIssueCursor {
-		return number > 0 && !updatedAt.Before(now.Add(-repositoryWatchNoneCursorWindow))
+		return number > 0 && !previousCheckAt.IsZero() && updatedAt.After(previousCheckAt.Add(-repositoryWatchCheckClockSkew))
 	}
 	return repositoryWatchPullAfterCursor(updatedAt, number, cursor)
 }
@@ -956,7 +960,7 @@ func repositoryWatchPullAfterCursor(updatedAt time.Time, number int, cursor stri
 	return updatedAt.After(cursorTime) || updatedAt.Equal(cursorTime) && number > cursorNumber
 }
 
-func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchIssue, string, error) {
+func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cursor string, previousCheckAt time.Time, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchIssue, string, error) {
 	query := url.Values{
 		"state":     {"all"},
 		"sort":      {"updated"},
@@ -1015,7 +1019,7 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 	}
 	result := make([]repositoryWatchIssue, 0, min(limit, len(filtered)))
 	for _, item := range filtered {
-		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, p.clock()) || len(result) >= limit {
+		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, previousCheckAt) || len(result) >= limit {
 			continue
 		}
 		status := "updated"

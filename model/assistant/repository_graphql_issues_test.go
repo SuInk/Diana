@@ -119,7 +119,7 @@ func TestRepositoryWatchIssuesUseGraphQLWhenTokenAvailable(t *testing.T) {
 	}}
 	plugin := newGraphQLRepoPlugin(t, server, now)
 	settings := SettingValues{repositoryWatchSettingToken: "test-token", repositoryWatchSettingLimit: 5}
-	found, next, err := plugin.fetchIssues(context.Background(), "acme/demo", repositoryWatchPullCursor(cursorAt, 3), repositoryWatchSelection{Issues: true}, settings)
+	found, next, err := plugin.fetchIssues(context.Background(), "acme/demo", repositoryWatchPullCursor(cursorAt, 3), time.Time{}, repositoryWatchSelection{Issues: true}, settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestRepositoryWatchIssuesFallBackToRESTWhenGraphQLFails(t *testing.T) {
 	now := time.Date(2026, 9, 16, 1, 0, 0, 0, time.UTC)
 	server := &graphQLRepoServer{failGraphQL: true}
 	plugin := newGraphQLRepoPlugin(t, server, now)
-	_, _, err := plugin.fetchIssues(context.Background(), "acme/demo", "", repositoryWatchSelection{Issues: true}, SettingValues{repositoryWatchSettingToken: "test-token"})
+	_, _, err := plugin.fetchIssues(context.Background(), "acme/demo", "", time.Time{}, repositoryWatchSelection{Issues: true}, SettingValues{repositoryWatchSettingToken: "test-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestRepositoryWatchIssuesFallBackToRESTWhenGraphQLFails(t *testing.T) {
 func TestRepositoryWatchPullRequestsFilterBranchOnServer(t *testing.T) {
 	server := &graphQLRepoServer{}
 	plugin := newGraphQLRepoPlugin(t, server, time.Now())
-	if _, _, err := plugin.fetchPullRequests(context.Background(), "acme/demo", "main", "", repositoryWatchSelection{PullRequests: true}, SettingValues{}); err != nil {
+	if _, _, err := plugin.fetchPullRequests(context.Background(), "acme/demo", "main", "", time.Time{}, repositoryWatchSelection{PullRequests: true}, SettingValues{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(server.pullQueries) != 1 || !strings.Contains(server.pullQueries[0], "base=main") {

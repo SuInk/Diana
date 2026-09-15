@@ -32,15 +32,17 @@ func TestLiveRepositoryWatchDoesNotReplayIssuesOnPullRequestHeavyRepository(t *t
 		// 没 Token 时 REST 匿名额度只有 60 次/小时，带上 Token 但强制走 REST 不现实；
 		// REST 路径仍用匿名请求验证。
 	}
+	// 假设订阅一小时检查一次：__none__ 游标只能推上次检查之后更新的 issue。
+	previousCheck := time.Now().Add(-time.Hour)
 	for name, settings := range paths {
 		for _, cursor := range []string{repositoryWatchNoIssueCursor, ""} {
-			found, next, err := plugin.fetchIssues(context.Background(), repository, cursor, repositoryWatchSelection{Issues: true}, settings)
+			found, next, err := plugin.fetchIssues(context.Background(), repository, cursor, previousCheck, repositoryWatchSelection{Issues: true}, settings)
 			if err != nil {
 				t.Fatalf("%s cursor=%q: %v", name, cursor, err)
 			}
 			t.Logf("%s cursor=%q → 推送 %d 条，新游标 %q", name, cursor, len(found), next)
 			for _, item := range found {
-				if item.UpdatedAt.Before(time.Now().Add(-repositoryWatchNoneCursorWindow)) {
+				if !item.UpdatedAt.After(previousCheck.Add(-repositoryWatchCheckClockSkew)) {
 					t.Errorf("%s 推送了旧 issue #%d", name, item.Number)
 				}
 			}
@@ -49,7 +51,7 @@ func TestLiveRepositoryWatchDoesNotReplayIssuesOnPullRequestHeavyRepository(t *t
 			}
 		}
 	}
-	pulls, next, err := plugin.fetchPullRequests(context.Background(), repository, "main", "", repositoryWatchSelection{PullRequests: true}, paths["rest"])
+	pulls, next, err := plugin.fetchPullRequests(context.Background(), repository, "main", "", time.Time{}, repositoryWatchSelection{PullRequests: true}, paths["rest"])
 	if err != nil {
 		t.Fatalf("pull requests: %v", err)
 	}

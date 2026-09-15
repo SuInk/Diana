@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // The poll result must still belong to the checkpoint it read. Reject a stale
@@ -43,4 +44,13 @@ func applyRepositoryReleaseCursor(item *Reminder, snapshot repositoryWatchSnapsh
 		item.LastReleasePublishedAt = snapshot.ReleasePublishedAt
 		item.LastReleaseID = snapshot.ReleaseID
 	}
+}
+
+// repositoryWatchPreviousCheckAt 取上一次成功检查的开始时间。升级前建的订阅没有这个字段，
+// 退回 LastRunAt：它在失败时也会前移，可能比真正的上次成功晚，但只影响升级后的第一轮。
+func repositoryWatchPreviousCheckAt(item Reminder) time.Time {
+	if !item.LastRepositoryCheckAt.IsZero() {
+		return item.LastRepositoryCheckAt
+	}
+	return item.LastRunAt
 }
