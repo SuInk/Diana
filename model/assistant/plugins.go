@@ -135,11 +135,32 @@ type PluginState struct {
 // OpenAPI is a process-wide HTTP service, not an event-bound bot capability.
 func (s PluginState) ForProfile(profileID string) PluginState {
 	if s.Manifest.ID != OpenAPIPluginID && !s.Manifest.Internal {
-		if enabled, ok := s.ProfileEnabled[strings.TrimSpace(profileID)]; ok && strings.TrimSpace(profileID) != "" {
-			s.Enabled = enabled
+		if profile := strings.TrimSpace(profileID); profile != "" {
+			if enabled, ok := s.ProfileEnabled[profile]; ok {
+				s.Enabled = enabled
+			} else {
+				s.Enabled = s.baseEnabled()
+			}
 		}
 	}
 	return s
+}
+
+// baseEnabled 是「认得出是哪台机器人、但这台没设过开关」时的取值：按清单默认算，
+// 不看存档里那个全局 Enabled。
+//
+// 那个值曾经是总开关，迁移之后不再承载信息：MigrateProfileConfigurations 会给每台
+// 已知机器人写一条明确条目，再把全局重置成 !DefaultDisabled，于是它永远等于清单
+// 默认。而插件页的开关只在选中机器人时才渲染，用户根本点不到它，它却仍会出现在
+// 状态接口里，把「这台开着」显示成关着。
+//
+// 两种情况仍旧读存档：配置里没有机器人 ID 的部署，那时全局是唯一能写的开关；以及
+// OpenAPI 这类进程级服务和已内化的能力，它们本来就不绑机器人。
+func (s PluginState) baseEnabled() bool {
+	if s.Manifest.ID == OpenAPIPluginID || s.Manifest.Internal {
+		return s.Enabled
+	}
+	return s.Manifest.BuiltIn && !s.Manifest.DefaultDisabled
 }
 
 func (m *PluginManager) ProfileOverrides(profileID string) map[string]bool {
@@ -427,6 +448,16 @@ func (m *PluginManager) List() []PluginState {
 		return strings.Compare(a.Manifest.ID, b.Manifest.ID)
 	})
 	return out
+}
+
+// ListForProfile 返回按某台机器人解析过开关的完整列表。普通插件的开关只存在于
+// ProfileEnabled，不解析就会拿到与实际不符的值。
+func (m *PluginManager) ListForProfile(profileID string) []PluginState {
+	states := m.List()
+	for i := range states {
+		states[i] = states[i].ForProfile(profileID)
+	}
+	return states
 }
 
 // ListVisible 返回面向用户的插件列表，跳过已内化为产品能力的插件。

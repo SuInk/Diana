@@ -1275,7 +1275,9 @@ func (r *Runtime) Status() RuntimeStatus {
 		Channel:       channelStatus,
 		Channels:      channelStatuses,
 		NoneBotBridge: r.bridge.Status(),
-		Plugins:       r.plugins.List(),
+		// 按当前这台机器人解析，别把原始的全局值端出去：普通插件的开关只存在于
+		// ProfileEnabled 里，直接给 List() 会把「这台开着」显示成关着。
+		Plugins:       r.plugins.ListForProfile(cfg.ID),
 		RecentEvents:  recent,
 		ActiveWorkers: r.activeCount(),
 		ActiveTasks:   r.activeSubagentTaskCount(),
