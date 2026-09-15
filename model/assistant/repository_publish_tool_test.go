@@ -44,6 +44,12 @@ func newRepositoryPublishTestGitHub() *repositoryPublishTestGitHub {
 }
 
 func (s *repositoryPublishTestGitHub) handler(w http.ResponseWriter, r *http.Request) {
+	// 这个假服务只模拟 REST。GraphQL 查询不计入请求记录、直接 404，工具会退回 REST，
+	// 既有用例继续只核对 REST 请求；GraphQL 路径由 repository_graphql_issues_test.go 覆盖。
+	if r.URL.Path == "/graphql" {
+		http.NotFound(w, r)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
