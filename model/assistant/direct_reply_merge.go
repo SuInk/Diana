@@ -53,7 +53,8 @@ type InboundReplyMergeStore interface {
 }
 
 func directReplyMergeKey(event MessageEvent) string {
-	if event.Kind != EventKindGroup || strings.TrimSpace(event.UserID) == "" {
+	// 私聊同样合并：连发「戳我」「戳我」「戳我」这类消息以前每句单独排队回一遍。
+	if (event.Kind != EventKindGroup && event.Kind != EventKindPrivate) || strings.TrimSpace(event.UserID) == "" {
 		return ""
 	}
 	return sessionKey(event) + "|sender:" + strings.TrimSpace(event.UserID)

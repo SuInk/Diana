@@ -97,8 +97,9 @@ func TestManuallyMarkedBotSuppressionBeforeReply(t *testing.T) {
 		if handled || outcome != "ignored_bot_message" {
 			t.Fatalf("%s: handled=%t outcome=%s", platform, handled, outcome)
 		}
-		if len(provider.requestSnapshot().Messages) == 0 {
-			t.Fatal("missing semantic bot gate")
+		// 没叫名字、也不是在接机器人的话：直接抑制，不需要问模型。
+		if len(provider.requestSnapshot().Messages) != 0 {
+			t.Fatal("marked bot noise should be suppressed without a model call")
 		}
 	}
 }

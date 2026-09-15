@@ -82,11 +82,20 @@ func (r *Runtime) markedBotPrivateMessageNeedsReply(ctx context.Context, event M
 }
 
 func (r *Runtime) telegramBotMessageMentionsSelf(ctx context.Context, event MessageEvent, text string) bool {
-	payload, err := json.Marshal(r.proactiveReplyPayload(event, readableEventText(event, text)))
+	cfg := r.effectiveConfigForEvent(event)
+	routePayload := r.proactiveReplyPayload(event, readableEventText(event, text))
+	// 只有结构上可能在叫本机时才问模型：正文里叫了机器人的名字，或者机器人上一句正是
+	// 对这个账号说的（对方在接话）。线上一天 1153 次这类判断全部是「没提到你」，别的
+	// Bot 刷屏时每条都占一次模型调用，拖慢了同一时间真人消息的回复。@ 和引用本机在
+	// requiresTelegramBotMentionJudgment 里已经直接放行，不会走到这里。
+	if len(matchedGroupAliases(event, cfg, text)) == 0 && !routePayload.LastBotAddressedCurrentSender {
+		return false
+	}
+	payload, err := json.Marshal(routePayload)
 	if err != nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(ctx, proactiveReplyRouteTimeout(r.effectiveConfigForEvent(event)))
+	ctx, cancel := context.WithTimeout(ctx, proactiveReplyRouteTimeout(cfg))
 	defer cancel()
 	raw, err := r.runLLMRouterProviderOnce(ctx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
