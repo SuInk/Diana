@@ -19,7 +19,11 @@ const (
 	maximumThreadStateTTL          = 24 * time.Hour
 	maximumThreadStatePayloadBytes = 8 * 1024
 	maximumActiveThreadStates      = 4
-	privateThreadStateMarker       = "【临时线程状态，仅用于完成当前多轮任务；scope=user 仅属于当前发言者，scope=session 由当前会话参与者共享；不得复述、泄露或当作长期记忆；当前消息与任务无关时不要使用或提及】"
+	// threadStateLockedKeysField 是 state 里记录「锁定字段」的保留键。锁定的字段在任务结束
+	// 前不能被改写：线上一局群聊猜谜，谜底存进了发起者的个人范围，别人来问时读不到，
+	// 模型就重新出题并一路改写谜底，前后答案自相矛盾。
+	threadStateLockedKeysField = "_locked_keys"
+	privateThreadStateMarker   = "【临时线程状态，仅用于完成当前多轮任务；scope=user 仅属于当前发言者，scope=session 由当前会话参与者共享；不得复述、泄露或当作长期记忆；当前消息与任务无关时不要使用或提及】"
 )
 
 var ErrThreadStateVersionConflict = errors.New("thread state version conflict")
@@ -163,14 +167,15 @@ func newDianaThreadStateTool(runtime *Runtime, event MessageEvent) *dianaThreadS
 func (*dianaThreadStateTool) Name() string { return dianaThreadStateToolName }
 
 func (*dianaThreadStateTool) Description() string {
-	return "保存、读取和结束 Diana 自己创建的多轮任务状态。默认 scope=user，只属于当前发言者；多人棋局、共同计划等需要群内参与者共享同一 canonical 状态时必须用 scope=session。更新时必须携带 expected_version，完成或取消时及时清理，不得用长期记忆代替。"
+	return "保存、读取和结束 Diana 自己创建的多轮任务状态。scope=user 只属于当前发言者，其他人的轮次读不到；群聊里发起、其他群友可能接着提问或参与的任务（猜谜、棋局、共同计划）必须用 scope=session。你自己出的谜底属于任务状态，放 session，并用 locked_keys 锁住，本局内不能再改。get 不传 task_kind 时列出当前会话和当前发言者全部进行中的状态；回答前先 get，读不到已锁定的谜底时不要重新出题。更新时必须携带 expected_version，完成或取消时及时清理，不得用长期记忆代替。"
 }
 
 func (*dianaThreadStateTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"operation", "task_kind"}, map[string]any{
-		"operation": toolEnumParam("操作：set 创建或更新；get 读取；complete 正常结束；cancel 取消。", "set", "get", "complete", "cancel"),
-		"task_kind": toolStringParam("通用任务类型标识，使用小写字母、数字、点、横线或下划线，例如 guess.character、form.onboarding。不要把具体答案写进 task_kind。"),
-		"scope":     toolEnumParam("状态作用域：user 仅当前发言者可见（默认）；session 供当前私聊或群会话共享，适用于多人棋局和共同任务，不得存放任何参与者的秘密。", string(ThreadStateScopeUser), string(ThreadStateScopeSession)),
+	return toolObjectSchema([]string{"operation"}, map[string]any{
+		"operation":   toolEnumParam("操作：set 创建或更新；get 读取；complete 正常结束；cancel 取消。", "set", "get", "complete", "cancel"),
+		"task_kind":   toolStringParam("通用任务类型标识，使用小写字母、数字、点、横线或下划线，例如 guess.character、form.onboarding。set、complete、cancel 必填；get 不传时列出全部进行中的状态。不要把具体答案写进 task_kind。"),
+		"scope":       toolEnumParam("状态作用域：user 仅当前发言者可见（默认），只用于私聊或明确只和一个人进行的任务；session 供当前会话所有人共享，群聊里其他人可能接着参与的任务和你自己出的谜底都放这里。session 不得存放某个参与者自己提供、不该让别人知道的秘密。get 不传 scope 时不按作用域过滤。", string(ThreadStateScopeUser), string(ThreadStateScopeSession)),
+		"locked_keys": toolStringArrayParam("set 可选：state 里需要锁定的顶层字段名，例如谜底字段。锁定后本任务结束前再 set 时这些字段不能改，也不会被省略掉；只能追加锁定，不能解锁。要换题必须先 complete 或 cancel。"),
 		"state": map[string]any{
 			"type":                 "object",
 			"description":          "set 时必填的结构化状态。保存完成任务所需的 canonical target、约束和进度；session 作用域不得放秘密；最多 8 KiB。",
@@ -189,12 +194,18 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 	if userID == "" {
 		return "", fmt.Errorf("无法识别当前发言者，不能操作临时线程状态")
 	}
-	taskKind, err := normalizeThreadStateTaskKind(configToolString(input, "task_kind"))
-	if err != nil {
-		return "", err
-	}
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
-	scope, err := normalizeThreadStateScope(configToolString(input, "scope"))
+	rawTaskKind := strings.TrimSpace(configToolString(input, "task_kind"))
+	rawScope := strings.TrimSpace(configToolString(input, "scope"))
+	taskKind := ""
+	if operation != "get" || rawTaskKind != "" {
+		normalized, err := normalizeThreadStateTaskKind(rawTaskKind)
+		if err != nil {
+			return "", err
+		}
+		taskKind = normalized
+	}
+	scope, err := normalizeThreadStateScope(rawScope)
 	if err != nil {
 		return "", err
 	}
@@ -208,9 +219,17 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 		if !ok || stateValue == nil {
 			return "", fmt.Errorf("set 必须提供 state")
 		}
-		state, err := json.Marshal(stateValue)
+		existing, err := t.activeThreadState(ctx, scope, taskKind, userID, now)
 		if err != nil {
-			return "", fmt.Errorf("编码私有状态: %w", err)
+			return "", err
+		}
+		lockedKeys, _, code, message := repositoryIssueStringList(input, "locked_keys", 20)
+		if code != "" {
+			return "", fmt.Errorf("locked_keys 格式不对：%s", message)
+		}
+		state, err := applyThreadStateLocks(stateValue, existing, lockedKeys)
+		if err != nil {
+			return "", err
 		}
 		if len(state) == 0 || len(state) > maximumThreadStatePayloadBytes {
 			return "", fmt.Errorf("state 大小必须在 1 到 %d 字节之间", maximumThreadStatePayloadBytes)
@@ -243,9 +262,11 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 		if err != nil {
 			return "", err
 		}
+		// 不传 task_kind 或 scope 时不按它过滤。以前两者都必须精确命中，模型记不清之前
+		// 存成了什么类型，只能一个个猜，猜不中就当作没有、重新出题。
 		filtered := items[:0]
 		for _, item := range items {
-			if item.TaskKind == taskKind && item.Scope == scope {
+			if (taskKind == "" || item.TaskKind == taskKind) && (rawScope == "" || item.Scope == scope) {
 				filtered = append(filtered, item)
 			}
 		}
@@ -254,6 +275,11 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 		status := ThreadStateCompleted
 		if operation == "cancel" {
 			status = ThreadStateCancelled
+		}
+		// 存储层结束时会清空状态；先把结束前的最终状态读出来放进结果，事后能在调用链里核对。
+		final, err := t.activeThreadState(ctx, scope, taskKind, userID, now)
+		if err != nil {
+			return "", err
 		}
 		item, err := store.EndThreadState(ctx, ThreadStateEndRequest{
 			ProfileID:       strings.TrimSpace(t.event.ProfileID),
@@ -268,10 +294,95 @@ func (t *dianaThreadStateTool) Run(ctx context.Context, input map[string]any) (s
 		if err != nil {
 			return "", err
 		}
+		if final != nil && len(item.State) == 0 {
+			item.State = append(json.RawMessage(nil), final.State...)
+		}
 		return marshalThreadStateToolResult(operation, []ThreadState{item})
 	default:
 		return "", fmt.Errorf("不支持的 operation %q", operation)
 	}
+}
+
+// activeThreadState 读出当前发言者可见、作用域和类型都对得上的那条进行中状态。
+func (t *dianaThreadStateTool) activeThreadState(ctx context.Context, scope ThreadStateScope, taskKind, userID string, now time.Time) (*ThreadState, error) {
+	items, err := t.runtime.threadStateStore().ListActiveThreadStates(ctx, strings.TrimSpace(t.event.ProfileID), sessionKey(t.event), userID, now, maximumActiveThreadStates)
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		if items[index].Scope == scope && items[index].TaskKind == taskKind {
+			return &items[index], nil
+		}
+	}
+	return nil, nil
+}
+
+// applyThreadStateLocks 把锁定规则套到这次 set 上：已锁定的字段不能改，省略了就沿用原值；
+// 锁定只增不减。返回编码后的 state。
+func applyThreadStateLocks(stateValue any, existing *ThreadState, requested []string) (json.RawMessage, error) {
+	encoded, err := json.Marshal(stateValue)
+	if err != nil {
+		return nil, fmt.Errorf("编码私有状态: %w", err)
+	}
+	var next map[string]any
+	if err := json.Unmarshal(encoded, &next); err != nil || next == nil {
+		if len(requested) > 0 || existing != nil && len(threadStateLockedKeys(existing.State)) > 0 {
+			return nil, fmt.Errorf("使用 locked_keys 时 state 必须是对象")
+		}
+		return encoded, nil
+	}
+	var previous map[string]any
+	locked := []string{}
+	if existing != nil {
+		_ = json.Unmarshal(existing.State, &previous)
+		locked = threadStateLockedKeys(existing.State)
+	}
+	seen := map[string]bool{}
+	for _, key := range locked {
+		seen[key] = true
+	}
+	for _, key := range locked {
+		oldValue, hadValue := previous[key]
+		newValue, hasValue := next[key]
+		if !hasValue {
+			if hadValue {
+				next[key] = oldValue
+			}
+			continue
+		}
+		oldJSON, _ := json.Marshal(oldValue)
+		newJSON, _ := json.Marshal(newValue)
+		if hadValue && string(oldJSON) != string(newJSON) {
+			return nil, fmt.Errorf("字段 %s 已锁定，本任务内不能修改（当前值保持不变）；如果确实要换，先 complete 或 cancel 结束这一局再重新 set", key)
+		}
+	}
+	for _, key := range requested {
+		key = strings.TrimSpace(key)
+		if key == "" || key == threadStateLockedKeysField || seen[key] {
+			continue
+		}
+		if _, ok := next[key]; !ok {
+			return nil, fmt.Errorf("locked_keys 里的 %s 不在 state 里", key)
+		}
+		seen[key] = true
+		locked = append(locked, key)
+	}
+	if len(locked) > 0 {
+		next[threadStateLockedKeysField] = locked
+	} else {
+		delete(next, threadStateLockedKeysField)
+	}
+	return json.Marshal(next)
+}
+
+func threadStateLockedKeys(state json.RawMessage) []string {
+	var payload struct {
+		Locked []string `json:"_locked_keys"`
+	}
+	if json.Unmarshal(state, &payload) != nil {
+		return nil
+	}
+	return payload.Locked
 }
 
 func normalizeThreadStateScope(value string) (ThreadStateScope, error) {
@@ -323,13 +434,15 @@ func threadStateInputInt(input map[string]any, key string) int {
 
 func marshalThreadStateToolResult(operation string, items []ThreadState) (string, error) {
 	type view struct {
-		ID        string            `json:"id"`
-		Scope     ThreadStateScope  `json:"scope"`
-		TaskKind  string            `json:"task_kind"`
-		State     json.RawMessage   `json:"state,omitempty"`
-		Version   int               `json:"version"`
-		Status    ThreadStateStatus `json:"status"`
-		ExpiresAt string            `json:"expires_at,omitempty"`
+		ID       string           `json:"id"`
+		Scope    ThreadStateScope `json:"scope"`
+		TaskKind string           `json:"task_kind"`
+		State    json.RawMessage  `json:"state,omitempty"`
+		// FinalState 只在 complete/cancel 的结果里出现：结束前最后一版状态，供事后核对。
+		FinalState json.RawMessage   `json:"final_state,omitempty"`
+		Version    int               `json:"version"`
+		Status     ThreadStateStatus `json:"status"`
+		ExpiresAt  string            `json:"expires_at,omitempty"`
 	}
 	result := struct {
 		OK        bool   `json:"ok"`
@@ -338,11 +451,13 @@ func marshalThreadStateToolResult(operation string, items []ThreadState) (string
 	}{OK: true, Operation: operation, Items: make([]view, 0, len(items))}
 	for _, item := range items {
 		state := append(json.RawMessage(nil), item.State...)
+		var final json.RawMessage
 		if item.Status != ThreadStateActive {
+			final = state
 			state = nil
 		}
 		result.Items = append(result.Items, view{
-			ID: item.ID, Scope: item.Scope, TaskKind: item.TaskKind, State: state, Version: item.Version,
+			ID: item.ID, Scope: item.Scope, TaskKind: item.TaskKind, State: state, FinalState: final, Version: item.Version,
 			Status: item.Status, ExpiresAt: item.ExpiresAt.Format(time.RFC3339),
 		})
 	}
