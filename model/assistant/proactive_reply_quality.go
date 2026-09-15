@@ -219,7 +219,11 @@ stop_requested —— 对方明确要求你不要再回。
   这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。
 
 只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
-{"send_confidence":0.96,"reason":"未发现与可见信息矛盾或内容截断","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"正常回答了当前请求","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"未发现空转证据","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":"未发现收尾证据"}
+{"send_confidence":0.96,"reason":"","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_confidence":0.95,"reply_loop_reason":"","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":""}
+
+理由只写发现的问题:某一项没有发现问题时,对应的 reason、account_risk_reason、refusal_reason、
+reply_loop_reason、closing_reason 一律填空字符串,不要写「未发现问题」「正常回答」这类说明。
+审核结果是逐字生成的,每多写一句理由,回复就晚发出几秒。发现问题时再用一句话写清具体问题。
 
 send_confidence 必须是 0 到 1 的数字，唯一含义是“这条候选回复适合发送”的置信度。
 越高越建议发送：未发现明确问题时给高分，明确矛盾、答非所问或截断时给低分。

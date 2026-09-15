@@ -17,8 +17,8 @@ func TestInboundConcurrencyDefaultsMatchTheOldConstants(t *testing.T) {
 	if cfg.InboundGroupConcurrency != 3 {
 		t.Fatalf("group concurrency default = %d, want 3 (unchanged)", cfg.InboundGroupConcurrency)
 	}
-	if cfg.InboundPrivateConcurrency != 1 {
-		t.Fatalf("private concurrency default = %d, want 1 (unchanged)", cfg.InboundPrivateConcurrency)
+	if cfg.InboundPrivateConcurrency != 2 {
+		t.Fatalf("private concurrency default = %d, want 2 (private bursts now merge)", cfg.InboundPrivateConcurrency)
 	}
 	if cfg.PrivateClosingGrace != defaultPrivateClosingGrace {
 		t.Fatalf("private closing grace default = %d, want %d", cfg.PrivateClosingGrace, defaultPrivateClosingGrace)
@@ -110,39 +110,32 @@ func (p *concurrentBurstProvider) stats() (int, int) {
 	return p.replies, p.maxActiv
 }
 
-// TestPrivateBurstIsNotFoldedByDirectReplyMerge 是并发问题的证据。
-//
-// 直呼合并（「同一用户随后又发来直呼消息，由新消息一并回答」）从来不覆盖私聊：
-// directReplyMergeKey 对非群事件返回空（direct_reply_merge.go:53），
-// inboundTriggerSuperseded 也在私聊上直接返回 false（reply_interrupt.go:158）。
-// 所以私聊里连发三句，本来就是三条独立回复；把并发从 1 提到 2 不会「打散合并」
-// ——没有合并可打散——但会让两条回复同时生成，后一条看不见前一条。
-func TestPrivateBurstIsNotFoldedByDirectReplyMerge(t *testing.T) {
+// TestPrivateBurstFoldsIntoActiveDirectReply：私聊连发的补充或重复现在并入正在生成的回复。
+func TestPrivateBurstFoldsIntoActiveDirectReply(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"relation":"repeat","confidence":0.95,"reason":"同一个请求再说一遍"}`}
 	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"},
-		nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	root := privateEvent("380726517", "burst-1", "帮我看看这个")
+		nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	root := privateEvent("380726517", "burst-1", "戳我一下")
+	if key := directReplyMergeKey(root); key == "" {
+		t.Fatal("private chat has no direct reply merge key")
+	}
 	ctx, finish := runtime.beginDirectReply(context.Background(), root)
 	defer finish()
 
 	for _, follow := range []string{"burst-2", "burst-3"} {
-		event := privateEvent("380726517", follow, "还有一点")
-		if rootID, merged := runtime.mergeIntoActiveDirectReply(ctx, event, event.RawMessage); merged {
-			t.Fatalf("private follow-up %s unexpectedly merged into %s", follow, rootID)
+		event := privateEvent("380726517", follow, "戳我")
+		if rootID, merged := runtime.mergeIntoActiveDirectReply(ctx, event, event.RawMessage); !merged || rootID != "burst-1" {
+			t.Fatalf("private follow-up %s merged=%v root=%q", follow, merged, rootID)
 		}
 	}
-	if key := directReplyMergeKey(root); key != "" {
-		t.Fatalf("directReplyMergeKey now covers private chat (%q); this test's premise needs revisiting", key)
-	}
-	if runtime.inboundTriggerSuperseded(ctx, privateEvent("380726517", "burst-3", "还有一点")) {
-		t.Fatal("private supersession changed; revisit the concurrency recommendation")
+	// 别人的私聊不会并进这个人的回复。
+	if _, merged := runtime.mergeIntoActiveDirectReply(ctx, privateEvent("999", "other", "戳我"), "戳我"); merged {
+		t.Fatal("another user's private message merged into this reply")
 	}
 }
 
-// TestPrivateBurstUnderConcurrency 在真实队列上跑一遍连发三句。
-//
-// 并发 1（现默认）：三条回复，串行生成，后一条看得见前一条。
-// 并发 2：仍然是三条回复——私聊本来就没有合并这一层——但其中两条同时生成，
-// 后一条看不见前一条刚说了什么。这正是不建议现在就把默认改成 2 的理由。
+// TestPrivateBurstUnderConcurrency 在真实队列上跑一遍连发三句，只验证并发档位本身。
+// 这里的模型不会把连发判成重复或补充，所以每句仍然单独回复；合并由上面那个测试覆盖。
 func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 1)
@@ -155,8 +148,9 @@ func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	})
 	t.Run("parallel", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 2)
-		if replies != 3 || sent != 3 {
-			t.Fatalf("parallel burst produced %d replies / %d sends, want 3 / 3 — private chat has no merge to preserve", replies, sent)
+		// 并发时后到的那句会先问一次「是不是同一件事」，模型调用数可能多一次。
+		if replies < 3 || sent != 3 {
+			t.Fatalf("parallel burst produced %d replies / %d sends, want 3 / 3 when follow-ups are not classified as repeats", replies, sent)
 		}
 		if maxActive < 2 {
 			t.Fatalf("max concurrent generations = %d, want at least 2 under private concurrency 2", maxActive)

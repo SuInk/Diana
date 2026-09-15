@@ -23,10 +23,24 @@ func TestTelegramBotSemanticMentionDecision(t *testing.T) {
 			if !r.requiresTelegramBotMentionJudgment(event) {
 				t.Fatal("bot semantic gate must default on")
 			}
-			if got := r.telegramBotMessageMentionsSelf(context.Background(), event, "你刚才那个建议能展开说说吗"); got != tc.want {
+			if got := r.telegramBotMessageMentionsSelf(context.Background(), event, "Diana 你刚才那个建议能展开说说吗"); got != tc.want {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// 线上一天 1153 次「别的 Bot 有没有在叫我」判断全部是否定。没叫名字、机器人上一句也不是
+// 对它说的，直接判否，不占模型调用。
+func TestTelegramBotMentionJudgmentSkipsModelWithoutStructuralHint(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"mentions_self":true}`}
+	r := NewRuntime(BotConfig{BotAccount: "8888", GroupTriggers: []string{"Diana"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "g", UserID: "42", SenderIsBot: true}
+	if r.telegramBotMessageMentionsSelf(context.Background(), event, "今日自动播报：天气晴") {
+		t.Fatal("bot message without any hint was treated as addressing the bot")
+	}
+	if len(provider.requestSnapshot().Messages) != 0 {
+		t.Fatal("model was called without a structural hint")
 	}
 }
 
