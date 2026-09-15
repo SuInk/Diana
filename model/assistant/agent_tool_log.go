@@ -121,9 +121,9 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				toolInput, toolOutput = sanitizePlatformDebugToolCall(toolInput, toolOutput)
 			} else if runEvent.Tool == dianaRepositoryIssuesToolName {
 				toolInput, toolOutput = sanitizeRepositoryIssuesDebugToolCall(toolInput, toolOutput)
-			} else if runEvent.Tool == dianaThreadStateToolName {
-				toolInput, toolOutput = sanitizeThreadStateDebugToolCall(toolInput, toolOutput)
 			}
+			// thread_state 的参数和结果照实记下：调用链只在后台可见，而多轮任务出错时（比如
+			// 猜谜游戏中途换了谜底）唯一能核对的就是每一步到底写进了什么。
 			// 报错文本要补在脱敏之后：上面那层挡的是工具载荷，而错误信息不是载荷，
 			// 挡掉它只会让追踪里少一行、多一句「输出已省略」。
 			if runError != "" && strings.TrimSpace(toolOutput) == "" {
@@ -148,22 +148,6 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		log.Printf("diana agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",
 			runEvent.TraceID, progressBar, progressLabel, runEvent.Phase, runEvent.ModelTurn, runEvent.Tool, runEvent.DurationMS)
 	}
-}
-
-func sanitizeThreadStateDebugToolCall(input map[string]any, output string) (map[string]any, string) {
-	redacted := map[string]any{
-		"operation":  strings.TrimSpace(configToolString(input, "operation")),
-		"scope":      strings.TrimSpace(configToolString(input, "scope")),
-		"task_kind":  strings.TrimSpace(configToolString(input, "task_kind")),
-		"input_keys": sortedMapKeys(input),
-	}
-	if version := threadStateInputInt(input, "expected_version"); version > 0 {
-		redacted["expected_version"] = version
-	}
-	if strings.TrimSpace(output) == "" {
-		return redacted, ""
-	}
-	return redacted, "[private thread state tool output omitted]"
 }
 
 func sanitizePlatformDebugToolCall(input map[string]any, output string) (map[string]any, string) {
