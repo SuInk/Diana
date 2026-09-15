@@ -265,3 +265,39 @@ func TestDebugToolCallSanitizersLeaveMissingOutputEmpty(t *testing.T) {
 		t.Fatal("有输出时必须挡住")
 	}
 }
+
+// thread_state 在调用链里照实显示参数和结果：多轮任务状态只在后台可见，出了问题要能核对
+// 每一步写进了什么。普通操作日志仍只记参数名。
+func TestAgentRunObserverShowsThreadStatePayloadInDebugTrace(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := NewRuntime(BotConfig{DebugModeEnabled: true}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "message-1"}
+	ctx := runtime.withDebugTraceContext(context.Background(), event)
+	runtime.agentRunObserver(event)(ctx, agent.RunEvent{
+		Phase:     agent.RunPhaseToolCompleted,
+		Tool:      dianaThreadStateToolName,
+		InputKeys: []string{"expected_version", "operation", "scope", "state", "task_kind"},
+		ToolInput: map[string]any{
+			"operation": "set", "scope": "session", "task_kind": "guess.word", "expected_version": 3,
+			"state": map[string]any{"secret_word": "耳机", "question_count": 2},
+		},
+		ToolOutput: `{"ok":true,"items":[{"version":4,"state":{"secret_word":"耳机","question_count":2}}]}`,
+	})
+	entries := logs.entriesSnapshot()
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if encoded, _ := json.Marshal(entries[0].Metadata); strings.Contains(string(encoded), "耳机") {
+		t.Fatalf("普通操作日志不该带状态内容：%s", encoded)
+	}
+	debug := entries[1]
+	input, _ := debug.Metadata["tool_input"].(map[string]any)
+	state, _ := input["state"].(map[string]any)
+	if state["secret_word"] != "耳机" || input["expected_version"] != 3 {
+		t.Fatalf("调用链应显示完整工具参数：%#v", debug.Metadata["tool_input"])
+	}
+	if output, _ := debug.Metadata["tool_output"].(string); !strings.Contains(output, `"secret_word":"耳机"`) {
+		t.Fatalf("调用链应显示工具结果：%#v", debug.Metadata["tool_output"])
+	}
+}

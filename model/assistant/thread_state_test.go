@@ -276,7 +276,9 @@ func TestThreadStatePromptAndPermissions(t *testing.T) {
 	}
 }
 
-func TestThreadStateDebugAndCarryoverAreRedacted(t *testing.T) {
+// 调用链只在后台可见，thread_state 写进去和读出来的内容要照实显示：多轮任务出错时
+// （线上一局猜谜游戏中途换了谜底）只能靠它核对每一步。跨轮携带仍然不带状态内容。
+func TestThreadStateDebugTraceShowsStateButCarryoverExcludesIt(t *testing.T) {
 	secret := "DIO-PRIVATE-TARGET"
 	req := llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleUser, Content: privateThreadStateMarker + ` [{"state":{"target":"` + secret + `"}}]`},
@@ -295,18 +297,17 @@ func TestThreadStateDebugAndCarryoverAreRedacted(t *testing.T) {
 	}}
 	sanitized := sanitizeDebugGenerateRequest(req)
 	encoded, _ := json.Marshal(sanitized)
-	if strings.Contains(string(encoded), secret) {
-		t.Fatalf("request leaked private state: %s", encoded)
+	if strings.Count(string(encoded), secret) != 3 {
+		t.Fatalf("调用链里的请求应完整显示状态注入、set 参数和工具返回：%s", encoded)
+	}
+	sanitized.Messages[1].ToolCalls[0].Arguments["state"] = "mutated"
+	if req.Messages[1].ToolCalls[0].Arguments["state"] == "mutated" {
+		t.Fatal("调试记录和原请求共用了同一份工具参数")
 	}
 	response := sanitizeDebugGenerateResponse(req, &llm.GenerateResponse{Text: secret, ToolCalls: req.Messages[1].ToolCalls})
 	encoded, _ = json.Marshal(response)
-	if strings.Contains(string(encoded), secret) {
-		t.Fatalf("response leaked private state: %s", encoded)
-	}
-	compat := sanitizeDebugGenerateResponse(req, &llm.GenerateResponse{Text: `{"action":"tool","tool":"diana.thread_state","input":{"state":{"target":"` + secret + `"}}}`})
-	encoded, _ = json.Marshal(compat)
-	if strings.Contains(string(encoded), secret) {
-		t.Fatalf("compat response leaked private state: %s", encoded)
+	if !strings.Contains(string(encoded), secret) {
+		t.Fatalf("调用链里的模型回复应显示状态内容：%s", encoded)
 	}
 	entries := agentCarryoverEntries([]agent.Step{{Tool: dianaThreadStateToolName, Input: map[string]any{"state": secret}, Output: secret}})
 	if len(entries) != 0 {
