@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -396,27 +397,36 @@ type Runtime struct {
 	activeReminders       map[string]struct{}
 	inboundWake           chan struct{}
 	inboundManualBackfill chan time.Duration
-	inboundDone           chan struct{}
-	memoryWake            chan struct{}
-	memoryDone            chan struct{}
-	inboundReadyMu        sync.RWMutex
-	inboundReady          bool
-	inboundReplayCutoff   time.Time
-	inboundInit           bool
-	subagentMu            sync.Mutex
-	subagentTasks         map[string]activeSubagentTask
-	subagentRecent        map[string]SubagentTaskStatus
-	subagentSem           chan struct{}
-	subagentLLMSem        chan struct{}
-	replySuppressMu       sync.Mutex
-	replySuppressByUser   map[string]ReplySuppression
-	replyOutboundGateMu   sync.Mutex
-	replyOutboundGates    map[string]*replySuppressionOutboundGate
-	replyRefusalMu        sync.Mutex
-	replyRefusalByUser    map[string]replyRefusalState
-	botReplyLoopMu        sync.Mutex
-	replyDamping          replyDamping
-	botReplyLoopByKey     map[string]botReplyLoopState
+	// 重连后 seq 缺口检测的状态，见 inbound_gap.go。
+	inboundSeqProbe     chan groupSeqProbe
+	seqProbeMu          sync.Mutex
+	seqProbeArmed       bool
+	seqProbed           map[string]struct{}
+	seqGapRunning       map[string]struct{}
+	seqGapActive        atomic.Int32
+	historyBackfillBusy atomic.Bool
+	historyFetchMu      sync.Mutex
+	inboundDone         chan struct{}
+	memoryWake          chan struct{}
+	memoryDone          chan struct{}
+	inboundReadyMu      sync.RWMutex
+	inboundReady        bool
+	inboundReplayCutoff time.Time
+	inboundInit         bool
+	subagentMu          sync.Mutex
+	subagentTasks       map[string]activeSubagentTask
+	subagentRecent      map[string]SubagentTaskStatus
+	subagentSem         chan struct{}
+	subagentLLMSem      chan struct{}
+	replySuppressMu     sync.Mutex
+	replySuppressByUser map[string]ReplySuppression
+	replyOutboundGateMu sync.Mutex
+	replyOutboundGates  map[string]*replySuppressionOutboundGate
+	replyRefusalMu      sync.Mutex
+	replyRefusalByUser  map[string]replyRefusalState
+	botReplyLoopMu      sync.Mutex
+	replyDamping        replyDamping
+	botReplyLoopByKey   map[string]botReplyLoopState
 	// privateClosingBySession 记录每个私聊会话已经互相道别了几轮。只在内存里：
 	// 重启后重新给足宽限次数，方向上偏「多答一句」而不是「误闭嘴」。
 	privateClosingMu        sync.Mutex
@@ -637,6 +647,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		resolverDeliveries:      map[string]resolverDeliveryReservation{},
 		inboundWake:             make(chan struct{}, 1),
 		inboundManualBackfill:   make(chan time.Duration, 1),
+		inboundSeqProbe:         make(chan groupSeqProbe, 256),
 		memoryWake:              make(chan struct{}, 1),
 		subagentTasks:           map[string]activeSubagentTask{},
 		subagentRecent:          map[string]SubagentTaskStatus{},
@@ -1628,6 +1639,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		if err != nil {
 			return r.retainFailedInbound(event, err)
 		}
+		r.observeLiveGroupSeq(event)
 		r.wakeInboundWorkers()
 		return nil
 	}
