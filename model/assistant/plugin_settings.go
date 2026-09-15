@@ -231,7 +231,11 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 		}
 		// 字节数没有小数概念，落库前取整。
 		return math.Round(number), nil
-	case PluginSettingTypeString:
+	case PluginSettingTypeString, PluginSettingTypeText:
+		// text 是多行文本框，值仍然是字符串，只是内部保留换行。漏掉这个分支会落到
+		// default 报「不支持的类型」，sanitizePluginSettings 于是跳过这个键——设置在
+		// 界面上存得进去，Restore 一清洗就没了，下次启动插件看到的是空值。编码代理的
+		// 工作区白名单就是这么丢的：界面上填着仓库，工具却说「还没有登记任何工作区」。
 		value, ok := raw.(string)
 		if !ok {
 			return nil, fmt.Errorf("diana: setting %q expects a string", spec.Key)
