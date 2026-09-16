@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +25,7 @@ const (
 	PortraitFieldHabit      UserPortraitField = "habit"
 	PortraitFieldInterest   UserPortraitField = "interest"
 	PortraitFieldRelation   UserPortraitField = "relation"
+	PortraitFieldTimezone   UserPortraitField = "timezone"
 	PortraitFieldOther      UserPortraitField = "other"
 )
 
@@ -60,6 +62,9 @@ var portraitFieldSpecs = []PortraitFieldSpec{
 	{Field: PortraitFieldHabit, Label: "生活习惯", Hint: "饮食、运动、通勤等稳定的生活方式", Capacity: 4},
 	{Field: PortraitFieldInterest, Label: "兴趣爱好", Hint: "长期的爱好、常玩的游戏、追的领域", Capacity: 4},
 	{Field: PortraitFieldRelation, Label: "家庭与关系", Hint: "同住的家人、宠物等稳定关系", Capacity: 3},
+	// 时区要拿来算时间，所以只收 IANA 名称：「在德国」「比你慢六小时」这类描述
+	// 换算不了，NormalizePortraitTrait 会把它们丢掉。
+	{Field: PortraitFieldTimezone, Label: "时区", Hint: "IANA 时区名，如 Asia/Shanghai、Europe/Berlin；只在能确定到具体时区时才记", Capacity: 1},
 	{Field: PortraitFieldOther, Label: "其他", Hint: "上面几栏装不下、但确实稳定的个人情况", Capacity: 4},
 }
 
@@ -114,6 +119,8 @@ func NormalizePortraitField(raw string) (UserPortraitField, bool) {
 		return PortraitFieldInterest, true
 	case "family", "pet", "relationship", "家庭", "宠物":
 		return PortraitFieldRelation, true
+	case "tz", "time_zone", "所在时区":
+		return PortraitFieldTimezone, true
 	}
 	return PortraitFieldOther, true
 }
@@ -145,6 +152,12 @@ func NormalizePortraitTrait(trait UserPortraitTrait, now time.Time) (UserPortrai
 	value := strings.Join(strings.Fields(trait.Value), " ")
 	if value == "" {
 		return UserPortraitTrait{}, false
+	}
+	if field == PortraitFieldTimezone {
+		location, err := time.LoadLocation(value)
+		if err != nil || location == time.UTC && !strings.EqualFold(value, "UTC") {
+			return UserPortraitTrait{}, false
+		}
 	}
 	if trait.Confidence > 0 && trait.Confidence < minPortraitConfidence {
 		return UserPortraitTrait{}, false
@@ -294,4 +307,56 @@ func FormatPortraitLines(traits []UserPortraitTrait) string {
 		builder.WriteString(strings.Join(values, "；"))
 	}
 	return builder.String()
+}
+
+// PortraitTimezoneStaleAfter 之后，时区按「可能已经变了」对待：人会搬家、会长住到
+// 别的地方，而画像只在对方再次说起时才更新。超过这个时长仍然照常换算，只是提示
+// 模型在安排具体时间前先确认一句。
+const PortraitTimezoneStaleAfter = 60 * 24 * time.Hour
+
+// PortraitTimezone 取出画像里记下的时区。没记过、或记下的值当前系统解析不了时
+// 返回 nil：宁可按机器人本地时区说时间，也不要按错误的时区换算。
+func PortraitTimezone(traits []UserPortraitTrait) *time.Location {
+	location, _ := PortraitTimezoneWithRecordedAt(traits)
+	return location
+}
+
+// PortraitTimezoneWithRecordedAt 一并返回这条时区是什么时候记下的。
+func PortraitTimezoneWithRecordedAt(traits []UserPortraitTrait) (*time.Location, time.Time) {
+	for _, trait := range traits {
+		if trait.Field != PortraitFieldTimezone {
+			continue
+		}
+		if location, err := time.LoadLocation(strings.TrimSpace(trait.Value)); err == nil {
+			return location, trait.UpdatedAt
+		}
+	}
+	return nil, time.Time{}
+}
+
+// FormatTimezoneOffset 描述目标时区相对参考时区的时差，用于提示词里说清「早几小时」。
+func FormatTimezoneOffset(now time.Time, target, reference *time.Location) string {
+	if target == nil || reference == nil {
+		return ""
+	}
+	_, targetOffset := now.In(target).Zone()
+	_, referenceOffset := now.In(reference).Zone()
+	delta := time.Duration(targetOffset-referenceOffset) * time.Second
+	switch {
+	case delta == 0:
+		return "和你所在时区相同"
+	case delta > 0:
+		return "比你早 " + formatHourOffset(delta)
+	default:
+		return "比你晚 " + formatHourOffset(-delta)
+	}
+}
+
+func formatHourOffset(delta time.Duration) string {
+	hours := int(delta / time.Hour)
+	minutes := int((delta % time.Hour) / time.Minute)
+	if minutes == 0 {
+		return strconv.Itoa(hours) + " 小时"
+	}
+	return strconv.Itoa(hours) + " 小时 " + strconv.Itoa(minutes) + " 分"
 }
