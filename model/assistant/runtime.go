@@ -1592,6 +1592,11 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	if event.Kind == EventKindNotice {
+		if reaction, ok := messageReactionFromEvent(event, event.Platform); ok {
+			// 表情回应只用来统计，不进回复流程，也不当成一条消息记进聊天记录。
+			r.recordMessageReaction(reaction)
+			return nil
+		}
 		if isRecallNotice(event) {
 			event = r.enrichRecallNotice(ctx, event)
 			// 撤回通知不走队列、即时到达：登记后还没送出的回复会在发送前放弃。
