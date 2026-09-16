@@ -17,41 +17,47 @@ import (
 func TestCodingHookNeedsApprovalByMode(t *testing.T) {
 	dangerous := codingApprovalPolicy{Mode: codingApprovalModeDangerous, Patterns: defaultCodingApprovalPatterns()}
 	for _, detail := range []string{"git push origin main", "GIT PUSH --force", "rm -rf build", "sudo apt install x"} {
-		if !codingHookNeedsApproval(dangerous, "Bash", detail) {
+		if _, needed := codingHookNeedsApproval(dangerous, "Bash", detail); !needed {
 			t.Fatalf("危险操作 %q 应当要确认", detail)
 		}
 	}
 	// 改文件、跑测试、本地提交是派活时就默许的事，每步都问等于这功能没法用。
 	for _, detail := range []string{"go test ./...", "git commit -m fix", "gofmt -w ."} {
-		if codingHookNeedsApproval(dangerous, "Bash", detail) {
+		if _, needed := codingHookNeedsApproval(dangerous, "Bash", detail); needed {
 			t.Fatalf("日常操作 %q 不该要确认", detail)
 		}
 	}
-	if codingHookNeedsApproval(dangerous, "Edit", "a.go") {
+	if _, needed := codingHookNeedsApproval(dangerous, "Edit", "a.go"); needed {
 		t.Fatalf("危险操作档不该拦改文件")
 	}
 
 	all := codingApprovalPolicy{Mode: codingApprovalModeAllWrites}
-	if !codingHookNeedsApproval(all, "Edit", "a.go") {
+	if _, needed := codingHookNeedsApproval(all, "Edit", "a.go"); !needed {
 		t.Fatalf("全部写操作档应当拦改文件")
 	}
 	off := codingApprovalPolicy{Mode: codingApprovalModeOff}
-	if codingHookNeedsApproval(off, "Bash", "git push") {
+	if _, needed := codingHookNeedsApproval(off, "Bash", "git push"); needed {
 		t.Fatalf("关闭档不该拦任何东西")
 	}
 }
 
 func TestCodingApprovalCodesAreStableAndDistinct(t *testing.T) {
 	request := codingApprovalRequest{ID: "r1", JobID: "code-1", Tool: "Bash", Detail: "git push"}
-	allow, deny := codingApprovalCodes(request)
-	againAllow, againDeny := codingApprovalCodes(request)
+	allow, always, deny := codingApprovalCodes(request)
+	againAllow, againAlways, againDeny := codingApprovalCodes(request)
+	if always != againAlways {
+		t.Fatalf("常驻放行码不稳定")
+	}
 	if allow != againAllow || deny != againDeny {
 		t.Fatalf("同一次询问派生出了不同的码")
+	}
+	if allow == always || always == deny || len(always) != codingApprovalCodeLength {
+		t.Fatalf("三个码必须互不相同：allow=%q always=%q deny=%q", allow, always, deny)
 	}
 	if allow == deny || len(allow) != codingApprovalCodeLength {
 		t.Fatalf("allow=%q deny=%q", allow, deny)
 	}
-	other, _ := codingApprovalCodes(codingApprovalRequest{ID: "r2", JobID: "code-1", Tool: "Bash", Detail: "git push"})
+	other, _, _ := codingApprovalCodes(codingApprovalRequest{ID: "r2", JobID: "code-1", Tool: "Bash", Detail: "git push"})
 	if other == allow {
 		t.Fatalf("不同询问不该共用放行码")
 	}
@@ -296,7 +302,7 @@ func TestCodingApprovalAsksOwnerAndHonorsReply(t *testing.T) {
 
 	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 1 })
 	asked := channel.messages()[0].Text
-	allowCode, denyCode := codingApprovalCodes(request)
+	allowCode, _, denyCode := codingApprovalCodes(request)
 	if !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, allowCode) || !strings.Contains(asked, denyCode) {
 		t.Fatalf("询问消息 = %q", asked)
 	}
@@ -355,7 +361,7 @@ func TestCodingApprovalDenyReplyWritesRefusal(t *testing.T) {
 	}
 	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 1 })
 
-	_, denyCode := codingApprovalCodes(request)
+	_, _, denyCode := codingApprovalCodes(request)
 	if _, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, denyCode); !handled {
 		t.Fatalf("拒绝码应当被受理")
 	}
@@ -385,7 +391,7 @@ func TestCodingToolStatusShowsPendingApproval(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	request := codingApprovalRequest{ID: "req3", JobID: job.ID, Tool: "Bash", Detail: "git push origin main"}
-	allow, deny := codingApprovalCodes(request)
+	allow, _, deny := codingApprovalCodes(request)
 	rt.codingJobs().registerApproval(&codingApprovalWait{
 		request: request, allowCode: allow, denyCode: deny,
 		decided: make(chan codingApprovalResponse, 1),
