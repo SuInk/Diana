@@ -6581,7 +6581,27 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 		"weekday":  chineseWeekday(now.Weekday()),
 	}))
 	appendPromptSection(&builder, fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", agent.RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
+	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
+		appendPromptSection(&builder, speaker)
+	}
 	return strings.TrimSpace(builder.String())
+}
+
+// speakerTimezonePrompt 在画像里记过对方时区时，给出他那边的当地时间和时差。
+// 机器人自己的「现在几点」仍然只看运行时钟，也就是本机时区。
+func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) string {
+	if !event.userProfileLoaded {
+		return ""
+	}
+	location := PortraitTimezone(event.userProfile.Portrait)
+	if location == nil {
+		return ""
+	}
+	local := now.In(location)
+	zoneName, zoneOffset := local.Zone()
+	offset := FormatTimezoneOffset(now, location, now.Location())
+	return fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。你自己的「现在」仍以上面的运行时钟为准。",
+		location.String(), zoneName, formatUTCOffset(zoneOffset), offset, local.Format("2006-01-02 15:04"))
 }
 
 // systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者

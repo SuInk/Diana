@@ -158,8 +158,9 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 10. 每条 portrait 必须给出 field、value（不超过 30 字的第三人称短语，直接写事实本身，不要写“用户说……”）、evidence（不超过 30 字的原话片段）、source 和 confidence。source=stated 表示本人在当前发言里明说；需要结合上下文推断时用 inferred，且必须 confidence>=0.85，拿不准就不输出。
 11. known_portrait 是已经记下的画像。已经记过且没有变化的不要重复输出；同一栏的情况发生变化（搬家、换工作、作息改了）时直接输出新值，旧值会被顶掉。
 12. 具体门牌地址、电话号码、证件号、账号密码这类精确身份与联系方式一律不记，居住地点最细只到城市或城区。
-13. 本条没有值得记的画像时 portrait 输出空数组，最多 3 条。
-14. 只输出一个合法 JSON 对象，不要输出 Markdown 或额外文字。格式固定为：{"should_update":false,"delta":0,"confidence":0.96,"reason":"中性查询，不改变关系","portrait":[{"field":"occupation","value":"在做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.95}]}`),
+13. timezone 这一栏的 value 必须是 IANA 时区名（如 Asia/Shanghai、Europe/Berlin、America/New_York），写别的一律会被丢弃。对方说自己在哪个国家或城市、说出自己那边的当地时间、或提到与机器人所在地的时差时才记；只有能确定到唯一时区时才写，跨多个时区的国家（如美国、俄罗斯）没说具体城市就不要记。短期出差、旅行不记。
+14. 本条没有值得记的画像时 portrait 输出空数组，最多 3 条。
+15. 只输出一个合法 JSON 对象，不要输出 Markdown 或额外文字。格式固定为：{"should_update":false,"delta":0,"confidence":0.96,"reason":"中性查询，不改变关系","portrait":[{"field":"occupation","value":"在做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.95}]}`),
 		},
 		{
 			Role:    llm.RoleUser,
