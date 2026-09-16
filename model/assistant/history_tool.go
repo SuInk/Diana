@@ -173,28 +173,29 @@ func (t *dianaChatHistoryTool) Name() string {
 }
 
 func (t *dianaChatHistoryTool) Description() string {
-	return `按需读取本地持久化聊天记录。引用里的指代需要更早上文、短上下文不够、或用户询问长期历史时必须先调用，不要直接声称看不到。`
+	return `按需读取本地持久化聊天记录，也能做群统计。引用里的指代需要更早上文、短上下文不够、或用户询问长期历史时必须先调用，不要直接声称看不到。` +
+		`群统计：问谁发言多、水群排行用 speakers；问点赞、表情回应、谁点了赞、点赞名单用 reactions（给 message_id 查某条消息，不给出排行）。两者不能互相冒充。`
 }
 
 // InputSchema 声明参数契约。哪个 operation 配哪些参数写在字段说明里，
 // 比在散文里列一遍内联 JSON 更不容易看漏。
 func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；overview 均匀抽取整个时间段的代表消息，用户要求总结或回顾一天/数小时且消息很多时优先使用；range 按时间段逐条精确列出，适合核对细节，没读完需分页；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息，最新的在前，更早的用 limit 调大再查。",
-			"around", "recent", "overview", "range", "search", "recalls"),
-		"message_id":   toolStringParam("around 可选：以哪条消息为中心；省略时以当前消息为中心。"),
+		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；overview 均匀抽取整个时间段的代表消息，用户要求总结或回顾一天/数小时且消息很多时优先使用；range 按时间段逐条精确列出，适合核对细节，没读完需分页；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息，最新的在前，更早的用 limit 调大再查；speakers 统计本群一段时间里谁发言多（排行）；reactions 统计表情回应（点赞）：给 message_id 列出这条消息上谁挂了什么表情，不给就是一段时间里谁挂表情最多的排行。",
+			"around", "recent", "overview", "range", "search", "recalls", "speakers", "reactions"),
+		"message_id":   toolStringParam("around 可选：以哪条消息为中心；省略时以当前消息为中心。reactions 可选：查这条消息上的表情回应。"),
 		"before":       toolIntParam("around 可选：读取锚点之前多少条消息。", 0, maximumChatHistoryAroundRadius),
 		"after":        toolIntParam("around 可选：读取锚点之后多少条消息。", 0, maximumChatHistoryAroundRadius),
 		"query":        toolStringParam("search 必填：检索关键词。"),
 		"order":        toolEnumParam("search 排序：newest 最新优先（默认），oldest 最早优先（未指定起始范围时查全部历史），两者支持精确分页；relevance 保留关键词与语义相关性召回，但无法穷尽或分页，不能用于证明最早。", "newest", "oldest", "relevance"),
 		"cursor":       toolStringParam("search 或 range 续查：原样传回 next_cursor；search 保持 query、scope、order 相同。游标固定首次查询的时间范围，优先于 next_from_time。"),
 		"group_id":     toolStringParam("around 可选：搜索命中的来源 group_id；跨群展开需要开启跨群记忆，仅可访问同一机器人命名空间。"),
-		"from_time":    toolStringParam(`range 与 search 的起始时间。接受 Unix 秒，也接受本地时间字符串 "2006-01-02 15:04" 或 "2006-01-02"。range 一次读不完时结果会给出 next_from_time，用它继续读完整个时间段再总结。`),
+		"from_time":    toolStringParam(`range、search、speakers、reactions 的起始时间。接受 Unix 秒，也接受本地时间字符串 "2006-01-02 15:04" 或 "2006-01-02"。range 一次读不完时结果会给出 next_from_time，用它继续读完整个时间段再总结。`),
 		"through_time": toolStringParam(`range 与 search 的结束时间，写法同 from_time。`),
 		"scope": toolEnumParam("检索范围。current 仅当前会话；all_groups 只有 search 支持，且需要管理员已开启跨群记忆，并严格限定在同一机器人命名空间内。群聊里可用；私聊里只有机器人主人能用。",
 			"current", "all_groups"),
-		"hours":    toolIntParam("search 可选：只检索最近多少小时。", 1, 24*365),
-		"days":     toolIntParam("search 可选：只检索最近多少天。", 1, 365),
+		"hours":    toolIntParam("search、speakers、reactions 可选：只看最近多少小时。", 1, 24*365),
+		"days":     toolIntParam("search、speakers、reactions 可选：只看最近多少天。", 1, 365),
 		"all_time": toolBoolParam("search 可选：置 true 时检索全部历史，忽略 hours 和 days。"),
 		"limit":    toolIntParam("返回条数，默认 "+itoa(defaultChatHistoryRecentLimit)+"。", 1, maximumChatHistoryResultLimit),
 	})
@@ -213,6 +214,13 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		}
 	}
 
+	switch operation {
+	case "speakers", "speaker_stats":
+		return t.speakerStats(ctx, input)
+	case "reactions", "likes":
+		return t.reactionStats(ctx, input)
+	}
+
 	var result dianaChatHistoryResult
 	var err error
 	switch operation {
@@ -229,7 +237,7 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 	case "recalls", "recall":
 		result, err = t.recalls(ctx, input)
 	default:
-		return "", fmt.Errorf("operation 必须是 around、recent、overview、range、search 或 recalls")
+		return "", fmt.Errorf("operation 必须是 around、recent、overview、range、search、recalls、speakers 或 reactions")
 	}
 	if err != nil {
 		return "", err
