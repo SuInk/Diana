@@ -50,7 +50,7 @@ func TestLiveParticipationTwoRatingsReplay(t *testing.T) {
 		OldAllowed bool                              `json:"old_allowed"`
 		System     string                            `json:"system"`
 		User       string                            `json:"user"`
-		NewRel     float64                           `json:"new_relevance"`
+		NewRel     bool                              `json:"new_directed"`
 		NewChat    float64                           `json:"new_chat_in"`
 		NewAnswer  float64                           `json:"new_answerability,omitempty"`
 		NewReason  string                            `json:"new_reason"`
@@ -114,8 +114,8 @@ func TestLiveParticipationTwoRatingsReplay(t *testing.T) {
 				item.Error = "解析失败：" + err.Error()
 				return
 			}
-			item.NewRel, item.NewChat = *ratings.Relevance.Score, *ratings.ChatIn.Score
-			item.NewReason = "相关度：" + ratings.Relevance.Reason + "；闲聊：" + ratings.ChatIn.Reason
+			item.NewRel, item.NewChat = *ratings.Relevance.Directed, *ratings.ChatIn.Score
+			item.NewReason = "在跟机器人说话：" + ratings.Relevance.Reason + "；闲聊：" + ratings.ChatIn.Reason
 			item.NewAllowed, _ = prefs.ratingsAllow(ratings, true)
 			if control {
 				item.NewAnswer = replayOldAnswerabilityScore(resp.Text)

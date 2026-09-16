@@ -12,9 +12,21 @@ type participationRating struct {
 	Score  *float64 `json:"score"`
 	Reason string   `json:"reason"`
 }
+
+// participationRelevance 是「是不是明确在跟机器人说话」的判断：只有是或否。
+type participationRelevance struct {
+	Directed *bool  `json:"directed"`
+	Reason   string `json:"reason"`
+}
+
+// participationRatings 是模型对当前消息的接话判断。
+//
+// 回应提问不打分：它问的是「是不是明确在跟机器人说话」，答案只有是或否，给它一个
+// 0~1 的分数，模型就会在 0.45 和 0.55 之间摇摆，程序再拿门槛去切，同一类消息这次回
+// 下次不回。只有闲聊是真正有松紧的，保留分数和档位。
 type participationRatings struct {
-	Relevance participationRating `json:"relevance"`
-	ChatIn    participationRating `json:"chat_in"`
+	Relevance participationRelevance `json:"relevance"`
+	ChatIn    participationRating    `json:"chat_in"`
 }
 
 // parseParticipationRatings 宽松解析接话评分。线上 7.8% 的评分被整条丢弃，原因是模型
@@ -30,10 +42,11 @@ func parseParticipationRatings(raw string) (participationRatings, error) {
 	if err := json.Unmarshal([]byte(text), &p); err != nil {
 		return p, err
 	}
-	for _, v := range []participationRating{p.Relevance, p.ChatIn} {
-		if v.Score == nil || *v.Score < 0 || *v.Score > 1 || strings.TrimSpace(v.Reason) == "" {
-			return p, fmt.Errorf("each rating needs a score from 0 to 1 and a reason")
-		}
+	if p.Relevance.Directed == nil || strings.TrimSpace(p.Relevance.Reason) == "" {
+		return p, fmt.Errorf("relevance needs directed true/false and a reason")
+	}
+	if v := p.ChatIn; v.Score == nil || *v.Score < 0 || *v.Score > 1 || strings.TrimSpace(v.Reason) == "" {
+		return p, fmt.Errorf("chat_in needs a score from 0 to 1 and a reason")
 	}
 	return p, nil
 }
@@ -127,12 +140,12 @@ func participationJSONSyntaxByte(c byte) bool {
 
 // participationRatingsLookComplete 判断被截断的输出里三项评分是否都已经带上了分数字段。
 func participationRatingsLookComplete(text string) bool {
-	for _, key := range []string{`"relevance"`, `"chat_in"`} {
+	for _, key := range []string{`"relevance"`, `"directed"`, `"chat_in"`, `"score"`} {
 		if !strings.Contains(text, key) {
 			return false
 		}
 	}
-	return strings.Count(text, `"score"`) >= 2
+	return true
 }
 
 func validParticipationLevel(s string) bool {
@@ -143,21 +156,17 @@ func validParticipationLevel(s string) bool {
 	return false
 }
 
-// participationRelevanceGate 是「回应提问」打开时的相关度门槛。
+// ratingLevels 返回回应提问开关（on/off）和闲聊档位。
 //
-// 回应提问以前也是七档。但它管的是「明确在跟机器人说话」这件事，要么回要么不回，
-// 分档只是让人猜 0.30 和 0.50 差在哪。现在只剩开关，打开就用原来的默认档 0.50。
-// 旧配置里存的档位名照样读：off 算关，其余一律算开。
-const participationRelevanceGate = "medium"
-
+// 回应提问以前是七档，旧配置里存的档位名照样读：off 算关，其余一律算开。
 func (p ParticipationPreferences) ratingLevels() (string, string) {
 	r, c := p.RelevanceLevel, p.ChatLevel
 	switch {
 	case r == "off":
 	case r == "on" || validParticipationLevel(r):
-		r = participationRelevanceGate
+		r = "on"
 	default:
-		r = participationRelevanceGate
+		r = "on"
 		if p.replyLevel() == ChatInLevelOff {
 			r = "off"
 		}
@@ -187,15 +196,15 @@ func ratingPasses(score float64, level string) bool {
 	return score > 0 && score >= threshold
 }
 func (p ParticipationPreferences) ratingsAllow(v participationRatings, cooldown bool) (bool, bool) {
-	if v.Relevance.Score == nil || v.ChatIn.Score == nil {
+	if v.Relevance.Directed == nil || v.ChatIn.Score == nil {
 		return false, false
 	}
 	r, c := p.ratingLevels()
-	// A zero in both dimensions encodes stop/repetition; always does not override it.
-	if *v.Relevance.Score == 0 && *v.ChatIn.Score == 0 {
+	// 没在跟机器人说话、闲聊又记 0，表示对方叫停或正在机械循环；always 也不越过它。
+	if !*v.Relevance.Directed && *v.ChatIn.Score == 0 {
 		return false, false
 	}
-	related := ratingPasses(*v.Relevance.Score, r)
+	related := r == "on" && *v.Relevance.Directed
 	chat := ratingPasses(*v.ChatIn.Score, c) && cooldown
 	return related || chat, !related && chat
 }
