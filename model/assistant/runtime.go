@@ -6581,7 +6581,49 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 		"weekday":  chineseWeekday(now.Weekday()),
 	}))
 	appendPromptSection(&builder, fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", agent.RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
+	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
+		appendPromptSection(&builder, speaker)
+	}
 	return strings.TrimSpace(builder.String())
+}
+
+// formatApproximateAge 用「N 天 / N 个月」描述记录的新旧，精确到天没有意义。
+func formatApproximateAge(age time.Duration) string {
+	days := int(age.Hours() / 24)
+	switch {
+	case days <= 0:
+		return "不到 1 天"
+	case days < 30:
+		return strconv.Itoa(days) + " 天"
+	default:
+		return strconv.Itoa(days/30) + " 个月"
+	}
+}
+
+// speakerTimezonePrompt 在画像里记过对方时区时，给出他那边的当地时间和时差。
+// 机器人自己的「现在几点」仍然只看运行时钟，也就是本机时区。
+func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) string {
+	if !event.userProfileLoaded {
+		return ""
+	}
+	location, recordedAt := PortraitTimezoneWithRecordedAt(event.userProfile.Portrait)
+	if location == nil {
+		return ""
+	}
+	local := now.In(location)
+	zoneName, zoneOffset := local.Zone()
+	offset := FormatTimezoneOffset(now, location, now.Location())
+	prompt := fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。你自己的「现在」仍以上面的运行时钟为准。",
+		location.String(), zoneName, formatUTCOffset(zoneOffset), offset, local.Format("2006-01-02 15:04"))
+	// 人会搬家、会出差：这条时区是过去某一次对话记下的，不是实时定位。
+	if !recordedAt.IsZero() {
+		prompt += fmt.Sprintf("这条时区记于 %s（%s前），不是实时位置。", recordedAt.In(now.Location()).Format("2006-01-02"), formatApproximateAge(now.Sub(recordedAt)))
+		if now.Sub(recordedAt) >= PortraitTimezoneStaleAfter {
+			prompt += "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
+		}
+	}
+	prompt += "对方说出自己那边的当地时间、或说自己在别的地方，和这条记录对不上时，以他当下说的为准，不要拿旧记录纠正他。"
+	return prompt
 }
 
 // systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者
