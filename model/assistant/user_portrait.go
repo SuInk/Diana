@@ -309,18 +309,29 @@ func FormatPortraitLines(traits []UserPortraitTrait) string {
 	return builder.String()
 }
 
+// PortraitTimezoneStaleAfter 之后，时区按「可能已经变了」对待：人会搬家、会长住到
+// 别的地方，而画像只在对方再次说起时才更新。超过这个时长仍然照常换算，只是提示
+// 模型在安排具体时间前先确认一句。
+const PortraitTimezoneStaleAfter = 60 * 24 * time.Hour
+
 // PortraitTimezone 取出画像里记下的时区。没记过、或记下的值当前系统解析不了时
 // 返回 nil：宁可按机器人本地时区说时间，也不要按错误的时区换算。
 func PortraitTimezone(traits []UserPortraitTrait) *time.Location {
+	location, _ := PortraitTimezoneWithRecordedAt(traits)
+	return location
+}
+
+// PortraitTimezoneWithRecordedAt 一并返回这条时区是什么时候记下的。
+func PortraitTimezoneWithRecordedAt(traits []UserPortraitTrait) (*time.Location, time.Time) {
 	for _, trait := range traits {
 		if trait.Field != PortraitFieldTimezone {
 			continue
 		}
 		if location, err := time.LoadLocation(strings.TrimSpace(trait.Value)); err == nil {
-			return location
+			return location, trait.UpdatedAt
 		}
 	}
-	return nil
+	return nil, time.Time{}
 }
 
 // FormatTimezoneOffset 描述目标时区相对参考时区的时差，用于提示词里说清「早几小时」。

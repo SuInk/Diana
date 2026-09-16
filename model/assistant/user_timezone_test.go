@@ -85,11 +85,21 @@ func TestSpeakerTimezonePromptConvertsForTheOtherSide(t *testing.T) {
 		t.Fatalf("prompt without a recorded timezone = %q", prompt)
 	}
 	event.userProfile.Portrait = append(event.userProfile.Portrait, UserPortraitTrait{Field: PortraitFieldTimezone, Value: "Europe/Berlin"})
+	event.userProfile.Portrait[1].UpdatedAt = now.Add(-3 * 24 * time.Hour)
 	prompt := runtime.speakerTimezonePrompt(event, now)
-	for _, want := range []string{"Europe/Berlin", "2026-09-16 03:00", "比你晚 6 小时", "按他的当地时间说", "你自己的「现在」仍以上面的运行时钟为准"} {
+	for _, want := range []string{"Europe/Berlin", "2026-09-16 03:00", "比你晚 6 小时", "按他的当地时间说", "你自己的「现在」仍以上面的运行时钟为准", "记于 2026-09-13（3 天前）", "以他当下说的为准"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "记录较旧") {
+		t.Fatalf("fresh record marked stale:\n%s", prompt)
+	}
+	// 人会搬家：记了很久的时区要提示先确认一次。
+	event.userProfile.Portrait[1].UpdatedAt = now.Add(-PortraitTimezoneStaleAfter - 24*time.Hour)
+	stale := runtime.speakerTimezonePrompt(event, now)
+	if !strings.Contains(stale, "记录较旧") || !strings.Contains(stale, "个月前") {
+		t.Fatalf("stale record prompt = %q", stale)
 	}
 	if clock := runtime.runtimeClockPrompt(event); !strings.Contains(clock, "Europe/Berlin") || !strings.Contains(clock, "2026-09-16 09:00") {
 		t.Fatalf("runtime clock prompt = %q", clock)
