@@ -6800,6 +6800,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		// 分得清「不说话」和「拒绝」不是一回事。
 		builder.WriteString("\n" + promptSilentFinish)
 	}
+	builder.WriteString("\n" + promptToolFindings)
 	builder.WriteString("\n" + promptSelfCharacterization)
 	builder.WriteString("\n" + promptCurrentMessage)
 	builder.WriteString("\n" + promptHistoryFormat)
