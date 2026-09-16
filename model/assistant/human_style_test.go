@@ -89,8 +89,12 @@ func TestHumanStyleDoesNotForceShortBubbles(t *testing.T) {
 	if !strings.Contains(human, "不按字数强行拆消息") {
 		t.Fatal("真人感档仍可能按字数强行拆成碎片")
 	}
-	if !strings.Contains(human, "尽量少发几条") {
+	// 原本写的是「尽量少发几条」，现在要求更硬：绝大多数时候一条说完。
+	if !strings.Contains(human, "绝大多数时候一条就说完") {
 		t.Fatal("缺少减少闲聊分条的要求")
+	}
+	if !strings.Contains(human, "不要连发一串碎片刷屏") {
+		t.Fatal("没有拦住连发刷屏")
 	}
 	if strings.Contains(human, "二十字往上就该拆开") {
 		t.Fatal("旧版强制连发规则回归")
