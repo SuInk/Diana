@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
@@ -218,6 +217,9 @@ func resolverResourceKeyFromURL(platform, raw string) string {
 		if id := twitterStatusID(raw); id != "" {
 			return "x:" + id
 		}
+		if id := twitterArticleID(raw); id != "" {
+			return "x:article:" + id
+		}
 		if handle := twitterProfileHandle(raw); handle != "" {
 			return "x:profile:" + strings.ToLower(handle)
 		}
@@ -249,6 +251,11 @@ func youtubeVideoID(raw string) string {
 }
 
 func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequest, raw string) resolverSocialResult {
+	// 长文直链（x.com/i/article/<id>）既不是推文也不是主页，必须先分流出去，
+	// 否则会一路掉到 yt-dlp，最后只回一句「媒体下载失败」。
+	if id := twitterArticleID(raw); id != "" {
+		return p.resolveTwitterArticle(ctx, req, raw, id)
+	}
 	if handle := twitterProfileHandle(raw); handle != "" {
 		return p.resolveTwitterProfile(ctx, req, raw, handle)
 	}
@@ -266,6 +273,12 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 	}
 	metaText := twitterMetaText(resolverNickname(), post)
 	nodes := []OutgoingMessage{{Text: metaText}}
+	// 推文只放了一个长文链接时，正文全在 article 里；不展开的话群里只能看到一个光链接。
+	if articleText := twitterPostArticleText(post, raw); articleText != "" {
+		nodes = append(nodes, OutgoingMessage{Text: articleText})
+		metaText += "\n\n" + articleText
+		post.Media = append(post.Media, post.Article.Media...)
+	}
 	for index, reply := range post.Replies {
 		text := strings.TrimSpace(reply.Text)
 		if text == "" {
@@ -280,52 +293,7 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 	if len(post.Media) == 0 {
 		return resolverSocialResult{Handled: true, Context: metaText, ForwardMessages: nodes}
 	}
-
-	downloadMedia := p.twitterMediaDownloader
-	if downloadMedia == nil {
-		downloadMedia = downloadTwitterMediaFile
-	}
-	resolved := make([]string, len(post.Media))
-	var downloads sync.WaitGroup
-	for index := range post.Media {
-		index := index
-		downloads.Add(1)
-		go func() {
-			defer recoverGoroutinePanic("resolver_social.go:286")
-			defer downloads.Done()
-			resolved[index] = downloadMedia(ctx, post.Media[index])
-		}()
-	}
-	downloads.Wait()
-
-	imageURLs := make([]string, 0, len(post.Media))
-	videoURLs := make([]string, 0, len(post.Media))
-	localImages := make([]string, 0, len(post.Media))
-	failed := 0
-	for index, media := range post.Media {
-		mediaPath := strings.TrimSpace(resolved[index])
-		if mediaPath == "" {
-			failed++
-			continue
-		}
-		if media.sendAsImage() {
-			imageURLs = append(imageURLs, mediaPath)
-			nodes = append(nodes, OutgoingMessage{ImageURLs: []string{mediaPath}})
-			if localPath := localMediaPath(mediaPath); localPath != "" {
-				if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
-					localImages = append(localImages, localPath)
-				}
-			}
-			continue
-		}
-		videoURLs = append(videoURLs, mediaPath)
-		nodes = append(nodes, OutgoingMessage{VideoURLs: []string{mediaPath}})
-		recordResolverVideoLog(ctx, req, raw, mediaPath)
-	}
-	if failed > 0 {
-		nodes = append(nodes, OutgoingMessage{Text: fmt.Sprintf("有 %d 个媒体下载失败，未发送。", failed)})
-	}
-	cleanupLocalMediaFilesLater(localImages, resolverLocalMediaTTL)
+	imageURLs, videoURLs, nodes := p.deliverTwitterMedia(ctx, req, raw, post.Media, nodes)
 	return resolverSocialResult{
 		Handled:         true,
 		Context:         metaText,

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,6 +33,8 @@ type twitterPost struct {
 	AuthorHandle string
 	Media        []twitterMedia
 	Replies      []twitterPost
+	// Article 是这条推文附带的 X 站内长文（Article）；没有长文时为空值。
+	Article twitterArticle
 }
 
 type twitterMedia struct {
@@ -68,6 +71,7 @@ type twitterPostPayload struct {
 	Author      json.RawMessage       `json:"author"`
 	User        json.RawMessage       `json:"user"`
 	Quote       json.RawMessage       `json:"quote"`
+	Article     json.RawMessage       `json:"article"`
 	Media       json.RawMessage       `json:"media"`
 	Images      []twitterMediaPayload `json:"images"`
 	Videos      []twitterMediaPayload `json:"videos"`
@@ -115,6 +119,9 @@ func fetchTwitterPost(ctx context.Context, raw string) (twitterPost, bool) {
 			if post, parsed := parseTwitterPostResponse([]byte(body)); parsed {
 				if len(post.Media) == 0 && len(legacy.Media) > 0 {
 					post.Media = legacy.Media
+				}
+				if !post.Article.hasContent() {
+					post.Article = legacy.Article
 				}
 				post.Replies = fetchTwitterThreadReplies(ctx, raw, post)
 				return post, true
@@ -265,6 +272,7 @@ func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 		),
 	}
 	post.AuthorName, post.AuthorHandle = parseTwitterAuthor(firstNonEmptyRawMessage(payload.Author, payload.User))
+	post.Article = parseTwitterArticle(payload.Article)
 	post.Media = parseTwitterMediaContainer(payload.Media)
 	if len(post.Media) == 0 {
 		post.Media = appendTwitterMediaPayloads(post.Media, payload.Images, "photo")
@@ -279,6 +287,10 @@ func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 	if depth < 2 && len(payload.Quote) > 0 && string(payload.Quote) != "null" {
 		if quoted, ok := parseTwitterPostPayloadDepth(payload.Quote, depth+1); ok {
 			post.Media = append(post.Media, quoted.Media...)
+			// 转推别人的长文时，长文挂在 quote 上，顶层只有一句评论。
+			if !post.Article.hasContent() {
+				post.Article = quoted.Article
+			}
 		}
 	}
 	post.Media = dedupeTwitterMedia(post.Media)
@@ -450,7 +462,7 @@ func looksLikeTwitterMediaURL(raw string) bool {
 
 func twitterPostHasStructuredMetadata(post twitterPost) bool {
 	return strings.TrimSpace(post.Text) != "" || strings.TrimSpace(post.AuthorName) != "" ||
-		strings.TrimSpace(post.AuthorHandle) != "" || len(post.Media) > 1
+		strings.TrimSpace(post.AuthorHandle) != "" || len(post.Media) > 1 || post.Article.hasContent()
 }
 
 func twitterPostHasContent(post twitterPost) bool {
@@ -629,4 +641,59 @@ func resolverImageDownloadMaxBytes() int64 {
 		return 0
 	}
 	return int64(maxMB) * 1024 * 1024
+}
+
+// deliverTwitterMedia 并发下载推文或长文里的媒体，并把成功的项追加成转发节点。
+// 推文正文和长文直链两条路都用它，下载失败的计数提示也只有这一份实现。
+func (p *ResolverPlugin) deliverTwitterMedia(ctx context.Context, req PluginRequest, raw string, media []twitterMedia, nodes []OutgoingMessage) ([]string, []string, []OutgoingMessage) {
+	media = dedupeTwitterMedia(media)
+	if len(media) == 0 {
+		return nil, nil, nodes
+	}
+	downloadMedia := p.twitterMediaDownloader
+	if downloadMedia == nil {
+		downloadMedia = downloadTwitterMediaFile
+	}
+	resolved := make([]string, len(media))
+	var downloads sync.WaitGroup
+	for index := range media {
+		index := index
+		downloads.Add(1)
+		go func() {
+			defer recoverGoroutinePanic("twitter_resolver.go:deliverTwitterMedia")
+			defer downloads.Done()
+			resolved[index] = downloadMedia(ctx, media[index])
+		}()
+	}
+	downloads.Wait()
+
+	imageURLs := make([]string, 0, len(media))
+	videoURLs := make([]string, 0, len(media))
+	localImages := make([]string, 0, len(media))
+	failed := 0
+	for index, item := range media {
+		mediaPath := strings.TrimSpace(resolved[index])
+		if mediaPath == "" {
+			failed++
+			continue
+		}
+		if item.sendAsImage() {
+			imageURLs = append(imageURLs, mediaPath)
+			nodes = append(nodes, OutgoingMessage{ImageURLs: []string{mediaPath}})
+			if localPath := localMediaPath(mediaPath); localPath != "" {
+				if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+					localImages = append(localImages, localPath)
+				}
+			}
+			continue
+		}
+		videoURLs = append(videoURLs, mediaPath)
+		nodes = append(nodes, OutgoingMessage{VideoURLs: []string{mediaPath}})
+		recordResolverVideoLog(ctx, req, raw, mediaPath)
+	}
+	if failed > 0 {
+		nodes = append(nodes, OutgoingMessage{Text: fmt.Sprintf("有 %d 个媒体下载失败，未发送。", failed)})
+	}
+	cleanupLocalMediaFilesLater(localImages, resolverLocalMediaTTL)
+	return imageURLs, videoURLs, nodes
 }

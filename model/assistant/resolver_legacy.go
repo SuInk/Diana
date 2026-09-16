@@ -7,9 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -177,6 +175,15 @@ func (p *ResolverPlugin) resolveXiaohongshu(ctx context.Context, req PluginReque
 }
 
 func (p *ResolverPlugin) resolveTwitter(ctx context.Context, req PluginRequest, raw string) resolverPlatformResult {
+	if id := twitterArticleID(raw); id != "" {
+		result := p.resolveTwitterArticle(ctx, req, raw, id)
+		return resolverPlatformResult{
+			Context:         result.Context,
+			ImageURLs:       result.ImageURLs,
+			VideoURLs:       result.VideoURLs,
+			ForwardMessages: resolverSocialForwardMessages(result),
+		}
+	}
 	if handle := twitterProfileHandle(raw); handle != "" {
 		result := p.resolveTwitterProfile(ctx, req, raw, handle)
 		return resolverPlatformResult{Context: result.Context, ForwardMessages: []OutgoingMessage{{Text: result.Context}}}
@@ -194,53 +201,17 @@ func (p *ResolverPlugin) resolveTwitter(ctx context.Context, req PluginRequest, 
 	}
 	metaText := twitterMetaText(resolverNickname(), post)
 	nodes := []OutgoingMessage{{Text: metaText}}
+	// 附带长文的推文在这条路上同样要把正文展开，两条路的可见结果必须一致。
+	if articleText := twitterPostArticleText(post, raw); articleText != "" {
+		nodes = append(nodes, OutgoingMessage{Text: articleText})
+		metaText += "\n\n" + articleText
+		post.Media = append(post.Media, post.Article.Media...)
+	}
+	post.Media = dedupeTwitterMedia(post.Media)
 	if len(post.Media) == 0 {
 		return resolverPlatformResult{Context: metaText, ForwardMessages: nodes}
 	}
-	downloadMedia := p.twitterMediaDownloader
-	if downloadMedia == nil {
-		downloadMedia = downloadTwitterMediaFile
-	}
-	resolved := make([]string, len(post.Media))
-	var downloads sync.WaitGroup
-	for index := range post.Media {
-		index := index
-		downloads.Add(1)
-		go func() {
-			defer recoverGoroutinePanic("resolver_legacy.go:205")
-			defer downloads.Done()
-			resolved[index] = downloadMedia(ctx, post.Media[index])
-		}()
-	}
-	downloads.Wait()
-	images := make([]string, 0, len(post.Media))
-	videos := make([]string, 0, len(post.Media))
-	localImages := make([]string, 0, len(post.Media))
-	failed := 0
-	for index, media := range post.Media {
-		mediaPath := strings.TrimSpace(resolved[index])
-		if mediaPath == "" {
-			failed++
-			continue
-		}
-		if media.sendAsImage() {
-			images = append(images, mediaPath)
-			nodes = append(nodes, OutgoingMessage{ImageURLs: []string{mediaPath}})
-			if localPath := localMediaPath(mediaPath); localPath != "" {
-				if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
-					localImages = append(localImages, localPath)
-				}
-			}
-			continue
-		}
-		videos = append(videos, mediaPath)
-		nodes = append(nodes, OutgoingMessage{VideoURLs: []string{mediaPath}})
-		recordResolverVideoLog(ctx, req, raw, mediaPath)
-	}
-	if failed > 0 {
-		nodes = append(nodes, OutgoingMessage{Text: fmt.Sprintf("有 %d 个媒体下载失败，未发送。", failed)})
-	}
-	cleanupLocalMediaFilesLater(localImages, resolverLocalMediaTTL)
+	images, videos, nodes := p.deliverTwitterMedia(ctx, req, raw, post.Media, nodes)
 	return resolverPlatformResult{Context: metaText, ImageURLs: images, VideoURLs: videos, ForwardMessages: nodes}
 }
 
