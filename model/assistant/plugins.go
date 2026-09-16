@@ -595,31 +595,67 @@ func (m *PluginManager) SanitizeGroupSettingOverrides(overrides PluginSettingOve
 	return out
 }
 
+// PersistedPluginState 是落库的插件状态，只保存用户改得动的部分。
+//
+// Manifest 由代码声明，启动时按当前版本重建，存一份旧的只会在排查时误导。
+// 全局启用开关同理：WebUI 上的开关一律按机器人来，全局开关既看不到也改不了，
+// 只有 OpenAPI 这种进程级服务用得上，其余插件的开关都在 ProfileEnabled 里。
+type PersistedPluginState struct {
+	Installed bool `json:"installed"`
+	// Enabled 只对进程级插件有意义；其余插件为空，表示按插件自己声明的默认值起步。
+	// 指针是为了认出升级前的老数据：那时每个插件都存了全局开关，迁移要用它。
+	Enabled               *bool                     `json:"enabled,omitempty"`
+	ProfileEnabled        map[string]bool           `json:"profile_enabled,omitempty"`
+	ProfileSettings       map[string]map[string]any `json:"profile_settings,omitempty"`
+	ProfileConfigMigrated bool                      `json:"profile_config_migrated,omitempty"`
+	SharedConfigMigrated  bool                      `json:"shared_config_migrated,omitempty"`
+	SharedConfigSource    string                    `json:"shared_config_source,omitempty"`
+	Settings              map[string]any            `json:"settings,omitempty"`
+}
+
+// pluginKeepsGlobalSwitch 说明这个插件的全局开关是不是用户真能操作的。
+// OpenAPI 是进程级 HTTP 服务，不绑定某个机器人，只有它保留全局开关。
+func pluginKeepsGlobalSwitch(id string) bool { return id == OpenAPIPluginID }
+
 // Snapshot 返回插件状态快照用于持久化。
-func (m *PluginManager) Snapshot() map[string]PluginState {
+func (m *PluginManager) Snapshot() map[string]PersistedPluginState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	// 返回副本，避免外部持久化逻辑反向修改 manager 内部状态。
-	out := make(map[string]PluginState, len(m.states))
+	out := make(map[string]PersistedPluginState, len(m.states))
 	for id, state := range m.states {
-		state.ProfileEnabled = maps.Clone(state.ProfileEnabled)
-		state.ProfileSettings = cloneProfileSettings(state.ProfileSettings)
-		state.Settings = clonePluginValues(state.Settings)
-		out[id] = state
+		record := PersistedPluginState{
+			Installed:             state.Installed,
+			ProfileEnabled:        maps.Clone(state.ProfileEnabled),
+			ProfileSettings:       cloneProfileSettings(state.ProfileSettings),
+			ProfileConfigMigrated: state.ProfileConfigMigrated,
+			SharedConfigMigrated:  state.SharedConfigMigrated,
+			SharedConfigSource:    state.SharedConfigSource,
+			Settings:              clonePluginValues(state.Settings),
+		}
+		if pluginKeepsGlobalSwitch(id) {
+			enabled := state.Enabled
+			record.Enabled = &enabled
+		}
+		out[id] = record
 	}
 	return out
 }
 
 // Restore 从持久化状态恢复插件开关。
-func (m *PluginManager) Restore(states map[string]PluginState) {
+func (m *PluginManager) Restore(states map[string]PersistedPluginState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, plugin := range m.catalog {
 		current := m.states[id]
 		current.Manifest = plugin.Manifest()
+		// 没有全局开关的插件以插件自己声明的默认值起步，再由每个机器人的开关覆盖。
+		current.Enabled = !current.Manifest.DefaultDisabled
 		if saved, ok := states[id]; ok {
 			current.Installed = saved.Installed
-			current.Enabled = saved.Enabled
+			if saved.Enabled != nil && (pluginKeepsGlobalSwitch(id) || !saved.ProfileConfigMigrated) {
+				// 升级前的数据里，全局开关就是各机器人开关的来源，迁移之前要留着。
+				current.Enabled = *saved.Enabled
+			}
 			current.ProfileEnabled = maps.Clone(saved.ProfileEnabled)
 			current.ProfileConfigMigrated = saved.ProfileConfigMigrated
 			current.SharedConfigMigrated = saved.SharedConfigMigrated
@@ -775,7 +811,7 @@ func (m *PluginManager) SetEnabledForProfile(id, profileID string, enabled bool)
 	}
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" || id == OpenAPIPluginID {
-		if profileID == "" && id != OpenAPIPluginID && state.ProfileConfigMigrated {
+		if profileID == "" && !pluginKeepsGlobalSwitch(id) {
 			return PluginState{}, fmt.Errorf("插件开关必须指定机器人")
 		}
 		state.Enabled = enabled
@@ -1100,9 +1136,9 @@ func recordPluginFailure(ctx context.Context, req PluginRequest, id string, err 
 }
 
 // savedStateDisabled 判断保存状态里插件是否被显式关闭。
-func savedStateDisabled(states map[string]PluginState, id string) bool {
+func savedStateDisabled(states map[string]PersistedPluginState, id string) bool {
 	state, ok := states[id]
-	return ok && !state.Enabled
+	return ok && state.Enabled != nil && !*state.Enabled
 }
 
 const (

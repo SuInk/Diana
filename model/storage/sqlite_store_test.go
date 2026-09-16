@@ -102,11 +102,11 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		t.Fatalf("gotGroupConfigs = %#v", gotGroupConfigs)
 	}
 
-	pluginStates := map[string]assistant.PluginState{
+	disabled := false
+	pluginStates := map[string]assistant.PersistedPluginState{
 		"official.file-parser-go": {
-			Manifest:  assistant.PluginManifest{ID: "official.file-parser-go"},
 			Installed: true,
-			Enabled:   false,
+			Enabled:   &disabled,
 		},
 	}
 	if err := store.SavePluginStates(ctx, pluginStates); err != nil {
@@ -116,7 +116,7 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LoadPluginStates() ok=%v err=%v", ok, err)
 	}
-	if gotStates["official.file-parser-go"].Enabled {
+	if enabled := gotStates["official.file-parser-go"].Enabled; enabled == nil || *enabled {
 		t.Fatalf("gotStates = %#v", gotStates)
 	}
 
