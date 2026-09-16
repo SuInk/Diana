@@ -59,11 +59,11 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 	if actual.Desire != 25 || actual.CooldownSeconds != 0 || actual.relevanceThreshold() != 80 || actual.substanceThreshold() != 80 {
 		t.Fatalf("partial update lost values: %+v", actual)
 	}
-	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "relevance_level": "extreme", "chat_level": "off"}); err != nil {
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "relevance_level": "on", "chat_level": "off"}); err != nil {
 		t.Fatal(err)
 	}
 	actual = r.effectiveConfigForEvent(event).participationPreferences()
-	if actual.RelevanceLevel != "extreme" || actual.ChatLevel != "off" || actual.CooldownSeconds != 0 {
+	if actual.RelevanceLevel != "on" || actual.ChatLevel != "off" || actual.CooldownSeconds != 0 {
 		t.Fatalf("new fields not applied: %+v", actual)
 	}
 }

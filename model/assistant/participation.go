@@ -50,16 +50,17 @@ func participationBotShareBlocks(botMessages, totalMessages int, chatLevel strin
 // Rating levels are independent. Legacy fields remain readable for saved configs;
 // CooldownSeconds only limits the chat branch.
 type ParticipationPreferences struct {
-	Desire             int    `json:"desire"`
-	Social             int    `json:"social"`
-	Followup           int    `json:"followup"`
-	Restraint          int    `json:"restraint"`
-	Information        int    `json:"information"`
-	CooldownSeconds    int    `json:"cooldown_seconds"`
-	RelevanceThreshold *int   `json:"relevance_threshold,omitempty"`
-	SubstanceThreshold *int   `json:"substance_threshold,omitempty"`
-	RelevanceLevel     string `json:"relevance_level,omitempty"`
-	ChatLevel          string `json:"chat_level,omitempty"`
+	Desire             int  `json:"desire"`
+	Social             int  `json:"social"`
+	Followup           int  `json:"followup"`
+	Restraint          int  `json:"restraint"`
+	Information        int  `json:"information"`
+	CooldownSeconds    int  `json:"cooldown_seconds"`
+	RelevanceThreshold *int `json:"relevance_threshold,omitempty"`
+	SubstanceThreshold *int `json:"substance_threshold,omitempty"`
+	// RelevanceLevel 是「回应提问」开关：on 或 off。旧配置里的七档名称读作 on（off 除外）。
+	RelevanceLevel string `json:"relevance_level,omitempty"`
+	ChatLevel      string `json:"chat_level,omitempty"`
 }
 
 // Preserve explicit zero (disabled) while defaulting an omitted cooldown.
@@ -135,7 +136,11 @@ func (p ParticipationPreferences) replyLevel() ChatInLevel {
 
 func (p ParticipationPreferences) prompt() string {
 	r, c := p.ratingLevels()
-	return fmt.Sprintf("本轮相关度档位：%s；闲聊档位：%s。档位由程序执行，不要按档位倒推评分。\n", r, c) + participationScorePrompt
+	relevance := "开"
+	if r == "off" {
+		relevance = "关"
+	}
+	return fmt.Sprintf("本轮回应提问：%s；闲聊档位：%s。开关和档位由程序执行，不要按它们倒推评分。\n", relevance, c) + participationScorePrompt
 }
 
 // participationScorePrompt 只让模型评两项。

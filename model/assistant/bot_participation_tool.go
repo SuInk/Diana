@@ -33,7 +33,7 @@ func (*dianaBotParticipationTool) InputSchema() map[string]any {
 		"operation":                  toolEnumParam("读取或局部更新；只有保存成功才报告已修改。", "get", "update"),
 		"scope":                      toolEnumParam("群聊默认 group，私聊默认 bot。不能指定其他机器人或群。", "group", "bot"),
 		"desire_level":               toolEnumParam("回复欲望；off 关闭主动插话，明确请求仍可回复。仅修改欲望，保留门槛和冷却。", "off", "low", "medium", "high", "max"),
-		"relevance_level":            toolEnumParam("相关度档位：关、极低、低、中、高、极高、总是；门槛为 0.90/0.70/0.50/0.30/0.10。", "off", "minimal", "low", "medium", "high", "extreme", "always"),
+		"relevance_level":            toolEnumParam("回应提问开关：on 明确在跟机器人说话时回应，off 关闭。", "on", "off"),
 		"chat_level":                 toolEnumParam("闲聊档位，仍受闲聊冷却限制；机器人近期发言占比过高时暂不插话，总是除外。", "off", "minimal", "low", "medium", "high", "extreme", "always"),
 		"cooldown_seconds":           toolIntParam("主动闲聊冷却，0 关闭冷却。", 0, 3600),
 		"minimum_reply_member_level": toolIntParam("仅 OneBot 群支持的最低回复成员等级。", 0, maximumReplyMemberLevel),
@@ -117,7 +117,7 @@ func (t *dianaBotParticipationTool) Run(ctx context.Context, input map[string]an
 					prefs.ChatLevel = "always"
 				}
 				if prefs.RelevanceLevel == "off" {
-					prefs.RelevanceLevel = "medium"
+					prefs.RelevanceLevel = "on"
 				}
 			}
 			changed = true
@@ -142,7 +142,10 @@ func (t *dianaBotParticipationTool) Run(ctx context.Context, input map[string]an
 		}{{"relevance_level", &prefs.RelevanceLevel}, {"chat_level", &prefs.ChatLevel}} {
 			if raw, exists := input[field.key]; exists {
 				level, ok := raw.(string)
-				if !ok || !validParticipationLevel(level) {
+				if field.key == "relevance_level" && ok && level != "on" && level != "off" {
+					return "", fmt.Errorf("relevance_level 只能是 on 或 off")
+				}
+				if !ok || (field.key != "relevance_level" && !validParticipationLevel(level)) {
 					return "", fmt.Errorf("无效评分档位 %s", field.key)
 				}
 				*field.target = level

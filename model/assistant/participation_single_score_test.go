@@ -51,12 +51,15 @@ func TestParticipationRatingsORAndOff(t *testing.T) {
 		r, c       float64
 		cool, want bool
 	}{
-		{"medium", "medium", 0.8, 0.1, true, true}, {"medium", "medium", 0.1, 0.8, true, true},
-		{"medium", "medium", 0.49, 0.49, true, false}, {"off", "medium", 1, 0.1, true, false},
-		{"medium", "off", 0.1, 1, true, false}, {"off", "off", 1, 1, true, false},
-		{"always", "off", 0.01, 0.01, false, true}, {"off", "always", 0.01, 0.01, true, true},
-		{"off", "always", 0.01, 0.01, false, false}, {"always", "always", 0, 0, true, false},
-		{"high", "medium", 0.3, 0, true, true}, {"low", "off", 0.69, 1, true, false},
+		{"on", "medium", 0.8, 0.1, true, true}, {"on", "medium", 0.1, 0.8, true, true},
+		{"on", "medium", 0.49, 0.49, true, false}, {"off", "medium", 1, 0.1, true, false},
+		{"on", "off", 0.1, 1, true, false}, {"off", "off", 1, 1, true, false},
+		// 回应提问打开就是固定 0.50，不受冷却影响；低于门槛不回。
+		{"on", "off", 0.50, 0.01, false, true}, {"on", "off", 0.49, 0.01, false, false},
+		{"off", "always", 0.01, 0.01, true, true}, {"off", "always", 0.01, 0.01, false, false},
+		{"on", "always", 0, 0, true, false},
+		// 旧配置里的七档名称一律读作打开，门槛统一 0.50。
+		{"high", "off", 0.3, 0, true, false}, {"minimal", "off", 0.6, 0, true, true}, {"always", "off", 0.2, 0, true, false},
 	} {
 		p := ParticipationPreferences{RelevanceLevel: tc.a, ChatLevel: tc.b}
 		got, _ := p.ratingsAllow(testRatings(tc.r, tc.c), tc.cool)
@@ -251,10 +254,16 @@ func TestParticipationSevenLevelBoundaries(t *testing.T) {
 		if !ratingPasses(threshold, level) || ratingPasses(threshold-0.01, level) {
 			t.Fatalf("boundary %s %.2f", level, threshold)
 		}
+		// 闲聊仍是七档；回应提问只剩开关，旧档位名一律读作打开（门槛 0.50）。
 		p := ParticipationPreferences{RelevanceLevel: level, ChatLevel: level}
 		r, c := p.ratingLevels()
-		if r != level || c != level {
-			t.Fatalf("lost %s", level)
+		if r != participationRelevanceGate || c != level {
+			t.Fatalf("lost %s: relevance=%s chat=%s", level, r, c)
+		}
+	}
+	for value, want := range map[string]string{"on": participationRelevanceGate, "off": "off"} {
+		if r, _ := (ParticipationPreferences{RelevanceLevel: value, ChatLevel: "low"}).ratingLevels(); r != want {
+			t.Fatalf("回应提问 %s 读成了 %s", value, r)
 		}
 	}
 	if ratingPasses(1, "off") || !ratingPasses(0, "always") || ratingPasses(1, "invalid") {
@@ -386,7 +395,11 @@ func TestParticipationRatingsRetryOnceOnParseFailure(t *testing.T) {
 
 func TestParticipationRatingsPromptAndConfig(t *testing.T) {
 	for _, level := range []string{"off", "low", "medium", "high", "always"} {
-		p := ParticipationPreferences{RelevanceLevel: level, ChatLevel: level}
+		relevance := "on"
+		if level == "off" {
+			relevance = "off"
+		}
+		p := ParticipationPreferences{RelevanceLevel: relevance, ChatLevel: level}
 		prompt := p.prompt()
 		for _, banned := range []string{"should_reply", "true", "false", "substance", "confidence", "category"} {
 			if strings.Contains(prompt, banned) {
@@ -403,7 +416,11 @@ func TestParticipationRatingsPromptAndConfig(t *testing.T) {
 		}
 		restored := ConfigFromPayload(payload, BotConfig{}).participationPreferences()
 		a, b := restored.ratingLevels()
-		if a != level || b != level {
+		wantRelevance := participationRelevanceGate
+		if relevance == "off" {
+			wantRelevance = "off"
+		}
+		if a != wantRelevance || b != level {
 			t.Fatalf("lost levels %s %s", a, b)
 		}
 	}

@@ -11,7 +11,7 @@ const inherited = computed(() => props.inheritable && !props.modelValue && !prop
 const cooldownSeconds = computed(() => value.value.cooldown_seconds ?? defaultParticipationCooldownSeconds);
 const preset = computed(() => participationPresetName(value.value));
 
-type RatingKey = "relevance_level" | "chat_level";
+type RatingKey = "chat_level";
 type LevelOption = { value: string; label: string; hint: string };
 // 档位名后面统一带上后端的分数门槛，数字只在 participation.ts 里维护。
 function levelOptions(options: LevelOption[]): LevelOption[] {
@@ -19,20 +19,6 @@ function levelOptions(options: LevelOption[]): LevelOption[] {
 }
 
 const settings = [
-  {
-    key: "relevance_level" as const,
-    label: "回应提问",
-    description: "多确定是在问你，才回应。",
-    options: levelOptions([
-      { value: "off", label: "从不回应", hint: "不通过提问相关度触发回应；直接回复和主动闲聊仍按各自规则处理。" },
-      { value: "minimal", label: "仅明显指向我", hint: "提问对象非常明确时才承接。" },
-      { value: "low", label: "较谨慎", hint: "较确定对方在向机器人提问时才承接。" },
-      { value: "medium", label: "适中", hint: "正常承接指向机器人的提问和追问。" },
-      { value: "high", label: "较积极", hint: "更容易接住不太明确的提问与追问。" },
-      { value: "extreme", label: "很积极", hint: "只有较弱的提问指向，也可能回应。" },
-      { value: "always", label: "完全不限制", hint: "不设提问相关度门槛。问某个群友本人的事不算在问你。" },
-    ]),
-  },
   {
     key: "chat_level" as const,
     label: "主动闲聊",
@@ -50,7 +36,16 @@ const settings = [
 ];
 
 function ratingLevel(key: RatingKey) {
-  return value.value[key] ?? (preset.value === "off" ? "off" : key === "relevance_level" ? "medium" : preset.value === "max" ? "always" : preset.value);
+  return value.value[key] ?? (preset.value === "off" ? "off" : preset.value === "max" ? "always" : preset.value);
+}
+// 回应提问只有开关：明确在跟机器人说话就回。旧配置里的七档名称除 off 以外都算打开。
+const relevanceEnabled = computed(() => {
+  const stored = value.value.relevance_level;
+  if (stored === undefined) return preset.value !== "off";
+  return stored !== "off";
+});
+function setRelevanceEnabled(enabled: boolean) {
+  emit("update:modelValue", { ...value.value, relevance_level: enabled ? "on" : "off" });
 }
 function displayedLevel(key: RatingKey) {
   return ratingLevel(key);
@@ -81,6 +76,17 @@ function restoreCooldown(event: Event) {
     </div>
     <template v-if="!inherited">
       <div class="participation-fields">
+        <section class="participation-setting">
+          <div class="setting-copy">
+            <label :for="id + '-relevance'">回应提问</label>
+            <p class="setting-help">明确在跟你说话时回应。关掉之后只靠主动闲聊开口。</p>
+          </div>
+          <label class="switch relevance-switch">
+            <input :id="id + '-relevance'" type="checkbox" :checked="relevanceEnabled" @change="setRelevanceEnabled(($event.target as HTMLInputElement).checked)" />
+            <span class="track" aria-hidden="true"></span>
+            <span class="switch-label">{{ relevanceEnabled ? "开启" : "关闭" }}</span>
+          </label>
+        </section>
         <section v-for="setting in settings" :key="setting.key" class="participation-setting">
           <div class="setting-copy">
             <label :for="id + '-' + setting.key">{{ setting.label }}</label>
@@ -95,7 +101,7 @@ function restoreCooldown(event: Event) {
         </section>
       </div>
       <p class="hint participation-gate-hint">
-        括号里是后端的评分门槛：参与度档位越高，要求的分数反而越低（“极低”最严 ≥0.90，“极高”最松 ≥0.10）。
+        闲聊档位括号里是后端的评分门槛：档位越积极，要求的分数越低（“很少插话”最严 ≥0.90，“频繁参与”最松 ≥0.10）。
         “回应提问”和“主动闲聊”是两条独立通道，任意一条达标就会开口。
       </p>
       <details class="participation-explanation">
@@ -105,7 +111,7 @@ function restoreCooldown(event: Event) {
           <p>“回应提问”达标不受闲聊冷却限制。关闭其中一项，只关闭对应的接话途径。</p>
           <p>问某个群友本人才知道的事（去不去、做没做）不算在问你。附和、接梗算正常闲聊；原样复读、给没依据的说法编理由，闲聊分会很低。</p>
           <p>需要搜索或调用工具不代表无法回答。停止请求和重复循环仍保持沉默；已经进入直接回复流程的请求不受这里的路由条件影响。</p>
-          <p>参与档位越积极，评分门槛越低。切换档位不会重设冷却时间。</p>
+          <p>回应提问打开时按固定门槛判断是不是在跟你说话。闲聊档位越积极，评分门槛越低。切换档位不会重设冷却时间。</p>
         </div>
       </details>
     </template>
@@ -123,6 +129,7 @@ function restoreCooldown(event: Event) {
 .setting-copy { display: grid; gap: 4px; min-width: 0; }
 .setting-copy > label { display: block; margin: 0; color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; }
 .participation-setting > .app-select, .configuration-source > .app-select { width: 260px; max-width: 100%; min-width: 0; }
+.relevance-switch { justify-self: start; }
 .setting-help { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .cooldown-setting { margin-top: 8px; }
 /* .hint 只在 .field 里有样式，这行提示不在表单项内，颜色字号得自己写齐。 */

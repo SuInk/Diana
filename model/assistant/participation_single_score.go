@@ -142,10 +142,22 @@ func validParticipationLevel(s string) bool {
 	}
 	return false
 }
+
+// participationRelevanceGate 是「回应提问」打开时的相关度门槛。
+//
+// 回应提问以前也是七档。但它管的是「明确在跟机器人说话」这件事，要么回要么不回，
+// 分档只是让人猜 0.30 和 0.50 差在哪。现在只剩开关，打开就用原来的默认档 0.50。
+// 旧配置里存的档位名照样读：off 算关，其余一律算开。
+const participationRelevanceGate = "medium"
+
 func (p ParticipationPreferences) ratingLevels() (string, string) {
 	r, c := p.RelevanceLevel, p.ChatLevel
-	if !validParticipationLevel(r) {
-		r = "medium"
+	switch {
+	case r == "off":
+	case r == "on" || validParticipationLevel(r):
+		r = participationRelevanceGate
+	default:
+		r = participationRelevanceGate
 		if p.replyLevel() == ChatInLevelOff {
 			r = "off"
 		}
