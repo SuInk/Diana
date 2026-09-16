@@ -198,8 +198,9 @@ func (c *TelegramChannel) pollLoop(ctx context.Context) {
 func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, error) {
 	params := map[string]any{
 		"timeout": telegramPollTimeoutSeconds,
-		// 只订阅消息类更新，避免拉回大量无关事件。
-		"allowed_updates": []string{"message", "edited_message", "channel_post", "edited_channel_post", "chat_member", "my_chat_member"},
+		// 只订阅消息类更新，避免拉回大量无关事件。message_reaction 是群友给消息挂的表情，
+		// 群统计要用；Telegram 只在机器人是群管理员时推送它。
+		"allowed_updates": []string{"message", "edited_message", "channel_post", "edited_channel_post", "chat_member", "my_chat_member", "message_reaction"},
 	}
 	c.mu.RLock()
 	offset := c.offset
@@ -235,6 +236,20 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 	}
 	c.observeMemberUpdate(update.ChatMember, false)
 	c.observeMemberUpdate(update.MyChatMember, true)
+	if update.MessageReaction != nil {
+		c.mu.RLock()
+		handler := c.handler
+		c.mu.RUnlock()
+		if handler == nil {
+			return
+		}
+		if event := telegramReactionToEvent(update.MessageReaction, c.Status().SelfID); event.Kind != "" {
+			if err := handler(ctx, event); err != nil {
+				log.Printf("telegram: handle reaction failed: update_id=%d chat_id=%s message_id=%s err=%v", update.UpdateID, event.GroupID, event.MessageID, err)
+			}
+		}
+		return
+	}
 	message := update.Message
 	if message == nil {
 		message = update.EditedMessage
@@ -650,6 +665,23 @@ type telegramUpdate struct {
 	EditedMessage     *telegramMessage      `json:"edited_message,omitempty"`
 	ChannelPost       *telegramMessage      `json:"channel_post,omitempty"`
 	EditedChannelPost *telegramMessage      `json:"edited_channel_post,omitempty"`
+	MessageReaction   *telegramReaction     `json:"message_reaction,omitempty"`
+}
+
+// telegramReaction 是 Bot API 的 MessageReactionUpdated：某人对某条消息挂着的表情变了。
+// new_reaction 是变化之后的完整集合，所以按整体替换处理。
+type telegramReaction struct {
+	Chat        *telegramChat          `json:"chat"`
+	MessageID   int64                  `json:"message_id"`
+	User        *telegramUser          `json:"user,omitempty"`
+	Date        int64                  `json:"date"`
+	NewReaction []telegramReactionType `json:"new_reaction"`
+}
+
+type telegramReactionType struct {
+	Type          string `json:"type"`
+	Emoji         string `json:"emoji,omitempty"`
+	CustomEmojiID string `json:"custom_emoji_id,omitempty"`
 }
 
 type telegramMessage struct {
@@ -732,6 +764,40 @@ type telegramFile struct {
 //   - from.id -> 用户 ID；Telegram 没有 OneBot 那样的群等级，SenderLevel 保持 0，
 //     ReplyGate 的等级门槛会按「读不到即放行」处理
 //   - ToMe 由文本里的 @username 提及判断
+//
+// telegramReactionToEvent 把表情回应变化翻成统一的 message_reaction 通知。
+// 匿名管理员以群身份挂的表情没有 user，统计不了是谁，直接忽略。
+func telegramReactionToEvent(reaction *telegramReaction, selfID string) MessageEvent {
+	if reaction == nil || reaction.Chat == nil || reaction.User == nil || reaction.MessageID == 0 || reaction.Chat.Type == "private" {
+		return MessageEvent{}
+	}
+	emojis := make([]string, 0, len(reaction.NewReaction))
+	for _, item := range reaction.NewReaction {
+		switch item.Type {
+		case "emoji":
+			emojis = append(emojis, item.Emoji)
+		case "custom_emoji":
+			emojis = append(emojis, "custom:"+item.CustomEmojiID)
+		case "paid":
+			emojis = append(emojis, "⭐")
+		}
+	}
+	messageID := strconv.FormatInt(reaction.MessageID, 10)
+	return MessageEvent{
+		Kind:        EventKindNotice,
+		SubType:     messageReactionSubType,
+		Time:        reaction.Date,
+		SelfID:      selfID,
+		MessageID:   messageID,
+		MessageType: "notice",
+		GroupID:     strconv.FormatInt(reaction.Chat.ID, 10),
+		GroupName:   strings.TrimSpace(reaction.Chat.Title),
+		UserID:      strconv.FormatInt(reaction.User.ID, 10),
+		SenderName:  telegramDisplayName(reaction.User),
+		Segments:    []MessageSegment{messageReactionSegment(messageID, emojis, messageReactionReplace)},
+	}
+}
+
 func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) MessageEvent {
 	if msg == nil || msg.Chat == nil {
 		return MessageEvent{}

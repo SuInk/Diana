@@ -61,7 +61,13 @@ type oneBotEnvelope struct {
 	TargetID    any             `json:"target_id,omitempty"`
 	Message     json.RawMessage `json:"message,omitempty"`
 	RawMessage  string          `json:"raw_message,omitempty"`
-	Sender      struct {
+	// Likes 和 IsAdd 是 NapCat 贴表情通知（group_msg_emoji_like）的字段：
+	// 谁给哪条消息贴上或取消了哪个表情。
+	Likes []struct {
+		EmojiID any `json:"emoji_id"`
+	} `json:"likes,omitempty"`
+	IsAdd  *bool `json:"is_add,omitempty"`
+	Sender struct {
 		Nickname string `json:"nickname,omitempty"`
 		Card     string `json:"card,omitempty"`
 		Role     string `json:"role,omitempty"`
@@ -520,6 +526,9 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 			subType = envelope.SubType
 		}
 		messageID := firstNonEmpty(stringifyID(envelope.MessageID), stringifyID(envelope.TargetID))
+		if subType == "group_msg_emoji_like" {
+			return oneBotEmojiLikeEvent(envelope, messageID)
+		}
 		return MessageEvent{
 			Kind:        EventKindNotice,
 			SubType:     subType,
@@ -572,6 +581,32 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 	}
 	event.ToMe = hasAt(segments, selfID)
 	return event
+}
+
+// oneBotEmojiLikeEvent 把 NapCat 的贴表情通知翻成统一的 message_reaction 通知。
+// 每次只带一个表情的贴上或取消，所以按增删处理；不带 is_add 的老版本按贴上算。
+func oneBotEmojiLikeEvent(envelope oneBotEnvelope, messageID string) MessageEvent {
+	emojis := make([]string, 0, len(envelope.Likes))
+	for _, like := range envelope.Likes {
+		if id := stringifyID(like.EmojiID); id != "" {
+			emojis = append(emojis, id)
+		}
+	}
+	mode := messageReactionAdd
+	if envelope.IsAdd != nil && !*envelope.IsAdd {
+		mode = messageReactionRemove
+	}
+	return MessageEvent{
+		Kind:        EventKindNotice,
+		SubType:     messageReactionSubType,
+		Time:        envelope.Time,
+		SelfID:      stringifyID(envelope.SelfID),
+		UserID:      stringifyID(envelope.UserID),
+		GroupID:     stringifyID(envelope.GroupID),
+		MessageID:   messageID,
+		MessageType: "notice",
+		Segments:    []MessageSegment{messageReactionSegment(messageID, emojis, mode)},
+	}
 }
 
 func noticeSegmentsFromEnvelope(envelope oneBotEnvelope, subType string, messageID string) []MessageSegment {
