@@ -175,11 +175,12 @@ func TestTelegramMusicPreparationFailureIsNotPlaybackSuccess(t *testing.T) {
 
 func TestMusicPluginManagerBindsPlatformPerTool(t *testing.T) {
 	manager := NewPluginManager(NewMusicPlugin(nil))
-	if _, err := manager.SetEnabled(musicPluginID, true); err != nil {
+	if _, err := manager.SetEnabledForProfile(musicPluginID, "qq", true); err != nil {
 		t.Fatal(err)
 	}
+	overrides := manager.ProfileOverrides("qq")
 	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11, PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
-		tools, err := manager.AgentToolsForPlatformWithGroupOverrides(platform, nil, nil)
+		tools, err := manager.AgentToolsForPlatformWithGroupOverrides(platform, overrides, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

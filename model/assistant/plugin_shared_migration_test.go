@@ -16,7 +16,10 @@ func TestSharedPluginMigrationSelectsWholeConfigAndPreservesBackups(t *testing.T
 		"b": {resolverSettingDouyinCookie: "account-b", resolverSettingMaxImages: float64(7)},
 	}
 	state.ProfileEnabled = map[string]bool{"a": false, "b": true}
-	m.Restore(map[string]PluginState{resolverPluginID: state})
+	m.Restore(map[string]PersistedPluginState{resolverPluginID: {
+		Installed: state.Installed, ProfileEnabled: state.ProfileEnabled, ProfileSettings: state.ProfileSettings,
+		ProfileConfigMigrated: state.ProfileConfigMigrated, Settings: state.Settings,
+	}})
 	if !m.MigrateProfileConfigurations([]BotConfig{{ID: "b"}, {ID: "a"}}) {
 		t.Fatal("migration was not performed")
 	}
@@ -30,7 +33,8 @@ func TestSharedPluginMigrationSelectsWholeConfigAndPreservesBackups(t *testing.T
 	if saved.ProfileSettings["a"][resolverSettingDouyinCookie] != "account-a" || saved.ProfileEnabled["a"] || !saved.ProfileEnabled["b"] || saved.SharedConfigSource != "b" {
 		t.Fatal("migration lost backup, source or independent enabled state")
 	}
-	data, _ := json.Marshal(saved.Redacted())
+	visible, _ := m.Get(resolverPluginID)
+	data, _ := json.Marshal(visible.Redacted())
 	if strings.Contains(string(data), "account-") || strings.Contains(string(data), "profile_settings") {
 		t.Fatal("backup credential leaked")
 	}

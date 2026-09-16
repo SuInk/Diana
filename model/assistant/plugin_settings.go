@@ -231,11 +231,12 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 		}
 		// 字节数没有小数概念，落库前取整。
 		return math.Round(number), nil
-	case PluginSettingTypeString:
+	case PluginSettingTypeString, PluginSettingTypeText:
 		value, ok := raw.(string)
 		if !ok {
 			return nil, fmt.Errorf("diana: setting %q expects a string", spec.Key)
 		}
+		// 多行文本只去掉首尾空白，中间的换行是配置本身（模板、白名单一行一条）。
 		return strings.TrimSpace(value), nil
 	case PluginSettingTypeSelect:
 		value, ok := raw.(string)
