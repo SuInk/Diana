@@ -226,7 +226,7 @@ func TestRuntimeReplyToBotTriggersReplyDirectly(t *testing.T) {
 	if !runtime.shouldConsiderProactiveReply(plain, plainText) || !runtime.shouldHandleProactiveReply(context.Background(), plain, plainText) {
 		t.Fatal("公开提问应当通过语义路由")
 	}
-	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "不是压低明确请求相关度的理由") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
+	if len(provider.request.Messages) == 0 || !strings.Contains(provider.request.Messages[0].Content, "需要搜索或调用工具，都不影响 directed") || !strings.Contains(provider.request.Messages[0].Content, "发送前准确度审核") {
 		t.Fatalf("router prompt missing deferred accuracy guard: %#v", provider.request.Messages)
 	}
 }
@@ -2608,7 +2608,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		t.Fatal("proactive router did not call the LLM")
 	}
 	systemPrompt := provider.request.Messages[0].Content
-	for _, want := range []string{"闲聊档位：low", "relevance", "chat_in", "不把别人对其他人的问题冒认", "不是压低明确请求相关度的理由"} {
+	for _, want := range []string{"闲聊档位：low", "relevance", "chat_in", "不把别人对其他人的问题冒认", "都不影响 directed"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}

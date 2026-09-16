@@ -188,11 +188,11 @@ func TestParticipationPromptPinsBareImagesLow(t *testing.T) {
 	// 纯图片压到和「只能附和/复述」同一档，并逐条列出真正该回的例外。
 	for _, want := range []string{
 		"只有图片、没文字也没问题的消息",
-		"chat_in 与 answerability 均不超过 0.30",
+		"没文字也没问题的消息（表情包、梗图、照片）chat_in 不超过 0.30",
 		"机器人刚要求该发送者发图而这就是那张图",
 		"图里本身是问题或任务",
 		"随图文字在问什么",
-		"「我能看图并吐槽两句」不是给高 answerability 的理由",
+		"「我能看图并吐槽两句」不是给高 chat_in 的理由",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("bare-image rule missing %q", want)

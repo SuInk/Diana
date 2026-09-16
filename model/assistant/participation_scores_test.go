@@ -65,7 +65,7 @@ func TestParticipationThresholdGroupOverridesAndPrompt(t *testing.T) {
 		if prefs.relevanceThreshold() != wantR || prefs.substanceThreshold() != wantS {
 			t.Fatal("group thresholds not applied")
 		}
-		for _, want := range []string{"本轮相关度档位", "闲聊档位"} {
+		for _, want := range []string{"本轮回应提问", "闲聊档位"} {
 			if !strings.Contains(prefs.prompt(), want) {
 				t.Fatalf("prompt missing %s", want)
 			}

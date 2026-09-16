@@ -29,7 +29,7 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 		}
 	}
 	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, settings, true)
-	if !strings.Contains(prompt, "闲聊档位：low") || !strings.Contains(prompt, "压低明确请求相关度") {
+	if !strings.Contains(prompt, "闲聊档位：low") || !strings.Contains(prompt, "都不影响 directed") {
 		t.Fatal("assistant mode must retain configured social replies")
 	}
 	restored := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
