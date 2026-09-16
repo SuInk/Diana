@@ -13,71 +13,73 @@ import (
 
 func floatPtr(v float64) *float64 { return &v }
 
-func TestAnswerabilityIsSharedGate(t *testing.T) {
+// 可回答不再是单独一道闸：它拦的两类消息分别由相关度和闲聊的评分标准接住。
+// 旧配置里存着的 answerability_level 读进来也不再起作用，相关度或闲聊达标就放行。
+func TestAnswerabilityNoLongerGatesReplies(t *testing.T) {
+	var p ParticipationPreferences
+	if err := json.Unmarshal([]byte(`{"relevance_level":"medium","chat_level":"medium","answerability_level":"minimal"}`), &p); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
-		rel, chat, quality float64
-		cool, want         bool
+		directed   bool
+		chat       float64
+		cool, want bool
 	}{
-		{1, 0, 0.49, true, false}, {0, 1, 0.49, true, false}, {1, 1, 0.49, true, false},
-		{1, 0, 0.50, false, true}, {0, 1, 0.50, true, true}, {0, 1, 1, false, false},
-		{0, 0, 1, true, false},
+		{true, 0.1, true, true}, {false, 0.8, true, true}, {false, 0.8, false, false}, {false, 0.49, true, false},
 	} {
-		p := ParticipationPreferences{RelevanceLevel: "medium", ChatLevel: "medium", AnswerabilityLevel: "medium"}
-		v := testRatings(tc.rel, tc.chat)
-		v.Answerability.Score = floatPtr(tc.quality)
-		got, _ := p.ratingsAllow(v, tc.cool)
-		if got != tc.want {
+		if got, _ := p.ratingsAllow(testRatings(tc.directed, tc.chat), tc.cool); got != tc.want {
 			t.Fatalf("%+v got %v", tc, got)
 		}
 	}
-	p := ParticipationPreferences{RelevanceLevel: "always", ChatLevel: "off"}
-	v := testRatings(0.1, 0)
-	v.Answerability.Score = floatPtr(0.1)
-	if got, _ := p.ratingsAllow(v, true); got {
-		t.Fatal("always relevance bypassed quality gate")
+	// 提示词里不能再让模型评可回答，也不能再写它是程序判断的一部分。
+	prompt := p.prompt()
+	if strings.Contains(prompt, "answerability") || strings.Contains(prompt, "可回答") {
+		t.Fatalf("提示词里还有可回答：%s", prompt)
 	}
-	p.AnswerabilityLevel = "off"
-	if got, _ := p.ratingsAllow(v, true); !got {
-		t.Fatal("disabled quality gate still blocks")
-	}
-	data, _ := json.Marshal(PayloadFromConfig(BotConfig{Participation: &p}))
-	var payload ConfigPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if ConfigFromPayload(payload, BotConfig{}).participationPreferences().answerabilityLevel() != "off" {
-		t.Fatal("quality setting lost")
+	// 它原来拦的两类消息要分别出现在相关度和闲聊的标准里。
+	for _, want := range []string{"问某个具体群友本人才知道的事", "原样复读别人刚说过的话", "对一个无法核实的说法补充听起来内行、其实没有依据的理由"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("评分标准缺少原可回答的判据：%s", want)
+		}
 	}
 }
-func testRatings(r, c float64) participationRatings {
-	return participationRatings{participationRating{&r, "相关度原因"}, participationRating{&c, "闲聊原因"}, participationRating{floatPtr(1), "可回答"}}
+func testRatings(directed bool, c float64) participationRatings {
+	return participationRatings{participationRelevance{&directed, "相关度原因"}, participationRating{&c, "闲聊原因"}}
 }
 func TestParticipationRatingsORAndOff(t *testing.T) {
 	for _, tc := range []struct {
 		a, b       string
-		r, c       float64
+		directed   bool
+		c          float64
 		cool, want bool
 	}{
-		{"medium", "medium", 0.8, 0.1, true, true}, {"medium", "medium", 0.1, 0.8, true, true},
-		{"medium", "medium", 0.49, 0.49, true, false}, {"off", "medium", 1, 0.1, true, false},
-		{"medium", "off", 0.1, 1, true, false}, {"off", "off", 1, 1, true, false},
-		{"always", "off", 0.01, 0.01, false, true}, {"off", "always", 0.01, 0.01, true, true},
-		{"off", "always", 0.01, 0.01, false, false}, {"always", "always", 0, 0, true, false},
-		{"high", "medium", 0.3, 0, true, true}, {"low", "off", 0.69, 1, true, false},
+		// 回应提问只看是或否，不看分数，也不受冷却影响。
+		{"on", "medium", true, 0.1, true, true}, {"on", "medium", true, 0.1, false, true},
+		{"on", "medium", false, 0.8, true, true}, {"on", "medium", false, 0.49, true, false},
+		{"off", "medium", true, 0.1, true, false}, {"on", "off", false, 1, true, false},
+		{"off", "off", true, 1, true, false},
+		{"off", "always", false, 0.01, true, true}, {"off", "always", false, 0.01, false, false},
+		// 没在叫机器人、闲聊又记 0 是叫停，always 也不越过。
+		{"on", "always", false, 0, true, false},
+		// 旧配置里的七档名称一律读作打开。
+		{"high", "off", true, 0, true, true}, {"minimal", "off", false, 0.6, true, false},
 	} {
 		p := ParticipationPreferences{RelevanceLevel: tc.a, ChatLevel: tc.b}
-		got, _ := p.ratingsAllow(testRatings(tc.r, tc.c), tc.cool)
+		got, _ := p.ratingsAllow(testRatings(tc.directed, tc.c), tc.cool)
 		if got != tc.want {
 			t.Fatalf("%+v got %v", tc, got)
 		}
 	}
 }
 func TestParticipationRatingsProtocol(t *testing.T) {
-	good := `{"relevance":{"score":0.25,"reason":"未直接对机器人说话"},"answerability":{"score":0.8,"reason":"有意义的回复"},"chat_in":{"score":0.80,"reason":"自然接梗"}}`
+	good := `{"relevance":{"directed":false,"reason":"未直接对机器人说话"},"chat_in":{"score":0.80,"reason":"自然接梗"}}`
 	if _, err := parseParticipationRatings(good); err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range []string{`true`, `0.8`, `{"score":0.8,"reason":"x"}`, strings.Replace(good, "0.25", "1.25", 1), strings.Replace(good, "0.25", `"0.25"`, 1)} {
+	// 回应提问不接受分数，也不接受字符串形式的布尔值；闲聊分仍要在 0~1。
+	for _, raw := range []string{`true`, `0.8`, `{"score":0.8,"reason":"x"}`,
+		strings.Replace(good, `"directed":false`, `"score":0.25`, 1), strings.Replace(good, `"directed":false`, `"directed":"false"`, 1),
+		strings.Replace(good, "0.80", "1.25", 1), strings.Replace(good, "0.80", `"0.80"`, 1)} {
 		if _, err := parseParticipationRatings(raw); err == nil {
 			t.Fatalf("accepted %s", raw)
 		}
@@ -86,7 +88,7 @@ func TestParticipationRatingsProtocol(t *testing.T) {
 
 // 线上 14 天里 139/1780 条评分因为这些形状被整条丢弃，全部按可解析处理。
 func TestParticipationRatingsLenientParsing(t *testing.T) {
-	body := `"relevance":{"score":0.31,"reason":"群友在延续话题"},"answerability":{"score":0.60,"reason":"能给出简短回应"},"chat_in":{"score":0.82,"reason":"顺着当前玩笑接一句很合适"}`
+	body := `"relevance":{"directed":false,"reason":"群友在延续话题"},"chat_in":{"score":0.82,"reason":"顺着当前玩笑接一句很合适"}`
 	good := "{" + body + "}"
 	for _, tc := range []struct {
 		name, raw string
@@ -114,7 +116,7 @@ func TestParticipationRatingsLenientParsing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("rejected %q: %v", tc.raw, err)
 			}
-			if *ratings.ChatIn.Score != tc.want || *ratings.Relevance.Score != 0.31 || *ratings.Answerability.Score != 0.60 {
+			if *ratings.ChatIn.Score != tc.want || *ratings.Relevance.Directed {
 				t.Fatalf("ratings=%+v", ratings)
 			}
 			if ratings.ChatIn.Reason != "顺着当前玩笑接一句很合适" {
@@ -125,10 +127,11 @@ func TestParticipationRatingsLenientParsing(t *testing.T) {
 	for _, tc := range []struct{ name, raw string }{
 		{"empty", ""},
 		{"no_object", "抱歉，我无法评分。"},
-		{"truncated_mid_string", `{"relevance":{"score":0.31,"reason":"群友在延续`},
-		{"truncated_before_chat_in", `{"relevance":{"score":0.31,"reason":"群友"},"answerability":{"score":0.6,"reason":"可以"}`},
-		{"missing_reason", `{"relevance":{"score":0.31,"reason":" "},"answerability":{"score":0.6,"reason":"可以"},"chat_in":{"score":0.8,"reason":"接梗"}}`},
-		{"score_out_of_range", `{"relevance":{"score":1.31,"reason":"高"},"answerability":{"score":0.6,"reason":"可以"},"chat_in":{"score":0.8,"reason":"接梗"}}`},
+		{"truncated_mid_string", `{"relevance":{"directed":true,"reason":"群友在延续`},
+		{"truncated_before_chat_in", `{"relevance":{"directed":true,"reason":"群友"}`},
+		{"missing_reason", `{"relevance":{"directed":true,"reason":" "},"chat_in":{"score":0.8,"reason":"接梗"}}`},
+		{"score_out_of_range", `{"relevance":{"directed":true,"reason":"高"},"chat_in":{"score":1.8,"reason":"接梗"}}`},
+		{"missing_directed", `{"relevance":{"reason":"高"},"chat_in":{"score":0.8,"reason":"接梗"}}`},
 		{"first_object_is_not_ratings", `{"note":"thinking"} ` + good},
 	} {
 		t.Run("reject_"+tc.name, func(t *testing.T) {
@@ -195,45 +198,51 @@ func TestParticipationBotShareBlocksChatIn(t *testing.T) {
 	}
 }
 
-// 线上 6% 的插话以「确实/没错」开头去附和一个无法核实的判断，评分模型却给了高
-// answerability：文字流畅贴题，但说不出任何依据。锚点必须把这种回复钉在低分区。
-func TestAnswerabilityAnchorsPushSycophancyLow(t *testing.T) {
+// 附和、捧场、顺口接一句本身是正常闲聊（2026-09-16 主人明确的口径），评分不能因为
+// 没带新信息就把它压低。当初线上 6% 的插话以「确实/没错」开头，真正的问题不是附和，
+// 是顺手给一个无法核实的判断补了一段听起来内行的理由——那是编造，仍然要压低。
+func TestChatInTreatsAgreementAsChatButNotFabrication(t *testing.T) {
 	prompt := ParticipationPreferences{Desire: 50}.prompt()
 	for _, want := range []string{
-		"只能附和对方的主观判断",
-		"只能为一个无法核实的说法补充听起来内行、其实没有依据的理由",
-		"流畅、贴题、像内行也不等于可回答，讲不出依据就压到 0.10 至 0.30",
+		"附和、捧场、表达共鸣、顺口接一句本身就是正常闲聊",
+		"不因为没带新信息就压低",
+		"原样复读别人刚说过的话，不超过 0.10",
+		"对一个无法核实的说法补充听起来内行、其实没有依据的理由",
+		"那是在编",
 	} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("answerability anchors missing %q", want)
+			t.Fatalf("闲聊评分口径缺少 %q", want)
 		}
 	}
-	// 原有锚点结构保持不变，五个刻度都还在。
-	for _, want := range []string{"0.10 只能猜", "0.30 只能给空泛感想", "0.50 能给一句站得住的具体回应", "0.70 有明确可讲的内容或思路", "0.90 上下文已有能直接回答的具体信息"} {
+	if strings.Contains(prompt, "只能附和对方的主观判断") {
+		t.Fatal("附和又被当成低分了")
+	}
+	// 插话回复阶段必须和评分口径一致：评分放行了附和，写回复时不能再被要求「不要附和」。
+	if strings.Contains(chatInReplyPrompt, "不要附和") || !strings.Contains(chatInReplyPrompt, "附和、捧场、顺口接一句都可以") {
+		t.Fatal("插话回复约束和评分口径对不上")
+	}
+	for _, want := range []string{"0.10 两人私聊", "0.90 群里明确抛出邀请"} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("answerability anchor scale lost %q", want)
+			t.Fatalf("闲聊刻度缺失 %q", want)
 		}
 	}
 }
 
-// answerability 是三条分支共用的门槛（见 ratingsAllow），把「讲不出依据就压低」写死之后
-// 接梗和角色扮演一起被判死：玩笑本来就没有依据可讲。回放 59 条线上评分时放行率从 66%
+// 「讲不出依据就压低」当初写在可回答里，而可回答是所有分支共用的门槛，写死之后
+// 接梗和角色扮演一起被判死：玩笑本来就没有依据可讲。可回答并进闲聊之后这条豁免照样要留。回放 59 条线上评分时放行率从 66%
 // 掉到 10%，丢的正是群里在演课堂角色扮演、接机器人自己抛的梗、拿触发行为调侃机器人这
 // 几类。附和一个无法核实的事实判断是机器人撑不住的断言，接一个正在进行的玩笑没有断言，
 // 只问机器人手里有没有一句新词。提示词必须把这两件事分开。
-func TestAnswerabilityExemptsBanterFromEvidenceTest(t *testing.T) {
+func TestChatInExemptsBanterFromEvidenceTest(t *testing.T) {
 	prompt := ParticipationPreferences{Desire: 50}.prompt()
 	for _, want := range []string{
 		// 依据标准的适用范围写成断言类型，不是「所有消息」。
-		"「讲不出依据就压低」只管对事实、原因、产品、人物和事件的断言",
+		"「没有依据就压低」只管对事实、原因、产品、人物和事件的断言",
 		"群里在玩梗、在演正进行的角色扮演、或在拿机器人打趣时没有这种断言",
-		// 玩笑里换判据：有没有一句合梗的新话，而不是有没有依据。
-		"判据换成机器人有没有一句合这个梗的新话",
-		"有就 0.50 至 0.70",
-		// 复读和泛泛捧场仍然留在低分区，豁免不是给捧场用的。
-		"只能复读或泛泛捧场才回 0.10 至 0.30",
-		// 共用门槛之外，闲聊分也不该被依据标准带着一起塌。
-		"这类互动的 chat_in 照梗与调侃的锚点给，不跟着压低",
+		// 玩笑照梗和调侃的锚点给分，不被依据标准带着一起塌。
+		"照梗与调侃的锚点给",
+		// 原样复读仍然留在低分区。
+		"只能原样复读就不超过 0.10",
 		// 玩笑包装下的事实断言不能借豁免绕开依据标准。
 		"玩笑里顺带抛出的事实说法仍按依据算",
 	} {
@@ -242,7 +251,7 @@ func TestAnswerabilityExemptsBanterFromEvidenceTest(t *testing.T) {
 		}
 	}
 	// 豁免必须排在附和锚点之后，读起来才是「上面那条依据标准的例外」。
-	if strings.Index(prompt, "只能附和对方的主观判断") > strings.Index(prompt, "「讲不出依据就压低」只管") {
+	if strings.Index(prompt, "原样复读别人刚说过的话") > strings.Index(prompt, "「没有依据就压低」只管") {
 		t.Fatal("banter carve-out must follow the sycophancy anchors it exempts")
 	}
 }
@@ -252,10 +261,16 @@ func TestParticipationSevenLevelBoundaries(t *testing.T) {
 		if !ratingPasses(threshold, level) || ratingPasses(threshold-0.01, level) {
 			t.Fatalf("boundary %s %.2f", level, threshold)
 		}
+		// 闲聊仍是七档；回应提问只剩开关，旧档位名一律读作打开（门槛 0.50）。
 		p := ParticipationPreferences{RelevanceLevel: level, ChatLevel: level}
 		r, c := p.ratingLevels()
-		if r != level || c != level {
-			t.Fatalf("lost %s", level)
+		if r != "on" || c != level {
+			t.Fatalf("lost %s: relevance=%s chat=%s", level, r, c)
+		}
+	}
+	for value, want := range map[string]string{"on": "on", "off": "off"} {
+		if r, _ := (ParticipationPreferences{RelevanceLevel: value, ChatLevel: "low"}).ratingLevels(); r != want {
+			t.Fatalf("回应提问 %s 读成了 %s", value, r)
 		}
 	}
 	if ratingPasses(1, "off") || !ratingPasses(0, "always") || ratingPasses(1, "invalid") {
@@ -267,17 +282,18 @@ func TestParticipationRatingsRouting(t *testing.T) {
 	r := NewRuntime(BotConfig{Participation: &ParticipationPreferences{RelevanceLevel: "medium", ChatLevel: "high", CooldownSeconds: 30}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "接着聊"}
 	for _, tc := range []struct {
-		rel, chat float64
-		want      bool
-	}{{0.5, 0.1, true}, {0.1, 0.3, true}, {0.1, 0.29, false}, {0, 0, false}} {
-		provider.reply = fmt.Sprintf(`{"relevance":{"score":%.2f,"reason":"相关度"},"answerability":{"score":0.8,"reason":"有意义的回复"},"chat_in":{"score":%.2f,"reason":"闲聊"}}`, tc.rel, tc.chat)
+		directed bool
+		chat     float64
+		want     bool
+	}{{true, 0.1, true}, {false, 0.3, true}, {false, 0.29, false}, {false, 0, false}} {
+		provider.reply = fmt.Sprintf(`{"relevance":{"directed":%t,"reason":"相关度"},"chat_in":{"score":%.2f,"reason":"闲聊"}}`, tc.directed, tc.chat)
 		_, _, _, got := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
 		if got != tc.want {
 			t.Fatalf("%+v got %v", tc, got)
 		}
 	}
 	r.markChatInReplied(event)
-	provider.reply = `{"relevance":{"score":0.9,"reason":"直接接话"},"answerability":{"score":0.8,"reason":"有意义的回复"},"chat_in":{"score":0.1,"reason":"不适合闲聊"}}`
+	provider.reply = `{"relevance":{"directed":true,"reason":"直接接话"},"chat_in":{"score":0.1,"reason":"不适合闲聊"}}`
 	_, _, _, got := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event}})
 	if !got {
 		t.Fatal("chat cooldown blocked relevance branch")
@@ -333,7 +349,7 @@ func lastParticipationRatingLog(t *testing.T, logs *captureAppLogs) map[string]a
 }
 
 func TestParticipationRatingsRetryOnceOnParseFailure(t *testing.T) {
-	valid := `{"relevance":{"score":0.80,"reason":"直接问机器人"},"answerability":{"score":0.80,"reason":"能给出有内容的回答"},"chat_in":{"score":0.10,"reason":"不需要闲聊"}}`
+	valid := `{"relevance":{"directed":true,"reason":"直接问机器人"},"chat_in":{"score":0.10,"reason":"不需要闲聊"}}`
 	newRuntime := func(replies ...string) (*Runtime, *scriptedRouterProvider, *captureAppLogs, MessageEvent) {
 		provider := &scriptedRouterProvider{replies: replies}
 		logs := &captureAppLogs{}
@@ -387,12 +403,20 @@ func TestParticipationRatingsRetryOnceOnParseFailure(t *testing.T) {
 
 func TestParticipationRatingsPromptAndConfig(t *testing.T) {
 	for _, level := range []string{"off", "low", "medium", "high", "always"} {
-		p := ParticipationPreferences{RelevanceLevel: level, ChatLevel: level}
+		relevance := "on"
+		if level == "off" {
+			relevance = "off"
+		}
+		p := ParticipationPreferences{RelevanceLevel: relevance, ChatLevel: level}
 		prompt := p.prompt()
-		for _, banned := range []string{"should_reply", "true", "false", "substance", "confidence", "category"} {
+		// 旧协议的开关字段不能回来；directed 的 true/false 是新协议本身，不在禁用之列。
+		for _, banned := range []string{"should_reply", "substance", "confidence", "category"} {
 			if strings.Contains(prompt, banned) {
 				t.Fatalf("prompt contains %s", banned)
 			}
+		}
+		if !strings.Contains(prompt, `"directed"`) {
+			t.Fatal("prompt must ask for directed")
 		}
 		if !strings.Contains(prompt, level) {
 			t.Fatal("level missing")
@@ -404,7 +428,11 @@ func TestParticipationRatingsPromptAndConfig(t *testing.T) {
 		}
 		restored := ConfigFromPayload(payload, BotConfig{}).participationPreferences()
 		a, b := restored.ratingLevels()
-		if a != level || b != level {
+		wantRelevance := "on"
+		if relevance == "off" {
+			wantRelevance = "off"
+		}
+		if a != wantRelevance || b != level {
 			t.Fatalf("lost levels %s %s", a, b)
 		}
 	}
