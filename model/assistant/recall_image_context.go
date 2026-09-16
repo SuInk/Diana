@@ -31,7 +31,9 @@ const (
 	historyImageDescriptionTimeout      = 90 * time.Second
 	historyImageDescriptionRetryBackoff = 10 * time.Minute
 	historyImageDescriptionIdlePoll     = 250 * time.Millisecond
-	replyImageGroundingTimeout          = 20 * time.Second
+	// 线上每天都有几次 recall image description failed: context deadline exceeded：
+	// 识图要把整张图带上去问一次模型，20 秒经常跑不完，撤回记录里的图就一直是空描述。
+	replyImageGroundingTimeout = 60 * time.Second
 	// historyImageDescriptionMaxAge 限定「自动补描述」的时间窗。
 	//
 	// 库里有近两万条带图消息，识图是单并发、每张最多等 90 秒。真要顺着回填
