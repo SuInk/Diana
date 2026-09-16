@@ -11,7 +11,7 @@ const inherited = computed(() => props.inheritable && !props.modelValue && !prop
 const cooldownSeconds = computed(() => value.value.cooldown_seconds ?? defaultParticipationCooldownSeconds);
 const preset = computed(() => participationPresetName(value.value));
 
-type RatingKey = "relevance_level" | "chat_level" | "answerability_level";
+type RatingKey = "relevance_level" | "chat_level";
 type LevelOption = { value: string; label: string; hint: string };
 // 档位名后面统一带上后端的分数门槛，数字只在 participation.ts 里维护。
 function levelOptions(options: LevelOption[]): LevelOption[] {
@@ -30,7 +30,7 @@ const settings = [
       { value: "medium", label: "适中", hint: "正常承接指向机器人的提问和追问。" },
       { value: "high", label: "较积极", hint: "更容易接住不太明确的提问与追问。" },
       { value: "extreme", label: "很积极", hint: "只有较弱的提问指向，也可能回应。" },
-      { value: "always", label: "完全不限制", hint: "不设提问相关度门槛，仍需满足回答质量要求。" },
+      { value: "always", label: "完全不限制", hint: "不设提问相关度门槛。问某个群友本人的事不算在问你。" },
     ]),
   },
   {
@@ -44,31 +44,16 @@ const settings = [
       { value: "medium", label: "适度参与", hint: "有合适的话就自然加入。" },
       { value: "high", label: "积极参与", hint: "更容易参与分享和闲聊。" },
       { value: "extreme", label: "频繁参与", hint: "较弱的接话机会也可能开口。" },
-      { value: "always", label: "完全不限制", hint: "不设闲聊评分门槛，仍受冷却和回答质量要求限制，不是每条必回。" },
-    ]),
-  },
-  {
-    key: "answerability_level" as const,
-    label: "回答质量要求",
-    description: "多有把握说出有用内容，才开口。",
-    options: levelOptions([
-      { value: "off", label: "完全不限制", hint: "不设回答质量门槛；停止请求和重复回应限制仍生效。" },
-      { value: "minimal", label: "很严格", hint: "预计回答很有意义时才放行。" },
-      { value: "low", label: "较严格", hint: "对预计回答质量有较高要求。" },
-      { value: "medium", label: "适中", hint: "对预计回答质量有适中的要求。" },
-      { value: "high", label: "较宽松", hint: "接受更多可能有帮助的回答。" },
-      { value: "extreme", label: "很宽松", hint: "只排除预计意义很小的回答。" },
+      { value: "always", label: "完全不限制", hint: "不设闲聊评分门槛，仍受冷却和发言占比限制，不是每条必回。" },
     ]),
   },
 ];
 
 function ratingLevel(key: RatingKey) {
-  return value.value[key] ?? (key === "answerability_level" ? "medium" : preset.value === "off" ? "off" : key === "relevance_level" ? "medium" : preset.value === "max" ? "always" : preset.value);
+  return value.value[key] ?? (preset.value === "off" ? "off" : key === "relevance_level" ? "medium" : preset.value === "max" ? "always" : preset.value);
 }
 function displayedLevel(key: RatingKey) {
-  const level = ratingLevel(key);
-  // Both legacy values bypass the quality score. Keep the stored value until edited.
-  return key === "answerability_level" && level === "always" ? "off" : level;
+  return ratingLevel(key);
 }
 function setRatingLevel(key: RatingKey, level: string) {
   emit("update:modelValue", { ...value.value, [key]: level });
@@ -111,15 +96,16 @@ function restoreCooldown(event: Event) {
       </div>
       <p class="hint participation-gate-hint">
         括号里是后端的评分门槛：参与度档位越高，要求的分数反而越低（“极低”最严 ≥0.90，“极高”最松 ≥0.10）。
-        “回答质量要求”是三项共用的总门槛，“回应提问”和“主动闲聊”是两条独立通道——质量达标，且两条通道任意一条达标，才会开口。
+        “回应提问”和“主动闲聊”是两条独立通道，任意一条达标就会开口。
       </p>
       <details class="participation-explanation">
         <summary>了解判断逻辑</summary>
         <div class="explanation-body">
-          <p>先检查预计回答质量。通过后，满足“回应提问”，或满足“主动闲聊”且冷却结束，才进入回复流程。</p>
-          <p>“回应提问”达标不受闲聊冷却限制。关闭其中一项，只关闭对应的接话途径；回答质量要求选“完全不限制”时不设质量门槛。</p>
+          <p>满足“回应提问”，或满足“主动闲聊”且冷却结束，就进入回复流程。</p>
+          <p>“回应提问”达标不受闲聊冷却限制。关闭其中一项，只关闭对应的接话途径。</p>
+          <p>问某个群友本人才知道的事（去不去、做没做）不算在问你。附和、接梗算正常闲聊；原样复读、给没依据的说法编理由，闲聊分会很低。</p>
           <p>需要搜索或调用工具不代表无法回答。停止请求和重复循环仍保持沉默；已经进入直接回复流程的请求不受这里的路由条件影响。</p>
-          <p>参与档位越积极，评分门槛越低；回答质量要求越严格，评分门槛越高。切换档位不会重设冷却时间。</p>
+          <p>参与档位越积极，评分门槛越低。切换档位不会重设冷却时间。</p>
         </div>
       </details>
     </template>

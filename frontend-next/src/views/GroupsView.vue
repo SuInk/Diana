@@ -551,7 +551,7 @@ function participationSummary(p: ParticipationPreferences): string {
   // 档位名后面跟上评分门槛，门槛数字统一来自 participation.ts。
   const name = (level: string) => participationLevelLabel(level, { compact: true });
   const legacy = participationPresetName(p);
-  return `相关度 ${name(p.relevance_level ?? (legacy === "off" ? "off" : "medium"))} · 闲聊 ${name(p.chat_level ?? (legacy === "max" ? "always" : legacy))} · 可回答 ${name(p.answerability_level ?? "medium")}`;
+  return `相关度 ${name(p.relevance_level ?? (legacy === "off" ? "off" : "medium"))} · 闲聊 ${name(p.chat_level ?? (legacy === "max" ? "always" : legacy))}`;
 }
 
 function setGroupParticipation(value: ParticipationPreferences | undefined): void {

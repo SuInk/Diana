@@ -13,9 +13,8 @@ type participationRating struct {
 	Reason string   `json:"reason"`
 }
 type participationRatings struct {
-	Relevance     participationRating `json:"relevance"`
-	ChatIn        participationRating `json:"chat_in"`
-	Answerability participationRating `json:"answerability"`
+	Relevance participationRating `json:"relevance"`
+	ChatIn    participationRating `json:"chat_in"`
 }
 
 // parseParticipationRatings 宽松解析接话评分。线上 7.8% 的评分被整条丢弃，原因是模型
@@ -31,7 +30,7 @@ func parseParticipationRatings(raw string) (participationRatings, error) {
 	if err := json.Unmarshal([]byte(text), &p); err != nil {
 		return p, err
 	}
-	for _, v := range []participationRating{p.Relevance, p.ChatIn, p.Answerability} {
+	for _, v := range []participationRating{p.Relevance, p.ChatIn} {
 		if v.Score == nil || *v.Score < 0 || *v.Score > 1 || strings.TrimSpace(v.Reason) == "" {
 			return p, fmt.Errorf("each rating needs a score from 0 to 1 and a reason")
 		}
@@ -77,7 +76,7 @@ func participationRatingsJSON(raw string) (string, error) {
 	if participationRatingsLookComplete(text) {
 		return text + strings.Repeat("}", depth), nil
 	}
-	return "", fmt.Errorf("rating output was truncated before all three ratings")
+	return "", fmt.Errorf("rating output was truncated before both ratings")
 }
 
 // participationRatingsSanitize 丢掉 JSON 字符串之外那些语法上不可能出现的字符。
@@ -128,12 +127,12 @@ func participationJSONSyntaxByte(c byte) bool {
 
 // participationRatingsLookComplete 判断被截断的输出里三项评分是否都已经带上了分数字段。
 func participationRatingsLookComplete(text string) bool {
-	for _, key := range []string{`"relevance"`, `"answerability"`, `"chat_in"`} {
+	for _, key := range []string{`"relevance"`, `"chat_in"`} {
 		if !strings.Contains(text, key) {
 			return false
 		}
 	}
-	return strings.Count(text, `"score"`) >= 3
+	return strings.Count(text, `"score"`) >= 2
 }
 
 func validParticipationLevel(s string) bool {
@@ -176,10 +175,7 @@ func ratingPasses(score float64, level string) bool {
 	return score > 0 && score >= threshold
 }
 func (p ParticipationPreferences) ratingsAllow(v participationRatings, cooldown bool) (bool, bool) {
-	if v.Answerability.Score == nil {
-		return false, false
-	}
-	if level := p.answerabilityLevel(); level != "off" && !ratingPasses(*v.Answerability.Score, level) {
+	if v.Relevance.Score == nil || v.ChatIn.Score == nil {
 		return false, false
 	}
 	r, c := p.ratingLevels()
@@ -192,18 +188,11 @@ func (p ParticipationPreferences) ratingsAllow(v participationRatings, cooldown 
 	return related || chat, !related && chat
 }
 
-func (p ParticipationPreferences) answerabilityLevel() string {
-	if validParticipationLevel(p.AnswerabilityLevel) {
-		return p.AnswerabilityLevel
-	}
-	return "medium"
-}
-
 func (r *Runtime) recordParticipationRatings(ctx context.Context, event MessageEvent, v participationRatings, parsed, allowed, retried bool, cfg BotConfig, raw string) {
 	w := r.appLogWriter()
 	if w == nil {
 		return
 	}
 	a, b := cfg.participationPreferences().ratingLevels()
-	_ = w.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "diana.proactive_reply_route", Message: "模型已完成接话评分", Actor: oneBotEventActor(event), Target: event.MessageID, Metadata: map[string]any{"group_id": event.GroupID, "ratings": v, "relevance_level": a, "chat_level": b, "answerability_level": cfg.participationPreferences().answerabilityLevel(), "parsed": parsed, "allowed": allowed, "retried": retried, "reason": event.routingReason, "raw": truncateRunesFromStart(raw, 1000)}})
+	_ = w.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "diana.proactive_reply_route", Message: "模型已完成接话评分", Actor: oneBotEventActor(event), Target: event.MessageID, Metadata: map[string]any{"group_id": event.GroupID, "ratings": v, "relevance_level": a, "chat_level": b, "parsed": parsed, "allowed": allowed, "retried": retried, "reason": event.routingReason, "raw": truncateRunesFromStart(raw, 1000)}})
 }
