@@ -107,7 +107,7 @@ func (t *dianaChatHistoryTool) withRecallSink(sink *recallDisclosureSink) *diana
 //
 // 这条路以前不是工具：插件用词表扫消息里有没有「撤回」加「谁/什么/看看」，命中就
 // 劫持整条回复。判断用户想不想看撤回记录是语义问题，本项目一律交给模型。
-func (t *dianaChatHistoryTool) recalls(ctx context.Context) (dianaChatHistoryResult, error) {
+func (t *dianaChatHistoryTool) recalls(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 		return dianaChatHistoryResult{}, fmt.Errorf("撤回记录只在群聊中可用")
 	}
@@ -133,10 +133,26 @@ func (t *dianaChatHistoryTool) recalls(ctx context.Context) (dianaChatHistoryRes
 			Items:   []dianaChatHistoryItem{},
 		}, nil
 	}
-	items := t.items(ctx, t.runtime.enrichRecallImageDescriptions(ctx, t.event, recalls))
-	message := fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录；你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。", len(items))
+	// 线上：一天里攒了 40 条撤回，工具按时间升序给出，输出预算从尾部裁，
+	// 裁掉的正好是刚刚发生的那 21 条。被问到「他刚才撤回了什么」时，手里只剩
+	// 一天前的旧记录。撤回记录一律最新优先，更早的再用 limit 往回要。
+	total := len(recalls)
+	limit := chatHistoryPositiveInt(input, "limit", defaultChatHistoryRecentLimit, maximumChatHistoryResultLimit)
+	newestFirst := make([]MessageEvent, len(recalls))
+	for i, record := range recalls {
+		newestFirst[len(recalls)-1-i] = record
+	}
+	if len(newestFirst) > limit {
+		newestFirst = newestFirst[:limit]
+	}
+	items := t.items(ctx, t.runtime.enrichRecallImageDescriptions(ctx, t.event, newestFirst))
+	message := fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录，最新的在前。", len(items))
+	if total > len(items) {
+		message += fmt.Sprintf("另有 %d 条更早的没有列出，需要时把 limit 调大再查一次。", total-len(items))
+	}
+	message += "你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。"
 	if normalizeRecallReplyMode(t.runtime.effectiveConfigForEvent(t.event).RecallReplyMode) == RecallReplyModeOriginalForward {
-		message = fmt.Sprintf("已读取本群最近 24 小时的 %d 条撤回记录，原文将在本轮回复时另行以合并转发卡片发出；你只需要围绕它们写一句说明，不要逐条复述，也要讲清这些消息已被撤回。", len(items))
+		message += "原文将在本轮回复时另行以合并转发卡片发出。"
 	}
 	return dianaChatHistoryResult{
 		OK:      true,
@@ -144,7 +160,7 @@ func (t *dianaChatHistoryTool) recalls(ctx context.Context) (dianaChatHistoryRes
 		Message: message,
 		Window:  chatHistoryWindowLabel(referenceTime-int64(recallDefaultWindow/time.Second), referenceTime),
 		Items:   items,
-		Total:   len(items),
+		Total:   total,
 	}, nil
 }
 
@@ -164,7 +180,7 @@ func (t *dianaChatHistoryTool) Description() string {
 // 比在散文里列一遍内联 JSON 更不容易看漏。
 func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；overview 均匀抽取整个时间段的代表消息，用户要求总结或回顾一天/数小时且消息很多时优先使用；range 按时间段逐条精确列出，适合核对细节，没读完需分页；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息。",
+		"operation": toolEnumParam("要执行的操作：around 读某条消息前后的记录；recent 读当前会话最近记录；overview 均匀抽取整个时间段的代表消息，用户要求总结或回顾一天/数小时且消息很多时优先使用；range 按时间段逐条精确列出，适合核对细节，没读完需分页；search 按关键词检索；recalls 读本群最近 24 小时被撤回的消息，最新的在前，更早的用 limit 调大再查。",
 			"around", "recent", "overview", "range", "search", "recalls"),
 		"message_id":   toolStringParam("around 可选：以哪条消息为中心；省略时以当前消息为中心。"),
 		"before":       toolIntParam("around 可选：读取锚点之前多少条消息。", 0, maximumChatHistoryAroundRadius),
@@ -211,7 +227,7 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 	case "search", "find":
 		result, err = t.search(ctx, input)
 	case "recalls", "recall":
-		result, err = t.recalls(ctx)
+		result, err = t.recalls(ctx, input)
 	default:
 		return "", fmt.Errorf("operation 必须是 around、recent、overview、range、search 或 recalls")
 	}
