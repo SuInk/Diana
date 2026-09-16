@@ -42,7 +42,12 @@ func defaultCodingApprovalPatterns() []string {
 		"git tag -d",
 		"gh pr merge",
 		"gh pr create",
-		"gh release",
+		// 只写动作，不写 "gh release"：查看 release（gh release view）是只读的，
+		// 线上正是它让每次查版本都要主人点头。
+		"gh release create",
+		"gh release edit",
+		"gh release delete",
+		"gh release upload",
 		"npm publish",
 		"docker push",
 		"rm -rf",
@@ -52,10 +57,12 @@ func defaultCodingApprovalPatterns() []string {
 
 // codingApprovalRequest 是 hook 进程写给 Diana 的一次询问。
 type codingApprovalRequest struct {
-	ID        string    `json:"id"`
-	JobID     string    `json:"job_id"`
-	Tool      string    `json:"tool"`
-	Detail    string    `json:"detail"`
+	ID     string `json:"id"`
+	JobID  string `json:"job_id"`
+	Tool   string `json:"tool"`
+	Detail string `json:"detail"`
+	// Pattern 是命中的危险模式，主人说「以后都同意」时按它记常驻放行。
+	Pattern   string    `json:"pattern,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -65,14 +72,98 @@ type codingApprovalResponse struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// codingAlwaysAllowEntry 是一条常驻放行记录：主人对某类操作说过「以后都同意」。
+type codingAlwaysAllowEntry struct {
+	Pattern   string    `json:"pattern"`
+	OwnerID   string    `json:"owner_id,omitempty"`
+	Example   string    `json:"example,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func codingAlwaysAllowPath() string {
+	return filepath.Join(codingApprovalDir(), "always-allow.json")
+}
+
+// loadCodingAlwaysAllow 读常驻放行清单，只返回模式。读不到就当清单为空——
+// 宁可多问一次，也不能因为文件坏了就把危险操作全放过去。
+func loadCodingAlwaysAllow(path string) []string {
+	entries := readCodingAlwaysAllow(path)
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if pattern := strings.ToLower(strings.TrimSpace(entry.Pattern)); pattern != "" {
+			out = append(out, pattern)
+		}
+	}
+	return out
+}
+
+func readCodingAlwaysAllow(path string) []codingAlwaysAllowEntry {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var entries []codingAlwaysAllowEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil
+	}
+	return entries
+}
+
+// rememberCodingAlwaysAllow 记下「这类操作以后都同意」。同一个模式只记一次。
+func rememberCodingAlwaysAllow(pattern, ownerID, example string) error {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	if pattern == "" {
+		return fmt.Errorf("这次确认没有对应的操作类别，无法记住")
+	}
+	path := codingAlwaysAllowPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	entries := readCodingAlwaysAllow(path)
+	for _, entry := range entries {
+		if strings.EqualFold(strings.TrimSpace(entry.Pattern), pattern) {
+			return nil
+		}
+	}
+	entries = append(entries, codingAlwaysAllowEntry{
+		Pattern: pattern, OwnerID: strings.TrimSpace(ownerID),
+		Example: truncateRunes(strings.TrimSpace(example), 200), CreatedAt: time.Now(),
+	})
+	body, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, body, 0o600)
+}
+
+// forgetCodingAlwaysAllow 清空常驻放行清单，返回清掉了几条。
+func forgetCodingAlwaysAllow() (int, error) {
+	entries := readCodingAlwaysAllow(codingAlwaysAllowPath())
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	if err := os.Remove(codingAlwaysAllowPath()); err != nil && !os.IsNotExist(err) {
+		return 0, err
+	}
+	return len(entries), nil
+}
+
 // codingApprovalPolicy 是 hook 进程要用的判断依据。它落成文件而不是塞进命令行：
 // 模式列表是用户可配的多行文本，进 argv 只会在引号上出问题。
 type codingApprovalPolicy struct {
-	JobID          string   `json:"job_id"`
-	Mode           string   `json:"mode"`
-	Patterns       []string `json:"patterns"`
-	ApprovalDir    string   `json:"approval_dir"`
-	TimeoutSeconds int      `json:"timeout_seconds"`
+	JobID    string   `json:"job_id"`
+	Mode     string   `json:"mode"`
+	Patterns []string `json:"patterns"`
+	// AlwaysAllowPath 指向常驻放行清单；hook 每次执行时现读，主人中途说
+	// 「以后都同意」，同一个任务后面的步骤就已经不问了。
+	AlwaysAllowPath string   `json:"always_allow_path,omitempty"`
+	AlwaysAllow     []string `json:"-"`
+	ApprovalDir     string   `json:"approval_dir"`
+	TimeoutSeconds  int      `json:"timeout_seconds"`
 }
 
 func codingApprovalDir() string {
@@ -91,24 +182,27 @@ func codingApprovalResponsePath(dir, id string) string {
 	return filepath.Join(dir, id+".res")
 }
 
-// codingApprovalCodes 派生这次询问的放行码和拒绝码。
+// codingApprovalCodes 派生这次询问的放行码、常驻放行码和拒绝码。
 //
 // 用确认码而不是认「同意」「可以」这类词：判断只剩一次结构匹配，不涉及任何语义
 // 推断，而且码只出现在主人自己那条消息里——网页正文、工具输出或者别人的发言即使
 // 写着「同意」也放行不了任何东西。这和扩展变更确认码是同一个思路。
-func codingApprovalCodes(request codingApprovalRequest) (string, string) {
+func codingApprovalCodes(request codingApprovalRequest) (string, string, string) {
 	seed := strings.Join([]string{request.ID, request.JobID, request.Tool, request.Detail}, "\x00")
 	allow := sha256.Sum256([]byte("allow\x00" + seed))
+	always := sha256.Sum256([]byte("always\x00" + seed))
 	deny := sha256.Sum256([]byte("deny\x00" + seed))
 	return hex.EncodeToString(allow[:])[:codingApprovalCodeLength],
+		hex.EncodeToString(always[:])[:codingApprovalCodeLength],
 		hex.EncodeToString(deny[:])[:codingApprovalCodeLength]
 }
 
 type codingApprovalWait struct {
-	request   codingApprovalRequest
-	allowCode string
-	denyCode  string
-	decided   chan codingApprovalResponse
+	request    codingApprovalRequest
+	allowCode  string
+	alwaysCode string
+	denyCode   string
+	decided    chan codingApprovalResponse
 }
 
 func (g *codingJobRegistry) registerApproval(wait *codingApprovalWait) {
@@ -118,6 +212,9 @@ func (g *codingJobRegistry) registerApproval(wait *codingApprovalWait) {
 		g.approvals = map[string]*codingApprovalWait{}
 	}
 	g.approvals[wait.allowCode] = wait
+	if wait.alwaysCode != "" {
+		g.approvals[wait.alwaysCode] = wait
+	}
 	g.approvals[wait.denyCode] = wait
 }
 
@@ -129,6 +226,7 @@ func (g *codingJobRegistry) resolveApproval(code string) (*codingApprovalWait, b
 		return nil, false
 	}
 	delete(g.approvals, wait.allowCode)
+	delete(g.approvals, wait.alwaysCode)
 	delete(g.approvals, wait.denyCode)
 	return wait, true
 }
@@ -137,6 +235,7 @@ func (g *codingJobRegistry) dropApproval(wait *codingApprovalWait) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.approvals, wait.allowCode)
+	delete(g.approvals, wait.alwaysCode)
 	delete(g.approvals, wait.denyCode)
 }
 
@@ -205,12 +304,17 @@ func (r *Runtime) watchCodingApprovals(ctx context.Context, job CodingJob, timeo
 			// 登记放在轮询这一轮里同步做完，再交给协程去问：登记如果留在协程
 			// 里，下一轮轮询可能在它跑起来之前又看到同一个请求，主人就会收到
 			// 两条一样的询问。
-			allowCode, denyCode := codingApprovalCodes(request)
+			allowCode, alwaysCode, denyCode := codingApprovalCodes(request)
+			if strings.TrimSpace(request.Pattern) == "" {
+				// 没有命中模式（全部写操作档）时不给常驻放行码：记不下来是哪一类。
+				alwaysCode = ""
+			}
 			wait := &codingApprovalWait{
-				request:   request,
-				allowCode: allowCode,
-				denyCode:  denyCode,
-				decided:   make(chan codingApprovalResponse, 1),
+				request:    request,
+				allowCode:  allowCode,
+				alwaysCode: alwaysCode,
+				denyCode:   denyCode,
+				decided:    make(chan codingApprovalResponse, 1),
 			}
 			r.codingJobs().registerApproval(wait)
 			go func() {
@@ -228,10 +332,14 @@ func (r *Runtime) askCodingApproval(ctx context.Context, job CodingJob, wait *co
 	allowCode, denyCode := wait.allowCode, wait.denyCode
 	defer r.codingJobs().dropApproval(wait)
 
+	always := ""
+	if wait.alwaysCode != "" {
+		always = fmt.Sprintf("这类操作（%s）以后都同意就回 %s，", request.Pattern, wait.alwaysCode)
+	}
 	message := fmt.Sprintf(
-		"编码任务 %s（工作区 %s）要执行一个需要你点头的操作：\n%s\n\n同意就回 %s，不同意回 %s。%s内没人回我就当拒绝。",
+		"编码任务 %s（工作区 %s）要执行一个需要你点头的操作：\n%s\n\n同意就回 %s，%s不同意回 %s。%s内没人回我就当拒绝。",
 		job.ID, job.Workspace, codingApprovalDetail(request),
-		allowCode, denyCode, formatCodingDuration(timeout),
+		allowCode, always, denyCode, formatCodingDuration(timeout),
 	)
 	if err := r.sendSubscriberNotice(ctx, job.Target.event(), message); err != nil {
 		r.setError(err.Error())
@@ -288,11 +396,18 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 	}
 	lowered := strings.ToLower(text)
 	for _, request := range pending {
-		allowCode, denyCode := codingApprovalCodes(request)
+		allowCode, alwaysCode, denyCode := codingApprovalCodes(request)
+		if strings.TrimSpace(request.Pattern) == "" {
+			alwaysCode = ""
+		}
 		for _, item := range []struct {
-			code  string
-			allow bool
-		}{{allowCode, true}, {denyCode, false}} {
+			code   string
+			allow  bool
+			always bool
+		}{{allowCode, true, false}, {alwaysCode, true, true}, {denyCode, false, false}} {
+			if item.code == "" {
+				continue
+			}
 			if !containsStandaloneCode(lowered, item.code) {
 				continue
 			}
@@ -304,6 +419,14 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 			if !item.allow {
 				decision.Reason = "主人拒绝了这个操作"
 			}
+			remembered := ""
+			if item.always {
+				if err := rememberCodingAlwaysAllow(request.Pattern, event.UserID, request.Detail); err != nil {
+					remembered = "（这类操作没记住：" + err.Error() + "，下次还会问）"
+				} else {
+					remembered = fmt.Sprintf("以后「%s」这类操作我不再问了，想恢复就用编码工具的 approvals 清空。", request.Pattern)
+				}
+			}
 			select {
 			case wait.decided <- decision:
 			default:
@@ -311,6 +434,9 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 				return "这个确认已经处理过了。", true
 			}
 			if item.allow {
+				if remembered != "" {
+					return fmt.Sprintf("好，任务 %s 继续。%s", request.JobID, remembered), true
+				}
 				return fmt.Sprintf("好，任务 %s 继续。", request.JobID), true
 			}
 			return fmt.Sprintf("已拒绝，任务 %s 会绕过这一步或者报错收尾。", request.JobID), true
@@ -366,11 +492,12 @@ func prepareCodingApproval(cfg codingAgentConfig, jobID string) (string, error) 
 	}
 	timeout := int(cfg.ApprovalTimeout / time.Second)
 	policy := codingApprovalPolicy{
-		JobID:          jobID,
-		Mode:           cfg.ApprovalMode,
-		Patterns:       cfg.ApprovalPatterns,
-		ApprovalDir:    codingApprovalDir(),
-		TimeoutSeconds: timeout,
+		JobID:           jobID,
+		Mode:            cfg.ApprovalMode,
+		Patterns:        cfg.ApprovalPatterns,
+		AlwaysAllowPath: codingAlwaysAllowPath(),
+		ApprovalDir:     codingApprovalDir(),
+		TimeoutSeconds:  timeout,
 	}
 	policyPath := codingApprovalPolicyPath(jobID)
 	policyBody, err := json.MarshalIndent(policy, "", "  ")

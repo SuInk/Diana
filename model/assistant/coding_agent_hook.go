@@ -58,7 +58,8 @@ func RunCodingApprovalHook(policyPath string, stdin io.Reader, stdout, stderr io
 		_ = json.Unmarshal(body, &payload)
 	}
 	detail := codingHookDetail(payload)
-	if !codingHookNeedsApproval(policy, payload.ToolName, detail) {
+	pattern, needed := codingHookNeedsApproval(policy, payload.ToolName, detail)
+	if !needed {
 		return 0
 	}
 
@@ -67,6 +68,7 @@ func RunCodingApprovalHook(policyPath string, stdin io.Reader, stdout, stderr io
 		JobID:     policy.JobID,
 		Tool:      payload.ToolName,
 		Detail:    detail,
+		Pattern:   pattern,
 		CreatedAt: time.Now(),
 	}
 	decision, err := requestCodingApproval(policy, request)
@@ -118,6 +120,9 @@ func loadCodingApprovalPolicy(path string) (codingApprovalPolicy, error) {
 	if len(policy.Patterns) == 0 {
 		policy.Patterns = defaultCodingApprovalPatterns()
 	}
+	// 常驻放行清单跟着任务之外的文件走：主人在某次任务里说「以后都同意」，
+	// 下一个任务开始时也要认。
+	policy.AlwaysAllow = loadCodingAlwaysAllow(policy.AlwaysAllowPath)
 	return policy, nil
 }
 
@@ -139,21 +144,96 @@ func codingHookDetail(payload codingHookPayload) string {
 	return truncateRunes(string(body), 400)
 }
 
-// codingHookNeedsApproval 判断这一步要不要问主人。
-func codingHookNeedsApproval(policy codingApprovalPolicy, tool, detail string) bool {
-	switch policy.Mode {
-	case codingApprovalModeOff:
-		return false
-	case codingApprovalModeAllWrites:
-		return true
-	}
-	lowered := strings.ToLower(tool + " " + detail)
-	for _, pattern := range policy.Patterns {
-		if pattern != "" && strings.Contains(lowered, pattern) {
-			return true
+// codingCommandSegments 把一条命令拆成可以单独判断的片段，并丢掉 heredoc 正文。
+//
+// 线上：机器人写发版说明时执行 cat > notes.md <<EOF …… EOF，正文里有一键安装命令
+// curl … | sudo sh，命中了 sudo，写个文件也要主人点头。正文是数据不是命令，不能拿它
+// 判断危险与否；同理，一条 && 链里各段要分开看，不能整条当成一个字符串搜。
+func codingCommandSegments(command string) []string {
+	var kept []string
+	lines := strings.Split(command, "\n")
+	for index := 0; index < len(lines); index++ {
+		line := lines[index]
+		kept = append(kept, line)
+		tag := heredocTag(line)
+		if tag == "" {
+			continue
+		}
+		// 跳到结束标记为止，正文整段不参与判断。
+		for index+1 < len(lines) {
+			index++
+			if strings.TrimSpace(lines[index]) == tag {
+				break
+			}
 		}
 	}
-	return false
+	joined := strings.Join(kept, "\n")
+	segments := strings.FieldsFunc(joined, func(r rune) bool {
+		return r == '\n' || r == ';' || r == '&' || r == '|'
+	})
+	out := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment = strings.TrimSpace(segment); segment != "" {
+			out = append(out, segment)
+		}
+	}
+	return out
+}
+
+// heredocTag 取出这一行开启的 heredoc 结束标记，没有就返回空串。
+func heredocTag(line string) string {
+	index := strings.Index(line, "<<")
+	if index < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line[index+2:], "-"))
+	if rest == "" {
+		return ""
+	}
+	quote := rest[0]
+	if quote == '\'' || quote == '"' {
+		if end := strings.IndexByte(rest[1:], quote); end >= 0 {
+			return rest[1 : 1+end]
+		}
+		return ""
+	}
+	tag := strings.Fields(rest)[0]
+	for _, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+		default:
+			return ""
+		}
+	}
+	return tag
+}
+
+// codingHookNeedsApproval 判断这一步要不要问主人，命中时一并给出命中的模式。
+func codingHookNeedsApproval(policy codingApprovalPolicy, tool, detail string) (string, bool) {
+	switch policy.Mode {
+	case codingApprovalModeOff:
+		return "", false
+	case codingApprovalModeAllWrites:
+		return "", true
+	}
+	allowed := map[string]bool{}
+	for _, pattern := range policy.AlwaysAllow {
+		allowed[strings.ToLower(strings.TrimSpace(pattern))] = true
+	}
+	lowered := strings.ToLower(tool)
+	segments := append([]string{lowered}, codingCommandSegments(strings.ToLower(detail))...)
+	for _, pattern := range policy.Patterns {
+		if pattern == "" || allowed[pattern] {
+			// 主人说过这类操作以后都同意，就不再问。
+			continue
+		}
+		for _, segment := range segments {
+			if strings.Contains(segment, pattern) {
+				return pattern, true
+			}
+		}
+	}
+	return "", false
 }
 
 // requestCodingApproval 把询问投进信箱，然后等 Diana 写回裁决。
