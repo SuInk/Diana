@@ -31,12 +31,12 @@ func newDianaCodingTool(runtime *Runtime, event MessageEvent, settings SettingVa
 func (t *dianaCodingTool) Name() string { return dianaCodingToolName }
 
 func (t *dianaCodingTool) Description() string {
-	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex）在持久工作区里长时间执行。submit 派活后立刻返回任务号，进程在后台独立运行，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。只有机器人主人能用。`
+	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex）在持久工作区里长时间执行。submit 派活后立刻返回任务号，进程在后台独立运行，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。只有机器人主人能用。`
 }
 
 func (t *dianaCodingTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces"),
+		"operation": toolEnumParam("要执行的操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces", "approvals"),
 		"workspace": toolStringParam("工作区名字，必须是设置里登记过的。只登记了一个时可以省略。submit 必填。"),
 		"instruction": toolStringParam("交给编码 CLI 的完整指令。它看不到这里的聊天记录，" +
 			"所以要改什么、为什么改、验收标准都要写进来。submit 和 followup 必填。"),
@@ -44,17 +44,20 @@ func (t *dianaCodingTool) InputSchema() map[string]any {
 			"把原话挑出来放这里，会作为背景附在指令前面。"),
 		"job_id":     toolStringParam("要查询、追加或取消的任务号。status / tail / cancel / followup 用；status 省略时返回最近的任务。"),
 		"tail_lines": toolIntParam("tail 返回的最近动作行数，默认 10。", 1, codingJobTailLines),
+		"clear":      toolBoolParam("approvals 专用：清空主人说过「以后都同意」的那些操作类别，清空后它们会重新逐次询问。"),
 	})
 }
 
 type dianaCodingResult struct {
-	OK         bool             `json:"ok"`
-	Operation  string           `json:"operation"`
-	Message    string           `json:"message,omitempty"`
-	Workspaces []string         `json:"workspaces,omitempty"`
-	Job        *dianaCodingJob  `json:"job,omitempty"`
-	Jobs       []dianaCodingJob `json:"jobs,omitempty"`
-	Tail       []string         `json:"tail,omitempty"`
+	OK         bool     `json:"ok"`
+	Operation  string   `json:"operation"`
+	Message    string   `json:"message,omitempty"`
+	Workspaces []string `json:"workspaces,omitempty"`
+	// AlwaysAllowed 是主人说过「以后都同意」的操作类别。
+	AlwaysAllowed []string         `json:"always_allowed,omitempty"`
+	Job           *dianaCodingJob  `json:"job,omitempty"`
+	Jobs          []dianaCodingJob `json:"jobs,omitempty"`
+	Tail          []string         `json:"tail,omitempty"`
 }
 
 type dianaCodingJob struct {
@@ -76,7 +79,10 @@ type dianaCodingJob struct {
 	// 重要：任务没在跑，是在等人。
 	AwaitingApproval  string `json:"awaiting_approval,omitempty"`
 	ApprovalAllowCode string `json:"approval_allow_code,omitempty"`
-	ApprovalDenyCode  string `json:"approval_deny_code,omitempty"`
+	// ApprovalAlwaysCode 回过去表示这类操作以后都同意；ApprovalPattern 是那一类。
+	ApprovalAlwaysCode string `json:"approval_always_code,omitempty"`
+	ApprovalPattern    string `json:"approval_pattern,omitempty"`
+	ApprovalDenyCode   string `json:"approval_deny_code,omitempty"`
 }
 
 func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -113,8 +119,28 @@ func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string
 			Workspaces: cfg.workspaceNames(),
 			Message:    codingWorkspaceHint(cfg),
 		})
+	case "approvals":
+		// 主人回过「以后都同意」之后，得有地方看见记了什么、并且能收回。
+		if boolInput(input, "clear") {
+			removed, err := forgetCodingAlwaysAllow()
+			if err != nil {
+				return "", fmt.Errorf("清空常驻放行失败：%w", err)
+			}
+			return codingToolJSON(dianaCodingResult{
+				OK: true, Operation: "approvals",
+				Message: fmt.Sprintf("已清空 %d 条常驻放行，这些操作以后会重新问你。", removed),
+			})
+		}
+		allowed := loadCodingAlwaysAllow(codingAlwaysAllowPath())
+		message := "还没有常驻放行，危险操作每次都会问。"
+		if len(allowed) > 0 {
+			message = "这些类别以后不再问；要恢复就带 clear=true 再调一次。"
+		}
+		return codingToolJSON(dianaCodingResult{
+			OK: true, Operation: "approvals", AlwaysAllowed: allowed, Message: message,
+		})
 	}
-	return "", fmt.Errorf("operation 必须是 submit、status、tail、cancel、followup、list 或 workspaces")
+	return "", fmt.Errorf("operation 必须是 submit、status、tail、cancel、followup、list、workspaces 或 approvals")
 }
 
 func (t *dianaCodingTool) submit(ctx context.Context, cfg codingAgentConfig, input map[string]any, resumeSession string) (string, error) {
@@ -272,9 +298,13 @@ func (t *dianaCodingTool) attachPendingApproval(view *dianaCodingJob) {
 		if request.JobID != view.ID {
 			continue
 		}
-		allow, deny := codingApprovalCodes(request)
+		allow, always, deny := codingApprovalCodes(request)
 		view.AwaitingApproval = codingApprovalDetail(request)
 		view.ApprovalAllowCode = allow
+		if strings.TrimSpace(request.Pattern) != "" {
+			view.ApprovalAlwaysCode = always
+			view.ApprovalPattern = request.Pattern
+		}
 		view.ApprovalDenyCode = deny
 		return
 	}
