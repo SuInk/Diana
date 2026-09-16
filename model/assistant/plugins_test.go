@@ -87,10 +87,10 @@ func TestPluginManagerInstallEnableRun(t *testing.T) {
 		t.Fatalf("responses = %#v", responses)
 	}
 
-	if _, err := manager.SetEnabled("test", false); err != nil {
+	if _, err := manager.SetEnabledForProfile("test", "qq", false); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
-	if responses := manager.Run(context.Background(), PluginRequest{Text: "hello"}); len(responses) != 0 {
+	if responses := manager.RunWithOverrides(context.Background(), PluginRequest{Text: "hello"}, manager.ProfileOverrides("qq")); len(responses) != 0 {
 		t.Fatalf("disabled responses = %#v", responses)
 	}
 }
@@ -354,9 +354,10 @@ func TestDefaultPluginManagerIncludesNoOpLLMConfigPlugin(t *testing.T) {
 // TestPluginManagerRestoreKeepsBuiltInDisabledChoice 验证对应功能场景。
 func TestPluginManagerRestoreKeepsBuiltInDisabledChoice(t *testing.T) {
 	manager := NewDefaultPluginManager()
-	manager.Restore(map[string]PluginState{
+	disabled := false
+	manager.Restore(map[string]PersistedPluginState{
 		"official.file-parser-go": {
-			Enabled: false,
+			Enabled: &disabled,
 		},
 	})
 	state, ok := manager.Get("official.file-parser-go")
@@ -978,10 +979,9 @@ func TestPluginManagerUpdateSettingsValidatesAndClamps(t *testing.T) {
 
 func TestPluginManagerRestoreSanitizesSettings(t *testing.T) {
 	manager := NewDefaultPluginManager()
-	manager.Restore(map[string]PluginState{
+	manager.Restore(map[string]PersistedPluginState{
 		resolverPluginID: {
 			Installed: true,
-			Enabled:   true,
 			Settings: map[string]any{
 				"fetch_title":     false,
 				"max_links":       float64(99),

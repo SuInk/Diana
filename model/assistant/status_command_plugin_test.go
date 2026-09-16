@@ -145,35 +145,38 @@ func TestStatusCommandPluginDefaultsToDisabled(t *testing.T) {
 	}
 
 	// 库里没有它的记录时（老版本升上来就是这样），Restore 不能把它打开。
-	manager.Restore(map[string]PluginState{})
+	manager.Restore(map[string]PersistedPluginState{})
 	if state, _ := pluginStateByID(manager.List(), statusCommandPluginID); state.Enabled {
 		t.Fatal("没有存过状态时 Restore 把默认关闭的插件打开了")
 	}
 
-	// 用户开过之后要记住。
-	if _, err := manager.SetEnabled(statusCommandPluginID, true); err != nil {
+	// 开关按机器人存：某个机器人开过之后要记住。
+	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
 		t.Fatal(err)
 	}
-	manager.Restore(map[string]PluginState{
-		statusCommandPluginID: {Installed: true, Enabled: true},
+	manager.Restore(map[string]PersistedPluginState{
+		statusCommandPluginID: {Installed: true, ProfileEnabled: map[string]bool{"qq": true}, ProfileConfigMigrated: true},
 	})
-	if state, _ := pluginStateByID(manager.List(), statusCommandPluginID); !state.Enabled {
-		t.Fatal("用户开过的状态没有被 Restore 保留")
+	if !manager.EnabledWithOverrides(statusCommandPluginID, manager.ProfileOverrides("qq")) {
+		t.Fatal("机器人开过的状态没有被 Restore 保留")
+	}
+	if manager.EnabledWithOverrides(statusCommandPluginID, manager.ProfileOverrides("tg")) {
+		t.Fatal("一个机器人的开关串到了另一个机器人")
 	}
 
 	// 再关回去也要记住。
-	manager.Restore(map[string]PluginState{
-		statusCommandPluginID: {Installed: true, Enabled: false},
+	manager.Restore(map[string]PersistedPluginState{
+		statusCommandPluginID: {Installed: true, ProfileEnabled: map[string]bool{"qq": false}, ProfileConfigMigrated: true},
 	})
-	if state, _ := pluginStateByID(manager.List(), statusCommandPluginID); state.Enabled {
-		t.Fatal("用户关掉的状态没有被 Restore 保留")
+	if manager.EnabledWithOverrides(statusCommandPluginID, manager.ProfileOverrides("qq")) {
+		t.Fatal("机器人关掉的状态没有被 Restore 保留")
 	}
 }
 
 // 默认开启的内置插件不受这次改动影响。
 func TestBuiltInPluginsStillDefaultToEnabled(t *testing.T) {
 	manager := NewDefaultPluginManager()
-	manager.Restore(map[string]PluginState{})
+	manager.Restore(map[string]PersistedPluginState{})
 	for _, state := range manager.List() {
 		if !state.Manifest.BuiltIn || state.Manifest.DefaultDisabled {
 			continue
@@ -191,13 +194,14 @@ func TestStatusCommandNotTriggeredWhileDisabled(t *testing.T) {
 	if manager.ShouldHandleWithOverrides(event, statusCommandTrigger, nil) {
 		t.Fatal("插件默认关闭，口令不该叫醒机器人")
 	}
-	if _, err := manager.SetEnabled(statusCommandPluginID, true); err != nil {
+	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
 		t.Fatal(err)
 	}
-	if !manager.ShouldHandleWithOverrides(event, statusCommandTrigger, nil) {
+	overrides := manager.ProfileOverrides("qq")
+	if !manager.ShouldHandleWithOverrides(event, statusCommandTrigger, overrides) {
 		t.Fatal("插件开启后口令应当叫醒机器人")
 	}
-	if manager.ShouldHandleWithOverrides(event, "今天天气怎么样", nil) {
+	if manager.ShouldHandleWithOverrides(event, "今天天气怎么样", overrides) {
 		t.Fatal("普通消息不该叫醒机器人")
 	}
 }
@@ -215,12 +219,12 @@ func pluginStateByID(states []PluginState, id string) (PluginState, bool) {
 // 而且完全不喊模型。
 func TestRuntimeStatusCommandRepliesWithoutLLM(t *testing.T) {
 	manager := NewPluginManager(NewStatusCommandPlugin())
-	if _, err := manager.SetEnabled(statusCommandPluginID, true); err != nil {
+	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
 		t.Fatal(err)
 	}
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
-	botRuntime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+	botRuntime := NewRuntime(BotConfig{ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls.Add(1)
 		return &capturingLLMProvider{reply: "不应该调用"}, nil
 	})
@@ -269,7 +273,7 @@ func TestRuntimeStatusCommandSilentWhileDisabled(t *testing.T) {
 		manager := NewPluginManager(NewStatusCommandPlugin())
 		channel := &recordingChannel{}
 		var calls atomic.Int32
-		botRuntime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+		botRuntime := NewRuntime(BotConfig{ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42"}, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
 			calls.Add(1)
 			return &capturingLLMProvider{reply: "不应该发出来"}, nil
 		})

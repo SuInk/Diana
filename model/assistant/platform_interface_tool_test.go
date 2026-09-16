@@ -322,13 +322,13 @@ func TestPlatformToolMemberRegistryRetainsReadTool(t *testing.T) {
 
 func TestPlatformInterfaceBuiltinSkillFollowsPluginAndPlatform(t *testing.T) {
 	plugins := NewDefaultPluginManager()
-	runtime := NewRuntime(BotConfig{Platform: PlatformOneBotV11}, &recordingChannel{}, plugins, nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ID: "qq", Platform: PlatformOneBotV11}, &recordingChannel{}, plugins, nil, nil, nil, nil)
 	for _, platform := range []string{PlatformOneBotV11, PlatformTelegram} {
 		if skills := runtime.platformInterfaceBuiltinSkills(MessageEvent{Platform: platform}); len(skills) != 1 || !strings.Contains(skills[0].Content, "Access Boundary") {
 			t.Fatalf("%s skills = %#v", platform, skills)
 		}
 	}
-	if _, err := plugins.SetEnabled(platformInterfacePluginID, false); err != nil {
+	if _, err := plugins.SetEnabledForProfile(platformInterfacePluginID, "qq", false); err != nil {
 		t.Fatal(err)
 	}
 	if skills := runtime.platformInterfaceBuiltinSkills(MessageEvent{Platform: PlatformOneBotV11}); len(skills) != 0 {

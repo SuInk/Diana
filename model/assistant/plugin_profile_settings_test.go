@@ -45,7 +45,7 @@ func TestOrdinaryPluginSettingsAndSecretsAreShared(t *testing.T) {
 		}
 	}
 	encoded, _ := json.Marshal(m.Snapshot())
-	var saved map[string]PluginState
+	var saved map[string]PersistedPluginState
 	if err := json.Unmarshal(encoded, &saved); err != nil {
 		t.Fatal(err)
 	}
@@ -86,9 +86,11 @@ func TestPluginMigrationPreservesIndependentSettingsAndSwitches(t *testing.T) {
 	if _, err := m.UpdateSettings(resolverPluginID, map[string]any{resolverSettingDouyinCookie: "legacy", resolverSettingMaxImages: 4}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SetEnabled(resolverPluginID, false); err != nil {
-		t.Fatal(err)
-	}
+	disabled := false
+	m.Restore(map[string]PersistedPluginState{resolverPluginID: {
+		Installed: true, Enabled: &disabled,
+		Settings: map[string]any{resolverSettingDouyinCookie: "legacy", resolverSettingMaxImages: float64(4)},
+	}})
 	if _, err := m.UpdateSettingsForProfile(resolverPluginID, "a", map[string]any{resolverSettingDouyinCookie: "independent", resolverSettingMaxImages: 7}, nil); err != nil {
 		t.Fatal(err)
 	}

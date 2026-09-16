@@ -22,7 +22,7 @@ func TestPluginProfileSwitchIsolationAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var saved map[string]PluginState
+	var saved map[string]PersistedPluginState
 	if err := json.Unmarshal(data, &saved); err != nil {
 		t.Fatal(err)
 	}

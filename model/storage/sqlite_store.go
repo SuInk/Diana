@@ -288,14 +288,14 @@ func (s *SQLiteStore) SaveWebUIAPIKeys(ctx context.Context, set WebUIAPIKeySet) 
 }
 
 // LoadPluginStates 读取插件状态。
-func (s *SQLiteStore) LoadPluginStates(ctx context.Context) (map[string]assistant.PluginState, bool, error) {
-	var states map[string]assistant.PluginState
+func (s *SQLiteStore) LoadPluginStates(ctx context.Context) (map[string]assistant.PersistedPluginState, bool, error) {
+	var states map[string]assistant.PersistedPluginState
 	ok, err := s.loadJSON(ctx, pluginStateKey, &states)
 	return states, ok, err
 }
 
 // SavePluginStates 保存插件状态。
-func (s *SQLiteStore) SavePluginStates(ctx context.Context, states map[string]assistant.PluginState) error {
+func (s *SQLiteStore) SavePluginStates(ctx context.Context, states map[string]assistant.PersistedPluginState) error {
 	return s.saveJSON(ctx, pluginStateKey, states)
 }
 

@@ -300,7 +300,7 @@ func TestRestoredRuntimeLearnsBotIdentityOnce(t *testing.T) {
 }
 
 func TestRestoredRuntimeTriggersSupportedSocialLinksOnly(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ID: "qq"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456"}
 	if !runtime.shouldHandle(event, "https://www.bilibili.com/video/BV1xx411c7mD") {
 		t.Fatal("supported social link should trigger the resolver")
