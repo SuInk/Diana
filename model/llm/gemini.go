@@ -116,7 +116,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 }
 
 func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
-	req = req.withDefaults(c.cfg)
+	req = applyContextBudget(req.withDefaults(c.cfg), c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
 	}
@@ -144,36 +144,59 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan 
 		defer close(out)
 		defer recoverChatStreamPanic(ctx, out, "gemini")
 		var last Usage
+		finished := false
 		for response, err := range iterator {
 			if err != nil {
-				out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error()})
 				return
 			}
 			if response == nil {
-				out <- ChatEvent{Type: ChatEventError, Error: "llm: gemini returned an empty stream response"}
+				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: "llm: gemini returned an empty stream response"})
 				return
 			}
 			if err := geminiContentBlock(response); err != nil {
-				out <- ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCode: err.Reason, ErrorCause: err}
+				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCode: err.Reason, ErrorCause: err})
 				return
 			}
-			text := response.Text()
-			if text != "" {
-				out <- ChatEvent{Type: ChatEventTextDelta, Text: text}
-			}
-			for _, functionCall := range response.FunctionCalls() {
-				if functionCall == nil {
-					continue
+			if len(response.Candidates) > 0 && response.Candidates[0] != nil {
+				reason := response.Candidates[0].FinishReason
+				if reason == genai.FinishReasonStop {
+					finished = true
+				} else if reason != "" {
+					sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: "llm: incomplete gemini stream: " + string(reason)})
+					return
 				}
-				call := ToolCall{ID: functionCall.ID, Name: nativeToolName(functionCall.Name, req.Tools), Arguments: functionCall.Args}
-				out <- ChatEvent{Type: ChatEventToolCall, ToolCall: &call}
 			}
+			if len(response.Candidates) > 0 && response.Candidates[0] != nil && response.Candidates[0].Content != nil {
+				for _, part := range response.Candidates[0].Content.Parts {
+					if part == nil || part.Text == "" {
+						continue
+					}
+					event := ChatEvent{Type: ChatEventTextDelta, Text: part.Text}
+					if part.Thought {
+						event = ChatEvent{Type: ChatEventReasoning, Reasoning: part.Text}
+					}
+					if !sendChatEvent(ctx, out, event) {
+						return
+					}
+				}
+			}
+			for _, call := range geminiToolCalls(response, req.Tools) {
+				if !sendChatEvent(ctx, out, ChatEvent{Type: ChatEventToolCall, ToolCall: &call}) {
+					return
+				}
+			}
+
 			if response.UsageMetadata != nil {
 				last = geminiUsage(response)
 			}
 		}
-		out <- ChatEvent{Type: ChatEventUsage, Usage: &last}
-		out <- ChatEvent{Type: ChatEventDone}
+		if !finished {
+			sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: "llm: gemini stream ended before completion"})
+			return
+		}
+		sendChatEvent(ctx, out, ChatEvent{Type: ChatEventUsage, Usage: &last})
+		sendChatEvent(ctx, out, ChatEvent{Type: ChatEventDone, Response: &GenerateResponse{Provider: ProviderGemini, Model: req.Model}})
 	}()
 	return out, nil
 }
@@ -226,6 +249,7 @@ func geminiContents(messages []Message, definitions []ToolDefinition) []*genai.C
 			for _, call := range msg.ToolCalls {
 				part := genai.NewPartFromFunctionCall(wireToolName(call.Name), call.Arguments)
 				part.FunctionCall.ID = call.ID
+				part.ThoughtSignature = call.ThoughtSignature
 				parts = append(parts, part)
 			}
 			out = append(out, &genai.Content{Role: genai.RoleModel, Parts: parts})
@@ -279,13 +303,19 @@ func geminiToolConfig(req GenerateRequest) *genai.ToolConfig {
 }
 
 func geminiToolCalls(response *genai.GenerateContentResponse, definitions []ToolDefinition) []ToolCall {
-	raw := response.FunctionCalls()
-	calls := make([]ToolCall, 0, len(raw))
-	for _, call := range raw {
-		if call == nil || strings.TrimSpace(call.Name) == "" {
+	var calls []ToolCall
+	if len(response.Candidates) == 0 || response.Candidates[0] == nil || response.Candidates[0].Content == nil {
+		return calls
+	}
+	for _, part := range response.Candidates[0].Content.Parts {
+		if part == nil || part.FunctionCall == nil {
 			continue
 		}
-		calls = append(calls, ToolCall{ID: call.ID, Name: nativeToolName(call.Name, definitions), Arguments: call.Args})
+		call := part.FunctionCall
+		if strings.TrimSpace(call.Name) == "" {
+			continue
+		}
+		calls = append(calls, ToolCall{ID: call.ID, Name: nativeToolName(call.Name, definitions), Arguments: call.Args, ThoughtSignature: part.ThoughtSignature})
 	}
 	return calls
 }

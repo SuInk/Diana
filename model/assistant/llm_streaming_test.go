@@ -5,7 +5,9 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +104,38 @@ func TestStreamingFallsBackOnError(t *testing.T) {
 	})
 }
 
+func TestStreamingFallsBackOnEmptyOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		events []llm.ChatEvent
+	}{
+		{"empty", []llm.ChatEvent{{Type: llm.ChatEventDone}}},
+		{"reasoning_only", []llm.ChatEvent{{Type: llm.ChatEventReasoning, Reasoning: "calling a tool"}, {Type: llm.ChatEventUsage, Usage: &llm.Usage{OutputTokens: 32}}, {Type: llm.ChatEventDone}}},
+		{"whitespace", []llm.ChatEvent{textDelta(" \n\t"), {Type: llm.ChatEventDone}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubStreamer{events: tc.events, generateOut: "fallback"}
+			response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
+			if err != nil || !stub.generated || response == nil || response.Text != "fallback" {
+				t.Fatalf("empty stream did not fall back: response=%+v error=%v generated=%v", response, err, stub.generated)
+			}
+		})
+	}
+	stub := &stubStreamer{events: []llm.ChatEvent{{Type: llm.ChatEventDone}}, generateErr: errors.New("provider output is empty")}
+	if _, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{}); !errors.Is(err, stub.generateErr) {
+		t.Fatalf("fallback failure was swallowed: %v", err)
+	}
+}
+
+func TestStreamingToolOnlyResponseDoesNotRetry(t *testing.T) {
+	call := llm.ToolCall{ID: "call_1", Name: "agent.finalize", Arguments: map[string]any{"silent": true}}
+	stub := &stubStreamer{events: []llm.ChatEvent{{Type: llm.ChatEventToolCall, ToolCall: &call}, {Type: llm.ChatEventDone}}}
+	response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || stub.generated || response == nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].ID != call.ID {
+		t.Fatalf("tool-only response should succeed without retry: response=%+v error=%v generated=%v", response, err, stub.generated)
+	}
+}
+
 // TestStreamingSkipsNonStreamingProvider 不支持流式的 provider 原样走 Generate。
 func TestStreamingSkipsNonStreamingProvider(t *testing.T) {
 	plain := slowStubProvider{usage: llm.Usage{OutputTokens: 3}}
@@ -113,9 +147,7 @@ func TestStreamingSkipsNonStreamingProvider(t *testing.T) {
 
 // TestTTFTNeedsMoreThanOneDelta 是这次最容易被忽略的一条。
 //
-// OpenAI 的 chat/completions 在带工具时会直接退回非流式，把整段回复当成一个
-// delta 吐出来。那种情况下「首 token 时间」等于总耗时——一个看着正常、实际全错
-// 的数，比没有这个指标更糟。只有一条增量时一律不报。
+// 只提供完整文本的旧适配器仍可能发送单个 delta，不能把总耗时当成首 token 时间。
 func TestTTFTNeedsMoreThanOneDelta(t *testing.T) {
 	started := time.Now()
 
@@ -143,6 +175,7 @@ func TestTTFTReachesUsageLog(t *testing.T) {
 		events: []llm.ChatEvent{
 			textDelta("一"), textDelta("二"), textDelta("三"),
 			{Type: llm.ChatEventUsage, Usage: &llm.Usage{InputTokens: 4, OutputTokens: 3}},
+			{Type: llm.ChatEventDone},
 		},
 	}
 	provider := &usageAccountingLLMProvider{
@@ -190,21 +223,52 @@ func TestUsageLogOmitsTTFTWhenNotStreaming(t *testing.T) {
 	}
 }
 
-// TestStreamingIsOptIn 默认关闭，不进装饰链。
-//
-// 流式在这个项目里一直是没被走过的代码路径，默认把主回复链路切上去不合适。
-func TestStreamingIsOptIn(t *testing.T) {
-	if boolValue(DefaultBotConfig().LLMStreamingEnabled, true) {
-		t.Fatal("默认配置里流式不该是打开的")
+func TestStreamingDefaultsOnAndPreservesExplicitOff(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setting *bool
+		want    bool
+	}{
+		{"missing", nil, true}, {"on", boolPointer(true), true}, {"off", boolPointer(false), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := BotConfig{LLMStreamingEnabled: tc.setting}.WithDefaults()
+			if boolValue(cfg.LLMStreamingEnabled, false) != tc.want {
+				t.Fatalf("default not applied: %+v", cfg.LLMStreamingEnabled)
+			}
+			runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			run := func(provider LLMProvider) (string, error) {
+				_, streaming := provider.(*streamingLLMProvider)
+				if streaming != tc.want {
+					t.Fatalf("streaming=%v want=%v", streaming, tc.want)
+				}
+				return "", nil
+			}
+			if _, err := runtime.withLLMStreamingRun(context.Background(), run)(slowStubProvider{}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
-	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	base := func(provider LLMProvider) (string, error) {
-		if _, ok := provider.(*streamingLLMProvider); ok {
-			t.Fatal("关闭时不该把流式包进链路")
-		}
-		return "", nil
+}
+
+func TestStreamingPreservesPrivateContinuationState(t *testing.T) {
+	reasoning := "private reasoning"
+	meta := &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "mimo", ReasoningContent: &reasoning, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"opaque"}`)}}
+	stub := &stubStreamer{events: []llm.ChatEvent{{Type: llm.ChatEventReasoning, Reasoning: reasoning}, {Type: llm.ChatEventToolCall, ToolCall: &llm.ToolCall{ID: "call", Name: "lookup"}}, {Type: llm.ChatEventDone, Response: meta}}}
+	response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || response.Text != "" || response.Model != "mimo" || response.ReasoningContent == nil || *response.ReasoningContent != reasoning || len(response.ResponsesOutput) != 1 {
+		t.Fatalf("response=%+v err=%v", response, err)
 	}
-	if _, err := runtime.withLLMStreamingRun(context.Background(), base)(slowStubProvider{}); err != nil {
-		t.Fatal(err)
+	encoded, _ := json.Marshal(response)
+	if strings.Contains(string(encoded), reasoning) || strings.Contains(string(encoded), "opaque") {
+		t.Fatal("continuation leaked into public JSON")
+	}
+}
+
+func TestStreamingRetriesTruncatedVisibleOutput(t *testing.T) {
+	stub := &stubStreamer{events: []llm.ChatEvent{textDelta("partial")}, generateOut: "complete"}
+	response, err := (&streamingLLMProvider{provider: stub}).Generate(context.Background(), llm.GenerateRequest{})
+	if err != nil || response.Text != "complete" || !stub.generated {
+		t.Fatalf("response=%+v err=%v", response, err)
 	}
 }

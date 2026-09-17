@@ -12521,6 +12521,7 @@ func truncateForChat(text string, maxRunes int) string {
 // normalizeReply cleans and truncates a model reply. The optional flag keeps
 // the legacy two-argument API while supporting per-bot Markdown conversion.
 func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
+	reply = llm.VisibleAssistantText(reply)
 	reply = normalizeLegacyLayoutMarkers(reply)
 	if len(markdownPlain) > 0 && markdownPlain[0] {
 		reply = markdownToPlain(reply)

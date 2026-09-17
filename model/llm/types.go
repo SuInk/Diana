@@ -83,13 +83,16 @@ const (
 )
 
 type Message struct {
-	Role       Role          `json:"role"`
-	Content    string        `json:"content"`
-	Parts      []ContentPart `json:"parts,omitempty"`
-	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	ToolName   string        `json:"tool_name,omitempty"`
-	ToolError  bool          `json:"tool_error,omitempty"`
+	AnthropicThinking []json.RawMessage `json:"-"`
+	// ReasoningContent is provider continuation state, never chat text or logs.
+	ReasoningContent *string       `json:"-"`
+	Role             Role          `json:"role"`
+	Content          string        `json:"content"`
+	Parts            []ContentPart `json:"parts,omitempty"`
+	ToolCalls        []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID       string        `json:"tool_call_id,omitempty"`
+	ToolName         string        `json:"tool_name,omitempty"`
+	ToolError        bool          `json:"tool_error,omitempty"`
 	// ResponsesOutput preserves original Responses API output items, including
 	// reasoning and encrypted continuation state required by the next request.
 	ResponsesOutput []json.RawMessage `json:"-"`
@@ -117,9 +120,10 @@ type ToolDefinition struct {
 }
 
 type ToolCall struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	ThoughtSignature []byte         `json:"-"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Arguments        map[string]any `json:"arguments,omitempty"`
 }
 
 type MessagePriority int
@@ -182,11 +186,13 @@ type Usage struct {
 }
 
 type GenerateResponse struct {
-	Provider  Provider   `json:"provider"`
-	Model     string     `json:"model,omitempty"`
-	Text      string     `json:"text"`
-	Usage     Usage      `json:"usage,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	AnthropicThinking []json.RawMessage `json:"-"`
+	ReasoningContent  *string           `json:"-"`
+	Provider          Provider          `json:"provider"`
+	Model             string            `json:"model,omitempty"`
+	Text              string            `json:"text"`
+	Usage             Usage             `json:"usage,omitempty"`
+	ToolCalls         []ToolCall        `json:"tool_calls,omitempty"`
 	// ResponsesOutput is internal continuation state and must not enter logs.
 	ResponsesOutput []json.RawMessage `json:"-"`
 }

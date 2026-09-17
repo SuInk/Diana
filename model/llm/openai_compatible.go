@@ -91,6 +91,10 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
+	response.Text = VisibleAssistantText(response.Text)
+	if strings.TrimSpace(response.Text) == "" && len(response.ToolCalls) == 0 {
+		return nil, fmt.Errorf("llm: provider output is empty (no visible text or tool calls)")
+	}
 	return response, nil
 }
 
@@ -101,98 +105,39 @@ func (c *openAICompatibleClient) generateForAPIFormat(ctx context.Context, req G
 	return c.generateResponse(ctx, req)
 }
 
-// Stream exposes native Chat Completions SSE deltas. Responses and tool-call
-// requests continue through Generate until their event schema is normalized.
+// Stream normalizes native text, reasoning and tool events for both OpenAI protocols.
 func (c *openAICompatibleClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
-	if c.cfg.APIFormatWithDefault() == APIFormatResponses {
-		return c.streamResponses(ctx, req)
-	}
-	if len(req.Tools) > 0 {
-		out := make(chan ChatEvent, 2)
-		go func() {
-			defer close(out)
-			defer recoverChatStreamPanic(ctx, out, "openai-compatible fallback")
-			response, err := c.Generate(ctx, req)
-			if err != nil {
-				out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
-				return
-			}
-			if response.Text != "" {
-				out <- ChatEvent{Type: ChatEventTextDelta, Text: response.Text}
-			}
-			usage := response.Usage
-			out <- ChatEvent{Type: ChatEventUsage, Usage: &usage}
-			out <- ChatEvent{Type: ChatEventDone}
-		}()
-		return out, nil
-	}
-	req = req.withDefaults(c.cfg)
-	body, err := json.Marshal(openAIChatCompletionRequest{Model: req.Model, Messages: openAIChatCompletionMessages(req.Messages, req.Tools), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Stream: true})
+	events, err := c.stream(ctx, req)
 	if err != nil {
 		return nil, err
-	}
-	httpReq, err := c.newOpenAIRequest(ctx, "chat/completions", body)
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	resp, cancel, err := c.doChatCompletionRequest(ctx, httpReq)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		cancel()
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("llm: stream request returned HTTP %d", resp.StatusCode)
 	}
 	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
-		defer recoverChatStreamPanic(ctx, out, "openai-compatible chat completions")
-		defer cancel()
-		defer resp.Body.Close()
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 4096), 1<<20)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || !strings.HasPrefix(line, "data:") {
-				continue
+		defer recoverChatStreamPanic(ctx, out, "openai-compatible visible text")
+		var filter VisibleTextFilter
+		for event := range events {
+			if event.Type == ChatEventTextDelta {
+				event.Text = filter.Push(event.Text)
+				if event.Text == "" {
+					continue
+				}
 			}
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data == "[DONE]" {
-				break
-			}
-			var payload map[string]any
-			if json.Unmarshal([]byte(data), &payload) != nil {
-				continue
-			}
-			if message := streamErrorMessage(payload); message != "" {
-				out <- ChatEvent{Type: ChatEventError, Error: message}
-				return
-			}
-			choices, _ := payload["choices"].([]any)
-			if len(choices) == 0 {
-				continue
-			}
-			choice, _ := choices[0].(map[string]any)
-			delta, _ := choice["delta"].(map[string]any)
-			text, _ := delta["content"].(string)
-			if text != "" {
-				out <- ChatEvent{Type: ChatEventTextDelta, Text: text}
-			}
-			if usage, ok := payload["usage"].(map[string]any); ok {
-				value := usageFromPayload(usage)
-				out <- ChatEvent{Type: ChatEventUsage, Usage: &value}
+			select {
+			case out <- event:
+			case <-ctx.Done():
+				// Keep draining the producer, which may be sending its final events.
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
-			return
-		}
-		out <- ChatEvent{Type: ChatEventDone}
 	}()
 	return out, nil
+}
+
+func (c *openAICompatibleClient) stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+	if c.cfg.APIFormatWithDefault() == APIFormatResponses {
+		return c.streamResponses(ctx, req)
+	}
+	return c.streamChatCompletion(ctx, req)
 }
 
 func (c *openAICompatibleClient) streamResponses(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
@@ -236,67 +181,129 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 	go func() {
 		defer close(out)
 		defer recoverChatStreamPanic(ctx, out, "openai-compatible responses")
-		// 标准 Responses 流会先通过 output_item.added 给出函数名，再发送参数
-		// 墫量和 done。部分兼容网关（例如 Sub2API）在 arguments.done 里省略
-		// name，因此必须按 item id 聚合，不能把缺失字段误当成空名称工具调用。
-		functionNames := map[string]string{}
+
+		defer stream.Close()
+		type pendingCall struct{ id, name, arguments string }
+		pending := map[string]*pendingCall{}
+		order := []string{}
+		var completed *GenerateResponse
+		var outputItems []json.RawMessage
+		textSeen := false
+		ensure := func(key string) *pendingCall {
+			if pending[key] == nil {
+				pending[key] = &pendingCall{}
+				order = append(order, key)
+			}
+			return pending[key]
+		}
+		emit := func(event ChatEvent) bool { return sendChatEvent(ctx, out, event) }
+		fail := func(message string) { emit(ChatEvent{Type: ChatEventError, Error: message}) }
 		for stream.Next() {
 			event := stream.Current()
 			switch event.Type {
 			case "response.output_item.added", "response.output_item.done":
-				call := event.Item.AsFunctionCall()
-				name := strings.TrimSpace(call.Name)
-				if name != "" {
-					if id := strings.TrimSpace(call.ID); id != "" {
-						functionNames[id] = name
+				if event.Type == "response.output_item.done" {
+					if raw := event.Item.RawJSON(); raw != "" {
+						outputItems = append(outputItems, json.RawMessage(raw))
 					}
-					if id := strings.TrimSpace(call.CallID); id != "" {
-						functionNames[id] = name
+				}
+				if event.Item.Type == "function_call" {
+					item := event.Item.AsFunctionCall()
+					call := ensure(item.ID)
+					if item.Name != "" {
+						call.name = item.Name
+					}
+					if item.CallID != "" {
+						call.id = item.CallID
+					}
+					if event.Type == "response.output_item.done" {
+						call.arguments = item.Arguments
 					}
 				}
 			case "response.output_text.delta":
 				if event.Delta != "" {
-					out <- ChatEvent{Type: ChatEventTextDelta, Text: event.Delta}
-				}
-			case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
-				if event.Delta != "" {
-					out <- ChatEvent{Type: ChatEventReasoning, Reasoning: event.Delta}
-				}
-			case "response.function_call_arguments.done":
-				arguments := map[string]any{}
-				if strings.TrimSpace(event.Arguments) != "" {
-					if err := json.Unmarshal([]byte(event.Arguments), &arguments); err != nil {
-						out <- ChatEvent{Type: ChatEventError, Error: fmt.Sprintf("llm: invalid tool arguments: %v", err)}
+					textSeen = true
+					if !emit(ChatEvent{Type: ChatEventTextDelta, Text: event.Delta}) {
 						return
 					}
 				}
-				name := strings.TrimSpace(event.Name)
-				if name == "" {
-					name = functionNames[strings.TrimSpace(event.ItemID)]
-				}
-				if name == "" {
-					out <- ChatEvent{Type: ChatEventError, Error: "llm: malformed responses stream: function call name is missing"}
+			case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+				if !emit(ChatEvent{Type: ChatEventReasoning, Reasoning: event.Delta}) {
 					return
 				}
-				call := ToolCall{ID: event.ItemID, Name: nativeToolName(name, req.Tools), Arguments: arguments}
-				out <- ChatEvent{Type: ChatEventToolCall, ToolCall: &call}
-			case "error", "response.failed", "response.incomplete":
-				message := event.Message
-				if message == "" {
-					message = event.Code
+			case "response.function_call_arguments.delta":
+				call := ensure(event.ItemID)
+				call.arguments += event.Delta
+			case "response.function_call_arguments.done":
+				call := ensure(event.ItemID)
+				call.arguments = event.Arguments
+				if event.Name != "" {
+					call.name = event.Name
 				}
-				out <- ChatEvent{Type: ChatEventError, Error: message}
+			case "error", "response.failed", "response.incomplete":
+				fail(firstNonEmptyString(event.Message, event.Response.Error.Message, event.Code, "llm: "+event.Type))
 				return
 			case "response.completed":
+				for _, item := range event.Response.Output {
+					if item.Type != "function_call" {
+						continue
+					}
+					value := item.AsFunctionCall()
+					call := ensure(value.ID)
+					call.id = value.CallID
+					call.name = value.Name
+					call.arguments = value.Arguments
+				}
+				if !textSeen {
+					if text := event.Response.OutputText(); text != "" {
+						if !emit(ChatEvent{Type: ChatEventTextDelta, Text: text}) {
+							return
+						}
+					}
+				}
 				usage := Usage{InputTokens: event.Response.Usage.InputTokens, OutputTokens: event.Response.Usage.OutputTokens, TotalTokens: event.Response.Usage.TotalTokens, CachedInputTokens: event.Response.Usage.InputTokensDetails.CachedTokens}
-				out <- ChatEvent{Type: ChatEventUsage, Usage: &usage}
+				completed = &GenerateResponse{Provider: ProviderOpenAICompatible, Model: firstNonEmptyString(string(event.Response.Model), req.Model), Usage: usage, ResponsesOutput: openAIResponsesOutputItems(event.Response.Output)}
 			}
 		}
 		if err := stream.Err(); err != nil {
-			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+			fail(err.Error())
 			return
 		}
-		out <- ChatEvent{Type: ChatEventDone}
+		if completed == nil {
+			fail("llm: responses stream ended before completion")
+			return
+		}
+		// Validate every call before publishing any, and use call_id for the next
+		// function_call_output, not the output item's fc_... identity.
+		calls := make([]ToolCall, 0, len(order))
+		for _, key := range order {
+			raw := pending[key]
+			args := map[string]any{}
+			if strings.TrimSpace(raw.name) == "" {
+				fail("llm: malformed responses stream: function call name is missing")
+				return
+			}
+			if strings.TrimSpace(raw.arguments) != "" {
+				if err := json.Unmarshal([]byte(raw.arguments), &args); err != nil || args == nil {
+					fail("llm: invalid tool arguments")
+					return
+				}
+			}
+			calls = append(calls, ToolCall{ID: firstNonEmptyString(raw.id, key), Name: nativeToolName(raw.name, req.Tools), Arguments: args})
+		}
+		if len(completed.ResponsesOutput) == 0 {
+			completed.ResponsesOutput = outputItems
+		}
+		for _, call := range calls {
+			if !emit(ChatEvent{Type: ChatEventToolCall, ToolCall: &call}) {
+				return
+			}
+		}
+		if !emit(ChatEvent{Type: ChatEventUsage, Usage: &completed.Usage}) {
+			return
+		}
+		emit(ChatEvent{Type: ChatEventDone, Response: completed})
+
 	}()
 	return out, nil
 }
@@ -661,6 +668,7 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 }
 
 type openAIChatCompletionRequest struct {
+	StreamOptions     map[string]bool               `json:"stream_options,omitempty"`
 	Model             string                        `json:"model"`
 	Messages          []openAIChatCompletionMessage `json:"messages"`
 	Temperature       *float64                      `json:"temperature,omitempty"`
@@ -685,10 +693,11 @@ type openAIChatToolFunction struct {
 }
 
 type openAIChatCompletionMessage struct {
-	Role       string               `json:"role"`
-	Content    any                  `json:"content,omitempty"`
-	ToolCalls  []openAIChatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string               `json:"tool_call_id,omitempty"`
+	Role             string               `json:"role"`
+	Content          any                  `json:"content,omitempty"`
+	ToolCalls        []openAIChatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string               `json:"tool_call_id,omitempty"`
+	ReasoningContent *string              `json:"reasoning_content,omitempty"`
 }
 
 type openAIChatToolCall struct {
@@ -727,7 +736,7 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 		Temperature:     req.Temperature,
 		ReasoningEffort: req.ReasoningEffort,
 		MaxTokens:       req.MaxOutputTokens,
-		Stream:          len(req.Tools) == 0,
+		Stream:          false,
 		Tools:           openAIChatTools(req.Tools),
 		ToolChoice:      openAIChatToolChoice(req),
 	}
@@ -766,7 +775,7 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 		capture.body = string(errBody)
 		return nil, openAICompatibleError(fmt.Errorf("openai-compatible chat completions failed"), capture)
 	}
-	if params.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		result, err := decodeOpenAITextEventStreamWithIdleTimeout(ctx, resp.Body, c.cfg.Timeout)
 		if err != nil {
 			return nil, err
@@ -788,7 +797,10 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 	}
 	result := chatCompletionResultFromPayload(payload)
 	text := strings.TrimSpace(result.Text())
-	toolCalls := openAIChatToolCallsFromPayload(payload, req.Tools)
+	toolCalls, err := openAIChatToolCallsFromPayload(payload, req.Tools)
+	if err != nil {
+		return nil, err
+	}
 	if text == "" && len(toolCalls) == 0 {
 		return nil, openAIChatCompletionTextError(openAIChatCompletionDiagnostics{
 			FinishReasons: result.FinishReasons,
@@ -800,11 +812,12 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 		})
 	}
 	return &GenerateResponse{
-		Provider:  ProviderOpenAICompatible,
-		Model:     firstNonEmptyString(stringField(payload, "model"), req.Model),
-		Text:      text,
-		ToolCalls: toolCalls,
-		Usage:     usageFromPayload(payload["usage"]),
+		Provider:         ProviderOpenAICompatible,
+		Model:            firstNonEmptyString(stringField(payload, "model"), req.Model),
+		Text:             text,
+		ToolCalls:        toolCalls,
+		ReasoningContent: chatReasoningContent(payload),
+		Usage:            usageFromPayload(payload["usage"]),
 	}, nil
 }
 
@@ -857,9 +870,10 @@ func openAIChatCompletionMessages(messages []Message, definitions []ToolDefiniti
 	messages = inlineTrailingSystemMessages(messages)
 	for _, message := range messages {
 		converted := openAIChatCompletionMessage{
-			Role:       openAIChatCompletionRole(message.Role),
-			Content:    openAIChatCompletionContent(message),
-			ToolCallID: message.ToolCallID,
+			Role:             openAIChatCompletionRole(message.Role),
+			Content:          openAIChatCompletionContent(message),
+			ToolCallID:       message.ToolCallID,
+			ReasoningContent: message.ReasoningContent,
 		}
 		for _, call := range message.ToolCalls {
 			arguments, _ := json.Marshal(call.Arguments)
@@ -2084,7 +2098,7 @@ func openAIChatTools(definitions []ToolDefinition) []openAIChatTool {
 	return tools
 }
 
-func openAIChatToolCallsFromPayload(payload map[string]any, definitions []ToolDefinition) []ToolCall {
+func openAIChatToolCallsFromPayload(payload map[string]any, definitions []ToolDefinition) ([]ToolCall, error) {
 	choices, _ := payload["choices"].([]any)
 	var calls []ToolCall
 	for _, choice := range choices {
@@ -2099,14 +2113,22 @@ func openAIChatToolCallsFromPayload(payload map[string]any, definitions []ToolDe
 				continue
 			}
 			arguments := map[string]any{}
-			if encoded, _ := function["arguments"].(string); encoded != "" {
-				_ = json.Unmarshal([]byte(encoded), &arguments)
+			if value := function["arguments"]; value != nil {
+				encoded, ok := value.(string)
+				if !ok {
+					return nil, fmt.Errorf("llm: tool arguments must be a JSON string")
+				}
+				if strings.TrimSpace(encoded) != "" {
+					if err := json.Unmarshal([]byte(encoded), &arguments); err != nil || arguments == nil {
+						return nil, fmt.Errorf("llm: invalid tool arguments for %s", name)
+					}
+				}
 			}
 			id, _ := callMap["id"].(string)
 			calls = append(calls, ToolCall{ID: id, Name: nativeToolName(name, definitions), Arguments: arguments})
 		}
 	}
-	return calls
+	return calls, nil
 }
 
 func normalizedInputAudioFormat(value string) string {
