@@ -3772,6 +3772,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					extraTools = append(extraTools, newDianaImageSourceTool(r, event, plugin, settings))
 				}
 			}
+			// AI 图片检测默认只在本地解析元数据，图片不出网；配了 SynthID 检测服务
+			// 才会上传。插件停用时模型看不到这个工具。
+			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(aiImageDetectPluginID, event); enabled {
+				if plugin, ok := pluginValue.(*AIImageDetectPlugin); ok {
+					extraTools = append(extraTools, newDianaAIImageDetectTool(r, event, plugin, settings))
+				}
+			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
 					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
