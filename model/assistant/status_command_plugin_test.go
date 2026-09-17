@@ -303,3 +303,43 @@ func TestRuntimeStatusCommandSilentWhileDisabled(t *testing.T) {
 			commandSent, commandCalls, controlSent, controlCalls)
 	}
 }
+
+// 发送前审核（账号安全、空转、私聊收尾）默认会给每条要发出去的回复过一次模型。
+// #diana 回的是本地拼出来的固定卡片，不该为它付这一次调用。
+func TestRuntimeStatusCommandSkipsReplyAuditModelCall(t *testing.T) {
+	manager := NewPluginManager(NewStatusCommandPlugin())
+	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
+		t.Fatal(err)
+	}
+	channel := &recordingChannel{}
+	var llmCalls atomic.Int32
+	cfg := BotConfig{ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42"}
+	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
+	botRuntime := NewRuntime(cfg, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+		llmCalls.Add(1)
+		return &capturingLLMProvider{reply: `{"allow":true}`}, nil
+	})
+
+	event := MessageEvent{
+		Kind:        EventKindGroup,
+		SelfID:      "42",
+		GroupID:     "123456",
+		UserID:      "10001",
+		MessageID:   "status-audit-1",
+		SenderLevel: 40, SenderLevelLabel: "LV40",
+		RawMessage: statusCommandTrigger,
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": statusCommandTrigger}}},
+	}
+	if err := botRuntime.HandleEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		return len(channel.sentSnapshot()) > 0
+	})
+	if got := llmCalls.Load(); got != 0 {
+		t.Fatalf("#diana 不该触发任何模型调用，llm calls = %d", got)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || !strings.Contains(sent[0].Text, "Diana 状态") {
+		t.Fatalf("回复 = %#v", sent)
+	}
+}
