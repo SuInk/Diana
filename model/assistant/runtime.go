@@ -1845,7 +1845,14 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		event, text = r.mergeBacklogMessages(event, text, held)
 		restriction, blocked = r.activeReplySuppression(event, now)
 	}
-	history := r.contextHistory(event)
+	statusCommand := r.statusCommandActive(event, text)
+	var history []MessageEvent
+	if statusCommand {
+		// 状态卡片用不到跨群上下文，别为它跑一次跨群语义检索。
+		history, _ = r.sessionContextHistory(event)
+	} else {
+		history = r.contextHistory(event)
+	}
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
 	ctx = r.withIdentityPrivacyContext(ctx, event, history)
@@ -1891,7 +1898,9 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	}
 	// Long-term extraction is durable and asynchronous. It never blocks reply
 	// routing and resolver/video-only messages do not enter the LLM memory gate.
-	r.enqueueEventMemory(event, memoryEventText(event))
+	if !statusCommand {
+		r.enqueueEventMemory(event, memoryEventText(event))
+	}
 	handled := r.shouldHandle(event, text)
 	successOutcome := "replied"
 	if handled {
@@ -3581,6 +3590,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply, handled := r.handleOwnerCommand(event, cleanText); handled {
 		// owner 指令优先级最高，避免“切模型/禁群”等管理命令被普通 LLM 回复吞掉。
+		if err := r.send(ctx, event, reply); err != nil {
+			return "", err
+		}
+		return reply, nil
+	}
+	if reply, handled := r.replyStatusCommand(ctx, event, cleanText); handled {
+		// #diana 是本地状态卡片，不经过话题解析、插件上下文和发送前审核这些要花 token 的环节。
 		if err := r.send(ctx, event, reply); err != nil {
 			return "", err
 		}

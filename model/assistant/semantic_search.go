@@ -88,6 +88,10 @@ func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
 	if !r.semanticSearchActive(r.effectiveConfigForEvent(event)) || r.messageVectorStore() == nil {
 		return
 	}
+	// #diana 口令没有可检索的内容，不值得为它算一次向量。
+	if r.statusCommandActive(event, PlainText(event.Segments)) {
+		return
+	}
 	// 纯图片消息的正文是空的，只有图片描述能代表它。描述是后台异步生成的：
 	// 第一次入库时通常还没有，等描述落库后 refreshMessageImageSearchText 会把
 	// 这条消息重新排一次索引，那时才真正进向量库。

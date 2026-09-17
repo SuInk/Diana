@@ -132,3 +132,32 @@ func formatStatusUptime(d time.Duration) string {
 		return fmt.Sprintf("%d分钟", minutes)
 	}
 }
+
+// statusCommandActive 判断这条消息是不是已开启的 #diana 口令。
+//
+// 回复链路上有不少环节会顺手花模型 token：长期记忆入队、跨群语义检索、语义索引、
+// 话题承接解析、发送前审核。这些对一张本地拼出来的固定卡片都没有意义，入口处用它
+// 把这些环节短路掉。插件关着时 #diana 只是一条普通消息，照常走原来的路径。
+func (r *Runtime) statusCommandActive(event MessageEvent, text string) bool {
+	if r == nil || r.plugins == nil || !isStatusCommand(text) {
+		return false
+	}
+	return r.plugins.EnabledWithOverrides(statusCommandPluginID, r.pluginOverridesForEvent(event))
+}
+
+// replyStatusCommand 在进入任何模型环节之前直接生成状态卡片。
+func (r *Runtime) replyStatusCommand(ctx context.Context, event MessageEvent, text string) (string, bool) {
+	if !r.statusCommandActive(event, text) {
+		return "", false
+	}
+	resp, err := r.plugins.RunOneWithGroupOverrides(ctx, statusCommandPluginID, PluginRequest{
+		Event:     event,
+		Text:      text,
+		Channel:   r.channel,
+		BuildInfo: r.currentBuildInfo(),
+	}, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
+	if err != nil || resp == nil || !resp.Handled || strings.TrimSpace(resp.Reply) == "" {
+		return "", false
+	}
+	return resp.Reply, true
+}
