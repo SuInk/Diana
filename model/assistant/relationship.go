@@ -127,8 +127,10 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaVersionToolName:     true,
 		dianaThreadStateToolName: true,
 		dianaStickerToolName:     true,
-		dianaPokeToolName:        true,
-		"diana.bot_config":       true,
+		// 查图是不是 AI 生成的只读图片元数据，不碰本地文件和命令；群里人人都会问。
+		dianaAIImageDetectToolName: true,
+		dianaPokeToolName:          true,
+		"diana.bot_config":         true,
 		// 屏蔽名单和回复门槛一样按群管理：工具里自己核验主人或实时核验的群管理员，
 		// 名单外的人调用只会被拒绝。不收录的话群主想屏蔽人就得去找机器人主人。
 		replyBlockToolName:    true,
