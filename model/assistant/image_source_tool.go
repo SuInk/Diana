@@ -144,21 +144,27 @@ func imageSourceIndex(input map[string]any) int {
 }
 
 // resolveImage 找出要反查的那张图并解码成字节。
+func (t *dianaImageSourceTool) resolveImage(ctx context.Context, messageID string, index int) ([]byte, string, error) {
+	return resolveToolChatImage(ctx, t.runtime, t.event, messageID, index, t.imageFromSegments)
+}
+
+// resolveToolChatImage 是「对聊天里某张图做点什么」这类工具共用的取图逻辑。
 //
 // 顺序是：指定的消息 → 当前消息自己带的图 → 引用/语义来源。当前消息带图时
-// 优先用它，那通常就是刚发出来、正在问的这张。
-func (t *dianaImageSourceTool) resolveImage(ctx context.Context, messageID string, index int) ([]byte, string, error) {
+// 优先用它，那通常就是刚发出来、正在问的这张。load 决定怎么把消息段变成字节：
+// 反查可以用压缩过的图，查元数据就必须拿原始文件。
+func resolveToolChatImage(ctx context.Context, runtime *Runtime, event MessageEvent, messageID string, index int, load func(context.Context, []MessageSegment, int) ([]byte, error)) ([]byte, string, error) {
 	if messageID == "" {
-		if image, err := t.imageFromSegments(ctx, t.event.Segments, index); err == nil {
-			return image, strings.TrimSpace(t.event.MessageID), nil
+		if image, err := load(ctx, event.Segments, index); err == nil {
+			return image, strings.TrimSpace(event.MessageID), nil
 		}
-		messageID = imageSourceFallbackMessageID(t.event)
+		messageID = imageSourceFallbackMessageID(event)
 		if messageID == "" {
 			return nil, "", fmt.Errorf("这条消息里没有图片；要查更早的图，请先用 %s 找到那条消息的 message_id 再传进来", dianaChatHistoryToolName)
 		}
 	}
 
-	source, found, persistState := newDianaHistoryImagesTool(t.runtime, t.event).findSourceEvent(ctx, messageID)
+	source, found, persistState := newDianaHistoryImagesTool(runtime, event).findSourceEvent(ctx, messageID)
 	if !found {
 		return nil, "", fmt.Errorf("当前会话里找不到消息 %s", messageID)
 	}
@@ -172,12 +178,12 @@ func (t *dianaImageSourceTool) resolveImage(ctx context.Context, messageID strin
 		return nil, "", fmt.Errorf("消息 %s 里只有 %d 张图，没有第 %d 张", messageID, len(refs), index)
 	}
 	ref := refs[index-1]
-	segment := t.runtime.prepareHistoricalImageSegment(ctx, source, ref)
+	segment := runtime.prepareHistoricalImageSegment(ctx, source, ref)
 	setHistoricalStillImageSegment(&source, ref, segment)
 	if persistState && historicalImageStateChanged(original, source) {
-		t.runtime.updateHistoricalImageState(source)
+		runtime.updateHistoricalImageState(source)
 	}
-	image, err := t.imageFromSegments(ctx, []MessageSegment{segment}, 1)
+	image, err := load(ctx, []MessageSegment{segment}, 1)
 	if err != nil {
 		return nil, "", fmt.Errorf("消息 %s 的原图已失效或读取失败", messageID)
 	}
