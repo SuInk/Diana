@@ -88,10 +88,11 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	}
 
 	return &GenerateResponse{
-		Provider:  ProviderAnthropic,
-		Model:     string(resp.Model),
-		Text:      text,
-		ToolCalls: toolCalls,
+		Provider:          ProviderAnthropic,
+		Model:             string(resp.Model),
+		Text:              text,
+		ToolCalls:         toolCalls,
+		AnthropicThinking: anthropicThinkingBlocks(resp.Content),
 		Usage: Usage{
 			InputTokens:       resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
 			OutputTokens:      resp.Usage.OutputTokens,
@@ -102,67 +103,108 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 }
 
 func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
-	req = req.withDefaults(c.cfg)
+	req = applyContextBudget(req.withDefaults(c.cfg), c.cfg)
+	if messagesHaveInputAudio(req.Messages) {
+		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
+	}
+	if err := validateGenerateRequest(req); err != nil {
+		return nil, err
+	}
 	if req.MaxOutputTokens == 0 {
 		req.MaxOutputTokens = defaultAnthropicMaxTokens
 	}
 	system, messages := splitSystemPrompt(req.Messages)
-	params := anthropic.MessageNewParams{Model: anthropic.Model(req.Model), MaxTokens: req.MaxOutputTokens, Messages: anthropicMessages(messages, req.Tools), Tools: anthropicTools(req.Tools)}
+	params := anthropic.MessageNewParams{Model: anthropic.Model(req.Model), MaxTokens: req.MaxOutputTokens, Messages: anthropicMessages(messages, req.Tools), Tools: anthropicTools(req.Tools), ToolChoice: anthropicToolChoice(req)}
 	if system != "" {
 		params.System = []anthropic.TextBlockParam{{Text: system, CacheControl: anthropic.NewCacheControlEphemeralParam()}}
 	}
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
 	}
-	params.ToolChoice = anthropicToolChoice(req)
 	stream := c.client.Messages.NewStreaming(ctx, params)
-	out := make(chan ChatEvent, 4)
+	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
 		defer recoverChatStreamPanic(ctx, out, "anthropic")
-		var usage Usage
-		var activeTools = map[int64]*ToolCall{}
-		var toolArguments = map[int64]string{}
+		defer stream.Close()
+		var message anthropic.Message
+		complete := false
+		emit := func(e ChatEvent) bool { return sendChatEvent(ctx, out, e) }
+		fail := func(err error) { emit(ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCause: err}) }
 		for stream.Next() {
 			event := stream.Current()
+			if err := message.Accumulate(event); err != nil {
+				fail(err)
+				return
+			}
 			switch event.Type {
 			case "content_block_start":
-				if event.ContentBlock.Type == "tool_use" {
-					call := ToolCall{ID: event.ContentBlock.ID, Name: nativeToolName(event.ContentBlock.Name, req.Tools), Arguments: map[string]any{}}
-					activeTools[event.Index] = &call
+				if event.ContentBlock.Type == "text" && event.ContentBlock.Text != "" {
+					if !emit(ChatEvent{Type: ChatEventTextDelta, Text: event.ContentBlock.Text}) {
+						return
+					}
 				}
 			case "content_block_delta":
 				if event.Delta.Text != "" {
-					out <- ChatEvent{Type: ChatEventTextDelta, Text: event.Delta.Text}
+					if !emit(ChatEvent{Type: ChatEventTextDelta, Text: event.Delta.Text}) {
+						return
+					}
 				}
 				if event.Delta.Thinking != "" {
-					out <- ChatEvent{Type: ChatEventReasoning, Reasoning: event.Delta.Thinking}
-				}
-				if event.Delta.PartialJSON != "" {
-					toolArguments[event.Index] += event.Delta.PartialJSON
-				}
-			case "content_block_stop":
-				if call := activeTools[event.Index]; call != nil {
-					if raw := strings.TrimSpace(toolArguments[event.Index]); raw != "" {
-						if err := json.Unmarshal([]byte(raw), &call.Arguments); err != nil {
-							out <- ChatEvent{Type: ChatEventError, Error: fmt.Sprintf("llm: invalid tool arguments: %v", err)}
-							return
-						}
+					if !emit(ChatEvent{Type: ChatEventReasoning, Reasoning: event.Delta.Thinking}) {
+						return
 					}
-					out <- ChatEvent{Type: ChatEventToolCall, ToolCall: call}
 				}
-			case "message_delta":
-				usage.OutputTokens = event.Usage.OutputTokens
+			case "message_stop":
+				complete = true
 			}
 		}
 		if err := stream.Err(); err != nil {
-			out <- ChatEvent{Type: ChatEventError, Error: err.Error()}
+			fail(err)
 			return
 		}
-		out <- ChatEvent{Type: ChatEventUsage, Usage: &usage}
-		out <- ChatEvent{Type: ChatEventDone}
+		if !complete {
+			fail(fmt.Errorf("llm: anthropic stream ended before completion"))
+			return
+		}
+		if message.StopReason == "max_tokens" {
+			fail(fmt.Errorf("llm: anthropic stream reached max_tokens"))
+			return
+		}
+		for _, block := range message.Content {
+			if block.Type != "tool_use" {
+				continue
+			}
+			var args map[string]any
+			if err := json.Unmarshal(block.Input, &args); err != nil || args == nil {
+				fail(fmt.Errorf("llm: invalid anthropic tool arguments"))
+				return
+			}
+		}
+		for _, call := range anthropicToolCalls(message.Content, req.Tools) {
+			if !emit(ChatEvent{Type: ChatEventToolCall, ToolCall: &call}) {
+				return
+			}
+		}
+		usage := Usage{InputTokens: message.Usage.InputTokens + message.Usage.CacheReadInputTokens + message.Usage.CacheCreationInputTokens, OutputTokens: message.Usage.OutputTokens, CachedInputTokens: message.Usage.CacheReadInputTokens}
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		if !emit(ChatEvent{Type: ChatEventUsage, Usage: &usage}) {
+			return
+		}
+		emit(ChatEvent{Type: ChatEventDone, Response: &GenerateResponse{Provider: ProviderAnthropic, Model: string(message.Model), AnthropicThinking: anthropicThinkingBlocks(message.Content)}})
 	}()
 	return out, nil
+}
+
+func anthropicThinkingBlocks(content []anthropic.ContentBlockUnion) []json.RawMessage {
+	var out []json.RawMessage
+	for _, block := range content {
+		if block.Type == "thinking" || block.Type == "redacted_thinking" {
+			raw, _ := json.Marshal(block.ToParam())
+			out = append(out, raw)
+		}
+	}
+	return out
 }
 
 func messagesHaveInputAudio(messages []Message) bool {
@@ -192,6 +234,16 @@ func anthropicMessages(messages []Message, definitions []ToolDefinition) []anthr
 			for _, call := range msg.ToolCalls {
 				blocks = append(blocks, anthropic.NewToolUseBlock(call.ID, call.Arguments, wireToolName(call.Name)))
 			}
+		}
+		if msg.Role == RoleAssistant && len(msg.AnthropicThinking) > 0 {
+			thinking := make([]anthropic.ContentBlockParamUnion, 0, len(msg.AnthropicThinking))
+			for _, raw := range msg.AnthropicThinking {
+				var block anthropic.ContentBlockParamUnion
+				if json.Unmarshal(raw, &block) == nil {
+					thinking = append(thinking, block)
+				}
+			}
+			blocks = append(thinking, blocks...)
 		}
 		if msg.Role == RoleTool {
 			blocks = []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)}

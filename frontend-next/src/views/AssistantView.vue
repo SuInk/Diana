@@ -539,6 +539,29 @@
             </div>
           </section>
 
+          <!-- 模型调用 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>模型调用</h2>
+              <span class="badge" :class="form.llm_streaming_enabled ? 'accent' : ''">
+                {{ form.llm_streaming_enabled ? "流式" : "非流式" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_streaming_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">流式调用模型（默认开启）</span>
+                </label>
+                <span class="hint">
+                  默认使用流式接收正文、思考和工具调用；思考不会作为聊天正文发送，工具参数完整后才会执行。
+                  可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
+                </span>
+              </div>
+            </div>
+          </section>
+
         </div>
 
         <div v-show="editorTab === 'behavior'" class="stack">
@@ -1220,30 +1243,6 @@
         </div>
 
         <div v-show="editorTab === 'advanced'" class="stack">
-          <!-- 诊断 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>调用诊断</h2>
-              <span class="badge" :class="form.llm_streaming_enabled ? 'accent' : ''">
-                {{ form.llm_streaming_enabled ? "流式" : "非流式" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_streaming_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">流式调用模型（用于统计首 token 时间）</span>
-                </label>
-                <span class="hint">
-                  回复仍然是攒齐了再发，聊天窗口里看不出区别 —— 打开只是为了在「记录」页看到首 token 时延（TTFT）。
-                  流式在本项目里一直没被走过，任何一步失败都会自动退回非流式，不影响回复发得出去。
-                  OpenAI 用 chat/completions 格式且带工具时底层会退化成非流式，那种情况下不会给出 TTFT，而不是给一个等于总耗时的假数。
-                </span>
-              </div>
-            </div>
-          </section>
-
           <!-- Agent -->
           <section class="card">
             <div class="card-header">
@@ -2919,7 +2918,7 @@ function setForm(config: BotProfileConfig): void {
     response_mode: "custom",
     action_description_enabled: config.action_description_enabled ?? false,
     daypart_tone_enabled: config.daypart_tone_enabled ?? false,
-    llm_streaming_enabled: config.llm_streaming_enabled ?? false,
+    llm_streaming_enabled: config.llm_streaming_enabled ?? true,
     self_reference: config.self_reference ?? "",
     sentence_enders: config.sentence_enders ?? "",
     group_trigger_mode: config.group_trigger_mode ?? "smart",

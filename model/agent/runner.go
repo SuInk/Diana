@@ -247,6 +247,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		action, ok := parseAction(lastText)
 		nativeToolCall := len(resp.ToolCalls) > 0
 		var nativeCall llm.ToolCall
+		nativeCallIndex := 0
 		var parallelDropNotice string
 		if nativeToolCall {
 			nativeProtocol = true
@@ -260,6 +261,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 			}
 			nativeCall = resp.ToolCalls[selected]
+			nativeCallIndex = selected
 			if nativeCall.Name == finalizeToolName {
 				// 结构化收尾不是一次工具执行：正文留在信封之外，只解码元数据。
 				action = finalizeAction(nativeCall, lastText)
@@ -570,15 +572,24 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		if nativeToolCall {
 			assistantMessage := llm.Message{
-				Role:            llm.RoleAssistant,
-				Content:         lastText,
-				ToolCalls:       []llm.ToolCall{nativeCall},
-				ResponsesOutput: resp.ResponsesOutput,
+				Role:              llm.RoleAssistant,
+				Content:           lastText,
+				ToolCalls:         resp.ToolCalls,
+				ResponsesOutput:   resp.ResponsesOutput,
+				AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent,
 			}
-			messages = append(messages,
-				assistantMessage,
-				llm.Message{Role: llm.RoleTool, Content: observationText, ToolCallID: nativeCall.ID, ToolName: nativeCall.Name, Priority: observation.Priority},
-			)
+			messages = append(messages, assistantMessage)
+			// Signed thinking and Responses continuation refer to the original
+			// tool batch. Keep every call paired with an honest result, including
+			// the calls skipped by our one-tool-per-step execution policy.
+			for index, call := range resp.ToolCalls {
+				content := observationText
+				skipped := index != nativeCallIndex
+				if skipped {
+					content = "本次调用没有执行：当前规划步只执行了 " + nativeCall.Name + "。如仍需要，请在下一步重新调用。"
+				}
+				messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: skipped, Priority: observation.Priority})
+			}
 			if len(observation.Parts) > 0 {
 				messages = append(messages, observation)
 			}

@@ -13,12 +13,9 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 流式只为一件事：拿到真实的 TTFT（首 token 时间）。
-//
-// 回复本身仍然是攒齐了再发。聊天平台这边没有「边生成边改一条消息」的东西，而且
-// 发送前审核审的是完整回复、splitChatReply 也要看完整文本——把 token 直接往群里
-// 冒会把这两样一起拆掉。所以这里流式消费、原地攒成一个完整的 GenerateResponse
-// 交出去，对上面四层装饰器（身份脱敏、预算封顶、调试追踪、缓存探针）完全透明。
+// Native streams share text, reasoning, tool, usage and completion events.
+// Accumulate a complete response before the Agent executes tools or the send
+// audit approves chat text. Only visible text deltas reach reply previews.
 //
 // 位置必须是最内层，紧挨真实客户端：身份脱敏要对完整文本做别名还原
 // （restoreText），别名会跨 chunk 边界，在流式中途还原一定会切坏。
@@ -91,10 +88,8 @@ func (c *ttftCollector) observeDelta(at time.Time) {
 
 // ttft 返回相对 started 的首 token 时延；没有可信结论时返回 0。
 //
-// 只有一条文本增量时一律不报：OpenAI 的 chat/completions 在带工具时会直接退回
-// 非流式，把整段回复当成一个 delta 吐出来（见 openai_compatible.go 的 Stream）。
-// 那种情况下「首 token 时间」等于总耗时，是个看起来正常、实际全错的数——比没有
-// 这个指标更糟。
+// 只有一条文本增量时不报：部分不支持原生流式的适配器只会发送完整文本，
+// 无法据此区分首 token 时间与总耗时。
 func (c *ttftCollector) ttft(started time.Time) time.Duration {
 	if c == nil {
 		return 0
@@ -122,7 +117,7 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 		return nil, err
 	}
 	if err != nil || events == nil {
-		// 起流失败就走老路。流式是为了一个诊断指标，不值得让它决定回复发不发得出去。
+		// Providers without a working streaming endpoint can still use Generate.
 		return p.provider.Generate(ctx, req)
 	}
 	response, err := accumulateChatEvents(ctx, events)
@@ -172,13 +167,17 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 	collector := ttftCollectorFromContext(ctx)
 	observer := textDeltaObserverFromContext(ctx)
 	var text strings.Builder
+	var visible llm.VisibleTextFilter
 	var toolCalls []llm.ToolCall
 	var usage llm.Usage
+	var metadata llm.GenerateResponse
+	completed := false
 	streamErr := ""
 	var streamCause error
 	for event := range events {
 		switch event.Type {
 		case llm.ChatEventTextDelta:
+			event.Text = visible.Push(event.Text)
 			if event.Text == "" {
 				continue
 			}
@@ -188,8 +187,12 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 				observer.ObserveTextDelta(ctx, text.String())
 			}
 		case llm.ChatEventReasoning:
-			// GenerateResponse 没有放推理内容的地方，非流式那条路同样丢掉它。
-			// 这里跟着丢，保证两条路的返回值一模一样。
+			// Reasoning never enters visible text. Private replay state arrives on done.
+		case llm.ChatEventDone:
+			completed = true
+			if event.Response != nil {
+				metadata = *event.Response
+			}
 		case llm.ChatEventToolCall:
 			if event.ToolCall != nil {
 				toolCalls = append(toolCalls, *event.ToolCall)
@@ -203,10 +206,23 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 			streamCause = event.ErrorCause
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if streamErr == "" && !completed {
+		streamErr = "stream ended before completion"
+	}
 	if streamErr != "" {
 		return nil, &streamingFailedError{reason: streamErr, cause: streamCause}
 	}
+	// A completed reasoning-only stream is not a usable assistant response.
+	// Report it as a failure so Generate can retry through the normal provider path.
+	if strings.TrimSpace(text.String()) == "" && len(toolCalls) == 0 {
+		return nil, &streamingFailedError{reason: "output is empty (no text or tool calls)"}
+	}
 	return &llm.GenerateResponse{
+		Provider: metadata.Provider, Model: metadata.Model,
+		AnthropicThinking: metadata.AnthropicThinking, ReasoningContent: metadata.ReasoningContent, ResponsesOutput: metadata.ResponsesOutput,
 		Text:      text.String(),
 		ToolCalls: toolCalls,
 		Usage:     usage,
@@ -229,7 +245,7 @@ func (e *streamingFailedError) Error() string {
 
 // withLLMStreamingRun 把流式包在最内层。关掉时原样返回，不进链。
 func (r *Runtime) withLLMStreamingRun(_ context.Context, run llmProviderRunFunc) llmProviderRunFunc {
-	if run == nil || !boolValue(r.Config().LLMStreamingEnabled, false) {
+	if run == nil || !boolValue(r.Config().LLMStreamingEnabled, true) {
 		return run
 	}
 	return func(provider LLMProvider) (string, error) {

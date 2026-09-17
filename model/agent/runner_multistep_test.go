@@ -75,4 +75,13 @@ func TestParallelToolCallsDropIsReportedToModel(t *testing.T) {
 	if !notified {
 		t.Fatal("被丢弃的并行调用没有告知模型")
 	}
+	results := map[string]llm.Message{}
+	for _, msg := range client.requests[1].Messages {
+		if msg.Role == llm.RoleTool {
+			results[msg.ToolCallID] = msg
+		}
+	}
+	if len(results) != 3 || results["call-1"].ToolError || !results["call-2"].ToolError || !results["call-3"].ToolError {
+		t.Fatalf("tool continuation must close every original call: %+v", results)
+	}
 }
