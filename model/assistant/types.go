@@ -551,11 +551,9 @@ type BotConfig struct {
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
 	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
-	// LLMStreamingEnabled 让模型调用走流式，用来量真实的 TTFT（首 token 时间）。
-	// 回复仍然是攒齐了再发，聊天窗口里看不出区别。
-	//
-	// 默认关闭：流式在这个项目里一直是没被走过的代码路径，把主回复链路切上去
-	// 要用户自己选。任何一步失败都会退回非流式，不影响回复发不发得出去。
+	// LLMStreamingEnabled 默认开启原生流式调用，分别接收正文、思考与工具。
+	// 工具参数完整后再执行；不支持流式或请求失败时可退回普通调用。
+	// 显式 false 保留用户选择，未配置时使用默认值。
 	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
@@ -900,11 +898,9 @@ type ConfigPayload struct {
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
 	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
-	// LLMStreamingEnabled 让模型调用走流式，用来量真实的 TTFT（首 token 时间）。
-	// 回复仍然是攒齐了再发，聊天窗口里看不出区别。
-	//
-	// 默认关闭：流式在这个项目里一直是没被走过的代码路径，把主回复链路切上去
-	// 要用户自己选。任何一步失败都会退回非流式，不影响回复发不发得出去。
+	// LLMStreamingEnabled 默认开启原生流式调用，分别接收正文、思考与工具。
+	// 工具参数完整后再执行；不支持流式或请求失败时可退回普通调用。
+	// 显式 false 保留用户选择，未配置时使用默认值。
 	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
@@ -1464,7 +1460,7 @@ func DefaultBotConfig() BotConfig {
 		RecallReplyMode:                RecallReplyModeOriginalForward,
 		RefusalStrategy:                RefusalStrategySmart,
 		DaypartToneEnabled:             boolPointer(false),
-		LLMStreamingEnabled:            boolPointer(false),
+		LLMStreamingEnabled:            boolPointer(true),
 		RecallReplyAutoDeleteEnabled:   boolPointer(false),
 		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
 		LLMIdentityMaskingEnabled:      boolPointer(true),

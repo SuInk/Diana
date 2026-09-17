@@ -597,7 +597,7 @@ func TestOpenAICompatibleChatCompletionsAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotBody["model"] != "deepseek-v4-flash" || gotBody["max_tokens"] != float64(256) || gotBody["reasoning_effort"] != "high" || gotBody["stream"] != true {
+	if gotBody["model"] != "deepseek-v4-flash" || gotBody["max_tokens"] != float64(256) || gotBody["reasoning_effort"] != "high" || gotBody["stream"] != false {
 		t.Fatalf("request body = %#v", gotBody)
 	}
 	messages, ok := gotBody["messages"].([]any)
@@ -1140,6 +1140,62 @@ func TestOpenAICompatibleResponsesAPIAcceptsEventStream(t *testing.T) {
 	}
 	if resp.Text != "群聊回复正常" || resp.Usage.TotalTokens != 11 {
 		t.Fatalf("response = %#v", resp)
+	}
+}
+
+func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body openAIChatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if r.URL.Path != "/v1/chat/completions" || !body.Stream || len(body.Tools) != 2 {
+			t.Errorf("unexpected tool request: %s %+v", r.URL.Path, body)
+		}
+		writeChatEvents(w,
+			`{"model":"mimo-test","choices":[{"index":0,"delta":{"reasoning_content":"private reasoning","tool_calls":[{"index":0,"id":"call_1","function":{"name":"diagnostic_x2e_echo","arguments":"{\"text\":"}}]}}]}`,
+			`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","function":{"name":"agent_x2e_finalize","arguments":"{\"silent\":true}"}},{"index":0,"function":{"arguments":"\"hello\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":101,"completion_tokens":45,"total_tokens":146}}`,
+		)
+	}))
+	defer server.Close()
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider: ProviderOpenAICompatible, APIKey: "test-key", BaseURL: server.URL + "/v1",
+		Model: "mimo-test", APIFormat: APIFormatChatCompletions,
+	}, server.Client())
+	events, err := client.Stream(context.Background(), GenerateRequest{
+		Messages: []Message{{Role: RoleUser, Content: "echo hello"}},
+		Tools: []ToolDefinition{
+			{Name: "diagnostic.echo", Parameters: map[string]any{"type": "object"}},
+			{Name: "agent.finalize", Parameters: map[string]any{"type": "object"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []*ToolCall
+	var usage Usage
+	done := false
+	for event := range events {
+		switch event.Type {
+		case ChatEventError:
+			t.Fatal(event.Error)
+		case ChatEventToolCall:
+			calls = append(calls, event.ToolCall)
+		case ChatEventUsage:
+			usage = *event.Usage
+		case ChatEventDone:
+			done = true
+		}
+	}
+	if len(calls) != 2 {
+		t.Fatalf("tool calls = %#v", calls)
+	}
+	if calls[0].ID != "call_1" || calls[0].Name != "diagnostic.echo" || calls[0].Arguments["text"] != "hello" || calls[1].ID != "call_2" || calls[1].Name != "agent.finalize" || calls[1].Arguments["silent"] != true {
+		t.Fatalf("tool calls changed: %+v %+v", calls[0], calls[1])
+	}
+	if !done || usage.TotalTokens != 146 {
+		t.Fatalf("done=%v usage=%+v", done, usage)
 	}
 }
 
