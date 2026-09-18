@@ -64,6 +64,9 @@ type dianaBotConfigSnapshot struct {
 	ReplyGate                       *ReplyGate                `json:"reply_gate,omitempty"`
 	WelcomeEnabled                  bool                      `json:"welcome_enabled"`
 	WelcomeMessage                  string                    `json:"welcome_message,omitempty"`
+	WelcomeMode                     WelcomeMode               `json:"welcome_mode,omitempty"`
+	WelcomeTemplates                []string                  `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds       int                       `json:"welcome_llm_cooldown_seconds,omitempty"`
 	SystemPromptConfigured          bool                      `json:"system_prompt_configured"`
 	SystemPromptChars               int                       `json:"system_prompt_chars,omitempty"`
 	ReplyReferenceMode              ReplyDecorationMode       `json:"reply_reference_mode"`
@@ -298,6 +301,9 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ReplyGate:                       cfg.ReplyGate.Clone(),
 		WelcomeEnabled:                  cfg.WelcomeEnabled,
 		WelcomeMessage:                  cfg.WelcomeMessage,
+		WelcomeMode:                     cfg.WelcomeMode,
+		WelcomeTemplates:                append([]string(nil), cfg.WelcomeTemplates...),
+		WelcomeLLMCooldownSeconds:       cfg.WelcomeLLMCooldownSeconds,
 		SystemPromptConfigured:          strings.TrimSpace(cfg.SystemPrompt) != "",
 		SystemPromptChars:               len([]rune(cfg.SystemPrompt)),
 		ReplyReferenceMode:              replyReferenceMode(cfg),

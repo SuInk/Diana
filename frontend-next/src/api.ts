@@ -213,6 +213,12 @@ export interface BotProfileConfig {
   reply_gate?: ReplyGate | null;
   welcome_enabled?: boolean;
   welcome_message?: string;
+  /** 欢迎词模式：fixed 固定文本 / template 模板池随机 / llm 按人设实时生成；不设等同 fixed。 */
+  welcome_mode?: "fixed" | "template" | "llm";
+  /** 口吻模板池，每条一行，可用 {user_id} 占位；template/llm 回落时使用。 */
+  welcome_templates?: string[];
+  /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
+  welcome_llm_cooldown_seconds?: number;
   system_prompt?: string;
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   action_description_enabled?: boolean;
@@ -482,6 +488,12 @@ export interface BotGroupConfig {
   sentence_enders?: string;
   welcome_enabled?: boolean;
   welcome_message?: string;
+  /** 欢迎词模式：fixed 固定文本 / template 模板池随机 / llm 按人设实时生成；不设等同 fixed。 */
+  welcome_mode?: "" | "fixed" | "template" | "llm";
+  /** 口吻模板池，每条一行，可用 {user_id} 占位；留空跟随机器人。 */
+  welcome_templates?: string[];
+  /** LLM 欢迎词每群冷却秒数；不设跟随机器人。 */
+  welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
   recent_context_limit?: number;

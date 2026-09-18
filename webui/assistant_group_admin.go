@@ -416,6 +416,21 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 	cfg.GroupID = strings.TrimSpace(groupID)
 	cfg.GroupTriggers = trimStringSlice(cfg.GroupTriggers)
 	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)
+	cfg.WelcomeTemplates = trimStringSlice(cfg.WelcomeTemplates)
+	if len(cfg.WelcomeTemplates) > 50 {
+		return assistant.GroupConfig{}, fmt.Errorf("欢迎词模板最多 50 条")
+	}
+	for _, template := range cfg.WelcomeTemplates {
+		if len([]rune(template)) > 200 {
+			return assistant.GroupConfig{}, fmt.Errorf("欢迎词模板不能超过 200 字")
+		}
+	}
+	if cfg.WelcomeLLMCooldownSeconds < 0 {
+		cfg.WelcomeLLMCooldownSeconds = 0
+	}
+	if cfg.WelcomeLLMCooldownSeconds > 24*60*60 {
+		return assistant.GroupConfig{}, fmt.Errorf("欢迎词 LLM 冷却不能超过 86400 秒")
+	}
 	cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt)
 	if len([]rune(cfg.ReplyAccountSafetyAuditPrompt)) > 8000 {
 		return assistant.GroupConfig{}, fmt.Errorf("账号安全审核规则不能超过 8000 字")

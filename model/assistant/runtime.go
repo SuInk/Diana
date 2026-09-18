@@ -304,29 +304,33 @@ type Runtime struct {
 	cfg              BotConfig
 	profileConfigs   map[string]BotConfig
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
-	relayPairs            []MessageRelayPair
-	channel               Channel
-	bridge                *NoneBotBridge
-	plugins               *PluginManager
-	llmStore              LLMProfileStore
-	modelLister           LLMModelLister
-	appLogs               applog.Writer
-	messageStore          MessageHistoryStore
-	inboundStore          InboundEventStore
-	inboundFailedAt       time.Time
-	userMemory            UserMemoryStore
-	structuredMemory      StructuredMemoryStore
-	threadStates          ThreadStateStore
-	oneBotRequests        OneBotRequestStore
-	notebook              NotebookStore
-	worldBook             WorldBookStore
-	expressionStyles      ExpressionStyleStore
-	moodMu                sync.Mutex
-	moods                 map[string]*moodState
-	pokeMu                sync.Mutex
-	pokeLastReply         map[string]time.Time
-	pokeLastSent          map[string]time.Time
-	pokeSessionSent       map[string][]time.Time
+	relayPairs       []MessageRelayPair
+	channel          Channel
+	bridge           *NoneBotBridge
+	plugins          *PluginManager
+	llmStore         LLMProfileStore
+	modelLister      LLMModelLister
+	appLogs          applog.Writer
+	messageStore     MessageHistoryStore
+	inboundStore     InboundEventStore
+	inboundFailedAt  time.Time
+	userMemory       UserMemoryStore
+	structuredMemory StructuredMemoryStore
+	threadStates     ThreadStateStore
+	oneBotRequests   OneBotRequestStore
+	notebook         NotebookStore
+	worldBook        WorldBookStore
+	expressionStyles ExpressionStyleStore
+	moodMu           sync.Mutex
+	moods            map[string]*moodState
+	pokeMu           sync.Mutex
+	pokeLastReply    map[string]time.Time
+	pokeLastSent     map[string]time.Time
+	pokeSessionSent  map[string][]time.Time
+	// welcomeLLMLast 记每个（机器人 × 群）上一次 LLM 欢迎词的生成时间，
+	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
+	welcomeMu             sync.Mutex
+	welcomeLLMLast        map[string]time.Time
 	buildInfo             BuildInfo
 	releaseStatus         ReleaseStatusProvider
 	reminders             ReminderStore
@@ -1219,6 +1223,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	cfg.WelcomeEnabled = groupCfg.WelcomeEnabled
 	cfg.WelcomeMessage = groupCfg.WelcomeMessage
+	cfg.WelcomeMode = groupCfg.WelcomeMode
+	cfg.WelcomeTemplates = append([]string(nil), groupCfg.WelcomeTemplates...)
+	cfg.WelcomeLLMCooldownSeconds = groupCfg.WelcomeLLMCooldownSeconds
 	cfg.MaxContextTokens = groupCfg.MaxContextTokens
 	// 群级的历史预算此前只存不用：GroupConfig 里有这个字段、WithDefaults 也从
 	// 机器人配置继承了默认值，却没有一行把它拷回生效配置，于是群组页那个输入框
@@ -6871,7 +6878,7 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	// 只处理群成员增加通知，避免把其它 notice 类型误当作可回复消息。
-	welcome := strings.ReplaceAll(cfg.WelcomeMessage, "{user_id}", event.UserID)
+	welcome := r.renderWelcome(ctx, cfg, event)
 	msg := OutgoingMessage{
 		GroupID:       event.GroupID,
 		Text:          welcome,
