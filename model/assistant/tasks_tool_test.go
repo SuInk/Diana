@@ -84,6 +84,8 @@ func TestRuntimeAgentCanQueryAllPersonalTasks(t *testing.T) {
 	}}
 	runtime := NewRuntime(BotConfig{
 		OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3,
+		// 序列模型按精确次数喂回复，发送前审核的额外往返与本断言无关，关掉。
+		ReplySafetyMasterEnabled: boolPointer(false),
 	}, &recordingChannel{}, NewPluginManager(), nil, store, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

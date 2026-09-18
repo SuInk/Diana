@@ -314,7 +314,6 @@ func TestRuntimeStatusCommandSkipsReplyAuditModelCall(t *testing.T) {
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
 	cfg := BotConfig{ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42"}
-	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
 	botRuntime := NewRuntime(cfg, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls.Add(1)
 		return &capturingLLMProvider{reply: `{"allow":true}`}, nil

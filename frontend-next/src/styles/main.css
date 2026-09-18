@@ -2269,6 +2269,29 @@ a.nav-action {
   color: var(--err);
 }
 
+/* 卡片右上角的单台启停开关。绝对定位在选择按钮之外，避免按钮套按钮，
+   同时不占用状态文字的位置——状态文字整体左移让位。 */
+.bot-profile-tile {
+  position: relative;
+}
+
+.bot-profile-enable {
+  /* 与头部一行对齐：选择按钮上内边距 16px + 图标 38px，行中心在 35px；
+     轨道高 22px，所以 top = 35 - 11 = 24px。 */
+  position: absolute;
+  top: 24px;
+  right: 16px;
+  display: inline-flex;
+}
+
+.bot-profile-enable .track {
+  margin: 0;
+}
+
+.bot-profile-head {
+  padding-right: 52px;
+}
+
 /* 操作横排在卡片底部，不再挤成右侧竖条。 */
 .bot-profile-actions {
   display: flex;
@@ -2284,6 +2307,14 @@ a.nav-action {
   flex: none;
   min-width: 68px;
   min-height: 30px;
+}
+
+/* 全局启动/停止只跟标题一行：窄屏媒体查询会把 .view-actions 折成整行
+   掉到标题下方，全局运行开关放在那里既不像页面动作、又和筛选挤在一起，
+   这里让它始终贴在标题行右端。 */
+.assistant-view .view-header .view-actions {
+  width: auto;
+  margin-left: auto;
 }
 
 /* 新增入口和机器人卡片同一网格，不额外套一层容器。 */
@@ -2313,6 +2344,21 @@ a.nav-action {
 
 .platform-picker {
   width: min(560px, calc(100vw - 32px));
+}
+
+/* 标题含副标题时，伸展的是外层容器，关闭按钮保持在标题栏右上角。 */
+.platform-picker .modal-header {
+  align-items: flex-start;
+}
+
+.platform-picker .modal-header > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.platform-picker .modal-header > .btn {
+  flex-shrink: 0;
+  margin-inline-start: auto;
 }
 
 .platform-picker .modal-header p {

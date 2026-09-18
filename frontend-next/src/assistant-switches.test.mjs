@@ -29,7 +29,12 @@ test("bot settings checkboxes have a visible switch track", () => {
       assert.ok(track.props.some(prop =>
         prop.type === NodeTypes.ATTRIBUTE && prop.name === "aria-hidden" && prop.value?.content === "true"
       ), `${name} track should be decorative`);
-      assert.ok(elements.some(child => hasClass(child, "switch-label")), `${name} is missing its label`);
+      const hasVisibleLabel = elements.some(child => hasClass(child, "switch-label"));
+      const hasAriaLabel = input.props.some(prop =>
+        (prop.type === NodeTypes.ATTRIBUTE && prop.name === "aria-label" && Boolean(prop.value?.content)) ||
+        (prop.type === NodeTypes.DIRECTIVE && prop.name === "bind" && prop.arg?.content === "aria-label")
+      );
+      assert.ok(hasVisibleLabel || hasAriaLabel, `${name} is missing its label`);
       checked++;
     }
     for (const child of node.children ?? []) visit(child);
