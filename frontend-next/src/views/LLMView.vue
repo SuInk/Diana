@@ -360,6 +360,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import LLMOAuthPicker from "../components/LLMOAuthPicker.vue";
@@ -1030,6 +1031,9 @@ onMounted(() => {
     toastError(error instanceof Error ? error.message : "加载配置失败");
   });
 });
+// Refresh role bindings and provider lists without replacing the editing form.
+useConfigurationRefresh(["bot", "llm"], reload);
+
 </script>
 
 <style scoped>

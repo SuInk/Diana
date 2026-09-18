@@ -16,7 +16,7 @@ const (
 	PlatformFeishu     = "feishu"
 	PlatformWeCom      = "wecom"
 
-	ProtocolOneBotV11     = "onebot-v11-reverse-ws"
+	ProtocolOneBotV11     = "onebot-v11"
 	ProtocolTelegramBot   = "telegram-bot-api"
 	ProtocolQQOfficialWS  = "qq-official-gateway-ws"
 	ProtocolDingTalkWS    = "dingtalk-stream-ws"
@@ -70,7 +70,7 @@ type PlatformDefinition struct {
 }
 
 var supportedPlatforms = []PlatformDefinition{
-	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "统一的 OneBot v11 反向 WebSocket 接入", Inbound: InboundReverseWS},
+	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "OneBot v11 正向 WebSocket、反向 WebSocket 和 HTTP 接入", Inbound: InboundReverseWS},
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound},
 	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
@@ -78,7 +78,7 @@ var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath, RichText: true},
 }
 
-// IsOneBotPlatform 判断平台是否走 OneBot 反向 WebSocket 适配器。
+// IsOneBotPlatform 判断平台是否走 OneBot v11 适配器。
 func IsOneBotPlatform(id string) bool {
 	def, ok := PlatformByID(id)
 	return ok && def.Protocol == ProtocolOneBotV11
@@ -160,9 +160,17 @@ func PlatformNeedsCallback(id string) bool {
 //
 // 三处工厂（启动时的配置集、WebUI 单机器人保存、默认工厂）以前各写一份平台判断，
 // 分叉过一次就出过「一边认这个平台、另一边不认」的线上问题。新增平台后分支更多，
-// 所以收敛到这一个函数，OneBot 除外——它是进程内共享的监听器，只能由调用方决定。
+// 所以收敛到这一个函数。OneBot 反向 WS 的共享监听器仍由调用方提供；
+// HTTP 工厂实例需由调用方同时挂载事件上报路由。
 func NewChannelForConfig(cfg BotConfig) Channel {
 	switch NormalizePlatformID(cfg.Platform) {
+	case PlatformOneBotV11:
+		switch cfg.WithDefaults().OneBotTransport {
+		case OneBotTransportForwardWS:
+			return NewOneBotChannel(OneBotConfig{Endpoint: cfg.OneBotWSEndpoint, AccessToken: cfg.OneBotAccessToken})
+		case OneBotTransportHTTP:
+			return NewOneBotHTTPChannel(OneBotConfig{Endpoint: cfg.OneBotHTTPURL, AccessToken: cfg.OneBotAccessToken, HTTPSecret: cfg.OneBotHTTPSecret})
+		}
 	case PlatformTelegram:
 		return NewTelegramChannel(TelegramConfig{
 			BotToken:   cfg.TelegramBotToken,

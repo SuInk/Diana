@@ -39,8 +39,11 @@
         <div class="comparison">
           <article><h3>OneBot v11</h3><dl>
             <div><dt>适配器</dt><dd>NapCat、Lagrange.Core、go-cqhttp</dd></div>
-            <div><dt>连接</dt><dd>适配器主动连接 Diana 的反向 WebSocket</dd></div>
-            <div><dt>地址</dt><dd><code>ws://HOST:18080/onebot/v11/ws</code></dd></div>
+            <div><dt>连接</dt><dd>支持正向 WS、反向 WS（默认）和 HTTP API + 事件上报</dd></div>
+            <div><dt>反向 WS</dt><dd><code>ws://HOST:18080/onebot/v11/ws</code>，双方 Access Token 一致</dd></div>
+            <div><dt>正向 WS</dt><dd>Diana 填接入端的通用地址，如 <code>ws://127.0.0.1:6700/</code>，自动重连</dd></div>
+            <div><dt>HTTP</dt><dd>Diana 填接入端 API 地址，如 <code>http://127.0.0.1:5700</code>；接入端上报至 <code>http://HOST:18080/onebot/v11/http</code>，双方配置相同的签名 secret。API Token 独立配置，回复通过 API 发送。</dd></div>
+            <div><dt>边界</dt><dd>OneBot v11；固定反向 WS 与 HTTP 入口各接一个配置档，正向 WS 可接多个。HTTP 连通状态仅表示 API 探测成功，需同时配置事件上报。</dd></div>
             <div><dt>能力</dt><dd>群列表、CQ 码、引用、群文件、本地媒体</dd></div>
           </dl></article>
           <article><h3>Telegram</h3><dl>

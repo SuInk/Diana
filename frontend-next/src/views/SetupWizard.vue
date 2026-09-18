@@ -172,6 +172,14 @@
       <div class="card-body stack">
         <div class="form-grid">
           <div class="field wide">
+            <label for="wizard-onebot-transport">连接方式</label>
+            <select id="wizard-onebot-transport" v-model="botForm.onebot_transport" class="input">
+              <option value="reverse_ws">反向 WebSocket</option>
+              <option value="forward_ws">正向 WebSocket</option>
+              <option value="http">HTTP API + HTTP 事件上报</option>
+            </select>
+          </div>
+          <div v-if="botForm.onebot_transport === 'reverse_ws'" class="field wide">
             <label for="wizard-onebot-endpoint">OneBot v11 回连地址</label>
             <div class="input-group">
               <input
@@ -187,6 +195,22 @@
             </div>
             <span class="hint">填写 OneBot v11 客户端实际能访问的地址；Docker 或局域网部署时请修改主机名。自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
           </div>
+          <div v-else-if="botForm.onebot_transport === 'forward_ws'" class="field wide">
+            <label for="wizard-onebot-ws">OneBot WS 服务地址</label>
+            <input id="wizard-onebot-ws" v-model="botForm.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700/" />
+            <span class="hint">使用同时提供 API 和事件的通用 WS 地址，Diana 主动连接并自动重连。</span>
+          </div>
+          <template v-else>
+            <div class="field wide">
+              <label for="wizard-onebot-http">OneBot HTTP API 地址</label>
+              <input id="wizard-onebot-http" v-model="botForm.onebot_http_url" class="input mono" placeholder="http://127.0.0.1:5700" />
+              <span class="hint">接入端把事件上报至 http://&lt;Diana 主机&gt;:18080/onebot/v11/http，填写实际可访问的主机和端口。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-onebot-secret">HTTP 事件签名密钥</label>
+              <input id="wizard-onebot-secret" v-model="botForm.onebot_http_secret" class="input" type="password" autocomplete="off" placeholder="与接入端的上报 secret 一致；留空沿用已保存值" />
+            </div>
+          </template>
           <div class="field">
             <label for="wizard-owner">主人账号（可选）</label>
             <input
@@ -212,7 +236,7 @@
           </button>
           <span class="badge" :class="connected ? 'ok' : 'warn'">
             <span class="status-dot" :class="{ pulse: !connected }" aria-hidden="true" />
-            {{ connected ? `OneBot v11 已连接 ${selfID}` : "等待 OneBot v11 客户端连入…" }}
+            {{ connected ? `OneBot v11 已连接 ${selfID}` : "等待 OneBot v11 通道就绪…" }}
           </span>
         </div>
         <p v-if="channelError" class="text-err" style="font-size: 12.5px">{{ channelError }}</p>
@@ -266,6 +290,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -424,7 +449,8 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
   }
 }
 
-const botForm = ref<{ onebot_reverse_ws_endpoint: string; owner_id: string; onebot_access_token: string }>({
+const botForm = ref<{ onebot_transport: "reverse_ws" | "forward_ws" | "http"; onebot_ws_endpoint: string; onebot_http_url: string; onebot_http_secret: string; onebot_reverse_ws_endpoint: string; owner_id: string; onebot_access_token: string }>({
+  onebot_transport: "reverse_ws", onebot_ws_endpoint: "", onebot_http_url: "", onebot_http_secret: "",
   onebot_reverse_ws_endpoint: `ws://${window.location.host}/onebot/v11/ws`,
   owner_id: "",
   onebot_access_token: ""
@@ -505,7 +531,7 @@ async function saveAndTestLLM(): Promise<void> {
 }
 
 async function saveBotAndStart(): Promise<void> {
-  if (!validWebSocketURL(wsEndpoint.value)) {
+  if (botForm.value.onebot_transport !== "http" && !validWebSocketURL(botForm.value.onebot_transport === "forward_ws" ? botForm.value.onebot_ws_endpoint : wsEndpoint.value)) {
     toastError("请填写有效的 ws:// 或 wss:// 回连地址");
     return;
   }
@@ -515,6 +541,10 @@ async function saveBotAndStart(): Promise<void> {
     const payload: BotProfileConfig = {
       ...base,
       enabled: true,
+      onebot_transport: botForm.value.onebot_transport,
+      onebot_ws_endpoint: botForm.value.onebot_ws_endpoint.trim(),
+      onebot_http_url: botForm.value.onebot_http_url.trim(),
+      onebot_http_secret: botForm.value.onebot_http_secret || undefined,
       onebot_reverse_ws_endpoint: wsEndpoint.value,
       bot_account: base.bot_account,
       owner_id: botForm.value.owner_id.trim(),
@@ -523,8 +553,9 @@ async function saveBotAndStart(): Promise<void> {
     };
     savedBot.value = await saveBotProfileConfig(payload);
     await startBot();
-    toastSuccess("配置已保存，等待 OneBot v11 客户端连接");
+    toastSuccess("配置已保存，正在启动 OneBot v11 通道");
     botForm.value.onebot_access_token = "";
+    botForm.value.onebot_http_secret = "";
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally {
@@ -547,6 +578,9 @@ onMounted(async () => {
     // 模型来源，空着的话会看起来像配置丢了。老配置可能只存了单个 model。
     modelOptions.value = llm.models?.length ? [...llm.models] : llm.model ? [{ id: llm.model }] : [];
     selectedService.value = detectLLMService(llm.base_url, llm.provider);
+    botForm.value.onebot_transport = bot.onebot_transport || "reverse_ws";
+    botForm.value.onebot_ws_endpoint = bot.onebot_ws_endpoint || "";
+    botForm.value.onebot_http_url = bot.onebot_http_url || "";
     botForm.value.onebot_reverse_ws_endpoint =
       bot.onebot_reverse_ws_endpoint || `ws://${window.location.host}/onebot/v11/ws`;
     // 10001 was used by early demo data and should not appear as a real default.
@@ -578,4 +612,13 @@ watch([connected, selfID], ([isConnected, id]) => {
     step.value = 2;
   }
 });
+useConfigurationRefresh(["bot"], async () => {
+  savedBot.value = await getBotProfileConfig();
+  tokenConfigured.value = Boolean(savedBot.value.onebot_access_token_configured);
+});
+useConfigurationRefresh(["llm"], async () => {
+  savedLLM.value = await getConfig();
+  llmConfigured.value = Boolean(savedLLM.value.api_key_configured);
+});
+
 </script>

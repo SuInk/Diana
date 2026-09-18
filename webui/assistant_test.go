@@ -231,6 +231,19 @@ func TestProfileSetRequiresReconnectOnlyForTransportChanges(t *testing.T) {
 		t.Fatal("OneBot token change did not require reconnect")
 	}
 
+	for name, change := range map[string]func(*assistant.BotConfig){
+		"transport":             func(c *assistant.BotConfig) { c.OneBotTransport = "http" },
+		"forward endpoint":      func(c *assistant.BotConfig) { c.OneBotWSEndpoint = "ws://localhost:6700" },
+		"HTTP endpoint":         func(c *assistant.BotConfig) { c.OneBotHTTPURL = "http://localhost:5700" },
+		"HTTP signature secret": func(c *assistant.BotConfig) { c.OneBotHTTPSecret = "new-secret" },
+	} {
+		next := base.WithDefaults()
+		change(&next.Profiles[0])
+		if !profileSetRequiresReconnect(base, next) {
+			t.Errorf("%s change did not reconnect", name)
+		}
+	}
+
 	concurrency := base.WithDefaults()
 	concurrency.Profiles[0].MaxBotConcurrency++
 	if !profileSetRequiresReconnect(base, concurrency) {

@@ -43,6 +43,10 @@ type dianaBotConfigSnapshot struct {
 	Platform                        string                    `json:"platform,omitempty"`
 	AvatarURL                       string                    `json:"avatar_url,omitempty"`
 	Enabled                         bool                      `json:"enabled"`
+	OneBotTransport                 string                    `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint                string                    `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL                   string                    `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecretConfigured      bool                      `json:"onebot_http_secret_configured"`
 	OneBotReverseWSEndpoint         string                    `json:"onebot_reverse_ws_endpoint,omitempty"`
 	OneBotAccessTokenConfigured     bool                      `json:"onebot_access_token_configured"`
 	NoneBotBridgeEnabled            bool                      `json:"nonebot_bridge_enabled"`
@@ -272,6 +276,10 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		Platform:                        cfg.Platform,
 		AvatarURL:                       cfg.AvatarURL,
 		Enabled:                         cfg.Enabled,
+		OneBotTransport:                 cfg.WithDefaults().OneBotTransport,
+		OneBotWSEndpoint:                cfg.OneBotWSEndpoint,
+		OneBotHTTPURL:                   cfg.OneBotHTTPURL,
+		OneBotHTTPSecretConfigured:      strings.TrimSpace(cfg.OneBotHTTPSecret) != "",
 		OneBotReverseWSEndpoint:         cfg.OneBotReverseWSEndpoint,
 		OneBotAccessTokenConfigured:     strings.TrimSpace(cfg.OneBotAccessToken) != "",
 		NoneBotBridgeEnabled:            cfg.NoneBotBridgeEnabled,

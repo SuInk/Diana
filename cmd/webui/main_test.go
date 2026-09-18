@@ -285,3 +285,44 @@ func TestConfigPathNearExecutableFollowsSymlink(t *testing.T) {
 		t.Fatalf("path = %q, want %q", got, want)
 	}
 }
+
+func TestOneBotFactorySelectsTransport(t *testing.T) {
+	reverse := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
+	httpChannel := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
+	factory := newBotChannelSetFactory(reverse, httpChannel)
+	profiles := []assistant.BotConfig{}
+	for _, mode := range []string{"forward_ws", "http", "reverse_ws"} {
+		cfg := assistant.DefaultBotConfig()
+		cfg.ID, cfg.Enabled, cfg.OneBotTransport = mode, true, mode
+		cfg.OneBotWSEndpoint = "ws://localhost:6700"
+		cfg.OneBotHTTPURL = "http://localhost:5700"
+		cfg.OneBotHTTPSecret = "http-secret"
+		cfg.OneBotAccessToken = mode + "-token"
+		profiles = append(profiles, cfg)
+	}
+	channel := factory(assistant.ProfileSet{ActiveID: "forward_ws", Profiles: profiles})
+	statuses := channel.(*assistant.MultiChannel).ChannelStatuses()
+	if len(statuses) != 3 {
+		t.Fatalf("channels=%+v", statuses)
+	}
+	for _, status := range statuses {
+		switch status.ProfileID {
+		case "forward_ws":
+			if status.Endpoint != "ws://localhost:6700" {
+				t.Fatalf("WS endpoint=%s", status.Endpoint)
+			}
+		case "http":
+			if status.Endpoint != "http://localhost:5700" {
+				t.Fatalf("HTTP endpoint=%s", status.Endpoint)
+			}
+		}
+	}
+	// Disabling HTTP must erase its callback credential even when WS remains.
+	profiles[1].Enabled = false
+	factory(assistant.ProfileSet{ActiveID: "forward_ws", Profiles: profiles})
+	w := httptest.NewRecorder()
+	httpChannel.ServeHTTP(w, httptest.NewRequest("POST", "/onebot/v11/http", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled HTTP status=%d", w.Code)
+	}
+}

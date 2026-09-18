@@ -269,6 +269,8 @@ func (h *BotHandler) Register(router gin.IRouter) {
 
 func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/config", h.getConfig)
+	router.GET(base+"/config/defaults", h.newProfileDefaults)
+	router.POST(base+"/config/new", h.createProfile)
 	router.GET(base+"/platforms", h.platforms)
 	router.POST(base+"/config", h.saveConfig)
 	router.POST(base+"/config/activate", h.activateProfile)
@@ -353,6 +355,24 @@ func (h *BotHandler) getConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles()))
 }
 
+// newProfileDefaults returns a fresh draft, never an existing profile or its secrets.
+func (h *BotHandler) newProfileDefaults(c *gin.Context) {
+	platform := assistant.NormalizePlatformID(c.Query("platform"))
+	if err := assistant.ValidatePlatform(platform); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	defaults := assistant.DefaultBotConfig()
+	defaults.Platform = platform
+	defaults.Enabled = true
+	defaults.OwnerLoginEnabled = true
+	c.JSON(http.StatusOK, assistant.PayloadFromConfig(defaults))
+}
+
+func (h *BotHandler) createProfile(c *gin.Context) {
+	h.saveProfile(c, true)
+}
+
 // agentDefaults 返回新建机器人时用的 Agent 推荐默认值。
 //
 // 存在的理由是「装完就能用」这件事对存量部署不成立：默认值只作用于新建配置，
@@ -379,6 +399,10 @@ func (h *BotHandler) featuresStatus(c *gin.Context) {
 
 // saveConfig 保存当前机器人配置或新增机器人配置档。
 func (h *BotHandler) saveConfig(c *gin.Context) {
+	h.saveProfile(c, false)
+}
+
+func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, "", nil)
@@ -387,6 +411,13 @@ func (h *BotHandler) saveConfig(c *gin.Context) {
 
 	set := h.profiles.Profiles()
 	existing := existingBotProfileConfig(set, payload)
+	if create {
+		// Creation cannot inherit credentials or overwrite an existing profile ID.
+		existing = assistant.DefaultBotConfig()
+		payload.ID = ""
+		payload.ActiveProfileID = ""
+		payload.Profiles = nil
+	}
 	cfg := assistant.ConfigFromPayload(payload, existing)
 	if err := validateTokenLength("onebot_access_token", payload.OneBotAccessToken); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
@@ -591,6 +622,10 @@ func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 type botTransportConfig struct {
 	ID                 string
 	Platform           string
+	OneBotTransport    string
+	OneBotWSEndpoint   string
+	OneBotHTTPURL      string
+	OneBotHTTPSecret   string
 	OneBotEndpoint     string
 	OneBotAccessToken  string
 	TelegramBotToken   string
@@ -619,6 +654,10 @@ func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
 		transports = append(transports, botTransportConfig{
 			ID:                 profile.ID,
 			Platform:           profile.Platform,
+			OneBotTransport:    profile.OneBotTransport,
+			OneBotWSEndpoint:   profile.OneBotWSEndpoint,
+			OneBotHTTPURL:      profile.OneBotHTTPURL,
+			OneBotHTTPSecret:   profile.OneBotHTTPSecret,
 			OneBotEndpoint:     profile.OneBotReverseWSEndpoint,
 			OneBotAccessToken:  profile.OneBotAccessToken,
 			TelegramBotToken:   profile.TelegramBotToken,
@@ -1060,9 +1099,6 @@ func existingBotProfileConfig(set assistant.ProfileSet, payload assistant.Config
 		if profile.ID == targetID {
 			return profile.WithDefaults()
 		}
-	}
-	if current, ok := set.Current(); ok {
-		return current.WithDefaults()
 	}
 	return assistant.DefaultBotConfig()
 }

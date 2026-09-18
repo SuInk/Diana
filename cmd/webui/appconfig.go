@@ -281,6 +281,10 @@ func reportSeedOutcome(path string, llmSeeded bool, llmSeed llm.ProviderConfig, 
 	if botSeeded {
 		reportSectionOutcome(path, "bot", botSeed.OneBotAccessToken == botStored.OneBotAccessToken &&
 			botSeed.OneBotReverseWSEndpoint == botStored.OneBotReverseWSEndpoint &&
+			botSeed.OneBotTransport == botStored.OneBotTransport &&
+			botSeed.OneBotWSEndpoint == botStored.OneBotWSEndpoint &&
+			botSeed.OneBotHTTPURL == botStored.OneBotHTTPURL &&
+			botSeed.OneBotHTTPSecret == botStored.OneBotHTTPSecret &&
 			botSeed.OwnerID == botStored.OwnerID)
 	}
 }
