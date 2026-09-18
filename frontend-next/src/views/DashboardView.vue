@@ -178,6 +178,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import {
   Activity,
@@ -336,4 +337,6 @@ onMounted(() => {
 watch(botScope, () => {
   void loadGroupNames();
 });
+useConfigurationRefresh(["bot", "llm"], refresh);
+
 </script>

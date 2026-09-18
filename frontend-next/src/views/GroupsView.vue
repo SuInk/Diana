@@ -364,6 +364,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -814,6 +815,8 @@ watch(botScope, () => {
 });
 
 onMounted(() => load());
+useConfigurationRefresh(["bot"], () => load());
+
 </script>
 
 <style scoped>

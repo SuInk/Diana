@@ -79,6 +79,11 @@ napcat:
 # bot:
 #   platform: onebot-v11
 #   enabled: true
+#   onebot_transport: reverse_ws # reverse_ws / forward_ws / http
+#   onebot_ws_endpoint: ws://127.0.0.1:6700/ # 正向 WS 通用地址
+#   onebot_http_url: http://127.0.0.1:5700 # HTTP API 地址
+#   onebot_http_secret: "" # HTTP 模式必填，与接入端上报 secret 一致
+#   # HTTP 上报地址：http://<Diana 主机>:18080/onebot/v11/http
 #   onebot_reverse_ws_endpoint: ws://127.0.0.1:18080/onebot/v11/ws
 #   onebot_access_token: ""
 #   bot_account: ""
