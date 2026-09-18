@@ -20,7 +20,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	OneBotTransportReverseWS = "reverse_ws"
+	OneBotTransportForwardWS = "forward_ws"
+	OneBotTransportHTTP      = "http"
+)
+
 type OneBotConfig struct {
+	HTTPSecret  string
 	Endpoint    string
 	AccessToken string
 }
@@ -88,8 +95,9 @@ func NewOneBotChannel(cfg OneBotConfig) *OneBotChannel {
 		cfg:    cfg,
 		dialer: websocket.DefaultDialer,
 		status: ChannelStatus{
-			Endpoint:  cfg.Endpoint,
-			UpdatedAt: time.Now(),
+			AccessTokenConfigured: strings.TrimSpace(cfg.AccessToken) != "",
+			Endpoint:              cfg.Endpoint,
+			UpdatedAt:             time.Now(),
 		},
 		closed: make(chan struct{}),
 	}
@@ -113,19 +121,42 @@ func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error
 		return err
 	}
 
+	conn.SetReadLimit(maxOneBotWebSocketFrameBytes)
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
+	defer conn.Close()
 	c.connMu.Lock()
 	if c.conn != nil {
 		// 重新连接成功后关闭旧连接，避免两个 read loop 同时消费事件。
 		_ = c.conn.Close()
 	}
 	c.conn = conn
+	c.status.ConnectionEpoch++
 	c.connMu.Unlock()
 	c.setStatus(true, "", "")
+	defer func() {
+		c.connMu.Lock()
+		if c.conn == conn {
+			c.conn = nil
+			c.status.Connected = false
+			c.status.UpdatedAt = time.Now()
+		}
+		c.connMu.Unlock()
+		c.pending.Range(func(key, value any) bool {
+			if result, ok := c.pending.LoadAndDelete(key); ok {
+				select {
+				case result.(chan callResult) <- callResult{err: errors.New("diana: onebot websocket disconnected")}:
+				default:
+				}
+			}
+			return true
+		})
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			_ = c.Close()
+			_ = conn.Close()
 			return ctx.Err()
 		case <-c.closed:
 			return nil
@@ -151,6 +182,10 @@ func (c *OneBotChannel) Send(ctx context.Context, msg OutgoingMessage) error {
 
 // SendWithResult sends a message and preserves the OneBot response message_id.
 func (c *OneBotChannel) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
+	return sendOneBotMessage(ctx, msg, c.CallAPI)
+}
+
+func sendOneBotMessage(ctx context.Context, msg OutgoingMessage, call func(context.Context, string, map[string]any) (map[string]any, error)) (map[string]any, error) {
 	if strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
 		return nil, nil
 	}
@@ -170,7 +205,7 @@ func (c *OneBotChannel) SendWithResult(ctx context.Context, msg OutgoingMessage)
 		}
 		params["user_id"] = userID
 	}
-	return c.CallAPI(ctx, action, params)
+	return call(ctx, action, params)
 }
 
 // buildOutgoingSegments 将回复消息转换为 OneBot segment 列表。
@@ -312,6 +347,8 @@ func buildForwardNodes(chunks []string, senderName string, senderUIN string) []m
 
 // CallAPI 发送 OneBot action 并等待 echo 响应。
 func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	c.connMu.RLock()
 	conn := c.conn
 	c.connMu.RUnlock()
@@ -331,6 +368,7 @@ func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[s
 		"echo":   echo,
 	}
 	c.writeMu.Lock()
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	err := conn.WriteJSON(req)
 	c.writeMu.Unlock()
 	if err != nil {
@@ -354,14 +392,14 @@ func (c *OneBotChannel) Status() ChannelStatus {
 
 // Close 关闭 OneBot WebSocket 连接。
 func (c *OneBotChannel) Close() error {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	select {
 	case <-c.closed:
 	default:
 		close(c.closed)
 	}
 
-	c.connMu.Lock()
-	defer c.connMu.Unlock()
 	if c.conn == nil {
 		return nil
 	}

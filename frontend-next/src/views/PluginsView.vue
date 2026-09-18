@@ -448,6 +448,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
 const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
@@ -1164,4 +1165,6 @@ onMounted(() => {
     window.setTimeout(() => void loadDependencies(), 1500);
   }
 });
+useConfigurationRefresh(["bot"], reload);
+
 </script>

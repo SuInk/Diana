@@ -173,6 +173,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, Plus, RefreshCw } from "@lucide/vue";
 import {
@@ -486,6 +487,8 @@ onMounted(() => {
   void loadScopeNames();
   void reload();
 });
+useConfigurationRefresh(["bot"], loadScopeNames);
+
 </script>
 
 <style scoped>

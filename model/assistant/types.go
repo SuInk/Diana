@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -447,6 +448,10 @@ type BotConfig struct {
 	Platform                    string               `json:"platform,omitempty"`
 	AvatarURL                   string               `json:"avatar_url,omitempty"`
 	Enabled                     bool                 `json:"enabled"`
+	OneBotTransport             string               `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint            string               `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL               string               `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecret            string               `json:"onebot_http_secret,omitempty"`
 	OneBotReverseWSEndpoint     string               `json:"onebot_reverse_ws_endpoint"`
 	OneBotAccessToken           string               `json:"onebot_access_token,omitempty"`
 	TelegramBotToken            string               `json:"telegram_bot_token,omitempty"`
@@ -790,8 +795,13 @@ type ConfigPayload struct {
 	// MessageRelays 是跨机器人的消息互通链路，读接口一并回传给 WebUI。
 	MessageRelays                     []MessageRelayPair `json:"message_relays,omitempty"`
 	Enabled                           bool               `json:"enabled"`
+	OneBotTransport                   string             `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint                  string             `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL                     string             `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecret                  string             `json:"onebot_http_secret,omitempty"`
 	OneBotReverseWSEndpoint           string             `json:"onebot_reverse_ws_endpoint"`
 	OneBotAccessToken                 string             `json:"onebot_access_token,omitempty"`
+	OneBotHTTPSecretConfigured        bool               `json:"onebot_http_secret_configured,omitempty"`
 	OneBotAccessTokenConfigured       bool               `json:"onebot_access_token_configured,omitempty"`
 	TelegramBotToken                  string             `json:"telegram_bot_token,omitempty"`
 	TelegramBotTokenConfigured        bool               `json:"telegram_bot_token_configured,omitempty"`
@@ -1519,6 +1529,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	// WithDefaults 会补齐运行所需的安全默认值，同时清理重复触发词/禁用群。
 	cfg.Name = NormalizeProfileName(cfg.Name)
 	cfg.Platform = NormalizePlatformID(cfg.Platform)
+	if cfg.OneBotTransport == "" {
+		cfg.OneBotTransport = OneBotTransportReverseWS
+	}
 	if strings.TrimSpace(cfg.OneBotReverseWSEndpoint) == "" {
 		cfg.OneBotReverseWSEndpoint = defaults.OneBotReverseWSEndpoint
 	}
@@ -1807,6 +1820,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 
 // Validate 校验 OneBot v11 机器人配置是否可运行。
 func (cfg BotConfig) Validate() error {
+	if cfg.OneBotTransport == "" {
+		cfg.OneBotTransport = OneBotTransportReverseWS
+	}
 	if err := ValidatePlatform(cfg.Platform); err != nil {
 		return err
 	}
@@ -1861,7 +1877,22 @@ func (cfg BotConfig) Validate() error {
 		return nil
 	}
 
+	if cfg.OneBotTransport == OneBotTransportHTTP {
+		if !isHTTPURL(cfg.OneBotHTTPURL) {
+			return fmt.Errorf("OneBot HTTP API 地址必须是 http:// 或 https:// URL")
+		}
+		if cfg.Enabled && strings.TrimSpace(cfg.OneBotHTTPSecret) == "" {
+			return fmt.Errorf("OneBot HTTP 事件上报需要配置签名密钥")
+		}
+		return nil
+	}
+	if cfg.OneBotTransport != OneBotTransportReverseWS && cfg.OneBotTransport != OneBotTransportForwardWS {
+		return fmt.Errorf("未知 OneBot 连接方式: %s", cfg.OneBotTransport)
+	}
 	endpoint := strings.TrimSpace(cfg.OneBotReverseWSEndpoint)
+	if cfg.OneBotTransport == OneBotTransportForwardWS {
+		endpoint = strings.TrimSpace(cfg.OneBotWSEndpoint)
+	}
 	if cfg.Enabled && endpoint == "" {
 		return ErrMissingOneBotEndpoint
 	}
@@ -1893,6 +1924,10 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		Platform:                    cfg.Platform,
 		AvatarURL:                   cfg.AvatarURL,
 		Enabled:                     cfg.Enabled,
+		OneBotTransport:             cfg.OneBotTransport,
+		OneBotWSEndpoint:            cfg.OneBotWSEndpoint,
+		OneBotHTTPURL:               cfg.OneBotHTTPURL,
+		OneBotHTTPSecretConfigured:  cfg.OneBotHTTPSecret != "",
 		OneBotReverseWSEndpoint:     cfg.OneBotReverseWSEndpoint,
 		OneBotAccessTokenConfigured: cfg.OneBotAccessToken != "",
 		TelegramBotTokenConfigured:  cfg.TelegramBotToken != "",
@@ -2036,6 +2071,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	payload := PayloadFromConfig(cfg)
 	cfg = cfg.WithDefaults()
+	payload.OneBotHTTPSecret = cfg.OneBotHTTPSecret
 	payload.OneBotAccessToken = cfg.OneBotAccessToken
 	payload.TelegramBotToken = cfg.TelegramBotToken
 	payload.NoneBotBridgeToken = cfg.NoneBotBridgeToken
@@ -2085,6 +2121,10 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AvatarURL:                       strings.TrimSpace(payload.AvatarURL),
 		Enabled:                         payload.Enabled,
 		OneBotReverseWSEndpoint:         payload.OneBotReverseWSEndpoint,
+		OneBotTransport:                 payload.OneBotTransport,
+		OneBotWSEndpoint:                payload.OneBotWSEndpoint,
+		OneBotHTTPURL:                   payload.OneBotHTTPURL,
+		OneBotHTTPSecret:                payload.OneBotHTTPSecret,
 		OneBotAccessToken:               payload.OneBotAccessToken,
 		TelegramBotToken:                payload.TelegramBotToken,
 		TelegramAPIBaseURL:              payload.TelegramAPIBaseURL,
@@ -2215,6 +2255,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,
 	}.WithDefaults()
+	if cfg.OneBotHTTPSecret == "" {
+		cfg.OneBotHTTPSecret = existing.OneBotHTTPSecret
+	}
 	if cfg.OneBotAccessToken == "" {
 		// 前端留空 token 表示沿用旧值，不表示删除鉴权。
 		cfg.OneBotAccessToken = existing.OneBotAccessToken

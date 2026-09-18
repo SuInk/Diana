@@ -59,18 +59,30 @@ const maxHTTPRequestBodyBytes = 8 << 20
 // newBotChannelSetFactory 按配置集重建全部通道。OneBot 反连监听器是进程内共享
 // 的单个实例，它的 endpoint/token 只能由这里决定——这是唯一的写入点，别处再写
 // 就会出现运行态和存储配置对不上的 401。
-func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer) func(assistant.ProfileSet) assistant.Channel {
+func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, httpServers ...*assistant.OneBotHTTPChannel) func(assistant.ProfileSet) assistant.Channel {
+	httpServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
+	if len(httpServers) > 0 {
+		httpServer = httpServers[0]
+	}
 	return func(set assistant.ProfileSet) assistant.Channel {
 		set = set.WithDefaults()
 		bindings := make([]assistant.ChannelBinding, 0, len(set.Profiles))
 		oneBotAdded := false
+		httpAdded := false
 		for _, profile := range set.Profiles {
 			profile = profile.WithDefaults()
 			if !profile.Enabled {
 				continue
 			}
 			var channel assistant.Channel
-			if assistant.IsOneBotPlatform(profile.Platform) {
+			if assistant.IsOneBotPlatform(profile.Platform) && profile.OneBotTransport == assistant.OneBotTransportHTTP {
+				if httpAdded {
+					continue
+				}
+				httpAdded = true
+				httpServer.SetConfig(assistant.OneBotConfig{Endpoint: profile.OneBotHTTPURL, AccessToken: profile.OneBotAccessToken, HTTPSecret: profile.OneBotHTTPSecret})
+				channel = httpServer
+			} else if assistant.IsOneBotPlatform(profile.Platform) && profile.OneBotTransport == assistant.OneBotTransportReverseWS {
 				// The reverse WebSocket endpoint is process-wide. OneBot v11 and Telegram can
 				// run together; multiple enabled OneBot profiles still share this one
 				// listener, so only the first is attached.
@@ -94,6 +106,9 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer) func(a
 					Channel:   channel,
 				})
 			}
+		}
+		if !httpAdded {
+			httpServer.SetConfig(assistant.OneBotConfig{})
 		}
 		if !oneBotAdded {
 			// 没有启用中的 OneBot 配置档时要显式清空监听器,否则它会一直拿着上一
@@ -282,7 +297,8 @@ func main() {
 		Endpoint:    botCfg.OneBotReverseWSEndpoint,
 		AccessToken: botCfg.OneBotAccessToken,
 	})
-	channelSetFactory := newBotChannelSetFactory(oneBotServer)
+	oneBotHTTPServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
+	channelSetFactory := newBotChannelSetFactory(oneBotServer, oneBotHTTPServer)
 	// 配置档绑了 OAuth 提供商时，凭据由 oauthManager 现取现续；没绑就和以前一样
 	// 只用配置里的 API Key，连 HTTP 客户端都不会被包一层。
 	newLLMClient := func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
@@ -371,8 +387,12 @@ func main() {
 		// 就当 OneBot」,平台字段一旦不是已注册的 OneBot 平台,两边判断就分叉:
 		// 这条路径拿它的(往往是空的)token 覆盖了共享监听器,配置集那条路径又不
 		// 认它、不会把 token 写回去,监听器就此停在一个谁都对不上的 token 上。
-		if !assistant.IsOneBotPlatform(cfg.Platform) {
+		if !assistant.IsOneBotPlatform(cfg.Platform) || cfg.WithDefaults().OneBotTransport == assistant.OneBotTransportForwardWS {
 			return assistant.NewChannelForConfig(cfg)
+		}
+		if cfg.OneBotTransport == assistant.OneBotTransportHTTP {
+			oneBotHTTPServer.SetConfig(assistant.OneBotConfig{Endpoint: cfg.OneBotHTTPURL, AccessToken: cfg.OneBotAccessToken, HTTPSecret: cfg.OneBotHTTPSecret})
+			return oneBotHTTPServer
 		}
 		oneBotServer.SetConfig(assistant.OneBotConfig{
 			Endpoint:    cfg.OneBotReverseWSEndpoint,
@@ -495,6 +515,7 @@ func main() {
 	})
 	// OneBot 路由必须在 SPA fallback 之前注册，否则 NapCat 会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
+	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
 	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
 
 	addr := net.JoinHostPort(host, port)

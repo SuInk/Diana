@@ -169,24 +169,51 @@
                 <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
                 <span class="hint">用于控制台区分多个机器人，不会自动修改账号昵称。</span>
               </div>
-              <!-- OneBot 是接入端反连过来，Telegram 是我们主动出站长轮询，
-                   两者需要的凭据完全不同，按平台分别展示。 -->
-              <div v-if="isOneBotPlatform" class="field">
-                <label for="bot-onebot-endpoint">回连地址</label>
-                <div class="input-group">
-                  <input
-                    id="bot-onebot-endpoint"
-                    v-model="form.onebot_reverse_ws_endpoint"
-                    class="input mono"
-                    placeholder="ws://127.0.0.1:18080/onebot/v11/ws"
-                    autocomplete="off"
-                  />
-                  <button class="btn icon-only" type="button" aria-label="复制地址" @click="copyEndpoint">
-                    <Copy :size="14" aria-hidden="true" />
-                  </button>
+              <!-- 按平台和传输方式展示连接地址与鉴权凭据。 -->
+              <template v-if="isOneBotPlatform">
+                <div class="field">
+                  <label for="bot-onebot-transport">连接方式</label>
+                  <select id="bot-onebot-transport" :value="form.onebot_transport || 'reverse_ws'" @change="form.onebot_transport = ($event.target as HTMLSelectElement).value as BotProfileConfig['onebot_transport']" class="input">
+                    <option value="reverse_ws">反向 WebSocket</option>
+                    <option value="forward_ws">正向 WebSocket</option>
+                    <option value="http">HTTP API + HTTP 事件上报</option>
+                  </select>
                 </div>
-                <span class="hint">填写接入端实际可访问的地址；自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
-              </div>
+                <div v-if="!form.onebot_transport || form.onebot_transport === 'reverse_ws'" class="field">
+                  <label for="bot-onebot-endpoint">回连地址</label>
+                  <div class="input-group">
+                    <input
+                      id="bot-onebot-endpoint"
+                      v-model="form.onebot_reverse_ws_endpoint"
+                      class="input mono"
+                      placeholder="ws://127.0.0.1:18080/onebot/v11/ws"
+                      autocomplete="off"
+                    />
+                    <button class="btn icon-only" type="button" aria-label="复制地址" @click="copyEndpoint">
+                      <Copy :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <span class="hint">填写接入端实际可访问的地址；自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
+                </div>
+                <div v-else-if="form.onebot_transport === 'forward_ws'" class="field">
+                  <label for="bot-onebot-ws">OneBot WebSocket 服务地址</label>
+                  <input id="bot-onebot-ws" v-model="form.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700" />
+                  <span class="hint">Diana 主动连接接入端的 WS 服务，请使用同时提供 API 和事件的通用地址（通常为 /）。断线后自动重连。</span>
+                </div>
+                <template v-else-if="form.onebot_transport === 'http'">
+                  <div class="field">
+                    <label for="bot-onebot-http">OneBot HTTP API 地址</label>
+                    <input id="bot-onebot-http" v-model="form.onebot_http_url" class="input mono" placeholder="http://127.0.0.1:5700" />
+                    <span class="hint">Diana 调用接入端的 HTTP API。事件上报地址填写接入端能访问的 Diana 地址 + /onebot/v11/http。</span>
+                  </div>
+                  <SecretField id="bot-onebot-http-secret" v-model="oneBotHTTPSecretDraft"
+                    label="HTTP 事件签名密钥" placeholder="与接入端 HTTP POST 的 secret 一致"
+                    hint="必填；用于校验 X-Signature（HMAC-SHA1）。API 的 Access Token 在下方单独配置。"
+                    :configured="form.onebot_http_secret_configured"
+                    :revealed="tokenRevealed.onebot_http_secret" :busy="tokenRevealBusy === 'onebot_http_secret'"
+                    @toggle-reveal="toggleTokenReveal('onebot_http_secret')" />
+                </template>
+              </template>
               <template v-else-if="currentPlatform === 'telegram'">
                 <SecretField
                   id="bot-tg-token"
@@ -1531,6 +1558,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -1547,6 +1575,8 @@ import {
   listLLMModels,
   requestBotBackfill,
   saveBotProfileConfig,
+  createBotProfileConfig,
+  getNewBotProfileDefaults,
   type MessageRelayPair,
   startBot,
   stopBot,
@@ -1658,6 +1688,7 @@ const commandSandboxMode = computed<string>({
   }
 });
 const allowedGroups = ref<string[]>([]);
+const oneBotHTTPSecretDraft = ref("");
 const telegramTokenDraft = ref("");
 const qqSecretDraft = ref("");
 const dingTalkSecretDraft = ref("");
@@ -1673,6 +1704,7 @@ const weComAESDraft = ref("");
 // 读取和判断都按约定推导——否则每加一个平台都要在三个 switch 里各补一遍。
 const tokenDrafts = {
   onebot_access_token: tokenDraft,
+  onebot_http_secret: oneBotHTTPSecretDraft,
   telegram_bot_token: telegramTokenDraft,
   nonebot_bridge_token: bridgeTokenDraft,
   qq_app_secret: qqSecretDraft,
@@ -2408,9 +2440,11 @@ function platformName(id?: string): string {
 }
 
 function platformProtocol(id?: string): string {
-  return platformDefinition(id)?.protocol === "onebot-v11-reverse-ws"
-    ? "OneBot v11 反向 WebSocket"
-    : (platformDefinition(id)?.protocol ?? "未识别协议");
+  if (platformDefinition(id)?.protocol.startsWith("onebot-v11")) {
+    const mode = form.value?.onebot_transport || "reverse_ws";
+    return ({ reverse_ws: "OneBot v11 反向 WebSocket", forward_ws: "OneBot v11 正向 WebSocket", http: "OneBot v11 HTTP" } as Record<string, string>)[mode] || "OneBot v11";
+  }
+  return platformDefinition(id)?.protocol ?? "未识别协议";
 }
 
 function platformDescription(id?: string): string {
@@ -3098,8 +3132,8 @@ async function save(): Promise<void> {
   if (!current) {
     return;
   }
-  if (!validWebSocketURL(current.onebot_reverse_ws_endpoint)) {
-    toastError("请填写有效的 ws:// 或 wss:// 回连地址");
+  if ((!current.platform || current.platform === "onebot-v11") && current.onebot_transport !== "http" && !validWebSocketURL(current.onebot_transport === "forward_ws" ? current.onebot_ws_endpoint || "" : current.onebot_reverse_ws_endpoint)) {
+    toastError("请填写有效的 ws:// 或 wss:// 连接地址");
     return;
   }
   const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
@@ -3180,7 +3214,7 @@ async function save(): Promise<void> {
       },
       model_roles: modelRoles
     };
-    const saved = await saveBotProfileConfig(payload);
+    const saved = await (creating.value ? createBotProfileConfig(payload) : saveBotProfileConfig(payload));
     applyConfig(saved);
     creating.value = false;
     toastSuccess("机器人配置已保存");
@@ -3271,25 +3305,26 @@ function leaveEditor(): void {
   page.value = "list";
 }
 
-function beginCreate(platform: BotPlatform): void {
-  const source = profiles.value.find((profile) => profile.id === activeProfileID.value) ?? form.value;
-  if (!source) return;
-  setForm({
-    ...source,
-    id: undefined,
-    name: `新建 ${platform.name} 机器人`,
-    platform: platform.id,
-    // 换平台就别把上一台的 Markdown 取舍带过来：能不能渲染是平台属性，
-    // 继承过来会让新建的 Telegram 机器人沿用 QQ 那台的降级设置。
-    markdown_to_plain: platform.id === source.platform ? source.markdown_to_plain : undefined,
-    enabled: false,
-    bot_account: "",
-    owner_login_enabled: false
-  });
-  creating.value = true;
-  platformPickerOpen.value = false;
-  editorTab.value = "access";
-  page.value = "edit";
+async function beginCreate(platform: BotPlatform): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const defaults = await getNewBotProfileDefaults(platform.id);
+    setForm({
+      ...defaults,
+      id: undefined,
+      name: `新建 ${platform.name} 机器人`,
+      platform: platform.id
+    });
+    creating.value = true;
+    platformPickerOpen.value = false;
+    editorTab.value = "access";
+    page.value = "edit";
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "加载机器人默认配置失败");
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function removeProfile(profile: BotProfileConfig): Promise<void> {
@@ -3350,7 +3385,7 @@ async function load(): Promise<void> {
   ]);
   platforms.value = platformResult.platforms.length
     ? platformResult.platforms
-    : [{ id: "onebot-v11", name: "OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ" }];
+    : [{ id: "onebot-v11", name: "OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ" }];
   if (botConfig) {
     applyConfig(botConfig);
   }
@@ -3365,4 +3400,15 @@ onMounted(() => {
   trackHeaderHeight();
   void load();
 });
+useConfigurationRefresh(["llm"], async () => {
+  const config = await getConfig();
+  llmChannels.value = config.profiles ?? [];
+});
+useConfigurationRefresh(["bot"], async () => {
+  const config = await getBotProfileConfig();
+  profileSet.value = config;
+  // An editor can have unsaved changes while another cached page saves data.
+  if (page.value !== "edit") setForm(config);
+});
+
 </script>

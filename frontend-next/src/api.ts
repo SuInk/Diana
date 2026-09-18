@@ -2,6 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { trackScopeRequest } from "./scope-transition";
+import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic";
 
@@ -141,6 +142,11 @@ export interface BotProfileConfig {
   /** 跨机器人的消息互通链路，一条链路连两个会话。 */
   message_relays?: MessageRelayPair[];
   enabled: boolean;
+  onebot_transport?: "reverse_ws" | "forward_ws" | "http";
+  onebot_ws_endpoint?: string;
+  onebot_http_url?: string;
+  onebot_http_secret?: string;
+  onebot_http_secret_configured?: boolean;
   onebot_reverse_ws_endpoint: string;
   onebot_access_token?: string;
   onebot_access_token_configured?: boolean;
@@ -751,6 +757,7 @@ export interface BotPlatform {
 
 const inflightRequests = new Map<string, Promise<unknown>>();
 const responseCache = new Map<string, { at: number; data: unknown }>();
+let cacheGeneration = 0;
 
 function requestPath(url: string): string {
   const [path] = url.split("?");
@@ -809,7 +816,9 @@ function requestCacheKey(method: string, url: string, body?: BodyInit | null): s
 }
 
 function invalidateAPICache(): void {
+  cacheGeneration++;
   responseCache.clear();
+  inflightRequests.clear();
 }
 
 // ApiError 把「后端根本没答话」和「后端答了但不同意」分开。两者混在一起时，
@@ -875,6 +884,7 @@ async function performRequestJSON<T>(url: string, init?: RequestInit): Promise<T
     }
   }
 
+  const generation = cacheGeneration;
   const pending = (async () => {
     let response: Response;
     try {
@@ -910,6 +920,12 @@ async function performRequestJSON<T>(url: string, init?: RequestInit): Promise<T
     }
     if (isMutatingRequest(method, path)) {
       invalidateAPICache();
+      const kind = configurationKindForMutation(path);
+      if (kind) notifyConfigurationChanged(kind);
+    } else if (isCacheableRead(method, path) && generation !== cacheGeneration) {
+      // A save completed while this read was in flight. Join a fresh request
+      // instead of returning/caching the pre-save snapshot.
+      return performRequestJSON<T>(url, init);
     } else if (ttl > 0) {
       responseCache.set(key, { at: Date.now(), data });
     }
@@ -1183,6 +1199,14 @@ export function getBotProfileConfig(includeSecrets = false): Promise<BotProfileC
 
 export function getBotPlatforms(): Promise<{ platforms: BotPlatform[] }> {
   return requestJSON<{ platforms: BotPlatform[] }>("/api/assistant/platforms");
+}
+
+export function getNewBotProfileDefaults(platform: string): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>(`/api/assistant/config/defaults?platform=${encodeURIComponent(platform)}`);
+}
+
+export function createBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {
+  return requestJSON<BotProfileConfig>("/api/assistant/config/new", { method: "POST", body: JSON.stringify(config) });
 }
 
 export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {

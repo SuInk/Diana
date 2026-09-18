@@ -416,7 +416,7 @@ let tasks: AssistantTask[] = [
 ];
 
 const platforms: BotPlatform[] = [
-  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11-reverse-ws", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 OneBot v11。" },
+  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 OneBot v11。" },
   { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。" }
 ];
 
@@ -570,11 +570,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       agent_max_steps: 8,
       agent_command_timeout_ms: 10000
     });
+  if (path === "/api/assistant/config/defaults" && method === "GET") return json({
+    platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
+    onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
+    group_triggers: ["Diana", "diana"], request_timeout_ms: 60000
+  });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
-  if (path === "/api/assistant/config" && method === "POST") {
+  if (["/api/assistant/config", "/api/assistant/config/new"].includes(path) && method === "POST") {
     const incoming = body as unknown as BotProfileConfig;
     const profiles = [...(assistantConfig.profiles ?? [])];
-    const saved = { ...incoming, id: incoming.id || `bot-${Date.now()}` };
+    const saved = { ...incoming, id: (path === "/api/assistant/config/new" ? undefined : incoming.id) || `bot-${Date.now()}` };
     const index = profiles.findIndex((profile) => profile.id === saved.id);
     if (index >= 0) profiles[index] = saved; else profiles.push(saved);
     assistantConfig = { ...assistantConfig, ...saved, profiles, active_profile_id: saved.id };

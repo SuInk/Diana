@@ -134,12 +134,20 @@ Telegram 主人账号支持数字 ID、用户名和 `@用户名`，按平台真�
 
 | 平台 | 要准备的凭据 | 连接方向 |
 | --- | --- | --- |
-| **OneBot v11**（NapCat、Lagrange.Core、go-cqhttp 等） | OneBot 客户端里配好反向 WebSocket 指向 Diana，双方约定一个 access token | 客户端 → Diana，无需公网 |
+| **OneBot v11**（NapCat、Lagrange.Core、go-cqhttp 等） | 支持正向 WS、反向 WS、HTTP API + HTTP 事件上报，在机器人页选择连接方式 | 连接方向取决于所选方式，可在局域网使用 |
 | **Telegram** | BotFather 的 Bot Token（国内网络通常还要代理地址） | Diana 主动出站，无需公网 |
 | **QQ 官方机器人** | 开放平台的 AppID + AppSecret（未上架可用沙箱） | Diana 主动出站，无需公网 |
 | **钉钉** | 应用的 Client ID + Client Secret（Stream 模式） | Diana 主动出站，无需公网 |
 | **飞书** | App ID + App Secret + Verification Token（加密推送再加 Encrypt Key） | 平台回调 → Diana，**需要公网地址** |
 | **企业微信** | 企业 ID + AgentId + Secret + 回调 Token/EncodingAESKey | 平台回调 → Diana，**需要公网地址** |
+
+OneBot v11 连接方式：
+
+- **反向 WS（默认）**：接入端连接 `ws://<Diana 主机>:18080/onebot/v11/ws`，双方填写相同的 Access Token；旧配置无需修改。
+- **正向 WS**：在机器人页填写接入端的通用 WS 地址，例如 `ws://127.0.0.1:6700/`（同时提供 API 和事件，不能只填 `/api` 或 `/event`），Diana 主动连接并在断线后重试。
+- **HTTP**：填写接入端 HTTP API 地址，例如 `http://127.0.0.1:5700`；接入端把事件 POST 到 `http://<Diana 主机>:18080/onebot/v11/http`。双方设置相同的 HTTP 事件签名密钥（接入端的 `secret`，HMAC-SHA1），API 的 Access Token 单独配置。Diana 异步处理事件并通过 HTTP API 回复，不使用上报响应中的快速操作。HTTP 状态表示 API 探测结果，仍需确认接入端已配置事件上报。
+
+固定的反向 WS 入口和 HTTP 上报入口各支持一个启用中的配置档（同类取第一个）；正向 WS 可配置多个机器人。Docker 中 `127.0.0.1` 指容器自身，服务地址须按实际网络调整。这里支持的是 OneBot v11 的三种连接方式，不包含 OneBot v12 的不同事件/API 格式。
 
 飞书和企业微信要填到对方后台的回调地址，机器人页会直接显示出来。各平台功能上的细微差异（比如 QQ 官方机器人只收得到 @ 消息、语音仅 OneBot 可用）见[配置文档](https://suink.github.io/Diana/configuration.html)。
 

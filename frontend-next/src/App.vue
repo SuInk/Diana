@@ -167,6 +167,7 @@
 </template>
 
 <script setup lang="ts">
+import { useConfigurationRefresh } from "./configuration-sync";
 import { computed, defineAsyncComponent, KeepAlive, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Component } from "vue";
 import {
@@ -193,10 +194,10 @@ import { currentView, navItemForView, navSections, navigate, type ViewID } from 
 import { ALL_PROFILES, botScope, reconcileBotScope, setBotScope } from "./bot-scope";
 import { scopeSwitching } from "./scope-transition";
 import AppSelect from "./components/AppSelect.vue";
-import { startEventStream, stream } from "./stream";
+import { startEventStream, stream, pushStatusSnapshot } from "./stream";
 import { theme } from "./theme";
 import { formatUptime } from "./format";
-import { checkForUpdate, getAuthStatus, getBotProfileConfig, getConfig, getHealth, getSystemVersion, logout, type BotProfileConfig, type HealthResponse, type SystemVersion } from "./api";
+import { checkForUpdate, getBotStatus, getAuthStatus, getBotProfileConfig, getConfig, getHealth, getSystemVersion, logout, type BotProfileConfig, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
 import ConfirmHost from "./components/ConfirmHost.vue";
 import { toastSuccess } from "./toast";
@@ -401,7 +402,7 @@ const botSummary = computed(() => {
   }
   const connected = channels.filter((channel) => channel.connected).length;
   if (connected === 0) {
-    return { kind: "err", label: "等待通道连接", hint: "请确认 NapCat 已启动，并检查反向 WebSocket 地址与 Token。" };
+    return { kind: "err", label: "等待通道连接", hint: "请确认 OneBot 接入端已启动，并检查连接方式、服务地址与鉴权配置。" };
   }
   return { kind: connected === channels.length ? "ok" : "warn", label: `已连接 ${connected}/${channels.length}`, hint: "机器人通道与账号状态正常。" };
 });
@@ -629,4 +630,9 @@ onBeforeUnmount(() => {
   window.clearInterval(updateIndicatorTimer);
   window.clearTimeout(backendRetryTimer);
 });
+useConfigurationRefresh(["bot"], loadBotProfiles);
+useConfigurationRefresh(["bot", "llm"], async () => {
+  pushStatusSnapshot(await getBotStatus());
+});
+
 </script>
