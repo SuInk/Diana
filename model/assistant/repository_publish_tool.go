@@ -262,7 +262,7 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -345,26 +345,55 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	}
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	userAllowed, groupAllowed, code, message := repositoryPublishAccessForEvent(t.event, repository, owner, t.settings)
-	if code != "" {
-		return t.finish(ctx, result.fail(code, message))
-	}
-	if operation == "create" && !userAllowed && groupAllowed {
-		return t.finish(ctx, t.createWriteDraft(ctx, repository, operation, input))
-	}
-	if !userAllowed {
-		return t.finish(ctx, result.fail("permission_denied", "当前用户没有该仓库的审批或写入权限。"))
+	readOperation := operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file"
+	if readOperation {
+		// search 的 query 本地校验先于任何网络探测：注入仓库限定符、布尔操作或
+		// 引号必须零请求被拒，不能先挨一发仓库元信息探测。
+		if operation == "search" {
+			if _, _, _, _, _, code, message := parseSearchInput(input); code != "" {
+				return t.finish(ctx, result.fail(code, message))
+			}
+		}
+		// 已按用户授权的用户保留旧版个人 Token 要求：这类用户已被显式授予该仓库的
+		// 操作权，访问应归因到本人，而不是悄悄走共享公共凭据。未在任何用户名单里的
+		// 用户不受此约束——公开仓库按新规则直接可读。同样必须在网络探测之前完成。
+		if !owner {
+			if code, message := t.validateReadCredential(repository); code != "" {
+				return t.finish(ctx, result.fail(code, message))
+			}
+		}
+		// 读操作按仓库可见性分流 ACL（关闭 #565）：
+		// 公开仓库默认全员可查，不再要求逐用户授权和全局白名单；
+		// 私有仓库仅主人与「私有仓库源码读取授权」名单（含 Issue 管理人员、
+		// 用户仓库授权名单）内的用户可读，其余人明确拒绝且不泄露仓库信息。
+		// 元信息探测返回 404 时不在这里拦截：凭据看不到的仓库，真正的读取接口
+		// 同样会 404，让后续请求给出带凭据归因的错误即可，行为与旧版一致。
+		visibility, apiErr := t.repositoryVisibility(ctx, repository)
+		if apiErr != nil && apiErr.Code != "not_found" {
+			return t.finish(ctx, result.fail(apiErr.Code, t.failureMessage(apiErr.Code)))
+		}
+		if apiErr == nil && visibility == repositoryVisibilityPrivate && !owner {
+			if code, message := t.validatePrivateReadAccess(repository); code != "" {
+				return t.finish(ctx, result.fail(code, message))
+			}
+		}
+	} else {
+		userAllowed, groupAllowed, code, message := repositoryPublishAccessForEvent(t.event, repository, owner, t.settings)
+		if code != "" {
+			return t.finish(ctx, result.fail(code, message))
+		}
+		if operation == "create" && !userAllowed && groupAllowed {
+			return t.finish(ctx, t.createWriteDraft(ctx, repository, operation, input))
+		}
+		if !userAllowed {
+			return t.finish(ctx, result.fail("permission_denied", "当前用户没有该仓库的审批或写入权限。"))
+		}
 	}
 	if operation != "create" && operation != "search" {
 		result.RequestedNumber = repositoryIssueNumber(input)
 		result.RequestedNumbers = repositoryIssueBatchTargets(input)
 	}
 	if operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file" {
-		if !owner {
-			if code, message := t.validateWriteAccess(repository, false); code != "" {
-				return t.finish(ctx, result.fail(code, message))
-			}
-		}
 		if operation == "get" {
 			return t.finish(ctx, t.get(ctx, repository, input))
 		}
@@ -632,6 +661,94 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner
 	return "", ""
 }
 
+const (
+	repositoryVisibilityPublic  = "public"
+	repositoryVisibilityPrivate = "private"
+)
+
+// repositoryVisibility 读取仓库元信息判断公开/私有。走凭据链（用户 Token、仓库绑定
+// 凭据、公共 Token、gh）：凭据可见的私有仓库返回 private，公开仓库无论带不带凭据
+// 都返回 public；凭据也看不到的仓库按 GitHub 的口径返回 not_found——不区分「不存在」
+// 和「无权访问」，免得拿探测接口枚举别人的私有仓库。
+func (t *dianaRepositoryIssuesTool) repositoryVisibility(ctx context.Context, repository string) (string, *repositoryIssueAPIError) {
+	var meta struct {
+		Private bool `json:"private"`
+	}
+	if apiErr := t.doJSON(ctx, http.MethodGet, "/repos/"+repository, nil, &meta); apiErr != nil {
+		return "", apiErr
+	}
+	if meta.Private {
+		return repositoryVisibilityPrivate, nil
+	}
+	return repositoryVisibilityPublic, nil
+}
+
+// validateReadCredential 保留旧版对「已按用户授权」用户的个人 Token 要求（关闭
+// #565）：这类用户已被显式授予该仓库的操作权，读操作也应归因到本人，而不是用共享
+// 公共凭据代替。未在任何用户名单里的用户不受此约束。返回非空 code 即拒绝。
+func (t *dianaRepositoryIssuesTool) validateReadCredential(repository string) (string, string) {
+	userID := strings.TrimSpace(t.event.UserID)
+	key := strings.ToLower(repository)
+	legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
+	if err != nil {
+		return "invalid_user_repository_access", "用户仓库授权配置无效。"
+	}
+	legacyGroups, err := repositoryPublishGroupAccess(t.settings.String(repositoryPublishSettingGroupAccess, ""))
+	if err != nil {
+		return "invalid_group_repository_access", "群聊仓库授权配置无效。"
+	}
+	managerUsers, managerGroups, _, _, err := repositoryPublishEffectiveAccess(t.settings, legacyUsers, legacyGroups)
+	if err != nil {
+		return "invalid_repository_access", "Issue 授权配置无效。"
+	}
+	groupDirect := t.event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(t.event.GroupID)][key]
+	if !managerUsers[userID][key] || groupDirect {
+		return "", ""
+	}
+	tokens, err := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
+	if err != nil {
+		return "invalid_user_tokens", "用户 GitHub Token 配置无效。"
+	}
+	modes, err := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
+	if err != nil {
+		return "invalid_user_auth_modes", "用户 GitHub 认证来源配置无效。"
+	}
+	mode := modes[userID]
+	// 未配置来源的旧规则继续要求个人 Token，避免升级后悄然扩大凭据权限。
+	if (mode == "" || mode == repositoryPublishAuthToken) && strings.TrimSpace(tokens[userID]) == "" {
+		return "user_token_required", "当前授权用户尚未配置自己的 GitHub Token。"
+	}
+	if mode == repositoryPublishUserAuthInherit && repositoryPublishAuthMode(t.settings) == repositoryPublishAuthToken && t.effectiveGlobalToken() == "" {
+		return "token_required", "当前用户沿用的全局认证方式要求配置 GitHub Token，请在「GitHub 仓库 · 设置」里填写。"
+	}
+	return "", ""
+}
+
+// validatePrivateReadAccess 校验非主人用户是否有私有仓库的源码读取授权。
+// 授权来源按宽口径取并集：「私有仓库源码读取授权」+ Issue 管理人员（含「用户仓库
+// 授权」回落）——这两拨人都已被后台显式授予该仓库的操作权，读代码不该比写 Issue
+// 更严。返回非空 code 即拒绝，提示里只说授权路径，不泄露仓库内容。
+func (t *dianaRepositoryIssuesTool) validatePrivateReadAccess(repository string) (string, string) {
+	userID := strings.TrimSpace(t.event.UserID)
+	key := strings.ToLower(repository)
+	codeUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingCodeUsers, ""))
+	if err != nil {
+		return "invalid_repository_access", "私有仓库源码读取授权配置无效，请按每行“用户ID = owner/repo, owner/repo”填写。"
+	}
+	if codeUsers[userID][key] {
+		return "", ""
+	}
+	legacyUsers, _ := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
+	managerUsers, _, _, _, effErr := repositoryPublishEffectiveAccess(t.settings, legacyUsers, map[string]map[string]bool{})
+	if effErr != nil {
+		return "invalid_repository_access", "Issue 授权配置无效。"
+	}
+	if managerUsers[userID][key] {
+		return "", ""
+	}
+	return "permission_denied", "该仓库是私有仓库，仅机器人主人和「私有仓库源码读取授权」名单内的用户可以读取代码；当前用户不在授权名单。"
+}
+
 // effectiveGlobalToken 返回实际会用到的公共 Token：优先发布插件自己的那份，为空时
 // 回落到订阅插件，与 repositoryPublishCredential 的取值口径保持一致。
 func (t *dianaRepositoryIssuesTool) effectiveGlobalToken() string {
@@ -812,25 +929,27 @@ func repositoryPublishEventRepositories(event MessageEvent, owner bool, settings
 	return granted
 }
 
-func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
-	result := repositoryIssueResult{Operation: "search", Repository: repository}
-	query, redactions := sanitizeRepositoryIssueText(configToolString(input, "query"), 500, true)
-	result.Redactions = redactions
+// parseSearchInput 解析并本地校验 search 参数，返回规范化后的 query/state/kind、
+// 拼进 GitHub 搜索串的类型限定符，以及脱敏计数。任何一步不合法都返回非空的
+// code/message——这些检查不触碰网络，Run 在读操作探测仓库可见性之前先跑一遍，
+// 保证注入类输入零请求被拒。
+func parseSearchInput(input map[string]any) (query, state, kind, typeQualifier string, redactions int, code, message string) {
+	query, redactions = sanitizeRepositoryIssueText(configToolString(input, "query"), 500, true)
 	if query == "" {
-		return result.fail("invalid_input", "search 必须提供 query。")
+		return "", "", "", "", redactions, "invalid_input", "search 必须提供 query。"
 	}
 	if repositoryIssueSearchQualifierPattern.MatchString(query) || repositoryIssueSearchBooleanPattern.MatchString(query) || strings.ContainsAny(query, "\"`") {
-		return result.fail("invalid_input", "query 只能包含普通关键词，不能注入仓库限定符、布尔操作或引号。")
+		return "", "", "", "", redactions, "invalid_input", "query 只能包含普通关键词，不能注入仓库限定符、布尔操作或引号。"
 	}
-	state := strings.ToLower(strings.TrimSpace(configToolString(input, "state")))
+	state = strings.ToLower(strings.TrimSpace(configToolString(input, "state")))
 	if state == "" {
 		state = "open"
 	}
 	if state != "open" && state != "closed" && state != "all" {
-		return result.fail("invalid_input", "state 必须是 open、closed 或 all。")
+		return "", "", "", "", redactions, "invalid_input", "state 必须是 open、closed 或 all。"
 	}
-	kind := strings.ToLower(strings.TrimSpace(configToolString(input, "kind")))
-	typeQualifier := " is:issue "
+	kind = strings.ToLower(strings.TrimSpace(configToolString(input, "kind")))
+	typeQualifier = " is:issue "
 	switch kind {
 	case "", "issue":
 		kind = "issue"
@@ -839,7 +958,17 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 	case "all":
 		typeQualifier = " "
 	default:
-		return result.fail("invalid_input", "kind 必须是 issue、pull_request 或 all。")
+		return "", "", "", "", redactions, "invalid_input", "kind 必须是 issue、pull_request 或 all。"
+	}
+	return query, state, kind, typeQualifier, redactions, "", ""
+}
+
+func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: "search", Repository: repository}
+	query, state, kind, typeQualifier, redactions, code, message := parseSearchInput(input)
+	result.Redactions = redactions
+	if code != "" {
+		return result.fail(code, message)
 	}
 	searchQuery := "repo:" + repository + typeQualifier + query
 	if state != "all" {

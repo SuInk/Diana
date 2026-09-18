@@ -34,6 +34,8 @@ type repositoryPublishTestGitHub struct {
 	createStatus    int
 	commentStatus   int
 	rateLimit       bool
+	// repoPrivate 控制 /repos/acme/demo 元信息探测返回的可见性，默认 public。
+	repoPrivate bool
 }
 
 func newRepositoryPublishTestGitHub() *repositoryPublishTestGitHub {
@@ -69,6 +71,11 @@ func (s *repositoryPublishTestGitHub) handler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// 仓库元信息探测（读操作 ACL 的可见性判断）：默认 public，测试可置 repoPrivate。
+	if r.Method == http.MethodGet && r.URL.Path == "/repos/acme/demo" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"private": s.repoPrivate, "full_name": "acme/demo"})
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/repos/acme/demo/issues")
 	switch {
 	case r.Method == http.MethodGet && path == "":
