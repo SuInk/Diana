@@ -2,7 +2,7 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <div ref="viewRoot">
+  <div ref="viewRoot" class="assistant-view">
     <header ref="viewHeader" class="view-header">
       <div class="view-title">
         <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="leaveEditor">
@@ -15,18 +15,9 @@
         </div>
       </div>
       <div v-if="page === 'edit'" class="view-actions">
-        <button v-if="status && !status.running" class="btn primary" type="button" :disabled="busy" @click="toggle(true)">
-          <Power :size="15" aria-hidden="true" />
-          启动
-        </button>
-        <button v-else-if="status" class="btn danger" type="button" :disabled="busy" @click="toggle(false)">
-          <PowerOff :size="15" aria-hidden="true" />
-          停止
-        </button>
         <!-- 回补会真的去拉 24 小时历史并补处理，属于「会产生后果」的动作，不能用
-             ghost：那是给取消、关闭这类退让动作留的，无边框无底色，夹在红色的停止
-             和绿色的保存之间看起来像是禁用了。默认样式有边框有底色，明确可点，又不
-             跟主动作抢。 -->
+             ghost：那是给取消、关闭这类退让动作留的，无边框无底色，夹在绿色的保存
+             旁边看起来像是禁用了。默认样式有边框有底色，明确可点，又不跟主动作抢。 -->
         <button
           v-if="status && status.running && isOneBotPlatform"
           class="btn"
@@ -41,6 +32,22 @@
         <button class="btn primary" type="button" :disabled="busy || !form" @click="save">
           <Save :size="15" aria-hidden="true" />
           保存配置
+        </button>
+      </div>
+      <!-- 批量启停作用于列表里的所有机器人，不属于某一台的配置，所以放在列表页
+           页头；编辑页只保留该机器人自己的保存和回补动作。 -->
+      <div v-else class="view-actions">
+        <button
+          v-if="profiles.length > 0"
+          class="btn"
+          :class="allProfilesEnabled ? 'danger' : 'primary'"
+          type="button"
+          :disabled="busy"
+          @click="toggleAllProfiles(!allProfilesEnabled)"
+        >
+          <Power v-if="!allProfilesEnabled" :size="15" aria-hidden="true" />
+          <PowerOff v-else :size="15" aria-hidden="true" />
+          {{ allProfilesEnabled ? "全部停止" : "全部启用" }}
         </button>
       </div>
     </header>
@@ -107,6 +114,16 @@
               <span class="bot-profile-account">{{ profile.bot_account || accountPlaceholder(profile) }}</span>
             </span>
           </button>
+          <label class="switch bot-profile-enable" :title="profile.enabled ? '停用这台机器人' : '启用这台机器人'">
+            <input
+              type="checkbox"
+              :checked="profile.enabled"
+              :disabled="busy || profileEnabledToggling === profile.id"
+              :aria-label="`启用或停用 ${profile.name || '未命名机器人'}`"
+              @change="toggleProfileEnabled(profile, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="track" aria-hidden="true"></span>
+          </label>
           <div class="bot-profile-actions">
             <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
               <Settings2 :size="14" aria-hidden="true" />
@@ -163,11 +180,20 @@
               <span class="card-sub">通过 {{ platformProtocol(form.platform) }} 连接</span>
             </div>
             <div class="card-body stack">
-              <!-- 名称放在最前：先确认这是哪个机器人，再填它的接入凭据。 -->
+              <!-- 名称放在最前：先确认这是哪个机器人，再选接入平台、填接入凭据。 -->
               <div class="field">
                 <label for="bot-name">机器人名称</label>
                 <input id="bot-name" v-model="form.name" class="input" placeholder="例如：主群助手、客服机器人" />
                 <span class="hint">用于控制台区分多个机器人，不会自动修改账号昵称。</span>
+              </div>
+              <div class="field wide">
+                <label>接入平台</label>
+                <AppSelect
+                  :model-value="form.platform ?? ''"
+                  :options="platformOptions"
+                  @update:model-value="(value) => { if (form) form.platform = value; }"
+                />
+                <span class="hint">{{ platformDescription(form.platform) }}</span>
               </div>
               <!-- 按平台和传输方式展示连接地址与鉴权凭据。 -->
               <template v-if="isOneBotPlatform">
@@ -410,15 +436,6 @@
                 </span>
               </div>
               <div class="form-grid">
-                <div class="field wide">
-                  <label>接入平台</label>
-                  <AppSelect
-                    :model-value="form.platform ?? ''"
-                    :options="platformOptions"
-                    @update:model-value="(value) => { if (form) form.platform = value; }"
-                  />
-                  <span class="hint">{{ platformDescription(form.platform) }}</span>
-                </div>
                 <div class="field">
                   <label for="bot-owner">{{ isOneBotPlatform || form.platform === 'telegram' ? "主人账号" : "主人用户 ID" }}</label>
                   <input
@@ -939,7 +956,7 @@
             <div class="card-header">
               <h2>发送前审核</h2>
               <span class="badge" :class="form.reply_account_safety_audit_master_enabled ? 'accent' : ''">
-                {{ !form.reply_account_safety_audit_master_enabled ? "已关闭" : form.reply_account_safety_audit_enabled ? "全部回复" : "仅主动回复" }}
+                {{ form.reply_account_safety_audit_master_enabled ? "已启用" : "已关闭" }}
               </span>
             </div>
             <div class="card-body form-grid">
@@ -949,18 +966,11 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">启用账号安全审核</span>
                 </label>
-                <span class="hint">关闭后，这台机器人所有主动和直接回复都不做账号安全审核；群配置可单独覆盖。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.reply_account_safety_audit_enabled" type="checkbox" :disabled="!form.reply_account_safety_audit_master_enabled" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">直接回复也做统一发送前审核</span>
-                </label>
                 <span class="hint">
+                  开启后，这台机器人所有主动和直接回复都会做一次统一发送前审核；关闭后都不做，群配置可单独覆盖。
                   一次审核同时给出账号安全置信度并判断是否属于明确拒答；主动回复还会额外使用其中的表达质量结论。只有安全置信度低于 10% 时才会拦下不发——
                   拿不准一律放行，避免机器人在沾边话题上无故闭嘴；高置信拒答仅在发送成功后累计。表达质量分数不会拦下直接回复。
-                  打开后，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
+                  开启时，被 @ 或私聊的直接回复也各多一次快模型往返，回复会慢一点。
                 </span>
               </div>
               <div class="field wide">
@@ -1637,8 +1647,6 @@ import {
   createBotProfileConfig,
   getNewBotProfileDefaults,
   type MessageRelayPair,
-  startBot,
-  stopBot,
   type LLMConfig,
   type LLMModelInfo,
   type BotProfileConfig,
@@ -1663,7 +1671,9 @@ import {
   type WorldBookNode,
   type WorldBookImportResult,
   listBotGroups,
-  getAgentDefaults
+  getAgentDefaults,
+  saveProfileEnabled,
+  saveAllProfilesEnabled
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -2498,6 +2508,35 @@ const relaySummary = computed(() => {
   const active = messageRelays.value.filter((pair) => pair.enabled).length;
   return active === total ? `已配置 ${total} 条链路，全部在转发。` : `已配置 ${total} 条链路，其中 ${active} 条在转发。`;
 });
+// 卡片右上角的启停只动这一台机器人的 enabled，其他机器人不受影响。
+const profileEnabledToggling = ref("");
+async function toggleProfileEnabled(profile: BotProfileConfig, enabled: boolean): Promise<void> {
+  if (!profile.id) return;
+  profileEnabledToggling.value = profile.id;
+  try {
+    applyConfig(await saveProfileEnabled(profile.id, enabled));
+    toastSuccess(enabled ? `机器人「${profile.name || "未命名"}」已启用` : `机器人「${profile.name || "未命名"}」已停用`);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "机器人启停保存失败");
+  } finally {
+    profileEnabledToggling.value = "";
+  }
+}
+
+// 页头的批量开关：全部启用 = 把每台机器人都置为启用；全部停止 = 全部停用。
+// 有一台没启用时显示「全部启用」，全部启用后才显示「全部停止」。
+const allProfilesEnabled = computed(() => profiles.value.length > 0 && profiles.value.every((profile) => profile.enabled));
+async function toggleAllProfiles(enabled: boolean): Promise<void> {
+  busy.value = true;
+  try {
+    applyConfig(await saveAllProfilesEnabled(enabled));
+    toastSuccess(enabled ? "全部机器人已启用" : "全部机器人已停用");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "批量启停保存失败");
+  } finally {
+    busy.value = false;
+  }
+}
 const channelStatuses = computed<readonly BotChannelStatus[]>(() => status.value?.channels ?? (status.value?.channel ? [status.value.channel] : []));
 const visibleChannels = computed(() => {
   const profileID = form.value?.id;
@@ -3009,7 +3048,6 @@ function setForm(config: BotProfileConfig): void {
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
     social_reply_enabled: config.social_reply_enabled ?? false,
-    reply_account_safety_audit_enabled: config.reply_account_safety_audit_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
@@ -3335,19 +3373,6 @@ function validWebSocketURL(value: string): boolean {
     return (parsed.protocol === "ws:" || parsed.protocol === "wss:") && Boolean(parsed.host);
   } catch {
     return false;
-  }
-}
-
-async function toggle(start: boolean): Promise<void> {
-  busy.value = true;
-  try {
-    const result = start ? await startBot() : await stopBot();
-    pushStatusSnapshot(result);
-    toastSuccess(start ? "机器人已启动" : "机器人已停止");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "操作失败");
-  } finally {
-    busy.value = false;
   }
 }
 

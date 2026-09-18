@@ -1266,8 +1266,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(groupCfg.RecallReplyAutoDeleteEnabled)
 	cfg.RecallReplyTTLSeconds = groupCfg.RecallReplyTTLSeconds
 	if groupCfg.ReplyAccountSafetyAuditEnabled != nil {
-		cfg.ReplyAccountSafetyAuditEnabled = copyBoolPointer(groupCfg.ReplyAccountSafetyAuditEnabled)
-		// 群级开关是完整覆盖：主动回复也服从关闭，而机器人级旧开关仍只扩展到直接回复。
+		// 群级开关是完整覆盖：主动和直接回复都服从它，覆盖机器人级的总开关。
 		cfg.groupReplyAccountSafetyAuditOverride = copyBoolPointer(groupCfg.ReplyAccountSafetyAuditEnabled)
 	}
 	if strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt) != "" {

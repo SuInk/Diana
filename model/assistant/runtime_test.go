@@ -2318,7 +2318,8 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 		`{"action":"none","prompt":""}`,
 		"这是一张测试图片。",
 	}}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	// 发送前审核默认会多一次模型调用，这条只数带图请求的归属，把它关掉。
+	runtime := NewRuntime(BotConfig{ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	imageBody := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
@@ -2374,7 +2375,7 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 		`{"action":"tool","tool":"diana.history_media","input":{"message_ids":["img-1","img-2","img-3"]}}`,
 		`{"action":"final","content":"三张图片都已读取。"}`,
 	}}
-	runtime := NewRuntime(BotConfig{AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	imageURLs := []string{
@@ -4598,7 +4599,10 @@ func TestRuntimeFailsOverLLMProfilesWithinGroup(t *testing.T) {
 			},
 		},
 	}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{
+		// 只验证多账号 failover 的尝试顺序，发送前审核的额外调用与本断言无关，关掉。
+		ReplySafetyMasterEnabled: boolPointer(false),
+	}, channel, NewPluginManager(), store, nil, nil, nil)
 	var attempts []string
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		attempts = append(attempts, cfg.Model)
@@ -4651,6 +4655,8 @@ func TestRuntimeReplyRuleUsesSpecificLLMProfile(t *testing.T) {
 			Action:       ReplyRuleActionModel,
 			LLMProfileID: "special",
 		}},
+		// 只验证回复规则走强模型，发送前审核的额外调用与本断言无关，关掉。
+		ReplySafetyMasterEnabled: boolPointer(false),
 	}, channel, NewPluginManager(), store, nil, nil, nil)
 	var attempts []string
 	main := &sequenceLLMProvider{replies: []string{
