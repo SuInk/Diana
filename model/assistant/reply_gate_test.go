@@ -471,3 +471,44 @@ func TestLevelGateSkippedOnNonOneBotPlatform(t *testing.T) {
 		t.Fatal("OneBot 上 deny 策略应拦下未知等级")
 	}
 }
+
+func TestPrivateAdmissionAllows(t *testing.T) {
+	owner := "10001"
+	cases := []struct {
+		name      string
+		admission PrivateAdmission
+		userID    string
+		want      bool
+	}{
+		{"默认 all 放行任何人", PrivateAdmission{}, "42", true},
+		{"all 放行空 ID", PrivateAdmission{}, "", true},
+		{"非法模式退回 all", PrivateAdmission{Mode: "nonsense"}, "42", true},
+		{"owner_only 放行主人", PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}, owner, true},
+		{"owner_only 拦截普通人", PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}, "42", false},
+		{"owner_only 拦截空 ID", PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}, "", false},
+		{"whitelist 放行主人", PrivateAdmission{Mode: PrivateAdmissionWhitelist, AllowedUsers: []string{"42"}}, owner, true},
+		{"whitelist 放行名单内", PrivateAdmission{Mode: PrivateAdmissionWhitelist, AllowedUsers: []string{"42"}}, "42", true},
+		{"whitelist 拦截名单外", PrivateAdmission{Mode: PrivateAdmissionWhitelist, AllowedUsers: []string{"42"}}, "43", false},
+		{"whitelist 名单清洗后匹配", PrivateAdmission{Mode: PrivateAdmissionWhitelist, AllowedUsers: []string{" 42 "}}, "42", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.admission.Allows(tc.userID, owner); got != tc.want {
+				t.Fatalf("Allows(%q, %q) = %v, want %v", tc.userID, owner, got, tc.want)
+			}
+		})
+	}
+}
+
+// 私聊准入是接入层整条丢弃，不应被 shouldHandle 的群门槛逻辑感知；
+// 这里只验证群聊路径不受私聊准入配置影响。
+func TestPrivateAdmissionDoesNotAffectGroupReplies(t *testing.T) {
+	rt := gateRuntime(t, BotConfig{
+		BotAccount:       "42",
+		OwnerID:          "10001",
+		PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionOwnerOnly},
+	}, time.Now())
+	if !rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "7", ToMe: true}, "hi") {
+		t.Fatal("私聊准入不该影响群聊响应")
+	}
+}

@@ -207,6 +207,8 @@ export interface BotProfileConfig {
   disabled_groups?: string[];
   /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
   group_admission?: GroupAdmission;
+  /** 私聊准入；不设等同 all，所有用户的私聊都会响应。 */
+  private_admission?: PrivateAdmission;
   /** 全局回复门槛（等级/时段/用户名单）；不设表示无门槛。 */
   reply_gate?: ReplyGate | null;
   welcome_enabled?: boolean;
@@ -542,6 +544,15 @@ export type GroupAdmissionMode = "blacklist" | "whitelist";
 export interface GroupAdmission {
   mode?: GroupAdmissionMode;
   allowed_groups?: string[];
+}
+
+/** 私聊准入模式：all 为默认不限制，owner_only 只响应主人，whitelist 只响应主人与白名单。 */
+export type PrivateAdmissionMode = "all" | "owner_only" | "whitelist";
+
+export interface PrivateAdmission {
+  mode?: PrivateAdmissionMode;
+  /** 仅 whitelist 模式生效；主人任何模式下都放行。 */
+  allowed_users?: string[];
 }
 
 export interface ReplyGate {
