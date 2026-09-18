@@ -16,6 +16,7 @@ import (
 // provider 配置只该回答「我是谁、我能提供哪些模型」，用哪个模型是调用方的事。所以
 // 用途在这里升级成一等概念：每个用途都能单独绑定，绑不到就用它所属分组的绑定。
 const (
+	PurposeMediaParse            = "media_parse"
 	PurposeReply                 = "reply"
 	PurposeSubagent              = "subagent"
 	PurposeSubtask               = "subtask"
@@ -44,9 +45,10 @@ const (
 // 它调用的是 runLLMProvider 还是 runLLMRouterProvider，从配置界面上完全看不出来。
 // 摊开写成表，用途才谈得上「可覆盖」：没单独绑就落到所属分组的绑定。
 var llmPurposeGroup = map[string]string{
-	PurposeReply:    llm.GroupChat,
-	PurposeSubagent: llm.GroupChat,
-	PurposeSubtask:  llm.GroupChat,
+	PurposeMediaParse: llm.GroupVision,
+	PurposeReply:      llm.GroupChat,
+	PurposeSubagent:   llm.GroupChat,
+	PurposeSubtask:    llm.GroupChat,
 
 	// 路由、判定这类调用短、频次高，值得单独指一个便宜快的模型。
 	PurposeReplyIntentRouter:     llm.GroupIntent,
@@ -134,6 +136,12 @@ func isModelBindingKey(key string) bool {
 func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (ModelRole, bool) {
 	if len(roles) == 0 {
 		return ModelRole{}, false
+	}
+	// A dedicated media parser wins even when general vision follows chat.
+	if isMediaParsePurpose(purpose) {
+		if role, ok := roles[PurposeMediaParse]; ok {
+			return resolveIfFollowChat(roles, role)
+		}
 	}
 	groupKey := modelRoleKeyForGroup(group)
 	// 本次调用的分组声明了「跟随对话」时直接落到对话绑定，不再往下看用途：用途上

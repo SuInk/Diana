@@ -53,6 +53,9 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 	out := append([]MessageSegment(nil), segments...)
 	var failures []error
 	for index, segment := range out {
+		if videoFileSegment(segment) && skipAutomaticVideo(ctx) {
+			continue
+		}
 		if segment.Type != "image" && segment.Type != "record" && !videoFileSegment(segment) {
 			continue
 		}

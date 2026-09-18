@@ -61,7 +61,7 @@ func (t *dianaHistoryImagesTool) Name() string {
 }
 
 func (t *dianaHistoryImagesTool) Description() string {
-	return `读取当前会话历史消息里的原始图片或缓存视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。`
+	return `读取当前会话历史消息里的原始图片或按需提取的视频关键帧，作为真实多模态附件交给下一轮模型。历史摘要够用时不要调用；需要辨认小字、比较画面或核对视频细节时才调用，并一次传入所有相关消息。单张失效会跳过并报告，不影响其他画面。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
@@ -106,6 +106,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		}
 		original := cloneHistoricalImageEvent(source)
 		source = cloneHistoricalImageEvent(source)
+		source = t.runtime.prepareRequestedVideoFrames(ctx, source)
 		textSegments := append([]MessageSegment(nil), source.Segments...)
 		if source.Quoted != nil {
 			textSegments = append(textSegments, source.Quoted.Segments...)
@@ -118,7 +119,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID: selector.MessageID,
 				Status:    "failed",
-				Error:     "消息中没有原始图片或缓存视频关键帧",
+				Error:     "消息中没有原始图片或按需提取的视频关键帧",
 			})
 			continue
 		}

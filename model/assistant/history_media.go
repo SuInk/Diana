@@ -52,6 +52,9 @@ func cacheMessageEventImagesDetailed(ctx context.Context, event MessageEvent) (M
 }
 
 func cacheMessageEventVideos(ctx context.Context, event MessageEvent) MessageEvent {
+	if skipAutomaticVideo(ctx) {
+		return event
+	}
 	event.Segments = cacheVideoFrames(ctx, event.Platform, event.Time, string(event.Kind), event.GroupID, event.UserID, event.MessageID, event.Segments)
 	if event.Quoted != nil {
 		quoted := *event.Quoted
