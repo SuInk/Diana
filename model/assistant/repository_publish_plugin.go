@@ -33,6 +33,7 @@ const (
 	repositoryPublishSettingDraftGroups   = "issue_draft_group_access"
 	repositoryPublishSettingManagerUsers  = "issue_manager_user_access"
 	repositoryPublishSettingManagerGroups = "issue_manager_group_access"
+	repositoryPublishSettingCodeUsers     = "code_reader_user_access"
 	repositoryPublishSettingUserTokens    = "user_github_tokens"
 	repositoryPublishSettingTokenUsers    = "user_github_token_users"
 	repositoryPublishSettingUserAuth      = "user_github_auth_modes"
@@ -272,11 +273,11 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "GitHub Issue 与 PR",
-		Version:     "0.6.0",
-		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。",
+		Version:     "0.6.1",
+		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。read_file 读取仓库文件：公开仓库全员可查，私有仓库仅主人与授权用户可读。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。",
 		Official:    true,
 		BuiltIn:     true,
-		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "github:pull_requests:read", "github:pull_requests:write", "audit:write", "llm:tool"},
+		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "github:pull_requests:read", "github:pull_requests:write", "github:contents:read", "audit:write", "llm:tool"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         repositoryPublishSettingAuthMode,
@@ -337,6 +338,11 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			{
 				Key: repositoryPublishSettingManagerGroups, Label: "Issue 管理人员（按群）",
 				Description: "按“群 ID = owner/repo, owner/repo”填写；该群的所有成员都能直接创建和管理 Issue，请谨慎授予。只想授权个别人时改用“按用户”那项。",
+				Type:        PluginSettingTypeString, Default: "",
+			},
+			{
+				Key: repositoryPublishSettingCodeUsers, Label: "私有仓库源码读取授权（按用户）",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；公开仓库默认全员可查，私有仓库仅主人与这里授权的用户（以及 Issue 管理人员、用户仓库授权名单）可以读取代码。授权跟着人走，私聊和群聊都生效。",
 				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
