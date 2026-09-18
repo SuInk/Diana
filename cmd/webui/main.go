@@ -28,6 +28,7 @@ import (
 	// 回复时段整体偏移几个小时。
 	_ "time/tzdata"
 
+	"github.com/SuInk/diana/internal/dlog"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/llm"
@@ -608,10 +609,12 @@ func setupLogging(logPath string) (io.Writer, func()) {
 		return os.Stdout, func() {}
 	}
 	writer := io.MultiWriter(os.Stdout, file)
-	log.SetOutput(writer)
+	// 统一日志管道：slog 默认 logger 与标准 log 都写到同一 writer，
+	// 输出行格式与历史 log.SetOutput 行为保持一致（见 internal/dlog）。
+	dlog.Init(writer)
 	log.Printf("logging to %s", logPath)
 	return writer, func() {
-		log.SetOutput(os.Stdout)
+		dlog.Init(nil)
 		_ = file.Close()
 	}
 }
