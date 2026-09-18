@@ -75,6 +75,35 @@ func normalizeRecallReplyMode(mode RecallReplyMode) RecallReplyMode {
 	}
 }
 
+// WelcomeMode 决定入群欢迎词的生成方式（关闭 #575）。
+type WelcomeMode string
+
+const (
+	// WelcomeModeFixed 固定文本，替换 {user_id} 后直接发送（旧行为）。
+	WelcomeModeFixed WelcomeMode = "fixed"
+	// WelcomeModeTemplate 从口吻模板池随机抽一条，兼顾生动与零 Token 成本。
+	WelcomeModeTemplate WelcomeMode = "template"
+	// WelcomeModeLLM 按机器人设定与人设调用轻量模型实时生成一句问候，
+	// 受每群冷却间隔约束，失败或限流时回落到模板池/固定文本。
+	WelcomeModeLLM WelcomeMode = "llm"
+)
+
+func normalizeWelcomeMode(mode WelcomeMode) WelcomeMode {
+	switch mode {
+	case WelcomeModeFixed, WelcomeModeTemplate, WelcomeModeLLM:
+		return mode
+	default:
+		return WelcomeModeFixed
+	}
+}
+
+// defaultWelcomeLLMCooldownSeconds 是 LLM 欢迎词的默认每群冷却：进群/退群刷屏时
+// 不会每条都烧一次 Token。
+const defaultWelcomeLLMCooldownSeconds = 300
+
+// welcomeLLMMaxChars 限制 LLM 生成的欢迎词长度，模型失控时截断兜底。
+const welcomeLLMMaxChars = 200
+
 type MessageSegment struct {
 	Type string            `json:"type"`
 	Data map[string]string `json:"data,omitempty"`
@@ -491,6 +520,9 @@ type BotConfig struct {
 	ReplyGate                   *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled              bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage              string               `json:"welcome_message,omitempty"`
+	WelcomeMode                 WelcomeMode          `json:"welcome_mode,omitempty"`
+	WelcomeTemplates            []string             `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds   int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
 	SystemPrompt                string               `json:"system_prompt,omitempty"`
 	PersonaID                   string               `json:"persona_id,omitempty"`
 	CustomPersona               *Persona             `json:"custom_persona,omitempty"`
@@ -735,24 +767,27 @@ type GroupConfig struct {
 	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
 	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
 	// 归给当时的当前配置档。
-	BotProfileID             string           `json:"bot_profile_id,omitempty"`
-	GroupID                  string           `json:"group_id"`
-	Enabled                  bool             `json:"enabled"`
-	EnabledSet               bool             `json:"enabled_set,omitempty"`
-	GroupTriggers            []string         `json:"group_triggers,omitempty"`
-	GroupTriggerMode         AliasTriggerMode `json:"group_trigger_mode,omitempty"`
-	SystemPrompt             string           `json:"system_prompt,omitempty"`
-	ResponseMode             ResponseMode     `json:"response_mode,omitempty"`
-	ReplyStyle               ReplyStyle       `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled *bool            `json:"action_description_enabled,omitempty"`
-	SelfReference            string           `json:"self_reference,omitempty"`
-	SentenceEnders           string           `json:"sentence_enders,omitempty"`
-	WelcomeEnabled           bool             `json:"welcome_enabled,omitempty"`
-	WelcomeMessage           string           `json:"welcome_message,omitempty"`
-	MaxContextTokens         int64            `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget int64            `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit       int              `json:"recent_context_limit,omitempty"`
-	MaxReplyChars            int              `json:"max_reply_chars,omitempty"`
+	BotProfileID              string           `json:"bot_profile_id,omitempty"`
+	GroupID                   string           `json:"group_id"`
+	Enabled                   bool             `json:"enabled"`
+	EnabledSet                bool             `json:"enabled_set,omitempty"`
+	GroupTriggers             []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode          AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	SystemPrompt              string           `json:"system_prompt,omitempty"`
+	ResponseMode              ResponseMode     `json:"response_mode,omitempty"`
+	ReplyStyle                ReplyStyle       `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled  *bool            `json:"action_description_enabled,omitempty"`
+	SelfReference             string           `json:"self_reference,omitempty"`
+	SentenceEnders            string           `json:"sentence_enders,omitempty"`
+	WelcomeEnabled            bool             `json:"welcome_enabled,omitempty"`
+	WelcomeMessage            string           `json:"welcome_message,omitempty"`
+	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
+	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
+	MaxContextTokens          int64            `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget  int64            `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit        int              `json:"recent_context_limit,omitempty"`
+	MaxReplyChars             int              `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
@@ -855,6 +890,9 @@ type ConfigPayload struct {
 	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
+	WelcomeMode                  WelcomeMode          `json:"welcome_mode,omitempty"`
+	WelcomeTemplates             []string             `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds    int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
 	SystemPrompt                 string               `json:"system_prompt,omitempty"`
 	PersonaID                    string               `json:"persona_id,omitempty"`
 	CustomPersona                *Persona             `json:"custom_persona,omitempty"`
@@ -976,6 +1014,9 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		ActionDescriptionEnabled:     copyBoolPointer(base.ActionDescriptionEnabled),
 		WelcomeEnabled:               base.WelcomeEnabled,
 		WelcomeMessage:               base.WelcomeMessage,
+		WelcomeMode:                  base.WelcomeMode,
+		WelcomeTemplates:             append([]string(nil), base.WelcomeTemplates...),
+		WelcomeLLMCooldownSeconds:    base.WelcomeLLMCooldownSeconds,
 		MaxContextTokens:             base.MaxContextTokens,
 		RecentHistoryTokenBudget:     base.RecentHistoryTokenBudget,
 		RecentContextLimit:           base.RecentContextLimit,
@@ -1036,6 +1077,18 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	// 空值表示这个群没有单独表态，读取时按全局配置解析，不在这里写死档位。
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
+	}
+	if strings.TrimSpace(string(cfg.WelcomeMode)) == "" {
+		cfg.WelcomeMode = defaults.WelcomeMode
+	} else {
+		cfg.WelcomeMode = normalizeWelcomeMode(cfg.WelcomeMode)
+	}
+	cfg.WelcomeTemplates = cleanStrings(cfg.WelcomeTemplates)
+	if len(cfg.WelcomeTemplates) == 0 {
+		cfg.WelcomeTemplates = append([]string(nil), defaults.WelcomeTemplates...)
+	}
+	if cfg.WelcomeLLMCooldownSeconds <= 0 {
+		cfg.WelcomeLLMCooldownSeconds = defaults.WelcomeLLMCooldownSeconds
 	}
 	if cfg.MaxContextTokens <= 0 {
 		cfg.MaxContextTokens = defaults.MaxContextTokens
@@ -1444,6 +1497,8 @@ func DefaultBotConfig() BotConfig {
 		PrivateAdmission:          PrivateAdmission{}.WithDefaults(),
 		WelcomeEnabled:            false,
 		WelcomeMessage:            "欢迎加入本群，可以直接 @我 开始聊天。",
+		WelcomeMode:               WelcomeModeFixed,
+		WelcomeLLMCooldownSeconds: defaultWelcomeLLMCooldownSeconds,
 		SystemPrompt:              defaultSystemPrompt,
 		ResponseMode:              ResponseModeStandard,
 		ActionDescriptionEnabled:  boolPointer(false),
@@ -1622,6 +1677,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
 		cfg.WelcomeMessage = defaults.WelcomeMessage
+	}
+	cfg.WelcomeMode = normalizeWelcomeMode(cfg.WelcomeMode)
+	cfg.WelcomeTemplates = cleanStrings(cfg.WelcomeTemplates)
+	if cfg.WelcomeLLMCooldownSeconds <= 0 {
+		cfg.WelcomeLLMCooldownSeconds = defaults.WelcomeLLMCooldownSeconds
 	}
 	if strings.TrimSpace(cfg.ErrorReplyPrefix) == "" {
 		cfg.ErrorReplyPrefix = defaults.ErrorReplyPrefix
@@ -1828,6 +1888,17 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 
 // Validate 校验 OneBot v11 机器人配置是否可运行。
 func (cfg BotConfig) Validate() error {
+	if len(cfg.WelcomeTemplates) > 50 {
+		return fmt.Errorf("欢迎词模板最多 50 条")
+	}
+	for _, template := range cfg.WelcomeTemplates {
+		if len([]rune(template)) > 200 {
+			return fmt.Errorf("欢迎词模板不能超过 200 字")
+		}
+	}
+	if cfg.WelcomeLLMCooldownSeconds < 0 || cfg.WelcomeLLMCooldownSeconds > 24*60*60 {
+		return fmt.Errorf("欢迎词 LLM 冷却必须在 0 到 86400 秒之间")
+	}
 	if cfg.OneBotTransport == "" {
 		cfg.OneBotTransport = OneBotTransportReverseWS
 	}
@@ -1978,6 +2049,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplyGate:                         cfg.ReplyGate.Clone(),
 		WelcomeEnabled:                    cfg.WelcomeEnabled,
 		WelcomeMessage:                    cfg.WelcomeMessage,
+		WelcomeMode:                       cfg.WelcomeMode,
+		WelcomeTemplates:                  append([]string(nil), cfg.WelcomeTemplates...),
+		WelcomeLLMCooldownSeconds:         cfg.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                      cfg.SystemPrompt,
 		PersonaID:                         cfg.PersonaID,
 		CustomPersona:                     copyCustomPersona(cfg.CustomPersona),
@@ -2174,6 +2248,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplyGate:                       payload.ReplyGate.Clone(),
 		WelcomeEnabled:                  payload.WelcomeEnabled,
 		WelcomeMessage:                  payload.WelcomeMessage,
+		WelcomeMode:                     payload.WelcomeMode,
+		WelcomeTemplates:                append([]string(nil), payload.WelcomeTemplates...),
+		WelcomeLLMCooldownSeconds:       payload.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                    payload.SystemPrompt,
 		PersonaID:                       payload.PersonaID,
 		CustomPersona:                   copyCustomPersona(payload.CustomPersona),

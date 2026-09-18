@@ -223,6 +223,36 @@
           <label for="group-welcome">欢迎语</label>
           <textarea id="group-welcome" v-model="editing.welcome_message" class="textarea" rows="2"></textarea>
         </div>
+        <div v-if="editing.welcome_enabled" class="field">
+          <label for="group-welcome-mode">欢迎词模式</label>
+          <AppSelect
+            id="group-welcome-mode"
+            :model-value="editing.welcome_mode ?? ''"
+            :options="groupWelcomeModeOptions"
+            @update:model-value="(value) => { if (editing) editing.welcome_mode = (value || undefined) as BotGroupConfig['welcome_mode']; }"
+          />
+        </div>
+        <div v-if="editing.welcome_enabled && (editing.welcome_mode ?? '') !== 'fixed'" class="field wide">
+          <label for="group-welcome-templates">欢迎词模板池</label>
+          <textarea
+            id="group-welcome-templates"
+            v-model="welcomeTemplatesDraft"
+            class="textarea"
+            rows="3"
+            placeholder="每行一条候选，发送时随机抽一条；{user_id} 会替换成新成员 ID。留空跟随机器人。LLM 模式冷却或失败时也从这里回落。"
+          ></textarea>
+        </div>
+        <div v-if="editing.welcome_enabled && editing.welcome_mode === 'llm'" class="field">
+          <label for="group-welcome-cooldown">LLM 欢迎冷却（秒/群）</label>
+          <input
+            id="group-welcome-cooldown"
+            v-model.number="editing.welcome_llm_cooldown_seconds"
+            class="input"
+            inputmode="numeric"
+            placeholder="留空跟随机器人"
+          />
+          <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
+        </div>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
           <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
@@ -407,6 +437,13 @@ const groupActionDescriptionOptions: AppSelectOption[] = [
   { value: "on", label: "开启" },
   { value: "off", label: "关闭" }
 ];
+
+const groupWelcomeModeOptions: AppSelectOption[] = [
+  { value: "", label: "跟随全局" },
+  { value: "fixed", label: "固定文本" },
+  { value: "template", label: "口吻模板池" },
+  { value: "llm", label: "按人设实时生成" }
+];
 import { toastError, toastSuccess } from "../toast";
 
 const groups = ref<BotGroupSummary[]>([]);
@@ -485,6 +522,7 @@ async function loadRelations(): Promise<void> {
 const editing = ref<BotGroupConfig | null>(null);
 const editingGroupName = ref("");
 const triggersDraft = ref("");
+const welcomeTemplatesDraft = ref("");
 const saving = ref(false);
 const togglingGroupID = ref("");
 const defaultRecallReplyAutoDeleteEnabled = ref(false);
@@ -685,6 +723,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   editing.value = config;
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
+  welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
 }
 
 function groupConfigOf(group: BotGroupConfig): BotGroupConfig {
@@ -772,7 +811,12 @@ async function saveEditing(): Promise<void> {
       group_triggers: triggersDraft.value
         .split(/[,，]/)
         .map((item) => item.trim())
-        .filter((item) => item !== "")
+        .filter((item) => item !== ""),
+      welcome_templates: welcomeTemplatesDraft.value
+        .split("\n")
+        .map((item) => item.trim())
+        .filter((item) => item !== ""),
+      welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0
     };
     const saved = await saveBotGroup({ ...payload, bot_profile_id: botScope.value || payload.bot_profile_id });
     upsert(saved.config);

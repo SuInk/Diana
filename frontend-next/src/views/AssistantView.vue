@@ -742,9 +742,39 @@
                   <span class="switch-label">开启入群欢迎</span>
                 </label>
               </div>
+              <div v-if="form.welcome_enabled" class="field">
+                <label for="bot-welcome-mode">欢迎词模式</label>
+                <AppSelect
+                  id="bot-welcome-mode"
+                  :model-value="form.welcome_mode ?? 'fixed'"
+                  :options="welcomeModeOptions"
+                  @update:model-value="(value) => { if (form) form.welcome_mode = value as BotProfileConfig['welcome_mode']; }"
+                />
+              </div>
               <div v-if="form.welcome_enabled" class="field wide">
                 <label for="bot-welcome">欢迎语</label>
                 <textarea id="bot-welcome" v-model="form.welcome_message" class="textarea" rows="2"></textarea>
+              </div>
+              <div v-if="form.welcome_enabled && (form.welcome_mode ?? 'fixed') !== 'fixed'" class="field wide">
+                <label for="bot-welcome-templates">欢迎词模板池</label>
+                <textarea
+                  id="bot-welcome-templates"
+                  v-model="welcomeTemplatesDraft"
+                  class="textarea"
+                  rows="3"
+                  placeholder="每行一条候选，发送时随机抽一条；{user_id} 会替换成新成员 ID。LLM 模式冷却或失败时也从这里回落。"
+                ></textarea>
+              </div>
+              <div v-if="form.welcome_enabled && (form.welcome_mode ?? 'fixed') === 'llm'" class="field">
+                <label for="bot-welcome-cooldown">LLM 欢迎冷却（秒/群）</label>
+                <input
+                  id="bot-welcome-cooldown"
+                  v-model.number="form.welcome_llm_cooldown_seconds"
+                  class="input"
+                  inputmode="numeric"
+                  placeholder="默认 300"
+                />
+                <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
               </div>
             </div>
           </section>
@@ -1672,6 +1702,7 @@ const busy = ref(false);
 const tokenDraft = ref("");
 const bridgeTokenDraft = ref("");
 const triggersDraft = ref("");
+const welcomeTemplatesDraft = ref("");
 const allowlistDraft = ref("");
 
 // 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架。纯前端提示，
@@ -1945,6 +1976,12 @@ const replyReferenceModeOptions: AppSelectOption[] = [
   { value: "on", label: "总是引用" },
   { value: "off", label: "从不引用" },
   { value: "auto", label: "让模型自己决定" }
+];
+
+const welcomeModeOptions: AppSelectOption[] = [
+  { value: "fixed", label: "固定文本" },
+  { value: "template", label: "口吻模板池" },
+  { value: "llm", label: "按人设实时生成" }
 ];
 
 const mentionUserModeOptions: AppSelectOption[] = [
@@ -3018,6 +3055,7 @@ function setForm(config: BotProfileConfig): void {
     prompt_chinese_slang_hint: config.prompt_chinese_slang_hint ?? true
   };
   triggersDraft.value = (config.group_triggers ?? []).join(",");
+  welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
   allowedGroups.value = [...(config.group_admission?.allowed_groups ?? [])];
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
@@ -3261,6 +3299,11 @@ async function save(): Promise<void> {
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
+      welcome_templates: welcomeTemplatesDraft.value
+        .split("\n")
+        .map((item) => item.trim())
+        .filter((item) => item !== ""),
+      welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
       agent_command_allowlist: splitList(allowlistDraft.value),
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
