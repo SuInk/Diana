@@ -638,7 +638,7 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 	}
 	record, err := t.plugin.prepareSongVoice(ctx, cfg, found, t.platform)
 	if err != nil {
-		return "", fmt.Errorf("《%s》%s", found.Title(), err.Error())
+		return "", fmt.Errorf("《%s》%w", found.Title(), err)
 	}
 	body, err := json.Marshal(musicToolResult{
 		OK:       true,

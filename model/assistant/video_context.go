@@ -235,7 +235,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) (
 	}
 	workDir, err := os.MkdirTemp("", "diana-video-context-*")
 	if err != nil {
-		return nil, fmt.Errorf("临时目录建不出来（%v），这是机器上的问题。", err)
+		return nil, fmt.Errorf("临时目录建不出来（%w），这是机器上的问题。", err)
 	}
 	stagedPath, err := stageVideoForContext(ctx, videoPath, workDir)
 	if err != nil {
