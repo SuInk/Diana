@@ -506,6 +506,8 @@ type BotConfig struct {
 	ErrorReplyPrefix            string               `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts           int                  `json:"send_retry_attempts,omitempty"`
 	SendChunkIntervalMS         int                  `json:"send_chunk_interval_ms,omitempty"`
+	AutoImageDescription        *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess         *bool                `json:"auto_video_preprocess,omitempty"`
 	ModelRoles                  map[string]ModelRole `json:"model_roles,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
@@ -880,6 +882,8 @@ type ConfigPayload struct {
 	PromptGroupSenderTemplate    string               `json:"prompt_group_sender_template,omitempty"`
 	PromptImageOnlyText          string               `json:"prompt_image_only_text,omitempty"`
 	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
+	AutoImageDescription         *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess          *bool                `json:"auto_video_preprocess,omitempty"`
 	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
 	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplySafetyMasterEnabled     *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
@@ -1998,6 +2002,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		PromptGroupSenderTemplate:         cfg.PromptGroupSenderTemplate,
 		PromptImageOnlyText:               cfg.PromptImageOnlyText,
 		PromptWakeOnlyText:                cfg.PromptWakeOnlyText,
+		AutoImageDescription:              copyBoolPointer(cfg.AutoImageDescription),
+		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
@@ -2191,6 +2197,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		PromptGroupSenderTemplate:       payload.PromptGroupSenderTemplate,
 		PromptImageOnlyText:             payload.PromptImageOnlyText,
 		PromptWakeOnlyText:              payload.PromptWakeOnlyText,
+		AutoImageDescription:            copyBoolPointer(firstNonNilBoolPointer(payload.AutoImageDescription, existing.AutoImageDescription)),
+		AutoVideoPreprocess:             copyBoolPointer(firstNonNilBoolPointer(payload.AutoVideoPreprocess, existing.AutoVideoPreprocess)),
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),

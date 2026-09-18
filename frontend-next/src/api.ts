@@ -232,6 +232,8 @@ export interface BotProfileConfig {
   inbound_group_concurrency?: number;
   inbound_private_concurrency?: number;
   /** 按用途分配模型：chat/vision/intent/image → 渠道（或渠道分组）+模型。 */
+  auto_image_description?: boolean;
+  auto_video_preprocess?: boolean;
   model_roles?: Record<string, {
 	 follow_chat?: boolean;
     profile_id?: string;
