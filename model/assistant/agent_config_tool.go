@@ -60,6 +60,7 @@ type dianaBotConfigSnapshot struct {
 	DisabledGroups                  []string                  `json:"disabled_groups,omitempty"`
 	DisabledUsers                   []string                  `json:"disabled_users,omitempty"`
 	GroupAdmission                  GroupAdmission            `json:"group_admission"`
+	PrivateAdmission                PrivateAdmission          `json:"private_admission"`
 	ReplyGate                       *ReplyGate                `json:"reply_gate,omitempty"`
 	WelcomeEnabled                  bool                      `json:"welcome_enabled"`
 	WelcomeMessage                  string                    `json:"welcome_message,omitempty"`
@@ -293,6 +294,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		DisabledGroups:                  append([]string(nil), cfg.DisabledGroups...),
 		DisabledUsers:                   append([]string(nil), cfg.DisabledUsers...),
 		GroupAdmission:                  cfg.GroupAdmission.WithDefaults(),
+		PrivateAdmission:                cfg.PrivateAdmission.WithDefaults(),
 		ReplyGate:                       cfg.ReplyGate.Clone(),
 		WelcomeEnabled:                  cfg.WelcomeEnabled,
 		WelcomeMessage:                  cfg.WelcomeMessage,

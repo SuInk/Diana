@@ -862,6 +862,25 @@
                 <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
               </div>
               <div class="field wide">
+                <label for="bot-private-admission-mode">私聊准入模式</label>
+                <AppSelect
+                  id="bot-private-admission-mode"
+                  :model-value="privateAdmissionMode"
+                  :options="privateAdmissionModeOptions"
+                  @update:model-value="setPrivateAdmissionMode($event as 'all' | 'owner_only' | 'whitelist')"
+                />
+                <span class="hint">被准入拦截的私聊整条静默忽略：不排队、不预处理、不调模型，对方收不到任何回应；与群聊无关，主人任何模式下都放行。</span>
+              </div>
+              <div v-if="privateAdmissionMode === 'whitelist'" class="field wide">
+                <label for="bot-private-allowed-users">私聊白名单</label>
+                <IdChipInput
+                  input-id="bot-private-allowed-users"
+                  v-model="privateAllowedUsers"
+                  placeholder="填用户 ID 后回车"
+                />
+                <span class="hint">仅这些用户（和主人）的私聊会得到响应；名单外一律静默忽略。</span>
+              </div>
+              <div class="field wide">
                 <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" />
               </div>
             </div>
@@ -1698,6 +1717,7 @@ const commandSandboxMode = computed<string>({
   }
 });
 const allowedGroups = ref<string[]>([]);
+const privateAllowedUsers = ref<string[]>([]);
 const oneBotHTTPSecretDraft = ref("");
 const telegramTokenDraft = ref("");
 const qqSecretDraft = ref("");
@@ -2404,6 +2424,21 @@ function setAdmissionMode(mode: "blacklist" | "whitelist"): void {
   form.value.group_admission = { ...(form.value.group_admission ?? {}), mode };
 }
 
+const privateAdmissionModeOptions: AppSelectOption[] = [
+  { value: "all", label: "所有人（默认）", hint: "任何用户的私聊都会响应" },
+  { value: "owner_only", label: "仅主人", hint: "非主人的私聊静默忽略" },
+  { value: "whitelist", label: "白名单", hint: "仅主人与白名单用户的私聊响应" }
+];
+
+const privateAdmissionMode = computed(() => form.value?.private_admission?.mode ?? "all");
+
+function setPrivateAdmissionMode(mode: "all" | "owner_only" | "whitelist"): void {
+  if (!form.value) {
+    return;
+  }
+  form.value.private_admission = { ...(form.value.private_admission ?? {}), mode };
+}
+
 // 全局门槛用 null 表示「不设门槛」，和群级的「跟随全局」是不同语义，
 // 所以全局表单不给「跟随」那一档。
 const globalGate = computed({
@@ -2985,6 +3020,7 @@ function setForm(config: BotProfileConfig): void {
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
   allowedGroups.value = [...(config.group_admission?.allowed_groups ?? [])];
+  privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
   for (const draft of Object.values(tokenDrafts)) {
     draft.value = "";
   }
@@ -3232,6 +3268,10 @@ async function save(): Promise<void> {
       group_admission: {
         mode: admissionMode.value,
         allowed_groups: [...allowedGroups.value]
+      },
+      private_admission: {
+        mode: privateAdmissionMode.value,
+        allowed_users: [...privateAllowedUsers.value]
       },
       model_roles: modelRoles
     };

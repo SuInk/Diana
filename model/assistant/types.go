@@ -487,6 +487,7 @@ type BotConfig struct {
 	DisabledUsers               []string             `json:"disabled_users,omitempty"`
 	MarkedBotIDs                []string             `json:"marked_bot_ids,omitempty"`
 	GroupAdmission              GroupAdmission       `json:"group_admission,omitempty"`
+	PrivateAdmission            PrivateAdmission     `json:"private_admission,omitempty"`
 	ReplyGate                   *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled              bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage              string               `json:"welcome_message,omitempty"`
@@ -850,6 +851,7 @@ type ConfigPayload struct {
 	DisabledUsers                []string             `json:"disabled_users,omitempty"`
 	MarkedBotIDs                 []string             `json:"marked_bot_ids,omitempty"`
 	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
+	PrivateAdmission             PrivateAdmission     `json:"private_admission,omitempty"`
 	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
 	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
 	WelcomeMessage               string               `json:"welcome_message,omitempty"`
@@ -1439,6 +1441,7 @@ func DefaultBotConfig() BotConfig {
 		DisabledGroups:            []string{},
 		DisabledUsers:             []string{},
 		GroupAdmission:            GroupAdmission{}.WithDefaults(),
+		PrivateAdmission:          PrivateAdmission{}.WithDefaults(),
 		WelcomeEnabled:            false,
 		WelcomeMessage:            "欢迎加入本群，可以直接 @我 开始聊天。",
 		SystemPrompt:              defaultSystemPrompt,
@@ -1552,6 +1555,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.DisabledUsers = append([]string(nil), defaults.DisabledUsers...)
 	}
 	cfg.GroupAdmission = cfg.GroupAdmission.WithDefaults()
+	cfg.PrivateAdmission = cfg.PrivateAdmission.WithDefaults()
 	if cfg.ReplyGate != nil {
 		normalized := cfg.ReplyGate.WithDefaults()
 		cfg.ReplyGate = &normalized
@@ -1970,6 +1974,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		DisabledUsers:                     append([]string(nil), cfg.DisabledUsers...),
 		MarkedBotIDs:                      append([]string(nil), cfg.MarkedBotIDs...),
 		GroupAdmission:                    cfg.GroupAdmission.WithDefaults(),
+		PrivateAdmission:                  cfg.PrivateAdmission.WithDefaults(),
 		ReplyGate:                         cfg.ReplyGate.Clone(),
 		WelcomeEnabled:                    cfg.WelcomeEnabled,
 		WelcomeMessage:                    cfg.WelcomeMessage,
@@ -2165,6 +2170,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		DisabledUsers:                   payload.DisabledUsers,
 		MarkedBotIDs:                    append([]string(nil), payload.MarkedBotIDs...),
 		GroupAdmission:                  payload.GroupAdmission,
+		PrivateAdmission:                payload.PrivateAdmission.WithDefaults(),
 		ReplyGate:                       payload.ReplyGate.Clone(),
 		WelcomeEnabled:                  payload.WelcomeEnabled,
 		WelcomeMessage:                  payload.WelcomeMessage,
