@@ -551,7 +551,7 @@ func ensureLLMModelAvailable(ctx context.Context, cfg llm.ProviderConfig, listMo
 	// listModels 会走当前 provider 的真实后端接口；不能靠本地硬编码模型名判断。
 	models, err := listModels(ctx, cfg)
 	if err != nil {
-		return llm.ModelInfo{}, fmt.Errorf("无法读取 %s 的模型列表，未保存；请先在 WebUI 的模型列表里选择可用模型。%v", cfg.Provider, err)
+		return llm.ModelInfo{}, fmt.Errorf("无法读取 %s 的模型列表，未保存；请先在 WebUI 的模型列表里选择可用模型。%w", cfg.Provider, err)
 	}
 	for _, candidate := range models {
 		if strings.EqualFold(strings.TrimSpace(candidate.ID), model) {

@@ -1,0 +1,1497 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/llm"
+)
+
+// SetLLMProviderConfigFactory 注入按 profile 配置创建 LLM provider 的工厂。
+func (r *Runtime) SetLLMProviderConfigFactory(factory LLMProviderConfigFactory) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.llmCfgFactory = factory
+	r.llmReuseEpoch++
+}
+
+// SetLLMProviderRegistry enables the providerId/modelId architecture while
+// leaving legacy profile routing available for bots that have not migrated.
+func (r *Runtime) SetLLMProviderRegistry(registry *llm.ProviderRegistry) {
+	r.mu.Lock()
+	r.llmRegistry = registry
+	r.llmReuseEpoch++
+	r.mu.Unlock()
+}
+
+// SetMessageHistoryStore 注入持久消息历史存储，用于重启后恢复最近群聊上下文。
+func (r *Runtime) SetMessageHistoryStore(store MessageHistoryStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.messageStore = store
+}
+
+// resolveImageForLLM persists short-lived platform media before encoding it for
+// a multimodal request. Falling back to the original URL keeps older providers
+// working when the local cache cannot fetch a particular image.
+func (r *Runtime) resolveImageForLLM(ctx context.Context, imageURL string) string {
+	r.mu.RLock()
+	store := r.media
+	r.mu.RUnlock()
+	if store == nil {
+		return imageURL
+	}
+	path, err := store.Fetch(ctx, imageURL)
+	if err != nil {
+		log.Printf("media: fetch %s failed: %v", redactURLQuery(imageURL), err)
+		return imageURL
+	}
+	dataURL, err := store.DataURL(path)
+	if err != nil {
+		log.Printf("media: encode %s failed: %v", filepath.Base(path), err)
+		return imageURL
+	}
+	return dataURL
+}
+
+// SetLLMModelLister 注入运行时使用的模型列表读取器。
+func (r *Runtime) SetLLMModelLister(lister LLMModelLister) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if lister == nil {
+		r.modelLister = defaultLLMModelLister
+		return
+	}
+	r.modelLister = lister
+}
+
+// llmModelLister 返回当前模型列表读取器。
+func (r *Runtime) llmModelLister() LLMModelLister {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.modelLister == nil {
+		return defaultLLMModelLister
+	}
+	return r.modelLister
+}
+
+func quotedPromptItems(items []string) string {
+	quoted := make([]string, 0, len(items))
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			quoted = append(quoted, strconv.Quote(item))
+		}
+	}
+	return strings.Join(quoted, "、")
+}
+
+func proactiveReplyRouterSystemPrompt(configured string) string {
+	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；群资料工具可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
+	const expressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
+	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
+	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard + "\n" + messageAddressingRule
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return runtimeGuard
+	}
+	configured = strings.ReplaceAll(configured, "planner", "Intent Recognition")
+	configured = strings.ReplaceAll(configured, "严格主动回复路由器", "Intent Recognition（意图识别）")
+	return configured + "\n\n" + runtimeGuard
+}
+
+// proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
+// 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
+func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
+	if chatIn.Participation != nil {
+		return chatIn.Participation.prompt()
+	}
+	prompt := proactiveReplyRouterSystemPrompt(configured)
+	if chatIn.SuperActive {
+		if strings.TrimSpace(configured) == "" || strings.TrimSpace(configured) == defaultProactiveReplyRouterPrompt {
+			return superActiveIntentPrompt
+		}
+		return prompt + "\n\n" + superActiveIntentPrompt
+	}
+	if social {
+		prompt += "\n\n" + socialReplyGuard
+	}
+	if chatIn.Assistant {
+		return prompt + "\n\n" + assistantIntentPrompt
+	}
+	if chatIn.Natural {
+		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
+	}
+	if chatIn.Enabled {
+		return prompt + fmt.Sprintf("\n\n当前闲聊插话档位：%s（%s）。档位只影响运行时的放行松紧，不放宽 substantive 的判断标准：任何档位下附和、复读和寒暄都必须 substantive=false。", chatIn.Level, chatIn.Level.Label())
+	}
+	return prompt + "\n\n当前闲聊插话已关闭：禁止使用 category=chat_in，普通闲聊一律 should_reply=false。"
+}
+
+func newRuntimeAgentLLMProvider(runtime *Runtime, ctx context.Context) *runtimeAgentLLMProvider {
+	return &runtimeAgentLLMProvider{runtime: runtime, ctx: ctx, providers: map[string]LLMProvider{}}
+}
+
+func (p *runtimeAgentLLMProvider) providerForGroup(group string) (LLMProvider, error) {
+	group = llm.NormalizeProfileGroup(group)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if provider := p.providers[group]; provider != nil {
+		return provider, nil
+	}
+	var provider LLMProvider
+	_, err := p.runtime.runRawLLMProviderForGroup(p.ctx, group, func(client LLMProvider) (string, error) {
+		provider = client
+		return "", nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if provider == nil {
+		return nil, fmt.Errorf("diana: no llm provider is configured for group %q", group)
+	}
+	p.providers[group] = provider
+	return provider, nil
+}
+
+func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provider llm.Provider, model string, usage llm.Usage, purpose string, duration time.Duration, ttft time.Duration) {
+	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
+		return
+	}
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	entry := applog.Entry{
+		Kind:    applog.KindOperation,
+		Level:   applog.LevelInfo,
+		Action:  "diana.llm_usage",
+		Message: "LLM 调用用量已记录",
+		Actor:   oneBotEventActor(event),
+		Target:  event.MessageID,
+		Metadata: map[string]any{
+			"group_id":            event.GroupID,
+			"user_id":             event.UserID,
+			"message_id":          event.MessageID,
+			"provider":            string(provider),
+			"model":               model,
+			"purpose":             strings.TrimSpace(purpose),
+			"input_tokens":        usage.InputTokens,
+			"output_tokens":       usage.OutputTokens,
+			"total_tokens":        usage.TotalTokens,
+			"cached_input_tokens": usage.CachedInputTokens,
+			// duration_ms 是这一次调用的墙钟耗时，tokens_per_second 是它的输出速率。
+			// 事件详情里的 duration_ms 说的是整条消息的处理耗时，两者不是一回事，
+			// 所以聚合到事件上时那个字段叫 llm_duration_ms。
+			"duration_ms":       duration.Milliseconds(),
+			"tokens_per_second": TokensPerSecond(usage.OutputTokens, duration),
+		},
+	}
+	// TTFT 只有流式跑通时才有。为 0 时整个键不写：写一个 0 进去，聚合那边分不清
+	// 「没开流式」和「首 token 真的是 0 毫秒」。
+	if ttft > 0 {
+		entry.Metadata["ttft_ms"] = ttft.Milliseconds()
+	}
+	_ = writer.AppendLog(ctx, entry)
+}
+
+func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event MessageEvent, prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
+		return prompt
+	}
+	var lines []string
+	if group, err := r.getGroupInfoForEvent(ctx, event, event.GroupID); err == nil {
+		line := "群聊：" + firstNonEmpty(group.GroupName, group.GroupID)
+		if group.GroupID != "" {
+			line += " (" + group.GroupID + ")"
+		}
+		if group.AvatarURL != "" {
+			line += "，群头像：" + group.AvatarURL
+		}
+		lines = append(lines, line)
+	}
+	if sender, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID); err == nil && sender.UserID != "" {
+		lines = append(lines, "当前发送者："+sender.DisplayName()+" ("+sender.UserID+")，头像："+sender.AvatarURL)
+	}
+	cfg := r.effectiveConfigForEvent(event)
+	botIDs := map[string]bool{}
+	for _, id := range []string{event.SelfID, cfg.BotAccount} {
+		if id = strings.TrimSpace(id); id != "" {
+			botIDs[id] = true
+		}
+	}
+	for _, userID := range mentionedUserIDs(event.Segments) {
+		if botIDs[userID] {
+			continue
+		}
+		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
+		if err != nil || member.UserID == "" {
+			lines = append(lines, "被@成员："+userID+"，头像："+MemberAvatarURL(r.currentPlatform(event), userID))
+			continue
+		}
+		lines = append(lines, "被@成员："+member.DisplayName()+" ("+member.UserID+")，头像："+member.AvatarURL)
+	}
+	if len(lines) == 0 {
+		return prompt
+	}
+	return prompt + "\n\n群聊上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）：\n" + strings.Join(lines, "\n")
+}
+
+func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
+	return r.runLLMProviderForGroup(ctx, llm.GroupChat, run)
+}
+
+func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
+	run = withEmojiSemanticsRun(run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	run = r.withContextBudgetCapRun(ctx, run)
+	run = r.withImageBudgetRun(group, run)
+	run = r.withDebugTraceRun(ctx, run)
+	run = r.withPromptCacheProbeRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
+	// Streaming must be the last wrapper added so it sits closest to the real
+	// provider. The other decorators expose Generate only and would otherwise
+	// hide the provider's Stream method.
+	run = r.withLLMStreamingRun(ctx, run)
+	return r.runRawLLMProviderForGroup(ctx, group, run)
+}
+
+func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMProvider) LLMProvider {
+	var wrapped LLMProvider
+	run := func(client LLMProvider) (string, error) {
+		wrapped = client
+		return "", nil
+	}
+	run = withEmojiSemanticsRun(run)
+	group := ModelBindingGroupOf(llmUsagePurposeFromContext(ctx))
+	if group == "" {
+		group = llm.GroupChat
+	}
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	run = r.withContextBudgetCapRun(ctx, run)
+	run = r.withImageBudgetRun(group, run)
+	run = r.withDebugTraceRun(ctx, run)
+	run = r.withPromptCacheProbeRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
+	run = r.withLLMStreamingRun(ctx, run)
+	_, _ = run(provider)
+	if wrapped == nil {
+		return provider
+	}
+	return wrapped
+}
+
+func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
+	roles := r.modelRolesForContext(ctx)
+	r.mu.RLock()
+	cfgFactory := r.llmCfgFactory
+	factory := r.llmFactory
+	store := r.llmStore
+	registry := r.llmRegistry
+	r.mu.RUnlock()
+	if registry == nil {
+		if registryStore, ok := store.(LLMProviderRegistryStore); ok {
+			registry, _ = registryStore.ProviderRegistry()
+		}
+	}
+	if registry != nil && store != nil {
+		set := store.Profiles().WithDefaults()
+		var profiles []llm.Profile
+		if profileID, ok := replyRuleLLMProfileID(ctx); ok {
+			for _, profile := range set.Profiles {
+				if strings.TrimSpace(profile.ID) == profileID {
+					profiles = []llm.Profile{profile}
+					break
+				}
+			}
+			if len(profiles) == 0 {
+				return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
+			}
+		} else {
+			var roleErr error
+			profiles, roleErr = r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
+			if roleErr != nil {
+				return "", roleErr
+			}
+			if len(profiles) == 0 {
+				profiles = llmProfilesInGroup(set, llm.NormalizeProfileGroup(group))
+			}
+			if len(profiles) == 0 {
+				profiles = fallbackProfilesForGroup(set, group)
+			}
+		}
+		if len(profiles) > 0 {
+			provider, err := newRegistryFailoverLLMProvider(registry, profiles, true, len(profiles) > 1)
+			if err != nil {
+				return "", err
+			}
+			return run(provider)
+		}
+	}
+
+	if cfgFactory != nil && store != nil {
+		set := store.Profiles().WithDefaults()
+		if profileID, ok := replyRuleLLMProfileID(ctx); ok {
+			for _, profile := range set.Profiles {
+				if strings.TrimSpace(profile.ID) == profileID {
+					return runLLMProviderProfileAttempts(ctx, []llm.Profile{profile}, cfgFactory, true, run)
+				}
+			}
+			return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
+		}
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
+		if roleErr != nil {
+			return "", roleErr
+		}
+		if len(profiles) > 0 {
+			provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
+			if err != nil {
+				return "", err
+			}
+			return run(provider)
+		}
+		// 没有角色绑定就按本次调用的分组取候选，组内顺序即降级顺序。
+		//
+		// 这里以前多绕一道：候选来自「激活配置所在的分组」，所以激活的是生图那套时
+		// 聊天调用会拿到一串生图配置，得先用 activeProfileForGroup 做一次能力检查再
+		// 退回本分组。分组直接由调用方给出之后，那类错配从源头就不成立了。
+		groupKey := llm.NormalizeProfileGroup(group)
+		if profiles := llmProfilesInGroup(set, groupKey); len(profiles) > 0 {
+			logUnboundGroupFallback(roles, group, profiles[0].ID)
+			provider, err := newProfileFailoverLLMProvider(profiles, cfgFactory, true, nil, len(profiles) > 1)
+			if err != nil {
+				return "", err
+			}
+			return run(provider)
+		}
+		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
+	}
+	if factory == nil {
+		return "", fmt.Errorf("diana: llm provider is not configured")
+	}
+	client, err := factory()
+	if err != nil {
+		return "", err
+	}
+	return run(withTransientLLMRetry(client, true))
+}
+
+func (r *Runtime) imageProviderConfigs(contexts ...context.Context) []llm.ProviderConfig {
+	r.mu.RLock()
+	store := r.llmStore
+	roles := normalizeModelRoles(r.cfg.ModelRoles)
+	r.mu.RUnlock()
+	if len(contexts) > 0 {
+		roles = r.modelRolesForContext(contexts[0])
+	}
+	if store == nil {
+		return nil
+	}
+	set := store.Profiles().WithDefaults()
+	role, explicitImageRole := roles["image"]
+	if !explicitImageRole {
+		role = roles["chat"]
+	}
+	if role.ProviderID != "" && role.ModelID != "" {
+		role.ProfileID = role.ProviderID
+		role.Model = strings.TrimPrefix(role.ModelID, role.ProviderID+":")
+	}
+	var profiles []llm.Profile
+	if role.Group != "" {
+		profiles = set.GroupProfiles(role.Group)
+	} else if role.ProfileID != "" {
+		for _, profile := range set.Profiles {
+			if profile.ID == role.ProfileID {
+				profiles = []llm.Profile{profile}
+				break
+			}
+		}
+	}
+	if len(profiles) == 0 {
+		if current, ok := set.FirstProfile(); ok {
+			profiles = []llm.Profile{current}
+		}
+	}
+	configs := make([]llm.ProviderConfig, 0, len(profiles))
+	for _, profile := range profiles {
+		cfg := profile.Config.WithDefaults()
+		if explicitImageRole {
+			cfg.ImageModel = role.Model
+		}
+		configs = append(configs, cfg)
+	}
+	return configs
+}
+
+func appendLLMMessageText(message llm.Message, suffix string) llm.Message {
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		return message
+	}
+	if strings.TrimSpace(message.Content) == "" {
+		message.Content = suffix
+	} else {
+		message.Content = strings.TrimSpace(message.Content) + "\n\n" + suffix
+	}
+	for index := range message.Parts {
+		if message.Parts[index].Type == llm.ContentPartText {
+			message.Parts[index].Text = message.Content
+			return message
+		}
+	}
+	if len(message.Parts) > 0 {
+		message.Parts = append([]llm.ContentPart{{Type: llm.ContentPartText, Text: message.Content}}, message.Parts...)
+	}
+	return message
+}
+
+func replyRuleLLMProfileID(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	value, _ := ctx.Value(replyRuleContextKey{}).(string)
+	value = strings.TrimSpace(value)
+	return value, value != ""
+}
+
+func (r *Runtime) runLLMRouterProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
+	return r.runLLMRouterProviderWithRetry(ctx, true, run)
+}
+
+func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderRunFunc) (string, error) {
+	return r.runLLMRouterProviderWithRetry(ctx, false, run)
+}
+
+func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
+	roles := r.modelRolesForContext(ctx)
+	run = withEmojiSemanticsRun(run)
+	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	run = r.withContextBudgetCapRun(ctx, run)
+	run = r.withImageBudgetRun(llm.GroupIntent, run)
+	run = r.withDebugTraceRun(ctx, run)
+	run = r.withPromptCacheProbeRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
+	r.mu.RLock()
+	cfgFactory := r.llmCfgFactory
+	factory := r.llmFactory
+	store := r.llmStore
+	registry := r.llmRegistry
+	r.mu.RUnlock()
+	if registry == nil {
+		if registryStore, ok := store.(LLMProviderRegistryStore); ok {
+			registry, _ = registryStore.ProviderRegistry()
+		}
+	}
+	if registry != nil && store != nil {
+		set := store.Profiles().WithDefaults()
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return run(registryLLMProvider(registry, selection, retryTransient))
+		}
+	}
+
+	if cfgFactory != nil && store != nil {
+		set := store.Profiles().WithDefaults()
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent, roles)
+		if roleErr != nil {
+			return "", roleErr
+		}
+		if len(profiles) > 0 {
+			if !retryTransient && len(profiles) > 1 {
+				profiles = profiles[:1]
+			}
+			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
+		}
+		for _, group := range semanticRouteProfileGroups {
+			profiles := llmProfilesInGroup(set, group)
+			if len(profiles) == 0 {
+				continue
+			}
+			if !retryTransient {
+				profiles = profiles[:1]
+			}
+			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
+		}
+		if current, ok := set.FirstProfile(); ok {
+			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
+		}
+		return "", fmt.Errorf("diana: no llm profile is configured")
+	}
+	if factory == nil {
+		return "", fmt.Errorf("diana: llm provider is not configured")
+	}
+	client, err := factory()
+	if err != nil {
+		return "", err
+	}
+	return run(withTransientLLMRetry(client, retryTransient))
+}
+
+func llmProfilesInGroup(set llm.ProfileSet, group string) []llm.Profile {
+	group = llm.NormalizeProfileGroup(group)
+	profiles := make([]llm.Profile, 0, len(set.Profiles))
+	for _, profile := range set.Profiles {
+		if llm.NormalizeProfileGroup(profile.Group) != group {
+			continue
+		}
+		profile.Group = llm.NormalizeProfileGroup(profile.Group)
+		profile.Config = profile.Config.WithDefaults()
+		profiles = append(profiles, profile)
+	}
+	return profiles
+}
+
+func runLLMProviderProfileAttempts(ctx context.Context, profiles []llm.Profile, factory LLMProviderConfigFactory, retryTransient bool, run llmProviderRunFunc) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	provider, err := newProfileFailoverLLMProvider(profiles, factory, retryTransient, nil, false)
+	if err != nil {
+		return "", err
+	}
+	return run(provider)
+}
+
+func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfileStore, factory LLMProviderConfigFactory, run llmProviderRunFunc) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	set := store.Profiles().WithDefaults()
+	// 候选以前来自「激活配置所在的分组」，且从激活那条开始绕圈；降级成功后还会把
+	// 激活项写回，于是列表顺序和实跑顺序对不上。现在退到默认分组、按列表顺序走，
+	// 默认分组也空了才拿第一条兜底。
+	attempts := llmProfilesInGroup(set, llm.GroupChat)
+	if len(attempts) == 0 {
+		attempts = fallbackProfilesForGroup(set, llm.GroupChat)
+	}
+	if len(attempts) == 0 {
+		return "", fmt.Errorf("diana: no llm profile is configured")
+	}
+	provider, err := newProfileFailoverLLMProvider(attempts, factory, true, nil, true)
+	if err != nil {
+		return "", err
+	}
+	return run(provider)
+}
+
+func shouldFailoverLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, llm.ErrUnverifiedRejection) {
+		return true
+	}
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+		return false
+	}
+	if isModelUnavailableLLMError(err) {
+		return true
+	}
+	if errors.Is(err, llm.ErrCompletionHasNoText) {
+		return false
+	}
+	if errors.Is(err, llm.ErrCompletionTruncatedNoText) {
+		return true
+	}
+	if errors.Is(err, llm.ErrCompletionEmpty) {
+		return true
+	}
+	if shouldRetryTransientLLMError(err) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"401", "403", "429",
+		"unauthorized", "forbidden", "too many requests",
+		"api key", "apikey", "authentication", "auth",
+		"permission", "permission_error",
+		"quota", "insufficient_quota", "billing", "credit",
+		"rate limit", "rate_limit",
+		"未授权", "无权限", "额度", "限流", "失效", "无效",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldRetryTransientLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
+		return false
+	}
+	if errors.Is(err, llm.ErrCompletionHasNoText) || errors.Is(err, llm.ErrCompletionTruncatedNoText) {
+		return false
+	}
+	if errors.Is(err, llm.ErrCompletionEmpty) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"502", "503", "504",
+		"bad gateway", "service unavailable", "gateway timeout",
+		"cloudflare",
+		"context deadline exceeded", "client.timeout exceeded", "timeout awaiting response headers",
+		"eof", "connection reset", "connection refused", "connection aborted",
+		"unexpected end of file", "server closed idle connection",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// systemPrompt 组合系统提示词和插件上下文。
+func (r *Runtime) systemPrompt(event MessageEvent, pluginResponses []PluginResponse) string {
+	return r.systemPromptWithMode(event, pluginResponses, false)
+}
+
+func (r *Runtime) systemPromptWithMode(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool) string {
+	return r.systemPromptWithRelationship(event, pluginResponses, proactiveTriggered, relationshipPolicyForEvent(r.effectiveConfigForEvent(event), UserMemoryProfile{}, event))
+}
+
+func (r *Runtime) systemPromptWithRelationship(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy) string {
+	return r.systemPromptWithRelationshipAndAgent(event, pluginResponses, proactiveTriggered, relationship, r.effectiveConfigForEvent(event).AgentEnabled)
+}
+
+func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool) string {
+	return r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, nil)
+}
+
+// runtimeClockPrompt 返回本轮的可信实时时间提示。返回值每次调用都不同，只能作为尾部
+// 独立 system 消息注入；拼进人设提示词会让那段最长的前缀每秒失效一次。
+func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
+	cfg := r.effectiveConfigForEvent(event)
+	if !boolValue(cfg.PromptInjectTime, true) {
+		return ""
+	}
+	now := r.clock()
+	zoneName, zoneOffset := now.Zone()
+	var builder strings.Builder
+	builder.WriteString(renderPromptTemplate(cfg.PromptTimeTemplate, map[string]string{
+		"datetime": now.Format("2006-01-02 15:04:05"),
+		"weekday":  chineseWeekday(now.Weekday()),
+	}))
+	appendPromptSection(&builder, fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", agent.RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
+	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
+		appendPromptSection(&builder, speaker)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+// speakerTimezonePrompt 在画像里记过对方时区时，给出他那边的当地时间和时差。
+// 机器人自己的「现在几点」仍然只看运行时钟，也就是本机时区。
+func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) string {
+	if !event.userProfileLoaded {
+		return ""
+	}
+	location, recordedAt := PortraitTimezoneWithRecordedAt(event.userProfile.Portrait)
+	if location == nil {
+		return ""
+	}
+	local := now.In(location)
+	zoneName, zoneOffset := local.Zone()
+	offset := FormatTimezoneOffset(now, location, now.Location())
+	prompt := fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。你自己的「现在」仍以上面的运行时钟为准。",
+		location.String(), zoneName, formatUTCOffset(zoneOffset), offset, local.Format("2006-01-02 15:04"))
+	// 人会搬家、会出差：这条时区是过去某一次对话记下的，不是实时定位。
+	if !recordedAt.IsZero() {
+		prompt += fmt.Sprintf("这条时区记于 %s（%s前），不是实时位置。", recordedAt.In(now.Location()).Format("2006-01-02"), formatApproximateAge(now.Sub(recordedAt)))
+		if now.Sub(recordedAt) >= PortraitTimezoneStaleAfter {
+			prompt += "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
+		}
+	}
+	prompt += "对方说出自己那边的当地时间、或说自己在别的地方，和这条记录对不上时，以他当下说的为准，不要拿旧记录纠正他。"
+	return prompt
+}
+
+// systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者
+// 尾部），给只发一条 system 消息的旁路（定时订阅、后续评论）和测试用。主回复链路
+// 用 systemPromptPartsWithRelationshipAndAgentTools 把两段分开放。
+func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) string {
+	head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, registry)
+	return joinPromptSections(head, tail)
+}
+
+// systemPromptPartsWithRelationshipAndAgentTools 把系统提示词拆成两段：
+//
+//   - head 只依赖机器人配置、本群配置和本轮注册的工具：同一个群里不管谁说话、
+//     说什么，它逐字节相同。它作为第一条 system 消息发出，供应商的前缀缓存
+//     （tools → system → messages）从它开始命中，后面的历史才有机会一起命中。
+//   - tail 随「谁在说话、这条说了什么」变化：权限档位、主人专属工具规则、发言者
+//     昵称、命中的别名、时段与心情语气、语气锚点。它由调用方作为独立 system
+//     消息放在历史之后、当前消息之前。以前这段直接拼在同一条 system 里，换一个
+//     人说话整条 system 就变，Anthropic / Gemini / Responses 把 system 放在所有
+//     消息之前，system 一变，几千 token 的历史缓存也跟着全部作废。
+//
+// 语气锚点留在 tail 末尾的理由和以前一样：离生成越近越管用，现在它离得更近了。
+func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
+	cfg := r.effectiveConfigForEvent(event)
+	var builder strings.Builder
+	// tail 收集随发言者权限档位变化的段落（主人专属工具规则、按好感度解锁的日程
+	// 工具规则）。注入条件保持原样，只是不写进 head：夹在中间会让它后面几千 token
+	// 的稳定规则永远命中不了供应商的前缀缓存。
+	var tail strings.Builder
+	tail.WriteString(addressingPrompt(event, cfg))
+	hasTool := func(name string) bool {
+		if registry == nil {
+			return true
+		}
+		_, ok := registry.Get(name)
+		return ok
+	}
+	hasAnyTool := func(names ...string) bool {
+		for _, name := range names {
+			if hasTool(name) {
+				return true
+			}
+		}
+		return false
+	}
+	builder.WriteString(cfg.SystemPrompt)
+	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
+	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
+	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled))
+	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
+	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
+	if boolValue(cfg.PromptChineseSlangHint, true) {
+		appendPromptSection(&builder, cfg.PromptChineseSlangText)
+	}
+	if event.Kind == EventKindGroup {
+		// 场景说明分「被触发」和「主动接话」两串：后者那一轮没人点名机器人，
+		// 再说「只有被提到才回复」会和下面的主动插话说明当场打架。
+		builder.WriteString("\n" + groupScopePrompt(event))
+		builder.WriteString("\n" + promptGroupOwnerDistinction)
+	}
+	// 称呼不分群聊私聊：私聊里没有触发这回事，但「别人怎么叫你」仍然是身份的一部分。
+	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
+		builder.WriteString("\n" + promptAliasPrefix + aliases + promptAliasRule)
+	}
+	if agentEnabled && relationship.Owner && hasTool("diana.llm_config") {
+		tail.WriteString("\n" + promptToolLLMConfig)
+	}
+	if agentEnabled && hasTool(dianaRepositoryIssuesToolName) {
+		builder.WriteString("\n" + promptToolRepositoryIssues)
+	}
+	if agentEnabled && hasTool(dianaPlatformToolName) {
+		builder.WriteString("\n" + promptToolPlatform)
+	}
+	// 破坏性动作只对主人出现在工具 schema 里；提示词也只对主人注入，且必须进随发言者
+	// 变化的尾部，不能写进按前缀缓存的稳定头部（否则主人和普通成员的提示词会提前分叉）。
+	if agentEnabled && relationship.Owner && hasTool(dianaPlatformToolName) {
+		tail.WriteString("\n" + promptToolPlatformModeration)
+	}
+	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {
+		tail.WriteString("\n" + promptToolOneBotRequests)
+	}
+	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
+		builder.WriteString("\n" + promptToolHistoryImages)
+	}
+	if agentEnabled && hasTool(dianaMemoryToolName) {
+		builder.WriteString("\n长期记忆摘要不够时，先用 diana.memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。")
+	}
+	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
+		builder.WriteString("\n" + promptInternalIdentifiers)
+		// 引用被管理员关掉时不教这一手：那是「永不带引用」的明确配置。
+		if replyReferenceMode(cfg) != ReplyDecorationOff {
+			builder.WriteString("\n" + promptQuoteHistoryMessage)
+		}
+	}
+	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
+		tail.WriteString("\n" + promptOwnerRelationshipTarget)
+	}
+	if agentEnabled && relationship.Owner && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
+		tail.WriteString("\n" + promptOwnerTaskTarget)
+	}
+	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
+	//（见 RelationshipPolicyFor），所以这几段对谁都注入，只随本轮注册了哪些工具
+	// 变化——和头部其余工具规则的性质完全一样。它们以前跟着「按好感度解锁」的
+	// 假设待在尾部，实测占尾部 436 token 里的绝大部分，等于每条消息都重发一遍
+	// 一段人人相同的文本，且永远命不中前缀缓存。
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.reminder") {
+		builder.WriteString("\n" + promptTaskReminder)
+	}
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.schedule") {
+		builder.WriteString("\n" + promptTaskSchedule)
+	}
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.rss") {
+		builder.WriteString("\n" + promptTaskRSS)
+	}
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.tasks") {
+		builder.WriteString("\n" + promptTaskList)
+	}
+	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+		builder.WriteString("\n" + promptTaskRepositoryWatch)
+	}
+	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
+		builder.WriteString("\n" + promptTaskNoSubstitute)
+	}
+	if agentEnabled && hasTool(dianaRuntimeModelToolName) {
+		builder.WriteString("\n" + promptToolRuntimeModel)
+	}
+	if agentEnabled && hasTool(dianaVersionToolName) {
+		builder.WriteString("\n" + promptToolVersion)
+	}
+	if agentEnabled && hasTool(dianaNotebookToolName) {
+		builder.WriteString("\n" + promptToolNotebook)
+	}
+	if agentEnabled && hasTool(dianaCodingToolName) {
+		builder.WriteString("\n" + promptToolCoding)
+	}
+	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
+		builder.WriteString("\n" + promptToolThreadState)
+	}
+	if agentEnabled && hasTool("diana.capabilities") {
+		builder.WriteString("\n" + promptToolCapabilities)
+	}
+	if agentEnabled && hasTool(groupToolName(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)})) {
+		builder.WriteString("\n" + groupToolPrompt(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)}))
+	}
+	if agentEnabled && hasTool(botParticipationToolName) {
+		builder.WriteString("\n修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 diana.bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。")
+	}
+	if agentEnabled && hasTool(replyBlockToolName) {
+		builder.WriteString("\n主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 diana.reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或 diana.group 的成员查询，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。")
+	}
+	if agentEnabled && hasTool("diana.relationship") {
+		builder.WriteString("\n" + promptToolRelationshipList)
+		builder.WriteString("\n" + promptToolRelationshipQuery)
+		builder.WriteString("\n" + promptToolRelationshipPortrait)
+		// 恋爱模式的规则跟着配置走：同一台机器人整段稳定，不影响前缀缓存。
+		// 关着时一个字不注入——模型不知道有这回事，被表白就按普通关系自然回应。
+		if boolValue(cfg.RomanceEnabled, false) {
+			builder.WriteString("\n" + promptToolRelationshipRomance)
+		}
+	}
+	if agentEnabled && hasTool(dianaImageToolName) {
+		builder.WriteString("\n" + promptToolImage)
+	}
+	if agentEnabled && hasTool("diana.tts") {
+		builder.WriteString("\n" + promptToolTTS)
+	}
+	builder.WriteString("\n" + promptRelationshipTierRules)
+	builder.WriteString("\n" + promptLongTermMemory)
+	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy))
+	if agentEnabled {
+		// 静默只有 agent.finalize 这一个出口，没开 Agent 时说了也做不到。
+		// 它逐字不变，跟着拒答规则一起留在稳定头部：两条规则读在一起，模型才
+		// 分得清「不说话」和「拒绝」不是一回事。
+		builder.WriteString("\n" + promptSilentFinish)
+	}
+	builder.WriteString("\n" + promptToolFindings)
+	builder.WriteString("\n" + promptSelfCharacterization)
+	builder.WriteString("\n" + promptCurrentMessage)
+	builder.WriteString("\n" + promptHistoryFormat)
+	builder.WriteString("\n" + promptAdjacentSupplement)
+	if boolValue(cfg.PromptInjectPlaintextRules, true) {
+		appendPromptSection(&builder, platformOutputRulesForConfig(cfg))
+	}
+	if proactiveTriggered {
+		builder.WriteString("\n")
+		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
+		builder.WriteString("\n" + proactiveReplyToolResultPrompt)
+	}
+	if event.chatInReply {
+		builder.WriteString("\n" + proactiveReplyPacingPrompt)
+		builder.WriteString("\n本次回复是主动插话，已根据用户发言偏好决定参与。顺着当前话题自然回应，可以接梗、表达感受或回答问题，不要求增加新知识。遵守人设和用户要求，不复读、不编造事实。")
+		// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
+		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
+		builder.WriteString("\n如果这一轮唯一能做的事只是赞同一个你无法核实的判断，就别发：要么说出一件你确实知道的具体的事，要么放弃这次插话。不要用「确实」「没错」开头去附和一个无法核实的判断，也不要给它补充听起来内行但没有依据的理由。别人凭印象下的结论，你没有证据就是没有证据，说不清楚就直说不确定。")
+	}
+	if eventCarriesImages(event) {
+		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
+		tail.WriteString("\n" + promptImageReply)
+	}
+	for _, resp := range pluginResponses {
+		if strings.TrimSpace(resp.Context) == "" {
+			continue
+		}
+		builder.WriteString("\n" + promptPluginAuthority)
+		break
+	}
+	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
+	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
+	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
+	appendPromptSection(&tail, relationshipPermissionContext(relationship))
+	if event.Kind == EventKindGroup {
+		if boolValue(cfg.PromptInjectGroupSender, true) {
+			appendPromptSection(&tail, renderPromptTemplate(cfg.PromptGroupSenderTemplate, map[string]string{
+				"sender": event.SenderNameOrID(),
+			}))
+		}
+		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" {
+			appendPromptSection(&tail, promptMatchedAliasPrefix+matched+promptMatchedAliasRule)
+		}
+	}
+	// 时段语气紧挨着锚点注入，理由和锚点一样：这两条都是「怎么说」，离生成越近
+	// 越管用。关掉时返回空串，appendPromptSection 会跳过。
+	appendPromptSection(&tail, dayPartToneForConfig(cfg, r.clock()))
+	// 心情语气和时段语气同一批：都描述「此刻怎么说」。
+	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
+	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
+	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
+	appendPromptSection(&tail, personaClosingAnchor())
+	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled))
+	return builder.String(), strings.TrimSpace(tail.String())
+}
+
+// joinPromptSections 用换行拼接非空段落。
+func joinPromptSections(sections ...string) string {
+	var builder strings.Builder
+	for _, section := range sections {
+		section = strings.TrimSpace(section)
+		if section == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(section)
+	}
+	return builder.String()
+}
+
+// replyMentionPrompt 说明「怎么 @ 别人」：候选名单和 CQ at 的写法。
+//
+// 「要不要 @ 当前发言者」不在这里,由 replyDecorationPrompt 按本轮的装饰件模式
+// 单独给出。两段提示词曾经各说各的:这一段写死「发送层会引用并 @ 当前发言者,
+// 这部分不需要你输出 CQ at」,那句话只有 on 档成立;而 auto 档发送层一个装饰件
+// 都不加,另一段却在请模型自己写 @。模型两段都收到,前一段是陈述句("发送层会
+// 做"),后一段是选择题,于是按前一段理解——不输出 CQ at,发送层也没加,@ 就消失了。
+// 「该 @ 的时候也不 @」是这么来的,不是模型判断保守。
+//
+// 现在描述发送层行为的那几句按模式给:on 档照旧说会自动加,auto/off 档明说不会,
+// 谁也不再替另一段做决定。
+func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
+	if event.Kind != EventKindGroup {
+		return ""
+	}
+	candidates := r.replyMentionCandidates(event, history)
+	if len(candidates) == 0 {
+		return ""
+	}
+	payload, err := json.Marshal(candidates)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf(`
+
+	【群聊真实提及规则】
+	发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。
+	可提及成员候选 JSON：%s
+	1. %s
+	2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
+	3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
+	4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
+	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进 Markdown 代码块，也不要自己写平台专用的提及写法。
+	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
+		string(payload),
+		currentSenderMentionRule(cfg),
+		autoDecorationCancelClause(cfg),
+		autoDecorationAvoidClause(cfg)))
+}
+
+// markStablePromptPrefix 在「历史之后、逐消息内容之前」标出缓存断点。只有 system
+// 头部一条时不标：那条由适配层单独缓存，没有历史就没有第二段可复用的前缀。
+func markStablePromptPrefix(messages []llm.Message) []llm.Message {
+	if len(messages) < 2 {
+		return messages
+	}
+	messages[len(messages)-1].CacheBreakpoint = true
+	return messages
+}
+
+func appendPromptSection(builder *strings.Builder, section string) {
+	section = strings.TrimSpace(section)
+	if section == "" {
+		return
+	}
+	builder.WriteString("\n")
+	builder.WriteString(section)
+}
+
+func renderPromptTemplate(template string, values map[string]string) string {
+	rendered := strings.TrimSpace(template)
+	for key, value := range values {
+		rendered = strings.ReplaceAll(rendered, "{"+key+"}", value)
+	}
+	return rendered
+}
+
+func historyPromptText(event MessageEvent) string {
+	return historyPromptTextAt(event, 0)
+}
+
+func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotConfig) string {
+	text := PlainText(event.Segments)
+	if text == "" && !hasImageSegment(event.Segments) {
+		text = event.RawMessage
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if quoted := quotedPromptText(event.Quoted); quoted != "" {
+		text += "\n" + quoted
+	}
+	return historyLinePrefix(event) + event.SenderNameOrID() + ": " + text + historyIdentityPrompt(event, configs...)
+}
+
+func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
+	return agentImageHistoryPromptTextWithDescriptions(event, currentTime, nil)
+}
+
+// agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
+// 只有计数的占位行会让模型在被追问历史媒体时无内容可依，转而编造或退化成寒暄。
+func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string, configs ...BotConfig) string {
+	imageCount := historicalStillImageCount(event)
+	videoCount := historicalVideoCount(event)
+	videoFrameCount := historicalVideoFrameCount(event)
+	audioCount := historicalAudioCount(event)
+	fileCount := historicalFileCount(event)
+	if imageCount+videoCount+videoFrameCount+audioCount+fileCount == 0 {
+		return ""
+	}
+	text := rawMessageWithoutImagePlaceholders(PlainText(event.Segments))
+	if quoted := quotedPromptText(event.Quoted); quoted != "" {
+		quoted = rawMessageWithoutImagePlaceholders(quoted)
+		if text != "" {
+			text += "\n"
+		}
+		text += quoted
+	}
+	messageID := strings.TrimSpace(event.MessageID)
+	if messageID == "" {
+		messageID = "不可用"
+	}
+	line := historyLinePrefix(event) + event.SenderNameOrID()
+	if text != "" {
+		line += ": " + text
+	}
+	// 只列有的媒体种类和数量。以前这一行把五种计数（多数是 0）、「当前未附加
+	// 原件」和一整句怎么调用 diana.history_media 都写一遍，每条带图的历史要多付
+	// 近百个 token——群里表情包一条接一条，这笔开销比正文还大。「摘要不等于看过
+	// 原件」和「怎么取原件」在 promptToolHistoryImages 里只说一次就够了。
+	line += "\n【媒体 message_id=" + messageID + "：" + historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount) + "】"
+	if len(descriptions) > 0 {
+		line += "\n" + strings.Join(descriptions, "\n")
+	}
+	return line + historyIdentityPrompt(event, configs...)
+}
+
+func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
+	text := strings.TrimSpace(PlainText(event.Segments))
+	if text == "" && !hasImageSegment(event.Segments) {
+		text = strings.TrimSpace(firstNonEmpty(fallbackText, event.RawMessage))
+	}
+	if text == "" {
+		return ""
+	}
+	if quoted := quotedPromptText(event.Quoted); quoted != "" {
+		text += "\n" + quoted
+	}
+	return fmt.Sprintf("【当前同轮补充消息，必须与最后的当前消息合并理解并一并回答；若本消息明确纠正原要求，以纠正后的条件为准，保留未被修改的要求】%s%s: %s", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
+}
+
+func currentPromptText(event MessageEvent, text string) string {
+	return currentPromptTextWithSemanticContext(event, text, semanticReferenceContext{
+		RequestedSourceCount: len(eventSemanticSourceMessageIDs(event)),
+	}, promptAnnotation{})
+}
+
+// currentPromptTextWithSemanticContext 组装交给模型的当前消息。
+//
+// annotation.WakeGuidance 是配置里的「只被唤醒」提示词。它是注解，不是正文替身：
+// 正文永远是用户的原话，这句只在「这条消息除了叫一声什么都没有」时附在后面，
+// 告诉模型该怎么接。
+func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourceContext semanticReferenceContext, annotation promptAnnotation) string {
+	text = strings.TrimSpace(text)
+	botID := annotation.botID(event)
+	wakeGuidanceAttached := false
+	hasAtSegment := eventHasSegmentType(event, "at")
+	hasReplySegment := eventHasSegmentType(event, "reply")
+	if text == "" {
+		// 这里曾经又抄了一遍那句「用户只唤醒了你」的字面量，和 cleanInput 用的
+		// 配置项各写各的：改了配置这条路径上不生效，改了默认值这里也不跟着变。
+		// cleanInput 正常情况下已经把空文本换成了配置值，走到这儿说明是别的
+		// 调用路径，至少要和内置默认值保持同一份。
+		text = annotation.wakeGuidance()
+		wakeGuidanceAttached = true
+	} else if bareWakeMention(event, text, botID, annotation.TriggerWords) {
+		// 只是叫了一声：原话照留，接话方式作为注解跟在后面。
+		text += "\n\n" + annotation.wakeGuidance()
+		wakeGuidanceAttached = true
+	}
+	if currentMessageOnlyMentionsOrReplies(event, text) && !wakeGuidanceAttached {
+		// 唤醒指引已经把「这是一次有效唤醒、该怎么接」说全了，不再补这句泛泛的。
+		text += "\n\n这条当前消息主要由 @ 或引用组成，没有额外正文，也要把它当成一次有效唤醒并自然回复。"
+	}
+	if hasAtSegment {
+		if mentionsSomeoneElseFor(event, botID) {
+			text += "\n\n当前消息包含 @ 标记，@ 是当前消息的一部分，不要忽略。"
+		} else {
+			text += "\n\n正文里那个 @ 指的就是你，等于有人直接叫了你一声。"
+		}
+	}
+	if hasReplySegment {
+		text += "\n\n当前消息包含引用/回复标记，引用关系是当前消息的一部分；如果引用内容能从历史参考中看出，可以结合它回复。"
+	}
+	if sourceContext.RequestedSourceCount > 1 {
+		switch {
+		case sourceContext.TextSourceCount > 0 && sourceContext.AttachedImageCount > 0:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，其中有 %d 条文字来源、实际附加 %d 张可读取图片；必须逐条核对文字并逐张查看图片后综合回答。", sourceContext.RequestedSourceCount, sourceContext.TextSourceCount, sourceContext.AttachedImageCount)
+		case sourceContext.AttachedImageCount > 0:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，实际附加 %d 张可读取图片；图片按原消息从旧到新排列，必须逐张查看并综合回答。", sourceContext.RequestedSourceCount, sourceContext.AttachedImageCount)
+		case sourceContext.TextSourceCount > 0:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，其中 %d 条包含文字；完整来源已按顺序列出，必须逐条核对并综合回答。", sourceContext.RequestedSourceCount, sourceContext.TextSourceCount)
+		default:
+			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源；必须按已提供的来源记录逐条核对，不要假定存在未附加的图片。", sourceContext.RequestedSourceCount)
+		}
+		if sourceContext.MissingSourceCount > 0 {
+			text += fmt.Sprintf("其中 %d 条来源未能从持久化历史解析，必须明确说明缺失范围，不要编造其内容。", sourceContext.MissingSourceCount)
+		}
+	}
+	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
+		text += "\n\n【媒体状态】" + notice
+	}
+	quotedCoveredBySemanticBlock := event.Quoted != nil && event.Quoted.Semantic && len(eventSemanticSourceMessageIDs(event)) > 0
+	if quoted := quotedPromptText(event.Quoted); quoted != "" && !quotedCoveredBySemanticBlock {
+		text += "\n\n" + quoted
+	}
+	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
+		text += "\n\n" + reference
+	}
+	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0) + text
+}
+
+func quotedPromptText(quoted *QuotedMessage) string {
+	if quoted == nil {
+		return ""
+	}
+	text := PlainText(quoted.Segments)
+	if hasImageSegment(quoted.Segments) {
+		text = rawMessageWithoutImagePlaceholders(text)
+	}
+	if strings.TrimSpace(text) == "" && !hasImageSegment(quoted.Segments) {
+		text = strings.TrimSpace(quoted.RawMessage)
+	}
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	sender := strings.TrimSpace(quoted.SenderName)
+	if sender == "" {
+		sender = strings.TrimSpace(quoted.UserID)
+	}
+	if sender == "" {
+		sender = "未知用户"
+	}
+	label := "被引用的消息"
+	if quoted.Semantic {
+		label = "指代判断选中的历史消息"
+	}
+	line := fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
+	if userID := strings.TrimSpace(quoted.UserID); userID != "" {
+		identity, _ := json.Marshal(map[string]string{"quoted_sender_user_id": userID})
+		line += "\n【引用发言者身份】" + string(identity)
+	}
+	return line
+}
+
+func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Message {
+	if len(options) == 0 {
+		return llmMessageFromEventWithImages(event, text, nil)
+	}
+
+	imageOnlyText := "用户发送了一张图片，请根据图片内容回答。"
+	if value, ok := options[0].(string); ok && strings.TrimSpace(value) != "" {
+		imageOnlyText = strings.TrimSpace(value)
+	}
+	var resolveImage func(string) string
+	if len(options) > 1 {
+		resolveImage, _ = options[1].(func(string) string)
+	}
+
+	text = strings.TrimSpace(text)
+	imageURLs := availableImageURLs(event.Segments)
+	if event.Quoted != nil {
+		imageURLs = append(imageURLs, availableImageURLs(event.Quoted.Segments)...)
+	}
+	if len(imageURLs) == 0 {
+		return llm.Message{Role: llm.RoleUser, Content: text}
+	}
+	if imageOnlyPrompt(text, event) {
+		text = imageOnlyText
+	}
+	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
+	if text != "" {
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: text})
+	}
+	for _, imageURL := range imageURLs {
+		if resolveImage != nil {
+			imageURL = resolveImage(imageURL)
+		}
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
+	}
+	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}
+}
+
+func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) llm.Message {
+	message, _ := llmMessageFromEventWithVideoFramesDetailed(ctx, event, text, extraImageURLs)
+	return message
+}
+
+func llmMessageFromEventWithVideoFramesDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
+	groups := [][]MessageSegment{event.Segments}
+	if event.Quoted != nil {
+		groups = append(groups, event.Quoted.Segments)
+	}
+	ctx = withVideoMediaIdentities(ctx, event.Platform, groups...)
+	videoURLs := videoSourceCandidates(event.Segments)
+	cachedFrames := cachedVideoFrameURLs(event.Segments)
+	quotedVideo := false
+	if event.Quoted != nil {
+		quotedURLs := videoSourceCandidates(event.Quoted.Segments)
+		quotedVideo = hasVideoSegment(event.Quoted.Segments)
+		videoURLs = append(videoURLs, quotedURLs...)
+		cachedFrames = append(cachedFrames, cachedVideoFrameURLs(event.Quoted.Segments)...)
+	}
+	frames := cachedFrames
+	cleanupFrames := false
+	videoFailure := ""
+	if len(frames) == 0 {
+		frames, videoFailure = extractVideoContextFramesDetailed(ctx, videoURLs, 0)
+		cleanupFrames = true
+	}
+	if cleanupFrames {
+		defer cleanupVideoContextFrames(frames)
+	}
+	if len(videoURLs) > 0 || len(cachedFrames) > 0 {
+		if len(frames) > 0 {
+			text += "\n\n【媒体读取事实】系统已成功读取并附加当前消息中的视频画面；不得声称媒体为空、未加载、不可见、工具不可用或读取失败。若画面本身难以辨认，只能如实说明无法从已看到的画面确认具体内容。"
+			if manifest := forwardVideoFrameManifest(event); manifest != "" {
+				text += "\n【合并转发媒体节点】" + manifest + "转发中的文字和视频是独立节点；除非节点归属明确，不得声称某句文字出现在某个视频里。"
+			}
+			if quotedVideo {
+				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。" + videoFrameNarrationRule
+			} else {
+				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。" + videoFrameNarrationRule
+			}
+		} else {
+			// 原因照实说出来。以前这里只写「读取或抽帧失败」，模型只能照着复述，
+			// 用户得到一句「我暂时读不了这个视频」——既不知道是这台机器没装
+			// ffmpeg、还是视频超了大小上限，也就不知道该找谁修。
+			text += "\n\n【系统提示】当前视频没能读出画面，原因：" + videoFailureReason(videoFailure) +
+				"把这个原因用自己的话告诉用户，别只说一句读不了。" +
+				"不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频。" + videoFrameNarrationRule
+		}
+	}
+	extraImageURLs = append(extraImageURLs, frames...)
+	return llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
+}
+
+func llmMessageFromEventWithImages(event MessageEvent, text string, extraImageURLs []string) llm.Message {
+	return llmMessageFromEventWithImagesForContext(context.Background(), event, text, extraImageURLs)
+}
+
+func llmMessageFromEventWithImagesForContext(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) llm.Message {
+	message, _ := llmMessageFromEventWithImagesForContextDetailed(ctx, event, text, extraImageURLs)
+	return message
+}
+
+func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, bool) {
+	message, failures := llmMessageFromEventWithImagesForContextDiagnostics(ctx, event, text, extraImageURLs)
+	return message, len(failures) == 0
+}
+
+func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
+	text = strings.TrimSpace(text)
+	imageURLs := availableImageURLs(event.Segments)
+	if event.Quoted != nil {
+		imageURLs = append(imageURLs, availableImageURLs(event.Quoted.Segments)...)
+	}
+	imageURLs = append(imageURLs, extraImageURLs...)
+	imageGroups, failures := loadLLMImageURLGroupsDetailed(ctx, imageURLs)
+	imageGroups = dedupeLLMImageGroups(imageGroups)
+	sourceImageCount := len(imageGroups)
+	imageURLs = flattenLLMImageGroups(imageGroups)
+	expandedLongImages := len(imageURLs) > sourceImageCount
+	if len(imageURLs) == 0 {
+		return llm.Message{Role: llm.RoleUser, Content: text}, failures
+	}
+	if imageOnlyPrompt(text, event) {
+		if sourceImageCount == 1 {
+			text = "用户发送了一张图片，请根据图片内容回答。"
+		} else {
+			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", sourceImageCount)
+		}
+	}
+	if expandedLongImages {
+		text += "\n\n【长图处理】部分超长图片已按“完整总览 → 沿长边顺序切片”展开；相邻切片有重叠，请按收到顺序阅读并合并重复内容。"
+	}
+	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
+	if text != "" {
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: text})
+	}
+	for _, imageURL := range imageURLs {
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
+	}
+	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, failures
+}
+
+func imageOnlyPrompt(text string, event MessageEvent) bool {
+	if !hasImageSegment(event.Segments) {
+		return false
+	}
+	text = strings.TrimSpace(text)
+	return text == "" || text == "[图片]"
+}
+
+func runtimeLLMMessageEmpty(msg llm.Message) bool {
+	if strings.TrimSpace(msg.Content) != "" {
+		return false
+	}
+	return len(msg.Parts) == 0
+}
+
+// contextHistory 返回当前会话历史副本。
+func (r *Runtime) contextHistory(event MessageEvent) []MessageEvent {
+	current, store := r.sessionContextHistory(event)
+	if store == nil {
+		return current
+	}
+	crossGroup := r.crossGroupContextEvents(event, store)
+	return mergeCrossGroupContextHistory(current, crossGroup)
+}
+
+// sessionContextHistory returns only the current conversation. Background
+// memory extraction uses this path because its recent-message prompt does not
+// need an expensive cross-group semantic search for every queued event.
+func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, MessageHistoryStore) {
+	if event.replyHistoryLoaded {
+		// 历史已经在本轮更早的地方加载过，直接用缓存并且不返回 store：
+		// 返回 store 会让 contextHistory 顺手补一次跨群检索，而这条正是回复
+		// 热路径，每轮会走好几次，等于凭空多出好几次全表文本搜索。跨群上下文
+		// 在历史首次加载时就已经并进去了。
+		return append([]MessageEvent(nil), event.replyHistory...), nil
+	}
+	session := sessionKey(event)
+	r.mu.RLock()
+	// 返回副本，生成回复时遍历历史不会和新消息写入互相影响。
+	history := r.history[session]
+	limit := r.effectiveConfigForEventLocked(event).RecentContextLimit
+	if limit <= 0 {
+		limit = 20
+	}
+	if len(history) > limit {
+		history = history[len(history)-limit:]
+	}
+	memory := append([]MessageEvent(nil), history...)
+	store := r.messageStore
+	r.mu.RUnlock()
+	if store == nil {
+		return memory, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stored, err := store.ListRecentMessageEvents(ctx, session, limit)
+	if err != nil {
+		log.Printf("diana message history load failed: %v", err)
+		return memory, store
+	}
+	return mergeMessageHistory(memory, stored, limit), store
+}
+
+func mergeMessageHistory(memory []MessageEvent, stored []MessageEvent, limit int) []MessageEvent {
+	if limit <= 0 {
+		limit = 20
+	}
+	merged := make([]MessageEvent, 0, len(stored)+len(memory))
+	seen := map[string]bool{}
+	appendOne := func(event MessageEvent) {
+		key := messageHistoryDedupeKey(event)
+		if key != "" && seen[key] {
+			return
+		}
+		if key != "" {
+			seen[key] = true
+		}
+		merged = append(merged, event)
+	}
+	for _, event := range stored {
+		appendOne(event)
+	}
+	for _, event := range memory {
+		appendOne(event)
+	}
+	// Persisted recent history and the in-memory window can overlap in different
+	// positions. Sort the deduplicated union before trimming so old memory-only
+	// entries cannot displace newer persisted events at the tail of the slice.
+	sort.SliceStable(merged, func(left, right int) bool {
+		return merged[left].Time < merged[right].Time
+	})
+	if len(merged) > limit {
+		merged = merged[len(merged)-limit:]
+	}
+	return merged
+}
+
+func messageHistoryDedupeKey(event MessageEvent) string {
+	if event.MessageID != "" {
+		return string(event.Kind) + "|" + event.GroupID + "|" + event.UserID + "|" + event.MessageID
+	}
+	text := firstNonEmpty(strings.TrimSpace(PlainText(event.Segments)), strings.TrimSpace(event.RawMessage))
+	if text == "" {
+		return ""
+	}
+	return string(event.Kind) + "|" + event.GroupID + "|" + event.UserID + "|" + strconv.FormatInt(event.Time, 10) + "|" + text
+}
+
+// renderLLMProfiles 渲染提供商配置档列表。
+func (r *Runtime) renderLLMProfiles() string {
+	if r.llmStore == nil {
+		return "当前未接入提供商配置集。"
+	}
+	set := r.llmStore.Profiles()
+	if len(set.Profiles) == 0 {
+		return "当前没有可用的提供商配置。"
+	}
+	// 按列表原顺序输出，不再按名字排序：组内顺序就是降级顺序，排过序的列表会把
+	// 这个含义抹掉。以前用 * 标出激活项，那个概念已经没有了。
+	lines := []string{"提供商配置列表（组内自上而下即降级顺序）："}
+	for _, profile := range set.Profiles {
+		lines = append(lines, fmt.Sprintf("- %s [%s] (%s / %s)", profile.Name, llm.NormalizeProfileGroup(profile.Group), profile.Config.Provider, profile.Config.Model))
+	}
+	return strings.Join(lines, "\n")
+}
