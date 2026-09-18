@@ -554,13 +554,34 @@ func TestRepositoryIssueWriteRequiresTokenAndExactAllowlist(t *testing.T) {
 	if result := runRepositoryPublishTestTool(t, tool, input); result.FailureCode != "token_required" {
 		t.Fatalf("missing token result=%#v", result)
 	}
+	// 主人不受写入白名单限制：白名单写的是别的仓库也只落草稿，确认码闸门不变。
 	tool.settings[repositoryPublishSettingToken] = repositoryPublishTestToken
 	tool.settings[repositoryPublishSettingAllowlist] = "acme/demo-extra"
-	if result := runRepositoryPublishTestTool(t, tool, input); result.FailureCode != "repository_not_allowed" {
+	if result := runRepositoryPublishToolOnce(t, tool, input); result.Outcome != "draft_pending" {
+		t.Fatalf("owner should bypass the allowlist, result=%#v", result)
+	}
+	if github.count(http.MethodPost)+github.count(http.MethodPatch) != 0 {
+		t.Fatalf("owner draft reached GitHub before confirmation: %#v", github.requests)
+	}
+
+	// 精确白名单仍然约束非主人：有草稿权限但仓库不在白名单里，零请求被拒。
+	memberTool := newDianaRepositoryIssuesTool(
+		NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 Exact allowlist"},
+		newRepositoryPublishPlugin(server.Client(), server.URL),
+		SettingValues{
+			repositoryPublishSettingToken:      repositoryPublishTestToken,
+			repositoryPublishSettingAllowlist:  "acme/demo-extra",
+			repositoryPublishSettingTimeout:    5,
+			repositoryPublishSettingDraftUsers: "member = acme/demo",
+		},
+	)
+	requestsBefore := len(github.requests)
+	if result := runRepositoryPublishToolOnce(t, memberTool, map[string]any{"operation": "create", "repository": "acme/demo", "title": "Exact allowlist"}); result.FailureCode != "repository_not_allowed" {
 		t.Fatalf("similar allowlist result=%#v", result)
 	}
-	if github.count(http.MethodGet)+github.count(http.MethodPost) != 0 {
-		t.Fatalf("rejected writes reached GitHub: %#v", github.requests)
+	if len(github.requests) != requestsBefore {
+		t.Fatalf("rejected writes reached GitHub: %#v", github.requests[requestsBefore:])
 	}
 }
 
@@ -946,6 +967,55 @@ func TestRepositoryPublishEventRepositoriesEmptyWithoutAllowlist(t *testing.T) {
 	}
 	if got := repositoryPublishEventRepositories(direct, true, settings); len(got) != 0 {
 		t.Fatalf("owner repositories without an allowlist = %#v", got)
+	}
+}
+
+// 描述里的仓库清单只圈写操作范围：读操作按仓库可见性分流（关闭 #576），公开仓库
+// 全员可读。清单为空时绝不能再写「任何 repository 都会被拒绝」——那句话会让模型
+// 替后端拒绝掉本该放行的公开仓库读取。
+func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+
+	// 没有任何写入授权的陌生人：写操作被拒，但公开仓库读取必须留口。
+	stranger := newDianaRepositoryIssuesTool(runtime,
+		MessageEvent{Kind: EventKindPrivate, UserID: "nobody"},
+		&RepositoryPublishPlugin{},
+		SettingValues{repositoryPublishSettingAllowlist: "acme/demo"},
+	)
+	description := stranger.Description()
+	if strings.Contains(description, "任何 repository 都会被拒绝") {
+		t.Fatalf("description still forbids every repository: %q", description)
+	}
+	if !strings.Contains(description, "公开仓库照常可读") {
+		t.Fatalf("description should keep public reads open: %q", description)
+	}
+
+	// 有写入授权的会话：清单标注为写入授权，并说明读操作不受清单限制。
+	granted := newDianaRepositoryIssuesTool(runtime,
+		MessageEvent{Kind: EventKindPrivate, UserID: "owner-user"},
+		&RepositoryPublishPlugin{},
+		SettingValues{
+			repositoryPublishSettingAllowlist:    "SuInk/Diana",
+			repositoryPublishSettingManagerUsers: "owner-user = SuInk/Diana",
+		},
+	)
+	description = granted.Description()
+	if !strings.Contains(description, "当前会话有写入授权的仓库：SuInk/Diana") {
+		t.Fatalf("description should list write-authorized repositories: %q", description)
+	}
+	if !strings.Contains(description, "读操作不受清单限制") {
+		t.Fatalf("description should note reads are not limited to the list: %q", description)
+	}
+
+	// 主人的写入不受白名单限制：描述里必须明说，免得模型拿白名单替他拒绝。
+	ownerTool := newDianaRepositoryIssuesTool(runtime,
+		MessageEvent{Kind: EventKindPrivate, UserID: "owner"},
+		&RepositoryPublishPlugin{},
+		SettingValues{repositoryPublishSettingAllowlist: "SuInk/Diana"},
+	)
+	description = ownerTool.Description()
+	if !strings.Contains(description, "写操作不受仓库白名单限制") {
+		t.Fatalf("owner description should state the allowlist does not apply: %q", description)
 	}
 }
 

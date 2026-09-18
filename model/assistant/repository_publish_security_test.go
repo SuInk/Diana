@@ -417,11 +417,39 @@ func TestRepositoryIssueWriteTargetNeverBypassesConfirmation(t *testing.T) {
 		})
 	}
 
-	t.Run("repository outside the allowlist is still rejected", func(t *testing.T) {
+	t.Run("owner bypasses the allowlist but still stops at the draft", func(t *testing.T) {
 		github := newRepositoryPublishTestGitHub()
 		server := httptest.NewServer(http.HandlerFunc(github.handler))
 		defer server.Close()
-		result := runRepositoryPublishToolOnce(t, repositoryPublishTestTool(server, "Please create a GitHub issue in acme/new, not acme/old", nil), map[string]any{
+		// 主人不受写入白名单限制，但确认码闸门不变：白名单外的仓库也只落草稿，
+		// 用户原样打出确认码之前一个写请求都不许到 GitHub。
+		result := runRepositoryPublishToolOnce(t, repositoryPublishTestTool(server, "Please create a GitHub issue in acme/old", nil), map[string]any{
+			"operation": "create", "repository": "acme/old", "title": "Wrong target",
+		})
+		if !result.OK || result.Outcome != "draft_pending" || result.Draft == nil {
+			t.Fatalf("result=%#v, want draft_pending for the owner", result)
+		}
+		if calls := github.count(http.MethodPost) + github.count(http.MethodPatch); calls != 0 {
+			t.Fatalf("owner draft reached GitHub before confirmation (%d requests): %#v", calls, github.requests)
+		}
+	})
+
+	t.Run("repository outside the allowlist is still rejected for non-owners", func(t *testing.T) {
+		github := newRepositoryPublishTestGitHub()
+		server := httptest.NewServer(http.HandlerFunc(github.handler))
+		defer server.Close()
+		tool := newDianaRepositoryIssuesTool(
+			NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+			MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "Please create a GitHub issue in acme/old"},
+			newRepositoryPublishPlugin(server.Client(), server.URL),
+			SettingValues{
+				repositoryPublishSettingToken:      repositoryPublishTestToken,
+				repositoryPublishSettingAllowlist:  "acme/demo",
+				repositoryPublishSettingTimeout:    5,
+				repositoryPublishSettingDraftUsers: "member = acme/old",
+			},
+		)
+		result := runRepositoryPublishToolOnce(t, tool, map[string]any{
 			"operation": "create", "repository": "acme/old", "title": "Wrong target",
 		})
 		if result.OK || result.FailureCode != "repository_not_allowed" {

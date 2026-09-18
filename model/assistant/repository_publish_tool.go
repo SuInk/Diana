@@ -27,7 +27,9 @@ import (
 )
 
 const (
-	dianaRepositoryIssuesToolName = "diana.repository_issues"
+	// 名字刻意不带点号：点号命名（diana.xxx）会让弱模型把操作名脑补成
+	// 子工具（github.get 之类）。
+	dianaRepositoryIssuesToolName = "github"
 	repositoryIssueBodyLimit      = 60_000
 	repositoryIssueTitleLimit     = 256
 	// repositoryIssueConfirmationCodeLength 是确认码取草稿 ID 前缀的长度。
@@ -262,21 +264,33 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `这是一个工具，不是一组子工具：get、pull_files、read_file、search、comment 等都是 operation 参数的取值，调用时工具名永远是 github。搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
-	// 把当前会话能操作的仓库直接写进描述：用户往往只说简称（「给 milksu 提个
+	// 把当前会话有写入授权的仓库直接写进描述：用户往往只说简称（「给 milksu 提个
 	// issue」），模型手里没有清单就只能反问一句完整的 owner/repo，白白多一轮。
+	// 注意这份清单只圈非主人的写操作范围——读操作（search、get、pull_files、
+	// read_file）按仓库可见性分流，公开仓库全员可读（关闭 #576），不能拿「不在
+	// 清单里」去拒绝读取公开仓库；私有仓库的读取限制写在正文里，由
+	// validatePrivateReadAccess 执行。主人的写入不受白名单限制，清单对他只是
+	// 简称对照表。
 	// 这里只需要「是不是主人」，用配置里的 OwnerID 直接比即可；relationshipPolicy
 	// 还会去读用户记忆档案，构造工具描述时不值得为此多打一次库。
 	isOwner := t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event)
 	repositories := repositoryPublishEventRepositories(t.event, isOwner, t.settings)
-	if len(repositories) == 0 {
-		return description + "\n当前会话没有任何已授权仓库，任何 repository 都会被拒绝；应说明尚未授权，不要让用户改用别的写法重试。"
+	if isOwner {
+		if len(repositories) == 0 {
+			return description + "\n你是主人：写操作不受仓库白名单限制，按用户给出的 owner/repo 直接执行；读操作公开仓库全员可读，私有仓库主人可读。"
+		}
+		return description + "\n你是主人：写操作不受仓库白名单限制，任何 owner/repo 都可以直接写。白名单内的仓库：" + strings.Join(repositories, "、") +
+			"，用户只给出简称、别名或链接时优先按这份清单匹配；匹配不上就按用户给出的 owner/repo 直接执行，不要以「不在白名单」为由拒绝。"
 	}
-	return description + "\n当前会话可操作的仓库：" + strings.Join(repositories, "、") +
-		"。用户只给出仓库简称、别名或链接时，按这份清单匹配后直接填 repository，不要反问完整的 owner/repo；只有确实对不上时才追问。"
+	if len(repositories) == 0 {
+		return description + "\n当前会话没有已授权的写入仓库，create、comment 等写操作会因未授权被拒；读操作不受此限，公开仓库照常可读，不要以「尚未授权」为由拒绝读取公开仓库。"
+	}
+	return description + "\n当前会话有写入授权的仓库：" + strings.Join(repositories, "、") +
+		"。写操作只对清单内仓库开放，用户只给出仓库简称、别名或链接时按清单匹配后直接填 repository，不要反问完整的 owner/repo；读操作不受清单限制，公开仓库按用户给出的 owner/repo 直接读，只有确实对不上时才追问。"
 }
 
 // InputSchema 声明参数契约。写操作对当前用户消息原文的要求写在 user_confirmed_write
@@ -604,14 +618,16 @@ func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositor
 }
 
 func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner bool) (string, string) {
-	allowed, err := repositoryPublishAllowlist(t.settings.String(repositoryPublishSettingAllowlist, ""))
-	if err != nil {
-		return "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
-	}
-	if !allowed[strings.ToLower(repository)] {
-		return "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的精确写入白名单中。"
-	}
+	// 主人不受写入白名单限制：白名单是给其他用户划的边界，主人自己的写入本来
+	// 就要过确认码，仓库范围不必再替他圈一遍。非主人继续精确匹配白名单。
 	if !owner {
+		allowed, err := repositoryPublishAllowlist(t.settings.String(repositoryPublishSettingAllowlist, ""))
+		if err != nil {
+			return "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
+		}
+		if !allowed[strings.ToLower(repository)] {
+			return "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的精确写入白名单中。"
+		}
 		legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
 		if err != nil {
 			return "invalid_user_repository_access", "用户仓库授权配置无效。"
