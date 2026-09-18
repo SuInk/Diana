@@ -880,7 +880,7 @@ func (h *BotHandler) installPluginDependency(c *gin.Context) {
 		h.writeError(c, status, "assistant.plugin.dependency.install", err, name, map[string]any{"dependency": name})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.plugin.dependency.install", "链接解析运行依赖已安装", name, map[string]any{
+	recordRequestOperation(c, h.logs, "assistant.plugin.dependency.install", "插件运行依赖已安装", name, map[string]any{
 		"dependency": name,
 		"installer":  result.Installer,
 		"version":    result.Dependency.Version,

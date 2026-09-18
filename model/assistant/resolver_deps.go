@@ -175,6 +175,9 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 	if name == browserDependencyName {
 		return installBrowserDependency(ctx)
 	}
+	if name == relationFontDependencyName {
+		return installCJKFontDependency(ctx)
+	}
 
 	deps := RefreshResolverDependencies()
 	if dep, ok := resolverDependencyByName(deps, name); ok && dep.Available {
@@ -322,7 +325,7 @@ func installableDependency(name string) bool {
 	if _, ok := resolverDependencySpecByName(name); ok {
 		return true
 	}
-	return name == browserDependencyName
+	return name == browserDependencyName || name == relationFontDependencyName
 }
 
 // resolverBrewCask 标出 Homebrew 里属于 cask 的依赖。

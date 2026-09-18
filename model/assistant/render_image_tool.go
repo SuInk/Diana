@@ -103,12 +103,18 @@ func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string
 		return t.fail(ctx, format, renderContentErrorMessage(format, err), err.Error())
 	}
 
+	page, fontFiles, err := prepareRenderFontHTML(ctx, page)
+	if err != nil {
+		return t.fail(ctx, format, "字体准备失败："+firstLineOf(err.Error()), err.Error())
+	}
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
 	request := agent.ScreenshotRequest{
-		HTML:    page,
-		Width:   renderImageWidth,
-		Height:  renderImageMaxHeight,
-		Timeout: time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
+		HTML:         page,
+		WaitForFonts: len(fontFiles) > 0,
+		FontFiles:    fontFiles,
+		Width:        renderImageWidth,
+		Height:       renderImageMaxHeight,
+		Timeout:      time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
 	}
 	if format == renderFormatMermaid {
 		request.VirtualTimeBudget = renderMermaidTimeBudget

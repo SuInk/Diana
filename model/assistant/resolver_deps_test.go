@@ -112,6 +112,10 @@ func TestResolverDependencyInstallPlanCoversBrowser(t *testing.T) {
 			installer: "Homebrew", want: [][]string{{"install", "--cask", "google-chrome"}},
 		},
 		{
+			name: "apk 装 chromium", goos: "linux", manager: "apk", path: "/sbin/apk",
+			installer: "apk", want: [][]string{{"add", "--no-cache", "chromium"}},
+		},
+		{
 			name: "apt 装 chromium", goos: "linux", manager: "apt-get", path: "/usr/bin/apt-get",
 			installer: "apt", want: [][]string{{"update"}, {"install", "-y", "chromium"}},
 		},
