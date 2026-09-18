@@ -48,7 +48,9 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 
 ```sh
 # Docker (prebuilt image, no need to clone the repo)
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
 docker run -d --name diana --restart unless-stopped \
+  --security-opt seccomp="$PWD/chromium-seccomp.json" \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
@@ -107,7 +109,7 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 <details>
 <summary>Docker details / manual download / building from source</summary>
 
-**Docker:** an image is published with every release (`ghcr.io/suink/diana:latest` plus version tags). OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), mount your `config.yaml` read-only at `/app/config.yaml`; the repo also ships a `docker-compose.yml` for local builds. To upgrade, pull the new image and recreate the container — your data lives in the mounted `data/` directory.
+**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags). OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), mount your `config.yaml` read-only at `/app/config.yaml`; the repo also ships a `docker-compose.yml` for local builds. To upgrade, pull the new image and recreate the container — your data lives in the mounted `data/` directory.
 
 **Manual download:** grab the **full package** for your platform (`.tar.gz` / `.zip`, includes the backend, prebuilt WebUI and launch scripts) from [Releases](https://github.com/SuInk/Diana/releases), verify `SHA256SUMS`, extract it, then run `run.sh` / `run.bat`. No separate WebUI deployment or Node.js installation is needed. Releases no longer provide standalone binaries; for custom deployments, extract the executable and frontend assets from the full package.
 

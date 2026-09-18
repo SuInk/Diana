@@ -34,6 +34,10 @@ const (
 
 // RenderedPage is the sanitized result of one disposable headless browser run.
 type RenderedPage struct {
+	SourceType      string                 `json:"source_type,omitempty"`
+	SourceURLs      []string               `json:"source_urls,omitempty"`
+	SourceNotice    string                 `json:"source_notice,omitempty"`
+	RetrievedAt     string                 `json:"retrieved_at,omitempty"`
 	RequestedURL    string                 `json:"requested_url"`
 	URL             string                 `json:"url"`
 	Title           string                 `json:"title,omitempty"`
@@ -100,16 +104,38 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 	if b == nil {
 		return RenderedPage{}, errors.New("headless browser is not configured")
 	}
+	timeout := b.cfg.Timeout
+	if timeout <= 0 {
+		timeout = defaultHeadlessBrowserTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	if err := validateSandboxedBrowserURL(ctx, rawURL); err != nil {
 		return RenderedPage{}, err
 	}
+	var sourceErr error
+	if apiURL, ok := githubReleaseAPIURL(rawURL); ok {
+		var page RenderedPage
+		page, sourceErr = readGitHubRelease(ctx, rawURL, apiURL, b.cfg.MaxTextChars)
+		if sourceErr == nil {
+			return page, nil
+		}
+	}
+	page, err := b.renderBrowser(ctx, rawURL)
+	if sourceErr != nil {
+		if err != nil {
+			return RenderedPage{}, errors.Join(sourceErr, err)
+		}
+		page.SourceNotice = "GitHub 官方 API 核验失败，以下仅为网页读取结果；不能据此或搜索空结果断言版本不存在。原因：" + sourceErr.Error()
+	}
+	page.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
+	return page, err
+}
+
+func (b *SandboxedHeadlessBrowser) renderBrowser(ctx context.Context, rawURL string) (RenderedPage, error) {
 	executable, err := findHeadlessBrowserExecutable(b.cfg.Executable)
 	if err != nil {
-		obscura, obscuraErr := findObscuraExecutable("")
-		if obscuraErr != nil {
-			return RenderedPage{}, err
-		}
-		return renderWithObscura(ctx, obscura, rawURL, b.cfg)
+		return RenderedPage{}, err
 	}
 
 	dirs, err := newBrowserSandboxDirs("diana-headless-browser-")
@@ -205,11 +231,7 @@ type HeadlessBrowserStatus struct {
 func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowserStatus {
 	path, err := findHeadlessBrowserExecutable(configured)
 	if err != nil {
-		obscura, obscuraErr := findObscuraExecutable("")
-		if obscuraErr != nil {
-			return HeadlessBrowserStatus{Detail: headlessBrowserProbeDetail(configured)}
-		}
-		return probeObscura(ctx, obscura)
+		return HeadlessBrowserStatus{Detail: headlessBrowserProbeDetail(configured)}
 	}
 	// Windows 上的 chrome.exe 是 GUI 子系统程序，--version 什么都不往标准输出写，
 	// 拿它判活会把装好的 Chrome 判成不可用。这里退回到「可执行文件存在」，
@@ -231,7 +253,7 @@ func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowse
 	return HeadlessBrowserStatus{Available: true, Path: path, Version: version, Engine: "chrome"}
 }
 
-// ProbeHeadlessBrowserRendering 在版本探测之后再完成一次真实的本地截图。
+// ProbeHeadlessBrowserRendering 验证版本、本地截图及网页沙箱/CDP 执行。
 // --version 只能证明文件能执行，不能发现浏览器启动后卡住、沙箱参数不兼容或无法
 // 产出 PNG。插件依赖页用这个探测，结论才和真正调用时一致。
 func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) HeadlessBrowserStatus {
@@ -242,9 +264,6 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
 	defer cancel()
 	executable := status.Path
-	if status.Engine == "obscura" {
-		executable = ""
-	}
 	_, err := CaptureHTMLScreenshot(probeCtx, ScreenshotRequest{
 		HTML:       `<!doctype html><meta charset="utf-8"><title>Diana browser probe</title><body>ok</body>`,
 		Width:      64,
@@ -255,6 +274,13 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	if err != nil {
 		status.Available = false
 		status.Detail = "找到了 " + status.Path + "，但真实截图失败：" + err.Error()
+		return status
+	}
+	sandboxCtx, cancelSandbox := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
+	defer cancelSandbox()
+	if err := probeSandboxedChrome(sandboxCtx, status.Path); err != nil {
+		status.Available = false
+		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error() + "。Docker 部署请使用项目提供的 chromium-seccomp.json；不要禁用 Chromium 沙箱"
 	}
 	return status
 }
@@ -263,7 +289,7 @@ func headlessBrowserProbeDetail(configured string) string {
 	if strings.TrimSpace(configured) != "" {
 		return "配置的浏览器路径不存在：" + strings.TrimSpace(configured)
 	}
-	return "没有找到 Chrome/Chromium 或 Obscura"
+	return "没有找到 Chromium / Google Chrome"
 }
 
 func firstNonEmptyLine(value string) string {
@@ -759,7 +785,7 @@ func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 func (t *BrowserRenderTool) Name() string { return "browser_render" }
 
 func (t *BrowserRenderTool) Description() string {
-	return `在一次性隔离配置的无头 Chrome/Chromium 中渲染公网网页并读取最终 DOM 文本，不使用用户浏览器登录态。`
+	return `读取公网网页。GitHub Release 地址优先读取官方 API 的版本与发布时间；其他页面通过一次性 Chrome/Chromium 沙箱读取 DOM。结果注明来源，不使用用户浏览器登录态。`
 }
 
 func (t *BrowserRenderTool) InputSchema() map[string]any {

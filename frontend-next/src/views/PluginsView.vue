@@ -518,9 +518,9 @@ const permissionsTarget = ref<PluginState | null>(null);
 const dependencyHints: Record<string, string> = {
   [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
   [sandboxedBrowserPluginID]:
-    "优先复用系统 Chrome/Chromium；没有浏览器时一键下载约 70–85 MB 的 Obscura，并在安装后执行一次真实截图验证。",
+    "复用系统 Chromium / Google Chrome；缺少时通过系统包管理器安装（Linux 安装 Chromium，macOS / Windows 安装 Chrome），安装需要相应系统权限。中文字体可一键下载；出图时按实际文字补齐缺失的多语言字体和单色 Emoji 字体，保存到应用缓存，无需管理员权限。官方 Docker 镜像已预装浏览器和中文字体。",
   [groupRelationsPluginID]:
-    "关系图有直接字体渲染和浏览器截图两条路径；至少一条检测通过即可正常出图。"
+    "关系图优先使用中文字体直接出图；缺失时可一键下载，首次出图也会自动补齐。浏览器截图作为备用路径。"
 };
 
 function dependenciesFor(pluginID: string): ResolverDependency[] {
@@ -536,7 +536,7 @@ function missingDependencyCount(pluginID: string): number {
 }
 
 function hasDependencyProblem(pluginID: string): boolean {
-  if (pluginID === groupRelationsPluginID) return readyDependencyCount(pluginID) === 0;
+  if (pluginID === groupRelationsPluginID) return !dependenciesFor(pluginID).some((dep) => dep.name === "cjk-font" && dep.available);
   return missingDependencyCount(pluginID) > 0;
 }
 

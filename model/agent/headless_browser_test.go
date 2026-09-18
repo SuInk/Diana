@@ -396,27 +396,33 @@ func TestBrowserSandboxDirsArePrivateAndCleaned(t *testing.T) {
 	}
 }
 
-// TestBrowserIdentityIsPlatformConsistent 盯住 UA 里的平台段跟着 GOOS 走。
+// TestBrowserIdentityIsPlatformConsistent 盯住 UA 里的平台段跟着 GOOS 走、
+// 架构段跟着 GOARCH 走。
 //
 // 写死一个平台的话，Linux 上跑的浏览器会一边用 UA 说自己是 macOS，一边通过
 // UA Client Hints 报 sec-ch-ua-platform: Linux——--user-agent 不会连带改客户端
-// 提示。这种自相矛盾比默认的 HeadlessChrome 更容易被认出来。
+// 提示。这种自相矛盾比默认的 HeadlessChrome 更容易被认出来。架构同理：
+// sec-ch-ua-arch 由真实运行时决定，ARM64 机器声称 x86_64 照样露馅。
 func TestBrowserIdentityIsPlatformConsistent(t *testing.T) {
-	for goos, want := range map[string]string{
-		"darwin":  "Macintosh; Intel Mac OS X 10_15_7",
-		"linux":   "X11; Linux x86_64",
-		"windows": "Windows NT 10.0; Win64; x64",
-		"freebsd": "X11; Linux x86_64",
+	for _, tc := range [][3]string{
+		{"darwin", "amd64", "Macintosh; Intel Mac OS X 10_15_7"},
+		{"darwin", "arm64", "Macintosh; Intel Mac OS X 10_15_7"},
+		{"linux", "amd64", "X11; Linux x86_64"},
+		{"linux", "arm64", "X11; Linux aarch64"},
+		{"windows", "amd64", "Windows NT 10.0; Win64; x64"},
+		{"windows", "arm64", "Windows NT 10.0; Win64; x64"},
+		{"freebsd", "amd64", "X11; Linux x86_64"},
 	} {
-		ua := chromeUserAgent(goos)
+		goos, goarch, want := tc[0], tc[1], tc[2]
+		ua := chromeUserAgent(goos, goarch)
 		if !strings.Contains(ua, "("+want+")") {
-			t.Fatalf("%s 的 UA 平台段不对：%s", goos, ua)
+			t.Fatalf("%s/%s 的 UA 平台段不对：%s", goos, goarch, ua)
 		}
 		if strings.Contains(ua, "Headless") {
-			t.Fatalf("%s 的 UA 里还留着 Headless：%s", goos, ua)
+			t.Fatalf("%s/%s 的 UA 里还留着 Headless：%s", goos, goarch, ua)
 		}
 		if !strings.Contains(ua, "Chrome/"+chromeUAVersion+" Safari/537.36") {
-			t.Fatalf("%s 的 UA 版本段不对：%s", goos, ua)
+			t.Fatalf("%s/%s 的 UA 版本段不对：%s", goos, goarch, ua)
 		}
 	}
 }

@@ -296,11 +296,19 @@ func (p *sandboxedChromeProcess) stop() {
 }
 
 func launchSandboxedChrome(ctx context.Context, executable, root, profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) (*sandboxedChromeProcess, error) {
-	processCtx, cancel := context.WithCancel(ctx)
 	args := sandboxedChromeArgs(profileDir, cacheDir, crashDir, cfg)
 	args = append(args, "about:blank")
+	return launchChromeProcess(ctx, executable, root, args)
+}
+
+func launchChromeProcess(ctx context.Context, executable, root string, args []string) (*sandboxedChromeProcess, error) {
+	return launchChromeProcessWithEnv(ctx, executable, root, args, nil)
+}
+
+func launchChromeProcessWithEnv(ctx context.Context, executable, root string, args, extraEnv []string) (*sandboxedChromeProcess, error) {
+	processCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(processCtx, executable, args...)
-	cmd.Env = sandboxedBrowserEnvironment(os.Environ(), root)
+	cmd.Env = append(sandboxedBrowserEnvironment(os.Environ(), root), extraEnv...)
 	cmd.Stdin = nil
 	cmd.Stdout = io.Discard
 	cmd.WaitDelay = 2 * time.Second
@@ -341,6 +349,33 @@ func launchSandboxedChrome(ctx context.Context, executable, root, profileDir, ca
 		cancel()
 		return nil, ctx.Err()
 	}
+}
+
+// probeSandboxedChrome verifies the same sandbox/CDP path used for untrusted
+// webpages. Local HTML screenshots intentionally have different requirements.
+func probeSandboxedChrome(ctx context.Context, executable string) error {
+	dirs, err := newBrowserSandboxDirs("diana-browser-probe-")
+	if err != nil {
+		return err
+	}
+	defer dirs.remove()
+	process, err := launchSandboxedChrome(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{}))
+	if err != nil {
+		return err
+	}
+	defer process.stop()
+	allocator, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
+	defer cancelAllocator()
+	browser, cancelBrowser := chromedp.NewContext(allocator)
+	defer cancelBrowser()
+	var value int
+	if err := chromedp.Run(browser, chromedp.Evaluate("1+1", &value)); err != nil {
+		return err
+	}
+	if value != 2 {
+		return errors.New("browser JavaScript probe failed")
+	}
+	return nil
 }
 
 func scanChromeDiagnostics(reader io.Reader, diagnostics *chromeDiagnosticBuffer, wsURL chan<- string) {

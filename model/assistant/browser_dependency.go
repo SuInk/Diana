@@ -13,7 +13,7 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-// 网页渲染插件唯一的外部依赖就是一个 Chrome/Chromium，可它以前只在真正渲染时
+// 网页渲染需要 Chrome/Chromium，中文截图还需要字体。过去浏览器只在真正渲染时
 // 才去找：插件在控制台上是「已启用」，机器上没装浏览器也照样是「已启用」，直到
 // 有人在群里发了个链接，才收到一句「渲染失败」。这里把它做成和 yt-dlp / ffmpeg
 // 完全一样的运行依赖：启用之前就能看出来齐不齐，缺了也能一键装。
@@ -56,9 +56,13 @@ func RefreshBrowserDependencies() []ResolverDependency {
 
 func probeBrowserDependencies() []ResolverDependency {
 	status := agent.ProbeHeadlessBrowserRendering(context.Background(), "")
+	return append(browserDependenciesFromStatus(status, runtime.GOOS, lookResolverCommand), cjkFontDependency())
+}
+
+func browserDependenciesFromStatus(status agent.HeadlessBrowserStatus, goos string, lookPath func(string) (string, error)) []ResolverDependency {
 	dep := ResolverDependency{
 		Name:    browserDependencyName,
-		Purpose: "网页渲染：优先使用系统 Chrome/Chromium，没有时使用轻量 Obscura",
+		Purpose: "网页渲染：使用系统 Chromium / Google Chrome",
 	}
 	if status.Available {
 		dep.Available = true
@@ -67,24 +71,26 @@ func probeBrowserDependencies() []ResolverDependency {
 		return []ResolverDependency{dep}
 	}
 	dep.Detail = strings.TrimSpace(status.Detail)
-	if _, ok := obscuraReleaseAssets[currentPlatformKey()]; ok {
+	if plan, err := resolverDependencyInstallPlan(browserDependencyName, goos, lookPath); err == nil {
 		dep.Installable = true
-		dep.Installer = "Diana 下载 Obscura " + obscuraVersion
+		dep.Installer = plan.installer
 	} else {
-		dep.Detail = strings.TrimSpace(dep.Detail + "。当前平台没有 Obscura 预编译包，请手动安装 Chrome/Chromium")
+		dep.Detail = strings.TrimSpace(dep.Detail + "。没有可用的系统包管理器，请手动安装 Chromium / Google Chrome")
 	}
 	return []ResolverDependency{dep}
 }
 
-// installBrowserDependency 在系统没有浏览器时下载固定版本的 Obscura。Diana 不再
-// 默认通过系统包管理器安装数 GB 的 Chrome；用户已经装过 Chrome 时仍优先复用它。
+// installBrowserDependency 通过系统包管理器安装 Chromium / Chrome，随后验证真实截图。
 func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallResult, error) {
 	deps := RefreshBrowserDependencies()
 	if dep, ok := resolverDependencyByName(deps, browserDependencyName); ok && dep.Available {
 		return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps)}, nil
 	}
-	path, err := installObscura(ctx)
+	plan, err := resolverDependencyInstallPlan(browserDependencyName, runtime.GOOS, lookResolverCommand)
 	if err != nil {
+		return ResolverDependencyInstallResult{}, err
+	}
+	if err := runDependencyInstallPlan(ctx, plan, browserDependencyName); err != nil {
 		return ResolverDependencyInstallResult{}, err
 	}
 	deps = RefreshBrowserDependencies()
@@ -94,31 +100,19 @@ func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallRes
 		if ok && strings.TrimSpace(dep.Detail) != "" {
 			detail = "：" + dep.Detail
 		}
-		return ResolverDependencyInstallResult{}, fmt.Errorf("Obscura 已安装到 %s，但网页渲染仍然不可用%s", path, detail)
+		return ResolverDependencyInstallResult{}, fmt.Errorf("%s 已执行 Chromium / Chrome 安装，但网页渲染仍然不可用%s", plan.installer, detail)
 	}
-	return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps), Installer: "Diana 下载 Obscura " + obscuraVersion}, nil
+	return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps), Installer: plan.installer}, nil
 }
-
-func currentPlatformKey() string { return runtime.GOOS + "/" + runtime.GOARCH }
 
 func browserDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {
-	return map[string][]ResolverDependency{SandboxedBrowserPluginID: deps}
+	return map[string][]ResolverDependency{SandboxedBrowserPluginID: deps, GroupRelationsPluginID: RelationRenderDependencies(deps)}
 }
 
-// RelationRenderDependencies 返回关系图两条可替代渲染路径的状态。字体能用时直接
-// 栅格化，字体不能用时浏览器截图兜底；界面会按「至少一条可用」判断整体状态。
+// RelationRenderDependencies 展示中文字体与备用浏览器。复杂文字走浏览器排版，
+// 缺少的字体在首次出图时按需下载。
 func RelationRenderDependencies(browser []ResolverDependency) []ResolverDependency {
-	fontDep := ResolverDependency{
-		Name:    relationFontDependencyName,
-		Purpose: "直接渲染：读取中文字形并在进程内生成 PNG",
-	}
-	if _, path, err := searchUsableCJKFont(); err == nil {
-		fontDep.Available = true
-		fontDep.Path = path
-		fontDep.Version = "可用"
-	} else {
-		fontDep.Detail = err.Error()
-	}
+	fontDep := cjkFontDependency()
 	result := []ResolverDependency{fontDep}
 	if dep, ok := resolverDependencyByName(browser, browserDependencyName); ok {
 		dep.Purpose = "浏览器渲染：用真实无头截图生成 PNG"

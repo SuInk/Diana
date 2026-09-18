@@ -144,8 +144,8 @@ let plugins: PluginState[] = [
   },
   {
     manifest: {
-      id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.3.0",
-      description: "优先使用系统浏览器，没有时使用轻量 Obscura，在隔离环境中执行动态网页。",
+      id: "official.sandboxed-browser-renderer", name: "网页渲染", version: "0.3.1",
+      description: "使用 Chromium / Google Chrome，在一次性隔离配置中执行动态网页。",
       official: true, built_in: true, permissions: ["网页渲染", "隔离浏览器"],
       settings: [{
         key: "window_mode", label: "Chrome 窗口模式", type: "select", default: "auto",
@@ -430,12 +430,13 @@ const dependencies: ResolverDependency[] = [
 const browserDependencies: ResolverDependency[] = [
   {
     name: "browser-renderer",
-    purpose: "网页渲染：优先使用系统 Chrome/Chromium，没有时使用轻量 Obscura",
+    purpose: "网页渲染：使用系统 Chromium / Google Chrome",
     available: false,
-    detail: "没有找到 Chrome/Chromium 或 Obscura",
+    detail: "没有找到 Chromium / Google Chrome",
     installable: true,
-    installer: "Diana 下载 Obscura v0.2.1"
-  }
+    installer: "系统包管理器"
+  },
+  { name: "cjk-font", purpose: "中文字体：关系图与中文截图", available: false, detail: "没有找到能画中文的字体文件", installable: true, installer: "Diana 下载 Noto Sans CJK SC（约 16 MiB）" }
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };

@@ -177,7 +177,7 @@ func (l *claimEvidenceLedger) observeRenderedPage(output string, runErr error) m
 		return nil
 	}
 	added := 0
-	for _, raw := range []string{page.URL, page.RequestedURL} {
+	for _, raw := range append([]string{page.URL, page.RequestedURL}, page.SourceURLs...) {
 		canonical := canonicalEvidenceURL(raw)
 		if canonical == "" {
 			continue

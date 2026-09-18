@@ -35,13 +35,14 @@ var cjkFontNameHints = []string{
 }
 
 type resolvedCJKFont struct {
+	key  string
 	font *sfnt.Font
 	path string
 	err  error
 }
 
 var (
-	cjkFontOnce  sync.Once
+	cjkFontMu    sync.Mutex
 	cjkFontCache resolvedCJKFont
 )
 
@@ -51,13 +52,28 @@ var (
 var cjkFontProbeRunes = []rune{'关', '系', '图'}
 
 // LoadCJKFont 找一个真的能画中文的字体。结果缓存：全盘扫字体是一次不便宜的
-// 遍历，而机器上的字体不会在进程生命周期里变来变去。
+// 遍历；只缓存成功结果，缺字体时允许后续安装立即生效。
 func LoadCJKFont() (*sfnt.Font, string, error) {
-	cjkFontOnce.Do(func() {
+	cjkFontMu.Lock()
+	defer cjkFontMu.Unlock()
+	managed, _ := managedCJKFontPath()
+	key := os.Getenv(cjkFontEnvPrimary) + "\x00" + os.Getenv(cjkFontEnvFallback) + "\x00" + managed
+	if cjkFontCache.font != nil {
+		if _, err := os.Stat(cjkFontCache.path); err != nil {
+			cjkFontCache = resolvedCJKFont{}
+		}
+	}
+	if cjkFontCache.font == nil || cjkFontCache.key != key {
 		font, path, err := searchUsableCJKFont()
-		cjkFontCache = resolvedCJKFont{font: font, path: path, err: err}
-	})
+		cjkFontCache = resolvedCJKFont{key: key, font: font, path: path, err: err}
+	}
 	return cjkFontCache.font, cjkFontCache.path, cjkFontCache.err
+}
+
+func resetCJKFontCache() {
+	cjkFontMu.Lock()
+	defer cjkFontMu.Unlock()
+	cjkFontCache = resolvedCJKFont{}
 }
 
 func searchUsableCJKFont() (*sfnt.Font, string, error) {
@@ -76,6 +92,11 @@ func searchUsableCJKFont() (*sfnt.Font, string, error) {
 		return font, configured, nil
 	}
 
+	if path, err := managedCJKFontPath(); err == nil {
+		if font, err := loadCJKFont(path); err == nil && fontHasCJKGlyphs(font) {
+			return font, path, nil
+		}
+	}
 	for _, path := range searchCJKFontCandidates() {
 		font, err := loadCJKFont(path)
 		if err != nil || !fontHasCJKGlyphs(font) {

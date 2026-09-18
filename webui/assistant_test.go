@@ -534,7 +534,7 @@ func TestBotHandlerGroupsPluginDependenciesByPlugin(t *testing.T) {
 		t.Fatalf("resolver group = %#v", payload.Plugins[assistant.ResolverPluginID])
 	}
 	browser := payload.Plugins[assistant.SandboxedBrowserPluginID]
-	if len(browser) != 1 {
+	if len(browser) != 2 {
 		t.Fatalf("browser group = %#v", browser)
 	}
 	// 装没装浏览器取决于跑测试的机器，但两种情况都必须能说清楚：装了要给出路径，
