@@ -118,21 +118,34 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	// 先在进程里直接画。它不需要浏览器，也就不用等一次冷启动——一台机器上装不装
 	// 得起 Chrome，和有没有中文字体，是两件独立的事，两条路都试才不至于一个环境
 	// 缺件就彻底没图。
-	png, rasterErr := RenderGroupRelationPNG(graph, title, rangeLabel, maxSeats)
+	var png []byte
+	_, _, fontErr := ensureCJKFont(ctx)
+	rasterErr := fontErr
+	if rasterErr == nil {
+		png, rasterErr = RenderGroupRelationPNG(graph, title, rangeLabel, maxSeats)
+	}
 	var browserErr error
 	if rasterErr != nil {
 		// 浏览器归「网页渲染」插件管：那个插件停用就是不许起浏览器，这里不能绕过去
 		// 自己起一个。停用也不至于没图——纯 Go 那条路不需要浏览器。
-		if !t.runtime.sandboxedBrowserEnabled(t.event) {
+		if fontErr != nil {
+			browserErr = fontErr
+		} else if !t.runtime.sandboxedBrowserEnabled(t.event) {
 			browserErr = errors.New("「网页渲染」插件没有启用，不能起浏览器")
 		} else {
 			page := RenderGroupRelationHTML(graph, title, rangeLabel, maxSeats)
-			png, browserErr = agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
-				HTML:    page,
-				Width:   relationImageWidth,
-				Height:  relationImageHeight,
-				Timeout: time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
-			})
+			var fontFiles []string
+			page, fontFiles, browserErr = prepareRenderFontHTML(ctx, page)
+			if browserErr == nil {
+				png, browserErr = agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
+					HTML:         page,
+					WaitForFonts: len(fontFiles) > 0,
+					FontFiles:    fontFiles,
+					Width:        relationImageWidth,
+					Height:       relationImageHeight,
+					Timeout:      time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
+				})
+			}
 		}
 	}
 	if rasterErr != nil && browserErr != nil {

@@ -48,7 +48,9 @@ irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 
 ```sh
 # Docker（预构建镜像，无需 clone 仓库）
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
 docker run -d --name diana --restart unless-stopped \
+  --security-opt seccomp="$PWD/chromium-seccomp.json" \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
@@ -107,7 +109,7 @@ docker run -d --name diana --restart unless-stopped \
 <details>
 <summary>Docker 细节 / 手动下载 / 源码构建</summary>
 
-**Docker：** 镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；仓库里也有 `docker-compose.yml` 可以本地构建。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
+**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；仓库里也有 `docker-compose.yml` 可以本地构建。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
 
 **手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
 
@@ -162,7 +164,7 @@ OneBot v11 连接方式：
 - **点歌** —— 网易云、QQ 音乐、酷狗多曲库自动切换。OneBot QQ 发语音；Telegram 将歌曲转为带歌名和歌手信息的 MP3 后直接上传，显示原生音乐播放器，无需 QQ 音乐卡片签名服务。音频不可用或准备失败时明确提示失败。QQ 官方机器人、钉钉、飞书和企业微信目前只提供歌曲来源页链接，并非聊天内播放器。
 - **表情包** —— 从群里见过的表情包中挑一张合适的发出去。
 - **图片识别** —— 视觉模型 + OCR（支持完全离线的本地方案），纯文本模型也能「看」图。
-- **画图出图** —— 表格、流程图、时序图这类纯文本讲不清的东西，模型自己判断该出图时渲染成图片发出来（Markdown / Mermaid / SVG，需要「网页渲染」插件提供的无头浏览器）。
+- **画图出图** —— 表格、流程图、时序图这类纯文本讲不清的东西，模型自己判断该出图时渲染成图片发出来（Markdown / Mermaid / SVG，需要「网页渲染」插件提供的无头浏览器）。 缺失字体会按实际文字自动下载，支持[多语言出图](docs/fonts.md)。
 - **记忆与笔记本** —— 分层记忆控制 token 消耗；重要的事（群规、忌口、约定）记进笔记本，可审可改可恢复。
 - **群级策略** —— 每个群独立的回复时段、黑白名单、人设和工具权限。
 - **内置 Agent** —— 最小工具循环，可用文件、命令、浏览器工具，支持装载 Skills 和 MCP 服务。

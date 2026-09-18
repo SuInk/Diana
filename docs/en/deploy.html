@@ -79,7 +79,9 @@ cd diana-webui-darwin-arm64
         <div class="section-heading"><p class="eyebrow">Docker</p><h2>Container deployment</h2></div>
         <div class="callout"><strong>Persistence</strong><p>You must mount <code>/app/data</code> and <code>/app/logs</code>, or rebuilding the container loses the SQLite database and your credentials.</p></div>
         <p>The published image means you do not have to clone the repository:</p>
-        <pre><code>docker run -d --name diana --restart unless-stopped \
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
+docker run -d --name diana --restart unless-stopped \
+  --security-opt seccomp="$PWD/chromium-seccomp.json" \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \

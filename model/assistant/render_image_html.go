@@ -182,7 +182,7 @@ func mustJSON(value any) string {
 }
 
 // renderFontStack 里挨个列出常见的中文字体：截图沙箱里没有网络，网页字体取不到，
-// 只能指望这台机器本地装了其中一个。列表和关系图找字体时的偏好一致。
+// 缺少系统字体时 prepareCJKRenderHTML 会内嵌已校验的下载字体，无需截图时联网。
 const renderFontStack = `"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Source Han Sans SC","Noto Sans CJK SC","WenQuanYi Micro Hei",-apple-system,"Segoe UI",Roboto,sans-serif`
 
 const renderPageTemplate = `<!doctype html>

@@ -77,7 +77,9 @@ cd diana-webui-darwin-arm64
         <div class="section-heading"><p class="eyebrow">Docker</p><h2>容器部署</h2></div>
         <div class="callout"><strong>持久化</strong><p>必须挂载 <code>/app/data</code> 和 <code>/app/logs</code>，否则重建容器会丢失 SQLite 配置与凭据。</p></div>
         <p>镜像随每个版本发布，不必克隆仓库再本地构建：</p>
-        <pre><code>docker run -d --name diana --restart unless-stopped \
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
+docker run -d --name diana --restart unless-stopped \
+  --security-opt seccomp="$PWD/chromium-seccomp.json" \
   -p 18080:18080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \

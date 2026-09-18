@@ -34,10 +34,15 @@ const (
 // 用 UA 说自己是 macOS，一边通过 UA Client Hints 报 sec-ch-ua-platform: Linux
 // ——`--user-agent` 不会连带改客户端提示。这种自相矛盾比默认的 HeadlessChrome
 // 更容易被认出来。
-var BrowserUserAgent = chromeUserAgent(runtime.GOOS)
+//
+// 架构段同理跟着 runtime.GOARCH 走：sec-ch-ua-arch 由真实运行时决定，改不掉。
+// ARM64 机器声称 x86_64 会和 Client Hints 报告的 ARM 打架。例外是 darwin 和
+// windows：Chrome 在 Apple Silicon Mac 上仍报 Intel Mac OS X 10_15_7，在
+// Windows ARM64 上仍报 Win64; x64（冻结的兼容 UA），照抄真实浏览器反而更一致。
+var BrowserUserAgent = chromeUserAgent(runtime.GOOS, runtime.GOARCH)
 
-func chromeUserAgent(goos string) string {
-	platform := "X11; Linux x86_64"
+func chromeUserAgent(goos, goarch string) string {
+	platform := linuxPlatform(goarch)
 	switch goos {
 	case "darwin":
 		platform = "Macintosh; Intel Mac OS X 10_15_7"
@@ -48,4 +53,13 @@ func chromeUserAgent(goos string) string {
 		"Mozilla/5.0 (%s) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Safari/537.36",
 		platform, chromeUAVersion,
 	)
+}
+
+// linuxPlatform 按架构给 Linux UA 平台段。ARM64 用 aarch64，与真实 Chrome on
+// ARM Linux 的 UA 及 sec-ch-ua-arch: ARM 保持一致。
+func linuxPlatform(goarch string) string {
+	if goarch == "arm64" {
+		return "X11; Linux aarch64"
+	}
+	return "X11; Linux x86_64"
 }

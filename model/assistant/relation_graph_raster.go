@@ -60,6 +60,13 @@ func RenderGroupRelationPNG(graph GroupRelationGraph, title, rangeLabel string, 
 	if err != nil {
 		return nil, err
 	}
+	texts := []string{title, relationSubtitle(graph, rangeLabel)}
+	for _, node := range graph.Nodes {
+		texts = append(texts, node.DisplayName)
+	}
+	if relationTextNeedsBrowser(sfntFont, strings.Join(texts, " ")) {
+		return nil, fmt.Errorf("关系图包含需要多字体或复杂排版的文字，使用浏览器渲染")
+	}
 	faces, err := newRelationFaces(sfntFont)
 	if err != nil {
 		return nil, err
