@@ -40,7 +40,7 @@ func TestRepositoryIssueWebCreateUsesSecurePublishingPlugin(t *testing.T) {
 	}
 }
 
-func TestRepositoryIssueWebCreateRequiresTokenAndExactAllowlist(t *testing.T) {
+func TestRepositoryIssueWebCreateRequiresTokenButNotAllowlist(t *testing.T) {
 	github := newRepositoryPublishTestGitHub()
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
@@ -52,14 +52,16 @@ func TestRepositoryIssueWebCreateRequiresTokenAndExactAllowlist(t *testing.T) {
 	}, input); result.FailureCode != "token_required" {
 		t.Fatalf("missing token result=%#v", result)
 	}
+	// WebUI 是已认证主人的控制台，与聊天里的主人一样不受写入白名单限制：
+	// 白名单写的是别的仓库也照样创建。白名单只约束聊天里的非主人用户。
 	if result := plugin.CreateIssueFromWeb(context.Background(), SettingValues{
 		repositoryPublishSettingToken:     repositoryPublishTestToken,
 		repositoryPublishSettingAllowlist: "acme/demo-extra",
-	}, input); result.FailureCode != "repository_not_allowed" {
-		t.Fatalf("wrong allowlist result=%#v", result)
+	}, input); !result.OK || result.Outcome != "created" {
+		t.Fatalf("webui owner should bypass the allowlist, result=%#v", result)
 	}
-	if github.count(http.MethodGet)+github.count(http.MethodPost) != 0 {
-		t.Fatalf("rejected requests reached GitHub: %#v", github.requests)
+	if github.count(http.MethodPost) != 1 {
+		t.Fatalf("webui owner create should reach GitHub exactly once: %#v", github.requests)
 	}
 }
 
