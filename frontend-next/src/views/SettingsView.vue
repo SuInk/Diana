@@ -305,7 +305,7 @@
               </span>
             </div>
             <p class="muted" style="font-size: 12.5px; margin: 0">
-              {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；安装和重启必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
+              {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；重启并安装必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
             </p>
 
             <template v-if="deploymentMode === 'git' && updateStatus">
@@ -319,7 +319,7 @@
             <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
               <RefreshCw v-if="deploymentMode === 'release' && downloadReadyForLatest" :size="15" aria-hidden="true" />
               <Download v-else :size="15" aria-hidden="true" />
-              {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "安装最新稳定 Release" : downloadReadyForLatest ? "安装并重启" : "下载最新 Release" }}
+              {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "重启并安装" : downloadReadyForLatest ? "重启并安装" : "下载最新 Release" }}
             </button>
             <p v-if="staleDownloadedVersion" class="muted" style="font-size: 12.5px; margin: 0">
               已下载 {{ updateStatus?.downloaded_version }}，但最新版本是 {{ latestVersion }}；下次下载会替换旧安装包。
@@ -849,13 +849,13 @@ async function runUpdate(): Promise<void> {
 	if (operationRunning.value) return;
 	const installingRelease = deploymentMode.value === "release" && downloadReadyForLatest.value;
   const confirmed = await askConfirm({
-		title: installingRelease ? "安装已下载版本并重启？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : "安装最新稳定版本？",
+		title: installingRelease ? "重启并安装已下载版本？" : deploymentMode.value === "release" ? "下载最新稳定版本？" : "重启并安装最新稳定版本？",
 		message: deploymentMode.value === "release"
 		  ? installingRelease
 			? "将备份数据库和当前版本，安装后自动重启并执行健康检查；失败时自动恢复。"
 			: "只下载、校验并暂存完整 Release 包，不会安装或重启服务。"
       : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
-		confirmLabel: installingRelease ? "安装并重启" : deploymentMode.value === "release" ? "下载更新" : "确认更新"
+		confirmLabel: installingRelease ? "重启并安装" : deploymentMode.value === "release" ? "下载更新" : "重启并安装"
   });
   if (!confirmed) return;
   updating.value = true;
@@ -876,8 +876,8 @@ async function runUpdate(): Promise<void> {
     updateOutput.value = result.output ?? "";
 		toastSuccess(deploymentMode.value === "release"
 		  ? installingRelease
-			? "已开始安装，服务即将重启并探活"
-			: result.downloaded ? "更新已下载并通过校验，等待安装" : "已是最新，无需更新"
+			? "已开始重启并安装，完成后将执行健康检查"
+			: result.downloaded ? "更新已下载并通过校验，等待重启并安装" : "已是最新，无需更新"
 		  : result.updated ? "更新完成，重启服务后生效" : "已是最新，无需更新");
   } catch (error) {
     const message = error instanceof Error ? error.message : "更新失败";
