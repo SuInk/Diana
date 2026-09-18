@@ -498,6 +498,16 @@
           </section>
 
 
+          <section class="card">
+            <div class="card-header"><h2>媒体预处理</h2></div>
+            <div class="card-body stack">
+              <label><input v-model="form.auto_image_description" type="checkbox" /> 自动生成图片描述</label>
+              <label><input v-model="form.auto_video_preprocess" type="checkbox" /> 自动下载视频并提取关键帧</label>
+              <p class="muted">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</p>
+              <p class="muted">下方「媒体解析」用于图片描述、视频帧描述和模型 OCR，可指定低成本视觉模型。不配置时沿用视觉理解路由；配置后仅使用该路由及显式后备。文本文件提取和本地 OCR 不消耗模型额度。</p>
+            </div>
+          </section>
+
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
@@ -521,8 +531,8 @@
                 <AppSelect
                   :model-value="roleModelValue(role.key)"
                   :options="modelOptionsFor(role.key)"
-                  :disabled="roleForm[role.key]?.follow_chat"
-                  :placeholder="roleForm[role.key]?.follow_chat ? '跟随对话模型' : '请选择模型（必填）'"
+                  :disabled="roleForm[role.key]?.follow_chat || (role.key === 'media_parse' && !roleForm[role.key])"
+                  :placeholder="role.key === 'media_parse' && !roleForm[role.key] ? '跟随视觉理解模型' : roleForm[role.key]?.follow_chat ? '跟随对话模型' : '请选择模型（必填）'"
                   @update:model-value="(value) => setRoleModel(role.key, value)"
                 />
                 <button
@@ -2468,12 +2478,13 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 }
 
 // —— 模型分配 ——
-type RoleKey = "chat" | "vision" | "intent" | "image";
+type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse";
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
 type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
 const modelRoleRows: { key: RoleKey; label: string }[] = [
   { key: "chat", label: "对话" },
   { key: "vision", label: "视觉理解" },
+  { key: "media_parse", label: "媒体解析（可选）" },
   { key: "intent", label: "意图识别" },
   { key: "image", label: "图片生成" }
 ];
@@ -2533,6 +2544,7 @@ const GROUP_PREFIX = "group:";
 // 个用途有；实际上每个用途都需要——不然「我就是要跟着对话走」这件事在界面上没法表达，
 // 只能靠「什么都不填」隐式回落，改了对话之后也看不出哪些用途跟着变了。
 const FOLLOW_CHAT = "__follow_chat__";
+const FOLLOW_VISION = "__follow_vision__";
 
 function llmProviderLabel(provider: LLMConfig["provider"]): string {
   const labels: Record<LLMConfig["provider"], string> = {
@@ -2657,6 +2669,7 @@ function channelGroups(): { name: string; count: number }[] {
 
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   const base: AppSelectOption[] = [];
+  if (role === "media_parse") base.push({ value: FOLLOW_VISION, label: "跟随视觉理解", hint: "不单独绑定媒体解析模型" });
   // 对话是被跟随的那一档，不能跟随自己。
   if (role !== "chat") {
     base.push({
@@ -2801,6 +2814,7 @@ function roleModelValue(role: RoleKey): string {
 }
 
 function roleSelectionValue(role: RoleKey): string {
+  if (role === "media_parse" && !roleForm.value[role]) return FOLLOW_VISION;
   return routeSelectionValue(roleForm.value[role]);
 }
 
@@ -2811,6 +2825,10 @@ function routeSelectionValue(route?: RoleRoute): string {
 }
 
 function setRoleChannel(role: RoleKey, value: string): void {
+  if (role === "media_parse" && value === FOLLOW_VISION) {
+    delete roleForm.value[role];
+    return;
+  }
   if (!value) {
     return;
   }
@@ -2950,6 +2968,8 @@ function setForm(config: BotProfileConfig): void {
     chat_in_threshold: undefined,
     chat_in_chance: undefined,
     response_mode: "custom",
+    auto_image_description: config.auto_image_description ?? true,
+    auto_video_preprocess: config.auto_video_preprocess ?? true,
     action_description_enabled: config.action_description_enabled ?? false,
     daypart_tone_enabled: config.daypart_tone_enabled ?? false,
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
@@ -3146,6 +3166,7 @@ async function save(): Promise<void> {
   }
   for (const row of modelRoleRows) {
     const role = roleForm.value[row.key];
+    if (row.key === "media_parse" && !role) continue;
     // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && role?.follow_chat) continue;
     if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {

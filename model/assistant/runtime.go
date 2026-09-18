@@ -1376,7 +1376,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
-	ctx = r.withFileParserVideoLimit(ctx, event)
+	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, event), event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
 	if r.ignoreUnavailableGroupEvent(event) {
@@ -1954,7 +1954,7 @@ func (r *Runtime) observeSelfMessage(ctx context.Context, event MessageEvent) {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return
 	}
-	ctx = r.withFileParserVideoLimit(ctx, event)
+	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, event), event)
 	r.mu.RLock()
 	resolver, _ := r.localMedia.(LocalMediaPathResolver)
 	r.mu.RUnlock()
@@ -6420,7 +6420,7 @@ func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg
 }
 
 func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source MessageEvent, msg OutgoingMessage, messageID string) {
-	ctx = r.withFileParserVideoLimit(ctx, source)
+	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, source), source)
 	event := r.outgoingHistoryEvent(source, msg)
 	if event.MessageID == "" {
 		return

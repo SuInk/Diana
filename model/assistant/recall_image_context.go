@@ -281,14 +281,18 @@ func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
 	// 自动路径只补近期图片。重连回填会把很久以前的消息重放一遍，每条都排一次
 	// 识图，等于拿单并发去补一整个库——按当前速度是几十小时起步，而这些老图
 	// 绝大多数没人再提起。真被引用时会走 enqueueHistoryImageDescriptionsNow。
-	if !withinHistoryImageDescriptionWindow(event, time.Now()) {
+	if r == nil || !boolValue(r.effectiveConfigForEvent(event).AutoImageDescription, true) || !withinHistoryImageDescriptionWindow(event, time.Now()) {
 		return
 	}
-	r.enqueueHistoryImageDescriptionsNow(event)
+	r.enqueueHistoryImageDescriptionsWithPolicy(event, false)
 }
 
 // enqueueHistoryImageDescriptionsNow 不看时间，用于用户/模型真的在读这张图的路径。
 func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
+	r.enqueueHistoryImageDescriptionsWithPolicy(event, true)
+}
+
+func (r *Runtime) enqueueHistoryImageDescriptionsWithPolicy(event MessageEvent, explicit bool) {
 	if r == nil || r.recallImageDescriptionStore() == nil {
 		return
 	}
@@ -314,7 +318,7 @@ func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
 			jobEvent.Segments = []MessageSegment{stripImageSegmentForQueue(segment)}
 			go func() {
 				defer recoverGoroutinePanic("recallImageContext.runHistoryImageDescription")
-				r.runHistoryImageDescription(jobEvent, historyImageDescriptionQueueEvent(sourceEvent), hash, source)
+				r.runHistoryImageDescription(jobEvent, historyImageDescriptionQueueEvent(sourceEvent), hash, source, explicit)
 			}()
 		}
 	}
@@ -376,7 +380,7 @@ func (r *Runtime) reserveHistoryImageDescription(hash string) bool {
 	return true
 }
 
-func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, hash, source string) {
+func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, hash, source string, explicit bool) {
 	ctx := context.Background()
 	r.mu.RLock()
 	runtimeCtx := r.runCtx
@@ -390,6 +394,12 @@ func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, has
 	err := r.waitForHistoryImageDescriptionSlot(ctx, cancel)
 	if err == nil {
 		defer r.releaseHistoryImageDescriptionSlot()
+		if !explicit && !boolValue(r.effectiveConfigForEvent(event).AutoImageDescription, true) {
+			r.historyImageDescMu.Lock()
+			delete(r.historyImageDescRun, hash)
+			r.historyImageDescMu.Unlock()
+			return
+		}
 		store := r.recallImageDescriptionStore()
 		if store == nil {
 			err = fmt.Errorf("image description store is not configured")
@@ -427,7 +437,13 @@ func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, has
 	}
 	r.historyImageDescMu.Unlock()
 	if errors.Is(err, context.Canceled) && (runtimeCtx == nil || runtimeCtx.Err() == nil) {
-		time.AfterFunc(historyImageDescriptionIdlePoll, func() { r.enqueueHistoryImageDescriptionsNow(event) })
+		time.AfterFunc(historyImageDescriptionIdlePoll, func() {
+			if explicit {
+				r.enqueueHistoryImageDescriptionsNow(event)
+			} else {
+				r.enqueueHistoryImageDescriptions(event)
+			}
+		})
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("diana history image description failed: message_id=%s err=%v", event.MessageID, err)
