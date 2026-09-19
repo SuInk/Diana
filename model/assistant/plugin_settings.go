@@ -11,6 +11,7 @@ import (
 
 // 插件设置项类型，WebUI 按类型渲染对应的表单控件。
 const (
+	PluginSettingTypeCodingAgents       = "coding_agents"
 	PluginSettingTypeBool               = "bool"
 	PluginSettingTypeNumber             = "number"
 	PluginSettingTypeString             = "string"
@@ -270,6 +271,8 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 			}
 		}
 		return out, nil
+	case PluginSettingTypeCodingAgents:
+		return normalizeCodingAgentProfiles(raw)
 	case PluginSettingTypePlatformLevelRules:
 		return normalizePlatformLevelRules(spec, raw)
 	default:

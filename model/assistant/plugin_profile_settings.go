@@ -21,6 +21,8 @@ func clonePluginValues(values map[string]any) map[string]any {
 		switch v := value.(type) {
 		case map[string]any:
 			out[key] = clonePluginValues(v)
+		case []codingAgentProfile:
+			out[key] = append([]codingAgentProfile{}, v...)
 		case []string:
 			out[key] = append([]string(nil), v...)
 		case []any:

@@ -31,12 +31,13 @@ func newDianaCodingTool(runtime *Runtime, event MessageEvent, settings SettingVa
 func (t *dianaCodingTool) Name() string { return dianaCodingToolName }
 
 func (t *dianaCodingTool) Description() string {
-	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex）在持久工作区里长时间执行。submit 派活后立刻返回任务号，进程在后台独立运行，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。只有机器人主人能用。`
+	return `把一件编码工作交给外部编码 CLI（Claude Code / Codex）在持久工作区里长时间执行。submit 派活后立刻返回任务号，进程在后台独立运行，跑完 Diana 会主动汇报；期间用 status 查进度、tail 看最近动作、cancel 终止、followup 在原会话上追加指令；approvals 查看或清空主人说过「以后都同意」的操作类别。适合「改代码、修 Bug、加测试、跑构建」这类要几分钟到几小时的活。可用 agents 查看多个代理配置，submit 用 agent 选择配置；不填使用默认代理。只有机器人主人能用。`
 }
 
 func (t *dianaCodingTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces", "approvals"),
+		"operation": toolEnumParam("要执行的操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces", "approvals", "agents"),
+		"agent":     toolStringParam("编码代理配置名称。submit 不填使用默认配置；agents 列出配置。followup 固定使用原任务配置。"),
 		"workspace": toolStringParam("工作区名字，必须是设置里登记过的。只登记了一个时可以省略。submit 必填。"),
 		"instruction": toolStringParam("交给编码 CLI 的完整指令。它看不到这里的聊天记录，" +
 			"所以要改什么、为什么改、验收标准都要写进来。submit 和 followup 必填。"),
@@ -61,6 +62,7 @@ type dianaCodingResult struct {
 }
 
 type dianaCodingJob struct {
+	Agent       string  `json:"agent"`
 	ID          string  `json:"id"`
 	Status      string  `json:"status"`
 	Workspace   string  `json:"workspace"`
@@ -94,16 +96,16 @@ func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string
 	if !t.runtime.relationshipPolicy(ctx, t.event).Owner {
 		return "", fmt.Errorf("编码代理只对机器人主人开放")
 	}
-	cfg, err := codingAgentConfigFromSettings(t.settings)
-	if err != nil {
-		return "", err
-	}
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
 	switch operation {
 	case "", "submit":
+		cfg, err := codingAgentConfigFor(t.settings, configToolString(input, "agent"))
+		if err != nil {
+			return "", err
+		}
 		return t.submit(ctx, cfg, input, "")
 	case "followup":
-		return t.followUp(ctx, cfg, input)
+		return t.followUp(ctx, input)
 	case "status":
 		return t.status(input)
 	case "tail":
@@ -112,7 +114,13 @@ func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string
 		return t.cancel(ctx, input)
 	case "list":
 		return t.list()
+	case "agents":
+		return t.agents()
 	case "workspaces":
+		cfg, err := codingAgentConfigFor(t.settings, configToolString(input, "agent"))
+		if err != nil {
+			return "", err
+		}
 		return codingToolJSON(dianaCodingResult{
 			OK:         true,
 			Operation:  "workspaces",
@@ -140,7 +148,7 @@ func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string
 			OK: true, Operation: "approvals", AlwaysAllowed: allowed, Message: message,
 		})
 	}
-	return "", fmt.Errorf("operation 必须是 submit、status、tail、cancel、followup、list、workspaces 或 approvals")
+	return "", fmt.Errorf("operation 必须是 submit、status、tail、cancel、followup、list、workspaces、agents 或 approvals")
 }
 
 func (t *dianaCodingTool) submit(ctx context.Context, cfg codingAgentConfig, input map[string]any, resumeSession string) (string, error) {
@@ -177,7 +185,7 @@ func (t *dianaCodingTool) submit(ctx context.Context, cfg codingAgentConfig, inp
 
 // followUp 在一个已经结束的任务的会话上继续。运行中的任务不接受追加：非交互模式的
 // 编码 CLI 没有中途收指令的通道，硬插只会变成另一个进程同时改同一份检出。
-func (t *dianaCodingTool) followUp(ctx context.Context, cfg codingAgentConfig, input map[string]any) (string, error) {
+func (t *dianaCodingTool) followUp(ctx context.Context, input map[string]any) (string, error) {
 	job, err := t.resolveJob(input)
 	if err != nil {
 		return "", err
@@ -185,15 +193,34 @@ func (t *dianaCodingTool) followUp(ctx context.Context, cfg codingAgentConfig, i
 	if !job.finished() {
 		return "", fmt.Errorf("任务 %s 还在跑，没法中途追加指令。等它结束，或者先 cancel", job.ID)
 	}
+	agent := job.Agent
+	if agent == "" {
+		agent = codingDefaultAgent
+	}
+	if requested := strings.TrimSpace(configToolString(input, "agent")); requested != "" && !strings.EqualFold(requested, agent) {
+		return "", fmt.Errorf("续跑必须使用原编码代理 %s", agent)
+	}
+	cfg, err := codingAgentConfigFor(t.settings, agent)
+	if err != nil {
+		return "", err
+	}
+	if cfg.Backend != job.Backend || (job.AgentFingerprint != "" && job.AgentFingerprint != codingAgentFingerprint(cfg)) {
+		return "", fmt.Errorf("原编码代理配置已改变，请恢复配置或提交新任务")
+	}
 	if !cfg.StreamJSON || job.SessionID == "" {
 		return "", fmt.Errorf("任务 %s 没有可续跑的会话 ID，改用 submit 重新派活", job.ID)
+	}
+	if requested := strings.TrimSpace(configToolString(input, "workspace")); requested != "" && !strings.EqualFold(requested, job.Workspace) {
+		return "", fmt.Errorf("续跑必须使用原工作区 %s", job.Workspace)
+	}
+	workspace, ok := cfg.workspace(job.Workspace)
+	if !ok || workspace.Dir != job.Dir {
+		return "", fmt.Errorf("原工作区配置已改变，请恢复配置或提交新任务")
 	}
 	if input == nil {
 		input = map[string]any{}
 	}
-	if strings.TrimSpace(configToolString(input, "workspace")) == "" {
-		input["workspace"] = job.Workspace
-	}
+	input["workspace"] = job.Workspace
 	return t.submit(ctx, cfg, input, job.SessionID)
 }
 
@@ -316,12 +343,16 @@ func codingJobView(job CodingJob, snapshot *codingJobSnapshot) dianaCodingJob {
 		Status:      job.Status,
 		Workspace:   job.Workspace,
 		Backend:     job.Backend,
+		Agent:       job.Agent,
 		Instruction: truncateRunes(job.Instruction, 300),
 		SessionID:   job.SessionID,
 		Result:      job.Result,
 		Error:       job.Error,
 		Turns:       job.Turns,
 		CostUSD:     job.CostUSD,
+	}
+	if view.Agent == "" {
+		view.Agent = codingDefaultAgent
 	}
 	end := job.FinishedAt
 	if end.IsZero() {
@@ -340,7 +371,7 @@ func codingJobView(job CodingJob, snapshot *codingJobSnapshot) dianaCodingJob {
 			view.Result = ""
 		}
 	}
-	view.CanFollowUp = job.finished() && view.SessionID != ""
+	view.CanFollowUp = job.finished() && job.Backend == codingBackendClaude && view.SessionID != ""
 	return view
 }
 
@@ -357,4 +388,29 @@ func codingToolJSON(result dianaCodingResult) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+func (t *dianaCodingTool) agents() (string, error) {
+	profiles, err := codingProfiles(t.settings)
+	if err != nil {
+		return "", err
+	}
+	type entry struct {
+		Name    string `json:"name"`
+		Backend string `json:"backend"`
+		Model   string `json:"model,omitempty"`
+		Default bool   `json:"default"`
+	}
+	defaultLegacy := true
+	for _, p := range profiles {
+		if p.Default {
+			defaultLegacy = false
+		}
+	}
+	entries := []entry{{Name: codingDefaultAgent, Backend: t.settings.String(codingAgentSettingBackend, codingBackendClaude), Model: t.settings.String(codingAgentSettingModel, ""), Default: defaultLegacy}}
+	for _, p := range profiles {
+		entries = append(entries, entry{Name: p.ID, Backend: p.Backend, Model: p.Model, Default: p.Default})
+	}
+	data, err := json.Marshal(map[string]any{"ok": true, "operation": "agents", "agents": entries})
+	return string(data), err
 }

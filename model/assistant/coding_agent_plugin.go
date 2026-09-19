@@ -82,7 +82,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          codingAgentPluginID,
 		Name:        "编码代理",
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Description: "把 Claude Code、Codex 这类编码 CLI 接进对话：在持久工作区里长时间改代码，完成后汇报，运行途中可以随时查询进度。仅机器人主人可用。",
 		Official:    true,
 		BuiltIn:     true,
@@ -90,10 +90,13 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 		DefaultDisabled: true,
 		Permissions:     []string{"运行外部编码 CLI", "读写白名单仓库", "执行 git 操作"},
 		Settings: []PluginSettingSpec{
+			{Key: codingAgentSettingKeys, Label: "代理密钥", Type: PluginSettingTypeString, Default: "", Secret: true},
+			{Key: codingAgentSettingProfiles, Label: "额外编码代理", Type: PluginSettingTypeCodingAgents, Default: []codingAgentProfile{},
+				Description: "同时配置多个 CLI 或模型，派任务时按名称选择。下方原有 CLI 设置保留为 default；所有代理共用工作区白名单和并发上限。"},
 			{
 				Key:         codingAgentSettingBackend,
 				Label:       "后端 CLI",
-				Description: "claude 走 Claude Code 的 stream-json，进度和结果解析最完整；codex 与 custom 只能按日志尾巴汇报。",
+				Description: "claude 走 Claude Code 的 stream-json，进度和结果解析最完整；codex 支持结构化命令进度和最终回答，但暂不支持续跑；custom 按日志尾巴汇报。",
 				Type:        PluginSettingTypeSelect,
 				Default:     codingBackendClaude,
 				Options: []PluginSettingOption{
@@ -215,16 +218,19 @@ type codingWorkspace struct {
 }
 
 type codingAgentConfig struct {
-	Backend     string
-	Command     string
-	Template    string
-	Model       string
-	EnvKey      string
-	APIKey      string
-	StreamJSON  bool
-	MaxRuntime  time.Duration
-	Concurrency int
-	Workspaces  []codingWorkspace
+	BaseURL          string
+	ManagedWorkspace bool
+	Agent            string
+	Backend          string
+	Command          string
+	Template         string
+	Model            string
+	EnvKey           string
+	APIKey           string
+	StreamJSON       bool
+	MaxRuntime       time.Duration
+	Concurrency      int
+	Workspaces       []codingWorkspace
 
 	ApprovalMode     string
 	ApprovalPatterns []string
@@ -247,7 +253,7 @@ func codingAgentConfigFromSettings(settings SettingValues) (codingAgentConfig, e
 		StreamJSON: preset.StreamJSON,
 	}
 	if cfg.Command == "" {
-		cfg.Command = preset.Command
+		cfg.Command = resolveCodingCommand("", backend)
 	}
 	if cfg.Template == "" {
 		cfg.Template = preset.Template

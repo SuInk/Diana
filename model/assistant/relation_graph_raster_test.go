@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"image"
+	"image/color"
+	"image/draw"
 	"image/png"
 	"strings"
 	"testing"
@@ -37,28 +39,33 @@ func TestRenderGroupRelationPNGWithoutBrowser(t *testing.T) {
 	if _, _, err := LoadCJKFont(); err != nil {
 		t.Skipf("这台机器上没有能画中文的字体：%v", err)
 	}
-	raw, err := RenderGroupRelationPNG(relationTestGraph(), "群 1049765710 · 关系图", "近 7 天", relationImageDefaultSeats)
-	if err != nil {
-		t.Fatalf("RenderGroupRelationPNG() error = %v", err)
-	}
-	img, err := png.Decode(bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("产出的不是合法 PNG：%v", err)
-	}
-	bounds := img.Bounds()
-	if bounds.Dx() != relationImageWidth || bounds.Dy() != relationImageHeight {
-		t.Fatalf("尺寸 %dx%d，想要 %dx%d", bounds.Dx(), bounds.Dy(), relationImageWidth, relationImageHeight)
-	}
+	for _, name := range []string{"Diana", "嘉然", "一个特别长的机器人名字"} {
+		t.Run(name, func(t *testing.T) {
+			graph := relationTestGraph()
+			graph.Nodes[0].DisplayName = name
+			raw, err := RenderGroupRelationPNG(graph, "群 1049765710 · 关系图", "近 7 天", relationImageDefaultSeats)
+			if err != nil {
+				t.Fatalf("RenderGroupRelationPNG() error = %v", err)
+			}
+			img, err := png.Decode(bytes.NewReader(raw))
+			if err != nil {
+				t.Fatalf("产出的不是合法 PNG：%v", err)
+			}
+			bounds := img.Bounds()
+			if bounds.Dx() != relationImageWidth || bounds.Dy() != relationImageHeight {
+				t.Fatalf("尺寸 %dx%d，想要 %dx%d", bounds.Dx(), bounds.Dy(), relationImageWidth, relationImageHeight)
+			}
 
-	// 不能只验「是张图」：全白的空画布同样是合法 PNG，也同样能通过尺寸检查。
-	// 中心节点那一坨粉色必须真的落在画布上。
-	centerX, centerY := bounds.Dx()/2, relationHeaderHeight+(bounds.Dy()-relationHeaderHeight)/2
-	r, g, b, _ := img.At(centerX, centerY).RGBA()
-	if r>>8 != 0xe0 || g>>8 != 0x57 || b>>8 != 0x8f {
-		t.Fatalf("中心节点没画上：中心像素是 #%02x%02x%02x", r>>8, g>>8, b>>8)
-	}
-	if painted := paintedPixelRatio(img); painted < 0.02 {
-		t.Fatalf("画布几乎是空的：非背景像素只占 %.3f%%", painted*100)
+			// 圆心可能被名字的白字覆盖，单点颜色依赖字体字形和排版。
+			// 检查圆心半径 32px 内的粉色覆盖率，避开圆边抗锯齿并允许文字覆盖。
+			// 多数区域必须是粉色，防止只剩辐条或少量杂点也通过。
+			if coverage := relationCenterPinkCoverage(img); coverage < 0.5 {
+				t.Fatalf("中心节点填充不足：中心区域粉色覆盖率 %.1f%%", coverage*100)
+			}
+			if painted := paintedPixelRatio(img); painted < 0.02 {
+				t.Fatalf("画布几乎是空的：非背景像素只占 %.3f%%", painted*100)
+			}
+		})
 	}
 }
 
@@ -178,5 +185,43 @@ func TestRelationRenderFailureMessageNamesTheRealBlocker(t *testing.T) {
 	// 两边的原因都要在，只说一句「画不出来」等于什么都没说。
 	if !strings.Contains(disabled, "没有找到能画中文的字体文件") {
 		t.Fatalf("没有带上直接渲染那条路的原因：%s", disabled)
+	}
+}
+
+func relationCenterPinkCoverage(img image.Image) float64 {
+	bounds := img.Bounds()
+	cx := bounds.Min.X + bounds.Dx()/2
+	cy := bounds.Min.Y + relationHeaderHeight + (bounds.Dy()-relationHeaderHeight)/2
+	const radius = 32
+	pink, total := 0, 0
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			if dx*dx+dy*dy > radius*radius {
+				continue
+			}
+			total++
+			r, g, b, a := img.At(cx+dx, cy+dy).RGBA()
+			if r>>8 == 0xe0 && g>>8 == 0x57 && b>>8 == 0x8f && a>>8 == 0xff {
+				pink++
+			}
+		}
+	}
+	return float64(pink) / float64(total)
+}
+
+func TestRelationCenterCoverageRejectsBlankAndSparseImages(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, relationImageWidth, relationImageHeight))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+	if got := relationCenterPinkCoverage(img); got >= 0.5 {
+		t.Fatal("空白画布被误认为有中心节点")
+	}
+	cx := relationImageWidth / 2
+	cy := relationHeaderHeight + (relationImageHeight-relationHeaderHeight)/2
+	// 即使圆心是正确颜色，只有一条细线也不应算作完整中心节点。
+	for x := cx - 32; x <= cx+32; x++ {
+		img.SetNRGBA(x, cy, color.NRGBA{R: 0xe0, G: 0x57, B: 0x8f, A: 0xff})
+	}
+	if got := relationCenterPinkCoverage(img); got >= 0.5 {
+		t.Fatal("稀疏粉色像素被误认为完整节点")
 	}
 }
