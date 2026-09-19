@@ -288,7 +288,8 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"diana.reminder","input":{"operation":"create","delay":"1m","message":"睡觉"}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["diana.reminder"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"diana.reminder","input":{"operation":"create","delay":"1m","message":"睡觉"}}}`,
 		`{"action":"final","content":"好，一分钟后提醒你睡觉。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
@@ -318,7 +319,7 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 	if len(channel.sent) != 1 || channel.sent[0].UserID != "10001" {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
-	if len(provider.requests) != 3 {
+	if len(provider.requests) != 4 {
 		t.Fatalf("requests = %d", len(provider.requests))
 	}
 	foundReminderTool := false

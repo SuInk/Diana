@@ -28,7 +28,10 @@ type restoredDynamicAgentProvider struct {
 func (p restoredDynamicAgentProvider) Generate(_ context.Context, request llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	*p.used = append(*p.used, p.model)
 	*p.requests = append(*p.requests, request)
-	text := `{"action":"tool","tool":"history_images","input":{}}`
+	text := `{"action":"tool","tool":"tools.execute","input":{"name":"history_images","input":{}}}`
+	if len(*p.requests) == 1 {
+		text = `{"action":"tool","tool":"tools.load","input":{"names":["history_images"]}}`
+	}
 	if p.model == "vision-model" {
 		text = `{"action":"final","content":"视觉细节已读取"}`
 	}
@@ -107,10 +110,10 @@ func TestAgentSwitchesFromChatToVisionAfterRichToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reply != "视觉细节已读取" || strings.Join(used, ",") != "chat-model,vision-model" {
+	if reply != "视觉细节已读取" || strings.Join(used, ",") != "chat-model,chat-model,vision-model" {
 		t.Fatalf("reply=%q used=%v", reply, used)
 	}
-	if len(requests) != 2 || requestHasAnyImage(requests[0]) || !requestHasAnyImage(requests[1]) {
+	if len(requests) != 3 || requestHasAnyImage(requests[0]) || requestHasAnyImage(requests[1]) || !requestHasAnyImage(requests[2]) {
 		t.Fatalf("dynamic agent requests = %#v", requests)
 	}
 }
