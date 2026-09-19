@@ -111,10 +111,10 @@ func (h *LLMConfigHandler) oauthSaveProvider(c *gin.Context) {
 	}
 	saved, err := h.oauth.SaveCustomProvider(c.Request.Context(), provider)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "llm.oauth.provider.save", err, payload.Key, nil)
+		h.writeError(c, http.StatusBadRequest, "llm_oauth_provider_save", err, payload.Key, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.oauth.provider.save", "已保存 OAuth 提供商", saved.Key,
+	recordRequestOperation(c, h.logs, "llm_oauth_provider_save", "已保存 OAuth 提供商", saved.Key,
 		map[string]any{"provider": saved.Key, "authorize_url": saved.AuthorizeURL})
 	c.JSON(http.StatusOK, gin.H{"providers": h.oauth.Statuses()})
 }
@@ -129,10 +129,10 @@ func (h *LLMConfigHandler) oauthDeleteProvider(c *gin.Context) {
 		return
 	}
 	if err := h.oauth.DeleteCustomProvider(c.Request.Context(), payload.Provider); err != nil {
-		h.writeError(c, http.StatusBadRequest, "llm.oauth.provider.delete", err, payload.Provider, nil)
+		h.writeError(c, http.StatusBadRequest, "llm_oauth_provider_delete", err, payload.Provider, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.oauth.provider.delete", "已删除 OAuth 提供商", payload.Provider,
+	recordRequestOperation(c, h.logs, "llm_oauth_provider_delete", "已删除 OAuth 提供商", payload.Provider,
 		map[string]any{"provider": payload.Provider})
 	c.JSON(http.StatusOK, gin.H{"providers": h.oauth.Statuses()})
 }
@@ -149,10 +149,10 @@ func (h *LLMConfigHandler) oauthLoginStart(c *gin.Context) {
 	}
 	login, err := h.oauth.StartLogin(payload.Provider)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "llm.oauth.login.start", err, payload.Provider, nil)
+		h.writeError(c, http.StatusBadRequest, "llm_oauth_login_start", err, payload.Provider, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.oauth.login.start", "已发起 OAuth 授权", payload.Provider,
+	recordRequestOperation(c, h.logs, "llm_oauth_login_start", "已发起 OAuth 授权", payload.Provider,
 		map[string]any{"provider": payload.Provider})
 	// login 结构里的 CodeVerifier 带 json:"-"，不会随响应出去。
 	c.JSON(http.StatusOK, gin.H{"login": login})
@@ -171,11 +171,11 @@ func (h *LLMConfigHandler) oauthLoginComplete(c *gin.Context) {
 	if _, err := h.oauth.CompleteLogin(c.Request.Context(), payload.Provider, payload.LoginID, payload.Callback); err != nil {
 		// 失败原因要照实说（state 不符、授权码过期、提供商拒绝），
 		// 但绝不带上用户粘贴的内容——那串里就有授权码。
-		h.writeError(c, http.StatusBadRequest, "llm.oauth.login.complete", err, payload.Provider,
+		h.writeError(c, http.StatusBadRequest, "llm_oauth_login_complete", err, payload.Provider,
 			map[string]any{"provider": payload.Provider})
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.oauth.login.complete", "OAuth 登录成功", payload.Provider,
+	recordRequestOperation(c, h.logs, "llm_oauth_login_complete", "OAuth 登录成功", payload.Provider,
 		map[string]any{"provider": payload.Provider})
 	c.JSON(http.StatusOK, gin.H{"providers": h.oauth.Statuses()})
 }
@@ -203,10 +203,10 @@ func (h *LLMConfigHandler) oauthLogout(c *gin.Context) {
 		return
 	}
 	if err := h.oauth.Logout(c.Request.Context(), payload.Provider); err != nil {
-		h.writeError(c, http.StatusBadRequest, "llm.oauth.logout", err, payload.Provider, nil)
+		h.writeError(c, http.StatusBadRequest, "llm_oauth_logout", err, payload.Provider, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.oauth.logout", "已退出 OAuth 登录", payload.Provider,
+	recordRequestOperation(c, h.logs, "llm_oauth_logout", "已退出 OAuth 登录", payload.Provider,
 		map[string]any{"provider": payload.Provider})
 	c.JSON(http.StatusOK, gin.H{"providers": h.oauth.Statuses()})
 }

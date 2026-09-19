@@ -11,7 +11,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const finalizeToolName = "agent.finalize"
+const finalizeToolName = "agent_finalize"
 
 // errEmptyFinalize 标记协议修复重试耗尽后，模型收尾时仍未给出任何正文的失败。
 // 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。
@@ -39,7 +39,7 @@ func finalizeLayoutIssue(action llmAction) string {
 
 func finalizeContentLayoutIssue(content string) string {
 	if strings.ContainsAny(content, "\r\n") {
-		return "agent.finalize 的 content 含有真实 CR/LF"
+		return "agent_finalize 的 content 含有真实 CR/LF"
 	}
 	return ""
 }
@@ -72,7 +72,7 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.
 	}
 }
 
-// finalizeAction 把原生 agent.finalize 调用转成内部的 final 动作。工具调用本身
+// finalizeAction 把原生 agent_finalize 调用转成内部的 final 动作。工具调用本身
 // 没带 content 时用调用之外的文本作为回复——供应商在同一轮里既输出正文又调用
 // 工具时就是这个形态。
 func finalizeAction(call llm.ToolCall, text string) llmAction {

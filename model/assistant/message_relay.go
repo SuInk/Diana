@@ -268,7 +268,7 @@ func (r *Runtime) recordMessageRelayFailure(event MessageEvent, target MessageRe
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.message_relay_failed",
+		Action:  "message_relay_failed",
 		Message: "消息互通转发失败",
 		Detail:  cause.Error(),
 		Actor:   oneBotEventActor(event),

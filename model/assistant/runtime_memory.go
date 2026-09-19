@@ -123,7 +123,7 @@ func (r *Runtime) recordRecallReplyDelete(event MessageEvent, messageID string, 
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.recall_reply.auto_delete",
+		Action:  "recall_reply_auto_delete",
 		Message: "撤回记录回复已自动撤回",
 		Actor:   oneBotEventActor(event),
 		Target:  messageID,

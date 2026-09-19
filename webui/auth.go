@@ -618,20 +618,20 @@ func (h *AuthHandler) login(c *gin.Context) {
 		return
 	}
 	throttleKey := c.ClientIP()
-	if !h.allowCredentialAttempt(c, "auth.login", throttleKey) {
+	if !h.allowCredentialAttempt(c, "auth_login", throttleKey) {
 		return
 	}
 	token, err := h.manager.LoginWithMetadata(payload.Username, payload.Password, authSessionMetadata(c))
 	if err != nil {
 		// 失败固定延迟，抬高在线爆破成本。
 		time.Sleep(400 * time.Millisecond)
-		h.recordCredentialFailure(c, "auth.login", throttleKey)
-		logAndWriteError(c, h.logs, http.StatusUnauthorized, "auth.login", err, "", nil)
+		h.recordCredentialFailure(c, "auth_login", throttleKey)
+		logAndWriteError(c, h.logs, http.StatusUnauthorized, "auth_login", err, "", nil)
 		return
 	}
 	h.throttle.Reset(throttleKey)
 	h.setSessionCookie(c, token, int(authSessionTTL/time.Second))
-	recordRequestOperation(c, h.logs, "auth.login", "WebUI 登录成功", "", nil)
+	recordRequestOperation(c, h.logs, "auth_login", "WebUI 登录成功", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -657,7 +657,7 @@ func (h *AuthHandler) revokeSession(c *gin.Context) {
 	if current {
 		h.setSessionCookie(c, "", -1)
 	}
-	recordRequestOperation(c, h.logs, "auth.session.revoke", "WebUI 会话已撤销", id, map[string]any{"current": current})
+	recordRequestOperation(c, h.logs, "auth_session_revoke", "WebUI 会话已撤销", id, map[string]any{"current": current})
 	c.JSON(http.StatusOK, gin.H{"revoked": true, "current": current})
 }
 
@@ -665,7 +665,7 @@ func (h *AuthHandler) revokeOtherSessions(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	token, _ := c.Cookie(authCookieName)
 	revoked := h.manager.RevokeOtherSessions(token)
-	recordRequestOperation(c, h.logs, "auth.session.revoke_others", "其他 WebUI 会话已撤销", "", map[string]any{"revoked": revoked})
+	recordRequestOperation(c, h.logs, "auth_session_revoke_others", "其他 WebUI 会话已撤销", "", map[string]any{"revoked": revoked})
 	c.JSON(http.StatusOK, gin.H{"revoked": revoked})
 }
 
@@ -692,7 +692,7 @@ func (h *AuthHandler) setPassword(c *gin.Context) {
 	// 改密同样要校验旧密码，因此跟登录共用一份失败预算，免得攻击者换个端点
 	// 就能把次数重新攒满。
 	throttleKey := c.ClientIP()
-	if !h.allowCredentialAttempt(c, "auth.password", throttleKey) {
+	if !h.allowCredentialAttempt(c, "auth_password", throttleKey) {
 		return
 	}
 	username, err := h.manager.SetCredentials(payload.CurrentPassword, payload.NewUsername, payload.NewPassword)
@@ -701,9 +701,9 @@ func (h *AuthHandler) setPassword(c *gin.Context) {
 		if errors.Is(err, ErrWrongPassword) {
 			status = http.StatusUnauthorized
 			time.Sleep(400 * time.Millisecond)
-			h.recordCredentialFailure(c, "auth.password", throttleKey)
+			h.recordCredentialFailure(c, "auth_password", throttleKey)
 		}
-		logAndWriteError(c, h.logs, status, "auth.password", err, "", nil)
+		logAndWriteError(c, h.logs, status, "auth_password", err, "", nil)
 		return
 	}
 	h.throttle.Reset(throttleKey)
@@ -712,7 +712,7 @@ func (h *AuthHandler) setPassword(c *gin.Context) {
 	if err == nil {
 		h.setSessionCookie(c, token, int(authSessionTTL/time.Second))
 	}
-	recordRequestOperation(c, h.logs, "auth.password", "WebUI 管理凭据已更新", "", nil)
+	recordRequestOperation(c, h.logs, "auth_password", "WebUI 管理凭据已更新", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "username": username})
 }
 

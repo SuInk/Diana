@@ -272,7 +272,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 	response, failure := h.runReleaseCheck(ctx)
 	if failure != nil {
 		if failure.updateError {
-			h.writeUpdateError(c, "system.update.check", failure.err)
+			h.writeUpdateError(c, "system_update_check", failure.err)
 			return
 		}
 		writeError(c, failure.status, failure.err)
@@ -389,7 +389,7 @@ func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
 	policy = normalizeUpdatePolicy(policy)
 	if h.policyStore != nil {
 		if err := h.policyStore.SaveUpdatePolicy(c.Request.Context(), policy); err != nil {
-			h.writeUpdateError(c, "system.update.policy", err)
+			h.writeUpdateError(c, "system_update_policy", err)
 			return
 		}
 	}
@@ -399,7 +399,7 @@ func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
 	if h.mirror != nil {
 		h.mirror.SetMode(policy.GitHubMirror)
 	}
-	recordRequestOperation(c, h.logs, "system.update.policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall, "github_mirror": policy.GitHubMirror, "channel": policy.Channel})
+	recordRequestOperation(c, h.logs, "system_update_policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall, "github_mirror": policy.GitHubMirror, "channel": policy.Channel})
 	c.JSON(http.StatusOK, policy)
 }
 
@@ -450,7 +450,7 @@ func (h *SystemUpdateHandler) saveGitHubToken(c *gin.Context) {
 		return
 	}
 	if err := h.githubTokenStore.SaveUpdateGitHubToken(c.Request.Context(), token); err != nil {
-		h.writeUpdateError(c, "system.update.github_token", err)
+		h.writeUpdateError(c, "system_update_github_token", err)
 		return
 	}
 	h.githubTokenMu.Lock()
@@ -461,7 +461,7 @@ func (h *SystemUpdateHandler) saveGitHubToken(c *gin.Context) {
 	h.releaseCache.RateLimitResetAt = time.Time{}
 	h.releaseCache.FetchedAt = time.Time{}
 	h.releaseCacheMu.Unlock()
-	recordRequestOperation(c, h.logs, "system.update.github_token", "GitHub 更新凭据已保存", "", map[string]any{"configured": token != ""})
+	recordRequestOperation(c, h.logs, "system_update_github_token", "GitHub 更新凭据已保存", "", map[string]any{"configured": token != ""})
 	h.getGitHubToken(c)
 }
 
@@ -492,14 +492,14 @@ func (h *SystemUpdateHandler) download(c *gin.Context) {
 	}
 	result, err := h.downloadLatestRelease(c.Request.Context(), request.Force)
 	if err != nil {
-		h.writeUpdateError(c, "system.update.download", err)
+		h.writeUpdateError(c, "system_update_download", err)
 		return
 	}
 	message := "更新包已下载并校验"
 	if result.Status.Updating {
 		message = "更新包下载任务正在进行"
 	}
-	recordRequestOperation(c, h.logs, "system.update.download", message, result.TargetCommit, map[string]any{"forced": request.Force})
+	recordRequestOperation(c, h.logs, "system_update_download", message, result.TargetCommit, map[string]any{"forced": request.Force})
 	c.JSON(http.StatusOK, result)
 }
 
@@ -521,12 +521,12 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 	}
 	status, err := h.releaseUpdater.Status(c.Request.Context())
 	if err != nil {
-		h.writeUpdateError(c, "system.update.install", err)
+		h.writeUpdateError(c, "system_update_install", err)
 		return
 	}
 	latest, err := h.latestChannelRelease(c.Request.Context(), "")
 	if err != nil {
-		h.writeUpdateError(c, "system.update.install", err)
+		h.writeUpdateError(c, "system_update_install", err)
 		return
 	}
 	if !downloadReadyForRelease(status, latest.Tag) {
@@ -540,10 +540,10 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 	}
 	result, err := h.releaseUpdater.InstallDownloaded(c.Request.Context())
 	if err != nil {
-		h.writeUpdateError(c, "system.update.install", err)
+		h.writeUpdateError(c, "system_update_install", err)
 		return
 	}
-	recordRequestOperation(c, h.logs, "system.update.install", "已开始安装更新并重启", result.TargetCommit, nil)
+	recordRequestOperation(c, h.logs, "system_update_install", "已开始安装更新并重启", result.TargetCommit, nil)
 	c.JSON(http.StatusOK, result)
 }
 
@@ -571,9 +571,9 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 	}
 
 	var result updater.Result
-	action := "system.update.pull"
+	action := "system_update_pull"
 	if request.Force {
-		action = "system.update.force"
+		action = "system_update_force"
 	}
 	result, err := h.applyLatestUpdate(c.Request.Context(), request.Force)
 	if err != nil {
@@ -739,7 +739,7 @@ func (h *SystemUpdateHandler) runScheduledUpdate(ctx context.Context) {
 		}
 	}
 	if _, err := h.latestChannelRelease(checkCtx, remoteURL); err != nil {
-		h.recordBackgroundUpdate("system.update.background_check", "后台检查更新失败", err, nil)
+		h.recordBackgroundUpdate("system_update_background_check", "后台检查更新失败", err, nil)
 		return
 	}
 	if h.releaseUpdater != nil && h.releaseUpdater.Supported() {
@@ -766,15 +766,15 @@ func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
 		latest, latestErr := h.latestChannelRelease(runCtx, "")
 		status, statusErr := h.releaseUpdater.Status(runCtx)
 		if latestErr != nil {
-			h.recordBackgroundUpdate("system.update.auto_install", "检查自动安装熔断状态失败", latestErr, nil)
+			h.recordBackgroundUpdate("system_update_auto_install", "检查自动安装熔断状态失败", latestErr, nil)
 			return
 		}
 		if statusErr != nil {
-			h.recordBackgroundUpdate("system.update.auto_install", "读取自动安装熔断状态失败", statusErr, nil)
+			h.recordBackgroundUpdate("system_update_auto_install", "读取自动安装熔断状态失败", statusErr, nil)
 			return
 		}
 		if status.LastUpdateVersion == latest.Tag && status.LastUpdateFailures >= 3 {
-			h.recordBackgroundUpdate("system.update.auto_install_blocked", "本版本连续安装失败 3 次，已停止自动重试", nil, map[string]any{
+			h.recordBackgroundUpdate("system_update_auto_install_blocked", "本版本连续安装失败 3 次，已停止自动重试", nil, map[string]any{
 				"target": latest.Tag, "failure_count": status.LastUpdateFailures,
 			})
 			return
@@ -782,21 +782,21 @@ func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
 	}
 	result, err := h.downloadLatestRelease(runCtx, false)
 	if err != nil {
-		h.recordBackgroundUpdate("system.update.auto_download", "自动下载更新失败", err, nil)
+		h.recordBackgroundUpdate("system_update_auto_download", "自动下载更新失败", err, nil)
 		return
 	}
 	if result.Fetched {
-		h.recordBackgroundUpdate("system.update.auto_download", "更新包已自动下载并校验", nil, map[string]any{"target": result.TargetCommit})
+		h.recordBackgroundUpdate("system_update_auto_download", "更新包已自动下载并校验", nil, map[string]any{"target": result.TargetCommit})
 	}
 	if !policy.AutoInstall || !result.Downloaded {
 		return
 	}
 	installed, err := h.releaseUpdater.InstallDownloaded(runCtx)
 	if err != nil {
-		h.recordBackgroundUpdate("system.update.auto_install", "自动安装更新失败", err, map[string]any{"target": result.TargetCommit})
+		h.recordBackgroundUpdate("system_update_auto_install", "自动安装更新失败", err, map[string]any{"target": result.TargetCommit})
 		return
 	}
-	h.recordBackgroundUpdate("system.update.auto_install", "已自动安装更新并开始重启", nil, map[string]any{"target": installed.TargetCommit})
+	h.recordBackgroundUpdate("system_update_auto_install", "已自动安装更新并开始重启", nil, map[string]any{"target": installed.TargetCommit})
 }
 
 func (h *SystemUpdateHandler) recordBackgroundUpdate(action, message string, err error, metadata map[string]any) {
@@ -900,7 +900,7 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 	if !releaseAvailable {
 		status, err := h.updater.Status(c.Request.Context())
 		if err != nil {
-			h.writeUpdateError(c, "system.update.rollback", err)
+			h.writeUpdateError(c, "system_update_rollback", err)
 			return
 		}
 		remoteURL = status.RemoteURL
@@ -910,7 +910,7 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 	}
 	releases, err := h.recentStableReleases(c.Request.Context(), remoteURL)
 	if err != nil {
-		h.writeUpdateError(c, "system.update.rollback", err)
+		h.writeUpdateError(c, "system_update_rollback", err)
 		return
 	}
 	var target ReleaseEntry
@@ -955,15 +955,15 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 			Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
 			Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
 		}, true); err != nil {
-			h.writeUpdateError(c, "system.update.rollback", err)
+			h.writeUpdateError(c, "system_update_rollback", err)
 			return
 		}
 		result, err := h.releaseUpdater.InstallDownloaded(c.Request.Context())
 		if err != nil {
-			h.writeUpdateError(c, "system.update.rollback", err)
+			h.writeUpdateError(c, "system_update_rollback", err)
 			return
 		}
-		recordRequestOperation(c, h.logs, "system.update.rollback", "已开始回退到 "+target.Tag+" 并重启", target.Tag, map[string]any{
+		recordRequestOperation(c, h.logs, "system_update_rollback", "已开始回退到 "+target.Tag+" 并重启", target.Tag, map[string]any{
 			"ref":             payload.Ref,
 			"deployment_mode": "release",
 		})
@@ -973,10 +973,10 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 
 	result, err := h.updater.Rollback(c.Request.Context(), payload.Ref)
 	if err != nil {
-		h.writeUpdateError(c, "system.update.rollback", err)
+		h.writeUpdateError(c, "system_update_rollback", err)
 		return
 	}
-	recordRequestOperation(c, h.logs, "system.update.rollback", "系统已回退到 "+result.Status.HeadCommit, result.Status.Root, map[string]any{
+	recordRequestOperation(c, h.logs, "system_update_rollback", "系统已回退到 "+result.Status.HeadCommit, result.Status.Root, map[string]any{
 		"ref": payload.Ref,
 	})
 	c.JSON(http.StatusOK, gin.H{"result": result})

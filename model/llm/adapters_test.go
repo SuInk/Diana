@@ -1155,7 +1155,7 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 		}
 		writeChatEvents(w,
 			`{"model":"mimo-test","choices":[{"index":0,"delta":{"reasoning_content":"private reasoning","tool_calls":[{"index":0,"id":"call_1","function":{"name":"diagnostic_x2e_echo","arguments":"{\"text\":"}}]}}]}`,
-			`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","function":{"name":"agent_x2e_finalize","arguments":"{\"silent\":true}"}},{"index":0,"function":{"arguments":"\"hello\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","function":{"name":"agent_finalize","arguments":"{\"silent\":true}"}},{"index":0,"function":{"arguments":"\"hello\"}"}}]},"finish_reason":"tool_calls"}]}`,
 			`{"choices":[],"usage":{"prompt_tokens":101,"completion_tokens":45,"total_tokens":146}}`,
 		)
 	}))
@@ -1168,7 +1168,7 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 		Messages: []Message{{Role: RoleUser, Content: "echo hello"}},
 		Tools: []ToolDefinition{
 			{Name: "diagnostic.echo", Parameters: map[string]any{"type": "object"}},
-			{Name: "agent.finalize", Parameters: map[string]any{"type": "object"}},
+			{Name: "agent_finalize", Parameters: map[string]any{"type": "object"}},
 		},
 	})
 	if err != nil {
@@ -1192,7 +1192,7 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("tool calls = %#v", calls)
 	}
-	if calls[0].ID != "call_1" || calls[0].Name != "diagnostic.echo" || calls[0].Arguments["text"] != "hello" || calls[1].ID != "call_2" || calls[1].Name != "agent.finalize" || calls[1].Arguments["silent"] != true {
+	if calls[0].ID != "call_1" || calls[0].Name != "diagnostic.echo" || calls[0].Arguments["text"] != "hello" || calls[1].ID != "call_2" || calls[1].Name != "agent_finalize" || calls[1].Arguments["silent"] != true {
 		t.Fatalf("tool calls changed: %+v %+v", calls[0], calls[1])
 	}
 	if !done || usage.TotalTokens != 146 {
@@ -1204,7 +1204,7 @@ func TestOpenAICompatibleResponsesStreamRecoversFunctionNameFromOutputItem(t *te
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("event: response.output_item.added\n"))
-		_, _ = w.Write([]byte(`data: {"type":"response.output_item.added","output_index":0,"sequence_number":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"agent_x2e_finalize","arguments":"","status":"in_progress"}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"response.output_item.added","output_index":0,"sequence_number":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"agent_finalize","arguments":"","status":"in_progress"}}` + "\n\n"))
 		_, _ = w.Write([]byte("event: response.function_call_arguments.done\n"))
 		// 复现 Sub2API：done 事件有完整参数，但缺少标准要求的 name。
 		_, _ = w.Write([]byte(`data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"sequence_number":2,"arguments":"{\"content\":\"完成\"}"}` + "\n\n"))
@@ -1222,7 +1222,7 @@ func TestOpenAICompatibleResponsesStreamRecoversFunctionNameFromOutputItem(t *te
 	}, server.Client())
 	events, err := client.Stream(context.Background(), GenerateRequest{
 		Messages: []Message{{Role: RoleUser, Content: "finish"}},
-		Tools:    []ToolDefinition{{Name: "agent.finalize", Parameters: map[string]any{"type": "object"}}},
+		Tools:    []ToolDefinition{{Name: "agent_finalize", Parameters: map[string]any{"type": "object"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1236,7 +1236,7 @@ func TestOpenAICompatibleResponsesStreamRecoversFunctionNameFromOutputItem(t *te
 			call = event.ToolCall
 		}
 	}
-	if call == nil || call.Name != "agent.finalize" || call.Arguments["content"] != "完成" {
+	if call == nil || call.Name != "agent_finalize" || call.Arguments["content"] != "完成" {
 		t.Fatalf("tool call = %#v", call)
 	}
 }
@@ -1469,7 +1469,7 @@ func TestAnthropicMessagesMapsRoles(t *testing.T) {
 	}
 }
 func TestForcedToolChoiceReachesEveryProvider(t *testing.T) {
-	definition := ToolDefinition{Name: "agent.finalize", Description: "finish", Parameters: map[string]any{"type": "object"}}
+	definition := ToolDefinition{Name: "agent_finalize", Description: "finish", Parameters: map[string]any{"type": "object"}}
 	req := GenerateRequest{Tools: []ToolDefinition{definition}, ToolChoice: definition.Name}
 
 	choice := anthropicToolChoice(req)
@@ -1508,7 +1508,7 @@ func TestForcedToolChoiceReachesEveryProvider(t *testing.T) {
 func TestAnthropicCachesStablePrefix(t *testing.T) {
 	tools := anthropicTools([]ToolDefinition{
 		{Name: "lookup", Parameters: map[string]any{"type": "object"}},
-		{Name: "agent.finalize", Parameters: map[string]any{"type": "object"}},
+		{Name: "agent_finalize", Parameters: map[string]any{"type": "object"}},
 	})
 	if len(tools) != 2 {
 		t.Fatalf("tools=%#v", tools)
@@ -1682,7 +1682,7 @@ func TestOpenAICompatibleRetriesOnceWhenGatewayRejectsStrictTools(t *testing.T) 
 	request := GenerateRequest{
 		Messages: []Message{{Role: RoleUser, Content: "hi"}},
 		Tools: []ToolDefinition{{
-			Name:   "agent.finalize",
+			Name:   "agent_finalize",
 			Strict: true,
 			Parameters: map[string]any{
 				"type":                 "object",
@@ -1716,12 +1716,12 @@ func TestOpenAICompatibleRetriesOnceWhenGatewayRejectsStrictTools(t *testing.T) 
 }
 
 func TestDeferredExecuteEnvelopeRoundTripsAcrossProviders(t *testing.T) {
-	definition := ToolDefinition{Name: "tools.execute", Parameters: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "input": map[string]any{"type": "object"}}}}
+	definition := ToolDefinition{Name: "tools_execute", Parameters: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "input": map[string]any{"type": "object"}}}}
 	definitions := []ToolDefinition{definition}
 	for _, failed := range []bool{false, true} {
 		messages := []Message{
-			{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-584", Name: "tools.execute", Arguments: map[string]any{"name": "mcp__demo__strict", "input": map[string]any{"chartType": 3}}}}},
-			{Role: RoleTool, ToolCallID: "call-584", ToolName: "tools.execute", ToolError: failed, Content: "tool observation"},
+			{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-584", Name: "tools_execute", Arguments: map[string]any{"name": "mcp__demo__strict", "input": map[string]any{"chartType": 3}}}}},
+			{Role: RoleTool, ToolCallID: "call-584", ToolName: "tools_execute", ToolError: failed, Content: "tool observation"},
 		}
 		conversions := map[string]any{
 			"chat":      openAIChatCompletionMessages(messages, definitions),
@@ -1736,7 +1736,7 @@ func TestDeferredExecuteEnvelopeRoundTripsAcrossProviders(t *testing.T) {
 					t.Fatal(err)
 				}
 				text := string(raw)
-				if strings.Count(text, "call-584") != 2 || !strings.Contains(text, wireToolName("tools.execute")) || !strings.Contains(text, "mcp__demo__strict") || !strings.Contains(text, "chartType") {
+				if strings.Count(text, "call-584") != 2 || !strings.Contains(text, wireToolName("tools_execute")) || !strings.Contains(text, "mcp__demo__strict") || !strings.Contains(text, "chartType") {
 					t.Fatalf("envelope or pairing lost: %s", text)
 				}
 			})

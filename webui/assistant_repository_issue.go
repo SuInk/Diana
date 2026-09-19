@@ -15,17 +15,17 @@ import (
 
 func (h *BotHandler) listRepositoryIssueDrafts(c *gin.Context) {
 	if h.sqlite == nil {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_issue.drafts", fmt.Errorf("草稿存储不可用"), "", nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_issue_drafts", fmt.Errorf("草稿存储不可用"), "", nil)
 		return
 	}
 	status := strings.ToLower(strings.TrimSpace(c.DefaultQuery("status", "all")))
 	if status != "all" && status != "pending" && status != "created" && status != "cancelled" {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_issue.drafts", fmt.Errorf("无效的草稿状态"), status, nil)
+		h.writeError(c, http.StatusBadRequest, "repository_issue_drafts", fmt.Errorf("无效的草稿状态"), status, nil)
 		return
 	}
 	items, err := h.sqlite.ListRepositoryIssueDrafts(c.Request.Context(), "", status)
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.repository_issue.drafts", err, status, nil)
+		h.writeError(c, http.StatusInternalServerError, "repository_issue_drafts", err, status, nil)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"drafts": items})
@@ -34,11 +34,11 @@ func (h *BotHandler) listRepositoryIssueDrafts(c *gin.Context) {
 func (h *BotHandler) createRepositoryIssue(c *gin.Context) {
 	var payload assistant.RepositoryIssueCreateInput
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_issue.create", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "repository_issue_create", err, "", nil)
 		return
 	}
 	if h.runtime == nil || h.runtime.Plugins() == nil {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_issue.create", fmt.Errorf("插件管理器不可用"), payload.Repository, nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_issue_create", fmt.Errorf("插件管理器不可用"), payload.Repository, nil)
 		return
 	}
 	profileID, ok := h.pluginProfileScope(c)
@@ -48,7 +48,7 @@ func (h *BotHandler) createRepositoryIssue(c *gin.Context) {
 	pluginValue, settings, enabled := h.runtime.Plugins().PluginWithSettingsForProfile(assistant.RepositoryPublishPluginID, profileID)
 	plugin, ok := pluginValue.(*assistant.RepositoryPublishPlugin)
 	if !enabled || !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_issue.create", fmt.Errorf("仓库 Issue 发布插件未启用"), payload.Repository, nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_issue_create", fmt.Errorf("仓库 Issue 发布插件未启用"), payload.Repository, nil)
 		return
 	}
 
@@ -58,7 +58,7 @@ func (h *BotHandler) createRepositoryIssue(c *gin.Context) {
 			c.JSON(http.StatusOK, result)
 			return
 		}
-		h.writeError(c, repositoryIssueCreateFailureStatus(result.FailureCode), "assistant.repository_issue.create", fmt.Errorf("%s", result.Message), result.Repository, map[string]any{
+		h.writeError(c, repositoryIssueCreateFailureStatus(result.FailureCode), "repository_issue_create", fmt.Errorf("%s", result.Message), result.Repository, map[string]any{
 			"repository":   result.Repository,
 			"failure_code": result.FailureCode,
 			"redactions":   result.Redactions,
@@ -83,7 +83,7 @@ func (h *BotHandler) createRepositoryIssue(c *gin.Context) {
 		metadata["issue_url"] = result.Issue.URL
 		target = result.Issue.URL
 	}
-	recordRequestOperation(c, h.logs, "assistant.repository_issue.create", "GitHub Issue 已创建", target, metadata)
+	recordRequestOperation(c, h.logs, "repository_issue_create", "GitHub Issue 已创建", target, metadata)
 	c.JSON(status, result)
 }
 

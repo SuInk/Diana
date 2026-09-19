@@ -403,8 +403,7 @@ WHERE created_at >= ? AND created_at < ?
 			_ = json.Unmarshal([]byte(metadata.String), &meta)
 		}
 		switch action {
-		// 动作名改过两轮，历史行还是旧名字，仪表盘要把它们一起算进来。
-		case "assistant.llm_usage", "chatbot.llm_usage", "diana.llm_usage", "llm_usage":
+		case "llm_usage":
 			stats.LLMCalls++
 			inputTokens := int64FromAny(meta["input_tokens"])
 			outputTokens := int64FromAny(meta["output_tokens"])
@@ -416,17 +415,17 @@ WHERE created_at >= ? AND created_at < ?
 			stats.LLMOutputTokens += outputTokens
 			stats.LLMTotalTokens += totalTokens
 			stats.LLMCachedInputTokens += int64FromAny(meta["cached_input_tokens"])
-		case "assistant.image.generate":
+		case "image_generate":
 			stats.ImageGenerations++
 			if bucketIndex >= 0 && bucketIndex < len(stats.Hourly) {
 				stats.Hourly[bucketIndex].Images++
 			}
-		case "assistant.image.edit":
+		case "image_edit":
 			stats.ImageEdits++
 			if bucketIndex >= 0 && bucketIndex < len(stats.Hourly) {
 				stats.Hourly[bucketIndex].Images++
 			}
-		case "assistant.agent_tool":
+		case "agent_tool":
 			if isDashboardSearchTool(target.String) {
 				stats.SearchCalls++
 				if bucketIndex >= 0 && bucketIndex < len(stats.Hourly) {

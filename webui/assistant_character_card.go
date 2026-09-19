@@ -43,17 +43,17 @@ func (h *BotHandler) registerCharacterCardRoutes(router gin.IRouter, base string
 func (h *BotHandler) importCharacterCard(c *gin.Context) {
 	var payload characterCardImportPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.import_card", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "personas_import_card", err, "", nil)
 		return
 	}
 	raw, err := base64.StdEncoding.DecodeString(payload.CardBase64)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.import_card", errCharacterCardBase64, "", nil)
+		h.writeError(c, http.StatusBadRequest, "personas_import_card", errCharacterCardBase64, "", nil)
 		return
 	}
 	card, err := assistant.ParseSillyTavernCharacterCard(raw)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.import_card", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "personas_import_card", err, "", nil)
 		return
 	}
 
@@ -72,7 +72,7 @@ func (h *BotHandler) importCharacterCard(c *gin.Context) {
 	updated, personaResult := set.Import([]assistant.Persona{card.Persona}, now)
 	if err := h.sqlite.SaveBotPersonas(c.Request.Context(), updated); err != nil {
 		personaLibraryMu.Unlock()
-		h.writeError(c, http.StatusInternalServerError, "assistant.personas.import_card", err, card.Persona.Name, nil)
+		h.writeError(c, http.StatusInternalServerError, "personas_import_card", err, card.Persona.Name, nil)
 		return
 	}
 	personaLibraryMu.Unlock()
@@ -97,7 +97,7 @@ func (h *BotHandler) importCharacterCard(c *gin.Context) {
 		updatedBook, bookResult := book.Import(card.BookNodes, now)
 		if err := h.sqlite.SaveWorldBook(c.Request.Context(), updatedBook); err != nil {
 			worldBookMu.Unlock()
-			h.writeError(c, http.StatusInternalServerError, "assistant.personas.import_card", err, card.Persona.Name, nil)
+			h.writeError(c, http.StatusInternalServerError, "personas_import_card", err, card.Persona.Name, nil)
 			return
 		}
 		worldBookMu.Unlock()
@@ -106,7 +106,7 @@ func (h *BotHandler) importCharacterCard(c *gin.Context) {
 		response.Nodes = updatedBook.Nodes
 	}
 
-	recordRequestOperation(c, h.logs, "assistant.personas.import_card", "角色卡已导入", card.Persona.Name, map[string]any{
+	recordRequestOperation(c, h.logs, "personas_import_card", "角色卡已导入", card.Persona.Name, map[string]any{
 		"skipped":       response.Skipped,
 		"renamed":       response.Renamed,
 		"book_imported": response.BookImported,

@@ -116,6 +116,7 @@ func TestDashboardStatsForDayTotalsCurrentAndLegacyLLMUsage(t *testing.T) {
 		}
 	}
 
+	rerunLogActionNameMigration(t, store)
 	stats, err := store.DashboardStatsForDay(ctx, now, "")
 	if err != nil {
 		t.Fatal(err)

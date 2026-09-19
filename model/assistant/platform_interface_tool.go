@@ -537,7 +537,7 @@ func (r *Runtime) recordPlatformInterfaceOperation(event MessageEvent, operation
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "diana.platform.operation",
+		Action:  "platform_operation",
 		Message: message,
 		Detail:  detail,
 		Actor:   oneBotEventActor(event),

@@ -60,9 +60,9 @@ func (h *BotHandler) editAssistantUser(c *gin.Context) {
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-	action, message := "assistant.users.save", "人员记录已修改"
+	action, message := "users_save", "人员记录已修改"
 	if remove {
-		action, message = "assistant.users.delete", "人员记录已删除"
+		action, message = "users_delete", "人员记录已删除"
 	}
 	recordRequestOperation(c, h.logs, action, message, c.Param("id"), map[string]any{"bot_profile_id": p.BotProfileID})
 	c.JSON(http.StatusOK, gin.H{"ok": true})

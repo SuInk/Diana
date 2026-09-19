@@ -61,12 +61,12 @@ func (h *BotHandler) registerWorldBookRoutes(router gin.IRouter, base string) {
 
 func (h *BotHandler) loadWorldBook(c *gin.Context) (assistant.WorldBook, bool) {
 	if h == nil || h.sqlite == nil {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.world_book", errWorldBookStoreUnavailable, "", nil)
+		h.writeError(c, http.StatusServiceUnavailable, "world_book", errWorldBookStoreUnavailable, "", nil)
 		return assistant.WorldBook{}, false
 	}
 	tree, _, err := h.sqlite.LoadWorldBook(c.Request.Context())
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.world_book", err, "", nil)
+		h.writeError(c, http.StatusInternalServerError, "world_book", err, "", nil)
 		return assistant.WorldBook{}, false
 	}
 	return tree.WithDefaults(), true
@@ -89,7 +89,7 @@ func (h *BotHandler) listWorldBook(c *gin.Context) {
 func (h *BotHandler) saveWorldBookNode(c *gin.Context) {
 	var payload worldBookSavePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.world_book.save", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "world_book_save", err, "", nil)
 		return
 	}
 	worldBookMu.Lock()
@@ -101,14 +101,14 @@ func (h *BotHandler) saveWorldBookNode(c *gin.Context) {
 	}
 	updated, saved, err := tree.Save(payload.Node, time.Now())
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.world_book.save", err, strings.TrimSpace(payload.Node.Title), nil)
+		h.writeError(c, http.StatusBadRequest, "world_book_save", err, strings.TrimSpace(payload.Node.Title), nil)
 		return
 	}
 	if err := h.sqlite.SaveWorldBook(c.Request.Context(), updated); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.world_book.save", err, saved.Title, nil)
+		h.writeError(c, http.StatusInternalServerError, "world_book_save", err, saved.Title, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.world_book.save", "世界书节点已保存", saved.Title, map[string]any{"node_id": saved.ID})
+	recordRequestOperation(c, h.logs, "world_book_save", "世界书节点已保存", saved.Title, map[string]any{"node_id": saved.ID})
 	c.JSON(http.StatusOK, gin.H{"node": saved, "nodes": updated.Nodes})
 }
 
@@ -116,7 +116,7 @@ func (h *BotHandler) saveWorldBookNode(c *gin.Context) {
 func (h *BotHandler) deleteWorldBookNode(c *gin.Context) {
 	var payload worldBookDeletePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.world_book.delete", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "world_book_delete", err, "", nil)
 		return
 	}
 	worldBookMu.Lock()
@@ -129,10 +129,10 @@ func (h *BotHandler) deleteWorldBookNode(c *gin.Context) {
 	node, _ := tree.Find(payload.ID)
 	updated := tree.Delete(payload.ID)
 	if err := h.sqlite.SaveWorldBook(c.Request.Context(), updated); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.world_book.delete", err, node.Title, nil)
+		h.writeError(c, http.StatusInternalServerError, "world_book_delete", err, node.Title, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.world_book.delete", "世界书节点已删除", node.Title, map[string]any{"node_id": strings.TrimSpace(payload.ID)})
+	recordRequestOperation(c, h.logs, "world_book_delete", "世界书节点已删除", node.Title, map[string]any{"node_id": strings.TrimSpace(payload.ID)})
 	c.JSON(http.StatusOK, gin.H{"nodes": updated.Nodes})
 }
 
@@ -141,19 +141,19 @@ func (h *BotHandler) deleteWorldBookNode(c *gin.Context) {
 func (h *BotHandler) importWorldBook(c *gin.Context) {
 	var payload worldBookImportPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.world_book.import", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "world_book_import", err, "", nil)
 		return
 	}
 	if len(payload.Nodes) == 0 && len(payload.Entries) > 0 {
 		converted, ok := assistant.WorldBookNodesFromSillyTavern(payload.Entries)
 		if !ok {
-			h.writeError(c, http.StatusBadRequest, "assistant.world_book.import", errWorldBookEntriesInvalid, "", nil)
+			h.writeError(c, http.StatusBadRequest, "world_book_import", errWorldBookEntriesInvalid, "", nil)
 			return
 		}
 		payload.Nodes = converted
 	}
 	if len(payload.Nodes) == 0 {
-		h.writeError(c, http.StatusBadRequest, "assistant.world_book.import", errWorldBookImportEmpty, "", nil)
+		h.writeError(c, http.StatusBadRequest, "world_book_import", errWorldBookImportEmpty, "", nil)
 		return
 	}
 	worldBookMu.Lock()
@@ -165,10 +165,10 @@ func (h *BotHandler) importWorldBook(c *gin.Context) {
 	}
 	updated, result := tree.Import(payload.Nodes, time.Now())
 	if err := h.sqlite.SaveWorldBook(c.Request.Context(), updated); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.world_book.import", err, "", nil)
+		h.writeError(c, http.StatusInternalServerError, "world_book_import", err, "", nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.world_book.import", "世界书已导入", "", map[string]any{
+	recordRequestOperation(c, h.logs, "world_book_import", "世界书已导入", "", map[string]any{
 		"imported": result.Imported,
 		"dropped":  result.Dropped,
 	})

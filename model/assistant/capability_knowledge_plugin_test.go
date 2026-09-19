@@ -115,8 +115,8 @@ func TestDefaultPluginManagerExposesCapabilityRAGAndLivePluginStates(t *testing.
 func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["capabilities"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"capabilities","input":{"query":"你能解析视频吗","limit":3}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["capabilities"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"capabilities","input":{"query":"你能解析视频吗","limit":3}}}`,
 		`{"action":"final","content":"可以，我能读取视频并抽取多帧理解内容。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3, ReplySafetyMasterEnabled: boolPointer(false)}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {

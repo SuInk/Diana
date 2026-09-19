@@ -1,7 +1,7 @@
 # Telegram 成员与头像适配
 
-Diana 的 Telegram 通道使用 HTTP Bot API。群聊 Agent 注册 `group`；
-OneBot 群查询使用 `diana.onebot_v11`，`group` 仅保留本地头像匹配。回复策略统一由 `bot_config` 修改。未实现相应能力的平台返回明确的不支持错误。
+Diana 的 Telegram 通道使用 HTTP Bot API。启用平台接口插件时，群资料和成员查询走 `platform`，
+头像匹配是单独的只读工具 `match_avatar`；未启用时群聊 Agent 注册只读的 `group_directory` 兼管查询和头像匹配。回复策略统一由 `bot_config` 修改。未实现相应能力的平台返回明确的不支持错误。
 
 ## 已接入能力
 

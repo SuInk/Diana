@@ -307,7 +307,7 @@ func (r *Runtime) recordInboundMediaReference(ctx context.Context, turnID string
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.inbound.media_reference",
+		Action:  "inbound_media_reference",
 		Message: message,
 		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),

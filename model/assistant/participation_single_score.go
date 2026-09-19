@@ -215,5 +215,5 @@ func (r *Runtime) recordParticipationRatings(ctx context.Context, event MessageE
 		return
 	}
 	a, b := cfg.participationPreferences().ratingLevels()
-	_ = w.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "diana.proactive_reply_route", Message: "模型已完成接话评分", Actor: oneBotEventActor(event), Target: event.MessageID, Metadata: map[string]any{"group_id": event.GroupID, "ratings": v, "relevance_level": a, "chat_level": b, "parsed": parsed, "allowed": allowed, "retried": retried, "reason": event.routingReason, "raw": truncateRunesFromStart(raw, 1000)}})
+	_ = w.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "proactive_reply_route", Message: "模型已完成接话评分", Actor: oneBotEventActor(event), Target: event.MessageID, Metadata: map[string]any{"group_id": event.GroupID, "ratings": v, "relevance_level": a, "chat_level": b, "parsed": parsed, "allowed": allowed, "retried": retried, "reason": event.routingReason, "raw": truncateRunesFromStart(raw, 1000)}})
 }

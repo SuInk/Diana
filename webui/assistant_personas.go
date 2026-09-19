@@ -66,12 +66,12 @@ func (h *BotHandler) registerPersonaRoutes(router gin.IRouter, base string) {
 
 func (h *BotHandler) loadPersonaSet(c *gin.Context) (assistant.PersonaSet, bool) {
 	if h == nil || h.sqlite == nil {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.personas", errPersonaStoreUnavailable, "", nil)
+		h.writeError(c, http.StatusServiceUnavailable, "personas", errPersonaStoreUnavailable, "", nil)
 		return assistant.PersonaSet{}, false
 	}
 	set, _, err := h.sqlite.LoadBotPersonas(c.Request.Context())
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.personas", err, "", nil)
+		h.writeError(c, http.StatusInternalServerError, "personas", err, "", nil)
 		return assistant.PersonaSet{}, false
 	}
 	return set.WithDefaults(), true
@@ -94,7 +94,7 @@ func (h *BotHandler) listPersonas(c *gin.Context) {
 func (h *BotHandler) savePersona(c *gin.Context) {
 	var payload personaSavePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.save", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "personas_save", err, "", nil)
 		return
 	}
 	personaLibraryMu.Lock()
@@ -106,14 +106,14 @@ func (h *BotHandler) savePersona(c *gin.Context) {
 	}
 	updated, saved, err := set.Save(payload.Persona, time.Now())
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.save", err, strings.TrimSpace(payload.Persona.Name), nil)
+		h.writeError(c, http.StatusBadRequest, "personas_save", err, strings.TrimSpace(payload.Persona.Name), nil)
 		return
 	}
 	if err := h.sqlite.SaveBotPersonas(c.Request.Context(), updated); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.personas.save", err, saved.Name, nil)
+		h.writeError(c, http.StatusInternalServerError, "personas_save", err, saved.Name, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.personas.save", "人设已保存", saved.Name, map[string]any{"persona_id": saved.ID})
+	recordRequestOperation(c, h.logs, "personas_save", "人设已保存", saved.Name, map[string]any{"persona_id": saved.ID})
 	c.JSON(http.StatusOK, gin.H{"persona": saved, "personas": updated.Personas})
 }
 
@@ -121,7 +121,7 @@ func (h *BotHandler) savePersona(c *gin.Context) {
 func (h *BotHandler) deletePersona(c *gin.Context) {
 	var payload personaDeletePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.delete", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "personas_delete", err, "", nil)
 		return
 	}
 	personaLibraryMu.Lock()
@@ -134,10 +134,10 @@ func (h *BotHandler) deletePersona(c *gin.Context) {
 	persona, _ := set.Find(payload.ID)
 	updated := set.Delete(payload.ID)
 	if err := h.sqlite.SaveBotPersonas(c.Request.Context(), updated); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.personas.delete", err, persona.Name, nil)
+		h.writeError(c, http.StatusInternalServerError, "personas_delete", err, persona.Name, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.personas.delete", "人设已删除", persona.Name, map[string]any{"persona_id": strings.TrimSpace(payload.ID)})
+	recordRequestOperation(c, h.logs, "personas_delete", "人设已删除", persona.Name, map[string]any{"persona_id": strings.TrimSpace(payload.ID)})
 	c.JSON(http.StatusOK, gin.H{"personas": updated.Personas})
 }
 
@@ -146,11 +146,11 @@ func (h *BotHandler) deletePersona(c *gin.Context) {
 func (h *BotHandler) importPersonas(c *gin.Context) {
 	var payload personaImportPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.import", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "personas_import", err, "", nil)
 		return
 	}
 	if len(payload.Personas) == 0 {
-		h.writeError(c, http.StatusBadRequest, "assistant.personas.import", errPersonaImportEmpty, "", nil)
+		h.writeError(c, http.StatusBadRequest, "personas_import", errPersonaImportEmpty, "", nil)
 		return
 	}
 	personaLibraryMu.Lock()
@@ -162,10 +162,10 @@ func (h *BotHandler) importPersonas(c *gin.Context) {
 	}
 	updated, result := set.Import(payload.Personas, time.Now())
 	if err := h.sqlite.SaveBotPersonas(c.Request.Context(), updated); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.personas.import", err, "", nil)
+		h.writeError(c, http.StatusInternalServerError, "personas_import", err, "", nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.personas.import", "人设已导入", "", map[string]any{
+	recordRequestOperation(c, h.logs, "personas_import", "人设已导入", "", map[string]any{
 		"imported":       len(result.Imported),
 		"skipped":        result.Skipped,
 		"renamed":        result.Renamed,

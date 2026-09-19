@@ -31,7 +31,7 @@ func (c *markerProbeClient) Generate(ctx context.Context, req llm.GenerateReques
 	resp, err := c.LLMClient.Generate(ctx, req)
 	if err == nil && resp != nil {
 		for _, call := range resp.ToolCalls {
-			if call.Name == "agent.finalize" {
+			if call.Name == "agent_finalize" {
 				c.finalCalls++
 			}
 		}

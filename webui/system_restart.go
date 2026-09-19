@@ -42,7 +42,7 @@ func (h *RestartHandler) restart(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("重启服务需要明确确认"))
 		return
 	}
-	recordRequestOperation(c, h.logs, "system.restart", "服务重启已触发", "", nil)
+	recordRequestOperation(c, h.logs, "system_restart", "服务重启已触发", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 	// 延迟触发，先让本次响应完整送达客户端。
 	go func() {

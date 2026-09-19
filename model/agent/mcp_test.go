@@ -181,11 +181,11 @@ func TestMCPInstallToolPersistsAndRefreshesRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	install, ok := registry.Get("mcp.install")
+	install, ok := registry.Get("mcp_install")
 	if !ok {
-		t.Fatal("mcp.install is missing")
+		t.Fatal("mcp_install is missing")
 	}
-	registry.Retain(map[string]bool{"mcp.install": true})
+	registry.Retain(map[string]bool{"mcp_install": true})
 	output, err := install.Run(context.Background(), map[string]any{
 		"name":    "dynamic",
 		"command": os.Args[0],
@@ -217,7 +217,7 @@ func TestMCPInstallToolPersistsAndRefreshesRegistry(t *testing.T) {
 	if _, ok := reloaded.Get("mcp__dynamic__echo"); !ok {
 		t.Fatal("persisted MCP tool was not restored")
 	}
-	uninstall, _ := reloaded.Get("mcp.uninstall")
+	uninstall, _ := reloaded.Get("mcp_uninstall")
 	if _, err := uninstall.Run(context.Background(), map[string]any{"name": "dynamic"}); err != nil {
 		t.Fatal(err)
 	}

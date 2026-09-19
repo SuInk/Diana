@@ -340,7 +340,7 @@ func requestContains(req llm.GenerateRequest, needle string) bool {
 func lastParticipationRatingLog(t *testing.T, logs *captureAppLogs) map[string]any {
 	t.Helper()
 	for _, entry := range logs.entriesSnapshot() {
-		if entry.Action == "diana.proactive_reply_route" && entry.Metadata["ratings"] != nil {
+		if entry.Action == "proactive_reply_route" && entry.Metadata["ratings"] != nil {
 			return entry.Metadata
 		}
 	}

@@ -181,7 +181,7 @@ func (h *LLMConfigHandler) Register(router gin.IRouter) {
 func (h *LLMConfigHandler) providers(c *gin.Context) {
 	registry, _, err := llm.NewProviderRegistryFromProfiles(h.store.Profiles())
 	if err != nil {
-		h.writeError(c, http.StatusUnprocessableEntity, "llm.providers", err, "", nil)
+		h.writeError(c, http.StatusUnprocessableEntity, "llm_providers", err, "", nil)
 		return
 	}
 	providers := make([]llm.ProviderDefinition, 0)
@@ -202,17 +202,17 @@ type providerSelectionPayload struct {
 func (h *LLMConfigHandler) providerModels(c *gin.Context) {
 	var payload providerSelectionPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.providers.models", err, "", nil)
+		h.writeError(c, 400, "llm_providers_models", err, "", nil)
 		return
 	}
 	registry, _, err := llm.NewProviderRegistryFromProfiles(h.store.Profiles())
 	if err != nil {
-		h.writeError(c, 422, "llm.providers.models", err, payload.ProviderID, nil)
+		h.writeError(c, 422, "llm_providers_models", err, payload.ProviderID, nil)
 		return
 	}
 	models, err := registry.ListModels(c.Request.Context(), payload.ProviderID)
 	if err != nil {
-		h.writeError(c, 502, "llm.providers.models", err, payload.ProviderID, nil)
+		h.writeError(c, 502, "llm_providers_models", err, payload.ProviderID, nil)
 		return
 	}
 	c.JSON(http.StatusOK, llmModelsPayload{Models: models})
@@ -221,12 +221,12 @@ func (h *LLMConfigHandler) providerModels(c *gin.Context) {
 func (h *LLMConfigHandler) providerTest(c *gin.Context) {
 	var payload providerSelectionPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.providers.test", err, "", nil)
+		h.writeError(c, 400, "llm_providers_test", err, "", nil)
 		return
 	}
 	registry, _, err := llm.NewProviderRegistryFromProfiles(h.store.Profiles())
 	if err != nil {
-		h.writeError(c, 422, "llm.providers.test", err, payload.ProviderID, nil)
+		h.writeError(c, 422, "llm_providers_test", err, payload.ProviderID, nil)
 		return
 	}
 	if strings.TrimSpace(payload.Message) == "" {
@@ -250,7 +250,7 @@ func (h *LLMConfigHandler) providerTest(c *gin.Context) {
 			}
 		}
 		log.Printf("llm provider test failed: provider=%q model=%q err=%v", payload.ProviderID, payload.ModelID, publicErr)
-		h.writeError(c, 502, "llm.providers.test", publicErr, payload.ProviderID, metadata)
+		h.writeError(c, 502, "llm_providers_test", publicErr, payload.ProviderID, metadata)
 		return
 	}
 	c.JSON(http.StatusOK, response)
@@ -295,7 +295,7 @@ func (h *LLMConfigHandler) exportConfig(c *gin.Context) {
 func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 	var payload llmConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.config.save", err, "", nil)
+		h.writeError(c, 400, "llm_config_save", err, "", nil)
 		return
 	}
 
@@ -313,24 +313,24 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 		cfg.Models = existing.Models
 	}
 	if strings.TrimSpace(payload.APIKey) != "" && utf8.RuneCountInString(cfg.APIKey) < minLLMAPIKeyChars {
-		h.writeError(c, 400, "llm.config.save", fmt.Errorf("api_key must be at least %d characters", minLLMAPIKeyChars), llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
+		h.writeError(c, 400, "llm_config_save", fmt.Errorf("api_key must be at least %d characters", minLLMAPIKeyChars), llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 		return
 	}
 	if err := cfg.ValidateChannel(); err != nil {
-		h.writeError(c, 400, "llm.config.save", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
+		h.writeError(c, 400, "llm_config_save", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 		return
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		if len(cfg.Models) == 0 {
 			models, err := h.listModels(c.Request.Context(), cfg)
 			if err != nil {
-				h.writeError(c, 502, "llm.config.save.models", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
+				h.writeError(c, 502, "llm_config_save_models", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 				return
 			}
 			cfg.Models = models
 		}
 		if len(cfg.Models) == 0 || strings.TrimSpace(cfg.Models[0].ID) == "" {
-			h.writeError(c, 422, "llm.config.save.models", fmt.Errorf("provider returned no usable models"), llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
+			h.writeError(c, 422, "llm_config_save_models", fmt.Errorf("provider returned no usable models"), llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 			return
 		}
 		cfg.Model = strings.TrimSpace(cfg.Models[0].ID)
@@ -339,10 +339,10 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 	next := upsertProfileSet(set, payload, cfg)
 	// 落库失败就不能回 200，否则前端提示保存成功、重启后配置又变回旧值。
 	if err := h.store.SaveProfiles(next); err != nil {
-		h.writeError(c, 500, "llm.config.save", err, payload.ID, llmLogMetadata(cfg, payload.ID))
+		h.writeError(c, 500, "llm_config_save", err, payload.ID, llmLogMetadata(cfg, payload.ID))
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.config.save", "提供商配置已保存", payload.ID, llmLogMetadata(cfg, payload.ID))
+	recordRequestOperation(c, h.logs, "llm_config_save", "提供商配置已保存", payload.ID, llmLogMetadata(cfg, payload.ID))
 	c.JSON(200, h.profileSetPayload(next))
 }
 
@@ -352,19 +352,19 @@ func (h *LLMConfigHandler) reorderProfiles(c *gin.Context) {
 		IDs []string `json:"ids"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.profile.reorder", err, "", nil)
+		h.writeError(c, 400, "llm_profile_reorder", err, "", nil)
 		return
 	}
 	if len(payload.IDs) == 0 {
-		h.writeError(c, 400, "llm.profile.reorder", fmt.Errorf("ids is required"), "", nil)
+		h.writeError(c, 400, "llm_profile_reorder", fmt.Errorf("ids is required"), "", nil)
 		return
 	}
 	set := h.store.Profiles().Reorder(payload.IDs)
 	if err := h.store.SaveProfiles(set); err != nil {
-		h.writeError(c, 500, "llm.profile.reorder", err, "", nil)
+		h.writeError(c, 500, "llm_profile_reorder", err, "", nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.profile.reorder", "提供商配置优先级已调整", "", nil)
+	recordRequestOperation(c, h.logs, "llm_profile_reorder", "提供商配置优先级已调整", "", nil)
 	c.JSON(200, h.profileSetPayload(set))
 }
 
@@ -372,29 +372,29 @@ func (h *LLMConfigHandler) reorderProfiles(c *gin.Context) {
 func (h *LLMConfigHandler) deleteProfile(c *gin.Context) {
 	var payload llmConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.profile.delete", err, "", nil)
+		h.writeError(c, 400, "llm_profile_delete", err, "", nil)
 		return
 	}
 	targetID := strings.TrimSpace(payload.ID)
 	if targetID == "" {
-		h.writeError(c, 400, "llm.profile.delete", fmt.Errorf("profile id is required"), "", nil)
+		h.writeError(c, 400, "llm_profile_delete", fmt.Errorf("profile id is required"), "", nil)
 		return
 	}
 	set := h.store.Profiles()
 	if len(set.Profiles) <= 1 {
-		h.writeError(c, 400, "llm.profile.delete", fmt.Errorf("at least one llm profile must remain"), targetID, nil)
+		h.writeError(c, 400, "llm_profile_delete", fmt.Errorf("at least one llm profile must remain"), targetID, nil)
 		return
 	}
 	next := set.Delete(targetID)
 	if len(next.Profiles) == len(set.Profiles) {
-		h.writeError(c, 404, "llm.profile.delete", fmt.Errorf("profile %q not found", targetID), targetID, nil)
+		h.writeError(c, 404, "llm_profile_delete", fmt.Errorf("profile %q not found", targetID), targetID, nil)
 		return
 	}
 	if err := h.store.SaveProfiles(next); err != nil {
-		h.writeError(c, 500, "llm.profile.delete", err, targetID, map[string]any{"profile_id": targetID})
+		h.writeError(c, 500, "llm_profile_delete", err, targetID, map[string]any{"profile_id": targetID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.profile.delete", "提供商配置已删除", targetID, map[string]any{"profile_id": targetID})
+	recordRequestOperation(c, h.logs, "llm_profile_delete", "提供商配置已删除", targetID, map[string]any{"profile_id": targetID})
 	c.JSON(200, h.profileSetPayload(next))
 }
 
@@ -402,7 +402,7 @@ func (h *LLMConfigHandler) deleteProfile(c *gin.Context) {
 func (h *LLMConfigHandler) cloneProfile(c *gin.Context) {
 	var payload llmConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.profile.clone", err, "", nil)
+		h.writeError(c, 400, "llm_profile_clone", err, "", nil)
 		return
 	}
 	sourceID := strings.TrimSpace(payload.ID)
@@ -422,14 +422,14 @@ func (h *LLMConfigHandler) cloneProfile(c *gin.Context) {
 		cloned.Description = profile.Description
 		next := upsertProfileSet(set, llmConfigPayload{Name: cloned.Name, Group: cloned.Group, Description: cloned.Description}, profile.Config)
 		if err := h.store.SaveProfiles(next); err != nil {
-			h.writeError(c, 500, "llm.profile.clone", err, sourceID, llmLogMetadata(profile.Config, sourceID))
+			h.writeError(c, 500, "llm_profile_clone", err, sourceID, llmLogMetadata(profile.Config, sourceID))
 			return
 		}
-		recordRequestOperation(c, h.logs, "llm.profile.clone", "提供商配置已复制", sourceID, llmLogMetadata(profile.Config, sourceID))
+		recordRequestOperation(c, h.logs, "llm_profile_clone", "提供商配置已复制", sourceID, llmLogMetadata(profile.Config, sourceID))
 		c.JSON(200, h.profileSetPayload(next))
 		return
 	}
-	h.writeError(c, 404, "llm.profile.clone", fmt.Errorf("profile %q not found", sourceID), sourceID, nil)
+	h.writeError(c, 404, "llm_profile_clone", fmt.Errorf("profile %q not found", sourceID), sourceID, nil)
 }
 
 // importProfiles 导入一组提供商配置档。
@@ -439,11 +439,11 @@ func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 		Profiles []llmConfigPayload `json:"profiles"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.profile.import", err, "", nil)
+		h.writeError(c, 400, "llm_profile_import", err, "", nil)
 		return
 	}
 	if len(payload.Profiles) == 0 {
-		h.writeError(c, 400, "llm.profile.import", fmt.Errorf("profiles are required"), "", nil)
+		h.writeError(c, 400, "llm_profile_import", fmt.Errorf("profiles are required"), "", nil)
 		return
 	}
 	next := llm.ProfileSet{Profiles: make([]llm.Profile, 0, len(payload.Profiles))}
@@ -452,16 +452,16 @@ func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 		// 导入文件必须自带密钥，避免导入后看似成功但实际无法调用模型。
 		cfg := configFromPayload(item)
 		if cfg.APIKey == "" {
-			h.writeError(c, 400, "llm.profile.import", fmt.Errorf("profile %q missing api_key", firstNonEmpty(item.Name, item.ID)), firstNonEmpty(item.ID, item.Name), nil)
+			h.writeError(c, 400, "llm_profile_import", fmt.Errorf("profile %q missing api_key", firstNonEmpty(item.Name, item.ID)), firstNonEmpty(item.ID, item.Name), nil)
 			return
 		}
 		if err := cfg.ValidateChannel(); err != nil {
-			h.writeError(c, 400, "llm.profile.import", err, firstNonEmpty(item.ID, item.Name), llmLogMetadata(cfg, item.ID))
+			h.writeError(c, 400, "llm_profile_import", err, firstNonEmpty(item.ID, item.Name), llmLogMetadata(cfg, item.ID))
 			return
 		}
 		id := firstNonEmpty(strings.TrimSpace(item.ID), llm.NewProfileSet(cfg).Profiles[0].ID)
 		if _, ok := seenIDs[id]; ok {
-			h.writeError(c, 400, "llm.profile.import", fmt.Errorf("duplicate profile id %q", id), id, nil)
+			h.writeError(c, 400, "llm_profile_import", fmt.Errorf("duplicate profile id %q", id), id, nil)
 			return
 		}
 		seenIDs[id] = struct{}{}
@@ -481,10 +481,10 @@ func (h *LLMConfigHandler) importProfiles(c *gin.Context) {
 		})
 	}
 	if err := h.store.SaveProfiles(next); err != nil {
-		h.writeError(c, 500, "llm.profile.import", err, next.Profiles[0].ID, map[string]any{"profile_count": len(next.Profiles)})
+		h.writeError(c, 500, "llm_profile_import", err, next.Profiles[0].ID, map[string]any{"profile_count": len(next.Profiles)})
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.profile.import", "提供商配置已导入", next.Profiles[0].ID, map[string]any{"profile_count": len(next.Profiles)})
+	recordRequestOperation(c, h.logs, "llm_profile_import", "提供商配置已导入", next.Profiles[0].ID, map[string]any{"profile_count": len(next.Profiles)})
 	c.JSON(200, h.profileSetPayload(next))
 }
 
@@ -495,7 +495,7 @@ func (h *LLMConfigHandler) models(c *gin.Context) {
 		// POST 用于前端在保存前拿“草稿配置”的模型列表，例如刚改了 Base URL 或 provider。
 		var payload llmConfigPayload
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			h.writeError(c, 400, "llm.models.list", err, "", nil)
+			h.writeError(c, 400, "llm_models_list", err, "", nil)
 			return
 		}
 		cfg = configFromPayload(payload)
@@ -510,10 +510,10 @@ func (h *LLMConfigHandler) models(c *gin.Context) {
 	defer cancel()
 	models, err := h.listModels(listCtx, cfg)
 	if err != nil {
-		h.writeError(c, 502, "llm.models.list", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, 502, "llm_models_list", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.models.list", "LLM 模型列表已读取", cfg.Model, map[string]any{
+	recordRequestOperation(c, h.logs, "llm_models_list", "LLM 模型列表已读取", cfg.Model, map[string]any{
 		"provider": string(cfg.Provider),
 		"model":    cfg.Model,
 		"count":    len(models),
@@ -528,7 +528,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 		llmConfigPayload
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, 400, "llm.test", err, "", nil)
+		h.writeError(c, 400, "llm_test", err, "", nil)
 		return
 	}
 	if payload.Message == "" {
@@ -542,7 +542,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 		testMode = "text"
 	}
 	if testMode != "text" && testMode != "image" {
-		h.writeError(c, 400, "llm.test", fmt.Errorf("unsupported test mode %q", payload.Mode), payload.Model, nil)
+		h.writeError(c, 400, "llm_test", fmt.Errorf("unsupported test mode %q", payload.Mode), payload.Model, nil)
 		return
 	}
 
@@ -563,14 +563,14 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	}
 	client, err := h.newClient(cfg)
 	if err != nil {
-		h.writeError(c, 400, "llm.test", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, 400, "llm_test", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	if testMode == "image" {
 		generator, ok := client.(llm.ImageGenerator)
 		if !ok {
 			err := fmt.Errorf("llm: image generation is not supported for provider %q", cfg.Provider)
-			h.writeError(c, 400, "llm.test.image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
+			h.writeError(c, 400, "llm_test_image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
 			return
 		}
 		started := time.Now()
@@ -580,11 +580,11 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 			N:      1,
 		})
 		if err != nil {
-			h.writeError(c, 502, "llm.test.image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
+			h.writeError(c, 502, "llm_test_image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
 			return
 		}
 		recordLLMUsage(c, h.logs, cfg.Provider, firstNonEmpty(resp.Model, cfg.ImageModelWithDefault()), resp.Usage, "webui_image_test", time.Since(started))
-		recordRequestOperation(c, h.logs, "llm.test.image", "LLM 生图测试成功", resp.Model, llmLogMetadata(cfg, ""))
+		recordRequestOperation(c, h.logs, "llm_test_image", "LLM 生图测试成功", resp.Model, llmLogMetadata(cfg, ""))
 		c.JSON(200, resp)
 		return
 	}
@@ -594,12 +594,12 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: payload.Message}},
 	})
 	if err != nil {
-		h.writeError(c, 502, "llm.test", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, 502, "llm_test", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	recordLLMUsage(c, h.logs, resp.Provider, firstNonEmpty(resp.Model, cfg.Model), resp.Usage, "webui_llm_test", time.Since(started))
 
-	recordRequestOperation(c, h.logs, "llm.test", "LLM 连通测试成功", cfg.Model, llmLogMetadata(cfg, ""))
+	recordRequestOperation(c, h.logs, "llm_test", "LLM 连通测试成功", cfg.Model, llmLogMetadata(cfg, ""))
 	c.JSON(200, resp)
 }
 

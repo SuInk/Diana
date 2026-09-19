@@ -30,7 +30,7 @@ func TestRecordTemporaryMemoryContextOnlyRecordsInjectedState(t *testing.T) {
 	}
 	runtime.recordTemporaryMemoryContext(context.Background(), event, BotConfig{}.WithDefaults(), messages, preload)
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "diana.memory.temporary" {
+	if len(entries) != 1 || entries[0].Action != "memory_temporary" {
 		t.Fatalf("entries = %#v", entries)
 	}
 	memories, ok := entries[0].Metadata["memories"].([]map[string]any)

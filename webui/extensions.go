@@ -34,7 +34,7 @@ func (h *BotHandler) extensions(c *gin.Context) {
 		return
 	}
 	if c.Request.Method == http.MethodPost && req.Operation != "read" && req.Operation != "list" {
-		recordRequestOperation(c, h.logs, "assistant.extensions."+req.Operation, "扩展管理操作已完成", req.Name, map[string]any{"kind": req.Kind, "profile_id": req.ProfileID})
+		recordRequestOperation(c, h.logs, "extensions_"+req.Operation, "扩展管理操作已完成", req.Name, map[string]any{"kind": req.Kind, "profile_id": req.ProfileID})
 	}
 	if result == nil {
 		result = gin.H{"ok": true}

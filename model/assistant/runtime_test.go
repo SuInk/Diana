@@ -2615,7 +2615,7 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 		}
 	}
 	routeLogs := withoutUsageEntries(logs.entries)
-	if len(routeLogs) != 1 || routeLogs[0].Action != "diana.proactive_reply_route" {
+	if len(routeLogs) != 1 || routeLogs[0].Action != "proactive_reply_route" {
 		t.Fatalf("route logs = %#v", logs.entries)
 	}
 	metadata := routeLogs[0].Metadata
@@ -3539,7 +3539,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	}
 	// 合并转发的内容安全检查会调一次模型并记用量；这里只关心主回复没有走模型。
 	entries := withoutUsageEntries(logs.entriesSnapshot())
-	if len(entries) != 1 || entries[0].Action != "diana.resolver.video_download" {
+	if len(entries) != 1 || entries[0].Action != "resolver_video_download" {
 		t.Fatalf("resolver logs = %#v", entries)
 	}
 }
@@ -4436,7 +4436,7 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 	runtime.recordImageOperation(
 		context.Background(),
 		MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "456", MessageID: "789"},
-		"diana.image.edit",
+		"image_edit",
 		"图片编辑已发送",
 		"只修改背景",
 		"只修改背景\n\n群聊上下文：\n当前发送者：Alice (456)，头像：https://example.test/avatar.png",

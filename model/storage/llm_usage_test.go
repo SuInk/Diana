@@ -38,6 +38,7 @@ func TestLLMUsageRollingWindow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	rerunLogActionNameMigration(t, s)
 	got, err := s.LLMUsageSince(ctx, since, until)
 	if err != nil {
 		t.Fatal(err)

@@ -37,7 +37,7 @@ SELECT printf('usage%d',x),'operation','info','llm_usage','usage',printf('m%d',1
 func TestLightweightEventsMatchFullPage(t *testing.T) {
 	s, now := seedEventBrowsing(t, 65)
 	ctx := context.Background()
-	if err := s.AppendLog(ctx, applog.Entry{Action: "diana.memory.retrieved", Target: "m1", Metadata: map[string]any{"profile_id": "bot", "group_id": "g", "user_id": "u", "memories": []any{map[string]any{"id": "memory", "content": "test"}}}}); err != nil {
+	if err := s.AppendLog(ctx, applog.Entry{Action: "memory_retrieved", Target: "m1", Metadata: map[string]any{"profile_id": "bot", "group_id": "g", "user_id": "u", "memories": []any{map[string]any{"id": "memory", "content": "test"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, offset := range []int{0, 30, 60, 65} {

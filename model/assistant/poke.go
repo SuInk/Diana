@@ -138,7 +138,7 @@ func (r *Runtime) recordPokeSent(ctx context.Context, event MessageEvent, target
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.poke_sent",
+		Action:  "poke_sent",
 		Message: "机器人戳了一下对方",
 		Actor:   oneBotEventActor(event),
 		Target:  target,

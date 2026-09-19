@@ -136,12 +136,12 @@ const personaGenerateSystemPrompt = `你在为一个聊天机器人写一张角�
 func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 	var payload personaGeneratePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "llm.persona", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "llm_persona", err, "", nil)
 		return
 	}
 	description := strings.TrimSpace(payload.Description)
 	if description == "" {
-		h.writeError(c, http.StatusBadRequest, "llm.persona", fmt.Errorf("请先描述想要的角色"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "llm_persona", fmt.Errorf("请先描述想要的角色"), "", nil)
 		return
 	}
 	if len([]rune(description)) > personaGenerateMaxDescription {
@@ -151,12 +151,12 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 
 	cfg, err := personaProviderConfig(h.store.Profiles(), payload)
 	if err != nil {
-		h.writeError(c, http.StatusUnprocessableEntity, "llm.persona", err, payload.Model, nil)
+		h.writeError(c, http.StatusUnprocessableEntity, "llm_persona", err, payload.Model, nil)
 		return
 	}
 	client, err := h.newClient(cfg)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "llm.persona", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, http.StatusBadRequest, "llm_persona", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 
@@ -168,23 +168,23 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 		},
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadGateway, "llm.persona", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, http.StatusBadGateway, "llm_persona", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	recordLLMUsage(c, h.logs, resp.Provider, firstNonEmpty(resp.Model, cfg.Model), resp.Usage, "webui_persona_generate", time.Since(started))
 	card, err := parseGeneratedCharacterCard(resp.Text, payload.Name)
 	if err != nil {
-		h.writeError(c, http.StatusBadGateway, "llm.persona", err, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, http.StatusBadGateway, "llm_persona", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
 	// 正文用导入角色卡那条路上的同一个拼装函数：生成的卡和导进来的卡拼出同样
 	// 形状的人设，用户看到的、机器人读到的都是同一样东西。
 	persona := normalizeGeneratedPersona(assistant.ComposeCharacterCardPersona(card), personaGenerateOutputLimit(current))
 	if persona == "" {
-		h.writeError(c, http.StatusBadGateway, "llm.persona", errPersonaCardUnusable, cfg.Model, llmLogMetadata(cfg, ""))
+		h.writeError(c, http.StatusBadGateway, "llm_persona", errPersonaCardUnusable, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
-	recordRequestOperation(c, h.logs, "llm.persona", "生成基础人设成功", resp.Model, llmLogMetadata(cfg, ""))
+	recordRequestOperation(c, h.logs, "llm_persona", "生成基础人设成功", resp.Model, llmLogMetadata(cfg, ""))
 	c.JSON(http.StatusOK, gin.H{
 		"persona":  persona,
 		"card":     personaCardEnvelope{Spec: personaCardSpec, SpecVersion: personaCardSpecVersion, Data: &card},

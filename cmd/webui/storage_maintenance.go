@@ -34,6 +34,12 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 			} else if result.DeletedFiles > 0 {
 				log.Printf("storage maintenance: deleted %d history media files (%d bytes)", result.DeletedFiles, result.DeletedBytes)
 			}
+			// 日志动作名改写成新名字的迁移在这里分批做，做完之前不清理日志，理由见 PruneLogs。
+			migrateCtx, stopMigrate := context.WithTimeout(ctx, 10*time.Minute)
+			if _, err := store.MigrateLogActionNames(migrateCtx); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: log action rename: %v", err)
+			}
+			stopMigrate()
 			now := time.Now()
 			runCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
 			count, err := store.PruneLogs(runCtx,

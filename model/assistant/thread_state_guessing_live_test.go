@@ -32,7 +32,7 @@ func TestLiveGroupGuessingGameKeepsLockedSecret(t *testing.T) {
 		messages := []llm.Message{{
 			Role: llm.RoleSystem,
 			Content: "你是 QQ 群里的机器人然然，回复简短口语化。当前是群聊，群里多个人都可能接着和你说话。\n" +
-				promptToolThreadState + "\n工具调用结束后调用 agent.finalize 给出要发到群里的话。",
+				promptToolThreadState + "\n工具调用结束后调用 agent_finalize 给出要发到群里的话。",
 		}}
 		if state := runtime.privateThreadStateContext(context.Background(), event); state != "" {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: state, Priority: llm.MessagePriorityPlugin, AtomicText: true})
