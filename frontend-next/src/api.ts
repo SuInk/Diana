@@ -1366,6 +1366,8 @@ export interface RepoPluginSource {
   owner: string;
   repo: string;
   ref?: string;
+  /** 实际安装的提交 SHA；ref 是分支或 tag 时会移动，commit 不会。 */
+  commit?: string;
   version: string;
   url: string;
   installed_at?: string;
@@ -1374,6 +1376,8 @@ export interface RepoPluginSource {
 /** 粘贴 GitHub 链接后的安装预览：确认框据此渲染权限、设置与风险。 */
 export interface RepoPluginPreview {
   source: RepoPluginSourceRef;
+  /** 预览读到的提交；安装时原样带回，仓库在中间有新提交会被拒绝。 */
+  commit: string;
   manifest: PluginManifest;
   permissions: RepoPluginPermission[];
   files: string[];
@@ -1387,17 +1391,17 @@ export function previewRepoPlugin(url: string): Promise<RepoPluginPreview> {
   });
 }
 
-export function installRepoPlugin(url: string, acceptRisk: boolean): Promise<PluginState> {
+export function installRepoPlugin(url: string, acceptRisk: boolean, commit: string): Promise<PluginState> {
   return requestJSON<PluginState>("/api/assistant/plugins/repo/install", {
     method: "POST",
-    body: JSON.stringify({ url, accept_risk: acceptRisk })
+    body: JSON.stringify({ url, accept_risk: acceptRisk, commit })
   });
 }
 
-export function updateRepoPlugin(id: string, acceptRisk: boolean): Promise<PluginState> {
+export function updateRepoPlugin(id: string, acceptRisk: boolean, commit = ""): Promise<PluginState> {
   return requestJSON<PluginState>(`/api/assistant/plugins/repo/update/${encodeURIComponent(id)}`, {
     method: "POST",
-    body: JSON.stringify({ url: "", accept_risk: acceptRisk })
+    body: JSON.stringify({ url: "", accept_risk: acceptRisk, commit })
   });
 }
 

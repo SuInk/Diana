@@ -20,9 +20,11 @@ type repoPluginURLPayload struct {
 
 // repoPluginInstallPayload 是安装请求体。AcceptRisk 必须由前端在用户勾选
 // 「我已了解风险」后显式置 true，服务端不接受默认值——确认框不点勾不能装。
+// Commit 是预览时读到的提交，安装时必须一致，保证装的就是确认框里那一版。
 type repoPluginInstallPayload struct {
 	URL        string `json:"url"`
 	AcceptRisk bool   `json:"accept_risk"`
+	Commit     string `json:"commit"`
 }
 
 // SetRepoPluginInstaller 注入第三方插件安装器；未注入时相关接口返回 501，
@@ -80,7 +82,11 @@ func (h *BotHandler) installRepoPlugin(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "assistant.plugin.repo.install", assistant.ErrRepoPluginRisk, payload.URL, nil)
 		return
 	}
-	plugin, source, err := installer.Install(c.Request.Context(), payload.URL)
+	if strings.TrimSpace(payload.Commit) == "" {
+		h.writeError(c, http.StatusBadRequest, "assistant.plugin.repo.install", errors.New("diana: 请先预览插件，确认后再安装"), payload.URL, nil)
+		return
+	}
+	plugin, source, err := installer.Install(c.Request.Context(), payload.URL, payload.Commit)
 	if err != nil {
 		h.writeRepoPluginError(c, "assistant.plugin.repo.install", err, payload.URL)
 		return
@@ -108,6 +114,7 @@ func (h *BotHandler) installRepoPlugin(c *gin.Context) {
 		"version":   plugin.Manifest().Version,
 		"source":    source.Owner + "/" + source.Repo,
 		"ref":       source.Ref,
+		"commit":    source.Commit,
 	})
 	state, _ := manager.Get(plugin.Manifest().ID)
 	c.JSON(http.StatusOK, h.withRepoSource(state).Redacted())
@@ -142,7 +149,7 @@ func (h *BotHandler) updateRepoPlugin(c *gin.Context) {
 	if strings.TrimSpace(source.Ref) != "" {
 		installURL += "/tree/" + source.Ref
 	}
-	plugin, next, err := installer.Install(c.Request.Context(), installURL)
+	plugin, next, err := installer.Install(c.Request.Context(), installURL, payload.Commit)
 	if err != nil {
 		h.writeRepoPluginError(c, "assistant.plugin.repo.update", err, source.ID)
 		return
@@ -167,6 +174,7 @@ func (h *BotHandler) updateRepoPlugin(c *gin.Context) {
 		"version":   next.Version,
 		"source":    next.Owner + "/" + next.Repo,
 		"ref":       next.Ref,
+		"commit":    next.Commit,
 	})
 	state, _ := manager.Get(source.ID)
 	c.JSON(http.StatusOK, h.withRepoSource(state).Redacted())
@@ -196,8 +204,11 @@ func (h *BotHandler) writeRepoPluginError(c *gin.Context, action string, err err
 		errors.Is(err, assistant.ErrRepoPluginManifest),
 		errors.Is(err, assistant.ErrRepoPluginFormat),
 		errors.Is(err, assistant.ErrRepoPluginSkill),
-		errors.Is(err, assistant.ErrRepoPluginRisk):
+		errors.Is(err, assistant.ErrRepoPluginRisk),
+		errors.Is(err, assistant.ErrRepoPluginCommit):
 		status = http.StatusBadRequest
+	case errors.Is(err, assistant.ErrRepoPluginChanged):
+		status = http.StatusConflict
 	}
 	h.writeError(c, status, action, err, target, map[string]any{"plugin_id": target})
 }

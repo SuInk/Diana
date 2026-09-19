@@ -484,9 +484,11 @@
           <p class="repo-preview-desc">{{ repoPreview.manifest.description }}</p>
           <p class="repo-preview-source">
             <a :href="repoPreviewLink" target="_blank" rel="noreferrer">{{ repoPreviewLink }}</a>
+            <span class="hint mono">提交 {{ repoPreview.commit.slice(0, 12) }}</span>
           </p>
           <section class="repo-preview-section">
-            <h3>权限（{{ repoPreview.permissions.length }} 项）</h3>
+            <h3>作者声明的权限（{{ repoPreview.permissions.length }} 项）</h3>
+            <p class="hint">这是插件作者的声明，Diana 目前不据此限制插件，见下方风险说明。</p>
             <ul class="repo-permission-list">
               <li v-for="permission in repoPreview.permissions" :key="permission.id" :class="{ sensitive: permission.sensitive }">
                 <span>{{ permission.label }}</span>
@@ -1040,7 +1042,7 @@ async function confirmRepoInstall(): Promise<void> {
   }
   repoInstallBusy.value = true;
   try {
-    upsert(await installRepoPlugin(url, true));
+    upsert(await installRepoPlugin(url, true, preview.commit));
     toastSuccess(`已安装 ${preview.manifest.name}`);
     repoInstallOpen.value = false;
     await reload();

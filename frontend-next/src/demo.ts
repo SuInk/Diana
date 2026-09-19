@@ -179,12 +179,13 @@ const demoRepoPlugin: PluginState = {
 
 const demoRepoPluginSource = {
   id: "demo.daily-verse", owner: "demo-author", repo: "diana-plugin-daily-verse",
-  ref: "v1.2.0", version: "1.2.0", url: "https://github.com/demo-author/diana-plugin-daily-verse",
+  ref: "v1.2.0", commit: "3f9c1a7e2b4d6f8091a2b3c4d5e6f708192a3b4c", version: "1.2.0", url: "https://github.com/demo-author/diana-plugin-daily-verse",
   installed_at: "2026-09-19T04:00:00Z"
 };
 
 const demoRepoPluginPreview = {
   source: { owner: "demo-author", repo: "diana-plugin-daily-verse", ref: "v1.2.0" },
+  commit: "3f9c1a7e2b4d6f8091a2b3c4d5e6f708192a3b4c",
   manifest: demoRepoPlugin.manifest,
   permissions: [
     { id: "message:write", label: "修改、撤回已发消息", sensitive: true },
@@ -197,7 +198,8 @@ const demoRepoPluginPreview = {
   risk: {
     floating_ref: false,
     warnings: [
-      "第三方插件由仓库作者发布，Diana 不对其行为负责；插件获得的权限在启用期间持续生效。"
+      "第三方插件由仓库作者发布，Diana 不对其行为负责。",
+      "插件以 SKILL.md 指令的形式进入对话上下文；清单里的权限只是作者声明，Diana 不据此限制插件。插件内容可以引导机器人使用它当前已开放的全部工具（例如联网搜索、执行命令、写 GitHub），请只安装信任的作者发布的插件。"
     ]
   }
 };

@@ -229,8 +229,11 @@ type PluginResponse struct {
 	Tasks                []PluginTask      `json:"-"`
 	// FollowUp 让插件在内容发出后，请机器人像真人那样再自然接一句。
 	// 只是一个开关：刚发出的内容已经写进历史，模型从历史里就能看到自己发了什么。
-	FollowUp            bool           `json:"-"`
-	RecallDisclosure    bool           `json:"-"`
+	FollowUp         bool `json:"-"`
+	RecallDisclosure bool `json:"-"`
+	// ThirdParty 标记内容来自第三方插件作者，不是 Diana 查到的事实：它以「第三方插件
+	// 说明」的名义进入对话，不享有插件事实结果的权威地位。
+	ThirdParty          bool           `json:"-"`
 	RecallEvents        []MessageEvent `json:"-"`
 	RecallReferenceTime int64          `json:"-"`
 }
