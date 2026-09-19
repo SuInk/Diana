@@ -42,6 +42,12 @@ func (r *Runtime) SetMessageHistoryStore(store MessageHistoryStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.messageStore = store
+	for _, state := range r.groupPromptSessions {
+		state.mu.Lock()
+		state.invalidated = true
+		state.mu.Unlock()
+	}
+	r.groupPromptSessions = nil
 }
 
 // resolveImageForLLM persists short-lived platform media before encoding it for

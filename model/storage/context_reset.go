@@ -45,6 +45,9 @@ ON CONFLICT(session) DO UPDATE SET generation = generation + 1, reset_at = exclu
 	if _, err := tx.ExecContext(ctx, `UPDATE thread_states SET status = 'cancelled', updated_at = ?, version = version + 1 WHERE session = ? AND status = 'active'`, at.UnixNano(), session); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_prompt_sessions WHERE session = ?`, session); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE memory_items SET status = 'forgotten', updated_at = ? WHERE source_session = ? AND kind = 'thread' AND status = 'active'`, at.Unix(), session); err != nil {
 		return err
 	}

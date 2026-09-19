@@ -1,0 +1,312 @@
+{
+  "date": "2026-09-19",
+  "model": "gpt-5.6-sol",
+  "api_format": "responses",
+  "provider": "configured Sub2API gateway",
+  "data": "synthetic fixtures only",
+  "routing_absent": [
+    {
+      "mode": "legacy_interleaved",
+      "turn": 0,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 6043
+    },
+    {
+      "mode": "legacy_interleaved",
+      "turn": 1,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 3273
+    },
+    {
+      "mode": "legacy_interleaved",
+      "turn": 2,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 5005
+    },
+    {
+      "mode": "legacy_interleaved",
+      "turn": 3,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 2765
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 0,
+      "input_tokens": 10411,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 4995
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 1,
+      "input_tokens": 10411,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 3748
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 2,
+      "input_tokens": 10411,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 3078
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 3,
+      "input_tokens": 10411,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 4123
+    }
+  ],
+  "routing_present": [
+    {
+      "mode": "legacy_interleaved",
+      "turn": 0,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 7943
+    },
+    {
+      "mode": "legacy_interleaved",
+      "turn": 1,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 2486
+    },
+    {
+      "mode": "legacy_interleaved",
+      "turn": 2,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 3318
+    },
+    {
+      "mode": "legacy_interleaved",
+      "turn": 3,
+      "input_tokens": 10413,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 4485
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 0,
+      "input_tokens": 10411,
+      "cached_input_tokens": 0,
+      "output_tokens": 5,
+      "milliseconds": 3502
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 1,
+      "input_tokens": 10411,
+      "cached_input_tokens": 10240,
+      "output_tokens": 5,
+      "milliseconds": 2379
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 2,
+      "input_tokens": 10411,
+      "cached_input_tokens": 10240,
+      "output_tokens": 5,
+      "milliseconds": 3316
+    },
+    {
+      "mode": "persistent_tail",
+      "turn": 3,
+      "input_tokens": 10411,
+      "cached_input_tokens": 10240,
+      "output_tokens": 5,
+      "milliseconds": 4038
+    }
+  ],
+  "tools_restart": [
+    {
+      "request": 1,
+      "input_tokens": 1548,
+      "cached_input_tokens": 0,
+      "cumulative_tool_calls": [
+        "tools.load"
+      ]
+    },
+    {
+      "request": 2,
+      "input_tokens": 1679,
+      "cached_input_tokens": 0,
+      "cumulative_tool_calls": [
+        "tools.load",
+        "fixture_lookup"
+      ]
+    },
+    {
+      "request": 3,
+      "input_tokens": 1748,
+      "cached_input_tokens": 1536,
+      "cumulative_tool_calls": [
+        "tools.load",
+        "fixture_lookup",
+        "agent.finalize"
+      ]
+    },
+    {
+      "request": 4,
+      "input_tokens": 1556,
+      "cached_input_tokens": 0,
+      "cumulative_tool_calls": [
+        "tools.load",
+        "fixture_lookup",
+        "agent.finalize",
+        "fixture_lookup"
+      ]
+    },
+    {
+      "request": 5,
+      "input_tokens": 1625,
+      "cached_input_tokens": 1408,
+      "cumulative_tool_calls": [
+        "tools.load",
+        "fixture_lookup",
+        "agent.finalize",
+        "fixture_lookup",
+        "agent.finalize"
+      ]
+    }
+  ],
+  "main_revalidation_16k": {
+    "context_window_tokens": 16384,
+    "cache_requests": [
+      {
+        "mode": "legacy_interleaved",
+        "turn": 0,
+        "input_tokens": 10413,
+        "cached_input_tokens": 0,
+        "output_tokens": 5,
+        "milliseconds": 2742
+      },
+      {
+        "mode": "legacy_interleaved",
+        "turn": 1,
+        "input_tokens": 10413,
+        "cached_input_tokens": 0,
+        "output_tokens": 5,
+        "milliseconds": 2000
+      },
+      {
+        "mode": "legacy_interleaved",
+        "turn": 2,
+        "input_tokens": 10413,
+        "cached_input_tokens": 0,
+        "output_tokens": 5,
+        "milliseconds": 2109
+      },
+      {
+        "mode": "legacy_interleaved",
+        "turn": 3,
+        "input_tokens": 10413,
+        "cached_input_tokens": 0,
+        "output_tokens": 5,
+        "milliseconds": 2007
+      },
+      {
+        "mode": "persistent_tail",
+        "turn": 0,
+        "input_tokens": 10411,
+        "cached_input_tokens": 0,
+        "output_tokens": 5,
+        "milliseconds": 3439
+      },
+      {
+        "mode": "persistent_tail",
+        "turn": 1,
+        "input_tokens": 10411,
+        "cached_input_tokens": 10240,
+        "output_tokens": 5,
+        "milliseconds": 4460
+      },
+      {
+        "mode": "persistent_tail",
+        "turn": 2,
+        "input_tokens": 10411,
+        "cached_input_tokens": 10240,
+        "output_tokens": 5,
+        "milliseconds": 2636
+      },
+      {
+        "mode": "persistent_tail",
+        "turn": 3,
+        "input_tokens": 10411,
+        "cached_input_tokens": 10240,
+        "output_tokens": 5,
+        "milliseconds": 2726
+      }
+    ],
+    "tool_requests": [
+      {
+        "request": 1,
+        "input_tokens": 1619,
+        "cached_input_tokens": 0,
+        "cumulative_tool_calls": [
+          "tools.load"
+        ]
+      },
+      {
+        "request": 2,
+        "input_tokens": 1767,
+        "cached_input_tokens": 0,
+        "cumulative_tool_calls": [
+          "tools.load",
+          "tools.execute"
+        ]
+      },
+      {
+        "request": 3,
+        "input_tokens": 1851,
+        "cached_input_tokens": 0,
+        "cumulative_tool_calls": [
+          "tools.load",
+          "tools.execute",
+          "agent.finalize"
+        ]
+      },
+      {
+        "request": 4,
+        "input_tokens": 1664,
+        "cached_input_tokens": 0,
+        "cumulative_tool_calls": [
+          "tools.load",
+          "tools.execute",
+          "agent.finalize",
+          "tools.execute"
+        ]
+      },
+      {
+        "request": 5,
+        "input_tokens": 1748,
+        "cached_input_tokens": 0,
+        "cumulative_tool_calls": [
+          "tools.load",
+          "tools.execute",
+          "agent.finalize",
+          "tools.execute",
+          "agent.finalize"
+        ]
+      }
+    ]
+  }
+}

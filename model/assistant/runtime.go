@@ -377,6 +377,8 @@ type Runtime struct {
 	relationshipEvalSem chan struct{}
 	relationshipEvalWG  sync.WaitGroup
 	history             map[string][]MessageEvent
+	groupPromptSessions map[string]*groupPromptSession
+	groupPromptHistory  map[string]groupPromptHistoryBuffer
 	semanticRefCache    map[string]SemanticReferenceCacheRecord
 	agentCarryovers     map[string]agentRunCarryover
 	semanticIndexQueue  chan semanticIndexItem
@@ -3604,18 +3606,27 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		var stableCheckpoint []llm.Message
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
 			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
 			summary, summaryRecompressed = r.fitOlderSummaryToBudget(ctx, summary, summaryBudget, cfg)
+			if promptSession := r.groupPromptSession(event); promptSession != nil {
+				summary = promptSession.rememberCheckpoint(summary)
+			}
 			if summary != "" {
-				messages = append(messages, llm.Message{
+				stableCheckpoint = append(stableCheckpoint, llm.Message{
 					Role:    llm.RoleUser,
 					Content: summaryPrefix + summary,
 					// 摘要已经压到目标配额，请求预算层不要再从中间截断它。
 					Priority:   llm.MessagePrioritySummary,
 					AtomicText: true,
 				})
+			}
+		} else if promptSession := r.groupPromptSession(event); promptSession != nil {
+			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
+			if summary := promptSession.rememberCheckpoint(""); summary != "" {
+				stableCheckpoint = append(stableCheckpoint, llm.Message{Role: llm.RoleUser, Content: summaryPrefix + summary, Priority: llm.MessagePrioritySummary, AtomicText: true})
 			}
 		}
 		turnCandidates := r.replyTurnCandidates(ctx)
@@ -3634,64 +3645,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				cancel()
 			}
 		}
-		historyGroups, recentHistory := historyContextMetadata(replyHistory, event.Time, cfg.BotAccount)
-		for _, historyEvent := range replyHistory {
-			historyKey := messageHistoryDedupeKey(historyEvent)
-			historyGroup := historyGroups[historyKey]
-			historyPriority := llm.MessagePriorityHistory
-			if recentHistory[historyKey] {
-				historyPriority = llm.MessagePriorityRecentHistory
-			}
-			// 上下文只追加同会话的历史用户消息，当前消息本身会在最后单独加入。
-			if historyEvent.MessageID == event.MessageID {
-				continue
-			}
-			if turnMessageIDs[strings.TrimSpace(historyEvent.MessageID)] {
-				continue
-			}
-			// 机器人自己发的错误提示也是它说过的话，照样留在历史里：模型看到「上一轮
-			// 出错了」才能接住「重试一下」。以前按「出错了：」前缀把它们剔掉，前缀还是
-			// 写死的，用户改了 error_reply_prefix 就认不出来了。
-			if strings.TrimSpace(historyEvent.botReply) != "" {
-				messages = append(messages, llm.Message{
-					Role:         llm.RoleAssistant,
-					Content:      historyEvent.botReply,
-					Priority:     historyPriority,
-					ContextGroup: historyGroup,
-				})
-				continue
-			}
-			// Cross-group self messages keep their historical nickname and explicit
-			// identity below; replaying only the text loses the nickname-to-self link.
-			if !historyEvent.crossGroupContext && assistantHistoryEvent(historyEvent, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))) {
-				if botText := strings.TrimSpace(historyPlainText(historyEvent)); botText != "" {
-					messages = append(messages, llm.Message{
-						Role:         llm.RoleAssistant,
-						Content:      botText,
-						Priority:     historyPriority,
-						ContextGroup: historyGroup,
-					})
-				}
-				if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
-					messages = append(messages, llm.Message{
-						Role:         llm.RoleUser,
-						Content:      agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent), cfg),
-						Priority:     historyPriority,
-						ContextGroup: historyGroup,
-					})
-				}
-				continue
-			}
-			historyText := historyPromptTextAt(historyEvent, event.Time, cfg)
-			if directAgentDecision && historicalMediaCount(historyEvent) > 0 {
-				historyText = agentImageHistoryPromptTextWithDescriptions(historyEvent, event.Time, r.historyImageCachedDescriptions(ctx, historyEvent), cfg)
-			}
-			historyMessage := llm.Message{Role: llm.RoleUser, Content: historyText, Priority: historyPriority, ContextGroup: historyGroup}
-			if runtimeLLMMessageEmpty(historyMessage) {
-				continue
-			}
-			messages = append(messages, historyMessage)
-		}
+		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
+		messages = append(messages, stableCheckpoint...)
+		messages = append(messages, stableHistory...)
+		volatile = append(volatile, crossGroupTail...)
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
 		// 显式缓存的供应商（Anthropic）按它写入和读取，自动前缀缓存的供应商忽略。
 		messages = markStablePromptPrefix(messages)
@@ -4127,10 +4084,13 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if carryover, ok := r.agentCarryoverMessage(event); ok {
 			messages = append(messages, carryover)
 		}
+		promptSession := r.groupPromptSession(event)
 		resp, err := agentRunner.Run(ctx, agent.Request{
-			Messages: messages,
-			TraceID:  traceID,
-			Observer: r.agentRunObserver(event),
+			Messages:    messages,
+			TraceID:     traceID,
+			Observer:    r.agentRunObserver(event),
+			LoadedTools: promptSession.loadedTools(),
+			ToolsLoaded: promptSession.rememberTools,
 		})
 		if err != nil {
 			return "", err
@@ -6956,6 +6916,13 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 func (r *Runtime) remember(event MessageEvent) {
 	event = withoutReplyRuntimeState(event)
 	session := sessionKey(event)
+	// Group context lives for a token-budget epoch, not just RecentContextLimit
+	// messages. Keep enough raw events even when there is no durable store.
+	groupLimit := 0
+	if event.Kind == EventKindGroup {
+		cfg := r.effectiveConfigForEvent(event)
+		groupLimit = historyCandidateLimitForBudget(recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg))
+	}
 	var compressed []MessageEvent
 	r.mu.Lock()
 	history := r.history[session]
@@ -6994,6 +6961,30 @@ func (r *Runtime) remember(event MessageEvent) {
 		}
 	}
 	r.history[session] = history
+	if groupLimit > 0 {
+		if r.groupPromptHistory == nil {
+			r.groupPromptHistory = make(map[string]groupPromptHistoryBuffer)
+		}
+		key := groupPromptSessionKey(event)
+		buffer := r.groupPromptHistory[key]
+		buffer.Session = session
+		// Prefer the current event on edits/replays; append only genuinely new IDs.
+		replaced := false
+		for index := range buffer.Events {
+			if event.MessageID != "" && buffer.Events[index].MessageID == event.MessageID {
+				buffer.Events[index] = event
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			buffer.Events = append(buffer.Events, event)
+		}
+		if len(buffer.Events) > groupLimit {
+			buffer.Events = append([]MessageEvent(nil), buffer.Events[len(buffer.Events)-groupLimit:]...)
+		}
+		r.groupPromptHistory[key] = buffer
+	}
 	r.mu.Unlock()
 	r.persistMessageEvent(event)
 	if len(compressed) > 0 && boolValue(cfg.LongTermMemoryEnabled, true) {

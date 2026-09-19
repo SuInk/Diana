@@ -161,6 +161,8 @@ type ContentPart struct {
 }
 
 type GenerateRequest struct {
+	// PromptCacheKey is an opaque stable routing/accounting key, not conversation state.
+	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"`
 	Model           string           `json:"model,omitempty"`
 	Messages        []Message        `json:"messages"`
 	Temperature     *float64         `json:"temperature,omitempty"`
@@ -698,6 +700,12 @@ func validateGenerateRequest(req GenerateRequest) error {
 	for i, msg := range req.Messages {
 		if msg.Role == "" {
 			return fmt.Errorf("llm: messages[%d].role is required", i)
+		}
+	}
+	if req.MaxContextTokens > 0 {
+		inputBudget := InputTokenBudget(req.MaxContextTokens, req.MaxOutputTokens)
+		if estimated := EstimateRequestInputTokens(req); estimated > inputBudget {
+			return fmt.Errorf("llm: fixed prompt and current input require about %d tokens but the input budget is %d; increase max_context_tokens or reduce loaded tool schemas/current input", estimated, inputBudget)
 		}
 	}
 	return nil
