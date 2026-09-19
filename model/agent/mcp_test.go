@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -397,5 +398,20 @@ func TestDeferredMCPDispatchValidatesBeforeSendingRequest(t *testing.T) {
 		if upstreamCalls.Load() != 1 || len(result.Steps) != 4 || !result.Steps[1].Skipped || !result.Steps[2].Skipped || result.Steps[3].Output != "success" {
 			t.Fatalf("calls=%d steps=%#v", upstreamCalls.Load(), result.Steps)
 		}
+	}
+}
+
+// 一次调用的报错只带这次调用期间新增的 stderr，不带进程启动以来的旧输出。
+func TestMCPErrorCarriesStderrWrittenDuringCall(t *testing.T) {
+	stderr := &lockedBuffer{}
+	_, _ = stderr.Write([]byte("startup banner\n"))
+	mark := stderr.written()
+	_, _ = stderr.Write([]byte("panic: boom\n"))
+	err := withMCPStderrSince(errors.New("tools/call failed"), stderr, mark)
+	if !strings.Contains(err.Error(), "panic: boom") || strings.Contains(err.Error(), "startup banner") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := withMCPStderrSince(errors.New("x"), stderr, stderr.written()); got.Error() != "x" {
+		t.Fatalf("没有新输出时不该附带 stderr：%v", got)
 	}
 }
