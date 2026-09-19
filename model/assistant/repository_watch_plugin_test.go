@@ -2166,14 +2166,27 @@ func TestRepositoryWatchPluginHonoursSelectedEventKinds(t *testing.T) {
 		t.Fatalf("PR 提交列表请求了 %d 次，只该为报出来的两个 PR 各拉一次", pullCommitCalls)
 	}
 
-	// 空集合仍然是「全要」：老订阅没存过这个字段，不能被静音。
-	all := repositoryWatchSelection{PullRequests: true, Issues: true}
-	change, err = plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, all, nil)
+	// nil 只兼容旧订阅：历史记录没存过该字段时仍按全选处理。
+	legacy := repositoryWatchSelection{PullRequests: true, Issues: true}
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, legacy, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(change.PullRequests) != 3 || len(change.Issues) != 2 {
-		t.Fatalf("空集合被当成了「一条都不要」：pulls=%d issues=%d", len(change.PullRequests), len(change.Issues))
+		t.Fatalf("旧订阅未按全选兼容：pulls=%d issues=%d", len(change.PullRequests), len(change.Issues))
+	}
+
+	// 显式空数组是用户取消全部勾选，不能再退回全选。
+	none := repositoryWatchSelection{
+		PullRequests: true, Issues: true,
+		PullRequestEvents: []string{}, IssueEvents: []string{},
+	}
+	change, err = plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, none, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(change.PullRequests) != 0 || len(change.Issues) != 0 {
+		t.Fatalf("显式空数组未按全不选处理：pulls=%d issues=%d", len(change.PullRequests), len(change.Issues))
 	}
 }
 
@@ -2182,12 +2195,43 @@ func TestNormalizeRepositoryWatchEvents(t *testing.T) {
 	if err != nil || !slices.Equal(got, []string{"opened", "merged"}) {
 		t.Fatalf("normalize = %v, %v", got, err)
 	}
-	// 全选和没选过存成同一个空集合，回显才不会一个说「全部」一个逐项列。
 	full, err := normalizeRepositoryWatchEvents(repositoryWatchPullEventKinds, repositoryWatchPullEventKinds, "PR ")
-	if err != nil || full != nil {
+	if err != nil || !slices.Equal(full, repositoryWatchPullEventKinds) {
 		t.Fatalf("full selection = %v, %v", full, err)
+	}
+	none, err := normalizeRepositoryWatchEvents([]string{}, repositoryWatchPullEventKinds, "PR ")
+	if err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("empty selection = %#v, %v", none, err)
+	}
+	defaults, err := normalizeRepositoryWatchEvents(nil, repositoryWatchPullEventKinds, "PR ")
+	if err != nil || !slices.Equal(defaults, repositoryWatchPullEventKinds) {
+		t.Fatalf("omitted selection = %v, %v", defaults, err)
 	}
 	if _, err := normalizeRepositoryWatchEvents([]string{"reopened"}, repositoryWatchPullEventKinds, "PR "); err == nil {
 		t.Fatal("PR 没有 reopened 这种动态，应当报错")
+	}
+}
+
+func TestRepositoryWatchEventSelectionJSONPreservesEmpty(t *testing.T) {
+	original := Reminder{
+		WatchPullRequestEvents: []string{},
+		WatchIssueEvents:       []string{"opened"},
+	}
+	body, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored Reminder
+	if err := json.Unmarshal(body, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.WatchPullRequestEvents == nil || len(restored.WatchPullRequestEvents) != 0 {
+		t.Fatalf("显式空数组在持久化后丢失: %s", body)
+	}
+	if got := EffectiveRepositoryWatchPullRequestEvents(nil); !slices.Equal(got, repositoryWatchPullEventKinds) {
+		t.Fatalf("旧订阅回显 = %v", got)
+	}
+	if got := EffectiveRepositoryWatchPullRequestEvents(restored.WatchPullRequestEvents); got == nil || len(got) != 0 {
+		t.Fatalf("显式全不选回显 = %#v", got)
 	}
 }

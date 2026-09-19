@@ -1403,7 +1403,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingEnabledPlatforms,
 				Label:       "启用平台",
-				Description: "勾选的平台会解析链接并进入模型上下文；默认全部启用。",
+				Description: "勾选的平台会解析链接并进入模型上下文；不勾选则全部停用，默认全部启用。",
 				Type:        PluginSettingTypeMultiSelect,
 				Default:     resolverPlatformKeys(),
 				Options:     resolverPlatformOptions(),

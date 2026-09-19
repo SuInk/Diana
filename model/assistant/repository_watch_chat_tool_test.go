@@ -126,9 +126,9 @@ func TestRepositoryWatchChatToolOwnerSeesEverything(t *testing.T) {
 	}
 }
 
-// TestRepositoryWatchEventKindsFromToolClearsBackToAll 传空数组是「改回全部」，
-// 不是「一条都不要」；完全不传才是「别动」。
-func TestRepositoryWatchEventKindsFromToolClearsBackToAll(t *testing.T) {
+// TestRepositoryWatchEventKindsFromToolClearsToNone 传空数组是“全不选”；
+// 完全不传才是“别动”。
+func TestRepositoryWatchEventKindsFromToolClearsToNone(t *testing.T) {
 	current := Reminder{Repository: "acme/demo", WatchPullRequestEvents: []string{"opened"}}
 	update, err := repositoryWatchUpdateFromTool(map[string]any{"pull_request_events": []any{}}, current)
 	if err != nil {
