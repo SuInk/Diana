@@ -162,6 +162,46 @@ for (const plugin of plugins) if (plugin.manifest.id !== "official.open-api") {
   plugin.enabled = !plugin.manifest.default_disabled;
 }
 
+// 演示用第三方仓库插件：插件页「从 GitHub 安装」的预览与安装都走它。
+const demoRepoPlugin: PluginState = {
+  manifest: {
+    id: "demo.daily-verse", name: "每日一句", version: "1.2.0",
+    description: "每天往群里发一句 curated 的格言或冷知识，支持自定义来源开关。",
+    official: false, built_in: false,
+    permissions: ["message:read", "message:send", "network:https", "task:persistent"],
+    settings: [
+      { key: "send_hour", label: "发送时间（时）", type: "number", default: 9, min: 0, max: 23, unit: "时" },
+      { key: "source_token", label: "来源 API Token", type: "string", default: "", secret: true, description: "自建来源服务需要；留空用内置来源。" }
+    ]
+  },
+  installed: false, enabled: true
+};
+
+const demoRepoPluginSource = {
+  id: "demo.daily-verse", owner: "demo-author", repo: "diana-plugin-daily-verse",
+  ref: "v1.2.0", version: "1.2.0", url: "https://github.com/demo-author/diana-plugin-daily-verse",
+  installed_at: "2026-09-19T04:00:00Z"
+};
+
+const demoRepoPluginPreview = {
+  source: { owner: "demo-author", repo: "diana-plugin-daily-verse", ref: "v1.2.0" },
+  manifest: demoRepoPlugin.manifest,
+  permissions: [
+    { id: "message:write", label: "修改、撤回已发消息", sensitive: true },
+    { id: "message:read", label: "读取消息内容与历史" },
+    { id: "message:send", label: "主动发送消息" },
+    { id: "network:https", label: "发起 HTTPS 网络请求" },
+    { id: "task:persistent", label: "创建持久后台任务" }
+  ],
+  files: ["SKILL.md", "prompts/"],
+  risk: {
+    floating_ref: false,
+    warnings: [
+      "第三方插件由仓库作者发布，Diana 不对其行为负责；插件获得的权限在启用期间持续生效。"
+    ]
+  }
+};
+
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
     <rect width="128" height="128" rx="24" fill="#7057d9"/>
@@ -479,6 +519,8 @@ let demoApiKeys: OpenAPIKey[] = [
 
 let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
 
+let demoMediaBaseURL = { base_url: "", source: "auto" };
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -493,6 +535,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       demoMediaCachePolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
     }
     return json(demoMediaCachePolicy);
+  }
+
+  if (path === "/api/system/media-base-url") {
+    if (method === "POST") {
+      demoMediaBaseURL = { base_url: String(body.base_url ?? ""), source: "database" };
+    }
+    return json(demoMediaBaseURL);
   }
 
   if (path === "/api/auth/status") return json({ auth_required: true, authenticated: true, username: "demo" });
@@ -648,6 +697,29 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       issue: { number: 49, title, state: "open", url: "https://github.com/SuInk/Diana/issues/49" }
     }, 201);
   }
+  if (path === "/api/assistant/plugins/repo/preview" && method === "POST") {
+    if (!String(body.url ?? "").includes("github.com")) return json({ error: "只支持 github.com 仓库链接" }, 400);
+    return json(demoRepoPluginPreview);
+  }
+  if (path === "/api/assistant/plugins/repo/install" && method === "POST") {
+    if (!body.accept_risk) return json({ error: "未确认安装风险" }, 400);
+    let plugin = plugins.find((item) => item.manifest.id === demoRepoPlugin.manifest.id);
+    if (!plugin) {
+      plugin = { ...demoRepoPlugin, profile_enabled: Object.fromEntries((assistantConfig.profiles ?? []).map((profile) => [profile.id!, true])) };
+      plugins = [...plugins, plugin];
+      demoStatus.plugins = plugins;
+    }
+    plugin.installed = true;
+    plugin.repo_source = demoRepoPluginSource;
+    return json(demoPluginForProfile(plugin, ""));
+  }
+  if (path.startsWith("/api/assistant/plugins/repo/update/") && method === "POST") {
+    const id = decodeURIComponent(path.slice("/api/assistant/plugins/repo/update/".length));
+    const plugin = plugins.find((item) => item.manifest.id === id);
+    if (!plugin) return json({ error: "演示插件不存在或不是仓库插件" }, 404);
+    if (!body.accept_risk) return json({ error: "未确认安装风险" }, 400);
+    return json(demoPluginForProfile(plugin, ""));
+  }
   const pluginMatch = path.match(/^\/api\/assistant\/plugins\/([^/]+)\/(install|uninstall|enabled|settings)$/);
   if (pluginMatch) {
     const plugin = plugins.find((item) => item.manifest.id === decodeURIComponent(pluginMatch[1]));
@@ -655,7 +727,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (pluginMatch[2] === "enabled" && plugin.manifest.id !== "official.open-api" && !url.searchParams.get("profile")) return json({ error: "请选择具体机器人" }, 400);
     if (body.inherit) return json({ error: "插件配置不再支持继承" }, 400);
     if (pluginMatch[2] === "install") plugin.installed = true;
-    if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; }
+    if (pluginMatch[2] === "uninstall") { plugin.installed = false; plugin.enabled = false; delete plugin.repo_source; }
     if (pluginMatch[2] === "enabled") {
       const profile = url.searchParams.get("profile") ?? "";
       if (profile && plugin.manifest.id !== "official.open-api") {

@@ -198,7 +198,7 @@
           <div v-else-if="botForm.onebot_transport === 'forward_ws'" class="field wide">
             <label for="wizard-onebot-ws">OneBot WS 服务地址</label>
             <input id="wizard-onebot-ws" v-model="botForm.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700/" />
-            <span class="hint">使用同时提供 API 和事件的通用 WS 地址，Diana 主动连接并自动重连。</span>
+            <span class="hint">使用同时提供 API 和事件的通用 WS 地址，Diana 主动连接并自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机部署稍后可在「设置 → 媒体与文件」页配置媒体回源基址。</span>
           </div>
           <template v-else>
             <div class="field wide">
@@ -211,6 +211,7 @@
               <input id="wizard-onebot-secret" v-model="botForm.onebot_http_secret" class="input" type="password" autocomplete="off" placeholder="与接入端的上报 secret 一致；留空沿用已保存值" />
             </div>
           </template>
+          <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
           <div class="field">
             <label for="wizard-owner">主人账号（可选）</label>
             <input
@@ -460,6 +461,43 @@ const connected = computed(() => stream.status?.channel.connected ?? false);
 const selfID = computed(() => stream.status?.channel.self_id ?? "");
 const channelError = computed(() => stream.status?.channel.last_error ?? "");
 const wsEndpoint = computed(() => botForm.value.onebot_reverse_ws_endpoint.trim());
+
+function endpointHostname(endpoint: string): string {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return "";
+  try {
+    return (new URL(trimmed).hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isLocalOriginHost(host: string): boolean {
+  return host === "localhost" || host.endsWith(".localhost") ||
+    host === "0.0.0.0" || host === "::" || host === "::1" ||
+    host.startsWith("127.") || host === "host.docker.internal";
+}
+
+// 正向 ws / HTTP 接入下文件/媒体靠接入端回源 Diana：后端按所填地址推主机名。
+// 回环或 docker 内网名多半没事；另一台主机要在服务端 config.yaml 配置
+// storage.local_media_base_url，这里直接警告而不是只留一行灰字。纯函数，
+// 与 AssistantView 保持一致，便于单测。
+function oneBotMediaOriginWarningText(transport: string, wsEndpoint: string, httpEndpoint: string, currentHost: string): string {
+  if (transport === "reverse_ws") return "";
+  const host = endpointHostname(transport === "forward_ws" ? wsEndpoint : httpEndpoint);
+  if (!host) return "";
+  if (isLocalOriginHost(host) || host === (currentHost || "").replace(/^\[|\]$/g, "").toLowerCase()) return "";
+  return `接入端将按 ${host} 回源拉取文件/媒体（端口为 Diana 的 Web 端口）。若该主机访问不到 Diana，文件发送会失败，请在「设置 → 媒体与文件」页配置媒体回源基址。`;
+}
+
+const oneBotMediaOriginWarning = computed(() =>
+  oneBotMediaOriginWarningText(
+    botForm.value.onebot_transport,
+    botForm.value.onebot_ws_endpoint ?? "",
+    botForm.value.onebot_http_url ?? "",
+    window.location.hostname || ""
+  )
+);
 
 const llmSummary = computed(() => {
   const config = savedLLM.value;

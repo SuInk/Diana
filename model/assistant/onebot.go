@@ -103,6 +103,39 @@ func NewOneBotChannel(cfg OneBotConfig) *OneBotChannel {
 	}
 }
 
+// OneBotEndpointOrigin 从 OneBot 接入端地址解析出 http(s) 源（协议 + 主机名，
+// 不含端口和路径）：ws→http、wss→https，http/https 原样。正向 ws / HTTP 接入
+// 没有入站握手，媒体回源地址推断不了「对端用哪个地址连到了本服务」，只能以
+// 配置里这个「本服务连得通接入端」的主机回推——同机或容器（host.docker.internal）
+// 部署时它同样回源得到本服务。端口由调用方按本服务实际监听端口补；解析不出
+// 主机名时返回空串。
+func OneBotEndpointOrigin(endpoint string) string {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	switch scheme {
+	case "ws":
+		scheme = "http"
+	case "wss":
+		scheme = "https"
+	case "http", "https":
+	default:
+		return ""
+	}
+	return scheme + "://" + parsed.Hostname()
+}
+
+// ConnectionOrigin 返回按正向 ws 配置地址推导的 http(s) 源（不含端口）。
+// 正向 ws 是 Diana 主动外连，没有入站握手可查，这里退而用接入端地址回推；
+// 与反向 ws 的同名方法同一约定，供 LocalMediaStore 的 origin provider 串在同
+// 一条兜底链里。
+func (c *OneBotChannel) ConnectionOrigin() string {
+	// cfg 构造后不再变更（Connect 同样不加锁直读），这里直接读。
+	return OneBotEndpointOrigin(c.cfg.Endpoint)
+}
+
 // Connect 主动连接 OneBot WebSocket 并读取事件。
 func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error {
 	if strings.TrimSpace(c.cfg.Endpoint) == "" {

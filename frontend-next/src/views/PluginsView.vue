@@ -64,6 +64,10 @@
           <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
           刷新
         </button>
+        <button class="btn primary" type="button" @click="openRepoInstall()">
+          <Download :size="15" aria-hidden="true" />
+          安装插件
+        </button>
       </div>
     </header>
 
@@ -162,6 +166,17 @@
               >
                 <SlidersHorizontal :size="14" aria-hidden="true" />
                 设置
+              </button>
+              <!-- 更新与安装同一套确认流程：重新预览权限、重新勾风险，不静默升级 -->
+              <button
+                v-if="plugin.repo_source"
+                class="btn small"
+                type="button"
+                :disabled="busyID === plugin.manifest.id"
+                @click="openRepoInstall(repoInstallLink(plugin))"
+              >
+                <RefreshCw :size="14" aria-hidden="true" />
+                更新
               </button>
               <button
                 v-if="!plugin.manifest.built_in"
@@ -443,9 +458,180 @@
         <button class="btn primary" type="button" @click="dependenciesTarget = null">完成</button>
       </template>
     </Modal>
+
+    <Modal v-if="repoInstallOpen" title="从 GitHub 安装插件" @close="closeRepoInstall">
+      <div class="repo-install">
+        <div class="field">
+          <label for="repo-plugin-url">GitHub 仓库链接</label>
+          <input
+            id="repo-plugin-url"
+            v-model="repoInstallURL"
+            class="input"
+            type="url"
+            placeholder="github.com/作者/仓库，或 …/tree/v1.0.0 固定版本"
+            :disabled="repoCheckBusy || !!repoPreview"
+            @keydown.enter="checkRepoPlugin"
+          />
+          <p class="hint">默认安装默认分支最新提交；用 /tree/版本tag 的链接可以固定版本、复现安装。</p>
+        </div>
+        <p v-if="repoInstallError" class="repo-install-error" role="alert">{{ repoInstallError }}</p>
+        <div v-if="repoPreview" class="repo-preview">
+          <div class="repo-preview-head">
+            <strong>{{ repoPreview.manifest.name }}</strong>
+            <span class="badge mono">v{{ repoPreview.manifest.version }}</span>
+            <span class="badge warn">第三方</span>
+          </div>
+          <p class="repo-preview-desc">{{ repoPreview.manifest.description }}</p>
+          <p class="repo-preview-source">
+            <a :href="repoPreviewLink" target="_blank" rel="noreferrer">{{ repoPreviewLink }}</a>
+          </p>
+          <section class="repo-preview-section">
+            <h3>权限（{{ repoPreview.permissions.length }} 项）</h3>
+            <ul class="repo-permission-list">
+              <li v-for="permission in repoPreview.permissions" :key="permission.id" :class="{ sensitive: permission.sensitive }">
+                <span>{{ permission.label }}</span>
+                <span v-if="permission.sensitive" class="badge warn">高敏感</span>
+                <code>{{ permission.id }}</code>
+              </li>
+            </ul>
+          </section>
+          <section v-if="repoPreview.manifest.settings?.length" class="repo-preview-section">
+            <h3>设置项（{{ repoPreview.manifest.settings.length }} 项）</h3>
+            <ul class="repo-setting-list">
+              <li v-for="spec in repoPreview.manifest.settings" :key="spec.key">
+                <span>{{ spec.label }}</span>
+                <span v-if="spec.secret" class="badge warn">凭据</span>
+              </li>
+            </ul>
+            <p class="hint">凭据类设置安装后请到插件设置里配置；读接口不回传明文。</p>
+          </section>
+          <ul class="repo-risk-list">
+            <li v-for="(warning, index) in repoPreview.risk.warnings" :key="index">{{ warning }}</li>
+          </ul>
+          <!-- 默认不勾选：安装第三方插件是显式信任动作，不能替用户做决定 -->
+          <label class="repo-risk-ack">
+            <input v-model="repoRiskAccepted" type="checkbox" />
+            <span>我已了解上述风险，确认安装此第三方插件</span>
+          </label>
+        </div>
+      </div>
+      <template #footer>
+        <template v-if="repoPreview">
+          <button class="btn" type="button" :disabled="repoInstallBusy" @click="resetRepoPreview">返回</button>
+          <button class="btn primary" type="button" :disabled="!repoRiskAccepted || repoInstallBusy" @click="confirmRepoInstall">
+            {{ repoInstallBusy ? "安装中…" : "确认安装" }}
+          </button>
+        </template>
+        <template v-else>
+          <button class="btn" type="button" :disabled="repoCheckBusy" @click="closeRepoInstall">取消</button>
+          <button class="btn primary" type="button" :disabled="repoCheckBusy || !repoInstallURL.trim()" @click="checkRepoPlugin">
+            {{ repoCheckBusy ? "检查中…" : "检查" }}
+          </button>
+        </template>
+      </template>
+    </Modal>
   </div>
   </div>
 </template>
+
+<style scoped>
+.repo-install-error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--danger-soft, rgba(220, 38, 38, 0.08));
+  color: var(--danger, #dc2626);
+  font-size: 13px;
+}
+
+.repo-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.repo-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+
+.repo-preview-desc {
+  margin: 0;
+  color: var(--text-secondary, #666);
+  font-size: 13px;
+}
+
+.repo-preview-source {
+  margin: 0;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.repo-preview-section h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.repo-permission-list,
+.repo-setting-list,
+.repo-risk-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.repo-permission-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.08));
+}
+
+.repo-permission-list li.sensitive {
+  outline: 1px solid var(--danger, #dc2626);
+}
+
+.repo-permission-list code {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+}
+
+.repo-setting-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.repo-risk-list {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--warning-soft, rgba(217, 119, 6, 0.1));
+  color: var(--text-secondary, #666);
+}
+
+.repo-risk-list li + li {
+  margin-top: 4px;
+}
+
+.repo-risk-ack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+</style>
 
 <script setup lang="ts">
 import { useConfigurationRefresh } from "../configuration-sync";
@@ -460,11 +646,13 @@ async function changeExtensionTab(value:'plugins'|'skill'|'mcp') {
   if (settingsTarget.value) { await closeSettings(); if (settingsTarget.value) return; }
   extensionTab.value=value;
 }
-import { ArrowRight, ChevronDown, ExternalLink, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
+import { ArrowRight, ChevronDown, Download, ExternalLink, LayoutGrid, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
+  installRepoPlugin,
   installResolverDependency,
   listPlugins,
+  previewRepoPlugin,
   setPluginEnabled,
   uninstallPlugin,
   updatePluginSettings,
@@ -473,6 +661,7 @@ import {
   listBotGroups,
   type PluginSettingSpec,
   type PluginState,
+  type RepoPluginPreview,
   type ResolverDependency,
   type BotGroupSummary,
   type MusicConnectionStatus
@@ -776,6 +965,89 @@ async function uninstall(plugin: PluginState): Promise<void> {
     toastError(error instanceof Error ? error.message : "卸载失败");
   } finally {
     busyID.value = "";
+  }
+}
+
+// 从 GitHub 安装第三方插件：粘贴链接 → 检查（拉清单渲染权限与风险）→
+// 勾选「我已了解风险」→ 确认安装。风险勾选框默认不勾，确认按钮随勾选状态解锁。
+const repoInstallOpen = ref(false);
+const repoInstallURL = ref("");
+const repoPreview = ref<RepoPluginPreview | null>(null);
+const repoInstallError = ref("");
+const repoCheckBusy = ref(false);
+const repoInstallBusy = ref(false);
+const repoRiskAccepted = ref(false);
+
+const repoPreviewLink = computed(() => {
+  const source = repoPreview.value?.source;
+  if (!source) {
+    return "";
+  }
+  return `https://github.com/${source.owner}/${source.repo}${source.ref ? `/tree/${source.ref}` : ""}`;
+});
+
+function openRepoInstall(url = ""): void {
+  repoInstallOpen.value = true;
+  repoInstallURL.value = url;
+  resetRepoPreview();
+}
+
+// 第三方插件的更新链接：固定 ref 拼回安装时的形态，复现安装。
+function repoInstallLink(plugin: PluginState): string {
+  const source = plugin.repo_source;
+  if (!source) {
+    return "";
+  }
+  return `${source.url}${source.ref ? `/tree/${source.ref}` : ""}`;
+}
+
+function closeRepoInstall(): void {
+  if (repoInstallBusy.value || repoCheckBusy.value) {
+    return;
+  }
+  repoInstallOpen.value = false;
+}
+
+function resetRepoPreview(): void {
+  repoPreview.value = null;
+  repoInstallError.value = "";
+  repoRiskAccepted.value = false;
+}
+
+async function checkRepoPlugin(): Promise<void> {
+  const url = repoInstallURL.value.trim();
+  if (!url) {
+    return;
+  }
+  repoCheckBusy.value = true;
+  repoInstallError.value = "";
+  try {
+    repoPreview.value = await previewRepoPlugin(url);
+    repoRiskAccepted.value = false;
+  } catch (error) {
+    repoPreview.value = null;
+    repoInstallError.value = error instanceof Error ? error.message : "检查失败";
+  } finally {
+    repoCheckBusy.value = false;
+  }
+}
+
+async function confirmRepoInstall(): Promise<void> {
+  const url = repoInstallURL.value.trim();
+  const preview = repoPreview.value;
+  if (!url || !preview || !repoRiskAccepted.value) {
+    return;
+  }
+  repoInstallBusy.value = true;
+  try {
+    upsert(await installRepoPlugin(url, true));
+    toastSuccess(`已安装 ${preview.manifest.name}`);
+    repoInstallOpen.value = false;
+    await reload();
+  } catch (error) {
+    repoInstallError.value = error instanceof Error ? error.message : "安装失败";
+  } finally {
+    repoInstallBusy.value = false;
   }
 }
 

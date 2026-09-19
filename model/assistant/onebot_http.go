@@ -156,6 +156,17 @@ func (c *OneBotHTTPChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	return sendOneBotMessage(ctx, msg, c.CallAPI)
 }
 
+// ConnectionOrigin 返回按 HTTP API 地址推导的 http(s) 源（不含端口）。HTTP 接入
+// 的事件上报是裸 POST，不经过反向 ws 握手，内嵌的握手版 ConnectionOrigin 永远为
+// 空；这里改用配置地址回推，与正向 ws 同一约定，供媒体回源地址兜底链使用。
+// cfg 只在 SetConfig 里整体替换，读侧拿 mu 读锁即可。
+func (c *OneBotHTTPChannel) ConnectionOrigin() string {
+	c.mu.RLock()
+	cfg := c.cfg
+	c.mu.RUnlock()
+	return OneBotEndpointOrigin(cfg.Endpoint)
+}
+
 func (c *OneBotHTTPChannel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
