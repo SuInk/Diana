@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	dianaHistoryImagesToolName      = "diana.history_media"
+	dianaHistoryImagesToolName      = "history_media"
 	maximumHistoryImagesPerToolCall = 8
 )
 

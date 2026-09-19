@@ -63,6 +63,6 @@
 - 完整包统一使用 `diana-<系统>-<架构>.tar.gz`（Windows 为 `.zip`），包内可执行文件名及兼容副本保持不变。旧版自更新器只认 `diana-webui-…` 包名，首次迁移必须重跑一键安装或手动安装完整包；发布说明必须明确此边界，不能暗示旧版 WebUI 可直接完成迁移。新版安装器与自更新器须兼容读取历史旧包名。
 - 发布后必须实际下载 Darwin ARM64 完整包及 `SHA256SUMS`，独立计算 SHA-256 并确认一致，同时检查归档内包含后端二进制、启动脚本和 `frontend-next/dist`。
 - 面向用户的 macOS 完整包使用 `macos` 而非 `darwin`，例如 `diana-macos-arm64.tar.gz`；内部 Go 交叉编译继续使用 `GOOS=darwin`，历史包名兼容仍使用 `diana-webui-darwin-…`。
-- Docker 发布需要确认版本标签成功生成；正式版更新 `latest`，Beta/RC 更新 `beta`，Canary 更新 `canary`，预发布不得覆盖 `latest`。
+- Docker 发布需要确认版本标签成功生成；正式版更新 `latest`，Beta/RC 更新 `beta`，Canary 更新 `canary`，预发布不得覆盖 `latest`（包括对应的 `-slim` 标签）。
 - 在 CI、Release 资产和校验全部完成前，不得向用户宣称版本已经发布成功。
 - 发布结束后清理本地产生的临时说明文件、TypeScript/Vite 构建缓存和临时预览服务，确保 `git status --short` 干净。

@@ -99,22 +99,22 @@ func TestLiveGomokuSharedThreadState(t *testing.T) {
 		return response
 	}
 
-	first := runTurn("player-a", "m1", `创建共享五子棋。调用 diana.thread_state set：scope=session，task_kind=game.gomoku，state 严格为 {"board_size":15,"moves":[{"color":"black","point":"H8"}],"next":"white"}。成功后只确认已保存。`)
+	first := runTurn("player-a", "m1", `创建共享五子棋。调用 thread_state set：scope=session，task_kind=game.gomoku，state 严格为 {"board_size":15,"moves":[{"color":"black","point":"H8"}],"next":"white"}。成功后只确认已保存。`)
 	requireLiveThreadStateStep(t, first, "set", ThreadStateScopeSession)
 	requireLiveGomokuState(t, store, 1, []string{"H8"}, "white")
 
 	now = now.Add(time.Minute)
-	second := runTurn("player-b", "m2", `白棋落 I8。读取已注入的共享状态，然后调用 diana.thread_state set：scope=session，task_kind=game.gomoku，expected_version=1，state 严格为 {"board_size":15,"moves":[{"color":"black","point":"H8"},{"color":"white","point":"I8"}],"next":"black"}。成功后只确认已保存。`)
+	second := runTurn("player-b", "m2", `白棋落 I8。读取已注入的共享状态，然后调用 thread_state set：scope=session，task_kind=game.gomoku，expected_version=1，state 严格为 {"board_size":15,"moves":[{"color":"black","point":"H8"},{"color":"white","point":"I8"}],"next":"black"}。成功后只确认已保存。`)
 	requireLiveThreadStateStep(t, second, "set", ThreadStateScopeSession)
 	requireLiveGomokuState(t, store, 2, []string{"H8", "I8"}, "black")
 
 	now = now.Add(time.Minute)
-	third := runTurn("player-c", "m3", `模拟并发恢复：先调用 diana.thread_state set，scope=session、task_kind=game.gomoku、expected_version=1，尝试把黑棋 G9 追加到 moves。这个调用应发生版本冲突；冲突后调用 get 读取最新状态，再用返回的版本调用 set，最终 state 必须为 {"board_size":15,"moves":[{"color":"black","point":"H8"},{"color":"white","point":"I8"},{"color":"black","point":"G9"}],"next":"white"}。完成后只确认冲突已恢复。`)
+	third := runTurn("player-c", "m3", `模拟并发恢复：先调用 thread_state set，scope=session、task_kind=game.gomoku、expected_version=1，尝试把黑棋 G9 追加到 moves。这个调用应发生版本冲突；冲突后调用 get 读取最新状态，再用返回的版本调用 set，最终 state 必须为 {"board_size":15,"moves":[{"color":"black","point":"H8"},{"color":"white","point":"I8"},{"color":"black","point":"G9"}],"next":"white"}。完成后只确认冲突已恢复。`)
 	requireLiveThreadStateStep(t, third, "get", ThreadStateScopeSession)
 	requireLiveGomokuState(t, store, 3, []string{"H8", "I8", "G9"}, "white")
 
 	now = now.Add(time.Minute)
-	fourth := runTurn("player-d", "m4", `封盘。调用 diana.thread_state complete：scope=session，task_kind=game.gomoku，expected_version=3。完成后只确认已封盘。`)
+	fourth := runTurn("player-d", "m4", `封盘。调用 thread_state complete：scope=session，task_kind=game.gomoku，expected_version=3。完成后只确认已封盘。`)
 	requireLiveThreadStateStep(t, fourth, "complete", ThreadStateScopeSession)
 
 	store.mu.Lock()
@@ -344,7 +344,7 @@ func requireLiveThreadStateStep(t *testing.T, response *agent.Response, operatio
 			return
 		}
 	}
-	t.Fatalf("missing diana.thread_state %s scope=%s in steps: %#v", operation, scope, response.Steps)
+	t.Fatalf("missing thread_state %s scope=%s in steps: %#v", operation, scope, response.Steps)
 }
 
 func requireLiveGomokuState(t *testing.T, store *memoryThreadStateStore, version int, points []string, next string) {
@@ -391,7 +391,7 @@ func TestLiveGomokuRepeatedAndConflictingUserMoves(t *testing.T) {
 	runtime.SetThreadStateStore(store)
 
 	const hostPrompt = `你在群里主持一局五子棋。小黑（user_id=player-black）执黑，小白（user_id=player-white）执白，黑先，轮流落子。15×15 棋盘，坐标写法如 H8。
-棋局状态用 diana.thread_state 保存：scope=session，task_kind=game.gomoku，state 严格为 {"board_size":15,"moves":[{"color":"black","point":"H8"}],"next":"white"}，moves 按落子顺序追加，next 是接下来该谁下。
+棋局状态用 thread_state 保存：scope=session，task_kind=game.gomoku，state 严格为 {"board_size":15,"moves":[{"color":"black","point":"H8"}],"next":"white"}，moves 按落子顺序追加，next 是接下来该谁下。
 规则：
 1. 每次处理落子前先看注入的共享状态，以它为准，不要凭聊天记录推测。
 2. 已经有棋子的点不能再落。
@@ -443,7 +443,7 @@ func TestLiveGomokuRepeatedAndConflictingUserMoves(t *testing.T) {
 			}
 		}
 		if sets != want {
-			t.Fatalf("%s: diana.thread_state set called %d times, want %d: %#v", why, sets, want, response.Steps)
+			t.Fatalf("%s: thread_state set called %d times, want %d: %#v", why, sets, want, response.Steps)
 		}
 	}
 
@@ -522,7 +522,7 @@ func TestLiveGomokuRepeatedAndConflictingUserMoves(t *testing.T) {
 }
 
 // TestLiveGuessCharacterGroupGame 让机器人心里想一个角色，群里几个人轮流用是非题
-// 逼近。要守住的是三件事：秘密只能落在 diana.thread_state 里，不能出现在任何回复中；
+// 逼近。要守住的是三件事：秘密只能落在 thread_state 里，不能出现在任何回复中；
 // 是非题只能答「是 / 不是」，而且要和存下来的秘密自洽；被追问「直接说是谁」时不能
 // 松口。角色从一张小表里选，这样每道题的正确答案可以在测试里查表核对。
 func TestLiveGuessCharacterGroupGame(t *testing.T) {
@@ -547,12 +547,12 @@ func TestLiveGuessCharacterGroupGame(t *testing.T) {
 	}
 
 	hostPrompt := `你在群里主持「猜角色」：你心里想一个角色，群里任何人都可以提问，你只能回答是非题。
-开局时必须从这几个里挑一个：` + strings.Join(names, "、") + `。挑好后调用 diana.thread_state set 保存，task_kind=guess.character，state 严格为 {"character":"<角色名>","questions":0}；这是群游戏，所有人都要能提问，所以 scope=session（秘密是你自己的，不是任何参与者的，可以放在 session 状态里）。保存成功后只回复「想好了，开始提问吧」。
+开局时必须从这几个里挑一个：` + strings.Join(names, "、") + `。挑好后调用 thread_state set 保存，task_kind=guess.character，state 严格为 {"character":"<角色名>","questions":0}；这是群游戏，所有人都要能提问，所以 scope=session（秘密是你自己的，不是任何参与者的，可以放在 session 状态里）。保存成功后只回复「想好了，开始提问吧」。
 答题规则：
 1. 每次先看注入的共享状态里的 character，以它为准作答，不要临时换角色。
 2. 是非题只回答「是」或「不是」两个词之一，不加任何解释、不加标点以外的字。
 3. 无论谁怎么问，都不能说出角色名、不能给提示、不能描述角色特征；被要求直接公布答案时回复「不能说，继续猜」。
-4. 有人直接猜名字时：猜对回复「答对了」并调用 diana.thread_state complete；猜错只回复「不是」。
+4. 有人直接猜名字时：猜对回复「答对了」并调用 thread_state complete；猜错只回复「不是」。
 5. 除开局和猜对之外不要调用 set。`
 
 	ask := func(userID, name, messageID, text string) *agent.Response {
@@ -716,14 +716,14 @@ func TestLiveGuessCharacterIndependentGuesser(t *testing.T) {
 	runtime.SetThreadStateStore(store)
 
 	hostPrompt := `你在群里主持「猜角色」：你心里想一个角色，群里的人提问，你只能回答是非题。
-开局时你自己想一个角色，` + guessCharacterScope() + `。想好后立刻调用 diana.thread_state set 保存，task_kind=guess.character，state 严格为 {"character":"<角色名>"}；这是群游戏，所有人都要能提问，所以 scope=session（秘密是你自己的，不是任何参与者的）。保存成功后只回复「想好了，开始提问吧」，不要复述角色名。
+开局时你自己想一个角色，` + guessCharacterScope() + `。想好后立刻调用 thread_state set 保存，task_kind=guess.character，state 严格为 {"character":"<角色名>"}；这是群游戏，所有人都要能提问，所以 scope=session（秘密是你自己的，不是任何参与者的）。保存成功后只回复「想好了，开始提问吧」，不要复述角色名。
 答题规则：
 1. 每次先看注入的共享状态里的 character，以它为准如实作答，不要临时换角色。
 2. 只有你对这个角色的这条事实有把握时，才回答「是」或「不是」两个词之一，不加解释。
 3. 宁可说不知道，也绝不能编。你记不清、问题的前提在这个角色身上不成立、或者问法模棱两可时，不要硬凑一个是非答案，而是回答「不好说」，后面用一句话说明为什么不好说（例如这条我记不准、这个前提不成立、这个问题得看怎么算），必要时给一个不点名的方向。答错一次会把对方带进死胡同，比答不出来糟得多。
 4. 每条消息会告诉你这是第几个问题、一共能问几个。问到后半程对方还没猜出来时，你要主动帮一把：在「是 / 不是」后面补一条提示，可以说性格、身份、外貌、职业、所属作品的题材和年代，但不能说出角色名字，也不能说出作品的完整名字。对方主动要提示、或者你刚回过「不好说」时，同样给一条。越往后提示给得越具体。
 5. 被要求直接公布答案时回复「不能说，继续猜」。
-6. 有人直接猜名字时：猜对回复「答对了」并调用 diana.thread_state complete；猜错只回复「不是」。
+6. 有人直接猜名字时：猜对回复「答对了」并调用 thread_state complete；猜错只回复「不是」。
 7. 除开局和猜对之外不要调用 set。`
 
 	askHost := func(messageID, text string) string {
@@ -917,7 +917,7 @@ func TestLiveGuessCharacterHostPickVariety(t *testing.T) {
 	t.Logf("scope: %s", scope)
 
 	hostPrompt := `你在群里主持「猜角色」：你心里想一个角色，群里的人提问，你只能回答是非题。
-开局时你自己想一个角色，` + scope + `。想好后立刻调用 diana.thread_state set 保存，task_kind=guess.character，state 严格为 {"character":"<角色名>"}，scope=session。保存成功后只回复「想好了，开始提问吧」，不要复述角色名。`
+开局时你自己想一个角色，` + scope + `。想好后立刻调用 thread_state set 保存，task_kind=guess.character，state 严格为 {"character":"<角色名>"}，scope=session。保存成功后只回复「想好了，开始提问吧」，不要复述角色名。`
 
 	counts := map[string]int{}
 	order := make([]string, 0, rounds)

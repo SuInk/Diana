@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	dianaChatHistoryToolName        = "diana.chat_history"
+	dianaChatHistoryToolName        = "chat_history"
 	defaultChatHistoryRecentLimit   = 20
 	maximumChatHistoryResultLimit   = 50
 	defaultChatHistoryBefore        = 10

@@ -18,7 +18,7 @@ func TestRunnerPreservesSupportedClaimWhenAnotherIsUnconfirmed(t *testing.T) {
 	})
 	tool := &recordingSearchTool{output: string(searchResult)}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"verify identity","claims":[{"id":"identity","statement":"实体身份是否成立"},{"id":"local_state","statement":"指定条件下状态如何"}],"claim_ids":["identity"]}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"verify identity","claims":[{"id":"identity","statement":"实体身份是否成立"},{"id":"local_state","statement":"指定条件下状态如何"}],"claim_ids":["identity"]}}`,
 		`{"action":"final","content":"已确认实体身份（来源：https://source.example/record）。指定条件下的状态尚未确认。","claims":[{"id":"identity","status":"supported","summary":"来源确认了实体身份","evidence":[{"url":"https://source.example/record","relation":"supports","source_type":"official_record","distance":"direct","strength":"high"}]},{"id":"local_state","status":"not_searched","summary":"尚未检索"}]}`,
 	}}
 	var events []RunEvent
@@ -60,7 +60,7 @@ func TestRunnerUnwrapsReplyCompatibilityJSONAfterSearch(t *testing.T) {
 		"2. 江西常见拌粉、炒粉和汤粉。[diana-line]" +
 		"3. 两省内部都有很多地方流派，不能用单一口味概括。"
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"湖南米粉 江西米粉 区别"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"湖南米粉 江西米粉 区别"}}`,
 		`{"reply":"` + completeReply + `"}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
@@ -83,7 +83,7 @@ func TestRunnerRepairsFinalThatClaimsUnsupportedFact(t *testing.T) {
 	searchResult, _ := json.Marshal(webSearchResult{Status: "no_results", StopReason: "all_queries_exhausted"})
 	tool := &recordingSearchTool{output: string(searchResult)}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"verify state","claims":[{"id":"state","statement":"状态是否成立"}],"claim_ids":["state"]}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"verify state","claims":[{"id":"state","statement":"状态是否成立"}],"claim_ids":["state"]}}`,
 		`{"action":"final","content":"确定存在。","claims":[{"id":"state","status":"supported","summary":"确定存在","evidence":[]}]}`,
 		`{"action":"final","content":"当前检索不足，暂时无法确认。","claims":[{"id":"state","status":"insufficient","summary":"没有找到足够证据"}]}`,
 	}}
@@ -109,7 +109,7 @@ func TestRunnerAcceptsSearchedURLWhenEvidenceMetadataNeedsNormalization(t *testi
 	})
 	tool := &recordingSearchTool{output: string(searchResult)}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"verify statement","claims":[{"id":"c1","statement":"该表述是否成立"}],"claim_ids":["c1"]}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"verify statement","claims":[{"id":"c1","statement":"该表述是否成立"}],"claim_ids":["c1"]}}`,
 		`{"action":"final","content":"对，这个表述有官方记录支持。","claims":[{"id":"c1","status":"supported","summary":"官方记录支持该表述","evidence":[{"url":"https://official.example/record","relation":"direct","source_type":"官方记录","distance":"primary","strength":"strong"}]}]}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
@@ -131,7 +131,7 @@ func TestRunnerFinalizesFromClaimLedgerAfterToolBudget(t *testing.T) {
 	})
 	tool := &recordingSearchTool{output: string(searchResult)}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"first gap","claims":[{"id":"known","statement":"第一项事实"},{"id":"gap","statement":"第二项事实"}],"claim_ids":["known"]}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"first gap","claims":[{"id":"known","statement":"第一项事实"},{"id":"gap","statement":"第二项事实"}],"claim_ids":["known"]}}`,
 		`{"action":"final","content":"第一项已有来源支持；第二项仍未检索。","claims":[{"id":"known","status":"supported","summary":"第一项已确认","evidence":[{"url":"https://evidence.example/item","relation":"supports","source_type":"primary_reporting","distance":"direct","strength":"medium"}]},{"id":"gap","status":"not_searched","summary":"未检索"}]}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 1}, NewToolRegistry(tool))
@@ -154,7 +154,7 @@ func TestRunnerFinalizesFromClaimLedgerAfterToolBudget(t *testing.T) {
 func TestRunnerSynthesizesFinalReplyAfterToolBudget(t *testing.T) {
 	tool := &recordingSearchTool{output: "result"}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"Diana latest","ignored":"history"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"Diana latest","ignored":"history"}}`,
 		`{"action":"final","content":"整理后的答案"}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 1}, NewToolRegistry(tool))
@@ -176,10 +176,10 @@ func TestRunnerSynthesizesFinalReplyAfterToolBudget(t *testing.T) {
 func TestRunnerLimitsWebSearchCalls(t *testing.T) {
 	tool := &recordingSearchTool{output: "result"}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"one"}}`,
-		`{"action":"tool","tool":"web_search.search","input":{"query":"two"}}`,
-		`{"action":"tool","tool":"web_search.search","input":{"query":"three"}}`,
-		`{"action":"tool","tool":"web_search.search","input":{"query":"four"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"one"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"two"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"three"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"four"}}`,
 		`{"action":"final","content":"done"}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 5}, NewToolRegistry(tool))
@@ -204,7 +204,7 @@ func TestRunnerPromptRequiresSearchForSpecificProductOpinions(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"具体商品", "口碑", "味道", "先调用 web_search.search 再回答", "不要凭印象编造亲身体验"} {
+	for _, expected := range []string{"具体商品", "口碑", "味道", "先调用 web_search 再回答", "不要凭印象编造亲身体验"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("search guidance missing %q: %s", expected, prompt)
 		}

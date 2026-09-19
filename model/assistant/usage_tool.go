@@ -9,7 +9,7 @@ import (
 	"github.com/SuInk/diana/model/applog"
 )
 
-const dianaUsageToolName = "diana.llm_usage"
+const dianaUsageToolName = "llm_usage"
 
 type dianaUsageTool struct {
 	runtime *Runtime

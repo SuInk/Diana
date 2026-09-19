@@ -51,7 +51,7 @@ func TestTelegramDirectoryIsExplicitlyPartialAndTracksUpdates(t *testing.T) {
 	}
 	r := NewRuntime(BotConfig{Platform: PlatformTelegram}, c, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaGroupTool(r, MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-1001"})
-	if tool.Name() != "diana.group" {
+	if tool.Name() != "match_avatar" {
 		t.Fatal("TG still uses OneBot tool name")
 	}
 	raw, err := tool.Run(context.Background(), map[string]any{"operation": "members", "query": "@rain"})
@@ -197,7 +197,7 @@ func TestTelegramGroupToolPromptAndPermissionsAreRegistered(t *testing.T) {
 	r := NewRuntime(BotConfig{Platform: PlatformTelegram, AgentEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-1001"}
 	prompt := r.systemPrompt(event, nil)
-	if !strings.Contains(prompt, "调用 diana.group") || !strings.Contains(prompt, "绝不是完整名单") {
+	if !strings.Contains(prompt, "调用 group") || !strings.Contains(prompt, "绝不是完整名单") {
 		t.Fatal("Telegram group capability missing from prompt")
 	}
 	if !strings.Contains(newDianaImageTool(r, event, RelationshipPolicy{AllowImageEditing: true}).(*dianaImageTool).InputSchema()["properties"].(map[string]any)["identity_sources"].(map[string]any)["description"].(string), "当前平台") {

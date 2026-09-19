@@ -18,7 +18,7 @@ type dianaBotMarkersTool struct {
 	event   MessageEvent
 }
 
-func (t *dianaBotMarkersTool) Name() string { return "diana.bot_markers" }
+func (t *dianaBotMarkersTool) Name() string { return "bot_markers" }
 func (t *dianaBotMarkersTool) Description() string {
 	return "主人管理当前机器人的手动机器人名单，支持 QQ 和 Telegram。只有主人明确要求标记、取消标记或查询时调用；不要根据聊天内容自行给用户贴机器人标签。scope=bot 对本机所有群生效，scope=group 仅当前群。标记后默认抑制其群消息，语义上向本机接话时仍可回应。使用真实账号 ID；昵称不确定时查询成员或请主人指定，不猜测 ID。引用某人消息后说把这个标记为机器人时，可以省略 user_id 使用被引用者。"
 }

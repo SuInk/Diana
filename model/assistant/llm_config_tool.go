@@ -22,7 +22,7 @@ func newDianaLLMConfigTool(runtime *Runtime, event MessageEvent) *dianaLLMConfig
 }
 
 func (t *dianaLLMConfigTool) Name() string {
-	return "diana.llm_config"
+	return "llm_config"
 }
 
 func (t *dianaLLMConfigTool) Description() string {
@@ -89,7 +89,7 @@ func (t *dianaLLMConfigTool) Run(ctx context.Context, input map[string]any) (str
 	result := t.runtime.applyLLMConfigCommand(ctx, t.event, command, t.runtime.llmModelLister())
 	recordLLMConfigSkillLog(ctx, PluginRequest{
 		Event:    t.event,
-		Text:     fmt.Sprintf("diana.llm_config role=%s provider=%s model=%s", command.Role, providerRaw, model),
+		Text:     fmt.Sprintf("llm_config role=%s provider=%s model=%s", command.Role, providerRaw, model),
 		OwnerID:  t.runtime.effectiveConfigForEvent(t.event).OwnerIDForEvent(t.event),
 		LLMStore: t.runtime.llmStore,
 		AppLogs:  t.runtime.appLogWriter(),

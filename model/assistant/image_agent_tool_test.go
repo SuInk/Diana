@@ -86,7 +86,7 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 		t.Fatalf("queued result = %#v", queued)
 	}
 	if _, ok := tool.(agent.TerminalResultTool); ok {
-		t.Fatal("diana.image must let the agent continue to its final text reply")
+		t.Fatal("image must let the agent continue to its final text reply")
 	}
 	waitForCondition(t, 2*time.Second, func() bool {
 		return runtime.activeSubagentTaskCount() == 0
@@ -172,7 +172,7 @@ func TestImageAnnouncementBecomesReplyWhenModelSaysNothing(t *testing.T) {
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"diana.image","input":{"operation":"generate","prompt":"一只在窗台上打盹的猫"}}`,
+		`{"action":"tool","tool":"image","input":{"operation":"generate","prompt":"一只在窗台上打盹的猫"}}`,
 		`{"action":"final","task_state":"pending","content":""}`,
 	}}
 	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
@@ -248,8 +248,8 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	plugins := NewPluginManager(&agentImageSearchPlugin{tool: search})
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"web_search.search","input":{"query":"官方主题配色"}}`,
-		`{"action":"tool","tool":"diana.image","input":{"operation":"generate","prompt":"根据已核验的官方资料创作平面海报，主色严格使用靛蓝 #4B0082 与金色 #FFD700，简洁几何构图，不添加文字。","caption":"按查到的官方配色画好了。"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"官方主题配色"}}`,
+		`{"action":"tool","tool":"image","input":{"operation":"generate","prompt":"根据已核验的官方资料创作平面海报，主色严格使用靛蓝 #4B0082 与金色 #FFD700，简洁几何构图，不添加文字。","caption":"按查到的官方配色画好了。"}}`,
 		`{"action":"final","task_state":"pending","content":"文字说明先发给你，图片完成后会自动补上。"}`,
 	}}
 	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
@@ -340,7 +340,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	if !strings.HasPrefix(sharedPaths[0], filepath.Join(mediaCache.Dir(), "objects")+string(filepath.Separator)) {
 		t.Fatalf("generated image did not use media cache: %q", sharedPaths[0])
 	}
-	wantTargets := map[string]bool{"web_search.search": false, dianaImageToolName: false}
+	wantTargets := map[string]bool{"web_search": false, dianaImageToolName: false}
 	imageLogFound := false
 	entries := logs.entriesSnapshot()
 	for _, entry := range entries {
@@ -353,7 +353,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 			imageLogFound = true
 		}
 	}
-	if !wantTargets["web_search.search"] || !wantTargets[dianaImageToolName] || !imageLogFound {
+	if !wantTargets["web_search"] || !wantTargets[dianaImageToolName] || !imageLogFound {
 		t.Fatalf("logs = %#v", entries)
 	}
 }
@@ -363,7 +363,7 @@ type recordingAgentSearchTool struct {
 	calls  int
 }
 
-func (t *recordingAgentSearchTool) Name() string { return "web_search.search" }
+func (t *recordingAgentSearchTool) Name() string { return "web_search" }
 
 func (t *recordingAgentSearchTool) Description() string {
 	return `测试搜索工具。input: {"query":"搜索词"}`

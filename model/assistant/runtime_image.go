@@ -199,7 +199,7 @@ func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 
 // imageEditSourceImages 按优先级挑出可编辑的图片：当前消息与引用消息里的图、指代
 // 解析选中的图、模型点名的头像来源，最后才退回最近历史图。identitySources 由模型
-// 在调用 diana.image 时给出，运行时不再从用户措辞里推断要用谁的头像。
+// 在调用 image 时给出，运行时不再从用户措辞里推断要用谁的头像。
 func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent, identitySources []string) []string {
 	var out []string
 	out = appendImageEditSourceImages(out, availableImageURLs(event.Segments)...)
@@ -509,8 +509,10 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		}
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
+		started := time.Now()
 		resp, err := llm.GenerateImage(ctx, cfg, request)
 		if err == nil {
+			r.recordImageUsage(ctx, cfg, resp, "image_generate", time.Since(started))
 			return resp, cfg, nil
 		}
 		lastErr = err
@@ -530,13 +532,33 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 		}
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
+		started := time.Now()
 		resp, err := llm.EditImage(ctx, cfg, request)
 		if err == nil {
+			r.recordImageUsage(ctx, cfg, resp, "image_edit", time.Since(started))
 			return resp, cfg, nil
 		}
 		lastErr = err
 	}
 	return nil, llm.ProviderConfig{}, lastErr
+}
+
+// recordImageUsage 把生图、改图的调用记进用量。它们不走文本 provider 链，装饰器
+// 记不到；按张计费的中转不报 token，这时仍记一次调用并标 usage_missing。
+func (r *Runtime) recordImageUsage(ctx context.Context, cfg llm.ProviderConfig, resp *llm.ImageGenerateResponse, purpose string, duration time.Duration) {
+	if resp == nil {
+		return
+	}
+	var event MessageEvent
+	if state := llmUsageFromContext(ctx); state != nil {
+		event = state.event
+	}
+	provider := resp.Provider
+	if provider == "" {
+		provider = cfg.Provider
+	}
+	model := firstNonEmpty(resp.Model, cfg.ImageModelWithDefault())
+	r.recordLLMUsage(ctx, event, provider, model, resp.Usage, purpose, duration, 0)
 }
 
 func messagesContainImages(messages []llm.Message) bool {

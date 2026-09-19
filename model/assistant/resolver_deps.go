@@ -224,10 +224,36 @@ func runDependencyInstallPlan(ctx context.Context, plan resolverInstallPlan, nam
 			if detail != "" {
 				detail = "：" + detail
 			}
-			return fmt.Errorf("%s 安装 %s 失败：%w%s", plan.installer, name, err, detail)
+			hint := ""
+			if dependencyInstallPermissionDenied(output.String()) {
+				// 一键安装跑在服务进程的身份下：Docker 容器里是非 root 用户，
+				// 桌面/服务器上也不是谁都给服务开 sudo。权限失败时把可手动执行
+				// 的完整命令带出来（Docker 里对应 docker exec -u root）。
+				hint = fmt.Sprintf("。服务进程没有包管理器权限，请手动执行：%s", strings.Join(append([]string{command.path}, command.args...), " "))
+			}
+			return fmt.Errorf("%s 安装 %s 失败：%w%s%s", plan.installer, name, err, detail, hint)
 		}
 	}
 	return nil
+}
+
+// dependencyInstallPermissionDenied 识别包管理器典型的权限失败输出，
+// 给「一键安装」一个能落地的下一步（Docker 里用 root 执行、桌面用 sudo）。
+func dependencyInstallPermissionDenied(output string) bool {
+	lower := strings.ToLower(output)
+	for _, marker := range []string{
+		"permission denied",
+		"operation not permitted",
+		"must be root",
+		"not authorized",
+		"eacces",
+		"read-only file system",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func probeResolverDependencies() []ResolverDependency {
@@ -270,9 +296,20 @@ func resolverDependencyInstallPlan(name, goos string, lookPath func(string) (str
 	}}
 	linuxManagers := []managerSpec{
 		{command: "apk", label: "apk", build: func(path, dependency string) []resolverInstallCommand {
+			// 浏览器和中文字体一起装：缺了字体，截图里的中文全是豆腐块，
+			// 用户还得再排一次「为什么渲染出来了但看不清」。
+			if dependency == browserDependencyName {
+				return []resolverInstallCommand{{path: path, args: []string{"add", "--no-cache", "chromium", "font-noto-cjk"}}}
+			}
 			return []resolverInstallCommand{{path: path, args: []string{"add", "--no-cache", resolverPackageName(dependency, "apk")}}}
 		}},
 		{command: "apt-get", label: "apt", build: func(path, dependency string) []resolverInstallCommand {
+			if dependency == browserDependencyName {
+				return []resolverInstallCommand{
+					{path: path, args: []string{"update"}},
+					{path: path, args: []string{"install", "-y", "chromium", "fonts-noto-cjk"}},
+				}
+			}
 			return []resolverInstallCommand{
 				{path: path, args: []string{"update"}},
 				{path: path, args: []string{"install", "-y", resolverPackageName(dependency, "apt")}},

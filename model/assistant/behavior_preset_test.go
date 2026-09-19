@@ -310,10 +310,10 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 	if strings.Contains(bob, "当前消息命中的配置别名") {
 		t.Fatal("a message without an alias hit must not carry the notice")
 	}
-	if !strings.Contains(owner, "diana.llm_config") {
+	if !strings.Contains(owner, "llm_config") {
 		t.Fatal("owner-only tool rules missing after the move")
 	}
-	if strings.Contains(alice, "diana.llm_config") {
+	if strings.Contains(alice, "llm_config") {
 		t.Fatal("owner-only tool rules leaked to an ordinary member")
 	}
 	for _, item := range []string{alice, bob, owner} {

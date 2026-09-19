@@ -237,7 +237,7 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 8. visibility=session 表示只在当前私聊或群可见；visibility=user 只适用于当前发言者明确陈述、非敏感且跨会话确有帮助的稳定事实/偏好。医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等 sensitive=true，且必须 visibility=session。
 9. importance 和 confidence 均为 0 到 1。只有 importance>=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。
 10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。
-11. 调用 memory.submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`),
+11. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`),
 		},
 		{
 			Role:    llm.RoleUser,
@@ -355,7 +355,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 6. 除普通摘要外，必须再输出且只输出一条 key 精确等于 thread_key 的会话线程便签，kind="thread"：写清这个会话「当前进行到哪」——正在聊的事、已经推进到的步骤、已经做出的决定、以及还悬而未决的问题。它是给下一轮对话直接看的状态便签，不是历史流水。
 7. 写 thread 时以 current_thread 为基础做增量更新：已经完结、被取代或不再推进的话题从 thread 里移走（它们归 summary 管），只保留仍然活着的线索。没有任何进行中的事情时，content 写一句话说明会话处于空闲状态。thread 控制在 300 字以内，retention_days 固定 7。
 8. 最多输出 6 条摘要（thread 不计入）；完全没有长期价值且没有 rollup 时摘要可以为空，但 thread 仍要输出。
-9. 调用 memory.submit 提交摘要和 thread 便签，字段含义以工具参数说明为准。只有在不支持工具调用时，才退回输出合法 JSON {"memories":[...]}。`),
+9. 调用 memory_submit 提交摘要和 thread 便签，字段含义以工具参数说明为准。只有在不支持工具调用时，才退回输出合法 JSON {"memories":[...]}。`),
 		},
 		{Role: llm.RoleUser, Content: "请整合这批较早会话。上下文 JSON：\n" + string(inputJSON)},
 	}
@@ -580,6 +580,10 @@ func (r *Runtime) wakeMemoryWorkers() {
 
 func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	// 记忆抽取和归纳各自打了用途标签，却一直没挂记账：这两类调用的 token 从来
+	// 没进过统计。
+	run = r.withDebugTraceRun(ctx, run)
+	run = r.withLLMUsageAccountingRun(ctx, run)
 	r.mu.RLock()
 	cfgFactory := r.llmCfgFactory
 	factory := r.llmFactory

@@ -19,7 +19,7 @@ const statusCommandTrigger = "#diana"
 
 // StatusCommandPlugin 让群友发一句 #diana 就能看到机器人的运行状态，不经过模型。
 //
-// 这类「探活」需求本来也能问模型（它有 diana.version 工具），但问一次要花一轮
+// 这类「探活」需求本来也能问模型（它有 version 工具），但问一次要花一轮
 // 生成，回答还每次都不一样。想确认机器人还活着的时候，要的是一张格式固定、
 // 立刻就回的卡片。
 //

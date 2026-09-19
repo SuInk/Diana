@@ -258,7 +258,7 @@ func (h *SystemUpdateHandler) status(c *gin.Context) {
 
 // check 以所选通道的最新 GitHub Release 判断版本；Git 只负责源码状态和安装传输。
 // releaseCheckFailure 记录一次检查失败该用哪个 HTTP 状态码回应。聊天里的
-// diana.version 用不上状态码，只看错误本身。
+// version 用不上状态码，只看错误本身。
 type releaseCheckFailure struct {
 	status int
 	err    error
@@ -285,7 +285,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 }
 
 // runReleaseCheck 汇总「当前什么版本、最新什么版本、能不能升」这一组结论。
-// HTTP 接口和聊天里的 diana.version 共用同一份判断，免得两处各写一套然后慢慢漂移。
+// HTTP 接口和聊天里的 version 共用同一份判断，免得两处各写一套然后慢慢漂移。
 func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (systemUpdateCheckResponse, *releaseCheckFailure) {
 	status, statusErr := h.updater.Status(requestCtx)
 	releaseAvailable := h.releaseUpdater != nil && h.releaseUpdater.Supported()

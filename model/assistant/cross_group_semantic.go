@@ -27,7 +27,7 @@ func (r *Runtime) crossGroupSemanticEvents(event MessageEvent, store MessageHist
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), semanticQueryTimeout)
 	defer cancel()
-	embedded, err := r.embedTextsFunc()(ctx, cfg, []string{query})
+	embedded, err := r.embedTextsFunc()(withLLMUsagePurpose(withLLMUsageContext(ctx, event), "cross_group_semantic"), cfg, []string{query})
 	if err != nil || len(embedded) != 1 || len(embedded[0]) == 0 {
 		return nil, "查询向量生成失败或超时"
 	}
