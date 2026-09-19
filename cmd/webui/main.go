@@ -145,6 +145,9 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 			}
 			resolved, err := set.ResolveConnection(profile)
 			if err != nil {
+				// 启用中的机器人整台接不上，至少要在日志里说清是哪台、为什么，
+				// 否则只会看到它一直不在线。
+				log.Printf("diana 机器人「%s」(%s) 未接入：%v", profile.Name, profile.ID, err)
 				continue
 			}
 			profile = resolved
@@ -155,6 +158,7 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 			}
 			if assistant.IsOneBotPlatform(profile.Platform) && profile.OneBotTransport == assistant.OneBotTransportHTTP {
 				if httpAdded {
+					log.Printf("diana 机器人「%s」(%s) 未接入：HTTP 回调只有一个进程级监听，已由另一台独立机器人占用；请改为复用那台的连接", profile.Name, profile.ID)
 					continue
 				}
 				httpAdded = true
@@ -164,6 +168,7 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 				// The reverse listener is process-wide. Explicit aliases were bound
 				// above; legacy independent profiles still attach only the first.
 				if oneBotAdded {
+					log.Printf("diana 机器人「%s」(%s) 未接入：反向 WebSocket 只有一个进程级监听，已由另一台独立机器人占用；请改为复用那台的连接，或改用正向 WebSocket", profile.Name, profile.ID)
 					continue
 				}
 				oneBotAdded = true
