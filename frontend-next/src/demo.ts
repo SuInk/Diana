@@ -519,6 +519,8 @@ let demoApiKeys: OpenAPIKey[] = [
 
 let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
 
+let demoMediaBaseURL = { base_url: "", source: "auto" };
+
 async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(raw, window.location.origin);
@@ -533,6 +535,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       demoMediaCachePolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
     }
     return json(demoMediaCachePolicy);
+  }
+
+  if (path === "/api/system/media-base-url") {
+    if (method === "POST") {
+      demoMediaBaseURL = { base_url: String(body.base_url ?? ""), source: "database" };
+    }
+    return json(demoMediaBaseURL);
   }
 
   if (path === "/api/auth/status") return json({ auth_required: true, authenticated: true, username: "demo" });

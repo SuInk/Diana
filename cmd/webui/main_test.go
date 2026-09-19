@@ -97,7 +97,7 @@ func TestLimitRequestBodyRejectsOversizedPayload(t *testing.T) {
 func TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile(t *testing.T) {
 	const token = "0123456789abcdef"
 	server := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
-	factory := newBotChannelSetFactory(server)
+	factory := newBotChannelSetFactory(server, &forwardWSOriginTracker{})
 
 	oneBot := assistant.DefaultBotConfig()
 	oneBot.ID = "onebot"
@@ -289,7 +289,8 @@ func TestConfigPathNearExecutableFollowsSymlink(t *testing.T) {
 func TestOneBotFactorySelectsTransport(t *testing.T) {
 	reverse := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
 	httpChannel := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
-	factory := newBotChannelSetFactory(reverse, httpChannel)
+	forwardTracker := &forwardWSOriginTracker{}
+	factory := newBotChannelSetFactory(reverse, forwardTracker, httpChannel)
 	profiles := []assistant.BotConfig{}
 	for _, mode := range []string{"forward_ws", "http", "reverse_ws"} {
 		cfg := assistant.DefaultBotConfig()
