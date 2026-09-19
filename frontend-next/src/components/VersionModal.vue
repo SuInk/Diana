@@ -21,7 +21,7 @@
           <span v-else-if="downloadReadyForLatest" class="badge warn">已下载，待重启并安装</span>
           <span v-else-if="operationRunning" class="badge warn">正在下载并校验</span>
           <span v-else-if="checkResult?.update_available" class="badge accent">发现新版本</span>
-          <span v-else-if="switchToRelease" class="badge accent">可切换到正式版</span>
+          <span v-else-if="switchToRelease" class="badge accent">可切换到发布版本</span>
           <!-- 「升不了级」不能渲染成「已是最新」：两者都没有可点的按钮，但含义相反。 -->
           <span v-else-if="updateUnsupported" class="badge err">不支持自更新</span>
           <span v-else-if="checkResult" class="badge ok">已是最新</span>
@@ -61,6 +61,15 @@
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
+      <div class="mirror-bar">
+        <div class="mirror-field">
+          <label for="version-channel">更新通道</label>
+          <AppSelect id="version-channel" :model-value="policy.channel || 'release'"
+            :options="channelOptions" :disabled="savingPolicy || checking || operationRunning"
+            @update:model-value="setChannel" />
+        </div>
+        <p class="mirror-hint">Release：仅正式版；Beta：测试版、候选版和正式版。切换通道不会自动降级，已下载的其他通道版本需重新检查。</p>
+      </div>
       <!-- 国内直连 GitHub 常常卡在几十 KB/s，这里挑一条快的下载线路。 -->
       <div v-if="releaseSelfUpdate && !sourceBuild" class="mirror-bar">
         <div class="mirror-field">
@@ -122,7 +131,7 @@
         </button>
         <button v-if="switchToRelease && !downloadReadyForLatest" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmSwitchToRelease">
           <Download :size="14" aria-hidden="true" />
-          {{ operationRunning ? "下载并校验中…" : `切换到正式 ${checkResult?.latest_version || "版本"}` }}
+          {{ operationRunning ? "下载并校验中…" : `切换到 ${checkResult?.latest_version || "版本"}` }}
         </button>
         <button v-if="!releaseSelfUpdate && checkResult?.update_supported && checkResult.update_available" class="btn primary small" type="button" :disabled="operationRunning" @click="confirmUpdate">
           <Download :size="14" aria-hidden="true" />
@@ -145,7 +154,7 @@
         </button>
       </div>
       <p v-if="sourceBuild" class="muted" style="font-size: 12.5px; margin: 0">
-        当前二进制由源码构建，没有注入正式版本号，因此不会提示更新，也不会自动下载或安装。切换到正式版会下载完整 Release 包并校验 SHA-256，再备份数据库、替换当前二进制并重启。
+        当前二进制由源码构建，没有注入正式版本号，因此不会提示更新，也不会自动下载或安装。切换到所选通道版本会下载完整 Release 包并校验 SHA-256，再备份数据库、替换当前二进制并重启。
       </p>
       <p v-else-if="deploymentMode === 'release' && !releaseSelfUpdate" class="muted" style="font-size: 12.5px; margin: 0">
         Docker 镜像由 OCI digest 校验并由部署环境安装。
@@ -304,7 +313,7 @@ const checkError = ref("");
 const checking = ref(false);
 const updating = ref(false);
 const savingPolicy = ref(false);
-const policy = ref<UpdatePolicy>({ auto_download: true, auto_install: false, github_mirror: "direct" });
+const policy = ref<UpdatePolicy>({ channel: "release", auto_download: true, auto_install: false, github_mirror: "direct" });
 const operationError = ref("");
 let statusPollTimer: number | undefined;
 const installTracking = ref(false);
@@ -333,7 +342,8 @@ const switchToRelease = computed(() => sourceBuild.value
   && checkResult.value?.switch_to_release_available === true);
 const downloadReadyForLatest = computed(() => status.value?.download_ready === true
   && Boolean(status.value.downloaded_version)
-  && (!checkResult.value?.latest_version || status.value.downloaded_version === checkResult.value.latest_version));
+  && Boolean(checkResult.value?.latest_version)
+  && status.value.downloaded_version === checkResult.value?.latest_version);
 const staleDownloadedVersion = computed(() => status.value?.download_ready === true
   && Boolean(status.value.downloaded_version)
   && Boolean(checkResult.value?.latest_version)
@@ -494,7 +504,7 @@ async function check(notify = true): Promise<void> {
       if (checkResult.value.update_available) {
         toastSuccess(`发现新版本 ${checkResult.value.latest_version || ""}`.trim());
       } else if (switchToRelease.value) {
-        toastSuccess(`当前为源码构建，可切换到正式 ${checkResult.value.latest_version || "版本"}`);
+        toastSuccess(`当前为源码构建，可切换到 ${checkResult.value.latest_version || "版本"}`);
       } else if (updateUnsupported.value) {
         const latest = checkResult.value.latest_version;
         toastError(latest && latest !== checkResult.value.current_version
@@ -521,6 +531,16 @@ const mirrorMode = computed({
   set: (value: string) => { policy.value.github_mirror = value; }
 });
 
+const channelOptions = [
+  { value: "release", label: "Release · 正式版" },
+  { value: "beta", label: "Beta · 测试版" }
+];
+function setChannel(value: string): void {
+  policy.value.channel = value as UpdatePolicy["channel"];
+  checkResult.value = null;
+  void persistPolicy("channel");
+}
+
 const mirrorOptions = [
   { value: "direct", label: "直连 GitHub" },
   { value: "auto", label: "自动选择镜像加速" }
@@ -531,13 +551,14 @@ function setMirrorMode(value: string): void {
   void persistPolicy("mirror");
 }
 
-async function persistPolicy(changed: "download" | "install" | "mirror"): Promise<void> {
+async function persistPolicy(changed: "download" | "install" | "mirror" | "channel"): Promise<void> {
   if (changed === "install" && policy.value.auto_install) policy.value.auto_download = true;
   if (changed === "download" && !policy.value.auto_download) policy.value.auto_install = false;
   savingPolicy.value = true;
   try {
     policy.value = await saveUpdatePolicy(policy.value);
-    toastSuccess(changed === "mirror" ? "下载加速设置已保存" : "自动更新设置已保存");
+    if (changed === "channel") await check(false);
+    toastSuccess(changed === "channel" ? "更新通道已保存" : changed === "mirror" ? "下载加速设置已保存" : "自动更新设置已保存");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存自动更新设置失败");
     await check(false);
@@ -557,9 +578,9 @@ async function loadPolicy(): Promise<void> {
 }
 
 async function confirmSwitchToRelease(): Promise<void> {
-  const target = checkResult.value?.latest_version || "最新稳定版本";
+  const target = checkResult.value?.latest_version || "当前通道最新版本";
   const confirmed = await askConfirm({
-    title: `切换到正式 ${target}？`,
+    title: `切换到 ${target}？`,
     message: "当前运行的是源码构建。切换会下载完整 Release 包并校验 SHA-256，安装时备份数据库和当前二进制，再重启并执行健康检查。",
     confirmLabel: "下载并校验"
   });
@@ -578,7 +599,7 @@ async function downloadUpdate(force = false): Promise<void> {
     status.value = result.status;
     toastSuccess(result.status.updating
       ? "更新包正在下载或处理中"
-      : result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待重启并安装` : "已是最新稳定版本");
+      : result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待重启并安装` : "已是当前通道最新版本");
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : "下载更新失败";
     toastError(operationError.value);
@@ -730,7 +751,7 @@ async function update(): Promise<void> {
       ? releaseSelfUpdate.value
         ? `已校验并暂存 ${target}，服务将自动重启并执行健康检查`
         : `已更新到 ${target}，重启服务后生效`
-      : "已是最新稳定版本");
+      : "已是当前通道最新版本");
     if (checkResult.value) checkResult.value.update_available = false;
     emit("checked", false);
   } catch (error) {
@@ -741,12 +762,12 @@ async function update(): Promise<void> {
 }
 
 async function confirmUpdate(): Promise<void> {
-  const target = checkResult.value?.latest_version || "最新稳定版本";
+  const target = checkResult.value?.latest_version || "当前通道最新版本";
   const confirmed = await askConfirm({
     title: `重启并安装 ${target}？`,
     message: releaseSelfUpdate.value
       ? "确认后才会下载并校验完整 Release 包、备份数据库和当前版本，再切换版本并执行健康检查。"
-      : "确认后才会同步到最新稳定 Release。更新完成前请勿关闭服务。",
+      : "确认后才会同步到当前通道最新 Release。更新完成前请勿关闭服务。",
     confirmLabel: "重启并安装"
   });
   if (confirmed) {
@@ -756,8 +777,8 @@ async function confirmUpdate(): Promise<void> {
 
 async function confirmForceSync(): Promise<void> {
   const confirmed = await askConfirm({
-    title: "强制同步最新稳定 Release？",
-    message: "这会丢弃已跟踪文件的本地修改，并重置到最新稳定 Release tag；不会绕过 Git 对象哈希校验。",
+    title: "强制同步当前通道最新 Release？",
+    message: "这会丢弃已跟踪文件的本地修改，并重置到当前通道最新 Release tag；不会绕过 Git 对象哈希校验。",
     confirmLabel: "强制同步",
     danger: true
   });

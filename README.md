@@ -113,6 +113,8 @@ docker run -d --name diana --restart unless-stopped \
 
 **手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
 
+**更新通道：** 在 WebUI 版本面板选择 `Release`（默认，仅正式版）或 `Beta`（测试版、候选版和正式版）。设置持久保存，检查更新、自动下载与安装均使用所选通道；切回 Release 不会自动降级。版本命名、Docker 标签与发布步骤见 [更新通道说明](docs/update-channels.md)。
+
 **包名迁移：** 新完整包统一命名为 `diana-<系统>-<架构>.tar.gz`（Windows 为 `.zip`），例如 `diana-macos-arm64.tar.gz`。仍只识别 `diana-webui-…` 包名的旧版控制台不能直接自更新到新包名版本，首次需重跑上方一键安装命令或手动安装完整包；新版安装器和自更新器仍兼容旧包名。包内可执行文件保持 `diana-webui` / `diana-webui.exe`，已有服务配置不必改名。
 
 **从源码：** 需要 Go 1.26+ 与 Node.js 22。
