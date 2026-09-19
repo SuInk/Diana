@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -32,7 +33,11 @@ const (
 	defaultVideoMaxHeight   = 720
 	douyinVideoAPI          = "https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id=%s&pc_client_type=1&version_code=190500&version_name=19.5.0&cookie_enabled=true&screen_width=1344&screen_height=756&browser_language=zh-CN&browser_platform=Win32&browser_name=Firefox&browser_version=118.0&browser_online=true&engine_name=Gecko&engine_version=109.0&os_name=Windows&os_version=10&cpu_core_num=16&device_memory=&platform=PC"
 	douyinPlayURL           = "https://aweme.snssdk.com/aweme/v1/play/?video_id=%s&ratio=1080p&line=0"
-	xiaohongshuExploreURL   = "https://www.xiaohongshu.com/explore/%s?xsec_source=%s&xsec_token=%s"
+	// Douyin started rejecting the shared Chrome 138 resolver identity on the
+	// detail endpoint in September 2026, while a current desktop Chrome identity
+	// succeeds with the same cookie and request parameters.
+	douyinUserAgent       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+	xiaohongshuExploreURL = "https://www.xiaohongshu.com/explore/%s?xsec_source=%s&xsec_token=%s"
 )
 
 //go:embed resolver_assets/a-bogus.js
@@ -247,16 +252,50 @@ func resolverProxyURL(ctx context.Context) string {
 
 func resolverDouyinCookie(ctx context.Context) string {
 	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.DouyinCookie }); value != "" || hasResolverCredentials(ctx) {
-		return value
+		return sanitizeResolverCookieHeader(value)
 	}
-	return strings.TrimSpace(firstNonEmpty(os.Getenv("DIANA_DOUYIN_CK"), os.Getenv("DOUYIN_CK"), os.Getenv("douyin_ck")))
+	return sanitizeResolverCookieHeader(firstNonEmpty(os.Getenv("DIANA_DOUYIN_CK"), os.Getenv("DOUYIN_CK"), os.Getenv("douyin_ck")))
 }
 
 func resolverXHSCookie(ctx context.Context) string {
 	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.XHSCookie }); value != "" || hasResolverCredentials(ctx) {
-		return value
+		return sanitizeResolverCookieHeader(value)
 	}
-	return strings.TrimSpace(firstNonEmpty(os.Getenv("DIANA_XHS_CK"), os.Getenv("XHS_CK"), os.Getenv("xhs_ck")))
+	return sanitizeResolverCookieHeader(firstNonEmpty(os.Getenv("DIANA_XHS_CK"), os.Getenv("XHS_CK"), os.Getenv("xhs_ck")))
+}
+
+// sanitizeResolverCookieHeader removes browser-export artifacts that cannot be
+// sent as an HTTP Cookie header. Some browser extensions include a bare domain
+// marker or decoded Unicode values (for example IsDouyinActive with Chinese
+// text); Go rejects the whole header before the request reaches the platform.
+func sanitizeResolverCookieHeader(raw string) string {
+	raw = strings.TrimSpace(raw)
+	// Preserve the historical single-token form used by callers and tests. It
+	// contains no browser-export structure to clean and is safe as an HTTP value.
+	if !strings.Contains(raw, ";") && !strings.Contains(raw, "=") && resolverCookieHeaderASCII(raw) {
+		return raw
+	}
+	parts := make([]string, 0, strings.Count(raw, ";")+1)
+	for segment := range strings.SplitSeq(raw, ";") {
+		segment = strings.TrimSpace(segment)
+		name, value, ok := strings.Cut(segment, "=")
+		name = strings.TrimSpace(name)
+		value = strings.TrimSpace(value)
+		if !ok || name == "" || !resolverCookieHeaderASCII(name) || !resolverCookieHeaderASCII(value) {
+			continue
+		}
+		parts = append(parts, name+"="+value)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func resolverCookieHeaderASCII(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func defaultYTDLPCookiesPath() string {
@@ -286,34 +325,97 @@ func downloadDouyinVideoFile(ctx context.Context, raw string) string {
 	}
 	awemeID := match[1]
 	headers := resolverCommonHeaders()
+	headers["User-Agent"] = douyinUserAgent
 	headers["Accept-Language"] = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
 	headers["Referer"] = "https://www.douyin.com/video/" + awemeID
 	headers["Cookie"] = cookie
 	apiURL := fmt.Sprintf(douyinVideoAPI, awemeID)
-	if bogus := generateDouyinABogus(ctx, apiURL, headers["User-Agent"]); bogus != "" {
-		apiURL += "&a_bogus=" + url.QueryEscape(bogus)
+	var response struct {
+		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
 	}
-	var detail struct {
-		AwemeDetail struct {
-			AwemeType int `json:"aweme_type"`
-			Video     struct {
-				PlayAddr struct {
-					URI string `json:"uri"`
-				} `json:"play_addr"`
-			} `json:"video"`
-		} `json:"aweme_detail"`
-	}
-	if !fetchResolverJSON(ctx, apiURL, headers, &detail) {
+	if !fetchDouyinJSON(ctx, apiURL, headers, &response) {
 		return ""
 	}
-	if detail.AwemeDetail.AwemeType == 2 || detail.AwemeDetail.AwemeType == 68 {
+	if response.AwemeDetail.AwemeID == "" {
+		response.AwemeDetail.AwemeID = awemeID
+	}
+	return downloadDouyinMediaDetailFile(ctx, response.AwemeDetail)
+}
+
+func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail) string {
+	if detail.AwemeType == 2 || detail.AwemeType == 68 || detail.AwemeType == 150 {
 		return ""
 	}
-	uri := strings.TrimSpace(detail.AwemeDetail.Video.PlayAddr.URI)
+	uri := strings.TrimSpace(detail.Video.PlayAddr.URI)
 	if uri == "" {
 		return ""
 	}
-	return downloadGenericVideoFile(ctx, fmt.Sprintf(douyinPlayURL, uri), resolverCommonHeaders())
+	headers := resolverCommonHeaders()
+	headers["User-Agent"] = douyinUserAgent
+	if detail.AwemeID != "" {
+		headers["Referer"] = "https://www.douyin.com/video/" + detail.AwemeID
+	}
+	if cookie := resolverDouyinCookie(ctx); cookie != "" {
+		headers["Cookie"] = cookie
+	}
+	return downloadGenericVideoFile(ctx, fmt.Sprintf(douyinPlayURL, uri), headers)
+}
+
+func fetchDouyinJSON(ctx context.Context, apiURL string, headers map[string]string, target any) bool {
+	if bogus := generateDouyinABogus(ctx, apiURL, headers["User-Agent"]); bogus != "" {
+		signedURL := apiURL + "&a_bogus=" + url.QueryEscape(bogus)
+		if fetchResolverJSON(ctx, signedURL, headers, target) {
+			return true
+		}
+	}
+	if fetchResolverJSON(ctx, apiURL, headers, target) {
+		return true
+	}
+	return fetchDouyinJSONViaPython(ctx, apiURL, headers, target)
+}
+
+func fetchDouyinJSONViaPython(ctx context.Context, apiURL string, headers map[string]string, target any) bool {
+	pythonPath, err := lookResolverCommand("python3")
+	if err != nil {
+		return false
+	}
+	payload := struct {
+		Headers map[string]string `json:"headers"`
+		Proxy   string            `json:"proxy,omitempty"`
+	}{Headers: headers, Proxy: resolverProxyURL(ctx)}
+	input, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	const script = `
+import json, sys, urllib.request
+payload = json.load(sys.stdin)
+handlers = []
+if payload.get("proxy"):
+    handlers.append(urllib.request.ProxyHandler({"http": payload["proxy"], "https": payload["proxy"]}))
+opener = urllib.request.build_opener(*handlers)
+request = urllib.request.Request(sys.argv[1], headers=payload.get("headers") or {})
+with opener.open(request, timeout=20) as response:
+    body = response.read(4 * 1024 * 1024 + 1)
+    if len(body) > 4 * 1024 * 1024:
+        raise RuntimeError("response too large")
+    sys.stdout.buffer.write(body)
+`
+	cmdCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cmdCtx, pythonPath, "-c", script, apiURL)
+	cmd.Env = resolverCommandEnv()
+	cmd.Stdin = bytes.NewReader(input)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("resolver Douyin Python fallback failed: %v: %s", err, truncateRunes(strings.TrimSpace(string(output)), 500))
+		return false
+	}
+	if err := json.Unmarshal(output, target); err != nil {
+		log.Printf("resolver Douyin Python fallback JSON parse failed: %v", err)
+		return false
+	}
+	return true
 }
 
 func generateDouyinABogus(ctx context.Context, raw string, userAgent string) string {
@@ -883,6 +985,28 @@ func xiaohongshuRequestParts(raw string) (id string, xsecSource string, xsecToke
 	return id, xsecSource, xsecToken
 }
 
+// xiaohongshuPageURL restores the note URL hidden behind the login redirect
+// returned to non-browser clients. Share links currently redirect to an http://
+// note URL; browsers upgrade it through HSTS and attach the site cookies, while
+// net/http follows the downgrade and can end at /login?redirectPath=....
+func xiaohongshuPageURL(raw string) string {
+	parsed, err := url.Parse(html.UnescapeString(strings.TrimSpace(raw)))
+	if err != nil || !hostMatchesDomain(strings.ToLower(parsed.Hostname()), "xiaohongshu.com") {
+		return raw
+	}
+	if parsed.Path == "/login" {
+		redirectPath := strings.TrimSpace(parsed.Query().Get("redirectPath"))
+		redirectURL, redirectErr := url.Parse(redirectPath)
+		if redirectErr == nil && hostMatchesDomain(strings.ToLower(redirectURL.Hostname()), "xiaohongshu.com") {
+			parsed = redirectURL
+		}
+	}
+	if parsed.Scheme == "http" {
+		parsed.Scheme = "https"
+	}
+	return parsed.String()
+}
+
 // 小红书分享短链有 .com 和 .cn 两套域名，App 新版分享用的是 xhslink.cn，
 // 漏掉任何一个都会让整条链接识别不出平台、被链接解析静默丢弃。
 var (
@@ -910,7 +1034,7 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 			return nil, "request_failed"
 		}
 		if finalURL != "" {
-			pageURL = finalURL
+			pageURL = xiaohongshuPageURL(finalURL)
 		}
 	}
 	xhsID, xsecSource, xsecToken := xiaohongshuRequestParts(pageURL)

@@ -77,8 +77,8 @@ func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
 		"interval":   toolStringParam("检查间隔，只接受 Go 时长写法：30s、1m、2h。不短于 " + minimumRepositoryWatchInterval.String() + "。"),
 		"watch": toolEnumArrayParam("要监控的类型，可多选。create 省略按全部处理；update 省略表示不改。",
 			"commits", "pull_requests", "issues", "releases", "stars"),
-		"pull_request_events": toolEnumArrayParam("PR 只收这几种动态；省略或给全表示全都要。", repositoryWatchPullEventKinds...),
-		"issue_events":        toolEnumArrayParam("Issue 只收这几种动态；省略或给全表示全都要。", repositoryWatchIssueEventKinds...),
+		"pull_request_events": toolEnumArrayParam("PR 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchPullEventKinds...),
+		"issue_events":        toolEnumArrayParam("Issue 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchIssueEventKinds...),
 	})
 }
 
@@ -88,8 +88,8 @@ type dianaRepositoryWatchView struct {
 	Branch            string   `json:"branch,omitempty"`
 	Interval          string   `json:"interval"`
 	Watch             []string `json:"watch"`
-	PullRequestEvents []string `json:"pull_request_events,omitempty"`
-	IssueEvents       []string `json:"issue_events,omitempty"`
+	PullRequestEvents []string `json:"pull_request_events"`
+	IssueEvents       []string `json:"issue_events"`
 	Status            string   `json:"status"`
 	LastError         string   `json:"last_error,omitempty"`
 	NextRunAt         string   `json:"next_run_at,omitempty"`
@@ -121,8 +121,8 @@ func repositoryWatchViewForTool(item Reminder) dianaRepositoryWatchView {
 		ID: item.ID, Repository: item.Repository, Branch: item.RepositoryBranch,
 		Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(),
 		Watch:    watch, Status: scheduleStatus(item), LastError: item.LastError,
-		PullRequestEvents: append([]string(nil), item.WatchPullRequestEvents...),
-		IssueEvents:       append([]string(nil), item.WatchIssueEvents...),
+		PullRequestEvents: EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
+		IssueEvents:       EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
 	}
 	if !item.TriggerAt.IsZero() {
 		view.NextRunAt = item.TriggerAt.Format(time.RFC3339)
@@ -368,7 +368,7 @@ func repositoryWatchUpdateFromTool(input map[string]any, current Reminder) (Repo
 		if eventsErr != nil {
 			return RepositoryWatchUpdateInput{}, eventsErr
 		}
-		// nil 会被更新层当成「没提」，而清空正是「改回全部」的表达方式。
+		// 更新层用 nil 表示“没提”；显式空数组表示取消全部勾选。
 		update.WatchPullRequestEvents = append([]string{}, events...)
 	}
 	if _, present := input["issue_events"]; present {

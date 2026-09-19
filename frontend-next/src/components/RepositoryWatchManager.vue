@@ -69,7 +69,7 @@
                   <input :checked="form.pull_request_events.includes(kind.value)" type="checkbox" @change="toggleEvent(form.pull_request_events, kind.value)" />{{ kind.label }}
                 </label>
               </div>
-              <span class="hint">全选和全不选都按「全部」算。「更新」包含评论、改标题和新推的提交，量最大。</span>
+              <span class="hint">不勾选则不接收 PR 动态；全部勾选表示全部接收。「更新」包含评论、改标题和新推的提交，量最大。</span>
             </div>
             <div v-if="form.watch_issues" class="field repository-watch-star-field">
               <label id="watch-issue-events-title">Issue 通知哪些动态</label>
@@ -78,7 +78,7 @@
                   <input :checked="form.issue_events.includes(kind.value)" type="checkbox" @change="toggleEvent(form.issue_events, kind.value)" />{{ kind.label }}
                 </label>
               </div>
-              <span class="hint">全选和全不选都按「全部」算。「更新」包含评论和改标题，量最大。</span>
+              <span class="hint">不勾选则不接收 Issue 动态；全部勾选表示全部接收。「更新」包含评论和改标题，量最大。</span>
             </div>
             <div v-if="form.watch_stars" class="field repository-watch-star-field">
               <label for="watch-star-mode">Star 通知模式</label>
@@ -249,7 +249,17 @@ const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
 const maximumIntervalSeconds = 365 * 24 * 60 * 60;
 const defaultIntervalSeconds = computed(() => props.tokenConfigured ? authenticatedIntervalSeconds : anonymousIntervalSeconds);
-const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, pull_request_events: [] as RepositoryWatchPullEvent[], issue_events: [] as RepositoryWatchIssueEvent[], star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
+const pullEventKinds: { value: RepositoryWatchPullEvent; label: string }[] = [
+  { value: "opened", label: "新建" }, { value: "updated", label: "更新" },
+  { value: "merged", label: "已合并" }, { value: "closed", label: "已关闭" }
+];
+const issueEventKinds: { value: RepositoryWatchIssueEvent; label: string }[] = [
+  { value: "opened", label: "新建" }, { value: "updated", label: "更新" },
+  { value: "closed", label: "已关闭" }, { value: "reopened", label: "重新打开" }
+];
+const allPullEventKinds = () => pullEventKinds.map((kind) => kind.value);
+const allIssueEventKinds = () => issueEventKinds.map((kind) => kind.value);
+const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, pull_request_events: allPullEventKinds(), issue_events: allIssueEventKinds(), star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -266,15 +276,6 @@ const selectedProfile = computed(() => profiles.value.find((profile) => profile.
 const groupOptions = computed(() => selectedProfile.value?.platform === "telegram" ? [] : joinedGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined })));
 const destinationOptions = [{ value: "private", label: "私聊" }, { value: "group", label: "群聊" }];
 const starModeOptions = [{ value: "growth", label: "累计增长" }, { value: "milestone", label: "自定义里程碑" }];
-const pullEventKinds: { value: RepositoryWatchPullEvent; label: string }[] = [
-  { value: "opened", label: "新建" }, { value: "updated", label: "更新" },
-  { value: "merged", label: "已合并" }, { value: "closed", label: "已关闭" }
-];
-const issueEventKinds: { value: RepositoryWatchIssueEvent; label: string }[] = [
-  { value: "opened", label: "新建" }, { value: "updated", label: "更新" },
-  { value: "closed", label: "已关闭" }, { value: "reopened", label: "重新打开" }
-];
-
 function toggleEvent<T extends string>(list: T[], value: T): void {
   const index = list.indexOf(value);
   if (index >= 0) list.splice(index, 1);
@@ -419,7 +420,7 @@ function startEdit(task: AssistantTask): void {
   editingTask.value = task;
   const repository = task.repository ?? "";
   const legacyTarget = task.group_id ? [{ profile_id: task.profile_id, destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ profile_id: task.profile_id, destination: "private" as const, user_id: task.user_id }] : [];
-  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? [])], issue_events: [...(task.watch_issue_events ?? [])], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ profile_id: target.profile_id || task.profile_id, destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
+  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? allPullEventKinds())], issue_events: [...(task.watch_issue_events ?? allIssueEventKinds())], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ profile_id: target.profile_id || task.profile_id, destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
   editing.value = true;
   markEditorClean();
 }
