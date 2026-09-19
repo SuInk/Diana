@@ -49,8 +49,9 @@ func (s *SQLiteStore) AppendMessageEvent(ctx context.Context, session string, ev
 		text = strings.TrimSpace(event.RawMessage)
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO message_events (id, session, kind, profile_id, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO message_events (id, session, kind, profile_id, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at, context_generation)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+  COALESCE((SELECT CASE WHEN ? < reset_at THEN -1 ELSE generation END FROM session_contexts WHERE session = ?), 0))
 ON CONFLICT(id) DO UPDATE SET
   kind=excluded.kind,
   profile_id=excluded.profile_id,
@@ -62,7 +63,7 @@ ON CONFLICT(id) DO UPDATE SET
   text=excluded.text,
   payload=excluded.payload,
   created_at=excluded.created_at
-`, id, session, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID, event.SenderName, eventTime, text, string(payload), time.Now().UTC().Format(time.RFC3339Nano))
+`, id, session, string(event.Kind), strings.TrimSpace(event.ProfileID), event.GroupID, event.UserID, event.MessageID, event.SenderName, eventTime, text, string(payload), time.Now().UTC().Format(time.RFC3339Nano), eventTime, session)
 	if err != nil {
 		return err
 	}
@@ -126,6 +127,16 @@ LIMIT 1
 
 // ListRecentMessageEvents returns recent message events in chronological order.
 func (s *SQLiteStore) ListRecentMessageEvents(ctx context.Context, session string, limit int) ([]assistant.MessageEvent, error) {
+	return s.listRecentMessageEvents(ctx, session, limit, false)
+}
+
+// ListContextMessageEvents excludes history from before the last context reset.
+// Explicit history tools keep using ListRecentMessageEvents.
+func (s *SQLiteStore) ListContextMessageEvents(ctx context.Context, session string, limit int) ([]assistant.MessageEvent, error) {
+	return s.listRecentMessageEvents(ctx, session, limit, true)
+}
+
+func (s *SQLiteStore) listRecentMessageEvents(ctx context.Context, session string, limit int, contextOnly bool) ([]assistant.MessageEvent, error) {
 	defer s.observeStorage(ctx, "ListRecentMessageEvents", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
@@ -139,9 +150,10 @@ func (s *SQLiteStore) ListRecentMessageEvents(ctx context.Context, session strin
 SELECT payload
 FROM message_events
 WHERE session = ? AND kind != ?
+  AND (? = 0 OR context_generation = COALESCE((SELECT generation FROM session_contexts WHERE session = ?), 0))
 ORDER BY event_time DESC, created_at DESC, id DESC
 LIMIT ?
-`, session, string(assistant.EventKindNotice), limit)
+`, session, string(assistant.EventKindNotice), contextOnly, session, limit)
 	if err != nil {
 		return nil, err
 	}
