@@ -20,7 +20,7 @@ func TestMigrateGroupConfigsDeduplicatesLegacyScopeByLatestUpdate(t *testing.T) 
 	defer func() { _ = store.Close() }()
 	profile := assistant.DefaultBotConfig()
 	profile.ID = "bot-a"
-	if err := store.SaveBotProfiles(context.Background(), assistant.ProfileSet{ActiveID: profile.ID, Profiles: []assistant.BotConfig{profile}}); err != nil {
+	if err := store.SaveBotProfiles(context.Background(), assistant.ProfileSet{Profiles: []assistant.BotConfig{profile}}); err != nil {
 		t.Fatal(err)
 	}
 	oldAt := time.Now().Add(-time.Hour)

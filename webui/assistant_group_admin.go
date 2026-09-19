@@ -311,7 +311,7 @@ func (h *BotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminSes
 }
 
 func (h *BotHandler) groupConfigForResponse(groupID string) assistant.GroupConfig {
-	return h.groupConfigForProfile(groupID, h.runtime.Config())
+	return h.groupConfigForProfile(groupID, h.runtime.ProfileConfig(""))
 }
 
 func (h *BotHandler) groupConfigForProfile(groupID string, profile assistant.BotConfig) assistant.GroupConfig {
@@ -331,7 +331,7 @@ func (h *BotHandler) groupConfigForAPI(cfg assistant.GroupConfig) assistant.Grou
 }
 
 func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, userID string, profiles ...string) error {
-	profileID := h.runtime.Config().ID
+	profileID := h.runtime.ProfileConfig("").ID
 	if len(profiles) > 0 {
 		profileID = profiles[0]
 	}
@@ -358,7 +358,7 @@ func (h *BotHandler) requireGroupAdmin(ctx context.Context, groupID string, user
 }
 
 func (h *BotHandler) sendPrivateMessage(ctx context.Context, userID string, text string, profiles ...string) error {
-	profileID := h.runtime.Config().ID
+	profileID := h.runtime.ProfileConfig("").ID
 	if len(profiles) > 0 {
 		profileID = profiles[0]
 	}
@@ -394,15 +394,7 @@ func normalizeGroupAdminIdentity(groupID string, userID string) (string, string,
 }
 
 func (h *BotHandler) callGroupAdminAPI(ctx context.Context, profileID, action string, params map[string]any) (map[string]any, error) {
-	if scoped, ok := h.runtime.(interface {
-		CallOneBotAPIForProfile(context.Context, string, string, map[string]any) (map[string]any, error)
-	}); ok {
-		return scoped.CallOneBotAPIForProfile(ctx, profileID, action, params)
-	}
-	if h.runtime.Config().ID != profileID {
-		return nil, fmt.Errorf("机器人不支持指定配置的群管理调用")
-	}
-	return h.runtime.CallOneBotAPI(ctx, action, params)
+	return h.runtime.CallOneBotAPIForProfile(ctx, profileID, action, params)
 }
 
 func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, groupID string) (assistant.GroupConfig, error) {

@@ -195,7 +195,6 @@ func TestRuntimeBindsConversationNamespaceToSourceProfile(t *testing.T) {
 func TestRuntimeUsesSourceProfileConfiguration(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ID: "qq", SystemPrompt: "QQ prompt"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetProfiles(ProfileSet{
-		ActiveID: "qq",
 		Profiles: []BotConfig{
 			{ID: "qq", Platform: PlatformOneBotV11, SystemPrompt: "QQ prompt"},
 			{ID: "tg", Platform: PlatformTelegram, SystemPrompt: "Telegram prompt", TelegramBotToken: "token"},

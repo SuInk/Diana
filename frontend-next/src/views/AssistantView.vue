@@ -1548,10 +1548,10 @@
                 {{ channelStatusLabel(channel) }}
               </span>
             </div>
-            <div v-if="status?.nonebot_bridge.enabled" class="cluster" style="justify-content: space-between">
+            <div v-if="formBridge?.enabled" class="cluster" style="justify-content: space-between">
               <span class="muted">NoneBot 桥</span>
-              <span class="badge" :class="status.nonebot_bridge.connected ? 'ok' : 'warn'">
-                {{ status.nonebot_bridge.connected ? "已连接" : "等待连接" }}
+              <span class="badge" :class="formBridge.connected ? 'ok' : 'warn'">
+                {{ formBridge.connected ? "已连接" : "等待连接" }}
               </span>
             </div>
             <div class="cluster" style="justify-content: space-between">
@@ -1688,7 +1688,6 @@ import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Plu
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import {
-  activateBotProfile,
   deleteBotProfile,
   generatePersona,
   getConfig,
@@ -2662,7 +2661,11 @@ async function beginCreateShared(source: BotProfileConfig): Promise<void> {
   const platform = platforms.value.find((item) => item.id === source.platform);
   if (platform) await beginCreate(platform, source.id);
 }
-const activeProfileID = computed(() => profileSet.value?.active_profile_id);
+// 正在编辑的这台机器人自己的 NoneBot 桥接状态；桥接按机器人各自一份。
+const formBridge = computed(() => {
+  const id = form.value?.id;
+  return id ? status.value?.nonebot_bridges?.[id] : undefined;
+});
 const relayManagerOpen = ref(false);
 const messageRelays = computed<MessageRelayPair[]>(() => profileSet.value?.message_relays ?? []);
 const relaySummary = computed(() => {
@@ -3204,7 +3207,6 @@ function setForm(config: BotProfileConfig): void {
     custom_persona: config.custom_persona ?? asCustomPersona(config).custom_persona,
     participation: participationFromConfig(config),
     profiles: undefined,
-    active_profile_id: undefined,
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
@@ -3576,37 +3578,22 @@ async function triggerBackfill(): Promise<void> {
   }
 }
 
-async function activateProfile(profile: BotProfileConfig): Promise<void> {
-  if (!profile.id || profile.id === activeProfileID.value) {
-    return;
-  }
-  busy.value = true;
-  try {
-    applyConfig(await activateBotProfile(profile.id));
-    toastSuccess("已切换机器人配置档");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "切换失败");
-  } finally {
-    busy.value = false;
-  }
-}
-
+// 编辑哪台机器人只是这个页面自己的状态：直接用列表里的那台填表单，不通知服务端。
+// 以前这里会先调用「切换激活」，把选中的机器人写成全局的当前机器人，影响运行时判断，
+// 两个人同时开控制台还会互相覆盖。
 async function editProfile(profile: BotProfileConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
-  if (profile.id !== activeProfileID.value) {
-    await activateProfile(profile);
-  } else {
-    setForm(profile);
-  }
+  setForm(profile);
   creating.value = false;
   editorTab.value = "access";
   page.value = "edit";
 }
 
 function leaveEditor(): void {
-  const current = profiles.value.find((profile) => profile.id === activeProfileID.value);
+  // 放弃未保存的修改：按表单里这台机器人的 ID 找回列表里保存过的配置。
+  const current = profiles.value.find((profile) => profile.id === form.value?.id);
   if (current) {
     setForm(current);
   }

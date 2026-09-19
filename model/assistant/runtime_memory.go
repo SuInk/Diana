@@ -334,6 +334,6 @@ func (r *Runtime) isBotOwnRecall(event MessageEvent) bool {
 	if !isRecallNotice(event) {
 		return false
 	}
-	botAccount := firstNonEmpty(r.Config().WithDefaults().BotAccount, event.SelfID)
+	botAccount := firstNonEmpty(r.profileConfig(event.ProfileID).BotAccount, event.SelfID)
 	return botAccount != "" && event.UserID == botAccount && event.OperatorID == botAccount
 }

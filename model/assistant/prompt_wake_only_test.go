@@ -45,11 +45,11 @@ func TestBareMentionKeepsOriginalTextAndAppendsWakeGuidance(t *testing.T) {
 	if !strings.Contains(clean, "Diana") || !strings.Contains(clean, "@") {
 		t.Fatalf("原话没有留下来：%q", clean)
 	}
-	if clean == runtime.Config().PromptWakeOnlyText {
+	if clean == runtime.ProfileConfig("").PromptWakeOnlyText {
 		t.Fatalf("正文被唤醒提示词顶替了：%q", clean)
 	}
-	prompt := currentPromptTextWithSemanticContext(bare, clean, semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.Config().PromptWakeOnlyText})
-	if !strings.Contains(prompt, runtime.Config().PromptWakeOnlyText) {
+	prompt := currentPromptTextWithSemanticContext(bare, clean, semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.ProfileConfig("").PromptWakeOnlyText})
+	if !strings.Contains(prompt, runtime.ProfileConfig("").PromptWakeOnlyText) {
 		t.Fatalf("唤醒指引没有作为注解附上：%q", prompt)
 	}
 	if !strings.Contains(prompt, "Diana") {
@@ -58,11 +58,11 @@ func TestBareMentionKeepsOriginalTextAndAppendsWakeGuidance(t *testing.T) {
 
 	spoken := bare
 	spoken.Segments = append(append([]MessageSegment{}, bare.Segments...), MessageSegment{Type: "text", Data: map[string]string{"text": "在干嘛"}})
-	got := currentPromptTextWithSemanticContext(spoken, runtime.cleanInput(spoken, ""), semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.Config().PromptWakeOnlyText})
+	got := currentPromptTextWithSemanticContext(spoken, runtime.cleanInput(spoken, ""), semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.ProfileConfig("").PromptWakeOnlyText})
 	if !strings.Contains(got, "在干嘛") {
 		t.Fatalf("带内容的消息正文丢了：%q", got)
 	}
-	if strings.Contains(got, runtime.Config().PromptWakeOnlyText) {
+	if strings.Contains(got, runtime.ProfileConfig("").PromptWakeOnlyText) {
 		t.Fatalf("说了话的消息不该附唤醒指引：%q", got)
 	}
 }

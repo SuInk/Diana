@@ -165,7 +165,7 @@ func TestReviewRepro09_SharedConnectionDeliversPrivateMessageToOneProfile(t *tes
 func TestReviewRepro11_MultiBotChecksUseEventProfile(t *testing.T) {
 	newRuntime := func() *Runtime {
 		r := NewRuntime(BotConfig{ID: "a", OwnerID: "900", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, &testBotMarkersSaver{}, nil)
-		r.SetProfiles(ProfileSet{ActiveID: "a", Profiles: []BotConfig{
+		r.SetProfiles(ProfileSet{Profiles: []BotConfig{
 			{ID: "a", OwnerID: "900", BotAccount: "42"},
 			{ID: "b", OwnerID: "901", BotAccount: "43", DisabledUsers: []string{"bad"}},
 		}})
@@ -229,7 +229,7 @@ func (s *blockingMarkersSaver) SaveMarkedBotIDs(id string, ids []string) error {
 func TestReviewRepro12_ConfigSaveDoesNotBlockMessageHandling(t *testing.T) {
 	saver := &blockingMarkersSaver{entered: make(chan struct{}), release: make(chan struct{})}
 	r := NewRuntime(BotConfig{ID: "a", OwnerID: "900", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
-	r.SetProfiles(ProfileSet{ActiveID: "a", Profiles: []BotConfig{{ID: "a", OwnerID: "900", BotAccount: "42"}}})
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{{ID: "a", OwnerID: "900", BotAccount: "42"}}})
 	go func() { _, _ = r.updateMarkedBotID("a", "900", "200", true) }()
 	<-saver.entered
 	defer close(saver.release)
@@ -242,5 +242,15 @@ func TestReviewRepro12_ConfigSaveDoesNotBlockMessageHandling(t *testing.T) {
 	case <-done:
 	case <-time.After(300 * time.Millisecond):
 		t.Error("配置落盘期间读取机器人配置被阻塞（写锁内做磁盘 I/O）")
+	}
+}
+
+// mutateTestProfile 改掉只有一台机器人的测试运行时里那台的配置。
+func mutateTestProfile(r *Runtime, mutate func(*BotConfig)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, profile := range r.profileConfigs {
+		mutate(&profile)
+		r.profileConfigs[id] = profile
 	}
 }

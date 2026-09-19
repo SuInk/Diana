@@ -22,7 +22,7 @@ func TestSaveDisabledGroupsPersistsPerProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{{ID: "a"}, {ID: "b"}}}); err != nil {
+	if err = s.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "a"}, {ID: "b"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err = NewRuntimePersistor(s).SaveDisabledGroups("b", []string{"100"}); err != nil {

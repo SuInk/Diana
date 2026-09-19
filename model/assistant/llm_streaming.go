@@ -244,8 +244,8 @@ func (e *streamingFailedError) Error() string {
 }
 
 // withLLMStreamingRun 把流式包在最内层。关掉时原样返回，不进链。
-func (r *Runtime) withLLMStreamingRun(_ context.Context, run llmProviderRunFunc) llmProviderRunFunc {
-	if run == nil || !boolValue(r.Config().LLMStreamingEnabled, true) {
+func (r *Runtime) withLLMStreamingRun(ctx context.Context, run llmProviderRunFunc) llmProviderRunFunc {
+	if run == nil || !boolValue(r.configForContext(ctx).LLMStreamingEnabled, true) {
 		return run
 	}
 	return func(provider LLMProvider) (string, error) {

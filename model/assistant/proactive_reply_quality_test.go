@@ -30,7 +30,7 @@ func TestJudgeProactiveReplyQualityRejectsLowConfidence(t *testing.T) {
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	err := runtime.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "这个怎么处理？", "可以试试看。", runtime.Config())
+	err := runtime.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "这个怎么处理？", "可以试试看。", runtime.ProfileConfig(""))
 	if err == nil || !strings.Contains(err.Error(), "置信度 72%") {
 		t.Fatalf("quality error = %v", err)
 	}
@@ -44,7 +44,7 @@ func TestJudgeProactiveReplyQualityAllowsQualifiedReply(t *testing.T) {
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	if err := runtime.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "这个怎么处理？", "先检查错误日志。", runtime.Config()); err != nil {
+	if err := runtime.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "这个怎么处理？", "先检查错误日志。", runtime.ProfileConfig("")); err != nil {
 		t.Fatalf("qualified reply rejected: %v", err)
 	}
 	if len(provider.requests) != 1 || len(provider.requests[0].Messages) != 2 {
@@ -143,7 +143,7 @@ func TestReplyAuditReceivesImageDescriptionWithoutFabricatingUserText(t *testing
 				event.Segments[0].Data[recallImageDescriptionKey] = description
 			}
 			candidate := "这是一款黑茶"
-			if _, err := rt.runReplyAudit(context.Background(), event, "", candidate, rt.Config(), botReplyLoopEvidence{}, replyAuditNeed{Quality: true}); err != nil {
+			if _, err := rt.runReplyAudit(context.Background(), event, "", candidate, rt.ProfileConfig(""), botReplyLoopEvidence{}, replyAuditNeed{Quality: true}); err != nil {
 				t.Fatal(err)
 			}
 			if len(provider.requests) != 1 {
@@ -183,7 +183,7 @@ func TestDirectImageReplyNeedsNoGatingAudit(t *testing.T) {
 		BotReplyLoopDetectionEnabled: boolPointer(false),
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}}}
-	need := runtime.replyAuditNeed(event, "看图", runtime.Config(), false)
+	need := runtime.replyAuditNeed(event, "看图", runtime.ProfileConfig(""), false)
 	if need.Quality || need.AccountSafety || need.Loop || need.Closing {
 		t.Fatalf("直接带图回复不该触发任何门禁项：%#v", need)
 	}
@@ -200,7 +200,7 @@ func TestReplyAuditFallsBackToOriginalImageWhenDescriptionIsUnavailable(t *testi
 		Kind: EventKindGroup, RawMessage: "[CQ:image,file=tea.jpg]",
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}},
 	}
-	if _, err := runtime.runReplyAudit(context.Background(), event, "看下这个", "这是一款黑茶", runtime.Config(), botReplyLoopEvidence{}, replyAuditNeed{Quality: true}); err != nil {
+	if _, err := runtime.runReplyAudit(context.Background(), event, "看下这个", "这是一款黑茶", runtime.ProfileConfig(""), botReplyLoopEvidence{}, replyAuditNeed{Quality: true}); err != nil {
 		t.Fatal(err)
 	}
 	if len(provider.requests) != 1 || len(provider.requests[0].Messages) != 2 {
@@ -249,7 +249,7 @@ func TestJudgeProactiveReplyRejectsAccountUnsafeContent(t *testing.T) {
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	err := runtime.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "怎么看这事？", "（涉政内容）", runtime.Config())
+	err := runtime.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "怎么看这事？", "（涉政内容）", runtime.ProfileConfig(""))
 	if err == nil {
 		t.Fatal("account-unsafe reply must be rejected even at high confidence")
 	}
@@ -298,7 +298,7 @@ func TestDirectReplyAuditReturnsRefusalControlWithSafetyResult(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	cfg := runtime.Config()
+	cfg := runtime.ProfileConfig("")
 	intent, err := runtime.evaluateDirectReplyAudit(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "做不到的请求", "这个我不能帮你", cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestAuditReplyAccountSafetyFollowsMasterSwitchForDirectReplies(t *testing.T
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}
 
-	if err := runtime.auditReplyAccountSafety(context.Background(), event, "在吗", "任何内容", runtime.Config()); err == nil || !strings.Contains(err.Error(), "露骨内容") {
+	if err := runtime.auditReplyAccountSafety(context.Background(), event, "在吗", "任何内容", runtime.ProfileConfig("")); err == nil || !strings.Contains(err.Error(), "露骨内容") {
 		t.Fatalf("default-on audit should reject explicit content: %v", err)
 	}
 	if len(provider.requests) != 1 {
@@ -341,7 +341,7 @@ func TestAuditReplyAccountSafetyFollowsMasterSwitchForDirectReplies(t *testing.T
 	}
 
 	provider.requests = nil
-	cfg := runtime.Config()
+	cfg := runtime.ProfileConfig("")
 	cfg.ReplySafetyMasterEnabled = boolPointer(false)
 	if err := runtime.auditReplyAccountSafety(context.Background(), event, "在吗", "任何内容", cfg); err != nil {
 		t.Fatalf("master-off audit must not reject: %v", err)
@@ -410,7 +410,7 @@ func TestAuditReplyAccountSafetyFailsOpen(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	cfg := runtime.Config()
+	cfg := runtime.ProfileConfig("")
 	if err := runtime.auditReplyAccountSafety(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "在吗", "在的", cfg); err != nil {
 		t.Fatalf("unparsable audit result must fail open: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestLowSendConfidenceDoesNotBlockDirectReply(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	cfg := runtime.Config()
+	cfg := runtime.ProfileConfig("")
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}
 	if _, err := runtime.evaluateDirectReplyAudit(context.Background(), event, "问题", "候选回复", cfg); err != nil {
 		t.Fatalf("直接回复不该被发送置信度拦下：%v", err)

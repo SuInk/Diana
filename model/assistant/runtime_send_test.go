@@ -515,7 +515,7 @@ func TestErrorNoticeIsNotChunkedByPersonaStyle(t *testing.T) {
 		ResponseMode: ResponseModeStandard,
 		ReplyStyle:   ReplyStyleHuman,
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
-	if size := runtime.Config().DirectReplyChunkSize; size != chatReplyChunkSize {
+	if size := runtime.ProfileConfig("").DirectReplyChunkSize; size != chatReplyChunkSize {
 		t.Fatalf("fixture needs the chat chunk size, got %d", size)
 	}
 
@@ -526,7 +526,7 @@ func TestErrorNoticeIsNotChunkedByPersonaStyle(t *testing.T) {
 		"Retrying will keep failing until the account owner accepts the regional terms for this model, " +
 		"switches the profile to a model that is available in the current region, or routes the request " +
 		"through a provider endpoint that already carries the required opt-in flag."
-	if len([]rune(notice)) <= runtime.Config().DirectReplyChunkSize {
+	if len([]rune(notice)) <= runtime.ProfileConfig("").DirectReplyChunkSize {
 		t.Fatalf("fixture notice must be longer than the chat chunk size: %d runes", len([]rune(notice)))
 	}
 

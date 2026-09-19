@@ -138,7 +138,6 @@ export interface BotProfileConfig {
   name?: string;
   platform?: string;
   avatar_url?: string;
-  active_profile_id?: string;
   profiles?: BotProfileConfig[];
   /** 跨机器人的消息互通链路，一条链路连两个会话。 */
   message_relays?: MessageRelayPair[];
@@ -718,16 +717,16 @@ export interface BotChannelStatus {
 
 export interface BotStatus {
   running: boolean;
-  config: BotProfileConfig;
   channel: BotChannelStatus;
   channels?: BotChannelStatus[];
-  nonebot_bridge: {
+  /** 各机器人自己的 NoneBot 桥接状态，按机器人 ID 索引；没开桥接的不出现。 */
+  nonebot_bridges?: Record<string, {
     enabled: boolean;
     connected: boolean;
     endpoint?: string;
     last_error?: string;
     updated_at: string;
-  };
+  }>;
   plugins: PluginState[];
   recent_events?: BotEvent[];
   active_workers: number;
@@ -1241,13 +1240,6 @@ export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfi
   return requestJSON<BotProfileConfig>("/api/assistant/config", {
     method: "POST",
     body: JSON.stringify(config)
-  });
-}
-
-export function activateBotProfile(id: string): Promise<BotProfileConfig> {
-  return requestJSON<BotProfileConfig>("/api/assistant/config/activate", {
-    method: "POST",
-    body: JSON.stringify({ id })
   });
 }
 

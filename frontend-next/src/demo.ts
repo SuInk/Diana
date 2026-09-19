@@ -70,7 +70,7 @@ const telegramProfile: BotProfileConfig = {
   telegram_api_base_url: "https://api.telegram.org", bot_account: "", owner_id: "880024"
 };
 
-let assistantConfig: BotProfileConfig = { ...oneBotProfile, active_profile_id: "bot-onebot", profiles: [oneBotProfile, telegramProfile] };
+let assistantConfig: BotProfileConfig = { ...oneBotProfile, profiles: [oneBotProfile, telegramProfile] };
 
 
 function demoPluginForProfile(plugin: PluginState, profile: string): PluginState {
@@ -441,13 +441,13 @@ export const demoStats: StatsSnapshot = {
 };
 
 export const demoStatus: BotStatus = {
-  running: true, config: assistantConfig,
+  running: true,
   channel: { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
   channels: [
     { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
     { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
   ],
-  nonebot_bridge: { enabled: false, connected: false, updated_at: before(1) }, plugins, recent_events: demoEvents, active_workers: 2, updated_at: before(1)
+  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2, updated_at: before(1)
 };
 
 let tasks: AssistantTask[] = [
@@ -634,8 +634,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const saved = { ...incoming, id: (path === "/api/assistant/config/new" ? undefined : incoming.id) || `bot-${Date.now()}` };
     const index = profiles.findIndex((profile) => profile.id === saved.id);
     if (index >= 0) profiles[index] = saved; else profiles.push(saved);
-    assistantConfig = { ...assistantConfig, ...saved, profiles, active_profile_id: saved.id };
-    demoStatus.config = assistantConfig;
+    assistantConfig = { ...assistantConfig, ...saved, profiles };
     return json(assistantConfig);
   }
   if (path === "/api/assistant/config/message-relays") { assistantConfig.message_relays = Array.isArray(body.relays) ? body.relays : []; return json(assistantConfig); }

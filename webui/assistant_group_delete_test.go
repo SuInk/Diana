@@ -17,7 +17,7 @@ import (
 func TestConsoleDeleteGroupConfig(t *testing.T) {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	h := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
-	if _, err := h.groupConfigs.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "a", GroupID: "10001"}, runtime.Config()); err != nil {
+	if _, err := h.groupConfigs.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "a", GroupID: "10001"}, runtime.ProfileConfig("")); err != nil {
 		t.Fatal(err)
 	}
 	router := botTestRouter(h)

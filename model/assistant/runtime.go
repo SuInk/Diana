@@ -175,19 +175,19 @@ type ReplySuppressionStore interface {
 }
 
 type RuntimeStatus struct {
-	Running       bool                 `json:"running"`
-	Config        ConfigPayload        `json:"config"`
-	Channel       ChannelStatus        `json:"channel"`
-	Channels      []ChannelStatus      `json:"channels,omitempty"`
-	NoneBotBridge NoneBotBridgeStatus  `json:"nonebot_bridge"`
-	Plugins       []PluginState        `json:"plugins"`
-	RecentEvents  []EventRecord        `json:"recent_events,omitempty"`
-	ActiveWorkers int                  `json:"active_workers"`
-	ActiveTasks   int                  `json:"active_subagent_tasks"`
-	SubagentTasks []SubagentTaskStatus `json:"subagent_tasks,omitempty"`
-	PendingEvents int                  `json:"pending_events"`
-	LastError     string               `json:"last_error,omitempty"`
-	UpdatedAt     time.Time            `json:"updated_at"`
+	Running  bool            `json:"running"`
+	Channel  ChannelStatus   `json:"channel"`
+	Channels []ChannelStatus `json:"channels,omitempty"`
+	// NoneBotBridges 是各机器人自己的 NoneBot 桥接状态，按机器人 ID 索引；没开桥接的不出现。
+	NoneBotBridges map[string]NoneBotBridgeStatus `json:"nonebot_bridges,omitempty"`
+	Plugins        []PluginState                  `json:"plugins"`
+	RecentEvents   []EventRecord                  `json:"recent_events,omitempty"`
+	ActiveWorkers  int                            `json:"active_workers"`
+	ActiveTasks    int                            `json:"active_subagent_tasks"`
+	SubagentTasks  []SubagentTaskStatus           `json:"subagent_tasks,omitempty"`
+	PendingEvents  int                            `json:"pending_events"`
+	LastError      string                         `json:"last_error,omitempty"`
+	UpdatedAt      time.Time                      `json:"updated_at"`
 }
 
 type EventRecord struct {
@@ -302,12 +302,14 @@ type Runtime struct {
 	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
-	cfg              BotConfig
 	profileConfigs   map[string]BotConfig
+	// profileOrder 是配置集里机器人的顺序，列表和兜底都按它来，不依赖 map 的随机顺序。
+	profileOrder []string
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
-	relayPairs       []MessageRelayPair
-	channel          Channel
-	bridge           *NoneBotBridge
+	relayPairs []MessageRelayPair
+	channel    Channel
+	// bridges 是各机器人自己的 NoneBot 桥接，按机器人 ID 索引，见 nonebot_bridges.go。
+	bridges          map[string]*NoneBotBridge
 	plugins          *PluginManager
 	llmStore         LLMProfileStore
 	modelLister      LLMModelLister
@@ -511,10 +513,9 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 	// 词典分词按配置启用;加载要几秒,后台预热,别让第一条消息扛这个延迟。
 	applyCJKSegmentConfig(cfg)
 	runtime := &Runtime{
-		cfg:                     cfg,
 		profileConfigs:          map[string]BotConfig{cfg.ID: cfg},
+		profileOrder:            []string{cfg.ID},
 		channel:                 channel,
-		bridge:                  NewNoneBotBridge(bridgeConfigFromBotConfig(cfg), channel),
 		plugins:                 plugins,
 		llmStore:                llmStore,
 		modelLister:             defaultLLMModelLister,
@@ -565,26 +566,33 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		subagentLLMSem:          make(chan struct{}, subagentLLMConcurrency(cfg.MaxBotConcurrency)),
 	}
 	runtime.members = newMemberCacheForEvent(runtime.callOneBotAPIForEvent)
+	runtime.reconcileBridges()
 	return runtime
 }
 
-// SetProfiles lets one runtime apply the configuration belonging to the
-// channel that produced each event while keeping one shared worker pipeline.
+// SetProfiles 换上整套机器人配置。每条消息按它所属的机器人取配置，共用一条处理流水线。
 func (r *Runtime) SetProfiles(set ProfileSet) {
 	set = set.WithDefaults()
 	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
+	order := make([]string, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {
 		resolved, err := set.ResolveConnection(profile)
 		if err != nil {
 			continue
 		}
-		profiles[strings.TrimSpace(profile.ID)] = resolved
+		id := strings.TrimSpace(profile.ID)
+		profiles[id] = resolved
+		order = append(order, id)
+		applyCJKSegmentConfig(resolved)
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles
+	r.profileOrder = order
 	r.relayPairs = set.MessageRelays
+	r.updatedAt = time.Now()
 	r.mu.Unlock()
+	r.reconcileBridges()
 }
 
 // SetAppLogWriter 注入运行时审计日志写入器。
@@ -608,14 +616,20 @@ func (r *Runtime) Start(parent context.Context) error {
 		r.mu.Unlock()
 		return nil
 	}
-	cfg := r.cfg.WithDefaults()
-	if !cfg.Enabled {
+	enabled := r.enabledProfilesLocked()
+	if len(enabled) == 0 {
 		r.mu.Unlock()
 		return ErrBotDisabled
 	}
-	if err := cfg.Validate(); err != nil {
-		r.mu.Unlock()
-		return err
+	// 每台启用的机器人都要能用；并发上限取各台里最大的那个，处理流水线是共用的，
+	// 不该随「选中了哪一台」变大变小。
+	concurrency := 0
+	for _, profile := range enabled {
+		if err := profile.Validate(); err != nil {
+			r.mu.Unlock()
+			return fmt.Errorf("机器人「%s」配置无效：%w", profile.Name, err)
+		}
+		concurrency = max(concurrency, profile.MaxBotConcurrency)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r.cancel = cancel
@@ -633,7 +647,7 @@ func (r *Runtime) Start(parent context.Context) error {
 	r.lastError = ""
 	r.updatedAt = time.Now()
 	// 配置里的最大并发数可能变更，启动时重建 semaphore 才能立即生效。
-	r.sem = make(chan struct{}, cfg.MaxBotConcurrency)
+	r.sem = make(chan struct{}, concurrency)
 	prewarmConfigs := make([]BotConfig, 0, len(r.profileConfigs))
 	for _, profile := range r.profileConfigs {
 		prewarmConfigs = append(prewarmConfigs, profile)
@@ -664,13 +678,13 @@ func (r *Runtime) Start(parent context.Context) error {
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
-			r.runInboundCoordinator(ctx, leaseOwner, cfg.MaxBotConcurrency, releaseStaleLeases, inboundDone)
+			r.runInboundCoordinator(ctx, leaseOwner, concurrency, releaseStaleLeases, inboundDone)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.memoryCoordinator")
 			r.runMemoryCoordinator(ctx, leaseOwner+"-memory", releaseStaleLeases, memoryDone)
 		}()
-		r.bridge.Start(ctx)
+		r.startBridges(ctx)
 		err := r.channel.Connect(ctx, r.HandleEvent)
 		if err != nil && ctx.Err() == nil {
 			r.setError(err.Error())
@@ -702,9 +716,7 @@ func (r *Runtime) Stop() error {
 	}
 	r.clearProactiveReplyBatches()
 	r.clearErrorNoticeBursts()
-	if r.bridge != nil {
-		r.bridge.Stop()
-	}
+	r.stopBridges()
 	// 先取消 context 再关闭 channel，Connect/readLoop 会尽快从阻塞读里退出。
 	err := r.channel.Close()
 	if inboundDone != nil {
@@ -725,118 +737,122 @@ func (r *Runtime) Stop() error {
 	return err
 }
 
-// Restart 使用新配置和 channel 重启运行时。
-func (r *Runtime) Restart(ctx context.Context, cfg BotConfig, channel Channel) error {
-	_ = r.Stop()
-	cfg = cfg.WithDefaults()
-	r.mu.Lock()
-	r.cfg = cfg
-	r.channel = channel
-	r.mu.Unlock()
-	applyCJKSegmentConfig(cfg)
-	return r.Start(ctx)
-}
-
-// UpdateConfig 更新运行时配置并按需重启。
-func (r *Runtime) UpdateConfig(ctx context.Context, cfg BotConfig, channel Channel) error {
-	cfg = cfg.WithDefaults()
+// ApplyProfiles 换上新的机器人配置集。channel 为 nil 表示只改行为配置：不断开连接、
+// 不重启处理流水线。连接参数或并发上限变了时传入新 channel，运行中的会先停再按新配置
+// 启动；新配置集里没有启用的机器人时保持停止。
+func (r *Runtime) ApplyProfiles(ctx context.Context, set ProfileSet, channel Channel) error {
+	if channel == nil {
+		for _, profile := range set.WithDefaults().Profiles {
+			if resolved, err := set.ResolveConnection(profile); err == nil && resolved.Enabled {
+				if err := resolved.Validate(); err != nil {
+					return fmt.Errorf("机器人「%s」配置无效：%w", profile.Name, err)
+				}
+			}
+		}
+		r.SetProfiles(set)
+		return nil
+	}
 	r.mu.Lock()
 	wasRunning := r.running
 	r.mu.Unlock()
-
 	if wasRunning {
 		// 运行中修改 WebSocket/token 等连接参数时，先停掉旧连接再替换配置。
 		_ = r.Stop()
 	} else {
 		r.closeAgentRegistryCache()
 	}
-
+	r.SetProfiles(set)
 	r.mu.Lock()
-	r.cfg = cfg.WithDefaults()
+	r.channel = channel
 	r.updatedAt = time.Now()
-	applyCJKSegmentConfig(cfg)
-	if channel != nil {
-		r.channel = channel
-		if r.bridge != nil {
-			r.bridge.UpdateConfig(bridgeConfigFromBotConfig(cfg), channel)
-		}
-	} else if r.bridge != nil {
-		r.bridge.UpdateConfig(bridgeConfigFromBotConfig(cfg), r.channel)
-	}
+	hasEnabled := len(r.enabledProfilesLocked()) > 0
 	r.mu.Unlock()
-	if !wasRunning || !cfg.Enabled {
+	if !wasRunning || !hasEnabled {
 		return nil
 	}
-	// 只有原本正在运行且新配置仍启用时才自动重启，避免保存禁用配置又拉起机器人。
 	return r.Start(ctx)
 }
 
-// UpdateConfigInPlace applies behavior-only configuration without replacing
-// the channel or restarting inbound workers. Callers must use UpdateConfig
-// when transport settings or worker concurrency change.
-func (r *Runtime) UpdateConfigInPlace(cfg BotConfig) error {
-	cfg = cfg.WithDefaults()
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	previous := r.cfg.WithDefaults()
-	r.cfg = cfg
-	r.updatedAt = time.Now()
-	bridge := r.bridge
-	channel := r.channel
-	runCtx := r.runCtx
-	running := r.running
-	r.mu.Unlock()
-
-	applyCJKSegmentConfig(cfg)
-	// Agent registry configuration is part of its cache key. New requests pick
-	// up changed settings automatically; keep old registries alive so an
-	// in-flight Agent run is not interrupted by an unrelated config save.
-	if bridge != nil {
-		previousBridge := bridgeConfigFromBotConfig(previous)
-		nextBridge := bridgeConfigFromBotConfig(cfg)
-		bridge.UpdateConfig(nextBridge, channel)
-		if previousBridge != nextBridge {
-			bridge.Stop()
-			if running && runCtx != nil {
-				bridge.Start(runCtx)
-			}
-		}
-	}
-	return nil
-}
-
-// Config 返回当前机器人配置。
-func (r *Runtime) Config() BotConfig {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.cfg
-}
-
-// CallOneBotAPI 通过当前运行配置对应的 OneBot channel 调用原生 API。
+// CallOneBotAPI 调用 OneBot 原生 API，只在唯一一台 OneBot 机器人时可用；有多台时
+// 用 CallOneBotAPIForProfile 指明是哪一台，不替调用方猜。
 func (r *Runtime) CallOneBotAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	action = strings.TrimSpace(action)
 	if action == "" {
 		return nil, fmt.Errorf("diana: onebot action is required")
 	}
+	target, err := r.soleOneBotTarget()
+	if err != nil {
+		return nil, err
+	}
+	return r.callOneBotAPIForEvent(ctx, target, action, params)
+}
+
+// soleOneBotTarget 找没有指明机器人时唯一能用的 OneBot 目标：先看机器人配置，配置里
+// 没有 OneBot 机器人时再看连接上是否恰好只有一个 OneBot 绑定。
+func (r *Runtime) soleOneBotTarget() (MessageEvent, error) {
+	profile, err := r.soleOneBotProfile()
+	if err == nil {
+		return MessageEvent{ProfileID: profile.ID, Platform: profile.Platform}, nil
+	}
 	r.mu.RLock()
-	cfg := r.cfg
 	channel := r.channel
+	hasOneBotProfile := false
+	for _, candidate := range r.profileConfigs {
+		hasOneBotProfile = hasOneBotProfile || IsOneBotPlatform(candidate.Platform)
+	}
 	r.mu.RUnlock()
-	if channel == nil {
-		return nil, fmt.Errorf("diana: channel is not configured")
-	}
-	if multi, ok := channel.(*MultiChannel); ok && !IsOneBotPlatform(cfg.Platform) {
-		// Explicit global OneBot administration may select the QQ binding even
-		// when the active profile is TG. Never fall back to a TG-only transport.
-		binding, found := multi.OneBotBinding()
-		if !found {
-			return nil, fmt.Errorf("diana: no OneBot channel is configured")
+	if multi, ok := channel.(*MultiChannel); ok && !hasOneBotProfile {
+		if binding, found := multi.OneBotBinding(); found {
+			return MessageEvent{ProfileID: binding.ProfileID, Platform: binding.Platform}, nil
 		}
-		return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: binding.ProfileID, Platform: binding.Platform}, action, params)
 	}
-	return r.callOneBotAPIForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, action, params)
+	return MessageEvent{}, err
+}
+
+// soleOneBotProfile 返回唯一一台 OneBot 机器人，用于没有指明机器人的平台调用。
+func (r *Runtime) soleOneBotProfile() (BotConfig, error) {
+	return r.soleAdminProfile(true)
+}
+
+// soleAdminProfile 找「不用指明也不会弄错」的那台机器人：优先看启用的，一台都没启用时
+// 看全部。只有一台符合时返回它；零台或多台都报错，让调用方指明，不替它猜。
+func (r *Runtime) soleAdminProfile(oneBotOnly bool) (BotConfig, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	pick := func(profiles []BotConfig) []BotConfig {
+		var out []BotConfig
+		for _, profile := range profiles {
+			if !oneBotOnly || IsOneBotPlatform(profile.Platform) {
+				out = append(out, profile)
+			}
+		}
+		return out
+	}
+	found := pick(r.enabledProfilesLocked())
+	if len(found) == 0 {
+		found = pick(r.orderedProfilesLocked())
+	}
+	switch {
+	case len(found) == 1:
+		return found[0], nil
+	case len(found) == 0 && oneBotOnly:
+		return BotConfig{}, fmt.Errorf("diana: 没有配置 OneBot 机器人")
+	case len(found) == 0:
+		return BotConfig{}, fmt.Errorf("diana: 没有配置机器人")
+	default:
+		return BotConfig{}, fmt.Errorf("diana: 有多台机器人，请指定要用哪一台")
+	}
+}
+
+// CallPlatformAPIForProfile 按机器人调用它所在平台的原生 API（OneBot 的动作名或
+// Telegram Bot API 的方法名），走的就是这台机器人自己的连接。
+func (r *Runtime) CallPlatformAPIForProfile(ctx context.Context, profileID, action string, params map[string]any) (map[string]any, error) {
+	profile := r.profileConfig(profileID)
+	channel, _, err := r.outboundChannelForEvent(MessageEvent{ProfileID: profile.ID, Platform: profile.Platform})
+	if err != nil {
+		return nil, err
+	}
+	return channel.CallAPI(ctx, action, params)
 }
 
 // CallOneBotAPIForProfile keeps scoped administration on its selected robot.
@@ -890,8 +906,11 @@ func (m OneBotGroupMemberInfo) DisplayName() string {
 }
 
 func (r *Runtime) GetGroupInfo(ctx context.Context, groupID string) (OneBotGroupInfo, error) {
-	cfg := r.Config()
-	return r.getGroupInfoForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, groupID)
+	profile, err := r.soleAdminProfile(false)
+	if err != nil {
+		return OneBotGroupInfo{}, err
+	}
+	return r.getGroupInfoForEvent(ctx, MessageEvent{ProfileID: profile.ID, Platform: profile.Platform}, groupID)
 }
 
 func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, groupID string) (OneBotGroupInfo, error) {
@@ -928,8 +947,11 @@ func (r *Runtime) getGroupInfo(ctx context.Context, groupID string, call oneBotA
 }
 
 func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID string) (OneBotGroupMemberInfo, error) {
-	cfg := r.Config()
-	return r.getGroupMemberInfoForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, groupID, userID)
+	profile, err := r.soleAdminProfile(false)
+	if err != nil {
+		return OneBotGroupMemberInfo{}, err
+	}
+	return r.getGroupMemberInfoForEvent(ctx, MessageEvent{ProfileID: profile.ID, Platform: profile.Platform}, groupID, userID)
 }
 
 func (r *Runtime) getGroupMemberInfoForEvent(ctx context.Context, event MessageEvent, groupID string, userID string) (OneBotGroupMemberInfo, error) {
@@ -967,8 +989,11 @@ func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID
 }
 
 func (r *Runtime) GetGroupMemberList(ctx context.Context, groupID string) ([]OneBotGroupMemberInfo, error) {
-	cfg := r.Config()
-	return r.getGroupMemberListForEvent(ctx, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, groupID)
+	profile, err := r.soleAdminProfile(false)
+	if err != nil {
+		return nil, err
+	}
+	return r.getGroupMemberListForEvent(ctx, MessageEvent{ProfileID: profile.ID, Platform: profile.Platform}, groupID)
 }
 
 func (r *Runtime) getGroupMemberListForEvent(ctx context.Context, event MessageEvent, groupID string) ([]OneBotGroupMemberInfo, error) {
@@ -1091,17 +1116,11 @@ func (r *Runtime) SendGroupMessage(ctx context.Context, groupID string, text str
 	if err != nil {
 		return nil, fmt.Errorf("diana: invalid group id %q", groupID)
 	}
-	event := MessageEvent{Kind: EventKindGroup, GroupID: groupID, Platform: PlatformOneBotV11}
-	r.mu.RLock()
-	channel := r.channel
-	r.mu.RUnlock()
-	if multi, ok := channel.(*MultiChannel); ok {
-		binding, found := multi.OneBotBinding()
-		if !found {
-			return nil, fmt.Errorf("diana: no OneBot channel is configured")
-		}
-		event.ProfileID = binding.ProfileID
+	event, err := r.soleOneBotTarget()
+	if err != nil {
+		return nil, err
 	}
+	event.Kind, event.GroupID = EventKindGroup, groupID
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
@@ -1116,7 +1135,6 @@ func (r *Runtime) SendGroupMessage(ctx context.Context, groupID string, text str
 // Status 返回机器人运行时状态快照。
 func (r *Runtime) Status() RuntimeStatus {
 	r.mu.RLock()
-	cfg := r.cfg
 	running := r.running
 	lastError := r.lastError
 	updatedAt := r.updatedAt
@@ -1128,59 +1146,51 @@ func (r *Runtime) Status() RuntimeStatus {
 	if provider, ok := channel.(interface{ ChannelStatuses() []ChannelStatus }); ok {
 		channelStatuses = provider.ChannelStatuses()
 	}
-	selfID := channelStatus.SelfID
-	if cfg.ID != "" && len(channelStatuses) > 1 {
-		selfID = ""
-		for _, status := range channelStatuses {
-			if status.ProfileID == cfg.ID {
-				selfID = status.SelfID
-				break
-			}
-		}
-	}
-	if cfg.BotAccount == "" && selfID != "" {
-		cfg = r.rememberBotAccount(selfID)
+	for _, status := range channelStatuses {
+		r.rememberBotAccount(status.ProfileID, status.SelfID)
 	}
 
 	return RuntimeStatus{
-		Running:       running,
-		Config:        PayloadFromConfig(cfg),
-		Channel:       channelStatus,
-		Channels:      channelStatuses,
-		NoneBotBridge: r.bridge.Status(),
-		Plugins:       r.plugins.List(),
-		RecentEvents:  recent,
-		ActiveWorkers: r.activeCount(),
-		ActiveTasks:   r.activeSubagentTaskCount(),
-		SubagentTasks: r.subagentTaskStatuses(),
-		PendingEvents: r.pendingInboundCount(),
-		LastError:     lastError,
-		UpdatedAt:     updatedAt,
+		Running:        running,
+		Channel:        channelStatus,
+		Channels:       channelStatuses,
+		NoneBotBridges: r.bridgeStatuses(),
+		Plugins:        r.plugins.List(),
+		RecentEvents:   recent,
+		ActiveWorkers:  r.activeCount(),
+		ActiveTasks:    r.activeSubagentTaskCount(),
+		SubagentTasks:  r.subagentTaskStatuses(),
+		PendingEvents:  r.pendingInboundCount(),
+		LastError:      lastError,
+		UpdatedAt:      updatedAt,
 	}
 }
 
-// rememberBotAccount records the account reported by the connected platform once,
-// without overwriting an explicitly configured identity.
-func (r *Runtime) rememberBotAccount(selfID string) BotConfig {
+// rememberBotAccount 把连接上报的账号记到对应机器人上，只在没填过账号时写一次，
+// 不覆盖显式配置的身份。
+func (r *Runtime) rememberBotAccount(profileID, selfID string) {
 	selfID = strings.TrimSpace(selfID)
 	if selfID == "" {
-		return r.Config()
+		return
 	}
-	r.mu.Lock()
-	if r.cfg.BotAccount != "" {
-		cfg := r.cfg
-		r.mu.Unlock()
-		return cfg
-	}
-	r.cfg.BotAccount = selfID
-	r.updatedAt = time.Now()
-	cfg := r.cfg
+	r.mu.RLock()
+	profile, ok := r.lookupProfileLocked(profileID)
 	saver := r.configSaver
-	r.mu.Unlock()
-	if saver != nil {
-		saver.SaveBotConfig(cfg)
+	r.mu.RUnlock()
+	if !ok || strings.TrimSpace(profile.BotAccount) != "" {
+		return
 	}
-	return cfg
+	_, _ = r.commitProfileChange(profile.ID, func(cfg *BotConfig) error {
+		if strings.TrimSpace(cfg.BotAccount) == "" {
+			cfg.BotAccount = selfID
+		}
+		return nil
+	}, func(cfg BotConfig) error {
+		if saver != nil {
+			saver.SaveBotConfig(cfg)
+		}
+		return nil
+	})
 }
 
 func (r *Runtime) effectiveConfigForEvent(event MessageEvent) BotConfig {
@@ -1190,12 +1200,7 @@ func (r *Runtime) effectiveConfigForEvent(event MessageEvent) BotConfig {
 }
 
 func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
-	cfg := r.cfg.WithDefaults()
-	if profileID := strings.TrimSpace(event.ProfileID); profileID != "" {
-		if profile, ok := r.profileConfigs[profileID]; ok {
-			cfg = profile.WithDefaults()
-		}
-	}
+	cfg := r.profileConfigLocked(event.ProfileID)
 	if (event.Kind != EventKindGroup && event.Kind != EventKindNotice) || strings.TrimSpace(event.GroupID) == "" || r.groupConfigs == nil {
 		return cfg
 	}
@@ -1293,7 +1298,7 @@ func (r *Runtime) groupConfigForEvent(event MessageEvent) (GroupConfig, bool) {
 	}
 	r.mu.RLock()
 	store := r.groupConfigs
-	base := r.cfg
+	base := r.profileConfigLocked(event.ProfileID)
 	r.mu.RUnlock()
 	if store == nil {
 		return GroupConfig{}, false
@@ -1344,29 +1349,24 @@ func (r *Runtime) replyLinkPolicy(event MessageEvent) string {
 	}
 }
 
-// oneBotBotAccount 返回负责 OneBot 的那台机器人的账号，用于给历史回填补 self_id。
-// 同样不能用 r.Config().BotAccount：激活的是 Telegram 那台时，那是个 Telegram 账号。
+// oneBotBotAccount 返回负责 OneBot 历史回填的那台机器人的账号，用于给回填消息补 self_id。
 func (r *Runtime) oneBotBotAccount() string {
 	r.mu.RLock()
-	cfg := r.cfg
 	channel := r.channel
-	profileConfigs := r.profileConfigs
 	r.mu.RUnlock()
-	if IsOneBotPlatform(cfg.Platform) {
-		return strings.TrimSpace(cfg.BotAccount)
-	}
 	multi, ok := channel.(*MultiChannel)
 	if !ok {
+		if profile, err := r.soleOneBotProfile(); err == nil {
+			return strings.TrimSpace(profile.BotAccount)
+		}
 		return ""
 	}
 	binding, found := multi.OneBotBinding()
 	if !found {
 		return ""
 	}
-	if profile, ok := profileConfigs[strings.TrimSpace(binding.ProfileID)]; ok {
-		if account := strings.TrimSpace(profile.BotAccount); account != "" {
-			return account
-		}
+	if account := strings.TrimSpace(r.profileConfig(binding.ProfileID).BotAccount); account != "" {
+		return account
 	}
 	// 配置里没填账号时用连接上报的 self_id：反连握手带着它，比空着强。
 	return strings.TrimSpace(binding.Channel.Status().SelfID)
@@ -1398,10 +1398,7 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.record(r.decisionEventRecord(event, text, "ignored_unavailable_group"))
 		return event, text, false, "ignored_unavailable_group"
 	}
-	if r.bridge != nil {
-		// NoneBot 桥只做旁路转发，不影响本地插件和 LLM 回复流程。
-		r.bridge.ForwardEvent(event)
-	}
+	r.forwardToBridge(event)
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
 	event = r.prepareIncomingVoice(ctx, event)
@@ -4876,9 +4873,7 @@ func profileRegistrySelection(registry *llm.ProviderRegistry, profile llm.Profil
 }
 
 func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group string, scoped ...map[string]ModelRole) ([]llm.Profile, error) {
-	r.mu.RLock()
-	roles := normalizeModelRoles(r.cfg.ModelRoles)
-	r.mu.RUnlock()
+	roles := r.modelRolesForContext(nil)
 	if len(scoped) > 0 {
 		roles = scoped[0]
 	}
@@ -7244,12 +7239,6 @@ func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled 
 		// 群开关由聊天指令修改，必须立即落盘，否则重启后会丢失。
 		if saver, ok := r.configSaver.(disabledGroupsSaver); ok {
 			return saver.SaveDisabledGroups(profileID, next)
-		}
-		r.mu.RLock()
-		isMain := r.cfg.ID == profileID
-		r.mu.RUnlock()
-		if !isMain {
-			return fmt.Errorf("配置存储不支持按机器人修改禁用群")
 		}
 		if r.configSaver != nil {
 			r.configSaver.SaveBotConfig(profile.WithDefaults())

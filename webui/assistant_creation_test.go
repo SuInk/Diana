@@ -30,7 +30,7 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	defer cancel()
 	runtime := assistant.NewRuntime(existing, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	handler := NewBotHandlerWithFactory(ctx, runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
-	existing, _ = handler.profiles.Profiles().Current()
+	existing = handler.profiles.Profiles().Profiles[0]
 	router := botTestRouter(handler)
 
 	response := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 
 	// Explicitly turning both switches off must be honored. Even a supplied
 	// existing ID cannot turn the creation endpoint into an edit operation.
-	draft.ID, draft.ActiveProfileID = existing.ID, existing.ID
+	draft.ID = existing.ID
 	draft.Enabled, draft.OwnerLoginEnabled = false, false
 	draft.Name = "Independent bot"
 	raw, err := json.Marshal(draft)
@@ -73,10 +73,8 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	if len(set.Profiles) != 2 {
 		t.Fatalf("creation did not add a profile: %d", len(set.Profiles))
 	}
-	fresh, ok := set.Current()
-	if !ok {
-		t.Fatal("missing new profile")
-	}
+	// 新建的机器人追加在末尾。
+	fresh := set.Profiles[len(set.Profiles)-1]
 	if fresh.ID == existing.ID || fresh.Enabled || fresh.OwnerLoginEnabled {
 		t.Fatalf("incorrect new identity or switches: %s", fresh.ID)
 	}

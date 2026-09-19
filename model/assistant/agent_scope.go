@@ -44,7 +44,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		return nil, err
 	}
 	if relationship.Owner {
-		registry.Register(newDianaConfigTool(r))
+		registry.Register(newDianaConfigTool(r, event))
 		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
 	}
@@ -78,12 +78,13 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 }
 
 func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {
-	global := r.Config()
+	// Skills 目录和 MCP 配置路径由 GlobalExtensionPaths 在首次使用时固定下来，
+	// 机器人之间不会因为各自填得不同而切到另一套扩展。
 	return agent.Config{
 		WorkDir:             AgentWorkspaceDir(),
 		MaxSteps:            cfg.AgentMaxSteps,
-		SkillRoots:          global.AgentSkillRoots,
-		MCPConfigPath:       global.AgentMCPConfigPath,
+		SkillRoots:          cfg.AgentSkillRoots,
+		MCPConfigPath:       cfg.AgentMCPConfigPath,
 		ExtensionManagement: extensionManagement,
 		BuiltinExtensions:   r.agentBuiltinExtensions(event),
 		BuiltinSkills:       r.botProtocolBuiltinSkills(event),

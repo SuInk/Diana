@@ -514,15 +514,16 @@ SELECT ?, user_id, display_name, favorability, message_count, memories, '', last
 	return tx.Commit()
 }
 
-// currentBotProfileID 读当前生效的机器人配置档 ID，供迁移决定历史数据的归属。
+// currentBotProfileID 读老库里那台机器人的 ID，供迁移决定历史数据的归属。
 // 读不到（全新库、或还没配过机器人）就归到空作用域，后续第一次写入会带上真实 ID。
 func (s *SQLiteStore) currentBotProfileID() string {
 	set, ok, err := s.LoadBotProfiles(context.Background())
 	if err != nil || !ok {
 		return ""
 	}
-	if current, found := set.Current(); found {
-		return strings.TrimSpace(current.ID)
+	// 需要这次迁移的都是多机器人之前的老库，那时只有一台机器人，就是列表里第一台。
+	if set = set.WithDefaults(); len(set.Profiles) > 0 {
+		return strings.TrimSpace(set.Profiles[0].ID)
 	}
 	return ""
 }

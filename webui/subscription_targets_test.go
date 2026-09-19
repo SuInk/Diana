@@ -11,8 +11,8 @@ import (
 func TestSubscriptionTargetsKeepEachRobotAndRejectUnknownRobots(t *testing.T) {
 	r := assistant.NewRuntime(assistant.BotConfig{ID: "qq"}, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	h := NewBotHandler(context.Background(), r)
-	profiles := NewMemoryBotProfileStore(r.Config())
-	if err := profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "qq", Profiles: []assistant.BotConfig{{ID: "qq", Platform: assistant.PlatformOneBotV11}, {ID: "tg", Platform: assistant.PlatformTelegram}}}); err != nil {
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	if err := profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "qq", Platform: assistant.PlatformOneBotV11}, {ID: "tg", Platform: assistant.PlatformTelegram}}}); err != nil {
 		t.Fatal(err)
 	}
 	h.SetProfileStore(profiles)

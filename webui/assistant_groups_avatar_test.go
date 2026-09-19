@@ -81,7 +81,6 @@ func TestIsOneBotProfileDoesNotAssumeOneBotWithoutOneBotProfiles(t *testing.T) {
 	telegram.Platform = "telegram"
 	store := NewMemoryBotProfileStore(telegram)
 	if err := store.SaveProfiles(assistant.ProfileSet{
-		ActiveID: "tg-profile",
 		Profiles: []assistant.BotConfig{telegram},
 	}); err != nil {
 		t.Fatal(err)
@@ -111,7 +110,6 @@ func TestIsOneBotProfileKeepsLegacyFallbackWithOneBotProfiles(t *testing.T) {
 	telegram.Platform = "telegram"
 	store := NewMemoryBotProfileStore(onebot)
 	if err := store.SaveProfiles(assistant.ProfileSet{
-		ActiveID: "qq-profile",
 		Profiles: []assistant.BotConfig{onebot, telegram},
 	}); err != nil {
 		t.Fatal(err)

@@ -305,7 +305,7 @@ func main() {
 	}
 	// 业务配置的真相源是数据库。config.yaml 里写了但没被采用时必须说清楚，
 	// 否则就退回到以前那种「改了配置文件重启没反应也不报错」的状态。
-	reportSeedOutcome(appCfg.path, llmSeeded, llmSeed, store.Current(), botSeeded, botSeed, botProfileStore.Current())
+	reportSeedOutcome(appCfg.path, llmSeeded, llmSeed, store.Current(), botSeeded, botSeed, firstBotProfile(botProfileStore.Profiles()))
 	botGroupConfigStore, err := webui.NewPersistentBotGroupConfigStore(ctx, sqliteStore)
 	if err != nil {
 		log.Fatal(err)
@@ -401,15 +401,9 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	botCfg, ok := botSet.RuntimeConfig()
-	if !ok {
-		botCfg = botProfileStore.Current()
-	}
-	// NapCat 使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，配置变更时只更新 token/endpoint。
-	oneBotServer := assistant.NewOneBotReverseServer(assistant.OneBotConfig{
-		Endpoint:    botCfg.OneBotReverseWSEndpoint,
-		AccessToken: botCfg.OneBotAccessToken,
-	})
+	// NapCat 使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，由通道工厂按
+	// 机器人配置设置 token/endpoint。
+	oneBotServer := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
 	oneBotHTTPServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
 	forwardTracker := &forwardWSOriginTracker{}
 	channelSetFactory := newBotChannelSetFactory(oneBotServer, forwardTracker, oneBotHTTPServer)
@@ -418,7 +412,7 @@ func main() {
 	newLLMClient := func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
 		return llm.NewClient(cfg, llm.ClientOptionsFor(cfg, oauthManager)...)
 	}
-	botRuntime := assistant.NewRuntime(botCfg, channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
+	botRuntime := assistant.NewRuntime(firstBotProfile(botSet), channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
 		return newLLMClient(store.Current())
 	})
 	botRuntime.SetProfiles(botSet)
@@ -495,10 +489,9 @@ func main() {
 		statsCollector.Observe(event)
 		eventHub.PublishBotEvent(event)
 	})
-	if botCfg.Enabled {
-		if err := botRuntime.Start(ctx); err != nil {
-			log.Printf("assistant start skipped: %v", err)
-		}
+	// 没有启用的机器人时 Start 返回 ErrBotDisabled，不算错误。
+	if err := botRuntime.Start(ctx); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		log.Printf("assistant start skipped: %v", err)
 	}
 	botHandler := webui.NewBotHandlerWithFactory(ctx, botRuntime, func(cfg assistant.BotConfig) assistant.Channel {
 		// 这里必须和 channelSetFactory 用同一个平台判断。以前是「不是 Telegram
@@ -852,4 +845,13 @@ func serveFile(c *gin.Context, root http.FileSystem, path string) {
 	if _, err := io.Copy(c.Writer, file); err != nil {
 		log.Printf("serve %s: %v", path, err)
 	}
+}
+
+// firstBotProfile 返回配置集里的第一台机器人，配置集为空时返回默认配置。
+// 只用于种子配置核对和构造运行时，随后 SetProfiles 会换上整套配置。
+func firstBotProfile(set assistant.ProfileSet) assistant.BotConfig {
+	if set = set.WithDefaults(); len(set.Profiles) > 0 {
+		return set.Profiles[0]
+	}
+	return assistant.DefaultBotConfig()
 }

@@ -63,10 +63,10 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("LoadBotProfiles() ok=%v err=%v", ok, err)
 	}
-	gotBot, ok := botSet.Current()
-	if !ok {
-		t.Fatalf("bot profile set has no current profile: %#v", botSet)
+	if len(botSet.Profiles) == 0 {
+		t.Fatalf("bot profile set is empty: %#v", botSet)
 	}
+	gotBot := botSet.Profiles[0]
 	if gotBot.OneBotAccessToken != botCfg.OneBotAccessToken || gotBot.BotAccount != botCfg.BotAccount {
 		t.Fatalf("gotBot = %#v", gotBot)
 	}

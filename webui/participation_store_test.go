@@ -22,7 +22,7 @@ func TestParticipationStorePersistsOneRobotAndPropagatesFailure(t *testing.T) {
 	}
 	a := assistant.BotConfig{ID: "a", OwnerID: "one", SystemPrompt: "unchanged"}
 	b := assistant.BotConfig{ID: "b", OwnerID: "two"}
-	if err := store.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{a, b}}); err != nil {
+	if err := store.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{a, b}}); err != nil {
 		t.Fatal(err)
 	}
 	p := NewRuntimePersistor(store)
@@ -33,7 +33,7 @@ func TestParticipationStorePersistsOneRobotAndPropagatesFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if set.ActiveID != "a" || set.Profiles[0].SystemPrompt != "unchanged" || set.Profiles[0].Participation != nil || set.Profiles[1].Participation.Desire != 0 || set.Profiles[1].Participation.CooldownSeconds != 120 {
+	if set.Profiles[0].SystemPrompt != "unchanged" || set.Profiles[0].Participation != nil || set.Profiles[1].Participation.Desire != 0 || set.Profiles[1].Participation.CooldownSeconds != 120 {
 		t.Fatalf("incorrect stored config: %+v", set)
 	}
 	if err := db.Close(); err != nil {

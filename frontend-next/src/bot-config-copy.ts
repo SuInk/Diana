@@ -16,7 +16,6 @@ export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProf
     ...copied,
     id: undefined,
     profiles: undefined,
-    active_profile_id: undefined,
     message_relays: undefined,
     connection_profile_id: "",
     bot_account: undefined,

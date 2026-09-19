@@ -165,7 +165,7 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 	if hasState && (state == nil || !state.enabled) {
 		return run
 	}
-	if !hasState && !llmIdentityMaskingEnabled(r.Config()) {
+	if !hasState && !llmIdentityMaskingEnabled(r.configForContext(ctx)) {
 		return run
 	}
 	scope := identityPrivacyScopeFromContext(ctx)

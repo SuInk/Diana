@@ -239,9 +239,6 @@ func (r *Runtime) saveBotParticipation(expected BotConfig, prefs ParticipationPr
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cfg.ID == saved.ID {
-		r.cfg = saved
-	}
 	if r.profileConfigs == nil {
 		r.profileConfigs = map[string]BotConfig{}
 	}

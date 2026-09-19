@@ -176,9 +176,8 @@ func (c *MultiChannel) SendChatAction(ctx context.Context, msg OutgoingMessage, 
 
 // OneBotBinding 返回负责 OneBot 的那条绑定。
 //
-// 「哪台机器人是 OneBot」和「当前激活的是哪台」是两件事。反连监听器是进程内共享的
-// 一个实例，OneBot 和 Telegram 可以同时跑；激活 Telegram 那台之后，OneBot 连接照常
-// 收消息，但它属于哪台机器人不该跟着激活项走。
+// 反连监听器是进程内共享的一个实例，OneBot 和 Telegram 可以同时跑；OneBot 连接收到的
+// 消息属于哪台机器人，由这条绑定决定。
 func (c *MultiChannel) OneBotBinding() (ChannelBinding, bool) {
 	if c == nil {
 		return ChannelBinding{}, false

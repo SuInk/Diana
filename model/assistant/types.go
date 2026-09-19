@@ -828,7 +828,6 @@ type ConfigPayload struct {
 	Name                        string          `json:"name,omitempty"`
 	Platform                    string          `json:"platform,omitempty"`
 	AvatarURL                   string          `json:"avatar_url,omitempty"`
-	ActiveProfileID             string          `json:"active_profile_id,omitempty"`
 	Profiles                    []ConfigPayload `json:"profiles,omitempty"`
 	// MessageRelays 是跨机器人的消息互通链路，读接口一并回传给 WebUI。
 	MessageRelays                     []MessageRelayPair `json:"message_relays,omitempty"`
@@ -1298,8 +1297,9 @@ const (
 	DefaultPlatform    = PlatformOneBotV11
 )
 
+// ProfileSet 是全部机器人的配置。没有「当前」或「激活」的那一台：运行时按消息所属的
+// 机器人取配置，WebUI 编辑哪一台由前端自己记。旧数据里的 active_id 字段读取时直接忽略。
 type ProfileSet struct {
-	ActiveID string      `json:"active_id"`
 	Profiles []BotConfig `json:"profiles"`
 	// MessageRelays 是「消息互通」的链路表。它跨机器人，不属于任何一台，所以
 	// 放在配置集这一层而不是单台机器人的配置里。
@@ -1326,10 +1326,7 @@ var (
 func NewProfileSet(cfg BotConfig) ProfileSet {
 	profile := cfg.WithDefaults()
 	profile.ID = uuid.NewString()
-	return ProfileSet{
-		ActiveID: profile.ID,
-		Profiles: []BotConfig{profile},
-	}
+	return ProfileSet{Profiles: []BotConfig{profile}}
 }
 
 // WithMessageRelays 换一整份互通配置。
@@ -1374,42 +1371,6 @@ func NormalizeProfileName(name string) string {
 	return DefaultProfileName
 }
 
-// Current 返回当前激活的机器人配置。
-func (s ProfileSet) Current() (BotConfig, bool) {
-	for _, profile := range s.Profiles {
-		if profile.ID == s.ActiveID {
-			return profile.WithDefaults(), true
-		}
-	}
-	if len(s.Profiles) == 0 {
-		return BotConfig{}, false
-	}
-	return s.Profiles[0].WithDefaults(), true
-}
-
-// RuntimeConfig keeps the active profile as the management target when it is
-// enabled, otherwise it selects another enabled profile so the shared runtime
-// can stay online for the remaining channels.
-func (s ProfileSet) RuntimeConfig() (BotConfig, bool) {
-	s = s.WithDefaults()
-	current, ok := s.Current()
-	if ok && current.Enabled {
-		resolved, err := s.ResolveConnection(current)
-		return resolved, err == nil
-	}
-	for _, profile := range s.Profiles {
-		if profile.Enabled {
-			resolved, err := s.ResolveConnection(profile)
-			return resolved, err == nil
-		}
-	}
-	if ok {
-		resolved, err := s.ResolveConnection(current)
-		return resolved, err == nil
-	}
-	return BotConfig{}, false
-}
-
 // ConfigForProfile 按 ID 取出这台机器人的配置。
 func (s ProfileSet) ConfigForProfile(id string) (BotConfig, bool) {
 	id = strings.TrimSpace(id)
@@ -1429,18 +1390,6 @@ func (s ProfileSet) Resolver() BotConfigResolver {
 	return s.ConfigForProfile
 }
 
-// WithActive 返回切换 active_id 后的机器人配置集。
-func (s ProfileSet) WithActive(id string) ProfileSet {
-	id = strings.TrimSpace(id)
-	for _, profile := range s.Profiles {
-		if profile.ID == id {
-			s.ActiveID = id
-			return s
-		}
-	}
-	return s
-}
-
 // Delete 从配置集中删除指定机器人配置。
 func (s ProfileSet) Delete(id string) ProfileSet {
 	id = strings.TrimSpace(id)
@@ -1458,17 +1407,10 @@ func (s ProfileSet) Delete(id string) ProfileSet {
 	// 机器人没了，指向它的互通链路也就断了。留着只会让转发一直往一个不存在的
 	// 机器人发，然后每条消息都在日志里失败一次。
 	s.MessageRelays = messageRelaysWithoutProfile(s.MessageRelays, id)
-	if len(s.Profiles) == 0 {
-		s.ActiveID = ""
-		return s
-	}
-	if s.ActiveID == id {
-		s.ActiveID = s.Profiles[0].ID
-	}
 	return s
 }
 
-// WithDefaults 补齐机器人配置集的默认字段、唯一 ID 和激活项。
+// WithDefaults 补齐机器人配置集的默认字段和唯一 ID。
 func (s ProfileSet) WithDefaults() ProfileSet {
 	s.MessageRelays = NormalizeMessageRelays(s.MessageRelays)
 	if len(s.Profiles) > 0 {
@@ -1489,17 +1431,6 @@ func (s ProfileSet) WithDefaults() ProfileSet {
 		s.Profiles[i].ID = id
 		s.Profiles[i] = s.Profiles[i].WithDefaults()
 	}
-	if len(s.Profiles) == 0 {
-		s.ActiveID = ""
-		return s
-	}
-	s.ActiveID = strings.TrimSpace(s.ActiveID)
-	for _, profile := range s.Profiles {
-		if profile.ID == s.ActiveID {
-			return s
-		}
-	}
-	s.ActiveID = s.Profiles[0].ID
 	return s
 }
 
@@ -2223,24 +2154,27 @@ func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	return payload
 }
 
-// PayloadFromProfileSet 把机器人配置集转换为前端可直接消费的 payload。
-func PayloadFromProfileSet(set ProfileSet) ConfigPayload {
-	return payloadFromProfileSet(set, PayloadFromConfig)
+// PayloadFromProfileSet 把机器人配置集转换为前端可直接消费的 payload。顶层字段是
+// focusID 指的那台机器人（这次请求操作的那台）；focusID 为空或找不到时是第一台。
+func PayloadFromProfileSet(set ProfileSet, focusID string) ConfigPayload {
+	return payloadFromProfileSet(set, focusID, PayloadFromConfig)
 }
 
 // PayloadFromProfileSetWithSecrets 与 PayloadFromProfileSet 相同,但带回真实 token。
-func PayloadFromProfileSetWithSecrets(set ProfileSet) ConfigPayload {
-	return payloadFromProfileSet(set, PayloadFromConfigWithSecrets)
+func PayloadFromProfileSetWithSecrets(set ProfileSet, focusID string) ConfigPayload {
+	return payloadFromProfileSet(set, focusID, PayloadFromConfigWithSecrets)
 }
 
-func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload) ConfigPayload {
+func payloadFromProfileSet(set ProfileSet, focusID string, convert func(BotConfig) ConfigPayload) ConfigPayload {
 	set = set.WithDefaults()
-	current, ok := set.Current()
-	if !ok {
+	if len(set.Profiles) == 0 {
 		return ConfigPayload{}
 	}
-	payload := convert(current)
-	payload.ActiveProfileID = set.ActiveID
+	focus := set.Profiles[0]
+	if profile, ok := set.ConfigForProfile(focusID); ok {
+		focus = profile
+	}
+	payload := convert(focus)
 	payload.MessageRelays = append([]MessageRelayPair(nil), set.MessageRelays...)
 	payload.Profiles = make([]ConfigPayload, 0, len(set.Profiles))
 	for _, profile := range set.Profiles {

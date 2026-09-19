@@ -37,10 +37,7 @@ func (r *Runtime) Plugins() *PluginManager {
 }
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
-	profileID := strings.TrimSpace(event.ProfileID)
-	if profileID == "" {
-		profileID = r.Config().ID
-	}
+	profileID := r.eventProfileID(event)
 	out := r.plugins.ProfileOverrides(profileID)
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
@@ -80,10 +77,7 @@ func (r *Runtime) webSearchPluginSettings(event MessageEvent) (SettingValues, bo
 }
 
 func (r *Runtime) pluginSettingOverridesForEvent(event MessageEvent) PluginSettingOverrides {
-	profileID := strings.TrimSpace(event.ProfileID)
-	if profileID == "" {
-		profileID = r.Config().ID
-	}
+	profileID := r.eventProfileID(event)
 	out := PluginSettingOverrides{pluginSettingsProfileKey: map[string]any{"profile_id": profileID}}
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginSettingOverrides) == 0 {

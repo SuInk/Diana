@@ -23,8 +23,8 @@ func TestBotHandlerPluginProfileIsolationPersists(t *testing.T) {
 	m := assistant.NewDefaultPluginManager()
 	r := assistant.NewRuntime(assistant.BotConfig{ID: "qq-a"}, fakeChannel{}, m, nil, nil, nil, nil)
 	h := NewBotHandlerWithFactory(ctx, r, nil)
-	profiles := NewMemoryBotProfileStore(r.Config())
-	if err := profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "qq-a", Profiles: []assistant.BotConfig{
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	if err := profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{
 		{ID: "qq-a", Platform: assistant.PlatformOneBotV11},
 		{ID: "qq-b", Platform: assistant.PlatformOneBotV11},
 		{ID: "tg", Platform: assistant.PlatformTelegram},

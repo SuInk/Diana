@@ -433,8 +433,9 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 		botCfg = saved
 	} else {
 		r.mu.RLock()
-		single := len(r.profileConfigs) <= 1 && r.cfg.ID == botCfg.ID
-		current := r.cfg.WithDefaults()
+		sole, single := r.lookupProfileLocked("")
+		single = single && sole.ID == botCfg.ID
+		current := sole.WithDefaults()
 		r.mu.RUnlock()
 		if !single {
 			return fmt.Errorf("配置存储不支持按机器人保存模型分配")
@@ -452,9 +453,6 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 		saver.SaveBotConfig(botCfg)
 	}
 	r.mu.Lock()
-	if r.cfg.ID == botCfg.ID {
-		r.cfg = botCfg
-	}
 	if r.profileConfigs == nil {
 		r.profileConfigs = map[string]BotConfig{}
 	}
