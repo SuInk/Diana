@@ -114,9 +114,11 @@ docker compose pull && docker compose up -d
 
 **Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；先创建该文件，再取消 Compose 中配置文件挂载行的注释。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
 
+**slim 轻量镜像：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.126-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的五分之一，适合不需要网页渲染、媒体下载和 OCR 的部署。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> apk add --no-cache chromium font-noto-cjk` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
+
 **手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
 
-**更新通道：** 在 WebUI 版本面板选择 `Release`（默认，仅正式版）或 `Beta`（测试版、候选版和正式版）。设置持久保存，检查更新、自动下载与安装均使用所选通道；切回 Release 不会自动降级。版本命名、Docker 标签与发布步骤见 [更新通道说明](docs/update-channels.md)。
+**更新通道：** 在 WebUI 版本面板选择 `Release`（默认，仅正式版）、`Beta`（测试版、候选版和正式版）或 `Canary`（另含每次合并到 main 自动构建的版本）。设置持久保存，检查更新、自动下载与安装均使用所选通道；切回 Release 不会自动降级。版本命名、Docker 标签与发布步骤见 [更新通道说明](docs/update-channels.md)。
 
 **包名迁移：** 新完整包统一命名为 `diana-<系统>-<架构>.tar.gz`（Windows 为 `.zip`），例如 `diana-macos-arm64.tar.gz`。仍只识别 `diana-webui-…` 包名的旧版控制台不能直接自更新到新包名版本，首次需重跑上方一键安装命令或手动安装完整包；新版安装器和自更新器仍兼容旧包名。包内可执行文件保持 `diana-webui` / `diana-webui.exe`，已有服务配置不必改名。
 

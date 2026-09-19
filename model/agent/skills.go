@@ -31,7 +31,7 @@ type SkillMetadata struct {
 	Source           string `json:"source,omitempty"`
 	Managed          bool   `json:"managed,omitempty"`
 	// Content is populated only for skills embedded in the Diana binary. It is
-	// excluded from catalogs and registry cache keys; skills.read returns it.
+	// excluded from catalogs and registry cache keys; read_skill returns it.
 	Content string `json:"-"`
 }
 
@@ -212,7 +212,7 @@ func RenderSkillsPrompt(skills []SkillMetadata, budget int) string {
 	}
 	builder.WriteString("### How to use skills\n")
 	builder.WriteString("- If the user names a skill with `$SkillName`, or the task clearly matches a skill description, use that skill for this turn.\n")
-	builder.WriteString("- Before using a skill, call `skills.read` for its name and follow the full `SKILL.md` instructions.\n")
+	builder.WriteString("- Before using a skill, call `read_skill` for its name and follow the full `SKILL.md` instructions.\n")
 	builder.WriteString("- When a `SKILL.md` references relative files, resolve them relative to the skill file directory.\n")
 	return strings.TrimSpace(builder.String())
 }
@@ -252,7 +252,6 @@ func isSkillNameRune(r rune) bool {
 }
 
 type SkillTools struct {
-	List *SkillsListTool
 	Read *SkillsReadTool
 }
 
@@ -265,33 +264,8 @@ func NewSkillTools(skills []SkillMetadata) SkillTools {
 
 func newLiveSkillTools(provider func() []SkillMetadata) SkillTools {
 	return SkillTools{
-		List: &SkillsListTool{provider: provider},
 		Read: &SkillsReadTool{provider: provider},
 	}
-}
-
-type SkillsListTool struct {
-	provider func() []SkillMetadata
-}
-
-func (t *SkillsListTool) Name() string {
-	return "skills.list"
-}
-
-func (t *SkillsListTool) Description() string {
-	return `列出可用的内置或本地 SKILL.md skills。`
-}
-
-func (t *SkillsListTool) InputSchema() map[string]any {
-	return toolEmptySchema()
-}
-
-func (t *SkillsListTool) Run(context.Context, map[string]any) (string, error) {
-	body, err := json.MarshalIndent(map[string]any{"skills": t.skills()}, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(body), nil
 }
 
 type SkillsReadTool struct {
@@ -299,7 +273,7 @@ type SkillsReadTool struct {
 }
 
 func (t *SkillsReadTool) Name() string {
-	return "skills.read"
+	return "read_skill"
 }
 
 func (t *SkillsReadTool) Description() string {
@@ -341,13 +315,6 @@ func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, e
 		return string(encoded), nil
 	}
 	return "", fmt.Errorf("skill %q not found", name)
-}
-
-func (t *SkillsListTool) skills() []SkillMetadata {
-	if t == nil || t.provider == nil {
-		return nil
-	}
-	return t.provider()
 }
 
 func (t *SkillsReadTool) skills() []SkillMetadata {

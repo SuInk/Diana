@@ -13,7 +13,7 @@ import (
 	"github.com/SuInk/diana/model/applog"
 )
 
-const replyBlockToolName = "diana.reply_block"
+const replyBlockToolName = "reply_block"
 
 // replyBlockSaver 只改机器人级门禁里的屏蔽名单，和 botMarkersSaver 一样窄：
 // 聊天里下的屏蔽指令不该有能力覆写整份门禁。
@@ -40,7 +40,7 @@ func (*dianaReplyBlockTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("block 加入屏蔽名单，unblock 移出，list 只读当前名单；只有保存成功才报告已生效。", "block", "unblock", "list"),
 		"scope":     toolEnumParam("群聊默认 group，私聊默认 bot。group 只影响当前群，bot 对本机所有群和私聊生效且仅主人可改；不能指定别的机器人或别的群。", "group", "bot"),
-		"user_id":   toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或 diana.group 查到的成员 ID。不要按昵称猜 ID，拿不准就先查成员或问清楚。省略时用当前引用消息的发送者；list 不需要。"),
+		"user_id":   toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或 group 查到的成员 ID。不要按昵称猜 ID，拿不准就先查成员或问清楚。省略时用当前引用消息的发送者；list 不需要。"),
 	})
 }
 
@@ -72,7 +72,7 @@ func (t *dianaReplyBlockTool) Run(ctx context.Context, input map[string]any) (st
 		if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
 			return "", fmt.Errorf("群级屏蔽只能在目标群内操作")
 		}
-		// 和 diana.bot_config 同一套核验：非主人一律清掉上报的身份，逼着走一次
+		// 和 bot_config 同一套核验：非主人一律清掉上报的身份，逼着走一次
 		// 实时成员查询，不拿入站事件里那个可以伪造的 sender_role 当权限凭据。
 		authEvent := t.event
 		if !base.IsOwnerEvent(authEvent) {

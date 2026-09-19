@@ -237,16 +237,19 @@ type QuotedMessage struct {
 }
 
 type OutgoingMessage struct {
-	PlatformScope        string
-	GuildID              string
-	Platform             string
-	ProfileID            string
-	GroupID              string
-	MessageThreadID      string
-	UserID               string
-	Text                 string
-	Segments             []MessageSegment
-	ImageURLs            []string
+	PlatformScope   string
+	GuildID         string
+	Platform        string
+	ProfileID       string
+	GroupID         string
+	MessageThreadID string
+	UserID          string
+	Text            string
+	Segments        []MessageSegment
+	ImageURLs       []string
+	// ImageLabels 与 ImageURLs 一一对应，给控制台的事件记录标出每张图是什么
+	// （比如哪个表情包）；不发给平台。
+	ImageLabels          []string
 	ImageAlbum           bool
 	GeneratedImageModels []GeneratedImageModel
 	VideoURLs            []string
@@ -489,6 +492,7 @@ type BotConfig struct {
 	TelegramAPIBaseURL          string           `json:"telegram_api_base_url,omitempty"`
 	TelegramProxyURL            string           `json:"telegram_proxy_url,omitempty"`
 	TelegramSuppressBotMessages *bool            `json:"telegram_suppress_bot_messages,omitempty"`
+	QQTypingEnabled             *bool            `json:"qq_typing_enabled,omitempty"`
 	QQAppID                     string           `json:"qq_app_id,omitempty"`
 	QQAppSecret                 string           `json:"qq_app_secret,omitempty"`
 	QQSandbox                   bool             `json:"qq_sandbox,omitempty"`
@@ -536,6 +540,7 @@ type BotConfig struct {
 	SentenceEnders            string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled          bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode        ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure           ModelDisclosure      `json:"model_disclosure,omitempty"`
 	MentionUserMode           ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain           *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled        *bool                `json:"error_notify_enabled,omitempty"`
@@ -846,6 +851,7 @@ type ConfigPayload struct {
 	TelegramAPIBaseURL                string             `json:"telegram_api_base_url,omitempty"`
 	TelegramProxyURL                  string             `json:"telegram_proxy_url,omitempty"`
 	TelegramSuppressBotMessages       *bool              `json:"telegram_suppress_bot_messages,omitempty"`
+	QQTypingEnabled                   *bool              `json:"qq_typing_enabled,omitempty"`
 	QQAppID                           string             `json:"qq_app_id,omitempty"`
 	QQAppSecret                       string             `json:"qq_app_secret,omitempty"`
 	QQAppSecretConfigured             bool               `json:"qq_app_secret_configured,omitempty"`
@@ -903,6 +909,7 @@ type ConfigPayload struct {
 	SentenceEnders                string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled              bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode            ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure               ModelDisclosure      `json:"model_disclosure,omitempty"`
 	MentionUserMode               ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain               *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled            *bool                `json:"error_notify_enabled,omitempty"`
@@ -1498,6 +1505,7 @@ func DefaultBotConfig() BotConfig {
 		BotReplyLoopDetectionEnabled: boolPointer(true),
 		ReplySafetyMasterEnabled:     boolPointer(true),
 		TelegramSuppressBotMessages:  boolPointer(true),
+		QQTypingEnabled:              boolPointer(true),
 		NotebookSharedScopeEnabled:   boolPointer(true),
 		RecentHistoryTokenBudget:     DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
@@ -1651,6 +1659,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyReferenceMode == "" {
 		cfg.ReplyReferenceMode = defaults.ReplyReferenceMode
 	}
+	cfg.ModelDisclosure = normalizeModelDisclosure(cfg.ModelDisclosure)
 	if cfg.MentionUserMode == "" {
 		cfg.MentionUserMode = defaults.MentionUserMode
 	}
@@ -1728,6 +1737,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.TelegramSuppressBotMessages == nil {
 		cfg.TelegramSuppressBotMessages = boolPointer(true)
+	}
+	if cfg.QQTypingEnabled == nil {
+		cfg.QQTypingEnabled = boolPointer(true)
 	}
 	if cfg.MaxContextTokens < 0 {
 		cfg.MaxContextTokens = 0
@@ -1996,6 +2008,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		TelegramAPIBaseURL:          cfg.TelegramAPIBaseURL,
 		TelegramProxyURL:            cfg.TelegramProxyURL,
 		TelegramSuppressBotMessages: copyBoolPointer(cfg.TelegramSuppressBotMessages),
+		QQTypingEnabled:             copyBoolPointer(cfg.QQTypingEnabled),
 		// 密钥一律只回 configured 标志或掩码预览（见 OneBotAccessTokenPreview），
 		// 不回明文。AppID/CorpID 这类公开标识可以回显，
 		// 方便用户核对填的是不是同一个应用。
@@ -2046,6 +2059,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SentenceEnders:                    cfg.SentenceEnders,
 		DebugModeEnabled:                  cfg.DebugModeEnabled,
 		ReplyReferenceMode:                cfg.ReplyReferenceMode,
+		ModelDisclosure:                   cfg.ModelDisclosure,
 		MentionUserMode:                   cfg.MentionUserMode,
 		MarkdownToPlain:                   copyBoolPointer(cfg.MarkdownToPlain),
 		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
@@ -2202,6 +2216,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		TelegramAPIBaseURL:              payload.TelegramAPIBaseURL,
 		TelegramProxyURL:                payload.TelegramProxyURL,
 		TelegramSuppressBotMessages:     copyBoolPointer(payload.TelegramSuppressBotMessages),
+		QQTypingEnabled:                 copyBoolPointer(payload.QQTypingEnabled),
 		QQAppID:                         payload.QQAppID,
 		QQAppSecret:                     payload.QQAppSecret,
 		QQSandbox:                       payload.QQSandbox,
@@ -2248,6 +2263,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SentenceEnders:                  payload.SentenceEnders,
 		DebugModeEnabled:                payload.DebugModeEnabled,
 		ReplyReferenceMode:              payload.ReplyReferenceMode,
+		ModelDisclosure:                 payload.ModelDisclosure,
 		MentionUserMode:                 payload.MentionUserMode,
 		MarkdownToPlain:                 copyBoolPointer(payload.MarkdownToPlain),
 		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),

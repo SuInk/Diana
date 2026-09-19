@@ -40,8 +40,8 @@ func TestMigrateLogTimestampsRewritesOffsetForm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertRawLog(t, store, "offset-row", "diana.llm_usage", "2026-09-04T01:00:00+08:00", `{"input_tokens":7,"output_tokens":3}`)
-	insertRawLog(t, store, "utc-row", "diana.llm_usage", "2026-09-03T18:00:00Z", `{"input_tokens":1,"output_tokens":1}`)
+	insertRawLog(t, store, "offset-row", "llm_usage", "2026-09-04T01:00:00+08:00", `{"input_tokens":7,"output_tokens":3}`)
+	insertRawLog(t, store, "utc-row", "llm_usage", "2026-09-03T18:00:00Z", `{"input_tokens":1,"output_tokens":1}`)
 	// 迁移标记是首次打开时写下的，这里要清掉，否则手工插进去的行不会被扫描。
 	if _, err := store.db.Exec(`DELETE FROM app_state WHERE key = ?`, logTimestampUTCMigrationKey); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestMigrateLogTimestampsRestoresDashboardVisibility(t *testing.T) {
 	}
 	now := time.Now().In(shanghai)
 	noon := time.Date(now.Year(), now.Month(), now.Day(), 14, 0, 0, 0, shanghai)
-	insertRawLog(t, store, "legacy", "diana.llm_usage",
+	insertRawLog(t, store, "legacy", "llm_usage",
 		noon.Add(-time.Hour).Format(time.RFC3339Nano), `{"input_tokens":7,"output_tokens":3}`)
 
 	// 迁移前：这条日志在统计里是看不见的，这正是要修的故障。
@@ -130,7 +130,7 @@ func TestMigrateLogTimestampsLeavesUnparseableValuesAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	insertRawLog(t, store, "garbage", "diana.llm_usage", "2026-09-04 01:00:00", `{}`)
+	insertRawLog(t, store, "garbage", "llm_usage", "2026-09-04 01:00:00", `{}`)
 	if _, err := store.db.Exec(`DELETE FROM app_state WHERE key = ?`, logTimestampUTCMigrationKey); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestMigrateLogTimestampsRunsOnce(t *testing.T) {
 	}
 
 	// 标记还在时插入一条坏行，重开之后它应当保持原样——证明扫描确实被跳过了。
-	insertRawLog(t, store, "after-marker", "diana.llm_usage", "2026-09-04T01:00:00+08:00", `{}`)
+	insertRawLog(t, store, "after-marker", "llm_usage", "2026-09-04T01:00:00+08:00", `{}`)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestMigrateLogTimestampsCoexistsWithNormalizedWrites(t *testing.T) {
 		t.Skipf("时区库不可用：%v", err)
 	}
 	if err := store.AppendLog(ctx, applog.Entry{
-		Action:    "diana.llm_usage",
+		Action:    "llm_usage",
 		Target:    "fresh",
 		CreatedAt: time.Date(2026, 9, 4, 1, 0, 0, 0, shanghai),
 	}); err != nil {

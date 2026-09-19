@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const dianaNotebookToolName = "diana.notebook"
+const dianaNotebookToolName = "notebook"
 
 const (
 	defaultNotebookListLimit = 20
@@ -39,7 +39,7 @@ type dianaNotebookResult struct {
 	// Entry 是单条操作的结果，Items 是列表和检索的结果。
 	Entry *NotebookEntry  `json:"entry,omitempty"`
 	Items []NotebookEntry `json:"items,omitempty"`
-	// ReplyGuidance 和 diana.relationship 同理：怎么把结果说出来的约束放在返回值里，
+	// ReplyGuidance 和 relationship 同理：怎么把结果说出来的约束放在返回值里，
 	// 只在真调用了才付 token，而且正好在要用它的那一刻送到。
 	ReplyGuidance string `json:"reply_guidance,omitempty"`
 }

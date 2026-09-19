@@ -30,7 +30,7 @@ func (r *Runtime) SetStructuredMemoryStore(store StructuredMemoryStore) {
 }
 
 // SetNotebookStore 注入笔记本存储。没有它时笔记本整体静默失效：自动命中查不到、
-// diana.notebook 明确报错，回复本身不受影响。
+// notebook 明确报错，回复本身不受影响。
 func (r *Runtime) SetNotebookStore(store NotebookStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -235,7 +235,7 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	builder.WriteString("\n关系等级：")
 	builder.WriteString(policy.Name)
 	// 不再列「已授权能力」：那份清单每个等级都一样，摆在这里只会被当成本等级
-	// 的特权复述出去。能力问题由 diana.capabilities 负责。
+	// 的特权复述出去。能力问题由 capabilities 负责。
 	//
 	// 语气要求和恋爱关系也不在这里重复：它们由 relationshipPermissionContext 放在
 	// 紧挨生成的系统尾部，那份优先级更高、不会被预算裁掉。两处各写一遍既浪费

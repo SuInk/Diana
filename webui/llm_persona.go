@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -159,6 +160,7 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 		return
 	}
 
+	started := time.Now()
 	resp, err := client.Generate(c.Request.Context(), llm.GenerateRequest{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: personaGenerateSystemPrompt},
@@ -169,6 +171,7 @@ func (h *LLMConfigHandler) personaGenerate(c *gin.Context) {
 		h.writeError(c, http.StatusBadGateway, "llm.persona", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
+	recordLLMUsage(c, h.logs, resp.Provider, firstNonEmpty(resp.Model, cfg.Model), resp.Usage, "webui_persona_generate", time.Since(started))
 	card, err := parseGeneratedCharacterCard(resp.Text, payload.Name)
 	if err != nil {
 		h.writeError(c, http.StatusBadGateway, "llm.persona", err, cfg.Model, llmLogMetadata(cfg, ""))

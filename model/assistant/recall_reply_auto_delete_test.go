@@ -99,7 +99,7 @@ func TestGroupConfigOverridesRecallReplyAutoDeletePolicy(t *testing.T) {
 
 func TestRecallReplyAutoDeleteHonorsGroupPolicy(t *testing.T) {
 	// 这个用例以前是端到端的：靠词表让插件劫持回复，再断言撤回上下文进了 LLM 请求。
-	// 触发权交给模型之后，撤回记录由 diana.chat_history 的 recalls 操作读回，响应经
+	// 触发权交给模型之后，撤回记录由 chat_history 的 recalls 操作读回，响应经
 	// recallDisclosureSink 合并进本轮 pluginResponses——自动撤回策略读的仍是同一处，
 	// 所以这里直接验证那个接缝，不再依赖一次伪造的 LLM 往返。
 	enabled := true

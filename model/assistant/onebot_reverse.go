@@ -207,6 +207,10 @@ func (s *OneBotReverseServer) SendWithResult(ctx context.Context, msg OutgoingMe
 	return s.CallAPI(ctx, action, params)
 }
 
+func (s *OneBotReverseServer) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
+	return sendOneBotInputStatus(ctx, msg, action, s.CallAPI)
+}
+
 // CallAPI 通过反向连接发送 OneBot action 并等待响应。
 func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
 	s.connMu.RLock()

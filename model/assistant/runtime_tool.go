@@ -186,7 +186,10 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			registry.Register(tool)
 		}
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
-		registry.Register(newDianaRuntimeModelTool(agentClient))
+		// 这条路径不知道发言者是谁，只有完全公开时才给。
+		if normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone {
+			registry.Register(newDianaRuntimeModelTool(agentClient))
+		}
 		runner, err := agent.NewRunner(agentClient, agentCfg, registry)
 		if err != nil {
 			_ = registry.Close()

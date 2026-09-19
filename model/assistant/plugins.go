@@ -111,6 +111,11 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 			PlatformOneBotV11: "支持历史图片和表情素材。",
 			PlatformTelegram:  "支持 Telegram sticker 媒体入库与发送。",
 		}
+	case fileDeliveryPluginID:
+		manifest.PlatformNotes = map[string]string{
+			PlatformOneBotV11: "群聊上传群文件，私聊上传私聊文件。",
+			PlatformTelegram:  "作为文档附件上传。",
+		}
 	}
 	return manifest
 }
@@ -380,6 +385,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewRSSWatchPlugin(nil),
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
+		NewFileDeliveryPlugin(),
 		NewCodingAgentPlugin(),
 		NewStatusCommandPlugin(),
 		NewOpenAPIPlugin(),

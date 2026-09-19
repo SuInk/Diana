@@ -188,6 +188,8 @@ func TestStickerToolAddsAndCachesVisionDescriptionForSearchCandidate(t *testing.
 		return provider, nil
 	})
 	runtime.SetMessageHistoryStore(store)
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
 	tool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingSearchResults: 3})
 
 	search := func() stickerToolResult {
@@ -211,6 +213,88 @@ func TestStickerToolAddsAndCachesVisionDescriptionForSearchCandidate(t *testing.
 	second := search()
 	if len(second.Candidates) != 1 || second.Candidates[0].Description == "" || provider.callCount() != 1 {
 		t.Fatalf("cached candidate=%#v calls=%d", second, provider.callCount())
+	}
+	// 给表情包写简介的那次视觉调用要记在触发搜索的这条消息名下；测试替身不报用量，
+	// 也要留下这次调用。命中缓存的第二次搜索不调模型，不能多记。
+	usage := usageEntriesFor(logs, "request")
+	if len(usage) != 1 || usage[0]["purpose"] != "sticker_description" || usage[0]["usage_missing"] != true {
+		t.Fatalf("sticker description usage = %#v", usage)
+	}
+}
+
+// 事件记录里要能看到机器人发的是哪张表情包，而不只是「发了 1 张图片」。
+func TestStickerToolSendRecordsWhichStickerWasSent(t *testing.T) {
+	dir := t.TempDir()
+	stickerPath := filepath.Join(dir, "sticker.gif")
+	body := []byte("sticker-image")
+	if err := os.WriteFile(stickerPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "request"}
+	store := &stickerHistoryStore{events: map[string][]MessageEvent{
+		sessionKey(event): {{Kind: EventKindGroup, GroupID: "group-1", MessageID: "sticker", Time: 2, Segments: []MessageSegment{{Type: "image", Data: map[string]string{
+			"summary": "[无语]", "cached_file": stickerPath, imageContentSHA256Key: imageBytesSHA256(body),
+		}}}}},
+	}}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaStickerTool(runtime, event, SettingValues{stickerSettingHistoryLimit: 1000, stickerSettingSearchResults: 8, stickerSettingIncludeGeneric: true})
+
+	ctx := withOutboundTurn(context.Background(), "turn-1")
+	output, err := tool.Run(ctx, map[string]any{"operation": "search", "query": "无语"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var search stickerToolResult
+	if err := json.Unmarshal([]byte(output), &search); err != nil || len(search.Candidates) != 1 {
+		t.Fatalf("search=%s err=%v", output, err)
+	}
+	if _, err := tool.Run(ctx, map[string]any{"operation": "send", "sticker_id": search.Candidates[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	delivery := outboundTurnFromContext(ctx).delivery()
+	if delivery.Images != 1 || len(delivery.Media) != 1 {
+		t.Fatalf("delivery = %#v", delivery)
+	}
+	if media := delivery.Media[0]; media.Kind != "image" || media.Source != stickerPath || media.Label != "表情包：无语" {
+		t.Fatalf("media = %#v", media)
+	}
+}
+
+// 内联图片（生图常见的 data URI）不往事件表里塞，只标出来；超出上限的只计数。
+func TestOutboundTurnRecordsImageSourcesWithinLimit(t *testing.T) {
+	turn := &outboundTurn{id: "t"}
+	turn.recordSentMessage(OutgoingMessage{
+		ImageURLs:   []string{"data:image/png;base64,AAAA", "/tmp/a.png"},
+		ImageLabels: []string{"生成的图"},
+		Segments:    []MessageSegment{{Type: "image", Data: map[string]string{"file": "https://example.com/b.png", "summary": "[b]"}}},
+	})
+	media := turn.delivery().Media
+	if len(media) != 3 || !media[0].Inline || media[0].Source != "" || media[0].Label != "生成的图" {
+		t.Fatalf("media = %#v", media)
+	}
+	if media[1].Source != "/tmp/a.png" || media[2].Source != "https://example.com/b.png" || media[2].Label != "[b]" {
+		t.Fatalf("media = %#v", media)
+	}
+	many := make([]string, maxOutboundMediaPerTurn+5)
+	for index := range many {
+		many[index] = "/tmp/x.png"
+	}
+	turn.recordSentMessage(OutgoingMessage{ImageURLs: many})
+	if got := turn.delivery(); len(got.Media) != maxOutboundMediaPerTurn || got.Images != 3+len(many) {
+		t.Fatalf("media = %d images = %d", len(got.Media), got.Images)
+	}
+}
+
+// 主回复的 ctx 带着 reply 用途；检索的 embedding 不能照抄，否则 embedding 模型会被
+// 当成主对话模型。只有调用方显式指定时才换成自己的用途。
+func TestSemanticSearchPurposeDoesNotInheritReply(t *testing.T) {
+	ctx := withLLMUsagePurpose(context.Background(), "reply")
+	if got := semanticSearchPurpose(ctx); got != "semantic_search" {
+		t.Fatalf("purpose = %q", got)
+	}
+	if got := semanticSearchPurpose(withSemanticSearchPurpose(ctx, "sticker_search")); got != "sticker_search" {
+		t.Fatalf("purpose = %q", got)
 	}
 }
 

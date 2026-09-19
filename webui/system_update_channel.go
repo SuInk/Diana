@@ -9,7 +9,7 @@ import (
 
 // Only documented release tags can enter an update channel. Unknown prereleases
 // (including source builds) never become downloadable update candidates.
-var channelTagPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-(beta|rc)\.(0|[1-9][0-9]*))?(?:\+[0-9A-Za-z.-]+)?$`)
+var channelTagPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-(canary|beta|rc)\.(0|[1-9][0-9]*))?(?:\+[0-9A-Za-z.-]+)?$`)
 
 func releaseAllowed(release ReleaseEntry, channel string) bool {
 	match := channelTagPattern.FindStringSubmatch(release.Tag)
@@ -19,10 +19,10 @@ func releaseAllowed(release ReleaseEntry, channel string) bool {
 	switch match[1] {
 	case "":
 		return !release.Prerelease
-	case "rc":
-		return channel == "beta"
-	case "beta":
-		return channel == "beta"
+	case "beta", "rc":
+		return channel == "beta" || channel == "canary"
+	case "canary":
+		return channel == "canary"
 	}
 	return false
 }

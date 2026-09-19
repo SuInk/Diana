@@ -159,6 +159,8 @@ export interface BotProfileConfig {
   telegram_proxy_url?: string;
   /** 默认抑制其他 Bot 的群消息；语义判断提到本机器人时放行。 */
   telegram_suppress_bot_messages?: boolean;
+  /** OneBot 私聊准备回复时显示「对方正在输入」，默认开启。 */
+  qq_typing_enabled?: boolean;
   /** QQ 开放平台机器人，出站 WebSocket 网关。 */
   qq_app_id?: string;
   qq_app_secret?: string;
@@ -232,6 +234,8 @@ export interface BotProfileConfig {
   debug_mode_enabled?: boolean;
   /** 回复行为个性化：on 每条都带、off 从不带、auto 交给模型自己判断；缺省等价于 on。 */
   reply_reference_mode?: "on" | "off" | "auto";
+  /** 谁能问出机器人所用的模型：owner 仅主人（默认）、everyone 所有人。主人始终能看和改。 */
+  model_disclosure?: "owner" | "everyone";
   mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
@@ -1514,7 +1518,7 @@ export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
 }
 
 export interface UpdatePolicy {
-	channel?: "release" | "beta";
+	channel?: "release" | "beta" | "canary";
 	auto_download: boolean;
 	auto_install: boolean;
 	/** 下载加速策略：auto（实测挑线路）、direct（始终直连）或一条具体的镜像地址。 */
@@ -1890,6 +1894,12 @@ export interface AssistantEventDetail extends BotEvent {
   /** 首 token 时延均值；只有流式跑通的调用才有样本。 */
   avg_ttft_ms?: number;
   ttft_calls?: number;
+  /** 主回复实际用到的模型，按首次调用排序；带图的一轮可能先走视觉模型。 */
+  /** 上游没报用量的调用数；不为 0 时这条的 token 数偏少。 */
+  usage_missing_calls?: number;
+  reply_models?: string[];
+  /** 这条消息所有模型调用按模型汇总的次数，路由、审核、记忆抽取都算。 */
+  models?: AssistantEventModelUsage[];
   decision: "replied" | "not_replied" | "pending" | "error" | string;
   reason: string;
   delivery_stage?: "generated" | "send_attempted" | "acknowledged" | "echo_persisted" | "failed" | string;
@@ -1912,6 +1922,20 @@ export interface AssistantEventDetail extends BotEvent {
   delivery?: AssistantEventDelivery;
 }
 
+export interface AssistantEventModelUsage {
+  model: string;
+  provider?: string;
+  calls: number;
+}
+
+/** 一轮里发出去的一张图；来源路径不下发，按序号从 outbound-images 接口取。 */
+export interface AssistantEventOutboundMedia {
+  kind: string;
+  label?: string;
+  /** 内联图片（data URI）不落库，没法预览。 */
+  inline?: boolean;
+}
+
 export interface AssistantEventDelivery {
   messages?: number;
   images?: number;
@@ -1919,6 +1943,7 @@ export interface AssistantEventDelivery {
   audios?: number;
   forward_cards?: number;
   forward_nodes?: number;
+  media?: AssistantEventOutboundMedia[];
 }
 
 export interface AssistantEventSubtask {
@@ -1956,6 +1981,8 @@ export interface AssistantEventsResponse {
   output_tokens_per_second: number;
   avg_ttft_ms: number;
   ttft_calls: number;
+  /** 上游没报用量的调用数；不为 0 时 token 合计偏少。 */
+  usage_missing_calls?: number;
   page: number;
   limit: number;
   has_more: boolean;
@@ -2026,6 +2053,42 @@ export interface AssistantEventTraceResponse {
   event_id: string;
   message_id?: string;
   steps: AppLogEntry[];
+}
+
+/** 表情包池里的一张表情包；同一张图在多个会话出现只列一次，字段取最近那次。 */
+export interface StickerLibraryItem {
+  hash: string;
+  summary: string;
+  /** 视觉模型写的简介；还没被搜到过的表情包没有。 */
+  description?: string;
+  mime?: string;
+  kind: string;
+  group_id?: string;
+  user_id?: string;
+  profile_id?: string;
+  /** 出现过的会话数。 */
+  sessions: number;
+  last_seen: string;
+}
+
+export interface StickerLibraryPage {
+  items: StickerLibraryItem[];
+  total: number;
+}
+
+export function listStickerLibrary(profile: string, query: string, offset: number, limit: number): Promise<StickerLibraryPage> {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (profile) params.set("profile", profile);
+  if (query.trim()) params.set("q", query.trim());
+  return requestJSON<StickerLibraryPage>(`/api/assistant/stickers?${params.toString()}`);
+}
+
+export function stickerImageURL(hash: string, profile: string, thumbnail = false): string {
+  const params = new URLSearchParams();
+  if (profile) params.set("profile", profile);
+  if (thumbnail) params.set("thumbnail", "1");
+  const query = params.toString();
+  return `/api/assistant/stickers/${encodeURIComponent(hash)}/image${query ? `?${query}` : ""}`;
 }
 
 export function getAssistantEventTrace(eventID: string): Promise<AssistantEventTraceResponse> {

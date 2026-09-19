@@ -93,14 +93,16 @@ type BotHandler struct {
 	logs                      AppLogWriter
 	features                  BotFeatureFlags
 	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
-	repoPlugins               *assistant.RepoPluginInstaller
-	repoPluginSources         *assistant.RepoPluginStore
-	liveGroupMu               sync.Mutex
-	liveGroupCache            liveGroupListCache
-	groupNameMu               sync.Mutex
-	groupNameCache            map[string]groupNameCacheEntry
-	userNameMu                sync.Mutex
-	userNameCache             map[string]userNameCacheEntry
+	// repoPlugins / repoPluginSources 是第三方（仓库安装）插件的安装器与来源
+	// 记录；未注入时相关接口返回 501，纯内置插件部署不受影响。
+	repoPlugins       *assistant.RepoPluginInstaller
+	repoPluginSources *assistant.RepoPluginStore
+	liveGroupMu       sync.Mutex
+	liveGroupCache    liveGroupListCache
+	groupNameMu       sync.Mutex
+	groupNameCache    map[string]groupNameCacheEntry
+	userNameMu        sync.Mutex
+	userNameCache     map[string]userNameCacheEntry
 }
 
 type BotFeatureFlags struct {
@@ -284,6 +286,9 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/events", h.listEvents)
 	router.GET(base+"/events/:id/trace", h.eventTrace)
 	router.GET(base+"/events/:id/images/:index", h.eventImage)
+	router.GET(base+"/events/:id/outbound-images/:index", h.eventOutboundImage)
+	router.GET(base+"/stickers", h.listStickers)
+	router.GET(base+"/stickers/:hash/image", h.stickerImage)
 	router.GET(base+"/users", h.listAssistantUsers)
 	router.GET(base+"/user-names", h.lookupAssistantUserNames)
 	router.GET(base+"/users/:id", h.getAssistantUser)
@@ -327,11 +332,12 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
+	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
+	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
+	// 第三方（仓库安装）插件。repo/* 是静态段，gin 里与 :id 参数段共存不冲突。
 	router.POST(base+"/plugins/repo/preview", h.previewRepoPlugin)
 	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
 	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
-	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
-	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
 	router.POST(base+"/plugins/coding-agent/setup", h.codingAgentSetup)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
@@ -984,6 +990,8 @@ func (h *BotHandler) uninstallPlugin(c *gin.Context) {
 		h.writePluginError(c, "assistant.plugin.uninstall", err, c.Param("id"))
 		return
 	}
+	// 第三方插件连落盘目录和来源记录一起清掉；非仓库插件这里静默返回。
+	h.removeRepoPluginSources(c.Param("id"))
 	h.persistState()
 	h.removeRepoPluginSources(state.Manifest.ID)
 	recordRequestOperation(c, h.logs, "assistant.plugin.uninstall", "机器人插件已卸载", state.Manifest.ID, pluginLogMetadata(state))

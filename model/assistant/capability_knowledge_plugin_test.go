@@ -53,7 +53,7 @@ func TestCapabilityKnowledgeFiltersUnsupportedPluginsForPlatform(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tool := range tools {
-		if tool.Name() == "diana.capabilities" {
+		if tool.Name() == "capabilities" {
 			capabilityTool = capabilityToolForConfig(tool, BotConfig{Platform: PlatformTelegram}.WithDefaults())
 			break
 		}
@@ -95,7 +95,7 @@ func TestDefaultPluginManagerExposesCapabilityRAGAndLivePluginStates(t *testing.
 		t.Fatal(err)
 	}
 	for _, tool := range tools {
-		if tool.Name() != "diana.capabilities" {
+		if tool.Name() != "capabilities" {
 			continue
 		}
 		toolFound = true
@@ -108,15 +108,15 @@ func TestDefaultPluginManagerExposesCapabilityRAGAndLivePluginStates(t *testing.
 		}
 	}
 	if !toolFound {
-		t.Fatal("diana.capabilities tool missing")
+		t.Fatal("capabilities tool missing")
 	}
 }
 
 func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["diana.capabilities"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"diana.capabilities","input":{"query":"你能解析视频吗","limit":3}}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["capabilities"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"capabilities","input":{"query":"你能解析视频吗","limit":3}}}`,
 		`{"action":"final","content":"可以，我能读取视频并抽取多帧理解内容。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3, ReplySafetyMasterEnabled: boolPointer(false)}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -133,7 +133,7 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	if !requestMessagesContain(provider.requests[3].Messages, `"id": "core:media"`) {
 		t.Fatalf("retrieval missing: %#v", provider.requests[3].Messages)
 	}
-	if !requestMessagesContain(provider.requests[1].Messages, "必须先调用 diana.capabilities") {
+	if !requestMessagesContain(provider.requests[1].Messages, "必须先调用 capabilities") {
 		t.Fatalf("capability guidance missing: %#v", provider.requests[1].Messages)
 	}
 }

@@ -47,7 +47,7 @@ type RelationshipPolicy struct {
 // 文档 OCR、OneBot 读取一律开放，随好感度变化的只有个人提醒与订阅额度
 // （见 personalScheduleLimit）。所以这里不再维护一份「本等级授权能力」清单：
 // 那份清单曾经每级各写一遍、措辞还不统一，被灌进提示词后就成了一串看着像特权、
-// 其实人人都有的条目。能力问题由 diana.capabilities 回答，能力管控走 Allow*
+// 其实人人都有的条目。能力问题由 capabilities 回答，能力管控走 Allow*
 // 与 allowedAgentToolNames。
 
 func RelationshipPolicyFor(profile UserMemoryProfile, ownerID, userID string) RelationshipPolicy {
@@ -111,37 +111,39 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		return nil
 	}
 	allowed := map[string]bool{
-		"skills.list":              true,
-		"skills.read":              true,
-		"diana.capabilities":       true,
+		"list_capabilities":        true,
+		"read_skill":               true,
+		"capabilities":             true,
 		dianaChatHistoryToolName:   true,
 		dianaMemoryToolName:        true,
 		dianaHistoryImagesToolName: true,
 		dianaRemoteImageToolName:   true,
-		"diana.telegram_images":    true,
+		"telegram_images":          true,
 		// 子调用不碰本地文件、命令和浏览器，只是把调用方给的素材压成一句结论，
 		// 所以和读历史同级，不需要 owner 权限。
 		dianaSubtaskToolName:     true,
-		"diana.relationship":     true,
+		"relationship":           true,
 		dianaNotebookToolName:    true,
 		dianaVersionToolName:     true,
 		dianaThreadStateToolName: true,
 		dianaStickerToolName:     true,
+		// 只发模型自己写的文本内容，不碰本地文件和命令；「仅主人可用」由插件设置在工具内判断。
+		dianaFileDeliveryToolName: true,
 		// 查图是不是 AI 生成的只读图片元数据，不碰本地文件和命令；群里人人都会问。
 		dianaAIImageDetectToolName: true,
 		dianaPokeToolName:          true,
-		"diana.bot_config":         true,
+		"bot_config":               true,
 		// 屏蔽名单和回复门槛一样按群管理：工具里自己核验主人或实时核验的群管理员，
 		// 名单外的人调用只会被拒绝。不收录的话群主想屏蔽人就得去找机器人主人。
 		replyBlockToolName:    true,
-		"diana.group":         true,
+		"group":               true,
 		dianaPlatformToolName: true,
 		dianaImageToolName:    true,
-		"diana.reminder":      true,
-		"diana.schedule":      true,
-		"diana.rss":           true,
-		"diana.tasks":         true,
-		"diana.tts":           true,
+		"reminder":            true,
+		"schedule":            true,
+		"rss":                 true,
+		"tasks":               true,
+		"tts":                 true,
 		// 点歌是群里人人都会用的事，和语音合成同级：它不碰本地文件、命令或浏览器，
 		// 只是搜一首歌发出来。只留给主人的话这个功能等于没开。
 		musicToolName:           true,

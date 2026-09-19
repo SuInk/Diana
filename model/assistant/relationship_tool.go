@@ -82,11 +82,11 @@ func newDianaRelationshipTool(runtime *Runtime, event MessageEvent) *dianaRelati
 }
 
 func (t *dianaRelationshipTool) Name() string {
-	return "diana.relationship"
+	return "relationship"
 }
 
 func (t *dianaRelationshipTool) Description() string {
-	return `查询 Diana 对用户的好感度、关系等级、互动次数、最近的增减分记录和人员画像（居住地点、职业、作息、生活习惯、兴趣爱好、家庭关系、时区）。用户说“记住我住在……/我是做……的/我在德国、和你差几小时”，或要求改掉、忘掉画像里的某一栏时，调用本工具的 portrait_set / portrait_forget。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。人机恋模式开启时，用户本人明确表白用 romance_start，明确提出分手用 romance_end。本工具不返回能力清单——用户问「你能做什么」应改用 diana.capabilities，基础能力对所有关系等级一律开放。`
+	return `查询 Diana 对用户的好感度、关系等级、互动次数、最近的增减分记录和人员画像（居住地点、职业、作息、生活习惯、兴趣爱好、家庭关系、时区）。用户说“记住我住在……/我是做……的/我在德国、和你差几小时”，或要求改掉、忘掉画像里的某一栏时，调用本工具的 portrait_set / portrait_forget。用户询问自己、被 @ 成员或指定群成员的好感度或关系时必须调用，不要根据上下文猜测，也不要声称无法查询隐藏数据。人机恋模式开启时，用户本人明确表白用 romance_start，明确提出分手用 romance_end。本工具不返回能力清单——用户问「你能做什么」应改用 capabilities，基础能力对所有关系等级一律开放。`
 }
 
 // InputSchema 声明参数契约。「拿到结果后怎么说话」不在这里，也不在 Description

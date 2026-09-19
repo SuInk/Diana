@@ -17,20 +17,20 @@ import (
 
 func TestParseReplyIntentDecisionKeepsOnlyRegisteredTools(t *testing.T) {
 	registry := agent.NewToolRegistry(
-		&scopeTestTool{name: "web_search.search"},
+		&scopeTestTool{name: "web_search"},
 		&scopeTestTool{name: "browser_render"},
 	)
 	decision, scope, ok := parseReplyIntentDecision(`{
 		"action":"none",
 		"prompt":"",
-		"tools":["web_search.search","missing.tool","web_search.search"],
+		"tools":["web_search","missing.tool","web_search"],
 		"context_message_ids":["m2","m2","m4"],
 		"keep_older_summary":true
 	}`, registry)
 	if !ok || decision.Action != visualIntentNone || !scope.Routed {
 		t.Fatalf("decision = %#v scope = %#v ok = %v", decision, scope, ok)
 	}
-	if strings.Join(scope.ToolNames, ",") != "web_search.search" {
+	if strings.Join(scope.ToolNames, ",") != "web_search" {
 		t.Fatalf("tools = %#v", scope.ToolNames)
 	}
 	if strings.Join(scope.ContextMessageIDs, ",") != "m2,m4" || !scope.KeepContextSummary {
@@ -57,9 +57,9 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 	if _, ok := registry.Get(dianaUsageToolName); !ok {
 		t.Fatal("owner usage tool is missing")
 	}
-	list, ok := registry.Get("extensions.list")
+	list, ok := registry.Get("list_capabilities")
 	if !ok {
-		t.Fatal("extensions.list is missing for owner")
+		t.Fatal("list_capabilities is missing for owner")
 	}
 	body, err := list.Run(context.Background(), nil)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 			t.Fatalf("default plugin %q missing from extension catalog: %s", state.Manifest.ID, body)
 		}
 	}
-	for _, toolName := range []string{"skills.install", "mcp.install", "mcp.uninstall"} {
+	for _, toolName := range []string{"install_skill", "mcp.install", "mcp.uninstall"} {
 		if _, ok := registry.Get(toolName); !ok {
 			t.Fatalf("owner extension management tool %q is missing", toolName)
 		}
@@ -106,13 +106,13 @@ func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer registry.Close()
-			_, gotTool := registry.Get("diana.llm_config")
-			_, gotMarkers := registry.Get("diana.bot_markers")
+			_, gotTool := registry.Get("llm_config")
+			_, gotMarkers := registry.Get("bot_markers")
 			if gotMarkers != tt.wantTool {
 				t.Fatalf("bot marker tool visible=%v want=%v", gotMarkers, tt.wantTool)
 			}
 			if gotTool != tt.wantTool {
-				t.Fatalf("diana.llm_config visible = %v, want %v", gotTool, tt.wantTool)
+				t.Fatalf("llm_config visible = %v, want %v", gotTool, tt.wantTool)
 			}
 		})
 	}
@@ -184,7 +184,7 @@ func TestRouteReplyIntentUsesCompactToolCatalog(t *testing.T) {
 	provider := &scopeRouteProvider{response: `{
 		"action":"none",
 		"prompt":"",
-		"tools":["web_search.search"],
+		"tools":["web_search"],
 		"context_message_ids":["m1"],
 		"keep_older_summary":false
 	}`}
@@ -194,12 +194,12 @@ func TestRouteReplyIntentUsesCompactToolCatalog(t *testing.T) {
 	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m1", RawMessage: "之前在聊长鑫存储"})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "m2", RawMessage: "搜索一下具体 IPO 时间"}
 	registry := agent.NewToolRegistry(&scopeTestTool{
-		name:        "web_search.search",
+		name:        "web_search",
 		description: `实时搜索。input: {"query":"keywords","num_results":10}`,
 	})
 
 	decision, scope, ok := runtime.routeReplyIntent(context.Background(), event, event.RawMessage, registry, false)
-	if !ok || decision.Action != visualIntentNone || !scope.Routed || strings.Join(scope.ToolNames, ",") != "web_search.search" {
+	if !ok || decision.Action != visualIntentNone || !scope.Routed || strings.Join(scope.ToolNames, ",") != "web_search" {
 		t.Fatalf("decision = %#v scope = %#v ok = %v", decision, scope, ok)
 	}
 	if len(provider.request.Messages) != 2 {
@@ -214,13 +214,13 @@ func TestRouteReplyIntentUsesCompactToolCatalog(t *testing.T) {
 	if err := json.Unmarshal([]byte(content[start:]), &payload); err != nil {
 		t.Fatalf("decode router payload: %v\n%s", err, content)
 	}
-	if len(payload.AvailableTools) != 1 || payload.AvailableTools[0].Name != "web_search.search" {
+	if len(payload.AvailableTools) != 1 || payload.AvailableTools[0].Name != "web_search" {
 		t.Fatalf("available tools = %#v", payload.AvailableTools)
 	}
 	if strings.Contains(strings.ToLower(payload.AvailableTools[0].Description), "input:") || strings.Contains(payload.AvailableTools[0].Description, "num_results") {
 		t.Fatalf("router catalog leaked schema: %#v", payload.AvailableTools[0])
 	}
-	for _, expected := range []string{"具体商品", "口碑", "味道", "好不好", "web_search.search"} {
+	for _, expected := range []string{"具体商品", "口碑", "味道", "好不好", "web_search"} {
 		if !strings.Contains(provider.request.Messages[0].Content, expected) {
 			t.Fatalf("router search guidance missing %q: %s", expected, provider.request.Messages[0].Content)
 		}
@@ -229,7 +229,7 @@ func TestRouteReplyIntentUsesCompactToolCatalog(t *testing.T) {
 
 func TestSystemPromptOmitsUnselectedToolRules(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nil, NewPluginManager(), nil, nil, nil, nil)
-	registry := agent.NewToolRegistry(&scopeTestTool{name: "web_search.search"})
+	registry := agent.NewToolRegistry(&scopeTestTool{name: "web_search"})
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(
 		MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "owner"},
 		nil,
@@ -238,7 +238,7 @@ func TestSystemPromptOmitsUnselectedToolRules(t *testing.T) {
 		true,
 		registry,
 	)
-	for _, unexpected := range []string{"diana.config", "diana.llm_config", "diana.relationship", "diana.tasks", "diana.reminder", "diana.schedule", "diana.tts", "diana.group", dianaNotebookToolName} {
+	for _, unexpected := range []string{"config", "llm_config", "relationship", "tasks", "reminder", "schedule", "tts", "match_avatar", dianaNotebookToolName} {
 		if strings.Contains(prompt, unexpected) {
 			t.Fatalf("prompt unexpectedly contains unselected tool %q: %s", unexpected, prompt)
 		}

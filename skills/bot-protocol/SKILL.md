@@ -10,13 +10,13 @@ Use the current event's platform and bot identity. Never substitute another bot,
 ## Platform Operations
 
 - OneBot: load `onebot-v11`, then use `diana.onebot_v11` for group information, members and management. Standard queries include `get_group_info`, `get_group_member_list` and `get_group_member_info`. Ordinary members retain only the backend read allowlist; mutation and unknown extensions require the owner. A group administrator is not automatically the bot owner.
-- Telegram and other platforms: use the available read-only `diana.group` adapter for `info`, `members` and `member`. Respect `member_list_complete`, `member_source` and warnings. Do not treat partial results as a full group list or invent unsupported moderation actions.
-- Image-to-avatar matching is a local operation: use `diana.group` with `match_avatar`. Do not guess identity from an image.
+- Telegram and other platforms: use the available read-only `group` adapter for `info`, `members` and `member`. Respect `member_list_complete`, `member_source` and warnings. Do not treat partial results as a full group list or invent unsupported moderation actions.
+- Image-to-avatar matching is a local operation: use `group` with `match_avatar`. Do not guess identity from an image.
 - Do not bypass a denied action with shell, raw network requests, an alias or another tool.
 
 ## Diana Reply Settings
 
-Platform protocol actions do not change Diana's participation settings. Use `diana.bot_config`:
+Platform protocol actions do not change Diana's participation settings. Use `bot_config`:
 
 - `{"operation":"get","scope":"group"}` reads the current group's effective behavior.
 - `{"operation":"update","scope":"group","desire_level":"off"}` stops unsolicited participation in this group. It does not disable the bot, mute a platform account or stop responding to explicit requests.
@@ -29,7 +29,7 @@ Platform protocol actions do not change Diana's participation settings. Use `dia
 
 ## Blocking One Person
 
-Ignoring one person for good is not the same as lowering participation, and not the same as a platform mute. Use `diana.reply_block`:
+Ignoring one person for good is not the same as lowering participation, and not the same as a platform mute. Use `reply_block`:
 
 - `{"operation":"block","user_id":"123456"}` stops every reply to that account in the current group until it is unblocked. There is no timer; it is not the 30-minute automatic suppression.
 - `{"operation":"unblock","user_id":"123456"}` restores replies, and `{"operation":"list"}` shows the current list.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -113,11 +114,11 @@ func TestResolverDependencyInstallPlanCoversBrowser(t *testing.T) {
 		},
 		{
 			name: "apk 装 chromium", goos: "linux", manager: "apk", path: "/sbin/apk",
-			installer: "apk", want: [][]string{{"add", "--no-cache", "chromium"}},
+			installer: "apk", want: [][]string{{"add", "--no-cache", "chromium", "font-noto-cjk"}},
 		},
 		{
 			name: "apt 装 chromium", goos: "linux", manager: "apt-get", path: "/usr/bin/apt-get",
-			installer: "apt", want: [][]string{{"update"}, {"install", "-y", "chromium"}},
+			installer: "apt", want: [][]string{{"update"}, {"install", "-y", "chromium", "fonts-noto-cjk"}},
 		},
 		{
 			name: "pacman 装 chromium", goos: "linux", manager: "pacman", path: "/usr/bin/pacman",
@@ -162,5 +163,51 @@ func TestResolverDependencyInstallPlanRejectsUnknownNames(t *testing.T) {
 		if _, err := resolverDependencyInstallPlan(name, "linux", lookPath); !errors.Is(err, ErrUnknownResolverDependency) {
 			t.Fatalf("name=%q err=%v", name, err)
 		}
+	}
+}
+
+func TestDependencyInstallPermissionDenied(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{name: "apk 权限拒绝", output: "apk: Permission denied", want: true},
+		{name: "apt 需要 root", output: "E: Could not open lock file - open (13: Permission denied)", want: true},
+		{name: "macOS 未授权", output: "installer: not authorized", want: true},
+		{name: "只读文件系统", output: "mkdir: can't create directory: Read-only file system", want: true},
+		{name: "网络错误不算权限问题", output: "apk: network error (try again)", want: false},
+		{name: "找不到包不算权限问题", output: "ERROR: No such package: chromium", want: false},
+		{name: "空输出", output: "", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dependencyInstallPermissionDenied(tc.output); got != tc.want {
+				t.Fatalf("dependencyInstallPermissionDenied(%q) = %v，期望 %v", tc.output, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunDependencyInstallPlanSurfacesManualCommandOnPermissionDenied(t *testing.T) {
+	if testing.Short() {
+		t.Skip("跳过需要 /bin/sh 的集成测试")
+	}
+	plan := resolverInstallPlan{
+		installer: "sh",
+		commands: []resolverInstallCommand{{
+			path: "/bin/sh",
+			args: []string{"-c", "echo apk: Permission denied; exit 1"},
+		}},
+	}
+	err := runDependencyInstallPlan(t.Context(), plan, "browser-renderer")
+	if err == nil {
+		t.Fatal("期望安装失败，实际成功")
+	}
+	if !strings.Contains(err.Error(), "没有包管理器权限") {
+		t.Fatalf("错误里缺少权限提示：%v", err)
+	}
+	if !strings.Contains(err.Error(), "/bin/sh -c") {
+		t.Fatalf("错误里缺少手动执行命令：%v", err)
 	}
 }

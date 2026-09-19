@@ -735,7 +735,7 @@ func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 		return []llm.ModelInfo{{ID: "example-chat-model"}, {ID: "example-pro-model", MaxOutputTokens: 8192}}, nil
 	})
 
-	output, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002"}).Run(
+	output, err := newTestLLMConfigTool(runtime, MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "20002", MessageID: "switch-1"}).Run(
 		context.Background(), map[string]any{"operation": "update", "model": "example-pro-model"})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -763,14 +763,25 @@ func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 	if len(profiles) != 1 || profiles[0].Config.Model != "example-pro-model" {
 		t.Fatalf("对话实际使用的模型没有跟着换: %#v", profiles)
 	}
-	if len(logs.entries) != 1 {
+	// 换模型前的探测调用会记一条用量，挂在发指令的那条消息名下。
+	var probeUsage []applog.Entry
+	for _, entry := range logs.entries {
+		if entry.Action == "llm_usage" {
+			probeUsage = append(probeUsage, entry)
+		}
+	}
+	if len(probeUsage) != 1 || probeUsage[0].Metadata["purpose"] != "model_switch_probe" || probeUsage[0].Target != "switch-1" {
+		t.Fatalf("probe usage = %#v", probeUsage)
+	}
+	opLogs := withoutUsageEntries(logs.entries)
+	if len(opLogs) != 1 {
 		t.Fatalf("logs = %#v", logs.entries)
 	}
-	if logs.entries[0].Kind != applog.KindOperation || logs.entries[0].Actor != "qq:10001" {
-		t.Fatalf("log entry = %#v", logs.entries[0])
+	if opLogs[0].Kind != applog.KindOperation || opLogs[0].Actor != "qq:10001" {
+		t.Fatalf("log entry = %#v", opLogs[0])
 	}
-	if logs.entries[0].Metadata["group_id"] != "20002" || logs.entries[0].Metadata["new_model"] != "example-pro-model" {
-		t.Fatalf("log metadata = %#v", logs.entries[0].Metadata)
+	if opLogs[0].Metadata["group_id"] != "20002" || opLogs[0].Metadata["new_model"] != "example-pro-model" {
+		t.Fatalf("log metadata = %#v", opLogs[0].Metadata)
 	}
 }
 
@@ -1435,10 +1446,10 @@ func TestAgentToolsAreFilteredByCurrentPlatform(t *testing.T) {
 	for _, tool := range tools {
 		names[tool.Name()] = true
 	}
-	if names["diana.tts"] {
+	if names["tts"] {
 		t.Fatalf("OneBot-only tools exposed on Telegram: %#v", names)
 	}
-	if !names["diana.capabilities"] || !names["web_search.search"] || !names["diana.music"] {
+	if !names["capabilities"] || !names["web_search"] || !names["music"] {
 		t.Fatalf("cross-platform tools missing on Telegram: %#v", names)
 	}
 }

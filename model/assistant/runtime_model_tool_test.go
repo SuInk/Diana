@@ -77,7 +77,7 @@ func TestRuntimeModelToolIsSemanticToolWithoutPromptMatching(t *testing.T) {
 // 模型对「我是谁」有很强的先验，被问到就顺口答「我是 ChatGPT」。工具存在还不够，
 // 提示词得明说必须去查——而且要和「改配置」那个工具区分开。
 func TestSystemPromptInjectsRuntimeModelRule(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ModelDisclosure: ModelDisclosureEveryone}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	registry := agent.NewToolRegistry(newDianaRuntimeModelTool(nil))
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(
 		MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"},
@@ -88,7 +88,7 @@ func TestSystemPromptInjectsRuntimeModelRule(t *testing.T) {
 	}
 	// 这条规则对普通成员也注入，所以不能提 owner 专属的配置工具：那等于告诉模型
 	// 有个它调不动的工具，反而会去试。
-	if strings.Contains(promptToolRuntimeModel, "diana.llm_config") {
+	if strings.Contains(promptToolRuntimeModel, "llm_config") {
 		t.Fatal("runtime model rule must not name the owner-only config tool")
 	}
 	for _, want := range []string{"模型 ID", "不得凭训练记忆", "只读不改", "model_id", "config_name"} {
@@ -202,5 +202,61 @@ func TestRuntimeModelToolReadsRegistryFailoverSelection(t *testing.T) {
 	}
 	if !strings.Contains(result, `"model_id":"gpt-stable"`) || !strings.Contains(result, `"provider":"backup"`) {
 		t.Fatalf("result = %q，期望报告后备路由 gpt-stable/backup", result)
+	}
+}
+
+// 默认只对主人报模型：普通成员拿到的是「别说」，主人拿到的是「去查」，两段都
+// 随发言者变化，只能进 tail。早期的 none 档已并入 owner：主人始终能看。
+func TestModelDisclosureGatesPromptBySpeaker(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
+	registry := agent.NewToolRegistry(newDianaRuntimeModelTool(nil))
+	cases := []struct {
+		mode       ModelDisclosure
+		owner      bool
+		agent      bool
+		wantRule   bool
+		wantHide   bool
+		wantInTail bool
+	}{
+		{"", false, true, false, true, true},
+		{"", true, true, true, false, true},
+		{"", false, false, false, true, true},
+		{"", true, false, false, false, false},
+		{"none", true, true, true, false, true},
+		{ModelDisclosureEveryone, false, true, true, false, false},
+	}
+	for _, tc := range cases {
+		runtime := NewRuntime(BotConfig{ModelDisclosure: tc.mode}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{Owner: tc.owner}, tc.agent, registry)
+		prompt := head + tail
+		if got := strings.Contains(prompt, promptToolRuntimeModel); got != tc.wantRule {
+			t.Fatalf("mode=%q owner=%v agent=%v: runtime model rule present=%v", tc.mode, tc.owner, tc.agent, got)
+		}
+		if got := strings.Contains(prompt, promptModelUndisclosed); got != tc.wantHide {
+			t.Fatalf("mode=%q owner=%v agent=%v: undisclosed rule present=%v", tc.mode, tc.owner, tc.agent, got)
+		}
+		inTail := strings.Contains(tail, promptToolRuntimeModel) || strings.Contains(tail, promptModelUndisclosed)
+		if inTail != tc.wantInTail {
+			t.Fatalf("mode=%q owner=%v agent=%v: rule in tail=%v", tc.mode, tc.owner, tc.agent, inTail)
+		}
+	}
+}
+
+func TestModelDisclosedTo(t *testing.T) {
+	for _, tc := range []struct {
+		mode  ModelDisclosure
+		owner bool
+		want  bool
+	}{
+		{"", true, true},
+		{"", false, false},
+		{"bogus", false, false},
+		{"none", true, true},
+		{"none", false, false},
+		{ModelDisclosureEveryone, false, true},
+	} {
+		if got := modelDisclosedTo(BotConfig{ModelDisclosure: tc.mode}, tc.owner); got != tc.want {
+			t.Fatalf("mode=%q owner=%v: got %v", tc.mode, tc.owner, got)
+		}
 	}
 }

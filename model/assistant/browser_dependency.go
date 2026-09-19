@@ -74,35 +74,73 @@ func browserDependenciesFromStatus(status agent.HeadlessBrowserStatus, goos stri
 	if plan, err := resolverDependencyInstallPlan(browserDependencyName, goos, lookPath); err == nil {
 		dep.Installable = true
 		dep.Installer = plan.installer
+	} else if goos == "linux" && !runningOnMusl() {
+		// 没有系统包管理器的 Linux（极小容器）也可以一键装：install 会退到
+		// Chrome for Testing 无 root 下载。musl（Alpine）上 CfT 二进制跑不起来，
+		// 保持手动安装提示。
+		dep.Installable = true
+		dep.Installer = "Chrome for Testing"
+		dep.Detail = strings.TrimSpace(dep.Detail + "。没有可用的系统包管理器，将改用 Chrome for Testing 无 root 下载")
 	} else {
 		dep.Detail = strings.TrimSpace(dep.Detail + "。没有可用的系统包管理器，请手动安装 Chromium / Google Chrome")
 	}
 	return []ResolverDependency{dep}
 }
 
-// installBrowserDependency 通过系统包管理器安装 Chromium / Chrome，随后验证真实截图。
+// installBrowserDependency 装 Chromium / Chrome 并验证真实截图。先试系统包管理器；
+// 走不通（容器里没权限、系统没有包管理器）时退回 Chrome for Testing 无 root 下载——
+// slim 镜像的 diana 用户写不了系统目录，但 data 目录可写。
 func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallResult, error) {
 	deps := RefreshBrowserDependencies()
 	if dep, ok := resolverDependencyByName(deps, browserDependencyName); ok && dep.Available {
 		return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps)}, nil
 	}
-	plan, err := resolverDependencyInstallPlan(browserDependencyName, runtime.GOOS, lookResolverCommand)
-	if err != nil {
-		return ResolverDependencyInstallResult{}, err
+
+	plan, planErr := resolverDependencyInstallPlan(browserDependencyName, runtime.GOOS, lookResolverCommand)
+	var installErr error
+	if planErr == nil {
+		installErr = runDependencyInstallPlan(ctx, plan, browserDependencyName)
+		if installErr == nil {
+			return verifiedBrowserInstallResult(plan.installer)
+		}
 	}
-	if err := runDependencyInstallPlan(ctx, plan, browserDependencyName); err != nil {
-		return ResolverDependencyInstallResult{}, err
+
+	// 系统包管理器这条路没走通。Linux 上还有一条不依赖 root 的路：把
+	// Chrome for Testing 下载进 data 目录，浏览器查找逻辑认得那里。
+	// 只限 glibc：CfT 二进制在 musl（Alpine）上无法执行，见 runningOnMusl。
+	if runtime.GOOS == "linux" && !runningOnMusl() {
+		path, err := downloadChromeForTesting(ctx)
+		if err == nil {
+			status := agent.ProbeHeadlessBrowserRendering(ctx, path)
+			if status.Available {
+				return verifiedBrowserInstallResult("Chrome for Testing")
+			}
+			return ResolverDependencyInstallResult{}, fmt.Errorf("Chrome for Testing 下载完成但网页渲染探测失败：%s", status.Detail)
+		}
+		if planErr == nil {
+			installErr = fmt.Errorf("%w；Chrome for Testing 下载也不可用：%v", installErr, err)
+		} else {
+			planErr = fmt.Errorf("%w；Chrome for Testing 下载也不可用：%v", planErr, err)
+		}
 	}
-	deps = RefreshBrowserDependencies()
+	if planErr != nil {
+		return ResolverDependencyInstallResult{}, planErr
+	}
+	return ResolverDependencyInstallResult{}, installErr
+}
+
+// verifiedBrowserInstallResult 安装动作完成后重新探测，把最新状态带回给设置页。
+func verifiedBrowserInstallResult(installer string) (ResolverDependencyInstallResult, error) {
+	deps := RefreshBrowserDependencies()
 	dep, ok := resolverDependencyByName(deps, browserDependencyName)
 	if !ok || !dep.Available {
 		detail := ""
 		if ok && strings.TrimSpace(dep.Detail) != "" {
 			detail = "：" + dep.Detail
 		}
-		return ResolverDependencyInstallResult{}, fmt.Errorf("%s 已执行 Chromium / Chrome 安装，但网页渲染仍然不可用%s", plan.installer, detail)
+		return ResolverDependencyInstallResult{}, fmt.Errorf("已执行浏览器安装，但网页渲染仍然不可用%s", detail)
 	}
-	return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps), Installer: plan.installer}, nil
+	return ResolverDependencyInstallResult{Dependency: dep, Plugins: browserDependencyGroup(deps), Installer: installer}, nil
 }
 
 func browserDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {

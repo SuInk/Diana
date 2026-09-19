@@ -14,7 +14,7 @@ import (
 
 // AI 图片检测的聊天入口。和图片溯源一样做成工具：「是不是 AI 画的」「AI 图吧」
 // 「有没有 SynthID」的问法太多，交给模型判断什么时候该查。
-const dianaAIImageDetectToolName = "diana.ai_image_detect"
+const dianaAIImageDetectToolName = "ai_image_detect"
 
 type dianaAIImageDetectTool struct {
 	runtime  *Runtime

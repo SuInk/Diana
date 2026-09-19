@@ -28,7 +28,7 @@ func (s *SQLiteStore) PruneLogs(ctx context.Context, debugBefore, otherBefore ti
 		for {
 			result, err := s.db.ExecContext(ctx, `DELETE FROM app_logs WHERE id IN (
 SELECT id FROM app_logs WHERE `+policy.predicate+` AND created_at < ?
-AND action NOT IN ('assistant.llm_usage', 'chatbot.llm_usage', 'diana.llm_usage')
+AND action NOT IN ('assistant.llm_usage', 'chatbot.llm_usage', 'diana.llm_usage', 'llm_usage')
 ORDER BY created_at LIMIT 500)`, cutoff)
 			if err != nil {
 				return deleted, fmt.Errorf("prune logs: %w", err)

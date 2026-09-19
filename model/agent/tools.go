@@ -209,7 +209,6 @@ func (r *ToolRegistry) NewView(cfg Config) (*ToolRegistry, error) {
 	registry.mu.Unlock()
 	if len(registry.builtinSkills) > 0 {
 		tools := newLiveSkillTools(registry.Skills)
-		registry.Register(tools.List)
 		registry.Register(tools.Read)
 	}
 	registry.Register(NewExtensionsListTool(registry.extensions, cfg.ExtensionManagement))
@@ -265,7 +264,6 @@ func (r *ToolRegistry) SetSkills(skills []SkillMetadata) {
 func (r *ToolRegistry) RegisterBuiltinSkills(skills []SkillMetadata) {
 	r.SetSkills(normalizeBuiltinSkills(skills))
 	tools := newLiveSkillTools(r.Skills)
-	r.Register(tools.List)
 	r.Register(tools.Read)
 }
 
@@ -291,7 +289,7 @@ func (r *ToolRegistry) Skills() []SkillMetadata {
 }
 
 // SetExtensionCatalog attaches the live built-in/skill/MCP catalog used by the
-// extensions.list tool and by the Agent system prompt.
+// list_capabilities tool and by the Agent system prompt.
 func (r *ToolRegistry) SetExtensionCatalog(catalog ExtensionCatalog) {
 	if r == nil {
 		return
@@ -420,7 +418,7 @@ func (r *ToolRegistry) Retain(allowed map[string]bool) {
 	}
 	r.order = order
 	r.parentOnly = cloneToolAllowlist(allowed)
-	if !allowed["skills.list"] && !allowed["skills.read"] {
+	if !allowed["read_skill"] {
 		r.skills = nil
 		r.skillsSet = true
 	}
@@ -447,11 +445,9 @@ func (r *ToolRegistry) Remove(name string) {
 		}
 	}
 	r.order = order
-	if name == "skills.list" || name == "skills.read" {
-		if r.hidden["skills.list"] && r.hidden["skills.read"] {
-			r.skills = nil
-			r.skillsSet = true
-		}
+	if name == "read_skill" {
+		r.skills = nil
+		r.skillsSet = true
 	}
 }
 
@@ -872,7 +868,7 @@ func (t *RunCommandTool) Name() string {
 
 // Description 返回命令执行工具说明。
 func (t *RunCommandTool) Description() string {
-	return `在 Agent 工作目录内执行短时本地命令，不经过 shell。不要用于网页搜索、计时、提醒、周期任务、sleep 或后台驻留；这些场景必须使用对应的专用工具。实时网页搜索必须优先使用 web_search.search。`
+	return `在 Agent 工作目录内执行短时本地命令，不经过 shell。不要用于网页搜索、计时、提醒、周期任务、sleep 或后台驻留；这些场景必须使用对应的专用工具。实时网页搜索必须优先使用 web_search。`
 }
 
 func (t *RunCommandTool) InputSchema() map[string]any {

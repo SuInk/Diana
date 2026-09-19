@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -47,16 +48,33 @@ type outboundTurn struct {
 	sentAudios   atomic.Int64
 	forwardCards atomic.Int64
 	forwardNodes atomic.Int64
+	// media 记下发出去的每张图是哪张。只有数量的话，事件里只能看到「发了 1 张
+	// 图片」，说不出发的是哪个表情包。
+	mediaMu sync.Mutex
+	media   []OutboundMedia
+}
+
+// maxOutboundMediaPerTurn 限制一轮记多少张图的来源；超出的只计数，不记来源。
+const maxOutboundMediaPerTurn = 16
+
+// OutboundMedia 是一轮里发出去的一张图。Source 是发送时用的本地路径或 URL，
+// 只落库、供控制台按序号取图，不下发给前端；内联的 data URI 不存，Inline 标出来。
+type OutboundMedia struct {
+	Kind   string `json:"kind"`
+	Label  string `json:"label,omitempty"`
+	Source string `json:"source,omitempty"`
+	Inline bool   `json:"inline,omitempty"`
 }
 
 // OutboundDelivery 是一轮回复实际发出去的内容概览。
 type OutboundDelivery struct {
-	Messages     int `json:"messages,omitempty"`
-	Images       int `json:"images,omitempty"`
-	Videos       int `json:"videos,omitempty"`
-	Audios       int `json:"audios,omitempty"`
-	ForwardCards int `json:"forward_cards,omitempty"`
-	ForwardNodes int `json:"forward_nodes,omitempty"`
+	Messages     int             `json:"messages,omitempty"`
+	Images       int             `json:"images,omitempty"`
+	Videos       int             `json:"videos,omitempty"`
+	Audios       int             `json:"audios,omitempty"`
+	ForwardCards int             `json:"forward_cards,omitempty"`
+	ForwardNodes int             `json:"forward_nodes,omitempty"`
+	Media        []OutboundMedia `json:"media,omitempty"`
 }
 
 // Empty 报告这一轮有没有发出任何东西。
@@ -80,6 +98,48 @@ func (t *outboundTurn) recordSentMessage(msg OutgoingMessage) {
 	if audios > 0 {
 		t.sentAudios.Add(int64(audios))
 	}
+	t.recordSentImages(msg)
+}
+
+func (t *outboundTurn) recordSentImages(msg OutgoingMessage) {
+	var items []OutboundMedia
+	for index, source := range msg.ImageURLs {
+		label := ""
+		if index < len(msg.ImageLabels) {
+			label = strings.TrimSpace(msg.ImageLabels[index])
+		}
+		items = append(items, outboundImage(source, label))
+	}
+	for _, segment := range msg.Segments {
+		if !strings.EqualFold(strings.TrimSpace(segment.Type), "image") {
+			continue
+		}
+		source := firstNonEmpty(segment.Data["file"], segment.Data["url"], segment.Data["path"])
+		items = append(items, outboundImage(source, segment.Data["summary"]))
+	}
+	if len(items) == 0 {
+		return
+	}
+	t.mediaMu.Lock()
+	defer t.mediaMu.Unlock()
+	for _, item := range items {
+		if len(t.media) >= maxOutboundMediaPerTurn {
+			return
+		}
+		t.media = append(t.media, item)
+	}
+}
+
+func outboundImage(source, label string) OutboundMedia {
+	source = strings.TrimSpace(source)
+	item := OutboundMedia{Kind: "image", Label: strings.TrimSpace(label)}
+	// base64 动辄几百 KB，不往事件表里塞。
+	if inlineImageSource(source) {
+		item.Inline = true
+		return item
+	}
+	item.Source = source
+	return item
 }
 
 func (t *outboundTurn) recordSentForward(nodes int) {
@@ -103,7 +163,14 @@ func (t *outboundTurn) delivery() OutboundDelivery {
 		Audios:       int(t.sentAudios.Load()),
 		ForwardCards: int(t.forwardCards.Load()),
 		ForwardNodes: int(t.forwardNodes.Load()),
+		Media:        t.mediaSnapshot(),
 	}
+}
+
+func (t *outboundTurn) mediaSnapshot() []OutboundMedia {
+	t.mediaMu.Lock()
+	defer t.mediaMu.Unlock()
+	return append([]OutboundMedia(nil), t.media...)
 }
 
 // outboundMediaCounts 数一条出站消息里的图片、视频和语音。URL 字段和 segment

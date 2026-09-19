@@ -470,7 +470,7 @@ func TestAgentHistorySummarizesImagesBeforeLazyToolSkipsBrokenImage(t *testing.T
 	}
 	// 「摘要不等于看过原件」和「怎么取原件」已经收进 promptToolHistoryImages 里统一
 	// 说一次，不再逐条历史重复，因此这里只断言每条摘要必须自带的部分：message_id
-	// 和媒体计数——模型要靠它们决定调不调 diana.history_media、传哪些 ID。
+	// 和媒体计数——模型要靠它们决定调不调 history_media、传哪些 ID。
 	for _, want := range []string{"message_id=expired-bot-image", "message_id=new-user-image", "图片×1"} {
 		if !strings.Contains(message.Content, want) {
 			t.Fatalf("history summary = %q, missing %q", message.Content, want)

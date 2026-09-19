@@ -11,12 +11,12 @@ import (
 
 func TestToolRegistryRetainRemovesUnapprovedTools(t *testing.T) {
 	registry := NewToolRegistry(
-		&registryPermissionTool{name: "web_search.search"},
+		&registryPermissionTool{name: "web_search"},
 		&registryPermissionTool{name: "run_command"},
 		&registryPermissionTool{name: "browser_render"},
 	)
 	registry.SetSkills([]SkillMetadata{{Name: "private-skill"}})
-	registry.Retain(map[string]bool{"web_search.search": true, "browser_render": true})
+	registry.Retain(map[string]bool{"web_search": true, "browser_render": true})
 	if registry.Len() != 2 {
 		t.Fatalf("tool count = %d", registry.Len())
 	}
@@ -41,12 +41,12 @@ func TestDefaultToolRegistryDoesNotBypassWebSearchPlugin(t *testing.T) {
 
 func TestToolRegistryCatalogIsCompactAndSchemaFree(t *testing.T) {
 	registry := NewToolRegistry(
-		&registryPermissionTool{name: "web_search.search", description: `搜索实时网页。input: {"query":"keywords","num_results":10}`},
-		&registryPermissionTool{name: "diana.reminder", description: `创建持久提醒。input: {"delay":"1m"}`},
+		&registryPermissionTool{name: "web_search", description: `搜索实时网页。input: {"query":"keywords","num_results":10}`},
+		&registryPermissionTool{name: "reminder", description: `创建持久提醒。input: {"delay":"1m"}`},
 	)
 
 	catalog := registry.Catalog(180)
-	if len(catalog) != 2 || catalog[0].Name != "diana.reminder" || catalog[1].Name != "web_search.search" {
+	if len(catalog) != 2 || catalog[0].Name != "reminder" || catalog[1].Name != "web_search" {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 	for _, item := range catalog {
@@ -61,43 +61,38 @@ func TestToolRegistryCatalogIsCompactAndSchemaFree(t *testing.T) {
 
 func TestToolRegistryRemoveKeepsRemainingToolsAndSkillMetadata(t *testing.T) {
 	registry := NewToolRegistry(
-		&registryPermissionTool{name: "diana.image"},
-		&registryPermissionTool{name: "skills.list"},
-		&registryPermissionTool{name: "skills.read"},
-		&registryPermissionTool{name: "web_search.search"},
+		&registryPermissionTool{name: "image"},
+		&registryPermissionTool{name: "read_skill"},
+		&registryPermissionTool{name: "web_search"},
 	)
 	registry.SetSkills([]SkillMetadata{{Name: "image-workflow"}})
 
-	registry.Remove("diana.image")
-	if _, ok := registry.Get("diana.image"); ok {
-		t.Fatal("diana.image should have been removed")
+	registry.Remove("image")
+	if _, ok := registry.Get("image"); ok {
+		t.Fatal("image should have been removed")
 	}
-	if got := strings.Join(registry.Names(), ","); got != "skills.list,skills.read,web_search.search" {
+	if got := strings.Join(registry.Names(), ","); got != "read_skill,web_search" {
 		t.Fatalf("tool order = %q", got)
 	}
 	if len(registry.Skills()) != 1 {
 		t.Fatalf("skills = %#v", registry.Skills())
 	}
 
-	registry.Remove("skills.list")
-	if len(registry.Skills()) != 1 {
-		t.Fatalf("skills should remain while skills.read is available: %#v", registry.Skills())
-	}
-	registry.Remove("skills.read")
+	registry.Remove("read_skill")
 	if len(registry.Skills()) != 0 {
-		t.Fatalf("skills should be cleared after both skill tools are removed: %#v", registry.Skills())
+		t.Fatalf("skills should be cleared once read_skill is removed: %#v", registry.Skills())
 	}
 }
 
 func TestToolRegistryViewKeepsParentToolsLiveAndIsolated(t *testing.T) {
-	parent := NewToolRegistry(&registryPermissionTool{name: "extensions.list"})
+	parent := NewToolRegistry(&registryPermissionTool{name: "list_capabilities"})
 	parent.SetSkills([]SkillMetadata{{Name: "shared-skill"}})
 	view, err := parent.NewView(Config{WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	view.Register(&registryPermissionTool{name: "request.only"})
-	if _, ok := view.Get("extensions.list"); !ok || len(view.Skills()) != 1 {
+	if _, ok := view.Get("list_capabilities"); !ok || len(view.Skills()) != 1 {
 		t.Fatalf("view did not inherit parent state: names=%#v skills=%#v", view.Names(), view.Skills())
 	}
 	parent.Register(&registryPermissionTool{name: "mcp__dynamic__echo"})
@@ -114,7 +109,7 @@ func TestToolRegistryViewKeepsParentToolsLiveAndIsolated(t *testing.T) {
 	if err := view.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := parent.Get("extensions.list"); !ok {
+	if _, ok := parent.Get("list_capabilities"); !ok {
 		t.Fatal("closing request view closed parent registry")
 	}
 }

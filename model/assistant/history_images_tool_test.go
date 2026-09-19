@@ -373,3 +373,44 @@ func TestHistoryImagesToolAllFailedErrorIdentifiesSourceImage(t *testing.T) {
 		t.Fatalf("all-failed diagnostic = %v", err)
 	}
 }
+
+// 弱模型最常写的单条形式：顶层 message_id，而不是 message_ids 数组。
+func TestHistoryImagesToolAcceptsTopLevelMessageID(t *testing.T) {
+	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	var secondCalls atomic.Int32
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00})
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		secondCalls.Add(1)
+		http.Error(w, "must not be called", http.StatusInternalServerError)
+	}))
+	defer second.Close()
+
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:      EventKindPrivate,
+		UserID:    "user-1",
+		MessageID: "two-images",
+		Segments: []MessageSegment{
+			{Type: "image", Data: map[string]string{"url": first.URL + "/first.png"}},
+			{Type: "image", Data: map[string]string{"url": second.URL + "/second.png"}},
+		},
+	}
+	runtime.remember(event)
+	tool := newDianaHistoryImagesTool(runtime, event)
+	properties := tool.InputSchema()["properties"].(map[string]any)
+	if _, ok := properties["message_id"]; !ok {
+		t.Fatalf("schema must declare message_id: %v", properties)
+	}
+	output, err := tool.Run(context.Background(), map[string]any{"message_id": "two-images", "media_indexes": []any{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondCalls.Load() != 0 || !strings.Contains(output, `"loaded":1`) {
+		t.Fatalf("second=%d output=%s", secondCalls.Load(), output)
+	}
+}

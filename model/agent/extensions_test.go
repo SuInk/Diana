@@ -34,9 +34,9 @@ func TestManagedSkillLifecycleAndBuiltinCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	install, ok := registry.Get("skills.install")
+	install, ok := registry.Get("install_skill")
 	if !ok {
-		t.Fatal("skills.install is missing")
+		t.Fatal("install_skill is missing")
 	}
 	if _, err := install.Run(context.Background(), map[string]any{
 		"content": "---\nname: demo-skill\ndescription: Installed demo skill.\n---\n\nFollow the installed workflow.",
@@ -46,12 +46,12 @@ func TestManagedSkillLifecycleAndBuiltinCatalog(t *testing.T) {
 	if len(registry.Skills()) != 1 || registry.Skills()[0].Name != "demo-skill" || !registry.Skills()[0].Managed {
 		t.Fatalf("skills = %#v", registry.Skills())
 	}
-	read, _ := registry.Get("skills.read")
+	read, _ := registry.Get("read_skill")
 	readOutput, err := read.Run(context.Background(), map[string]any{"name": "demo-skill"})
 	if err != nil || !strings.Contains(readOutput, "Follow the installed workflow") {
 		t.Fatalf("read output=%q err=%v", readOutput, err)
 	}
-	list, _ := registry.Get("extensions.list")
+	list, _ := registry.Get("list_capabilities")
 	listOutput, err := list.Run(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +73,7 @@ func TestManagedSkillLifecycleAndBuiltinCatalog(t *testing.T) {
 	if len(reloaded.Skills()) != 1 || reloaded.Skills()[0].Name != "demo-skill" {
 		t.Fatalf("reloaded skills = %#v", reloaded.Skills())
 	}
-	uninstall, _ := reloaded.Get("skills.uninstall")
+	uninstall, _ := reloaded.Get("uninstall_skill")
 	output, err := uninstall.Run(context.Background(), map[string]any{"name": "demo-skill"})
 	if err != nil {
 		t.Fatal(err)
@@ -92,12 +92,12 @@ func TestExtensionManagementCanBeReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer registry.Close()
-	for _, name := range []string{"extensions.list", "skills.list", "skills.read"} {
+	for _, name := range []string{"list_capabilities", "read_skill"} {
 		if _, ok := registry.Get(name); !ok {
 			t.Fatalf("read-only extension tool %q is missing", name)
 		}
 	}
-	for _, name := range []string{"skills.install", "skills.uninstall", "mcp.install", "mcp.set_enabled", "mcp.uninstall"} {
+	for _, name := range []string{"install_skill", "uninstall_skill", "mcp.install", "mcp.set_enabled", "mcp.uninstall"} {
 		if _, ok := registry.Get(name); ok {
 			t.Fatalf("mutation tool %q should not be exposed", name)
 		}
@@ -134,12 +134,12 @@ func TestBuiltinSkillIsReadableAndCannotBeOverridden(t *testing.T) {
 	if skills := registry.Skills(); len(skills) != 1 || skills[0].Source != "builtin:test" {
 		t.Fatalf("skills = %#v", skills)
 	}
-	read, _ := registry.Get("skills.read")
+	read, _ := registry.Get("read_skill")
 	output, err := read.Run(context.Background(), map[string]any{"name": builtin.Name})
 	if err != nil || !strings.Contains(output, "OWNER_FULL_MEMBER_READ_ONLY") || strings.Contains(output, "UNSAFE_REPLACEMENT") {
 		t.Fatalf("read output=%q err=%v", output, err)
 	}
-	install, _ := registry.Get("skills.install")
+	install, _ := registry.Get("install_skill")
 	_, err = install.Run(context.Background(), map[string]any{
 		"name":    builtin.Name,
 		"replace": true,
@@ -148,7 +148,7 @@ func TestBuiltinSkillIsReadableAndCannotBeOverridden(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "built into Diana") {
 		t.Fatalf("replace error = %v", err)
 	}
-	uninstall, _ := registry.Get("skills.uninstall")
+	uninstall, _ := registry.Get("uninstall_skill")
 	if _, err := uninstall.Run(context.Background(), map[string]any{"name": builtin.Name}); err == nil || !strings.Contains(err.Error(), "cannot be uninstalled") {
 		t.Fatalf("uninstall error = %v", err)
 	}
@@ -186,22 +186,22 @@ func TestSkillInstallRestoresReadToolAfterRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer registry.Close()
-	install, ok := registry.Get("skills.install")
+	install, ok := registry.Get("install_skill")
 	if !ok {
-		t.Fatal("skills.install is missing")
+		t.Fatal("install_skill is missing")
 	}
-	registry.Retain(map[string]bool{"skills.install": true})
-	if _, ok := registry.Get("skills.read"); ok {
-		t.Fatal("skills.read should have been removed by routing")
+	registry.Retain(map[string]bool{"install_skill": true})
+	if _, ok := registry.Get("read_skill"); ok {
+		t.Fatal("read_skill should have been removed by routing")
 	}
 	if _, err := install.Run(context.Background(), map[string]any{
 		"content": "---\nname: routed-skill\ndescription: Installed after routing.\n---\n\nUse this immediately.",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	read, ok := registry.Get("skills.read")
+	read, ok := registry.Get("read_skill")
 	if !ok {
-		t.Fatal("skills.read was not restored after installation")
+		t.Fatal("read_skill was not restored after installation")
 	}
 	output, err := read.Run(context.Background(), map[string]any{"name": "routed-skill"})
 	if err != nil || !strings.Contains(output, "Use this immediately") {
@@ -228,7 +228,7 @@ func TestSkillArchiveRejectsPathTraversal(t *testing.T) {
 func TestRunnerRequiresCurrentUserAuthorizationForExtensionMutation(t *testing.T) {
 	guarded := &guardedMutationTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"skills.install","input":{"content":"malicious"}}`,
+		`{"action":"tool","tool":"install_skill","input":{"content":"malicious"}}`,
 		`{"action":"final","content":"没有执行安装"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry(guarded))
@@ -255,10 +255,10 @@ func TestRunnerRequiresCurrentUserAuthorizationForExtensionMutation(t *testing.T
 // 跨轮稳定，模型重发同一次调用时 Runner 能推出同一个值。
 func TestRunnerExecutesExtensionMutationAfterConfirmationCode(t *testing.T) {
 	input := map[string]any{"content": "malicious"}
-	code := extensionMutationConfirmationCode("skill", "skills.install", input)
+	code := extensionMutationConfirmationCode("skill", "install_skill", input)
 	guarded := &guardedMutationTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"skills.install","input":{"content":"malicious"}}`,
+		`{"action":"tool","tool":"install_skill","input":{"content":"malicious"}}`,
 		`{"action":"final","content":"已安装"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry(guarded))
@@ -283,27 +283,27 @@ func TestRunnerExecutesExtensionMutationAfterConfirmationCode(t *testing.T) {
 func TestExtensionMutationCodeIsBoundToItsTarget(t *testing.T) {
 	install := map[string]any{"name": "alpha"}
 	other := map[string]any{"name": "beta"}
-	code := extensionMutationConfirmationCode("skill", "skills.install", install)
-	if extensionMutationConfirmationCode("skill", "skills.install", other) == code {
+	code := extensionMutationConfirmationCode("skill", "install_skill", install)
+	if extensionMutationConfirmationCode("skill", "install_skill", other) == code {
 		t.Fatal("different skills share a confirmation code")
 	}
-	if extensionMutationConfirmationCode("skill", "skills.uninstall", install) == code {
+	if extensionMutationConfirmationCode("skill", "uninstall_skill", install) == code {
 		t.Fatal("install and uninstall share a confirmation code")
 	}
-	if extensionMutationConfirmationCode("mcp", "skills.install", install) == code {
+	if extensionMutationConfirmationCode("mcp", "install_skill", install) == code {
 		t.Fatal("different extension kinds share a confirmation code")
 	}
-	if !ExtensionMutationAuthorized("确认 "+code, "skill", "skills.install", install) {
+	if !ExtensionMutationAuthorized("确认 "+code, "skill", "install_skill", install) {
 		t.Fatal("matching code was rejected")
 	}
-	if ExtensionMutationAuthorized("确认 "+code, "skill", "skills.install", other) {
+	if ExtensionMutationAuthorized("确认 "+code, "skill", "install_skill", other) {
 		t.Fatal("code authorized a different target")
 	}
 }
 
 func TestExtensionMutationConfirmationIsStructuralOnly(t *testing.T) {
 	input := map[string]any{"name": "alpha"}
-	code := extensionMutationConfirmationCode("skill", "skills.install", input)
+	code := extensionMutationConfirmationCode("skill", "install_skill", input)
 	tests := []struct {
 		name string
 		text string
@@ -321,7 +321,7 @@ func TestExtensionMutationConfirmationIsStructuralOnly(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := ExtensionMutationAuthorized(test.text, "skill", "skills.install", input); got != test.want {
+			if got := ExtensionMutationAuthorized(test.text, "skill", "install_skill", input); got != test.want {
 				t.Fatalf("ExtensionMutationAuthorized(%q) = %v, want %v", test.text, got, test.want)
 			}
 		})
@@ -330,7 +330,7 @@ func TestExtensionMutationConfirmationIsStructuralOnly(t *testing.T) {
 
 func TestCurrentUserRequestTextExcludesQuotedMutationInstructions(t *testing.T) {
 	input := map[string]any{"name": "alpha"}
-	code := extensionMutationConfirmationCode("skill", "skills.install", input)
+	code := extensionMutationConfirmationCode("skill", "install_skill", input)
 	req := Request{Messages: []llm.Message{{
 		Role: llm.RoleUser,
 		Content: "【当前需要回复的消息】【消息时间：2026-08-10 12:00:00】这句话是什么意思？\n\n" +
@@ -340,7 +340,7 @@ func TestCurrentUserRequestTextExcludesQuotedMutationInstructions(t *testing.T) 
 	if got != "这句话是什么意思？" {
 		t.Fatalf("currentUserRequestText = %q", got)
 	}
-	if ExtensionMutationAuthorized(got, "skill", "skills.install", input) {
+	if ExtensionMutationAuthorized(got, "skill", "install_skill", input) {
 		t.Fatal("quoted confirmation code authorized a skill change")
 	}
 }
@@ -349,7 +349,7 @@ type guardedMutationTool struct {
 	calls int
 }
 
-func (t *guardedMutationTool) Name() string { return "skills.install" }
+func (t *guardedMutationTool) Name() string { return "install_skill" }
 
 func (t *guardedMutationTool) Description() string { return "install skill" }
 

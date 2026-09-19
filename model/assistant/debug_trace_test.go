@@ -68,8 +68,8 @@ func TestDebugTraceRecordsModelContextOnlyWhenEnabled(t *testing.T) {
 func TestDebugTraceRedactsPlatformAgentProtocol(t *testing.T) {
 	req := llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: "tool available: " + dianaPlatformToolName},
-		{Role: llm.RoleAssistant, Content: `{"action":"tool","tool":"diana.platform","input":{"operation":"kick","user_id":"secret.example"}}`},
-		{Role: llm.RoleUser, Content: "工具 diana.platform 执行成功：owner-secret"},
+		{Role: llm.RoleAssistant, Content: `{"action":"tool","tool":"platform","input":{"operation":"kick","user_id":"secret.example"}}`},
+		{Role: llm.RoleUser, Content: "工具 platform 执行成功：owner-secret"},
 	}}
 	sanitized := sanitizeDebugGenerateRequest(req)
 	if sanitized.Messages[0].Content != req.Messages[0].Content {
@@ -83,5 +83,23 @@ func TestDebugTraceRedactsPlatformAgentProtocol(t *testing.T) {
 	response := sanitizeDebugGenerateResponse(req, &llm.GenerateResponse{Text: "owner-secret"})
 	if response == nil || strings.Contains(response.Text, "owner-secret") || !strings.Contains(response.Text, "omitted") {
 		t.Fatalf("response was not redacted: %#v", response)
+	}
+}
+
+// 调用链里最该看清模型的恰恰是失败的那一步，而失败时没有响应可读模型名。调试
+// 装饰器在最外层，中间隔着缓存探针、用量记账和流式几层，要能一路剥到握着选择的
+// failover 那层。
+func TestLLMProviderIdentitySeesThroughDecorators(t *testing.T) {
+	failover := &profileFailoverLLMProvider{profiles: []llm.Profile{
+		{Name: "主对话", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-main"}},
+		{Name: "后备", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-backup"}},
+	}, current: 1}
+	wrapped := &promptCacheProbeLLMProvider{provider: &usageAccountingLLMProvider{provider: &streamingLLMProvider{provider: withTransientLLMRetry(failover, true)}}}
+	identity, err := llmProviderIdentity(wrapped, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ModelID != "chat-backup" || identity.Provider != string(llm.ProviderOpenAICompatible) {
+		t.Fatalf("identity = %#v", identity)
 	}
 }
