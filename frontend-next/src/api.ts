@@ -1577,6 +1577,17 @@ export function saveHistoryMediaPolicy(policy: HistoryMediaPolicy): Promise<Hist
   return requestJSON<HistoryMediaPolicy>("/api/system/history-media", { method: "POST", body: JSON.stringify(policy) });
 }
 
+export interface MediaBaseURLSetting {
+  base_url: string;
+  source: "database" | "config" | "auto";
+}
+export function getMediaBaseURLSetting(): Promise<MediaBaseURLSetting> {
+  return requestJSON<MediaBaseURLSetting>("/api/system/media-base-url");
+}
+export function saveMediaBaseURLSetting(setting: { base_url: string }): Promise<MediaBaseURLSetting> {
+  return requestJSON<MediaBaseURLSetting>("/api/system/media-base-url", { method: "POST", body: JSON.stringify(setting) });
+}
+
 export interface SystemVersion {
   build_version: string;
   build_type?: BuildType;

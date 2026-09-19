@@ -224,13 +224,13 @@
                 <div v-else-if="form.onebot_transport === 'forward_ws'" class="field">
                   <label for="bot-onebot-ws">OneBot WebSocket 服务地址</label>
                   <input id="bot-onebot-ws" v-model="form.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700" />
-                  <span class="hint">Diana 主动连接接入端的 WS 服务，请使用同时提供 API 和事件的通用地址（通常为 /）。断线后自动重连。</span>
+                  <span class="hint">Diana 主动连接接入端的 WS 服务，请使用同时提供 API 和事件的通用地址（通常为 /）。断线后自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机或反向代理部署请在「设置 → 媒体与文件」页配置媒体回源基址。</span>
                 </div>
                 <template v-else-if="form.onebot_transport === 'http'">
                   <div class="field">
                     <label for="bot-onebot-http">OneBot HTTP API 地址</label>
                     <input id="bot-onebot-http" v-model="form.onebot_http_url" class="input mono" placeholder="http://127.0.0.1:5700" />
-                    <span class="hint">Diana 调用接入端的 HTTP API。事件上报地址填写接入端能访问的 Diana 地址 + /onebot/v11/http。</span>
+                    <span class="hint">Diana 调用接入端的 HTTP API。事件上报地址填写接入端能访问的 Diana 地址 + /onebot/v11/http。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器部署无需额外配置，跨机或反向代理部署请在「设置 → 媒体与文件」页配置媒体回源基址。</span>
                   </div>
                   <SecretField id="bot-onebot-http-secret" v-model="oneBotHTTPSecretDraft"
                     label="HTTP 事件签名密钥" placeholder="与接入端 HTTP POST 的 secret 一致"
@@ -239,6 +239,7 @@
                     :revealed="tokenRevealed.onebot_http_secret" :busy="tokenRevealBusy === 'onebot_http_secret'"
                     @toggle-reveal="toggleTokenReveal('onebot_http_secret')" />
                 </template>
+                <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
                 <SecretField
@@ -1896,6 +1897,48 @@ const isOneBotPlatform = computed(() => {
 
 /** 当前平台的 ID，用于在接入区按平台切换凭据表单。 */
 const currentPlatform = computed(() => form.value?.platform ?? "");
+
+function endpointHostname(endpoint: string): string {
+  const trimmed = endpoint.trim();
+  if (!trimmed) return "";
+  try {
+    // ws://host:port/path 与 http(s) 都能被 URL 解析。
+    return (new URL(trimmed).hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isLocalOriginHost(host: string): boolean {
+  return host === "localhost" || host.endsWith(".localhost") ||
+    host === "0.0.0.0" || host === "::" || host === "::1" ||
+    host.startsWith("127.") || host === "host.docker.internal";
+}
+
+/**
+ * 正向 ws / HTTP 接入下，文件和图片靠「接入端回源 Diana」投递：后端按这里填的
+ * 地址推主机名，再加 Diana 自己的 Web 端口。填回环或 docker 内网名时多半没事；
+ * 填的是另一台主机（和浏览器当前访问 Diana 用的主机名也对不上）时，接入端很
+ * 可能回源失败，必须在服务端显式配置 storage.local_media_base_url——这种情况
+ * 要在界面上直接警告，而不是只留一行灰字 hint。纯函数，便于单测。
+ */
+function oneBotMediaOriginWarningText(transport: string, wsEndpoint: string, httpEndpoint: string, currentHost: string): string {
+  if (transport === "reverse_ws") return "";
+  const host = endpointHostname(transport === "forward_ws" ? wsEndpoint : httpEndpoint);
+  if (!host) return "";
+  if (isLocalOriginHost(host) || host === (currentHost || "").replace(/^\[|\]$/g, "").toLowerCase()) return "";
+  return `接入端将按 ${host} 回源拉取文件/媒体（端口为 Diana 的 Web 端口）。若该主机访问不到 Diana，文件发送会失败，请在「设置 → 媒体与文件」页配置媒体回源基址。`;
+}
+
+const oneBotMediaOriginWarning = computed(() => {
+  if (!isOneBotPlatform.value) return "";
+  return oneBotMediaOriginWarningText(
+    form.value?.onebot_transport || "reverse_ws",
+    form.value?.onebot_ws_endpoint ?? "",
+    form.value?.onebot_http_url ?? "",
+    window.location.hostname || ""
+  );
+});
 
 /**
  * 回调型平台要把这个地址填到对方后台。
