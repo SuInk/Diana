@@ -241,6 +241,24 @@ func sendOneBotMessage(ctx context.Context, msg OutgoingMessage, call func(conte
 	return call(ctx, action, params)
 }
 
+// sendOneBotInputStatus 用 NapCat 的 set_input_status 显示「对方正在输入」。
+// 该扩展只对私聊生效，群聊直接跳过。
+func sendOneBotInputStatus(ctx context.Context, msg OutgoingMessage, action string, call func(context.Context, string, map[string]any) (map[string]any, error)) error {
+	if strings.TrimSpace(msg.GroupID) != "" || strings.TrimSpace(action) != "typing" {
+		return nil
+	}
+	userID, err := strconv.ParseInt(strings.TrimSpace(msg.UserID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("diana: invalid user id %q", msg.UserID)
+	}
+	_, err = call(ctx, "set_input_status", map[string]any{"user_id": userID, "event_type": 1})
+	return err
+}
+
+func (c *OneBotChannel) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
+	return sendOneBotInputStatus(ctx, msg, action, c.CallAPI)
+}
+
 // buildOutgoingSegments 将回复消息转换为 OneBot segment 列表。
 func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 	segments := make([]map[string]any, 0, 3+len(msg.ImageURLs)+len(msg.VideoURLs))
