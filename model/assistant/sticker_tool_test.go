@@ -57,7 +57,7 @@ func (s *stickerHistoryStore) ListRecentStickerEvents(_ context.Context, query S
 
 func TestDefaultPluginManagerIncludesStickerSender(t *testing.T) {
 	state, ok := NewDefaultPluginManager().Get(stickerPluginID)
-	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.0" {
+	if !ok || !state.Enabled || !state.Manifest.BuiltIn || state.Manifest.Version != "0.2.1" {
 		t.Fatalf("sticker plugin state=%#v ok=%v", state, ok)
 	}
 	if len(state.Manifest.Settings) != 5 {
