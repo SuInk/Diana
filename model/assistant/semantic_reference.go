@@ -780,7 +780,7 @@ func (r *Runtime) recordSemanticReference(ctx context.Context, event MessageEven
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.semantic_reference",
+		Action:  "semantic_reference",
 		Message: "模型已完成上下文指代判断",
 		Actor:   oneBotEventActor(event),
 		Target:  messageID,

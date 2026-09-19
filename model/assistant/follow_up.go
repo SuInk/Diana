@@ -291,7 +291,7 @@ func (r *Runtime) recordFollowUpFailure(ctx context.Context, kind followUpKind, 
 	_ = writer.AppendLog(auditCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "assistant.follow_up",
+		Action:  "follow_up",
 		Message: kind.label() + "失败",
 		Detail:  stage + ": " + err.Error(),
 		Actor:   strings.TrimSpace(source.UserID),

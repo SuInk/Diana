@@ -186,7 +186,7 @@ func TestIdentityPrivacyDeferredExecuteRoundTrip(t *testing.T) {
 	for kind, real := range map[string]string{"user": "10001", "group": "123456", "message": "1145141919"} {
 		input[kind] = scope.register(real, kind)
 	}
-	calls := []llm.ToolCall{{ID: "execute-1", Name: "tools.execute", Arguments: map[string]any{"name": "mcp__test__identity", "input": input}}}
+	calls := []llm.ToolCall{{ID: "execute-1", Name: "tools_execute", Arguments: map[string]any{"name": "mcp__test__identity", "input": input}}}
 	restored := scope.restoreToolCalls(calls)
 	inner := restored[0].Arguments["input"].(map[string]any)
 	if inner["user"] != "10001" || inner["group"] != "123456" || inner["message"] != "1145141919" {
@@ -196,7 +196,7 @@ func TestIdentityPrivacyDeferredExecuteRoundTrip(t *testing.T) {
 	for _, m := range protected.Messages {
 		if len(m.ToolCalls) > 0 {
 			call := m.ToolCalls[0]
-			if call.Name != "tools.execute" || call.ID != "execute-1" {
+			if call.Name != "tools_execute" || call.ID != "execute-1" {
 				t.Fatal("envelope changed")
 			}
 			for kind, alias := range input {

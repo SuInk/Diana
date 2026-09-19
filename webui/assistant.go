@@ -414,7 +414,7 @@ func (h *BotHandler) saveConfig(c *gin.Context) {
 func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "config_save", err, "", nil)
 		return
 	}
 
@@ -433,39 +433,39 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		cfg.ID = existing.ID
 	}
 	if err := set.ValidateIndependentConnection(cfg); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
 	if err := validateTokenLength("onebot_access_token", payload.OneBotAccessToken); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
 	if err := validateTokenLength("nonebot_bridge_token", payload.NoneBotBridgeToken); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
 	if err := cfg.Validate(); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
 	}
 
 	next, savedID := upsertBotProfileSet(set, payload, cfg)
 	current, ok := next.ConfigForProfile(savedID)
 	if !ok {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", fmt.Errorf("diana profile set is empty"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "config_save", fmt.Errorf("diana profile set is empty"), "", nil)
 		return
 	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(current), botLogMetadata(current))
+		h.writeError(c, http.StatusBadRequest, "config_save", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
 	// 落库失败就不能回 200：以前这里吞掉错误，前端提示保存成功，重启后配置
 	// 又是旧的，只能靠翻数据库才发现。
 	if err := h.profiles.SaveProfiles(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.config.save", err, botLogTarget(current), botLogMetadata(current))
+		h.writeError(c, http.StatusInternalServerError, "config_save", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.config.save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
+	recordRequestOperation(c, h.logs, "config_save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, savedID))
 }
 
@@ -473,13 +473,13 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 func (h *BotHandler) cloneProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "profile_clone", err, "", nil)
 		return
 	}
 	sourceID := strings.TrimSpace(payload.ID)
 	set := h.profiles.Profiles()
 	if sourceID == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("profile id is required"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "profile_clone", fmt.Errorf("profile id is required"), "", nil)
 		return
 	}
 	for _, profile := range set.Profiles {
@@ -495,55 +495,55 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 		next, clonedID := upsertBotProfileSet(set, assistant.ConfigPayload{Name: cloned.Name}, cloned)
 		current, ok := next.ConfigForProfile(clonedID)
 		if !ok {
-			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("diana profile set is empty"), "", nil)
+			h.writeError(c, http.StatusBadRequest, "profile_clone", fmt.Errorf("diana profile set is empty"), "", nil)
 			return
 		}
 		if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", err, botLogTarget(current), botLogMetadata(current))
+			h.writeError(c, http.StatusBadRequest, "profile_clone", err, botLogTarget(current), botLogMetadata(current))
 			return
 		}
 		if err := h.profiles.SaveProfiles(next); err != nil {
-			h.writeError(c, http.StatusInternalServerError, "assistant.profile.clone", err, botLogTarget(current), botLogMetadata(current))
+			h.writeError(c, http.StatusInternalServerError, "profile_clone", err, botLogTarget(current), botLogMetadata(current))
 			return
 		}
-		recordRequestOperation(c, h.logs, "assistant.profile.clone", "OneBot v11 机器人配置已复制", sourceID, botLogMetadata(profile))
+		recordRequestOperation(c, h.logs, "profile_clone", "OneBot v11 机器人配置已复制", sourceID, botLogMetadata(profile))
 		c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, clonedID))
 		return
 	}
-	h.writeError(c, http.StatusNotFound, "assistant.profile.clone", fmt.Errorf("profile %q not found", sourceID), sourceID, nil)
+	h.writeError(c, http.StatusNotFound, "profile_clone", fmt.Errorf("profile %q not found", sourceID), sourceID, nil)
 }
 
 // deleteProfile 删除指定 OneBot v11 机器人配置档。
 func (h *BotHandler) deleteProfile(c *gin.Context) {
 	var payload assistant.ConfigPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "profile_delete", err, "", nil)
 		return
 	}
 	targetID := strings.TrimSpace(payload.ID)
 	if targetID == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("profile id is required"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "profile_delete", fmt.Errorf("profile id is required"), "", nil)
 		return
 	}
 	set := h.profiles.Profiles()
 	if len(set.Profiles) <= 1 {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("at least one qqbot profile must remain"), targetID, nil)
+		h.writeError(c, http.StatusBadRequest, "profile_delete", fmt.Errorf("at least one qqbot profile must remain"), targetID, nil)
 		return
 	}
 	next := set.Delete(targetID)
 	if len(next.Profiles) == len(set.Profiles) {
-		h.writeError(c, http.StatusNotFound, "assistant.profile.delete", fmt.Errorf("profile %q not found", targetID), targetID, nil)
+		h.writeError(c, http.StatusNotFound, "profile_delete", fmt.Errorf("profile %q not found", targetID), targetID, nil)
 		return
 	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, targetID, map[string]any{"profile_id": targetID})
+		h.writeError(c, http.StatusBadRequest, "profile_delete", err, targetID, map[string]any{"profile_id": targetID})
 		return
 	}
 	if err := h.profiles.SaveProfiles(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.profile.delete", err, targetID, map[string]any{"profile_id": targetID})
+		h.writeError(c, http.StatusInternalServerError, "profile_delete", err, targetID, map[string]any{"profile_id": targetID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.profile.delete", "OneBot v11 机器人配置已删除", targetID, map[string]any{"profile_id": targetID})
+	recordRequestOperation(c, h.logs, "profile_delete", "OneBot v11 机器人配置已删除", targetID, map[string]any{"profile_id": targetID})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, ""))
 }
 
@@ -558,19 +558,19 @@ type messageRelayPayload struct {
 func (h *BotHandler) setMessageRelays(c *gin.Context) {
 	var payload messageRelayPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.message_relays.update", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "message_relays_update", err, "", nil)
 		return
 	}
 	next := h.profiles.Profiles().WithMessageRelays(payload.Relays)
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.message_relays.update", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "message_relays_update", err, "", nil)
 		return
 	}
 	if err := h.profiles.SaveProfiles(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.message_relays.update", err, "", map[string]any{"relays": len(next.MessageRelays)})
+		h.writeError(c, http.StatusInternalServerError, "message_relays_update", err, "", map[string]any{"relays": len(next.MessageRelays)})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.message_relays.update", "消息互通链路已更新", "", map[string]any{"relays": len(next.MessageRelays)})
+	recordRequestOperation(c, h.logs, "message_relays_update", "消息互通链路已更新", "", map[string]any{"relays": len(next.MessageRelays)})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, botProfileScope(c)))
 }
 
@@ -584,34 +584,34 @@ type profileEnabledPayload struct {
 func (h *BotHandler) setProfileEnabled(c *gin.Context) {
 	var payload profileEnabledPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "profile_enabled", err, "", nil)
 		return
 	}
 	next, ok := h.profiles.Profiles().WithProfileEnabled(payload.ProfileID, payload.Enabled)
 	if !ok {
-		h.writeError(c, http.StatusNotFound, "assistant.profile.enabled", fmt.Errorf("profile %q not found", payload.ProfileID), payload.ProfileID, nil)
+		h.writeError(c, http.StatusNotFound, "profile_enabled", fmt.Errorf("profile %q not found", payload.ProfileID), payload.ProfileID, nil)
 		return
 	}
 	current, _ := next.ConfigForProfile(payload.ProfileID)
 	if payload.Enabled {
 		if err := next.ValidateIndependentConnection(current); err != nil {
-			h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, botLogTarget(current), botLogMetadata(current))
+			h.writeError(c, http.StatusBadRequest, "profile_enabled", err, botLogTarget(current), botLogMetadata(current))
 			return
 		}
 	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, botLogTarget(current), botLogMetadata(current))
+		h.writeError(c, http.StatusBadRequest, "profile_enabled", err, botLogTarget(current), botLogMetadata(current))
 		return
 	}
 	if err := h.profiles.SaveProfiles(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.profile.enabled", err, botLogTarget(current), map[string]any{"enabled": payload.Enabled})
+		h.writeError(c, http.StatusInternalServerError, "profile_enabled", err, botLogTarget(current), map[string]any{"enabled": payload.Enabled})
 		return
 	}
 	status := "机器人已停用"
 	if payload.Enabled {
 		status = "机器人已启用"
 	}
-	recordRequestOperation(c, h.logs, "assistant.profile.enabled", status, current.ID, botLogMetadata(current))
+	recordRequestOperation(c, h.logs, "profile_enabled", status, current.ID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, current.ID))
 }
 
@@ -622,31 +622,31 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 		Enabled bool `json:"enabled"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "profiles_enabled", err, "", nil)
 		return
 	}
 	next := h.profiles.Profiles().WithAllProfilesEnabled(payload.Enabled)
 	if payload.Enabled {
 		for _, profile := range next.Profiles {
 			if err := next.ValidateIndependentConnection(profile); err != nil {
-				h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, botLogTarget(profile), botLogMetadata(profile))
+				h.writeError(c, http.StatusBadRequest, "profiles_enabled", err, botLogTarget(profile), botLogMetadata(profile))
 				return
 			}
 		}
 	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "profiles_enabled", err, "", nil)
 		return
 	}
 	if err := h.profiles.SaveProfiles(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.profiles.enabled", err, "", map[string]any{"enabled": payload.Enabled})
+		h.writeError(c, http.StatusInternalServerError, "profiles_enabled", err, "", map[string]any{"enabled": payload.Enabled})
 		return
 	}
 	status := "全部机器人已停用"
 	if payload.Enabled {
 		status = "全部机器人已启用"
 	}
-	recordRequestOperation(c, h.logs, "assistant.profiles.enabled", status, "", map[string]any{"enabled": payload.Enabled})
+	recordRequestOperation(c, h.logs, "profiles_enabled", status, "", map[string]any{"enabled": payload.Enabled})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, botProfileScope(c)))
 }
 
@@ -759,20 +759,20 @@ func (h *BotHandler) status(c *gin.Context) {
 // start 处理启动 OneBot v11 机器人的请求。
 func (h *BotHandler) start(c *gin.Context) {
 	if err := h.runtime.Start(h.ctx); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.start", err, "", h.runtimeLogMetadata())
+		h.writeError(c, http.StatusBadRequest, "start", err, "", h.runtimeLogMetadata())
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.start", "机器人运行时已启动", "", h.runtimeLogMetadata())
+	recordRequestOperation(c, h.logs, "start", "机器人运行时已启动", "", h.runtimeLogMetadata())
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
 // stop 处理停止 OneBot v11 机器人的请求。
 func (h *BotHandler) stop(c *gin.Context) {
 	if err := h.runtime.Stop(); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.stop", err, "", h.runtimeLogMetadata())
+		h.writeError(c, http.StatusBadRequest, "stop", err, "", h.runtimeLogMetadata())
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.stop", "机器人运行时已停止", "", h.runtimeLogMetadata())
+	recordRequestOperation(c, h.logs, "stop", "机器人运行时已停止", "", h.runtimeLogMetadata())
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
@@ -780,7 +780,7 @@ func (h *BotHandler) stop(c *gin.Context) {
 func (h *BotHandler) requestBackfill(c *gin.Context) {
 	runtime, ok := h.runtime.(historyBackfillRuntime)
 	if !ok {
-		h.writeError(c, http.StatusNotImplemented, "assistant.backfill", fmt.Errorf("runtime does not support manual history backfill"), "", h.runtimeLogMetadata())
+		h.writeError(c, http.StatusNotImplemented, "backfill", fmt.Errorf("runtime does not support manual history backfill"), "", h.runtimeLogMetadata())
 		return
 	}
 	var payload struct {
@@ -793,10 +793,10 @@ func (h *BotHandler) requestBackfill(c *gin.Context) {
 		window = assistant.InboundReplayWindow
 	}
 	if err := runtime.RequestHistoryBackfill(window); err != nil {
-		h.writeError(c, http.StatusConflict, "assistant.backfill", err, "", h.runtimeLogMetadata())
+		h.writeError(c, http.StatusConflict, "backfill", err, "", h.runtimeLogMetadata())
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.backfill", fmt.Sprintf("已触发手动回补，窗口 %s", window), "", h.runtimeLogMetadata())
+	recordRequestOperation(c, h.logs, "backfill", fmt.Sprintf("已触发手动回补，窗口 %s", window), "", h.runtimeLogMetadata())
 	c.JSON(http.StatusOK, gin.H{"requested": true, "window_hours": window.Hours()})
 }
 
@@ -804,7 +804,7 @@ func (h *BotHandler) requestBackfill(c *gin.Context) {
 func (h *BotHandler) getGroupTest(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Query("group_id"))
 	if groupID == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.status", fmt.Errorf("group_id is required"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_status", fmt.Errorf("group_id is required"), "", nil)
 		return
 	}
 	status := h.runtime.Status()
@@ -820,17 +820,17 @@ func (h *BotHandler) getGroupTest(c *gin.Context) {
 func (h *BotHandler) sendGroupTest(c *gin.Context) {
 	var payload groupTestPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_send", err, "", nil)
 		return
 	}
 	groupID := strings.TrimSpace(payload.GroupID)
 	message := strings.TrimSpace(payload.Message)
 	if groupID == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", fmt.Errorf("group_id is required"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_send", fmt.Errorf("group_id is required"), "", nil)
 		return
 	}
 	if message == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", fmt.Errorf("message is required"), groupID, map[string]any{"group_id": groupID})
+		h.writeError(c, http.StatusBadRequest, "group_test_send", fmt.Errorf("message is required"), groupID, map[string]any{"group_id": groupID})
 		return
 	}
 	var sendResult map[string]any
@@ -838,7 +838,7 @@ func (h *BotHandler) sendGroupTest(c *gin.Context) {
 	if payload.OneShot {
 		groupNumber, parseErr := strconv.ParseInt(groupID, 10, 64)
 		if parseErr != nil || groupNumber <= 0 {
-			h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", fmt.Errorf("valid group_id is required"), groupID, nil)
+			h.writeError(c, http.StatusBadRequest, "group_test_send", fmt.Errorf("valid group_id is required"), groupID, nil)
 			return
 		}
 		segments := assistant.TextToOneBotSegments(message)
@@ -849,12 +849,12 @@ func (h *BotHandler) sendGroupTest(c *gin.Context) {
 		sendResult, err = h.runtime.SendGroupMessage(c.Request.Context(), groupID, message)
 	}
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.send", err, groupID, map[string]any{"group_id": groupID})
+		h.writeError(c, http.StatusBadRequest, "group_test_send", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
 	messageID := oneBotMessageID(sendResult)
 	status := h.runtime.Status()
-	recordRequestOperation(c, h.logs, "assistant.group_test.send", "群测试消息已发送", groupID, map[string]any{
+	recordRequestOperation(c, h.logs, "group_test_send", "群测试消息已发送", groupID, map[string]any{
 		"group_id":   groupID,
 		"message_id": messageID,
 	})
@@ -960,10 +960,10 @@ func (h *BotHandler) installPluginDependency(c *gin.Context) {
 		case errors.Is(err, context.DeadlineExceeded):
 			status = http.StatusGatewayTimeout
 		}
-		h.writeError(c, status, "assistant.plugin.dependency.install", err, name, map[string]any{"dependency": name})
+		h.writeError(c, status, "plugin_dependency_install", err, name, map[string]any{"dependency": name})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.plugin.dependency.install", "插件运行依赖已安装", name, map[string]any{
+	recordRequestOperation(c, h.logs, "plugin_dependency_install", "插件运行依赖已安装", name, map[string]any{
 		"dependency": name,
 		"installer":  result.Installer,
 		"version":    result.Dependency.Version,
@@ -975,11 +975,11 @@ func (h *BotHandler) installPluginDependency(c *gin.Context) {
 func (h *BotHandler) installPlugin(c *gin.Context) {
 	state, err := h.runtime.Plugins().Install(c.Param("id"))
 	if err != nil {
-		h.writePluginError(c, "assistant.plugin.install", err, c.Param("id"))
+		h.writePluginError(c, "plugin_install", err, c.Param("id"))
 		return
 	}
 	h.persistState()
-	recordRequestOperation(c, h.logs, "assistant.plugin.install", "机器人插件已安装", state.Manifest.ID, pluginLogMetadata(state))
+	recordRequestOperation(c, h.logs, "plugin_install", "机器人插件已安装", state.Manifest.ID, pluginLogMetadata(state))
 	c.JSON(http.StatusOK, state.Redacted())
 }
 
@@ -987,14 +987,14 @@ func (h *BotHandler) installPlugin(c *gin.Context) {
 func (h *BotHandler) uninstallPlugin(c *gin.Context) {
 	state, err := h.runtime.Plugins().Uninstall(c.Param("id"))
 	if err != nil {
-		h.writePluginError(c, "assistant.plugin.uninstall", err, c.Param("id"))
+		h.writePluginError(c, "plugin_uninstall", err, c.Param("id"))
 		return
 	}
 	// 第三方插件连落盘目录和来源记录一起清掉；非仓库插件这里静默返回。
 	h.removeRepoPluginSources(c.Param("id"))
 	h.persistState()
 	h.removeRepoPluginSources(state.Manifest.ID)
-	recordRequestOperation(c, h.logs, "assistant.plugin.uninstall", "机器人插件已卸载", state.Manifest.ID, pluginLogMetadata(state))
+	recordRequestOperation(c, h.logs, "plugin_uninstall", "机器人插件已卸载", state.Manifest.ID, pluginLogMetadata(state))
 	c.JSON(http.StatusOK, state.Redacted())
 }
 
@@ -1006,18 +1006,18 @@ func (h *BotHandler) setPluginEnabled(c *gin.Context) {
 	}
 	var payload pluginEnabledPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.enabled", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
+		h.writeError(c, http.StatusBadRequest, "plugin_enabled", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
 		return
 	}
 	state, err := h.runtime.Plugins().SetEnabledForProfile(c.Param("id"), profileID, payload.Enabled)
 	if err != nil {
-		h.writePluginError(c, "assistant.plugin.enabled", err, c.Param("id"))
+		h.writePluginError(c, "plugin_enabled", err, c.Param("id"))
 		return
 	}
 	h.persistState()
 	metadata := pluginLogMetadata(state)
 	metadata["profile_id"] = profileID
-	recordRequestOperation(c, h.logs, "assistant.plugin.enabled", "机器人插件开关已更新", state.Manifest.ID, metadata)
+	recordRequestOperation(c, h.logs, "plugin_enabled", "机器人插件开关已更新", state.Manifest.ID, metadata)
 	c.JSON(http.StatusOK, state.Redacted())
 }
 
@@ -1029,7 +1029,7 @@ func (h *BotHandler) updatePluginSettings(c *gin.Context) {
 	}
 	var payload pluginSettingsPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.settings", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
+		h.writeError(c, http.StatusBadRequest, "plugin_settings", err, c.Param("id"), map[string]any{"plugin_id": c.Param("id")})
 		return
 	}
 	var state assistant.PluginState
@@ -1041,13 +1041,13 @@ func (h *BotHandler) updatePluginSettings(c *gin.Context) {
 		state, err = h.runtime.Plugins().UpdateSettingsForProfile(c.Param("id"), profileID, payload.Settings, payload.ClearSecrets)
 	}
 	if err != nil {
-		h.writePluginError(c, "assistant.plugin.settings", err, c.Param("id"))
+		h.writePluginError(c, "plugin_settings", err, c.Param("id"))
 		return
 	}
 	h.persistState()
 	metadata := pluginLogMetadata(state)
 	metadata["profile_id"] = profileID
-	recordRequestOperation(c, h.logs, "assistant.plugin.settings", "机器人插件设置已更新", state.Manifest.ID, metadata)
+	recordRequestOperation(c, h.logs, "plugin_settings", "机器人插件设置已更新", state.Manifest.ID, metadata)
 	c.JSON(http.StatusOK, state.Redacted())
 }
 
@@ -1058,17 +1058,17 @@ func (h *BotHandler) testMusicConnections(c *gin.Context) {
 	}
 	var payload musicConnectionTestPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.music.test", err, "official.music", nil)
+		h.writeError(c, http.StatusBadRequest, "plugin_music_test", err, "official.music", nil)
 		return
 	}
 	plugin, settings, ok := h.runtime.Plugins().PluginForConfiguration("official.music", profileID)
 	if !ok {
-		h.writeError(c, http.StatusNotFound, "assistant.plugin.music.test", assistant.ErrPluginNotFound, "official.music", nil)
+		h.writeError(c, http.StatusNotFound, "plugin_music_test", assistant.ErrPluginNotFound, "official.music", nil)
 		return
 	}
 	music, ok := plugin.(*assistant.MusicPlugin)
 	if !ok {
-		h.writeError(c, http.StatusInternalServerError, "assistant.plugin.music.test", errors.New("music plugin has unexpected implementation"), "official.music", nil)
+		h.writeError(c, http.StatusInternalServerError, "plugin_music_test", errors.New("music plugin has unexpected implementation"), "official.music", nil)
 		return
 	}
 	for key, value := range payload.Settings {
@@ -1104,7 +1104,7 @@ func (h *BotHandler) persistState() {
 	}
 	// 插件开关/安装状态不在 runtime.Config 里，因此单独持久化。
 	if err := h.sqlite.SavePluginStates(h.ctx, h.runtime.Plugins().Snapshot()); err != nil {
-		recordError(h.ctx, h.logs, "assistant.persist", err, "plugin_states", nil)
+		recordError(h.ctx, h.logs, "persist", err, "plugin_states", nil)
 	}
 }
 

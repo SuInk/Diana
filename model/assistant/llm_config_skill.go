@@ -522,7 +522,7 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
 		Kind:     kind,
 		Level:    level,
-		Action:   "assistant.llm_config.command",
+		Action:   "llm_config_command",
 		Message:  message,
 		Detail:   detail,
 		Actor:    oneBotEventActor(req.Event),

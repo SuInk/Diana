@@ -328,7 +328,7 @@ func TestSilentFinishPromptSitsInTheStableHead(t *testing.T) {
 			t.Fatalf("silent finish rule missing %q: %s", want, promptSilentFinish)
 		}
 	}
-	// 没开 Agent 时没有 agent.finalize，这条规则说了也做不到。
+	// 没开 Agent 时没有 agent_finalize，这条规则说了也做不到。
 	offHead, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, relationship, false, nil)
 	if strings.Contains(offHead, promptSilentFinish) {
 		t.Fatal("silent finish rule was injected without the Agent")

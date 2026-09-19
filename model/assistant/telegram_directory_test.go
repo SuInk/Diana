@@ -51,8 +51,8 @@ func TestTelegramDirectoryIsExplicitlyPartialAndTracksUpdates(t *testing.T) {
 	}
 	r := NewRuntime(BotConfig{Platform: PlatformTelegram}, c, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaGroupTool(r, MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-1001"})
-	if tool.Name() != "match_avatar" {
-		t.Fatal("TG still uses OneBot tool name")
+	if tool.Name() != groupDirectoryToolName {
+		t.Fatalf("without the platform interface, TG group tool = %q, want %q", tool.Name(), groupDirectoryToolName)
 	}
 	raw, err := tool.Run(context.Background(), map[string]any{"operation": "members", "query": "@rain"})
 	if err != nil {
@@ -217,5 +217,24 @@ func TestTelegramPrivateGroupAvatarRequiresRequesterMembership(t *testing.T) {
 	}
 	if len(api.callsOf("getChatMember")) != 1 {
 		t.Fatal("explicit negative group ID was not checked natively")
+	}
+}
+
+// 平台接口开着时群资料和成员只走 platform：群工具只剩头像匹配，名字也随之变成
+// match_avatar，模型不会同时看到两个能查群成员的工具。
+func TestGroupToolDefersToPlatformInterface(t *testing.T) {
+	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11} {
+		r := NewRuntime(BotConfig{Platform: platform}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+		event := MessageEvent{Platform: platform, Kind: EventKindGroup, GroupID: "-1001"}
+		tool := newDianaGroupTool(r, event)
+		if tool.Name() != avatarMatchToolName {
+			t.Fatalf("%s group tool = %q, want %q", platform, tool.Name(), avatarMatchToolName)
+		}
+		if _, err := tool.Run(context.Background(), map[string]any{"operation": "members"}); err == nil || !strings.Contains(err.Error(), "platform") {
+			t.Fatalf("%s members err = %v, want redirect to platform", platform, err)
+		}
+		if prompt := r.groupToolPrompt(event); strings.Contains(prompt, groupDirectoryToolName) {
+			t.Fatalf("%s prompt mentions %s while platform is enabled: %s", platform, groupDirectoryToolName, prompt)
+		}
 	}
 }

@@ -248,7 +248,7 @@ func (r *Runtime) recordPokeReaction(ctx context.Context, event MessageEvent, re
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.poke_reply",
+		Action:  "poke_reply",
 		Message: "戳一戳已回应",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,

@@ -170,12 +170,12 @@ func (v *groupAdminVerifier) cleanupLocked(now time.Time) {
 func (h *BotHandler) startGroupAdminChallenge(c *gin.Context) {
 	var payload groupAdminChallengePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.challenge", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_admin_challenge", err, "", nil)
 		return
 	}
 	groupID, userID, err := normalizeGroupAdminIdentity(payload.GroupID, payload.UserID)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.challenge", err, groupID, nil)
+		h.writeError(c, http.StatusBadRequest, "group_admin_challenge", err, groupID, nil)
 		return
 	}
 	profile, ok := h.groupAdminProfile(c, payload.ProfileID)
@@ -183,20 +183,20 @@ func (h *BotHandler) startGroupAdminChallenge(c *gin.Context) {
 		return
 	}
 	if err := h.requireGroupAdmin(c.Request.Context(), groupID, userID, profile.ID); err != nil {
-		h.writeError(c, http.StatusForbidden, "assistant.group_admin.challenge", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
+		h.writeError(c, http.StatusForbidden, "group_admin_challenge", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
 		return
 	}
 	code, expiresAt, err := h.groupAdmin.CreateChallenge(groupID, userID, profile.ID)
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.group_admin.challenge", err, groupID, nil)
+		h.writeError(c, http.StatusInternalServerError, "group_admin_challenge", err, groupID, nil)
 		return
 	}
 	message := fmt.Sprintf("Diana 群管理验证码：%s。10 分钟内有效，请勿转发。群：%s", code, groupID)
 	if err := h.sendPrivateMessage(c.Request.Context(), userID, message, profile.ID); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.challenge", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
+		h.writeError(c, http.StatusBadRequest, "group_admin_challenge", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_admin.challenge", "群管理员验证码已发送", groupID, map[string]any{"group_id": groupID, "user_id": userID})
+	recordRequestOperation(c, h.logs, "group_admin_challenge", "群管理员验证码已发送", groupID, map[string]any{"group_id": groupID, "user_id": userID})
 	c.JSON(http.StatusOK, groupAdminChallengeResponse{
 		GroupID:   groupID,
 		UserID:    userID,
@@ -208,12 +208,12 @@ func (h *BotHandler) startGroupAdminChallenge(c *gin.Context) {
 func (h *BotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 	var payload groupAdminVerifyPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.verify", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_admin_verify", err, "", nil)
 		return
 	}
 	groupID, userID, err := normalizeGroupAdminIdentity(payload.GroupID, payload.UserID)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.verify", err, groupID, nil)
+		h.writeError(c, http.StatusBadRequest, "group_admin_verify", err, groupID, nil)
 		return
 	}
 	profile, ok := h.groupAdminProfile(c, payload.ProfileID)
@@ -222,11 +222,11 @@ func (h *BotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 	}
 	token, expiresAt, err := h.groupAdmin.Verify(groupID, userID, payload.Code, profile.ID)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.verify", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
+		h.writeError(c, http.StatusBadRequest, "group_admin_verify", err, groupID, map[string]any{"group_id": groupID, "user_id": userID})
 		return
 	}
 	config := h.groupConfigForProfile(groupID, profile)
-	recordRequestOperation(c, h.logs, "assistant.group_admin.verify", "群管理员验证通过", groupID, map[string]any{"group_id": groupID, "user_id": userID})
+	recordRequestOperation(c, h.logs, "group_admin_verify", "群管理员验证通过", groupID, map[string]any{"group_id": groupID, "user_id": userID})
 	c.JSON(http.StatusOK, groupAdminConfigResponse{
 		GroupID:   groupID,
 		UserID:    userID,
@@ -241,7 +241,7 @@ func (h *BotHandler) verifyGroupAdminChallenge(c *gin.Context) {
 func (h *BotHandler) getGroupAdminConfig(c *gin.Context) {
 	session, ok := h.groupAdminSessionFromRequest(c)
 	if !ok {
-		h.writeError(c, http.StatusUnauthorized, "assistant.group_admin.config", fmt.Errorf("群管理登录已过期，请重新验证"), "", nil)
+		h.writeError(c, http.StatusUnauthorized, "group_admin_config", fmt.Errorf("群管理登录已过期，请重新验证"), "", nil)
 		return
 	}
 	profile, ok := h.groupAdminProfile(c, session.profileID)
@@ -261,12 +261,12 @@ func (h *BotHandler) getGroupAdminConfig(c *gin.Context) {
 func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 	session, ok := h.groupAdminSessionFromRequest(c)
 	if !ok {
-		h.writeError(c, http.StatusUnauthorized, "assistant.group_admin.config.save", fmt.Errorf("群管理登录已过期，请重新验证"), "", nil)
+		h.writeError(c, http.StatusUnauthorized, "group_admin_config_save", fmt.Errorf("群管理登录已过期，请重新验证"), "", nil)
 		return
 	}
 	var payload groupAdminSessionPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, nil)
+		h.writeError(c, http.StatusBadRequest, "group_admin_config_save", err, session.groupID, nil)
 		return
 	}
 	profile, ok := h.groupAdminProfile(c, session.profileID)
@@ -278,20 +278,20 @@ func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 	if payload.Config.MarkedBotIDs == nil {
 		payload.Config.MarkedBotIDs = append([]string(nil), current.MarkedBotIDs...)
 	} else if session.userID != profile.OwnerID && !slices.Equal(payload.Config.MarkedBotIDs, current.MarkedBotIDs) {
-		h.writeError(c, http.StatusForbidden, "assistant.group_admin.config.save", fmt.Errorf("只有机器人主人可以修改机器人标记"), session.groupID, nil)
+		h.writeError(c, http.StatusForbidden, "group_admin_config_save", fmt.Errorf("只有机器人主人可以修改机器人标记"), session.groupID, nil)
 		return
 	}
 	cfg, err := h.sanitizeGroupConfigPayload(payload.Config, session.groupID)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, map[string]any{"group_id": session.groupID})
+		h.writeError(c, http.StatusBadRequest, "group_admin_config_save", err, session.groupID, map[string]any{"group_id": session.groupID})
 		return
 	}
 	saved, err := h.groupConfigs.SaveGroupConfig(cfg, profile)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_admin.config.save", err, session.groupID, map[string]any{"group_id": session.groupID})
+		h.writeError(c, http.StatusBadRequest, "group_admin_config_save", err, session.groupID, map[string]any{"group_id": session.groupID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_admin.config.save", "群级机器人配置已保存", session.groupID, map[string]any{"group_id": session.groupID, "user_id": session.userID})
+	recordRequestOperation(c, h.logs, "group_admin_config_save", "群级机器人配置已保存", session.groupID, map[string]any{"group_id": session.groupID, "user_id": session.userID})
 	c.JSON(http.StatusOK, groupAdminConfigResponse{
 		GroupID:   session.groupID,
 		UserID:    session.userID,

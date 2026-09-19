@@ -42,12 +42,12 @@ func TestCoerceToolInputArrays(t *testing.T) {
 
 func TestCoerceToolInputArraysDoesNotMutateOriginal(t *testing.T) {
 	schema := map[string]any{"properties": map[string]any{"names": map[string]any{"type": "array"}}}
-	input := map[string]any{"names": "diana.remote_image"}
+	input := map[string]any{"names": "remote_image"}
 	got := coerceToolInputArrays(schema, input)
-	if input["names"] != "diana.remote_image" {
+	if input["names"] != "remote_image" {
 		t.Fatalf("original input mutated: %#v", input)
 	}
 	if err := validateToolInput((&deferredToolLoader{}).InputSchema(), got); err != nil {
-		t.Fatalf("coerced tools.load input still invalid: %v", err)
+		t.Fatalf("coerced tools_load input still invalid: %v", err)
 	}
 }

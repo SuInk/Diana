@@ -146,7 +146,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 			logCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 			defer stop()
 			_ = writer.AppendLog(logCtx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo,
-				Action: "diana.reply.semantic_dedup", Message: "发送前语义重复检查完成", Target: event.MessageID,
+				Action: "reply_semantic_dedup", Message: "发送前语义重复检查完成", Target: event.MessageID,
 				Metadata: map[string]any{"action": action, "model_action": decision.Action, "confidence": decision.Confidence, "reason": decision.Reason, "recent_sent_count": len(recent)}})
 		}
 	}()

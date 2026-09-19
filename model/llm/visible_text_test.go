@@ -65,15 +65,15 @@ func TestRegistryPreservesToolChoiceAndHidesInlineReasoning(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if body.ToolChoice.Type != "function" || body.ToolChoice.Function.Name != "agent_x2e_finalize" {
+				if body.ToolChoice.Type != "function" || body.ToolChoice.Function.Name != "agent_finalize" {
 					t.Errorf("tool_choice lost: %+v", body.ToolChoice)
 				}
 				if body.Stream {
-					writeChatEvents(w, `{"choices":[{"index":0,"delta":{"content":"<think>private reasoning</think>visible answer","tool_calls":[{"index":0,"id":"call_1","function":{"name":"agent_x2e_finalize","arguments":"{\"content\":\"visible answer\"}"}}]},"finish_reason":"tool_calls"}]}`)
+					writeChatEvents(w, `{"choices":[{"index":0,"delta":{"content":"<think>private reasoning</think>visible answer","tool_calls":[{"index":0,"id":"call_1","function":{"name":"agent_finalize","arguments":"{\"content\":\"visible answer\"}"}}]},"finish_reason":"tool_calls"}]}`)
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, `{"model":"mimo-test","choices":[{"message":{"role":"assistant","content":"<think>private reasoning</think>visible answer","tool_calls":[{"id":"call_1","type":"function","function":{"name":"agent_x2e_finalize","arguments":"{\"content\":\"visible answer\"}"}}]},"finish_reason":"tool_calls"}]}`)
+				fmt.Fprint(w, `{"model":"mimo-test","choices":[{"message":{"role":"assistant","content":"<think>private reasoning</think>visible answer","tool_calls":[{"id":"call_1","type":"function","function":{"name":"agent_finalize","arguments":"{\"content\":\"visible answer\"}"}}]},"finish_reason":"tool_calls"}]}`)
 			}))
 			defer server.Close()
 			registry, selection, err := NewProviderRegistryFromProfiles(NewProfileSet(ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test-key", BaseURL: server.URL + "/v1", APIFormat: APIFormatChatCompletions, Model: "mimo-test"}))
@@ -81,7 +81,7 @@ func TestRegistryPreservesToolChoiceAndHidesInlineReasoning(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := RegistryClient{Registry: registry, Selection: selection}
-			req := GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "finish"}}, Tools: []ToolDefinition{{Name: "agent.finalize", Parameters: map[string]any{"type": "object"}}}, ToolChoice: "agent.finalize"}
+			req := GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "finish"}}, Tools: []ToolDefinition{{Name: "agent_finalize", Parameters: map[string]any{"type": "object"}}}, ToolChoice: "agent_finalize"}
 			var text string
 			var calls []ToolCall
 			if mode == "generate" {
@@ -106,7 +106,7 @@ func TestRegistryPreservesToolChoiceAndHidesInlineReasoning(t *testing.T) {
 					}
 				}
 			}
-			if text != "visible answer" || len(calls) != 1 || calls[0].Name != "agent.finalize" {
+			if text != "visible answer" || len(calls) != 1 || calls[0].Name != "agent_finalize" {
 				t.Fatalf("text=%q calls=%+v", text, calls)
 			}
 		})

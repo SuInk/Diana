@@ -197,10 +197,10 @@ func (h *BotHandler) saveNotebookEntry(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	action := "assistant.notebook.update"
+	action := "notebook_update"
 	message := "笔记本条目已更新"
 	if created {
-		action, message = "assistant.notebook.create", "笔记本条目已新增"
+		action, message = "notebook_create", "笔记本条目已新增"
 	}
 	recordRequestOperation(c, h.logs, action, message, entry.Term,
 		map[string]any{"scope": entry.ScopeKey, "term": entry.Term, "version": entry.Version})
@@ -223,7 +223,7 @@ func (h *BotHandler) deleteNotebookEntry(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "条目不存在"})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.notebook.delete", "笔记本条目已作废", entry.Term,
+	recordRequestOperation(c, h.logs, "notebook_delete", "笔记本条目已作废", entry.Term,
 		map[string]any{"scope": entry.ScopeKey, "term": entry.Term})
 	c.JSON(http.StatusOK, entry)
 }
@@ -243,7 +243,7 @@ func (h *BotHandler) restoreNotebookEntry(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "条目不存在"})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.notebook.restore", "笔记本条目已恢复", entry.Term,
+	recordRequestOperation(c, h.logs, "notebook_restore", "笔记本条目已恢复", entry.Term,
 		map[string]any{"scope": entry.ScopeKey, "term": entry.Term})
 	c.JSON(http.StatusOK, entry)
 }

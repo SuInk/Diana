@@ -174,7 +174,7 @@ func (r *Runtime) recordReminderRetryAttempt(item Reminder, cause error, noticeE
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.reminder.retry_scheduled",
+		Action:  "reminder_retry_scheduled",
 		Message: "提醒或订阅执行失败，已安排自动重试",
 		Detail:  detail,
 		Actor:   item.OwnerID,

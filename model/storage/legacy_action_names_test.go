@@ -13,13 +13,25 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
-// 运行时的日志动作名改过两轮：assistant.* -> chatbot.* -> diana.*。
+// rerunLogActionNameMigration 模拟升级：数据库里先有旧名字的行，再跑一次迁移。
+// NewSQLiteStore 打开时迁移已经跑过（空表），所以测试要清掉标记后重跑。
+func rerunLogActionNameMigration(t *testing.T, store *SQLiteStore) {
+	t.Helper()
+	if _, err := store.db.Exec(`DELETE FROM app_state WHERE key = ?`, logActionNamesMigrationKey); err != nil {
+		t.Fatal(err)
+	}
+	if done, err := store.MigrateLogActionNames(context.Background()); err != nil || !done {
+		t.Fatalf("migrate done=%v err=%v", done, err)
+	}
+}
+
+// 运行时的日志动作名换过几代写法：assistant.* -> chatbot.* -> diana.* -> 不带前缀的 snake_case。
 //
-// 升级不会重写历史日志行，所以老库里存的还是老名字。查询侧漏掉哪个名字，那段时间的
-// 记录就会整段查不出来——界面上看起来像「日志没了」，而不是像一个 Bug，因此格外容易
-// 一直没人发现。这个测试盯着这件事：写进老名字，仍然要能读出来。
+// 查询侧只认现在的名字，历史行靠迁移改名。迁移漏掉哪一代，那段时间的记录就会整段
+// 查不出来——界面上看起来像「日志没了」，而不是像一个 Bug，因此格外容易一直没人发现。
+// 这个测试盯着这件事：写进老名字，迁移后仍然要能读出来。
 func TestInboundEventDebugTraceReadsLegacyActionNames(t *testing.T) {
-	for _, action := range []string{"diana.debug_trace", "chatbot.debug_trace"} {
+	for _, action := range []string{"debug_trace", "diana.debug_trace", "chatbot.debug_trace", "qqbot.debug_trace"} {
 		t.Run(action, func(t *testing.T) {
 			ctx := context.Background()
 			store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "legacy-trace.db"))
@@ -46,6 +58,7 @@ func TestInboundEventDebugTraceReadsLegacyActionNames(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+			rerunLogActionNameMigration(t, store)
 
 			_, steps, found, err := store.InboundEventDebugTrace(ctx, eventID)
 			if err != nil {
@@ -71,8 +84,6 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 	// 会在午夜前后一分钟内把条目甩到前一天去。
 	local := time.Now()
 	now := time.Date(local.Year(), local.Month(), local.Day(), 14, 0, 0, 0, time.Local)
-	// 动作名随工具改名换过三代：assistant.* / chatbot.* 是历史行，diana.llm_usage
-	// 是上一轮工具名，llm_usage 是当前名——四代都要能读出来。
 	for _, action := range []string{"llm_usage", "diana.llm_usage", "chatbot.llm_usage", "assistant.llm_usage"} {
 		if err := store.AppendLog(ctx, applog.Entry{
 			Action:    action,
@@ -83,6 +94,8 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
+	rerunLogActionNameMigration(t, store)
 
 	stats, err := store.DashboardStatsForDay(ctx, now, "")
 	if err != nil {

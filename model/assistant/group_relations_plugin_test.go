@@ -100,7 +100,7 @@ func TestGroupRelationsToolRecordsFailureInLogs(t *testing.T) {
 	if !strings.Contains(output, `"ok":false`) {
 		t.Fatalf("output = %s", output)
 	}
-	entry, ok := logs.find("assistant.group_relations")
+	entry, ok := logs.find("group_relations")
 	if !ok {
 		t.Fatalf("运行记录里没有这次失败：%#v", logs.entries)
 	}
@@ -121,7 +121,7 @@ func TestGroupRelationsToolStaysQuietInPrivateChat(t *testing.T) {
 	if _, err := tool.Run(context.Background(), map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := logs.find("assistant.group_relations"); ok {
+	if _, ok := logs.find("group_relations"); ok {
 		t.Fatalf("私聊不该记错误：%#v", logs.entries)
 	}
 }

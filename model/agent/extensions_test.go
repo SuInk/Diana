@@ -97,7 +97,7 @@ func TestExtensionManagementCanBeReadOnly(t *testing.T) {
 			t.Fatalf("read-only extension tool %q is missing", name)
 		}
 	}
-	for _, name := range []string{"install_skill", "uninstall_skill", "mcp.install", "mcp.set_enabled", "mcp.uninstall"} {
+	for _, name := range []string{"install_skill", "uninstall_skill", "mcp_install", "mcp_set_enabled", "mcp_uninstall"} {
 		if _, ok := registry.Get(name); ok {
 			t.Fatalf("mutation tool %q should not be exposed", name)
 		}

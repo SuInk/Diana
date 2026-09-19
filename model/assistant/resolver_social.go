@@ -611,7 +611,7 @@ func recordResolverMediaLog(ctx context.Context, req PluginRequest, raw, platfor
 	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "assistant.resolver.media",
+		Action:  "resolver_media",
 		Message: message,
 		Detail:  detail,
 		Actor:   strings.TrimSpace(req.Event.UserID),
@@ -639,7 +639,7 @@ func recordResolverVideoLog(ctx context.Context, req PluginRequest, raw, videoPa
 	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
 		Kind:     applog.KindOperation,
 		Level:    applog.LevelInfo,
-		Action:   "diana.resolver.video_download",
+		Action:   "resolver_video_download",
 		Message:  "链接解析插件已下载视频",
 		Actor:    oneBotEventActor(req.Event),
 		Target:   raw,

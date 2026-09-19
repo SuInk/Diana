@@ -25,7 +25,7 @@ func (c *silentFinalizeClient) Generate(_ context.Context, req llm.GenerateReque
 	}, nil
 }
 
-// TestRunnerSilentFinalizeViaNativeToolCall：模型调用 agent.finalize 填 silent=true
+// TestRunnerSilentFinalizeViaNativeToolCall：模型调用 agent_finalize 填 silent=true
 // 时，这一轮不产出任何正文，也不算生成失败。
 func TestRunnerSilentFinalizeViaNativeToolCall(t *testing.T) {
 	client := &silentFinalizeClient{arguments: map[string]any{

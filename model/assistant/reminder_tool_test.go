@@ -288,8 +288,8 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["reminder"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"reminder","input":{"operation":"create","delay":"1m","message":"睡觉"}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["reminder"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"reminder","input":{"operation":"create","delay":"1m","message":"睡觉"}}}`,
 		`{"action":"final","content":"好，一分钟后提醒你睡觉。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{

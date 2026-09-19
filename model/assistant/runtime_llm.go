@@ -895,14 +895,15 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
 	}
-	if agentEnabled && hasTool(groupToolName(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)})) {
-		builder.WriteString("\n" + groupToolPrompt(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)}))
+	groupEvent := groupToolEventForConfig(event, cfg)
+	if agentEnabled && hasTool(r.groupToolName(groupEvent)) {
+		builder.WriteString("\n" + r.groupToolPrompt(groupEvent))
 	}
 	if agentEnabled && hasTool(botParticipationToolName) {
 		builder.WriteString("\n修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。")
 	}
 	if agentEnabled && hasTool(replyBlockToolName) {
-		builder.WriteString("\n主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或 group 的成员查询，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。")
+		builder.WriteString("\n主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或群成员查询结果，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。")
 	}
 	if agentEnabled && hasTool("relationship") {
 		builder.WriteString("\n" + promptToolRelationshipList)
@@ -924,7 +925,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	builder.WriteString("\n" + promptLongTermMemory)
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy))
 	if agentEnabled {
-		// 静默只有 agent.finalize 这一个出口，没开 Agent 时说了也做不到。
+		// 静默只有 agent_finalize 这一个出口，没开 Agent 时说了也做不到。
 		// 它逐字不变，跟着拒答规则一起留在稳定头部：两条规则读在一起，模型才
 		// 分得清「不说话」和「拒绝」不是一回事。
 		builder.WriteString("\n" + promptSilentFinish)

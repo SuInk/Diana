@@ -28,9 +28,9 @@ type restoredDynamicAgentProvider struct {
 func (p restoredDynamicAgentProvider) Generate(_ context.Context, request llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	*p.used = append(*p.used, p.model)
 	*p.requests = append(*p.requests, request)
-	text := `{"action":"tool","tool":"tools.execute","input":{"name":"history_images","input":{}}}`
+	text := `{"action":"tool","tool":"tools_execute","input":{"name":"history_images","input":{}}}`
 	if len(*p.requests) == 1 {
-		text = `{"action":"tool","tool":"tools.load","input":{"names":["history_images"]}}`
+		text = `{"action":"tool","tool":"tools_load","input":{"names":["history_images"]}}`
 	}
 	if p.model == "vision-model" {
 		text = `{"action":"final","content":"视觉细节已读取"}`

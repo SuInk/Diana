@@ -268,7 +268,7 @@ func (t *dianaFileDeliveryTool) record(ctx context.Context, result dianaFileDeli
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     kind,
 		Level:    level,
-		Action:   "assistant.send_file",
+		Action:   "send_file",
 		Message:  result.Message,
 		Detail:   detail,
 		Actor:    oneBotEventActor(t.event),

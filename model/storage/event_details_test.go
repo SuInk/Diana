@@ -80,6 +80,7 @@ VALUES (?, ?, 'group', 'g1', 'u1', ?, ?, '{}', 0, ?, 0, ?, ?, ?, ?, ?)
 		}
 	}
 
+	rerunLogActionNameMigration(t, store)
 	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-24 * time.Hour), Limit: 2, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
@@ -165,15 +166,15 @@ func TestAttachInboundEventMemoriesMatchesExactBotAndConversation(t *testing.T) 
 	}
 	defer func() { _ = store.Close() }()
 	for _, entry := range []applog.Entry{
-		{Action: "diana.memory.retrieved", Target: "same-message", Metadata: map[string]any{
+		{Action: "memory_retrieved", Target: "same-message", Metadata: map[string]any{
 			"message_id": "same-message", "profile_id": "bot-a", "group_id": "group-1", "user_id": "user-1",
 			"memories": []map[string]any{{"id": "memory-a", "kind": "fact", "topic": "住址", "content": "住在杭州", "confidence": 0.96}},
 		}},
-		{Action: "diana.memory.retrieved", Target: "same-message", Metadata: map[string]any{
+		{Action: "memory_retrieved", Target: "same-message", Metadata: map[string]any{
 			"message_id": "same-message", "profile_id": "bot-b", "group_id": "group-1", "user_id": "user-1",
 			"memories": []map[string]any{{"id": "memory-b", "kind": "fact", "content": "不应串到另一台机器人"}},
 		}},
-		{Action: "diana.memory.temporary", Target: "same-message", Metadata: map[string]any{
+		{Action: "memory_temporary", Target: "same-message", Metadata: map[string]any{
 			"message_id": "same-message", "profile_id": "bot-a", "group_id": "group-1", "user_id": "user-1",
 			"memories": []map[string]any{{"id": "state-a", "kind": "private_thread_state", "task_kind": "guess.character", "content": map[string]any{"target": "DIO"}, "version": 2}},
 		}},

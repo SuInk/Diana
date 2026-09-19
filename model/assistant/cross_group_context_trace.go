@@ -98,7 +98,7 @@ func (r *Runtime) recordCrossGroupContextTrace(event MessageEvent, trace crossGr
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
-		Action:   "diana.cross_group_context",
+		Action:   "cross_group_context",
 		Message:  message,
 		Target:   event.MessageID,
 		Metadata: metadata,

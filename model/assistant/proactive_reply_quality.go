@@ -695,7 +695,7 @@ func (r *Runtime) recordPrivateClosingVerdict(ctx context.Context, event Message
 	defer stop()
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind: applog.KindOperation, Level: applog.LevelInfo,
-		Action: "diana.reply.private_closing", Message: "私聊收尾判断已拦下一条回复", Target: event.MessageID,
+		Action: "reply_private_closing", Message: "私聊收尾判断已拦下一条回复", Target: event.MessageID,
 		Metadata: map[string]any{
 			"user_id":              event.UserID,
 			"conversation_closing": decision.ConversationClosing,

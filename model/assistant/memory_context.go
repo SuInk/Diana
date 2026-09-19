@@ -181,7 +181,7 @@ func (r *Runtime) recordRetrievedMemoryContext(ctx context.Context, event Messag
 			"retrieval_score": item.RetrievalScore, "retrieval_reason": item.RetrievalReason,
 		})
 	}
-	_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindDebug, Level: applog.LevelInfo, Action: "diana.memory.retrieved", Message: "长期记忆已进入本轮上下文", Target: event.MessageID, Metadata: map[string]any{
+	_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindDebug, Level: applog.LevelInfo, Action: "memory_retrieved", Message: "长期记忆已进入本轮上下文", Target: event.MessageID, Metadata: map[string]any{
 		"platform": event.Platform, "profile_id": event.ProfileID, "group_id": event.GroupID,
 		"user_id": event.UserID, "message_id": event.MessageID, "memories": memories,
 	}})

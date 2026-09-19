@@ -198,7 +198,7 @@ func TestResolverSuppressesSameResourceAcrossDifferentInboundMessages(t *testing
 		t.Fatalf("resolver deliveries = %#v", sent)
 	}
 	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "assistant.resolver_duplicate_suppressed" || entries[0].Target != "second" {
+	if len(entries) != 1 || entries[0].Action != "resolver_duplicate_suppressed" || entries[0].Target != "second" {
 		t.Fatalf("duplicate audit entries = %#v", entries)
 	}
 
@@ -350,7 +350,7 @@ func TestFollowUpFailureIsAudited(t *testing.T) {
 	entries := logs.entriesSnapshot()
 	var found bool
 	for _, entry := range entries {
-		if entry.Action == "assistant.follow_up" && strings.Contains(entry.Detail, "generate") {
+		if entry.Action == "follow_up" && strings.Contains(entry.Detail, "generate") {
 			found = true
 		}
 	}

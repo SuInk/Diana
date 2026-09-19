@@ -13,8 +13,8 @@ import (
 )
 
 // Deferred tools expose their contract through messages, never by mutating API declarations.
-const ToolsLoadToolName = "tools.load"
-const ToolsExecuteToolName = "tools.execute"
+const ToolsLoadToolName = "tools_load"
+const ToolsExecuteToolName = "tools_execute"
 const maxLoadedContractChars = 128 * 1024
 
 type deferredToolLoader struct {
@@ -73,7 +73,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	return append(out,
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
-		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行本轮 tools.load 已加载的工具；name 为工具名，input 必须符合加载返回的 inputSchema。", Parameters: executeInputSchema()},
+		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行本轮 tools_load 已加载的工具；name 为工具名，input 必须符合加载返回的 inputSchema。", Parameters: executeInputSchema()},
 	)
 }
 
@@ -132,7 +132,7 @@ func executeInputSchema() map[string]any {
 func (l *deferredToolLoader) Name() string { return ToolsLoadToolName }
 
 func (l *deferredToolLoader) Description() string {
-	return "加载系统提示词「按需加载的工具」里列出的工具。names 传工具名；加载结果包含完整契约，随后通过 tools.execute(name,input) 调用。已加载工具会在当前群会话后续运行中保留。只加载确实要用的工具。"
+	return "加载系统提示词「按需加载的工具」里列出的工具。names 传工具名；加载结果包含完整契约，随后通过 tools_execute(name,input) 调用。已加载工具会在当前群会话后续运行中保留。只加载确实要用的工具。"
 }
 
 func (l *deferredToolLoader) InputSchema() map[string]any {
@@ -171,7 +171,7 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 	for _, name := range requested {
 		tool, ok := l.registry.Get(name)
 		if !ok || name == "" {
-			return "", fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools.load 名称", name)
+			return "", fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
 		}
 		schema, err := snapshotToolSchema(tool)
 		if err != nil {
@@ -182,7 +182,7 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 			snapshots[name] = schema
 		}
 	}
-	result, err := json.Marshal(map[string]any{"loaded": contracts, "instruction": "使用 tools.execute，把目标工具名放入 name、参数对象放入 input；当前群会话后续运行会保留加载状态。"})
+	result, err := json.Marshal(map[string]any{"loaded": contracts, "instruction": "使用 tools_execute，把目标工具名放入 name、参数对象放入 input；当前群会话后续运行会保留加载状态。"})
 	if err != nil {
 		return "", fmt.Errorf("无法编码工具契约")
 	}
@@ -210,7 +210,7 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 	if action.Tool == ToolsExecuteToolName {
 		if l == nil {
-			return action, fmt.Errorf("当前未启用延迟工具，不能调用 tools.execute")
+			return action, fmt.Errorf("当前未启用延迟工具，不能调用 tools_execute")
 		}
 		if err := validateToolInput(executeInputSchema(), action.Input); err != nil {
 			return action, err
@@ -223,23 +223,23 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		action.Tool, action.Input = name, cloneDeferredInput(input).(map[string]any)
 		schema, loaded := l.loaded[name]
 		if !loaded {
-			return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools.load，再 tools.execute", name)
+			return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools_load，再 tools_execute", name)
 		}
 		action.Input = coerceToolInputArrays(schema, action.Input)
 		input = action.Input
 		tool, ok := l.registry.Get(name)
 		if !ok {
-			return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools.load", name)
+			return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools_load", name)
 		}
 		if err := validateToolInput(schema, input); err != nil {
 			return action, err
 		}
 		current, err := snapshotToolSchema(tool)
 		if err != nil {
-			return action, fmt.Errorf("工具当前 inputSchema 无效，请重新 tools.load")
+			return action, fmt.Errorf("工具当前 inputSchema 无效，请重新 tools_load")
 		}
 		if err := validateToolInput(current, input); err != nil {
-			return action, fmt.Errorf("当前工具契约校验失败，请重新 tools.load: %w", err)
+			return action, fmt.Errorf("当前工具契约校验失败，请重新 tools_load: %w", err)
 		}
 		return action, nil
 	}
@@ -249,14 +249,14 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 			return action, validateToolInput(l.InputSchema(), action.Input)
 		}
 		if !l.core[action.Tool] {
-			return action, fmt.Errorf("不能直接调用延迟工具 %q；请先 tools.load，再 tools.execute", action.Tool)
+			return action, fmt.Errorf("不能直接调用延迟工具 %q；请先 tools_load，再 tools_execute", action.Tool)
 		}
 	}
 	return action, nil
 }
 
 // Target tools may normalize or fill their input in place. Do not let that
-// mutate the provider's original tools.execute envelope or its nested values.
+// mutate the provider's original tools_execute envelope or its nested values.
 func cloneDeferredInput(value any) any {
 	switch v := value.(type) {
 	case map[string]any:

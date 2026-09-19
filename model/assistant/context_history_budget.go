@@ -507,7 +507,7 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
-		Action:   "diana.context_budget",
+		Action:   "context_budget",
 		Message:  "上下文预算已编排",
 		Actor:    "chat_context",
 		Target:   strings.TrimSpace(event.MessageID),

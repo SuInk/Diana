@@ -299,7 +299,7 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 		defer cancelLog()
 		_ = writer.AppendLog(logCtx, applog.Entry{
 			Kind: applog.KindOperation, Level: applog.LevelInfo,
-			Action: "diana.reply.topic_relation", Message: "连续消息话题关系判断完成",
+			Action: "reply_topic_relation", Message: "连续消息话题关系判断完成",
 			Actor: oneBotEventActor(event), Target: event.MessageID,
 			Metadata: map[string]any{
 				"root_message_id": root.MessageID, "relation": decision.Relation,

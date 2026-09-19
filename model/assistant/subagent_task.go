@@ -585,7 +585,7 @@ func (r *Runtime) recordSubagentTaskLog(ctx context.Context, item reservedSubage
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "diana.subagent_task",
+		Action:  "subagent_task",
 		Message: message,
 		Detail:  detail,
 		Actor:   oneBotEventActor(item.event),

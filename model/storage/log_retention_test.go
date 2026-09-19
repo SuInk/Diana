@@ -45,6 +45,7 @@ func TestPruneLogs(t *testing.T) {
 	if err := s.saveJSON(ctx, "retention-test", "keep"); err != nil {
 		t.Fatal(err)
 	}
+	rerunLogActionNameMigration(t, s)
 	deleted, err := s.PruneLogs(ctx, debugBefore, otherBefore)
 	if err != nil || deleted != 503 {
 		t.Fatalf("deleted=%d err=%v", deleted, err)

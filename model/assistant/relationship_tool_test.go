@@ -172,8 +172,8 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["relationship"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"relationship","input":{"operation":"get"}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["relationship"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"relationship","input":{"operation":"get"}}}`,
 		`{"action":"final","content":"[CQ:at,qq=10005] 当前好感度是 5，关系等级是初识，互动 18 次。当前权限：基础聊天、媒体理解、网页搜索和 1 个提醒或订阅额度。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{

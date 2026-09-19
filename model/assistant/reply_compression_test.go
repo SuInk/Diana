@@ -46,7 +46,7 @@ func compressionTestRuntime(provider *compressionTestProvider) *Runtime {
 // 出站最后一道闸：被渲染成人话的工具调用不是回复正文，宁可整轮按失败记账，也不能
 // 发出去。生产事故（2026-09-09 群聊）就是下面这一整行被当成回复发进了群。
 func TestRenderedToolCallNeverLeavesTheOutboundPath(t *testing.T) {
-	leaked := `调用工具：agent.finalize，参数：{"content":"对，确实会跳！\nWARP 用的本来就是 Cloudflare 的动态共享 IP 池，纯纯是负优化喵～"}`
+	leaked := `调用工具：agent_finalize，参数：{"content":"对，确实会跳！\nWARP 用的本来就是 Cloudflare 的动态共享 IP 池，纯纯是负优化喵～"}`
 	for _, reply := range []string{leaked, replySingleMarker + leaked} {
 		p := &compressionTestProvider{err: errors.New("must not call")}
 		got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, reply)

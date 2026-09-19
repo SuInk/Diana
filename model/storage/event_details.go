@@ -538,7 +538,7 @@ func (s *SQLiteStore) attachInboundEventMemories(ctx context.Context, events []I
 	for index, id := range messageIDs {
 		args[index] = id
 	}
-	rows, err := s.eventReader().QueryContext(ctx, `SELECT action, target, metadata FROM app_logs WHERE action IN ('diana.memory.retrieved', 'diana.memory.temporary') AND target IN (`+placeholders(len(args))+`) ORDER BY created_at ASC`, args...)
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT action, target, metadata FROM app_logs WHERE action IN ('memory_retrieved', 'memory_temporary') AND target IN (`+placeholders(len(args))+`) ORDER BY created_at ASC`, args...)
 	if err != nil {
 		return fmt.Errorf("load inbound event memories: %w", err)
 	}
@@ -565,7 +565,7 @@ func (s *SQLiteStore) attachInboundEventMemories(ctx context.Context, events []I
 			return err
 		}
 		switch action {
-		case "diana.memory.retrieved":
+		case "memory_retrieved":
 			var item retrievedTrace
 			if json.Unmarshal([]byte(raw), &item) != nil {
 				continue
@@ -575,7 +575,7 @@ func (s *SQLiteStore) attachInboundEventMemories(ctx context.Context, events []I
 			}
 			key := eventMemoryTraceKey(item.MessageID, item.ProfileID, item.GroupID, item.UserID)
 			byKey[key] = appendUniqueInboundEventMemories(byKey[key], item.Memories...)
-		case "diana.memory.temporary":
+		case "memory_temporary":
 			var item temporaryTrace
 			if json.Unmarshal([]byte(raw), &item) != nil {
 				continue
@@ -960,7 +960,7 @@ func (s *SQLiteStore) inboundEventTokenUsageForPage(ctx context.Context, since t
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT target, metadata
 FROM app_logs
-WHERE created_at >= ? AND action IN ('llm_usage', 'diana.llm_usage', 'chatbot.llm_usage', 'assistant.llm_usage')
+WHERE created_at >= ? AND action = 'llm_usage'
 `+targetCondition+`
 ORDER BY created_at`, args...)
 	if err != nil {

@@ -66,9 +66,9 @@ func TestLiveGroupToolSession(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		instruction := "First call tools.load with names=[fixture_lookup], then call tools.execute with name=fixture_lookup and input={} to read its live value, then call agent.finalize with that value in content. Do not call any other tool."
+		instruction := "First call tools_load with names=[fixture_lookup], then call tools_execute with name=fixture_lookup and input={} to read its live value, then call agent_finalize with that value in content. Do not call any other tool."
 		if turn == 1 {
-			instruction = "The fixture_lookup contract is already loaded. Call tools.execute with name=fixture_lookup and input={} directly, then call agent.finalize. Do not call tools.load."
+			instruction = "The fixture_lookup contract is already loaded. Call tools_execute with name=fixture_lookup and input={} directly, then call agent_finalize. Do not call tools_load."
 		}
 		before := len(probe.requests)
 		callOffset := len(probe.calls)
