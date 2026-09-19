@@ -115,7 +115,8 @@ func TestDefaultPluginManagerExposesCapabilityRAGAndLivePluginStates(t *testing.
 func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"diana.capabilities","input":{"query":"你能解析视频吗","limit":3}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["diana.capabilities"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"diana.capabilities","input":{"query":"你能解析视频吗","limit":3}}}`,
 		`{"action":"final","content":"可以，我能读取视频并抽取多帧理解内容。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3, ReplySafetyMasterEnabled: boolPointer(false)}, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -126,11 +127,11 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reply, "抽取多帧") || len(provider.requests) != 3 {
+	if !strings.Contains(reply, "抽取多帧") || len(provider.requests) != 4 {
 		t.Fatalf("reply=%q requests=%d", reply, len(provider.requests))
 	}
-	if !requestMessagesContain(provider.requests[2].Messages, `"id": "core:media"`) {
-		t.Fatalf("retrieval missing: %#v", provider.requests[2].Messages)
+	if !requestMessagesContain(provider.requests[3].Messages, `"id": "core:media"`) {
+		t.Fatalf("retrieval missing: %#v", provider.requests[3].Messages)
 	}
 	if !requestMessagesContain(provider.requests[1].Messages, "必须先调用 diana.capabilities") {
 		t.Fatalf("capability guidance missing: %#v", provider.requests[1].Messages)
