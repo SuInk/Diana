@@ -369,7 +369,18 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 		return result
 	}
 	result.ImageURLs = singleURL(firstNonEmptyString(detail.Video.Cover.URLList))
-	return p.attachDownloadedVideo(ctx, req, raw, "douyin", result)
+	if p.videoDownloader != nil || p.mediaDownloader != nil {
+		return p.attachDownloadedVideo(ctx, req, raw, "douyin", result)
+	}
+	if path := downloadDouyinMediaDetailFile(ctx, detail); path != "" {
+		result.VideoURLs = []string{path}
+		recordResolverMediaLog(ctx, req, raw, "douyin", true, "")
+		return result
+	}
+	reason := resolverDownloadFailureHint(ctx, raw)
+	result.Context += "\n媒体下载失败：" + reason
+	recordResolverMediaLog(ctx, req, raw, "douyin", false, reason)
+	return result
 }
 
 func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
@@ -467,6 +478,9 @@ type douyinMediaDetail struct {
 		Cover struct {
 			URLList []string `json:"url_list"`
 		} `json:"cover"`
+		PlayAddr struct {
+			URI string `json:"uri"`
+		} `json:"play_addr"`
 	} `json:"video"`
 	Images []struct {
 		URLList []string `json:"url_list"`
@@ -488,16 +502,14 @@ func fetchDouyinMediaDetail(ctx context.Context, raw string) (douyinMediaDetail,
 	}
 	awemeID := match[1]
 	headers := resolverCommonHeaders()
+	headers["User-Agent"] = douyinUserAgent
 	headers["Referer"] = "https://www.douyin.com/video/" + awemeID
 	headers["Cookie"] = cookie
 	apiURL := fmt.Sprintf(douyinVideoAPI, awemeID)
-	if bogus := generateDouyinABogus(ctx, apiURL, headers["User-Agent"]); bogus != "" {
-		apiURL += "&a_bogus=" + url.QueryEscape(bogus)
-	}
 	var response struct {
 		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
 	}
-	if !fetchResolverJSON(ctx, apiURL, headers, &response) {
+	if !fetchDouyinJSON(ctx, apiURL, headers, &response) {
 		return douyinMediaDetail{}, false, "request_failed"
 	}
 	if strings.TrimSpace(response.AwemeDetail.AwemeID) == "" {

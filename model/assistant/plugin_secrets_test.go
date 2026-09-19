@@ -180,6 +180,19 @@ func TestResolverCredentialsPreferSettings(t *testing.T) {
 	}
 }
 
+func TestResolverCookieHeaderDropsBrowserExportArtifacts(t *testing.T) {
+	raw := `sessionid=valid; douyin.com; IsDouyinActive={"name":"抖音"}; empty=; ttwid=abc==`
+	want := "sessionid=valid; empty=; ttwid=abc=="
+	if got := sanitizeResolverCookieHeader(raw); got != want {
+		t.Fatalf("sanitizeResolverCookieHeader() = %q, want %q", got, want)
+	}
+
+	t.Setenv("DIANA_DOUYIN_CK", raw)
+	if got := resolverDouyinCookie(context.Background()); got != want {
+		t.Fatalf("resolverDouyinCookie() = %q, want %q", got, want)
+	}
+}
+
 func TestResolverCredentialsFromSettings(t *testing.T) {
 	values := SettingValues{
 		resolverSettingBiliSessdata: "  bili%2Csession  ",

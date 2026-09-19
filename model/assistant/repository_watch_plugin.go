@@ -104,15 +104,15 @@ type repositoryWatchSelection struct {
 	// Diff 只在这一轮确实有人要读 diff 时才置位（目前是跟评）。通知正文从不展示
 	// diff，无条件拉取等于每轮白花一次 compare 加每个 PR 一次 files。
 	Diff bool
-	// PullRequestEvents / IssueEvents 是只想收的动态种类，空表示全要。
+	// PullRequestEvents / IssueEvents 为 nil 时兼容旧订阅并表示全选；显式空数组表示全不选。
 	PullRequestEvents []string
 	IssueEvents       []string
 }
 
-// wants 判断某一类动态要不要报。空集合是「全要」——老订阅没存过这个字段，
-// 不能因为后来加了开关就把它们静音。
+// wants 判断某一类动态要不要报。nil 是旧订阅的“未存字段”，仍按全选处理；
+// 非 nil 空数组是用户明确取消全部勾选。
 func (s repositoryWatchSelection) wants(kinds []string, status string) bool {
-	if len(kinds) == 0 {
+	if kinds == nil {
 		return true
 	}
 	return slices.Contains(kinds, strings.ToLower(strings.TrimSpace(status)))
