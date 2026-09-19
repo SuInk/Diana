@@ -283,6 +283,27 @@ func main() {
 	} else if ok {
 		plugins.Restore(savedPluginStates)
 	}
+	// 第三方仓库插件：按来源记录把已安装的插件重新登记进管理器，再套用一次
+	// 已保存的开关与设置。登记在 Restore 之后、迁移之前，老的持久化数据路径
+	// 不需要为第三方插件做任何特殊处理。
+	dataDir := filepath.Dir(sqliteStore.Path())
+	repoPluginStore := assistant.NewRepoPluginStore(dataDir)
+	if err := repoPluginStore.Load(); err != nil {
+		log.Printf("第三方插件来源记录读取失败，本次跳过恢复: %v", err)
+	}
+	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err == nil && ok {
+		for _, source := range repoPluginStore.List() {
+			plugin, err := assistant.LoadRepoPlugin(dataDir, source)
+			if err != nil {
+				log.Printf("第三方插件 %s 恢复失败，跳过: %v", source.ID, err)
+				continue
+			}
+			if err := plugins.RegisterPlugin(plugin); err != nil {
+				log.Printf("第三方插件 %s 登记失败，跳过: %v", source.ID, err)
+			}
+		}
+		plugins.Restore(savedPluginStates)
+	}
 	botSet := botProfileStore.Profiles()
 	if plugins.MigrateProfileConfigurations(botSet.Profiles) {
 		if err := sqliteStore.SavePluginStates(ctx, plugins.Snapshot()); err != nil {
@@ -412,6 +433,12 @@ func main() {
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
 	botHandler.SetSQLiteStore(sqliteStore)
+	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 60 * time.Second})
+	repoPluginInstaller.MirrorBase = func(ctx context.Context) string {
+		return mirrorSelector.Base(ctx, "https://raw.githubusercontent.com/SuInk/diana/main/model/version/VERSION")
+	}
+	botHandler.SetRepoPluginInstaller(repoPluginInstaller)
+	botHandler.SetRepoPluginSourceStore(repoPluginStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)
 	napCatLoginHandler, err := webui.NewNapCatLoginHandler(webui.NapCatLoginConfig{
 		BaseURL: strings.TrimSpace(appCfg.NapCat.WebUIURL),
