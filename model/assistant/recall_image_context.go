@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -25,12 +24,14 @@ const (
 	recallImageDescriptionMaxRunes    = 1600
 	recallImageDescriptionConcurrency = 3
 	// 历史行里的描述比撤回记录短得多：每轮都要重复发送，超长会把上下文预算吃光。
-	historyImageDescriptionMaxRunes     = 400
-	historyImageDescriptionQueueLimit   = 32
-	historyImageDescriptionReadyLimit   = 2048
+	historyImageDescriptionMaxRunes   = 400
+	historyImageDescriptionQueueLimit = 32
+	historyImageDescriptionReadyLimit = 2048
+	historyImageDescriptionIdlePoll   = 250 * time.Millisecond
+	// 识图超时只罩住单次视觉调用（不含排队）。线上成功调用最长 57 秒，p90 约 16 秒；
+	// 队列是单并发的，一次卡死的调用会让后面所有图陪着等满这段时间，不宜再放大。
 	historyImageDescriptionTimeout      = 90 * time.Second
 	historyImageDescriptionRetryBackoff = 10 * time.Minute
-	historyImageDescriptionIdlePoll     = 250 * time.Millisecond
 	// 线上每天都有几次 recall image description failed: context deadline exceeded：
 	// 识图要把整张图带上去问一次模型，20 秒经常跑不完，撤回记录里的图就一直是空描述。
 	replyImageGroundingTimeout = 60 * time.Second
@@ -273,57 +274,6 @@ func (r *Runtime) recallImageDescriptionStore() ImageDescriptionStore {
 	return store
 }
 
-// enqueueHistoryImageDescriptions fills the durable summary layer away from
-// the visible reply path. Content hashes deduplicate identical images across
-// messages and the bounded pending set prevents image bursts from creating an
-// unbounded background workload.
-func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
-	// 自动路径只补近期图片。重连回填会把很久以前的消息重放一遍，每条都排一次
-	// 识图，等于拿单并发去补一整个库——按当前速度是几十小时起步，而这些老图
-	// 绝大多数没人再提起。真被引用时会走 enqueueHistoryImageDescriptionsNow。
-	if r == nil || !boolValue(r.effectiveConfigForEvent(event).AutoImageDescription, true) || !withinHistoryImageDescriptionWindow(event, time.Now()) {
-		return
-	}
-	r.enqueueHistoryImageDescriptionsWithPolicy(event, false)
-}
-
-// enqueueHistoryImageDescriptionsNow 不看时间，用于用户/模型真的在读这张图的路径。
-func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
-	r.enqueueHistoryImageDescriptionsWithPolicy(event, true)
-}
-
-func (r *Runtime) enqueueHistoryImageDescriptionsWithPolicy(event MessageEvent, explicit bool) {
-	if r == nil || r.recallImageDescriptionStore() == nil {
-		return
-	}
-	for _, sourceEvent := range historyImageDescriptionEvents(event) {
-		for _, segment := range sourceEvent.Segments {
-			if !historyDescribableImageSegment(segment) || strings.EqualFold(strings.TrimSpace(segment.Data[imageUnavailableKey]), "true") {
-				continue
-			}
-			if strings.TrimSpace(segment.Data[recallImageDescriptionKey]) != "" {
-				continue
-			}
-			hash, ok := imageSegmentContentSHA256(segment)
-			if !ok {
-				continue
-			}
-			// 排队的任务不能攥着图片本体：单并发下 31 个任务纯粹在等，却各自
-			// 钉住一整条消息。削成「哈希 + 本地路径」再入队（见 history_image_queue.go）。
-			source, retained := queuedImageSourceRetained(segment)
-			if !retained || !r.reserveHistoryImageDescription(hash) {
-				continue
-			}
-			jobEvent := historyImageDescriptionQueueEvent(sourceEvent)
-			jobEvent.Segments = []MessageSegment{stripImageSegmentForQueue(segment)}
-			go func() {
-				defer recoverGoroutinePanic("recallImageContext.runHistoryImageDescription")
-				r.runHistoryImageDescription(jobEvent, historyImageDescriptionQueueEvent(sourceEvent), hash, source, explicit)
-			}()
-		}
-	}
-}
-
 func historyImageDescriptionEvents(event MessageEvent) []MessageEvent {
 	main := event
 	main.Quoted = nil
@@ -341,113 +291,6 @@ func historyImageDescriptionEvents(event MessageEvent) []MessageEvent {
 	quotedEvent.SenderName = quoted.SenderName
 	quotedEvent.Quoted = nil
 	return append(events, quotedEvent)
-}
-
-func (r *Runtime) reserveHistoryImageDescription(hash string) bool {
-	now := time.Now()
-	r.historyImageDescMu.Lock()
-	defer r.historyImageDescMu.Unlock()
-	if r.historyImageDescRun == nil {
-		r.historyImageDescRun = map[string]struct{}{}
-	}
-	if r.historyImageDescReady == nil {
-		r.historyImageDescReady = map[string]struct{}{}
-	}
-	if r.historyImageDescRetry == nil {
-		r.historyImageDescRetry = map[string]time.Time{}
-	}
-	if r.historyImageDescSem == nil {
-		r.historyImageDescSem = make(chan struct{}, 1)
-	}
-	for key, retryAt := range r.historyImageDescRetry {
-		if !retryAt.After(now) {
-			delete(r.historyImageDescRetry, key)
-		}
-	}
-	if _, running := r.historyImageDescRun[hash]; running {
-		return false
-	}
-	if _, ready := r.historyImageDescReady[hash]; ready {
-		return false
-	}
-	if retryAt := r.historyImageDescRetry[hash]; retryAt.After(now) {
-		return false
-	}
-	if len(r.historyImageDescRun) >= historyImageDescriptionQueueLimit {
-		return false
-	}
-	r.historyImageDescRun[hash] = struct{}{}
-	return true
-}
-
-func (r *Runtime) runHistoryImageDescription(event, indexEvent MessageEvent, hash, source string, explicit bool) {
-	ctx := context.Background()
-	r.mu.RLock()
-	runtimeCtx := r.runCtx
-	if runtimeCtx != nil {
-		ctx = runtimeCtx
-	}
-	r.mu.RUnlock()
-	ctx, cancel := context.WithTimeout(ctx, historyImageDescriptionTimeout)
-	defer cancel()
-
-	err := r.waitForHistoryImageDescriptionSlot(ctx, cancel)
-	if err == nil {
-		defer r.releaseHistoryImageDescriptionSlot()
-		if !explicit && !boolValue(r.effectiveConfigForEvent(event).AutoImageDescription, true) {
-			r.historyImageDescMu.Lock()
-			delete(r.historyImageDescRun, hash)
-			r.historyImageDescMu.Unlock()
-			return
-		}
-		store := r.recallImageDescriptionStore()
-		if store == nil {
-			err = fmt.Errorf("image description store is not configured")
-		} else if record, found, loadErr := store.GetImageDescription(ctx, hash); loadErr != nil {
-			err = loadErr
-		} else if found && strings.TrimSpace(record.Description) != "" {
-			r.markHistoryImageDescriptionReady(hash)
-			// 描述早就生成过（同一张表情包、或升级前留下的记录），但这条消息的
-			// 检索文本可能还是空的：顺手补上，老历史才搜得到。
-			r.refreshMessageImageSearchText(ctx, indexEvent)
-		} else {
-			var description string
-			description, err = r.describeRecallImage(ctx, event, source)
-			if err == nil {
-				err = store.SaveImageDescription(ctx, ImageDescriptionRecord{
-					ContentSHA256:   hash,
-					Description:     compactRecallImageDescription(description),
-					SourceSession:   sessionKey(event),
-					SourceMessageID: event.MessageID,
-					Source:          "vision",
-					Version:         recallImageDescriptionVersion,
-				})
-				if err == nil {
-					r.markHistoryImageDescriptionReady(hash)
-					r.refreshMessageImageSearchText(ctx, indexEvent)
-				}
-			}
-		}
-	}
-
-	r.historyImageDescMu.Lock()
-	delete(r.historyImageDescRun, hash)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		r.historyImageDescRetry[hash] = time.Now().Add(historyImageDescriptionRetryBackoff)
-	}
-	r.historyImageDescMu.Unlock()
-	if errors.Is(err, context.Canceled) && (runtimeCtx == nil || runtimeCtx.Err() == nil) {
-		time.AfterFunc(historyImageDescriptionIdlePoll, func() {
-			if explicit {
-				r.enqueueHistoryImageDescriptionsNow(event)
-			} else {
-				r.enqueueHistoryImageDescriptions(event)
-			}
-		})
-	}
-	if err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("diana history image description failed: message_id=%s err=%v", event.MessageID, err)
-	}
 }
 
 // refreshMessageImageSearchText 在图片描述生成之后，把描述补进这条消息的可检索
@@ -510,31 +353,6 @@ func (r *Runtime) messageImageDescriptionText(ctx context.Context, event Message
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
-func (r *Runtime) beginHistoryImageDescriptionForeground() {
-	if r == nil {
-		return
-	}
-	r.historyImageDescMu.Lock()
-	r.historyImageDescFront++
-	cancel := r.historyImageDescStop
-	r.historyImageDescStop = nil
-	r.historyImageDescMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func (r *Runtime) endHistoryImageDescriptionForeground() {
-	if r == nil {
-		return
-	}
-	r.historyImageDescMu.Lock()
-	if r.historyImageDescFront > 0 {
-		r.historyImageDescFront--
-	}
-	r.historyImageDescMu.Unlock()
-}
-
 func (r *Runtime) markHistoryImageDescriptionReady(hash string) {
 	r.historyImageDescMu.Lock()
 	if r.historyImageDescReady == nil {
@@ -548,43 +366,6 @@ func (r *Runtime) markHistoryImageDescriptionReady(hash string) {
 	}
 	r.historyImageDescReady[hash] = struct{}{}
 	r.historyImageDescMu.Unlock()
-}
-
-func (r *Runtime) waitForHistoryImageDescriptionSlot(ctx context.Context, cancel context.CancelFunc) error {
-	ticker := time.NewTicker(historyImageDescriptionIdlePoll)
-	defer ticker.Stop()
-	for {
-		r.historyImageDescMu.Lock()
-		foreground := r.historyImageDescFront
-		r.historyImageDescMu.Unlock()
-		if foreground == 0 && r.activeCount() == 0 {
-			select {
-			case r.historyImageDescSem <- struct{}{}:
-				r.historyImageDescMu.Lock()
-				if r.historyImageDescFront == 0 && r.activeCount() == 0 {
-					r.historyImageDescStop = cancel
-					r.historyImageDescMu.Unlock()
-					return nil
-				}
-				r.historyImageDescMu.Unlock()
-				<-r.historyImageDescSem
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func (r *Runtime) releaseHistoryImageDescriptionSlot() {
-	r.historyImageDescMu.Lock()
-	r.historyImageDescStop = nil
-	r.historyImageDescMu.Unlock()
-	<-r.historyImageDescSem
 }
 
 func (r *Runtime) historicalRecallImageDescriptions(ctx context.Context, event MessageEvent, targets []*recallImageTarget) map[string]string {
