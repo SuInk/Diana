@@ -1455,6 +1455,10 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
 	}
+	// 已授权的本地重置无需走语义路由，也不能被积压消息合并吞掉。
+	if r.isOwnerContextResetCommand(event, text) && r.admits(r.effectiveConfigForEvent(event), event) {
+		return event, text, true, "replied"
+	}
 	// 队列积压：消息已经 remember 进历史、做过表达学习，这里补上长期记忆和用户画像，登记进
 	// 积压包后就收住，跳过后面所有花模型 token 的环节，由同会话后面那条一起接话。
 	// 判断和登记挨在一起：判断时后面那条还在排队，登记完它才可能来取，积压包不会落空。
@@ -2054,7 +2058,7 @@ func (r *Runtime) shouldHandleChatTrigger(event MessageEvent, text string) bool 
 	if event.Kind != EventKindGroup {
 		return false
 	}
-	if r.isOwnerReplySuppressionCommand(event, text) {
+	if r.isOwnerReplySuppressionCommand(event, text) || r.isOwnerContextResetCommand(event, text) {
 		return true
 	}
 	// @ 它、引用它、回复它的消息，都算直接在叫它，一律进回复流程。
@@ -3056,6 +3060,14 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 // 具名返回值只为了让 defer 拿到这一轮最终说了什么（见 finishReplyTurn），
 // 各处 return 的写法不变。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (reply string, err error) {
+	// 本地重置命令不需要加载旧上下文、调用模型或登记续聊状态。
+	if r.isOwnerContextResetCommand(event, text) {
+		reply, _ := r.handleOwnerCommand(event, r.cleanInput(event, text))
+		if err := r.send(ctx, event, reply); err != nil {
+			return "", err
+		}
+		return reply, nil
+	}
 	ctx = withModelConfigEvent(ctx, event)
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
@@ -7101,6 +7113,9 @@ func sessionKey(event MessageEvent) string {
 // handleOwnerCommand 处理 owner 的强格式管理命令。
 func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
 	cfg := r.Config().WithDefaults()
+	if command := strings.TrimSpace(text); command == "清空上下文" || command == "清除上下文" {
+		cfg = r.effectiveConfigForEvent(event)
+	}
 	if !cfg.IsOwnerEvent(event) {
 		return "", false
 	}
@@ -7165,24 +7180,17 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	case strings.HasPrefix(command, "订阅 添加 "):
 		args := strings.TrimSpace(strings.TrimPrefix(command, "订阅 添加 "))
 		return r.addScheduledQueryCommand(event, args), true
-	case command == "清空上下文":
-		r.clearSessionHistory(event)
-		return "已清空当前会话上下文。", true
+	case command == "清空上下文" || command == "清除上下文":
+		if err := r.clearSessionHistory(event); err != nil {
+			log.Printf("diana context reset failed: %v", err)
+			return "清空上下文失败，请稍后重试或检查服务日志。", true
+		}
+		return "已清空当前会话上下文；聊天记录、长期记忆和人设仍保留。", true
 	case command == "帮助" || command == "菜单":
 		return "可用命令：lllm 列表、lllm 当前、lllm 切换 <名称>、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、清空上下文。也可以直接说：1 分钟后提醒我睡觉，或者每 1 分钟查询某件事并通知我。", true
 	default:
 		return "", false
 	}
-}
-
-// clearSessionHistory 清空当前会话上下文。
-func (r *Runtime) clearSessionHistory(event MessageEvent) {
-	session := sessionKey(event)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.history, session)
-	delete(r.contextSummaries, session)
-	delete(r.contextSummaryMarks, session)
 }
 
 // renderDisabledGroups 渲染禁用群列表。

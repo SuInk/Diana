@@ -1419,7 +1419,7 @@ func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, Mes
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	stored, err := store.ListRecentMessageEvents(ctx, session, limit)
+	stored, err := listContextMessageEvents(ctx, store, session, limit)
 	if err != nil {
 		log.Printf("diana message history load failed: %v", err)
 		return memory, store

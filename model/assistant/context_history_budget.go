@@ -108,7 +108,7 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 	if store != nil {
 		loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		var err error
-		stored, err = store.ListRecentMessageEvents(loadCtx, session, candidateLimit)
+		stored, err = listContextMessageEvents(loadCtx, store, session, candidateLimit)
 		cancel()
 		if err != nil {
 			log.Printf("diana token-budget history load failed: %v", err)
