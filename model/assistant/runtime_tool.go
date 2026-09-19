@@ -110,7 +110,7 @@ func (r *Runtime) shouldHandlePlugin(event MessageEvent, text string) bool {
 	if r.plugins == nil || (event.Kind != EventKindGroup && event.Kind != EventKindPrivate) {
 		return false
 	}
-	if r.isUserDisabled(event) {
+	if r.userBlocked(event) {
 		return false
 	}
 	if event.Kind == EventKindGroup && r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {

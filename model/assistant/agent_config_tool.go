@@ -58,7 +58,6 @@ type dianaBotConfigSnapshot struct {
 	GroupTriggers                   []string                  `json:"group_triggers,omitempty"`
 	GroupTriggerMode                AliasTriggerMode          `json:"group_trigger_mode,omitempty"`
 	DisabledGroups                  []string                  `json:"disabled_groups,omitempty"`
-	DisabledUsers                   []string                  `json:"disabled_users,omitempty"`
 	GroupAdmission                  GroupAdmission            `json:"group_admission"`
 	PrivateAdmission                PrivateAdmission          `json:"private_admission"`
 	ReplyGate                       *ReplyGate                `json:"reply_gate,omitempty"`
@@ -295,7 +294,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),
 		GroupTriggerMode:                aliasTriggerMode(cfg),
 		DisabledGroups:                  append([]string(nil), cfg.DisabledGroups...),
-		DisabledUsers:                   append([]string(nil), cfg.DisabledUsers...),
 		GroupAdmission:                  cfg.GroupAdmission.WithDefaults(),
 		PrivateAdmission:                cfg.PrivateAdmission.WithDefaults(),
 		ReplyGate:                       cfg.ReplyGate.Clone(),

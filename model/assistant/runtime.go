@@ -2005,9 +2005,6 @@ func (r *Runtime) shouldHandle(event MessageEvent, text string) bool {
 // admits applies the shared user, group, and reply-gate policy before any
 // chat, resolver, or plugin trigger is allowed to start work.
 func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
-	if r.isUserDisabled(event) {
-		return false
-	}
 	if event.Kind == EventKindPrivate {
 		return r.replyGateAllows(cfg, event)
 	}
@@ -2034,9 +2031,6 @@ func (r *Runtime) admitsGroupScope(cfg BotConfig, event MessageEvent) bool {
 // output as ordinary messages. Notice keeps its own event kind, but a notice
 // carrying GroupID still belongs to that group's policy scope.
 func (r *Runtime) admitsNotice(cfg BotConfig, event MessageEvent) bool {
-	if r.isUserDisabled(event) {
-		return false
-	}
 	if strings.TrimSpace(event.GroupID) != "" {
 		if !r.admitsGroupScope(cfg, event) {
 			return false
@@ -3047,7 +3041,7 @@ func (r *Runtime) shouldHandleResolver(event MessageEvent, text string) bool {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return false
 	}
-	if r.isUserDisabled(event) {
+	if r.userBlocked(event) {
 		return false
 	}
 	if event.Kind == EventKindGroup && r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
@@ -7635,7 +7629,7 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 	if !gate.IsAllowedUser(event.UserID) {
 		return
 	}
-	if r.isUserDisabled(event) || gate.IsBlocked(event.UserID) || gate.IsExempt(event.UserID) {
+	if gate.IsBlocked(event.UserID) || gate.IsExempt(event.UserID) {
 		return
 	}
 	if event.Kind == EventKindGroup {
@@ -7755,17 +7749,10 @@ func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 	return slices.Contains(cfg.DisabledGroups, groupID)
 }
 
-// isUserDisabled 判断用户是否被这台机器人配置为不触发回复。
-func (r *Runtime) isUserDisabled(event MessageEvent) bool {
-	userID := strings.TrimSpace(event.UserID)
-	if userID == "" {
-		return false
-	}
-	cfg := r.profileConfig(event.ProfileID)
-	if userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotAccount) {
-		return false
-	}
-	return slices.Contains(cleanStrings(cfg.DisabledUsers), userID)
+// userBlocked 判断发送者是否在这台机器人（及所在群）的屏蔽名单里。链接解析、插件入口
+// 这些不走 admits 的路径也用它，被屏蔽的人不能换个入口拿到回复。
+func (r *Runtime) userBlocked(event MessageEvent) bool {
+	return r.replyGateBlocksUser(r.effectiveConfigForEvent(event), event)
 }
 
 // notificationChunkSize 是通知的兜底长度。人格预设可以把聊天回复压得更短，但不

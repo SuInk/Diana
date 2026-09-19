@@ -472,78 +472,79 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
-	ConnectionProfileID         string               `json:"connection_profile_id,omitempty"`
-	ReplyMergeConfidencePercent int                  `json:"reply_merge_confidence_percent,omitempty"`
-	ID                          string               `json:"id,omitempty"`
-	Name                        string               `json:"name,omitempty"`
-	Platform                    string               `json:"platform,omitempty"`
-	AvatarURL                   string               `json:"avatar_url,omitempty"`
-	Enabled                     bool                 `json:"enabled"`
-	OneBotTransport             string               `json:"onebot_transport,omitempty"`
-	OneBotWSEndpoint            string               `json:"onebot_ws_endpoint,omitempty"`
-	OneBotHTTPURL               string               `json:"onebot_http_url,omitempty"`
-	OneBotHTTPSecret            string               `json:"onebot_http_secret,omitempty"`
-	OneBotReverseWSEndpoint     string               `json:"onebot_reverse_ws_endpoint"`
-	OneBotAccessToken           string               `json:"onebot_access_token,omitempty"`
-	TelegramBotToken            string               `json:"telegram_bot_token,omitempty"`
-	TelegramAPIBaseURL          string               `json:"telegram_api_base_url,omitempty"`
-	TelegramProxyURL            string               `json:"telegram_proxy_url,omitempty"`
-	TelegramSuppressBotMessages *bool                `json:"telegram_suppress_bot_messages,omitempty"`
-	QQAppID                     string               `json:"qq_app_id,omitempty"`
-	QQAppSecret                 string               `json:"qq_app_secret,omitempty"`
-	QQSandbox                   bool                 `json:"qq_sandbox,omitempty"`
-	DingTalkClientID            string               `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret        string               `json:"dingtalk_client_secret,omitempty"`
-	DingTalkRobotCode           string               `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                 string               `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret             string               `json:"feishu_app_secret,omitempty"`
-	FeishuVerificationToken     string               `json:"feishu_verification_token,omitempty"`
-	FeishuEncryptKey            string               `json:"feishu_encrypt_key,omitempty"`
-	FeishuAPIBaseURL            string               `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                 string               `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                string               `json:"wecom_agent_id,omitempty"`
-	WeComSecret                 string               `json:"wecom_secret,omitempty"`
-	WeComToken                  string               `json:"wecom_token,omitempty"`
-	WeComEncodingAESKey         string               `json:"wecom_encoding_aes_key,omitempty"`
-	NoneBotBridgeEnabled        bool                 `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint       string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken          string               `json:"nonebot_bridge_token,omitempty"`
-	BotAccount                  string               `json:"bot_account,omitempty"`
-	OwnerID                     string               `json:"owner_id,omitempty"`
-	OwnerLoginEnabled           bool                 `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled       *bool                `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers               []string             `json:"group_triggers,omitempty"`
-	GroupTriggerMode            AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
-	DisabledGroups              []string             `json:"disabled_groups,omitempty"`
-	DisabledUsers               []string             `json:"disabled_users,omitempty"`
-	MarkedBotIDs                []string             `json:"marked_bot_ids,omitempty"`
-	GroupAdmission              GroupAdmission       `json:"group_admission,omitempty"`
-	PrivateAdmission            PrivateAdmission     `json:"private_admission,omitempty"`
-	ReplyGate                   *ReplyGate           `json:"reply_gate,omitempty"`
-	WelcomeEnabled              bool                 `json:"welcome_enabled,omitempty"`
-	WelcomeMessage              string               `json:"welcome_message,omitempty"`
-	WelcomeMode                 WelcomeMode          `json:"welcome_mode,omitempty"`
-	WelcomeTemplates            []string             `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds   int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
-	SystemPrompt                string               `json:"system_prompt,omitempty"`
-	PersonaID                   string               `json:"persona_id,omitempty"`
-	CustomPersona               *Persona             `json:"custom_persona,omitempty"`
-	ResponseMode                ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                  ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled    *bool                `json:"action_description_enabled,omitempty"`
-	SelfReference               string               `json:"self_reference,omitempty"`
-	SentenceEnders              string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled            bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode          ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	MentionUserMode             ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain             *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled          *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix            string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts           int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS         int                  `json:"send_chunk_interval_ms,omitempty"`
-	AutoImageDescription        *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess         *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles                  map[string]ModelRole `json:"model_roles,omitempty"`
+	ConnectionProfileID         string           `json:"connection_profile_id,omitempty"`
+	ReplyMergeConfidencePercent int              `json:"reply_merge_confidence_percent,omitempty"`
+	ID                          string           `json:"id,omitempty"`
+	Name                        string           `json:"name,omitempty"`
+	Platform                    string           `json:"platform,omitempty"`
+	AvatarURL                   string           `json:"avatar_url,omitempty"`
+	Enabled                     bool             `json:"enabled"`
+	OneBotTransport             string           `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint            string           `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL               string           `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecret            string           `json:"onebot_http_secret,omitempty"`
+	OneBotReverseWSEndpoint     string           `json:"onebot_reverse_ws_endpoint"`
+	OneBotAccessToken           string           `json:"onebot_access_token,omitempty"`
+	TelegramBotToken            string           `json:"telegram_bot_token,omitempty"`
+	TelegramAPIBaseURL          string           `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL            string           `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages *bool            `json:"telegram_suppress_bot_messages,omitempty"`
+	QQAppID                     string           `json:"qq_app_id,omitempty"`
+	QQAppSecret                 string           `json:"qq_app_secret,omitempty"`
+	QQSandbox                   bool             `json:"qq_sandbox,omitempty"`
+	DingTalkClientID            string           `json:"dingtalk_client_id,omitempty"`
+	DingTalkClientSecret        string           `json:"dingtalk_client_secret,omitempty"`
+	DingTalkRobotCode           string           `json:"dingtalk_robot_code,omitempty"`
+	FeishuAppID                 string           `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret             string           `json:"feishu_app_secret,omitempty"`
+	FeishuVerificationToken     string           `json:"feishu_verification_token,omitempty"`
+	FeishuEncryptKey            string           `json:"feishu_encrypt_key,omitempty"`
+	FeishuAPIBaseURL            string           `json:"feishu_api_base_url,omitempty"`
+	WeComCorpID                 string           `json:"wecom_corp_id,omitempty"`
+	WeComAgentID                string           `json:"wecom_agent_id,omitempty"`
+	WeComSecret                 string           `json:"wecom_secret,omitempty"`
+	WeComToken                  string           `json:"wecom_token,omitempty"`
+	WeComEncodingAESKey         string           `json:"wecom_encoding_aes_key,omitempty"`
+	NoneBotBridgeEnabled        bool             `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint       string           `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken          string           `json:"nonebot_bridge_token,omitempty"`
+	BotAccount                  string           `json:"bot_account,omitempty"`
+	OwnerID                     string           `json:"owner_id,omitempty"`
+	OwnerLoginEnabled           bool             `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled       *bool            `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers               []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode            AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	DisabledGroups              []string         `json:"disabled_groups,omitempty"`
+	// DisabledUsers 已废弃，只为读取旧配置保留：WithDefaults 会把它并进 ReplyGate.BlockedUsers。
+	DisabledUsers             []string             `json:"disabled_users,omitempty"`
+	MarkedBotIDs              []string             `json:"marked_bot_ids,omitempty"`
+	GroupAdmission            GroupAdmission       `json:"group_admission,omitempty"`
+	PrivateAdmission          PrivateAdmission     `json:"private_admission,omitempty"`
+	ReplyGate                 *ReplyGate           `json:"reply_gate,omitempty"`
+	WelcomeEnabled            bool                 `json:"welcome_enabled,omitempty"`
+	WelcomeMessage            string               `json:"welcome_message,omitempty"`
+	WelcomeMode               WelcomeMode          `json:"welcome_mode,omitempty"`
+	WelcomeTemplates          []string             `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
+	SystemPrompt              string               `json:"system_prompt,omitempty"`
+	PersonaID                 string               `json:"persona_id,omitempty"`
+	CustomPersona             *Persona             `json:"custom_persona,omitempty"`
+	ResponseMode              ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled  *bool                `json:"action_description_enabled,omitempty"`
+	SelfReference             string               `json:"self_reference,omitempty"`
+	SentenceEnders            string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled          bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode        ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	MentionUserMode           ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain           *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled        *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix          string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts         int                  `json:"send_retry_attempts,omitempty"`
+	SendChunkIntervalMS       int                  `json:"send_chunk_interval_ms,omitempty"`
+	AutoImageDescription      *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess       *bool                `json:"auto_video_preprocess,omitempty"`
+	ModelRoles                map[string]ModelRole `json:"model_roles,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -1632,9 +1633,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.DisabledGroups == nil {
 		cfg.DisabledGroups = append([]string(nil), defaults.DisabledGroups...)
 	}
-	if cfg.DisabledUsers == nil {
-		cfg.DisabledUsers = append([]string(nil), defaults.DisabledUsers...)
-	}
+	cfg = cfg.migrateDisabledUsers()
 	cfg.GroupAdmission = cfg.GroupAdmission.WithDefaults()
 	cfg.PrivateAdmission = cfg.PrivateAdmission.WithDefaults()
 	if cfg.ReplyGate != nil {
@@ -1902,7 +1901,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.AgentCommandAllowlist = cleanStrings(cfg.AgentCommandAllowlist)
 	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
 	cfg.DisabledGroups = cleanStrings(cfg.DisabledGroups)
-	cfg.DisabledUsers = cleanStrings(cfg.DisabledUsers)
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.ReplyRules = normalizeReplyRules(cfg.ReplyRules)
 	cfg.ModelRoles = normalizeModelRoles(cfg.ModelRoles)
@@ -2593,3 +2591,29 @@ const defaultProactiveReplyRouterPrompt = `你是群聊机器人 Diana 的 Inten
 11. requests_response 只描述发言者的诉求，与 should_reply 是两件事：这句话本身在要求得到回应（提问、指派任务、追问依据、要求继续）就为 true；只是附和、道谢、玩梗、闲聊，或者明确让机器人别再说话（“闭嘴”“不用回复”这类意思，不限于这些字面）则为 false。即使你最终判断不回复，也要如实填写它。
 12. blocker 取值固定为 none、missing_context、no_capability、not_addressed、low_value。missing_context 和 no_capability 不能拦截 requests_response=true 的明确请求，正式回复会处理；not_addressed 和 low_value 仍可保持沉默。
 13. 只输出单个合法 JSON 对象，不要解释、Markdown 或额外文本。字段固定为 should_reply（布尔值）、confidence（0 到 1）、category（needs_response、bot_related、chat_in 或 none）、target_message_id（字符串）、turn_message_ids（字符串数组）、directed_at_bot（布尔值）、answerable（布尔值）、substantive（布尔值）、requests_response（布尔值）、blocker（字符串）、reason（简短中文理由）。例如：{"should_reply":true,"confidence":0.96,"category":"needs_response","target_message_id":"125","turn_message_ids":["123","124","125"],"directed_at_bot":false,"answerable":true,"substantive":true,"requests_response":true,"blocker":"none","reason":"同一发送者连续补充了三个需要统一回答的问题"}；闲聊插话例如：{"should_reply":true,"confidence":0.91,"category":"chat_in","target_message_id":"131","turn_message_ids":["131"],"directed_at_bot":false,"answerable":true,"substantive":true,"requests_response":false,"blocker":"none","reason":"群友把两款机型的续航记反了，可以直接给出正确参数"}；不回复时例如：{"should_reply":false,"confidence":0.98,"category":"none","target_message_id":"","turn_message_ids":[],"directed_at_bot":false,"answerable":false,"substantive":false,"requests_response":false,"blocker":"low_value","reason":"只是互相附和，插话只能是没有新增信息的捧场"}。`
+
+// migrateDisabledUsers 把遗留的 DisabledUsers 并进回复门禁的屏蔽名单。
+//
+// 以前「不回复某个人」有两套名单：老的 DisabledUsers（WebUI 早已不展示，而且只读主配置）
+// 和按机器人的 ReplyGate.BlockedUsers（聊天里「屏蔽某人」写的就是它）。两套名单的生效
+// 范围不一样：链接解析和插件入口只认前者，于是被聊天屏蔽的人发个链接照样有回复。现在只
+// 剩屏蔽名单一处。主人和机器人自己的账号在老名单里从来不生效，迁移时同样跳过。
+func (cfg BotConfig) migrateDisabledUsers() BotConfig {
+	legacy := cleanStrings(cfg.DisabledUsers)
+	cfg.DisabledUsers = []string{}
+	blocked := make([]string, 0, len(legacy))
+	for _, userID := range legacy {
+		if userID != strings.TrimSpace(cfg.OwnerID) && userID != strings.TrimSpace(cfg.BotAccount) {
+			blocked = append(blocked, userID)
+		}
+	}
+	if len(blocked) == 0 {
+		return cfg
+	}
+	var existing []string
+	if cfg.ReplyGate != nil {
+		existing = cfg.ReplyGate.BlockedUsers
+	}
+	cfg.ReplyGate = cfg.ReplyGate.WithBlockedUsers(unionStrings(existing, blocked))
+	return cfg
+}
