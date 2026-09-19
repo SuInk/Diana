@@ -53,6 +53,8 @@ func TestReplyPathRunsInstalledPluginToolWhenAgentDisabled(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
 		OwnerID:      "owner",
 		AgentEnabled: false,
+		// 只验证插件工具路径，发送前审核的额外模型往返与本断言无关，关掉保持序列模型刚好够用。
+		ReplySafetyMasterEnabled: boolPointer(false),
 	}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

@@ -588,6 +588,16 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(assistantConfig);
   }
   if (path === "/api/assistant/config/message-relays") { assistantConfig.message_relays = Array.isArray(body.relays) ? body.relays : []; return json(assistantConfig); }
+  if (path === "/api/assistant/config/profile-enabled") {
+    const profiles = [...(assistantConfig.profiles ?? [])];
+    const index = profiles.findIndex((profile) => profile.id === body.profile_id);
+    if (index >= 0) { profiles[index] = { ...profiles[index], enabled: body.enabled !== false }; assistantConfig = { ...assistantConfig, profiles }; }
+    return json(assistantConfig);
+  }
+  if (path === "/api/assistant/config/profiles-enabled") {
+    assistantConfig = { ...assistantConfig, profiles: (assistantConfig.profiles ?? []).map((profile) => ({ ...profile, enabled: body.enabled !== false })) };
+    return json(assistantConfig);
+  }
   if (path.startsWith("/api/assistant/config/") && method === "POST") return json(assistantConfig);
   if (path === "/api/assistant/status") return json(demoStatus);
   if (path === "/api/assistant/start") { demoStatus.running = true; return json(demoStatus); }

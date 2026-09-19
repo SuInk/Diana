@@ -38,7 +38,7 @@ func TestExplicitBotQuoteRequiresVerifiedIdentity(t *testing.T) {
 
 func TestExplicitQuoteUsesDirectAuditPolicy(t *testing.T) {
 	provider := &qualityTestProvider{reply: `{"send_confidence":0.06,"reason":"需要更正年份","account_safe":true}`}
-	r := NewRuntime(BotConfig{BotAccount: "42", ReplyAccountSafetyAuditEnabled: boolPointer(true), BotReplyLoopDetectionEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	r := NewRuntime(BotConfig{BotAccount: "42", BotReplyLoopDetectionEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", SelfID: "42", UserID: "u", Quoted: &QuotedMessage{MessageID: "old", UserID: "42"}, proactiveReply: true}
 	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "你上网查一下", "答复", r.Config()); err != nil {
 		t.Fatalf("explicit reply silently rejected as proactive: %v", err)
@@ -66,7 +66,7 @@ func (quotedReplyProvider) Generate(ctx context.Context, _ llm.GenerateRequest) 
 
 func TestExplicitQuotedRequestProducesDirectReplyOutcome(t *testing.T) {
 	channel := &recordingChannel{}
-	r := NewRuntime(BotConfig{BotAccount: "42", AgentEnabled: false, ReplyAccountSafetyAuditEnabled: boolPointer(true), BotReplyLoopDetectionEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return quotedReplyProvider{}, nil })
+	r := NewRuntime(BotConfig{BotAccount: "42", AgentEnabled: false, BotReplyLoopDetectionEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return quotedReplyProvider{}, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", SelfID: "42", UserID: "u", MessageID: "new", RawMessage: "你上网查一下", Quoted: &QuotedMessage{MessageID: "old", UserID: "42", RawMessage: "之前的答复"}, proactiveReply: true, chatInReply: true}
 	outcome, err := r.replyAndRecord(context.Background(), event, event.RawMessage, "replied_proactive")
 	if err != nil || outcome != "replied_direct_followup" {

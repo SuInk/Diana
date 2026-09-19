@@ -553,10 +553,6 @@ type BotConfig struct {
 	InboundPrivateConcurrency    int   `json:"inbound_private_concurrency,omitempty"`
 	BotReplyLoopDetectionEnabled *bool `json:"bot_reply_loop_detection_enabled,omitempty"`
 	ReplySafetyMasterEnabled     *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
-	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
-	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
-	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
-	ReplyAccountSafetyAuditEnabled *bool `json:"reply_account_safety_audit_enabled,omitempty"`
 	// ReplyAccountSafetyAuditPrompt 是账号安全判断的自定义规则。留空使用内置范围；
 	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
 	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
@@ -871,67 +867,63 @@ type ConfigPayload struct {
 	WeComEncodingAESKey               string             `json:"wecom_encoding_aes_key,omitempty"`
 	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
-	CallbackPath                 string               `json:"callback_path,omitempty"`
-	NoneBotBridgeEnabled         bool                 `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint        string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken           string               `json:"nonebot_bridge_token,omitempty"`
-	NoneBotBridgeTokenConfigured bool                 `json:"nonebot_bridge_token_configured,omitempty"`
-	BotAccount                   string               `json:"bot_account,omitempty"`
-	OwnerID                      string               `json:"owner_id,omitempty"`
-	OwnerLoginEnabled            bool                 `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled        *bool                `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers                []string             `json:"group_triggers,omitempty"`
-	GroupTriggerMode             AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
-	DisabledGroups               []string             `json:"disabled_groups,omitempty"`
-	DisabledUsers                []string             `json:"disabled_users,omitempty"`
-	MarkedBotIDs                 []string             `json:"marked_bot_ids,omitempty"`
-	GroupAdmission               GroupAdmission       `json:"group_admission,omitempty"`
-	PrivateAdmission             PrivateAdmission     `json:"private_admission,omitempty"`
-	ReplyGate                    *ReplyGate           `json:"reply_gate,omitempty"`
-	WelcomeEnabled               bool                 `json:"welcome_enabled,omitempty"`
-	WelcomeMessage               string               `json:"welcome_message,omitempty"`
-	WelcomeMode                  WelcomeMode          `json:"welcome_mode,omitempty"`
-	WelcomeTemplates             []string             `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds    int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
-	SystemPrompt                 string               `json:"system_prompt,omitempty"`
-	PersonaID                    string               `json:"persona_id,omitempty"`
-	CustomPersona                *Persona             `json:"custom_persona,omitempty"`
-	ResponseMode                 ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                   ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled     *bool                `json:"action_description_enabled,omitempty"`
-	SelfReference                string               `json:"self_reference,omitempty"`
-	SentenceEnders               string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled             bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode           ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	MentionUserMode              ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain              *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled           *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix             string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts            int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS          int                  `json:"send_chunk_interval_ms,omitempty"`
-	PrivateClosingGrace          int                  `json:"private_closing_grace,omitempty"`
-	InboundGroupConcurrency      int                  `json:"inbound_group_concurrency,omitempty"`
-	InboundPrivateConcurrency    int                  `json:"inbound_private_concurrency,omitempty"`
-	PromptInjectTime             *bool                `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules   *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender      *bool                `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint       *bool                `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText       string               `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText     string               `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate           string               `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate    string               `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText          string               `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText           string               `json:"prompt_wake_only_text,omitempty"`
-	AutoImageDescription         *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess          *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles                   map[string]ModelRole `json:"model_roles,omitempty"`
-	BotReplyLoopDetectionEnabled *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplySafetyMasterEnabled     *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
-	// ReplyAccountSafetyAuditEnabled 控制「直接回复」是否也过一遍账号安全审核。
-	// 主动回复本来就要审一次，安全判断顺带做掉不额外花钱；直接回复没有这次调用，
-	// 打开就等于每条回复多一次快模型往返，所以默认关闭，由用户按风险自行权衡。
-	ReplyAccountSafetyAuditEnabled *bool  `json:"reply_account_safety_audit_enabled,omitempty"`
-	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
+	CallbackPath                  string               `json:"callback_path,omitempty"`
+	NoneBotBridgeEnabled          bool                 `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint         string               `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken            string               `json:"nonebot_bridge_token,omitempty"`
+	NoneBotBridgeTokenConfigured  bool                 `json:"nonebot_bridge_token_configured,omitempty"`
+	BotAccount                    string               `json:"bot_account,omitempty"`
+	OwnerID                       string               `json:"owner_id,omitempty"`
+	OwnerLoginEnabled             bool                 `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled         *bool                `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers                 []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode              AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
+	DisabledGroups                []string             `json:"disabled_groups,omitempty"`
+	DisabledUsers                 []string             `json:"disabled_users,omitempty"`
+	MarkedBotIDs                  []string             `json:"marked_bot_ids,omitempty"`
+	GroupAdmission                GroupAdmission       `json:"group_admission,omitempty"`
+	PrivateAdmission              PrivateAdmission     `json:"private_admission,omitempty"`
+	ReplyGate                     *ReplyGate           `json:"reply_gate,omitempty"`
+	WelcomeEnabled                bool                 `json:"welcome_enabled,omitempty"`
+	WelcomeMessage                string               `json:"welcome_message,omitempty"`
+	WelcomeMode                   WelcomeMode          `json:"welcome_mode,omitempty"`
+	WelcomeTemplates              []string             `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds     int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
+	SystemPrompt                  string               `json:"system_prompt,omitempty"`
+	PersonaID                     string               `json:"persona_id,omitempty"`
+	CustomPersona                 *Persona             `json:"custom_persona,omitempty"`
+	ResponseMode                  ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                    ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled      *bool                `json:"action_description_enabled,omitempty"`
+	SelfReference                 string               `json:"self_reference,omitempty"`
+	SentenceEnders                string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled              bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode            ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	MentionUserMode               ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain               *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled            *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix              string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts             int                  `json:"send_retry_attempts,omitempty"`
+	SendChunkIntervalMS           int                  `json:"send_chunk_interval_ms,omitempty"`
+	PrivateClosingGrace           int                  `json:"private_closing_grace,omitempty"`
+	InboundGroupConcurrency       int                  `json:"inbound_group_concurrency,omitempty"`
+	InboundPrivateConcurrency     int                  `json:"inbound_private_concurrency,omitempty"`
+	PromptInjectTime              *bool                `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules    *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender       *bool                `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint        *bool                `json:"prompt_chinese_slang_hint,omitempty"`
+	PromptChineseSlangText        string               `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText      string               `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate            string               `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate     string               `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText           string               `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText            string               `json:"prompt_wake_only_text,omitempty"`
+	AutoImageDescription          *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess           *bool                `json:"auto_video_preprocess,omitempty"`
+	ModelRoles                    map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled  *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
+	ReplySafetyMasterEnabled      *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	ReplyAccountSafetyAuditPrompt string               `json:"reply_account_safety_audit_prompt,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
@@ -1341,6 +1333,34 @@ func (s ProfileSet) WithMessageRelays(pairs []MessageRelayPair) ProfileSet {
 	return s.WithDefaults()
 }
 
+// WithProfileEnabled 只切换单台机器人的启用状态，其余档案原样保留。
+// 档案不存在时返回 ok=false，调用方按 404 处理。
+func (s ProfileSet) WithProfileEnabled(id string, enabled bool) (ProfileSet, bool) {
+	id = strings.TrimSpace(id)
+	profiles := make([]BotConfig, len(s.Profiles))
+	copy(profiles, s.Profiles)
+	for i := range profiles {
+		if strings.TrimSpace(profiles[i].ID) != id {
+			continue
+		}
+		profiles[i].Enabled = enabled
+		s.Profiles = profiles
+		return s.WithDefaults(), true
+	}
+	return s, false
+}
+
+// WithAllProfilesEnabled 把全部机器人的启用状态统一改成 enabled。
+func (s ProfileSet) WithAllProfilesEnabled(enabled bool) ProfileSet {
+	profiles := make([]BotConfig, len(s.Profiles))
+	copy(profiles, s.Profiles)
+	for i := range profiles {
+		profiles[i].Enabled = enabled
+	}
+	s.Profiles = profiles
+	return s.WithDefaults()
+}
+
 // NormalizeProfileName 规范化机器人配置名称。
 func NormalizeProfileName(name string) string {
 	if trimmed := strings.TrimSpace(name); trimmed != "" {
@@ -1513,35 +1533,34 @@ func DefaultBotConfig() BotConfig {
 		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
 		// 真人。这两个数原先是群友风格在 apply 里钳出来的，风格不再改配置之后
 		// 搬到这里当默认值——想要长一点的气泡、快一点的连发就在 WebUI 里改。
-		SendChunkIntervalMS:            chatSendChunkIntervalMS,
-		PrivateClosingGrace:            defaultPrivateClosingGrace,
-		InboundGroupConcurrency:        defaultInboundGroupConcurrency,
-		InboundPrivateConcurrency:      defaultInboundPrivateConcurrency,
-		ProactiveReplyRouterPrompt:     defaultProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:           defaultProactiveReplyPrompt,
-		ChatInEnabled:                  boolPointer(true),
-		ChatInLevel:                    defaultChatInLevel,
-		NaturalInterjectionEnabled:     boolPointer(false),
-		MaxInputChars:                  2000,
-		ReplyMergeConfidencePercent:    defaultReplyMergeConfidencePercent,
-		MaxReplyChars:                  3500,
-		ReplyMaxBubbles:                replyMaxChatBubbles,
-		ForwardReplyChunkThreshold:     0,
-		DirectReplyChunkSize:           chatReplyChunkSize,
-		ForwardReplyThreshold:          0,
-		RecallReplyMode:                RecallReplyModeOriginalForward,
-		RefusalStrategy:                RefusalStrategySmart,
-		DaypartToneEnabled:             boolPointer(false),
-		LLMStreamingEnabled:            boolPointer(true),
-		RecallReplyAutoDeleteEnabled:   boolPointer(false),
-		RecallReplyTTLSeconds:          defaultRecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:      boolPointer(true),
-		BotReplyLoopDetectionEnabled:   boolPointer(true),
-		ReplySafetyMasterEnabled:       boolPointer(true),
-		TelegramSuppressBotMessages:    boolPointer(true),
-		ReplyAccountSafetyAuditEnabled: boolPointer(false),
-		NotebookSharedScopeEnabled:     boolPointer(true),
-		RecentHistoryTokenBudget:       DefaultRecentHistoryTokenBudget,
+		SendChunkIntervalMS:          chatSendChunkIntervalMS,
+		PrivateClosingGrace:          defaultPrivateClosingGrace,
+		InboundGroupConcurrency:      defaultInboundGroupConcurrency,
+		InboundPrivateConcurrency:    defaultInboundPrivateConcurrency,
+		ProactiveReplyRouterPrompt:   defaultProactiveReplyRouterPrompt,
+		ProactiveReplyPrompt:         defaultProactiveReplyPrompt,
+		ChatInEnabled:                boolPointer(true),
+		ChatInLevel:                  defaultChatInLevel,
+		NaturalInterjectionEnabled:   boolPointer(false),
+		MaxInputChars:                2000,
+		ReplyMergeConfidencePercent:  defaultReplyMergeConfidencePercent,
+		MaxReplyChars:                3500,
+		ReplyMaxBubbles:              replyMaxChatBubbles,
+		ForwardReplyChunkThreshold:   0,
+		DirectReplyChunkSize:         chatReplyChunkSize,
+		ForwardReplyThreshold:        0,
+		RecallReplyMode:              RecallReplyModeOriginalForward,
+		RefusalStrategy:              RefusalStrategySmart,
+		DaypartToneEnabled:           boolPointer(false),
+		LLMStreamingEnabled:          boolPointer(true),
+		RecallReplyAutoDeleteEnabled: boolPointer(false),
+		RecallReplyTTLSeconds:        defaultRecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:    boolPointer(true),
+		BotReplyLoopDetectionEnabled: boolPointer(true),
+		ReplySafetyMasterEnabled:     boolPointer(true),
+		TelegramSuppressBotMessages:  boolPointer(true),
+		NotebookSharedScopeEnabled:   boolPointer(true),
+		RecentHistoryTokenBudget:     DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
@@ -1760,9 +1779,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.LLMIdentityMaskingEnabled == nil {
 		cfg.LLMIdentityMaskingEnabled = boolPointer(true)
-	}
-	if cfg.ReplyAccountSafetyAuditEnabled == nil {
-		cfg.ReplyAccountSafetyAuditEnabled = boolPointer(false)
 	}
 	if cfg.ReplySafetyMasterEnabled == nil {
 		cfg.ReplySafetyMasterEnabled = boolPointer(true)
@@ -2086,7 +2102,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
-		ReplyAccountSafetyAuditEnabled:    copyBoolPointer(cfg.ReplyAccountSafetyAuditEnabled),
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:        cfg.ProactiveReplyRouterPrompt,
@@ -2285,7 +2300,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
 		BotReplyLoopDetectionEnabled:    copyBoolPointer(payload.BotReplyLoopDetectionEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
-		ReplyAccountSafetyAuditEnabled:  copyBoolPointer(payload.ReplyAccountSafetyAuditEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:      payload.ProactiveReplyRouterPrompt,

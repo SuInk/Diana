@@ -10,30 +10,39 @@
       </div>
     </header>
 
-    <!-- 按「改的是什么」分三档：账号与会话决定谁能进来，系统是这台服务本身，
-         外观只影响你眼前这个浏览器。原先五张卡平铺成两列，既没有标题也没有边界，
-         找一项设置只能一张张看过去。用和机器人配置同一套 tab，两处操作手感一致。 -->
-    <nav class="editor-tabs settings-tabs" role="tablist" aria-label="设置分区">
-      <button
-        v-for="item in settingsTabs"
-        :key="item.key"
-        class="editor-tab"
-        :class="{ active: tab === item.key }"
-        type="button"
-        role="tab"
-        :aria-selected="tab === item.key"
-        @click="tab = item.key"
-      >
-        {{ item.label }}
-      </button>
-    </nav>
-    <p class="settings-tab-hint">{{ activeTabHint }}</p>
+    <!-- 左侧分类菜单 + 右侧内容：和 anime-rss 的设置页同一套交互——分区收进
+         侧栏分组，正文一次只显示选中的一项，长页不用来回滚。 -->
+    <div class="settings-layout">
+      <aside class="settings-side">
+        <nav class="settings-side-nav" aria-label="设置分类">
+          <div v-for="group in settingsGroups" :key="group.label" class="settings-side-group">
+            <span class="settings-side-group-label">{{ group.label }}</span>
+            <button
+              v-for="page in group.pages"
+              :key="page.key"
+              type="button"
+              class="settings-side-link"
+              :class="{ 'settings-side-link-active': activePage === page.key }"
+              :aria-current="activePage === page.key ? 'page' : undefined"
+              @click="activePage = page.key"
+            >
+              <component :is="page.icon" :size="15" aria-hidden="true" />
+              {{ page.label }}
+            </button>
+          </div>
+        </nav>
+      </aside>
 
-      <div v-show="tab === 'security'" class="settings-section-body">
+      <div class="settings-content">
+        <header class="settings-page-head">
+          <h2>{{ activePageMeta.label }}</h2>
+          <p class="settings-page-desc">{{ activePageMeta.hint }}</p>
+        </header>
+
+      <div v-show="activePage === 'security'" class="settings-section-body">
           <!-- 访问安全 -->
           <section class="card">
           <div class="card-header">
-            <h2>访问安全</h2>
             <SkeletonBlock v-if="authLoading" width="120px" height="21px" />
             <span v-else class="badge" :class="authRequired ? 'ok' : 'warn'">{{ authRequired ? "已开启密码保护" : "未设置密码" }}</span>
           </div>
@@ -97,6 +106,9 @@
           </div>
         </section>
 
+      </div>
+
+      <div v-show="activePage === 'sessions'" class="settings-section-body">
           <!-- 登录会话 -->
           <section v-if="authRequired || authLoading" class="card">
           <div class="card-header">
@@ -142,6 +154,9 @@
           </div>
         </section>
 
+      </div>
+
+      <div v-show="activePage === 'openapi'" class="settings-section-body">
           <!-- 对外 API 密钥 -->
           <section class="card">
           <div class="card-header">
@@ -217,7 +232,7 @@
         </section>
       </div>
 
-      <div v-show="tab === 'system'" class="settings-section-body">
+      <div v-show="activePage === 'cache'" class="settings-section-body">
         <section class="download-cache-settings">
           <div class="card-header">
             <h2>下载缓存</h2>
@@ -264,6 +279,9 @@
             </fieldset>
           </form>
         </section>
+      </div>
+
+      <div v-show="activePage === 'media'" class="settings-section-body">
         <section class="download-cache-settings">
           <div class="card-header"><h2>历史媒体原件</h2><button class="btn small ghost" type="button" :disabled="historyMediaLoading || historyMediaSaving" @click="loadHistoryMediaPolicy"><RefreshCw :size="14" /></button></div>
           <form class="card-body form-grid" @submit.prevent="saveHistoryMedia">
@@ -274,10 +292,12 @@
             <div class="field wide"><button class="btn primary" type="submit" :disabled="historyMediaLoading || historyMediaSaving || !historyMediaValid"><Save :size="15" />{{ historyMediaSaving ? "清理中…" : "保存并立即清理" }}</button></div>
           </form>
         </section>
-        <!-- 系统更新 -->
+      </div>
+
+      <div v-show="activePage === 'update'" class="settings-section-body">
+        <!-- 系统更新：标题和说明在正文页头已经有一份，卡片头只留状态徽标和刷新。 -->
         <section class="card">
-          <div class="card-header">
-            <h2>系统更新</h2>
+          <div class="card-header" style="justify-content: space-between">
             <SkeletonBlock v-if="loading && !systemVersion" width="90px" height="21px" />
             <span v-else class="badge">{{ deploymentMode === "git" ? "源码更新" : systemVersion?.update_supported ? "Release 自更新" : "Docker" }}</span>
             <button class="btn small ghost" type="button" :disabled="loading" title="刷新更新状态" @click="loadUpdates">
@@ -285,21 +305,14 @@
             </button>
           </div>
           <div v-if="loading && !systemVersion" class="card-body stack" style="gap: 10px" role="status" aria-label="正在加载更新状态">
-            <div class="cluster" style="justify-content: space-between"><SkeletonBlock width="64px" height="20px" /><SkeletonBlock width="80px" height="20px" /></div>
+            <div class="info-row"><SkeletonBlock width="64px" height="20px" /><SkeletonBlock width="80px" height="20px" /></div>
             <SkeletonBlock width="85%" height="19px" />
             <SkeletonBlock height="38px" />
-            <hr class="divider" style="margin: 4px 0" />
-            <div class="field"><SkeletonBlock width="120px" height="20px" /><SkeletonBlock height="37px" /></div>
-            <SkeletonBlock width="90px" height="30px" />
-            <SkeletonBlock width="85%" height="19px" />
-            <hr class="divider" style="margin: 4px 0" />
-            <SkeletonBlock height="38px" />
-            <SkeletonBlock width="75%" height="19px" />
           </div>
           <div v-else class="card-body stack" style="gap: 10px; font-size: 13px">
-            <div class="cluster" style="justify-content: space-between">
-              <span class="muted">当前版本</span>
-              <span class="cluster" style="gap: 6px">
+            <div class="info-row">
+              <span class="muted info-label">当前版本</span>
+              <span class="info-value cluster" style="gap: 6px; justify-content: flex-end">
                 <span v-if="sourceBuild" class="badge warn">源码构建</span>
                 <span v-if="currentVersionLabel" class="mono">{{ currentVersionLabel }}</span>
               </span>
@@ -309,18 +322,19 @@
             </p>
 
             <template v-if="deploymentMode === 'git' && updateStatus">
-              <hr class="divider" style="margin: 4px 0" />
-              <div class="cluster" style="justify-content: space-between">
-                <span class="muted">分支 / 提交</span>
-                <span class="mono">{{ updateStatus.branch || "—" }} · {{ shortCommit }}</span>
+              <div class="info-row">
+                <span class="muted info-label">分支 / 提交</span>
+                <span class="mono info-value">{{ updateStatus.branch || "—" }} · {{ shortCommit }}</span>
               </div>
               <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
             </template>
-            <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
-              <RefreshCw v-if="deploymentMode === 'release' && downloadReadyForLatest" :size="15" aria-hidden="true" />
-              <Download v-else :size="15" aria-hidden="true" />
-              {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "重启并安装" : downloadReadyForLatest ? "重启并安装" : "下载最新 Release" }}
-            </button>
+            <div class="cluster">
+              <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
+                <RefreshCw v-if="deploymentMode === 'release' && downloadReadyForLatest" :size="15" aria-hidden="true" />
+                <Download v-else :size="15" aria-hidden="true" />
+                {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "重启并安装" : downloadReadyForLatest ? "重启并安装" : "下载最新 Release" }}
+              </button>
+            </div>
             <p v-if="staleDownloadedVersion" class="muted" style="font-size: 12.5px; margin: 0">
               已下载 {{ updateStatus?.downloaded_version }}，但最新版本是 {{ latestVersion }}；下次下载会替换旧安装包。
             </p>
@@ -332,13 +346,17 @@
               <div class="update-progress-track"><span :style="{ width: `${updatePercent}%` }"></span></div>
             </div>
             <pre v-if="updateOutput" class="mono update-output" :class="{ error: updateFailed }">{{ updateOutput }}</pre>
-            <hr class="divider" style="margin: 4px 0" />
-            <!-- Token 只影响查询版本时的 API 限额，装不装都能更新，所以放在这里
-                 而不是更新面板上：更新面板要的是「点一下就更新」。 -->
-            <label class="field update-token-field">
-              <span class="muted">GitHub Token（可选）</span>
+          </div>
+        </section>
+
+        <!-- Token 只影响查询版本时的 API 限额，装不装都能更新：独立一张卡片，不混进更新操作里。 -->
+        <section class="card">
+          <div class="card-header"><span class="card-sub">GitHub Token（可选）</span></div>
+          <div class="card-body stack" style="gap: 10px; font-size: 13px">
+            <label class="update-token-field">
               <input
                 v-model="githubToken"
+                class="input"
                 type="password"
                 autocomplete="new-password"
                 :placeholder="githubTokenFromEnvironment ? '已由环境变量提供' : githubTokenConfigured ? '已配置，留空保持不变' : '提高版本查询的 API 限额'"
@@ -353,15 +371,25 @@
               匿名查询 GitHub 版本有限额，用得频繁时容易被限流；填一个只读 Token 就够，不填也能正常更新。也可以改用环境变量
               <code>DIANA_GITHUB_TOKEN</code>。
             </p>
-            <hr class="divider" style="margin: 4px 0" />
-            <button class="btn" type="button" :disabled="restarting" @click="doRestart">
-              <RotateCw :size="15" aria-hidden="true" />
-              {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
-            </button>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header"><span class="card-sub">重启服务</span></div>
+          <div class="card-body stack" style="gap: 10px; font-size: 13px">
+            <div class="cluster">
+              <button class="btn" type="button" :disabled="restarting" @click="doRestart">
+                <RotateCw :size="15" aria-hidden="true" />
+                {{ restarting ? "重启中，等待服务恢复…" : "重启服务" }}
+              </button>
+            </div>
             <p class="muted" style="font-size: 12.5px; margin: 0">原地重启当前服务进程，更新拉取后需重启才生效。恢复后页面会自动刷新。</p>
           </div>
         </section>
 
+      </div>
+
+      <div v-show="activePage === 'status'" class="settings-section-body">
         <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
         <section class="card">
           <div class="card-header">
@@ -382,7 +410,7 @@
         </section>
       </div>
 
-      <div v-show="tab === 'appearance'" class="settings-section-body">
+      <div v-show="activePage === 'theme'" class="settings-section-body">
         <!-- 主题 -->
         <section class="card">
           <div class="card-header">
@@ -416,6 +444,8 @@
           </div>
         </section>
       </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -424,7 +454,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
-import { Download, Eye, EyeOff, KeyRound, LogOut, RefreshCw, RotateCw, Save } from "@lucide/vue";
+import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -466,14 +496,27 @@ import { accentOptions, theme } from "../theme";
 import { formatTime, formatUptime } from "../format";
 import { toastError, toastSuccess } from "../toast";
 
-const settingsTabs = [
-  { key: "security", label: "安全", hint: "谁能打开这个控制台，以及现在有哪些设备登着。" },
-  { key: "system", label: "系统", hint: "这台服务本身的版本、更新与运行信息。" },
-  { key: "appearance", label: "外观", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。" }
+// 侧栏菜单按「改的是谁的」分组：账号与安全决定谁能进来，系统是这台服务本身，
+// 个性化只影响当前浏览器。正文一次只显示选中的一项。
+const settingsPages = [
+  { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号与密码保护。", icon: ShieldCheck },
+  { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
+  { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
+  { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
+  { key: "media", label: "历史媒体原件", hint: "超过保留期或容量上限的历史媒体原件会被删除，聊天文字保留。", icon: Images },
+  { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
+  { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长。", icon: Activity },
+  { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
 ] as const;
 
-const tab = ref<(typeof settingsTabs)[number]["key"]>("security");
-const activeTabHint = computed(() => settingsTabs.find((item) => item.key === tab.value)?.hint ?? "");
+const settingsGroups: { label: string; pages: (typeof settingsPages)[number][] }[] = [
+  { label: "账号与安全", pages: [settingsPages[0], settingsPages[1], settingsPages[2]] },
+  { label: "系统", pages: [settingsPages[3], settingsPages[4], settingsPages[5], settingsPages[6]] },
+  { label: "个性化", pages: [settingsPages[7]] }
+];
+
+const activePage = ref<(typeof settingsPages)[number]["key"]>("security");
+const activePageMeta = computed(() => settingsPages.find((item) => item.key === activePage.value) ?? settingsPages[0]);
 
 const cachePolicy = ref<MediaCachePolicy | null>(null);
 const historyMediaDays = ref(-1);
@@ -977,6 +1020,7 @@ onBeforeUnmount(() => {
 
 .update-token-field input {
   width: 100%;
+  max-width: 360px;
 }
 
 .update-token-actions {
@@ -1026,24 +1070,96 @@ onBeforeUnmount(() => {
   max-width: 100%;
 }
 
-/* 只有三档，铺满整行反而显得空；靠左按内容宽度排。 */
-.settings-tabs {
-  display: inline-flex;
-  max-width: 100%;
+/* 左侧分组菜单 + 右侧内容：和 anime-rss 设置页同一套两栏结构。窄屏收成单栏，
+   菜单横排换行，不占纵向空间。 */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
 }
 
-.settings-tabs .editor-tab {
-  flex: 0 0 auto;
+.settings-side {
+  position: sticky;
+  /* 页头吸顶，菜单跟着停在其下方。 */
+  top: calc(var(--topbar-height) + 84px);
 }
 
-/* 一句话说明跟着当前 tab 变：分区名进了 tab 之后，「这一档管什么」得有地方说。 */
-.settings-tab-hint {
-  margin: 10px 0 14px;
+.settings-side-nav {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-side-group {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-side-group-label {
+  padding: 0 10px 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.settings-side-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.settings-side-link:hover {
+  background: var(--surface-2);
+}
+
+.settings-side-link-active,
+.settings-side-link-active:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.settings-content {
+  min-width: 0;
+}
+
+/* 选中项的标题和一句话说明：分区名进了侧栏，「这一项管什么」由正文头部交代。 */
+.settings-page-head {
+  margin: 0 0 14px;
+}
+
+.settings-page-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.settings-page-desc {
+  margin: 4px 0 0;
   font-size: 12.5px;
   color: var(--muted);
 }
 
-/* auto-fit 让只有一张卡的分区（外观）自己占满整行，右边不留空位；
+@media (max-width: 640px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-side { position: static; }
+  .settings-side-nav { display: flex; flex-wrap: wrap; gap: 6px; }
+  .settings-side-group { display: contents; }
+  .settings-side-group-label { display: none; }
+  .settings-side-link { width: auto; }
+}
+
+/* auto-fit 让只有一张卡的分区自己占满整行，右边不留空位；
    两张卡的分区并排，和原来的两列观感一致。 */
 .settings-section-body {
   display: grid;

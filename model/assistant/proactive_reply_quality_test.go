@@ -179,8 +179,8 @@ func TestReplyAuditReceivesImageDescriptionWithoutFabricatingUserText(t *testing
 // 现在直接触发不再有任何一项能靠打分拦下回复。
 func TestDirectImageReplyNeedsNoGatingAudit(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		ReplyAccountSafetyAuditEnabled: boolPointer(false),
-		BotReplyLoopDetectionEnabled:   boolPointer(false),
+		ReplySafetyMasterEnabled:     boolPointer(false),
+		BotReplyLoopDetectionEnabled: boolPointer(false),
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "data:image/png;base64,YQ=="}}}}
 	need := runtime.replyAuditNeed(event, "看图", runtime.Config(), false)
@@ -299,7 +299,6 @@ func TestDirectReplyAuditReturnsRefusalControlWithSafetyResult(t *testing.T) {
 		return provider, nil
 	})
 	cfg := runtime.Config()
-	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
 	intent, err := runtime.evaluateDirectReplyAudit(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "做不到的请求", "这个我不能帮你", cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -326,34 +325,34 @@ func TestReplyAuditTreatsMissingAccountSafeAsSafe(t *testing.T) {
 	}
 }
 
-// 直接回复的安全审核默认关闭：主动回复那次审核是顺带的，直接回复要额外一次调用。
-func TestAuditReplyAccountSafetyIsOptInForDirectReplies(t *testing.T) {
+// 直接回复的安全审核跟着总开关走：总开关默认开，直接回复也审；关了才不审。
+func TestAuditReplyAccountSafetyFollowsMasterSwitchForDirectReplies(t *testing.T) {
 	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"explicit"}`}
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}
 
-	if err := runtime.auditReplyAccountSafety(context.Background(), event, "在吗", "任何内容", runtime.Config()); err != nil {
-		t.Fatalf("audit must be off by default: %v", err)
-	}
-	if len(provider.requests) != 0 {
-		t.Fatalf("disabled audit must not call the model: %d requests", len(provider.requests))
-	}
-
-	cfg := runtime.Config()
-	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
-	err := runtime.auditReplyAccountSafety(context.Background(), event, "在吗", "任何内容", cfg)
-	if err == nil || !strings.Contains(err.Error(), "露骨内容") {
-		t.Fatalf("enabled audit should reject explicit content: %v", err)
+	if err := runtime.auditReplyAccountSafety(context.Background(), event, "在吗", "任何内容", runtime.Config()); err == nil || !strings.Contains(err.Error(), "露骨内容") {
+		t.Fatalf("default-on audit should reject explicit content: %v", err)
 	}
 	if len(provider.requests) != 1 {
-		t.Fatalf("enabled audit should make exactly one call: %d", len(provider.requests))
+		t.Fatalf("default-on audit should make exactly one call: %d", len(provider.requests))
+	}
+
+	provider.requests = nil
+	cfg := runtime.Config()
+	cfg.ReplySafetyMasterEnabled = boolPointer(false)
+	if err := runtime.auditReplyAccountSafety(context.Background(), event, "在吗", "任何内容", cfg); err != nil {
+		t.Fatalf("master-off audit must not reject: %v", err)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("master-off audit must not call the model: %d requests", len(provider.requests))
 	}
 }
 
 func TestGroupAccountSafetyOverrideControlsProactiveAndDirectReplies(t *testing.T) {
-	runtime := NewRuntime(BotConfig{ReplyAccountSafetyAuditEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
 		"off": {GroupID: "off", ReplyAccountSafetyAuditEnabled: boolPointer(false)},
 		"on":  {GroupID: "on", ReplyAccountSafetyAuditEnabled: boolPointer(true)},
@@ -364,7 +363,7 @@ func TestGroupAccountSafetyOverrideControlsProactiveAndDirectReplies(t *testing.
 	}{
 		{group: "off", proactive: true, want: false}, {group: "off", proactive: false, want: false},
 		{group: "on", proactive: true, want: true}, {group: "on", proactive: false, want: true},
-		{group: "inherit", proactive: true, want: true}, {group: "inherit", proactive: false, want: false},
+		{group: "inherit", proactive: true, want: true}, {group: "inherit", proactive: false, want: true},
 	} {
 		event := MessageEvent{Kind: EventKindGroup, GroupID: test.group, UserID: "u"}
 		need := runtime.replyAuditNeed(event, "普通消息", runtime.effectiveConfigForEvent(event), test.proactive)
@@ -376,8 +375,7 @@ func TestGroupAccountSafetyOverrideControlsProactiveAndDirectReplies(t *testing.
 
 func TestRobotAccountSafetyMasterSwitchDisablesAllReplies(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		ReplySafetyMasterEnabled:       boolPointer(false),
-		ReplyAccountSafetyAuditEnabled: boolPointer(true),
+		ReplySafetyMasterEnabled: boolPointer(false),
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, proactive := range []bool{false, true} {
 		event := MessageEvent{Kind: EventKindGroup, GroupID: "inherit", UserID: "u"}
@@ -413,7 +411,6 @@ func TestAuditReplyAccountSafetyFailsOpen(t *testing.T) {
 		return provider, nil
 	})
 	cfg := runtime.Config()
-	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
 	if err := runtime.auditReplyAccountSafety(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, "在吗", "在的", cfg); err != nil {
 		t.Fatalf("unparsable audit result must fail open: %v", err)
 	}
@@ -462,7 +459,6 @@ func TestLowSendConfidenceDoesNotBlockDirectReply(t *testing.T) {
 		return provider, nil
 	})
 	cfg := runtime.Config()
-	cfg.ReplyAccountSafetyAuditEnabled = boolPointer(true)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}
 	if _, err := runtime.evaluateDirectReplyAudit(context.Background(), event, "问题", "候选回复", cfg); err != nil {
 		t.Fatalf("直接回复不该被发送置信度拦下：%v", err)

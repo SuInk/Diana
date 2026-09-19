@@ -196,7 +196,8 @@ func TestPrivateStopRequestFromOwnerSkipsSuppression(t *testing.T) {
 func TestPrivateFirstMessagePaysNoClosingAudit(t *testing.T) {
 	provider := &privateClosingProvider{replies: []string{"你好呀"}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"},
+	// 只数私聊收尾审核，账号安全审核的额外往返与本断言无关，关掉。
+	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner", ReplySafetyMasterEnabled: boolPointer(false)},
 		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 
 	event := privateEvent("30004", "first", "在吗")
@@ -213,7 +214,8 @@ func TestPrivateFirstMessagePaysNoClosingAudit(t *testing.T) {
 func TestPrivateClosingAuditSkippedAfterLongSilence(t *testing.T) {
 	provider := &privateClosingProvider{replies: []string{"早呀"}}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"},
+	// 只数私聊收尾审核，账号安全审核的额外往返与本断言无关，关掉。
+	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner", ReplySafetyMasterEnabled: boolPointer(false)},
 		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 
 	rememberPrivateBotReply(runtime, "30004", "old", time.Now().Add(-privateClosingAuditWindow-time.Minute))
