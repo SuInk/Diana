@@ -7,6 +7,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestPromptSenderIdentityIncludesDisplayNameAndUserID(t *testing.T) {
@@ -124,5 +126,41 @@ func TestReplyTurnSenderPrivacyWithoutHistory(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPromptSenderOpaqueIDPrivacy(t *testing.T) {
+	for _, userID := range []string{"ou_user", "staff-1", "member-1"} {
+		t.Run(userID, func(t *testing.T) {
+			event := MessageEvent{Kind: EventKindGroup, UserID: userID, SenderName: "Alice", RawMessage: "hello"}
+			quoted := &QuotedMessage{UserID: userID, SenderName: "Alice", RawMessage: "hello"}
+			for name, content := range map[string]string{
+				"current":    currentPromptText(event, "hello"),
+				"history":    historyPromptTextAt(event, 0),
+				"supplement": proactiveTurnPromptTextAt(event, "hello", 0),
+				"quoted":     quotedPromptText(quoted),
+				"summary":    compactContextEvent(event),
+			} {
+				scope := newIdentityPrivacyScope()
+				// Summaries outlive their original events; their structured identity
+				// fields must discover opaque IDs without an event registration.
+				if name != "summary" {
+					scope.registerEvent(event)
+				}
+				protected := scope.protectRequest(llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: content}}})
+				text := requestTextForPrivacyTest(protected)
+				if strings.Contains(text, userID) || !strings.Contains(text, "Alice（im_user_") {
+					t.Fatalf("%s leaked or lost opaque sender identity: %s", name, text)
+				}
+				if restored := scope.restoreText(protected.Messages[len(protected.Messages)-1].Content); restored != content {
+					t.Fatalf("%s identity did not round trip: %s", name, restored)
+				}
+				for _, longerID := range []string{userID + "_other", "other-" + userID, userID + userID} {
+					if got := scope.protectText(longerID); got != longerID {
+						t.Fatalf("changed another identifier: %s", got)
+					}
+				}
+			}
+		})
 	}
 }
