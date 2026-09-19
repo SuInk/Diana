@@ -79,11 +79,23 @@ func modelSilenceRefusedReason(ctx context.Context, pluginResponses []PluginResp
 	if hasExternalSideEffect(ctx) {
 		return "本轮已经产生了不可撤销的外部副作用"
 	}
-	if len(pluginResponses) > 0 {
+	if hasFactualPluginResponse(pluginResponses) {
 		return "本轮带着必须交代的插件结果"
 	}
 	if images.hasPendingWork() {
 		return "本轮已经受理了图片任务"
 	}
 	return ""
+}
+
+// hasFactualPluginResponse 报告这一轮有没有必须交代的插件结果。第三方插件的说明每条
+// 消息都会注入，不算结果：否则装了一个第三方插件，机器人就再也不能静默，发送前审核和
+// 语义去重也会被整轮跳过。
+func hasFactualPluginResponse(responses []PluginResponse) bool {
+	for _, resp := range responses {
+		if !resp.ThirdParty {
+			return true
+		}
+	}
+	return false
 }

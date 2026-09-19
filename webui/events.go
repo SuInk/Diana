@@ -166,14 +166,15 @@ func statusSignature(status assistant.RuntimeStatus) string {
 			channel.UpdatedAt.Format(time.RFC3339Nano),
 		)
 	}
+	bridgeEnabled, bridgeConnected := status.BridgeSummary()
 	return fmt.Sprintf("%t|%t|%s|%s|%s|%t|%t|%d|%s|%s|%s",
 		status.Running,
 		status.Channel.Connected,
 		status.Channel.SelfID,
 		status.Channel.LastError,
 		channels.String(),
-		status.NoneBotBridge.Enabled,
-		status.NoneBotBridge.Connected,
+		bridgeEnabled,
+		bridgeConnected,
 		status.ActiveWorkers,
 		status.LastError,
 		status.UpdatedAt.Format(time.RFC3339Nano),

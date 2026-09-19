@@ -8,7 +8,6 @@ import "testing"
 // 卡片开关只该影响目标机器人：停用一台，其他机器人的启用状态原样保留。
 func TestWithProfileEnabledOnlyTouchesTarget(t *testing.T) {
 	set := ProfileSet{
-		ActiveID: "a",
 		Profiles: []BotConfig{{ID: "a", Enabled: true}, {ID: "b", Enabled: true}, {ID: "c", Enabled: false}},
 	}
 	next, ok := set.WithProfileEnabled("b", false)
@@ -34,7 +33,6 @@ func TestWithProfileEnabledOnlyTouchesTarget(t *testing.T) {
 // 批量开关把全部机器人统一置为同一状态，且不改动原配置集。
 func TestWithAllProfilesEnabled(t *testing.T) {
 	set := ProfileSet{
-		ActiveID: "a",
 		Profiles: []BotConfig{{ID: "a", Enabled: true}, {ID: "b", Enabled: false}, {ID: "c", Enabled: true}},
 	}
 	next := set.WithAllProfilesEnabled(false)

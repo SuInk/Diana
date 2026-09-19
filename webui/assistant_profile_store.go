@@ -6,6 +6,7 @@ package webui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -13,10 +14,10 @@ import (
 )
 
 type BotProfileStore interface {
-	Current() assistant.BotConfig
 	Profiles() assistant.ProfileSet
 	SaveProfiles(assistant.ProfileSet) error
-	SaveCurrentConfig(assistant.BotConfig) error
+	// SaveProfileConfig 按机器人 ID 覆盖这台机器人的配置。
+	SaveProfileConfig(assistant.BotConfig) error
 }
 
 type MemoryBotProfileStore struct {
@@ -24,19 +25,14 @@ type MemoryBotProfileStore struct {
 	data assistant.ProfileSet
 }
 
-// NewMemoryBotProfileStore 创建内存版 OneBot v11 机器人配置集存储。
+// NewMemoryBotProfileStore 创建只有一台机器人的内存版配置集存储。
 func NewMemoryBotProfileStore(cfg assistant.BotConfig) *MemoryBotProfileStore {
 	return &MemoryBotProfileStore{data: assistant.NewProfileSet(cfg)}
 }
 
-// Current 返回内存存储中的当前机器人配置。
-func (s *MemoryBotProfileStore) Current() assistant.BotConfig {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if profile, ok := s.data.Current(); ok {
-		return profile.WithDefaults()
-	}
-	return assistant.BotConfig{}
+// NewMemoryBotProfileStoreFromSet 用现成的配置集创建内存版存储。
+func NewMemoryBotProfileStoreFromSet(set assistant.ProfileSet) *MemoryBotProfileStore {
+	return &MemoryBotProfileStore{data: set.WithDefaults()}
 }
 
 // Profiles 返回内存存储中的机器人配置集。
@@ -54,11 +50,15 @@ func (s *MemoryBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
 	return nil
 }
 
-// SaveCurrentConfig 把运行时当前配置写回当前激活的机器人档案。
-func (s *MemoryBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) error {
+// SaveProfileConfig 按机器人 ID 覆盖内存里这台机器人的配置。
+func (s *MemoryBotProfileStore) SaveProfileConfig(cfg assistant.BotConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data = upsertCurrentBotProfileSet(s.data, cfg)
+	next, err := upsertProfileConfig(s.data, cfg)
+	if err != nil {
+		return err
+	}
+	s.data = next
 	return nil
 }
 
@@ -84,16 +84,6 @@ func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStor
 	}, nil
 }
 
-// Current 返回持久化存储中的当前机器人配置。
-func (s *PersistentBotProfileStore) Current() assistant.BotConfig {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if profile, ok := s.data.Current(); ok {
-		return profile.WithDefaults()
-	}
-	return assistant.BotConfig{}
-}
-
 // Profiles 返回持久化存储中的机器人配置集。
 func (s *PersistentBotProfileStore) Profiles() assistant.ProfileSet {
 	s.mu.RLock()
@@ -115,11 +105,14 @@ func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) error
 	return nil
 }
 
-// SaveCurrentConfig 把运行时当前配置回写到激活中的机器人配置档。
-func (s *PersistentBotProfileStore) SaveCurrentConfig(cfg assistant.BotConfig) error {
+// SaveProfileConfig 按机器人 ID 覆盖这台机器人的配置并落库。
+func (s *PersistentBotProfileStore) SaveProfileConfig(cfg assistant.BotConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	set := upsertCurrentBotProfileSet(s.data, cfg)
+	set, err := upsertProfileConfig(s.data, cfg)
+	if err != nil {
+		return err
+	}
 	if err := s.persist(set); err != nil {
 		return err
 	}
@@ -138,32 +131,32 @@ func (s *PersistentBotProfileStore) persist(set assistant.ProfileSet) error {
 	return nil
 }
 
-// upsertCurrentBotProfileSet 用最新运行态覆盖当前激活的机器人配置档。
-func upsertCurrentBotProfileSet(set assistant.ProfileSet, cfg assistant.BotConfig) assistant.ProfileSet {
+// upsertProfileConfig 按 ID 覆盖一台机器人的配置。老调用方不带 ID 时，只有一台
+// 机器人才能确定写给它；多台时报错，不写到别的机器人名下。
+func upsertProfileConfig(set assistant.ProfileSet, cfg assistant.BotConfig) (assistant.ProfileSet, error) {
 	set = set.WithDefaults()
-	current, ok := set.Current()
-	if cfg.ID == "" && ok {
-		cfg.ID = current.ID
+	if strings.TrimSpace(cfg.ID) == "" {
+		if len(set.Profiles) != 1 {
+			return set, fmt.Errorf("保存机器人配置时缺少机器人 ID")
+		}
+		cfg.ID = set.Profiles[0].ID
 	}
-	if cfg.Name == "" && ok {
-		cfg.Name = current.Name
-	}
-	if cfg.Platform == "" && ok {
-		cfg.Platform = current.Platform
-	}
-	if cfg.AvatarURL == "" && ok {
-		cfg.AvatarURL = current.AvatarURL
-	}
-	cfg = cfg.WithDefaults()
 	for i := range set.Profiles {
 		if set.Profiles[i].ID != cfg.ID {
 			continue
 		}
-		set.Profiles[i] = cfg
-		set.ActiveID = cfg.ID
-		return set.WithDefaults()
+		current := set.Profiles[i]
+		if cfg.Name == "" {
+			cfg.Name = current.Name
+		}
+		if cfg.Platform == "" {
+			cfg.Platform = current.Platform
+		}
+		if cfg.AvatarURL == "" {
+			cfg.AvatarURL = current.AvatarURL
+		}
+		set.Profiles[i] = cfg.WithDefaults()
+		return set.WithDefaults(), nil
 	}
-	set.Profiles = append(set.Profiles, cfg)
-	set.ActiveID = cfg.ID
-	return set.WithDefaults()
+	return set, fmt.Errorf("机器人 %s 不存在", cfg.ID)
 }

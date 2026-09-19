@@ -40,16 +40,16 @@ func TestExplicitQuoteUsesDirectAuditPolicy(t *testing.T) {
 	provider := &qualityTestProvider{reply: `{"send_confidence":0.06,"reason":"需要更正年份","account_safe":true}`}
 	r := NewRuntime(BotConfig{BotAccount: "42", BotReplyLoopDetectionEnabled: boolPointer(false)}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", SelfID: "42", UserID: "u", Quoted: &QuotedMessage{MessageID: "old", UserID: "42"}, proactiveReply: true}
-	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "你上网查一下", "答复", r.Config()); err != nil {
+	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "你上网查一下", "答复", r.ProfileConfig("")); err != nil {
 		t.Fatalf("explicit reply silently rejected as proactive: %v", err)
 	}
 	event.Quoted.UserID = "other"
-	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "闲聊", "答复", r.Config()); err == nil {
+	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "闲聊", "答复", r.ProfileConfig("")); err == nil {
 		t.Fatal("ordinary chat lost quality gate")
 	}
 	event.Quoted.UserID = "42"
 	provider.reply = `{"send_confidence":0.99,"account_safe":false,"account_risk":"explicit","account_risk_reason":"命中账号安全规则"}`
-	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "请求", "答复", r.Config()); err == nil {
+	if _, err := r.evaluateProactiveReplyQuality(context.Background(), event, "请求", "答复", r.ProfileConfig("")); err == nil {
 		t.Fatal("explicit quote bypassed configured account safety")
 	}
 }

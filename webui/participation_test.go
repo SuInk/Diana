@@ -28,7 +28,7 @@ func TestParticipationHTTPSaveAndRestart(t *testing.T) {
 	h := NewBotHandlerWithFactory(ctx, r, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
 	h.SetProfileStore(store)
 	router := botTestRouter(h)
-	current, _ := store.Profiles().Current()
+	current := store.Profiles().Profiles[0]
 	body := assistant.PayloadFromConfig(current)
 	body.Enabled = false
 	body.Participation = &assistant.ParticipationPreferences{Desire: 87, Social: 99, Followup: 61, Restraint: 12, Information: 0, CooldownSeconds: 45}
@@ -51,7 +51,7 @@ func TestParticipationHTTPSaveAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, _ := reopened.Profiles().Current()
+	saved := reopened.Profiles().Profiles[0]
 	if saved.Participation == nil || *saved.Participation != *body.Participation {
 		t.Fatalf("restart: %+v", saved.Participation)
 	}

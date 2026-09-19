@@ -38,7 +38,7 @@ func TestDeepsleepFutureJokeUsesSendConfidence(t *testing.T) {
 	reply := "等晚高峰排队的时候，你肯定还是第一个喊 deepsleep 的～"
 	provider := &qualityTestProvider{reply: `{"send_confidence":0.97,"reason":"过去自述与未来调侃不构成事实矛盾","account_safe":true}`}
 	r := NewRuntime(BotConfig{ProactiveReplyThreshold: 0.9}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
-	if err := r.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, original, reply, r.Config()); err != nil {
+	if err := r.judgeProactiveReplyQuality(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u"}, original, reply, r.ProfileConfig("")); err != nil {
 		t.Fatal(err)
 	}
 	if len(provider.requests) != 1 {

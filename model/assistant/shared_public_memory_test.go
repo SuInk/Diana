@@ -38,7 +38,7 @@ func TestSharedPublicRecallHasReservedCandidatesWithoutMembership(t *testing.T) 
 			r := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
 			source := cfg
 			source.ID, source.Platform = "tg", PlatformTelegram
-			r.SetProfiles(ProfileSet{ActiveID: "qq", Profiles: []BotConfig{cfg, source}})
+			r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg, source}})
 			store := &sharedPublicRecallStore{}
 			for i := 0; i < structuredMemoryLoadLimit; i++ {
 				store.items = append(store.items, StructuredMemoryItem{ID: fmt.Sprint(i), Kind: MemoryKindFact, Topic: "旧话题", Content: "本群的其他讨论", Confidence: 0.99, Importance: 0.99})
@@ -63,7 +63,7 @@ func TestSharedPublicRecallHasReservedCandidatesWithoutMembership(t *testing.T) 
 			}
 			store.requests = nil
 			cfg.CrossGroupMemoryEnabled, cfg.CrossPlatformMemoryEnabled = boolPointer(false), boolPointer(false)
-			r.SetProfiles(ProfileSet{ActiveID: "qq", Profiles: []BotConfig{cfg, source}})
+			r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg, source}})
 			text = r.memoryContext(context.Background(), event, event.RawMessage)
 			if len(store.requests) != 1 || strings.Contains(text, "周五上线") {
 				t.Fatal("sharing continued after disabling the switch")

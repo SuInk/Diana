@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 )
 
 type botMarkersSaver interface {
@@ -109,39 +108,30 @@ func (t *dianaBotMarkersTool) Run(ctx context.Context, input map[string]any) (st
 }
 
 func (r *Runtime) updateMarkedBotID(profileID, actorID, userID string, marked bool) ([]string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	saver, ok := r.configSaver.(botMarkersSaver)
 	if !ok {
 		return nil, fmt.Errorf("当前未接入可确认持久化结果的机器人配置存储")
 	}
-	profile, exists := r.profileConfigs[profileID]
-	if !exists {
-		if r.cfg.ID != profileID {
-			return nil, fmt.Errorf("目标机器人不存在")
+	var ids []string
+	_, err := r.commitProfileChange(profileID, func(profile *BotConfig) error {
+		if profile.OwnerID == "" || profile.OwnerID != actorID {
+			return fmt.Errorf("只有本机主人可以修改机器人标记")
 		}
-		profile = r.cfg
-	}
-	if profile.OwnerID == "" || profile.OwnerID != actorID {
-		return nil, fmt.Errorf("只有本机主人可以修改机器人标记")
-	}
-	ids := append([]string(nil), profile.MarkedBotIDs...)
-	if marked {
-		ids = cleanStrings(append(ids, userID))
-	} else {
-		ids = slices.DeleteFunc(ids, func(id string) bool { return id == userID })
-	}
-	if err := saver.SaveMarkedBotIDs(profileID, ids); err != nil {
+		if ids == nil {
+			ids = append([]string(nil), profile.MarkedBotIDs...)
+			if marked {
+				ids = cleanStrings(append(ids, userID))
+			} else {
+				ids = slices.DeleteFunc(ids, func(id string) bool { return id == userID })
+			}
+		}
+		profile.MarkedBotIDs = append([]string(nil), ids...)
+		return nil
+	}, func(BotConfig) error {
+		return saver.SaveMarkedBotIDs(profileID, ids)
+	})
+	if err != nil {
 		return nil, err
 	}
-	profile.MarkedBotIDs = append([]string(nil), ids...)
-	if r.profileConfigs == nil {
-		r.profileConfigs = map[string]BotConfig{}
-	}
-	r.profileConfigs[profileID] = profile
-	if r.cfg.ID == profileID {
-		r.cfg.MarkedBotIDs = append([]string(nil), ids...)
-	}
-	r.updatedAt = time.Now()
 	return ids, nil
 }

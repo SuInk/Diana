@@ -23,7 +23,6 @@ func personaScopeProfiles() (assistant.BotConfig, assistant.BotConfig, stubBotPr
 		GroupTriggers: []string{"贝塔"}, WelcomeMessage: "贝塔的欢迎语",
 	}
 	return alpha, beta, stubBotProfileSource{set: assistant.ProfileSet{
-		ActiveID: alpha.ID,
 		Profiles: []assistant.BotConfig{alpha, beta},
 	}}
 }

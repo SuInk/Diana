@@ -512,3 +512,16 @@ func TestPrivateAdmissionDoesNotAffectGroupReplies(t *testing.T) {
 		t.Fatal("私聊准入不该影响群聊响应")
 	}
 }
+
+// Telegram 主人填用户名时，私聊准入要按统一的主人判定放行，而不是拿数字 ID 比对用户名。
+func TestPrivateAdmissionRecognizesTelegramUsernameOwner(t *testing.T) {
+	cfg := BotConfig{Platform: PlatformTelegram, OwnerID: "@owneruser", PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionOwnerOnly}}
+	owner := MessageEvent{Kind: EventKindPrivate, Platform: PlatformTelegram, UserID: "70001", SenderUsername: "owneruser"}
+	if !privateAdmissionAllowsConfig(cfg, owner) {
+		t.Fatal("用户名主人在 owner_only 下被挡")
+	}
+	stranger := MessageEvent{Kind: EventKindPrivate, Platform: PlatformTelegram, UserID: "42", SenderUsername: "someone"}
+	if privateAdmissionAllowsConfig(cfg, stranger) {
+		t.Fatal("陌生人在 owner_only 下被放行")
+	}
+}

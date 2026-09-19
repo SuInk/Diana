@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/netguard"
+	"github.com/SuInk/diana/model/version"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -314,16 +316,65 @@ func (t *MCPTool) Run(ctx context.Context, input map[string]any) (string, error)
 	return t.client.CallTool(ctx, t.rawName, input)
 }
 
+// MCPClient 持有一个 MCP 服务的会话。服务进程退出或远程会话失效后，下一次调用会先
+// 重新连接再发请求；已经发出、中途断掉的那次调用不自动重试——服务可能已经执行了
+// 一半，重发会把非幂等的操作做两遍。
 type MCPClient struct {
-	name        string
-	session     *mcpsdk.ClientSession
-	stderr      *lockedBuffer
-	toolTimeout time.Duration
-	closeOnce   sync.Once
-	closeErr    error
+	name           string
+	config         mcpServerConfig
+	workDir        string
+	toolTimeout    time.Duration
+	startupTimeout time.Duration
+
+	mu            sync.Mutex
+	current       *mcpSession
+	closed        bool
+	lastReconnect time.Time
+	reconnectErr  error
 }
 
+type mcpSession struct {
+	session *mcpsdk.ClientSession
+	stderr  *lockedBuffer
+	done    chan struct{}
+}
+
+func (s *mcpSession) alive() bool {
+	select {
+	case <-s.done:
+		return false
+	default:
+		return true
+	}
+}
+
+// mcpReconnectBackoff 限制连续重连：服务一启动就崩时，不能每次调用都卡一个启动超时。
+const mcpReconnectBackoff = 5 * time.Second
+
 func startMCPClient(ctx context.Context, name string, cfg mcpServerConfig, workDir string, toolTimeout time.Duration) (*MCPClient, error) {
+	startupTimeout := time.Duration(DefaultMCPStartupTimeoutMS) * time.Millisecond
+	if deadline, ok := ctx.Deadline(); ok {
+		startupTimeout = time.Until(deadline)
+	}
+	client := &MCPClient{name: name, config: cfg, workDir: workDir, toolTimeout: toolTimeout, startupTimeout: startupTimeout}
+	session, err := connectMCPSession(ctx, name, cfg, workDir, toolTimeout)
+	if err != nil {
+		return nil, err
+	}
+	client.current = session
+	return client, nil
+}
+
+// mcpClientVersion 在握手里报出 Diana 的版本。以前写死成 0.5.0，服务端日志和兼容判断
+// 看到的一直是一个早已不存在的版本。发布时 VERSION 必须与标签一致，所以源码基线可信。
+func mcpClientVersion() string {
+	if source := strings.TrimPrefix(version.Source(), "v"); source != "" {
+		return source
+	}
+	return "0.0.0"
+}
+
+func connectMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workDir string, toolTimeout time.Duration) (*mcpSession, error) {
 	var (
 		transport mcpsdk.Transport
 		stderr    *lockedBuffer
@@ -358,24 +409,88 @@ func startMCPClient(ctx context.Context, name string, cfg mcpServerConfig, workD
 			DisableStandaloneSSE: true,
 		}
 	}
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "diana-agent", Version: "0.5.0"}, &mcpsdk.ClientOptions{
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "diana-agent", Version: mcpClientVersion()}, &mcpsdk.ClientOptions{
 		Capabilities: &mcpsdk.ClientCapabilities{},
 	})
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		return nil, withMCPStderr(fmt.Errorf("mcp server %q connect failed: %w", name, err), stderr)
 	}
-	return &MCPClient{name: name, session: session, stderr: stderr, toolTimeout: toolTimeout}, nil
+	state := &mcpSession{session: session, stderr: stderr, done: make(chan struct{})}
+	go func() {
+		defer recoverGoroutinePanic("mcp_session_watcher")
+		_ = session.Wait()
+		close(state.done)
+	}()
+	return state, nil
+}
+
+// activeSession 返回可用会话；上一个会话已经断开时先重连。
+func (c *MCPClient) activeSession(ctx context.Context) (*mcpSession, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, fmt.Errorf("mcp server %q client is closed", c.name)
+	}
+	if c.current != nil && c.current.alive() {
+		return c.current, nil
+	}
+	if c.current != nil {
+		closeMCPSessionAsync(c.current)
+		c.current = nil
+	}
+	if c.reconnectErr != nil && time.Since(c.lastReconnect) < mcpReconnectBackoff {
+		return nil, c.reconnectErr
+	}
+	startupTimeout := c.startupTimeout
+	if startupTimeout <= 0 {
+		startupTimeout = time.Duration(DefaultMCPStartupTimeoutMS) * time.Millisecond
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	c.lastReconnect = time.Now()
+	session, err := connectMCPSession(connectCtx, c.name, c.config, c.workDir, c.toolTimeout)
+	if err != nil {
+		c.reconnectErr = fmt.Errorf("mcp server %q reconnect failed: %w", c.name, err)
+		return nil, c.reconnectErr
+	}
+	c.reconnectErr = nil
+	c.current = session
+	return session, nil
+}
+
+// dropSession 把断掉的会话作废，下一次调用重连。只作废仍是当前的那一个，
+// 避免把别的调用刚重连好的会话关掉。
+func (c *MCPClient) dropSession(state *mcpSession) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current == state {
+		closeMCPSessionAsync(state)
+		c.current = nil
+	}
+}
+
+// closeMCPSessionAsync 在后台关掉已经断开的会话。关闭 stdio 会话要等子进程退出，
+// 最长 TerminateDuration，不能让下一次调用在锁里陪着等。
+func closeMCPSessionAsync(state *mcpSession) {
+	go func() {
+		defer recoverGoroutinePanic("mcp_session_close")
+		_ = state.session.Close()
+	}()
 }
 
 func (c *MCPClient) ListTools(ctx context.Context) ([]mcpToolInfo, error) {
+	state, err := c.activeSession(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var all []mcpToolInfo
 	var cursor string
 	for {
 		params := &mcpsdk.ListToolsParams{Cursor: cursor}
-		result, err := c.session.ListTools(ctx, params)
+		result, err := state.session.ListTools(ctx, params)
 		if err != nil {
-			return nil, withMCPStderr(err, c.stderr)
+			return nil, withMCPStderr(err, state.stderr)
 		}
 		for _, tool := range result.Tools {
 			if tool == nil || strings.TrimSpace(tool.Name) == "" {
@@ -401,27 +516,53 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[str
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	result, err := c.session.CallTool(callCtx, &mcpsdk.CallToolParams{Name: name, Arguments: arguments})
+	state, err := c.activeSession(callCtx)
 	if err != nil {
-		return "", withMCPStderr(fmt.Errorf("mcp server %q tools/call %q failed: %w", c.name, name, err), c.stderr)
+		return "", err
 	}
-	output, resultErr := formatSDKMCPToolResult(result)
-	if resultErr != nil {
-		return output, resultErr
+	mark := state.stderr.written()
+	result, err := state.session.CallTool(callCtx, &mcpsdk.CallToolParams{Name: name, Arguments: arguments})
+	if err != nil {
+		// 传输层断开（进程退出、连接被关）时作废会话，下一次调用重连。服务端返回的
+		// JSON-RPC 错误不属于这一类，会话照常复用。
+		if mcpTransportClosed(err) || !state.alive() {
+			c.dropSession(state)
+		}
+		return "", withMCPStderrSince(fmt.Errorf("mcp server %q tools/call %q failed: %w", c.name, name, err), state.stderr, mark)
 	}
-	return output, nil
+	return formatSDKMCPToolResult(result)
+}
+
+func mcpTransportClosed(err error) bool {
+	return errors.Is(err, mcpsdk.ErrConnectionClosed) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func (c *MCPClient) Close() error {
 	if c == nil {
 		return nil
 	}
-	c.closeOnce.Do(func() {
-		if c.session != nil {
-			c.closeErr = c.session.Close()
-		}
-	})
-	return c.closeErr
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	if c.current == nil {
+		return nil
+	}
+	err := c.current.session.Close()
+	c.current = nil
+	return err
+}
+
+// mcpInlineBinaryLimit 之内的二进制内容也不内联：工具输出进的是模型上下文，base64 只会
+// 占满字数预算，模型读不出图片或音频。这里只留类型和大小，让模型知道服务返回了什么。
+func describeMCPBinaryContent(kind, mimeType string, size int) string {
+	mimeType = strings.TrimSpace(mimeType)
+	if mimeType == "" {
+		mimeType = "未知类型"
+	}
+	return fmt.Sprintf("[MCP 返回了%s（%s，%d 字节），二进制内容未放入文本结果]", kind, mimeType, size)
 }
 
 func formatSDKMCPToolResult(result *mcpsdk.CallToolResult) (string, error) {
@@ -430,9 +571,21 @@ func formatSDKMCPToolResult(result *mcpsdk.CallToolResult) (string, error) {
 	}
 	var parts []string
 	for _, content := range result.Content {
-		if textContent, ok := content.(*mcpsdk.TextContent); ok {
-			parts = append(parts, textContent.Text)
+		switch typed := content.(type) {
+		case *mcpsdk.TextContent:
+			parts = append(parts, typed.Text)
 			continue
+		case *mcpsdk.ImageContent:
+			parts = append(parts, describeMCPBinaryContent("图片", typed.MIMEType, len(typed.Data)))
+			continue
+		case *mcpsdk.AudioContent:
+			parts = append(parts, describeMCPBinaryContent("音频", typed.MIMEType, len(typed.Data)))
+			continue
+		case *mcpsdk.EmbeddedResource:
+			if typed.Resource != nil && len(typed.Resource.Blob) > 0 {
+				parts = append(parts, describeMCPBinaryContent("资源 "+typed.Resource.URI, typed.Resource.MIMEType, len(typed.Resource.Blob)))
+				continue
+			}
 		}
 		body, err := content.MarshalJSON()
 		if err == nil {
@@ -458,16 +611,22 @@ func formatSDKMCPToolResult(result *mcpsdk.CallToolResult) (string, error) {
 }
 
 type lockedBuffer struct {
-	mu   sync.Mutex
-	data []byte
+	mu    sync.Mutex
+	data  []byte
+	total int64
 }
 
 const maxMCPStderrBytes = 64 << 10
+
+// maxReportedMCPStderrBytes 是一次报错里附带的 stderr 上限。报错会进模型上下文，
+// 带上整个进程生命周期累积的 64KB 只是在浪费预算。
+const maxReportedMCPStderrBytes = 4 << 10
 
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	written := len(p)
+	b.total += int64(written)
 	if len(p) >= maxMCPStderrBytes {
 		b.data = append(b.data[:0], p[len(p)-maxMCPStderrBytes:]...)
 		return written, nil
@@ -489,10 +648,48 @@ func (b *lockedBuffer) String() string {
 	return string(b.data)
 }
 
+// written 返回累计写入的字节数，用作「这次调用之后新增了哪些」的起点。
+func (b *lockedBuffer) written() int64 {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.total
+}
+
+// since 返回从 mark 之后写入、仍留在缓冲区里的内容。
+func (b *lockedBuffer) since(mark int64) string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	start := b.total - int64(len(b.data))
+	if mark <= start {
+		return string(b.data)
+	}
+	if mark >= b.total {
+		return ""
+	}
+	return string(b.data[mark-start:])
+}
+
 func withMCPStderr(err error, stderr *lockedBuffer) error {
-	detail := strings.TrimSpace(stderr.String())
+	return appendMCPStderr(err, stderr.String())
+}
+
+func withMCPStderrSince(err error, stderr *lockedBuffer, mark int64) error {
+	return appendMCPStderr(err, stderr.since(mark))
+}
+
+func appendMCPStderr(err error, detail string) error {
+	detail = strings.TrimSpace(detail)
 	if detail == "" {
 		return err
+	}
+	if len(detail) > maxReportedMCPStderrBytes {
+		detail = "…" + strings.ToValidUTF8(detail[len(detail)-maxReportedMCPStderrBytes:], "")
 	}
 	return fmt.Errorf("%w: %s", err, detail)
 }

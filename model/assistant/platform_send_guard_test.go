@@ -21,16 +21,16 @@ func TestPluginDeliveryUsesTargetPlatform(t *testing.T) {
 			r := NewRuntime(BotConfig{Platform: PlatformOneBotV11}, multi, NewPluginManager(), nil, nil, nil, nil)
 			event := MessageEvent{Kind: EventKindGroup, ProfileID: "target", Platform: platform, GroupID: "-100200400", UserID: "42", SelfID: "99"}
 			response := PluginResponse{ForwardMessages: []OutgoingMessage{{Text: "ranking"}, {Text: "details", ImageURLs: []string{"https://example.com/image.png"}}}}
-			if err := r.sendForwardPluginResponse(context.Background(), event, response, r.Config()); err != nil {
+			if err := r.sendForwardPluginResponse(context.Background(), event, response, r.ProfileConfig("")); err != nil {
 				t.Fatal(err)
 			}
 			if err := r.sendDirectPluginResponse(context.Background(), event, "video", nil, []string{"https://example.com/video.mp4"}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := r.sendNestedForwardPluginResponse(context.Background(), event, response, "summary", r.Config()); err != nil {
+			if _, err := r.sendNestedForwardPluginResponse(context.Background(), event, response, "summary", r.ProfileConfig("")); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := r.sendRealForwardMessages(context.Background(), event, response.ForwardMessages, r.Config()); err == nil {
+			if _, err := r.sendRealForwardMessages(context.Background(), event, response.ForwardMessages, r.ProfileConfig("")); err == nil {
 				t.Fatal("unsupported raw forward accepted")
 			}
 			if err := r.send(context.Background(), event, "next reply"); err != nil {

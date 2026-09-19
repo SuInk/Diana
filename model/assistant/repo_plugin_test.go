@@ -279,55 +279,57 @@ func TestExtractRepoArchiveWhitelistAndSafety(t *testing.T) {
 	}
 }
 
-// repoPluginTestServer 在本地起一个假 GitHub：raw 文件按路径提供，
-// tar.gz 归档按插件内容现场打包。
+// testRepoPluginCommit 是假 GitHub 归档 pax 头里的提交 SHA。
+const testRepoPluginCommit = "0123456789abcdef0123456789abcdef01234567"
+
+// repoPluginTestArchive 按 GitHub codeload 的形态打一个 tar.gz：第一层是
+// owner-repo-ref/ 目录，pax 全局头的 comment 字段写着提交 SHA。
+func repoPluginTestArchive(t *testing.T, root, commit string, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if commit != "" {
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": commit}, Format: tar.FormatPAX}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range files {
+		header := &tar.Header{Name: root + "/" + name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// repoPluginTestServer 在本地起一个假 GitHub，只提供 codeload 归档：
+// 安装器从同一份归档里读清单、入口和文件。
 func repoPluginTestServer(t *testing.T, manifest map[string]any, files map[string]string, ref string) *httptest.Server {
 	t.Helper()
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
+	all := map[string]string{"diana.plugin.json": string(manifestJSON)}
+	for name, body := range files {
+		all[name] = body
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/")
-		parts := strings.SplitN(path, "/", 4)
+		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 4)
 		if len(parts) == 4 && parts[2] == "tar.gz" && parts[3] == ref {
-			var buf bytes.Buffer
-			gz := gzip.NewWriter(&buf)
-			tw := tar.NewWriter(gz)
-			root := parts[0] + "-" + parts[1] + "-" + ref
-			for name, body := range files {
-				header := &tar.Header{Name: root + "/" + name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}
-				if err := tw.WriteHeader(header); err != nil {
-					t.Error(err)
-					return
-				}
-				if _, err := tw.Write([]byte(body)); err != nil {
-					t.Error(err)
-					return
-				}
-			}
-			if err := tw.Close(); err != nil {
-				t.Error(err)
-				return
-			}
-			if err := gz.Close(); err != nil {
-				t.Error(err)
-				return
-			}
 			w.Header().Set("Content-Type", "application/gzip")
-			_, _ = w.Write(buf.Bytes())
+			_, _ = w.Write(repoPluginTestArchive(t, parts[0]+"-"+parts[1]+"-"+ref, testRepoPluginCommit, all))
 			return
-		}
-		if len(parts) == 4 && parts[2] == ref {
-			rel := parts[3]
-			if rel == "diana.plugin.json" {
-				_, _ = w.Write(manifestJSON)
-				return
-			}
-			if body, ok := files[rel]; ok {
-				_, _ = w.Write([]byte(body))
-				return
-			}
 		}
 		http.NotFound(w, r)
 	}))
@@ -354,7 +356,6 @@ func testManifestMap(mutate func(map[string]any)) map[string]any {
 func testInstaller(t *testing.T, server *httptest.Server, dataDir string) *RepoPluginInstaller {
 	t.Helper()
 	installer := NewRepoPluginInstaller(dataDir, server.Client())
-	installer.RawBase = server.URL
 	installer.ArchiveBase = server.URL
 	return installer
 }
@@ -443,7 +444,7 @@ func TestRepoPluginInstallerInstallRoundTrip(t *testing.T) {
 	}, "HEAD")
 	installer := testInstaller(t, server, dataDir)
 
-	plugin, source, err := installer.Install(context.Background(), "github.com/SuInk/diana-plugin-hello")
+	plugin, source, err := installer.Install(context.Background(), "github.com/SuInk/diana-plugin-hello", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +488,7 @@ func TestRepoPluginInstallerInstallTagVersionMismatch(t *testing.T) {
 	skill := "---\nname: h\ndescription: d\n---\n"
 	server := repoPluginTestServer(t, testManifestMap(nil), map[string]string{"SKILL.md": skill}, "v2.0.0")
 	installer := testInstaller(t, server, t.TempDir())
-	_, _, err := installer.Install(context.Background(), "github.com/SuInk/diana-plugin-hello/tree/v2.0.0")
+	_, _, err := installer.Install(context.Background(), "github.com/SuInk/diana-plugin-hello/tree/v2.0.0", "")
 	if !errors.Is(err, ErrRepoPluginFormat) {
 		t.Fatalf("err = %v, 想要 ErrRepoPluginFormat", err)
 	}
@@ -572,5 +573,48 @@ func TestPluginManagerUnregisterPluginKeepsBuiltIn(t *testing.T) {
 	manager := NewPluginManager(NewStatusCommandPlugin())
 	if err := manager.UnregisterPlugin(statusCommandPluginID); err == nil {
 		t.Fatal("内置插件不能通过 UnregisterPlugin 摘除")
+	}
+}
+
+// 归档里读不出提交就无从锁定版本，宁可拒绝也不装一个说不清是哪一版的插件。
+func TestRepoPluginInstallerRejectsArchiveWithoutCommit(t *testing.T) {
+	manifest, _ := json.Marshal(testManifestMap(nil))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(repoPluginTestArchive(t, "SuInk-diana-plugin-hello-HEAD", "", map[string]string{
+			"diana.plugin.json": string(manifest),
+			"SKILL.md":          "---\nname: hello\ndescription: 示例插件\n---\n\n回复问候。",
+		}))
+	}))
+	t.Cleanup(server.Close)
+	_, err := testInstaller(t, server, t.TempDir()).Preview(context.Background(), "github.com/SuInk/diana-plugin-hello")
+	if !errors.Is(err, ErrRepoPluginCommit) {
+		t.Fatalf("err = %v, 想要 ErrRepoPluginCommit", err)
+	}
+}
+
+// 第三方插件的说明标成第三方、带上出处，并且限制长度，不会以「插件事实结果」的名义进对话。
+func TestRepoPluginContextIsMarkedThirdPartyAndBounded(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nname: hello\ndescription: 示例\n---\n" + strings.Repeat("长", repoPluginMaxContextRunes+500)
+	if err := os.WriteFile(filepath.Join(dir, RepoPluginEntryFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plugin := NewRepoPlugin(dir, RepoPluginSource{URL: "https://github.com/a/b"}, PluginManifest{ID: "a.b", Name: "示例"})
+	resp, err := plugin.Handle(context.Background(), PluginRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || !resp.ThirdParty || !strings.Contains(resp.Context, "https://github.com/a/b") || !strings.Contains(resp.Context, "已省略") {
+		t.Fatalf("resp = %+v", resp)
+	}
+	if runes := len([]rune(resp.Context)); runes > repoPluginMaxContextRunes+200 {
+		t.Fatalf("注入长度 %d 超限", runes)
+	}
+	messages := pluginContextMessages(context.Background(), []PluginResponse{*resp})
+	if len(messages) != 1 || strings.Contains(messages[0].Content, "插件事实结果") || !strings.Contains(messages[0].Content, "第三方插件说明") {
+		t.Fatalf("message = %q", messages[0].Content[:80])
+	}
+	if hasFactualPluginResponse([]PluginResponse{*resp}) {
+		t.Fatal("第三方插件说明不该阻止静默和发送前审核")
 	}
 }

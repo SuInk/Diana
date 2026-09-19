@@ -481,7 +481,7 @@ func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForSignal(t, first.started)
-	if err := runtime.UpdateConfig(context.Background(), cfg, second); err != nil {
+	if err := runtime.ApplyProfiles(context.Background(), NewProfileSet(cfg), second); err != nil {
 		t.Fatal(err)
 	}
 	waitForSignal(t, second.started)
@@ -510,10 +510,10 @@ func TestRuntimeUpdateConfigInPlaceKeepsChannelConnected(t *testing.T) {
 
 	next := cfg
 	next.SystemPrompt = "after"
-	if err := runtime.UpdateConfigInPlace(next); err != nil {
+	if err := runtime.ApplyProfiles(context.Background(), NewProfileSet(next), nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := runtime.Config().SystemPrompt; got != "after" {
+	if got := runtime.ProfileConfig("").SystemPrompt; got != "after" {
 		t.Fatalf("system prompt = %q", got)
 	}
 	select {
@@ -1303,7 +1303,7 @@ func TestDianaConfigToolReturnsRedactedBotConfigAndSkills(t *testing.T) {
 		AgentMCPConfigPath: "/tmp/diana/.mcp.json",
 	}, nilChannel{}, NewDefaultPluginManager(), store, nil, nil, nil)
 
-	got, err := newDianaConfigTool(runtime).Run(context.Background(), map[string]any{"section": "all"})
+	got, err := newDianaConfigTool(runtime, MessageEvent{}).Run(context.Background(), map[string]any{"section": "all"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1532,7 +1532,7 @@ func TestRuntimeSendsRecallSummaryWithFlatForgedForward(t *testing.T) {
 		{Text: "第一条原消息", ForwardName: "Alice", ForwardUIN: "10001", ForwardTime: 100},
 		{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": "/tmp/recalled.jpg", "cached_mime": "image/jpeg", "url": "https://example.com/recalled.jpg"}}}, ForwardName: "Bob", ForwardUIN: "10002", ForwardTime: 200},
 	}}
-	if _, err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近24小时共有两条撤回消息。", runtime.Config()); err != nil {
+	if _, err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近24小时共有两条撤回消息。", runtime.ProfileConfig("")); err != nil {
 		t.Fatal(err)
 	}
 	if len(channel.calls) != 1 || channel.calls[0].action != "send_group_forward_msg" {
@@ -1563,7 +1563,7 @@ func TestRuntimeFallsBackToTextRecallForwardWhenMediaForwardFails(t *testing.T) 
 		ForwardUIN:  "10001",
 	}}}
 
-	if _, err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近有一条图片撤回。", runtime.Config()); err != nil {
+	if _, err := runtime.sendNestedForwardPluginResponse(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "123456", SelfID: "42"}, resp, "最近有一条图片撤回。", runtime.ProfileConfig("")); err != nil {
 		t.Fatal(err)
 	}
 	forwardCalls := recordedCallsByAction(channel.calls, "send_group_forward_msg")

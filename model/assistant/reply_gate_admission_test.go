@@ -153,3 +153,40 @@ func TestBlacklistModeIgnoresAllowedUsers(t *testing.T) {
 		t.Fatal("黑名单模式下不该按白名单拦人")
 	}
 }
+
+// 遗留的 DisabledUsers 并进屏蔽名单：原有屏蔽保留，主人和机器人自己的账号不迁。
+func TestMigrateDisabledUsersIntoReplyGate(t *testing.T) {
+	cfg := BotConfig{
+		OwnerID: "owner", BotAccount: "bot",
+		DisabledUsers: []string{"bad", "owner", "bot", " bad "},
+		ReplyGate:     &ReplyGate{BlockedUsers: []string{"old"}},
+	}.WithDefaults()
+	if len(cfg.DisabledUsers) != 0 {
+		t.Fatalf("迁移后不应再留遗留名单：%v", cfg.DisabledUsers)
+	}
+	if cfg.ReplyGate == nil || !slices.Equal(cfg.ReplyGate.BlockedUsers, []string{"old", "bad"}) {
+		t.Fatalf("屏蔽名单 = %+v", cfg.ReplyGate)
+	}
+	if again := cfg.WithDefaults(); !slices.Equal(again.ReplyGate.BlockedUsers, cfg.ReplyGate.BlockedUsers) {
+		t.Fatalf("迁移不幂等：%v", again.ReplyGate.BlockedUsers)
+	}
+}
+
+// 聊天里屏蔽的人，换成发链接、触发插件也拿不到回复。
+func TestChatBlockedUserCannotReachResolverOrPlugins(t *testing.T) {
+	r := NewRuntime(BotConfig{OwnerID: "owner", ReplyGate: &ReplyGate{BlockedUsers: []string{"bad"}}}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	allowed := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "someone"}
+	if !r.shouldHandleResolver(allowed, "https://x.com/a/status/1") {
+		t.Skip("默认插件配置下链接解析未启用，无法验证这条入口")
+	}
+	blocked := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "bad"}
+	if !r.userBlocked(blocked) {
+		t.Fatal("屏蔽名单里的人没被认出来")
+	}
+	if r.shouldHandleResolver(blocked, "https://x.com/a/status/1") || r.shouldHandlePlugin(blocked, "https://x.com/a/status/1") {
+		t.Fatal("被屏蔽的人仍能触发链接解析或插件")
+	}
+	if r.userBlocked(MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "owner"}) {
+		t.Fatal("主人被自己的屏蔽名单挡住")
+	}
+}

@@ -148,7 +148,7 @@ func TestLiveReplyAuditJudgesPurposeOfDenseExchange(t *testing.T) {
 			wrong := 0
 			for i := 0; i < samples; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-				decision, err := r.runReplyAudit(ctx, event, tc.current, tc.reply, r.Config(), evidence, need)
+				decision, err := r.runReplyAudit(ctx, event, tc.current, tc.reply, r.ProfileConfig(""), evidence, need)
 				cancel()
 				if err != nil {
 					t.Fatalf("样本 %d 审核失败：%v", i+1, err)

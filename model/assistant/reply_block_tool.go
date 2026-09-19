@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/SuInk/diana/model/applog"
 )
@@ -215,39 +214,22 @@ func replyBlockScopeWord(scope string) string {
 
 // saveBotBlockedUsers 落库机器人级屏蔽名单，成功后同步运行时里的那几份配置。
 func (r *Runtime) saveBotBlockedUsers(expected BotConfig, actorID string, userIDs []string) error {
-	r.modelConfigMu.Lock()
-	defer r.modelConfigMu.Unlock()
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	saver, ok := r.configSaver.(replyBlockSaver)
 	if !ok {
 		return fmt.Errorf("配置存储不支持机器人级屏蔽名单更新")
 	}
-	profile, exists := r.profileConfigs[expected.ID]
-	if !exists {
-		if r.cfg.ID != expected.ID {
-			return fmt.Errorf("目标机器人不存在")
+	_, err := r.commitProfileChange(expected.ID, func(profile *BotConfig) error {
+		// 保存前再核一次主人：工具入口已经判过一遍，这里防的是以后有别的调用方接进来。
+		if owner := strings.TrimSpace(profile.OwnerID); owner == "" || owner != strings.TrimSpace(actorID) {
+			return fmt.Errorf("只有机器人主人可以修改机器人级屏蔽名单")
 		}
-		profile = r.cfg
-	}
-	// 保存前再核一次主人：工具入口已经判过一遍，这里防的是以后有别的调用方接进来。
-	if owner := strings.TrimSpace(profile.OwnerID); owner == "" || owner != strings.TrimSpace(actorID) {
-		return fmt.Errorf("只有机器人主人可以修改机器人级屏蔽名单")
-	}
-	if err := saver.SaveBlockedUsers(expected.ID, userIDs); err != nil {
-		return err
-	}
-	gate := profile.ReplyGate.WithBlockedUsers(userIDs)
-	profile.ReplyGate = gate
-	if r.profileConfigs == nil {
-		r.profileConfigs = map[string]BotConfig{}
-	}
-	r.profileConfigs[expected.ID] = profile
-	if r.cfg.ID == expected.ID {
-		r.cfg.ReplyGate = gate.Clone()
-	}
-	r.updatedAt = time.Now()
-	return nil
+		gate := profile.ReplyGate.WithBlockedUsers(userIDs)
+		profile.ReplyGate = gate
+		return nil
+	}, func(BotConfig) error {
+		return saver.SaveBlockedUsers(expected.ID, userIDs)
+	})
+	return err
 }
 
 func (r *Runtime) recordReplyBlockChanged(ctx context.Context, event MessageEvent, base BotConfig, role, scope, op, target string, blocked []string) {

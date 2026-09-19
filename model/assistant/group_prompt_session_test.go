@@ -23,13 +23,13 @@ func TestGroupHistoryDoesNotShrinkAtLegacyMessageThreshold(t *testing.T) {
 		r.remember(item)
 	}
 	e.MessageID = "current"
-	if history := r.promptContextHistory(e, r.Config()); len(history) != 12 {
+	if history := r.promptContextHistory(e, r.effectiveConfigForEvent(e)); len(history) != 12 {
 		t.Fatalf("warm history prematurely shrank to %d", len(history))
 	}
 	if err := r.clearSessionHistory(e); err != nil {
 		t.Fatal(err)
 	}
-	if history := r.promptContextHistory(e, r.Config()); len(history) != 0 {
+	if history := r.promptContextHistory(e, r.effectiveConfigForEvent(e)); len(history) != 0 {
 		t.Fatal("cleared group restored history")
 	}
 }
@@ -61,10 +61,10 @@ func TestGroupPromptRejectsForeignBotWithoutContextNamespace(t *testing.T) {
 	second.ProfileID = "bot-two"
 	second.MessageID = "current"
 	second.Time = 2
-	if history := r.promptContextHistory(second, r.Config()); len(history) != 0 {
+	if history := r.promptContextHistory(second, r.effectiveConfigForEvent(second)); len(history) != 0 {
 		t.Fatal("foreign profile leaked through short history fallback")
 	}
-	stable, _ := r.stableGroupHistory(context.Background(), second, r.Config(), []MessageEvent{first}, true, nil)
+	stable, _ := r.stableGroupHistory(context.Background(), second, r.effectiveConfigForEvent(second), []MessageEvent{first}, true, nil)
 	if len(stable) != 0 {
 		t.Fatal("foreign profile persisted")
 	}
@@ -191,7 +191,7 @@ func TestGroupPromptLateHistoryAppendsAndDeletedOrEditedHistoryInvalidates(t *te
 	b := makeEvent("b", "second", 60)
 	late := makeEvent("late", "backfill", 40)
 	project := func(items ...MessageEvent) []llm.Message {
-		out, _ := r.stableGroupHistory(context.Background(), e, r.Config(), items, true, nil)
+		out, _ := r.stableGroupHistory(context.Background(), e, r.effectiveConfigForEvent(e), items, true, nil)
 		return out
 	}
 	first := project(a, b)

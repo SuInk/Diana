@@ -12,7 +12,7 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 	r80, s90 := 80, 90
 	base := BotConfig{ID: "a", OwnerID: "owner", Participation: &ParticipationPreferences{Desire: 75, RelevanceLevel: "high", ChatLevel: "always", CooldownSeconds: 120, RelevanceThreshold: &r80, SubstanceThreshold: &s90}, ProactiveReplyThreshold: .93}
 	r := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	r.SetProfiles(ProfileSet{ActiveID: "a", Profiles: []BotConfig{base, {ID: "b", OwnerID: "other", Participation: &ParticipationPreferences{Desire: 100, CooldownSeconds: 30}}}})
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{base, {ID: "b", OwnerID: "other", Participation: &ParticipationPreferences{Desire: 100, CooldownSeconds: 30}}}})
 	store := &testWritableGroupConfigStore{}
 	r.SetGroupConfigStore(store)
 	event := MessageEvent{ProfileID: "a", Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "g", UserID: "owner"}
@@ -37,7 +37,7 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 	if actual.Desire != 0 || actual.CooldownSeconds != 120 || actual.relevanceThreshold() != 80 || actual.substanceThreshold() != 90 {
 		t.Fatalf("effective preferences wrong: %+v", actual)
 	}
-	if r.Config().Participation.Desire != 75 || r.effectiveConfigForEvent(MessageEvent{ProfileID: "b"}).Participation.Desire != 100 {
+	if r.ProfileConfig("a").Participation.Desire != 75 || r.effectiveConfigForEvent(MessageEvent{ProfileID: "b"}).Participation.Desire != 100 {
 		t.Fatal("group update changed robot defaults")
 	}
 	if !(proactiveReplyDecision{ShouldReply: true, Category: "bot_related", DirectedAtBot: true}).allows(0, r.effectiveConfigForEvent(event).chatInSettings()) {
@@ -101,7 +101,7 @@ func TestBotConfigRejectsInvalidFieldsAndPersistenceFailure(t *testing.T) {
 func TestGroupToolsAndSkillsDoNotExposeOldMixedTool(t *testing.T) {
 	r := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "g", UserID: "member"}
-	registry, err := r.newAgentRegistry(context.Background(), r.Config(), event, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "member"), newDianaGroupTool(r, event), newDianaBotParticipationTool(r, event))
+	registry, err := r.newAgentRegistry(context.Background(), r.ProfileConfig("a"), event, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "member"), newDianaGroupTool(r, event), newDianaBotParticipationTool(r, event))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,13 +146,13 @@ func TestBotConfigOwnerScopeAndFailedSave(t *testing.T) {
 	b := BotConfig{ID: "b", OwnerID: "b-owner", Participation: &ParticipationPreferences{Desire: 50, CooldownSeconds: 90}}
 	saver := &participationToolSaver{cfg: b}
 	r := NewRuntime(a, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
-	r.SetProfiles(ProfileSet{ActiveID: "a", Profiles: []BotConfig{a, b}})
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{a, b}})
 	event := MessageEvent{Kind: EventKindPrivate, ProfileID: "b", UserID: "b-owner"}
 	tool := newDianaBotParticipationTool(r, event)
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "desire_level": "off"}); err != nil {
 		t.Fatal(err)
 	}
-	if r.effectiveConfigForEvent(event).Participation.Desire != 0 || r.Config().Participation.Desire != 75 || saver.cfg.Participation.CooldownSeconds != 90 {
+	if r.effectiveConfigForEvent(event).Participation.Desire != 0 || r.ProfileConfig("a").Participation.Desire != 75 || saver.cfg.Participation.CooldownSeconds != 90 {
 		t.Fatal("bot-scoped configuration update was not isolated")
 	}
 	saver.fail = true

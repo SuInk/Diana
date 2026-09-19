@@ -88,7 +88,7 @@ func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 	if _, err := newTestLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "new"}); err != nil {
 		t.Fatal(err)
 	}
-	if r.Config().ModelRoles["chat"].Model != "new" || r.Config().OwnerID != "@owneruser" {
+	if r.ProfileConfig("").ModelRoles["chat"].Model != "new" || r.ProfileConfig("").OwnerID != "@owneruser" {
 		t.Fatal("model not changed or saved owner was rewritten")
 	}
 	event.SenderUsername = "someone"

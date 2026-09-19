@@ -64,7 +64,7 @@ func TestRuntimeIgnoresLowLevelMemberBeforeReplyDecisionButKeepsHistory(t *testi
 		Enabled:                 true,
 		EnabledSet:              true,
 		MinimumReplyMemberLevel: 10,
-	}, runtime.Config())
+	}, runtime.ProfileConfig(""))
 	runtime.SetGroupConfigStore(store)
 	historyStore := newMemoryMessageHistoryStore()
 	runtime.SetMessageHistoryStore(historyStore)
@@ -102,7 +102,7 @@ func TestRuntimeAllowsLowLevelMemberWhenDirectlyMentioned(t *testing.T) {
 		Enabled:                 true,
 		EnabledSet:              true,
 		MinimumReplyMemberLevel: 50,
-	}, runtime.Config())
+	}, runtime.ProfileConfig(""))
 	runtime.SetGroupConfigStore(store)
 	event := MessageEvent{
 		Kind:        EventKindGroup,
@@ -131,7 +131,7 @@ func TestRuntimeAllowsLowLevelGroupAdministrator(t *testing.T) {
 		Enabled:                 true,
 		EnabledSet:              true,
 		MinimumReplyMemberLevel: 50,
-	}, runtime.Config())
+	}, runtime.ProfileConfig(""))
 	runtime.SetGroupConfigStore(store)
 	event := MessageEvent{
 		Kind:        EventKindGroup,
@@ -160,7 +160,7 @@ func TestRuntimeFallsBackToNapCatWhenSenderLevelIsMissing(t *testing.T) {
 		Enabled:                 true,
 		EnabledSet:              true,
 		MinimumReplyMemberLevel: 10,
-	}, runtime.Config())
+	}, runtime.ProfileConfig(""))
 	runtime.SetGroupConfigStore(store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", MessageID: "lookup-1"}
 
@@ -239,7 +239,7 @@ func TestMessageEventFromEnvelopeKeepsSenderRoleAndLevel(t *testing.T) {
 func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &testWritableGroupConfigStore{}
-	_, _ = store.SaveGroupConfig(GroupConfig{GroupID: "123", Enabled: true, EnabledSet: true, ResponseMode: ResponseModeStandard}, runtime.Config())
+	_, _ = store.SaveGroupConfig(GroupConfig{GroupID: "123", Enabled: true, EnabledSet: true, ResponseMode: ResponseModeStandard}, runtime.ProfileConfig(""))
 	runtime.SetGroupConfigStore(store)
 	tool := newDianaBotParticipationTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"})
 
