@@ -289,7 +289,7 @@ func TestDianaChatHistoryToolCrossGroupSearchRequiresOptInAndKeepsNamespace(t *t
 		t.Fatalf("disabled cross-group search err=%v calls=%d", err, store.calls)
 	}
 
-	enabled := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	enabled := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	enabled.SetMessageHistoryStore(store)
 	raw, err := newDianaChatHistoryTool(enabled, event).Run(context.Background(), map[string]any{
 		"operation": "search", "query": "长期记忆", "scope": "all_groups", "all_time": true,

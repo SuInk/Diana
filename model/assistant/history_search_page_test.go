@@ -135,11 +135,11 @@ func TestHistoryRangeCursorKeepsSameSecondMessages(t *testing.T) {
 }
 
 func TestHistoryAroundCrossGroupRequiresOptInAndUsesSourceSession(t *testing.T) {
-	cfg := BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}
+	cfg := BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}
 	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.SetMessageHistoryStore(newSemanticTimelineStore())
 	r.remember(chatHistoryTextEvent(100, "alice", "Alice", "source", "old evidence"))
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "another-group", Time: 200}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "another-group", UserID: "owner", Time: 200}
 	tool := newDianaChatHistoryTool(r, event)
 	input := map[string]any{"operation": "around", "group_id": "group-1", "message_id": "source"}
 	raw, err := tool.Run(context.Background(), input)
