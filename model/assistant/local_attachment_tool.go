@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
@@ -124,77 +123,48 @@ func (t *dianaLocalAttachmentTool) Run(ctx context.Context, input map[string]any
 		if err != nil {
 			return "", err
 		}
-	} else {
-		platform := NormalizePlatformID(t.event.Platform)
-		if platform != PlatformTelegram && !IsOneBotPlatform(platform) {
-			return "", fmt.Errorf("file attachment sending is unavailable for this platform")
-		}
-		// Send a private snapshot, not a path the command process can change during upload.
-		dir, err := os.MkdirTemp("", "diana-attachment-*")
-		if err != nil {
-			return "", err
-		}
-		defer os.RemoveAll(dir)
-		name := filepath.Base(path)
-		snapshot := filepath.Join(dir, name)
-		if err = os.WriteFile(snapshot, data, 0600); err != nil {
-			return "", err
-		}
-		if platform == PlatformTelegram {
-			err = t.runtime.sendOutgoing(ctx, t.event, OutgoingMessage{Segments: []MessageSegment{{Type: "file", Data: map[string]string{"file": snapshot, "name": name}}}})
-		} else {
-			err = t.runtime.uploadResolverVideoFile(ctx, t.event, resolverVideoUpload{Path: snapshot, Name: name})
-		}
-		if err != nil {
-			return "", err
-		}
+	} else if err := t.runtime.sendFileAttachment(ctx, t.event, filepath.Base(path), data); err != nil {
+		return "", err
 	}
 	return `{"status":"sent","message":"附件已发送到当前会话。"}`, nil
 }
 
 // sendSVGImage 把 SVG 文件经无头浏览器栅格化成 PNG 发到当前会话。
-// 复用 render 工具的页面构造与截图链，净化规则保持一致；截图前不跟随
-// 文件系统状态——数据已经整体读进内存，命令进程改不了它。
-//
-// 产物先落盘成临时文件再投递：Telegram 侧 data URL 只会被当成普通
-// 字符串塞进 JSON，真实 Bot API 不收，必须走 multipart 本地文件上传。
+// 数据已经整体读进内存，命令进程在截图期间改不了它。
 func (t *dianaLocalAttachmentTool) sendSVGImage(ctx context.Context, data []byte) (string, error) {
 	if !t.runtime.sandboxedBrowserEnabled(t.event) {
 		return "", fmt.Errorf("svg 作为图片发送需要先栅格化成 PNG，但「网页渲染」插件没有启用；可以改用 mode=file 直接发送原始 SVG 文件")
 	}
-	page, err := buildRenderPage(renderFormatSVG, string(data), "")
-	if err != nil {
-		return "", fmt.Errorf("%s", renderContentErrorMessage(renderFormatSVG, err))
-	}
-	page, fontFiles, err := prepareRenderFontHTML(ctx, page)
-	if err != nil {
-		return "", fmt.Errorf("字体准备失败：%s", firstLineOf(err.Error()))
-	}
-	cfg := t.runtime.effectiveConfigForEvent(t.event)
-	shot, err := agent.CaptureHTMLScreenshot(ctx, agent.ScreenshotRequest{
-		HTML:         page,
-		WaitForFonts: len(fontFiles) > 0,
-		FontFiles:    fontFiles,
-		Width:        renderImageWidth,
-		Height:       renderImageMaxHeight,
-		Timeout:      time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
-	})
-	if err != nil {
-		return "", fmt.Errorf("svg 渲染失败：%s", firstLineOf(err.Error()))
-	}
-	dir, err := os.MkdirTemp("", "diana-svg-image-*")
+	png, err := t.runtime.renderContentPNG(ctx, t.event, renderFormatSVG, string(data), "")
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(dir)
-	pngPath := filepath.Join(dir, "image.png")
-	if err := os.WriteFile(pngPath, trimRenderScreenshot(shot), 0600); err != nil {
+	if err := t.runtime.sendPNGImage(ctx, t.event, png); err != nil {
 		return "", err
-	}
-	if err := t.runtime.sendOutgoing(ctx, t.event, OutgoingMessage{ImageURLs: []string{pngPath}}); err != nil {
-		return "", fmt.Errorf("发送图片失败：%w", err)
 	}
 	return `{"status":"sent","message":"SVG 已栅格化为 PNG 并发送到当前会话。"}`, nil
+}
+
+// sendFileAttachment 把内存里的数据作为原文件附件发到当前会话。先写成私有
+// 临时快照再上传，发送过程中数据不会再被外部改动。
+func (r *Runtime) sendFileAttachment(ctx context.Context, event MessageEvent, name string, data []byte) error {
+	platform := NormalizePlatformID(event.Platform)
+	if platform != PlatformTelegram && !IsOneBotPlatform(platform) {
+		return fmt.Errorf("file attachment sending is unavailable for this platform")
+	}
+	dir, err := os.MkdirTemp("", "diana-attachment-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	snapshot := filepath.Join(dir, name)
+	if err = os.WriteFile(snapshot, data, 0600); err != nil {
+		return err
+	}
+	if platform == PlatformTelegram {
+		return r.sendOutgoing(ctx, event, OutgoingMessage{Segments: []MessageSegment{{Type: "file", Data: map[string]string{"file": snapshot, "name": name}}}})
+	}
+	return r.uploadResolverVideoFile(ctx, event, resolverVideoUpload{Path: snapshot, Name: name})
 }
 
 func (t *dianaLocalAttachmentTool) ToolResultParts(string) []llm.ContentPart {

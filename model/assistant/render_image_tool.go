@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -132,6 +134,54 @@ func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string
 	result := dianaRenderResult{OK: true, Message: "图片已经发到会话里了。", Format: format}
 	t.record(ctx, result, "")
 	return marshalRenderResult(result), nil
+}
+
+// renderContentPNG 用 render 工具同一套页面构造、净化和截图链把内容画成 PNG。
+// 调用方负责先确认「网页渲染」插件已启用。
+func (r *Runtime) renderContentPNG(ctx context.Context, event MessageEvent, format, content, title string) ([]byte, error) {
+	page, err := buildRenderPage(format, content, title)
+	if err != nil {
+		return nil, fmt.Errorf("%s", renderContentErrorMessage(format, err))
+	}
+	page, fontFiles, err := prepareRenderFontHTML(ctx, page)
+	if err != nil {
+		return nil, fmt.Errorf("字体准备失败：%s", firstLineOf(err.Error()))
+	}
+	cfg := r.effectiveConfigForEvent(event)
+	request := agent.ScreenshotRequest{
+		HTML:         page,
+		WaitForFonts: len(fontFiles) > 0,
+		FontFiles:    fontFiles,
+		Width:        renderImageWidth,
+		Height:       renderImageMaxHeight,
+		Timeout:      time.Duration(cfg.AgentBrowserTimeoutMS) * time.Millisecond,
+	}
+	if format == renderFormatMermaid {
+		request.VirtualTimeBudget = renderMermaidTimeBudget
+	}
+	shot, err := agent.CaptureHTMLScreenshot(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("渲染失败：%s", firstLineOf(err.Error()))
+	}
+	return trimRenderScreenshot(shot), nil
+}
+
+// sendPNGImage 先落盘成临时文件再投递：Telegram 侧 data URL 只会被当成普通
+// 字符串塞进 JSON，真实 Bot API 不收，必须走 multipart 本地文件上传。
+func (r *Runtime) sendPNGImage(ctx context.Context, event MessageEvent, png []byte) error {
+	dir, err := os.MkdirTemp("", "diana-render-image-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	pngPath := filepath.Join(dir, "image.png")
+	if err := os.WriteFile(pngPath, png, 0600); err != nil {
+		return err
+	}
+	if err := r.sendOutgoing(ctx, event, routeOutgoingToEvent(event, OutgoingMessage{ImageURLs: []string{pngPath}})); err != nil {
+		return fmt.Errorf("发送图片失败：%w", err)
+	}
+	return nil
 }
 
 // renderContentErrorMessage 把内容层面的错误说成模型能照着改的话。

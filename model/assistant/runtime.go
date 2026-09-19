@@ -3311,6 +3311,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if _, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 			}
+			// 只有能上传文件的平台才挂：其他平台模型看得到也只能失败。
+			if platform := NormalizePlatformID(event.Platform); platform == PlatformTelegram || IsOneBotPlatform(platform) {
+				if _, settings, enabled := r.pluginWithSettingsForEvent(fileDeliveryPluginID, event); enabled {
+					extraTools = append(extraTools, newDianaFileDeliveryTool(r, event, settings, relationship))
+				}
+			}
 			// 图片溯源同样按插件开关走：反查要把图片上传给第三方图库，不是每个
 			// 群都愿意，插件停用时模型看不到这个工具。
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(imageSourcePluginID, event); enabled {
