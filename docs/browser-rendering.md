@@ -14,25 +14,27 @@
 
 ## Docker
 
-官方运行镜像预装 Chromium、fontconfig 和 Noto CJK 字体，并以 UID 10001 运行 Diana。使用仓库的 `docker-compose.yml` 时已配置专用 seccomp 规则：
+官方运行镜像预装 Chromium、fontconfig 和 Noto CJK 字体，并以 UID 10001 运行 Diana。仓库的 `docker-compose.yml` 默认拉取预构建镜像，已配置专用 seccomp 规则。首次在部署目录执行一键脚本，自动下载 Compose 文件与 `scripts/docker/chromium-seccomp.json` 并启动（需已安装并启动 Docker，含 Compose v2）：
 
 ```sh
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
-使用预构建镜像：
+以后在同一目录更新：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
-docker run -d --name diana --restart unless-stopped \
-  --security-opt seccomp="$PWD/chromium-seccomp.json" \
-  -p 18080:18080 \
-  -v "$PWD/data:/app/data" \
-  -v "$PWD/logs:/app/logs" \
-  ghcr.io/suink/diana:latest
+docker compose pull && docker compose up -d
 ```
 
-已有部署更新镜像后，需要带上上述参数重建容器。配置档必须保存在宿主机，Docker 在创建容器时读取它；它不是挂载给应用的配置文件。旧版尚未包含预装浏览器，需要升级到包含本次改动的镜像。
+从克隆的仓库本地构建：
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+已有 `docker run --name diana` 部署迁移到 Compose 时，先确认 Compose 使用原来的 `data/`、`logs/` 和可选配置文件路径，再停止并删除旧容器（保留宿主机数据目录），以免同名容器冲突。
+
+seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；它不是挂载给应用的配置文件。旧版尚未包含预装浏览器，需要升级到包含浏览器的镜像。
 
 默认 Docker seccomp 会阻止 Chromium 创建其沙箱所需的命名空间，表现为 `Operation not permitted` 或 CDP 启动失败。项目配置保留默认拒绝策略，只在 Moby 默认配置基础上额外允许 `clone`、`setns`、`unshare`。不需要 `--privileged`、`SYS_ADMIN` 或 `seccomp=unconfined`，网页渲染也不添加 `--no-sandbox`。宿主机另有 AppArmor 或用户命名空间禁令时仍需按管理员策略处理，插件探测会显示实际失败原因。
 

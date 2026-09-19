@@ -53,11 +53,11 @@ func newDianaScheduleTool(runtime *Runtime, event MessageEvent) *dianaScheduleTo
 }
 
 func (t *dianaScheduleTool) Name() string {
-	return "diana.schedule"
+	return "schedule"
 }
 
 func (t *dianaScheduleTool) Description() string {
-	return `创建和管理持久化周期查询/订阅：按固定间隔重复执行一段查询并把结果通知用户。只执行一次的提醒改用 diana.reminder。GitHub 仓库的 Commit、PR、Release、Star 更新订阅不属于本工具，也不能由聊天创建，只能提示用户去 WebUI 的「提醒与订阅」页面管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+	return `创建和管理持久化周期查询/订阅：按固定间隔重复执行一段查询并把结果通知用户。只执行一次的提醒改用 reminder。GitHub 仓库的 Commit、PR、Release、Star 更新订阅不属于本工具，也不能由聊天创建，只能提示用户去 WebUI 的「提醒与订阅」页面管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
 }
 
 // InputSchema 声明参数契约。interval 的上下限直接引用校验用的同一份常量，

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const dianaVersionToolName = "diana.version"
+const dianaVersionToolName = "version"
 
 // processStartedAt 是进程启动时刻，作为没有注入 BuildInfo 时的运行时长基准。
 var processStartedAt = time.Now()
@@ -52,7 +52,7 @@ type ReleaseStatusProvider interface {
 	ReleaseStatus(ctx context.Context) (ReleaseStatus, error)
 }
 
-// SetReleaseStatusProvider 注入更新检查入口。没注入时 diana.version 只报本地事实，
+// SetReleaseStatusProvider 注入更新检查入口。没注入时 version 只报本地事实，
 // 不谈新版本——而不是猜一个。
 func (r *Runtime) SetReleaseStatusProvider(provider ReleaseStatusProvider) {
 	r.mu.Lock()
@@ -83,7 +83,7 @@ type BuildInfo struct {
 	StartedAt time.Time
 }
 
-// SetBuildInfo 注入版本信息。没注入时 diana.version 如实说不知道，而不是编一个。
+// SetBuildInfo 注入版本信息。没注入时 version 如实说不知道，而不是编一个。
 func (r *Runtime) SetBuildInfo(info BuildInfo) {
 	if info.StartedAt.IsZero() {
 		info.StartedAt = time.Now()

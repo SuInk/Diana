@@ -132,9 +132,9 @@ func TestLooksLikeRenderedToolCall(t *testing.T) {
 	rendered := []string{
 		leakedRenderedFinalize,
 		"调用工具：agent.finalize，参数：{}",
-		"工具调用: web_search.search, arguments: {\"query\":\"warp\"}",
+		"工具调用: web_search, arguments: {\"query\":\"warp\"}",
 		"Tool call: agent.finalize",
-		"  调用工具：diana.image，参数：{\"prompt\":\"猫\"}",
+		"  调用工具：image，参数：{\"prompt\":\"猫\"}",
 	}
 	for _, text := range rendered {
 		if !LooksLikeRenderedToolCall(text) {

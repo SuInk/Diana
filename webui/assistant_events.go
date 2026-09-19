@@ -55,9 +55,11 @@ type assistantEventsResponse struct {
 	// AvgTTFTMS 只统计流式跑通的调用；TTFTCalls 为 0 表示这段范围没有可信样本。
 	AvgTTFTMS float64 `json:"avg_ttft_ms"`
 	TTFTCalls int64   `json:"ttft_calls"`
-	Page      int     `json:"page"`
-	Limit     int     `json:"limit"`
-	HasMore   bool    `json:"has_more"`
+	// UsageMissingCalls 是上游没报用量的调用数；不为 0 时上面的 token 合计偏少。
+	UsageMissingCalls int64 `json:"usage_missing_calls"`
+	Page              int   `json:"page"`
+	Limit             int   `json:"limit"`
+	HasMore           bool  `json:"has_more"`
 	// Group 是当前筛选的群号，Groups 是这个时间范围内可选的群。
 	Group  string                    `json:"group,omitempty"`
 	Groups []assistantEventGroupItem `json:"groups"`
@@ -161,6 +163,33 @@ func (h *BotHandler) eventImage(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "事件图片不存在"})
 		return
 	}
+	h.writeEventImage(c, segment)
+}
+
+// eventOutboundImage 返回这一轮机器人发出去的第 index 张图，比如表情包工具发的那张。
+func (h *BotHandler) eventOutboundImage(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "事件存储未配置"})
+		return
+	}
+	index, err := strconv.Atoi(strings.TrimSpace(c.Param("index")))
+	if err != nil || index <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "图片序号无效"})
+		return
+	}
+	media, found, err := h.sqlite.InboundEventOutboundMedia(c.Request.Context(), c.Param("id"), index)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取出站图片失败"})
+		return
+	}
+	if !found || media.Kind != "image" || strings.TrimSpace(media.Source) == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "出站图片不存在或未保存来源"})
+		return
+	}
+	h.writeEventImage(c, assistant.MessageSegment{Type: "image", Data: map[string]string{"file": media.Source}})
+}
+
+func (h *BotHandler) writeEventImage(c *gin.Context, segment assistant.MessageSegment) {
 	body, contentType, err := assistant.ReadMessageImageSegment(c.Request.Context(), segment)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "图片源已失效或不可读取"})
@@ -382,6 +411,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		OutputTokensPerSecond: stored.OutputTokensPerSecond,
 		AvgTTFTMS:             stored.AvgTTFTMS,
 		TTFTCalls:             stored.TTFTCalls,
+		UsageMissingCalls:     stored.UsageMissingCalls,
 
 		Page:         page,
 		Limit:        limit,

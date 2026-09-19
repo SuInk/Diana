@@ -187,6 +187,14 @@ type Usage struct {
 	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
 }
 
+// Add 把另一次调用的用量累加进来。
+func (u *Usage) Add(other Usage) {
+	u.InputTokens += other.InputTokens
+	u.OutputTokens += other.OutputTokens
+	u.TotalTokens += other.TotalTokens
+	u.CachedInputTokens += other.CachedInputTokens
+}
+
 type GenerateResponse struct {
 	// ContinuationScope binds opaque reasoning state to its originating endpoint and model.
 	ContinuationScope string            `json:"-"`
@@ -220,6 +228,9 @@ type ImageGenerateResponse struct {
 	Provider Provider `json:"provider"`
 	Model    string   `json:"model,omitempty"`
 	Images   []string `json:"images"`
+	// Usage 是上游报的 token 用量。gpt-image 这类按 token 计费的模型会给，按张
+	// 计费的中转常常不给，这时为零值。
+	Usage Usage `json:"usage,omitempty"`
 }
 
 type ProviderConfig struct {

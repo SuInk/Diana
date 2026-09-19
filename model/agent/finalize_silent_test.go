@@ -132,7 +132,7 @@ func TestSilentIsNeverParsedFromProse(t *testing.T) {
 func TestSilentFinalizeRefusedWhileImageTaskPending(t *testing.T) {
 	tool := &queuedImageTestTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"diana.image","input":{"prompt":"画一只奶鼠"}}`,
+		`{"action":"tool","tool":"image","input":{"prompt":"画一只奶鼠"}}`,
 		`{"action":"final","silent":true,"silent_reason":"没什么好说的"}`,
 		`{"action":"final","task_state":"pending","content":"已经开始生成，完成后会自动发送。"}`,
 	}}

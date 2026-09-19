@@ -17,7 +17,7 @@ import (
 //
 // 做成工具而不是关键词命令：「这图哪来的」「谁画的」「出处」「源」的说法太多，
 // 关键词表永远补不全，而模型本来就在读这句话。工具只负责取图、反查、回报。
-const dianaImageSourceToolName = "diana.image_source"
+const dianaImageSourceToolName = "image_source"
 
 // imageRecognitionKindSource 与 OCR、画面描述共用那张识别结果表，kind 区分用途。
 const imageRecognitionKindSource = "source"

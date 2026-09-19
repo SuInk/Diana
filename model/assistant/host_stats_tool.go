@@ -15,7 +15,7 @@ import (
 	"github.com/SuInk/diana/model/hostinfo"
 )
 
-const dianaHostStatsToolName = "diana.host_stats"
+const dianaHostStatsToolName = "host_stats"
 
 // 「内存占多少」「CPU 现在忙不忙」以前机器人答不上来：这些数字只在控制台的总览页
 // 里，采集代码住在 webui，而 webui 单向依赖 model——机器人够不着。采集移到

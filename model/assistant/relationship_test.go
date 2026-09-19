@@ -40,7 +40,7 @@ func TestRelationshipPolicyTiersRequireScoreAndInteractionCount(t *testing.T) {
 
 func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testing.T) {
 	initial := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "user")
-	if !initial.allowedAgentToolNames()["web_search.search"] || !initial.allowedAgentToolNames()["browser_render"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["diana.relationship"] || !initial.allowedAgentToolNames()["diana.tts"] || !initial.allowedAgentToolNames()[dianaPlatformToolName] || !initial.allowedAgentToolNames()[dianaImageToolName] || !initial.allowedAgentToolNames()["diana.reminder"] || !initial.AllowImageGeneration || !initial.AllowImageEditing || !initial.AllowDocumentOCR || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
+	if !initial.allowedAgentToolNames()["web_search"] || !initial.allowedAgentToolNames()["browser_render"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["relationship"] || !initial.allowedAgentToolNames()["tts"] || !initial.allowedAgentToolNames()[dianaPlatformToolName] || !initial.allowedAgentToolNames()[dianaImageToolName] || !initial.allowedAgentToolNames()["reminder"] || !initial.AllowImageGeneration || !initial.AllowImageEditing || !initial.AllowDocumentOCR || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
 		t.Fatalf("initial tools = %#v", initial.allowedAgentToolNames())
 	}
 	if initial.allowedAgentToolNames()[dianaRepositoryIssuesToolName] {
@@ -58,7 +58,7 @@ func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testi
 		t.Fatalf("hostile relationship lost mandatory web search tool: %#v", hostile.allowedAgentToolNames())
 	}
 	friend := RelationshipPolicyFor(UserMemoryProfile{Favorability: 60, MessageCount: 30}, "owner", "user")
-	if !friend.AllowImageEditing || !friend.AllowPersonalSchedule || friend.allowedAgentToolNames()["diana.config"] {
+	if !friend.AllowImageEditing || !friend.AllowPersonalSchedule || friend.allowedAgentToolNames()["config"] {
 		t.Fatalf("friend policy = %#v tools=%#v", friend, friend.allowedAgentToolNames())
 	}
 	owner := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner")

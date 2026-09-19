@@ -97,7 +97,7 @@ func TestRunnerCitesRenderedPageWithoutRepairEvenWhenOutputIsTruncated(t *testin
 	})
 	renderTool := &recordingRenderTool{output: string(page)}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"latest commit","claims":[{"id":"commit","statement":"最新提交做了什么"}],"claim_ids":["commit"]}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"latest commit","claims":[{"id":"commit","statement":"最新提交做了什么"}],"claim_ids":["commit"]}}`,
 		`{"action":"tool","tool":"browser_render","input":{"url":"https://official.example/commit/abc123"}}`,
 		`{"action":"final","content":"最新提交把环境代理收成了可发版状态。","claims":[{"id":"commit","status":"supported","summary":"提交页直接写明","evidence":[{"url":"https://official.example/commit/abc123","relation":"supports"}]}]}`,
 	}}
@@ -169,7 +169,7 @@ func TestRunnerAdvisoryEvidenceLedgerRecordsWithoutBlockingFinal(t *testing.T) {
 	searchResult, _ := json.Marshal(webSearchResult{Status: "no_results", StopReason: "all_queries_exhausted"})
 	tool := &recordingSearchTool{output: string(searchResult)}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"verify state","claims":[{"id":"state","statement":"状态是否成立"}],"claim_ids":["state"]}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"verify state","claims":[{"id":"state","statement":"状态是否成立"}],"claim_ids":["state"]}}`,
 		`{"action":"final","content":"状态成立。","claims":[{"id":"state","status":"supported","summary":"确定存在","evidence":[]}]}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 2, EvidenceLedgerAdvisory: true}, NewToolRegistry(tool))

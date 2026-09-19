@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	memorySubmitToolName = "memory.submit"
+	memorySubmitToolName = "memory_submit"
 	// 门控最多 5 条；摘要最多 6 条外加固定的一条 thread 便签。
 	memoryGateMaxCandidates    = 5
 	memorySummaryMaxCandidates = 7

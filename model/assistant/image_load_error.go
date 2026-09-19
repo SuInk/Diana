@@ -127,7 +127,7 @@ func continueWithAvailableForwardMedia(ctx context.Context, event MessageEvent) 
 
 // prepareCurrentEventImages keeps the current upload strict while leaving
 // quoted historical media lazy. Agent mode can then inspect the quoted source
-// through diana.history_media without a stale quote breaking the whole turn.
+// through history_media without a stale quote breaking the whole turn.
 func (r *Runtime) prepareCurrentEventImages(ctx context.Context, event MessageEvent) MessageEvent {
 	quoted := event.Quoted
 	event.Quoted = nil

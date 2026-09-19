@@ -27,7 +27,7 @@ import (
 //  1. 群里丢一条网易云链接，别人得切出去开 App 才能听——这里把链接换成一条语音，
 //     点开就响。这条走插件的消息通路，认的是链接形状。
 //  2. 点歌。「放首稻香」「来一首适合睡前听的」都是点歌，但它们没有共同的关键词，
-//     补一张同义词表是补不完的。所以这条走 Agent 工具 diana.music：模型读完整条
+//     补一张同义词表是补不完的。所以这条走 Agent 工具 music：模型读完整条
 //     消息自己决定要不要点歌、点哪一首，判断留给它做。
 //
 // 曲库目前只有网易云（见 netease_source.go）。取源的部分单独成文件，将来加别的
@@ -35,7 +35,7 @@ import (
 
 const (
 	musicPluginID = "official.music"
-	musicToolName = "diana.music"
+	musicToolName = "music"
 
 	musicSettingSources     = "enabled_sources"
 	musicSettingPreferred   = "preferred_source"
@@ -291,7 +291,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 // ShouldHandle 让没有 @ 机器人的分享消息也能被处理。
 //
 // 这里认的是链接形状，不是「用户想不想听歌」那种语义意图——和链接解析同一类判断。
-// 点歌那半边正相反，没有可认的形状，所以交给模型走 diana.music，不在这里猜。
+// 点歌那半边正相反，没有可认的形状，所以交给模型走 music，不在这里猜。
 func (p *MusicPlugin) ShouldHandle(event MessageEvent, text string) bool {
 	// 触发判断用「全部曲库」而不是「启用的曲库」：这里还读不到会话级的插件设置，
 	// 少认一家的代价是那条链接彻底没反应，多认一家的代价只是 Handle 里空跑一次。

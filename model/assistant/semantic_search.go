@@ -168,6 +168,7 @@ func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), semanticIndexTimeout)
 	defer cancel()
+	ctx = withLLMUsagePurpose(ctx, "semantic_index")
 	vectors, err := r.embedTextsFunc()(ctx, cfg, texts)
 	if err != nil {
 		log.Printf("semantic index embed failed (%d items dropped): %v", len(batch), err)
@@ -189,8 +190,34 @@ func (r *Runtime) embedTextsFunc() func(context.Context, llm.ProviderConfig, []s
 		return r.embedTexts
 	}
 	return func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error) {
-		return llm.EmbedTexts(ctx, cfg, texts)
+		started := time.Now()
+		vectors, usage, err := llm.EmbedTextsWithUsage(ctx, cfg, texts)
+		if err == nil {
+			// embedding 不走文本 provider 链，装饰器记不到，在这里补记。
+			var event MessageEvent
+			if state := llmUsageFromContext(ctx); state != nil {
+				event = state.event
+			}
+			r.recordLLMUsage(ctx, event, cfg.Provider, cfg.Model, usage, llmCallPurpose(ctx), time.Since(started), 0)
+		}
+		return vectors, err
 	}
+}
+
+type semanticSearchPurposeKey struct{}
+
+// withSemanticSearchPurpose 让调用方给这次检索的 embedding 标上自己的用途（比如
+// 表情包搜索）。不能直接沿用 ctx 里的用量用途：主回复的 ctx 带着 reply，照抄的话
+// embedding 模型会被当成主对话模型。
+func withSemanticSearchPurpose(ctx context.Context, purpose string) context.Context {
+	return context.WithValue(ctx, semanticSearchPurposeKey{}, strings.TrimSpace(purpose))
+}
+
+func semanticSearchPurpose(ctx context.Context) string {
+	if purpose, _ := ctx.Value(semanticSearchPurposeKey{}).(string); purpose != "" {
+		return purpose
+	}
+	return "semantic_search"
 }
 
 // semanticSearchEvents 把查询转成向量后按相似度召回历史消息。
@@ -212,6 +239,7 @@ func (r *Runtime) semanticSearchEvents(ctx context.Context, event MessageEvent, 
 		return nil
 	}
 	embedCtx, cancel := context.WithTimeout(ctx, semanticQueryTimeout)
+	embedCtx = withLLMUsagePurpose(withLLMUsageContext(embedCtx, event), semanticSearchPurpose(ctx))
 	vectors, err := r.embedTextsFunc()(embedCtx, cfg, []string{query})
 	cancel()
 	if err != nil || len(vectors) != 1 {

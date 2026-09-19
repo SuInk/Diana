@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const dianaMemoryToolName = "diana.memory"
+const dianaMemoryToolName = "memory"
 
 type dianaMemoryTool struct {
 	runtime *Runtime
@@ -20,7 +20,7 @@ type dianaMemoryTool struct {
 
 func (t *dianaMemoryTool) Name() string { return dianaMemoryToolName }
 func (t *dianaMemoryTool) Description() string {
-	return "按需查阅已提取的长期记忆，不需要 embedding。先 search 获取简短索引，再 read 读取相关记忆全文与提取证据。未命中时可根据任务换关键词，不要编造历史；原始聊天请使用 diana.chat_history。"
+	return "按需查阅已提取的长期记忆，不需要 embedding。先 search 获取简短索引，再 read 读取相关记忆全文与提取证据。未命中时可根据任务换关键词，不要编造历史；原始聊天请使用 chat_history。"
 }
 func (t *dianaMemoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{

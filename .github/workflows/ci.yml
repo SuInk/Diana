@@ -35,15 +35,19 @@ jobs:
     outputs:
       value: ${{ steps.version.outputs.value }}
       channel: ${{ steps.version.outputs.channel }}
+      canary: ${{ steps.version.outputs.canary }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve and validate
         id: version
         shell: bash
         run: |
           SOURCE_VERSION="$(tr -d '[:space:]' < model/version/VERSION)"
+          CANARY=false
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             BUILD_VERSION="${GITHUB_REF#refs/tags/}"
             if [[ ! "${BUILD_VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(beta|rc)\.(0|[1-9][0-9]*))?$ ]]; then
@@ -55,14 +59,28 @@ jobs:
               echo "model/version/VERSION (${SOURCE_VERSION}) must match the release tag ${BUILD_VERSION}" >&2
               exit 1
             fi
+          elif [[ "${GITHUB_EVENT_NAME}" == push && "${GITHUB_REF}" == refs/heads/main ]]; then
+            # 每次合并到 main 发一个 Canary：基线是最新正式版的下一个修订号，序号取已有 Canary 的最大值加一。
+            STABLE="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+            if [[ -z "${STABLE}" ]]; then
+              echo "No stable release tag to derive the canary version from" >&2
+              exit 1
+            fi
+            IFS=. read -r MAJOR MINOR PATCH <<<"${STABLE#v}"
+            CORE="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            LAST="$(git tag -l "${CORE}-canary.*" | sed "s/^${CORE}-canary\.//" | grep -E '^[0-9]+$' | sort -n | tail -n 1 || true)"
+            BUILD_VERSION="${CORE}-canary.$(( ${LAST:-0} + 1 ))"
+            CANARY=true
           else
             BUILD_VERSION="${GITHUB_SHA:0:7}"
           fi
           CHANNEL=release
           if [[ "${BUILD_VERSION}" == *-beta.* ]]; then CHANNEL=beta; fi
           if [[ "${BUILD_VERSION}" == *-rc.* ]]; then CHANNEL=beta; fi
+          if [[ "${CANARY}" == true ]]; then CHANNEL=canary; fi
           echo "channel=${CHANNEL}" >> "${GITHUB_OUTPUT}"
           echo "value=${BUILD_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "canary=${CANARY}" >> "${GITHUB_OUTPUT}"
 
   backend:
     name: Go Test
@@ -249,6 +267,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -268,16 +291,43 @@ jobs:
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel == 'release' }}
-            type=raw,value=${{ needs.build-version.outputs.channel }},enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel != 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.channel }},enable=${{ (startsWith(github.ref, 'refs/tags/v') || needs.build-version.outputs.canary == 'true') && needs.build-version.outputs.channel != 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.value }},enable=${{ needs.build-version.outputs.canary == 'true' }}
             type=sha
+
+      # slim 变体与完整版同名同 tag，统一加 -slim 后缀，例如 latest-slim / v0.8.126-slim。
+      - name: Docker metadata (slim)
+        id: meta-slim
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/suink/diana
+          tags: |
+            type=ref,event=tag,suffix=-slim
+            type=raw,value=latest-slim,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel == 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.channel }}-slim,enable=${{ (startsWith(github.ref, 'refs/tags/v') || needs.build-version.outputs.canary == 'true') && needs.build-version.outputs.channel != 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.value }}-slim,enable=${{ needs.build-version.outputs.canary == 'true' }}
+            type=sha,suffix=-slim
 
       - name: Build and publish Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ needs.build-version.outputs.value }}
+
+      - name: Build and publish slim Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: runtime-slim
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-slim.outputs.tags }}
+          labels: ${{ steps.meta-slim.outputs.labels }}
           build-args: |
             BUILD_VERSION=${{ needs.build-version.outputs.value }}
 
@@ -288,7 +338,7 @@ jobs:
       - build-version
       - build
       - docker
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || needs.build-version.outputs.canary == 'true'
     permissions:
       contents: write
       actions: read
@@ -310,7 +360,7 @@ jobs:
         working-directory: release
         env:
           RELEASE_CHANNEL: ${{ needs.build-version.outputs.channel }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.build-version.outputs.value }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           assets='[]'
@@ -327,10 +377,25 @@ jobs:
             '{schema: 1, releases: [{prerelease: $prerelease, tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS") | .url), assets: $assets}]}' \
             > latest.json
 
+      - name: Write canary release notes
+        if: needs.build-version.outputs.canary == 'true'
+        env:
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          {
+            echo "main 分支合并后自动构建的 Canary 预览版，未经人工验证，只推送给选择 Canary 更新通道的实例。发布正式版时自动删除。"
+            echo
+            echo "- 提交：${GITHUB_SHA}"
+            echo "- 改动：$(head -n 1 <<<"${COMMIT_SUBJECT}")"
+          } > release/NOTES.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: Diana ${{ github.ref_name }}
+          tag_name: ${{ needs.build-version.outputs.value }}
+          target_commitish: ${{ github.sha }}
+          body_path: ${{ needs.build-version.outputs.canary == 'true' && 'release/NOTES.md' || '' }}
+          name: Diana ${{ needs.build-version.outputs.value }}
           prerelease: ${{ needs.build-version.outputs.channel != 'release' }}
           make_latest: ${{ needs.build-version.outputs.channel == 'release' }}
           generate_release_notes: true
@@ -339,3 +404,18 @@ jobs:
             release/*.zip
             release/SHA256SUMS
             release/latest.json
+
+      - name: Prune superseded canary releases
+        if: needs.build-version.outputs.channel == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build-version.outputs.value }}
+        run: |
+          # 更新器只看最近 30 条 Release，不清理的话 Canary 会把正式版挤出去。只删 Canary，手动发布的 Beta/RC 保留。
+          gh release list --repo "${GITHUB_REPOSITORY}" --limit 1000 --json tagName --jq '.[].tagName' |
+            { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-canary\.[0-9]+$' || true; } |
+            while read -r tag; do
+              if [[ "$(printf '%s\n%s\n' "${tag%%-*}" "${RELEASE_TAG}" | sort -V | tail -n 1)" == "${RELEASE_TAG}" ]]; then
+                gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes || echo "::warning::failed to delete ${tag}"
+              fi
+            done

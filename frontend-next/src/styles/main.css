@@ -369,7 +369,7 @@ code {
   font-weight: 600;
 }
 
-.model-role-row > .model-route-action {
+.model-role-row .model-route-action {
   width: 34px;
   height: 34px;
   min-width: 34px;
@@ -385,6 +385,71 @@ code {
   height: 16px;
 }
 
+/* 每个用途一块：配置行在上，说明在下，块之间用分隔线隔开 */
+.model-role-head {
+  padding-bottom: 8px;
+}
+
+.model-role-block {
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.model-role-desc {
+  margin: 8px 44px 0 82px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.model-role-note {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+/* 主路由/后备行：容器不参与网格布局，只用来接收拖放事件 */
+.model-route-group {
+  display: contents;
+}
+
+.model-route-handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: grab;
+}
+
+.model-route-handle:hover,
+.model-route-handle:focus-visible {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
+
+.model-route-handle:active {
+  cursor: grabbing;
+}
+
+.model-route-handle > svg {
+  flex: none;
+  opacity: 0.7;
+}
+
+.model-route-group.is-dragging > * {
+  opacity: 0.45;
+}
+
+.model-route-group.is-drop-target > * {
+  box-shadow: 0 -2px 0 var(--accent, #3fb27f);
+}
+
 .model-role-head {
   color: var(--muted);
   font-size: 11.5px;
@@ -398,6 +463,10 @@ code {
 
   .model-role-head {
     display: none;
+  }
+
+  .model-role-desc {
+    margin: 8px 0 0;
   }
 }
 

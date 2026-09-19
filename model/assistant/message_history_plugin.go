@@ -59,7 +59,7 @@ func (p *MessageHistoryPlugin) Manifest() PluginManifest {
 
 // Handle 曾经用词表判断「这条消息是不是在问撤回记录」，命中就劫持整条回复。判断
 // 用户想不想看撤回记录是语义问题，本项目一律交给模型，不做关键词匹配。读撤回记录
-// 现在是 diana.chat_history 的 recalls 操作，由模型自己决定什么时候需要。
+// 现在是 chat_history 的 recalls 操作，由模型自己决定什么时候需要。
 //
 // 保留空实现而不是删掉方法，是因为插件仍然要通过 Observe 记录撤回通知；被撤掉的
 // 只有「主动劫持回复」这一步。转发卡片与自动撤回策略的投递链路一行没动，改成由

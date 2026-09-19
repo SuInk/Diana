@@ -3,8 +3,7 @@
 
 services:
   diana:
-    build: .
-    image: diana:latest
+    image: ${DIANA_IMAGE:-ghcr.io/suink/diana:latest}
     container_name: diana
     restart: unless-stopped
     security_opt:
@@ -18,7 +17,7 @@ services:
       - ./logs:/app/logs
       # 配置文件。复制 config.example.yaml 改好再挂进来；不挂也能起，
       # 打开 WebUI 走安装向导即可。
-      - ./config.yaml:/app/config.yaml:ro
+      # - ./config.yaml:/app/config.yaml:ro
     environment:
       # 唯一需要的环境变量：告诉进程去哪找配置文件。其余配置一律写在
       # config.yaml 里——基础设施段每次启动生效，bot/llm 段只在数据库为空时

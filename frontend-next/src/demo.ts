@@ -139,6 +139,14 @@ let plugins: PluginState[] = [
     installed: true, enabled: true, settings: { default_interval_seconds: 60 }, secrets_configured: { github_token: true }
   },
   {
+    manifest: { id: "official.sticker-sender", name: "表情包发送", version: "0.2.0", description: "启用内置 Agent 后，从持久表情资产库中检索候选，按当前语义选一张发送。", official: true, built_in: true, permissions: ["message:read", "message:send"], settings: [{ key: "history_limit", label: "每个范围候选上限", type: "number", default: 1000 }, { key: "search_results", label: "候选返回数量", type: "number", default: 8 }] },
+    installed: true, enabled: true
+  },
+  {
+    manifest: { id: "official.file-delivery", name: "文件交付", version: "0.1.0", description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown 等文本内容直接作为文件发到会话供下载，并可附带渲染预览图。", official: true, built_in: true, permissions: ["message:send", "file:send", "browser:render"], settings: [{ key: "max_file_bytes", label: "单个文件大小上限", type: "size", default: 1048576 }, { key: "preview", label: "默认附带预览图", type: "bool", default: true }, { key: "owner_only", label: "仅主人可用", type: "bool", default: false }] },
+    installed: true, enabled: true
+  },
+  {
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.2.0", description: "按条件监控 RSS 或社交动态，一条订阅可同时盯多个账号或 Feed，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
@@ -201,6 +209,13 @@ const demoRepoPluginPreview = {
     ]
   }
 };
+
+const demoStickers = [
+  { hash: "a".repeat(64), summary: "懂了", description: "猫猫认真点头，表示已经明白对方的意思，语气轻松，适合接在解释之后。", kind: "group", group_id: "100200301", sessions: 3, last_seen: before(12) },
+  { hash: "b".repeat(64), summary: "无语", description: "角色面无表情地盯着镜头，表达对离谱发言的无奈。", kind: "group", group_id: "100200418", sessions: 1, last_seen: before(40) },
+  { hash: "c".repeat(64), summary: "动画表情", kind: "private", user_id: "880024", sessions: 1, last_seen: before(90) },
+  { hash: "d".repeat(64), summary: "贴贴", description: "两只小动物蹭在一起，表示亲近或安慰。", kind: "group", group_id: "100200301", sessions: 2, last_seen: before(200) }
+];
 
 const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
@@ -391,11 +406,11 @@ const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
 };
 
 export const demoEvents: AssistantEventDetail[] = [
-  { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
+  { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, reply_models: ["gpt-5.4"], models: [{ model: "gpt-5.4-mini", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.4", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
   { id: "demo-event-2", at: before(9), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200418", user_id: "100200812", sender_name: "栖迟", message_id: "demo-7298", text: "[图片]", handled: false, status: "ignored", outcome: "bot_message_ignored", decision: "not_replied", reason: "识别为其他机器人发送的自动消息；“识别机器人后不回复”已启用，因此未启动视觉模型和主 Agent。", duration_ms: 42, llm_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-  { id: "demo-event-3", at: before(18), kind: "private", platform: "telegram", profile_id: "bot-telegram", user_id: "880024", sender_name: "Demo User", message_id: "demo-tg-114", text: "Zeabur 最近有什么产品更新？", reply: "我检索了官方更新渠道，并按发布时间整理了近期变化；真实服务会在回答中保留来源链接。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "私聊默认响应；问题包含时效性要求，Agent 先调用内置联网搜索再组织答案。", duration_ms: 8200, llm_calls: 2, input_tokens: 2844, output_tokens: 387, total_tokens: 3231, delivery_stage: "acknowledged", outbound_message_id: "demo-tg-out-114" },
+  { id: "demo-event-3", at: before(18), kind: "private", platform: "telegram", profile_id: "bot-telegram", user_id: "880024", sender_name: "Demo User", message_id: "demo-tg-114", text: "Zeabur 最近有什么产品更新？", reply: "我检索了官方更新渠道，并按发布时间整理了近期变化；真实服务会在回答中保留来源链接。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "私聊默认响应；问题包含时效性要求，Agent 先调用内置联网搜索再组织答案。", duration_ms: 8200, llm_calls: 2, input_tokens: 2844, output_tokens: 387, total_tokens: 3231, reply_models: ["claude-sonnet-5"], models: [{ model: "claude-sonnet-5", provider: "anthropic", calls: 2 }], delivery_stage: "acknowledged", outbound_message_id: "demo-tg-out-114" },
   { id: "demo-event-4", at: before(31), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200519", user_id: "100200913", sender_name: "星野", message_id: "demo-7220", text: "画一张雨夜城市里的复古电车", reply: "图片已生成并发送。事件明细默认显示缩略图，点击后查看原图。", handled: true, status: "replied", outcome: "image_generated", decision: "replied", reason: "命中群触发词并识别为明确的图片生成请求；调用独立生图模型。", duration_ms: 18400, llm_calls: 1, input_tokens: 1410, output_tokens: 262, total_tokens: 1672, delivery_stage: "acknowledged", outbound_message_id: "demo-out-7220" },
-  { id: "demo-event-5", at: before(47), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100201014", sender_name: "白榆", message_id: "demo-7166", text: "Zeabur 风味是什么", reply: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。", handled: true, status: "replied", outcome: "proactive_replied", decision: "replied", reason: "短句虽未显式 @机器人，但包含可回答的产品语境问题；主动回复判断认为应该参与。", duration_ms: 4900, llm_calls: 2, input_tokens: 1671, output_tokens: 237, total_tokens: 1908, delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7166" }
+  { id: "demo-event-5", at: before(47), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100201014", sender_name: "白榆", message_id: "demo-7166", text: "Zeabur 风味是什么", reply: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。", handled: true, status: "replied", outcome: "proactive_replied", decision: "replied", reason: "短句虽未显式 @机器人，但包含可回答的产品语境问题；主动回复判断认为应该参与。", duration_ms: 4900, llm_calls: 2, input_tokens: 1671, output_tokens: 237, total_tokens: 1908, reply_models: ["gpt-5.4"], models: [{ model: "gpt-5.4-mini", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.4", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7166", delivery: { messages: 2, images: 1, media: [{ kind: "image", label: "表情包：懂了" }] } }
 ];
 
 const trace: AppLogEntry[] = [
@@ -611,6 +626,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ provider: "openai_compatible", model: String(body.model ?? "gpt-5.6"), text: "模型测试通过。这是 Pages 演示模式返回的模拟结果，不会消耗真实 Token。", usage: { input_tokens: 36, output_tokens: 24, total_tokens: 60 } });
   }
 
+  if (path === "/api/assistant/stickers") {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const items = demoStickers.filter((item) => !q || item.summary.includes(q) || (item.description ?? "").includes(q));
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 48);
+    return json({ items: items.slice(offset, offset + limit), total: items.length });
+  }
   if (path === "/api/assistant/platforms") return json({ platforms });
   if (path === "/api/assistant/agent-defaults")
     return json({

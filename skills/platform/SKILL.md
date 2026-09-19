@@ -5,7 +5,7 @@ description: Read group information and members across platforms, and perform ow
 
 # Platform Interface
 
-Use `diana.platform` as the single cross-platform entry point for group information and moderation. Do not emulate an operation in prose and do not call it for ordinary conversation. The operations are platform-neutral verbs; the Go tool maps each to the current platform's native API (OneBot v11 or Telegram Bot API).
+Use `platform` as the single cross-platform entry point for group information and moderation. Do not emulate an operation in prose and do not call it for ordinary conversation. The operations are platform-neutral verbs; the Go tool maps each to the current platform's native API (OneBot v11 or Telegram Bot API).
 
 ## Operations
 
@@ -36,7 +36,7 @@ Take `user_id` from an @ segment, from the quoted message's sender, or from a `m
 
 ## Diana's Own Reply Behavior
 
-Diana's participation is not a platform property. To stop unsolicited replies use `diana.bot_config` with `desire_level=off`, not a platform mute. To ignore one person's messages without a platform action use `diana.reply_block`. For local image-to-avatar matching use the read-only `diana.group` operation `match_avatar`.
+Diana's participation is not a platform property. To stop unsolicited replies use `bot_config` with `desire_level=off`, not a platform mute. To ignore one person's messages without a platform action use `reply_block`. For local image-to-avatar matching use the read-only `group` operation `match_avatar`.
 
 ## Result Handling
 

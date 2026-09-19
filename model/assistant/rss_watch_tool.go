@@ -84,10 +84,10 @@ func (t *dianaRSSWatchTool) targetOwner(requesterIsOwner bool, fallbackOwner, id
 	return item.OwnerID, nil
 }
 
-func (*dianaRSSWatchTool) Name() string { return "diana.rss" }
+func (*dianaRSSWatchTool) Name() string { return "rss" }
 
 func (*dianaRSSWatchTool) Description() string {
-	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅：发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。普通用户只能查看和管理自己的订阅，机器人主人可以查看和管理全部订阅，包括 WebUI 创建的订阅。一条订阅可以同时盯多个账号或多个 Feed，它们共用同一套 judge_prompt，命中的内容合成一条消息发出；用户说「盯这几个人，条件一样」时建一条多来源订阅，不要一人建一条。用户要求持续关注某个网站 Feed 或某个推特用户、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
+	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅：发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。普通用户只能查看和管理自己的订阅，机器人主人可以查看和管理全部订阅，包括 WebUI 创建的订阅。一条订阅可以同时盯多个账号或多个 Feed，它们共用同一套 judge_prompt，命中的内容合成一条消息发出；用户说「盯这几个人，条件一样」时建一条多来源订阅，不要一人建一条。用户要求持续关注某个网站 Feed 或某个推特用户、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 schedule。首次创建只建立当前内容基线，不补发历史条目。`
 }
 
 func (*dianaRSSWatchTool) InputSchema() map[string]any {

@@ -19,7 +19,7 @@ import (
 // 回复时可以顺带做的动作，由模型按场景判断；程序只管三件事：只戳当前对话里能确认
 // 身份的人、同一个人不连着戳、同一个会话里总量不刷屏。
 const (
-	dianaPokeToolName = "diana.poke"
+	dianaPokeToolName = "poke"
 	// pokeSendPersonCooldown 是同一个会话里同一个人两次被戳的最小间隔。
 	pokeSendPersonCooldown = 60 * time.Second
 	// pokeSendSessionWindow 内同一个会话最多戳 pokeSendSessionLimit 次。

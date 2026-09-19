@@ -300,6 +300,14 @@
                 </div>
                 <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
                 </template>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.qq_typing_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">显示「对方正在输入」</span>
+                  </label>
+                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要 NapCat 等支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
+                </div>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
                 <SecretField
@@ -559,7 +567,7 @@
               <label><input v-model="form.auto_image_description" type="checkbox" /> 自动生成图片描述</label>
               <label><input v-model="form.auto_video_preprocess" type="checkbox" /> 自动下载视频并提取关键帧</label>
               <p class="muted">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</p>
-              <p class="muted">下方「媒体解析」用于图片描述、视频帧描述和模型 OCR，可指定低成本视觉模型。不配置时沿用视觉理解路由；配置后仅使用该路由及显式后备。文本文件提取和本地 OCR 不消耗模型额度。</p>
+              <p class="muted">图片描述、视频帧描述和模型 OCR 用的是下方「模型分配」里的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</p>
             </div>
           </section>
 
@@ -569,64 +577,104 @@
               <h2>模型分配</h2>
               <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
-            <div class="card-body stack" style="gap: 12px">
+            <div class="card-body stack" style="gap: 0">
               <div class="model-role-row model-role-head" aria-hidden="true">
                 <span>用途</span>
                 <span>提供商 / 分组</span>
                 <span>模型</span>
               </div>
-              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-row">
-                <span class="model-role-label">{{ role.label }}</span>
-                <AppSelect
-                  :model-value="roleSelectionValue(role.key)"
-                  :options="channelOptionsFor(role.key)"
-                  placeholder="请选择提供商 / 分组"
-                  @update:model-value="(value) => setRoleChannel(role.key, value)"
-                />
-                <AppSelect
-                  :model-value="roleModelValue(role.key)"
-                  :options="modelOptionsFor(role.key)"
-                  :disabled="roleForm[role.key]?.follow_chat || (role.key === 'media_parse' && !roleForm[role.key])"
-                  :placeholder="role.key === 'media_parse' && !roleForm[role.key] ? '跟随视觉理解模型' : roleForm[role.key]?.follow_chat ? '跟随对话模型' : '请选择模型（必填）'"
-                  @update:model-value="(value) => setRoleModel(role.key, value)"
-                />
-                <button
-                  class="btn icon-only ghost model-route-action"
-                  type="button"
-                  title="添加后备路由"
-                  :aria-label="`${role.label}：添加后备路由`"
-                  :disabled="!roleForm[role.key] || roleForm[role.key]?.follow_chat"
-                  @click="addRoleFallback(role.key)"
-                >
-                  <Plus :size="16" aria-hidden="true" />
-                </button>
-                <template v-for="(fallback, index) in roleForm[role.key]?.fallbacks ?? []" :key="`${role.key}-fallback-${index}`">
-                  <span class="model-role-label muted">后备 {{ index + 1 }}</span>
-                  <AppSelect
-                    :model-value="routeSelectionValue(fallback)"
-                    :options="channelOptionsFor(role.key)"
-                    placeholder="请选择提供商 / 分组"
-                    @update:model-value="(value) => setFallbackChannel(role.key, index, value)"
-                  />
-                  <AppSelect
-                    :model-value="fallback.model"
-                    :options="modelOptionsFor(role.key, fallback)"
-                    placeholder="请选择后备模型"
-                    @update:model-value="(value) => setFallbackModel(role.key, index, value)"
-                  />
-                  <button class="btn icon-only ghost model-route-action" type="button" title="删除后备路由" :aria-label="`${role.label}：删除后备 ${index + 1}`" @click="removeRoleFallback(role.key, index)">
-                    <Trash2 :size="16" aria-hidden="true" />
-                  </button>
-                </template>
+              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-block">
+                <div class="model-role-row">
+                  <div
+                    class="model-route-group"
+                    :class="routeDragClasses(role.key, 0)"
+                    @dragover="(event) => onRouteDragOver(role.key, 0, event)"
+                    @drop="(event) => onRouteDrop(role.key, 0, event)"
+                  >
+                    <button
+                      v-if="routeReorderable(role.key)"
+                      class="model-role-label model-route-handle"
+                      type="button"
+                      draggable="true"
+                      :data-route-handle="`${role.key}-0`"
+                      title="拖动调整顺序，或按 ↑ ↓ 键；排在最上面的是主路由"
+                      :aria-label="`${role.label}：主路由，按上下方向键调整顺序`"
+                      @dragstart="(event) => onRouteDragStart(role.key, 0, event)"
+                      @dragend="onRouteDragEnd"
+                      @keydown="(event) => onRouteHandleKeydown(role.key, 0, event)"
+                    >
+                      <GripVertical :size="14" aria-hidden="true" />
+                      {{ role.label }}
+                    </button>
+                    <span v-else class="model-role-label">{{ role.label }}</span>
+                    <AppSelect
+                      :model-value="roleSelectionValue(role.key)"
+                      :options="channelOptionsFor(role.key)"
+                      placeholder="请选择提供商 / 分组"
+                      @update:model-value="(value) => setRoleChannel(role.key, value)"
+                    />
+                    <AppSelect
+                      :model-value="roleModelValue(role.key)"
+                      :options="modelOptionsFor(role.key)"
+                      :disabled="roleForm[role.key]?.follow_chat || (role.key === 'media_parse' && !roleForm[role.key])"
+                      :placeholder="role.key === 'media_parse' && !roleForm[role.key] ? '跟随视觉理解模型' : roleForm[role.key]?.follow_chat ? '跟随对话模型' : '请选择模型（必填）'"
+                      @update:model-value="(value) => setRoleModel(role.key, value)"
+                    />
+                    <button
+                      class="btn icon-only ghost model-route-action"
+                      type="button"
+                      title="添加后备路由"
+                      :aria-label="`${role.label}：添加后备路由`"
+                      :disabled="!roleForm[role.key] || roleForm[role.key]?.follow_chat"
+                      @click="addRoleFallback(role.key)"
+                    >
+                      <Plus :size="16" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div
+                    v-for="(fallback, index) in roleForm[role.key]?.fallbacks ?? []"
+                    :key="`${role.key}-fallback-${index}`"
+                    class="model-route-group"
+                    :class="routeDragClasses(role.key, index + 1)"
+                    @dragover="(event) => onRouteDragOver(role.key, index + 1, event)"
+                    @drop="(event) => onRouteDrop(role.key, index + 1, event)"
+                  >
+                    <button
+                      class="model-role-label muted model-route-handle"
+                      type="button"
+                      draggable="true"
+                      :data-route-handle="`${role.key}-${index + 1}`"
+                      title="拖动调整顺序，或按 ↑ ↓ 键；排在最上面的是主路由"
+                      :aria-label="`${role.label}：后备 ${index + 1}，按上下方向键调整顺序`"
+                      @dragstart="(event) => onRouteDragStart(role.key, index + 1, event)"
+                      @dragend="onRouteDragEnd"
+                      @keydown="(event) => onRouteHandleKeydown(role.key, index + 1, event)"
+                    >
+                      <GripVertical :size="14" aria-hidden="true" />
+                      后备 {{ index + 1 }}
+                    </button>
+                    <AppSelect
+                      :model-value="routeSelectionValue(fallback)"
+                      :options="channelOptionsFor(role.key)"
+                      placeholder="请选择提供商 / 分组"
+                      @update:model-value="(value) => setFallbackChannel(role.key, index, value)"
+                    />
+                    <AppSelect
+                      :model-value="fallback.model"
+                      :options="modelOptionsFor(role.key, fallback)"
+                      placeholder="请选择后备模型"
+                      @update:model-value="(value) => setFallbackModel(role.key, index, value)"
+                    />
+                    <button class="btn icon-only ghost model-route-action" type="button" title="删除后备路由" :aria-label="`${role.label}：删除后备 ${index + 1}`" @click="removeRoleFallback(role.key, index)">
+                      <Trash2 :size="16" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+                <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
-              <p class="muted" style="margin: 0; font-size: 12.5px">
-                除「对话」外，每个用途都可以在提供商一栏选「跟随对话」，直接沿用对话选定的提供商、模型和后备路由，模型一栏随之锁定；也可以单独指定提供商和模型。
-                图片生成选择跟随对话时，对话模型本身必须支持出图。
-              </p>
-              <p class="muted" style="margin: 0; font-size: 12.5px">
-                「意图识别」这一档管的是所有短小的旁路调用：意图与规则路由、主动接话判定、发送前审核、语义指代、上下文压缩、
-                记忆抽取与归纳、关系评估、防循环与暂停判定，以及发送前提示的改写——上游拒绝、账号安全拦截和其余错误提示都会先用
-                机器人自己的口吻重写一遍再发出去。这些调用短、频次高，值得单独指一个便宜快的模型。
+              <p class="muted model-role-note">
+                每个用途的主路由和后备路由按从上到下的顺序依次尝试。有后备时，拖动左侧的名称可以调整顺序（也可以聚焦后按 ↑ ↓ 键），
+                拖到最上面的那条就成为主路由，原来的主路由顺延为后备。
               </p>
             </div>
           </section>
@@ -650,6 +698,16 @@
                   默认使用流式接收正文、思考和工具调用；思考不会作为聊天正文发送，工具参数完整后才会执行。
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
                 </span>
+              </div>
+              <div class="field">
+                <label for="bot-model-disclosure">谁能问出所用模型</label>
+                <AppSelect
+                  id="bot-model-disclosure"
+                  :model-value="form.model_disclosure ?? 'owner'"
+                  :options="modelDisclosureOptions"
+                  @update:model-value="(value) => { if (form) form.model_disclosure = value as 'owner' | 'everyone'; }"
+                />
+                <span class="hint">默认只对主人如实回答模型 ID 和供应商，主人也始终能在聊天里查看和切换模型；其他人问起时机器人会含糊带过，也不会凭训练记忆自报家门。</span>
               </div>
             </div>
           </section>
@@ -1684,7 +1742,7 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import {
@@ -2096,6 +2154,11 @@ const replyReferenceModeOptions: AppSelectOption[] = [
   { value: "on", label: "总是引用" },
   { value: "off", label: "从不引用" },
   { value: "auto", label: "让模型自己决定" }
+];
+
+const modelDisclosureOptions: AppSelectOption[] = [
+  { value: "owner", label: "仅主人" },
+  { value: "everyone", label: "所有人" }
 ];
 
 const welcomeModeOptions: AppSelectOption[] = [
@@ -2756,12 +2819,37 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse";
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
 type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
-const modelRoleRows: { key: RoleKey; label: string }[] = [
-  { key: "chat", label: "对话" },
-  { key: "vision", label: "视觉理解" },
-  { key: "media_parse", label: "媒体解析（可选）" },
-  { key: "intent", label: "意图识别" },
-  { key: "image", label: "图片生成" }
+const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
+  {
+    key: "chat",
+    label: "对话",
+    description: "正式回复用的模型。其他用途在提供商一栏选「跟随对话」时，直接沿用这里的提供商、模型和后备路由，模型一栏随之锁定。"
+  },
+  {
+    key: "vision",
+    label: "视觉理解",
+    description: "聊天中直接看图回答时使用。选「跟随对话」时，对话模型本身要能识图。"
+  },
+  {
+    key: "media_parse",
+    label: "媒体解析（可选）",
+    description:
+      "后台批量识图：历史图片和视频每一帧的描述、表情包语义简介，以及图片识别插件的看图与模型 OCR。这些调用量大、在后台排队逐张执行，" +
+      "建议单独指一个便宜、快、识图稳定的视觉模型并配上后备。跟随视觉理解时，更换对话模型会连带换掉它，换成慢模型会让识图队列积压；" +
+      "单独指定后只使用这一档及其后备，不再回落到视觉理解。"
+  },
+  {
+    key: "intent",
+    label: "意图识别",
+    description:
+      "所有短小的旁路调用：意图与规则路由、主动接话判定、发送前审核、语义指代、上下文压缩、记忆抽取与归纳、关系评估、防循环与暂停判定，" +
+      "以及发送前提示的改写（上游拒绝、账号安全拦截和其余错误提示都会先用机器人自己的口吻重写一遍再发出去）。这些调用短、频次高，值得单独指一个便宜快的模型。"
+  },
+  {
+    key: "image",
+    label: "图片生成",
+    description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
+  }
 ];
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
@@ -3138,6 +3226,74 @@ function removeRoleFallback(role: RoleKey, index: number): void {
   roleForm.value[role]?.fallbacks?.splice(index, 1);
 }
 
+// 主路由和后备路由是同一张有序列表：下标 0 是主路由，i 是后备 i。
+// 拖动或方向键调整顺序，排到最上面的那条成为主路由。跟随对话时没有自己的路由可排。
+const routeDrag = ref<{ role: RoleKey; from: number; over: number | null } | null>(null);
+
+function routeReorderable(role: RoleKey): boolean {
+  const assignment = roleForm.value[role];
+  return !!assignment && !assignment.follow_chat && (assignment.fallbacks?.length ?? 0) > 0;
+}
+
+function moveRoleRoute(role: RoleKey, from: number, to: number): void {
+  const assignment = roleForm.value[role];
+  if (!assignment || assignment.follow_chat) return;
+  const { fallbacks = [], ...primary } = assignment;
+  const routes: RoleRoute[] = [primary, ...fallbacks];
+  if (from === to || from < 0 || to < 0 || from >= routes.length || to >= routes.length) return;
+  const [moved] = routes.splice(from, 1);
+  routes.splice(to, 0, moved);
+  const [first, ...rest] = routes;
+  roleForm.value[role] = { ...first, fallbacks: rest };
+}
+
+function routeDragClasses(role: RoleKey, index: number): Record<string, boolean> {
+  const drag = routeDrag.value;
+  const active = drag?.role === role;
+  return {
+    "is-dragging": active && drag.from === index,
+    "is-drop-target": active && drag.over === index && drag.from !== index
+  };
+}
+
+function onRouteDragStart(role: RoleKey, index: number, event: DragEvent): void {
+  routeDrag.value = { role, from: index, over: null };
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", `${role}:${index}`);
+  }
+}
+
+function onRouteDragOver(role: RoleKey, index: number, event: DragEvent): void {
+  const drag = routeDrag.value;
+  if (!drag || drag.role !== role) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  drag.over = index;
+}
+
+function onRouteDrop(role: RoleKey, index: number, event: DragEvent): void {
+  const drag = routeDrag.value;
+  if (!drag || drag.role !== role) return;
+  event.preventDefault();
+  moveRoleRoute(role, drag.from, index);
+  routeDrag.value = null;
+}
+
+function onRouteDragEnd(): void {
+  routeDrag.value = null;
+}
+
+async function onRouteHandleKeydown(role: RoleKey, index: number, event: KeyboardEvent): Promise<void> {
+  const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+  const count = 1 + (roleForm.value[role]?.fallbacks?.length ?? 0);
+  if (!delta || index + delta < 0 || index + delta >= count) return;
+  event.preventDefault();
+  moveRoleRoute(role, index, index + delta);
+  await nextTick();
+  document.querySelector<HTMLElement>(`[data-route-handle="${role}-${index + delta}"]`)?.focus();
+}
+
 function setFallbackChannel(role: RoleKey, index: number, value: string): void {
   const route = roleForm.value[role]?.fallbacks?.[index];
   if (!route) return;
@@ -3214,12 +3370,14 @@ function setForm(config: BotProfileConfig): void {
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
+    qq_typing_enabled: config.qq_typing_enabled ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
+    model_disclosure: config.model_disclosure ?? "owner",
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
@@ -3439,6 +3597,7 @@ async function save(): Promise<void> {
   }
   // 后端会拒绝「启用 + 反向 WS + 空 token」的保存；提前拦住，错误提示更贴上下文。
   if (
+    !current.connection_profile_id &&
     (!current.platform || current.platform === "onebot-v11") &&
     current.enabled &&
     (!current.onebot_transport || current.onebot_transport === "reverse_ws") &&

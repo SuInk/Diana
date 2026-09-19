@@ -448,22 +448,27 @@ type Runtime struct {
 	errorNoticeFreshWindow time.Duration
 	replyBatchMu           sync.Mutex
 	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
-	replyTurnMu           sync.Mutex
-	replyTurns            map[string]replyTurnRecord
-	replyBatches          map[string]*replyBatchGate
-	unavailableGroupMu    sync.RWMutex
-	unavailableGroups     map[string]unavailableGroupSend
-	outboundDeliveryMu    sync.Mutex
-	outboundDeliveries    map[string]*groupOutboundDelivery
-	historyImageDescMu    sync.Mutex
-	historyImageDescRun   map[string]struct{}
-	historyImageDescReady map[string]struct{}
-	historyImageDescRetry map[string]time.Time
-	historyImageDescSem   chan struct{}
-	historyImageDescStop  context.CancelFunc
-	historyImageDescFront int
-	agentRegistryMu       sync.Mutex
-	agentRegistryCache    map[string]*agent.ToolRegistry
+	replyTurnMu             sync.Mutex
+	replyTurns              map[string]replyTurnRecord
+	replyBatches            map[string]*replyBatchGate
+	unavailableGroupMu      sync.RWMutex
+	unavailableGroups       map[string]unavailableGroupSend
+	outboundDeliveryMu      sync.Mutex
+	outboundDeliveries      map[string]*groupOutboundDelivery
+	historyImageDescMu      sync.Mutex
+	historyImageDescQueue   []*historyImageDescJob
+	historyImageDescJobs    map[string]*historyImageDescJob
+	historyImageDescRunning *historyImageDescJob
+	historyImageDescWorker  bool
+	historyImageDescWake    chan struct{}
+	historyImageDescReady   map[string]struct{}
+	historyImageDescFailed  map[string]historyImageDescFailure
+	historyImageDescFront   int
+	// 测试用来缩短识图超时和失败退避；零值取 historyImageDescriptionTimeout/RetryBackoff。
+	historyImageDescTimeout time.Duration
+	historyImageDescBackoff time.Duration
+	agentRegistryMu         sync.Mutex
+	agentRegistryCache      map[string]*agent.ToolRegistry
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -547,10 +552,10 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyBatches:            map[string]*replyBatchGate{},
 		unavailableGroups:       map[string]unavailableGroupSend{},
 		outboundDeliveries:      map[string]*groupOutboundDelivery{},
-		historyImageDescRun:     map[string]struct{}{},
+		historyImageDescJobs:    map[string]*historyImageDescJob{},
 		historyImageDescReady:   map[string]struct{}{},
-		historyImageDescRetry:   map[string]time.Time{},
-		historyImageDescSem:     make(chan struct{}, 1),
+		historyImageDescFailed:  map[string]historyImageDescFailure{},
+		historyImageDescWake:    make(chan struct{}, 1),
 		agentRegistryCache:      map[string]*agent.ToolRegistry{},
 		quietNotices:            map[string]time.Time{},
 		resolverDeliveries:      map[string]resolverDeliveryReservation{},
@@ -2155,6 +2160,11 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	if len(candidates) == 0 {
 		return MessageEvent{}, "", nil, false
 	}
+	// 攒批是定时器触发的，那时的 ctx 不带消息事件：这一路的判断调用以前一次都
+	// 没进过用量统计。记到批里最新那条消息名下，事件列表里点开它就能看到。
+	if llmUsageFromContext(ctx) == nil {
+		ctx = withLLMUsageContext(ctx, candidates[len(candidates)-1].Event)
+	}
 	eligible := make([]proactiveReplyCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, candidate.Event); ignored {
@@ -2537,7 +2547,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	}
 	if event.Kind == EventKindGroup {
 		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-			"web_search.search：始终注册的实时联网搜索；Provider 不可用时会返回明确配置或上游错误",
+			"web_search：始终注册的实时联网搜索；Provider 不可用时会返回明确配置或上游错误",
 		)
 	}
 	if cfg.AgentEnabled && event.Kind == EventKindGroup {
@@ -2546,7 +2556,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		)
 		if r.llmStore != nil {
 			payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-				"diana.image：系统已注册图片生成与编辑工具；具体用户权限由正式回复阶段校验，路由阶段不得声称系统没有绘图工具",
+				"image：系统已注册图片生成与编辑工具；具体用户权限由正式回复阶段校验，路由阶段不得声称系统没有绘图工具",
 			)
 		}
 	}
@@ -3097,7 +3107,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
-	stopTyping := r.startTelegramTyping(ctx, event)
+	stopTyping := r.startTypingIndicator(ctx, event, cfg)
 	defer stopTyping()
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
@@ -3144,7 +3154,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	overrides := r.pluginOverridesForEvent(event)
 	settingOverrides := r.pluginSettingOverridesForEvent(event)
 	// 撤回记录以前靠词表判断「用户是不是在问撤回」再预取并劫持回复。现在由模型通过
-	// diana.chat_history 的 recalls 操作按需读取，读到之后仍走原有的转发卡片链路。
+	// chat_history 的 recalls 操作按需读取，读到之后仍走原有的转发卡片链路。
 	var recallEvents []MessageEvent
 	recallSink := &recallDisclosureSink{}
 	pluginRequest := func(current MessageEvent, history []MessageEvent) PluginRequest {
@@ -3305,6 +3315,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if _, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
+			}
+			// 只有能上传文件的平台才挂：其他平台模型看得到也只能失败。
+			if platform := NormalizePlatformID(event.Platform); platform == PlatformTelegram || IsOneBotPlatform(platform) {
+				if _, settings, enabled := r.pluginWithSettingsForEvent(fileDeliveryPluginID, event); enabled {
+					extraTools = append(extraTools, newDianaFileDeliveryTool(r, event, settings, relationship))
+				}
 			}
 			// 图片溯源同样按插件开关走：反查要把图片上传给第三方图库，不是每个
 			// 群都愿意，插件停用时模型看不到这个工具。
@@ -3607,6 +3623,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
 				turnMessageIDs[messageID] = true
+			}
+		}
+		if directAgentDecision {
+			// 先发图、隔一会儿再单独问「这是啥」：历史里那张图只有文字摘要，摘要没出来
+			// 模型就只能看到「尚无缓存描述」。拼历史之前加急等一下。
+			if dependencies := recentSenderImageEvents(replyHistory, event, turnMessageIDs); len(dependencies) > 0 {
+				waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
+				r.awaitHistoryImageDescriptions(waitCtx, dependencies...)
+				cancel()
 			}
 		}
 		historyGroups, recentHistory := historyContextMetadata(replyHistory, event.Time, cfg.BotAccount)
@@ -4079,7 +4104,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			ownsRegistry = true
 		}
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
-		registry.Register(newDianaRuntimeModelTool(agentClient, event))
+		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
+		if modelDisclosedTo(cfg, relationship.Owner) {
+			registry.Register(newDianaRuntimeModelTool(agentClient, event))
+		}
 		agentRunner, err := agent.NewRunner(agentClient, agentCfg, registry)
 		if err != nil {
 			if ownsRegistry {
@@ -4473,7 +4501,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 13. edit_image 只能用于从现有参考图里实际可见的像素、区域、人物或对象进行编辑或衍生创作。不要因为当前消息或引用消息带图，就假定用户要的目标画面已经存在于图中。
 14. 如果用户要先识别图片中的文字、编号或线索，再去网页、数据库或其他外部来源查找并发送另一张图片、封面、商品图或页面截图，这是检索/浏览器任务，必须输出 action="none"，由普通 Agent 处理；不能让图片编辑模型凭空补出外部内容。
 15. “裁剪/截取/提取”只有在目标区域确实可见于当前或引用图片时才是 edit_image；若目标只由文字或编号指向、原图中并不存在，则必须输出 action="none"。
-16. 如果图片产出依赖尚未执行的联网搜索、网页核验、外部资料读取或实时事实，必须输出 action="none"，让普通 Agent 先调用搜索/浏览器工具，再把确认后的结果交给 diana.image；不得在搜索前直接生成，也不得臆造搜索结果。`)
+16. 如果图片产出依赖尚未执行的联网搜索、网页核验、外部资料读取或实时事实，必须输出 action="none"，让普通 Agent 先调用搜索/浏览器工具，再把确认后的结果交给 image；不得在搜索前直接生成，也不得臆造搜索结果。`)
 	userPrompt := "请判断这条当前消息是否要调用图片功能。消息上下文 JSON：\n"
 	outputFormat := `{"action":"none","prompt":""}`
 	if registry != nil {
@@ -4485,7 +4513,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 19. context_message_ids 只能填写 recent_messages 中真实存在的 message_id。保留所有可能帮助理解当前指代、话题延续、约束或用户意图的消息；只删除确定无关的旁支聊天，不要为了追求数量少而丢上下文。
 20. 当前消息的直接引用和语义指向会由运行时强制保留，不必依靠关键词。older_summary_available=true 且当前问题确实延续更早话题时，keep_older_summary=true；独立新问题则为 false。
 21. 工具参数应保持最小且符合工具说明。搜索只需要工具根据当前信息缺口整理出的 query，不要把聊天记录、工具目录或系统说明塞进搜索词。
-22. available_tools 中存在 web_search.search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
+22. available_tools 中存在 web_search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
 23. tools、context_message_ids 和 keep_older_summary 三个字段必须始终给出，即使它们为空或为 false。`)
 		userPrompt = "请判断图片动作，并选择本轮真正可能有用的上下文和工具。消息上下文 JSON：\n"
 		outputFormat = `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`
@@ -4760,7 +4788,7 @@ type llmProviderRunFunc func(LLMProvider) (string, error)
 // modelRoleForGroup 返回某个用途实际绑定的模型角色，没有专门绑定时回落到 chat 绑定。
 //
 // 回落这条是有意的：机器人绑定的是「这台机器人用哪个模型说话」。一轮对话中途多出
-// 几张图（例如 diana.history_media 把历史原图作为附件补进下一轮），用途会从 chat
+// 几张图（例如 history_media 把历史原图作为附件补进下一轮），用途会从 chat
 // 变成 vision，但说话的还是同一台机器人。没有单独绑视觉模型时就该继续用它绑定的
 // 聊天模型，而不是滑到全局激活配置那份和这台机器人无关的配置上——那种切换是静默的，
 // 表现为「聊着聊着换了个模型答话」，而日志里两轮的 provider/model 都是「正常」的。

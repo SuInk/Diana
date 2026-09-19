@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	dianaStickerToolName             = "diana.sticker"
+	dianaStickerToolName             = "sticker"
 	maximumStickerDescriptionLookups = 128
 	stickerDescriptionWorkers        = 3
 )
@@ -156,7 +156,11 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 		if selected.Hash != "" && !stickerFileMatchesHash(selected.Path, selected.Hash) {
 			return "", fmt.Errorf("表情包缓存内容校验失败")
 		}
-		if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: []string{selected.Path}})); err != nil {
+		label := "表情包"
+		if name := firstNonEmpty(selected.Summary, truncateRunes(selected.Description, 60)); name != "" {
+			label += "：" + name
+		}
+		if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: []string{selected.Path}, ImageLabels: []string{label}})); err != nil {
 			return "", fmt.Errorf("发送表情包失败: %w", err)
 		}
 		item := stickerSearchItems([]stickerCandidate{*selected})[0]
@@ -366,6 +370,7 @@ func (t *dianaStickerTool) semanticCandidateScores(ctx context.Context, query st
 		return scores
 	}
 	crossGroups := shareGroups && t.event.Kind == EventKindGroup
+	ctx = withSemanticSearchPurpose(ctx, "sticker_search")
 	for rank, event := range t.runtime.semanticSearchEvents(ctx, t.event, query, 0, time.Now().Unix(), crossGroups) {
 		// Keep exact sticker-name matches stronger while making semantic neighbors
 		// outrank merely recent candidates.
