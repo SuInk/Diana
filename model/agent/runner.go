@@ -75,6 +75,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	startedAt := time.Now()
 	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools)
+	if r.loader != nil {
+		r.loader.restore(req.LoadedTools)
+		r.loader.onLoad = req.ToolsLoaded
+	}
 	traceID := strings.TrimSpace(req.TraceID)
 	if traceID == "" {
 		traceID = newRunTraceID()
@@ -459,7 +463,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: guardErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, guardErr)
-			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code))
+			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -988,9 +992,13 @@ func (r *Runner) systemPrompt() string {
 		"这一轮确实不需要说话时，调用 agent_finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 	}
-	if loader := newDeferredToolLoader(r.registry, r.cfg.CoreTools); loader != nil {
+	if loader := r.loader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 传入工具名取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function，跨 Run 必须重新加载）：\n"+loader.catalog())
+		section := "按需加载的工具（没有随请求带完整定义；需要时先调用 " + ToolsLoadToolName + " 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function）：\n" + loader.catalog()
+		if loaded := loader.loadedContracts(); loaded != "" {
+			section += "\n\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" + loaded
+		}
+		sections = append(sections, section)
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}

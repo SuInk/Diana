@@ -229,7 +229,7 @@ func TestRSSSharedWorkStillDeliversToBothRobots(t *testing.T) {
 	qq, tg := &recordingChannel{}, &recordingChannel{}
 	channels := NewMultiChannel([]ChannelBinding{{ProfileID: "qq", Platform: PlatformOneBotV11, Channel: qq}, {ProfileID: "tg", Platform: PlatformTelegram, Channel: tg}})
 	r := NewRuntime(BotConfig{ID: "qq", BotAccount: "42"}, channels, NewPluginManager(NewRSSWatchPlugin(server.Client())), models, tasks, nil, nil)
-	r.SetProfiles(ProfileSet{ActiveID: "qq", Profiles: []BotConfig{{ID: "qq", Platform: PlatformOneBotV11, BotAccount: "42"}, {ID: "tg", Platform: PlatformTelegram, BotAccount: "43"}}})
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{{ID: "qq", Platform: PlatformOneBotV11, BotAccount: "42"}, {ID: "tg", Platform: PlatformTelegram, BotAccount: "43"}}})
 	r.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) { return provider, nil })
 	for _, item := range []Reminder{a, b} {
 		if _, err := r.runClaimedRSSWatch(context.Background(), item); err != nil {

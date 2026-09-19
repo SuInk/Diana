@@ -197,7 +197,7 @@ func TestRepositoryWatchCreateUsesSelectedProfileAndGroupTarget(t *testing.T) {
 		Name: "通知机器人", Platform: assistant.PlatformOneBotV11, Enabled: true,
 	})
 	handler.SetProfileStore(profiles)
-	profileID := profiles.Profiles().ActiveID
+	profileID := profiles.Profiles().Profiles[0].ID
 	router := botTestRouter(handler)
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/private","profile_id":%q,"destination":"group","group_id":"123456",
@@ -227,7 +227,7 @@ func TestRepositoryWatchCreateUsesArbitraryPrivateTargetWithoutProfileOwner(t *t
 	router := botTestRouter(handler)
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/private","profile_id":%q,"destination":"private","user_id":"998877","watch_commits":true
-	}`, profiles.Profiles().ActiveID))
+	}`, profiles.Profiles().Profiles[0].ID))
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -245,7 +245,7 @@ func TestRepositoryWatchCreateRequiresPrivateTarget(t *testing.T) {
 	router := botTestRouter(handler)
 	recorder := performJSONRequest(router, http.MethodPost, "/api/assistant/tasks/repository-watches", fmt.Sprintf(`{
 		"repository":"acme/private","profile_id":%q,"destination":"private","watch_commits":true
-	}`, profiles.Profiles().ActiveID))
+	}`, profiles.Profiles().Profiles[0].ID))
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "发送对象") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -403,7 +403,7 @@ func TestRepositoryWatchCreateForwardsSelectedEventKinds(t *testing.T) {
 		"repository":"acme/demo","profile_id":%q,"destination":"group","group_id":"123456",
 		"watch_pull_requests":true,"watch_issues":true,
 		"watch_pull_request_events":["opened","merged"],"watch_issue_events":["opened"]
-	}`, profiles.Profiles().ActiveID))
+	}`, profiles.Profiles().Profiles[0].ID))
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}

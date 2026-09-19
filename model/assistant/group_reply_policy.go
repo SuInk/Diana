@@ -170,7 +170,7 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 func (r *Runtime) saveGroupConfig(cfg GroupConfig) (GroupConfig, error) {
 	r.mu.RLock()
 	store := r.groupConfigs
-	base := r.cfg
+	base := r.profileConfigLocked(cfg.BotProfileID)
 	r.mu.RUnlock()
 	writer, ok := store.(GroupConfigWriter)
 	if !ok || writer == nil {

@@ -168,7 +168,7 @@ func (r *Runtime) verifyGroupSeqGap(ctx context.Context, store InboundEventStore
 	query := GroupSeqGapQuery{
 		ProfileID: event.ProfileID,
 		GroupID:   event.GroupID,
-		SelfID:    firstNonEmpty(r.oneBotBotAccount(), r.Config().BotAccount, event.SelfID),
+		SelfID:    firstNonEmpty(r.oneBotBotAccount(), r.profileConfig(event.ProfileID).BotAccount, event.SelfID),
 		Seq:       probe.seq,
 		EventTime: event.Time,
 		Since:     event.Time - int64(InboundReplayWindow/time.Second),

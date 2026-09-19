@@ -324,3 +324,43 @@ func (p *scopeRouteProvider) Generate(_ context.Context, req llm.GenerateRequest
 	p.replyRequest = req
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
 }
+
+// 扩展底座在机器人之间共享后，本地工具仍按各自配置：没开命令执行的机器人不能从底座
+// 借到别的机器人的 run_command；随事件变化的内置 Skill 也只出现在对应请求里。
+func TestSharedExtensionRegistryKeepsLocalToolsPerBot(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	defer runtime.closeAgentRegistryCache()
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
+	policy := RelationshipPolicy{Owner: true}
+	withCommands, without := DefaultBotConfig(), DefaultBotConfig()
+	withCommands.AgentCommandAllowlist = []string{"echo"}
+	without.AgentCommandAllowlist = []string{}
+
+	first, err := runtime.newAgentRegistry(context.Background(), withCommands.WithDefaults(), event, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := runtime.newAgentRegistry(context.Background(), without.WithDefaults(), event, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if len(runtime.agentRegistryCache) != 1 {
+		t.Fatalf("扩展底座条目 = %d，想要 1", len(runtime.agentRegistryCache))
+	}
+	if _, ok := first.Get("run_command"); !ok {
+		t.Fatal("开了命令白名单的机器人没有 run_command")
+	}
+	if _, ok := second.Get("run_command"); ok {
+		t.Fatal("没开命令执行的机器人从共享底座借到了 run_command")
+	}
+	hasBotProtocol := false
+	for _, skill := range second.Skills() {
+		hasBotProtocol = hasBotProtocol || skill.Name == "bot-protocol"
+	}
+	if !hasBotProtocol {
+		t.Fatalf("请求视图缺少内置 Skill：%+v", second.Skills())
+	}
+}

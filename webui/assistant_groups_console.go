@@ -126,7 +126,7 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 	}
 	// 中心节点优先用配置里的机器人账号：新群可能还没有机器人自己的发言，
 	// 光靠扫历史找不出中心，图就散成一堆互不相干的点。
-	botID := strings.TrimSpace(h.runtime.Config().BotAccount)
+	botID := strings.TrimSpace(h.botConfigForProfile(botProfileScope(c)).BotAccount)
 	graph, err := h.sqlite.GroupRelationGraphFor(c.Request.Context(), groupID, since, botID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -137,8 +137,8 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 
 // listConsoleGroups 返回机器人已加入的群、已保存群配置与插件清单。
 func (h *BotHandler) listConsoleGroups(c *gin.Context) {
-	base := h.runtime.Config()
 	profileID := botProfileScope(c)
+	base := h.botConfigForProfile(profileID)
 	set := assistant.GroupConfigSet{Groups: h.groupConfigs.Groups().GroupsForProfile(profileID)}
 	refresh := queryBool(c.Query("refresh"))
 	liveGroups, liveAvailable, warning := h.consoleGroupSources(c.Request.Context(), profileID, refresh)
@@ -532,14 +532,15 @@ func (h *BotHandler) botConfigResolver() assistant.BotConfigResolver {
 	}
 }
 
-// botConfigForProfile 取指定机器人的配置，档案不在时退回运行时当前配置。
+// botConfigForProfile 取指定机器人的配置；档案里找不到时问运行时（只有一台机器人时
+// 空 ID 就是它，多台时是默认配置，不拿别的机器人充数）。
 func (h *BotHandler) botConfigForProfile(profileID string) assistant.BotConfig {
 	if resolve := h.botConfigResolver(); resolve != nil {
 		if cfg, ok := resolve(profileID); ok {
 			return cfg
 		}
 	}
-	return h.runtime.Config()
+	return h.runtime.ProfileConfig(profileID)
 }
 
 func (h *BotHandler) consoleGroupProfile(requested string) (string, string, error) {

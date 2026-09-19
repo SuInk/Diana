@@ -1,7 +1,5 @@
 package llm
 
-import "encoding/json"
-
 // InputBudgetSplit is an estimate, not provider-reported usage. Text and images
 // each receive half the available budget and may borrow the other's unused share.
 type InputBudgetSplit struct {
@@ -34,17 +32,8 @@ func PlanInputBudget(req GenerateRequest, budget int64) InputBudgetSplit {
 		p.ImageTokens += images
 		p.OtherTokens += other
 		p.TextTokens += estimateMessageTokens(message) - images - other
-		if len(message.ToolCalls) > 0 {
-			if raw, err := json.Marshal(message.ToolCalls); err == nil {
-				p.TextTokens += estimateTextTokens(string(raw))
-			}
-		}
 	}
-	if len(req.Tools) > 0 {
-		if raw, err := json.Marshal(req.Tools); err == nil {
-			p.TextTokens += estimateTextTokens(string(raw))
-		}
-	}
+	p.TextTokens += estimateToolDefinitionsTokens(req.Tools, req.ToolChoice)
 	available := max(int64(0), budget-p.OtherTokens)
 	textShare := available / 2
 	imageShare := available - textShare

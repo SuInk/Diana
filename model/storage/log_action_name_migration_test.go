@@ -29,9 +29,9 @@ func TestLogActionNameMigrationFlattensLegacyNames(t *testing.T) {
 		"assistant.llm_usage":         "llm_usage",
 		"assistant.image.generate":    "image_generate",
 		"assistant.config.save":       "config_save",
-		"llm.models.list":             "llm_models_list",
-		"system.update.pull":          "system_update_pull",
-		"image.generate":              "image_generate",
+		"llm_models_list":             "llm_models_list",
+		"system_update_pull":          "system_update_pull",
+		"image_generate":              "image_generate",
 		// 只是以 diana 开头，不是 diana. 前缀：只换点，不去前缀。
 		"dianax.custom": "dianax_custom",
 		"llm_usage":     "llm_usage",

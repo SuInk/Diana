@@ -68,6 +68,12 @@ func (b *NoneBotBridge) UpdateConfig(cfg NoneBotBridgeConfig, channel Channel) {
 	b.mu.Unlock()
 }
 
+func (b *NoneBotBridge) config() NoneBotBridgeConfig {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.cfg
+}
+
 // Start 启动 NoneBot bridge 连接循环。
 func (b *NoneBotBridge) Start(parent context.Context) {
 	b.Stop()

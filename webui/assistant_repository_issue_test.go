@@ -105,7 +105,7 @@ func TestBotHandlerCreatesRepositoryIssueThroughPublishingPlugin(t *testing.T) {
 	router := botTestRouter(handler)
 
 	body := []byte(`{"repository":"acme/demo","title":"WebUI issue","body":"details","labels":["bug"]}`)
-	if err := handler.profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "issue-bot", Profiles: []assistant.BotConfig{runtime.Config()}}); err != nil {
+	if err := handler.profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{runtime.ProfileConfig("")}}); err != nil {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repository-publish/issues?profile=issue-bot", bytes.NewReader(body))

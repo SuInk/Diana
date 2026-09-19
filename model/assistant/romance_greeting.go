@@ -89,8 +89,7 @@ func (r *Runtime) romanceEnabledConfigs() []BotConfig {
 		seen[id] = true
 		configs = append(configs, cfg)
 	}
-	appendConfig(r.cfg)
-	for _, cfg := range r.profileConfigs {
+	for _, cfg := range r.orderedProfilesLocked() {
 		appendConfig(cfg)
 	}
 	return configs

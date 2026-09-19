@@ -20,8 +20,13 @@ func (r *Runtime) SetInboundEventStore(store InboundEventStore) {
 // privateAdmissionAllows 判断用户的私聊是否准入。all（默认）直接放行；
 // owner_only 只放行主人；whitelist 放行主人与白名单。空用户 ID 只在 all 下放行。
 func (r *Runtime) privateAdmissionAllows(event MessageEvent) bool {
-	cfg := r.effectiveConfigForEvent(event)
-	return cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
+	return privateAdmissionAllowsConfig(r.effectiveConfigForEvent(event), event)
+}
+
+// privateAdmissionAllowsConfig 按统一的主人判定放行主人：Telegram 主人填的是用户名时，
+// 私聊发来的是数字 ID，直接比对 OwnerID 会把主人自己挡在外面。
+func privateAdmissionAllowsConfig(cfg BotConfig, event MessageEvent) bool {
+	return cfg.IsOwnerEvent(event) || cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
 }
 
 // HandleEvent 处理 OneBot 消息或通知事件。
@@ -122,31 +127,31 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 // transport event does not carry it. OneBot history responses never contain
 // ProfileID, so reconnect backfill has to补一个。
 //
-// 这里绝不能拿「当前激活配置」去补。反连监听器是进程内共享的一个实例，OneBot 和
-// Telegram 同时跑的时候，激活哪一台跟这条消息是从哪个通道进来的没有关系。以前用
-// r.cfg 补，于是保存并激活 Telegram 那台之后触发的一次 OneBot 重连回填，把三十多条
-// 真实 QQ 群消息全部写成了 Telegram：正文带着 CQ 码、QQ 多媒体域名和正数 QQ 群号，
-// 事件页却按 Telegram 分类，真正的 Telegram 群消息反而看不到。
+// 身份只能按消息的来源绑。以前拿 WebUI 里当时选中的那台机器人去补，于是选中 Telegram
+// 那台之后触发的一次 OneBot 重连回填，把三十多条真实 QQ 群消息全部写成了 Telegram：
+// 正文带着 CQ 码、QQ 多媒体域名和正数 QQ 群号，事件页却按 Telegram 分类。
 //
 // 所以按来源平台绑：调用方说清楚这批事件是哪个平台来的，身份就从那个平台的通道绑定
-// 上取。只有激活配置本身就是那个平台时，才用它兜底。
+// 上取。只有一台机器人时身份就是它。
 func (r *Runtime) bindInboundEventIdentity(event MessageEvent) MessageEvent {
 	return r.bindInboundEventIdentityForPlatform(event, "")
 }
 
 // bindInboundEventIdentityForPlatform 按来源平台补身份；sourcePlatform 为空表示
-// 「不知道来源」，此时只能沿用当前激活配置（活跃通道事件本来就自带身份，走不到这里）。
+// 「不知道来源」，此时只在只有一台机器人时补（活跃通道事件本来就自带身份，走不到这里）。
 func (r *Runtime) bindInboundEventIdentityForPlatform(event MessageEvent, sourcePlatform string) MessageEvent {
 	r.mu.RLock()
-	cfg := r.cfg
+	sole, hasSole := r.lookupProfileLocked("")
 	channel := r.channel
 	r.mu.RUnlock()
 
-	profileID := strings.TrimSpace(cfg.ID)
-	platform := NormalizePlatformID(cfg.Platform)
+	// 只有一台机器人时身份就是它；多台时从通道绑定里找真正负责这个来源平台的那台。
+	// 找不到就把身份留空——宁可事件没有归属，也不要挂到一台根本不在这个平台上的机器人名下。
+	profileID, platform := "", ""
+	if hasSole {
+		profileID, platform = strings.TrimSpace(sole.ID), NormalizePlatformID(sole.Platform)
+	}
 	if sourcePlatform = NormalizePlatformID(sourcePlatform); sourcePlatform != "" && sourcePlatform != platform {
-		// 激活的不是这个平台：从通道绑定里找真正负责它的那台机器人。找不到就把身份
-		// 留空——宁可事件没有归属，也不要挂到一台根本不在这个平台上的机器人名下。
 		profileID, platform = "", ""
 		if multi, ok := channel.(*MultiChannel); ok {
 			if binding, found := multi.bindingForPlatform(sourcePlatform); found {

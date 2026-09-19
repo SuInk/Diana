@@ -17,6 +17,7 @@ import (
 
 type dianaConfigTool struct {
 	runtime *Runtime
+	event   MessageEvent
 }
 
 type dianaConfigSnapshot struct {
@@ -58,7 +59,6 @@ type dianaBotConfigSnapshot struct {
 	GroupTriggers                   []string                  `json:"group_triggers,omitempty"`
 	GroupTriggerMode                AliasTriggerMode          `json:"group_trigger_mode,omitempty"`
 	DisabledGroups                  []string                  `json:"disabled_groups,omitempty"`
-	DisabledUsers                   []string                  `json:"disabled_users,omitempty"`
 	GroupAdmission                  GroupAdmission            `json:"group_admission"`
 	PrivateAdmission                PrivateAdmission          `json:"private_admission"`
 	ReplyGate                       *ReplyGate                `json:"reply_gate,omitempty"`
@@ -191,8 +191,8 @@ type dianaRuntimePathSnapshot struct {
 }
 
 // newDianaConfigTool exposes the bot's own redacted runtime configuration to Agent skills.
-func newDianaConfigTool(runtime *Runtime) *dianaConfigTool {
-	return &dianaConfigTool{runtime: runtime}
+func newDianaConfigTool(runtime *Runtime, event MessageEvent) *dianaConfigTool {
+	return &dianaConfigTool{runtime: runtime, event: event}
 }
 
 func (t *dianaConfigTool) Name() string {
@@ -215,7 +215,7 @@ func (t *dianaConfigTool) Run(_ context.Context, input map[string]any) (string, 
 	if section == "" {
 		section = "all"
 	}
-	snapshot := t.runtime.dianaConfigSnapshot()
+	snapshot := t.runtime.dianaConfigSnapshot(t.event)
 	filtered := map[string]any{"note": snapshot.Note}
 	switch section {
 	case "all":
@@ -248,12 +248,13 @@ func (t *dianaConfigTool) Run(_ context.Context, input map[string]any) (string, 
 	return string(body), nil
 }
 
-func (r *Runtime) dianaConfigSnapshot() dianaConfigSnapshot {
+// dianaConfigSnapshot 返回提问所在那台机器人的配置快照。
+func (r *Runtime) dianaConfigSnapshot(event MessageEvent) dianaConfigSnapshot {
 	status := r.Status()
-	cfg := r.Config().WithDefaults()
+	cfg := r.profileConfig(event.ProfileID)
 	return dianaConfigSnapshot{
 		Note:        "配置已脱敏：不会返回 API key、OneBot token、自定义 header 值、config.yaml 原文或 secrets 文件内容。",
-		Runtime:     dianaRuntimeFromStatus(status),
+		Runtime:     dianaRuntimeFromStatus(status, cfg.ID),
 		Bot:         dianaBotConfigFromConfig(cfg),
 		LLM:         r.dianaLLMSnapshot(),
 		Skills:      dianaPluginSkillsFromStates(status.Plugins),
@@ -261,11 +262,11 @@ func (r *Runtime) dianaConfigSnapshot() dianaConfigSnapshot {
 	}
 }
 
-func dianaRuntimeFromStatus(status RuntimeStatus) dianaRuntimeSnapshot {
+func dianaRuntimeFromStatus(status RuntimeStatus, profileID string) dianaRuntimeSnapshot {
 	return dianaRuntimeSnapshot{
 		Running:       status.Running,
 		Channel:       status.Channel,
-		NoneBotBridge: status.NoneBotBridge,
+		NoneBotBridge: status.NoneBotBridges[profileID],
 		ActiveWorkers: status.ActiveWorkers,
 		LastError:     status.LastError,
 		UpdatedAt:     status.UpdatedAt,
@@ -295,7 +296,6 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),
 		GroupTriggerMode:                aliasTriggerMode(cfg),
 		DisabledGroups:                  append([]string(nil), cfg.DisabledGroups...),
-		DisabledUsers:                   append([]string(nil), cfg.DisabledUsers...),
 		GroupAdmission:                  cfg.GroupAdmission.WithDefaults(),
 		PrivateAdmission:                cfg.PrivateAdmission.WithDefaults(),
 		ReplyGate:                       cfg.ReplyGate.Clone(),

@@ -287,7 +287,8 @@ func (s *restoredConfigSaver) SaveBotConfig(cfg BotConfig) {
 func TestRestoredRuntimeLearnsBotIdentityOnce(t *testing.T) {
 	saver := &restoredConfigSaver{}
 	runtime := NewRuntime(BotConfig{}, restoredStatusChannel{status: ChannelStatus{Connected: true, SelfID: "1784464"}}, NewPluginManager(), nil, nil, saver, nil)
-	if got := runtime.Status().Config.BotAccount; got != "1784464" {
+	runtime.Status()
+	if got := runtime.ProfileConfig("").BotAccount; got != "1784464" {
 		t.Fatalf("BotAccount=%q", got)
 	}
 	runtime.Status()
@@ -297,7 +298,8 @@ func TestRestoredRuntimeLearnsBotIdentityOnce(t *testing.T) {
 
 	explicitSaver := &restoredConfigSaver{}
 	explicit := NewRuntime(BotConfig{BotAccount: "10001"}, restoredStatusChannel{status: ChannelStatus{SelfID: "1784464"}}, NewPluginManager(), nil, nil, explicitSaver, nil)
-	if got := explicit.Status().Config.BotAccount; got != "10001" || explicitSaver.calls != 0 {
+	explicit.Status()
+	if got := explicit.ProfileConfig("").BotAccount; got != "10001" || explicitSaver.calls != 0 {
 		t.Fatalf("explicit BotAccount=%q save calls=%d", got, explicitSaver.calls)
 	}
 }
@@ -311,7 +313,7 @@ func TestRestoredRuntimeTriggersSupportedSocialLinksOnly(t *testing.T) {
 	if runtime.shouldHandle(event, "https://example.com/article") {
 		t.Fatal("ordinary link should not trigger a group reply")
 	}
-	if _, err := runtime.plugins.SetEnabledForProfile(resolverPluginID, runtime.Config().ID, false); err != nil {
+	if _, err := runtime.plugins.SetEnabledForProfile(resolverPluginID, runtime.ProfileConfig("").ID, false); err != nil {
 		t.Fatalf("SetEnabled() error = %v", err)
 	}
 	if runtime.shouldHandle(event, "https://youtu.be/example") {
@@ -408,7 +410,7 @@ func TestRestoredLLMConfigUsesStructuredAgentTool(t *testing.T) {
 	if err != nil || !strings.Contains(output, "已把对话模型换成 gpt-4.1-mini") || store.Current().Model != "old-model" {
 		t.Fatalf("output=%q err=%v config=%#v", output, err, store.Current())
 	}
-	if roles := normalizeModelRoles(runtime.Config().ModelRoles); roles["chat"].Model != "gpt-4.1-mini" {
+	if roles := normalizeModelRoles(runtime.ProfileConfig("").ModelRoles); roles["chat"].Model != "gpt-4.1-mini" {
 		t.Fatalf("chat role = %#v", roles["chat"])
 	}
 	plugins := NewDefaultPluginManager()

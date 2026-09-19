@@ -49,9 +49,9 @@ func TestReplyMergeThresholdGroupOverrideControlsMerging(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := topicTestRuntime(provider)
-			cfg := r.Config()
+			cfg := r.ProfileConfig("")
 			cfg.ReplyMergeConfidencePercent = tc.bot
-			if err := r.UpdateConfigInPlace(cfg); err != nil {
+			if err := r.ApplyProfiles(context.Background(), NewProfileSet(cfg), nil); err != nil {
 				t.Fatal(err)
 			}
 			r.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{

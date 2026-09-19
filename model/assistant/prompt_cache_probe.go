@@ -21,7 +21,7 @@ import (
 // 各算一个哈希，和同一会话同一用途的上一次请求逐段比对，定位到首个分叉的段、消息下标
 // 和字节偏移。
 //
-// 它只读不写：不碰 GenerateRequest，不改变发给供应商的任何字节，因此自身不会影响命中率。
+// 指纹观测只读 payload；同一包装器另行补充稳定的匿名路由键，供兼容网关保持会话亲和。
 // 顺利追加（上一次是这一次的严格前缀）时什么都不记——那是期望状态，用量日志里的
 // cached_input_tokens 已经能说明问题；只有前缀真的断了才留一条 debug 记录。
 
@@ -300,6 +300,9 @@ type promptCacheProbeLLMProvider struct {
 
 func (p *promptCacheProbeLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	purpose := llmCallPurpose(ctx)
+	if req.PromptCacheKey == "" {
+		req.PromptCacheKey = promptCacheRoutingKey(p.event, purpose)
+	}
 	observation := observePromptCachePayload(req)
 	previous, ok := p.runtime.promptCacheProbe.swap(promptCacheProbeKey(p.event, purpose, observation.ToolsHash), observation)
 	response, err := p.provider.Generate(ctx, req)
@@ -310,6 +313,13 @@ func (p *promptCacheProbeLLMProvider) Generate(ctx context.Context, req llm.Gene
 		}
 	}
 	return response, err
+}
+
+func promptCacheRoutingKey(event MessageEvent, purpose string) string {
+	// Do not put account IDs or group names on the wire. Tool additions must not
+	// change routing; current tool authorization remains enforced by the registry.
+	sum := sha256.Sum256([]byte(groupPromptSessionKey(event) + "\x00" + strings.TrimSpace(purpose)))
+	return "diana-" + hex.EncodeToString(sum[:24])
 }
 
 // recordPromptCacheDivergence 记录一次前缀断裂。写 debug 类日志：它不是错误，

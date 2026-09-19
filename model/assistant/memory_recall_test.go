@@ -112,7 +112,7 @@ func TestMemoryToolSearchThenReadPreservesEvidence(t *testing.T) {
 	if len(result.Items) != 1 || result.Items[0].Content != s.neighbors[0].Content || result.Items[0].Evidence != s.neighbors[0].Evidence {
 		t.Fatalf("full evidence lost: %s", raw)
 	}
-	r.cfg.LongTermMemoryEnabled = boolPointer(false)
+	mutateTestProfile(r, func(c *BotConfig) { c.LongTermMemoryEnabled = boolPointer(false) })
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "read", "id": "linked"}); err == nil {
 		t.Fatal("tool bypassed live memory switch")
 	}

@@ -31,7 +31,7 @@ func TestBotMarkersOwnerScopesAndSuppression(t *testing.T) {
 	ctx := context.Background()
 	saver := &testBotMarkersSaver{}
 	r := NewRuntime(BotConfig{ID: "a", OwnerID: "900", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
-	r.SetProfiles(ProfileSet{ActiveID: "a", Profiles: []BotConfig{{ID: "a", OwnerID: "900", BotAccount: "42"}, {ID: "b", OwnerID: "901", BotAccount: "43"}}})
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{{ID: "a", OwnerID: "900", BotAccount: "42"}, {ID: "b", OwnerID: "901", BotAccount: "43"}}})
 	r.SetGroupConfigStore(&testWritableGroupConfigStore{})
 	e := MessageEvent{Kind: EventKindGroup, ProfileID: "a", GroupID: "100", UserID: "900", Quoted: &QuotedMessage{UserID: "200"}}
 	tool := &dianaBotMarkersTool{runtime: r, event: e}
@@ -78,12 +78,12 @@ func TestBotMarkersOwnerScopesAndSuppression(t *testing.T) {
 	if _, err := tool.Run(ctx, map[string]any{"operation": "mark", "scope": "bot", "user_id": "202"}); err == nil {
 		t.Fatal("persistence failure hidden")
 	}
-	if slices.Contains(r.Config().MarkedBotIDs, "202") {
+	if slices.Contains(r.ProfileConfig("a").MarkedBotIDs, "202") {
 		t.Fatal("failed write changed runtime")
 	}
-	copy := ConfigFromPayload(PayloadFromConfig(r.Config()), BotConfig{}).WithDefaults()
+	copy := ConfigFromPayload(PayloadFromConfig(r.ProfileConfig("a")), BotConfig{}).WithDefaults()
 	copy.MarkedBotIDs[0] = "changed"
-	if !slices.Contains(r.Config().MarkedBotIDs, "200") {
+	if !slices.Contains(r.ProfileConfig("a").MarkedBotIDs, "200") {
 		t.Fatal("configuration slice alias")
 	}
 }

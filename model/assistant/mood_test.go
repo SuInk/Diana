@@ -56,19 +56,19 @@ func TestMoodToneForConfigGates(t *testing.T) {
 	now := runtime.clock()
 
 	// 平静时一个字都不注入。
-	if tone := runtime.moodToneForConfig(runtime.Config(), "bot"); tone != "" {
+	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); tone != "" {
 		t.Fatalf("neutral tone = %q", tone)
 	}
 	for range 4 {
 		runtime.bumpMood("bot", 1, now)
 	}
-	if tone := runtime.moodToneForConfig(runtime.Config(), "bot"); !strings.Contains(tone, "心情不错") {
+	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); !strings.Contains(tone, "心情不错") {
 		t.Fatalf("happy tone = %q", tone)
 	}
 	for range 4 {
 		runtime.bumpMood("bot", -2, now)
 	}
-	if tone := runtime.moodToneForConfig(runtime.Config(), "bot"); !strings.Contains(tone, "低落") {
+	if tone := runtime.moodToneForConfig(runtime.ProfileConfig(""), "bot"); !strings.Contains(tone, "低落") {
 		t.Fatalf("low tone = %q", tone)
 	}
 
@@ -77,7 +77,7 @@ func TestMoodToneForConfigGates(t *testing.T) {
 	for range 10 {
 		off.bumpMood("bot", 3, now)
 	}
-	if tone := off.moodToneForConfig(off.Config(), "bot"); tone != "" {
+	if tone := off.moodToneForConfig(off.ProfileConfig(""), "bot"); tone != "" {
 		t.Fatalf("disabled tone = %q", tone)
 	}
 }

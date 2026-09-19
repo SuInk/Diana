@@ -17,7 +17,7 @@ func TestSharedConnectionAPICreatesWithoutCredentialsAndRejectsSourceDeletion(t 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	h := NewBotHandlerWithFactory(ctx, runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
-	source, _ = h.profiles.Profiles().Current()
+	source = h.profiles.Profiles().Profiles[0]
 	router := botTestRouter(h)
 	post := func(path string, payload assistant.ConfigPayload) *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(payload)
@@ -31,7 +31,7 @@ func TestSharedConnectionAPICreatesWithoutCredentialsAndRejectsSourceDeletion(t 
 	if response.Code != http.StatusOK {
 		t.Fatalf("create: %d %s", response.Code, response.Body.String())
 	}
-	saved, _ := h.profiles.Profiles().Current()
+	saved := h.profiles.Profiles().Profiles[len(h.profiles.Profiles().Profiles)-1]
 	if saved.ConnectionProfileID != source.ID || saved.OneBotAccessToken != "" {
 		t.Fatal("reference not stored independently of credentials")
 	}
@@ -56,7 +56,7 @@ func TestWebSocketDuplicateSaveAndEnableAreRejectedWithoutMutation(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	h := NewBotHandlerWithFactory(ctx, runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
-	source, _ = h.profiles.Profiles().Current()
+	source = h.profiles.Profiles().Profiles[0]
 	router := botTestRouter(h)
 	post := func(path string, payload any) *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(payload)

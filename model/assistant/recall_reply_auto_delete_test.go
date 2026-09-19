@@ -127,7 +127,7 @@ func TestRecallReplyAutoDeleteHonorsGroupPolicy(t *testing.T) {
 				EnabledSet:                   true,
 				RecallReplyAutoDeleteEnabled: tt.groupPolicy,
 				RecallReplyTTLSeconds:        1,
-			}, runtime.Config()); err != nil {
+			}, runtime.ProfileConfig("")); err != nil {
 				t.Fatal(err)
 			}
 			runtime.SetGroupConfigStore(store)

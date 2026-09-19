@@ -65,11 +65,11 @@ func TestBotHandlerConfigKeepsTokenHidden(t *testing.T) {
 	if !payload.WelcomeEnabled || payload.WelcomeMessage != "欢迎 {user_id}" {
 		t.Fatalf("welcome payload wrong: %#v", payload)
 	}
-	if runtime.Config().OneBotAccessToken != "secret" {
-		t.Fatalf("stored token = %q", runtime.Config().OneBotAccessToken)
+	if runtime.ProfileConfig("").OneBotAccessToken != "secret" {
+		t.Fatalf("stored token = %q", runtime.ProfileConfig("").OneBotAccessToken)
 	}
-	if runtime.Config().NoneBotBridgeToken != "nonebot-secret" {
-		t.Fatalf("stored nonebot token = %q", runtime.Config().NoneBotBridgeToken)
+	if runtime.ProfileConfig("").NoneBotBridgeToken != "nonebot-secret" {
+		t.Fatalf("stored nonebot token = %q", runtime.ProfileConfig("").NoneBotBridgeToken)
 	}
 }
 

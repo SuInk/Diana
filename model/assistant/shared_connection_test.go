@@ -16,12 +16,12 @@ func TestSharedConnectionResolvesLiveSettingsAndProtectsReferences(t *testing.T)
 	child := DefaultBotConfig()
 	child.ID, child.ConnectionProfileID, child.Enabled = "child", source.ID, true
 	child.SystemPrompt = "independent persona"
-	set := ProfileSet{ActiveID: child.ID, Profiles: []BotConfig{child, source}}
+	set := ProfileSet{Profiles: []BotConfig{child, source}}
 	if err := set.ValidateConnections(); err != nil {
 		t.Fatal(err)
 	}
-	resolved, ok := set.RuntimeConfig()
-	if !ok || resolved.OneBotAccessToken != source.OneBotAccessToken || resolved.SystemPrompt != child.SystemPrompt || !resolved.Enabled {
+	resolved, err := set.ResolveConnection(set.Profiles[0])
+	if err != nil || resolved.OneBotAccessToken != source.OneBotAccessToken || resolved.SystemPrompt != child.SystemPrompt || !resolved.Enabled {
 		t.Fatal("source settings or independent behavior lost")
 	}
 	if set.Profiles[0].OneBotAccessToken != "" {
@@ -29,7 +29,7 @@ func TestSharedConnectionResolvesLiveSettingsAndProtectsReferences(t *testing.T)
 	}
 	source.OneBotAccessToken = "updated-source-token"
 	set.Profiles[1] = source
-	resolved, err := set.ResolveConnection(child)
+	resolved, err = set.ResolveConnection(child)
 	if err != nil || resolved.OneBotAccessToken != source.OneBotAccessToken {
 		t.Fatal("source changes not followed")
 	}
@@ -135,7 +135,7 @@ func TestSharedConnectionPrivateAdmissionUsesEachProfile(t *testing.T) {
 	child := source
 	child.ID, child.OwnerID, child.ConnectionProfileID = "child", "owner-b", source.ID
 	runtime := NewRuntime(source, &multiChannelProbe{}, NewDefaultPluginManager(), nil, nil, nil, nil)
-	runtime.SetProfiles(ProfileSet{ActiveID: source.ID, Profiles: []BotConfig{source, child}})
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{source, child}})
 	if runtime.privateAdmissionAllows(MessageEvent{Kind: EventKindPrivate, ProfileID: child.ID, UserID: source.OwnerID}) {
 		t.Fatal("child accepted source owner")
 	}

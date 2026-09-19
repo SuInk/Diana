@@ -744,7 +744,7 @@ func TestDianaLLMConfigToolRebindsChatModelRole(t *testing.T) {
 		t.Fatalf("output = %q", output)
 	}
 	// 这才是真正决定机器人用什么模型的地方。
-	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	roles := normalizeModelRoles(runtime.ProfileConfig("").ModelRoles)
 	if roles["chat"].Model != "example-pro-model" || roles["chat"].ProfileID != "main" {
 		t.Fatalf("chat role = %#v", roles["chat"])
 	}
@@ -832,7 +832,7 @@ func TestDianaLLMConfigToolFollowsModelToItsProfile(t *testing.T) {
 		context.Background(), map[string]any{"operation": "update", "model": "claude-sonnet"}); err != nil {
 		t.Fatal(err)
 	}
-	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	roles := normalizeModelRoles(runtime.ProfileConfig("").ModelRoles)
 	if roles["chat"].ProfileID != "claude" || roles["chat"].Model != "claude-sonnet" {
 		t.Fatalf("chat role = %#v", roles["chat"])
 	}
@@ -867,7 +867,7 @@ func TestDianaLLMConfigToolUpdatesModelOnly(t *testing.T) {
 		t.Fatalf("output = %q", output)
 	}
 	// 换模型写的是机器人的模型分配，provider 配置一个字不动。
-	if roles := normalizeModelRoles(runtime.Config().ModelRoles); roles["chat"].Model != "gpt-4.1-mini" {
+	if roles := normalizeModelRoles(runtime.ProfileConfig("").ModelRoles); roles["chat"].Model != "gpt-4.1-mini" {
 		t.Fatalf("chat role = %#v", roles["chat"])
 	}
 	if got := store.Current(); got.Model != "example-chat-model" {
@@ -1368,7 +1368,7 @@ func TestDianaLLMConfigToolRebindsEveryModelRole(t *testing.T) {
 		if !strings.Contains(output, "已把"+item.wantLabel+"模型换成 "+item.model) {
 			t.Fatalf("role %s output = %q", item.role, output)
 		}
-		roles := normalizeModelRoles(runtime.Config().ModelRoles)
+		roles := normalizeModelRoles(runtime.ProfileConfig("").ModelRoles)
 		if roles[item.role].Model != item.model {
 			t.Fatalf("role %s = %#v", item.role, roles[item.role])
 		}
@@ -1400,7 +1400,7 @@ func TestDianaLLMConfigToolBindsNonChatRoleWithoutTouchingChat(t *testing.T) {
 		context.Background(), map[string]any{"operation": "update", "role": "vision", "model": "see-model"}); err != nil {
 		t.Fatal(err)
 	}
-	roles := normalizeModelRoles(runtime.Config().ModelRoles)
+	roles := normalizeModelRoles(runtime.ProfileConfig("").ModelRoles)
 	if roles["vision"].Model != "see-model" {
 		t.Fatalf("vision role = %#v", roles["vision"])
 	}

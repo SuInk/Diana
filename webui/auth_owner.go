@@ -35,9 +35,12 @@ const (
 var ownerPairingCodePattern = regexp.MustCompile(`^(?:登录(?:控制台)?\s*)?(\d{6})$`)
 
 // OwnerLoginRuntime 是管理员快速登录依赖的机器人运行时能力。
+//
+// 任一台开了快速登录的机器人，它的主人都能通过私聊那台机器人登录；回执也从那台发回。
 type OwnerLoginRuntime interface {
-	Config() assistant.BotConfig
-	CallOneBotAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error)
+	ProfileConfig(profileID string) assistant.BotConfig
+	ProfileConfigs() []assistant.BotConfig
+	CallPlatformAPIForProfile(ctx context.Context, profileID, action string, params map[string]any) (map[string]any, error)
 }
 
 type ownerPairing struct {
@@ -88,34 +91,54 @@ func (h *OwnerLoginHandler) Register(router gin.IRouter) {
 	router.POST("/api/auth/owner/pair/claim", h.claimPairing)
 }
 
-// availability 校验前提：开启了密码保护、配置了主人账号，且当前平台能把回执
-// 投递给主人。
-func (h *OwnerLoginHandler) availability() (assistant.BotConfig, error) {
+// availability 校验前提：开启了密码保护，并且至少有一台机器人能接受主人快速登录。
+func (h *OwnerLoginHandler) availability() error {
 	if h.auth == nil || h.runtime == nil || !h.auth.Required() {
-		return assistant.BotConfig{}, errors.New("未开启密码保护，无需管理员快速登录")
+		return errors.New("未开启密码保护，无需管理员快速登录")
 	}
-	cfg := h.runtime.Config()
+	var firstErr error
+	for _, cfg := range h.runtime.ProfileConfigs() {
+		err := ownerLoginEligible(cfg)
+		if err == nil {
+			return nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr == nil {
+		firstErr = errors.New("没有配置机器人")
+	}
+	return firstErr
+}
+
+// ownerLoginEligible 判断这台机器人能不能接受主人快速登录：启用、开了快速登录、
+// 配了主人账号，且平台能把回执投递给主人。
+func ownerLoginEligible(cfg assistant.BotConfig) error {
+	if !cfg.Enabled {
+		return errors.New("机器人未启用")
+	}
 	if !cfg.OwnerLoginEnabled {
-		return cfg, errors.New("管理员快速登录未开启")
+		return errors.New("管理员快速登录未开启")
 	}
 	if strings.TrimSpace(cfg.OwnerID) == "" {
-		return cfg, errors.New("未配置主人账号")
+		return errors.New("未配置主人账号")
 	}
 	if cfg.Platform != assistant.PlatformTelegram || assistant.TelegramOwnerUsername(cfg.OwnerID) == "" {
 		if _, _, err := ownerMessageDelivery(cfg, ""); err != nil {
-			return cfg, err
+			return err
 		}
 	}
-	return cfg, nil
+	return nil
 }
 
 func (h *OwnerLoginHandler) status(c *gin.Context) {
-	_, err := h.availability()
+	err := h.availability()
 	c.JSON(http.StatusOK, gin.H{"available": err == nil})
 }
 
 func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
-	if _, err := h.availability(); err != nil {
+	if err := h.availability(); err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
@@ -180,7 +203,7 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 }
 
 func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
-	if _, err := h.availability(); err != nil {
+	if err := h.availability(); err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
@@ -224,7 +247,7 @@ func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
 // 掐断、页面被手机浏览器回收、或者干脆换了个标签页打开。主人私聊发出去的那条
 // 消息里就有验证码，从聊天记录抄回来填即可，不必重走一遍流程。
 func (h *OwnerLoginHandler) claimPairing(c *gin.Context) {
-	if _, err := h.availability(); err != nil {
+	if err := h.availability(); err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
@@ -291,11 +314,12 @@ func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event ass
 	if event.Kind != assistant.EventKindPrivate {
 		return false
 	}
-	cfg, err := h.availability()
-	if err != nil {
+	if h.auth == nil || h.runtime == nil || !h.auth.Required() {
 		return false
 	}
-	if !cfg.IsOwnerEvent(event) {
+	// 认的是收到这条私聊的那台机器人的主人。
+	cfg := h.runtime.ProfileConfig(event.ProfileID)
+	if ownerLoginEligible(cfg) != nil || !cfg.IsOwnerEvent(event) {
 		return false
 	}
 	cfg.OwnerID = cfg.OwnerIDForEvent(event)
@@ -338,7 +362,7 @@ func (h *OwnerLoginHandler) notifyOwner(ctx context.Context, cfg assistant.BotCo
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, ownerMessageSendTimeout)
 	defer cancel()
-	_, err = h.runtime.CallOneBotAPI(sendCtx, action, params)
+	_, err = h.runtime.CallPlatformAPIForProfile(sendCtx, cfg.ID, action, params)
 	return err
 }
 

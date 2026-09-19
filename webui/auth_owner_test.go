@@ -18,26 +18,43 @@ import (
 )
 
 type fakeOwnerRuntime struct {
-	mu    sync.Mutex
-	cfg   assistant.BotConfig
-	calls []fakeOwnerAPICall
+	mu  sync.Mutex
+	cfg assistant.BotConfig
+	// profiles 非空时模拟多台机器人，cfg 不再使用。
+	profiles []assistant.BotConfig
+	calls    []fakeOwnerAPICall
 }
 
 type fakeOwnerAPICall struct {
-	action string
-	params map[string]any
+	profileID string
+	action    string
+	params    map[string]any
 }
 
-func (f *fakeOwnerRuntime) Config() assistant.BotConfig {
+func (f *fakeOwnerRuntime) ProfileConfig(id string) assistant.BotConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	for _, profile := range f.profiles {
+		if profile.ID == id {
+			return profile
+		}
+	}
 	return f.cfg
 }
 
-func (f *fakeOwnerRuntime) CallOneBotAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+func (f *fakeOwnerRuntime) ProfileConfigs() []assistant.BotConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, fakeOwnerAPICall{action: action, params: params})
+	if len(f.profiles) > 0 {
+		return append([]assistant.BotConfig(nil), f.profiles...)
+	}
+	return []assistant.BotConfig{f.cfg}
+}
+
+func (f *fakeOwnerRuntime) CallPlatformAPIForProfile(_ context.Context, profileID string, action string, params map[string]any) (map[string]any, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakeOwnerAPICall{profileID: profileID, action: action, params: params})
 	return map[string]any{}, nil
 }
 
@@ -68,7 +85,7 @@ func oneBotCallText(call fakeOwnerAPICall) string {
 
 func ownerLoginRuntime() *fakeOwnerRuntime {
 	return &fakeOwnerRuntime{cfg: assistant.BotConfig{
-		Platform: assistant.PlatformOneBotV11, OwnerID: "10001", Name: "Diana", OwnerLoginEnabled: true,
+		Platform: assistant.PlatformOneBotV11, OwnerID: "10001", Name: "Diana", OwnerLoginEnabled: true, Enabled: true,
 	}}
 }
 
@@ -285,5 +302,34 @@ func TestOwnerLoginUnavailableWhenDisabled(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/auth/owner/status", nil))
 	if !strings.Contains(rec.Body.String(), `"available":false`) {
 		t.Fatalf("status = %s", rec.Body.String())
+	}
+}
+
+// 多台机器人时，哪台开了快速登录，它的主人就能私聊那台登录；回执从那台发出。
+// 别的机器人的主人私聊这台不算数，也不能借一台没开快速登录的机器人登录。
+func TestOwnerLoginAcceptsOwnerOfTheReceivingBot(t *testing.T) {
+	runtime := &fakeOwnerRuntime{profiles: []assistant.BotConfig{
+		{ID: "a", Platform: assistant.PlatformOneBotV11, OwnerID: "10001", Enabled: true},
+		{ID: "b", Platform: assistant.PlatformOneBotV11, OwnerID: "20002", Enabled: true, OwnerLoginEnabled: true},
+	}}
+	router, _, handler := newOwnerLoginTestRouter(t, runtime)
+	code, _ := createOwnerPairing(t, router)
+	ownerOfA := assistant.MessageEvent{Kind: assistant.EventKindPrivate, Platform: assistant.PlatformOneBotV11, ProfileID: "a", UserID: "10001"}
+	if handler.ConsumePrivateMessage(context.Background(), ownerOfA, code) {
+		t.Fatal("没开快速登录的机器人 a 的主人登录成功")
+	}
+	ownerOfAviaB := ownerOfA
+	ownerOfAviaB.ProfileID = "b"
+	if handler.ConsumePrivateMessage(context.Background(), ownerOfAviaB, code) {
+		t.Fatal("别的机器人的主人通过 b 登录成功")
+	}
+	ownerOfB := assistant.MessageEvent{Kind: assistant.EventKindPrivate, Platform: assistant.PlatformOneBotV11, ProfileID: "b", UserID: "20002"}
+	if !handler.ConsumePrivateMessage(context.Background(), ownerOfB, code) {
+		t.Fatal("机器人 b 的主人私聊 b 没能登录")
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if len(runtime.calls) != 1 || runtime.calls[0].profileID != "b" {
+		t.Fatalf("回执应从机器人 b 发出：%+v", runtime.calls)
 	}
 }

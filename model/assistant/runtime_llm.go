@@ -42,6 +42,12 @@ func (r *Runtime) SetMessageHistoryStore(store MessageHistoryStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.messageStore = store
+	for _, state := range r.groupPromptSessions {
+		state.mu.Lock()
+		state.invalidated = true
+		state.mu.Unlock()
+	}
+	r.groupPromptSessions = nil
 }
 
 // resolveImageForLLM persists short-lived platform media before encoding it for
@@ -404,11 +410,12 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 func (r *Runtime) imageProviderConfigs(contexts ...context.Context) []llm.ProviderConfig {
 	r.mu.RLock()
 	store := r.llmStore
-	roles := normalizeModelRoles(r.cfg.ModelRoles)
 	r.mu.RUnlock()
+	var ctx context.Context
 	if len(contexts) > 0 {
-		roles = r.modelRolesForContext(contexts[0])
+		ctx = contexts[0]
 	}
+	roles := r.modelRolesForContext(ctx)
 	if store == nil {
 		return nil
 	}
