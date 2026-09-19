@@ -222,7 +222,7 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (*ll
 	}
 	return &llm.GenerateResponse{
 		Provider: metadata.Provider, Model: metadata.Model,
-		AnthropicThinking: metadata.AnthropicThinking, ReasoningContent: metadata.ReasoningContent, ResponsesOutput: metadata.ResponsesOutput,
+		ContinuationScope: metadata.ContinuationScope, AnthropicThinking: metadata.AnthropicThinking, ReasoningContent: metadata.ReasoningContent, ResponsesOutput: metadata.ResponsesOutput,
 		Text:      text.String(),
 		ToolCalls: toolCalls,
 		Usage:     usage,
