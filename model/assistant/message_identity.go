@@ -5,6 +5,30 @@ package assistant
 
 import "strings"
 
+// promptSenderIdentity keeps the human-readable name and the stable platform
+// identifier together in model context. Nicknames and group cards can change
+// or collide, so showing only the display name makes multi-user conversations
+// ambiguous. The identity privacy layer still replaces sensitive identifiers
+// before a request leaves the process when masking is enabled.
+func promptSenderIdentity(event MessageEvent) string {
+	return formatPromptIdentity(event.SenderName, event.UserID)
+}
+
+func formatPromptIdentity(displayName, userID string) string {
+	displayName = strings.TrimSpace(displayName)
+	userID = strings.TrimSpace(userID)
+	switch {
+	case displayName != "" && userID != "" && displayName != userID:
+		return displayName + "（" + userID + "）"
+	case displayName != "":
+		return displayName
+	case userID != "":
+		return userID
+	default:
+		return "用户"
+	}
+}
+
 // messageParticipantDisplayNames builds a reusable chat identity map from
 // message senders and quoted senders. Events must be passed in priority order.
 func messageParticipantDisplayNames(events ...MessageEvent) map[string]string {
