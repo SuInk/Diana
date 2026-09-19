@@ -41,7 +41,7 @@ func TestMediaDescriptionDisabledStillAllowsExplicitRead(t *testing.T) {
 		runtime.enqueueHistoryImageDescriptions(event)
 	}
 	runtime.historyImageDescMu.Lock()
-	pending := len(runtime.historyImageDescRun)
+	pending := len(runtime.historyImageDescJobs)
 	runtime.historyImageDescMu.Unlock()
 	if pending != 0 || provider.callCount() != 0 {
 		t.Fatal("automatic description ran while disabled")

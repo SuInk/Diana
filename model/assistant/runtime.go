@@ -448,22 +448,27 @@ type Runtime struct {
 	errorNoticeFreshWindow time.Duration
 	replyBatchMu           sync.Mutex
 	// replyTurns 记「同一个人刚问过」，让紧接着的第二条被当成追问接住而不是重答一遍。
-	replyTurnMu           sync.Mutex
-	replyTurns            map[string]replyTurnRecord
-	replyBatches          map[string]*replyBatchGate
-	unavailableGroupMu    sync.RWMutex
-	unavailableGroups     map[string]unavailableGroupSend
-	outboundDeliveryMu    sync.Mutex
-	outboundDeliveries    map[string]*groupOutboundDelivery
-	historyImageDescMu    sync.Mutex
-	historyImageDescRun   map[string]struct{}
-	historyImageDescReady map[string]struct{}
-	historyImageDescRetry map[string]time.Time
-	historyImageDescSem   chan struct{}
-	historyImageDescStop  context.CancelFunc
-	historyImageDescFront int
-	agentRegistryMu       sync.Mutex
-	agentRegistryCache    map[string]*agent.ToolRegistry
+	replyTurnMu             sync.Mutex
+	replyTurns              map[string]replyTurnRecord
+	replyBatches            map[string]*replyBatchGate
+	unavailableGroupMu      sync.RWMutex
+	unavailableGroups       map[string]unavailableGroupSend
+	outboundDeliveryMu      sync.Mutex
+	outboundDeliveries      map[string]*groupOutboundDelivery
+	historyImageDescMu      sync.Mutex
+	historyImageDescQueue   []*historyImageDescJob
+	historyImageDescJobs    map[string]*historyImageDescJob
+	historyImageDescRunning *historyImageDescJob
+	historyImageDescWorker  bool
+	historyImageDescWake    chan struct{}
+	historyImageDescReady   map[string]struct{}
+	historyImageDescFailed  map[string]historyImageDescFailure
+	historyImageDescFront   int
+	// 测试用来缩短识图超时和失败退避；零值取 historyImageDescriptionTimeout/RetryBackoff。
+	historyImageDescTimeout time.Duration
+	historyImageDescBackoff time.Duration
+	agentRegistryMu         sync.Mutex
+	agentRegistryCache      map[string]*agent.ToolRegistry
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -547,10 +552,10 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		replyBatches:            map[string]*replyBatchGate{},
 		unavailableGroups:       map[string]unavailableGroupSend{},
 		outboundDeliveries:      map[string]*groupOutboundDelivery{},
-		historyImageDescRun:     map[string]struct{}{},
+		historyImageDescJobs:    map[string]*historyImageDescJob{},
 		historyImageDescReady:   map[string]struct{}{},
-		historyImageDescRetry:   map[string]time.Time{},
-		historyImageDescSem:     make(chan struct{}, 1),
+		historyImageDescFailed:  map[string]historyImageDescFailure{},
+		historyImageDescWake:    make(chan struct{}, 1),
 		agentRegistryCache:      map[string]*agent.ToolRegistry{},
 		quietNotices:            map[string]time.Time{},
 		resolverDeliveries:      map[string]resolverDeliveryReservation{},
@@ -3618,6 +3623,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		for _, candidate := range turnCandidates {
 			if messageID := strings.TrimSpace(candidate.Event.MessageID); messageID != "" && messageID != event.MessageID {
 				turnMessageIDs[messageID] = true
+			}
+		}
+		if directAgentDecision {
+			// 先发图、隔一会儿再单独问「这是啥」：历史里那张图只有文字摘要，摘要没出来
+			// 模型就只能看到「尚无缓存描述」。拼历史之前加急等一下。
+			if dependencies := recentSenderImageEvents(replyHistory, event, turnMessageIDs); len(dependencies) > 0 {
+				waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
+				r.awaitHistoryImageDescriptions(waitCtx, dependencies...)
+				cancel()
 			}
 		}
 		historyGroups, recentHistory := historyContextMetadata(replyHistory, event.Time, cfg.BotAccount)
