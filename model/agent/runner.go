@@ -449,6 +449,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			})
 			continue
 		}
+		if typed, ok := tool.(ToolInputSchema); ok {
+			action.Input = coerceToolInputArrays(typed.InputSchema(), action.Input)
+		}
 		explicitRequestKind := explicitUserRequestKind(tool, action.Input)
 		if explicitRequestKind != "" && !ExtensionMutationAuthorized(currentUserRequestText(req), explicitRequestKind, action.Tool, action.Input) {
 			protocolRepairs++

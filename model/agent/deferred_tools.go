@@ -168,6 +168,8 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		if !loaded {
 			return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools.load，再 tools.execute", name)
 		}
+		action.Input = coerceToolInputArrays(schema, action.Input)
+		input = action.Input
 		tool, ok := l.registry.Get(name)
 		if !ok {
 			return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools.load", name)
@@ -186,6 +188,7 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 	}
 	if l != nil {
 		if action.Tool == ToolsLoadToolName {
+			action.Input = coerceToolInputArrays(l.InputSchema(), action.Input)
 			return action, validateToolInput(l.InputSchema(), action.Input)
 		}
 		if !l.core[action.Tool] {

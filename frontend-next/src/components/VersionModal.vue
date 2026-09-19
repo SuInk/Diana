@@ -533,7 +533,8 @@ const mirrorMode = computed({
 
 const channelOptions = [
   { value: "release", label: "Release · 正式版" },
-  { value: "beta", label: "Beta · 测试版" }
+  { value: "beta", label: "Beta · 测试版" },
+  { value: "canary", label: "Canary · 每次合并构建" }
 ];
 function setChannel(value: string): void {
   policy.value.channel = value as UpdatePolicy["channel"];
