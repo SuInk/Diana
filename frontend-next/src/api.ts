@@ -1516,6 +1516,7 @@ export function installDownloadedSystemUpdate(): Promise<UpdateResult> {
 }
 
 export interface UpdatePolicy {
+	channel?: "release" | "beta";
 	auto_download: boolean;
 	auto_install: boolean;
 	/** 下载加速策略：auto（实测挑线路）、direct（始终直连）或一条具体的镜像地址。 */

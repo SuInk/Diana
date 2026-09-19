@@ -256,7 +256,7 @@ func (h *SystemUpdateHandler) status(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
-// check 始终以最新稳定 GitHub Release 判断版本；Git 只负责源码状态和安装传输。
+// check 以所选通道的最新 GitHub Release 判断版本；Git 只负责源码状态和安装传输。
 // releaseCheckFailure 记录一次检查失败该用哪个 HTTP 状态码回应。聊天里的
 // diana.version 用不上状态码，只看错误本身。
 type releaseCheckFailure struct {
@@ -302,7 +302,7 @@ func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (syste
 	if gitAvailable {
 		remoteURL = status.RemoteURL
 	}
-	latest, err := h.latestStableRelease(requestCtx, remoteURL)
+	latest, err := h.latestChannelRelease(requestCtx, remoteURL)
 	if err != nil {
 		return systemUpdateCheckResponse{}, &releaseCheckFailure{status: http.StatusBadGateway, err: err}
 	}
@@ -377,6 +377,15 @@ func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
+	if policy.Channel != "" && policy.Channel != "release" && policy.Channel != "beta" {
+		writeError(c, http.StatusBadRequest, errors.New("更新通道必须是 release 或 beta"))
+		return
+	}
+	if !h.autoUpdateMu.TryLock() {
+		writeError(c, http.StatusConflict, errors.New("后台更新正在进行，请稍后修改更新策略"))
+		return
+	}
+	defer h.autoUpdateMu.Unlock()
 	policy = normalizeUpdatePolicy(policy)
 	if h.policyStore != nil {
 		if err := h.policyStore.SaveUpdatePolicy(c.Request.Context(), policy); err != nil {
@@ -390,7 +399,7 @@ func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
 	if h.mirror != nil {
 		h.mirror.SetMode(policy.GitHubMirror)
 	}
-	recordRequestOperation(c, h.logs, "system.update.policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall, "github_mirror": policy.GitHubMirror})
+	recordRequestOperation(c, h.logs, "system.update.policy", "系统更新策略已保存", "", map[string]any{"auto_download": policy.AutoDownload, "auto_install": policy.AutoInstall, "github_mirror": policy.GitHubMirror, "channel": policy.Channel})
 	c.JSON(http.StatusOK, policy)
 }
 
@@ -457,6 +466,9 @@ func (h *SystemUpdateHandler) saveGitHubToken(c *gin.Context) {
 }
 
 func normalizeUpdatePolicy(policy updater.UpdatePolicy) updater.UpdatePolicy {
+	if policy.Channel != "beta" {
+		policy.Channel = "release"
+	}
 	if policy.AutoInstall {
 		policy.AutoDownload = true
 	}
@@ -512,7 +524,7 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 		h.writeUpdateError(c, "system.update.install", err)
 		return
 	}
-	latest, err := h.latestStableRelease(c.Request.Context(), "")
+	latest, err := h.latestChannelRelease(c.Request.Context(), "")
 	if err != nil {
 		h.writeUpdateError(c, "system.update.install", err)
 		return
@@ -584,7 +596,7 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// applyLatestUpdate applies the newest stable Release after the HTTP layer has
+// applyLatestUpdate applies the newest Release in the selected channel after the HTTP layer has
 // verified the user's explicit confirmation.
 func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool) (updater.Result, error) {
 	status, err := h.updater.Status(ctx)
@@ -602,7 +614,7 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 			return updater.Result{}, err
 		}
 	}
-	latest, err := h.latestStableRelease(ctx, remoteURL)
+	latest, err := h.latestChannelRelease(ctx, remoteURL)
 	if err != nil {
 		return updater.Result{}, err
 	}
@@ -615,7 +627,7 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 			return updater.Result{
 				Status:       status,
 				TargetCommit: status.HeadCommit,
-				Output:       "Already at the latest stable release.",
+				Output:       "Already at the latest release in the selected channel.",
 				At:           time.Now(),
 			}, nil
 		}
@@ -652,12 +664,9 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 	if status.Updating {
 		return releaseOperationInProgressResult(status, status.DownloadedVersion), nil
 	}
-	latest, err := h.latestStableRelease(ctx, "")
+	latest, err := h.latestChannelRelease(ctx, "")
 	if err != nil {
 		return updater.Result{}, err
-	}
-	if !force && status.DownloadReady && status.DownloadedVersion == latest.Tag {
-		return updater.Result{Status: status, Downloaded: true, TargetCommit: latest.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
 	}
 	if !force {
 		updateAvailable, versionErr := updateAvailableAgainst(status.VersionLabel(), latest.Tag)
@@ -665,8 +674,11 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 			return updater.Result{}, versionErr
 		}
 		if !updateAvailable {
-			return updater.Result{Status: status, TargetCommit: status.VersionLabel(), Output: "Already at the latest stable release.", At: time.Now()}, nil
+			return updater.Result{Status: status, TargetCommit: status.VersionLabel(), Output: "Already at the latest release in the selected channel.", At: time.Now()}, nil
 		}
+	}
+	if !force && status.DownloadReady && status.DownloadedVersion == latest.Tag {
+		return updater.Result{Status: status, Downloaded: true, TargetCommit: latest.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
 	}
 	archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName())
 	if !ok {
@@ -726,7 +738,7 @@ func (h *SystemUpdateHandler) runScheduledUpdate(ctx context.Context) {
 			remoteURL = status.RemoteURL
 		}
 	}
-	if _, err := h.latestStableRelease(checkCtx, remoteURL); err != nil {
+	if _, err := h.latestChannelRelease(checkCtx, remoteURL); err != nil {
 		h.recordBackgroundUpdate("system.update.background_check", "后台检查更新失败", err, nil)
 		return
 	}
@@ -751,7 +763,7 @@ func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
 	runCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	if policy.AutoInstall {
-		latest, latestErr := h.latestStableRelease(runCtx, "")
+		latest, latestErr := h.latestChannelRelease(runCtx, "")
 		status, statusErr := h.releaseUpdater.Status(runCtx)
 		if latestErr != nil {
 			h.recordBackgroundUpdate("system.update.auto_install", "检查自动安装熔断状态失败", latestErr, nil)
@@ -776,7 +788,7 @@ func (h *SystemUpdateHandler) runAutoUpdate(ctx context.Context) {
 	if result.Fetched {
 		h.recordBackgroundUpdate("system.update.auto_download", "更新包已自动下载并校验", nil, map[string]any{"target": result.TargetCommit})
 	}
-	if !policy.AutoInstall || !result.Downloaded && !result.Status.DownloadReady {
+	if !policy.AutoInstall || !result.Downloaded {
 		return
 	}
 	installed, err := h.releaseUpdater.InstallDownloaded(runCtx)
@@ -854,7 +866,7 @@ func (h *SystemUpdateHandler) recentStableReleases(ctx context.Context, remoteUR
 	}
 	stable := make([]ReleaseEntry, 0, len(releases))
 	for _, release := range releases {
-		if release.Prerelease || strings.TrimSpace(release.Tag) == "" {
+		if release.Prerelease || strings.TrimSpace(release.Tag) == "" || strings.Contains(strings.SplitN(release.Tag, "+", 2)[0], "-") {
 			continue
 		}
 		stable = append(stable, release)
@@ -1120,7 +1132,7 @@ func updateAvailableAgainst(current, latest string) (bool, error) {
 			return latestParts[i] > currentParts[i], nil
 		}
 	}
-	return false, nil
+	return newerPrerelease(current, latest), nil
 }
 
 func isNewerVersion(current, latest string) (bool, error) {
@@ -1137,7 +1149,7 @@ func isNewerVersion(current, latest string) (bool, error) {
 			return latestParts[i] > currentParts[i], nil
 		}
 	}
-	return false, nil
+	return newerPrerelease(current, latest), nil
 }
 
 func versionParts(value string) ([3]int, bool) {
