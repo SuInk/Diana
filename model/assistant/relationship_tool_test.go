@@ -172,7 +172,8 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"relationship","input":{"operation":"get"}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["relationship"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"relationship","input":{"operation":"get"}}}`,
 		`{"action":"final","content":"[CQ:at,qq=10005] 当前好感度是 5，关系等级是初识，互动 18 次。当前权限：基础聊天、媒体理解、网页搜索和 1 个提醒或订阅额度。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
@@ -204,8 +205,8 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	if !strings.Contains(reply, "[CQ:at,qq=10005]") || !strings.Contains(reply, "好感度是 5") || !strings.Contains(reply, "当前权限") {
 		t.Fatalf("reply = %q", reply)
 	}
-	// 3 次 Agent 调用，外加一次发送前审核（这条消息够得上空转候选）。
-	if len(provider.requests) != 4 || !requestMessagesContain(provider.requests[2].Messages, `"favorability": 5`) {
+	// 4 次 Agent 调用，外加一次发送前审核（这条消息够得上空转候选）。
+	if len(provider.requests) != 5 || !requestMessagesContain(provider.requests[3].Messages, `"favorability": 5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
 	for _, want := range []string{"必须调用 relationship", "operation=list", "不得以隐私", "不得编造"} {

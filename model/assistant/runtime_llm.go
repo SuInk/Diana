@@ -960,7 +960,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if event.Kind == EventKindGroup {
 		if boolValue(cfg.PromptInjectGroupSender, true) {
 			appendPromptSection(&tail, renderPromptTemplate(cfg.PromptGroupSenderTemplate, map[string]string{
-				"sender": event.SenderNameOrID(),
+				"sender": promptSenderIdentity(event),
 			}))
 		}
 		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" {
@@ -1078,7 +1078,7 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return historyLinePrefix(event) + event.SenderNameOrID() + ": " + text + historyIdentityPrompt(event, configs...)
+	return historyLinePrefix(event) + promptSenderIdentity(event) + ": " + text + historyIdentityPrompt(event, configs...)
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
@@ -1108,7 +1108,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if messageID == "" {
 		messageID = "不可用"
 	}
-	line := historyLinePrefix(event) + event.SenderNameOrID()
+	line := historyLinePrefix(event) + promptSenderIdentity(event)
 	if text != "" {
 		line += ": " + text
 	}
@@ -1134,7 +1134,7 @@ func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentT
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return fmt.Sprintf("【当前同轮补充消息，必须与最后的当前消息合并理解并一并回答；若本消息明确纠正原要求，以纠正后的条件为准，保留未被修改的要求】%s%s: %s", contextMessageTiming(event.Time, currentTime), event.SenderNameOrID(), text)
+	return fmt.Sprintf("【当前同轮补充消息，必须与最后的当前消息合并理解并一并回答；若本消息明确纠正原要求，以纠正后的条件为准，保留未被修改的要求】%s%s: %s", contextMessageTiming(event.Time, currentTime), promptSenderIdentity(event), text)
 }
 
 func currentPromptText(event MessageEvent, text string) string {
@@ -1205,7 +1205,7 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
 	}
-	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0) + text
+	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, 0) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {
@@ -1222,13 +1222,7 @@ func quotedPromptText(quoted *QuotedMessage) string {
 	if strings.TrimSpace(text) == "" {
 		return ""
 	}
-	sender := strings.TrimSpace(quoted.SenderName)
-	if sender == "" {
-		sender = strings.TrimSpace(quoted.UserID)
-	}
-	if sender == "" {
-		sender = "未知用户"
-	}
+	sender := formatPromptIdentity(quoted.SenderName, quoted.UserID)
 	label := "被引用的消息"
 	if quoted.Semantic {
 		label = "指代判断选中的历史消息"

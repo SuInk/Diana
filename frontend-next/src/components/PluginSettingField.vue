@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import CodingAgentsField from "./CodingAgentsField.vue";
 import AppSelect from "./AppSelect.vue";
 import PluginSizeInput from "./PluginSizeInput.vue";
 import type { PluginSettingSpec } from "../api";
@@ -41,7 +42,7 @@ function toggleMultiSelect(option: string, event: Event): void {
 </script>
 
 <template>
-  <div class="field">
+  <div v-if="spec.key !== 'agent_api_keys'" class="field">
     <template v-if="spec.type === 'bool'">
       <div class="plugin-setting-switch">
         <div class="plugin-setting-switch-text">
@@ -68,6 +69,11 @@ function toggleMultiSelect(option: string, event: Event): void {
         </label>
       </div>
       <span class="hint">{{ spec.description ? `${spec.description} ` : "" }}不勾选表示全部停用；全部勾选表示全部启用。</span>
+    </template>
+    <template v-else-if="spec.type === 'coding_agents'">
+      <span :id="labelID" class="plugin-setting-group-label">{{ spec.label }}</span>
+      <CodingAgentsField :id="controlID" v-model="form[spec.key]" :key-drafts="form.agent_api_keys || ''" @update:key-drafts="form.agent_api_keys = $event" :aria-labelledby="labelID" />
+      <span v-if="spec.description" class="hint">{{ spec.description }}</span>
     </template>
     <template v-else>
       <label :for="controlID">{{ spec.label }}</label>

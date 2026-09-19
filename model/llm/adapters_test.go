@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1711,5 +1712,34 @@ func TestOpenAICompatibleRetriesOnceWhenGatewayRejectsStrictTools(t *testing.T) 
 	lastFunction, _ := lastTool["function"].(map[string]any)
 	if lastFunction["strict"] == true {
 		t.Fatalf("strict was sent again after the downgrade: %#v", lastFunction)
+	}
+}
+
+func TestDeferredExecuteEnvelopeRoundTripsAcrossProviders(t *testing.T) {
+	definition := ToolDefinition{Name: "tools.execute", Parameters: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "input": map[string]any{"type": "object"}}}}
+	definitions := []ToolDefinition{definition}
+	for _, failed := range []bool{false, true} {
+		messages := []Message{
+			{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-584", Name: "tools.execute", Arguments: map[string]any{"name": "mcp__demo__strict", "input": map[string]any{"chartType": 3}}}}},
+			{Role: RoleTool, ToolCallID: "call-584", ToolName: "tools.execute", ToolError: failed, Content: "tool observation"},
+		}
+		conversions := map[string]any{
+			"chat":      openAIChatCompletionMessages(messages, definitions),
+			"responses": openAIResponsesInput(messages, definitions),
+			"gemini":    geminiContents(messages, definitions),
+			"anthropic": anthropicMessages(messages, definitions),
+		}
+		for provider, converted := range conversions {
+			t.Run(fmt.Sprintf("%s/error=%v", provider, failed), func(t *testing.T) {
+				raw, err := json.Marshal(converted)
+				if err != nil {
+					t.Fatal(err)
+				}
+				text := string(raw)
+				if strings.Count(text, "call-584") != 2 || !strings.Contains(text, wireToolName("tools.execute")) || !strings.Contains(text, "mcp__demo__strict") || !strings.Contains(text, "chartType") {
+					t.Fatalf("envelope or pairing lost: %s", text)
+				}
+			})
+		}
 	}
 }

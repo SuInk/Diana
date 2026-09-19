@@ -60,18 +60,9 @@ func finalizeToolDefinition(ledger *claimEvidenceLedger, imagePending bool) llm.
 		"silent_reason": toolStringParam("silent=true 时用一句话说明为什么不回复。只写进运行日志，不发给用户。"),
 	}
 	required := []string{"content"}
-	if imagePending {
-		properties["task_state"] = toolEnumParam("异步图片任务仍在后台处理时固定填 pending", imageTaskPendingState)
-		required = append(required, "task_state")
-	}
-	if ledger.isActive() {
-		claimIDs := ledger.declaredClaimIDs()
-		properties["claims"] = toolArrayParam(
-			"逐主张证据结算，必须覆盖全部已声明的 claim",
-			claimUpdateSchema(claimIDs, ledger.allowedSourceURLs()),
-		)
-		required = append(required, "claims")
-	}
+	// Runtime guards enforce conditional requirements without mutating schemas.
+	properties["task_state"] = toolEnumParam("图片任务 queued 后必须填 pending", imageTaskPendingState)
+	properties["claims"] = toolArrayParam("账本启用后必须覆盖全部已声明 claim；ID 与来源以工具结果为准", claimUpdateSchema(nil, nil))
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
 		Description: "结束本轮并提交最终答复。不再需要其他工具时调用它。content 禁止真实换行，只能用 [diana-msg] 表示下一条消息、[diana-line] 表示当前消息内换行。这一轮决定不说话时填 silent=true 并留空 content。",
@@ -111,22 +102,11 @@ func finalizeAction(call llm.ToolCall, text string) llmAction {
 	return action
 }
 
-// turnDefinitions 构造本规划步的工具定义。claim 相关的 schema 每轮重建，把已声明
-// 的 claim id 和检索工具真实返回过的来源填成枚举：编造的来源从「事后拒绝」变成
-// 「根本解码不出来」。
+// turnDefinitions is independent of loaded tools, claim IDs, sources and image state.
 func (r *Runner) turnDefinitions(ledger *claimEvidenceLedger, imagePending bool) []llm.ToolDefinition {
 	definitions := r.registry.Definitions()
 	if len(definitions) == 0 {
 		return nil
-	}
-	if ledger.isActive() {
-		claimIDs := ledger.declaredClaimIDs()
-		sources := ledger.allowedSourceURLs()
-		for index := range definitions {
-			if definitions[index].Name == webSearchToolName {
-				definitions[index].Parameters = WebSearchInputSchema(claimIDs, sources)
-			}
-		}
 	}
 	definitions = r.loader.filter(definitions)
 	return append(definitions, finalizeToolDefinition(ledger, imagePending))

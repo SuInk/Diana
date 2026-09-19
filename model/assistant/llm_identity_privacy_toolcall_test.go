@@ -179,3 +179,31 @@ func TestIsLikelyMessageID(t *testing.T) {
 		t.Fatal("negative value must not be treated as a QQ id")
 	}
 }
+
+func TestIdentityPrivacyDeferredExecuteRoundTrip(t *testing.T) {
+	scope := newIdentityPrivacyScope()
+	input := map[string]any{}
+	for kind, real := range map[string]string{"user": "10001", "group": "123456", "message": "1145141919"} {
+		input[kind] = scope.register(real, kind)
+	}
+	calls := []llm.ToolCall{{ID: "execute-1", Name: "tools.execute", Arguments: map[string]any{"name": "mcp__test__identity", "input": input}}}
+	restored := scope.restoreToolCalls(calls)
+	inner := restored[0].Arguments["input"].(map[string]any)
+	if inner["user"] != "10001" || inner["group"] != "123456" || inner["message"] != "1145141919" {
+		t.Fatalf("not restored: %#v", inner)
+	}
+	protected := scope.protectRequest(llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleAssistant, ToolCalls: restored}}})
+	for _, m := range protected.Messages {
+		if len(m.ToolCalls) > 0 {
+			call := m.ToolCalls[0]
+			if call.Name != "tools.execute" || call.ID != "execute-1" {
+				t.Fatal("envelope changed")
+			}
+			for kind, alias := range input {
+				if call.Arguments["input"].(map[string]any)[kind] != alias {
+					t.Fatal("identity leaked")
+				}
+			}
+		}
+	}
+}

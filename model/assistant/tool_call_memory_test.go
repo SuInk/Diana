@@ -21,6 +21,8 @@ func TestToolCallMemoryTellsNextTurnWhatWasSearched(t *testing.T) {
 		{Tool: "web_search", Input: map[string]any{"query": "iCloud 由云上贵州运营 条款与条件 更新"}},
 		{Tool: "browser_render", Input: map[string]any{"url": "https://www.apple.com/legal/"}, Error: "timeout"},
 		{Tool: "chat_history", Skipped: true},
+		{Tool: "tools.load", Input: map[string]any{"names": []string{"unexecuted"}}},
+		{Tool: "tools.execute", Input: map[string]any{"name": "internal"}},
 		{Tool: "agent.finalize", Input: map[string]any{"content": "回复正文"}},
 	})
 
@@ -31,7 +33,7 @@ func TestToolCallMemoryTellsNextTurnWhatWasSearched(t *testing.T) {
 			t.Fatalf("context missing %q:\n%s", want, context)
 		}
 	}
-	for _, unwanted := range []string{"chat_history", "agent.finalize", "回复正文"} {
+	for _, unwanted := range []string{"chat_history", "agent.finalize", "tools.load", "tools.execute", "unexecuted", "回复正文"} {
 		if strings.Contains(context, unwanted) {
 			t.Fatalf("context should not include %q:\n%s", unwanted, context)
 		}

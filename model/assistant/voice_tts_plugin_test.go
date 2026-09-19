@@ -230,7 +230,8 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tts","input":{"text":"晚上好呀，今天也要开心。"}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["tts"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"tts","input":{"text":"晚上好呀，今天也要开心。"}}}`,
 	}}
 	channel := &recordingChannel{}
 	plugins := NewDefaultPluginManager()
@@ -255,7 +256,7 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 	if len(segments) != 1 || segments[0]["type"] != "record" {
 		t.Fatalf("segments=%#v", segments)
 	}
-	if len(provider.requests) != 2 || !requestMessagesContain(provider.requests[1].Messages, "只有用户明确要求用语音回复") {
+	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "只有用户明确要求用语音回复") {
 		t.Fatalf("requests=%d", len(provider.requests))
 	}
 }
@@ -276,7 +277,8 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tts","input":{"text":"晚安，做个好梦。"}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["tts"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"tts","input":{"text":"晚安，做个好梦。"}}}`,
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {

@@ -356,7 +356,7 @@ export interface PluginSettingSpec {
   key: string;
   label: string;
   description?: string;
-  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules";
+  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules" | "coding_agents";
   default: unknown;
   min?: number;
   max?: number;
@@ -2815,4 +2815,8 @@ export function cancelOAuthLogin(loginId: string): Promise<{ ok: boolean }> {
 
 export function logoutOAuthProvider(provider: string): Promise<{ providers: LLMOAuthStatus[] }> {
   return requestJSON("/api/llm/oauth/logout", { method: "POST", body: JSON.stringify({ provider }) });
+}
+
+export function codingAgentSetup(agent: string, operation: "status" | "install" | "test" | "login-start" | "login-status" | "login-cancel"): Promise<{installed: boolean; key_configured: boolean; installable: boolean; message: string; login_url?: string; device_code?: string; login_state?: string}> {
+  return requestJSON("/api/assistant/plugins/coding-agent/setup", {method: "POST", body: JSON.stringify({agent, operation})});
 }

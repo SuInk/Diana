@@ -230,7 +230,8 @@ func TestRuntimeAgentCanCreateScheduledQuery(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"schedule","input":{"operation":"create","interval":"6h","query":"查询最新公告并总结变化"}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["schedule"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"schedule","input":{"operation":"create","interval":"6h","query":"查询最新公告并总结变化"}}}`,
 		`{"action":"final","content":"已建立每 6 小时执行一次的订阅。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
@@ -259,7 +260,7 @@ func TestRuntimeAgentCanCreateScheduledQuery(t *testing.T) {
 	if len(channel.sent) != 1 || channel.sent[0].UserID != "10001" {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
-	if len(provider.requests) != 3 {
+	if len(provider.requests) != 4 {
 		t.Fatalf("requests = %d", len(provider.requests))
 	}
 	foundTool := false

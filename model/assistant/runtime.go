@@ -3682,6 +3682,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				continue
 			}
 			candidateEvent := r.prepareHistoricalEventImages(ctx, candidate.Event)
+			// Supplements can fall outside replyHistory or arrive after its
+			// privacy scope was created. Register the actual rendered event
+			// before exposing its sender identity to the provider.
+			if scope := identityPrivacyScopeFromContext(ctx); scope != nil {
+				scope.registerEvent(candidateEvent)
+			}
 			skippedImages := unavailableImageSegmentCount(candidateEvent.Segments)
 			candidateEvent = eventWithAvailableImages(candidateEvent)
 			candidateText := proactiveTurnPromptTextAt(candidateEvent, candidate.Text, event.Time)
@@ -5847,10 +5853,7 @@ func compactContextEvent(event MessageEvent) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += " " + quoted
 	}
-	sender := strings.TrimSpace(event.SenderNameOrID())
-	if sender == "" {
-		sender = "未知用户"
-	}
+	sender := promptSenderIdentity(event)
 	return sender + ": " + strings.Join(strings.Fields(text), " ") + strings.ReplaceAll(historyIdentityPrompt(event), "\n", " ")
 }
 

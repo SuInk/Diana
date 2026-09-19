@@ -344,6 +344,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
 	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
+	router.POST(base+"/plugins/coding-agent/setup", h.codingAgentSetup)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
 	router.GET(base+"/plugins/repository-publish/drafts", h.listRepositoryIssueDrafts)
 	router.POST(base+"/group-admin/challenge", h.startGroupAdminChallenge)

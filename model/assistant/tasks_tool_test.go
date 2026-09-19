@@ -79,7 +79,8 @@ func TestRuntimeAgentCanQueryAllPersonalTasks(t *testing.T) {
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tasks","input":{"operation":"list","scope":"mine"}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["tasks"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"tasks","input":{"operation":"list","scope":"mine"}}}`,
 		`{"action":"final","content":"你有一个喝水提醒和一个查询公告的周期订阅。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
@@ -94,11 +95,11 @@ func TestRuntimeAgentCanQueryAllPersonalTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reply, "喝水提醒") || !strings.Contains(reply, "周期订阅") || len(provider.requests) != 3 {
+	if !strings.Contains(reply, "喝水提醒") || !strings.Contains(reply, "周期订阅") || len(provider.requests) != 4 {
 		t.Fatalf("reply=%q requests=%d", reply, len(provider.requests))
 	}
-	if !requestMessagesContain(provider.requests[2].Messages, `"kind": "reminder"`) || !requestMessagesContain(provider.requests[2].Messages, `"kind": "schedule"`) {
-		t.Fatalf("tool result missing: %#v", provider.requests[2].Messages)
+	if !requestMessagesContain(provider.requests[3].Messages, `"kind": "reminder"`) || !requestMessagesContain(provider.requests[3].Messages, `"kind": "schedule"`) {
+		t.Fatalf("tool result missing: %#v", provider.requests[3].Messages)
 	}
 }
 

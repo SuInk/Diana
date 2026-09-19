@@ -138,8 +138,8 @@ func (t *WebSearchTool) InputSchema() map[string]any {
 	return WebSearchInputSchema(nil, nil)
 }
 
-// WebSearchInputSchema 构造检索工具的参数 schema。Runner 每轮重建它，把已声明的
-// claim id 和已经检索到的来源填成枚举，未检索到的来源因此在解码层就写不出来。
+// WebSearchInputSchema 构造检索工具的参数 schema。原生声明使用固定无动态枚举
+// 的版本；claim ID 和来源约束由 Runner 证据账本在本地校验。
 func WebSearchInputSchema(claimIDs, allowedSources []string) map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
 		"query":         toolStringParam("当前最佳搜索词"),

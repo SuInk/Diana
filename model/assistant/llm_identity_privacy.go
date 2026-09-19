@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -58,7 +59,7 @@ func identityAliasRoleList() string {
 
 var (
 	identityPrivacyAliasTokenPattern = regexp.MustCompile(`im_[A-Za-z0-9_]+`)
-	identityPrivacyJSONIDPattern     = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([1-9][0-9]{4,13})"|([1-9][0-9]{4,13}))`)
+	identityPrivacyJSONIDPattern     = regexp.MustCompile(`(?i)"([a-z0-9_]*(?:user_id|group_id|qq|uin)|owner_id|operator_id|self_id)"\s*:\s*(?:"([^"\\]+)"|([1-9][0-9]{4,13}))`)
 	identityPrivacyCQIDPattern       = regexp.MustCompile(`(?i)\[CQ:(?:at|contact),[^\]]*(?:qq|id)=([1-9][0-9]{4,13})`)
 	identityPrivacyLabelPattern      = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
 	// 消息 ID 单独匹配：它允许负号，长度范围也和 QQ 号不同。
@@ -275,7 +276,7 @@ func (s *identityPrivacyScope) registerSegments(segments []MessageSegment) {
 
 func (s *identityPrivacyScope) register(realID string, role string) string {
 	realID = strings.TrimSpace(realID)
-	if !isLikelyChatIdentifier(realID) {
+	if !isLikelyChatIdentifier(realID) && !isOpaqueChatIdentifier(realID) {
 		return realID
 	}
 	role = normalizeIdentityPrivacyRole(role)
@@ -351,6 +352,23 @@ func isLikelyChatIdentifier(value string) bool {
 		}
 	}
 	return true
+}
+
+// Opaque platform IDs (for example Feishu open_id and DingTalk staff IDs)
+// are trusted when supplied by an event or an explicit identity field. Keep
+// the existing numeric-ID heuristic and never register an already masked ID.
+func isOpaqueChatIdentifier(value string) bool {
+	if value == "" || value == "all" || strings.HasPrefix(value, identityAliasPrefix) {
+		return false
+	}
+	hasLetter := false
+	for _, char := range value {
+		if unicode.IsSpace(char) || unicode.IsControl(char) {
+			return false
+		}
+		hasLetter = hasLetter || unicode.IsLetter(char)
+	}
+	return hasLetter
 }
 
 func (s *identityPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateRequest {
@@ -435,7 +453,7 @@ func (s *identityPrivacyScope) protectText(text string) string {
 	s.mu.Unlock()
 	sort.Slice(pairs, func(i, j int) bool { return len(pairs[i][0]) > len(pairs[j][0]) })
 	for _, pair := range pairs {
-		text = replaceNumericIdentifier(text, pair[0], pair[1])
+		text = replacePrivacyIdentifier(text, pair[0], pair[1])
 	}
 	return text
 }
@@ -489,27 +507,36 @@ func (s *identityPrivacyScope) restoreText(text string) string {
 	})
 }
 
-func replaceNumericIdentifier(text string, identifier string, replacement string) string {
+func replacePrivacyIdentifier(text string, identifier string, replacement string) string {
+	opaque := isOpaqueChatIdentifier(identifier)
+	isBoundaryByte := func(value byte) bool {
+		if value >= '0' && value <= '9' {
+			return true
+		}
+		return opaque && ((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || value == '_' || value == '-')
+	}
 	if identifier == "" || !strings.Contains(text, identifier) {
 		return text
 	}
 	var builder strings.Builder
 	remaining := text
+	consumed := 0
 	for {
 		index := strings.Index(remaining, identifier)
 		if index < 0 {
 			builder.WriteString(remaining)
 			break
 		}
-		beforeDigit := index > 0 && remaining[index-1] >= '0' && remaining[index-1] <= '9'
+		beforeToken := consumed+index > 0 && isBoundaryByte(text[consumed+index-1])
 		afterIndex := index + len(identifier)
-		afterDigit := afterIndex < len(remaining) && remaining[afterIndex] >= '0' && remaining[afterIndex] <= '9'
+		afterToken := afterIndex < len(remaining) && isBoundaryByte(remaining[afterIndex])
 		builder.WriteString(remaining[:index])
-		if beforeDigit || afterDigit {
+		if beforeToken || afterToken {
 			builder.WriteString(identifier)
 		} else {
 			builder.WriteString(replacement)
 		}
+		consumed += afterIndex
 		remaining = remaining[afterIndex:]
 	}
 	return builder.String()

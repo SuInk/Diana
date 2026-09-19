@@ -414,6 +414,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			})
 			continue
 		}
+		// Keep provider history in the original envelope while executing the target
+		// through the ordinary Runner guards and result handling below.
+		var dispatchErr error
+		action, dispatchErr = r.loader.dispatch(action)
+		if dispatchErr != nil {
+			protocolRepairs++
+			reason := dispatchErr.Error()
+			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: reason, Skipped: true})
+			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+			messages = appendToolRepair(messages, resp, lastText, reason)
+			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+				finishReason = "protocol_repair_exhausted"
+				break
+			}
+			continue
+		}
 		tool, ok := r.registry.Get(action.Tool)
 		if !ok && r.loader != nil && action.Tool == ToolsLoadToolName {
 			tool, ok = r.loader, true
@@ -440,8 +456,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: guardErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, guardErr)
-			messages = appendAssistantEcho(messages, lastText)
-			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code)})
+			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code))
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -460,8 +475,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			duplicateErr := "连续重复的相同工具调用已跳过；请使用上一条工具结果、调整参数或直接给出最终回复"
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: duplicateErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, duplicateErr)
-			messages = appendAssistantEcho(messages, lastText)
-			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: duplicateErr})
+			messages = appendToolRepair(messages, resp, lastText, duplicateErr)
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -475,8 +489,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				protocolRepairs++
 				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "联网搜索次数已达上限：" + limitErr + "。不要再次调用联网搜索。\n" + claimLedger.digest()})
+				messages = appendToolRepair(messages, resp, lastText, "联网搜索次数已达上限："+limitErr+"。不要再次调用联网搜索。\n"+claimLedger.digest())
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -515,6 +528,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			rawOutput = ""
 		} else {
 			record.Output = truncateRunes(output, r.cfg.MaxToolOutputChars)
+			if action.Tool == ToolsLoadToolName {
+				// Loader enforces its own bound atomically; truncating a JSON
+				// contract would mark unseen parameters as loaded.
+				record.Output = output
+			}
 			output = record.Output
 			if action.Tool == dianaImageToolName && imageToolResultQueued(output) {
 				imageTaskQueued = true
@@ -969,7 +987,7 @@ func (r *Runner) systemPrompt() string {
 	}
 	if loader := newDeferredToolLoader(r.registry, r.cfg.CoreTools); loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 传入工具名，下一步即可调用）：\n"+loader.catalog())
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 传入工具名取得完整描述和 inputSchema，再通过 tools.execute 的 name/input 调用；目录名称不是可直接调用的 function，跨 Run 必须重新加载）：\n"+loader.catalog())
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}
@@ -1329,4 +1347,18 @@ func truncateRunes(value string, limit int) string {
 	}
 	// 按 rune 截断，避免中文或 emoji 被按字节切坏。
 	return string(runes[:limit]) + "\n...truncated..."
+}
+
+// appendToolRepair preserves every original call ID, including skipped parallel calls,
+// so native provider continuation remains valid even when dispatch is rejected.
+func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, text, reason string) []llm.Message {
+	if len(resp.ToolCalls) == 0 {
+		messages = appendAssistantEcho(messages, text)
+		return append(messages, llm.Message{Role: llm.RoleUser, Content: reason})
+	}
+	messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: resp.ToolCalls, ResponsesOutput: resp.ResponsesOutput, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent})
+	for _, call := range resp.ToolCalls {
+		messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, ToolError: true, Content: "本次调用未执行：" + reason})
+	}
+	return messages
 }

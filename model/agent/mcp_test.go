@@ -4,18 +4,22 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/netguard"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -341,4 +345,57 @@ func newEchoMCPServer() *mcpsdk.Server {
 		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "echo: " + strings.TrimSpace(input.Text)}}}, nil
 	})
 	return server
+}
+
+func TestDeferredMCPDispatchValidatesBeforeSendingRequest(t *testing.T) {
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "strict", Version: "1"}, nil)
+	server.AddTool(&mcpsdk.Tool{Name: "strict", Description: "Full strict contract", InputSchema: json.RawMessage(`{"type":"object","required":["qqNumber","chartType"],"additionalProperties":false,"properties":{"qqNumber":{"type":"string","minLength":1},"chartType":{"type":"integer","enum":[0,1,2,3]}}}`)}, func(_ context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "success"}}}, nil
+	})
+	handler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return server }, &mcpsdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	var upstreamCalls atomic.Int32
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var payload struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		if payload.Method == "tools/call" {
+			upstreamCalls.Add(1)
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer httpServer.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".mcp.json")
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"mcpServers":{"strict":{"url":%q}}}`, httpServer.URL)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mcp, err := NewMCPRegistry(context.Background(), Config{WorkDir: dir, MCPConfigPath: path, MCPStartupTimeoutMS: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeMCPClosers(mcp.Closers)
+	name := mcp.Tools[0].Name()
+	for _, native := range []bool{false, true} {
+		upstreamCalls.Store(0)
+		client := &dispatchTestClient{replies: []*llm.GenerateResponse{
+			loadReply(native, name),
+			executeReply(native, name, map[string]any{"chartType": 3}),
+			executeReply(native, name, map[string]any{"qqNumber": "10001", "chartType": "spa"}),
+			executeReply(native, name, map[string]any{"qqNumber": "10001", "chartType": 3}),
+		}}
+		registry := NewToolRegistry(append([]Tool{&countingTool{name: "common"}}, mcp.Tools...)...)
+		runner, _ := NewRunner(client, Config{MaxSteps: 5, ProtocolRepairLimit: 5, CoreTools: []string{"common"}}, registry)
+		result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if upstreamCalls.Load() != 1 || len(result.Steps) != 4 || !result.Steps[1].Skipped || !result.Steps[2].Skipped || result.Steps[3].Output != "success" {
+			t.Fatalf("calls=%d steps=%#v", upstreamCalls.Load(), result.Steps)
+		}
+	}
 }

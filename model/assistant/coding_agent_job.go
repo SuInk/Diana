@@ -48,24 +48,26 @@ const (
 // 它落在工作区目录里而不是数据库：进程的输出本来就要写成日志文件，记录和日志放
 // 在一起只有一个真相来源，重启接回就是扫一遍目录。这样没配数据库的部署也能用。
 type CodingJob struct {
-	ID          string    `json:"id"`
-	Backend     string    `json:"backend"`
-	Workspace   string    `json:"workspace"`
-	Dir         string    `json:"dir"`
-	Instruction string    `json:"instruction"`
-	SessionID   string    `json:"session_id,omitempty"`
-	ResumedFrom string    `json:"resumed_from,omitempty"`
-	PID         int       `json:"pid,omitempty"`
-	LogPath     string    `json:"log_path"`
-	Status      string    `json:"status"`
-	ExitCode    int       `json:"exit_code,omitempty"`
-	StartedAt   time.Time `json:"started_at"`
-	FinishedAt  time.Time `json:"finished_at,omitempty"`
-	Deadline    time.Time `json:"deadline,omitempty"`
-	Result      string    `json:"result,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	CostUSD     float64   `json:"cost_usd,omitempty"`
-	Turns       int       `json:"turns,omitempty"`
+	Agent            string    `json:"agent,omitempty"`
+	AgentFingerprint string    `json:"agent_fingerprint,omitempty"`
+	ID               string    `json:"id"`
+	Backend          string    `json:"backend"`
+	Workspace        string    `json:"workspace"`
+	Dir              string    `json:"dir"`
+	Instruction      string    `json:"instruction"`
+	SessionID        string    `json:"session_id,omitempty"`
+	ResumedFrom      string    `json:"resumed_from,omitempty"`
+	PID              int       `json:"pid,omitempty"`
+	LogPath          string    `json:"log_path"`
+	Status           string    `json:"status"`
+	ExitCode         int       `json:"exit_code,omitempty"`
+	StartedAt        time.Time `json:"started_at"`
+	FinishedAt       time.Time `json:"finished_at,omitempty"`
+	Deadline         time.Time `json:"deadline,omitempty"`
+	Result           string    `json:"result,omitempty"`
+	Error            string    `json:"error,omitempty"`
+	CostUSD          float64   `json:"cost_usd,omitempty"`
+	Turns            int       `json:"turns,omitempty"`
 	// ApprovalMode 记下这次任务按哪档审批跑的：查任务时要能看出「它当时是不是
 	// 会来问我」，事后改了设置也不影响已经跑过的任务怎么被解释。
 	ApprovalMode string `json:"approval_mode,omitempty"`
@@ -222,8 +224,8 @@ type codingJobSnapshot struct {
 	UpdatedAt  time.Time
 }
 
-// parseCodingLog 单遍扫描日志。Claude Code 的 stream-json 能被精确解析出会话 ID、
-// 每一步动作和结构化结果；别的后端认不出格式时退化成保留尾巴当结果。
+// parseCodingLog 单遍扫描 Claude Code stream-json 和 Codex JSONL，提取会话、
+// 命令进度及最终结果；未识别的后端退化成保留日志尾部。
 func parseCodingLog(path string) codingJobSnapshot {
 	snapshot := codingJobSnapshot{}
 	if info, err := os.Stat(path); err == nil {
@@ -300,6 +302,36 @@ func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool)
 		snapshot.SessionID = id
 	}
 	switch jsonString(payload, "type") {
+	case "thread.started":
+		snapshot.SessionID = jsonString(payload, "thread_id")
+		return "会话已建立", true
+	case "turn.started":
+		return "", false
+	case "turn.completed":
+		snapshot.Done = true
+		snapshot.Turns++
+		return "", false
+	case "turn.failed", "error":
+		snapshot.Done = true
+		snapshot.IsError = true
+		detail, _ := payload["error"].(map[string]any)
+		snapshot.Result = firstNonEmpty(jsonString(detail, "message"), jsonString(payload, "message"), "Codex 执行失败")
+		return snapshot.Result, true
+	case "item.started", "item.updated", "item.completed":
+		item, _ := payload["item"].(map[string]any)
+		switch jsonString(item, "type") {
+		case "agent_message":
+			text := jsonString(item, "text")
+			if jsonString(payload, "type") == "item.completed" && text != "" {
+				snapshot.Result = text
+			}
+			return truncateRunes(text, 200), text != ""
+		case "command_execution":
+			return "执行命令：" + truncateRunes(jsonString(item, "command"), 200), true
+		case "error":
+			return jsonString(item, "message"), true
+		}
+		return "", false
 	case "system":
 		if jsonString(payload, "subtype") == "init" {
 			return "会话已建立", true
@@ -518,6 +550,9 @@ func (r *Runtime) launchCodingJob(
 	instruction string,
 	resumeSession string,
 ) (CodingJob, error) {
+	if err := prepareCodingRuntime(cfg); err != nil {
+		return CodingJob{}, err
+	}
 	if err := ensureCodingWorkspace(ctx, workspace); err != nil {
 		return CodingJob{}, err
 	}
@@ -525,15 +560,17 @@ func (r *Runtime) launchCodingJob(
 		return CodingJob{}, err
 	}
 	job := CodingJob{
-		ID:          "code-" + strings.ReplaceAll(uuid.NewString()[:8], "-", ""),
-		Backend:     cfg.Backend,
-		Workspace:   workspace.Name,
-		Dir:         workspace.Dir,
-		Instruction: instruction,
-		ResumedFrom: resumeSession,
-		Status:      codingJobStatusRunning,
-		StartedAt:   time.Now(),
-		Target:      codingJobTargetFromEvent(event),
+		ID:               "code-" + strings.ReplaceAll(uuid.NewString()[:8], "-", ""),
+		Backend:          cfg.Backend,
+		Agent:            cfg.Agent,
+		AgentFingerprint: codingAgentFingerprint(cfg),
+		Workspace:        workspace.Name,
+		Dir:              workspace.Dir,
+		Instruction:      instruction,
+		ResumedFrom:      resumeSession,
+		Status:           codingJobStatusRunning,
+		StartedAt:        time.Now(),
+		Target:           codingJobTargetFromEvent(event),
 	}
 	job.LogPath = codingJobLogPath(job.ID)
 	job.Deadline = job.StartedAt.Add(cfg.MaxRuntime)
@@ -563,7 +600,7 @@ func (r *Runtime) launchCodingJob(
 		"workspace":   workspace.Dir,
 		"settings":    settingsPath,
 	})
-	cmd := exec.Command(cfg.Command, args...)
+	cmd := exec.Command(cfg.Command, codingProviderArgs(cfg, args)...)
 	cmd.Dir = workspace.Dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -593,8 +630,26 @@ func (r *Runtime) launchCodingJob(
 
 func codingJobEnv(cfg codingAgentConfig) []string {
 	env := os.Environ()
+	if cfg.Backend == codingBackendClaude && cfg.BaseURL != "" {
+		env = append(env, "ANTHROPIC_BASE_URL="+cfg.BaseURL)
+	}
+	if cfg.Command == codingManagedCommand(cfg.Backend) {
+		key := "CODEX_HOME"
+		if cfg.Backend == codingBackendClaude {
+			key = "CLAUDE_CONFIG_DIR"
+		}
+		env = append(env, key+"="+filepath.Join(codingManagedRoot(), "state", cfg.Backend))
+	}
+	if cfg.Backend == codingBackendCodex && cfg.APIKey == "" {
+		if _, err := os.Stat(filepath.Join(codingAuthDir(cfg), "auth.json")); err == nil {
+			env = append(env, "CODEX_HOME="+codingAuthDir(cfg))
+		}
+	}
 	if cfg.APIKey != "" && cfg.EnvKey != "" {
 		env = append(env, cfg.EnvKey+"="+cfg.APIKey)
+		if cfg.Backend == codingBackendCodex {
+			env = append(env, "CODEX_API_KEY="+cfg.APIKey)
+		}
 	}
 	// CLI 在非交互模式下仍可能想开分页器或彩色输出，两个都只会污染日志。
 	env = append(env, "CI=1", "TERM=dumb", "NO_COLOR=1", "PAGER=cat")

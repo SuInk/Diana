@@ -29,9 +29,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldfl
 FROM alpine:3.22 AS runtime-base
 WORKDIR /app
 # data/logs 预建并交给运行用户，容器不挂卷也能直接跑（SQLite 与日志有处可写）。
-RUN apk add --no-cache ca-certificates fontconfig nodejs npm bubblewrap \
-    && adduser -D -H -u 10001 diana \
-    && mkdir -p /app/data /app/logs \
+# git/libgcc/libstdc++ 供 WebUI 安装的编码 CLI（Codex 等）运行；运行用户的 home
+# 放在数据目录下，挂卷后 CLI 的设备登录态能跨容器重建保留。
+RUN apk add --no-cache ca-certificates fontconfig nodejs npm git libgcc libstdc++ bubblewrap \
+    && adduser -D -H -h /app/data/home -u 10001 diana \
+    && mkdir -p /app/data/home /app/logs \
     && chown -R diana:diana /app/data /app/logs
 
 # 完整版运行时：预装 Chromium（网页读取/截图）、Noto CJK 字体、ffmpeg、

@@ -40,6 +40,7 @@ func TestEveryDeclaredPluginSettingTypeIsSupported(t *testing.T) {
 		PluginSettingTypeText:               "line one\nline two",
 		PluginSettingTypeMultiSelect:        []any{},
 		PluginSettingTypePlatformLevelRules: []any{},
+		PluginSettingTypeCodingAgents:       []any{},
 	}
 	for _, state := range NewDefaultPluginManager().List() {
 		manifest := state.Manifest
