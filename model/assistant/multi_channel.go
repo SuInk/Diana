@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -20,10 +21,12 @@ const (
 // ChannelBinding associates one transport with the persisted bot profile that
 // owns it. Conversation keys and reply routing always use the source profile.
 type ChannelBinding struct {
-	ProfileID string
-	Platform  string
-	Name      string
-	Channel   Channel
+	// ConnectionID groups explicit aliases of the same physical transport.
+	ConnectionID string
+	ProfileID    string
+	Platform     string
+	Name         string
+	Channel      Channel
 }
 
 type MultiChannel struct {
@@ -55,17 +58,26 @@ func (c *MultiChannel) Connect(ctx context.Context, handler EventHandler) error 
 		return fmt.Errorf("assistant: no enabled channels")
 	}
 	var wg sync.WaitGroup
-	for _, binding := range c.bindings {
-		binding := binding
+	for _, group := range c.connectionGroups() {
+		group := group
+		binding := group[0]
 		wg.Add(1)
 		go func() {
 			defer recoverGoroutinePanic("multi_channel.go:61")
 			defer wg.Done()
 			wrapped := func(eventCtx context.Context, event MessageEvent) error {
-				event.Platform = binding.Platform
-				event.ProfileID = binding.ProfileID
-				event.ContextNamespace = binding.ProfileID
-				return handler(eventCtx, event)
+				var failures []error
+				for _, target := range group {
+					delivered := cloneHistoricalImageEvent(event)
+					delivered.MentionTargets = append([]MessageMention(nil), event.MentionTargets...)
+					delivered.Platform = target.Platform
+					delivered.ProfileID = target.ProfileID
+					delivered.ContextNamespace = target.ProfileID
+					if err := handler(eventCtx, delivered); err != nil {
+						failures = append(failures, err)
+					}
+				}
+				return errors.Join(failures...)
 			}
 			c.connectBinding(ctx, binding, wrapped)
 		}()
@@ -253,8 +265,8 @@ func (c *MultiChannel) Close() error {
 		return nil
 	}
 	var firstErr error
-	for _, binding := range c.bindings {
-		if err := binding.Channel.Close(); err != nil && firstErr == nil {
+	for _, group := range c.connectionGroups() {
+		if err := group[0].Channel.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -278,6 +290,9 @@ func (c *MultiChannel) bindingFor(profileID, platform string) (ChannelBinding, e
 				continue
 			}
 			if match != nil {
+				if match.ConnectionID != "" && match.ConnectionID == c.bindings[index].ConnectionID {
+					continue
+				}
 				return ChannelBinding{}, fmt.Errorf("assistant: platform %q matches multiple channels", platform)
 			}
 			match = &c.bindings[index]
@@ -290,4 +305,23 @@ func (c *MultiChannel) bindingFor(profileID, platform string) (ChannelBinding, e
 		return c.bindings[0], nil
 	}
 	return ChannelBinding{}, fmt.Errorf("assistant: no channel for profile %q platform %q", profileID, platform)
+}
+
+// A transport is connected and closed once even when several profiles use it.
+func (c *MultiChannel) connectionGroups() [][]ChannelBinding {
+	var groups [][]ChannelBinding
+	indexes := map[string]int{}
+	for _, binding := range c.bindings {
+		if binding.ConnectionID == "" {
+			groups = append(groups, []ChannelBinding{binding})
+			continue
+		}
+		if index, ok := indexes[binding.ConnectionID]; ok {
+			groups[index] = append(groups[index], binding)
+		} else {
+			indexes[binding.ConnectionID] = len(groups)
+			groups = append(groups, []ChannelBinding{binding})
+		}
+	}
+	return groups
 }

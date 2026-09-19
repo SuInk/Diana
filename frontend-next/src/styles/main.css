@@ -2225,6 +2225,7 @@ a.nav-action {
 
 .bot-profile-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -2246,6 +2247,13 @@ a.nav-action {
   background: var(--surface-2);
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.bot-profile-connection {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: left;
 }
 
 .bot-profile-state {
@@ -2295,6 +2303,7 @@ a.nav-action {
 /* 操作横排在卡片底部，不再挤成右侧竖条。 */
 .bot-profile-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;

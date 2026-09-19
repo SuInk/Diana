@@ -82,14 +82,14 @@ test("bot card actions are matching buttons with an explicitly destructive delet
   visit(descriptor.template.ast);
   assert.ok(actions);
   const buttons = actions.children.filter(child => child.type === NodeTypes.ELEMENT);
-  assert.equal(buttons.length, 2);
+  assert.equal(buttons.length, 3);
   for (const button of buttons) {
     assert.equal(button.tag, "button");
     assert.ok(classes(button).includes("btn") && classes(button).includes("small"));
     assert.ok(!classes(button).includes("ghost") && !classes(button).includes("icon-only"));
     assert.ok(button.children.some(child => child.type === NodeTypes.TEXT && child.content.trim()));
   }
-  assert.ok(classes(buttons[1]).includes("danger"));
+  assert.ok(classes(buttons[2]).includes("danger"));
 });
 
 test("danger colors survive ghost styles and skeleton motion respects user preferences", () => {

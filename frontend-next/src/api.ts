@@ -129,6 +129,7 @@ export interface MessageRelayPair {
 }
 
 export interface BotProfileConfig {
+  connection_profile_id?: string;
   persona_id?: string;
   custom_persona?: Persona;
   marked_bot_ids?: string[];

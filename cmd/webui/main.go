@@ -133,12 +133,26 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 		oneBotAdded := false
 		httpAdded := false
 		var forwardChannels []*assistant.OneBotChannel
+		connections := make(map[string]assistant.Channel)
 		for _, profile := range set.Profiles {
 			profile = profile.WithDefaults()
 			if !profile.Enabled {
 				continue
 			}
-			var channel assistant.Channel
+			connectionID := profile.ID
+			if profile.ConnectionProfileID != "" {
+				connectionID = profile.ConnectionProfileID
+			}
+			resolved, err := set.ResolveConnection(profile)
+			if err != nil {
+				continue
+			}
+			profile = resolved
+			channel := connections[connectionID]
+			if channel != nil {
+				bindings = append(bindings, assistant.ChannelBinding{ProfileID: profile.ID, Platform: profile.Platform, Name: profile.Name, Channel: channel, ConnectionID: connectionID})
+				continue
+			}
 			if assistant.IsOneBotPlatform(profile.Platform) && profile.OneBotTransport == assistant.OneBotTransportHTTP {
 				if httpAdded {
 					continue
@@ -147,9 +161,8 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 				httpServer.SetConfig(assistant.OneBotConfig{Endpoint: profile.OneBotHTTPURL, AccessToken: profile.OneBotAccessToken, HTTPSecret: profile.OneBotHTTPSecret})
 				channel = httpServer
 			} else if assistant.IsOneBotPlatform(profile.Platform) && profile.OneBotTransport == assistant.OneBotTransportReverseWS {
-				// The reverse WebSocket endpoint is process-wide. OneBot v11 and Telegram can
-				// run together; multiple enabled OneBot profiles still share this one
-				// listener, so only the first is attached.
+				// The reverse listener is process-wide. Explicit aliases were bound
+				// above; legacy independent profiles still attach only the first.
 				if oneBotAdded {
 					continue
 				}
@@ -168,11 +181,13 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 				channel = assistant.NewChannelForConfig(profile)
 			}
 			if channel != nil {
+				connections[connectionID] = channel
 				bindings = append(bindings, assistant.ChannelBinding{
-					ProfileID: profile.ID,
-					Platform:  profile.Platform,
-					Name:      profile.Name,
-					Channel:   channel,
+					ConnectionID: connectionID,
+					ProfileID:    profile.ID,
+					Platform:     profile.Platform,
+					Name:         profile.Name,
+					Channel:      channel,
 				})
 			}
 		}
