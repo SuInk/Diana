@@ -126,6 +126,8 @@ type PluginState struct {
 	SharedConfigSource    string                    `json:"shared_config_source,omitempty"`
 	// Settings 只保存用户显式覆盖的值，默认值以 Manifest.Settings 声明为准。
 	Settings map[string]any `json:"settings,omitempty"`
+	// RepoSource 只对第三方仓库插件出现：安装来源与版本，插件页据此提供更新入口。
+	RepoSource *RepoPluginSource `json:"repo_source,omitempty"`
 	// SecretsConfigured 只在脱敏后的响应里出现，标记哪些凭据已经配置过。
 	// 明文永远不出现在读接口里。
 	SecretsConfigured map[string]bool `json:"secrets_configured,omitempty"`
@@ -681,6 +683,49 @@ func (m *PluginManager) Restore(states map[string]PersistedPluginState) {
 		}
 		m.states[id] = current
 	}
+}
+
+// RegisterPlugin 动态登记一个插件实例（用于第三方仓库插件）。同 ID 已存在
+// 时替换实现并保留既有状态，更新流程依赖这一点不丢用户的开关与设置。
+// official. 前缀保留给内置插件，第三方声明会被拒绝。
+func (m *PluginManager) RegisterPlugin(p Plugin) error {
+	if m == nil || p == nil {
+		return fmt.Errorf("diana: plugin is nil")
+	}
+	manifest := withBuiltinPlatformSupport(p.Manifest())
+	if strings.HasPrefix(manifest.ID, "official.") && !manifest.BuiltIn {
+		return fmt.Errorf("diana: plugin id prefix official. is reserved for built-in plugins")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state, ok := m.states[manifest.ID]; ok {
+		state.Manifest = manifest
+		m.states[manifest.ID] = state
+	} else {
+		m.states[manifest.ID] = PluginState{Manifest: manifest}
+	}
+	m.catalog[manifest.ID] = p
+	return nil
+}
+
+// UnregisterPlugin 移除动态登记的插件及其状态。内置插件不能通过这个接口
+// 摘掉——它们随程序编译，只能由代码决定存废。
+func (m *PluginManager) UnregisterPlugin(id string) error {
+	if m == nil {
+		return ErrPluginNotFound
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.states[id]
+	if !ok {
+		return ErrPluginNotFound
+	}
+	if state.Manifest.BuiltIn {
+		return ErrBuiltInPluginAction
+	}
+	delete(m.catalog, id)
+	delete(m.states, id)
+	return nil
 }
 
 // Install 安装并启用指定插件。

@@ -1,0 +1,37 @@
+{
+  "id": "yourname.hello-plugin",
+  "name": "示例插件",
+  "version": "1.0.0",
+  "description": "一句话说明这个插件做什么，会展示在安装确认框里。",
+  "permissions": [
+    "message:read",
+    "message:send"
+  ],
+  "platforms": [],
+  "platform_notes": {},
+  "entry": "SKILL.md",
+  "files": [
+    "SKILL.md",
+    "prompts/",
+    "assets/"
+  ],
+  "min_diana": "0.8.0",
+  "homepage": "https://github.com/yourname/diana-plugin-hello",
+  "settings": [
+    {
+      "key": "greeting_prefix",
+      "label": "问候前缀",
+      "description": "回复消息时加在开头的前缀。",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "key": "api_token",
+      "label": "API Token",
+      "description": "调用上游服务需要的凭据，安装后请在插件设置里配置。",
+      "type": "string",
+      "default": "",
+      "secret": true
+    }
+  ]
+}

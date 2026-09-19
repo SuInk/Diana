@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -57,10 +58,71 @@ const (
 
 const maxHTTPRequestBodyBytes = 8 << 20
 
+// forwardWSOriginTracker 收集当前配置集里正向 ws 配置档的渠道实例。媒体回源
+// 地址推断需要「接入端回源得到本服务」的地址：反向 ws 有入站握手可用，正向
+// ws 只能按配置地址回推主机，而渠道实例由工厂在每次配置变更时重建，所以由
+// 工厂顺手登记到这里。
+type forwardWSOriginTracker struct {
+	mu       sync.Mutex
+	channels []*assistant.OneBotChannel
+}
+
+func (t *forwardWSOriginTracker) reset(channels []*assistant.OneBotChannel) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.channels = channels
+}
+
+// origin 返回第一个能推出主机的正向 ws 渠道的 http(s) 源（不含端口）。
+func (t *forwardWSOriginTracker) origin() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, channel := range t.channels {
+		if channel == nil {
+			continue
+		}
+		if origin := channel.ConnectionOrigin(); origin != "" {
+			return origin
+		}
+	}
+	return ""
+}
+
+// localMediaOriginProvider 串起媒体回源地址的兜底链，原则只有一个：「接入端
+// 回源用哪个地址，就拼哪个地址」。
+//  1. 反向 ws 握手 Host——桥主动连入用的地址，一定也回源得到本服务；
+//  2. 正向 ws 配置地址回推——Diana 外连桥用的主机，同机/容器
+//     （host.docker.internal）部署时桥同样回源得到本服务；
+//  3. HTTP API 地址回推——同上；
+//
+// 都推不出来返回空串，LocalMediaStore 退回构造时的静态基址（此时多半是跨机
+// 部署，应显式配置 local_media_base_url）。正向 ws / HTTP 推出来的是「协议 +
+// 主机名」，端口一律补本服务自己的 web 端口：媒体由本服务提供，接入端的
+// ws/http 端口上并没有媒体服务。
+func localMediaOriginProvider(oneBotServer *assistant.OneBotReverseServer, forwardTracker *forwardWSOriginTracker, httpChannel *assistant.OneBotHTTPChannel, port string) func() string {
+	return func() string {
+		if origin := oneBotServer.ConnectionOrigin(); origin != "" {
+			return origin
+		}
+		origin := forwardTracker.origin()
+		if origin == "" && httpChannel != nil {
+			origin = httpChannel.ConnectionOrigin()
+		}
+		if origin == "" {
+			return ""
+		}
+		scheme, host, found := strings.Cut(origin, "://")
+		if !found || host == "" {
+			return ""
+		}
+		return scheme + "://" + net.JoinHostPort(host, port)
+	}
+}
+
 // newBotChannelSetFactory 按配置集重建全部通道。OneBot 反连监听器是进程内共享
 // 的单个实例，它的 endpoint/token 只能由这里决定——这是唯一的写入点，别处再写
 // 就会出现运行态和存储配置对不上的 401。
-func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, httpServers ...*assistant.OneBotHTTPChannel) func(assistant.ProfileSet) assistant.Channel {
+func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwardTracker *forwardWSOriginTracker, httpServers ...*assistant.OneBotHTTPChannel) func(assistant.ProfileSet) assistant.Channel {
 	httpServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
 	if len(httpServers) > 0 {
 		httpServer = httpServers[0]
@@ -70,6 +132,7 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, httpSe
 		bindings := make([]assistant.ChannelBinding, 0, len(set.Profiles))
 		oneBotAdded := false
 		httpAdded := false
+		var forwardChannels []*assistant.OneBotChannel
 		for _, profile := range set.Profiles {
 			profile = profile.WithDefaults()
 			if !profile.Enabled {
@@ -96,6 +159,11 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, httpSe
 					AccessToken: profile.OneBotAccessToken,
 				})
 				channel = oneBotServer
+			} else if assistant.IsOneBotPlatform(profile.Platform) && profile.WithDefaults().OneBotTransport == assistant.OneBotTransportForwardWS {
+				// 与 NewChannelForConfig 同一构造，额外登记一份给媒体回源推断。
+				forwardChannel := assistant.NewOneBotChannel(assistant.OneBotConfig{Endpoint: profile.OneBotWSEndpoint, AccessToken: profile.OneBotAccessToken})
+				channel = forwardChannel
+				forwardChannels = append(forwardChannels, forwardChannel)
 			} else {
 				channel = assistant.NewChannelForConfig(profile)
 			}
@@ -107,6 +175,9 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, httpSe
 					Channel:   channel,
 				})
 			}
+		}
+		if forwardTracker != nil {
+			forwardTracker.reset(forwardChannels)
 		}
 		if !httpAdded {
 			httpServer.SetConfig(assistant.OneBotConfig{})
@@ -283,6 +354,27 @@ func main() {
 	} else if ok {
 		plugins.Restore(savedPluginStates)
 	}
+	// 第三方仓库插件：按来源记录把已安装的插件重新登记进管理器，再套用一次
+	// 已保存的开关与设置。登记在 Restore 之后、迁移之前，老的持久化数据路径
+	// 不需要为第三方插件做任何特殊处理。
+	dataDir := filepath.Dir(sqliteStore.Path())
+	repoPluginStore := assistant.NewRepoPluginStore(dataDir)
+	if err := repoPluginStore.Load(); err != nil {
+		log.Printf("第三方插件来源记录读取失败，本次跳过恢复: %v", err)
+	}
+	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err == nil && ok {
+		for _, source := range repoPluginStore.List() {
+			plugin, err := assistant.LoadRepoPlugin(dataDir, source)
+			if err != nil {
+				log.Printf("第三方插件 %s 恢复失败，跳过: %v", source.ID, err)
+				continue
+			}
+			if err := plugins.RegisterPlugin(plugin); err != nil {
+				log.Printf("第三方插件 %s 登记失败，跳过: %v", source.ID, err)
+			}
+		}
+		plugins.Restore(savedPluginStates)
+	}
 	botSet := botProfileStore.Profiles()
 	if plugins.MigrateProfileConfigurations(botSet.Profiles) {
 		if err := sqliteStore.SavePluginStates(ctx, plugins.Snapshot()); err != nil {
@@ -299,7 +391,8 @@ func main() {
 		AccessToken: botCfg.OneBotAccessToken,
 	})
 	oneBotHTTPServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
-	channelSetFactory := newBotChannelSetFactory(oneBotServer, oneBotHTTPServer)
+	forwardTracker := &forwardWSOriginTracker{}
+	channelSetFactory := newBotChannelSetFactory(oneBotServer, forwardTracker, oneBotHTTPServer)
 	// 配置档绑了 OAuth 提供商时，凭据由 oauthManager 现取现续；没绑就和以前一样
 	// 只用配置里的 API Key，连 HTTP 客户端都不会被包一层。
 	newLLMClient := func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
@@ -346,11 +439,15 @@ func main() {
 		log.Fatalf("local media share index: %v", err)
 	}
 	if configuredMediaBaseURL == "" {
-		// 未显式配置媒体基址时，按反向 ws 握手时客户端使用的地址动态拼
-		// 媒体 URL：桥在容器或别的机器上时（如 host.docker.internal），
-		// 能连上 ws 的地址一定也能回源取媒体，用户只需配置 ws 地址。
-		localMediaStore.SetOriginProvider(oneBotServer.ConnectionOrigin)
+		localMediaStore.SetOriginProvider(localMediaOriginProvider(oneBotServer, forwardTracker, oneBotHTTPServer, port))
 	}
+	// WebUI 可读写同一项设置：数据库里保存的值优先，保存即热生效；没保存过时
+	// 回落到 config.yaml 的 storage.local_media_base_url，再没有才走推断链。
+	mediaBaseURLHandler, err := webui.NewMediaBaseURLHandler(ctx, sqliteStore, configuredMediaBaseURL, localMediaStore.SetConfiguredBaseURL)
+	if err != nil {
+		log.Fatalf("media base url handler: %v", err)
+	}
+	mediaBaseURLHandler.SetLogStore(sqliteStore)
 	botRuntime.SetLocalMediaSharer(localMediaStore)
 	// 入站图片下载后持久化，识图一律用本地文件的 base64，不依赖模型服务商
 	// 能否访问聊天平台那些短时效地址。
@@ -412,6 +509,12 @@ func main() {
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
 	botHandler.SetSQLiteStore(sqliteStore)
+	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 60 * time.Second})
+	repoPluginInstaller.MirrorBase = func(ctx context.Context) string {
+		return mirrorSelector.Base(ctx, "https://raw.githubusercontent.com/SuInk/diana/main/model/version/VERSION")
+	}
+	botHandler.SetRepoPluginInstaller(repoPluginInstaller)
+	botHandler.SetRepoPluginSourceStore(repoPluginStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)
 	napCatLoginHandler, err := webui.NewNapCatLoginHandler(webui.NapCatLoginConfig{
 		BaseURL: strings.TrimSpace(appCfg.NapCat.WebUIURL),
@@ -478,6 +581,7 @@ func main() {
 	systemHandler.Register(router)
 	mediaCacheHandler.Register(router)
 	historyMediaHandler.Register(router)
+	mediaBaseURLHandler.Register(router)
 	botHandler.Register(router)
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)
 	ownerLoginHandler.SetLogStore(sqliteStore)

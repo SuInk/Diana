@@ -30,10 +30,20 @@ type LocalMediaStore struct {
 	mu             sync.RWMutex
 	baseURL        string
 	basePath       string
+	configuredBase string
 	originProvider func() string
 	items          map[string]localMediaItem
 	indexDir       string
 	now            func() time.Time
+}
+
+// SetConfiguredBaseURL 登记 WebUI 保存的显式媒体回源基址；空串表示清除，
+// 退回 originProvider / 构造基址的推断链。优先级最高：用户显式配置永远胜过
+// 任何自动推断——推断错了还能自动兜，显式配错了只能让用户看见并改回来。
+func (s *LocalMediaStore) SetConfiguredBaseURL(baseURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configuredBase = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 }
 
 // SetIndexDir preserves unexpired share mappings across process restarts.
@@ -97,8 +107,12 @@ func (s *LocalMediaStore) shareBaseURL() string {
 		return ""
 	}
 	s.mu.RLock()
+	configured := s.configuredBase
 	provider := s.originProvider
 	s.mu.RUnlock()
+	if configured != "" {
+		return configured
+	}
 	if provider != nil {
 		if origin := strings.TrimRight(strings.TrimSpace(provider()), "/"); origin != "" {
 			return origin + s.basePath
