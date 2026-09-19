@@ -839,6 +839,7 @@ type ConfigPayload struct {
 	OneBotAccessToken                 string             `json:"onebot_access_token,omitempty"`
 	OneBotHTTPSecretConfigured        bool               `json:"onebot_http_secret_configured,omitempty"`
 	OneBotAccessTokenConfigured       bool               `json:"onebot_access_token_configured,omitempty"`
+	OneBotAccessTokenPreview          string             `json:"onebot_access_token_preview,omitempty"`
 	TelegramBotToken                  string             `json:"telegram_bot_token,omitempty"`
 	TelegramBotTokenConfigured        bool               `json:"telegram_bot_token_configured,omitempty"`
 	TelegramAPIBaseURL                string             `json:"telegram_api_base_url,omitempty"`
@@ -1995,6 +1996,13 @@ func (cfg BotConfig) Validate() error {
 	if cfg.OneBotTransport != OneBotTransportReverseWS && cfg.OneBotTransport != OneBotTransportForwardWS {
 		return fmt.Errorf("未知 OneBot 连接方式: %s", cfg.OneBotTransport)
 	}
+	// 反向 WS 的 token 不是「可选」：server 侧 token 为空会拒绝一切握手
+	//（reason=server_token_unset），保存成启用的空 token 配置等于让机器人静默
+	// 掉线。正向 WS / HTTP 是 Diana 主动外连，token 发不发由接入端决定，
+	// 留空合法，不做限制。
+	if cfg.OneBotTransport == OneBotTransportReverseWS && cfg.Enabled && strings.TrimSpace(cfg.OneBotAccessToken) == "" {
+		return fmt.Errorf("OneBot 反向 WebSocket 必须配置 Access Token，且需与接入端（如 NapCat）填写的 token 一致")
+	}
 	endpoint := strings.TrimSpace(cfg.OneBotReverseWSEndpoint)
 	if cfg.OneBotTransport == OneBotTransportForwardWS {
 		endpoint = strings.TrimSpace(cfg.OneBotWSEndpoint)
@@ -2020,6 +2028,20 @@ func isHTTPURL(value string) bool {
 	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
+// maskSecretPreview 把密钥渲染成「前两位…后两位」的掩码预览：只够辨认是不是
+// 自己刚填的那一个，又不泄露多少凭据。太短的 token 一律不露。
+// 只用于展示，回传明文预览等同于泄露凭据。
+func maskSecretPreview(value string) string {
+	key := []rune(strings.TrimSpace(value))
+	if len(key) == 0 {
+		return ""
+	}
+	if len(key) < 5 {
+		return "••••"
+	}
+	return string(key[:2]) + "…" + string(key[len(key)-2:])
+}
+
 // PayloadFromConfig 把内部机器人配置转换为前端安全 payload。
 func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	cfg = cfg.WithDefaults()
@@ -2037,11 +2059,15 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		OneBotHTTPSecretConfigured:  cfg.OneBotHTTPSecret != "",
 		OneBotReverseWSEndpoint:     cfg.OneBotReverseWSEndpoint,
 		OneBotAccessTokenConfigured: cfg.OneBotAccessToken != "",
+		// 只回传掩码预览（前几位 + 后几位），与 LLM API Key 的 api_key_preview
+		// 同一约定：方便用户核对配置的是哪一个 token，又不泄露完整凭据。
+		OneBotAccessTokenPreview:    maskSecretPreview(cfg.OneBotAccessToken),
 		TelegramBotTokenConfigured:  cfg.TelegramBotToken != "",
 		TelegramAPIBaseURL:          cfg.TelegramAPIBaseURL,
 		TelegramProxyURL:            cfg.TelegramProxyURL,
 		TelegramSuppressBotMessages: copyBoolPointer(cfg.TelegramSuppressBotMessages),
-		// 密钥一律只回 configured 标志。AppID/CorpID 这类公开标识可以回显，
+		// 密钥一律只回 configured 标志或掩码预览（见 OneBotAccessTokenPreview），
+		// 不回明文。AppID/CorpID 这类公开标识可以回显，
 		// 方便用户核对填的是不是同一个应用。
 		QQAppID:                           cfg.QQAppID,
 		QQAppSecretConfigured:             cfg.QQAppSecret != "",

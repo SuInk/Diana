@@ -275,7 +275,7 @@
                       class="input"
                       :type="tokenRevealed.onebot_access_token ? 'text' : 'password'"
                       autocomplete="off"
-                      :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
+                      :placeholder="form.onebot_access_token_configured ? (form.onebot_access_token_preview ? `已保存 ${form.onebot_access_token_preview}，留空沿用，填写则覆盖` : '已配置 — 留空沿用，填写则覆盖') : ((!form.onebot_transport || form.onebot_transport === 'reverse_ws') ? '反向 WebSocket 必填（启用时），至少 16 位' : '可选，至少 16 位')"
                     />
                     <button
                       class="btn icon-only"
@@ -286,6 +286,15 @@
                     >
                       <EyeOff v-if="tokenRevealed.onebot_access_token" :size="14" aria-hidden="true" />
                       <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      aria-label="随机生成 Token"
+                      title="随机生成"
+                      @click="generateOneBotToken"
+                    >
+                      <Shuffle :size="14" aria-hidden="true" />
                     </button>
                   </div>
                 </div>
@@ -1858,6 +1867,21 @@ function tokenValue(config: BotProfileConfig, field: TokenField): string {
   return (readField(config, field) as string | undefined) ?? "";
 }
 
+// 用 CSPRNG 生成足够长的随机 token，满足后端的最低长度要求；
+// 生成后自动切到明文，方便用户复制到 OneBot 客户端。
+function generateOneBotToken(): void {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let token = "";
+  for (const byte of bytes) {
+    token += alphabet[byte % alphabet.length];
+  }
+  tokenDraft.value = token;
+  tokenRevealed.value.onebot_access_token = true;
+  toastSuccess("已生成随机 Token，请同步填写到 OneBot 客户端");
+}
+
 // 点「查看」才去后端要一次真实凭据：草稿是空的说明用户没改过,值只在服务端,
 // 常规配置接口不会带回来。取到后填进草稿,再保存等于原样写回,不会误清空。
 async function toggleTokenReveal(field: TokenField): Promise<void> {
@@ -3411,6 +3435,17 @@ async function save(): Promise<void> {
   if (connectionConflict.value) {
     editorTab.value = "access";
     toastError(`此 WebSocket 地址已由「${connectionConflict.value.name || "未命名机器人"}」使用，请选择复用或填写不同的地址`);
+    return;
+  }
+  // 后端会拒绝「启用 + 反向 WS + 空 token」的保存；提前拦住，错误提示更贴上下文。
+  if (
+    (!current.platform || current.platform === "onebot-v11") &&
+    current.enabled &&
+    (!current.onebot_transport || current.onebot_transport === "reverse_ws") &&
+    !current.onebot_access_token_configured &&
+    !tokenDraft.value.trim()
+  ) {
+    toastError("反向 WebSocket 模式必须配置 Access Token，需与 OneBot v11 客户端保持一致");
     return;
   }
   const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);

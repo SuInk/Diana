@@ -165,6 +165,7 @@ func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive, 
 	provider := newConcurrentBurstProvider(privateConcurrency, 2*time.Second)
 	runtime := NewRuntime(BotConfig{
 		Enabled: true, BotAccount: "42", MaxBotConcurrency: 4, InboundPrivateConcurrency: privateConcurrency,
+		OneBotAccessToken: "test-token",
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	runtime.SetInboundEventStore(store)
 
