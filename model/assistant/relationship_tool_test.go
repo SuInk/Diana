@@ -172,8 +172,8 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["diana.relationship"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"diana.relationship","input":{"operation":"get"}}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["relationship"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"relationship","input":{"operation":"get"}}}`,
 		`{"action":"final","content":"[CQ:at,qq=10005] 当前好感度是 5，关系等级是初识，互动 18 次。当前权限：基础聊天、媒体理解、网页搜索和 1 个提醒或订阅额度。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
@@ -209,7 +209,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	if len(provider.requests) != 5 || !requestMessagesContain(provider.requests[3].Messages, `"favorability": 5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
-	for _, want := range []string{"必须调用 diana.relationship", "operation=list", "不得以隐私", "不得编造"} {
+	for _, want := range []string{"必须调用 relationship", "operation=list", "不得以隐私", "不得编造"} {
 		if !requestMessagesContain(provider.requests[1].Messages, want) {
 			t.Fatalf("relationship guidance missing %q: %#v", want, provider.requests[1].Messages)
 		}

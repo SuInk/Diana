@@ -57,7 +57,7 @@ type LLMClient interface {
 //     工作目录内的读取已经有 read_file / grep / find_files，它们锁在 workspace 里。
 //   - curl / wget / nc —— 读到的东西能被发出去，这一层白名单挡不住。
 //   - ps —— 进程列表会带上别的进程的完整命令行，那里面可能有别人的密钥。
-//     Diana 自己的 CPU 和内存 diana.host_stats 已经给了，不需要靠它。
+//     Diana 自己的 CPU 和内存 host_stats 已经给了，不需要靠它。
 //   - git / 包管理器 / 任何写操作 —— 会改磁盘。
 //
 // 想要更多就自己往里加，那是明确的一次授权动作。

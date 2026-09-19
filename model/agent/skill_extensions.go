@@ -38,7 +38,7 @@ type SkillsInstallTool struct {
 	manager *ExtensionManager
 }
 
-func (t *SkillsInstallTool) Name() string { return "skills.install" }
+func (t *SkillsInstallTool) Name() string { return "install_skill" }
 
 func (t *SkillsInstallTool) Description() string {
 	return `安装一个受 Diana 管理的 Skill 并立即刷新能力目录。首次调用会被拒绝并返回确认码，请把要装的内容讲清楚、等用户原样回复确认码后再重发本次调用。`
@@ -69,7 +69,7 @@ func (t *SkillsInstallTool) Run(ctx context.Context, input map[string]any) (stri
 	}
 	body, err := json.MarshalIndent(map[string]any{
 		"installed": state,
-		"message":   "Skill 已安装并在当前 Agent 会话中生效。使用前请调用 skills.read 读取完整说明。",
+		"message":   "Skill 已安装并在当前 Agent 会话中生效。使用前请调用 read_skill 读取完整说明。",
 	}, "", "  ")
 	if err != nil {
 		return "", err
@@ -81,7 +81,7 @@ type SkillsUninstallTool struct {
 	manager *ExtensionManager
 }
 
-func (t *SkillsUninstallTool) Name() string { return "skills.uninstall" }
+func (t *SkillsUninstallTool) Name() string { return "uninstall_skill" }
 
 func (t *SkillsUninstallTool) Description() string {
 	return `卸载一个由 Diana 管理的 Skill；外部只读 Skill 不可卸载。首次调用会被拒绝并返回确认码，等用户原样回复后再重发本次调用。`

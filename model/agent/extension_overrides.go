@@ -75,10 +75,7 @@ func (r *ToolRegistry) ApplyExtensionOverrides(values map[string]bool) {
 	}
 	r.SetSkills(skills)
 	tools := newLiveSkillTools(r.Skills)
-	if _, ok := r.Get("skills.list"); ok {
-		r.Register(tools.List)
-	}
-	if _, ok := r.Get("skills.read"); ok {
+	if _, ok := r.Get("read_skill"); ok {
 		r.Register(tools.Read)
 	}
 	r.mu.Lock()
@@ -87,7 +84,7 @@ func (r *ToolRegistry) ApplyExtensionOverrides(values map[string]bool) {
 		r.extensions = &filteredExtensionCatalog{previous: previous, values: values}
 	}
 	r.mu.Unlock()
-	if _, ok := r.Get("extensions.list"); ok {
+	if _, ok := r.Get("list_capabilities"); ok {
 		r.Register(NewExtensionsListTool(r.extensions, true))
 	}
 }

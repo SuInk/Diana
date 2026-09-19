@@ -139,7 +139,7 @@ func (p *CapabilityKnowledgePlugin) documents(platform, platformRules string) []
 }
 
 func (t *dianaCapabilitiesTool) Name() string {
-	return "diana.capabilities"
+	return "capabilities"
 }
 
 func (t *dianaCapabilitiesTool) Description() string {
@@ -242,28 +242,28 @@ func capabilityTerms(text string) map[string]float64 {
 }
 
 var coreCapabilityDocuments = []capabilityDocument{
-	{ID: "core:web-search", Title: "实时联网搜索", Content: "可使用 web_search.search 通过有预算的候选查询探索、多 provider 回退和空结果恢复检索实时新闻、IPO 时间、价格和网页资料；支持别名、语言及宽松查询候选，并会返回来源和证据状态供后续核验。", Source: "core", Enabled: true},
+	{ID: "core:web-search", Title: "实时联网搜索", Content: "可使用 web_search 通过有预算的候选查询探索、多 provider 回退和空结果恢复检索实时新闻、IPO 时间、价格和网页资料；支持别名、语言及宽松查询候选，并会返回来源和证据状态供后续核验。", Source: "core", Enabled: true},
 	{ID: "core:browser", Title: "网页浏览与渲染", Content: "可用沙盒无头浏览器执行 JavaScript、跟随跳转、读取动态网页；主人还可使用浏览器和本地工具。", Source: "core", Enabled: true},
 	{ID: "core:media", Title: "图片视频与链接解析", Content: "能理解聊天图片上下文，下载并抽取视频多帧；链接解析插件支持 B站、YouTube、X、小红书、抖音等平台并发送解析结果。", Source: "core", Enabled: true},
-	{ID: "core:image-source", Title: "图片溯源", Content: "可调用 diana.image_source 查聊天里图片的出处：SauceNAO 覆盖插画、同人志和表情包并给出 pixiv、Danbooru 等原链，trace.moe 认番剧截图并给出集数和出现时间。只能查聊天里已有的图片，反查会把图片上传到对应的第三方图库。", Source: "core", Enabled: true},
-	{ID: "core:ai-image-detect", Title: "AI 图片检测", Content: "可调用 diana.ai_image_detect 检测聊天图片是不是 AI 生成的：本地解析 C2PA 内容凭证、IPTC 数字来源类型、Google SynthID/「Made with Google AI」标注、国内 AIGC 隐式标识，以及 Stable Diffusion、ComfyUI、NovelAI、Midjourney 等生成参数；配置检测服务后还会检查 SynthID 像素水印。聊天平台转发和截图会抹掉元数据，查不到标识不能说成是真图。", Source: "core", Enabled: true},
+	{ID: "core:image-source", Title: "图片溯源", Content: "可调用 image_source 查聊天里图片的出处：SauceNAO 覆盖插画、同人志和表情包并给出 pixiv、Danbooru 等原链，trace.moe 认番剧截图并给出集数和出现时间。只能查聊天里已有的图片，反查会把图片上传到对应的第三方图库。", Source: "core", Enabled: true},
+	{ID: "core:ai-image-detect", Title: "AI 图片检测", Content: "可调用 ai_image_detect 检测聊天图片是不是 AI 生成的：本地解析 C2PA 内容凭证、IPTC 数字来源类型、Google SynthID/「Made with Google AI」标注、国内 AIGC 隐式标识，以及 Stable Diffusion、ComfyUI、NovelAI、Midjourney 等生成参数；配置检测服务后还会检查 SynthID 像素水印。聊天平台转发和截图会抹掉元数据，查不到标识不能说成是真图。", Source: "core", Enabled: true},
 	{ID: "core:image", Title: "图片生成与编辑", Content: "熟悉等级可生成和编辑图片；可结合群成员头像、用户提供的图片以及 Agent 联网搜索或网页核验后的结果。", Source: "core", Enabled: true, Required: "熟悉"},
-	{ID: "core:voice", Title: "配置音色语音回复", Content: "用户明确要求语音回复、朗读或念出文字时，可调用 diana.tts 通过语音合成插件生成已配置音色并直接发送 语音；普通文字回复不会自动转语音。", Source: "core", Enabled: true},
+	{ID: "core:voice", Title: "配置音色语音回复", Content: "用户明确要求语音回复、朗读或念出文字时，可调用 tts 通过语音合成插件生成已配置音色并直接发送 语音；普通文字回复不会自动转语音。", Source: "core", Enabled: true},
 	{ID: "core:ocr", Title: "文件与 OCR", Content: "能解析 PDF 和文件；macOS 使用 PDFKit/Vision，本地原生路径不可用时回退 PDFium 与视觉 LLM。", Source: "core", Enabled: true, Required: "熟悉"},
-	{ID: "core:group", Title: "群资料与成员", Content: "群资料和成员统一用 diana.platform：group_info 读群资料和人数，member_list 拉成员候选，member_info 按账号实时核验成员。TG 的成员候选是管理员与已知账号，不是完整名单。回复欲望、评分门槛和冷却由 diana.bot_config 更新 participation；关闭主动插话用 desire_level=off，不用平台禁言。头像来源通过图片工具指定，由运行时按平台获取；本地头像图片匹配用只读 diana.group，不能把部分候选当成全群。", Source: "core", Enabled: true},
-	{ID: "core:group-admin", Title: "禁言与踢人", Content: "群管理操作用 diana.platform 的 mute（禁言）、unmute（解禁）、kick（踢人）：仅机器人主人可用，群管理员和群主都不行；还要求机器人本身是该群管理员，否则直接说做不到，不去猜。目前支持 OneBot v11 和 Telegram，其余平台会明确说不支持。禁言必须给正的时长（秒），OneBot 上限 30 天；只认账号 ID，不按昵称猜，也不能对主人或机器人自己下手。", Source: "core", Enabled: true},
-	{ID: "core:platform", Title: "平台接口协议", Content: "diana.platform 是跨平台的群操作接口，动词按当前平台映射到原生动作（OneBot v11 或 Telegram Bot API）。读操作对成员开放，禁言/踢人仅主人且需机器人为群管理员。好友请求、成员入群申请和机器人群邀请（OneBot）会持久化并私聊通知主人，由主人通过 diana.onebot_requests 批准或拒绝。", Source: "core", Enabled: true},
-	{ID: "core:runtime-model", Title: "自己在用什么模型", Content: "diana.runtime_model 支持本轮实际模型、所有分组及细分用途的当前配置、语音识别和语音合成服务信息。group=all 查看所有用途，group=history 按当前引用或 message_id 查询本会话已发送图片的实际模型记录，包括备用切换。配置不能代替历史执行证据，旧图片没有记录时明确无法确认；外部语音服务不公开权重名时不能猜。工具只读；主人修改模型分配由 diana.llm_config 完成。", Source: "core", Enabled: true},
-	{ID: "core:version", Title: "自己的版本与更新状态", Content: "通过 diana.version 报出当前版本号、是正式发布版还是源码构建、这台机器上这个版本什么时候装上的、本次运行了多久、跑在什么系统架构上，以及项目的开源地址、最新发布版本、有没有新版本可用、这台机器能不能自更新。", Source: "core", Enabled: true},
-	{ID: "core:notebook", Title: "笔记本与梗记忆", Content: "通过 diana.notebook 维护群里的梗、黑话、缩写和内部称呼：记下新说法、更新变了的释义、作废不再成立的条目，删错了还能恢复。当前消息里出现已收录的说法时，释义会自动进入回复上下文。", Source: "core", Enabled: true},
-	{ID: "core:thread-state", Title: "多轮任务临时状态", Content: "通过 diana.thread_state 保存短期 canonical 状态。scope=user 用于当前用户的私有猜谜、计划和表单；scope=session 用于多人棋局、共同计划等需要当前会话参与者接续同一状态的任务。状态会跨消息和进程重启恢复，更新需带 expected_version 防止并发覆盖，完成、取消或超时后清理，不写入长期记忆，也不会出现在公开回复里；管理员可在事件详情审计本轮实际调用的状态。", Source: "core", Enabled: true},
-	{ID: "core:relationship", Title: "记忆好感度与权限", Content: "通过 diana.relationship 查询用户长期互动、好感度、关系等级和权限；主人可设置或增减其他人的好感度。", Source: "core", Enabled: true},
+	{ID: "core:group", Title: "群资料与成员", Content: "群资料和成员统一用 platform：group_info 读群资料和人数，member_list 拉成员候选，member_info 按账号实时核验成员。TG 的成员候选是管理员与已知账号，不是完整名单。回复欲望、评分门槛和冷却由 bot_config 更新 participation；关闭主动插话用 desire_level=off，不用平台禁言。头像来源通过图片工具指定，由运行时按平台获取；本地头像图片匹配用只读 group，不能把部分候选当成全群。", Source: "core", Enabled: true},
+	{ID: "core:group-admin", Title: "禁言与踢人", Content: "群管理操作用 platform 的 mute（禁言）、unmute（解禁）、kick（踢人）：仅机器人主人可用，群管理员和群主都不行；还要求机器人本身是该群管理员，否则直接说做不到，不去猜。目前支持 OneBot v11 和 Telegram，其余平台会明确说不支持。禁言必须给正的时长（秒），OneBot 上限 30 天；只认账号 ID，不按昵称猜，也不能对主人或机器人自己下手。", Source: "core", Enabled: true},
+	{ID: "core:platform", Title: "平台接口协议", Content: "platform 是跨平台的群操作接口，动词按当前平台映射到原生动作（OneBot v11 或 Telegram Bot API）。读操作对成员开放，禁言/踢人仅主人且需机器人为群管理员。好友请求、成员入群申请和机器人群邀请（OneBot）会持久化并私聊通知主人，由主人通过 onebot_requests 批准或拒绝。", Source: "core", Enabled: true},
+	{ID: "core:runtime-model", Title: "自己在用什么模型", Content: "runtime_model 支持本轮实际模型、所有分组及细分用途的当前配置、语音识别和语音合成服务信息。group=all 查看所有用途，group=history 按当前引用或 message_id 查询本会话已发送图片的实际模型记录，包括备用切换。配置不能代替历史执行证据，旧图片没有记录时明确无法确认；外部语音服务不公开权重名时不能猜。工具只读；主人修改模型分配由 llm_config 完成。", Source: "core", Enabled: true},
+	{ID: "core:version", Title: "自己的版本与更新状态", Content: "通过 version 报出当前版本号、是正式发布版还是源码构建、这台机器上这个版本什么时候装上的、本次运行了多久、跑在什么系统架构上，以及项目的开源地址、最新发布版本、有没有新版本可用、这台机器能不能自更新。", Source: "core", Enabled: true},
+	{ID: "core:notebook", Title: "笔记本与梗记忆", Content: "通过 notebook 维护群里的梗、黑话、缩写和内部称呼：记下新说法、更新变了的释义、作废不再成立的条目，删错了还能恢复。当前消息里出现已收录的说法时，释义会自动进入回复上下文。", Source: "core", Enabled: true},
+	{ID: "core:thread-state", Title: "多轮任务临时状态", Content: "通过 thread_state 保存短期 canonical 状态。scope=user 用于当前用户的私有猜谜、计划和表单；scope=session 用于多人棋局、共同计划等需要当前会话参与者接续同一状态的任务。状态会跨消息和进程重启恢复，更新需带 expected_version 防止并发覆盖，完成、取消或超时后清理，不写入长期记忆，也不会出现在公开回复里；管理员可在事件详情审计本轮实际调用的状态。", Source: "core", Enabled: true},
+	{ID: "core:relationship", Title: "记忆好感度与权限", Content: "通过 relationship 查询用户长期互动、好感度、关系等级和权限；主人可设置或增减其他人的好感度。", Source: "core", Enabled: true},
 	{ID: "core:world-book", Title: "世界书世界观设定", Content: "世界书是主人在控制台维护的世界观设定集：条目按树状章节组织，常驻条目（蓝灯）每轮进入上下文，带触发词的条目（绿灯）在聊到相关话题时注入。支持直接导入 SillyTavern 世界书文件和角色卡内嵌的 character_book。它定义机器人所处的世界背景，由每台机器人的配置决定用不用；设定内容不会主动复述给用户。", Source: "core", Enabled: true},
-	{ID: "core:romance", Title: "人机恋恋爱模式", Content: "主人在控制台开启恋爱模式后，用户本人认真表白时可通过 diana.relationship 的 romance_start 确立恋人关系，好感度和相处时长不够会被温柔婉拒；恋爱是单偶的，同一时间只有一位恋人，已有恋人时任何表白都会被婉拒。romance_end 随时可以分手。确立后语气按恋人来、记纪念日，整月和周年当天白天还会主动私聊一句纪念日祝福，但不解锁任何权限。开关默认关闭，关闭时机器人不参与恋爱话题的确立。", Source: "core", Enabled: true},
+	{ID: "core:romance", Title: "人机恋恋爱模式", Content: "主人在控制台开启恋爱模式后，用户本人认真表白时可通过 relationship 的 romance_start 确立恋人关系，好感度和相处时长不够会被温柔婉拒；恋爱是单偶的，同一时间只有一位恋人，已有恋人时任何表白都会被婉拒。romance_end 随时可以分手。确立后语气按恋人来、记纪念日，整月和周年当天白天还会主动私聊一句纪念日祝福，但不解锁任何权限。开关默认关闭，关闭时机器人不参与恋爱话题的确立。", Source: "core", Enabled: true},
 	{ID: "core:humanlike", Title: "拟人化：情绪、表达学习与戳一戳", Content: "主人可在控制台按机器人开启三项拟人化行为：情绪系统让心情随相处涨落、随时间回落，只影响语气；表达学习按群统计大家常说的短句和口癖，作为说话风格参考，让机器人越来越像这个群的人；戳一戳回应让它在被戳时按人设和关系回一句（仅 OneBot，有 90 秒冷却）。三项默认全部关闭。", Source: "core", Enabled: true},
-	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 diana.reminder、diana.schedule、diana.rss 和 diana.tasks 创建、查询、修改、取消和删除提醒、周期查询及 RSS/Twitter 条件订阅；GitHub 仓库更新订阅在 WebUI 管理。", Source: "core", Enabled: true},
+	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 reminder、schedule、rss 和 tasks 创建、查询、修改、取消和删除提醒、周期查询及 RSS/Twitter 条件订阅；GitHub 仓库更新订阅在 WebUI 管理。", Source: "core", Enabled: true},
 	{ID: "core:history", Title: "聊天历史引用与撤回", Content: "持久保存 OneBot v11 消息、引用、图片和视频关键帧，重启后不丢；可读取合并转发和撤回记录并结合上下文回复。", Source: "core", Enabled: true},
-	{ID: "core:config", Title: "机器人配置与模型配置", Content: "diana.config 可读取脱敏运行配置、LLM、plugins 和 skills；仅主人可用 diana.llm_config 修改 Diana 自己当前的 provider/model。", Source: "core", Enabled: true, Required: "主人"},
+	{ID: "core:config", Title: "机器人配置与模型配置", Content: "config 可读取脱敏运行配置、LLM、plugins 和 skills；仅主人可用 llm_config 修改 Diana 自己当前的 provider/model。", Source: "core", Enabled: true, Required: "主人"},
 	{ID: "core:llm-identity-privacy", Title: "LLM 账号标识脱敏", Content: "默认在本地 LLM 边界把账号和群号替换为带角色语义的稳定别名；模型回复和 Agent 工具参数会在本地执行前还原。真实标识仍保留在本地数据库，不影响消息发送、群工具和长期记忆。", Source: "core", Enabled: true},
-	{ID: "core:capabilities", Title: "自身能力知识库 RAG", Content: "diana.capabilities 使用本地稀疏检索，从核心能力和实时插件清单召回相关条目后交给模型回答。", Source: "core", Enabled: true},
+	{ID: "core:capabilities", Title: "自身能力知识库 RAG", Content: "capabilities 使用本地稀疏检索，从核心能力和实时插件清单召回相关条目后交给模型回答。", Source: "core", Enabled: true},
 }

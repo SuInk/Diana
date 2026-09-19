@@ -342,6 +342,9 @@ func findHeadlessBrowserExecutable(configured string) (string, error) {
 			"/usr/lib/chromium/chromium",
 			"/usr/lib/chromium-browser/chromium-browser",
 		)
+		// WebUI 依赖管理从 Chrome for Testing 下载的完整版 Chrome（slim 镜像
+		// 没有包管理器权限时的无 root 安装路），位置约定跟着 APP_DB_PATH 走。
+		paths = append(paths, downloadedChromePaths()...)
 	case "windows":
 		for _, base := range []string{os.Getenv("PROGRAMFILES"), os.Getenv("PROGRAMFILES(X86)"), os.Getenv("LOCALAPPDATA")} {
 			if base == "" {
@@ -412,6 +415,27 @@ func newBrowserSandboxDirs(prefix string) (browserSandboxDirs, error) {
 func (d browserSandboxDirs) remove() {
 	if d.root != "" {
 		_ = os.RemoveAll(d.root)
+	}
+}
+
+// downloadedChromePaths 返回 WebUI 依赖管理下载的 Chrome for Testing 完整版
+// Chrome 候选路径。位置约定与 assistant 包的媒体/工作区目录一致：优先
+// DIANA_BROWSER_DIR，否则跟着 APP_DB_PATH 走，最后回落到用户缓存目录。
+func downloadedChromePaths() []string {
+	dir := strings.TrimSpace(os.Getenv("DIANA_BROWSER_DIR"))
+	if dir == "" {
+		if dbPath := strings.TrimSpace(os.Getenv("APP_DB_PATH")); dbPath != "" {
+			dir = filepath.Join(filepath.Dir(dbPath), "browser")
+		} else if cacheDir, err := os.UserCacheDir(); err == nil {
+			dir = filepath.Join(cacheDir, "diana", "browser")
+		}
+	}
+	if dir == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(dir, "chrome-linux64", "chrome"),
+		filepath.Join(dir, "chrome-linux-arm64", "chrome"),
 	}
 }
 

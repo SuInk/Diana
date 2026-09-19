@@ -31,7 +31,7 @@ const (
 )
 
 const (
-	dianaImageToolName       = "diana.image"
+	dianaImageToolName       = "image"
 	dianaImageMediaTTL       = 10 * time.Minute
 	dianaImageMaxDecodedSize = 32 << 20
 	dianaImageTimeoutGrace   = 30 * time.Second
@@ -363,6 +363,10 @@ func (t *dianaImageTool) taskTimeout() time.Duration {
 }
 
 func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequest, services PluginTaskServices) (dianaImageTaskOutput, error) {
+	// 生图在后台任务里跑，拿到的 ctx 不带消息事件；不挂上的话用量记不到这条消息名下。
+	if llmUsageFromContext(ctx) == nil {
+		ctx = withLLMUsageContext(ctx, t.event)
+	}
 	progress := services.Report
 	operation := request.Operation
 	prompt := request.Prompt
@@ -553,7 +557,7 @@ func asyncImageReplyInstruction(result dianaImageToolResult) string {
 	}
 	// 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
 	// 「你没有权限」，用户看到的就只剩这句话。
-	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 diana.image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
+	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
 }
 
 func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string) (dianaImageToolResult, error) {

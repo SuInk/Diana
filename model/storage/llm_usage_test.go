@@ -22,12 +22,12 @@ func TestLLMUsageRollingWindow(t *testing.T) {
 		at     time.Time
 		action string
 	}{
-		{since.Add(-time.Nanosecond), "diana.llm_usage"},
+		{since.Add(-time.Nanosecond), "llm_usage"},
 		{since, "assistant.llm_usage"},
 		{since.Add(time.Hour), "chatbot.llm_usage"},
-		{until.Add(-time.Nanosecond), "diana.llm_usage"},
-		{until, "diana.llm_usage"},
-		{until.Add(time.Nanosecond), "diana.llm_usage"},
+		{until.Add(-time.Nanosecond), "llm_usage"},
+		{until, "llm_usage"},
+		{until.Add(time.Nanosecond), "llm_usage"},
 		{since.Add(time.Hour), "assistant.agent_tool"},
 	} {
 		meta := map[string]any{"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 60}

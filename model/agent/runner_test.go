@@ -37,11 +37,11 @@ func TestParseActionAcceptsFunctionCallJSON(t *testing.T) {
 }
 
 func TestParseActionAcceptsBareToolJSON(t *testing.T) {
-	action, ok := parseAction(`{"tool":"diana.reminder","arguments":{"operation":"create","delay":"1m","message":"睡觉"}}`)
+	action, ok := parseAction(`{"tool":"reminder","arguments":{"operation":"create","delay":"1m","message":"睡觉"}}`)
 	if !ok {
 		t.Fatal("expected bare tool JSON action")
 	}
-	if action.Action != "tool" || action.Tool != "diana.reminder" || action.Input["delay"] != "1m" {
+	if action.Action != "tool" || action.Tool != "reminder" || action.Input["delay"] != "1m" {
 		t.Fatalf("action = %#v", action)
 	}
 }
@@ -225,7 +225,7 @@ func TestRunnerPreservesCompleteToolErrors(t *testing.T) {
 }
 
 func TestRunnerPromptDistinguishesQueuedImageTaskFromCompletion(t *testing.T) {
-	runner, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, NewToolRegistry(&countingTool{name: "diana.image"}))
+	runner, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, NewToolRegistry(&countingTool{name: "image"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestRunnerDoesNotRepairFinalByScanningItsText(t *testing.T) {
 func TestRunnerRequiresPendingStateAfterQueuedImage(t *testing.T) {
 	tool := &queuedImageTestTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"diana.image","input":{"prompt":"画一只奶鼠"}}`,
+		`{"action":"tool","tool":"image","input":{"prompt":"画一只奶鼠"}}`,
 		`{"action":"final","content":"任意未声明任务状态的回复。"}`,
 		`{"action":"final","task_state":"pending","content":"已经开始画啦，完成后会自动发出来。"}`,
 	}}
@@ -361,7 +361,7 @@ func TestRunnerRequiresPendingStateAfterQueuedImage(t *testing.T) {
 func TestRunnerAcceptsPendingImageStatus(t *testing.T) {
 	tool := &queuedImageTestTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"diana.image","input":{"prompt":"画一只奶鼠"}}`,
+		`{"action":"tool","tool":"image","input":{"prompt":"画一只奶鼠"}}`,
 		`{"action":"final","task_state":"pending","content":"已经开始生成，完成后会自动发送。"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(tool))
@@ -555,7 +555,7 @@ func TestRunnerPromptRequiresToolsForCurrentState(t *testing.T) {
 func TestRunnerPreservesWebSearchCandidatesAndDropsUnrelatedInput(t *testing.T) {
 	tool := &countingWebSearchTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"precise","queries":["alias","translated"],"chat_history":"private"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"precise","queries":["alias","translated"],"chat_history":"private"}}`,
 		`{"action":"final","content":"done"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry(tool))
@@ -577,7 +577,7 @@ func TestRunnerPreservesWebSearchCandidatesAndDropsUnrelatedInput(t *testing.T) 
 func TestRunnerPromptOmitsRulesForUnselectedTools(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()
-	for _, unexpected := range []string{"diana.reminder", "diana.schedule", "diana.image", "browser_open", "skills.read"} {
+	for _, unexpected := range []string{"reminder", "schedule", "image", "browser_open", "read_skill"} {
 		if strings.Contains(prompt, unexpected) {
 			t.Fatalf("prompt unexpectedly contains unselected tool %q: %s", unexpected, prompt)
 		}
@@ -587,7 +587,7 @@ func TestRunnerPromptOmitsRulesForUnselectedTools(t *testing.T) {
 func TestRunnerOnlyPassesQueryToWebSearch(t *testing.T) {
 	tool := &countingWebSearchTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"长鑫存储 IPO 时间","num_results":10,"chat_history":"irrelevant"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"长鑫存储 IPO 时间","num_results":10,"chat_history":"irrelevant"}}`,
 		`{"action":"final","content":"done"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir()}, NewToolRegistry(tool))
@@ -612,10 +612,10 @@ func TestRunnerOnlyPassesQueryToWebSearch(t *testing.T) {
 func TestRunnerEnforcesPerRunWebSearchLimit(t *testing.T) {
 	tool := &countingWebSearchTool{}
 	client := &scriptedClient{responses: []string{
-		`{"action":"tool","tool":"web_search.search","input":{"query":"first"}}`,
-		`{"action":"tool","tool":"web_search.search","input":{"query":"second"}}`,
-		`{"action":"tool","tool":"web_search.search","input":{"query":"third"}}`,
-		`{"action":"tool","tool":"web_search.search","input":{"query":"fourth"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"first"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"second"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"third"}}`,
+		`{"action":"tool","tool":"web_search","input":{"query":"fourth"}}`,
 		`{"action":"final","content":"根据前三次搜索结果回答"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 5}, NewToolRegistry(tool))

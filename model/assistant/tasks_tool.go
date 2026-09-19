@@ -73,7 +73,7 @@ func newDianaTasksTool(runtime *Runtime, event MessageEvent) *dianaTasksTool {
 }
 
 func (t *dianaTasksTool) Name() string {
-	return "diana.tasks"
+	return "tasks"
 }
 
 func (t *dianaTasksTool) Description() string {

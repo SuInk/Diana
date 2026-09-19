@@ -199,7 +199,7 @@ func (r *Runtime) localImageEditSourceImages(event MessageEvent) []string {
 
 // imageEditSourceImages 按优先级挑出可编辑的图片：当前消息与引用消息里的图、指代
 // 解析选中的图、模型点名的头像来源，最后才退回最近历史图。identitySources 由模型
-// 在调用 diana.image 时给出，运行时不再从用户措辞里推断要用谁的头像。
+// 在调用 image 时给出，运行时不再从用户措辞里推断要用谁的头像。
 func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent, identitySources []string) []string {
 	var out []string
 	out = appendImageEditSourceImages(out, availableImageURLs(event.Segments)...)
@@ -348,7 +348,7 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 			attached[url] = true
 		}
 	}
-	var lines []string
+	var sources []MessageEvent
 	seen := map[string]bool{}
 	appendEvent := func(source MessageEvent) {
 		messageID := strings.TrimSpace(source.MessageID)
@@ -359,7 +359,7 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 		if len(attached) > 0 && sourceImagesAllAttached(source, attached) {
 			return
 		}
-		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyImageCachedDescriptions(ctx, source)))
+		sources = append(sources, source)
 	}
 	if event.Quoted != nil {
 		quotedEvent := MessageEvent{
@@ -378,8 +378,17 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 			appendEvent(source)
 		}
 	}
-	if len(lines) == 0 {
+	if len(sources) == 0 {
 		return ""
+	}
+	// 原图附不上时，用户问的这张图只剩文字摘要可用；摘要还没生成就当场加急等一会儿，
+	// 否则模型拿到的是一句「尚无缓存描述」。
+	waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
+	r.awaitHistoryImageDescriptions(waitCtx, sources...)
+	cancel()
+	lines := make([]string, 0, len(sources))
+	for _, source := range sources {
+		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyImageCachedDescriptions(ctx, source)))
 	}
 	return "【当前消息引用的历史图片仍未附加原图】\n" + strings.Join(lines, "\n")
 }
@@ -509,8 +518,10 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		}
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
+		started := time.Now()
 		resp, err := llm.GenerateImage(ctx, cfg, request)
 		if err == nil {
+			r.recordImageUsage(ctx, cfg, resp, "image_generate", time.Since(started))
 			return resp, cfg, nil
 		}
 		lastErr = err
@@ -530,13 +541,33 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 		}
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
+		started := time.Now()
 		resp, err := llm.EditImage(ctx, cfg, request)
 		if err == nil {
+			r.recordImageUsage(ctx, cfg, resp, "image_edit", time.Since(started))
 			return resp, cfg, nil
 		}
 		lastErr = err
 	}
 	return nil, llm.ProviderConfig{}, lastErr
+}
+
+// recordImageUsage 把生图、改图的调用记进用量。它们不走文本 provider 链，装饰器
+// 记不到；按张计费的中转不报 token，这时仍记一次调用并标 usage_missing。
+func (r *Runtime) recordImageUsage(ctx context.Context, cfg llm.ProviderConfig, resp *llm.ImageGenerateResponse, purpose string, duration time.Duration) {
+	if resp == nil {
+		return
+	}
+	var event MessageEvent
+	if state := llmUsageFromContext(ctx); state != nil {
+		event = state.event
+	}
+	provider := resp.Provider
+	if provider == "" {
+		provider = cfg.Provider
+	}
+	model := firstNonEmpty(resp.Model, cfg.ImageModelWithDefault())
+	r.recordLLMUsage(ctx, event, provider, model, resp.Usage, purpose, duration, 0)
 }
 
 func messagesContainImages(messages []llm.Message) bool {

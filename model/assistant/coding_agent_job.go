@@ -928,7 +928,7 @@ func (r *Runtime) recordCodingJobLog(ctx context.Context, job CodingJob, kind ap
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "diana.coding",
+		Action:  "coding",
 		Message: message,
 		Detail:  detail,
 		Actor:   oneBotEventActor(job.Target.event()),

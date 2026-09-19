@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,12 +67,20 @@ type InboundEventDetail struct {
 	OutputTokensPerSecond float64 `json:"output_tokens_per_second,omitempty"`
 	// AvgTTFTMS 是首 token 时延的均值，只统计真正流式跑通的那些调用；
 	// TTFTCalls 是其中的调用数，为 0 说明这段范围里没有可信的 TTFT 样本。
-	AvgTTFTMS float64              `json:"avg_ttft_ms,omitempty"`
-	TTFTCalls int64                `json:"ttft_calls,omitempty"`
-	Images    []InboundEventImage  `json:"images,omitempty"`
-	Memories  []InboundEventMemory `json:"memories,omitempty"`
+	AvgTTFTMS float64 `json:"avg_ttft_ms,omitempty"`
+	TTFTCalls int64   `json:"ttft_calls,omitempty"`
+	// UsageMissingCalls 是上游没报用量的调用数（按张计费的生图中转常见）。不为 0
+	// 时上面的 token 数是偏少的，界面要说出来，不能让人以为这些调用没花钱。
+	UsageMissingCalls int64 `json:"usage_missing_calls,omitempty"`
+	// ReplyModels 是这条消息主回复（purpose=reply）实际用到的模型，按首次调用排序。
+	// 带图的轮次会先走视觉模型再回到对话模型，所以可能不止一个。
+	ReplyModels []string `json:"reply_models,omitempty"`
+	// Models 是这条消息所有模型调用按模型汇总的次数，路由、审核、记忆抽取都算。
+	Models   []InboundEventModelUsage `json:"models,omitempty"`
+	Images   []InboundEventImage      `json:"images,omitempty"`
+	Memories []InboundEventMemory     `json:"memories,omitempty"`
 	// TemporaryMemories 是本轮实际进入模型上下文的短期状态：会话线程便签和
-	// diana.thread_state 私有任务状态。它们只通过管理员事件接口返回。
+	// thread_state 私有任务状态。它们只通过管理员事件接口返回。
 	TemporaryMemories []InboundEventTemporaryMemory `json:"temporary_memories,omitempty"`
 	// Subtasks 是这条消息触发的后台子任务（生成图片、文档 OCR 等）。图片是任务跑完
 	// 之后异步发出去的，事件详情里只有一句文字回复时看不出它从哪来。
@@ -140,6 +149,7 @@ type InboundEventDetailPage struct {
 	OutputTokensPerSecond float64
 	AvgTTFTMS             float64
 	TTFTCalls             int64
+	UsageMissingCalls     int64
 }
 
 // InboundEventResultFilter limits event detail rows without changing the
@@ -380,6 +390,11 @@ LIMIT ? OFFSET ?
 			if err := json.Unmarshal([]byte(deliveryJSON), &item.Delivery); err != nil {
 				item.Delivery = assistant.OutboundDelivery{}
 			}
+			// 来源是服务器上的本地路径或上游 URL，列表里不下发；控制台按序号走
+			// InboundEventOutboundMedia 取图。
+			for index := range item.Delivery.Media {
+				item.Delivery.Media[index].Source = ""
+			}
 		}
 		item.At = time.Unix(eventTime, 0)
 		item.Status = strings.TrimSpace(item.Status)
@@ -498,6 +513,9 @@ LIMIT ? OFFSET ?
 			page.Events[index].OutputTokensPerSecond = eventUsage.tokensPerSecond()
 			page.Events[index].AvgTTFTMS = eventUsage.avgTTFTMS()
 			page.Events[index].TTFTCalls = eventUsage.TTFTCalls
+			page.Events[index].UsageMissingCalls = eventUsage.UsageMissingCalls
+			page.Events[index].ReplyModels = eventUsage.replyModels
+			page.Events[index].Models = eventUsage.models
 		}
 	}
 	return page, nil
@@ -627,6 +645,28 @@ func unixNanoTimePointer(value int64) *time.Time {
 
 // InboundEventImageSegment returns one current-message image by its one-based
 // display index. It never exposes the containing event or media source path.
+// InboundEventOutboundMedia 取出一轮回复里发出去的第 index 张图（从 1 开始），
+// 带着落库时记下的来源，供控制台预览机器人发了什么（比如哪个表情包）。
+func (s *SQLiteStore) InboundEventOutboundMedia(ctx context.Context, eventID string, index int) (assistant.OutboundMedia, bool, error) {
+	defer s.observeStorage(ctx, "InboundEventOutboundMedia", "read")()
+	if s == nil || s.db == nil || strings.TrimSpace(eventID) == "" || index <= 0 {
+		return assistant.OutboundMedia{}, false, nil
+	}
+	var deliveryJSON string
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COALESCE(delivery_json, '') FROM inbound_events WHERE id = ? LIMIT 1`, strings.TrimSpace(eventID)).Scan(&deliveryJSON)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return assistant.OutboundMedia{}, false, nil
+		}
+		return assistant.OutboundMedia{}, false, fmt.Errorf("load outbound media: %w", err)
+	}
+	var delivery assistant.OutboundDelivery
+	if strings.TrimSpace(deliveryJSON) == "" || json.Unmarshal([]byte(deliveryJSON), &delivery) != nil || index > len(delivery.Media) {
+		return assistant.OutboundMedia{}, false, nil
+	}
+	return delivery.Media[index-1], true, nil
+}
+
 func (s *SQLiteStore) InboundEventImageSegment(ctx context.Context, eventID string, imageIndex int) (assistant.MessageSegment, bool, error) {
 	defer s.observeStorage(ctx, "InboundEventImageSegment", "read")()
 	if s == nil || s.db == nil || strings.TrimSpace(eventID) == "" || imageIndex <= 0 {
@@ -834,6 +874,13 @@ func inboundEventStillImage(segment assistant.MessageSegment) bool {
 	return segment.Type == "image" && !strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame")
 }
 
+// InboundEventModelUsage 是某个模型在一条消息里被调用的次数。
+type InboundEventModelUsage struct {
+	Model    string `json:"model"`
+	Provider string `json:"provider,omitempty"`
+	Calls    int64  `json:"calls"`
+}
+
 type inboundEventTokenTotals struct {
 	LLMCalls          int64
 	InputTokens       int64
@@ -843,8 +890,30 @@ type inboundEventTokenTotals struct {
 	DurationMS        int64
 	// TTFTSumMS/TTFTCalls 只累计有 ttft_ms 的调用。没开流式、或者底层退化成非
 	// 流式的调用不带这个键，不能拿它们当 0 参与平均——那会把均值稀释成假的。
-	TTFTSumMS int64
-	TTFTCalls int64
+	TTFTSumMS         int64
+	TTFTCalls         int64
+	UsageMissingCalls int64
+	// replyModels 和 models 只在按消息汇总时有用，范围合计不填。
+	replyModels []string
+	models      []InboundEventModelUsage
+}
+
+// addModel 按首次出现的顺序记下模型；老日志没有 model 字段时跳过。
+func (t *inboundEventTokenTotals) addModel(model, provider, purpose string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	if purpose == "reply" && !slices.Contains(t.replyModels, model) {
+		t.replyModels = append(t.replyModels, model)
+	}
+	for index := range t.models {
+		if t.models[index].Model == model {
+			t.models[index].Calls++
+			return
+		}
+	}
+	t.models = append(t.models, InboundEventModelUsage{Model: model, Provider: strings.TrimSpace(provider), Calls: 1})
 }
 
 // avgTTFTMS 是有样本的那些调用的均值。没有样本时返回 0。
@@ -891,8 +960,9 @@ func (s *SQLiteStore) inboundEventTokenUsageForPage(ctx context.Context, since t
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT target, metadata
 FROM app_logs
-WHERE created_at >= ? AND action IN ('diana.llm_usage', 'chatbot.llm_usage', 'assistant.llm_usage')
-`+targetCondition, args...)
+WHERE created_at >= ? AND action IN ('llm_usage', 'diana.llm_usage', 'chatbot.llm_usage', 'assistant.llm_usage')
+`+targetCondition+`
+ORDER BY created_at`, args...)
 	if err != nil {
 		return nil, inboundEventTokenTotals{}, fmt.Errorf("query event token usage: %w", err)
 	}
@@ -929,6 +999,9 @@ WHERE created_at >= ? AND action IN ('diana.llm_usage', 'chatbot.llm_usage', 'as
 		}
 		// ttft_ms 只有流式跑通时才写。没有这个键就不计入样本数——拿它们当 0
 		// 参与平均会把均值稀释成一个假的小数字。
+		if missing, _ := meta["usage_missing"].(bool); missing {
+			current.UsageMissingCalls = 1
+		}
 		if ttft := int64FromAny(meta["ttft_ms"]); ttft > 0 {
 			current.TTFTSumMS = ttft
 			current.TTFTCalls = 1
@@ -942,6 +1015,10 @@ WHERE created_at >= ? AND action IN ('diana.llm_usage', 'chatbot.llm_usage', 'as
 		if messageID != "" {
 			item := byMessage[messageID]
 			item.add(current)
+			model, _ := meta["model"].(string)
+			provider, _ := meta["provider"].(string)
+			purpose, _ := meta["purpose"].(string)
+			item.addModel(model, provider, strings.TrimSpace(purpose))
 			byMessage[messageID] = item
 		}
 	}
@@ -963,6 +1040,7 @@ func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {
 	t.DurationMS += other.DurationMS
 	t.TTFTSumMS += other.TTFTSumMS
 	t.TTFTCalls += other.TTFTCalls
+	t.UsageMissingCalls += other.UsageMissingCalls
 }
 
 // metadataGroupID 取用量日志里记的群号。私聊那条是空的，按群筛选时自然不匹配。
@@ -1194,4 +1272,5 @@ func applyEventUsageSummary(page *InboundEventDetailPage, usage inboundEventToke
 	page.OutputTokensPerSecond = usage.tokensPerSecond()
 	page.AvgTTFTMS = usage.avgTTFTMS()
 	page.TTFTCalls = usage.TTFTCalls
+	page.UsageMissingCalls = usage.UsageMissingCalls
 }

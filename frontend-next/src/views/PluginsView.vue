@@ -211,7 +211,7 @@
     <Modal
       v-if="settingsTarget"
       :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
-      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID"
+      :wide="settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
       @close="closeSettings"
     >
       <p class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
@@ -412,6 +412,7 @@
           <button class="btn small ghost" type="button" @click="navigate('logs')">查看执行日志</button>
         </div>
       </div>
+      <StickerLibrary v-if="settingsTarget.manifest.id === stickerPluginID" :profile="botScope" />
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :default-profile-id="botScope"
@@ -678,6 +679,7 @@ import Modal from "../components/Modal.vue";
 import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue";
 import RepositoryCredentialEditor from "../components/RepositoryCredentialEditor.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
+import StickerLibrary from "../components/StickerLibrary.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
@@ -696,6 +698,7 @@ const repositoryWatchPluginID = "official.repository-watch";
 const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
 const musicPluginID = "official.music";
+const stickerPluginID = "official.sticker-sender";
 // 依赖按插件 ID 分组：链接解析要 yt-dlp/ffmpeg/node，网页渲染要一个
 // Chrome/Chromium，以后再有别的插件也不必再往模板里加一个 id 判断。
 const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});

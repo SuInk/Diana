@@ -39,7 +39,7 @@ func (p *LLMConfigPlugin) Manifest() PluginManifest {
 }
 
 // Handle deliberately does nothing: the main Agent decides whether an owner
-// request warrants a structured diana.llm_config tool call.
+// request warrants a structured llm_config tool call.
 func (p *LLMConfigPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
 	return nil, nil
 }
@@ -168,6 +168,9 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		}
 	}
 	notes := llmConfigOutputTokenNote(target.Config, modelInfo)
+	if llmUsageFromContext(ctx) == nil {
+		ctx = withLLMUsageContext(ctx, event)
+	}
 	if err := r.probeModelSwitch(ctx, registry, target.ID, probe, roleKey); err != nil {
 		return llmConfigApplyResult{
 			Reply: "目标模型可用性测试失败，未修改模型分配：" + modelSwitchProbeError(probe, err),

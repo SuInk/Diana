@@ -12,7 +12,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const dianaRuntimeModelToolName = "diana.runtime_model"
+const dianaRuntimeModelToolName = "runtime_model"
 
 type dianaRuntimeModelTool struct {
 	provider *runtimeAgentLLMProvider
@@ -76,10 +76,12 @@ func (*dianaRuntimeModelTool) InputSchema() map[string]any {
 func (*dianaRuntimeModelTool) Name() string { return dianaRuntimeModelToolName }
 
 func (*dianaRuntimeModelTool) Description() string {
-	return "读取 Diana 本轮实际使用的模型 ID、供应商、接口协议和模型分组用途。" +
-		"仅当用户询问 Diana 当前是什么模型、模型 ID、由哪个供应商提供或使用何种接口时调用；不得根据历史回复猜测。" +
-		"注意 model_id 才是模型，config_name 只是这套配置在控制台里的名字。" +
-		"支持所有模型分组、细分用途、语音识别和语音合成。询问历史图片实际模型用 history；查询当前配置用对应用途或 all，不能用配置替代历史记录。"
+	return "读取 Diana 实际使用的模型 ID、供应商、接口协议和用途分组，仅当用户询问模型时调用，不得根据历史回复猜测。" +
+		"model_id 才是模型，config_name 只是这套配置在控制台里的名字。" +
+		"group=current 返回本轮对话/识图实际模型；all 返回所有用途的配置，也可单独查 chat、vision、intent、image、embedding、stt、tts 或细分用途。" +
+		"当前配置含后备候选，不代表过去实际调用。" +
+		"问刚才或引用的图片实际用了什么模型时必须用 history，可带 message_id；未指定时优先查引用消息，否则查本会话最近一次记录。" +
+		"没有历史记录就明确说无法确认，不能拿聊天模型或当前生图配置替代。语音服务未公开具体权重时如实说明，不猜模型名。"
 }
 
 func (t *dianaRuntimeModelTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -158,7 +160,13 @@ func (p *runtimeAgentLLMProvider) currentModelIdentity() (dianaRuntimeModelResul
 	if provider == nil {
 		return dianaRuntimeModelResult{}, fmt.Errorf("当前模型尚未完成首次调用")
 	}
-	provider = unwrapTransientLLMRetry(provider)
+	return llmProviderIdentity(provider, group)
+}
+
+// llmProviderIdentity 从 provider 链上读出当前选中的模型。调试调用链在请求失败、
+// 拿不到响应里的模型名时也用它补上。
+func llmProviderIdentity(provider LLMProvider, group string) (dianaRuntimeModelResult, error) {
+	provider = unwrapLLMDecorators(provider)
 	switch client := provider.(type) {
 	case llm.RegistryClient:
 		model, ok := client.Registry.Model(client.Selection.ModelID)

@@ -22,7 +22,7 @@ func TestLoadSkillsAndReadTool(t *testing.T) {
 		t.Fatalf("skills = %#v", skills)
 	}
 	prompt := RenderSkillsPrompt(skills, 8000)
-	if !strings.Contains(prompt, "demo-skill") || !strings.Contains(prompt, "skills.read") {
+	if !strings.Contains(prompt, "demo-skill") || !strings.Contains(prompt, "read_skill") {
 		t.Fatalf("prompt did not include skill guidance: %s", prompt)
 	}
 	tools := NewSkillTools(skills)

@@ -315,7 +315,7 @@ func TestPlatformToolMemberRegistryRetainsReadTool(t *testing.T) {
 	if _, ok := registry.Get("diana.onebot_v11"); ok {
 		t.Fatal("legacy diana.onebot_v11 tool is still registered")
 	}
-	if _, ok := registry.Get("diana.llm_config"); ok {
+	if _, ok := registry.Get("llm_config"); ok {
 		t.Fatal("member registry exposed owner-only LLM configuration")
 	}
 }

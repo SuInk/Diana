@@ -232,7 +232,11 @@ func (h *LLMConfigHandler) providerTest(c *gin.Context) {
 	if strings.TrimSpace(payload.Message) == "" {
 		payload.Message = "ping"
 	}
+	started := time.Now()
 	response, err := registry.Generate(c.Request.Context(), llm.AgentModelConfig{ProviderID: payload.ProviderID, ModelID: payload.ModelID}, llm.ChatRequest{Messages: []llm.ChatMessage{{Role: llm.RoleUser, Content: payload.Message}}})
+	if err == nil {
+		recordLLMUsage(c, h.logs, response.Provider, firstNonEmpty(response.Model, payload.ModelID), response.Usage, "webui_provider_test", time.Since(started))
+	}
 	if err != nil {
 		publicErr := h.providerTestError(payload.ProviderID, err)
 		metadata := map[string]any{
@@ -569,6 +573,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 			h.writeError(c, 400, "llm.test.image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
 			return
 		}
+		started := time.Now()
 		resp, err := generator.GenerateImage(c.Request.Context(), llm.ImageGenerateRequest{
 			Model:  cfg.ImageModelWithDefault(),
 			Prompt: payload.Message,
@@ -578,11 +583,13 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 			h.writeError(c, 502, "llm.test.image", err, cfg.ImageModelWithDefault(), llmLogMetadata(cfg, ""))
 			return
 		}
+		recordLLMUsage(c, h.logs, cfg.Provider, firstNonEmpty(resp.Model, cfg.ImageModelWithDefault()), resp.Usage, "webui_image_test", time.Since(started))
 		recordRequestOperation(c, h.logs, "llm.test.image", "LLM 生图测试成功", resp.Model, llmLogMetadata(cfg, ""))
 		c.JSON(200, resp)
 		return
 	}
 
+	started := time.Now()
 	resp, err := client.Generate(c.Request.Context(), llm.GenerateRequest{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: payload.Message}},
 	})
@@ -590,6 +597,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 		h.writeError(c, 502, "llm.test", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
 	}
+	recordLLMUsage(c, h.logs, resp.Provider, firstNonEmpty(resp.Model, cfg.Model), resp.Usage, "webui_llm_test", time.Since(started))
 
 	recordRequestOperation(c, h.logs, "llm.test", "LLM 连通测试成功", cfg.Model, llmLogMetadata(cfg, ""))
 	c.JSON(200, resp)
