@@ -188,9 +188,9 @@
         </ul>
 
         <template v-else-if="kind === 'releases'">
-          <p v-if="!releases.length" class="muted" style="font-size: 12.5px; margin: 0">暂无 Release 记录。</p>
+          <p v-if="!channelReleases.length" class="muted" style="font-size: 12.5px; margin: 0">{{ releases.length ? "当前更新通道暂无可用版本。" : "暂无 Release 记录。" }}</p>
           <ul v-else class="changelog-list release-list version-history-list" :class="{ 'with-rollback': deploymentMode === 'git' || releaseSelfUpdate }">
-            <li v-for="release in releases" :key="release.tag" class="release-item">
+            <li v-for="release in channelReleases" :key="release.tag" class="release-item">
               <div class="release-row">
                 <span class="cluster" style="gap: 7px">
                   <a class="mono changelog-sha" :href="release.url" target="_blank" rel="noreferrer">{{ release.tag }}</a>
@@ -296,6 +296,7 @@ import {
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 import { askConfirm } from "../confirm";
+import { channelSwitchConfirm, releaseAllowedOnChannel, type UpdateChannel } from "../release-channel";
 import { markUpdateInstalling } from "../backendState";
 
 const emit = defineEmits<{ close: []; checked: [available: boolean]; versionChanged: [version: SystemVersion] }>();
@@ -379,6 +380,11 @@ const currentTag = computed(() => {
   const raw = version.value?.version_label || version.value?.build_version || "";
   return raw.split("+")[0].split("（")[0].trim();
 });
+
+// 版本历史只列出所选通道能更新到的版本，规则与服务端挑选更新候选一致；当前运行的
+// 版本总是保留，否则切到 Release 后就找不到自己正在跑的那个 Beta 了。
+const channelReleases = computed(() => releases.value.filter((release) =>
+  release.tag === currentTag.value || releaseAllowedOnChannel(release, policy.value.channel || "release")));
 
 // 与服务端回退白名单保持一致：比当前版本旧的最近 5 个稳定 Release。
 const rollbackTags = computed(() => {
@@ -536,8 +542,13 @@ const channelOptions = [
   { value: "beta", label: "Beta · 测试版" },
   { value: "canary", label: "Canary · 每次合并构建" }
 ];
-function setChannel(value: string): void {
-  policy.value.channel = value as UpdatePolicy["channel"];
+// 下拉框是受控的：没确认前不改 policy，取消后自然停在原来的通道上。
+async function setChannel(value: string): Promise<void> {
+  const target = value as UpdateChannel;
+  if (target === (policy.value.channel || "release")) return;
+  const confirmed = await askConfirm(channelSwitchConfirm(target, policy.value.auto_install));
+  if (!confirmed) return;
+  policy.value.channel = target;
   checkResult.value = null;
   void persistPolicy("channel");
 }

@@ -497,7 +497,7 @@ const browserDependencies: ResolverDependency[] = [
 ];
 
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
-let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "direct" };
+let updatePolicy = { channel: "release", auto_download: true, auto_install: false, github_mirror: "direct" };
 let demoUpdateTokenConfigured = false;
 
 const logs: AppLogEntry[] = [
@@ -1068,8 +1068,9 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/system/update/check") return json({ deployment_mode: "release", current_version: "v0.8.6", latest_version: "v0.8.7", latest_published_at: before(30), checked_at: new Date(now).toISOString(), update_available: true, update_supported: true, integrity_mode: "sha256", checksum_available: true, checksum_url: "https://github.com/SuInk/Diana/releases", status: updateStatus, policy: updatePolicy });
   if (path === "/api/system/update/policy" && method === "GET") return json(updatePolicy);
   if (path === "/api/system/update/policy" && method === "PUT") {
-    const next = JSON.parse(String(init?.body ?? "{}")) as { auto_download?: boolean; auto_install?: boolean; github_mirror?: string };
+    const next = JSON.parse(String(init?.body ?? "{}")) as { channel?: string; auto_download?: boolean; auto_install?: boolean; github_mirror?: string };
     updatePolicy = {
+      channel: next.channel || "release",
       auto_download: Boolean(next.auto_download || next.auto_install),
       auto_install: Boolean(next.auto_install),
       github_mirror: next.github_mirror || "direct"
@@ -1080,7 +1081,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (method === "PUT") { demoUpdateTokenConfigured = !JSON.parse(String(init?.body ?? "{}")).clear && Boolean(JSON.parse(String(init?.body ?? "{}")).token); }
     return json({ configured: demoUpdateTokenConfigured, source: demoUpdateTokenConfigured ? "stored" : "" });
   }
-  if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [{ tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }] });
+  if (path === "/api/system/update/changelog") return json({ repo: "SuInk/Diana", kind: "releases", cached: true, releases: [
+    { tag: "v0.8.8-canary.2", name: "v0.8.8-canary.2", notes: "main 分支合并后自动构建的 Canary 预览版。", prerelease: true, date: before(2), url: "https://github.com/SuInk/Diana/releases", checksum_available: true },
+    { tag: "v0.8.8-beta.1", name: "Diana v0.8.8-beta.1", notes: "更新通道切换加入二次确认。", prerelease: true, date: before(10), url: "https://github.com/SuInk/Diana/releases", checksum_available: true },
+    { tag: "v0.8.7", name: "Diana v0.8.7", notes: "真实 WebUI GitHub Pages 演示与可观测性优化。", prerelease: false, date: before(30), url: "https://github.com/SuInk/Diana/releases", checksum_available: true },
+    { tag: "v0.8.6", name: "Diana v0.8.6", notes: "历史回补与表情包池。", prerelease: false, date: before(900), url: "https://github.com/SuInk/Diana/releases", checksum_available: true }
+  ] });
   if (path.startsWith("/api/system/update") && method === "POST") return json({ status: { ...updateStatus, download_ready: true, downloaded_version: "v0.8.7", downloaded_at: new Date().toISOString() }, fetched: true, updated: false, downloaded: true, output: "演示模式：已模拟完成下载与 SHA-256 校验，未写入任何文件。", at: new Date().toISOString() });
 
   return json({ error: `演示模式尚未覆盖 ${method} ${path}` }, 404);
