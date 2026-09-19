@@ -11,6 +11,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2004,7 +2005,7 @@ func (r *Runtime) shouldHandle(event MessageEvent, text string) bool {
 // admits applies the shared user, group, and reply-gate policy before any
 // chat, resolver, or plugin trigger is allowed to start work.
 func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
-	if r.isUserDisabled(event.UserID) {
+	if r.isUserDisabled(event) {
 		return false
 	}
 	if event.Kind == EventKindPrivate {
@@ -2033,7 +2034,7 @@ func (r *Runtime) admitsGroupScope(cfg BotConfig, event MessageEvent) bool {
 // output as ordinary messages. Notice keeps its own event kind, but a notice
 // carrying GroupID still belongs to that group's policy scope.
 func (r *Runtime) admitsNotice(cfg BotConfig, event MessageEvent) bool {
-	if r.isUserDisabled(event.UserID) {
+	if r.isUserDisabled(event) {
 		return false
 	}
 	if strings.TrimSpace(event.GroupID) != "" {
@@ -3046,7 +3047,7 @@ func (r *Runtime) shouldHandleResolver(event MessageEvent, text string) bool {
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {
 		return false
 	}
-	if r.isUserDisabled(event.UserID) {
+	if r.isUserDisabled(event) {
 		return false
 	}
 	if event.Kind == EventKindGroup && r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
@@ -7118,10 +7119,8 @@ func sessionKey(event MessageEvent) string {
 
 // handleOwnerCommand 处理 owner 的强格式管理命令。
 func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
-	cfg := r.Config().WithDefaults()
-	if command := strings.TrimSpace(text); command == "清空上下文" || command == "清除上下文" {
-		cfg = r.effectiveConfigForEvent(event)
-	}
+	// 按事件所属的机器人认主人：多机器人时每台的主人只管自己那台。
+	cfg := r.effectiveConfigForEvent(event)
 	if !cfg.IsOwnerEvent(event) {
 		return "", false
 	}
@@ -7142,13 +7141,13 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	case command == "lllm 列表":
 		return r.renderLLMProfiles(), true
 	case command == "群 列表":
-		return r.renderDisabledGroups(), true
+		return r.renderDisabledGroups(event), true
 	case strings.HasPrefix(command, "群 禁用 "):
 		groupID := strings.TrimSpace(strings.TrimPrefix(command, "群 禁用 "))
-		return r.disableGroup(groupID), true
+		return r.setGroupDisabled(event, groupID, true), true
 	case strings.HasPrefix(command, "群 启用 "):
 		groupID := strings.TrimSpace(strings.TrimPrefix(command, "群 启用 "))
-		return r.enableGroup(groupID), true
+		return r.setGroupDisabled(event, groupID, false), true
 	case command == "提醒 列表":
 		return r.renderReminders(), true
 	case strings.HasPrefix(command, "提醒 取消 "):
@@ -7199,9 +7198,9 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	}
 }
 
-// renderDisabledGroups 渲染禁用群列表。
-func (r *Runtime) renderDisabledGroups() string {
-	cfg := r.Config().WithDefaults()
+// renderDisabledGroups 渲染这台机器人的禁用群列表。
+func (r *Runtime) renderDisabledGroups(event MessageEvent) string {
+	cfg := r.profileConfig(r.eventProfileID(event))
 	if len(cfg.DisabledGroups) == 0 {
 		return "当前没有被禁用的群。"
 	}
@@ -7212,59 +7211,62 @@ func (r *Runtime) renderDisabledGroups() string {
 	return strings.Join(lines, "\n")
 }
 
-// disableGroup 禁用指定群的机器人响应。
-func (r *Runtime) disableGroup(groupID string) string {
-	groupID = strings.TrimSpace(groupID)
-	if groupID == "" {
-		return "用法：群 禁用 <群号>"
-	}
-	cfg := r.Config().WithDefaults()
-	for _, existing := range cfg.DisabledGroups {
-		if existing == groupID {
-			return "这个群已经处于禁用状态。"
-		}
-	}
-	cfg.DisabledGroups = append(cfg.DisabledGroups, groupID)
-	cfg = cfg.WithDefaults()
-	r.mu.Lock()
-	r.cfg = cfg
-	r.updatedAt = time.Now()
-	r.mu.Unlock()
-	if r.configSaver != nil {
-		// 群开关由聊天指令修改，必须立即落盘，否则重启后会丢失。
-		r.configSaver.SaveBotConfig(cfg)
-	}
-	return "已禁用该群的机器人响应。"
+// disabledGroupsSaver 只改一台机器人的禁用群列表，和屏蔽名单、机器人标记一样窄。
+type disabledGroupsSaver interface {
+	SaveDisabledGroups(profileID string, groupIDs []string) error
 }
 
-// enableGroup 恢复指定群的机器人响应。
-func (r *Runtime) enableGroup(groupID string) string {
+// setGroupDisabled 禁用或恢复这台机器人在指定群的响应。
+//
+// 以前改的是主配置的 DisabledGroups，而判定时每台机器人都读主配置，结果一台机器人的
+// 主人「群 禁用」会把所有机器人在这个群都关掉。现在只改事件所属那台。
+func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled bool) string {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
+		if disabled {
+			return "用法：群 禁用 <群号>"
+		}
 		return "用法：群 启用 <群号>"
 	}
-	cfg := r.Config().WithDefaults()
-	next := make([]string, 0, len(cfg.DisabledGroups))
-	removed := false
-	for _, existing := range cfg.DisabledGroups {
-		if existing == groupID {
-			removed = true
-			continue
+	profileID := r.eventProfileID(event)
+	current := r.profileConfig(profileID).DisabledGroups
+	if slices.Contains(current, groupID) == disabled {
+		if disabled {
+			return "这个群已经处于禁用状态。"
 		}
-		next = append(next, existing)
-	}
-	if !removed {
 		return "这个群当前没有被禁用。"
 	}
-	cfg.DisabledGroups = next
-	cfg = cfg.WithDefaults()
-	r.mu.Lock()
-	r.cfg = cfg
-	r.updatedAt = time.Now()
-	r.mu.Unlock()
-	if r.configSaver != nil {
-		// 与禁用保持对称，恢复群响应后同步保存配置。
-		r.configSaver.SaveBotConfig(cfg)
+	var next []string
+	_, err := r.commitProfileChange(profileID, func(profile *BotConfig) error {
+		if next == nil {
+			next = slices.DeleteFunc(append([]string(nil), profile.DisabledGroups...), func(id string) bool { return id == groupID })
+			if disabled {
+				next = append(next, groupID)
+			}
+		}
+		profile.DisabledGroups = append([]string{}, next...)
+		return nil
+	}, func(profile BotConfig) error {
+		// 群开关由聊天指令修改，必须立即落盘，否则重启后会丢失。
+		if saver, ok := r.configSaver.(disabledGroupsSaver); ok {
+			return saver.SaveDisabledGroups(profileID, next)
+		}
+		r.mu.RLock()
+		isMain := r.cfg.ID == profileID
+		r.mu.RUnlock()
+		if !isMain {
+			return fmt.Errorf("配置存储不支持按机器人修改禁用群")
+		}
+		if r.configSaver != nil {
+			r.configSaver.SaveBotConfig(profile.WithDefaults())
+		}
+		return nil
+	})
+	if err != nil {
+		return "修改群开关失败：" + err.Error()
+	}
+	if disabled {
+		return "已禁用该群的机器人响应。"
 	}
 	return "已恢复该群的机器人响应。"
 }
@@ -7633,7 +7635,7 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 	if !gate.IsAllowedUser(event.UserID) {
 		return
 	}
-	if r.isUserDisabled(event.UserID) || gate.IsBlocked(event.UserID) || gate.IsExempt(event.UserID) {
+	if r.isUserDisabled(event) || gate.IsBlocked(event.UserID) || gate.IsExempt(event.UserID) {
 		return
 	}
 	if event.Kind == EventKindGroup {
@@ -7727,18 +7729,22 @@ func (r *Runtime) allowQuietNotice(event MessageEvent) bool {
 
 // isSelfMessage 判断事件是否来自机器人自身。
 func (r *Runtime) isSelfMessage(event MessageEvent) bool {
-	cfg := r.Config().WithDefaults()
-	if event.UserID == "" || cfg.BotAccount == "" {
+	userID := strings.TrimSpace(event.UserID)
+	if userID == "" {
 		return false
 	}
-	return event.UserID == cfg.BotAccount
+	if selfID := strings.TrimSpace(event.SelfID); selfID != "" && selfID == userID {
+		return true
+	}
+	account := strings.TrimSpace(r.profileConfig(event.ProfileID).BotAccount)
+	return account != "" && userID == account
 }
 
 // isGroupDisabled 判断这台机器人在这个群里是否被禁用。同一个群里两台机器人可以
 // 一台开一台关，所以必须带上是谁在问。
 func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 	r.mu.RLock()
-	cfg := r.cfg.WithDefaults()
+	cfg := r.profileConfigLocked(botProfileID)
 	store := r.groupConfigs
 	r.mu.RUnlock()
 	if store != nil {
@@ -7746,32 +7752,20 @@ func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 			return true
 		}
 	}
-	for _, disabled := range cfg.DisabledGroups {
-		if disabled == groupID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(cfg.DisabledGroups, groupID)
 }
 
-// isUserDisabled 判断用户是否被配置为不触发机器人回复。
-func (r *Runtime) isUserDisabled(userID string) bool {
-	userID = strings.TrimSpace(userID)
+// isUserDisabled 判断用户是否被这台机器人配置为不触发回复。
+func (r *Runtime) isUserDisabled(event MessageEvent) bool {
+	userID := strings.TrimSpace(event.UserID)
 	if userID == "" {
 		return false
 	}
-	r.mu.RLock()
-	cfg := r.cfg.WithDefaults()
-	r.mu.RUnlock()
+	cfg := r.profileConfig(event.ProfileID)
 	if userID == strings.TrimSpace(cfg.OwnerID) || userID == strings.TrimSpace(cfg.BotAccount) {
 		return false
 	}
-	for _, disabled := range cfg.DisabledUsers {
-		if strings.TrimSpace(disabled) == userID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(cleanStrings(cfg.DisabledUsers), userID)
 }
 
 // notificationChunkSize 是通知的兜底长度。人格预设可以把聊天回复压得更短，但不
