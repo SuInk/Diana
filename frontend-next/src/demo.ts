@@ -51,7 +51,7 @@ let llmConfig: LLMConfig = {
 
 const oneBotProfile: BotProfileConfig = {
   id: "bot-onebot", name: "Diana OneBot（演示）", platform: "onebot-v11", enabled: true,
-  onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", onebot_access_token_configured: true,
+  onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", onebot_access_token_configured: true, onebot_access_token_preview: "d1…2a",
   bot_account: "100000001", owner_id: "100200001", owner_login_enabled: true,
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,

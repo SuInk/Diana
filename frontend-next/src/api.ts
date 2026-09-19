@@ -151,6 +151,8 @@ export interface BotProfileConfig {
   onebot_reverse_ws_endpoint: string;
   onebot_access_token?: string;
   onebot_access_token_configured?: boolean;
+  /** 已保存 token 的掩码预览（前几位…后几位），仅用于展示。 */
+  onebot_access_token_preview?: string;
   /** Telegram 走官方 Bot API 长轮询，凭据与 OneBot 完全不同。 */
   telegram_bot_token?: string;
   telegram_bot_token_configured?: boolean;
