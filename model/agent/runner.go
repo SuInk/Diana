@@ -456,7 +456,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: guardErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, guardErr)
-			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code))
+			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
