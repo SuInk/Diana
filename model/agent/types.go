@@ -316,3 +316,20 @@ func defaultSkillRoots(workDir string, configured []string) []string {
 	add(filepath.Join(base, "skills"))
 	return roots
 }
+
+// ExtensionScope 只保留扩展管理（Skills 目录、MCP 配置与进程）用到的字段。
+// 共享扩展底座按它区分：各机器人的步数、命令白名单、沙盒这些设置不影响扩展本身，
+// 不该让同一套 MCP 服务因此被拉起好几份。
+func (cfg Config) ExtensionScope() Config {
+	cfg = cfg.WithDefaults()
+	return Config{
+		WorkDir:             cfg.WorkDir,
+		SkillRoots:          append([]string(nil), cfg.SkillRoots...),
+		ManagedSkillRoot:    cfg.ManagedSkillRoot,
+		MCPConfigPath:       cfg.MCPConfigPath,
+		MCPStartupTimeoutMS: cfg.MCPStartupTimeoutMS,
+		MCPToolTimeoutMS:    cfg.MCPToolTimeoutMS,
+		ExtensionManagement: cfg.ExtensionManagement,
+		ReservedSkillNames:  append([]string(nil), cfg.ReservedSkillNames...),
+	}.WithDefaults()
+}

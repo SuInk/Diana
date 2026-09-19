@@ -90,6 +90,8 @@ type ToolRegistry struct {
 	closers            []closeableTool
 	skills             []SkillMetadata
 	skillsSet          bool
+	builtinSkills      []SkillMetadata
+	reservedSkillNames []string
 	extensions         ExtensionCatalog
 	parent             *ToolRegistry
 	parentOnly         map[string]bool
@@ -152,6 +154,25 @@ func NewAgentToolRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error
 	return registry, nil
 }
 
+// NewSharedExtensionRegistry 创建只含扩展（Skills 与 MCP）的共享底座。
+//
+// 请求视图查不到的工具会回落到底座里找，所以底座里不能有按机器人配置的本地工具
+// （命令白名单、文件写入、浏览器）：否则一台机器人的 run_command 会被另一台借到。
+// 本地工具和随事件变化的内置 Skill 都由 NewView 按本次请求的配置提供，底座只按
+// ExtensionScope 共享，所有机器人共用同一套 MCP 进程和已装扩展。
+func NewSharedExtensionRegistry(ctx context.Context, cfg Config) (*ToolRegistry, error) {
+	cfg = cfg.ExtensionScope()
+	registry := NewToolRegistry()
+	extensions, err := NewExtensionManager(ctx, cfg, registry)
+	if err != nil {
+		_ = registry.Close()
+		return nil, err
+	}
+	registry.SetExtensionCatalog(extensions)
+	registry.RegisterCloser(extensions)
+	return registry, nil
+}
+
 // NewView creates a request-scoped registry that inherits live extension tools
 // from this registry without owning their MCP sessions. Local tools can still
 // be added, filtered, and closed independently for one Agent run.
@@ -179,7 +200,18 @@ func (r *ToolRegistry) NewView(cfg Config) (*ToolRegistry, error) {
 		parent:  r,
 		builtin: append([]BuiltinExtension(nil), cfg.BuiltinExtensions...),
 	}
+	// 内置 Skill 随事件变化（比如平台接口只在开了的群里有），叠在底座的 Skills 之上，
+	// 不进底座；skills.list/read 也换成读这份合并结果的版本。
+	if builtin := normalizeBuiltinSkills(cfg.BuiltinSkills); len(builtin) > 0 {
+		registry.builtinSkills = builtin
+		registry.reservedSkillNames = append([]string(nil), cfg.ReservedSkillNames...)
+	}
 	registry.mu.Unlock()
+	if len(registry.builtinSkills) > 0 {
+		tools := newLiveSkillTools(registry.Skills)
+		registry.Register(tools.List)
+		registry.Register(tools.Read)
+	}
 	registry.Register(NewExtensionsListTool(registry.extensions, cfg.ExtensionManagement))
 	return registry, nil
 }
@@ -246,8 +278,13 @@ func (r *ToolRegistry) Skills() []SkillMetadata {
 	skills := append([]SkillMetadata(nil), r.skills...)
 	set := r.skillsSet
 	parent := r.parent
+	builtin := r.builtinSkills
+	reserved := r.reservedSkillNames
 	r.mu.RUnlock()
 	if !set && parent != nil {
+		if len(builtin) > 0 {
+			return mergeBuiltinSkills(builtin, parent.Skills(), reserved)
+		}
 		return parent.Skills()
 	}
 	return skills

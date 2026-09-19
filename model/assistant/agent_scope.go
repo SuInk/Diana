@@ -107,13 +107,9 @@ func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*a
 	if pathErr != nil {
 		return nil, pathErr
 	}
-	// Built-in plugin state can vary per group override, but it does not change
-	// the underlying Skills/MCP processes. Request views overlay that state.
-	baseCfg := cfg
-	baseCfg.BuiltinExtensions = nil
-	// 证据账本开关按群覆盖，只影响 Runner 的校验行为，不改变工具集合；
-	// 参与缓存键会把同一套 Skills/MCP 进程按开关拆成两份。
-	baseCfg.EvidenceLedgerAdvisory = false
+	// 底座只放扩展，按 ExtensionScope 共享：各机器人的步数、命令白名单、沙盒，以及
+	// 随群变化的内置插件与内置 Skill，都由请求视图叠加，不能拆出第二套 MCP 进程。
+	baseCfg := cfg.ExtensionScope()
 	keyBody, err := json.Marshal(baseCfg)
 	if err != nil {
 		return nil, err
@@ -136,7 +132,7 @@ func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*a
 	if lifecycleCtx == nil {
 		lifecycleCtx = context.WithoutCancel(ctx)
 	}
-	registry, err := agent.NewAgentToolRegistry(lifecycleCtx, baseCfg)
+	registry, err := agent.NewSharedExtensionRegistry(lifecycleCtx, baseCfg)
 	if err != nil {
 		return nil, err
 	}
