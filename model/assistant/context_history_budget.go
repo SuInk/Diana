@@ -95,11 +95,21 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 	fullBudget := recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg)
 	// 就着眼前这张图问一句时收紧历史：答案几乎全在图里，长历史是白付的 prefill。
 	budget := visionFocusedHistoryBudget(fullBudget, event, PlainText(event.Segments))
+	if event.Kind == EventKindGroup {
+		// A one-off image question must not replace a warm group prefix with a
+		// shorter window. The final provider budget still enforces image costs.
+		budget = fullBudget
+	}
 	candidateLimit := historyCandidateLimitForBudget(budget)
 	session := sessionKey(event)
 
 	r.mu.RLock()
 	memory := append([]MessageEvent(nil), r.history[session]...)
+	if event.Kind == EventKindGroup {
+		if buffer, ok := r.groupPromptHistory[groupPromptSessionKey(event)]; ok {
+			memory = append([]MessageEvent(nil), buffer.Events...)
+		}
+	}
 	store := r.messageStore
 	summaryWatermark := r.contextSummaryWatermarkLocked(session)
 	r.mu.RUnlock()
@@ -114,7 +124,18 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 			log.Printf("diana token-budget history load failed: %v", err)
 		}
 	}
-	history := dropSummarizedHistory(mergeMessageHistory(memory, stored, candidateLimit), memory, summaryWatermark)
+	history := mergeMessageHistory(memory, stored, candidateLimit)
+	if event.Kind == EventKindGroup {
+		visible := history[:0]
+		for _, item := range history {
+			if samePromptGroupScope(event, item) {
+				visible = append(visible, item)
+			}
+		}
+		history = visible
+	} else {
+		history = dropSummarizedHistory(history, memory, summaryWatermark)
+	}
 	if strings.TrimSpace(event.MessageID) != "" {
 		filtered := history[:0]
 		for _, item := range history {
@@ -124,7 +145,16 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 		}
 		history = filtered
 	}
-	selected := r.anchoredHistoryWindow(session, history, event, cfg.BotAccount, fullBudget, budget)
+	anchorKey := session
+	promptSession := r.groupPromptSession(event)
+	if promptSession != nil {
+		anchorKey = groupPromptSessionKey(event)
+		if anchor := promptSession.anchor(); anchor != "" {
+			r.setHistoryWindowAnchor(anchorKey, anchor)
+		}
+	}
+	selected := r.anchoredHistoryWindow(anchorKey, history, event, cfg.BotAccount, fullBudget, budget)
+	promptSession.rememberAnchor(r.historyWindowAnchor(anchorKey))
 	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
 		return selected
 	}
@@ -163,22 +193,20 @@ const historyWindowLowWatermarkPercent int64 = 70
 // 锚定好的窗口上再取一段尾巴，不改锚本身，下一轮正常消息仍然沿用原窗口。
 func (r *Runtime) anchoredHistoryWindow(session string, history []MessageEvent, current MessageEvent, botAccount string, budget, focusedBudget int64) []MessageEvent {
 	window := selectRecentHistoryTurns(history, current, botAccount, budget)
+	anchor := r.historyWindowAnchor(session)
 	switch {
 	case len(window) == 0:
 		r.setHistoryWindowAnchor(session, "")
+	case historyWindowAnchorIndex(window, anchor) >= 0:
+		window = window[historyWindowAnchorIndex(window, anchor):]
 	case len(window) == len(history):
 		// 全部装得下：窗口起点就是历史起点，天然稳定。
 		r.setHistoryWindowAnchor(session, "")
 	default:
-		anchor := r.historyWindowAnchor(session)
-		if index := historyWindowAnchorIndex(window, anchor); index >= 0 {
-			window = window[index:]
-		} else {
-			if low := selectRecentHistoryTurns(window, current, botAccount, budget*historyWindowLowWatermarkPercent/100); len(low) > 0 {
-				window = low
-			}
-			r.setHistoryWindowAnchor(session, messageHistoryDedupeKey(window[0]))
+		if low := selectRecentHistoryTurns(window, current, botAccount, budget*historyWindowLowWatermarkPercent/100); len(low) > 0 {
+			window = low
 		}
+		r.setHistoryWindowAnchor(session, messageHistoryDedupeKey(window[0]))
 	}
 	if focusedBudget < budget {
 		window = selectRecentHistoryTurns(window, current, botAccount, focusedBudget)

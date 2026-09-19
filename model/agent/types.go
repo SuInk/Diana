@@ -109,6 +109,10 @@ type Request struct {
 	Messages []llm.Message
 	TraceID  string
 	Observer RunObserver
+	// LoadedTools carries session discoveries, never tool instances or authority.
+	LoadedTools []string
+	// ToolsLoaded is called immediately, including when a later model call fails.
+	ToolsLoaded func([]string)
 }
 
 type Response struct {

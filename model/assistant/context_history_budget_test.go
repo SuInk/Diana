@@ -359,8 +359,8 @@ func TestPromptContextHistoryDropsHistoryAlreadyCoveredBySummary(t *testing.T) {
 	base := int64(1700000000)
 	newEvent := func(index int) MessageEvent {
 		return MessageEvent{
-			Kind:       EventKindGroup,
-			GroupID:    "20001",
+			Kind:       EventKindPrivate,
+			GroupID:    "",
 			UserID:     "10001",
 			SenderName: "Alice",
 			MessageID:  fmt.Sprintf("msg-%02d", index),

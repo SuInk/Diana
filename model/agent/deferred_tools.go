@@ -21,6 +21,8 @@ type deferredToolLoader struct {
 	registry *ToolRegistry
 	core     map[string]bool
 	loaded   map[string]map[string]any
+	order    []string
+	onLoad   func([]string)
 }
 
 func newDeferredToolLoader(registry *ToolRegistry, coreTools []string) *deferredToolLoader {
@@ -65,7 +67,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	out := make([]llm.ToolDefinition, 0, len(definitions)+2)
 	for _, definition := range definitions {
-		if l.core[definition.Name] {
+		if l.core[definition.Name] || definition.Name == finalizeToolName {
 			out = append(out, definition)
 		}
 	}
@@ -73,6 +75,51 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
 		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行本轮 tools.load 已加载的工具；name 为工具名，input 必须符合加载返回的 inputSchema。", Parameters: executeInputSchema()},
 	)
+}
+
+func (l *deferredToolLoader) restore(names []string) {
+	if l == nil {
+		return
+	}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || l.core[name] {
+			continue
+		}
+		tool, allowed := l.registry.Get(name)
+		if !allowed {
+			continue
+		}
+		schema, err := snapshotToolSchema(tool)
+		if err != nil {
+			continue
+		}
+		if _, exists := l.loaded[name]; !exists {
+			l.order = append(l.order, name)
+		}
+		l.loaded[name] = schema
+	}
+}
+
+func (l *deferredToolLoader) loadedContracts() string {
+	if l == nil || len(l.order) == 0 {
+		return ""
+	}
+	type contract struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		InputSchema map[string]any `json:"inputSchema"`
+	}
+	contracts := make([]contract, 0, len(l.order))
+	for _, name := range l.order {
+		tool, ok := l.registry.Get(name)
+		if !ok {
+			continue
+		}
+		contracts = append(contracts, contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
+	}
+	raw, _ := json.Marshal(contracts)
+	return string(raw)
 }
 
 func executeInputSchema() map[string]any {
@@ -85,7 +132,7 @@ func executeInputSchema() map[string]any {
 func (l *deferredToolLoader) Name() string { return ToolsLoadToolName }
 
 func (l *deferredToolLoader) Description() string {
-	return "加载系统提示词「按需加载的工具」里列出的工具。names 传工具名；加载结果包含完整契约，随后只能通过 tools.execute(name,input) 调用；加载状态仅在当前运行有效。只加载这一轮确实要用的工具，不要为了看看有什么而加载。"
+	return "加载系统提示词「按需加载的工具」里列出的工具。names 传工具名；加载结果包含完整契约，随后通过 tools.execute(name,input) 调用。已加载工具会在当前群会话后续运行中保留。只加载确实要用的工具。"
 }
 
 func (l *deferredToolLoader) InputSchema() map[string]any {
@@ -135,7 +182,7 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 			snapshots[name] = schema
 		}
 	}
-	result, err := json.Marshal(map[string]any{"loaded": contracts, "instruction": "使用 tools.execute，把目标工具名放入 name、参数对象放入 input；仅在当前 Run 有效。"})
+	result, err := json.Marshal(map[string]any{"loaded": contracts, "instruction": "使用 tools.execute，把目标工具名放入 name、参数对象放入 input；当前群会话后续运行会保留加载状态。"})
 	if err != nil {
 		return "", fmt.Errorf("无法编码工具契约")
 	}
@@ -143,8 +190,18 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 		return "", fmt.Errorf("完整工具契约超过 %d 字符，请减少加载数量；单个工具超限需缩小其 schema 或描述", maxLoadedContractChars)
 	}
 	// Commit only after all contracts fit; never mark a truncated/unseen schema loaded.
-	for name, schema := range snapshots {
+	for _, name := range requested {
+		schema, ok := snapshots[name]
+		if !ok {
+			continue
+		}
+		if _, exists := l.loaded[name]; !exists {
+			l.order = append(l.order, name)
+		}
 		l.loaded[name] = schema
+	}
+	if l.onLoad != nil {
+		l.onLoad(append([]string(nil), l.order...))
 	}
 	return string(result), nil
 }

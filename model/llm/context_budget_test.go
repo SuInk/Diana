@@ -9,6 +9,12 @@ import (
 	"testing"
 )
 
+func TestDefaultContextWindowIs128K(t *testing.T) {
+	if DefaultContextWindowTokens != 128000 || DefaultMaxContextTokens != 128000 {
+		t.Fatalf("default context window/max = %d/%d, want 128000/128000", DefaultContextWindowTokens, DefaultMaxContextTokens)
+	}
+}
+
 func TestApplyContextBudgetPreservesLayeredPriorities(t *testing.T) {
 	req := GenerateRequest{
 		MaxOutputTokens: 64,
@@ -35,6 +41,60 @@ func TestApplyContextBudgetPreservesLayeredPriorities(t *testing.T) {
 	inputBudget := int64(1024 - 64 - contextBudgetSafetyReserve)
 	if tokens := estimateMessagesTokens(got.Messages); tokens > inputBudget {
 		t.Fatalf("estimated tokens = %d, budget = %d", tokens, inputBudget)
+	}
+}
+
+func TestApplyContextBudgetReservesToolSchemas(t *testing.T) {
+	tools := []ToolDefinition{{
+		Name:        "large_lookup",
+		Description: strings.Repeat("large schema description ", 500),
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{
+			"query": map[string]any{"type": "string", "description": strings.Repeat("query field ", 300)},
+		}},
+	}}
+	req := GenerateRequest{MaxOutputTokens: 1024, Tools: tools, Messages: []Message{
+		{Role: RoleSystem, Content: "system"},
+		{Role: RoleUser, Content: strings.Repeat("old history ", 6000), Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: "current question", Priority: MessagePriorityCurrent},
+	}}
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: 16384, MaxContextTokens: 16384}
+	got := applyContextBudget(req, cfg)
+	if estimated := EstimateRequestInputTokens(got); estimated > InputTokenBudget(16384, 1024) {
+		t.Fatalf("request estimate %d exceeds input budget", estimated)
+	}
+	if gotCost := EstimateRequestInputTokens(got); gotCost+estimateTextTokens(strings.Repeat("old history ", 5000)) <= InputTokenBudget(16384, 1024) {
+		t.Fatal("history did not yield meaningful space to the persistent tool schema")
+	}
+	if !strings.Contains(messageTextForTest(got.Messages), "current question") {
+		t.Fatal("current input was lost")
+	}
+}
+
+func TestContextBudgetKeepsToolCallBatchAtomicWithoutExplicitGroup(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: "question", Priority: MessagePriorityHistory},
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{"query": strings.Repeat("x", 300)}}}, Priority: MessagePriorityHistory},
+		{Role: RoleTool, ToolCallID: "call-1", ToolName: "lookup", Content: strings.Repeat("result ", 600), Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: "current", Priority: MessagePriorityCurrent},
+	}
+	got := fitMessagesToTokenBudget(messages, 256)
+	for _, message := range got {
+		if len(message.ToolCalls) > 0 || message.Role == RoleTool {
+			t.Fatalf("partial tool exchange survived: %#v", got)
+		}
+	}
+}
+
+func TestValidateGenerateRequestRejectsImpossibleFixedFootprint(t *testing.T) {
+	req := GenerateRequest{
+		Model:            "test",
+		MaxContextTokens: 2048,
+		MaxOutputTokens:  1024,
+		Messages:         []Message{{Role: RoleUser, Content: "current"}},
+		Tools:            []ToolDefinition{{Name: "huge", Description: strings.Repeat("schema ", 3000), Parameters: map[string]any{"type": "object"}}},
+	}
+	if err := validateGenerateRequest(req); err == nil || !strings.Contains(err.Error(), "loaded tool schemas") {
+		t.Fatalf("validation error = %v", err)
 	}
 }
 
