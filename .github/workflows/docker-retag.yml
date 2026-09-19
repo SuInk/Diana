@@ -1,0 +1,45 @@
+name: Docker Retag Latest
+
+# 手动把 latest / latest-slim 指向某个已发布的正式版镜像，不重新构建。
+# 用于修正被错误覆盖的 latest，或把 latest 回退到上一个正式版。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已发布的正式版标签，例如 v0.8.128
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  retag:
+    name: Point latest to ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "${TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Only stable release tags such as v0.8.128 can become latest: ${TAG}" >&2
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          docker buildx imagetools create -t ghcr.io/suink/diana:latest "ghcr.io/suink/diana:${TAG}"
+          docker buildx imagetools create -t ghcr.io/suink/diana:latest-slim "ghcr.io/suink/diana:${TAG}-slim"
+          docker buildx imagetools inspect ghcr.io/suink/diana:latest --format '{{json .Manifest.Digest}}'
+          docker buildx imagetools inspect ghcr.io/suink/diana:latest-slim --format '{{json .Manifest.Digest}}'
