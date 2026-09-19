@@ -20,8 +20,13 @@ func (r *Runtime) SetInboundEventStore(store InboundEventStore) {
 // privateAdmissionAllows 判断用户的私聊是否准入。all（默认）直接放行；
 // owner_only 只放行主人；whitelist 放行主人与白名单。空用户 ID 只在 all 下放行。
 func (r *Runtime) privateAdmissionAllows(event MessageEvent) bool {
-	cfg := r.effectiveConfigForEvent(event)
-	return cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
+	return privateAdmissionAllowsConfig(r.effectiveConfigForEvent(event), event)
+}
+
+// privateAdmissionAllowsConfig 按统一的主人判定放行主人：Telegram 主人填的是用户名时，
+// 私聊发来的是数字 ID，直接比对 OwnerID 会把主人自己挡在外面。
+func privateAdmissionAllowsConfig(cfg BotConfig, event MessageEvent) bool {
+	return cfg.IsOwnerEvent(event) || cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
 }
 
 // HandleEvent 处理 OneBot 消息或通知事件。

@@ -2036,7 +2036,13 @@ func (r *Runtime) admitsNotice(cfg BotConfig, event MessageEvent) bool {
 	if r.isUserDisabled(event.UserID) {
 		return false
 	}
-	if strings.TrimSpace(event.GroupID) != "" && !r.admitsGroupScope(cfg, event) {
+	if strings.TrimSpace(event.GroupID) != "" {
+		if !r.admitsGroupScope(cfg, event) {
+			return false
+		}
+	} else if !privateAdmissionAllowsConfig(cfg, event) {
+		// 私聊里的通知（戳一戳等）同样受私聊准入约束，否则 owner_only 下陌生人
+		// 戳一下仍会触发模型调用和回复。
 		return false
 	}
 	return r.replyGateAllows(cfg, event)
