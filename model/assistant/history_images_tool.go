@@ -66,7 +66,9 @@ func (t *dianaHistoryImagesTool) Description() string {
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"message_ids": toolStringArrayParam("要读取图片或视频关键帧的消息 ID；只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。省略 message_ids 和 items 时使用当前引用或语义来源。"),
+		"message_id":    toolStringParam("只读一条消息时用它：该消息的 ID，只接受当前会话中真实存在的 message_id，不接受文件路径或 URL。"),
+		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id 使用：要读取的图片或视频关键帧序号，从 1 开始；省略表示全部画面。", "items": map[string]any{"type": "integer", "minimum": 1}},
+		"message_ids":   toolStringArrayParam("一次读多条消息时用它：消息 ID 数组。省略 message_id、message_ids 和 items 时使用当前引用或语义来源。"),
 		"items": toolItemsParam("需要精确指定某条消息里的第几个画面时改用它，与 message_ids 二选一。",
 			maximumHistoryImagesPerToolCall,
 			[]string{"message_id"},
