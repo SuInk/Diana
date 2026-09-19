@@ -574,7 +574,11 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
 	for _, profile := range set.Profiles {
-		profiles[strings.TrimSpace(profile.ID)] = profile.WithDefaults()
+		resolved, err := set.ResolveConnection(profile)
+		if err != nil {
+			continue
+		}
+		profiles[strings.TrimSpace(profile.ID)] = resolved
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles

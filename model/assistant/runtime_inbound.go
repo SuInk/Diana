@@ -19,11 +19,9 @@ func (r *Runtime) SetInboundEventStore(store InboundEventStore) {
 
 // privateAdmissionAllows 判断用户的私聊是否准入。all（默认）直接放行；
 // owner_only 只放行主人；whitelist 放行主人与白名单。空用户 ID 只在 all 下放行。
-func (r *Runtime) privateAdmissionAllows(userID string) bool {
-	r.mu.RLock()
-	cfg := r.cfg.WithDefaults()
-	r.mu.RUnlock()
-	return cfg.PrivateAdmission.Allows(userID, cfg.OwnerID)
+func (r *Runtime) privateAdmissionAllows(event MessageEvent) bool {
+	cfg := r.effectiveConfigForEvent(event)
+	return cfg.PrivateAdmission.Allows(event.UserID, cfg.OwnerID)
 }
 
 // HandleEvent 处理 OneBot 消息或通知事件。
@@ -82,7 +80,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		// 私聊准入在配对之后、入队之前拦截：非准入用户的私聊整条丢弃，
 		// 不登记直呼、不进预处理队列、不调模型。配对是带自身鉴权的特权流程，
 		// 不受准入限制（否则 owner_only 模式下主人没配对过就没法登录控制台）。
-		if !r.privateAdmissionAllows(event.UserID) {
+		if !r.privateAdmissionAllows(event) {
 			record := r.decisionEventRecord(event, "[私聊准入]", "ignored_private_admission")
 			record.Reason = "私聊准入模式限制，该用户的私聊被静默忽略"
 			r.record(record)
