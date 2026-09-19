@@ -72,7 +72,7 @@ func (p *PlatformInterfacePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          platformInterfacePluginID,
 		Name:        "平台接口",
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Description: "官方内置的跨平台群操作能力：读取群资料与成员，主人可在机器人具备管理员身份时禁言、解禁和踢人。支持 OneBot v11 与 Telegram，其余平台不支持的操作会明确说明。",
 		Official:    true,
 		BuiltIn:     true,

@@ -103,7 +103,7 @@ func (p *VoiceTTSPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          voiceTTSPluginID,
 		Name:        voiceName + "语音合成",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "通过可配置的 GPT-SoVITS 服务把回复合成为" + voiceName + "音色；由模型通过 Agent 工具按需调用。",
 		Official:    true,
 		BuiltIn:     true,

@@ -83,7 +83,7 @@ func NewImageSourcePlugin(client *http.Client) *ImageSourcePlugin {
 
 func (p *ImageSourcePlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID: imageSourcePluginID, Name: "图片溯源", Version: "0.1.0",
+		ID: imageSourcePluginID, Name: "图片溯源", Version: "0.1.1",
 		Description: "以图搜图，回答「这张图哪来的」：把聊天里的图片反查图库，给出可能的原作、作者和链接。SauceNAO 覆盖 pixiv、Danbooru、同人志等，需要在 saucenao.com 免费注册后填 API Key；trace.moe 专门识别番剧截图，返回番名、集数和时间点，不需要 Key。两条线可以各自开关，结果按相似度过滤后交给模型转述。注意反查要把图片上传到对应的第三方图库；不希望这件事发生就关掉整个插件，或只留需要的那一条。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "network:https", "agent:tool"},
