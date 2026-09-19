@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -90,9 +91,25 @@ func TestValidateTelegramConfig(t *testing.T) {
 	}
 
 	// OneBot 平台的回连地址要求不该被 Telegram 的分支影响。
-	onebot := BotConfig{Platform: PlatformOneBotV11, Enabled: true}
+	onebot := BotConfig{Platform: PlatformOneBotV11, Enabled: true, OneBotAccessToken: "test-token"}
 	if err := onebot.Validate(); err != ErrMissingOneBotEndpoint {
 		t.Fatalf("OneBot 启用时仍需回连地址，实际 %v", err)
+	}
+	// 反向 WS 的 token 由 server 侧握手强制校验，空 token 等于机器人静默掉线，
+	// 校验必须在保存/启动时就拦住。
+	noToken := BotConfig{Platform: PlatformOneBotV11, Enabled: true, OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws"}
+	if err := noToken.Validate(); err == nil || !strings.Contains(err.Error(), "Access Token") {
+		t.Fatalf("反向 WS 缺 token 应报错，实际 %v", err)
+	}
+	// 正向 WS 是 Diana 主动外连，token 是否发送由接入端决定，留空合法。
+	forward := BotConfig{Platform: PlatformOneBotV11, Enabled: true, OneBotTransport: OneBotTransportForwardWS, OneBotWSEndpoint: "ws://127.0.0.1:6700/"}
+	if err := forward.Validate(); err != nil {
+		t.Fatalf("正向 WS 允许空 token，实际 %v", err)
+	}
+	// 禁用的配置不需要凭据也能保存。
+	disabled := BotConfig{Platform: PlatformOneBotV11, Enabled: false, OneBotReverseWSEndpoint: "ws://127.0.0.1:18080/onebot/v11/ws"}
+	if err := disabled.Validate(); err != nil {
+		t.Fatalf("禁用状态不应校验 token，实际 %v", err)
 	}
 }
 
@@ -109,6 +126,34 @@ func TestTelegramTokenKeptWhenPayloadOmitsIt(t *testing.T) {
 	restored := ConfigFromPayload(payload, existing)
 	if restored.TelegramBotToken != "keep-me" {
 		t.Fatalf("留空提交应沿用旧 token，实际 %q", restored.TelegramBotToken)
+	}
+}
+
+// OneBot token 只回掩码预览：足够辨认配置的是哪一个，又不泄露完整凭据。
+func TestOneBotTokenPreviewMasked(t *testing.T) {
+	cfg := BotConfig{Platform: PlatformOneBotV11, OneBotAccessToken: "0123456789abcdefXYZ"}
+	payload := PayloadFromConfig(cfg)
+	if payload.OneBotAccessToken != "" {
+		t.Fatal("读接口不该回传 token 明文")
+	}
+	if !payload.OneBotAccessTokenConfigured {
+		t.Fatal("应标记为已配置")
+	}
+	if payload.OneBotAccessTokenPreview != "01…YZ" {
+		t.Fatalf("预览应是前缀 2 + 后缀 2 的掩码，实际 %q", payload.OneBotAccessTokenPreview)
+	}
+	if strings.Contains(payload.OneBotAccessTokenPreview, "234") {
+		t.Fatalf("预览不该暴露中间部分，实际 %q", payload.OneBotAccessTokenPreview)
+	}
+
+	short := PayloadFromConfig(BotConfig{Platform: PlatformOneBotV11, OneBotAccessToken: "abc"})
+	if short.OneBotAccessTokenPreview != "••••" {
+		t.Fatalf("过短的 token 不应露出任何片段，实际 %q", short.OneBotAccessTokenPreview)
+	}
+
+	empty := PayloadFromConfig(BotConfig{Platform: PlatformOneBotV11})
+	if empty.OneBotAccessTokenPreview != "" || empty.OneBotAccessTokenConfigured {
+		t.Fatal("未配置时不该有预览或已配置标志")
 	}
 }
 

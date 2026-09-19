@@ -475,7 +475,7 @@ func TestRuntimeJudgesProactiveGroupMessagesImmediately(t *testing.T) {
 func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 	first := newDelayedExitChannel()
 	second := newDelayedExitChannel()
-	cfg := BotConfig{Enabled: true, BotAccount: "42"}
+	cfg := BotConfig{Enabled: true, BotAccount: "42", OneBotAccessToken: "test-token"}
 	runtime := NewRuntime(cfg, first, NewPluginManager(), nil, nil, nil, nil)
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -501,7 +501,7 @@ func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 
 func TestRuntimeUpdateConfigInPlaceKeepsChannelConnected(t *testing.T) {
 	channel := newDelayedExitChannel()
-	cfg := BotConfig{Enabled: true, BotAccount: "42", SystemPrompt: "before"}
+	cfg := BotConfig{Enabled: true, BotAccount: "42", SystemPrompt: "before", OneBotAccessToken: "test-token"}
 	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
