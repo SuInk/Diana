@@ -427,6 +427,15 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		payload.Profiles = nil
 	}
 	cfg := assistant.ConfigFromPayload(payload, existing)
+	// Legacy edit requests omit the ID; keep their current profile identity so
+	// the duplicate check does not mistake an edit for a second connection.
+	if !create && cfg.ID == "" {
+		cfg.ID = existing.ID
+	}
+	if err := set.ValidateIndependentConnection(cfg); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		return
+	}
 	if err := validateTokenLength("onebot_access_token", payload.OneBotAccessToken); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
@@ -619,6 +628,12 @@ func (h *BotHandler) setProfileEnabled(c *gin.Context) {
 		return
 	}
 	current, _ := next.ConfigForProfile(payload.ProfileID)
+	if payload.Enabled {
+		if err := next.ValidateIndependentConnection(current); err != nil {
+			h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, botLogTarget(current), botLogMetadata(current))
+			return
+		}
+	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, botLogTarget(current), botLogMetadata(current))
 		return
@@ -646,6 +661,14 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 		return
 	}
 	next := h.profiles.Profiles().WithAllProfilesEnabled(payload.Enabled)
+	if payload.Enabled {
+		for _, profile := range next.Profiles {
+			if err := next.ValidateIndependentConnection(profile); err != nil {
+				h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, botLogTarget(profile), botLogMetadata(profile))
+				return
+			}
+		}
+	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, "", nil)
 		return
@@ -664,6 +687,9 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 
 func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 	set = set.WithDefaults()
+	if err := set.ValidateConnections(); err != nil {
+		return err
+	}
 	cfg, ok := set.RuntimeConfig()
 	if !ok {
 		return fmt.Errorf("assistant profile set is empty")
@@ -690,17 +716,18 @@ func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 }
 
 type botTransportConfig struct {
-	ID                 string
-	Platform           string
-	OneBotTransport    string
-	OneBotWSEndpoint   string
-	OneBotHTTPURL      string
-	OneBotHTTPSecret   string
-	OneBotEndpoint     string
-	OneBotAccessToken  string
-	TelegramBotToken   string
-	TelegramAPIBaseURL string
-	TelegramProxyURL   string
+	ConnectionProfileID string
+	ID                  string
+	Platform            string
+	OneBotTransport     string
+	OneBotWSEndpoint    string
+	OneBotHTTPURL       string
+	OneBotHTTPSecret    string
+	OneBotEndpoint      string
+	OneBotAccessToken   string
+	TelegramBotToken    string
+	TelegramAPIBaseURL  string
+	TelegramProxyURL    string
 }
 
 func profileSetRequiresReconnect(previous, next assistant.ProfileSet) bool {
@@ -721,18 +748,20 @@ func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
 		if !profile.Enabled {
 			continue
 		}
+		profile, _ = set.ResolveConnection(profile)
 		transports = append(transports, botTransportConfig{
-			ID:                 profile.ID,
-			Platform:           profile.Platform,
-			OneBotTransport:    profile.OneBotTransport,
-			OneBotWSEndpoint:   profile.OneBotWSEndpoint,
-			OneBotHTTPURL:      profile.OneBotHTTPURL,
-			OneBotHTTPSecret:   profile.OneBotHTTPSecret,
-			OneBotEndpoint:     profile.OneBotReverseWSEndpoint,
-			OneBotAccessToken:  profile.OneBotAccessToken,
-			TelegramBotToken:   profile.TelegramBotToken,
-			TelegramAPIBaseURL: profile.TelegramAPIBaseURL,
-			TelegramProxyURL:   profile.TelegramProxyURL,
+			ConnectionProfileID: profile.ConnectionProfileID,
+			ID:                  profile.ID,
+			Platform:            profile.Platform,
+			OneBotTransport:     profile.OneBotTransport,
+			OneBotWSEndpoint:    profile.OneBotWSEndpoint,
+			OneBotHTTPURL:       profile.OneBotHTTPURL,
+			OneBotHTTPSecret:    profile.OneBotHTTPSecret,
+			OneBotEndpoint:      profile.OneBotReverseWSEndpoint,
+			OneBotAccessToken:   profile.OneBotAccessToken,
+			TelegramBotToken:    profile.TelegramBotToken,
+			TelegramAPIBaseURL:  profile.TelegramAPIBaseURL,
+			TelegramProxyURL:    profile.TelegramProxyURL,
 		})
 	}
 	return transports

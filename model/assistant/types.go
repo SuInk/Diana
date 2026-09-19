@@ -471,6 +471,7 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
+	ConnectionProfileID         string               `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int                  `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string               `json:"id,omitempty"`
 	Name                        string               `json:"name,omitempty"`
@@ -819,6 +820,7 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
+	ConnectionProfileID         string          `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int             `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string          `json:"id,omitempty"`
 	Name                        string          `json:"name,omitempty"`
@@ -1389,15 +1391,18 @@ func (s ProfileSet) RuntimeConfig() (BotConfig, bool) {
 	s = s.WithDefaults()
 	current, ok := s.Current()
 	if ok && current.Enabled {
-		return current, true
+		resolved, err := s.ResolveConnection(current)
+		return resolved, err == nil
 	}
 	for _, profile := range s.Profiles {
 		if profile.Enabled {
-			return profile.WithDefaults(), true
+			resolved, err := s.ResolveConnection(profile)
+			return resolved, err == nil
 		}
 	}
 	if ok {
-		return current, true
+		resolved, err := s.ResolveConnection(current)
+		return resolved, err == nil
 	}
 	return BotConfig{}, false
 }
@@ -1921,6 +1926,12 @@ func (cfg BotConfig) Validate() error {
 	if err := ValidatePlatform(cfg.Platform); err != nil {
 		return err
 	}
+	if strings.TrimSpace(cfg.ConnectionProfileID) != "" {
+		if !IsOneBotPlatform(cfg.Platform) {
+			return fmt.Errorf("只有 OneBot 机器人支持复用连接")
+		}
+		return nil
+	}
 	// 每个平台的必填凭据都不一样，按平台分支校验。这里不能写成「不是 OneBot
 	// 就当 Telegram」——新增平台后那种写法会拿 Telegram 的规则去校验飞书。
 	switch NormalizePlatformID(cfg.Platform) {
@@ -2014,6 +2025,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	cfg = cfg.WithDefaults()
 	// token 只返回 configured 标志，不把保存的密钥明文暴露给普通配置接口。
 	return ConfigPayload{
+		ConnectionProfileID:         cfg.ConnectionProfileID,
 		ID:                          cfg.ID,
 		Name:                        cfg.Name,
 		Platform:                    cfg.Platform,
@@ -2215,6 +2227,7 @@ func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	cfg := BotConfig{
+		ConnectionProfileID:             strings.TrimSpace(payload.ConnectionProfileID),
 		ID:                              strings.TrimSpace(payload.ID),
 		Name:                            payload.Name,
 		Platform:                        payload.Platform,
