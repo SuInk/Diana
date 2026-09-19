@@ -45,7 +45,8 @@ func TestGenerateReplyRunsOnlyPluginToolsWhenAgentDisabled(t *testing.T) {
 func TestReplyPathRunsInstalledPluginToolWhenAgentDisabled(t *testing.T) {
 	provider := &agentSequenceLLMProvider{responses: []string{
 		`{"action":"none","prompt":"","tools":["plugin.echo"],"context_message_ids":[],"keep_older_summary":false}`,
-		`{"action":"tool","tool":"plugin.echo","input":{"text":"hello"}}`,
+		`{"action":"tool","tool":"tools.load","input":{"names":["plugin.echo"]}}`,
+		`{"action":"tool","tool":"tools.execute","input":{"name":"plugin.echo","input":{"text":"hello"}}}`,
 		`{"action":"final","content":"search result used"}`,
 	}}
 	tool := &echoAgentTool{}
@@ -70,8 +71,8 @@ func TestReplyPathRunsInstalledPluginToolWhenAgentDisabled(t *testing.T) {
 	if reply != "search result used" || tool.calls != 1 {
 		t.Fatalf("reply=%q calls=%d", reply, tool.calls)
 	}
-	if len(provider.requests) != 3 {
-		t.Fatalf("provider requests = %d, want route + tool + final", len(provider.requests))
+	if len(provider.requests) != 4 {
+		t.Fatalf("provider requests = %d, want route + load + tool + final", len(provider.requests))
 	}
 }
 
