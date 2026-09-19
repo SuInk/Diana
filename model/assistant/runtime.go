@@ -249,7 +249,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_bot_message":
 		return "not_replied", "其他机器人消息未被语义判断为提到本机器人，已保持静默", false
 	case "ignored_model_silent":
-		return "not_replied", "模型在这一轮自己选择了不回复（agent.finalize 的 silent），没有发送任何消息；这不是拒答，也不触发暂停", false
+		return "not_replied", "模型在这一轮自己选择了不回复（agent_finalize 的 silent），没有发送任何消息；这不是拒答，也不触发暂停", false
 	case "ignored_conversation_closed":
 		return "not_replied", "对方已经在收尾，双方互相道别的次数达到设定上限，这条回复只是又一句告别，没有发送", false
 	case "ignored_stop_requested":
@@ -2552,7 +2552,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	}
 	if cfg.AgentEnabled && event.Kind == EventKindGroup {
 		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-			groupToolPrompt(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)}),
+			r.groupToolPrompt(groupToolEventForConfig(event, cfg)),
 		)
 		if r.llmStore != nil {
 			payload.AvailableReplyTools = append(payload.AvailableReplyTools,
@@ -2951,7 +2951,7 @@ func (r *Runtime) recordProactiveReplyRouteError(ctx context.Context, event Mess
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.proactive_reply_route",
+		Action:  "proactive_reply_route",
 		Message: "主动回复判断失败，已保持沉默",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -2971,7 +2971,7 @@ func (r *Runtime) recordProactiveReplyRouteFallback(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.proactive_reply_route_fallback",
+		Action:  "proactive_reply_route_fallback",
 		Message: "主动回复路由超时，明确公开问题已降级进入回复流程",
 		Detail:  routeErr.Error(),
 		Actor:   oneBotEventActor(event),
@@ -2991,7 +2991,7 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.proactive_reply_route",
+		Action:  "proactive_reply_route",
 		Message: "模型已完成主动回复判断",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -3028,7 +3028,7 @@ func (r *Runtime) recordProactiveReplySuperseded(ctx context.Context, event Mess
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.proactive_reply_superseded",
+		Action:  "proactive_reply_superseded",
 		Message: "检测到新的候选消息，旧主动回复候选将交由 LLM 合并重判",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -4139,7 +4139,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		r.rememberClaimSources(event, resp.Claims)
 		r.rememberToolCalls(event, resp.Steps)
 		if resp.Silent {
-			// 模型在 agent.finalize 上自己按下了静默。没有正文可整理，也不该被
+			// 模型在 agent_finalize 上自己按下了静默。没有正文可整理，也不该被
 			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
 			return "", newModelSilentFinishError(resp.SilentReason)
 		}
@@ -4200,7 +4200,7 @@ var replyAgentCoreTools = []string{
 	dianaHistoryImagesToolName,
 	dianaImageToolName,
 	"browser_render",
-	// 戳一戳要顺手用：每次先多一轮 tools.load 就不自然了。它只在 OneBot 会话里注册。
+	// 戳一戳要顺手用：每次先多一轮 tools_load 就不自然了。它只在 OneBot 会话里注册。
 	dianaPokeToolName,
 }
 
@@ -4365,7 +4365,7 @@ func (r *Runtime) recordReplyRuleRouteError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:     applog.KindError,
 		Level:    applog.LevelError,
-		Action:   "diana.reply_rule.route",
+		Action:   "reply_rule_route",
 		Message:  "回复规则判断失败，已使用默认回复策略",
 		Detail:   err.Error(),
 		Actor:    oneBotEventActor(event),
@@ -4382,7 +4382,7 @@ func (r *Runtime) recordReplyRuleRoute(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.reply_rule.route",
+		Action:  "reply_rule_route",
 		Message: "回复规则判断已完成",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -4410,7 +4410,7 @@ func (r *Runtime) recordReplyRuleError(ctx context.Context, event MessageEvent, 
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.reply_rule.apply",
+		Action:  "reply_rule_apply",
 		Message: "回复规则执行失败，已回退文字回复",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -4704,7 +4704,7 @@ func (r *Runtime) recordVisualIntentError(ctx context.Context, event MessageEven
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.visual_intent",
+		Action:  "visual_intent",
 		Message: "图片功能意图判断失败，已回退普通聊天",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -4724,7 +4724,7 @@ func (r *Runtime) recordVisualIntentDecision(ctx context.Context, event MessageE
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.visual_intent",
+		Action:  "visual_intent",
 		Message: "图片功能意图已命中",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -5326,7 +5326,7 @@ func (r *Runtime) recordReplyReferenceError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.reply_reference.get_msg",
+		Action:  "reply_reference_get_msg",
 		Message: "引用消息读取失败",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),
@@ -5491,7 +5491,7 @@ func (r *Runtime) recordForwardMessageError(ctx context.Context, event MessageEv
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.forward.get_forward_msg",
+		Action:  "forward_get_forward_msg",
 		Message: "合并转发读取失败",
 		Detail:  err.Error(),
 		Actor:   oneBotEventActor(event),

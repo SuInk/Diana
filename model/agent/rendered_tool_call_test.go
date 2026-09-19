@@ -11,9 +11,9 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 生产事故原文（2026-09-09 群聊）：供应商没把 agent.finalize 放进 tool_calls，
+// 生产事故原文（2026-09-09 群聊）：供应商没把 agent_finalize 放进 tool_calls，
 // 而是渲染成一行给人看的字塞进正文，整条内部协议被当成回复发进了群。
-const leakedRenderedFinalize = `调用工具：agent.finalize，参数：{"content":"对，确实会跳！\nWARP 用的本来就是 Cloudflare 的动态共享 IP 池，纯纯是负优化喵～"}`
+const leakedRenderedFinalize = `调用工具：agent_finalize，参数：{"content":"对，确实会跳！\nWARP 用的本来就是 Cloudflare 的动态共享 IP 池，纯纯是负优化喵～"}`
 
 const leakedRenderedFinalizeBody = "对，确实会跳！\nWARP 用的本来就是 Cloudflare 的动态共享 IP 池，纯纯是负优化喵～"
 
@@ -28,7 +28,7 @@ func TestRunnerSalvagesRenderedFinalizeInsteadOfLeakingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "agent.finalize") {
+	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "agent_finalize") {
 		t.Fatalf("渲染出来的工具调用泄漏进了回复：%q", resp.Text)
 	}
 	if resp.Text != leakedRenderedFinalizeBody {
@@ -53,7 +53,7 @@ func TestFinalizationSalvagesRenderedFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "agent.finalize") {
+	if strings.Contains(resp.Text, "调用工具") || strings.Contains(resp.Text, "agent_finalize") {
 		t.Fatalf("收尾阶段泄漏了渲染出来的工具调用：%q", resp.Text)
 	}
 	if resp.Text != leakedRenderedFinalizeBody {
@@ -93,9 +93,9 @@ func TestRenderedNonFinalizeToolCallNeverBecomesReply(t *testing.T) {
 	}
 }
 
-// agent.finalize 被当成普通工具写进 JSON 动作时也要收尾，而不是撞「工具不存在」。
+// agent_finalize 被当成普通工具写进 JSON 动作时也要收尾，而不是撞「工具不存在」。
 func TestFinalizeWrittenAsJSONToolActionIsFinal(t *testing.T) {
-	action, ok := parseAction(`{"action":"tool","tool":"agent.finalize","input":{"content":"好的喵～"}}`)
+	action, ok := parseAction(`{"action":"tool","tool":"agent_finalize","input":{"content":"好的喵～"}}`)
 	if !ok || action.Action != "final" {
 		t.Fatalf("action = %#v, ok = %v", action, ok)
 	}
@@ -119,7 +119,7 @@ func TestParseActionRecognizesRenderedFinalize(t *testing.T) {
 
 // 参数被网关截断时，救不回正文也绝不能把这行协议当正文。
 func TestParseActionRejectsTruncatedRenderedFinalize(t *testing.T) {
-	action, ok := parseAction(`调用工具：agent.finalize，参数：{"content":"对，确实会`)
+	action, ok := parseAction(`调用工具：agent_finalize，参数：{"content":"对，确实会`)
 	if !ok || action.Action != "final" {
 		t.Fatalf("action = %#v, ok = %v", action, ok)
 	}
@@ -131,9 +131,9 @@ func TestParseActionRejectsTruncatedRenderedFinalize(t *testing.T) {
 func TestLooksLikeRenderedToolCall(t *testing.T) {
 	rendered := []string{
 		leakedRenderedFinalize,
-		"调用工具：agent.finalize，参数：{}",
+		"调用工具：agent_finalize，参数：{}",
 		"工具调用: web_search, arguments: {\"query\":\"warp\"}",
-		"Tool call: agent.finalize",
+		"Tool call: agent_finalize",
 		"  调用工具：image，参数：{\"prompt\":\"猫\"}",
 	}
 	for _, text := range rendered {

@@ -499,9 +499,9 @@ let updatePolicy = { auto_download: true, auto_install: false, github_mirror: "d
 let demoUpdateTokenConfigured = false;
 
 const logs: AppLogEntry[] = [
-  { id: "log-1", kind: "operation", level: "info", action: "message.reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
-  { id: "log-2", kind: "operation", level: "info", action: "repository.watch", message: "仓库检查完成，未发现新 Commit 或 Release", actor: "scheduler", target: "SuInk/Diana", created_at: before(4) },
-  { id: "log-3", kind: "operation", level: "info", action: "memory.compress", message: "已更新群聊压缩摘要与长期事实索引", actor: "memory", target: "group:100200418", created_at: before(16) }
+  { id: "log-1", kind: "operation", level: "info", action: "message_reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
+  { id: "log-2", kind: "operation", level: "info", action: "repository_watch", message: "仓库检查完成，未发现新 Commit 或 Release", actor: "scheduler", target: "SuInk/Diana", created_at: before(4) },
+  { id: "log-3", kind: "operation", level: "info", action: "memory_compress", message: "已更新群聊压缩摘要与长期事实索引", actor: "memory", target: "group:100200418", created_at: before(16) }
 ];
 
 function json(value: unknown, status = 200): Response {
@@ -1058,7 +1058,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
 
   if (path === "/api/logs") {
-    const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery.retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
+    const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
     return json({ logs: url.searchParams.get("kind") === "error" ? errorLogs : logs });
   }
 

@@ -58,11 +58,11 @@ func TestInboundFailureBackfillsWithoutReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Stop()
-	waitForCondition(t, 4*time.Second, func() bool { return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_completed") })
+	waitForCondition(t, 4*time.Second, func() bool { return hasAppLogAction(logs.entriesSnapshot(), "backfill_completed") })
 	channel.setResponse("get_group_msg_history", map[string]any{"messages": []any{historyTestMessage(967, now-1800, "recovered")}})
 	r.noteFailedInbound(MessageEvent{Platform: PlatformOneBotV11, Time: now - 1800})
 	waitForCondition(t, 4*time.Second, func() bool { return s.hasEvent("group:123:967") })
-	if !hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_ingest_recovery") {
+	if !hasAppLogAction(logs.entriesSnapshot(), "backfill_ingest_recovery") {
 		t.Fatal("missing automatic recovery audit")
 	}
 }

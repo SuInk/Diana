@@ -239,7 +239,7 @@ func TestSQLiteStorePersistsAppLogs(t *testing.T) {
 	if err := store.AppendLog(ctx, AppLogEntry{
 		ID:        "op-old",
 		Kind:      LogKindOperation,
-		Action:    "assistant.start",
+		Action:    "start",
 		Message:   "started",
 		Target:    "bot",
 		CreatedAt: oldAt,
@@ -249,7 +249,7 @@ func TestSQLiteStorePersistsAppLogs(t *testing.T) {
 	if err := store.AppendLog(ctx, AppLogEntry{
 		ID:        "err-new",
 		Kind:      LogKindError,
-		Action:    "llm.test",
+		Action:    "llm_test",
 		Message:   "failed",
 		Detail:    "bad gateway",
 		Metadata:  map[string]any{"provider": "openai_compatible", "count": 2},
@@ -273,7 +273,7 @@ func TestSQLiteStorePersistsAppLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(operations) != 1 || operations[0].Action != "assistant.start" {
+	if len(operations) != 1 || operations[0].Action != "start" {
 		t.Fatalf("operation logs = %#v", operations)
 	}
 }

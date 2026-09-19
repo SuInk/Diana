@@ -42,7 +42,7 @@ func replyContractRequest(array bool) llm.GenerateRequest {
 			"type": "array", "items": map[string]any{"type": "string"},
 			"description": "按发送顺序排列的完整消息，每个元素直接作为一条消息发送；数组和各元素均不能为空。",
 		}
-		prompt = strings.ReplaceAll(prompt, replySegmentationRule, "通过 agent.finalize 的 messages 数组提交回复，每个元素就是一次完整发言。元素内部的换行只负责排版，不会另发消息。不要输出分条标记，也不要把协议字段写进正文。")
+		prompt = strings.ReplaceAll(prompt, replySegmentationRule, "通过 agent_finalize 的 messages 数组提交回复，每个元素就是一次完整发言。元素内部的换行只负责排版，不会另发消息。不要输出分条标记，也不要把协议字段写进正文。")
 		prompt = strings.ReplaceAll(prompt, replyBlankLineRule, "每条消息内部可以使用必要的段落、列表和代码换行，代码及引用原文保留格式。不要为了排版增加消息数组元素。")
 		prompt = strings.ReplaceAll(prompt, "需要另发时写 "+notificationSplitMarker, "需要另发时另建 messages 元素")
 	}
@@ -59,24 +59,24 @@ func replyContractRequest(array bool) llm.GenerateRequest {
 			value = strings.Split(answer, notificationSplitMarker)
 		}
 		encoded, _ := json.Marshal(map[string]any{field: value})
-		lines[i] = "你调用 agent.finalize：" + string(encoded)
+		lines[i] = "你调用 agent_finalize：" + string(encoded)
 	}
 	prompt = strings.Join(lines, "\n")
 	prompt += "\n每条消息表达完整，不拆散标题和正文，不逐句发送。"
-	prompt += "\n本轮无需外部工具，请调用 agent.finalize，将完整回复写入 " + field + "。"
+	prompt += "\n本轮无需外部工具，请调用 agent_finalize，将完整回复写入 " + field + "。"
 	return llm.GenerateRequest{
 		Messages: []llm.Message{{Role: llm.RoleSystem, Content: prompt}},
 		Tools: []llm.ToolDefinition{{
-			Name: "agent.finalize", Description: "结束本轮并提交最终答复。", Strict: true,
+			Name: "agent_finalize", Description: "结束本轮并提交最终答复。", Strict: true,
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{field: property}, "required": []string{field}, "additionalProperties": false},
 		}},
-		ToolChoice: "agent.finalize", MaxOutputTokens: 8192,
+		ToolChoice: "agent_finalize", MaxOutputTokens: 8192,
 	}
 }
 
 func decodeReplyContract(response *llm.GenerateResponse, array bool) ([]string, error) {
-	if response == nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Name != "agent.finalize" {
-		return nil, fmt.Errorf("expected exactly one agent.finalize call")
+	if response == nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Name != "agent_finalize" {
+		return nil, fmt.Errorf("expected exactly one agent_finalize call")
 	}
 	args := response.ToolCalls[0].Arguments
 	if len(args) != 1 {
@@ -169,13 +169,13 @@ func TestReplyContractProbeValidation(t *testing.T) {
 		t.Fatal("content prompt lost explicit marker guidance")
 	}
 	for _, invalid := range []any{nil, "text", []any{}, []any{""}, []any{"ok", 4}, []any{" "}} {
-		response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "agent.finalize", Arguments: map[string]any{"messages": invalid}}}}
+		response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "agent_finalize", Arguments: map[string]any{"messages": invalid}}}}
 		if _, err := decodeReplyContract(response, true); err == nil {
 			t.Fatalf("accepted invalid array: %#v", invalid)
 		}
 	}
 	want := []string{"## Title\nBody", "```python\nprint(1)\nprint(2)\n```"}
-	response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "agent.finalize", Arguments: map[string]any{"messages": want}}}}
+	response := &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{Name: "agent_finalize", Arguments: map[string]any{"messages": want}}}}
 	got, err := decodeReplyContract(response, true)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("array delivery changed content: %q, %v", got, err)

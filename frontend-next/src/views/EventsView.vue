@@ -376,7 +376,7 @@
                         <span v-if="traceDuration(step)" class="muted">{{ traceDuration(step) }}</span>
                       </div>
                       <p v-if="traceSummary(step)" class="debug-step-summary">{{ traceSummary(step) }}</p>
-                      <div v-if="step.action === 'diana.cross_group_context' && traceJSON(step, 'selected_messages')" class="debug-payload">
+                      <div v-if="step.action === 'cross_group_context' && traceJSON(step, 'selected_messages')" class="debug-payload">
                         <span>补入历史的消息</span>
                         <pre>{{ traceJSON(step, "selected_messages") }}</pre>
                       </div>
@@ -1284,7 +1284,7 @@ function tracePhaseLabel(step: AppLogEntry): string {
 
 function traceSummary(step: AppLogEntry): string {
   const metadata = traceMetadata(step);
-  if (step.action === "diana.cross_group_context") {
+  if (step.action === "cross_group_context") {
     const parts = [String(metadata.search_range ?? "历史检索")];
     if (metadata.skip_reason) parts.push(String(metadata.skip_reason));
     parts.push(`文字候选 ${Number(metadata.keyword_candidates ?? 0)}`, `语义候选 ${Number(metadata.semantic_candidates ?? 0)}`, `补入历史 ${Number(metadata.selected ?? 0)}`);

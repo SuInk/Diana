@@ -45,8 +45,8 @@ func TestGenerateReplyRunsOnlyPluginToolsWhenAgentDisabled(t *testing.T) {
 func TestReplyPathRunsInstalledPluginToolWhenAgentDisabled(t *testing.T) {
 	provider := &agentSequenceLLMProvider{responses: []string{
 		`{"action":"none","prompt":"","tools":["plugin.echo"],"context_message_ids":[],"keep_older_summary":false}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["plugin.echo"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"plugin.echo","input":{"text":"hello"}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["plugin.echo"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"plugin.echo","input":{"text":"hello"}}}`,
 		`{"action":"final","content":"search result used"}`,
 	}}
 	tool := &echoAgentTool{}

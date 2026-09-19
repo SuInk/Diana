@@ -103,7 +103,7 @@ func (r *Runtime) recordResolverDuplicateSuppressed(ctx context.Context, event M
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "assistant.resolver_duplicate_suppressed",
+		Action:  "resolver_duplicate_suppressed",
 		Message: "重复链接解析结果已抑制",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,

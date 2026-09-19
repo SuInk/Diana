@@ -91,7 +91,7 @@ func (p *deliveryModeLLMProvider) Generate(ctx context.Context, req llm.Generate
 		return response, err
 	}
 	for _, tool := range req.Tools {
-		if tool.Name == "agent.finalize" {
+		if tool.Name == "agent_finalize" {
 			p.finalized = true
 			response.ToolCalls = []llm.ToolCall{{ID: "choice", Name: tool.Name, Arguments: map[string]any{"content": response.Text}}}
 			response.Text = ""

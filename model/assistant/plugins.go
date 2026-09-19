@@ -1176,7 +1176,7 @@ func recordPluginFailure(ctx context.Context, req PluginRequest, id string, err 
 	_ = req.AppLogs.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "assistant.plugin.execute",
+		Action:  "plugin_execute",
 		Message: "插件执行失败",
 		Detail:  err.Error(),
 		Actor:   strings.TrimSpace(req.Event.UserID),

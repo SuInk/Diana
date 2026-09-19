@@ -75,7 +75,7 @@ func validateToolInput(schema map[string]any, input map[string]any) error {
 				}
 				return
 			}
-			reasons = append(reasons, fmt.Sprintf("input%s: 不符合 %s 约束（参照 tools.load 的 inputSchema）", e.InstanceLocation, e.KeywordLocation))
+			reasons = append(reasons, fmt.Sprintf("input%s: 不符合 %s 约束（参照 tools_load 的 inputSchema）", e.InstanceLocation, e.KeywordLocation))
 		}
 		visit(validation)
 		return fmt.Errorf("%s", strings.Join(reasons, "; "))

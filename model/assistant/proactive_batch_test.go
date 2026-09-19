@@ -319,7 +319,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	}
 	var superseded bool
 	for _, entry := range logs.entries {
-		if entry.Action == "diana.proactive_reply_superseded" && entry.Metadata["stage"] == "before_send" {
+		if entry.Action == "proactive_reply_superseded" && entry.Metadata["stage"] == "before_send" {
 			superseded = true
 		}
 	}
@@ -463,7 +463,7 @@ func TestProactiveReplyBatchAppliesRelationshipDeltaWithoutDoubleCounting(t *tes
 	}
 	var relationshipLogFound bool
 	for _, entry := range logs.entries {
-		if entry.Action == "diana.relationship_evaluation" && entry.Metadata["delta"] == 1 {
+		if entry.Action == "relationship_evaluation" && entry.Metadata["delta"] == 1 {
 			relationshipLogFound = true
 		}
 	}

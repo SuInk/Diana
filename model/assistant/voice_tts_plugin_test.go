@@ -230,8 +230,8 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["tts"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"tts","input":{"text":"晚上好呀，今天也要开心。"}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["tts"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"tts","input":{"text":"晚上好呀，今天也要开心。"}}}`,
 	}}
 	channel := &recordingChannel{}
 	plugins := NewDefaultPluginManager()
@@ -277,8 +277,8 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["tts"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"tts","input":{"text":"晚安，做个好梦。"}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["tts"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"tts","input":{"text":"晚安，做个好梦。"}}}`,
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {

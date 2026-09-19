@@ -4,9 +4,9 @@
 
 现在删除 `diana.onebot_group`，不提供同名别名。内置 `bot-protocol` skill 区分以下路径：
 
-- OneBot 群资料、名单、成员与平台管理通过 `onebot-v11` skill 调用 `diana.onebot_v11`。读取当前群资料和成员时可省略 group_id；需要其他群时必须提供真实 ID。普通成员只有既有只读白名单，写操作和未知扩展仍仅主人可用。
-- Telegram 等其他平台使用只读 `group`。名单是否完整、成员权限及平台能力边界继续由适配器返回。没有支持的平台管理操作不会因添加 skill 自动变得可用。
-- `group` 的 `match_avatar` 保留本地头像比较；在 OneBot 上只开放这一项，其他查询转协议工具。
+- 群资料、名单、成员与平台管理统一通过 `platform`：`group_info`、`member_list`、`member_info` 读取，`mute`、`unmute`、`kick` 仅主人可用。普通成员只有只读路径，群管理员不等于机器人主人。
+- 非 OneBot 平台未启用平台接口插件时，改用只读 `group_directory` 的 `info`、`members`、`member`。名单是否完整、成员权限及平台能力边界继续由适配器返回。没有支持的平台管理操作不会因添加 skill 自动变得可用。
+- 本地头像比较在 `platform` 可用时是只读工具 `match_avatar`，否则是 `group_directory` 的 `match_avatar` 操作。同一时刻只有一个工具能查群成员，避免模型在两个入口之间摇摆。
 - 相关度、闲聊、可回答门槛和主动闲聊冷却通过 `bot_config` 读取或局部修改。`config` 仍仅用于主人的脱敏运行配置查询，`llm_config` 继续负责模型分配。
 
 群聊默认 `scope=group`，需要主人或实时核验的群主、管理员；`scope=bot` 只改消息所属机器人的默认设置，仅主人可用。不能在参数中指定其他机器人或其他群。

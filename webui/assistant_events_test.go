@@ -456,7 +456,7 @@ func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
-		Kind: storage.LogKindDebug, Action: "diana.debug_trace", Target: event.MessageID, Message: "模型请求完成",
+		Kind: storage.LogKindDebug, Action: "debug_trace", Target: event.MessageID, Message: "模型请求完成",
 		Metadata: map[string]any{
 			"phase": "model_request", "platform": event.Platform, "profile_id": event.ProfileID,
 			"kind": "group", "group_id": event.GroupID, "user_id": event.UserID, "message_id": event.MessageID,

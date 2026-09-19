@@ -31,7 +31,7 @@ func TestAppLogHandlerListsLogs(t *testing.T) {
 
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
 		Kind:    storage.LogKindOperation,
-		Action:  "assistant.start",
+		Action:  "start",
 		Message: "started",
 		Target:  "bot",
 	}); err != nil {
@@ -39,7 +39,7 @@ func TestAppLogHandlerListsLogs(t *testing.T) {
 	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
 		Kind:    storage.LogKindError,
-		Action:  "llm.test",
+		Action:  "llm_test",
 		Message: "failed",
 		Detail:  "bad gateway",
 	}); err != nil {
@@ -62,7 +62,7 @@ func TestAppLogHandlerListsLogs(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if len(payload.Logs) != 1 || payload.Logs[0].Kind != storage.LogKindError || payload.Logs[0].Action != "llm.test" {
+	if len(payload.Logs) != 1 || payload.Logs[0].Kind != storage.LogKindError || payload.Logs[0].Action != "llm_test" {
 		t.Fatalf("logs = %#v", payload.Logs)
 	}
 }
@@ -128,13 +128,13 @@ func TestLLMConfigHandlerWritesAppLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(operations) != 1 || operations[0].Action != "llm.config.save" {
+	if len(operations) != 1 || operations[0].Action != "llm_config_save" {
 		t.Fatalf("operation logs = %#v", operations)
 	}
 	if operations[0].Actor != "admin" {
 		t.Fatalf("operation actor = %q", operations[0].Actor)
 	}
-	if len(errors) != 1 || errors[0].Action != "llm.config.save" {
+	if len(errors) != 1 || errors[0].Action != "llm_config_save" {
 		t.Fatalf("error logs = %#v", errors)
 	}
 	if errors[0].Actor != "web:203.0.113.9" {
@@ -192,7 +192,7 @@ func TestProviderTestReturnsAndLogsRedactedUpstreamError(t *testing.T) {
 		t.Fatalf("error logs = %#v", entries)
 	}
 	entry := entries[0]
-	if entry.Action != "llm.providers.test" || entry.Target != profile.ID {
+	if entry.Action != "llm_providers_test" || entry.Target != profile.ID {
 		t.Fatalf("entry = %#v", entry)
 	}
 	if entry.Metadata["provider_id"] != profile.ID || entry.Metadata["model_id"] != profile.ID+":chat-model" {
@@ -219,9 +219,9 @@ func TestAppLogsResolveActorNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range []storage.AppLogEntry{
-		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "diana.test.named", Message: "有名字的", Actor: "qq:1255848531"},
-		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "diana.test.unknown", Message: "查不到名字的", Actor: "qq:99999999"},
-		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "diana.test.console", Message: "控制台操作者", Actor: "webui:admin"},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "test_named", Message: "有名字的", Actor: "qq:1255848531"},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "test_unknown", Message: "查不到名字的", Actor: "qq:99999999"},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "test_console", Message: "控制台操作者", Actor: "webui:admin"},
 	} {
 		if err := store.AppendLog(ctx, entry); err != nil {
 			t.Fatal(err)
@@ -244,11 +244,11 @@ func TestAppLogsResolveActorNames(t *testing.T) {
 	for _, entry := range resp.Logs {
 		names[entry.Action] = entry.ActorName
 	}
-	if names["diana.test.named"] != "吊图吧群友" {
+	if names["test_named"] != "吊图吧群友" {
 		t.Fatalf("actor names = %#v", names)
 	}
 	// 查不到昵称、以及控制台操作者这种不是账号的 actor，都不该硬凑一个名字出来。
-	if names["diana.test.unknown"] != "" || names["diana.test.console"] != "" {
+	if names["test_unknown"] != "" || names["test_console"] != "" {
 		t.Fatalf("actor names = %#v", names)
 	}
 }

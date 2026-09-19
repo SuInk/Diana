@@ -467,7 +467,7 @@ func (r *Runtime) enterOutboundDropCooldown(event MessageEvent, action string, g
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.outbound_delivery_dropped",
+		Action:  "outbound_delivery_dropped",
 		Message: "群消息连续发送失败，已丢弃等待结果并进入冷却",
 		Detail:  gate.lastError,
 		Actor:   oneBotEventActor(event),
@@ -493,7 +493,7 @@ func (r *Runtime) recordOutboundDeliveryBackoff(event MessageEvent, action strin
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.outbound_delivery_backoff",
+		Action:  "outbound_delivery_backoff",
 		Message: "群消息发送失败，已按指数退避等待下次尝试",
 		Detail:  cause.Error(),
 		Actor:   oneBotEventActor(event),
@@ -518,7 +518,7 @@ func (r *Runtime) recordOutboundDeliveryRecovered(event MessageEvent, action str
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.outbound_delivery_recovered",
+		Action:  "outbound_delivery_recovered",
 		Message: "群消息发送已恢复，后续消息将连续放行",
 		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
@@ -676,7 +676,7 @@ func (r *Runtime) markGroupSendUnavailable(ctx context.Context, event MessageEve
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    applog.KindError,
 		Level:   applog.LevelError,
-		Action:  "diana.group_send_disabled",
+		Action:  "group_send_disabled",
 		Message: "群发送目标失效，已停止向该群发送后续消息",
 		Detail:  reason,
 		Actor:   oneBotEventActor(event),

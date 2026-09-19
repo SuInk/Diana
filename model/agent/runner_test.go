@@ -879,7 +879,7 @@ func TestRunnerUsesNativeToolCallsAndReturnsToolResult(t *testing.T) {
 }
 
 // nativeFinalizeClient answers with a tool call, then with prose plus a native
-// agent.finalize call, which is the shape providers produce when text and a
+// agent_finalize call, which is the shape providers produce when text and a
 // tool call share one turn.
 type nativeFinalizeClient struct {
 	requests []llm.GenerateRequest

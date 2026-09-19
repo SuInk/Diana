@@ -40,7 +40,7 @@ func (h *BotHandler) codingAgentSetup(c *gin.Context) {
 		return
 	}
 	if payload.Operation != "status" && payload.Operation != "login-status" {
-		recordRequestOperation(c, h.logs, "assistant.coding.setup", "编码代理配置操作已执行", payload.Agent, map[string]any{"operation": payload.Operation})
+		recordRequestOperation(c, h.logs, "coding_setup", "编码代理配置操作已执行", payload.Agent, map[string]any{"operation": payload.Operation})
 	}
 	c.JSON(http.StatusOK, result)
 }

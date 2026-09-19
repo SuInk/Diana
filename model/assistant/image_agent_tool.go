@@ -396,7 +396,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		cfg = usedCfg
 		images = resp.Images
 		models = generatedImageModels(usedCfg, operation, len(resp.Images), resp)
-		action = "diana.image.generate"
+		action = "image_generate"
 		message = "Agent 图片生成已完成"
 	case "edit":
 		sources := t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
@@ -490,14 +490,14 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 			models = append(models, generatedImageModels(usedCfg, operation, len(resp.Images), resp)...)
 		}
 		if streamed > 0 && len(images) == 0 {
-			t.runtime.recordImageOperation(ctx, t.event, "diana.image.edit", "Agent 图片编辑已完成", prompt, submittedPrompt, cfg.ImageModelWithDefault(), streamed, sourceCount)
+			t.runtime.recordImageOperation(ctx, t.event, "image_edit", "Agent 图片编辑已完成", prompt, submittedPrompt, cfg.ImageModelWithDefault(), streamed, sourceCount)
 			note := ""
 			if failed > 0 || dropped > 0 {
 				note = dianaImageResultCaption("", 0, dropped, failed)
 			}
 			return dianaImageTaskOutput{Delivered: true, Caption: note}, nil
 		}
-		action = "diana.image.edit"
+		action = "image_edit"
 		message = "Agent 图片编辑已完成"
 	}
 	if len(images) == 0 {

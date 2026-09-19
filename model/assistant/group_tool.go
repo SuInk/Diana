@@ -61,20 +61,20 @@ func newDianaGroupTool(runtime *Runtime, event MessageEvent) *dianaGroupTool {
 }
 
 func (t *dianaGroupTool) Name() string {
-	return groupToolName(t.event)
+	return t.runtime.groupToolName(t.event)
 }
 
 func (t *dianaGroupTool) Description() string {
-	if !IsOneBotPlatform(t.event.Platform) {
-		return groupToolPrompt(t.event) + " 此工具只读；Diana 回复设置使用 bot_config。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
+	if !t.runtime.groupToolUsesPlatform(t.event) {
+		return t.runtime.groupToolPrompt(t.event) + " 此工具只读；Diana 回复设置使用 bot_config。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
 	}
-	return `使用 match_avatar 做本地群成员头像匹配，不凭视觉猜身份。OneBot 群资料、名单和成员查询使用 platform；Diana 回复设置使用 bot_config。此工具只读。`
+	return `本地群成员头像匹配：把当前图片与可用成员头像做模式比对，不凭视觉猜身份。群资料、名单和成员查询使用 platform；Diana 回复设置使用 bot_config。此工具只读。`
 }
 
 // InputSchema 声明参数契约。取值范围引用与校验同一份常量。
 func (t *dianaGroupTool) InputSchema() map[string]any {
-	if IsOneBotPlatform(t.event.Platform) {
-		return toolObjectSchema([]string{"operation"}, map[string]any{"operation": toolEnumParam("本地头像匹配；原生群查询使用 platform。", "match_avatar")})
+	if t.runtime.groupToolUsesPlatform(t.event) {
+		return toolObjectSchema([]string{"operation"}, map[string]any{"operation": toolEnumParam("本地头像匹配；群资料和成员查询使用 platform。", "match_avatar")})
 	}
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作：info 读群资料；members 获取或检索成员候选；member 按 user_id 实时核验成员；match_avatar 将当前图片与可用成员头像做本地模式匹配。",
@@ -98,8 +98,8 @@ func (t *dianaGroupTool) Run(ctx context.Context, input map[string]any) (string,
 	if operation == "" {
 		operation = "members"
 	}
-	if IsOneBotPlatform(t.event.Platform) && operation != "match_avatar" && operation != "avatar_match" {
-		return "", fmt.Errorf("OneBot 群查询和平台操作请使用 platform；回复设置请使用 bot_config")
+	if t.runtime.groupToolUsesPlatform(t.event) && operation != "match_avatar" && operation != "avatar_match" {
+		return "", fmt.Errorf("群资料和成员查询请使用 platform；回复设置请使用 bot_config")
 	}
 	switch operation {
 	case "member":

@@ -163,7 +163,7 @@ func (r *Runtime) deliverRomanceGreeting(ctx context.Context, cfg BotConfig, pro
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.romance_greeting",
+		Action:  "romance_greeting",
 		Message: "纪念日问候已发送",
 		Actor:   oneBotEventActor(event),
 		Metadata: map[string]any{

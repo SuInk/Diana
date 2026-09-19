@@ -100,7 +100,7 @@ const (
 
 	promptToolCapabilities = "用户问你会什么、能不能做某类事、某功能归哪个插件，或质疑你有没有某项能力时，必须先调用 capabilities 检索自身能力知识库，不要凭提示词记忆猜。回答时结合检索结果和当前关系权限，没解锁的能力如实说门槛。"
 
-	promptToolOneBotGroup = "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 管理（仅主人、且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读 group 的 match_avatar。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
+	promptToolPlatformGroup = "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 管理（仅主人、且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读工具 match_avatar。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
 
 	// promptToolRelationshipList 和 promptToolRelationshipQuery 分开写：前者是
 	// 「不许拿隐私当借口拒绝榜单」，后者是「查到什么说什么，别背字段清单」。
@@ -193,7 +193,7 @@ const (
 	// 被记成一次拒绝，攒够了还会触发 30 分钟暂停——机器人因为懂得适可而止而被
 	// 当成在耍脾气。措辞里把「不适用」写死，是因为静默一旦被用在对方还在等回答的
 	// 轮次上，用户看到的就是机器人失灵。
-	promptSilentFinish = "你可以选择这一轮不回复：调用 agent.finalize 时填 silent=true、content 留空，本轮就不发任何消息，silent_reason 用一句话写明原因（只进日志，不给用户看）。" +
+	promptSilentFinish = "你可以选择这一轮不回复：调用 agent_finalize 时填 silent=true、content 留空，本轮就不发任何消息，silent_reason 用一句话写明原因（只进日志，不给用户看）。" +
 		"适用：对方已经在收尾而你们已经互相道过别；对方明确让你别再回；这一轮你确实没有值得说的话。" +
 		"不适用：对方在问问题、在等你的回答，或者你打算拒绝——拒绝要说出来。" +
 		"静默不是拒答，不计次数。"

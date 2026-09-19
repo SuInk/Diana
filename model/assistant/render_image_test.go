@@ -205,7 +205,7 @@ func TestRenderToolRefusesWhenBrowserPluginDisabled(t *testing.T) {
 	if !strings.Contains(output, `"ok":false`) || !strings.Contains(output, "网页渲染") {
 		t.Fatalf("没有说清是哪个插件没开：%s", output)
 	}
-	entry, ok := logs.find("assistant.render")
+	entry, ok := logs.find("render")
 	if !ok {
 		t.Fatalf("运行记录里没有这次失败：%#v", logs.entries)
 	}

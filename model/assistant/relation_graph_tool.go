@@ -237,7 +237,7 @@ func (t *dianaGroupRelationsTool) recordRelationsOutcome(ctx context.Context, re
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:    kind,
 		Level:   level,
-		Action:  "assistant.group_relations",
+		Action:  "group_relations",
 		Message: result.Message,
 		Detail:  detail,
 		Actor:   oneBotEventActor(t.event),

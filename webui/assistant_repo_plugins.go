@@ -53,12 +53,12 @@ func (h *BotHandler) previewRepoPlugin(c *gin.Context) {
 	}
 	var payload repoPluginURLPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.repo.preview", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "plugin_repo_preview", err, "", nil)
 		return
 	}
 	preview, err := installer.Preview(c.Request.Context(), payload.URL)
 	if err != nil {
-		h.writeRepoPluginError(c, "assistant.plugin.repo.preview", err, payload.URL)
+		h.writeRepoPluginError(c, "plugin_repo_preview", err, payload.URL)
 		return
 	}
 	c.JSON(http.StatusOK, preview)
@@ -73,37 +73,37 @@ func (h *BotHandler) installRepoPlugin(c *gin.Context) {
 	}
 	var payload repoPluginInstallPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.repo.install", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "plugin_repo_install", err, "", nil)
 		return
 	}
 	if !payload.AcceptRisk {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.repo.install", assistant.ErrRepoPluginRisk, payload.URL, nil)
+		h.writeError(c, http.StatusBadRequest, "plugin_repo_install", assistant.ErrRepoPluginRisk, payload.URL, nil)
 		return
 	}
 	plugin, source, err := installer.Install(c.Request.Context(), payload.URL)
 	if err != nil {
-		h.writeRepoPluginError(c, "assistant.plugin.repo.install", err, payload.URL)
+		h.writeRepoPluginError(c, "plugin_repo_install", err, payload.URL)
 		return
 	}
 	manager := h.runtime.Plugins()
 	if err := manager.RegisterPlugin(plugin); err != nil {
-		h.writeError(c, http.StatusConflict, "assistant.plugin.repo.install", err, plugin.Manifest().ID, nil)
+		h.writeError(c, http.StatusConflict, "plugin_repo_install", err, plugin.Manifest().ID, nil)
 		return
 	}
 	if state, ok := manager.Get(plugin.Manifest().ID); !ok || !state.Installed {
 		if _, err := manager.Install(plugin.Manifest().ID); err != nil {
-			h.writePluginError(c, "assistant.plugin.repo.install", err, plugin.Manifest().ID)
+			h.writePluginError(c, "plugin_repo_install", err, plugin.Manifest().ID)
 			return
 		}
 	}
 	if h.repoPluginSources != nil {
 		if err := h.repoPluginSources.Save(source); err != nil {
-			h.writeError(c, http.StatusInternalServerError, "assistant.plugin.repo.install", err, plugin.Manifest().ID, nil)
+			h.writeError(c, http.StatusInternalServerError, "plugin_repo_install", err, plugin.Manifest().ID, nil)
 			return
 		}
 	}
 	h.persistState()
-	recordRequestOperation(c, h.logs, "assistant.plugin.repo.install", "第三方插件已安装", plugin.Manifest().ID, map[string]any{
+	recordRequestOperation(c, h.logs, "plugin_repo_install", "第三方插件已安装", plugin.Manifest().ID, map[string]any{
 		"plugin_id": plugin.Manifest().ID,
 		"version":   plugin.Manifest().Version,
 		"source":    source.Owner + "/" + source.Repo,
@@ -126,11 +126,11 @@ func (h *BotHandler) updateRepoPlugin(c *gin.Context) {
 	}
 	var payload repoPluginInstallPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.repo.update", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "plugin_repo_update", err, c.Param("id"), nil)
 		return
 	}
 	if !payload.AcceptRisk {
-		h.writeError(c, http.StatusBadRequest, "assistant.plugin.repo.update", assistant.ErrRepoPluginRisk, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "plugin_repo_update", assistant.ErrRepoPluginRisk, c.Param("id"), nil)
 		return
 	}
 	source, ok := h.repoPluginSources.Get(c.Param("id"))
@@ -144,25 +144,25 @@ func (h *BotHandler) updateRepoPlugin(c *gin.Context) {
 	}
 	plugin, next, err := installer.Install(c.Request.Context(), installURL)
 	if err != nil {
-		h.writeRepoPluginError(c, "assistant.plugin.repo.update", err, source.ID)
+		h.writeRepoPluginError(c, "plugin_repo_update", err, source.ID)
 		return
 	}
 	if plugin.Manifest().ID != source.ID {
-		h.writeError(c, http.StatusConflict, "assistant.plugin.repo.update",
+		h.writeError(c, http.StatusConflict, "plugin_repo_update",
 			errors.New("diana: 更新后的插件 ID 发生变化，拒绝替换"), source.ID, nil)
 		return
 	}
 	manager := h.runtime.Plugins()
 	if err := manager.RegisterPlugin(plugin); err != nil {
-		h.writeError(c, http.StatusConflict, "assistant.plugin.repo.update", err, source.ID, nil)
+		h.writeError(c, http.StatusConflict, "plugin_repo_update", err, source.ID, nil)
 		return
 	}
 	if err := h.repoPluginSources.Save(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.plugin.repo.update", err, source.ID, nil)
+		h.writeError(c, http.StatusInternalServerError, "plugin_repo_update", err, source.ID, nil)
 		return
 	}
 	h.persistState()
-	recordRequestOperation(c, h.logs, "assistant.plugin.repo.update", "第三方插件已更新", source.ID, map[string]any{
+	recordRequestOperation(c, h.logs, "plugin_repo_update", "第三方插件已更新", source.ID, map[string]any{
 		"plugin_id": source.ID,
 		"version":   next.Version,
 		"source":    next.Owner + "/" + next.Repo,

@@ -60,14 +60,14 @@ func (h *BotHandler) deleteConsoleGroup(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Param("id"))
 	found, err := h.groupConfigs.DeleteGroupConfig(strings.TrimSpace(profileID), groupID)
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.groups.delete", err, groupID, nil)
+		h.writeError(c, http.StatusInternalServerError, "groups_delete", err, groupID, nil)
 		return
 	}
 	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "群配置不存在"})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.groups.delete", "群配置已删除，恢复全局规则", groupID, map[string]any{"bot_profile_id": profileID})
+	recordRequestOperation(c, h.logs, "groups_delete", "群配置已删除，恢复全局规则", groupID, map[string]any{"bot_profile_id": profileID})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -488,17 +488,17 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 	var payload consoleGroupSavePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "groups_save", err, "", nil)
 		return
 	}
 	groupID := strings.TrimSpace(payload.Config.GroupID)
 	if _, err := strconv.ParseInt(groupID, 10, 64); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", fmt.Errorf("群号格式不正确"), groupID, nil)
+		h.writeError(c, http.StatusBadRequest, "groups_save", fmt.Errorf("群号格式不正确"), groupID, nil)
 		return
 	}
 	profileID, profileName, err := h.consoleGroupProfile(payload.Config.BotProfileID)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
+		h.writeError(c, http.StatusBadRequest, "groups_save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
 	previous, _ := h.groupConfigs.ConfigForGroup(profileID, groupID)
@@ -507,7 +507,7 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 	// 群配置按机器人各存一份，保存时必须钉住是给哪一台配的。
 	cfg.BotProfileID = profileID
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
+		h.writeError(c, http.StatusBadRequest, "groups_save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
 	// 群配置跟随它自己那台机器人：拿运行时当前配置当 base，会把另一台的人设和
@@ -515,10 +515,10 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 	base := h.botConfigForProfile(profileID)
 	saved, err := h.groupConfigs.SaveGroupConfig(cfg, base)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.groups.save", err, groupID, map[string]any{"group_id": groupID})
+		h.writeError(c, http.StatusBadRequest, "groups_save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.groups.save", "群配置已保存（控制台）", groupID, groupConfigAuditMetadata(previous, saved, profileName))
+	recordRequestOperation(c, h.logs, "groups_save", "群配置已保存（控制台）", groupID, groupConfigAuditMetadata(previous, saved, profileName))
 	c.JSON(http.StatusOK, gin.H{"config": h.groupConfigForAPI(saved.WithDefaults(groupID, base))})
 }
 

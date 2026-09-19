@@ -9,9 +9,9 @@ Use the current event's platform and bot identity. Never substitute another bot,
 
 ## Platform Operations
 
-- OneBot: load `onebot-v11`, then use `diana.onebot_v11` for group information, members and management. Standard queries include `get_group_info`, `get_group_member_list` and `get_group_member_info`. Ordinary members retain only the backend read allowlist; mutation and unknown extensions require the owner. A group administrator is not automatically the bot owner.
-- Telegram and other platforms: use the available read-only `group` adapter for `info`, `members` and `member`. Respect `member_list_complete`, `member_source` and warnings. Do not treat partial results as a full group list or invent unsupported moderation actions.
-- Image-to-avatar matching is a local operation: use `group` with `match_avatar`. Do not guess identity from an image.
+- Group information, members and moderation go through `platform` (see the `platform` skill): `group_info`, `member_list` and `member_info` read; `mute`, `unmute` and `kick` are owner-only. A group administrator is not automatically the bot owner.
+- Only when `platform` is not registered (a non-OneBot platform with the platform interface disabled), the read-only `group_directory` tool provides `info`, `members` and `member`. Respect `member_list_complete`, `member_source` and warnings. Do not treat partial results as a full group list or invent unsupported moderation actions.
+- Image-to-avatar matching is a local operation: use the `match_avatar` tool, or `group_directory` with operation `match_avatar` where that tool is registered instead. Do not guess identity from an image.
 - Do not bypass a denied action with shell, raw network requests, an alias or another tool.
 
 ## Diana Reply Settings

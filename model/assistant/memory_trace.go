@@ -62,7 +62,7 @@ func (r *Runtime) recordTemporaryMemoryContext(ctx context.Context, event Messag
 		return
 	}
 	_ = writer.AppendLog(ctx, applog.Entry{
-		Kind: applog.KindDebug, Level: applog.LevelInfo, Action: "diana.memory.temporary",
+		Kind: applog.KindDebug, Level: applog.LevelInfo, Action: "memory_temporary",
 		Message: "临时记忆已进入本轮上下文", Target: event.MessageID,
 		Metadata: map[string]any{
 			"platform": event.Platform, "profile_id": event.ProfileID, "group_id": event.GroupID,

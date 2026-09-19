@@ -246,7 +246,7 @@ func (h *BotHandler) dashboardStats(c *gin.Context) {
 	}
 	stats, err := h.sqlite.DashboardStatsForDay(c.Request.Context(), time.Now(), botProfileScope(c))
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.dashboard_stats", err, "dashboard", nil)
+		h.writeError(c, http.StatusInternalServerError, "dashboard_stats", err, "dashboard", nil)
 		return
 	}
 	stats.Server = collectDashboardServerStats(time.Now())
@@ -255,21 +255,21 @@ func (h *BotHandler) dashboardStats(c *gin.Context) {
 
 func (h *BotHandler) shareNapCatQRCode(c *gin.Context) {
 	if h.localMedia == nil {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.group_test.napcat_qrcode", fmt.Errorf("local media store is unavailable"), "napcat-qrcode", nil)
+		h.writeError(c, http.StatusServiceUnavailable, "group_test_napcat_qrcode", fmt.Errorf("local media store is unavailable"), "napcat-qrcode", nil)
 		return
 	}
 	path := strings.TrimSpace(os.Getenv("DIANA_NAPCAT_QRCODE_PATH"))
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			h.writeError(c, http.StatusInternalServerError, "assistant.group_test.napcat_qrcode", err, "napcat-qrcode", nil)
+			h.writeError(c, http.StatusInternalServerError, "group_test_napcat_qrcode", err, "napcat-qrcode", nil)
 			return
 		}
 		path = filepath.Join(home, "Library", "Containers", "com.tencent.qq", "Data", "Library", "Application Support", "QQ", "NapCat", "cache", "qrcode.png")
 	}
 	sharedURL, ok := h.localMedia.Share(path, 2*time.Minute)
 	if !ok {
-		h.writeError(c, http.StatusNotFound, "assistant.group_test.napcat_qrcode", fmt.Errorf("NapCat login QR code is unavailable"), "napcat-qrcode", nil)
+		h.writeError(c, http.StatusNotFound, "group_test_napcat_qrcode", fmt.Errorf("NapCat login QR code is unavailable"), "napcat-qrcode", nil)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"url": sharedURL, "expires_in_seconds": 120})
@@ -279,12 +279,12 @@ func (h *BotHandler) listGroupTestFiles(c *gin.Context) {
 	groupID := strings.TrimSpace(c.Query("group_id"))
 	parsedGroupID, err := strconv.ParseInt(groupID, 10, 64)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.files", fmt.Errorf("valid group_id is required"), groupID, nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_files", fmt.Errorf("valid group_id is required"), groupID, nil)
 		return
 	}
 	result, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_group_root_files", map[string]any{"group_id": parsedGroupID})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.files", err, groupID, map[string]any{"group_id": groupID})
+		h.writeError(c, http.StatusBadRequest, "group_test_files", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"group_id": groupID, "result": result})
@@ -293,7 +293,7 @@ func (h *BotHandler) listGroupTestFiles(c *gin.Context) {
 func (h *BotHandler) uploadGroupTestFile(c *gin.Context) {
 	var payload groupTestUploadFilePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_upload_file", err, "", nil)
 		return
 	}
 	groupID := strings.TrimSpace(payload.GroupID)
@@ -301,7 +301,7 @@ func (h *BotHandler) uploadGroupTestFile(c *gin.Context) {
 	name := strings.TrimSpace(payload.Name)
 	parsedGroupID, err := strconv.ParseInt(groupID, 10, 64)
 	if err != nil || file == "" || name == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", fmt.Errorf("valid group_id, file and name are required"), groupID, nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_upload_file", fmt.Errorf("valid group_id, file and name are required"), groupID, nil)
 		return
 	}
 	uploadSource := file
@@ -316,10 +316,10 @@ func (h *BotHandler) uploadGroupTestFile(c *gin.Context) {
 		"name":     name,
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.upload_file", err, groupID, map[string]any{"group_id": groupID, "name": name})
+		h.writeError(c, http.StatusBadRequest, "group_test_upload_file", err, groupID, map[string]any{"group_id": groupID, "name": name})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.upload_file", "群测试文件已上传", groupID, map[string]any{"group_id": groupID, "name": name})
+	recordRequestOperation(c, h.logs, "group_test_upload_file", "群测试文件已上传", groupID, map[string]any{"group_id": groupID, "name": name})
 	c.JSON(http.StatusOK, gin.H{"group_id": groupID, "name": name, "result": result})
 }
 
@@ -415,12 +415,12 @@ func autoGroupFromMap(item map[string]any) botAutoGroupInfo {
 func (h *BotHandler) callGroupTestOneBot(c *gin.Context) {
 	var payload groupTestOneBotPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.onebot", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_onebot", err, "", nil)
 		return
 	}
 	action := strings.TrimSpace(payload.Action)
 	if _, ok := groupTestOneBotReadActions[action]; !ok {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.onebot", fmt.Errorf("OneBot action %q is not allowed", action), action, nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_onebot", fmt.Errorf("OneBot action %q is not allowed", action), action, nil)
 		return
 	}
 	if payload.Params == nil {
@@ -428,7 +428,7 @@ func (h *BotHandler) callGroupTestOneBot(c *gin.Context) {
 	}
 	result, err := h.runtime.CallOneBotAPI(c.Request.Context(), action, payload.Params)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.onebot", err, action, nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_onebot", err, action, nil)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"action": action, "result": result})
@@ -436,12 +436,12 @@ func (h *BotHandler) callGroupTestOneBot(c *gin.Context) {
 
 func (h *BotHandler) listTasks(c *gin.Context) {
 	if h.sqlite == nil {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.tasks.list", fmt.Errorf("task store is unavailable"), "", nil)
+		h.writeError(c, http.StatusServiceUnavailable, "tasks_list", fmt.Errorf("task store is unavailable"), "", nil)
 		return
 	}
 	items, _, err := h.sqlite.LoadReminders(c.Request.Context())
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.tasks.list", err, "", nil)
+		h.writeError(c, http.StatusInternalServerError, "tasks_list", err, "", nil)
 		return
 	}
 	// 列表和单条详情必须走同一个映射：手抄两份的结果是列表悄悄漏字段——Star 的
@@ -463,17 +463,17 @@ func (h *BotHandler) listTasks(c *gin.Context) {
 func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.create", fmt.Errorf("repository watch runtime is unavailable"), "", nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_watch_create", fmt.Errorf("repository watch runtime is unavailable"), "", nil)
 		return
 	}
 	var payload repositoryWatchCreatePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_create", err, "", nil)
 		return
 	}
 	profile, err := h.repositoryWatchProfile(payload.ProfileID)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_create", err, payload.Repository, nil)
 		return
 	}
 	destination := strings.ToLower(strings.TrimSpace(payload.Destination))
@@ -481,12 +481,12 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		destination = "private"
 	}
 	if destination != "private" && destination != "group" {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("destination 必须是 private 或 group"), payload.Repository, nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_create", fmt.Errorf("destination 必须是 private 或 group"), payload.Repository, nil)
 		return
 	}
 	targets, err := h.subscriptionTargets(payload.NotificationTargets, profile)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_create", err, payload.Repository, nil)
 		return
 	}
 	notificationEnabled := payload.NotificationEnabled == nil || *payload.NotificationEnabled
@@ -498,7 +498,7 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 			userID = strings.TrimSpace(payload.UserID)
 		}
 		if groupID == "" && userID == "" {
-			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", fmt.Errorf("启用通知时至少填写一个群聊或私聊发送对象"), payload.Repository, nil)
+			h.writeError(c, http.StatusBadRequest, "repository_watch_create", fmt.Errorf("启用通知时至少填写一个群聊或私聊发送对象"), payload.Repository, nil)
 			return
 		}
 		targets = []assistant.ReminderDeliveryTarget{{Platform: profile.Platform, ProfileID: profile.ID, ContextNamespace: strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID}}
@@ -519,27 +519,27 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		NotificationEnabled: notificationEnabled, NotificationTargets: targets,
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.create", err, payload.Repository, nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_create", err, payload.Repository, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.repository_watch.create", "仓库更新订阅已创建", item.ID, map[string]any{"repository": item.Repository, "profile_id": item.ProfileID, "group_id": item.GroupID})
+	recordRequestOperation(c, h.logs, "repository_watch_create", "仓库更新订阅已创建", item.ID, map[string]any{"repository": item.Repository, "profile_id": item.ProfileID, "group_id": item.GroupID})
 	c.JSON(http.StatusCreated, botTaskFromReminder(item))
 }
 
 func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.update", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_watch_update", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
 		return
 	}
 	var payload repositoryWatchUpdatePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_update", err, c.Param("id"), nil)
 		return
 	}
 	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.update", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "repository_watch_update", err, c.Param("id"), nil)
 		return
 	}
 	destination := strings.ToLower(strings.TrimSpace(payload.Destination))
@@ -554,16 +554,16 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 	if deliveryRequested {
 		profile, profileErr := h.repositoryWatchProfile(payload.ProfileID)
 		if profileErr != nil {
-			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", profileErr, c.Param("id"), nil)
+			h.writeError(c, http.StatusBadRequest, "repository_watch_update", profileErr, c.Param("id"), nil)
 			return
 		}
 		targets, err := h.subscriptionTargets(payload.NotificationTargets, profile)
 		if err != nil {
-			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
+			h.writeError(c, http.StatusBadRequest, "repository_watch_update", err, c.Param("id"), nil)
 			return
 		}
 		if len(targets) == 0 && payload.NotificationEnabled != nil && *payload.NotificationEnabled {
-			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("启用通知时至少填写一个群聊或私聊对象"), c.Param("id"), nil)
+			h.writeError(c, http.StatusBadRequest, "repository_watch_update", fmt.Errorf("启用通知时至少填写一个群聊或私聊对象"), c.Param("id"), nil)
 			return
 		}
 		if len(targets) > 0 {
@@ -573,7 +573,7 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 			destination = "none"
 		}
 		if destination != "private" && destination != "group" && destination != "targets" && destination != "none" {
-			h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("destination 必须是 private 或 group"), c.Param("id"), nil)
+			h.writeError(c, http.StatusBadRequest, "repository_watch_update", fmt.Errorf("destination 必须是 private 或 group"), c.Param("id"), nil)
 			return
 		}
 		groupID, userID := "", ""
@@ -585,13 +585,13 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		} else if destination == "group" {
 			groupID = strings.TrimSpace(payload.GroupID)
 			if groupID == "" {
-				h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), c.Param("id"), nil)
+				h.writeError(c, http.StatusBadRequest, "repository_watch_update", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), c.Param("id"), nil)
 				return
 			}
 		} else {
 			userID = strings.TrimSpace(payload.UserID)
 			if userID == "" {
-				h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", fmt.Errorf("私聊通知必须填写发送对象 ID"), c.Param("id"), nil)
+				h.writeError(c, http.StatusBadRequest, "repository_watch_update", fmt.Errorf("私聊通知必须填写发送对象 ID"), c.Param("id"), nil)
 				return
 			}
 		}
@@ -613,96 +613,96 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 	updateInput.Branch = branch
 	item, err := manager.UpdateRepositoryWatch(c.Request.Context(), ownerID, c.Param("id"), updateInput)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.update", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_update", err, c.Param("id"), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.repository_watch.update", "仓库更新订阅已更新", item.ID, map[string]any{"repository": item.Repository})
+	recordRequestOperation(c, h.logs, "repository_watch_update", "仓库更新订阅已更新", item.ID, map[string]any{"repository": item.Repository})
 	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
 func (h *BotHandler) cancelRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.cancel", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_watch_cancel", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
 		return
 	}
 	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.cancel", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "repository_watch_cancel", err, c.Param("id"), nil)
 		return
 	}
 	item, err := manager.CancelRepositoryWatch(ownerID, c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.cancel", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_cancel", err, c.Param("id"), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.repository_watch.cancel", "仓库更新订阅已取消", item.ID, nil)
+	recordRequestOperation(c, h.logs, "repository_watch_cancel", "仓库更新订阅已取消", item.ID, nil)
 	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
 func (h *BotHandler) runRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.run", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_watch_run", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
 		return
 	}
 	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.run", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "repository_watch_run", err, c.Param("id"), nil)
 		return
 	}
 	item, err := manager.RunRepositoryWatchNow(ownerID, c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.repository_watch.run", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "repository_watch_run", err, c.Param("id"), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.repository_watch.run", "仓库更新订阅已安排立即检查", item.ID, map[string]any{"repository": item.Repository})
+	recordRequestOperation(c, h.logs, "repository_watch_run", "仓库更新订阅已安排立即检查", item.ID, map[string]any{"repository": item.Repository})
 	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
 func (h *BotHandler) deleteRepositoryWatch(c *gin.Context) {
 	manager, ok := h.runtime.(repositoryWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.repository_watch.delete", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
+		h.writeError(c, http.StatusServiceUnavailable, "repository_watch_delete", fmt.Errorf("repository watch runtime is unavailable"), c.Param("id"), nil)
 		return
 	}
 	ownerID, err := h.repositoryWatchOwner(c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.delete", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "repository_watch_delete", err, c.Param("id"), nil)
 		return
 	}
 	removed, err := manager.DeleteRepositoryWatch(ownerID, c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.repository_watch.delete", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusInternalServerError, "repository_watch_delete", err, c.Param("id"), nil)
 		return
 	}
 	if !removed {
-		h.writeError(c, http.StatusNotFound, "assistant.repository_watch.delete", fmt.Errorf("仓库更新订阅不存在"), c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "repository_watch_delete", fmt.Errorf("仓库更新订阅不存在"), c.Param("id"), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.repository_watch.delete", "仓库更新订阅已删除", c.Param("id"), nil)
+	recordRequestOperation(c, h.logs, "repository_watch_delete", "仓库更新订阅已删除", c.Param("id"), nil)
 	c.Status(http.StatusNoContent)
 }
 
 func (h *BotHandler) createRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.create", fmt.Errorf("rss watch runtime is unavailable"), "", nil)
+		h.writeError(c, http.StatusServiceUnavailable, "rss_watch_create", fmt.Errorf("rss watch runtime is unavailable"), "", nil)
 		return
 	}
 	var payload rssWatchCreatePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_create", err, "", nil)
 		return
 	}
 	profile, err := h.repositoryWatchProfile(payload.ProfileID)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, payload.FeedURL, nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_create", err, payload.FeedURL, nil)
 		return
 	}
 	targets, err := h.subscriptionTargets(payload.NotificationTargets, profile)
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_create", err, "", nil)
 		return
 	}
 	if len(targets) > 0 {
@@ -717,20 +717,20 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		destination = "private"
 	}
 	if destination != "private" && destination != "group" {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", fmt.Errorf("destination 必须是 private 或 group"), payload.FeedURL, nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_create", fmt.Errorf("destination 必须是 private 或 group"), payload.FeedURL, nil)
 		return
 	}
 	groupID, userID := "", ""
 	if destination == "group" {
 		groupID = strings.TrimSpace(payload.GroupID)
 		if groupID == "" {
-			h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), payload.FeedURL, nil)
+			h.writeError(c, http.StatusBadRequest, "rss_watch_create", fmt.Errorf("群聊通知必须填写群号或 Chat ID"), payload.FeedURL, nil)
 			return
 		}
 	} else {
 		userID = strings.TrimSpace(payload.UserID)
 		if userID == "" {
-			h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", fmt.Errorf("私聊通知必须填写发送对象 ID"), payload.FeedURL, nil)
+			h.writeError(c, http.StatusBadRequest, "rss_watch_create", fmt.Errorf("私聊通知必须填写发送对象 ID"), payload.FeedURL, nil)
 			return
 		}
 	}
@@ -743,27 +743,27 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 		ContextNamespace: strings.TrimSpace(profile.ID),
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.create", err, firstNonEmptyWeb(payload.TwitterHandle, payload.FeedURL), nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_create", err, firstNonEmptyWeb(payload.TwitterHandle, payload.FeedURL), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.rss_watch.create", "RSS 订阅已创建", item.ID, map[string]any{"feed_url": item.FeedURL, "profile_id": item.ProfileID})
+	recordRequestOperation(c, h.logs, "rss_watch_create", "RSS 订阅已创建", item.ID, map[string]any{"feed_url": item.FeedURL, "profile_id": item.ProfileID})
 	c.JSON(http.StatusCreated, botTaskFromReminder(item))
 }
 
 func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.update", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
+		h.writeError(c, http.StatusServiceUnavailable, "rss_watch_update", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
 		return
 	}
 	var payload rssWatchUpdatePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.update", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_update", err, c.Param("id"), nil)
 		return
 	}
 	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindRSSWatch, "RSS 订阅")
 	if err != nil {
-		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.update", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "rss_watch_update", err, c.Param("id"), nil)
 		return
 	}
 	var targets *[]assistant.ReminderDeliveryTarget
@@ -773,7 +773,7 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 			if err == nil {
 				err = fmt.Errorf("至少配置一个通知目标")
 			}
-			h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.update", err, c.Param("id"), nil)
+			h.writeError(c, http.StatusBadRequest, "rss_watch_update", err, c.Param("id"), nil)
 			return
 		}
 		targets = &values
@@ -785,54 +785,54 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.update", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_update", err, c.Param("id"), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.rss_watch.update", "RSS 订阅已更新", item.ID, map[string]any{"feed_url": item.FeedURL})
+	recordRequestOperation(c, h.logs, "rss_watch_update", "RSS 订阅已更新", item.ID, map[string]any{"feed_url": item.FeedURL})
 	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
 func (h *BotHandler) cancelRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.cancel", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
+		h.writeError(c, http.StatusServiceUnavailable, "rss_watch_cancel", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
 		return
 	}
 	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindRSSWatch, "RSS 订阅")
 	if err != nil {
-		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.cancel", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "rss_watch_cancel", err, c.Param("id"), nil)
 		return
 	}
 	item, err := manager.CancelRSSWatch(ownerID, c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.rss_watch.cancel", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusBadRequest, "rss_watch_cancel", err, c.Param("id"), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.rss_watch.cancel", "RSS 订阅已取消", item.ID, nil)
+	recordRequestOperation(c, h.logs, "rss_watch_cancel", "RSS 订阅已取消", item.ID, nil)
 	c.JSON(http.StatusOK, botTaskFromReminder(item))
 }
 
 func (h *BotHandler) deleteRSSWatch(c *gin.Context) {
 	manager, ok := h.runtime.(rssWatchRuntime)
 	if !ok {
-		h.writeError(c, http.StatusServiceUnavailable, "assistant.rss_watch.delete", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
+		h.writeError(c, http.StatusServiceUnavailable, "rss_watch_delete", fmt.Errorf("rss watch runtime is unavailable"), c.Param("id"), nil)
 		return
 	}
 	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindRSSWatch, "RSS 订阅")
 	if err != nil {
-		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.delete", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "rss_watch_delete", err, c.Param("id"), nil)
 		return
 	}
 	removed, err := manager.DeleteRSSWatch(ownerID, c.Param("id"))
 	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.rss_watch.delete", err, c.Param("id"), nil)
+		h.writeError(c, http.StatusInternalServerError, "rss_watch_delete", err, c.Param("id"), nil)
 		return
 	}
 	if !removed {
-		h.writeError(c, http.StatusNotFound, "assistant.rss_watch.delete", fmt.Errorf("RSS 订阅不存在"), c.Param("id"), nil)
+		h.writeError(c, http.StatusNotFound, "rss_watch_delete", fmt.Errorf("RSS 订阅不存在"), c.Param("id"), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.rss_watch.delete", "RSS 订阅已删除", c.Param("id"), nil)
+	recordRequestOperation(c, h.logs, "rss_watch_delete", "RSS 订阅已删除", c.Param("id"), nil)
 	c.Status(http.StatusNoContent)
 }
 
@@ -1000,27 +1000,27 @@ func taskConsumesQuota(item assistant.Reminder) bool {
 func (h *BotHandler) recallGroupTestMessage(c *gin.Context) {
 	var payload groupTestRecallPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_recall", err, "", nil)
 		return
 	}
 	messageID := strings.TrimSpace(payload.MessageID)
 	if messageID == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", fmt.Errorf("message_id is required"), "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_recall", fmt.Errorf("message_id is required"), "", nil)
 		return
 	}
 	result, err := h.runtime.CallOneBotAPI(c.Request.Context(), "delete_msg", map[string]any{"message_id": oneBotIDParam(messageID)})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.recall", err, messageID, map[string]any{"message_id": messageID})
+		h.writeError(c, http.StatusBadRequest, "group_test_recall", err, messageID, map[string]any{"message_id": messageID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.recall", "群测试消息已撤回", messageID, map[string]any{"message_id": messageID})
+	recordRequestOperation(c, h.logs, "group_test_recall", "群测试消息已撤回", messageID, map[string]any{"message_id": messageID})
 	c.JSON(http.StatusOK, groupTestRecallResponse{MessageID: messageID, Recalled: true, Result: result})
 }
 
 func (h *BotHandler) parseGroupTestFile(c *gin.Context) {
 	var payload groupTestFilePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", err, "", nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_file", err, "", nil)
 		return
 	}
 	groupID := strings.TrimSpace(payload.GroupID)
@@ -1028,16 +1028,16 @@ func (h *BotHandler) parseGroupTestFile(c *gin.Context) {
 	name := strings.TrimSpace(payload.Name)
 	localPath := strings.TrimSpace(payload.LocalPath)
 	if name == "" || (localPath == "" && (groupID == "" || fileID == "")) {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("name and either local_path or group_id plus file_id are required"), groupID, nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_file", fmt.Errorf("name and either local_path or group_id plus file_id are required"), groupID, nil)
 		return
 	}
 	if localPath != "" && !filepath.IsAbs(localPath) {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("local_path must be absolute"), name, nil)
+		h.writeError(c, http.StatusBadRequest, "group_test_file", fmt.Errorf("local_path must be absolute"), name, nil)
 		return
 	}
 	if groupID != "" {
 		if _, err := strconv.ParseInt(groupID, 10, 64); err != nil {
-			h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("invalid group_id %q", groupID), groupID, nil)
+			h.writeError(c, http.StatusBadRequest, "group_test_file", fmt.Errorf("invalid group_id %q", groupID), groupID, nil)
 			return
 		}
 	}
@@ -1069,25 +1069,25 @@ func (h *BotHandler) parseGroupTestFile(c *gin.Context) {
 		Text: "群文件解析测试",
 	})
 	if err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", err, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+		h.writeError(c, http.StatusBadRequest, "group_test_file", err, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
 		return
 	}
 	if resp == nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+		h.writeError(c, http.StatusBadRequest, "group_test_file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
 		return
 	}
 	contextText := strings.TrimSpace(resp.Context)
 	if contextText == "" && len(resp.Tasks) > 0 {
 		runner, ok := h.runtime.(pluginTaskRunner)
 		if !ok {
-			h.writeError(c, http.StatusServiceUnavailable, "assistant.group_test.file", fmt.Errorf("plugin task runner is unavailable"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+			h.writeError(c, http.StatusServiceUnavailable, "group_test_file", fmt.Errorf("plugin task runner is unavailable"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
 			return
 		}
 		results := make([]string, 0, len(resp.Tasks))
 		for _, task := range resp.Tasks {
 			result, taskErr := runner.RunPluginTask(c.Request.Context(), task)
 			if taskErr != nil {
-				h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", taskErr, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+				h.writeError(c, http.StatusBadRequest, "group_test_file", taskErr, logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
 				return
 			}
 			if text := strings.TrimSpace(result.Reply); text != "" {
@@ -1097,10 +1097,10 @@ func (h *BotHandler) parseGroupTestFile(c *gin.Context) {
 		contextText = strings.Join(results, "\n\n")
 	}
 	if contextText == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.group_test.file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
+		h.writeError(c, http.StatusBadRequest, "group_test_file", fmt.Errorf("file parser returned no result"), logTarget, map[string]any{"group_id": groupID, "file_id": fileID})
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.group_test.file", "群文件解析测试完成", logTarget, map[string]any{"group_id": groupID, "file_id": fileID, "name": name})
+	recordRequestOperation(c, h.logs, "group_test_file", "群文件解析测试完成", logTarget, map[string]any{"group_id": groupID, "file_id": fileID, "name": name})
 	c.JSON(http.StatusOK, groupTestFileResponse{GroupID: groupID, FileID: fileID, Name: name, Context: contextText})
 }
 

@@ -741,7 +741,7 @@ func (r *Runtime) recordInboundMediaTurn(ctx context.Context, turnID string, eve
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.inbound.media_turn_assembled",
+		Action:  "inbound_media_turn_assembled",
 		Message: "已合并相邻媒体与后续问题",
 		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),
@@ -763,7 +763,7 @@ func (r *Runtime) recordInboundMediaSupersededBeforeSend(ctx context.Context, ev
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.inbound.media_turn_superseded",
+		Action:  "inbound_media_turn_superseded",
 		Message: "媒体任务已由关联问题接管，取消独立发送",
 		Actor:   oneBotEventActor(event),
 		Target:  strings.TrimSpace(event.MessageID),
@@ -1011,7 +1011,7 @@ func (r *Runtime) recordOneBotConnectionLifecycleWithMetadata(ctx context.Contex
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:      kind,
 		Level:     level,
-		Action:    "diana." + event,
+		Action:    event,
 		Message:   message,
 		Detail:    detail,
 		Target:    status.ProfileID,

@@ -36,7 +36,7 @@ Take `user_id` from an @ segment, from the quoted message's sender, or from a `m
 
 ## Diana's Own Reply Behavior
 
-Diana's participation is not a platform property. To stop unsolicited replies use `bot_config` with `desire_level=off`, not a platform mute. To ignore one person's messages without a platform action use `reply_block`. For local image-to-avatar matching use the read-only `group` operation `match_avatar`.
+Diana's participation is not a platform property. To stop unsolicited replies use `bot_config` with `desire_level=off`, not a platform mute. To ignore one person's messages without a platform action use `reply_block`. For local image-to-avatar matching use the read-only `match_avatar` tool.
 
 ## Result Handling
 

@@ -170,7 +170,7 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 	h.lastCreated[requestIP] = now
 	h.mu.Unlock()
 
-	recordRequestOperation(c, h.logs, "auth.owner.pair.create", "已创建主人私聊登录配对", "", nil)
+	recordRequestOperation(c, h.logs, "auth_owner_pair_create", "已创建主人私聊登录配对", "", nil)
 	c.JSON(http.StatusOK, gin.H{
 		"ok":                 true,
 		"code":               code,
@@ -214,7 +214,7 @@ func (h *OwnerLoginHandler) pollPairing(c *gin.Context) {
 	h.deletePairingLocked(pairing)
 	h.mu.Unlock()
 
-	if !h.issueOwnerSession(c, "auth.owner.pair.login", "主人私聊确认登录成功") {
+	if !h.issueOwnerSession(c, "auth_owner_pair_login", "主人私聊确认登录成功") {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"approved": true})
@@ -261,12 +261,12 @@ func (h *OwnerLoginHandler) claimPairing(c *gin.Context) {
 		// 验证码的探针。主人自己知道有没有发出去。
 		time.Sleep(400 * time.Millisecond)
 		h.throttle.Fail(throttleKey, time.Now())
-		logAndWriteError(c, h.logs, http.StatusUnauthorized, "auth.owner.pair.claim",
+		logAndWriteError(c, h.logs, http.StatusUnauthorized, "auth_owner_pair_claim",
 			errors.New("验证码无效、已过期，或还没有在私聊里确认"), "", nil)
 		return
 	}
 	h.throttle.Reset(throttleKey)
-	if !h.issueOwnerSession(c, "auth.owner.pair.claim", "主人私聊确认登录成功（手动填写验证码）") {
+	if !h.issueOwnerSession(c, "auth_owner_pair_claim", "主人私聊确认登录成功（手动填写验证码）") {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -323,9 +323,9 @@ func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event ass
 	// 吞掉——万一验证码是被诱导转发的，主人当场就能发现并去踢掉会话。
 	receipt := fmt.Sprintf("已确认登录\n来源 IP：%s\n设备：%s\n\n浏览器没有自动跳转的话，把这个验证码填进登录页即可。\n若非本人操作，请立刻在控制台踢掉该会话并修改密码。", requestIP, deviceName)
 	if err := h.notifyOwner(ctx, cfg, receipt); err != nil {
-		recordOperation(ctx, h.logs, "auth.owner.pair.notify", "登录回执发送失败："+err.Error(), event.UserID, nil)
+		recordOperation(ctx, h.logs, "auth_owner_pair_notify", "登录回执发送失败："+err.Error(), event.UserID, nil)
 	}
-	recordOperation(ctx, h.logs, "auth.owner.pair.approve", "主人已通过私聊确认控制台登录", event.UserID, nil)
+	recordOperation(ctx, h.logs, "auth_owner_pair_approve", "主人已通过私聊确认控制台登录", event.UserID, nil)
 	return true
 }
 

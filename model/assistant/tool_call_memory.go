@@ -32,9 +32,9 @@ type toolCallRecord struct {
 
 // toolCallMemoryIgnored 是不值得记的内部工具：它们不是「去查了什么」。
 var toolCallMemoryIgnored = map[string]bool{
-	"agent.finalize": true,
-	"tools.load":     true,
-	"tools.execute":  true,
+	"agent_finalize": true,
+	"tools_load":     true,
+	"tools_execute":  true,
 }
 
 // rememberToolCalls 记下本轮实际执行过的工具调用，跳过的调用不算。

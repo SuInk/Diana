@@ -210,7 +210,7 @@ func (t *dianaBotParticipationTool) Run(ctx context.Context, input map[string]an
 		}
 		prefs = effective.participationPreferences()
 		if writer := t.runtime.appLogWriter(); writer != nil {
-			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "diana.bot_config.update", Message: "回复设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs}})
+			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_update", Message: "回复设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs}})
 		}
 	}
 	groupID, message := "", "已读取实际生效回复设置"

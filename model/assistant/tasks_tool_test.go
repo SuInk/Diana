@@ -79,8 +79,8 @@ func TestRuntimeAgentCanQueryAllPersonalTasks(t *testing.T) {
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools.load","input":{"names":["tasks"]}}`,
-		`{"action":"tool","tool":"tools.execute","input":{"name":"tasks","input":{"operation":"list","scope":"mine"}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["tasks"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"tasks","input":{"operation":"list","scope":"mine"}}}`,
 		`{"action":"final","content":"你有一个喝水提醒和一个查询公告的周期订阅。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{

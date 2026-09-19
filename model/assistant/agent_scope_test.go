@@ -70,7 +70,7 @@ func TestOwnerAgentExtensionCatalogIncludesDefaultPlugins(t *testing.T) {
 			t.Fatalf("default plugin %q missing from extension catalog: %s", state.Manifest.ID, body)
 		}
 	}
-	for _, toolName := range []string{"install_skill", "mcp.install", "mcp.uninstall"} {
+	for _, toolName := range []string{"install_skill", "mcp_install", "mcp_uninstall"} {
 		if _, ok := registry.Get(toolName); !ok {
 			t.Fatalf("owner extension management tool %q is missing", toolName)
 		}

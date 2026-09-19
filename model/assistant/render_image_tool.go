@@ -219,7 +219,7 @@ func (t *dianaRenderTool) record(ctx context.Context, result dianaRenderResult, 
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     kind,
 		Level:    level,
-		Action:   "assistant.render",
+		Action:   "render",
 		Message:  result.Message,
 		Detail:   detail,
 		Actor:    oneBotEventActor(t.event),

@@ -32,22 +32,22 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		}
 		kind := applog.KindOperation
 		level := applog.LevelInfo
-		action := "diana.agent_run"
+		action := "agent_run"
 		message := "Agent 运行状态已更新"
 		switch runEvent.Phase {
 		case agent.RunPhaseStarted:
 			message = "Agent 运行开始"
 		case agent.RunPhaseModelCompleted:
-			action = "diana.agent_model"
+			action = "agent_model"
 			message = "Agent 模型轮次完成"
 		case agent.RunPhaseProtocolRepair:
-			action = "diana.agent_protocol"
+			action = "agent_protocol"
 			message = "Agent 协议已自动修正"
 		case agent.RunPhaseToolStarted:
-			action = "diana.agent_tool"
+			action = "agent_tool"
 			message = "Agent 工具调用开始"
 		case agent.RunPhaseToolCompleted:
-			action = "diana.agent_tool"
+			action = "agent_tool"
 			message = "Agent 工具调用完成"
 			if runError != "" {
 				kind = applog.KindError

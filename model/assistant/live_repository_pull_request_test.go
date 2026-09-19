@@ -161,7 +161,7 @@ func TestLiveAgentReviewsPullRequestThroughTool(t *testing.T) {
 					renderedGitHub = append(renderedGitHub, target)
 				}
 			}
-			if call.Name != "agent.finalize" {
+			if call.Name != "agent_finalize" {
 				operations = append(operations, call.Name)
 			}
 			continue

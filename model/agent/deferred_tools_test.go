@@ -101,7 +101,7 @@ func TestToolsLoadRejectsUnknownNamesAndSystemCatalogStaysStable(t *testing.T) {
 	if after := loader.catalog(); after != before {
 		t.Fatalf("catalog changed after loading; prompt cache would break:\n%s\n---\n%s", before, after)
 	}
-	if names := strings.Join(toolDefinitionNames(loader.filter(registry.Definitions())), ","); names != "common,tools.load,tools.execute" {
+	if names := strings.Join(toolDefinitionNames(loader.filter(registry.Definitions())), ","); names != "common,tools_load,tools_execute" {
 		t.Fatalf("filtered = %s", names)
 	}
 }

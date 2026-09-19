@@ -41,7 +41,7 @@ func (*dianaReplyBlockTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("block 加入屏蔽名单，unblock 移出，list 只读当前名单；只有保存成功才报告已生效。", "block", "unblock", "list"),
 		"scope":     toolEnumParam("群聊默认 group，私聊默认 bot。group 只影响当前群，bot 对本机所有群和私聊生效且仅主人可改；不能指定别的机器人或别的群。", "group", "bot"),
-		"user_id":   toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或 group 查到的成员 ID。不要按昵称猜 ID，拿不准就先查成员或问清楚。省略时用当前引用消息的发送者；list 不需要。"),
+		"user_id":   toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或群成员查询结果里的成员 ID。不要按昵称猜 ID，拿不准就先查成员或问清楚。省略时用当前引用消息的发送者；list 不需要。"),
 	})
 }
 
@@ -262,7 +262,7 @@ func (r *Runtime) recordReplyBlockChanged(ctx context.Context, event MessageEven
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.reply_block." + op,
+		Action:  "reply_block_" + op,
 		Message: message,
 		Actor:   oneBotEventActor(event),
 		Target:  target,

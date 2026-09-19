@@ -84,7 +84,7 @@ func startGapTestRuntime(t *testing.T, store *memoryInboundEventStore, channel *
 	}
 	t.Cleanup(func() { _ = runtime.Stop() })
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_completed")
+		return hasAppLogAction(logs.entriesSnapshot(), "backfill_completed")
 	})
 	return runtime, logs
 }
@@ -114,14 +114,14 @@ func TestRuntimeSeqGapTriggersTargetedGroupBackfill(t *testing.T) {
 	}
 
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_gap_resolved")
+		return hasAppLogAction(logs.entriesSnapshot(), "backfill_gap_resolved")
 	})
 	for _, id := range []string{"group:123:101", "group:123:102", "group:123:103"} {
 		if !store.hasEvent(id) {
 			t.Fatalf("seq gap backfill did not enqueue %s", id)
 		}
 	}
-	detected, ok := appLogEntry(logs.entriesSnapshot(), "diana.backfill_gap_detected")
+	detected, ok := appLogEntry(logs.entriesSnapshot(), "backfill_gap_detected")
 	if !ok || detected.Metadata["missing"] != 3 || detected.Metadata["previous_seq"] != int64(100) {
 		t.Fatalf("gap detected entry = %#v", detected)
 	}
@@ -156,7 +156,7 @@ func TestRuntimeSeqGapIgnoresBotOwnMessages(t *testing.T) {
 		return probed && len(runtime.seqGapRunning) == 0 && runtime.seqGapActive.Load() == 0
 	})
 	time.Sleep(200 * time.Millisecond)
-	if hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_gap_detected") {
+	if hasAppLogAction(logs.entriesSnapshot(), "backfill_gap_detected") {
 		t.Fatal("bot's own messages were reported as a seq gap")
 	}
 	if calls := channel.callCount("get_group_msg_history"); calls != historyCalls {
@@ -181,16 +181,16 @@ func TestRuntimeSeqGapReportsUnresolvedAfterRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_gap_unresolved")
+		return hasAppLogAction(logs.entriesSnapshot(), "backfill_gap_unresolved")
 	})
 	if calls := channel.callCount("get_group_msg_history") - historyCalls; calls != 2 {
 		t.Fatalf("targeted history fetches = %d, want one per retry (2)", calls)
 	}
-	entry, _ := appLogEntry(logs.entriesSnapshot(), "diana.backfill_gap_unresolved")
+	entry, _ := appLogEntry(logs.entriesSnapshot(), "backfill_gap_unresolved")
 	if entry.Level != applog.LevelError || entry.Metadata["missing"] != 4 {
 		t.Fatalf("unresolved entry = %#v", entry)
 	}
-	if hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_gap_resolved") {
+	if hasAppLogAction(logs.entriesSnapshot(), "backfill_gap_resolved") {
 		t.Fatal("unresolved gap was also reported as resolved")
 	}
 }
@@ -212,11 +212,11 @@ func TestRuntimeFollowUpBackfillCatchesLateSyncedHistory(t *testing.T) {
 		historyTestMessage(970, time.Now().Add(-time.Minute).Unix(), "登录后才同步到的离线消息"),
 	}})
 	waitForCondition(t, 4*time.Second, func() bool {
-		return hasAppLogAction(logs.entriesSnapshot(), "diana.backfill_follow_up") && store.hasEvent("group:123:970")
+		return hasAppLogAction(logs.entriesSnapshot(), "backfill_follow_up") && store.hasEvent("group:123:970")
 	})
 	waitForCondition(t, 4*time.Second, func() bool {
 		for _, entry := range logs.entriesSnapshot() {
-			if entry.Action == "diana.backfill_completed" && entry.Metadata["inserted"] == 1 {
+			if entry.Action == "backfill_completed" && entry.Metadata["inserted"] == 1 {
 				return true
 			}
 		}

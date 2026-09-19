@@ -347,10 +347,10 @@ func (h *OpenAPIHandler) createKey(c *gin.Context) {
 		if !errors.Is(err, ErrOpenAPIKeyNameInvalid) {
 			status = http.StatusInternalServerError
 		}
-		logAndWriteError(c, h.logs, status, "openapi.key.create", err, "", nil)
+		logAndWriteError(c, h.logs, status, "openapi_key_create", err, "", nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "openapi.key.create", "创建对外 API 密钥", info.ID, map[string]any{"name": info.Name})
+	recordRequestOperation(c, h.logs, "openapi_key_create", "创建对外 API 密钥", info.ID, map[string]any{"name": info.Name})
 	c.Header("Cache-Control", "no-store")
 	// token 只在这次响应里出现，之后任何接口都拿不到明文。
 	c.JSON(http.StatusOK, gin.H{"key": info, "token": token})
@@ -368,10 +368,10 @@ func (h *OpenAPIHandler) revokeKey(c *gin.Context) {
 		if errors.Is(err, ErrOpenAPIKeyNotFound) {
 			status = http.StatusNotFound
 		}
-		logAndWriteError(c, h.logs, status, "openapi.key.revoke", err, id, nil)
+		logAndWriteError(c, h.logs, status, "openapi_key_revoke", err, id, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "openapi.key.revoke", "吊销对外 API 密钥", info.ID, map[string]any{"name": info.Name})
+	recordRequestOperation(c, h.logs, "openapi_key_revoke", "吊销对外 API 密钥", info.ID, map[string]any{"name": info.Name})
 	c.JSON(http.StatusOK, gin.H{"revoked": true})
 }
 
@@ -479,7 +479,7 @@ func (h *OpenAPIHandler) pushMessage(c *gin.Context) {
 		recordAppLog(c.Request.Context(), h.logs, storage.AppLogEntry{
 			Kind:     storage.LogKindError,
 			Level:    storage.LogLevelError,
-			Action:   "openapi.message",
+			Action:   "openapi_message",
 			Message:  err.Error(),
 			Actor:    "openapi:" + key.Name,
 			Target:   targetLabel,
@@ -491,7 +491,7 @@ func (h *OpenAPIHandler) pushMessage(c *gin.Context) {
 	recordAppLog(c.Request.Context(), h.logs, storage.AppLogEntry{
 		Kind:     storage.LogKindOperation,
 		Level:    storage.LogLevelInfo,
-		Action:   "openapi.message",
+		Action:   "openapi_message",
 		Message:  "对外 API 推送已投递",
 		Actor:    "openapi:" + key.Name,
 		Target:   targetLabel,
