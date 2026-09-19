@@ -82,7 +82,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          codingAgentPluginID,
 		Name:        "编码代理",
-		Version:     "0.1.1",
+		Version:     "0.1.2",
 		Description: "把 Claude Code、Codex 这类编码 CLI 接进对话：在持久工作区里长时间改代码，完成后汇报，运行途中可以随时查询进度。仅机器人主人可用。",
 		Official:    true,
 		BuiltIn:     true,

@@ -90,7 +90,7 @@ func NewAIImageDetectPlugin(client *http.Client) *AIImageDetectPlugin {
 
 func (p *AIImageDetectPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID: aiImageDetectPluginID, Name: "AI 图片检测", Version: "0.1.0",
+		ID: aiImageDetectPluginID, Name: "AI 图片检测", Version: "0.1.1",
 		Description: "回答「这张图是不是 AI 生成的」：在本地解析图片里的 AI 生成标识，包括 C2PA 内容凭证、IPTC 数字来源类型、Google「Made with Google AI」/SynthID 标注、国内 AIGC 隐式标识，以及 Stable Diffusion WebUI、ComfyUI、NovelAI、Midjourney 等工具写入的生成参数。本地检测不上传图片。SynthID 像素水印没有公开的离线检测方法，需要另外配置检测服务地址才会检查。注意：聊天平台转发、截图和重新保存都会抹掉元数据，查不到标识不代表一定是真图。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "network:https", "agent:tool"},

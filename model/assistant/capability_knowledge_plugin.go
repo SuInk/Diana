@@ -58,7 +58,7 @@ func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          capabilityKnowledgePluginID,
 		Name:        "能力知识库",
-		Version:     "0.1.4",
+		Version:     "0.1.5",
 		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
 		Official:    true,
 		BuiltIn:     true,

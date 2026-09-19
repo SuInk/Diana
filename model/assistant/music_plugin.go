@@ -151,7 +151,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.2.2",
+		Version:     "0.2.3",
 		Description: "支持网易云、QQ 音乐和酷狗点歌及链接解析。OneBot QQ 发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
