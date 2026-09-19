@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -49,10 +50,17 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 		t.Fatalf("router calls = %d, want 1", len(provider.requests))
 	}
 	requestText := provider.requests[0].Messages[len(provider.requests[0].Messages)-1].Content
-	for _, want := range []string{`"message_id":"message-1"`, `"user_id":"user-1"`, `"message_id":"message-2"`, `"user_id":"user-2"`} {
+	for _, want := range []string{`"message_id":"message-1"`, `"message_id":"message-2"`} {
 		if !strings.Contains(requestText, want) {
 			t.Fatalf("batch payload missing %s: %s", want, requestText)
 		}
+	}
+	aliases := regexp.MustCompile(`"user_id":"(im_user_[a-f0-9]+)"`).FindAllStringSubmatch(requestText, -1)
+	if len(aliases) != 2 || aliases[0][1] == aliases[1][1] {
+		t.Fatalf("expected distinct masked candidate identities: %s", requestText)
+	}
+	if strings.Contains(requestText, "user-1") || strings.Contains(requestText, "user-2") {
+		t.Fatalf("batch payload leaked candidate identities: %s", requestText)
 	}
 	routePrompt := provider.requests[0].Messages[0].Content
 	for _, want := range []string{"只评估 current_text", "历史与候选供理解上下文", "不选择其他消息作为回复目标", "同一内容已经回答"} {
