@@ -52,7 +52,8 @@ type dianaRSSWatchResult struct {
 }
 
 type dianaRSSWatch struct {
-	ID string `json:"id"`
+	ID      string `json:"id"`
+	OwnerID string `json:"owner_id"`
 	// Sources 列出这条订阅盯的所有来源；feed_url / twitter_handle 保留第一个，
 	// 方便只看单来源的旧读法。
 	Sources         []string  `json:"sources,omitempty"`
@@ -72,10 +73,21 @@ func newDianaRSSWatchTool(runtime *Runtime, event MessageEvent) *dianaRSSWatchTo
 	return &dianaRSSWatchTool{runtime: runtime, event: event}
 }
 
+func (t *dianaRSSWatchTool) targetOwner(requesterIsOwner bool, fallbackOwner, id string) (string, error) {
+	if !requesterIsOwner {
+		return fallbackOwner, nil
+	}
+	item, err := t.runtime.rssWatchByID(id)
+	if err != nil {
+		return "", err
+	}
+	return item.OwnerID, nil
+}
+
 func (*dianaRSSWatchTool) Name() string { return "diana.rss" }
 
 func (*dianaRSSWatchTool) Description() string {
-	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅：发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。一条订阅可以同时盯多个账号或多个 Feed，它们共用同一套 judge_prompt，命中的内容合成一条消息发出；用户说「盯这几个人，条件一样」时建一条多来源订阅，不要一人建一条。用户要求持续关注某个网站 Feed 或某个推特用户、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
+	return `创建和管理 RSS/Atom 或 X (Twitter) 用户订阅：发现新条目后由模型按 judge_prompt 判断是否值得通知，不符合条件就保持静默。普通用户只能查看和管理自己的订阅，机器人主人可以查看和管理全部订阅，包括 WebUI 创建的订阅。一条订阅可以同时盯多个账号或多个 Feed，它们共用同一套 judge_prompt，命中的内容合成一条消息发出；用户说「盯这几个人，条件一样」时建一条多来源订阅，不要一人建一条。用户要求持续关注某个网站 Feed 或某个推特用户、并且只在特定内容出现时才通知，必须使用本工具；普通周期搜索改用 diana.schedule。首次创建只建立当前内容基线，不补发历史条目。`
 }
 
 func (*dianaRSSWatchTool) InputSchema() map[string]any {
@@ -130,6 +142,9 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		return marshalDianaRSSWatchResult(dianaRSSWatchResult{OK: true, Action: "created", Message: fmt.Sprintf("订阅已创建，共 %d 个来源，当前 Feed 已作为基线；后续新条目会先经判断器决定是否回复。", len(ReminderFeedSources(item))), Watch: rssWatchForTool(item)})
 	case "list":
 		stored := t.runtime.rssWatches(targetID)
+		if policy.Owner {
+			stored = t.runtime.allRSSWatches()
+		}
 		items := make([]dianaRSSWatch, 0, len(stored))
 		for _, item := range stored {
 			items = append(items, *rssWatchForTool(item))
@@ -139,6 +154,10 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		id := strings.TrimSpace(configToolString(input, "id"))
 		if id == "" {
 			return "", fmt.Errorf("修改 RSS 订阅时必须提供 id")
+		}
+		targetID, err = t.targetOwner(policy.Owner, targetID, id)
+		if err != nil {
+			return "", err
 		}
 		update, err := rssWatchUpdateFromTool(input)
 		if err != nil {
@@ -154,6 +173,10 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		if id == "" {
 			return "", fmt.Errorf("取消 RSS 订阅时必须提供 id")
 		}
+		targetID, err = t.targetOwner(policy.Owner, targetID, id)
+		if err != nil {
+			return "", err
+		}
 		item, err := t.runtime.CancelRSSWatch(targetID, id)
 		if err != nil {
 			return "", err
@@ -163,6 +186,10 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		id := strings.TrimSpace(configToolString(input, "id"))
 		if id == "" {
 			return "", fmt.Errorf("删除 RSS 订阅时必须提供 id")
+		}
+		targetID, err = t.targetOwner(policy.Owner, targetID, id)
+		if err != nil {
+			return "", err
 		}
 		removed, err := t.runtime.DeleteRSSWatch(targetID, id)
 		if err != nil {
@@ -520,6 +547,31 @@ func (r *Runtime) rssWatches(owner string) []Reminder {
 	return out
 }
 
+func (r *Runtime) allRSSWatches() []Reminder {
+	if r.reminders == nil {
+		return nil
+	}
+	r.reminderMu.Lock()
+	defer r.reminderMu.Unlock()
+	var out []Reminder
+	for _, item := range r.reminders.Reminders() {
+		if reminderIsRSSWatch(item) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func (r *Runtime) rssWatchByID(id string) (Reminder, error) {
+	id = strings.TrimSpace(id)
+	for _, item := range r.allRSSWatches() {
+		if item.ID == id {
+			return item, nil
+		}
+	}
+	return Reminder{}, fmt.Errorf("没有找到 RSS 订阅 %s", id)
+}
+
 func (r *Runtime) rssWatch(owner, id string) (Reminder, error) {
 	for _, item := range r.rssWatches(owner) {
 		if item.ID == strings.TrimSpace(id) {
@@ -636,7 +688,7 @@ func rssWatchSourceLabels(item Reminder) []string {
 }
 
 func rssWatchForTool(item Reminder) *dianaRSSWatch {
-	return &dianaRSSWatch{ID: item.ID, Sources: rssWatchSourceLabels(item), FeedURL: item.FeedURL, Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: item.LastError, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: item.FeedURL, Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: item.LastError, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
 }
 
 func marshalDianaRSSWatchResult(result dianaRSSWatchResult) (string, error) {
