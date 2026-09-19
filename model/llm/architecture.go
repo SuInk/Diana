@@ -51,6 +51,8 @@ type AgentModelConfig struct {
 }
 
 type ChatMessage struct {
+	// ContinuationScope binds opaque reasoning state to its originating endpoint and model.
+	ContinuationScope string            `json:"-"`
 	AnthropicThinking []json.RawMessage `json:"-"`
 	ReasoningContent  *string           `json:"-"`
 	ResponsesOutput   []json.RawMessage `json:"-"`
@@ -118,6 +120,8 @@ type ModelListerAdapter interface {
 }
 
 type ChatResponse struct {
+	// ContinuationScope binds opaque reasoning state to its originating endpoint and model.
+	ContinuationScope string            `json:"-"`
 	AnthropicThinking []json.RawMessage `json:"-"`
 	Provider          Provider          `json:"provider,omitempty"`
 	Model             string            `json:"model,omitempty"`
@@ -320,7 +324,7 @@ func (a clientAdapter) Generate(ctx context.Context, model ModelDefinition, req 
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	return ChatResponse{Provider: response.Provider, Model: response.Model, AnthropicThinking: response.AnthropicThinking, ReasoningContent: response.ReasoningContent, ResponsesOutput: response.ResponsesOutput, Text: response.Text, ToolCalls: response.ToolCalls, Usage: response.Usage}, nil
+	return ChatResponse{Provider: response.Provider, Model: response.Model, ContinuationScope: response.ContinuationScope, AnthropicThinking: response.AnthropicThinking, ReasoningContent: response.ReasoningContent, ResponsesOutput: response.ResponsesOutput, Text: response.Text, ToolCalls: response.ToolCalls, Usage: response.Usage}, nil
 }
 
 func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req ChatRequest) (<-chan ChatEvent, error) {
@@ -360,7 +364,7 @@ func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req Ch
 func chatMessagesToLegacy(messages []ChatMessage) []Message {
 	out := make([]Message, 0, len(messages))
 	for _, message := range messages {
-		converted := Message{AnthropicThinking: message.AnthropicThinking, ReasoningContent: message.ReasoningContent, ResponsesOutput: message.ResponsesOutput, Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls, Priority: message.Priority, ContextGroup: message.ContextGroup, AtomicText: message.AtomicText, CacheBreakpoint: message.CacheBreakpoint}
+		converted := Message{ContinuationScope: message.ContinuationScope, AnthropicThinking: message.AnthropicThinking, ReasoningContent: message.ReasoningContent, ResponsesOutput: message.ResponsesOutput, Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls, Priority: message.Priority, ContextGroup: message.ContextGroup, AtomicText: message.AtomicText, CacheBreakpoint: message.CacheBreakpoint}
 		if message.ToolResult != nil {
 			converted.ToolCallID, converted.ToolName, converted.Content = message.ToolResult.CallID, message.ToolResult.Name, message.ToolResult.Content
 		}
@@ -372,7 +376,7 @@ func chatMessagesToLegacy(messages []ChatMessage) []Message {
 func legacyMessagesToChat(messages []Message) []ChatMessage {
 	out := make([]ChatMessage, 0, len(messages))
 	for _, message := range messages {
-		converted := ChatMessage{AnthropicThinking: message.AnthropicThinking, ReasoningContent: message.ReasoningContent, ResponsesOutput: message.ResponsesOutput, Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls, Priority: message.Priority, ContextGroup: message.ContextGroup, AtomicText: message.AtomicText, CacheBreakpoint: message.CacheBreakpoint}
+		converted := ChatMessage{ContinuationScope: message.ContinuationScope, AnthropicThinking: message.AnthropicThinking, ReasoningContent: message.ReasoningContent, ResponsesOutput: message.ResponsesOutput, Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCalls: message.ToolCalls, Priority: message.Priority, ContextGroup: message.ContextGroup, AtomicText: message.AtomicText, CacheBreakpoint: message.CacheBreakpoint}
 		if message.Role == RoleTool {
 			converted.ToolResult = &ToolResult{CallID: message.ToolCallID, Name: message.ToolName, Content: message.Content}
 		}
@@ -494,5 +498,5 @@ func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*Gen
 	if err != nil {
 		return nil, err
 	}
-	return &GenerateResponse{Provider: response.Provider, Model: response.Model, AnthropicThinking: response.AnthropicThinking, ReasoningContent: response.ReasoningContent, ResponsesOutput: response.ResponsesOutput, Text: response.Text, ToolCalls: response.ToolCalls, Usage: response.Usage}, nil
+	return &GenerateResponse{Provider: response.Provider, Model: response.Model, ContinuationScope: response.ContinuationScope, AnthropicThinking: response.AnthropicThinking, ReasoningContent: response.ReasoningContent, ResponsesOutput: response.ResponsesOutput, Text: response.Text, ToolCalls: response.ToolCalls, Usage: response.Usage}, nil
 }

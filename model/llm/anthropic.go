@@ -44,7 +44,12 @@ func newAnthropicClient(cfg ProviderConfig, httpClient *http.Client) *anthropicC
 }
 
 // Generate 调用 Anthropic 模型生成回复。
-func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
+func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (result *GenerateResponse, resultErr error) {
+	defer func() {
+		if result != nil {
+			result.ContinuationScope = continuationScope(c.cfg, req.Model)
+		}
+	}()
 	req = req.withDefaults(c.cfg)
 	if messagesHaveInputAudio(req.Messages) {
 		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
@@ -102,7 +107,12 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (*G
 	}, nil
 }
 
-func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (streamEvents <-chan ChatEvent, resultErr error) {
+	defer func() {
+		if resultErr == nil && streamEvents != nil {
+			streamEvents = scopeContinuationEvents(ctx, streamEvents, continuationScope(c.cfg, req.Model))
+		}
+	}()
 	req = applyContextBudget(req.withDefaults(c.cfg), c.cfg)
 	if messagesHaveInputAudio(req.Messages) {
 		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
@@ -238,6 +248,16 @@ func anthropicMessages(messages []Message, definitions []ToolDefinition) []anthr
 		if msg.Role == RoleAssistant && len(msg.AnthropicThinking) > 0 {
 			thinking := make([]anthropic.ContentBlockParamUnion, 0, len(msg.AnthropicThinking))
 			for _, raw := range msg.AnthropicThinking {
+				var state struct {
+					Type      string `json:"type"`
+					Signature string `json:"signature"`
+					Data      string `json:"data"`
+				}
+				if json.Unmarshal(raw, &state) != nil ||
+					!(state.Type == "thinking" && strings.TrimSpace(state.Signature) != "" ||
+						state.Type == "redacted_thinking" && strings.TrimSpace(state.Data) != "") {
+					continue
+				}
 				var block anthropic.ContentBlockParamUnion
 				if json.Unmarshal(raw, &block) == nil {
 					thinking = append(thinking, block)

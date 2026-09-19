@@ -594,7 +594,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				Content:           lastText,
 				ToolCalls:         resp.ToolCalls,
 				ResponsesOutput:   resp.ResponsesOutput,
-				AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent,
+				ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent,
 			}
 			messages = append(messages, assistantMessage)
 			// Signed thinking and Responses continuation refer to the original
