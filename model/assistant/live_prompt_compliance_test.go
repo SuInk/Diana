@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -41,14 +42,23 @@ func liveLLMClient(t *testing.T) llm.LLMClient {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	client, err := llm.NewClient(llm.ProviderConfig{
+	config := llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible,
 		APIKey:   apiKey,
 		BaseURL:  strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_BASE_URL")),
 		Model:    model,
 		APIStyle: llm.APIStyle(strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_API_STYLE"))),
 		Timeout:  90 * time.Second,
-	})
+	}
+	if raw := strings.TrimSpace(os.Getenv("DIANA_TEST_MAX_CONTEXT_TOKENS")); raw != "" {
+		limit, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || limit <= 0 {
+			t.Fatalf("invalid DIANA_TEST_MAX_CONTEXT_TOKENS %q", raw)
+		}
+		config.ContextWindowTokens = limit
+		config.MaxContextTokens = limit
+	}
+	client, err := llm.NewClient(config)
 	if err != nil {
 		t.Fatal(err)
 	}
