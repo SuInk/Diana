@@ -87,12 +87,12 @@ func TestLiveTerraReceivesCurrentImage(t *testing.T) {
 	}
 	auditRuntime := NewRuntime(BotConfig{ProactiveReplyThreshold: 0.9}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return luna, nil })
 	enriched.replyAuditImageContext = description
-	decision, err := auditRuntime.runReplyAudit(context.Background(), enriched, "嘉然帮我查证一下这个说法", "杭州公交电梯里的老人主要因为省钱和锻炼不坐电梯", auditRuntime.Config(), botReplyLoopEvidence{}, replyAuditNeed{Quality: true})
+	decision, err := auditRuntime.runReplyAudit(context.Background(), enriched, "嘉然帮我查证一下这个说法", "杭州公交电梯里的老人主要因为省钱和锻炼不坐电梯", auditRuntime.ProfileConfig(""), botReplyLoopEvidence{}, replyAuditNeed{Quality: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("Luna audit: send_confidence=%.2f reason=%q", decision.Confidence, decision.Reason)
-	if auditRuntime.proactiveQualityError(enriched, decision, auditRuntime.Config()) == nil {
+	if auditRuntime.proactiveQualityError(enriched, decision, auditRuntime.ProfileConfig("")) == nil {
 		t.Fatal("Luna audit allowed an elevator answer for the Mormon screenshot")
 	}
 }

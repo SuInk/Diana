@@ -67,7 +67,7 @@ func (c *MultiChannel) Connect(ctx context.Context, handler EventHandler) error 
 			defer wg.Done()
 			wrapped := func(eventCtx context.Context, event MessageEvent) error {
 				var failures []error
-				for _, target := range group {
+				for _, target := range connectionEventTargets(group, event) {
 					delivered := cloneHistoricalImageEvent(event)
 					delivered.MentionTargets = append([]MessageMention(nil), event.MentionTargets...)
 					delivered.Platform = target.Platform
@@ -176,9 +176,8 @@ func (c *MultiChannel) SendChatAction(ctx context.Context, msg OutgoingMessage, 
 
 // OneBotBinding 返回负责 OneBot 的那条绑定。
 //
-// 「哪台机器人是 OneBot」和「当前激活的是哪台」是两件事。反连监听器是进程内共享的
-// 一个实例，OneBot 和 Telegram 可以同时跑；激活 Telegram 那台之后，OneBot 连接照常
-// 收消息，但它属于哪台机器人不该跟着激活项走。
+// 反连监听器是进程内共享的一个实例，OneBot 和 Telegram 可以同时跑；OneBot 连接收到的
+// 消息属于哪台机器人，由这条绑定决定。
 func (c *MultiChannel) OneBotBinding() (ChannelBinding, bool) {
 	if c == nil {
 		return ChannelBinding{}, false
@@ -324,4 +323,31 @@ func (c *MultiChannel) connectionGroups() [][]ChannelBinding {
 		}
 	}
 	return groups
+}
+
+// connectionEventTargets 决定复用连接上的一个事件交给哪几台机器人。
+//
+// 群里的消息交给每一台，各自按人设和群配置决定回不回。私聊不行：对方看到的是同一个
+// 账号，几台都回就是同一个账号连回好几遍，所以私聊、私聊里的通知和好友请求只交给
+// 连接的来源机器人；来源停用时交给第一台启用的复用机器人。
+func connectionEventTargets(group []ChannelBinding, event MessageEvent) []ChannelBinding {
+	if len(group) <= 1 || !privateScopeEvent(event) {
+		return group
+	}
+	for _, binding := range group {
+		if binding.ConnectionID != "" && binding.ProfileID == binding.ConnectionID {
+			return []ChannelBinding{binding}
+		}
+	}
+	return group[:1]
+}
+
+func privateScopeEvent(event MessageEvent) bool {
+	if event.Kind == EventKindPrivate {
+		return true
+	}
+	if event.Kind == EventKindGroup {
+		return false
+	}
+	return strings.TrimSpace(event.GroupID) == "" && strings.TrimSpace(event.GuildID) == ""
 }

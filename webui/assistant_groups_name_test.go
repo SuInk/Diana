@@ -38,7 +38,6 @@ func newGroupNameHandler(runtime BotRuntime) *BotHandler {
 	base.Platform = "telegram"
 	store := NewMemoryBotProfileStore(base)
 	_ = store.SaveProfiles(assistant.ProfileSet{
-		ActiveID: "tg-profile",
 		Profiles: []assistant.BotConfig{base},
 	})
 	return &BotHandler{
@@ -99,7 +98,6 @@ func TestResolveGroupNameSkipsOneBotProfiles(t *testing.T) {
 	telegram.Platform = "telegram"
 	store := NewMemoryBotProfileStore(onebot)
 	_ = store.SaveProfiles(assistant.ProfileSet{
-		ActiveID: "qq-profile",
 		Profiles: []assistant.BotConfig{onebot, telegram},
 	})
 	handler := &BotHandler{

@@ -23,7 +23,6 @@ func TestOneBotHistoryIdentityIgnoresActiveTelegramProfile(t *testing.T) {
 			{ProfileID: "tg", Platform: PlatformTelegram, Channel: telegram},
 		}), NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetProfiles(ProfileSet{
-		ActiveID: "tg",
 		Profiles: []BotConfig{
 			{ID: "qq", Platform: PlatformOneBotV11, BotAccount: "10000001", Enabled: true},
 			{ID: "tg", Platform: PlatformTelegram, BotAccount: "8100000001", Enabled: true},

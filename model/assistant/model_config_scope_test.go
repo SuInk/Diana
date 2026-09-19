@@ -43,7 +43,7 @@ func modelSwitchTestRuntime(t *testing.T) (*Runtime, *scopedRoleTestSaver, *stub
 	b := BotConfig{ID: "b", OwnerID: "22", ModelRoles: map[string]ModelRole{"chat": {ProfileID: "one", Model: "shared"}, "vision": {ProfileID: "one", Model: "shared"}, "intent": {ProfileID: "one", Model: "shared"}, "image": {ProfileID: "one", Model: "shared"}}}.WithDefaults()
 	saver := &scopedRoleTestSaver{configs: map[string]BotConfig{"a": a, "b": b}}
 	r := NewRuntime(a, nilChannel{}, NewPluginManager(), store, nil, saver, nil)
-	r.SetProfiles(ProfileSet{ActiveID: "a", Profiles: []BotConfig{a, b}})
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{a, b}})
 	r.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "shared"}, {ID: "other"}}, nil
 	})
@@ -64,8 +64,8 @@ func TestModelSwitchTargetsSenderBotAndSpecificProvider(t *testing.T) {
 		if _, err := tool.Run(context.Background(), map[string]any{"role": role, "provider_id": "two", "model": "other"}); err != nil {
 			t.Fatal(err)
 		}
-		if r.Config().ID != "a" || r.Config().ModelRoles["chat"].ProfileID != "one" {
-			t.Fatal("changed active robot")
+		if r.ProfileConfig("a").ModelRoles["chat"].ProfileID != "one" {
+			t.Fatal("changed another robot")
 		}
 		if saver.configs["b"].ModelRoles[role].ProfileID != "two" || r.effectiveConfigForEvent(event).ModelRoles[role].Model != "other" {
 			t.Fatal("target robot binding not saved or applied")

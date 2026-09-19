@@ -22,7 +22,7 @@ func TestScopedModelRolePersistencePreservesActiveAndOtherConfig(t *testing.T) {
 	}
 	a := assistant.BotConfig{ID: "a", OwnerID: "11"}
 	b := assistant.BotConfig{ID: "b", OwnerID: "22", SystemPrompt: "keep this", ModelRoles: map[string]assistant.ModelRole{"vision": {ProfileID: "one", Model: "vision"}}}
-	if err := store.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{a, b}}); err != nil {
+	if err := store.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{a, b}}); err != nil {
 		t.Fatal(err)
 	}
 	persist := NewRuntimePersistor(store)
@@ -33,7 +33,7 @@ func TestScopedModelRolePersistencePreservesActiveAndOtherConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.ActiveID != "a" || saved.Profiles[1].SystemPrompt != "keep this" || saved.Profiles[1].ModelRoles["vision"].Model != "vision" || saved.Profiles[1].ModelRoles["chat"].ProfileID != "two" {
+	if saved.Profiles[1].SystemPrompt != "keep this" || saved.Profiles[1].ModelRoles["vision"].Model != "vision" || saved.Profiles[1].ModelRoles["chat"].ProfileID != "two" {
 		t.Fatal("scoped save changed unrelated configuration")
 	}
 	if err := db.Close(); err != nil {
@@ -52,7 +52,7 @@ func TestModelRoleStoreMergesLatestConfigurationAndRechecksOwner(t *testing.T) {
 	latest := expected
 	latest.SystemPrompt = "new persona"
 	latest.ModelRoles = map[string]assistant.ModelRole{"vision": {ProfileID: "vision", Model: "vision-model"}}
-	set := assistant.ProfileSet{ActiveID: "bot", Profiles: []assistant.BotConfig{latest}}
+	set := assistant.ProfileSet{Profiles: []assistant.BotConfig{latest}}
 	_, saved, err := updateStoredModelRole(set, expected, "chat", assistant.ModelRole{ProfileID: "two", Model: "new"})
 	if err != nil || saved.SystemPrompt != "new persona" || saved.ModelRoles["vision"].Model != "vision-model" {
 		t.Fatalf("latest settings overwritten: %+v %v", saved, err)

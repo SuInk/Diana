@@ -138,7 +138,6 @@ export interface BotProfileConfig {
   name?: string;
   platform?: string;
   avatar_url?: string;
-  active_profile_id?: string;
   profiles?: BotProfileConfig[];
   /** 跨机器人的消息互通链路，一条链路连两个会话。 */
   message_relays?: MessageRelayPair[];
@@ -722,16 +721,16 @@ export interface BotChannelStatus {
 
 export interface BotStatus {
   running: boolean;
-  config: BotProfileConfig;
   channel: BotChannelStatus;
   channels?: BotChannelStatus[];
-  nonebot_bridge: {
+  /** 各机器人自己的 NoneBot 桥接状态，按机器人 ID 索引；没开桥接的不出现。 */
+  nonebot_bridges?: Record<string, {
     enabled: boolean;
     connected: boolean;
     endpoint?: string;
     last_error?: string;
     updated_at: string;
-  };
+  }>;
   plugins: PluginState[];
   recent_events?: BotEvent[];
   active_workers: number;
@@ -1248,13 +1247,6 @@ export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfi
   });
 }
 
-export function activateBotProfile(id: string): Promise<BotProfileConfig> {
-  return requestJSON<BotProfileConfig>("/api/assistant/config/activate", {
-    method: "POST",
-    body: JSON.stringify({ id })
-  });
-}
-
 export function cloneBotProfile(id: string): Promise<BotProfileConfig> {
   return requestJSON<BotProfileConfig>("/api/assistant/config/clone", {
     method: "POST",
@@ -1370,6 +1362,8 @@ export interface RepoPluginSource {
   owner: string;
   repo: string;
   ref?: string;
+  /** 实际安装的提交 SHA；ref 是分支或 tag 时会移动，commit 不会。 */
+  commit?: string;
   version: string;
   url: string;
   installed_at?: string;
@@ -1378,6 +1372,8 @@ export interface RepoPluginSource {
 /** 粘贴 GitHub 链接后的安装预览：确认框据此渲染权限、设置与风险。 */
 export interface RepoPluginPreview {
   source: RepoPluginSourceRef;
+  /** 预览读到的提交；安装时原样带回，仓库在中间有新提交会被拒绝。 */
+  commit: string;
   manifest: PluginManifest;
   permissions: RepoPluginPermission[];
   files: string[];
@@ -1391,17 +1387,17 @@ export function previewRepoPlugin(url: string): Promise<RepoPluginPreview> {
   });
 }
 
-export function installRepoPlugin(url: string, acceptRisk: boolean): Promise<PluginState> {
+export function installRepoPlugin(url: string, acceptRisk: boolean, commit: string): Promise<PluginState> {
   return requestJSON<PluginState>("/api/assistant/plugins/repo/install", {
     method: "POST",
-    body: JSON.stringify({ url, accept_risk: acceptRisk })
+    body: JSON.stringify({ url, accept_risk: acceptRisk, commit })
   });
 }
 
-export function updateRepoPlugin(id: string, acceptRisk: boolean): Promise<PluginState> {
+export function updateRepoPlugin(id: string, acceptRisk: boolean, commit = ""): Promise<PluginState> {
   return requestJSON<PluginState>(`/api/assistant/plugins/repo/update/${encodeURIComponent(id)}`, {
     method: "POST",
-    body: JSON.stringify({ url: "", accept_risk: acceptRisk })
+    body: JSON.stringify({ url: "", accept_risk: acceptRisk, commit })
   });
 }
 

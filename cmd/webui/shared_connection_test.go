@@ -18,7 +18,7 @@ func TestFactorySharesOneBotConnectionRegardlessOfOrderAndSourceEnabled(t *testi
 				child.ID, child.Enabled, child.ConnectionProfileID = "child", true, source.ID
 				for _, profiles := range [][]assistant.BotConfig{{child, source}, {source, child}} {
 					server := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
-					channel := newBotChannelSetFactory(server, &forwardWSOriginTracker{})(assistant.ProfileSet{ActiveID: child.ID, Profiles: profiles}).(*assistant.MultiChannel)
+					channel := newBotChannelSetFactory(server, &forwardWSOriginTracker{})(assistant.ProfileSet{Profiles: profiles}).(*assistant.MultiChannel)
 					want := 1
 					if sourceEnabled {
 						want = 2

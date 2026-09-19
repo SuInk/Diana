@@ -70,6 +70,40 @@ type InboundConcurrency struct {
 }
 
 // inboundConcurrencyForConfig 把配置翻译成队列认识的形状。
+// inboundConcurrency 是共用入站队列的并发上限，取各台启用机器人里最大的设置。
+func (r *Runtime) inboundConcurrency() InboundConcurrency {
+	r.mu.RLock()
+	enabled := r.enabledProfilesLocked()
+	r.mu.RUnlock()
+	limits := inboundConcurrencyForConfig(DefaultBotConfig())
+	for i, profile := range enabled {
+		next := inboundConcurrencyForConfig(profile)
+		if i == 0 {
+			limits = next
+			continue
+		}
+		limits.Group = max(limits.Group, next.Group)
+		limits.Private = max(limits.Private, next.Private)
+	}
+	return limits
+}
+
+// historyBackfillProfile 返回负责 OneBot 历史回填的那台机器人的配置。
+func (r *Runtime) historyBackfillProfile() BotConfig {
+	r.mu.RLock()
+	channel := r.channel
+	r.mu.RUnlock()
+	if multi, ok := channel.(*MultiChannel); ok {
+		if binding, found := multi.OneBotBinding(); found {
+			return r.profileConfig(binding.ProfileID)
+		}
+	}
+	if profile, err := r.soleOneBotProfile(); err == nil {
+		return profile
+	}
+	return r.profileConfig("")
+}
+
 func inboundConcurrencyForConfig(cfg BotConfig) InboundConcurrency {
 	limits := InboundConcurrency{Group: cfg.InboundGroupConcurrency, Private: cfg.InboundPrivateConcurrency}
 	if limits.Group <= 0 {
@@ -489,7 +523,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 		for r.inboundProcessingReady() {
 			claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			// 每轮重读配置：改并发不该要重启。
-			item, ok, err := store.ClaimNextInboundEvent(claimCtx, leaseOwner, time.Now().Add(inboundLeaseDuration), inboundConcurrencyForConfig(r.Config()))
+			item, ok, err := store.ClaimNextInboundEvent(claimCtx, leaseOwner, time.Now().Add(inboundLeaseDuration), r.inboundConcurrency())
 			cancel()
 			if err != nil {
 				if ctx.Err() == nil {
@@ -900,7 +934,6 @@ func inboundRetryDelay(attempts int) time.Duration {
 func (r *Runtime) channelStatus() ChannelStatus {
 	r.mu.RLock()
 	channel := r.channel
-	currentProfileID := r.cfg.ID
 	r.mu.RUnlock()
 	if channel == nil {
 		return ChannelStatus{}
@@ -913,9 +946,6 @@ func (r *Runtime) channelStatus() ChannelStatus {
 			}
 			if fallback.Platform == "" {
 				fallback = status
-			}
-			if status.ProfileID == currentProfileID {
-				return status
 			}
 		}
 		if fallback.Platform != "" {
@@ -1201,7 +1231,7 @@ func (r *Runtime) backfillInboundHistorySessions(ctx context.Context, store Inbo
 	}
 	jobs := make(chan HistorySession, len(ordered))
 	results := make(chan historyFetchResult, len(ordered))
-	botAccount := strings.TrimSpace(r.Config().BotAccount)
+	botAccount := r.oneBotBotAccount()
 	for _, session := range ordered {
 		if session.Kind != EventKindPrivate || session.ID != botAccount {
 			jobs <- session
@@ -1367,7 +1397,7 @@ func (r *Runtime) fetchHistorySince(ctx context.Context, session HistorySession)
 	}
 
 	eventsByID := map[string]MessageEvent{}
-	messageLimit := r.Config().WithDefaults().HistoryBackfillMessageLimit
+	messageLimit := r.historyBackfillProfile().HistoryBackfillMessageLimit
 	cursor := ""
 	seenCursors := map[string]struct{}{}
 	for {
@@ -1520,9 +1550,8 @@ func (r *Runtime) historyEventFromData(session HistorySession, data map[string]a
 		normalized["group_id"] = session.ID
 	}
 	if strings.TrimSpace(stringFromAny(normalized["self_id"])) == "" {
-		// 历史回填拉的是 OneBot 的消息，self_id 要用 OneBot 那台的账号。
-		// 用 r.Config().BotAccount 的话，激活的是 Telegram 那台时补进去的是个
-		// Telegram 账号，这批 QQ 消息就全认错了主人。
+		// 历史回填拉的是 OneBot 的消息，self_id 要用 OneBot 那台的账号；
+		// 用了 Telegram 那台的账号，这批 QQ 消息就全认错了主人。
 		normalized["self_id"] = r.oneBotBotAccount()
 	}
 	payload, err := json.Marshal(normalized)
@@ -1537,8 +1566,7 @@ func (r *Runtime) historyEventFromData(session HistorySession, data map[string]a
 	if event.Kind == "" {
 		return MessageEvent{}, false
 	}
-	// 这批消息是从 OneBot 的历史接口拉回来的，身份必须绑到 OneBot 那台机器人，
-	// 不能跟着「当前激活配置」走。
+	// 这批消息是从 OneBot 的历史接口拉回来的，身份必须绑到 OneBot 那台机器人。
 	event = r.bindInboundEventIdentityForPlatform(event, PlatformOneBotV11)
 	if event.MessageSeq == "" {
 		event.MessageSeq = firstNonEmpty(stringFromAny(data["message_seq"]), stringFromAny(data["real_id"]))

@@ -23,8 +23,8 @@ func TestPluginProfileSettingsHTTPAndPersistence(t *testing.T) {
 	m := assistant.NewDefaultPluginManager()
 	r := assistant.NewRuntime(assistant.BotConfig{ID: "a"}, fakeChannel{}, m, nil, nil, nil, nil)
 	h := NewBotHandler(ctx, r)
-	profiles := NewMemoryBotProfileStore(r.Config())
-	if err := profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{{ID: "a", Platform: assistant.PlatformOneBotV11}, {ID: "b", Platform: assistant.PlatformTelegram}}}); err != nil {
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	if err := profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "a", Platform: assistant.PlatformOneBotV11}, {ID: "b", Platform: assistant.PlatformTelegram}}}); err != nil {
 		t.Fatal(err)
 	}
 	h.SetProfileStore(profiles)
@@ -109,13 +109,13 @@ func TestGroupAdminSessionBindsRobotProfile(t *testing.T) {
 	ctx := context.Background()
 	r := assistant.NewRuntime(assistant.BotConfig{ID: "a"}, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	h := NewBotHandler(ctx, r)
-	profiles := NewMemoryBotProfileStore(r.Config())
-	profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{{ID: "a"}, {ID: "b"}}})
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "a"}, {ID: "b"}}})
 	h.SetProfileStore(profiles)
 	store := NewMemoryBotGroupConfigStore()
 	h.SetGroupConfigStore(store)
-	store.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "a", GroupID: "100", SystemPrompt: "a only"}, r.Config())
-	store.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "b", GroupID: "100", SystemPrompt: "b only"}, r.Config())
+	store.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "a", GroupID: "100", SystemPrompt: "a only"}, r.ProfileConfig(""))
+	store.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "b", GroupID: "100", SystemPrompt: "b only"}, r.ProfileConfig(""))
 	code, _, err := h.groupAdmin.CreateChallenge("100", "200", "b")
 	if err != nil {
 		t.Fatal(err)
@@ -170,8 +170,8 @@ func TestGroupAdminVerificationAndCodeUseSelectedBot(t *testing.T) {
 	channel := assistant.NewMultiChannel([]assistant.ChannelBinding{{ProfileID: "a", Platform: assistant.PlatformOneBotV11, Channel: a}, {ProfileID: "b", Platform: assistant.PlatformOneBotV11, Channel: b}})
 	r := assistant.NewRuntime(assistant.BotConfig{ID: "a", Platform: assistant.PlatformOneBotV11}, channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	h := NewBotHandler(context.Background(), r)
-	profiles := NewMemoryBotProfileStore(r.Config())
-	if err := profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{{ID: "a", Platform: assistant.PlatformOneBotV11}, {ID: "b", Platform: assistant.PlatformOneBotV11}}}); err != nil {
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	if err := profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "a", Platform: assistant.PlatformOneBotV11}, {ID: "b", Platform: assistant.PlatformOneBotV11}}}); err != nil {
 		t.Fatal(err)
 	}
 	h.SetProfileStore(profiles)

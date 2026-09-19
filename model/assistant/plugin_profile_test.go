@@ -50,7 +50,7 @@ func TestPluginProfileSwitchIsolationAndRestore(t *testing.T) {
 func TestRuntimePluginSwitchUsesEventProfileAndGroupOverride(t *testing.T) {
 	m := NewDefaultPluginManager()
 	r := NewRuntime(BotConfig{ID: "qq-a"}, nilChannel{}, m, nil, nil, nil, nil)
-	r.SetProfiles(ProfileSet{ActiveID: "qq-a", Profiles: []BotConfig{
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{
 		{ID: "qq-a", Platform: PlatformOneBotV11},
 		{ID: "qq-b", Platform: PlatformOneBotV11},
 		{ID: "tg", Platform: PlatformTelegram},
@@ -62,7 +62,8 @@ func TestRuntimePluginSwitchUsesEventProfileAndGroupOverride(t *testing.T) {
 		for _, kind := range []EventKind{EventKindPrivate, EventKindGroup} {
 			event := MessageEvent{ProfileID: profile, Kind: kind, GroupID: "same-group"}
 			_, _, enabled := r.pluginWithSettingsForEvent(statusCommandPluginID, event)
-			if enabled != (profile == "qq-a" || profile == "") {
+			// 多台机器人时，没带机器人 ID 的事件不继承任何一台的插件开关。
+			if enabled != (profile == "qq-a") {
 				t.Fatalf("profile %q kind %q enabled = %v", profile, kind, enabled)
 			}
 			overrides := r.pluginOverridesForEvent(event)

@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -309,6 +310,9 @@ func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any)
 		if err := t.crossGroupSearchError(ctx); err != nil {
 			return dianaChatHistoryResult{}, err
 		}
+		if !newCrossGroupReadGuard(ctx, t).allows(ctx, groupID) {
+			return dianaChatHistoryResult{}, fmt.Errorf("你不在群 %s 里，不能读取那个群的记录", groupID)
+		}
 		scoped := *t
 		// 从私聊跳过去时事件类型也要跟着换成群：会话键由 GroupID 定，但往下读引用、
 		// 回复链时还会看事件类型，留着私聊类型就会按私聊会话去找。
@@ -517,11 +521,24 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			total = max(total, len(matched))
 		}
 	}
-	items := t.searchSnippets(ctx, matched, query)
 	label := "当前会话"
 	if crossGroup {
 		label = "同一机器人的所有群"
+		if guard := newCrossGroupReadGuard(ctx, t); !guard.owner {
+			kept := matched[:0:0]
+			for _, event := range matched {
+				if guard.allows(ctx, event.GroupID) {
+					kept = append(kept, event)
+				}
+			}
+			if dropped := len(matched) - len(kept); dropped > 0 {
+				total = max(len(kept), total-dropped)
+			}
+			matched = kept
+			label = "你所在的各个群"
+		}
 	}
+	items := t.searchSnippets(ctx, matched, query)
 	result := dianaChatHistoryResult{
 		OK: true, Action: "search", Query: query, Order: order, Items: items, Total: total,
 		Message: "已在" + label + "内按指定时间顺序进行关键词检索，返回精简命中；图片仅保留相关片段。",
@@ -860,13 +877,49 @@ func (t *dianaChatHistoryTool) crossGroupSearchError(ctx context.Context) error 
 	return fmt.Errorf("当前会话类型不支持检索其他群")
 }
 
+// crossGroupReadGuard 决定跨群检索能读哪些群。
+//
+// 检索范围是这个机器人所在的全部群。主人本来就能看全部配置和记录，不受限制；其他人
+// 只能读自己也在的群，否则群成员就能翻自己不在的群。成员身份用群成员接口核实，
+// 和跨群上下文自动带入时核对原发言者是同一个口径。
+type crossGroupReadGuard struct {
+	tool    *dianaChatHistoryTool
+	owner   bool
+	checked map[string]bool
+}
+
+func newCrossGroupReadGuard(ctx context.Context, t *dianaChatHistoryTool) *crossGroupReadGuard {
+	return &crossGroupReadGuard{tool: t, owner: t.runtime.relationshipPolicy(ctx, t.event).Owner, checked: map[string]bool{}}
+}
+
+func (g *crossGroupReadGuard) allows(ctx context.Context, groupID string) bool {
+	groupID = strings.TrimSpace(groupID)
+	if g.owner || groupID == "" || (g.tool.event.Kind == EventKindGroup && groupID == strings.TrimSpace(g.tool.event.GroupID)) {
+		return true
+	}
+	if allowed, ok := g.checked[groupID]; ok {
+		return allowed
+	}
+	requester := strings.TrimSpace(g.tool.event.UserID)
+	allowed := false
+	if requester != "" {
+		member, err := g.tool.runtime.getGroupMemberInfoForEvent(ctx, g.tool.event, groupID, requester)
+		allowed = err == nil && strings.TrimSpace(member.UserID) == requester
+	}
+	g.checked[groupID] = allowed
+	return allowed
+}
+
 // aroundInOtherGroup 在这个机器人所在的其他群里找当前会话里没有的消息，找到就读它的
 // 前后文。located=false 表示没找到或没有跨群权限，调用方按原来的报错处理。
 func (t *dianaChatHistoryTool) aroundInOtherGroup(ctx context.Context, input map[string]any, messageID string) (dianaChatHistoryResult, bool, error) {
 	if t.crossGroupSearchError(ctx) != nil {
 		return dianaChatHistoryResult{}, false, nil
 	}
-	groups := t.runtime.groupsContainingMessage(ctx, t.event, messageID)
+	guard := newCrossGroupReadGuard(ctx, t)
+	groups := slices.DeleteFunc(t.runtime.groupsContainingMessage(ctx, t.event, messageID), func(groupID string) bool {
+		return !guard.allows(ctx, groupID)
+	})
 	switch len(groups) {
 	case 0:
 		return dianaChatHistoryResult{}, false, nil

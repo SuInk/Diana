@@ -26,12 +26,11 @@ test("saved bot and model mutations notify other pages; failed saves and model t
   const { api, changes } = apiHarness(async (url) => response({}, url.endsWith("/delete") ? 400 : 200));
   await api.saveBotProfileConfig({ enabled: true });
   await api.createBotProfileConfig({ enabled: true });
-  await api.activateBotProfile("bot2");
   await api.saveConfig({ model: "new-model" });
   await api.importConfigProfiles({ profiles: [] });
   await api.testLLM("hello");
   await assert.rejects(api.deleteConfigProfile("provider"));
-  assert.deepEqual(changes, ["bot", "bot", "bot", "llm", "llm"]);
+  assert.deepEqual(changes, ["bot", "bot", "llm", "llm"]);
 });
 
 test("a pre-save read cannot overwrite the post-save cache or be reused as a new read", async () => {

@@ -31,10 +31,11 @@ func (r *Runtime) modelConfigForEvent(event MessageEvent) (BotConfig, error) {
 		}
 		return BotConfig{}, fmt.Errorf("消息所属机器人 %q 不存在", id)
 	}
-	if len(r.profileConfigs) > 1 {
+	profile, ok := r.lookupProfileLocked("")
+	if !ok {
 		return BotConfig{}, fmt.Errorf("多机器人模式下缺少消息所属机器人，未修改配置")
 	}
-	return r.cfg.WithDefaults(), nil
+	return profile.WithDefaults(), nil
 }
 
 func (r *Runtime) modelRolesForContext(ctx context.Context) map[string]ModelRole {
@@ -46,7 +47,5 @@ func (r *Runtime) modelRolesForContext(ctx context.Context) map[string]ModelRole
 	if usage := llmUsageFromContext(ctx); usage != nil && usage.event.ProfileID != "" {
 		return normalizeModelRoles(r.effectiveConfigForEvent(usage.event).ModelRoles)
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return normalizeModelRoles(r.cfg.ModelRoles)
+	return normalizeModelRoles(r.profileConfig("").ModelRoles)
 }

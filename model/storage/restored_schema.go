@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -336,6 +337,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.migrateGroupConfigsToBotScope(); err != nil {
 		return err
 	}
+	if err := s.dropBotProfilesActiveID(); err != nil {
+		return err
+	}
 	if err := s.addMessageSearchExtraColumn(); err != nil {
 		return err
 	}
@@ -514,17 +518,37 @@ SELECT ?, user_id, display_name, favorability, message_count, memories, '', last
 	return tx.Commit()
 }
 
-// currentBotProfileID 读当前生效的机器人配置档 ID，供迁移决定历史数据的归属。
+// currentBotProfileID 读老库里那台机器人的 ID，供迁移决定历史数据的归属。
 // 读不到（全新库、或还没配过机器人）就归到空作用域，后续第一次写入会带上真实 ID。
 func (s *SQLiteStore) currentBotProfileID() string {
 	set, ok, err := s.LoadBotProfiles(context.Background())
 	if err != nil || !ok {
 		return ""
 	}
-	if current, found := set.Current(); found {
-		return strings.TrimSpace(current.ID)
+	// 需要这次迁移的都是多机器人之前的老库，那时只有一台机器人，就是列表里第一台。
+	if set = set.WithDefaults(); len(set.Profiles) > 0 {
+		return strings.TrimSpace(set.Profiles[0].ID)
 	}
 	return ""
+}
+
+// dropBotProfilesActiveID 删掉机器人配置集里遗留的 active_id。
+//
+// 配置集以前记着「当前激活的机器人」，运行时和控制台都已不再有这个概念。这个键
+// 留在库里没有任何作用，只会让人以为它还在生效，所以启动时直接删掉。只改这一个键，
+// 其余内容原样写回；已经没有这个键时不写库。
+func (s *SQLiteStore) dropBotProfilesActiveID() error {
+	ctx := context.Background()
+	var raw map[string]json.RawMessage
+	ok, err := s.loadJSON(ctx, botProfilesKey, &raw)
+	if err != nil || !ok {
+		return err
+	}
+	if _, exists := raw["active_id"]; !exists {
+		return nil
+	}
+	delete(raw, "active_id")
+	return s.saveJSON(ctx, botProfilesKey, raw)
 }
 
 // migrateGroupConfigsToBotScope 给已有群配置补上机器人归属。

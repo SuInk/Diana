@@ -36,7 +36,7 @@ func TestLegacySharedContextConfigPreservesProfilesAndHistory(t *testing.T) {
 		t.Fatalf("load legacy profiles: found=%v err=%v", found, err)
 	}
 	set = set.WithDefaults()
-	if set.ActiveID != "qq" || len(set.Profiles) != 2 || set.Profiles[0].ID != "qq" || set.Profiles[1].ID != "tg" {
+	if len(set.Profiles) != 2 || set.Profiles[0].ID != "qq" || set.Profiles[1].ID != "tg" {
 		t.Fatalf("legacy profile identity changed: %#v", set)
 	}
 	if err := store.SaveBotProfiles(ctx, set); err != nil {

@@ -27,7 +27,7 @@ func dianaAgentTools(t *testing.T) []agent.Tool {
 		newDianaScheduleTool(runtime, event),
 		newDianaRSSWatchTool(runtime, event),
 		newDianaLLMConfigTool(runtime, event),
-		newDianaConfigTool(runtime),
+		newDianaConfigTool(runtime, MessageEvent{}),
 		&dianaCapabilitiesTool{plugin: NewCapabilityKnowledgePlugin()},
 	}
 }

@@ -18,7 +18,7 @@ test("new bot loads independent defaults and enables both switches", async () =>
   const defaults = { enabled: true, owner_login_enabled: true, system_prompt: "default persona", onebot_access_token_configured: false };
   const context = vm.createContext({
     copiedFrom: { value: null }, busy: { value: false }, creating: { value: false }, platformPickerOpen: { value: true }, editorTab: { value: "model" }, page: { value: "list" },
-    profiles: { value: [{ id: "old", system_prompt: "old persona", owner_id: "123", onebot_access_token_configured: true }] }, activeProfileID: { value: "old" },
+    profiles: { value: [{ id: "old", system_prompt: "old persona", owner_id: "123", onebot_access_token_configured: true }] },
     getNewBotProfileDefaults: async platform => { assert.equal(platform, "telegram"); return defaults; },
     setForm: value => { form = value; }, toastError: message => assert.fail(message)
   });

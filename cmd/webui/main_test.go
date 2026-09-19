@@ -113,7 +113,7 @@ func TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile(t *testing.T) {
 	telegram.TelegramBotToken = "telegram-token"
 
 	// 激活档是 Telegram，OneBot 档只是启用着：监听器仍必须绑到 OneBot 档的 token。
-	set := assistant.ProfileSet{ActiveID: telegram.ID, Profiles: []assistant.BotConfig{telegram, oneBot}}
+	set := assistant.ProfileSet{Profiles: []assistant.BotConfig{telegram, oneBot}}
 	factory(set)
 	request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
@@ -128,7 +128,7 @@ func TestBotChannelSetFactoryBindsListenerToEnabledOneBotProfile(t *testing.T) {
 
 	// OneBot 档被停用后，监听器不能继续拿着旧 token 收连接。
 	oneBot.Enabled = false
-	factory(assistant.ProfileSet{ActiveID: telegram.ID, Profiles: []assistant.BotConfig{telegram, oneBot}})
+	factory(assistant.ProfileSet{Profiles: []assistant.BotConfig{telegram, oneBot}})
 	if server.Status().AccessTokenConfigured {
 		t.Fatal("disabled OneBot profile must clear the listener token")
 	}
@@ -301,7 +301,7 @@ func TestOneBotFactorySelectsTransport(t *testing.T) {
 		cfg.OneBotAccessToken = mode + "-token"
 		profiles = append(profiles, cfg)
 	}
-	channel := factory(assistant.ProfileSet{ActiveID: "forward_ws", Profiles: profiles})
+	channel := factory(assistant.ProfileSet{Profiles: profiles})
 	statuses := channel.(*assistant.MultiChannel).ChannelStatuses()
 	if len(statuses) != 3 {
 		t.Fatalf("channels=%+v", statuses)
@@ -320,7 +320,7 @@ func TestOneBotFactorySelectsTransport(t *testing.T) {
 	}
 	// Disabling HTTP must erase its callback credential even when WS remains.
 	profiles[1].Enabled = false
-	factory(assistant.ProfileSet{ActiveID: "forward_ws", Profiles: profiles})
+	factory(assistant.ProfileSet{Profiles: profiles})
 	w := httptest.NewRecorder()
 	httpChannel.ServeHTTP(w, httptest.NewRequest("POST", "/onebot/v11/http", nil))
 	if w.Code != http.StatusUnauthorized {

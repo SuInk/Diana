@@ -44,9 +44,9 @@ func TestCrossGroupSemanticRecallAndFallback(t *testing.T) {
 	store := &semanticFakeStore{semantic: []MessageEvent{crossGroupTestEvent(10, "other", "author", "semantic", "正式开放安排在周五")}}
 	embeds := 0
 	r := newSemanticRuntime(t, true, store, &embeds)
-	r.cfg.CrossGroupMemoryEnabled = boolPointer(true)
+	mutateTestProfile(r, func(c *BotConfig) { c.CrossGroupMemoryEnabled = boolPointer(true) })
 	r.channel = &crossGroupMembershipChannel{allowed: map[string]bool{"current|author": true}}
-	r.cfg.DebugModeEnabled = true
+	mutateTestProfile(r, func(c *BotConfig) { c.DebugModeEnabled = true })
 	logs := &captureAppLogs{}
 	r.SetAppLogWriter(logs)
 	current := crossGroupTestEvent(180*86400, "current", "requester", "query", "什么时候上线")
@@ -77,7 +77,7 @@ func TestCrossGroupSemanticRecallAndFallback(t *testing.T) {
 func TestCrossGroupSemanticHitsStillRequireMembership(t *testing.T) {
 	store := &semanticFakeStore{semantic: []MessageEvent{crossGroupTestEvent(10, "other", "stranger", "semantic", "正式开放安排在周五")}}
 	r := newSemanticRuntime(t, true, store, nil)
-	r.cfg.CrossGroupMemoryEnabled = boolPointer(true)
+	mutateTestProfile(r, func(c *BotConfig) { c.CrossGroupMemoryEnabled = boolPointer(true) })
 	r.channel = &crossGroupMembershipChannel{}
 	if got := r.crossGroupContextEvents(crossGroupTestEvent(100, "current", "requester", "query", "什么时候上线"), store); len(got) != 0 {
 		t.Fatalf("semantic recall bypassed membership: %v", got)

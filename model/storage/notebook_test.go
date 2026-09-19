@@ -284,7 +284,6 @@ func TestNotebookGlobalScopeMigratesToCurrentBot(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 	if err := store.SaveBotProfiles(ctx, assistant.ProfileSet{
-		ActiveID: "bot-onebot",
 		Profiles: []assistant.BotConfig{{ID: "bot-onebot", Name: "OneBot"}, {ID: "bot-telegram", Name: "Telegram"}},
 	}); err != nil {
 		t.Fatal(err)

@@ -25,24 +25,20 @@ import (
 type BotRuntime interface {
 	Start(context.Context) error
 	Stop() error
-	UpdateConfig(context.Context, assistant.BotConfig, assistant.Channel) error
-	Config() assistant.BotConfig
+	// ApplyProfiles 换上整套机器人配置；channel 为 nil 表示只改行为配置、不重连。
+	ApplyProfiles(context.Context, assistant.ProfileSet, assistant.Channel) error
+	// ProfileConfig 取指定机器人的配置；ID 为空且只有一台时就是它。
+	ProfileConfig(string) assistant.BotConfig
+	ProfileConfigs() []assistant.BotConfig
 	Status() assistant.RuntimeStatus
 	CallOneBotAPI(context.Context, string, map[string]any) (map[string]any, error)
+	CallOneBotAPIForProfile(context.Context, string, string, map[string]any) (map[string]any, error)
 	SendGroupMessage(context.Context, string, string) (map[string]any, error)
 	Plugins() *assistant.PluginManager
 }
 
 type BotChannelFactory func(assistant.BotConfig) assistant.Channel
 type BotChannelSetFactory func(assistant.ProfileSet) assistant.Channel
-
-type profileAwareRuntime interface {
-	SetProfiles(assistant.ProfileSet)
-}
-
-type inPlaceConfigRuntime interface {
-	UpdateConfigInPlace(assistant.BotConfig) error
-}
 
 // groupInfoRuntime 让群管理页按群号问平台要这个群此刻的信息。做成可选接口而不是
 // 塞进 BotRuntime：只有 Telegram 这类「没有列出全部群的接口、但能按群号查」的平台
@@ -206,7 +202,7 @@ func NewBotHandlerWithFactory(ctx context.Context, runtime BotRuntime, factory B
 		ctx:                       ctx,
 		installResolverDependency: assistant.InstallResolverDependency,
 		// 没有显式持久化 store 时，至少保证本次进程内也能按配置集语义工作。
-		profiles:     NewMemoryBotProfileStore(runtime.Config()),
+		profiles:     NewMemoryBotProfileStoreFromSet(assistant.ProfileSet{Profiles: runtime.ProfileConfigs()}),
 		groupConfigs: NewMemoryBotGroupConfigStore(),
 		groupAdmin:   newGroupAdminVerifier(),
 	}
@@ -277,7 +273,6 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/new", h.createProfile)
 	router.GET(base+"/platforms", h.platforms)
 	router.POST(base+"/config", h.saveConfig)
-	router.POST(base+"/config/activate", h.activateProfile)
 	router.POST(base+"/config/clone", h.cloneProfile)
 	router.POST(base+"/config/delete", h.deleteProfile)
 	router.POST(base+"/config/message-relays", h.setMessageRelays)
@@ -363,10 +358,10 @@ func (h *BotHandler) platforms(c *gin.Context) {
 // include_secrets=true 再要一次,和 LLM API Key 那套保持一致。
 func (h *BotHandler) getConfig(c *gin.Context) {
 	if queryBool(c.Query("include_secrets")) {
-		c.JSON(http.StatusOK, assistant.PayloadFromProfileSetWithSecrets(h.profiles.Profiles()))
+		c.JSON(http.StatusOK, assistant.PayloadFromProfileSetWithSecrets(h.profiles.Profiles(), botProfileScope(c)))
 		return
 	}
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles()))
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(h.profiles.Profiles(), botProfileScope(c)))
 }
 
 // newProfileDefaults returns a fresh draft, never an existing profile or its secrets.
@@ -429,7 +424,6 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		// Creation cannot inherit credentials or overwrite an existing profile ID.
 		existing = assistant.DefaultBotConfig()
 		payload.ID = ""
-		payload.ActiveProfileID = ""
 		payload.Profiles = nil
 	}
 	cfg := assistant.ConfigFromPayload(payload, existing)
@@ -455,13 +449,12 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 
-	next := upsertBotProfileSet(set, payload, cfg)
-	current, ok := next.Current()
+	next, savedID := upsertBotProfileSet(set, payload, cfg)
+	current, ok := next.ConfigForProfile(savedID)
 	if !ok {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", fmt.Errorf("diana profile set is empty"), "", nil)
 		return
 	}
-	// 当前激活机器人配置发生变化时，运行时要同步切换并按需重启连接。
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(current), botLogMetadata(current))
 		return
@@ -473,37 +466,7 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.config.save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
-}
-
-// activateProfile 切换当前激活的 OneBot v11 机器人配置档。
-func (h *BotHandler) activateProfile(c *gin.Context) {
-	var payload assistant.ConfigPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", err, "", nil)
-		return
-	}
-	targetID := strings.TrimSpace(payload.ID)
-	if targetID == "" {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", fmt.Errorf("profile id is required"), "", nil)
-		return
-	}
-	next := h.profiles.Profiles().WithActive(targetID)
-	current, ok := next.Current()
-	if !ok || current.ID != targetID {
-		h.writeError(c, http.StatusNotFound, "assistant.profile.activate", fmt.Errorf("profile %q not found", targetID), targetID, nil)
-		return
-	}
-	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.activate", err, botLogTarget(current), botLogMetadata(current))
-		return
-	}
-	if err := h.profiles.SaveProfiles(next); err != nil {
-		h.writeError(c, http.StatusInternalServerError, "assistant.profile.activate", err, botLogTarget(current), botLogMetadata(current))
-		return
-	}
-	recordRequestOperation(c, h.logs, "assistant.profile.activate", "OneBot v11 机器人配置已切换", targetID, botLogMetadata(current))
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, savedID))
 }
 
 // cloneProfile 复制指定 OneBot v11 机器人配置档。
@@ -516,7 +479,8 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 	sourceID := strings.TrimSpace(payload.ID)
 	set := h.profiles.Profiles()
 	if sourceID == "" {
-		sourceID = set.ActiveID
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("profile id is required"), "", nil)
+		return
 	}
 	for _, profile := range set.Profiles {
 		if profile.ID != sourceID {
@@ -528,8 +492,8 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 		// A cloned credential must never start a second poller/socket until the
 		// administrator explicitly enables it.
 		cloned.Enabled = false
-		next := upsertBotProfileSet(set, assistant.ConfigPayload{Name: cloned.Name}, cloned)
-		current, ok := next.Current()
+		next, clonedID := upsertBotProfileSet(set, assistant.ConfigPayload{Name: cloned.Name}, cloned)
+		current, ok := next.ConfigForProfile(clonedID)
 		if !ok {
 			h.writeError(c, http.StatusBadRequest, "assistant.profile.clone", fmt.Errorf("diana profile set is empty"), "", nil)
 			return
@@ -543,7 +507,7 @@ func (h *BotHandler) cloneProfile(c *gin.Context) {
 			return
 		}
 		recordRequestOperation(c, h.logs, "assistant.profile.clone", "OneBot v11 机器人配置已复制", sourceID, botLogMetadata(profile))
-		c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+		c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, clonedID))
 		return
 	}
 	h.writeError(c, http.StatusNotFound, "assistant.profile.clone", fmt.Errorf("profile %q not found", sourceID), sourceID, nil)
@@ -571,13 +535,8 @@ func (h *BotHandler) deleteProfile(c *gin.Context) {
 		h.writeError(c, http.StatusNotFound, "assistant.profile.delete", fmt.Errorf("profile %q not found", targetID), targetID, nil)
 		return
 	}
-	current, ok := next.Current()
-	if !ok {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", fmt.Errorf("diana profile set is empty"), "", nil)
-		return
-	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
-		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, botLogTarget(current), botLogMetadata(current))
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.delete", err, targetID, map[string]any{"profile_id": targetID})
 		return
 	}
 	if err := h.profiles.SaveProfiles(next); err != nil {
@@ -585,7 +544,7 @@ func (h *BotHandler) deleteProfile(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.profile.delete", "OneBot v11 机器人配置已删除", targetID, map[string]any{"profile_id": targetID})
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, ""))
 }
 
 type messageRelayPayload struct {
@@ -612,7 +571,7 @@ func (h *BotHandler) setMessageRelays(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.message_relays.update", "消息互通链路已更新", "", map[string]any{"relays": len(next.MessageRelays)})
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, botProfileScope(c)))
 }
 
 type profileEnabledPayload struct {
@@ -653,7 +612,7 @@ func (h *BotHandler) setProfileEnabled(c *gin.Context) {
 		status = "机器人已启用"
 	}
 	recordRequestOperation(c, h.logs, "assistant.profile.enabled", status, current.ID, botLogMetadata(current))
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, current.ID))
 }
 
 // setAllProfilesEnabled 统一启用或停用全部机器人；卡片上的批量开关走这里，
@@ -688,7 +647,7 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 		status = "全部机器人已启用"
 	}
 	recordRequestOperation(c, h.logs, "assistant.profiles.enabled", status, "", map[string]any{"enabled": payload.Enabled})
-	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, botProfileScope(c)))
 }
 
 func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
@@ -696,29 +655,27 @@ func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 	if err := set.ValidateConnections(); err != nil {
 		return err
 	}
-	cfg, ok := set.RuntimeConfig()
-	if !ok {
+	if len(set.Profiles) == 0 {
 		return fmt.Errorf("assistant profile set is empty")
 	}
 	previous := h.profiles.Profiles().WithDefaults()
-	if runtime, ok := h.runtime.(profileAwareRuntime); ok {
-		runtime.SetProfiles(set)
+	if !profileSetRequiresReconnect(previous, set) {
+		return h.runtime.ApplyProfiles(h.ctx, set, nil)
 	}
-	if runtime, ok := h.runtime.(inPlaceConfigRuntime); ok && !profileSetRequiresReconnect(previous, set) {
-		return runtime.UpdateConfigInPlace(cfg)
-	}
-	// 只在没有配置集工厂时才退回单配置工厂。以前这里两个都调,单配置工厂造出来
-	// 的 channel 直接被丢弃,但它有副作用——OneBot 反连监听器是进程内共享的一个
-	// 实例,那次调用会用「当前激活配置」的 token 覆盖监听器,而当前激活的未必是
-	// OneBot 配置档。于是监听器拿着一个空的或别的档案的 token,连数据库里自己的
-	// token 都认不出来,握手一律 401。
-	var channel assistant.Channel
+	return h.runtime.ApplyProfiles(h.ctx, set, h.newChannelForSet(set))
+}
+
+// newChannelForSet 为整套机器人配置建连接。只在没有配置集工厂时退回单配置工厂：
+// 以前两个都调，单配置工厂造出来的 channel 直接被丢弃，但它有副作用——OneBot 反连
+// 监听器是进程内共享的一个实例，那次调用会用某一台的 token 覆盖监听器，握手一律 401。
+func (h *BotHandler) newChannelForSet(set assistant.ProfileSet) assistant.Channel {
 	if h.newChannelSet != nil {
-		channel = h.newChannelSet(set)
-	} else {
-		channel = h.newChannel(cfg)
+		return h.newChannelSet(set)
 	}
-	return h.runtime.UpdateConfig(h.ctx, cfg, channel)
+	if h.newChannel == nil || len(set.Profiles) == 0 {
+		return nil
+	}
+	return h.newChannel(set.Profiles[0])
 }
 
 type botTransportConfig struct {
@@ -739,12 +696,21 @@ type botTransportConfig struct {
 func profileSetRequiresReconnect(previous, next assistant.ProfileSet) bool {
 	previous = previous.WithDefaults()
 	next = next.WithDefaults()
-	previousRuntime, previousOK := previous.RuntimeConfig()
-	nextRuntime, nextOK := next.RuntimeConfig()
-	if previousOK != nextOK || (previousOK && previousRuntime.MaxBotConcurrency != nextRuntime.MaxBotConcurrency) {
+	// 处理流水线的并发上限取各台启用机器人里最大的，变了就要重建。
+	if maxEnabledConcurrency(previous) != maxEnabledConcurrency(next) {
 		return true
 	}
 	return !reflect.DeepEqual(enabledBotTransports(previous), enabledBotTransports(next))
+}
+
+func maxEnabledConcurrency(set assistant.ProfileSet) int {
+	limit := 0
+	for _, profile := range set.WithDefaults().Profiles {
+		if profile.Enabled {
+			limit = max(limit, profile.MaxBotConcurrency)
+		}
+	}
+	return limit
 }
 
 func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
@@ -793,20 +759,20 @@ func (h *BotHandler) status(c *gin.Context) {
 // start 处理启动 OneBot v11 机器人的请求。
 func (h *BotHandler) start(c *gin.Context) {
 	if err := h.runtime.Start(h.ctx); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.start", err, botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusBadRequest, "assistant.start", err, "", h.runtimeLogMetadata())
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.start", "OneBot v11 机器人已启动", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
+	recordRequestOperation(c, h.logs, "assistant.start", "机器人运行时已启动", "", h.runtimeLogMetadata())
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
 // stop 处理停止 OneBot v11 机器人的请求。
 func (h *BotHandler) stop(c *gin.Context) {
 	if err := h.runtime.Stop(); err != nil {
-		h.writeError(c, http.StatusBadRequest, "assistant.stop", err, botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusBadRequest, "assistant.stop", err, "", h.runtimeLogMetadata())
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.stop", "OneBot v11 机器人已停止", h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
+	recordRequestOperation(c, h.logs, "assistant.stop", "机器人运行时已停止", "", h.runtimeLogMetadata())
 	c.JSON(http.StatusOK, h.runtime.Status())
 }
 
@@ -814,7 +780,7 @@ func (h *BotHandler) stop(c *gin.Context) {
 func (h *BotHandler) requestBackfill(c *gin.Context) {
 	runtime, ok := h.runtime.(historyBackfillRuntime)
 	if !ok {
-		h.writeError(c, http.StatusNotImplemented, "assistant.backfill", fmt.Errorf("runtime does not support manual history backfill"), botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusNotImplemented, "assistant.backfill", fmt.Errorf("runtime does not support manual history backfill"), "", h.runtimeLogMetadata())
 		return
 	}
 	var payload struct {
@@ -827,10 +793,10 @@ func (h *BotHandler) requestBackfill(c *gin.Context) {
 		window = assistant.InboundReplayWindow
 	}
 	if err := runtime.RequestHistoryBackfill(window); err != nil {
-		h.writeError(c, http.StatusConflict, "assistant.backfill", err, botLogTarget(h.runtime.Config()), botLogMetadata(h.runtime.Config()))
+		h.writeError(c, http.StatusConflict, "assistant.backfill", err, "", h.runtimeLogMetadata())
 		return
 	}
-	recordRequestOperation(c, h.logs, "assistant.backfill", fmt.Sprintf("已触发手动回补，窗口 %s", window), h.runtime.Config().ID, botLogMetadata(h.runtime.Config()))
+	recordRequestOperation(c, h.logs, "assistant.backfill", fmt.Sprintf("已触发手动回补，窗口 %s", window), "", h.runtimeLogMetadata())
 	c.JSON(http.StatusOK, gin.H{"requested": true, "window_hours": window.Hours()})
 }
 
@@ -1206,25 +1172,21 @@ func oneBotMessageID(data map[string]any) string {
 	}
 }
 
-// existingBotProfileConfig 根据 payload 推断“编辑的是哪个机器人配置档”。
+// existingBotProfileConfig 找出 payload 编辑的是哪台机器人。老客户端不带 ID 时，
+// 只有一台机器人才能确定是它；多台时当作新配置，不替它猜。
 func existingBotProfileConfig(set assistant.ProfileSet, payload assistant.ConfigPayload) assistant.BotConfig {
-	targetID := strings.TrimSpace(payload.ID)
-	if targetID == "" {
-		targetID = strings.TrimSpace(payload.ActiveProfileID)
+	set = set.WithDefaults()
+	if profile, ok := set.ConfigForProfile(payload.ID); ok {
+		return profile.WithDefaults()
 	}
-	if targetID == "" {
-		targetID = strings.TrimSpace(set.ActiveID)
-	}
-	for _, profile := range set.WithDefaults().Profiles {
-		if profile.ID == targetID {
-			return profile.WithDefaults()
-		}
+	if strings.TrimSpace(payload.ID) == "" && len(set.Profiles) == 1 {
+		return set.Profiles[0].WithDefaults()
 	}
 	return assistant.DefaultBotConfig()
 }
 
-// upsertBotProfileSet 把当前表单保存为配置档，并让它成为新的激活机器人。
-func upsertBotProfileSet(set assistant.ProfileSet, payload assistant.ConfigPayload, cfg assistant.BotConfig) assistant.ProfileSet {
+// upsertBotProfileSet 把表单保存进配置集，返回新配置集和这台机器人的 ID。
+func upsertBotProfileSet(set assistant.ProfileSet, payload assistant.ConfigPayload, cfg assistant.BotConfig) (assistant.ProfileSet, string) {
 	set = set.WithDefaults()
 	targetID := strings.TrimSpace(payload.ID)
 	if targetID == "" {
@@ -1232,7 +1194,7 @@ func upsertBotProfileSet(set assistant.ProfileSet, payload assistant.ConfigPaylo
 	}
 	cfg = cfg.WithDefaults()
 	if targetID == "" {
-		targetID = assistant.NewProfileSet(cfg).ActiveID
+		targetID = assistant.NewProfileSet(cfg).Profiles[0].ID
 	}
 	cfg.ID = targetID
 	for i := range set.Profiles {
@@ -1240,12 +1202,22 @@ func upsertBotProfileSet(set assistant.ProfileSet, payload assistant.ConfigPaylo
 			continue
 		}
 		set.Profiles[i] = cfg
-		set.ActiveID = targetID
-		return set.WithDefaults()
+		return set.WithDefaults(), targetID
 	}
 	set.Profiles = append(set.Profiles, cfg)
-	set.ActiveID = targetID
-	return set.WithDefaults()
+	return set.WithDefaults(), targetID
+}
+
+// runtimeLogMetadata 描述整个运行时的操作（启停、回补）涉及哪些机器人：这些操作不属于
+// 某一台，日志里列出全部启用的那几台。
+func (h *BotHandler) runtimeLogMetadata() map[string]any {
+	var enabled []string
+	for _, profile := range h.runtime.ProfileConfigs() {
+		if profile.Enabled {
+			enabled = append(enabled, profile.ID)
+		}
+	}
+	return map[string]any{"enabled_profiles": enabled}
 }
 
 // botLogTarget 选择更适合日志索引的机器人配置目标。

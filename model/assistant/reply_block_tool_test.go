@@ -58,7 +58,7 @@ func newReplyBlockRuntime(botGate, groupGate *ReplyGate, memberRole string) (*Ru
 	}
 	saver := &replyBlockTestSaver{}
 	runtime := NewRuntime(base, channel, NewPluginManager(), nil, nil, saver, nil)
-	runtime.SetProfiles(ProfileSet{ActiveID: "bot-1", Profiles: []BotConfig{base}})
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{base}})
 	store := &testWritableGroupConfigStore{}
 	if groupGate != nil {
 		_, _ = store.SaveGroupConfig(GroupConfig{BotProfileID: "bot-1", GroupID: "g1", Enabled: true, EnabledSet: true, ReplyGate: groupGate}, base)
@@ -260,7 +260,7 @@ func TestReplyBlockBotScopeReportsOnlySavedState(t *testing.T) {
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "block", "scope": "bot", "user_id": "20002"}); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("保存失败却报了成功：%v", err)
 	}
-	if slices.Contains(saver.blocked, "20002") || runtime.Config().ReplyGate.IsBlocked("20002") {
+	if slices.Contains(saver.blocked, "20002") || runtime.ProfileConfig("bot-1").ReplyGate.IsBlocked("20002") {
 		t.Fatal("保存失败后名单仍被改了")
 	}
 }
@@ -272,7 +272,7 @@ func TestReplyBlockBotScopeReportsOnlySavedState(t *testing.T) {
 func TestReplyBlockToolReachesGroupAdmins(t *testing.T) {
 	runtime, _, _ := newReplyBlockRuntime(nil, nil, "owner")
 	event := replyBlockEvent("30001")
-	registry, err := runtime.newAgentRegistry(context.Background(), runtime.Config(), event,
+	registry, err := runtime.newAgentRegistry(context.Background(), runtime.ProfileConfig("bot-1"), event,
 		RelationshipPolicyFor(UserMemoryProfile{}, "10001", "30001"), newDianaReplyBlockTool(runtime, event))
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +310,7 @@ func TestBlockedUserIsDroppedBeforeScoring(t *testing.T) {
 		ReplyGate: &ReplyGate{BlockedUsers: []string{"20001"}},
 	}
 	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return probe, nil })
-	runtime.SetProfiles(ProfileSet{ActiveID: "bot-1", Profiles: []BotConfig{base}})
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{base}})
 
 	message := func(userID, messageID string) MessageEvent {
 		event := replyBlockEvent(userID)
