@@ -300,6 +300,14 @@
                 </div>
                 <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
                 </template>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.qq_typing_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">显示「对方正在输入」</span>
+                  </label>
+                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要 NapCat 等支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
+                </div>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
                 <SecretField
@@ -3362,6 +3370,7 @@ function setForm(config: BotProfileConfig): void {
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
+    qq_typing_enabled: config.qq_typing_enabled ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
