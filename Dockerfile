@@ -26,9 +26,9 @@ WORKDIR /app
 # bubblewrap 是 Agent 执行本地命令时的沙盒。装了它不代表一定能用——容器默认的
 # seccomp 或 AppArmor 策略常常禁掉非特权用户命名空间，运行时会实际试跑一次再决定
 # 用不用；但不装则连试的机会都没有，命令只能以主进程权限裸跑。
-RUN apk add --no-cache chromium font-noto-cjk fontconfig ffmpeg nodejs yt-dlp bubblewrap tesseract-ocr tesseract-ocr-data-chi_sim tesseract-ocr-data-eng \
-    && adduser -D -H -u 10001 diana \
-    && mkdir -p /app/data /app/logs \
+RUN apk add --no-cache chromium font-noto-cjk fontconfig ffmpeg nodejs npm git ca-certificates libgcc libstdc++ yt-dlp bubblewrap tesseract-ocr tesseract-ocr-data-chi_sim tesseract-ocr-data-eng \
+    && adduser -D -H -h /app/data/home -u 10001 diana \
+    && mkdir -p /app/data/home /app/logs \
     && chown -R diana:diana /app/data /app/logs
 FROM runtime-base AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
