@@ -288,6 +288,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/suink/diana
+          # latest 由下面的显式条目控制；默认的 latest=auto 会给每个标签构建都加上 latest。
+          flavor: latest=false
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel == 'release' }}
@@ -301,6 +303,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/suink/diana
+          # 必须关掉：suffix 只加在各条目上，自动生成的 latest 不带 -slim，
+          # slim 又在完整版之后推送，会把完整版的 latest 覆盖成 slim 镜像。
+          flavor: latest=false
           tags: |
             type=ref,event=tag,suffix=-slim
             type=raw,value=latest-slim,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel == 'release' }}
