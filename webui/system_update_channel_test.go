@@ -23,6 +23,8 @@ func TestUpdateChannelSelection(t *testing.T) {
    {"tag_name":"v9.0.0-alpha.1","prerelease":true},
    {"tag_name":"v1.2.0-rc.1"},
    {"tag_name":"v1.3.0-beta.1"},
+   {"tag_name":"v1.3.0-canary.4","prerelease":true},
+   {"tag_name":"v1.3.0-canary.12","prerelease":true},
    {"tag_name":"v9.0.0","prerelease":true}
   ]`))
 	}))
@@ -30,7 +32,7 @@ func TestUpdateChannelSelection(t *testing.T) {
 	h := NewSystemUpdateHandler(fakeSystemUpdater{})
 	h.githubAPIBase = server.URL
 	for _, tc := range []struct{ channel, want string }{
-		{"", "v1.1.0"}, {"release", "v1.1.0"}, {"beta", "v1.3.0-beta.1"},
+		{"", "v1.1.0"}, {"release", "v1.1.0"}, {"beta", "v1.3.0-beta.1"}, {"canary", "v1.3.0-canary.12"},
 	} {
 		h.policy.Channel = tc.channel
 		got, err := h.latestChannelRelease(context.Background(), "")
@@ -48,6 +50,11 @@ func TestPrereleaseVersionOrdering(t *testing.T) {
 		{"v1.2.0-beta.2", "v1.2.0-beta.10", true},
 		{"v1.2.0-beta.10", "v1.2.0-beta.2", false},
 		{"v1.2.0-beta.10", "v1.2.0-rc.1", true},
+		{"v1.2.0-beta.3", "v1.2.0-canary.1", true},
+		{"v1.2.0-canary.2", "v1.2.0-canary.10", true},
+		{"v1.2.0-canary.9", "v1.2.0-beta.9", false},
+		{"v1.2.0-canary.9", "v1.2.0-rc.1", true},
+		{"v1.2.0-canary.9", "v1.2.0", true},
 		{"v1.2.0-rc.1", "v1.2.0", true},
 		{"v1.2.0", "v1.2.0-rc.1", false},
 		{"v1.2.0-beta.1", "v1.1.9", false},
@@ -69,7 +76,7 @@ func TestChannelPolicyPersistenceAndValidation(t *testing.T) {
 	}
 	router := gin.New()
 	h.Register(router)
-	for _, channel := range []string{"beta", "release", "nightly"} {
+	for _, channel := range []string{"beta", "canary", "release", "nightly"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPut, "/api/system/update/policy", strings.NewReader(`{"channel":"`+channel+`","auto_download":true}`))
 		req.Header.Set("Content-Type", "application/json")

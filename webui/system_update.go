@@ -377,8 +377,8 @@ func (h *SystemUpdateHandler) savePolicy(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
-	if policy.Channel != "" && policy.Channel != "release" && policy.Channel != "beta" {
-		writeError(c, http.StatusBadRequest, errors.New("更新通道必须是 release 或 beta"))
+	if policy.Channel != "" && policy.Channel != "release" && policy.Channel != "beta" && policy.Channel != "canary" {
+		writeError(c, http.StatusBadRequest, errors.New("更新通道必须是 release、beta 或 canary"))
 		return
 	}
 	if !h.autoUpdateMu.TryLock() {
@@ -466,7 +466,7 @@ func (h *SystemUpdateHandler) saveGitHubToken(c *gin.Context) {
 }
 
 func normalizeUpdatePolicy(policy updater.UpdatePolicy) updater.UpdatePolicy {
-	if policy.Channel != "beta" {
+	if policy.Channel != "beta" && policy.Channel != "canary" {
 		policy.Channel = "release"
 	}
 	if policy.AutoInstall {
