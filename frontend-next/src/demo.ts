@@ -143,6 +143,10 @@ let plugins: PluginState[] = [
     installed: true, enabled: true
   },
   {
+    manifest: { id: "official.file-delivery", name: "文件交付", version: "0.1.0", description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown 等文本内容直接作为文件发到会话供下载，并可附带渲染预览图。", official: true, built_in: true, permissions: ["message:send", "file:send", "browser:render"], settings: [{ key: "max_file_bytes", label: "单个文件大小上限", type: "size", default: 1048576 }, { key: "preview", label: "默认附带预览图", type: "bool", default: true }, { key: "owner_only", label: "仅主人可用", type: "bool", default: false }] },
+    installed: true, enabled: true
+  },
+  {
     manifest: { id: "official.rss-watch", name: "RSS 订阅", version: "0.2.0", description: "按条件监控 RSS 或社交动态，一条订阅可同时盯多个账号或 Feed，判断后发送到指定群聊或私聊。", official: true, built_in: true, permissions: ["网络请求", "消息发送"], settings: [{ key: "default_interval_seconds", label: "默认检查周期", type: "number", default: 300, min: 30, max: 86400, unit: "秒" }] },
     installed: true, enabled: true
   },
