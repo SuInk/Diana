@@ -388,6 +388,8 @@ export interface PluginState {
   settings?: Record<string, unknown>;
   /** 凭据是否已配置；明文永远不会下发。 */
   secrets_configured?: Record<string, boolean>;
+  /** 第三方仓库插件的安装来源；有它才显示更新入口。 */
+  repo_source?: RepoPluginSource;
 }
 
 export interface RepositoryIssueCreateInput {
@@ -1334,6 +1336,66 @@ export function installPlugin(id: string): Promise<PluginState> {
 
 export function uninstallPlugin(id: string): Promise<PluginState> {
   return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/uninstall`, { method: "POST" });
+}
+
+export interface RepoPluginPermission {
+  id: string;
+  label: string;
+  /** 高敏感权限在安装确认框里置顶并加醒目标记。 */
+  sensitive?: boolean;
+}
+
+export interface RepoPluginRisk {
+  /** true 表示安装的是默认分支最新提交，内容与权限随时可能变化。 */
+  floating_ref?: boolean;
+  warnings?: string[];
+}
+
+export interface RepoPluginSourceRef {
+  owner: string;
+  repo: string;
+  ref?: string;
+}
+
+/** 第三方仓库插件的安装来源；只在从 GitHub 安装的插件上出现。 */
+export interface RepoPluginSource {
+  id: string;
+  owner: string;
+  repo: string;
+  ref?: string;
+  version: string;
+  url: string;
+  installed_at?: string;
+}
+
+/** 粘贴 GitHub 链接后的安装预览：确认框据此渲染权限、设置与风险。 */
+export interface RepoPluginPreview {
+  source: RepoPluginSourceRef;
+  manifest: PluginManifest;
+  permissions: RepoPluginPermission[];
+  files: string[];
+  risk: RepoPluginRisk;
+}
+
+export function previewRepoPlugin(url: string): Promise<RepoPluginPreview> {
+  return requestJSON<RepoPluginPreview>("/api/assistant/plugins/repo/preview", {
+    method: "POST",
+    body: JSON.stringify({ url })
+  });
+}
+
+export function installRepoPlugin(url: string, acceptRisk: boolean): Promise<PluginState> {
+  return requestJSON<PluginState>("/api/assistant/plugins/repo/install", {
+    method: "POST",
+    body: JSON.stringify({ url, accept_risk: acceptRisk })
+  });
+}
+
+export function updateRepoPlugin(id: string, acceptRisk: boolean): Promise<PluginState> {
+  return requestJSON<PluginState>(`/api/assistant/plugins/repo/update/${encodeURIComponent(id)}`, {
+    method: "POST",
+    body: JSON.stringify({ url: "", accept_risk: acceptRisk })
+  });
 }
 
 export function setPluginEnabled(id: string, enabled: boolean, profile = ""): Promise<PluginState> {
