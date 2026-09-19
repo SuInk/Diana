@@ -1,0 +1,6 @@
+# Optional source build: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  diana:
+    build: .
+    image: diana:local
+    pull_policy: build

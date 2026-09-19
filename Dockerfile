@@ -3,20 +3,22 @@
 # Copyright (c) 2025-now SuInk.
 # Licensed under the Limited Redistribution License in the repository root.
 
-FROM node:22-alpine AS frontend-next
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-next
 WORKDIR /src/frontend-next
 COPY frontend-next/package*.json ./
 RUN npm ci
 COPY frontend-next/ ./
 RUN npm run build
 
-FROM golang:1.26.6-alpine AS backend
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS backend
 ARG BUILD_VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o /out/diana-webui ./cmd/webui
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o /out/diana-webui ./cmd/webui
 
 FROM alpine:3.22 AS runtime-base
 WORKDIR /app
