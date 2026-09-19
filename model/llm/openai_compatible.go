@@ -169,6 +169,9 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 		Model: shared.ResponsesModel(req.Model),
 		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
 	}
+	if req.PromptCacheKey != "" {
+		params.PromptCacheKey = param.NewOpt(req.PromptCacheKey)
+	}
 	if system != "" {
 		params.Instructions = param.NewOpt(system)
 	}
@@ -632,6 +635,9 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 			OfInputItemList: input,
 		},
 	}
+	if req.PromptCacheKey != "" {
+		params.PromptCacheKey = param.NewOpt(req.PromptCacheKey)
+	}
 	if system != "" {
 		params.Instructions = param.NewOpt(system)
 	}
@@ -678,6 +684,7 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 }
 
 type openAIChatCompletionRequest struct {
+	PromptCacheKey    string                        `json:"prompt_cache_key,omitempty"`
 	StreamOptions     map[string]bool               `json:"stream_options,omitempty"`
 	Model             string                        `json:"model"`
 	Messages          []openAIChatCompletionMessage `json:"messages"`
@@ -741,6 +748,7 @@ type openAIChatCompletionInputAudio struct {
 // generateChatCompletion 使用 Chat Completions API 生成回复。
 func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
 	params := openAIChatCompletionRequest{
+		PromptCacheKey:  req.PromptCacheKey,
 		Model:           req.Model,
 		Messages:        openAIChatCompletionMessages(req.Messages, req.Tools),
 		Temperature:     req.Temperature,

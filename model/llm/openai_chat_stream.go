@@ -34,7 +34,7 @@ func (c *openAICompatibleClient) streamChatCompletion(ctx context.Context, req G
 	// Strict-schema rejection happens before any SSE output. Retry the same
 	// streaming request without strict schemas, never switch tool calls to JSON.
 	for attempt := 0; attempt < 2; attempt++ {
-		params := openAIChatCompletionRequest{Model: req.Model, Messages: openAIChatCompletionMessages(req.Messages, req.Tools), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Stream: true, Tools: openAIChatTools(req.Tools), ToolChoice: openAIChatToolChoice(req)}
+		params := openAIChatCompletionRequest{PromptCacheKey: req.PromptCacheKey, Model: req.Model, Messages: openAIChatCompletionMessages(req.Messages, req.Tools), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Stream: true, Tools: openAIChatTools(req.Tools), ToolChoice: openAIChatToolChoice(req)}
 		params.StreamOptions = map[string]bool{"include_usage": true}
 		if len(req.Tools) > 0 {
 			parallel := false
