@@ -295,6 +295,19 @@ jobs:
             type=raw,value=${{ needs.build-version.outputs.value }},enable=${{ needs.build-version.outputs.canary == 'true' }}
             type=sha
 
+      # slim 变体与完整版同名同 tag，统一加 -slim 后缀，例如 latest-slim / v0.8.126-slim。
+      - name: Docker metadata (slim)
+        id: meta-slim
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/suink/diana
+          tags: |
+            type=ref,event=tag,suffix=-slim
+            type=raw,value=latest-slim,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel == 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.channel }}-slim,enable=${{ (startsWith(github.ref, 'refs/tags/v') || needs.build-version.outputs.canary == 'true') && needs.build-version.outputs.channel != 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.value }}-slim,enable=${{ needs.build-version.outputs.canary == 'true' }}
+            type=sha,suffix=-slim
+
       - name: Build and publish Docker image
         uses: docker/build-push-action@v6
         with:
@@ -303,6 +316,18 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ needs.build-version.outputs.value }}
+
+      - name: Build and publish slim Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: runtime-slim
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-slim.outputs.tags }}
+          labels: ${{ steps.meta-slim.outputs.labels }}
           build-args: |
             BUILD_VERSION=${{ needs.build-version.outputs.value }}
 

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	dianaSubtaskToolName = "diana.subtask"
+	dianaSubtaskToolName = "subtask"
 	// maximumSubtaskCallsPerReply 限制单轮扇出规模。子调用是同步的，放开了会把一次
 	// 回复拖成一串串行往返；真正需要更大扇出的活属于后台 PluginTask，不是这里。
 	maximumSubtaskCallsPerReply = 4

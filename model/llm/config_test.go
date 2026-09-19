@@ -225,11 +225,11 @@ func TestValidateGenerateRequestAcceptsNativeToolCallWithoutText(t *testing.T) {
 				Role: RoleAssistant,
 				ToolCalls: []ToolCall{{
 					ID:        "call-1",
-					Name:      "diana.capabilities",
+					Name:      "capabilities",
 					Arguments: map[string]any{"query": "群聊 Agent 有哪些能力"},
 				}},
 			},
-			{Role: RoleTool, ToolCallID: "call-1", ToolName: "diana.capabilities", Content: `{"results":[]}`},
+			{Role: RoleTool, ToolCallID: "call-1", ToolName: "capabilities", Content: `{"results":[]}`},
 		},
 	}
 

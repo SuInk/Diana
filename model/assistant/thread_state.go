@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	dianaThreadStateToolName       = "diana.thread_state"
+	dianaThreadStateToolName       = "thread_state"
 	defaultThreadStateTTL          = 30 * time.Minute
 	minimumThreadStateTTL          = time.Minute
 	maximumThreadStateTTL          = 24 * time.Hour

@@ -51,7 +51,7 @@ func TestIdentityPrivacyRestoresToolCallArguments(t *testing.T) {
 
 	calls := []llm.ToolCall{{
 		ID:   "call-1",
-		Name: "diana.reminder",
+		Name: "reminder",
 		Arguments: map[string]any{
 			"operation":      "create",
 			"delay":          "5m",
@@ -92,7 +92,7 @@ func TestIdentityPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
 	request := llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: "系统"},
 		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-			ID: "call-1", Name: "diana.reminder",
+			ID: "call-1", Name: "reminder",
 			Arguments: map[string]any{"target_user_id": "10001"},
 		}}},
 	}}

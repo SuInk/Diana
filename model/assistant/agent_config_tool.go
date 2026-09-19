@@ -196,7 +196,7 @@ func newDianaConfigTool(runtime *Runtime) *dianaConfigTool {
 }
 
 func (t *dianaConfigTool) Name() string {
-	return "diana.config"
+	return "config"
 }
 
 func (t *dianaConfigTool) Description() string {

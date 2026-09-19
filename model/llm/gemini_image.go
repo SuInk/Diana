@@ -31,11 +31,11 @@ func (c *geminiClient) GenerateImage(ctx context.Context, req ImageGenerateReque
 		return nil, errors.New("llm: image prompt is required")
 	}
 	parts := []*genai.Part{{Text: req.Prompt}}
-	images, err := c.generateImageParts(ctx, req.Model, req.Size, req.N, parts)
+	images, usage, err := c.generateImageParts(ctx, req.Model, req.Size, req.N, parts)
 	if err != nil {
 		return nil, err
 	}
-	return &ImageGenerateResponse{Provider: ProviderGemini, Model: req.Model, Images: images}, nil
+	return &ImageGenerateResponse{Provider: ProviderGemini, Model: req.Model, Images: images, Usage: usage}, nil
 }
 
 // EditImage 把源图和修改要求一起交给 Gemini 的图片模型。
@@ -57,18 +57,19 @@ func (c *geminiClient) EditImage(ctx context.Context, req ImageEditRequest) (*Im
 		parts = append(parts, genai.NewPartFromBytes(input.data, input.mediaType))
 	}
 	parts = append(parts, &genai.Part{Text: req.Prompt})
-	images, err := c.generateImageParts(ctx, req.Model, req.Size, req.N, parts)
+	images, usage, err := c.generateImageParts(ctx, req.Model, req.Size, req.N, parts)
 	if err != nil {
 		return nil, err
 	}
-	return &ImageGenerateResponse{Provider: ProviderGemini, Model: req.Model, Images: images}, nil
+	return &ImageGenerateResponse{Provider: ProviderGemini, Model: req.Model, Images: images, Usage: usage}, nil
 }
 
 // generateImageParts 发请求并把响应里的图片取出来。
 //
 // 一次 generateContent 通常只回一张图，要 n 张就得发 n 次。已经拿到图之后再失败
-// 不整批作废：少给几张也比一张都没有强，全都失败才把错误抛上去。
-func (c *geminiClient) generateImageParts(ctx context.Context, model, size string, n int, parts []*genai.Part) ([]string, error) {
+// 不整批作废：少给几张也比一张都没有强，全都失败才把错误抛上去。用量把每次
+// 请求都加上，包括没出图的那次：token 已经花出去了。
+func (c *geminiClient) generateImageParts(ctx context.Context, model, size string, n int, parts []*genai.Part) ([]string, Usage, error) {
 	if n <= 0 {
 		n = 1
 	}
@@ -78,6 +79,7 @@ func (c *geminiClient) generateImageParts(ctx context.Context, model, size strin
 	}
 	contents := []*genai.Content{{Role: genai.RoleUser, Parts: parts}}
 	images := make([]string, 0, n)
+	var usage Usage
 	var lastErr error
 	for len(images) < n {
 		resp, err := c.client.Models.GenerateContent(ctx, model, contents, config)
@@ -89,6 +91,7 @@ func (c *geminiClient) generateImageParts(ctx context.Context, model, size strin
 			lastErr = errors.New("llm: gemini returned an empty response")
 			break
 		}
+		usage.Add(geminiUsage(resp))
 		if blocked := geminiContentBlock(resp); blocked != nil {
 			lastErr = blocked
 			break
@@ -102,14 +105,14 @@ func (c *geminiClient) generateImageParts(ctx context.Context, model, size strin
 	}
 	if len(images) == 0 {
 		if lastErr != nil {
-			return nil, lastErr
+			return nil, usage, lastErr
 		}
-		return nil, errors.New("llm: image output is empty")
+		return nil, usage, errors.New("llm: image output is empty")
 	}
 	if len(images) > n {
 		images = images[:n]
 	}
-	return images, nil
+	return images, usage, nil
 }
 
 // geminiInlineImages 取出响应里的图片，编码成和 OpenAI 那条链路一致的 data URI，

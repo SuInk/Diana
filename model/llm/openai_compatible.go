@@ -354,11 +354,11 @@ func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGen
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, openAICompatibleError(fmt.Errorf("openai-compatible images failed"), &openAIErrorCapture{statusCode: resp.StatusCode, body: string(errBody)})
 	}
-	images, err := decodeOpenAIImagesResponse(resp.Body)
+	images, usage, err := decodeOpenAIImagesResponse(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	return &ImageGenerateResponse{Provider: ProviderOpenAICompatible, Model: req.Model, Images: images}, nil
+	return &ImageGenerateResponse{Provider: ProviderOpenAICompatible, Model: req.Model, Images: images, Usage: usage}, nil
 }
 
 // EditImage 调用 OpenAI-compatible 图片编辑接口。
@@ -417,11 +417,11 @@ func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditReq
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, openAICompatibleError(fmt.Errorf("openai-compatible images edit failed"), &openAIErrorCapture{statusCode: resp.StatusCode, body: string(errBody)})
 	}
-	images, err := decodeOpenAIImagesResponse(resp.Body)
+	images, usage, err := decodeOpenAIImagesResponse(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	return &ImageGenerateResponse{Provider: ProviderOpenAICompatible, Model: req.Model, Images: images}, nil
+	return &ImageGenerateResponse{Provider: ProviderOpenAICompatible, Model: req.Model, Images: images, Usage: usage}, nil
 }
 
 func imageRequestWithDefaults(req ImageGenerateRequest, cfg ProviderConfig) ImageGenerateRequest {
@@ -450,15 +450,16 @@ func imageEditRequestWithDefaults(req ImageEditRequest, cfg ProviderConfig) Imag
 	return req
 }
 
-func decodeOpenAIImagesResponse(reader io.Reader) ([]string, error) {
+func decodeOpenAIImagesResponse(reader io.Reader) ([]string, Usage, error) {
 	var payload struct {
 		Data []struct {
 			URL     string `json:"url,omitempty"`
 			B64JSON string `json:"b64_json,omitempty"`
 		} `json:"data"`
+		Usage any `json:"usage,omitempty"`
 	}
 	if err := json.NewDecoder(reader).Decode(&payload); err != nil {
-		return nil, err
+		return nil, Usage{}, err
 	}
 	images := make([]string, 0, len(payload.Data))
 	for _, item := range payload.Data {
@@ -471,9 +472,9 @@ func decodeOpenAIImagesResponse(reader io.Reader) ([]string, error) {
 		}
 	}
 	if len(images) == 0 {
-		return nil, errors.New("llm: image output is empty")
+		return nil, Usage{}, errors.New("llm: image output is empty")
 	}
-	return images, nil
+	return images, usageFromPayload(payload.Usage), nil
 }
 
 type imageEditInputData struct {

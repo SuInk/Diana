@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const dianaRepositoryWatchToolName = "diana.repository_watch"
+const dianaRepositoryWatchToolName = "github_watch"
 
 // repositoryWatchManagedRepositories 返回当前会话有权管的仓库集合。用的是「仓库
 // Issue 发布」插件里那份管理人员名单——同一批人管 Issue，也就该管得了这个仓库的
@@ -64,7 +64,7 @@ func (*dianaRepositoryWatchTool) Description() string {
 	return `管理 GitHub 仓库更新订阅：新建、查看、改设置、暂停、删除，也可以立刻检查一次。` +
 		`能改监控哪几类动态（Commit / PR / Issue / Release / Star），以及 PR 和 Issue 各自只收哪几种动态。` +
 		`新建的订阅推送到当前这个会话。只有主人和该仓库的管理人员能调用。` +
-		`关注 RSS 或推特用户改用 diana.rss，普通周期任务改用 diana.schedule。`
+		`关注 RSS 或推特用户改用 rss，普通周期任务改用 schedule。`
 }
 
 func (*dianaRepositoryWatchTool) InputSchema() map[string]any {

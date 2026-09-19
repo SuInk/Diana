@@ -119,6 +119,6 @@ func TestHumanDuration(t *testing.T) {
 // 主机名、磁盘路径、硬件型号不该对群里所有人可见。
 func TestHostStatsToolIsOwnerOnly(t *testing.T) {
 	if (RelationshipPolicy{}).allowedAgentToolNames()[dianaHostStatsToolName] {
-		t.Fatal("diana.host_stats is reachable by non-owners")
+		t.Fatal("host_stats is reachable by non-owners")
 	}
 }

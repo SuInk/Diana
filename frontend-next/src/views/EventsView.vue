@@ -227,6 +227,37 @@
                 <strong>回复结果</strong>
                 <p>{{ replyResultText(event) }}</p>
                 <p v-if="deliverySummary(event)" class="muted">{{ deliverySummary(event) }}</p>
+                <div v-if="event.delivery?.media?.length" class="event-image-grid" aria-label="机器人发出的图片">
+                  <template v-for="(media, index) in event.delivery.media" :key="index">
+                    <div
+                      v-if="media.inline || failedImages[outboundImageKey(event, index + 1)]"
+                      class="event-image-preview unavailable"
+                      :title="media.label || ''"
+                      :aria-label="`${outboundImageAlt(index + 1, media.label)}，${media.inline ? '内联图片未保存' : '图片不可用'}`"
+                    >
+                      <span class="event-image-unavailable">
+                        <ImageOff :size="22" aria-hidden="true" />
+                        <span>{{ media.inline ? "未保存" : "图片不可用" }}</span>
+                      </span>
+                    </div>
+                    <button
+                      v-else
+                      class="event-image-preview"
+                      type="button"
+                      :title="media.label || '查看原图'"
+                      :aria-label="`${outboundImageAlt(index + 1, media.label)}，点击查看原图`"
+                      @click="openOutboundImage(event, index + 1, media.label)"
+                    >
+                      <img
+                        :src="`${eventOutboundImageURL(event, index + 1)}?thumbnail=1`"
+                        :alt="outboundImageAlt(index + 1, media.label)"
+                        loading="lazy"
+                        decoding="async"
+                        @error="markOutboundImageFailed(event, index + 1)"
+                      />
+                    </button>
+                  </template>
+                </div>
               </div>
               <div v-if="event.subtasks?.length" class="event-subtasks">
                 <strong>触发的后台任务</strong>
@@ -256,9 +287,12 @@
                 <span v-if="event.message_id">消息 {{ event.message_id }}</span>
                 <span>结果 {{ event.outcome || event.status }}</span>
                 <span v-if="event.outbound_message_id">出站 {{ event.outbound_message_id }}</span>
+                <span v-if="event.reply_models?.length">主对话模型 {{ event.reply_models.join(" → ") }}</span>
+                <span v-if="eventOtherModelsText(event)">调用模型 {{ eventOtherModelsText(event) }}</span>
                 <span v-if="event.total_tokens">
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="eventCacheHitText(event)"> / {{ eventCacheHitText(event) }}</template>）
                 </span>
+                <span v-if="event.usage_missing_calls" class="usage-missing" :title="'上游没返回用量的调用不计 token，这条的实际消耗比显示的多'">{{ event.usage_missing_calls }} 次调用未报用量</span>
                 <span v-if="event.output_tokens_per_second">
                   {{ event.output_tokens_per_second.toFixed(1) }} tok/s（模型耗时 {{ formatDurationMS(event.llm_duration_ms || 0) }}<template v-if="event.ttft_calls"> / 首 token {{ formatDurationMS(event.avg_ttft_ms || 0) }}</template>）
                 </span>
@@ -574,7 +608,8 @@ const summary = computed(() => ({
   llm_duration_ms: summaryResponse.value?.llm_duration_ms ?? 0,
   output_tokens_per_second: summaryResponse.value?.output_tokens_per_second ?? 0,
   avg_ttft_ms: summaryResponse.value?.avg_ttft_ms ?? 0,
-  ttft_calls: summaryResponse.value?.ttft_calls ?? 0
+  ttft_calls: summaryResponse.value?.ttft_calls ?? 0,
+  usage_missing_calls: summaryResponse.value?.usage_missing_calls ?? 0
 }));
 const hasMore = computed(() => response.value?.has_more ?? false);
 const filteredTotal = computed(() => summaryResponse.value?.filtered_total ?? summary.value.total);
@@ -602,7 +637,8 @@ const tokenBreakdown = computed(() => {
   const input = cached === null
     ? `输入 ${formatNumber(summary.value.input_tokens)}`
     : `输入 ${formatNumber(summary.value.input_tokens)}（缓存命中 ${Math.round(cached * 100)}%）`;
-  return `${input} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用`;
+  const missing = summary.value.usage_missing_calls > 0 ? `，其中 ${formatNumber(summary.value.usage_missing_calls)} 次上游未报用量` : "";
+  return `${input} / 输出 ${formatNumber(summary.value.output_tokens)} · ${formatNumber(summary.value.llm_calls)} 次调用${missing}`;
 });
 
 // 速率算的是输出 token / 模型墙钟耗时。这里不叫 TTFT——回复链路走的是非流式
@@ -685,6 +721,27 @@ function imageAriaLabel(imageIndex: number, summary?: string): string {
 
 function openImage(event: AssistantEventDetail, imageIndex: number, summary?: string): void {
   activeImage.value = { url: eventImageURL(event, imageIndex), alt: imageAlt(imageIndex, summary) };
+}
+
+// 机器人这一轮发出去的图（表情包、插件直发的图）。序号从 1 开始，和接口一致。
+function eventOutboundImageURL(event: AssistantEventDetail, index: number): string {
+  return `/api/assistant/events/${encodeURIComponent(event.id)}/outbound-images/${index}`;
+}
+
+function outboundImageKey(event: AssistantEventDetail, index: number): string {
+  return `${event.id}:out:${index}`;
+}
+
+function outboundImageAlt(index: number, label?: string): string {
+  return label ? `发出的图片 ${index}：${label}` : `发出的图片 ${index}`;
+}
+
+function openOutboundImage(event: AssistantEventDetail, index: number, label?: string): void {
+  activeImage.value = { url: eventOutboundImageURL(event, index), alt: outboundImageAlt(index, label) };
+}
+
+function markOutboundImageFailed(event: AssistantEventDetail, index: number): void {
+  failedImages.value = { ...failedImages.value, [outboundImageKey(event, index)]: true };
 }
 
 function closeImage(): void {
@@ -1198,6 +1255,15 @@ async function toggleTrace(event: AssistantEventDetail): Promise<void> {
   }
 }
 
+// 主对话模型已经单独列出来了；只有还用到别的模型、或者同一模型调了多次时才值得再列一遍。
+function eventOtherModelsText(event: AssistantEventDetail): string {
+  const models = event.models ?? [];
+  const replyModels = event.reply_models ?? [];
+  if (models.length === 0) return "";
+  if (models.every((item) => replyModels.includes(item.model) && item.calls === 1)) return "";
+  return models.map((item) => (item.calls > 1 ? `${item.model} ×${item.calls}` : item.model)).join("、");
+}
+
 function traceMetadata(step: AppLogEntry): Record<string, unknown> {
   return step.metadata ?? {};
 }
@@ -1570,6 +1636,11 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
+}
+
+/* token 数偏少时要显眼一点，不然会被当成「这些调用没花钱」。 */
+.event-technical .usage-missing {
+  color: var(--warn);
 }
 
 /* 发送者是排错时最先要认的东西，整块连在一起，别被 flex 的 gap 拆散。 */

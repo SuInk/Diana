@@ -404,7 +404,7 @@ WHERE created_at >= ? AND created_at < ?
 		}
 		switch action {
 		// 动作名改过两轮，历史行还是旧名字，仪表盘要把它们一起算进来。
-		case "assistant.llm_usage", "chatbot.llm_usage", "diana.llm_usage":
+		case "assistant.llm_usage", "chatbot.llm_usage", "diana.llm_usage", "llm_usage":
 			stats.LLMCalls++
 			inputTokens := int64FromAny(meta["input_tokens"])
 			outputTokens := int64FromAny(meta["output_tokens"])

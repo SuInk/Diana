@@ -104,9 +104,10 @@ func TestDashboardStatsForDayTotalsCurrentAndLegacyLLMUsage(t *testing.T) {
 
 	now := time.Date(2026, time.July, 19, 15, 30, 0, 0, time.Local)
 	for _, entry := range []AppLogEntry{
-		{Action: "diana.llm_usage", CreatedAt: now.Add(-time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 80, "output_tokens": 20, "cached_input_tokens": 60}},
+		// 动作名改过三轮：assistant.*/chatbot.* 是老历史行，diana.llm_usage 是
+		// 上一版工具名留下的行，llm_usage 是当前名——每一代都要算进统计。
+		{Action: "llm_usage", CreatedAt: now.Add(-time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 80, "output_tokens": 20, "cached_input_tokens": 60}},
 		{Action: "assistant.llm_usage", CreatedAt: now.Add(-2 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 30, "output_tokens": 10, "total_tokens": 45}},
-		// 动作名改过两轮，chatbot.* 是绝大多数在用的库里存着的那一版，漏掉它升级后统计会缺一块。
 		{Action: "chatbot.llm_usage", CreatedAt: now.Add(-3 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 20, "output_tokens": 5}},
 		{Action: "diana.llm_usage", CreatedAt: now.Add(-24 * time.Hour).UTC(), Metadata: map[string]any{"input_tokens": 1000, "output_tokens": 1000}},
 	} {

@@ -24,7 +24,7 @@ func (s *SQLiteStore) LLMUsageSince(ctx context.Context, since, until time.Time)
 	const seconds = "2006-01-02T15:04:05"
 	rows, err := s.eventReader().QueryContext(ctx, `SELECT metadata, created_at FROM app_logs
 WHERE created_at >= ? AND created_at < ?
-AND action IN ('diana.llm_usage', 'assistant.llm_usage', 'chatbot.llm_usage')`,
+AND action IN ('llm_usage', 'diana.llm_usage', 'assistant.llm_usage', 'chatbot.llm_usage')`,
 		since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds))
 	if err != nil {
 		return stats, err

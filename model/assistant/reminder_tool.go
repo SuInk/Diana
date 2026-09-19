@@ -52,11 +52,11 @@ func newDianaReminderTool(runtime *Runtime, event MessageEvent) *dianaReminderTo
 }
 
 func (t *dianaReminderTool) Name() string {
-	return "diana.reminder"
+	return "reminder"
 }
 
 func (t *dianaReminderTool) Description() string {
-	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒时必须使用此工具；周期性查询或定期订阅改用 diana.schedule，仓库更新订阅只能在 WebUI 管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒时必须使用此工具；周期性查询或定期订阅改用 schedule，仓库更新订阅只能在 WebUI 管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
 }
 
 // InputSchema 声明参数契约。相对时间使用 delay，绝对时间使用 at，避免模型把

@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
@@ -256,4 +258,34 @@ func requestActor(c *gin.Context) string {
 		return "web:" + ip
 	}
 	return "web:unknown"
+}
+
+// recordLLMUsage 给控制台里直接发起的模型调用（提供商测试、生图测试、AI 生成人设）
+// 记一条用量。这些调用不经过机器人运行时的装饰链，不在这里记就不进 token 统计；
+// 字段和运行时写的 llm_usage 保持一致，统计那边不用区分来源。
+func recordLLMUsage(c *gin.Context, logger AppLogWriter, provider llm.Provider, model string, usage llm.Usage, purpose string, duration time.Duration) {
+	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	metadata := map[string]any{
+		"provider":            string(provider),
+		"model":               strings.TrimSpace(model),
+		"purpose":             purpose,
+		"input_tokens":        usage.InputTokens,
+		"output_tokens":       usage.OutputTokens,
+		"total_tokens":        usage.TotalTokens,
+		"cached_input_tokens": usage.CachedInputTokens,
+		"duration_ms":         duration.Milliseconds(),
+	}
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
+		metadata["usage_missing"] = true
+	}
+	recordAppLog(c.Request.Context(), logger, storage.AppLogEntry{
+		Kind:     storage.LogKindOperation,
+		Level:    storage.LogLevelInfo,
+		Action:   "llm_usage",
+		Message:  "LLM 调用用量已记录",
+		Actor:    requestActor(c),
+		Metadata: metadata,
+	})
 }

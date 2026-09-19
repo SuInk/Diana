@@ -64,11 +64,12 @@ func llmUsagePurposeFromContext(ctx context.Context) string {
 	return purpose
 }
 
-// withLLMUsageAccountingRun 把用量记账装饰器接进 provider 链。
+// withLLMUsageAccountingRun 把用量记账装饰器接进 provider 链。没有消息事件的调用
+// （后台索引、定时任务）也记，只是不归到哪条消息名下。
 func (r *Runtime) withLLMUsageAccountingRun(ctx context.Context, run llmProviderRunFunc) llmProviderRunFunc {
 	state := llmUsageFromContext(ctx)
 	if state == nil {
-		return run
+		state = &llmUsageState{}
 	}
 	return func(provider LLMProvider) (string, error) {
 		return run(&usageAccountingLLMProvider{runtime: r, state: state, provider: provider})
@@ -81,7 +82,18 @@ type usageAccountingLLMProvider struct {
 	provider LLMProvider
 }
 
+type llmUsageAccountedKey struct{}
+
 func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	// 同一次请求可能被两层记账装饰器包住（拿到一个已装饰的 provider 再交给另一条
+	// 装饰链），只让最外层记，否则那一次调用会算两遍。
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Value(llmUsageAccountedKey{}) != nil {
+		return p.provider.Generate(ctx, req)
+	}
+	ctx = context.WithValue(ctx, llmUsageAccountedKey{}, true)
 	// 墙钟时间在这里量而不是在各个调用点：装饰器已经包住了每一次调用，量的范围
 	// 和记账的范围天然一致。放到调用点去量，新增一条调用路径就会漏一次。
 	//

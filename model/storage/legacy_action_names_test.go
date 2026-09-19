@@ -71,7 +71,9 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 	// 会在午夜前后一分钟内把条目甩到前一天去。
 	local := time.Now()
 	now := time.Date(local.Year(), local.Month(), local.Day(), 14, 0, 0, 0, time.Local)
-	for _, action := range []string{"diana.llm_usage", "chatbot.llm_usage", "assistant.llm_usage"} {
+	// 动作名随工具改名换过三代：assistant.* / chatbot.* 是历史行，diana.llm_usage
+	// 是上一轮工具名，llm_usage 是当前名——四代都要能读出来。
+	for _, action := range []string{"llm_usage", "diana.llm_usage", "chatbot.llm_usage", "assistant.llm_usage"} {
 		if err := store.AppendLog(ctx, applog.Entry{
 			Action:    action,
 			Target:    "message-" + action,
@@ -86,9 +88,9 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 三个名字各记一条，一条都不能漏。
-	if stats.LLMCalls != 3 || stats.LLMInputTokens != 30 || stats.LLMOutputTokens != 15 {
-		t.Fatalf("totals = calls:%d input:%d output:%d, want 3/30/15", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens)
+	// 四个名字各记一条，一条都不能漏。
+	if stats.LLMCalls != 4 || stats.LLMInputTokens != 40 || stats.LLMOutputTokens != 20 {
+		t.Fatalf("totals = calls:%d input:%d output:%d, want 4/40/20", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens)
 	}
 }
 
@@ -114,7 +116,7 @@ func TestAppendLogNormalizesCreatedAtToUTC(t *testing.T) {
 	noon := time.Date(now.Year(), now.Month(), now.Day(), 14, 0, 0, 0, shanghai)
 
 	if err := store.AppendLog(ctx, applog.Entry{
-		Action:    "diana.llm_usage",
+		Action:    "llm_usage",
 		Target:    "message-local-zone",
 		CreatedAt: noon.Add(-time.Hour),
 		Metadata:  map[string]any{"input_tokens": 7, "output_tokens": 3},

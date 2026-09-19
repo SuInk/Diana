@@ -69,6 +69,16 @@ func (p *debugTraceLLMProvider) Generate(ctx context.Context, req llm.GenerateRe
 		metadata["model"] = response.Model
 		metadata["usage"] = response.Usage
 	}
+	// 失败的请求没有响应，模型名只能从 provider 链上读；否则调用链里偏偏是出错
+	// 的那一步看不出打的是哪个模型。
+	if model, _ := metadata["model"].(string); strings.TrimSpace(model) == "" {
+		if identity, identityErr := llmProviderIdentity(p.provider, ""); identityErr == nil {
+			metadata["model"] = identity.ModelID
+			if provider, _ := metadata["provider"].(llm.Provider); provider == "" {
+				metadata["provider"] = identity.Provider
+			}
+		}
+	}
 	if err != nil {
 		message = "模型请求失败"
 		metadata["error"] = err.Error()

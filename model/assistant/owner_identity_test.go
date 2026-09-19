@@ -79,7 +79,7 @@ func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer registry.Close()
-	if _, found := registry.Get("diana.llm_config"); !found {
+	if _, found := registry.Get("llm_config"); !found {
 		t.Fatal("model configuration tool hidden from username owner")
 	}
 	if prompt := r.systemPrompt(event, nil); !strings.Contains(prompt, "当前发言者是主人") {

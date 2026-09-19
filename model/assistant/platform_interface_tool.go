@@ -28,7 +28,7 @@ func sortedMapKeys(values map[string]any) []string {
 
 const (
 	platformInterfacePluginID    = "official.platform-interface"
-	dianaPlatformToolName        = "diana.platform"
+	dianaPlatformToolName        = "platform"
 	platformInterfaceSkillSource = "builtin:official.platform-interface"
 
 	// 各平台真实的禁言时长上限。OneBot/QQ 是 30 天；Telegram 的 restrictChatMember
@@ -416,7 +416,7 @@ func (t *dianaPlatformTool) marshal(operation, access string, extra map[string]a
 	return string(body), nil
 }
 
-// validatePlatformTargetID 只接受账号 ID 形状的目标，昵称一律拒绝。和 diana.reply_block
+// validatePlatformTargetID 只接受账号 ID 形状的目标，昵称一律拒绝。和 reply_block
 // 同一套判断：@ 结构化信息、引用消息发送者或成员查询给出的都是 ID。
 func validatePlatformTargetID(target string) error {
 	for _, char := range target {
@@ -469,7 +469,7 @@ func telegramFullPermissions() map[string]any {
 	return perms
 }
 
-// platformSupportsInterfaceTool 判断某平台是否挂载 diana.platform 工具。读操作走跨平台
+// platformSupportsInterfaceTool 判断某平台是否挂载 platform 工具。读操作走跨平台
 // 只读层，破坏性操作只有 OneBot 和 Telegram 真正实现，其余平台会返回明确的不支持说明。
 func platformSupportsInterfaceTool(platform string) bool {
 	switch NormalizePlatformID(platform) {

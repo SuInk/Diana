@@ -10,7 +10,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const dianaRemoteImageToolName = "diana.remote_image"
+const dianaRemoteImageToolName = "remote_image"
 
 // The cache belongs to one reply, so send cannot access another conversation's images.
 type dianaRemoteImageTool struct {

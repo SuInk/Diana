@@ -47,7 +47,7 @@ func TestExtensionAdminSkillAndRobotOverrides(t *testing.T) {
 	if len(a.Skills()) != 0 || len(b.Skills()) != 1 {
 		t.Fatal("skill enable state crossed robots")
 	}
-	read, _ := a.Get("skills.read")
+	read, _ := a.Get("read_skill")
 	if _, err := read.Run(ctx, map[string]any{"name": "demo"}); err == nil {
 		t.Fatal("disabled skill readable")
 	}

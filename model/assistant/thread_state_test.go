@@ -268,7 +268,7 @@ func TestThreadStatePromptAndPermissions(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1"}
 	registry := agent.NewToolRegistry(newDianaThreadStateTool(runtime, event))
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
-	if !strings.Contains(prompt, "必须先调用 diana.thread_state set") {
+	if !strings.Contains(prompt, "必须先调用 thread_state set") {
 		t.Fatalf("system prompt missing commit rule: %q", prompt)
 	}
 	if !(RelationshipPolicy{}).allowedAgentToolNames()[dianaThreadStateToolName] {

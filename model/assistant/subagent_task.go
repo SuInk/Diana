@@ -260,7 +260,9 @@ func (r *Runtime) subagentRootContext() context.Context {
 }
 
 func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTask) {
-	rootCtx = withModelConfigEvent(rootCtx, item.event)
+	// withLLMUsageContext 同时挂上模型配置事件；少了用量这一半，后台任务（文档 OCR、
+	// 图片描述）的调用就归不到触发它的那条消息名下。
+	rootCtx = withLLMUsageContext(rootCtx, item.event)
 	if item.debugTrace != nil {
 		rootCtx = context.WithValue(rootCtx, debugTraceContextKey{}, item.debugTrace)
 	}

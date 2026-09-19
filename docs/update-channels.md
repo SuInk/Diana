@@ -38,4 +38,4 @@ Canary 标签由 CI 在合并提交上创建，标记为 GitHub Prerelease，不
 
 CI 自动将 Beta/RC 标记为 GitHub Prerelease，不设置为最新正式 Release；完整包、SHA256SUMS 和 latest.json 与正式版使用相同的构建和校验流程。latest.json 包含 prerelease 标记。中文更新说明、平台产物检查和下载校验仍按 AGENTS.md 发布要求完成。
 
-Docker 保留每个完整版本标签。正式版更新 `latest`，Beta 和 RC 更新 `beta`，Canary 更新 `canary`；预发布不会覆盖 latest。默认安装脚本仍安装正式版，完整包用户安装后可在版本面板切换 Beta；Docker 用户使用 `ghcr.io/suink/diana:beta`、`ghcr.io/suink/diana:canary` 或具体版本标签，并由原部署环境拉取和重建容器。
+Docker 保留每个完整版本标签（及对应的 `-slim` 标签）。正式版更新 `latest` / `latest-slim`，Beta 和 RC 更新 `beta` / `beta-slim`，Canary 更新 `canary` / `canary-slim`；预发布不会覆盖 latest。默认安装脚本仍安装正式版，完整包用户安装后可在版本面板切换 Beta；Docker 用户使用 `ghcr.io/suink/diana:beta`、`ghcr.io/suink/diana:canary` 或具体版本标签，并由原部署环境拉取和重建容器。

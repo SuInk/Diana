@@ -27,7 +27,7 @@ SELECT printf('m%d',x),'g','group','g','u',printf('m%d',x),?-x,'{}','done',?,?,?
 	}
 	_, err = s.db.Exec(`WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM seq WHERE x < ?)
 INSERT INTO app_logs(id,kind,level,action,message,target,metadata,created_at)
-SELECT printf('usage%d',x),'operation','info','diana.llm_usage','usage',printf('m%d',1+(x-1)/6),'{"input_tokens":1000,"output_tokens":100,"cached_input_tokens":500}',? FROM seq`, count*6, now.Format(time.RFC3339Nano))
+SELECT printf('usage%d',x),'operation','info','llm_usage','usage',printf('m%d',1+(x-1)/6),'{"input_tokens":1000,"output_tokens":100,"cached_input_tokens":500}',? FROM seq`, count*6, now.Format(time.RFC3339Nano))
 	if err != nil {
 		tb.Fatal(err)
 	}

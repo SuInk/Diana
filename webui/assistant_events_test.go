@@ -63,7 +63,7 @@ func TestAssistantEventsEndpointReturnsDurableDecisionReasons(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.AppendLog(ctx, storage.AppLogEntry{
-		Action:    "diana.llm_usage",
+		Action:    "llm_usage",
 		Target:    event.MessageID,
 		CreatedAt: time.Now().UTC(),
 		Metadata:  map[string]any{"input_tokens": 60, "output_tokens": 15},
@@ -193,6 +193,82 @@ func TestAssistantEventImageEndpointServesCachedImageWithoutLeakingSource(t *tes
 	router.ServeHTTP(missingRecorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/images/2", nil))
 	if missingRecorder.Code != http.StatusNotFound {
 		t.Fatalf("missing image status=%d body=%s", missingRecorder.Code, missingRecorder.Body.String())
+	}
+}
+
+// 机器人这一轮发的图（比如表情包）要能在事件记录里点开看；列表里只给序号和标签，
+// 不下发服务器上的本地路径。
+func TestAssistantEventOutboundImageEndpoint(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-outbound-image.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	stickerPath := filepath.Join(t.TempDir(), "sticker.png")
+	file, err := os.Create(stickerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(file, image.NewRGBA(image.Rect(0, 0, 3, 3))); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	event := assistant.MessageEvent{
+		Platform: assistant.PlatformOneBotV11, Kind: assistant.EventKindGroup,
+		GroupID: "group-1", UserID: "user-1", MessageID: "sticker-request", Time: time.Now().Unix(), RawMessage: "来个表情",
+	}
+	eventID, inserted, err := store.EnqueueInboundEvent(ctx, "group:group-1", event)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind: assistant.EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "sticker-request",
+		Decision: "replied", Handled: true,
+		Delivery: assistant.OutboundDelivery{Messages: 1, Images: 2, Media: []assistant.OutboundMedia{
+			{Kind: "image", Label: "表情包：无语", Source: stickerPath},
+			{Kind: "image", Label: "生成的图", Inline: true},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &BotHandler{sqlite: store}
+	router.GET("/api/assistant/events", handler.listEvents)
+	router.GET("/api/assistant/events/:id/outbound-images/:index", handler.eventOutboundImage)
+
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h", nil))
+	if listRecorder.Code != http.StatusOK || strings.Contains(listRecorder.Body.String(), stickerPath) {
+		t.Fatalf("list status=%d leaked path: %s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var response assistantEventsResponse
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Events) != 1 || len(response.Events[0].Delivery.Media) != 2 || response.Events[0].Delivery.Media[0].Label != "表情包：无语" {
+		t.Fatalf("events = %+v", response.Events)
+	}
+
+	imageRecorder := httptest.NewRecorder()
+	router.ServeHTTP(imageRecorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/outbound-images/1", nil))
+	want, _ := os.ReadFile(stickerPath)
+	if imageRecorder.Code != http.StatusOK || imageRecorder.Header().Get("Content-Type") != "image/png" || !bytes.Equal(imageRecorder.Body.Bytes(), want) {
+		t.Fatalf("image status=%d type=%q", imageRecorder.Code, imageRecorder.Header().Get("Content-Type"))
+	}
+	for _, index := range []string{"2", "3"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/events/"+eventID+"/outbound-images/"+index, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("index %s status=%d", index, recorder.Code)
+		}
 	}
 }
 

@@ -325,7 +325,7 @@ func TestRuntimeAgentCanQueryHistoryAroundCurrentQuote(t *testing.T) {
 			if !hasTool && !requestMessagesContain(req.Messages, dianaChatHistoryToolName) {
 				return "", fmt.Errorf("history tool missing from Agent prompt")
 			}
-			return `{"action":"tool","tool":"diana.chat_history","input":{"operation":"around","before":3,"after":1}}`, nil
+			return `{"action":"tool","tool":"chat_history","input":{"operation":"around","before":3,"after":1}}`, nil
 		case 3:
 			if !requestMessagesContain(req.Messages, "项目版本可以在设置页查看") {
 				return "", fmt.Errorf("history tool result missing from Agent follow-up")

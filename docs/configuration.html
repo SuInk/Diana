@@ -27,7 +27,7 @@
         <h3>接入方式决定部署形态</h3>
         <p>真正影响部署的不是平台本身，而是消息怎么进来。前四个平台由 Diana 主动出站建立连接，家庭宽带或内网也能直接用；飞书和企业微信只能由平台把事件 POST 过来，必须有一个公网可达的 HTTPS 地址。</p>
         <div class="table-wrap"><table><thead><tr><th>平台</th><th>接入方式</th><th>需要公网地址</th></tr></thead><tbody>
-          <tr><td>OneBot v11</td><td>反向 WebSocket，由适配器连到 Diana</td><td>否</td></tr>
+          <tr><td>OneBot v11</td><td>正向 WS、反向 WS 或 HTTP API + 事件上报</td><td>否</td></tr>
           <tr><td>Telegram</td><td>Bot API 长轮询，Diana 主动出站</td><td>否</td></tr>
           <tr><td>QQ 官方机器人</td><td>开放平台 WebSocket 网关，Diana 主动出站</td><td>否</td></tr>
           <tr><td>钉钉</td><td>Stream 模式长连接，Diana 主动出站</td><td>否</td></tr>
@@ -289,7 +289,7 @@ Bash：git push origin main
         <div class="section-heading"><p class="eyebrow">安全边界</p><h2>公网部署必须增加 HTTPS 和来源限制</h2></div>
         <ul class="check-list">
           <li>WebUI 使用登录会话保护 API，并立即更换首次管理员密码。</li>
-          <li>OneBot 单独配置 access token，反向 WebSocket 两端保持一致。</li>
+          <li>OneBot 单独配置 Access Token，WS 或 HTTP API 两端保持一致；HTTP 事件上报另配相同的签名 secret。</li>
           <li><code>config.yaml</code>、模型 API Key、Bot Token 和平台 Cookie 不进入 Git。</li>
           <li>调试模式会记录完整上下文和工具参数，只在可信环境短期开启。</li>
           <li>公网入口放在 HTTPS 反向代理后，并限制管理端来源。</li>

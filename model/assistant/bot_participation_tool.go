@@ -10,7 +10,7 @@ import (
 	"github.com/SuInk/diana/model/applog"
 )
 
-const botParticipationToolName = "diana.bot_config"
+const botParticipationToolName = "bot_config"
 
 type BotParticipationConfigSaver interface {
 	SaveParticipation(BotConfig, ParticipationPreferences) (BotConfig, error)

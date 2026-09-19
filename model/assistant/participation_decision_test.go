@@ -49,7 +49,11 @@ func TestParticipationDecisionRoutingAndCooldown(t *testing.T) {
 		}
 	}
 	route(true)
-	metadata := logs.entries[0].Metadata
+	// 攒批路由是定时器触发的，ctx 里没有消息事件；判断调用的用量要记到批里那条消息名下。
+	if usage := usageEntriesFor(logs, "m"); len(usage) != 1 || usage[0]["purpose"] != "proactive_reply_router" {
+		t.Fatalf("router usage = %#v", usage)
+	}
+	metadata := withoutUsageEntries(logs.entries)[0].Metadata
 	if metadata["scores"] == nil || metadata["reply_score"] != nil || metadata["reply_level"] != ChatInLevelMax || metadata["should_reply"] != true {
 		t.Fatalf("decision log: %+v", metadata)
 	}
