@@ -5823,10 +5823,7 @@ func compactContextEvent(event MessageEvent) string {
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += " " + quoted
 	}
-	sender := strings.TrimSpace(event.SenderNameOrID())
-	if sender == "" {
-		sender = "未知用户"
-	}
+	sender := promptSenderIdentity(event)
 	return sender + ": " + strings.Join(strings.Fields(text), " ") + strings.ReplaceAll(historyIdentityPrompt(event), "\n", " ")
 }
 

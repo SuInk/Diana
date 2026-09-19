@@ -397,7 +397,7 @@ func TestSystemPromptInjectsRulesTimeAndSender(t *testing.T) {
 	prompt := runtime.systemPrompt(event, nil)
 	for _, want := range []string{
 		"不渲染 Markdown",
-		"「小明」",
+		"「小明（10001）」",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
