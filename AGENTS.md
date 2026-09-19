@@ -56,11 +56,11 @@
 
 - 发布前至少运行并通过：`gofmt -l .`、`git diff --check`、`go test ./...`、前端依赖安装与生产构建。涉及依赖变化时还要执行安全审计。
 - 发布 PR 的 CI 必须验证 Go 测试、Vue 构建、Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker 镜像。
-- 标签构建完成后，确认 GitHub Release 不是 Draft 或 Prerelease，并检查所有预期资产均已上传。
+- 标签构建完成后，确认 GitHub Release 不是 Draft；正式版不得是 Prerelease，Beta/RC 标签必须标记为 Prerelease，并检查所有预期资产均已上传。
 - Release 必须包含各支持平台的完整包、`SHA256SUMS` 和自更新清单 `latest.json`，不得上传独立裸二进制。当前 CI 的预期资产数量为 7（5 个平台完整包和 2 个元数据文件）；若工作流调整了产物矩阵，应按工作流重新计算。
 - 完整包统一使用 `diana-<系统>-<架构>.tar.gz`（Windows 为 `.zip`），包内可执行文件名及兼容副本保持不变。旧版自更新器只认 `diana-webui-…` 包名，首次迁移必须重跑一键安装或手动安装完整包；发布说明必须明确此边界，不能暗示旧版 WebUI 可直接完成迁移。新版安装器与自更新器须兼容读取历史旧包名。
 - 发布后必须实际下载 Darwin ARM64 完整包及 `SHA256SUMS`，独立计算 SHA-256 并确认一致，同时检查归档内包含后端二进制、启动脚本和 `frontend-next/dist`。
 - 面向用户的 macOS 完整包使用 `macos` 而非 `darwin`，例如 `diana-macos-arm64.tar.gz`；内部 Go 交叉编译继续使用 `GOOS=darwin`，历史包名兼容仍使用 `diana-webui-darwin-…`。
-- Docker 发布需要确认版本标签与 `latest` 均成功生成。
+- Docker 发布需要确认版本标签成功生成；正式版更新 `latest`，Beta/RC 更新 `beta`，预发布不得覆盖 `latest`。
 - 在 CI、Release 资产和校验全部完成前，不得向用户宣称版本已经发布成功。
 - 发布结束后清理本地产生的临时说明文件、TypeScript/Vite 构建缓存和临时预览服务，确保 `git status --short` 干净。
