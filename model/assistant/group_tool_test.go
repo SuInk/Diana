@@ -71,7 +71,7 @@ func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 		case 1:
 			return `{"action":"none"}`, nil
 		case 2:
-			return `{"action":"tool","tool":"diana.platform","input":{"operation":"member_list"}}`, nil
+			return `{"action":"tool","tool":"platform","input":{"operation":"member_list"}}`, nil
 		case 3:
 			match := regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"Alice"`).FindStringSubmatch(requestTextForPrivacyTest(req))
 			if len(match) > 1 {
@@ -111,7 +111,7 @@ func TestRuntimeAgentUsesOneBotGroupToolToMentionOtherMembers(t *testing.T) {
 	if !strings.Contains(reply, "[CQ:at,qq=10002]") {
 		t.Fatalf("reply = %q", reply)
 	}
-	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "diana.platform") || !requestMessagesContain(provider.requests[2].Messages, targetAlias) {
+	if len(provider.requests) != 3 || !requestMessagesContain(provider.requests[1].Messages, "platform") || !requestMessagesContain(provider.requests[2].Messages, targetAlias) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
 	for _, req := range provider.requests {
@@ -145,7 +145,7 @@ func TestRuntimeAgentAnswersPromotedGroupCountFollowupWithOneBotGroupTool(t *tes
 		},
 	}}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"action":"tool","tool":"diana.platform","input":{"operation":"member_list"}}`,
+		`{"action":"tool","tool":"platform","input":{"operation":"member_list"}}`,
 		`{"action":"final","content":"群里现在有 3 个人。"}`,
 		`{"send_confidence":0.99,"reason":"准确回答群成员数量"}`,
 	}}

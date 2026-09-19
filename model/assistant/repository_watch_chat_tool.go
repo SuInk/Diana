@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const dianaRepositoryWatchToolName = "diana.repository_watch"
+const dianaRepositoryWatchToolName = "github_watch"
 
 // repositoryWatchManagedRepositories 返回当前会话有权管的仓库集合。用的是「仓库
 // Issue 发布」插件里那份管理人员名单——同一批人管 Issue，也就该管得了这个仓库的
@@ -64,7 +64,7 @@ func (*dianaRepositoryWatchTool) Description() string {
 	return `管理 GitHub 仓库更新订阅：新建、查看、改设置、暂停、删除，也可以立刻检查一次。` +
 		`能改监控哪几类动态（Commit / PR / Issue / Release / Star），以及 PR 和 Issue 各自只收哪几种动态。` +
 		`新建的订阅推送到当前这个会话。只有主人和该仓库的管理人员能调用。` +
-		`关注 RSS 或推特用户改用 diana.rss，普通周期任务改用 diana.schedule。`
+		`关注 RSS 或推特用户改用 rss，普通周期任务改用 schedule。`
 }
 
 func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
@@ -77,8 +77,8 @@ func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
 		"interval":   toolStringParam("检查间隔，只接受 Go 时长写法：30s、1m、2h。不短于 " + minimumRepositoryWatchInterval.String() + "。"),
 		"watch": toolEnumArrayParam("要监控的类型，可多选。create 省略按全部处理；update 省略表示不改。",
 			"commits", "pull_requests", "issues", "releases", "stars"),
-		"pull_request_events": toolEnumArrayParam("PR 只收这几种动态；省略或给全表示全都要。", repositoryWatchPullEventKinds...),
-		"issue_events":        toolEnumArrayParam("Issue 只收这几种动态；省略或给全表示全都要。", repositoryWatchIssueEventKinds...),
+		"pull_request_events": toolEnumArrayParam("PR 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchPullEventKinds...),
+		"issue_events":        toolEnumArrayParam("Issue 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchIssueEventKinds...),
 	})
 }
 
@@ -88,8 +88,8 @@ type dianaRepositoryWatchView struct {
 	Branch            string   `json:"branch,omitempty"`
 	Interval          string   `json:"interval"`
 	Watch             []string `json:"watch"`
-	PullRequestEvents []string `json:"pull_request_events,omitempty"`
-	IssueEvents       []string `json:"issue_events,omitempty"`
+	PullRequestEvents []string `json:"pull_request_events"`
+	IssueEvents       []string `json:"issue_events"`
 	Status            string   `json:"status"`
 	LastError         string   `json:"last_error,omitempty"`
 	NextRunAt         string   `json:"next_run_at,omitempty"`
@@ -121,8 +121,8 @@ func repositoryWatchViewForTool(item Reminder) dianaRepositoryWatchView {
 		ID: item.ID, Repository: item.Repository, Branch: item.RepositoryBranch,
 		Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(),
 		Watch:    watch, Status: scheduleStatus(item), LastError: item.LastError,
-		PullRequestEvents: append([]string(nil), item.WatchPullRequestEvents...),
-		IssueEvents:       append([]string(nil), item.WatchIssueEvents...),
+		PullRequestEvents: EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
+		IssueEvents:       EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
 	}
 	if !item.TriggerAt.IsZero() {
 		view.NextRunAt = item.TriggerAt.Format(time.RFC3339)
@@ -368,7 +368,7 @@ func repositoryWatchUpdateFromTool(input map[string]any, current Reminder) (Repo
 		if eventsErr != nil {
 			return RepositoryWatchUpdateInput{}, eventsErr
 		}
-		// nil 会被更新层当成「没提」，而清空正是「改回全部」的表达方式。
+		// 更新层用 nil 表示“没提”；显式空数组表示取消全部勾选。
 		update.WatchPullRequestEvents = append([]string{}, events...)
 	}
 	if _, present := input["issue_events"]; present {

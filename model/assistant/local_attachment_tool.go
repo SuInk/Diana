@@ -46,16 +46,16 @@ type dianaLocalAttachmentTool struct {
 
 func (t *dianaLocalAttachmentTool) Name() string {
 	if t.view {
-		return "diana.view_image"
+		return "view_image"
 	}
-	return "diana.send_attachment"
+	return "send_attachment"
 }
 
 func (t *dianaLocalAttachmentTool) Description() string {
 	if t.view {
 		return "读取 Agent 工作目录内的真实图片，把画面作为附件交给下一轮模型。用于查看 run_command 下载或生成的图片；不能把文件名当作画面证据。path 必须是工作目录相对路径。读取成功不代表已发送到聊天。"
 	}
-	return "把 Agent 工作目录内的文件发送到当前会话，支持 Telegram 和 OneBot。mode=image 作为图片发送（位图直发；svg 会经「网页渲染」插件栅格化成 PNG 再发，插件没启用时请改用 mode=file），mode=file 作为原文件附件发送（常见文档、压缩包、音视频，可执行文件一律拒绝）。命令下载成功不等于用户收到文件；需要交付时调用本工具。描述图片内容前先用 diana.view_image 查看。不会执行文件；仅主人可用。"
+	return "把 Agent 工作目录内的文件发送到当前会话，支持 Telegram 和 OneBot。mode=image 作为图片发送（位图直发；svg 会经「网页渲染」插件栅格化成 PNG 再发，插件没启用时请改用 mode=file），mode=file 作为原文件附件发送（常见文档、压缩包、音视频，可执行文件一律拒绝）。命令下载成功不等于用户收到文件；需要交付时调用本工具。描述图片内容前先用 view_image 查看。不会执行文件；仅主人可用。"
 }
 
 func (t *dianaLocalAttachmentTool) InputSchema() map[string]any {

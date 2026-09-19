@@ -223,7 +223,7 @@ func TestWebSearchToolReportsSkippedAttemptedAndNotExecutedProviders(t *testing.
 	if len(result.Providers) != 3 || result.Providers[0].Status != "skipped" || result.Providers[1].Status != "attempted" || result.Providers[2].Status != "not_executed" {
 		t.Fatalf("providers = %#v", result.Providers)
 	}
-	if result.Providers[2].Reason != "sufficient_evidence" {
+	if result.Providers[2].Reason != "candidate_sources_found" {
 		t.Fatalf("spare provider = %#v", result.Providers[2])
 	}
 }

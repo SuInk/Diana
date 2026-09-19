@@ -371,7 +371,7 @@ func (c *recallIdentityChannel) CallAPI(_ context.Context, action string, params
 	}, nil
 }
 
-// recallDisclosureForTest 走的是模型通过 diana.chat_history 的 recalls 操作取撤回
+// recallDisclosureForTest 走的是模型通过 chat_history 的 recalls 操作取撤回
 // 记录的那条路。这些用例以前调 plugin.Handle：那条路靠词表判断「用户是不是在问撤
 // 回」，现在触发权交给模型，取数和组装响应仍是同一段代码，断言的行为因此不变。
 func recallDisclosureForTest(t *testing.T, plugin *MessageHistoryPlugin, req PluginRequest) *PluginResponse {

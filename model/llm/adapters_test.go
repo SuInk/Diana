@@ -336,13 +336,13 @@ func TestOpenAICompatibleResponsesNativeToolCall(t *testing.T) {
 			t.Fatal(err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_test","object":"response","created_at":1,"model":"gpt-test","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search.search","arguments":"{\"query\":\"Diana\"}","status":"completed"}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7},"status":"completed"}`))
+		_, _ = w.Write([]byte(`{"id":"resp_test","object":"response","created_at":1,"model":"gpt-test","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search","arguments":"{\"query\":\"Diana\"}","status":"completed"}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7},"status":"completed"}`))
 	}))
 	defer server.Close()
 	client := newOpenAICompatibleClient(ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test", BaseURL: server.URL + "/v1", Model: "gpt-test"}, server.Client())
 	resp, err := client.Generate(context.Background(), GenerateRequest{
 		Messages: []Message{{Role: RoleUser, Content: "search"}},
-		Tools:    []ToolDefinition{{Name: "web_search.search", Parameters: map[string]any{"type": "object"}}},
+		Tools:    []ToolDefinition{{Name: "web_search", Parameters: map[string]any{"type": "object"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -368,10 +368,10 @@ func TestOpenAIResponsesInputPreservesNativeOutputItems(t *testing.T) {
 	input := openAIResponsesInput([]Message{
 		{
 			Role:      RoleAssistant,
-			ToolCalls: []ToolCall{{ID: "call_1", Name: "web_search.search", Arguments: map[string]any{"query": "Diana"}}},
+			ToolCalls: []ToolCall{{ID: "call_1", Name: "web_search", Arguments: map[string]any{"query": "Diana"}}},
 			ResponsesOutput: []json.RawMessage{
 				json.RawMessage(`{"type":"reasoning","id":"rs_1","encrypted_content":"opaque-state","summary":[]}`),
-				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search.search","arguments":"{\"query\":\"Diana\"}","status":"completed"}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search","arguments":"{\"query\":\"Diana\"}","status":"completed"}`),
 			},
 		},
 		{Role: RoleTool, ToolCallID: "call_1", Content: `{"results":[]}`},
@@ -385,7 +385,7 @@ func TestOpenAIResponsesInputPreservesNativeOutputItems(t *testing.T) {
 	if !strings.Contains(string(reasoning), `"type":"reasoning"`) || !strings.Contains(string(reasoning), `"encrypted_content":"opaque-state"`) {
 		t.Fatalf("reasoning item was not preserved: %s", reasoning)
 	}
-	if !strings.Contains(string(functionCall), `"call_id":"call_1"`) || !strings.Contains(string(functionCall), `"name":"web_search.search"`) {
+	if !strings.Contains(string(functionCall), `"call_id":"call_1"`) || !strings.Contains(string(functionCall), `"name":"web_search"`) {
 		t.Fatalf("function call item was not preserved: %s", functionCall)
 	}
 	if !strings.Contains(string(functionOutput), `"type":"function_call_output"`) || !strings.Contains(string(functionOutput), `"call_id":"call_1"`) {
@@ -398,9 +398,9 @@ func TestOpenAIResponsesInputRewritesItemIDOutputsToCallID(t *testing.T) {
 	input := openAIResponsesInput([]Message{
 		{
 			Role:      RoleAssistant,
-			ToolCalls: []ToolCall{{ID: "fc_1", Name: "web_search.search", Arguments: map[string]any{"query": "Diana"}}},
+			ToolCalls: []ToolCall{{ID: "fc_1", Name: "web_search", Arguments: map[string]any{"query": "Diana"}}},
 			ResponsesOutput: []json.RawMessage{
-				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search.search","arguments":"{}","status":"completed"}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"web_search","arguments":"{}","status":"completed"}`),
 			},
 		},
 		{Role: RoleTool, ToolCallID: "fc_1", Content: `{"results":[]}`},
@@ -419,9 +419,9 @@ func TestOpenAIResponsesInputPatchesMissingCallID(t *testing.T) {
 	input := openAIResponsesInput([]Message{
 		{
 			Role:      RoleAssistant,
-			ToolCalls: []ToolCall{{ID: "fc_1", Name: "web_search.search", Arguments: map[string]any{}}},
+			ToolCalls: []ToolCall{{ID: "fc_1", Name: "web_search", Arguments: map[string]any{}}},
 			ResponsesOutput: []json.RawMessage{
-				json.RawMessage(`{"type":"function_call","id":"fc_1","name":"web_search.search","arguments":"{}","status":"completed"}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_1","name":"web_search","arguments":"{}","status":"completed"}`),
 			},
 		},
 		{Role: RoleTool, ToolCallID: "fc_1", Content: `{"results":[]}`},
@@ -446,10 +446,10 @@ func TestOpenAIResponsesInputDropsUnpairedFunctionItems(t *testing.T) {
 		{
 			Role:      RoleAssistant,
 			Content:   "先搜一下",
-			ToolCalls: []ToolCall{{ID: "call_kept", Name: "web_search.search", Arguments: map[string]any{}}},
+			ToolCalls: []ToolCall{{ID: "call_kept", Name: "web_search", Arguments: map[string]any{}}},
 			ResponsesOutput: []json.RawMessage{
-				json.RawMessage(`{"type":"function_call","id":"fc_kept","call_id":"call_kept","name":"web_search.search","arguments":"{}","status":"completed"}`),
-				json.RawMessage(`{"type":"function_call","id":"fc_dropped","call_id":"call_dropped","name":"web_search.search","arguments":"{}","status":"completed"}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_kept","call_id":"call_kept","name":"web_search","arguments":"{}","status":"completed"}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_dropped","call_id":"call_dropped","name":"web_search","arguments":"{}","status":"completed"}`),
 			},
 		},
 		{Role: RoleTool, ToolCallID: "call_kept", Content: `{"results":[]}`},
@@ -488,12 +488,12 @@ func TestOpenAICompatibleResponsesContinuesAfterTextlessToolCall(t *testing.T) {
 		{Role: RoleUser, Content: "群聊 Agent 有哪些能力"},
 		{
 			Role:      RoleAssistant,
-			ToolCalls: []ToolCall{{ID: "call_1", Name: "diana.capabilities", Arguments: map[string]any{"query": "群聊 Agent"}}},
+			ToolCalls: []ToolCall{{ID: "call_1", Name: "capabilities", Arguments: map[string]any{"query": "群聊 Agent"}}},
 			ResponsesOutput: []json.RawMessage{
-				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"diana.capabilities","arguments":"{\"query\":\"群聊 Agent\"}","status":"completed"}`),
+				json.RawMessage(`{"type":"function_call","id":"fc_1","call_id":"call_1","name":"capabilities","arguments":"{\"query\":\"群聊 Agent\"}","status":"completed"}`),
 			},
 		},
-		{Role: RoleTool, ToolCallID: "call_1", ToolName: "diana.capabilities", Content: `{"results":[]}`},
+		{Role: RoleTool, ToolCallID: "call_1", ToolName: "capabilities", Content: `{"results":[]}`},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +514,7 @@ func TestOpenAICompatibleResponsesContinuesAfterTextlessToolCall(t *testing.T) {
 
 func TestNativeToolMappingsForAnthropicAndGemini(t *testing.T) {
 	definition := ToolDefinition{
-		Name: "diana.relationship", Description: "query relationship", Strict: true,
+		Name: "relationship", Description: "query relationship", Strict: true,
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{"operation": map[string]any{"type": "string"}}},
 	}
 	if tools := anthropicTools([]ToolDefinition{definition}); len(tools) != 1 || tools[0].OfTool == nil || tools[0].OfTool.Name != wireToolName(definition.Name) {

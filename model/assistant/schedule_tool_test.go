@@ -230,7 +230,7 @@ func TestRuntimeAgentCanCreateScheduledQuery(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"diana.schedule","input":{"operation":"create","interval":"6h","query":"查询最新公告并总结变化"}}`,
+		`{"action":"tool","tool":"schedule","input":{"operation":"create","interval":"6h","query":"查询最新公告并总结变化"}}`,
 		`{"action":"final","content":"已建立每 6 小时执行一次的订阅。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{
@@ -264,13 +264,13 @@ func TestRuntimeAgentCanCreateScheduledQuery(t *testing.T) {
 	}
 	foundTool := false
 	for _, msg := range provider.requests[1].Messages {
-		if strings.Contains(msg.Content, "diana.schedule") {
+		if strings.Contains(msg.Content, "schedule") {
 			foundTool = true
 			break
 		}
 	}
 	if !foundTool {
-		t.Fatal("agent prompt did not expose diana.schedule")
+		t.Fatal("agent prompt did not expose schedule")
 	}
 }
 

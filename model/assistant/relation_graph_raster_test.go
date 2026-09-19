@@ -52,10 +52,23 @@ func TestRenderGroupRelationPNGWithoutBrowser(t *testing.T) {
 
 	// 不能只验「是张图」：全白的空画布同样是合法 PNG，也同样能通过尺寸检查。
 	// 中心节点那一坨粉色必须真的落在画布上。
+	// 不能咬死中心那一个像素：圆心处压着「Diana」白字，单个采样点纯属运气。
+	// 所以改验圆心半径内一大片里到底有没有粉色——那才是真正在测的东西。
 	centerX, centerY := bounds.Dx()/2, relationHeaderHeight+(bounds.Dy()-relationHeaderHeight)/2
-	r, g, b, _ := img.At(centerX, centerY).RGBA()
-	if r>>8 != 0xe0 || g>>8 != 0x57 || b>>8 != 0x8f {
-		t.Fatalf("中心节点没画上：中心像素是 #%02x%02x%02x", r>>8, g>>8, b>>8)
+	pink := 0
+	for dy := -20; dy <= 20; dy++ {
+		for dx := -20; dx <= 20; dx++ {
+			if dx*dx+dy*dy > 20*20 {
+				continue
+			}
+			r, g, b, _ := img.At(centerX+dx, centerY+dy).RGBA()
+			if r>>8 == 0xe0 && g>>8 == 0x57 && b>>8 == 0x8f {
+				pink++
+			}
+		}
+	}
+	if pink == 0 {
+		t.Fatal("中心节点没画上：圆心半径 20px 内没有一点粉色")
 	}
 	if painted := paintedPixelRatio(img); painted < 0.02 {
 		t.Fatalf("画布几乎是空的：非背景像素只占 %.3f%%", painted*100)

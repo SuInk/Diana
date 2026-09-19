@@ -574,7 +574,11 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
 	for _, profile := range set.Profiles {
-		profiles[strings.TrimSpace(profile.ID)] = profile.WithDefaults()
+		resolved, err := set.ResolveConnection(profile)
+		if err != nil {
+			continue
+		}
+		profiles[strings.TrimSpace(profile.ID)] = resolved
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles
@@ -1451,6 +1455,10 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
 	}
+	// 已授权的本地重置无需走语义路由，也不能被积压消息合并吞掉。
+	if r.isOwnerContextResetCommand(event, text) && r.admits(r.effectiveConfigForEvent(event), event) {
+		return event, text, true, "replied"
+	}
 	// 队列积压：消息已经 remember 进历史、做过表达学习，这里补上长期记忆和用户画像，登记进
 	// 积压包后就收住，跳过后面所有花模型 token 的环节，由同会话后面那条一起接话。
 	// 判断和登记挨在一起：判断时后面那条还在排队，登记完它才可能来取，积压包不会落空。
@@ -2050,7 +2058,7 @@ func (r *Runtime) shouldHandleChatTrigger(event MessageEvent, text string) bool 
 	if event.Kind != EventKindGroup {
 		return false
 	}
-	if r.isOwnerReplySuppressionCommand(event, text) {
+	if r.isOwnerReplySuppressionCommand(event, text) || r.isOwnerContextResetCommand(event, text) {
 		return true
 	}
 	// @ 它、引用它、回复它的消息，都算直接在叫它，一律进回复流程。
@@ -2146,6 +2154,11 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	ctx = withLLMUsagePurpose(ctx, "proactive_reply_router")
 	if len(candidates) == 0 {
 		return MessageEvent{}, "", nil, false
+	}
+	// 攒批是定时器触发的，那时的 ctx 不带消息事件：这一路的判断调用以前一次都
+	// 没进过用量统计。记到批里最新那条消息名下，事件列表里点开它就能看到。
+	if llmUsageFromContext(ctx) == nil {
+		ctx = withLLMUsageContext(ctx, candidates[len(candidates)-1].Event)
 	}
 	eligible := make([]proactiveReplyCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -2529,7 +2542,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	}
 	if event.Kind == EventKindGroup {
 		payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-			"web_search.search：始终注册的实时联网搜索；Provider 不可用时会返回明确配置或上游错误",
+			"web_search：始终注册的实时联网搜索；Provider 不可用时会返回明确配置或上游错误",
 		)
 	}
 	if cfg.AgentEnabled && event.Kind == EventKindGroup {
@@ -2538,7 +2551,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 		)
 		if r.llmStore != nil {
 			payload.AvailableReplyTools = append(payload.AvailableReplyTools,
-				"diana.image：系统已注册图片生成与编辑工具；具体用户权限由正式回复阶段校验，路由阶段不得声称系统没有绘图工具",
+				"image：系统已注册图片生成与编辑工具；具体用户权限由正式回复阶段校验，路由阶段不得声称系统没有绘图工具",
 			)
 		}
 	}
@@ -3052,6 +3065,14 @@ func (r *Runtime) resolverEnabledForEvent(event MessageEvent) bool {
 // 具名返回值只为了让 defer 拿到这一轮最终说了什么（见 finishReplyTurn），
 // 各处 return 的写法不变。
 func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) (reply string, err error) {
+	// 本地重置命令不需要加载旧上下文、调用模型或登记续聊状态。
+	if r.isOwnerContextResetCommand(event, text) {
+		reply, _ := r.handleOwnerCommand(event, r.cleanInput(event, text))
+		if err := r.send(ctx, event, reply); err != nil {
+			return "", err
+		}
+		return reply, nil
+	}
 	ctx = withModelConfigEvent(ctx, event)
 	ctx = r.withFileParserVideoLimit(ctx, event)
 	r.beginHistoryImageDescriptionForeground()
@@ -3128,7 +3149,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	overrides := r.pluginOverridesForEvent(event)
 	settingOverrides := r.pluginSettingOverridesForEvent(event)
 	// 撤回记录以前靠词表判断「用户是不是在问撤回」再预取并劫持回复。现在由模型通过
-	// diana.chat_history 的 recalls 操作按需读取，读到之后仍走原有的转发卡片链路。
+	// chat_history 的 recalls 操作按需读取，读到之后仍走原有的转发卡片链路。
 	var recallEvents []MessageEvent
 	recallSink := &recallDisclosureSink{}
 	pluginRequest := func(current MessageEvent, history []MessageEvent) PluginRequest {
@@ -4057,7 +4078,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			ownsRegistry = true
 		}
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
-		registry.Register(newDianaRuntimeModelTool(agentClient, event))
+		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
+		if modelDisclosedTo(cfg, relationship.Owner) {
+			registry.Register(newDianaRuntimeModelTool(agentClient, event))
+		}
 		agentRunner, err := agent.NewRunner(agentClient, agentCfg, registry)
 		if err != nil {
 			if ownsRegistry {
@@ -4451,7 +4475,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 13. edit_image 只能用于从现有参考图里实际可见的像素、区域、人物或对象进行编辑或衍生创作。不要因为当前消息或引用消息带图，就假定用户要的目标画面已经存在于图中。
 14. 如果用户要先识别图片中的文字、编号或线索，再去网页、数据库或其他外部来源查找并发送另一张图片、封面、商品图或页面截图，这是检索/浏览器任务，必须输出 action="none"，由普通 Agent 处理；不能让图片编辑模型凭空补出外部内容。
 15. “裁剪/截取/提取”只有在目标区域确实可见于当前或引用图片时才是 edit_image；若目标只由文字或编号指向、原图中并不存在，则必须输出 action="none"。
-16. 如果图片产出依赖尚未执行的联网搜索、网页核验、外部资料读取或实时事实，必须输出 action="none"，让普通 Agent 先调用搜索/浏览器工具，再把确认后的结果交给 diana.image；不得在搜索前直接生成，也不得臆造搜索结果。`)
+16. 如果图片产出依赖尚未执行的联网搜索、网页核验、外部资料读取或实时事实，必须输出 action="none"，让普通 Agent 先调用搜索/浏览器工具，再把确认后的结果交给 image；不得在搜索前直接生成，也不得臆造搜索结果。`)
 	userPrompt := "请判断这条当前消息是否要调用图片功能。消息上下文 JSON：\n"
 	outputFormat := `{"action":"none","prompt":""}`
 	if registry != nil {
@@ -4463,7 +4487,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 19. context_message_ids 只能填写 recent_messages 中真实存在的 message_id。保留所有可能帮助理解当前指代、话题延续、约束或用户意图的消息；只删除确定无关的旁支聊天，不要为了追求数量少而丢上下文。
 20. 当前消息的直接引用和语义指向会由运行时强制保留，不必依靠关键词。older_summary_available=true 且当前问题确实延续更早话题时，keep_older_summary=true；独立新问题则为 false。
 21. 工具参数应保持最小且符合工具说明。搜索只需要工具根据当前信息缺口整理出的 query，不要把聊天记录、工具目录或系统说明塞进搜索词。
-22. available_tools 中存在 web_search.search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
+22. available_tools 中存在 web_search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
 23. tools、context_message_ids 和 keep_older_summary 三个字段必须始终给出，即使它们为空或为 false。`)
 		userPrompt = "请判断图片动作，并选择本轮真正可能有用的上下文和工具。消息上下文 JSON：\n"
 		outputFormat = `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`
@@ -4738,7 +4762,7 @@ type llmProviderRunFunc func(LLMProvider) (string, error)
 // modelRoleForGroup 返回某个用途实际绑定的模型角色，没有专门绑定时回落到 chat 绑定。
 //
 // 回落这条是有意的：机器人绑定的是「这台机器人用哪个模型说话」。一轮对话中途多出
-// 几张图（例如 diana.history_media 把历史原图作为附件补进下一轮），用途会从 chat
+// 几张图（例如 history_media 把历史原图作为附件补进下一轮），用途会从 chat
 // 变成 vision，但说话的还是同一台机器人。没有单独绑视觉模型时就该继续用它绑定的
 // 聊天模型，而不是滑到全局激活配置那份和这台机器人无关的配置上——那种切换是静默的，
 // 表现为「聊着聊着换了个模型答话」，而日志里两轮的 provider/model 都是「正常」的。
@@ -7094,6 +7118,9 @@ func sessionKey(event MessageEvent) string {
 // handleOwnerCommand 处理 owner 的强格式管理命令。
 func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, bool) {
 	cfg := r.Config().WithDefaults()
+	if command := strings.TrimSpace(text); command == "清空上下文" || command == "清除上下文" {
+		cfg = r.effectiveConfigForEvent(event)
+	}
 	if !cfg.IsOwnerEvent(event) {
 		return "", false
 	}
@@ -7158,24 +7185,17 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	case strings.HasPrefix(command, "订阅 添加 "):
 		args := strings.TrimSpace(strings.TrimPrefix(command, "订阅 添加 "))
 		return r.addScheduledQueryCommand(event, args), true
-	case command == "清空上下文":
-		r.clearSessionHistory(event)
-		return "已清空当前会话上下文。", true
+	case command == "清空上下文" || command == "清除上下文":
+		if err := r.clearSessionHistory(event); err != nil {
+			log.Printf("diana context reset failed: %v", err)
+			return "清空上下文失败，请稍后重试或检查服务日志。", true
+		}
+		return "已清空当前会话上下文；聊天记录、长期记忆和人设仍保留。", true
 	case command == "帮助" || command == "菜单":
 		return "可用命令：lllm 列表、lllm 当前、lllm 切换 <名称>、群 列表、群 禁用 <群号>、群 启用 <群号>、响应限制 列表、响应限制 解除 <账号>、提醒 添加 <时长> <内容>、提醒 列表、提醒 取消 <ID>、提醒 删除 <ID>、订阅 添加 <周期> <查询内容>、订阅 列表、订阅 取消 <ID>、订阅 删除 <ID>、清空上下文。也可以直接说：1 分钟后提醒我睡觉，或者每 1 分钟查询某件事并通知我。", true
 	default:
 		return "", false
 	}
-}
-
-// clearSessionHistory 清空当前会话上下文。
-func (r *Runtime) clearSessionHistory(event MessageEvent) {
-	session := sessionKey(event)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.history, session)
-	delete(r.contextSummaries, session)
-	delete(r.contextSummaryMarks, session)
 }
 
 // renderDisabledGroups 渲染禁用群列表。

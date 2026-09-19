@@ -44,8 +44,8 @@ type dianaTask struct {
 	RepositoryBranch      string    `json:"repository_branch,omitempty"`
 	WatchCommits          bool      `json:"watch_commits,omitempty"`
 	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
-	PullRequestEvents     []string  `json:"watch_pull_request_events,omitempty"`
-	IssueEvents           []string  `json:"watch_issue_events,omitempty"`
+	PullRequestEvents     []string  `json:"watch_pull_request_events"`
+	IssueEvents           []string  `json:"watch_issue_events"`
 	WatchIssues           bool      `json:"watch_issues,omitempty"`
 	WatchReleases         bool      `json:"watch_releases,omitempty"`
 	WatchStars            bool      `json:"watch_stars,omitempty"`
@@ -73,7 +73,7 @@ func newDianaTasksTool(runtime *Runtime, event MessageEvent) *dianaTasksTool {
 }
 
 func (t *dianaTasksTool) Name() string {
-	return "diana.tasks"
+	return "tasks"
 }
 
 func (t *dianaTasksTool) Description() string {
@@ -207,8 +207,8 @@ func taskForTool(item Reminder) dianaTask {
 		RepositoryBranch:      item.RepositoryBranch,
 		WatchCommits:          item.WatchCommits,
 		WatchPullRequests:     item.WatchPullRequests,
-		PullRequestEvents:     append([]string(nil), item.WatchPullRequestEvents...),
-		IssueEvents:           append([]string(nil), item.WatchIssueEvents...),
+		PullRequestEvents:     EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
+		IssueEvents:           EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
 		WatchIssues:           item.WatchIssues,
 		WatchReleases:         item.WatchReleases,
 		WatchStars:            item.WatchStars,

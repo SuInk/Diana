@@ -36,6 +36,33 @@ func registryLLMProvider(registry *llm.ProviderRegistry, selection llm.AgentMode
 	return withTransientLLMRetry(llm.RegistryClient{Registry: registry, Selection: selection}, retryTransient)
 }
 
+// wrappedLLMProvider 是只做装饰、不改变选中模型的 provider。要读模型身份时顺着它
+// 一层层往里找，直到碰到真正握着选择的那一层。
+type wrappedLLMProvider interface {
+	innerLLMProvider() LLMProvider
+}
+
+func (p *transientRetryLLMProvider) innerLLMProvider() LLMProvider   { return p.provider }
+func (p *streamingLLMProvider) innerLLMProvider() LLMProvider        { return p.provider }
+func (p *promptCacheProbeLLMProvider) innerLLMProvider() LLMProvider { return p.provider }
+func (p *usageAccountingLLMProvider) innerLLMProvider() LLMProvider  { return p.provider }
+
+// unwrapLLMDecorators 剥掉所有装饰层。层数有限，上限只防意外的自引用。
+func unwrapLLMDecorators(provider LLMProvider) LLMProvider {
+	for range 16 {
+		wrapped, ok := provider.(wrappedLLMProvider)
+		if !ok {
+			return provider
+		}
+		inner := wrapped.innerLLMProvider()
+		if inner == nil {
+			return provider
+		}
+		provider = inner
+	}
+	return provider
+}
+
 func unwrapTransientLLMRetry(provider LLMProvider) LLMProvider {
 	if wrapped, ok := provider.(*transientRetryLLMProvider); ok && wrapped != nil && wrapped.provider != nil {
 		return wrapped.provider

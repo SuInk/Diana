@@ -111,7 +111,9 @@
             <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
             <span class="bot-profile-meta">
               <span class="platform-chip">{{ platformName(profile.platform) }}</span>
-              <span class="bot-profile-account">{{ profile.bot_account || accountPlaceholder(profile) }}</span>
+              <span class="bot-profile-account">{{ connectionAccount(profile) || accountPlaceholder(profile) }}</span>
+              <span v-if="profile.connection_profile_id" class="platform-chip bot-profile-connection">复用 · {{ connectionSourceName(profile) }}</span>
+              <span v-else-if="connectionUsers(profile).length" class="platform-chip bot-profile-connection">连接被 {{ connectionUsers(profile).length }} 台复用</span>
             </span>
           </button>
           <label class="switch bot-profile-enable" :title="profile.enabled ? '停用这台机器人' : '启用这台机器人'">
@@ -128,6 +130,10 @@
             <button class="btn small" type="button" :disabled="busy" @click="editProfile(profile)">
               <Settings2 :size="14" aria-hidden="true" />
               配置
+            </button>
+            <button class="btn small" type="button" :disabled="busy" @click="beginCopyProfile(profile)">
+              <Copy :size="14" aria-hidden="true" />
+              复制配置
             </button>
             <button
               class="btn small danger"
@@ -180,6 +186,10 @@
               <span class="card-sub">通过 {{ platformProtocol(form.platform) }} 连接</span>
             </div>
             <div class="card-body stack">
+              <div v-if="creating && copiedFrom" class="stack" style="gap: 8px" role="status">
+                <p class="hint">已从「{{ copiedFrom.name || '未命名机器人' }}」复制人设、模型和行为设置。保存后独立修改，不会跟随来源同步；接入方式在下方另选。</p>
+                <button v-if="copiedConnectionSource && !form.connection_profile_id" class="btn small" type="button" @click="form.connection_profile_id = copiedConnectionSource">同时复用来源连接</button>
+              </div>
               <!-- 名称放在最前：先确认这是哪个机器人，再选接入平台、填接入凭据。 -->
               <div class="field">
                 <label for="bot-name">机器人名称</label>
@@ -191,12 +201,23 @@
                 <AppSelect
                   :model-value="form.platform ?? ''"
                   :options="platformOptions"
-                  @update:model-value="(value) => { if (form) form.platform = value; }"
+                  @update:model-value="(value) => { if (form) { form.platform = value; form.connection_profile_id = ''; } }"
                 />
                 <span class="hint">{{ platformDescription(form.platform) }}</span>
               </div>
               <!-- 按平台和传输方式展示连接地址与鉴权凭据。 -->
               <template v-if="isOneBotPlatform">
+                <div class="field">
+                  <label>连接来源</label>
+                  <AppSelect :model-value="form.connection_profile_id || ''" :options="connectionOptions" @update:model-value="(value) => { if (form) form.connection_profile_id = value; }" />
+                  <span class="hint">复用已有连接即可免填地址和 Token，来源连接的修改会自动同步。</span>
+                </div>
+                <div v-if="form.connection_profile_id" class="hint">
+                  正在复用「{{ connectionSourceName(form) }}」的连接，使用同一个平台账号。
+                  消息会交给各台启用的机器人，各自按人设和行为配置决定是否回复，可能产生多条回复。
+                  停用来源机器人的回复不会断开复用连接；仍有机器人复用时不能删除来源。
+                </div>
+                <template v-else>
                 <div class="field">
                   <label for="bot-onebot-transport">连接方式</label>
                   <select id="bot-onebot-transport" :value="form.onebot_transport || 'reverse_ws'" @change="form.onebot_transport = ($event.target as HTMLSelectElement).value as BotProfileConfig['onebot_transport']" class="input">
@@ -239,7 +260,46 @@
                     :revealed="tokenRevealed.onebot_http_secret" :busy="tokenRevealBusy === 'onebot_http_secret'"
                     @toggle-reveal="toggleTokenReveal('onebot_http_secret')" />
                 </template>
+                <div v-if="connectionConflict" class="stack" role="alert" style="gap: 8px">
+                  <p class="hint warn-text">此 WebSocket 地址已由「{{ connectionConflict.name || '未命名机器人' }}」使用。请选择复用，或填写不同的地址，避免重复接收消息或连接被替换。</p>
+                  <button class="btn small" type="button" :disabled="busy || connectionUsers(form).length > 0" @click="reuseConflictingConnection">改为复用「{{ connectionConflict.name || '未命名机器人' }}」</button>
+                  <span v-if="connectionUsers(form).length" class="hint">当前连接仍被其他机器人复用，请先更换它们的连接来源。</span>
+                  <span v-else class="hint">改为复用后，地址和 Token 跟随来源；人设及行为设置保留，保存后生效。</span>
+                </div>
+                <div class="field wide">
+                  <label for="bot-token">OneBot Access Token</label>
+                  <div class="input-group">
+                    <input
+                      id="bot-token"
+                      v-model="tokenDraft"
+                      class="input"
+                      :type="tokenRevealed.onebot_access_token ? 'text' : 'password'"
+                      autocomplete="off"
+                      :placeholder="form.onebot_access_token_configured ? (form.onebot_access_token_preview ? `已保存 ${form.onebot_access_token_preview}，留空沿用，填写则覆盖` : '已配置 — 留空沿用，填写则覆盖') : ((!form.onebot_transport || form.onebot_transport === 'reverse_ws') ? '反向 WebSocket 必填（启用时），至少 16 位' : '可选，至少 16 位')"
+                    />
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      :disabled="tokenRevealBusy === 'onebot_access_token'"
+                      :aria-label="tokenRevealed.onebot_access_token ? '隐藏 Token' : '查看 Token'"
+                      @click="toggleTokenReveal('onebot_access_token')"
+                    >
+                      <EyeOff v-if="tokenRevealed.onebot_access_token" :size="14" aria-hidden="true" />
+                      <Eye v-else :size="14" aria-hidden="true" />
+                    </button>
+                    <button
+                      class="btn icon-only"
+                      type="button"
+                      aria-label="随机生成 Token"
+                      title="随机生成"
+                      @click="generateOneBotToken"
+                    >
+                      <Shuffle :size="14" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
                 <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
+                </template>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
                 <SecretField
@@ -458,29 +518,6 @@
                   </label>
                   <span class="hint">开启后登录页可显示一次性验证码，主人私聊发给机器人即可登录；需当前机器人在线。</span>
                 </div>
-                <div v-if="isOneBotPlatform" class="field wide">
-                  <label for="bot-token">OneBot Access Token</label>
-                  <div class="input-group">
-                    <input
-                      id="bot-token"
-                      v-model="tokenDraft"
-                      class="input"
-                      :type="tokenRevealed.onebot_access_token ? 'text' : 'password'"
-                      autocomplete="off"
-                      :placeholder="form.onebot_access_token_configured ? '已配置 — 留空沿用，填写则覆盖' : '可选，至少 16 位'"
-                    />
-                    <button
-                      class="btn icon-only"
-                      type="button"
-                      :disabled="tokenRevealBusy === 'onebot_access_token'"
-                      :aria-label="tokenRevealed.onebot_access_token ? '隐藏 Token' : '查看 Token'"
-                      @click="toggleTokenReveal('onebot_access_token')"
-                    >
-                      <EyeOff v-if="tokenRevealed.onebot_access_token" :size="14" aria-hidden="true" />
-                      <Eye v-else :size="14" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
                 <div class="field wide">
                   <label class="switch">
                     <input v-model="form.enabled" type="checkbox" />
@@ -613,6 +650,16 @@
                   默认使用流式接收正文、思考和工具调用；思考不会作为聊天正文发送，工具参数完整后才会执行。
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
                 </span>
+              </div>
+              <div class="field">
+                <label for="bot-model-disclosure">谁能问出所用模型</label>
+                <AppSelect
+                  id="bot-model-disclosure"
+                  :model-value="form.model_disclosure ?? 'owner'"
+                  :options="modelDisclosureOptions"
+                  @update:model-value="(value) => { if (form) form.model_disclosure = value as 'owner' | 'everyone'; }"
+                />
+                <span class="hint">默认只对主人如实回答模型 ID 和供应商，主人也始终能在聊天里查看和切换模型；其他人问起时机器人会含糊带过，也不会凭训练记忆自报家门。</span>
               </div>
             </div>
           </section>
@@ -1540,13 +1587,26 @@
         <div class="modal-header">
           <div>
             <h2 id="platform-picker-title">新增机器人</h2>
-            <p class="muted">先选择机器人使用的接入平台</p>
+            <p class="muted">选择接入平台，或直接复用已有 OneBot 连接</p>
           </div>
           <button class="btn ghost icon-only" type="button" aria-label="关闭" @click="platformPickerOpen = false">
             <X :size="18" aria-hidden="true" />
           </button>
         </div>
+        <div class="field" v-if="profiles.length" style="padding: 0 20px 16px">
+          <label>从已有机器人复制配置</label>
+          <div class="input-group">
+            <AppSelect v-model="copySourceID" :options="copySourceOptions" />
+            <button class="btn small" type="button" :disabled="busy || !copySourceID" @click="copySelectedProfile">使用这份配置</button>
+          </div>
+          <span class="hint">沿用人设、模型和行为，接入连接另选；保存后各自独立。</span>
+        </div>
         <div class="platform-choice-list">
+          <button v-for="source in reusableConnections" :key="`reuse-${source.id}`" class="platform-choice" type="button" @click="beginCreateShared(source)">
+            <span class="platform-choice-icon"><Bot :size="21" aria-hidden="true" /></span>
+            <span><strong>复用 {{ source.name || '未命名机器人' }} 的连接</strong><small>同一平台账号，免填地址和 Token，人设与行为单独配置</small></span>
+            <ChevronRight :size="18" aria-hidden="true" />
+          </button>
           <button
             v-for="platform in platforms"
             :key="platform.id"
@@ -1628,6 +1688,8 @@
 </template>
 
 <script setup lang="ts">
+import { copyBotConfiguration } from "../bot-config-copy";
+import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -1813,6 +1875,21 @@ function tokenConfigured(field: TokenField): boolean {
 
 function tokenValue(config: BotProfileConfig, field: TokenField): string {
   return (readField(config, field) as string | undefined) ?? "";
+}
+
+// 用 CSPRNG 生成足够长的随机 token，满足后端的最低长度要求；
+// 生成后自动切到明文，方便用户复制到 OneBot 客户端。
+function generateOneBotToken(): void {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let token = "";
+  for (const byte of bytes) {
+    token += alphabet[byte % alphabet.length];
+  }
+  tokenDraft.value = token;
+  tokenRevealed.value.onebot_access_token = true;
+  toastSuccess("已生成随机 Token，请同步填写到 OneBot 客户端");
 }
 
 // 点「查看」才去后端要一次真实凭据：草稿是空的说明用户没改过,值只在服务端,
@@ -2029,6 +2106,11 @@ const replyReferenceModeOptions: AppSelectOption[] = [
   { value: "on", label: "总是引用" },
   { value: "off", label: "从不引用" },
   { value: "auto", label: "让模型自己决定" }
+];
+
+const modelDisclosureOptions: AppSelectOption[] = [
+  { value: "owner", label: "仅主人" },
+  { value: "everyone", label: "所有人" }
 ];
 
 const welcomeModeOptions: AppSelectOption[] = [
@@ -2542,6 +2624,59 @@ const globalGate = computed({
 
 const status = computed(() => stream.status);
 const profiles = computed<BotProfileConfig[]>(() => profileSet.value?.profiles ?? []);
+const copiedFrom = ref<Pick<BotProfileConfig, "id" | "name" | "platform" | "connection_profile_id"> | null>(null);
+const copySourceID = ref("");
+const copySourceOptions = computed<AppSelectOption[]>(() => [
+  { value: "", label: "选择配置来源" },
+  ...profiles.value.filter((profile) => profile.id).map((profile) => ({ value: profile.id!, label: profile.name || "未命名机器人", hint: platformName(profile.platform) }))
+]);
+const copiedConnectionSource = computed(() => form.value?.platform === "onebot-v11" && copiedFrom.value?.platform === "onebot-v11" ? copiedFrom.value.connection_profile_id || copiedFrom.value.id : undefined);
+async function copySelectedProfile(): Promise<void> {
+  const source = profiles.value.find((profile) => profile.id === copySourceID.value);
+  if (source) await beginCopyProfile(source);
+}
+async function beginCopyProfile(source: BotProfileConfig): Promise<void> {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const defaults = await getNewBotProfileDefaults(source.platform || "onebot-v11");
+    setForm(copyBotConfiguration(source, defaults));
+    copiedFrom.value = { id: source.id, name: source.name, platform: source.platform, connection_profile_id: source.connection_profile_id };
+    creating.value = true;
+    platformPickerOpen.value = false;
+    editorTab.value = "access";
+    page.value = "edit";
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "复制机器人配置失败");
+  } finally {
+    busy.value = false;
+  }
+}
+const connectionConflict = computed(() => form.value ? findWebSocketConnectionConflict(form.value, profiles.value) : undefined);
+function reuseConflictingConnection(): void {
+  const source = connectionConflict.value;
+  if (!form.value || !source?.id || connectionUsers(form.value).length) return;
+  form.value.connection_profile_id = source.id;
+}
+const reusableConnections = computed(() => profiles.value.filter((profile) => profile.id && profile.platform === "onebot-v11" && !profile.connection_profile_id));
+const connectionOptions = computed<AppSelectOption[]>(() => [
+  { value: "", label: "独立配置连接" },
+  ...reusableConnections.value.filter((profile) => profile.id !== form.value?.id).map((profile) => ({ value: profile.id!, label: `复用 · ${profile.name || "未命名机器人"}` }))
+]);
+function connectionAccount(profile: BotProfileConfig): string | undefined {
+  return profile.connection_profile_id ? profiles.value.find((source) => source.id === profile.connection_profile_id)?.bot_account : profile.bot_account;
+}
+function connectionSourceName(profile: BotProfileConfig): string {
+  return profiles.value.find((source) => source.id === profile.connection_profile_id)?.name || "来源不存在";
+}
+function connectionUsers(profile: BotProfileConfig): BotProfileConfig[] {
+  if (!profile.id) return [];
+  return profiles.value.filter((item) => item.connection_profile_id === profile.id);
+}
+async function beginCreateShared(source: BotProfileConfig): Promise<void> {
+  const platform = platforms.value.find((item) => item.id === source.platform);
+  if (platform) await beginCreate(platform, source.id);
+}
 const activeProfileID = computed(() => profileSet.value?.active_profile_id);
 const relayManagerOpen = ref(false);
 const messageRelays = computed<MessageRelayPair[]>(() => profileSet.value?.message_relays ?? []);
@@ -2605,7 +2740,8 @@ function platformName(id?: string): string {
 
 function platformProtocol(id?: string): string {
   if (platformDefinition(id)?.protocol.startsWith("onebot-v11")) {
-    const mode = form.value?.onebot_transport || "reverse_ws";
+    const source = form.value?.connection_profile_id ? profiles.value.find((profile) => profile.id === form.value?.connection_profile_id) : form.value;
+    const mode = source?.onebot_transport || "reverse_ws";
     return ({ reverse_ws: "OneBot v11 反向 WebSocket", forward_ws: "OneBot v11 正向 WebSocket", http: "OneBot v11 HTTP" } as Record<string, string>)[mode] || "OneBot v11";
   }
   return platformDefinition(id)?.protocol ?? "未识别协议";
@@ -3099,6 +3235,7 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
+    model_disclosure: config.model_disclosure ?? "owner",
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
@@ -3307,8 +3444,25 @@ async function save(): Promise<void> {
   if (!current) {
     return;
   }
-  if ((!current.platform || current.platform === "onebot-v11") && current.onebot_transport !== "http" && !validWebSocketURL(current.onebot_transport === "forward_ws" ? current.onebot_ws_endpoint || "" : current.onebot_reverse_ws_endpoint)) {
+  if (!current.connection_profile_id && (!current.platform || current.platform === "onebot-v11") && current.onebot_transport !== "http" && !validWebSocketURL(current.onebot_transport === "forward_ws" ? current.onebot_ws_endpoint || "" : current.onebot_reverse_ws_endpoint)) {
     toastError("请填写有效的 ws:// 或 wss:// 连接地址");
+    return;
+  }
+  if (connectionConflict.value) {
+    editorTab.value = "access";
+    toastError(`此 WebSocket 地址已由「${connectionConflict.value.name || "未命名机器人"}」使用，请选择复用或填写不同的地址`);
+    return;
+  }
+  // 后端会拒绝「启用 + 反向 WS + 空 token」的保存；提前拦住，错误提示更贴上下文。
+  if (
+    !current.connection_profile_id &&
+    (!current.platform || current.platform === "onebot-v11") &&
+    current.enabled &&
+    (!current.onebot_transport || current.onebot_transport === "reverse_ws") &&
+    !current.onebot_access_token_configured &&
+    !tokenDraft.value.trim()
+  ) {
+    toastError("反向 WebSocket 模式必须配置 Access Token，需与 OneBot v11 客户端保持一致");
     return;
   }
   const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
@@ -3370,7 +3524,7 @@ async function save(): Promise<void> {
     // 草稿为空表示「没改过」，字段留空提交，后端会沿用已存的那份；填了才覆盖。
     const secrets: Record<string, string | undefined> = {};
     for (const [field, draft] of Object.entries(tokenDrafts)) {
-      secrets[field] = draft.value.trim() || undefined;
+      secrets[field] = current.connection_profile_id && (field === "onebot_access_token" || field === "onebot_http_secret") ? undefined : draft.value.trim() || undefined;
     }
     const payload: BotProfileConfig = {
       ...current,
@@ -3477,15 +3631,17 @@ function leaveEditor(): void {
   page.value = "list";
 }
 
-async function beginCreate(platform: BotPlatform): Promise<void> {
+async function beginCreate(platform: BotPlatform, connectionProfileID = ""): Promise<void> {
   if (busy.value) return;
   busy.value = true;
   try {
     const defaults = await getNewBotProfileDefaults(platform.id);
+    copiedFrom.value = null;
     setForm({
       ...defaults,
       id: undefined,
       name: `新建 ${platform.name} 机器人`,
+      connection_profile_id: connectionProfileID,
       platform: platform.id
     });
     creating.value = true;
@@ -3501,6 +3657,11 @@ async function beginCreate(platform: BotPlatform): Promise<void> {
 
 async function removeProfile(profile: BotProfileConfig): Promise<void> {
   if (!profile.id) {
+    return;
+  }
+  const users = connectionUsers(profile);
+  if (users.length) {
+    toastError(`「${users.map((item) => item.name || "未命名机器人").join("、")}」仍在复用此连接，请先更换它们的连接来源`);
     return;
   }
   const ok = await askConfirm({

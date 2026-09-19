@@ -83,6 +83,8 @@ const (
 )
 
 type Message struct {
+	// ContinuationScope binds opaque reasoning state to its originating endpoint and model.
+	ContinuationScope string            `json:"-"`
 	AnthropicThinking []json.RawMessage `json:"-"`
 	// ReasoningContent is provider continuation state, never chat text or logs.
 	ReasoningContent *string       `json:"-"`
@@ -185,7 +187,17 @@ type Usage struct {
 	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
 }
 
+// Add 把另一次调用的用量累加进来。
+func (u *Usage) Add(other Usage) {
+	u.InputTokens += other.InputTokens
+	u.OutputTokens += other.OutputTokens
+	u.TotalTokens += other.TotalTokens
+	u.CachedInputTokens += other.CachedInputTokens
+}
+
 type GenerateResponse struct {
+	// ContinuationScope binds opaque reasoning state to its originating endpoint and model.
+	ContinuationScope string            `json:"-"`
 	AnthropicThinking []json.RawMessage `json:"-"`
 	ReasoningContent  *string           `json:"-"`
 	Provider          Provider          `json:"provider"`
@@ -216,6 +228,9 @@ type ImageGenerateResponse struct {
 	Provider Provider `json:"provider"`
 	Model    string   `json:"model,omitempty"`
 	Images   []string `json:"images"`
+	// Usage 是上游报的 token 用量。gpt-image 这类按 token 计费的模型会给，按张
+	// 计费的中转常常不给，这时为零值。
+	Usage Usage `json:"usage,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -660,6 +675,7 @@ func (req GenerateRequest) withDefaults(cfg ProviderConfig) GenerateRequest {
 	if strings.TrimSpace(req.ReasoningEffort) == "" {
 		req.ReasoningEffort = cfg.ReasoningEffort
 	}
+	req.Messages = scopedContinuationMessages(req.Messages, continuationScope(cfg, req.Model))
 	req.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
 	if req.MaxOutputTokens == 0 {
 		// 0 表示调用方没覆盖，沿用 provider config；负数会在 Validate 阶段拒绝。

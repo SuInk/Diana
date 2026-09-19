@@ -76,14 +76,16 @@ func webSearchRunMetadataFromOutput(tool, output string, runErr error) map[strin
 		})
 	}
 	return map[string]any{
-		"status":       result.Status,
-		"stop_reason":  result.StopReason,
-		"strategy":     result.Strategy,
-		"source_count": len(result.Sources),
-		"queries":      queries,
-		"providers":    providers,
-		"attempts":     attempts,
-		"budget":       result.Budget,
+		"retrieved_at":       result.RetrievedAt,
+		"freshness_verified": result.FreshnessVerified,
+		"status":             result.Status,
+		"stop_reason":        result.StopReason,
+		"strategy":           result.Strategy,
+		"source_count":       len(result.Sources),
+		"queries":            queries,
+		"providers":          providers,
+		"attempts":           attempts,
+		"budget":             result.Budget,
 	}
 }
 

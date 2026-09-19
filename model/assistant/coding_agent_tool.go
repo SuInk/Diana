@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	dianaCodingToolName = "diana.coding"
+	dianaCodingToolName = "coding"
 	// maxCodingInstructionRunes 限制单次指令长度。指令是要落进 argv 的，系统对单个
 	// 参数有长度上限；真需要更多上下文的活该写进工作区里的文件，让 CLI 自己去读。
 	maxCodingInstructionRunes = 8000

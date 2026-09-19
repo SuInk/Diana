@@ -166,12 +166,13 @@ func (p *runtimeAgentLLMProvider) providerForGroup(group string) (LLMProvider, e
 	return provider, nil
 }
 
+// recordLLMUsage 每次调用成功就记一条，不管上游报没报用量、有没有挂在某条消息
+// 名下。以前这两种情况直接跳过：中转没回 usage 的调用连调用次数都不算，后台建
+// 表情包索引、定时任务这些没有消息 ID 的调用整条消失，统计出来的总量比账单少一截
+// 还看不出来少在哪。
 func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provider llm.Provider, model string, usage llm.Usage, purpose string, duration time.Duration, ttft time.Duration) {
 	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
-	}
-	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
-		return
 	}
 	writer := r.appLogWriter()
 	if writer == nil {
@@ -180,7 +181,7 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	entry := applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
-		Action:  "diana.llm_usage",
+		Action:  "llm_usage",
 		Message: "LLM 调用用量已记录",
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
@@ -207,7 +208,15 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	if ttft > 0 {
 		entry.Metadata["ttft_ms"] = ttft.Milliseconds()
 	}
-	_ = writer.AppendLog(ctx, entry)
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.TotalTokens == 0 {
+		// 调用确实发生了，只是上游没报用量。标出来，免得被当成「这次没花钱」。
+		entry.Metadata["usage_missing"] = true
+	}
+	// 调用方的 ctx 可能正好在这时到期或被取消（带超时的旁路调用很常见），用它写日志
+	// 会把刚花掉的用量丢掉。
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_ = writer.AppendLog(logCtx, entry)
 }
 
 func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event MessageEvent, prompt string) string {
@@ -794,7 +803,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
 		builder.WriteString("\n" + promptAliasPrefix + aliases + promptAliasRule)
 	}
-	if agentEnabled && relationship.Owner && hasTool("diana.llm_config") {
+	if agentEnabled && relationship.Owner && hasTool("llm_config") {
 		tail.WriteString("\n" + promptToolLLMConfig)
 	}
 	if agentEnabled && hasTool(dianaRepositoryIssuesToolName) {
@@ -815,7 +824,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		builder.WriteString("\n" + promptToolHistoryImages)
 	}
 	if agentEnabled && hasTool(dianaMemoryToolName) {
-		builder.WriteString("\n长期记忆摘要不够时，先用 diana.memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。")
+		builder.WriteString("\n长期记忆摘要不够时，先用 memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。")
 	}
 	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
 		builder.WriteString("\n" + promptInternalIdentifiers)
@@ -824,10 +833,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 			builder.WriteString("\n" + promptQuoteHistoryMessage)
 		}
 	}
-	if agentEnabled && relationship.Owner && hasTool("diana.relationship") {
+	if agentEnabled && relationship.Owner && hasTool("relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)
 	}
-	if agentEnabled && relationship.Owner && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
+	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", "schedule", "rss") {
 		tail.WriteString("\n" + promptOwnerTaskTarget)
 	}
 	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
@@ -835,26 +844,34 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 变化——和头部其余工具规则的性质完全一样。它们以前跟着「按好感度解锁」的
 	// 假设待在尾部，实测占尾部 436 token 里的绝大部分，等于每条消息都重发一遍
 	// 一段人人相同的文本，且永远命不中前缀缓存。
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.reminder") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("reminder") {
 		builder.WriteString("\n" + promptTaskReminder)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.schedule") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("schedule") {
 		builder.WriteString("\n" + promptTaskSchedule)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("rss") {
 		builder.WriteString("\n" + promptTaskRSS)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("diana.tasks") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("tasks") {
 		builder.WriteString("\n" + promptTaskList)
 	}
 	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
 		builder.WriteString("\n" + promptTaskRepositoryWatch)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("diana.tasks", "diana.reminder", "diana.schedule", "diana.rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", "schedule", "rss") {
 		builder.WriteString("\n" + promptTaskNoSubstitute)
 	}
-	if agentEnabled && hasTool(dianaRuntimeModelToolName) {
+	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
+	// 主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
+	switch everyone := normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone; {
+	case !everyone && !relationship.Owner:
+		tail.WriteString("\n" + promptModelUndisclosed)
+	case !agentEnabled || !hasTool(dianaRuntimeModelToolName):
+	case everyone:
 		builder.WriteString("\n" + promptToolRuntimeModel)
+	default:
+		tail.WriteString("\n" + promptToolRuntimeModel)
 	}
 	if agentEnabled && hasTool(dianaVersionToolName) {
 		builder.WriteString("\n" + promptToolVersion)
@@ -868,19 +885,19 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
 		builder.WriteString("\n" + promptToolThreadState)
 	}
-	if agentEnabled && hasTool("diana.capabilities") {
+	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
 	}
 	if agentEnabled && hasTool(groupToolName(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)})) {
 		builder.WriteString("\n" + groupToolPrompt(MessageEvent{Platform: firstNonEmpty(event.Platform, cfg.Platform)}))
 	}
 	if agentEnabled && hasTool(botParticipationToolName) {
-		builder.WriteString("\n修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 diana.bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。")
+		builder.WriteString("\n修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。")
 	}
 	if agentEnabled && hasTool(replyBlockToolName) {
-		builder.WriteString("\n主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 diana.reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或 diana.group 的成员查询，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。")
+		builder.WriteString("\n主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或 group 的成员查询，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。")
 	}
-	if agentEnabled && hasTool("diana.relationship") {
+	if agentEnabled && hasTool("relationship") {
 		builder.WriteString("\n" + promptToolRelationshipList)
 		builder.WriteString("\n" + promptToolRelationshipQuery)
 		builder.WriteString("\n" + promptToolRelationshipPortrait)
@@ -893,7 +910,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaImageToolName) {
 		builder.WriteString("\n" + promptToolImage)
 	}
-	if agentEnabled && hasTool("diana.tts") {
+	if agentEnabled && hasTool("tts") {
 		builder.WriteString("\n" + promptToolTTS)
 	}
 	builder.WriteString("\n" + promptRelationshipTierRules)
@@ -1096,7 +1113,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 		line += ": " + text
 	}
 	// 只列有的媒体种类和数量。以前这一行把五种计数（多数是 0）、「当前未附加
-	// 原件」和一整句怎么调用 diana.history_media 都写一遍，每条带图的历史要多付
+	// 原件」和一整句怎么调用 history_media 都写一遍，每条带图的历史要多付
 	// 近百个 token——群里表情包一条接一条，这笔开销比正文还大。「摘要不等于看过
 	// 原件」和「怎么取原件」在 promptToolHistoryImages 里只说一次就够了。
 	line += "\n【媒体 message_id=" + messageID + "：" + historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount) + "】"
@@ -1425,7 +1442,7 @@ func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, Mes
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	stored, err := store.ListRecentMessageEvents(ctx, session, limit)
+	stored, err := listContextMessageEvents(ctx, store, session, limit)
 	if err != nil {
 		log.Printf("diana message history load failed: %v", err)
 		return memory, store

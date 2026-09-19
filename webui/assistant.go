@@ -97,14 +97,16 @@ type BotHandler struct {
 	logs                      AppLogWriter
 	features                  BotFeatureFlags
 	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
-	repoPlugins               *assistant.RepoPluginInstaller
-	repoPluginSources         *assistant.RepoPluginStore
-	liveGroupMu               sync.Mutex
-	liveGroupCache            liveGroupListCache
-	groupNameMu               sync.Mutex
-	groupNameCache            map[string]groupNameCacheEntry
-	userNameMu                sync.Mutex
-	userNameCache             map[string]userNameCacheEntry
+	// repoPlugins / repoPluginSources 是第三方（仓库安装）插件的安装器与来源
+	// 记录；未注入时相关接口返回 501，纯内置插件部署不受影响。
+	repoPlugins       *assistant.RepoPluginInstaller
+	repoPluginSources *assistant.RepoPluginStore
+	liveGroupMu       sync.Mutex
+	liveGroupCache    liveGroupListCache
+	groupNameMu       sync.Mutex
+	groupNameCache    map[string]groupNameCacheEntry
+	userNameMu        sync.Mutex
+	userNameCache     map[string]userNameCacheEntry
 }
 
 type BotFeatureFlags struct {
@@ -289,6 +291,9 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/events", h.listEvents)
 	router.GET(base+"/events/:id/trace", h.eventTrace)
 	router.GET(base+"/events/:id/images/:index", h.eventImage)
+	router.GET(base+"/events/:id/outbound-images/:index", h.eventOutboundImage)
+	router.GET(base+"/stickers", h.listStickers)
+	router.GET(base+"/stickers/:hash/image", h.stickerImage)
 	router.GET(base+"/users", h.listAssistantUsers)
 	router.GET(base+"/user-names", h.lookupAssistantUserNames)
 	router.GET(base+"/users/:id", h.getAssistantUser)
@@ -332,11 +337,12 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
+	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
+	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
+	// 第三方（仓库安装）插件。repo/* 是静态段，gin 里与 :id 参数段共存不冲突。
 	router.POST(base+"/plugins/repo/preview", h.previewRepoPlugin)
 	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
 	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
-	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
-	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
 	router.GET(base+"/plugins/repository-publish/drafts", h.listRepositoryIssueDrafts)
@@ -426,6 +432,15 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		payload.Profiles = nil
 	}
 	cfg := assistant.ConfigFromPayload(payload, existing)
+	// Legacy edit requests omit the ID; keep their current profile identity so
+	// the duplicate check does not mistake an edit for a second connection.
+	if !create && cfg.ID == "" {
+		cfg.ID = existing.ID
+	}
+	if err := set.ValidateIndependentConnection(cfg); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
+		return
+	}
 	if err := validateTokenLength("onebot_access_token", payload.OneBotAccessToken); err != nil {
 		h.writeError(c, http.StatusBadRequest, "assistant.config.save", err, botLogTarget(cfg), botLogMetadata(cfg))
 		return
@@ -618,6 +633,12 @@ func (h *BotHandler) setProfileEnabled(c *gin.Context) {
 		return
 	}
 	current, _ := next.ConfigForProfile(payload.ProfileID)
+	if payload.Enabled {
+		if err := next.ValidateIndependentConnection(current); err != nil {
+			h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, botLogTarget(current), botLogMetadata(current))
+			return
+		}
+	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, botLogTarget(current), botLogMetadata(current))
 		return
@@ -645,6 +666,14 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 		return
 	}
 	next := h.profiles.Profiles().WithAllProfilesEnabled(payload.Enabled)
+	if payload.Enabled {
+		for _, profile := range next.Profiles {
+			if err := next.ValidateIndependentConnection(profile); err != nil {
+				h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, botLogTarget(profile), botLogMetadata(profile))
+				return
+			}
+		}
+	}
 	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, "", nil)
 		return
@@ -663,6 +692,9 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 
 func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 	set = set.WithDefaults()
+	if err := set.ValidateConnections(); err != nil {
+		return err
+	}
 	cfg, ok := set.RuntimeConfig()
 	if !ok {
 		return fmt.Errorf("assistant profile set is empty")
@@ -689,17 +721,18 @@ func (h *BotHandler) applyProfileSet(set assistant.ProfileSet) error {
 }
 
 type botTransportConfig struct {
-	ID                 string
-	Platform           string
-	OneBotTransport    string
-	OneBotWSEndpoint   string
-	OneBotHTTPURL      string
-	OneBotHTTPSecret   string
-	OneBotEndpoint     string
-	OneBotAccessToken  string
-	TelegramBotToken   string
-	TelegramAPIBaseURL string
-	TelegramProxyURL   string
+	ConnectionProfileID string
+	ID                  string
+	Platform            string
+	OneBotTransport     string
+	OneBotWSEndpoint    string
+	OneBotHTTPURL       string
+	OneBotHTTPSecret    string
+	OneBotEndpoint      string
+	OneBotAccessToken   string
+	TelegramBotToken    string
+	TelegramAPIBaseURL  string
+	TelegramProxyURL    string
 }
 
 func profileSetRequiresReconnect(previous, next assistant.ProfileSet) bool {
@@ -720,18 +753,20 @@ func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
 		if !profile.Enabled {
 			continue
 		}
+		profile, _ = set.ResolveConnection(profile)
 		transports = append(transports, botTransportConfig{
-			ID:                 profile.ID,
-			Platform:           profile.Platform,
-			OneBotTransport:    profile.OneBotTransport,
-			OneBotWSEndpoint:   profile.OneBotWSEndpoint,
-			OneBotHTTPURL:      profile.OneBotHTTPURL,
-			OneBotHTTPSecret:   profile.OneBotHTTPSecret,
-			OneBotEndpoint:     profile.OneBotReverseWSEndpoint,
-			OneBotAccessToken:  profile.OneBotAccessToken,
-			TelegramBotToken:   profile.TelegramBotToken,
-			TelegramAPIBaseURL: profile.TelegramAPIBaseURL,
-			TelegramProxyURL:   profile.TelegramProxyURL,
+			ConnectionProfileID: profile.ConnectionProfileID,
+			ID:                  profile.ID,
+			Platform:            profile.Platform,
+			OneBotTransport:     profile.OneBotTransport,
+			OneBotWSEndpoint:    profile.OneBotWSEndpoint,
+			OneBotHTTPURL:       profile.OneBotHTTPURL,
+			OneBotHTTPSecret:    profile.OneBotHTTPSecret,
+			OneBotEndpoint:      profile.OneBotReverseWSEndpoint,
+			OneBotAccessToken:   profile.OneBotAccessToken,
+			TelegramBotToken:    profile.TelegramBotToken,
+			TelegramAPIBaseURL:  profile.TelegramAPIBaseURL,
+			TelegramProxyURL:    profile.TelegramProxyURL,
 		})
 	}
 	return transports
@@ -988,6 +1023,8 @@ func (h *BotHandler) uninstallPlugin(c *gin.Context) {
 		h.writePluginError(c, "assistant.plugin.uninstall", err, c.Param("id"))
 		return
 	}
+	// 第三方插件连落盘目录和来源记录一起清掉；非仓库插件这里静默返回。
+	h.removeRepoPluginSources(c.Param("id"))
 	h.persistState()
 	h.removeRepoPluginSources(state.Manifest.ID)
 	recordRequestOperation(c, h.logs, "assistant.plugin.uninstall", "机器人插件已卸载", state.Manifest.ID, pluginLogMetadata(state))

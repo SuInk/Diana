@@ -51,10 +51,13 @@ func (r *Runtime) probeModelSwitch(ctx context.Context, registry *llm.ProviderRe
 		if !ok {
 			return fmt.Errorf("目标提供商不支持图片生成")
 		}
+		started := time.Now()
 		response, err := generator.GenerateImage(ctx, llm.ImageGenerateRequest{Model: cfg.Model, Prompt: "Generate a plain white image without text.", N: 1})
 		if err != nil {
 			return err
 		}
+		// 测试图虽然不发出去，钱是真花了。
+		r.recordImageUsage(ctx, cfg, response, "model_switch_probe", time.Since(started))
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -72,9 +75,18 @@ func (r *Runtime) probeModelSwitch(ctx context.Context, registry *llm.ProviderRe
 		message.Content = "Describe the supplied image briefly."
 		message.Parts = []llm.ContentPart{{Type: llm.ContentPartText, Text: message.Content}, {Type: llm.ContentPartImageURL, ImageURL: modelSwitchProbeImage}}
 	}
+	started := time.Now()
 	response, err := client.Generate(ctx, llm.GenerateRequest{Model: cfg.Model, Messages: []llm.Message{message}, MaxOutputTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort})
 	if err != nil {
 		return err
+	}
+	// 探测故意绕开运行时的路由和装饰链，用量得在这里自己记。
+	if response != nil {
+		var event MessageEvent
+		if state := llmUsageFromContext(ctx); state != nil {
+			event = state.event
+		}
+		r.recordLLMUsage(ctx, event, response.Provider, firstNonEmpty(response.Model, cfg.Model), response.Usage, "model_switch_probe", time.Since(started), 0)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

@@ -19,7 +19,7 @@ import (
 //
 // 做成工具而不是「回复里出现表格就自动转图」：短表格用文字说反而更快，
 // 值不值得出图是看语境的判断，那是模型的事，不是一条格式规则能定的。
-const dianaRenderToolName = "diana.render"
+const dianaRenderToolName = "render"
 
 const (
 	renderImageWidth      = 1000

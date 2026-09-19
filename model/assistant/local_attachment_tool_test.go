@@ -183,7 +183,7 @@ func TestLocalAttachmentTextFileUploadPassesWhitelist(t *testing.T) {
 
 func TestLocalAttachmentToolsRemainOwnerOnly(t *testing.T) {
 	allowed := (RelationshipPolicy{}).allowedAgentToolNames()
-	if allowed["diana.view_image"] || allowed["diana.send_attachment"] {
+	if allowed["view_image"] || allowed["send_attachment"] {
 		t.Fatal("local tools exposed to group members")
 	}
 	if !allowed[dianaRemoteImageToolName] {

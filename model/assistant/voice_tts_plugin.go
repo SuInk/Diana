@@ -24,7 +24,7 @@ import (
 
 const (
 	voiceTTSPluginID = "official.voice-tts"
-	voiceTTSToolName = "diana.tts"
+	voiceTTSToolName = "tts"
 
 	voiceTTSPresetLocal  = "local"
 	voiceTTSPresetDocker = "docker"
@@ -168,7 +168,7 @@ func voiceTTSLanguageOptions() []PluginSettingOption {
 // 「用户是不是要语音回复」。那不是固定命令前缀，是自然语言的若干种说法——补不完，
 // 也挡不住「你能不能念一下这段」这种绕过去的问法。这属于用关键词判断语义意图。
 //
-// 判断改由模型做：同一个插件已经导出 diana.tts 工具，模型读完整条消息后自行决定要
+// 判断改由模型做：同一个插件已经导出 tts 工具，模型读完整条消息后自行决定要
 // 不要合成语音，合成什么内容也由它给。
 func (p *VoiceTTSPlugin) ShouldHandle(MessageEvent, string) bool { return false }
 

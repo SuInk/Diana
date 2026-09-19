@@ -63,21 +63,23 @@ type webSearchBudget struct {
 }
 
 type webSearchResult struct {
-	SourceNotice  string                    `json:"source_notice,omitempty"`
-	Status        string                    `json:"status"`
-	StopReason    string                    `json:"stop_reason"`
-	Strategy      string                    `json:"strategy"`
-	Query         string                    `json:"query"`
-	SelectedQuery string                    `json:"selected_query,omitempty"`
-	Provider      string                    `json:"provider,omitempty"`
-	ProviderType  string                    `json:"provider_type,omitempty"`
-	FallbackUsed  bool                      `json:"fallback_used"`
-	Queries       []webSearchQueryCandidate `json:"queries"`
-	Providers     []webSearchProviderState  `json:"providers"`
-	Attempts      []webSearchAttempt        `json:"attempts"`
-	Budget        webSearchBudget           `json:"budget"`
-	Sources       []string                  `json:"sources,omitempty"`
-	Content       string                    `json:"content,omitempty"`
+	RetrievedAt       string                    `json:"retrieved_at"`
+	FreshnessVerified bool                      `json:"freshness_verified"`
+	SourceNotice      string                    `json:"source_notice,omitempty"`
+	Status            string                    `json:"status"`
+	StopReason        string                    `json:"stop_reason"`
+	Strategy          string                    `json:"strategy"`
+	Query             string                    `json:"query"`
+	SelectedQuery     string                    `json:"selected_query,omitempty"`
+	Provider          string                    `json:"provider,omitempty"`
+	ProviderType      string                    `json:"provider_type,omitempty"`
+	FallbackUsed      bool                      `json:"fallback_used"`
+	Queries           []webSearchQueryCandidate `json:"queries"`
+	Providers         []webSearchProviderState  `json:"providers"`
+	Attempts          []webSearchAttempt        `json:"attempts"`
+	Budget            webSearchBudget           `json:"budget"`
+	Sources           []string                  `json:"sources,omitempty"`
+	Content           string                    `json:"content,omitempty"`
 }
 
 func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandidate, error) {
@@ -134,6 +136,8 @@ func webSearchCandidates(input map[string]any, limit int) ([]webSearchQueryCandi
 		appendCandidate(query, strategy)
 	}
 	for _, query := range append([]string(nil), supplied...) {
+		query = sanitizeExternalSearchQuery(normalizeWebSearchQuery(query))
+		appendCandidate(relaxWebSearchURLPaths(query), "url_path_terms")
 		appendCandidate(relaxWebSearchOperators(query), "operators_relaxed")
 		appendCandidate(relaxWebSearchQuotes(query), "quotes_relaxed")
 		appendCandidate(normalizeWebSearchSeparators(query), "separators_normalized")
@@ -162,6 +166,39 @@ func normalizeWebSearchQuery(query string) string {
 // 多数 provider 不支持这些算子，带着它们的查询会直接返回 no_results 并浪费一轮回退。
 func relaxWebSearchOperators(query string) string {
 	return webSearchOperatorPattern.ReplaceAllString(query, "$1")
+}
+
+// An exact site:path can miss an existing, unindexed URL. Keep the path's
+// topic/version tokens while searching beyond that exact indexed address.
+func relaxWebSearchURLPaths(query string) string {
+	words := strings.Fields(query)
+	changed := false
+	for i, word := range words {
+		value := strings.Trim(word, "\"'`")
+		if strings.HasPrefix(value, "-") {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(value), "site:") {
+			value = value[5:]
+		}
+		if !strings.Contains(value, "://") {
+			value = "https://" + value
+		}
+		u, err := url.Parse(value)
+		if err != nil || u.User != nil || !strings.Contains(u.Hostname(), ".") || strings.Trim(u.Path, "/") == "" {
+			continue
+		}
+		path := strings.Join(strings.FieldsFunc(u.Path, func(r rune) bool { return r == '/' || r == '_' }), " ")
+		if path == "" {
+			continue
+		}
+		words[i] = path
+		changed = true
+	}
+	if !changed {
+		return query
+	}
+	return strings.Join(words, " ")
 }
 
 func relaxWebSearchQuotes(query string) string {

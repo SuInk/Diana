@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	WebSearchToolName               = "web_search.search"
+	WebSearchToolName               = "web_search"
 	DefaultWebSearchConfigFile      = "web-search.json"
 	defaultWebSearchTimeout         = 35 * time.Second
 	defaultWebSearchProviderTimeout = 12 * time.Second
@@ -315,14 +315,14 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 			state.Outcome = "success"
 			candidate.Outcome = "success"
 			result.Status = "ok"
-			result.StopReason = "sufficient_evidence"
+			result.StopReason = "candidate_sources_found"
 			result.SelectedQuery = candidate.Query
 			result.Provider = provider.Name
 			result.ProviderType = provider.Type
 			result.FallbackUsed = queryIndex > 0 || providerIndex > 0
 			result.Sources = sources
 			result.Content = content
-			markWebSearchRemainder(result.Queries, result.Providers, queryIndex, "sufficient_evidence")
+			markWebSearchRemainder(result.Queries, result.Providers, queryIndex, "candidate_sources_found")
 			return t.formatExplorationResult(result)
 		}
 		candidate.Outcome = candidateOutcome
@@ -655,6 +655,9 @@ func (t *WebSearchTool) runExaMCP(ctx context.Context, provider webSearchProvide
 		"query":      query,
 		"numResults": provider.MaxResults,
 	}
+	if endpoint, err := url.Parse(provider.URL); err == nil && strings.EqualFold(endpoint.Hostname(), "mcp.exa.ai") && provider.Tool == "web_search_exa" {
+		arguments["objective"] = "Find primary sources directly answering: " + query + ". For current/latest claims, prioritize official dated records; absence from search is not proof of nonexistence."
+	}
 	if provider.Tool == "web_search_advanced_exa" {
 		arguments["type"] = "auto"
 		arguments["enableHighlights"] = true
@@ -902,7 +905,9 @@ func (t *WebSearchTool) runTavily(ctx context.Context, provider webSearchProvide
 }
 
 func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string, error) {
-	result.SourceNotice = "搜索结果可能来自转载或聚合页面，页面日期不一定是原始内容的真实发布时间。未核实原始来源时，不要据此断言发布时间或‘最新’。"
+	result.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
+	result.FreshnessVerified = false
+	result.SourceNotice = "搜索结果可能来自转载或聚合页面，页面日期不一定是原始内容的真实发布时间。未核实原始来源时，不要据此断言发布时间或‘最新’。本次查询时间不是索引更新时间；搜索空结果不证明页面、版本或事件不存在。精确 URL 可能未收录，应直接读取官方页面或 API。"
 	maxChars := t.maxBytes
 	if maxChars <= 0 {
 		maxChars = DefaultMaxToolOutputChars

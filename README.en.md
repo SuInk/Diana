@@ -46,16 +46,19 @@ The recommended sudo installation uses the fixed `/opt/diana` directory and crea
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
 
+Docker Compose (prebuilt image; no clone required). Run once in your deployment directory:
+
 ```sh
-# Docker (prebuilt image, no need to clone the repo)
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
-docker run -d --name diana --restart unless-stopped \
-  --security-opt seccomp="$PWD/chromium-seccomp.json" \
-  -p 18080:18080 \
-  -v "$PWD/data:/app/data" \
-  -v "$PWD/logs:/app/logs" \
-  ghcr.io/suink/diana:latest
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
+
+For subsequent updates, run in the same directory:
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+If an older image fails on Apple Silicon / ARM64 with `no matching manifest for linux/arm64/v8`, temporarily add `platform: linux/amd64` under `services.diana` in `docker-compose.yml` (requires amd64 emulation; performance and browser compatibility may be affected). Remove it once a native ARM64 image is published. Alternatively, use the native installer above. Build configuration changes do not update existing registry images.
 
 **② Log in to the console.** Open `http://127.0.0.1:18080`. The admin username and password are in the terminal output (for Docker, check `docker logs diana`; script installs also write them to `config.yaml` in the install directory — don't share that file).
 
@@ -109,7 +112,7 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 <details>
 <summary>Docker details / manual download / building from source</summary>
 
-**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags). OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), mount your `config.yaml` read-only at `/app/config.yaml`; the repo also ships a `docker-compose.yml` for local builds. To upgrade, pull the new image and recreate the container — your data lives in the mounted `data/` directory.
+**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags). OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), mount your `config.yaml` read-only at `/app/config.yaml`; uncomment the optional config volume in `docker-compose.yml` after creating that file. For source builds from a cloned repository, run `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`. To upgrade, pull the new image and recreate the container — your data lives in the mounted `data/` directory.
 
 **Manual download:** grab the **full package** for your platform (`.tar.gz` / `.zip`, includes the backend, prebuilt WebUI and launch scripts) from [Releases](https://github.com/SuInk/Diana/releases), verify `SHA256SUMS`, extract it, then run `run.sh` / `run.bat`. No separate WebUI deployment or Node.js installation is needed. Releases no longer provide standalone binaries; for custom deployments, extract the executable and frontend assets from the full package.
 

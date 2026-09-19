@@ -237,16 +237,19 @@ type QuotedMessage struct {
 }
 
 type OutgoingMessage struct {
-	PlatformScope        string
-	GuildID              string
-	Platform             string
-	ProfileID            string
-	GroupID              string
-	MessageThreadID      string
-	UserID               string
-	Text                 string
-	Segments             []MessageSegment
-	ImageURLs            []string
+	PlatformScope   string
+	GuildID         string
+	Platform        string
+	ProfileID       string
+	GroupID         string
+	MessageThreadID string
+	UserID          string
+	Text            string
+	Segments        []MessageSegment
+	ImageURLs       []string
+	// ImageLabels 与 ImageURLs 一一对应，给控制台的事件记录标出每张图是什么
+	// （比如哪个表情包）；不发给平台。
+	ImageLabels          []string
 	ImageAlbum           bool
 	GeneratedImageModels []GeneratedImageModel
 	VideoURLs            []string
@@ -304,9 +307,10 @@ type Reminder struct {
 	RepositoryBranch         string    `json:"repository_branch,omitempty"`
 	WatchCommits             bool      `json:"watch_commits,omitempty"`
 	WatchPullRequests        bool      `json:"watch_pull_requests,omitempty"`
-	// WatchPullRequestEvents / WatchIssueEvents 是只想收的动态种类，空表示全要。
-	WatchPullRequestEvents []string  `json:"watch_pull_request_events,omitempty"`
-	WatchIssueEvents       []string  `json:"watch_issue_events,omitempty"`
+	// WatchPullRequestEvents / WatchIssueEvents：nil 是未配置的旧记录，按全选兼容；
+	// 非 nil 空数组表示明确全不选，因此 JSON 不能使用 omitempty。
+	WatchPullRequestEvents []string  `json:"watch_pull_request_events"`
+	WatchIssueEvents       []string  `json:"watch_issue_events"`
 	WatchIssues            bool      `json:"watch_issues,omitempty"`
 	WatchReleases          bool      `json:"watch_releases,omitempty"`
 	WatchStars             bool      `json:"watch_stars,omitempty"`
@@ -471,6 +475,7 @@ type ChannelStatus struct {
 type EventHandler func(context.Context, MessageEvent) error
 
 type BotConfig struct {
+	ConnectionProfileID         string               `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int                  `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string               `json:"id,omitempty"`
 	Name                        string               `json:"name,omitempty"`
@@ -533,6 +538,7 @@ type BotConfig struct {
 	SentenceEnders              string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled            bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode          ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure             ModelDisclosure      `json:"model_disclosure,omitempty"`
 	MentionUserMode             ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain             *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled          *bool                `json:"error_notify_enabled,omitempty"`
@@ -819,6 +825,7 @@ type GroupConfigSet struct {
 }
 
 type ConfigPayload struct {
+	ConnectionProfileID         string          `json:"connection_profile_id,omitempty"`
 	ReplyMergeConfidencePercent int             `json:"reply_merge_confidence_percent,omitempty"`
 	ID                          string          `json:"id,omitempty"`
 	Name                        string          `json:"name,omitempty"`
@@ -837,6 +844,7 @@ type ConfigPayload struct {
 	OneBotAccessToken                 string             `json:"onebot_access_token,omitempty"`
 	OneBotHTTPSecretConfigured        bool               `json:"onebot_http_secret_configured,omitempty"`
 	OneBotAccessTokenConfigured       bool               `json:"onebot_access_token_configured,omitempty"`
+	OneBotAccessTokenPreview          string             `json:"onebot_access_token_preview,omitempty"`
 	TelegramBotToken                  string             `json:"telegram_bot_token,omitempty"`
 	TelegramBotTokenConfigured        bool               `json:"telegram_bot_token_configured,omitempty"`
 	TelegramAPIBaseURL                string             `json:"telegram_api_base_url,omitempty"`
@@ -899,6 +907,7 @@ type ConfigPayload struct {
 	SentenceEnders                string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled              bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode            ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure               ModelDisclosure      `json:"model_disclosure,omitempty"`
 	MentionUserMode               ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain               *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled            *bool                `json:"error_notify_enabled,omitempty"`
@@ -1389,15 +1398,18 @@ func (s ProfileSet) RuntimeConfig() (BotConfig, bool) {
 	s = s.WithDefaults()
 	current, ok := s.Current()
 	if ok && current.Enabled {
-		return current, true
+		resolved, err := s.ResolveConnection(current)
+		return resolved, err == nil
 	}
 	for _, profile := range s.Profiles {
 		if profile.Enabled {
-			return profile.WithDefaults(), true
+			resolved, err := s.ResolveConnection(profile)
+			return resolved, err == nil
 		}
 	}
 	if ok {
-		return current, true
+		resolved, err := s.ResolveConnection(current)
+		return resolved, err == nil
 	}
 	return BotConfig{}, false
 }
@@ -1714,6 +1726,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyReferenceMode == "" {
 		cfg.ReplyReferenceMode = defaults.ReplyReferenceMode
 	}
+	cfg.ModelDisclosure = normalizeModelDisclosure(cfg.ModelDisclosure)
 	if cfg.MentionUserMode == "" {
 		cfg.MentionUserMode = defaults.MentionUserMode
 	}
@@ -1921,6 +1934,12 @@ func (cfg BotConfig) Validate() error {
 	if err := ValidatePlatform(cfg.Platform); err != nil {
 		return err
 	}
+	if strings.TrimSpace(cfg.ConnectionProfileID) != "" {
+		if !IsOneBotPlatform(cfg.Platform) {
+			return fmt.Errorf("只有 OneBot 机器人支持复用连接")
+		}
+		return nil
+	}
 	// 每个平台的必填凭据都不一样，按平台分支校验。这里不能写成「不是 OneBot
 	// 就当 Telegram」——新增平台后那种写法会拿 Telegram 的规则去校验飞书。
 	switch NormalizePlatformID(cfg.Platform) {
@@ -1984,6 +2003,13 @@ func (cfg BotConfig) Validate() error {
 	if cfg.OneBotTransport != OneBotTransportReverseWS && cfg.OneBotTransport != OneBotTransportForwardWS {
 		return fmt.Errorf("未知 OneBot 连接方式: %s", cfg.OneBotTransport)
 	}
+	// 反向 WS 的 token 不是「可选」：server 侧 token 为空会拒绝一切握手
+	//（reason=server_token_unset），保存成启用的空 token 配置等于让机器人静默
+	// 掉线。正向 WS / HTTP 是 Diana 主动外连，token 发不发由接入端决定，
+	// 留空合法，不做限制。
+	if cfg.OneBotTransport == OneBotTransportReverseWS && cfg.Enabled && strings.TrimSpace(cfg.OneBotAccessToken) == "" {
+		return fmt.Errorf("OneBot 反向 WebSocket 必须配置 Access Token，且需与接入端（如 NapCat）填写的 token 一致")
+	}
 	endpoint := strings.TrimSpace(cfg.OneBotReverseWSEndpoint)
 	if cfg.OneBotTransport == OneBotTransportForwardWS {
 		endpoint = strings.TrimSpace(cfg.OneBotWSEndpoint)
@@ -2009,11 +2035,26 @@ func isHTTPURL(value string) bool {
 	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
+// maskSecretPreview 把密钥渲染成「前两位…后两位」的掩码预览：只够辨认是不是
+// 自己刚填的那一个，又不泄露多少凭据。太短的 token 一律不露。
+// 只用于展示，回传明文预览等同于泄露凭据。
+func maskSecretPreview(value string) string {
+	key := []rune(strings.TrimSpace(value))
+	if len(key) == 0 {
+		return ""
+	}
+	if len(key) < 5 {
+		return "••••"
+	}
+	return string(key[:2]) + "…" + string(key[len(key)-2:])
+}
+
 // PayloadFromConfig 把内部机器人配置转换为前端安全 payload。
 func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 	cfg = cfg.WithDefaults()
 	// token 只返回 configured 标志，不把保存的密钥明文暴露给普通配置接口。
 	return ConfigPayload{
+		ConnectionProfileID:         cfg.ConnectionProfileID,
 		ID:                          cfg.ID,
 		Name:                        cfg.Name,
 		Platform:                    cfg.Platform,
@@ -2025,11 +2066,15 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		OneBotHTTPSecretConfigured:  cfg.OneBotHTTPSecret != "",
 		OneBotReverseWSEndpoint:     cfg.OneBotReverseWSEndpoint,
 		OneBotAccessTokenConfigured: cfg.OneBotAccessToken != "",
+		// 只回传掩码预览（前几位 + 后几位），与 LLM API Key 的 api_key_preview
+		// 同一约定：方便用户核对配置的是哪一个 token，又不泄露完整凭据。
+		OneBotAccessTokenPreview:    maskSecretPreview(cfg.OneBotAccessToken),
 		TelegramBotTokenConfigured:  cfg.TelegramBotToken != "",
 		TelegramAPIBaseURL:          cfg.TelegramAPIBaseURL,
 		TelegramProxyURL:            cfg.TelegramProxyURL,
 		TelegramSuppressBotMessages: copyBoolPointer(cfg.TelegramSuppressBotMessages),
-		// 密钥一律只回 configured 标志。AppID/CorpID 这类公开标识可以回显，
+		// 密钥一律只回 configured 标志或掩码预览（见 OneBotAccessTokenPreview），
+		// 不回明文。AppID/CorpID 这类公开标识可以回显，
 		// 方便用户核对填的是不是同一个应用。
 		QQAppID:                           cfg.QQAppID,
 		QQAppSecretConfigured:             cfg.QQAppSecret != "",
@@ -2078,6 +2123,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SentenceEnders:                    cfg.SentenceEnders,
 		DebugModeEnabled:                  cfg.DebugModeEnabled,
 		ReplyReferenceMode:                cfg.ReplyReferenceMode,
+		ModelDisclosure:                   cfg.ModelDisclosure,
 		MentionUserMode:                   cfg.MentionUserMode,
 		MarkdownToPlain:                   copyBoolPointer(cfg.MarkdownToPlain),
 		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
@@ -2215,6 +2261,7 @@ func payloadFromProfileSet(set ProfileSet, convert func(BotConfig) ConfigPayload
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	cfg := BotConfig{
+		ConnectionProfileID:             strings.TrimSpace(payload.ConnectionProfileID),
 		ID:                              strings.TrimSpace(payload.ID),
 		Name:                            payload.Name,
 		Platform:                        payload.Platform,
@@ -2276,6 +2323,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SentenceEnders:                  payload.SentenceEnders,
 		DebugModeEnabled:                payload.DebugModeEnabled,
 		ReplyReferenceMode:              payload.ReplyReferenceMode,
+		ModelDisclosure:                 payload.ModelDisclosure,
 		MentionUserMode:                 payload.MentionUserMode,
 		MarkdownToPlain:                 copyBoolPointer(payload.MarkdownToPlain),
 		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),

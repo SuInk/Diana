@@ -94,7 +94,6 @@ func NewExtensionManager(ctx context.Context, cfg Config, registry *ToolRegistry
 	}
 
 	skillTools := newLiveSkillTools(manager.Skills)
-	registry.Register(skillTools.List)
 	registry.Register(skillTools.Read)
 	registry.Register(NewExtensionsListTool(manager, cfg.ExtensionManagement))
 	if cfg.ExtensionManagement {
@@ -176,10 +175,7 @@ func (m *ExtensionManager) reloadSkills() error {
 	if m.registry != nil {
 		m.registry.SetSkills(skills)
 		tools := newLiveSkillTools(m.Skills)
-		if _, ok := m.registry.Get("skills.list"); !ok {
-			m.registry.Register(tools.List)
-		}
-		if _, ok := m.registry.Get("skills.read"); !ok {
+		if _, ok := m.registry.Get("read_skill"); !ok {
 			m.registry.Register(tools.Read)
 		}
 	}
@@ -283,10 +279,10 @@ func NewExtensionsListTool(catalog ExtensionCatalog, managementEnabled bool) *Ex
 	return &ExtensionsListTool{catalog: catalog, managementEnabled: managementEnabled}
 }
 
-func (t *ExtensionsListTool) Name() string { return "extensions.list" }
+func (t *ExtensionsListTool) Name() string { return "list_capabilities" }
 
 func (t *ExtensionsListTool) Description() string {
-	return `列出 Diana 的统一能力目录，包括默认内置插件、本地 Skills、MCP 服务、启用状态和 MCP 工具名。`
+	return `列出 Diana 的统一能力目录，包括默认内置插件、本地 Skills、MCP 服务、启用状态和 MCP 工具名。技能正文用 read_skill 读取。`
 }
 
 func (t *ExtensionsListTool) InputSchema() map[string]any {
@@ -341,7 +337,7 @@ func RenderExtensionsPrompt(states []ExtensionState) string {
 	if len(mcps) > 0 {
 		lines = append(lines, "Configured MCP services: "+strings.Join(mcps, ", ")+".")
 	}
-	lines = append(lines, "Call `extensions.list` when you need the complete current catalog and MCP tool names.")
+	lines = append(lines, "Call `list_capabilities` when you need the complete current catalog and MCP tool names.")
 	return strings.Join(lines, "\n")
 }
 

@@ -449,3 +449,20 @@ func TestSandboxedArgsCarryBrowserIdentity(t *testing.T) {
 		t.Fatalf("对外 UA 不是一台正常的桌面浏览器：%s", BrowserUserAgent)
 	}
 }
+
+func TestDownloadedChromePathsFollowBrowserDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DIANA_BROWSER_DIR", dir)
+	paths := downloadedChromePaths()
+	if len(paths) != 2 {
+		t.Fatalf("期望 2 个候选路径，实际 %d", len(paths))
+	}
+	for _, path := range paths {
+		if !strings.HasPrefix(path, dir) {
+			t.Fatalf("下载路径 %q 没有落在 DIANA_BROWSER_DIR 里", path)
+		}
+		if filepath.Base(path) != "chrome" {
+			t.Fatalf("下载路径 %q 没有指向 chrome 可执行文件", path)
+		}
+	}
+}

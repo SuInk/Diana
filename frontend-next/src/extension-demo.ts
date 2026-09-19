@@ -1,7 +1,7 @@
 import type { ManagedExtension } from './api';
 
 const entries: Array<ManagedExtension & {content?:string;config?:Record<string,any>}> = [
-  {kind:'skill',id:'skill:bot-protocol',name:'bot-protocol',description:'平台群操作与 Diana 回复设置',source:'builtin:bot-protocol',managed:false,enabled:true,content:'---\nname: bot-protocol\ndescription: 平台协议与回复配置\n---\n使用平台协议工具查询群信息，使用 diana.bot_config 修改回复设置。'},
+  {kind:'skill',id:'skill:bot-protocol',name:'bot-protocol',description:'平台群操作与 Diana 回复设置',source:'builtin:bot-protocol',managed:false,enabled:true,content:'---\nname: bot-protocol\ndescription: 平台协议与回复配置\n---\n使用平台协议工具查询群信息，使用 bot_config 修改回复设置。'},
   {kind:'skill',id:'skill:daily-summary',name:'daily-summary',description:'整理讨论中的待办与结论',source:'managed',managed:true,enabled:true,content:'---\nname: daily-summary\ndescription: 整理讨论中的待办与结论\n---\n根据提供的讨论内容整理待办。'},
   {kind:'mcp',id:'mcp:notes',name:'notes',description:'演示笔记服务',source:'https://example.com/mcp',transport:'streamable_http',managed:true,enabled:true,config:{url:'https://example.com/mcp',headers:{},env:{},enabled:true,startup_timeout_sec:20,tool_timeout_sec:60}},
 ];

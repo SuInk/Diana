@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       value: ${{ steps.version.outputs.value }}
+      channel: ${{ steps.version.outputs.channel }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,7 +46,7 @@ jobs:
           SOURCE_VERSION="$(tr -d '[:space:]' < model/version/VERSION)"
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             BUILD_VERSION="${GITHUB_REF#refs/tags/}"
-            if [[ ! "${BUILD_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            if [[ ! "${BUILD_VERSION}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(beta|rc)\.(0|[1-9][0-9]*))?$ ]]; then
               echo "Release tag must be a semantic version such as v0.8.7: ${BUILD_VERSION}" >&2
               exit 1
             fi
@@ -57,6 +58,10 @@ jobs:
           else
             BUILD_VERSION="${GITHUB_SHA:0:7}"
           fi
+          CHANNEL=release
+          if [[ "${BUILD_VERSION}" == *-beta.* ]]; then CHANNEL=beta; fi
+          if [[ "${BUILD_VERSION}" == *-rc.* ]]; then CHANNEL=beta; fi
+          echo "channel=${CHANNEL}" >> "${GITHUB_OUTPUT}"
           echo "value=${BUILD_VERSION}" >> "${GITHUB_OUTPUT}"
 
   backend:
@@ -244,6 +249,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -262,16 +272,42 @@ jobs:
           images: ghcr.io/suink/diana
           tags: |
             type=ref,event=tag
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel == 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.channel }},enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel != 'release' }}
             type=sha
+
+      # slim 变体与完整版同名同 tag，统一加 -slim 后缀，例如 latest-slim / v0.8.126-slim。
+      - name: Docker metadata (slim)
+        id: meta-slim
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/suink/diana
+          tags: |
+            type=ref,event=tag,suffix=-slim
+            type=raw,value=latest-slim,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel == 'release' }}
+            type=raw,value=${{ needs.build-version.outputs.channel }}-slim,enable=${{ startsWith(github.ref, 'refs/tags/v') && needs.build-version.outputs.channel != 'release' }}
+            type=sha,suffix=-slim
 
       - name: Build and publish Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ needs.build-version.outputs.value }}
+
+      - name: Build and publish slim Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          target: runtime-slim
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-slim.outputs.tags }}
+          labels: ${{ steps.meta-slim.outputs.labels }}
           build-args: |
             BUILD_VERSION=${{ needs.build-version.outputs.value }}
 
@@ -279,6 +315,7 @@ jobs:
     name: GitHub Release
     runs-on: ubuntu-latest
     needs:
+      - build-version
       - build
       - docker
     if: startsWith(github.ref, 'refs/tags/v')
@@ -302,6 +339,7 @@ jobs:
       - name: Generate static update manifest
         working-directory: release
         env:
+          RELEASE_CHANNEL: ${{ needs.build-version.outputs.channel }}
           RELEASE_TAG: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
@@ -310,17 +348,21 @@ jobs:
             assets=$(jq --arg name "$file" --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${file}" --argjson size "$(stat -c %s "$file")" '. + [{name: $name, url: $url, size: $size}]' <<<"$assets")
           done
           jq -n \
+            --argjson prerelease "$([[ "$RELEASE_CHANNEL" == release ]] && echo false || echo true)" \
             --arg tag "$RELEASE_TAG" \
             --arg name "Diana $RELEASE_TAG" \
             --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson assets "$assets" \
-            '{schema: 1, releases: [{tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS") | .url), assets: $assets}]}' \
+            '{schema: 1, releases: [{prerelease: $prerelease, tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS") | .url), assets: $assets}]}' \
             > latest.json
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          name: Diana ${{ github.ref_name }}
+          prerelease: ${{ needs.build-version.outputs.channel != 'release' }}
+          make_latest: ${{ needs.build-version.outputs.channel == 'release' }}
           generate_release_notes: true
           files: |
             release/*.tar.gz

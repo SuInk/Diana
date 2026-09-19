@@ -21,7 +21,7 @@ import (
 //
 // 做成工具而不是关键词命令：群里说「画个关系图」「看看谁跟你最熟」的说法太多，
 // 关键词表永远补不全，而模型本来就在读这句话。工具只负责取数、渲染、发图。
-const dianaGroupRelationsToolName = "diana.group_relations"
+const dianaGroupRelationsToolName = "group_relations"
 
 // GroupRelationStore 是消息存储里能算关系图的那部分能力。做成可选接口：
 // 换一个不支持的存储实现时，工具自己说「这个部署不支持」，而不是整个运行时起不来。

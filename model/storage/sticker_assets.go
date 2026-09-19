@@ -246,3 +246,118 @@ LIMIT ?`, args...)
 	}
 	return assets, rows.Err()
 }
+
+// StickerLibraryQuery 是控制台浏览表情包池的筛选条件。ProfileID 为空时列出全部机器人的。
+type StickerLibraryQuery struct {
+	ProfileID string
+	Search    string
+	Limit     int
+	Offset    int
+}
+
+// StickerLibraryItem 是池子里的一张表情包。同一张图在多个会话里出现只列一次，
+// 字段取最近那次；Sessions 是它出现过的会话数。本地路径不在这里，取图走 StickerAssetFile。
+type StickerLibraryItem struct {
+	Hash        string    `json:"hash"`
+	Summary     string    `json:"summary"`
+	Description string    `json:"description,omitempty"`
+	MIME        string    `json:"mime,omitempty"`
+	Kind        string    `json:"kind"`
+	GroupID     string    `json:"group_id,omitempty"`
+	UserID      string    `json:"user_id,omitempty"`
+	ProfileID   string    `json:"profile_id,omitempty"`
+	Sessions    int       `json:"sessions"`
+	LastSeen    time.Time `json:"last_seen"`
+}
+
+type StickerLibraryPage struct {
+	Items []StickerLibraryItem `json:"items"`
+	Total int                  `json:"total"`
+}
+
+// ListStickerLibrary 列出已经收进池子的表情包，最近出现的在前。
+func (s *SQLiteStore) ListStickerLibrary(ctx context.Context, query StickerLibraryQuery) (StickerLibraryPage, error) {
+	page := StickerLibraryPage{Items: []StickerLibraryItem{}}
+	if s == nil || s.db == nil {
+		return page, nil
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 60
+	}
+	offset := max(query.Offset, 0)
+	conditions := []string{"1 = 1"}
+	args := []any{}
+	if profile := strings.TrimSpace(query.ProfileID); profile != "" {
+		conditions = append(conditions, "a.profile_id = ?")
+		args = append(args, profile)
+	}
+	if search := strings.TrimSpace(query.Search); search != "" {
+		pattern := "%" + escapeSQLiteLike(search) + "%"
+		conditions = append(conditions, `(a.summary LIKE ? ESCAPE '\' OR COALESCE(d.description, '') LIKE ? ESCAPE '\')`)
+		args = append(args, pattern, pattern)
+	}
+	where := strings.Join(conditions, " AND ")
+	// 先按哈希挑出最近的那一行，再分页；count 和列表用同一个子查询，数字才对得上。
+	base := `
+WITH ranked AS (
+  SELECT a.content_sha256, COALESCE(a.summary, '') AS summary, COALESCE(d.description, '') AS description,
+         COALESCE(a.cached_mime, '') AS mime, a.kind, COALESCE(a.group_id, '') AS group_id,
+         COALESCE(a.user_id, '') AS user_id, COALESCE(a.profile_id, '') AS profile_id, a.event_time,
+         COUNT(*) OVER (PARTITION BY a.content_sha256) AS sessions,
+         ROW_NUMBER() OVER (PARTITION BY a.content_sha256 ORDER BY a.event_time DESC, a.updated_at DESC) AS rank
+  FROM sticker_assets AS a
+  LEFT JOIN image_descriptions AS d ON d.content_sha256 = a.content_sha256
+  WHERE ` + where + `
+)`
+	if err := s.db.QueryRowContext(ctx, base+`SELECT COUNT(*) FROM ranked WHERE rank = 1`, args...).Scan(&page.Total); err != nil {
+		return page, fmt.Errorf("count sticker library: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, base+`
+SELECT content_sha256, summary, description, mime, kind, group_id, user_id, profile_id, sessions, event_time
+FROM ranked WHERE rank = 1
+ORDER BY event_time DESC, content_sha256
+LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		return page, fmt.Errorf("list sticker library: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var item StickerLibraryItem
+		var eventTime int64
+		if err := rows.Scan(&item.Hash, &item.Summary, &item.Description, &item.MIME, &item.Kind,
+			&item.GroupID, &item.UserID, &item.ProfileID, &item.Sessions, &eventTime); err != nil {
+			return page, fmt.Errorf("scan sticker library: %w", err)
+		}
+		item.LastSeen = time.Unix(eventTime, 0)
+		page.Items = append(page.Items, item)
+	}
+	return page, rows.Err()
+}
+
+// StickerAssetFile 按图片哈希取缓存文件路径，供控制台预览。profileID 非空时只认这个
+// 机器人收到过的，免得按机器人筛选的页面能拿到别的机器人的图。
+func (s *SQLiteStore) StickerAssetFile(ctx context.Context, hash, profileID string) (string, bool, error) {
+	if s == nil || s.db == nil {
+		return "", false, nil
+	}
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if !validStickerAssetHash(hash) {
+		return "", false, nil
+	}
+	query := `SELECT cached_file FROM sticker_assets WHERE content_sha256 = ?`
+	args := []any{hash}
+	if profile := strings.TrimSpace(profileID); profile != "" {
+		query += ` AND profile_id = ?`
+		args = append(args, profile)
+	}
+	var path string
+	err := s.db.QueryRowContext(ctx, query+` ORDER BY event_time DESC LIMIT 1`, args...).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("load sticker asset file: %w", err)
+	}
+	return path, true, nil
+}

@@ -341,7 +341,7 @@ func TestRuntimeDoesNotOverrideModelSilenceForDirectedFollowup(t *testing.T) {
 		t.Fatalf("router request = %#v", provider.request.Messages)
 	}
 	prompt := provider.request.Messages[0].Content + "\n" + provider.request.Messages[1].Content
-	for _, want := range []string{"web_search.search", "始终注册", "diana.group", "成员总数", "diana.image", "系统没有绘图工具", "available_reply_tools"} {
+	for _, want := range []string{"web_search", "始终注册", "group", "成员总数", "image", "系统没有绘图工具", "available_reply_tools"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}
@@ -475,7 +475,7 @@ func TestRuntimeJudgesProactiveGroupMessagesImmediately(t *testing.T) {
 func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 	first := newDelayedExitChannel()
 	second := newDelayedExitChannel()
-	cfg := BotConfig{Enabled: true, BotAccount: "42"}
+	cfg := BotConfig{Enabled: true, BotAccount: "42", OneBotAccessToken: "test-token"}
 	runtime := NewRuntime(cfg, first, NewPluginManager(), nil, nil, nil, nil)
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -501,7 +501,7 @@ func TestRuntimeUpdateConfigIgnoresPreviousRunExit(t *testing.T) {
 
 func TestRuntimeUpdateConfigInPlaceKeepsChannelConnected(t *testing.T) {
 	channel := newDelayedExitChannel()
-	cfg := BotConfig{Enabled: true, BotAccount: "42", SystemPrompt: "before"}
+	cfg := BotConfig{Enabled: true, BotAccount: "42", SystemPrompt: "before", OneBotAccessToken: "test-token"}
 	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1214,7 +1214,7 @@ func TestMessageHistoryPluginAddsRecallContext(t *testing.T) {
 func TestRuntimeRecallDefaultsToLLMReplyWithoutOriginalForward(t *testing.T) {
 	// 这个用例以前是端到端的：靠词表让插件劫持回复，再断言撤回原文以插件优先级进了
 	// LLM 请求、且默认档位不发原文转发卡片。触发权交给模型之后，撤回原文改由
-	// diana.chat_history 的 recalls 操作作为工具结果回给模型，而「默认档位不发原文
+	// chat_history 的 recalls 操作作为工具结果回给模型，而「默认档位不发原文
 	// 卡片」这条策略仍由 applyRecallReplyMode 决定——这里直接验证那一步。
 	history := NewMessageHistoryPlugin()
 	history.Observe(context.Background(), MessageEvent{
@@ -2372,7 +2372,7 @@ func TestRuntimeCarriesRecentImageIntoFollowup(t *testing.T) {
 func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
-		`{"action":"tool","tool":"diana.history_media","input":{"message_ids":["img-1","img-2","img-3"]}}`,
+		`{"action":"tool","tool":"history_media","input":{"message_ids":["img-1","img-2","img-3"]}}`,
 		`{"action":"final","content":"三张图片都已读取。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -2614,10 +2614,11 @@ func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 			t.Fatalf("proactive router prompt missing %q", want)
 		}
 	}
-	if len(logs.entries) != 1 || logs.entries[0].Action != "diana.proactive_reply_route" {
+	routeLogs := withoutUsageEntries(logs.entries)
+	if len(routeLogs) != 1 || routeLogs[0].Action != "diana.proactive_reply_route" {
 		t.Fatalf("route logs = %#v", logs.entries)
 	}
-	metadata := logs.entries[0].Metadata
+	metadata := routeLogs[0].Metadata
 	if metadata["allowed"] != true || metadata["parsed"] != true || metadata["reply_level"] != ChatInLevelLow || metadata["confidence"] != nil || metadata["threshold"] != nil || metadata["directed_at_bot"] != true {
 		t.Fatalf("route metadata = %#v", metadata)
 	}
@@ -2644,7 +2645,7 @@ func TestRuntimeProactiveReplyPayloadIncludesMessageAges(t *testing.T) {
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "现在的问题"}}},
 	}
 	payload := runtime.proactiveReplyPayload(event, "现在的问题")
-	if len(payload.AvailableReplyTools) != 1 || !strings.Contains(payload.AvailableReplyTools[0], "web_search.search") {
+	if len(payload.AvailableReplyTools) != 1 || !strings.Contains(payload.AvailableReplyTools[0], "web_search") {
 		t.Fatalf("mandatory router tools = %#v", payload.AvailableReplyTools)
 	}
 	if payload.ContextGapSeconds == nil || *payload.ContextGapSeconds != 1200 {
@@ -3176,7 +3177,7 @@ func TestRuntimeProactiveReplyDoesNotRateLimitQualifiedMessages(t *testing.T) {
 
 func TestCacheMessageEventImagesStoresLocalHistory(t *testing.T) {
 	tempDir := t.TempDir()
-	t.Setenv("APP_DB_PATH", filepath.Join(tempDir, "data", "diana-qq-bot.db"))
+	t.Setenv("APP_DB_PATH", filepath.Join(tempDir, "data", "diana.db"))
 	imageBody := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -3210,7 +3211,7 @@ func TestCacheMessageEventImagesStoresLocalHistory(t *testing.T) {
 
 func TestRuntimeCachesImagesWithoutHistoryPlugin(t *testing.T) {
 	tempDir := t.TempDir()
-	t.Setenv("APP_DB_PATH", filepath.Join(tempDir, "data", "diana-qq-bot.db"))
+	t.Setenv("APP_DB_PATH", filepath.Join(tempDir, "data", "diana.db"))
 	imageBody := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00}
 	imageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
@@ -3536,7 +3537,8 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	if !recordedForward {
 		t.Fatalf("history missing bot resolver reply: %#v", history)
 	}
-	entries := logs.entriesSnapshot()
+	// 合并转发的内容安全检查会调一次模型并记用量；这里只关心主回复没有走模型。
+	entries := withoutUsageEntries(logs.entriesSnapshot())
 	if len(entries) != 1 || entries[0].Action != "diana.resolver.video_download" {
 		t.Fatalf("resolver logs = %#v", entries)
 	}

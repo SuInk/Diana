@@ -43,7 +43,7 @@ func TestVoiceTTSPluginSupportsAgentToolAndIsEnabledByDefault(t *testing.T) {
 }
 
 // 「用语音说 / 语音说 / 朗读 / 念一下 / 读一下」这张同义词前缀表已经删除：插件不再
-// 自己拦消息，要不要合成语音由模型判断后调用 diana.tts（合成路径见
+// 自己拦消息，要不要合成语音由模型判断后调用 tts（合成路径见
 // TestVoiceTTSPluginAgentToolSynthesizesAndShares）。
 func TestVoiceTTSPluginNoLongerInterceptsWordedRequests(t *testing.T) {
 	plugin := NewVoiceTTSPlugin(nil)
@@ -230,7 +230,7 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"diana.tts","input":{"text":"晚上好呀，今天也要开心。"}}`,
+		`{"action":"tool","tool":"tts","input":{"text":"晚上好呀，今天也要开心。"}}`,
 	}}
 	channel := &recordingChannel{}
 	plugins := NewDefaultPluginManager()
@@ -276,7 +276,7 @@ func TestRuntimeGroupTTSVoiceIsAStandaloneRecord(t *testing.T) {
 
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"diana.tts","input":{"text":"晚安，做个好梦。"}}`,
+		`{"action":"tool","tool":"tts","input":{"text":"晚安，做个好梦。"}}`,
 	}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
