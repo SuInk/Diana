@@ -67,7 +67,7 @@ func (c *MultiChannel) Connect(ctx context.Context, handler EventHandler) error 
 			defer wg.Done()
 			wrapped := func(eventCtx context.Context, event MessageEvent) error {
 				var failures []error
-				for _, target := range group {
+				for _, target := range connectionEventTargets(group, event) {
 					delivered := cloneHistoricalImageEvent(event)
 					delivered.MentionTargets = append([]MessageMention(nil), event.MentionTargets...)
 					delivered.Platform = target.Platform
@@ -324,4 +324,31 @@ func (c *MultiChannel) connectionGroups() [][]ChannelBinding {
 		}
 	}
 	return groups
+}
+
+// connectionEventTargets 决定复用连接上的一个事件交给哪几台机器人。
+//
+// 群里的消息交给每一台，各自按人设和群配置决定回不回。私聊不行：对方看到的是同一个
+// 账号，几台都回就是同一个账号连回好几遍，所以私聊、私聊里的通知和好友请求只交给
+// 连接的来源机器人；来源停用时交给第一台启用的复用机器人。
+func connectionEventTargets(group []ChannelBinding, event MessageEvent) []ChannelBinding {
+	if len(group) <= 1 || !privateScopeEvent(event) {
+		return group
+	}
+	for _, binding := range group {
+		if binding.ConnectionID != "" && binding.ProfileID == binding.ConnectionID {
+			return []ChannelBinding{binding}
+		}
+	}
+	return group[:1]
+}
+
+func privateScopeEvent(event MessageEvent) bool {
+	if event.Kind == EventKindPrivate {
+		return true
+	}
+	if event.Kind == EventKindGroup {
+		return false
+	}
+	return strings.TrimSpace(event.GroupID) == "" && strings.TrimSpace(event.GuildID) == ""
 }
