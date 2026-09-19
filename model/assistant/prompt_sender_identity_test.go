@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -67,5 +68,61 @@ func TestPromptSenderUserIDRespectsIdentityPrivacy(t *testing.T) {
 	}
 	if !strings.Contains(protected, "Alice（"+alias+"）") {
 		t.Fatalf("protected current prompt lost the sender alias: %s", protected)
+	}
+}
+
+func TestReplyTurnSenderPrivacyWithoutHistory(t *testing.T) {
+	for _, source := range []string{"proactive", "backlog"} {
+		for _, masking := range []bool{true, false} {
+			name := source + "/unmasked"
+			if masking {
+				name = source + "/masked"
+			}
+			t.Run(name, func(t *testing.T) {
+				provider := &sequenceLLMProvider{replies: []string{
+					`{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`,
+					"答案是 2 和 4。",
+				}}
+				runtime := NewRuntime(BotConfig{LLMIdentityMaskingEnabled: boolPtr(masking)},
+					&recordingChannel{}, NewPluginManager(), nil, nil, nil,
+					func() (LLMProvider, error) { return provider, nil })
+				current := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "87654321",
+					MessageID: "current", SenderName: "Bob", RawMessage: "2+2", Time: 106}
+				supplement := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "12345678",
+					MessageID: "supplement", SenderName: "Alice", RawMessage: "1+1", Time: 100}
+				turn := []proactiveReplyCandidate{{Event: supplement, Text: supplement.RawMessage}}
+				// Deliberately keep the supplement out of history, as can happen
+				// when the prompt's history budget drops an older turn.
+				ctx := context.Background()
+				if source == "proactive" {
+					ctx = withProactiveReplyTurnContext(ctx, turn)
+				} else {
+					current.backlogTurn = turn
+					ctx = withInboundReplyTurnContext(ctx, current)
+				}
+				if _, err := runtime.replyTo(ctx, current, current.RawMessage); err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				for _, request := range provider.requests {
+					for _, message := range request.Messages {
+						if !strings.HasPrefix(message.Content, "【当前同轮补充消息") {
+							continue
+						}
+						found = true
+						if masking {
+							if strings.Contains(message.Content, supplement.UserID) || !strings.Contains(message.Content, "Alice（im_user_") {
+								t.Fatalf("supplement sender was not masked: %s", message.Content)
+							}
+						} else if !strings.Contains(message.Content, "Alice（12345678）") {
+							t.Fatalf("masking disabled but sender changed: %s", message.Content)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("provider did not receive the supplement")
+				}
+			})
+		}
 	}
 }
