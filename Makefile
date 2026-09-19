@@ -115,10 +115,10 @@ clean:
 	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend-next/dist']) fs.rmSync(p,{recursive:true,force:true})"
 
 docker-build:
-	$(DOCKER) build -t diana:latest .
+	$(DOCKER) build -t diana:local .
 
 docker-up:
-	$(DOCKER_COMPOSE) up -d --build
+	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 docker-down:
 	$(DOCKER_COMPOSE) down

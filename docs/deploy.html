@@ -77,18 +77,14 @@ cd diana-webui-darwin-arm64
         <div class="section-heading"><p class="eyebrow">Docker</p><h2>容器部署</h2></div>
         <div class="callout"><strong>持久化</strong><p>必须挂载 <code>/app/data</code> 和 <code>/app/logs</code>，否则重建容器会丢失 SQLite 配置与凭据。</p></div>
         <p>镜像随每个版本发布，不必克隆仓库再本地构建：</p>
-        <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
-docker run -d --name diana --restart unless-stopped \
-  --security-opt seccomp="$PWD/chromium-seccomp.json" \
-  -p 18080:18080 \
-  -v "$PWD/data:/app/data" \
-  -v "$PWD/logs:/app/logs" \
-  ghcr.io/suink/diana:latest</code></pre>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh</code></pre>
+        <p>以后在同一部署目录更新：</p>
+        <pre><code>docker compose pull &amp;&amp; docker compose up -d</code></pre>
         <p>管理员账号密码用 <code>docker logs diana</code> 查看。想预置配置做无人值守部署，把改好的 <code>config.yaml</code> 以只读方式挂到 <code>/app/config.yaml</code>。升级拉新镜像重建容器即可，数据都在挂出来的 <code>data/</code> 里。</p>
         <p>需要本地构建，或者要和 NapCat 一起编排时，用仓库里的 compose：</p>
         <pre><code>git clone https://github.com/SuInk/Diana.git
 cd Diana
-docker compose up -d --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 docker compose logs -f diana</code></pre>
         <p>NapCat 与 Diana 分容器时，反向 WebSocket 使用容器服务名，例如 <code>ws://diana:18080/onebot/v11/ws</code>，不能写只指向 NapCat 容器自身的 <code>127.0.0.1</code>。</p>
       </section>
