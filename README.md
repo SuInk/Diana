@@ -46,16 +46,19 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
 ```
 
+Docker Compose（预构建镜像，无需 clone 仓库）。首次在部署目录执行：
+
 ```sh
-# Docker（预构建镜像，无需 clone 仓库）
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
-docker run -d --name diana --restart unless-stopped \
-  --security-opt seccomp="$PWD/chromium-seccomp.json" \
-  -p 18080:18080 \
-  -v "$PWD/data:/app/data" \
-  -v "$PWD/logs:/app/logs" \
-  ghcr.io/suink/diana:latest
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
+
+以后更新只需在同一目录执行：
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+如果 Apple Silicon / ARM64 拉取旧镜像时报 `no matching manifest for linux/arm64/v8`，可临时在 `docker-compose.yml` 的 `services.diana` 下添加 `platform: linux/amd64`（需要 amd64 模拟支持，性能及浏览器兼容性可能受影响），原生 ARM64 镜像发布后删除此项；也可使用上方安装脚本原生部署。构建配置修改不会自动更新线上已有镜像。
 
 **② 登录控制台。** 打开 `http://127.0.0.1:18080`。管理员账号密码在刚才的终端输出里（Docker 方式用 `docker logs diana` 查看；脚本安装的还会写进安装目录的 `config.yaml`，别把这个文件给别人）。
 
@@ -109,7 +112,7 @@ docker run -d --name diana --restart unless-stopped \
 <details>
 <summary>Docker 细节 / 手动下载 / 源码构建</summary>
 
-**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；仓库里也有 `docker-compose.yml` 可以本地构建。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
+**Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；先创建该文件，再取消 Compose 中配置文件挂载行的注释。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
 
 **手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
 
