@@ -68,7 +68,7 @@ function toggleMultiSelect(option: string, event: Event): void {
           <span>{{ option.label }}</span>
         </label>
       </div>
-      <span v-if="spec.description" class="hint">{{ spec.description }}</span>
+      <span class="hint">{{ spec.description ? `${spec.description} ` : "" }}不勾选表示全部停用；全部勾选表示全部启用。</span>
     </template>
     <template v-else-if="spec.type === 'coding_agents'">
       <span :id="labelID" class="plugin-setting-group-label">{{ spec.label }}</span>

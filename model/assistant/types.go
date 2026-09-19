@@ -304,9 +304,10 @@ type Reminder struct {
 	RepositoryBranch         string    `json:"repository_branch,omitempty"`
 	WatchCommits             bool      `json:"watch_commits,omitempty"`
 	WatchPullRequests        bool      `json:"watch_pull_requests,omitempty"`
-	// WatchPullRequestEvents / WatchIssueEvents 是只想收的动态种类，空表示全要。
-	WatchPullRequestEvents []string  `json:"watch_pull_request_events,omitempty"`
-	WatchIssueEvents       []string  `json:"watch_issue_events,omitempty"`
+	// WatchPullRequestEvents / WatchIssueEvents：nil 是未配置的旧记录，按全选兼容；
+	// 非 nil 空数组表示明确全不选，因此 JSON 不能使用 omitempty。
+	WatchPullRequestEvents []string  `json:"watch_pull_request_events"`
+	WatchIssueEvents       []string  `json:"watch_issue_events"`
 	WatchIssues            bool      `json:"watch_issues,omitempty"`
 	WatchReleases          bool      `json:"watch_releases,omitempty"`
 	WatchStars             bool      `json:"watch_stars,omitempty"`

@@ -189,8 +189,8 @@ type botTaskPayload struct {
 	RepositoryBranch      string    `json:"repository_branch,omitempty"`
 	WatchCommits          bool      `json:"watch_commits,omitempty"`
 	WatchPullRequests     bool      `json:"watch_pull_requests,omitempty"`
-	PullRequestEvents     []string  `json:"watch_pull_request_events,omitempty"`
-	IssueEvents           []string  `json:"watch_issue_events,omitempty"`
+	PullRequestEvents     []string  `json:"watch_pull_request_events"`
+	IssueEvents           []string  `json:"watch_issue_events"`
 	WatchIssues           bool      `json:"watch_issues,omitempty"`
 	WatchReleases         bool      `json:"watch_releases,omitempty"`
 	WatchStars            bool      `json:"watch_stars,omitempty"`
@@ -889,8 +889,8 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 		PendingSince: item.PendingSince, Repository: item.Repository, RepositoryBranch: item.RepositoryBranch,
 		WatchCommits: item.WatchCommits, WatchPullRequests: item.WatchPullRequests,
 		WatchIssues: item.WatchIssues, WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
-		PullRequestEvents: append([]string(nil), item.WatchPullRequestEvents...),
-		IssueEvents:       append([]string(nil), item.WatchIssueEvents...),
+		PullRequestEvents: assistant.EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
+		IssueEvents:       assistant.EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
 		StarNotifyMode:    item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
 		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,

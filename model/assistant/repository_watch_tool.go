@@ -60,14 +60,41 @@ const (
 )
 
 // PR 和 Issue 各自的动态种类。订阅时可以只挑其中几种：一个只关心「合并了什么」
-// 的群，不需要每条评论都被顶一次。空集合表示全要——老订阅没有这个字段，不能因为
-// 加了开关就把它们静音。
+// 的群，不需要每条评论都被顶一次。nil 只用于兼容没有存过该字段的旧订阅；
+// 显式空数组表示一项都不接收。
 var (
 	repositoryWatchPullEventKinds  = []string{"opened", "updated", "closed", "merged"}
 	repositoryWatchIssueEventKinds = []string{"opened", "updated", "closed", "reopened"}
 )
 
+func cloneRepositoryWatchEvents(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string{}, values...)
+}
+
+func effectiveRepositoryWatchEvents(values, allowed []string) []string {
+	if values == nil {
+		return cloneRepositoryWatchEvents(allowed)
+	}
+	return cloneRepositoryWatchEvents(values)
+}
+
+// EffectiveRepositoryWatchPullRequestEvents / EffectiveRepositoryWatchIssueEvents
+// 把旧订阅缺失的字段展开为全选，供 WebUI 和工具回显；显式空数组保持为空。
+func EffectiveRepositoryWatchPullRequestEvents(values []string) []string {
+	return effectiveRepositoryWatchEvents(values, repositoryWatchPullEventKinds)
+}
+
+func EffectiveRepositoryWatchIssueEvents(values []string) []string {
+	return effectiveRepositoryWatchEvents(values, repositoryWatchIssueEventKinds)
+}
+
 func normalizeRepositoryWatchEvents(values []string, allowed []string, label string) ([]string, error) {
+	if values == nil {
+		return cloneRepositoryWatchEvents(allowed), nil
+	}
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
 	for _, value := range values {
@@ -83,10 +110,6 @@ func normalizeRepositoryWatchEvents(values []string, allowed []string, label str
 		}
 		seen[value] = struct{}{}
 		out = append(out, value)
-	}
-	if len(out) == 0 || len(out) == len(allowed) {
-		// 全选和没选过都存成空：回显时是同一句「全部」，也省掉一次无谓的迁移。
-		return nil, nil
 	}
 	// 按固定顺序存，回显和比较都不受用户勾选顺序影响。
 	sorted := make([]string, 0, len(out))
@@ -454,8 +477,8 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		RepositoryBranch:        branch,
 		WatchCommits:            selection.Commits,
 		WatchPullRequests:       selection.PullRequests,
-		WatchPullRequestEvents:  append([]string(nil), selection.PullRequestEvents...),
-		WatchIssueEvents:        append([]string(nil), selection.IssueEvents...),
+		WatchPullRequestEvents:  cloneRepositoryWatchEvents(selection.PullRequestEvents),
+		WatchIssueEvents:        cloneRepositoryWatchEvents(selection.IssueEvents),
 		WatchIssues:             selection.Issues,
 		WatchReleases:           selection.Releases,
 		WatchStars:              selection.Stars,
@@ -578,8 +601,8 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	selection := repositoryWatchSelection{
 		Commits: current.WatchCommits, PullRequests: current.WatchPullRequests,
 		Issues: current.WatchIssues, Releases: current.WatchReleases, Stars: current.WatchStars,
-		PullRequestEvents: append([]string(nil), current.WatchPullRequestEvents...),
-		IssueEvents:       append([]string(nil), current.WatchIssueEvents...),
+		PullRequestEvents: cloneRepositoryWatchEvents(current.WatchPullRequestEvents),
+		IssueEvents:       cloneRepositoryWatchEvents(current.WatchIssueEvents),
 	}
 	if value, present := input["watch_commits"].(bool); present {
 		selection.Commits = value
@@ -708,8 +731,8 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		item.RepositoryBranch = branch
 		item.WatchCommits = selection.Commits
 		item.WatchPullRequests = selection.PullRequests
-		item.WatchPullRequestEvents = append([]string(nil), selection.PullRequestEvents...)
-		item.WatchIssueEvents = append([]string(nil), selection.IssueEvents...)
+		item.WatchPullRequestEvents = cloneRepositoryWatchEvents(selection.PullRequestEvents)
+		item.WatchIssueEvents = cloneRepositoryWatchEvents(selection.IssueEvents)
 		item.WatchIssues = selection.Issues
 		item.WatchReleases = selection.Releases
 		item.WatchStars = selection.Stars
