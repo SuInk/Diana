@@ -83,6 +83,8 @@ const (
 )
 
 type Message struct {
+	// ContinuationScope binds opaque reasoning state to its originating endpoint and model.
+	ContinuationScope string            `json:"-"`
 	AnthropicThinking []json.RawMessage `json:"-"`
 	// ReasoningContent is provider continuation state, never chat text or logs.
 	ReasoningContent *string       `json:"-"`
@@ -186,6 +188,8 @@ type Usage struct {
 }
 
 type GenerateResponse struct {
+	// ContinuationScope binds opaque reasoning state to its originating endpoint and model.
+	ContinuationScope string            `json:"-"`
 	AnthropicThinking []json.RawMessage `json:"-"`
 	ReasoningContent  *string           `json:"-"`
 	Provider          Provider          `json:"provider"`
@@ -660,6 +664,7 @@ func (req GenerateRequest) withDefaults(cfg ProviderConfig) GenerateRequest {
 	if strings.TrimSpace(req.ReasoningEffort) == "" {
 		req.ReasoningEffort = cfg.ReasoningEffort
 	}
+	req.Messages = scopedContinuationMessages(req.Messages, continuationScope(cfg, req.Model))
 	req.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
 	if req.MaxOutputTokens == 0 {
 		// 0 表示调用方没覆盖，沿用 provider config；负数会在 Validate 阶段拒绝。

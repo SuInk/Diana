@@ -72,7 +72,12 @@ func newOpenAICompatibleClient(cfg ProviderConfig, httpClient *http.Client) *ope
 }
 
 // Generate 调用 OpenAI-compatible 模型生成回复。
-func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
+func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateRequest) (result *GenerateResponse, resultErr error) {
+	defer func() {
+		if result != nil {
+			result.ContinuationScope = continuationScope(c.cfg, req.Model)
+		}
+	}()
 	req = req.withDefaults(c.cfg)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
@@ -106,7 +111,12 @@ func (c *openAICompatibleClient) generateForAPIFormat(ctx context.Context, req G
 }
 
 // Stream normalizes native text, reasoning and tool events for both OpenAI protocols.
-func (c *openAICompatibleClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+func (c *openAICompatibleClient) Stream(ctx context.Context, req GenerateRequest) (streamEvents <-chan ChatEvent, resultErr error) {
+	defer func() {
+		if resultErr == nil && streamEvents != nil {
+			streamEvents = scopeContinuationEvents(ctx, streamEvents, continuationScope(c.cfg, req.Model))
+		}
+	}()
 	events, err := c.stream(ctx, req)
 	if err != nil {
 		return nil, err

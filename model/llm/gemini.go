@@ -62,7 +62,12 @@ func normalizeGeminiBaseURL(raw string) string {
 }
 
 // Generate 调用 Gemini 模型生成回复。
-func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
+func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (result *GenerateResponse, resultErr error) {
+	defer func() {
+		if result != nil {
+			result.ContinuationScope = continuationScope(c.cfg, req.Model)
+		}
+	}()
 	req = req.withDefaults(c.cfg)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
@@ -115,7 +120,12 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (*Gene
 	}, nil
 }
 
-func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
+func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamEvents <-chan ChatEvent, resultErr error) {
+	defer func() {
+		if resultErr == nil && streamEvents != nil {
+			streamEvents = scopeContinuationEvents(ctx, streamEvents, continuationScope(c.cfg, req.Model))
+		}
+	}()
 	req = applyContextBudget(req.withDefaults(c.cfg), c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
