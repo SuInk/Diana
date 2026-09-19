@@ -225,9 +225,15 @@
             <span class="hint">不需要聊天内管理或配对登录时可以留空。</span>
           </div>
           <div class="field wide">
-            <label for="wizard-token">OneBot Access Token（可选，至少 16 位）</label>
-            <input id="wizard-token" v-model="botForm.onebot_access_token" class="input" type="password" autocomplete="off"
-              :placeholder="tokenConfigured ? '留空表示沿用已保存 token' : '与 OneBot v11 客户端填写的 token 保持一致'" />
+            <label for="wizard-token">OneBot Access Token（{{ tokenRequired ? "反向 WebSocket 必填" : "可选" }}，至少 16 位）</label>
+            <div class="input-group">
+              <input id="wizard-token" v-model="botForm.onebot_access_token" class="input" type="text" autocomplete="off"
+                :placeholder="tokenConfigured ? (savedBot?.onebot_access_token_preview ? `已保存 ${savedBot.onebot_access_token_preview}，留空沿用` : '留空表示沿用已保存 token') : '与 OneBot v11 客户端填写的 token 保持一致'" />
+              <button class="btn icon-only" type="button" aria-label="随机生成 Token" title="随机生成" @click="generateToken">
+                <Dices :size="14" aria-hidden="true" />
+              </button>
+            </div>
+            <span v-if="tokenRequiredHint" class="hint">{{ tokenRequiredHint }}</span>
           </div>
         </div>
         <div class="cluster">
@@ -295,7 +301,7 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { CheckCircle2, ChevronLeft, ChevronRight, Copy, LayoutGrid, MessageCircle, Plus, Power, RefreshCw, X, Zap } from "@lucide/vue";
+import { CheckCircle2, ChevronLeft, ChevronRight, Copy, Dices, LayoutGrid, MessageCircle, Plus, Power, RefreshCw, X, Zap } from "@lucide/vue";
 import {
   getConfig,
   getBotProfileConfig,
@@ -459,6 +465,12 @@ const botForm = ref<{ onebot_transport: "reverse_ws" | "forward_ws" | "http"; on
 
 const connected = computed(() => stream.status?.channel.connected ?? false);
 const selfID = computed(() => stream.status?.channel.self_id ?? "");
+// 反向 WS 是接入端连进 Diana：server 侧 token 为空会拒绝一切握手，所以首次
+// 配置反向 WS 时必须填 token；正向 WS / HTTP 由 Diana 外连，token 可留空。
+const tokenRequired = computed(() => botForm.value.onebot_transport === "reverse_ws" && !tokenConfigured.value);
+const tokenRequiredHint = computed(() =>
+  tokenRequired.value ? "反向 WebSocket 模式下 NapCat 等客户端必须凭这个 token 才能连进来，请与客户端填写保持一致。" : ""
+);
 const channelError = computed(() => stream.status?.channel.last_error ?? "");
 const wsEndpoint = computed(() => botForm.value.onebot_reverse_ws_endpoint.trim());
 
@@ -533,6 +545,20 @@ async function copyEndpoint(): Promise<void> {
   }
 }
 
+// 用 CSPRNG 生成足够长的随机 token，满足后端的最低长度要求；
+// 生成后保持明文显示，方便用户复制到 OneBot 客户端。
+function generateToken(): void {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let token = "";
+  for (const byte of bytes) {
+    token += alphabet[byte % alphabet.length];
+  }
+  botForm.value.onebot_access_token = token;
+  toastSuccess("已生成随机 Token，请同步填写到 OneBot 客户端");
+}
+
 async function saveAndTestLLM(): Promise<void> {
   // 一个模型都没有就没得测。同步不通的话上面还能手填，这里只兜同步这一条。
   if (modelOptions.value.length === 0) {
@@ -571,6 +597,11 @@ async function saveAndTestLLM(): Promise<void> {
 async function saveBotAndStart(): Promise<void> {
   if (botForm.value.onebot_transport !== "http" && !validWebSocketURL(botForm.value.onebot_transport === "forward_ws" ? botForm.value.onebot_ws_endpoint : wsEndpoint.value)) {
     toastError("请填写有效的 ws:// 或 wss:// 回连地址");
+    return;
+  }
+  // 后端会拒绝「启用 + 反向 WS + 空 token」的保存；这里提前拦住，错误提示更贴上下文。
+  if (tokenRequired.value && !botForm.value.onebot_access_token.trim()) {
+    toastError("反向 WebSocket 模式必须填写 Access Token，需与 OneBot v11 客户端保持一致");
     return;
   }
   busy.value = true;

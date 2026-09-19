@@ -924,7 +924,7 @@ func newQueuedTestRuntime(channel Channel, store InboundEventStore, provider LLM
 	if provider != nil {
 		factory = func() (LLMProvider, error) { return provider, nil }
 	}
-	runtime := NewRuntime(BotConfig{Enabled: true, BotAccount: "42", GroupTriggers: []string{"Diana"}}, channel, NewPluginManager(), nil, nil, nil, factory)
+	runtime := NewRuntime(BotConfig{Enabled: true, BotAccount: "42", GroupTriggers: []string{"Diana"}, OneBotAccessToken: "test-token"}, channel, NewPluginManager(), nil, nil, nil, factory)
 	runtime.SetInboundEventStore(store)
 	return runtime
 }
