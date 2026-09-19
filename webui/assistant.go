@@ -97,6 +97,8 @@ type BotHandler struct {
 	logs                      AppLogWriter
 	features                  BotFeatureFlags
 	installResolverDependency func(context.Context, string) (assistant.ResolverDependencyInstallResult, error)
+	repoPlugins               *assistant.RepoPluginInstaller
+	repoPluginSources         *assistant.RepoPluginStore
 	liveGroupMu               sync.Mutex
 	liveGroupCache            liveGroupListCache
 	groupNameMu               sync.Mutex
@@ -330,6 +332,9 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)
 	router.POST(base+"/plugins/:id/uninstall", h.uninstallPlugin)
+	router.POST(base+"/plugins/repo/preview", h.previewRepoPlugin)
+	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
+	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
 	router.POST(base+"/plugins/:id/enabled", h.setPluginEnabled)
 	router.POST(base+"/plugins/:id/settings", h.updatePluginSettings)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
@@ -863,6 +868,18 @@ func (h *BotHandler) sendGroupTest(c *gin.Context) {
 	})
 }
 
+// withRepoSource 给第三方仓库插件的响应附上安装来源，插件页据此展示更新入口。
+func (h *BotHandler) withRepoSource(state assistant.PluginState) assistant.PluginState {
+	if h.repoPluginSources == nil {
+		return state
+	}
+	if source, ok := h.repoPluginSources.Get(state.Manifest.ID); ok {
+		source := source
+		state.RepoSource = &source
+	}
+	return state
+}
+
 // listPlugins 返回机器人插件列表。
 func (h *BotHandler) listPlugins(c *gin.Context) {
 	profileID, ok := h.pluginProfileScope(c)
@@ -873,7 +890,7 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 	visible := make([]assistant.PluginState, 0, len(states))
 	for _, state := range states {
 		if profileID == "" || state.Manifest.ID != assistant.OpenAPIPluginID {
-			visible = append(visible, state)
+			visible = append(visible, h.withRepoSource(state))
 		}
 	}
 	c.JSON(http.StatusOK, assistant.RedactStates(visible))
@@ -972,6 +989,7 @@ func (h *BotHandler) uninstallPlugin(c *gin.Context) {
 		return
 	}
 	h.persistState()
+	h.removeRepoPluginSources(state.Manifest.ID)
 	recordRequestOperation(c, h.logs, "assistant.plugin.uninstall", "机器人插件已卸载", state.Manifest.ID, pluginLogMetadata(state))
 	c.JSON(http.StatusOK, state.Redacted())
 }
