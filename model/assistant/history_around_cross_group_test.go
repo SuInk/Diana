@@ -10,13 +10,14 @@ import (
 )
 
 // 跨群检索命中的消息，模型调 around 时漏传 group_id：权限允许就自动去那个群读前后文。
+// 这几条用主人身份，非主人的成员校验见 TestHistoryAroundCrossGroupChecksRequesterMembership。
 func TestHistoryAroundFindsMessageInOtherGroupWithoutGroupID(t *testing.T) {
-	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.SetMessageHistoryStore(newSemanticTimelineStore())
 	r.remember(chatHistoryTextEvent(100, "alice", "Alice", "before", "前一句"))
 	r.remember(chatHistoryTextEvent(110, "alice", "Alice", "target", "那个 dsh 远程项目有 7.6k star"))
 	r.remember(chatHistoryTextEvent(120, "bob", "Bob", "after", "后一句"))
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-2", Time: 200}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-2", UserID: "owner", Time: 200}
 
 	raw, err := newDianaChatHistoryTool(r, event).Run(context.Background(), map[string]any{"operation": "around", "message_id": "target", "before": 1, "after": 1})
 	if err != nil {
@@ -36,7 +37,7 @@ func TestHistoryAroundDoesNotLeaveCurrentGroupWithoutCrossGroupMemory(t *testing
 	r := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.SetMessageHistoryStore(newSemanticTimelineStore())
 	r.remember(chatHistoryTextEvent(110, "alice", "Alice", "target", "别的群的消息"))
-	_, err := newDianaChatHistoryTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "group-2", Time: 200}).Run(context.Background(), map[string]any{"operation": "around", "message_id": "target"})
+	_, err := newDianaChatHistoryTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "group-2", UserID: "owner", Time: 200}).Run(context.Background(), map[string]any{"operation": "around", "message_id": "target"})
 	if err == nil || !strings.Contains(err.Error(), "找不到消息 target") || !strings.Contains(err.Error(), "group_id") {
 		t.Fatalf("err=%v", err)
 	}
@@ -44,14 +45,14 @@ func TestHistoryAroundDoesNotLeaveCurrentGroupWithoutCrossGroupMemory(t *testing
 
 // 同一编号在多个群里都有：不猜，列出候选群让模型带 group_id 重试。
 func TestHistoryAroundAmbiguousMessageAcrossGroups(t *testing.T) {
-	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	r.SetMessageHistoryStore(newSemanticTimelineStore())
 	first := chatHistoryTextEvent(110, "alice", "Alice", "target", "一群")
 	second := chatHistoryTextEvent(120, "bob", "Bob", "target", "三群")
 	second.GroupID = "group-3"
 	r.remember(first)
 	r.remember(second)
-	_, err := newDianaChatHistoryTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "group-2", Time: 200}).Run(context.Background(), map[string]any{"operation": "around", "message_id": "target"})
+	_, err := newDianaChatHistoryTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "group-2", UserID: "owner", Time: 200}).Run(context.Background(), map[string]any{"operation": "around", "message_id": "target"})
 	if err == nil || !strings.Contains(err.Error(), "group-1") || !strings.Contains(err.Error(), "group-3") {
 		t.Fatalf("err=%v", err)
 	}
@@ -79,7 +80,7 @@ func (s prefixLookupHistoryStore) FindMessageEventsBySessionPrefix(_ context.Con
 
 // 消息只在持久化记录里（内存历史早就滚掉了）时，也能通过存储定位到所在群。
 func TestHistoryAroundLocatesOtherGroupThroughStore(t *testing.T) {
-	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	base := newSemanticTimelineStore()
 	target := chatHistoryTextEvent(110, "alice", "Alice", "stored-only", "只在库里")
 	if err := base.AppendMessageEvent(context.Background(), sessionKey(target), target); err != nil {
@@ -89,11 +90,38 @@ func TestHistoryAroundLocatesOtherGroupThroughStore(t *testing.T) {
 	if groups := r.groupsContainingMessage(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "group-2"}, "stored-only"); len(groups) != 1 || groups[0] != "group-1" {
 		t.Fatalf("groups=%v", groups)
 	}
-	raw, err := newDianaChatHistoryTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "group-2", Time: 200}).Run(context.Background(), map[string]any{"operation": "around", "message_id": "stored-only"})
+	raw, err := newDianaChatHistoryTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "group-2", UserID: "owner", Time: 200}).Run(context.Background(), map[string]any{"operation": "around", "message_id": "stored-only"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := decodeHistoryPage(t, raw); len(got.Items) == 0 || got.Items[0].Text != "只在库里" {
 		t.Fatalf("got=%+v", got)
+	}
+}
+
+// 非主人只能读自己也在的群：在 group-1 里的成员能展开 group-1，不在的人不能。
+func TestHistoryAroundCrossGroupChecksRequesterMembership(t *testing.T) {
+	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"group-1|member": true}}
+	r := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, nil)
+	r.SetMessageHistoryStore(newSemanticTimelineStore())
+	r.remember(chatHistoryTextEvent(110, "alice", "Alice", "target", "一群的消息"))
+	input := map[string]any{"operation": "around", "group_id": "group-1", "message_id": "target"}
+
+	member := MessageEvent{Kind: EventKindGroup, GroupID: "group-2", UserID: "member", Time: 200}
+	raw, err := newDianaChatHistoryTool(r, member).Run(context.Background(), input)
+	if err != nil {
+		t.Fatalf("group-1 的成员应当能展开 group-1：%v", err)
+	}
+	if got := decodeHistoryPage(t, raw); len(got.Items) == 0 || got.Items[0].Text != "一群的消息" {
+		t.Fatalf("got=%+v", got)
+	}
+
+	stranger := MessageEvent{Kind: EventKindGroup, GroupID: "group-2", UserID: "stranger", Time: 200}
+	if _, err := newDianaChatHistoryTool(r, stranger).Run(context.Background(), input); err == nil || !strings.Contains(err.Error(), "不在群 group-1") {
+		t.Fatalf("不在 group-1 的人不该读到那里的记录：err=%v", err)
+	}
+	// 漏传 group_id 自动定位时同样只认自己在的群。
+	if _, err := newDianaChatHistoryTool(r, stranger).Run(context.Background(), map[string]any{"operation": "around", "message_id": "target"}); err == nil {
+		t.Fatal("自动定位绕过了成员校验")
 	}
 }

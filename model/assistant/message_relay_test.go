@@ -123,7 +123,6 @@ func TestNormalizeMessageRelaysDropsUnusablePairs(t *testing.T) {
 // 机器人被删掉后，牵扯到它的链路不能留着一直往不存在的机器人发。
 func TestDeletingProfileDropsItsRelays(t *testing.T) {
 	set := ProfileSet{
-		ActiveID: "bot-qq",
 		Profiles: []BotConfig{{ID: "bot-qq", Platform: PlatformOneBotV11}, {ID: "bot-tg", Platform: PlatformTelegram}},
 		MessageRelays: []MessageRelayPair{relayPair("p1", true,
 			relayEndpoint("bot-qq", PlatformOneBotV11, MessageRelayKindGroup, "123456"),

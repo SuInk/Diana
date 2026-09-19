@@ -65,7 +65,7 @@ func TestContextResetExcludesPersistentHistoryFromBothPromptPaths(t *testing.T) 
 		if got := runtime.contextHistory(command); len(got) != 0 {
 			t.Fatalf("restarted=%v recent=%v", restarted, got)
 		}
-		if got := runtime.promptContextHistory(command, runtime.Config()); len(got) != 0 {
+		if got := runtime.promptContextHistory(command, runtime.ProfileConfig("")); len(got) != 0 {
 			t.Fatalf("restarted=%v prompt=%v", restarted, got)
 		}
 		if got := runtime.contextHistory(other); len(got) != 1 {
@@ -82,7 +82,7 @@ func TestContextResetExcludesPersistentHistoryFromBothPromptPaths(t *testing.T) 
 	if got := runtime.contextHistory(command); len(got) != 1 || got[0].MessageID != "new" {
 		t.Fatalf("new recent=%v", got)
 	}
-	if got := runtime.promptContextHistory(command, runtime.Config()); len(got) != 1 || got[0].MessageID != "new" {
+	if got := runtime.promptContextHistory(command, runtime.ProfileConfig("")); len(got) != 1 || got[0].MessageID != "new" {
 		t.Fatalf("new prompt=%v", got)
 	}
 }

@@ -30,7 +30,7 @@ type OneBotReverseServer struct {
 	ctx     context.Context
 	// connectGeneration 标记「当前这次 Connect 才是有效的那次」。
 	//
-	// 这个监听器是进程内共享的一个实例，保存或激活机器人配置会重建整套通道，于是
+	// 这个监听器是进程内共享的一个实例，保存机器人配置会重建整套通道，于是
 	// Connect 会被再调一次。旧那次阻塞在 <-ctx.Done() 上，醒来后无条件 Close()——
 	// 如果这中间新一次 Connect 已经注册、接入端也重连上来了，旧协程关掉的是新连接。
 	// 记下代际，醒来时不是当前那次就不动手。
@@ -205,6 +205,10 @@ func (s *OneBotReverseServer) SendWithResult(ctx context.Context, msg OutgoingMe
 		params["user_id"] = userID
 	}
 	return s.CallAPI(ctx, action, params)
+}
+
+func (s *OneBotReverseServer) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
+	return sendOneBotInputStatus(ctx, msg, action, s.CallAPI)
 }
 
 // CallAPI 通过反向连接发送 OneBot action 并等待响应。

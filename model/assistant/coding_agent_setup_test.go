@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -157,5 +158,16 @@ func TestCodingDeviceLoginProcessLifecycle(t *testing.T) {
 	})
 	if result.LoginURL != "" || result.DeviceCode != "" {
 		t.Fatal("completed login retained device code")
+	}
+}
+
+// 自动安装必须装固定版本，不能随 npm 上的最新版漂移。
+func TestCodingCLIPackageIsPinned(t *testing.T) {
+	for _, backend := range []string{codingBackendCodex, codingBackendClaude} {
+		pkg := codingCLIPackage(backend)
+		at := strings.LastIndex(pkg, "@")
+		if at <= 0 || !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(pkg[at+1:]) {
+			t.Fatalf("%s 安装包没有固定版本：%q", backend, pkg)
+		}
 	}
 }

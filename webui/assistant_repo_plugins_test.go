@@ -4,6 +4,9 @@
 package webui
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -27,24 +30,20 @@ func newRepoPluginTestHandler(t *testing.T, manifest map[string]any, files map[s
 	}
 	t.Cleanup(func() { store.Close() })
 
-	// 复用模型层测试的假 GitHub：直接内联一个同等语义的本地服务。
+	// 假 GitHub 只提供 codeload 归档：安装器从同一份归档里读清单、入口和提交。
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
+	all := map[string]string{"diana.plugin.json": string(manifestJSON)}
+	for name, body := range files {
+		all[name] = body
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/")
-		parts := strings.SplitN(path, "/", 4)
-		if len(parts) == 4 && parts[2] == ref {
-			rel := parts[3]
-			if rel == "diana.plugin.json" {
-				_, _ = w.Write(manifestJSON)
-				return
-			}
-			if body, ok := files[rel]; ok {
-				_, _ = w.Write([]byte(body))
-				return
-			}
+		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 4)
+		if len(parts) == 4 && parts[2] == "tar.gz" && parts[3] == ref {
+			_, _ = w.Write(repoPluginArchive(t, parts[0]+"-"+parts[1]+"-"+ref, testRepoCommit, all))
+			return
 		}
 		http.NotFound(w, r)
 	}))
@@ -52,7 +51,6 @@ func newRepoPluginTestHandler(t *testing.T, manifest map[string]any, files map[s
 
 	dataDir := filepath.Dir(store.Path())
 	installer := assistant.NewRepoPluginInstaller(dataDir, server.Client())
-	installer.RawBase = server.URL
 	installer.ArchiveBase = server.URL
 	sources := assistant.NewRepoPluginStore(dataDir)
 	if err := sources.Load(); err != nil {
@@ -66,6 +64,34 @@ func newRepoPluginTestHandler(t *testing.T, manifest map[string]any, files map[s
 	h.SetRepoPluginInstaller(installer)
 	h.SetRepoPluginSourceStore(sources)
 	return h, installer, sources, server, store
+}
+
+const testRepoCommit = "0123456789abcdef0123456789abcdef01234567"
+
+// repoPluginArchive 按 GitHub codeload 的形态打包，pax 全局头 comment 里写提交 SHA。
+func repoPluginArchive(t *testing.T, root, commit string, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": commit}, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: root + "/" + name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func repoPluginManifest() map[string]any {
@@ -90,7 +116,7 @@ func TestBotHandlerRepoPluginPreview(t *testing.T) {
 	router := botTestRouter(h)
 
 	rec := httptest.NewRecorder()
-	// ParseGitHubRepoURL 只认 github.com 链接形态；假 GitHub 由 RawBase 接管实际请求。
+	// ParseGitHubRepoURL 只认 github.com 链接形态；假 GitHub 由 ArchiveBase 接管实际请求。
 	body := `{"url":"github.com/SuInk/diana-plugin-hello"}`
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repo/preview", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -100,7 +126,7 @@ func TestBotHandlerRepoPluginPreview(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if preview.Manifest.ID != "suink.hello" {
+	if preview.Manifest.ID != "suink.hello" || preview.Commit != testRepoCommit {
 		t.Fatalf("manifest = %+v", preview.Manifest)
 	}
 	if len(preview.Permissions) != 1 || preview.Permissions[0].Label == "" {
@@ -149,42 +175,33 @@ func TestBotHandlerRepoPluginInstallUninstallRoundTrip(t *testing.T) {
 		"SKILL.md": repoPluginSkill(),
 	}, "HEAD")
 	router := botTestRouter(h)
-	// 假 GitHub 不提供归档下载，安装会失败；这里只验证 502 映射与风险校验路径。
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repo/install", strings.NewReader(`{"url":"github.com/SuInk/diana-plugin-hello","accept_risk":true}`)))
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("归档下载失败应返回 502: %d %s", rec.Code, rec.Body.String())
+	install := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repo/install", strings.NewReader(body)))
+		return rec
 	}
-
-	// 直接落盘一个插件，走卸载清理路径验证来源记录与目录删除。
-	source := assistant.RepoPluginSource{ID: "suink.hello", Owner: "SuInk", Repo: "diana-plugin-hello", Version: "1.0.0", URL: "https://github.com/SuInk/diana-plugin-hello"}
-	if err := sources.Save(source); err != nil {
-		t.Fatal(err)
+	// 没有预览提交不能装：装的必须是确认框里那一版。
+	if rec := install(`{"url":"github.com/SuInk/diana-plugin-hello","accept_risk":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("缺少预览提交应拒绝: %d %s", rec.Code, rec.Body.String())
+	}
+	// 预览之后仓库有了新提交：拒绝并提示重新预览。
+	if rec := install(`{"url":"github.com/SuInk/diana-plugin-hello","accept_risk":true,"commit":"fedcba9876543210fedcba9876543210fedcba98"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("提交不一致应返回 409: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := install(`{"url":"github.com/SuInk/diana-plugin-hello","accept_risk":true,"commit":"` + testRepoCommit + `"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("安装: %d %s", rec.Code, rec.Body.String())
+	}
+	source, ok := sources.Get("suink.hello")
+	if !ok || source.Commit != testRepoCommit {
+		t.Fatalf("来源记录应带实际提交: %+v ok=%v", source, ok)
 	}
 	dir := filepath.Join(installer.DataDir, "plugin-sources", "suink.hello")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
+		t.Fatalf("落盘缺少 SKILL.md: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(repoPluginSkill()), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	manifestJSON, err := json.Marshal(repoPluginManifest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "diana.plugin.json"), manifestJSON, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	plugin, err := assistant.LoadRepoPlugin(installer.DataDir, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := h.runtime.Plugins()
-	if err := manager.RegisterPlugin(plugin); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Install(source.ID); err != nil {
-		t.Fatal(err)
+	if state, ok := h.runtime.Plugins().Get(source.ID); !ok || !state.Installed {
+		t.Fatalf("安装后插件应已登记并安装: %+v ok=%v", state, ok)
 	}
 
 	// 列表接口给第三方插件附带安装来源，更新入口据此渲染。

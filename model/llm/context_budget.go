@@ -4,6 +4,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"unicode"
@@ -38,6 +39,7 @@ func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest
 	if limit <= 0 || len(req.Messages) == 0 {
 		return req
 	}
+	req.MaxContextTokens = limit
 	outputReserve := req.MaxOutputTokens
 	if outputReserve <= 0 {
 		outputReserve = DefaultMaxOutputTokens
@@ -49,7 +51,12 @@ func applyContextBudget(req GenerateRequest, cfg ProviderConfig) GenerateRequest
 	if inputBudget < 1 {
 		inputBudget = 1
 	}
-	req.Messages = fitMessagesToTokenBudget(req.Messages, inputBudget)
+	fixedTokens := estimateToolDefinitionsTokens(req.Tools, req.ToolChoice)
+	messageBudget := inputBudget - fixedTokens
+	if messageBudget < 1 {
+		messageBudget = 1
+	}
+	req.Messages = fitMessagesToTokenBudget(req.Messages, messageBudget)
 	return req
 }
 
@@ -319,17 +326,66 @@ func minInt64(left, right int64) int64 {
 }
 
 func contextBudgetGroupIndexes(messages []Message, index int) []int {
-	if index < 0 || index >= len(messages) || strings.TrimSpace(messages[index].ContextGroup) == "" {
+	if index < 0 || index >= len(messages) {
+		return nil
+	}
+	groupID := strings.TrimSpace(messages[index].ContextGroup)
+	if groupID == "" {
+		groupID = toolExchangeContextGroup(messages, index)
+	}
+	if groupID == "" {
 		return []int{index}
 	}
-	groupID := messages[index].ContextGroup
 	indexes := make([]int, 0, 2)
 	for candidateIndex, message := range messages {
-		if message.ContextGroup == groupID {
+		candidateGroup := strings.TrimSpace(message.ContextGroup)
+		if candidateGroup == "" {
+			candidateGroup = toolExchangeContextGroup(messages, candidateIndex)
+		}
+		if candidateGroup == groupID {
 			indexes = append(indexes, candidateIndex)
 		}
 	}
 	return indexes
+}
+
+// toolExchangeContextGroup keeps one assistant tool-call batch and all of its
+// results together even when the producer did not assign ContextGroup. Sending
+// either side alone is invalid for OpenAI-compatible and Anthropic protocols.
+func toolExchangeContextGroup(messages []Message, index int) string {
+	if index < 0 || index >= len(messages) {
+		return ""
+	}
+	message := messages[index]
+	if message.Role == RoleAssistant && len(message.ToolCalls) > 0 {
+		return "tool-exchange:" + toolCallBatchKey(message.ToolCalls)
+	}
+	if message.Role != RoleTool || strings.TrimSpace(message.ToolCallID) == "" {
+		return ""
+	}
+	for candidate := index - 1; candidate >= 0; candidate-- {
+		previous := messages[candidate]
+		if previous.Role == RoleAssistant && len(previous.ToolCalls) > 0 {
+			for _, call := range previous.ToolCalls {
+				if call.ID == message.ToolCallID {
+					return "tool-exchange:" + toolCallBatchKey(previous.ToolCalls)
+				}
+			}
+		}
+		if previous.Role == RoleUser {
+			break
+		}
+	}
+	return ""
+}
+
+func toolCallBatchKey(calls []ToolCall) string {
+	var builder strings.Builder
+	for _, call := range calls {
+		builder.WriteString(call.ID)
+		builder.WriteByte('\x00')
+	}
+	return builder.String()
 }
 
 // Current input and plugin evidence are required context. When their image
@@ -515,6 +571,23 @@ func estimateMessagesTokens(messages []Message) int64 {
 
 func estimateMessageTokens(message Message) int64 {
 	total := messageTokenOverhead
+	if len(message.ToolCalls) > 0 {
+		if raw, err := json.Marshal(message.ToolCalls); err == nil {
+			total += estimateTextTokens(string(raw)) + 8
+		}
+	}
+	if message.ToolCallID != "" {
+		total += estimateTextTokens(message.ToolCallID) + estimateTextTokens(message.ToolName) + 4
+	}
+	if message.ReasoningContent != nil {
+		total += estimateTextTokens(*message.ReasoningContent)
+	}
+	for _, item := range message.AnthropicThinking {
+		total += estimateTextTokens(string(item))
+	}
+	for _, item := range message.ResponsesOutput {
+		total += estimateTextTokens(string(item))
+	}
 	if len(message.Parts) == 0 {
 		return total + estimateTextTokens(message.Content)
 	}
@@ -540,6 +613,23 @@ func estimateMessageTokens(message Message) int64 {
 		total += estimateTextTokens(message.Content)
 	}
 	return total
+}
+
+func estimateToolDefinitionsTokens(tools []ToolDefinition, toolChoice string) int64 {
+	if len(tools) == 0 && strings.TrimSpace(toolChoice) == "" {
+		return 0
+	}
+	total := int64(8)
+	if raw, err := json.Marshal(tools); err == nil {
+		total += estimateTextTokens(string(raw))
+	}
+	total += estimateTextTokens(toolChoice)
+	return total
+}
+
+// EstimateRequestInputTokens includes messages, tool schemas and tool choice.
+func EstimateRequestInputTokens(req GenerateRequest) int64 {
+	return estimateMessagesTokens(req.Messages) + estimateToolDefinitionsTokens(req.Tools, req.ToolChoice)
 }
 
 func estimateTextTokens(text string) int64 {

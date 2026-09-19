@@ -224,10 +224,10 @@ func TestProfileSetIgnoresLegacyContextIsolationSetting(t *testing.T) {
 			t.Fatal(err)
 		}
 		set = set.WithDefaults()
-		if set.ActiveID != "qq" || len(set.Profiles) != 1 || set.Profiles[0].ID != "qq" {
+		if len(set.Profiles) != 1 || set.Profiles[0].ID != "qq" {
 			t.Fatalf("legacy setting %v changed profile identity: %#v", setting, set)
 		}
-		for _, value := range []any{set, PayloadFromProfileSet(set)} {
+		for _, value := range []any{set, PayloadFromProfileSet(set, "")} {
 			encoded, err := json.Marshal(value)
 			if err != nil {
 				t.Fatal(err)
@@ -240,19 +240,5 @@ func TestProfileSetIgnoresLegacyContextIsolationSetting(t *testing.T) {
 				t.Fatalf("removed setting is still serialized for %T", value)
 			}
 		}
-	}
-}
-
-func TestProfileSetRuntimeConfigKeepsOtherEnabledChannelOnline(t *testing.T) {
-	set := ProfileSet{
-		ActiveID: "disabled",
-		Profiles: []BotConfig{
-			{ID: "disabled", Platform: PlatformOneBotV11, Enabled: false},
-			{ID: "telegram", Platform: PlatformTelegram, Enabled: true, TelegramBotToken: "token"},
-		},
-	}
-	cfg, ok := set.RuntimeConfig()
-	if !ok || cfg.ID != "telegram" || !cfg.Enabled {
-		t.Fatalf("runtime config=%#v ok=%v", cfg, ok)
 	}
 }

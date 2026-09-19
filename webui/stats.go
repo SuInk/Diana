@@ -361,14 +361,15 @@ func (h *StatsHandler) stats(c *gin.Context) {
 
 // summarizeBotStatus 把完整运行时状态压缩成 Dashboard 摘要。
 func summarizeBotStatus(status assistant.RuntimeStatus) StatsBotSummary {
+	bridgeEnabled, bridgeConnected := status.BridgeSummary()
 	summary := StatsBotSummary{
 		Running:       status.Running,
 		Connected:     status.Channel.Connected,
 		SelfID:        status.Channel.SelfID,
 		ActiveWorkers: status.ActiveWorkers,
 		LastError:     status.LastError,
-		BridgeEnabled: status.NoneBotBridge.Enabled,
-		BridgeOK:      status.NoneBotBridge.Connected,
+		BridgeEnabled: bridgeEnabled,
+		BridgeOK:      bridgeConnected,
 	}
 	summary.PluginsTotal = len(status.Plugins)
 	for _, plugin := range status.Plugins {

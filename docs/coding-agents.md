@@ -51,4 +51,4 @@ DIANA_RUN_REAL_CODEX_SMOKE=1 go test ./model/assistant -run '^TestLocalRealCodex
 
 Codex 也可选择「使用 ChatGPT 登录」：先保存不带 API 密钥和自定义地址的配置，点击按钮，再刷新登录状态取得链接及一次性代码；在自己的浏览器完成授权后刷新，看到登录成功再测试连接。凭据按代理名称保存到数据目录，15 分钟未完成会自动结束；账户需要允许设备代码登录。更改代理名称后需重新登录。Claude 的 WebUI 目前使用 API 密钥方式，或复用运行用户已有登录，不提供浏览器登录回调。
 
-自动工作目录用于新任务和新项目。需要修改已有项目时，取消自动目录并使用原有工作区白名单；容器外的现有文件仍需挂载进容器。安装器仅安装固定的官方 `@openai/codex` / `@anthropic-ai/claude-code` 包，自定义 CLI 仍由部署者管理。本机不使用 Docker 时，自动安装需要已有 Node.js/npm。
+自动工作目录用于新任务和新项目。需要修改已有项目时，取消自动目录并使用原有工作区白名单；容器外的现有文件仍需挂载进容器。安装器仅安装官方 `@openai/codex` / `@anthropic-ai/claude-code` 包，版本固定在 `model/assistant/coding_agent_setup.go`，随 Diana 发版核对更新；自定义 CLI 仍由部署者管理。本机不使用 Docker 时，自动安装需要已有 Node.js/npm。

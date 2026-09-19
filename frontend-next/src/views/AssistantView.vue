@@ -300,6 +300,14 @@
                 </div>
                 <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
                 </template>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.qq_typing_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">显示「对方正在输入」</span>
+                  </label>
+                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要 NapCat 等支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
+                </div>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
                 <SecretField
@@ -1598,10 +1606,10 @@
                 {{ channelStatusLabel(channel) }}
               </span>
             </div>
-            <div v-if="status?.nonebot_bridge.enabled" class="cluster" style="justify-content: space-between">
+            <div v-if="formBridge?.enabled" class="cluster" style="justify-content: space-between">
               <span class="muted">NoneBot 桥</span>
-              <span class="badge" :class="status.nonebot_bridge.connected ? 'ok' : 'warn'">
-                {{ status.nonebot_bridge.connected ? "已连接" : "等待连接" }}
+              <span class="badge" :class="formBridge.connected ? 'ok' : 'warn'">
+                {{ formBridge.connected ? "已连接" : "等待连接" }}
               </span>
             </div>
             <div class="cluster" style="justify-content: space-between">
@@ -1738,7 +1746,6 @@ import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import {
-  activateBotProfile,
   deleteBotProfile,
   generatePersona,
   getConfig,
@@ -2717,7 +2724,11 @@ async function beginCreateShared(source: BotProfileConfig): Promise<void> {
   const platform = platforms.value.find((item) => item.id === source.platform);
   if (platform) await beginCreate(platform, source.id);
 }
-const activeProfileID = computed(() => profileSet.value?.active_profile_id);
+// 正在编辑的这台机器人自己的 NoneBot 桥接状态；桥接按机器人各自一份。
+const formBridge = computed(() => {
+  const id = form.value?.id;
+  return id ? status.value?.nonebot_bridges?.[id] : undefined;
+});
 const relayManagerOpen = ref(false);
 const messageRelays = computed<MessageRelayPair[]>(() => profileSet.value?.message_relays ?? []);
 const relaySummary = computed(() => {
@@ -3352,7 +3363,6 @@ function setForm(config: BotProfileConfig): void {
     custom_persona: config.custom_persona ?? asCustomPersona(config).custom_persona,
     participation: participationFromConfig(config),
     profiles: undefined,
-    active_profile_id: undefined,
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
@@ -3362,6 +3372,7 @@ function setForm(config: BotProfileConfig): void {
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
+    qq_typing_enabled: config.qq_typing_enabled ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
@@ -3726,37 +3737,22 @@ async function triggerBackfill(): Promise<void> {
   }
 }
 
-async function activateProfile(profile: BotProfileConfig): Promise<void> {
-  if (!profile.id || profile.id === activeProfileID.value) {
-    return;
-  }
-  busy.value = true;
-  try {
-    applyConfig(await activateBotProfile(profile.id));
-    toastSuccess("已切换机器人配置档");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "切换失败");
-  } finally {
-    busy.value = false;
-  }
-}
-
+// 编辑哪台机器人只是这个页面自己的状态：直接用列表里的那台填表单，不通知服务端。
+// 以前这里会先调用「切换激活」，把选中的机器人写成全局的当前机器人，影响运行时判断，
+// 两个人同时开控制台还会互相覆盖。
 async function editProfile(profile: BotProfileConfig): Promise<void> {
   if (!profile.id) {
     return;
   }
-  if (profile.id !== activeProfileID.value) {
-    await activateProfile(profile);
-  } else {
-    setForm(profile);
-  }
+  setForm(profile);
   creating.value = false;
   editorTab.value = "access";
   page.value = "edit";
 }
 
 function leaveEditor(): void {
-  const current = profiles.value.find((profile) => profile.id === activeProfileID.value);
+  // 放弃未保存的修改：按表单里这台机器人的 ID 找回列表里保存过的配置。
+  const current = profiles.value.find((profile) => profile.id === form.value?.id);
   if (current) {
     setForm(current);
   }

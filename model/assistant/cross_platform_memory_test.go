@@ -35,7 +35,7 @@ func TestCrossPlatformMemoryRequiresMutualOptIn(t *testing.T) {
 	other := profile("off", PlatformTelegram, false)
 	samePlatform := profile("qq2", PlatformOneBotV11, true)
 	r := NewRuntime(target, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	set := ProfileSet{ActiveID: target.ID, Profiles: []BotConfig{target, source, other, samePlatform}}
+	set := ProfileSet{Profiles: []BotConfig{target, source, other, samePlatform}}
 	r.SetProfiles(set)
 	event := MessageEvent{Kind: EventKindGroup, Platform: target.Platform, ProfileID: target.ID, ContextNamespace: target.ID, GroupID: "1", UserID: "123"}
 	if got := r.crossPlatformMemoryPrefixes(event, target); !reflect.DeepEqual(got, []string{"tg:group:"}) {
@@ -60,7 +60,7 @@ func TestCrossPlatformMemoryRequiresMutualOptIn(t *testing.T) {
 			case "unisolated":
 				next.ContextNamespace = ""
 			}
-			r.SetProfiles(ProfileSet{ActiveID: target.ID, Profiles: []BotConfig{target, sourceCfg}})
+			r.SetProfiles(ProfileSet{Profiles: []BotConfig{target, sourceCfg}})
 			if got := r.crossPlatformMemoryPrefixes(next, cfg); len(got) != 0 {
 				t.Fatalf("unexpected sharing: %v", got)
 			}

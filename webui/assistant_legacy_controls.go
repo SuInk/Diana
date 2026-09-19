@@ -848,8 +848,8 @@ func firstNonEmptyWeb(values ...string) string {
 func (h *BotHandler) repositoryWatchProfile(profileID string) (assistant.BotConfig, error) {
 	set := h.profiles.Profiles().WithDefaults()
 	profileID = strings.TrimSpace(profileID)
-	if profileID == "" {
-		profileID = set.ActiveID
+	if profileID == "" && len(set.Profiles) == 1 {
+		profileID = set.Profiles[0].ID
 	}
 	for _, profile := range set.Profiles {
 		if profile.ID == profileID {
@@ -1053,7 +1053,7 @@ func (h *BotHandler) parseGroupTestFile(c *gin.Context) {
 	if logTarget == "" {
 		logTarget = name
 	}
-	testCfg := h.runtime.Config()
+	testCfg := h.runtime.ProfileConfig(botProfileScope(c))
 	plugin := assistant.NewFileParserPlugin(nil)
 	resp, err := plugin.Handle(c.Request.Context(), assistant.PluginRequest{
 		Channel: runtimeAPICallChannel{runtime: h.runtime},

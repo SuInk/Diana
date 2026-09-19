@@ -49,6 +49,8 @@ var (
 	ErrRepoPluginSkill     = errors.New("diana: SKILL.md 缺少 name/description frontmatter")
 	ErrRepoPluginRisk      = errors.New("diana: 未确认安装风险")
 	ErrRepoPluginNotSource = errors.New("diana: 该插件不是从仓库安装的")
+	ErrRepoPluginChanged   = errors.New("diana: 仓库在预览之后有了新提交，请重新预览确认后再安装")
+	ErrRepoPluginCommit    = errors.New("diana: 无法从仓库归档确定提交版本，拒绝安装")
 )
 
 // RepoPluginRef 是解析后的 GitHub 仓库坐标。Ref 为空表示默认分支最新提交。
@@ -441,10 +443,12 @@ func validateSkillFrontmatter(data []byte) error {
 
 // RepoPluginSource 记录一次仓库安装的出处，更新时按同一坐标重新拉取。
 type RepoPluginSource struct {
-	ID          string    `json:"id"`
-	Owner       string    `json:"owner"`
-	Repo        string    `json:"repo"`
-	Ref         string    `json:"ref,omitempty"`
+	ID    string `json:"id"`
+	Owner string `json:"owner"`
+	Repo  string `json:"repo"`
+	Ref   string `json:"ref,omitempty"`
+	// Commit 是实际安装的那次提交。Ref 可以是分支或 tag，会移动；Commit 不会。
+	Commit      string    `json:"commit,omitempty"`
 	Version     string    `json:"version"`
 	URL         string    `json:"url"`
 	InstalledAt time.Time `json:"installed_at"`
@@ -543,13 +547,21 @@ func (s *RepoPluginStore) writeLocked() error {
 }
 
 // RepoPlugin 是从仓库安装的第三方插件。v1 的运行时形态是上下文插件：
-// 每次请求把 SKILL.md 指令作为插件上下文注入提示词，由模型按指令执行。
-// 插件声明的权限用于安装确认与展示；通用适配器本身只读自己目录里的文件。
+// 每次请求把 SKILL.md 指令作为「第三方插件说明」注入对话，由模型参考执行。
+// 插件声明的权限只用于安装确认与展示，Diana 不据此限制插件，见 repoPluginRiskWarnings。
 type RepoPlugin struct {
 	manifest PluginManifest
 	dir      string
 	source   RepoPluginSource
+
+	loadOnce sync.Once
+	context  string
+	loadErr  error
 }
+
+// repoPluginMaxContextRunes 限制注入对话的 SKILL.md 长度。单文件上限是 8MB，
+// 不设限的话一个插件就能把每一轮的上下文预算吃光。
+const repoPluginMaxContextRunes = 12000
 
 // NewRepoPlugin 从已安装目录构造插件实例。
 func NewRepoPlugin(dir string, source RepoPluginSource, manifest PluginManifest) *RepoPlugin {
@@ -561,19 +573,33 @@ func (p *RepoPlugin) Manifest() PluginManifest { return p.manifest }
 // Source 返回安装来源，WebUI 据此展示「从 GitHub 安装」标记与更新入口。
 func (p *RepoPlugin) Source() RepoPluginSource { return p.source }
 
+// Handle 注入插件说明。SKILL.md 只在首次使用时读一次：更新插件会重新构造实例，
+// 不需要每条消息都读盘。
 func (p *RepoPlugin) Handle(_ context.Context, _ PluginRequest) (*PluginResponse, error) {
-	body, err := os.ReadFile(filepath.Join(p.dir, RepoPluginEntryFile))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+	p.loadOnce.Do(func() {
+		body, err := os.ReadFile(filepath.Join(p.dir, RepoPluginEntryFile))
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				p.loadErr = err
+			}
+			return
 		}
-		return nil, err
+		content := strings.TrimSpace(string(body))
+		if content == "" {
+			return
+		}
+		if runes := []rune(content); len(runes) > repoPluginMaxContextRunes {
+			content = string(runes[:repoPluginMaxContextRunes]) + "\n（插件说明过长，后面的内容已省略）"
+		}
+		p.context = fmt.Sprintf("插件「%s」（%s）：\n%s", p.manifest.Name, p.source.URL, content)
+	})
+	if p.loadErr != nil {
+		return nil, p.loadErr
 	}
-	content := strings.TrimSpace(string(body))
-	if content == "" {
+	if p.context == "" {
 		return nil, nil
 	}
-	return &PluginResponse{Handled: true, Context: content}, nil
+	return &PluginResponse{Handled: true, Context: p.context, ThirdParty: true}, nil
 }
 
 // RepoPluginRisk 是安装确认框的风险提示。
@@ -586,7 +612,10 @@ type RepoPluginRisk struct {
 // RepoPluginPreview 是「粘贴链接 → 确认安装」中间步骤的完整视图：
 // 格式校验通过后原样返回给前端，确认框拿它渲染权限与风险。
 type RepoPluginPreview struct {
-	Source      RepoPluginRef          `json:"source"`
+	Source RepoPluginRef `json:"source"`
+	// Commit 是预览时读到的提交。安装请求带回它，仓库在中间有新提交就拒绝安装，
+	// 保证装进去的就是用户在确认框里看到的那一版。
+	Commit      string                 `json:"commit"`
 	Manifest    PluginManifest         `json:"manifest"`
 	Permissions []RepoPluginPermission `json:"permissions"`
 	Files       []string               `json:"files"`
@@ -597,7 +626,6 @@ type RepoPluginPreview struct {
 type RepoPluginInstaller struct {
 	Client      *http.Client
 	DataDir     string
-	RawBase     string // 默认 https://raw.githubusercontent.com，测试可指向本地服务
 	ArchiveBase string // 默认 https://codeload.github.com，测试可指向本地服务
 	// MirrorBase 可选返回 ghmirror 加速线路；返回空串表示直连。
 	MirrorBase func(context.Context) string
@@ -612,16 +640,8 @@ func NewRepoPluginInstaller(dataDir string, client *http.Client) *RepoPluginInst
 	return &RepoPluginInstaller{
 		Client:      client,
 		DataDir:     dataDir,
-		RawBase:     "https://raw.githubusercontent.com",
 		ArchiveBase: "https://codeload.github.com",
 	}
-}
-
-func (i *RepoPluginInstaller) rawBase() string {
-	if strings.TrimSpace(i.RawBase) == "" {
-		return "https://raw.githubusercontent.com"
-	}
-	return strings.TrimRight(i.RawBase, "/")
 }
 
 func (i *RepoPluginInstaller) archiveBase() string {
@@ -650,100 +670,168 @@ func (i *RepoPluginInstaller) fetch(ctx context.Context, rawURL string) ([]byte,
 	return io.ReadAll(io.LimitReader(resp.Body, repoPluginMaxTotalBytes))
 }
 
-func (i *RepoPluginInstaller) manifestURL(ref RepoPluginRef) string {
-	return fmt.Sprintf("%s/%s/%s/%s/%s", i.rawBase(), ref.Owner, ref.Repo, ref.gitHubRef(), RepoPluginManifestFile)
-}
-
-func (i *RepoPluginInstaller) skillURL(ref RepoPluginRef) string {
-	return fmt.Sprintf("%s/%s/%s/%s/%s", i.rawBase(), ref.Owner, ref.Repo, ref.gitHubRef(), RepoPluginEntryFile)
-}
-
-func (i *RepoPluginInstaller) fileURL(ref RepoPluginRef, path string) string {
-	return fmt.Sprintf("%s/%s/%s/%s/%s", i.rawBase(), ref.Owner, ref.Repo, ref.gitHubRef(), path)
-}
-
 func (i *RepoPluginInstaller) archiveURL(ref RepoPluginRef) string {
 	return fmt.Sprintf("%s/%s/%s/tar.gz/%s", i.archiveBase(), ref.Owner, ref.Repo, ref.gitHubRef())
-}
-
-// loadManifest 拉取并校验清单，返回原始字节与解析后的插件清单。
-// 原始字节随插件落盘一份，进程重启后按本地副本恢复，不依赖网络。
-func (i *RepoPluginInstaller) loadManifest(ctx context.Context, ref RepoPluginRef) ([]byte, repoPluginManifestFile, PluginManifest, error) {
-	data, err := i.fetch(ctx, i.manifestURL(ref))
-	if err != nil {
-		if isNotFound(err) {
-			return nil, repoPluginManifestFile{}, PluginManifest{}, fmt.Errorf("%w: %s", ErrRepoPluginManifest, ref.RepoURL())
-		}
-		return nil, repoPluginManifestFile{}, PluginManifest{}, err
-	}
-	manifestFile, err := decodeRepoPluginManifest(data)
-	if err != nil {
-		return nil, repoPluginManifestFile{}, PluginManifest{}, err
-	}
-	if err := manifestFile.validate(); err != nil {
-		return nil, repoPluginManifestFile{}, PluginManifest{}, err
-	}
-	return data, manifestFile, manifestFile.pluginManifest(), nil
 }
 
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "HTTP 404")
 }
 
-// checkRemoteFiles 核对分发白名单里的文件在仓库里真实存在。目录条目无法
-// 逐个核对（raw 地址不列目录），交给解包阶段处理；文件缺失按格式错误拒绝，
-// 宁可误拒也不漏放。
-func (i *RepoPluginInstaller) checkRemoteFiles(ctx context.Context, ref RepoPluginRef, files []string) error {
-	for _, path := range files {
-		if strings.HasSuffix(path, "/") {
-			continue
-		}
-		if _, err := i.fetch(ctx, i.fileURL(ref, path)); err != nil {
-			return fmt.Errorf("%w: 清单引用的文件 %s 在仓库中不存在或无法读取", ErrRepoPluginFormat, path)
-		}
-	}
-	return nil
+// repoPluginSnapshot 是从同一份仓库归档里读出的全部内容。
+//
+// 以前清单和 SKILL.md 从 raw 地址拉、落盘文件从归档拉，是三次独立请求：分支在中间移动时，
+// 校验通过的是一版，落盘的是另一版；预览看到的和最终安装的也可能不是同一版。
+// 现在只下载一次归档，清单、入口、声明文件和提交 SHA 都出自它。
+type repoPluginSnapshot struct {
+	ref          RepoPluginRef
+	commit       string
+	archive      []byte
+	manifestData []byte
+	manifestFile repoPluginManifestFile
+	manifest     PluginManifest
+	files        []string
 }
 
-// Preview 只拉取清单、入口与声明文件做格式校验，不下载仓库归档，
-// 返回渲染安装确认框所需的全部信息。
-func (i *RepoPluginInstaller) Preview(ctx context.Context, rawURL string) (RepoPluginPreview, error) {
+func (i *RepoPluginInstaller) loadSnapshot(ctx context.Context, rawURL string) (repoPluginSnapshot, error) {
 	ref, err := ParseGitHubRepoURL(rawURL)
 	if err != nil {
-		return RepoPluginPreview{}, err
+		return repoPluginSnapshot{}, err
 	}
-	_, manifestFile, manifest, err := i.loadManifest(ctx, ref)
-	if err != nil {
-		return RepoPluginPreview{}, err
-	}
-	skill, err := i.fetch(ctx, i.skillURL(ref))
+	archive, err := i.fetch(ctx, i.archiveURL(ref))
 	if err != nil {
 		if isNotFound(err) {
-			return RepoPluginPreview{}, fmt.Errorf("%w: %s", ErrRepoPluginSkill, RepoPluginEntryFile)
+			return repoPluginSnapshot{}, fmt.Errorf("%w: %s", ErrRepoPluginManifest, ref.RepoURL())
 		}
-		return RepoPluginPreview{}, err
+		return repoPluginSnapshot{}, fmt.Errorf("diana: 下载仓库归档失败: %w", err)
+	}
+	index, err := readRepoArchiveIndex(archive)
+	if err != nil {
+		return repoPluginSnapshot{}, err
+	}
+	if !gitHubCommitPattern.MatchString(index.commit) {
+		return repoPluginSnapshot{}, ErrRepoPluginCommit
+	}
+	manifestData, ok := index.contents[RepoPluginManifestFile]
+	if !ok {
+		return repoPluginSnapshot{}, fmt.Errorf("%w: %s", ErrRepoPluginManifest, ref.RepoURL())
+	}
+	manifestFile, err := decodeRepoPluginManifest(manifestData)
+	if err != nil {
+		return repoPluginSnapshot{}, err
+	}
+	if err := manifestFile.validate(); err != nil {
+		return repoPluginSnapshot{}, err
+	}
+	skill, ok := index.contents[RepoPluginEntryFile]
+	if !ok {
+		return repoPluginSnapshot{}, fmt.Errorf("%w: %s", ErrRepoPluginSkill, RepoPluginEntryFile)
 	}
 	if err := validateSkillFrontmatter(skill); err != nil {
-		return RepoPluginPreview{}, err
+		return repoPluginSnapshot{}, err
 	}
 	files := manifestFile.normalizedFiles()
-	if err := i.checkRemoteFiles(ctx, ref, files); err != nil {
+	// 清单引用的文件必须真实存在；目录条目可以是空目录（模板里的 prompts/），不做要求。
+	for _, path := range files {
+		if !strings.HasSuffix(path, "/") && !index.paths[path] {
+			return repoPluginSnapshot{}, fmt.Errorf("%w: 清单引用的文件 %s 在仓库中不存在", ErrRepoPluginFormat, path)
+		}
+	}
+	manifest := manifestFile.pluginManifest()
+	if err := checkTagVersion(ref, manifest.Version); err != nil {
+		return repoPluginSnapshot{}, err
+	}
+	return repoPluginSnapshot{
+		ref: ref, commit: index.commit, archive: archive,
+		manifestData: manifestData, manifestFile: manifestFile, manifest: manifest, files: files,
+	}, nil
+}
+
+type repoArchiveIndex struct {
+	commit   string
+	paths    map[string]bool
+	contents map[string][]byte
+}
+
+// readRepoArchiveIndex 列出归档里的常规文件，读出清单与入口的内容，并从 GitHub 写在
+// pax 全局头 comment 里的字段取出这份归档对应的提交 SHA。
+func readRepoArchiveIndex(archive []byte) (repoArchiveIndex, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return repoArchiveIndex{}, fmt.Errorf("diana: 仓库归档不是有效的 gzip: %w", err)
+	}
+	defer gz.Close()
+	index := repoArchiveIndex{paths: map[string]bool{}, contents: map[string][]byte{}}
+	reader := tar.NewReader(gz)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return index, nil
+		}
+		if err != nil {
+			return repoArchiveIndex{}, fmt.Errorf("diana: 解包仓库归档失败: %w", err)
+		}
+		if header.Typeflag == tar.TypeXGlobalHeader {
+			index.commit = strings.ToLower(strings.TrimSpace(header.PAXRecords["comment"]))
+			continue
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		rel, ok := stripArchiveRoot(header.Name)
+		if !ok {
+			continue
+		}
+		index.paths[rel] = true
+		if rel != RepoPluginManifestFile && rel != RepoPluginEntryFile {
+			continue
+		}
+		if header.Size > repoPluginMaxFileBytes {
+			return repoArchiveIndex{}, fmt.Errorf("diana: 插件文件 %s 超过单文件上限 %dMB", rel, repoPluginMaxFileBytes>>20)
+		}
+		body, err := io.ReadAll(io.LimitReader(reader, header.Size))
+		if err != nil {
+			return repoArchiveIndex{}, fmt.Errorf("diana: 读取 %s 失败: %w", rel, err)
+		}
+		index.contents[rel] = body
+	}
+}
+
+// Preview 下载仓库归档做格式校验，返回渲染安装确认框所需的全部信息，
+// 包括这一版对应的提交，供安装时核对。
+func (i *RepoPluginInstaller) Preview(ctx context.Context, rawURL string) (RepoPluginPreview, error) {
+	snapshot, err := i.loadSnapshot(ctx, rawURL)
+	if err != nil {
 		return RepoPluginPreview{}, err
 	}
+	ref, manifest := snapshot.ref, snapshot.manifest
 	preview := RepoPluginPreview{
 		Source:      ref,
+		Commit:      snapshot.commit,
 		Manifest:    manifest,
 		Permissions: DescribeRepoPluginPermissions(manifest.Permissions),
-		Files:       files,
+		Files:       snapshot.files,
 		Risk: RepoPluginRisk{
 			FloatingRef: strings.TrimSpace(ref.Ref) == "",
-			Warnings:    []string{"第三方插件由仓库作者发布，Diana 不对其行为负责；插件获得的权限在启用期间持续生效。"},
+			Warnings:    repoPluginRiskWarnings(),
 		},
 	}
 	if preview.Risk.FloatingRef {
-		preview.Risk.Warnings = append(preview.Risk.Warnings, "安装的是默认分支最新提交，内容与权限声明随时可能变化；发布者建议使用固定 tag 的链接。")
+		preview.Risk.Warnings = append(preview.Risk.Warnings, "链接没有固定 tag 或提交，安装的是默认分支当前这一版（"+snapshot.commit[:12]+"）；之后「更新」会拉取届时的最新提交。")
 	}
 	return preview, nil
+}
+
+// repoPluginRiskWarnings 如实说明第三方插件能做什么。
+//
+// 插件的运行形态是把 SKILL.md 作为指令放进对话上下文。清单里的权限是作者的声明，
+// Diana 目前不据此限制插件——插件文字可以引导模型调用机器人已经开放的任何工具。
+// 确认框不能让人以为「只勾了读取消息」就只能读取消息。
+func repoPluginRiskWarnings() []string {
+	return []string{
+		"第三方插件由仓库作者发布，Diana 不对其行为负责。",
+		"插件以 SKILL.md 指令的形式进入对话上下文；清单里的权限只是作者声明，Diana 不据此限制插件。插件内容可以引导机器人使用它当前已开放的全部工具（例如联网搜索、执行命令、写 GitHub），请只安装信任的作者发布的插件。",
+	}
 }
 
 // checkTagVersion 固定到 tag 安装时，清单版本必须与 tag 一致，防止
@@ -760,38 +848,18 @@ func checkTagVersion(ref RepoPluginRef, version string) error {
 	return nil
 }
 
-// Install 校验、下载归档、落盘并返回构造好的插件实例与来源记录。
-// 调用方负责把插件登记进 PluginManager 并持久化状态。
-func (i *RepoPluginInstaller) Install(ctx context.Context, rawURL string) (*RepoPlugin, RepoPluginSource, error) {
-	ref, err := ParseGitHubRepoURL(rawURL)
+// Install 下载归档、校验并落盘，返回构造好的插件实例与来源记录。
+// expectedCommit 非空时必须与归档的提交一致：预览之后仓库有新提交就拒绝，
+// 避免装进去的不是用户确认过的那一版。调用方负责把插件登记进 PluginManager 并持久化状态。
+func (i *RepoPluginInstaller) Install(ctx context.Context, rawURL, expectedCommit string) (*RepoPlugin, RepoPluginSource, error) {
+	snapshot, err := i.loadSnapshot(ctx, rawURL)
 	if err != nil {
 		return nil, RepoPluginSource{}, err
 	}
-	manifestData, manifestFile, manifest, err := i.loadManifest(ctx, ref)
-	if err != nil {
-		return nil, RepoPluginSource{}, err
+	if expected := strings.ToLower(strings.TrimSpace(expectedCommit)); expected != "" && expected != snapshot.commit {
+		return nil, RepoPluginSource{}, ErrRepoPluginChanged
 	}
-	if err := checkTagVersion(ref, manifest.Version); err != nil {
-		return nil, RepoPluginSource{}, err
-	}
-	skill, err := i.fetch(ctx, i.skillURL(ref))
-	if err != nil {
-		if isNotFound(err) {
-			return nil, RepoPluginSource{}, fmt.Errorf("%w: %s", ErrRepoPluginSkill, RepoPluginEntryFile)
-		}
-		return nil, RepoPluginSource{}, err
-	}
-	if err := validateSkillFrontmatter(skill); err != nil {
-		return nil, RepoPluginSource{}, err
-	}
-	files := manifestFile.normalizedFiles()
-	if err := i.checkRemoteFiles(ctx, ref, files); err != nil {
-		return nil, RepoPluginSource{}, err
-	}
-	archive, err := i.fetch(ctx, i.archiveURL(ref))
-	if err != nil {
-		return nil, RepoPluginSource{}, fmt.Errorf("diana: 下载仓库归档失败: %w", err)
-	}
+	manifest := snapshot.manifest
 	root := filepath.Join(i.DataDir, repoPluginSourceDir)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, RepoPluginSource{}, err
@@ -801,7 +869,12 @@ func (i *RepoPluginInstaller) Install(ctx context.Context, rawURL string) (*Repo
 		return nil, RepoPluginSource{}, err
 	}
 	defer os.RemoveAll(staging)
-	if err := extractRepoArchive(archive, staging, files); err != nil {
+	if err := extractRepoArchive(snapshot.archive, staging, snapshot.files); err != nil {
+		return nil, RepoPluginSource{}, err
+	}
+	// 清单副本落盘：重启恢复按本地副本读，不再走网络。写进暂存目录再整体换上，
+	// 不会出现目录已替换、清单还没写的半截状态。
+	if err := os.WriteFile(filepath.Join(staging, RepoPluginManifestFile), snapshot.manifestData, 0o644); err != nil {
 		return nil, RepoPluginSource{}, err
 	}
 	target := filepath.Join(root, manifest.ID)
@@ -811,17 +884,14 @@ func (i *RepoPluginInstaller) Install(ctx context.Context, rawURL string) (*Repo
 	if err := os.Rename(staging, target); err != nil {
 		return nil, RepoPluginSource{}, err
 	}
-	// 清单副本落盘：重启恢复按本地副本读，不再走网络。
-	if err := os.WriteFile(filepath.Join(target, RepoPluginManifestFile), manifestData, 0o644); err != nil {
-		return nil, RepoPluginSource{}, err
-	}
 	source := RepoPluginSource{
 		ID:          manifest.ID,
-		Owner:       ref.Owner,
-		Repo:        ref.Repo,
-		Ref:         ref.Ref,
+		Owner:       snapshot.ref.Owner,
+		Repo:        snapshot.ref.Repo,
+		Ref:         snapshot.ref.Ref,
+		Commit:      snapshot.commit,
 		Version:     manifest.Version,
-		URL:         ref.RepoURL(),
+		URL:         snapshot.ref.RepoURL(),
 		InstalledAt: time.Now(),
 	}
 	return NewRepoPlugin(target, source, manifest), source, nil

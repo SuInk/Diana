@@ -48,6 +48,20 @@ func (r *Runtime) clearSessionHistory(event MessageEvent) error {
 	delete(r.contextSummaries, session)
 	delete(r.contextSummaryMarks, session)
 	delete(r.historyWindowAnchors, session)
+	for key, buffer := range r.groupPromptHistory {
+		if buffer.Session == session {
+			delete(r.groupPromptHistory, key)
+		}
+	}
+	for key, state := range r.groupPromptSessions {
+		if state.session == session {
+			delete(r.historyWindowAnchors, key)
+			state.mu.Lock()
+			state.invalidated = true
+			state.mu.Unlock()
+			delete(r.groupPromptSessions, key)
+		}
+	}
 	delete(r.recentClaimSources, session)
 	delete(r.recentToolCalls, session)
 	for key := range r.agentCarryovers {

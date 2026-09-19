@@ -108,6 +108,21 @@ type CodingSetupStatus struct {
 
 var codingSetupMu sync.Mutex
 
+// 自动安装的 CLI 版本固定在这里。以前装的是 npm 上的最新版：同一个 Diana 版本在不同时间
+// 装出不同的 CLI，上游出了不兼容改动或包被投毒都会直接进到部署里。发布 Diana 时核对并
+// 按需更新这两个版本，和其他依赖一样走 CI。
+const (
+	codingCodexPackage  = "@openai/codex@0.155.1"
+	codingClaudePackage = "@anthropic-ai/claude-code@2.1.278"
+)
+
+func codingCLIPackage(backend string) string {
+	if backend == codingBackendClaude {
+		return codingClaudePackage
+	}
+	return codingCodexPackage
+}
+
 func CodingAgentSetup(ctx context.Context, settings SettingValues, name, operation string) (CodingSetupStatus, error) {
 	cfg, err := codingAgentConfigFor(settings, name)
 	if err != nil {
@@ -150,10 +165,7 @@ func CodingAgentSetup(ctx context.Context, settings SettingValues, name, operati
 		if err := os.MkdirAll(prefix, 0700); err != nil {
 			return status, err
 		}
-		pkg := "@openai/codex"
-		if cfg.Backend == codingBackendClaude {
-			pkg = "@anthropic-ai/claude-code"
-		}
+		pkg := codingCLIPackage(cfg.Backend)
 		runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 		cmd := exec.CommandContext(runCtx, "npm", "install", "--global", "--prefix", prefix, "--cache", filepath.Join(codingManagedRoot(), "npm-cache"), "--no-audit", "--no-fund", pkg)

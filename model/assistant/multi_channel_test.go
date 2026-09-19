@@ -195,7 +195,6 @@ func TestRuntimeBindsConversationNamespaceToSourceProfile(t *testing.T) {
 func TestRuntimeUsesSourceProfileConfiguration(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ID: "qq", SystemPrompt: "QQ prompt"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetProfiles(ProfileSet{
-		ActiveID: "qq",
 		Profiles: []BotConfig{
 			{ID: "qq", Platform: PlatformOneBotV11, SystemPrompt: "QQ prompt"},
 			{ID: "tg", Platform: PlatformTelegram, SystemPrompt: "Telegram prompt", TelegramBotToken: "token"},
@@ -326,5 +325,31 @@ func TestReminderSourceKeepsChannelRoute(t *testing.T) {
 	}
 	if event.Kind != EventKindGroup || event.GroupID != "100" || event.UserID != "200" {
 		t.Fatalf("reminder target=%#v", event)
+	}
+}
+
+// 复用连接时群消息仍交给每一台；来源停用时私聊交给第一台启用的复用机器人。
+func TestConnectionEventTargets(t *testing.T) {
+	source := ChannelBinding{ConnectionID: "source", ProfileID: "source"}
+	alias := ChannelBinding{ConnectionID: "source", ProfileID: "alias"}
+	other := ChannelBinding{ConnectionID: "source", ProfileID: "other"}
+	group := MessageEvent{Kind: EventKindGroup, GroupID: "100"}
+	if got := connectionEventTargets([]ChannelBinding{alias, source}, group); len(got) != 2 {
+		t.Fatalf("群消息 targets = %+v", got)
+	}
+	private := MessageEvent{Kind: EventKindPrivate, UserID: "200"}
+	if got := connectionEventTargets([]ChannelBinding{alias, source}, private); len(got) != 1 || got[0].ProfileID != "source" {
+		t.Fatalf("私聊应交给来源机器人：%+v", got)
+	}
+	if got := connectionEventTargets([]ChannelBinding{alias, other}, private); len(got) != 1 || got[0].ProfileID != "alias" {
+		t.Fatalf("来源停用时私聊应交给第一台：%+v", got)
+	}
+	friendRequest := MessageEvent{Kind: EventKindRequest, UserID: "200"}
+	if got := connectionEventTargets([]ChannelBinding{alias, source}, friendRequest); len(got) != 1 {
+		t.Fatalf("好友请求只应处理一次：%+v", got)
+	}
+	groupPoke := MessageEvent{Kind: EventKindNotice, SubType: "poke", GroupID: "100"}
+	if got := connectionEventTargets([]ChannelBinding{alias, source}, groupPoke); len(got) != 2 {
+		t.Fatalf("群里的通知交给每一台：%+v", got)
 	}
 }

@@ -16,8 +16,9 @@ func (r *Runtime) AdministerExtensions(ctx context.Context, req agent.ExtensionA
 			return nil, fmt.Errorf("机器人不存在")
 		}
 	}
-	cfg := r.Config()
-	admin := r.agentRegistryConfig(cfg, MessageEvent{Platform: PlatformOneBotV11}, true)
+	// 扩展路径是全局固定的（见 GlobalExtensionPaths），取哪台机器人的配置都指向同一处。
+	cfg := r.profileConfig(req.ProfileID)
+	admin := r.agentRegistryConfig(cfg, MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform}, true)
 	admin, err := agent.GlobalExtensionPaths(admin)
 	if err != nil {
 		return nil, err

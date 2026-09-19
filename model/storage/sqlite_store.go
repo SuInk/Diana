@@ -409,6 +409,9 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, t
 	if err := s.migrateContextHistory(); err != nil {
 		return err
 	}
+	if err := s.migrateGroupPromptSessions(); err != nil {
+		return err
+	}
 	if err := s.migrateLogTimestampsToUTC(); err != nil {
 		return err
 	}

@@ -13,7 +13,6 @@ import (
 func (r *Runtime) rssJudgeIdentity(ctx context.Context, event MessageEvent) string {
 	r.mu.RLock()
 	store, registry, factory, epoch := r.llmStore, r.llmRegistry, r.llmCfgFactory, r.llmReuseEpoch
-	global := r.cfg
 	r.mu.RUnlock()
 	if store == nil {
 		return ""
@@ -38,7 +37,7 @@ func (r *Runtime) rssJudgeIdentity(ctx context.Context, event MessageEvent) stri
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	override, _ := replyRuleLLMProfileID(ctx)
-	return sharedResultKey([]any{"rss-model-route-v1", profiles, document, epoch, override, global.ModelRoles, cfg.ModelRoles, global.MaxContextTokens, cfg.MaxContextTokens, llmIdentityMaskingEnabled(global), llmIdentityMaskingEnabled(cfg)})
+	return sharedResultKey([]any{"rss-model-route-v1", profiles, document, epoch, override, cfg.ModelRoles, cfg.MaxContextTokens, llmIdentityMaskingEnabled(cfg)})
 }
 
 func (r *Runtime) reuseRSSJudgment(ctx context.Context, source MessageEvent, messages []llm.Message, load func(context.Context) (rssJudgeDecision, error)) (rssJudgeDecision, error) {

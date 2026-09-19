@@ -98,7 +98,7 @@ func TestImageForwardRejectionUsesFallbackWithoutGroupCooldown(t *testing.T) {
 			response.ImageURLs = []string{server.URL + "/1.png", server.URL + "/2.png"}
 			response.ForwardMessages[1].ImageURLs = response.ImageURLs[:1]
 			response.ForwardMessages[2].ImageURLs = response.ImageURLs[1:]
-			if err := r.sendForwardPluginResponse(ctx, event, response, r.Config()); err != nil {
+			if err := r.sendForwardPluginResponse(ctx, event, response, r.ProfileConfig("")); err != nil {
 				t.Fatalf("fallback failed: %v", err)
 			}
 			if channel.customAttempts != outboundPayloadMaxAttempts {
@@ -166,7 +166,7 @@ func TestForwardSafetyRejectionDoesNotTryOtherDeliveryForms(t *testing.T) {
 	provider := &qualityTestProvider{reply: `{"send_confidence":1,"reason":"test","account_safe":false,"account_risk":"other","account_risk_reason":"test block"}`}
 	r := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "42", MessageID: "blocked-forward"}
-	err := r.sendForwardPluginResponse(context.Background(), event, resolverForwardTestResponse(), r.Config())
+	err := r.sendForwardPluginResponse(context.Background(), event, resolverForwardTestResponse(), r.ProfileConfig(""))
 	var blocked *replyAccountSafetyRejectedError
 	if !errors.As(err, &blocked) {
 		t.Fatalf("expected safety rejection, got %v", err)
@@ -210,7 +210,7 @@ func TestForwardStagingFetchesHostImagesOverHTTP(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "42", MessageID: "host-image"}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err := r.sendRealForwardMessages(ctx, event, []OutgoingMessage{{ImageURLs: []string{file}}}, r.Config())
+	_, err := r.sendRealForwardMessages(ctx, event, []OutgoingMessage{{ImageURLs: []string{file}}}, r.ProfileConfig(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestImageForwardRecoversWithinRetryBudget(t *testing.T) {
 		channel := &imageRejectingForwardChannel{recordingChannel: resolverForwardChannel(), recoverCustomAfter: succeedsAt}
 		r := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 		event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "42", MessageID: "retry-image"}
-		id, err := r.sendRealForwardMessages(context.Background(), event, resolverForwardTestResponse().ForwardMessages, r.Config())
+		id, err := r.sendRealForwardMessages(context.Background(), event, resolverForwardTestResponse().ForwardMessages, r.ProfileConfig(""))
 		if err != nil || id == "" || channel.customAttempts != succeedsAt {
 			t.Fatalf("succeedsAt=%d attempts=%d id=%q err=%v", succeedsAt, channel.customAttempts, id, err)
 		}

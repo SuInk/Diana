@@ -24,7 +24,7 @@ func TestBotMarkersPersistenceKeepsActiveProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{{ID: "a", OwnerID: "900"}, {ID: "b", OwnerID: "901"}}}); err != nil {
+	if err = s.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "a", OwnerID: "900"}, {ID: "b", OwnerID: "901"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err = NewRuntimePersistor(s).SaveMarkedBotIDs("b", []string{"200"}); err != nil {
@@ -35,9 +35,6 @@ func TestBotMarkersPersistenceKeepsActiveProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	set := reopened.Profiles()
-	if set.ActiveID != "a" {
-		t.Fatal("mark switched active profile")
-	}
 	for _, p := range set.Profiles {
 		if slices.Contains(p.MarkedBotIDs, "200") != (p.ID == "b") {
 			t.Fatalf("wrong scope: %+v", p.MarkedBotIDs)
@@ -52,14 +49,14 @@ func TestBotMarkersGroupAdminCannotChangeOwnerList(t *testing.T) {
 	ctx := context.Background()
 	r := assistant.NewRuntime(assistant.BotConfig{ID: "a", OwnerID: "900"}, fakeChannel{}, assistant.NewPluginManager(), nil, nil, nil, nil)
 	h := NewBotHandler(ctx, r)
-	profiles := NewMemoryBotProfileStore(r.Config())
-	if err := profiles.SaveProfiles(assistant.ProfileSet{ActiveID: "a", Profiles: []assistant.BotConfig{{ID: "a", OwnerID: "900"}}}); err != nil {
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	if err := profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{{ID: "a", OwnerID: "900"}}}); err != nil {
 		t.Fatal(err)
 	}
 	h.SetProfileStore(profiles)
 	groups := NewMemoryBotGroupConfigStore()
 	h.SetGroupConfigStore(groups)
-	if _, err := groups.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "a", GroupID: "100", MarkedBotIDs: []string{"200"}}, r.Config()); err != nil {
+	if _, err := groups.SaveGroupConfig(assistant.GroupConfig{BotProfileID: "a", GroupID: "100", MarkedBotIDs: []string{"200"}}, r.ProfileConfig("")); err != nil {
 		t.Fatal(err)
 	}
 	router := botTestRouter(h)
