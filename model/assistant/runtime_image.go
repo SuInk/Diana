@@ -348,7 +348,7 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 			attached[url] = true
 		}
 	}
-	var lines []string
+	var sources []MessageEvent
 	seen := map[string]bool{}
 	appendEvent := func(source MessageEvent) {
 		messageID := strings.TrimSpace(source.MessageID)
@@ -359,7 +359,7 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 		if len(attached) > 0 && sourceImagesAllAttached(source, attached) {
 			return
 		}
-		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyImageCachedDescriptions(ctx, source)))
+		sources = append(sources, source)
 	}
 	if event.Quoted != nil {
 		quotedEvent := MessageEvent{
@@ -378,8 +378,17 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 			appendEvent(source)
 		}
 	}
-	if len(lines) == 0 {
+	if len(sources) == 0 {
 		return ""
+	}
+	// 原图附不上时，用户问的这张图只剩文字摘要可用；摘要还没生成就当场加急等一会儿，
+	// 否则模型拿到的是一句「尚无缓存描述」。
+	waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
+	r.awaitHistoryImageDescriptions(waitCtx, sources...)
+	cancel()
+	lines := make([]string, 0, len(sources))
+	for _, source := range sources {
+		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyImageCachedDescriptions(ctx, source)))
 	}
 	return "【当前消息引用的历史图片仍未附加原图】\n" + strings.Join(lines, "\n")
 }
