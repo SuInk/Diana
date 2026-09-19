@@ -563,7 +563,7 @@ func TestReplySuppressionBlocksReplyActivatedDuringGeneration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := &generationTimeSuppressionProvider{}
 			channel := &recordingChannel{}
-			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", ForwardReplyThreshold: tt.forwardThreshold}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+			runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42", ForwardReplyThreshold: tt.forwardThreshold, ReplySafetyMasterEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				return provider, nil
 			})
 			event := MessageEvent{
@@ -800,13 +800,15 @@ func TestBotReplyLoopDetectionCanBeDisabled(t *testing.T) {
 		OwnerID:                      "10001",
 		BotAccount:                   "42",
 		BotReplyLoopDetectionEnabled: &disabled,
+		// 空转判断和账号安全审核共用一次调用；这里只测空转，把审核一起关掉。
+		ReplySafetyMasterEnabled: &disabled,
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	if err := runBotReplyLoopReview(t, runtime, "disabled-loop", "20002", 0, time.Now().Add(-time.Minute), time.Minute, "收到，我会继续自动回复", "好的"); err != nil {
 		t.Fatalf("disabled detection returned %v", err)
 	}
-	// 关掉之后账号安全也默认关着，三项都不需要，这一次审核整个跳过。
+	// 两项都关着，这一次审核整个跳过。
 	if len(provider.requestsSnapshot()) != 0 {
 		t.Fatalf("disabled detection still called the model: %#v", provider.requestsSnapshot())
 	}

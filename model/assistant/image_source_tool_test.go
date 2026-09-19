@@ -207,7 +207,7 @@ func TestImageSourceToolRegisteredOnlyWhenProviderConfigured(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) {
+		runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, ReplySafetyMasterEnabled: boolPointer(false)}, nilChannel{}, plugins, nil, nil, nil, func() (LLMProvider, error) {
 			return provider, nil
 		})
 		if _, err := runtime.replyTo(context.Background(), MessageEvent{

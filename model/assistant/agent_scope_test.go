@@ -261,6 +261,8 @@ func TestReplyToUsesSingleAgentDecisionWithoutPreRouter(t *testing.T) {
 		AgentEnabled:       true,
 		AgentSkillRoots:    []string{filepath.Join(workDir, "skills")},
 		AgentMCPConfigPath: filepath.Join(workDir, "missing-mcp.json"),
+		// 这条只数 Agent 决策的调用次数，发送前审核的额外往返不在断言范围里，显式关掉。
+		ReplySafetyMasterEnabled: boolPointer(false),
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

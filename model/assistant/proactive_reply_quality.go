@@ -491,8 +491,8 @@ type replyAuditNeed struct {
 
 func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
 	proactive = proactive && !explicitlyRepliesToBot(event, cfg)
-	accountSafety := boolValue(cfg.ReplySafetyMasterEnabled, true) &&
-		(proactive || boolValue(cfg.ReplyAccountSafetyAuditEnabled, false))
+	// 发送前审核只有开和关两档：开着就覆盖主动和直接回复，群配置可单独覆盖。
+	accountSafety := boolValue(cfg.ReplySafetyMasterEnabled, true)
 	if cfg.groupReplyAccountSafetyAuditOverride != nil {
 		accountSafety = *cfg.groupReplyAccountSafetyAuditOverride
 	}

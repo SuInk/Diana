@@ -234,7 +234,7 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 	}}
 	channel := &recordingChannel{}
 	plugins := NewDefaultPluginManager()
-	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentEnabled: true, AgentMaxSteps: 3, ReplySafetyMasterEnabled: boolPointer(false)}, channel, plugins, nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/api/assistant/media/voice-token"})

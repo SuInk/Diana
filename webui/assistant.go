@@ -277,6 +277,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/clone", h.cloneProfile)
 	router.POST(base+"/config/delete", h.deleteProfile)
 	router.POST(base+"/config/message-relays", h.setMessageRelays)
+	router.POST(base+"/config/profile-enabled", h.setProfileEnabled)
+	router.POST(base+"/config/profiles-enabled", h.setAllProfilesEnabled)
 	router.GET(base+"/agent-defaults", h.agentDefaults)
 	router.GET(base+"/features", h.featuresStatus)
 	router.GET(base+"/status", h.status)
@@ -589,6 +591,68 @@ func (h *BotHandler) setMessageRelays(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "assistant.message_relays.update", "消息互通链路已更新", "", map[string]any{"relays": len(next.MessageRelays)})
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+}
+
+type profileEnabledPayload struct {
+	ProfileID string `json:"profile_id"`
+	Enabled   bool   `json:"enabled"`
+}
+
+// setProfileEnabled 只切换单台机器人的启用状态，其他机器人不受影响；
+// 启停某一台不需要重配其余档案。
+func (h *BotHandler) setProfileEnabled(c *gin.Context) {
+	var payload profileEnabledPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, "", nil)
+		return
+	}
+	next, ok := h.profiles.Profiles().WithProfileEnabled(payload.ProfileID, payload.Enabled)
+	if !ok {
+		h.writeError(c, http.StatusNotFound, "assistant.profile.enabled", fmt.Errorf("profile %q not found", payload.ProfileID), payload.ProfileID, nil)
+		return
+	}
+	current, _ := next.ConfigForProfile(payload.ProfileID)
+	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		h.writeError(c, http.StatusBadRequest, "assistant.profile.enabled", err, botLogTarget(current), botLogMetadata(current))
+		return
+	}
+	if err := h.profiles.SaveProfiles(next); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.profile.enabled", err, botLogTarget(current), map[string]any{"enabled": payload.Enabled})
+		return
+	}
+	status := "机器人已停用"
+	if payload.Enabled {
+		status = "机器人已启用"
+	}
+	recordRequestOperation(c, h.logs, "assistant.profile.enabled", status, current.ID, botLogMetadata(current))
+	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
+}
+
+// setAllProfilesEnabled 统一启用或停用全部机器人；卡片上的批量开关走这里，
+// 下方每台机器人的状态随配置集一起更新。
+func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
+	var payload struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, "", nil)
+		return
+	}
+	next := h.profiles.Profiles().WithAllProfilesEnabled(payload.Enabled)
+	if err := h.applyProfileSet(next); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		h.writeError(c, http.StatusBadRequest, "assistant.profiles.enabled", err, "", nil)
+		return
+	}
+	if err := h.profiles.SaveProfiles(next); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "assistant.profiles.enabled", err, "", map[string]any{"enabled": payload.Enabled})
+		return
+	}
+	status := "全部机器人已停用"
+	if payload.Enabled {
+		status = "全部机器人已启用"
+	}
+	recordRequestOperation(c, h.logs, "assistant.profiles.enabled", status, "", map[string]any{"enabled": payload.Enabled})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next))
 }
 
