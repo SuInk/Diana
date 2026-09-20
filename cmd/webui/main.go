@@ -363,6 +363,7 @@ func main() {
 		Mirror:         mirrorSelector,
 		FrontendDir:    frontendDistDir(appCfg.Server.FrontendDist),
 		DatabasePath:   sqliteStore.Path(),
+		WorkspaceRoot:  appCfg.Update.Workspace,
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
 		Arguments:      os.Args[1:],
 		Shutdown:       cancel,

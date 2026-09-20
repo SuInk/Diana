@@ -63,6 +63,10 @@ admin:
 update:
   # 源码检出目录，WebUI 的在线更新在这里执行。
   root: "."
+  # 更新工作目录（下载暂存、备份、状态文件）。留空时跟随 storage.db_path 所在的
+  # data 目录；容器部署里可执行文件所在的 /app 往往不可写，所以不再默认写那儿。
+  # 只读根文件系统或想把暂存放到别处时才需要显式指定。
+  workspace: ""
   apply_enabled: true
   release_enabled: true
   # 群测试能力，默认关闭。

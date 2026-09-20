@@ -81,7 +81,10 @@ type adminConfig struct {
 }
 
 type updateConfig struct {
-	Root           string `yaml:"root"`
+	Root string `yaml:"root"`
+	// Workspace 是更新工作目录。留空时跟随数据库所在的 data 目录；只读根文件
+	// 系统或想把暂存放到别处时才需要显式指定。
+	Workspace      string `yaml:"workspace"`
 	ApplyEnabled   *bool  `yaml:"apply_enabled"`
 	ReleaseEnabled *bool  `yaml:"release_enabled"`
 	GroupTest      *bool  `yaml:"group_test_enabled"`

@@ -29,11 +29,15 @@ type releaseApplyFile struct {
 }
 
 type releaseApplyPlan struct {
-	Schema           int      `json:"schema"`
-	ParentPID        int      `json:"parent_pid"`
-	CurrentVersion   string   `json:"current_version"`
-	TargetVersion    string   `json:"target_version"`
-	InstallRoot      string   `json:"install_root"`
+	Schema         int    `json:"schema"`
+	ParentPID      int    `json:"parent_pid"`
+	CurrentVersion string `json:"current_version"`
+	TargetVersion  string `json:"target_version"`
+	InstallRoot    string `json:"install_root"`
+	// UpdatesRoot 是更新工作目录。助手进程只认计划文件，自己不再从 InstallRoot
+	// 推算——工作目录已经可以跟着 data 走，推算会算到别处去。旧版本写下的计划
+	// 没有这一项，读到空值时按老规矩回落到 InstallRoot/.diana-updates。
+	UpdatesRoot      string   `json:"updates_root,omitempty"`
 	WorkRoot         string   `json:"work_root"`
 	BackupRoot       string   `json:"backup_root"`
 	ExecutablePath   string   `json:"executable_path"`
@@ -193,9 +197,9 @@ func validateReleaseApplyPlan(plan releaseApplyPlan) error {
 			return fmt.Errorf("updater: %s path is not absolute", name)
 		}
 	}
-	updatesRoot := filepath.Join(plan.InstallRoot, ".diana-updates")
+	updatesRoot := planUpdatesRoot(plan)
 	if !pathWithin(updatesRoot, plan.WorkRoot) || !pathWithin(filepath.Join(updatesRoot, "backups"), plan.BackupRoot) {
-		return errors.New("updater: update workspace escapes the install root")
+		return errors.New("updater: update workspace escapes the configured workspace root")
 	}
 	if !pathWithin(plan.InstallRoot, plan.ExecutablePath) || !pathWithin(plan.InstallRoot, plan.FrontendPath) {
 		return errors.New("updater: package target escapes the install root")
@@ -559,7 +563,7 @@ func validReleaseHealthURL(raw string) bool {
 }
 
 func writeReleaseState(plan releaseApplyPlan, state releaseUpdateState) error {
-	previous, ok := readReleaseState(plan.InstallRoot)
+	previous, ok := readReleaseState(planUpdatesRoot(plan))
 	sameTarget := ok && previous.TargetVersion == state.TargetVersion
 	switch state.Status {
 	case "failed", "rolled_back":
@@ -572,12 +576,20 @@ func writeReleaseState(plan releaseApplyPlan, state releaseUpdateState) error {
 			state.FailureCount = previous.FailureCount
 		}
 	}
-	return writePrivateJSON(filepath.Join(plan.InstallRoot, ".diana-updates", "last-update.json"), state)
+	return writePrivateJSON(filepath.Join(planUpdatesRoot(plan), "last-update.json"), state)
 }
 
-func readReleaseState(installRoot string) (releaseUpdateState, bool) {
+// planUpdatesRoot 取计划里的工作目录，旧计划没写时回落到老位置。
+func planUpdatesRoot(plan releaseApplyPlan) string {
+	if root := strings.TrimSpace(plan.UpdatesRoot); root != "" {
+		return root
+	}
+	return filepath.Join(plan.InstallRoot, ".diana-updates")
+}
+
+func readReleaseState(updatesRoot string) (releaseUpdateState, bool) {
 	var state releaseUpdateState
-	file, err := os.Open(filepath.Join(installRoot, ".diana-updates", "last-update.json"))
+	file, err := os.Open(filepath.Join(updatesRoot, "last-update.json"))
 	if err != nil {
 		return state, false
 	}

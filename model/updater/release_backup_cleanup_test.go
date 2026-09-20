@@ -35,7 +35,7 @@ func TestHealthyReleaseReportsBackupCleanupFailure(t *testing.T) {
 	if err != nil || !process.released || process.stopped {
 		t.Fatalf("healthy update was treated as failed: %v %#v", err, process)
 	}
-	state, ok := readReleaseState(plan.InstallRoot)
+	state, ok := readReleaseState(planUpdatesRoot(plan))
 	if !ok || state.Status != "healthy" || state.CleanupError == "" || state.BackupRoot != plan.BackupRoot {
 		t.Fatalf("cleanup failure was not recorded: %#v", state)
 	}

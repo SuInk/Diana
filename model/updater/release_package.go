@@ -85,12 +85,18 @@ type ReleasePackageOptions struct {
 	Executable     string
 	FrontendDir    string
 	DatabasePath   string
-	HealthURL      string
-	WorkingDir     string
-	Arguments      []string
-	HTTPClient     *http.Client
-	Shutdown       func()
-	Disable        bool
+	// WorkspaceRoot 是更新工作目录（下载暂存、备份、状态文件）的落点。
+	//
+	// 留空时跟随数据库所在的 data 目录，再退回可执行文件旁边。容器部署里
+	// 可执行文件在只读或不属于运行用户的 /app 下，往那儿建目录会直接
+	// permission denied，而 data 目录本来就是挂进来、可写的。
+	WorkspaceRoot string
+	HealthURL     string
+	WorkingDir    string
+	Arguments     []string
+	HTTPClient    *http.Client
+	Shutdown      func()
+	Disable       bool
 	// Mirror 在直连 GitHub 慢或不通时给下载地址套一层加速前缀；nil 表示始终直连。
 	Mirror MirrorResolver
 
@@ -119,6 +125,8 @@ type ReleasePackageUpdater struct {
 	workingDir     string
 	arguments      []string
 	installRoot    string
+	// updatesRoot 是解析后的更新工作目录，绝对路径。
+	updatesRoot    string
 	assetName      string
 	binaryName     string
 	httpClient     *http.Client
@@ -242,6 +250,10 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 			return nil, err
 		}
 	}
+	updatesRoot, err := resolveUpdatesRoot(options.WorkspaceRoot, databasePath, installRoot)
+	if err != nil {
+		return nil, err
+	}
 	workingDir := strings.TrimSpace(options.WorkingDir)
 	if workingDir == "" {
 		workingDir, err = os.Getwd()
@@ -270,6 +282,7 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 		workingDir:     workingDir,
 		arguments:      append([]string(nil), options.Arguments...),
 		installRoot:    installRoot,
+		updatesRoot:    updatesRoot,
 		assetName:      ExpectedReleaseAssetName(goos, goarch),
 		binaryName:     binaryName,
 		httpClient:     client,
@@ -358,7 +371,13 @@ func (u *ReleasePackageUpdater) Status(context.Context) (Status, error) {
 			status.DownloadPercent = 100
 		}
 	}
-	if state, ok := readReleaseState(u.installRoot); ok {
+	state, ok := readReleaseState(u.workspaceRoot())
+	if !ok {
+		if legacy := u.legacyUpdatesRoot(); legacy != "" {
+			state, ok = readReleaseState(legacy)
+		}
+	}
+	if ok {
 		status.LastUpdateAt = state.At
 		status.LastUpdateStatus = state.Status
 		status.LastUpdateVersion = state.TargetVersion
@@ -431,9 +450,11 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}
 	u.removePendingUpdate()
 
-	updatesRoot := filepath.Join(u.installRoot, ".diana-updates")
+	updatesRoot := u.workspaceRoot()
 	if err := os.MkdirAll(updatesRoot, 0o700); err != nil {
-		return Result{}, fmt.Errorf("create update workspace: %w", err)
+		// 带上路径：这条错误线上最常见的形态就是权限问题，不写清楚是哪个
+		// 目录，看日志的人无从下手。
+		return Result{}, fmt.Errorf("create update workspace %s: %w", updatesRoot, err)
 	}
 	workRoot, err := os.MkdirTemp(updatesRoot, "stage-")
 	if err != nil {
@@ -520,6 +541,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		CurrentVersion:   u.currentVersion,
 		TargetVersion:    release.Tag,
 		InstallRoot:      u.installRoot,
+		UpdatesRoot:      updatesRoot,
 		WorkRoot:         workRoot,
 		BackupRoot:       filepath.Join(updatesRoot, "backups", backupName),
 		ExecutablePath:   u.executable,
@@ -637,19 +659,49 @@ func (u *ReleasePackageUpdater) Install(ctx context.Context, release ReleasePack
 }
 
 func (u *ReleasePackageUpdater) pendingUpdatePath() string {
-	return filepath.Join(u.installRoot, ".diana-updates", "pending-update.json")
+	return filepath.Join(u.workspaceRoot(), "pending-update.json")
+}
+
+// workspaceRoot 容忍零值：直接按字段构造的实例（测试里有）没走过 New，
+// 那时回落到老位置，行为和改动前一致。
+func (u *ReleasePackageUpdater) workspaceRoot() string {
+	if root := strings.TrimSpace(u.updatesRoot); root != "" {
+		return root
+	}
+	return filepath.Join(u.installRoot, ".diana-updates")
+}
+
+// legacyUpdatesRoot 是 v0.8.130 之前固定使用的位置。工作目录改为跟随 data 之后，
+// 升级前下载好的那一份还留在老地方：只读它，不往里写——容器里那个目录多半
+// 就是不可写才要搬家的。
+func (u *ReleasePackageUpdater) legacyUpdatesRoot() string {
+	legacy := filepath.Join(u.installRoot, ".diana-updates")
+	if legacy == u.workspaceRoot() {
+		return ""
+	}
+	return legacy
 }
 
 func (u *ReleasePackageUpdater) pendingUpdate() (pendingReleaseUpdate, bool) {
+	if pending, ok := u.pendingUpdateAt(u.workspaceRoot()); ok {
+		return pending, true
+	}
+	if legacy := u.legacyUpdatesRoot(); legacy != "" {
+		return u.pendingUpdateAt(legacy)
+	}
+	return pendingReleaseUpdate{}, false
+}
+
+func (u *ReleasePackageUpdater) pendingUpdateAt(updatesRoot string) (pendingReleaseUpdate, bool) {
 	var pending pendingReleaseUpdate
-	file, err := os.Open(u.pendingUpdatePath())
+	file, err := os.Open(filepath.Join(updatesRoot, "pending-update.json"))
 	if err != nil {
 		return pending, false
 	}
 	defer file.Close()
 	decoder := json.NewDecoder(io.LimitReader(file, maxChecksumBytes))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&pending) != nil || pending.Schema != 1 || !releaseTagPattern.MatchString(pending.TargetVersion) || !filepath.IsAbs(pending.PlanPath) || !pathWithin(filepath.Join(u.installRoot, ".diana-updates"), pending.PlanPath) {
+	if decoder.Decode(&pending) != nil || pending.Schema != 1 || !releaseTagPattern.MatchString(pending.TargetVersion) || !filepath.IsAbs(pending.PlanPath) || !pathWithin(updatesRoot, pending.PlanPath) {
 		return pendingReleaseUpdate{}, false
 	}
 	if _, err := readReleaseApplyPlan(pending.PlanPath); err != nil {
@@ -661,7 +713,7 @@ func (u *ReleasePackageUpdater) pendingUpdate() (pendingReleaseUpdate, bool) {
 func (u *ReleasePackageUpdater) removePendingUpdate() {
 	pending, ok := u.pendingUpdate()
 	if ok {
-		if plan, err := readReleaseApplyPlan(pending.PlanPath); err == nil && pathWithin(filepath.Join(u.installRoot, ".diana-updates"), plan.WorkRoot) {
+		if plan, err := readReleaseApplyPlan(pending.PlanPath); err == nil && pathWithin(u.workspaceRoot(), plan.WorkRoot) {
 			_ = os.RemoveAll(plan.WorkRoot)
 		}
 	}
@@ -1080,4 +1132,23 @@ func writePrivateJSON(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+// resolveUpdatesRoot 决定更新工作目录落在哪。
+//
+// 顺序是：显式配置 > 数据库所在的 data 目录 > 可执行文件旁边。最后一档只
+// 在既没配置也没有数据库路径时才会走到（单元测试和还没初始化的进程），
+// 正常部署都会落在 data 目录里——那里本来就是挂载进来、运行用户可写的。
+func resolveUpdatesRoot(configured, databasePath, installRoot string) (string, error) {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		absolute, err := filepath.Abs(configured)
+		if err != nil {
+			return "", err
+		}
+		return absolute, nil
+	}
+	if strings.TrimSpace(databasePath) != "" {
+		return filepath.Join(filepath.Dir(databasePath), ".diana-updates"), nil
+	}
+	return filepath.Join(installRoot, ".diana-updates"), nil
 }
