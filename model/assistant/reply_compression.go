@@ -156,14 +156,12 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 			if err != nil {
 				return "", fmt.Errorf("%w: %v", errReplyCompression, err)
 			}
-			outputBudget := max(cfg.MaxReplyChars, replyCompressionRunes(part))
 			candidate, err := r.runLLMProviderForGroup(compactCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
 				response, err := client.Generate(compactCtx, llm.GenerateRequest{
 					Messages: []llm.Message{
 						{Role: llm.RoleSystem, Content: replyCompressionPrompt},
 						{Role: llm.RoleUser, Content: string(payload), AtomicText: true},
 					},
-					MaxOutputTokens: int64(max(256, min(outputBudget, 4096)*2)),
 				})
 				if err != nil {
 					return "", err

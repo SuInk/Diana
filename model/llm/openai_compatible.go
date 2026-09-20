@@ -666,7 +666,7 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 	text := strings.TrimSpace(resp.OutputText())
 	toolCalls := openAIResponseToolCalls(resp.Output, req.Tools)
 	if text == "" && len(toolCalls) == 0 {
-		return nil, fmt.Errorf("llm: openai-compatible responses output is empty")
+		return nil, openAIResponsesEmptyOutputError(resp)
 	}
 
 	return &GenerateResponse{
@@ -2048,6 +2048,31 @@ func openAIResponsesInput(messages []Message, definitions []ToolDefinition) resp
 		}
 	}
 	return out
+}
+
+// openAIResponsesEmptyOutputError 区分「额度在思考阶段就用光了」和其他空输出。
+// 会思考的模型先输出 reasoning 再写正文，max_output_tokens 卡得紧时正文一个字都
+// 轮不到，服务端返回 status=incomplete、reason=max_output_tokens，输出里只有
+// reasoning。这和 Chat Completions 那边的截断是同一回事，用同一个哨兵，调用方才
+// 能据此放宽上限重试，而不是当成模型不可用去切换配置。
+func openAIResponsesEmptyOutputError(resp *responses.Response) error {
+	if resp == nil {
+		return fmt.Errorf("llm: openai-compatible responses output is empty")
+	}
+	truncated := strings.Contains(strings.ToLower(resp.IncompleteDetails.Reason), "max_output_tokens")
+	if !truncated && string(resp.Status) == "incomplete" {
+		for _, item := range resp.Output {
+			if item.Type == "reasoning" {
+				truncated = true
+				break
+			}
+		}
+	}
+	if truncated {
+		return fmt.Errorf("llm: openai-compatible responses output is empty after truncation (status=%s reason=%s): %w",
+			resp.Status, resp.IncompleteDetails.Reason, ErrCompletionTruncatedNoText)
+	}
+	return fmt.Errorf("llm: openai-compatible responses output is empty (status=%s)", resp.Status)
 }
 
 func openAIResponsesOutputItems(output []responses.ResponseOutputItemUnion) []json.RawMessage {
