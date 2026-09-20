@@ -1502,7 +1502,7 @@ func DefaultBotConfig() BotConfig {
 		ReplyMaxBubbles:              replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:   0,
 		DirectReplyChunkSize:         chatReplyChunkSize,
-		ForwardReplyThreshold:        0,
+		ForwardReplyThreshold:        defaultForwardReplyThreshold,
 		RecallReplyMode:              RecallReplyModeOriginalForward,
 		RefusalStrategy:              RefusalStrategySmart,
 		DaypartToneEnabled:           boolPointer(false),
@@ -1709,12 +1709,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyMaxBubbles <= 0 {
 		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
 	}
-	if cfg.ForwardReplyChunkThreshold <= 0 {
-		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
-	}
-	if cfg.ForwardReplyThreshold <= 0 {
-		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
-	}
+	// 两个合并转发阈值上 0 是「关掉这条触发」，不是「没填」：这里不能回落到
+	// 默认值，否则用户清空输入框就被默认值顶回去，关不掉。新建配置的默认值由
+	// DefaultBotConfig 给，群级覆盖同样只做钳零。
+	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
+	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.DaypartToneEnabled == nil {

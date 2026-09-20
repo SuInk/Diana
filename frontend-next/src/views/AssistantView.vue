@@ -771,7 +771,7 @@
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
+                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；新建机器人默认 140 字，0 或留空关闭此条件。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
