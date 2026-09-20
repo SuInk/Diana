@@ -184,6 +184,10 @@ type MessageEvent struct {
 	// Persisted outgoing events still use the regular message fields above.
 	botReply      string
 	routingReason string
+	// tempSessionGroupID 只在「给非好友发私聊」时有值：QQ 的临时会话要靠共同群
+	// 才发得出去。它是一次投递的路由提示，不是会话身份的一部分——写成导出字段
+	// 就会跟着事件落库，让这条私聊在历史里看起来像发生在那个群里。
+	tempSessionGroupID string
 	// backlogProbe 是这条消息所在的队列项，用来判断它是不是积压了、该交给同会话后面的消息
 	// 一起接话。不走队列的消息没有它。
 	backlogProbe *InboundQueueItem
@@ -264,6 +268,10 @@ type OutgoingMessage struct {
 	ForwardName  string
 	ForwardUIN   string
 	ForwardTime  int64
+	// TempSessionGroupID 让私聊走 QQ 的临时会话：OneBot 的 send_private_msg 带上
+	// group_id 才能发给不是好友、但同在这个群里的人。只在确认不是好友时才填——
+	// 对好友也走临时会话会把消息塞进另一个对话框。
+	TempSessionGroupID string
 }
 
 type ReminderKind string

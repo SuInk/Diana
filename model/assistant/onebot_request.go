@@ -287,6 +287,14 @@ func (t *dianaOneBotRequestsTool) Run(ctx context.Context, input map[string]any)
 	if err != nil {
 		return "", err
 	}
+	// 好友请求通过之后补发欠着的私聊。friend_add 通知也会做同一件事，但不是每个
+	// OneBot 实现都报那条通知；取出即删除，两条路谁先到都只发一次。
+	if approve && item.RequestType == "friend" {
+		t.runtime.flushPendingDirectMessages(ctx, MessageEvent{
+			ProfileID: item.ProfileID, Platform: item.Platform,
+			SelfID: item.SelfID, UserID: item.UserID,
+		})
+	}
 	return marshalOneBotRequestToolResult(operation, []OneBotRequestRecord{resolved}, "")
 }
 
