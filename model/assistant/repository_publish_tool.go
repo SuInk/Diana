@@ -108,22 +108,25 @@ type repositoryIssueResult struct {
 	Comments           []repositoryIssueCommentView `json:"comments,omitempty"`
 	CommentsTruncated  bool                         `json:"comments_truncated,omitempty"`
 	// PullRequest、Reviews 只在 get 读到 PR 时返回；Files 只在 pull_files 返回。
-	PullRequest          *repositoryPullRequestView        `json:"pull_request,omitempty"`
-	Reviews              []repositoryPullRequestReviewView `json:"reviews,omitempty"`
-	ReviewsTruncated     bool                              `json:"reviews_truncated,omitempty"`
-	Files                []repositoryPullRequestFileView   `json:"files,omitempty"`
-	FilesTruncated       bool                              `json:"files_truncated,omitempty"`
-	ReviewURL            string                            `json:"review_url,omitempty"`
-	File                 *repositoryFileView               `json:"file,omitempty"`
-	Fingerprint          string                            `json:"fingerprint,omitempty"`
-	Idempotent           bool                              `json:"idempotent,omitempty"`
-	Reconciled           bool                              `json:"reconciled,omitempty"`
-	RequiresConfirmation bool                              `json:"requires_confirmation,omitempty"`
-	ConfirmationToken    string                            `json:"confirmation_token,omitempty"`
-	RequiresApproval     bool                              `json:"requires_approval,omitempty"`
-	Draft                *repositoryIssueDraftView         `json:"draft,omitempty"`
-	Drafts               []repositoryIssueDraftView        `json:"drafts,omitempty"`
-	Redactions           int                               `json:"redactions,omitempty"`
+	PullRequest      *repositoryPullRequestView        `json:"pull_request,omitempty"`
+	Reviews          []repositoryPullRequestReviewView `json:"reviews,omitempty"`
+	ReviewsTruncated bool                              `json:"reviews_truncated,omitempty"`
+	Files            []repositoryPullRequestFileView   `json:"files,omitempty"`
+	FilesTruncated   bool                              `json:"files_truncated,omitempty"`
+	// Repositories 只在 repo_search 返回，RepositoryProfile 只在 repo 返回。
+	Repositories         []repositoryProfileView    `json:"repositories,omitempty"`
+	RepositoryProfile    *repositoryProfileView     `json:"repository_profile,omitempty"`
+	ReviewURL            string                     `json:"review_url,omitempty"`
+	File                 *repositoryFileView        `json:"file,omitempty"`
+	Fingerprint          string                     `json:"fingerprint,omitempty"`
+	Idempotent           bool                       `json:"idempotent,omitempty"`
+	Reconciled           bool                       `json:"reconciled,omitempty"`
+	RequiresConfirmation bool                       `json:"requires_confirmation,omitempty"`
+	ConfirmationToken    string                     `json:"confirmation_token,omitempty"`
+	RequiresApproval     bool                       `json:"requires_approval,omitempty"`
+	Draft                *repositoryIssueDraftView  `json:"draft,omitempty"`
+	Drafts               []repositoryIssueDraftView `json:"drafts,omitempty"`
+	Redactions           int                        `json:"redactions,omitempty"`
 }
 
 type RepositoryIssueDraft struct {
@@ -295,7 +298,14 @@ func (t *dianaRepositoryIssuesTool) Name() string {
 }
 
 func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `这是一个工具，不是一组子工具：get、pull_files、read_file、search、comment 等都是 operation 参数的取值，调用时工具名永远是 github。搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+	description := `这是一个工具，不是一组子工具：get、pull_files、read_file、search、repo_search、comment 等都是 operation 参数的取值，调用时工具名永远是 github。` +
+		`找仓库、搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。` +
+		`要给用户推荐 GitHub 仓库时用 repo_search 按关键词找，用户已经点名某个仓库时用 repo 读它一个——不要靠网页搜索或印象来推荐仓库。` +
+		`这两个操作返回 stars（多少人在用）、forks（多少人真拿去改）和 pushed_ago（最近一次推送距今多久）：` +
+		`推荐时必须把这三项一起写进回复，并据此说清影响力和维护状态。star 和 fork 都很少说明它还没被人用起来；` +
+		`结果里 stale 为 true（一年以上没推送）或 archived 为 true（已归档）时必须明确提醒用户，不能当作可用推荐照样给出去；` +
+		`fork 为 true 说明它本身是别人的分叉，推荐前先看看上游是不是更合适。` +
+		`search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files、repo 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -328,13 +338,18 @@ func (t *dianaRepositoryIssuesTool) Description() string {
 // 的字段说明里——这是最容易踩的一条，放在参数旁边比埋在描述中段更显眼。
 func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。",
-			"search", "get", "pull_files", "read_file", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
-		"repository": toolStringParam("目标仓库，写成 owner/repo。approve、cancel_draft、list_drafts 不需要。"),
+		"operation": toolEnumParam("要执行的操作。repo_search 按关键词找公开仓库，repo 读单个仓库的 star、fork 和最近推送时间——给用户推荐仓库时用这两个。"+
+			"create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。",
+			"repo_search", "repo", "search", "get", "pull_files", "read_file", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
+		"repository": toolStringParam("目标仓库，写成 owner/repo。repo_search、approve、cancel_draft、list_drafts 不需要。"),
 		"number":     toolIntParam("目标 Issue 或 PR 编号；get、pull_files、review 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
 		"numbers":    toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
-		"query":      toolStringParam("search 专用：检索关键词。"),
+		"query":      toolStringParam("search 与 repo_search 的检索关键词，只写普通词，不要带 repo:、language: 这类限定符。"),
 		"kind":       toolEnumParam("search 专用：搜 Issue（默认）、PR 还是两者都搜。", "issue", "pull_request", "all"),
+		"language":   toolStringParam("repo_search 可选：只要这门语言的仓库，例如 go、rust、typescript。"),
+		"sort": toolEnumParam("repo_search 可选：结果排序。best_match 按相关度（默认）；用户问「最流行」用 stars，问「还有人维护吗」用 updated。",
+			"best_match", "stars", "forks", "updated"),
+		"limit":      toolIntParam("repo_search 可选：最多返回几个仓库，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
 		"path":       toolStringParam("read_file 专用：仓库内文件路径。"),
 		"ref":        toolStringParam("read_file 可选：分支、标签或提交；传了 number 且不传 ref 时读 PR head。"),
 		"start_line": toolIntParam("read_file 可选：从第几行开始读，默认 1。", 1, 10_000_000),
@@ -370,7 +385,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
-		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、get、pull_files、read_file、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
+		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 repo_search、repo、search、get、pull_files、read_file、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
 	}
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
 		return t.finish(ctx, result.fail("plugin_unavailable", "GitHub Issue 与 PR 插件未正确配置。"))
@@ -384,13 +399,18 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	if operation == "cancel_draft" {
 		return t.finish(ctx, t.cancelDraft(ctx, input))
 	}
+	// repo_search 搜的是全站公开仓库，没有目标仓库可填，所以排在 repository
+	// 规范化之前；它自己在查询里钉死 is:public，不经过按仓库分流的读 ACL。
+	if operation == "repo_search" {
+		return t.finish(ctx, t.searchRepositories(ctx, input))
+	}
 	repository, err := normalizeGitHubRepository(configToolString(input, "repository"))
 	if err != nil {
 		return t.finish(ctx, result.fail("invalid_repository", err.Error()))
 	}
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	readOperation := operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file"
+	readOperation := operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file" || operation == "repo"
 	if readOperation {
 		// search 的 query 本地校验先于任何网络探测：注入仓库限定符、布尔操作或
 		// 引号必须零请求被拒，不能先挨一发仓库元信息探测。
@@ -434,11 +454,14 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 			return t.finish(ctx, result.fail("permission_denied", "当前用户没有该仓库的审批或写入权限。"))
 		}
 	}
-	if operation != "create" && operation != "search" {
+	if operation != "create" && operation != "search" && operation != "repo" {
 		result.RequestedNumber = repositoryIssueNumber(input)
 		result.RequestedNumbers = repositoryIssueBatchTargets(input)
 	}
-	if operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file" {
+	if readOperation {
+		if operation == "repo" {
+			return t.finish(ctx, t.repositoryProfile(ctx, repository))
+		}
 		if operation == "get" {
 			return t.finish(ctx, t.get(ctx, repository, input))
 		}
@@ -463,6 +486,10 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 	switch strings.ToLower(strings.TrimSpace(operation)) {
 	case "search", "find", "list":
 		return "search"
+	case "repo_search", "search_repositories", "search_repos", "find_repository", "find_repositories", "recommend_repository":
+		return "repo_search"
+	case "repo", "repository", "repo_info", "repository_info", "repo_profile":
+		return "repo"
 	case "get", "get_issue", "view", "read", "show":
 		return "get"
 	case "create", "create_issue", "new":
@@ -633,12 +660,12 @@ func (r repositoryIssueResult) fail(code, message string) repositoryIssueResult 
 }
 
 func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositoryIssueResult) (string, error) {
-	if result.Operation != "" && result.Operation != "search" {
+	if result.Operation != "" && !repositoryIssueReadOnlyOperation(result.Operation) {
 		t.audit(result)
 	}
 	// GitHub 上已经落地的写入不可撤销：标记之后，这一轮回复不会再被后续消息
 	// 打断丢弃，用户至少能看到「已经建好了」和链接。草稿只存在本地，不算。
-	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "search" && result.Operation != "list_drafts" {
+	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "list_drafts" && !repositoryIssueReadOnlyOperation(result.Operation) {
 		markExternalSideEffect(ctx)
 	}
 	body, err := json.Marshal(result)
@@ -646,6 +673,12 @@ func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositor
 		return "", err
 	}
 	return string(body), nil
+}
+
+// repositoryIssueReadOnlyOperation 圈出纯查询操作：它们不写 GitHub，既不进操作审计，
+// 也不该把这一轮回复标成「有外部副作用、不可打断」。
+func repositoryIssueReadOnlyOperation(operation string) bool {
+	return operation == "search" || operation == "repo_search" || operation == "repo"
 }
 
 func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner bool) (string, string) {
