@@ -366,7 +366,13 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	default:
 		return botReplyLoopCandidate{}, false
 	}
-	directBotFollowup := eventRepliesToBot(event, cfg)
+	// routingDirected 和「引用了机器人那条」在这里是同一件事的两种形态：都表示这条
+	// 消息冲着机器人来。结构形态（@、引用、名字）以外还要认语义形态，否则相关度
+	// 分支放行的回复永远进不了空转判断——2026-09-20 深夜 1049765710 群里就是这样：
+	// 另一台机器人和 Diana 互道晚安刷了十几轮，每条评分都是「在跟机器人说话：是」，
+	// 但正文里既没有 @ 也没有名字，bot_reply_loop_classification 从 23:56 起就再没
+	// 跑过一次，回复欲望衰减的密度计数自然也一直是空的。
+	directBotFollowup := eventRepliesToBot(event, cfg) || event.routingDirected
 	if strings.TrimSpace(readableEventText(event, text)) == "" || (!directBotFollowup && !r.shouldHandleChat(event, text)) {
 		return botReplyLoopCandidate{}, false
 	}
@@ -392,6 +398,11 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	}
 	if event.ToMe {
 		return botReplyLoopCandidate{TriggerKind: "direct"}, true
+	}
+	// 结构上找不到触发点，但评分模型认定对方在跟机器人说话。单独一种 trigger_kind：
+	// 这一支的判据来自模型而不是消息本身，日志里要能和 mention/quote/alias 分开看。
+	if event.routingDirected {
+		return botReplyLoopCandidate{TriggerKind: "directed"}, true
 	}
 	return botReplyLoopCandidate{}, false
 }

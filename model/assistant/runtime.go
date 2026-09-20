@@ -2345,6 +2345,10 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			allowed, chatReply = false, false
 		}
 		event.proactiveReply, event.chatInReply = allowed, chatReply
+		// 相关度分支放行的回复在正文里可能既没有 @ 也没有名字，空转判断本来看不见
+		// 它们（botReplyLoopCandidate 只认结构触发）。把模型的 directed 结论带下去，
+		// 那道闸才管得到这一支。
+		event.routingDirected = parseErr == nil && ratings.Relevance.Directed != nil && *ratings.Relevance.Directed
 		if parseErr != nil {
 			event.routingReason = "接话评分格式无效，已保持沉默：" + parseErr.Error()
 		} else {
