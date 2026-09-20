@@ -75,6 +75,44 @@ func TestRepositoryReleaseKindsReenabledDoesNotReplaySkippedPrereleases(t *testi
 	}
 }
 
+// 被过滤掉的预发布之后被删除——rc 转正后删掉预发布是常见操作。游标记的是发布时间
+// 加 ID 的水位，不指望那个 tag 还在，所以删掉既不会报错，也不会把更旧的正式版当成
+// 新动态重推一遍。
+func TestRepositoryReleaseKindsSurviveDeletedSkippedPrerelease(t *testing.T) {
+	f, p := newRepositoryCursorFixture(t)
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	release := func(tag string, id int, day int, prerelease bool) map[string]any {
+		return map[string]any{
+			"tag_name": tag, "id": id, "name": tag, "published_at": at.AddDate(0, 0, day),
+			"draft": false, "prerelease": prerelease,
+		}
+	}
+	path := "/repos/acme/demo/releases"
+	stable, candidate, next := release("v1.0.0", 1, 0, false), release("v1.1.0-rc.1", 2, 1, true), release("v1.1.0", 3, 2, false)
+	stableOnly := repositoryWatchSelection{ReleaseKinds: []string{repositoryWatchReleaseKindStable}}
+
+	// rc 不推，但游标照样越过它——它现在停在一条从没通知过的记录上。
+	f.set(path, []any{candidate, stable})
+	got, cursor, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: "v1.0.0", ReleasePublishedAt: at, ReleaseID: 1}, stableOnly, nil)
+	if err != nil || len(got) != 0 || cursor.ReleaseTag != "v1.1.0-rc.1" || cursor.ReleaseID != 2 {
+		t.Fatalf("skipped prerelease=%v cursor=%#v err=%v", got, cursor, err)
+	}
+
+	// rc 被删除，列表里只剩更旧的正式版：保留水位，不倒退也不重推。
+	f.set(path, []any{stable})
+	got, retained, err := p.fetchReleases(context.Background(), "acme/demo", cursor, stableOnly, nil)
+	if err != nil || len(got) != 0 || retained.ReleaseTag != cursor.ReleaseTag || retained.ReleaseID != cursor.ReleaseID {
+		t.Fatalf("after delete=%v cursor=%#v err=%v", got, retained, err)
+	}
+
+	// 正式版发布后照常推一次，且只推这一条。
+	f.set(path, []any{next, stable})
+	got, advanced, err := p.fetchReleases(context.Background(), "acme/demo", retained, stableOnly, nil)
+	if err != nil || len(got) != 1 || got[0].Tag != "v1.1.0" || advanced.ReleaseID != 3 {
+		t.Fatalf("after next release=%v cursor=%#v err=%v", got, advanced, err)
+	}
+}
+
 // 两类混在同一条通知里时，预发布要看得出来，正式版保持原样。
 func TestRepositoryWatchRendersPrereleaseMarker(t *testing.T) {
 	at := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
