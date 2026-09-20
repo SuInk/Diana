@@ -554,21 +554,20 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 
 func (r *Runtime) describeRecallImage(ctx context.Context, event MessageEvent, source string) (string, error) {
 	const instruction = "请为这张图片生成可复用的客观中文描述。说明主要人物、物体、场景、界面结构，并完整记录清晰可辨的文字、数字和关键细节。不要回答任何聊天问题，不要推测看不清的内容，不要使用 Markdown，控制在1200字以内。"
-	return r.describeCachedImage(ctx, event, source, "你是 Diana 的图片内容缓存子代理。输出将作为后续聊天和撤回记录的可靠视觉事实。", instruction, "image_description_cache", 1200)
+	return r.describeCachedImage(ctx, event, source, "你是 Diana 的图片内容缓存子代理。输出将作为后续聊天和撤回记录的可靠视觉事实。", instruction, "image_description_cache")
 }
 
 func (r *Runtime) describeStickerImage(ctx context.Context, event MessageEvent, source string) (string, error) {
 	const instruction = "请为这张聊天表情包生成简短中文简介。重点说明发送者借这张图表达的潜台词、复合情绪、说话视角、典型触发场景和清晰可辨的原始文字，而不是只描述构图或画风。不要回答当前聊天问题，不要使用 Markdown，控制在180字以内。"
-	return r.describeCachedImage(ctx, event, source, "你是 Diana 的表情包语义标注器。简介用于按聊天语境检索合适表情，不能编造看不清的文字、角色或梗来源。", instruction, "sticker_description", 400)
+	return r.describeCachedImage(ctx, event, source, "你是 Diana 的表情包语义标注器。简介用于按聊天语境检索合适表情，不能编造看不清的文字、角色或梗来源。", instruction, "sticker_description")
 }
 
-func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, source, system, instruction, purpose string, maxOutputTokens int64) (string, error) {
+func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, source, system, instruction, purpose string) (string, error) {
 	readyImages := llmReadyImageURLs(ctx, []string{source})
 	if len(readyImages) == 0 || !strings.HasPrefix(readyImages[0], "data:image/") {
 		return "", fmt.Errorf("cached image is unavailable")
 	}
 	request := llm.GenerateRequest{
-		MaxOutputTokens: maxOutputTokens,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: system},
 			{
