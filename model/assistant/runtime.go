@@ -3324,8 +3324,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaBotParticipationTool(r, event),
 				newDianaReplyBlockTool(r, event),
 				newDianaReminderTool(r, event),
-				newDianaScheduleTool(r, event),
-				newDianaRSSWatchTool(r, event),
 				newDianaRenderTool(r, event),
 				// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
 				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
@@ -3392,14 +3390,37 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
 				}
 			}
+			// schedule、rss、github 三种订阅合成一个 subscription 工具。github 那种仍然
+			// 只挂给主人和仓库管理人员——它不进 backends，kind 枚举里就不会出现，
+			// 没权限的人看不见也就不会去调。
+			var githubWatch *dianaRepositoryWatchTool
 			if pluginValue, watchSettings, enabled := r.pluginWithSettingsForEvent(repositoryWatchPluginID, event); enabled {
 				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
 					_, publishSettings, _ := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event)
 					managed := repositoryWatchManagedRepositories(event, publishSettings)
 					if relationship.Owner || len(managed) > 0 {
-						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
+						githubWatch = newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings)
 					}
 				}
+			}
+			if subscription := newDianaSubscriptionTool(
+				subscriptionBackend{
+					kind: subscriptionKindSchedule, label: "按固定间隔重复执行一段查询并通知结果",
+					operations: []string{"create", "list", "update", "cancel", "delete"},
+					delegate:   newDianaScheduleTool(r, event),
+				},
+				subscriptionBackend{
+					kind: subscriptionKindRSS, label: "盯 RSS/Atom Feed 或 X (Twitter) 用户，由模型按 judge_prompt 判断是否值得通知",
+					operations: []string{"create", "list", "update", "cancel", "delete"},
+					delegate:   newDianaRSSWatchTool(r, event),
+				},
+				subscriptionBackend{
+					kind: subscriptionKindGitHub, label: "盯 GitHub 仓库的 Commit / PR / Issue / Release / Star",
+					operations: []string{"create", "list", "update", "cancel", "delete", "run"},
+					delegate:   subscriptionGitHubDelegate(githubWatch),
+				},
+			); subscription != nil {
+				extraTools = append(extraTools, subscription)
 			}
 			// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
 			// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里

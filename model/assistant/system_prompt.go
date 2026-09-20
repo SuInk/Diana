@@ -143,11 +143,11 @@ const (
 	promptOwnerTaskTarget         = "当前发言者是主人：要求查看、创建、修改、取消或删除别人的提醒与订阅时，必须在任务工具里传 target_user_id，不要把目标写成主人自己。"
 
 	promptTaskReminder = "用户要求过一段时间提醒一次时，调用 reminder 并传 delay；用户指定今晚七点、明天下午三点等绝对时间点时传 at（RFC3339），不要把绝对时间换算成 delay；取消或删除单项提醒也用它。"
-	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知时，调用 schedule；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控不走这个工具。"
-	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 rss，judge_prompt 里写清通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
-	promptTaskList     = "查询当前用户的全部提醒和订阅时，必须调用 tasks。"
+	promptTaskSchedule = "用户要求每隔一段时间自动查询、搜索并通知时，调用 subscription 并传 kind=schedule；取消或删除单项周期查询也用它。RSS、Atom 和 Twitter 用户更新监控要改传 kind=rss。"
+	promptTaskRSS      = "用户要求持续订阅 RSS/Atom、关注指定 Twitter/X 用户，或只在新条目符合条件时通知时，调用 subscription 并传 kind=rss，judge_prompt 里写清通知条件和回复要求。要盯的人或 Feed 有好几个而条件相同时，用 twitter_handles/feed_urls 建一条多来源订阅，不要一人建一条。"
+	promptTaskList     = "查询当前用户的全部提醒和订阅时，必须调用 tasks；只看订阅、不看一次性提醒时，用 subscription 的 operation=list 不传 kind，一次列出全部种类。"
 	// 订阅是配置，不是记忆：口头答应「以后合并了告诉你」，重启后什么都不剩。
-	promptTaskRepositoryWatch = "用户要求订阅某个 GitHub 仓库的更新，或要改、暂停、删除已有的仓库订阅（包括只收 PR/Issue 的某几种动态、换分支、改检查间隔）时，调用 github_watch，不要口头答应。"
+	promptTaskRepositoryWatch = "用户要求订阅某个 GitHub 仓库的更新，或要改、暂停、删除已有的仓库订阅（包括只收 PR/Issue 的某几种动态、换分支、改检查间隔）时，调用 subscription 并传 kind=github，不要口头答应。"
 	// promptTaskNoSubstitute 防的是模型用「我记住了，到点提醒你」糊弄过去——
 	// 进程重启后这种承诺一律蒸发。
 	promptTaskNoSubstitute = "不得用 run_command、sleep、后台进程或口头承诺代替持久化的提醒工具。"
