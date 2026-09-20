@@ -65,6 +65,32 @@
         </div>
       </div>
 
+      <div v-if="loaded && botScope && supportsGroupLevel" class="group-scope-bar group-scope-levels">
+        <div class="group-scope-level">
+          <label for="group-default-level">群等级门槛</label>
+          <input
+            id="group-default-level"
+            class="input"
+            inputmode="numeric"
+            :value="defaultMinGroupLevel"
+            :disabled="bulkBusy"
+            @change="saveMinGroupLevel($event)"
+          />
+          <span>0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。单个群可以在它的配置里覆盖。</span>
+        </div>
+        <div class="group-scope-level">
+          <label for="group-default-unknown">等级读不到时</label>
+          <AppSelect
+            id="group-default-unknown"
+            :model-value="defaultLevelUnknownPolicy"
+            :options="levelUnknownOptions"
+            :disabled="bulkBusy"
+            @update:model-value="saveLevelUnknownPolicy($event as 'allow' | 'deny')"
+          />
+          <span>部分 OneBot 实现不提供群等级。选「拦截」会让这些实现下的群整体静音。</span>
+        </div>
+      </div>
+
       <div v-if="syncWarning" class="group-sync-warning" role="status">
         <WifiOff :size="16" aria-hidden="true" />
         <span>{{ syncWarning }}</span>
@@ -747,6 +773,8 @@ async function load(showFeedback = false): Promise<void> {
         ...(config.profiles ?? []).map((profile) => [profile.id, { name: profile.name ?? "", prompt: profile.system_prompt ?? "" }])
       ]);
       newGroupEnabled.value = (current.group_admission?.mode ?? "blacklist") !== "whitelist";
+      defaultMinGroupLevel.value = current.reply_gate?.min_group_level ?? 0;
+      defaultLevelUnknownPolicy.value = current.reply_gate?.level_unknown_policy === "deny" ? "deny" : "allow";
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
@@ -914,6 +942,50 @@ function setPluginSettingOverrides(pluginID: string, values: Record<string, unkn
 // 后者只作用于当前列出来的群，两者合起来才是完整的一份逐群开关。
 const newGroupEnabled = ref(true);
 const bulkBusy = ref(false);
+
+const defaultMinGroupLevel = ref(0);
+const defaultLevelUnknownPolicy = ref<"allow" | "deny">("allow");
+const levelUnknownOptions: AppSelectOption[] = [
+  { value: "allow", label: "放行（推荐）", hint: "读不到等级时照常回复" },
+  { value: "deny", label: "拦截", hint: "读不到等级时不回复" }
+];
+
+async function saveMinGroupLevel(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const level = Math.max(0, Math.trunc(Number(input.value)) || 0);
+  if (level === defaultMinGroupLevel.value) {
+    input.value = String(level);
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    await saveBotGroupSwitches({ bot_profile_id: botScope.value, min_group_level: level });
+    defaultMinGroupLevel.value = level;
+    input.value = String(level);
+    toastSuccess(level > 0 ? `群等级门槛设为 Lv.${level}` : "群等级门槛已取消");
+  } catch (error) {
+    input.value = String(defaultMinGroupLevel.value);
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
+async function saveLevelUnknownPolicy(policy: "allow" | "deny"): Promise<void> {
+  if (policy === defaultLevelUnknownPolicy.value) {
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    await saveBotGroupSwitches({ bot_profile_id: botScope.value, level_unknown_policy: policy });
+    defaultLevelUnknownPolicy.value = policy;
+    toastSuccess(policy === "allow" ? "等级读不到时放行" : "等级读不到时拦截");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
 
 function sharedBotsTitle(group: BotGroupSummary): string {
   const names = (group.shared_with ?? []).map((bot) => `「${bot.name || "未命名机器人"}」`).join("");

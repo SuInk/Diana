@@ -852,6 +852,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
 
   if (path === "/api/assistant/groups/switches" && method === "POST") {
+    if (typeof body.min_group_level === "number" || typeof body.level_unknown_policy === "string") {
+      const gate = { ...(assistantConfig.reply_gate ?? {}) };
+      if (typeof body.min_group_level === "number") gate.min_group_level = body.min_group_level;
+      if (typeof body.level_unknown_policy === "string") gate.level_unknown_policy = body.level_unknown_policy as "allow" | "deny";
+      assistantConfig = { ...assistantConfig, reply_gate: gate };
+    }
     if (typeof body.new_group_enabled === "boolean") {
       const mode = body.new_group_enabled ? "blacklist" : "whitelist";
       assistantConfig = { ...assistantConfig, group_admission: { mode } };

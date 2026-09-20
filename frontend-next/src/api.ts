@@ -1751,6 +1751,8 @@ export function saveBotGroupSwitches(payload: {
   group_ids?: string[];
   enabled?: boolean;
   new_group_enabled?: boolean;
+  min_group_level?: number;
+  level_unknown_policy?: "allow" | "deny";
 }): Promise<{ ok: boolean; updated: number }> {
   return requestJSON<{ ok: boolean; updated: number }>("/api/assistant/groups/switches", {
     method: "POST",

@@ -2652,6 +2652,34 @@ a.nav-action {
   gap: 8px;
 }
 
+/* 群等级那两项是所有群的默认，和上面那栏同宽，两列各占一半。 */
+.group-scope-levels {
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 12px 32px;
+}
+
+.group-scope-level {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.group-scope-level label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.group-scope-level .input,
+.group-scope-level .app-select {
+  max-width: 220px;
+}
+
 .group-search {
   display: flex;
   align-items: center;

@@ -70,6 +70,10 @@ type consoleGroupSwitchesPayload struct {
 	GroupIDs        []string `json:"group_ids,omitempty"`
 	Enabled         *bool    `json:"enabled,omitempty"`
 	NewGroupEnabled *bool    `json:"new_group_enabled,omitempty"`
+	// 群等级门槛是所有群的默认，按群可以在群配置里单独覆盖。它和逐群开关
+	// 一样是「关于群的默认」，所以入口也在群管理这一页。
+	MinGroupLevel      *int   `json:"min_group_level,omitempty"`
+	LevelUnknownPolicy string `json:"level_unknown_policy,omitempty"`
 }
 
 func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
@@ -83,12 +87,12 @@ func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "groups_switches", err, "", nil)
 		return
 	}
-	if payload.NewGroupEnabled != nil {
-		if err := h.saveNewGroupDefault(profileID, *payload.NewGroupEnabled); err != nil {
+	if note, mutate := payload.groupDefaults(); mutate != nil {
+		if err := h.saveGroupDefaults(profileID, mutate); err != nil {
 			h.writeError(c, http.StatusInternalServerError, "groups_switches", err, "", map[string]any{"bot_profile_id": profileID})
 			return
 		}
-		recordRequestOperation(c, h.logs, "groups_switches", newGroupDefaultAudit(*payload.NewGroupEnabled), "", map[string]any{"bot_profile_id": profileID, "bot_profile_name": profileName})
+		recordRequestOperation(c, h.logs, "groups_switches", note, "", map[string]any{"bot_profile_id": profileID, "bot_profile_name": profileName})
 	}
 	updated := 0
 	if payload.Enabled != nil {
@@ -124,21 +128,59 @@ func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": updated})
 }
 
-func newGroupDefaultAudit(enabled bool) string {
-	if enabled {
-		return "新加入的群默认工作"
+// groupDefaults 把这次请求里的「群默认」项折成一个改配置的函数，顺带给出
+// 审计要记的那句话。没有任何默认项时返回 nil，请求就只做批量开关。
+func (p consoleGroupSwitchesPayload) groupDefaults() (string, func(*assistant.BotConfig)) {
+	var notes []string
+	var steps []func(*assistant.BotConfig)
+	if p.NewGroupEnabled != nil {
+		enabled := *p.NewGroupEnabled
+		notes = append(notes, map[bool]string{true: "新加入的群默认工作", false: "新加入的群默认不工作"}[enabled])
+		mode := assistant.GroupAdmissionWhitelist
+		if enabled {
+			mode = assistant.GroupAdmissionBlacklist
+		}
+		steps = append(steps, func(cfg *assistant.BotConfig) {
+			cfg.GroupAdmission = assistant.GroupAdmission{Mode: mode}.WithDefaults()
+		})
 	}
-	return "新加入的群默认不工作"
+	if p.MinGroupLevel != nil {
+		level := max(0, *p.MinGroupLevel)
+		notes = append(notes, fmt.Sprintf("群等级门槛设为 %d", level))
+		steps = append(steps, func(cfg *assistant.BotConfig) {
+			gate := cfg.ReplyGate.Clone()
+			if gate == nil {
+				gate = &assistant.ReplyGate{}
+			}
+			gate.MinGroupLevel = level
+			cfg.ReplyGate = gate
+		})
+	}
+	if policy := strings.TrimSpace(p.LevelUnknownPolicy); policy == assistant.LevelUnknownAllow || policy == assistant.LevelUnknownDeny {
+		notes = append(notes, map[string]string{assistant.LevelUnknownAllow: "等级读不到时放行", assistant.LevelUnknownDeny: "等级读不到时拦截"}[policy])
+		steps = append(steps, func(cfg *assistant.BotConfig) {
+			gate := cfg.ReplyGate.Clone()
+			if gate == nil {
+				gate = &assistant.ReplyGate{}
+			}
+			gate.LevelUnknownPolicy = policy
+			cfg.ReplyGate = gate
+		})
+	}
+	if len(steps) == 0 {
+		return "", nil
+	}
+	return strings.Join(notes, "、"), func(cfg *assistant.BotConfig) {
+		for _, step := range steps {
+			step(cfg)
+		}
+	}
 }
 
-// saveNewGroupDefault 改这台机器人的新群默认，并让运行时立刻用上。
-func (h *BotHandler) saveNewGroupDefault(profileID string, enabled bool) error {
+// saveGroupDefaults 改这台机器人的群默认，并让运行时立刻用上。
+func (h *BotHandler) saveGroupDefaults(profileID string, mutate func(*assistant.BotConfig)) error {
 	if h.profiles == nil {
 		return fmt.Errorf("配置存储不可用")
-	}
-	mode := assistant.GroupAdmissionWhitelist
-	if enabled {
-		mode = assistant.GroupAdmissionBlacklist
 	}
 	set := h.profiles.Profiles().WithDefaults()
 	found := false
@@ -146,7 +188,7 @@ func (h *BotHandler) saveNewGroupDefault(profileID string, enabled bool) error {
 		if set.Profiles[index].ID != profileID {
 			continue
 		}
-		set.Profiles[index].GroupAdmission = assistant.GroupAdmission{Mode: mode}.WithDefaults()
+		mutate(&set.Profiles[index])
 		found = true
 		if err := h.profiles.SaveProfileConfig(set.Profiles[index]); err != nil {
 			return err

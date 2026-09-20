@@ -1022,7 +1022,10 @@
                 <span class="hint">仅这些用户（和主人）的私聊会得到响应；名单外一律静默忽略。</span>
               </div>
               <div class="field wide">
-                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" />
+                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" hide-group-level />
+                <p v-if="isOneBotPlatform" class="hint">
+                  群等级门槛在<a href="#" @click.prevent="navigate('groups')">群管理</a>里，和逐群开关放在一起；它仍然生效，主人豁免也仍然绕过它。
+                </p>
               </div>
             </div>
           </section>

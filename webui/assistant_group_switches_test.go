@@ -175,3 +175,39 @@ func TestConsoleGroupsMarkSharedBots(t *testing.T) {
 		}
 	}
 }
+
+// 群等级门槛是所有群的默认，入口在群管理，落点仍是机器人的回复门槛。
+func TestConsoleGroupSwitchesGroupLevelDefaults(t *testing.T) {
+	handler, _, profiles := switchesTestRouter(t)
+
+	if rec := postSwitches(t, handler, `{"bot_profile_id":"a","min_group_level":3,"level_unknown_policy":"deny"}`); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	gate := profiles.Profiles().Profiles[0].ReplyGate
+	if gate == nil || gate.MinGroupLevel != 3 || gate.LevelUnknownPolicy != assistant.LevelUnknownDeny {
+		t.Fatalf("群等级默认没写进回复门槛：%#v", gate)
+	}
+
+	// 只改一项时不该把另一项冲掉。
+	if rec := postSwitches(t, handler, `{"bot_profile_id":"a","min_group_level":0}`); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	gate = profiles.Profiles().Profiles[0].ReplyGate
+	if gate == nil || gate.MinGroupLevel != 0 || gate.LevelUnknownPolicy != assistant.LevelUnknownDeny {
+		t.Fatalf("只改门槛却动了另一项：%#v", gate)
+	}
+}
+
+// 非法的等级策略直接忽略，不能把它写进配置。
+func TestConsoleGroupSwitchesIgnoresUnknownLevelPolicy(t *testing.T) {
+	handler, _, profiles := switchesTestRouter(t)
+
+	if rec := postSwitches(t, handler, `{"bot_profile_id":"a","level_unknown_policy":"maybe"}`); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	if gate := profiles.Profiles().Profiles[0].ReplyGate; gate != nil && gate.LevelUnknownPolicy == "maybe" {
+		t.Fatalf("非法策略被写进了配置：%#v", gate)
+	}
+}
