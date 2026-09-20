@@ -190,7 +190,10 @@ type groupTestResponse struct {
 	Status       assistant.RuntimeStatus `json:"status"`
 }
 
-const minBotTokenChars = 16
+// 反向 WebSocket 的监听器只绑在本机，token 防的是同机上的其他进程冒连，不是公网
+// 爆破。16 位挡掉了不少既有的、够用的 token（miku 线上那个就是 15 位），升级后只能
+// 重新生成并同步改客户端。8 位是个能拦住手滑写个 "1234" 的下限。
+const minBotTokenChars = 8
 
 // NewBotHandler 创建 BotHandler 实例。
 func NewBotHandler(ctx context.Context, runtime BotRuntime) *BotHandler {

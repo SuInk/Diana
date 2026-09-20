@@ -224,7 +224,7 @@
             </template>
             <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
             <div class="field wide">
-              <label for="wizard-token">OneBot Access Token（{{ tokenRequired ? "反向 WebSocket 必填" : "可选" }}，至少 16 位）</label>
+              <label for="wizard-token">OneBot Access Token（{{ tokenRequired ? "反向 WebSocket 必填" : "可选" }}，至少 8 位）</label>
               <div class="input-group">
                 <input id="wizard-token" v-model="botForm.onebot_access_token" class="input" type="text" autocomplete="off"
                   :placeholder="tokenConfigured ? (savedBot?.onebot_access_token_preview ? `已保存 ${savedBot.onebot_access_token_preview}，留空沿用` : '留空表示沿用已保存 token') : '与 OneBot v11 客户端填写的 token 保持一致'" />

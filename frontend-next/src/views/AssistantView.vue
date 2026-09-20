@@ -275,7 +275,7 @@
                       class="input"
                       :type="tokenRevealed.onebot_access_token ? 'text' : 'password'"
                       autocomplete="off"
-                      :placeholder="form.onebot_access_token_configured ? (form.onebot_access_token_preview ? `已保存 ${form.onebot_access_token_preview}，留空沿用，填写则覆盖` : '已配置 — 留空沿用，填写则覆盖') : ((!form.onebot_transport || form.onebot_transport === 'reverse_ws') ? '反向 WebSocket 必填（启用时），至少 16 位' : '可选，至少 16 位')"
+                      :placeholder="form.onebot_access_token_configured ? (form.onebot_access_token_preview ? `已保存 ${form.onebot_access_token_preview}，留空沿用，填写则覆盖` : '已配置 — 留空沿用，填写则覆盖') : ((!form.onebot_transport || form.onebot_transport === 'reverse_ws') ? '反向 WebSocket 必填（启用时），至少 8 位' : '可选，至少 8 位')"
                     />
                     <button
                       class="btn icon-only"
@@ -1578,7 +1578,7 @@
                       class="input"
                       :type="tokenRevealed.nonebot_bridge_token ? 'text' : 'password'"
                       autocomplete="off"
-                      :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
+                      :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 8 位'"
                     />
                     <button
                       class="btn icon-only"
