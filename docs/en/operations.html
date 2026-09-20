@@ -66,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
           <div><h3>The vision model cannot read a screenshot or small text</h3><p>Confirm the vision role is bound to a model you tested with a real image, that the original was not downscaled, and that the image was not dropped by the token budget. Text-heavy images should use both OCR and the original as evidence.</p></div>
           <div><h3>Group management shows not found, or groups are missing</h3><p>Check the OneBot connection and the <code>get_group_list</code> response. While connected it should list every group the bot has joined; it falls back to local configuration only when the connection is unavailable.</p></div>
           <div><h3>Unprompted-reply candidates stay pending forever</h3><p>Candidates should go straight to semantic evaluation and write a definite result within 60 seconds. Getting stuck usually means the intent model timed out, the queue consumer is not running, or the running version predates the current logic.</p></div>
-          <div><h3>The health check fails after an update</h3><p>Check for a port conflict, database permissions, the frontend directory and the binary architecture. Installer backups live in <code>.installer/backups</code>; console update backups live in <code>.diana-updates</code>.</p></div>
+          <div><h3>The health check fails after an update</h3><p>Check for a port conflict, database permissions, the frontend directory and the binary architecture. Installer backups live in <code>.installer/backups</code>; console update backups live in <code>.diana-updates</code> under the data directory (<code>update.work_dir</code> moves it elsewhere).</p></div>
         </div>
       </section>
 

@@ -366,6 +366,7 @@ func main() {
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
 		Arguments:      os.Args[1:],
 		Shutdown:       cancel,
+		UpdatesDir:     appCfg.Update.WorkDir,
 		Disable:        !boolOr(appCfg.Update.ReleaseEnabled, true),
 	})
 	if err != nil {

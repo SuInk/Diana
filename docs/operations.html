@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
           <details><summary>视觉模型看不清截图或小字</summary><p>确认视觉职责绑定了经过真实图片测试的模型、原图未被缩放、图片未被 token 预算裁掉。文本密集图片使用 OCR 与原图双证据。</p></details>
           <details><summary>群管理显示 not found 或缺少群</summary><p>检查 OneBot 连接与 <code>get_group_list</code> 响应。在线时应显示机器人加入的全部群；只有连接不可用才回退本地配置。</p></details>
           <details><summary>主动回复候选长期显示等待处理</summary><p>候选应该直接进入语义判断，最长等待 60 秒后写入明确结果。持续卡住通常表示意图模型超时、队列消费者未运行或运行版本未包含新逻辑。</p></details>
-          <details><summary>更新后健康检查失败</summary><p>检查端口冲突、数据库权限、前端目录和二进制架构。安装器备份位于 <code>.installer/backups</code>；控制台更新备份位于 <code>.diana-updates</code>。</p></details>
+          <details><summary>更新后健康检查失败</summary><p>检查端口冲突、数据库权限、前端目录和二进制架构。安装器备份位于 <code>.installer/backups</code>；控制台更新备份位于数据目录下的 <code>.diana-updates</code>（可用 <code>update.work_dir</code> 改到别处）。</p></details>
         </div>
       </section>
 
