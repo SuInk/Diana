@@ -316,6 +316,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// 逐群开关以前分在群配置、聊天指令和白名单三处，现在只剩群配置里那一份。
+	// 迁移要赶在运行时读配置之前跑完，否则这一瞬间被关掉的群会开口说话。
+	if err := webui.MigrateGroupScopeSwitches(botProfileStore, botGroupConfigStore); err != nil {
+		log.Fatal(err)
+	}
 	reminderStore, err := webui.NewPersistentReminderStore(ctx, sqliteStore)
 	if err != nil {
 		log.Fatal(err)
@@ -366,6 +371,7 @@ func main() {
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
 		Arguments:      os.Args[1:],
 		Shutdown:       cancel,
+		UpdatesDir:     appCfg.Update.WorkDir,
 		Disable:        !boolOr(appCfg.Update.ReleaseEnabled, true),
 	})
 	if err != nil {

@@ -89,8 +89,11 @@ type ReleasePackageOptions struct {
 	WorkingDir     string
 	Arguments      []string
 	HTTPClient     *http.Client
-	Shutdown       func()
-	Disable        bool
+	// UpdatesDir 覆盖更新工作目录。留空时跟随数据目录（SQLite 所在目录），
+	// 只读根文件系统或数据目录不可写的部署可以用它指到别处。
+	UpdatesDir string
+	Shutdown   func()
+	Disable    bool
 	// Mirror 在直连 GitHub 慢或不通时给下载地址套一层加速前缀；nil 表示始终直连。
 	Mirror MirrorResolver
 
@@ -119,6 +122,7 @@ type ReleasePackageUpdater struct {
 	workingDir     string
 	arguments      []string
 	installRoot    string
+	updatesRoot    string
 	assetName      string
 	binaryName     string
 	httpClient     *http.Client
@@ -200,6 +204,19 @@ func expectedReleaseBinaryName(goos, _ string) string {
 	return name
 }
 
+// resolveUpdatesRoot 选出更新工作目录。容器里 /app 通常对运行用户只读，而数据
+// 目录本来就是挂进来的可写卷，所以默认跟着数据库走；没有数据库（不支持更新的
+// 部署）时才退回安装目录，保持宿主机部署的老路径不变。
+func resolveUpdatesRoot(override, databasePath, installRoot string) (string, error) {
+	if override = strings.TrimSpace(override); override != "" {
+		return filepath.Abs(override)
+	}
+	if databasePath != "" {
+		return filepath.Join(filepath.Dir(databasePath), ".diana-updates"), nil
+	}
+	return filepath.Join(installRoot, ".diana-updates"), nil
+}
+
 // NewReleasePackageUpdater detects whether the current process is running from
 // a complete Release package. Unsupported layouts return a usable updater whose
 // Status method reports ErrReleaseUpdateUnsupported; this keeps source and
@@ -261,6 +278,10 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	if starter == nil {
 		starter = startDetachedReleaseHelper
 	}
+	updatesRoot, err := resolveUpdatesRoot(options.UpdatesDir, databasePath, installRoot)
+	if err != nil {
+		return nil, err
+	}
 	u := &ReleasePackageUpdater{
 		currentVersion: strings.TrimSpace(options.CurrentVersion),
 		executable:     absExecutable,
@@ -270,6 +291,7 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 		workingDir:     workingDir,
 		arguments:      append([]string(nil), options.Arguments...),
 		installRoot:    installRoot,
+		updatesRoot:    updatesRoot,
 		assetName:      ExpectedReleaseAssetName(goos, goarch),
 		binaryName:     binaryName,
 		httpClient:     client,
@@ -358,7 +380,7 @@ func (u *ReleasePackageUpdater) Status(context.Context) (Status, error) {
 			status.DownloadPercent = 100
 		}
 	}
-	if state, ok := readReleaseState(u.installRoot); ok {
+	if state, ok := readReleaseState(u.updatesDir()); ok {
 		status.LastUpdateAt = state.At
 		status.LastUpdateStatus = state.Status
 		status.LastUpdateVersion = state.TargetVersion
@@ -431,10 +453,13 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	}
 	u.removePendingUpdate()
 
-	updatesRoot := filepath.Join(u.installRoot, ".diana-updates")
+	updatesRoot := u.updatesDir()
 	if err := os.MkdirAll(updatesRoot, 0o700); err != nil {
 		return Result{}, fmt.Errorf("create update workspace: %w", err)
 	}
+	// 走到这里已经没有待安装的计划，工作目录里剩下的暂存目录都是上一次中断
+	// 留下的半成品，留着只会占盘，清掉再开新的。
+	removeStaleStageDirs(updatesRoot)
 	workRoot, err := os.MkdirTemp(updatesRoot, "stage-")
 	if err != nil {
 		return Result{}, err
@@ -520,6 +545,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		CurrentVersion:   u.currentVersion,
 		TargetVersion:    release.Tag,
 		InstallRoot:      u.installRoot,
+		UpdatesRoot:      updatesRoot,
 		WorkRoot:         workRoot,
 		BackupRoot:       filepath.Join(updatesRoot, "backups", backupName),
 		ExecutablePath:   u.executable,
@@ -636,8 +662,29 @@ func (u *ReleasePackageUpdater) Install(ctx context.Context, release ReleasePack
 	return u.InstallDownloaded(ctx)
 }
 
+// updatesDir 是这个实例的更新工作目录。零值实例（测试里直接构造的）回落到
+// 安装目录下的老路径，正式构造路径总会填好这个字段。
+func (u *ReleasePackageUpdater) updatesDir() string {
+	if root := strings.TrimSpace(u.updatesRoot); root != "" {
+		return root
+	}
+	return filepath.Join(u.installRoot, ".diana-updates")
+}
+
+func removeStaleStageDirs(updatesRoot string) {
+	entries, err := os.ReadDir(updatesRoot)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "stage-") {
+			_ = os.RemoveAll(filepath.Join(updatesRoot, entry.Name()))
+		}
+	}
+}
+
 func (u *ReleasePackageUpdater) pendingUpdatePath() string {
-	return filepath.Join(u.installRoot, ".diana-updates", "pending-update.json")
+	return filepath.Join(u.updatesDir(), "pending-update.json")
 }
 
 func (u *ReleasePackageUpdater) pendingUpdate() (pendingReleaseUpdate, bool) {
@@ -649,7 +696,7 @@ func (u *ReleasePackageUpdater) pendingUpdate() (pendingReleaseUpdate, bool) {
 	defer file.Close()
 	decoder := json.NewDecoder(io.LimitReader(file, maxChecksumBytes))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&pending) != nil || pending.Schema != 1 || !releaseTagPattern.MatchString(pending.TargetVersion) || !filepath.IsAbs(pending.PlanPath) || !pathWithin(filepath.Join(u.installRoot, ".diana-updates"), pending.PlanPath) {
+	if decoder.Decode(&pending) != nil || pending.Schema != 1 || !releaseTagPattern.MatchString(pending.TargetVersion) || !filepath.IsAbs(pending.PlanPath) || !pathWithin(u.updatesDir(), pending.PlanPath) {
 		return pendingReleaseUpdate{}, false
 	}
 	if _, err := readReleaseApplyPlan(pending.PlanPath); err != nil {
@@ -661,7 +708,7 @@ func (u *ReleasePackageUpdater) pendingUpdate() (pendingReleaseUpdate, bool) {
 func (u *ReleasePackageUpdater) removePendingUpdate() {
 	pending, ok := u.pendingUpdate()
 	if ok {
-		if plan, err := readReleaseApplyPlan(pending.PlanPath); err == nil && pathWithin(filepath.Join(u.installRoot, ".diana-updates"), plan.WorkRoot) {
+		if plan, err := readReleaseApplyPlan(pending.PlanPath); err == nil && pathWithin(u.updatesDir(), plan.WorkRoot) {
 			_ = os.RemoveAll(plan.WorkRoot)
 		}
 	}

@@ -310,7 +310,7 @@ func TestApplyReleasePlanBacksUpAndSwitchesHealthyPackage(t *testing.T) {
 	if !process.released || process.stopped {
 		t.Fatalf("process = %#v", process)
 	}
-	state, ok := readReleaseState(plan.InstallRoot)
+	state, ok := readReleaseState(plan.updatesDir())
 	if !ok || state.Status != "healthy" || state.TargetVersion != "v0.5.0" {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
 	}
@@ -357,7 +357,7 @@ func TestApplyReleasePlanRestoresPackageAndDatabaseAfterFailedHealthCheck(t *tes
 	if !processes[0].stopped || !processes[1].released {
 		t.Fatalf("process states = %#v", processes)
 	}
-	state, ok := readReleaseState(plan.InstallRoot)
+	state, ok := readReleaseState(plan.updatesDir())
 	if !ok || state.Status != "rolled_back" || !strings.Contains(state.Error, "new version unhealthy") {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
 	}
@@ -409,7 +409,7 @@ func TestReleaseFailureCountPersistsForSameTargetAndResetsForNewTarget(t *testin
 		if err := writeReleaseState(plan, failed); err != nil {
 			t.Fatal(err)
 		}
-		state, ok := readReleaseState(plan.InstallRoot)
+		state, ok := readReleaseState(plan.updatesDir())
 		if !ok || state.FailureCount != want {
 			t.Fatalf("failure %d state = %#v, ok = %v", want, state, ok)
 		}
@@ -420,7 +420,7 @@ func TestReleaseFailureCountPersistsForSameTargetAndResetsForNewTarget(t *testin
 	if err := writeReleaseState(plan, releaseUpdateState{TargetVersion: "v0.6.0", Status: "downloaded", At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	state, ok := readReleaseState(plan.InstallRoot)
+	state, ok := readReleaseState(plan.updatesDir())
 	if !ok || state.FailureCount != 0 {
 		t.Fatalf("new target state = %#v, ok = %v", state, ok)
 	}
@@ -450,7 +450,7 @@ func TestApplyReleasePlanRestartsOldVersionWhenUpdatedProcessCannotLaunch(t *tes
 	if launches != 2 || !oldProcess.released {
 		t.Fatalf("launches = %d, old process = %#v", launches, oldProcess)
 	}
-	state, ok := readReleaseState(plan.InstallRoot)
+	state, ok := readReleaseState(plan.updatesDir())
 	if !ok || state.Status != "rolled_back" || !strings.Contains(state.Error, "cannot start") {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
 	}
@@ -605,7 +605,7 @@ func TestApplyReleasePlanDelegatesRestartToServiceManager(t *testing.T) {
 	}
 	assertUpdaterTestContent(t, plan.ExecutablePath, "new-binary")
 	// 文件必须在请求重启之前就换好，否则管理器拉起来的还是旧版本。
-	state, ok := readReleaseState(plan.InstallRoot)
+	state, ok := readReleaseState(plan.updatesDir())
 	if !ok || state.Status != "healthy" {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
 	}
@@ -640,7 +640,7 @@ func TestApplyReleasePlanRollsBackThroughServiceManager(t *testing.T) {
 		t.Fatalf("restarts = %d, want 2 (updated, then restored)", restarts)
 	}
 	assertUpdaterTestContent(t, plan.ExecutablePath, "old-binary")
-	state, ok := readReleaseState(plan.InstallRoot)
+	state, ok := readReleaseState(plan.updatesDir())
 	if !ok || state.Status != "rolled_back" {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
 	}

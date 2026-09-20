@@ -8,12 +8,14 @@ import vue from "@vitejs/plugin-vue";
 //（/api/...、/onebot/...）。
 const backendTarget = process.env.VITE_BACKEND_TARGET || "http://127.0.0.1:18080";
 const basePath = process.env.VITE_BASE_PATH || "/";
+// 端口默认 5174，PORT 可以改：同一份仓库开多个工作区时，5174 只够一个人用。
+const devPort = Number(process.env.PORT) || 5174;
 
 export default defineConfig({
   base: basePath,
   plugins: [vue()],
   server: {
-    port: 5174,
+    port: devPort,
     strictPort: false,
     proxy: {
       "/api": backendTarget,
