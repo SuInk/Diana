@@ -481,21 +481,22 @@ func TestRepositoryIssueWriteNeverReachesGitHubBeforeConfirmation(t *testing.T) 
 
 func TestRepositoryIssueConfirmationCodeMustBeTypedByTheUser(t *testing.T) {
 	const draftID = "a1b2c3d4e5f6a1b2c3d4e5f6"
+	draft := repositoryIssueDraft{ID: draftID}
 	code := repositoryIssueConfirmationCode(draftID)
 	if len(code) != repositoryIssueConfirmationCodeLength {
 		t.Fatalf("confirmation code = %q", code)
 	}
-	if !repositoryIssueRequestConfirms("确认 "+code, draftID) {
+	if !repositoryIssueRequestConfirms("确认 "+code, draft) {
 		t.Fatal("typed confirmation code was not accepted")
 	}
 	// 措辞不再构成确认：只有原样打出确认码才算。
 	for _, text := range []string{"同意", "批准创建", "approve", "确认 a1b2c4"} {
-		if repositoryIssueRequestConfirms(text, draftID) {
+		if repositoryIssueRequestConfirms(text, draft) {
 			t.Fatalf("wording alone confirmed the draft: %q", text)
 		}
 	}
 	// 确认码不能是更长串的一部分，避免随手贴的哈希误触发。
-	if repositoryIssueRequestConfirms("build "+code+"7788", draftID) {
+	if repositoryIssueRequestConfirms("build "+code+"7788", draft) {
 		t.Fatal("confirmation code matched inside a longer token")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 )
@@ -53,6 +54,61 @@ func (s *SQLiteStore) RepositoryIssueDraft(ctx context.Context, id string) (assi
 		return assistant.RepositoryIssueDraft{}, false, fmt.Errorf("decode repository issue draft: %w", err)
 	}
 	return draft, true, nil
+}
+
+// DeleteRepositoryIssueDraft 删掉一条草稿记录。删的只是本地记录，
+// 已经写进 GitHub 的 Issue 不受影响。
+func (s *SQLiteStore) DeleteRepositoryIssueDraft(ctx context.Context, id string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("storage: repository issue draft store unavailable")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false, fmt.Errorf("storage: empty repository issue draft id")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM repository_issue_drafts WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete repository issue draft: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete repository issue draft: %w", err)
+	}
+	return affected > 0, nil
+}
+
+// PruneRepositoryIssueDrafts 删掉过期太久的待审批草稿。
+//
+// 过期的草稿不能确认也不能还原，留着只是记录；超过保留期就没有查阅价值了。
+// 已创建和已取消的草稿是操作留痕，不在清理范围内。
+func (s *SQLiteStore) PruneRepositoryIssueDrafts(ctx context.Context, createdBefore time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("storage: repository issue draft store unavailable")
+	}
+	if createdBefore.IsZero() {
+		return 0, nil
+	}
+	var deleted int64
+	cutoff := createdBefore.UTC().UnixNano()
+	for {
+		result, err := s.db.ExecContext(ctx, `DELETE FROM repository_issue_drafts WHERE id IN (
+SELECT id FROM repository_issue_drafts WHERE status = 'pending' AND created_at < ?
+ORDER BY created_at LIMIT 500)`, cutoff)
+		if err != nil {
+			return deleted, fmt.Errorf("prune repository issue drafts: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return deleted, fmt.Errorf("prune repository issue drafts: %w", err)
+		}
+		deleted += affected
+		if affected < 500 {
+			return deleted, nil
+		}
+		if ctx.Err() != nil {
+			return deleted, ctx.Err()
+		}
+	}
 }
 
 func (s *SQLiteStore) ListRepositoryIssueDrafts(ctx context.Context, groupID, status string) ([]assistant.RepositoryIssueDraft, error) {

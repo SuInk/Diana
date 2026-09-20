@@ -442,6 +442,10 @@ export interface RepositoryIssueDraft {
   requester_name?: string;
   input: { title?: string; body?: string; labels?: string[] };
   status: "pending" | "created" | "cancelled";
+  /** 待审批草稿的失效时刻，过期后群里的确认码不再可用，可在后台还原。 */
+  expires_at?: string;
+  /** 当前确认码；后台还原过期草稿会换成新的。历史草稿没有这个字段，按草稿 ID 前六位取。 */
+  confirmation_code?: string;
   issue_number?: number;
   issue_url?: string;
   resolved_by?: string;
@@ -1450,6 +1454,38 @@ export function createRepositoryIssue(input: RepositoryIssueCreateInput, profile
 
 export function listRepositoryIssueDrafts(status = "all"): Promise<{ drafts: RepositoryIssueDraft[] }> {
   return requestJSON<{ drafts: RepositoryIssueDraft[] }>(`/api/assistant/plugins/repository-publish/drafts?status=${encodeURIComponent(status)}`);
+}
+
+export function restoreRepositoryIssueDraft(id: string, profileID = ""): Promise<{ draft: RepositoryIssueDraft }> {
+  return requestJSON<{ draft: RepositoryIssueDraft }>(
+    `/api/assistant/plugins/repository-publish/drafts/${encodeURIComponent(id)}/restore?profile=${encodeURIComponent(profileID)}`,
+    { method: "POST" }
+  );
+}
+
+export function editRepositoryIssueDraft(
+  id: string,
+  input: { title: string; body: string; labels: string[] },
+  profileID = ""
+): Promise<{ draft: RepositoryIssueDraft }> {
+  return requestJSON<{ draft: RepositoryIssueDraft }>(
+    `/api/assistant/plugins/repository-publish/drafts/${encodeURIComponent(id)}?profile=${encodeURIComponent(profileID)}`,
+    { method: "PATCH", body: JSON.stringify(input) }
+  );
+}
+
+export function deleteRepositoryIssueDraft(id: string, profileID = ""): Promise<{ deleted: boolean }> {
+  return requestJSON<{ deleted: boolean }>(
+    `/api/assistant/plugins/repository-publish/drafts/${encodeURIComponent(id)}?profile=${encodeURIComponent(profileID)}`,
+    { method: "DELETE" }
+  );
+}
+
+export function publishRepositoryIssueDraft(id: string, profileID = ""): Promise<RepositoryIssueCreateResult> {
+  return requestJSON<RepositoryIssueCreateResult>(
+    `/api/assistant/plugins/repository-publish/drafts/${encodeURIComponent(id)}/publish?profile=${encodeURIComponent(profileID)}`,
+    { method: "POST" }
+  );
 }
 
 export function listPluginDependencies(refresh = false): Promise<PluginDependencyResponse> {
