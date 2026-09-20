@@ -2354,6 +2354,10 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			allowed, chatReply = false, false
 		}
 		event.proactiveReply, event.chatInReply = allowed, chatReply
+		// 相关度分支放行的回复在正文里可能既没有 @ 也没有名字，空转判断本来看不见
+		// 它们（botReplyLoopCandidate 只认结构触发）。把模型的 directed 结论带下去，
+		// 那道闸才管得到这一支。
+		event.routingDirected = parseErr == nil && ratings.Relevance.Directed != nil && *ratings.Relevance.Directed
 		if parseErr != nil {
 			event.routingReason = "接话评分格式无效，已保持沉默：" + parseErr.Error()
 		} else {
@@ -3937,7 +3941,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply == "" {
 		if controlIntent.SuppressCurrentUser {
-			reply = "为避免继续自动循环，我会暂停响应此账号约 30 分钟"
+			// 模型只吐了个处置标志、没有正文。以前在这里补一句写死的「我会暂停响应
+			// 此账号约 30 分钟」发出去，那读起来是系统弹窗不是说话。改成：暂停就地
+			// 生效（后面的发送路径不会再走到，applyReplyControlAfterSend 没有机会
+			// 执行），再由 sendReplyPauseHint 用人设写一句自然的提示；写不出来就
+			// 不说，不退回模板。
+			guardedCtx := withReplySuppressionSendGuard(ctx)
+			r.applyReplyControlAfterSend(guardedCtx, event, "", controlIntent)
+			if item, active := r.activeReplySuppression(event, time.Now()); active {
+				r.sendReplyPauseHint(guardedCtx, event, item)
+			}
+			return "", errReplySuppressedBeforeSend
 		} else if controlIntent.RefuseCurrent {
 			reply = "这条消息我暂时不想回答，我们换个话题吧"
 		} else if pending := imageAnnouncements.drain(); pending != "" {
