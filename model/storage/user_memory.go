@@ -14,7 +14,10 @@ import (
 )
 
 const (
-	defaultUserFavorability = 0
+	// defaultUserFavorability 给新人一个小正分作起点，不从零开始：取消「20 分以下
+	// 自然增长」之后，好感度只由真实的善意与恶意驱动，起点为零会让每个新人
+	// 一开口就贴着负分边界。10 分是「陌生但无恶意」。
+	defaultUserFavorability = 10
 	// ownerUserFavorability 是主人的起始分，不是下限：主人一上来就是满信任，
 	// 但之后照样按互动记录涨落。等级由身份决定（见 RelationshipPolicyFor），
 	// 所以分数掉下来也不会把主人降级，只是如实反映最近处得怎么样。

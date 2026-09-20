@@ -82,7 +82,7 @@ func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 	if _, found := registry.Get("llm_config"); !found {
 		t.Fatal("model configuration tool hidden from username owner")
 	}
-	if prompt := r.systemPrompt(event, nil); !strings.Contains(prompt, "当前发言者是主人") {
+	if prompt := r.systemPrompt(event, nil); !strings.Contains(prompt, "【当前发言者身份】主人") {
 		t.Fatal("model prompt still treats owner as ordinary member")
 	}
 	if _, err := newTestLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "new"}); err != nil {

@@ -83,10 +83,6 @@ func (t *dianaScheduleTool) Run(_ context.Context, input map[string]any) (string
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana schedule: runtime is not configured")
 	}
-	policy := t.runtime.relationshipPolicy(context.Background(), t.event)
-	if !policy.AllowPersonalSchedule {
-		return "", fmt.Errorf("好感度不足：当前关系等级为“%s”，尚未解锁个人定时订阅", policy.Name)
-	}
 	targetID, err := taskTargetUserID(context.Background(), t.runtime, t.event, input)
 	if err != nil {
 		return "", err
@@ -251,9 +247,6 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 	}
 	policy := r.relationshipPolicy(context.Background(), event)
 	limit := policy.personalScheduleLimit()
-	if limit == 0 {
-		return nil, fmt.Errorf("当前关系等级为“%s”，没有个人定时订阅权限", policy.Name)
-	}
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -265,7 +258,7 @@ func (r *Runtime) addScheduledQueries(event MessageEvent, requests []scheduleCre
 	}
 	remaining := limit - count
 	if remaining <= 0 {
-		return nil, fmt.Errorf("当前关系等级最多创建 %d 个定时订阅，额度已满", limit)
+		return nil, fmt.Errorf("当前最多可创建 %d 个定时订阅，额度已满", limit)
 	}
 	if len(requests) > remaining {
 		requests = requests[:remaining]
