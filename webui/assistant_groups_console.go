@@ -36,6 +36,14 @@ type consoleGroupItem struct {
 	MaxMemberCount int    `json:"max_member_count,omitempty"`
 	Configured     bool   `json:"configured"`
 	Joined         bool   `json:"joined"`
+	// SharedWith 是复用同一条连接、并且在这个群也开着的其它机器人。
+	// 同一个平台账号上多台机器人都放行一个群，这个群就会收到多份回复。
+	SharedWith []consoleGroupSharedBot `json:"shared_with,omitempty"`
+}
+
+type consoleGroupSharedBot struct {
+	BotProfileID string `json:"bot_profile_id"`
+	Name         string `json:"name,omitempty"`
 }
 
 type consoleGroupSavePayload struct {
@@ -46,9 +54,108 @@ type consoleGroupSavePayload struct {
 func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	router.GET("/api/assistant/groups", h.listConsoleGroups)
 	router.POST("/api/assistant/groups", h.saveConsoleGroup)
+	router.POST("/api/assistant/groups/switches", h.saveConsoleGroupSwitches)
 	router.DELETE("/api/assistant/groups/:id", h.deleteConsoleGroup)
 	router.GET("/api/assistant/groups/:id/relations", h.groupRelationGraph)
 	router.GET("/api/assistant/groups/:id/avatar", h.groupAvatar)
+}
+
+// consoleGroupSwitchesPayload 是群管理页那排批量操作：一键开关当前列出的群，
+// 以及「新加入的群默认工作吗」。
+//
+// 作用范围由前端把当前看到的群号发上来决定，而不是后端自己去拉一份群列表：
+// 用户按下「全部停用」时看到的是哪几个群，改的就该是那几个群。
+type consoleGroupSwitchesPayload struct {
+	BotProfileID    string   `json:"bot_profile_id"`
+	GroupIDs        []string `json:"group_ids,omitempty"`
+	Enabled         *bool    `json:"enabled,omitempty"`
+	NewGroupEnabled *bool    `json:"new_group_enabled,omitempty"`
+}
+
+func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
+	var payload consoleGroupSwitchesPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "groups_switches", err, "", nil)
+		return
+	}
+	profileID, profileName, err := h.consoleGroupProfile(payload.BotProfileID)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "groups_switches", err, "", nil)
+		return
+	}
+	if payload.NewGroupEnabled != nil {
+		if err := h.saveNewGroupDefault(profileID, *payload.NewGroupEnabled); err != nil {
+			h.writeError(c, http.StatusInternalServerError, "groups_switches", err, "", map[string]any{"bot_profile_id": profileID})
+			return
+		}
+		recordRequestOperation(c, h.logs, "groups_switches", newGroupDefaultAudit(*payload.NewGroupEnabled), "", map[string]any{"bot_profile_id": profileID, "bot_profile_name": profileName})
+	}
+	updated := 0
+	if payload.Enabled != nil {
+		base := h.botConfigForProfile(profileID)
+		for _, groupID := range payload.GroupIDs {
+			groupID = strings.TrimSpace(groupID)
+			if _, err := strconv.ParseInt(groupID, 10, 64); err != nil {
+				continue
+			}
+			cfg, ok := h.groupConfigs.ConfigForGroup(profileID, groupID)
+			if !ok {
+				cfg = assistant.DefaultGroupConfig(groupID, base)
+			}
+			cfg.BotProfileID, cfg.GroupID = profileID, groupID
+			if ok && cfg.WithDefaults(groupID, base).Enabled == *payload.Enabled && cfg.EnabledSet {
+				continue
+			}
+			cfg.Enabled, cfg.EnabledSet = *payload.Enabled, true
+			if _, err := h.groupConfigs.SaveGroupConfig(cfg, base); err != nil {
+				h.writeError(c, http.StatusInternalServerError, "groups_switches", err, groupID, map[string]any{"bot_profile_id": profileID})
+				return
+			}
+			updated++
+		}
+		if updated > 0 {
+			action := "群管理批量停用"
+			if *payload.Enabled {
+				action = "群管理批量启用"
+			}
+			recordRequestOperation(c, h.logs, "groups_switches", fmt.Sprintf("%s %d 个群", action, updated), "", map[string]any{"bot_profile_id": profileID, "bot_profile_name": profileName})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": updated})
+}
+
+func newGroupDefaultAudit(enabled bool) string {
+	if enabled {
+		return "新加入的群默认工作"
+	}
+	return "新加入的群默认不工作"
+}
+
+// saveNewGroupDefault 改这台机器人的新群默认，并让运行时立刻用上。
+func (h *BotHandler) saveNewGroupDefault(profileID string, enabled bool) error {
+	if h.profiles == nil {
+		return fmt.Errorf("配置存储不可用")
+	}
+	mode := assistant.GroupAdmissionWhitelist
+	if enabled {
+		mode = assistant.GroupAdmissionBlacklist
+	}
+	set := h.profiles.Profiles().WithDefaults()
+	found := false
+	for index := range set.Profiles {
+		if set.Profiles[index].ID != profileID {
+			continue
+		}
+		set.Profiles[index].GroupAdmission = assistant.GroupAdmission{Mode: mode}.WithDefaults()
+		found = true
+		if err := h.profiles.SaveProfileConfig(set.Profiles[index]); err != nil {
+			return err
+		}
+	}
+	if !found {
+		return fmt.Errorf("机器人不存在")
+	}
+	return h.applyProfileSet(set)
 }
 
 func (h *BotHandler) deleteConsoleGroup(c *gin.Context) {
@@ -145,6 +252,7 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	groups := mergeConsoleGroupItems(base, set, liveGroups, h.isOneBotProfile, h.botConfigResolver())
 	for index := range groups {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
+		groups[index].SharedWith = h.groupSharedBots(profileID, groups[index].GroupID)
 	}
 	c.JSON(http.StatusOK, consoleGroupsResponse{
 		Groups:        groups,
@@ -152,6 +260,60 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 		LiveAvailable: liveAvailable,
 		Warning:       warning,
 	})
+}
+
+// groupSharedBots 找出复用同一条连接、在这个群也开着的其它机器人。
+//
+// 复用连接的机器人共用一个平台账号，一条群消息交给每一台，各自按自己的群开关
+// 决定回不回。两台都开着这个群，群里就会收到两份回复——这件事只有把几台放在
+// 一起看才看得出来，单台的配置页永远显示正常。
+//
+// 选了「全部机器人」时不算：那个视图里每个群本来就会按机器人各列一遍。
+func (h *BotHandler) groupSharedBots(profileID, groupID string) []consoleGroupSharedBot {
+	profileID, groupID = strings.TrimSpace(profileID), strings.TrimSpace(groupID)
+	if profileID == "" || groupID == "" || h.profiles == nil {
+		return nil
+	}
+	set := h.profiles.Profiles().WithDefaults()
+	connection := ""
+	for _, profile := range set.Profiles {
+		if profile.ID == profileID {
+			connection = profile.ConnectionProfileID
+			if connection == "" {
+				connection = profile.ID
+			}
+			break
+		}
+	}
+	if connection == "" {
+		return nil
+	}
+	var shared []consoleGroupSharedBot
+	for _, profile := range set.Profiles {
+		if profile.ID == profileID || !profile.Enabled {
+			continue
+		}
+		other := profile.ConnectionProfileID
+		if other == "" {
+			other = profile.ID
+		}
+		if other != connection {
+			continue
+		}
+		if h.groupWorksForProfile(profile, groupID) {
+			shared = append(shared, consoleGroupSharedBot{BotProfileID: profile.ID, Name: profile.Name})
+		}
+	}
+	return shared
+}
+
+// groupWorksForProfile 复读一遍运行时那条判据：有群配置就看它的开关，没有就
+// 按这台机器人的新群默认。
+func (h *BotHandler) groupWorksForProfile(profile assistant.BotConfig, groupID string) bool {
+	if cfg, ok := h.groupConfigs.ConfigForGroup(profile.ID, groupID); ok {
+		return cfg.WithDefaults(groupID, profile).Enabled
+	}
+	return profile.GroupAdmission.NewGroupEnabled()
 }
 
 // consoleGroupSources 按当前作用域决定群列表从哪来。

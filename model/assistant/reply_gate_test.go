@@ -44,43 +44,60 @@ func TestReplyGateAbsentKeepsLegacyBehaviour(t *testing.T) {
 	}
 }
 
-func TestGroupAdmissionWhitelist(t *testing.T) {
+// 新群默认不工作（原来的白名单模式）：没有群配置的群一律不回，
+// 有群配置并且开着的群照常工作。逐群开关只有群配置那一份。
+func TestNewGroupDefaultOff(t *testing.T) {
 	rt := gateRuntime(t, BotConfig{
-		BotAccount: "42",
-		GroupAdmission: GroupAdmission{
-			Mode:          GroupAdmissionWhitelist,
-			AllowedGroups: []string{"100"},
-		},
+		BotAccount:     "42",
+		GroupAdmission: GroupAdmission{Mode: GroupAdmissionWhitelist},
 	}, time.Now())
+	store := &testWritableGroupConfigStore{}
+	if _, err := store.SaveGroupConfig(GroupConfig{GroupID: "100", Enabled: true, EnabledSet: true}, BotConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	rt.SetGroupConfigStore(store)
 
 	if !rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "100", ToMe: true}, "hi") {
-		t.Fatal("白名单内的群应触发")
+		t.Fatal("开着的群应触发")
 	}
 	if rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "200", ToMe: true}, "hi") {
-		t.Fatal("白名单外的群不该触发")
+		t.Fatal("没有群配置的群在新群默认关时不该触发")
 	}
-	// 白名单模式下私聊不受影响。
+	// 新群默认只管群聊，私聊不受影响。
 	if !rt.shouldHandle(MessageEvent{Kind: EventKindPrivate, UserID: "7"}, "hi") {
-		t.Fatal("私聊不该被群白名单影响")
+		t.Fatal("私聊不该被新群默认影响")
 	}
 }
 
-// 白名单和 DisabledGroups 叠加：先过白名单，再过黑名单。
-func TestGroupAdmissionWhitelistStillHonoursDisabledGroups(t *testing.T) {
-	rt := gateRuntime(t, BotConfig{
-		BotAccount:     "42",
-		DisabledGroups: []string{"100"},
-		GroupAdmission: GroupAdmission{
-			Mode:          GroupAdmissionWhitelist,
-			AllowedGroups: []string{"100", "200"},
-		},
-	}, time.Now())
+// 群配置里关掉的群不工作，哪怕新群默认是开的。
+func TestGroupConfigSwitchOverridesNewGroupDefault(t *testing.T) {
+	rt := gateRuntime(t, BotConfig{BotAccount: "42"}, time.Now())
+	store := &testWritableGroupConfigStore{}
+	if _, err := store.SaveGroupConfig(GroupConfig{GroupID: "100", Enabled: false, EnabledSet: true}, BotConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	rt.SetGroupConfigStore(store)
 
 	if rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "100", ToMe: true}, "hi") {
-		t.Fatal("白名单内但被单独禁用的群不该触发")
+		t.Fatal("群配置里关掉的群不该触发")
 	}
 	if !rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "200", ToMe: true}, "hi") {
-		t.Fatal("白名单内未禁用的群应触发")
+		t.Fatal("没有群配置的群在新群默认开时应触发")
+	}
+}
+
+// 迁移之前写下的 DisabledGroups 还要再认一个版本，否则升级上来的那一瞬间
+// 被聊天指令停用过的群会重新开口。
+func TestLegacyDisabledGroupsStillBlock(t *testing.T) {
+	rt := gateRuntime(t, BotConfig{BotAccount: "42", DisabledGroups: []string{"100"}}, time.Now())
+	store := &testWritableGroupConfigStore{}
+	if _, err := store.SaveGroupConfig(GroupConfig{GroupID: "100", Enabled: true, EnabledSet: true}, BotConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	rt.SetGroupConfigStore(store)
+
+	if rt.shouldHandle(MessageEvent{Kind: EventKindGroup, GroupID: "100", ToMe: true}, "hi") {
+		t.Fatal("老的禁用群名单仍该拦住")
 	}
 }
 

@@ -997,37 +997,10 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label for="bot-admission-mode">群准入模式</label>
-                <AppSelect
-                  id="bot-admission-mode"
-                  :model-value="admissionMode"
-                  :options="admissionModeOptions"
-                  @update:model-value="setAdmissionMode($event as 'blacklist' | 'whitelist')"
-                />
-              </div>
-              <div v-if="admissionMode === 'whitelist'" class="field wide">
-                <label for="bot-allowed-groups">工作群白名单</label>
-                <IdChipInput
-                  input-id="bot-allowed-groups"
-                  v-model="allowedGroups"
-                  placeholder="填群号后回车"
-                  :resolve-names="resolveGroupNames"
-                />
-                <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
-              </div>
-              <div v-if="connectionGroupRoutes.length" class="field wide">
-                <label>这条连接上的群归属</label>
-                <ul class="stack" style="gap: 4px; margin: 0; padding-left: 18px">
-                  <li v-for="(member, index) in connectionGroupRoutes" :key="member.id || `draft-${index}`" class="hint">
-                    「{{ member.name }}」{{ member.editing ? "（这一台）" : "" }}：{{ memberScopeText(member) }}
-                  </li>
-                </ul>
-                <p v-for="overlap in shownGroupRouteOverlaps" :key="overlap.groupID" class="hint warn-text">{{ overlapText(overlap) }}</p>
-                <p v-if="hiddenGroupRouteOverlaps" class="hint warn-text">另有 {{ hiddenGroupRouteOverlaps }} 个群同样会收到多台回复。</p>
-                <p v-if="openScopeRoutes.length > 1" class="hint warn-text">
-                  这条连接上有 {{ openScopeRoutes.length }} 台不限群，任何群都会收到多台回复。给每台设置工作群白名单，就能按群分工。
+                <label>在哪些群工作</label>
+                <p class="hint">
+                  逐群开关在<a href="#" @click.prevent="navigate('groups')">群管理</a>里：一个群一个开关，还能一键全开全关，以及设定新加入的群默认工不工作。
                 </p>
-                <span class="hint">复用同一条连接的机器人共用一个平台账号，一条群消息每台都会收到，各自按这里的准入决定回不回。让一个群只有一台说话，就把它放进那一台的白名单，别的台不要放行。</span>
               </div>
               <div class="field wide">
                 <label for="bot-private-admission-mode">私聊准入模式</label>
@@ -1766,8 +1739,9 @@
 </template>
 
 <script setup lang="ts">
+import { navigate } from "../router";
 import { copyBotConfiguration } from "../bot-config-copy";
-import { connectionGroupMembers, findWebSocketConnectionConflict, groupRoutingOverlaps, openScopeMembers, type ConnectionGroupMember } from "../bot-connection-conflicts";
+import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -1810,7 +1784,6 @@ import {
   WORLD_BOOK_EXPORT_VERSION,
   type WorldBookNode,
   type WorldBookImportResult,
-  listBotGroups,
   getAgentDefaults,
   saveProfileEnabled,
   saveAllProfilesEnabled
@@ -1897,7 +1870,6 @@ const commandSandboxMode = computed<string>({
     if (form.value) form.value.agent_command_sandbox = value;
   }
 });
-const allowedGroups = ref<string[]>([]);
 const privateAllowedUsers = ref<string[]>([]);
 const oneBotHTTPSecretDraft = ref("");
 const telegramTokenDraft = ref("");
@@ -2659,19 +2631,9 @@ function setParticipation(value: ParticipationPreferences | undefined): void {
   form.value.participation = value;
 }
 
-const admissionModeOptions: AppSelectOption[] = [
-  { value: "blacklist", label: "黑名单（默认）", hint: "除禁用群外都工作" },
-  { value: "whitelist", label: "白名单", hint: "只在指定群工作" }
-];
-
+// 新群默认在群管理里改，这里只是把读到的值原样带回去：保存机器人配置不该
+// 顺手把它重置成默认的「新群照常工作」。
 const admissionMode = computed(() => form.value?.group_admission?.mode ?? "blacklist");
-
-function setAdmissionMode(mode: "blacklist" | "whitelist"): void {
-  if (!form.value) {
-    return;
-  }
-  form.value.group_admission = { ...(form.value.group_admission ?? {}), mode };
-}
 
 const privateAdmissionModeOptions: AppSelectOption[] = [
   { value: "all", label: "所有人（默认）", hint: "任何用户的私聊都会响应" },
@@ -2730,28 +2692,6 @@ async function beginCopyProfile(source: BotProfileConfig): Promise<void> {
   }
 }
 const connectionConflict = computed(() => form.value ? findWebSocketConnectionConflict(form.value, profiles.value) : undefined);
-
-// 群归属按手上这份草稿算：准入模式和白名单在保存前只存在于表单里，
-// 读 form 里那份旧值会让提示慢一步，改完了还在说上一次的冲突。
-const connectionGroupRoutes = computed<ConnectionGroupMember[]>(() => form.value
-  ? connectionGroupMembers({ ...form.value, group_admission: { mode: admissionMode.value, allowed_groups: [...allowedGroups.value] } }, profiles.value)
-  : []);
-const groupRouteOverlaps = computed(() => groupRoutingOverlaps(connectionGroupRoutes.value));
-const openScopeRoutes = computed(() => openScopeMembers(connectionGroupRoutes.value));
-// 冲突按群列，群多了会把整页顶开，列几条讲清是什么问题就够，剩下的说个数。
-const shownGroupRouteOverlaps = computed(() => groupRouteOverlaps.value.slice(0, 3));
-const hiddenGroupRouteOverlaps = computed(() => Math.max(0, groupRouteOverlaps.value.length - shownGroupRouteOverlaps.value.length));
-function overlapText(overlap: { groupID: string; members: ConnectionGroupMember[] }): string {
-  return `群 ${overlap.groupID} 会同时收到${overlap.members.map((member) => `「${member.name}」`).join("")}的回复。`;
-}
-function memberScopeText(member: ConnectionGroupMember): string {
-  const disabled = member.disabledGroups.length ? `，禁用 ${member.disabledGroups.length} 个群` : "";
-  if (!member.whitelist) return `不限群${disabled}`;
-  if (!member.allowedGroups.length) return "白名单还是空的，任何群都不回";
-  const shown = member.allowedGroups.slice(0, 5).join("、");
-  const rest = member.allowedGroups.length - 5;
-  return `只在 ${shown}${rest > 0 ? ` 等 ${member.allowedGroups.length} 个群` : ""}${disabled}`;
-}
 function reuseConflictingConnection(): void {
   const source = connectionConflict.value;
   if (!form.value || !source?.id || connectionUsers(form.value).length) return;
@@ -3472,7 +3412,6 @@ function setForm(config: BotProfileConfig): void {
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
-  allowedGroups.value = [...(config.group_admission?.allowed_groups ?? [])];
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
   for (const draft of Object.values(tokenDrafts)) {
     draft.value = "";
@@ -3497,29 +3436,6 @@ function setForm(config: BotProfileConfig): void {
 function applyConfig(config: BotProfileConfig): void {
   profileSet.value = config;
   setForm(config);
-}
-
-// 群名只在白名单里有群号时才需要，所以群列表懒加载一次就缓存住：
-// 这个页面平时不该为一个可能不显示的字段多发一次请求。
-// 拿不到（listBotGroups 本来就可能不可用）就退回只显示群号，不报错。
-let groupNamesCache: Promise<Record<string, string>> | null = null;
-
-function resolveGroupNames(ids: string[]): Promise<Record<string, string>> {
-  groupNamesCache ??= listBotGroups().then((response) => {
-    const names: Record<string, string> = {};
-    for (const group of response.groups ?? []) {
-      const name = (group.group_name ?? "").trim();
-      if (group.group_id && name !== "") names[group.group_id] = name;
-    }
-    return names;
-  });
-  return groupNamesCache.then((names) => {
-    const picked: Record<string, string> = {};
-    for (const id of ids) {
-      if (names[id]) picked[id] = names[id];
-    }
-    return picked;
-  });
 }
 
 function splitList(raw: string): string[] {
@@ -3740,10 +3656,7 @@ async function save(): Promise<void> {
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,
-      group_admission: {
-        mode: admissionMode.value,
-        allowed_groups: [...allowedGroups.value]
-      },
+      group_admission: { mode: admissionMode.value },
       private_admission: {
         mode: privateAdmissionMode.value,
         allowed_users: [...privateAllowedUsers.value]

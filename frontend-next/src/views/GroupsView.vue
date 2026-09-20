@@ -45,6 +45,21 @@
         </div>
       </div>
 
+      <div v-if="loaded && botScope" class="group-list-toolbar">
+        <div class="group-list-summary">
+          <label class="switch" :title="newGroupEnabled ? '新加入的群默认工作' : '新加入的群默认不工作'">
+            <input type="checkbox" :checked="newGroupEnabled" :disabled="bulkBusy" @change="setNewGroupDefault($event)" />
+            <span class="track" aria-hidden="true"></span>
+          </label>
+          <span>{{ newGroupEnabled ? "新加入的群默认工作" : "新加入的群默认不工作" }}</span>
+        </div>
+        <div class="group-list-actions">
+          <span class="muted">一键只改下面列出的 {{ filteredGroups.length }} 个群，新群仍按上面的默认</span>
+          <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(true)">全部启用</button>
+          <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(false)">全部停用</button>
+        </div>
+      </div>
+
       <div v-if="syncWarning" class="group-sync-warning" role="status">
         <WifiOff :size="16" aria-hidden="true" />
         <span>{{ syncWarning }}</span>
@@ -92,6 +107,9 @@
             <span v-else-if="group.configured && group.reply_account_safety_audit_enabled === true" class="badge accent">本群开启安全审核</span>
             <span v-if="group.configured && blockedUserCount(group) > 0" class="badge">屏蔽 {{ blockedUserCount(group) }} 人</span>
             <span v-if="group.configured && hasOtherReplyGateRules(group)" class="badge">专属回复规则</span>
+            <span v-if="group.shared_with?.length" class="badge warn" :title="sharedBotsTitle(group)">
+              同连接 {{ group.shared_with.length + 1 }} 台都在回
+            </span>
           </div>
           <p class="group-card-desc">
             {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
@@ -439,6 +457,7 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import { askConfirm } from "../confirm";
 import { botScope } from "../bot-scope";
 import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
 import {
@@ -446,6 +465,7 @@ import {
   getBotPlatforms,
   listBotGroups,
   saveBotGroup,
+  saveBotGroupSwitches,
   deleteBotGroup,
   getGroupRelations,
   fetchAssistantUserNames,
@@ -721,6 +741,7 @@ async function load(showFeedback = false): Promise<void> {
         ["", { name: current.name ?? "", prompt: current.system_prompt ?? "" }],
         ...(config.profiles ?? []).map((profile) => [profile.id, { name: profile.name ?? "", prompt: profile.system_prompt ?? "" }])
       ]);
+      newGroupEnabled.value = (current.group_admission?.mode ?? "blacklist") !== "whitelist";
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
@@ -882,6 +903,57 @@ function setPluginSettingOverrides(pluginID: string, values: Record<string, unkn
     overrides[pluginID] = values;
   }
   editing.value.plugin_setting_overrides = overrides;
+}
+
+// 新群默认和一键开关都写在机器人这一侧：前者是「没有群配置的群怎么办」，
+// 后者只作用于当前列出来的群，两者合起来才是完整的一份逐群开关。
+const newGroupEnabled = ref(true);
+const bulkBusy = ref(false);
+
+function sharedBotsTitle(group: BotGroupSummary): string {
+  const names = (group.shared_with ?? []).map((bot) => `「${bot.name || "未命名机器人"}」`).join("");
+  return `${names}复用同一条连接，在这个群也开着：群里会收到多份回复。要只留一台说话，把别的台在这个群关掉。`;
+}
+
+async function setNewGroupDefault(event: Event): Promise<void> {
+  const enabled = (event.target as HTMLInputElement).checked;
+  bulkBusy.value = true;
+  try {
+    await saveBotGroupSwitches({ bot_profile_id: botScope.value, new_group_enabled: enabled });
+    newGroupEnabled.value = enabled;
+    toastSuccess(enabled ? "新加入的群默认工作" : "新加入的群默认不工作");
+  } catch (error) {
+    (event.target as HTMLInputElement).checked = !enabled;
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
+async function setAllGroups(enabled: boolean): Promise<void> {
+  const groupIDs = filteredGroups.value.map((group) => group.group_id).filter(Boolean);
+  if (!groupIDs.length) {
+    return;
+  }
+  const ok = await askConfirm({
+    title: enabled ? "全部启用" : "全部停用",
+    message: `确定把下面列出的 ${groupIDs.length} 个群${enabled ? "全部启用" : "全部停用"}吗？新加入的群不受影响，仍按「新群默认」决定。`,
+    confirmLabel: enabled ? "全部启用" : "全部停用",
+    danger: !enabled
+  });
+  if (!ok) {
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    const result = await saveBotGroupSwitches({ bot_profile_id: botScope.value, group_ids: groupIDs, enabled });
+    toastSuccess(`已${enabled ? "启用" : "停用"} ${result.updated} 个群`);
+    await load();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
 }
 
 async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> {

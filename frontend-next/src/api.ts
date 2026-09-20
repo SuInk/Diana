@@ -209,7 +209,7 @@ export interface BotProfileConfig {
   /** 流式调用模型，用于统计首 token 时间；回复仍是攒齐了再发。不设等同关闭。 */
   llm_streaming_enabled?: boolean;
   disabled_groups?: string[];
-  /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
+  /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
   /** 私聊准入；不设等同 all，所有用户的私聊都会响应。 */
   private_admission?: PrivateAdmission;
@@ -563,13 +563,24 @@ export interface BotGroupSummary extends BotGroupConfig {
   max_member_count?: number;
   configured: boolean;
   joined: boolean;
+  /** 复用同一条连接、在这个群也开着的其它机器人：这个群会收到多份回复。 */
+  shared_with?: BotGroupSharedBot[];
 }
 
-/** 群准入模式：blacklist 为默认（除禁用群外都工作），whitelist 只在指定群工作。 */
+export interface BotGroupSharedBot {
+  bot_profile_id: string;
+  name?: string;
+}
+
+/**
+ * 新群默认：blacklist 表示新加入的群默认工作，whitelist 表示默认不工作。
+ * 逐群开关在群管理里，一个群一份，见 saveBotGroupSwitches。
+ */
 export type GroupAdmissionMode = "blacklist" | "whitelist";
 
 export interface GroupAdmission {
   mode?: GroupAdmissionMode;
+  /** @deprecated 已迁进群配置的逐群开关，后端不再写这份名单。 */
   allowed_groups?: string[];
 }
 
@@ -1729,6 +1740,22 @@ export function listBotGroups(refresh = false, profile = ""): Promise<ConsoleGro
   if (profile) params.set("profile", profile);
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
   return requestJSON<ConsoleGroupsResponse>(`/api/assistant/groups${suffix}`);
+}
+
+/**
+ * saveBotGroupSwitches 是群管理里那排批量操作：一键开关传进来的这些群，
+ * 以及「新加入的群默认工作吗」。两件事可以一起提交，也可以只提一件。
+ */
+export function saveBotGroupSwitches(payload: {
+  bot_profile_id: string;
+  group_ids?: string[];
+  enabled?: boolean;
+  new_group_enabled?: boolean;
+}): Promise<{ ok: boolean; updated: number }> {
+  return requestJSON<{ ok: boolean; updated: number }>("/api/assistant/groups/switches", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export function saveBotGroup(config: BotGroupConfig): Promise<{ config: BotGroupConfig }> {

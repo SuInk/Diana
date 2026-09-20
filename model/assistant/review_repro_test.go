@@ -165,6 +165,8 @@ func TestReviewRepro09_SharedConnectionDeliversPrivateMessageToOneProfile(t *tes
 func TestReviewRepro11_MultiBotChecksUseEventProfile(t *testing.T) {
 	newRuntime := func() *Runtime {
 		r := NewRuntime(BotConfig{ID: "a", OwnerID: "900", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, &testBotMarkersSaver{}, nil)
+		// 群开关落在群配置里，聊天指令要有地方写。
+		r.SetGroupConfigStore(&testWritableGroupConfigStore{})
 		r.SetProfiles(ProfileSet{Profiles: []BotConfig{
 			{ID: "a", OwnerID: "900", BotAccount: "42"},
 			{ID: "b", OwnerID: "901", BotAccount: "43", DisabledUsers: []string{"bad"}},

@@ -851,6 +851,24 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ config });
   }
 
+  if (path === "/api/assistant/groups/switches" && method === "POST") {
+    if (typeof body.new_group_enabled === "boolean") {
+      const mode = body.new_group_enabled ? "blacklist" : "whitelist";
+      assistantConfig = { ...assistantConfig, group_admission: { mode } };
+    }
+    let updated = 0;
+    if (typeof body.enabled === "boolean") {
+      const wanted = new Set((body.group_ids as string[] | undefined) ?? []);
+      for (const group of groups) {
+        if (!wanted.has(group.group_id) || group.enabled === body.enabled) continue;
+        group.enabled = body.enabled as boolean;
+        group.configured = true;
+        updated += 1;
+      }
+    }
+    return json({ ok: true, updated });
+  }
+
   if (path === "/api/assistant/users") {
     const keyword = (url.searchParams.get("q") ?? "").trim();
     const matched = demoUsers.filter((user) => !keyword || user.user_id.includes(keyword) || (user.display_name ?? "").includes(keyword));
