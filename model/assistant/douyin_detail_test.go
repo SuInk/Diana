@@ -53,6 +53,30 @@ func TestDouyinCookieValue(t *testing.T) {
 	}
 }
 
+func TestDouyinWebHeadersCarryCookieAndUifid(t *testing.T) {
+	t.Setenv("DIANA_DOUYIN_CK", "ttwid=abc; UIFID=deadbeef")
+	headers := douyinWebHeaders(context.Background(), "https://open.douyin.com/")
+	if headers["Cookie"] != "ttwid=abc; UIFID=deadbeef" {
+		t.Fatalf("Cookie=%q", headers["Cookie"])
+	}
+	// Argus 只看请求头里的 uifid，Cookie 里那份不算。
+	if headers["uifid"] != "deadbeef" {
+		t.Fatalf("uifid=%q", headers["uifid"])
+	}
+	if headers["Referer"] != "https://open.douyin.com/" || headers["User-Agent"] != douyinUserAgent {
+		t.Fatalf("headers=%v", headers)
+	}
+
+	t.Setenv("DIANA_DOUYIN_CK", "")
+	bare := douyinWebHeaders(context.Background(), "")
+	if _, ok := bare["Cookie"]; ok {
+		t.Fatal("没配 Cookie 时不应该发空 Cookie 头")
+	}
+	if _, ok := bare["uifid"]; ok {
+		t.Fatal("没配 Cookie 时不应该发 uifid 头")
+	}
+}
+
 // TestLiveDouyinDetail 打真实接口，确认 Argus 网关这条链路还通。
 func TestLiveDouyinDetail(t *testing.T) {
 	link := strings.TrimSpace(os.Getenv("DIANA_LIVE_DOUYIN_URL"))

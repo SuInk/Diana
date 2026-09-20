@@ -507,10 +507,8 @@ func fetchDouyinDetail(ctx context.Context, raw string) (douyinMediaDetail, stri
 	}
 	awemeID := match[1]
 
-	openHeaders := resolverCommonHeaders()
-	openHeaders["User-Agent"] = douyinUserAgent
+	openHeaders := douyinWebHeaders(ctx, "https://open.douyin.com/")
 	openHeaders["Origin"] = "https://open.douyin.com"
-	openHeaders["Referer"] = "https://open.douyin.com/"
 	var openResponse struct {
 		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
 	}
@@ -536,15 +534,7 @@ func fetchDouyinDetail(ctx context.Context, raw string) (douyinMediaDetail, stri
 	if cookie == "" {
 		return douyinMediaDetail{}, "missing_cookie"
 	}
-	legacyHeaders := resolverCommonHeaders()
-	legacyHeaders["User-Agent"] = douyinUserAgent
-	legacyHeaders["Accept-Language"] = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
-	legacyHeaders["Referer"] = "https://www.douyin.com/video/" + awemeID
-	legacyHeaders["Cookie"] = cookie
-	// Argus 先看 uifid 请求头，缺了就直接 403，轮不到校验签名。
-	if uifid := douyinCookieValue(cookie, "UIFID"); uifid != "" {
-		legacyHeaders["uifid"] = uifid
-	}
+	legacyHeaders := douyinWebHeaders(ctx, "https://www.douyin.com/video/"+awemeID)
 	var legacyResponse struct {
 		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
 	}

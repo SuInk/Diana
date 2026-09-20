@@ -348,6 +348,25 @@ func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail
 	return downloadGenericVideoFile(ctx, fmt.Sprintf(douyinPlayURL, uri), headers)
 }
 
+// douyinWebHeaders 组装抖音网页接口的请求头。配置了 Cookie 就一并带上：匿名请求
+// 容易被风控盯上，登录态也决定能看到哪些内容。Argus 先看 uifid 请求头，缺了直接
+// 403，所以 UIFID 除了留在 Cookie 里，还要单独作为请求头发一份。
+func douyinWebHeaders(ctx context.Context, referer string) map[string]string {
+	headers := resolverCommonHeaders()
+	headers["User-Agent"] = douyinUserAgent
+	headers["Accept-Language"] = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
+	if referer != "" {
+		headers["Referer"] = referer
+	}
+	if cookie := resolverDouyinCookie(ctx); cookie != "" {
+		headers["Cookie"] = cookie
+		if uifid := douyinCookieValue(cookie, "UIFID"); uifid != "" {
+			headers["uifid"] = uifid
+		}
+	}
+	return headers
+}
+
 // douyinCookieValue 取出 Cookie 里的某个字段，用于把 UIFID 同时放进请求头。
 func douyinCookieValue(cookie, name string) string {
 	for _, part := range strings.Split(cookie, ";") {
