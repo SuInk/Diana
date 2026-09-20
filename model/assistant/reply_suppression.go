@@ -43,6 +43,10 @@ var errReplySuppressedBeforeSend = errors.New("diana: reply suppressed before se
 // 这条回复因此不发出去，暂停也从这一刻起生效。
 var errReplyLoopDetected = errors.New("chatbot: reply loop detected before send")
 
+// errReplySelfRepeatDropped 表示这条候选回复只是把机器人自己说过的话又说了一遍。
+// 只丢这一条，不开降欲望也不暂停：对方下一条要是带来了新东西，照常回答。
+var errReplySelfRepeatDropped = errors.New("chatbot: candidate reply repeats the bot's own recent replies")
+
 type replySuppressionSendGuardKey struct{}
 
 type replySuppressionOutboundGateKey struct{}
@@ -125,21 +129,38 @@ func (decision botReplyLoopAIDecision) counts() bool {
 	if !decision.MeaninglessLoop && !decision.PurposelessLoop && !decision.SelfRepeat {
 		return false
 	}
+	return decision.confident()
+}
+
+// damps 决定这次结论要不要进降欲望。降欲望是按账号的：开了以后这个人后面没点名的
+// 消息一律不接，直到保留期过去。「没内容」和「没目的」说的是这一整串来回的状态，
+// 按账号收口说得通；「在复读自己」说的只是候选回复这一条——下一条要是带来了新东西，
+// 本来就该照常回答，不该被前一条的结论连坐。所以复读只丢当前这条（见
+// selfRepeatDropsReply），不进这一层。
+func (decision botReplyLoopAIDecision) damps() bool {
+	if !decision.MeaninglessLoop && !decision.PurposelessLoop {
+		return false
+	}
+	return decision.confident()
+}
+
+// selfRepeatDropsReply 报告这条候选回复是不是该就地丢掉：判到复读自己就不发这一条，
+// 不牵连这个账号后面的消息。
+func (decision botReplyLoopAIDecision) selfRepeatDropsReply() bool {
+	return decision.SelfRepeat && decision.confident()
+}
+
+func (decision botReplyLoopAIDecision) confident() bool {
 	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
 }
 
-// replyDampingCause 把这次空转结论翻译成写进事件理由的那句话。一条结论可能同时
-// 命中几项，按「最具体的那个」挑：复读自己指名道姓说了是机器人自己的问题，
-// 没有内容次之，没有目的最泛。
+// replyDampingCause 把这次空转结论翻译成写进事件理由的那句话。复读自己不在其中：
+// 它只丢当前这条回复，不开降欲望，见 botReplyLoopAIDecision.damps。
 func replyDampingCause(decision botReplyLoopAIDecision) string {
-	switch {
-	case decision.SelfRepeat:
-		return replyDampingCauseSelfRepeat
-	case decision.MeaninglessLoop:
+	if decision.MeaninglessLoop {
 		return replyDampingCauseMeaningless
-	default:
-		return replyDampingCausePurposeless
 	}
+	return replyDampingCausePurposeless
 }
 
 type botReplyLoopClassificationPayload struct {

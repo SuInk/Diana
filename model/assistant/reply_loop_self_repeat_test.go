@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -35,8 +36,9 @@ func TestSelfRepeatCountsOnItsOwn(t *testing.T) {
 	}
 }
 
-// 复读自己不必等密度：判据只看机器人说过什么，和回得密不密无关。
-func TestSelfRepeatDampsWithoutDensity(t *testing.T) {
+// 复读自己只丢当前这条：不发这一句，但不牵连这个账号后面的消息——降欲望是按账号
+// 收口的，开了以后对方不点名就说不上话，新内容会跟着被连坐。
+func TestSelfRepeatDropsOnlyThisReply(t *testing.T) {
 	provider := &sequenceLLMProvider{auditReplies: []string{
 		selfRepeatVerdict(true, 0.95, "同一句晚安换了措辞又说一遍，没有推进"),
 	}}
@@ -44,14 +46,33 @@ func TestSelfRepeatDampsWithoutDensity(t *testing.T) {
 	now := time.Now()
 	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
 	event := botReplyLoopEvent(r, "again", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 晚安宝宝喵")
-	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 晚安宝宝喵", "嗯呐，满格那页见，睡吧喵。", r.effectiveConfigForEvent(event), false); err != nil {
-		t.Fatal(err)
+	_, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 晚安宝宝喵", "嗯呐，满格那页见，睡吧喵。", r.effectiveConfigForEvent(event), false)
+	if !errors.Is(err, errReplySelfRepeatDropped) {
+		t.Fatalf("判到复读就该丢掉这一条，err=%v", err)
 	}
 	if payload := requestTextContent(provider.requestsSnapshot()[0]); strings.Contains(payload, `"exchange_density":`) {
 		t.Fatalf("这一轮本来就不该带密度：%s", payload)
 	}
+	// 关键：没有开降欲望，对方下一条照常走到生成。
+	if verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now); verdict.Skip {
+		t.Fatalf("复读只丢一条，不该把后面的消息一起挡掉：%+v", verdict)
+	}
+}
+
+// 「没内容」仍然开降欲望：它说的是这一整串来回的状态，按账号收口说得通。
+func TestMeaninglessStillDamps(t *testing.T) {
+	provider := &sequenceLLMProvider{auditReplies: []string{
+		meaninglessAuditVerdict(true, "纯附和，已经重复好几轮"),
+	}}
+	r := dampingTestRuntime(BotConfig{}, provider)
+	now := time.Now()
+	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
+	event := botReplyLoopEvent(r, "empty", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 嗯")
+	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 嗯", "嗯呐", r.effectiveConfigForEvent(event), false); err != nil {
+		t.Fatal(err)
+	}
 	if verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now); !verdict.Skip {
-		t.Fatalf("判到复读自己就该降欲望，没点名的话应放掉：%+v", verdict)
+		t.Fatalf("判到没内容仍然要降欲望：%+v", verdict)
 	}
 }
 
@@ -91,11 +112,9 @@ func TestReplyDampingReasonNamesTheActualCause(t *testing.T) {
 		decision botReplyLoopAIDecision
 		want     string
 	}{
-		{"self_repeat", botReplyLoopAIDecision{SelfRepeat: true}, replyDampingCauseSelfRepeat},
 		{"meaningless", botReplyLoopAIDecision{MeaninglessLoop: true}, replyDampingCauseMeaningless},
 		{"purposeless", botReplyLoopAIDecision{PurposelessLoop: true}, replyDampingCausePurposeless},
-		// 同时命中时挑最具体的那个。
-		{"self_repeat_wins", botReplyLoopAIDecision{SelfRepeat: true, PurposelessLoop: true}, replyDampingCauseSelfRepeat},
+		// 同时命中时挑更具体的那个。
 		{"meaningless_beats_purposeless", botReplyLoopAIDecision{MeaninglessLoop: true, PurposelessLoop: true}, replyDampingCauseMeaningless},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,49 +124,40 @@ func TestReplyDampingReasonNamesTheActualCause(t *testing.T) {
 		})
 	}
 
-	provider := &sequenceLLMProvider{auditReplies: []string{selfRepeatVerdict(true, 0.95, "同一句晚安又说一遍")}}
+	provider := &sequenceLLMProvider{auditReplies: []string{meaninglessAuditVerdict(true, "纯附和，已经重复好几轮")}}
 	r := dampingTestRuntime(BotConfig{}, provider)
 	now := time.Now()
 	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
-	event := botReplyLoopEvent(r, "again", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 晚安宝宝喵")
-	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 晚安宝宝喵", "嗯呐，满格那页见，睡吧喵。", r.effectiveConfigForEvent(event), false); err != nil {
+	event := botReplyLoopEvent(r, "empty", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 嗯")
+	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 嗯", "嗯呐", r.effectiveConfigForEvent(event), false); err != nil {
 		t.Fatal(err)
 	}
 	verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now)
 	if !verdict.Skip {
 		t.Fatalf("应当放掉：%+v", verdict)
 	}
-	if !strings.Contains(verdict.Reason, replyDampingCauseSelfRepeat) {
-		t.Fatalf("理由该说是复读自己，实际是：%s", verdict.Reason)
+	if !strings.Contains(verdict.Reason, replyDampingCauseMeaningless) {
+		t.Fatalf("理由该说是没有实质内容，实际是：%s", verdict.Reason)
 	}
 }
 
-// 对方一直刷，降欲望就一直续着，不会自己到期。原先按判定时间计时：被放掉的消息
-// 不生成回复、不走审核，也就刷新不了它，十分钟一到自动解除、回一条、再判一次
-// 复读、再停十分钟——等于每十分钟漏一条，而不是停住。
-func TestReplyDampingDoesNotExpireWhileSenderKeepsPushing(t *testing.T) {
+// 降欲望按判定时间到期，不随对方继续发消息而续期。曾经改成「每放掉一条就续上」，
+// 结果是这个账号只要不点名就永远说不上话，新内容跟着被连坐；真正要一直挡住的复读
+// 现在逐条判、逐条丢，不靠这一层兜。
+func TestReplyDampingExpiresOnItsOwnSchedule(t *testing.T) {
 	r := dampingTestRuntime(BotConfig{}, nil)
 	start := time.Now()
 	recordDampingSends(r, replyDampingDenseLimit, start)
-	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCauseSelfRepeat, start)
+	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCauseMeaningless, start)
 
-	// 每隔大半个保留期来一条没点名的消息，走过好几个保留期仍然一条都不接。
-	at := start
-	for i := 0; i < 5; i++ {
-		at = at.Add(replyDampingPurposelessRetention * 3 / 4)
-		verdict := r.replyDampingJudge(dampingTestEvent(fmt.Sprintf("keep-%d", i), "接着说"), "接着说", false, at)
-		if !verdict.Skip {
-			t.Fatalf("第 %d 条（判定后 %v）漏出去了：%+v", i+1, at.Sub(start), verdict)
-		}
+	within := start.Add(replyDampingPurposelessRetention / 2)
+	if verdict := r.replyDampingJudge(dampingTestEvent("mid", "接着说"), "接着说", false, within); !verdict.Skip {
+		t.Fatalf("保留期内应当放掉：%+v", verdict)
 	}
-	if elapsed := at.Sub(start); elapsed <= replyDampingPurposelessRetention {
-		t.Fatalf("这个用例要跨过保留期才有意义，只走了 %v", elapsed)
-	}
-
-	// 对方真的不说了，才按保留期到期解除。
-	quiet := at.Add(replyDampingPurposelessRetention + time.Minute)
-	if verdict := r.replyDampingJudge(dampingTestEvent("later", "接着说"), "接着说", false, quiet); verdict.Skip {
-		t.Fatalf("对方停了一整个保留期之后应当解除：%+v", verdict)
+	// 对方一直在说也不续期：到点就解除。
+	after := start.Add(replyDampingPurposelessRetention + time.Minute)
+	if verdict := r.replyDampingJudge(dampingTestEvent("late", "接着说"), "接着说", false, after); verdict.Skip {
+		t.Fatalf("保留期过了就该解除：%+v", verdict)
 	}
 }
 

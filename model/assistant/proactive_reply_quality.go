@@ -610,18 +610,16 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 		if need.Density == nil {
 			// 没把密度证据递上去就没问过目的，模型就算填了也不作数。
 			decision.ReplyLoopPurposeless = false
-			// 「没内容」和「在复读自己」都不用等密度：前者说的是这一来一回本身已经
-			// 在空转，后者只看机器人自己说过什么，两个判据都与回得密不密无关，密度
-			// 只决定它转得多快。但这里只开降欲望、不解除——没问过目的，就没有「有
-			// 目的」这个结论可以拿来解除，一条普通回复不该把刚判出来的空转一笔勾销。
-			if loop := decision.loopDecision(); loop.counts() {
+			// 「没内容」不用等密度：这一来一回本身已经在空转，密度只决定它转得多快。
+			// 但这里只开降欲望、不解除——没问过目的，就没有「有目的」这个结论可以
+			// 拿来解除，一条普通回复不该把刚判出来的空转一笔勾销。
+			if loop := decision.loopDecision(); loop.damps() {
 				r.markReplyPurpose(event, true, replyDampingCause(loop), time.Now())
 			}
 		} else {
-			// 没内容和复读自己同样没有目的，三种都开始降欲望。问过了就按结论记，
-			// 判到有目的当场解除。
+			// 没内容和没目的都开始降欲望。问过了就按结论记，判到有目的当场解除。
 			loop := decision.loopDecision()
-			r.markReplyPurpose(event, loop.counts(), replyDampingCause(loop), time.Now())
+			r.markReplyPurpose(event, loop.damps(), replyDampingCause(loop), time.Now())
 		}
 		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision, need.LoopSuppress); loopErr != nil {
 			return intent, loopErr
@@ -672,9 +670,15 @@ func replyAuditHasStillImageSegment(segments []MessageSegment) bool {
 // 自己的机器人外面。
 func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent, candidate botReplyLoopCandidate, decision proactiveReplyQualityDecision, suppress bool) error {
 	now := time.Now()
-	hitCount, loopReason, detected := r.registerBotReplyLoopDecision(event, candidate, decision.loopDecision(), now)
-	r.recordBotReplyLoopClassification(ctx, event, candidate, decision.loopDecision(), hitCount, decision.ReplyLoopReason, nil, suppress)
+	loop := decision.loopDecision()
+	hitCount, loopReason, detected := r.registerBotReplyLoopDecision(event, candidate, loop, now)
+	r.recordBotReplyLoopClassification(ctx, event, candidate, loop, hitCount, decision.ReplyLoopReason, nil, suppress)
 	if !detected || !suppress {
+		// 还没累计到暂停，但这一条如果只是把自己说过的话又说一遍，就别发了。
+		// 只丢这一条：下一条带来新东西时审核会判 false，照常回答。
+		if loop.selfRepeatDropsReply() {
+			return errReplySelfRepeatDropped
+		}
 		return nil
 	}
 	restriction, activated := r.activateReplySuppression(event, loopReason, now)
