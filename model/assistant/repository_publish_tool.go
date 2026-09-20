@@ -552,6 +552,18 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 	groupManager := inGroup && managerGroups[groupID][key]
 	groupDrafter := inGroup && draftGroups[groupID][key]
 
+	// 按用户的授权跟着人走，但不该溢到无关的群：在群里，这个仓库本身也得是这个群
+	// 的话题（该群对它有任意一条按群授权）。否则被授权的人可以把机器人带进任何一个
+	// 群往仓库里写——群里所有人都看得见，也能顺着上下文影响写进去的内容，而那个群
+	// 从来没被授权聊这个仓库。私聊不受此限：那是本人和机器人之间的事。
+	//
+	// 身份档不拦这类人。按群授权收窄到群主或群管理员，说的是「群里哪些人继承这条
+	// 群授权」；单独给某个人授权本来就是为了放行不在那一档里的人。
+	groupOnTopic := !inGroup || groupManager || groupDrafter
+	userManager := managerUsers[userID][key] && groupOnTopic
+	userDrafter := draftUsers[userID][key] && groupOnTopic
+	userGrantOffTopic := !groupOnTopic && (managerUsers[userID][key] || draftUsers[userID][key])
+
 	// 身份要求只有真的写了后缀才去查身份：绝大多数部署一条都没有，不该为了「万一
 	// 要判」给每次调用多打一次群成员查询。
 	var role GroupRole
@@ -580,9 +592,14 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 		}
 	}
 
-	directAllowed := managerUsers[userID][key] || groupManager
-	draftAllowed := draftUsers[userID][key] || groupDrafter
+	directAllowed := userManager || groupManager
+	draftAllowed := userDrafter || groupDrafter
 	if !directAllowed && !draftAllowed {
+		// 「你有授权但这个群没有」是最容易撞上也最容易修的一种，优先说它。
+		if userGrantOffTopic {
+			return false, false, "permission_denied", "你对该仓库有按用户的授权，但这个群没有该仓库的授权，按用户的授权不会带进无关的群。" +
+				"请在私聊里操作，或让主人把这个群加进该仓库的按群授权。"
+		}
 		if blocked != repositoryAccessRoleAllMembers {
 			return false, false, "permission_denied", repositoryPublishGroupRoleDeniedMessage(blocked, role)
 		}
@@ -1140,8 +1157,10 @@ func repositoryPublishEventRepositories(event MessageEvent, owner bool, settings
 	granted := make([]string, 0, len(names))
 	for _, repository := range names {
 		key := strings.ToLower(repository)
+		// 群里只列这个群自己被授权的仓库。按用户授权的人在群里能做的更多（不受身份档
+		// 限制、可以直接写），但范围仍然是这个群的仓库，不把他在别处的授权列进来。
 		reachable := managerUsers[userID][key] || draftUsers[userID][key]
-		if !reachable && event.Kind == EventKindGroup {
+		if event.Kind == EventKindGroup {
 			reachable = managerGroups[groupID][key] || draftGroups[groupID][key]
 		}
 		if reachable {

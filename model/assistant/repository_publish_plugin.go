@@ -485,8 +485,10 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key: repositoryPublishSettingManagerUsers, Label: "Issue 管理人员（按用户）",
-				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。授权跟着人走，私聊和群聊都生效——想让某个群友当管理员，填他的用户 ID 即可，不必放开整个群。",
-				Type:        PluginSettingTypeString, Default: "",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。授权跟着人走：私聊里直接生效，" +
+					"群聊里还要求该群自己也被授权了这个仓库（见下面两项按群授权），否则会被拒绝并提示——按用户的授权不会带进无关的群。" +
+					"在已授权的群里，这些用户不受按群授权的身份要求限制：想让某个不是群管理员的群友能操作，填他的用户 ID 即可。",
+				Type: PluginSettingTypeString, Default: "",
 			},
 			{
 				Key: repositoryPublishSettingManagerGroups, Label: "Issue 管理人员（按群）",

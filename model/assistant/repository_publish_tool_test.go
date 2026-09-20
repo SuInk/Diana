@@ -1019,27 +1019,57 @@ func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
 	}
 }
 
-// 「群友甲是管理员，但整个群没放开」：他在群里能建能批，也必须能列出草稿。
-func TestRepositoryPublishUserScopedManagerWorksInsideGroups(t *testing.T) {
+// 按用户的授权跟着人走，但不该溢到无关的群：被授权的人不能把机器人带进任意一个
+// 群往仓库里写。群里要生效，这个群自己也得被授权聊这个仓库。
+func TestRepositoryPublishUserScopedManagerStaysOutOfUnauthorizedGroups(t *testing.T) {
 	settings := SettingValues{
 		repositoryPublishSettingAllowlist:    "SuInk/Diana",
 		repositoryPublishSettingManagerUsers: "manager-user = SuInk/Diana",
 	}
-	group := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "manager-user"}
+	stranger := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "manager-user"}
+	direct, draft, code, message := repositoryPublishAccessForEvent(stranger, "SuInk/Diana", false, settings, nil)
+	if direct || draft || code != "permission_denied" {
+		t.Fatalf("user-scoped manager leaked into an unauthorized group: direct=%v draft=%v code=%q", direct, draft, code)
+	}
+	// 拒绝要说清是群没放开，而不是这个人没权限——这两件事修法完全不同。
+	if !strings.Contains(message, "这个群没有该仓库的授权") || !strings.Contains(message, "私聊") {
+		t.Fatalf("denial message does not explain the group scope: %q", message)
+	}
+	// 清单里也不该出现：否则模型会先把仓库报给用户，再撞一次拒绝。
+	if got := repositoryPublishEventRepositories(stranger, false, settings); len(got) != 0 {
+		t.Fatalf("unauthorized group still listed repositories: %#v", got)
+	}
 
-	// 群里未授权，但这个人是按用户授权的管理员，直接写入应当放行。
-	direct, _, code, message := repositoryPublishAccessForEvent(group, "SuInk/Diana", false, settings, nil)
+	// 私聊不受此限：那是本人和机器人之间的事。
+	private := MessageEvent{Kind: EventKindPrivate, UserID: "manager-user"}
+	if direct, _, code, _ := repositoryPublishAccessForEvent(private, "SuInk/Diana", false, settings, nil); code != "" || !direct {
+		t.Fatalf("user-scoped manager denied in private chat: direct=%v code=%q", direct, code)
+	}
+}
+
+// 群本身被授权之后，按用户授权的人在群里恢复全部权限——而且不受按群授权的身份档
+// 限制：单独给某个人授权本来就是为了放行不在那一档里的人。
+func TestRepositoryPublishUserScopedManagerWorksInsideAuthorizedGroups(t *testing.T) {
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:     "SuInk/Diana",
+		repositoryPublishSettingManagerUsers:  "manager-user = SuInk/Diana",
+		repositoryPublishSettingManagerGroups: "10497 = SuInk/Diana#group_owner",
+	}
+	member := func(userID string) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: userID, SenderRole: "member"}
+	}
+	memberRole := func() GroupRole { return GroupRoleMember }
+
+	direct, _, code, message := repositoryPublishAccessForEvent(member("manager-user"), "SuInk/Diana", false, settings, memberRole)
 	if code != "" || !direct {
-		t.Fatalf("user-scoped manager denied inside a group: direct=%v code=%q message=%q", direct, code, message)
+		t.Fatalf("user-scoped manager denied inside an authorized group: direct=%v code=%q message=%q", direct, code, message)
 	}
-	// 同一个人也应当出现在可操作仓库清单里。
-	if got := repositoryPublishEventRepositories(group, false, settings); len(got) != 1 || got[0] != "SuInk/Diana" {
-		t.Fatalf("group repositories for a user-scoped manager = %#v", got)
+	if got := repositoryPublishEventRepositories(member("manager-user"), false, settings); len(got) != 1 || got[0] != "SuInk/Diana" {
+		t.Fatalf("authorized group repositories = %#v", got)
 	}
-	// 同群里没有任何授权的其他人仍然被拒。
-	stranger := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "someone-else"}
-	if _, _, code, _ := repositoryPublishAccessForEvent(stranger, "SuInk/Diana", false, settings, nil); code == "" {
-		t.Fatalf("unauthorized group member should stay denied")
+	// 同群里没有按用户授权、身份又不够的人仍然被拒。
+	if _, _, code, _ := repositoryPublishAccessForEvent(member("someone-else"), "SuInk/Diana", false, settings, memberRole); code != "permission_denied" {
+		t.Fatalf("plain member should stay denied under an owner-only group rule, code=%q", code)
 	}
 }
 
