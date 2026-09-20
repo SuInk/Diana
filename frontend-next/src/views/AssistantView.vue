@@ -1015,6 +1015,20 @@
                 />
                 <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
               </div>
+              <div v-if="connectionGroupRoutes.length" class="field wide">
+                <label>这条连接上的群归属</label>
+                <ul class="stack" style="gap: 4px; margin: 0; padding-left: 18px">
+                  <li v-for="(member, index) in connectionGroupRoutes" :key="member.id || `draft-${index}`" class="hint">
+                    「{{ member.name }}」{{ member.editing ? "（这一台）" : "" }}：{{ memberScopeText(member) }}
+                  </li>
+                </ul>
+                <p v-for="overlap in shownGroupRouteOverlaps" :key="overlap.groupID" class="hint warn-text">{{ overlapText(overlap) }}</p>
+                <p v-if="hiddenGroupRouteOverlaps" class="hint warn-text">另有 {{ hiddenGroupRouteOverlaps }} 个群同样会收到多台回复。</p>
+                <p v-if="openScopeRoutes.length > 1" class="hint warn-text">
+                  这条连接上有 {{ openScopeRoutes.length }} 台不限群，任何群都会收到多台回复。给每台设置工作群白名单，就能按群分工。
+                </p>
+                <span class="hint">复用同一条连接的机器人共用一个平台账号，一条群消息每台都会收到，各自按这里的准入决定回不回。让一个群只有一台说话，就把它放进那一台的白名单，别的台不要放行。</span>
+              </div>
               <div class="field wide">
                 <label for="bot-private-admission-mode">私聊准入模式</label>
                 <AppSelect
@@ -1753,7 +1767,7 @@
 
 <script setup lang="ts">
 import { copyBotConfiguration } from "../bot-config-copy";
-import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
+import { connectionGroupMembers, findWebSocketConnectionConflict, groupRoutingOverlaps, openScopeMembers, type ConnectionGroupMember } from "../bot-connection-conflicts";
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -2716,6 +2730,28 @@ async function beginCopyProfile(source: BotProfileConfig): Promise<void> {
   }
 }
 const connectionConflict = computed(() => form.value ? findWebSocketConnectionConflict(form.value, profiles.value) : undefined);
+
+// 群归属按手上这份草稿算：准入模式和白名单在保存前只存在于表单里，
+// 读 form 里那份旧值会让提示慢一步，改完了还在说上一次的冲突。
+const connectionGroupRoutes = computed<ConnectionGroupMember[]>(() => form.value
+  ? connectionGroupMembers({ ...form.value, group_admission: { mode: admissionMode.value, allowed_groups: [...allowedGroups.value] } }, profiles.value)
+  : []);
+const groupRouteOverlaps = computed(() => groupRoutingOverlaps(connectionGroupRoutes.value));
+const openScopeRoutes = computed(() => openScopeMembers(connectionGroupRoutes.value));
+// 冲突按群列，群多了会把整页顶开，列几条讲清是什么问题就够，剩下的说个数。
+const shownGroupRouteOverlaps = computed(() => groupRouteOverlaps.value.slice(0, 3));
+const hiddenGroupRouteOverlaps = computed(() => Math.max(0, groupRouteOverlaps.value.length - shownGroupRouteOverlaps.value.length));
+function overlapText(overlap: { groupID: string; members: ConnectionGroupMember[] }): string {
+  return `群 ${overlap.groupID} 会同时收到${overlap.members.map((member) => `「${member.name}」`).join("")}的回复。`;
+}
+function memberScopeText(member: ConnectionGroupMember): string {
+  const disabled = member.disabledGroups.length ? `，禁用 ${member.disabledGroups.length} 个群` : "";
+  if (!member.whitelist) return `不限群${disabled}`;
+  if (!member.allowedGroups.length) return "白名单还是空的，任何群都不回";
+  const shown = member.allowedGroups.slice(0, 5).join("、");
+  const rest = member.allowedGroups.length - 5;
+  return `只在 ${shown}${rest > 0 ? ` 等 ${member.allowedGroups.length} 个群` : ""}${disabled}`;
+}
 function reuseConflictingConnection(): void {
   const source = connectionConflict.value;
   if (!form.value || !source?.id || connectionUsers(form.value).length) return;
