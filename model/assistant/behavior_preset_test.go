@@ -140,7 +140,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true, personaVoice{}), personaClosingAnchor()} {
+	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true, personaVoice{}, base.SystemPrompt), personaClosingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -636,13 +636,13 @@ func TestRoleplayAndCatgirlDoNotContradictEachOther(t *testing.T) {
 }
 
 func TestActionDescriptionIsAnIndependentPersonaPreservingLayer(t *testing.T) {
-	combined := actionDescriptionPrompt(true) + "\n" + actionDescriptionClosingAnchor(true)
+	combined := actionDescriptionPrompt(true, "") + "\n" + actionDescriptionClosingAnchor(true, "")
 	for _, want := range []string{"原有人设和表达风格", "不必只写一处", "台词前、中间或结尾", "不额外变得黏人或亲密", "每条含自然语言的回复至少"} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("动作描写提示缺少 %q：%q", want, combined)
 		}
 	}
-	if got := actionDescriptionPrompt(false); got != "" {
+	if got := actionDescriptionPrompt(false, ""); got != "" {
 		t.Fatalf("关闭动作描写后仍注入了提示：%q", got)
 	}
 }
@@ -654,7 +654,7 @@ func TestCatgirlActionDescriptionToggleProducesUnambiguousPrompt(t *testing.T) {
 	}
 
 	withActions := ReplyStyleCatgirl.promptWithActions(true, personaVoice{}, true) + "\n" +
-		actionDescriptionPrompt(true) + "\n" + actionDescriptionClosingAnchor(true)
+		actionDescriptionPrompt(true, "") + "\n" + actionDescriptionClosingAnchor(true, "")
 	if strings.Contains(withActions, catgirlNoActionRule) {
 		t.Fatalf("开启动作描写后仍保留了冲突的禁止规则：%q", withActions)
 	}
@@ -667,7 +667,7 @@ func TestCatgirlSystemPromptEndsWithMandatoryActionAnchor(t *testing.T) {
 	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl, ActionDescriptionEnabled: boolPointer(true)}.WithDefaults()
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
-	anchor := actionDescriptionClosingAnchor(true)
+	anchor := actionDescriptionClosingAnchor(true, "")
 	if !strings.HasSuffix(prompt, anchor) {
 		t.Fatalf("最终提示词没有以动作描写锚点收尾：%q", prompt)
 	}
@@ -730,7 +730,7 @@ func TestGroupSocialReplyOverridesAndInherits(t *testing.T) {
 // 自己那份独有的内容。
 func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 	for _, natural := range []bool{true, false} {
-		if prompt := replyPresentationPrompt(natural, personaVoice{}); !strings.Contains(prompt, replyBlankLineRule) {
+		if prompt := replyPresentationPrompt(natural, personaVoice{}, ""); !strings.Contains(prompt, replyBlankLineRule) {
 			t.Fatalf("换行协议的出处不见了：%q", prompt)
 		}
 	}
@@ -750,5 +750,48 @@ func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 	// 标记本身和它们的语义一个字都不许动：发送层只认这两串。
 	if notificationSplitMarker != "[diana-msg]" || notificationLineMarker != "[diana-line]" {
 		t.Fatalf("投递标记被改了：%q %q", notificationSplitMarker, notificationLineMarker)
+	}
+}
+
+// 人设正文接管一段规则后，运行时不该再给同一件事第二份说法：两份指令打架时模型
+// 只能挑一边听，用户看到的就是「改了正文不生效」。
+func TestPersonaOwnedSectionsAreNotInjectedTwice(t *testing.T) {
+	voice := personaVoiceFrom("本喵", "喵,喵~")
+	// 存量人设没有这些段头，照旧拿到运行时那几份——升级上来的配置行为不变。
+	legacy := replyPresentationPrompt(true, voice, "你是一只猫娘。")
+	for _, want := range []string{replyProportionRule, replyEmojiRule, replyCompactPacingRule, replyConversationalIntentRule, replyDocumentDeliveryRule, "自称偏好是"} {
+		if !strings.Contains(legacy, want) {
+			t.Fatalf("没声明接管的人设丢了运行时那份规则：%q", want)
+		}
+	}
+	// 正文逐段声明接管，运行时就逐段让位。
+	owned := replyPresentationPrompt(true, voice, strings.Join([]string{
+		"答多长：短点。", "表情符号：不用。", "聊天节奏：少发几条。",
+		"聊天还是求助：先分清。", "长文怎么组织：按主要部分分。", "自称与语气词：平时用「我」。",
+	}, "\n"))
+	for _, unwanted := range []string{replyProportionRule, replyEmojiRule, replyCompactPacingRule, replyConversationalIntentRule, replyDocumentDeliveryRule, "自称偏好是"} {
+		if strings.Contains(owned, unwanted) {
+			t.Fatalf("正文已声明接管，不该再注入：%q", unwanted)
+		}
+	}
+	// 让位的只是被接管的那几段。消息标记和本轮分条上限是投递机制，不归人设管，
+	// 正文写什么都照常注入——写错了发不出去的是消息本身。
+	for _, want := range []string{replyBlankLineRule, replySegmentationRule, replyDeliveryChoiceRule, replyLineBreakChoiceRule} {
+		if !strings.Contains(owned, want) {
+			t.Fatalf("投递机制不归人设管，任何时候都要注入：%q", want)
+		}
+	}
+}
+
+// 动作描写同理：开关开着但正文自己写了「动作描写：」那一段时，运行时不再补第二份。
+func TestActionDescriptionYieldsToThePersona(t *testing.T) {
+	if got := actionDescriptionPrompt(true, "你是一只猫娘。"); got == "" {
+		t.Fatal("正文没声明时，开着的动作描写开关仍然要给出说明")
+	}
+	if got := actionDescriptionPrompt(true, "动作描写：不写括号动作。"); got != "" {
+		t.Fatalf("正文声明接管后不该再注入动作描写说明：%q", got)
+	}
+	if got := actionDescriptionClosingAnchor(true, "动作描写：不写括号动作。"); got != "" {
+		t.Fatalf("收尾锚点同样要让位：%q", got)
 	}
 }
