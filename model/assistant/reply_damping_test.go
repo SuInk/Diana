@@ -44,13 +44,13 @@ func loopAuditVerdict(purposeless bool, reason string) string {
 	return fmt.Sprintf(`{"send_confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_automated_ai":true,"reply_loop_meaningless":false,"reply_loop_purposeless":%v,"reply_loop_confidence":0.97,"reply_loop_reason":%q}`, purposeless, reason)
 }
 
-// 还没回到 replyDampingPurposeAuditMin 条时审核不带密度、不判目的；模型就算填了
-// 无目的也不作数、不降欲望。少于这么几条谈不上「一连串来回」，没什么目的可判。
+// 只回过一条时审核不带密度、不判目的；模型就算填了无目的也不作数、不降欲望。
+// 一来一回两次之后才谈得上「一连串来回」，再早就没有东西可判。
 func TestReplyAuditOnlyJudgesPurposeWhenDense(t *testing.T) {
 	provider := &sequenceLLMProvider{auditReplies: []string{loopAuditVerdict(true, "续写剧情")}}
 	r := dampingTestRuntime(BotConfig{}, provider)
 	now := time.Now()
-	recordDampingSends(r, replyDampingPurposeAuditMin-1, now.Add(-time.Minute))
+	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
 	event := botReplyLoopEvent(r, "sparse", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 接着演")
 	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 接着演", "好呀", r.effectiveConfigForEvent(event), false); err != nil {
 		t.Fatal(err)
@@ -63,40 +63,47 @@ func TestReplyAuditOnlyJudgesPurposeWhenDense(t *testing.T) {
 	}
 }
 
-// 问目的不必等到 replyDampingDenseLimit：审核本来就要跑这一次，密度只是同一份
-// 载荷里多一个字段，等到第 10 条才问等于白放前面九轮。
-func TestReplyAuditAsksPurposeBeforeCooldownDenseLimit(t *testing.T) {
-	if replyDampingPurposeAuditMin >= replyDampingDenseLimit {
-		t.Fatalf("问目的的门 %d 不该晚于冷却用的 %d", replyDampingPurposeAuditMin, replyDampingDenseLimit)
+// 回到第二条就问目的：审核本来就要跑这一次，密度只是同一份载荷里多一个字段，
+// 让它先转够十轮再问等于白放前面那些。
+func TestReplyAuditAsksPurposeAtSecondReply(t *testing.T) {
+	if replyDampingDenseLimit != 2 {
+		t.Fatalf("这道门定的是两条，现在是 %d", replyDampingDenseLimit)
 	}
 	provider := &sequenceLLMProvider{auditReplies: []string{loopAuditVerdict(true, "反复寒暄，没有要完成的事")}}
 	r := dampingTestRuntime(BotConfig{}, provider)
 	now := time.Now()
-	recordDampingSends(r, replyDampingPurposeAuditMin, now.Add(-time.Minute))
+	recordDampingSends(r, replyDampingDenseLimit, now.Add(-time.Minute))
 	event := botReplyLoopEvent(r, "early", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 晚安")
 	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 晚安", "晚安喵", r.effectiveConfigForEvent(event), false); err != nil {
 		t.Fatal(err)
 	}
 	payload := requestTextContent(provider.requestsSnapshot()[0])
-	if !strings.Contains(payload, fmt.Sprintf(`"bot_replies_to_sender":%d`, replyDampingPurposeAuditMin)) {
-		t.Fatalf("回到 %d 条就该把密度递给审核：%s", replyDampingPurposeAuditMin, payload)
+	if !strings.Contains(payload, fmt.Sprintf(`"bot_replies_to_sender":%d`, replyDampingDenseLimit)) {
+		t.Fatalf("回到 %d 条就该把密度递给审核：%s", replyDampingDenseLimit, payload)
 	}
-	// 判到无目的即刻降欲望，不用再等冷却那道门。
 	if verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now); !verdict.Skip {
 		t.Fatalf("无目的后没点名的话应放掉：%+v", verdict)
 	}
 }
 
-// 被标记成机器人的账号问得更早，这道门不能反而把它推后。
-func TestReplyPurposeAuditMinNeverDelaysMarkedBot(t *testing.T) {
-	r := dampingTestRuntime(BotConfig{}, nil)
+// 判据与对方是不是机器人无关，标记账号不再单设一档，走的是同一条门。
+func TestReplyDampingDenseLimitIgnoresBotMarker(t *testing.T) {
+	now := time.Now()
 	event := dampingTestEvent("m", "x")
-	if got := r.replyPurposeAuditMin(event); got != replyDampingPurposeAuditMin {
-		t.Fatalf("普通账号 = %d，want %d", got, replyDampingPurposeAuditMin)
-	}
 	marked := dampingTestRuntime(BotConfig{MarkedBotIDs: []string{"20002"}}, nil)
-	if got := marked.replyPurposeAuditMin(event); got != replyDampingMarkedBotDenseLimit {
-		t.Fatalf("标记账号 = %d，want %d", got, replyDampingMarkedBotDenseLimit)
+	plain := dampingTestRuntime(BotConfig{}, nil)
+	for _, tc := range []struct {
+		name string
+		r    *Runtime
+	}{{"marked", marked}, {"plain", plain}} {
+		recordDampingSends(tc.r, replyDampingDenseLimit-1, now.Add(-time.Minute))
+		if _, dense := tc.r.replyDensityForAudit(event, now); dense {
+			t.Fatalf("%s：只回过一条就带上了密度", tc.name)
+		}
+		recordDampingSends(tc.r, replyDampingDenseLimit, now)
+		if _, dense := tc.r.replyDensityForAudit(event, now); !dense {
+			t.Fatalf("%s：回到两条就该带密度", tc.name)
+		}
 	}
 }
 
@@ -179,14 +186,9 @@ func TestReplyDampingCooldownGrowsWithReplies(t *testing.T) {
 	}
 }
 
-// 被标记的机器人更早开始判目的；主人、关掉循环检测时完全不管；主人解除响应限制时清零。
+// 主人、关掉循环检测时完全不管；主人解除响应限制时清零。
 func TestReplyDampingScope(t *testing.T) {
 	now := time.Now()
-	marked := dampingTestRuntime(BotConfig{MarkedBotIDs: []string{"20002"}}, nil)
-	recordDampingSends(marked, replyDampingMarkedBotDenseLimit, now.Add(-time.Minute))
-	if _, dense := marked.replyDensityForAudit(dampingTestEvent("m", "x"), now); !dense {
-		t.Fatalf("被标记的机器人回 %d 条就该开始判目的", replyDampingMarkedBotDenseLimit)
-	}
 
 	owner := dampingTestRuntime(BotConfig{OwnerID: "20002"}, nil)
 	recordDampingSends(owner, replyDampingDenseLimit*2, now.Add(-time.Minute))
@@ -257,7 +259,7 @@ func TestMeaninglessLoopDampsWithoutDensity(t *testing.T) {
 	r := dampingTestRuntime(BotConfig{}, provider)
 	now := time.Now()
 	// 刻意停在问目的那道门以下：这一轮审核拿不到密度证据。
-	recordDampingSends(r, replyDampingPurposeAuditMin-1, now.Add(-time.Minute))
+	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
 	event := botReplyLoopEvent(r, "empty", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 嗯")
 	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 嗯", "嗯呐", r.effectiveConfigForEvent(event), false); err != nil {
 		t.Fatal(err)
@@ -278,7 +280,7 @@ func TestMeaninglessDampingNotClearedWithoutDensity(t *testing.T) {
 	}}
 	r := dampingTestRuntime(BotConfig{}, provider)
 	now := time.Now()
-	recordDampingSends(r, replyDampingPurposeAuditMin-1, now.Add(-time.Minute))
+	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
 	first := botReplyLoopEvent(r, "empty", "20002", 0, now.Add(-40*time.Second), 10*time.Second, "Diana 嗯")
 	if _, err := r.auditReplyBeforeSend(context.Background(), first, "Diana 嗯", "嗯呐", r.effectiveConfigForEvent(first), false); err != nil {
 		t.Fatal(err)
