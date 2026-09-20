@@ -1616,6 +1616,11 @@
               <span class="muted">活跃 worker</span>
               <span>{{ status?.active_workers ?? 0 }}</span>
             </div>
+            <!-- worker 数不等于模型压力：一个 worker 一轮会打好几次模型。 -->
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">模型并发</span>
+              <span :title="`本次运行峰值 ${status?.llm_concurrency?.peak ?? 0}`">{{ status?.llm_concurrency?.active ?? 0 }}</span>
+            </div>
             <p v-for="channel in failedChannels" :key="`error-${channel.profile_id || channel.platform}`" class="text-err" style="font-size: 12px">
               {{ channel.name || platformName(channel.platform) }}：{{ channelStatusHint(channel) }}
             </p>
