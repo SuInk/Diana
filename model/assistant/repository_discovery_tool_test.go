@@ -77,9 +77,9 @@ func repositoryDiscoveryTestRepo(fullName string, stars, forks int, pushedAgo ti
 	return item
 }
 
-func repositoryDiscoveryTestTool(server *httptest.Server, userID string, settings SettingValues) *dianaRepositoryIssuesTool {
+func repositoryDiscoveryTestTool(server *httptest.Server, userID string, settings SettingValues) *dianaGitHubTool {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	return newDianaRepositoryIssuesTool(
+	return newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: userID, RawMessage: "有没有好用的库推荐"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),

@@ -25,8 +25,8 @@ func TestExpiredDraftCannotBeApproved(t *testing.T) {
 		repositoryPublishSettingTimeout:   5,
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	toolFor := func(rawMessage string) *dianaRepositoryIssuesTool {
-		return newDianaRepositoryIssuesTool(runtime,
+	toolFor := func(rawMessage string) *dianaGitHubTool {
+		return newDianaGitHubTool(runtime,
 			MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
 			plugin, settings)
 	}
@@ -95,7 +95,7 @@ func TestPublishDraftFromWebSkipsConfirmationCode(t *testing.T) {
 		repositoryPublishSettingTimeout:   5,
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaRepositoryIssuesTool(runtime,
+	tool := newDianaGitHubTool(runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: "给 acme/demo 提个 issue，说导航栏在窄屏会错位"},
 		plugin, settings)
 	drafted := runRepositoryPublishToolOnce(t, tool, map[string]any{
@@ -142,7 +142,7 @@ func TestPublishDraftFromWebWorksOnExpiredDraft(t *testing.T) {
 		repositoryPublishSettingTimeout:   5,
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaRepositoryIssuesTool(runtime,
+	tool := newDianaGitHubTool(runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: "给 acme/demo 提个 issue，说日志页筛选会丢状态"},
 		plugin, settings)
 	drafted := runRepositoryPublishToolOnce(t, tool, map[string]any{
