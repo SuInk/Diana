@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { builtinPersonas, withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "./builtin-personas.ts";
 import { selectPersona, currentPersonaSelection } from "./persona-settings.ts";
-import { personaLint } from "./persona-lint.ts";
 
 test("built-in personas remain available alongside saved personas", () => {
   const saved = { id: "saved", name: "我的人设", system_prompt: "原有人设" };
@@ -46,23 +45,8 @@ test("每份内置人设都写满能模仿的密度", () => {
   }
 });
 
-// 出厂预设不能踩人设编辑器自己的检查线。用户一选内置人设就看到一排黄色提示，
-// 那条检查立刻变成噪音——他会先学会无视提示，再也不看真正写错的那次。
-// 每份都按它自己的开关值跑：动作描写那条规则只在开关关着时才检查。
-test("内置人设不触发编辑器里的写法提示", () => {
-  for (const preset of builtinPersonas) {
-    const warnings = personaLint(preset.system_prompt ?? "", {
-      actionDescriptionEnabled: preset.action_description_enabled,
-      selfReference: preset.self_reference,
-      sentenceEnders: preset.sentence_enders
-    });
-    assert.deepEqual(warnings, [], `${preset.name} 触发了提示：${JSON.stringify(warnings)}`);
-  }
-});
-
 // 开关和正文必须是一套。猫娘那份正文和示例全靠说话本身撑，一个括号动作都没有，
-// 所以动作描写开关关着；关着的时候 persona-lint 才会去查正文里的括号动作，上面
-// 那条测试也就顺带钉住了「以后别往猫娘正文里加括号动作」。
+// 所以动作描写开关关着。下面这条断言就是「以后别往猫娘正文里加括号动作」的锁。
 test("动作描写开关和正文写法一致", () => {
   const byId = Object.fromEntries(builtinPersonas.map(preset => [preset.id, preset]));
   assert.equal(byId["builtin:catgirl"].action_description_enabled, false);

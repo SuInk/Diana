@@ -1214,21 +1214,36 @@
                     <Sparkles :size="14" aria-hidden="true" />
                     AI 生成
                   </button>
+                  <button class="btn small" type="button" :disabled="personaReviewBusy || !form.system_prompt?.trim()" title="让模型读一遍，挑出和下面开关打架的写法" @click="runPersonaReview">
+                    <Eye :size="14" aria-hidden="true" />
+                    AI 检查
+                  </button>
                   <button v-if="personaCardExportable" class="btn small" type="button" title="导出成 SillyTavern V2 角色卡 JSON" @click="exportPersonaCard">
                     <Download :size="14" aria-hidden="true" />
                     导出角色卡 JSON
                   </button>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
-                <!-- 只提示不拦截：正文是用户写的，这里只负责说清「这条已经有开关管了」。 -->
-                <span v-for="(warning, index) in personaWarnings" :key="`${warning.code}-${index}`" class="hint warn-text">
-                  「{{ warning.match }}」——{{ warning.message }}
-                </span>
+                <!-- 只提示不拦截：正文是用户写的，这里只负责说清「这条已经有开关管了」。
+                     检查期间随时能跳过，跳过之后保存照常。 -->
+                <div v-if="personaReviewBusy" class="cluster">
+                  <span class="hint">AI 正在读这段人设…</span>
+                  <button class="btn small" type="button" @click="skipPersonaReview">跳过</button>
+                </div>
+                <template v-else-if="personaReviewVisible">
+                  <span v-for="(finding, index) in personaReviewFindings" :key="`ai-${finding.code}-${index}`" class="hint warn-text">
+                    「{{ finding.match }}」——{{ finding.message }}
+                  </span>
+                  <div class="cluster">
+                    <span v-if="personaReviewClean" class="hint">AI 检查没发现和开关打架的写法。</span>
+                    <button class="btn small" type="button" @click="resetPersonaReview">忽略</button>
+                  </div>
+                </template>
                 <div v-if="personaPrevious" class="cluster">
                   <button class="btn small" type="button" @click="undoPersonaGenerate">撤销生成</button>
                   <span class="hint">保存后才会生效，不满意可以撤回上一版。</span>
                 </div>
-                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。自称、句尾语气词、动作描写、分条和长短由下面的开关控制，人设正文只写角色本身，写进去会和开关打架。</span>
+                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。正文可以用段头自己接管一类规则——写了「自称与语气词：」「动作描写：」「答多长：」这样的段头，运行时就不再补那一段，下面对应的控件也会停用。消息标记、分条上限和平台差异始终由运行时决定，正文写了也不算数。</span>
               </div>
               <div class="field wide">
                 <label>接话设置</label>
@@ -1236,11 +1251,12 @@
               </div>
               <div class="field">
                 <label class="switch">
-                  <input v-model="form.action_description_enabled" type="checkbox" />
+                  <input v-model="form.action_description_enabled" type="checkbox" :disabled="personaOwnsAction" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">动作描写</span>
                 </label>
-                <span class="hint">保留当前人设，只在台词前后自然穿插括号动作。</span>
+                <span v-if="personaOwnsAction" class="hint warn-text">人设正文里写了「动作描写：」，这个开关已经交给正文，开关了都不会生效。</span>
+                <span v-else class="hint">保留当前人设，只在台词前后自然穿插括号动作。</span>
               </div>
               <div class="field">
                 <label class="switch">
@@ -1255,13 +1271,15 @@
               </div>
               <div class="field">
                 <label for="bot-self-reference">自称</label>
-                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随人设，例如 我 / 本喵 / 咱" />
-                <span class="hint">机器人怎么称呼自己。</span>
+                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" :disabled="personaOwnsVoice" placeholder="留空跟随人设，例如 我 / 本喵 / 咱" />
+                <span v-if="personaOwnsVoice" class="hint warn-text">人设正文里写了「自称与语气词：」，这一项已交给正文，这里填什么都不会生效。要用这个输入框就把正文里那一段删掉。</span>
+                <span v-else class="hint">机器人怎么称呼自己。</span>
               </div>
               <div class="field wide">
                 <label for="bot-sentence-enders">句尾语气词</label>
-                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随人设，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
-                <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
+                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" :disabled="personaOwnsVoice" placeholder="留空跟随人设，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
+                <span v-if="personaOwnsVoice" class="hint warn-text">同上：人设正文里的「自称与语气词：」已经接管了这一项。</span>
+                <span v-else class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
               </div>
               <div class="field wide">
                 <label>手动标记的机器人（本机所有群）</label>
@@ -1764,6 +1782,7 @@ import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../b
 import {
   deleteBotProfile,
   generatePersona,
+  reviewPersona,
   getConfig,
   getBotProfileConfig,
   getBotPlatforms,
@@ -1806,7 +1825,8 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
-import { personaLint } from "../persona-lint";
+import type { PersonaLintFinding } from "../api";
+import { personaOwnsField } from "../persona-owned";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -1841,15 +1861,86 @@ const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const allowlistDraft = ref("");
 
-// 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架。纯前端提示，
-// 不改正文也不拦保存——判断靠正则，误伤了也只是多一行灰字。
-const personaWarnings = computed(() =>
-  personaLint(form.value?.system_prompt ?? "", {
-    sentenceEnders: form.value?.sentence_enders ?? "",
-    selfReference: form.value?.self_reference ?? "",
-    actionDescriptionEnabled: form.value?.action_description_enabled ?? false
-  })
+// 人设正文用段头声明接管的那几项，运行时不再注入，界面上对应的控件也就不再生效。
+// 不说出来的话，用户会对着一个填了值却毫无反应的输入框反复试，而且没有任何线索
+// 指向原因——所以这里把话挑明，并顺手把控件禁掉，省得白填。
+const personaOwnsVoice = computed(() => personaOwnsField(form.value?.system_prompt ?? "", "voice"));
+const personaOwnsAction = computed(() => personaOwnsField(form.value?.system_prompt ?? "", "action"));
+
+// 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架：自称、句尾语气词、
+// 动作描写、分条与长短都由运行时单独拼进提示词，正文里再规定一遍，模型只能挑一边
+// 听，而用户改开关不见效，只会以为开关坏了。
+//
+// 这件事以前用一组正则做，认的是字面：「每句话都以喵结尾」命中，「每一句结尾都来个
+// 喵」多一个字就漏；单侧的「（」它看不见，正文里正常的括号注释又会被误报——是个
+// 关键词提醒器，不是检查器，已经删掉了。现在交给模型去读，判断的是意思。
+//
+// 代价是一次模型往返，所以它不自动跑：用户点「AI 检查」才请求，检查期间「跳过」
+// 当场掐断，结果只是多几行灰字，任何时候都不拦保存。
+const personaReviewBusy = ref(false);
+const personaReviewFindings = ref<PersonaLintFinding[]>([]);
+// 这批结果是照哪一版正文得出的。正文一改，那几条 match 可能已经被删掉，留着就会
+// 指向输入框里根本不存在的句子——比没有提示更让人找不着北。
+const personaReviewedText = ref("");
+// 「查过且干净」要和「还没查过」区分开：两者都是零条，但只有前者值得说一句。
+const personaReviewClean = ref(false);
+let personaReviewAbort: AbortController | null = null;
+
+const personaReviewStale = computed(() => (form.value?.system_prompt ?? "") !== personaReviewedText.value);
+const personaReviewVisible = computed(
+  () => !personaReviewStale.value && (personaReviewFindings.value.length > 0 || personaReviewClean.value)
 );
+
+function resetPersonaReview(): void {
+  personaReviewFindings.value = [];
+  personaReviewedText.value = "";
+  personaReviewClean.value = false;
+}
+
+// 跳过：掐断请求，回到「没查过」的状态。不想等、或者本来就不想花这次模型调用，
+// 随时能按——这条检查从头到尾是可选的，跳过之后保存照常。
+function skipPersonaReview(): void {
+  personaReviewAbort?.abort();
+  personaReviewAbort = null;
+  personaReviewBusy.value = false;
+  resetPersonaReview();
+}
+
+async function runPersonaReview(): Promise<void> {
+  const text = form.value?.system_prompt?.trim() ?? "";
+  if (!form.value || !text || personaReviewBusy.value) return;
+  const controller = new AbortController();
+  personaReviewAbort = controller;
+  personaReviewBusy.value = true;
+  resetPersonaReview();
+  try {
+    // 和生成走同一条路由：检查用的模型就是写人设用的那个，没单独指定就跟随对话那一档。
+    const route = personaRoute.value ?? roleForm.value.chat;
+    const result = await reviewPersona(
+      text,
+      {
+        self_reference: form.value.self_reference ?? "",
+        sentence_enders: form.value.sentence_enders ?? "",
+        action_description_enabled: form.value.action_description_enabled ?? false,
+        profile_id: route?.profile_id || route?.provider_id,
+        group: route?.group,
+        model: route?.model_id || route?.model
+      },
+      controller.signal
+    );
+    if (controller.signal.aborted) return;
+    personaReviewFindings.value = result.findings ?? [];
+    personaReviewedText.value = form.value.system_prompt ?? "";
+    personaReviewClean.value = personaReviewFindings.value.length === 0;
+  } catch (error) {
+    // 跳过是用户自己按的，不是故障，不该弹错。
+    if (controller.signal.aborted) return;
+    toastError(error instanceof Error ? error.message : "人设检查失败");
+  } finally {
+    if (personaReviewAbort === controller) personaReviewAbort = null;
+    personaReviewBusy.value = false;
+  }
+}
 
 // 白名单为空 = 命令执行整体关闭，这一点要在界面上直接说出来，见模板里的说明。
 const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));

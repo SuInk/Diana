@@ -1232,6 +1232,46 @@ export function generatePersona(
   });
 }
 
+/** 人设检查报出的一条。 */
+export interface PersonaLintFinding {
+  /** sentence-enders | self-reference | action-description | formatting | venue */
+  code: string;
+  /** 正文里被命中的原话，后端保证能在提交的正文里逐字找到。 */
+  match: string;
+  message: string;
+}
+
+export interface PersonaReviewResponse {
+  findings: PersonaLintFinding[];
+  model?: string;
+  provider?: string;
+}
+
+/**
+ * 让模型读一遍人设正文，挑出「和界面开关抢同一件事」的地方。
+ *
+ * 这是人设正文唯一的检查：判断的是意思不是字面，代价是一次模型往返。所以它由用户
+ * 点按钮触发，signal 用来让「跳过」当场掐断请求。
+ */
+export function reviewPersona(
+  text: string,
+  options?: {
+    self_reference?: string;
+    sentence_enders?: string;
+    action_description_enabled?: boolean;
+    profile_id?: string;
+    group?: string;
+    model?: string;
+  },
+  signal?: AbortSignal
+): Promise<PersonaReviewResponse> {
+  return requestJSON<PersonaReviewResponse>("/api/llm/persona/lint", {
+    method: "POST",
+    body: JSON.stringify({ text, ...(options ?? {}) }),
+    signal
+  });
+}
+
 export function testLLMImage(prompt: string, config?: LLMConfig): Promise<ImageGenerateResponse> {
   return requestJSON<ImageGenerateResponse>("/api/llm/test", {
     method: "POST",
