@@ -966,6 +966,43 @@ WHERE status = 'active' AND id IN (`+strings.Join(placeholders, ",")+`)
 	return err
 }
 
+// ForgetStructuredMemoriesBySubject 清空一个人身上还生效的长期记忆。
+//
+// memoryID 为空表示整个清空；给了就只清那一条。作用域和人员页的列表完全一致，
+// 看得到什么就清得掉什么，不会顺手清到别的机器人名下的同号账号。
+//
+// 和门控里的 forget 一样置为 forgotten 而不是删行：memory_sources 里的出处还
+// 在，「这条当初是哪句话带出来的」仍然查得到。清空之后模型再遇到同一件事会重
+// 新提议，这是清空不是拉黑。
+func (s *SQLiteStore) ForgetStructuredMemoriesBySubject(ctx context.Context, profileID, userID, memoryID string) (int64, error) {
+	defer s.observeStorage(ctx, "ForgetStructuredMemoriesBySubject", "write")()
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return 0, nil
+	}
+	groupPrefix, privatePrefix := memoryProfileSessionPrefixes(profileID)
+	query := `
+UPDATE memory_items
+SET status = 'forgotten', updated_at = ?
+WHERE status = 'active'
+  AND subject_user_id = ?
+  AND (substr(source_session, 1, length(?)) = ? OR substr(source_session, 1, length(?)) = ?)`
+	args := []any{time.Now().UTC().Unix(), userID, groupPrefix, groupPrefix, privatePrefix, privatePrefix}
+	if memoryID = strings.TrimSpace(memoryID); memoryID != "" {
+		query += `
+  AND id = ?`
+		args = append(args, memoryID)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // ListStructuredMemoriesBySubject 按人取这个人身上还生效的长期记忆，供控制台人员
 // 页展示。
 //
