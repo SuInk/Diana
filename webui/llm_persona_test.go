@@ -343,7 +343,7 @@ func TestPersonaGenerateOutputLimitFollowsRewriteScale(t *testing.T) {
 	if got := personaGenerateOutputLimit(""); got != personaGenerateMaxOutput {
 		t.Fatalf("从零写的上限 = %d，期望 %d", got, personaGenerateMaxOutput)
 	}
-	// 提示词要的卡是 600～900 字，拼装还会再加上段头并展开宏，硬上限得盖住这部分
+	// 提示词要的卡是 1200～1800 字，拼装还会再加上段头并展开宏，硬上限得盖住这部分
 	// 开销：贴着 900 截，一份写满的卡刚拼完就会被砍掉最后一两组示例对话——正好是
 	// 最该留下的部分。
 	if personaGenerateMaxOutput <= 1200 {
@@ -418,7 +418,7 @@ func TestPersonaGenerateSystemPromptForbidsRuntimeOwnedRules(t *testing.T) {
 		"拒答",
 		"表情符号",
 		"能查天气",
-		"600～900 字",
+		"1200～1800 字",
 		"不要在 JSON 前后写解释",
 	} {
 		if !strings.Contains(personaGenerateSystemPrompt, want) {

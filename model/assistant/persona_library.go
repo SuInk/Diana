@@ -37,15 +37,18 @@ const (
 
 // Persona 是一套具名人设。
 type Persona struct {
-	ID                       string     `json:"id"`
-	Name                     string     `json:"name"`
-	SystemPrompt             string     `json:"system_prompt,omitempty"`
-	ReplyStyle               ReplyStyle `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled *bool      `json:"action_description_enabled,omitempty"`
-	DaypartToneEnabled       *bool      `json:"daypart_tone_enabled,omitempty"`
-	SelfReference            string     `json:"self_reference,omitempty"`
-	SentenceEnders           string     `json:"sentence_enders,omitempty"`
-	UpdatedAt                time.Time  `json:"updated_at,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
+	// PersonaMode 跟着正文走：一份接管模式的正文（带段头）只在接管档下成立，
+	// 套到填空题档上，段头不生效而运行时照旧注入，同一件事说两遍。
+	PersonaMode              PersonaMode `json:"persona_mode,omitempty"`
+	ReplyStyle               ReplyStyle  `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled *bool       `json:"action_description_enabled,omitempty"`
+	DaypartToneEnabled       *bool       `json:"daypart_tone_enabled,omitempty"`
+	SelfReference            string      `json:"self_reference,omitempty"`
+	SentenceEnders           string      `json:"sentence_enders,omitempty"`
+	UpdatedAt                time.Time   `json:"updated_at,omitempty"`
 }
 
 // PersonaSet 是整个人设库。
@@ -76,6 +79,9 @@ func (persona Persona) Normalized() Persona {
 	persona.SystemPrompt = mergePersonaStyleWithinLimit(persona.SystemPrompt, &persona.ReplyStyle, &persona.ActionDescriptionEnabled)
 	persona.SelfReference = strings.TrimSpace(persona.SelfReference)
 	persona.SentenceEnders = strings.TrimSpace(persona.SentenceEnders)
+	if persona.PersonaMode != PersonaModeOwn {
+		persona.PersonaMode = ""
+	}
 	return persona
 }
 
@@ -234,7 +240,8 @@ func (persona Persona) sameContent(other Persona) bool {
 		(persona.DaypartToneEnabled == nil) == (other.DaypartToneEnabled == nil) &&
 		boolValue(persona.DaypartToneEnabled, false) == boolValue(other.DaypartToneEnabled, false) &&
 		persona.SelfReference == other.SelfReference &&
-		persona.SentenceEnders == other.SentenceEnders
+		persona.SentenceEnders == other.SentenceEnders &&
+		persona.PersonaMode == other.PersonaMode
 }
 
 // Import 把外部来的几套人设并进库里。
