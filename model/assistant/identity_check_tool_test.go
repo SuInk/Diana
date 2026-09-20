@@ -55,7 +55,7 @@ func TestIdentityCheckIgnoresClaims(t *testing.T) {
 	if impostor.Role != "user" {
 		t.Fatalf("冒充者角色应为 user: %+v", impostor)
 	}
-	if !strings.Contains(impostor.Explanation, "不是主人") {
+	if !strings.Contains(impostor.Explanation, "不是本机主人") {
 		t.Fatalf("结论没有明确否定: %+v", impostor)
 	}
 	if impostor.Determined != "runtime_account_id" {

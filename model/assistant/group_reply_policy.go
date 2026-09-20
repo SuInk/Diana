@@ -96,9 +96,16 @@ func (r *Runtime) canConfigureGroup(ctx context.Context, event MessageEvent) (st
 	if cfg.IsOwnerEvent(event) {
 		return "bot_owner", nil
 	}
-	if role := NormalizeGroupRole(event.SenderRole); GroupRoleCanConfigure(role) && IsOneBotPlatform(r.currentPlatform(event)) {
-		return string(role), nil
-	}
+	// 非主人一律走平台实时查询，不看入站事件上报的 sender_role。
+	//
+	// 这里原本有一条快捷路径：上报的角色是群主或管理员就直接放行。它信任的是桥接端
+	// 上报的字段，自建桥和 HTTP 上报模式下可以伪造。两个写操作调用方
+	// （reply_block、bot_participation）都在调用前手动把 SenderRole 清空来绕过它，
+	// 说明这条路径事实上已经没人敢用——但「靠每个调用方自觉」本身就是个失败模式：
+	// 将来新增的调用方忘了清空，就会直接踩上去拿到伪造的权限。
+	//
+	// 把清空动作收进这里，调用方不必再关心，也无从忘记。主人那一档在上面已经返回，
+	// 不受影响。
 	member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
 	if err != nil {
 		return "", fmt.Errorf("无法校验当前群权限: %w", err)
