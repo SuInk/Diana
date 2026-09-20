@@ -161,8 +161,8 @@ func TestPrivateStopRequestWithholdsAndSuppresses(t *testing.T) {
 	if !blocked {
 		t.Fatal("stop request did not activate the existing response suppression")
 	}
-	if remaining := time.Until(item.Until); remaining < 29*time.Minute || remaining > 31*time.Minute {
-		t.Fatalf("suppression duration = %s, want about 30m", remaining)
+	if remaining := time.Until(item.Until); remaining < replySuppressionMinDuration-time.Minute || remaining > replySuppressionMaxDuration {
+		t.Fatalf("suppression duration = %s，want 落在 %s 到 %s 之间", remaining, replySuppressionMinDuration, replySuppressionMaxDuration)
 	}
 }
 

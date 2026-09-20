@@ -74,7 +74,7 @@ func TestReplySuppressionPromptLeavesAccountControlToSendAudit(t *testing.T) {
 	}
 }
 
-func TestReplyRefusalFourthSuccessfulSendShowsCooldownForGroupAndPrivate(t *testing.T) {
+func TestReplyRefusalFourthSuccessfulSendActivatesSilentCooldown(t *testing.T) {
 	tests := []struct {
 		name  string
 		kind  EventKind
@@ -114,27 +114,17 @@ func TestReplyRefusalFourthSuccessfulSendShowsCooldownForGroupAndPrivate(t *test
 			if provider.mainRequests != replyRefusalThreshold || provider.visualRequests != replyRefusalThreshold {
 				t.Fatalf("main requests=%d visual requests=%d", provider.mainRequests, provider.visualRequests)
 			}
-			if len(channel.sent) != replyRefusalThreshold+1 {
-				t.Fatalf("sent=%#v, want four refusals and one cooldown notice", channel.sent)
+			// 暂停不再通报：四条可见的拒答照旧，后面没有那条「已累计拒绝 4 次」。
+			if len(channel.sent) != replyRefusalThreshold {
+				t.Fatalf("sent=%#v，want 四条拒答且没有任何暂停通报", channel.sent)
 			}
-			for index, sent := range channel.sent[:replyRefusalThreshold] {
+			for index, sent := range channel.sent {
 				if strings.TrimSpace(sent.Text) == "" || strings.Contains(sent.Text, replyRefusalMarker) {
 					t.Fatalf("visible refusal %d=%#v", index+1, sent)
 				}
-			}
-			notice := channel.sent[replyRefusalThreshold]
-			if notice.ReplyMessageID != "" || notice.MentionUserID != "" ||
-				!strings.Contains(notice.Text, "累计拒绝 4 次") ||
-				!strings.Contains(notice.Text, "暂停响应此账号约 30 分钟") ||
-				!strings.Contains(notice.Text, "不会在到期后补发") {
-				t.Fatalf("cooldown notice=%#v", notice)
-			}
-			if tt.kind == EventKindGroup {
-				if notice.GroupID != tt.group || notice.UserID != "" {
-					t.Fatalf("group cooldown notice routed incorrectly: %#v", notice)
+				if strings.Contains(sent.Text, "暂停响应此账号") {
+					t.Fatalf("第 %d 条把暂停通报出去了：%#v", index+1, sent)
 				}
-			} else if notice.UserID != "user" || notice.GroupID != "" {
-				t.Fatalf("private cooldown notice routed incorrectly: %#v", notice)
 			}
 
 			requestsBeforeFollowUp := len(provider.requests)
@@ -173,7 +163,7 @@ func TestReplyRefusalMarkerOnlyUsesVisibleFallback(t *testing.T) {
 	}
 }
 
-func TestImmediateReplySuppressionMarkerOnlyUsesVisibleFallback(t *testing.T) {
+func TestImmediateReplySuppressionMarkerOnlyGoesSilent(t *testing.T) {
 	provider := &refusalLLMProvider{replies: []string{replySuppressionMarker}}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -182,17 +172,14 @@ func TestImmediateReplySuppressionMarkerOnlyUsesVisibleFallback(t *testing.T) {
 	event := refusalTestEvent(EventKindPrivate, "", "user", "hard-marker-only")
 
 	reply, err := runtime.replyTo(context.Background(), event, event.RawMessage)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, errReplySuppressedBeforeSend) {
+		t.Fatalf("只有处置标志、没有正文时应当静默收场：reply=%q err=%v", reply, err)
 	}
-	if reply != "为避免继续自动循环，我会暂停响应此账号约 30 分钟" || len(channel.sent) != 1 || channel.sent[0].Text != reply {
-		t.Fatalf("marker-only immediate suppression reply=%q sent=%#v", reply, channel.sent)
-	}
-	if strings.Contains(reply, replySuppressionMarker) {
-		t.Fatalf("immediate suppression marker leaked: %q", reply)
+	if len(channel.sent) != 0 {
+		t.Fatalf("暂停不该通报，实际发了：%#v", channel.sent)
 	}
 	if _, active := runtime.activeReplySuppression(event, time.Now()); !active {
-		t.Fatal("immediate suppression marker did not activate cooldown")
+		t.Fatal("静默收场之后暂停仍然要生效")
 	}
 }
 
@@ -222,8 +209,8 @@ func TestReplyRefusalFailedSendDoesNotCount(t *testing.T) {
 			t.Fatalf("send %d: %v", index+1, err)
 		}
 	}
-	if len(channel.sent) != replyRefusalThreshold+1 {
-		t.Fatalf("successful sends=%#v, want three refusals and one cooldown notice", channel.sent)
+	if len(channel.sent) != replyRefusalThreshold {
+		t.Fatalf("successful sends=%#v，want 四条成功发出的拒答且没有暂停通报", channel.sent)
 	}
 	event := refusalTestEvent(EventKindPrivate, "", "user", "check")
 	if _, active := runtime.activeReplySuppression(event, time.Now()); !active {
@@ -231,38 +218,35 @@ func TestReplyRefusalFailedSendDoesNotCount(t *testing.T) {
 	}
 }
 
-func TestReplyRefusalCooldownNoticeFailureDoesNotActivateSilentCooldown(t *testing.T) {
+// 暂停不再依赖「通报发得出去」。以前是发通知失败就直接 return，暂停跟着一起不生效，
+// 于是拒答攒够了次数却还在继续回。现在没有通知这一步，累计够了就地生效。
+func TestReplyRefusalCooldownActivatesWithoutAnyNotice(t *testing.T) {
 	provider := &refusalLLMProvider{}
 	for index := 0; index < replyRefusalThreshold+1; index++ {
 		provider.replies = append(provider.replies, fmt.Sprintf("拒绝说明 %d。", index+1)+replyRefusalMarker)
 	}
-	channel := &failNthSendChannel{recordingChannel: &recordingChannel{}, failAt: replyRefusalThreshold + 1}
+	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 
 	for index := 0; index < replyRefusalThreshold; index++ {
-		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("notice-failure-%d", index))
+		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("silent-cooldown-%d", index))
 		if _, err := runtime.replyTo(context.Background(), event, event.RawMessage); err != nil {
 			t.Fatalf("refusal %d: %v", index+1, err)
 		}
 	}
-	event := refusalTestEvent(EventKindPrivate, "", "user", "after-failed-notice")
-	if _, active := runtime.activeReplySuppression(event, time.Now()); active {
-		t.Fatal("failed cooldown notice activated a silent cooldown")
-	}
-	if state := runtime.replyRefusalByUser["user"]; len(state.Hits) != replyRefusalThreshold {
-		t.Fatalf("refusal hits after failed notice=%d, want %d for retry", len(state.Hits), replyRefusalThreshold)
-	}
-
-	if _, err := runtime.replyTo(context.Background(), event, event.RawMessage); err != nil {
-		t.Fatal(err)
-	}
+	event := refusalTestEvent(EventKindPrivate, "", "user", "after-threshold")
 	if _, active := runtime.activeReplySuppression(event, time.Now()); !active {
-		t.Fatal("next successful refusal did not retry the cooldown notice")
+		t.Fatal("累计够了就该生效，不该再等一条通知")
 	}
-	if len(channel.sent) != replyRefusalThreshold+2 || !strings.Contains(channel.sent[len(channel.sent)-1].Text, "暂停响应此账号") {
-		t.Fatalf("successful sends after notice retry=%#v", channel.sent)
+	if len(channel.sent) != replyRefusalThreshold {
+		t.Fatalf("发出去的应当只有四条拒答：%#v", channel.sent)
+	}
+	for _, sent := range channel.sent {
+		if strings.Contains(sent.Text, "暂停响应此账号") || strings.Contains(sent.Text, "累计拒绝") {
+			t.Fatalf("把暂停通报出去了：%#v", sent)
+		}
 	}
 }
 
@@ -300,12 +284,15 @@ func TestReplyRefusalConcurrentThresholdBlocksTheExtraReply(t *testing.T) {
 		t.Fatalf("concurrent outcomes=%#v", outcomes)
 	}
 	messages := channel.messages()
-	if len(messages) != 2 || !strings.Contains(messages[0].Text, "拒绝") || !strings.Contains(messages[1].Text, "暂停响应此账号") {
-		t.Fatalf("concurrent sends=%#v, want one refusal then one cooldown notice", messages)
+	if len(messages) != 1 || !strings.Contains(messages[0].Text, "拒绝") {
+		t.Fatalf("concurrent sends=%#v，want 只有那一条拒答，暂停不通报", messages)
 	}
 }
 
-func TestReplyRefusalCooldownNoticeUsesIndependentContext(t *testing.T) {
+// 请求上下文被取消不影响暂停生效。以前这一条守的是「通知不能跟着请求一起被取消」，
+// 现在没有通知了，要守的就剩暂停本身：它在 applyReplyControlAfterSend 里就地写入，
+// 不经过任何发送，自然也不受上下文取消影响。
+func TestReplyRefusalCooldownSurvivesCanceledContext(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
 	seedAt := time.Now().Add(-time.Minute)
@@ -318,11 +305,11 @@ func TestReplyRefusalCooldownNoticeUsesIndependentContext(t *testing.T) {
 	cancel()
 	runtime.applyReplyControlAfterSend(ctx, event, "这条消息我拒绝回答。", replyControlIntent{RefuseCurrent: true})
 
-	if len(channel.sent) != 1 || !strings.Contains(channel.sent[0].Text, "暂停响应此账号") {
-		t.Fatalf("cooldown notice was lost with canceled request context: %#v", channel.sent)
+	if len(channel.sent) != 0 {
+		t.Fatalf("暂停不该通报：%#v", channel.sent)
 	}
 	if _, active := runtime.activeReplySuppression(event, time.Now()); !active {
-		t.Fatal("canceled request context prevented cooldown activation")
+		t.Fatal("上下文被取消不该妨碍暂停生效")
 	}
 }
 
@@ -500,8 +487,8 @@ func TestReplySuppressionBlocksFollowingMentionAndQuote(t *testing.T) {
 		t.Fatal("generated refusal did not activate response suppression")
 	}
 	remaining := time.Until(item.Until)
-	if remaining < 29*time.Minute || remaining > 31*time.Minute {
-		t.Fatalf("suppression duration = %s, want about 30m", remaining)
+	if remaining < replySuppressionMinDuration-time.Minute || remaining > replySuppressionMaxDuration {
+		t.Fatalf("suppression duration = %s，want 落在 %s 到 %s 之间", remaining, replySuppressionMinDuration, replySuppressionMaxDuration)
 	}
 
 	second := MessageEvent{
@@ -650,7 +637,7 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 			loopVerdict("0.96", "延续相同助手人格"),
 			loopVerdict("0.98", "继续自动回应机器人"),
 		},
-		replies: []string{`为避免机器人互相循环，已暂停响应此账号约 30 分钟，期间不再接续消息。`},
+		replies: []string{`那我先去忙点别的啦，晚点再聊喵`},
 	}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -682,21 +669,28 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	if !strings.Contains(item.Reason, "累计 3 次高置信度空转") {
 		t.Fatalf("suppression reason = %q", item.Reason)
 	}
-	// 三次审核加一次暂停通知：空转判断没有单独占用调用，是跟着发送前审核走的。
+	// 三次审核加一次收声提示：空转判断没有单独占用调用，是跟着发送前审核走的；
+	// 多出来的那一次是暂停生效后那句人设提示。
 	if len(provider.requests) != botReplyLoopThreshold+1 {
-		t.Fatalf("LLM requests = %d, want %d audits and one notice", len(provider.requests), botReplyLoopThreshold+1)
+		t.Fatalf("LLM requests = %d, want %d audits and one pause hint", len(provider.requests), botReplyLoopThreshold+1)
 	}
 	// 审核请求里必须同时有待发回复和判断空转要用的近期上下文。
 	first := requestTextContent(provider.requests[0])
 	if !strings.Contains(first, `"candidate_reply":"好的，我在的"`) || !strings.Contains(first, "recent_bot_replies") {
 		t.Fatalf("audit payload missing the reply or loop evidence: %q", first)
 	}
+	// 暂停生效后提示一句，而且这句不能带任何后台词汇。
 	if len(channel.sent) != 1 {
-		t.Fatalf("suppression notices = %#v", channel.sent)
+		t.Fatalf("suppression hints = %#v", channel.sent)
 	}
-	notice := channel.sent[0]
-	if notice.ReplyMessageID != "" || notice.MentionUserID != "" || !strings.Contains(notice.Text, "为避免机器人互相循环") || !strings.Contains(notice.Text, "暂停响应此账号") || !strings.Contains(notice.Text, "约 30 分钟") {
-		t.Fatalf("suppression notice = %#v", notice)
+	hint := channel.sent[0]
+	if hint.ReplyMessageID != "" || hint.MentionUserID != "" {
+		t.Fatalf("收声提示不该点名：%#v", hint)
+	}
+	for _, banned := range []string{"暂停", "响应", "账号", "循环", "分钟"} {
+		if strings.Contains(hint.Text, banned) {
+			t.Fatalf("收声提示漏出后台词汇 %q：%#v", banned, hint)
+		}
 	}
 	// 暂停已经生效，下一条进来时由本地状态直接拦掉，不再走模型。
 	handled, outcome := prepareBotReplyLoopRound(t, runtime, "ai-loop", "20002", 3, time.Now(), time.Minute, "收到，我继续待命")
@@ -704,7 +698,7 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 		t.Fatalf("suppressed follow-up handled=%v outcome=%q", handled, outcome)
 	}
 	if len(channel.sent) != 1 {
-		t.Fatalf("suppression notice repeated: %#v", channel.sent)
+		t.Fatalf("suppression hint repeated: %#v", channel.sent)
 	}
 }
 
@@ -878,54 +872,37 @@ func TestBotReplyLoopThresholdAndWindowBoundaries(t *testing.T) {
 	}
 }
 
-func TestReplySuppressionExpiresAtThirtyMinuteBoundary(t *testing.T) {
+func TestReplySuppressionExpiresAtItsOwnBoundary(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "message"}
 	t0 := time.Date(2026, time.July, 18, 9, 0, 0, 0, time.UTC)
 	item, activated := runtime.activateReplySuppression(event, "test", t0)
-	if !activated || !item.Until.Equal(t0.Add(30*time.Minute)) {
+	if !activated {
 		t.Fatalf("item=%#v activated=%v", item, activated)
 	}
+	if got := item.Until.Sub(t0); got < replySuppressionMinDuration || got > replySuppressionMaxDuration {
+		t.Fatalf("时长 %s 不在 %s 到 %s 之间", got, replySuppressionMinDuration, replySuppressionMaxDuration)
+	}
 	if _, active := runtime.activeReplySuppression(event, item.Until.Add(-time.Nanosecond)); !active {
-		t.Fatal("suppression expired before the 30-minute boundary")
+		t.Fatal("到期前一纳秒就失效了")
 	}
 	if _, active := runtime.activeReplySuppression(event, item.Until); active {
-		t.Fatal("suppression remained active at the 30-minute boundary")
+		t.Fatal("到期时刻仍然生效")
 	}
 }
 
-func TestReplySuppressionNoticeUsesMainModelWithoutMentions(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `为避免机器人互相循环，已暂停响应此账号约 30 分钟。`}
-	store := &stubLLMProfileStore{set: llm.ProfileSet{
-		Profiles: []llm.Profile{
-			{ID: "main", Name: "主聊天", Group: "chat", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "main-key", Model: "main-model"}},
-			{ID: "routing", Name: "快速语义判定", Group: "routing", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "routing-key", Model: "routing-model"}},
-		},
-	}}
-	runtime := NewRuntime(BotConfig{SystemPrompt: "保持 Diana 的自然人设"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
-	var usedModel string
-	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
-		usedModel = cfg.Model
-		return provider, nil
-	})
-	notice, err := runtime.generateReplySuppressionActivationNotice(context.Background(), MessageEvent{Kind: EventKindGroup, GroupID: "12345"}, ReplySuppression{Until: time.Now().Add(30 * time.Minute)})
-	if err != nil {
-		t.Fatal(err)
+// 每次暂停的时长要随机，不再是固定的整三十分钟。
+func TestReplySuppressionDurationIsRandomWithinRange(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 200; i++ {
+		got := randomReplySuppressionDuration()
+		if got < replySuppressionMinDuration || got > replySuppressionMaxDuration {
+			t.Fatalf("第 %d 次取到 %s，超出 %s 到 %s", i+1, got, replySuppressionMinDuration, replySuppressionMaxDuration)
+		}
+		seen[got] = true
 	}
-	if usedModel != "main-model" {
-		t.Fatalf("used model = %q", usedModel)
-	}
-	if strings.Contains(notice, "@") || strings.Contains(notice, "CQ:") || strings.Contains(notice, "20002") {
-		t.Fatalf("notice leaked mention metadata: %q", notice)
-	}
-	if !strings.Contains(notice, "暂停响应此账号") {
-		t.Fatalf("notice = %q", notice)
-	}
-	if !requestMessagesContain(provider.request.Messages, "保持 Diana 的自然人设") {
-		t.Fatalf("notice request missing persona: %#v", provider.request.Messages)
-	}
-	if got := sanitizeReplySuppressionNotice(`@某人 [CQ:at,qq=20002] 暂停响应此账号`); got != "" {
-		t.Fatalf("unsafe notice was not rejected: %q", got)
+	if len(seen) < 2 {
+		t.Fatalf("两百次只取到 %d 个不同的值，没有随机", len(seen))
 	}
 }
 
