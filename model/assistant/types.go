@@ -2540,7 +2540,8 @@ func copyBoolPointer(value *bool) *bool {
 }
 
 // PersonaOwnedTemplate 是接管模式的起手模板：把默认正文里那几段「本来由控件和运行时
-// 负责」的规则也写出来，每段带上 personaOwnedSections 认的段头。
+// 负责」的规则也写出来，各自起一个段头，方便照着改。段头只是给人看的结构，运行时
+// 不解析它——接管与否只看档位。
 //
 // 存在的理由是接管模式不该让人从空白开始。切过去之后运行时就不再补那几段了，而
 // 「运行时本来补的是什么」在界面上一个字都看不见——没有模板的话，用户得先把提示词
@@ -2561,8 +2562,9 @@ const PersonaOwnedTemplate = "身份与来历：你叫 Diana，是个机器人�
 // 自称、开过动作描写、却从没编辑过人设正文的人不在少数，默认切到接管模式会让这些
 // 设置安静失效，而他们根本不知道发生了什么。
 //
-// 接管模式要用户自己选。选了之后，正文里用段头声明的那几段运行时不再补，界面上
-// 对应的控件也会停用并写明原因（见 personaOwnedSections 和前端 persona-owned.ts）。
+// 接管模式要用户自己选。选了之后，「这个角色怎么说话」那几段运行时一律不补——
+// 自称与句尾语气词、动作描写、时段语气、接梗、答多长、篇幅与节奏，全交给正文；
+// 界面上对应的控件也跟着藏起来（见前端 persona-owned.ts）。
 type PersonaMode string
 
 const (
@@ -2572,8 +2574,9 @@ const (
 	PersonaModeOwn PersonaMode = "own"
 )
 
-// ownsSections 判断这一档要不要认正文里的段头。只有接管模式认。
-func (mode PersonaMode) ownsSections() bool { return mode == PersonaModeOwn }
+// ownsPersonaVoice 报告这一档是不是由人设正文全权负责「怎么说话」。
+// 只有接管模式是——运行时那几段规则跟着整体关掉，不逐段去猜正文写没写。
+func (mode PersonaMode) ownsPersonaVoice() bool { return mode == PersonaModeOwn }
 
 // defaultSystemPrompt 是没配置任何人设时的兜底正文，写成和内置预设、AI 生成人设
 // 同一种形状：身份与来历 / 性格 / 说话方式 / 关系与称呼 / 边界，再跟一小段示例。

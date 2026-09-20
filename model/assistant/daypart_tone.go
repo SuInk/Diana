@@ -69,7 +69,8 @@ func dayPartTonePrompt(enabled bool, now time.Time) string {
 // 时区复用回复门槛那份（ReplyGate.Timezone）：一台机器人不该有两个「几点了」。
 // 门槛没配时 Location() 退回服务器本地时区。
 func dayPartToneForConfig(cfg BotConfig, now time.Time) string {
-	if !boolValue(cfg.DaypartToneEnabled, false) {
+	// 接管档下「怎么说话」全归正文，时段语气这个开关跟着一起不生效。
+	if cfg.PersonaMode.ownsPersonaVoice() || !boolValue(cfg.DaypartToneEnabled, false) {
 		return ""
 	}
 	location := time.Local

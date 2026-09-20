@@ -1247,7 +1247,13 @@
                   <button class="btn small" type="button" @click="undoPersonaGenerate">撤销生成</button>
                   <span class="hint">保存后才会生效，不满意可以撤回上一版。</span>
                 </div>
-                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。当前是{{ personaMode === "own" ? "接管模式：正文里带段头的那几段运行时不再补，对应控件停用" : "填空题模式：正文只写角色，其余交给下面的控件，正文里的段头不生效" }}。消息标记、分条上限和平台差异始终由运行时决定，正文写了也不算数。</span>
+                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。当前是{{ personaMode === "own" ? "接管模式：「怎么说话」全由正文负责，运行时不再补那几段" : "填空题模式：正文只写角色，其余交给下面的控件" }}。消息标记、分条上限和平台差异始终由运行时决定，正文写了也不算数。</span>
+                <!-- 控件藏起来之后它存的值还在配置里。不说出来的话，一个填过「本喵」的
+                     输入框就既看不见也改不掉，只在某天正文里那段被删掉时突然复活。 -->
+                <span v-if="personaOwnedSummary.length" class="hint warn-text">
+                  已交给正文的设置：{{ personaOwnedSummary.map(item => item.staleValue ? `${item.label}（原填「${item.staleValue}」，当前不生效）` : item.label).join("、") }}。
+                  下面对应的控件已隐藏；要改回用控件，把人设模式切回填空题。
+                </span>
               </div>
               <div class="field wide">
                 <label for="bot-persona-mode">人设模式</label>
@@ -1258,16 +1264,18 @@
                 <label>接话设置</label>
                 <ParticipationControls :key="form.id" :model-value="form.participation" @update:model-value="setParticipation" />
               </div>
-              <div class="field">
+              <!-- 正文接管之后这几个控件一律藏起来，不留一排灰掉的空壳：接管模式是用户
+                   自己选的，他要的是「正文说了算」，不是被同一件事提醒三遍。归属由人设
+                   正文下面那一行汇总交代，连同这里还存着、但当前不生效的值。 -->
+              <div v-if="!personaOwned" class="field">
                 <label class="switch">
-                  <input v-model="form.action_description_enabled" type="checkbox" :disabled="personaOwnsAction" />
+                  <input v-model="form.action_description_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">动作描写</span>
                 </label>
-                <span v-if="personaOwnsAction" class="hint warn-text">人设正文里写了「动作描写：」，这个开关已经交给正文，开关了都不会生效。</span>
-                <span v-else class="hint">保留当前人设，只在台词前后自然穿插括号动作。</span>
+                <span class="hint">保留当前人设，只在台词前后自然穿插括号动作。</span>
               </div>
-              <div class="field">
+              <div v-if="!personaOwned" class="field">
                 <label class="switch">
                   <input v-model="form.daypart_tone_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
@@ -1278,17 +1286,15 @@
                   只调精力和节奏，不改口癖和身份，对所有人设生效。时区取「准入控制」里回复时段那一份。
                 </span>
               </div>
-              <div class="field">
+              <div v-if="!personaOwned" class="field">
                 <label for="bot-self-reference">自称</label>
-                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" :disabled="personaOwnsVoice" placeholder="留空跟随人设，例如 我 / 本喵 / 咱" />
-                <span v-if="personaOwnsVoice" class="hint warn-text">人设正文里写了「自称与语气词：」，这一项已交给正文，这里填什么都不会生效。要用这个输入框就把正文里那一段删掉。</span>
-                <span v-else class="hint">机器人怎么称呼自己。</span>
+                <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随人设，例如 我 / 本喵 / 咱" />
+                <span class="hint">机器人怎么称呼自己。</span>
               </div>
-              <div class="field wide">
+              <div v-if="!personaOwned" class="field wide">
                 <label for="bot-sentence-enders">句尾语气词</label>
-                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" :disabled="personaOwnsVoice" placeholder="留空跟随人设，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
-                <span v-if="personaOwnsVoice" class="hint warn-text">同上：人设正文里的「自称与语气词：」已经接管了这一项。</span>
-                <span v-else class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
+                <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随人设，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
+                <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
               </div>
               <div class="field wide">
                 <label>手动标记的机器人（本机所有群）</label>
@@ -1835,7 +1841,7 @@ import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import type { PersonaLintFinding } from "../api";
-import { personaOwnsField } from "../persona-owned";
+import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
 import { personaOwnedTemplate } from "../persona-owned-template";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
@@ -1879,8 +1885,18 @@ const personaModeOptions: AppSelectOption[] = [
   { value: "own", label: "接管：人设正文自己写全" }
 ];
 const personaMode = computed(() => form.value?.persona_mode ?? "fill");
-const personaOwnsVoice = computed(() => personaOwnsField(personaMode.value, form.value?.system_prompt ?? "", "voice"));
-const personaOwnsAction = computed(() => personaOwnsField(personaMode.value, form.value?.system_prompt ?? "", "action"));
+const personaOwned = computed(() => personaOwnsVoice(personaMode.value));
+
+// 被正文接管的那几项，控件已经藏起来，这里汇总成一行交代去向，连同还存着但当前
+// 不生效的值——否则藏掉一个填过「本喵」的输入框，那个值既看不见也改不掉。
+const personaOwnedSummary = computed(() =>
+  personaOwnedNotices(personaMode.value, {
+    selfReference: form.value?.self_reference,
+    sentenceEnders: form.value?.sentence_enders,
+    actionDescriptionEnabled: form.value?.action_description_enabled,
+    daypartToneEnabled: form.value?.daypart_tone_enabled
+  })
+);
 
 // 切到接管模式时人设框多半还是填空题那份正文——没有段头，运行时照旧补，等于白切。
 // 所以给一个一键填模板：运行时本来补的是什么，界面上一个字都看不见，让人从空白开始

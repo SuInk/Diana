@@ -128,85 +128,52 @@ const replySegmentationMarkerOnlyRule = "当前关闭多条发送：默认只发
 // 出处口头点名就够。
 const replyProportionRule = "按当前这一问给最小但足够的回答，直接回答不等于全面展开。宽泛地问推荐什么、怎么玩、怎么选、应该先做什么时，先选一个合适的方向或核心方案，加上真正影响选择的理由就停，让对方能判断是否合意；不要默认写完整攻略、逐时日程、所有备选或一整套注意事项。带有天数、预算、同行者等条件，只表示答案必须符合这些条件，不等于要求穷举细节。只有明确要求详细攻略、完整步骤、多个选项比较或后续追问某项细节时才展开相应部分；不要为了简短省略回答所必需的操作或关键风险。技术问题也只解决问到的范围：问怎么查原因就给检查方法，不自动延伸到所有修复和清理操作。信息足够时先给答案，允许一句话说明合理假设；缺少决定性条件才问当前最关键的一两项，不把整份信息采集表一次丢给对方。答到能满足这一问就结束，不固定附加追问、总结或‘我还可以帮你细化’。不要在回复里罗列参考链接或来源清单；需要交代出处时口头点名，对方追问再给链接。"
 
-// 人设正文接管了某一段运行时规则时，那一段就不再注入——否则同一件事被规定两遍，
-// 模型只能挑一边听，而这正是人设正文最容易出的毛病。
+// 接管模式下，这些「这个角色怎么说话」的规则段一律不注入：自称与句尾语气词、
+// 动作描写、时段语气、接梗、答多长、篇幅与节奏。用户选了接管，就是说这些他自己
+// 在正文里写，运行时不用再操心。
 //
-// 判据是段头，不是内容相似度：段头是写人设时自己打上去的显式声明（「答多长：」
-// 就是「这段我自己写」），一个字符串比较，既不会误伤也不需要维护同义词表。
+// 判据只有档位一个。早先试过按正文里的段头逐段判重，那条路要拿字符串去匹配用户
+// 写的散文——匹配得上的算接管、匹配不上的照旧注入，于是段头少一个标点、换一种
+// 写法就悄悄改变行为，而界面和运行时对「接管了没有」还可能给出不同答案。档位是
+// 用户明确选的，不用猜。
 //
-// 存量人设一个字都没改过，自然带不上这些段头，于是照旧拿到运行时那份——换句话说
-// 这张表只对「主动把规则写进正文」的人设生效，升级上来的配置行为不变。
-// 能进这张表的只有「固定字符串」那几段：运行时每轮拼的是同一句话，不随时间、
-// 平台、好感度或本轮分条上限变化。随运行时状态变化的几段进不来，不是选择问题，
-// 是类型对不上——人设是一段静态文本，而 replySegmentationRule 要看本轮是不是
-// 单条模式、dayPartToneForConfig 要看当前时刻、moodToneForConfig 要看当前好感度、
-// platformOutputRulesForConfig 要看当前平台，每轮算出来都不一样。
-//
-// 自称、句尾语气词和动作描写背后各有一个界面控件。它们在表里，但多一层义务：
-// 正文声明接管之后，界面必须明说这一项已经被正文接管（见 AssistantView 里的
-// personaOwnedFields），否则用户填了值没反应，也不知道为什么。
-var personaOwnedSections = map[string]string{
-	"答多长：":    "proportion",
-	"接梗与分寸：":  "slang",
-	"自称与语气词：": "voice",
-	"动作描写：":   "action",
-	"表情符号：":   "emoji",
-	"聊天节奏：":   "pacing",
-	"聊天还是求助：": "intent",
-	"长文怎么组织：": "document",
-}
-
-// personaOwnsSection 判断这段人设正文是不是自己接管了某一类规则。
-//
-// 先看档位：填空题模式下段头一律不算数。存量配置和大多数人都停在那一档，正文里
-// 偶然出现一个同名段头就让运行时静默少给一段规则，是没人能查明白的那种坏。接管
-// 模式是用户自己选的，选了才认段头。
-func personaOwnsSection(mode PersonaMode, systemPrompt string, kind string) bool {
-	if !mode.ownsSections() {
-		return false
-	}
-	for header, owned := range personaOwnedSections {
-		if owned == kind && strings.Contains(systemPrompt, header) {
-			return true
-		}
-	}
-	return false
-}
+// 不跟着关的是另一类：消息标记、本轮分条上限、平台差异、好感度语气。它们不是
+// 「怎么说话」，是投递机制和运行时上下文——正文写死了也不作数，关掉只会让消息
+// 发不出去。
 
 // replyPresentationPrompt contains shared delivery rules, independent of persona.
-// systemPrompt 只用来判重：正文里自带对应段头的那几段不再重复给，见 personaOwnedSections。
-func replyPresentationPrompt(naturalSplit bool, voice personaVoice, mode PersonaMode, systemPrompt string) string {
+// 接管模式下只留投递机制那几段，其余交给人设正文。
+func replyPresentationPrompt(naturalSplit bool, voice personaVoice, mode PersonaMode) string {
 	segmentation := replySegmentationRule
 	if !naturalSplit {
 		segmentation = replySegmentationMarkerOnlyRule
 	}
-	// 正文没声明的照给，声明了的留空——留空的项由下面的 TrimSpace/Join 自然吞掉。
-	unless := func(kind string, rule string) string {
-		if personaOwnsSection(mode, systemPrompt, kind) {
+	// 填空题档照给，接管档留空——留空的项由下面的 TrimSpace/Join 自然吞掉。
+	unless := func(rule string) string {
+		if mode.ownsPersonaVoice() {
 			return ""
 		}
 		return rule
 	}
 	return strings.TrimSpace(strings.Join([]string{
-		unless("intent", replyConversationalIntentRule),
-		unless("pacing", replyCompactPacingRule),
-		unless("emoji", replyEmojiRule),
-		// replyBlankLineRule、segmentation、投递方式与换行选择这几段不让位：
-		// 它们讲的是消息标记和本轮分条上限，是投递机制，不是这个角色怎么说话。
+		unless(replyConversationalIntentRule),
+		unless(replyCompactPacingRule),
+		unless(replyEmojiRule),
+		// 这几段不跟着关：讲的是消息标记和本轮分条上限，是投递机制，不是怎么说话。
 		replyBlankLineRule,
 		segmentation,
-		unless("document", replyDocumentDeliveryRule),
+		unless(replyDocumentDeliveryRule),
 		replyDeliveryChoiceRule,
 		replyLineBreakChoiceRule,
-		unless("proportion", replyProportionRule),
-		unless("voice", voice.prompt()),
+		unless(replyProportionRule),
+		unless(voice.prompt()),
 	}, "\n"))
 }
 
 // actionDescriptionPrompt is an optional rendering layer, not a persona. It may
 // be combined with any reply style without inventing new traits or relationships.
-func actionDescriptionPrompt(enabled bool, mode PersonaMode, systemPrompt string) string {
-	if !enabled || personaOwnsSection(mode, systemPrompt, "action") {
+func actionDescriptionPrompt(enabled bool, mode PersonaMode) string {
+	if !enabled || mode.ownsPersonaVoice() {
 		return ""
 	}
 	return strings.Join([]string{
@@ -217,8 +184,8 @@ func actionDescriptionPrompt(enabled bool, mode PersonaMode, systemPrompt string
 	}, "\n")
 }
 
-func actionDescriptionClosingAnchor(enabled bool, mode PersonaMode, systemPrompt string) string {
-	if !enabled || personaOwnsSection(mode, systemPrompt, "action") {
+func actionDescriptionClosingAnchor(enabled bool, mode PersonaMode) string {
+	if !enabled || mode.ownsPersonaVoice() {
 		return ""
 	}
 	return "动作描写只叠加在原有人设上：保持原来的性格和语气，每条含自然语言的回复至少用全角括号写一处短动作，不额外变得黏人或亲密；纯代码、命令、链接或原文除外。"
