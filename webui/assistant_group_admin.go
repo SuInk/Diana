@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 
 	"github.com/gin-gonic/gin"
@@ -249,13 +250,52 @@ func (h *BotHandler) getGroupAdminConfig(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, groupAdminConfigResponse{
-		GroupID:   session.groupID,
-		UserID:    session.userID,
-		ExpiresAt: session.expiresAt,
-		ProfileID: profile.ID,
-		Config:    h.groupConfigForProfile(session.groupID, profile),
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profile.ID)),
+		GroupID:    session.groupID,
+		UserID:     session.userID,
+		ExpiresAt:  session.expiresAt,
+		ProfileID:  profile.ID,
+		Config:     h.groupConfigForProfile(session.groupID, profile),
+		Plugins:    assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profile.ID)),
+		Extensions: h.groupAdminExtensions(c.Request.Context(), profile.ID),
 	})
+}
+
+// groupAdminExtensions 列出这台机器人的 MCP 和 Skill 及其机器人级档位。查不到就
+// 返回空列表：自助页少一块卡片，不影响其他配置保存。
+func (h *BotHandler) groupAdminExtensions(ctx context.Context, profileID string) []groupAdminExtension {
+	runtime, ok := h.runtime.(extensionAdminRuntime)
+	if !ok {
+		return []groupAdminExtension{}
+	}
+	result, err := runtime.AdministerExtensions(ctx, agent.ExtensionAdminRequest{Operation: "list", ProfileID: profileID})
+	if err != nil {
+		return []groupAdminExtension{}
+	}
+	payload, _ := result.(map[string]any)
+	states, _ := payload["items"].([]agent.ExtensionState)
+	overrides, err := agent.LoadExtensionOverrides(assistant.AgentWorkspaceDir(), profileID)
+	if err != nil {
+		return []groupAdminExtension{}
+	}
+	audiences, err := agent.LoadExtensionAudiences(assistant.AgentWorkspaceDir(), profileID)
+	if err != nil {
+		return []groupAdminExtension{}
+	}
+	out := make([]groupAdminExtension, 0, len(states))
+	for _, state := range states {
+		if state.Kind == agent.ExtensionKindBuiltin {
+			continue
+		}
+		out = append(out, groupAdminExtension{
+			ID:          state.ID,
+			Kind:        string(state.Kind),
+			Name:        state.Name,
+			Description: state.Description,
+			Bundled:     state.Bundled,
+			BotTier:     agent.BotExtensionTier(overrides, audiences, state.ID),
+		})
+	}
+	return out
 }
 
 func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
@@ -286,6 +326,12 @@ func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "group_admin_config_save", err, session.groupID, map[string]any{"group_id": session.groupID})
 		return
 	}
+	if session.userID != profile.OwnerID {
+		if err := h.groupExtensionAccessWithinBotLimits(profile.ID, current.ExtensionAccess, cfg.ExtensionAccess); err != nil {
+			h.writeError(c, http.StatusForbidden, "group_admin_config_save", err, session.groupID, map[string]any{"group_id": session.groupID})
+			return
+		}
+	}
 	saved, err := h.groupConfigs.SaveGroupConfig(cfg, profile)
 	if err != nil {
 		h.writeError(c, http.StatusBadRequest, "group_admin_config_save", err, session.groupID, map[string]any{"group_id": session.groupID})
@@ -293,12 +339,13 @@ func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "group_admin_config_save", "群级机器人配置已保存", session.groupID, map[string]any{"group_id": session.groupID, "user_id": session.userID})
 	c.JSON(http.StatusOK, groupAdminConfigResponse{
-		GroupID:   session.groupID,
-		UserID:    session.userID,
-		ExpiresAt: session.expiresAt,
-		ProfileID: profile.ID,
-		Config:    h.groupConfigForAPI(saved.WithDefaults(session.groupID, profile)),
-		Plugins:   assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profile.ID)),
+		GroupID:    session.groupID,
+		UserID:     session.userID,
+		ExpiresAt:  session.expiresAt,
+		ProfileID:  profile.ID,
+		Config:     h.groupConfigForAPI(saved.WithDefaults(session.groupID, profile)),
+		Plugins:    assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profile.ID)),
+		Extensions: h.groupAdminExtensions(c.Request.Context(), profile.ID),
 	})
 }
 
@@ -427,6 +474,11 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 	if len([]rune(cfg.ReplyAccountSafetyAuditPrompt)) > 8000 {
 		return assistant.GroupConfig{}, fmt.Errorf("账号安全审核规则不能超过 8000 字")
 	}
+	access, err := normalizeGroupExtensionAccess(cfg.ExtensionAccess)
+	if err != nil {
+		return assistant.GroupConfig{}, err
+	}
+	cfg.ExtensionAccess = access
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
 	}
@@ -442,6 +494,136 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 	}
 	cfg.PluginSettingOverrides = normalized
 	return cfg, nil
+}
+
+// normalizeGroupExtensionAccess 清掉空键、跟随档和空名单，档位取值交给 agent 校验。
+func normalizeGroupExtensionAccess(values map[string]assistant.GroupExtensionAccess) (map[string]assistant.GroupExtensionAccess, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]assistant.GroupExtensionAccess, len(values))
+	for id, item := range values {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		tier, err := agent.NormalizeExtensionTier(item.Tier)
+		if err != nil {
+			return nil, err
+		}
+		// 「跟随」就是本群不干预这一项：连带名单一起丢掉，不留看不见的配置。
+		if tier == "" {
+			continue
+		}
+		allow, err := normalizeGroupExtensionAccounts(item.Allow)
+		if err != nil {
+			return nil, err
+		}
+		deny, err := normalizeGroupExtensionAccounts(item.Deny)
+		if err != nil {
+			return nil, err
+		}
+		next := assistant.GroupExtensionAccess{Tier: tier, Allow: allow, Deny: deny}
+		if next.Empty() {
+			continue
+		}
+		out[id] = next
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+const groupExtensionUserLimit = 200
+
+func normalizeGroupExtensionAccounts(values []string) ([]string, error) {
+	accounts := trimStringSlice(values)
+	if len(accounts) > groupExtensionUserLimit {
+		return nil, fmt.Errorf("本群名单最多 %d 个账号", groupExtensionUserLimit)
+	}
+	for _, account := range accounts {
+		if len([]rune(account)) > 64 {
+			return nil, fmt.Errorf("账号 ID 过长")
+		}
+	}
+	return accounts, nil
+}
+
+// groupExtensionAccessWithinBotLimits 拦住群管理员往宽了改：群里只能比机器人那一档
+// 更严，否则群管理员就能把主人装的服务放给全群。主人自己改不受这条限制。
+func (h *BotHandler) groupExtensionAccessWithinBotLimits(profileID string, current, next map[string]assistant.GroupExtensionAccess) error {
+	overrides, err := agent.LoadExtensionOverrides(assistant.AgentWorkspaceDir(), profileID)
+	if err != nil {
+		return err
+	}
+	audiences, err := agent.LoadExtensionAudiences(assistant.AgentWorkspaceDir(), profileID)
+	if err != nil {
+		return err
+	}
+	for id, item := range next {
+		botTier := agent.BotExtensionTier(overrides, audiences, id)
+		effective := item.Tier
+		if effective == "" {
+			effective = botTier
+		}
+		if agent.ExtensionTierRank(effective) > agent.ExtensionTierRank(botTier) {
+			return fmt.Errorf("群管理员只能把 %s 调得更严，机器人给的是「%s」", id, extensionTierLabel(botTier))
+		}
+		// 白名单是放行，群管理员只能删不能加；黑名单是拦截，只能加不能删。
+		if added := missingUsers(item.Allow, current[id].Allow); added != "" {
+			return fmt.Errorf("群管理员不能把 %s 加进 %s 的本群白名单，放行只有主人能做", added, id)
+		}
+		if removed := missingUsers(current[id].Deny, item.Deny); removed != "" {
+			return fmt.Errorf("群管理员不能把 %s 从 %s 的本群黑名单里去掉", removed, id)
+		}
+	}
+	// 去掉一条覆盖等于回到机器人那一档，这同样可能是放宽。
+	for id, item := range current {
+		if _, ok := next[id]; ok {
+			continue
+		}
+		botTier := agent.BotExtensionTier(overrides, audiences, id)
+		tier := item.Tier
+		if tier == "" {
+			tier = botTier
+		}
+		if agent.ExtensionTierRank(botTier) > agent.ExtensionTierRank(tier) || len(item.Deny) > 0 {
+			return fmt.Errorf("群管理员不能撤掉 %s 的本群限制", id)
+		}
+	}
+	return nil
+}
+
+// missingUsers 返回 current 里有、next 里没有的第一个账号，没有就返回空串。
+func missingUsers(current, next []string) string {
+	if len(current) == 0 {
+		return ""
+	}
+	kept := make(map[string]bool, len(next))
+	for _, user := range next {
+		kept[strings.TrimSpace(user)] = true
+	}
+	for _, user := range current {
+		user = strings.TrimSpace(user)
+		if user != "" && !kept[user] {
+			return user
+		}
+	}
+	return ""
+}
+
+func extensionTierLabel(tier string) string {
+	switch tier {
+	case agent.ExtensionTierOff:
+		return "停用"
+	case agent.ExtensionTierAdmins:
+		return "群管"
+	case agent.ExtensionTierMembers:
+		return "群成员"
+	default:
+		return "仅主人"
+	}
 }
 
 func trimStringSlice(values []string) []string {

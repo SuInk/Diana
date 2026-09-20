@@ -476,6 +476,60 @@ func TestDeferredTargetCannotMutateProviderEnvelope(t *testing.T) {
 	}
 }
 
+func TestToolsLoadSeparatesUnknownToolFromDeniedTool(t *testing.T) {
+	base := NewToolRegistry(&countingTool{name: "common"}, &MCPTool{serverName: "probe", modelName: "mcp__probe__ping"})
+	view, err := base.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	view.Retain(map[string]bool{"common": true})
+	loader := newDeferredToolLoader(view, []string{"common"})
+
+	_, err = loader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}})
+	if err == nil || !strings.Contains(err.Error(), "没有权限") {
+		t.Fatalf("restricted tool error = %v", err)
+	}
+	_, err = loader.Run(context.Background(), map[string]any{"names": []any{"totally_made_up"}})
+	if err == nil || !strings.Contains(err.Error(), "不存在或已禁用") {
+		t.Fatalf("unknown tool error = %v", err)
+	}
+
+	// 主人视图没有白名单，查无此工具就照实说，不能反过来当成权限问题。
+	ownerView, err := base.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownerView.Close()
+	ownerLoader := newDeferredToolLoader(ownerView, []string{"common"})
+	if _, err := ownerLoader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}}); err != nil {
+		t.Fatalf("owner load failed: %v", err)
+	}
+	_, err = ownerLoader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__missing"}})
+	if err == nil || !strings.Contains(err.Error(), "不存在或已禁用") {
+		t.Fatalf("owner unknown MCP tool error = %v", err)
+	}
+}
+
+func TestToolsExecuteReportsRevokedToolAsPermission(t *testing.T) {
+	base := NewToolRegistry(&countingTool{name: "common"}, &MCPTool{serverName: "probe", modelName: "mcp__probe__ping"})
+	view, err := base.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	loader := newDeferredToolLoader(view, []string{"common"})
+	if _, err := loader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}}); err != nil {
+		t.Fatal(err)
+	}
+	// 加载之后才被机器人开关停用：执行时要说清是权限，而不是让模型重新加载。
+	view.ApplyExtensionOverrides(map[string]bool{"mcp:probe": false})
+	_, err = loader.dispatch(llmAction{Tool: ToolsExecuteToolName, Input: map[string]any{"name": "mcp__probe__ping", "input": map[string]any{}}})
+	if err == nil || !strings.Contains(err.Error(), "没有权限") {
+		t.Fatalf("revoked tool error = %v", err)
+	}
+}
+
 type coreEnvelopeClient struct {
 	requests []llm.GenerateRequest
 }

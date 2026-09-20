@@ -6,7 +6,9 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -362,5 +364,335 @@ func TestSharedExtensionRegistryKeepsLocalToolsPerBot(t *testing.T) {
 	}
 	if !hasBotProtocol {
 		t.Fatalf("请求视图缺少内置 Skill：%+v", second.Skills())
+	}
+}
+
+// stubExtensionCatalog 替代真实 MCP 进程：只提供「有这么一个服务，它发现了这些工具」。
+type stubExtensionCatalog struct{ states []agent.ExtensionState }
+
+func (c stubExtensionCatalog) Extensions() []agent.ExtensionState { return c.states }
+
+func TestMemberMCPPermissionIsOptInPerRobot(t *testing.T) {
+	dbDir := t.TempDir()
+	t.Setenv("APP_DB_PATH", filepath.Join(dbDir, "diana.db"))
+	workDir := AgentWorkspaceDir()
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultBotConfig()
+	cfg.AgentSkillRoots = []string{filepath.Join(dbDir, "skills")}
+	cfg.AgentMCPConfigPath = filepath.Join(dbDir, "missing-mcp.json")
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "member", ProfileID: "bot-a"}
+	member := RelationshipPolicy{Tier: RelationshipFriend}
+
+	// 底座按已经跑起来的共享扩展模拟：一个 MCP 服务，发现了一个工具。
+	baseCfg := runtime.agentRegistryConfig(cfg.WithDefaults(), event, true)
+	_, key, err := agentRegistryCacheKey(baseCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := agent.NewToolRegistry(&scopeTestTool{name: "mcp__probe__ping"})
+	base.SetExtensionCatalog(stubExtensionCatalog{states: []agent.ExtensionState{{
+		Kind:      agent.ExtensionKindMCP,
+		ID:        "mcp:probe",
+		Name:      "probe",
+		Installed: true,
+		Enabled:   true,
+		Tools:     []string{"mcp__probe__ping"},
+	}}})
+	runtime.agentRegistryCache = map[string]*agent.ToolRegistry{key: base}
+
+	registry, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("mcp__probe__ping"); ok {
+		t.Fatal("群成员默认拿到了 MCP 工具")
+	}
+	if !registry.PolicyDenied("mcp__probe__ping") {
+		t.Fatal("拒绝原因没被识别成权限问题")
+	}
+	if _, ok := registry.Get("list_capabilities"); ok {
+		t.Fatal("群成员看到了完整扩展目录")
+	}
+	if err := registry.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	overrides := filepath.Join(workDir, ".extension-overrides.json")
+	if err := os.WriteFile(overrides, []byte(`{"bot-a":{"members:mcp:probe":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	if _, ok := opened.Get("mcp__probe__ping"); !ok {
+		t.Fatal("放开后群成员仍然拿不到 MCP 工具")
+	}
+	if _, ok := opened.Get("read_file"); ok {
+		t.Fatal("放开一个 MCP 把本地文件工具也带了出来")
+	}
+
+	// 名单限定之后，只有名单里的人在名单里的群能用。
+	if err := os.WriteFile(overrides, []byte(`{"bot-a":{"members:mcp:probe":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"users":["member"],"groups":["g1"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := listed.Get("mcp__probe__ping"); !ok {
+		t.Fatal("名单里的人被挡住了")
+	}
+	if err := listed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	outsider := event
+	outsider.UserID = "stranger"
+	blocked, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), outsider, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocked.Close()
+	if _, ok := blocked.Get("mcp__probe__ping"); ok {
+		t.Fatal("名单外的人也拿到了工具")
+	}
+	elsewhere := event
+	elsewhere.GroupID = "g9"
+	otherGroup, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), elsewhere, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer otherGroup.Close()
+	if _, ok := otherGroup.Get("mcp__probe__ping"); ok {
+		t.Fatal("名单外的群也拿到了工具")
+	}
+	// 群管门槛：事件自带身份时直接判定，普通成员拿不到。
+	if err := os.WriteFile(filepath.Join(workDir, ".extension-audience.json"), []byte(`{"bot-a":{"mcp:probe":{"min_role":"admin"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plain.Get("mcp__probe__ping"); ok {
+		t.Fatal("普通成员越过了群管门槛")
+	}
+	if err := plain.Close(); err != nil {
+		t.Fatal(err)
+	}
+	adminEvent := event
+	adminEvent.SenderRole = "admin"
+	asAdmin, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), adminEvent, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer asAdmin.Close()
+	if _, ok := asAdmin.Get("mcp__probe__ping"); !ok {
+		t.Fatal("群管理员没拿到设了群管门槛的工具")
+	}
+	if err := os.WriteFile(filepath.Join(workDir, ".extension-audience.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 另一台机器人没开，同一个底座下仍然只有主人能用。
+	otherBot := event
+	otherBot.ProfileID = "bot-b"
+	other, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), otherBot, member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if _, ok := other.Get("mcp__probe__ping"); ok {
+		t.Fatal("群成员权限跨机器人生效了")
+	}
+}
+
+func TestMemberSkillPermissionOpensOnlyTheChosenSkill(t *testing.T) {
+	dbDir := t.TempDir()
+	t.Setenv("APP_DB_PATH", filepath.Join(dbDir, "diana.db"))
+	workDir := AgentWorkspaceDir()
+	skillRoot := filepath.Join(dbDir, "skills")
+	for _, name := range []string{"open-guide", "private-runbook"} {
+		dir := filepath.Join(skillRoot, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nname: " + name + "\ndescription: " + name + " 说明\n---\n" + name + " 正文"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 带脚本的 skill 要被标出来：成员没有命令和文件工具，脚本段落执行不了。
+	if err := os.WriteFile(filepath.Join(skillRoot, "open-guide", "fetch.py"), []byte("print('hi')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	overrides := filepath.Join(workDir, ".extension-overrides.json")
+	if err := os.WriteFile(overrides, []byte(`{"bot-a":{"members:skill:open-guide":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultBotConfig()
+	cfg.AgentSkillRoots = []string{skillRoot}
+	cfg.AgentMCPConfigPath = filepath.Join(dbDir, "missing-mcp.json")
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "member", ProfileID: "bot-a"}
+
+	registry, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, RelationshipPolicy{Tier: RelationshipFriend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	names := []string{}
+	bundled := map[string]bool{}
+	for _, skill := range registry.Skills() {
+		names = append(names, skill.Name)
+		bundled[skill.Name] = skill.Bundled
+	}
+	// 内置协议 skill 一直都在，自定义 skill 只应出现放开的那一份。
+	if !slices.Contains(names, "open-guide") || slices.Contains(names, "private-runbook") {
+		t.Fatalf("群成员看到的 skill = %v", names)
+	}
+	if !bundled["open-guide"] {
+		t.Fatal("带脚本的 skill 没有被标记，界面提示不出来")
+	}
+	read, ok := registry.Get("read_skill")
+	if !ok {
+		t.Fatal("read_skill 不见了")
+	}
+	if _, err := read.Run(context.Background(), map[string]any{"name": "private-runbook"}); err == nil {
+		t.Fatal("没放开的 skill 被读到了")
+	}
+	body, err := read.Run(context.Background(), map[string]any{"name": "open-guide"})
+	if err != nil || !strings.Contains(body, "open-guide 正文") {
+		t.Fatalf("放开的 skill 读不到：body=%q err=%v", body, err)
+	}
+
+	// 另一台机器人没开，同一份 skill 目录下成员仍然只有内置协议那几份。
+	other := event
+	other.ProfileID = "bot-b"
+	closed, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), other, RelationshipPolicy{Tier: RelationshipFriend})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closed.Close()
+	for _, skill := range closed.Skills() {
+		if skill.Name == "open-guide" {
+			t.Fatal("skill 的成员权限跨机器人生效了")
+		}
+	}
+}
+
+func TestGroupExtensionAccessOverridesBotTier(t *testing.T) {
+	dbDir := t.TempDir()
+	t.Setenv("APP_DB_PATH", filepath.Join(dbDir, "diana.db"))
+	workDir := AgentWorkspaceDir()
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// 机器人那一档：仅主人。
+	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultBotConfig()
+	cfg.ID = "bot-a"
+	cfg.OwnerID = "owner"
+	cfg.AgentSkillRoots = []string{filepath.Join(dbDir, "skills")}
+	cfg.AgentMCPConfigPath = filepath.Join(dbDir, "missing-mcp.json")
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "member", ProfileID: "bot-a"}
+
+	baseCfg := runtime.agentRegistryConfig(cfg.WithDefaults(), event, true)
+	_, key, err := agentRegistryCacheKey(baseCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := agent.NewToolRegistry(&scopeTestTool{name: "mcp__probe__ping"})
+	base.SetExtensionCatalog(stubExtensionCatalog{states: []agent.ExtensionState{{
+		Kind: agent.ExtensionKindMCP, ID: "mcp:probe", Name: "probe", Installed: true, Enabled: true,
+		Tools: []string{"mcp__probe__ping"},
+	}}})
+	runtime.agentRegistryCache = map[string]*agent.ToolRegistry{key: base}
+
+	groupAccess := func(access GroupExtensionAccess) {
+		groupCfg := DefaultGroupConfig("g1", cfg.WithDefaults())
+		groupCfg.BotProfileID = "bot-a"
+		groupCfg.ExtensionAccess = map[string]GroupExtensionAccess{"mcp:probe": access}
+		runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"g1": groupCfg}})
+	}
+	visible := func(e MessageEvent, policy RelationshipPolicy) bool {
+		registry, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), e, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer registry.Close()
+		_, ok := registry.Get("mcp__probe__ping")
+		return ok
+	}
+	member := RelationshipPolicy{Tier: RelationshipFriend}
+	owner := RelationshipPolicy{Owner: true}
+	adminEvent := event
+	adminEvent.SenderRole = "admin"
+
+	// 本群放宽到群成员：机器人那一档是仅主人，群里照样能用。
+	groupAccess(GroupExtensionAccess{Tier: "members"})
+	if !visible(event, member) {
+		t.Fatal("本群放宽没有生效")
+	}
+	// 本群只给群管：普通成员挡住，管理员放行。
+	groupAccess(GroupExtensionAccess{Tier: "admins"})
+	if visible(event, member) {
+		t.Fatal("普通成员越过了本群的群管档")
+	}
+	if !visible(adminEvent, member) {
+		t.Fatal("群管理员被本群的群管档挡住了")
+	}
+	// 本群停用：主人也用不了。
+	groupAccess(GroupExtensionAccess{Tier: "off"})
+	if visible(event, member) || visible(event, owner) {
+		t.Fatal("本群停用没有对所有人生效")
+	}
+	stranger := event
+	stranger.UserID = "stranger"
+	// 黑名单压过档位：这一档本来人人能用，名单里的人也用不了。
+	groupAccess(GroupExtensionAccess{Tier: "members", Deny: []string{"member"}})
+	if visible(event, member) {
+		t.Fatal("黑名单没挡住")
+	}
+	if !visible(stranger, member) {
+		t.Fatal("黑名单误伤了名单外的人")
+	}
+	// 白名单是例外放行：机器人和本群都只给主人，名单里的人照样能用。
+	groupAccess(GroupExtensionAccess{Tier: "owner", Allow: []string{"member"}})
+	if !visible(event, member) {
+		t.Fatal("白名单没放行")
+	}
+	if visible(stranger, member) {
+		t.Fatal("白名单外的人跟着放开了")
+	}
+	// 黑名单压过白名单。
+	groupAccess(GroupExtensionAccess{Tier: "members", Allow: []string{"member"}, Deny: []string{"member"}})
+	if visible(event, member) {
+		t.Fatal("同时在黑白名单里时没有按黑名单处理")
+	}
+	// 停用压过白名单：这个群没这个能力，放行也放不出来。
+	groupAccess(GroupExtensionAccess{Tier: "off", Allow: []string{"member"}})
+	if visible(event, member) || visible(event, owner) {
+		t.Fatal("停用被白名单绕过了")
+	}
+
+	// 私聊不看群配置。
+	private := MessageEvent{Kind: EventKindPrivate, UserID: "owner", ProfileID: "bot-a"}
+	if !visible(private, owner) {
+		t.Fatal("群配置影响到了私聊")
 	}
 }
