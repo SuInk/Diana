@@ -324,6 +324,7 @@ type Runtime struct {
 	structuredMemory StructuredMemoryStore
 	threadStates     ThreadStateStore
 	oneBotRequests   OneBotRequestStore
+	pendingDirect    PendingDirectMessageStore
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	expressionStyles ExpressionStyleStore
@@ -333,6 +334,14 @@ type Runtime struct {
 	pokeLastReply    map[string]time.Time
 	pokeLastSent     map[string]time.Time
 	pokeSessionSent  map[string][]time.Time
+	// 跨会话发送的限流账本：按「来源会话×目标」记冷却，按来源会话记窗口内总量。
+	// 自带锁，不受 mu 保护。
+	crossSessionMu          sync.Mutex
+	crossSessionLastSent    map[string]time.Time
+	crossSessionSessionSent map[string][]time.Time
+	// friendRosters 缓存各账号的 OneBot 好友名册，见 onebot_friends.go。
+	friendRosterMu sync.Mutex
+	friendRosters  map[string]oneBotFriendRoster
 	// welcomeLLMLast 记每个（机器人 × 群）上一次 LLM 欢迎词的生成时间，
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
 	welcomeMu             sync.Mutex
@@ -702,6 +711,10 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.romanceGreetingLoop")
 			r.runRomanceGreetingLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")
+			r.runPendingDirectMessagePurgeLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
@@ -3310,6 +3323,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
+			}
+			// 跨会话发送只在「确实存在另一条会话可发」时才有意义。群里人人可用，
+			// 但只能发给当前说话的人；主人在哪都能用，因为只有他能指定别人和群。
+			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
+			if event.Kind == EventKindGroup || relationship.Owner {
+				extraTools = append(extraTools, newDianaCrossSessionTool(r, event, relationship.Owner))
 			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
@@ -6143,6 +6162,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 		msg.MessageThreadID = event.MessageThreadID
 	} else {
 		msg.UserID = event.UserID
+		msg.TempSessionGroupID = event.tempSessionGroupID
 	}
 	return msg
 }
@@ -6888,6 +6908,12 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType == "poke" {
 		return r.handlePokeNotice(ctx, event)
+	}
+	// 刚加上好友：把之前因为发不出去而存下的私聊补上。这条通知不受群准入和回复
+	// 门槛约束——它不产生新的发言，只是把已经答应过的话送出去。
+	if event.SubType == "friend_add" {
+		r.flushPendingDirectMessages(ctx, event)
+		return nil
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	if !cfg.WelcomeEnabled {
