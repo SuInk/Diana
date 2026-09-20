@@ -11,9 +11,9 @@ import (
 
 // repositoryAccessRoleTestTool 复用 Issue 工具的假 GitHub 夹具，只换发言人：
 // 同一条按群授权，群主、群管理员和普通成员应当拿到不同的结果。
-func repositoryAccessRoleTestTool(server *httptest.Server, userID, senderRole string, settings SettingValues) *dianaRepositoryIssuesTool {
+func repositoryAccessRoleTestTool(server *httptest.Server, userID, senderRole string, settings SettingValues) *dianaGitHubTool {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	return newDianaRepositoryIssuesTool(
+	return newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: userID, SenderRole: senderRole, RawMessage: "帮我提个 Issue"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),

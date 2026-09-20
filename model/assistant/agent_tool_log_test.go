@@ -145,7 +145,7 @@ func TestAgentRunObserverRedactsRepositoryIssueRequestPayload(t *testing.T) {
 	ctx := runtime.withDebugTraceContext(context.Background(), event)
 	runtime.agentRunObserver(event)(ctx, agent.RunEvent{
 		Phase:      agent.RunPhaseToolCompleted,
-		Tool:       dianaRepositoryIssuesToolName,
+		Tool:       dianaGitHubToolName,
 		ToolInput:  map[string]any{"operation": "create", "repository": "acme/demo", "title": "private title", "body": "token=owner-secret"},
 		ToolOutput: `{"ok":true,"issue":{"number":12,"title":"private title"}}`,
 		Error:      "GitHub rejected owner-secret",

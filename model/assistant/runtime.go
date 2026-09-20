@@ -3389,7 +3389,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
-					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
+					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
 				}
 			}
 			if pluginValue, watchSettings, enabled := r.pluginWithSettingsForEvent(repositoryWatchPluginID, event); enabled {
@@ -4198,16 +4198,31 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 }
 
 // replyAgentCoreTools 是主回复每一步都带完整定义的工具，其余按需加载（agent.Config.CoreTools）。
-// 取自近 7 天的调用统计：4642 次 Agent 运行里，搜索 338 次、历史媒体 71、聊天记录 63、
-// 线程状态 63、生图 59、网页渲染 32，其余每个工具最多 28 次。
+//
+// 门槛是「用到它的 Agent 运行占多少」，不是调用次数：常驻的代价按请求算，收益按运行算，
+// 一次运行里连调五次同一个工具也只省下一次 tools_load。近 7 天线上 719 次 Agent 运行，
+// 按 trace 去重后 web_search 273（38%）、history_media 94（13%）、github 76（11%）、
+// image 59（8%）、chat_history 57（8%）、browser_render 48（7%）、capabilities 47（7%）、
+// thread_state 23（3%）、poke 8（1%）。github 只在开了仓库插件、且本次会话有权限时才注册，
+// 在那些群里是 76/387≈20%。
+//
+// github 和 capabilities 补进来：171 次用到 tools_load 的运行里，有 71 次加载的只有这两个
+// 之一，占全部运行的 10%——这一步换来的只是一次多余的模型往返。
+//
+// thread_state 挪出去：它的用法整段写在 promptToolThreadState 里，提示词点了名，模型知道
+// 该加载什么，挪出去只在 3% 的运行里多一步。poke 留下的理由正相反——「什么时候该戳」只写在
+// 它自己的描述里，目录行压到 120 字就没了，挪出去等于这个工具不会再被用；它只在 OneBot
+// 会话里注册。
+//
+// 改这份名单会改请求里的 tools 数组，等于把所有会话的前缀缓存清一次，别为一两个百分点反复调。
 var replyAgentCoreTools = []string{
 	agent.WebSearchToolName,
-	dianaChatHistoryToolName,
-	dianaThreadStateToolName,
 	dianaHistoryImagesToolName,
+	dianaGitHubToolName,
 	dianaImageToolName,
+	dianaChatHistoryToolName,
 	"browser_render",
-	// 戳一戳要顺手用：每次先多一轮 tools_load 就不自然了。它只在 OneBot 会话里注册。
+	"capabilities",
 	dianaPokeToolName,
 }
 

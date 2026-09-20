@@ -815,7 +815,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool("llm_config") {
 		tail.WriteString("\n" + promptToolLLMConfig)
 	}
-	if agentEnabled && hasTool(dianaRepositoryIssuesToolName) {
+	if agentEnabled && hasTool(dianaGitHubToolName) {
 		builder.WriteString("\n" + promptToolRepositoryIssues)
 	}
 	if agentEnabled && hasTool(dianaPlatformToolName) {

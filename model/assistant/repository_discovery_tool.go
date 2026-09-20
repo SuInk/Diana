@@ -136,7 +136,7 @@ func parseRepositoryDiscoveryInput(input map[string]any) (repositoryDiscoveryInp
 }
 
 // searchRepositories 按关键词找公开仓库，返回按影响力可判断的画像列表。
-func (t *dianaRepositoryIssuesTool) searchRepositories(ctx context.Context, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) searchRepositories(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "repo_search"}
 	parsed, redactions, code, message := parseRepositoryDiscoveryInput(input)
 	result.Redactions = redactions
@@ -180,7 +180,7 @@ func (t *dianaRepositoryIssuesTool) searchRepositories(ctx context.Context, inpu
 }
 
 // repositoryProfile 读单个仓库的画像。用户已经点名某个仓库时用它，不必先搜一遍。
-func (t *dianaRepositoryIssuesTool) repositoryProfile(ctx context.Context, repository string) repositoryIssueResult {
+func (t *dianaGitHubTool) repositoryProfile(ctx context.Context, repository string) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "repo", Repository: repository}
 	var profile githubRepositoryProfile
 	if apiErr := t.doJSON(ctx, http.MethodGet, "/repos/"+repository, nil, &profile); apiErr != nil {
@@ -202,7 +202,8 @@ func (t *dianaRepositoryIssuesTool) repositoryProfile(ctx context.Context, repos
 // 不是查完就扔的中间态。
 const repositoryDiscoveryReadingHint = "推荐仓库时把 stars、forks 和 pushed_ago 一起写给用户：" +
 	"star 说明多少人在用，fork 说明多少人真拿去改，pushed_ago 说明还有没有人维护；" +
-	"stale 或 archived 为 true 时必须明说它已经长期没有更新，不要当作可用推荐。"
+	"stale 或 archived 为 true 时必须明说它已经长期没有更新，不要当作可用推荐；" +
+	"fork 为 true 说明它本身是别人的分叉，推荐前先看看上游是不是更合适。"
 
 func repositoryDiscoveryPushedText(view repositoryProfileView) string {
 	if view.PushedAgo == "" {
