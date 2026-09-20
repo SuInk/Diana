@@ -29,11 +29,11 @@ const personaGenerateMaxDescription = 500
 // 和六到八组示例对话——照 600 收着，模型要么砍掉示例，要么把说话方式压回一句
 // 「语气轻软」，正是这次要修的毛病。
 //
-// 现在生成的是一张角色卡，卡本身按 600～900 字写，但存进人设框的是拼装后的正文：
+// 现在生成的是一张角色卡，卡本身按 1200～1800 字写，但存进人设框的是拼装后的正文：
 // 「你是X。」「性格与特质：」「对话示例（……）：」这些段头是拼装时加的，示例里
 // 的 {{user}}/{{char}} 也会展开成更长的称呼。上限要盖住这部分开销，不然一份写满
 // 的卡刚拼完就被截掉最后一两组示例——正好是最该留下的部分。
-const personaGenerateMaxOutput = 1600
+const personaGenerateMaxOutput = 3000
 
 // personaStoredMaxRunes 是人设字段本身能存下的长度，镜像 assistant 包里的
 // personaPromptMaxRunes（未导出，改那边时这里要跟着改）。改写时拿它当输入上限：
@@ -129,7 +129,7 @@ const personaGenerateSystemPrompt = `你在为一个聊天机器人写一张角�
 写法：
 - description、personality、scenario、system_prompt 用第二人称直接对机器人说话，例如「你是……」；不要在字段里重复写角色的名字当标题。
 - 每个字段内部都是纯文本：不要标题、不要项目符号、不要编号、不要 Markdown。字段里需要换行时，在 JSON 字符串里写 \n。
-- 全卡加起来 600～900 字。description 占大头，mes_example 次之，其余各一小段就够。
+- 全卡加起来 1200～1800 字。description 占大头，mes_example 次之，其余各一小段就够。
 - 只输出这一个 JSON 对象：不要代码围栏，不要「以下是人设」这类前言，不要在 JSON 前后写解释或使用说明。`
 
 // personaGenerate 用当前已配置的模型写一张角色卡，并把拼装后的人设正文一起返回。

@@ -4,6 +4,7 @@ export function personaFromSettings(current: BotProfileConfig, name: string) {
   return {
     name,
     system_prompt: current.system_prompt ?? "",
+    persona_mode: current.persona_mode ?? "fill",
     action_description_enabled: current.action_description_enabled ?? false,
     daypart_tone_enabled: current.daypart_tone_enabled ?? false,
     self_reference: current.self_reference ?? "",
@@ -16,6 +17,8 @@ export function applyPersonaSettings(current: BotProfileConfig, persona: Persona
   return {
     ...current,
     system_prompt: prompt.trim() && (replacePrompt || !current.system_prompt?.trim()) ? prompt : current.system_prompt,
+    // 档位跟着正文一起换：这份人设的正文带不带段头，只有它自己的档位说了算。
+    persona_mode: persona.persona_mode ?? "fill",
     action_description_enabled: persona.action_description_enabled ?? false,
     daypart_tone_enabled: persona.daypart_tone_enabled ?? current.daypart_tone_enabled,
     self_reference: persona.self_reference ?? "",

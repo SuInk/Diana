@@ -224,6 +224,14 @@ export interface BotProfileConfig {
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
   system_prompt?: string;
+  /**
+   * 人设正文和界面控件谁说了算。
+   *
+   * fill（默认）＝填空题：正文只写角色，自称、句尾语气词、动作描写、答多长这些由
+   * 控件和运行时负责，正文里的段头不生效。own＝接管：正文用段头声明哪几段自己写，
+   * 运行时对那几段让位，界面上对应的控件停用。不填按 fill 处理。
+   */
+  persona_mode?: "fill" | "own";
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   action_description_enabled?: boolean;
   /** 机器人怎么称呼自己；留空跟随人设。 */
@@ -1240,6 +1248,46 @@ export function generatePersona(
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
     body: JSON.stringify({ description, name, current, ...rest, ...(card ? { card } : {}) })
+  });
+}
+
+/** 人设检查报出的一条。 */
+export interface PersonaLintFinding {
+  /** sentence-enders | self-reference | action-description | formatting | venue */
+  code: string;
+  /** 正文里被命中的原话，后端保证能在提交的正文里逐字找到。 */
+  match: string;
+  message: string;
+}
+
+export interface PersonaReviewResponse {
+  findings: PersonaLintFinding[];
+  model?: string;
+  provider?: string;
+}
+
+/**
+ * 让模型读一遍人设正文，挑出「和界面开关抢同一件事」的地方。
+ *
+ * 这是人设正文唯一的检查：判断的是意思不是字面，代价是一次模型往返。所以它由用户
+ * 点按钮触发，signal 用来让「跳过」当场掐断请求。
+ */
+export function reviewPersona(
+  text: string,
+  options?: {
+    self_reference?: string;
+    sentence_enders?: string;
+    action_description_enabled?: boolean;
+    profile_id?: string;
+    group?: string;
+    model?: string;
+  },
+  signal?: AbortSignal
+): Promise<PersonaReviewResponse> {
+  return requestJSON<PersonaReviewResponse>("/api/llm/persona/lint", {
+    method: "POST",
+    body: JSON.stringify({ text, ...(options ?? {}) }),
+    signal
   });
 }
 
@@ -2427,6 +2475,8 @@ export interface Persona {
   id: string;
   name: string;
   system_prompt?: string;
+  /** 跟着正文走：带段头的接管正文套到填空题档上会和运行时重复。 */
+  persona_mode?: "fill" | "own";
   action_description_enabled?: boolean;
   daypart_tone_enabled?: boolean;
   self_reference?: string;
