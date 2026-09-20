@@ -3677,7 +3677,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
 			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
-			summary, summaryRecompressed = r.fitOlderSummaryToBudget(ctx, summary, summaryBudget, cfg)
+			summary, summaryRecompressed = r.fitOlderSummaryToBudget(summary, summaryBudget)
 			if promptSession := r.groupPromptSession(event); promptSession != nil {
 				summary = promptSession.rememberCheckpoint(summary)
 			}
