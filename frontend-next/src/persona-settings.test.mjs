@@ -53,3 +53,20 @@ test("legacy settings remain custom and survive preset selection and serializati
   assert.equal(currentPersonaSelection(applied, []), "custom");
   assert.equal(applied.system_prompt, preset.system_prompt);
 });
+
+// 档位跟着正文一起存、一起套。一份接管模式的人设，正文里靠段头声明自己接管了
+// 哪几段；套到填空题档上，段头不生效而运行时照旧注入，同一件事说两遍——而用户
+// 只是从人设库里点了一下。
+test("人设库存取带着人设模式", () => {
+  const own = { system_prompt: "自称与语气词：平时用「我」。", persona_mode: "own", self_reference: "", sentence_enders: "" };
+  const captured = personaFromSettings(own, "接管人设");
+  assert.equal(captured.persona_mode, "own");
+
+  const applied = applyPersonaSettings({ system_prompt: "" }, { id: "x", name: "接管人设", ...own }, true);
+  assert.equal(applied.persona_mode, "own");
+  assert.equal(applied.system_prompt, own.system_prompt);
+
+  // 没写档位的人设（存量库里全是这种）一律按填空题套用，行为不变。
+  const legacy = applyPersonaSettings({ system_prompt: "", persona_mode: "own" }, { id: "y", name: "旧人设", system_prompt: "你是一只猫娘。" }, true);
+  assert.equal(legacy.persona_mode, "fill");
+});

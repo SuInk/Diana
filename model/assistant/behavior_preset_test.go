@@ -842,3 +842,21 @@ func TestDefaultPersonaDeclaresNoSection(t *testing.T) {
 		t.Fatal("默认档位必须是填空题：存量配置升上来不能改变行为")
 	}
 }
+
+// 档位要能存下来。它走的是 BotConfig ⇄ ConfigPayload 这条往返：界面读的是 payload，
+// 保存回来的也是 payload，任何一个方向漏掉这个字段，用户选了接管模式、点一下保存
+// 就变回填空题，而界面上看不出发生了什么。
+func TestPersonaModeSurvivesThePayloadRoundTrip(t *testing.T) {
+	cfg := BotConfig{PersonaMode: PersonaModeOwn}.WithDefaults()
+	payload := PayloadFromConfig(cfg)
+	if payload.PersonaMode != PersonaModeOwn {
+		t.Fatalf("档位没进 payload，界面读不到：%q", payload.PersonaMode)
+	}
+	if back := ConfigFromPayload(payload, BotConfig{}).WithDefaults(); back.PersonaMode != PersonaModeOwn {
+		t.Fatalf("档位没从 payload 存回来，保存一次就丢：%q", back.PersonaMode)
+	}
+	// 存量 payload 里根本没有这个字段，反序列化出来是零值——必须落回填空题。
+	if back := ConfigFromPayload(ConfigPayload{}, BotConfig{}).WithDefaults(); back.PersonaMode != PersonaModeFill {
+		t.Fatalf("空档位没落回填空题：%q", back.PersonaMode)
+	}
+}

@@ -960,6 +960,7 @@ type ConfigPayload struct {
 	ResponseMode                  ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                    ReplyStyle           `json:"reply_style,omitempty"`
 	ActionDescriptionEnabled      *bool                `json:"action_description_enabled,omitempty"`
+	PersonaMode                   PersonaMode          `json:"persona_mode,omitempty"`
 	SelfReference                 string               `json:"self_reference,omitempty"`
 	SentenceEnders                string               `json:"sentence_enders,omitempty"`
 	DebugModeEnabled              bool                 `json:"debug_mode_enabled,omitempty"`
@@ -2118,6 +2119,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		PersonaID:                         cfg.PersonaID,
 		CustomPersona:                     copyCustomPersona(cfg.CustomPersona),
 		ResponseMode:                      cfg.ResponseMode,
+		PersonaMode:                       cfg.PersonaMode,
 		ReplyStyle:                        cfg.ReplyStyle,
 		ActionDescriptionEnabled:          copyBoolPointer(cfg.ActionDescriptionEnabled),
 		SelfReference:                     cfg.SelfReference,
@@ -2323,6 +2325,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		PersonaID:                       payload.PersonaID,
 		CustomPersona:                   copyCustomPersona(payload.CustomPersona),
 		ResponseMode:                    payload.ResponseMode,
+		PersonaMode:                     payload.PersonaMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		ActionDescriptionEnabled:        copyBoolPointer(payload.ActionDescriptionEnabled),
 		SelfReference:                   payload.SelfReference,

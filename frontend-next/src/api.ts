@@ -2405,6 +2405,8 @@ export interface Persona {
   id: string;
   name: string;
   system_prompt?: string;
+  /** 跟着正文走：带段头的接管正文套到填空题档上会和运行时重复。 */
+  persona_mode?: "fill" | "own";
   action_description_enabled?: boolean;
   daypart_tone_enabled?: boolean;
   self_reference?: string;
