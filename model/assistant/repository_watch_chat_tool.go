@@ -83,7 +83,7 @@ func (*dianaRepositoryWatchTool) Description() string {
 	return `管理 GitHub 仓库更新订阅：新建、查看、改设置、暂停、删除，也可以立刻检查一次。` +
 		`能改监控哪几类动态（Commit / PR / Issue / Release / Star），以及 PR、Issue、Release 各自只收哪几种。` +
 		`新建的订阅推送到当前这个会话。只有主人和该仓库的管理人员能调用。` +
-		`关注 RSS 或推特用户改用 rss，普通周期任务改用 schedule。`
+		`关注 RSS 或推特用户改用 kind=rss，普通周期任务改用 kind=schedule。`
 }
 
 func (*dianaRepositoryWatchTool) InputSchema() map[string]any {

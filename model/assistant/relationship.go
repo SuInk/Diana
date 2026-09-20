@@ -147,10 +147,11 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaPlatformToolName:  true,
 		dianaImageToolName:     true,
 		"reminder":             true,
-		"schedule":             true,
-		"rss":                  true,
-		"tasks":                true,
-		"tts":                  true,
+		// schedule / rss / github 三种订阅现在是同一个工具的 kind 取值。github 那种
+		// 另有自己的授权闸门，不因为这里放行就人人可用。
+		dianaSubscriptionToolName: true,
+		"tasks":                   true,
+		"tts":                     true,
 		// 点歌是群里人人都会用的事，和语音合成同级：它不碰本地文件、命令或浏览器，
 		// 只是搜一首歌发出来。只留给主人的话这个功能等于没开。
 		musicToolName:           true,
