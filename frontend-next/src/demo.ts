@@ -462,7 +462,19 @@ export const demoStatus: BotStatus = {
     { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
     { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
   ],
-  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2, updated_at: before(1)
+  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2,
+  llm_concurrency: {
+    active: 3, peak: 9,
+    models: [
+      { provider: "openai_compatible", model: "gpt-5.4-mini", active: 2, started_at: before(0.2) },
+      { provider: "anthropic", model: "claude-sonnet-5", active: 1, started_at: before(0.6) }
+    ]
+  },
+  llm_usage: {
+    today: { calls: 412, input_tokens: 1_284_600, output_tokens: 96_420, cached_input_tokens: 742_180, total_tokens: 1_381_020, missing_usage_calls: 0 },
+    session: { calls: 1_486, input_tokens: 4_612_880, output_tokens: 338_940, cached_input_tokens: 2_604_310, total_tokens: 4_951_820, missing_usage_calls: 3 }
+  },
+  updated_at: before(1)
 };
 
 let tasks: AssistantTask[] = [
@@ -472,9 +484,15 @@ let tasks: AssistantTask[] = [
   { id: "task-rss-04", kind: "rss_watch", platform: "telegram", profile_id: "bot-telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_sources: [{ feed_url: "https://github.com/SuInk/Diana/releases.atom", source: "rss", name: "Diana Release Feed" }], feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
 ];
 
+// 与后端 SupportedPlatforms 注册表保持一致：配置向导和机器人页的平台下拉都
+// 按它渲染，少一个平台，演示站就看不到那一套接入表单。
 const platforms: BotPlatform[] = [
-  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 OneBot v11。" },
-  { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。" }
+  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 Snowluma、NapCat 或 Lagrange 接入 OneBot v11。", inbound: "reverse_ws" },
+  { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。", inbound: "outbound", rich_text: true },
+  { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound" },
+  { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
+  { id: "feishu", name: "飞书", protocol: "feishu-event-callback", category: "feishu", category_label: "飞书", description: "事件订阅回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/feishu/callback", rich_text: true },
+  { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true }
 ];
 
 type DemoIssueDraft = {

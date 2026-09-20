@@ -48,7 +48,7 @@ func liveGitHubSettings(repository string) SettingValues {
 func TestLiveRepositoryPullRequestReadsRealGitHub(t *testing.T) {
 	repository, number := liveGitHubPullRequestTarget(t)
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaRepositoryIssuesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: "看 PR"},
+	tool := newDianaGitHubTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: "看 PR"},
 		newRepositoryPublishPlugin(&http.Client{Timeout: 60 * time.Second}, "https://api.github.com"), liveGitHubSettings(repository))
 
 	get := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "get", "repository": repository, "number": number})
@@ -153,7 +153,7 @@ func TestLiveAgentReviewsPullRequestThroughTool(t *testing.T) {
 	var reviewDraftInput map[string]any
 	var renderedGitHub []string
 	for _, call := range probe.snapshot() {
-		if call.Name != dianaRepositoryIssuesToolName {
+		if call.Name != dianaGitHubToolName {
 			if call.Name == "browser_render" {
 				target := configToolString(call.Arguments, "url")
 				t.Logf("browser_render url=%s", target)
@@ -167,7 +167,7 @@ func TestLiveAgentReviewsPullRequestThroughTool(t *testing.T) {
 			continue
 		}
 		operation := configToolString(call.Arguments, "operation")
-		operations = append(operations, "repository_issues:"+operation)
+		operations = append(operations, dianaGitHubToolName+":"+operation)
 		if operation == "review" {
 			reviewDraftInput = call.Arguments
 		}
@@ -184,10 +184,10 @@ func TestLiveAgentReviewsPullRequestThroughTool(t *testing.T) {
 		}
 		return -1
 	}
-	filesAt := indexOf("repository_issues:pull_files")
-	writeAt := indexOf("repository_issues:review")
+	filesAt := indexOf(dianaGitHubToolName + ":pull_files")
+	writeAt := indexOf(dianaGitHubToolName + ":review")
 	if writeAt < 0 {
-		writeAt = indexOf("repository_issues:comment")
+		writeAt = indexOf(dianaGitHubToolName + ":comment")
 	}
 	if filesAt < 0 {
 		t.Fatal("没有调用 pull_files 读实际改动")
@@ -199,7 +199,7 @@ func TestLiveAgentReviewsPullRequestThroughTool(t *testing.T) {
 		t.Errorf("有了 PR 工具仍然改用网页渲染去读 GitHub：%v", renderedGitHub)
 	}
 	if reviewDraftInput != nil {
-		tool := newDianaRepositoryIssuesTool(rt, event, newRepositoryPublishPlugin(&http.Client{Timeout: 60 * time.Second}, "https://api.github.com"), liveGitHubSettings(repository))
+		tool := newDianaGitHubTool(rt, event, newRepositoryPublishPlugin(&http.Client{Timeout: 60 * time.Second}, "https://api.github.com"), liveGitHubSettings(repository))
 		files := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "pull_files", "repository": repository, "number": number})
 		changed := map[string]bool{}
 		for _, file := range files.Files {

@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"bytes"
+	"context"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,12 @@ import (
 func TestReverseServerLogsDuplicateClientConflict(t *testing.T) {
 	const token = "0123456789abcdef"
 	server := NewOneBotReverseServer(OneBotConfig{Endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", AccessToken: token})
+
+	// 挂上事件处理器，模拟「机器人正在跑」。没有它握手会先撞上「机器人已停用」
+	// 那条 503，测不到冲突这一档。
+	server.mu.Lock()
+	server.handler = func(context.Context, MessageEvent) error { return nil }
+	server.mu.Unlock()
 
 	// 手动占住连接位，模拟「已有客户端连着」。
 	server.connMu.Lock()

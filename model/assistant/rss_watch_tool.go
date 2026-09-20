@@ -109,9 +109,6 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		return "", fmt.Errorf("diana rss: runtime is not configured")
 	}
 	policy := t.runtime.relationshipPolicy(ctx, t.event)
-	if !policy.AllowPersonalSchedule {
-		return "", fmt.Errorf("好感度不足：当前关系等级为“%s”，尚未解锁个人订阅", policy.Name)
-	}
 	targetID, err := taskTargetUserID(ctx, t.runtime, t.event, input)
 	if err != nil {
 		return "", err
@@ -220,7 +217,7 @@ func (r *Runtime) ensureRecurringTaskCapacity(ownerID string, limit int) error {
 		}
 	}
 	if count >= limit {
-		return fmt.Errorf("当前关系等级最多创建 %d 个定时订阅，额度已满", limit)
+		return fmt.Errorf("当前最多可创建 %d 个定时订阅，额度已满", limit)
 	}
 	return nil
 }

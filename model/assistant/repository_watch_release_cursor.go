@@ -17,13 +17,23 @@ type repositoryReleaseRecord struct {
 	HTMLURL     string    `json:"html_url"`
 	PublishedAt time.Time `json:"published_at"`
 	Draft       bool      `json:"draft"`
+	Prerelease  bool      `json:"prerelease"`
+}
+
+// releaseKind 认 GitHub 的 prerelease 标记，不看标签怎么写：作者不勾「Set as a
+// pre-release」时，v1.2.0-rc.1 在 API 里就是正式版，反过来 v2.0.0 也可以是预发布。
+func releaseKind(item repositoryReleaseRecord) string {
+	if item.Prerelease {
+		return repositoryWatchReleaseKindPrerelease
+	}
+	return repositoryWatchReleaseKindStable
 }
 
 func releaseCursorAfter(at time.Time, id int64, previousAt time.Time, previousID int64) bool {
 	return !at.IsZero() && (at.After(previousAt) || at.Equal(previousAt) && id > previousID)
 }
 
-func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository string, cursor repositoryWatchSnapshot, settings SettingValues) ([]repositoryWatchRelease, repositoryWatchSnapshot, error) {
+func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository string, cursor repositoryWatchSnapshot, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchRelease, repositoryWatchSnapshot, error) {
 	base := repositoryWatchSnapshot{ReleaseTag: strings.TrimSpace(cursor.ReleaseTag), ReleasePublishedAt: cursor.ReleasePublishedAt, ReleaseID: cursor.ReleaseID}
 	var payload []repositoryReleaseRecord
 	if err := p.getJSON(ctx, "/repos/"+repository+"/releases?per_page=50", settings, &payload); err != nil {
@@ -91,7 +101,11 @@ func (p *RepositoryWatchPlugin) fetchReleases(ctx context.Context, repository st
 		if !releaseCursorAfter(item.PublishedAt, item.ID, base.ReleasePublishedAt, base.ReleaseID) {
 			continue
 		}
-		result = append(result, repositoryWatchRelease{Tag: item.Tag, Name: item.Name, Body: truncateRunes(strings.TrimSpace(item.Body), 4000), URL: item.HTMLURL, PublishedAt: item.PublishedAt})
+		// 和 PR / Issue 的种类过滤一样：游标跟着所有已发布版本走，种类只决定报不报。
+		// 否则关掉预发布的订阅一旦重新打开，会把中间攒下的 rc 版一次性全补推出来。
+		if selection.wants(selection.ReleaseKinds, releaseKind(item)) {
+			result = append(result, repositoryWatchRelease{Tag: item.Tag, Name: item.Name, Body: truncateRunes(strings.TrimSpace(item.Body), 4000), URL: item.HTMLURL, PublishedAt: item.PublishedAt, Prerelease: item.Prerelease})
+		}
 		if releaseCursorAfter(item.PublishedAt, item.ID, next.ReleasePublishedAt, next.ReleaseID) {
 			next.ReleaseTag, next.ReleasePublishedAt, next.ReleaseID = item.Tag, item.PublishedAt, item.ID
 		}

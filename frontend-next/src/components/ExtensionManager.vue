@@ -1,21 +1,43 @@
 <template>
   <section class="extension-manager">
     <header class="view-header">
-      <div class="view-title"><h1>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h1><p>配置全局共享 · {{ botScope ? '启用状态仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
+      <div class="view-title"><h1>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h1><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
       <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
     </header>
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取扩展…</p>
     <div v-else class="extension-list">
       <article v-for="item in items" :key="item.id" class="extension-row">
-        <div class="extension-info"><strong>{{ item.name }}</strong><p>{{ item.description || (item.transport === 'stdio' ? '本地进程' : item.transport === 'streamable_http' ? 'HTTP MCP' : '') }}</p><small>{{ item.source || '本地扩展' }} · {{ item.managed ? '可管理' : '只读' }}</small><p v-if="item.error" class="error-text">{{ item.error }}</p></div>
-        <span v-if="item.available===false" class="badge">全局停用</span>
-        <label v-if="botScope" class="switch"><input type="checkbox" :checked="item.enabled" :disabled="busy === item.id || item.available===false" :aria-label="`启用 ${item.name}`" @change="toggle(item)" /><span class="track"></span></label>
+        <div class="extension-info">
+          <strong>{{ item.name }}<span v-if="item.available===false" class="badge">全局停用</span></strong>
+          <p>{{ item.description || (item.transport === 'stdio' ? '本地进程' : item.transport === 'streamable_http' ? 'HTTP MCP' : '') }}</p>
+          <small>{{ item.source || '本地扩展' }} · {{ item.managed ? '可管理' : '只读' }}<template v-if="item.bundled"> · <span title="目录里带脚本或资源；群成员没有命令和文件工具，这部分在成员会话里不会执行">含脚本</span></template><template v-if="audienceSummary(item)"> · <span class="extension-audience-note">{{ audienceSummary(item) }}</span></template></small>
+          <p v-if="item.error" class="error-text">{{ item.error }}</p>
+        </div>
+        <!-- 停用 / 仅主人 / 群成员是同一件事的三档，合成一个控件：两个开关并排时
+             没人分得清哪个管什么，状态也要扫一眼就看得见。 -->
+        <div v-if="botScope" class="segmented extension-state" role="group" :aria-label="`${item.name} 在当前机器人的状态`">
+          <button v-for="state in extensionStates" :key="state.value" type="button" :class="{active: currentState(item) === state.value}" :disabled="busy === item.id || item.available===false" :title="state.hint" @click="setState(item, state.value)">{{ state.label }}</button>
+        </div>
+        <!-- 和编辑、删除同一款图标按钮：名单是「去改」的入口，改完的结果写在上面那行小字里。
+             档位没放开时留着但置灰，免得每行的按钮左右错位。 -->
+        <button v-if="botScope" class="btn icon-only" :disabled="busy === item.id || !isOpenTier(item)" :aria-label="`设置 ${item.name} 的开放对象`" :title="audienceTitle(item)" @click="openAccess(item)"><Users :size="16" /></button>
         <button class="btn icon-only" :aria-label="`查看或编辑 ${item.name}`" title="查看或编辑" @click="edit(item)"><Settings2 :size="16" /></button>
         <button v-if="item.managed" class="btn ghost danger icon-only" :aria-label="`删除 ${item.name}`" title="删除" @click="remove(item)"><Trash2 :size="16" /></button>
+        <!-- 只读扩展删不掉，但位置要留着：否则每行的开关和按钮左右错开一截。 -->
+        <span v-else class="extension-action-slot" aria-hidden="true"></span>
       </article>
       <p v-if="!items.length">还没有{{ kind === 'skill' ? '自定义 Skill' : 'MCP 服务' }}。</p>
     </div>
+    <Modal v-if="accessFor" :title="`${accessFor.name} 的开放对象`" @close="accessFor=null">
+      <div class="extension-form">
+        <p class="hint">两个名单都留空 = 这台机器人的所有群成员。都填则要同时满足：名单里的人，且只在这些群里。主人不受名单限制。</p>
+        <div class="field"><label for="extension-access-users">用户</label><IdChipInput input-id="extension-access-users" :model-value="accessUsers" placeholder="填账号后回车，留空 = 所有群成员" :resolve-names="resolveAccountNames" @update:model-value="accessUsers = $event" /></div>
+        <div class="field"><label for="extension-access-groups">群号</label><IdChipInput input-id="extension-access-groups" :model-value="accessGroups" placeholder="填群号后回车，留空 = 不限群" @update:model-value="accessGroups = $event" /></div>
+        <p v-if="accessError" class="error-text" role="alert">{{ accessError }}</p>
+      </div>
+      <template #footer><button class="btn" :disabled="savingAccess" @click="accessFor=null">关闭</button><button class="btn primary" :disabled="savingAccess" @click="saveAudience"><Save :size="15" />保存</button></template>
+    </Modal>
     <Modal v-if="editing" :title="`${existing ? '编辑' : '添加'} ${kind === 'skill' ? 'Skill' : 'MCP'}`" wide @close="closeEditor">
       <div class="extension-form">
         <label class="field">名称<input v-model.trim="form.name" class="input" :disabled="existing || readonly" /></label>
@@ -35,7 +57,7 @@
           <label class="field">允许的工具（每行一个，留空全部）<textarea v-model="form.enabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="field">禁用的工具（每行一个）<textarea v-model="form.disabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="switch"><input v-model="form.enabled" type="checkbox" /><span class="track"></span>服务可用</label>
-          <p class="hint">测试连接会访问服务；stdio 会启动配置的本地进程。仅主人会话可调用自定义扩展工具。</p>
+          <p class="hint">测试连接会访问服务；stdio 会启动配置的本地进程。谁能调用这些工具在列表里按机器人设置，默认仅主人。</p>
           <p v-if="tested" role="status">连接成功，发现 {{ discovered.length }} 个工具</p><ul v-if="discovered.length"><li v-for="name in discovered" :key="name" class="tool-name">{{ name }}</li></ul>
         </template>
         <p v-if="error" class="error-text" role="alert">{{ error }}</p>
@@ -47,10 +69,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { Plus, RefreshCw, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
+import { Plus, RefreshCw, Settings2, Trash2, Save, PlugZap, Users } from '@lucide/vue';
 import Modal from './Modal.vue';
 import { botScope } from '../bot-scope';
-import { listManagedExtensions, manageExtension, type ManagedExtension } from '../api';
+import { fetchAssistantUserNames, listManagedExtensions, manageExtension, type ManagedExtension } from '../api';
+import IdChipInput from './IdChipInput.vue';
 import { askConfirm } from '../confirm';
 import { toastError, toastSuccess } from '../toast';
 
@@ -74,7 +97,35 @@ function stringMap(raw:string){const result=JSON.parse(raw||'{}');if(!result||Ar
 function payload(operation:string){return {operation,kind:props.kind,name:form.value.name,replace:existing.value,content:fromURL.value?'':form.value.content,source_url:fromURL.value?form.value.source_url:'',config:{enabled:form.value.enabled,url:transport.value==='http'?form.value.url:'',command:transport.value==='stdio'?form.value.command:'',args:transport.value==='stdio'?lines(form.value.args):[],cwd:transport.value==='stdio'?form.value.cwd:'',headers:transport.value==='http'?stringMap(headers.value):{},env:transport.value==='stdio'?stringMap(env.value):{},startup_timeout_sec:form.value.startup_timeout_sec,tool_timeout_sec:form.value.tool_timeout_sec,enabled_tools:lines(form.value.enabled_tools),disabled_tools:lines(form.value.disabled_tools)},clear_headers:transport.value==='http'?clearSecrets.value:[],clear_env:transport.value==='stdio'?clearSecrets.value:[]}}
 async function save(){saving.value=true;error.value='';try{await manageExtension(payload('save'));editing.value=false;toastSuccess('扩展已保存，后续会话生效');await load()}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
 async function testConnection(){saving.value=true;error.value='';tested.value=false;discovered.value=[];try{const result=await manageExtension<{connected:boolean;tools:string[]}>(payload('test'));tested.value=result.connected;discovered.value=result.tools}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
-async function toggle(item:ManagedExtension){const profile=botScope.value;if(!profile)return;busy.value=item.id;try{await manageExtension({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile,enabled:!item.enabled});await load()}catch(e){toastError(String(e instanceof Error?e.message:e))}finally{busy.value=''}}
+const accessFor=ref<ManagedExtension|null>(null),accessUsers=ref<string[]>([]),accessGroups=ref<string[]>([]),accessError=ref(''),savingAccess=ref(false);
+async function resolveAccountNames(ids:string[]):Promise<Record<string,string>>{const response=await fetchAssistantUserNames(ids);return response.names??{}}
+const extensionStates=[{value:'off',label:'停用',hint:'这台机器人不用它'},{value:'owner',label:'仅主人',hint:'只有主人会话能用'},{value:'admins',label:'群管',hint:'群主和群管理员也能用；平台给不出身份时按普通成员处理'},{value:'members',label:'群成员',hint:'群成员也能用，可再限定对象'}] as const;
+type ExtensionState=typeof extensionStates[number]['value'];
+const currentState=(item:ManagedExtension):ExtensionState=>!item.enabled?'off':!item.members_enabled?'owner':item.member_audience?.min_role==='admin'?'admins':'members';
+const isOpenTier=(item:ManagedExtension)=>{const state=currentState(item);return state==='members'||state==='admins'};
+// 小字只写「被收窄成什么样」，没收窄就不写：档位那一段已经说过谁能用了。
+function audienceSummary(item:ManagedExtension){if(!isOpenTier(item))return '';const users=item.member_audience?.users?.length||0,groups=item.member_audience?.groups?.length||0;if(!users&&!groups)return '';return `限定 ${[users?`${users} 人`:'',groups?`${groups} 群`:''].filter(Boolean).join(' · ')}`}
+function audienceTitle(item:ManagedExtension){if(!isOpenTier(item))return '开放给群管或群成员后，才能再限定具体是谁';return audienceSummary(item)?`开放对象：${audienceSummary(item)}`:'设置开放对象，现在是这一档的所有人'}
+function memberRisk(item:ManagedExtension,state:ExtensionState){const who=state==='admins'?'群主和群管理员':'群里任何人';
+ if(props.kind==='skill')return `正文对${state==='admins'?'群主和群管理员':'群里任何人'}可读。${item.bundled?'目录里的脚本在成员会话不会执行（成员没有命令和文件工具），':''}真正会发生的是模型按它去用搜索、网页渲染、订阅这些已有的工具。`;
+ return `${who}都能在对话里触发这个服务的工具。只对只读查询类服务开放。`}
+async function setState(item:ManagedExtension,state:ExtensionState){const profile=botScope.value;const now=currentState(item);if(!profile||now===state)return;
+ const opening=(state==='members'||state==='admins')&&(now==='off'||now==='owner'||(now==='admins'&&state==='members'));
+ if(opening&&!await askConfirm({title:`让${state==='admins'?'群主和管理员':'群成员'}使用 ${item.name}？`,message:memberRisk(item,state),confirmLabel:'开放'}))return;
+ const members=state==='members'||state==='admins';
+ busy.value=item.id;
+ try{
+  const base={kind:props.kind,name:item.name,profile_id:profile};
+  const audience={min_role:state==='admins'?'admin':'',users:item.member_audience?.users||[],groups:item.member_audience?.groups||[]};
+  // 收紧的那一步先做：先摘权限再改启用，不会出现「已开放但还没限制住」的瞬间。
+  if(!members&&item.members_enabled)await manageExtension({...base,operation:'members',enabled:false});
+  if(members&&audience.min_role!==(item.member_audience?.min_role||''))await manageExtension({...base,operation:'audience',audience});
+  if((state==='off')!==!item.enabled)await manageExtension({...base,operation:'enabled',enabled:state!=='off'});
+  if(members&&!item.members_enabled)await manageExtension({...base,operation:'members',enabled:true});
+  await load();
+ }catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
+function openAccess(item:ManagedExtension){accessFor.value=item;accessUsers.value=[...(item.member_audience?.users||[])];accessGroups.value=[...(item.member_audience?.groups||[])];accessError.value=''}
+async function saveAudience(){const item=accessFor.value,profile=botScope.value;if(!item||!profile)return;savingAccess.value=true;accessError.value='';try{await manageExtension({operation:'audience',kind:props.kind,name:item.name,profile_id:profile,audience:{min_role:item.member_audience?.min_role||'',users:accessUsers.value,groups:accessGroups.value}});accessFor.value=null;toastSuccess('开放对象已更新，后续会话生效');await load()}catch(e){accessError.value=String(e instanceof Error?e.message:e)}finally{savingAccess.value=false}}
 async function remove(item:ManagedExtension){if(!await askConfirm({title:`删除 ${item.name}？`,message:'全局删除会影响使用它的所有机器人。',confirmLabel:'删除',danger:true}))return;try{await manageExtension({operation:'delete',kind:props.kind,name:item.name});await load()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 watch(() => state(),()=>{tested.value=false;discovered.value=[]});
 async function prepareLeave(){await closeEditor();return !editing.value}
@@ -83,5 +134,5 @@ watch(botScope,load);onMounted(load);
 </script>
 
 <style scoped>
-.extension-manager{padding-top:20px}.extension-list{border-top:1px solid var(--border)}.extension-row{display:flex;align-items:center;gap:12px;padding:18px 0;border-bottom:1px solid var(--border)}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.secret-clear{display:flex;gap:8px;align-items:center}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}@media(max-width:600px){.extension-row{gap:6px;flex-wrap:wrap}.extension-info{flex-basis:100%}.extension-grid{grid-template-columns:1fr}}
+.extension-manager{padding-top:20px}.extension-list{border-top:1px solid var(--border)}.extension-row{display:flex;align-items:center;gap:12px;padding:18px 0;border-bottom:1px solid var(--border)}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.secret-clear{display:flex;gap:8px;align-items:center}.extension-info strong{display:flex;align-items:center;gap:8px}.extension-state{flex-shrink:0}.extension-state button:disabled{opacity:.45;cursor:not-allowed}.extension-audience-note{color:var(--text-secondary)}.extension-action-slot{width:34px;flex-shrink:0}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}@media(max-width:600px){.extension-row{gap:6px;flex-wrap:wrap}.extension-info{flex-basis:100%}.extension-grid{grid-template-columns:1fr}}
 </style>

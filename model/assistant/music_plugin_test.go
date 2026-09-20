@@ -653,7 +653,7 @@ func TestNeteaseSongPayloadAcceptsBothFieldGenerations(t *testing.T) {
 
 // 点歌得对群里所有人可用。非主人走的是工具白名单，漏掉就等于这个功能只有主人能用。
 func TestMusicRequestToolIsAvailableToOrdinaryMembers(t *testing.T) {
-	member := RelationshipPolicy{Tier: RelationshipAcquaintance}
+	member := RelationshipPolicy{Score: 10}
 	allowed := member.allowedAgentToolNames()
 	if allowed == nil {
 		t.Fatal("a non-owner should have an explicit allowlist")

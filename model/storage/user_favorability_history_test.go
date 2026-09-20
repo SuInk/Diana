@@ -58,7 +58,7 @@ func TestSQLiteStoreRecordsRealFavorabilityChangesNewestFirst(t *testing.T) {
 	if len(changes) != 2 {
 		t.Fatalf("changes=%#v, want 2 real changes", changes)
 	}
-	if changes[0].Delta != 48 || changes[0].Before != 2 || changes[0].After != 50 || changes[0].Source != "owner_set" || changes[0].Reason != "活动奖励" || changes[0].OperatorID != "10001" {
+	if changes[0].Delta != 38 || changes[0].Before != 12 || changes[0].After != 50 || changes[0].Source != "owner_set" || changes[0].Reason != "活动奖励" || changes[0].OperatorID != "10001" {
 		t.Fatalf("newest change=%#v", changes[0])
 	}
 	if changes[1].Delta != 2 || changes[1].Source != "interaction" || changes[1].Reason != "明确表达感谢" || changes[1].GroupID != "20001" || changes[1].MessageID != "30001" {

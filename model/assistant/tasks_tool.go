@@ -48,6 +48,7 @@ type dianaTask struct {
 	IssueEvents           []string  `json:"watch_issue_events"`
 	WatchIssues           bool      `json:"watch_issues,omitempty"`
 	WatchReleases         bool      `json:"watch_releases,omitempty"`
+	ReleaseKinds          []string  `json:"watch_release_kinds"`
 	WatchStars            bool      `json:"watch_stars,omitempty"`
 	StarNotifyMode        string    `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold   int       `json:"star_notify_threshold,omitempty"`
@@ -211,6 +212,7 @@ func taskForTool(item Reminder) dianaTask {
 		IssueEvents:           EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
 		WatchIssues:           item.WatchIssues,
 		WatchReleases:         item.WatchReleases,
+		ReleaseKinds:          EffectiveRepositoryWatchReleaseKinds(item.WatchReleaseKinds),
 		WatchStars:            item.WatchStars,
 		StarNotifyMode:        item.StarNotifyMode,
 		StarNotifyThreshold:   item.StarNotifyThreshold,

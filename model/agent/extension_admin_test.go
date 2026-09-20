@@ -197,3 +197,147 @@ func TestExtensionAdminCannotReplaceReadonlySkill(t *testing.T) {
 		t.Fatal("external file changed")
 	}
 }
+
+func TestExtensionAdminMemberPermissionDefaultsToOwnerOnly(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), MCPConfigPath: "mcp.json"}
+	ctx := context.Background()
+	config := map[string]any{"url": "https://example.com/mcp", "enabled": true}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: "probe", Config: config}); err != nil {
+		t.Fatal(err)
+	}
+	members := func() *bool {
+		result, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "list", ProfileID: "bot-a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, state := range result.(map[string]any)["items"].([]ExtensionState) {
+			if state.ID == "mcp:probe" {
+				return state.MembersEnabled
+			}
+		}
+		t.Fatal("saved MCP missing from catalog")
+		return nil
+	}
+	if value := members(); value == nil || *value {
+		t.Fatalf("new MCP defaults to members_enabled=%v, want false", value)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if value := members(); value == nil || !*value {
+		t.Fatalf("members_enabled = %v after opening the service", value)
+	}
+	values, err := LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(values); strings.Join(ids, ",") != "mcp:probe" {
+		t.Fatalf("member extensions = %v", ids)
+	}
+	// 机器人级停用优先：服务在这台机器人上关掉后，成员开关不再生效。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "enabled", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	values, err = LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(values); len(ids) != 0 {
+		t.Fatalf("disabled service still open to members: %v", ids)
+	}
+	// 另一台机器人不受影响，默认仍是仅主人。
+	other, err := LoadExtensionOverrides(cfg.WorkDir, "bot-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(other); len(ids) != 0 {
+		t.Fatalf("member permission crossed robots: %v", ids)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "builtin", Name: "probe", ProfileID: "bot-a", Enabled: true}); err == nil {
+		t.Fatal("builtin plugin accepted a member permission it cannot enforce")
+	}
+	// Skill 走同一套开关，内置插件不参与。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "skill", Name: "guide", Content: "---\nname: guide\ndescription: Member guide\n---\nHello"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "skill", Name: "guide", ProfileID: "bot-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	values, err = LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(values); strings.Join(ids, ",") != "skill:guide" {
+		t.Fatalf("member extensions = %v", ids)
+	}
+}
+
+func TestExtensionAudienceLimitsMemberAccess(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), MCPConfigPath: "mcp.json"}
+	ctx := context.Background()
+	config := map[string]any{"url": "https://example.com/mcp", "enabled": true}
+	for _, name := range []string{"probe", "other"} {
+		if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: name, Config: config}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "mcp", Name: name, ProfileID: "bot-a", Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	audience := ExtensionAudience{Users: []string{" 1001 ", "1002", "1001"}, Groups: []string{"g1"}}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "audience", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Audience: audience}); err != nil {
+		t.Fatal(err)
+	}
+	overrides, err := LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	audiences, err := LoadExtensionAudiences(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := audiences["mcp:probe"]
+	if strings.Join(saved.Users, ",") != "1001,1002" || strings.Join(saved.Groups, ",") != "g1" {
+		t.Fatalf("audience = %#v，重复和空白没有清掉", saved)
+	}
+	cases := []struct {
+		user, group string
+		want        string
+	}{
+		{"1001", "g1", "mcp:other,mcp:probe"},
+		{"1003", "g1", "mcp:other"},
+		{"1001", "g2", "mcp:other"},
+		{"1001", "", "mcp:other"},
+	}
+	for _, tt := range cases {
+		got := MemberAllowedExtensionIDsFor(overrides, audiences, tt.user, tt.group)
+		if strings.Join(got, ",") != tt.want {
+			t.Fatalf("user=%q group=%q allowed=%v want=%s", tt.user, tt.group, got, tt.want)
+		}
+	}
+	// 名单清空就是不限制，同时不在文件里留空记录。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "audience", Kind: "mcp", Name: "probe", ProfileID: "bot-a"}); err != nil {
+		t.Fatal(err)
+	}
+	audiences, err = LoadExtensionAudiences(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audiences) != 0 {
+		t.Fatalf("清空后仍有记录：%#v", audiences)
+	}
+	if got := MemberAllowedExtensionIDsFor(overrides, audiences, "1003", "g9"); strings.Join(got, ",") != "mcp:other,mcp:probe" {
+		t.Fatalf("清空后仍在限制：%v", got)
+	}
+	// 关掉成员开关后，名单不能把权限找回来。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	overrides, err = LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := MemberAllowedExtensionIDsFor(overrides, audiences, "1001", "g1"); strings.Join(got, ",") != "mcp:other" {
+		t.Fatalf("关掉成员开关后仍然开放：%v", got)
+	}
+}

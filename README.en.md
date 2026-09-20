@@ -137,7 +137,7 @@ Every enabled bot profile is online at the same time, and replies always go back
 
 | Platform | Credentials you need | Connection direction |
 | --- | --- | --- |
-| **OneBot v11** (NapCat, Lagrange.Core, go-cqhttp, …) | Point your OneBot client's reverse WebSocket at Diana and agree on an access token | Client → Diana, no public address needed |
+| **OneBot v11** (Snowluma, NapCat, Lagrange, …) | Point your OneBot client's reverse WebSocket at Diana and agree on an access token | Client → Diana, no public address needed |
 | **Telegram** | Bot Token from BotFather (a proxy address is often needed from mainland China) | Diana connects outbound, no public address needed |
 | **QQ Official Bot** | AppID + AppSecret from the open platform (sandbox available before listing) | Diana connects outbound, no public address needed |
 | **DingTalk** | App Client ID + Client Secret (Stream mode) | Diana connects outbound, no public address needed |

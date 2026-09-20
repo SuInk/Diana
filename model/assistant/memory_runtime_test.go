@@ -51,9 +51,9 @@ func TestMemoryGateUsesMemoryProfileAndExistingKeys(t *testing.T) {
 		Time:       200,
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "我现在不吃辣了"}}},
 	}
-	err := runtime.processEventMemoryJob(context.Background(), memory, MemoryJobPayload{
+	err := runtime.processEventMemoryJobs(context.Background(), memory, []MemoryJobPayload{{
 		Kind: MemoryJobEvent, Session: "group:123", Event: event,
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestStructuredMemoryDetailedFormatterReturnsOnlyInjectedItems(t *testing.T)
 		{ID: "short", Kind: MemoryKindFact, Topic: "饮食", Content: "喜欢清淡口味", Confidence: 0.95},
 		{ID: "long", Kind: MemoryKindFact, Topic: "超长", Content: strings.Repeat("很长的记忆内容", 500), Confidence: 0.95},
 	}
-	_, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(UserMemoryProfile{UserID: "user-1"}, RelationshipPolicy{Name: "初识"}, items, 300)
+	_, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(UserMemoryProfile{UserID: "user-1"}, RelationshipPolicy{Score: 10}, items, 300)
 	if usage.SelectedItems != 1 || len(selected) != 1 || selected[0].ID != "short" {
 		t.Fatalf("usage=%#v selected=%#v", usage, selected)
 	}
@@ -537,7 +537,7 @@ func TestMemoryGateFetchesRelevantMemoriesBeforeImportantOnes(t *testing.T) {
 		Kind: EventKindGroup, GroupID: "123", UserID: "user", SenderName: "Alice", MessageID: "m9", Time: 300,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "我现在改吃甜的了，不爱麻辣烫了"}}},
 	}
-	if err := runtime.processEventMemoryJob(context.Background(), memory, MemoryJobPayload{Kind: MemoryJobEvent, Session: "group:123", Event: event}); err != nil {
+	if err := runtime.processEventMemoryJobs(context.Background(), memory, []MemoryJobPayload{{Kind: MemoryJobEvent, Session: "group:123", Event: event}}); err != nil {
 		t.Fatal(err)
 	}
 

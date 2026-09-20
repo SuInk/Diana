@@ -27,7 +27,7 @@ func TestApplyRomancePolicyOverlaysPartnerTier(t *testing.T) {
 
 	base := RelationshipPolicyFor(profile, "owner", "10005")
 	policy := applyRomancePolicy(base, profile, now)
-	if policy.Tier != RelationshipPartner || policy.Name != "恋人" || !policy.Romance {
+	if !policy.Romance {
 		t.Fatalf("policy = %#v", policy)
 	}
 	if policy.RomanceDays != 10 {
@@ -37,7 +37,7 @@ func TestApplyRomancePolicyOverlaysPartnerTier(t *testing.T) {
 	if policy.Owner || policy.AllowDocumentOCR != base.AllowDocumentOCR || policy.AllowImageGeneration != base.AllowImageGeneration {
 		t.Fatalf("permissions changed: %#v", policy)
 	}
-	if policy.personalScheduleLimit() != (RelationshipPolicy{Tier: RelationshipTrusted}).personalScheduleLimit() {
+	if policy.personalScheduleLimit() != (RelationshipPolicy{Score: 100}).personalScheduleLimit() {
 		t.Fatalf("schedule limit = %d", policy.personalScheduleLimit())
 	}
 
@@ -45,13 +45,13 @@ func TestApplyRomancePolicyOverlaysPartnerTier(t *testing.T) {
 	cold := profile
 	cold.Favorability = -30
 	policy = applyRomancePolicy(RelationshipPolicyFor(cold, "owner", "10005"), cold, now)
-	if policy.Tier != RelationshipPartner || policy.Name != "冷战" {
+	if !policy.Romance {
 		t.Fatalf("strained policy = %#v", policy)
 	}
 
 	// 没在恋爱时原样返回。
 	plain := UserMemoryProfile{UserID: "10005", Favorability: 80, MessageCount: 60}
-	if got := applyRomancePolicy(RelationshipPolicyFor(plain, "owner", "10005"), plain, now); got.Romance || got.Tier == RelationshipPartner {
+	if got := applyRomancePolicy(RelationshipPolicyFor(plain, "owner", "10005"), plain, now); got.Romance {
 		t.Fatalf("plain profile got romance overlay: %#v", got)
 	}
 }
@@ -61,7 +61,7 @@ func TestApplyRomancePolicyKeepsOwnerIdentity(t *testing.T) {
 	profile := romanceProfile(120, 200, now.AddDate(0, -2, 0))
 	profile.UserID = "owner"
 	policy := applyRomancePolicy(RelationshipPolicyFor(profile, "owner", "owner"), profile, now)
-	if !policy.Owner || policy.Tier != RelationshipOwner || policy.Name != "主人" {
+	if !policy.Owner {
 		t.Fatalf("owner identity lost: %#v", policy)
 	}
 	if !policy.Romance || !strings.Contains(policy.Tone, "恋人") {
@@ -76,7 +76,7 @@ func TestRelationshipPolicyForConfigHonorsRomanceGate(t *testing.T) {
 		t.Fatalf("romance leaked past disabled gate: %#v", policy)
 	}
 	enabled := BotConfig{OwnerID: "owner", RomanceEnabled: boolPointer(true)}
-	if policy := RelationshipPolicyForConfig(enabled, profile, "10005"); !policy.Romance || policy.Name != "恋人" {
+	if policy := RelationshipPolicyForConfig(enabled, profile, "10005"); !policy.Romance {
 		t.Fatalf("romance not applied: %#v", policy)
 	}
 }
@@ -296,7 +296,7 @@ func TestRelationshipSnapshotCarriesRomance(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Target == nil || !result.Target.Romance || result.Target.RelationshipTier != RelationshipPartner || result.Target.RelationshipName != "恋人" {
+	if result.Target == nil || !result.Target.Romance {
 		t.Fatalf("target = %#v", result.Target)
 	}
 	if result.Target.RomanceDays < 1 {

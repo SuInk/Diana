@@ -56,7 +56,7 @@ func (t *dianaReminderTool) Name() string {
 }
 
 func (t *dianaReminderTool) Description() string {
-	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒时必须使用此工具；周期性查询或定期订阅改用 schedule，仓库更新订阅只能在 WebUI 管理。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
+	return `创建和管理持久化一次性提醒。用户要求在某个时间点或某段时间之后提醒时必须使用此工具；周期性查询、RSS/推特关注、GitHub 仓库更新这类会重复触发的订阅改用 subscription，用 kind 选种类。禁止用 run_command、sleep 或后台进程代替。初识及以上可用。`
 }
 
 // InputSchema 声明参数契约。相对时间使用 delay，绝对时间使用 at，避免模型把
@@ -85,10 +85,6 @@ func (t *dianaReminderTool) InputSchema() map[string]any {
 func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana reminder: runtime is not configured")
-	}
-	policy := t.runtime.relationshipPolicy(ctx, t.event)
-	if !policy.AllowPersonalSchedule {
-		return "", fmt.Errorf("好感度不足：当前关系等级为“%s”，尚未解锁个人提醒", policy.Name)
 	}
 	targetID, err := taskTargetUserID(ctx, t.runtime, t.event, input)
 	if err != nil {
@@ -316,9 +312,6 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 	}
 	policy := r.relationshipPolicy(context.Background(), event)
 	limit := policy.personalScheduleLimit()
-	if limit == 0 {
-		return nil, nil, fmt.Errorf("当前关系等级为“%s”，没有个人提醒权限", policy.Name)
-	}
 
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
@@ -331,7 +324,7 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 	}
 	remaining := limit - count
 	if remaining <= 0 {
-		return nil, nil, fmt.Errorf("当前关系等级最多创建 %d 个一次性提醒，额度已满", limit)
+		return nil, nil, fmt.Errorf("当前最多可创建 %d 个一次性提醒，额度已满", limit)
 	}
 	if len(requests) > remaining {
 		requests = requests[:remaining]

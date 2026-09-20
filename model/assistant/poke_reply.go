@@ -159,12 +159,12 @@ func (r *Runtime) generatePokeReaction(ctx context.Context, event MessageEvent) 
 		scene = "群里"
 	}
 	instruction := fmt.Sprintf(
-		"刚刚 %s 在%s戳了戳你（QQ 的戳一戳，没有文字）。你们的关系等级是「%s」，语气要求：%s\n%s\n"+
+		"刚刚 %s 在%s戳了戳你（QQ 的戳一戳，没有文字）。语气要求：%s\n%s\n"+
 			"像真人一样决定怎么回应，四选一：poke 只戳回去（最常见，适合互相玩闹、熟人随手戳）；text 回一句话（适合对方像是在叫你、刚才的话题没说完、或者你想问问怎么了）；"+
 			"both 戳回去再说一句；none 不理（比如对方刚连着戳、群里正聊别的正事、或者你们不熟没必要回应）。不要每次都问「戳我干嘛」，结合最近聊天说点具体的。"+
 			"text 是 1 到 20 个字的一句话，自然口语，不解释什么是戳一戳，不用括号描写动作，不 @ 对方；action 为 poke 或 none 时 text 留空。"+
 			"只输出一个 JSON 对象：{\"action\":\"poke\",\"text\":\"\"}",
-		who, scene, policy.Name, policy.Tone, r.pokeRecentChat(event))
+		who, scene, policy.Tone, r.pokeRecentChat(event))
 	messages := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})
 	callCtx, cancel := context.WithTimeout(ctx, pokeReplyTimeout)
 	defer cancel()

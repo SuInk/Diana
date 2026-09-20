@@ -54,15 +54,13 @@ type dianaRelationshipSnapshot struct {
 	UserID      string `json:"user_id"`
 	DisplayName string `json:"display_name"`
 	// Mention 是可以直接抄进回复的提及标记，出站时按平台翻译。
-	Mention          string           `json:"mention"`
-	Favorability     int              `json:"favorability"`
-	MessageCount     int              `json:"message_count"`
-	RelationshipTier RelationshipTier `json:"relationship_tier"`
-	RelationshipName string           `json:"relationship_name"`
-	ScheduleLimit    int              `json:"reminder_schedule_limit"`
-	CanGenerateImage bool             `json:"can_generate_image"`
-	CanEditImage     bool             `json:"can_edit_image"`
-	CanDocumentOCR   bool             `json:"can_document_ocr"`
+	Mention          string `json:"mention"`
+	Favorability     int    `json:"favorability"`
+	MessageCount     int    `json:"message_count"`
+	ScheduleLimit    int    `json:"reminder_schedule_limit"`
+	CanGenerateImage bool   `json:"can_generate_image"`
+	CanEditImage     bool   `json:"can_edit_image"`
+	CanDocumentOCR   bool   `json:"can_document_ocr"`
 	// Owner 说的是机器人的主人，不是群主，所以键名写成 bot_owner——群成员角色
 	// 里的 owner 是群主，同名会让模型把两者混成一个人。
 	Owner      bool `json:"bot_owner"`
@@ -522,8 +520,6 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 		Mention:          mentionMarkerFor(userID),
 		Favorability:     profile.Favorability,
 		MessageCount:     profile.MessageCount,
-		RelationshipTier: policy.Tier,
-		RelationshipName: policy.Name,
 		ScheduleLimit:    policy.personalScheduleLimit(),
 		CanGenerateImage: policy.AllowImageGeneration,
 		CanEditImage:     policy.AllowImageEditing,

@@ -54,8 +54,8 @@ func TestModelAuthoredCommentBecomesDraftAndPostsAfterApproval(t *testing.T) {
 		repositoryPublishSettingTimeout:   5,
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	toolFor := func(rawMessage string) *dianaRepositoryIssuesTool {
-		return newDianaRepositoryIssuesTool(runtime,
+	toolFor := func(rawMessage string) *dianaGitHubTool {
+		return newDianaGitHubTool(runtime,
 			MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
 			plugin, settings)
 	}
@@ -111,8 +111,8 @@ func TestUnapprovedDraftNeverReachesGitHub(t *testing.T) {
 		repositoryPublishSettingTimeout:   5,
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	toolFor := func(rawMessage string) *dianaRepositoryIssuesTool {
-		return newDianaRepositoryIssuesTool(runtime,
+	toolFor := func(rawMessage string) *dianaGitHubTool {
+		return newDianaGitHubTool(runtime,
 			MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
 			plugin, settings)
 	}
@@ -151,8 +151,8 @@ func TestApprovingAnAlreadyAppliedDraftReportsTheTruth(t *testing.T) {
 		repositoryPublishSettingTimeout:   5,
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	toolFor := func(rawMessage string) *dianaRepositoryIssuesTool {
-		return newDianaRepositoryIssuesTool(runtime,
+	toolFor := func(rawMessage string) *dianaGitHubTool {
+		return newDianaGitHubTool(runtime,
 			MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
 			plugin, settings)
 	}
@@ -207,8 +207,8 @@ func TestListDraftsCarriesConfirmationCode(t *testing.T) {
 		repositoryPublishSettingUserAccess: "owner = acme/demo",
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	toolFor := func(rawMessage string) *dianaRepositoryIssuesTool {
-		return newDianaRepositoryIssuesTool(runtime,
+	toolFor := func(rawMessage string) *dianaGitHubTool {
+		return newDianaGitHubTool(runtime,
 			MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
 			plugin, settings)
 	}

@@ -44,6 +44,18 @@ const (
 	llmTransientMaxRetries         = 1
 	proactiveReplyRouteBudget      = 60 * time.Second
 	replyRuleRouteBudget           = 15 * time.Second
+
+	// auditPersistTimeout 是「落库留痕，失败只打日志」这类写入的预算：入站判决原因、
+	// 通知事件、消息历史。
+	//
+	// 原来三处各自写死 2 秒。SQLite 写池是串行的，繁忙时排队本身就能吃掉一两秒——
+	// 线上 3 小时丢了 190 条 decision_reason、42 条 assistant 审计、27 条投递状态，
+	// 本机一个新库两小时也丢了 33 条，全部是 AppendLog context deadline exceeded。
+	//
+	// 丢的不是日志噪音，是排查时要看的判决依据：inbound_events 里查不到某条为什么
+	// 没回复，一部分就是这么没的。这些写入都在后台 goroutine 里，放宽到 15 秒不影响
+	// 任何用户可见的延迟，却能让排队高峰扛过去。仍然保留超时，避免写池卡死时无限堆积。
+	auditPersistTimeout = 15 * time.Second
 )
 
 type LLMProfileStore interface {
@@ -184,10 +196,14 @@ type RuntimeStatus struct {
 	RecentEvents   []EventRecord                  `json:"recent_events,omitempty"`
 	ActiveWorkers  int                            `json:"active_workers"`
 	ActiveTasks    int                            `json:"active_subagent_tasks"`
-	SubagentTasks  []SubagentTaskStatus           `json:"subagent_tasks,omitempty"`
-	PendingEvents  int                            `json:"pending_events"`
-	LastError      string                         `json:"last_error,omitempty"`
-	UpdatedAt      time.Time                      `json:"updated_at"`
+	// LLMConcurrency 是模型侧的并发，和 ActiveWorkers 不是一个量级；LLMUsage 是
+	// 这些调用花掉的 token。两者见 llm_call_metrics.go。
+	LLMConcurrency LLMConcurrencyStatus `json:"llm_concurrency"`
+	LLMUsage       LLMUsageTotals       `json:"llm_usage"`
+	SubagentTasks  []SubagentTaskStatus `json:"subagent_tasks,omitempty"`
+	PendingEvents  int                  `json:"pending_events"`
+	LastError      string               `json:"last_error,omitempty"`
+	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
 type EventRecord struct {
@@ -303,24 +319,30 @@ type Runtime struct {
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
 	profileConfigs   map[string]BotConfig
+	// disabledProfiles 是配置集里已停用的档案 ID。停用只把档案从通道 bindings 里
+	// 摘掉，共享连接本身可能还活着（别的档案在用它），入站这边要自己认一次。
+	disabledProfiles map[string]bool
 	// profileOrder 是配置集里机器人的顺序，列表和兜底都按它来，不依赖 map 的随机顺序。
 	profileOrder []string
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
 	relayPairs []MessageRelayPair
 	channel    Channel
 	// bridges 是各机器人自己的 NoneBot 桥接，按机器人 ID 索引，见 nonebot_bridges.go。
-	bridges          map[string]*NoneBotBridge
-	plugins          *PluginManager
-	llmStore         LLMProfileStore
-	modelLister      LLMModelLister
-	appLogs          applog.Writer
-	messageStore     MessageHistoryStore
+	bridges      map[string]*NoneBotBridge
+	plugins      *PluginManager
+	llmStore     LLMProfileStore
+	modelLister  LLMModelLister
+	appLogs      applog.Writer
+	messageStore MessageHistoryStore
+	// aliasSalt 是脱敏别名的全局盐，进程内只定一次，落库后跨重启不变。
+	aliasSalt        string
 	inboundStore     InboundEventStore
 	inboundFailedAt  time.Time
 	userMemory       UserMemoryStore
 	structuredMemory StructuredMemoryStore
 	threadStates     ThreadStateStore
 	oneBotRequests   OneBotRequestStore
+	pendingDirect    PendingDirectMessageStore
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	expressionStyles ExpressionStyleStore
@@ -330,6 +352,14 @@ type Runtime struct {
 	pokeLastReply    map[string]time.Time
 	pokeLastSent     map[string]time.Time
 	pokeSessionSent  map[string][]time.Time
+	// 跨会话发送的限流账本：按「来源会话×目标」记冷却，按来源会话记窗口内总量。
+	// 自带锁，不受 mu 保护。
+	crossSessionMu          sync.Mutex
+	crossSessionLastSent    map[string]time.Time
+	crossSessionSessionSent map[string][]time.Time
+	// friendRosters 缓存各账号的 OneBot 好友名册，见 onebot_friends.go。
+	friendRosterMu sync.Mutex
+	friendRosters  map[string]oneBotFriendRoster
 	// welcomeLLMLast 记每个（机器人 × 群）上一次 LLM 欢迎词的生成时间，
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
 	welcomeMu             sync.Mutex
@@ -399,10 +429,14 @@ type Runtime struct {
 	// 摘要、又以完整原文进入同一个请求。
 	contextSummaryMarks map[string]int64
 	// historyWindowAnchors 记录每个会话近期历史窗口的起点（见 anchoredHistoryWindow）。
-	historyWindowAnchors  map[string]string
-	recent                []EventRecord
-	activeMu              sync.Mutex
-	active                int
+	historyWindowAnchors map[string]string
+	recent               []EventRecord
+	activeMu             sync.Mutex
+	active               int
+	// llmConcurrency 数的是在飞的模型调用，llmUsage 数它们花掉的 token。
+	// 两者都自带锁，不受 mu 保护。
+	llmConcurrency        llmConcurrencyTracker
+	llmUsage              llmUsageTracker
 	reminderMu            sync.Mutex
 	activeReminders       map[string]struct{}
 	inboundWake           chan struct{}
@@ -583,7 +617,11 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
 	order := make([]string, 0, len(set.Profiles))
+	disabled := make(map[string]bool)
 	for _, profile := range set.Profiles {
+		if !profile.Enabled {
+			disabled[strings.TrimSpace(profile.ID)] = true
+		}
 		resolved, err := set.ResolveConnection(profile)
 		if err != nil {
 			continue
@@ -595,11 +633,24 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles
+	r.disabledProfiles = disabled
 	r.profileOrder = order
 	r.relayPairs = set.MessageRelays
 	r.updatedAt = time.Now()
 	r.mu.Unlock()
 	r.reconcileBridges()
+}
+
+// profileDisabled 报告事件所属档案是否已停用。这是入站侧的兜底：共享一条连接的
+// 档案里只要还有一个启用着，连接就不会断，停用档案的事件照样能从那条连接进来。
+func (r *Runtime) profileDisabled(profileID string) bool {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.disabledProfiles[profileID]
 }
 
 // SetAppLogWriter 注入运行时审计日志写入器。
@@ -682,6 +733,10 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.romanceGreetingLoop")
 			r.runRomanceGreetingLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")
+			r.runPendingDirectMessagePurgeLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
@@ -1166,6 +1221,8 @@ func (r *Runtime) Status() RuntimeStatus {
 		RecentEvents:   recent,
 		ActiveWorkers:  r.activeCount(),
 		ActiveTasks:    r.activeSubagentTaskCount(),
+		LLMConcurrency: r.llmConcurrencyStatus(),
+		LLMUsage:       r.llmUsageTotals(),
 		SubagentTasks:  r.subagentTaskStatuses(),
 		PendingEvents:  r.pendingInboundCount(),
 		LastError:      lastError,
@@ -1386,7 +1443,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 	if !ok || store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 	defer cancel()
 	if err := store.RecordNoticeEvent(ctx, sessionKey(event), withoutReplyRuntimeState(event)); err != nil {
 		log.Printf("diana notice audit persist failed: %v", err)
@@ -3200,7 +3257,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		pluginResponses = r.plugins.RunWithGroupOverrides(ctx, pluginRequest(event, replyHistory), overrides, settingOverrides)
 	}
 	pluginResponses = applyRecallReplyMode(pluginResponses, cfg.RecallReplyMode)
-	pluginResponses = applyRelationshipTaskPermissions(pluginResponses, relationship)
 	authoritativePluginContext := hasAuthoritativePluginContext(pluginResponses)
 	var pluginTasks []PluginTask
 	for _, resp := range pluginResponses {
@@ -3281,8 +3337,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaBotParticipationTool(r, event),
 				newDianaReplyBlockTool(r, event),
 				newDianaReminderTool(r, event),
-				newDianaScheduleTool(r, event),
-				newDianaRSSWatchTool(r, event),
 				newDianaRenderTool(r, event),
 				// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
 				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
@@ -3290,6 +3344,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
+			}
+			// 跨会话发送只在「确实存在另一条会话可发」时才有意义。群里人人可用，
+			// 但只能发给当前说话的人；主人在哪都能用，因为只有他能指定别人和群。
+			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
+			if event.Kind == EventKindGroup || relationship.Owner {
+				extraTools = append(extraTools, newDianaCrossSessionTool(r, event, relationship.Owner))
 			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
@@ -3340,17 +3400,40 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
-					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
+					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
 				}
 			}
+			// schedule、rss、github 三种订阅合成一个 subscription 工具。github 那种仍然
+			// 只挂给主人和仓库管理人员——它不进 backends，kind 枚举里就不会出现，
+			// 没权限的人看不见也就不会去调。
+			var githubWatch *dianaRepositoryWatchTool
 			if pluginValue, watchSettings, enabled := r.pluginWithSettingsForEvent(repositoryWatchPluginID, event); enabled {
 				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
 					_, publishSettings, _ := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event)
 					managed := repositoryWatchManagedRepositories(event, publishSettings)
 					if relationship.Owner || len(managed) > 0 {
-						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
+						githubWatch = newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings)
 					}
 				}
+			}
+			if subscription := newDianaSubscriptionTool(
+				subscriptionBackend{
+					kind: subscriptionKindSchedule, label: "按固定间隔重复执行一段查询并通知结果",
+					operations: []string{"create", "list", "update", "cancel", "delete"},
+					delegate:   newDianaScheduleTool(r, event),
+				},
+				subscriptionBackend{
+					kind: subscriptionKindRSS, label: "盯 RSS/Atom Feed 或 X (Twitter) 用户，由模型按 judge_prompt 判断是否值得通知",
+					operations: []string{"create", "list", "update", "cancel", "delete"},
+					delegate:   newDianaRSSWatchTool(r, event),
+				},
+				subscriptionBackend{
+					kind: subscriptionKindGitHub, label: "盯 GitHub 仓库的 Commit / PR / Issue / Release / Star",
+					operations: []string{"create", "list", "update", "cancel", "delete", "run"},
+					delegate:   subscriptionGitHubDelegate(githubWatch),
+				},
+			); subscription != nil {
+				extraTools = append(extraTools, subscription)
 			}
 			// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
 			// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里
@@ -3395,13 +3478,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if routed && intent.Action != visualIntentNone {
 			switch intent.Action {
 			case visualIntentGenerateImage:
-				if !relationship.AllowImageGeneration {
-					reply := relationshipPermissionDenied(relationship, "图片生成", relationshipImageTierName)
-					if err := r.send(ctx, event, reply); err != nil {
-						return "", err
-					}
-					return reply, nil
-				}
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想生成什么画面？把画面描述发给我就行。"
 					if err := r.send(ctx, event, reply); err != nil {
@@ -3415,13 +3491,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
 			case visualIntentEditImage:
-				if !relationship.AllowImageEditing {
-					reply := relationshipPermissionDenied(relationship, "图片编辑", relationshipImageTierName)
-					if err := r.send(ctx, event, reply); err != nil {
-						return "", err
-					}
-					return reply, nil
-				}
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想怎么改？发图时顺便说清楚要改哪里就行。"
 					if err := r.send(ctx, event, reply); err != nil {
@@ -3608,7 +3677,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
 			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
-			summary, summaryRecompressed = r.fitOlderSummaryToBudget(ctx, summary, summaryBudget, cfg)
+			summary, summaryRecompressed = r.fitOlderSummaryToBudget(summary, summaryBudget)
 			if promptSession := r.groupPromptSession(event); promptSession != nil {
 				summary = promptSession.rememberCheckpoint(summary)
 			}
@@ -4149,16 +4218,31 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 }
 
 // replyAgentCoreTools 是主回复每一步都带完整定义的工具，其余按需加载（agent.Config.CoreTools）。
-// 取自近 7 天的调用统计：4642 次 Agent 运行里，搜索 338 次、历史媒体 71、聊天记录 63、
-// 线程状态 63、生图 59、网页渲染 32，其余每个工具最多 28 次。
+//
+// 门槛是「用到它的 Agent 运行占多少」，不是调用次数：常驻的代价按请求算，收益按运行算，
+// 一次运行里连调五次同一个工具也只省下一次 tools_load。近 7 天线上 719 次 Agent 运行，
+// 按 trace 去重后 web_search 273（38%）、history_media 94（13%）、github 76（11%）、
+// image 59（8%）、chat_history 57（8%）、browser_render 48（7%）、capabilities 47（7%）、
+// thread_state 23（3%）、poke 8（1%）。github 只在开了仓库插件、且本次会话有权限时才注册，
+// 在那些群里是 76/387≈20%。
+//
+// github 和 capabilities 补进来：171 次用到 tools_load 的运行里，有 71 次加载的只有这两个
+// 之一，占全部运行的 10%——这一步换来的只是一次多余的模型往返。
+//
+// thread_state 挪出去：它的用法整段写在 promptToolThreadState 里，提示词点了名，模型知道
+// 该加载什么，挪出去只在 3% 的运行里多一步。poke 留下的理由正相反——「什么时候该戳」只写在
+// 它自己的描述里，目录行压到 120 字就没了，挪出去等于这个工具不会再被用；它只在 OneBot
+// 会话里注册。
+//
+// 改这份名单会改请求里的 tools 数组，等于把所有会话的前缀缓存清一次，别为一两个百分点反复调。
 var replyAgentCoreTools = []string{
 	agent.WebSearchToolName,
-	dianaChatHistoryToolName,
-	dianaThreadStateToolName,
 	dianaHistoryImagesToolName,
+	dianaGitHubToolName,
 	dianaImageToolName,
+	dianaChatHistoryToolName,
 	"browser_render",
-	// 戳一戳要顺手用：每次先多一轮 tools_load 就不自然了。它只在 OneBot 会话里注册。
+	"capabilities",
 	dianaPokeToolName,
 }
 
@@ -5830,7 +5914,7 @@ func compactContextEvent(event MessageEvent) string {
 		text += " " + quoted
 	}
 	sender := promptSenderIdentity(event)
-	return sender + ": " + strings.Join(strings.Fields(text), " ") + strings.ReplaceAll(historyIdentityPrompt(event), "\n", " ")
+	return sender + ": " + strings.Join(strings.Fields(text), " ") + summaryIdentityPrompt(event)
 }
 
 func truncateRunesFromStart(text string, maxRunes int) string {
@@ -6123,6 +6207,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 		msg.MessageThreadID = event.MessageThreadID
 	} else {
 		msg.UserID = event.UserID
+		msg.TempSessionGroupID = event.tempSessionGroupID
 	}
 	return msg
 }
@@ -6869,6 +6954,12 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType == "poke" {
 		return r.handlePokeNotice(ctx, event)
 	}
+	// 刚加上好友：把之前因为发不出去而存下的私聊补上。这条通知不受群准入和回复
+	// 门槛约束——它不产生新的发言，只是把已经答应过的话送出去。
+	if event.SubType == "friend_add" {
+		r.flushPendingDirectMessages(ctx, event)
+		return nil
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	if !cfg.WelcomeEnabled {
 		return nil
@@ -7010,7 +7101,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	if store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 	defer cancel()
 	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
 		log.Printf("diana message history persist failed: %v", err)
@@ -7077,7 +7168,7 @@ func (r *Runtime) record(record EventRecord) {
 	inboundStore := r.inboundStore
 	r.mu.Unlock()
 	if auditStore, ok := inboundStore.(InboundEventAuditStore); ok && strings.TrimSpace(record.MessageID) != "" {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		auditCtx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 		if err := auditStore.RecordInboundEventAudit(auditCtx, record); err != nil {
 			log.Printf("diana persist inbound event reason failed: %v", err)
 		}

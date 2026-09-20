@@ -94,6 +94,9 @@ func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.Gener
 		return p.provider.Generate(ctx, req)
 	}
 	ctx = context.WithValue(ctx, llmUsageAccountedKey{}, true)
+	// 并发计数和记账共用这道闸：都要求「一次逻辑调用只数一次」。重试和配置档降级
+	// 发生在更内层，一次调用里重试三回仍然只占一个并发位，这正是要显示的口径。
+	defer p.runtime.beginLLMCall(p.provider, req)()
 	// 墙钟时间在这里量而不是在各个调用点：装饰器已经包住了每一次调用，量的范围
 	// 和记账的范围天然一致。放到调用点去量，新增一条调用路径就会漏一次。
 	//

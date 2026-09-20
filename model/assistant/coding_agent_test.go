@@ -511,7 +511,7 @@ func TestCodingAgentConfigClampsRuntimeAndConcurrency(t *testing.T) {
 func TestCodingAgentToolStaysOwnerOnly(t *testing.T) {
 	// 非主人的可用工具是一份显式白名单。编码代理不在里面，这条测试把它钉住：
 	// 有人往白名单里加东西时不会顺手把它一起放进去。
-	allowed := RelationshipPolicy{Tier: RelationshipTrusted}.allowedAgentToolNames()
+	allowed := RelationshipPolicy{Score: 100}.allowedAgentToolNames()
 	if allowed[dianaCodingToolName] {
 		t.Fatalf("编码代理不能出现在非主人白名单里")
 	}
@@ -527,7 +527,7 @@ func TestCodingToolIsDroppedFromNonOwnerRegistry(t *testing.T) {
 
 	// 非主人的工具表是一份显式白名单，Retain 会把没收录的工具摘掉。这条测
 	// 试钉住的是「工具表这一层就挡住了」，不依赖工具自己再校验身份。
-	guest, err := rt.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, RelationshipPolicy{Tier: RelationshipTrusted}, tool)
+	guest, err := rt.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, RelationshipPolicy{Score: 100}, tool)
 	if err != nil {
 		t.Fatal(err)
 	}
