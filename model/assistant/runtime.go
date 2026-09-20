@@ -44,6 +44,18 @@ const (
 	llmTransientMaxRetries         = 1
 	proactiveReplyRouteBudget      = 60 * time.Second
 	replyRuleRouteBudget           = 15 * time.Second
+
+	// auditPersistTimeout 是「落库留痕，失败只打日志」这类写入的预算：入站判决原因、
+	// 通知事件、消息历史。
+	//
+	// 原来三处各自写死 2 秒。SQLite 写池是串行的，繁忙时排队本身就能吃掉一两秒——
+	// 线上 3 小时丢了 190 条 decision_reason、42 条 assistant 审计、27 条投递状态，
+	// 本机一个新库两小时也丢了 33 条，全部是 AppendLog context deadline exceeded。
+	//
+	// 丢的不是日志噪音，是排查时要看的判决依据：inbound_events 里查不到某条为什么
+	// 没回复，一部分就是这么没的。这些写入都在后台 goroutine 里，放宽到 15 秒不影响
+	// 任何用户可见的延迟，却能让排队高峰扛过去。仍然保留超时，避免写池卡死时无限堆积。
+	auditPersistTimeout = 15 * time.Second
 )
 
 type LLMProfileStore interface {
@@ -1429,7 +1441,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 	if !ok || store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 	defer cancel()
 	if err := store.RecordNoticeEvent(ctx, sessionKey(event), withoutReplyRuntimeState(event)); err != nil {
 		log.Printf("diana notice audit persist failed: %v", err)
@@ -7102,7 +7114,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	if store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 	defer cancel()
 	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
 		log.Printf("diana message history persist failed: %v", err)
@@ -7169,7 +7181,7 @@ func (r *Runtime) record(record EventRecord) {
 	inboundStore := r.inboundStore
 	r.mu.Unlock()
 	if auditStore, ok := inboundStore.(InboundEventAuditStore); ok && strings.TrimSpace(record.MessageID) != "" {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		auditCtx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 		if err := auditStore.RecordInboundEventAudit(auditCtx, record); err != nil {
 			log.Printf("diana persist inbound event reason failed: %v", err)
 		}

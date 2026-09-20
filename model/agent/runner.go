@@ -992,13 +992,22 @@ func (r *Runner) systemPrompt() string {
 		"这一轮确实不需要说话时，调用 agent_finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 	}
+	// loadedContracts 是整段系统提示词里唯一会在会话中途增长的内容：每次
+	// tools_load 都往里追加一份契约。它以前紧跟在工具目录后面，也就是夹在系统提示词
+	// 中段——一变，后面的 Skills、扩展说明和规则全部整体位移，供应商的前缀缓存从该点
+	// 起全部作废。
+	//
+	// 线上 prompt_cache_divergence 抓得很清楚：purpose=unlabeled、segment=system 的
+	// 分叉六小时内 165 次，平均落在 byte_offset≈20744，可复用前缀 0。系统提示词排在
+	// 最前面，它作废等于整条 prompt 重新 prefill。
+	//
+	// 现在把它挪到所有固定内容之后单独成段：前面那一大段逐字不变，缓存能一直命中到
+	// 规则结束；新加载一个工具只让末尾变长，不再推动前面的任何字节。
+	var loadedContracts string
 	if loader := r.loader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		section := "按需加载的工具（没有随请求带完整定义；需要时先调用 " + ToolsLoadToolName + " 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function）：\n" + loader.catalog()
-		if loaded := loader.loadedContracts(); loaded != "" {
-			section += "\n\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" + loaded
-		}
-		sections = append(sections, section)
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function）：\n"+loader.catalog())
+		loadedContracts = loader.loadedContracts()
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}
@@ -1009,6 +1018,10 @@ func (r *Runner) systemPrompt() string {
 		sections = append(sections, extensionsPrompt)
 	}
 	sections = append(sections, "规则：\n"+strings.Join(rules, "\n"))
+	// 唯一会在会话中途变长的一段，放在最后，前面的字节位置永远不动。
+	if loadedContracts != "" {
+		sections = append(sections, "当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n"+loadedContracts)
+	}
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
 }
 
