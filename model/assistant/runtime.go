@@ -3160,8 +3160,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	currentImageGrounding := strings.TrimSpace(event.replyAuditImageContext)
+	var currentImageFailure string
 	if cfg.AgentEnabled && hasImageSegment(event.Segments) && currentImageGrounding == "" {
-		event, currentImageGrounding = r.ensureReplyImageDescription(ctx, event)
+		event, currentImageGrounding, currentImageFailure = r.ensureReplyImageDescription(ctx, event)
 		if currentImageGrounding != "" {
 			event.replyAuditImageContext = currentImageGrounding
 		}
@@ -3842,6 +3843,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// small-text screenshots so the chat model cannot silently replace their
 		// topic with an unrelated but searchable hypothesis.
 		currentMessage = appendLLMMessageText(currentMessage, "【当前图片的独立视觉描述，可能有识别误差；请与原图共同核对主题，搜索词必须来自这张图，不得改换成无关话题】\n"+currentImageGrounding)
+	} else if currentImageFailure != "" {
+		// 描述拿不到时这一段不能就这么空着：模型只看到「请分析这张图片」而没有图，
+		// 会自己推断成「用户没发图」，把我们的故障说成对方的问题。
+		currentMessage = appendLLMMessageText(currentMessage, currentImageFailure)
 	}
 	if avatarMatch := strings.TrimSpace(event.avatarMatchContext); avatarMatch != "" {
 		currentMessage = appendLLMMessageText(currentMessage, "【群成员头像匹配】\n"+avatarMatch)

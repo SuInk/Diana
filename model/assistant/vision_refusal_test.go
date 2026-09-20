@@ -5,6 +5,8 @@ package assistant
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -76,4 +78,44 @@ type fixedTextLLMProvider struct{ text string }
 
 func (p fixedTextLLMProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "blind", Text: p.text}, nil
+}
+
+// TestImageFailureNoticeSeparatesReasons 三种失败对用户的含义不同，提示词必须说清是
+// 哪一种：能不能让对方重发，取决于这个。
+func TestImageFailureNoticeSeparatesReasons(t *testing.T) {
+	event := MessageEvent{Segments: []MessageSegment{
+		{Type: "image", Data: map[string]string{"url": "a", recallImageFailureKey: imageFailureNotDelivered}},
+		{Type: "image", Data: map[string]string{"url": "b", recallImageFailureKey: imageFailureNotDelivered}},
+		{Type: "image", Data: map[string]string{"url": "c", recallImageFailureKey: imageFailureUnavailable}},
+	}}
+	notice := imageFailureNotice(event)
+	for _, want := range []string{"用户确实发了图", "2 张", "不接受图片输入", "1 张", "获取失败"} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("notice missing %q:\n%s", want, notice)
+		}
+	}
+	if strings.Contains(notice, "超时") {
+		t.Fatalf("unrelated reason leaked into the notice:\n%s", notice)
+	}
+	if imageFailureNotice(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "a"}}}}) != "" {
+		t.Fatal("notice should be empty when nothing failed")
+	}
+}
+
+// TestClassifyImageDescriptionFailureDistinguishesDelivery 取不到图和送不进模型不能混：
+// 前者让对方重发有用，后者重发多少次都一样。
+func TestClassifyImageDescriptionFailureDistinguishesDelivery(t *testing.T) {
+	cases := map[error]string{
+		fmt.Errorf("%w: data:image/png", errVisionImageUnavailable): imageFailureUnavailable,
+		fmt.Errorf("%w: 未收到图片内容", errVisionImageNotDelivered):       imageFailureNotDelivered,
+		context.DeadlineExceeded: imageFailureTimeout,
+	}
+	for err, want := range cases {
+		if got := classifyImageDescriptionFailure(err); got != want {
+			t.Errorf("classify(%v) = %q, want %q", err, got, want)
+		}
+	}
+	if got := classifyImageDescriptionFailure(nil); got != "" {
+		t.Errorf("classify(nil) = %q, want empty", got)
+	}
 }

@@ -140,7 +140,7 @@ func TestEnsureReplyImageDescriptionWaitsAndPersistsGrounding(t *testing.T) {
 	event := recallImageEvent("current-image", imagePath)
 	event.Segments[0].Data[imageContentSHA256Key] = hash
 
-	enriched, description := runtime.ensureReplyImageDescription(context.Background(), event)
+	enriched, description, _ := runtime.ensureReplyImageDescription(context.Background(), event)
 	if description == "" || !strings.Contains(description, "请求命中率为 63%") {
 		t.Fatalf("description = %q", description)
 	}
@@ -154,7 +154,7 @@ func TestEnsureReplyImageDescriptionWaitsAndPersistsGrounding(t *testing.T) {
 		t.Fatalf("cached record = %#v ok=%v err=%v", record, ok, err)
 	}
 
-	_, again := runtime.ensureReplyImageDescription(context.Background(), enriched)
+	_, again, _ := runtime.ensureReplyImageDescription(context.Background(), enriched)
 	if again != description || provider.callCount() != 1 {
 		t.Fatalf("cached retry description=%q calls=%d", again, provider.callCount())
 	}

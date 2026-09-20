@@ -19,6 +19,7 @@ import (
 const (
 	recallImageDescriptionKey         = "cached_description"
 	recallImageDescriptionSourceKey   = "cached_description_source"
+	recallImageFailureKey             = "cached_description_failure"
 	recallImageAttachmentIndexKey     = "recall_attachment_index"
 	recallImageDescriptionVersion     = "recall-image-v1"
 	recallImageDescriptionMaxRunes    = 1600
@@ -48,21 +49,24 @@ const (
 // a visible reply is running, so merely polling the cache here would deadlock
 // until after the send audit. Promote the current image to a synchronous vision
 // description instead; the background job will observe the saved cache later.
-func (r *Runtime) ensureReplyImageDescription(ctx context.Context, event MessageEvent) (MessageEvent, string) {
+func (r *Runtime) ensureReplyImageDescription(ctx context.Context, event MessageEvent) (MessageEvent, string, string) {
 	if description := r.messageImageDescriptionText(ctx, event); description != "" {
-		return event, description
+		return event, description, ""
 	}
 	if !hasImageSegment(event.Segments) || r.recallImageDescriptionStore() == nil {
-		return event, ""
+		return event, "", ""
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
 	defer cancel()
 	enriched := r.enrichRecallImageDescriptions(waitCtx, event, []MessageEvent{event})
 	if len(enriched) == 0 {
-		return event, ""
+		return event, "", ""
 	}
 	event.Segments = enriched[0].Segments
-	return event, r.messageImageDescriptionText(waitCtx, event)
+	if description := r.messageImageDescriptionText(waitCtx, event); description != "" {
+		return event, description, ""
+	}
+	return event, "", imageFailureNotice(event)
 }
 
 // withinHistoryImageDescriptionWindow 判断这条消息是否新到值得自动补描述。
@@ -87,6 +91,7 @@ type recallImageTarget struct {
 	positions         []recallImagePosition
 	description       string
 	descriptionSource string
+	failure           string
 }
 
 func prepareRecallImageAttachments(recalls []MessageEvent) ([]MessageEvent, []string) {
@@ -213,6 +218,10 @@ func (r *Runtime) enrichRecallImageDescriptions(ctx context.Context, event Messa
 	r.describeMissingRecallImages(ctx, event, targets)
 	for _, target := range targets {
 		if target.description == "" {
+			// 没有描述时把失败原因留在片段上，拼提示词时才说得出这张图是怎么没的。
+			for _, position := range target.failurePositions() {
+				out[position.eventIndex].Segments[position.segmentIndex].Data[recallImageFailureKey] = target.failure
+			}
 			continue
 		}
 		for _, position := range target.positions {
@@ -544,6 +553,7 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 	for result := range results {
 		if result.err != nil {
 			log.Printf("diana recall image description failed: message_id=%s err=%v", firstNonEmpty(result.target.sourceMessageIDs...), result.err)
+			result.target.failure = classifyImageDescriptionFailure(result.err)
 			continue
 		}
 		result.target.description = compactRecallImageDescription(result.description)
@@ -565,7 +575,7 @@ func (r *Runtime) describeStickerImage(ctx context.Context, event MessageEvent, 
 func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, source, system, instruction, purpose string) (string, error) {
 	readyImages := llmReadyImageURLs(ctx, []string{source})
 	if len(readyImages) == 0 || !strings.HasPrefix(readyImages[0], "data:image/") {
-		return "", fmt.Errorf("cached image is unavailable")
+		return "", fmt.Errorf("%w: %s", errVisionImageUnavailable, source)
 	}
 	request := llm.GenerateRequest{
 		Messages: []llm.Message{
@@ -593,7 +603,7 @@ func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, s
 		// 模型说它没收到图片时，这句话不是描述。当成成功返回会被调用方缓存成永久
 		// 的视觉事实，理由见 vision_refusal.go。
 		if VisionDescriptionRefused(description) {
-			return "", fmt.Errorf("vision model received no image: %s", truncateRunes(description, 60))
+			return "", fmt.Errorf("%w: %s", errVisionImageNotDelivered, truncateRunes(description, 60))
 		}
 		return description, nil
 	})
