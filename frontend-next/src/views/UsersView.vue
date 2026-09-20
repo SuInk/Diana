@@ -155,7 +155,18 @@
         </section>
 
         <section>
-          <h3 class="detail-section-title">长期记忆（{{ structuredMemories.length }} 条）</h3>
+          <h3 class="detail-section-title">
+            <span>长期记忆（{{ structuredMemories.length }} 条）</span>
+            <button
+              v-if="structuredMemories.length > 0"
+              class="btn ghost memory-clear-all"
+              type="button"
+              :disabled="clearingMemory"
+              @click="confirmClearMemories = true"
+            >
+              <Trash2 :size="13" />清空
+            </button>
+          </h3>
           <div v-if="structuredMemories.length > 0" class="stack" style="gap: 8px">
             <article v-for="memory in structuredMemories" :key="memory.id" class="memory-item">
               <div class="cluster" style="gap: 6px">
@@ -163,6 +174,15 @@
                 <strong style="font-size: 13px">{{ memory.topic || memory.entity || "未命名记忆" }}</strong>
                 <span v-if="memory.sensitive" class="badge warn">敏感</span>
                 <span v-if="memory.source_type === 'inferred'" class="badge" title="机器人根据聊天推断，不是本人明说">推断</span>
+                <button
+                  class="btn ghost memory-forget"
+                  type="button"
+                  title="删除这一条长期记忆"
+                  :disabled="clearingMemory"
+                  @click="confirmForget = memory"
+                >
+                  <Trash2 :size="13" />
+                </button>
               </div>
               <p class="memory-text" style="margin-top: 4px">{{ memory.content }}</p>
               <p class="log-detail">
@@ -243,8 +263,29 @@
         </template>
       </template>
     </Modal>
+    <Modal v-if="confirmClearMemories && detail" title="清空长期记忆" @close="!clearingMemory && (confirmClearMemories = false)">
+      <p>
+        清空 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的 {{ structuredMemories.length }} 条长期记忆？
+        画像、好感度和聊天记录都保留。清空之后再聊到同样的事，机器人会重新记一遍——这是清空，不是不许再记。
+      </p>
+      <template #footer>
+        <button class="btn ghost" :disabled="clearingMemory" @click="confirmClearMemories = false">取消</button>
+        <button class="btn" :disabled="clearingMemory" @click="clearMemories()">
+          <Trash2 :size="15" />{{ clearingMemory ? "清空中…" : "清空" }}
+        </button>
+      </template>
+    </Modal>
+    <Modal v-if="confirmForget" title="删除这条长期记忆" @close="!clearingMemory && (confirmForget = null)">
+      <p>删除「{{ confirmForget.content }}」？</p>
+      <template #footer>
+        <button class="btn ghost" :disabled="clearingMemory" @click="confirmForget = null">取消</button>
+        <button class="btn" :disabled="clearingMemory" @click="clearMemories(confirmForget.id)">
+          <Trash2 :size="15" />{{ clearingMemory ? "删除中…" : "删除" }}
+        </button>
+      </template>
+    </Modal>
     <Modal v-if="confirmDelete && detail" title="删除人员记录" @close="!saving && (confirmDelete = false)">
-      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史和恋人状态？结构化长期记忆和聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录。</p>
+      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史、恋人状态和结构化长期记忆？聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录，机器人也会重新记住新说的事。</p>
       <template #footer>
         <button class="btn ghost" :disabled="saving" @click="confirmDelete = false">取消</button>
         <button class="btn" :disabled="saving" @click="saveUser(true)"><Trash2 :size="15" />{{ saving ? "删除中…" : "删除人员" }}</button>
@@ -260,6 +301,7 @@ import { ChevronDown, ChevronRight, ChevronUp, Pencil, RefreshCw, Save, Trash2 }
 import {
   getAssistantUser,
   listAssistantUsers,
+  clearAssistantUserMemories,
   saveAssistantUser,
   type AssistantUserDetailResponse,
   type AssistantUsersOrder,
@@ -297,6 +339,9 @@ const detailLoading = ref(false);
 const draft = ref<UserMemoryProfile | null>(null);
 const saving = ref(false);
 const confirmDelete = ref(false);
+const confirmClearMemories = ref(false);
+const confirmForget = ref<UserStructuredMemory | null>(null);
+const clearingMemory = ref(false);
 let listRequest = 0;
 
 async function saveUser(remove = false): Promise<void> {
@@ -317,6 +362,27 @@ async function saveUser(remove = false): Promise<void> {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
+// 清空长期记忆：memoryID 为空是整个清空，给了就只删那一条。
+// 接口要求显式传机器人作用域，这里取详情里那条记录自己的 bot_profile_id，
+// 而不是列表当前的筛选值——筛选可能是「全部机器人」，清空不能靠猜。
+async function clearMemories(memoryID = ""): Promise<void> {
+  const profile = detail.value?.profile;
+  if (!profile || clearingMemory.value) return;
+  clearingMemory.value = true;
+  try {
+    const result = await clearAssistantUserMemories(profile.user_id, profile.bot_profile_id ?? "", memoryID);
+    confirmClearMemories.value = false;
+    confirmForget.value = null;
+    toastSuccess(memoryID ? "已删除这条长期记忆" : `已清空 ${result.cleared} 条长期记忆`);
+    detail.value = await getAssistantUser(profile.user_id, profile.bot_profile_id ?? "");
+    reload();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "清空失败");
+  } finally {
+    clearingMemory.value = false;
+  }
+}
+
 // 最近发言默认收起：它是排查用的原始缓冲，展开后会把画像和长期记忆挤出屏幕。
 const recentOpen = ref(false);
 
@@ -404,9 +470,11 @@ async function openDetail(user: UserMemoryProfile): Promise<void> {
 }
 
 function closeDetail(): void {
-  if (saving.value) return;
+  if (saving.value || clearingMemory.value) return;
   draft.value = null;
   confirmDelete.value = false;
+  confirmClearMemories.value = false;
+  confirmForget.value = null;
   selected.value = null;
   detail.value = null;
 }
@@ -506,6 +574,26 @@ onMounted(() => {
   font-size: 13px;
   margin: 0 0 8px;
   color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 清空和单条删除都放在不显眼的位置：日常看记忆的人远多于删记忆的人。 */
+.memory-clear-all {
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+.memory-forget {
+  margin-left: auto;
+  padding: 2px 6px;
+  color: var(--text-secondary);
+}
+
+.memory-forget:hover:not(:disabled) {
+  color: var(--danger, #d64545);
 }
 
 .portrait-table {
