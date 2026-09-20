@@ -140,7 +140,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true, personaVoice{}, base.SystemPrompt), personaClosingAnchor()} {
+	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true, personaVoice{}, PersonaModeFill, base.SystemPrompt), personaClosingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -636,13 +636,13 @@ func TestRoleplayAndCatgirlDoNotContradictEachOther(t *testing.T) {
 }
 
 func TestActionDescriptionIsAnIndependentPersonaPreservingLayer(t *testing.T) {
-	combined := actionDescriptionPrompt(true, "") + "\n" + actionDescriptionClosingAnchor(true, "")
+	combined := actionDescriptionPrompt(true, PersonaModeFill, "") + "\n" + actionDescriptionClosingAnchor(true, PersonaModeFill, "")
 	for _, want := range []string{"原有人设和表达风格", "不必只写一处", "台词前、中间或结尾", "不额外变得黏人或亲密", "每条含自然语言的回复至少"} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("动作描写提示缺少 %q：%q", want, combined)
 		}
 	}
-	if got := actionDescriptionPrompt(false, ""); got != "" {
+	if got := actionDescriptionPrompt(false, PersonaModeFill, ""); got != "" {
 		t.Fatalf("关闭动作描写后仍注入了提示：%q", got)
 	}
 }
@@ -654,7 +654,7 @@ func TestCatgirlActionDescriptionToggleProducesUnambiguousPrompt(t *testing.T) {
 	}
 
 	withActions := ReplyStyleCatgirl.promptWithActions(true, personaVoice{}, true) + "\n" +
-		actionDescriptionPrompt(true, "") + "\n" + actionDescriptionClosingAnchor(true, "")
+		actionDescriptionPrompt(true, PersonaModeFill, "") + "\n" + actionDescriptionClosingAnchor(true, PersonaModeFill, "")
 	if strings.Contains(withActions, catgirlNoActionRule) {
 		t.Fatalf("开启动作描写后仍保留了冲突的禁止规则：%q", withActions)
 	}
@@ -667,7 +667,7 @@ func TestCatgirlSystemPromptEndsWithMandatoryActionAnchor(t *testing.T) {
 	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl, ActionDescriptionEnabled: boolPointer(true)}.WithDefaults()
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
-	anchor := actionDescriptionClosingAnchor(true, "")
+	anchor := actionDescriptionClosingAnchor(true, PersonaModeFill, "")
 	if !strings.HasSuffix(prompt, anchor) {
 		t.Fatalf("最终提示词没有以动作描写锚点收尾：%q", prompt)
 	}
@@ -730,7 +730,7 @@ func TestGroupSocialReplyOverridesAndInherits(t *testing.T) {
 // 自己那份独有的内容。
 func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 	for _, natural := range []bool{true, false} {
-		if prompt := replyPresentationPrompt(natural, personaVoice{}, ""); !strings.Contains(prompt, replyBlankLineRule) {
+		if prompt := replyPresentationPrompt(natural, personaVoice{}, PersonaModeFill, ""); !strings.Contains(prompt, replyBlankLineRule) {
 			t.Fatalf("换行协议的出处不见了：%q", prompt)
 		}
 	}
@@ -758,14 +758,14 @@ func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 func TestPersonaOwnedSectionsAreNotInjectedTwice(t *testing.T) {
 	voice := personaVoiceFrom("本喵", "喵,喵~")
 	// 存量人设没有这些段头，照旧拿到运行时那几份——升级上来的配置行为不变。
-	legacy := replyPresentationPrompt(true, voice, "你是一只猫娘。")
+	legacy := replyPresentationPrompt(true, voice, PersonaModeFill, "你是一只猫娘。")
 	for _, want := range []string{replyProportionRule, replyEmojiRule, replyCompactPacingRule, replyConversationalIntentRule, replyDocumentDeliveryRule, "自称偏好是"} {
 		if !strings.Contains(legacy, want) {
 			t.Fatalf("没声明接管的人设丢了运行时那份规则：%q", want)
 		}
 	}
 	// 正文逐段声明接管，运行时就逐段让位。
-	owned := replyPresentationPrompt(true, voice, strings.Join([]string{
+	owned := replyPresentationPrompt(true, voice, PersonaModeOwn, strings.Join([]string{
 		"答多长：短点。", "表情符号：不用。", "聊天节奏：少发几条。",
 		"聊天还是求助：先分清。", "长文怎么组织：按主要部分分。", "自称与语气词：平时用「我」。",
 	}, "\n"))
@@ -785,13 +785,60 @@ func TestPersonaOwnedSectionsAreNotInjectedTwice(t *testing.T) {
 
 // 动作描写同理：开关开着但正文自己写了「动作描写：」那一段时，运行时不再补第二份。
 func TestActionDescriptionYieldsToThePersona(t *testing.T) {
-	if got := actionDescriptionPrompt(true, "你是一只猫娘。"); got == "" {
+	if got := actionDescriptionPrompt(true, PersonaModeOwn, "你是一只猫娘。"); got == "" {
 		t.Fatal("正文没声明时，开着的动作描写开关仍然要给出说明")
 	}
-	if got := actionDescriptionPrompt(true, "动作描写：不写括号动作。"); got != "" {
+	if got := actionDescriptionPrompt(true, PersonaModeOwn, "动作描写：不写括号动作。"); got != "" {
 		t.Fatalf("正文声明接管后不该再注入动作描写说明：%q", got)
 	}
-	if got := actionDescriptionClosingAnchor(true, "动作描写：不写括号动作。"); got != "" {
+	if got := actionDescriptionClosingAnchor(true, PersonaModeOwn, "动作描写：不写括号动作。"); got != "" {
 		t.Fatalf("收尾锚点同样要让位：%q", got)
+	}
+}
+
+// 填空题档一律不认段头。大多数人和所有存量配置都停在这一档，正文里偶然出现一个
+// 同名段头就让运行时静默少给一段规则，是没人能查明白的那种坏——所以档位在前，
+// 段头在后，顺序不能反。
+func TestFillModeIgnoresSectionHeaders(t *testing.T) {
+	declared := strings.Join([]string{
+		"答多长：短点。", "表情符号：不用。", "聊天节奏：少发几条。",
+		"聊天还是求助：先分清。", "长文怎么组织：按主要部分分。", "自称与语气词：平时用「我」。",
+	}, "\n")
+	voice := personaVoiceFrom("本喵", "喵")
+	prompt := replyPresentationPrompt(true, voice, PersonaModeFill, declared)
+	for _, want := range []string{replyProportionRule, replyEmojiRule, replyCompactPacingRule, replyConversationalIntentRule, replyDocumentDeliveryRule, "自称偏好是「本喵」"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("填空题档不该因为段头少给规则：%q", want)
+		}
+	}
+	if got := actionDescriptionPrompt(true, PersonaModeFill, "动作描写：不写括号动作。"); got == "" {
+		t.Fatal("填空题档下动作描写开关说了算，不看正文里的段头")
+	}
+	// 空档位就是填空题：存量配置里这个字段根本不存在，反序列化出来是零值。
+	if PersonaMode("").ownsSections() {
+		t.Fatal("零值档位必须等同填空题，否则存量配置一升级就变了行为")
+	}
+}
+
+// 接管模板必须带齐判重表里的每一个段头。少一个，用户切到接管模式、照模板改完，
+// 那一段就既不在正文里、也不再由运行时补——两头都没有，是最难查的一种丢失。
+func TestOwnedTemplateDeclaresEverySection(t *testing.T) {
+	for header := range personaOwnedSections {
+		if !strings.Contains(PersonaOwnedTemplate, header) {
+			t.Fatalf("接管模板缺少段头 %q：切过去之后这一段会两头都没有", header)
+		}
+	}
+}
+
+// 默认正文反过来：一个段头都不能带。默认是填空题档，段头在那一档不生效，写了只会
+// 和运行时那份重复，同一件事说两遍。
+func TestDefaultPersonaDeclaresNoSection(t *testing.T) {
+	for header := range personaOwnedSections {
+		if strings.Contains(defaultSystemPrompt, header) {
+			t.Fatalf("默认正文带了段头 %q：填空题档下它不生效，只会和运行时那份重复", header)
+		}
+	}
+	if (BotConfig{}).WithDefaults().PersonaMode != PersonaModeFill {
+		t.Fatal("默认档位必须是填空题：存量配置升上来不能改变行为")
 	}
 }

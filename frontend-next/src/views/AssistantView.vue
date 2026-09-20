@@ -1214,6 +1214,10 @@
                     <Sparkles :size="14" aria-hidden="true" />
                     AI 生成
                   </button>
+                  <button v-if="personaMode === 'own'" class="btn small" type="button" title="把运行时本来会补的那几段写进正文，每段带段头" @click="fillPersonaOwnedTemplate">
+                    <Plus :size="14" aria-hidden="true" />
+                    填入接管模板
+                  </button>
                   <button class="btn small" type="button" :disabled="personaReviewBusy || !form.system_prompt?.trim()" title="让模型读一遍，挑出和下面开关打架的写法" @click="runPersonaReview">
                     <Eye :size="14" aria-hidden="true" />
                     AI 检查
@@ -1243,7 +1247,12 @@
                   <button class="btn small" type="button" @click="undoPersonaGenerate">撤销生成</button>
                   <span class="hint">保存后才会生效，不满意可以撤回上一版。</span>
                 </div>
-                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。正文可以用段头自己接管一类规则——写了「自称与语气词：」「动作描写：」「答多长：」这样的段头，运行时就不再补那一段，下面对应的控件也会停用。消息标记、分条上限和平台差异始终由运行时决定，正文写了也不算数。</span>
+                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。当前是{{ personaMode === "own" ? "接管模式：正文里带段头的那几段运行时不再补，对应控件停用" : "填空题模式：正文只写角色，其余交给下面的控件，正文里的段头不生效" }}。消息标记、分条上限和平台差异始终由运行时决定，正文写了也不算数。</span>
+              </div>
+              <div class="field wide">
+                <label for="bot-persona-mode">人设模式</label>
+                <AppSelect id="bot-persona-mode" :model-value="personaMode" :options="personaModeOptions" @update:model-value="value => { if (form) form.persona_mode = value === 'own' ? 'own' : 'fill'; }" />
+                <span class="hint">填空题适合大多数情况：人设正文只写这个角色是谁，自称、句尾语气词、动作描写、答多长这些在下面点几下就好。接管模式留给想自己写全的人——切过去之后，正文里用段头声明的那几段运行时不再补。</span>
               </div>
               <div class="field wide">
                 <label>接话设置</label>
@@ -1827,6 +1836,7 @@ import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import type { PersonaLintFinding } from "../api";
 import { personaOwnsField } from "../persona-owned";
+import { personaOwnedTemplate } from "../persona-owned-template";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -1864,8 +1874,24 @@ const allowlistDraft = ref("");
 // 人设正文用段头声明接管的那几项，运行时不再注入，界面上对应的控件也就不再生效。
 // 不说出来的话，用户会对着一个填了值却毫无反应的输入框反复试，而且没有任何线索
 // 指向原因——所以这里把话挑明，并顺手把控件禁掉，省得白填。
-const personaOwnsVoice = computed(() => personaOwnsField(form.value?.system_prompt ?? "", "voice"));
-const personaOwnsAction = computed(() => personaOwnsField(form.value?.system_prompt ?? "", "action"));
+const personaModeOptions: AppSelectOption[] = [
+  { value: "fill", label: "填空题（推荐）" },
+  { value: "own", label: "接管：人设正文自己写全" }
+];
+const personaMode = computed(() => form.value?.persona_mode ?? "fill");
+const personaOwnsVoice = computed(() => personaOwnsField(personaMode.value, form.value?.system_prompt ?? "", "voice"));
+const personaOwnsAction = computed(() => personaOwnsField(personaMode.value, form.value?.system_prompt ?? "", "action"));
+
+// 切到接管模式时人设框多半还是填空题那份正文——没有段头，运行时照旧补，等于白切。
+// 所以给一个一键填模板：运行时本来补的是什么，界面上一个字都看不见，让人从空白开始
+// 写接管正文，结果一定是漏掉几段而不自知。覆盖前先问一句，正文是用户的东西。
+function fillPersonaOwnedTemplate(): void {
+  if (!form.value) return;
+  const current = form.value.system_prompt?.trim() ?? "";
+  if (current && !window.confirm("会用接管模板替换当前人设正文，继续？")) return;
+  personaPrevious.value = current;
+  form.value.system_prompt = personaOwnedTemplate;
+}
 
 // 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架：自称、句尾语气词、
 // 动作描写、分条与长短都由运行时单独拼进提示词，正文里再规定一遍，模型只能挑一边

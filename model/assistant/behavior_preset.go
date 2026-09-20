@@ -157,7 +157,14 @@ var personaOwnedSections = map[string]string{
 }
 
 // personaOwnsSection 判断这段人设正文是不是自己接管了某一类规则。
-func personaOwnsSection(systemPrompt string, kind string) bool {
+//
+// 先看档位：填空题模式下段头一律不算数。存量配置和大多数人都停在那一档，正文里
+// 偶然出现一个同名段头就让运行时静默少给一段规则，是没人能查明白的那种坏。接管
+// 模式是用户自己选的，选了才认段头。
+func personaOwnsSection(mode PersonaMode, systemPrompt string, kind string) bool {
+	if !mode.ownsSections() {
+		return false
+	}
 	for header, owned := range personaOwnedSections {
 		if owned == kind && strings.Contains(systemPrompt, header) {
 			return true
@@ -168,14 +175,14 @@ func personaOwnsSection(systemPrompt string, kind string) bool {
 
 // replyPresentationPrompt contains shared delivery rules, independent of persona.
 // systemPrompt 只用来判重：正文里自带对应段头的那几段不再重复给，见 personaOwnedSections。
-func replyPresentationPrompt(naturalSplit bool, voice personaVoice, systemPrompt string) string {
+func replyPresentationPrompt(naturalSplit bool, voice personaVoice, mode PersonaMode, systemPrompt string) string {
 	segmentation := replySegmentationRule
 	if !naturalSplit {
 		segmentation = replySegmentationMarkerOnlyRule
 	}
 	// 正文没声明的照给，声明了的留空——留空的项由下面的 TrimSpace/Join 自然吞掉。
 	unless := func(kind string, rule string) string {
-		if personaOwnsSection(systemPrompt, kind) {
+		if personaOwnsSection(mode, systemPrompt, kind) {
 			return ""
 		}
 		return rule
@@ -198,8 +205,8 @@ func replyPresentationPrompt(naturalSplit bool, voice personaVoice, systemPrompt
 
 // actionDescriptionPrompt is an optional rendering layer, not a persona. It may
 // be combined with any reply style without inventing new traits or relationships.
-func actionDescriptionPrompt(enabled bool, systemPrompt string) string {
-	if !enabled || personaOwnsSection(systemPrompt, "action") {
+func actionDescriptionPrompt(enabled bool, mode PersonaMode, systemPrompt string) string {
+	if !enabled || personaOwnsSection(mode, systemPrompt, "action") {
 		return ""
 	}
 	return strings.Join([]string{
@@ -210,8 +217,8 @@ func actionDescriptionPrompt(enabled bool, systemPrompt string) string {
 	}, "\n")
 }
 
-func actionDescriptionClosingAnchor(enabled bool, systemPrompt string) string {
-	if !enabled || personaOwnsSection(systemPrompt, "action") {
+func actionDescriptionClosingAnchor(enabled bool, mode PersonaMode, systemPrompt string) string {
+	if !enabled || personaOwnsSection(mode, systemPrompt, "action") {
 		return ""
 	}
 	return "动作描写只叠加在原有人设上：保持原来的性格和语气，每条含自然语言的回复至少用全角括号写一处短动作，不额外变得黏人或亲密；纯代码、命令、链接或原文除外。"

@@ -52,7 +52,7 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
 	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, voice, cfg.SystemPrompt) + "\n" + replyLineBreakPrompt(cfg) + "\n" + actionDescriptionPrompt(actionsEnabled, cfg.SystemPrompt) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled, cfg.SystemPrompt))
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, voice, cfg.PersonaMode, cfg.SystemPrompt) + "\n" + replyLineBreakPrompt(cfg) + "\n" + actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode, cfg.SystemPrompt) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode, cfg.SystemPrompt))
 	if persona == "" {
 		return messages
 	}

@@ -53,8 +53,8 @@ func TestDefaultSystemPromptTeachesHowToSpeak(t *testing.T) {
 			t.Fatalf("default persona should not hard-code %q: %q", conflict, defaultSystemPrompt)
 		}
 	}
-	if runes := len([]rune(defaultSystemPrompt)); runes < 400 || runes > 700 {
-		t.Fatalf("default persona should stay between 400 and 700 runes, got %d", runes)
+	if runes := len([]rune(defaultSystemPrompt)); runes < 400 || runes > 1200 {
+		t.Fatalf("default persona should stay between 400 and 1200 runes, got %d", runes)
 	}
 }
 

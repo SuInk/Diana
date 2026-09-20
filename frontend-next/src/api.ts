@@ -224,6 +224,14 @@ export interface BotProfileConfig {
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
   system_prompt?: string;
+  /**
+   * 人设正文和界面控件谁说了算。
+   *
+   * fill（默认）＝填空题：正文只写角色，自称、句尾语气词、动作描写、答多长这些由
+   * 控件和运行时负责，正文里的段头不生效。own＝接管：正文用段头声明哪几段自己写，
+   * 运行时对那几段让位，界面上对应的控件停用。不填按 fill 处理。
+   */
+  persona_mode?: "fill" | "own";
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   action_description_enabled?: boolean;
   /** 机器人怎么称呼自己；留空跟随人设。 */

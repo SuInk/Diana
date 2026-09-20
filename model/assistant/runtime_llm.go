@@ -810,12 +810,12 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.SystemPrompt))
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode, cfg.SystemPrompt))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
-	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.SystemPrompt))
+	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode, cfg.SystemPrompt))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
-	if boolValue(cfg.PromptChineseSlangHint, true) && !personaOwnsSection(cfg.SystemPrompt, "slang") {
+	if boolValue(cfg.PromptChineseSlangHint, true) && !personaOwnsSection(cfg.PersonaMode, cfg.SystemPrompt, "slang") {
 		appendPromptSection(&builder, cfg.PromptChineseSlangText)
 	}
 	if event.Kind == EventKindGroup {
@@ -1005,7 +1005,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&tail, personaClosingAnchor())
-	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled, cfg.SystemPrompt))
+	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode, cfg.SystemPrompt))
 	return builder.String(), strings.TrimSpace(tail.String())
 }
 

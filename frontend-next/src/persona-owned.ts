@@ -14,12 +14,19 @@ export const personaOwnedHeaders = {
 
 export type PersonaOwnedField = keyof typeof personaOwnedHeaders;
 
+/** 和后端 PersonaMode 同一套取值；空值按 fill 处理。 */
+export type PersonaMode = "fill" | "own";
+
 /**
  * personaOwnsField 判断这段人设正文是不是自己接管了某个带控件的项。
  *
- * 纯函数，判据是段头出现与否——和后端同一个判据（strings.Contains），不做归一化：
+ * 档位在前，段头在后，和后端 personaOwnsSection 同一个顺序：填空题档一律不认段头，
+ * 哪怕正文里真写了。顺序反过来的话，界面会对着一个其实仍然生效的控件说「已接管」。
+ *
+ * 纯函数。判据是段头出现与否——和后端同一个判据（strings.Contains），不做归一化：
  * 后端认的是原样子串，这里多做一步就会两边给出不同答案。
  */
-export function personaOwnsField(systemPrompt: string, field: PersonaOwnedField): boolean {
+export function personaOwnsField(mode: PersonaMode | undefined, systemPrompt: string, field: PersonaOwnedField): boolean {
+  if (mode !== "own") return false;
   return (systemPrompt ?? "").includes(personaOwnedHeaders[field]);
 }
