@@ -177,7 +177,7 @@ func TestReplyDampingCooldownGrowsWithReplies(t *testing.T) {
 	now := time.Now()
 	last := now.Add(-2 * time.Minute)
 	recordDampingSends(r, replyDampingDenseLimit+2, last)
-	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, last)
+	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCausePurposeless, last)
 	if verdict := r.replyDampingJudge(dampingTestEvent("m1", "Diana 你看"), "Diana 你看", false, last.Add(3*replyDampingCooldownStep-time.Second)); !verdict.Skip {
 		t.Fatalf("多回两条后冷却应是三档：%+v", verdict)
 	}
@@ -192,7 +192,7 @@ func TestReplyDampingScope(t *testing.T) {
 
 	owner := dampingTestRuntime(BotConfig{OwnerID: "20002"}, nil)
 	recordDampingSends(owner, replyDampingDenseLimit*2, now.Add(-time.Minute))
-	owner.markReplyPurpose(dampingTestEvent("mark", "x"), true, now)
+	owner.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCausePurposeless, now)
 	if _, dense := owner.replyDensityForAudit(dampingTestEvent("m", "x"), now); dense {
 		t.Fatal("主人不参与回复欲望衰减")
 	}
@@ -209,7 +209,7 @@ func TestReplyDampingScope(t *testing.T) {
 
 	r := dampingTestRuntime(BotConfig{}, nil)
 	recordDampingSends(r, replyDampingDenseLimit, now.Add(-time.Minute))
-	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, now)
+	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCausePurposeless, now)
 	r.resetBotReplyLoopUser("20002")
 	if verdict := r.replyDampingJudge(dampingTestEvent("m", "接着说"), "接着说", false, now); verdict.Skip {
 		t.Fatalf("解除后应清零：%+v", verdict)
@@ -224,7 +224,7 @@ func TestReplyDampingExpires(t *testing.T) {
 	if _, dense := r.replyDensityForAudit(dampingTestEvent("m", "x"), now); dense {
 		t.Fatal("窗口外的回复不该算密")
 	}
-	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, now.Add(-replyDampingPurposelessRetention-time.Minute))
+	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCausePurposeless, now.Add(-replyDampingPurposelessRetention-time.Minute))
 	if verdict := r.replyDampingJudge(dampingTestEvent("m", "接着说"), "接着说", false, now); verdict.Skip {
 		t.Fatalf("过了保留期应自动解除：%+v", verdict)
 	}
@@ -235,7 +235,7 @@ func TestPrepareMessageEventAppliesReplyDamping(t *testing.T) {
 	r := dampingTestRuntime(BotConfig{}, nil)
 	now := time.Now()
 	recordDampingSends(r, replyDampingDenseLimit, now.Add(-time.Minute))
-	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, now)
+	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCausePurposeless, now)
 	event := dampingTestEvent("follow", "你刚才说的那个呢")
 	event.ToMe = true
 	_, _, handled, outcome := r.prepareMessageEvent(context.Background(), event)

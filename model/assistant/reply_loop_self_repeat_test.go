@@ -82,3 +82,42 @@ func TestSelfRepeatDefaultsFalseOnLegacyPayload(t *testing.T) {
 		t.Fatal("缺字段时应当按 false 处理")
 	}
 }
+
+// 停下来时写进事件的理由要说清是哪一种空转：复读自己被写成「没有明确目的」，
+// 会让下一个排查的人照着错的方向找——这次的根因就是被 trigger_kind 误导浪费的。
+func TestReplyDampingReasonNamesTheActualCause(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		decision botReplyLoopAIDecision
+		want     string
+	}{
+		{"self_repeat", botReplyLoopAIDecision{SelfRepeat: true}, replyDampingCauseSelfRepeat},
+		{"meaningless", botReplyLoopAIDecision{MeaninglessLoop: true}, replyDampingCauseMeaningless},
+		{"purposeless", botReplyLoopAIDecision{PurposelessLoop: true}, replyDampingCausePurposeless},
+		// 同时命中时挑最具体的那个。
+		{"self_repeat_wins", botReplyLoopAIDecision{SelfRepeat: true, PurposelessLoop: true}, replyDampingCauseSelfRepeat},
+		{"meaningless_beats_purposeless", botReplyLoopAIDecision{MeaninglessLoop: true, PurposelessLoop: true}, replyDampingCauseMeaningless},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := replyDampingCause(tc.decision); got != tc.want {
+				t.Fatalf("理由 = %q，want %q", got, tc.want)
+			}
+		})
+	}
+
+	provider := &sequenceLLMProvider{auditReplies: []string{selfRepeatVerdict(true, 0.95, "同一句晚安又说一遍")}}
+	r := dampingTestRuntime(BotConfig{}, provider)
+	now := time.Now()
+	recordDampingSends(r, replyDampingDenseLimit-1, now.Add(-time.Minute))
+	event := botReplyLoopEvent(r, "again", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 晚安宝宝喵")
+	if _, err := r.auditReplyBeforeSend(context.Background(), event, "Diana 晚安宝宝喵", "嗯呐，满格那页见，睡吧喵。", r.effectiveConfigForEvent(event), false); err != nil {
+		t.Fatal(err)
+	}
+	verdict := r.replyDampingJudge(dampingTestEvent("u", "接着说"), "接着说", false, now)
+	if !verdict.Skip {
+		t.Fatalf("应当放掉：%+v", verdict)
+	}
+	if !strings.Contains(verdict.Reason, replyDampingCauseSelfRepeat) {
+		t.Fatalf("理由该说是复读自己，实际是：%s", verdict.Reason)
+	}
+}

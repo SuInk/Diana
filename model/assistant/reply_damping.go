@@ -36,8 +36,15 @@ const (
 	replyDampingDenseLimit = 2
 	// 降欲望期间点名消息的冷却，每多回一条就再加一档。
 	replyDampingCooldownStep = 20 * time.Second
-	// 判到无目的之后，降欲望持续这么久；期间只要再判到有目的就立刻解除。
+	// 判到空转之后，降欲望持续这么久；期间只要再判到有目的就立刻解除。
 	replyDampingPurposelessRetention = 10 * time.Minute
+)
+
+// 降欲望的三种起因，原样写进事件理由。
+const (
+	replyDampingCausePurposeless = "最近判断这串来回没有明确目的"
+	replyDampingCauseMeaningless = "最近判断这一来一回已经没有实质内容"
+	replyDampingCauseSelfRepeat  = "最近判断机器人在把自己说过的话换个说法重复"
 )
 
 type replyDampingHit struct {
@@ -47,8 +54,12 @@ type replyDampingHit struct {
 
 type replyDampingState struct {
 	Sent []replyDampingHit
-	// PurposelessAt 是最近一次判到「高频且无目的」的时间，零值表示当前没有降欲望。
+	// PurposelessAt 是最近一次判到空转的时间，零值表示当前没有降欲望。
 	PurposelessAt time.Time
+	// PurposelessCause 是那次判的是哪一种空转。写进事件理由时要如实说：停下来的
+	// 原因可能是「在复读自己」，而不是「这串来回没有目的」——理由写错会让下一个
+	// 排查的人照着错的方向找。
+	PurposelessCause string
 }
 
 type replyDamping struct {
@@ -141,8 +152,9 @@ func (r *Runtime) replyDensityForAudit(event MessageEvent, now time.Time) (reply
 	return replyDensity{BotRepliesToSender: len(state.Sent), WindowMinutes: int(replyDampingWindow / time.Minute)}, true
 }
 
-// markReplyPurpose 记下审核对这一串高频来回的判断：无目的就开始降欲望，有目的就解除。
-func (r *Runtime) markReplyPurpose(event MessageEvent, purposeless bool, now time.Time) {
+// markReplyPurpose 记下审核对这一串来回的判断：判到空转就开始降欲望，判到有目的就解除。
+// cause 说明这次是哪一种空转，只在 purposeless 为真时有意义。
+func (r *Runtime) markReplyPurpose(event MessageEvent, purposeless bool, cause string, now time.Time) {
 	if !r.replyDampingApplies(event) {
 		return
 	}
@@ -150,9 +162,9 @@ func (r *Runtime) markReplyPurpose(event MessageEvent, purposeless bool, now tim
 	defer r.replyDamping.mu.Unlock()
 	state := r.replyDampingStateLocked(event, now, true)
 	if purposeless {
-		state.PurposelessAt = now
+		state.PurposelessAt, state.PurposelessCause = now, cause
 	} else {
-		state.PurposelessAt = time.Time{}
+		state.PurposelessAt, state.PurposelessCause = time.Time{}, ""
 	}
 }
 
@@ -177,7 +189,11 @@ func (r *Runtime) replyDampingJudge(event MessageEvent, text string, proactive b
 		return replyDampingVerdict{}
 	}
 	sent := len(state.Sent)
-	prefix := fmt.Sprintf("回复欲望衰减：%d 分钟内已回复该账号 %d 次，最近判断这串来回没有明确目的", int(replyDampingWindow/time.Minute), sent)
+	cause := state.PurposelessCause
+	if strings.TrimSpace(cause) == "" {
+		cause = replyDampingCausePurposeless
+	}
+	prefix := fmt.Sprintf("回复欲望衰减：%d 分钟内已回复该账号 %d 次，%s", int(replyDampingWindow/time.Minute), sent, cause)
 	if proactive {
 		return replyDampingVerdict{Skip: true, Reason: prefix + "，暂不主动接它的话"}
 	}

@@ -124,6 +124,20 @@ func (decision botReplyLoopAIDecision) counts() bool {
 	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
 }
 
+// replyDampingCause 把这次空转结论翻译成写进事件理由的那句话。一条结论可能同时
+// 命中几项，按「最具体的那个」挑：复读自己指名道姓说了是机器人自己的问题，
+// 没有内容次之，没有目的最泛。
+func replyDampingCause(decision botReplyLoopAIDecision) string {
+	switch {
+	case decision.SelfRepeat:
+		return replyDampingCauseSelfRepeat
+	case decision.MeaninglessLoop:
+		return replyDampingCauseMeaningless
+	default:
+		return replyDampingCausePurposeless
+	}
+}
+
 type botReplyLoopClassificationPayload struct {
 	CurrentText string `json:"current_text"`
 	// BotReplyText 是机器人刚刚为这条消息发出去的回复。判断挪到回复之后做，就是

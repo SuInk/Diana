@@ -614,13 +614,14 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 			// 在空转，后者只看机器人自己说过什么，两个判据都与回得密不密无关，密度
 			// 只决定它转得多快。但这里只开降欲望、不解除——没问过目的，就没有「有
 			// 目的」这个结论可以拿来解除，一条普通回复不该把刚判出来的空转一笔勾销。
-			if decision.loopDecision().counts() {
-				r.markReplyPurpose(event, true, time.Now())
+			if loop := decision.loopDecision(); loop.counts() {
+				r.markReplyPurpose(event, true, replyDampingCause(loop), time.Now())
 			}
 		} else {
 			// 没内容和复读自己同样没有目的，三种都开始降欲望。问过了就按结论记，
 			// 判到有目的当场解除。
-			r.markReplyPurpose(event, decision.loopDecision().counts(), time.Now())
+			loop := decision.loopDecision()
+			r.markReplyPurpose(event, loop.counts(), replyDampingCause(loop), time.Now())
 		}
 		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision, need.LoopSuppress); loopErr != nil {
 			return intent, loopErr
