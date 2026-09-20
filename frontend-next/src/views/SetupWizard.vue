@@ -6,7 +6,7 @@
     <header class="view-header">
       <div class="view-title">
         <h1>配置向导</h1>
-        <p>三步跑通：配置模型 → 接入 OneBot v11 → 启动验证</p>
+        <p>三步跑通：配置模型 → 接入聊天平台 → 启动验证</p>
       </div>
     </header>
 
@@ -163,87 +163,229 @@
       </div>
     </section>
 
-    <!-- 第 2 步：OneBot v11 -->
+    <!-- 第 2 步：接入聊天平台 -->
     <section v-else-if="step === 1" class="card">
       <div class="card-header">
-        <h2>接入 OneBot v11</h2>
+        <h2>接入聊天平台</h2>
         <span v-if="connected" class="badge ok">已连接</span>
       </div>
       <div class="card-body stack">
         <div class="form-grid">
           <div class="field wide">
-            <label for="wizard-onebot-transport">连接方式</label>
-            <select id="wizard-onebot-transport" v-model="botForm.onebot_transport" class="input">
-              <option value="reverse_ws">反向 WebSocket</option>
-              <option value="forward_ws">正向 WebSocket</option>
-              <option value="http">HTTP API + HTTP 事件上报</option>
-            </select>
+            <label for="wizard-platform">接入平台</label>
+            <AppSelect
+              id="wizard-platform"
+              :model-value="botForm.platform"
+              :options="platformOptions"
+              @update:model-value="(value) => (botForm.platform = value)"
+            />
+            <span class="hint">{{ platformDescription }}</span>
           </div>
-          <div v-if="botForm.onebot_transport === 'reverse_ws'" class="field wide">
-            <label for="wizard-onebot-endpoint">OneBot v11 回连地址</label>
+          <template v-if="isOneBotPlatform">
+            <div class="field wide">
+              <label for="wizard-onebot-transport">连接方式</label>
+              <select id="wizard-onebot-transport" v-model="botForm.onebot_transport" class="input">
+                <option value="reverse_ws">反向 WebSocket</option>
+                <option value="forward_ws">正向 WebSocket</option>
+                <option value="http">HTTP API + HTTP 事件上报</option>
+              </select>
+            </div>
+            <div v-if="botForm.onebot_transport === 'reverse_ws'" class="field wide">
+              <label for="wizard-onebot-endpoint">OneBot v11 回连地址</label>
+              <div class="input-group">
+                <input
+                  id="wizard-onebot-endpoint"
+                  v-model="botForm.onebot_reverse_ws_endpoint"
+                  class="input mono"
+                  placeholder="ws://127.0.0.1:18080/onebot/v11/ws"
+                  autocomplete="off"
+                />
+                <button class="btn icon-only" type="button" aria-label="复制地址" @click="copyEndpoint">
+                  <Copy :size="14" aria-hidden="true" />
+                </button>
+              </div>
+              <span class="hint">填写 OneBot v11 客户端实际能访问的地址；Docker 或局域网部署时请修改主机名。自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
+            </div>
+            <div v-else-if="botForm.onebot_transport === 'forward_ws'" class="field wide">
+              <label for="wizard-onebot-ws">OneBot WS 服务地址</label>
+              <input id="wizard-onebot-ws" v-model="botForm.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700/" />
+              <span class="hint">使用同时提供 API 和事件的通用 WS 地址，Diana 主动连接并自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机部署稍后可在「设置 → 媒体与文件」页配置媒体回源基址。</span>
+            </div>
+            <template v-else>
+              <div class="field wide">
+                <label for="wizard-onebot-http">OneBot HTTP API 地址</label>
+                <input id="wizard-onebot-http" v-model="botForm.onebot_http_url" class="input mono" placeholder="http://127.0.0.1:5700" />
+                <span class="hint">接入端把事件上报至 http://&lt;Diana 主机&gt;:18080/onebot/v11/http，填写实际可访问的主机和端口。</span>
+              </div>
+              <div class="field wide">
+                <label for="wizard-onebot-secret">HTTP 事件签名密钥</label>
+                <input id="wizard-onebot-secret" v-model="botForm.onebot_http_secret" class="input" type="password" autocomplete="off" placeholder="与接入端的上报 secret 一致；留空沿用已保存值" />
+              </div>
+            </template>
+            <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
+            <div class="field wide">
+              <label for="wizard-token">OneBot Access Token（{{ tokenRequired ? "反向 WebSocket 必填" : "可选" }}，至少 16 位）</label>
+              <div class="input-group">
+                <input id="wizard-token" v-model="botForm.onebot_access_token" class="input" type="text" autocomplete="off"
+                  :placeholder="tokenConfigured ? (savedBot?.onebot_access_token_preview ? `已保存 ${savedBot.onebot_access_token_preview}，留空沿用` : '留空表示沿用已保存 token') : '与 OneBot v11 客户端填写的 token 保持一致'" />
+                <button class="btn icon-only" type="button" aria-label="随机生成 Token" title="随机生成" @click="generateToken">
+                  <Dices :size="14" aria-hidden="true" />
+                </button>
+              </div>
+              <span v-if="tokenRequiredHint" class="hint">{{ tokenRequiredHint }}</span>
+            </div>
+          </template>
+
+          <template v-else-if="botForm.platform === 'telegram'">
+            <div class="field wide">
+              <label for="wizard-tg-token">Bot Token</label>
+              <input id="wizard-tg-token" v-model="botForm.telegram_bot_token" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('telegram_bot_token_configured') ? '留空表示沿用已保存的 Token' : '从 @BotFather 获取'" />
+              <span class="hint">长轮询出站连接，不需要公网地址，也不用配置 webhook。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-tg-proxy">代理地址（可选）</label>
+              <input id="wizard-tg-proxy" v-model="botForm.telegram_proxy_url" class="input mono" autocomplete="off" placeholder="留空直连，例如 http://127.0.0.1:7890" />
+              <span class="hint">直连不通时再填；国内网络访问 api.telegram.org 通常需要代理，支持 http/https/socks5。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-tg-base">自建 Bot API 地址（可选）</label>
+              <input id="wizard-tg-base" v-model="botForm.telegram_api_base_url" class="input mono" autocomplete="off" placeholder="留空使用官方 https://api.telegram.org" />
+              <span class="hint">部署了本地 Bot API server 时填写，可绕过 50MB 上传限制。</span>
+            </div>
+          </template>
+
+          <template v-else-if="botForm.platform === 'qq-official'">
+            <div class="field wide">
+              <label for="wizard-qq-appid">AppID</label>
+              <input id="wizard-qq-appid" v-model="botForm.qq_app_id" class="input mono" autocomplete="off" placeholder="QQ 开放平台的机器人 AppID" />
+              <span class="hint">在 q.qq.com 的机器人管理后台「开发设置」里查看。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-qq-secret">AppSecret</label>
+              <input id="wizard-qq-secret" v-model="botForm.qq_app_secret" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('qq_app_secret_configured') ? '留空表示沿用已保存的 AppSecret' : '开发设置里的机器人密钥'" />
+              <span class="hint">出站 WebSocket 网关接入，不需要公网地址；平台只会推送 @ 机器人的群消息。</span>
+            </div>
+            <div class="field wide">
+              <label class="check">
+                <input v-model="botForm.qq_sandbox" type="checkbox" />
+                <span>使用沙箱环境</span>
+              </label>
+              <span class="hint">机器人尚未发布上架时勾选，走沙箱接口联调。</span>
+            </div>
+          </template>
+
+          <template v-else-if="botForm.platform === 'dingtalk'">
+            <div class="field wide">
+              <label for="wizard-ding-id">Client ID</label>
+              <input id="wizard-ding-id" v-model="botForm.dingtalk_client_id" class="input mono" autocomplete="off" placeholder="应用的 AppKey / Client ID" />
+              <span class="hint">钉钉开放平台的应用凭证页可以看到。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-ding-secret">Client Secret</label>
+              <input id="wizard-ding-secret" v-model="botForm.dingtalk_client_secret" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('dingtalk_client_secret_configured') ? '留空表示沿用已保存的 Secret' : '应用的 AppSecret / Client Secret'" />
+              <span class="hint">用 Stream 模式出站长连接接入，不需要公网地址，也不用在后台配 HTTP 回调。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-ding-robot">机器人 RobotCode（可选）</label>
+              <input id="wizard-ding-robot" v-model="botForm.dingtalk_robot_code" class="input mono" autocomplete="off" placeholder="留空则与 Client ID 相同" />
+              <span class="hint">企业内部机器人单独分配了 robotCode 时才需要填。</span>
+            </div>
+          </template>
+
+          <template v-else-if="botForm.platform === 'feishu'">
+            <div class="field wide">
+              <label for="wizard-feishu-appid">App ID</label>
+              <input id="wizard-feishu-appid" v-model="botForm.feishu_app_id" class="input mono" autocomplete="off" placeholder="cli_ 开头的自建应用 App ID" />
+              <span class="hint">飞书开放平台的「凭证与基础信息」页。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-feishu-secret">App Secret</label>
+              <input id="wizard-feishu-secret" v-model="botForm.feishu_app_secret" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('feishu_app_secret_configured') ? '留空表示沿用已保存的 Secret' : '自建应用的 App Secret'" />
+            </div>
+            <div class="field wide">
+              <label for="wizard-feishu-verify">Verification Token</label>
+              <input id="wizard-feishu-verify" v-model="botForm.feishu_verification_token" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('feishu_verification_token_configured') ? '留空表示沿用已保存的 Token' : '事件订阅页的 Verification Token'" />
+              <span class="hint">用于核验回调来源。强烈建议填写——回调地址本身是公开的，不能当凭据用。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-feishu-encrypt">Encrypt Key（可选）</label>
+              <input id="wizard-feishu-encrypt" v-model="botForm.feishu_encrypt_key" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('feishu_encrypt_key_configured') ? '留空表示沿用已保存的 Key' : '后台开启了加密推送才填'" />
+              <span class="hint">填了这里就必须在飞书后台同步开启加密推送，否则明文回调会被拒绝。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-feishu-base">开放平台地址（可选）</label>
+              <input id="wizard-feishu-base" v-model="botForm.feishu_api_base_url" class="input mono" autocomplete="off" placeholder="留空使用 https://open.feishu.cn" />
+              <span class="hint">Lark 国际版填 https://open.larksuite.com。</span>
+            </div>
+          </template>
+
+          <template v-else-if="botForm.platform === 'wecom'">
+            <div class="field wide">
+              <label for="wizard-wecom-corp">企业 ID</label>
+              <input id="wizard-wecom-corp" v-model="botForm.wecom_corp_id" class="input mono" autocomplete="off" placeholder="ww 开头的 CorpID" />
+              <span class="hint">企业微信管理后台「我的企业」页底部。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-wecom-agent">AgentId</label>
+              <input id="wizard-wecom-agent" v-model="botForm.wecom_agent_id" class="input mono" inputmode="numeric" autocomplete="off" placeholder="自建应用的 AgentId，纯数字" />
+              <span class="hint">在「应用管理」里打开自建应用即可看到。</span>
+            </div>
+            <div class="field wide">
+              <label for="wizard-wecom-secret">应用 Secret</label>
+              <input id="wizard-wecom-secret" v-model="botForm.wecom_secret" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('wecom_secret_configured') ? '留空表示沿用已保存的 Secret' : '自建应用的 Secret'" />
+            </div>
+            <div class="field wide">
+              <label for="wizard-wecom-token">Token</label>
+              <input id="wizard-wecom-token" v-model="botForm.wecom_token" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('wecom_token_configured') ? '留空表示沿用已保存的 Token' : '「接收消息」配置里的 Token'" />
+            </div>
+            <div class="field wide">
+              <label for="wizard-wecom-aes">EncodingAESKey</label>
+              <input id="wizard-wecom-aes" v-model="botForm.wecom_encoding_aes_key" class="input" type="password" autocomplete="off"
+                :placeholder="secretConfigured('wecom_encoding_aes_key_configured') ? '留空表示沿用已保存的 Key' : '43 位的 EncodingAESKey'" />
+              <span class="hint">Token 和 EncodingAESKey 用于回调验签和解密，缺一个就只能发不能收。</span>
+            </div>
+          </template>
+
+          <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
+          <div v-if="callbackURL" class="field wide">
+            <label for="wizard-callback-url">回调地址</label>
             <div class="input-group">
-              <input
-                id="wizard-onebot-endpoint"
-                v-model="botForm.onebot_reverse_ws_endpoint"
-                class="input mono"
-                placeholder="ws://127.0.0.1:18080/onebot/v11/ws"
-                autocomplete="off"
-              />
-              <button class="btn icon-only" type="button" aria-label="复制地址" @click="copyEndpoint">
+              <input id="wizard-callback-url" class="input mono" :value="callbackURL" readonly />
+              <button class="btn icon-only" type="button" aria-label="复制回调地址" @click="copyCallbackURL">
                 <Copy :size="14" aria-hidden="true" />
               </button>
             </div>
-            <span class="hint">填写 OneBot v11 客户端实际能访问的地址；Docker 或局域网部署时请修改主机名。自定义路径需要反向代理转发到 /onebot/v11/ws。</span>
+            <span class="hint">填到该平台后台的事件接收配置里。这里按你当前访问控制台的地址拼出，必须换成平台服务器能访问到的公网 HTTPS 地址才收得到消息。</span>
           </div>
-          <div v-else-if="botForm.onebot_transport === 'forward_ws'" class="field wide">
-            <label for="wizard-onebot-ws">OneBot WS 服务地址</label>
-            <input id="wizard-onebot-ws" v-model="botForm.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700/" />
-            <span class="hint">使用同时提供 API 和事件的通用 WS 地址，Diana 主动连接并自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机部署稍后可在「设置 → 媒体与文件」页配置媒体回源基址。</span>
-          </div>
-          <template v-else>
-            <div class="field wide">
-              <label for="wizard-onebot-http">OneBot HTTP API 地址</label>
-              <input id="wizard-onebot-http" v-model="botForm.onebot_http_url" class="input mono" placeholder="http://127.0.0.1:5700" />
-              <span class="hint">接入端把事件上报至 http://&lt;Diana 主机&gt;:18080/onebot/v11/http，填写实际可访问的主机和端口。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-onebot-secret">HTTP 事件签名密钥</label>
-              <input id="wizard-onebot-secret" v-model="botForm.onebot_http_secret" class="input" type="password" autocomplete="off" placeholder="与接入端的上报 secret 一致；留空沿用已保存值" />
-            </div>
-          </template>
-          <p v-if="oneBotMediaOriginWarning" class="hint warn-text">{{ oneBotMediaOriginWarning }}</p>
           <div class="field">
-            <label for="wizard-owner">主人账号（可选）</label>
+            <label for="wizard-owner">{{ ownerLabel }}（可选）</label>
             <input
               id="wizard-owner"
               v-model="botForm.owner_id"
               class="input"
-              inputmode="numeric"
-              placeholder="例如 123456789，用于管理指令和私聊登录"
+              :inputmode="isOneBotPlatform ? 'numeric' : 'text'"
+              :placeholder="ownerPlaceholder"
             />
-            <AccountNameHint :user-id="botForm.owner_id" />
+            <AccountNameHint v-if="isOneBotPlatform" :user-id="botForm.owner_id" />
             <span class="hint">不需要聊天内管理或配对登录时可以留空。</span>
-          </div>
-          <div class="field wide">
-            <label for="wizard-token">OneBot Access Token（{{ tokenRequired ? "反向 WebSocket 必填" : "可选" }}，至少 16 位）</label>
-            <div class="input-group">
-              <input id="wizard-token" v-model="botForm.onebot_access_token" class="input" type="text" autocomplete="off"
-                :placeholder="tokenConfigured ? (savedBot?.onebot_access_token_preview ? `已保存 ${savedBot.onebot_access_token_preview}，留空沿用` : '留空表示沿用已保存 token') : '与 OneBot v11 客户端填写的 token 保持一致'" />
-              <button class="btn icon-only" type="button" aria-label="随机生成 Token" title="随机生成" @click="generateToken">
-                <Dices :size="14" aria-hidden="true" />
-              </button>
-            </div>
-            <span v-if="tokenRequiredHint" class="hint">{{ tokenRequiredHint }}</span>
           </div>
         </div>
         <div class="cluster">
           <button class="btn primary" type="button" :disabled="busy" @click="saveBotAndStart">
             <Power :size="15" aria-hidden="true" />
-            保存并启动等待连接
+            {{ startButtonLabel }}
           </button>
           <span class="badge" :class="connected ? 'ok' : 'warn'">
             <span class="status-dot" :class="{ pulse: !connected }" aria-hidden="true" />
-            {{ connected ? `OneBot v11 已连接 ${selfID}` : "等待 OneBot v11 通道就绪…" }}
+            {{ connected ? `${connectedPlatformName} 已连接 ${selfID}` : `等待 ${platformName} 通道就绪…` }}
           </span>
         </div>
         <p v-if="channelError" class="text-err" style="font-size: 12.5px">{{ channelError }}</p>
@@ -263,7 +405,7 @@
           </div>
           <div class="checklist-item" :class="connected ? 'done' : 'todo'">
             <span class="check-icon"><CheckCircle2 :size="15" aria-hidden="true" /></span>
-            <span class="check-main">OneBot v11 已连接<div class="check-hint">{{ connected ? `账号 ${selfID}` : "尚未连接" }}</div></span>
+            <span class="check-main">{{ connectedPlatformName }} 已连接<div class="check-hint">{{ connected ? `账号 ${selfID}` : "尚未连接" }}</div></span>
           </div>
         </div>
         <p class="muted">
@@ -304,12 +446,14 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { CheckCircle2, ChevronLeft, ChevronRight, Copy, Dices, LayoutGrid, MessageCircle, Plus, Power, RefreshCw, X, Zap } from "@lucide/vue";
 import {
   getConfig,
+  getBotPlatforms,
   getBotProfileConfig,
   listLLMModels,
   saveConfig,
   saveBotProfileConfig,
   startBot,
   testLLM,
+  type BotPlatform,
   type LLMConfig,
   type LLMModelInfo,
   type Provider,
@@ -333,7 +477,9 @@ import {
 const step = ref(0);
 const loading = ref(true);
 const busy = ref(false);
-const stepLabels = ["配置提供商", "接入 OneBot v11", "启动验证"];
+const stepLabels = ["配置提供商", "接入聊天平台", "启动验证"];
+/** 平台注册表取不到时的默认平台，也是历史配置里 platform 为空时的含义。 */
+const PlatformOneBotV11 = "onebot-v11";
 const SETUP_COMPLETE_KEY = "dqb-next:setup-completed";
 
 function finishSetup(): void {
@@ -456,18 +602,104 @@ async function loadModels(selectFirst: boolean): Promise<boolean> {
   }
 }
 
-const botForm = ref<{ onebot_transport: "reverse_ws" | "forward_ws" | "http"; onebot_ws_endpoint: string; onebot_http_url: string; onebot_http_secret: string; onebot_reverse_ws_endpoint: string; owner_id: string; onebot_access_token: string }>({
-  onebot_transport: "reverse_ws", onebot_ws_endpoint: "", onebot_http_url: "", onebot_http_secret: "",
+const botForm = ref({
+  platform: PlatformOneBotV11,
+  onebot_transport: "reverse_ws" as "reverse_ws" | "forward_ws" | "http",
+  onebot_ws_endpoint: "",
+  onebot_http_url: "",
+  onebot_http_secret: "",
   onebot_reverse_ws_endpoint: `ws://${window.location.host}/onebot/v11/ws`,
   owner_id: "",
-  onebot_access_token: ""
+  onebot_access_token: "",
+  telegram_bot_token: "",
+  telegram_api_base_url: "",
+  telegram_proxy_url: "",
+  qq_app_id: "",
+  qq_app_secret: "",
+  qq_sandbox: false,
+  dingtalk_client_id: "",
+  dingtalk_client_secret: "",
+  dingtalk_robot_code: "",
+  feishu_app_id: "",
+  feishu_app_secret: "",
+  feishu_verification_token: "",
+  feishu_encrypt_key: "",
+  feishu_api_base_url: "",
+  wecom_corp_id: "",
+  wecom_agent_id: "",
+  wecom_secret: "",
+  wecom_token: "",
+  wecom_encoding_aes_key: ""
 });
 
+// 平台注册表来自后端，这里先塞一条 OneBot 兜底：/platforms 取不到时这一步仍
+// 然能用最常见的接入方式走完，而不是给出一个空的平台下拉框。
+const platforms = ref<BotPlatform[]>([
+  {
+    id: PlatformOneBotV11,
+    name: "OneBot v11",
+    protocol: "onebot-v11",
+    category: "onebot_v11",
+    category_label: "OneBot v11",
+    description: "OneBot v11 正向 WebSocket、反向 WebSocket 和 HTTP 接入",
+    inbound: "reverse_ws"
+  }
+]);
+
+const platformOptions = computed(() =>
+  platforms.value.map((platform) => ({ value: platform.id, label: platform.name, hint: platform.description }))
+);
+const currentPlatform = computed(() => platforms.value.find((platform) => platform.id === botForm.value.platform));
+const platformName = computed(() => currentPlatform.value?.name ?? "聊天平台");
+const platformDescription = computed(() => currentPlatform.value?.description ?? "选择机器人要接入的聊天平台。");
+// 未知平台按 OneBot 处理：兜底列表只有它，落到这里说明后端注册表没取到。
+const isOneBotPlatform = computed(() => (currentPlatform.value?.protocol ?? "onebot-v11").startsWith("onebot"));
+
+/** 回调型平台要把这个地址填到对方后台；按浏览器当前 origin 拼。 */
+const callbackURL = computed(() => {
+  const path = currentPlatform.value?.callback_path ?? "";
+  if (!path) return "";
+  return window.location.origin ? `${window.location.origin}${path}` : path;
+});
+
+const startButtonLabel = computed(() => {
+  switch (currentPlatform.value?.inbound) {
+    case "callback":
+      return "保存并启动接收回调";
+    case "outbound":
+      return "保存并启动连接";
+    default:
+      return "保存并启动等待连接";
+  }
+});
+
+const ownerLabel = computed(() =>
+  isOneBotPlatform.value || botForm.value.platform === "telegram" ? "主人账号" : "主人用户 ID"
+);
+const ownerPlaceholder = computed(() => {
+  if (botForm.value.platform === "telegram") return "数字用户 ID 或 @用户名，例如 70001 / @owneruser";
+  if (isOneBotPlatform.value) return "例如 123456789，用于管理指令和私聊登录";
+  return "平台用户 ID，用于管理指令";
+});
+
+/** 后端从不回显明文密钥，只回 *_configured；据此决定占位文案说不说「留空沿用」。 */
+function secretConfigured(field: keyof BotProfileConfig): boolean {
+  return Boolean(savedBot.value?.[field]);
+}
+
 const connected = computed(() => stream.status?.channel.connected ?? false);
+// 已连接时按实际在线的通道报平台名：在下拉里翻看别的平台，不该把已经在线的
+// 那条通道跟着改名。
+const connectedPlatformName = computed(() => {
+  const id = stream.status?.channel.platform ?? "";
+  return platforms.value.find((platform) => platform.id === id)?.name ?? platformName.value;
+});
 const selfID = computed(() => stream.status?.channel.self_id ?? "");
 // 反向 WS 是接入端连进 Diana：server 侧 token 为空会拒绝一切握手，所以首次
 // 配置反向 WS 时必须填 token；正向 WS / HTTP 由 Diana 外连，token 可留空。
-const tokenRequired = computed(() => botForm.value.onebot_transport === "reverse_ws" && !tokenConfigured.value);
+const tokenRequired = computed(
+  () => isOneBotPlatform.value && botForm.value.onebot_transport === "reverse_ws" && !tokenConfigured.value
+);
 const tokenRequiredHint = computed(() =>
   tokenRequired.value ? "反向 WebSocket 模式下 NapCat 等客户端必须凭这个 token 才能连进来，请与客户端填写保持一致。" : ""
 );
@@ -502,14 +734,15 @@ function oneBotMediaOriginWarningText(transport: string, wsEndpoint: string, htt
   return `接入端将按 ${host} 回源拉取文件/媒体（端口为 Diana 的 Web 端口）。若该主机访问不到 Diana，文件发送会失败，请在「设置 → 媒体与文件」页配置媒体回源基址。`;
 }
 
-const oneBotMediaOriginWarning = computed(() =>
-  oneBotMediaOriginWarningText(
+const oneBotMediaOriginWarning = computed(() => {
+  if (!isOneBotPlatform.value) return "";
+  return oneBotMediaOriginWarningText(
     botForm.value.onebot_transport,
     botForm.value.onebot_ws_endpoint ?? "",
     botForm.value.onebot_http_url ?? "",
     window.location.hostname || ""
-  )
-);
+  );
+});
 
 const llmSummary = computed(() => {
   const config = savedLLM.value;
@@ -534,6 +767,16 @@ function stepClass(index: number): string {
     return "active";
   }
   return stepDone(index) ? "done" : "";
+}
+
+async function copyCallbackURL(): Promise<void> {
+  if (!callbackURL.value) return;
+  try {
+    await navigator.clipboard.writeText(callbackURL.value);
+    toastSuccess("回调地址已复制");
+  } catch {
+    toastError("复制失败，请手动选择复制");
+  }
 }
 
 async function copyEndpoint(): Promise<void> {
@@ -594,14 +837,138 @@ async function saveAndTestLLM(): Promise<void> {
   }
 }
 
-async function saveBotAndStart(): Promise<void> {
-  if (botForm.value.onebot_transport !== "http" && !validWebSocketURL(botForm.value.onebot_transport === "forward_ws" ? botForm.value.onebot_ws_endpoint : wsEndpoint.value)) {
-    toastError("请填写有效的 ws:// 或 wss:// 回连地址");
-    return;
+/**
+ * 保存前的必填校验。后端同样会校验，但这里能指到具体那一格，而不是把协议层
+ * 的报错丢给刚开始配置的人。已存过的密钥留空表示沿用，所以要连
+ * `*_configured` 一起看，否则第二次进向导会被自己的校验拦住。
+ */
+function credentialError(): string {
+  const form = botForm.value;
+  const filled = (draft: string, field: keyof BotProfileConfig): boolean =>
+    draft.trim() !== "" || secretConfigured(field);
+  if (isOneBotPlatform.value) {
+    if (form.onebot_transport === "http") {
+      if (!/^https?:\/\//.test(form.onebot_http_url.trim())) {
+        return "请填写有效的 http:// 或 https:// OneBot HTTP API 地址";
+      }
+      if (!filled(form.onebot_http_secret, "onebot_http_secret_configured")) {
+        return "HTTP 事件上报需要配置签名密钥，与接入端保持一致";
+      }
+      return "";
+    }
+    if (!validWebSocketURL(form.onebot_transport === "forward_ws" ? form.onebot_ws_endpoint : wsEndpoint.value)) {
+      return "请填写有效的 ws:// 或 wss:// 回连地址";
+    }
+    // 后端会拒绝「启用 + 反向 WS + 空 token」的保存；提前拦住，提示更贴上下文。
+    if (tokenRequired.value && form.onebot_access_token.trim() === "") {
+      return "反向 WebSocket 模式必须填写 Access Token，需与 OneBot v11 客户端保持一致";
+    }
+    return "";
   }
-  // 后端会拒绝「启用 + 反向 WS + 空 token」的保存；这里提前拦住，错误提示更贴上下文。
-  if (tokenRequired.value && !botForm.value.onebot_access_token.trim()) {
-    toastError("反向 WebSocket 模式必须填写 Access Token，需与 OneBot v11 客户端保持一致");
+  switch (form.platform) {
+    case "telegram":
+      return filled(form.telegram_bot_token, "telegram_bot_token_configured")
+        ? ""
+        : "请填写 Telegram Bot Token，找 @BotFather 申请";
+    case "qq-official":
+      if (form.qq_app_id.trim() === "") return "请填写 QQ 开放平台的 AppID";
+      return filled(form.qq_app_secret, "qq_app_secret_configured") ? "" : "请填写 QQ 开放平台的 AppSecret";
+    case "dingtalk":
+      if (form.dingtalk_client_id.trim() === "") return "请填写钉钉应用的 Client ID";
+      return filled(form.dingtalk_client_secret, "dingtalk_client_secret_configured")
+        ? ""
+        : "请填写钉钉应用的 Client Secret";
+    case "feishu":
+      if (form.feishu_app_id.trim() === "") return "请填写飞书自建应用的 App ID";
+      return filled(form.feishu_app_secret, "feishu_app_secret_configured") ? "" : "请填写飞书自建应用的 App Secret";
+    case "wecom":
+      if (form.wecom_corp_id.trim() === "") return "请填写企业微信的企业 ID";
+      if (!/^\d+$/.test(form.wecom_agent_id.trim())) return "请填写自建应用的 AgentId，为纯数字";
+      if (!filled(form.wecom_secret, "wecom_secret_configured")) return "请填写自建应用的 Secret";
+      // 回调验签缺任何一项都是「只能发不能收」，这种半可用状态先说清楚。
+      if (!filled(form.wecom_token, "wecom_token_configured")
+        || !filled(form.wecom_encoding_aes_key, "wecom_encoding_aes_key_configured")) {
+        return "请填写企业微信「接收消息」里的 Token 和 EncodingAESKey，缺一个就只能发不能收";
+      }
+      return "";
+    default:
+      return "";
+  }
+}
+
+/**
+ * 只提交当前平台的那一组接入字段。别的平台的配置原样跟着已存配置走，免得在
+ * 向导里换一次平台就把之前配好的另一套接入信息清空。
+ */
+function platformPayload(): Partial<BotProfileConfig> {
+  const form = botForm.value;
+  switch (form.platform) {
+    case "telegram":
+      return {
+        telegram_bot_token: form.telegram_bot_token.trim() || undefined,
+        telegram_api_base_url: form.telegram_api_base_url.trim(),
+        telegram_proxy_url: form.telegram_proxy_url.trim()
+      };
+    case "qq-official":
+      return {
+        qq_app_id: form.qq_app_id.trim(),
+        qq_app_secret: form.qq_app_secret.trim() || undefined,
+        qq_sandbox: form.qq_sandbox
+      };
+    case "dingtalk":
+      return {
+        dingtalk_client_id: form.dingtalk_client_id.trim(),
+        dingtalk_client_secret: form.dingtalk_client_secret.trim() || undefined,
+        dingtalk_robot_code: form.dingtalk_robot_code.trim()
+      };
+    case "feishu":
+      return {
+        feishu_app_id: form.feishu_app_id.trim(),
+        feishu_app_secret: form.feishu_app_secret.trim() || undefined,
+        feishu_verification_token: form.feishu_verification_token.trim() || undefined,
+        feishu_encrypt_key: form.feishu_encrypt_key.trim() || undefined,
+        feishu_api_base_url: form.feishu_api_base_url.trim()
+      };
+    case "wecom":
+      return {
+        wecom_corp_id: form.wecom_corp_id.trim(),
+        wecom_agent_id: form.wecom_agent_id.trim(),
+        wecom_secret: form.wecom_secret.trim() || undefined,
+        wecom_token: form.wecom_token.trim() || undefined,
+        wecom_encoding_aes_key: form.wecom_encoding_aes_key.trim() || undefined
+      };
+    default:
+      return {
+        onebot_transport: form.onebot_transport,
+        onebot_ws_endpoint: form.onebot_ws_endpoint.trim(),
+        onebot_http_url: form.onebot_http_url.trim(),
+        onebot_http_secret: form.onebot_http_secret || undefined,
+        onebot_reverse_ws_endpoint: wsEndpoint.value,
+        onebot_access_token: form.onebot_access_token.trim() || undefined
+      };
+  }
+}
+
+/** 保存成功后清掉明文密钥草稿：再次保存时留空即表示沿用后端已存的那份。 */
+function clearSecretDrafts(): void {
+  const form = botForm.value;
+  form.onebot_access_token = "";
+  form.onebot_http_secret = "";
+  form.telegram_bot_token = "";
+  form.qq_app_secret = "";
+  form.dingtalk_client_secret = "";
+  form.feishu_app_secret = "";
+  form.feishu_verification_token = "";
+  form.feishu_encrypt_key = "";
+  form.wecom_secret = "";
+  form.wecom_token = "";
+  form.wecom_encoding_aes_key = "";
+}
+
+async function saveBotAndStart(): Promise<void> {
+  const invalid = credentialError();
+  if (invalid !== "") {
+    toastError(invalid);
     return;
   }
   busy.value = true;
@@ -610,21 +977,17 @@ async function saveBotAndStart(): Promise<void> {
     const payload: BotProfileConfig = {
       ...base,
       enabled: true,
-      onebot_transport: botForm.value.onebot_transport,
-      onebot_ws_endpoint: botForm.value.onebot_ws_endpoint.trim(),
-      onebot_http_url: botForm.value.onebot_http_url.trim(),
-      onebot_http_secret: botForm.value.onebot_http_secret || undefined,
-      onebot_reverse_ws_endpoint: wsEndpoint.value,
+      platform: botForm.value.platform,
       bot_account: base.bot_account,
       owner_id: botForm.value.owner_id.trim(),
-      onebot_access_token: botForm.value.onebot_access_token.trim() || undefined,
-      profiles: undefined
+      profiles: undefined,
+      ...platformPayload()
     };
     savedBot.value = await saveBotProfileConfig(payload);
+    tokenConfigured.value = Boolean(savedBot.value.onebot_access_token_configured);
     await startBot();
-    toastSuccess("配置已保存，正在启动 OneBot v11 通道");
-    botForm.value.onebot_access_token = "";
-    botForm.value.onebot_http_secret = "";
+    toastSuccess(`配置已保存，正在启动 ${platformName.value} 通道`);
+    clearSecretDrafts();
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally {
@@ -633,6 +996,12 @@ async function saveBotAndStart(): Promise<void> {
 }
 
 onMounted(async () => {
+  // 平台列表失败不该挡住整个向导：兜底的 OneBot 一条仍然可用。
+  void getBotPlatforms()
+    .then((result) => {
+      if (result.platforms.length > 0) platforms.value = result.platforms;
+    })
+    .catch(() => undefined);
   try {
     const [llm, bot] = await Promise.all([getConfig(), getBotProfileConfig()]);
     savedLLM.value = llm;
@@ -647,11 +1016,24 @@ onMounted(async () => {
     // 模型来源，空着的话会看起来像配置丢了。老配置可能只存了单个 model。
     modelOptions.value = llm.models?.length ? [...llm.models] : llm.model ? [{ id: llm.model }] : [];
     selectedService.value = detectLLMService(llm.base_url, llm.provider);
+    // 老配置可能压根没存 platform，按 OneBot 处理，和后端的归一化一致。
+    botForm.value.platform = bot.platform || PlatformOneBotV11;
     botForm.value.onebot_transport = bot.onebot_transport || "reverse_ws";
     botForm.value.onebot_ws_endpoint = bot.onebot_ws_endpoint || "";
     botForm.value.onebot_http_url = bot.onebot_http_url || "";
     botForm.value.onebot_reverse_ws_endpoint =
       bot.onebot_reverse_ws_endpoint || `ws://${window.location.host}/onebot/v11/ws`;
+    // 密钥一律不回填——后端只回 *_configured，留空即沿用。
+    botForm.value.telegram_api_base_url = bot.telegram_api_base_url || "";
+    botForm.value.telegram_proxy_url = bot.telegram_proxy_url || "";
+    botForm.value.qq_app_id = bot.qq_app_id || "";
+    botForm.value.qq_sandbox = Boolean(bot.qq_sandbox);
+    botForm.value.dingtalk_client_id = bot.dingtalk_client_id || "";
+    botForm.value.dingtalk_robot_code = bot.dingtalk_robot_code || "";
+    botForm.value.feishu_app_id = bot.feishu_app_id || "";
+    botForm.value.feishu_api_base_url = bot.feishu_api_base_url || "";
+    botForm.value.wecom_corp_id = bot.wecom_corp_id || "";
+    botForm.value.wecom_agent_id = bot.wecom_agent_id || "";
     // 10001 was used by early demo data and should not appear as a real default.
     botForm.value.owner_id = bot.owner_id === "10001" ? "" : (bot.owner_id ?? "");
     if (llmConfigured.value && !connected.value) {
