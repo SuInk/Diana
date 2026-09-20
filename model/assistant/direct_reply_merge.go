@@ -60,6 +60,11 @@ func directReplyMergeKey(event MessageEvent) string {
 	return sessionKey(event) + "|sender:" + strings.TrimSpace(event.UserID)
 }
 
+// directReplyTopicTimeout 给话题判断留的时间。按 5 秒卡时，会思考的模型（线上
+// deepseek-flash 平均 3 秒）有将近一半的调用被掐断，判断退化成默认值，功能等于没开。
+// 判断超时只影响要不要合并连续消息，不阻塞回复本身，放宽到 12 秒更划算。
+const directReplyTopicTimeout = 12 * time.Second
+
 func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent) (context.Context, func()) {
 	key := directReplyMergeKey(event)
 	if key == "" {
@@ -271,7 +276,7 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 		return "uncertain"
 	}
 	ctx = withLLMUsagePurpose(ctx, "direct_reply_topic")
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, directReplyTopicTimeout)
 	defer cancel()
 	raw, err := r.runLLMRouterProviderOnce(ctx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{

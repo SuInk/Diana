@@ -33,6 +33,10 @@ type semanticReplyGate struct {
 	sent    []semanticSentReply
 }
 
+// replySemanticDedupeTimeout 给发送前语义去重留的时间。线上 deepseek-flash 的成功
+// 调用最慢到 8.3 秒，10 秒几乎没有余量；超时就直接放行，等于这道去重没生效。
+const replySemanticDedupeTimeout = 20 * time.Second
+
 func (r *Runtime) lockSemanticReply(ctx context.Context, event MessageEvent) (*semanticReplyGate, func(), error) {
 	key := event.ProfileID + "|" + event.Platform + "|" + sessionKey(event)
 	r.semanticReplyMu.Lock()
@@ -114,7 +118,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 	if err != nil {
 		return reply, nil
 	}
-	judgeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	judgeCtx, cancel := context.WithTimeout(ctx, replySemanticDedupeTimeout)
 	defer cancel()
 	judgeCtx = withLLMUsagePurpose(judgeCtx, "reply_semantic_dedup")
 	judgeCtx = context.WithValue(judgeCtx, textDeltaObserverKey{}, struct{}{})

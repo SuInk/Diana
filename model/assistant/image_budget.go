@@ -56,14 +56,14 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 		event = usage.event
 	}
 	textCalls := 0
-	req = fitBudgetText(describeCtx, req, budget, &textCalls, p.runtime.summarizeBudgetText)
+	req = fitBudgetText(describeCtx, req, budget, window, &textCalls, p.runtime.summarizeBudgetText)
 	if llm.PlanInputBudget(req, budget).ImageExcess > 0 {
 		req = fitImagesWithDescriptions(describeCtx, req, budget, func(callCtx context.Context, source string) (string, error) {
 			return p.runtime.budgetImageDescription(callCtx, event, source)
 		})
 	}
 	// Image descriptions consume text quota; account for them before proceeding.
-	req = fitBudgetText(describeCtx, req, budget, &textCalls, p.runtime.summarizeBudgetText)
+	req = fitBudgetText(describeCtx, req, budget, window, &textCalls, p.runtime.summarizeBudgetText)
 	req = lowerOverBudgetImageDetail(req, budget)
 	cancel()
 	retained := 0
