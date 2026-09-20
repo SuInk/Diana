@@ -111,7 +111,9 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		return nil
 	}
 	allowed := map[string]bool{
-		"list_capabilities":        true,
+		// list_capabilities 不收录：它是整份扩展目录（全部 Skill 和 MCP 服务），
+		// 群成员的注册表现在挂在共享底座下，收录了就等于把主人装的东西全列出来。
+		// 放给成员的 MCP 工具照样会出现在按需加载目录里，不靠它发现。
 		"read_skill":               true,
 		"capabilities":             true,
 		dianaChatHistoryToolName:   true,

@@ -30,6 +30,9 @@ type SkillMetadata struct {
 	ShortDescription string `json:"short_description,omitempty"`
 	Source           string `json:"source,omitempty"`
 	Managed          bool   `json:"managed,omitempty"`
+	// Bundled 表示这个 skill 目录里除 SKILL.md 外还带了脚本或资源。正文之外的
+	// 文件只有拿得到 run_command / read_file 的会话才碰得到，权限提示要说清楚。
+	Bundled bool `json:"bundled,omitempty"`
 	// Content is populated only for skills embedded in the Diana binary. It is
 	// excluded from catalogs and registry cache keys; read_skill returns it.
 	Content string `json:"-"`
@@ -146,6 +149,7 @@ func parseSkill(path string) (SkillMetadata, error) {
 		ShortDescription: strings.TrimSpace(frontmatter.Metadata.ShortDescription),
 		Path:             abs,
 	}
+	skill.Bundled = skillFolderHasResources(filepath.Dir(abs))
 	if metadataBody, readErr := os.ReadFile(filepath.Join(filepath.Dir(abs), skillInstallMetadataName)); readErr == nil {
 		var installed skillInstallMetadata
 		if json.Unmarshal(metadataBody, &installed) == nil {
@@ -160,6 +164,22 @@ func parseSkill(path string) (SkillMetadata, error) {
 		return SkillMetadata{}, errors.New("missing skill description")
 	}
 	return skill, nil
+}
+
+// skillFolderHasResources 判断 skill 目录里除正文和安装元数据外还有没有别的文件。
+func skillFolderHasResources(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == skillFileName || name == skillInstallMetadataName {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func parseSkillFrontmatter(markdown string) (skillFrontmatter, error) {
