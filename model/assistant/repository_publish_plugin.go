@@ -423,7 +423,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "GitHub Issue 与 PR",
-		Version:     "0.6.2",
+		Version:     "0.6.3",
 		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。read_file 读取仓库文件：公开仓库全员可查，私有仓库仅主人与授权用户可读。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。",
 		Official:    true,
 		BuiltIn:     true,
@@ -464,11 +464,12 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Default:     "",
 			},
 			{
-				Key:         repositoryPublishSettingGroupAccess,
-				Label:       "群聊草稿范围",
-				Description: "群内所有成员可为这些仓库生成 Issue 草稿；只有群内授权用户确认后才会创建。",
-				Type:        PluginSettingTypeString,
-				Default:     "",
+				Key:   repositoryPublishSettingGroupAccess,
+				Label: "群聊草稿范围",
+				Description: "群内成员可为这些仓库生成 Issue 草稿；只有群内授权用户确认后才会创建。默认群里所有人都算数，" +
+					"可在仓库后面加 #group_admin 或 #group_owner 收窄到群主和群管理员。",
+				Type:    PluginSettingTypeString,
+				Default: "",
 			},
 			{
 				Key: repositoryPublishSettingDraftUsers, Label: "Issue 草稿提交者（按用户）",
@@ -477,18 +478,25 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key: repositoryPublishSettingDraftGroups, Label: "Issue 草稿提交者（按群）",
-				Description: "按“群 ID = owner/repo, owner/repo”填写；该群的所有成员都可以提交草稿，但不能直接写入 Issue。只想放开个别人时改用“按用户”那项。",
-				Type:        PluginSettingTypeString, Default: "",
+				Description: "按“群 ID = owner/repo, owner/repo”填写；该群成员可以提交草稿，但不能直接写入 Issue。默认群里所有人都算数；" +
+					"要收窄就在仓库后面加身份要求——owner/repo#group_admin 只对群主和群管理员生效，owner/repo#group_owner 只对群主生效。" +
+					"这里说的是发言人在群里的身份，和本插件的“Issue 管理人员”不是一回事。只想放开个别人时改用“按用户”那项。",
+				Type: PluginSettingTypeString, Default: "",
 			},
 			{
 				Key: repositoryPublishSettingManagerUsers, Label: "Issue 管理人员（按用户）",
-				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。授权跟着人走，私聊和群聊都生效——想让某个群友当管理员，填他的用户 ID 即可，不必放开整个群。",
-				Type:        PluginSettingTypeString, Default: "",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。授权跟着人走：私聊里直接生效，" +
+					"群聊里还要求该群自己也被授权了这个仓库（见下面两项按群授权），否则会被拒绝并提示——按用户的授权不会带进无关的群。" +
+					"在已授权的群里，这些用户不受按群授权的身份要求限制：想让某个不是群管理员的群友能操作，填他的用户 ID 即可。",
+				Type: PluginSettingTypeString, Default: "",
 			},
 			{
 				Key: repositoryPublishSettingManagerGroups, Label: "Issue 管理人员（按群）",
-				Description: "按“群 ID = owner/repo, owner/repo”填写；该群的所有成员都能直接创建和管理 Issue，请谨慎授予。只想授权个别人时改用“按用户”那项。",
-				Type:        PluginSettingTypeString, Default: "",
+				Description: "按“群 ID = owner/repo, owner/repo”填写；该群成员可以直接创建和管理 Issue，请谨慎授予。默认群里所有人都算数；" +
+					"要收窄就在仓库后面加身份要求——owner/repo#group_admin 只对群主和群管理员生效，owner/repo#group_owner 只对群主生效。" +
+					"这里说的是发言人在群里的身份，和本项授予的“Issue 管理人员”不是一回事：前者由聊天平台决定，后者是这份名单。" +
+					"身份不达标的调用会被直接拒绝并说明原因。只想授权个别人时改用“按用户”那项——按用户的授权私聊和群聊都生效，不受身份要求限制。",
+				Type: PluginSettingTypeString, Default: "",
 			},
 			{
 				Key: repositoryPublishSettingCodeUsers, Label: "私有仓库源码读取授权（按用户）",

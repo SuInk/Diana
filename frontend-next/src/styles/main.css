@@ -3577,6 +3577,20 @@ a.nav-action {
   min-width: 0;
 }
 
+/* 按群授权的那一格里摞着两个下拉：选哪个群，以及这条授权要求什么群身份。
+   身份那个宽度固定，群名再长也不会把它挤没。 */
+.target-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+@media (max-width: 620px) {
+  .target-group { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* 人设库是一排可点的卡片：点正文套用，点右上角小叉删除。宽度自适应内容，
    名字下面那行摘要用来区分「猫娘」和「猫娘 v2」这种。 */
 .persona-library {
