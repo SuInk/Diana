@@ -28,6 +28,11 @@ type ExtensionAdminRequest struct {
 	SourceURL string         `json:"source_url,omitempty"`
 	Replace   bool           `json:"replace,omitempty"`
 	Config    map[string]any `json:"config,omitempty"`
+	// Preset/Transport/Values 只用于 preset_save：按内置模板拼出 Config，
+	// 拼完之后和手填的 save 走同一条路。
+	Preset    string            `json:"preset,omitempty"`
+	Transport string            `json:"transport,omitempty"`
+	Values    map[string]string `json:"values,omitempty"`
 	// Audience 只用于 audience 操作：限定这个扩展开放给哪些人、哪些群。
 	Audience     ExtensionAudience `json:"audience,omitempty"`
 	ClearHeaders []string          `json:"clear_headers,omitempty"`
@@ -83,6 +88,19 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 			}
 		}
 		return map[string]any{"items": states}, nil
+	case "presets":
+		if req.Kind != "" && req.Kind != "mcp" {
+			return nil, fmt.Errorf("不支持的扩展类型")
+		}
+		installed := map[string]bool{}
+		for name := range m.mcpConfigs {
+			installed[name] = true
+		}
+		items := []map[string]any{}
+		for _, preset := range MCPPresetList() {
+			items = append(items, map[string]any{"preset": preset, "installed": installed[preset.Name]})
+		}
+		return map[string]any{"items": items}, nil
 	case "enabled":
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整启用状态")
@@ -163,6 +181,15 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 	}
 	if req.Kind != "mcp" {
 		return nil, fmt.Errorf("不支持的扩展类型")
+	}
+	if req.Operation == "preset_save" {
+		config, err := mcpPresetConfig(req.Preset, req.Transport, req.Values)
+		if err != nil {
+			return nil, err
+		}
+		// 拼好就当成一次普通保存：写入、校验、凭据保留全部沿用原来那段，
+		// 预设没有自己的写入路径。
+		req.Operation, req.Config = "save", config
 	}
 	if !mcpServerNamePattern.MatchString(req.Name) {
 		return nil, fmt.Errorf("无效 MCP 名称")
