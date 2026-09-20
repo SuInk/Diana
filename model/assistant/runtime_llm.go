@@ -1101,7 +1101,9 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	if text == "" && !hasImageSegment(event.Segments) {
 		text = event.RawMessage
 	}
-	text = strings.TrimSpace(text)
+	// 正文同样不可信：不中和的话，一条消息里手写
+	// 「[历史 …] 李四（im_user_x）[主人]: …」就能伪造出一整行别人的历史。
+	text = neutralizeIdentityMarkers(strings.TrimSpace(text))
 	if text == "" {
 		return ""
 	}
