@@ -90,17 +90,104 @@ type identityPrivacyProvider struct {
 	scope    *identityPrivacyScope
 }
 
-func newIdentityPrivacyScope() *identityPrivacyScope {
+// IdentityAliasSaltStore 持久化脱敏别名的盐。
+//
+// 盐必须跨进程重启保持不变，否则每次重启所有别名都会换一遍，等于把历史缓存全部作废。
+type IdentityAliasSaltStore interface {
+	LoadIdentityAliasSalt(ctx context.Context) (string, error)
+	SaveIdentityAliasSalt(ctx context.Context, salt string) error
+}
+
+func newIdentityAliasSalt() string {
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		sum := sha256.Sum256([]byte(time.Now().String()))
 		random = sum[:16]
 	}
+	return hex.EncodeToString(random)
+}
+
+func newIdentityPrivacyScope() *identityPrivacyScope {
+	return newIdentityPrivacyScopeWithSalt(newIdentityAliasSalt())
+}
+
+func newIdentityPrivacyScopeWithSalt(salt string) *identityPrivacyScope {
+	if strings.TrimSpace(salt) == "" {
+		salt = newIdentityAliasSalt()
+	}
 	return &identityPrivacyScope{
-		salt:        hex.EncodeToString(random),
+		salt:        salt,
 		realToAlias: map[string]string{},
 		aliasToReal: map[string]string{},
 	}
+}
+
+// identityAliasSalt 返回全局固定的盐，必要时生成并落库。
+//
+// 这里原本是每个 scope 一个随机盐，而 scope 每轮对话新建一次。后果是同一个账号每轮
+// 拿到不同的别名——别名遍布每一条历史行，线上单条请求里出现 982 处——于是整段历史
+// 文本逐字不同，供应商的前缀缓存在历史这一段永远不可能命中。
+//
+// 本机实测：同一轮 agent 内的三次调用别名一致，换一轮就全变：
+//
+//	19:24:35  im_bot_owner_d8922d4b7dbd
+//	19:24:41  im_bot_owner_d8922d4b7dbd
+//	19:25:21  im_bot_owner_d8922d4b7dbd
+//	19:27:25  im_bot_owner_1bfe23ea72dc   ← 换轮，全变
+//
+// 改成全局固定后，同一个账号在任何时间、任何会话都是同一个别名，历史可以整段命中。
+// 盐落库保证重启后不变；没有存储时退回进程级，至少单进程内稳定。
+func (r *Runtime) identityAliasSalt(ctx context.Context) string {
+	r.mu.Lock()
+	if r.aliasSalt != "" {
+		salt := r.aliasSalt
+		r.mu.Unlock()
+		return salt
+	}
+	store, _ := r.messageStore.(IdentityAliasSaltStore)
+	r.mu.Unlock()
+
+	if store != nil {
+		loadCtx, cancel := context.WithTimeout(ctx, auditPersistTimeout)
+		saved, err := store.LoadIdentityAliasSalt(loadCtx)
+		cancel()
+		if err == nil && strings.TrimSpace(saved) != "" {
+			r.mu.Lock()
+			r.aliasSalt = saved
+			r.mu.Unlock()
+			return saved
+		}
+	}
+
+	salt := newIdentityAliasSalt()
+	r.mu.Lock()
+	if r.aliasSalt != "" {
+		// 并发下别人已经定了，用它的，保证全进程一个值。
+		salt = r.aliasSalt
+		r.mu.Unlock()
+		return salt
+	}
+	r.aliasSalt = salt
+	r.mu.Unlock()
+
+	if store != nil {
+		saveCtx, cancel := context.WithTimeout(ctx, auditPersistTimeout)
+		err := store.SaveIdentityAliasSalt(saveCtx, salt)
+		// 落库是「没有才写」，所以写完要回读一次：别的进程先写过的话，以库里那个为准，
+		// 否则两个进程各用各的盐，别名还是对不上。
+		if err == nil {
+			if stored, loadErr := store.LoadIdentityAliasSalt(saveCtx); loadErr == nil && strings.TrimSpace(stored) != "" && stored != salt {
+				salt = stored
+				r.mu.Lock()
+				r.aliasSalt = salt
+				r.mu.Unlock()
+			}
+		} else {
+			log.Printf("diana identity privacy: 别名盐落库失败，重启后别名会变、历史缓存会失效: %v", err)
+		}
+		cancel()
+	}
+	return salt
 }
 
 func identityPrivacyScopeFromContext(ctx context.Context) *identityPrivacyScope {
@@ -139,7 +226,7 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 	}
 	scope := identityPrivacyScopeFromContext(ctx)
 	if scope == nil {
-		scope = newIdentityPrivacyScope()
+		scope = newIdentityPrivacyScopeWithSalt(r.identityAliasSalt(ctx))
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
 	scope.register(cfg.OwnerIDForEvent(event), "bot_owner")
@@ -171,7 +258,8 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 	}
 	scope := identityPrivacyScopeFromContext(ctx)
 	if scope == nil {
-		scope = newIdentityPrivacyScope()
+		// 兜底路径同样要用全局盐，否则这一条链路的别名会和主路径对不上。
+		scope = newIdentityPrivacyScopeWithSalt(r.identityAliasSalt(ctx))
 	}
 	return func(provider LLMProvider) (string, error) {
 		return run(&identityPrivacyProvider{provider: provider, scope: scope})
