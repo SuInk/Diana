@@ -701,7 +701,7 @@ const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
 const musicPluginID = "official.music";
 const stickerPluginID = "official.sticker-sender";
-// 依赖按插件 ID 分组：链接解析要 yt-dlp/ffmpeg/node，网页渲染要一个
+// 依赖按插件 ID 分组：链接解析要 yt-dlp/ffmpeg，网页渲染要一个
 // Chrome/Chromium，以后再有别的插件也不必再往模板里加一个 id 判断。
 const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
 const dependenciesLoading = ref(false);

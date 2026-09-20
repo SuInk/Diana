@@ -76,7 +76,7 @@ func TestResolverPluginCurrentMediaPathAlwaysBuildsMergedForward(t *testing.T) {
 	if resp == nil || !resp.Handled || !resp.Forward || len(resp.ForwardMessages) != 1 {
 		t.Fatalf("response = %#v", resp)
 	}
-	if !strings.Contains(resp.ForwardMessages[0].Text, "抖音 Cookie") {
+	if !strings.Contains(resp.ForwardMessages[0].Text, "平台接口解析失败") {
 		t.Fatalf("forward message = %#v", resp.ForwardMessages[0])
 	}
 }

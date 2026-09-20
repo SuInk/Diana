@@ -124,7 +124,6 @@ type resolverDependencySpec struct {
 var resolverDependencySpecs = []resolverDependencySpec{
 	{name: "yt-dlp", purpose: "YouTube / X 等平台的视频下载", versionArgs: []string{"--version"}},
 	{name: "ffmpeg", purpose: "B 站音视频分离流的合并", versionArgs: []string{"-version"}},
-	{name: "node", purpose: "抖音接口签名（a-bogus）", versionArgs: []string{"--version"}},
 }
 
 type resolverInstallCommand struct {
@@ -383,16 +382,6 @@ func resolverPackageName(name, manager string) string {
 			return "Google.Chrome"
 		case "choco":
 			return "googlechrome"
-		}
-	}
-	if name == "node" {
-		switch manager {
-		case "apk", "apt", "dnf", "yum", "pacman":
-			return "nodejs"
-		case "winget":
-			return "OpenJS.NodeJS.LTS"
-		case "choco":
-			return "nodejs-lts"
 		}
 	}
 	if manager == "winget" {

@@ -4,9 +4,7 @@
 package assistant
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -31,8 +29,13 @@ const (
 	defaultVideoMaxMB       = 200
 	defaultVideoMaxDuration = 15 * 60
 	defaultVideoMaxHeight   = 720
-	douyinVideoAPI          = "https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id=%s&pc_client_type=1&version_code=190500&version_name=19.5.0&cookie_enabled=true&screen_width=1344&screen_height=756&browser_language=zh-CN&browser_platform=Win32&browser_name=Firefox&browser_version=118.0&browser_online=true&engine_name=Gecko&engine_version=109.0&os_name=Windows&os_version=10&cpu_core_num=16&device_memory=&platform=PC"
 	douyinPlayURL           = "https://aweme.snssdk.com/aweme/v1/play/?video_id=%s&ratio=1080p&line=0"
+	// 2026-09 抖音在 detail 接口前加了 Argus 网关：带浏览器全套参数的请求会被拒为
+	// "Uifid Not Found"，补上 uifid 头之后又要 "Signature Not Found"。以 open.douyin.com
+	// 为来源、只带 aweme_id 和 aid 的精简请求不走这道校验，不需要 Cookie 和签名。
+	douyinOpenDetailAPI = "https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=%s&aid=6383"
+	// 移动端 feed 走 App 协议，完全绕开 Argus，响应里会混入推荐内容，按 aweme_id 挑。
+	douyinMobileUserAgent = "com.ss.android.ugc.aweme/300904 (Linux; U; Android 12; zh_CN; SM-G9730; Build/SQ3A.220705.004; Cronet/TTNetVersion:2e47e0ce 2022-05-19)"
 	// Douyin started rejecting the shared Chrome 138 resolver identity on the
 	// detail endpoint in September 2026, while a current desktop Chrome identity
 	// succeeds with the same cookie and request parameters.
@@ -40,8 +43,10 @@ const (
 	xiaohongshuExploreURL = "https://www.xiaohongshu.com/explore/%s?xsec_source=%s&xsec_token=%s"
 )
 
-//go:embed resolver_assets/a-bogus.js
-var douyinABogusJS string
+var douyinMobileFeedAPIs = []string{
+	"https://api5-normal-c-hl.amemv.com/aweme/v1/feed/?aweme_id=%s&aid=1128",
+	"https://aweme.snssdk.com/aweme/v1/feed/?aweme_id=%s&aid=1128",
+}
 
 var (
 	douyinIDPattern       = regexp.MustCompile(`(?i)/(?:video|note)/([0-9]+)`)
@@ -311,35 +316,11 @@ func defaultYTDLPCookiesPath() string {
 }
 
 func downloadDouyinVideoFile(ctx context.Context, raw string) string {
-	cookie := resolverDouyinCookie(ctx)
-	if cookie == "" {
+	detail, status := fetchDouyinDetail(ctx, raw)
+	if status != "" {
 		return ""
 	}
-	pageURL := fetchFinalURL(ctx, raw, resolverCommonHeaders())
-	if pageURL == "" {
-		pageURL = raw
-	}
-	match := douyinIDPattern.FindStringSubmatch(pageURL)
-	if len(match) < 2 {
-		return ""
-	}
-	awemeID := match[1]
-	headers := resolverCommonHeaders()
-	headers["User-Agent"] = douyinUserAgent
-	headers["Accept-Language"] = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
-	headers["Referer"] = "https://www.douyin.com/video/" + awemeID
-	headers["Cookie"] = cookie
-	apiURL := fmt.Sprintf(douyinVideoAPI, awemeID)
-	var response struct {
-		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
-	}
-	if !fetchDouyinJSON(ctx, apiURL, headers, &response) {
-		return ""
-	}
-	if response.AwemeDetail.AwemeID == "" {
-		response.AwemeDetail.AwemeID = awemeID
-	}
-	return downloadDouyinMediaDetailFile(ctx, response.AwemeDetail)
+	return downloadDouyinMediaDetailFile(ctx, detail)
 }
 
 func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail) string {
@@ -361,82 +342,34 @@ func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail
 	return downloadGenericVideoFile(ctx, fmt.Sprintf(douyinPlayURL, uri), headers)
 }
 
-func fetchDouyinJSON(ctx context.Context, apiURL string, headers map[string]string, target any) bool {
-	if bogus := generateDouyinABogus(ctx, apiURL, headers["User-Agent"]); bogus != "" {
-		signedURL := apiURL + "&a_bogus=" + url.QueryEscape(bogus)
-		if fetchResolverJSON(ctx, signedURL, headers, target) {
-			return true
+// douyinWebHeaders 组装抖音网页接口的请求头。配置了 Cookie 就一并带上：匿名请求
+// 容易被风控盯上，登录态也决定能看到哪些内容。Argus 先看 uifid 请求头，缺了直接
+// 403，所以 UIFID 除了留在 Cookie 里，还要单独作为请求头发一份。
+func douyinWebHeaders(ctx context.Context, referer string) map[string]string {
+	headers := resolverCommonHeaders()
+	headers["User-Agent"] = douyinUserAgent
+	headers["Accept-Language"] = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
+	if referer != "" {
+		headers["Referer"] = referer
+	}
+	if cookie := resolverDouyinCookie(ctx); cookie != "" {
+		headers["Cookie"] = cookie
+		if uifid := douyinCookieValue(cookie, "UIFID"); uifid != "" {
+			headers["uifid"] = uifid
 		}
 	}
-	if fetchResolverJSON(ctx, apiURL, headers, target) {
-		return true
-	}
-	return fetchDouyinJSONViaPython(ctx, apiURL, headers, target)
+	return headers
 }
 
-func fetchDouyinJSONViaPython(ctx context.Context, apiURL string, headers map[string]string, target any) bool {
-	pythonPath, err := lookResolverCommand("python3")
-	if err != nil {
-		return false
+// douyinCookieValue 取出 Cookie 里的某个字段，用于把 UIFID 同时放进请求头。
+func douyinCookieValue(cookie, name string) string {
+	for _, part := range strings.Split(cookie, ";") {
+		key, value, found := strings.Cut(part, "=")
+		if found && strings.TrimSpace(key) == name {
+			return strings.TrimSpace(value)
+		}
 	}
-	payload := struct {
-		Headers map[string]string `json:"headers"`
-		Proxy   string            `json:"proxy,omitempty"`
-	}{Headers: headers, Proxy: resolverProxyURL(ctx)}
-	input, err := json.Marshal(payload)
-	if err != nil {
-		return false
-	}
-	const script = `
-import json, sys, urllib.request
-payload = json.load(sys.stdin)
-handlers = []
-if payload.get("proxy"):
-    handlers.append(urllib.request.ProxyHandler({"http": payload["proxy"], "https": payload["proxy"]}))
-opener = urllib.request.build_opener(*handlers)
-request = urllib.request.Request(sys.argv[1], headers=payload.get("headers") or {})
-with opener.open(request, timeout=20) as response:
-    body = response.read(4 * 1024 * 1024 + 1)
-    if len(body) > 4 * 1024 * 1024:
-        raise RuntimeError("response too large")
-    sys.stdout.buffer.write(body)
-`
-	cmdCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, pythonPath, "-c", script, apiURL)
-	cmd.Env = resolverCommandEnv()
-	cmd.Stdin = bytes.NewReader(input)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("resolver Douyin Python fallback failed: %v: %s", err, truncateRunes(strings.TrimSpace(string(output)), 500))
-		return false
-	}
-	if err := json.Unmarshal(output, target); err != nil {
-		log.Printf("resolver Douyin Python fallback JSON parse failed: %v", err)
-		return false
-	}
-	return true
-}
-
-func generateDouyinABogus(ctx context.Context, raw string, userAgent string) string {
-	nodePath, err := lookResolverCommand("node")
-	if err != nil {
-		return ""
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	cmdCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	script := douyinABogusJS + "\nconsole.log(generate_a_bogus(process.argv[1], process.argv[2]));\n"
-	nodeCmd := exec.CommandContext(cmdCtx, nodePath, "-e", script, parsed.RawQuery, userAgent)
-	nodeCmd.Env = resolverCommandEnv()
-	output, err := nodeCmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
+	return ""
 }
 
 func downloadXiaohongshuVideoFile(ctx context.Context, raw string) string {
