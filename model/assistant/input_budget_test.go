@@ -18,7 +18,7 @@ func TestTextBudgetCompactsHistoryWithoutTouchingImagesOrCurrentQuestion(t *test
 	}}
 	current := req.Messages[2]
 	calls := 0
-	got := fitBudgetText(context.Background(), req, 20000, 128000, &calls, func(_ context.Context, text string, target, _ int64) (string, error) {
+	got := fitBudgetText(context.Background(), req, 20000, &calls, func(_ context.Context, text string, target int64) (string, error) {
 		if text != req.Messages[1].Content {
 			t.Fatal("wrong summary input")
 		}
@@ -45,7 +45,7 @@ func TestTextBudgetCompactsHistoryWithoutTouchingImagesOrCurrentQuestion(t *test
 func TestImageQuotaDoesNotCompressFittingText(t *testing.T) {
 	req := imageBudgetRequest(18)
 	calls := 0
-	got := fitBudgetText(context.Background(), req, 128000, 128000, &calls, func(context.Context, string, int64, int64) (string, error) {
+	got := fitBudgetText(context.Background(), req, 128000, &calls, func(context.Context, string, int64) (string, error) {
 		t.Fatal("fitting text compressed")
 		return "", nil
 	})
@@ -85,9 +85,7 @@ func TestBudgetSummaryFailurePreservesToolPairAndCurrentInput(t *testing.T) {
 		{Role: llm.RoleAssistant, Content: "continuing"},
 	}}
 	calls := 0
-	got := fitBudgetText(context.Background(), req, 10000, 128000, &calls, func(context.Context, string, int64, int64) (string, error) {
-		return "", errors.New("summary unavailable")
-	})
+	got := fitBudgetText(context.Background(), req, 10000, &calls, func(context.Context, string, int64) (string, error) { return "", errors.New("summary unavailable") })
 	if !reflect.DeepEqual(got, req) {
 		t.Fatal("failed summary changed request")
 	}
@@ -118,7 +116,7 @@ func TestBudgetTextPreservesHistoricalToolPair(t *testing.T) {
 		{Role: llm.RoleUser, Content: "new question"},
 	}}
 	calls := 0
-	got := fitBudgetText(context.Background(), req, 10000, 128000, &calls, func(context.Context, string, int64, int64) (string, error) { return "confirmed earlier findings", nil })
+	got := fitBudgetText(context.Background(), req, 10000, &calls, func(context.Context, string, int64) (string, error) { return "confirmed earlier findings", nil })
 	if calls != 1 || got.Messages[2].ToolCallID != "read-1" || got.Messages[2].Role != llm.RoleTool || !reflect.DeepEqual(got.Messages[1], req.Messages[1]) || got.Messages[3].Content != "new question" {
 		t.Fatal("tool pair or current question changed")
 	}
@@ -139,7 +137,7 @@ func TestBudgetTextCompressesLargestMessagesFirst(t *testing.T) {
 	}}
 	var summarized []int64
 	calls := 0
-	got := fitBudgetText(context.Background(), req, 4000, 128000, &calls, func(_ context.Context, text string, _, _ int64) (string, error) {
+	got := fitBudgetText(context.Background(), req, 4000, &calls, func(_ context.Context, text string, _ int64) (string, error) {
 		summarized = append(summarized, llm.EstimateTextTokens(text))
 		return "压缩后的摘要", nil
 	})

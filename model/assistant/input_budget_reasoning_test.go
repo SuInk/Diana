@@ -5,53 +5,37 @@ package assistant
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 会思考的模型先写 reasoning 再写正文。按摘要目标长度卡死 max_output_tokens，额度
-// 在思考阶段就用光，正文一个字都写不出来——线上 deepseek-flash 的压缩 53 次里只成功
-// 过 1 次。上限要留出思考余量。
-func TestSummaryOutputCapLeavesReasoningHeadroom(t *testing.T) {
-	for _, tc := range []struct{ window, want int64 }{
-		{128000, 128000},
-		{16384, 16384},
-		// 窗口未知时按默认窗口的一半兜底，不会退回「按目标长度卡死」。
-		{0, llm.DefaultContextWindowTokens},
-	} {
-		if got := summaryOutputCap(tc.window); got != tc.want {
-			t.Fatalf("summaryOutputCap(%d) = %d, want %d", tc.window, got, tc.want)
-		}
-	}
+type capturingSummaryProvider struct {
+	requests []llm.GenerateRequest
 }
 
-type truncatedThenTextProvider struct {
-	caps  []int64
-	reply string
+func (p *capturingSummaryProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.requests = append(p.requests, req)
+	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: "压缩后的摘要"}, nil
 }
 
-func (p *truncatedThenTextProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	p.caps = append(p.caps, req.MaxOutputTokens)
-	// 思考比预留的余量还长：第一次仍然只有 reasoning，不带上限重试才写得出正文。
-	if req.MaxOutputTokens > 0 {
-		return nil, fmt.Errorf("responses output is empty after truncation: %w", llm.ErrCompletionTruncatedNoText)
-	}
-	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
-}
-
-func TestSummarizeBudgetTextRetriesWithoutCapWhenReasoningExhaustsOutput(t *testing.T) {
-	provider := &truncatedThenTextProvider{reply: "压缩后的摘要"}
+// 摘要压缩不下发 max_output_tokens。它管的是总输出，会思考的模型先写 reasoning 再写
+// 正文，按摘要目标长度卡死就会让正文一个字都写不出来：线上 deepseek-flash 的压缩 53 次
+// 里只成功过 1 次。目标长度只写在提示词里。
+func TestSummarizeBudgetTextSendsNoOutputCap(t *testing.T) {
+	provider := &capturingSummaryProvider{}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 
-	summary, err := runtime.summarizeBudgetText(context.Background(), "很长的历史对话", 128, 16384)
+	summary, err := runtime.summarizeBudgetText(context.Background(), "很长的历史对话", 128)
 	if err != nil || summary != "压缩后的摘要" {
 		t.Fatalf("summary=%q err=%v", summary, err)
 	}
-	if len(provider.caps) != 2 || provider.caps[0] != 16384 || provider.caps[1] != 0 {
-		t.Fatalf("caps = %v, want [16384 0]", provider.caps)
+	if len(provider.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(provider.requests))
+	}
+	if got := provider.requests[0].MaxOutputTokens; got != 0 {
+		t.Fatalf("MaxOutputTokens = %d, want 0（不下发上限）", got)
 	}
 }
