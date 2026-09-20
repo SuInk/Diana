@@ -475,3 +475,35 @@ func TestDeferredTargetCannotMutateProviderEnvelope(t *testing.T) {
 		t.Fatal("provider envelope mutated")
 	}
 }
+
+type coreEnvelopeClient struct {
+	requests []llm.GenerateRequest
+}
+
+func (c *coreEnvelopeClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "core", Name: ToolsExecuteToolName, Arguments: map[string]any{"name": "common", "input": map[string]any{"query": "x"}}}}}, nil
+	}
+	return &llm.GenerateResponse{Text: `{"action":"final","content":"done"}`}, nil
+}
+
+// 常驻工具被裹进 tools_execute 时要照常执行，不能回「未在本轮加载，请先 tools_load」：
+// 那一步对常驻工具不登记加载状态，模型照做回来还是同一个错，一直耗到协议修复次数用尽。
+// 线上 browser_render 就这么连撞了两次。
+func TestDeferredExecuteEnvelopeAcceptsCoreTools(t *testing.T) {
+	client := &coreEnvelopeClient{}
+	common := &countingTool{name: "common"}
+	rare := &countingTool{name: "rare"}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, CoreTools: []string{"common"}}, NewToolRegistry(common, rare))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "用一下常驻工具"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Text != "done" || common.calls != 1 || len(client.requests) != 2 {
+		t.Fatalf("response=%#v common calls=%d requests=%d", response, common.calls, len(client.requests))
+	}
+}

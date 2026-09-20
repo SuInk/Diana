@@ -95,7 +95,7 @@ func TestRepositoryPublishCredentialPrefersTheRepositoryBinding(t *testing.T) {
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, manager, nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
-	tool := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{repositoryPublishSettingToken: "publish-token"})
+	tool := newDianaGitHubTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{repositoryPublishSettingToken: "publish-token"})
 
 	// 绑定的仓库用绑定的凭据，而不是发布插件自己的公共 Token。
 	token, apiErr := tool.repositoryPublishCredential(context.Background(), "acme/demo")

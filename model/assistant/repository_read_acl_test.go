@@ -51,9 +51,9 @@ func (s *repositoryReadACLTestGitHub) count(pred func(string) bool) int {
 	return n
 }
 
-func repositoryReadACLTool(server *httptest.Server, userID string, settings SettingValues) *dianaRepositoryIssuesTool {
+func repositoryReadACLTool(server *httptest.Server, userID string, settings SettingValues) *dianaGitHubTool {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	return newDianaRepositoryIssuesTool(
+	return newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: userID, RawMessage: "读一下代码"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -61,7 +61,7 @@ func repositoryReadACLTool(server *httptest.Server, userID string, settings Sett
 	)
 }
 
-func runRepositoryReadACL(t *testing.T, tool *dianaRepositoryIssuesTool, repository string) repositoryIssueResult {
+func runRepositoryReadACL(t *testing.T, tool *dianaGitHubTool, repository string) repositoryIssueResult {
 	t.Helper()
 	return runRepositoryPublishToolOnce(t, tool, map[string]any{
 		"operation":  "read_file",
