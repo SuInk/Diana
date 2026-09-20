@@ -271,6 +271,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "对方已经在收尾，双方互相道别的次数达到设定上限，这条回复只是又一句告别，没有发送", false
 	case "ignored_stop_requested":
 		return "not_replied", "发送前审核认定对方明确要求不要再回复，这条回复没有发送，并已按响应限制暂停接话", false
+	case "ignored_self_repeat":
+		return "not_replied", "发送前审核认定这条回复只是把机器人自己刚说过的话换个说法又说一遍，没有发送；只跳过这一条，对方下一条带来新内容时照常回答", false
 	case "ignored_ai_reply_loop":
 		return "not_replied", "发送前审核认定这一来一回已在空转（对方是自动回复，或双方都只在应付没有内容），为避免继续接茬而没有发送", false
 	case "ignored_no_natural_reply":
@@ -1797,6 +1799,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "ignored_conversation_closed", nil
 		}
+		if errors.Is(err, errReplySelfRepeatDropped) {
+			// 这条候选只是把机器人自己说过的话又说了一遍：不发，也不牵连后面的消息。
+			setEventRecordOutcome(&record, "ignored_self_repeat")
+			record.Error = ""
+			r.record(record)
+			return "ignored_self_repeat", nil
+		}
 		if errors.Is(err, errReplyLoopDetected) {
 			// 发送前审核认定在空转且累计到阈值：这条不发，暂停已同时生效。
 			setEventRecordOutcome(&record, "ignored_ai_reply_loop")
@@ -2349,7 +2358,8 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		// 闲聊分支还要看机器人最近说了多少：占比过高时只留下相关度分支。
 		_, chatLevel := chatIn.Participation.ratingLevels()
 		botMessages, totalMessages := proactiveReplyBotShare(payload.RecentMessages, participationShareWindow, participationShareSpanSeconds)
-		shareBlocked := chatReply && participationBotShareBlocks(botMessages, totalMessages, chatLevel)
+		otherSpeakers := proactiveReplyOtherSpeakers(payload.RecentMessages, participationShareWindow, participationShareSpanSeconds)
+		shareBlocked := chatReply && participationBotShareBlocks(botMessages, totalMessages, otherSpeakers, chatLevel)
 		if shareBlocked {
 			allowed, chatReply = false, false
 		}
@@ -2416,6 +2426,33 @@ func proactiveReplyBotShare(messages []proactiveReplyHistoryItem, window int, sp
 		}
 	}
 	return bot, total
+}
+
+// proactiveReplyOtherSpeakers 数窗口里除机器人以外有几个不同的人开过口。只有一个时
+// 这段对话是一对一，发言占比高是常态，不该按刷屏处理。缺 user_id 的条目（历史里少数
+// 拿不到账号的消息）按「又一个人」算：宁可多算一个让限流照常生效，也不要因为字段缺失
+// 把热闹群误判成一对一。
+func proactiveReplyOtherSpeakers(messages []proactiveReplyHistoryItem, window int, spanSeconds int64) int {
+	if window > 0 && len(messages) > window {
+		messages = messages[:window]
+	}
+	speakers := map[string]struct{}{}
+	unknown := 0
+	for _, item := range messages {
+		if spanSeconds > 0 && item.AgeSeconds != nil && *item.AgeSeconds > spanSeconds {
+			continue
+		}
+		if item.IsBot {
+			continue
+		}
+		userID := strings.TrimSpace(item.UserID)
+		if userID == "" {
+			unknown++
+			continue
+		}
+		speakers[userID] = struct{}{}
+	}
+	return len(speakers) + unknown
 }
 
 // chatInCooldownAllows 判断本群距上次闲聊插话是否已过冷却。
@@ -2592,6 +2629,9 @@ type proactiveReplyHistoryItem struct {
 	Images     int               `json:"images,omitempty"`
 	IsBot      bool              `json:"is_bot,omitempty"`
 	AgeSeconds *int64            `json:"age_seconds,omitempty"`
+	// UserID 只给程序侧数「窗口里有几个人在说话」用，不进路由提示词：模型按 sender
+	// 称呼理解对话，多一个数字账号只会让它把 ID 当成正文的一部分复述出去。
+	UserID string `json:"-"`
 }
 
 // botAliasesForEvent 把平台用户名一起交给路由模型：群消息里写的是
@@ -2666,6 +2706,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			Images:     imageCount,
 			IsBot:      payload.BotAccount != "" && item.UserID == payload.BotAccount,
 			AgeSeconds: ageSeconds,
+			UserID:     strings.TrimSpace(item.UserID),
 		}
 		if historyItem.IsBot && payload.LastBotMessage == nil {
 			lastBotMessage := historyItem
