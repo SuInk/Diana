@@ -99,15 +99,26 @@ type botReplyLoopAIDecision struct {
 	MeaninglessLoop bool `json:"meaningless_loop"`
 	// PurposelessLoop 是「回得很密、而且这一连串来回没有明确任务」：漫无目的地互相接戏、
 	// 续剧情、斗嘴。下棋报步、解题、一起做事且在推进的不算。
-	PurposelessLoop bool    `json:"purposeless_loop"`
-	Confidence      float64 `json:"confidence"`
-	Reason          string  `json:"reason"`
+	PurposelessLoop bool `json:"purposeless_loop"`
+	// SelfRepeat 只看机器人自己最近几条回复：这一条是不是把它们又说了一遍。
+	//
+	// 另外三项都要先对发送者或这一来一回下判断——对方是不是 AI、对方这条有没有内容、
+	// 这串来回密不密。机器人和另一台机器人互道晚安时这三项全落空：对方的话像真人，
+	// 每条都有内容，密度也说不上异常，可机器人自己已经把同一句「晚安、被窝、明天那页」
+	// 换着说了七遍。判据换成只看自己说过什么，那七遍才藏不住。
+	//
+	// 字面统计做不了这件事：2026-09-20 那段循环用字符二元组 Dice、内容字重合、新词率
+	// 三种度量回放 5 天 2959 条发言，都和正常对话分不开——重复的是「又道了一次别」这个
+	// 语义动作，措辞每条都新，而群里大量连续答同一个技术问题的发言在字面上比它还重复。
+	SelfRepeat bool    `json:"self_repeat"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
 }
 
-// counts 决定这次结论算不算一次空转。只有「没内容」或「没目的」才算：对方是不是 AI
-// 只记录不计数——两台 AI 正经下棋、做题，不该因为对面是 AI 就被停掉。
+// counts 决定这次结论算不算一次空转。只有「没内容」「没目的」或「在复读自己」才算：
+// 对方是不是 AI 只记录不计数——两台 AI 正经下棋、做题，不该因为对面是 AI 就被停掉。
 func (decision botReplyLoopAIDecision) counts() bool {
-	if !decision.MeaninglessLoop && !decision.PurposelessLoop {
+	if !decision.MeaninglessLoop && !decision.PurposelessLoop && !decision.SelfRepeat {
 		return false
 	}
 	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
@@ -523,9 +534,9 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
 			"automated_ai_reply": decision.AutomatedAIReply, "meaningless_loop": decision.MeaninglessLoop,
-			"purposeless_loop": decision.PurposelessLoop,
-			"confidence":       decision.Confidence,
-			"reason":           decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
+			"purposeless_loop": decision.PurposelessLoop, "self_repeat": decision.SelfRepeat,
+			"confidence": decision.Confidence,
+			"reason":     decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
 			"threshold": botReplyLoopThreshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
 			"suppression_allowed": suppressionAllowed,
 		},
