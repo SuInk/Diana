@@ -142,6 +142,7 @@ func (p *RepositoryPublishPlugin) saveDraft(ctx context.Context, draft repositor
 	now := time.Now()
 	draft.CreatedAt = now
 	draft.UpdatedAt = now
+	draft.ExpiresAt = now.Add(repositoryIssueDraftTTL)
 	draft.Status = "pending"
 	p.draftsMu.Lock()
 	p.drafts[draft.ID] = draft
@@ -170,23 +171,30 @@ func (p *RepositoryPublishPlugin) findDraft(ctx context.Context, groupID, draftI
 		if draftID != "" {
 			draft, ok, err := store.RepositoryIssueDraft(ctx, draftID)
 			privateApproval := strings.HasPrefix(groupID, "private:")
-			if err != nil || !ok || (!privateApproval && draft.GroupID != groupID) || draft.Status != "pending" {
+			if err != nil || !ok || (!privateApproval && draft.GroupID != groupID) || draft.Status != "pending" || draft.Expired(time.Now()) {
 				return repositoryIssueDraft{}, false, err
 			}
 			return draft, true, nil
 		}
 		items, err := store.ListRepositoryIssueDrafts(ctx, groupID, "pending")
-		if err != nil || len(items) == 0 {
+		if err != nil {
 			return repositoryIssueDraft{}, false, err
 		}
-		return items[0], true, nil
+		now := time.Now()
+		for _, item := range items {
+			if !item.Expired(now) {
+				return item, true, nil
+			}
+		}
+		return repositoryIssueDraft{}, false, nil
 	}
 	p.draftsMu.Lock()
 	defer p.draftsMu.Unlock()
 	var latest repositoryIssueDraft
+	now := time.Now()
 	for id, draft := range p.drafts {
 		privateApproval := strings.HasPrefix(groupID, "private:")
-		if (!privateApproval && draft.GroupID != groupID) || draft.Status != "pending" {
+		if (!privateApproval && draft.GroupID != groupID) || draft.Status != "pending" || draft.Expired(now) {
 			continue
 		}
 		if draftID != "" {
@@ -244,6 +252,148 @@ func (p *RepositoryPublishPlugin) updateDraft(ctx context.Context, draft reposit
 		return store.SaveRepositoryIssueDraft(ctx, draft)
 	}
 	return nil
+}
+
+// draftByID 按 ID 读一份草稿，不限会话范围：WebUI 的调用者不属于任何群。
+func (p *RepositoryPublishPlugin) draftByID(ctx context.Context, id string) (RepositoryIssueDraft, bool, error) {
+	p.draftsMu.Lock()
+	store := p.draftStore
+	cached, cachedOK := p.drafts[id]
+	p.draftsMu.Unlock()
+	if store != nil {
+		return store.RepositoryIssueDraft(ctx, id)
+	}
+	return cached, cachedOK, nil
+}
+
+// RestoreDraft 让一份过期或已取消的草稿重新回到待审批，并重新计时。
+//
+// 后台的调用者已经登录过控制台，是这条链路上的授权人；群里那套确认码只是聊天
+// 窗口没有身份验证时的替代。已经写进 GitHub 的草稿不能还原：再提交一次就是重复
+// 建 Issue。
+func (p *RepositoryPublishPlugin) RestoreDraft(ctx context.Context, id string) (RepositoryIssueDraft, error) {
+	draft, err := p.pendingDraftForEdit(ctx, id, true)
+	if err != nil {
+		return RepositoryIssueDraft{}, err
+	}
+	draft.Status = "pending"
+	draft.ResolvedBy = ""
+	draft.ExpiresAt = time.Now().Add(repositoryIssueDraftTTL)
+	// 换一个确认码：旧码在群里公开过，又躺了至少七天，照原样放回去等于把一个
+	// 人人都见过的口令重新激活。
+	draft.ConfirmationCode = newRepositoryIssueConfirmationCode(draftConfirmationCode(draft))
+	if err := p.updateDraft(ctx, draft); err != nil {
+		return RepositoryIssueDraft{}, err
+	}
+	return draft, nil
+}
+
+// EditDraftFromWeb 改写草稿的标题、正文和标签。只改还没写进 GitHub 的草稿：
+// 已创建的改了也不会同步到线上，只会让记录和实际内容对不上。
+func (p *RepositoryPublishPlugin) EditDraftFromWeb(ctx context.Context, id, title, body string, labels []string) (RepositoryIssueDraft, error) {
+	draft, err := p.pendingDraftForEdit(ctx, id, false)
+	if err != nil {
+		return RepositoryIssueDraft{}, err
+	}
+	if draft.Input == nil {
+		draft.Input = map[string]any{}
+	}
+	if title = strings.TrimSpace(title); title != "" {
+		draft.Input["title"] = title
+	}
+	draft.Input["body"] = body
+	cleaned := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if label = strings.TrimSpace(label); label != "" {
+			cleaned = append(cleaned, label)
+		}
+	}
+	if len(cleaned) > 0 {
+		draft.Input["labels"] = cleaned
+	} else {
+		delete(draft.Input, "labels")
+	}
+	if err := p.updateDraft(ctx, draft); err != nil {
+		return RepositoryIssueDraft{}, err
+	}
+	return draft, nil
+}
+
+// DeleteDraft 删掉一条草稿记录。删的只是记录：已经写进 GitHub 的 Issue 还在。
+func (p *RepositoryPublishPlugin) DeleteDraft(ctx context.Context, id string) error {
+	if p == nil {
+		return fmt.Errorf("仓库发布插件不可用")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("缺少草稿 ID")
+	}
+	p.draftsMu.Lock()
+	store := p.draftStore
+	_, cached := p.drafts[id]
+	delete(p.drafts, id)
+	p.draftsMu.Unlock()
+	if store == nil {
+		if !cached {
+			return fmt.Errorf("草稿不存在")
+		}
+		return nil
+	}
+	deleted, err := store.DeleteRepositoryIssueDraft(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !deleted && !cached {
+		return fmt.Errorf("草稿不存在")
+	}
+	return nil
+}
+
+// pendingDraftForEdit 取出一份还没写进 GitHub 的草稿。restoring 为真时允许
+// 已取消的草稿，其余场景只接受待审批的。
+func (p *RepositoryPublishPlugin) pendingDraftForEdit(ctx context.Context, id string, restoring bool) (RepositoryIssueDraft, error) {
+	if p == nil {
+		return RepositoryIssueDraft{}, fmt.Errorf("仓库发布插件不可用")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return RepositoryIssueDraft{}, fmt.Errorf("缺少草稿 ID")
+	}
+	draft, ok, err := p.draftByID(ctx, id)
+	if err != nil {
+		return RepositoryIssueDraft{}, err
+	}
+	if !ok {
+		return RepositoryIssueDraft{}, fmt.Errorf("草稿不存在")
+	}
+	switch draft.Status {
+	case "pending":
+		return draft, nil
+	case "cancelled":
+		if restoring {
+			return draft, nil
+		}
+		return RepositoryIssueDraft{}, fmt.Errorf("草稿已取消，先还原再改")
+	default:
+		return RepositoryIssueDraft{}, fmt.Errorf("草稿已经写进 GitHub，不能再改动；要改就去改那个 Issue")
+	}
+}
+
+// newRepositoryIssueConfirmationCode 生成一个不同于 previous 的确认码。
+func newRepositoryIssueConfirmationCode(previous string) string {
+	previous = strings.TrimSpace(previous)
+	for attempt := 0; attempt < 8; attempt++ {
+		var raw [4]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			break
+		}
+		code := hex.EncodeToString(raw[:])[:repositoryIssueConfirmationCodeLength]
+		if !strings.EqualFold(code, previous) {
+			return code
+		}
+	}
+	// 随机源不可用时退回时间戳，宁可码不够随机也不能把旧码原样留着。
+	return fmt.Sprintf("%0*x", repositoryIssueConfirmationCodeLength, time.Now().UnixNano()&0xffffff)
 }
 
 func (p *RepositoryPublishPlugin) listDrafts(ctx context.Context, groupID, status string) ([]repositoryIssueDraft, error) {

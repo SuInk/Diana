@@ -41,6 +41,13 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 			}
 			stopMigrate()
 			now := time.Now()
+			draftCtx, stopDrafts := context.WithTimeout(ctx, time.Minute)
+			if count, err := store.PruneRepositoryIssueDrafts(draftCtx, assistant.RepositoryIssueDraftPurgeCutoff(now)); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: prune repository issue drafts: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: deleted %d expired repository issue drafts", count)
+			}
+			stopDrafts()
 			runCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
 			count, err := store.PruneLogs(runCtx,
 				logRetentionCutoff(now, cfg.DebugLogRetentionDays, 7),

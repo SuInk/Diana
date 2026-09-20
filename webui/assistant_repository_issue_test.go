@@ -50,6 +50,49 @@ func TestBotHandlerListsPersistentRepositoryIssueDrafts(t *testing.T) {
 	}
 }
 
+// 过期是按时间分的：同一批 pending 草稿，status=pending 只给还能确认的，
+// status=expired 只给过了有效期的。
+func TestListRepositoryIssueDraftsSplitsExpired(t *testing.T) {
+	store, err := storage.NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	drafts := []assistant.RepositoryIssueDraft{
+		{ID: "fresh", GroupID: "group-1", Repository: "acme/demo", RequesterID: "member", Status: "pending",
+			Input: map[string]any{"title": "还能确认"}, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(48 * time.Hour)},
+		{ID: "stale", GroupID: "group-1", Repository: "acme/demo", RequesterID: "member", Status: "pending",
+			Input: map[string]any{"title": "已经过期"}, CreatedAt: now.Add(-9 * 24 * time.Hour), UpdatedAt: now.Add(-9 * 24 * time.Hour), ExpiresAt: now.Add(-2 * 24 * time.Hour)},
+	}
+	for _, draft := range drafts {
+		if err := store.SaveRepositoryIssueDraft(context.Background(), draft); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := &BotHandler{sqlite: store}
+	router := gin.New()
+	router.GET("/api/assistant/plugins/repository-publish/drafts", handler.listRepositoryIssueDrafts)
+
+	body := func(status string) string {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/plugins/repository-publish/drafts?status="+status, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%s code=%d body=%s", status, recorder.Code, recorder.Body.String())
+		}
+		return recorder.Body.String()
+	}
+	if pending := body("pending"); !strings.Contains(pending, "还能确认") || strings.Contains(pending, "已经过期") {
+		t.Fatalf("pending 列表不对：%s", pending)
+	}
+	if expired := body("expired"); !strings.Contains(expired, "已经过期") || strings.Contains(expired, "还能确认") {
+		t.Fatalf("expired 列表不对：%s", expired)
+	}
+	if all := body("all"); !strings.Contains(all, "还能确认") || !strings.Contains(all, "已经过期") {
+		t.Fatalf("all 列表应当两条都在：%s", all)
+	}
+}
+
 func (t repositoryIssueTestTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	clone := request.Clone(request.Context())
 	clonedURL := *request.URL

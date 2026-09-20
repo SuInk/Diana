@@ -36,13 +36,19 @@ const (
 	// 6 位十六进制既短到能手打，又不可能在正常聊天里被无意打出来。
 	repositoryIssueConfirmationCodeLength = 6
 	repositoryIssueCommentLimit           = 60_000
-	repositoryIssueListLimit              = 100
-	repositoryIssueRecentWindow           = 90 * 24 * time.Hour
-	repositoryIssueCommentMaxPages        = 100
-	repositoryIssueListMaxPages           = 10
-	repositoryIssueConfirmationTTL        = 15 * time.Minute
-	repositoryIssueResponseLimit          = 16 << 20
-	repositoryIssueCredentialKey          = `(?:[a-z0-9]+[_-])*(?:authorization|api[_-]?key|access[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|token|secret|password|passwd)(?:[_-][a-z0-9]+)*`
+	// repositoryIssueDraftTTL 是待审批草稿的有效期。过期之后确认码永久失效，
+	// 草稿只作为记录保留，不能再确认，也不能重新计时。
+	repositoryIssueDraftTTL = 7 * 24 * time.Hour
+	// repositoryIssueDraftPurgeAfter 是过期草稿再保留多久。到期后整条删掉：
+	// 一份躺了一个多月没人理的草稿，留着既不能用也没人查。
+	repositoryIssueDraftPurgeAfter = 30 * 24 * time.Hour
+	repositoryIssueListLimit       = 100
+	repositoryIssueRecentWindow    = 90 * 24 * time.Hour
+	repositoryIssueCommentMaxPages = 100
+	repositoryIssueListMaxPages    = 10
+	repositoryIssueConfirmationTTL = 15 * time.Minute
+	repositoryIssueResponseLimit   = 16 << 20
+	repositoryIssueCredentialKey   = `(?:[a-z0-9]+[_-])*(?:authorization|api[_-]?key|access[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|token|secret|password|passwd)(?:[_-][a-z0-9]+)*`
 )
 
 var (
@@ -138,6 +144,30 @@ type RepositoryIssueDraft struct {
 	ResolvedBy    string         `json:"resolved_by,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
+	// ConfirmationCode 是这份草稿当前的确认码。后台还原过期草稿时会换一个：
+	// 旧码在群里公开过，又躺了至少七天。历史草稿没有这个字段，仍按 ID 前缀取。
+	ConfirmationCode string `json:"confirmation_code,omitempty"`
+	// ExpiresAt 是待审批草稿的失效时刻。状态列有 CHECK 约束，加一个 expired 取值要
+	// 重建整张表；过期与否本来就只取决于时间，存在 payload 里按时间判断即可。
+	// 历史草稿没有这个字段，零值按创建时间加有效期折算。
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+}
+
+// ExpiresAtOrDefault 给历史草稿补出失效时刻。
+func (d RepositoryIssueDraft) ExpiresAtOrDefault() time.Time {
+	if !d.ExpiresAt.IsZero() {
+		return d.ExpiresAt
+	}
+	return d.CreatedAt.Add(repositoryIssueDraftTTL)
+}
+
+// Expired 判断这份草稿是不是已经过了有效期。只有待审批的草稿会过期：
+// 已创建和已取消都是终态，留着做记录。
+func (d RepositoryIssueDraft) Expired(now time.Time) bool {
+	if d.Status != "pending" {
+		return false
+	}
+	return now.After(d.ExpiresAtOrDefault())
 }
 
 type repositoryIssueDraft = RepositoryIssueDraft
@@ -146,6 +176,7 @@ type RepositoryIssueDraftStore interface {
 	SaveRepositoryIssueDraft(context.Context, RepositoryIssueDraft) error
 	RepositoryIssueDraft(context.Context, string) (RepositoryIssueDraft, bool, error)
 	ListRepositoryIssueDrafts(context.Context, string, string) ([]RepositoryIssueDraft, error)
+	DeleteRepositoryIssueDraft(context.Context, string) (bool, error)
 }
 
 // repositoryIssueDraftView 是交给模型转述给用户看的草稿内容。
@@ -1109,7 +1140,7 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 			result.Message = fmt.Sprintf(
 				"同标题的草稿已经在等待审批，没有重复建。把这份草稿的内容和确认码 %s 单独成行再告诉用户一次，"+
 					"等有权限的人自己打出确认码后用 operation=approve 和这个 draft_id 提交。",
-				repositoryIssueConfirmationCode(existing.ID))
+				draftConfirmationCode(existing))
 			return result
 		} else if kind == "created" {
 			result.OK = true
@@ -1213,7 +1244,7 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 		"草稿已生成，尚未写入 GitHub。把将要写入的内容原样告诉用户，并把确认码 %s 单独成行写进这次回复里——"+
 			"不发出来对方就没法确认。然后等有权限的人自己把这个码打出来，收到之后再用 operation=approve "+
 			"和这个 draft_id 执行；在那之前不要调用 approve，也不要当作对方已经确认过。",
-		repositoryIssueConfirmationCode(draft.ID))
+		draftConfirmationCode(draft))
 	result.RequiresApproval = true
 	result.Draft = repositoryIssueDraftViewFromDraft(draft)
 	return result
@@ -1234,6 +1265,9 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 		// 执行过，而不是含糊地报「找不到」——后者会让用户以为写入失败，可
 		// GitHub 上其实已经建好了。
 		if resolved, found, findErr := t.plugin.findResolvedDraft(ctx, scope, configToolString(input, "draft_id")); findErr == nil && found {
+			if resolved.Expired(time.Now()) {
+				return result.fail("draft_expired", "这份草稿已经超过 7 天有效期，确认码失效了。让主人在 WebUI 里还原（会换一个新码）或者直接提交，也可以重新提一份。")
+			}
 			return t.describeResolvedDraft(resolved)
 		}
 		return result.fail("draft_not_found", "本群没有可审批的 Issue 草稿，或草稿已处理。")
@@ -1250,13 +1284,20 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	// 确认必须是用户本人原样打出运行时给的确认码。以前这里扫「同意/批准/提交」并用
 	// 「不同意/取消/拒绝」反向排除，那是拿关键词判断意图：措辞千变万化，判宽了会替
 	// 用户写 Issue，判严了又让人确认不了。确认码没有这个歧义。
-	if !repositoryIssueRequestConfirms(repositoryIssueCurrentRequestText(t.event), draft.ID) {
+	if !repositoryIssueRequestConfirms(repositoryIssueCurrentRequestText(t.event), draft) {
 		return result.fail("explicit_approval_required", fmt.Sprintf(
-			"当前消息里没有确认码 %s。请让有权限的人原样回复它再执行。", repositoryIssueConfirmationCode(draft.ID)))
+			"当前消息里没有确认码 %s。请让有权限的人原样回复它再执行。", draftConfirmationCode(draft)))
 	}
 	if code, message := t.validateWriteAccess(draft.Repository, owner); code != "" {
 		return result.fail(code, message)
 	}
+	return t.executeDraft(ctx, draft, input, "approve")
+}
+
+// executeDraft 执行草稿记录的写操作并把草稿标记为已用掉。
+// 群里的确认码审批和 WebUI 的直接发布都走这里，免得两条链路各写一份。
+func (t *dianaRepositoryIssuesTool) executeDraft(ctx context.Context, draft repositoryIssueDraft, input map[string]any, operationName string) repositoryIssueResult {
+	result := repositoryIssueResult{Operation: operationName, Repository: draft.Repository}
 	writeInput := make(map[string]any, len(draft.Input)+2)
 	for key, value := range draft.Input {
 		writeInput[key] = value
@@ -1278,7 +1319,7 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	} else {
 		executed = t.executeWrite(ctx, draft.Repository, operation, writeInput)
 	}
-	executed.Operation = "approve"
+	executed.Operation = operationName
 	executed.Draft = repositoryIssueDraftViewFromDraft(draft)
 	// 批量里只要有一条写上了，草稿就算用掉：再批一次会把成功的那些重做一遍
 	// （update 不幂等）。没写上的编号在 Failures 里逐条列出，用户另起一份草稿。
@@ -1467,6 +1508,7 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 	if err != nil {
 		return result.fail("draft_store_failed", "读取 Issue 草稿列表失败。")
 	}
+	drafts = dropExpiredDrafts(drafts)
 	// 默认列表以前只有待审批的：一份草稿刚被批准提交，下一轮模型再 list 就看不到
 	// 它了，于是把「已经提交」读成「草稿丢了」，接着重新建一份、再要一次确认码。
 	// 今晚 #67 和 #70 都是这么重复出来的——上一轮的回复还没进入下一轮的上下文，
@@ -1507,6 +1549,26 @@ func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[st
 	return result
 }
 
+// RepositoryIssueDraftPurgeCutoff 返回「创建时间早于它就该删掉」的时刻。
+// 草稿记的是创建时间，有效期和保留期都是固定长度，直接往前推即可。
+func RepositoryIssueDraftPurgeCutoff(now time.Time) time.Time {
+	return now.Add(-(repositoryIssueDraftTTL + repositoryIssueDraftPurgeAfter))
+}
+
+// dropExpiredDrafts 去掉超过有效期的待审批草稿。它们的确认码已经永久失效，
+// 在 WebUI 里还能查到，直到保留期满被删掉。
+func dropExpiredDrafts(drafts []repositoryIssueDraft) []repositoryIssueDraft {
+	now := time.Now()
+	kept := make([]repositoryIssueDraft, 0, len(drafts))
+	for _, draft := range drafts {
+		if draft.Expired(now) {
+			continue
+		}
+		kept = append(kept, draft)
+	}
+	return kept
+}
+
 const (
 	// repositoryIssueRecentDraftWindow 是默认草稿列表里保留已处理草稿的时长。
 	repositoryIssueRecentDraftWindow   = 12 * time.Hour
@@ -1540,6 +1602,9 @@ func (t *dianaRepositoryIssuesTool) findSameTitleDraft(ctx context.Context, scop
 		}
 		switch draft.Status {
 		case "pending":
+			if draft.Expired(time.Now()) {
+				continue
+			}
 			return draft, "pending"
 		case "created":
 			if created.ID == "" && draft.IssueNumber > 0 && !draft.UpdatedAt.Before(cutoff) {
@@ -1564,6 +1629,9 @@ func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[s
 		return result.fail("draft_store_failed", "读取 Issue 草稿失败。")
 	}
 	if !ok {
+		if resolved, found, findErr := t.plugin.findResolvedDraft(ctx, scope, configToolString(input, "draft_id")); findErr == nil && found && resolved.Expired(time.Now()) {
+			return result.fail("draft_expired", "这份草稿已经超过 7 天有效期，不用再取消了。")
+		}
 		return result.fail("draft_not_found", "本群没有可取消的待审批草稿。")
 	}
 	result.Repository = draft.Repository
@@ -1599,11 +1667,19 @@ func repositoryIssueConfirmationCode(draftID string) string {
 	return draftID[:repositoryIssueConfirmationCodeLength]
 }
 
+// draftConfirmationCode 返回草稿当前的确认码。
+func draftConfirmationCode(draft repositoryIssueDraft) string {
+	if code := strings.TrimSpace(draft.ConfirmationCode); code != "" {
+		return code
+	}
+	return repositoryIssueConfirmationCode(draft.ID)
+}
+
 // repositoryIssueRequestConfirms 判断用户本人这条消息里是否原样写出了确认码。
 // 只看用户自己的话：引用和转发内容已由 repositoryIssueStripUntrustedContext 去掉，
 // 免得别人贴一段带确认码的记录就能替他确认。
-func repositoryIssueRequestConfirms(text, draftID string) bool {
-	code := repositoryIssueConfirmationCode(draftID)
+func repositoryIssueRequestConfirms(text string, draft repositoryIssueDraft) bool {
+	code := draftConfirmationCode(draft)
 	if code == "" {
 		return false
 	}
@@ -1650,7 +1726,7 @@ func confirmationCodeForPendingDraft(draft repositoryIssueDraft) string {
 	if strings.TrimSpace(draft.Status) != "pending" {
 		return ""
 	}
-	return repositoryIssueConfirmationCode(draft.ID)
+	return draftConfirmationCode(draft)
 }
 
 func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
