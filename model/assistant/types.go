@@ -814,12 +814,51 @@ type GroupConfig struct {
 	RecallReplyAutoDeleteEnabled *bool                     `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                       `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	// nil 跟随机器人；true/false 在本群对主动和直接回复统一开启/关闭账号安全审核。
-	ReplyAccountSafetyAuditEnabled *bool                  `json:"reply_account_safety_audit_enabled,omitempty"`
-	ReplyAccountSafetyAuditPrompt  string                 `json:"reply_account_safety_audit_prompt,omitempty"`
-	PluginOverrides                map[string]bool        `json:"plugin_overrides,omitempty"`
-	PluginSettingOverrides         PluginSettingOverrides `json:"plugin_setting_overrides,omitempty"`
-	ReplyGate                      *ReplyGate             `json:"reply_gate,omitempty"`
-	UpdatedAt                      time.Time              `json:"updated_at,omitempty"`
+	ReplyAccountSafetyAuditEnabled *bool  `json:"reply_account_safety_audit_enabled,omitempty"`
+	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
+	// ExtensionAccess 按群覆盖 MCP / Skill 的开放范围，键是扩展 ID，没写的跟随
+	// 机器人那一档。群管理员只能往严的方向改。
+	ExtensionAccess        map[string]GroupExtensionAccess `json:"extension_access,omitempty"`
+	PluginOverrides        map[string]bool                 `json:"plugin_overrides,omitempty"`
+	PluginSettingOverrides PluginSettingOverrides          `json:"plugin_setting_overrides,omitempty"`
+	ReplyGate              *ReplyGate                      `json:"reply_gate,omitempty"`
+	UpdatedAt              time.Time                       `json:"updated_at,omitempty"`
+}
+
+// GroupExtensionAccess 是一个扩展在某个群里的开放范围：一个基线档位，加一对名单。
+//
+// 判定顺序是「停用 > 黑名单 > 白名单 > 档位」：停用等于这个群没这个能力，谁都不给；
+// 黑名单无条件挡住，压过白名单；白名单是例外放行，名单里的账号不看档位也不看身份。
+type GroupExtensionAccess struct {
+	// Tier 为空表示这一项的基线跟随机器人。
+	Tier string `json:"tier,omitempty"`
+	// Allow 是额外放行的账号，能越过档位、身份和机器人那份名单，但越不过停用。
+	Allow []string `json:"allow,omitempty"`
+	// Deny 是本群不给用的账号，优先级最高。
+	Deny []string `json:"deny,omitempty"`
+}
+
+func (a GroupExtensionAccess) Empty() bool {
+	return a.Tier == "" && len(a.Allow) == 0 && len(a.Deny) == 0
+}
+
+// Allowed 判断这个账号是否被本群白名单放行。
+func (a GroupExtensionAccess) Allowed(userID string) bool { return containsAccount(a.Allow, userID) }
+
+// Denied 判断这个账号是否被本群黑名单挡住。
+func (a GroupExtensionAccess) Denied(userID string) bool { return containsAccount(a.Deny, userID) }
+
+func containsAccount(list []string, userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false
+	}
+	for _, item := range list {
+		if strings.TrimSpace(item) == userID {
+			return true
+		}
+	}
+	return false
 }
 
 type GroupConfigSet struct {

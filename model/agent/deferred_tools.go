@@ -171,7 +171,7 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 	for _, name := range requested {
 		tool, ok := l.registry.Get(name)
 		if !ok || name == "" {
-			return "", fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
+			return "", l.unavailableToolError(name)
 		}
 		schema, err := snapshotToolSchema(tool)
 		if err != nil {
@@ -206,6 +206,22 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 	return string(result), nil
 }
 
+// 名字取不到时把两种原因分开：查无此工具要换一个名字，没权限则换名字也没用，
+// 得让模型改口告诉用户，而不是在协议修复次数里对着同一个名字空转。
+func (l *deferredToolLoader) unavailableToolError(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("工具名不能为空；请从目录里选一个名称")
+	}
+	if l.registry.PolicyDenied(name) {
+		return deniedToolError(name)
+	}
+	return fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
+}
+
+func deniedToolError(name string) error {
+	return fmt.Errorf("工具 %q 当前会话没有权限使用：它只对主人开放，或者没有对群成员开放。不要重试，直接说明这件事需要主人来做", name)
+}
+
 // dispatch expands only the internal action. Provider calls and IDs stay untouched.
 func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 	if action.Tool == ToolsExecuteToolName {
@@ -229,6 +245,9 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		input = action.Input
 		tool, ok := l.registry.Get(name)
 		if !ok {
+			if l.registry.PolicyDenied(name) {
+				return action, deniedToolError(name)
+			}
 			return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools_load", name)
 		}
 		if err := validateToolInput(schema, input); err != nil {

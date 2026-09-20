@@ -799,8 +799,11 @@ func closeMCPClosers(closers []closeableTool) {
 	}
 }
 
+// mcpToolNamePrefix 是 MCP 工具在模型侧的固定前缀，权限提示据此识别这类名字。
+const mcpToolNamePrefix = "mcp__"
+
 func mcpModelToolName(server, tool string) string {
-	name := "mcp__" + sanitizeToolName(server) + "__" + sanitizeToolName(tool)
+	name := mcpToolNamePrefix + sanitizeToolName(server) + "__" + sanitizeToolName(tool)
 	if len(name) <= 64 {
 		return name
 	}

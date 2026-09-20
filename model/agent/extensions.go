@@ -47,11 +47,17 @@ type ExtensionState struct {
 	Installed   bool          `json:"installed"`
 	Enabled     bool          `json:"enabled"`
 	Available   *bool         `json:"available,omitempty"`
-	Source      string        `json:"source,omitempty"`
-	Transport   string        `json:"transport,omitempty"`
-	Tools       []string      `json:"tools,omitempty"`
-	Permissions []string      `json:"permissions,omitempty"`
-	Error       string        `json:"error,omitempty"`
+	// MembersEnabled 只在按机器人读取目录时返回：nil 表示这类扩展没有成员开关。
+	MembersEnabled *bool `json:"members_enabled,omitempty"`
+	// MemberAudience 非空表示这项只开放给名单里的人或群，nil 表示所有群成员。
+	MemberAudience *ExtensionAudience `json:"member_audience,omitempty"`
+	// Bundled 标记带脚本或资源的 skill。
+	Bundled     bool     `json:"bundled,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Transport   string   `json:"transport,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
 
 type ExtensionCatalog interface {
@@ -145,6 +151,7 @@ func (m *ExtensionManager) Extensions() []ExtensionState {
 			Installed:   true,
 			Enabled:     true,
 			Source:      skill.Source,
+			Bundled:     skill.Bundled,
 		})
 	}
 	states = append(states, m.mcpExtensionStates()...)

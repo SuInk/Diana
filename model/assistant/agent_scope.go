@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/SuInk/diana/model/agent"
@@ -26,39 +27,285 @@ type agentReplyScope struct {
 
 func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, extraTools ...agent.Tool) (*agent.ToolRegistry, error) {
 	agentCfg := r.agentRegistryConfig(cfg, event, relationship.Owner)
-	var registry *agent.ToolRegistry
-	var err error
-	if relationship.Owner {
-		base, baseErr := r.sharedAgentRegistry(ctx, agentCfg)
-		if baseErr != nil {
-			return nil, baseErr
-		}
-		registry, err = base.NewView(agentCfg)
-	} else {
-		registry, err = agent.NewDefaultToolRegistry(agentCfg)
-		if err == nil {
-			registry.RegisterBuiltinSkills(agentCfg.BuiltinSkills)
-		}
-	}
+	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), event.ProfileID)
 	if err != nil {
 		return nil, err
+	}
+	audiences, err := agent.LoadExtensionAudiences(AgentWorkspaceDir(), event.ProfileID)
+	if err != nil {
+		return nil, err
+	}
+	// 本群单独设过的扩展走群里的说法，其余跟随机器人。
+	groupAccess := r.groupExtensionAccessForEvent(event)
+	access := extensionAccessInput{overrides: overrides, audiences: audiences, groupAccess: groupAccess, userID: event.UserID, groupID: event.GroupID}
+	// 起不起共享底座只看「有没有可能对非主人开」，这一步不碰扩展目录，也就不会
+	// 为一句群闲聊把 MCP 进程拉起来。
+	mayOpen := relationship.Owner || len(agent.MemberAllowedExtensionIDs(overrides)) > 0 || groupOpensExtensions(groupAccess)
+	base, err := r.agentExtensionBase(ctx, agentCfg, mayOpen)
+	if err != nil {
+		return nil, err
+	}
+	var registry *agent.ToolRegistry
+	if base != nil {
+		registry, err = base.NewView(agentCfg)
+		if err != nil && relationship.Owner {
+			return nil, err
+		}
+	}
+	if registry == nil {
+		base = nil
+		registry, err = agent.NewDefaultToolRegistry(agentCfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if relationship.Owner {
 		registry.Register(newDianaConfigTool(r, event))
 		registry.Register(&dianaUsageTool{runtime: r, event: event})
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
+		registry.Register(newDianaExtensionAccessTool(r, event))
 	}
 	for _, tool := range extraTools {
 		registry.Register(tool)
 	}
-	registry.Retain(r.allowedAgentToolNamesForEvent(event, relationship))
-	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), event.ProfileID)
-	if err != nil {
-		_ = registry.Close()
-		return nil, err
+	allowed := r.allowedAgentToolNamesForEvent(event, relationship)
+	memberExtensions := []string{}
+	if allowed != nil && base != nil {
+		// 非主人能用哪些扩展，按「停用 > 黑名单 > 白名单 > 档位」逐项算出来。
+		var pending []string
+		memberExtensions, pending = resolveMemberExtensions(extensionIDsOf(base), access)
+		if len(pending) > 0 {
+			role := r.senderGroupRole(ctx, event)
+			if role == agent.MemberRoleAdmin || role == "owner" {
+				memberExtensions = append(memberExtensions, pending...)
+			}
+		}
+		sort.Strings(memberExtensions)
+		for _, name := range memberMCPToolNames(base, memberExtensions) {
+			allowed[name] = true
+		}
 	}
-	registry.ApplyExtensionOverrides(overrides)
+	if !relationship.Owner {
+		// 群成员的 skill 面固定成「内置协议 + 放行的那几份」：视图挂在共享底座下
+		// 之后，不显式设置就会把底座上的自定义 Skill 全部继承过来。
+		registry.RegisterScopedSkills(agentCfg.BuiltinSkills, memberSkills(base, memberExtensions), agentCfg.ReservedSkillNames)
+	}
+	registry.Retain(allowed)
+	// 一次性交给注册表：ApplyExtensionOverrides 是整份替换，分两次调用后一次会
+	// 把前一次的机器人级停用覆盖掉。
+	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupDisabledOverrides(groupAccess)))
 	return registry, nil
+}
+
+// groupExtensionAccessForEvent 取本群对扩展档位的覆盖，私聊没有群配置。
+func (r *Runtime) groupExtensionAccessForEvent(event MessageEvent) map[string]GroupExtensionAccess {
+	if event.Kind != EventKindGroup {
+		return nil
+	}
+	groupCfg, ok := r.groupConfigForEvent(event)
+	if !ok || len(groupCfg.ExtensionAccess) == 0 {
+		return nil
+	}
+	access := make(map[string]GroupExtensionAccess, len(groupCfg.ExtensionAccess))
+	for id, item := range groupCfg.ExtensionAccess {
+		id = strings.TrimSpace(id)
+		tier, err := agent.NormalizeExtensionTier(item.Tier)
+		if err != nil || id == "" {
+			continue
+		}
+		item.Tier = tier
+		// 跟随档不带本群名单：界面上「跟随」就是这个群不干预，存储侧也按这条收。
+		if tier == "" || item.Empty() {
+			continue
+		}
+		access[id] = item
+	}
+	return access
+}
+
+// extensionAccessInput 是算「这个人在这个群能用哪些扩展」要用到的全部输入。
+type extensionAccessInput struct {
+	overrides   map[string]bool
+	audiences   map[string]agent.ExtensionAudience
+	groupAccess map[string]GroupExtensionAccess
+	userID      string
+	groupID     string
+}
+
+// resolveMemberExtensions 逐项判断非主人能不能用，顺序是「停用 > 黑名单 > 白名单 > 档位」。
+// 第二个返回值是还要核验群身份才能定的项：核验可能要访问平台接口，能不查就不查。
+func resolveMemberExtensions(candidates []string, in extensionAccessInput) (allowed, needsRole []string) {
+	for _, id := range candidates {
+		group := in.groupAccess[id]
+		tier := group.Tier
+		if tier == "" {
+			tier = agent.BotExtensionTier(in.overrides, in.audiences, id)
+		}
+		// 停用是「这里没有这个能力」，白名单也放不出来。
+		if tier == agent.ExtensionTierOff || agent.BotExtensionTier(in.overrides, in.audiences, id) == agent.ExtensionTierOff {
+			continue
+		}
+		if group.Denied(in.userID) {
+			continue
+		}
+		if group.Allowed(in.userID) {
+			allowed = append(allowed, id)
+			continue
+		}
+		// 机器人那份对象名单继续管用，本群白名单才是它的例外。
+		if !in.audiences[id].Allows(in.userID, in.groupID) {
+			continue
+		}
+		switch tier {
+		case agent.ExtensionTierMembers:
+			allowed = append(allowed, id)
+		case agent.ExtensionTierAdmins:
+			needsRole = append(needsRole, id)
+		}
+	}
+	return allowed, needsRole
+}
+
+// groupOpensExtensions 判断本群配置里有没有「可能放开给非主人」的条目。
+func groupOpensExtensions(access map[string]GroupExtensionAccess) bool {
+	for _, item := range access {
+		if len(item.Allow) > 0 || item.Tier == agent.ExtensionTierAdmins || item.Tier == agent.ExtensionTierMembers {
+			return true
+		}
+	}
+	return false
+}
+
+// extensionIDsOf 列出底座上已装的 MCP 和 Skill。
+func extensionIDsOf(base *agent.ToolRegistry) []string {
+	if base == nil {
+		return nil
+	}
+	ids := []string{}
+	for _, state := range base.Extensions() {
+		if state.Kind == agent.ExtensionKindMCP || state.Kind == agent.ExtensionKindSkill {
+			ids = append(ids, state.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// mergeExtensionOverrides 合并机器人级和群级停用，群里说停用的优先。
+func mergeExtensionOverrides(botLevel, groupLevel map[string]bool) map[string]bool {
+	if len(groupLevel) == 0 {
+		return botLevel
+	}
+	merged := make(map[string]bool, len(botLevel)+len(groupLevel))
+	for id, enabled := range botLevel {
+		merged[id] = enabled
+	}
+	for id, enabled := range groupLevel {
+		merged[id] = enabled
+	}
+	return merged
+}
+
+// groupDisabledOverrides 把本群停用的扩展表达成注册表认识的停用开关。
+func groupDisabledOverrides(access map[string]GroupExtensionAccess) map[string]bool {
+	if len(access) == 0 {
+		return nil
+	}
+	values := map[string]bool{}
+	for id, item := range access {
+		if item.Tier == agent.ExtensionTierOff {
+			values[id] = false
+		}
+	}
+	return values
+}
+
+func sortedExtensionIDs(values map[string]bool) []string {
+	ids := make([]string, 0, len(values))
+	for id := range values {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// agentExtensionBase 取共享扩展底座。主人会话和「有 MCP 放给群成员」时按需拉起；
+// 其余群消息只借用已经起来的底座，不为一句闲聊新起一堆 MCP 进程——借到了也有用：
+// 白名单外的工具名这时能被认出来是没权限，而不是查无此工具。
+func (r *Runtime) agentExtensionBase(ctx context.Context, agentCfg agent.Config, start bool) (*agent.ToolRegistry, error) {
+	// 底座按 ExtensionScope 共享，而 ExtensionManagement 在里面。群成员视图关掉了
+	// 扩展管理，取底座时仍按主人那份取，否则同一套 MCP 会被拉起第二份。
+	baseCfg := agentCfg
+	baseCfg.ExtensionManagement = true
+	if start {
+		return r.sharedAgentRegistry(ctx, baseCfg)
+	}
+	return r.cachedAgentRegistry(baseCfg), nil
+}
+
+// memberMCPToolNames 展开放给群成员的 MCP 服务当前发现到的工具名。
+func memberMCPToolNames(base *agent.ToolRegistry, extensionIDs []string) []string {
+	if base == nil || len(extensionIDs) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(extensionIDs))
+	for _, id := range extensionIDs {
+		allowed[id] = true
+	}
+	names := []string{}
+	for _, state := range base.Extensions() {
+		if state.Kind != agent.ExtensionKindMCP || !state.Enabled || !allowed[state.ID] {
+			continue
+		}
+		names = append(names, state.Tools...)
+	}
+	return names
+}
+
+// senderGroupRole 核验发言人在本群的身份，只在确实有扩展设了群管门槛时才调用。
+// 事件自带身份就不访问平台；平台给不出身份时返回空串，按普通成员处理。
+// 返回的是 agent 包认的取值（owner/admin/member），不是本包的 group_ 前缀常量。
+func (r *Runtime) senderGroupRole(ctx context.Context, event MessageEvent) string {
+	if event.Kind != EventKindGroup {
+		return ""
+	}
+	role := NormalizeGroupRole(event.SenderRole)
+	if role == "" {
+		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID)
+		if err != nil {
+			log.Printf("diana agent: 无法核验 %s 在群 %s 的身份，按普通成员处理: %v", event.UserID, event.GroupID, err)
+			return ""
+		}
+		role = NormalizeGroupRole(member.Role)
+	}
+	switch role {
+	case GroupRoleOwner:
+		return "owner"
+	case GroupRoleAdmin:
+		return agent.MemberRoleAdmin
+	case GroupRoleMember:
+		return "member"
+	}
+	return ""
+}
+
+// memberSkills 挑出放给群成员的 skill。正文之外的脚本资源不跟着开放：成员没有
+// run_command 和 read_file，skill 里让跑脚本的段落在成员会话里执行不了。
+func memberSkills(base *agent.ToolRegistry, extensionIDs []string) []agent.SkillMetadata {
+	if base == nil || len(extensionIDs) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(extensionIDs))
+	for _, id := range extensionIDs {
+		allowed[id] = true
+	}
+	skills := []agent.SkillMetadata{}
+	for _, skill := range base.Skills() {
+		if allowed["skill:"+skill.Name] {
+			skills = append(skills, skill)
+		}
+	}
+	return skills
 }
 
 func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship RelationshipPolicy) map[string]bool {
@@ -101,21 +348,39 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 	}
 }
 
-func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*agent.ToolRegistry, error) {
+// agentRegistryCacheKey 规范化共享底座的配置并给出缓存键。底座只放扩展，按
+// ExtensionScope 共享：各机器人的步数、命令白名单、沙盒，以及随群变化的内置插件与
+// 内置 Skill，都由请求视图叠加，不能拆出第二套 MCP 进程。
+func agentRegistryCacheKey(cfg agent.Config) (agent.Config, string, error) {
 	cfg = cfg.WithDefaults()
-	var pathErr error
-	cfg, pathErr = agent.GlobalExtensionPaths(cfg)
-	if pathErr != nil {
-		return nil, pathErr
+	cfg, err := agent.GlobalExtensionPaths(cfg)
+	if err != nil {
+		return agent.Config{}, "", err
 	}
-	// 底座只放扩展，按 ExtensionScope 共享：各机器人的步数、命令白名单、沙盒，以及
-	// 随群变化的内置插件与内置 Skill，都由请求视图叠加，不能拆出第二套 MCP 进程。
 	baseCfg := cfg.ExtensionScope()
 	keyBody, err := json.Marshal(baseCfg)
 	if err != nil {
+		return agent.Config{}, "", err
+	}
+	return baseCfg, string(keyBody), nil
+}
+
+// cachedAgentRegistry 只看缓存，不创建底座，也不启动任何 MCP 进程。
+func (r *Runtime) cachedAgentRegistry(cfg agent.Config) *agent.ToolRegistry {
+	_, key, err := agentRegistryCacheKey(cfg)
+	if err != nil {
+		return nil
+	}
+	r.agentRegistryMu.Lock()
+	defer r.agentRegistryMu.Unlock()
+	return r.agentRegistryCache[key]
+}
+
+func (r *Runtime) sharedAgentRegistry(ctx context.Context, cfg agent.Config) (*agent.ToolRegistry, error) {
+	baseCfg, key, err := agentRegistryCacheKey(cfg)
+	if err != nil {
 		return nil, err
 	}
-	key := string(keyBody)
 	r.agentRegistryMu.Lock()
 	defer r.agentRegistryMu.Unlock()
 	if err := ctx.Err(); err != nil {

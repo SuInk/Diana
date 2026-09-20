@@ -543,6 +543,9 @@ export interface BotGroupConfig {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群对 MCP / Skill 的覆盖：档位（off/owner/admins/members，留空跟随机器人）加白名单、黑名单。
+   *  判定顺序是停用 > 黑名单 > 白名单 > 档位。 */
+  extension_access?: Record<string, { tier?: string; allow?: string[]; deny?: string[] }>;
   plugin_overrides?: Record<string, boolean>;
   /** 按插件、按字段保存的群级非密钥设置覆盖；缺失字段沿用全局。 */
   plugin_setting_overrides?: Record<string, Record<string, unknown>>;
@@ -1325,7 +1328,7 @@ export function listPlugins(profile = ""): Promise<PluginState[]> {
   return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
-export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; transport?: string; tools?: string[]; error?: string }
+export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; error?: string }
 export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
   return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
 }
