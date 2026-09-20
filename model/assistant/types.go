@@ -630,6 +630,11 @@ type BotConfig struct {
 	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
 	// 升级后突然发生。
 	RomanceEnabled *bool `json:"romance_enabled,omitempty"`
+	// LLMCapabilityProbeEnabled 让后台在空闲时定期探测这台机器人绑着的模型收不
+	// 收「强制调用指定工具」，把结论提前学好，真实对话就不用先撞一次 400。默认
+	// 关闭：探测是会计费的真实调用，花不花这个钱该由部署者决定。关着也不影响
+	// 正确性，请求路径上的降级会在撞到时自己学一次。
+	LLMCapabilityProbeEnabled *bool `json:"llm_capability_probe_enabled,omitempty"`
 	// MoodEnabled 让机器人有随相处涨落、随时间回落的心情，只影响语气。
 	// 默认关闭：可感知的行为变化不该在升级后突然发生。
 	MoodEnabled *bool `json:"mood_enabled,omitempty"`
@@ -975,6 +980,7 @@ type ConfigPayload struct {
 	CrossPlatformMemoryEnabled      *bool                     `json:"cross_platform_memory_enabled,omitempty"`
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
 	RomanceEnabled                  *bool                     `json:"romance_enabled,omitempty"`
+	LLMCapabilityProbeEnabled       *bool                     `json:"llm_capability_probe_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
 	ExpressionLearningEnabled       *bool                     `json:"expression_learning_enabled,omitempty"`
@@ -1519,6 +1525,7 @@ func DefaultBotConfig() BotConfig {
 		CrossPlatformMemoryEnabled:  boolPointer(false),
 		WorldBookEnabled:            boolPointer(true),
 		RomanceEnabled:              boolPointer(false),
+		LLMCapabilityProbeEnabled:   boolPointer(false),
 		MoodEnabled:                 boolPointer(false),
 		PokeReplyEnabled:            boolPointer(false),
 		ExpressionLearningEnabled:   boolPointer(false),
@@ -1776,6 +1783,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.RomanceEnabled == nil {
 		cfg.RomanceEnabled = boolPointer(false)
+	}
+	if cfg.LLMCapabilityProbeEnabled == nil {
+		cfg.LLMCapabilityProbeEnabled = boolPointer(false)
 	}
 	if cfg.MoodEnabled == nil {
 		cfg.MoodEnabled = boolPointer(false)
@@ -2115,6 +2125,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
+		LLMCapabilityProbeEnabled:         copyBoolPointer(cfg.LLMCapabilityProbeEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
 		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
@@ -2319,6 +2330,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
+		LLMCapabilityProbeEnabled:       copyBoolPointer(payload.LLMCapabilityProbeEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
 		ExpressionLearningEnabled:       copyBoolPointer(payload.ExpressionLearningEnabled),

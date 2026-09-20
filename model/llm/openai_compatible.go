@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -35,9 +34,6 @@ type openAICompatibleClient struct {
 	client          openai.Client
 	httpClient      *http.Client
 	imageHTTPClient *http.Client
-	// strictUnsupported 记住这个端点拒绝过严格模式，之后直接按普通 schema 发，
-	// 降级的代价是每个 client 一次请求，不是每轮一次。
-	strictUnsupported atomic.Bool
 }
 
 // newOpenAICompatibleClient 创建 OpenAI-compatible provider 客户端。
@@ -83,15 +79,21 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
-	if c.strictUnsupported.Load() {
-		req = withoutStrictTools(req)
-	}
+	req = c.withRememberedDowngrades(req)
 	response, err := c.generateForAPIFormat(ctx, req)
-	if err != nil && requestHasStrictTools(req) && strictToolsRejected(err) {
-		// 不是每个 OpenAI 兼容网关都实现了严格模式。降级重发一次，而不是让整
-		// 轮对话失败。
-		c.strictUnsupported.Store(true)
-		response, err = c.generateForAPIFormat(ctx, withoutStrictTools(req))
+	// 兼容网关对严格 schema、强制工具这类字段支持不一。被拒时摘掉字段重发，而
+	// 不是让整轮对话失败；每个字段最多摘一次。
+	applied := map[string]bool{}
+	for err != nil {
+		stripped, ok := downgradeFor(req, err, applied)
+		if !ok {
+			break
+		}
+		req = stripped
+		response, err = c.generateForAPIFormat(ctx, req)
+	}
+	if err == nil {
+		c.rememberSuccessfulDowngrades(req, applied)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
@@ -152,10 +154,8 @@ func (c *openAICompatibleClient) stream(ctx context.Context, req GenerateRequest
 
 func (c *openAICompatibleClient) streamResponses(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
 	req = req.withDefaults(c.cfg)
-	if c.strictUnsupported.Load() {
-		// 流式无法透明重试，因此沿用非流式已经学到的降级结论。
-		req = withoutStrictTools(req)
-	}
+	// 流式无法透明重试，因此沿用非流式已经学到的降级结论。
+	req = c.withRememberedDowngrades(req)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
@@ -2288,16 +2288,6 @@ type openAIRequestError struct {
 
 func (e *openAIRequestError) Error() string {
 	return "llm: openai-compatible request failed: " + e.detail
-}
-
-// strictToolsRejected 判断这次失败是否可能是网关拒绝严格模式。各家网关只会报成
-// 普通的 schema 校验错误，文案无法可靠匹配，因此按状态码判定；降级只发生一次。
-func strictToolsRejected(err error) bool {
-	var status *openAIRequestError
-	if !errors.As(err, &status) {
-		return false
-	}
-	return status.statusCode == http.StatusBadRequest || status.statusCode == http.StatusUnprocessableEntity
 }
 
 func openAICompatibleError(err error, capture *openAIErrorCapture) error {

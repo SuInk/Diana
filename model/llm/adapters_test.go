@@ -1743,3 +1743,255 @@ func TestDeferredExecuteEnvelopeRoundTripsAcrossProviders(t *testing.T) {
 		}
 	}
 }
+
+// 思考模式的模型（deepseek-reasoner 一类）只接受 tool_choice=auto，强制指定收尾
+// 工具会被 400 拒掉。降级重发一次，并记住这个端点。
+func TestOpenAICompatibleRetriesOnceWhenGatewayRejectsForcedToolChoice(t *testing.T) {
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		requests = append(requests, body)
+		w.Header().Set("Content-Type", "application/json")
+		if body["tool_choice"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Thinking mode does not support this tool_choice","type":"invalid_request_error","code":"invalid_request_error"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chat_test","model":"test","choices":[{"message":{"role":"assistant","content":"降级后仍然可用"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":4,"total_tokens":13}}`))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider:  ProviderOpenAICompatible,
+		APIKey:    "test-key",
+		BaseURL:   server.URL + "/v1",
+		APIFormat: APIFormatChatCompletions,
+		Model:     "test",
+	}, server.Client())
+	request := GenerateRequest{
+		Messages:   []Message{{Role: RoleUser, Content: "hi"}},
+		ToolChoice: "agent_finalize",
+		Tools: []ToolDefinition{{
+			Name:       "agent_finalize",
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{"content": map[string]any{"type": "string"}}},
+		}},
+	}
+	resp, err := client.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "降级后仍然可用" || len(requests) != 2 {
+		t.Fatalf("response=%#v requests=%d", resp, len(requests))
+	}
+	if requests[1]["tool_choice"] != nil {
+		t.Fatalf("tool_choice was not dropped on retry: %#v", requests[1]["tool_choice"])
+	}
+	if tools, _ := requests[1]["tools"].([]any); len(tools) != 1 {
+		t.Fatalf("tools were dropped along with tool_choice: %#v", requests[1]["tools"])
+	}
+
+	if _, err := client.Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 || requests[2]["tool_choice"] != nil {
+		t.Fatalf("the tool_choice downgrade was not remembered: requests=%d", len(requests))
+	}
+}
+
+// 普通的 400 不该被当成 tool_choice 被拒，否则会白白多发一次请求。
+func TestOpenAICompatibleKeepsForcedToolChoiceOnUnrelatedBadRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"context length exceeded","type":"invalid_request_error"}}`))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider:  ProviderOpenAICompatible,
+		APIKey:    "test-key",
+		BaseURL:   server.URL + "/v1",
+		APIFormat: APIFormatChatCompletions,
+		Model:     "test",
+	}, server.Client())
+	_, err := client.Generate(context.Background(), GenerateRequest{
+		Messages:   []Message{{Role: RoleUser, Content: "hi"}},
+		ToolChoice: "agent_finalize",
+		Tools:      []ToolDefinition{{Name: "agent_finalize", Parameters: map[string]any{"type": "object"}}},
+	})
+	if err == nil {
+		t.Fatal("Generate error = nil, want the upstream 400")
+	}
+	if requests != 1 {
+		t.Fatalf("requests=%d, want no tool_choice downgrade", requests)
+	}
+}
+
+// 被拒的字段不止一个时，梯子按顺序逐个摘掉，每个字段只摘一次：N 个被拒字段
+// 最多 N 次重试，不会重发没变过的请求，也不会绕圈。
+func TestOpenAICompatibleChainsParameterDowngrades(t *testing.T) {
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		requests = append(requests, body)
+		w.Header().Set("Content-Type", "application/json")
+		if body["tool_choice"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Thinking mode does not support this tool_choice","type":"invalid_request_error"}}`))
+			return
+		}
+		tools, _ := body["tools"].([]any)
+		first, _ := tools[0].(map[string]any)
+		function, _ := first["function"].(map[string]any)
+		if function["strict"] == true {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Invalid schema: strict is not supported","type":"invalid_request_error"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chat_test","model":"test","choices":[{"message":{"role":"assistant","content":"两级降级后仍然可用"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{
+		Provider:  ProviderOpenAICompatible,
+		APIKey:    "test-key",
+		BaseURL:   server.URL + "/v1",
+		APIFormat: APIFormatChatCompletions,
+		Model:     "test",
+	}, server.Client())
+	request := GenerateRequest{
+		Messages:   []Message{{Role: RoleUser, Content: "hi"}},
+		ToolChoice: "agent_finalize",
+		Tools: []ToolDefinition{{
+			Name:       "agent_finalize",
+			Strict:     true,
+			Parameters: map[string]any{"type": "object", "properties": map[string]any{"content": map[string]any{"type": "string"}}, "additionalProperties": false},
+		}},
+	}
+	resp, err := client.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "两级降级后仍然可用" || len(requests) != 3 {
+		t.Fatalf("response=%#v requests=%d, want one retry per rejected field", resp, len(requests))
+	}
+
+	// 两条结论都被记住了，下一轮一次就过。
+	if _, err := client.Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 4 {
+		t.Fatalf("the downgrades were not remembered: requests=%d", len(requests))
+	}
+}
+
+// 每回复一条消息都会新建一遍 client，所以降级结论必须记在进程级：同一端点同一
+// 模型的下一个 client 直接按降级后的请求发，不再重复吃 400；换个模型则重新学。
+func TestParameterDowngradeIsRememberedAcrossClients(t *testing.T) {
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		requests = append(requests, body)
+		w.Header().Set("Content-Type", "application/json")
+		if body["tool_choice"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Thinking mode does not support this tool_choice","type":"invalid_request_error"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chat_test","model":"test","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	cfg := ProviderConfig{
+		Provider:  ProviderOpenAICompatible,
+		APIKey:    "test-key",
+		BaseURL:   server.URL + "/v1",
+		APIFormat: APIFormatChatCompletions,
+		Model:     "thinking-model",
+	}
+	request := GenerateRequest{
+		Messages:   []Message{{Role: RoleUser, Content: "hi"}},
+		ToolChoice: "agent_finalize",
+		Tools:      []ToolDefinition{{Name: "agent_finalize", Parameters: map[string]any{"type": "object"}}},
+	}
+	if _, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests=%d, want the rejected attempt plus the downgraded retry", len(requests))
+	}
+
+	// 新 client，同一端点同一模型：一次就过。
+	if _, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 || requests[2]["tool_choice"] != nil {
+		t.Fatalf("a fresh client paid for the rejection again: requests=%d", len(requests))
+	}
+
+	// 同端点的另一个模型不继承结论：限制是模型级的。
+	otherModel := cfg
+	otherModel.Model = "chat-model"
+	if _, err := newOpenAICompatibleClient(otherModel, server.Client()).Generate(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 5 || requests[3]["tool_choice"] == nil {
+		t.Fatalf("another model inherited the downgrade: requests=%d", len(requests))
+	}
+}
+
+// 严格模式那条只能按状态码判定，会把无关的 400 也认领走。结论要等降级真的救回
+// 请求之后才记住，否则一次上下文超限就会把这个端点的严格模式永久停掉。
+func TestFailedDowngradeIsNotRemembered(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"context length exceeded","type":"invalid_request_error"}}`))
+	}))
+	defer server.Close()
+
+	cfg := ProviderConfig{
+		Provider:  ProviderOpenAICompatible,
+		APIKey:    "test-key",
+		BaseURL:   server.URL + "/v1",
+		APIFormat: APIFormatChatCompletions,
+		Model:     "test",
+	}
+	request := GenerateRequest{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools: []ToolDefinition{{
+			Name:       "agent_finalize",
+			Strict:     true,
+			Parameters: map[string]any{"type": "object", "additionalProperties": false},
+		}},
+	}
+	// 第一次：被无关的 400 拖着摘了一次 strict，重试仍然失败。
+	if _, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), request); err == nil {
+		t.Fatal("Generate error = nil, want the upstream 400")
+	}
+	if requests != 2 {
+		t.Fatalf("requests=%d, want the original attempt plus one downgraded retry", requests)
+	}
+
+	// 降级没救回来，所以什么都不该记住：下一个 client 仍然按严格模式发。
+	requests = 0
+	if _, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), request); err == nil {
+		t.Fatal("Generate error = nil, want the upstream 400")
+	}
+	if requests != 2 {
+		t.Fatalf("a failed downgrade was remembered: requests=%d", requests)
+	}
+}
