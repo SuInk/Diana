@@ -24,25 +24,26 @@ const (
 	// RepositoryPublishPluginID is shared with authenticated WebUI actions.
 	RepositoryPublishPluginID = repositoryPublishPluginID
 
-	repositoryPublishSettingToken         = "github_token"
-	repositoryPublishSettingAuthMode      = "github_auth_mode"
-	repositoryPublishSettingAllowlist     = "allowed_repositories"
-	repositoryPublishSettingUserAccess    = "user_repository_access"
-	repositoryPublishSettingGroupAccess   = "group_repository_access"
-	repositoryPublishSettingDraftUsers    = "issue_draft_user_access"
-	repositoryPublishSettingDraftGroups   = "issue_draft_group_access"
-	repositoryPublishSettingManagerUsers  = "issue_manager_user_access"
-	repositoryPublishSettingManagerGroups = "issue_manager_group_access"
-	repositoryPublishSettingCodeUsers     = "code_reader_user_access"
-	repositoryPublishSettingUserTokens    = "user_github_tokens"
-	repositoryPublishSettingTokenUsers    = "user_github_token_users"
-	repositoryPublishSettingUserAuth      = "user_github_auth_modes"
-	repositoryPublishSettingTimeout       = "timeout_seconds"
-	defaultRepositoryPublishTimeoutSecs   = 20
-	repositoryPublishAuthToken            = "token"
-	repositoryPublishAuthGH               = "gh"
-	repositoryPublishAuthAuto             = "auto"
-	repositoryPublishUserAuthInherit      = "inherit"
+	repositoryPublishSettingToken          = "github_token"
+	repositoryPublishSettingAuthMode       = "github_auth_mode"
+	repositoryPublishSettingAllowlist      = "allowed_repositories"
+	repositoryPublishSettingUserAccess     = "user_repository_access"
+	repositoryPublishSettingGroupAccess    = "group_repository_access"
+	repositoryPublishSettingDraftUsers     = "issue_draft_user_access"
+	repositoryPublishSettingDraftGroups    = "issue_draft_group_access"
+	repositoryPublishSettingManagerUsers   = "issue_manager_user_access"
+	repositoryPublishSettingManagerGroups  = "issue_manager_group_access"
+	repositoryPublishSettingApproverGroups = "issue_approver_group_access"
+	repositoryPublishSettingCodeUsers      = "code_reader_user_access"
+	repositoryPublishSettingUserTokens     = "user_github_tokens"
+	repositoryPublishSettingTokenUsers     = "user_github_token_users"
+	repositoryPublishSettingUserAuth       = "user_github_auth_modes"
+	repositoryPublishSettingTimeout        = "timeout_seconds"
+	defaultRepositoryPublishTimeoutSecs    = 20
+	repositoryPublishAuthToken             = "token"
+	repositoryPublishAuthGH                = "gh"
+	repositoryPublishAuthAuto              = "auto"
+	repositoryPublishUserAuthInherit       = "inherit"
 )
 
 var (
@@ -423,7 +424,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "GitHub Issue 与 PR",
-		Version:     "0.6.3",
+		Version:     "0.7.0",
 		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。read_file 读取仓库文件：公开仓库全员可查，私有仓库仅主人与授权用户可读。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。",
 		Official:    true,
 		BuiltIn:     true,
@@ -459,7 +460,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryPublishSettingUserAccess,
 				Label:       "用户仓库授权",
-				Description: "允许特定用户审批和操作特定仓库；每个用户使用自己的 GitHub Token。",
+				Description: "允许特定用户在私聊里审批和操作特定仓库；每个用户使用自己的 GitHub Token。群聊用“群聊草稿范围”那项。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
@@ -473,7 +474,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key: repositoryPublishSettingDraftUsers, Label: "Issue 草稿提交者（按用户）",
-				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以提交草稿，但不能直接写入 Issue。授权跟着人走，私聊和群聊都生效。",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户在**私聊**里可以提交草稿，但不能直接写入 Issue。只在私聊生效——要放开群聊用“按群”那项。",
 				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
@@ -485,9 +486,9 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key: repositoryPublishSettingManagerUsers, Label: "Issue 管理人员（按用户）",
-				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户可以直接创建和管理 Issue。授权跟着人走：私聊里直接生效，" +
-					"群聊里还要求该群自己也被授权了这个仓库（见下面两项按群授权），否则会被拒绝并提示——按用户的授权不会带进无关的群。" +
-					"在已授权的群里，这些用户不受按群授权的身份要求限制：想让某个不是群管理员的群友能操作，填他的用户 ID 即可。",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户在私聊里可以直接创建和管理 Issue。" +
+					"只在私聊生效——群聊里的权限一律由下面两项“按群”授权决定（那两项还能按群身份收窄），个人授权不会带进群。" +
+					"想让某个群友能拍板推动本群草稿，用“群聊草稿审批人（按群）”。",
 				Type: PluginSettingTypeString, Default: "",
 			},
 			{
@@ -499,8 +500,14 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Type: PluginSettingTypeString, Default: "",
 			},
 			{
+				Key: repositoryPublishSettingApproverGroups, Label: "群聊草稿审批人（按群）",
+				Description: "按“群 ID = 用户 ID, 用户 ID”填写；这些人可以在该群里审批或取消本群提交的 Issue 草稿，但不能绕过草稿直接写入。" +
+					"群里谁能拍板由群自己定，不靠个人把私聊里的权限带进来；留空则该群的草稿只有机器人主人能批。",
+				Type: PluginSettingTypeString, Default: "",
+			},
+			{
 				Key: repositoryPublishSettingCodeUsers, Label: "私有仓库源码读取授权（按用户）",
-				Description: "按“用户 ID = owner/repo, owner/repo”填写；公开仓库默认全员可查，私有仓库仅主人与这里授权的用户（以及 Issue 管理人员、用户仓库授权名单）可以读取代码。授权跟着人走，私聊和群聊都生效。",
+				Description: "按“用户 ID = owner/repo, owner/repo”填写；公开仓库默认全员可查，私有仓库仅主人与这里授权的用户（以及 Issue 管理人员、用户仓库授权名单）可以读取代码。只在私聊生效——群聊里除主人外读不到私有仓库源码。",
 				Type:        PluginSettingTypeString, Default: "",
 			},
 			{
