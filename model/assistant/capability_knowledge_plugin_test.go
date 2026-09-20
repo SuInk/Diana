@@ -75,7 +75,7 @@ func TestImageCapabilityRequiresFamiliarRelationship(t *testing.T) {
 		if document.ID != "core:image" {
 			continue
 		}
-		if document.Required != relationshipImageTierName || !strings.Contains(document.Content, "熟悉等级可生成和编辑图片") {
+		if document.Required != "熟悉" || !strings.Contains(document.Content, "熟悉等级可生成和编辑图片") {
 			t.Fatalf("image capability = %#v", document)
 		}
 		return

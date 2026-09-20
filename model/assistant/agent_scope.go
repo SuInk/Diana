@@ -65,6 +65,9 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		registry.Register(&dianaBotMarkersTool{runtime: r, event: event})
 		registry.Register(newDianaExtensionAccessTool(r, event))
 	}
+	// 所有人都要能用：它的用途就是核实「我是主人」这类声称，只给主人用等于没用。
+	// 它只读运行时判定、不改任何状态，对非主人开放没有额外风险。
+	registry.Register(&dianaIdentityCheckTool{runtime: r, event: event})
 	for _, tool := range extraTools {
 		registry.Register(tool)
 	}

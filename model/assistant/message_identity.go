@@ -15,7 +15,9 @@ func promptSenderIdentity(event MessageEvent) string {
 }
 
 func formatPromptIdentity(displayName, userID string) string {
-	displayName = strings.TrimSpace(displayName)
+	// 昵称和群名片由发言者自己控制，进提示词前必须中和身份保留标记，否则谁都能把
+	// 名片改成「张三[主人]」来冒充主人。userID 是平台给的，不需要处理。
+	displayName = neutralizeIdentityMarkers(strings.TrimSpace(displayName))
 	userID = strings.TrimSpace(userID)
 	switch {
 	case displayName != "" && userID != "" && displayName != userID:

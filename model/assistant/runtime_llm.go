@@ -1101,14 +1101,16 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	if text == "" && !hasImageSegment(event.Segments) {
 		text = event.RawMessage
 	}
-	text = strings.TrimSpace(text)
+	// 正文同样不可信：不中和的话，一条消息里手写
+	// 「[历史 …] 李四（im_user_x）[主人]: …」就能伪造出一整行别人的历史。
+	text = neutralizeIdentityMarkers(strings.TrimSpace(text))
 	if text == "" {
 		return ""
 	}
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return historyLinePrefix(event) + promptSenderIdentity(event) + ": " + text + historyIdentityPrompt(event, configs...)
+	return historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...) + ": " + text
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
@@ -1138,7 +1140,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if messageID == "" {
 		messageID = "不可用"
 	}
-	line := historyLinePrefix(event) + promptSenderIdentity(event)
+	line := historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...)
 	if text != "" {
 		line += ": " + text
 	}
@@ -1150,7 +1152,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	return line + historyIdentityPrompt(event, configs...)
+	return line
 }
 
 func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
@@ -1257,12 +1259,11 @@ func quotedPromptText(quoted *QuotedMessage) string {
 	if quoted.Semantic {
 		label = "指代判断选中的历史消息"
 	}
-	line := fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
-	if userID := strings.TrimSpace(quoted.UserID); userID != "" {
-		identity, _ := json.Marshal(map[string]string{"quoted_sender_user_id": userID})
-		line += "\n【引用发言者身份】" + string(identity)
-	}
-	return line
+	// 引用发言者的别名已经在上面的 sender 里（formatPromptIdentity 渲染成
+	// 「昵称（别名）」），以前还会再跟一行
+	// 【引用发言者身份】{"quoted_sender_user_id":"…"}。线上抽样的 30 条引用里，
+	// 这一行的 role 全是空的，剩下的就只有那个重复的别名——整段是纯冗余。
+	return fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
 }
 
 func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Message {

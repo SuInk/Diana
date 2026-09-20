@@ -82,6 +82,11 @@ type MemoryCandidate struct {
 	Visibility    MemoryVisibility      `json:"visibility"`
 	Sensitive     bool                  `json:"sensitive"`
 	RetentionDays int                   `json:"retention_days,omitempty"`
+	// SourceIndex 指向 current_batch 里的下标：攒批门控时一次调用覆盖多条消息，
+	// 候选要能各自回指到真正支撑它的那条，出处和时间才不会张冠李戴。
+	// 用指针是为了区分「模型没标」和「模型标了 0」：前者归到最新那条，后者是
+	// 真的指向批次里第一条。
+	SourceIndex *int `json:"source_index,omitempty"`
 }
 
 // StructuredMemoryItem is a derived view over immutable message events.
@@ -190,6 +195,12 @@ type StructuredMemoryStore interface {
 	ReleaseMemoryJobLeases(ctx context.Context, leaseOwner string) error
 	ApplyMemoryCandidates(ctx context.Context, request MemoryWriteRequest) ([]StructuredMemoryItem, error)
 	ListStructuredMemories(ctx context.Context, query StructuredMemoryQuery) ([]StructuredMemoryItem, error)
+}
+
+// MemoryJobBatchClaimer 是可选能力：一次领走同一会话、同一发言者的多条事件任务，
+// 交给一次记忆门控调用处理。存储没实现它时退回一条一条领，行为不变。
+type MemoryJobBatchClaimer interface {
+	ClaimMemoryJobBatch(ctx context.Context, leaseOwner string, leaseUntil time.Time, max int) ([]MemoryJob, error)
 }
 
 // StructuredMemoryTouchStore 是可选能力：把「这条记忆刚刚被检索命中」写回去。

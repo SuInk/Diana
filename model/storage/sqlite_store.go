@@ -55,6 +55,27 @@ type SQLiteStore struct {
 	historyVectors bool
 	userMemoryMu   sync.Mutex
 	retryMu        sync.Mutex
+	// memoryEventJobDelay 覆盖事件记忆任务的攒批窗口，nil 表示沿用默认值。
+	memoryEventJobDelay *time.Duration
+}
+
+// SetMemoryEventJobDelay 覆盖事件记忆任务入队后的等待时间。0 表示入队即可领取，
+// 测试用它去掉攒批窗口。只在启动时或测试里设置一次。
+func (s *SQLiteStore) SetMemoryEventJobDelay(delay time.Duration) {
+	if s == nil {
+		return
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	s.memoryEventJobDelay = &delay
+}
+
+func (s *SQLiteStore) memoryEventDelay() time.Duration {
+	if s == nil || s.memoryEventJobDelay == nil {
+		return assistant.MemoryEventJobDelay
+	}
+	return *s.memoryEventJobDelay
 }
 
 // NewSQLiteStore 打开 SQLite 数据库并执行迁移。

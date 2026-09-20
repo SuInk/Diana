@@ -772,13 +772,22 @@ func TestRuntimeAddsUserMemoryContextToLLMPrompt(t *testing.T) {
 	}
 	var memoryPrompt string
 	for _, message := range provider.request.Messages {
-		if strings.Contains(message.Content, "好感度：16") {
+		if strings.Contains(message.Content, "【当前发言者长期记忆，仅用于理解语气和关系") {
 			memoryPrompt = message.Content
 			break
 		}
 	}
-	if !strings.Contains(memoryPrompt, "好感度：16") || !strings.Contains(memoryPrompt, "关系等级：") {
+	if !strings.Contains(memoryPrompt, "Alice") {
 		t.Fatalf("memory prompt = %q", memoryPrompt)
+	}
+	// 好感度数值不再写进这一段：它每轮都会变，摆在长期记忆里会推动后面的内容、
+	// 切断前缀缓存。整轮里仍然要出现一次，由系统尾部的
+	// relationshipPermissionContext 给出。
+	if strings.Contains(memoryPrompt, "当前好感度：") {
+		t.Fatalf("favorability leaked into memory block: %q", memoryPrompt)
+	}
+	if !requestMessagesContain(provider.request.Messages, "当前好感度：16") {
+		t.Fatalf("favorability missing from prompt: %#v", provider.request.Messages)
 	}
 	// 原始发言缓冲不再进提示词：它和最近历史逐条重复，真正的长期记忆走结构化
 	// 记忆检索。
@@ -792,7 +801,7 @@ func TestRuntimeAddsUserMemoryContextToLLMPrompt(t *testing.T) {
 		t.Fatalf("current priority = %d", provider.request.Messages[len(provider.request.Messages)-1].Priority)
 	}
 	for _, message := range provider.request.Messages {
-		if strings.Contains(message.Content, "好感度：16") && message.Priority != llm.MessagePriorityMemory {
+		if strings.Contains(message.Content, "【当前发言者长期记忆，仅用于理解语气和关系") && message.Priority != llm.MessagePriorityMemory {
 			t.Fatalf("memory priority = %d", message.Priority)
 		}
 	}
@@ -3264,12 +3273,12 @@ func TestSystemPromptHeadIsStableAcrossSpeakers(t *testing.T) {
 	if ownerTail == memberTail {
 		t.Fatalf("speaker tail should differ between owner and member: %q", ownerTail)
 	}
-	for _, want := range []string{"主人", promptOwnerRelationshipTarget, "关系等级："} {
+	for _, want := range []string{"主人", promptOwnerRelationshipTarget, "当前好感度："} {
 		if !strings.Contains(ownerTail, want) {
 			t.Fatalf("owner tail missing %q: %q", want, ownerTail)
 		}
 	}
-	for _, leaked := range []string{"关系等级：", "路人"} {
+	for _, leaked := range []string{"当前好感度：", "路人"} {
 		if strings.Contains(memberHead, leaked) {
 			t.Fatalf("head must not carry speaker-specific text %q: %q", leaked, memberHead)
 		}
@@ -3343,7 +3352,7 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		if strings.HasPrefix(message.Content, "[历史 ") {
 			historyIndex = index
 		}
-		if message.Role == llm.RoleSystem && strings.Contains(message.Content, "关系等级：") {
+		if message.Role == llm.RoleSystem && strings.Contains(message.Content, "当前好感度：") {
 			tailIndex = index
 		}
 	}
@@ -5093,6 +5102,7 @@ type capturingLLMProvider struct {
 	mu      sync.Mutex
 	reply   string
 	request llm.GenerateRequest
+	calls   int
 }
 
 // Generate 记录请求并返回固定回复。
@@ -5104,6 +5114,7 @@ func (p *capturingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 	}
 	p.mu.Lock()
 	p.request = cloneGenerateRequestForTest(req)
+	p.calls++
 	p.mu.Unlock()
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
 }

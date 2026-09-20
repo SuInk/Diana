@@ -86,10 +86,6 @@ func (t *dianaReminderTool) Run(ctx context.Context, input map[string]any) (stri
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana reminder: runtime is not configured")
 	}
-	policy := t.runtime.relationshipPolicy(ctx, t.event)
-	if !policy.AllowPersonalSchedule {
-		return "", fmt.Errorf("好感度不足：当前关系等级为“%s”，尚未解锁个人提醒", policy.Name)
-	}
 	targetID, err := taskTargetUserID(ctx, t.runtime, t.event, input)
 	if err != nil {
 		return "", err
@@ -316,9 +312,6 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 	}
 	policy := r.relationshipPolicy(context.Background(), event)
 	limit := policy.personalScheduleLimit()
-	if limit == 0 {
-		return nil, nil, fmt.Errorf("当前关系等级为“%s”，没有个人提醒权限", policy.Name)
-	}
 
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
@@ -331,7 +324,7 @@ func (r *Runtime) addOneTimeReminders(event MessageEvent, requests []reminderCre
 	}
 	remaining := limit - count
 	if remaining <= 0 {
-		return nil, nil, fmt.Errorf("当前关系等级最多创建 %d 个一次性提醒，额度已满", limit)
+		return nil, nil, fmt.Errorf("当前最多可创建 %d 个一次性提醒，额度已满", limit)
 	}
 	if len(requests) > remaining {
 		requests = requests[:remaining]

@@ -2324,6 +2324,15 @@ export function saveAssistantUser(profile: UserMemoryProfile, remove = false): P
   });
 }
 
+/** 清空一个人的结构化长期记忆；给 memoryID 就只删那一条。profile 必须显式指定。 */
+export function clearAssistantUserMemories(userID: string, profile: string, memoryID = ""): Promise<{ ok: boolean; cleared: number }> {
+  const suffix = memoryID ? `/${encodeURIComponent(memoryID)}` : "";
+  return requestJSON(
+    `/api/assistant/users/${encodeURIComponent(userID)}/memories${suffix}?profile=${encodeURIComponent(profile)}`,
+    { method: "DELETE" }
+  );
+}
+
 export function deleteBotGroup(groupID: string, profile = ""): Promise<{ ok: boolean }> {
   return requestJSON(`/api/assistant/groups/${encodeURIComponent(groupID)}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" });
 }
