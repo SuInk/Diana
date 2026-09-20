@@ -637,7 +637,7 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 			loopVerdict("0.96", "延续相同助手人格"),
 			loopVerdict("0.98", "继续自动回应机器人"),
 		},
-		replies: []string{`为避免机器人互相循环，已暂停响应此账号约 30 分钟，期间不再接续消息。`},
+		replies: []string{`那我先去忙点别的啦，晚点再聊喵`},
 	}
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -669,26 +669,36 @@ func TestBotReplyLoopSuppressesAfterThirdMeaninglessReply(t *testing.T) {
 	if !strings.Contains(item.Reason, "累计 3 次高置信度空转") {
 		t.Fatalf("suppression reason = %q", item.Reason)
 	}
-	// 只有三次审核：空转判断没有单独占用调用，是跟着发送前审核走的；暂停也不再通报。
-	if len(provider.requests) != botReplyLoopThreshold {
-		t.Fatalf("LLM requests = %d, want %d audits and no notice", len(provider.requests), botReplyLoopThreshold)
+	// 三次审核加一次收声提示：空转判断没有单独占用调用，是跟着发送前审核走的；
+	// 多出来的那一次是暂停生效后那句人设提示。
+	if len(provider.requests) != botReplyLoopThreshold+1 {
+		t.Fatalf("LLM requests = %d, want %d audits and one pause hint", len(provider.requests), botReplyLoopThreshold+1)
 	}
 	// 审核请求里必须同时有待发回复和判断空转要用的近期上下文。
 	first := requestTextContent(provider.requests[0])
 	if !strings.Contains(first, `"candidate_reply":"好的，我在的"`) || !strings.Contains(first, "recent_bot_replies") {
 		t.Fatalf("audit payload missing the reply or loop evidence: %q", first)
 	}
-	// 暂停静默生效，一个字都不发。
-	if len(channel.sent) != 0 {
-		t.Fatalf("suppression notices = %#v", channel.sent)
+	// 暂停生效后提示一句，而且这句不能带任何后台词汇。
+	if len(channel.sent) != 1 {
+		t.Fatalf("suppression hints = %#v", channel.sent)
+	}
+	hint := channel.sent[0]
+	if hint.ReplyMessageID != "" || hint.MentionUserID != "" {
+		t.Fatalf("收声提示不该点名：%#v", hint)
+	}
+	for _, banned := range []string{"暂停", "响应", "账号", "循环", "分钟"} {
+		if strings.Contains(hint.Text, banned) {
+			t.Fatalf("收声提示漏出后台词汇 %q：%#v", banned, hint)
+		}
 	}
 	// 暂停已经生效，下一条进来时由本地状态直接拦掉，不再走模型。
 	handled, outcome := prepareBotReplyLoopRound(t, runtime, "ai-loop", "20002", 3, time.Now(), time.Minute, "收到，我继续待命")
 	if handled || outcome != "ignored_response_suppression" {
 		t.Fatalf("suppressed follow-up handled=%v outcome=%q", handled, outcome)
 	}
-	if len(channel.sent) != 0 {
-		t.Fatalf("suppression notice repeated: %#v", channel.sent)
+	if len(channel.sent) != 1 {
+		t.Fatalf("suppression hint repeated: %#v", channel.sent)
 	}
 }
 

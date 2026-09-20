@@ -3928,12 +3928,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply == "" {
 		if controlIntent.SuppressCurrentUser {
-			// 暂停不通报：模型只吐了个处置标志、没有正文时，以前会补一句「我会暂停
-			// 响应此账号约 30 分钟」再发出去。那句话本身也是一条发言，对着正在刷屏的
-			// 另一台机器人既停不住它，又给这段已经在空转的对话再添一条。现在什么都
-			// 不发——但暂停要在这里就地生效：后面的发送路径不会再走到，
-			// applyReplyControlAfterSend 也就没有机会执行。
-			r.applyReplyControlAfterSend(withReplySuppressionSendGuard(ctx), event, "", controlIntent)
+			// 模型只吐了个处置标志、没有正文。以前在这里补一句写死的「我会暂停响应
+			// 此账号约 30 分钟」发出去，那读起来是系统弹窗不是说话。改成：暂停就地
+			// 生效（后面的发送路径不会再走到，applyReplyControlAfterSend 没有机会
+			// 执行），再由 sendReplyPauseHint 用人设写一句自然的提示；写不出来就
+			// 不说，不退回模板。
+			guardedCtx := withReplySuppressionSendGuard(ctx)
+			r.applyReplyControlAfterSend(guardedCtx, event, "", controlIntent)
+			if item, active := r.activeReplySuppression(event, time.Now()); active {
+				r.sendReplyPauseHint(guardedCtx, event, item)
+			}
 			return "", errReplySuppressedBeforeSend
 		} else if controlIntent.RefuseCurrent {
 			reply = "这条消息我暂时不想回答，我们换个话题吧"

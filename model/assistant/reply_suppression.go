@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/llm"
 )
 
 const (
 	// 暂停时长在这个区间里随机取，不再固定三十分钟：固定值等于给对方一个精确的
 	// 时刻表，而且每次都一样的「恰好三十分钟」本身就很像机器。
+	replySuppressionNoticeTimeout     = 60 * time.Second
 	replySuppressionMinDuration       = 10 * time.Minute
 	replySuppressionMaxDuration       = 30 * time.Minute
 	replySuppressionMarker            = "[[DIANA_IGNORE_CURRENT_USER_30M]]"
@@ -684,10 +686,13 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 	if !ok {
 		return
 	}
-	// 不再发「短时间内已累计拒绝 N 次请求，现暂停响应此账号」那一句：暂停直接生效，
-	// 不通报。顺带修掉一处耦合——原先通知发失败就直接 return，暂停跟着一起不生效。
-	_ = item
+	// 暂停先生效，再提示。原先顺序反着：通知发失败就直接 return，暂停跟着一起不生效，
+	// 攒够了次数却还在继续回。提示发不出去不该影响暂停。
 	r.activateReplySuppressionWithinOutboundGate(event, reason, now)
+	hintBase := withReplySuppressionOutboundGateHeld(withReplySuppressionSendGuard(context.Background()))
+	hintCtx, cancel := context.WithTimeout(hintBase, replySuppressionNoticeTimeout)
+	defer cancel()
+	r.sendReplyPauseHint(hintCtx, event, item)
 }
 
 func (r *Runtime) persistReplySuppressionsLocked() error {
@@ -798,10 +803,120 @@ func formatReplySuppressionRemaining(remaining time.Duration) string {
 	return fmt.Sprintf("约 %d 分钟", minutes)
 }
 
-// 暂停不再向群里通报。以前会发一句「为避免机器人互相循环，已暂停响应此账号约 30
-// 分钟」，那句话本身也是一条发言：对着正在刷屏的另一台机器人，它既停不住对方，又
-// 给这段已经在空转的对话再添一条。人被晾着的时候不会先宣布自己要晾多久，直接不说
-// 话就是了。停多久也不再是固定的整三十分钟，见 randomReplySuppressionDuration。
+// 暂停时提示一句，但这句必须由人设生成，不能是写死的模板。
+//
+// 以前三处各有一条硬编码：「为避免机器人互相循环，已暂停响应此账号约 30 分钟，期间
+// 不再接续消息。」「短时间内已累计拒绝 N 次请求，现暂停响应此账号…」「为避免继续
+// 自动循环，我会暂停响应此账号约 30 分钟」。它们读起来像系统弹窗，而且把「账号」
+// 「响应」「暂停」这套后台词汇直接倒进群聊。现在统一走 generateReplyPauseHint，由主
+// 模型带人设写一句自然的话；写不出来就什么都不发——宁可不说，也不要退回模板。
+//
+// 提示里不说具体多久：时长本来就是 10 到 30 分钟之间随机的（见
+// randomReplySuppressionDuration），报一个精确数字既不准，也正是那股机器味的来源。
+func (r *Runtime) sendReplyPauseHint(ctx context.Context, event MessageEvent, item ReplySuppression) {
+	hint, err := r.generateReplyPauseHint(ctx, event)
+	if err != nil || hint == "" {
+		r.recordReplySuppressionNotice(event, item, false, err, nil)
+		return
+	}
+	msg := OutgoingMessage{Text: hint}
+	if event.Kind == EventKindGroup {
+		msg.GroupID = event.GroupID
+	} else {
+		msg.UserID = event.UserID
+	}
+	sendErr := r.sendOutgoing(ctx, event, msg)
+	r.recordReplySuppressionNotice(event, item, true, nil, sendErr)
+}
+
+func (r *Runtime) generateReplyPauseHint(ctx context.Context, event MessageEvent) (string, error) {
+	ctx = withLLMUsagePurpose(ctx, "reply_suppression_notice")
+	messages := r.withUserFacingPersona(event, []llm.Message{
+		{
+			Role: llm.RoleSystem,
+			Content: strings.TrimSpace(`用你自己的语气说一句话，告诉对方你接下来一段时间不接话了。
+要求：
+1. 就是随口提一句，像人要去忙别的了那样，不是系统通知。
+2. 不要说具体停多久，不要出现「暂停」「响应」「账号」「循环」「检测」这类词。
+3. 不要解释原因，不要责怪对方，不要说教。
+4. 只输出一句自然中文纯文本，不得使用 @、账号、昵称、引用、CQ 码、Markdown、表情或引号。
+5. 最多 30 个汉字。`),
+		},
+		{Role: llm.RoleUser, Content: "现在说这一句。"},
+	})
+	callCtx, cancel := context.WithTimeout(ctx, replySuppressionNoticeTimeout)
+	defer cancel()
+	raw, err := r.runLLMProvider(callCtx, func(client LLMProvider) (string, error) {
+		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
+		if err != nil {
+			return "", err
+		}
+		return resp.Text, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	hint := sanitizeReplyPauseHint(raw)
+	if hint == "" {
+		return "", fmt.Errorf("收声提示为空或含有不该出现的内容")
+	}
+	return hint, nil
+}
+
+// sanitizeReplyPauseHint 拦掉点名、账号和后台词汇：这句话要读起来像人随口说的，
+// 漏出「暂停响应此账号」里的任何一个词都会立刻把它打回系统通知。
+func sanitizeReplyPauseHint(raw string) string {
+	if strings.Contains(raw, "@") || strings.Contains(raw, "[CQ:") || replySuppressionAccountPattern.MatchString(raw) {
+		return ""
+	}
+	// 中文引号一起剥掉：提示词里写了不要加引号，模型照样常给「」括起来，留着就成了
+	// 一句被引述的话，不是它自己在说。
+	raw = strings.Trim(strings.TrimSpace(raw), "`\"' 「」“”‘’")
+	raw = PlainText(CQToSegments(raw))
+	raw = normalizeChatWhitespace(raw)
+	for _, banned := range []string{"暂停", "响应", "账号", "循环", "检测", "系统"} {
+		if strings.Contains(raw, banned) {
+			return ""
+		}
+	}
+	if len([]rune(raw)) > 30 {
+		return ""
+	}
+	return strings.TrimSpace(raw)
+}
+
+func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySuppression, llmGenerated bool, generationErr, sendErr error) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	action := "response_suppression_notice_sent"
+	message := "响应限制提示已发送"
+	kind := applog.KindOperation
+	level := applog.LevelInfo
+	detail := ""
+	if sendErr != nil {
+		action = "response_suppression_notice_failed"
+		message = "响应限制提示发送失败"
+		kind = applog.KindError
+		level = applog.LevelError
+		detail = sendErr.Error()
+	}
+	metadata := map[string]any{
+		"group_id": item.GroupID, "user_id": item.UserID, "until": item.Until,
+		"trigger_message_id": item.TriggerMessageID, "llm_generated": llmGenerated,
+	}
+	if generationErr != nil {
+		metadata["generation_error"] = generationErr.Error()
+	}
+	logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = writer.AppendLog(logCtx, applog.Entry{
+		Kind: kind, Level: level, Action: action, Message: message, Detail: detail,
+		Actor: oneBotEventActor(event), Target: item.UserID, Metadata: metadata,
+	})
+}
+
 func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppression, action, message string, operationErr error) {
 	writer := r.appLogWriter()
 	if writer == nil {
