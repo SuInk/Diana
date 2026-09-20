@@ -31,6 +31,10 @@ func privateAdmissionAllowsConfig(cfg BotConfig, event MessageEvent) bool {
 
 // HandleEvent 处理 OneBot 消息或通知事件。
 func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
+	if r.profileDisabled(event.ProfileID) {
+		// 停用的机器人一条都不处理：不记聊天记录、不进队列、不回。
+		return nil
+	}
 	event = r.bindInboundEventIdentity(event)
 	if event.Kind == EventKindRequest {
 		return r.handleOneBotRequest(ctx, event)

@@ -303,6 +303,9 @@ type Runtime struct {
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
 	profileConfigs   map[string]BotConfig
+	// disabledProfiles 是配置集里已停用的档案 ID。停用只把档案从通道 bindings 里
+	// 摘掉，共享连接本身可能还活着（别的档案在用它），入站这边要自己认一次。
+	disabledProfiles map[string]bool
 	// profileOrder 是配置集里机器人的顺序，列表和兜底都按它来，不依赖 map 的随机顺序。
 	profileOrder []string
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
@@ -583,7 +586,11 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
 	order := make([]string, 0, len(set.Profiles))
+	disabled := make(map[string]bool)
 	for _, profile := range set.Profiles {
+		if !profile.Enabled {
+			disabled[strings.TrimSpace(profile.ID)] = true
+		}
 		resolved, err := set.ResolveConnection(profile)
 		if err != nil {
 			continue
@@ -595,11 +602,24 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles
+	r.disabledProfiles = disabled
 	r.profileOrder = order
 	r.relayPairs = set.MessageRelays
 	r.updatedAt = time.Now()
 	r.mu.Unlock()
 	r.reconcileBridges()
+}
+
+// profileDisabled 报告事件所属档案是否已停用。这是入站侧的兜底：共享一条连接的
+// 档案里只要还有一个启用着，连接就不会断，停用档案的事件照样能从那条连接进来。
+func (r *Runtime) profileDisabled(profileID string) bool {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.disabledProfiles[profileID]
 }
 
 // SetAppLogWriter 注入运行时审计日志写入器。
