@@ -317,10 +317,12 @@ type Reminder struct {
 	WatchPullRequests        bool      `json:"watch_pull_requests,omitempty"`
 	// WatchPullRequestEvents / WatchIssueEvents：nil 是未配置的旧记录，按全选兼容；
 	// 非 nil 空数组表示明确全不选，因此 JSON 不能使用 omitempty。
-	WatchPullRequestEvents []string  `json:"watch_pull_request_events"`
-	WatchIssueEvents       []string  `json:"watch_issue_events"`
-	WatchIssues            bool      `json:"watch_issues,omitempty"`
-	WatchReleases          bool      `json:"watch_releases,omitempty"`
+	WatchPullRequestEvents []string `json:"watch_pull_request_events"`
+	WatchIssueEvents       []string `json:"watch_issue_events"`
+	WatchIssues            bool     `json:"watch_issues,omitempty"`
+	WatchReleases          bool     `json:"watch_releases,omitempty"`
+	// WatchReleaseKinds 同理：nil 是未配置的旧记录，按全选兼容，所以不能 omitempty。
+	WatchReleaseKinds      []string  `json:"watch_release_kinds"`
 	WatchStars             bool      `json:"watch_stars,omitempty"`
 	StarNotifyMode         string    `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold    int       `json:"star_notify_threshold,omitempty"`

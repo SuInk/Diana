@@ -2608,6 +2608,7 @@ export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "
 // 空数组表示「全部种类都要」——后端也是这么存的，别把空当成「一条都不要」。
 export type RepositoryWatchPullEvent = "opened" | "updated" | "closed" | "merged";
 export type RepositoryWatchIssueEvent = "opened" | "updated" | "closed" | "reopened";
+export type RepositoryWatchReleaseKind = "stable" | "prerelease";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -2638,6 +2639,7 @@ export interface AssistantTask {
   watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues?: boolean;
   watch_releases?: boolean;
+  watch_release_kinds?: RepositoryWatchReleaseKind[];
   watch_stars?: boolean;
   star_notify_mode?: "growth" | "milestone";
   star_notify_threshold?: number;
@@ -2681,6 +2683,7 @@ export interface RepositoryWatchInput {
   watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues: boolean;
   watch_releases: boolean;
+  watch_release_kinds?: RepositoryWatchReleaseKind[];
   watch_stars: boolean;
   star_notify_mode?: "growth" | "milestone";
   star_notify_threshold?: number;
