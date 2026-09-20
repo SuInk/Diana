@@ -1430,6 +1430,13 @@ export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: str
 export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
   return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
 }
+/** 内置的 MCP 接入模板：界面照着字段渲染表单，拼配置在服务端做。 */
+export interface MCPPresetField { key: string; label: string; placeholder?: string; hint?: string; required?: boolean; secret?: boolean }
+export interface MCPPresetTransport { id: string; label: string; hint?: string; fields: MCPPresetField[] }
+export interface MCPPreset { id: string; name: string; title: string; summary: string; docs_url?: string; transports: MCPPresetTransport[] }
+export function listMCPPresets(): Promise<{items: {preset: MCPPreset; installed: boolean}[]}> {
+  return requestJSON("/api/assistant/extensions", {method: "POST", body: JSON.stringify({operation: "presets", kind: "mcp"})});
+}
 export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown>): Promise<T> {
   return requestJSON<T>("/api/assistant/extensions", {method:"POST", body:JSON.stringify(input)});
 }
