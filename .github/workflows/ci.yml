@@ -400,7 +400,7 @@ jobs:
           tag_name: ${{ needs.build-version.outputs.value }}
           target_commitish: ${{ github.sha }}
           body_path: ${{ needs.build-version.outputs.canary == 'true' && 'release/NOTES.md' || '' }}
-          name: Diana ${{ needs.build-version.outputs.value }}
+          name: ${{ needs.build-version.outputs.value }}
           prerelease: ${{ needs.build-version.outputs.channel != 'release' }}
           make_latest: ${{ needs.build-version.outputs.channel == 'release' }}
           generate_release_notes: true
