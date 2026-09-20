@@ -51,9 +51,9 @@ func TestMemoryGateUsesMemoryProfileAndExistingKeys(t *testing.T) {
 		Time:       200,
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "我现在不吃辣了"}}},
 	}
-	err := runtime.processEventMemoryJob(context.Background(), memory, MemoryJobPayload{
+	err := runtime.processEventMemoryJobs(context.Background(), memory, []MemoryJobPayload{{
 		Kind: MemoryJobEvent, Session: "group:123", Event: event,
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestMemoryGateFetchesRelevantMemoriesBeforeImportantOnes(t *testing.T) {
 		Kind: EventKindGroup, GroupID: "123", UserID: "user", SenderName: "Alice", MessageID: "m9", Time: 300,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "我现在改吃甜的了，不爱麻辣烫了"}}},
 	}
-	if err := runtime.processEventMemoryJob(context.Background(), memory, MemoryJobPayload{Kind: MemoryJobEvent, Session: "group:123", Event: event}); err != nil {
+	if err := runtime.processEventMemoryJobs(context.Background(), memory, []MemoryJobPayload{{Kind: MemoryJobEvent, Session: "group:123", Event: event}}); err != nil {
 		t.Fatal(err)
 	}
 

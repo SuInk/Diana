@@ -5102,6 +5102,7 @@ type capturingLLMProvider struct {
 	mu      sync.Mutex
 	reply   string
 	request llm.GenerateRequest
+	calls   int
 }
 
 // Generate 记录请求并返回固定回复。
@@ -5113,6 +5114,7 @@ func (p *capturingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 	}
 	p.mu.Lock()
 	p.request = cloneGenerateRequestForTest(req)
+	p.calls++
 	p.mu.Unlock()
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
 }

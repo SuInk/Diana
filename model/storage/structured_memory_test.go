@@ -335,6 +335,8 @@ func TestMemoryJobQueueIsDurableAndDeduplicated(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
+	// 这个用例测的是队列本身，不测攒批窗口：入队即可领取。
+	store.SetMemoryEventJobDelay(0)
 	payload := assistant.MemoryJobPayload{
 		Kind:    assistant.MemoryJobEvent,
 		Session: "group:123",
