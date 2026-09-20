@@ -102,10 +102,7 @@ func (p *ResolverPlugin) resolveBilibili(ctx context.Context, req PluginRequest,
 
 func (p *ResolverPlugin) resolveDouyin(ctx context.Context, req PluginRequest, raw string) resolverPlatformResult {
 	nickname := resolverNickname()
-	detail, ok, status := fetchDouyinMediaDetail(ctx, raw)
-	if status == "missing_cookie" {
-		return resolverPlatformTextResult(fmt.Sprintf("%s识别：抖音，无法获取到管理员设置的抖音ck！", nickname))
-	}
+	detail, ok, _ := fetchDouyinMediaDetail(ctx, raw)
 	if !ok {
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别：抖音，解析失败！", nickname))
 	}
