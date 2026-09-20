@@ -479,8 +479,7 @@ const platforms: BotPlatform[] = [
 
 const dependencies: ResolverDependency[] = [
   { name: "ffmpeg", purpose: "媒体转码与时长检测", available: true, version: "7.1", path: "/usr/local/bin/ffmpeg", installable: true, installer: "系统包管理器" },
-  { name: "yt-dlp", purpose: "视频地址解析", available: true, version: "2026.08.10", path: "/usr/local/bin/yt-dlp", installable: true, installer: "pipx" },
-  { name: "node", purpose: "抖音接口签名（a-bogus）", available: true, version: "22.11.0", path: "/usr/local/bin/node", installable: true, installer: "系统包管理器" }
+  { name: "yt-dlp", purpose: "视频地址解析", available: true, version: "2026.08.10", path: "/usr/local/bin/yt-dlp", installable: true, installer: "pipx" }
 ];
 
 // 演示里故意让浏览器缺席：这一格就是要给人看「插件开着但其实跑不起来」长什么样。

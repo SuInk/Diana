@@ -46,25 +46,6 @@ func TestResolverDependencyInstallPlanUsesHomebrewWhitelist(t *testing.T) {
 	}
 }
 
-func TestResolverDependencyInstallPlanUsesAptNodePackage(t *testing.T) {
-	lookPath := func(name string) (string, error) {
-		if name == "apt-get" {
-			return "/usr/bin/apt-get", nil
-		}
-		return "", fmt.Errorf("missing %s", name)
-	}
-	plan, err := resolverDependencyInstallPlan("node", "linux", lookPath)
-	if err != nil {
-		t.Fatalf("resolverDependencyInstallPlan() error = %v", err)
-	}
-	if plan.installer != "apt" || len(plan.commands) != 2 {
-		t.Fatalf("plan = %#v", plan)
-	}
-	if !reflect.DeepEqual(plan.commands[1].args, []string{"install", "-y", "nodejs"}) {
-		t.Fatalf("install args = %#v", plan.commands[1].args)
-	}
-}
-
 func TestResolverDependencyInstallPlanRejectsUnknownName(t *testing.T) {
 	_, err := resolverDependencyInstallPlan("anything; rm -rf", "darwin", func(string) (string, error) {
 		return "/opt/homebrew/bin/brew", nil

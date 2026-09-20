@@ -4,9 +4,7 @@
 package assistant
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -31,7 +29,6 @@ const (
 	defaultVideoMaxMB       = 200
 	defaultVideoMaxDuration = 15 * 60
 	defaultVideoMaxHeight   = 720
-	douyinVideoAPI          = "https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id=%s&pc_client_type=1&version_code=190500&version_name=19.5.0&cookie_enabled=true&screen_width=1344&screen_height=756&browser_language=zh-CN&browser_platform=Win32&browser_name=Firefox&browser_version=118.0&browser_online=true&engine_name=Gecko&engine_version=109.0&os_name=Windows&os_version=10&cpu_core_num=16&device_memory=&platform=PC"
 	douyinPlayURL           = "https://aweme.snssdk.com/aweme/v1/play/?video_id=%s&ratio=1080p&line=0"
 	// 2026-09 抖音在 detail 接口前加了 Argus 网关：带浏览器全套参数的请求会被拒为
 	// "Uifid Not Found"，补上 uifid 头之后又要 "Signature Not Found"。以 open.douyin.com
@@ -45,9 +42,6 @@ const (
 	douyinUserAgent       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 	xiaohongshuExploreURL = "https://www.xiaohongshu.com/explore/%s?xsec_source=%s&xsec_token=%s"
 )
-
-//go:embed resolver_assets/a-bogus.js
-var douyinABogusJS string
 
 var douyinMobileFeedAPIs = []string{
 	"https://api5-normal-c-hl.amemv.com/aweme/v1/feed/?aweme_id=%s&aid=1128",
@@ -376,84 +370,6 @@ func douyinCookieValue(cookie, name string) string {
 		}
 	}
 	return ""
-}
-
-func fetchDouyinJSON(ctx context.Context, apiURL string, headers map[string]string, target any) bool {
-	if bogus := generateDouyinABogus(ctx, apiURL, headers["User-Agent"]); bogus != "" {
-		signedURL := apiURL + "&a_bogus=" + url.QueryEscape(bogus)
-		if fetchResolverJSON(ctx, signedURL, headers, target) {
-			return true
-		}
-	}
-	if fetchResolverJSON(ctx, apiURL, headers, target) {
-		return true
-	}
-	return fetchDouyinJSONViaPython(ctx, apiURL, headers, target)
-}
-
-func fetchDouyinJSONViaPython(ctx context.Context, apiURL string, headers map[string]string, target any) bool {
-	pythonPath, err := lookResolverCommand("python3")
-	if err != nil {
-		return false
-	}
-	payload := struct {
-		Headers map[string]string `json:"headers"`
-		Proxy   string            `json:"proxy,omitempty"`
-	}{Headers: headers, Proxy: resolverProxyURL(ctx)}
-	input, err := json.Marshal(payload)
-	if err != nil {
-		return false
-	}
-	const script = `
-import json, sys, urllib.request
-payload = json.load(sys.stdin)
-handlers = []
-if payload.get("proxy"):
-    handlers.append(urllib.request.ProxyHandler({"http": payload["proxy"], "https": payload["proxy"]}))
-opener = urllib.request.build_opener(*handlers)
-request = urllib.request.Request(sys.argv[1], headers=payload.get("headers") or {})
-with opener.open(request, timeout=20) as response:
-    body = response.read(4 * 1024 * 1024 + 1)
-    if len(body) > 4 * 1024 * 1024:
-        raise RuntimeError("response too large")
-    sys.stdout.buffer.write(body)
-`
-	cmdCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, pythonPath, "-c", script, apiURL)
-	cmd.Env = resolverCommandEnv()
-	cmd.Stdin = bytes.NewReader(input)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("resolver Douyin Python fallback failed: %v: %s", err, truncateRunes(strings.TrimSpace(string(output)), 500))
-		return false
-	}
-	if err := json.Unmarshal(output, target); err != nil {
-		log.Printf("resolver Douyin Python fallback JSON parse failed: %v", err)
-		return false
-	}
-	return true
-}
-
-func generateDouyinABogus(ctx context.Context, raw string, userAgent string) string {
-	nodePath, err := lookResolverCommand("node")
-	if err != nil {
-		return ""
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	cmdCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	script := douyinABogusJS + "\nconsole.log(generate_a_bogus(process.argv[1], process.argv[2]));\n"
-	nodeCmd := exec.CommandContext(cmdCtx, nodePath, "-e", script, parsed.RawQuery, userAgent)
-	nodeCmd.Env = resolverCommandEnv()
-	output, err := nodeCmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
 }
 
 func downloadXiaohongshuVideoFile(ctx context.Context, raw string) string {

@@ -343,11 +343,6 @@ func bilibiliResolverResourceKey(view bilibiliViewResponse) string {
 func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
 	result := resolverSocialResult{Handled: true}
 	detail, ok, status := fetchDouyinMediaDetail(ctx, raw)
-	if status == "missing_cookie" {
-		result.Context = "[抖音] 公开接口都没取到内容，可在插件设置里填写抖音 Cookie（或配置 DIANA_DOUYIN_CK）后重试。"
-		recordResolverMediaLog(ctx, req, raw, "douyin", false, status)
-		return result
-	}
 	if !ok {
 		result.Context = "[抖音] 链接已识别，但平台接口解析失败。"
 		recordResolverMediaLog(ctx, req, raw, "douyin", false, status)
@@ -492,10 +487,10 @@ func fetchDouyinMediaDetail(ctx context.Context, raw string) (douyinMediaDetail,
 	return detail, status == "", status
 }
 
-// fetchDouyinDetail 依次走三条链路，返回空 status 表示成功。
+// fetchDouyinDetail 依次走两条链路，返回空 status 表示成功。
 //
-// 网页接口前面的 Argus 网关会拒掉带全套浏览器参数的请求，所以精简请求排在最前，
-// 移动端 feed 接口兜底，最后才回到需要 Cookie 和签名的老链路。
+// 网页接口前面的 Argus 网关会拒掉带全套浏览器参数的请求，所以只发精简请求，
+// 拿不到再走移动端 feed 接口。
 func fetchDouyinDetail(ctx context.Context, raw string) (douyinMediaDetail, string) {
 	pageURL := fetchFinalURL(ctx, raw, resolverCommonHeaders())
 	if pageURL == "" {
@@ -530,17 +525,6 @@ func fetchDouyinDetail(ctx context.Context, raw string) (douyinMediaDetail, stri
 		}
 	}
 
-	cookie := resolverDouyinCookie(ctx)
-	if cookie == "" {
-		return douyinMediaDetail{}, "missing_cookie"
-	}
-	legacyHeaders := douyinWebHeaders(ctx, "https://www.douyin.com/video/"+awemeID)
-	var legacyResponse struct {
-		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
-	}
-	if fetchDouyinJSON(ctx, fmt.Sprintf(douyinVideoAPI, awemeID), legacyHeaders, &legacyResponse) && douyinDetailUsable(legacyResponse.AwemeDetail) {
-		return normalizeDouyinDetail(legacyResponse.AwemeDetail, awemeID), ""
-	}
 	return douyinMediaDetail{}, "request_failed"
 }
 
