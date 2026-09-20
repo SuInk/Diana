@@ -784,6 +784,22 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		_, ok := registry.Get(name)
 		return ok
 	}
+	// 订阅工具合成一个之后，「本轮有没有某一种订阅」不能再靠工具名判断：三种都在
+	// subscription 里，github 那种是否可用由构造时收没收进 backends 决定。
+	hasSubscriptionKind := func(kind string) bool {
+		if registry == nil {
+			return true
+		}
+		tool, ok := registry.Get(dianaSubscriptionToolName)
+		if !ok {
+			return false
+		}
+		subscription, ok := tool.(*dianaSubscriptionTool)
+		if !ok {
+			return false
+		}
+		return slicesContains(subscription.kinds(), kind)
+	}
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -849,7 +865,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool("relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)
 	}
-	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", "schedule", "rss") {
+	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		tail.WriteString("\n" + promptOwnerTaskTarget)
 	}
 	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
@@ -860,19 +876,19 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("reminder") {
 		builder.WriteString("\n" + promptTaskReminder)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("schedule") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindSchedule) {
 		builder.WriteString("\n" + promptTaskSchedule)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindRSS) {
 		builder.WriteString("\n" + promptTaskRSS)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("tasks") {
 		builder.WriteString("\n" + promptTaskList)
 	}
-	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
 		builder.WriteString("\n" + promptTaskRepositoryWatch)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", "schedule", "rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		builder.WriteString("\n" + promptTaskNoSubstitute)
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
