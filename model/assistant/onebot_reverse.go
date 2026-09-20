@@ -51,6 +51,9 @@ type OneBotReverseServer struct {
 	lastUnauthorizedReason string
 	lastUnauthorizedClient string
 	lastUnauthorizedLog    time.Time
+	lastConflictClient     string
+	lastConflictLog        time.Time
+	connectedAt            time.Time
 }
 
 func (s *OneBotReverseServer) OutboundBackoffEnabled() bool { return true }
@@ -123,7 +126,26 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		s.status.LastConnectionEvent = "duplicate_client_conflict"
 		s.status.LastConnectionEventTime = &now
 		s.status.UpdatedAt = now
+		// 连接位被一个不再收发的连接占住时，接入端每次重连都撞这里。以前这条路径
+		// 一行日志都不写：机器人整段时间收不到消息，日志里却干干净净，只能手动发
+		// 一次握手才看得出来。和鉴权失败同样按分钟限流记一条。
+		shouldLog := s.lastConflictClient != clientFingerprint ||
+			s.lastConflictLog.IsZero() ||
+			now.Sub(s.lastConflictLog) >= time.Minute
+		if shouldLog {
+			s.lastConflictClient = clientFingerprint
+			s.lastConflictLog = now
+		}
+		holder := s.status.ConnectionOwner
+		heldFor := time.Duration(0)
+		if !s.connectedAt.IsZero() {
+			heldFor = now.Sub(s.connectedAt).Truncate(time.Second)
+		}
 		s.connMu.Unlock()
+		if shouldLog {
+			log.Printf("onebot reverse handshake rejected: reason=duplicate_client_conflict client=%s holder=%s held_for=%s",
+				clientFingerprint, orUnknownClient(holder), heldFor)
+		}
 		http.Error(w, "onebot reverse websocket already has an active client", http.StatusConflict)
 		return
 	}
@@ -166,6 +188,7 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	s.status.LastError = ""
 	s.status.ConnectionEpoch++
 	s.status.ConnectionOwner = clientFingerprint
+	s.connectedAt = now
 	s.status.LastConnectionEvent = "connection_opened"
 	s.status.LastConnectionEventTime = &now
 	s.status.UpdatedAt = now
@@ -479,6 +502,13 @@ func oneBotClientFingerprint(r *http.Request) string {
 	}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("client-%x", sum[:8])
+}
+
+func orUnknownClient(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 // recordUnauthorized 记录一次握手鉴权失败，写进状态并按需打一行日志。
