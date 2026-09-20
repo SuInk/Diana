@@ -32,6 +32,16 @@ const (
 	dianaImageToolName           = "image"
 	imageTaskPendingState        = "pending"
 	maxWebSearchCallsPerAgentRun = 3
+
+	// maxToolLoadCallsPerAgentRun 给 tools_load 单独的配额，不占 MaxSteps。
+	//
+	// tools_load 不做任何外部动作，只从注册表里取 schema——线上实测 3 毫秒。让它扣一格
+	// 工具预算是双重惩罚：延迟加载本来就已经多花一次模型往返（先调 tools_load、看结果、
+	// 再调真工具），再扣预算等于「需要一个延迟工具的回合只剩 MaxSteps-1 格干正事」。
+	//
+	// 但也不能完全不设限，否则模型交替加载不同工具就能空转。单独给一个配额：既不挤占
+	// 干活的预算，又保证循环一定会终止。一次调用可以带多个名字，所以这个数很够用。
+	maxToolLoadCallsPerAgentRun = 4
 )
 
 // internalProtocolTermPattern 是证据账本协议里的固定字段名和术语。它们是代码定义的
@@ -143,6 +153,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var lastModel string
 	var usage llm.Usage
 	webSearchCalls := 0
+	toolLoadCalls := 0
 	modelTurns := 0
 	toolCalls := 0
 	protocolRepairs := 0
@@ -505,7 +516,24 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			webSearchCalls++
 		}
-		toolCalls++
+		if action.Tool == ToolsLoadToolName {
+			// 只取 schema，不做外部动作，不占 MaxSteps；用自己的配额兜住空转。
+			if toolLoadCalls >= maxToolLoadCallsPerAgentRun {
+				protocolRepairs++
+				limitErr := fmt.Sprintf("本轮 %s 次数已达上限 %d；需要的工具请一次性列全，或直接用已加载的工具继续", ToolsLoadToolName, maxToolLoadCallsPerAgentRun)
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
+				messages = appendToolRepair(messages, resp, lastText, limitErr)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
+			toolLoadCalls++
+		} else {
+			toolCalls++
+		}
 		lastToolSignature = signature
 		inputKeys := sortedInputKeys(action.Input)
 		toolMetadata := mergeRunMetadata(webSearchRunMetadataFromInput(action.Tool, action.Input), claimMetadata)
