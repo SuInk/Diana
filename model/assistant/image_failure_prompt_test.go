@@ -80,14 +80,14 @@ func TestReplyPromptExplainsImageFailure(t *testing.T) {
 	}
 	found := false
 	for _, message := range messages {
-		if !strings.Contains(message.Content, "【本轮图片处理失败】") {
+		if !strings.Contains(message.Content, "【图片处理情况") {
 			continue
 		}
 		found = true
 		if !strings.Contains(message.Content, event.RawMessage) {
 			t.Fatalf("the notice replaced the user's own text:\n%s", message.Content)
 		}
-		for _, want := range []string{"这条视觉链路不接受图片输入", "不要说没收到图片"} {
+		for _, want := range []string{"图没能送进识图那一步", "不要说没收到图片"} {
 			if !strings.Contains(message.Content, want) {
 				t.Fatalf("notice missing %q:\n%s", want, message.Content)
 			}
@@ -102,5 +102,33 @@ func TestReplyPromptExplainsImageFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no image failure notice reached the prompt; messages=%d", len(messages))
+	}
+}
+
+// TestImageFailureNoticeStaysInCharacter 这段说明会进到任何人设的提示词里，包括拟人
+// 人设。人设本身就禁止暴露内部配置，所以这里只给事实和硬约束，措辞交给模型；实现细节
+// 一个字都不能出现——写进去就等于递到模型嘴边。
+func TestImageFailureNoticeStaysInCharacter(t *testing.T) {
+	event := MessageEvent{Segments: []MessageSegment{
+		{Type: "image", Data: map[string]string{"url": "a", recallImageFailureKey: imageFailureNotDelivered}},
+		{Type: "image", Data: map[string]string{"url": "b", recallImageFailureKey: imageFailureUnavailable}},
+		{Type: "image", Data: map[string]string{"url": "c", recallImageFailureKey: imageFailureTimeout}},
+	}}
+	for _, attached := range []bool{true, false} {
+		notice := imageFailureNotice(event, attached)
+		for _, leak := range []string{
+			"模型", "接口", "通道", "链路", "视觉", "缓存", "描述失败",
+			"vision", "provider", "LLM", "API", "token",
+		} {
+			if strings.Contains(notice, leak) {
+				t.Fatalf("attached=%v notice leaks %q:\n%s", attached, leak, notice)
+			}
+		}
+		if !strings.Contains(notice, "不要照抄给对方") {
+			t.Fatalf("attached=%v notice may be quoted verbatim:\n%s", attached, notice)
+		}
+		if !strings.Contains(notice, "按你自己的身份") {
+			t.Fatalf("attached=%v notice dictates wording instead of leaving it to the persona:\n%s", attached, notice)
+		}
 	}
 }

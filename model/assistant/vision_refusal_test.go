@@ -89,13 +89,23 @@ func TestImageFailureNoticeSeparatesReasons(t *testing.T) {
 		{Type: "image", Data: map[string]string{"url": "c", recallImageFailureKey: imageFailureUnavailable}},
 	}}
 	notice := imageFailureNotice(event, false)
-	for _, want := range []string{"对方确实发了图", "2 张", "不接受图片输入", "1 张", "获取失败"} {
+	for _, want := range []string{"对方确实发了图", "2 张", "重发同一张不会有任何变化", "1 张", "图片内容没取到"} {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("notice missing %q:\n%s", want, notice)
 		}
 	}
-	if strings.Contains(notice, "超时") {
+	if strings.Contains(notice, "等下再看") {
 		t.Fatalf("unrelated reason leaked into the notice:\n%s", notice)
+	}
+	// 这段是内部说明，不能把实现细节递到模型嘴边——人设明令不暴露内部配置，
+	// 拟人人设下「视觉链路/接口/通道」更是彻底出戏。
+	for _, leak := range []string{"视觉链路", "接口", "通道", "vision", "provider"} {
+		if strings.Contains(notice, leak) {
+			t.Fatalf("notice leaks the internal term %q:\n%s", leak, notice)
+		}
+	}
+	if !strings.Contains(notice, "不要照抄给对方") || !strings.Contains(notice, "按你自己的身份") {
+		t.Fatalf("notice does not leave the wording to the persona:\n%s", notice)
 	}
 	if imageFailureNotice(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "a"}}}}, false) != "" {
 		t.Fatal("notice should be empty when nothing failed")

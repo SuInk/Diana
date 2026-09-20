@@ -91,17 +91,26 @@ func imageFailureNotice(event MessageEvent, imageAttached bool) string {
 		}
 		lines = append(lines, fmt.Sprintf("- %d 张：%s", count, imageFailureExplanations[reason]))
 	}
-	tail := "对方确实发了图，任何情况下都不要说没收到图片、也不要说对方没发。"
+	var tail []string
 	if imageAttached {
-		tail = "原图仍附在本条消息里：你能看到就按你看到的说；看不到就直说是这边的图片通道出了问题。" + tail
+		tail = append(tail, "原图仍附在本条消息里：你能看到就当普通图片正常回应，不必提这段说明。")
 	}
-	return "【本轮图片处理失败】\n" + strings.Join(lines, "\n") + "\n" + tail
+	tail = append(tail,
+		// 不在这里列违禁词：把「接口」「通道」写进提示词，等于先把它们递到模型嘴边。
+		"确实看不到时，按你自己的身份用一句日常说法带过，例如「这张图我这边没打开」，"+
+			"不解释原因，也不提任何内部细节。",
+		"对方确实发了图：任何情况下都不要说没收到图片，也不要说对方没发。")
+	return "【图片处理情况·内部说明，不要照抄给对方，也不要解释技术细节】\n" +
+		strings.Join(lines, "\n") + "\n" + strings.Join(tail, "\n")
 }
 
+// 解释用平白说法写，不写「视觉链路」这类词：这段虽然禁止照抄，但模型仍会从中取词，
+// 留着内部术语等于把它递到嘴边。每条末尾带上重发口径——能不能让对方重发，正是三种
+// 失败的区别所在。
 var imageFailureExplanations = map[string]string{
-	imageFailureNotDelivered: "独立视觉描述失败，这条视觉链路不接受图片输入；让对方重发没有用。",
-	imageFailureUnavailable:  "图片内容获取失败，没下到或解不开。可以请对方重发。",
-	imageFailureTimeout:      "图片识别超时，这一轮没看完。可以说稍后再看。",
+	imageFailureNotDelivered: "图没能送进识图那一步；让对方重发同一张不会有任何变化。",
+	imageFailureUnavailable:  "图片内容没取到，没下下来或者打不开；可以请对方重发。",
+	imageFailureTimeout:      "这一轮没看完；可以说等下再看，不要请对方重发。",
 }
 
 func llmMessageHasImagePart(message llm.Message) bool {
