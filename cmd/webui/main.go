@@ -172,6 +172,12 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 					continue
 				}
 				oneBotAdded = true
+				// 空 token 曾经等于「不鉴权」，现在一律拒绝握手。升级上来的旧配置
+				// 会就此静默掉线：客户端每几秒被拒一次，机器人一条消息都收不到。
+				// 这种配置必须在启动时说清楚，而不是让人去翻握手日志。
+				if strings.TrimSpace(profile.OneBotAccessToken) == "" {
+					log.Printf("diana 机器人「%s」(%s) 收不到消息：反向 WebSocket 必须配置 Access Token，当前为空，所有握手都会被拒绝（reason=server_token_unset）。请在「机器人 → 配置 → 接入」填写，并与 OneBot 客户端保持一致", profile.Name, profile.ID)
+				}
 				oneBotServer.SetConfig(assistant.OneBotConfig{
 					Endpoint:    profile.OneBotReverseWSEndpoint,
 					AccessToken: profile.OneBotAccessToken,
