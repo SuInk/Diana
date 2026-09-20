@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,11 +36,26 @@ func TestLocalMediaOriginProviderPrefersReverseHandshake(t *testing.T) {
 		t.Fatalf("origin = %q", got)
 	}
 
+	// 监听器要先有机器人在跑：没有登记 handler 时握手会被直接拒掉。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = reverse.Connect(ctx, func(context.Context, assistant.MessageEvent) error { return nil })
+	}()
+
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{
+	header := http.Header{
 		"Authorization": []string{"Bearer token"},
 		"X-Self-ID":     []string{"42"},
-	})
+	}
+	var conn *websocket.Conn
+	var err error
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if conn, _, err = websocket.DefaultDialer.Dial(wsURL, header); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("dial error = %v", err)
 	}

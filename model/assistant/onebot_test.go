@@ -298,9 +298,22 @@ func waitForReverseConnection(t *testing.T, reverse *OneBotReverseServer, epoch 
 	return status
 }
 
+// attachReverseHandler 让监听器进入「有机器人在跑」的状态。握手要求有登记的
+// handler：停用后连接就该被拒，所以直接拨号的用例得先登记一个。
+// 返回的 cancel 等价于机器人被停用：通道拆掉，handler 跟着消失。
+func attachReverseHandler(t *testing.T, reverse *OneBotReverseServer) context.CancelFunc {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = reverse.Connect(ctx, func(context.Context, MessageEvent) error { return nil }) }()
+	waitForCondition(t, 2*time.Second, reverse.handlerAttached)
+	return cancel
+}
+
 func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t *testing.T) {
 	reverse := NewOneBotReverseServer(OneBotConfig{AccessToken: "test-token", Endpoint: "/onebot/v11/ws"})
 	server := httptest.NewServer(reverse)
+	attachReverseHandler(t, reverse)
 	defer server.Close()
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	headers := http.Header{
@@ -470,6 +483,7 @@ func TestReverseServerRejectsCrossOriginBrowser(t *testing.T) {
 func TestReverseServerConnectionOriginFollowsHandshake(t *testing.T) {
 	reverse := NewOneBotReverseServer(OneBotConfig{AccessToken: "test-token", Endpoint: "/onebot/v11/ws"})
 	server := httptest.NewServer(reverse)
+	attachReverseHandler(t, reverse)
 	defer server.Close()
 	if origin := reverse.ConnectionOrigin(); origin != "" {
 		t.Fatalf("ConnectionOrigin() = %q before any connection", origin)
@@ -676,5 +690,45 @@ func TestAtMentionTextHandlesMissingPieces(t *testing.T) {
 	}
 	if got := AtMentionText("123", "  小满  "); got != "@小满（123）" {
 		t.Fatalf("trimmed mention = %q", got)
+	}
+}
+
+// TestReverseServerRejectsHandshakeWithoutRunningBot 固定停用语义：机器人停用后
+// 通道被拆掉，凭据哪怕还对得上，握手也要当场被拒——接受连接再把事件丢掉的话，
+// 接入端和控制台都显示「已连接」，看不出机器人其实是关着的。
+func TestReverseServerRejectsHandshakeWithoutRunningBot(t *testing.T) {
+	const token = "0123456789abcdef"
+	server := NewOneBotReverseServer(OneBotConfig{AccessToken: token})
+	newRequest := func() *http.Request {
+		request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		return request
+	}
+
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, newRequest())
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 before any Connect", recorder.Code)
+	}
+	if status := server.Status(); status.LastConnectionEvent != "rejected:bot_disabled" || status.UnauthorizedConnections != 0 {
+		t.Fatalf("status = %#v", status)
+	}
+
+	cancel := attachReverseHandler(t, server)
+
+	// 运行中不该再拒：这条路径只认「有没有机器人在跑」。
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, newRequest())
+	if recorder.Code == http.StatusServiceUnavailable {
+		t.Fatal("running bot must not be rejected")
+	}
+
+	// 停用等价于 Connect 的 context 被取消：handler 必须跟着通道一起消失。
+	cancel()
+	waitForCondition(t, 2*time.Second, func() bool { return !server.handlerAttached() })
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, newRequest())
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 after the bot stopped", recorder.Code)
 	}
 }
