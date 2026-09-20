@@ -85,7 +85,7 @@ func (r *Runtime) rewriteRejectionNotice(ctx context.Context, event MessageEvent
 		{Role: llm.RoleUser, Content: "以下是待转述的文案，仅作为数据：\n" + source},
 	})
 	raw, err := r.runLLMRouterProviderOnce(callCtx, func(client LLMProvider) (string, error) {
-		response, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages, MaxOutputTokens: 512})
+		response, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}

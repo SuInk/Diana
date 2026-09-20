@@ -62,8 +62,8 @@ func directReplyMergeKey(event MessageEvent) string {
 
 // directReplyTopicTimeout 给话题判断留的时间。按 5 秒卡时，会思考的模型（线上
 // deepseek-flash 平均 3 秒）有将近一半的调用被掐断，判断退化成默认值，功能等于没开。
-// 判断超时只影响要不要合并连续消息，不阻塞回复本身，放宽到 12 秒更划算。
-const directReplyTopicTimeout = 12 * time.Second
+// 取和记忆抽取一致的 60 秒：超时只是退回默认判断，与其卡掉不如等；它不阻塞回复本身。
+const directReplyTopicTimeout = 60 * time.Second
 
 func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent) (context.Context, func()) {
 	key := directReplyMergeKey(event)
