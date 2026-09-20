@@ -593,11 +593,18 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 		}
 	}
 	if need.Loop {
-		// 没回得很密时审核不判目的，模型就算填了也不作数。
 		if need.Density == nil {
+			// 没把密度证据递上去就没问过目的，模型就算填了也不作数。
 			decision.ReplyLoopPurposeless = false
+			// 「没内容」不用等密度：这一来一回本身已经在空转，密度只决定它转得
+			// 多快。但这里只开降欲望、不解除——没问过目的，就没有「有目的」这个
+			// 结论可以拿来解除，一条普通回复不该把刚判出来的空转一笔勾销。
+			if decision.loopDecision().counts() {
+				r.markReplyPurpose(event, true, time.Now())
+			}
 		} else {
-			// 没内容的空转同样没有目的，两种都开始降欲望。
+			// 没内容的空转同样没有目的，两种都开始降欲望。问过了就按结论记，
+			// 判到有目的当场解除。
 			r.markReplyPurpose(event, decision.loopDecision().counts(), time.Now())
 		}
 		if loopErr := r.applyReplyLoopVerdict(ctx, event, need.candidate, decision, need.LoopSuppress); loopErr != nil {

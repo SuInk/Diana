@@ -21,8 +21,20 @@ import (
 // 线上 7 天的数据：真人在 10 分钟内最多被回复 17 次，两台 AI 分别是 40 和 67 次。
 const (
 	replyDampingWindow = 10 * time.Minute
-	// 10 分钟内回同一个账号达到这么多条，发送前审核开始判这一串来回有没有目的。
+	// 10 分钟内回同一个账号达到这么多条，降欲望期间开始按条累加点名消息的冷却。
 	replyDampingDenseLimit = 10
+	// 回到这么多条就把密度证据交给发送前审核，让它判这一串来回有没有目的。
+	//
+	// 这道门以前和 replyDampingDenseLimit 共用 10：那个数是照着「真人 10 分钟内最多
+	// 被回复 17 次」定的，留足了余量才不会误伤。但密度在这里决定的不是结论，只是
+	// 「什么时候该问一句这是在干什么」——上面那段注释本来就是这么写的。而问这一句
+	// 不额外花钱：空转判断和表达质量、账号安全共用发送前那一次审核调用，密度只是
+	// 同一份载荷里多一个字段。既然问是免费的，就没有理由等到第 10 条才问。
+	//
+	// 线上 14 天 4877 次回复：按 10 只有 12.1% 的回复会被问到目的，按 3 是 36.7%。
+	// 判成「无目的」的后果由审核自己的判据兜底——有明确任务在推进一律 false、拿不准
+	// 一律 false——密度只负责把问题递上去。少于 3 条谈不上「一连串来回」，不问。
+	replyDampingPurposeAuditMin = 3
 	// 被管理员标记成机器人的账号更早开始判。
 	replyDampingMarkedBotDenseLimit = 2
 	// 降欲望期间点名消息的冷却，每多回一条就再加一档。
@@ -85,6 +97,12 @@ func (r *Runtime) replyDampingDenseLimit(event MessageEvent) int {
 	return replyDampingDenseLimit
 }
 
+// replyPurposeAuditMin 是「开始问目的」的条数。被标记成机器人的账号本来就问得更早，
+// 两者取小的那个，标记不会反而把这道门推后。
+func (r *Runtime) replyPurposeAuditMin(event MessageEvent) int {
+	return min(replyDampingPurposeAuditMin, r.replyDampingDenseLimit(event))
+}
+
 // replyDampingStateLocked 取出并清理这个账号的状态；调用方持有锁。
 func (r *Runtime) replyDampingStateLocked(event MessageEvent, now time.Time, create bool) *replyDampingState {
 	key := botReplyLoopKey(event, event.UserID)
@@ -133,7 +151,7 @@ func (r *Runtime) replyDensityForAudit(event MessageEvent, now time.Time) (reply
 	r.replyDamping.mu.Lock()
 	defer r.replyDamping.mu.Unlock()
 	state := r.replyDampingStateLocked(event, now, false)
-	if state == nil || len(state.Sent) < r.replyDampingDenseLimit(event) {
+	if state == nil || len(state.Sent) < r.replyPurposeAuditMin(event) {
 		return replyDensity{}, false
 	}
 	return replyDensity{BotRepliesToSender: len(state.Sent), WindowMinutes: int(replyDampingWindow / time.Minute)}, true
