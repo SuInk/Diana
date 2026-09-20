@@ -344,13 +344,13 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	result := resolverSocialResult{Handled: true}
 	detail, ok, status := fetchDouyinMediaDetail(ctx, raw)
 	if status == "missing_cookie" {
-		result.Context = "[抖音] 需要在插件设置里填写抖音 Cookie（或配置 DIANA_DOUYIN_CK）后才能解析。"
+		result.Context = "[抖音] 公开接口都没取到内容，可在插件设置里填写抖音 Cookie（或配置 DIANA_DOUYIN_CK）后重试。"
 		recordResolverMediaLog(ctx, req, raw, "douyin", false, status)
 		return result
 	}
 	if !ok {
 		result.Context = "[抖音] 链接已识别，但平台接口解析失败。"
-		recordResolverMediaLog(ctx, req, raw, "douyin", false, "metadata unavailable")
+		recordResolverMediaLog(ctx, req, raw, "douyin", false, status)
 		return result
 	}
 	if id := strings.TrimSpace(detail.AwemeID); id != "" {
@@ -488,34 +488,92 @@ type douyinMediaDetail struct {
 }
 
 func fetchDouyinMediaDetail(ctx context.Context, raw string) (douyinMediaDetail, bool, string) {
-	cookie := resolverDouyinCookie(ctx)
-	if cookie == "" {
-		return douyinMediaDetail{}, false, "missing_cookie"
-	}
+	detail, status := fetchDouyinDetail(ctx, raw)
+	return detail, status == "", status
+}
+
+// fetchDouyinDetail 依次走三条链路，返回空 status 表示成功。
+//
+// 网页接口前面的 Argus 网关会拒掉带全套浏览器参数的请求，所以精简请求排在最前，
+// 移动端 feed 接口兜底，最后才回到需要 Cookie 和签名的老链路。
+func fetchDouyinDetail(ctx context.Context, raw string) (douyinMediaDetail, string) {
 	pageURL := fetchFinalURL(ctx, raw, resolverCommonHeaders())
 	if pageURL == "" {
 		pageURL = raw
 	}
 	match := douyinIDPattern.FindStringSubmatch(pageURL)
 	if len(match) < 2 {
-		return douyinMediaDetail{}, false, "unsupported_link"
+		return douyinMediaDetail{}, "unsupported_link"
 	}
 	awemeID := match[1]
-	headers := resolverCommonHeaders()
-	headers["User-Agent"] = douyinUserAgent
-	headers["Referer"] = "https://www.douyin.com/video/" + awemeID
-	headers["Cookie"] = cookie
-	apiURL := fmt.Sprintf(douyinVideoAPI, awemeID)
-	var response struct {
+
+	openHeaders := resolverCommonHeaders()
+	openHeaders["User-Agent"] = douyinUserAgent
+	openHeaders["Origin"] = "https://open.douyin.com"
+	openHeaders["Referer"] = "https://open.douyin.com/"
+	var openResponse struct {
 		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
 	}
-	if !fetchDouyinJSON(ctx, apiURL, headers, &response) {
-		return douyinMediaDetail{}, false, "request_failed"
+	if fetchResolverJSON(ctx, fmt.Sprintf(douyinOpenDetailAPI, awemeID), openHeaders, &openResponse) && douyinDetailUsable(openResponse.AwemeDetail) {
+		return normalizeDouyinDetail(openResponse.AwemeDetail, awemeID), ""
 	}
-	if strings.TrimSpace(response.AwemeDetail.AwemeID) == "" {
-		response.AwemeDetail.AwemeID = awemeID
+
+	mobileHeaders := resolverCommonHeaders()
+	mobileHeaders["User-Agent"] = douyinMobileUserAgent
+	for _, api := range douyinMobileFeedAPIs {
+		var feed struct {
+			AwemeList []douyinMediaDetail `json:"aweme_list"`
+		}
+		if !fetchResolverJSON(ctx, fmt.Sprintf(api, awemeID), mobileHeaders, &feed) {
+			continue
+		}
+		if item, ok := pickDouyinFeedItem(feed.AwemeList, awemeID); ok {
+			return normalizeDouyinDetail(item, awemeID), ""
+		}
 	}
-	return response.AwemeDetail, true, ""
+
+	cookie := resolverDouyinCookie(ctx)
+	if cookie == "" {
+		return douyinMediaDetail{}, "missing_cookie"
+	}
+	legacyHeaders := resolverCommonHeaders()
+	legacyHeaders["User-Agent"] = douyinUserAgent
+	legacyHeaders["Accept-Language"] = "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2"
+	legacyHeaders["Referer"] = "https://www.douyin.com/video/" + awemeID
+	legacyHeaders["Cookie"] = cookie
+	// Argus 先看 uifid 请求头，缺了就直接 403，轮不到校验签名。
+	if uifid := douyinCookieValue(cookie, "UIFID"); uifid != "" {
+		legacyHeaders["uifid"] = uifid
+	}
+	var legacyResponse struct {
+		AwemeDetail douyinMediaDetail `json:"aweme_detail"`
+	}
+	if fetchDouyinJSON(ctx, fmt.Sprintf(douyinVideoAPI, awemeID), legacyHeaders, &legacyResponse) && douyinDetailUsable(legacyResponse.AwemeDetail) {
+		return normalizeDouyinDetail(legacyResponse.AwemeDetail, awemeID), ""
+	}
+	return douyinMediaDetail{}, "request_failed"
+}
+
+// pickDouyinFeedItem 从 feed 响应里挑出目标作品：接口会连带返回推荐内容。
+func pickDouyinFeedItem(list []douyinMediaDetail, awemeID string) (douyinMediaDetail, bool) {
+	for _, item := range list {
+		if strings.TrimSpace(item.AwemeID) == awemeID && douyinDetailUsable(item) {
+			return item, true
+		}
+	}
+	return douyinMediaDetail{}, false
+}
+
+// douyinDetailUsable 判断响应是不是真有内容：被风控挡下时字段会是空的。
+func douyinDetailUsable(detail douyinMediaDetail) bool {
+	return strings.TrimSpace(detail.Video.PlayAddr.URI) != "" || len(detail.Images) > 0
+}
+
+func normalizeDouyinDetail(detail douyinMediaDetail, awemeID string) douyinMediaDetail {
+	if strings.TrimSpace(detail.AwemeID) == "" {
+		detail.AwemeID = awemeID
+	}
+	return detail
 }
 
 func resolverDouyinMediaType(code int) string {
