@@ -186,3 +186,40 @@ func TestRepositoryReadLooseningDoesNotAffectWrites(t *testing.T) {
 		t.Fatalf("被拒后不应发起写入请求：%v", github.requests)
 	}
 }
+
+// 「按用户授权只在私聊生效」之后，同一个人在群里就是普通成员：读公开仓库不该再被
+// 「请先配置你自己的 GitHub Token」挡下——那是给已授权用户做归因用的，普通成员走
+// 公共凭据。漏改这一处会把一次本来人人都能做的公开仓库读取变成报错。
+func TestRepositoryReadPublicRepoInGroupNeedsNoPersonalToken(t *testing.T) {
+	github := &repositoryReadACLTestGitHub{}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	settings := SettingValues{
+		repositoryPublishSettingToken: repositoryPublishTestToken,
+		// 这个人在私聊里是管理员，但没有配自己的 Token。
+		repositoryPublishSettingManagerUsers: "manager = acme/public-repo",
+		repositoryPublishSettingTimeout:      5,
+	}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	inGroup := newDianaGitHubTool(runtime, MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "manager", RawMessage: "看看这个仓库",
+	}, newRepositoryPublishPlugin(server.Client(), server.URL), settings)
+
+	result := runRepositoryPublishToolOnce(t, inGroup, map[string]any{
+		"operation": "read_file", "repository": "acme/public-repo", "path": "README.md",
+	})
+	if !result.OK || result.File == nil || !strings.Contains(result.File.Content, "func main") {
+		t.Fatalf("群里读公开仓库被挡下：%#v", result)
+	}
+
+	// 同一个人在私聊里仍然按已授权用户处理：没有个人 Token 就要求先配。
+	inPrivate := newDianaGitHubTool(runtime, MessageEvent{
+		Kind: EventKindPrivate, UserID: "manager", RawMessage: "看看这个仓库",
+	}, newRepositoryPublishPlugin(server.Client(), server.URL), settings)
+	denied := runRepositoryPublishToolOnce(t, inPrivate, map[string]any{
+		"operation": "read_file", "repository": "acme/public-repo", "path": "README.md",
+	})
+	if denied.OK || denied.FailureCode != "user_token_required" {
+		t.Fatalf("私聊里的已授权用户应按本人 Token 归因：%#v", denied)
+	}
+}

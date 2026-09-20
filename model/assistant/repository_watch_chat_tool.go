@@ -46,15 +46,15 @@ func repositoryWatchManagedRepositories(event MessageEvent, settings SettingValu
 		}
 		return managed
 	}
-	// 群里只认这个群自己被授权的仓库：按用户的授权跟着人走，但不该把他在别处的
-	// 授权带进一个从没被授权聊这个仓库的群，口径和 Issue 写操作保持一致。
+	// 群里只认这个群自己被授权的仓库：按用户的授权只在私聊算数，不带进群，口径和
+	// Issue 写操作保持一致（见 repositoryPublishUserScopedAllowed）。
 	//
 	// 按群授权带了身份要求时，这里只认事件自带的群身份，不额外回查成员信息：构造
 	// 工具描述属于每条消息都会走的热路径，不值得为它多打一次平台接口。拿不到身份
-	// 就按最严处理——除非本人另有按用户的授权，那是主人单独点名放行的。
+	// 就按最严处理，该仓库不进这份清单。
 	role := NormalizeGroupRole(event.SenderRole)
 	for repository := range managerGroups[groupID] {
-		if !managerGroupRoles.requirement(groupID, repository).satisfiedBy(role) && !managerUsers[userID][repository] {
+		if !managerGroupRoles.requirement(groupID, repository).satisfiedBy(role) {
 			continue
 		}
 		managed[repository] = true
