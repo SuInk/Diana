@@ -31,12 +31,24 @@ func repositoryWatchManagedRepositories(event MessageEvent, settings SettingValu
 	if err != nil {
 		return nil
 	}
+	managerGroupRoles, _, err := repositoryPublishEffectiveGroupRoles(settings)
+	if err != nil {
+		return nil
+	}
 	managed := map[string]bool{}
 	for repository := range managerUsers[strings.TrimSpace(event.UserID)] {
 		managed[repository] = true
 	}
 	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
-		for repository := range managerGroups[strings.TrimSpace(event.GroupID)] {
+		groupID := strings.TrimSpace(event.GroupID)
+		// 按群授权带了身份要求时，这里只认事件自带的群身份，不额外回查成员信息：
+		// 构造工具描述属于每条消息都会走的热路径，不值得为它多打一次平台接口。
+		// 拿不到身份就按最严处理，该仓库不进这份清单。
+		role := NormalizeGroupRole(event.SenderRole)
+		for repository := range managerGroups[groupID] {
+			if !managerGroupRoles.requirement(groupID, repository).satisfiedBy(role) {
+				continue
+			}
 			managed[repository] = true
 		}
 	}

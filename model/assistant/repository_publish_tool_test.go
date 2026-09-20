@@ -478,7 +478,7 @@ func TestRepositoryIssueUserTokenCannotBypassGlobalAllowlist(t *testing.T) {
 		repositoryPublishSettingUserTokens: `{"member":"member-token"}`,
 	}
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "member"}
-	if _, _, code, _ := repositoryPublishAccessForEvent(event, "acme/demo", false, settings); code != "repository_not_allowed" {
+	if _, _, code, _ := repositoryPublishAccessForEvent(event, "acme/demo", false, settings, nil); code != "repository_not_allowed" {
 		t.Fatalf("access code=%q, want repository_not_allowed", code)
 	}
 }
@@ -1028,7 +1028,7 @@ func TestRepositoryPublishUserScopedManagerWorksInsideGroups(t *testing.T) {
 	group := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "manager-user"}
 
 	// 群里未授权，但这个人是按用户授权的管理员，直接写入应当放行。
-	direct, _, code, message := repositoryPublishAccessForEvent(group, "SuInk/Diana", false, settings)
+	direct, _, code, message := repositoryPublishAccessForEvent(group, "SuInk/Diana", false, settings, nil)
 	if code != "" || !direct {
 		t.Fatalf("user-scoped manager denied inside a group: direct=%v code=%q message=%q", direct, code, message)
 	}
@@ -1038,7 +1038,7 @@ func TestRepositoryPublishUserScopedManagerWorksInsideGroups(t *testing.T) {
 	}
 	// 同群里没有任何授权的其他人仍然被拒。
 	stranger := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "someone-else"}
-	if _, _, code, _ := repositoryPublishAccessForEvent(stranger, "SuInk/Diana", false, settings); code == "" {
+	if _, _, code, _ := repositoryPublishAccessForEvent(stranger, "SuInk/Diana", false, settings, nil); code == "" {
 		t.Fatalf("unauthorized group member should stay denied")
 	}
 }

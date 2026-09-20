@@ -305,7 +305,8 @@ func (t *dianaRepositoryIssuesTool) Description() string {
 		`推荐时必须把这三项一起写进回复，并据此说清影响力和维护状态。star 和 fork 都很少说明它还没被人用起来；` +
 		`结果里 stale 为 true（一年以上没推送）或 archived 为 true（已归档）时必须明确提醒用户，不能当作可用推荐照样给出去；` +
 		`fork 为 true 说明它本身是别人的分叉，推荐前先看看上游是不是更合适。` +
-		`search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files、repo 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+		`search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files、repo 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。` +
+		`调用被拒绝时（failure_code=permission_denied 等），把结果里的 message 原样转达给用户，说清差在哪、下一步能做什么，不要含糊成一句「我没有权限」。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -443,7 +444,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 			}
 		}
 	} else {
-		userAllowed, groupAllowed, code, message := repositoryPublishAccessForEvent(t.event, repository, owner, t.settings)
+		userAllowed, groupAllowed, code, message := repositoryPublishAccessForEvent(t.event, repository, owner, t.settings, t.groupRoleResolver(ctx))
 		if code != "" {
 			return t.finish(ctx, result.fail(code, message))
 		}
@@ -525,7 +526,7 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 	return ""
 }
 
-func repositoryPublishAccessForEvent(event MessageEvent, repository string, owner bool, settings SettingValues) (bool, bool, string, string) {
+func repositoryPublishAccessForEvent(event MessageEvent, repository string, owner bool, settings SettingValues, groupRole groupRoleResolver) (bool, bool, string, string) {
 	if owner {
 		return true, event.Kind == EventKindGroup, "", ""
 	}
@@ -542,9 +543,49 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 	if err != nil {
 		return false, false, "invalid_repository_access", "Issue 授权配置无效。"
 	}
-	directAllowed := managerUsers[strings.TrimSpace(event.UserID)][key] || event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(event.GroupID)][key]
-	draftAllowed := draftUsers[strings.TrimSpace(event.UserID)][key] || event.Kind == EventKindGroup && draftGroups[strings.TrimSpace(event.GroupID)][key]
+	managerGroupRoles, draftGroupRoles, err := repositoryPublishEffectiveGroupRoles(settings)
+	if err != nil {
+		return false, false, "invalid_repository_access", "按群授权的身份要求配置无效。"
+	}
+	userID, groupID := strings.TrimSpace(event.UserID), strings.TrimSpace(event.GroupID)
+	inGroup := event.Kind == EventKindGroup
+	groupManager := inGroup && managerGroups[groupID][key]
+	groupDrafter := inGroup && draftGroups[groupID][key]
+
+	// 身份要求只有真的写了后缀才去查身份：绝大多数部署一条都没有，不该为了「万一
+	// 要判」给每次调用多打一次群成员查询。
+	var role GroupRole
+	var roleResolved bool
+	satisfies := func(requirement repositoryAccessRole) bool {
+		if requirement == repositoryAccessRoleAllMembers {
+			return true
+		}
+		if !roleResolved {
+			role, roleResolved = resolvedGroupRole(groupRole), true
+		}
+		return requirement.satisfiedBy(role)
+	}
+	blocked := repositoryAccessRoleAllMembers
+	if groupManager {
+		if requirement := managerGroupRoles.requirement(groupID, key); !satisfies(requirement) {
+			groupManager, blocked = false, requirement
+		}
+	}
+	if groupDrafter {
+		if requirement := draftGroupRoles.requirement(groupID, key); !satisfies(requirement) {
+			groupDrafter = false
+			if blocked == repositoryAccessRoleAllMembers {
+				blocked = requirement
+			}
+		}
+	}
+
+	directAllowed := managerUsers[userID][key] || groupManager
+	draftAllowed := draftUsers[userID][key] || groupDrafter
 	if !directAllowed && !draftAllowed {
+		if blocked != repositoryAccessRoleAllMembers {
+			return false, false, "permission_denied", repositoryPublishGroupRoleDeniedMessage(blocked, role)
+		}
 		return false, false, "permission_denied", "当前群聊不能为该仓库发起草稿，当前用户也没有该仓库权限。"
 	}
 	allowed, err := repositoryPublishAllowlist(settings.String(repositoryPublishSettingAllowlist, ""))
@@ -555,6 +596,56 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 		return false, false, "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的全局白名单中。"
 	}
 	return directAllowed, draftAllowed, "", ""
+}
+
+// repositoryPublishEffectiveGroupRoles 返回按群授权的身份要求，合并口径与
+// repositoryPublishEffectiveAccess 的名单一致：草稿侧要把管理侧并进来，重合的组合
+// 取更宽的一条——否则「管理人员限管理员」会连带把本来放给全体成员的草稿权收走。
+// 这里自己重新解析一遍「群聊草稿范围」，不复用调用方手上那份：
+// repositoryPublishEffectiveAccess 会把管理人员就地合并进它收到的 legacy map，
+// 拿被改过的 map 来判断「草稿侧本来就授过这个组合」会把每条都判成授过，
+// 身份要求随之被放宽成所有成员。
+func repositoryPublishEffectiveGroupRoles(settings SettingValues) (repositoryAccessRoles, repositoryAccessRoles, error) {
+	_, managerRoles, err := repositoryPublishGroupAccessRules(settings.String(repositoryPublishSettingManagerGroups, ""))
+	if err != nil {
+		return nil, nil, err
+	}
+	draftAccess, draftRoles, err := repositoryPublishGroupAccessRules(settings.String(repositoryPublishSettingDraftGroups, ""))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(draftAccess) == 0 {
+		draftAccess, draftRoles, err = repositoryPublishGroupAccessRules(settings.String(repositoryPublishSettingGroupAccess, ""))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	effectiveDraft := repositoryAccessRoles{}
+	for scopeID, repositories := range draftRoles {
+		for repository, requirement := range repositories {
+			effectiveDraft.set(scopeID, repository, requirement)
+		}
+	}
+	for scopeID, repositories := range managerRoles {
+		for repository, requirement := range repositories {
+			if draftAccess[scopeID][repository] {
+				requirement = requirement.looser(effectiveDraft.requirement(scopeID, repository))
+			}
+			effectiveDraft.set(scopeID, repository, requirement)
+		}
+	}
+	return managerRoles, effectiveDraft, nil
+}
+
+// repositoryPublishGroupRoleDeniedMessage 说清楚差在哪：是身份不够，还是平台压根
+// 没告诉我们身份。后者要写明，否则群主自己被拒会以为是配置错了。
+func repositoryPublishGroupRoleDeniedMessage(requirement repositoryAccessRole, role GroupRole) string {
+	const tail = "（这里说的是群里的身份，不是 Diana 的「Issue 管理人员」名单：" +
+		"想单独放行某个人，让主人把他的用户 ID 填进按用户的授权，那份授权私聊群聊都生效。）"
+	if label := GroupRoleLabel(role); label != "" {
+		return "本群对该仓库的授权只对" + requirement.label() + "生效，你当前的群身份是" + label + "，已拒绝。" + tail
+	}
+	return "本群对该仓库的授权只对" + requirement.label() + "生效，但当前平台没有提供你的群身份，无法确认，已拒绝。" + tail
 }
 
 func repositoryPublishEffectiveAccess(settings SettingValues, legacyUsers, legacyGroups map[string]map[string]bool) (map[string]map[string]bool, map[string]map[string]bool, map[string]map[string]bool, map[string]map[string]bool, error) {
@@ -679,6 +770,31 @@ func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositor
 // 也不该把这一轮回复标成「有外部副作用、不可打断」。
 func repositoryIssueReadOnlyOperation(operation string) bool {
 	return operation == "search" || operation == "repo_search" || operation == "repo"
+}
+
+// groupRoleResolver 返回「取当前发言人在本群的身份」的惰性闭包。事件里带就用事件
+// 里的——OneBot 每条群消息都带 sender.role；带不到再回查一次群成员信息。查不到返回
+// 空串，按「身份未知」处理，不当成普通成员放行。
+//
+// 这里说的是发言人在群里的身份（群主 / 群管理员 / 群成员），和 Diana 自己的
+// 「Issue 管理人员」是两回事：后者是这个插件的授权名单，跟着人或群走，私聊也算数。
+func (t *dianaRepositoryIssuesTool) groupRoleResolver(ctx context.Context) groupRoleResolver {
+	return func() GroupRole {
+		if t == nil || t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+			return ""
+		}
+		if role := NormalizeGroupRole(t.event.SenderRole); role != "" {
+			return role
+		}
+		if t.runtime == nil {
+			return ""
+		}
+		member, err := t.runtime.getGroupMemberInfoForEvent(ctx, t.event, t.event.GroupID, t.event.UserID)
+		if err != nil {
+			return ""
+		}
+		return NormalizeGroupRole(member.Role)
+	}
 }
 
 func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner bool) (string, string) {
@@ -914,25 +1030,51 @@ func repositoryPublishGroupAccess(raw string) (map[string]map[string]bool, error
 }
 
 func repositoryPublishScopedAccess(raw, scope string) (map[string]map[string]bool, error) {
+	access, _, err := repositoryPublishScopedAccessRules(raw, scope)
+	return access, err
+}
+
+// repositoryPublishGroupAccessRules 在解析按群授权的同时取出每条的身份要求。
+func repositoryPublishGroupAccessRules(raw string) (map[string]map[string]bool, repositoryAccessRoles, error) {
+	return repositoryPublishScopedAccessRules(raw, "group")
+}
+
+// repositoryPublishScopedAccessRules 解析「ID = owner/repo, owner/repo」。按群授权的
+// 每个仓库后面可以跟 #group_admin 这样的身份要求后缀，不写等于「所有成员」，老配置
+// 读进来语义不变。用户授权没有群身份可言，带后缀直接判错，免得填错地方还悄悄生效。
+func repositoryPublishScopedAccessRules(raw, scope string) (map[string]map[string]bool, repositoryAccessRoles, error) {
 	access := map[string]map[string]bool{}
+	roles := repositoryAccessRoles{}
 	for _, line := range strings.FieldsFunc(raw, func(char rune) bool { return char == '\n' || char == '\r' || char == ';' || char == '；' }) {
 		scopeID, repositories, ok := strings.Cut(line, "=")
 		scopeID = strings.TrimSpace(scopeID)
 		if !ok || scopeID == "" || strings.Contains(repositories, "=") {
-			return nil, fmt.Errorf("invalid %s repository rule", scope)
+			return nil, nil, fmt.Errorf("invalid %s repository rule", scope)
 		}
 		if access[scopeID] == nil {
 			access[scopeID] = map[string]bool{}
 		}
 		for _, item := range strings.Split(repositories, ",") {
+			item, suffix, hasSuffix := strings.Cut(item, repositoryAccessRoleSeparator)
+			if hasSuffix && scope != "group" {
+				return nil, nil, fmt.Errorf("invalid %s repository rule: group role requirement is only valid for group access", scope)
+			}
+			requirement, err := parseRepositoryAccessRole(suffix)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid %s repository rule: %w", scope, err)
+			}
 			repository, err := normalizeGitHubRepository(item)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			access[scopeID][strings.ToLower(repository)] = true
+			key := strings.ToLower(repository)
+			access[scopeID][key] = true
+			if requirement != repositoryAccessRoleAllMembers {
+				roles.set(scopeID, key, requirement)
+			}
 		}
 	}
-	return access, nil
+	return access, roles, nil
 }
 
 func repositoryPublishAllowlist(raw string) (map[string]bool, error) {
@@ -1307,7 +1449,7 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	}
 	result.Repository = draft.Repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	userAllowed, _, code, message := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings)
+	userAllowed, _, code, message := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings, t.groupRoleResolver(ctx))
 	if code != "" || !userAllowed {
 		if code == "" {
 			code, message = "permission_denied", "当前用户没有该仓库的审批权限。"
@@ -1669,7 +1811,7 @@ func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[s
 	}
 	result.Repository = draft.Repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	userAllowed, _, code, _ := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings)
+	userAllowed, _, code, _ := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings, t.groupRoleResolver(ctx))
 	if code != "" || !userAllowed {
 		return result.fail("permission_denied", "当前用户没有该仓库的草稿管理权限。")
 	}
