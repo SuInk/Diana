@@ -3928,7 +3928,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply == "" {
 		if controlIntent.SuppressCurrentUser {
-			reply = "为避免继续自动循环，我会暂停响应此账号约 30 分钟"
+			// 暂停不通报：模型只吐了个处置标志、没有正文时，以前会补一句「我会暂停
+			// 响应此账号约 30 分钟」再发出去。那句话本身也是一条发言，对着正在刷屏的
+			// 另一台机器人既停不住它，又给这段已经在空转的对话再添一条。现在什么都
+			// 不发——但暂停要在这里就地生效：后面的发送路径不会再走到，
+			// applyReplyControlAfterSend 也就没有机会执行。
+			r.applyReplyControlAfterSend(withReplySuppressionSendGuard(ctx), event, "", controlIntent)
+			return "", errReplySuppressedBeforeSend
 		} else if controlIntent.RefuseCurrent {
 			reply = "这条消息我暂时不想回答，我们换个话题吧"
 		} else if pending := imageAnnouncements.drain(); pending != "" {

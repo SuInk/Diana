@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"sort"
 	"strings"
@@ -14,11 +15,13 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
-	"github.com/SuInk/diana/model/llm"
 )
 
 const (
-	replySuppressionDuration          = 30 * time.Minute
+	// 暂停时长在这个区间里随机取，不再固定三十分钟：固定值等于给对方一个精确的
+	// 时刻表，而且每次都一样的「恰好三十分钟」本身就很像机器。
+	replySuppressionMinDuration       = 10 * time.Minute
+	replySuppressionMaxDuration       = 30 * time.Minute
 	replySuppressionMarker            = "[[DIANA_IGNORE_CURRENT_USER_30M]]"
 	replyRefusalMarker                = "[[DIANA_REFUSE_CURRENT]]"
 	replyRefusalThreshold             = 4
@@ -27,7 +30,6 @@ const (
 	botReplyLoopWindow                = 30 * time.Minute
 	botReplyLoopAIConfidenceThreshold = 0.90
 	botReplyLoopClassificationTimeout = 20 * time.Second
-	replySuppressionNoticeTimeout     = 60 * time.Second
 	replyRefusalAuditConfidence       = 0.90
 )
 
@@ -299,6 +301,16 @@ func (r *Runtime) activateReplySuppressionWithinOutboundGate(event MessageEvent,
 	return item, true
 }
 
+// randomReplySuppressionDuration 在 [replySuppressionMinDuration, replySuppressionMaxDuration]
+// 里取一个随机时长。用 math/rand 就够：这不是安全边界，只是不想每次都停一样久。
+func randomReplySuppressionDuration() time.Duration {
+	spread := replySuppressionMaxDuration - replySuppressionMinDuration
+	if spread <= 0 {
+		return replySuppressionMinDuration
+	}
+	return replySuppressionMinDuration + time.Duration(rand.Int63n(int64(spread)+1))
+}
+
 func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now time.Time) (ReplySuppression, bool) {
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
@@ -314,7 +326,7 @@ func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now tim
 		TriggerMessageID: strings.TrimSpace(event.MessageID),
 		Reason:           truncateRunesFromStart(strings.TrimSpace(reason), 240),
 		CreatedAt:        now,
-		Until:            now.Add(replySuppressionDuration),
+		Until:            now.Add(randomReplySuppressionDuration()),
 	}, true
 }
 
@@ -672,12 +684,9 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 	if !ok {
 		return
 	}
-	noticeBase := withReplySuppressionOutboundGateHeld(withReplySuppressionSendGuard(context.Background()))
-	noticeCtx, cancel := context.WithTimeout(noticeBase, replySuppressionNoticeTimeout)
-	defer cancel()
-	if err := r.sendReplyRefusalCooldownNotice(noticeCtx, event, item); err != nil {
-		return
-	}
+	// 不再发「短时间内已累计拒绝 N 次请求，现暂停响应此账号」那一句：暂停直接生效，
+	// 不通报。顺带修掉一处耦合——原先通知发失败就直接 return，暂停跟着一起不生效。
+	_ = item
 	r.activateReplySuppressionWithinOutboundGate(event, reason, now)
 }
 
@@ -789,88 +798,10 @@ func formatReplySuppressionRemaining(remaining time.Duration) string {
 	return fmt.Sprintf("约 %d 分钟", minutes)
 }
 
-func (r *Runtime) sendReplySuppressionActivationNotice(ctx context.Context, event MessageEvent, item ReplySuppression) {
-	notice, generationErr := r.generateReplySuppressionActivationNotice(ctx, event, item)
-	llmGenerated := generationErr == nil && notice != ""
-	if !llmGenerated {
-		notice = "为避免机器人互相循环，已暂停响应此账号" + formatReplySuppressionRemaining(time.Until(item.Until)) + "，期间不再接续消息。"
-	}
-	msg := OutgoingMessage{Text: notice}
-	if event.Kind == EventKindGroup {
-		msg.GroupID = event.GroupID
-	} else {
-		msg.UserID = event.UserID
-	}
-	sendErr := r.sendOutgoing(ctx, event, msg)
-	r.recordReplySuppressionNotice(event, item, llmGenerated, generationErr, sendErr)
-}
-
-func (r *Runtime) sendReplyRefusalCooldownNotice(ctx context.Context, event MessageEvent, item ReplySuppression) error {
-	msg := OutgoingMessage{Text: fmt.Sprintf(
-		"短时间内已累计拒绝 %d 次请求，现暂停响应此账号%s；期间消息不会在到期后补发。",
-		replyRefusalThreshold,
-		formatReplySuppressionRemaining(time.Until(item.Until)),
-	)}
-	if event.Kind == EventKindGroup {
-		msg.GroupID = event.GroupID
-	} else {
-		msg.UserID = event.UserID
-	}
-	sendErr := r.sendOutgoing(ctx, event, msg)
-	r.recordReplySuppressionNotice(event, item, false, nil, sendErr)
-	return sendErr
-}
-
-func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, event MessageEvent, item ReplySuppression) (string, error) {
-	ctx = withLLMUsagePurpose(ctx, "reply_suppression_notice")
-	messages := r.withUserFacingPersona(event, []llm.Message{
-		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你为 群聊生成一条简短的系统状态提示。
-要求：
-1. 说明为避免机器人互相循环，机器人已暂时停止响应“此账号”。
-2. 说明暂停的大约时长。
-3. 只输出一句自然中文纯文本，不要解释检测细节，不要责怪对方。
-4. 不得使用 @、账号、昵称、引用、CQ 码、Markdown、表情或引号。
-5. 最多 70 个汉字。`),
-		},
-		{
-			Role:    llm.RoleUser,
-			Content: "暂停时长：" + formatReplySuppressionRemaining(time.Until(item.Until)),
-		},
-	})
-	callCtx, cancel := context.WithTimeout(ctx, replySuppressionNoticeTimeout)
-	defer cancel()
-	raw, err := r.runLLMProvider(callCtx, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
-		if err != nil {
-			return "", err
-		}
-		return resp.Text, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	notice := sanitizeReplySuppressionNotice(raw)
-	if notice == "" || !strings.Contains(notice, "暂停") || !strings.Contains(notice, "响应") || !strings.Contains(notice, "此账号") {
-		return "", fmt.Errorf("响应限制提示未包含必要状态")
-	}
-	return notice, nil
-}
-
-func sanitizeReplySuppressionNotice(raw string) string {
-	if strings.Contains(raw, "@") || strings.Contains(raw, "[CQ:") || replySuppressionAccountPattern.MatchString(raw) {
-		return ""
-	}
-	raw = strings.Trim(strings.TrimSpace(raw), "`\"' ")
-	raw = PlainText(CQToSegments(raw))
-	raw = normalizeChatWhitespace(raw)
-	if len([]rune(raw)) > 70 {
-		raw = string([]rune(raw)[:70])
-	}
-	return strings.TrimSpace(raw)
-}
-
+// 暂停不再向群里通报。以前会发一句「为避免机器人互相循环，已暂停响应此账号约 30
+// 分钟」，那句话本身也是一条发言：对着正在刷屏的另一台机器人，它既停不住对方，又
+// 给这段已经在空转的对话再添一条。人被晾着的时候不会先宣布自己要晾多久，直接不说
+// 话就是了。停多久也不再是固定的整三十分钟，见 randomReplySuppressionDuration。
 func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppression, action, message string, operationErr error) {
 	writer := r.appLogWriter()
 	if writer == nil {
@@ -898,36 +829,4 @@ func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppressi
 
 func (r *Runtime) recordReplySuppressionBlocked(event MessageEvent, item ReplySuppression) {
 	r.recordReplySuppression(event, item, "response_suppression_blocked", "响应限制已拦截用户消息", nil)
-}
-
-func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySuppression, llmGenerated bool, generationErr, sendErr error) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	action := "response_suppression_notice_sent"
-	message := "响应限制提示已发送"
-	kind := applog.KindOperation
-	level := applog.LevelInfo
-	detail := ""
-	if sendErr != nil {
-		action = "response_suppression_notice_failed"
-		message = "响应限制提示发送失败"
-		kind = applog.KindError
-		level = applog.LevelError
-		detail = sendErr.Error()
-	}
-	metadata := map[string]any{
-		"group_id": item.GroupID, "user_id": item.UserID, "until": item.Until,
-		"trigger_message_id": item.TriggerMessageID, "llm_generated": llmGenerated,
-	}
-	if generationErr != nil {
-		metadata["generation_error"] = generationErr.Error()
-	}
-	logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = writer.AppendLog(logCtx, applog.Entry{
-		Kind: kind, Level: level, Action: action, Message: message, Detail: detail,
-		Actor: oneBotEventActor(event), Target: item.UserID, Metadata: metadata,
-	})
 }

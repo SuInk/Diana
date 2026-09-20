@@ -680,7 +680,6 @@ func (r *Runtime) applyReplyLoopVerdict(ctx context.Context, event MessageEvent,
 	restriction, activated := r.activateReplySuppression(event, loopReason, now)
 	if activated {
 		r.recordReplySuppressionBlocked(event, restriction)
-		r.sendReplySuppressionActivationNotice(ctx, event, restriction)
 	}
 	return errReplyLoopDetected
 }
