@@ -1,0 +1,922 @@
+{
+ "_comment": "Real production request measurements: character-class counts and provider-reported input_tokens. Content is intentionally not stored.",
+ "samples": [
+  {
+   "ascii": 555,
+   "bmp": 634,
+   "astral": 2,
+   "messages": 2,
+   "input_tokens": 747
+  },
+  {
+   "ascii": 737,
+   "bmp": 601,
+   "astral": 2,
+   "messages": 2,
+   "input_tokens": 760
+  },
+  {
+   "ascii": 690,
+   "bmp": 601,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 765
+  },
+  {
+   "ascii": 675,
+   "bmp": 623,
+   "astral": 5,
+   "messages": 2,
+   "input_tokens": 765
+  },
+  {
+   "ascii": 766,
+   "bmp": 738,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 769
+  },
+  {
+   "ascii": 648,
+   "bmp": 633,
+   "astral": 2,
+   "messages": 2,
+   "input_tokens": 777
+  },
+  {
+   "ascii": 819,
+   "bmp": 572,
+   "astral": 2,
+   "messages": 2,
+   "input_tokens": 793
+  },
+  {
+   "ascii": 788,
+   "bmp": 615,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 795
+  },
+  {
+   "ascii": 818,
+   "bmp": 623,
+   "astral": 2,
+   "messages": 2,
+   "input_tokens": 818
+  },
+  {
+   "ascii": 797,
+   "bmp": 680,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 863
+  },
+  {
+   "ascii": 887,
+   "bmp": 686,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 907
+  },
+  {
+   "ascii": 942,
+   "bmp": 719,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 981
+  },
+  {
+   "ascii": 919,
+   "bmp": 767,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1000
+  },
+  {
+   "ascii": 1015,
+   "bmp": 1152,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1021
+  },
+  {
+   "ascii": 1008,
+   "bmp": 1207,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1076
+  },
+  {
+   "ascii": 1033,
+   "bmp": 1219,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1105
+  },
+  {
+   "ascii": 1072,
+   "bmp": 1137,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1124
+  },
+  {
+   "ascii": 1196,
+   "bmp": 1035,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1150
+  },
+  {
+   "ascii": 1092,
+   "bmp": 1024,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1152
+  },
+  {
+   "ascii": 1377,
+   "bmp": 984,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1172
+  },
+  {
+   "ascii": 1443,
+   "bmp": 1163,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1289
+  },
+  {
+   "ascii": 1799,
+   "bmp": 954,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1347
+  },
+  {
+   "ascii": 1579,
+   "bmp": 1088,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1362
+  },
+  {
+   "ascii": 1525,
+   "bmp": 1131,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1376
+  },
+  {
+   "ascii": 1592,
+   "bmp": 1125,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1390
+  },
+  {
+   "ascii": 1651,
+   "bmp": 1113,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1424
+  },
+  {
+   "ascii": 1658,
+   "bmp": 1081,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1426
+  },
+  {
+   "ascii": 1626,
+   "bmp": 1127,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1434
+  },
+  {
+   "ascii": 1840,
+   "bmp": 967,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1560
+  },
+  {
+   "ascii": 3412,
+   "bmp": 757,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 1787
+  },
+  {
+   "ascii": 4813,
+   "bmp": 1189,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 2664
+  },
+  {
+   "ascii": 4989,
+   "bmp": 1188,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 2698
+  },
+  {
+   "ascii": 4986,
+   "bmp": 1234,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 2746
+  },
+  {
+   "ascii": 5317,
+   "bmp": 1025,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 2757
+  },
+  {
+   "ascii": 4262,
+   "bmp": 1997,
+   "astral": 16,
+   "messages": 2,
+   "input_tokens": 2899
+  },
+  {
+   "ascii": 5218,
+   "bmp": 1868,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 2935
+  },
+  {
+   "ascii": 1782,
+   "bmp": 3243,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 2982
+  },
+  {
+   "ascii": 5588,
+   "bmp": 1205,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 3020
+  },
+  {
+   "ascii": 5229,
+   "bmp": 1956,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 3058
+  },
+  {
+   "ascii": 5831,
+   "bmp": 1948,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3139
+  },
+  {
+   "ascii": 5379,
+   "bmp": 2125,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3166
+  },
+  {
+   "ascii": 5007,
+   "bmp": 2080,
+   "astral": 15,
+   "messages": 2,
+   "input_tokens": 3237
+  },
+  {
+   "ascii": 5449,
+   "bmp": 2224,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3345
+  },
+  {
+   "ascii": 2265,
+   "bmp": 3893,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3362
+  },
+  {
+   "ascii": 5351,
+   "bmp": 2055,
+   "astral": 17,
+   "messages": 2,
+   "input_tokens": 3447
+  },
+  {
+   "ascii": 2354,
+   "bmp": 3997,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3480
+  },
+  {
+   "ascii": 5592,
+   "bmp": 2145,
+   "astral": 13,
+   "messages": 2,
+   "input_tokens": 3528
+  },
+  {
+   "ascii": 5448,
+   "bmp": 2630,
+   "astral": 11,
+   "messages": 2,
+   "input_tokens": 3709
+  },
+  {
+   "ascii": 5516,
+   "bmp": 2501,
+   "astral": 13,
+   "messages": 2,
+   "input_tokens": 3720
+  },
+  {
+   "ascii": 2269,
+   "bmp": 3872,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3733
+  },
+  {
+   "ascii": 2288,
+   "bmp": 3865,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3736
+  },
+  {
+   "ascii": 2254,
+   "bmp": 3888,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3739
+  },
+  {
+   "ascii": 6056,
+   "bmp": 2011,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 3748
+  },
+  {
+   "ascii": 2265,
+   "bmp": 3895,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3757
+  },
+  {
+   "ascii": 6215,
+   "bmp": 2086,
+   "astral": 12,
+   "messages": 2,
+   "input_tokens": 3769
+  },
+  {
+   "ascii": 6158,
+   "bmp": 2580,
+   "astral": 6,
+   "messages": 2,
+   "input_tokens": 3774
+  },
+  {
+   "ascii": 6090,
+   "bmp": 2028,
+   "astral": 6,
+   "messages": 2,
+   "input_tokens": 3854
+  },
+  {
+   "ascii": 2459,
+   "bmp": 4018,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 3912
+  },
+  {
+   "ascii": 6799,
+   "bmp": 1988,
+   "astral": 1,
+   "messages": 2,
+   "input_tokens": 4072
+  },
+  {
+   "ascii": 6212,
+   "bmp": 3271,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 4306
+  },
+  {
+   "ascii": 7157,
+   "bmp": 3011,
+   "astral": 65,
+   "messages": 2,
+   "input_tokens": 5007
+  },
+  {
+   "ascii": 6461,
+   "bmp": 4238,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 5383
+  },
+  {
+   "ascii": 3772,
+   "bmp": 5892,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 5674
+  },
+  {
+   "ascii": 3068,
+   "bmp": 6642,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 5800
+  },
+  {
+   "ascii": 4846,
+   "bmp": 2176,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 6316
+  },
+  {
+   "ascii": 2219,
+   "bmp": 3849,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 6429
+  },
+  {
+   "ascii": 5704,
+   "bmp": 2413,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 6751
+  },
+  {
+   "ascii": 5730,
+   "bmp": 2234,
+   "astral": 0,
+   "messages": 2,
+   "input_tokens": 8922
+  },
+  {
+   "ascii": 3468,
+   "bmp": 11097,
+   "astral": 3,
+   "messages": 27,
+   "input_tokens": 9732
+  },
+  {
+   "ascii": 4006,
+   "bmp": 11983,
+   "astral": 4,
+   "messages": 28,
+   "input_tokens": 9899
+  },
+  {
+   "ascii": 3923,
+   "bmp": 12808,
+   "astral": 3,
+   "messages": 28,
+   "input_tokens": 11307
+  },
+  {
+   "ascii": 22787,
+   "bmp": 25240,
+   "astral": 3,
+   "messages": 79,
+   "input_tokens": 27114
+  },
+  {
+   "ascii": 29075,
+   "bmp": 25118,
+   "astral": 3,
+   "messages": 91,
+   "input_tokens": 27679
+  },
+  {
+   "ascii": 30327,
+   "bmp": 25113,
+   "astral": 3,
+   "messages": 85,
+   "input_tokens": 27754
+  },
+  {
+   "ascii": 23514,
+   "bmp": 26034,
+   "astral": 4,
+   "messages": 87,
+   "input_tokens": 27811
+  },
+  {
+   "ascii": 23445,
+   "bmp": 26867,
+   "astral": 47,
+   "messages": 85,
+   "input_tokens": 28293
+  },
+  {
+   "ascii": 23791,
+   "bmp": 26510,
+   "astral": 3,
+   "messages": 98,
+   "input_tokens": 28445
+  },
+  {
+   "ascii": 31715,
+   "bmp": 25810,
+   "astral": 3,
+   "messages": 89,
+   "input_tokens": 28550
+  },
+  {
+   "ascii": 23911,
+   "bmp": 27066,
+   "astral": 39,
+   "messages": 97,
+   "input_tokens": 29188
+  },
+  {
+   "ascii": 25785,
+   "bmp": 26049,
+   "astral": 3,
+   "messages": 100,
+   "input_tokens": 29500
+  },
+  {
+   "ascii": 24789,
+   "bmp": 27228,
+   "astral": 3,
+   "messages": 113,
+   "input_tokens": 29559
+  },
+  {
+   "ascii": 23371,
+   "bmp": 27953,
+   "astral": 13,
+   "messages": 73,
+   "input_tokens": 29623
+  },
+  {
+   "ascii": 25151,
+   "bmp": 27023,
+   "astral": 3,
+   "messages": 138,
+   "input_tokens": 29975
+  },
+  {
+   "ascii": 25684,
+   "bmp": 27242,
+   "astral": 3,
+   "messages": 147,
+   "input_tokens": 30681
+  },
+  {
+   "ascii": 26265,
+   "bmp": 27753,
+   "astral": 3,
+   "messages": 132,
+   "input_tokens": 30894
+  },
+  {
+   "ascii": 27230,
+   "bmp": 27320,
+   "astral": 3,
+   "messages": 158,
+   "input_tokens": 31391
+  },
+  {
+   "ascii": 26665,
+   "bmp": 28125,
+   "astral": 3,
+   "messages": 130,
+   "input_tokens": 31405
+  },
+  {
+   "ascii": 25577,
+   "bmp": 29162,
+   "astral": 52,
+   "messages": 118,
+   "input_tokens": 31775
+  },
+  {
+   "ascii": 25911,
+   "bmp": 30729,
+   "astral": 49,
+   "messages": 96,
+   "input_tokens": 31837
+  },
+  {
+   "ascii": 28055,
+   "bmp": 28756,
+   "astral": 55,
+   "messages": 140,
+   "input_tokens": 32697
+  },
+  {
+   "ascii": 27822,
+   "bmp": 31027,
+   "astral": 48,
+   "messages": 133,
+   "input_tokens": 33128
+  },
+  {
+   "ascii": 28815,
+   "bmp": 28802,
+   "astral": 58,
+   "messages": 143,
+   "input_tokens": 33149
+  },
+  {
+   "ascii": 28778,
+   "bmp": 29629,
+   "astral": 7,
+   "messages": 112,
+   "input_tokens": 34014
+  },
+  {
+   "ascii": 29766,
+   "bmp": 31032,
+   "astral": 3,
+   "messages": 118,
+   "input_tokens": 35249
+  },
+  {
+   "ascii": 30088,
+   "bmp": 31106,
+   "astral": 3,
+   "messages": 126,
+   "input_tokens": 35706
+  },
+  {
+   "ascii": 41166,
+   "bmp": 30685,
+   "astral": 70,
+   "messages": 114,
+   "input_tokens": 35834
+  },
+  {
+   "ascii": 34915,
+   "bmp": 31969,
+   "astral": 79,
+   "messages": 114,
+   "input_tokens": 36218
+  },
+  {
+   "ascii": 25662,
+   "bmp": 39541,
+   "astral": 45,
+   "messages": 94,
+   "input_tokens": 37011
+  },
+  {
+   "ascii": 34666,
+   "bmp": 33647,
+   "astral": 45,
+   "messages": 103,
+   "input_tokens": 37076
+  },
+  {
+   "ascii": 32073,
+   "bmp": 32596,
+   "astral": 9,
+   "messages": 145,
+   "input_tokens": 37963
+  },
+  {
+   "ascii": 34916,
+   "bmp": 32922,
+   "astral": 3,
+   "messages": 128,
+   "input_tokens": 38532
+  },
+  {
+   "ascii": 37872,
+   "bmp": 35723,
+   "astral": 73,
+   "messages": 130,
+   "input_tokens": 40319
+  },
+  {
+   "ascii": 43895,
+   "bmp": 36060,
+   "astral": 36,
+   "messages": 107,
+   "input_tokens": 40985
+  },
+  {
+   "ascii": 39320,
+   "bmp": 36547,
+   "astral": 73,
+   "messages": 132,
+   "input_tokens": 41435
+  },
+  {
+   "ascii": 33620,
+   "bmp": 37298,
+   "astral": 8,
+   "messages": 96,
+   "input_tokens": 41581
+  },
+  {
+   "ascii": 51931,
+   "bmp": 35294,
+   "astral": 87,
+   "messages": 113,
+   "input_tokens": 46431
+  },
+  {
+   "ascii": 58722,
+   "bmp": 34573,
+   "astral": 92,
+   "messages": 118,
+   "input_tokens": 50812
+  },
+  {
+   "ascii": 45326,
+   "bmp": 55893,
+   "astral": 13,
+   "messages": 185,
+   "input_tokens": 52991
+  },
+  {
+   "ascii": 48884,
+   "bmp": 57653,
+   "astral": 14,
+   "messages": 215,
+   "input_tokens": 58398
+  },
+  {
+   "ascii": 47238,
+   "bmp": 55361,
+   "astral": 14,
+   "messages": 211,
+   "input_tokens": 58932
+  },
+  {
+   "ascii": 48132,
+   "bmp": 56497,
+   "astral": 14,
+   "messages": 211,
+   "input_tokens": 59031
+  },
+  {
+   "ascii": 46597,
+   "bmp": 53791,
+   "astral": 13,
+   "messages": 216,
+   "input_tokens": 59115
+  },
+  {
+   "ascii": 46806,
+   "bmp": 54251,
+   "astral": 14,
+   "messages": 213,
+   "input_tokens": 59565
+  },
+  {
+   "ascii": 47043,
+   "bmp": 54347,
+   "astral": 14,
+   "messages": 215,
+   "input_tokens": 59576
+  },
+  {
+   "ascii": 45863,
+   "bmp": 54459,
+   "astral": 14,
+   "messages": 205,
+   "input_tokens": 59644
+  },
+  {
+   "ascii": 47230,
+   "bmp": 56595,
+   "astral": 14,
+   "messages": 197,
+   "input_tokens": 61055
+  },
+  {
+   "ascii": 78399,
+   "bmp": 51422,
+   "astral": 3,
+   "messages": 581,
+   "input_tokens": 61482
+  },
+  {
+   "ascii": 71800,
+   "bmp": 49394,
+   "astral": 159,
+   "messages": 390,
+   "input_tokens": 62400
+  },
+  {
+   "ascii": 80185,
+   "bmp": 51412,
+   "astral": 175,
+   "messages": 473,
+   "input_tokens": 63035
+  },
+  {
+   "ascii": 81560,
+   "bmp": 49881,
+   "astral": 3,
+   "messages": 575,
+   "input_tokens": 64351
+  },
+  {
+   "ascii": 82648,
+   "bmp": 51044,
+   "astral": 3,
+   "messages": 584,
+   "input_tokens": 64564
+  },
+  {
+   "ascii": 82537,
+   "bmp": 49858,
+   "astral": 3,
+   "messages": 583,
+   "input_tokens": 65241
+  },
+  {
+   "ascii": 80545,
+   "bmp": 50758,
+   "astral": 3,
+   "messages": 574,
+   "input_tokens": 65637
+  },
+  {
+   "ascii": 75838,
+   "bmp": 48681,
+   "astral": 3,
+   "messages": 560,
+   "input_tokens": 65698
+  },
+  {
+   "ascii": 95848,
+   "bmp": 62949,
+   "astral": 195,
+   "messages": 542,
+   "input_tokens": 65842
+  },
+  {
+   "ascii": 84276,
+   "bmp": 53857,
+   "astral": 3,
+   "messages": 576,
+   "input_tokens": 65976
+  },
+  {
+   "ascii": 83067,
+   "bmp": 52252,
+   "astral": 3,
+   "messages": 613,
+   "input_tokens": 66403
+  },
+  {
+   "ascii": 78048,
+   "bmp": 50489,
+   "astral": 3,
+   "messages": 572,
+   "input_tokens": 66779
+  },
+  {
+   "ascii": 76069,
+   "bmp": 48854,
+   "astral": 3,
+   "messages": 568,
+   "input_tokens": 66894
+  },
+  {
+   "ascii": 64182,
+   "bmp": 47176,
+   "astral": 3,
+   "messages": 394,
+   "input_tokens": 66999
+  },
+  {
+   "ascii": 92576,
+   "bmp": 62976,
+   "astral": 3,
+   "messages": 596,
+   "input_tokens": 70343
+  }
+ ]
+}

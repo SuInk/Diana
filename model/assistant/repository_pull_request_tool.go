@@ -131,7 +131,7 @@ type repositoryPullRequestReviewComment struct {
 
 // getIssueOrPullRequest 读 Issue 接口上的对象，PR 也照样返回。GitHub 的 PR 同时是一个
 // Issue：标题、正文、普通评论都在 Issue 接口上。
-func (t *dianaRepositoryIssuesTool) getIssueOrPullRequest(ctx context.Context, repository string, number int) (githubRepositoryIssue, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) getIssueOrPullRequest(ctx context.Context, repository string, number int) (githubRepositoryIssue, *repositoryIssueAPIError) {
 	var issue githubRepositoryIssue
 	apiErr := t.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d", repository, number), nil, &issue)
 	return issue, apiErr
@@ -144,7 +144,7 @@ func repositoryIssueResource(issue githubRepositoryIssue) string {
 	return "issues"
 }
 
-func (t *dianaRepositoryIssuesTool) getPullRequest(ctx context.Context, repository string, number int) (githubPullRequest, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) getPullRequest(ctx context.Context, repository string, number int) (githubPullRequest, *repositoryIssueAPIError) {
 	var pull githubPullRequest
 	if apiErr := t.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d", repository, number), nil, &pull); apiErr != nil {
 		return pull, apiErr
@@ -168,7 +168,7 @@ func repositoryPullRequestViewFromGitHub(pull githubPullRequest) *repositoryPull
 }
 
 // attachPullRequestDetails 给 get 的结果补上 PR 的分支、合并状态和最近几条 review。
-func (t *dianaRepositoryIssuesTool) attachPullRequestDetails(ctx context.Context, repository string, number int, result *repositoryIssueResult) *repositoryIssueAPIError {
+func (t *dianaGitHubTool) attachPullRequestDetails(ctx context.Context, repository string, number int, result *repositoryIssueResult) *repositoryIssueAPIError {
 	pull, apiErr := t.getPullRequest(ctx, repository, number)
 	if apiErr != nil {
 		return apiErr
@@ -197,7 +197,7 @@ func (t *dianaRepositoryIssuesTool) attachPullRequestDetails(ctx context.Context
 }
 
 // pullFiles 读 PR 改动的文件和 patch。review 之前应该先读这里，而不是只看 PR 描述。
-func (t *dianaRepositoryIssuesTool) pullFiles(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) pullFiles(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	number := repositoryIssueNumber(input)
 	result := repositoryIssueResult{Operation: "pull_files", Repository: repository, RequestedNumber: number}
 	if number <= 0 {
@@ -365,7 +365,7 @@ func repositoryPullRequestReviewCommentsPayload(comments []repositoryPullRequest
 }
 
 // review 提交一次只评论、不批准也不要求修改的 PR review。
-func (t *dianaRepositoryIssuesTool) review(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) review(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	number := repositoryIssueNumber(input)
 	result := repositoryIssueResult{Operation: "review", Repository: repository, RequestedNumber: number}
 	if number <= 0 {
@@ -447,7 +447,7 @@ func (t *dianaRepositoryIssuesTool) review(ctx context.Context, repository strin
 	return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 }
 
-func (t *dianaRepositoryIssuesTool) findReviewMarker(ctx context.Context, repository string, number int, marker, markerPrefix string) (githubPullRequestReview, repositoryIssueMarkerMatch, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) findReviewMarker(ctx context.Context, repository string, number int, marker, markerPrefix string) (githubPullRequestReview, repositoryIssueMarkerMatch, *repositoryIssueAPIError) {
 	for page := 1; page <= repositoryPullRequestReviewMaxPages; page++ {
 		values := url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}}
 		var reviews []githubPullRequestReview
@@ -509,7 +509,7 @@ type githubRepositoryContent struct {
 // readFile 读仓库里一个文件的完整内容（带行号）。pull_files 只有 diff，review 时要看改动
 // 周围的代码就得读原文件；以前模型只能去渲染 GitHub 网页。给了 PR number 时默认读 PR
 // head 那一版，行号和行内评论要用的 RIGHT 行号一致。
-func (t *dianaRepositoryIssuesTool) readFile(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) readFile(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "read_file", Repository: repository}
 	path := strings.Trim(strings.TrimSpace(configToolString(input, "path")), "/")
 	if path == "" || strings.Contains(path, "..") {

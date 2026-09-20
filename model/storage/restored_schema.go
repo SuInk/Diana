@@ -214,6 +214,17 @@ CREATE TABLE IF NOT EXISTS onebot_requests (
   decided_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS pending_direct_messages (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  platform TEXT,
+  user_id TEXT NOT NULL,
+  source_session TEXT,
+  message TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS outbound_delivery_steps (
   turn_id TEXT NOT NULL,
   step_key TEXT NOT NULL,
@@ -313,6 +324,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_jobs_claim ON memory_jobs(status, availabl
 CREATE INDEX IF NOT EXISTS idx_memory_jobs_lease ON memory_jobs(status, lease_until);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_states_active_scope ON thread_states(profile_id, session, user_id, task_kind) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_thread_states_active_expiry ON thread_states(status, expires_at, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pending_direct_messages_target ON pending_direct_messages(profile_id, user_id, expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_onebot_requests_identity ON onebot_requests(profile_id, request_type, sub_type, flag);
 CREATE INDEX IF NOT EXISTS idx_onebot_requests_profile_status_time ON onebot_requests(profile_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_claim_time ON inbound_events(status, available_at, event_time, created_at, id);

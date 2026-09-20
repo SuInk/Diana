@@ -86,7 +86,7 @@ func TestDianaScheduleToolCreatesAtMostFivePerCall(t *testing.T) {
 
 func TestDianaScheduleBatchUsesRemainingQuota(t *testing.T) {
 	store := &stubReminderStore{}
-	for index := 0; index < 14; index++ {
+	for index := 0; index < 9; index++ {
 		store.items = append(store.items, Reminder{ID: fmt.Sprintf("existing-%d", index), Kind: ReminderKindQuery, OwnerID: "20002", UserID: "20002", IntervalSeconds: 3600})
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
@@ -108,7 +108,7 @@ func TestDianaScheduleBatchUsesRemainingQuota(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 1 || result.Items[0].Query != "A" || !strings.Contains(result.Message, "按剩余额度创建了 1 个") || len(store.items) != 15 || store.items[14].Message != "A" {
+	if result.Schedule == nil && len(result.Items) != 1 || !strings.Contains(result.Message, "按剩余额度创建了 1 个") || len(store.items) != 10 || store.items[9].Message != "A" {
 		t.Fatalf("result=%#v stored=%#v", result, store.items)
 	}
 }
@@ -145,12 +145,13 @@ func TestDianaScheduleToolAllowsOneDefaultTaskAndRejectsShortIntervals(t *testin
 	}); err != nil {
 		t.Fatalf("default create: %v", err)
 	}
-	for _, query := range []string{"第二项", "第三项"} {
+	// 额度不再分级，非主人一律 10：建满之后下一个必须被拒。
+	for _, query := range []string{"第二项", "第三项", "第四项", "第五项", "第六项", "第七项", "第八项", "第九项", "第十项"} {
 		if _, err := tool.Run(context.Background(), map[string]any{"operation": "create", "interval": "6h", "query": query}); err != nil {
 			t.Fatalf("default create %s: %v", query, err)
 		}
 	}
-	if _, err := tool.Run(context.Background(), map[string]any{"operation": "create", "interval": "6h", "query": "第四项"}); err == nil || !strings.Contains(err.Error(), "最多创建 3 个") {
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "create", "interval": "6h", "query": "第四项"}); err == nil || !strings.Contains(err.Error(), "最多可创建 10 个") {
 		t.Fatalf("default quota error = %v", err)
 	}
 	_, err := newDianaScheduleTool(runtime, MessageEvent{UserID: "10001"}).Run(context.Background(), map[string]any{
@@ -171,7 +172,8 @@ func TestDianaScheduleToolAllowsFriendWithPersonalQuota(t *testing.T) {
 	runtime.SetUserMemoryStore(memory)
 	tool := newDianaScheduleTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "20002"})
 
-	for i := 0; i < 15; i++ {
+	// 好感度高不再额外加额度：60 分和新人一样是 10 个。
+	for i := 0; i < 10; i++ {
 		if _, err := tool.Run(context.Background(), map[string]any{
 			"operation": "create",
 			"interval":  "6h",
@@ -185,7 +187,7 @@ func TestDianaScheduleToolAllowsFriendWithPersonalQuota(t *testing.T) {
 		"interval":  "6h",
 		"query":     "超过额度",
 	})
-	if err == nil || !strings.Contains(err.Error(), "最多创建 15 个") {
+	if err == nil || !strings.Contains(err.Error(), "最多可创建 10 个") {
 		t.Fatalf("quota error = %v", err)
 	}
 }
@@ -230,8 +232,8 @@ func TestRuntimeAgentCanCreateScheduledQuery(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`,
-		`{"action":"tool","tool":"tools_load","input":{"names":["schedule"]}}`,
-		`{"action":"tool","tool":"tools_execute","input":{"name":"schedule","input":{"operation":"create","interval":"6h","query":"查询最新公告并总结变化"}}}`,
+		`{"action":"tool","tool":"tools_load","input":{"names":["subscription"]}}`,
+		`{"action":"tool","tool":"tools_execute","input":{"name":"subscription","input":{"operation":"create","kind":"schedule","interval":"6h","query":"查询最新公告并总结变化"}}}`,
 		`{"action":"final","content":"已建立每 6 小时执行一次的订阅。"}`,
 	}}
 	runtime := NewRuntime(BotConfig{

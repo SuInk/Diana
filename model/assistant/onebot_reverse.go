@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -201,27 +200,10 @@ func (s *OneBotReverseServer) Send(ctx context.Context, msg OutgoingMessage) err
 }
 
 // SendWithResult sends a message and preserves the OneBot response message_id.
+// 正反向连接发的是同一套 OneBot action，组包逻辑共用 sendOneBotMessage：各写一份
+// 的时候，临时会话这类新参数只会被加到其中一份上，另一条连接静悄悄地少一半能力。
 func (s *OneBotReverseServer) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
-	if strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
-		return nil, nil
-	}
-	params := map[string]any{"message": buildOutgoingSegments(msg)}
-	action := "send_private_msg"
-	if msg.GroupID != "" {
-		action = "send_group_msg"
-		groupID, err := strconv.ParseInt(msg.GroupID, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		params["group_id"] = groupID
-	} else {
-		userID, err := strconv.ParseInt(msg.UserID, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		params["user_id"] = userID
-	}
-	return s.CallAPI(ctx, action, params)
+	return sendOneBotMessage(ctx, msg, s.CallAPI)
 }
 
 func (s *OneBotReverseServer) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {

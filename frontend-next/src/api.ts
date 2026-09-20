@@ -545,6 +545,9 @@ export interface BotGroupConfig {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群对 MCP / Skill 的覆盖：档位（off/owner/admins/members，留空跟随机器人）加白名单、黑名单。
+   *  判定顺序是停用 > 黑名单 > 白名单 > 档位。 */
+  extension_access?: Record<string, { tier?: string; allow?: string[]; deny?: string[] }>;
   plugin_overrides?: Record<string, boolean>;
   /** 按插件、按字段保存的群级非密钥设置覆盖；缺失字段沿用全局。 */
   plugin_setting_overrides?: Record<string, Record<string, unknown>>;
@@ -740,6 +743,10 @@ export interface BotStatus {
   plugins: PluginState[];
   recent_events?: BotEvent[];
   active_workers: number;
+  /** 正在飞的模型调用。和 active_workers 不是一个量级：一个 worker 一轮会打好几次模型。 */
+  llm_concurrency?: LLMConcurrency;
+  /** 这些调用花掉的 token。两个桶都只从本次启动算起，重启清零。 */
+  llm_usage?: LLMUsageTotals;
   /** 正在跑的后台子任务（生成图片、文档 OCR 等）。 */
   subagent_tasks?: SubagentTask[];
   active_subagent_tasks?: number;
@@ -747,6 +754,39 @@ export interface BotStatus {
   pending_events?: number;
   last_error?: string;
   updated_at: string;
+}
+
+/** 模型调用并发：此刻有多少次请求发出去还没回来。 */
+export interface LLMConcurrency {
+  active: number;
+  /** 本次运行以来的最高并发。瞬时值落回低谷时用它判断峰值有多高。 */
+  peak: number;
+  models?: LLMConcurrencyModel[];
+}
+
+/** 单个模型上的在飞调用。 */
+export interface LLMConcurrencyModel {
+  provider?: string;
+  model: string;
+  active: number;
+  /** 这一组里最早发出、还没回来的那次调用的起点。 */
+  started_at: string;
+}
+
+/** 模型调用的 token 用量。today 跨日清零，session 从本次启动算起。 */
+export interface LLMUsageTotals {
+  today: LLMUsageCounters;
+  session: LLMUsageCounters;
+}
+
+export interface LLMUsageCounters {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+  /** 上游没报用量的调用数；不为 0 时 token 合计只会偏少。 */
+  missing_usage_calls: number;
 }
 
 /** 运行中的后台子任务。跑完即从状态里消失，历史记录见事件详情的 subtasks。 */
@@ -1327,7 +1367,7 @@ export function listPlugins(profile = ""): Promise<PluginState[]> {
   return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
-export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; transport?: string; tools?: string[]; error?: string }
+export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; error?: string }
 export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
   return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
 }
@@ -2286,6 +2326,15 @@ export function saveAssistantUser(profile: UserMemoryProfile, remove = false): P
   });
 }
 
+/** 清空一个人的结构化长期记忆；给 memoryID 就只删那一条。profile 必须显式指定。 */
+export function clearAssistantUserMemories(userID: string, profile: string, memoryID = ""): Promise<{ ok: boolean; cleared: number }> {
+  const suffix = memoryID ? `/${encodeURIComponent(memoryID)}` : "";
+  return requestJSON(
+    `/api/assistant/users/${encodeURIComponent(userID)}/memories${suffix}?profile=${encodeURIComponent(profile)}`,
+    { method: "DELETE" }
+  );
+}
+
 export function deleteBotGroup(groupID: string, profile = ""): Promise<{ ok: boolean }> {
   return requestJSON(`/api/assistant/groups/${encodeURIComponent(groupID)}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" });
 }
@@ -2573,6 +2622,7 @@ export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "
 // 空数组表示「全部种类都要」——后端也是这么存的，别把空当成「一条都不要」。
 export type RepositoryWatchPullEvent = "opened" | "updated" | "closed" | "merged";
 export type RepositoryWatchIssueEvent = "opened" | "updated" | "closed" | "reopened";
+export type RepositoryWatchReleaseKind = "stable" | "prerelease";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -2603,6 +2653,7 @@ export interface AssistantTask {
   watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues?: boolean;
   watch_releases?: boolean;
+  watch_release_kinds?: RepositoryWatchReleaseKind[];
   watch_stars?: boolean;
   star_notify_mode?: "growth" | "milestone";
   star_notify_threshold?: number;
@@ -2646,6 +2697,7 @@ export interface RepositoryWatchInput {
   watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues: boolean;
   watch_releases: boolean;
+  watch_release_kinds?: RepositoryWatchReleaseKind[];
   watch_stars: boolean;
   star_notify_mode?: "growth" | "milestone";
   star_notify_threshold?: number;

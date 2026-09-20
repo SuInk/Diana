@@ -22,7 +22,7 @@ const (
 	repositoryWatchDefaultCommitTemplate  = "Commit {sha}\n{title}\n作者：{author}\n提交于 {time}\n{short_url}"
 	repositoryWatchDefaultPullTemplate    = "PR #{number}（{status}）\n{title}\n作者：{author}\n{branches}\n{commits}\n{time_label} {time}\n{url}"
 	repositoryWatchDefaultIssueTemplate   = "Issue #{number}（{status}）\n{title}\n作者：{author}\n{time_label} {time}\n{url}"
-	repositoryWatchDefaultReleaseTemplate = "Release {label}\n发布于 {time}\n{url}"
+	repositoryWatchDefaultReleaseTemplate = "Release {label}{prerelease}\n发布于 {time}\n{url}"
 )
 
 // renderRepositoryWatchTemplate 逐行替换占位符。某一行里出现过占位符、而全部占位

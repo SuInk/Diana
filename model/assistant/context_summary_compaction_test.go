@@ -108,41 +108,38 @@ func TestMergeContextSummaryDropsWholeLinesAtTheCap(t *testing.T) {
 	}
 }
 
-func TestFitOlderSummaryRecompressesInsteadOfTruncating(t *testing.T) {
+// 摘要超额时只做结构化裁剪，绝不再调模型压缩：那条路径已经删掉。
+func TestFitOlderSummaryNeverCallsTheModel(t *testing.T) {
 	header := contextSummaryHeader("2026-08-18 09:00", "2026-08-19 08:40", 120)
 	summary := longContextSummary(header, 40)
-	short := header + "\nAlice 和 Bob 敲定了周五上线，Carol 负责回归测试。"
-	provider := &stubSummaryLLMProvider{reply: short}
+	provider := &stubSummaryLLMProvider{reply: header + "\n压缩结果"}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 
 	budget := int64(256)
-	fitted, recompressed := runtime.fitOlderSummaryToBudget(context.Background(), summary, budget, BotConfig{})
+	fitted, reduced := runtime.fitOlderSummaryToBudget(summary, budget)
 
-	if !recompressed {
-		t.Fatal("oversized summary was not reported as recompressed")
+	if !reduced {
+		t.Fatal("oversized summary was not reduced")
 	}
-	if len(provider.requests) != 1 {
-		t.Fatalf("expected one compaction request, got %d", len(provider.requests))
-	}
-	if cost := llm.EstimateTextTokens(fitted); cost > budget {
-		t.Fatalf("recompressed summary costs %d tokens, budget is %d", cost, budget)
+	if len(provider.requests) != 0 {
+		t.Fatalf("摘要压缩不该再花模型调用，实际 %d 次", len(provider.requests))
 	}
 	if !strings.HasPrefix(fitted, header) {
-		t.Fatalf("watermark lost during recompression: %q", fitted)
+		t.Fatalf("watermark lost: %q", fitted)
 	}
 	if strings.Contains(fitted, "...[上下文已按 token 预算裁剪]...") {
 		t.Fatalf("summary went through the generic truncator: %q", fitted)
 	}
 }
 
-func TestFitOlderSummaryDropsWholeLinesWhenModelIsUnavailable(t *testing.T) {
+func TestFitOlderSummaryDropsWholeLines(t *testing.T) {
 	header := contextSummaryHeader("2026-08-18 09:00", "2026-08-19 08:40", 40)
 	summary := longContextSummary(header, 40)
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
-	fitted, recompressed := runtime.fitOlderSummaryToBudget(context.Background(), summary, 512, BotConfig{})
+	fitted, recompressed := runtime.fitOlderSummaryToBudget(summary, 512)
 
 	if !recompressed {
 		t.Fatal("structural reduction should still be reported as recompressed")
@@ -169,7 +166,7 @@ func TestFitOlderSummaryKeepsShortSummaryUntouched(t *testing.T) {
 		return provider, nil
 	})
 
-	fitted, recompressed := runtime.fitOlderSummaryToBudget(context.Background(), summary, 4096, BotConfig{})
+	fitted, recompressed := runtime.fitOlderSummaryToBudget(summary, 4096)
 
 	if recompressed || fitted != summary {
 		t.Fatalf("summary within budget was rewritten: recompressed=%v, %q", recompressed, fitted)

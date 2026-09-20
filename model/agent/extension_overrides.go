@@ -4,7 +4,37 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
+
+// 群成员权限和机器人启用开关放在同一份 profile 覆盖文件里，键名加前缀区分，
+// 不改文件结构：`mcp:foo` 是这台机器人用不用，`members:mcp:foo` 是群成员能不能用。
+const memberOverridePrefix = "members:"
+
+// MemberOverrideKey 返回某个扩展的群成员权限键。
+func MemberOverrideKey(id string) string { return memberOverridePrefix + id }
+
+// MemberAllowedExtensionIDs 列出这台机器人放开给群成员的扩展 ID。机器人级停用
+// 优先：关掉的服务不会因为成员开关还开着就恢复。
+func MemberAllowedExtensionIDs(values map[string]bool) []string {
+	ids := []string{}
+	for key, allowed := range values {
+		if !allowed || !strings.HasPrefix(key, memberOverridePrefix) {
+			continue
+		}
+		id := strings.TrimPrefix(key, memberOverridePrefix)
+		if id == "" {
+			continue
+		}
+		if enabled, ok := values[id]; ok && !enabled {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
 
 func extensionOverridePath(root string) string {
 	return filepath.Join(root, ".extension-overrides.json")

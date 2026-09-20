@@ -24,6 +24,14 @@ const (
 	defaultStructuredMemoryCandidates = 80
 	maxStructuredMemoryCandidates     = 200
 	maxMemoryCandidatesPerWrite       = 8
+	// maxActiveMemoriesPerSubject 是单个主体在一个作用域里能同时活跃的长期记忆
+	// 条数上限。
+	//
+	// 记忆只增不减时，检索窗口会被一堆边角料填满，真正重要的那几条反而挤不进
+	// 提示词；条数还会一路推高 existing_memories 的体积，每次门控都要重发一遍。
+	// 满了就按重要度淘汰最不值钱的那条，行还留着（状态置为 forgotten），出处和
+	// 审计链不丢。
+	maxActiveMemoriesPerSubject = 20
 )
 
 func (s *SQLiteStore) EnqueueMemoryJob(ctx context.Context, payload assistant.MemoryJobPayload) (string, bool, error) {
@@ -41,11 +49,17 @@ func (s *SQLiteStore) EnqueueMemoryJob(ctx context.Context, payload assistant.Me
 	}
 	id := memoryJobID(payload)
 	now := time.Now().UTC().UnixNano()
+	availableAt := now
+	if payload.Kind == assistant.MemoryJobEvent {
+		// 事件任务压一会儿再可领：同一个人连着说几句时，这个窗口让它们并进同
+		// 一次门控调用。摘要任务本来就是攒好一批才入队，不再延迟。
+		availableAt = time.Now().UTC().Add(s.memoryEventDelay()).UnixNano()
+	}
 	result, err := s.db.ExecContext(ctx, `
 INSERT OR IGNORE INTO memory_jobs
   (id, kind, session, payload, status, attempts, available_at, created_at, updated_at)
 VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)
-`, id, string(payload.Kind), payload.Session, string(raw), now, now, now)
+`, id, string(payload.Kind), payload.Session, string(raw), availableAt, now, now)
 	if err != nil {
 		return "", false, err
 	}
@@ -104,6 +118,127 @@ WHERE id = ? AND status = 'pending'
 		return assistant.MemoryJob{}, false, err
 	}
 	return assistant.MemoryJob{ID: id, Payload: payload, Attempts: attempts + 1}, true, nil
+}
+
+// ClaimMemoryJobBatch 一次领走可以合并处理的一批任务。
+//
+// 合并只发生在「同一会话、同一发言者的事件任务」之间：记忆门控是按发言者写入
+// 的，混进别人的消息会让候选的归属出错；摘要任务的输入形状也完全不同。所以第
+// 一条是摘要时就单独返回，第一条是事件时才继续凑。
+func (s *SQLiteStore) ClaimMemoryJobBatch(ctx context.Context, leaseOwner string, leaseUntil time.Time, max int) ([]assistant.MemoryJob, error) {
+	defer s.observeStorage(ctx, "ClaimMemoryJobBatch", "write")()
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	leaseOwner = strings.TrimSpace(leaseOwner)
+	if leaseOwner == "" {
+		return nil, fmt.Errorf("memory lease owner is required")
+	}
+	if max < 1 {
+		max = 1
+	}
+	tx, err := s.beginWriteTx(ctx, "ClaimMemoryJobBatch")
+	if err != nil {
+		return nil, err
+	}
+	defer observeTransaction("ClaimMemoryJobBatch")()
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC().UnixNano()
+	var firstID, firstKind, firstRaw string
+	var firstAttempts int
+	err = tx.QueryRowContext(ctx, `
+SELECT id, kind, payload, attempts
+FROM memory_jobs
+WHERE status = 'pending' AND available_at <= ?
+ORDER BY available_at, created_at, id
+LIMIT 1
+`, now).Scan(&firstID, &firstKind, &firstRaw, &firstAttempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	first, err := decodeMemoryJob(firstID, firstRaw, firstAttempts)
+	if err != nil {
+		return nil, err
+	}
+	claimed := []assistant.MemoryJob{first}
+	if firstKind == string(assistant.MemoryJobEvent) && max > 1 {
+		rows, err := tx.QueryContext(ctx, `
+SELECT id, payload, attempts
+FROM memory_jobs
+WHERE status = 'pending' AND available_at <= ? AND kind = 'event' AND session = ? AND id <> ?
+ORDER BY available_at, created_at, id
+LIMIT ?
+`, now, first.Payload.Session, first.ID, max*4)
+		if err != nil {
+			return nil, err
+		}
+		subject := strings.TrimSpace(first.Payload.Event.UserID)
+		for rows.Next() {
+			var id, raw string
+			var attempts int
+			if err := rows.Scan(&id, &raw, &attempts); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			job, err := decodeMemoryJob(id, raw, attempts)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if strings.TrimSpace(job.Payload.Event.UserID) != subject {
+				continue
+			}
+			claimed = append(claimed, job)
+			if len(claimed) >= max {
+				break
+			}
+		}
+		closeErr := rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+	}
+	for index := range claimed {
+		result, err := tx.ExecContext(ctx, `
+UPDATE memory_jobs
+SET status = 'processing', attempts = attempts + 1, lease_owner = ?, lease_until = ?, updated_at = ?
+WHERE id = ? AND status = 'pending'
+`, leaseOwner, leaseUntil.UTC().UnixNano(), time.Now().UTC().UnixNano(), claimed[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if rows != 1 {
+			// 被别的 worker 抢走了。第一条抢不到就整批作废，重新来过。
+			if index == 0 {
+				return nil, nil
+			}
+			claimed = claimed[:index]
+			break
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+func decodeMemoryJob(id, raw string, attempts int) (assistant.MemoryJob, error) {
+	var payload assistant.MemoryJobPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return assistant.MemoryJob{}, fmt.Errorf("decode memory job: %w", err)
+	}
+	return assistant.MemoryJob{ID: id, Payload: payload, Attempts: attempts + 1}, nil
 }
 
 func (s *SQLiteStore) CompleteMemoryJob(ctx context.Context, id string, leaseOwner string) error {
@@ -183,6 +318,7 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 	defer func() { _ = tx.Rollback() }()
 
 	written := make([]assistant.StructuredMemoryItem, 0, len(normalized))
+	touched := map[memoryScope]bool{}
 	for _, candidate := range normalized {
 		scopeKey := request.Session
 		if candidate.Visibility == assistant.MemoryVisibilityUser {
@@ -302,11 +438,48 @@ UPDATE memory_items SET status = 'superseded', updated_at = ? WHERE id = ? AND s
 			return nil, err
 		}
 		written = append(written, item)
+		touched[memoryScope{scopeKey: scopeKey, subjectUserID: strings.TrimSpace(request.SubjectUserID)}] = true
+	}
+	for scope := range touched {
+		if err := enforceMemoryCapacity(ctx, tx, scope, now); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return written, nil
+}
+
+type memoryScope struct {
+	scopeKey      string
+	subjectUserID string
+}
+
+// enforceMemoryCapacity 把一个主体在一个作用域里的活跃长期记忆压到上限之内。
+//
+// 淘汰顺序：先看重要度，再看最近一次被证实的时间，最后看更新时间。摘要和会话
+// 便签不参与——它们条数自有其它机制管（memorySummaryRollupSize），和"这个人有
+// 哪些长期事实"不是一回事。
+//
+// 淘汰掉的行置为 forgotten 而不是删除：memory_sources 里的出处还在，回头要查
+// "这条记忆当初是哪句话带出来的"仍然查得到。
+func enforceMemoryCapacity(ctx context.Context, tx *sql.Tx, scope memoryScope, now time.Time) error {
+	if strings.TrimSpace(scope.scopeKey) == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+UPDATE memory_items
+SET status = 'forgotten', updated_at = ?
+WHERE id IN (
+  SELECT id FROM memory_items
+  WHERE scope_key = ? AND subject_user_id = ? AND status = 'active'
+    AND kind IN ('fact', 'preference', 'episode', 'instruction')
+  ORDER BY importance DESC, last_verified_at DESC, updated_at DESC, id
+  LIMIT -1 OFFSET ?
+)
+`, now.Unix(), scope.scopeKey, scope.subjectUserID, maxActiveMemoriesPerSubject)
+	return err
 }
 
 func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistant.StructuredMemoryQuery) ([]assistant.StructuredMemoryItem, error) {
@@ -791,6 +964,43 @@ SET last_verified_at = ?
 WHERE status = 'active' AND id IN (`+strings.Join(placeholders, ",")+`)
 `, args...)
 	return err
+}
+
+// ForgetStructuredMemoriesBySubject 清空一个人身上还生效的长期记忆。
+//
+// memoryID 为空表示整个清空；给了就只清那一条。作用域和人员页的列表完全一致，
+// 看得到什么就清得掉什么，不会顺手清到别的机器人名下的同号账号。
+//
+// 和门控里的 forget 一样置为 forgotten 而不是删行：memory_sources 里的出处还
+// 在，「这条当初是哪句话带出来的」仍然查得到。清空之后模型再遇到同一件事会重
+// 新提议，这是清空不是拉黑。
+func (s *SQLiteStore) ForgetStructuredMemoriesBySubject(ctx context.Context, profileID, userID, memoryID string) (int64, error) {
+	defer s.observeStorage(ctx, "ForgetStructuredMemoriesBySubject", "write")()
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return 0, nil
+	}
+	groupPrefix, privatePrefix := memoryProfileSessionPrefixes(profileID)
+	query := `
+UPDATE memory_items
+SET status = 'forgotten', updated_at = ?
+WHERE status = 'active'
+  AND subject_user_id = ?
+  AND (substr(source_session, 1, length(?)) = ? OR substr(source_session, 1, length(?)) = ?)`
+	args := []any{time.Now().UTC().Unix(), userID, groupPrefix, groupPrefix, privatePrefix, privatePrefix}
+	if memoryID = strings.TrimSpace(memoryID); memoryID != "" {
+		query += `
+  AND id = ?`
+		args = append(args, memoryID)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // ListStructuredMemoriesBySubject 按人取这个人身上还生效的长期记忆，供控制台人员

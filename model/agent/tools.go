@@ -96,6 +96,7 @@ type ToolRegistry struct {
 	parent             *ToolRegistry
 	parentOnly         map[string]bool
 	hidden             map[string]bool
+	restricted         map[string]bool
 	extensionOverrides map[string]bool
 	activeViews        int
 	closeRequested     bool
@@ -262,7 +263,13 @@ func (r *ToolRegistry) SetSkills(skills []SkillMetadata) {
 // RegisterBuiltinSkills exposes only embedded, trusted instructions. It does
 // not scan local skill roots or create MCP connections.
 func (r *ToolRegistry) RegisterBuiltinSkills(skills []SkillMetadata) {
-	r.SetSkills(normalizeBuiltinSkills(skills))
+	r.RegisterScopedSkills(skills, nil, nil)
+}
+
+// RegisterScopedSkills 固定这份视图能看到的 skill：内置的那几份，加上显式放开的
+// extra。设过之后不会再继承共享底座上的其他 skill，read_skill 也读不到它们。
+func (r *ToolRegistry) RegisterScopedSkills(builtin, extra []SkillMetadata, reservedNames []string) {
+	r.SetSkills(mergeBuiltinSkills(builtin, extra, reservedNames))
 	tools := newLiveSkillTools(r.Skills)
 	r.Register(tools.Read)
 }
@@ -400,6 +407,49 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	return tool, ok
 }
 
+// PolicyDenied 回答「这个名字是查无此工具，还是本次会话没权限用」。被身份白名单
+// 摘掉、被机器人开关停用，或只存在于共享底座却不在白名单里的工具都算后者：调用方
+// 据此给出的提示不一样，模型才不会对着同一个名字反复重试。
+func (r *ToolRegistry) PolicyDenied(name string) bool {
+	if r == nil || name == "" {
+		return false
+	}
+	// 拿得到就不是权限问题：这个判断要能独立回答，不能依赖调用方先试过 Get。
+	if _, ok := r.Get(name); ok {
+		return false
+	}
+	r.mu.RLock()
+	_, local := r.tools[name]
+	restricted := r.restricted[name]
+	hidden := r.hidden[name]
+	allowed := cloneToolAllowlist(r.parentOnly)
+	parent := r.parent
+	r.mu.RUnlock()
+	// 名字还在本地表里却取不出来，只可能是机器人级扩展开关把它关了。
+	if local || restricted || hidden {
+		return true
+	}
+	if allowed == nil || allowed[name] {
+		// 白名单没挡住的话，剩下的可能是机器人级扩展开关把这个 MCP 关了。
+		if parent != nil {
+			if tool, ok := parent.Get(name); ok && !r.extensionToolAllowed(tool) {
+				return true
+			}
+		}
+		return false
+	}
+	// MCP 工具名由本进程按固定前缀生成，白名单外的这类名字就是权限问题，
+	// 不必为了区分而把整套共享扩展拉起来。
+	if strings.HasPrefix(name, mcpToolNamePrefix) {
+		return true
+	}
+	if parent == nil {
+		return false
+	}
+	_, existsInBase := parent.Get(name)
+	return existsInBase
+}
+
 // Retain removes every tool not present in allowed. A nil allowlist keeps all
 // tools and is used only for the bot Owner's unrestricted registry.
 func (r *ToolRegistry) Retain(allowed map[string]bool) {
@@ -414,6 +464,10 @@ func (r *ToolRegistry) Retain(allowed map[string]bool) {
 			order = append(order, name)
 			continue
 		}
+		if r.restricted == nil {
+			r.restricted = map[string]bool{}
+		}
+		r.restricted[name] = true
 		delete(r.tools, name)
 	}
 	r.order = order

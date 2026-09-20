@@ -166,6 +166,17 @@ type groupAdminConfigResponse struct {
 	ExpiresAt time.Time               `json:"expires_at,omitempty"`
 	Config    assistant.GroupConfig   `json:"config"`
 	Plugins   []assistant.PluginState `json:"plugins"`
+	// Extensions 只给群管理员看「有哪些扩展、机器人给到哪一档」，不带工具清单。
+	Extensions []groupAdminExtension `json:"extensions"`
+}
+
+type groupAdminExtension struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Bundled     bool   `json:"bundled,omitempty"`
+	BotTier     string `json:"bot_tier"`
 }
 
 type groupTestResponse struct {
@@ -294,6 +305,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/users/:id", h.getAssistantUser)
 	router.PUT(base+"/users/:id", h.editAssistantUser)
 	router.DELETE(base+"/users/:id", h.editAssistantUser)
+	router.DELETE(base+"/users/:id/memories", h.clearAssistantUserMemories)
+	router.DELETE(base+"/users/:id/memories/:memory", h.clearAssistantUserMemories)
 	h.registerPersonaRoutes(router, base)
 	h.registerCharacterCardRoutes(router, base)
 	h.registerWorldBookRoutes(router, base)

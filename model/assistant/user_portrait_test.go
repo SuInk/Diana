@@ -184,7 +184,7 @@ func TestUserMemoryContextCarriesPortrait(t *testing.T) {
 	if strings.Contains(squeezed, "住在杭州") {
 		t.Fatalf("portrait should be dropped when it does not fit: %s", squeezed)
 	}
-	if !strings.Contains(squeezed, "好感度：30") {
-		t.Fatalf("relationship core should outlive the portrait: %s", squeezed)
+	if !strings.Contains(squeezed, "用户：") {
+		t.Fatalf("发言者标识应当比画像更晚被裁掉: %s", squeezed)
 	}
 }
