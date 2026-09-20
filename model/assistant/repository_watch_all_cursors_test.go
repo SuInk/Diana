@@ -129,35 +129,35 @@ func TestRepositoryReleaseCursorSurvivesEmptyOlderAndDeletedAnchor(t *testing.T)
 	}
 	old, current := release("v8", 8, 0), release("v9", 9, 1)
 	f.set(path, []any{old, current})
-	got, cursor, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{}, nil)
+	got, cursor, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{}, repositoryWatchSelection{}, nil)
 	if err != nil || len(got) != 0 || cursor.ReleaseTag != "v9" || cursor.ReleaseID != 9 {
 		t.Fatalf("initial=%v %#v %v", got, cursor, err)
 	}
 	for _, response := range []any{nil, []any{}, []any{map[string]any{"draft": true}}, []any{old}} {
 		f.set(path, response)
-		got, next, err := p.fetchReleases(context.Background(), "acme/demo", cursor, nil)
+		got, next, err := p.fetchReleases(context.Background(), "acme/demo", cursor, repositoryWatchSelection{}, nil)
 		if err != nil || len(got) != 0 || next.ReleaseTag != cursor.ReleaseTag || !next.ReleasePublishedAt.Equal(cursor.ReleasePublishedAt) {
 			t.Fatalf("regressed=%v %#v %v", got, next, err)
 		}
 		f.set(path, []any{current, old})
-		if got, _, err := p.fetchReleases(context.Background(), "acme/demo", next, nil); err != nil || len(got) != 0 {
+		if got, _, err := p.fetchReleases(context.Background(), "acme/demo", next, repositoryWatchSelection{}, nil); err != nil || len(got) != 0 {
 			t.Fatalf("replayed=%v %v", got, err)
 		}
 	}
 	// A backport or previously drafted release may have a lower tag and ID.
 	fresh := release("v1-backport", 3, 2)
 	f.set(path, []any{old, fresh})
-	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", cursor, nil)
+	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", cursor, repositoryWatchSelection{}, nil)
 	if err != nil || len(got) != 1 || got[0].Tag != "v1-backport" || cursor.ReleaseTag != "v1-backport" {
 		t.Fatalf("fresh=%v %#v %v", got, cursor, err)
 	}
 	f.set(path, []any{release("other", 10, 2), fresh})
-	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", cursor, nil)
+	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", cursor, repositoryWatchSelection{}, nil)
 	if err != nil || len(got) != 1 || got[0].Tag != "other" || cursor.ReleaseID != 10 {
 		t.Fatalf("same time=%v %#v %v", got, cursor, err)
 	}
 	f.set(path, []any{release("other", 11, 2)})
-	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", cursor, nil)
+	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", cursor, repositoryWatchSelection{}, nil)
 	if err != nil || len(got) != 1 || cursor.ReleaseID != 11 {
 		t.Fatalf("recreated release identity lost: %v %#v %v", got, cursor, err)
 	}
@@ -176,7 +176,7 @@ func TestRepositoryReleaseCursorSurvivesEmptyOlderAndDeletedAnchor(t *testing.T)
 		t.Fatal("release metadata lost after reload")
 	}
 	f.set(path, []any{old})
-	_, next, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: restored.LastReleaseTag, ReleasePublishedAt: restored.LastReleasePublishedAt, ReleaseID: restored.LastReleaseID}, nil)
+	_, next, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: restored.LastReleaseTag, ReleasePublishedAt: restored.LastReleasePublishedAt, ReleaseID: restored.LastReleaseID}, repositoryWatchSelection{}, nil)
 	if err != nil || next.ReleaseTag != restored.LastReleaseTag {
 		t.Fatalf("deleted anchor reset: %#v %v", next, err)
 	}
@@ -188,32 +188,32 @@ func TestRepositoryReleaseCursorMigratesLegacyTagAndKeepsFirstRelease(t *testing
 	old := repositoryWatchReleasePayload("v1.0.0", "old")
 	newer := repositoryWatchReleasePayload("v1.1.0", "new")
 	f.set(path, []any{newer, old})
-	got, cursor, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: "v1.1.0"}, nil)
+	got, cursor, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: "v1.1.0"}, repositoryWatchSelection{}, nil)
 	if err != nil || len(got) != 0 || cursor.ReleasePublishedAt.IsZero() {
 		t.Fatalf("legacy=%v %#v %v", got, cursor, err)
 	}
 	partial := cursor
 	partial.ReleaseID = 0
-	got, repaired, err := p.fetchReleases(context.Background(), "acme/demo", partial, nil)
+	got, repaired, err := p.fetchReleases(context.Background(), "acme/demo", partial, repositoryWatchSelection{}, nil)
 	if err != nil || len(got) != 0 || repaired.ReleaseID != cursor.ReleaseID {
 		t.Fatalf("learning a missing release ID replayed history: %v %#v %v", got, repaired, err)
 	}
 	f.set(path, []any{old})
 	f.set(path+"/tags/v1.1.0", newer)
-	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: "v1.1.0"}, nil)
+	got, cursor, err = p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: "v1.1.0"}, repositoryWatchSelection{}, nil)
 	if err != nil || len(got) != 0 || cursor.ReleaseTag != "v1.1.0" {
 		t.Fatalf("lookup=%v %#v %v", got, cursor, err)
 	}
-	if _, kept, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: "deleted"}, nil); err == nil || kept.ReleaseTag != "deleted" {
+	if _, kept, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{ReleaseTag: "deleted"}, repositoryWatchSelection{}, nil); err == nil || kept.ReleaseTag != "deleted" {
 		t.Fatal("unverifiable legacy tag was reset")
 	}
 	f.set(path, nil)
-	_, empty, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{}, nil)
+	_, empty, err := p.fetchReleases(context.Background(), "acme/demo", repositoryWatchSnapshot{}, repositoryWatchSelection{}, nil)
 	if err != nil || empty.ReleaseTag != repositoryWatchNoReleaseCursor {
 		t.Fatal("initial empty changed")
 	}
 	f.set(path, []any{old})
-	if got, _, err := p.fetchReleases(context.Background(), "acme/demo", empty, nil); err != nil || len(got) != 1 {
+	if got, _, err := p.fetchReleases(context.Background(), "acme/demo", empty, repositoryWatchSelection{}, nil); err != nil || len(got) != 1 {
 		t.Fatalf("first release lost: %v %v", got, err)
 	}
 }

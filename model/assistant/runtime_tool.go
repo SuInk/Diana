@@ -917,6 +917,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
 			Diff:              r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
 			PullRequestEvents: item.WatchPullRequestEvents, IssueEvents: item.WatchIssueEvents,
+			ReleaseKinds: item.WatchReleaseKinds,
 		},
 		settings,
 	)
@@ -1283,12 +1284,19 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 			} else if label == "" {
 				label = strings.TrimSpace(release.Name)
 			}
+			// 两类版本混在一条通知里时，正式版不标、预发布标出来，和 GitHub 自己
+			// 只给预发布挂标签的做法一致。
+			prerelease := ""
+			if release.Prerelease {
+				prerelease = "（预发布）"
+			}
 			entries.add(renderRepositoryWatchTemplate(templates.Release, map[string]string{
-				"label": label,
-				"tag":   strings.TrimSpace(release.Tag),
-				"name":  strings.TrimSpace(release.Name),
-				"time":  formatRepositoryWatchTime(release.PublishedAt),
-				"url":   strings.TrimSpace(release.URL),
+				"label":      label,
+				"tag":        strings.TrimSpace(release.Tag),
+				"name":       strings.TrimSpace(release.Name),
+				"prerelease": prerelease,
+				"time":       formatRepositoryWatchTime(release.PublishedAt),
+				"url":        strings.TrimSpace(release.URL),
 			}))
 		}
 	}

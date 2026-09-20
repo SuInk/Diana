@@ -92,6 +92,7 @@ type repositoryWatchCreatePayload struct {
 	IssueEvents          []string                       `json:"watch_issue_events,omitempty"`
 	WatchIssues          bool                           `json:"watch_issues"`
 	WatchReleases        bool                           `json:"watch_releases"`
+	ReleaseKinds         []string                       `json:"watch_release_kinds,omitempty"`
 	WatchStars           bool                           `json:"watch_stars"`
 	StarNotifyMode       string                         `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold  int                            `json:"star_notify_threshold,omitempty"`
@@ -122,6 +123,7 @@ type repositoryWatchUpdatePayload struct {
 	IssueEvents          []string                       `json:"watch_issue_events,omitempty"`
 	WatchIssues          *bool                          `json:"watch_issues,omitempty"`
 	WatchReleases        *bool                          `json:"watch_releases,omitempty"`
+	ReleaseKinds         []string                       `json:"watch_release_kinds,omitempty"`
 	WatchStars           *bool                          `json:"watch_stars,omitempty"`
 	StarNotifyMode       *string                        `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold  *int                           `json:"star_notify_threshold,omitempty"`
@@ -193,6 +195,7 @@ type botTaskPayload struct {
 	IssueEvents           []string  `json:"watch_issue_events"`
 	WatchIssues           bool      `json:"watch_issues,omitempty"`
 	WatchReleases         bool      `json:"watch_releases,omitempty"`
+	ReleaseKinds          []string  `json:"watch_release_kinds"`
 	WatchStars            bool      `json:"watch_stars,omitempty"`
 	StarNotifyMode        string    `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold   int       `json:"star_notify_threshold,omitempty"`
@@ -513,7 +516,8 @@ func (h *BotHandler) createRepositoryWatch(c *gin.Context) {
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
-		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
+		WatchReleaseKinds: payload.ReleaseKinds,
+		StarNotifyMode:    payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 		Platform: profile.Platform, ProfileID: profile.ID, OwnerID: "webui:" + strings.TrimSpace(profile.ID), UserID: userID, GroupID: groupID,
 		ContextNamespace:    strings.TrimSpace(profile.ID),
 		NotificationEnabled: notificationEnabled, NotificationTargets: targets,
@@ -549,7 +553,8 @@ func (h *BotHandler) updateRepositoryWatch(c *gin.Context) {
 		WatchCommits: payload.WatchCommits, WatchPullRequests: payload.WatchPullRequests,
 		WatchIssues: payload.WatchIssues, WatchReleases: payload.WatchReleases, WatchStars: payload.WatchStars,
 		WatchPullRequestEvents: payload.PullRequestEvents, WatchIssueEvents: payload.IssueEvents,
-		StarNotifyMode: payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
+		WatchReleaseKinds: payload.ReleaseKinds,
+		StarNotifyMode:    payload.StarNotifyMode, StarNotifyThreshold: payload.StarNotifyThreshold, StarNotifyMilestones: payload.StarNotifyMilestones,
 	}
 	if deliveryRequested {
 		profile, profileErr := h.repositoryWatchProfile(payload.ProfileID)
@@ -891,6 +896,7 @@ func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
 		WatchIssues: item.WatchIssues, WatchReleases: item.WatchReleases, WatchStars: item.WatchStars,
 		PullRequestEvents: assistant.EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
 		IssueEvents:       assistant.EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
+		ReleaseKinds:      assistant.EffectiveRepositoryWatchReleaseKinds(item.WatchReleaseKinds),
 		StarNotifyMode:    item.StarNotifyMode, StarNotifyThreshold: item.StarNotifyThreshold, StarNotifyMilestones: append([]int(nil), item.StarNotifyMilestones...),
 		LastCommitSHA: item.LastCommitSHA, LastPullRequestCursor: item.LastPullRequestCursor,
 		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,

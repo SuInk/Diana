@@ -65,6 +65,13 @@ const (
 var (
 	repositoryWatchPullEventKinds  = []string{"opened", "updated", "closed", "merged"}
 	repositoryWatchIssueEventKinds = []string{"opened", "updated", "closed", "reopened"}
+	// Release 分正式版和预发布两种，草稿不算：它只有仓库成员看得到，插件一直跳过。
+	repositoryWatchReleaseKindList = []string{repositoryWatchReleaseKindStable, repositoryWatchReleaseKindPrerelease}
+)
+
+const (
+	repositoryWatchReleaseKindStable     = "stable"
+	repositoryWatchReleaseKindPrerelease = "prerelease"
 )
 
 func cloneRepositoryWatchEvents(values []string) []string {
@@ -89,6 +96,11 @@ func EffectiveRepositoryWatchPullRequestEvents(values []string) []string {
 
 func EffectiveRepositoryWatchIssueEvents(values []string) []string {
 	return effectiveRepositoryWatchEvents(values, repositoryWatchIssueEventKinds)
+}
+
+// EffectiveRepositoryWatchReleaseKinds 同理，把旧订阅缺失的字段展开成正式版加预发布。
+func EffectiveRepositoryWatchReleaseKinds(values []string) []string {
+	return effectiveRepositoryWatchEvents(values, repositoryWatchReleaseKindList)
 }
 
 func normalizeRepositoryWatchEvents(values []string, allowed []string, label string) ([]string, error) {
@@ -172,6 +184,7 @@ type RepositoryWatchCreateInput struct {
 	WatchIssueEvents       []string
 	WatchIssues            bool
 	WatchReleases          bool
+	WatchReleaseKinds      []string
 	WatchStars             bool
 	StarNotifyMode         string
 	StarNotifyThreshold    int
@@ -196,6 +209,7 @@ type RepositoryWatchUpdateInput struct {
 	WatchIssueEvents       []string
 	WatchIssues            *bool
 	WatchReleases          *bool
+	WatchReleaseKinds      []string
 	WatchStars             *bool
 	StarNotifyMode         *string
 	StarNotifyThreshold    *int
@@ -274,10 +288,14 @@ func (r *Runtime) CreateRepositoryWatch(ctx context.Context, input RepositoryWat
 	if err != nil {
 		return Reminder{}, err
 	}
+	releaseKinds, err := normalizeRepositoryWatchEvents(input.WatchReleaseKinds, repositoryWatchReleaseKindList, "Release ")
+	if err != nil {
+		return Reminder{}, err
+	}
 	selection := repositoryWatchSelection{
 		Commits: input.WatchCommits, PullRequests: input.WatchPullRequests, Issues: input.WatchIssues,
 		Releases: input.WatchReleases, Stars: input.WatchStars,
-		PullRequestEvents: pullEvents, IssueEvents: issueEvents,
+		PullRequestEvents: pullEvents, IssueEvents: issueEvents, ReleaseKinds: releaseKinds,
 	}
 	if !selection.Commits && !selection.PullRequests && !selection.Issues && !selection.Releases && !selection.Stars {
 		return Reminder{}, fmt.Errorf("Commit、PR、Issue、Release 和 Star 至少启用一项")
@@ -383,6 +401,9 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	if input.WatchReleases != nil {
 		values["watch_releases"] = *input.WatchReleases
 	}
+	if input.WatchReleaseKinds != nil {
+		values["watch_release_kinds"] = input.WatchReleaseKinds
+	}
 	if input.WatchStars != nil {
 		values["watch_stars"] = *input.WatchStars
 	}
@@ -481,6 +502,7 @@ func (r *Runtime) addRepositoryWatch(event MessageEvent, ownerID, repository, br
 		WatchIssueEvents:        cloneRepositoryWatchEvents(selection.IssueEvents),
 		WatchIssues:             selection.Issues,
 		WatchReleases:           selection.Releases,
+		WatchReleaseKinds:       cloneRepositoryWatchEvents(selection.ReleaseKinds),
 		WatchStars:              selection.Stars,
 		StarNotifyMode:          starNotifyMode,
 		StarNotifyThreshold:     starNotifyThreshold,
@@ -603,6 +625,7 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		Issues: current.WatchIssues, Releases: current.WatchReleases, Stars: current.WatchStars,
 		PullRequestEvents: cloneRepositoryWatchEvents(current.WatchPullRequestEvents),
 		IssueEvents:       cloneRepositoryWatchEvents(current.WatchIssueEvents),
+		ReleaseKinds:      cloneRepositoryWatchEvents(current.WatchReleaseKinds),
 	}
 	if value, present := input["watch_commits"].(bool); present {
 		selection.Commits = value
@@ -637,6 +660,17 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 	}
 	if value, present := input["watch_releases"].(bool); present {
 		selection.Releases = value
+	}
+	if value, present := input["watch_release_kinds"]; present {
+		raw, ok := value.([]string)
+		if !ok {
+			return Reminder{}, fmt.Errorf("Release 种类格式无效")
+		}
+		parsed, parseErr := normalizeRepositoryWatchEvents(raw, repositoryWatchReleaseKindList, "Release ")
+		if parseErr != nil {
+			return Reminder{}, parseErr
+		}
+		selection.ReleaseKinds = parsed
 	}
 	if value, present := input["watch_stars"].(bool); present {
 		selection.Stars = value
@@ -735,6 +769,7 @@ func (r *Runtime) updateRepositoryWatch(ownerID, id string, input map[string]any
 		item.WatchIssueEvents = cloneRepositoryWatchEvents(selection.IssueEvents)
 		item.WatchIssues = selection.Issues
 		item.WatchReleases = selection.Releases
+		item.WatchReleaseKinds = cloneRepositoryWatchEvents(selection.ReleaseKinds)
 		item.WatchStars = selection.Stars
 		if starConfigProvided {
 			item.StarNotifyMode = starNotifyMode

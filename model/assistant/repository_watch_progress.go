@@ -21,6 +21,7 @@ func validateRepositoryWatchProgress(item Reminder, snapshot repositoryWatchSnap
 	selected := snapshot.selection
 	stale = stale || item.WatchCommits != selected.Commits || item.WatchPullRequests != selected.PullRequests || item.WatchIssues != selected.Issues || item.WatchReleases != selected.Releases || item.WatchStars != selected.Stars
 	stale = stale || !slices.Equal(item.WatchPullRequestEvents, selected.PullRequestEvents) || !slices.Equal(item.WatchIssueEvents, selected.IssueEvents)
+	stale = stale || !slices.Equal(item.WatchReleaseKinds, selected.ReleaseKinds)
 	stale = stale || item.WatchCommits && snapshot.CommitSHA != "" && item.LastCommitSHA != previous.CommitSHA
 	stale = stale || item.WatchPullRequests && snapshot.PullRequestCursor != "" && item.LastPullRequestCursor != previous.PullRequestCursor
 	stale = stale || item.WatchIssues && snapshot.IssueCursor != "" && item.LastIssueCursor != previous.IssueCursor
