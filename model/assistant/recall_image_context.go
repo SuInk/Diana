@@ -590,6 +590,11 @@ func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, s
 		if description == "" {
 			return "", fmt.Errorf("vision model returned an empty description")
 		}
+		// 模型说它没收到图片时，这句话不是描述。当成成功返回会被调用方缓存成永久
+		// 的视觉事实，理由见 vision_refusal.go。
+		if VisionDescriptionRefused(description) {
+			return "", fmt.Errorf("vision model received no image: %s", truncateRunes(description, 60))
+		}
 		return description, nil
 	})
 }
