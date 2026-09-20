@@ -40,8 +40,19 @@ const participationRatingsRetryReminder = "只输出一个裸 JSON 对象：以�
 // 「总是」档位是用户明确要求的高频陪聊，不参与限流；样本为空、或机器人自己在窗口里
 // 还没说够 participationShareMinBotMessages 条时不做判断——安静群里一来一回的比例天然
 // 很高，只按比例会把正常对话也掐掉。
-func participationBotShareBlocks(botMessages, totalMessages int, chatLevel string) bool {
+//
+// 窗口里只有一个人在跟机器人说话时同样不限流。这道闸要挡的是「机器人在热闹群里占掉
+// 太多发言」，而一对一的时候没有别人被挤掉：占比高恰恰是这种对话的正常形态，两个人
+// 你一句我一句本来就该接近一半。改用时间跨度已经躲开了大部分这类误伤（见上面那段
+// 回放），但一来一回够密时仍然会撞上 25%，把顺口接的那句掐掉。
+//
+// 这一条只放开闲聊分支。真怕它和另一台机器人一对一转起来，挡住的是复读那道闸
+// （botReplyLoopAIDecision.selfRepeatDropsReply），不是发言占比。
+func participationBotShareBlocks(botMessages, totalMessages, otherSpeakers int, chatLevel string) bool {
 	if chatLevel == "always" || totalMessages <= 0 || botMessages < participationShareMinBotMessages {
+		return false
+	}
+	if otherSpeakers <= 1 {
 		return false
 	}
 	return float64(botMessages)/float64(totalMessages) >= participationShareBlockRatio
