@@ -56,10 +56,19 @@
         <StatCard label="平均响应" :loading="initialLoading" :value="stats && stats.avg_reply_ms > 0 ? `${(stats.avg_reply_ms / 1000).toFixed(1)}s` : '—'" :foot="`回复并发 ${status?.active_workers ?? 0} / 后台任务 ${status?.active_subagent_tasks ?? 0}`">
           <template #icon><Zap :size="14" aria-hidden="true" /></template>
         </StatCard>
+        <!-- 回复并发数的是消息 worker；一个 worker 一轮要打好几次模型，撞限流和涨账单
+             的是这一个数，所以它单独占一张卡。 -->
+        <StatCard label="模型并发" :loading="initialLoading" :value="formatNumber(status?.llm_concurrency?.active ?? 0)" :foot="llmConcurrencyFoot" :hint="llmConcurrencyHint">
+          <template #icon><Gauge :size="14" aria-hidden="true" /></template>
+        </StatCard>
+        <!-- 并发说明此刻压力有多大，token 说明这些调用花掉了什么，两个数出自同一批调用。 -->
+        <StatCard label="今日 Token" :loading="initialLoading" :value="formatNumber(status?.llm_usage?.today?.total_tokens ?? 0)" :foot="llmUsageFoot" :hint="llmUsageHint">
+          <template #icon><Coins :size="14" aria-hidden="true" /></template>
+        </StatCard>
       </div>
 
       <div class="dashboard-insights">
-        <!-- 24h 消息量：与第一行统计卡同一四列网格，占左两格。 -->
+        <!-- 24h 消息量：与第一行统计卡共用同一套网格，和另外两张洞察卡均分，两排竖边对齐。 -->
         <section class="card dashboard-chart">
           <div class="card-header">
             <h2>最近 24 小时消息量</h2>
@@ -184,6 +193,8 @@ import {
   Activity,
   ArrowRight,
   CheckCircle2,
+  Coins,
+  Gauge,
   MessageCircle,
   Power,
   PowerOff,
@@ -239,6 +250,45 @@ const inboundFoot = computed(() => {
   const pending = status.value?.pending_events ?? 0;
   return pending > 0 ? `${total} · 队列积压 ${formatNumber(pending)}` : total;
 });
+// 卡面只放得下一行，所以正文给峰值，再点出压力最集中的那个模型；完整分解走 hint。
+const llmConcurrencyFoot = computed(() => {
+  const concurrency = status.value?.llm_concurrency;
+  const peak = `峰值 ${formatNumber(concurrency?.peak ?? 0)}`;
+  const busiest = concurrency?.models?.[0];
+  return busiest ? `${peak} · ${busiest.model} ×${busiest.active}` : peak;
+});
+
+const llmConcurrencyHint = computed(() => {
+  const models = status.value?.llm_concurrency?.models ?? [];
+  if (models.length === 0) {
+    return "当前没有正在进行的模型调用";
+  }
+  return models
+    .map((entry) => `${entry.model}${entry.provider ? `（${entry.provider}）` : ""} ×${entry.active}，最早 ${formatRelative(entry.started_at)}`)
+    .join("\n");
+});
+
+const llmUsageFoot = computed(() => `调用 ${formatNumber(status.value?.llm_usage?.today?.calls ?? 0)} 次`);
+
+// 输入输出的分法、缓存命中和「上游没报用量」都影响这个数怎么读，但一行放不下，走 hint。
+const llmUsageHint = computed(() => {
+  const usage = status.value?.llm_usage;
+  if (!usage) {
+    return "本次启动后还没有模型调用";
+  }
+  const lines = [
+    `今日 输入 ${formatNumber(usage.today.input_tokens)} / 输出 ${formatNumber(usage.today.output_tokens)}`,
+    `本次运行累计 ${formatNumber(usage.session.total_tokens)}，调用 ${formatNumber(usage.session.calls)} 次（重启清零）`
+  ];
+  if (usage.today.cached_input_tokens > 0) {
+    lines.splice(1, 0, `其中缓存命中输入 ${formatNumber(usage.today.cached_input_tokens)}`);
+  }
+  if (usage.today.missing_usage_calls > 0) {
+    lines.push(`有 ${formatNumber(usage.today.missing_usage_calls)} 次调用上游没报用量，合计偏少`);
+  }
+  return lines.join("\n");
+});
+
 const hourlyBuckets = computed<StatsHourBucket[]>(() => (stats.value ? [...stats.value.hourly] : []));
 // 进程指标可能因为权限或平台限制采集不到，那时整张卡片退回整机读数。
 const processMetricsReady = computed(() => {

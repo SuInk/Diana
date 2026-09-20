@@ -237,6 +237,15 @@ func sendOneBotMessage(ctx context.Context, msg OutgoingMessage, call func(conte
 			return nil, fmt.Errorf("diana: invalid user id %q", msg.UserID)
 		}
 		params["user_id"] = userID
+		// 临时会话：对方不是好友时，send_private_msg 要带上共同群的 group_id 才
+		// 发得出去。只有调用方确认过不是好友才会填，所以这里不再判一次。
+		if temp := strings.TrimSpace(msg.TempSessionGroupID); temp != "" {
+			groupID, err := strconv.ParseInt(temp, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("diana: invalid temp session group id %q", temp)
+			}
+			params["group_id"] = groupID
+		}
 	}
 	return call(ctx, action, params)
 }

@@ -238,6 +238,17 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		}
 		action.Tool, action.Input = name, cloneDeferredInput(input).(map[string]any)
 		schema, loaded := l.loaded[name]
+		if !loaded && l.core[name] {
+			// 常驻工具本来就能直接调用，不进目录也不进 loaded，于是把它裹进
+			// tools_execute 时会撞上「未在本轮加载」。这句话对常驻工具是死路：模型照着
+			// 去 tools_load，那一步对常驻工具不登记加载状态，回来还是同一个错，一直耗到
+			// 协议修复次数用尽（线上 browser_render 就这么连撞两次）。信封拆开照常执行。
+			if tool, ok := l.registry.Get(name); ok {
+				if current, err := snapshotToolSchema(tool); err == nil {
+					schema, loaded = current, true
+				}
+			}
+		}
 		if !loaded {
 			return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools_load，再 tools_execute", name)
 		}

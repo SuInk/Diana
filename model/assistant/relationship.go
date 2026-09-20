@@ -134,7 +134,11 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		// 查图是不是 AI 生成的只读图片元数据，不碰本地文件和命令；群里人人都会问。
 		dianaAIImageDetectToolName: true,
 		dianaPokeToolName:          true,
-		"bot_config":               true,
+		// 「私聊发给我」是群里任何人都会提的要求，不是权限。工具自己把目标锁死在
+		// 当前说话的人身上，非主人指定别人或指定群都会被拒绝，所以不必按好感度
+		// 再挡一次。
+		dianaCrossSessionToolName: true,
+		"bot_config":              true,
 		// 屏蔽名单和回复门槛一样按群管理：工具里自己核验主人或实时核验的群管理员，
 		// 名单外的人调用只会被拒绝。不收录的话群主想屏蔽人就得去找机器人主人。
 		replyBlockToolName:     true,

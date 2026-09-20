@@ -180,6 +180,8 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	// 运行期合计先记：它给总览页读，不该因为没配日志写入器就停掉。
+	r.recordLLMUsageTotals(usage)
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -813,11 +815,15 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool("llm_config") {
 		tail.WriteString("\n" + promptToolLLMConfig)
 	}
-	if agentEnabled && hasTool(dianaRepositoryIssuesToolName) {
+	if agentEnabled && hasTool(dianaGitHubToolName) {
 		builder.WriteString("\n" + promptToolRepositoryIssues)
 	}
 	if agentEnabled && hasTool(dianaPlatformToolName) {
 		builder.WriteString("\n" + promptToolPlatform)
+	}
+	// 这条对所有人逐字相同（能不能指定别人或指定群由工具自己判身份），所以进稳定头部。
+	if agentEnabled && hasTool(dianaCrossSessionToolName) {
+		builder.WriteString("\n" + promptToolCrossSession)
 	}
 	// 破坏性动作只对主人出现在工具 schema 里；提示词也只对主人注入，且必须进随发言者
 	// 变化的尾部，不能写进按前缀缓存的稳定头部（否则主人和普通成员的提示词会提前分叉）。

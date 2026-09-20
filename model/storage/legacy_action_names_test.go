@@ -17,8 +17,10 @@ import (
 // NewSQLiteStore 打开时迁移已经跑过（空表），所以测试要清掉标记后重跑。
 func rerunLogActionNameMigration(t *testing.T, store *SQLiteStore) {
 	t.Helper()
-	if _, err := store.db.Exec(`DELETE FROM app_state WHERE key = ?`, logActionNamesMigrationKey); err != nil {
-		t.Fatal(err)
+	for _, key := range []string{logActionNamesMigrationKey, renamedLogActionsMigrationKey} {
+		if _, err := store.db.Exec(`DELETE FROM app_state WHERE key = ?`, key); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if done, err := store.MigrateLogActionNames(context.Background()); err != nil || !done {
 		t.Fatalf("migrate done=%v err=%v", done, err)

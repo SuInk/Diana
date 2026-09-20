@@ -167,7 +167,9 @@ func statusSignature(status assistant.RuntimeStatus) string {
 		)
 	}
 	bridgeEnabled, bridgeConnected := status.BridgeSummary()
-	return fmt.Sprintf("%t|%t|%s|%s|%s|%t|%t|%d|%s|%s|%s",
+	// 模型并发和 token 合计进指纹：它们每秒都可能变，而 UpdatedAt 只在运行时状态
+	// 改动时才动。不带上它们，前端要等下一次别的变化才会看到这两个数刷新。
+	return fmt.Sprintf("%t|%t|%s|%s|%s|%t|%t|%d|%d|%d|%d|%d|%s|%s|%s",
 		status.Running,
 		status.Channel.Connected,
 		status.Channel.SelfID,
@@ -176,6 +178,10 @@ func statusSignature(status assistant.RuntimeStatus) string {
 		bridgeEnabled,
 		bridgeConnected,
 		status.ActiveWorkers,
+		status.LLMConcurrency.Active,
+		status.LLMConcurrency.Peak,
+		status.LLMUsage.Today.Calls,
+		status.LLMUsage.Today.TotalTokens,
 		status.LastError,
 		status.UpdatedAt.Format(time.RFC3339Nano),
 		recentAt,

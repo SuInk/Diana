@@ -771,7 +771,7 @@
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
+                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；新建机器人默认 140 字，0 或留空关闭此条件。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
@@ -1615,6 +1615,11 @@
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">活跃 worker</span>
               <span>{{ status?.active_workers ?? 0 }}</span>
+            </div>
+            <!-- worker 数不等于模型压力：一个 worker 一轮会打好几次模型。 -->
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">模型并发</span>
+              <span :title="`本次运行峰值 ${status?.llm_concurrency?.peak ?? 0}`">{{ status?.llm_concurrency?.active ?? 0 }}</span>
             </div>
             <p v-for="channel in failedChannels" :key="`error-${channel.profile_id || channel.platform}`" class="text-err" style="font-size: 12px">
               {{ channel.name || platformName(channel.platform) }}：{{ channelStatusHint(channel) }}

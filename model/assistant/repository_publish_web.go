@@ -74,7 +74,7 @@ func (p *RepositoryPublishPlugin) PublishDraftFromWeb(ctx context.Context, setti
 	if draft.Status != "pending" {
 		return RepositoryIssueCreateResult{}, fmt.Errorf("这份草稿已经处理过了")
 	}
-	tool := &dianaRepositoryIssuesTool{
+	tool := &dianaGitHubTool{
 		plugin:   p,
 		settings: settings,
 		event: MessageEvent{
@@ -102,7 +102,7 @@ func (p *RepositoryPublishPlugin) CreateIssueFromWeb(ctx context.Context, settin
 		return repositoryIssueCreateResultFromInternal(repositoryIssueResult{Operation: "create"}.fail("invalid_repository", err.Error()))
 	}
 
-	tool := &dianaRepositoryIssuesTool{
+	tool := &dianaGitHubTool{
 		plugin:   p,
 		settings: settings,
 		event: MessageEvent{

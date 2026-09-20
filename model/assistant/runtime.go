@@ -184,10 +184,14 @@ type RuntimeStatus struct {
 	RecentEvents   []EventRecord                  `json:"recent_events,omitempty"`
 	ActiveWorkers  int                            `json:"active_workers"`
 	ActiveTasks    int                            `json:"active_subagent_tasks"`
-	SubagentTasks  []SubagentTaskStatus           `json:"subagent_tasks,omitempty"`
-	PendingEvents  int                            `json:"pending_events"`
-	LastError      string                         `json:"last_error,omitempty"`
-	UpdatedAt      time.Time                      `json:"updated_at"`
+	// LLMConcurrency 是模型侧的并发，和 ActiveWorkers 不是一个量级；LLMUsage 是
+	// 这些调用花掉的 token。两者见 llm_call_metrics.go。
+	LLMConcurrency LLMConcurrencyStatus `json:"llm_concurrency"`
+	LLMUsage       LLMUsageTotals       `json:"llm_usage"`
+	SubagentTasks  []SubagentTaskStatus `json:"subagent_tasks,omitempty"`
+	PendingEvents  int                  `json:"pending_events"`
+	LastError      string               `json:"last_error,omitempty"`
+	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
 type EventRecord struct {
@@ -324,6 +328,7 @@ type Runtime struct {
 	structuredMemory StructuredMemoryStore
 	threadStates     ThreadStateStore
 	oneBotRequests   OneBotRequestStore
+	pendingDirect    PendingDirectMessageStore
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	expressionStyles ExpressionStyleStore
@@ -333,6 +338,14 @@ type Runtime struct {
 	pokeLastReply    map[string]time.Time
 	pokeLastSent     map[string]time.Time
 	pokeSessionSent  map[string][]time.Time
+	// 跨会话发送的限流账本：按「来源会话×目标」记冷却，按来源会话记窗口内总量。
+	// 自带锁，不受 mu 保护。
+	crossSessionMu          sync.Mutex
+	crossSessionLastSent    map[string]time.Time
+	crossSessionSessionSent map[string][]time.Time
+	// friendRosters 缓存各账号的 OneBot 好友名册，见 onebot_friends.go。
+	friendRosterMu sync.Mutex
+	friendRosters  map[string]oneBotFriendRoster
 	// welcomeLLMLast 记每个（机器人 × 群）上一次 LLM 欢迎词的生成时间，
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
 	welcomeMu             sync.Mutex
@@ -402,10 +415,14 @@ type Runtime struct {
 	// 摘要、又以完整原文进入同一个请求。
 	contextSummaryMarks map[string]int64
 	// historyWindowAnchors 记录每个会话近期历史窗口的起点（见 anchoredHistoryWindow）。
-	historyWindowAnchors  map[string]string
-	recent                []EventRecord
-	activeMu              sync.Mutex
-	active                int
+	historyWindowAnchors map[string]string
+	recent               []EventRecord
+	activeMu             sync.Mutex
+	active               int
+	// llmConcurrency 数的是在飞的模型调用，llmUsage 数它们花掉的 token。
+	// 两者都自带锁，不受 mu 保护。
+	llmConcurrency        llmConcurrencyTracker
+	llmUsage              llmUsageTracker
 	reminderMu            sync.Mutex
 	activeReminders       map[string]struct{}
 	inboundWake           chan struct{}
@@ -702,6 +719,10 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.romanceGreetingLoop")
 			r.runRomanceGreetingLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")
+			r.runPendingDirectMessagePurgeLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
@@ -1186,6 +1207,8 @@ func (r *Runtime) Status() RuntimeStatus {
 		RecentEvents:   recent,
 		ActiveWorkers:  r.activeCount(),
 		ActiveTasks:    r.activeSubagentTaskCount(),
+		LLMConcurrency: r.llmConcurrencyStatus(),
+		LLMUsage:       r.llmUsageTotals(),
 		SubagentTasks:  r.subagentTaskStatuses(),
 		PendingEvents:  r.pendingInboundCount(),
 		LastError:      lastError,
@@ -3311,6 +3334,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
 			}
+			// 跨会话发送只在「确实存在另一条会话可发」时才有意义。群里人人可用，
+			// 但只能发给当前说话的人；主人在哪都能用，因为只有他能指定别人和群。
+			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
+			if event.Kind == EventKindGroup || relationship.Owner {
+				extraTools = append(extraTools, newDianaCrossSessionTool(r, event, relationship.Owner))
+			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
 			}
@@ -3360,7 +3389,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
 				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
-					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
+					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
 				}
 			}
 			if pluginValue, watchSettings, enabled := r.pluginWithSettingsForEvent(repositoryWatchPluginID, event); enabled {
@@ -4169,16 +4198,31 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 }
 
 // replyAgentCoreTools 是主回复每一步都带完整定义的工具，其余按需加载（agent.Config.CoreTools）。
-// 取自近 7 天的调用统计：4642 次 Agent 运行里，搜索 338 次、历史媒体 71、聊天记录 63、
-// 线程状态 63、生图 59、网页渲染 32，其余每个工具最多 28 次。
+//
+// 门槛是「用到它的 Agent 运行占多少」，不是调用次数：常驻的代价按请求算，收益按运行算，
+// 一次运行里连调五次同一个工具也只省下一次 tools_load。近 7 天线上 719 次 Agent 运行，
+// 按 trace 去重后 web_search 273（38%）、history_media 94（13%）、github 76（11%）、
+// image 59（8%）、chat_history 57（8%）、browser_render 48（7%）、capabilities 47（7%）、
+// thread_state 23（3%）、poke 8（1%）。github 只在开了仓库插件、且本次会话有权限时才注册，
+// 在那些群里是 76/387≈20%。
+//
+// github 和 capabilities 补进来：171 次用到 tools_load 的运行里，有 71 次加载的只有这两个
+// 之一，占全部运行的 10%——这一步换来的只是一次多余的模型往返。
+//
+// thread_state 挪出去：它的用法整段写在 promptToolThreadState 里，提示词点了名，模型知道
+// 该加载什么，挪出去只在 3% 的运行里多一步。poke 留下的理由正相反——「什么时候该戳」只写在
+// 它自己的描述里，目录行压到 120 字就没了，挪出去等于这个工具不会再被用；它只在 OneBot
+// 会话里注册。
+//
+// 改这份名单会改请求里的 tools 数组，等于把所有会话的前缀缓存清一次，别为一两个百分点反复调。
 var replyAgentCoreTools = []string{
 	agent.WebSearchToolName,
-	dianaChatHistoryToolName,
-	dianaThreadStateToolName,
 	dianaHistoryImagesToolName,
+	dianaGitHubToolName,
 	dianaImageToolName,
+	dianaChatHistoryToolName,
 	"browser_render",
-	// 戳一戳要顺手用：每次先多一轮 tools_load 就不自然了。它只在 OneBot 会话里注册。
+	"capabilities",
 	dianaPokeToolName,
 }
 
@@ -6143,6 +6187,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 		msg.MessageThreadID = event.MessageThreadID
 	} else {
 		msg.UserID = event.UserID
+		msg.TempSessionGroupID = event.tempSessionGroupID
 	}
 	return msg
 }
@@ -6888,6 +6933,12 @@ func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageE
 func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType == "poke" {
 		return r.handlePokeNotice(ctx, event)
+	}
+	// 刚加上好友：把之前因为发不出去而存下的私聊补上。这条通知不受群准入和回复
+	// 门槛约束——它不产生新的发言，只是把已经答应过的话送出去。
+	if event.SubType == "friend_add" {
+		r.flushPendingDirectMessages(ctx, event)
+		return nil
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	if !cfg.WelcomeEnabled {

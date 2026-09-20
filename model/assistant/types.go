@@ -184,6 +184,10 @@ type MessageEvent struct {
 	// Persisted outgoing events still use the regular message fields above.
 	botReply      string
 	routingReason string
+	// tempSessionGroupID 只在「给非好友发私聊」时有值：QQ 的临时会话要靠共同群
+	// 才发得出去。它是一次投递的路由提示，不是会话身份的一部分——写成导出字段
+	// 就会跟着事件落库，让这条私聊在历史里看起来像发生在那个群里。
+	tempSessionGroupID string
 	// backlogProbe 是这条消息所在的队列项，用来判断它是不是积压了、该交给同会话后面的消息
 	// 一起接话。不走队列的消息没有它。
 	backlogProbe *InboundQueueItem
@@ -264,6 +268,10 @@ type OutgoingMessage struct {
 	ForwardName  string
 	ForwardUIN   string
 	ForwardTime  int64
+	// TempSessionGroupID 让私聊走 QQ 的临时会话：OneBot 的 send_private_msg 带上
+	// group_id 才能发给不是好友、但同在这个群里的人。只在确认不是好友时才填——
+	// 对好友也走临时会话会把消息塞进另一个对话框。
+	TempSessionGroupID string
 }
 
 type ReminderKind string
@@ -309,10 +317,12 @@ type Reminder struct {
 	WatchPullRequests        bool      `json:"watch_pull_requests,omitempty"`
 	// WatchPullRequestEvents / WatchIssueEvents：nil 是未配置的旧记录，按全选兼容；
 	// 非 nil 空数组表示明确全不选，因此 JSON 不能使用 omitempty。
-	WatchPullRequestEvents []string  `json:"watch_pull_request_events"`
-	WatchIssueEvents       []string  `json:"watch_issue_events"`
-	WatchIssues            bool      `json:"watch_issues,omitempty"`
-	WatchReleases          bool      `json:"watch_releases,omitempty"`
+	WatchPullRequestEvents []string `json:"watch_pull_request_events"`
+	WatchIssueEvents       []string `json:"watch_issue_events"`
+	WatchIssues            bool     `json:"watch_issues,omitempty"`
+	WatchReleases          bool     `json:"watch_releases,omitempty"`
+	// WatchReleaseKinds 同理：nil 是未配置的旧记录，按全选兼容，所以不能 omitempty。
+	WatchReleaseKinds      []string  `json:"watch_release_kinds"`
 	WatchStars             bool      `json:"watch_stars,omitempty"`
 	StarNotifyMode         string    `json:"star_notify_mode,omitempty"`
 	StarNotifyThreshold    int       `json:"star_notify_threshold,omitempty"`
@@ -1533,7 +1543,7 @@ func DefaultBotConfig() BotConfig {
 		ReplyMaxBubbles:              replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:   0,
 		DirectReplyChunkSize:         chatReplyChunkSize,
-		ForwardReplyThreshold:        0,
+		ForwardReplyThreshold:        defaultForwardReplyThreshold,
 		RecallReplyMode:              RecallReplyModeOriginalForward,
 		RefusalStrategy:              RefusalStrategySmart,
 		DaypartToneEnabled:           boolPointer(false),
@@ -1740,12 +1750,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyMaxBubbles <= 0 {
 		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
 	}
-	if cfg.ForwardReplyChunkThreshold <= 0 {
-		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
-	}
-	if cfg.ForwardReplyThreshold <= 0 {
-		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
-	}
+	// 两个合并转发阈值上 0 是「关掉这条触发」，不是「没填」：这里不能回落到
+	// 默认值，否则用户清空输入框就被默认值顶回去，关不掉。新建配置的默认值由
+	// DefaultBotConfig 给，群级覆盖同样只做钳零。
+	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
+	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.DaypartToneEnabled == nil {
