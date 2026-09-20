@@ -334,6 +334,9 @@ CREATE INDEX IF NOT EXISTS idx_inbound_events_session_time ON inbound_events(ses
 CREATE INDEX IF NOT EXISTS idx_inbound_events_group_time ON inbound_events(group_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_time ON inbound_events(event_time DESC, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_outbound_message ON inbound_events(outbound_message_id) WHERE outbound_message_id IS NOT NULL;
+-- 总览页按时间窗统计回复量和耗时是按完成时间筛的，没有这个索引就得全表扫。
+-- 只索引已完成的行：处理中的行 completed_at 是 NULL，从来不参与这类查询。
+CREATE INDEX IF NOT EXISTS idx_inbound_events_completed_at ON inbound_events(completed_at) WHERE completed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inbound_events_priority_claim ON inbound_events(status, available_at, priority DESC, event_time, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repository_issue_drafts(group_id, status, created_at DESC);
 `)

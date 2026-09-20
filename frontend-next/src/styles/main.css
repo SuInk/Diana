@@ -1795,6 +1795,59 @@ a.nav-action {
   gap: 4px;
 }
 
+/* 可点的卡片是 button，得把浏览器默认的按钮外观抹平，再补回卡片自己的对齐方式，
+   否则文字会居中、字体也换成系统字体。 */
+.stat-card-clickable {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.stat-card-clickable:hover {
+  border-color: var(--accent);
+}
+
+.stat-card-clickable:active {
+  transform: translateY(1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-card-clickable {
+    transition: none;
+  }
+
+  .stat-card-clickable:active {
+    transform: none;
+  }
+}
+
+/* Token 明细弹窗：分段控件占满一行，合计那一行按卡面的字号给，一眼能认出是同一个数。 */
+.usage-range {
+  display: flex;
+  width: 100%;
+}
+
+.usage-range button {
+  flex: 1;
+}
+
+.usage-detail-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usage-detail-total strong {
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 指标瓦片的统一排版：总览的统计卡片和系统资源共用同一套。 */
 .stat-label {
   display: flex;
