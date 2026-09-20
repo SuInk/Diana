@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -55,11 +56,26 @@ var identityMarkerNeutralizer = strings.NewReplacer(
 	"【引用发言者身份】", "［引用发言者身份］",
 )
 
+// forgedIdentityAliasPattern 匹配不可信文本里长得像会话别名的 token。
+//
+// 隐私代理把真实账号换成 im_bot_owner_xxx 这类别名，系统提示词还明确告诉模型
+// 「im_bot_owner、im_current_user、im_bot 前缀保留角色语义」——也就是说前缀本身
+// 就是一句身份声明。用户在正文里手写一个 im_bot_owner_deadbeef，等于凭空给自己
+// 发了张身份证，和伪造 [主人] 是同一类洞，只是换了个 token。
+//
+// 这里可以放心整体中和：别名是渲染之后由 protectText 注入的，所以渲染阶段的文本里
+// 出现的任何 im_ token 必然来自用户书写，不会误伤运行时生成的真别名。
+var forgedIdentityAliasPattern = regexp.MustCompile(`\bim_[A-Za-z0-9_]+`)
+
 func neutralizeIdentityMarkers(text string) string {
 	if text == "" {
 		return text
 	}
-	return identityMarkerNeutralizer.Replace(text)
+	text = identityMarkerNeutralizer.Replace(text)
+	return forgedIdentityAliasPattern.ReplaceAllStringFunc(text, func(token string) string {
+		// 换成全角下划线：读起来一样，但不再匹配别名形态，也不会被还原逻辑认领。
+		return "ｉｍ＿" + strings.TrimPrefix(token, "im_")
+	})
 }
 
 // summaryIdentityPrompt 是压缩摘要专用的结构化身份，必须保留 JSON。

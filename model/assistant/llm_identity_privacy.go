@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -210,6 +211,11 @@ func (s *identityPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.Tool
 		if len(call.Arguments) > 0 {
 			arguments := make(map[string]any, len(call.Arguments))
 			for key, value := range call.Arguments {
+				// 执行前校验：身份类参数里还原不出来的别名一律清掉，不放行成垃圾字符串。
+				if cleared, rejected := s.rejectUnresolvableIdentityArgument(key, value); rejected {
+					arguments[key] = cleared
+					continue
+				}
 				arguments[key] = s.restoreValue(value)
 			}
 			restored.Arguments = arguments
@@ -217,6 +223,45 @@ func (s *identityPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.Tool
 		out = append(out, restored)
 	}
 	return out
+}
+
+// identityArgumentKeyPattern 标出「这个参数是一个身份标识」的参数名。
+//
+// 只对这些键做严格校验：自由文本参数（要发送的正文、搜索词）里出现别名形态的字符串
+// 是正常的——用户就在聊这个——整段拒绝会把正常功能一起拒掉。
+var identityArgumentKeyPattern = regexp.MustCompile(`(?i)(^|_)(user|group|owner|operator|target|sender|member|message)_?ids?$|^(user|group|target|qq|uin)$`)
+
+// rejectUnresolvableIdentityArgument 在工具拿到参数之前清掉还原不出来的身份标识。
+//
+// 别名只可能由本轮的隐私代理生成。一个 im_ 开头的标识还原不出真实账号，就说明它不是
+// 本轮提供的候选——要么模型自己编的，要么是从用户正文里抄来的伪造标识（用户完全可以
+// 在消息里手写 im_bot_owner_deadbeef，而系统提示词恰恰告诉模型这个前缀带角色语义）。
+//
+// 以前这种值是「原样返回」，于是伪造标识直接进到工具内部。多数工具拿它比对真实 ID 会
+// 失败，算是兜住了，但兜住的方式是「碰巧没匹配」而不是「明确拒绝」，而且这个由攻击者
+// 控制的字符串还会出现在错误信息里。
+//
+// 清成空串之后，每个工具现成的必填校验都会拒绝它，并给出自己那句明确的提示（例如
+// 「请指定目标账号 ID 或引用目标消息」），模型据此就知道要改用 identity_check 核实或
+// 从本轮候选里逐字复制，不需要在执行层再铺一套管道。
+func (s *identityPrivacyScope) rejectUnresolvableIdentityArgument(key string, value any) (any, bool) {
+	if s == nil || !identityArgumentKeyPattern.MatchString(strings.TrimSpace(key)) {
+		return value, false
+	}
+	text, ok := value.(string)
+	if !ok || text == "" {
+		return value, false
+	}
+	for _, alias := range identityPrivacyAliasTokenPattern.FindAllString(text, -1) {
+		s.mu.Lock()
+		_, known := s.aliasToReal[alias]
+		s.mu.Unlock()
+		if !known {
+			log.Printf("diana identity privacy: 工具参数 %s 含无法还原的标识 %q，已清空（不是本轮候选）", key, alias)
+			return "", true
+		}
+	}
+	return value, false
 }
 
 func (s *identityPrivacyScope) restoreValue(value any) any {
