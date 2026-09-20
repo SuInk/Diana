@@ -1907,6 +1907,47 @@ export function getStats(): Promise<StatsSnapshot> {
   return requestJSON<StatsSnapshot>("/api/stats");
 }
 
+/** 总览页能切的时间窗。today 走实时统计，其余走库里的窗口查询。 */
+export type StatsRangeID = "1h" | "12h" | "24h";
+
+/** 一个时间窗内的模型用量。cached_input_tokens 已包含在 input_tokens 里。 */
+export interface LLMUsageSummary {
+  since: string;
+  until: string;
+  recorded_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cached_input_tokens: number;
+}
+
+/** 一个时间窗内总览页要用的全部数字。 */
+export interface StatsRange {
+  id: StatsRangeID;
+  since: string;
+  until: string;
+  messages: number;
+  handled: number;
+  errors: number;
+  avg_reply_ms: number;
+  /** 平均耗时的样本数；为 0 说明这段时间没有可计时的回复，平均值不该显示成 0。 */
+  replies_measured: number;
+  usage: LLMUsageSummary;
+}
+
+export interface StatsRanges {
+  until: string;
+  ranges: StatsRange[];
+}
+
+/**
+ * 按时间窗读总览页统计。数字来自库里的队列事件和用量日志而非进程内累加器，
+ * 所以跨重启仍然成立，和「今日」那一档不是同一个口径。
+ */
+export function getStatsRanges(): Promise<StatsRanges> {
+  return requestJSON<StatsRanges>("/api/stats/ranges");
+}
+
 export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";
 export type AssistantEventResultFilter = "all" | "replied" | "not_replied" | "pending" | "error" | "notice";
 

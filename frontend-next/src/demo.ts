@@ -620,6 +620,34 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
+  // 三个窗口互相包含（1h ⊂ 12h ⊂ 24h），演示数据也照这个关系给，不然切来切去数字会倒挂。
+  if (path === "/api/stats/ranges") {
+    const until = new Date().toISOString();
+    const ranges = [
+      { id: "1h", minutes: 60, messages: 41, handled: 33, errors: 0, avg_reply_ms: 4_820, replies_measured: 33, calls: 37, input: 118_420, output: 9_260, total: 127_680, cached: 68_310 },
+      { id: "12h", minutes: 720, messages: 486, handled: 372, errors: 3, avg_reply_ms: 5_140, replies_measured: 372, calls: 296, input: 921_540, output: 71_880, total: 993_420, cached: 534_260 },
+      { id: "24h", minutes: 1440, messages: 908, handled: 694, errors: 5, avg_reply_ms: 5_260, replies_measured: 694, calls: 508, input: 1_602_310, output: 124_970, total: 1_727_280, cached: 928_640 }
+    ].map((entry) => ({
+      id: entry.id,
+      since: before(entry.minutes),
+      until,
+      messages: entry.messages,
+      handled: entry.handled,
+      errors: entry.errors,
+      avg_reply_ms: entry.avg_reply_ms,
+      replies_measured: entry.replies_measured,
+      usage: {
+        since: before(entry.minutes),
+        until,
+        recorded_calls: entry.calls,
+        input_tokens: entry.input,
+        output_tokens: entry.output,
+        total_tokens: entry.total,
+        cached_input_tokens: entry.cached
+      }
+    }));
+    return json({ until, ranges });
+  }
 
   // 授权登录：演示模式给出内置提供商的未登录状态，登录流程本身不模拟——
   // 真去打一次 OAuth 授权页在演示环境里既做不到也不该做。
