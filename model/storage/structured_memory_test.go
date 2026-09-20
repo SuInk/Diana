@@ -304,7 +304,8 @@ func TestStructuredMemoryQueryPrioritizesLexicalMatchesBeforeCandidateLimit(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < 30; index++ {
+	// 噪声条数压在活跃上限之内：这个用例测的是候选池排序，不是容量淘汰。
+	for index := 0; index < maxActiveMemoriesPerSubject-5; index++ {
 		_, err = store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
 			Session: "group:one", EventKind: assistant.EventKindGroup, GroupID: "one", SourceMessageID: fmt.Sprintf("noise-%d", index), SourceEventTime: now,
 			Candidates: []assistant.MemoryCandidate{{

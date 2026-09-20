@@ -24,6 +24,14 @@ const (
 	defaultStructuredMemoryCandidates = 80
 	maxStructuredMemoryCandidates     = 200
 	maxMemoryCandidatesPerWrite       = 8
+	// maxActiveMemoriesPerSubject 是单个主体在一个作用域里能同时活跃的长期记忆
+	// 条数上限。
+	//
+	// 记忆只增不减时，检索窗口会被一堆边角料填满，真正重要的那几条反而挤不进
+	// 提示词；条数还会一路推高 existing_memories 的体积，每次门控都要重发一遍。
+	// 满了就按重要度淘汰最不值钱的那条，行还留着（状态置为 forgotten），出处和
+	// 审计链不丢。
+	maxActiveMemoriesPerSubject = 20
 )
 
 func (s *SQLiteStore) EnqueueMemoryJob(ctx context.Context, payload assistant.MemoryJobPayload) (string, bool, error) {
@@ -310,6 +318,7 @@ func (s *SQLiteStore) ApplyMemoryCandidates(ctx context.Context, request assista
 	defer func() { _ = tx.Rollback() }()
 
 	written := make([]assistant.StructuredMemoryItem, 0, len(normalized))
+	touched := map[memoryScope]bool{}
 	for _, candidate := range normalized {
 		scopeKey := request.Session
 		if candidate.Visibility == assistant.MemoryVisibilityUser {
@@ -429,11 +438,48 @@ UPDATE memory_items SET status = 'superseded', updated_at = ? WHERE id = ? AND s
 			return nil, err
 		}
 		written = append(written, item)
+		touched[memoryScope{scopeKey: scopeKey, subjectUserID: strings.TrimSpace(request.SubjectUserID)}] = true
+	}
+	for scope := range touched {
+		if err := enforceMemoryCapacity(ctx, tx, scope, now); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return written, nil
+}
+
+type memoryScope struct {
+	scopeKey      string
+	subjectUserID string
+}
+
+// enforceMemoryCapacity 把一个主体在一个作用域里的活跃长期记忆压到上限之内。
+//
+// 淘汰顺序：先看重要度，再看最近一次被证实的时间，最后看更新时间。摘要和会话
+// 便签不参与——它们条数自有其它机制管（memorySummaryRollupSize），和"这个人有
+// 哪些长期事实"不是一回事。
+//
+// 淘汰掉的行置为 forgotten 而不是删除：memory_sources 里的出处还在，回头要查
+// "这条记忆当初是哪句话带出来的"仍然查得到。
+func enforceMemoryCapacity(ctx context.Context, tx *sql.Tx, scope memoryScope, now time.Time) error {
+	if strings.TrimSpace(scope.scopeKey) == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+UPDATE memory_items
+SET status = 'forgotten', updated_at = ?
+WHERE id IN (
+  SELECT id FROM memory_items
+  WHERE scope_key = ? AND subject_user_id = ? AND status = 'active'
+    AND kind IN ('fact', 'preference', 'episode', 'instruction')
+  ORDER BY importance DESC, last_verified_at DESC, updated_at DESC, id
+  LIMIT -1 OFFSET ?
+)
+`, now.Unix(), scope.scopeKey, scope.subjectUserID, maxActiveMemoriesPerSubject)
+	return err
 }
 
 func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistant.StructuredMemoryQuery) ([]assistant.StructuredMemoryItem, error) {
