@@ -27,7 +27,11 @@ func TestApplyContextBudgetPreservesLayeredPriorities(t *testing.T) {
 			{Role: RoleUser, Content: "当前问题" + strings.Repeat("己", 40), Priority: MessagePriorityCurrent},
 		},
 	}
-	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: 1024, MaxContextTokens: 1024}
+	const window = 576
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: window, MaxContextTokens: window}
+	inputBudget := int64(window - 64 - contextBudgetSafetyReserve)
+	requireOverBudget(t, req.Messages, inputBudget)
+
 	got := applyContextBudget(req, cfg)
 	joined := messageTextForTest(got.Messages)
 	for _, want := range []string{"系统规则", "长期记忆", "压缩摘要", "当前问题"} {
@@ -38,9 +42,21 @@ func TestApplyContextBudgetPreservesLayeredPriorities(t *testing.T) {
 	if strings.Contains(joined, "最旧历史") {
 		t.Fatalf("old history should be removed before layered memory: %s", joined)
 	}
-	inputBudget := int64(1024 - 64 - contextBudgetSafetyReserve)
 	if tokens := estimateMessagesTokens(got.Messages); tokens > inputBudget {
 		t.Fatalf("estimated tokens = %d, budget = %d", tokens, inputBudget)
+	}
+}
+
+// requireOverBudget 确认场景确实超出预算。
+//
+// 这两个裁剪测试的窗口是按当时的估算器手工标定的字面量。估算器一旦调准（中文那档
+// 从每字 2 token 降到 7/8），同样的文本就全装得下，裁剪逻辑一次都不会执行，断言
+// 却还是绿的——测试会安静地退化成一个空壳。宁可在这里显式炸掉，也不要让它假装还
+// 在守着裁剪顺序。
+func requireOverBudget(t *testing.T, messages []Message, inputBudget int64) {
+	t.Helper()
+	if tokens := estimateMessagesTokens(messages); tokens <= inputBudget {
+		t.Fatalf("scenario no longer exceeds the budget (%d <= %d): the trimming path is untested, retune the window", tokens, inputBudget)
 	}
 }
 
@@ -116,10 +132,13 @@ func TestContextBudgetRetainsRecentHistoryAndMemoryUnderOversizedAgentPrompts(t 
 		Message{Role: RoleUser, Content: "【当前需要回复的消息】继续刚才的话题。", Priority: MessagePriorityCurrent},
 	)
 
+	const window = 10240
 	req := GenerateRequest{Messages: messages, MaxOutputTokens: 1024}
-	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: 16384, MaxContextTokens: 16384}
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, ContextWindowTokens: window, MaxContextTokens: window}
+	budget := int64(window - 1024 - contextBudgetSafetyReserve)
+	requireOverBudget(t, messages, budget)
+
 	got := applyContextBudget(req, cfg)
-	budget := int64(16384 - 1024 - contextBudgetSafetyReserve)
 	joined := messageTextForTest(got.Messages)
 	if !strings.Contains(joined, "【当前发言者长期记忆】") {
 		t.Fatalf("structured memory was completely discarded: %s", joined)
