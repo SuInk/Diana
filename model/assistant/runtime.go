@@ -5915,7 +5915,7 @@ func compactContextEvent(event MessageEvent) string {
 		text += " " + quoted
 	}
 	sender := promptSenderIdentity(event)
-	return sender + ": " + strings.Join(strings.Fields(text), " ") + strings.ReplaceAll(historyIdentityPrompt(event), "\n", " ")
+	return sender + ": " + strings.Join(strings.Fields(text), " ") + summaryIdentityPrompt(event)
 }
 
 func truncateRunesFromStart(text string, maxRunes int) string {
