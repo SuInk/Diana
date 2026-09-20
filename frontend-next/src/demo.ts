@@ -484,9 +484,15 @@ let tasks: AssistantTask[] = [
   { id: "task-rss-04", kind: "rss_watch", platform: "telegram", profile_id: "bot-telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_sources: [{ feed_url: "https://github.com/SuInk/Diana/releases.atom", source: "rss", name: "Diana Release Feed" }], feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
 ];
 
+// 与后端 SupportedPlatforms 注册表保持一致：配置向导和机器人页的平台下拉都
+// 按它渲染，少一个平台，演示站就看不到那一套接入表单。
 const platforms: BotPlatform[] = [
-  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 OneBot v11。" },
-  { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。" }
+  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 Snowluma、NapCat 或 Lagrange 接入 OneBot v11。", inbound: "reverse_ws" },
+  { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。", inbound: "outbound", rich_text: true },
+  { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound" },
+  { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
+  { id: "feishu", name: "飞书", protocol: "feishu-event-callback", category: "feishu", category_label: "飞书", description: "事件订阅回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/feishu/callback", rich_text: true },
+  { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true }
 ];
 
 type DemoIssueDraft = {
