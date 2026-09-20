@@ -13,7 +13,7 @@
     </div>
 
     <div v-if="!allowInherit || custom" class="form-grid">
-      <div v-if="supportsGroupLevel" class="field">
+      <div v-if="showGroupLevel" class="field">
         <label :for="`${idPrefix}-level`">群等级门槛</label>
         <input
           :id="`${idPrefix}-level`"
@@ -25,7 +25,7 @@
         <p class="muted" style="margin-top: 4px">0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。</p>
       </div>
 
-      <div v-if="supportsGroupLevel" class="field">
+      <div v-if="showGroupLevel" class="field">
         <label :for="`${idPrefix}-unknown`">等级读不到时</label>
         <AppSelect
           :id="`${idPrefix}-unknown`"
@@ -190,10 +190,17 @@ const props = defineProps<{
    * 显示出来只会让人以为配了会生效。
    */
   supportsGroupLevel?: boolean;
+  /**
+   * hideGroupLevel 只藏起等级那两个输入框，其余文案照旧提等级：
+   * 这台机器人的群等级门槛在群管理里设，但它仍然生效，主人豁免也仍然绕过它。
+   */
+  hideGroupLevel?: boolean;
 }>();
 const emit = defineEmits<{ "update:modelValue": [ReplyGate | null] }>();
 
 // 账号在不同平台叫法不同，文案跟着平台走。
+const showGroupLevel = computed(() => props.supportsGroupLevel && !props.hideGroupLevel);
+
 const accountNoun = computed(() => (props.supportsGroupLevel ? " 账号" : "用户 ID"));
 
 const userAdmissionOptions: AppSelectOption[] = [

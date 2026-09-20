@@ -2086,13 +2086,13 @@ func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
 }
 
 // admitsGroupScope reports whether this bot participates in the group at all:
-// the group is inside the admission list (black/whitelist) and has not been
-// switched off for this profile. It is the group-level half of admits and
-// admitsNotice, pulled out so prepareMessageEvent can ask it before spending a
-// single model token——关掉或不准入的群永远不会回复，那一轮跨群语义检索、Telegram
-// 接话判定和主动回复路由都是白花的钱。三处判据共用这一处，永远说同一句话。
+// the per-group switch has not been turned off for this profile. It is the
+// group-level half of admits and admitsNotice, pulled out so prepareMessageEvent
+// can ask it before spending a single model token——关掉的群永远不会回复，那一轮
+// 跨群语义检索、Telegram 接话判定和主动回复路由都是白花的钱。三处判据共用这
+// 一处，永远说同一句话。
 func (r *Runtime) admitsGroupScope(cfg BotConfig, event MessageEvent) bool {
-	return cfg.GroupAdmission.Allows(event.GroupID) && !r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID)
+	return !r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID)
 }
 
 // admitsNotice applies the same local admission boundary to notice-triggered
@@ -7324,8 +7324,9 @@ type disabledGroupsSaver interface {
 
 // setGroupDisabled 禁用或恢复这台机器人在指定群的响应。
 //
-// 以前改的是主配置的 DisabledGroups，而判定时每台机器人都读主配置，结果一台机器人的
-// 主人「群 禁用」会把所有机器人在这个群都关掉。现在只改事件所属那台。
+// 开关只有群配置里那一份：聊天指令和控制台的群管理改的是同一个 Enabled，
+// 两边看到的状态因此总是一致的。老的 DisabledGroups 只在这里顺手清掉，
+// 它已经不是判据的一部分，留着只会挡住重新启用。
 func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled bool) string {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
@@ -7335,25 +7336,52 @@ func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled 
 		return "用法：群 启用 <群号>"
 	}
 	profileID := r.eventProfileID(event)
-	current := r.profileConfig(profileID).DisabledGroups
-	if slices.Contains(current, groupID) == disabled {
+	r.mu.RLock()
+	store := r.groupConfigs
+	r.mu.RUnlock()
+	writer, ok := store.(GroupConfigWriter)
+	if !ok {
+		return "当前部署不支持在聊天里改群开关，请在控制台的群管理里操作。"
+	}
+	cfg := r.profileConfig(profileID)
+	groupCfg, exists := writer.ConfigForGroup(profileID, groupID)
+	if !exists {
+		groupCfg = DefaultGroupConfig(groupID, cfg)
+		groupCfg.BotProfileID = profileID
+	}
+	groupCfg = groupCfg.WithDefaults(groupID, cfg)
+	stale := slices.Contains(cfg.DisabledGroups, groupID)
+	if exists && groupCfg.Enabled == !disabled && !stale {
 		if disabled {
 			return "这个群已经处于禁用状态。"
 		}
 		return "这个群当前没有被禁用。"
 	}
+	groupCfg.Enabled = !disabled
+	groupCfg.EnabledSet = true
+	if _, err := writer.SaveGroupConfig(groupCfg, cfg); err != nil {
+		return "修改群开关失败：" + err.Error()
+	}
+	if stale {
+		r.forgetDisabledGroup(profileID, groupID)
+	}
+	if disabled {
+		return "已禁用该群的机器人响应。"
+	}
+	return "已恢复该群的机器人响应。"
+}
+
+// forgetDisabledGroup 把一个群从老的 DisabledGroups 里摘掉。迁移会清空整份名单，
+// 这里只管聊天指令当场碰到的那一个，失败了也不影响群配置里已经写好的开关。
+func (r *Runtime) forgetDisabledGroup(profileID, groupID string) {
 	var next []string
 	_, err := r.commitProfileChange(profileID, func(profile *BotConfig) error {
 		if next == nil {
 			next = slices.DeleteFunc(append([]string(nil), profile.DisabledGroups...), func(id string) bool { return id == groupID })
-			if disabled {
-				next = append(next, groupID)
-			}
 		}
 		profile.DisabledGroups = append([]string{}, next...)
 		return nil
 	}, func(profile BotConfig) error {
-		// 群开关由聊天指令修改，必须立即落盘，否则重启后会丢失。
 		if saver, ok := r.configSaver.(disabledGroupsSaver); ok {
 			return saver.SaveDisabledGroups(profileID, next)
 		}
@@ -7363,12 +7391,8 @@ func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled 
 		return nil
 	})
 	if err != nil {
-		return "修改群开关失败：" + err.Error()
+		log.Printf("diana 清理机器人 %s 的旧禁用群 %s 失败：%v", profileID, groupID, err)
 	}
-	if disabled {
-		return "已禁用该群的机器人响应。"
-	}
-	return "已恢复该群的机器人响应。"
 }
 
 type rssJudgeDecision struct {
@@ -7739,7 +7763,7 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 		return
 	}
 	if event.Kind == EventKindGroup {
-		if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+		if r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 			return
 		}
 	} else if event.Kind != EventKindPrivate {
@@ -7842,17 +7866,26 @@ func (r *Runtime) isSelfMessage(event MessageEvent) bool {
 
 // isGroupDisabled 判断这台机器人在这个群里是否被禁用。同一个群里两台机器人可以
 // 一台开一台关，所以必须带上是谁在问。
+// isGroupDisabled 是「这台机器人在这个群工作吗」的唯一判据。群配置里那一份
+// Enabled 就是逐群开关；还没有群配置的群按机器人的新群默认走，白名单模式下
+// 被拉进新群因此不会回话。
+//
+// DisabledGroups 是聊天指令写过的老存储，启动时会迁进群配置，这里继续读一个
+// 版本，免得迁移之前的一瞬间被停用的群又开口。
 func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 	r.mu.RLock()
 	cfg := r.profileConfigLocked(botProfileID)
 	store := r.groupConfigs
 	r.mu.RUnlock()
+	if slices.Contains(cfg.DisabledGroups, groupID) {
+		return true
+	}
 	if store != nil {
-		if groupCfg, ok := store.ConfigForGroup(botProfileID, groupID); ok && !groupCfg.WithDefaults(groupID, cfg).Enabled {
-			return true
+		if groupCfg, ok := store.ConfigForGroup(botProfileID, groupID); ok {
+			return !groupCfg.WithDefaults(groupID, cfg).Enabled
 		}
 	}
-	return slices.Contains(cfg.DisabledGroups, groupID)
+	return !cfg.GroupAdmission.NewGroupEnabled()
 }
 
 // userBlocked 判断发送者是否在这台机器人（及所在群）的屏蔽名单里。链接解析、插件入口

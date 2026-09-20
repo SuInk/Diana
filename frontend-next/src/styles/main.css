@@ -2654,6 +2654,85 @@ a.nav-action {
   gap: 8px;
 }
 
+/* 新群默认和批量开关各占一边：开关那半要垂直居中（.group-list-summary 的
+   baseline 对齐会让开关和文字错位），按钮那半把说明放在按钮下面，挤在同一行
+   会把按钮顶到边上。 */
+.group-scope-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.group-scope-default {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.group-scope-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.group-scope-copy strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.group-scope-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.group-scope-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 群等级那两项是所有群的默认，和上面那栏同宽，两列各占一半。 */
+.group-scope-levels {
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 12px 32px;
+}
+
+.group-scope-level {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.group-scope-level label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.group-scope-level .input,
+.group-scope-level .app-select {
+  max-width: 220px;
+}
+
 .group-search {
   display: flex;
   align-items: center;
@@ -5307,6 +5386,19 @@ a.nav-action {
 
   .group-list-actions {
     width: 100%;
+  }
+
+  .group-scope-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .group-scope-actions {
+    align-items: stretch;
+  }
+
+  .group-scope-buttons .btn {
+    flex: 1;
   }
 
   .group-search {

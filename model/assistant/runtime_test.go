@@ -1901,6 +1901,8 @@ func TestRuntimeOwnerCommandsListProfilesAndClearHistory(t *testing.T) {
 		},
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), store, reminders, nil, nil)
+	// 「群 禁用」写的是群配置，没有存储就没地方落。
+	runtime.SetGroupConfigStore(&testWritableGroupConfigStore{})
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
 
 	reply, handled := runtime.handleOwnerCommand(event, "lllm 列表")

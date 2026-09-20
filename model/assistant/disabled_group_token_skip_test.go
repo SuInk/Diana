@@ -187,12 +187,14 @@ func TestDisabledGroupIgnoresDirectMention(t *testing.T) {
 	}
 }
 
-// TestNotAdmittedGroupSkipsModelCalls 白名单外的群和被关掉的群走同一条捷径：
-// 记账照旧，模型调用一次不花。
+// TestNotAdmittedGroupSkipsModelCalls 新群默认关时还没有群配置的群，和被关掉的
+// 群走同一条捷径：记账照旧，模型调用一次不花。
 func TestNotAdmittedGroupSkipsModelCalls(t *testing.T) {
-	base := BotConfig{GroupAdmission: GroupAdmission{Mode: GroupAdmissionWhitelist, AllowedGroups: []string{"other"}}}
-	h := newDisabledGroupSkipHarness(t, base, true) // 群配置开着，但不在准入白名单里。
+	base := BotConfig{GroupAdmission: GroupAdmission{Mode: GroupAdmissionWhitelist}}
+	h := newDisabledGroupSkipHarness(t, base, true)
+	// 事件落在另一个群：那个群还没有群配置，按新群默认关处理。
 	event := disabledGroupPhraseEvent()
+	event.GroupID = "g2"
 
 	_, _, handled, outcome := h.runtime.prepareMessageEvent(context.Background(), event)
 

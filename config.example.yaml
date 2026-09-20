@@ -65,6 +65,9 @@ update:
   root: "."
   apply_enabled: true
   release_enabled: true
+  # Release 更新的工作目录，留空时用数据目录下的 .diana-updates。
+  # 数据目录不可写（比如只读根文件系统）时才需要改。
+  work_dir: ""
   # 群测试能力，默认关闭。
   group_test_enabled: false
 
