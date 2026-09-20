@@ -51,6 +51,9 @@ type OneBotReverseServer struct {
 	lastUnauthorizedReason string
 	lastUnauthorizedClient string
 	lastUnauthorizedLog    time.Time
+	// 同上，机器人停用期间接入端也会几秒一次地重连。
+	lastDetachedClient string
+	lastDetachedLog    time.Time
 }
 
 func (s *OneBotReverseServer) OutboundBackoffEnabled() bool { return true }
@@ -100,6 +103,15 @@ func (s *OneBotReverseServer) Connect(ctx context.Context, handler EventHandler)
 	superseded := s.connectGeneration != generation
 	s.mu.RUnlock()
 	if !superseded {
+		// 通道被拆掉了，handler 也必须跟着走。监听器是进程内共享的一个实例：
+		// 停用机器人只会让它从 bindings 里消失，没人关这个 handler 的话，接入端
+		// 下次重连上来的事件仍旧喂给一个已经不该收它的运行时。
+		s.mu.Lock()
+		if s.connectGeneration == generation {
+			s.handler = nil
+			s.ctx = nil
+		}
+		s.mu.Unlock()
 		_ = s.Close()
 	}
 	return ctx.Err()
@@ -110,6 +122,11 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if ok, reason := s.authorized(r); !ok {
 		s.recordUnauthorized(r, reason)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.handlerAttached() {
+		s.recordDetached(r)
+		http.Error(w, "onebot reverse websocket has no running bot", http.StatusServiceUnavailable)
 		return
 	}
 	clientFingerprint := oneBotClientFingerprint(r)
@@ -479,6 +496,38 @@ func oneBotClientFingerprint(r *http.Request) string {
 	}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("client-%x", sum[:8])
+}
+
+// handlerAttached 报告有没有运行中的通道登记了事件处理器。没有就说明用这条反连
+// 的机器人都已停用或尚未启动，这时握手必须当场拒掉：接受连接再把事件丢掉的话，
+// 接入端和控制台两边都显示「已连接」，看不出机器人其实是关着的。
+func (s *OneBotReverseServer) handlerAttached() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.handler != nil
+}
+
+// recordDetached 记录「凭据对得上、但没有机器人在跑」这一类拒绝。它不是鉴权失败，
+// 不计进 UnauthorizedConnections，否则会把「机器人关着」看成「token 配错了」。
+func (s *OneBotReverseServer) recordDetached(r *http.Request) {
+	fingerprint := oneBotClientFingerprint(r)
+	now := time.Now()
+	s.connMu.Lock()
+	s.status.LastRejectedClient = fingerprint
+	s.status.LastConnectionEvent = "rejected:bot_disabled"
+	s.status.LastConnectionEventTime = &now
+	s.status.UpdatedAt = now
+	shouldLog := s.lastDetachedClient != fingerprint ||
+		s.lastDetachedLog.IsZero() ||
+		now.Sub(s.lastDetachedLog) >= time.Minute
+	if shouldLog {
+		s.lastDetachedClient = fingerprint
+		s.lastDetachedLog = now
+	}
+	s.connMu.Unlock()
+	if shouldLog {
+		log.Printf("onebot reverse handshake rejected: reason=bot_disabled client=%s", fingerprint)
+	}
 }
 
 // recordUnauthorized 记录一次握手鉴权失败，写进状态并按需打一行日志。
