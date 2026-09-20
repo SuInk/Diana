@@ -180,6 +180,8 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	// 运行期合计先记：它给总览页读，不该因为没配日志写入器就停掉。
+	r.recordLLMUsageTotals(usage)
 	writer := r.appLogWriter()
 	if writer == nil {
 		return

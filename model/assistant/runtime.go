@@ -184,10 +184,14 @@ type RuntimeStatus struct {
 	RecentEvents   []EventRecord                  `json:"recent_events,omitempty"`
 	ActiveWorkers  int                            `json:"active_workers"`
 	ActiveTasks    int                            `json:"active_subagent_tasks"`
-	SubagentTasks  []SubagentTaskStatus           `json:"subagent_tasks,omitempty"`
-	PendingEvents  int                            `json:"pending_events"`
-	LastError      string                         `json:"last_error,omitempty"`
-	UpdatedAt      time.Time                      `json:"updated_at"`
+	// LLMConcurrency 是模型侧的并发，和 ActiveWorkers 不是一个量级；LLMUsage 是
+	// 这些调用花掉的 token。两者见 llm_call_metrics.go。
+	LLMConcurrency LLMConcurrencyStatus `json:"llm_concurrency"`
+	LLMUsage       LLMUsageTotals       `json:"llm_usage"`
+	SubagentTasks  []SubagentTaskStatus `json:"subagent_tasks,omitempty"`
+	PendingEvents  int                  `json:"pending_events"`
+	LastError      string               `json:"last_error,omitempty"`
+	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
 type EventRecord struct {
@@ -402,10 +406,14 @@ type Runtime struct {
 	// 摘要、又以完整原文进入同一个请求。
 	contextSummaryMarks map[string]int64
 	// historyWindowAnchors 记录每个会话近期历史窗口的起点（见 anchoredHistoryWindow）。
-	historyWindowAnchors  map[string]string
-	recent                []EventRecord
-	activeMu              sync.Mutex
-	active                int
+	historyWindowAnchors map[string]string
+	recent               []EventRecord
+	activeMu             sync.Mutex
+	active               int
+	// llmConcurrency 数的是在飞的模型调用，llmUsage 数它们花掉的 token。
+	// 两者都自带锁，不受 mu 保护。
+	llmConcurrency        llmConcurrencyTracker
+	llmUsage              llmUsageTracker
 	reminderMu            sync.Mutex
 	activeReminders       map[string]struct{}
 	inboundWake           chan struct{}
@@ -1186,6 +1194,8 @@ func (r *Runtime) Status() RuntimeStatus {
 		RecentEvents:   recent,
 		ActiveWorkers:  r.activeCount(),
 		ActiveTasks:    r.activeSubagentTaskCount(),
+		LLMConcurrency: r.llmConcurrencyStatus(),
+		LLMUsage:       r.llmUsageTotals(),
 		SubagentTasks:  r.subagentTaskStatuses(),
 		PendingEvents:  r.pendingInboundCount(),
 		LastError:      lastError,

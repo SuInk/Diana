@@ -462,7 +462,19 @@ export const demoStatus: BotStatus = {
     { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
     { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
   ],
-  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2, updated_at: before(1)
+  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2,
+  llm_concurrency: {
+    active: 3, peak: 9,
+    models: [
+      { provider: "openai_compatible", model: "gpt-5.4-mini", active: 2, started_at: before(0.2) },
+      { provider: "anthropic", model: "claude-sonnet-5", active: 1, started_at: before(0.6) }
+    ]
+  },
+  llm_usage: {
+    today: { calls: 412, input_tokens: 1_284_600, output_tokens: 96_420, cached_input_tokens: 742_180, total_tokens: 1_381_020, missing_usage_calls: 0 },
+    session: { calls: 1_486, input_tokens: 4_612_880, output_tokens: 338_940, cached_input_tokens: 2_604_310, total_tokens: 4_951_820, missing_usage_calls: 3 }
+  },
+  updated_at: before(1)
 };
 
 let tasks: AssistantTask[] = [
