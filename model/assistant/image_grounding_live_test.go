@@ -60,7 +60,7 @@ func TestLiveTerraReceivesCurrentImage(t *testing.T) {
 	store := newRecallImageTestStore()
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return terra, nil })
 	runtime.SetMessageHistoryStore(store)
-	enriched, description, _ := runtime.ensureReplyImageDescription(context.Background(), event)
+	enriched, description := runtime.ensureReplyImageDescription(context.Background(), event)
 	t.Logf("foreground description: %q", description)
 	if !strings.Contains(description, "摩门教") || !strings.Contains(description, "婚前") || !strings.Contains(description, "插入") || !strings.Contains(description, "推") {
 		t.Fatalf("foreground description did not recover visible text: %s", description)

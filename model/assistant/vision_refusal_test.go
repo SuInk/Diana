@@ -88,8 +88,8 @@ func TestImageFailureNoticeSeparatesReasons(t *testing.T) {
 		{Type: "image", Data: map[string]string{"url": "b", recallImageFailureKey: imageFailureNotDelivered}},
 		{Type: "image", Data: map[string]string{"url": "c", recallImageFailureKey: imageFailureUnavailable}},
 	}}
-	notice := imageFailureNotice(event)
-	for _, want := range []string{"用户确实发了图", "2 张", "不接受图片输入", "1 张", "获取失败"} {
+	notice := imageFailureNotice(event, false)
+	for _, want := range []string{"对方确实发了图", "2 张", "不接受图片输入", "1 张", "获取失败"} {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("notice missing %q:\n%s", want, notice)
 		}
@@ -97,8 +97,22 @@ func TestImageFailureNoticeSeparatesReasons(t *testing.T) {
 	if strings.Contains(notice, "超时") {
 		t.Fatalf("unrelated reason leaked into the notice:\n%s", notice)
 	}
-	if imageFailureNotice(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "a"}}}}) != "" {
+	if imageFailureNotice(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "a"}}}}, false) != "" {
 		t.Fatal("notice should be empty when nothing failed")
+	}
+	// 原图还在请求里时，绝不能替模型断言「你看不了图」：识图失败的是 vision 分组，
+	// chat 分组可能是另一个完全能读图的模型。
+	attached := imageFailureNotice(event, true)
+	if !strings.Contains(attached, "原图仍附在本条消息里") {
+		t.Fatalf("attached notice lost the raw image hint:\n%s", attached)
+	}
+	if strings.Contains(notice, "原图仍附在本条消息里") {
+		t.Fatalf("unattached notice should not claim the raw image is present:\n%s", notice)
+	}
+	for _, text := range []string{notice, attached} {
+		if strings.Contains(text, "是这边看不了图。") {
+			t.Fatalf("notice asserts an incapacity the model may not have:\n%s", text)
+		}
 	}
 }
 

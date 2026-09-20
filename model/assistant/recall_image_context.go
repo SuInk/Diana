@@ -49,24 +49,22 @@ const (
 // a visible reply is running, so merely polling the cache here would deadlock
 // until after the send audit. Promote the current image to a synchronous vision
 // description instead; the background job will observe the saved cache later.
-func (r *Runtime) ensureReplyImageDescription(ctx context.Context, event MessageEvent) (MessageEvent, string, string) {
+func (r *Runtime) ensureReplyImageDescription(ctx context.Context, event MessageEvent) (MessageEvent, string) {
 	if description := r.messageImageDescriptionText(ctx, event); description != "" {
-		return event, description, ""
+		return event, description
 	}
 	if !hasImageSegment(event.Segments) || r.recallImageDescriptionStore() == nil {
-		return event, "", ""
+		return event, ""
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
 	defer cancel()
 	enriched := r.enrichRecallImageDescriptions(waitCtx, event, []MessageEvent{event})
 	if len(enriched) == 0 {
-		return event, "", ""
+		return event, ""
 	}
+	// 失败原因留在 enriched 的片段里，拼提示词时由 imageFailureNotice 现取。
 	event.Segments = enriched[0].Segments
-	if description := r.messageImageDescriptionText(waitCtx, event); description != "" {
-		return event, description, ""
-	}
-	return event, "", imageFailureNotice(event)
+	return event, r.messageImageDescriptionText(waitCtx, event)
 }
 
 // withinHistoryImageDescriptionWindow 判断这条消息是否新到值得自动补描述。

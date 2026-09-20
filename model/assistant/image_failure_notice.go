@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 // 识图失败时，提示词里那段「当前图片的独立视觉描述」整块消失，模型手上只剩一句「请
@@ -58,7 +60,12 @@ func (t *recallImageTarget) failurePositions() []recallImagePosition {
 
 // imageFailureNotice 把片段上记下的失败原因拼成提示词里的一段话。没有失败记录时返回
 // 空串，调用方什么也不加。
-func imageFailureNotice(event MessageEvent) string {
+//
+// imageAttached 表示原图是否还附在这一轮的请求里。它决定措辞能说到多满：识图失败的是
+// vision 分组，chat 分组可以是另一个模型，原图对它可能完全可读。所以这里绝不能替模型
+// 断言「你看不了图」——那会让它谎称自己看不见一张其实看得见的图。只说清楚发生了什么，
+// 看得见看不见由模型自己判断。
+func imageFailureNotice(event MessageEvent, imageAttached bool) string {
 	counts := map[string]int{}
 	segments := append([]MessageSegment(nil), event.Segments...)
 	if event.Quoted != nil {
@@ -84,11 +91,24 @@ func imageFailureNotice(event MessageEvent) string {
 		}
 		lines = append(lines, fmt.Sprintf("- %d 张：%s", count, imageFailureExplanations[reason]))
 	}
-	return "【本轮图片处理失败，用户确实发了图，不要说没收到图片】\n" + strings.Join(lines, "\n")
+	tail := "对方确实发了图，任何情况下都不要说没收到图片、也不要说对方没发。"
+	if imageAttached {
+		tail = "原图仍附在本条消息里：你能看到就按你看到的说；看不到就直说是这边的图片通道出了问题。" + tail
+	}
+	return "【本轮图片处理失败】\n" + strings.Join(lines, "\n") + "\n" + tail
 }
 
 var imageFailureExplanations = map[string]string{
-	imageFailureNotDelivered: "图片没能送进视觉模型（这条模型链路不接受图片输入）。让对方重发没有用，据实说明是这边看不了图。",
-	imageFailureUnavailable:  "图片内容获取失败（没下到或解不开）。可以请对方重发。",
-	imageFailureTimeout:      "图片识别超时，这一轮没看完。可以说稍后再看，不要说没收到。",
+	imageFailureNotDelivered: "独立视觉描述失败，这条视觉链路不接受图片输入；让对方重发没有用。",
+	imageFailureUnavailable:  "图片内容获取失败，没下到或解不开。可以请对方重发。",
+	imageFailureTimeout:      "图片识别超时，这一轮没看完。可以说稍后再看。",
+}
+
+func llmMessageHasImagePart(message llm.Message) bool {
+	for _, part := range message.Parts {
+		if part.Type == llm.ContentPartImageURL && strings.TrimSpace(part.ImageURL) != "" {
+			return true
+		}
+	}
+	return false
 }
