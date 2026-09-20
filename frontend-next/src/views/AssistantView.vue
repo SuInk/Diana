@@ -699,6 +699,17 @@
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
                 </span>
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_capability_probe_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">后台探测模型兼容性（默认关闭）</span>
+                </label>
+                <span class="hint">
+                  空闲时每天探一次当前绑定的模型收不收「强制调用指定工具」——带思考模式的模型（如 DeepSeek）只接受自动选择，强制会让整轮对话报错。
+                  提前探好，真实对话就不用先失败一次。探测是极小的真实调用，会计入用量和账单；关着也不影响正确性，遇到时会自动降级并记住结论。
+                </span>
+              </div>
               <div class="field">
                 <label for="bot-model-disclosure">谁能问出所用模型</label>
                 <AppSelect
@@ -771,7 +782,7 @@
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
+                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；新建机器人默认 140 字，0 或留空关闭此条件。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
@@ -1615,6 +1626,11 @@
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">活跃 worker</span>
               <span>{{ status?.active_workers ?? 0 }}</span>
+            </div>
+            <!-- worker 数不等于模型压力：一个 worker 一轮会打好几次模型。 -->
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">模型并发</span>
+              <span :title="`本次运行峰值 ${status?.llm_concurrency?.peak ?? 0}`">{{ status?.llm_concurrency?.active ?? 0 }}</span>
             </div>
             <p v-for="channel in failedChannels" :key="`error-${channel.profile_id || channel.platform}`" class="text-err" style="font-size: 12px">
               {{ channel.name || platformName(channel.platform) }}：{{ channelStatusHint(channel) }}
@@ -3391,6 +3407,7 @@ function setForm(config: BotProfileConfig): void {
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
     romance_enabled: config.romance_enabled ?? false,
+    llm_capability_probe_enabled: config.llm_capability_probe_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,

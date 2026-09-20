@@ -31,10 +31,6 @@ const (
 	romanceStrainedFavorability = -20
 )
 
-// RelationshipPartner 是恋人等级。值不叫 lover：partner 在模型语料里更中性，
-// 不会把语气一下带到露骨那一侧。
-const RelationshipPartner RelationshipTier = "partner"
-
 // UserRomanceState 是一个人与机器人的恋爱关系状态，挂在长期档案上持久化。
 type UserRomanceState struct {
 	Active bool `json:"active"`
@@ -110,12 +106,9 @@ func applyRomancePolicy(policy RelationshipPolicy, profile UserMemoryProfile, no
 		}
 		return policy
 	}
-	policy.Tier = RelationshipPartner
 	if strained {
-		policy.Name = "冷战"
 		policy.Tone = "你们仍是恋人，但正在闹别扭：语气克制、有距离，不用亲昵称呼，也不刻薄、不翻旧账；对方先服软就顺着台阶下。"
 	} else {
-		policy.Name = "恋人"
 		policy.Tone = "像稳定交往中的恋人：自然的亲昵、关心和偶尔的撒娇，可以吃醋也可以拌嘴，但保留自己的性格，不无底线迁就。谈正事、讲事实、提示风险时照常认真，不因为是恋人就报喜不报忧。"
 	}
 	return policy

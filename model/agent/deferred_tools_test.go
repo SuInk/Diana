@@ -475,3 +475,89 @@ func TestDeferredTargetCannotMutateProviderEnvelope(t *testing.T) {
 		t.Fatal("provider envelope mutated")
 	}
 }
+
+func TestToolsLoadSeparatesUnknownToolFromDeniedTool(t *testing.T) {
+	base := NewToolRegistry(&countingTool{name: "common"}, &MCPTool{serverName: "probe", modelName: "mcp__probe__ping"})
+	view, err := base.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	view.Retain(map[string]bool{"common": true})
+	loader := newDeferredToolLoader(view, []string{"common"})
+
+	_, err = loader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}})
+	if err == nil || !strings.Contains(err.Error(), "没有权限") {
+		t.Fatalf("restricted tool error = %v", err)
+	}
+	_, err = loader.Run(context.Background(), map[string]any{"names": []any{"totally_made_up"}})
+	if err == nil || !strings.Contains(err.Error(), "不存在或已禁用") {
+		t.Fatalf("unknown tool error = %v", err)
+	}
+
+	// 主人视图没有白名单，查无此工具就照实说，不能反过来当成权限问题。
+	ownerView, err := base.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownerView.Close()
+	ownerLoader := newDeferredToolLoader(ownerView, []string{"common"})
+	if _, err := ownerLoader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}}); err != nil {
+		t.Fatalf("owner load failed: %v", err)
+	}
+	_, err = ownerLoader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__missing"}})
+	if err == nil || !strings.Contains(err.Error(), "不存在或已禁用") {
+		t.Fatalf("owner unknown MCP tool error = %v", err)
+	}
+}
+
+func TestToolsExecuteReportsRevokedToolAsPermission(t *testing.T) {
+	base := NewToolRegistry(&countingTool{name: "common"}, &MCPTool{serverName: "probe", modelName: "mcp__probe__ping"})
+	view, err := base.NewView(Config{WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	loader := newDeferredToolLoader(view, []string{"common"})
+	if _, err := loader.Run(context.Background(), map[string]any{"names": []any{"mcp__probe__ping"}}); err != nil {
+		t.Fatal(err)
+	}
+	// 加载之后才被机器人开关停用：执行时要说清是权限，而不是让模型重新加载。
+	view.ApplyExtensionOverrides(map[string]bool{"mcp:probe": false})
+	_, err = loader.dispatch(llmAction{Tool: ToolsExecuteToolName, Input: map[string]any{"name": "mcp__probe__ping", "input": map[string]any{}}})
+	if err == nil || !strings.Contains(err.Error(), "没有权限") {
+		t.Fatalf("revoked tool error = %v", err)
+	}
+}
+
+type coreEnvelopeClient struct {
+	requests []llm.GenerateRequest
+}
+
+func (c *coreEnvelopeClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "core", Name: ToolsExecuteToolName, Arguments: map[string]any{"name": "common", "input": map[string]any{"query": "x"}}}}}, nil
+	}
+	return &llm.GenerateResponse{Text: `{"action":"final","content":"done"}`}, nil
+}
+
+// 常驻工具被裹进 tools_execute 时要照常执行，不能回「未在本轮加载，请先 tools_load」：
+// 那一步对常驻工具不登记加载状态，模型照做回来还是同一个错，一直耗到协议修复次数用尽。
+// 线上 browser_render 就这么连撞了两次。
+func TestDeferredExecuteEnvelopeAcceptsCoreTools(t *testing.T) {
+	client := &coreEnvelopeClient{}
+	common := &countingTool{name: "common"}
+	rare := &countingTool{name: "rare"}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, CoreTools: []string{"common"}}, NewToolRegistry(common, rare))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "用一下常驻工具"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Text != "done" || common.calls != 1 || len(client.requests) != 2 {
+		t.Fatalf("response=%#v common calls=%d requests=%d", response, common.calls, len(client.requests))
+	}
+}

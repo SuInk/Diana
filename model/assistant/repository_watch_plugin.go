@@ -104,9 +104,11 @@ type repositoryWatchSelection struct {
 	// Diff 只在这一轮确实有人要读 diff 时才置位（目前是跟评）。通知正文从不展示
 	// diff，无条件拉取等于每轮白花一次 compare 加每个 PR 一次 files。
 	Diff bool
-	// PullRequestEvents / IssueEvents 为 nil 时兼容旧订阅并表示全选；显式空数组表示全不选。
+	// PullRequestEvents / IssueEvents / ReleaseKinds 为 nil 时兼容旧订阅并表示全选；
+	// 显式空数组表示全不选。
 	PullRequestEvents []string
 	IssueEvents       []string
+	ReleaseKinds      []string
 }
 
 // wants 判断某一类动态要不要报。nil 是旧订阅的“未存字段”，仍按全选处理；
@@ -148,6 +150,7 @@ type repositoryWatchRelease struct {
 	Body        string    `json:"body,omitempty"`
 	URL         string    `json:"url,omitempty"`
 	PublishedAt time.Time `json:"published_at,omitempty"`
+	Prerelease  bool      `json:"prerelease,omitempty"`
 }
 
 type repositoryWatchPullRequest struct {
@@ -473,7 +476,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.Releases {
-		releases, snapshot, err := p.fetchReleases(ctx, repository, cursor, settings)
+		releases, snapshot, err := p.fetchReleases(ctx, repository, cursor, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {

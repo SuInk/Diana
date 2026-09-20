@@ -75,37 +75,8 @@ func TestRelationshipEvaluationUsesRouterSemantics(t *testing.T) {
 	if usedModel != "routing-model" {
 		t.Fatalf("used model = %q", usedModel)
 	}
-	if !strings.Contains(provider.request.Messages[0].Content, "不得按关键词") || !strings.Contains(provider.request.Messages[1].Content, event.RawMessage) || !strings.Contains(provider.request.Messages[1].Content, `"natural_interaction_gain_enabled":true`) {
+	if !strings.Contains(provider.request.Messages[0].Content, "不得按关键词") || !strings.Contains(provider.request.Messages[1].Content, event.RawMessage) || !strings.Contains(provider.request.Messages[1].Content, `"current_score":17`) {
 		t.Fatalf("evaluation request = %#v", provider.request.Messages)
-	}
-}
-
-func TestRelationshipEvaluationAllowsNaturalInteractionBeforeThreshold(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"should_update":true,"delta":1,"confidence":0.96,"reason":"初识阶段的一次真实提问会带来轻微熟悉"}`}
-	memory := newMemoryUserMemoryStore()
-	memory.profiles["user"] = UserMemoryProfile{UserID: "user", Favorability: 19, MessageCount: 8}
-	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	runtime.SetUserMemoryStore(memory)
-	event := MessageEvent{
-		Kind:       EventKindPrivate,
-		UserID:     "user",
-		MessageID:  "message",
-		SenderName: "Alice",
-		RawMessage: "今天有什么适合散步的地方？",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "今天有什么适合散步的地方？"}}},
-	}
-
-	decision, before, evaluated := runtime.evaluateRelationshipUpdate(context.Background(), event, PlainText(event.Segments), true)
-	if !evaluated || decision.effectiveDelta() != 1 || before.Favorability != 19 {
-		t.Fatalf("decision=%#v before=%#v evaluated=%v", decision, before, evaluated)
-	}
-	if !requestMessagesContain(provider.request.Messages, `"natural_interaction_gain_enabled":true`) || !requestMessagesContain(provider.request.Messages, `"natural_interaction_threshold":20`) {
-		t.Fatalf("natural interaction phase missing: %#v", provider.request.Messages)
-	}
-	if !requestMessagesContain(provider.request.Messages, "默认应 should_update=true、delta=1") || !requestMessagesContain(provider.request.Messages, "不能仅以“普通提问”“功能请求”或“任务指令”为理由判为 0") {
-		t.Fatalf("natural interaction rule is not explicit enough: %#v", provider.request.Messages)
 	}
 }
 
@@ -167,32 +138,6 @@ func TestRuntimeAppliesNaturalInteractionFavorability(t *testing.T) {
 	}
 	if relationshipLog == nil || relationshipLog.Metadata["delta"] != 1 {
 		t.Fatalf("logs = %#v", logs.entries)
-	}
-}
-
-func TestRelationshipEvaluationDisablesNaturalInteractionAtThreshold(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"should_update":false,"delta":0,"confidence":0.98,"reason":"已达到自然熟悉阈值，普通提问不再加分"}`}
-	memory := newMemoryUserMemoryStore()
-	memory.profiles["user"] = UserMemoryProfile{UserID: "user", Favorability: naturalInteractionFavorabilityThreshold, MessageCount: 10}
-	runtime := NewRuntime(BotConfig{BotAccount: "bot", OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	runtime.SetUserMemoryStore(memory)
-	event := MessageEvent{
-		Kind:       EventKindPrivate,
-		UserID:     "user",
-		MessageID:  "message",
-		SenderName: "Alice",
-		RawMessage: "今天有什么适合散步的地方？",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "今天有什么适合散步的地方？"}}},
-	}
-
-	decision, _, evaluated := runtime.evaluateRelationshipUpdate(context.Background(), event, PlainText(event.Segments), true)
-	if !evaluated || decision.effectiveDelta() != 0 {
-		t.Fatalf("decision=%#v evaluated=%v", decision, evaluated)
-	}
-	if !requestMessagesContain(provider.request.Messages, `"natural_interaction_gain_enabled":false`) {
-		t.Fatalf("natural interaction phase should be disabled: %#v", provider.request.Messages)
 	}
 }
 
@@ -317,8 +262,8 @@ func TestRuntimeAppliesOwnerFavorabilityDrop(t *testing.T) {
 	if !ok || profile.Favorability != 97 {
 		t.Fatalf("owner favorability = %#v ok=%v", profile, ok)
 	}
-	if policy := RelationshipPolicyFor(profile, "owner", "owner"); policy.Tier != RelationshipOwner || policy.Score != 97 {
-		t.Fatalf("owner tier must not follow the score: %#v", policy)
+	if policy := RelationshipPolicyFor(profile, "owner", "owner"); !policy.Owner || policy.Score != 97 {
+		t.Fatalf("主人身份由账号决定，不随分数变化: %#v", policy)
 	}
 }
 

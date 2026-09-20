@@ -202,7 +202,7 @@ func TestRepositoryIssueRecentScanUsesGraphQL(t *testing.T) {
 	server := &graphQLRepoServer{issuePages: pages}
 	httpServer := httptest.NewServer(http.HandlerFunc(server.handler))
 	defer httpServer.Close()
-	tool := newDianaRepositoryIssuesTool(NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+	tool := newDianaGitHubTool(NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
 		MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, newRepositoryPublishPlugin(httpServer.Client(), httpServer.URL),
 		SettingValues{repositoryPublishSettingToken: "test-token", repositoryPublishSettingAllowlist: "acme/demo", repositoryPublishSettingTimeout: 5})
 	issues, apiErr := tool.listRecentIssues(context.Background(), "acme/demo")

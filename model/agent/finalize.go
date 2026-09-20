@@ -111,3 +111,51 @@ func (r *Runner) turnDefinitions(ledger *claimEvidenceLedger, imagePending bool)
 	definitions = r.loader.filter(definitions)
 	return append(definitions, finalizeToolDefinition(ledger, imagePending))
 }
+
+// finalizeEnvelopeFromText 把「正文位置上的 agent_finalize 信封」当成收尾动作。
+//
+// 模型偶尔不走 function calling，而是直接把 {"content":...,"silent":false,...}
+// 当普通文本输出。原来这段文本既不含 "action" 也不含 "tool"，looksLikeAgentAction
+// 认不出来，于是整个信封被当作正文发给了用户——线上真出过：一条 QQ 消息显示成
+// `{"content":"主人是然然最亲近的人呀。` 加半截 JSON。
+//
+// 判据要收紧到只认这一种形状：必须是 JSON 对象、必须有字符串 content，且除
+// content 外的键全都属于信封字段。多一个陌生键就不认，免得把用户要求输出的
+// JSON 当成信封吞掉正文。
+func finalizeEnvelopeFromText(text string) (llmAction, bool) {
+	candidate := strings.TrimSpace(extractJSON(text))
+	if !strings.HasPrefix(candidate, "{") {
+		return llmAction{}, false
+	}
+	var fields map[string]json.RawMessage
+	if err := decoderFromString(candidate).Decode(&fields); err != nil {
+		return llmAction{}, false
+	}
+	raw, ok := fields["content"]
+	if !ok {
+		return llmAction{}, false
+	}
+	var content string
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return llmAction{}, false
+	}
+	envelopeOnly := map[string]bool{"content": true, "task_state": true, "silent": true, "silent_reason": true, "claims": true}
+	extras := 0
+	for key := range fields {
+		if !envelopeOnly[key] {
+			return llmAction{}, false
+		}
+		if key != "content" {
+			extras++
+		}
+	}
+	if extras == 0 {
+		// 只有 content 一个键时无从判断是信封还是用户要的 JSON，交给原路径。
+		return llmAction{}, false
+	}
+	arguments := map[string]any{}
+	if err := decoderFromString(candidate).Decode(&arguments); err != nil {
+		return llmAction{}, false
+	}
+	return finalizeAction(llm.ToolCall{Name: finalizeToolName, Arguments: arguments}, ""), true
+}

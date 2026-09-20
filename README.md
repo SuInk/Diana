@@ -143,7 +143,7 @@ Telegram 主人账号支持数字 ID、用户名和 `@用户名`，按平台真�
 
 | 平台 | 要准备的凭据 | 连接方向 |
 | --- | --- | --- |
-| **OneBot v11**（NapCat、Lagrange.Core、go-cqhttp 等） | 支持正向 WS、反向 WS、HTTP API + HTTP 事件上报，在机器人页选择连接方式 | 连接方向取决于所选方式，可在局域网使用 |
+| **OneBot v11**（Snowluma、NapCat、Lagrange 等） | 支持正向 WS、反向 WS、HTTP API + HTTP 事件上报，在机器人页选择连接方式 | 连接方向取决于所选方式，可在局域网使用 |
 | **Telegram** | BotFather 的 Bot Token（国内网络通常还要代理地址） | Diana 主动出站，无需公网 |
 | **QQ 官方机器人** | 开放平台的 AppID + AppSecret（未上架可用沙箱） | Diana 主动出站，无需公网 |
 | **钉钉** | 应用的 Client ID + Client Secret（Stream 模式） | Diana 主动出站，无需公网 |

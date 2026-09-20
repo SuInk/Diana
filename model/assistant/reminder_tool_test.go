@@ -146,7 +146,7 @@ func TestDianaReminderToolWarnsWhenTargetAlreadyPassed(t *testing.T) {
 
 func TestDianaReminderBatchUsesRemainingQuota(t *testing.T) {
 	store := &stubReminderStore{}
-	for index := 0; index < 14; index++ {
+	for index := 0; index < 9; index++ {
 		store.items = append(store.items, Reminder{ID: fmt.Sprintf("existing-%d", index), Kind: ReminderKindMessage, OwnerID: "20002", UserID: "20002"})
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, store, nil, nil)
@@ -168,7 +168,7 @@ func TestDianaReminderBatchUsesRemainingQuota(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 1 || result.Items[0].Message != "A" || !strings.Contains(result.Message, "按剩余额度创建了 1 个") || len(store.items) != 15 || store.items[14].Message != "A" {
+	if result.Reminder == nil && len(result.Items) != 1 || !strings.Contains(result.Message, "按剩余额度创建了 1 个") || len(store.items) != 10 || store.items[9].Message != "A" {
 		t.Fatalf("result=%#v stored=%#v", result, store.items)
 	}
 }

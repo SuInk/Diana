@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -23,18 +22,6 @@ const contextSummaryMaxRunes = 4000
 // minimumContextSummaryTokens 保证再紧张的窗口也给摘要留下能放进水位标识和
 // 几条结论的空间；比这更小就不值得带摘要了。
 const minimumContextSummaryTokens int64 = 192
-
-const contextSummaryCompactionPrompt = `你是一个上下文摘要压缩器。输入是一段群聊/私聊的历史压缩摘要，它已经超出可用预算，需要你重新压缩得更短。
-
-要求：
-1. 必须保留输入第一行的【较早上下文摘要范围：…】水位标识，原样输出，不要改写其中的时间和条数。
-2. 保留人物与人物之间的关系、已经达成的结论、待办和承诺、明确的时间边界、数字与专有名词。
-3. 丢掉寒暄、重复表达、情绪词和与后续对话无关的细节。
-4. 不要从中间截断句子，输出必须是完整可读的摘要。
-5. 不要新增输入里没有的信息，不要推测。
-6. 直接输出压缩后的摘要正文，不要输出解释、Markdown 代码块或额外说明。
-
-目标长度：不超过 %d 个汉字。`
 
 func contextSummaryTimeLabel(unix int64) string {
 	if unix <= 0 {
@@ -115,11 +102,16 @@ func dropOldestContextSummaryLines(header string, body []string, maxRunes int) [
 	return body
 }
 
-// fitOlderSummaryToBudget 让较早上下文压缩摘要落进它的目标配额。
-// 摘要是一个完整语义单元：首尾截断会把结论、实体关系和时间边界一起切掉，留下
-// 一段看着完整、其实缺了要点的背景。超额时先请模型重新压缩，压缩失败或仍然超额
-// 再按整行丢弃最旧的记录，水位标识始终保留。
-func (r *Runtime) fitOlderSummaryToBudget(ctx context.Context, summary string, budget int64, cfg BotConfig) (string, bool) {
+// fitOlderSummaryToBudget 让较早上下文摘要落进它的目标配额。
+//
+// 这里原本会先请模型把摘要重新压一遍，压不下去再结构化裁剪。那条模型压缩路径
+// 已经删掉：实测从未触发过（窗口只用到 12%），而方向上历史开销由稳定前缀缓存
+// 负责，不靠把历史压短——见 docs/group-prompt-cache.md。留着只是多一次可能
+// 发生的模型调用和一段要跟着改的代码。
+//
+// 现在只做结构化裁剪：整行丢掉最旧的记录，水位标识始终保留。摘要是一个完整语义
+// 单元，首尾截断会把结论、实体关系和时间边界一起切掉，所以宁可整条丢。
+func (r *Runtime) fitOlderSummaryToBudget(summary string, budget int64) (string, bool) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
 		return "", false
@@ -131,18 +123,7 @@ func (r *Runtime) fitOlderSummaryToBudget(ctx context.Context, summary string, b
 		return summary, false
 	}
 	header, body := splitContextSummary(summary)
-	// 估算里一个汉字约一个 token 有余，按目标 token 折算成汉字数给模型一个明确上限。
 	targetRunes := int(budget * 3 / 4)
-	if compressed := r.recompressContextSummary(ctx, summary, targetRunes, cfg); compressed != "" {
-		compressedHeader, compressedBody := splitContextSummary(compressed)
-		if compressedHeader == "" {
-			compressedHeader = header
-		}
-		if rebuilt := joinContextSummary(compressedHeader, compressedBody); llm.EstimateTextTokens(rebuilt) <= budget {
-			return rebuilt, true
-		}
-	}
-	// 模型不可用或压得不够狠时退回结构化裁剪：丢掉最旧的整条记录。
 	reduced := dropOldestContextSummaryLines(header, body, targetRunes)
 	if len(reduced) == len(body) {
 		return summary, false
@@ -151,37 +132,4 @@ func (r *Runtime) fitOlderSummaryToBudget(ctx context.Context, summary string, b
 		return joinContextSummary(header, nil), true
 	}
 	return joinContextSummary(header, reduced), true
-}
-
-func (r *Runtime) recompressContextSummary(ctx context.Context, summary string, targetRunes int, cfg BotConfig) string {
-	ctx = withLLMUsagePurpose(ctx, "context_summary_compaction")
-	if targetRunes <= 0 {
-		return ""
-	}
-	compactCtx, cancel := context.WithTimeout(ctx, contextSummaryCompactionTimeout(cfg))
-	defer cancel()
-	raw, err := r.runLLMRouterProvider(compactCtx, func(client LLMProvider) (string, error) {
-		resp, generateErr := client.Generate(compactCtx, llm.GenerateRequest{
-			Messages: []llm.Message{
-				{Role: llm.RoleSystem, Content: fmt.Sprintf(contextSummaryCompactionPrompt, targetRunes)},
-				{Role: llm.RoleUser, Content: "请压缩以下摘要：\n" + summary},
-			},
-		})
-		if generateErr != nil {
-			return "", generateErr
-		}
-		return resp.Text, nil
-	})
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(stripJSONCodeFence(strings.TrimSpace(raw)))
-}
-
-func contextSummaryCompactionTimeout(cfg BotConfig) time.Duration {
-	const budget = 30 * time.Second
-	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < budget {
-		return cfg.RequestTimeout
-	}
-	return budget
 }

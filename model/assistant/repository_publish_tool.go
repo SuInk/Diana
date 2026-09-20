@@ -27,11 +27,17 @@ import (
 )
 
 const (
-	// 名字刻意不带点号：点号命名（diana.xxx）会让弱模型把操作名脑补成
-	// 子工具（github.get 之类）。
-	dianaRepositoryIssuesToolName = "github"
-	repositoryIssueBodyLimit      = 60_000
-	repositoryIssueTitleLimit     = 256
+	// 对外工具名、Go 类型名和日志动作名都叫 github，三处必须一致：不一致时统计
+	// 一个工具要把每种写法都列一遍，漏列一处那一项就悄悄归零。
+	//
+	// 名字刻意不带点号。点号命名在线上会被编码成 diana_x2e_repository_issues，
+	// 模型看到的和代码里写的不是一个名字；改名当天线上还有四次 tool not found:
+	// diana_x2e_repository_issues，是模型照着上下文里的旧名字调的。所以这个名字
+	// 一旦定下就不再改：历史里所有该工具的调用都按这个名字记，换名字会让它们失去
+	// 定义，还要清一次前缀缓存。
+	dianaGitHubToolName       = "github"
+	repositoryIssueBodyLimit  = 60_000
+	repositoryIssueTitleLimit = 256
 	// repositoryIssueConfirmationCodeLength 是确认码取草稿 ID 前缀的长度。
 	// 6 位十六进制既短到能手打，又不可能在正常聊天里被无意打出来。
 	repositoryIssueConfirmationCodeLength = 6
@@ -76,7 +82,7 @@ var (
 	repositoryIssueSearchBooleanPattern         = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:AND|OR|NOT)(?:[^A-Za-z0-9_]|$)`)
 )
 
-type dianaRepositoryIssuesTool struct {
+type dianaGitHubTool struct {
 	runtime  *Runtime
 	event    MessageEvent
 	plugin   *RepositoryPublishPlugin
@@ -87,15 +93,17 @@ type dianaRepositoryIssuesTool struct {
 }
 
 type repositoryIssueResult struct {
-	OK              bool                     `json:"ok"`
-	Operation       string                   `json:"operation"`
-	Outcome         string                   `json:"outcome,omitempty"`
-	Repository      string                   `json:"repository,omitempty"`
-	RequestedNumber int                      `json:"requested_number,omitempty"`
-	FailureCode     string                   `json:"failure_code,omitempty"`
-	Message         string                   `json:"message"`
-	Issue           *repositoryIssueSummary  `json:"issue,omitempty"`
-	Items           []repositoryIssueSummary `json:"items,omitempty"`
+	OK              bool   `json:"ok"`
+	Operation       string `json:"operation"`
+	Outcome         string `json:"outcome,omitempty"`
+	Repository      string `json:"repository,omitempty"`
+	RequestedNumber int    `json:"requested_number,omitempty"`
+	FailureCode     string `json:"failure_code,omitempty"`
+	Message         string `json:"message"`
+	// RelayHint 只在失败时出现：提醒模型把 message 原样转达，别含糊成「没有权限」。
+	RelayHint string                   `json:"relay_hint,omitempty"`
+	Issue     *repositoryIssueSummary  `json:"issue,omitempty"`
+	Items     []repositoryIssueSummary `json:"items,omitempty"`
 	// RequestedNumbers 和 Failures 只在批量写入（numbers）时出现：Items 是成功的那些，
 	// Failures 逐条说明哪个编号为什么没写上。
 	RequestedNumbers []int                         `json:"requested_numbers,omitempty"`
@@ -108,22 +116,25 @@ type repositoryIssueResult struct {
 	Comments           []repositoryIssueCommentView `json:"comments,omitempty"`
 	CommentsTruncated  bool                         `json:"comments_truncated,omitempty"`
 	// PullRequest、Reviews 只在 get 读到 PR 时返回；Files 只在 pull_files 返回。
-	PullRequest          *repositoryPullRequestView        `json:"pull_request,omitempty"`
-	Reviews              []repositoryPullRequestReviewView `json:"reviews,omitempty"`
-	ReviewsTruncated     bool                              `json:"reviews_truncated,omitempty"`
-	Files                []repositoryPullRequestFileView   `json:"files,omitempty"`
-	FilesTruncated       bool                              `json:"files_truncated,omitempty"`
-	ReviewURL            string                            `json:"review_url,omitempty"`
-	File                 *repositoryFileView               `json:"file,omitempty"`
-	Fingerprint          string                            `json:"fingerprint,omitempty"`
-	Idempotent           bool                              `json:"idempotent,omitempty"`
-	Reconciled           bool                              `json:"reconciled,omitempty"`
-	RequiresConfirmation bool                              `json:"requires_confirmation,omitempty"`
-	ConfirmationToken    string                            `json:"confirmation_token,omitempty"`
-	RequiresApproval     bool                              `json:"requires_approval,omitempty"`
-	Draft                *repositoryIssueDraftView         `json:"draft,omitempty"`
-	Drafts               []repositoryIssueDraftView        `json:"drafts,omitempty"`
-	Redactions           int                               `json:"redactions,omitempty"`
+	PullRequest      *repositoryPullRequestView        `json:"pull_request,omitempty"`
+	Reviews          []repositoryPullRequestReviewView `json:"reviews,omitempty"`
+	ReviewsTruncated bool                              `json:"reviews_truncated,omitempty"`
+	Files            []repositoryPullRequestFileView   `json:"files,omitempty"`
+	FilesTruncated   bool                              `json:"files_truncated,omitempty"`
+	// Repositories 只在 repo_search 返回，RepositoryProfile 只在 repo 返回。
+	Repositories         []repositoryProfileView    `json:"repositories,omitempty"`
+	RepositoryProfile    *repositoryProfileView     `json:"repository_profile,omitempty"`
+	ReviewURL            string                     `json:"review_url,omitempty"`
+	File                 *repositoryFileView        `json:"file,omitempty"`
+	Fingerprint          string                     `json:"fingerprint,omitempty"`
+	Idempotent           bool                       `json:"idempotent,omitempty"`
+	Reconciled           bool                       `json:"reconciled,omitempty"`
+	RequiresConfirmation bool                       `json:"requires_confirmation,omitempty"`
+	ConfirmationToken    string                     `json:"confirmation_token,omitempty"`
+	RequiresApproval     bool                       `json:"requires_approval,omitempty"`
+	Draft                *repositoryIssueDraftView  `json:"draft,omitempty"`
+	Drafts               []repositoryIssueDraftView `json:"drafts,omitempty"`
+	Redactions           int                        `json:"redactions,omitempty"`
 }
 
 type RepositoryIssueDraft struct {
@@ -286,16 +297,25 @@ func (e *repositoryIssueAPIError) Error() string {
 	return e.Code
 }
 
-func newDianaRepositoryIssuesTool(runtime *Runtime, event MessageEvent, plugin *RepositoryPublishPlugin, settings SettingValues) *dianaRepositoryIssuesTool {
-	return &dianaRepositoryIssuesTool{runtime: runtime, event: event, plugin: plugin, settings: settings}
+func newDianaGitHubTool(runtime *Runtime, event MessageEvent, plugin *RepositoryPublishPlugin, settings SettingValues) *dianaGitHubTool {
+	return &dianaGitHubTool{runtime: runtime, event: event, plugin: plugin, settings: settings}
 }
 
-func (t *dianaRepositoryIssuesTool) Name() string {
-	return dianaRepositoryIssuesToolName
+func (t *dianaGitHubTool) Name() string {
+	return dianaGitHubToolName
 }
 
-func (t *dianaRepositoryIssuesTool) Description() string {
-	description := `这是一个工具，不是一组子工具：get、pull_files、read_file、search、comment 等都是 operation 参数的取值，调用时工具名永远是 github。搜索和管理 GitHub Issues，并读取、评论和 review Pull Request。search 按关键词找（kind=pull_request 搜 PR）；get 读回某个 Issue 或 PR 的标题、正文和最近评论，PR 还会带上分支、合并状态、改动统计和已有 review；pull_files 读 PR 改动的文件和 patch——review 之前必须先读 pull_files，只看 PR 描述不算读过代码；要看改动周围的完整代码用 read_file（传 number 时读 PR head 那一版，带行号），不要改用网页渲染去读 PR 或仓库文件。read_file 与 search、get、pull_files 按仓库可见性控制：公开仓库全员可查，私有仓库仅主人和「私有仓库源码读取授权」名单内的用户可读，其他人调用会直接拒绝。comment 可以评论 Issue 或 PR；review 对 PR 提交一次只评论的 review（body 写总体意见，comments 写落在 patch 行上的行内评论），不会批准也不会要求修改；合并、关闭、修改 PR 本身不支持。要改已有 Issue 之前先 get，update 的 body 是整段覆盖，只想补几句就用 append_body（追加到正文末尾，原文不动）。要对多个 Issue 做同一件事（同样的评论、同样的追加、一起关闭）时用 numbers 一次传全部编号，只需要一份草稿和一个确认码。create、comment 和 review 的内容由你根据当前需求整理，一律先落成待审批草稿。拿到草稿后把内容复述给用户，并把结果里的 confirmation_code 原样写进你的回复——不写出来对方就无从确认；有权限的人自己打出这个码之后再调用 approve 提交，明确拒绝时调用 cancel_draft；list_drafts 可查看待审批草稿。写操作必须传 user_confirmed_write=true。不得把凭据、运行时 ID 或私密上下文写进 Issue。`
+// Description 只说这个工具是什么，一句话。
+//
+// 怎么调写在各自的参数说明里（operation 的语义、read_file 的 path、写操作的
+// user_confirmed_write），调完之后该做什么写在工具结果的 message 里——描述是每个请求
+// 都要付的钱，结果只在真用到时付一次。原先这段有 1300 字、按本项目的
+// estimateTextTokens 算 1656 token，其中六段和 operation 枚举、body/append_body/
+// numbers/user_confirmed_write 的参数说明、草稿结果的 message 或
+// repositoryDiscoveryReadingHint 逐字重复；「被拒绝时把 message 原样转达」那句挪进了
+// repositoryIssueResult.fail，跟着真正发生的那次失败回去。
+func (t *dianaGitHubTool) Description() string {
+	description := `找仓库、搜索和管理 GitHub Issues，并读取、评论和 review Pull Request；具体做什么由 operation 决定。`
 	if t == nil || t.runtime == nil {
 		return description
 	}
@@ -326,16 +346,25 @@ func (t *dianaRepositoryIssuesTool) Description() string {
 
 // InputSchema 声明参数契约。写操作对当前用户消息原文的要求写在 user_confirmed_write
 // 的字段说明里——这是最容易踩的一条，放在参数旁边比埋在描述中段更显眼。
-func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
+func (t *dianaGitHubTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("要执行的操作。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。",
-			"search", "get", "pull_files", "read_file", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
-		"repository": toolStringParam("目标仓库，写成 owner/repo。approve、cancel_draft、list_drafts 不需要。"),
+		"operation": toolEnumParam("要执行的操作。repo_search 按关键词找公开仓库，repo 读单个仓库的 star、fork 和最近推送时间——给用户推荐仓库时用这两个，不要靠网页搜索或印象。"+
+			"search 在某个仓库里按关键词找 Issue 或 PR（用 kind 选）；get 读回标题、正文和最近评论，PR 另带分支、合并状态、改动统计和已有 review；"+
+			"pull_files 读 PR 改动的文件和 patch，review 之前必须先调它，只看 PR 描述不算读过代码；read_file 读仓库里某个文件的完整代码。"+
+			"review 只提交评论，不批准也不要求修改；合并 PR、关闭 PR、改 PR 本身都不支持。"+
+			"update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。"+
+			"要改已有 Issue 之前先 get 读回原文。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。",
+			"repo_search", "repo", "search", "get", "pull_files", "read_file", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
+		"repository": toolStringParam("目标仓库，写成 owner/repo。repo_search、approve、cancel_draft、list_drafts 不需要。"),
 		"number":     toolIntParam("目标 Issue 或 PR 编号；get、pull_files、review 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
 		"numbers":    toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
-		"query":      toolStringParam("search 专用：检索关键词。"),
+		"query":      toolStringParam("search 与 repo_search 的检索关键词，只写普通词，不要带 repo:、language: 这类限定符。"),
 		"kind":       toolEnumParam("search 专用：搜 Issue（默认）、PR 还是两者都搜。", "issue", "pull_request", "all"),
-		"path":       toolStringParam("read_file 专用：仓库内文件路径。"),
+		"language":   toolStringParam("repo_search 可选：只要这门语言的仓库，例如 go、rust、typescript。"),
+		"sort": toolEnumParam("repo_search 可选：结果排序。best_match 按相关度（默认）；用户问「最流行」用 stars，问「还有人维护吗」用 updated。",
+			"best_match", "stars", "forks", "updated"),
+		"limit":      toolIntParam("repo_search 可选：最多返回几个仓库，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
+		"path":       toolStringParam("read_file 专用：仓库内文件路径。读 PR 或仓库里的代码一律用本工具，不要改用网页渲染。"),
 		"ref":        toolStringParam("read_file 可选：分支、标签或提交；传了 number 且不传 ref 时读 PR head。"),
 		"start_line": toolIntParam("read_file 可选：从第几行开始读，默认 1。", 1, 10_000_000),
 		"end_line":   toolIntParam("read_file 可选：读到第几行，默认往后 "+itoa(repositoryFileDefaultLines)+" 行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
@@ -351,7 +380,7 @@ func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
 			}),
 		},
 		"title":       toolStringParam("create 必填、update 可选：Issue 标题，最多 " + itoa(repositoryIssueTitleLimit) + " 字符。"),
-		"body":        toolStringParam("create 的正文、comment 的评论内容、review 的总体意见；update 时整段覆盖原正文，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。"),
+		"body":        toolStringParam("create 的正文、comment 的评论内容、review 的总体意见；update 时整段覆盖原正文，最多 " + itoa(repositoryIssueBodyLimit) + " 字符。不得写入凭据、运行时 ID 或私密上下文。"),
 		"append_body": toolStringParam("update 专用：追加到现有正文末尾的内容，原正文保持不动；给已有 Issue 补充信息（复现版本、补图说明）用它，不要用 body 重写整段。"),
 		"labels":      toolStringArrayParam("要设置的标签；传空数组表示清空。"),
 		"assignees":   toolStringArrayParam("要设置的负责人；传空数组表示清空。"),
@@ -366,11 +395,11 @@ func (t *dianaRepositoryIssuesTool) InputSchema() map[string]any {
 	})
 }
 
-func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
-		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 search、get、pull_files、read_file、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
+		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 repo_search、repo、search、get、pull_files、read_file、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
 	}
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
 		return t.finish(ctx, result.fail("plugin_unavailable", "GitHub Issue 与 PR 插件未正确配置。"))
@@ -384,13 +413,18 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 	if operation == "cancel_draft" {
 		return t.finish(ctx, t.cancelDraft(ctx, input))
 	}
+	// repo_search 搜的是全站公开仓库，没有目标仓库可填，所以排在 repository
+	// 规范化之前；它自己在查询里钉死 is:public，不经过按仓库分流的读 ACL。
+	if operation == "repo_search" {
+		return t.finish(ctx, t.searchRepositories(ctx, input))
+	}
 	repository, err := normalizeGitHubRepository(configToolString(input, "repository"))
 	if err != nil {
 		return t.finish(ctx, result.fail("invalid_repository", err.Error()))
 	}
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	readOperation := operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file"
+	readOperation := operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file" || operation == "repo"
 	if readOperation {
 		// search 的 query 本地校验先于任何网络探测：注入仓库限定符、布尔操作或
 		// 引号必须零请求被拒，不能先挨一发仓库元信息探测。
@@ -423,7 +457,7 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 			}
 		}
 	} else {
-		userAllowed, groupAllowed, code, message := repositoryPublishAccessForEvent(t.event, repository, owner, t.settings)
+		userAllowed, groupAllowed, code, message := repositoryPublishAccessForEvent(t.event, repository, owner, t.settings, t.groupRoleResolver(ctx))
 		if code != "" {
 			return t.finish(ctx, result.fail(code, message))
 		}
@@ -434,11 +468,14 @@ func (t *dianaRepositoryIssuesTool) Run(ctx context.Context, input map[string]an
 			return t.finish(ctx, result.fail("permission_denied", "当前用户没有该仓库的审批或写入权限。"))
 		}
 	}
-	if operation != "create" && operation != "search" {
+	if operation != "create" && operation != "search" && operation != "repo" {
 		result.RequestedNumber = repositoryIssueNumber(input)
 		result.RequestedNumbers = repositoryIssueBatchTargets(input)
 	}
-	if operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file" {
+	if readOperation {
+		if operation == "repo" {
+			return t.finish(ctx, t.repositoryProfile(ctx, repository))
+		}
 		if operation == "get" {
 			return t.finish(ctx, t.get(ctx, repository, input))
 		}
@@ -463,6 +500,10 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 	switch strings.ToLower(strings.TrimSpace(operation)) {
 	case "search", "find", "list":
 		return "search"
+	case "repo_search", "search_repositories", "search_repos", "find_repository", "find_repositories", "recommend_repository":
+		return "repo_search"
+	case "repo", "repository", "repo_info", "repository_info", "repo_profile":
+		return "repo"
 	case "get", "get_issue", "view", "read", "show":
 		return "get"
 	case "create", "create_issue", "new":
@@ -498,7 +539,19 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 	return ""
 }
 
-func repositoryPublishAccessForEvent(event MessageEvent, repository string, owner bool, settings SettingValues) (bool, bool, string, string) {
+// repositoryPublishUserScopedAllowed 判定「按用户」的那几项授权在本次事件里算不算数。
+//
+// 以前按用户的授权跟着人走，私聊和群聊都生效：一个人在私聊里被放行之后，他进了任何
+// 群都把这份权限带进去，群里发生什么，群自己说了不算。现在两边分开——群聊只认「按群」
+// 那几项，私聊只认「按用户」那几项，谁也不越界到对面。
+func repositoryPublishUserScopedAllowed(event MessageEvent, access map[string]map[string]bool, repositoryKey string) bool {
+	if event.Kind == EventKindGroup {
+		return false
+	}
+	return access[strings.TrimSpace(event.UserID)][repositoryKey]
+}
+
+func repositoryPublishAccessForEvent(event MessageEvent, repository string, owner bool, settings SettingValues, groupRole groupRoleResolver) (bool, bool, string, string) {
 	if owner {
 		return true, event.Kind == EventKindGroup, "", ""
 	}
@@ -515,9 +568,60 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 	if err != nil {
 		return false, false, "invalid_repository_access", "Issue 授权配置无效。"
 	}
-	directAllowed := managerUsers[strings.TrimSpace(event.UserID)][key] || event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(event.GroupID)][key]
-	draftAllowed := draftUsers[strings.TrimSpace(event.UserID)][key] || event.Kind == EventKindGroup && draftGroups[strings.TrimSpace(event.GroupID)][key]
+	managerGroupRoles, draftGroupRoles, err := repositoryPublishEffectiveGroupRoles(settings)
+	if err != nil {
+		return false, false, "invalid_repository_access", "按群授权的身份要求配置无效。"
+	}
+	userID, groupID := strings.TrimSpace(event.UserID), strings.TrimSpace(event.GroupID)
+	inGroup := event.Kind == EventKindGroup
+	groupManager := inGroup && managerGroups[groupID][key]
+	groupDrafter := inGroup && draftGroups[groupID][key]
+
+	// 按用户的授权只在私聊算数，见 repositoryPublishUserScopedAllowed。
+	userManager := repositoryPublishUserScopedAllowed(event, managerUsers, key)
+	userDrafter := repositoryPublishUserScopedAllowed(event, draftUsers, key)
+	// 记下「这个人确实有按用户的授权，只是在群里不算数」，拒绝时好说清差在哪。
+	userGrantPrivateOnly := inGroup && (managerUsers[userID][key] || draftUsers[userID][key])
+
+	// 身份要求只有真的写了后缀才去查身份：绝大多数部署一条都没有，不该为了「万一
+	// 要判」给每次调用多打一次群成员查询。
+	var role GroupRole
+	var roleResolved bool
+	satisfies := func(requirement repositoryAccessRole) bool {
+		if requirement == repositoryAccessRoleAllMembers {
+			return true
+		}
+		if !roleResolved {
+			role, roleResolved = resolvedGroupRole(groupRole), true
+		}
+		return requirement.satisfiedBy(role)
+	}
+	blocked := repositoryAccessRoleAllMembers
+	if groupManager {
+		if requirement := managerGroupRoles.requirement(groupID, key); !satisfies(requirement) {
+			groupManager, blocked = false, requirement
+		}
+	}
+	if groupDrafter {
+		if requirement := draftGroupRoles.requirement(groupID, key); !satisfies(requirement) {
+			groupDrafter = false
+			if blocked == repositoryAccessRoleAllMembers {
+				blocked = requirement
+			}
+		}
+	}
+
+	directAllowed := userManager || groupManager
+	draftAllowed := userDrafter || groupDrafter
 	if !directAllowed && !draftAllowed {
+		// 「你有授权，但那是按用户的、只在私聊算数」是最容易撞上也最容易修的一种，先说它。
+		if userGrantPrivateOnly {
+			return false, false, "permission_denied", "你对该仓库有按用户的授权，但按用户的授权只在私聊生效，不会带进群。" +
+				"请在私聊里操作；要在本群操作，让主人把这个群加进该仓库的按群授权，或把你加进本群的「群聊草稿审批人」。"
+		}
+		if blocked != repositoryAccessRoleAllMembers {
+			return false, false, "permission_denied", repositoryPublishGroupRoleDeniedMessage(blocked, role)
+		}
 		return false, false, "permission_denied", "当前群聊不能为该仓库发起草稿，当前用户也没有该仓库权限。"
 	}
 	allowed, err := repositoryPublishAllowlist(settings.String(repositoryPublishSettingAllowlist, ""))
@@ -528,6 +632,56 @@ func repositoryPublishAccessForEvent(event MessageEvent, repository string, owne
 		return false, false, "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的全局白名单中。"
 	}
 	return directAllowed, draftAllowed, "", ""
+}
+
+// repositoryPublishEffectiveGroupRoles 返回按群授权的身份要求，合并口径与
+// repositoryPublishEffectiveAccess 的名单一致：草稿侧要把管理侧并进来，重合的组合
+// 取更宽的一条——否则「管理人员限管理员」会连带把本来放给全体成员的草稿权收走。
+// 这里自己重新解析一遍「群聊草稿范围」，不复用调用方手上那份：
+// repositoryPublishEffectiveAccess 会把管理人员就地合并进它收到的 legacy map，
+// 拿被改过的 map 来判断「草稿侧本来就授过这个组合」会把每条都判成授过，
+// 身份要求随之被放宽成所有成员。
+func repositoryPublishEffectiveGroupRoles(settings SettingValues) (repositoryAccessRoles, repositoryAccessRoles, error) {
+	_, managerRoles, err := repositoryPublishGroupAccessRules(settings.String(repositoryPublishSettingManagerGroups, ""))
+	if err != nil {
+		return nil, nil, err
+	}
+	draftAccess, draftRoles, err := repositoryPublishGroupAccessRules(settings.String(repositoryPublishSettingDraftGroups, ""))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(draftAccess) == 0 {
+		draftAccess, draftRoles, err = repositoryPublishGroupAccessRules(settings.String(repositoryPublishSettingGroupAccess, ""))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	effectiveDraft := repositoryAccessRoles{}
+	for scopeID, repositories := range draftRoles {
+		for repository, requirement := range repositories {
+			effectiveDraft.set(scopeID, repository, requirement)
+		}
+	}
+	for scopeID, repositories := range managerRoles {
+		for repository, requirement := range repositories {
+			if draftAccess[scopeID][repository] {
+				requirement = requirement.looser(effectiveDraft.requirement(scopeID, repository))
+			}
+			effectiveDraft.set(scopeID, repository, requirement)
+		}
+	}
+	return managerRoles, effectiveDraft, nil
+}
+
+// repositoryPublishGroupRoleDeniedMessage 说清楚差在哪：是身份不够，还是平台压根
+// 没告诉我们身份。后者要写明，否则群主自己被拒会以为是配置错了。
+func repositoryPublishGroupRoleDeniedMessage(requirement repositoryAccessRole, role GroupRole) string {
+	const tail = "（这里说的是你在群里的身份，不是 Diana 的「Issue 管理人员」名单。" +
+		"想在本群单独放行某个人，让主人把他加进「群聊草稿审批人（按群）」——按用户的授权只在私聊生效，放行不到群里。）"
+	if label := GroupRoleLabel(role); label != "" {
+		return "本群对该仓库的授权只对" + requirement.label() + "生效，你当前的群身份是" + label + "，已拒绝。" + tail
+	}
+	return "本群对该仓库的授权只对" + requirement.label() + "生效，但当前平台没有提供你的群身份，无法确认，已拒绝。" + tail
 }
 
 func repositoryPublishEffectiveAccess(settings SettingValues, legacyUsers, legacyGroups map[string]map[string]bool) (map[string]map[string]bool, map[string]map[string]bool, map[string]map[string]bool, map[string]map[string]bool, error) {
@@ -624,21 +778,29 @@ func repositoryIssueASCIIIdentifier(value string) bool {
 	return true
 }
 
+// repositoryIssueFailureRelayHint 跟着每一次失败回去，而不是写在工具描述里。
+//
+// 拒绝的理由都在 message 里：差在哪个身份档、当前是什么身份、想单独放行该改哪项
+// 配置。模型把它含糊成一句「我没有权限」，用户就不知道下一步该做什么。这句提醒只在
+// 真的失败时才需要，挂在结果上只付一次，写进描述则是每个请求都付。
+const repositoryIssueFailureRelayHint = "把上面这条 message 原样转达给用户，说清差在哪、下一步能做什么，不要含糊成一句「我没有权限」。"
+
 func (r repositoryIssueResult) fail(code, message string) repositoryIssueResult {
 	r.OK = false
 	r.Outcome = "failed"
 	r.FailureCode = strings.TrimSpace(code)
 	r.Message = strings.TrimSpace(message)
+	r.RelayHint = repositoryIssueFailureRelayHint
 	return r
 }
 
-func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositoryIssueResult) (string, error) {
-	if result.Operation != "" && result.Operation != "search" {
+func (t *dianaGitHubTool) finish(ctx context.Context, result repositoryIssueResult) (string, error) {
+	if result.Operation != "" && !repositoryIssueReadOnlyOperation(result.Operation) {
 		t.audit(result)
 	}
 	// GitHub 上已经落地的写入不可撤销：标记之后，这一轮回复不会再被后续消息
 	// 打断丢弃，用户至少能看到「已经建好了」和链接。草稿只存在本地，不算。
-	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "search" && result.Operation != "list_drafts" {
+	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "list_drafts" && !repositoryIssueReadOnlyOperation(result.Operation) {
 		markExternalSideEffect(ctx)
 	}
 	body, err := json.Marshal(result)
@@ -648,7 +810,38 @@ func (t *dianaRepositoryIssuesTool) finish(ctx context.Context, result repositor
 	return string(body), nil
 }
 
-func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner bool) (string, string) {
+// repositoryIssueReadOnlyOperation 圈出纯查询操作：它们不写 GitHub，既不进操作审计，
+// 也不该把这一轮回复标成「有外部副作用、不可打断」。
+func repositoryIssueReadOnlyOperation(operation string) bool {
+	return operation == "search" || operation == "repo_search" || operation == "repo"
+}
+
+// groupRoleResolver 返回「取当前发言人在本群的身份」的惰性闭包。事件里带就用事件
+// 里的——OneBot 每条群消息都带 sender.role；带不到再回查一次群成员信息。查不到返回
+// 空串，按「身份未知」处理，不当成普通成员放行。
+//
+// 这里说的是发言人在群里的身份（群主 / 群管理员 / 群成员），和 Diana 自己的
+// 「Issue 管理人员」是两回事：后者是这个插件的授权名单，跟着人或群走，私聊也算数。
+func (t *dianaGitHubTool) groupRoleResolver(ctx context.Context) groupRoleResolver {
+	return func() GroupRole {
+		if t == nil || t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+			return ""
+		}
+		if role := NormalizeGroupRole(t.event.SenderRole); role != "" {
+			return role
+		}
+		if t.runtime == nil {
+			return ""
+		}
+		member, err := t.runtime.getGroupMemberInfoForEvent(ctx, t.event, t.event.GroupID, t.event.UserID)
+		if err != nil {
+			return ""
+		}
+		return NormalizeGroupRole(member.Role)
+	}
+}
+
+func (t *dianaGitHubTool) validateWriteAccess(repository string, owner bool) (string, string) {
 	// 主人不受写入白名单限制：白名单是给其他用户划的边界，主人自己的写入本来
 	// 就要过确认码，仓库范围不必再替他圈一遍。非主人继续精确匹配白名单。
 	if !owner {
@@ -673,10 +866,23 @@ func (t *dianaRepositoryIssuesTool) validateWriteAccess(repository string, owner
 		}
 		userID := strings.TrimSpace(t.event.UserID)
 		key := strings.ToLower(repository)
+		// 按用户的管理员权限只在私聊算数，群里要么整个群被放开，要么是本群指定的
+		// 草稿审批人在推动一份已经过确认码的草稿。
+		userDirect := repositoryPublishUserScopedAllowed(t.event, managerUsers, key)
 		groupDirect := t.event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(t.event.GroupID)][key]
-		if !managerUsers[userID][key] && !groupDirect {
+		groupApprover := false
+		if !userDirect && !groupDirect && t.event.Kind == EventKindGroup {
+			approvers, approverErr := repositoryPublishGroupApprovers(t.settings.String(repositoryPublishSettingApproverGroups, ""))
+			if approverErr != nil {
+				return "invalid_group_approver_access", "群聊草稿审批人配置无效，请按每行“群 ID = 用户 ID, 用户 ID”填写。"
+			}
+			groupApprover = approvers[strings.TrimSpace(t.event.GroupID)][userID]
+		}
+		if !userDirect && !groupDirect && !groupApprover {
 			return "permission_denied", "当前用户没有该仓库的写入权限。"
 		}
+		// 整个群被放开时用公共 Token；落到个人头上的放行（私聊里的管理员、群里的审批人）
+		// 都要用本人的 Token，写到 GitHub 上的东西必须归因到具体的人。
 		if groupDirect {
 			return "", ""
 		}
@@ -717,7 +923,7 @@ const (
 // 凭据、公共 Token、gh）：凭据可见的私有仓库返回 private，公开仓库无论带不带凭据
 // 都返回 public；凭据也看不到的仓库按 GitHub 的口径返回 not_found——不区分「不存在」
 // 和「无权访问」，免得拿探测接口枚举别人的私有仓库。
-func (t *dianaRepositoryIssuesTool) repositoryVisibility(ctx context.Context, repository string) (string, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) repositoryVisibility(ctx context.Context, repository string) (string, *repositoryIssueAPIError) {
 	var meta struct {
 		Private bool `json:"private"`
 	}
@@ -733,7 +939,7 @@ func (t *dianaRepositoryIssuesTool) repositoryVisibility(ctx context.Context, re
 // validateReadCredential 保留旧版对「已按用户授权」用户的个人 Token 要求（关闭
 // #565）：这类用户已被显式授予该仓库的操作权，读操作也应归因到本人，而不是用共享
 // 公共凭据代替。未在任何用户名单里的用户不受此约束。返回非空 code 即拒绝。
-func (t *dianaRepositoryIssuesTool) validateReadCredential(repository string) (string, string) {
+func (t *dianaGitHubTool) validateReadCredential(repository string) (string, string) {
 	userID := strings.TrimSpace(t.event.UserID)
 	key := strings.ToLower(repository)
 	legacyUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingUserAccess, ""))
@@ -749,7 +955,10 @@ func (t *dianaRepositoryIssuesTool) validateReadCredential(repository string) (s
 		return "invalid_repository_access", "Issue 授权配置无效。"
 	}
 	groupDirect := t.event.Kind == EventKindGroup && managerGroups[strings.TrimSpace(t.event.GroupID)][key]
-	if !managerUsers[userID][key] || groupDirect {
+	// 归因要求跟着「这次事件里他到底算不算被授权的人」走。按用户的授权只在私聊生效，
+	// 所以同一个人在群里就是个普通成员：读公开仓库照常走公共凭据，不能再拿本人 Token
+	// 来卡他——没配 Token 的话，那会把一次本来人人都能做的公开仓库读取挡掉。
+	if !repositoryPublishUserScopedAllowed(t.event, managerUsers, key) || groupDirect {
 		return "", ""
 	}
 	tokens, err := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
@@ -775,9 +984,14 @@ func (t *dianaRepositoryIssuesTool) validateReadCredential(repository string) (s
 // 授权来源按宽口径取并集：「私有仓库源码读取授权」+ Issue 管理人员（含「用户仓库
 // 授权」回落）——这两拨人都已被后台显式授予该仓库的操作权，读代码不该比写 Issue
 // 更严。返回非空 code 即拒绝，提示里只说授权路径，不泄露仓库内容。
-func (t *dianaRepositoryIssuesTool) validatePrivateReadAccess(repository string) (string, string) {
-	userID := strings.TrimSpace(t.event.UserID)
+func (t *dianaGitHubTool) validatePrivateReadAccess(repository string) (string, string) {
 	key := strings.ToLower(repository)
+	// 源码读取只有「按用户」一份名单，没有按群的对应项，所以这里直接按会话类型挡：
+	// 群聊里除主人外谁都读不到私有仓库源码。要放开就得先有一份按群的名单。
+	if t.event.Kind == EventKindGroup {
+		return "permission_denied", "群聊里不能读取私有仓库源码，私有仓库源码读取授权只在私聊生效；请与机器人私聊后再读。"
+	}
+	userID := strings.TrimSpace(t.event.UserID)
 	codeUsers, err := repositoryPublishUserAccess(t.settings.String(repositoryPublishSettingCodeUsers, ""))
 	if err != nil {
 		return "invalid_repository_access", "私有仓库源码读取授权配置无效，请按每行“用户ID = owner/repo, owner/repo”填写。"
@@ -798,7 +1012,7 @@ func (t *dianaRepositoryIssuesTool) validatePrivateReadAccess(repository string)
 
 // effectiveGlobalToken 返回实际会用到的公共 Token：优先发布插件自己的那份，为空时
 // 回落到订阅插件，与 repositoryPublishCredential 的取值口径保持一致。
-func (t *dianaRepositoryIssuesTool) effectiveGlobalToken() string {
+func (t *dianaGitHubTool) effectiveGlobalToken() string {
 	if token := strings.TrimSpace(t.settings.String(repositoryPublishSettingToken, "")); token != "" {
 		return token
 	}
@@ -833,7 +1047,7 @@ func repositoryPublishValidateEventAccess(event MessageEvent, repository string,
 	if effectiveErr != nil {
 		return "invalid_repository_access", "Issue 授权配置无效。"
 	}
-	userAllowed := draftUsers[strings.TrimSpace(event.UserID)][repositoryKey]
+	userAllowed := repositoryPublishUserScopedAllowed(event, draftUsers, repositoryKey)
 	groupAllowed := event.Kind == EventKindGroup && draftGroups[strings.TrimSpace(event.GroupID)][repositoryKey]
 	if !userAllowed && !groupAllowed {
 		return "permission_denied", "当前用户或所在群聊未获授权操作该 GitHub 仓库。"
@@ -858,10 +1072,10 @@ func repositoryPublishUserHasAccess(userID string, settings SettingValues) bool 
 }
 
 func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues) bool {
-	if repositoryPublishUserHasAccess(event.UserID, settings) {
-		return true
+	if event.Kind != EventKindGroup {
+		return repositoryPublishUserHasAccess(event.UserID, settings)
 	}
-	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
+	if strings.TrimSpace(event.GroupID) == "" {
 		return false
 	}
 	legacy, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
@@ -870,6 +1084,59 @@ func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues)
 	}
 	_, managers, _, drafts, err := repositoryPublishEffectiveAccess(settings, map[string]map[string]bool{}, legacy)
 	return err == nil && (len(managers[strings.TrimSpace(event.GroupID)]) > 0 || len(drafts[strings.TrimSpace(event.GroupID)]) > 0)
+}
+
+// repositoryPublishGroupApprovers 解析「群 ID = 用户 ID, 用户 ID」。
+//
+// 按用户的那几项只在私聊生效（见 repositoryPublishUserScopedAllowed），否则一个人在
+// 私聊里拿到的权限会被他带进任何一个群。但群草稿本来就需要「群里有人拍板」——所以
+// 审批人按群配：群 ID 是谁的群，谁说了算，这仍然是群自己的配置，不是个人跨场景带权限。
+func repositoryPublishGroupApprovers(raw string) (map[string]map[string]bool, error) {
+	approvers := map[string]map[string]bool{}
+	for _, line := range strings.FieldsFunc(raw, func(char rune) bool { return char == '\n' || char == '\r' || char == ';' || char == '；' }) {
+		groupID, users, ok := strings.Cut(line, "=")
+		groupID = strings.TrimSpace(groupID)
+		if !ok || groupID == "" || strings.Contains(users, "=") {
+			return nil, fmt.Errorf("invalid group approver rule")
+		}
+		if approvers[groupID] == nil {
+			approvers[groupID] = map[string]bool{}
+		}
+		for _, item := range strings.Split(users, ",") {
+			user := strings.TrimSpace(item)
+			if user == "" {
+				return nil, fmt.Errorf("invalid group approver rule")
+			}
+			approvers[groupID][user] = true
+		}
+	}
+	return approvers, nil
+}
+
+// repositoryPublishEventCanApprove 判定这次事件能不能审批或取消某个仓库的草稿。
+//
+// 除了本来就有直接写入权限的人，群里还认「群聊草稿审批人」名单。审批人只能推动草稿，
+// 不能绕过草稿直接写：能批哪些仓库由本群的草稿范围决定，否则填一个审批人等于把整份
+// 白名单都交给他。
+func repositoryPublishEventCanApprove(event MessageEvent, repository string, owner bool, settings SettingValues, groupRole groupRoleResolver) (bool, string, string) {
+	direct, draftScoped, code, message := repositoryPublishAccessForEvent(event, repository, owner, settings, groupRole)
+	if direct {
+		return true, "", ""
+	}
+	if event.Kind != EventKindGroup || !draftScoped {
+		if code == "" {
+			code, message = "permission_denied", "当前用户没有该仓库的审批权限。"
+		}
+		return false, code, message
+	}
+	approvers, err := repositoryPublishGroupApprovers(settings.String(repositoryPublishSettingApproverGroups, ""))
+	if err != nil {
+		return false, "invalid_group_approver_access", "群聊草稿审批人配置无效，请按每行“群 ID = 用户 ID, 用户 ID”填写。"
+	}
+	if !approvers[strings.TrimSpace(event.GroupID)][strings.TrimSpace(event.UserID)] {
+		return false, "permission_denied", "当前用户不是本群的草稿审批人。群聊草稿由「群聊草稿审批人（按群）」名单里的人审批，私聊里的个人授权不带进群。"
+	}
+	return true, "", ""
 }
 
 func repositoryPublishUserAccess(raw string) (map[string]map[string]bool, error) {
@@ -881,25 +1148,51 @@ func repositoryPublishGroupAccess(raw string) (map[string]map[string]bool, error
 }
 
 func repositoryPublishScopedAccess(raw, scope string) (map[string]map[string]bool, error) {
+	access, _, err := repositoryPublishScopedAccessRules(raw, scope)
+	return access, err
+}
+
+// repositoryPublishGroupAccessRules 在解析按群授权的同时取出每条的身份要求。
+func repositoryPublishGroupAccessRules(raw string) (map[string]map[string]bool, repositoryAccessRoles, error) {
+	return repositoryPublishScopedAccessRules(raw, "group")
+}
+
+// repositoryPublishScopedAccessRules 解析「ID = owner/repo, owner/repo」。按群授权的
+// 每个仓库后面可以跟 #group_admin 这样的身份要求后缀，不写等于「所有成员」，老配置
+// 读进来语义不变。用户授权没有群身份可言，带后缀直接判错，免得填错地方还悄悄生效。
+func repositoryPublishScopedAccessRules(raw, scope string) (map[string]map[string]bool, repositoryAccessRoles, error) {
 	access := map[string]map[string]bool{}
+	roles := repositoryAccessRoles{}
 	for _, line := range strings.FieldsFunc(raw, func(char rune) bool { return char == '\n' || char == '\r' || char == ';' || char == '；' }) {
 		scopeID, repositories, ok := strings.Cut(line, "=")
 		scopeID = strings.TrimSpace(scopeID)
 		if !ok || scopeID == "" || strings.Contains(repositories, "=") {
-			return nil, fmt.Errorf("invalid %s repository rule", scope)
+			return nil, nil, fmt.Errorf("invalid %s repository rule", scope)
 		}
 		if access[scopeID] == nil {
 			access[scopeID] = map[string]bool{}
 		}
 		for _, item := range strings.Split(repositories, ",") {
+			item, suffix, hasSuffix := strings.Cut(item, repositoryAccessRoleSeparator)
+			if hasSuffix && scope != "group" {
+				return nil, nil, fmt.Errorf("invalid %s repository rule: group role requirement is only valid for group access", scope)
+			}
+			requirement, err := parseRepositoryAccessRole(suffix)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid %s repository rule: %w", scope, err)
+			}
 			repository, err := normalizeGitHubRepository(item)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			access[scopeID][strings.ToLower(repository)] = true
+			key := strings.ToLower(repository)
+			access[scopeID][key] = true
+			if requirement != repositoryAccessRoleAllMembers {
+				roles.set(scopeID, key, requirement)
+			}
 		}
 	}
-	return access, nil
+	return access, roles, nil
 }
 
 func repositoryPublishAllowlist(raw string) (map[string]bool, error) {
@@ -960,12 +1253,12 @@ func repositoryPublishEventRepositories(event MessageEvent, owner bool, settings
 	if err != nil {
 		return nil
 	}
-	userID := strings.TrimSpace(event.UserID)
 	groupID := strings.TrimSpace(event.GroupID)
 	granted := make([]string, 0, len(names))
 	for _, repository := range names {
 		key := strings.ToLower(repository)
-		reachable := managerUsers[userID][key] || draftUsers[userID][key]
+		reachable := repositoryPublishUserScopedAllowed(event, managerUsers, key) ||
+			repositoryPublishUserScopedAllowed(event, draftUsers, key)
 		if !reachable && event.Kind == EventKindGroup {
 			reachable = managerGroups[groupID][key] || draftGroups[groupID][key]
 		}
@@ -1010,7 +1303,7 @@ func parseSearchInput(input map[string]any) (query, state, kind, typeQualifier s
 	return query, state, kind, typeQualifier, redactions, "", ""
 }
 
-func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) search(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "search", Repository: repository}
 	query, state, kind, typeQualifier, redactions, code, message := parseSearchInput(input)
 	result.Redactions = redactions
@@ -1047,7 +1340,7 @@ func (t *dianaRepositoryIssuesTool) search(ctx context.Context, repository strin
 }
 
 // describeResolvedDraft 说明一份已经处理过的草稿的真实归宿。
-func (t *dianaRepositoryIssuesTool) describeResolvedDraft(draft repositoryIssueDraft) repositoryIssueResult {
+func (t *dianaGitHubTool) describeResolvedDraft(draft repositoryIssueDraft) repositoryIssueResult {
 	result := repositoryIssueResult{
 		Operation:  "approve",
 		Repository: draft.Repository,
@@ -1092,7 +1385,7 @@ func repositoryIssueDraftOperation(draft repositoryIssueDraft) string {
 // （字段名、否定词、清空词）确认「用户真的要求了这件事」。措辞判断已经移除，而替代
 // 不能是「什么都不查」——那就只剩模型自报。改为所有写操作先落草稿，由用户原样打出
 // 确认码之后再执行：用户看到的是将要写入的确切内容，比猜措辞更强也更好解释。
-func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: operation, Repository: repository}
 	draftScope := strings.TrimSpace(t.event.GroupID)
 	if t.event.Kind != EventKindGroup {
@@ -1250,7 +1543,7 @@ func (t *dianaRepositoryIssuesTool) createWriteDraft(ctx context.Context, reposi
 	return result
 }
 
-func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "approve", Message: "Issue 草稿未提交。"}
 	scope := strings.TrimSpace(t.event.GroupID)
 	if t.event.Kind != EventKindGroup {
@@ -1274,8 +1567,8 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 	}
 	result.Repository = draft.Repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	userAllowed, _, code, message := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings)
-	if code != "" || !userAllowed {
+	userAllowed, code, message := repositoryPublishEventCanApprove(t.event, draft.Repository, owner, t.settings, t.groupRoleResolver(ctx))
+	if !userAllowed {
 		if code == "" {
 			code, message = "permission_denied", "当前用户没有该仓库的审批权限。"
 		}
@@ -1296,7 +1589,7 @@ func (t *dianaRepositoryIssuesTool) approveDraft(ctx context.Context, input map[
 
 // executeDraft 执行草稿记录的写操作并把草稿标记为已用掉。
 // 群里的确认码审批和 WebUI 的直接发布都走这里，免得两条链路各写一份。
-func (t *dianaRepositoryIssuesTool) executeDraft(ctx context.Context, draft repositoryIssueDraft, input map[string]any, operationName string) repositoryIssueResult {
+func (t *dianaGitHubTool) executeDraft(ctx context.Context, draft repositoryIssueDraft, input map[string]any, operationName string) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: operationName, Repository: draft.Repository}
 	writeInput := make(map[string]any, len(draft.Input)+2)
 	for key, value := range draft.Input {
@@ -1338,7 +1631,7 @@ func (t *dianaRepositoryIssuesTool) executeDraft(ctx context.Context, draft repo
 }
 
 // executeWrite 对单个目标执行草稿记录的写操作。
-func (t *dianaRepositoryIssuesTool) executeWrite(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) executeWrite(ctx context.Context, repository, operation string, input map[string]any) repositoryIssueResult {
 	switch operation {
 	case "create":
 		return t.create(ctx, repository, input)
@@ -1355,7 +1648,7 @@ func (t *dianaRepositoryIssuesTool) executeWrite(ctx context.Context, repository
 
 // executeBatch 把同一份改动逐个写到 targets 上。一条失败不拦后面的：用户要的是
 // 「这几个都改掉」，中途停下只会留下一半改了一半没改、还得自己数哪些成了。
-func (t *dianaRepositoryIssuesTool) executeBatch(ctx context.Context, repository, operation string, input map[string]any, targets []int) repositoryIssueResult {
+func (t *dianaGitHubTool) executeBatch(ctx context.Context, repository, operation string, input map[string]any, targets []int) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: operation, Repository: repository, RequestedNumbers: targets}
 	for _, number := range targets {
 		single := make(map[string]any, len(input))
@@ -1462,7 +1755,7 @@ func repositoryIssueBatchTargets(input map[string]any) []int {
 	return numbers
 }
 
-func (t *dianaRepositoryIssuesTool) listDrafts(ctx context.Context, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) listDrafts(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "list_drafts", Message: "没有找到 Issue 草稿。"}
 	if t.event.Kind != EventKindGroup && strings.TrimSpace(t.event.UserID) == "" {
 		return result.fail("permission_denied", "只能在有明确对象的会话中列出 Issue 草稿。")
@@ -1582,7 +1875,7 @@ func repositoryIssueDraftTitleKey(title string) string {
 
 // findSameTitleDraft 在当前会话范围里找同仓库、同标题的草稿：待审批的直接复用，
 // 最近刚提交成功的当成「已经建好」。返回的第二个值说明找到的是哪一种。
-func (t *dianaRepositoryIssuesTool) findSameTitleDraft(ctx context.Context, scope, repository, title string) (repositoryIssueDraft, string) {
+func (t *dianaGitHubTool) findSameTitleDraft(ctx context.Context, scope, repository, title string) (repositoryIssueDraft, string) {
 	key := repositoryIssueDraftTitleKey(title)
 	if key == "" {
 		return repositoryIssueDraft{}, ""
@@ -1618,7 +1911,7 @@ func (t *dianaRepositoryIssuesTool) findSameTitleDraft(ctx context.Context, scop
 	return repositoryIssueDraft{}, ""
 }
 
-func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) cancelDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "cancel_draft", Message: "Issue 草稿未取消。"}
 	scope := strings.TrimSpace(t.event.GroupID)
 	if t.event.Kind != EventKindGroup {
@@ -1636,8 +1929,11 @@ func (t *dianaRepositoryIssuesTool) cancelDraft(ctx context.Context, input map[s
 	}
 	result.Repository = draft.Repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	userAllowed, _, code, _ := repositoryPublishAccessForEvent(t.event, draft.Repository, owner, t.settings)
-	if code != "" || !userAllowed {
+	userAllowed, code, message := repositoryPublishEventCanApprove(t.event, draft.Repository, owner, t.settings, t.groupRoleResolver(ctx))
+	if !userAllowed {
+		if code != "permission_denied" && code != "" {
+			return result.fail(code, message)
+		}
 		return result.fail("permission_denied", "当前用户没有该仓库的草稿管理权限。")
 	}
 	// 取消草稿只会让写操作不发生，判错的代价是「本该写的没写」，用户重说一次即可。
@@ -1689,7 +1985,7 @@ func repositoryIssueRequestConfirms(text string, draft repositoryIssueDraft) boo
 
 // writeRequestText 返回提出这次写操作的用户消息。走草稿时它记在草稿里，因为确认阶段
 // 的消息只有确认码；直接调用时就是当前消息。
-func (t *dianaRepositoryIssuesTool) writeRequestText(input map[string]any) string {
+func (t *dianaGitHubTool) writeRequestText(input map[string]any) string {
 	if recorded := strings.TrimSpace(configToolString(input, "request_text")); recorded != "" {
 		return recorded
 	}
@@ -1729,7 +2025,7 @@ func confirmationCodeForPendingDraft(draft repositoryIssueDraft) string {
 	return draftConfirmationCode(draft)
 }
 
-func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) create(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "create", Repository: repository}
 	title, titleRedactions := sanitizeRepositoryIssueText(configToolString(input, "title"), repositoryIssueTitleLimit, true)
 	body, bodyRedactions := sanitizeRepositoryIssueText(configToolString(input, "body"), repositoryIssueBodyLimit, false)
@@ -1843,7 +2139,7 @@ func (t *dianaRepositoryIssuesTool) create(ctx context.Context, repository strin
 	return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 }
 
-func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) update(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "update", Repository: repository, RequestedNumber: repositoryIssueNumber(input)}
 	number := repositoryIssueNumber(input)
 	if number <= 0 {
@@ -1923,7 +2219,7 @@ func (t *dianaRepositoryIssuesTool) update(ctx context.Context, repository strin
 
 // get 把一个 Issue 的标题、正文和最近评论读回来。update 是整段覆盖，模型不先看
 // 原文就只能凭记忆重写，很容易把原内容冲掉；以前工具里没有任何操作能读正文。
-func (t *dianaRepositoryIssuesTool) get(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "get", Repository: repository, RequestedNumber: repositoryIssueNumber(input)}
 	number := repositoryIssueNumber(input)
 	if number <= 0 {
@@ -2018,7 +2314,7 @@ func repositoryIssueUpdateHasChanges(input map[string]any, title, body, appendBo
 	return false
 }
 
-func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
+func (t *dianaGitHubTool) comment(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "comment", Repository: repository, RequestedNumber: repositoryIssueNumber(input)}
 	number := repositoryIssueNumber(input)
 	if number <= 0 {
@@ -2096,7 +2392,7 @@ func (t *dianaRepositoryIssuesTool) comment(ctx context.Context, repository stri
 	return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 }
 
-func (t *dianaRepositoryIssuesTool) setState(ctx context.Context, repository string, input map[string]any, operation string) repositoryIssueResult {
+func (t *dianaGitHubTool) setState(ctx context.Context, repository string, input map[string]any, operation string) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: operation, Repository: repository, RequestedNumber: repositoryIssueNumber(input)}
 	number := repositoryIssueNumber(input)
 	if number <= 0 {
@@ -2135,7 +2431,7 @@ func (t *dianaRepositoryIssuesTool) setState(ctx context.Context, repository str
 	return result
 }
 
-func (t *dianaRepositoryIssuesTool) listRecentIssues(ctx context.Context, repository string) ([]githubRepositoryIssue, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) listRecentIssues(ctx context.Context, repository string) ([]githubRepositoryIssue, *repositoryIssueAPIError) {
 	// REST 的 issues 接口把 PR 混在一起返回，PR 多的仓库很快超过翻页上限，查重和防重复
 	// 就一直报「扫描不完整」。有凭据时用 GraphQL 只列 issue。
 	if issues, apiErr, used := t.listIssuesGraphQL(ctx, repository); used {
@@ -2191,7 +2487,7 @@ const repositoryPublishIssuesGraphQLQuery = `query($owner: String!, $name: Strin
 
 // listIssuesGraphQL 用 GraphQL 列出仓库全部 issue（不含 PR）。used=false 表示没有可用凭据或
 // 查询失败，调用方退回 REST。
-func (t *dianaRepositoryIssuesTool) listIssuesGraphQL(ctx context.Context, repository string) ([]githubRepositoryIssue, *repositoryIssueAPIError, bool) {
+func (t *dianaGitHubTool) listIssuesGraphQL(ctx context.Context, repository string) ([]githubRepositoryIssue, *repositoryIssueAPIError, bool) {
 	if t == nil || t.plugin == nil || t.plugin.client == nil {
 		return nil, nil, false
 	}
@@ -2262,7 +2558,7 @@ func (t *dianaRepositoryIssuesTool) listIssuesGraphQL(ctx context.Context, repos
 	return nil, &repositoryIssueAPIError{Code: "idempotency_scan_incomplete"}, true
 }
 
-func (t *dianaRepositoryIssuesTool) getIssue(ctx context.Context, repository string, number int) (githubRepositoryIssue, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) getIssue(ctx context.Context, repository string, number int) (githubRepositoryIssue, *repositoryIssueAPIError) {
 	var issue githubRepositoryIssue
 	apiErr := t.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d", repository, number), nil, &issue)
 	if apiErr == nil && issue.PullRequest != nil {
@@ -2271,7 +2567,7 @@ func (t *dianaRepositoryIssuesTool) getIssue(ctx context.Context, repository str
 	return issue, apiErr
 }
 
-func (t *dianaRepositoryIssuesTool) findCommentMarker(ctx context.Context, repository string, number int, marker, legacyMarker, markerPrefix string) (githubIssueComment, repositoryIssueMarkerMatch, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) findCommentMarker(ctx context.Context, repository string, number int, marker, legacyMarker, markerPrefix string) (githubIssueComment, repositoryIssueMarkerMatch, *repositoryIssueAPIError) {
 	readPage := func(page int) ([]githubIssueComment, http.Header, *repositoryIssueAPIError) {
 		values := url.Values{
 			"per_page": {"100"},
@@ -2354,7 +2650,7 @@ func repositoryIssueLastPage(linkHeader string) (int, bool) {
 	return 0, false
 }
 
-func (t *dianaRepositoryIssuesTool) reconcileIssueMarker(repository, marker string) (githubRepositoryIssue, bool) {
+func (t *dianaGitHubTool) reconcileIssueMarker(repository, marker string) (githubRepositoryIssue, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), min(t.requestTimeout(), 10*time.Second))
 	defer cancel()
 	issues, apiErr := t.listRecentIssues(ctx, repository)
@@ -2364,7 +2660,7 @@ func (t *dianaRepositoryIssuesTool) reconcileIssueMarker(repository, marker stri
 	return repositoryIssueWithMarker(issues, marker)
 }
 
-func (t *dianaRepositoryIssuesTool) reconcileCommentMarker(repository string, number int, marker, legacyMarker string) (githubIssueComment, bool) {
+func (t *dianaGitHubTool) reconcileCommentMarker(repository string, number int, marker, legacyMarker string) (githubIssueComment, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), min(t.requestTimeout(), 10*time.Second))
 	defer cancel()
 	comment, match, _ := t.findCommentMarker(ctx, repository, number, marker, legacyMarker, "")
@@ -2591,7 +2887,7 @@ func repositoryIssueRequestMentionsCandidate(text string, candidates []repositor
 	return false
 }
 
-func (t *dianaRepositoryIssuesTool) newDuplicateConfirmation(repository, fingerprint string, candidates []repositoryIssueSummary) string {
+func (t *dianaGitHubTool) newDuplicateConfirmation(repository, fingerprint string, candidates []repositoryIssueSummary) string {
 	if t == nil || t.plugin == nil || !t.plugin.confirmationOK {
 		return ""
 	}
@@ -2611,7 +2907,7 @@ func (t *dianaRepositoryIssuesTool) newDuplicateConfirmation(repository, fingerp
 	}, ".")
 }
 
-func (t *dianaRepositoryIssuesTool) verifyDuplicateConfirmation(token, repository, fingerprint string, candidates []repositoryIssueSummary) bool {
+func (t *dianaGitHubTool) verifyDuplicateConfirmation(token, repository, fingerprint string, candidates []repositoryIssueSummary) bool {
 	if t == nil || t.plugin == nil || !t.plugin.confirmationOK {
 		return false
 	}
@@ -2742,7 +3038,7 @@ func repositoryIssueTitleTerms(value string) map[string]bool {
 	return terms
 }
 
-func (t *dianaRepositoryIssuesTool) requestTimeout() time.Duration {
+func (t *dianaGitHubTool) requestTimeout() time.Duration {
 	seconds := t.settings.Int(repositoryPublishSettingTimeout, defaultRepositoryPublishTimeoutSecs)
 	if seconds <= 0 {
 		seconds = defaultRepositoryPublishTimeoutSecs
@@ -2750,22 +3046,22 @@ func (t *dianaRepositoryIssuesTool) requestTimeout() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func (t *dianaRepositoryIssuesTool) doJSON(ctx context.Context, method, path string, payload any, target any) *repositoryIssueAPIError {
+func (t *dianaGitHubTool) doJSON(ctx context.Context, method, path string, payload any, target any) *repositoryIssueAPIError {
 	_, apiErr := t.doJSONWithHeaders(ctx, method, path, payload, target)
 	return apiErr
 }
 
-func (t *dianaRepositoryIssuesTool) doJSONWithHeaders(ctx context.Context, method, path string, payload any, target any) (http.Header, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) doJSONWithHeaders(ctx context.Context, method, path string, payload any, target any) (http.Header, *repositoryIssueAPIError) {
 	return t.doJSONWithHeadersStatus(ctx, method, path, payload, target, 0)
 }
 
 // doJSONStatus 用于成功状态码不是默认值的接口：提交 PR review 成功返回 200 而不是 201。
-func (t *dianaRepositoryIssuesTool) doJSONStatus(ctx context.Context, method, path string, payload any, target any, expectedStatus int) *repositoryIssueAPIError {
+func (t *dianaGitHubTool) doJSONStatus(ctx context.Context, method, path string, payload any, target any, expectedStatus int) *repositoryIssueAPIError {
 	_, apiErr := t.doJSONWithHeadersStatus(ctx, method, path, payload, target, expectedStatus)
 	return apiErr
 }
 
-func (t *dianaRepositoryIssuesTool) doJSONWithHeadersStatus(ctx context.Context, method, path string, payload any, target any, expectedStatus int) (http.Header, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) doJSONWithHeadersStatus(ctx context.Context, method, path string, payload any, target any, expectedStatus int) (http.Header, *repositoryIssueAPIError) {
 	requestCtx, cancel := context.WithTimeout(ctx, t.requestTimeout())
 	defer cancel()
 	var body io.Reader
@@ -2863,7 +3159,7 @@ func (t *dianaRepositoryIssuesTool) doJSONWithHeadersStatus(ctx context.Context,
 	return headers, nil
 }
 
-func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Context, repository string) (string, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) repositoryPublishCredential(ctx context.Context, repository string) (string, *repositoryIssueAPIError) {
 	userID := strings.TrimSpace(t.event.UserID)
 	tokens, _ := repositoryPublishUserTokens(t.settings.String(repositoryPublishSettingUserTokens, ""))
 	modes, _ := repositoryPublishUserAuthModes(t.settings.String(repositoryPublishSettingUserAuth, ""))
@@ -2913,13 +3209,13 @@ func (t *dianaRepositoryIssuesTool) repositoryPublishCredential(ctx context.Cont
 // 留空沿用」。于是先配好 Token、之后再改别的设置并保存，发布插件这边始终是空的；
 // 「已配置」的提示又是「两个插件任一有就算」，结果就是界面说配好了、Issue 却用不了。
 // 与其指望前端每次都能镜像过去，不如让读取侧兑现界面的承诺。
-func (t *dianaRepositoryIssuesTool) sharedGitHubToken() string {
+func (t *dianaGitHubTool) sharedGitHubToken() string {
 	return strings.TrimSpace(t.watchSettings().String(repositoryWatchSettingToken, ""))
 }
 
 // watchSettings 取回「仓库订阅」插件的设置。凭据列表和仓库绑定都存在那边——界面上
 // 它们同属一个「GitHub 仓库 · 设置」，仓库本身也归订阅插件管。
-func (t *dianaRepositoryIssuesTool) watchSettings() SettingValues {
+func (t *dianaGitHubTool) watchSettings() SettingValues {
 	if t == nil || t.runtime == nil || t.runtime.plugins == nil {
 		return nil
 	}
@@ -2932,7 +3228,7 @@ func (t *dianaRepositoryIssuesTool) watchSettings() SettingValues {
 
 // repositoryBoundCredential 返回目标仓库单独绑定的凭据。没绑定就返回 false，调用方
 // 继续走原来的用户 Token / 公共 Token / gh 顺序。
-func (t *dianaRepositoryIssuesTool) repositoryBoundCredential(repository string) (repositoryCredential, string, bool) {
+func (t *dianaGitHubTool) repositoryBoundCredential(repository string) (repositoryCredential, string, bool) {
 	settings := t.watchSettings()
 	if settings == nil {
 		return repositoryCredential{}, "", false
@@ -2940,7 +3236,7 @@ func (t *dianaRepositoryIssuesTool) repositoryBoundCredential(repository string)
 	return repositoryCredentialFor(repository, settings)
 }
 
-func (t *dianaRepositoryIssuesTool) repositoryPublishGHCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
+func (t *dianaGitHubTool) repositoryPublishGHCredential(ctx context.Context) (string, *repositoryIssueAPIError) {
 	if t.plugin == nil || t.plugin.ghAuthToken == nil {
 		return "", &repositoryIssueAPIError{Code: "gh_unavailable"}
 	}
@@ -3030,7 +3326,7 @@ func validRepositoryIssueCanonicalURL(raw, repository, resource string, number i
 
 // failureMessage 在凭据相关的报错后面补一句「本次用的是哪种凭据」。配了 Token 却
 // 报 404 时，这句话直接指出该去查哪一份配置；只报来源，不含 Token 本身。
-func (t *dianaRepositoryIssuesTool) failureMessage(code string) string {
+func (t *dianaGitHubTool) failureMessage(code string) string {
 	message := repositoryIssueFailureMessage(code)
 	source := ""
 	if t != nil {
@@ -3158,7 +3454,7 @@ func redactRepositoryIssueSignedURLs(value string) (string, int) {
 	return redacted, count
 }
 
-func (t *dianaRepositoryIssuesTool) audit(result repositoryIssueResult) {
+func (t *dianaGitHubTool) audit(result repositoryIssueResult) {
 	if t == nil || t.runtime == nil {
 		return
 	}
@@ -3205,7 +3501,7 @@ func (t *dianaRepositoryIssuesTool) audit(result repositoryIssueResult) {
 	_ = writer.AppendLog(logCtx, applog.Entry{
 		Kind:     kind,
 		Level:    level,
-		Action:   "repository_issue",
+		Action:   dianaGitHubToolName,
 		Message:  message,
 		Actor:    oneBotEventActor(t.event),
 		Target:   target,

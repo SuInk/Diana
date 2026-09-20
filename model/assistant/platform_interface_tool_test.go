@@ -301,7 +301,7 @@ func TestPlatformToolMemberRegistryRetainsReadTool(t *testing.T) {
 		context.Background(),
 		cfg.WithDefaults(),
 		event,
-		RelationshipPolicy{Tier: RelationshipAcquaintance},
+		RelationshipPolicy{Score: 10},
 		newDianaPlatformTool(runtime, event),
 		newDianaLLMConfigTool(runtime, event),
 	)

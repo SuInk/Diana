@@ -197,12 +197,12 @@ func stringMapValue(values map[string]any, key string) string {
 	return value
 }
 
-func repositoryPublishTestTool(server *httptest.Server, rawMessage string, logs *captureAppLogs) *dianaRepositoryIssuesTool {
+func repositoryPublishTestTool(server *httptest.Server, rawMessage string, logs *captureAppLogs) *dianaGitHubTool {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	if logs != nil {
 		runtime.SetAppLogWriter(logs)
 	}
-	return newDianaRepositoryIssuesTool(
+	return newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "owner", RawMessage: rawMessage},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -221,7 +221,7 @@ func repositoryPublishTestTool(server *httptest.Server, rawMessage string, logs 
 // 生成的确认码」。这里模拟用户回复确认码，让原有那批用例继续验证它们真正关心的性
 // 质——授权之后哪些请求会发出去、幂等和失败如何处理。确认闸门本身由
 // TestRepositoryIssueConfirmationCodeMustBeTypedByTheUser 这类用例单独覆盖。
-func runRepositoryPublishTestTool(t *testing.T, tool *dianaRepositoryIssuesTool, input map[string]any) repositoryIssueResult {
+func runRepositoryPublishTestTool(t *testing.T, tool *dianaGitHubTool, input map[string]any) repositoryIssueResult {
 	t.Helper()
 	result := runRepositoryPublishToolOnce(t, tool, input)
 	if result.Outcome != "draft_pending" || result.Draft == nil {
@@ -234,7 +234,7 @@ func runRepositoryPublishTestTool(t *testing.T, tool *dianaRepositoryIssuesTool,
 	event := tool.event
 	event.RawMessage = "确认 " + code
 	event.Segments = nil
-	approveTool := newDianaRepositoryIssuesTool(tool.runtime, event, tool.plugin, tool.settings)
+	approveTool := newDianaGitHubTool(tool.runtime, event, tool.plugin, tool.settings)
 	approveInput := map[string]any{"operation": "approve", "draft_id": result.Draft.ID}
 	for _, key := range []string{"allow_duplicate", "confirmation_token"} {
 		if value, present := input[key]; present {
@@ -244,7 +244,7 @@ func runRepositoryPublishTestTool(t *testing.T, tool *dianaRepositoryIssuesTool,
 	return runRepositoryPublishToolOnce(t, approveTool, approveInput)
 }
 
-func runRepositoryPublishToolOnce(t *testing.T, tool *dianaRepositoryIssuesTool, input map[string]any) repositoryIssueResult {
+func runRepositoryPublishToolOnce(t *testing.T, tool *dianaGitHubTool, input map[string]any) repositoryIssueResult {
 	t.Helper()
 	if _, present := input["user_confirmed_write"]; !present && normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state")) != "search" {
 		input["user_confirmed_write"] = true
@@ -307,13 +307,13 @@ func TestRepositoryIssueGroupDraftRequiresAuthorizedMemberApproval(t *testing.T)
 		t.Fatal(err)
 	}
 	settings := SettingValues{
-		repositoryPublishSettingAllowlist:   "acme/demo",
-		repositoryPublishSettingUserAccess:  "approver = acme/demo",
-		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
-		repositoryPublishSettingUserTokens:  string(tokens),
-		repositoryPublishSettingTimeout:     5,
+		repositoryPublishSettingAllowlist:      "acme/demo",
+		repositoryPublishSettingGroupAccess:    "group-1 = acme/demo",
+		repositoryPublishSettingApproverGroups: "group-1 = approver",
+		repositoryPublishSettingUserTokens:     string(tokens),
+		repositoryPublishSettingTimeout:        5,
 	}
-	requester := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+	requester := newDianaGitHubTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "登录失败，请帮我提 Issue",
 	}, plugin, settings)
 	// 这个用例本身就在测草稿与审批流程，取草稿这步不走夹具的自动确认。
@@ -331,7 +331,7 @@ func TestRepositoryIssueGroupDraftRequiresAuthorizedMemberApproval(t *testing.T)
 		t.Fatalf("listed drafts=%#v", listed)
 	}
 
-	unauthorized := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+	unauthorized := newDianaGitHubTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "other", RawMessage: "同意创建",
 	}, plugin, settings)
 	denied := runRepositoryPublishToolOnce(t, unauthorized, map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
@@ -339,7 +339,7 @@ func TestRepositoryIssueGroupDraftRequiresAuthorizedMemberApproval(t *testing.T)
 		t.Fatalf("unauthorized approval=%#v", denied)
 	}
 
-	approver := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+	approver := newDianaGitHubTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver",
 		RawMessage: "确认 " + repositoryIssueConfirmationCode(draft.Draft.ID),
 	}, plugin, settings)
@@ -372,18 +372,18 @@ func TestRepositoryIssueApprovalRequiresApproverToken(t *testing.T) {
 	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	settings := SettingValues{
-		repositoryPublishSettingAllowlist:   "acme/demo",
-		repositoryPublishSettingUserAccess:  "approver = acme/demo",
-		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
-		repositoryPublishSettingToken:       repositoryPublishTestToken,
+		repositoryPublishSettingAllowlist:      "acme/demo",
+		repositoryPublishSettingGroupAccess:    "group-1 = acme/demo",
+		repositoryPublishSettingApproverGroups: "group-1 = approver",
+		repositoryPublishSettingToken:          repositoryPublishTestToken,
 	}
-	requester := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+	requester := newDianaGitHubTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "登录失败，请帮我提 Issue",
 	}, plugin, settings)
 	draft := runRepositoryPublishToolOnce(t, requester, map[string]any{
 		"operation": "create", "repository": "acme/demo", "title": "登录失败",
 	})
-	approver := newDianaRepositoryIssuesTool(runtime, MessageEvent{
+	approver := newDianaGitHubTool(runtime, MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver",
 		RawMessage: "确认 " + repositoryIssueConfirmationCode(draft.Draft.ID),
 	}, plugin, settings)
@@ -401,7 +401,7 @@ func TestRepositoryIssueSearchRequiresAuthorizedUsersOwnToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaRepositoryIssuesTool(
+	tool := newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "搜索 acme/demo 的登录问题"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -426,7 +426,7 @@ func TestRepositoryIssueAuthorizedUserCanInheritGlobalToken(t *testing.T) {
 	github := newRepositoryPublishTestGitHub()
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	tool := newDianaRepositoryIssuesTool(
+	tool := newDianaGitHubTool(
 		NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
 		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "搜索 acme/demo"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -449,7 +449,7 @@ func TestRepositoryIssueAuthorizedUserCanSelectGH(t *testing.T) {
 	defer server.Close()
 	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
 	plugin.ghAuthToken = func(context.Context) (string, error) { return repositoryPublishTestToken, nil }
-	tool := newDianaRepositoryIssuesTool(
+	tool := newDianaGitHubTool(
 		NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
 		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "搜索 acme/demo"},
 		plugin,
@@ -478,7 +478,7 @@ func TestRepositoryIssueUserTokenCannotBypassGlobalAllowlist(t *testing.T) {
 		repositoryPublishSettingUserTokens: `{"member":"member-token"}`,
 	}
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "member"}
-	if _, _, code, _ := repositoryPublishAccessForEvent(event, "acme/demo", false, settings); code != "repository_not_allowed" {
+	if _, _, code, _ := repositoryPublishAccessForEvent(event, "acme/demo", false, settings, nil); code != "repository_not_allowed" {
 		t.Fatalf("access code=%q, want repository_not_allowed", code)
 	}
 }
@@ -531,7 +531,7 @@ func TestRepositoryIssueCreateSanitizesAndSendsOptionalFields(t *testing.T) {
 	}
 	// 写操作现在分两步：先落草稿，用户打出确认码后执行，所以审计也是两条。
 	entries := logs.entriesSnapshot()
-	if len(entries) != 2 || entries[0].Action != "repository_issue" || entries[1].Action != "repository_issue" {
+	if len(entries) != 2 || entries[0].Action != dianaGitHubToolName || entries[1].Action != dianaGitHubToolName {
 		t.Fatalf("audit entries=%#v", entries)
 	}
 	if entries[0].Metadata["outcome"] != "draft_pending" || entries[1].Metadata["outcome"] != "created" {
@@ -565,7 +565,7 @@ func TestRepositoryIssueWriteRequiresTokenAndExactAllowlist(t *testing.T) {
 	}
 
 	// 精确白名单仍然约束非主人：有草稿权限但仓库不在白名单里，零请求被拒。
-	memberTool := newDianaRepositoryIssuesTool(
+	memberTool := newDianaGitHubTool(
 		NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
 		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 Exact allowlist"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -735,7 +735,7 @@ func TestRepositoryIssueRejectsNonOwnerBeforeGitHub(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaRepositoryIssuesTool(
+	tool := newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "请创建 GitHub Issue"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -763,7 +763,7 @@ func TestRepositoryIssueAllowsConfiguredUserOnlyForMappedRepository(t *testing.T
 		repositoryPublishSettingUserAccess: "member = acme/demo\nother = acme/other",
 		repositoryPublishSettingUserTokens: `{"member":"` + repositoryPublishTestToken + `"}`,
 	}
-	tool := newDianaRepositoryIssuesTool(
+	tool := newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 Delegated write"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -819,7 +819,7 @@ func TestRepositoryIssueMappedGroupOnlyDraftsForMappedRepository(t *testing.T) {
 		repositoryPublishSettingAllowlist:   "acme/demo,acme/other",
 		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
 	}
-	tool := newDianaRepositoryIssuesTool(
+	tool := newDianaGitHubTool(
 		runtime,
 		MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "member", RawMessage: "请在 acme/demo 创建 GitHub Issue，标题为 Group write"},
 		newRepositoryPublishPlugin(server.Client(), server.URL),
@@ -977,7 +977,7 @@ func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
 	// 没有任何写入授权的陌生人：写操作被拒，但公开仓库读取必须留口。
-	stranger := newDianaRepositoryIssuesTool(runtime,
+	stranger := newDianaGitHubTool(runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "nobody"},
 		&RepositoryPublishPlugin{},
 		SettingValues{repositoryPublishSettingAllowlist: "acme/demo"},
@@ -991,7 +991,7 @@ func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
 	}
 
 	// 有写入授权的会话：清单标注为写入授权，并说明读操作不受清单限制。
-	granted := newDianaRepositoryIssuesTool(runtime,
+	granted := newDianaGitHubTool(runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "owner-user"},
 		&RepositoryPublishPlugin{},
 		SettingValues{
@@ -1008,7 +1008,7 @@ func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
 	}
 
 	// 主人的写入不受白名单限制：描述里必须明说，免得模型拿白名单替他拒绝。
-	ownerTool := newDianaRepositoryIssuesTool(runtime,
+	ownerTool := newDianaGitHubTool(runtime,
 		MessageEvent{Kind: EventKindPrivate, UserID: "owner"},
 		&RepositoryPublishPlugin{},
 		SettingValues{repositoryPublishSettingAllowlist: "SuInk/Diana"},
@@ -1019,27 +1019,33 @@ func TestRepositoryPublishDescriptionKeepsPublicReadsOpen(t *testing.T) {
 	}
 }
 
-// 「群友甲是管理员，但整个群没放开」：他在群里能建能批，也必须能列出草稿。
-func TestRepositoryPublishUserScopedManagerWorksInsideGroups(t *testing.T) {
+// 「按用户」的授权只在私聊生效：同一个人在私聊里能写，进了没放开的群就不能写，
+// 也不该在群里看见这个仓库。个人授权不跨场景带进群，群里的事由群的配置说了算。
+func TestRepositoryPublishUserScopedAccessStaysOutOfGroups(t *testing.T) {
 	settings := SettingValues{
 		repositoryPublishSettingAllowlist:    "SuInk/Diana",
 		repositoryPublishSettingManagerUsers: "manager-user = SuInk/Diana",
 	}
-	group := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "manager-user"}
+	private := MessageEvent{Kind: EventKindPrivate, UserID: "manager-user"}
+	if direct, _, code, message := repositoryPublishAccessForEvent(private, "SuInk/Diana", false, settings, nil); code != "" || !direct {
+		t.Fatalf("按用户授权在私聊里被拒：direct=%v code=%q message=%q", direct, code, message)
+	}
+	if got := repositoryPublishEventRepositories(private, false, settings); len(got) != 1 || got[0] != "SuInk/Diana" {
+		t.Fatalf("私聊可操作仓库清单 = %#v", got)
+	}
 
-	// 群里未授权，但这个人是按用户授权的管理员，直接写入应当放行。
-	direct, _, code, message := repositoryPublishAccessForEvent(group, "SuInk/Diana", false, settings)
-	if code != "" || !direct {
-		t.Fatalf("user-scoped manager denied inside a group: direct=%v code=%q message=%q", direct, code, message)
+	group := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "manager-user"}
+	direct, draft, code, message := repositoryPublishAccessForEvent(group, "SuInk/Diana", false, settings, nil)
+	if direct || draft || code != "permission_denied" {
+		t.Fatalf("按用户授权被带进了群：direct=%v draft=%v code=%q", direct, draft, code)
 	}
-	// 同一个人也应当出现在可操作仓库清单里。
-	if got := repositoryPublishEventRepositories(group, false, settings); len(got) != 1 || got[0] != "SuInk/Diana" {
-		t.Fatalf("group repositories for a user-scoped manager = %#v", got)
+	// 拒绝要说清是「按用户的授权只在私聊生效」，而不是「你没有权限」——这两件事修法不同。
+	if !strings.Contains(message, "只在私聊生效") {
+		t.Fatalf("拒绝提示没有说明按用户授权的适用范围：%q", message)
 	}
-	// 同群里没有任何授权的其他人仍然被拒。
-	stranger := MessageEvent{Kind: EventKindGroup, GroupID: "10497", UserID: "someone-else"}
-	if _, _, code, _ := repositoryPublishAccessForEvent(stranger, "SuInk/Diana", false, settings); code == "" {
-		t.Fatalf("unauthorized group member should stay denied")
+	// 描述里那份「本会话有写入授权的仓库」清单同样不能把它列出来。
+	if got := repositoryPublishEventRepositories(group, false, settings); len(got) != 0 {
+		t.Fatalf("群里仍然列出了按用户授权的仓库 = %#v", got)
 	}
 }
 
@@ -1055,7 +1061,7 @@ func TestRepositoryPublishCredentialFallsBackToWatchToken(t *testing.T) {
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner"}
 
 	// 发布插件自己的 Token 为空：回落到订阅插件那份。
-	tool := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{})
+	tool := newDianaGitHubTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{})
 	token, apiErr := tool.repositoryPublishCredential(context.Background(), "acme/demo")
 	if apiErr != nil || token != "watch-token" {
 		t.Fatalf("token=%q err=%#v", token, apiErr)
@@ -1064,14 +1070,14 @@ func TestRepositoryPublishCredentialFallsBackToWatchToken(t *testing.T) {
 		t.Fatalf("credential source should name the fallback: %q", tool.credentialSource)
 	}
 	// 回落能取到凭据时，写入预检查不能抢先报 token_required。
-	gated := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{},
+	gated := newDianaGitHubTool(runtime, event, &RepositoryPublishPlugin{},
 		SettingValues{repositoryPublishSettingAllowlist: "acme/demo"})
 	if code, message := gated.validateWriteAccess("acme/demo", true); code != "" {
 		t.Fatalf("precheck rejected a usable fallback token: %s %s", code, message)
 	}
 
 	// 发布插件自己配了就用自己的，不被订阅插件覆盖。
-	own := newDianaRepositoryIssuesTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{repositoryPublishSettingToken: "publish-token"})
+	own := newDianaGitHubTool(runtime, event, &RepositoryPublishPlugin{}, SettingValues{repositoryPublishSettingToken: "publish-token"})
 	token, apiErr = own.repositoryPublishCredential(context.Background(), "acme/demo")
 	if apiErr != nil || token != "publish-token" {
 		t.Fatalf("own token=%q err=%#v", token, apiErr)
@@ -1084,7 +1090,7 @@ func TestRepositoryPublishCredentialFallsBackToWatchToken(t *testing.T) {
 // 两边都没有 Token 时仍要明确要求配置，而不是发一个匿名请求出去。
 func TestRepositoryPublishCredentialRequiresATokenWhenBothAreEmpty(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaRepositoryIssuesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, &RepositoryPublishPlugin{}, SettingValues{})
+	tool := newDianaGitHubTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, &RepositoryPublishPlugin{}, SettingValues{})
 	if _, apiErr := tool.repositoryPublishCredential(context.Background(), "acme/demo"); apiErr == nil || apiErr.Code != "token_required" {
 		t.Fatalf("expected token_required, got %#v", apiErr)
 	}
@@ -1092,7 +1098,7 @@ func TestRepositoryPublishCredentialRequiresATokenWhenBothAreEmpty(t *testing.T)
 
 // 404 要带上凭据来源，否则「配了 Token 却 404」无从下手。
 func TestRepositoryIssueFailureMessageNamesTheCredential(t *testing.T) {
-	tool := &dianaRepositoryIssuesTool{credentialSource: "公共 GitHub Token（来自仓库订阅插件）"}
+	tool := &dianaGitHubTool{credentialSource: "公共 GitHub Token（来自仓库订阅插件）"}
 	message := tool.failureMessage("not_found")
 	if !strings.Contains(message, "404") || !strings.Contains(message, "来自仓库订阅插件") {
 		t.Fatalf("not_found message = %q", message)
@@ -1102,8 +1108,68 @@ func TestRepositoryIssueFailureMessageNamesTheCredential(t *testing.T) {
 		t.Fatalf("rate_limited message should stay clean: %q", got)
 	}
 	// 没记录来源时不留下空括号。
-	empty := &dianaRepositoryIssuesTool{}
+	empty := &dianaGitHubTool{}
 	if got := empty.failureMessage("not_found"); strings.Contains(got, "本次凭据") {
 		t.Fatalf("message should omit an unknown source: %q", got)
+	}
+}
+
+// 群草稿的审批人由群自己指定：私聊里的个人管理员权限带不进群，群审批人也不能
+// 绕过草稿直接写。这两条合起来才是「私聊就是私聊，群里的事群说了算」。
+func TestRepositoryIssueGroupApproverScope(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	plugin := newRepositoryPublishPlugin(server.Client(), server.URL)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	tokens, err := json.Marshal(map[string]string{"approver": repositoryPublishTestToken, "manager": repositoryPublishTestToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := SettingValues{
+		repositoryPublishSettingAllowlist:      "acme/demo",
+		repositoryPublishSettingGroupAccess:    "group-1 = acme/demo",
+		repositoryPublishSettingApproverGroups: "group-1 = approver",
+		// 这个人在私聊里是管理员，但不是 group-1 的审批人。
+		repositoryPublishSettingManagerUsers: "manager = acme/demo",
+		repositoryPublishSettingUserTokens:   string(tokens),
+		repositoryPublishSettingTimeout:      5,
+	}
+	inGroup := func(userID, raw string) *dianaGitHubTool {
+		return newDianaGitHubTool(runtime, MessageEvent{
+			Kind: EventKindGroup, GroupID: "group-1", UserID: userID, RawMessage: raw,
+		}, plugin, settings)
+	}
+
+	draft := runRepositoryPublishToolOnce(t, inGroup("member", "帮我提个 Issue"), map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "群里提的", "body": "正文",
+	})
+	if !draft.OK || draft.Outcome != "draft_pending" || draft.Draft == nil {
+		t.Fatalf("draft=%#v", draft)
+	}
+
+	// 私聊里的管理员在群里既不是审批人，也不该被放行。
+	denied := runRepositoryPublishToolOnce(t, inGroup("manager", "同意"), map[string]any{
+		"operation": "approve", "draft_id": draft.Draft.ID,
+	})
+	if denied.OK || denied.FailureCode != "permission_denied" || github.count(http.MethodPost) != 0 {
+		t.Fatalf("私聊管理员在群里批了草稿：%#v posts=%d", denied, github.count(http.MethodPost))
+	}
+
+	// 群审批人不能绕过草稿直接写：他发起的写操作同样只落成草稿。
+	second := runRepositoryPublishToolOnce(t, inGroup("approver", "我自己提一个"), map[string]any{
+		"operation": "create", "repository": "acme/demo", "title": "审批人自己提的", "body": "正文",
+	})
+	if !second.OK || second.Outcome != "draft_pending" || github.count(http.MethodPost) != 0 {
+		t.Fatalf("群审批人绕过草稿直接写了：%#v posts=%d", second, github.count(http.MethodPost))
+	}
+
+	// 群审批人批别人的草稿可以，写入归到他自己的 Token 上。
+	approved := runRepositoryPublishToolOnce(t, newDianaGitHubTool(runtime, MessageEvent{
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "approver",
+		RawMessage: "确认 " + repositoryIssueConfirmationCode(draft.Draft.ID),
+	}, plugin, settings), map[string]any{"operation": "approve", "draft_id": draft.Draft.ID})
+	if !approved.OK || approved.Outcome != "created" || github.count(http.MethodPost) != 1 {
+		t.Fatalf("群审批人没能批下草稿：%#v posts=%d", approved, github.count(http.MethodPost))
 	}
 }

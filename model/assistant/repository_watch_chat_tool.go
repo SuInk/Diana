@@ -31,14 +31,33 @@ func repositoryWatchManagedRepositories(event MessageEvent, settings SettingValu
 	if err != nil {
 		return nil
 	}
-	managed := map[string]bool{}
-	for repository := range managerUsers[strings.TrimSpace(event.UserID)] {
-		managed[repository] = true
+	managerGroupRoles, _, err := repositoryPublishEffectiveGroupRoles(settings)
+	if err != nil {
+		return nil
 	}
-	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
-		for repository := range managerGroups[strings.TrimSpace(event.GroupID)] {
+	managed := map[string]bool{}
+	userID, groupID := strings.TrimSpace(event.UserID), strings.TrimSpace(event.GroupID)
+	if event.Kind != EventKindGroup || groupID == "" {
+		for repository := range managerUsers[userID] {
 			managed[repository] = true
 		}
+		if len(managed) == 0 {
+			return nil
+		}
+		return managed
+	}
+	// 群里只认这个群自己被授权的仓库：按用户的授权只在私聊算数，不带进群，口径和
+	// Issue 写操作保持一致（见 repositoryPublishUserScopedAllowed）。
+	//
+	// 按群授权带了身份要求时，这里只认事件自带的群身份，不额外回查成员信息：构造
+	// 工具描述属于每条消息都会走的热路径，不值得为它多打一次平台接口。拿不到身份
+	// 就按最严处理，该仓库不进这份清单。
+	role := NormalizeGroupRole(event.SenderRole)
+	for repository := range managerGroups[groupID] {
+		if !managerGroupRoles.requirement(groupID, repository).satisfiedBy(role) {
+			continue
+		}
+		managed[repository] = true
 	}
 	if len(managed) == 0 {
 		return nil
@@ -62,9 +81,9 @@ func (*dianaRepositoryWatchTool) Name() string { return dianaRepositoryWatchTool
 
 func (*dianaRepositoryWatchTool) Description() string {
 	return `管理 GitHub 仓库更新订阅：新建、查看、改设置、暂停、删除，也可以立刻检查一次。` +
-		`能改监控哪几类动态（Commit / PR / Issue / Release / Star），以及 PR 和 Issue 各自只收哪几种动态。` +
+		`能改监控哪几类动态（Commit / PR / Issue / Release / Star），以及 PR、Issue、Release 各自只收哪几种。` +
 		`新建的订阅推送到当前这个会话。只有主人和该仓库的管理人员能调用。` +
-		`关注 RSS 或推特用户改用 rss，普通周期任务改用 schedule。`
+		`关注 RSS 或推特用户改用 kind=rss，普通周期任务改用 kind=schedule。`
 }
 
 func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
@@ -79,6 +98,8 @@ func (*dianaRepositoryWatchTool) InputSchema() map[string]any {
 			"commits", "pull_requests", "issues", "releases", "stars"),
 		"pull_request_events": toolEnumArrayParam("PR 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchPullEventKinds...),
 		"issue_events":        toolEnumArrayParam("Issue 只收这几种动态；省略表示新订阅默认全选，空数组表示全不选。", repositoryWatchIssueEventKinds...),
+		"release_kinds": toolEnumArrayParam("Release 只收这几种版本：stable 是正式版，prerelease 是预发布；"+
+			"省略表示新订阅默认全选，空数组表示全不选。草稿任何时候都不推送。", repositoryWatchReleaseKindList...),
 	})
 }
 
@@ -90,6 +111,7 @@ type dianaRepositoryWatchView struct {
 	Watch             []string `json:"watch"`
 	PullRequestEvents []string `json:"pull_request_events"`
 	IssueEvents       []string `json:"issue_events"`
+	ReleaseKinds      []string `json:"release_kinds"`
 	Status            string   `json:"status"`
 	LastError         string   `json:"last_error,omitempty"`
 	NextRunAt         string   `json:"next_run_at,omitempty"`
@@ -123,6 +145,7 @@ func repositoryWatchViewForTool(item Reminder) dianaRepositoryWatchView {
 		Watch:    watch, Status: scheduleStatus(item), LastError: item.LastError,
 		PullRequestEvents: EffectiveRepositoryWatchPullRequestEvents(item.WatchPullRequestEvents),
 		IssueEvents:       EffectiveRepositoryWatchIssueEvents(item.WatchIssueEvents),
+		ReleaseKinds:      EffectiveRepositoryWatchReleaseKinds(item.WatchReleaseKinds),
 	}
 	if !item.TriggerAt.IsZero() {
 		view.NextRunAt = item.TriggerAt.Format(time.RFC3339)
@@ -198,7 +221,7 @@ func (t *dianaRepositoryWatchTool) Run(ctx context.Context, input map[string]any
 		if !provided {
 			selection = repositoryWatchSelection{Commits: true, PullRequests: true, Issues: true, Releases: true, Stars: true}
 		}
-		pullEvents, issueEvents, err := repositoryWatchEventKindsFromTool(input)
+		pullEvents, issueEvents, releaseKinds, err := repositoryWatchEventKindsFromTool(input)
 		if err != nil {
 			return "", err
 		}
@@ -206,7 +229,7 @@ func (t *dianaRepositoryWatchTool) Run(ctx context.Context, input map[string]any
 			Repository: repository, Branch: configToolString(input, "branch"), Interval: interval,
 			WatchCommits: selection.Commits, WatchPullRequests: selection.PullRequests,
 			WatchIssues: selection.Issues, WatchReleases: selection.Releases, WatchStars: selection.Stars,
-			WatchPullRequestEvents: pullEvents, WatchIssueEvents: issueEvents,
+			WatchPullRequestEvents: pullEvents, WatchIssueEvents: issueEvents, WatchReleaseKinds: releaseKinds,
 			Platform: t.event.Platform, ProfileID: t.event.ProfileID, ContextNamespace: t.event.ContextNamespace,
 			OwnerID: strings.TrimSpace(t.event.UserID), GroupID: t.event.GroupID, UserID: t.event.UserID,
 			NotificationEnabled: true,
@@ -310,16 +333,20 @@ func repositoryWatchSelectionFromTool(input map[string]any) (repositoryWatchSele
 	return selection, true, nil
 }
 
-func repositoryWatchEventKindsFromTool(input map[string]any) ([]string, []string, error) {
+func repositoryWatchEventKindsFromTool(input map[string]any) ([]string, []string, []string, error) {
 	pullEvents, err := repositoryWatchEventKindFromTool(input, "pull_request_events", repositoryWatchPullEventKinds, "PR ")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	issueEvents, err := repositoryWatchEventKindFromTool(input, "issue_events", repositoryWatchIssueEventKinds, "Issue ")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return pullEvents, issueEvents, nil
+	releaseKinds, err := repositoryWatchEventKindFromTool(input, "release_kinds", repositoryWatchReleaseKindList, "Release ")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return pullEvents, issueEvents, releaseKinds, nil
 }
 
 func repositoryWatchEventKindFromTool(input map[string]any, key string, allowed []string, label string) ([]string, error) {
@@ -377,6 +404,13 @@ func repositoryWatchUpdateFromTool(input map[string]any, current Reminder) (Repo
 			return RepositoryWatchUpdateInput{}, eventsErr
 		}
 		update.WatchIssueEvents = append([]string{}, events...)
+	}
+	if _, present := input["release_kinds"]; present {
+		kinds, kindsErr := repositoryWatchEventKindFromTool(input, "release_kinds", repositoryWatchReleaseKindList, "Release ")
+		if kindsErr != nil {
+			return RepositoryWatchUpdateInput{}, kindsErr
+		}
+		update.WatchReleaseKinds = append([]string{}, kinds...)
 	}
 	return update, nil
 }

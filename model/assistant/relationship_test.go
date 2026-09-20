@@ -4,37 +4,57 @@
 package assistant
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
 )
 
-func TestRelationshipPolicyTiersRequireScoreAndInteractionCount(t *testing.T) {
-	tests := []struct {
-		name     string
-		score    int
-		messages int
-		ownerID  string
-		userID   string
-		want     RelationshipTier
-	}{
-		{name: "hostile", score: -20, messages: 50, want: RelationshipHostile},
-		{name: "score alone cannot unlock familiar", score: 20, messages: 9, want: RelationshipAcquaintance},
-		{name: "familiar", score: 20, messages: 10, want: RelationshipFamiliar},
-		{name: "friend", score: 60, messages: 30, want: RelationshipFriend},
-		{name: "trusted still needs history", score: 100, messages: 79, want: RelationshipFriend},
-		{name: "trusted", score: 100, messages: 80, want: RelationshipTrusted},
-		{name: "owner bypasses score", score: -100, messages: 0, ownerID: "42", userID: "42", want: RelationshipOwner},
+// 关系等级已删除，语气改由好感度连续驱动。这个测试守住两件事：
+// 主人身份不随分数变化，以及负分确实会收敛语气（惩罚落在「愿不愿意主动搭理」上）。
+func TestFavorabilityStanceReplacesTiers(t *testing.T) {
+	owner := RelationshipPolicyFor(UserMemoryProfile{Favorability: -100}, "42", "42")
+	if !owner.Owner {
+		t.Fatalf("主人身份由账号决定，不该被分数影响: %#v", owner)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: test.score, MessageCount: test.messages}, test.ownerID, test.userID)
-			if policy.Tier != test.want {
-				t.Fatalf("tier = %q, want %q: %#v", policy.Tier, test.want, policy)
+	if strings.Contains(owner.Tone, "疏离") || strings.Contains(owner.Tone, "只回答") {
+		t.Fatalf("主人不该被负分收敛语气: %q", owner.Tone)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		score   int
+		wantHas string
+	}{
+		{"极低分只答必要内容", -60, "只回答被直接问到的必要内容"},
+		{"负分不主动接话", -1, "不主动接话题"},
+		{"新人默认分随和", 10, "刚认识"},
+		{"分高更放松", 60, "朋友"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: tc.score}, "owner", "user")
+			if !strings.Contains(policy.Tone, tc.wantHas) {
+				t.Fatalf("好感度 %d 的语气指引里没有 %q: %q", tc.score, tc.wantHas, policy.Tone)
 			}
 		})
+	}
+}
+
+// 负分的惩罚只作用于主动性，绝不关闭任何能力：否则任何人都能靠激怒机器人
+// 把自己的功能弄坏。
+func TestNegativeFavorabilityNeverDisablesCapabilities(t *testing.T) {
+	for _, score := range []int{-100, -50, -1, 0, 10, 200} {
+		policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: score}, "owner", "user")
+		if !policy.AllowImageGeneration || !policy.AllowImageEditing ||
+			!policy.AllowDocumentOCR || !policy.AllowPersonalSchedule {
+			t.Fatalf("好感度 %d 关掉了能力: %#v", score, policy)
+		}
+		if !policy.allowedAgentToolNames()[agent.WebSearchToolName] {
+			t.Fatalf("好感度 %d 丢了联网搜索", score)
+		}
+		if policy.personalScheduleLimit() <= 0 {
+			t.Fatalf("好感度 %d 的提醒额度归零了，等于禁用功能", score)
+		}
 	}
 }
 
@@ -43,7 +63,7 @@ func TestRelationshipPolicySeparatesCapabilitiesFromOwnerAdministration(t *testi
 	if !initial.allowedAgentToolNames()["web_search"] || !initial.allowedAgentToolNames()["browser_render"] || !initial.allowedAgentToolNames()[dianaChatHistoryToolName] || !initial.allowedAgentToolNames()[dianaHistoryImagesToolName] || !initial.allowedAgentToolNames()["relationship"] || !initial.allowedAgentToolNames()["tts"] || !initial.allowedAgentToolNames()[dianaPlatformToolName] || !initial.allowedAgentToolNames()[dianaImageToolName] || !initial.allowedAgentToolNames()["reminder"] || !initial.AllowImageGeneration || !initial.AllowImageEditing || !initial.AllowDocumentOCR || !initial.AllowPersonalSchedule || initial.allowedAgentToolNames()["run_command"] {
 		t.Fatalf("initial tools = %#v", initial.allowedAgentToolNames())
 	}
-	if initial.allowedAgentToolNames()[dianaRepositoryIssuesToolName] {
+	if initial.allowedAgentToolNames()[dianaGitHubToolName] {
 		t.Fatal("non-owner relationship unexpectedly received GitHub Issue write access")
 	}
 	familiar := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
@@ -98,17 +118,16 @@ func TestRelationshipScheduleLimitsIncreaseByTier(t *testing.T) {
 		userID  string
 		want    int
 	}{
-		{profile: UserMemoryProfile{Favorability: -20}, want: 1},
-		{profile: UserMemoryProfile{}, want: 3},
-		{profile: UserMemoryProfile{Favorability: 20, MessageCount: 10}, want: 10},
-		{profile: UserMemoryProfile{Favorability: 60, MessageCount: 30}, want: 15},
-		{profile: UserMemoryProfile{Favorability: 100, MessageCount: 80}, want: 20},
+		// 额度不再分级，只有三段：主人 50，关系为负 1，其余一律 10。
+		{profile: UserMemoryProfile{Favorability: -1}, want: 1},
+		{profile: UserMemoryProfile{Favorability: 10}, want: 10},
+		{profile: UserMemoryProfile{Favorability: 200, MessageCount: 500}, want: 10},
 		{ownerID: "owner", userID: "owner", want: 50},
 	}
 	for _, test := range tests {
 		policy := RelationshipPolicyFor(test.profile, test.ownerID, test.userID)
 		if got := policy.personalScheduleLimit(); got != test.want {
-			t.Fatalf("tier=%s limit=%d want=%d", policy.Name, got, test.want)
+			t.Fatalf("score=%d limit=%d want=%d", policy.Score, got, test.want)
 		}
 	}
 }
@@ -117,7 +136,7 @@ func TestRelationshipContextDrivesToneAndHardPermissionMessage(t *testing.T) {
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
 	// 随发言者变的只有等级名和语气；固定的能力与权限规则在稳定的系统头部。
 	contextText := relationshipPermissionContext(policy)
-	for _, want := range []string{"关系等级：熟悉", "语气要求"} {
+	for _, want := range []string{"当前好感度：20", "语气要求"} {
 		if !strings.Contains(contextText, want) {
 			t.Fatalf("tier context = %q, missing %q", contextText, want)
 		}
@@ -130,63 +149,9 @@ func TestRelationshipContextDrivesToneAndHardPermissionMessage(t *testing.T) {
 			t.Fatalf("promptRelationshipTierRules missing %q", moved)
 		}
 	}
-	denied := relationshipPermissionDenied(RelationshipPolicyFor(UserMemoryProfile{Favorability: -20}, "owner", "user"), "图片编辑", relationshipImageTierName)
-	if !strings.Contains(denied, "好感度不足") || !strings.Contains(denied, "冷淡") || !strings.Contains(denied, relationshipImageTierName) {
-		t.Fatalf("denied = %q", denied)
-	}
-}
-
-func TestRelationshipAllowsOCRTasksForEveryTier(t *testing.T) {
-	responses := []PluginResponse{{
-		Handled: true,
-		Tasks: []PluginTask{{
-			Kind: "document_ocr",
-			Name: "OCR",
-			Run: func(context.Context, PluginTaskServices) (PluginTaskResult, error) {
-				return PluginTaskResult{}, nil
-			},
-		}},
-	}}
-	initial := RelationshipPolicyFor(UserMemoryProfile{}, "owner", "user")
-	allowedInitial := applyRelationshipTaskPermissions(responses, initial)
-	if len(allowedInitial[0].Tasks) != 1 {
-		t.Fatalf("initial responses = %#v", allowedInitial)
-	}
-	familiar := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", "user")
-	allowed := applyRelationshipTaskPermissions(responses, familiar)
-	if len(allowed[0].Tasks) != 1 {
-		t.Fatalf("allowed responses = %#v", allowed)
-	}
 }
 
 // 五个非主人等级的能力完全相同，真正随好感度变化的只有提醒与订阅额度。
-func TestRelationshipLevelsDifferOnlyByScheduleQuota(t *testing.T) {
-	levels := []struct {
-		name  string
-		score int
-		count int
-		limit int
-	}{
-		{"冷淡", -50, 5, 1},
-		{"初识", 0, 0, 3},
-		{"熟悉", 30, 12, 10},
-		{"朋友", 70, 40, 15},
-		{"信赖", 120, 100, 20},
-	}
-	for _, level := range levels {
-		policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: level.score, MessageCount: level.count}, "owner", "user")
-		if policy.Name != level.name {
-			t.Fatalf("score %d count %d -> %q, want %q", level.score, level.count, policy.Name, level.name)
-		}
-		if policy.personalScheduleLimit() != level.limit {
-			t.Fatalf("%s quota = %d, want %d", level.name, policy.personalScheduleLimit(), level.limit)
-		}
-		// 能力一项都不因等级收窄，包括好感度最低的「冷淡」。
-		if !policy.AllowImageGeneration || !policy.AllowImageEditing || !policy.AllowDocumentOCR || !policy.AllowPersonalSchedule {
-			t.Fatalf("%s unexpectedly restricts a baseline capability: %#v", level.name, policy)
-		}
-	}
-}
 
 // 提示词不能再把人人都有的基础能力摆成「授权能力」清单——那正是回复里冒出
 // 一长串「当前权限：…」的来源。
@@ -217,8 +182,8 @@ func TestRelationshipContextDoesNotListBaselineAsGrants(t *testing.T) {
 	if strings.Contains(memoryContext, "已授权能力") {
 		t.Fatalf("memory context still lists capabilities:\n%s", memoryContext)
 	}
-	if !strings.Contains(memoryContext, "好感度：101") || !strings.Contains(memoryContext, "关系等级：信赖") {
-		t.Fatalf("memory context lost the core fields:\n%s", memoryContext)
+	if strings.Contains(memoryContext, "好感度：") || strings.Contains(memoryContext, "互动次数：") {
+		t.Fatalf("记忆段不该再带每轮变化的计数:\n%s", memoryContext)
 	}
 	// 语气要求只在系统尾部出现一次，记忆块里不再重复同一段话。
 	if strings.Contains(memoryContext, "语气要求：") || strings.Contains(memoryContext, policy.Tone) {

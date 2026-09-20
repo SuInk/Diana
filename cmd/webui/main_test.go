@@ -327,3 +327,35 @@ func TestOneBotFactorySelectsTransport(t *testing.T) {
 		t.Fatalf("disabled HTTP status=%d", w.Code)
 	}
 }
+
+// 控制台改用 History 路由后，/bot、/groups 这类地址是真的浏览器地址：刷新和直接
+// 打开都会先打到后端。这些路径必须回 index.html，由前端自己解析（认不出来的地址
+// 前端会收敛到首页），否则用户一刷新就是 404。
+func TestSPAHandlerServesIndexForFrontendRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const page = "<html>console</html>"
+	root := http.FS(fstest.MapFS{
+		"index.html":          {Data: []byte(page)},
+		"assets/index-abc.js": {Data: []byte("console.log('ok')")},
+	})
+	router := gin.New()
+	router.NoRoute(spaHandler(root))
+
+	for _, path := range []string{"/", "/bot", "/groups", "/plugins?settings=rss", "/provider", "/nope"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", path, rec.Code)
+		}
+		if rec.Body.String() != page {
+			t.Fatalf("%s did not return index.html", path)
+		}
+	}
+
+	// 接口拼错仍然是 JSON 404，不能被前端路由兜底掩盖成一张页面。
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/typo", nil))
+	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "<html") {
+		t.Fatalf("api 404 = %d %q", rec.Code, rec.Body.String())
+	}
+}

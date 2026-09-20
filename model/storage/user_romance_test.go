@@ -68,7 +68,7 @@ func TestUserRomanceStatePersistsAcrossReads(t *testing.T) {
 		t.Fatalf("romance after breakup = %#v err=%v", profile.Romance, err)
 	}
 	// 分手不动好感度。
-	if profile.Favorability != 1 {
+	if profile.Favorability != 11 {
 		t.Fatalf("favorability = %d", profile.Favorability)
 	}
 }
