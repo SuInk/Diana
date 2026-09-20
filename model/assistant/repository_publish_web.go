@@ -51,6 +51,45 @@ type RepositoryIssueCreateResult struct {
 	Redactions           int                      `json:"redactions,omitempty"`
 }
 
+// PublishDraftFromWeb 直接把一份待审批草稿写进 GitHub。
+//
+// 群里的审批靠确认码，因为聊天窗口里没有身份验证；WebUI 的调用者已经登录过后台，
+// 再要一次确认码等于让他把码发回群里再打一遍。过期的草稿这条路也不通：过期之后
+// 没有任何复活方式。
+func (p *RepositoryPublishPlugin) PublishDraftFromWeb(ctx context.Context, settings SettingValues, draftID string) (RepositoryIssueCreateResult, error) {
+	if p == nil || p.client == nil {
+		return repositoryIssueCreateResultFromInternal(repositoryIssueResult{Operation: "publish"}.fail("plugin_unavailable", "GitHub Issue 与 PR 插件未正确配置。")), nil
+	}
+	draftID = strings.TrimSpace(draftID)
+	if draftID == "" {
+		return RepositoryIssueCreateResult{}, fmt.Errorf("缺少草稿 ID")
+	}
+	draft, ok, err := p.draftByID(ctx, draftID)
+	if err != nil {
+		return RepositoryIssueCreateResult{}, err
+	}
+	if !ok {
+		return RepositoryIssueCreateResult{}, fmt.Errorf("草稿不存在")
+	}
+	if draft.Status != "pending" {
+		return RepositoryIssueCreateResult{}, fmt.Errorf("这份草稿已经处理过了")
+	}
+	tool := &dianaRepositoryIssuesTool{
+		plugin:   p,
+		settings: settings,
+		event: MessageEvent{
+			Platform:  "webui",
+			Kind:      EventKindPrivate,
+			UserID:    "webui-owner",
+			MessageID: repositoryIssueWebMessageID(),
+		},
+	}
+	if code, message := tool.validateWriteAccess(draft.Repository, true); code != "" {
+		return repositoryIssueCreateResultFromInternal(repositoryIssueResult{Operation: "publish", Repository: draft.Repository}.fail(code, message)), nil
+	}
+	return repositoryIssueCreateResultFromInternal(tool.executeDraft(ctx, draft, nil, "publish")), nil
+}
+
 // CreateIssueFromWeb executes the same validation, redaction, duplicate
 // detection, idempotency, and reconciliation path used by the chat tool. The
 // authenticated WebUI confirmation is the explicit mutation authorization.

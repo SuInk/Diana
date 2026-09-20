@@ -477,6 +477,25 @@ const platforms: BotPlatform[] = [
   { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。" }
 ];
 
+type DemoIssueDraft = {
+  id: string; platform: string; profile_id: string; group_id: string; repository: string;
+  requester_id: string; requester_name: string; input: { title: string; body: string; labels: string[] };
+  status: string; created_at: string; updated_at: string; expires_at: string; confirmation_code?: string;
+};
+
+// 待审批草稿 7 天过期；第二条已经过期，可以在后台还原、修改、提交或删除。
+const issueDrafts: DemoIssueDraft[] = [{
+  id: "draft-demo-01", platform: "onebot-v11", profile_id: "bot-main", group_id: "100200301",
+  repository: "SuInk/Diana", requester_id: "100200711", requester_name: "青禾",
+  input: { title: "事件图片改为页面内放大", body: "点击事件中的图片时，在当前页面打开查看器，不再跳转到新标签页。", labels: ["enhancement", "webui"] },
+  status: "pending", created_at: before(16), updated_at: before(16), expires_at: before(-7 * 24 * 60 + 16)
+}, {
+  id: "draft-demo-02", platform: "onebot-v11", profile_id: "bot-main", group_id: "100200418",
+  repository: "SuInk/Diana", requester_id: "100200842", requester_name: "岸芷",
+  input: { title: "群公告支持定时发送", body: "希望能预约时间再发群公告，避免半夜打扰。", labels: ["enhancement"] },
+  status: "pending", created_at: before(9 * 24 * 60), updated_at: before(9 * 24 * 60), expires_at: before(2 * 24 * 60)
+}];
+
 const dependencies: ResolverDependency[] = [
   { name: "ffmpeg", purpose: "媒体转码与时长检测", available: true, version: "7.1", path: "/usr/local/bin/ffmpeg", installable: true, installer: "系统包管理器" },
   { name: "yt-dlp", purpose: "视频地址解析", available: true, version: "2026.08.10", path: "/usr/local/bin/yt-dlp", installable: true, installer: "pipx" }
@@ -694,14 +713,46 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(plugins.filter((plugin) => !profile || plugin.manifest.id !== "official.open-api").map((plugin) => demoPluginForProfile(plugin, profile)));
   }
   if (path === "/api/assistant/plugins/repository-publish/drafts") {
-    const drafts = [{
-      id: "draft-demo-01", platform: "onebot-v11", profile_id: "bot-main", group_id: "100200301",
-      repository: "SuInk/Diana", requester_id: "100200711", requester_name: "青禾",
-      input: { title: "事件图片改为页面内放大", body: "点击事件中的图片时，在当前页面打开查看器，不再跳转到新标签页。", labels: ["enhancement", "webui"] },
-      status: "pending", created_at: before(16), updated_at: before(16)
-    }];
     const status = url.searchParams.get("status") ?? "all";
-    return json({ drafts: status === "all" ? drafts : drafts.filter((draft) => draft.status === status) });
+    const expired = (draft: DemoIssueDraft) => new Date(draft.expires_at).getTime() < Date.now();
+    if (status === "expired") return json({ drafts: issueDrafts.filter(expired) });
+    if (status === "pending") return json({ drafts: issueDrafts.filter((draft) => draft.status === "pending" && !expired(draft)) });
+    return json({ drafts: status === "all" ? issueDrafts : issueDrafts.filter((draft) => draft.status === status) });
+  }
+  if (/^\/api\/assistant\/plugins\/repository-publish\/drafts\/[^/]+$/.test(path) && (method === "PATCH" || method === "DELETE")) {
+    const segments = path.split("/");
+    const index = issueDrafts.findIndex((item) => item.id === segments[segments.length - 1]);
+    if (index < 0) return json({ error: "草稿不存在" }, 400);
+    if (method === "DELETE") {
+      issueDrafts.splice(index, 1);
+      return json({ deleted: true });
+    }
+    const draft = issueDrafts[index];
+    draft.input = {
+      title: String(body.title ?? draft.input.title),
+      body: String(body.body ?? draft.input.body),
+      labels: Array.isArray(body.labels) ? (body.labels as string[]) : draft.input.labels
+    };
+    draft.updated_at = before(0);
+    return json({ draft });
+  }
+  if (/^\/api\/assistant\/plugins\/repository-publish\/drafts\/[^/]+\/restore$/.test(path) && method === "POST") {
+    const segments = path.split("/");
+    const draft = issueDrafts.find((item) => item.id === segments[segments.length - 2]);
+    if (!draft) return json({ error: "草稿不存在" }, 400);
+    draft.status = "pending";
+    draft.expires_at = before(-7 * 24 * 60);
+    draft.updated_at = before(0);
+    draft.confirmation_code = Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0");
+    return json({ draft });
+  }
+  if (/^\/api\/assistant\/plugins\/repository-publish\/drafts\/[^/]+\/publish$/.test(path) && method === "POST") {
+    const segments = path.split("/");
+    const draft = issueDrafts.find((item) => item.id === segments[segments.length - 2]);
+    if (!draft) return json({ error: "草稿不存在" }, 400);
+    draft.status = "created";
+    draft.updated_at = before(0);
+    return json({ ok: true, outcome: "created", repository: draft.repository, message: "Issue 已创建。", issue: { number: 618, title: draft.input.title, url: "https://github.com/SuInk/Diana/issues/618", state: "open" } });
   }
   if (path === "/api/assistant/plugins/repository-publish/issues" && method === "POST") {
     const repository = String(body.repository ?? "SuInk/Diana");
