@@ -16,10 +16,10 @@ import (
 // 过 1 次。上限要留出思考余量。
 func TestSummaryOutputCapLeavesReasoningHeadroom(t *testing.T) {
 	for _, tc := range []struct{ window, want int64 }{
-		{128000, 64000},
-		{16384, 8192},
+		{128000, 128000},
+		{16384, 16384},
 		// 窗口未知时按默认窗口的一半兜底，不会退回「按目标长度卡死」。
-		{0, llm.DefaultContextWindowTokens / 2},
+		{0, llm.DefaultContextWindowTokens},
 	} {
 		if got := summaryOutputCap(tc.window); got != tc.want {
 			t.Fatalf("summaryOutputCap(%d) = %d, want %d", tc.window, got, tc.want)
@@ -51,7 +51,7 @@ func TestSummarizeBudgetTextRetriesWithoutCapWhenReasoningExhaustsOutput(t *test
 	if err != nil || summary != "压缩后的摘要" {
 		t.Fatalf("summary=%q err=%v", summary, err)
 	}
-	if len(provider.caps) != 2 || provider.caps[0] != 8192 || provider.caps[1] != 0 {
-		t.Fatalf("caps = %v, want [8192 0]", provider.caps)
+	if len(provider.caps) != 2 || provider.caps[0] != 16384 || provider.caps[1] != 0 {
+		t.Fatalf("caps = %v, want [16384 0]", provider.caps)
 	}
 }

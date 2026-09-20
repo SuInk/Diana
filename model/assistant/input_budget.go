@@ -118,19 +118,20 @@ func budgetSummaryWorthKeeping(summaryCost, originalCost, target int64) bool {
 // 正文，额度在思考阶段就用光，正文一个字都写不出来，白花一次调用。线上 deepseek-flash
 // 的压缩因此 53 次里只成功过 1 次。
 //
-// 取窗口的一半：留给思考和正文都绰绰有余，同时挡得住模型失控写长文——输出再长也不会
-// 把输入挤出窗口。真正决定摘要够不够短的是 budgetSummaryWorthKeeping，压不够短一律丢弃。
+// 直接给到上下文窗口（窗口未知时按默认的 128k）：这个参数只是防止模型失控写长文的
+// 保险，输出本来就受窗口约束，再低就可能把思考和正文一起卡掉。摘要够不够短由
+// budgetSummaryWorthKeeping 把关，压不够短一律丢弃。
 func summaryOutputCap(contextWindow int64) int64 {
 	if contextWindow <= 0 {
-		contextWindow = llm.DefaultContextWindowTokens
+		return llm.DefaultContextWindowTokens
 	}
-	return contextWindow / 2
+	return contextWindow
 }
 
 func (r *Runtime) summarizeBudgetText(ctx context.Context, text string, target, contextWindow int64) (string, error) {
 	ctx = withLLMUsagePurpose(ctx, PurposeContextSummary)
 	summary, err := r.summarizeBudgetTextWithCap(ctx, text, target, summaryOutputCap(contextWindow))
-	// 窗口一半都不够思考时不设上限再来一次：模型自己会按提示词里的目标收敛，
+	// 服务端不接受这么大的上限、或者额度仍然不够时，不设上限再来一次：模型自己会按提示词里的目标收敛，
 	// 压不够短照样会被 budgetSummaryWorthKeeping 丢掉。
 	if errors.Is(err, llm.ErrCompletionTruncatedNoText) {
 		return r.summarizeBudgetTextWithCap(ctx, text, target, 0)
