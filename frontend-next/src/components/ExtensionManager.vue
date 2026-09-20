@@ -2,7 +2,7 @@
   <section class="extension-manager">
     <header class="view-header">
       <div class="view-title"><h1>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h1><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
-      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
+      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button v-if="kind==='mcp'" class="btn" @click="openPresets"><Blocks :size="15" />预设</button><button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
     </header>
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取扩展…</p>
@@ -29,6 +29,36 @@
       </article>
       <p v-if="!items.length">还没有{{ kind === 'skill' ? '自定义 Skill' : 'MCP 服务' }}。</p>
     </div>
+    <Modal v-if="presetsOpen" :title="preset ? `添加 ${preset.title}` : '从预设添加 MCP'" @close="closePresets">
+      <div class="extension-form">
+        <template v-if="!preset">
+          <p class="hint">预设只是帮你填好参数，装上之后就是一条普通的 MCP，改配置、停用、删除都和手工添加的一样。服务本身要自己跑，Diana 不打包别人的二进制。</p>
+          <p v-if="presetError" class="error-text" role="alert">{{ presetError }}</p>
+          <article v-for="entry in presets" :key="entry.preset.id" class="preset-row">
+            <div class="extension-info">
+              <strong>{{ entry.preset.title }}<span v-if="entry.installed" class="badge">已添加</span></strong>
+              <p>{{ entry.preset.summary }}</p>
+              <small v-if="entry.preset.docs_url"><a :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></small>
+            </div>
+            <button class="btn" @click="pickPreset(entry.preset)">{{ entry.installed ? '再装一个' : '添加' }}</button>
+          </article>
+          <p v-if="!presets.length && !presetError">还没有内置预设。</p>
+        </template>
+        <template v-else>
+          <p class="hint">{{ preset.summary }}<template v-if="preset.docs_url"> <a :href="preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></template></p>
+          <div v-if="preset.transports.length > 1" class="segmented" role="group" aria-label="接入方式"><button v-for="option in preset.transports" :key="option.id" type="button" :class="{active: presetTransport === option.id}" @click="presetTransport = option.id">{{ option.label }}</button></div>
+          <p v-if="presetTransportHint" class="hint">{{ presetTransportHint }}</p>
+          <label class="field">名称<input v-model.trim="presetName" class="input" /><span class="hint">装上后这条 MCP 的名字，装第二个同类服务时改一下。</span></label>
+          <label v-for="field in presetFields" :key="field.key" class="field">
+            <span>{{ field.label }}<template v-if="field.required"> *</template></span>
+            <input v-model.trim="presetValues[field.key]" class="input" :type="field.secret ? 'password' : 'text'" :placeholder="field.placeholder" :autocomplete="field.secret ? 'new-password' : 'off'" />
+            <span v-if="field.hint" class="hint">{{ field.hint }}</span>
+          </label>
+          <p v-if="presetError" class="error-text" role="alert">{{ presetError }}</p>
+        </template>
+      </div>
+      <template #footer><button v-if="preset" class="btn" :disabled="presetSaving" @click="preset=null">返回</button><button class="btn" :disabled="presetSaving" @click="closePresets">关闭</button><button v-if="preset" class="btn primary" :disabled="presetSaving" @click="savePreset"><Save :size="15" />添加</button></template>
+    </Modal>
     <Modal v-if="accessFor" :title="`${accessFor.name} 的开放对象`" @close="accessFor=null">
       <div class="extension-form">
         <p class="hint">两个名单都留空 = 这台机器人的所有群成员。都填则要同时满足：名单里的人，且只在这些群里。主人不受名单限制。</p>
@@ -69,10 +99,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { Plus, RefreshCw, Settings2, Trash2, Save, PlugZap, Users } from '@lucide/vue';
+import { Blocks, Plus, RefreshCw, Settings2, Trash2, Save, PlugZap, Users } from '@lucide/vue';
 import Modal from './Modal.vue';
 import { botScope } from '../bot-scope';
-import { fetchAssistantUserNames, listManagedExtensions, manageExtension, type ManagedExtension } from '../api';
+import { fetchAssistantUserNames, listMCPPresets, listManagedExtensions, manageExtension, type MCPPreset, type ManagedExtension } from '../api';
 import IdChipInput from './IdChipInput.vue';
 import { askConfirm } from '../confirm';
 import { toastError, toastSuccess } from '../toast';
@@ -97,6 +127,14 @@ function stringMap(raw:string){const result=JSON.parse(raw||'{}');if(!result||Ar
 function payload(operation:string){return {operation,kind:props.kind,name:form.value.name,replace:existing.value,content:fromURL.value?'':form.value.content,source_url:fromURL.value?form.value.source_url:'',config:{enabled:form.value.enabled,url:transport.value==='http'?form.value.url:'',command:transport.value==='stdio'?form.value.command:'',args:transport.value==='stdio'?lines(form.value.args):[],cwd:transport.value==='stdio'?form.value.cwd:'',headers:transport.value==='http'?stringMap(headers.value):{},env:transport.value==='stdio'?stringMap(env.value):{},startup_timeout_sec:form.value.startup_timeout_sec,tool_timeout_sec:form.value.tool_timeout_sec,enabled_tools:lines(form.value.enabled_tools),disabled_tools:lines(form.value.disabled_tools)},clear_headers:transport.value==='http'?clearSecrets.value:[],clear_env:transport.value==='stdio'?clearSecrets.value:[]}}
 async function save(){saving.value=true;error.value='';try{await manageExtension(payload('save'));editing.value=false;toastSuccess('扩展已保存，后续会话生效');await load()}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
 async function testConnection(){saving.value=true;error.value='';tested.value=false;discovered.value=[];try{const result=await manageExtension<{connected:boolean;tools:string[]}>(payload('test'));tested.value=result.connected;discovered.value=result.tools}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
+// 预设：服务端给字段清单，这里只负责渲染和回填，拼配置仍在服务端做。
+const presetsOpen=ref(false),presets=ref<{preset:MCPPreset;installed:boolean}[]>([]),preset=ref<MCPPreset|null>(null),presetTransport=ref(''),presetValues=ref<Record<string,string>>({}),presetName=ref(''),presetSaving=ref(false),presetError=ref('');
+const presetFields=computed(()=>preset.value?.transports.find(t=>t.id===presetTransport.value)?.fields||[]);
+const presetTransportHint=computed(()=>preset.value?.transports.find(t=>t.id===presetTransport.value)?.hint||'');
+async function openPresets(){presetsOpen.value=true;preset.value=null;presetError.value='';try{presets.value=(await listMCPPresets()).items}catch(e){presetError.value=String(e instanceof Error?e.message:e)}}
+function closePresets(){if(presetSaving.value)return;presetsOpen.value=false;preset.value=null}
+function pickPreset(value:MCPPreset){preset.value=value;presetTransport.value=value.transports[0]?.id||'';presetValues.value={};presetName.value=items.value.some(i=>i.name===value.name)?`${value.name}-2`:value.name;presetError.value=''}
+async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{await manageExtension({operation:'preset_save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess('已添加，默认仅主人可用，可在列表里开放');await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
 const accessFor=ref<ManagedExtension|null>(null),accessUsers=ref<string[]>([]),accessGroups=ref<string[]>([]),accessError=ref(''),savingAccess=ref(false);
 async function resolveAccountNames(ids:string[]):Promise<Record<string,string>>{const response=await fetchAssistantUserNames(ids);return response.names??{}}
 const extensionStates=[{value:'off',label:'停用',hint:'这台机器人不用它'},{value:'owner',label:'仅主人',hint:'只有主人会话能用'},{value:'admins',label:'群管',hint:'群主和群管理员也能用；平台给不出身份时按普通成员处理'},{value:'members',label:'群成员',hint:'群成员也能用，可再限定对象'}] as const;
@@ -134,5 +172,5 @@ watch(botScope,load);onMounted(load);
 </script>
 
 <style scoped>
-.extension-manager{padding-top:20px}.extension-list{border-top:1px solid var(--border)}.extension-row{display:flex;align-items:center;gap:12px;padding:18px 0;border-bottom:1px solid var(--border)}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.secret-clear{display:flex;gap:8px;align-items:center}.extension-info strong{display:flex;align-items:center;gap:8px}.extension-state{flex-shrink:0}.extension-state button:disabled{opacity:.45;cursor:not-allowed}.extension-audience-note{color:var(--text-secondary)}.extension-action-slot{width:34px;flex-shrink:0}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}@media(max-width:600px){.extension-row{gap:6px;flex-wrap:wrap}.extension-info{flex-basis:100%}.extension-grid{grid-template-columns:1fr}}
+.extension-manager{padding-top:20px}.preset-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}.extension-list{border-top:1px solid var(--border)}.extension-row{display:flex;align-items:center;gap:12px;padding:18px 0;border-bottom:1px solid var(--border)}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.secret-clear{display:flex;gap:8px;align-items:center}.extension-info strong{display:flex;align-items:center;gap:8px}.extension-state{flex-shrink:0}.extension-state button:disabled{opacity:.45;cursor:not-allowed}.extension-audience-note{color:var(--text-secondary)}.extension-action-slot{width:34px;flex-shrink:0}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}@media(max-width:600px){.extension-row{gap:6px;flex-wrap:wrap}.extension-info{flex-basis:100%}.extension-grid{grid-template-columns:1fr}}
 </style>
