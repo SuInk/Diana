@@ -544,7 +544,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path())
+	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path()).WithRangeReaders(sqliteStore, sqliteStore)
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
 	healthHandler := webui.NewHealthHandlerWithVersion(runtimeVersion)

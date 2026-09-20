@@ -1607,9 +1607,27 @@
             <h2>运行状态</h2>
           </div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
+            <!-- 启停按钮就贴在「已停止」这行旁边：运行时停着的时候，光把机器人
+                 设成启用是连不上的，还得在这里起一次。按钮放总览页的话，人正看着
+                 这张卡发现没连上，却要先跳走才能动手。 -->
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">运行时</span>
-              <span class="badge" :class="status?.running ? 'ok' : 'warn'">{{ status?.running ? "运行中" : "已停止" }}</span>
+              <div class="cluster" style="gap: 8px">
+                <span class="badge" :class="status?.running ? 'ok' : 'warn'">{{ status?.running ? "运行中" : "已停止" }}</span>
+                <button
+                  v-if="status"
+                  class="btn small"
+                  :class="status.running ? 'danger' : 'primary'"
+                  type="button"
+                  :disabled="busy"
+                  :title="status.running ? '停止运行时，所有机器人都会断开' : '启动运行时，已启用的机器人开始收消息'"
+                  @click="toggleRuntime(!status.running)"
+                >
+                  <PowerOff v-if="status.running" :size="13" aria-hidden="true" />
+                  <Power v-else :size="13" aria-hidden="true" />
+                  {{ status.running ? "停止" : "启动" }}
+                </button>
+              </div>
             </div>
             <div v-for="channel in visibleChannels" :key="channel.profile_id || channel.platform" class="cluster" style="justify-content: space-between">
               <span class="muted">{{ channel.name || platformName(channel.platform) }}</span>
@@ -1799,7 +1817,9 @@ import {
   listBotGroups,
   getAgentDefaults,
   saveProfileEnabled,
-  saveAllProfilesEnabled
+  saveAllProfilesEnabled,
+  startBot,
+  stopBot
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -2778,6 +2798,18 @@ async function toggleAllProfiles(enabled: boolean): Promise<void> {
     toastSuccess(enabled ? "全部机器人已启用" : "全部机器人已停用");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "批量启停保存失败");
+  } finally {
+    busy.value = false;
+  }
+}
+// 运行时的启停是整个进程一份，不分机器人：停掉就是所有启用的机器人一起断开。
+async function toggleRuntime(start: boolean): Promise<void> {
+  busy.value = true;
+  try {
+    pushStatusSnapshot(start ? await startBot() : await stopBot());
+    toastSuccess(start ? "机器人已启动" : "机器人已停止");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "操作失败");
   } finally {
     busy.value = false;
   }

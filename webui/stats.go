@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
 
@@ -333,6 +334,18 @@ type StatsHandler struct {
 	collector   *StatsCollector
 	runtime     statsStatusProvider
 	storagePath string
+	// 读取器为空时时间窗接口返回 503：没有存储就给不出跨重启的窗口，与其返回一份
+	// 零值让前端当成「这段时间什么都没发生」，不如明确说读不到。
+	usage  applog.UsageReader
+	events eventStatsRangeReader
+	now    func() time.Time
+}
+
+// WithRangeReaders 注入时间窗统计要用的两个读取器：队列事件和用量日志。
+func (h *StatsHandler) WithRangeReaders(usage applog.UsageReader, events eventStatsRangeReader) *StatsHandler {
+	h.usage = usage
+	h.events = events
+	return h
 }
 
 // NewStatsHandler 创建 StatsHandler 实例。
@@ -347,6 +360,7 @@ func NewStatsHandler(collector *StatsCollector, runtime statsStatusProvider, sto
 // Register 注册当前模块的路由或能力。
 func (h *StatsHandler) Register(router gin.IRouter) {
 	router.GET("/api/stats", h.stats)
+	router.GET("/api/stats/ranges", h.statsRanges)
 }
 
 // stats 返回运行统计和机器人状态摘要。
