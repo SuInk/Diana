@@ -45,18 +45,23 @@
         </div>
       </div>
 
-      <div v-if="loaded && botScope" class="group-list-toolbar">
-        <div class="group-list-summary">
+      <div v-if="loaded && botScope" class="group-scope-bar">
+        <div class="group-scope-default">
           <label class="switch" :title="newGroupEnabled ? '新加入的群默认工作' : '新加入的群默认不工作'">
             <input type="checkbox" :checked="newGroupEnabled" :disabled="bulkBusy" @change="setNewGroupDefault($event)" />
             <span class="track" aria-hidden="true"></span>
           </label>
-          <span>{{ newGroupEnabled ? "新加入的群默认工作" : "新加入的群默认不工作" }}</span>
+          <span class="group-scope-copy">
+            <strong>{{ newGroupEnabled ? "新加入的群默认工作" : "新加入的群默认不工作" }}</strong>
+            <span>没有单独设过的群按这个来</span>
+          </span>
         </div>
-        <div class="group-list-actions">
-          <span class="muted">一键只改下面列出的 {{ filteredGroups.length }} 个群，新群仍按上面的默认</span>
-          <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(true)">全部启用</button>
-          <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(false)">全部停用</button>
+        <div class="group-scope-actions">
+          <div class="group-scope-buttons">
+            <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(true)">全部启用</button>
+            <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(false)">全部停用</button>
+          </div>
+          <span>只改下面列出的 {{ filteredGroups.length }} 个群，新加入的群不受影响</span>
         </div>
       </div>
 
