@@ -299,6 +299,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					len(resp.ToolCalls), nativeCall.Name, strings.Join(dropped, "、"))
 			}
 		}
+		if !ok {
+			// 模型没走 function calling，但正文本身就是 agent_finalize 信封时，
+			// 按收尾解码，别把信封当正文发出去。
+			if envelope, decoded := finalizeEnvelopeFromText(lastText); decoded {
+				action = envelope
+				ok = true
+			}
+		}
 		if imageTaskQueued && ((!ok && !looksLikeAgentAction(lastText)) || (ok && action.Action == "final" && !imageTaskFinalIsPending(action))) {
 			protocolRepairs++
 			reason := "图片工具返回 queued=true 后，agent_finalize 的 task_state 必须是 pending"
