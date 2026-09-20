@@ -121,3 +121,32 @@ func TestReplyDampingReasonNamesTheActualCause(t *testing.T) {
 		t.Fatalf("理由该说是复读自己，实际是：%s", verdict.Reason)
 	}
 }
+
+// 对方一直刷，降欲望就一直续着，不会自己到期。原先按判定时间计时：被放掉的消息
+// 不生成回复、不走审核，也就刷新不了它，十分钟一到自动解除、回一条、再判一次
+// 复读、再停十分钟——等于每十分钟漏一条，而不是停住。
+func TestReplyDampingDoesNotExpireWhileSenderKeepsPushing(t *testing.T) {
+	r := dampingTestRuntime(BotConfig{}, nil)
+	start := time.Now()
+	recordDampingSends(r, replyDampingDenseLimit, start)
+	r.markReplyPurpose(dampingTestEvent("mark", "x"), true, replyDampingCauseSelfRepeat, start)
+
+	// 每隔大半个保留期来一条没点名的消息，走过好几个保留期仍然一条都不接。
+	at := start
+	for i := 0; i < 5; i++ {
+		at = at.Add(replyDampingPurposelessRetention * 3 / 4)
+		verdict := r.replyDampingJudge(dampingTestEvent(fmt.Sprintf("keep-%d", i), "接着说"), "接着说", false, at)
+		if !verdict.Skip {
+			t.Fatalf("第 %d 条（判定后 %v）漏出去了：%+v", i+1, at.Sub(start), verdict)
+		}
+	}
+	if elapsed := at.Sub(start); elapsed <= replyDampingPurposelessRetention {
+		t.Fatalf("这个用例要跨过保留期才有意义，只走了 %v", elapsed)
+	}
+
+	// 对方真的不说了，才按保留期到期解除。
+	quiet := at.Add(replyDampingPurposelessRetention + time.Minute)
+	if verdict := r.replyDampingJudge(dampingTestEvent("later", "接着说"), "接着说", false, quiet); verdict.Skip {
+		t.Fatalf("对方停了一整个保留期之后应当解除：%+v", verdict)
+	}
+}

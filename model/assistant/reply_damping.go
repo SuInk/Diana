@@ -36,7 +36,11 @@ const (
 	replyDampingDenseLimit = 2
 	// 降欲望期间点名消息的冷却，每多回一条就再加一档。
 	replyDampingCooldownStep = 20 * time.Second
-	// 判到空转之后，降欲望持续这么久；期间只要再判到有目的就立刻解除。
+	// 判到空转之后，降欲望持续这么久。它从「最后一次因为降欲望放掉消息」起算，不是
+	// 从判定那一刻起算：被放掉的消息压根不生成回复，也就不会再走一次审核，按判定时间
+	// 计时的话对方明明还在刷，降欲望却会自己到期——机器人回一条、再判一次复读、再停
+	// 十分钟，变成每十分钟漏一条，而不是真的停住。改成对方每来一条就续上以后，只有
+	// 对方真的不说了才会到期。期间只要再判到有目的，仍然立刻解除。
 	replyDampingPurposelessRetention = 10 * time.Minute
 )
 
@@ -195,9 +199,12 @@ func (r *Runtime) replyDampingJudge(event MessageEvent, text string, proactive b
 	}
 	prefix := fmt.Sprintf("回复欲望衰减：%d 分钟内已回复该账号 %d 次，%s", int(replyDampingWindow/time.Minute), sent, cause)
 	if proactive {
+		state.PurposelessAt = now
 		return replyDampingVerdict{Skip: true, Reason: prefix + "，暂不主动接它的话"}
 	}
 	if !named {
+		// 对方还在刷，降欲望就续上：这条消息不会生成回复，也就没有下一次审核能刷新它。
+		state.PurposelessAt = now
 		return replyDampingVerdict{Skip: true, Reason: prefix + "，只接 @、引用或叫名字的消息"}
 	}
 	dense := replyDampingDenseLimit
