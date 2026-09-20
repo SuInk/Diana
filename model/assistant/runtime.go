@@ -679,6 +679,8 @@ func (r *Runtime) Start(parent context.Context) error {
 	}
 	enabled := r.enabledProfilesLocked()
 	if len(enabled) == 0 {
+		// 这一种不写 lastError：一台都没启用是用户自己的选择，界面上每张卡都写着
+		// 「未启用」，再挂一条红字只会看起来像出了故障。
 		r.mu.Unlock()
 		return ErrBotDisabled
 	}
@@ -687,8 +689,15 @@ func (r *Runtime) Start(parent context.Context) error {
 	concurrency := 0
 	for _, profile := range enabled {
 		if err := profile.Validate(); err != nil {
+			// 这一种必须写进状态：机器人是启用着的，配置却起不来，运行时就停在这里。
+			// 以前这条 return 走在清空 lastError 之前，接口看到的是「没在跑，也没有
+			// 错误」，前端只能显示成「等待连接」，看起来像接入端没连上，实际是压根
+			// 没启动过，原因只在进程的标准输出里。
+			err = fmt.Errorf("机器人「%s」配置无效：%w", profile.Name, err)
+			r.lastError = err.Error()
+			r.updatedAt = time.Now()
 			r.mu.Unlock()
-			return fmt.Errorf("机器人「%s」配置无效：%w", profile.Name, err)
+			return err
 		}
 		concurrency = max(concurrency, profile.MaxBotConcurrency)
 	}

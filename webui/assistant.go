@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -599,6 +600,26 @@ type profileEnabledPayload struct {
 	Enabled   bool   `json:"enabled"`
 }
 
+// startRuntimeAfterEnable 在「把机器人设成启用」之后把停着的运行时拉起来。
+//
+// ApplyProfiles 只会重启本来就在跑的运行时，停着的它一概不碰（runtime.ApplyProfiles
+// 里 !wasRunning 直接返回）。于是「运行时停着的时候启用一台机器人」这个操作以前
+// 会返回 200、界面把开关点亮，实际什么都没启动，也没有任何提示——接入端反连过来
+// 一律被 503 挡掉，控制台却只显示「等待连接」。启用本身就是「我要它跑起来」，
+// 这里顺手补上那一次 Start。
+//
+// 只在启用路径上做，配置保存这类路径不碰：用户明确按过「停止」之后再去改配置，
+// 不该被一次保存悄悄复活。起不来时不让整个请求失败——配置已经存好了，启动失败的
+// 原因留在运行时状态里（Start 会写进 lastError），前端照常能读到。
+func (h *BotHandler) startRuntimeAfterEnable() {
+	if h.runtime == nil || h.runtime.Status().Running {
+		return
+	}
+	if err := h.runtime.Start(h.ctx); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		log.Printf("enable requested but runtime start failed: %v", err)
+	}
+}
+
 // setProfileEnabled 只切换单台机器人的启用状态，其他机器人不受影响；
 // 启停某一台不需要重配其余档案。
 func (h *BotHandler) setProfileEnabled(c *gin.Context) {
@@ -630,6 +651,7 @@ func (h *BotHandler) setProfileEnabled(c *gin.Context) {
 	status := "机器人已停用"
 	if payload.Enabled {
 		status = "机器人已启用"
+		h.startRuntimeAfterEnable()
 	}
 	recordRequestOperation(c, h.logs, "profile_enabled", status, current.ID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, current.ID))
@@ -665,6 +687,7 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 	status := "全部机器人已停用"
 	if payload.Enabled {
 		status = "全部机器人已启用"
+		h.startRuntimeAfterEnable()
 	}
 	recordRequestOperation(c, h.logs, "profiles_enabled", status, "", map[string]any{"enabled": payload.Enabled})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, botProfileScope(c)))
