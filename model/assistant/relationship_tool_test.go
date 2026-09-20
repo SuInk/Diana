@@ -51,11 +51,11 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 	if result.Target == nil || result.Target.UserID != "10005" || result.Target.DisplayName != "Alice" {
 		t.Fatalf("target = %#v", result.Target)
 	}
-	if result.Target.Favorability != 5 || result.Target.MessageCount != 18 || result.Target.RelationshipTier != RelationshipAcquaintance {
+	if result.Target.Favorability != 5 || result.Target.MessageCount != 18 {
 		t.Fatalf("relationship = %#v", result.Target)
 	}
 	// 结果里不再带能力清单：它对所有等级都一样，留着只会被复述成本等级的特权。
-	if result.Target.ScheduleLimit != 3 || !result.Target.CanGenerateImage || !result.Target.CanEditImage || !result.Target.CanDocumentOCR {
+	if result.Target.ScheduleLimit != 10 || !result.Target.CanGenerateImage || !result.Target.CanEditImage || !result.Target.CanDocumentOCR {
 		t.Fatalf("permissions = %#v", result.Target)
 	}
 	if result.Target.Mention != "[diana-at:10005]" || !result.Target.HasHistory {

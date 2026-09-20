@@ -93,7 +93,7 @@ func TestAgentRegistryExposesLLMConfigOnlyToOwner(t *testing.T) {
 		wantTool     bool
 	}{
 		{name: "owner", event: MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, relationship: RelationshipPolicy{Owner: true}, wantTool: true},
-		{name: "non-owner", event: MessageEvent{Kind: EventKindPrivate, UserID: "member"}, relationship: RelationshipPolicy{Tier: RelationshipFriend}, wantTool: false},
+		{name: "non-owner", event: MessageEvent{Kind: EventKindPrivate, UserID: "member"}, relationship: RelationshipPolicy{Score: 60}, wantTool: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -384,7 +384,7 @@ func TestMemberMCPPermissionIsOptInPerRobot(t *testing.T) {
 	cfg.AgentMCPConfigPath = filepath.Join(dbDir, "missing-mcp.json")
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "member", ProfileID: "bot-a"}
-	member := RelationshipPolicy{Tier: RelationshipFriend}
+	member := RelationshipPolicy{Score: 60}
 
 	// 底座按已经跑起来的共享扩展模拟：一个 MCP 服务，发现了一个工具。
 	baseCfg := runtime.agentRegistryConfig(cfg.WithDefaults(), event, true)
@@ -547,7 +547,7 @@ func TestMemberSkillPermissionOpensOnlyTheChosenSkill(t *testing.T) {
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "member", ProfileID: "bot-a"}
 
-	registry, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, RelationshipPolicy{Tier: RelationshipFriend})
+	registry, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), event, RelationshipPolicy{Score: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +580,7 @@ func TestMemberSkillPermissionOpensOnlyTheChosenSkill(t *testing.T) {
 	// 另一台机器人没开，同一份 skill 目录下成员仍然只有内置协议那几份。
 	other := event
 	other.ProfileID = "bot-b"
-	closed, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), other, RelationshipPolicy{Tier: RelationshipFriend})
+	closed, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), other, RelationshipPolicy{Score: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +638,7 @@ func TestGroupExtensionAccessOverridesBotTier(t *testing.T) {
 		_, ok := registry.Get("mcp__probe__ping")
 		return ok
 	}
-	member := RelationshipPolicy{Tier: RelationshipFriend}
+	member := RelationshipPolicy{Score: 60}
 	owner := RelationshipPolicy{Owner: true}
 	adminEvent := event
 	adminEvent.SenderRole = "admin"

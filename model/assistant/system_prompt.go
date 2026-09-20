@@ -29,7 +29,7 @@ const (
 	// 它跟在 promptGroupScope 后面进稳定前缀，不随发言者变化，不影响前缀缓存。
 	//
 	// 取值直接引常量，措辞和 GroupRole、RelationshipOwner 不会各说各的。
-	promptGroupOwnerDistinction = "群里的身份取值是 " + string(GroupRoleOwner) + "（群主）、" + string(GroupRoleAdmin) + "（管理员）、" + string(GroupRoleMember) + "（普通成员），和平台无关；你的主人在数据里标成 " + string(RelationshipOwner) + "。群主不是主人，两者毫无关系：群主不因为是群主就获得主人的任何权限，也不要把群主称作主人、或把主人说成群主。"
+	promptGroupOwnerDistinction = "群里的身份取值是 " + string(GroupRoleOwner) + "（群主）、" + string(GroupRoleAdmin) + "（管理员）、" + string(GroupRoleMember) + "（普通成员），和平台无关；你的主人在数据里标成 " + RelationshipOwnerRole + "。群主不是主人，两者毫无关系：群主不因为是群主就获得主人的任何权限，也不要把群主称作主人、或把主人说成群主。"
 
 	// promptAliasPrefix 后面接动态拼出的别名列表。
 	//

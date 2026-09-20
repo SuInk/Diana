@@ -3257,7 +3257,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		pluginResponses = r.plugins.RunWithGroupOverrides(ctx, pluginRequest(event, replyHistory), overrides, settingOverrides)
 	}
 	pluginResponses = applyRecallReplyMode(pluginResponses, cfg.RecallReplyMode)
-	pluginResponses = applyRelationshipTaskPermissions(pluginResponses, relationship)
 	authoritativePluginContext := hasAuthoritativePluginContext(pluginResponses)
 	var pluginTasks []PluginTask
 	for _, resp := range pluginResponses {
@@ -3479,13 +3478,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if routed && intent.Action != visualIntentNone {
 			switch intent.Action {
 			case visualIntentGenerateImage:
-				if !relationship.AllowImageGeneration {
-					reply := relationshipPermissionDenied(relationship, "图片生成", relationshipImageTierName)
-					if err := r.send(ctx, event, reply); err != nil {
-						return "", err
-					}
-					return reply, nil
-				}
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想生成什么画面？把画面描述发给我就行。"
 					if err := r.send(ctx, event, reply); err != nil {
@@ -3499,13 +3491,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
 			case visualIntentEditImage:
-				if !relationship.AllowImageEditing {
-					reply := relationshipPermissionDenied(relationship, "图片编辑", relationshipImageTierName)
-					if err := r.send(ctx, event, reply); err != nil {
-						return "", err
-					}
-					return reply, nil
-				}
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想怎么改？发图时顺便说清楚要改哪里就行。"
 					if err := r.send(ctx, event, reply); err != nil {

@@ -133,7 +133,7 @@ func (r *Runtime) shouldIgnoreGroupReplyByMemberLevel(ctx context.Context, event
 	}
 	if cfg.IsOwnerEvent(event) {
 		// 主人和群主是两回事，这里借关系等级那个常量，两处永远说同一个词。
-		decision.Role = string(RelationshipOwner)
+		decision.Role = RelationshipOwnerRole
 		decision.Reason = "privileged_role"
 		return false, decision
 	}

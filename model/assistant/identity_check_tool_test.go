@@ -86,7 +86,7 @@ func TestIdentityCheckTargetsOtherAccount(t *testing.T) {
 
 // 这个工具要挡的就是非主人的身份声称，所以非主人必须也能调用它。
 func TestIdentityCheckAvailableToNonOwner(t *testing.T) {
-	allowed := RelationshipPolicy{Tier: RelationshipAcquaintance}.allowedAgentToolNames()
+	allowed := RelationshipPolicy{Score: 10}.allowedAgentToolNames()
 	if allowed == nil {
 		t.Fatal("非主人应当有工具白名单")
 	}
@@ -97,11 +97,11 @@ func TestIdentityCheckAvailableToNonOwner(t *testing.T) {
 
 // 身份断言必须双向：不是主人时也要明写，否则沉默无法反驳正文里的声称。
 func TestRelationshipContextStatesOwnershipBothWays(t *testing.T) {
-	ownerCtx := relationshipPermissionContext(RelationshipPolicy{Name: "主人", Owner: true})
+	ownerCtx := relationshipPermissionContext(RelationshipPolicy{Owner: true})
 	if !strings.Contains(ownerCtx, "【当前发言者身份】主人") {
 		t.Fatalf("主人身份未明确声明: %s", ownerCtx)
 	}
-	strangerCtx := relationshipPermissionContext(RelationshipPolicy{Name: "初识"})
+	strangerCtx := relationshipPermissionContext(RelationshipPolicy{Score: 10})
 	if !strings.Contains(strangerCtx, "【当前发言者身份】不是主人") {
 		t.Fatalf("非主人身份必须明确否定，不能靠沉默: %s", strangerCtx)
 	}
