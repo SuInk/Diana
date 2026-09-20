@@ -42,6 +42,19 @@ func (s *SQLiteStore) EditUserMemory(ctx context.Context, profileID, userID stri
 		if _, err = tx.ExecContext(ctx, "DELETE FROM user_favorability_changes WHERE bot_profile_id = ? AND user_id = ?", profileID, userID); err != nil {
 			return err
 		}
+		// 结构化长期记忆也要一起收掉。以前只删 user_profiles，控制台上人没了、
+		// 机器人却还记得他说过什么——下次他再出现，旧记忆照样注进提示词。
+		// 置为 forgotten 而不是删行，出处链保留，和清空接口一致。
+		groupPrefix, privatePrefix := memoryProfileSessionPrefixes(profileID)
+		if _, err = tx.ExecContext(ctx, `
+UPDATE memory_items
+SET status = 'forgotten', updated_at = ?
+WHERE status = 'active'
+  AND subject_user_id = ?
+  AND (substr(source_session, 1, length(?)) = ? OR substr(source_session, 1, length(?)) = ?)
+`, time.Now().UTC().Unix(), userID, groupPrefix, groupPrefix, privatePrefix, privatePrefix); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, "DELETE FROM user_profiles WHERE bot_profile_id = ? AND user_id = ?", profileID, userID); err != nil {
 			return err
 		}

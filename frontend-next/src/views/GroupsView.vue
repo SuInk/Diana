@@ -351,6 +351,47 @@
           <label>本群回复时间与屏蔽账号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
+        <div v-if="extensions.length" class="field wide">
+          <label>本群扩展</label>
+          <p class="hint">按群覆盖 MCP 与 Skill：档位不设就跟随机器人，白名单里的人不看档位也能用，黑名单一律不给。判定顺序是停用 &gt; 黑名单 &gt; 白名单 &gt; 档位，「停用」对所有人生效，主人也一样。</p>
+          <div class="row-list" style="margin-top: 6px">
+            <div v-for="item in extensions" :key="item.id" class="row-item group-plugin-row">
+              <div class="group-plugin-row-head">
+                <div class="row-main">
+                  <div class="row-title">{{ item.name }}<span class="badge">{{ item.kind === 'skill' ? 'Skill' : 'MCP' }}</span></div>
+                  <div class="row-sub">机器人：{{ extensionTierLabel(botTierOf(item)) }}</div>
+                </div>
+                <div class="segmented">
+                  <button type="button" :class="{ active: !tierOf(item.id) }" @click="setTier(item.id, undefined)">跟随</button>
+                  <button v-for="tier in extensionTiers" :key="tier.value" type="button" :class="{ active: tierOf(item.id) === tier.value }" :title="tier.hint" @click="setTier(item.id, tier.value)">{{ tier.label }}</button>
+                </div>
+              </div>
+              <!-- 「跟随」是本群完全不干预，连名单也不该有；停用时两份名单同样没有意义。 -->
+              <div v-if="tierOf(item.id) && tierOf(item.id) !== 'off'" class="group-extension-lists">
+                <div class="field">
+                  <label :for="`group-extension-allow-${item.id}`">本群白名单</label>
+                  <IdChipInput
+                    :input-id="`group-extension-allow-${item.id}`"
+                    :model-value="listOf(item.id, 'allow')"
+                    placeholder="填账号后回车，这些人不看档位也能用"
+                    :resolve-names="resolveAccountNames"
+                    @update:model-value="setList(item.id, 'allow', $event)"
+                  />
+                </div>
+                <div class="field">
+                  <label :for="`group-extension-deny-${item.id}`">本群黑名单</label>
+                  <IdChipInput
+                    :input-id="`group-extension-deny-${item.id}`"
+                    :model-value="listOf(item.id, 'deny')"
+                    placeholder="填账号后回车，这些人一律不给用"
+                    :resolve-names="resolveAccountNames"
+                    @update:model-value="setList(item.id, 'deny', $event)"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="field wide">
           <label>本群插件</label>
           <div class="row-list" style="margin-top: 6px">
@@ -407,6 +448,9 @@ import {
   saveBotGroup,
   deleteBotGroup,
   getGroupRelations,
+  fetchAssistantUserNames,
+  listManagedExtensions,
+  type ManagedExtension,
   type PluginState,
   type BotGroupConfig,
   type BotGroupSummary,
@@ -414,6 +458,7 @@ import {
   type GroupRelationGraph
 } from "../api";
 import EmptyState from "../components/EmptyState.vue";
+import IdChipInput from "../components/IdChipInput.vue";
 import GroupRelationChart from "../components/GroupRelationChart.vue";
 import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -466,6 +511,13 @@ async function removeGroup(): Promise<void> {
 // 群等级只有 OneBot v11 有；按当前激活的机器人平台决定要不要显示这一项。
 const supportsGroupLevel = ref(true);
 const plugins = ref<PluginState[]>([]);
+const extensions = ref<ManagedExtension[]>([]);
+const extensionTiers = [
+  { value: "off", label: "停用", hint: "本群谁都不用它，主人也一样" },
+  { value: "owner", label: "仅主人", hint: "本群只有主人能用" },
+  { value: "admins", label: "群管", hint: "本群群主和管理员也能用" },
+  { value: "members", label: "群成员", hint: "本群成员都能用" }
+] as const;
 const loaded = ref(false);
 const refreshing = ref(false);
 const liveAvailable = ref(false);
@@ -635,12 +687,15 @@ function hasOtherReplyGateRules(group: BotGroupConfig): boolean {
 async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
-    const [response, configAndPlatforms] = await Promise.all([
+    const [response, configAndPlatforms, extensionList] = await Promise.all([
       listBotGroups(showFeedback, botScope.value),
-      Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null)
+      Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null),
+      // 扩展目录和群列表互不依赖：取不到就不显示这一栏，不拖累整页。
+      botScope.value ? listManagedExtensions(botScope.value).catch(() => null) : Promise.resolve(null)
     ]);
     groups.value = response.groups;
     plugins.value = response.plugins;
+    extensions.value = extensionList?.items ?? [];
     liveAvailable.value = response.live_available;
     syncWarning.value = response.warning ?? "";
     if (showFeedback) {
@@ -734,6 +789,65 @@ function groupConfigOf(group: BotGroupConfig): BotGroupConfig {
 
 function hideBrokenAvatar(event: Event): void {
   (event.currentTarget as HTMLImageElement).hidden = true;
+}
+
+// 机器人那一档由扩展页的启用开关和成员档位推出来，和后端 BotExtensionTier 同一套规则。
+function botTierOf(item: ManagedExtension): string {
+  if (!item.enabled || item.available === false) {
+    return "off";
+  }
+  if (!item.members_enabled) {
+    return "owner";
+  }
+  return item.member_audience?.min_role === "admin" ? "admins" : "members";
+}
+
+function extensionTierLabel(tier: string): string {
+  return extensionTiers.find((item) => item.value === tier)?.label ?? "仅主人";
+}
+
+async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
+  const response = await fetchAssistantUserNames(ids);
+  return response.names ?? {};
+}
+
+function accessOf(extensionID: string): { tier?: string; allow?: string[]; deny?: string[] } {
+  return editing.value?.extension_access?.[extensionID] ?? {};
+}
+
+function tierOf(extensionID: string): string | undefined {
+  return accessOf(extensionID).tier || undefined;
+}
+
+function listOf(extensionID: string, kind: "allow" | "deny"): string[] {
+  return accessOf(extensionID)[kind] ?? [];
+}
+
+function patchAccess(extensionID: string, patch: { tier?: string; allow?: string[]; deny?: string[] }): void {
+  if (!editing.value) {
+    return;
+  }
+  const access = { ...(editing.value.extension_access ?? {}) };
+  const next = { ...(access[extensionID] ?? {}), ...patch };
+  if (!next.tier && !(next.allow ?? []).length && !(next.deny ?? []).length) {
+    delete access[extensionID];
+  } else {
+    access[extensionID] = next;
+  }
+  editing.value.extension_access = access;
+}
+
+function setTier(extensionID: string, tier: string | undefined): void {
+  // 切回跟随就把本群那两份名单一起清掉：留着看不见的名单，下次改档位会莫名其妙生效。
+  if (!tier || tier === "off") {
+    patchAccess(extensionID, { tier: tier ?? "", allow: [], deny: [] });
+    return;
+  }
+  patchAccess(extensionID, { tier });
+}
+
+function setList(extensionID: string, kind: "allow" | "deny", accounts: string[]): void {
+  patchAccess(extensionID, kind === "allow" ? { allow: accounts } : { deny: accounts });
 }
 
 function overrideOf(pluginID: string): boolean | undefined {
@@ -877,4 +991,7 @@ useConfigurationRefresh(["bot"], () => load());
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.group-extension-lists{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+@media(max-width:700px){.group-extension-lists{grid-template-columns:1fr}}
 </style>

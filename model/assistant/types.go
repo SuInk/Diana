@@ -184,6 +184,10 @@ type MessageEvent struct {
 	// Persisted outgoing events still use the regular message fields above.
 	botReply      string
 	routingReason string
+	// tempSessionGroupID 只在「给非好友发私聊」时有值：QQ 的临时会话要靠共同群
+	// 才发得出去。它是一次投递的路由提示，不是会话身份的一部分——写成导出字段
+	// 就会跟着事件落库，让这条私聊在历史里看起来像发生在那个群里。
+	tempSessionGroupID string
 	// backlogProbe 是这条消息所在的队列项，用来判断它是不是积压了、该交给同会话后面的消息
 	// 一起接话。不走队列的消息没有它。
 	backlogProbe *InboundQueueItem
@@ -264,6 +268,10 @@ type OutgoingMessage struct {
 	ForwardName  string
 	ForwardUIN   string
 	ForwardTime  int64
+	// TempSessionGroupID 让私聊走 QQ 的临时会话：OneBot 的 send_private_msg 带上
+	// group_id 才能发给不是好友、但同在这个群里的人。只在确认不是好友时才填——
+	// 对好友也走临时会话会把消息塞进另一个对话框。
+	TempSessionGroupID string
 }
 
 type ReminderKind string
@@ -632,6 +640,11 @@ type BotConfig struct {
 	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
 	// 升级后突然发生。
 	RomanceEnabled *bool `json:"romance_enabled,omitempty"`
+	// LLMCapabilityProbeEnabled 让后台在空闲时定期探测这台机器人绑着的模型收不
+	// 收「强制调用指定工具」，把结论提前学好，真实对话就不用先撞一次 400。默认
+	// 关闭：探测是会计费的真实调用，花不花这个钱该由部署者决定。关着也不影响
+	// 正确性，请求路径上的降级会在撞到时自己学一次。
+	LLMCapabilityProbeEnabled *bool `json:"llm_capability_probe_enabled,omitempty"`
 	// MoodEnabled 让机器人有随相处涨落、随时间回落的心情，只影响语气。
 	// 默认关闭：可感知的行为变化不该在升级后突然发生。
 	MoodEnabled *bool `json:"mood_enabled,omitempty"`
@@ -816,12 +829,51 @@ type GroupConfig struct {
 	RecallReplyAutoDeleteEnabled *bool                     `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int                       `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	// nil 跟随机器人；true/false 在本群对主动和直接回复统一开启/关闭账号安全审核。
-	ReplyAccountSafetyAuditEnabled *bool                  `json:"reply_account_safety_audit_enabled,omitempty"`
-	ReplyAccountSafetyAuditPrompt  string                 `json:"reply_account_safety_audit_prompt,omitempty"`
-	PluginOverrides                map[string]bool        `json:"plugin_overrides,omitempty"`
-	PluginSettingOverrides         PluginSettingOverrides `json:"plugin_setting_overrides,omitempty"`
-	ReplyGate                      *ReplyGate             `json:"reply_gate,omitempty"`
-	UpdatedAt                      time.Time              `json:"updated_at,omitempty"`
+	ReplyAccountSafetyAuditEnabled *bool  `json:"reply_account_safety_audit_enabled,omitempty"`
+	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
+	// ExtensionAccess 按群覆盖 MCP / Skill 的开放范围，键是扩展 ID，没写的跟随
+	// 机器人那一档。群管理员只能往严的方向改。
+	ExtensionAccess        map[string]GroupExtensionAccess `json:"extension_access,omitempty"`
+	PluginOverrides        map[string]bool                 `json:"plugin_overrides,omitempty"`
+	PluginSettingOverrides PluginSettingOverrides          `json:"plugin_setting_overrides,omitempty"`
+	ReplyGate              *ReplyGate                      `json:"reply_gate,omitempty"`
+	UpdatedAt              time.Time                       `json:"updated_at,omitempty"`
+}
+
+// GroupExtensionAccess 是一个扩展在某个群里的开放范围：一个基线档位，加一对名单。
+//
+// 判定顺序是「停用 > 黑名单 > 白名单 > 档位」：停用等于这个群没这个能力，谁都不给；
+// 黑名单无条件挡住，压过白名单；白名单是例外放行，名单里的账号不看档位也不看身份。
+type GroupExtensionAccess struct {
+	// Tier 为空表示这一项的基线跟随机器人。
+	Tier string `json:"tier,omitempty"`
+	// Allow 是额外放行的账号，能越过档位、身份和机器人那份名单，但越不过停用。
+	Allow []string `json:"allow,omitempty"`
+	// Deny 是本群不给用的账号，优先级最高。
+	Deny []string `json:"deny,omitempty"`
+}
+
+func (a GroupExtensionAccess) Empty() bool {
+	return a.Tier == "" && len(a.Allow) == 0 && len(a.Deny) == 0
+}
+
+// Allowed 判断这个账号是否被本群白名单放行。
+func (a GroupExtensionAccess) Allowed(userID string) bool { return containsAccount(a.Allow, userID) }
+
+// Denied 判断这个账号是否被本群黑名单挡住。
+func (a GroupExtensionAccess) Denied(userID string) bool { return containsAccount(a.Deny, userID) }
+
+func containsAccount(list []string, userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false
+	}
+	for _, item := range list {
+		if strings.TrimSpace(item) == userID {
+			return true
+		}
+	}
+	return false
 }
 
 type GroupConfigSet struct {
@@ -977,6 +1029,7 @@ type ConfigPayload struct {
 	CrossPlatformMemoryEnabled      *bool                     `json:"cross_platform_memory_enabled,omitempty"`
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
 	RomanceEnabled                  *bool                     `json:"romance_enabled,omitempty"`
+	LLMCapabilityProbeEnabled       *bool                     `json:"llm_capability_probe_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
 	ExpressionLearningEnabled       *bool                     `json:"expression_learning_enabled,omitempty"`
@@ -1496,7 +1549,7 @@ func DefaultBotConfig() BotConfig {
 		ReplyMaxBubbles:              replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:   0,
 		DirectReplyChunkSize:         chatReplyChunkSize,
-		ForwardReplyThreshold:        0,
+		ForwardReplyThreshold:        defaultForwardReplyThreshold,
 		RecallReplyMode:              RecallReplyModeOriginalForward,
 		RefusalStrategy:              RefusalStrategySmart,
 		DaypartToneEnabled:           boolPointer(false),
@@ -1521,6 +1574,7 @@ func DefaultBotConfig() BotConfig {
 		CrossPlatformMemoryEnabled:  boolPointer(false),
 		WorldBookEnabled:            boolPointer(true),
 		RomanceEnabled:              boolPointer(false),
+		LLMCapabilityProbeEnabled:   boolPointer(false),
 		MoodEnabled:                 boolPointer(false),
 		PokeReplyEnabled:            boolPointer(false),
 		ExpressionLearningEnabled:   boolPointer(false),
@@ -1703,12 +1757,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ReplyMaxBubbles <= 0 {
 		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
 	}
-	if cfg.ForwardReplyChunkThreshold <= 0 {
-		cfg.ForwardReplyChunkThreshold = defaults.ForwardReplyChunkThreshold
-	}
-	if cfg.ForwardReplyThreshold <= 0 {
-		cfg.ForwardReplyThreshold = defaults.ForwardReplyThreshold
-	}
+	// 两个合并转发阈值上 0 是「关掉这条触发」，不是「没填」：这里不能回落到
+	// 默认值，否则用户清空输入框就被默认值顶回去，关不掉。新建配置的默认值由
+	// DefaultBotConfig 给，群级覆盖同样只做钳零。
+	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
+	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
 	cfg.RecallReplyMode = normalizeRecallReplyMode(cfg.RecallReplyMode)
 	cfg.RefusalStrategy = normalizeRefusalStrategy(cfg.RefusalStrategy)
 	if cfg.DaypartToneEnabled == nil {
@@ -1778,6 +1831,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.RomanceEnabled == nil {
 		cfg.RomanceEnabled = boolPointer(false)
+	}
+	if cfg.LLMCapabilityProbeEnabled == nil {
+		cfg.LLMCapabilityProbeEnabled = boolPointer(false)
 	}
 	if cfg.MoodEnabled == nil {
 		cfg.MoodEnabled = boolPointer(false)
@@ -2117,6 +2173,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
+		LLMCapabilityProbeEnabled:         copyBoolPointer(cfg.LLMCapabilityProbeEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
 		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
@@ -2321,6 +2378,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
+		LLMCapabilityProbeEnabled:       copyBoolPointer(payload.LLMCapabilityProbeEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
 		ExpressionLearningEnabled:       copyBoolPointer(payload.ExpressionLearningEnabled),

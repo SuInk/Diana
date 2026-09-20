@@ -59,7 +59,7 @@ func TestLiveRepositoryWatchDoesNotReplayIssuesOnPullRequestHeavyRepository(t *t
 	if token == "" {
 		return
 	}
-	tool := newDianaRepositoryIssuesTool(NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+	tool := newDianaGitHubTool(NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
 		MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, newRepositoryPublishPlugin(client, "https://api.github.com"),
 		SettingValues{repositoryPublishSettingToken: token, repositoryPublishSettingAllowlist: repository, repositoryPublishSettingTimeout: 30})
 	issues, apiErr := tool.listRecentIssues(context.Background(), repository)

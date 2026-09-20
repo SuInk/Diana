@@ -180,6 +180,8 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	// 运行期合计先记：它给总览页读，不该因为没配日志写入器就停掉。
+	r.recordLLMUsageTotals(usage)
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -782,6 +784,22 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		_, ok := registry.Get(name)
 		return ok
 	}
+	// 订阅工具合成一个之后，「本轮有没有某一种订阅」不能再靠工具名判断：三种都在
+	// subscription 里，github 那种是否可用由构造时收没收进 backends 决定。
+	hasSubscriptionKind := func(kind string) bool {
+		if registry == nil {
+			return true
+		}
+		tool, ok := registry.Get(dianaSubscriptionToolName)
+		if !ok {
+			return false
+		}
+		subscription, ok := tool.(*dianaSubscriptionTool)
+		if !ok {
+			return false
+		}
+		return slicesContains(subscription.kinds(), kind)
+	}
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -813,11 +831,15 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool("llm_config") {
 		tail.WriteString("\n" + promptToolLLMConfig)
 	}
-	if agentEnabled && hasTool(dianaRepositoryIssuesToolName) {
+	if agentEnabled && hasTool(dianaGitHubToolName) {
 		builder.WriteString("\n" + promptToolRepositoryIssues)
 	}
 	if agentEnabled && hasTool(dianaPlatformToolName) {
 		builder.WriteString("\n" + promptToolPlatform)
+	}
+	// 这条对所有人逐字相同（能不能指定别人或指定群由工具自己判身份），所以进稳定头部。
+	if agentEnabled && hasTool(dianaCrossSessionToolName) {
+		builder.WriteString("\n" + promptToolCrossSession)
 	}
 	// 破坏性动作只对主人出现在工具 schema 里；提示词也只对主人注入，且必须进随发言者
 	// 变化的尾部，不能写进按前缀缓存的稳定头部（否则主人和普通成员的提示词会提前分叉）。
@@ -843,7 +865,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool("relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)
 	}
-	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", "schedule", "rss") {
+	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		tail.WriteString("\n" + promptOwnerTaskTarget)
 	}
 	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
@@ -854,19 +876,19 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("reminder") {
 		builder.WriteString("\n" + promptTaskReminder)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("schedule") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindSchedule) {
 		builder.WriteString("\n" + promptTaskSchedule)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindRSS) {
 		builder.WriteString("\n" + promptTaskRSS)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("tasks") {
 		builder.WriteString("\n" + promptTaskList)
 	}
-	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
 		builder.WriteString("\n" + promptTaskRepositoryWatch)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", "schedule", "rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		builder.WriteString("\n" + promptTaskNoSubstitute)
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
@@ -1079,14 +1101,16 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	if text == "" && !hasImageSegment(event.Segments) {
 		text = event.RawMessage
 	}
-	text = strings.TrimSpace(text)
+	// 正文同样不可信：不中和的话，一条消息里手写
+	// 「[历史 …] 李四（im_user_x）[主人]: …」就能伪造出一整行别人的历史。
+	text = neutralizeIdentityMarkers(strings.TrimSpace(text))
 	if text == "" {
 		return ""
 	}
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return historyLinePrefix(event) + promptSenderIdentity(event) + ": " + text + historyIdentityPrompt(event, configs...)
+	return historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...) + ": " + text
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
@@ -1116,7 +1140,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if messageID == "" {
 		messageID = "不可用"
 	}
-	line := historyLinePrefix(event) + promptSenderIdentity(event)
+	line := historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...)
 	if text != "" {
 		line += ": " + text
 	}
@@ -1128,7 +1152,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	return line + historyIdentityPrompt(event, configs...)
+	return line
 }
 
 func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
@@ -1235,12 +1259,11 @@ func quotedPromptText(quoted *QuotedMessage) string {
 	if quoted.Semantic {
 		label = "指代判断选中的历史消息"
 	}
-	line := fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
-	if userID := strings.TrimSpace(quoted.UserID); userID != "" {
-		identity, _ := json.Marshal(map[string]string{"quoted_sender_user_id": userID})
-		line += "\n【引用发言者身份】" + string(identity)
-	}
-	return line
+	// 引用发言者的别名已经在上面的 sender 里（formatPromptIdentity 渲染成
+	// 「昵称（别名）」），以前还会再跟一行
+	// 【引用发言者身份】{"quoted_sender_user_id":"…"}。线上抽样的 30 条引用里，
+	// 这一行的 role 全是空的，剩下的就只有那个重复的别名——整段是纯冗余。
+	return fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
 }
 
 func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Message {

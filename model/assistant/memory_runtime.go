@@ -29,12 +29,45 @@ const (
 	// 「当前进行到哪」这件事本身就不成立了，不该继续常驻注入。
 	memoryThreadRetentionDays = 7
 	memorySummaryRollupSize   = 12
+	// memoryEventBatchMax 是一次记忆门控最多带几条新消息。
+	//
+	// 攒批的动机是缓存：门控的固定前缀约 600 token，够不到供应商 1024 token 的
+	// 最低可缓存长度，所以每次调用都是全价——实测这条链路缓存命中率恒为 0%。
+	// 一条消息一次调用时，system、existing_memories、recent_messages 会被重复
+	// 付费 N 遍；攒成一次就只付一遍。
+	memoryEventBatchMax = 6
 )
+
+// MemoryEventJobDelay 是事件记忆任务入队后的等待时间，用来把同一会话同一发言者
+// 的连续消息攒进一次门控调用。
+//
+// 代价是长期记忆晚成形这一会儿。可以接受：这段时间里那几条消息本来就还在最近
+// 历史里，回复时看得到；长期记忆负责的是跨会话那部分，不差这几十秒。
+const MemoryEventJobDelay = 45 * time.Second
+
+// memoryGateSystemPrompt 是记忆门控的固定前缀。单条和攒批共用同一份，缓存才有
+// 可能在两种形状之间互相命中。
+const memoryGateSystemPrompt = `你是 Diana 的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
+
+必须遵守：
+1. 逐句理解语义、指代、引用和最近上下文，不得用关键词、前缀、子串或正则机械判断。
+2. 只记录关于当前发言者的稳定事实、持续偏好、长期交互要求，或未来仍有明显价值的重要情景。普通问题、一次性任务、寒暄、玩梗、短暂情绪、媒体占位、链接、机器人回答、未经证实的第三方传闻都不记。当前任务里的格式要求、分析角度、修改意见、验收条件和临时约束即使表达得很明确，也只属于工作记忆；除非语义明确要求今后跨话题默认遵循或长期记住，否则绝不能写成 instruction。
+3. 提醒、订阅、待办已有独立任务系统，不要重复写成长期记忆。好感度也由独立关系系统维护。
+4. source_type=explicit 只用于当前发言者直接明确陈述；需要结合上下文推断时用 inferred。inferred 必须 confidence>=0.90，拿不准就不输出。
+5. 每条记忆必须有稳定且颗粒度足够细的 key，例如 preference.food.spicy、profile.pet.cat、instruction.reply_style。更新、否定或要求忘记已有记忆时必须复用 existing_memories 中的原 key；不要用笼统的 profile、preference、chat 作为 key。
+6. action=upsert 表示新增、确认或更新；action=forget 只用于当前发言者明确要求忘记、撤销或纠正已有记忆。forget 时 content 可以为空。
+7. kind 只能是 fact、preference、episode、instruction。instruction 只表示跨会话长期有效的交互规则，不表示本次任务要求。episode 只用于重要的一次性经历，默认 retention_days=90；稳定事实和偏好可以为 0 表示不过期。
+8. visibility=session 表示只在当前私聊或群可见；visibility=user 只适用于当前发言者明确陈述、非敏感且跨会话确有帮助的稳定事实/偏好。医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等 sensitive=true，且必须 visibility=session。
+9. importance 和 confidence 均为 0 到 1。只有 importance>=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。
+10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。
+11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。
+12. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`
 
 var memoryProfileGroups = []string{"memory", "memories", "recall"}
 
 type memoryGatePayload struct {
-	Current          memoryGateEvent    `json:"current"`
+	Current          *memoryGateEvent   `json:"current,omitempty"`
+	CurrentBatch     []memoryGateEvent  `json:"current_batch,omitempty"`
 	RecentMessages   []memoryGateEvent  `json:"recent_messages,omitempty"`
 	ExistingMemories []memoryGateMemory `json:"existing_memories,omitempty"`
 }
@@ -114,39 +147,48 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 		}
 		for ctx.Err() == nil {
 			claimCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			job, ok, err := store.ClaimNextMemoryJob(claimCtx, leaseOwner, time.Now().Add(memoryLeaseDuration))
+			jobs, err := claimMemoryJobs(claimCtx, store, leaseOwner, time.Now().Add(memoryLeaseDuration))
 			cancel()
 			if err != nil {
 				log.Printf("diana memory job claim failed: %v", err)
 				break
 			}
-			if !ok {
+			if len(jobs) == 0 {
 				break
 			}
-			if memoryJobAttemptsExhausted(job.Attempts) {
-				log.Printf("diana memory job abandoned after %d attempts: id=%s", job.Attempts-1, job.ID)
-				commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				err = store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner)
-				commitCancel()
-				if err != nil {
-					log.Printf("diana memory job state update failed: %v", err)
+			live := make([]MemoryJob, 0, len(jobs))
+			for _, job := range jobs {
+				if memoryJobAttemptsExhausted(job.Attempts) {
+					log.Printf("diana memory job abandoned after %d attempts: id=%s", job.Attempts-1, job.ID)
+					commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					if err := store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner); err != nil {
+						log.Printf("diana memory job state update failed: %v", err)
+					}
+					commitCancel()
+					continue
 				}
+				live = append(live, job)
+			}
+			if len(live) == 0 {
 				continue
 			}
 			jobCtx, jobCancel := context.WithTimeout(ctx, memoryExtractionTimeout)
-			err = r.processMemoryJob(jobCtx, store, job)
+			err = r.processMemoryJobs(jobCtx, store, live)
 			jobCancel()
 
-			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err == nil {
-				err = store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner)
-			} else {
-				retryAt := time.Now().Add(memoryRetryDelay(job.Attempts))
-				err = store.RetryMemoryJob(commitCtx, job.ID, leaseOwner, retryAt, err.Error())
-			}
-			commitCancel()
-			if err != nil {
-				log.Printf("diana memory job state update failed: %v", err)
+			for _, job := range live {
+				commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				var stateErr error
+				if err == nil {
+					stateErr = store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner)
+				} else {
+					retryAt := time.Now().Add(memoryRetryDelay(job.Attempts))
+					stateErr = store.RetryMemoryJob(commitCtx, job.ID, leaseOwner, retryAt, err.Error())
+				}
+				commitCancel()
+				if stateErr != nil {
+					log.Printf("diana memory job state update failed: %v", stateErr)
+				}
 			}
 		}
 	}
@@ -166,10 +208,37 @@ func memoryRetryDelay(attempt int) time.Duration {
 	return time.Duration(1<<(attempt-1)) * 15 * time.Second
 }
 
-func (r *Runtime) processMemoryJob(ctx context.Context, store StructuredMemoryStore, job MemoryJob) error {
+// claimMemoryJobs 优先走批量领取；存储没实现那个可选接口时退回单条。
+func claimMemoryJobs(ctx context.Context, store StructuredMemoryStore, leaseOwner string, leaseUntil time.Time) ([]MemoryJob, error) {
+	if batcher, ok := store.(MemoryJobBatchClaimer); ok && batcher != nil {
+		return batcher.ClaimMemoryJobBatch(ctx, leaseOwner, leaseUntil, memoryEventBatchMax)
+	}
+	job, ok, err := store.ClaimNextMemoryJob(ctx, leaseOwner, leaseUntil)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return []MemoryJob{job}, nil
+}
+
+func (r *Runtime) processMemoryJobs(ctx context.Context, store StructuredMemoryStore, jobs []MemoryJob) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	if len(jobs) > 1 {
+		// 批量领取只会把同会话同发言者的事件任务凑在一起，摘要任务永远单独来。
+		payloads := make([]MemoryJobPayload, 0, len(jobs))
+		for _, job := range jobs {
+			if job.Payload.Kind != MemoryJobEvent {
+				return fmt.Errorf("unsupported memory job kind %q in batch", job.Payload.Kind)
+			}
+			payloads = append(payloads, job.Payload)
+		}
+		return r.processEventMemoryJobs(ctx, store, payloads)
+	}
+	job := jobs[0]
 	switch job.Payload.Kind {
 	case MemoryJobEvent:
-		return r.processEventMemoryJob(ctx, store, job.Payload)
+		return r.processEventMemoryJobs(ctx, store, []MemoryJobPayload{job.Payload})
 	case MemoryJobSummary:
 		return r.processSummaryMemoryJob(ctx, store, job)
 	default:
@@ -177,22 +246,41 @@ func (r *Runtime) processMemoryJob(ctx context.Context, store StructuredMemorySt
 	}
 }
 
-func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMemoryStore, payload MemoryJobPayload) error {
+func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMemoryStore, payloads []MemoryJobPayload) error {
 	ctx = withLLMUsagePurpose(ctx, "memory_extract")
-	event := payload.Event
-	text := memoryEventText(event)
-	if !memoryEventEligible(r.effectiveConfigForEvent(event), event, text) {
+	type gateSource struct {
+		payload MemoryJobPayload
+		event   MessageEvent
+		text    string
+	}
+	sources := make([]gateSource, 0, len(payloads))
+	for _, payload := range payloads {
+		event := payload.Event
+		text := memoryEventText(event)
+		if !memoryEventEligible(r.effectiveConfigForEvent(event), event, text) {
+			continue
+		}
+		sources = append(sources, gateSource{payload: payload, event: event, text: text})
+	}
+	if len(sources) == 0 {
 		return nil
+	}
+	// 相关记忆按整批消息一起检索：分开领取时每条消息都要重查一遍，查出来的还
+	// 大量重合。
+	last := sources[len(sources)-1]
+	searchText := last.text
+	for index := 0; index < len(sources)-1; index++ {
+		searchText = sources[index].text + "\n" + searchText
 	}
 	// 门控要求模型「更新已有记忆时复用原 key」，前提是相关的旧记忆真的出现在
 	// existing_memories 里。只按 importance 取前 40 条时，记忆一多，与当前消息
 	// 相关但权重不高的旧 key 就会掉出窗口，模型只能另立新 key——改口后的偏好
 	// 与旧偏好并存。先按当前消息的相关性取一批，再用 importance 批兜底合并。
 	relevant, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
-		SubjectUserID: event.UserID,
-		Session:       payload.Session,
-		GroupID:       event.GroupID,
-		SearchTerms:   structuredMemorySearchTerms(text, 32),
+		SubjectUserID: last.event.UserID,
+		Session:       last.payload.Session,
+		GroupID:       last.event.GroupID,
+		SearchTerms:   structuredMemorySearchTerms(searchText, 32),
 		Now:           time.Now(),
 		MaxCandidates: 24,
 		ExcludeKinds:  []MemoryKind{MemoryKindThread},
@@ -201,9 +289,9 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 		return fmt.Errorf("load relevant memories: %w", err)
 	}
 	important, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
-		SubjectUserID: event.UserID,
-		Session:       payload.Session,
-		GroupID:       event.GroupID,
+		SubjectUserID: last.event.UserID,
+		Session:       last.payload.Session,
+		GroupID:       last.event.GroupID,
 		Now:           time.Now(),
 		MaxCandidates: 40,
 		ExcludeKinds:  []MemoryKind{MemoryKindThread},
@@ -212,36 +300,40 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 		return fmt.Errorf("load existing memories: %w", err)
 	}
 	existing := mergeStructuredMemories(relevant, important, 40)
+	current := memoryGateEventFromMessage(last.event, last.text)
 	gatePayload := memoryGatePayload{
-		Current:          memoryGateEventFromMessage(event, text),
-		RecentMessages:   r.memoryGateRecentEvents(event),
-		ExistingMemories: memoryGateExistingMemories(existing, event.UserID),
+		Current:          &current,
+		RecentMessages:   r.memoryGateRecentEvents(last.event),
+		ExistingMemories: memoryGateExistingMemories(existing, last.event.UserID),
+	}
+	if len(sources) > 1 {
+		// 多条时 current 不再是单数：整批按时间顺序给出，模型用 source_index
+		// 标注每条候选出自哪一条。current 留空，避免同一条消息出现两次。
+		gatePayload.Current = nil
+		batch := make([]memoryGateEvent, 0, len(sources))
+		for _, source := range sources {
+			batch = append(batch, memoryGateEventFromMessage(source.event, source.text))
+		}
+		gatePayload.CurrentBatch = batch
+		// 攒批的这几条本来就在最近历史里，不必再作为上下文重复一遍。
+		gatePayload.RecentMessages = memoryGateEventsExcluding(gatePayload.RecentMessages, batch)
 	}
 	payloadJSON, err := json.Marshal(gatePayload)
 	if err != nil {
 		return err
 	}
+	instruction := "请对当前消息执行记忆门控。上下文 JSON：\n"
+	if len(sources) > 1 {
+		instruction = "请对 current_batch 里的每一条消息执行记忆门控，每条候选用 source_index 标明出自第几条（从 0 开始）。上下文 JSON：\n"
+	}
 	messages := []llm.Message{
 		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana 的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
-
-必须遵守：
-1. 逐句理解语义、指代、引用和最近上下文，不得用关键词、前缀、子串或正则机械判断。
-2. 只记录关于当前发言者的稳定事实、持续偏好、长期交互要求，或未来仍有明显价值的重要情景。普通问题、一次性任务、寒暄、玩梗、短暂情绪、媒体占位、链接、机器人回答、未经证实的第三方传闻都不记。当前任务里的格式要求、分析角度、修改意见、验收条件和临时约束即使表达得很明确，也只属于工作记忆；除非语义明确要求今后跨话题默认遵循或长期记住，否则绝不能写成 instruction。
-3. 提醒、订阅、待办已有独立任务系统，不要重复写成长期记忆。好感度也由独立关系系统维护。
-4. source_type=explicit 只用于当前发言者直接明确陈述；需要结合上下文推断时用 inferred。inferred 必须 confidence>=0.90，拿不准就不输出。
-5. 每条记忆必须有稳定且颗粒度足够细的 key，例如 preference.food.spicy、profile.pet.cat、instruction.reply_style。更新、否定或要求忘记已有记忆时必须复用 existing_memories 中的原 key；不要用笼统的 profile、preference、chat 作为 key。
-6. action=upsert 表示新增、确认或更新；action=forget 只用于当前发言者明确要求忘记、撤销或纠正已有记忆。forget 时 content 可以为空。
-7. kind 只能是 fact、preference、episode、instruction。instruction 只表示跨会话长期有效的交互规则，不表示本次任务要求。episode 只用于重要的一次性经历，默认 retention_days=90；稳定事实和偏好可以为 0 表示不过期。
-8. visibility=session 表示只在当前私聊或群可见；visibility=user 只适用于当前发言者明确陈述、非敏感且跨会话确有帮助的稳定事实/偏好。医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等 sensitive=true，且必须 visibility=session。
-9. importance 和 confidence 均为 0 到 1。只有 importance>=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。
-10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。
-11. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`),
+			Role:    llm.RoleSystem,
+			Content: memoryGateSystemPrompt,
 		},
 		{
 			Role:    llm.RoleUser,
-			Content: "请对当前消息执行记忆门控。上下文 JSON：\n" + string(payloadJSON),
+			Content: instruction + string(payloadJSON),
 		},
 	}
 	raw, err := r.runLLMMemoryProvider(ctx, func(client LLMProvider) (string, error) {
@@ -257,20 +349,55 @@ func (r *Runtime) processEventMemoryJob(ctx context.Context, store StructuredMem
 	if len(candidates) == 0 {
 		return nil
 	}
-	_, err = store.ApplyMemoryCandidates(ctx, MemoryWriteRequest{
-		SubjectUserID:   strings.TrimSpace(event.UserID),
-		SubjectName:     strings.TrimSpace(event.SenderNameOrID()),
-		Session:         payload.Session,
-		EventKind:       event.Kind,
-		GroupID:         event.GroupID,
-		SourceMessageID: event.MessageID,
-		SourceEventTime: memoryEventTime(event),
-		Candidates:      candidates,
-	})
-	if err != nil {
-		return fmt.Errorf("apply memory candidates: %w", err)
+	grouped := make([][]MemoryCandidate, len(sources))
+	for _, candidate := range candidates {
+		// 没标或标歪了都归到最后一条：它是最新的那条，出处写错时的影响最小。
+		index := len(sources) - 1
+		if candidate.SourceIndex != nil && *candidate.SourceIndex >= 0 && *candidate.SourceIndex < len(sources) {
+			index = *candidate.SourceIndex
+		}
+		grouped[index] = append(grouped[index], candidate)
+	}
+	for index, source := range sources {
+		if len(grouped[index]) == 0 {
+			continue
+		}
+		_, err = store.ApplyMemoryCandidates(ctx, MemoryWriteRequest{
+			SubjectUserID:   strings.TrimSpace(source.event.UserID),
+			SubjectName:     strings.TrimSpace(source.event.SenderNameOrID()),
+			Session:         source.payload.Session,
+			EventKind:       source.event.Kind,
+			GroupID:         source.event.GroupID,
+			SourceMessageID: source.event.MessageID,
+			SourceEventTime: memoryEventTime(source.event),
+			Candidates:      grouped[index],
+		})
+		if err != nil {
+			return fmt.Errorf("apply memory candidates: %w", err)
+		}
 	}
 	return nil
+}
+
+// memoryGateEventsExcluding 去掉已经出现在批次里的那几条，按 message_id 比对。
+func memoryGateEventsExcluding(items []memoryGateEvent, batch []memoryGateEvent) []memoryGateEvent {
+	if len(items) == 0 || len(batch) == 0 {
+		return items
+	}
+	seen := make(map[string]bool, len(batch))
+	for _, item := range batch {
+		if item.MessageID != "" {
+			seen[item.MessageID] = true
+		}
+	}
+	kept := items[:0]
+	for _, item := range items {
+		if item.MessageID != "" && seen[item.MessageID] {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
 }
 
 func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredMemoryStore, job MemoryJob) error {

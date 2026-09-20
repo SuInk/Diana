@@ -147,7 +147,7 @@ func dianaImageStartedMessage(request dianaImageToolRequest, result dianaImageTo
 	return fmt.Sprintf("开始%s，完成后我会把结果发出来。", action)
 }
 
-// InputSchema 的 operation 枚举按当前关系等级裁剪：没解锁的操作压根不出现在
+// InputSchema 的 operation 枚举按当前可用能力裁剪：不可用的操作压根不出现在
 // 参数里，比在描述里说明「你没有权限」更省事，模型也不会去试。
 func (t *dianaImageTool) InputSchema() map[string]any {
 	operations := make([]string, 0, 2)
@@ -246,13 +246,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	}
 	switch operation {
 	case "generate":
-		if !t.relationship.AllowImageGeneration {
-			return dianaImageToolRequest{}, fmt.Errorf("%s", relationshipPermissionDenied(t.relationship, "图片生成", relationshipImageTierName))
-		}
 	case "edit":
-		if !t.relationship.AllowImageEditing {
-			return dianaImageToolRequest{}, fmt.Errorf("%s", relationshipPermissionDenied(t.relationship, "图片编辑", relationshipImageTierName))
-		}
 	default:
 		return dianaImageToolRequest{}, fmt.Errorf("operation 必须是 generate 或 edit")
 	}

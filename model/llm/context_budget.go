@@ -632,30 +632,57 @@ func EstimateRequestInputTokens(req GenerateRequest) int64 {
 	return estimateMessagesTokens(req.Messages) + estimateToolDefinitionsTokens(req.Tools, req.ToolChoice)
 }
 
+// estimateTextTokens 按字符类别估算 token 数。
+//
+// 非 ASCII 这一档原来按「每字 2 token」算，注释说这是保守取值。对中文来说它不是
+// 保守，是错得离谱：常用汉字实测约 0.85 token/字，2.0 高估了两倍半。拿 1223 条
+// 线上请求（字符计数 + 供应商回报的 input_tokens，抽样见
+// testdata/token_estimate_samples.json）做最小二乘，系数是 ASCII 0.241、
+// 非 ASCII 0.847；旧算法的相对误差中位数 +97.7%、p90 +153.5%，96% 的样本高估
+// 超过一半。
+//
+// 高估不是「留余量」这么轻巧。请求本来装得下却被判成超预算，上游会白跑两次摘要
+// 模型、丢掉用户刚发的图，还会就地改写历史消息——前缀一变，整条 prompt 的 KV
+// cache 全作废，每轮重新 prefill 六万多 token。线上主 agent 调用的
+// cached_input_tokens 长期是 0，根因就在这里。
+//
+// 现在 ASCII 保留 3 字符 1 token（实测 4.14，留一截余量），非 ASCII 取 7/8
+// （实测 0.847，同样略微偏保守）。整体相对偏差中位 +10.6%、p90 +23.7%，仍然偏
+// 保守，但不再制造假超限。按连续同类段累加再取整，避免逐字向上取整把偏差重新引
+// 回来。
 func estimateTextTokens(text string) int64 {
-	var total int64
-	var asciiRun int64
-	flushASCII := func() {
+	var total, asciiRun, wideRun int64
+	flush := func() {
 		if asciiRun > 0 {
-			// Three ASCII characters per token is conservative for prose, JSON,
-			// URLs, and tool output without treating every byte as a full token.
 			total += (asciiRun + 2) / 3
 			asciiRun = 0
 		}
+		if wideRun > 0 {
+			total += (wideRun*7 + 7) / 8
+			wideRun = 0
+		}
 	}
 	for _, value := range text {
-		if value <= unicode.MaxASCII {
+		switch {
+		case value <= unicode.MaxASCII:
+			if wideRun > 0 {
+				flush()
+			}
 			asciiRun++
-			continue
-		}
-		flushASCII()
-		if value > 0xffff {
-			total += 4
-		} else {
-			total += 2
+		case value > 0xffff:
+			// 星区字符基本是表情和罕用字，按两个宽字符计。
+			if asciiRun > 0 {
+				flush()
+			}
+			wideRun += 2
+		default:
+			if asciiRun > 0 {
+				flush()
+			}
+			wideRun++
 		}
 	}
-	flushASCII()
+	flush()
 	return total
 }
 

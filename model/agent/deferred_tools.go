@@ -171,7 +171,7 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 	for _, name := range requested {
 		tool, ok := l.registry.Get(name)
 		if !ok || name == "" {
-			return "", fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
+			return "", l.unavailableToolError(name)
 		}
 		schema, err := snapshotToolSchema(tool)
 		if err != nil {
@@ -206,6 +206,22 @@ func (l *deferredToolLoader) Run(_ context.Context, input map[string]any) (strin
 	return string(result), nil
 }
 
+// 名字取不到时把两种原因分开：查无此工具要换一个名字，没权限则换名字也没用，
+// 得让模型改口告诉用户，而不是在协议修复次数里对着同一个名字空转。
+func (l *deferredToolLoader) unavailableToolError(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("工具名不能为空；请从目录里选一个名称")
+	}
+	if l.registry.PolicyDenied(name) {
+		return deniedToolError(name)
+	}
+	return fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
+}
+
+func deniedToolError(name string) error {
+	return fmt.Errorf("工具 %q 当前会话没有权限使用：它只对主人开放，或者没有对群成员开放。不要重试，直接说明这件事需要主人来做", name)
+}
+
 // dispatch expands only the internal action. Provider calls and IDs stay untouched.
 func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 	if action.Tool == ToolsExecuteToolName {
@@ -222,6 +238,17 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		}
 		action.Tool, action.Input = name, cloneDeferredInput(input).(map[string]any)
 		schema, loaded := l.loaded[name]
+		if !loaded && l.core[name] {
+			// 常驻工具本来就能直接调用，不进目录也不进 loaded，于是把它裹进
+			// tools_execute 时会撞上「未在本轮加载」。这句话对常驻工具是死路：模型照着
+			// 去 tools_load，那一步对常驻工具不登记加载状态，回来还是同一个错，一直耗到
+			// 协议修复次数用尽（线上 browser_render 就这么连撞两次）。信封拆开照常执行。
+			if tool, ok := l.registry.Get(name); ok {
+				if current, err := snapshotToolSchema(tool); err == nil {
+					schema, loaded = current, true
+				}
+			}
+		}
 		if !loaded {
 			return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools_load，再 tools_execute", name)
 		}
@@ -229,6 +256,9 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		input = action.Input
 		tool, ok := l.registry.Get(name)
 		if !ok {
+			if l.registry.PolicyDenied(name) {
+				return action, deniedToolError(name)
+			}
 			return action, fmt.Errorf("工具 %q 已移除或禁用，请重新 tools_load", name)
 		}
 		if err := validateToolInput(schema, input); err != nil {

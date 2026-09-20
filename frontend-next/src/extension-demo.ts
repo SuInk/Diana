@@ -3,16 +3,21 @@ import type { ManagedExtension } from './api';
 const entries: Array<ManagedExtension & {content?:string;config?:Record<string,any>}> = [
   {kind:'skill',id:'skill:bot-protocol',name:'bot-protocol',description:'平台群操作与 Diana 回复设置',source:'builtin:bot-protocol',managed:false,enabled:true,content:'---\nname: bot-protocol\ndescription: 平台协议与回复配置\n---\n使用平台协议工具查询群信息，使用 bot_config 修改回复设置。'},
   {kind:'skill',id:'skill:daily-summary',name:'daily-summary',description:'整理讨论中的待办与结论',source:'managed',managed:true,enabled:true,content:'---\nname: daily-summary\ndescription: 整理讨论中的待办与结论\n---\n根据提供的讨论内容整理待办。'},
+  {kind:'skill',id:'skill:release-notes',name:'release-notes',description:'按仓库发布记录整理更新说明',source:'managed',managed:true,enabled:true,bundled:true,content:'---\nname: release-notes\ndescription: 按仓库发布记录整理更新说明\n---\n用 browser_render 读取 releases 页面，再按模板整理。'},
   {kind:'mcp',id:'mcp:notes',name:'notes',description:'演示笔记服务',source:'https://example.com/mcp',transport:'streamable_http',managed:true,enabled:true,config:{url:'https://example.com/mcp',headers:{},env:{},enabled:true,startup_timeout_sec:20,tool_timeout_sec:60}},
 ];
 const overrides:Record<string,Record<string,boolean>>={};
+const memberAccess:Record<string,Record<string,boolean>>={};
+const memberAudience:Record<string,Record<string,{min_role?:string;users:string[];groups:string[]}>>={};
 export function extensionDemoResponse(method:string,profile:string,body:Record<string,any>){
  const operation=method==='GET'?'list':body.operation;
- if(operation==='list')return {items:entries.map(({content,config,...item})=>({...item,enabled:item.enabled&&(overrides[profile]?.[item.id]??true)}))};
+ if(operation==='list')return {items:entries.map(({content,config,...item})=>({...item,enabled:item.enabled&&(overrides[profile]?.[item.id]??true),...(profile?{members_enabled:memberAccess[profile]?.[item.id]??false,...(memberAudience[profile]?.[item.id]?{member_audience:memberAudience[profile][item.id]}:{})}:{})}))};
  const item=entries.find(i=>i.kind===body.kind&&i.name===body.name);
  if(operation==='read'){if(!item)throw Error('扩展不存在');return item.kind==='skill'?{content:item.content,managed:item.managed}:{config:item.config,configured_headers:[],configured_env:[]}}
  if(operation==='test')throw Error('演示模式不连接外部 MCP，请在真实部署中测试');
  if(operation==='enabled'){if(!item||!body.profile_id)throw Error('请选择机器人');(overrides[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
+ if(operation==='members'){if(!item)throw Error('扩展不存在');if(!body.profile_id)throw Error('请选择机器人');(memberAccess[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
+ if(operation==='audience'){if(!item)throw Error('扩展不存在');if(!body.profile_id)throw Error('请选择机器人');const users=(body.audience?.users||[]).filter(Boolean),groups=(body.audience?.groups||[]).filter(Boolean);const minRole=body.audience?.min_role||'';if(minRole&&minRole!=='admin')throw Error('身份门槛只支持 admin');const store=(memberAudience[body.profile_id]??={});if(users.length||groups.length||minRole)store[item.id]={...(minRole?{min_role:minRole}:{}),users,groups};else delete store[item.id];return {ok:true}}
  if(operation==='delete'){if(!item?.managed)throw Error('只读扩展不能删除');entries.splice(entries.indexOf(item),1);return {ok:true}}
  if(operation==='save'){
   if(body.source_url)throw Error('演示模式请直接导入 SKILL.md 正文');

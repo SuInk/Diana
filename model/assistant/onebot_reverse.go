@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +50,9 @@ type OneBotReverseServer struct {
 	lastUnauthorizedReason string
 	lastUnauthorizedClient string
 	lastUnauthorizedLog    time.Time
+	lastConflictClient     string
+	lastConflictLog        time.Time
+	connectedAt            time.Time
 	// 同上，机器人停用期间接入端也会几秒一次地重连。
 	lastDetachedClient string
 	lastDetachedLog    time.Time
@@ -140,7 +142,26 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		s.status.LastConnectionEvent = "duplicate_client_conflict"
 		s.status.LastConnectionEventTime = &now
 		s.status.UpdatedAt = now
+		// 连接位被一个不再收发的连接占住时，接入端每次重连都撞这里。以前这条路径
+		// 一行日志都不写：机器人整段时间收不到消息，日志里却干干净净，只能手动发
+		// 一次握手才看得出来。和鉴权失败同样按分钟限流记一条。
+		shouldLog := s.lastConflictClient != clientFingerprint ||
+			s.lastConflictLog.IsZero() ||
+			now.Sub(s.lastConflictLog) >= time.Minute
+		if shouldLog {
+			s.lastConflictClient = clientFingerprint
+			s.lastConflictLog = now
+		}
+		holder := s.status.ConnectionOwner
+		heldFor := time.Duration(0)
+		if !s.connectedAt.IsZero() {
+			heldFor = now.Sub(s.connectedAt).Truncate(time.Second)
+		}
 		s.connMu.Unlock()
+		if shouldLog {
+			log.Printf("onebot reverse handshake rejected: reason=duplicate_client_conflict client=%s holder=%s held_for=%s",
+				clientFingerprint, orUnknownClient(holder), heldFor)
+		}
 		http.Error(w, "onebot reverse websocket already has an active client", http.StatusConflict)
 		return
 	}
@@ -183,6 +204,7 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	s.status.LastError = ""
 	s.status.ConnectionEpoch++
 	s.status.ConnectionOwner = clientFingerprint
+	s.connectedAt = now
 	s.status.LastConnectionEvent = "connection_opened"
 	s.status.LastConnectionEventTime = &now
 	s.status.UpdatedAt = now
@@ -201,27 +223,10 @@ func (s *OneBotReverseServer) Send(ctx context.Context, msg OutgoingMessage) err
 }
 
 // SendWithResult sends a message and preserves the OneBot response message_id.
+// 正反向连接发的是同一套 OneBot action，组包逻辑共用 sendOneBotMessage：各写一份
+// 的时候，临时会话这类新参数只会被加到其中一份上，另一条连接静悄悄地少一半能力。
 func (s *OneBotReverseServer) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
-	if strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
-		return nil, nil
-	}
-	params := map[string]any{"message": buildOutgoingSegments(msg)}
-	action := "send_private_msg"
-	if msg.GroupID != "" {
-		action = "send_group_msg"
-		groupID, err := strconv.ParseInt(msg.GroupID, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		params["group_id"] = groupID
-	} else {
-		userID, err := strconv.ParseInt(msg.UserID, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		params["user_id"] = userID
-	}
-	return s.CallAPI(ctx, action, params)
+	return sendOneBotMessage(ctx, msg, s.CallAPI)
 }
 
 func (s *OneBotReverseServer) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
@@ -496,6 +501,13 @@ func oneBotClientFingerprint(r *http.Request) string {
 	}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("client-%x", sum[:8])
+}
+
+func orUnknownClient(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 // handlerAttached 报告有没有运行中的通道登记了事件处理器。没有就说明用这条反连

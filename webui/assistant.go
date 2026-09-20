@@ -166,6 +166,17 @@ type groupAdminConfigResponse struct {
 	ExpiresAt time.Time               `json:"expires_at,omitempty"`
 	Config    assistant.GroupConfig   `json:"config"`
 	Plugins   []assistant.PluginState `json:"plugins"`
+	// Extensions 只给群管理员看「有哪些扩展、机器人给到哪一档」，不带工具清单。
+	Extensions []groupAdminExtension `json:"extensions"`
+}
+
+type groupAdminExtension struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Bundled     bool   `json:"bundled,omitempty"`
+	BotTier     string `json:"bot_tier"`
 }
 
 type groupTestResponse struct {
@@ -179,7 +190,10 @@ type groupTestResponse struct {
 	Status       assistant.RuntimeStatus `json:"status"`
 }
 
-const minBotTokenChars = 16
+// 反向 WebSocket 的监听器只绑在本机，token 防的是同机上的其他进程冒连，不是公网
+// 爆破。16 位挡掉了不少既有的、够用的 token（miku 线上那个就是 15 位），升级后只能
+// 重新生成并同步改客户端。8 位是个能拦住手滑写个 "1234" 的下限。
+const minBotTokenChars = 8
 
 // NewBotHandler 创建 BotHandler 实例。
 func NewBotHandler(ctx context.Context, runtime BotRuntime) *BotHandler {
@@ -294,6 +308,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/users/:id", h.getAssistantUser)
 	router.PUT(base+"/users/:id", h.editAssistantUser)
 	router.DELETE(base+"/users/:id", h.editAssistantUser)
+	router.DELETE(base+"/users/:id/memories", h.clearAssistantUserMemories)
+	router.DELETE(base+"/users/:id/memories/:memory", h.clearAssistantUserMemories)
 	h.registerPersonaRoutes(router, base)
 	h.registerCharacterCardRoutes(router, base)
 	h.registerWorldBookRoutes(router, base)

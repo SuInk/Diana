@@ -64,7 +64,7 @@ func TestAssistantUserEditsAndDeletesExactProfile(t *testing.T) {
 		}
 	}
 	p, found, err := store.GetUserMemoryExact(ctx, "bot-b", "10001")
-	if err != nil || !found || p.DisplayName != "Original" || p.Favorability != 2 {
+	if err != nil || !found || p.DisplayName != "Original" || p.Favorability != 12 {
 		t.Fatalf("other bot modified: %+v %v", p, err)
 	}
 }

@@ -19,17 +19,19 @@ func sortedKeys(values map[string]string) []string {
 }
 
 type ExtensionAdminRequest struct {
-	Operation    string         `json:"operation"`
-	Kind         string         `json:"kind"`
-	Name         string         `json:"name"`
-	ProfileID    string         `json:"profile_id,omitempty"`
-	Enabled      bool           `json:"enabled"`
-	Content      string         `json:"content,omitempty"`
-	SourceURL    string         `json:"source_url,omitempty"`
-	Replace      bool           `json:"replace,omitempty"`
-	Config       map[string]any `json:"config,omitempty"`
-	ClearHeaders []string       `json:"clear_headers,omitempty"`
-	ClearEnv     []string       `json:"clear_env,omitempty"`
+	Operation string         `json:"operation"`
+	Kind      string         `json:"kind"`
+	Name      string         `json:"name"`
+	ProfileID string         `json:"profile_id,omitempty"`
+	Enabled   bool           `json:"enabled"`
+	Content   string         `json:"content,omitempty"`
+	SourceURL string         `json:"source_url,omitempty"`
+	Replace   bool           `json:"replace,omitempty"`
+	Config    map[string]any `json:"config,omitempty"`
+	// Audience 只用于 audience 操作：限定这个扩展开放给哪些人、哪些群。
+	Audience     ExtensionAudience `json:"audience,omitempty"`
+	ClearHeaders []string          `json:"clear_headers,omitempty"`
+	ClearEnv     []string          `json:"clear_env,omitempty"`
 }
 
 func extensionAdminManager(cfg Config) (*ExtensionManager, error) {
@@ -61,11 +63,23 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if err != nil {
 			return nil, err
 		}
+		audiences, err := LoadExtensionAudiences(m.cfg.WorkDir, req.ProfileID)
+		if err != nil {
+			return nil, err
+		}
 		for i := range states {
 			available := states[i].Enabled
 			states[i].Available = &available
 			if enabled, ok := overrides[states[i].ID]; ok {
 				states[i].Enabled = states[i].Enabled && enabled
+			}
+			if states[i].Kind != ExtensionKindBuiltin && req.ProfileID != "" {
+				members := overrides[MemberOverrideKey(states[i].ID)]
+				states[i].MembersEnabled = &members
+				if audience, ok := audiences[states[i].ID]; ok && !audience.Empty() {
+					value := audience
+					states[i].MemberAudience = &value
+				}
 			}
 		}
 		return map[string]any{"items": states}, nil
@@ -83,6 +97,42 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 			return nil, fmt.Errorf("扩展不存在")
 		}
 		return nil, saveExtensionOverride(m.cfg.WorkDir, req.ProfileID, req.Kind+":"+req.Name, req.Enabled)
+	case "members":
+		if req.ProfileID == "" {
+			return nil, fmt.Errorf("请选择机器人后调整权限")
+		}
+		kind := ExtensionKind(req.Kind)
+		if kind != ExtensionKindMCP && kind != ExtensionKindSkill {
+			return nil, fmt.Errorf("只有 MCP 服务和 Skill 支持群成员权限")
+		}
+		found := false
+		for _, s := range m.Extensions() {
+			if s.Kind == kind && s.Name == req.Name {
+				found = true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("扩展不存在")
+		}
+		return nil, saveExtensionOverride(m.cfg.WorkDir, req.ProfileID, MemberOverrideKey(req.Kind+":"+req.Name), req.Enabled)
+	case "audience":
+		if req.ProfileID == "" {
+			return nil, fmt.Errorf("请选择机器人后调整权限")
+		}
+		kind := ExtensionKind(req.Kind)
+		if kind != ExtensionKindMCP && kind != ExtensionKindSkill {
+			return nil, fmt.Errorf("只有 MCP 服务和 Skill 支持群成员权限")
+		}
+		found := false
+		for _, s := range m.Extensions() {
+			if s.Kind == kind && s.Name == req.Name {
+				found = true
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("扩展不存在")
+		}
+		return nil, saveExtensionAudience(m.cfg.WorkDir, req.ProfileID, req.Kind+":"+req.Name, req.Audience)
 	}
 	if req.Kind == "skill" {
 		switch req.Operation {
