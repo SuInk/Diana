@@ -402,6 +402,8 @@ type Runtime struct {
 	updatedAt                 time.Time
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
+	browserControl            agent.BrowserControlBridge
+	browserBox                agent.BuiltinBrowserBridge
 	media                     *MediaStore
 	members                   *memberCache
 	now                       func() time.Time
@@ -529,6 +531,45 @@ func (r *Runtime) SetEventListener(listener EventListener) {
 	r.mu.Lock()
 	r.eventListener = listener
 	r.mu.Unlock()
+}
+
+// SetBrowserControl 注入浏览器控制扩展的控制面。没注入时 browser_ext_* 那组
+// 工具在任何机器人上都不登记，和把这一档关掉等价。
+func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
+	r.mu.Lock()
+	r.browserControl = bridge
+	r.mu.Unlock()
+}
+
+// SetBrowserBox 注入内置浏览器。没注入时 browser_* 那组工具沿用机器人配置里的
+// 外部 CDP 地址，行为和加这一档之前一样。
+func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
+	r.mu.Lock()
+	r.browserBox = bridge
+	r.mu.Unlock()
+}
+
+// browserBoxFor 同样要两边都点头：全局起了内置浏览器，这台机器人也开了那档开关。
+func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
+	if !cfg.AgentBrowserBoxEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserBox
+	r.mu.RUnlock()
+	return bridge
+}
+
+// browserControlFor 只在两边都点头时才把控制面交出去：全局注入了控制面，
+// 并且这台机器人自己那档开关也开着。
+func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
+	if !cfg.AgentBrowserControlEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserControl
+	r.mu.RUnlock()
+	return bridge
 }
 
 func (r *Runtime) SetPrivateMessageInterceptor(interceptor PrivateMessageInterceptor) {
@@ -4215,6 +4256,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
+			BrowserControl:             r.browserControlFor(cfg),
+			BuiltinBrowser:             r.browserBoxFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry

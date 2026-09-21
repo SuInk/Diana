@@ -52,7 +52,13 @@ Docker Compose (prebuilt image; no clone required). Run once in your deployment 
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
-For subsequent updates, run in the same directory:
+If you don't need page rendering, media downloads, or OCR, use the slim image (~67 MB to pull, versus ~447 MB for the full one):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_VARIANT=slim sh
+```
+
+The variant is recorded in `.env` in the deployment directory. For subsequent updates, run in the same directory:
 
 ```sh
 docker compose pull && docker compose up -d

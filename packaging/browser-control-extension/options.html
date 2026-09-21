@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Diana 浏览器控制</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #111827;
+        --muted: #6b7280;
+        --line: #d1d5db;
+        --bg: #ffffff;
+        --accent: #2563eb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e5e7eb;
+          --muted: #9ca3af;
+          --line: #374151;
+          --bg: #111827;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        max-width: 640px;
+        font: 14px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+      }
+      p.hint {
+        color: var(--muted);
+        margin: 0 0 20px;
+      }
+      label {
+        display: block;
+        margin: 14px 0 4px;
+        font-weight: 600;
+      }
+      input[type="text"],
+      input[type="password"] {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        box-sizing: border-box;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+      }
+      button {
+        padding: 8px 14px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: var(--accent);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      section {
+        margin-top: 24px;
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 6px 12px;
+        margin: 0;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        word-break: break-all;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Diana 浏览器控制</h1>
+    <p class="hint">
+      Diana 只能操作下面「已授权站点」里列出的页面，而且要你把这些站点的权限给这个扩展。
+      任何时候点一下工具栏图标，或按这一页的接管按钮，Diana 就会立刻停手。
+    </p>
+
+    <label for="server">Diana WebUI 地址</label>
+    <input id="server" type="text" placeholder="http://127.0.0.1:18080" autocomplete="off" />
+
+    <label for="token">控制令牌</label>
+    <input id="token" type="password" placeholder="dianabx_…" autocomplete="off" />
+
+    <label for="label">这台浏览器的备注</label>
+    <input id="label" type="text" placeholder="公司台式机 Chrome" autocomplete="off" />
+
+    <div class="row">
+      <button id="save" class="primary">保存并连接</button>
+      <button id="disconnect">断开</button>
+      <button id="grant">授权这些站点</button>
+      <button id="takeover">人工接管</button>
+    </div>
+
+    <section>
+      <dl>
+        <dt>扩展 ID</dt>
+        <dd><code id="extension-id">—</code></dd>
+        <dt>连接状态</dt>
+        <dd id="connection">—</dd>
+        <dt>授权档位</dt>
+        <dd id="mode">—</dd>
+        <dt>已授权站点</dt>
+        <dd id="hosts">—</dd>
+        <dt>最近一次错误</dt>
+        <dd id="error">—</dd>
+      </dl>
+      <p class="hint" style="margin-top: 16px">
+        把上面的扩展 ID 填进 Diana 的「浏览器控制 → 允许的来源」里，填成
+        <code>chrome-extension://&lt;扩展 ID&gt;</code>，否则控制面不会接受这个扩展的连接。
+      </p>
+    </section>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
