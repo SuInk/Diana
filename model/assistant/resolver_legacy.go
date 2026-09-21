@@ -110,7 +110,7 @@ func (p *ResolverPlugin) resolveDouyin(ctx context.Context, req PluginRequest, r
 	if strings.TrimSpace(text) == nickname+"识别：抖音，" {
 		text = fmt.Sprintf("%s识别：抖音", nickname)
 	}
-	if resolverDouyinMediaType(detail.AwemeType) == "image" {
+	if douyinDetailIsImagePost(detail) {
 		images := douyinMediaImageURLs(detail)
 		nodes := []OutgoingMessage{{Text: text}}
 		for _, imageURL := range images {
