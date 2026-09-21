@@ -136,6 +136,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		})
 	}
 	registry.RegisterBrowserTools(root, cfg)
+	registry.RegisterBrowserControlTools(root, cfg)
 	return registry, nil
 }
 
@@ -371,6 +372,7 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 	base := browserToolBase{
 		root:     root,
 		cdpURL:   cfg.BrowserCDPURL,
+		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
 		maxChars: cfg.MaxToolOutputChars,
 	}

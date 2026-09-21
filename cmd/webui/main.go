@@ -31,6 +31,8 @@ import (
 
 	"github.com/SuInk/diana/internal/dlog"
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/browserbox"
+	"github.com/SuInk/diana/model/browserctl"
 	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/llmauth"
@@ -627,6 +629,24 @@ func main() {
 	openAPIHandler := webui.NewOpenAPIHandler(webui.NewOpenAPIKeyManager(sqliteStore), botRuntime, plugins)
 	openAPIHandler.SetLogStore(sqliteStore)
 	openAPIHandler.Register(router)
+	// 浏览器控制扩展：/api/browser-control 下的管理接口走会话鉴权，
+	// /browser-control/v1/socket 由令牌加来源白名单自行鉴权。默认全关，
+	// 策略里没打开总开关、没列站点之前，工具那一侧连注册都不会发生。
+	browserControlRegistry := browserctl.NewRegistry(ctx, sqliteStore)
+	browserControlHub := browserctl.NewHub(browserControlRegistry)
+	browserControlHandler := webui.NewBrowserControlHandler(browserControlRegistry, browserControlHub)
+	browserControlHandler.SetLogStore(sqliteStore)
+	browserControlHandler.Register(router)
+	botRuntime.SetBrowserControl(browserControlHub)
+	defer browserControlHub.CloseAll()
+	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
+	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
+	browserBoxManager := browserbox.New(ctx, sqliteStore, dataDir)
+	browserBoxHandler := webui.NewBrowserBoxHandler(browserBoxManager)
+	browserBoxHandler.SetLogStore(sqliteStore)
+	browserBoxHandler.Register(router)
+	botRuntime.SetBrowserBox(browserBoxManager)
+	defer browserBoxManager.Stop()
 	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
 	// main 收尾时判断 restartRequested 原地重启。
 	var restartRequested atomic.Bool
