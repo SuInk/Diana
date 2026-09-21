@@ -4,11 +4,18 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // MCPPreset 是一条内置的 MCP 接入模板：告诉界面要问用户哪几个字段，以及怎么
@@ -35,8 +42,22 @@ type MCPPresetTransport struct {
 	Label  string           `json:"label"`
 	Hint   string           `json:"hint,omitempty"`
 	Fields []MCPPresetField `json:"fields"`
-	config func(map[string]string) map[string]any
+	// Verifiable 告诉界面这一种接法能不能在保存前验凭据，好决定要不要给「检测」
+	// 按钮。它由 MCPPresetList 按 verify 是否存在填，不手写，免得和实现对不上。
+	Verifiable bool `json:"verifiable,omitempty"`
+	config     func(map[string]string) map[string]any
+	// values 是 config 的反向：从已保存的配置里取回非机密字段，好让编辑时那张表
+	// 是填好的。机密字段永远不回头取，它们在界面上留空表示「保持原值」。
+	values func(mcpServerConfig) map[string]string
+	// verify 拿拼好的配置去问一次服务端，确认这套凭据当真能用。收的是最终配置而
+	// 不是表单值：编辑时令牌可以留空表示沿用旧的，只有配置里才有那个旧值。没有
+	// verify 的接法就是没法在保存前验证（例如令牌根本不经 Diana 的手）。
+	verify func(context.Context, mcpServerConfig) (string, error)
 }
+
+// ErrPresetCredentialRejected 表示服务端明确拒绝了这套凭据——令牌错了或过期了。
+// 和「连不上」分开：前者不该保存，后者只是这台机器现在够不着，值得放行。
+var ErrPresetCredentialRejected = errors.New("凭据被拒绝")
 
 type MCPPresetField struct {
 	Key         string `json:"key"`
@@ -87,6 +108,15 @@ func giteaMCPPreset() MCPPreset {
 						},
 					}
 				},
+				values: func(cfg mcpServerConfig) map[string]string {
+					values := map[string]string{"host": cfg.Env["GITEA_HOST"]}
+					// 自带的那份是留空的意思，回填成绝对路径会让人以为自己填过。
+					if command := strings.TrimSpace(cfg.Command); command != "" && command != bundledGiteaMCPCommand() {
+						values["command"] = command
+					}
+					return values
+				},
+				verify: verifyGiteaToken,
 			},
 			{
 				ID:    "http",
@@ -103,9 +133,119 @@ func giteaMCPPreset() MCPPreset {
 					}
 					return cfg
 				},
+				values: func(cfg mcpServerConfig) map[string]string {
+					return map[string]string{"url": cfg.URL}
+				},
+				// 这条接法的 Gitea 令牌配在对面那份 gitea-mcp 上，Diana 手里没有，
+				// 验不了；这里的 Authorization 是不是对，要连上去才知道，交给「测试连接」。
 			},
 		},
 	}
+}
+
+// verifyGiteaToken 拿填好的地址和令牌问一次 Gitea 的 /api/v1/user：能换回用户名
+// 才算这套凭据可用。不这么问的话，令牌错了在这里什么都看不出来——gitea-mcp 的
+// 握手和工具发现根本不碰令牌，「测试连接」照样是绿的，真正的 401 要等到某次对话
+// 里调用工具才冒出来。
+//
+// 这一个请求故意不走 netguard 的公网客户端：自建 Gitea 常常就在内网，按公网规则
+// 校验会把它们全挡掉，而这个地址是主人自己填的，填完 gitea-mcp 本来也要连它。
+// 代价是多了一个由管理员指定目标的出站请求，所以收窄到只此一种：固定 GET 这一条
+// 路径、不跟重定向、不回显响应内容，只取用户名。
+func verifyGiteaToken(ctx context.Context, cfg mcpServerConfig) (string, error) {
+	host := strings.TrimRight(strings.TrimSpace(cfg.Env["GITEA_HOST"]), "/")
+	token := strings.TrimSpace(cfg.Env["GITEA_ACCESS_TOKEN"])
+	if host == "" || token == "" {
+		return "", errors.New("请先填写实例地址和访问令牌")
+	}
+	parsed, err := url.Parse(host)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", fmt.Errorf("实例地址要是完整的 http(s) 地址，例如 https://git.example.com")
+	}
+	if parsed.User != nil {
+		return "", errors.New("实例地址里不要带用户名和密码")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.JoinPath("/api/v1/user").String(), nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Authorization", "token "+token)
+	request.Header.Set("Accept", "application/json")
+	client := &http.Client{
+		Timeout: 8 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			// 跟着跳就可能把令牌送去另一台主机，这里宁可报错让人把地址填对。
+			return http.ErrUseLastResponse
+		},
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("连不上 %s：%w", parsed.Host, err)
+	}
+	defer response.Body.Close()
+	switch {
+	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
+		return "", fmt.Errorf("%w：Gitea 不认这个访问令牌，请确认没填错、没过期，并且有读取用户信息的权限", ErrPresetCredentialRejected)
+	case response.StatusCode != http.StatusOK:
+		return "", fmt.Errorf("Gitea 返回 %s，请确认地址指向 Gitea 实例本身", response.Status)
+	}
+	var account struct {
+		Login string `json:"login"`
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("读取 Gitea 响应失败：%w", err)
+	}
+	if err := json.Unmarshal(body, &account); err != nil || strings.TrimSpace(account.Login) == "" {
+		return "", errors.New("这个地址没有返回 Gitea 的用户信息，请确认它指向 Gitea 实例本身")
+	}
+	return account.Login, nil
+}
+
+// presetTransportByID 找到某个预设的某种接法。
+func presetTransportByID(presetID, transportID string) (MCPPresetTransport, bool) {
+	for _, preset := range mcpPresets {
+		if preset.ID != presetID {
+			continue
+		}
+		for _, transport := range preset.Transports {
+			if transport.ID == transportID {
+				return transport, true
+			}
+		}
+	}
+	return MCPPresetTransport{}, false
+}
+
+// presetValuesFromConfig 把已保存的配置还原成预设表单里的非机密字段。
+func presetValuesFromConfig(cfg mcpServerConfig) map[string]string {
+	transport, ok := presetTransportByID(cfg.Preset, cfg.PresetTransport)
+	if !ok || transport.values == nil {
+		return map[string]string{}
+	}
+	values := transport.values(cfg)
+	for _, field := range transport.Fields {
+		if field.Secret {
+			delete(values, field.Key)
+		}
+	}
+	for key, value := range values {
+		if strings.TrimSpace(value) == "" {
+			delete(values, key)
+		}
+	}
+	return values
+}
+
+// presetVerifyConfig 验一遍这份配置。预设或接法没有 verify 时返回 false，调用方
+// 据此告诉用户「这条没法提前验」，而不是假装验过了。
+func presetVerifyConfig(ctx context.Context, cfg mcpServerConfig) (string, bool, error) {
+	transport, ok := presetTransportByID(cfg.Preset, cfg.PresetTransport)
+	if !ok || transport.verify == nil {
+		return "", false, nil
+	}
+	account, err := transport.verify(ctx, cfg)
+	return account, true, err
 }
 
 // bundledGiteaMCPCommand 指向随 Diana 一起发布的那份 gitea-mcp。它就放在主程序
@@ -138,14 +278,25 @@ func bundledCommandIn(dir, name string) string {
 
 // MCPPresetList 返回内置清单，供界面渲染。
 func MCPPresetList() []MCPPreset {
-	out := make([]MCPPreset, len(mcpPresets))
-	copy(out, mcpPresets)
+	out := make([]MCPPreset, 0, len(mcpPresets))
+	for _, preset := range mcpPresets {
+		transports := make([]MCPPresetTransport, 0, len(preset.Transports))
+		for _, transport := range preset.Transports {
+			transport.Verifiable = transport.verify != nil
+			transports = append(transports, transport)
+		}
+		preset.Transports = transports
+		out = append(out, preset)
+	}
 	return out
 }
 
 // mcpPresetConfig 按预设和接法拼出一份 MCP 配置。必填项缺一个就直接说是哪一个，
 // 不要等连接失败再让人回头猜。
-func mcpPresetConfig(presetID, transportID string, values map[string]string) (map[string]any, error) {
+//
+// storedSecrets 为真时，机密字段可以留空：编辑一条已经装好的服务时，令牌留空的
+// 意思是「沿用已保存的那个」，保存那段会把旧值填回来。
+func mcpPresetConfig(presetID, transportID string, values map[string]string, storedSecrets bool) (map[string]any, error) {
 	for _, preset := range mcpPresets {
 		if preset.ID != presetID {
 			continue
@@ -157,7 +308,7 @@ func mcpPresetConfig(presetID, transportID string, values map[string]string) (ma
 			clean := map[string]string{}
 			for _, field := range transport.Fields {
 				value := strings.TrimSpace(values[field.Key])
-				if field.Required && value == "" {
+				if field.Required && value == "" && !(field.Secret && storedSecrets) {
 					return nil, fmt.Errorf("请填写「%s」", field.Label)
 				}
 				clean[field.Key] = value

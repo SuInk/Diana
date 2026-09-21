@@ -4,6 +4,10 @@
 package agent
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,7 +18,7 @@ import (
 // 预设装出来的必须是一份能过校验的普通 MCP 配置，不然「一键装上」只是把错误
 // 推迟到连接的时候。
 func TestGiteaPresetProducesValidConfigs(t *testing.T) {
-	http, err := mcpPresetConfig("gitea", "http", map[string]string{"url": "http://127.0.0.1:8080/mcp"})
+	http, err := mcpPresetConfig("gitea", "http", map[string]string{"url": "http://127.0.0.1:8080/mcp"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +33,7 @@ func TestGiteaPresetProducesValidConfigs(t *testing.T) {
 		t.Fatalf("没填 Authorization 时不该带请求头：%#v", server.Headers)
 	}
 
-	stdio, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com", "token": "abc"})
+	stdio, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com", "token": "abc"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +49,7 @@ func TestGiteaPresetProducesValidConfigs(t *testing.T) {
 	}
 
 	// 填了可执行文件就按填的走，自己编译的版本不能被自带的那份顶掉。
-	custom, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com", "token": "abc", "command": "/opt/bin/gitea-mcp"})
+	custom, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com", "token": "abc", "command": "/opt/bin/gitea-mcp"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +64,7 @@ func TestGiteaPresetProducesValidConfigs(t *testing.T) {
 
 // 填了 Authorization 才带请求头，并且按填的原样带。
 func TestGiteaPresetKeepsAuthorizationHeader(t *testing.T) {
-	config, err := mcpPresetConfig("gitea", "http", map[string]string{"url": "http://127.0.0.1:8080/mcp", "authorization": "Bearer t"})
+	config, err := mcpPresetConfig("gitea", "http", map[string]string{"url": "http://127.0.0.1:8080/mcp", "authorization": "Bearer t"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,14 +79,14 @@ func TestGiteaPresetKeepsAuthorizationHeader(t *testing.T) {
 
 // 缺必填项要直接说缺哪个，不能等连接失败再让人回头猜。
 func TestPresetConfigReportsMissingField(t *testing.T) {
-	_, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com"})
+	_, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com"}, false)
 	if err == nil || !strings.Contains(err.Error(), "访问令牌") {
 		t.Fatalf("err = %v，应当点名缺的是访问令牌", err)
 	}
-	if _, err := mcpPresetConfig("gitea", "carrier-pigeon", nil); err == nil {
+	if _, err := mcpPresetConfig("gitea", "carrier-pigeon", nil, false); err == nil {
 		t.Fatal("不存在的接法应当报错")
 	}
-	if _, err := mcpPresetConfig("nope", "http", nil); err == nil {
+	if _, err := mcpPresetConfig("nope", "http", nil, false); err == nil {
 		t.Fatal("不存在的预设应当报错")
 	}
 }
@@ -141,5 +145,111 @@ func TestBundledGiteaMCPCommandPrefersNeighbourBinary(t *testing.T) {
 	}
 	if got := bundledCommandIn(filepath.Join(dir, "empty"), name); got != name {
 		t.Fatalf("目录里没有时应当退回裸名字：%q", got)
+	}
+}
+
+// giteaAPIStub 扮演一个 Gitea 实例：只认一个令牌，其余一律 401。
+func giteaAPIStub(t *testing.T, validToken string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/user" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "token "+validToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"login":"diana","id":7}`))
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// 令牌对不对，必须在保存前就能看出来。gitea-mcp 的握手和工具发现根本不碰令牌，
+// 只靠「测试连接」的话填错的令牌要到真正调用工具时才 401。
+func TestGiteaPresetVerifiesToken(t *testing.T) {
+	gitea := giteaAPIStub(t, "good-token")
+	config, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": gitea.URL, "token": "good-token"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := mcpServerConfigFromInput(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Preset, server.PresetTransport = "gitea", "stdio"
+	account, supported, err := presetVerifyConfig(context.Background(), server)
+	if err != nil || !supported {
+		t.Fatalf("有效令牌应当验证通过：account=%q supported=%v err=%v", account, supported, err)
+	}
+	if account != "diana" {
+		t.Fatalf("应当报出换到的用户名，实际 %q", account)
+	}
+
+	server.Env["GITEA_ACCESS_TOKEN"] = "stale-token"
+	if _, _, err := presetVerifyConfig(context.Background(), server); !errors.Is(err, ErrPresetCredentialRejected) {
+		t.Fatalf("过期令牌要被判成凭据问题，实际 %v", err)
+	}
+
+	// 连不上和令牌错必须分开：前者不该说人家令牌不对。
+	server.Env["GITEA_HOST"] = "http://127.0.0.1:1"
+	server.Env["GITEA_ACCESS_TOKEN"] = "good-token"
+	_, _, err = presetVerifyConfig(context.Background(), server)
+	if err == nil || errors.Is(err, ErrPresetCredentialRejected) {
+		t.Fatalf("连不上应当报成连接问题，实际 %v", err)
+	}
+
+	// 地址指到一个不是 Gitea 的服务上，要说清是地址的问题。
+	notGitea := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html>hello</html>"))
+	}))
+	defer notGitea.Close()
+	server.Env["GITEA_HOST"] = notGitea.URL
+	if _, _, err := presetVerifyConfig(context.Background(), server); err == nil || !strings.Contains(err.Error(), "Gitea") {
+		t.Fatalf("非 Gitea 地址应当点名地址不对，实际 %v", err)
+	}
+}
+
+// 编辑时那张表要能填好：非机密字段从配置里取回，令牌永远不回显。
+func TestGiteaPresetValuesForEditing(t *testing.T) {
+	config, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com", "token": "abc"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := mcpServerConfigFromInput(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Preset, server.PresetTransport = "gitea", "stdio"
+	values := presetValuesFromConfig(server)
+	if values["host"] != "https://git.example.com" {
+		t.Fatalf("实例地址没取回来：%#v", values)
+	}
+	if _, ok := values["token"]; ok {
+		t.Fatalf("令牌不该回显：%#v", values)
+	}
+	// 用的是自带的那份时「可执行文件」保持留空，不然像是用户自己填过路径。
+	if _, ok := values["command"]; ok {
+		t.Fatalf("自带的二进制不该回填成路径：%#v", values)
+	}
+	server.Command = "/opt/bin/gitea-mcp"
+	if values := presetValuesFromConfig(server); values["command"] != "/opt/bin/gitea-mcp" {
+		t.Fatalf("自填的路径要取回来：%#v", values)
+	}
+
+	// 没有 verify 的接法要老实说自己验不了，不能假装验过。
+	httpConfig, err := mcpPresetConfig("gitea", "http", map[string]string{"url": "http://127.0.0.1:8080/mcp"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := mcpServerConfigFromInput(httpConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote.Preset, remote.PresetTransport = "gitea", "http"
+	if _, supported, err := presetVerifyConfig(context.Background(), remote); supported || err != nil {
+		t.Fatalf("HTTP 接法没有凭据可验：supported=%v err=%v", supported, err)
 	}
 }
