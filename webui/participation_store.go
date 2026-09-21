@@ -27,25 +27,30 @@ func updatedParticipationSet(set assistant.ProfileSet, expected assistant.BotCon
 }
 func (s *MemoryBotProfileStore) SaveParticipation(cfg assistant.BotConfig, prefs assistant.ParticipationPreferences) (assistant.BotConfig, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	set, saved, err := updatedParticipationSet(s.data, cfg, prefs)
 	if err != nil {
+		s.mu.Unlock()
 		return saved, err
 	}
 	s.data = set
+	s.mu.Unlock()
+	s.notifyChanged()
 	return saved, nil
 }
 func (s *PersistentBotProfileStore) SaveParticipation(cfg assistant.BotConfig, prefs assistant.ParticipationPreferences) (assistant.BotConfig, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	set, saved, err := updatedParticipationSet(s.data, cfg, prefs)
 	if err != nil {
+		s.mu.Unlock()
 		return saved, err
 	}
 	if err := s.persist(set); err != nil {
+		s.mu.Unlock()
 		return assistant.BotConfig{}, err
 	}
 	s.data = set
+	s.mu.Unlock()
+	s.notifyChanged()
 	return saved, nil
 }
 func (p *RuntimePersistor) SaveParticipation(cfg assistant.BotConfig, prefs assistant.ParticipationPreferences) (assistant.BotConfig, error) {

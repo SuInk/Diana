@@ -31,25 +31,31 @@ func updateStoredModelRole(set assistant.ProfileSet, expected assistant.BotConfi
 
 func (s *MemoryBotProfileStore) SaveModelRole(cfg assistant.BotConfig, role string, next assistant.ModelRole) (assistant.BotConfig, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	set, saved, err := updateStoredModelRole(s.data, cfg, role, next)
 	if err != nil {
+		s.mu.Unlock()
 		return assistant.BotConfig{}, err
 	}
 	s.data = set
+	s.mu.Unlock()
+	// 聊天里换的模型和 WebUI 改的是同一份配置，改完要让开着的页面知道。
+	s.notifyChanged()
 	return saved, nil
 }
 
 func (s *PersistentBotProfileStore) SaveModelRole(cfg assistant.BotConfig, role string, next assistant.ModelRole) (assistant.BotConfig, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	set, saved, err := updateStoredModelRole(s.data, cfg, role, next)
-	if err != nil {
-		return assistant.BotConfig{}, err
+	if err == nil {
+		err = s.persist(set)
 	}
-	if err := s.persist(set); err != nil {
+	if err != nil {
+		s.mu.Unlock()
 		return assistant.BotConfig{}, err
 	}
 	s.data = set
+	s.mu.Unlock()
+	// 聊天里换的模型和 WebUI 改的是同一份配置，改完要让开着的页面知道。
+	s.notifyChanged()
 	return saved, nil
 }

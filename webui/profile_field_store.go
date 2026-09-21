@@ -23,7 +23,13 @@ func withProfileField(set assistant.ProfileSet, profileID string, mutate func(*a
 	return assistant.ProfileSet{}, fmt.Errorf("目标机器人不存在")
 }
 
-func (s *MemoryBotProfileStore) updateProfileField(profileID string, mutate func(*assistant.BotConfig)) error {
+func (s *MemoryBotProfileStore) updateProfileField(profileID string, mutate func(*assistant.BotConfig)) (err error) {
+	// 先注册后执行：defer 后进先出，这一条最后跑，那时写锁已经放开。
+	defer func() {
+		if err == nil {
+			s.notifyChanged()
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next, err := withProfileField(s.data, profileID, mutate)
@@ -34,7 +40,12 @@ func (s *MemoryBotProfileStore) updateProfileField(profileID string, mutate func
 	return nil
 }
 
-func (s *PersistentBotProfileStore) updateProfileField(profileID string, mutate func(*assistant.BotConfig)) error {
+func (s *PersistentBotProfileStore) updateProfileField(profileID string, mutate func(*assistant.BotConfig)) (err error) {
+	defer func() {
+		if err == nil {
+			s.notifyChanged()
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next, err := withProfileField(s.data, profileID, mutate)

@@ -494,6 +494,10 @@ func main() {
 		statsCollector.RestoreDurableBaselines(baselines)
 	}
 	eventHub := webui.NewEventHub()
+	// 主人在聊天里让机器人换模型、改屏蔽名单，改的是 WebUI 这同一份机器人配置。
+	// 页面只在自己发过写请求后才重新拉配置，所以不播这一条，开着的控制台会一直
+	// 停在旧值，要手动刷新才对得上。
+	botProfileStore.SetChangeListener(func() { eventHub.PublishConfigChanged("bot") })
 	botRuntime.SetEventListener(func(event assistant.EventRecord) {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if err := sqliteStore.RecordInboundEventAudit(auditCtx, event); err != nil {
