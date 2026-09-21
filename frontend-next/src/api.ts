@@ -4,7 +4,7 @@
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
 
-export type Provider = "openai_compatible" | "gemini" | "anthropic";
+export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
 export interface LLMRoleBinding {
   bot_id?: string;

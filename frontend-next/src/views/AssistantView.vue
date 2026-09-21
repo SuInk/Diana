@@ -3136,7 +3136,8 @@ function llmProviderLabel(provider: LLMConfig["provider"]): string {
   const labels: Record<LLMConfig["provider"], string> = {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
-    anthropic: "Anthropic"
+    anthropic: "Anthropic",
+    typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];
 }
