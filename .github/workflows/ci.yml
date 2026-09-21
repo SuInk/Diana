@@ -144,9 +144,12 @@ jobs:
   build:
     name: Build WebUI
     runs-on: ubuntu-latest
+    # 只等真正的数据依赖：版本号和 frontend-next 的 dist 产物。
+    # 不等 backend——交叉编译用不到测试结论，等它等于把五个平台的编译
+    # 整体推到 Go Test 之后。产物要发出去仍然过 release，而 release 经由
+    # docker 传递地依赖 backend，测试没过发布链一样走不通。
     needs:
       - build-version
-      - backend
       - frontend-next
     strategy:
       fail-fast: false
@@ -253,9 +256,46 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
+  # PR 上只验「Dockerfile 还能编过」，不推镜像，所以不必排在 Go Test 之后，
+  # 也不必为此在 QEMU 里模拟跑一遍 arm64——两个变体各一次 amd64 构建就够了。
+  # arm64 仍然在 main / tag 的发布构建里真正编一次。
+  docker-pr:
+    name: Docker Build (PR)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs:
+      - build-version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            BUILD_VERSION=${{ needs.build-version.outputs.value }}
+
+      - name: Build slim Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          target: runtime-slim
+          push: false
+          build-args: |
+            BUILD_VERSION=${{ needs.build-version.outputs.value }}
+
   docker:
     name: Docker Build and Publish
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    # 这个 job 自己往 GHCR 推，门必须留在它身上：测试没过就不该有镜像被发出去。
     needs:
       - build-version
       - backend
@@ -276,7 +316,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -318,7 +357,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -330,7 +369,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           target: runtime-slim
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta-slim.outputs.tags }}
           labels: ${{ steps.meta-slim.outputs.labels }}
           build-args: |
