@@ -73,3 +73,30 @@ func tail(s string, from int) string {
 	}
 	return s[from:end]
 }
+
+// Skill 的开关按机器人、按群分档，装一个卸一个也会改这份清单。它进系统提示词就意味着
+// 换个群、装个 skill 就把整条 prompt 的前缀缓存作废，和上面那一段是同一个坑。
+//
+// 判据：系统提示词对当前有哪些 skill 完全不敏感。
+func TestSkillsCatalogDoesNotEnterStablePrompt(t *testing.T) {
+	registry := NewToolRegistry(&SkillsReadTool{}, &countingTool{name: "agent_finalize"})
+	runner, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	empty := runner.systemPrompt()
+	registry.SetSkills([]SkillMetadata{
+		{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"},
+	})
+	loaded := runner.systemPrompt()
+	if empty != loaded {
+		t.Fatalf("装上 skill 改动了系统提示词，前缀缓存会作废\n之前: %q\n之后: %q", empty, loaded)
+	}
+	if strings.Contains(loaded, "demo-skill") || strings.Contains(loaded, "/tmp/demo/SKILL.md") {
+		t.Fatalf("系统提示词里出现了 skill 名称或路径:\n%s", loaded)
+	}
+	if catalog := RenderSkillsCatalog(registry.Skills(), 8000); !strings.Contains(catalog, "demo-skill") {
+		t.Fatalf("目录没渲染出 skill: %s", catalog)
+	}
+}

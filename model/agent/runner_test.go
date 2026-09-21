@@ -437,18 +437,62 @@ func TestRunnerStopsAfterTerminalTool(t *testing.T) {
 	}
 }
 
-// TestRunnerPromptIncludesSkills 验证 Agent prompt 只暴露 skills 清单和读取工具。
-func TestRunnerPromptIncludesSkills(t *testing.T) {
-	registry := NewToolRegistry()
+// TestRunnerPromptKeepsSkillsOutOfStableProtocol 验证 skills 清单不进系统提示词，
+// 只有「先 read_skill」这条规则常驻。
+func TestRunnerPromptKeepsSkillsOutOfStableProtocol(t *testing.T) {
+	registry := NewToolRegistry(&SkillsReadTool{})
 	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
 	runner := &Runner{cfg: Config{SkillsListBudget: 8000}.WithDefaults(), registry: registry}
 	protocol := runner.systemPrompt()
 	hint := runner.explicitSkillPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}})
-	if !strings.Contains(protocol, "demo-skill") || strings.Contains(protocol, "Explicitly Mentioned Skills") {
-		t.Fatalf("stable protocol = %s", protocol)
+	if strings.Contains(protocol, "demo-skill") || strings.Contains(protocol, "Available skills") {
+		t.Fatalf("skills catalog leaked into the stable protocol: %s", protocol)
+	}
+	if !strings.Contains(protocol, "read_skill") {
+		t.Fatalf("stable protocol lost the read_skill rule: %s", protocol)
 	}
 	if !strings.Contains(hint, "demo-skill") || !strings.Contains(hint, "Explicitly Mentioned Skills") {
 		t.Fatalf("request hint = %s", hint)
+	}
+}
+
+// TestRunnerSkillsCatalogRidesInTrailingBlock 验证目录挂在消息尾部的易变块里，
+// 且当前轮仍是最后一条。
+func TestRunnerSkillsCatalogRidesInTrailingBlock(t *testing.T) {
+	client := &scriptedClient{}
+	registry := NewToolRegistry(&SkillsReadTool{})
+	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
+	runner := &Runner{client: client, cfg: Config{}.WithDefaults(), registry: registry}
+	caller := []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设提示词"},
+		{Role: llm.RoleUser, Content: "【历史参考消息】旧问题"},
+		{Role: llm.RoleUser, Content: "【当前需要回复的消息】用一下 skill"},
+	}
+	if _, err := runner.Run(context.Background(), Request{Messages: caller}); err != nil {
+		t.Fatal(err)
+	}
+	messages := client.requests[0].Messages
+	catalogIndex := -1
+	for index, message := range messages {
+		if strings.Contains(message.Content, "### Available skills") {
+			catalogIndex = index
+		}
+	}
+	if catalogIndex < 0 {
+		t.Fatalf("skills catalog missing from the request: %#v", messages)
+	}
+	if !strings.Contains(messages[catalogIndex].Content, "demo-skill") {
+		t.Fatalf("catalog = %q", messages[catalogIndex].Content)
+	}
+	// 必须排在调用方的人设和历史之后,否则前缀缓存从那里就断了。
+	if catalogIndex <= 2 {
+		t.Fatalf("catalog displaced the caller prefix at %d: %#v", catalogIndex, messages)
+	}
+	if catalogIndex == len(messages)-1 {
+		t.Fatalf("catalog took the current turn slot: %#v", messages)
+	}
+	if !strings.Contains(messages[len(messages)-1].Content, "【当前需要回复的消息】") {
+		t.Fatalf("current turn is no longer last: %#v", messages)
 	}
 }
 
