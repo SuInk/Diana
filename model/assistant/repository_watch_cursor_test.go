@@ -58,7 +58,7 @@ func TestRepositoryWatchIssueAndPullCursorsSurviveEmptyAndStaleResponses(t *test
 				_ = json.NewEncoder(w).Encode(response)
 			}))
 			defer server.Close()
-			plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+			plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 			selection := repositoryWatchSelection{Issues: true, PullRequests: true}
 			settings := SettingValues{repositoryWatchSettingLimit: 5}
 			entry := func(number int, updatedAt string) map[string]any {
@@ -90,7 +90,7 @@ func TestRepositoryWatchIssueAndPullCursorsSurviveEmptyAndStaleResponses(t *test
 					}
 				} else {
 					var found []repositoryWatchPullRequest
-					found, next, err = plugin.fetchPullRequests(context.Background(), "acme/demo", "main", cursor, previousCheck, selection, settings)
+					found, next, _, err = plugin.fetchPullRequests(context.Background(), "acme/demo", "main", cursor, previousCheck, selection, settings)
 					for _, item := range found {
 						numbers = append(numbers, item.Number)
 					}
