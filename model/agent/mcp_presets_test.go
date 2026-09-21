@@ -4,6 +4,9 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -37,8 +40,21 @@ func TestGiteaPresetProducesValidConfigs(t *testing.T) {
 	if err := server.validate(); err != nil {
 		t.Fatalf("stdio 预设配置不合法：%v", err)
 	}
-	if server.Command != "gitea-mcp" || server.Env["GITEA_HOST"] != "https://git.example.com" || server.Env["GITEA_ACCESS_TOKEN"] != "abc" {
+	if filepath.Base(server.Command) != bundledGiteaMCPName() || server.Env["GITEA_HOST"] != "https://git.example.com" || server.Env["GITEA_ACCESS_TOKEN"] != "abc" {
 		t.Fatalf("stdio 预设没按 gitea-mcp 的约定拼：%#v", server)
+	}
+
+	// 填了可执行文件就按填的走，自己编译的版本不能被自带的那份顶掉。
+	custom, err := mcpPresetConfig("gitea", "stdio", map[string]string{"host": "https://git.example.com", "token": "abc", "command": "/opt/bin/gitea-mcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err = mcpServerConfigFromInput(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Command != "/opt/bin/gitea-mcp" {
+		t.Fatalf("自填的可执行文件被改写了：%q", server.Command)
 	}
 }
 
@@ -94,5 +110,36 @@ func TestPresetListIsRenderable(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func bundledGiteaMCPName() string {
+	if runtime.GOOS == "windows" {
+		return "gitea-mcp.exe"
+	}
+	return "gitea-mcp"
+}
+
+// 自带的二进制放在主程序旁边，不在 PATH 里：解析不出绝对路径，stdio 预设装上去
+// 就是一条起不来的服务。两头都没有时必须退回裸名字，让 PATH 还有机会兜住。
+func TestBundledGiteaMCPCommandPrefersNeighbourBinary(t *testing.T) {
+	name := bundledGiteaMCPName()
+	dir := t.TempDir()
+	fake := filepath.Join(dir, name)
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Skipf("拿不到当前可执行文件：%v", err)
+	}
+	if got := bundledGiteaMCPCommand(); got != name && filepath.Dir(got) != filepath.Dir(executable) {
+		t.Fatalf("解析结果既不在主程序旁边也不是裸名字：%q", got)
+	}
+	if got := bundledCommandIn(dir, name); got != fake {
+		t.Fatalf("旁边就有一份却没用上：%q", got)
+	}
+	if got := bundledCommandIn(filepath.Join(dir, "empty"), name); got != name {
+		t.Fatalf("目录里没有时应当退回裸名字：%q", got)
 	}
 }
