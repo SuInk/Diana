@@ -2,7 +2,7 @@
   <section class="extension-manager">
     <header class="view-header">
       <div class="view-title"><h1>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h1><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
-      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button class="btn primary" @click="startAdd"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
+      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
     </header>
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取扩展…</p>
@@ -25,40 +25,27 @@
         <!-- 只读扩展删不掉，但位置要留着：否则每行的开关和按钮左右错开一截。 -->
         <span v-else class="extension-action-slot" aria-hidden="true"></span>
       </article>
-      <!-- 一条都没有时，与其只说「还没有」，不如把现成的预设直接铺出来：
-           第一次进这一页的人不用先猜「添加」后面藏着什么。 -->
-      <template v-if="!items.length">
-        <p v-if="kind !== 'mcp'">还没有自定义 Skill。</p>
-        <template v-else>
-          <p class="hint">还没有 MCP 服务。下面这些是内置预设，填两个字段就能用；接别的服务点「手动配置」。</p>
-          <article v-for="entry in presets" :key="entry.preset.id" class="preset-row">
-            <div class="extension-info">
-              <strong>{{ entry.preset.title }}</strong>
-              <p>{{ entry.preset.summary }}</p>
-              <small v-if="entry.preset.docs_url"><a :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></small>
-            </div>
-            <button class="btn" @click="startPreset(entry.preset)">添加</button>
-          </article>
-          <p><button class="btn" @click="addManually"><Settings2 :size="15" />手动配置</button></p>
-        </template>
-      </template>
+      <!-- 内置预设默认就在列表里占一行：它是「有这么个服务，只是还没配」，
+           不是藏在某个按钮后面的目录。填完凭据它就变成上面那样的普通一条。 -->
+      <article v-for="entry in pendingPresets" :key="entry.preset.id" class="extension-row">
+        <div class="extension-info">
+          <strong>{{ entry.preset.title }}<span class="badge">未配置</span></strong>
+          <p>{{ entry.preset.summary }}</p>
+          <small>内置预设 · 填完凭据就能用<template v-if="entry.preset.docs_url"> · <a :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></template></small>
+        </div>
+        <label class="switch" title="还没配凭据，点一下去填">
+          <input type="checkbox" :checked="false" @change="startPreset(entry.preset, $event)" />
+          <span class="track" aria-hidden="true"></span>
+        </label>
+        <button class="btn icon-only" :aria-label="`配置 ${entry.preset.title}`" title="填凭据" @click="startPreset(entry.preset)"><Settings2 :size="16" /></button>
+        <button class="btn ghost danger icon-only" :aria-label="`从列表里去掉 ${entry.preset.title}`" title="用不上，从列表里去掉" @click="hidePreset(entry.preset)"><Trash2 :size="16" /></button>
+      </article>
+      <p v-if="!items.length && !pendingPresets.length">还没有{{ kind === 'skill' ? '自定义 Skill' : 'MCP 服务' }}。</p>
+      <p v-if="hiddenPresets.length" class="hint"><button type="button" class="link-button" @click="showHiddenPresets">显示隐藏的预设（{{ hiddenPresets.length }}）</button></p>
     </div>
-    <Modal v-if="presetsOpen" :title="preset ? `添加 ${preset.title}` : '添加 MCP'" @close="closePresets">
+    <Modal v-if="presetsOpen && preset" :title="`配置 ${preset.title}`" @close="closePresets">
       <div class="extension-form">
-        <template v-if="!preset">
-          <p class="hint">下面这些是内置预设，帮你把参数填对——装上之后就是一条普通的 MCP，改配置、停用、删除都和手填的一样。少数服务的二进制随 Diana 一起打包，直接填地址和凭据就能用；其余的要自己先把服务跑起来。接别的服务点下面的「手动配置」。</p>
-          <p v-if="presetError" class="error-text" role="alert">{{ presetError }}</p>
-          <article v-for="entry in presets" :key="entry.preset.id" class="preset-row">
-            <div class="extension-info">
-              <strong>{{ entry.preset.title }}<span v-if="entry.installed" class="badge">已添加</span></strong>
-              <p>{{ entry.preset.summary }}</p>
-              <small v-if="entry.preset.docs_url"><a :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></small>
-            </div>
-            <button class="btn" @click="pickPreset(entry.preset)">{{ entry.installed ? '再装一个' : '添加' }}</button>
-          </article>
-          <p v-if="!presets.length && !presetError">还没有内置预设，手动配置一条吧。</p>
-        </template>
-        <template v-else>
+        <template v-if="preset">
           <p class="hint">{{ preset.summary }}<template v-if="preset.docs_url"> <a :href="preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></template></p>
           <div v-if="preset.transports.length > 1" class="segmented" role="group" aria-label="接入方式"><button v-for="option in preset.transports" :key="option.id" type="button" :class="{active: presetTransport === option.id}" @click="presetTransport = option.id">{{ option.label }}</button></div>
           <p v-if="presetTransportHint" class="hint">{{ presetTransportHint }}</p>
@@ -72,7 +59,7 @@
           <p v-if="presetError" class="error-text" role="alert">{{ presetError }}</p>
         </template>
       </div>
-      <template #footer><button v-if="preset" class="btn" :disabled="presetSaving" @click="preset=null">返回</button><button v-if="presetVerifiable" class="btn" :disabled="presetSaving||verifying" @click="verifyPreset"><KeyRound :size="15" />检测令牌</button><button v-if="!preset" class="btn" @click="addManually"><Settings2 :size="15" />手动配置</button><button class="btn" :disabled="presetSaving" @click="closePresets">关闭</button><button v-if="preset" class="btn primary" :disabled="presetSaving" @click="savePreset"><Save :size="15" />添加</button></template>
+      <template #footer><button v-if="presetVerifiable" class="btn" :disabled="presetSaving||verifying" @click="verifyPreset"><KeyRound :size="15" />检测令牌</button><button class="btn" :disabled="presetSaving" @click="closePresets">关闭</button><button v-if="preset" class="btn primary" :disabled="presetSaving" @click="savePreset"><Save :size="15" />添加</button></template>
     </Modal>
     <Modal v-if="editing" :title="`${existing ? '编辑' : '添加'} ${kind === 'skill' ? 'Skill' : 'MCP'}`" wide @close="closeEditor">
       <div class="extension-form">
@@ -161,8 +148,8 @@ const snapshot=ref('');
 const state=()=>JSON.stringify([form.value,transport.value,headers.value,env.value,fromURL.value,editPresetValues.value,editAdvanced.value]);
 let generation=0;
 async function load(){const current=++generation;loading.value=true;loadError.value='';try{const result=await listManagedExtensions(botScope.value);if(current===generation)items.value=result.items.filter(i=>i.kind===props.kind)}catch(e){if(current===generation)loadError.value=String(e instanceof Error?e.message:e)}finally{if(current===generation)loading.value=false}
- // 空列表要把预设铺出来，这份清单得先在手里。
- if(props.kind==='mcp'&&!items.value.length)void ensurePresets()}
+ // 未配置的预设也要在列表里占一行，这份清单得跟着刷新。
+ if(props.kind==='mcp')await refreshPresets()}
 function openNew(){form.value=blank();headers.value=env.value='{}';fromURL.value=false;transport.value='http';existing.value=readonly.value=false;error.value='';tested.value=false;discovered.value=[];editPreset.value=null;editPresetTransport.value='';editPresetValues.value={};editAdvanced.value=false;verifyNote.value='';permissionName.value='';loadAudienceInputs(null);editing.value=true;snapshot.value=state()}
 async function edit(item:ManagedExtension){try{const data=await manageExtension<any>({operation:'read',kind:props.kind,name:item.name});openNew();existing.value=true;readonly.value=!item.managed;form.value.name=item.name;permissionName.value=item.name;loadAudienceInputs(item);if(props.kind==='skill')form.value.content=data.content;else{const c=data.config;Object.assign(form.value,c,{args:(c.args||[]).join('\n'),enabled_tools:(c.enabled_tools||[]).join('\n'),disabled_tools:(c.disabled_tools||[]).join('\n'),enabled:c.enabled!==false});transport.value=c.command?'stdio':'http';headers.value=JSON.stringify(c.headers||{},null,2);env.value=JSON.stringify(c.env||{},null,2);if(data.preset){const known=await ensurePresets();editPreset.value=known.find(p=>p.id===data.preset)||null;editPresetTransport.value=data.preset_transport||'';editPresetValues.value={...(data.preset_values||{})};editAdvanced.value=!editPreset.value}}snapshot.value=state()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 async function closeEditor(){if(!editing.value||saving.value)return;if(!readonly.value&&snapshot.value!==state()&&!await askConfirm({title:'放弃未保存的修改？',message:'本次编辑尚未保存。',confirmLabel:'放弃'}))return;editing.value=false}
@@ -191,22 +178,26 @@ const verifyEditPreset=()=>runVerify(presetPayload('preset_verify'),message=>{er
 const verifyPreset=()=>runVerify({operation:'preset_verify',kind:'mcp',name:presetName.value,preset:preset.value?.id,transport:presetTransport.value,values:presetValues.value},message=>{presetError.value=message});
 async function testConnection(){saving.value=true;error.value='';tested.value=false;discovered.value=[];try{const result=await manageExtension<{connected:boolean;tools:string[]}>(payload('test'));tested.value=result.connected;discovered.value=result.tools}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
 // 预设：服务端给字段清单，这里只负责渲染和回填，拼配置仍在服务端做。
-const presetsOpen=ref(false),presets=ref<{preset:MCPPreset;installed:boolean}[]>([]),preset=ref<MCPPreset|null>(null),presetTransport=ref(''),presetValues=ref<Record<string,string>>({}),presetName=ref(''),presetSaving=ref(false),presetError=ref('');
+const presetsOpen=ref(false),presets=ref<{preset:MCPPreset;installed:boolean;hidden?:boolean}[]>([]),preset=ref<MCPPreset|null>(null),presetTransport=ref(''),presetValues=ref<Record<string,string>>({}),presetName=ref(''),presetSaving=ref(false),presetError=ref('');
 const presetFields=computed(()=>preset.value?.transports.find(t=>t.id===presetTransport.value)?.fields||[]);
 const presetTransportHint=computed(()=>preset.value?.transports.find(t=>t.id===presetTransport.value)?.hint||'');
 const presetVerifiable=computed(()=>!!(preset.value?.transports.find(t=>t.id===presetTransport.value)?.verifiable));
 // 编辑已装好的服务时也要这份清单（拿字段定义），所以取一次存着。
-async function ensurePresets(){if(!presets.value.length){try{presets.value=(await listMCPPresets()).items}catch{return []}}return presets.value.map(entry=>entry.preset)}
-// 「预设」和「添加」做的是同一件事，合成一个入口：点添加先看有没有现成的预设，
-// 没有对上的再手动配置。Skill 没有预设，直接进空白表单。
-function startAdd(){if(props.kind!=='mcp'){openNew();return}void openPresets()}
-function addManually(){presetsOpen.value=false;preset.value=null;openNew()}
-// 从空列表那几张卡片直接进预设表单，省掉「先打开添加弹窗」这一步。
-function startPreset(value:MCPPreset){presetsOpen.value=true;pickPreset(value)}
-async function openPresets(){presetsOpen.value=true;preset.value=null;presetError.value='';verifyNote.value='';try{presets.value=(await listMCPPresets()).items}catch(e){presetError.value=String(e instanceof Error?e.message:e)}}
+async function ensurePresets(){if(!presets.value.length)await refreshPresets();return presets.value.map(entry=>entry.preset)}
+async function refreshPresets(){try{presets.value=(await listMCPPresets()).items}catch{/* 取不到就少这几行，不拖累已装的服务 */}}
+// 列表里那一行直接进预设表单，不用先打开一个目录弹窗。开关是「去配置」的入口，
+// 点完要弹回去：没填完凭据它就还没装上，让它停在打开状态是在撒谎。
+function startPreset(value:MCPPreset,event?:Event){if(event)(event.target as HTMLInputElement).checked=false;presetsOpen.value=true;pickPreset(value)}
+// 还没配的内置预设：列表里照样占一行，装上之后这一行就变成真正的那条服务。
+const pendingPresets=computed(()=>props.kind==='mcp'?presets.value.filter(entry=>!entry.hidden&&!entry.installed&&!items.value.some(item=>item.name===entry.preset.name)):[]);
+const hiddenPresets=computed(()=>props.kind==='mcp'?presets.value.filter(entry=>entry.hidden):[]);
+// 删掉的是列表里那一行，不是服务：随时能放回来，所以底下留一句找得回来的话。
+async function hidePreset(value:MCPPreset){if(!await askConfirm({title:`从列表里去掉 ${value.title}？`,message:'只是不再显示这一行，随时可以在下面「显示隐藏的预设」里放回来。已经配好的服务不受影响。',confirmLabel:'去掉'}))return;
+ try{await manageExtension({operation:'preset_hide',kind:'mcp',preset:value.id});await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
+async function showHiddenPresets(){try{await Promise.all(hiddenPresets.value.map(entry=>manageExtension({operation:'preset_show',kind:'mcp',preset:entry.preset.id})));await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 function closePresets(){if(presetSaving.value)return;presetsOpen.value=false;preset.value=null}
 function pickPreset(value:MCPPreset){preset.value=value;presetTransport.value=value.transports[0]?.id||'';presetValues.value={};presetName.value=items.value.some(i=>i.name===value.name)?`${value.name}-2`:value.name;presetError.value='';verifyNote.value=''}
-async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'preset_save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess(result.warning||`已添加${presetVerifiedSuffix(result)}，默认仅主人可用，可在列表里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
+async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'preset_save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess(result.warning||`已配置${presetVerifiedSuffix(result)}，默认仅主人可用，在它那一行的设置里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
 // 权限跟着正在编辑的那一条走：设置弹窗里改，改完从列表里取回最新的一份。
 const permissionName=ref(''),accessUsers=ref<string[]>([]),accessGroups=ref<string[]>([]),accessError=ref(''),savingAccess=ref(false);
 const permissionItem=computed(()=>editing.value&&botScope.value&&permissionName.value?items.value.find(i=>i.kind===props.kind&&i.name===permissionName.value)||null:null);
