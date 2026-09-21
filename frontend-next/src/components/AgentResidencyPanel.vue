@@ -5,7 +5,7 @@
   <section class="residency-panel">
     <header class="view-header">
       <div class="view-title">
-        <h1>上下文</h1>
+        <h2>上下文</h2>
         <p>{{ botScope ? '常驻的每轮都带完整定义，按需的只留一行目录、用到再加载' : '选择机器人后调整档位' }}</p>
       </div>
       <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button></div>

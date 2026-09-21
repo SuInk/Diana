@@ -12,7 +12,6 @@
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
-        <h1>扩展</h1>
         <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置" }} · OpenAPI 位于系统设置</p>
       </div>
       <div class="view-actions">

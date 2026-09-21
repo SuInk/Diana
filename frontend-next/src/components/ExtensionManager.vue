@@ -1,7 +1,7 @@
 <template>
   <section class="extension-manager">
     <header class="view-header">
-      <div class="view-title"><h1>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h1><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
+      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
       <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button v-if="kind==='mcp'" class="btn" @click="openPresets"><Blocks :size="15" />预设</button><button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
     </header>
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>

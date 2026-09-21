@@ -2361,21 +2361,18 @@ onBeforeUnmount(() => {
     flex: 1 0 auto;
   }
 
+  /* 每行 3 个、刚好两行。之前是 6 列再让按钮跨 2/3 列，那套值是按 5 个
+     筛选项算的；现在有 6 个，会排成 3 + 2 + 1 的错落三行。 */
   .event-result-filter {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     overflow: visible;
   }
 
   .event-result-filter button {
-    grid-column: span 2;
     justify-content: center;
     min-width: 0;
     padding-inline: 7px;
-  }
-
-  .event-result-filter button:nth-last-child(-n + 2) {
-    grid-column: span 3;
   }
 
   .event-detail-list {

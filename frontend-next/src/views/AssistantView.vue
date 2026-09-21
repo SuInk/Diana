@@ -10,7 +10,8 @@
           机器人列表
         </button>
         <div>
-          <h1>{{ page === "list" ? "机器人" : (form?.name || "新机器人") }}</h1>
+          <!-- 列表态的标题就是「机器人」，跟顶栏重复；编辑态是机器人名字，要留。 -->
+          <h2 v-if="page !== 'list'">{{ form?.name || "新机器人" }}</h2>
           <p>{{ page === "list" ? "多机器人配置、平台接入与运行管理" : `${platformName(form?.platform)} · 机器人配置` }}</p>
         </div>
       </div>
