@@ -36,7 +36,7 @@ func NewModelsDevCatalog(client *http.Client) *ModelsDevCatalog {
 
 func newModelsDevCatalog(client *http.Client, endpoint string) *ModelsDevCatalog {
 	if client == nil {
-		client = &http.Client{Timeout: 12 * time.Second}
+		client = &http.Client{Timeout: 45 * time.Second}
 	}
 	return &ModelsDevCatalog{client: client, url: endpoint}
 }

@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>设置</h1>
         <p>控制台自身的配置。机器人怎么说话、回不回复，在「机器人」页里改。</p>
       </div>
     </header>
@@ -34,8 +33,8 @@
       </aside>
 
       <div class="settings-content">
+        <!-- 标题左侧菜单的选中项已经说了一遍，这里只留说明。 -->
         <header class="settings-page-head">
-          <h2>{{ activePageMeta.label }}</h2>
           <p class="settings-page-desc">{{ activePageMeta.hint }}</p>
         </header>
 
@@ -111,10 +110,6 @@
       <div v-show="activePage === 'sessions'" class="settings-section-body">
           <!-- 登录会话 -->
           <section v-if="authRequired || authLoading" class="card">
-          <div class="card-header">
-            <h2>登录会话</h2>
-            <span class="card-sub">机器人发来异常登录提醒时，在这里把对应设备踢下线</span>
-          </div>
           <div class="card-body stack">
             <LoadingSkeleton v-if="sessionsLoading && sessions.length === 0" kind="sessions" :count="2" label="正在加载登录会话" />
             <p v-else-if="sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">当前没有活跃会话。</p>
@@ -160,10 +155,8 @@
           <!-- 对外 API 密钥 -->
           <section class="card">
           <div class="card-header">
-            <h2>对外 API</h2>
             <SkeletonBlock v-if="pluginLoading" width="90px" height="21px" />
             <span v-else class="badge" :class="openAPIPluginEnabled ? 'ok' : 'warn'">{{ openAPIPluginEnabled ? "插件已启用" : "插件未启用" }}</span>
-            <span class="card-sub">让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息</span>
           </div>
           <div class="card-body stack">
             <div class="cluster" style="gap: 8px; align-items: center">
@@ -232,10 +225,256 @@
         </section>
       </div>
 
+
+      <div v-show="activePage === 'browser-control'" class="settings-section-body">
+        <section class="card">
+          <div class="card-header">
+            <span class="badge" :class="browserPolicy.enabled ? (browserReady ? 'ok' : 'warn') : 'warn'">
+              {{ browserPolicy.enabled ? (browserReady ? "可用" : "已启用，等扩展连接") : "未启用" }}
+            </span>
+            <button class="btn small ghost" type="button" :disabled="browserLoading" title="刷新" aria-label="刷新浏览器控制状态" @click="loadBrowserControl">
+              <RefreshCw :size="14" aria-hidden="true" />
+            </button>
+            <span class="card-sub">机器人操作的是你自己浏览器里的页面，带着你的登录态</span>
+          </div>
+          <div class="card-body stack">
+            <p class="muted" style="margin: 0; font-size: 13px">
+              装在浏览器里的扩展反向连到这里，只能操作下面列出的站点。默认只读；点击、输入和导航要单独打开。
+              任何时候你都可以在扩展或这一页按下接管，机器人立刻停手。还需要在对应机器人的 Agent 设置里单独打开这一档。
+            </p>
+            <p v-if="browserExtensionDownload" class="muted" style="margin: 0; font-size: 12.5px">
+              还没装扩展？
+              <a href="/api/browser-control/extension.zip" download>下载扩展源码包</a>
+              ，解压后在 <code class="mono">chrome://extensions</code> 开启开发者模式、「加载已解压的扩展程序」选那个目录。
+            </p>
+
+            <div class="field">
+              <label class="switch-row">
+                <input v-model="browserPolicy.enabled" type="checkbox" />
+                <span>启用浏览器控制（关闭会当场断开所有已连接的扩展）</span>
+              </label>
+              <label class="switch-row">
+                <input v-model="browserPolicy.write_enabled" type="checkbox" :disabled="!browserPolicy.enabled" />
+                <span>允许写操作：点击、输入、导航。关闭时只能读取页面</span>
+              </label>
+            </div>
+
+            <div class="field">
+              <label for="browser-origins">允许的来源（每行一条）</label>
+              <textarea
+                id="browser-origins"
+                v-model="browserOriginsText"
+                class="input"
+                rows="2"
+                placeholder="chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+              ></textarea>
+              <p class="muted" style="margin: 0; font-size: 12.5px">
+                填扩展选项页上显示的扩展 ID，写成 <code class="mono">chrome-extension://&lt;扩展 ID&gt;</code>。留空时谁都连不上。
+              </p>
+            </div>
+
+            <div class="field">
+              <label for="browser-allowed-hosts">可操作站点（每行一条）</label>
+              <textarea
+                id="browser-allowed-hosts"
+                v-model="browserAllowedHostsText"
+                class="input"
+                rows="3"
+                placeholder="example.com&#10;*.wiki.example.com"
+              ></textarea>
+              <p class="muted" style="margin: 0; font-size: 12.5px">
+                <code class="mono">example.com</code> 只匹配这一个主机名；<code class="mono">*.example.com</code> 匹配子域但不含主域本身，
+                两个都要就写两行。留空时一个站点都不允许。
+              </p>
+            </div>
+
+            <div class="field">
+              <label for="browser-denied-hosts">排除的站点（每行一条，优先于上面）</label>
+              <textarea
+                id="browser-denied-hosts"
+                v-model="browserDeniedHostsText"
+                class="input"
+                rows="2"
+                placeholder="admin.example.com"
+              ></textarea>
+            </div>
+
+            <div class="cluster" style="gap: 8px; flex-wrap: wrap">
+              <div class="field" style="max-width: 200px">
+                <label for="browser-timeout">单条指令超时（毫秒）</label>
+                <input id="browser-timeout" v-model.number="browserPolicy.command_timeout_ms" class="input" type="number" min="1000" max="120000" />
+              </div>
+              <div class="field" style="max-width: 200px">
+                <label for="browser-rate">每分钟指令上限</label>
+                <input id="browser-rate" v-model.number="browserPolicy.commands_per_minute" class="input" type="number" min="1" max="600" />
+              </div>
+            </div>
+
+            <div class="cluster" style="gap: 8px">
+              <button class="btn primary" type="button" :disabled="browserSaving" @click="saveBrowserPolicy">
+                <Save :size="14" aria-hidden="true" />
+                {{ browserSaving ? "保存中…" : "保存策略" }}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <h2>控制令牌</h2>
+            <span class="card-sub">扩展用它连接，只显示一次</span>
+          </div>
+          <div class="card-body stack">
+            <div v-if="browserCreatedToken" class="openapi-token">
+              <p class="openapi-token-hint">令牌只显示这一次，请立即复制并填进扩展选项页：</p>
+              <div class="cluster" style="gap: 8px; flex-wrap: wrap">
+                <code class="mono openapi-token-value">{{ browserCreatedToken }}</code>
+                <button class="btn small" type="button" @click="copyBrowserToken">复制</button>
+                <button class="btn small ghost" type="button" @click="browserCreatedToken = ''">我已保存</button>
+              </div>
+            </div>
+            <LoadingSkeleton v-if="browserLoading && browserTokens.length === 0" kind="sessions" :count="2" label="正在加载令牌" />
+            <p v-else-if="browserTokens.length === 0" class="muted" style="margin: 0; font-size: 13px">还没有令牌。签发后扩展才能连上来。</p>
+            <ul v-else class="session-list">
+              <li v-for="token in browserTokens" :key="token.id" class="session-item">
+                <div class="session-main">
+                  <span class="session-name">{{ token.name }}</span>
+                  <span class="session-meta mono">{{ token.prefix }}…</span>
+                  <span class="session-meta">
+                    创建于 {{ formatTime(token.created_at) }}
+                    · {{ token.last_used_at ? `最近使用 ${formatTime(token.last_used_at)}` : "从未使用" }}
+                    · {{ token.extension_id ? `已绑定扩展 ${token.extension_id}` : "尚未绑定扩展" }}
+                  </span>
+                </div>
+                <button class="btn small danger" type="button" :disabled="browserRevokingID !== ''" @click="revokeBrowserToken(token)">
+                  {{ browserRevokingID === token.id ? "处理中…" : "吊销" }}
+                </button>
+              </li>
+            </ul>
+            <div class="cluster" style="gap: 8px">
+              <input
+                v-model="browserNewTokenName"
+                class="input"
+                placeholder="这台浏览器的用途，例如 公司台式机 Chrome"
+                style="max-width: 280px"
+                @keyup.enter="createBrowserToken"
+              />
+              <button class="btn primary" type="button" :disabled="browserCreating || browserNewTokenName.trim().length === 0" @click="createBrowserToken">
+                <KeyRound :size="15" aria-hidden="true" />
+                {{ browserCreating ? "签发中…" : "签发令牌" }}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <h2>已连接的浏览器</h2>
+            <span class="card-sub">接管打开时机器人一条指令都不会下发</span>
+          </div>
+          <div class="card-body stack">
+            <p v-if="browserConnections.length === 0" class="muted" style="margin: 0; font-size: 13px">
+              还没有扩展连上来。装好扩展、填上地址与令牌之后会自动出现在这里。
+            </p>
+            <ul v-else class="session-list">
+              <li v-for="conn in browserConnections" :key="conn.id" class="session-item">
+                <div class="session-main">
+                  <span class="session-name">
+                    {{ conn.label || conn.browser || "浏览器" }}
+                    <span v-if="conn.takeover" class="badge warn">人工接管中</span>
+                  </span>
+                  <span class="session-meta mono">{{ conn.extension_id }}</span>
+                  <span class="session-meta">
+                    连接于 {{ formatTime(conn.connected_at) }}
+                    · 可操作标签页 {{ conn.allowed_tabs }} 个
+                    · 已下发 {{ conn.commands }} 条指令
+                    <template v-if="conn.takeover_reason"> · {{ conn.takeover_reason }}</template>
+                  </span>
+                </div>
+                <div class="cluster" style="gap: 6px">
+                  <button class="btn small" type="button" @click="toggleBrowserTakeover(conn)">
+                    {{ conn.takeover ? "交还控制权" : "人工接管" }}
+                  </button>
+                  <button class="btn small danger" type="button" @click="disconnectBrowser(conn)">断开</button>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </section>
+      </div>
+
+      <div v-show="activePage === 'storage'" class="settings-section-body">
+        <section class="card">
+          <div class="card-header" style="justify-content: flex-end">
+            <button class="btn small ghost" type="button" :disabled="storageLoading" title="重新统计存储占用" aria-label="重新统计存储占用" @click="loadStorageUsage">
+              <RefreshCw :size="14" aria-hidden="true" />
+            </button>
+          </div>
+          <div class="card-body">
+            <p v-if="storageError" class="error" role="alert">{{ storageError }}</p>
+            <LoadingSkeleton v-if="!storage" kind="chart" label="正在统计存储占用" />
+            <template v-else>
+              <div class="storage-overview">
+                <StorageDonut
+                  :segments="diskSegments"
+                  :total="diskTotal"
+                  :center-value="diskCenterValue"
+                  :center-label="diskCenterLabel"
+                />
+                <ul class="storage-legend">
+                  <li v-for="segment in diskSegments" :key="segment.key" class="storage-legend-row">
+                    <span class="storage-legend-dot" :style="{ background: segment.color }" aria-hidden="true"></span>
+                    <span class="storage-legend-label">{{ segment.label }}</span>
+                    <span class="storage-legend-size">{{ formatBytes(segment.bytes) }}</span>
+                    <span class="storage-legend-percent muted">{{ storageShareLabel(segment.bytes, diskTotal) }}</span>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- 上面那圈的分母是整块盘，Diana 常常连 1% 都不到；类型拆分换成以
+                   数据目录自己为分母的一条，分类才看得见。 -->
+              <div class="storage-breakdown">
+                <div class="storage-breakdown-head">
+                  <h3>数据目录里是什么</h3>
+                  <span class="muted">{{ formatBytes(storage.diana_bytes) }} · {{ formatNumber(storage.diana_files) }} 个文件</span>
+                </div>
+                <div v-if="categorySegments.length > 0" class="storage-bar" role="img" :aria-label="categoryBarLabel">
+                  <span
+                    v-for="segment in categorySegments"
+                    :key="segment.key"
+                    class="storage-bar-part"
+                    :style="{ background: segment.color, width: storageWidth(segment.bytes, storage.diana_bytes) }"
+                    :title="`${segment.label} ${formatBytes(segment.bytes)}`"
+                  ></span>
+                </div>
+                <ul class="storage-legend storage-legend-wide">
+                  <li v-for="segment in categorySegments" :key="segment.key" class="storage-legend-row">
+                    <span class="storage-legend-dot" :style="{ background: segment.color }" aria-hidden="true"></span>
+                    <span class="storage-legend-label">{{ segment.label }}</span>
+                    <span class="storage-legend-size">{{ formatBytes(segment.bytes) }}</span>
+                    <span class="storage-legend-percent muted">{{ storageShareLabel(segment.bytes, storage.diana_bytes) }}</span>
+                  </li>
+                </ul>
+                <EmptyState v-if="categorySegments.length === 0 && !storage.scanning" title="数据目录还是空的" hint="机器人收到媒体后这里会出现分类占用" />
+              </div>
+
+              <p v-if="storage.disk_unavailable" class="hint">
+                读不到磁盘容量（{{ storage.disk_unavailable }}），上面那圈只按数据目录的分类画。
+              </p>
+              <p class="hint">
+                数据目录 <code class="mono">{{ storage.path }}</code>。
+                <template v-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
+                <template v-else-if="storage.scanned_at">统计于 {{ formatTime(storage.scanned_at) }}。</template>
+                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理。
+              </p>
+            </template>
+          </div>
+        </section>
+      </div>
+
       <div v-show="activePage === 'cache'" class="settings-section-body">
         <section class="download-cache-settings">
-          <div class="card-header">
-            <h2>下载缓存</h2>
+          <div class="card-header" style="justify-content: flex-end">
             <button class="btn small ghost" type="button" :disabled="cacheLoading || cacheSaving" title="刷新缓存设置" aria-label="刷新缓存设置" @click="loadCachePolicy">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
@@ -339,6 +578,14 @@
                 <span v-if="currentVersionLabel" class="mono">{{ currentVersionLabel }}</span>
               </span>
             </div>
+            <!-- 检查结果要看得见：不然不管有没有新版本，按钮都是一句「下载最新」。 -->
+            <div v-if="systemVersion?.update_supported && updateCheck" class="info-row">
+              <span class="muted info-label">最新版本</span>
+              <span class="info-value cluster" style="gap: 6px; justify-content: flex-end">
+                <span class="badge" :class="updateCheck.update_available ? 'warn' : 'ok'">{{ updateCheck.update_available ? "有新版本" : "已是最新" }}</span>
+                <span v-if="latestVersion" class="mono">{{ latestVersion }}</span>
+              </span>
+            </div>
             <p class="muted" style="font-size: 12.5px; margin: 0">
               {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；重启并安装必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
             </p>
@@ -351,10 +598,28 @@
               <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
             </template>
             <div class="cluster">
-              <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
+              <!-- 检查没成功就不提供下载：不知道最新版是什么的时候，先让它重新检一次。 -->
+              <button
+                v-if="systemVersion?.update_supported && !updateCheck && !downloadReadyForLatest"
+                class="btn primary"
+                type="button"
+                :disabled="loading"
+                @click="loadUpdates"
+              >
+                <RefreshCw :size="15" aria-hidden="true" />
+                {{ loading ? "检查中…" : "检查更新" }}
+              </button>
+              <button
+                v-else-if="systemVersion?.update_supported"
+                class="btn primary"
+                type="button"
+                :disabled="operationRunning || upToDate"
+                :title="upToDate ? '已经是最新版本，没有可下载的更新' : undefined"
+                @click="runUpdate"
+              >
                 <RefreshCw v-if="deploymentMode === 'release' && downloadReadyForLatest" :size="15" aria-hidden="true" />
                 <Download v-else :size="15" aria-hidden="true" />
-                {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "重启并安装" : downloadReadyForLatest ? "重启并安装" : "下载最新 Release" }}
+                {{ primaryUpdateLabel }}
               </button>
             </div>
             <p v-if="staleDownloadedVersion" class="muted" style="font-size: 12.5px; margin: 0">
@@ -414,9 +679,6 @@
       <div v-show="activePage === 'status'" class="settings-section-body">
         <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
         <section class="card">
-          <div class="card-header">
-            <h2>运行状态</h2>
-          </div>
           <div class="card-body stack" style="gap: 8px; font-size: 13px">
             <div class="info-row">
               <span class="muted info-label">运行时长</span>
@@ -435,9 +697,6 @@
       <div v-show="activePage === 'theme'" class="settings-section-body">
         <!-- 主题 -->
         <section class="card">
-          <div class="card-header">
-            <h2>界面主题</h2>
-          </div>
           <div class="card-body stack">
             <div class="field">
               <label>主题模式</label>
@@ -472,11 +731,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
-import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import StorageDonut from "../components/StorageDonut.vue";
+import { Activity, Download, Eye, EyeOff, Globe, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -495,6 +756,8 @@ import {
   restartSystem,
   getMediaCachePolicy,
   saveMediaCachePolicy,
+  getStorageUsage,
+  type StorageUsage,
   type MediaCachePolicy,
   getHistoryMediaPolicy,
   saveHistoryMediaPolicy,
@@ -505,6 +768,15 @@ import {
   listOpenAPIKeys,
   createOpenAPIKey,
   revokeOpenAPIKey,
+  getBrowserControlStatus,
+  saveBrowserControlPolicy,
+  createBrowserControlToken,
+  revokeBrowserControlToken,
+  setBrowserControlTakeover,
+  disconnectBrowserControl,
+  type BrowserControlConnection,
+  type BrowserControlPolicy,
+  type BrowserControlToken,
   listPlugins,
   setPluginEnabled,
   updatePluginSettings,
@@ -518,7 +790,8 @@ import {
 } from "../api";
 import { askConfirm } from "../confirm";
 import { accentOptions, theme } from "../theme";
-import { formatTime, formatUptime } from "../format";
+import { formatBytes, formatNumber, formatTime, formatUptime } from "../format";
+import { storageCategorySegments, storageDiskSegments, storageDiskTotal, storageShareLabel, storageWidth } from "../storage-usage";
 import { toastError, toastSuccess } from "../toast";
 
 // 侧栏菜单按「改的是谁的」分组：账号与安全决定谁能进来，系统是这台服务本身，
@@ -527,6 +800,8 @@ const settingsPages = [
   { key: "security", label: "访问安全", hint: "谁能打开这个控制台：管理账号与密码保护。", icon: ShieldCheck },
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
   { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
+  { key: "browser-control", label: "浏览器控制", hint: "让机器人操作你自己浏览器里已授权站点的页面，随时可人工接管。", icon: Globe },
+  { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
   { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略，以及发送文件时接入端回源拉取媒体的地址。", icon: Images },
   { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
@@ -534,14 +809,69 @@ const settingsPages = [
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
 ] as const;
 
-const settingsGroups: { label: string; pages: (typeof settingsPages)[number][] }[] = [
-  { label: "账号与安全", pages: [settingsPages[0], settingsPages[1], settingsPages[2]] },
-  { label: "系统", pages: [settingsPages[3], settingsPages[4], settingsPages[5], settingsPages[6]] },
-  { label: "个性化", pages: [settingsPages[7]] }
-];
+// 按 key 组装而不是按下标：调顺序、插新页时不用跟着数数组下标。
+const settingsGroups = (
+  [
+    { label: "个性化", keys: ["theme"] },
+    { label: "账号与安全", keys: ["security", "sessions", "openapi", "browser-control"] },
+    { label: "系统", keys: ["storage", "cache", "media", "update", "status"] }
+  ] as const
+).map((group) => ({
+  label: group.label,
+  pages: group.keys.map((key) => settingsPages.find((page) => page.key === key)!)
+}));
 
 const activePage = ref<(typeof settingsPages)[number]["key"]>("security");
 const activePageMeta = computed(() => settingsPages.find((item) => item.key === activePage.value) ?? settingsPages[0]);
+
+// 存储卡片：后端遍历数据目录不便宜，所以只在真的打开这一页时才请求，
+// 并且在它报告「还在扫」的时候自己轮询，不让用户对着空饼图点刷新。
+const storage = ref<StorageUsage | null>(null);
+const storageLoading = ref(false);
+const storageError = ref("");
+let storageRetryTimer: number | undefined;
+
+const diskSegments = computed(() => storageDiskSegments(storage.value));
+const categorySegments = computed(() => storageCategorySegments(storage.value));
+const diskTotal = computed(() => storageDiskTotal(storage.value));
+const diskCenterValue = computed(() => {
+  const usage = storage.value;
+  if (!usage) return "—";
+  return formatBytes(usage.disk_total_bytes ? usage.disk_free_bytes ?? 0 : usage.diana_bytes);
+});
+const diskCenterLabel = computed(() => {
+  const usage = storage.value;
+  if (!usage) return "";
+  return usage.disk_total_bytes ? `可用 / 共 ${formatBytes(usage.disk_total_bytes)}` : "数据目录";
+});
+const categoryBarLabel = computed(
+  () => `数据目录占用：${categorySegments.value.map((segment) => `${segment.label} ${formatBytes(segment.bytes)}`).join("，")}`
+);
+
+async function loadStorageUsage() {
+  storageLoading.value = true;
+  storageError.value = "";
+  try {
+    const usage = await getStorageUsage();
+    storage.value = usage;
+    if (storageRetryTimer !== undefined) window.clearTimeout(storageRetryTimer);
+    if (usage.scanning) {
+      storageRetryTimer = window.setTimeout(() => void loadStorageUsage(), 2000);
+    }
+  } catch (error) {
+    storageError.value = error instanceof Error ? error.message : "读取存储占用失败";
+  } finally {
+    storageLoading.value = false;
+  }
+}
+
+watch(
+  activePage,
+  (page) => {
+    if (page === "storage" && !storage.value) void loadStorageUsage();
+  },
+  { immediate: true }
+);
 
 const cachePolicy = ref<MediaCachePolicy | null>(null);
 const historyMediaDays = ref(-1);
@@ -693,6 +1023,23 @@ const openAPISettings = ref<Record<string, unknown>>({});
 const savingOpenAPISettings = ref(false);
 const togglingPlugin = ref(false);
 const openAPIPluginEnabled = computed(() => openAPIPlugin.value?.enabled === true);
+const browserPolicy = ref<BrowserControlPolicy>({ enabled: false, write_enabled: false, command_timeout_ms: 20000, commands_per_minute: 60 });
+const browserTokens = ref<BrowserControlToken[]>([]);
+const browserConnections = ref<BrowserControlConnection[]>([]);
+const browserReady = ref(false);
+const browserExtensionDownload = ref(false);
+const browserLoading = ref(true);
+const browserSaving = ref(false);
+const browserCreating = ref(false);
+const browserRevokingID = ref("");
+const browserNewTokenName = ref("");
+const browserCreatedToken = ref("");
+// 三个站点列表在界面上是多行文本，保存时才拆成数组：让用户一行一条地贴，
+// 比逗号分隔好改，也不会因为多打一个逗号多出一条空白规则。
+const browserOriginsText = ref("");
+const browserAllowedHostsText = ref("");
+const browserDeniedHostsText = ref("");
+
 const OPEN_API_PLUGIN_ID = "official.open-api";
 const otherSessionCount = computed(() => sessions.value.filter((item) => !item.current).length);
 const operationRunning = computed(() => updating.value || updateStatus.value?.updating === true);
@@ -705,6 +1052,14 @@ const latestVersion = computed(() => updateCheck.value?.latest_version || "");
 const downloadReadyForLatest = computed(() => updateStatus.value?.download_ready === true
   && Boolean(updateStatus.value.downloaded_version)
   && (!latestVersion.value || updateStatus.value.downloaded_version === latestVersion.value));
+// 检查说没新版本、也没有已下载待安装的包，就没什么可执行的。
+const upToDate = computed(() => updateCheck.value?.update_available === false && !downloadReadyForLatest.value);
+const primaryUpdateLabel = computed(() => {
+  if (operationRunning.value) return "处理中…";
+  if (downloadReadyForLatest.value) return "重启并安装";
+  if (upToDate.value) return "已是最新";
+  return deploymentMode.value === "git" ? "重启并安装" : "下载最新 Release";
+});
 const staleDownloadedVersion = computed(() => updateStatus.value?.download_ready === true
   && Boolean(updateStatus.value.downloaded_version)
   && Boolean(latestVersion.value)
@@ -893,6 +1248,136 @@ async function revokeKey(key: OpenAPIKey): Promise<void> {
   }
 }
 
+function linesToList(value: string): string[] {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+async function loadBrowserControl(): Promise<void> {
+  browserLoading.value = true;
+  try {
+    const status = await getBrowserControlStatus();
+    browserPolicy.value = status.policy;
+    browserTokens.value = status.tokens ?? [];
+    browserConnections.value = status.connections ?? [];
+    browserReady.value = status.ready;
+    browserExtensionDownload.value = status.extension_download ?? false;
+    browserOriginsText.value = (status.policy.allowed_origins ?? []).join("\n");
+    browserAllowedHostsText.value = (status.policy.allowed_hosts ?? []).join("\n");
+    browserDeniedHostsText.value = (status.policy.denied_hosts ?? []).join("\n");
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "读取浏览器控制状态失败");
+  } finally {
+    browserLoading.value = false;
+  }
+}
+
+async function saveBrowserPolicy(): Promise<void> {
+  if (browserSaving.value) return;
+  const policy: BrowserControlPolicy = {
+    ...browserPolicy.value,
+    allowed_origins: linesToList(browserOriginsText.value),
+    allowed_hosts: linesToList(browserAllowedHostsText.value),
+    denied_hosts: linesToList(browserDeniedHostsText.value)
+  };
+  if (policy.enabled && (policy.allowed_hosts?.length ?? 0) === 0) {
+    // 这不是错误配置，但它的效果是「启用了却一个站点都碰不到」，先说清楚再保存。
+    if (!(await askConfirm({
+      title: "没有授权任何站点",
+      message: "站点白名单是空的，扩展连上来也读不了任何页面。确定就这样保存吗？",
+      confirmLabel: "保存"
+    }))) {
+      return;
+    }
+  }
+  browserSaving.value = true;
+  try {
+    const saved = await saveBrowserControlPolicy(policy);
+    toastSuccess("浏览器控制策略已保存");
+    browserPolicy.value = saved.policy;
+    await loadBrowserControl();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "保存浏览器控制策略失败");
+  } finally {
+    browserSaving.value = false;
+  }
+}
+
+async function createBrowserToken(): Promise<void> {
+  const name = browserNewTokenName.value.trim();
+  if (name.length === 0 || browserCreating.value) return;
+  browserCreating.value = true;
+  try {
+    const result = await createBrowserControlToken(name);
+    // 明文只在这次响应里出现，摆在页面上等用户复制，刷新即消失。
+    browserCreatedToken.value = result.plaintext;
+    browserNewTokenName.value = "";
+    await loadBrowserControl();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "签发令牌失败");
+  } finally {
+    browserCreating.value = false;
+  }
+}
+
+async function copyBrowserToken(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(browserCreatedToken.value);
+    toastSuccess("令牌已复制");
+  } catch {
+    toastError("复制失败，请手动选中复制");
+  }
+}
+
+async function revokeBrowserToken(token: BrowserControlToken): Promise<void> {
+  if (!(await askConfirm({
+    title: "吊销控制令牌",
+    message: `吊销「${token.name}」后，用它连着的浏览器会立即断开，需要重新签发才能再连。`,
+    confirmLabel: "吊销",
+    danger: true
+  }))) {
+    return;
+  }
+  browserRevokingID.value = token.id;
+  try {
+    await revokeBrowserControlToken(token.id);
+    toastSuccess("令牌已吊销");
+    await loadBrowserControl();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "吊销令牌失败");
+  } finally {
+    browserRevokingID.value = "";
+  }
+}
+
+async function toggleBrowserTakeover(conn: BrowserControlConnection): Promise<void> {
+  try {
+    await setBrowserControlTakeover(conn.id, !conn.takeover, conn.takeover ? "" : "从 WebUI 接管");
+    await loadBrowserControl();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "切换接管状态失败");
+  }
+}
+
+async function disconnectBrowser(conn: BrowserControlConnection): Promise<void> {
+  if (!(await askConfirm({
+    title: "断开浏览器连接",
+    message: "断开后扩展会自动重连；要彻底停掉请关闭总开关或吊销令牌。",
+    confirmLabel: "断开",
+    danger: true
+  }))) {
+    return;
+  }
+  try {
+    await disconnectBrowserControl(conn.id);
+    await loadBrowserControl();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "断开连接失败");
+  }
+}
+
 const shortCommit = computed(() => {
   const commit = updateStatus.value?.head_commit;
   return commit ? commit.slice(0, 10) : "—";
@@ -1049,6 +1534,7 @@ onMounted(() => {
   void loadAuthStatus().then(() => loadSessions());
   void loadApiKeys();
   void loadOpenAPIPlugin();
+  void loadBrowserControl();
   void getHealth()
     .then((result) => {
       health.value = result;
@@ -1065,10 +1551,97 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
 	if (updateStatusPollTimer !== undefined) window.clearInterval(updateStatusPollTimer);
+	if (storageRetryTimer !== undefined) window.clearTimeout(storageRetryTimer);
 });
 </script>
 
 <style scoped>
+.storage-overview {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.storage-breakdown {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 12px;
+}
+
+.storage-breakdown-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.storage-breakdown-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.storage-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.storage-bar-part {
+  min-width: 2px;
+}
+
+.storage-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 260px;
+  min-width: 240px;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.storage-legend-wide {
+  flex: none;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  column-gap: 20px;
+}
+
+.storage-legend-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.storage-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.storage-legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-legend-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-legend-percent {
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
 .update-token-field {
   display: grid;
   gap: 4px;
@@ -1189,19 +1762,13 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-/* 选中项的标题和一句话说明：分区名进了侧栏，「这一项管什么」由正文头部交代。 */
+/* 「这一项管什么」由正文头部交代；分区名和选中项都在侧栏里。 */
 .settings-page-head {
   margin: 0 0 14px;
 }
 
-.settings-page-head h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 650;
-}
-
 .settings-page-desc {
-  margin: 4px 0 0;
+  margin: 0;
   font-size: 12.5px;
   color: var(--muted);
 }

@@ -5,7 +5,6 @@
   <div class="provider-view">
     <header class="view-header">
       <div class="view-title">
-        <h1>提供商</h1>
         <p>管理提供商、凭据、分组与可用模型；机器人按用途选择提供商和模型</p>
       </div>
       <div class="view-actions">
@@ -564,7 +563,8 @@ function providerLabel(provider: Provider): string {
   const labels: Record<Provider, string> = {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
-    anthropic: "Anthropic"
+    anthropic: "Anthropic",
+    typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];
 }

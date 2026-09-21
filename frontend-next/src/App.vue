@@ -32,25 +32,19 @@
           <span class="brand-mark">
             <BotMessageSquare :size="19" aria-hidden="true" />
           </span>
-          <span class="brand-name">
-            <strong>Diana</strong>
-            <button v-if="versionLabel" class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
-              {{ versionLabel }}
-              <span v-if="releaseUpdateAvailable" class="version-dot" aria-label="有新版本"></span>
-            </button>
-          </span>
+          <strong class="brand-name">Diana</strong>
+          <button
+            class="btn ghost icon-only sidebar-toggle"
+            type="button"
+            :aria-label="sidebarToggleLabel"
+            :aria-expanded="sidebarExpanded"
+            aria-controls="app-sidebar"
+            :title="sidebarToggleLabel"
+            @click="toggleSidebar"
+          >
+            <component :is="sidebarToggleIcon" :size="18" aria-hidden="true" />
+          </button>
         </div>
-        <button
-          class="btn ghost icon-only sidebar-toggle"
-          type="button"
-          :aria-label="sidebarToggleLabel"
-          :aria-expanded="sidebarExpanded"
-          aria-controls="app-sidebar"
-          :title="sidebarToggleLabel"
-          @click="toggleSidebar"
-        >
-          <component :is="sidebarToggleIcon" :size="18" aria-hidden="true" />
-        </button>
       </div>
 
       <div v-if="scopeOptions.length > 1" class="bot-scope">
@@ -86,6 +80,17 @@
           <component :is="themeIcon" :size="16" aria-hidden="true" />
           <span class="nav-label">{{ themeModeLabel }}</span>
         </button>
+        <button
+          v-if="versionLabel"
+          class="nav-action version-action"
+          type="button"
+          title="查看版本与更新"
+          @click="versionOpen = true"
+        >
+          <Tag :size="16" aria-hidden="true" />
+          <span class="nav-label version-label-text">{{ versionLabel }}</span>
+          <span v-if="releaseUpdateAvailable" class="version-dot" aria-label="有新版本"></span>
+        </button>
       </div>
     </aside>
 
@@ -102,7 +107,7 @@
         >
           <PanelLeftOpen :size="18" aria-hidden="true" />
         </button>
-        <span class="topbar-title">{{ viewTitle }}</span>
+        <h1 class="topbar-title">{{ viewTitle }}</h1>
         <span class="topbar-spacer" />
         <span v-if="botSummary" class="badge" :class="botSummary.kind" :title="botSummary.hint">
           <span class="status-dot" :class="{ pulse: botSummary.kind === 'ok' }" aria-hidden="true" />
@@ -113,7 +118,7 @@
           <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
           <span class="topbar-stream-text">{{ stream.connected ? "实时连接正常" : "实时连接已断开" }}</span>
         </span>
-        <span v-if="health" class="topbar-uptime mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
+        <span v-if="health" class="topbar-uptime mono">已运行 {{ formatUptime(health.uptime_seconds) }}</span>
         <div class="topbar-actions">
         <a
           class="btn ghost small icon-only topbar-repo"
@@ -177,6 +182,7 @@ import {
   BrainCircuit,
   CalendarClock,
   FileClock,
+  Globe,
   LayoutGrid,
   MessageCircle,
   LogOut,
@@ -186,6 +192,7 @@ import {
   Moon,
   Sun,
   SunMoon,
+  Tag,
   BookUser,
   Users,
   Wrench
@@ -219,6 +226,7 @@ const PluginsView = defineAsyncComponent(() => import("./views/PluginsView.vue")
 const GroupsView = defineAsyncComponent(() => import("./views/GroupsView.vue"));
 const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
 const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
+const BrowserBoxView = defineAsyncComponent(() => import("./views/BrowserBoxView.vue"));
 
 const VIEW_CACHE_LIMIT = 16;
 
@@ -233,6 +241,7 @@ const viewComponents: Record<ViewID, Component> = {
   groups: GroupsView,
   users: MemoryView,
   notebook: MemoryView,
+  browser: BrowserBoxView,
   logs: RecordsView,
   settings: SettingsView
 };
@@ -314,6 +323,7 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
+  browser: "内置浏览器",
   events: "运行记录",
   tasks: "提醒与订阅",
   setup: "配置向导",
@@ -431,6 +441,7 @@ function navIcon(id: ViewID): Component {
     plugins: PlugZap,
     groups: Users,
     users: BookUser,
+    browser: Globe,
     logs: FileClock,
     settings: Wrench
   };

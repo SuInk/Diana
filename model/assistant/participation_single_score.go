@@ -215,5 +215,7 @@ func (r *Runtime) recordParticipationRatings(ctx context.Context, event MessageE
 		return
 	}
 	a, b := cfg.participationPreferences().ratingLevels()
-	_ = w.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "proactive_reply_route", Message: "模型已完成接话评分", Actor: oneBotEventActor(event), Target: event.MessageID, Metadata: map[string]any{"group_id": event.GroupID, "ratings": v, "relevance_level": a, "chat_level": b, "parsed": parsed, "allowed": allowed, "retried": retried, "reason": event.routingReason, "raw": truncateRunesFromStart(raw, 1000)}})
+	// custom_criteria 让「这次评分带没带管理员那段判据」可回溯：不记的话，补充判据
+	// 改坏了导致的沉默和模型自己判成沉默，在事件中心里长得一模一样。
+	_ = w.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "proactive_reply_route", Message: "模型已完成接话评分", Actor: oneBotEventActor(event), Target: event.MessageID, Metadata: map[string]any{"group_id": event.GroupID, "ratings": v, "relevance_level": a, "chat_level": b, "parsed": parsed, "allowed": allowed, "retried": retried, "custom_criteria": customRouterCriteria(cfg.ProactiveReplyExtraCriteria) != "", "reason": event.routingReason, "raw": truncateRunesFromStart(raw, 1000)}})
 }

@@ -5,7 +5,7 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>日志</h1>
+        <h2>日志</h2>
         <p>操作审计与接口错误记录</p>
       </div>
       <div class="view-actions">

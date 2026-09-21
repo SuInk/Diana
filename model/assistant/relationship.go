@@ -116,7 +116,10 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaNotebookToolName:    true,
 		dianaVersionToolName:     true,
 		dianaThreadStateToolName: true,
-		dianaStickerToolName:     true,
+		// 自述是机器人自己的自我描述，不是谁的特权：只给主人就等于这个功能只在
+		// 主人在场时存在。清空全部是主人专属，由工具自己判身份。
+		dianaSelfNoteToolName: true,
+		dianaStickerToolName:  true,
 		// 只发模型自己写的文本内容，不碰本地文件和命令；「仅主人可用」由插件设置在工具内判断。
 		dianaFileDeliveryToolName: true,
 		// 查图是不是 AI 生成的只读图片元数据，不碰本地文件和命令；群里人人都会问。

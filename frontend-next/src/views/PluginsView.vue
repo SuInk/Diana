@@ -6,11 +6,12 @@
     <div class="segmented extension-tabs" role="tablist" aria-label="扩展类型">
       <button v-for="tab in extensionTabs" :key="tab.value" type="button" role="tab" :aria-selected="extensionTab === tab.value" :class="{active:extensionTab === tab.value}" @click="changeExtensionTab(tab.value)">{{ tab.label }}</button>
     </div>
-    <ExtensionManager v-if="extensionTab !== 'plugins'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
+    <ExtensionManager v-if="extensionTab === 'skill' || extensionTab === 'mcp'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
+    <AgentResidencyPanel v-else-if="extensionTab === 'residency'" />
+    <AgentBrowserPanel v-else-if="extensionTab === 'browser'" />
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
-        <h1>扩展</h1>
         <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置" }} · OpenAPI 位于系统设置</p>
       </div>
       <div class="view-actions">
@@ -640,10 +641,13 @@
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
-const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
-const extensionTab = ref<'plugins' | 'skill' | 'mcp'>('plugins');
+import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
+import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'},{value:'residency' as const,label:'上下文'},{value:'browser' as const,label:'浏览器'}];
+type ExtensionTab = typeof extensionTabs[number]['value'];
+const extensionTab = ref<ExtensionTab>('plugins');
 const extensionManager = ref<InstanceType<typeof ExtensionManager> | null>(null);
-async function changeExtensionTab(value:'plugins'|'skill'|'mcp') {
+async function changeExtensionTab(value:ExtensionTab) {
   if (value === extensionTab.value) return;
   if (extensionManager.value && !await extensionManager.value.prepareLeave()) return;
   if (settingsTarget.value) { await closeSettings(); if (settingsTarget.value) return; }

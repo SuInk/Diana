@@ -93,7 +93,7 @@ func TestParticipationIsSoleIntentGate(t *testing.T) {
 	if decision.allows(0, settings) {
 		t.Fatal("model silence overridden")
 	}
-	prompt := proactiveReplyRouterPromptForChatIn("旧规则：没有新信息不能发言", settings, false)
+	prompt := proactiveReplyRouterPromptForChatIn("旧规则：没有新信息不能发言", "", settings, false)
 	if strings.Contains(prompt, "旧规则") || !strings.Contains(prompt, "闲聊档位：always") {
 		t.Fatal(prompt)
 	}
@@ -166,7 +166,7 @@ func TestLiveParticipationPreferences(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := BotConfig{ChatInLevel: tc.level, Participation: tc.preferences}.WithDefaults()
 			probe := &liveTopicProbe{LLMProvider: client, t: t}
-			resp, err := probe.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.chatInSettings(), false)}, {Role: llm.RoleUser, Content: tc.input}}})
+			resp, err := probe.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)}, {Role: llm.RoleUser, Content: tc.input}}})
 			if err != nil {
 				t.Fatal("real model failed; see redacted log")
 			}

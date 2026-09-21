@@ -355,7 +355,7 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	if result.Context == "[抖音] " {
 		result.Context = "[抖音] 已识别内容"
 	}
-	if resolverDouyinMediaType(detail.AwemeType) == "image" {
+	if douyinDetailIsImagePost(detail) {
 		result.ImageURLs = limitStrings(douyinMediaImageURLs(detail), maxImages)
 		if len(result.ImageURLs) == 0 {
 			result.Context += "\n图集解析成功，但没有取得可发送的图片地址。"
@@ -550,6 +550,15 @@ func normalizeDouyinDetail(detail douyinMediaDetail, awemeID string) douyinMedia
 	return detail
 }
 
+// douyinDetailIsImagePost 判断这条作品是不是图集。
+//
+// aweme_type 不可靠：share/note 形式的图集回的是 0，而它的 video.play_addr 指向背景
+// 音乐的 mp3，只看 type 就会把图集当视频送去下载，最后只能拿到一个空响应。有 images
+// 就按图集处理，type 只作兜底。
+func douyinDetailIsImagePost(detail douyinMediaDetail) bool {
+	return len(detail.Images) > 0 || resolverDouyinMediaType(detail.AwemeType) == "image"
+}
+
 func resolverDouyinMediaType(code int) string {
 	switch code {
 	case 2, 68, 150:
@@ -606,10 +615,9 @@ func resolverDownloadFailureHint(ctx context.Context, raw string) string {
 func resolverCredentialFailureHint(ctx context.Context, raw string) string {
 	switch {
 	case isDouyinURL(raw):
-		if resolverDouyinCookie(ctx) == "" {
-			return "未配置抖音 Cookie，请在插件设置里填写"
-		}
-		return "抖音 Cookie 可能已失效，或视频超过大小/时长上限"
+		// 抖音的解析和下载都不依赖 Cookie（配了只是少被风控盯上），而且 Cookie 真失效时
+		// 前面的 detail 接口就已经失败、根本走不到下载。再提示去换 Cookie 只会把排查带偏。
+		return "抖音接口没有返回可下载的地址，或视频超过大小/时长上限"
 	case isXiaohongshuURL(raw):
 		if resolverXHSCookie(ctx) == "" {
 			return "未配置小红书 Cookie，请在插件设置里填写"

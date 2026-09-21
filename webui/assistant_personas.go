@@ -35,6 +35,10 @@ type personaDeletePayload struct {
 type personaImportPayload struct {
 	Version  int                 `json:"version,omitempty"`
 	Personas []assistant.Persona `json:"personas"`
+	// Source 是整份文件的原文，前端读到什么就发什么。YAML 只能在服务端解析
+	// （前端没有 YAML 解析器），而品格层本来就该写成 YAML：十来段带理由的条目，
+	// JSON 里既没有注释也没有多行字符串。老前端仍然发 personas，两条都认。
+	Source string `json:"source,omitempty"`
 }
 
 type personaImportResponse struct {
@@ -148,6 +152,14 @@ func (h *BotHandler) importPersonas(c *gin.Context) {
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		h.writeError(c, http.StatusBadRequest, "personas_import", err, "", nil)
 		return
+	}
+	if len(payload.Personas) == 0 && strings.TrimSpace(payload.Source) != "" {
+		document, err := assistant.ParsePersonaDocument([]byte(payload.Source))
+		if err != nil {
+			h.writeError(c, http.StatusBadRequest, "personas_import", err, "", nil)
+			return
+		}
+		payload.Personas = document.Personas
 	}
 	if len(payload.Personas) == 0 {
 		h.writeError(c, http.StatusBadRequest, "personas_import", errPersonaImportEmpty, "", nil)

@@ -117,3 +117,122 @@ func utf16Length(text string) int {
 	}
 	return len(utf16.Encode([]rune(text)))
 }
+
+// 出站前的标记归一与清理。
+//
+// 标记的语法是模型手写的，写歪就没人认得出来。线上 9/20 换上 mimo-x-flash-preview
+// 之后一天里写出六种形态：<diana-at:ID>、(diana-at:ID)、[ diana-at:ID ]、
+// @diana-at-ID，以及光秃秃一个 @diana-at。dianaMentionMarkerPattern 一个都不认，
+// 于是它们原样当正文发进群——截图里那句「@diana-at-30007 撤啥呀」就是这么来的。
+//
+// 提示词已经写明唯一合法写法，但小模型记得有这个标记、不记得确切语法是常态，
+// 只靠提示词堵不住。出站前因此过两道：
+//
+//   - normalizeDianaMentionVariants：外壳换成方括号、分隔符换成冒号，只要 id 还
+//     认得出来就还原成真提及——模型本来就是想 @ 这个人，没理由因为括号打错就不 @。
+//   - dropUnusableDianaMentions：id 认不出来（占位符、编出来的、只写了半个标记）
+//     的整个丢掉。不降级成纯文本的「@昵称」：那个点不动也没通知，读的人以为被叫
+//     了其实没有；少一个 @ 只是这句话没点名，句子本身照样完整。
+//
+// 两道都跳过代码块和行内代码：Diana 在群里讲自己怎么实现时会把标记写进反引号，
+// 那是在展示写法，不是要提及谁。
+const mentionCodeSpanAlternation = "(?s)```.*?```|~~~.*?~~~|`[^`\n]*`|"
+
+var (
+	// 变体的核心：diana-at 后面跟一个分隔符和一个还认得出的 id。
+	dianaMentionVariantCore = `[Dd]iana[-_ ]?at[ \t]*[:：=-][ \t]*([A-Za-z0-9_-]{1,64})`
+	// 连同外壳一起吃掉：方括号、尖括号、圆括号、花括号、中文方括号，或者一个 @。
+	dianaMentionVariantPattern = regexp.MustCompile(mentionCodeSpanAlternation +
+		`[\[<({【]?[ \t]*@?[ \t]*` + dianaMentionVariantCore + `[ \t]*[\]>)}】]?`)
+	dianaMentionVariantIDPattern = regexp.MustCompile(dianaMentionVariantCore)
+	// 归一之后还剩下的标记残骸：括号里裹着 diana-at 的任何东西，以及没带 id 的裸写。
+	dianaMentionResiduePattern = regexp.MustCompile(mentionCodeSpanAlternation +
+		`[\[<({【][^\[\]<>(){}【】\n]{0,80}?[Dd]iana[-_ ]?at[^\[\]<>(){}【】\n]{0,80}?[\]>)}】]` +
+		`|@?[ \t]*[Dd]iana[-_ ]?at(?:[ \t]*[:：=-][ \t]*[A-Za-z0-9_-]{0,64})?`)
+)
+
+// normalizeDianaMentionVariants 把写歪的提及标记改回正规形态。
+func normalizeDianaMentionVariants(text string) string {
+	if !strings.Contains(strings.ToLower(text), "diana") {
+		return text
+	}
+	return dianaMentionVariantPattern.ReplaceAllStringFunc(text, func(token string) string {
+		if isMentionCodeSpan(token) {
+			return token
+		}
+		match := dianaMentionVariantIDPattern.FindStringSubmatch(token)
+		if match == nil {
+			return token
+		}
+		return mentionMarkerFor(match[1])
+	})
+}
+
+// dropUnusableDianaMentions 丢掉 id 不可用的标记，正规且 id 可用的原样留下。
+func dropUnusableDianaMentions(text string, acceptable func(id string) bool) string {
+	if !strings.Contains(strings.ToLower(text), "diana") {
+		return text
+	}
+	var builder strings.Builder
+	last := 0
+	for _, bounds := range dianaMentionResiduePattern.FindAllStringIndex(text, -1) {
+		token := text[bounds[0]:bounds[1]]
+		if isMentionCodeSpan(token) || usableMentionMarker(token, acceptable) {
+			continue
+		}
+		builder.WriteString(text[last:bounds[0]])
+		last = bounds[1]
+		// 标记连着的那个空格是给提及和正文分隔用的，标记没了它就成了多余的缩进。
+		if last < len(text) && text[last] == ' ' {
+			last++
+		}
+	}
+	if last == 0 {
+		return text
+	}
+	builder.WriteString(text[last:])
+	return strings.TrimSpace(builder.String())
+}
+
+// usableMentionMarker 判断这段残骸是不是一个照常发出去就行的正规标记。
+func usableMentionMarker(token string, acceptable func(id string) bool) bool {
+	match := dianaMentionMarkerPattern.FindStringSubmatch(token)
+	if match == nil || match[0] != token {
+		return false
+	}
+	return acceptable(match[1])
+}
+
+func isMentionCodeSpan(token string) bool {
+	return strings.HasPrefix(token, "`") || strings.HasPrefix(token, "~")
+}
+
+// mentionIDAcceptable 判断这个 id 能不能当成 platform 上的账号发出去。
+//
+// OneBot 和 Telegram 的用户 ID 都是纯数字，卡死数字最省事。其余平台的 ID 形态各
+// 不相同（飞书是 ou_ 开头的 open_id，企业微信是字母数字的账号名），没法统一断言，
+// 只排掉两种确定不是账号的：把标记名写进 id 的，和没还原成功的脱敏别名——别名能
+// 对上就一定在 restoreText 那步换成真 ID 了，还留着 im_ 前缀说明这个 id 是编的。
+func mentionIDAcceptable(platform, id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	if strings.Contains(strings.ToLower(id), "diana") || strings.HasPrefix(id, identityAliasPrefix) {
+		return false
+	}
+	switch NormalizePlatformID(platform) {
+	case PlatformOneBotV11, PlatformTelegram:
+		return numericChatID(id)
+	}
+	return true
+}
+
+func numericChatID(id string) bool {
+	for index := 0; index < len(id); index++ {
+		if id[index] < '0' || id[index] > '9' {
+			return false
+		}
+	}
+	return len(id) > 0
+}
