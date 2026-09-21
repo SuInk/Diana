@@ -3217,8 +3217,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
-	stopTyping := r.startTypingIndicator(ctx, event, cfg)
-	defer stopTyping()
+	typing := r.startTypingIndicator(ctx, event, cfg)
+	// 放进 ctx 是为了让发送链路能自己调节：发出一条就静音，还有下一条再点亮。
+	ctx = withTypingIndicator(ctx, typing)
+	defer typing.stop()
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
