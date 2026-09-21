@@ -21,8 +21,8 @@ const (
 	// browserControlHandshakeTimeout 是等 hello 帧的时间。连上来不说话的客户端
 	// 不该一直占着一条连接。
 	browserControlHandshakeTimeout = 10 * time.Second
-	// browserControlReadLimit 是单帧上限。截图是这里最大的一类载荷，
-	// 8 MiB 足够一张整屏 PNG，也挡住把控制面当文件上传口用。
+	// browserControlReadLimit 是单帧上限。页面正文是这里最大的一类载荷，
+	// 8 MiB 远超任何一页的可见文字，也挡住把控制面当文件上传口用。
 	browserControlReadLimit = 8 << 20
 	// browserControlWriteTimeout 是单次写超时。对端卡住时写会一直阻塞，
 	// 没有它的话一条坏连接能把下发指令的协程挂死。

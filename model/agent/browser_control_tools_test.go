@@ -5,11 +5,8 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,7 +59,6 @@ func TestBrowserControlToolsRegisteredWithBridge(t *testing.T) {
 	for _, want := range []string{
 		"browser_ext_tabs",
 		"browser_ext_read",
-		"browser_ext_screenshot",
 		"browser_ext_open",
 		"browser_ext_click",
 		"browser_ext_type",
@@ -116,68 +112,21 @@ func TestBrowserExtToolsSurfaceBridgeError(t *testing.T) {
 	}
 }
 
+func TestBrowserControlToolsHaveNoScreenshot(t *testing.T) {
+	// 截图要 <all_urls> 级权限，和「只授权白名单站点」冲突，所以这组工具里没有它。
+	names := browserExtToolNames(t, Config{WorkDir: t.TempDir(), BrowserControl: &stubBridge{ready: true}})
+	if names["browser_ext_screenshot"] {
+		t.Fatal("不该登记扩展截图工具")
+	}
+	if browserctl.KnownOp("page.screenshot") {
+		t.Fatal("协议里不该有截图指令")
+	}
+}
+
 func TestBrowserExtToolsWithoutBridgeExplainThemselves(t *testing.T) {
 	tool := &BrowserExtTabsTool{base: browserControlToolBase{root: t.TempDir()}}
 	_, err := tool.Run(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "未启用") {
 		t.Fatalf("没有控制面时应说清是没启用，得到 %v", err)
-	}
-}
-
-func TestBrowserExtScreenshotWritesDataURL(t *testing.T) {
-	root := t.TempDir()
-	// 1x1 透明 PNG，够验证解码与落盘。
-	png, err := base64.StdEncoding.DecodeString(
-		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
-	if err != nil {
-		t.Fatalf("准备测试图片失败：%v", err)
-	}
-	payload := map[string]any{
-		"url":   "https://example.com/page",
-		"title": "页面",
-		"image": "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("序列化失败：%v", err)
-	}
-	bridge := &stubBridge{ready: true, result: browserctl.Result{OK: true, Data: body}}
-	tool := &BrowserExtScreenshotTool{base: browserControlToolBase{root: root, bridge: bridge}}
-	out, err := tool.Run(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("截图失败：%v", err)
-	}
-	var result struct {
-		Path  string `json:"path"`
-		Bytes int    `json:"bytes"`
-	}
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		t.Fatalf("解析输出失败：%v", err)
-	}
-	if result.Bytes != len(png) {
-		t.Fatalf("落盘字节数不对：%d != %d", result.Bytes, len(png))
-	}
-	saved, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(result.Path)))
-	if err != nil {
-		t.Fatalf("读回截图失败：%v", err)
-	}
-	if string(saved) != string(png) {
-		t.Fatal("落盘内容与回执不一致")
-	}
-}
-
-func TestBrowserExtScreenshotRejectsGarbage(t *testing.T) {
-	bridge := &stubBridge{ready: true, result: browserctl.Result{OK: true, Data: json.RawMessage(`{"image":"不是图片"}`)}}
-	tool := &BrowserExtScreenshotTool{base: browserControlToolBase{root: t.TempDir(), bridge: bridge}}
-	if _, err := tool.Run(context.Background(), nil); err == nil {
-		t.Fatal("非法 base64 应报错，而不是写出一个坏文件")
-	}
-}
-
-func TestBrowserExtScreenshotStaysInWorkspace(t *testing.T) {
-	bridge := &stubBridge{ready: true, result: browserctl.Result{OK: true}}
-	tool := &BrowserExtScreenshotTool{base: browserControlToolBase{root: t.TempDir(), bridge: bridge}}
-	if _, err := tool.Run(context.Background(), map[string]any{"path": "../escape.png"}); err == nil {
-		t.Fatal("路径逃逸应被拦下")
 	}
 }

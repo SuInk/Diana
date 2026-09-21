@@ -111,12 +111,17 @@ func TestIsWriteOp(t *testing.T) {
 			t.Errorf("%s 应属于写操作", op)
 		}
 	}
-	for _, op := range []string{OpTabsList, OpPageRead, OpPageScreenshot} {
+	for _, op := range []string{OpTabsList, OpPageRead} {
 		if IsWriteOp(op) {
 			t.Errorf("%s 不该属于写操作", op)
 		}
 	}
 	if KnownOp("page.eval") {
 		t.Fatal("协议里不该有执行任意脚本的指令")
+	}
+	// 截图要 <all_urls> 或 activeTab 级权限，比「只授权白名单站点」宽得多，
+	// 为一张图把扩展权限放大到全网不值得，所以协议里没有它。
+	if KnownOp("page.screenshot") {
+		t.Fatal("协议里不该有截图指令")
 	}
 }

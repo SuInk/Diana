@@ -50,13 +50,17 @@ const (
 
 // 指令名。只有这几条，且全部是「看得懂的单步动作」：
 // 没有执行任意脚本，没有读写 Cookie，没有下载与文件系统访问。
+//
+// 这里没有截图。浏览器的 captureVisibleTab 要么要 <all_urls>、要么要 activeTab
+// 这种「当前这一页随便读」的权限，比「只授权白名单站点」宽得多；为了一张图把扩展
+// 的权限放大到全网不值得。要页面内容用 page.read，要出图用 Diana 自己的一次性
+// 无头浏览器（browser_screenshot），那条链路不碰用户的登录态。
 const (
-	OpTabsList       = "tabs.list"
-	OpPageRead       = "page.read"
-	OpPageScreenshot = "page.screenshot"
-	OpPageOpen       = "page.open"
-	OpPageClick      = "page.click"
-	OpPageType       = "page.type"
+	OpTabsList  = "tabs.list"
+	OpPageRead  = "page.read"
+	OpPageOpen  = "page.open"
+	OpPageClick = "page.click"
+	OpPageType  = "page.type"
 )
 
 // 错误码。回给模型的文字会变，错误码不会，WebUI 和测试都按它判断。
@@ -79,9 +83,8 @@ const (
 
 // readOnlyOps 是不改变页面状态的指令。写操作单独一档开关，见 Policy.WriteEnabled。
 var readOnlyOps = map[string]bool{
-	OpTabsList:       true,
-	OpPageRead:       true,
-	OpPageScreenshot: true,
+	OpTabsList: true,
+	OpPageRead: true,
 }
 
 // writeOps 会点、会打字、会导航，也就是会在用户账号下留下痕迹。

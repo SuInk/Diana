@@ -271,11 +271,6 @@ async function execute(frame) {
       reply(frame.id, result);
       return;
     }
-    case 'page.screenshot': {
-      const image = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
-      reply(frame.id, { url: tab.url, title: tab.title || '', image });
-      return;
-    }
     default:
       reply(frame.id, null, 'unsupported_op', `扩展不认识这条指令：${op}`);
   }
@@ -366,7 +361,7 @@ async function connect() {
         browser: navigator.userAgentData?.brands?.at(-1)?.brand || 'Chromium',
         browser_version: navigator.userAgentData?.brands?.at(-1)?.version || '',
         label: settings.label,
-        capabilities: ['page.read', 'page.screenshot', 'page.open', 'page.click', 'page.type'],
+        capabilities: ['page.read', 'page.open', 'page.click', 'page.type'],
       },
     });
   };

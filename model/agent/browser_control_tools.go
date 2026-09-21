@@ -5,26 +5,20 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/SuInk/diana/model/browserctl"
 )
-
-// defaultExtensionScreenshotPath 是扩展截图的默认落盘位置，和 CDP 截图分开放，
-// 免得两条链路互相覆盖。
-const defaultExtensionScreenshotPath = ".agent-browser/extension-screenshot.png"
 
 // BrowserControlBridge 是浏览器控制扩展的下发入口，由 model/browserctl.Hub 实现。
 //
 // 它和 browser_* 那组 CDP 工具是两回事：CDP 那边是 Diana 自己起的一次性浏览器，
 // 这边是用户日常浏览器里装的扩展，带着用户的登录态，所以每一条都要过
 // browserctl 的授权边界，而且用户随时能按下接管把 Diana 挡在外面。
+// 这组工具里没有截图：浏览器的截图接口要 <all_urls> 或 activeTab 这种「当前页随便读」
+// 的权限，比「只授权白名单站点」宽得多。要页面内容用 browser_ext_read；要出图用
+// browser_screenshot，那条链路跑在 Diana 自己的一次性浏览器里，不碰用户登录态。
 type BrowserControlBridge interface {
 	// Ready 表示现在能不能下发：总开关开着、有扩展连着、且没人在接管。
 	Ready() bool
@@ -245,82 +239,6 @@ func (t *BrowserExtTypeTool) Run(ctx context.Context, input map[string]any) (str
 	return jsonOutput(result.Data)
 }
 
-// BrowserExtScreenshotTool 截图并落到工作目录。
-type BrowserExtScreenshotTool struct {
-	base browserControlToolBase
-}
-
-func (t *BrowserExtScreenshotTool) Name() string { return "browser_ext_screenshot" }
-
-func (t *BrowserExtScreenshotTool) Description() string {
-	return `把用户浏览器里某个已授权页面的可见区域截图保存到工作目录。截图可能含登录后的私人内容，只在用户要求时用。`
-}
-
-func (t *BrowserExtScreenshotTool) InputSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
-		"path":       toolStringParam("工作目录内的相对保存路径，省略时使用默认文件名"),
-		"connection": toolStringParam("有多个浏览器连着时用它点名"),
-		"tab_id":     toolIntParam("browser_ext_tabs 列出的标签页 ID，省略时用当前活动标签页"),
-	})
-}
-
-func (t *BrowserExtScreenshotTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	outPath := stringFromInput(input, "path")
-	if outPath == "" {
-		outPath = defaultExtensionScreenshotPath
-	}
-	path, err := safePath(t.base.root, outPath)
-	if err != nil {
-		return "", err
-	}
-	connection, tabID := commonInput(input)
-	result, err := t.base.dispatch(ctx, browserctl.Command{
-		Op:         browserctl.OpPageScreenshot,
-		Connection: connection,
-		TabID:      tabID,
-	})
-	if err != nil {
-		return "", err
-	}
-	var payload struct {
-		URL   string `json:"url"`
-		Title string `json:"title"`
-		Image string `json:"image"`
-	}
-	if err := json.Unmarshal(result.Data, &payload); err != nil {
-		return "", fmt.Errorf("扩展截图回执解析失败：%w", err)
-	}
-	// 扩展给的是 data URL，前缀不固定（浏览器可能给 png 也可能给 jpeg），
-	// 所以按逗号切，而不是假定某一种前缀。
-	encoded := payload.Image
-	if index := strings.Index(encoded, ","); strings.HasPrefix(encoded, "data:") && index > 0 {
-		encoded = encoded[index+1:]
-	}
-	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
-	if err != nil {
-		return "", fmt.Errorf("扩展截图不是合法的 base64 图片：%w", err)
-	}
-	if len(data) == 0 {
-		return "", errors.New("扩展返回了空截图")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return "", err
-	}
-	body, err := json.MarshalIndent(map[string]any{
-		"path":  relPathForOutput(t.base.root, path),
-		"bytes": len(data),
-		"url":   payload.URL,
-		"title": payload.Title,
-	}, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(body), nil
-}
-
 // RegisterBrowserControlTools 登记浏览器控制扩展工具。
 //
 // 桥为 nil 时一个都不登记：模型看不到工具，就不会反复去试一个没授权的能力，
@@ -332,7 +250,6 @@ func (r *ToolRegistry) RegisterBrowserControlTools(root string, cfg Config) {
 	base := browserControlToolBase{root: root, bridge: cfg.BrowserControl}
 	r.Register(&BrowserExtTabsTool{base: base})
 	r.Register(&BrowserExtReadTool{base: base, maxChars: cfg.MaxToolOutputChars})
-	r.Register(&BrowserExtScreenshotTool{base: base})
 	// 写操作的工具照样登记：能不能用由 browserctl 的策略逐条判断，
 	// 拒绝时给的是「当前只读」这种能让模型改做法的原因。
 	r.Register(&BrowserExtOpenTool{base: base})
