@@ -290,8 +290,10 @@ export interface BotProfileConfig {
   prompt_group_sender_template?: string;
   prompt_image_only_text?: string;
   prompt_wake_only_text?: string;
-  /** 群聊未显式唤醒机器人时，用于判断是否应主动回复。 */
+  /** @deprecated 旧的整段路由提示词，已被接话评分契约取代，后端不再读取。 */
   proactive_reply_router_prompt?: string;
+  /** 接话评分的补充判据：本群的称呼、黑话和禁区，拼在内置评分提示词尾部，最多 1000 字。 */
+  proactive_reply_extra_criteria?: string;
   /** 主动回复路由放行后，注入最终回复模型的生成约束。 */
   proactive_reply_prompt?: string;
   /** 主动回复路由放行后的确定性采样率，范围 0~1。 */
@@ -564,6 +566,8 @@ export interface BotGroupConfig {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群接话评分的补充判据；留空跟随机器人，最多 1000 字。 */
+  proactive_reply_extra_criteria?: string;
   /** 本群对 MCP / Skill 的覆盖：档位（off/owner/admins/members，留空跟随机器人）加白名单、黑名单。
    *  判定顺序是停用 > 黑名单 > 白名单 > 档位。 */
   extension_access?: Record<string, { tier?: string; allow?: string[]; deny?: string[] }>;
