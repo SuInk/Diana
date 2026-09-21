@@ -1574,10 +1574,6 @@
                   <span class="hint">默认切断。命令能联网就意味着它读到的东西能被发出去，这一层白名单挡不住。</span>
                 </div>
                 <div class="field">
-                  <label for="agent-cdp">浏览器 CDP 地址</label>
-                  <input id="agent-cdp" v-model="form.agent_browser_cdp_url" class="input" placeholder="http://127.0.0.1:9222" />
-                </div>
-                <div class="field">
                   <label for="agent-timeout">命令超时（毫秒）</label>
                   <input id="agent-timeout" v-model.number="form.agent_command_timeout_ms" class="input" inputmode="numeric" />
                 </div>

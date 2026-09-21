@@ -1424,6 +1424,28 @@ func (s ProfileSet) WithProfileEnabled(id string, enabled bool) (ProfileSet, boo
 	return s, false
 }
 
+// WithAgentBrowser 只改一台机器人的交互式浏览器接入参数。
+//
+// 单独开一条路而不是让界面回存整份配置：交互式浏览器的入口在扩展页，那一页没有、
+// 也不该有整份机器人配置。把整份配置读出来改一个字段再存回去，等于让这一页替所有
+// 别的字段负责——凭据、平台连接、人设，任何一处读回来是脱敏值就会被写坏。
+func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int) (ProfileSet, bool) {
+	id = strings.TrimSpace(id)
+	profiles := make([]BotConfig, len(s.Profiles))
+	copy(profiles, s.Profiles)
+	for i := range profiles {
+		if strings.TrimSpace(profiles[i].ID) != id {
+			continue
+		}
+		profiles[i].AgentBrowserCDPURL = strings.TrimSpace(cdpURL)
+		profiles[i].AgentBrowserTimeoutMS = timeoutMS
+		s.Profiles = profiles
+		// WithDefaults 会把空地址和越界超时补回默认值，省得界面自己复述一遍规则。
+		return s.WithDefaults(), true
+	}
+	return s, false
+}
+
 // WithAllProfilesEnabled 把全部机器人的启用状态统一改成 enabled。
 func (s ProfileSet) WithAllProfilesEnabled(enabled bool) ProfileSet {
 	profiles := make([]BotConfig, len(s.Profiles))

@@ -1443,6 +1443,18 @@ export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown
   return requestJSON<T>("/api/assistant/extensions", {method:"POST", body:JSON.stringify(input)});
 }
 
+/** 交互式浏览器接入：模型通过 CDP 操作一个真实浏览器，用的是那个浏览器已有的登录态。 */
+export interface AgentBrowserSettings { profile_id?: string; cdp_url?: string; timeout_ms?: number; tools: string[] }
+export function getAgentBrowser(profile = ""): Promise<AgentBrowserSettings> {
+  return requestJSON(`/api/assistant/agent-browser?profile=${encodeURIComponent(profile)}`);
+}
+export function saveAgentBrowser(profile: string, cdpURL: string, timeoutMS: number): Promise<AgentBrowserSettings> {
+  return requestJSON("/api/assistant/agent-browser", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL, timeout_ms: timeoutMS})});
+}
+export function testAgentBrowser(profile: string, cdpURL: string): Promise<{connected: boolean; browser?: string; error?: string}> {
+  return requestJSON("/api/assistant/agent-browser/test", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL})});
+}
+
 /** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
 export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp"; name: string; description?: string; tools?: string[]; default: boolean; resident?: boolean }
 export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]}> {
