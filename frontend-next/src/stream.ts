@@ -3,6 +3,7 @@
 
 import { reactive, readonly } from "vue";
 import { scopeStatsSnapshot } from "./api";
+import { notifyConfigurationChanged, type ConfigurationKind } from "./configuration-sync";
 import type { BotStatus, StatsSnapshot } from "./api";
 
 export type BotEvent = NonNullable<BotStatus["recent_events"]>[number];
@@ -54,6 +55,20 @@ function handleBotEvent(raw: string): void {
   }
 }
 
+// 配置不是只有这个页面能改：主人在聊天里让机器人换模型走的是同一份机器人配置。
+// 后端改完播一条 config_changed，这里把它转成和本页写请求一样的刷新信号，页面
+// 不用手动刷新也能对上。通知只说哪一块变了，配置内容各自重新拉。
+function handleConfigChanged(raw: string): void {
+  try {
+    const kind = (JSON.parse(raw) as { kind?: string }).kind;
+    if (kind === "bot" || kind === "llm") {
+      notifyConfigurationChanged(kind as ConfigurationKind);
+    }
+  } catch {
+    /* 忽略坏帧 */
+  }
+}
+
 function connect(): void {
   if (source) {
     source.close();
@@ -69,6 +84,7 @@ function connect(): void {
   source.addEventListener("status", (event) => handleStatus((event as MessageEvent<string>).data));
   source.addEventListener("stats", (event) => handleStats((event as MessageEvent<string>).data));
   source.addEventListener("bot_event", (event) => handleBotEvent((event as MessageEvent<string>).data));
+  source.addEventListener("config_changed", (event) => handleConfigChanged((event as MessageEvent<string>).data));
 }
 
 /** 启动全局 SSE 连接；重复调用是幂等的。 */

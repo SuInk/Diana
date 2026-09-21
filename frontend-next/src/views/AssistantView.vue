@@ -578,6 +578,10 @@
               <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
             <div class="card-body stack" style="gap: 0">
+              <p v-if="modelRolesChangedElsewhere" class="hint warn-text">
+                模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
+                <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
+              </p>
               <div class="model-role-row model-role-head" aria-hidden="true">
                 <span>用途</span>
                 <span>提供商 / 分组</span>
@@ -3027,6 +3031,56 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
 
+// 模型分配不止这一页能改：主人在聊天里让机器人换模型，写的是同一份机器人配置。
+// savedRoleSnapshot 记着草稿出发时服务端那一版，用来分辨「这一档没动过」和
+// 「两边同时在改」——前者直接跟上新值，后者只提示，不替主人决定保留哪一份。
+const savedRoleSnapshot = ref("");
+const modelRolesChangedElsewhere = ref(false);
+const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
+
+// roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
+function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
+  const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true];
+  return JSON.stringify(
+    Object.keys(roles ?? {})
+      .sort()
+      .map((key) => {
+        const role = roles?.[key];
+        return role ? [key, route(role), (role.fallbacks ?? []).map(route)] : [key];
+      })
+  );
+}
+
+// orderedRoleKeys 按「模型分配」那几行的排法给用途排序，不跟数据来源走。
+// 服务端的 model_roles 是个 map，序列化出来按字母排；草稿又可能在编辑途中被
+// 别处的改动整份换掉，或者因为后加了一档而把新键追加在末尾。键序跟着这些走，
+// 保存出去的配置就会莫名其妙换个样子，配置对比和导出全是噪音。认不出的键按
+// 原样排在后面，别把以后新增的用途悄悄丢掉。
+function orderedRoleKeys(roles: Partial<Record<string, unknown>>): string[] {
+  const known = modelRoleRows.map((row) => row.key).filter((key) => key in roles);
+  return [...known, ...Object.keys(roles).filter((key) => !known.includes(key as RoleKey))];
+}
+
+function setRoleForm(source: BotProfileConfig["model_roles"]): void {
+  const incoming = source ?? {};
+  const roles: typeof roleForm.value = {};
+  for (const key of orderedRoleKeys(incoming)) {
+    const role = incoming[key];
+    roles[key as RoleKey] = {
+      profile_id: role.profile_id,
+      group: role.group,
+      model: role.model,
+      provider_id: role.provider_id,
+      model_id: role.model_id,
+      follow_chat: role.follow_chat,
+      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
+    };
+  }
+  roleForm.value = roles;
+  savedRoleSnapshot.value = roleSnapshot(roles);
+  modelRolesChangedElsewhere.value = false;
+}
+
 // 生成人设时用哪个提供商和模型。undefined 表示跟随对话那一档，和「模型分配」里的
 // 「跟随对话」是同一个意思，也是原来唯一的行为——想换一个更会写文案的模型来起草人设
 // 以前做不到，只能先把对话那一档改掉、生成完再改回去。
@@ -3597,19 +3651,7 @@ function setForm(config: BotProfileConfig): void {
   }
   // 换一个配置档就得重新索取，别把上一档的明文状态带过来。
   tokenRevealed.value = emptyRevealState();
-  const roles: typeof roleForm.value = {};
-  for (const [key, role] of Object.entries(config.model_roles ?? {})) {
-		roles[key as RoleKey] = {
-      profile_id: role.profile_id,
-      group: role.group,
-      model: role.model,
-      provider_id: role.provider_id,
-      model_id: role.model_id,
-	  follow_chat: role.follow_chat,
-      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
-    };
-  }
-  roleForm.value = roles;
+  setRoleForm(config.model_roles);
 }
 
 function applyConfig(config: BotProfileConfig): void {
@@ -3797,7 +3839,8 @@ async function save(): Promise<void> {
   busy.value = true;
   try {
     const modelRoles: BotProfileConfig["model_roles"] = {};
-    for (const [key, role] of Object.entries(roleForm.value)) {
+    for (const key of orderedRoleKeys(roleForm.value)) {
+      const role = roleForm.value[key as RoleKey];
       if (key !== "chat" && role?.follow_chat) {
         modelRoles[key] = { model: "", follow_chat: true };
         continue;
@@ -4015,7 +4058,35 @@ useConfigurationRefresh(["bot"], async () => {
   const config = await getBotProfileConfig();
   profileSet.value = config;
   // An editor can have unsaved changes while another cached page saves data.
-  if (page.value !== "edit") setForm(config);
+  if (page.value !== "edit") {
+    setForm(config);
+    return;
+  }
+  syncModelRolesWhileEditing(config);
 });
+
+// 编辑页开着的时候不能拿服务端那份覆盖整个草稿，但模型分配这一档得跟上：主人
+// 多半就是刚在聊天里让机器人换完模型，再回到这一页看结果，页面停在旧值等于告诉
+// 他没换成。草稿里这一档没动过就直接换成新值；动过了只挂一条提示，两边都改时
+// 替谁做主都是错的。
+function syncModelRolesWhileEditing(config: BotProfileConfig): void {
+  const editing = form.value?.id;
+  if (!editing) return;
+  const latest = config.id === editing ? config : (config.profiles ?? []).find((profile) => profile.id === editing);
+  if (!latest) return;
+  const incoming = roleSnapshot(latest.model_roles);
+  if (incoming === savedRoleSnapshot.value) return;
+  if (roleSnapshot(roleForm.value) === savedRoleSnapshot.value) {
+    setRoleForm(latest.model_roles);
+    return;
+  }
+  incomingModelRoles.value = latest.model_roles;
+  modelRolesChangedElsewhere.value = true;
+}
+
+// 放弃这一档的草稿，改用服务端最新的模型分配；其余草稿字段不动。
+function adoptIncomingModelRoles(): void {
+  setRoleForm(incomingModelRoles.value);
+}
 
 </script>

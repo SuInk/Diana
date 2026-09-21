@@ -196,12 +196,26 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		OldModel:    oldModel,
 		NewModel:    model,
 	}
-	if err := r.saveModelRole(botCfg, roles, roleKey, target, model, command.ProviderID != "" || command.ProviderName != ""); err != nil {
+	replacedRoute, err := r.saveModelRole(botCfg, roles, roleKey, target, model, command.ProviderID != "" || command.ProviderName != "")
+	if err != nil {
 		return llmConfigApplyResult{Reply: "更新失败：机器人配置没能保存（" + err.Error() + "）。"}
 	}
-	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s），目标模型可用性测试已通过。改的是机器人模型分配里的这一档，没有动提供商配置里的 provider 设置，其余用途各自的分配保持不变。%s%s",
-		llmConfigRoleLabel(roleKey), model, target.Name, llmConfigFollowChatNote(roleKey, roles), notes)
+	result.Reply = fmt.Sprintf("已把%s模型换成 %s（配置：%s），目标模型可用性测试已通过。改的是机器人模型分配里的这一档，没有动提供商配置里的 provider 设置，其余用途各自的分配保持不变。%s%s%s",
+		llmConfigRoleLabel(roleKey), model, target.Name, llmConfigReplacedRouteNote(replacedRoute, roles[roleKey]), llmConfigFollowChatNote(roleKey, roles), notes)
 	return result
+}
+
+// llmConfigReplacedRouteNote 说明换供应商顺带作废了原来的路由方案。后备路由是
+// 在 WebUI 里一条条排出来的，被一句「换成 X」清掉却不吭声，等到主模型挂了才
+// 发现没有兜底，那时已经晚了。
+func llmConfigReplacedRouteNote(replaced bool, previous ModelRole) string {
+	if !replaced {
+		return ""
+	}
+	if count := len(previous.Fallbacks); count > 0 {
+		return fmt.Sprintf("这一档原有的 %d 条后备路由已被这次绑定替换，需要的话要在 WebUI 的模型分配里重新排。", count)
+	}
+	return "这一档原来的分组绑定已被这次绑定替换，故障转移不再跟着分组走。"
 }
 
 // llmConfigFollowChatNote 在第一次给对话定下绑定时说明连带影响：视觉理解、意图
@@ -404,21 +418,14 @@ func llmConfigOutputTokenNote(cfg llm.ProviderConfig, info llm.ModelInfo) string
 }
 
 // saveModelRole 只改指定用途的绑定，其余用途原样保留。
-func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, roleKey string, target llm.Profile, model string, explicitProvider bool) error {
+func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, roleKey string, target llm.Profile, model string, explicitProvider bool) (bool, error) {
 	r.modelConfigMu.Lock()
 	defer r.modelConfigMu.Unlock()
 	next := make(map[string]ModelRole, len(roles)+1)
 	for key, role := range roles {
 		next[key] = role
 	}
-	role := next[roleKey]
-	// 原来按分组绑定、而新配置仍在那个分组里时保留分组绑定，只换模型：
-	// 分组绑定带故障转移，改成单配置会把这个能力弄丢。
-	if !explicitProvider && role.Group != "" && profileInGroup(target, role.Group) {
-		role.Model = model
-	} else {
-		role = ModelRole{ProfileID: target.ID, Model: model}
-	}
+	role, replacedRoute := nextModelRole(next[roleKey], target, model, explicitProvider)
 	next[roleKey] = role
 	botCfg.ModelRoles = normalizeModelRoles(next)
 	botCfg = botCfg.WithDefaults()
@@ -426,12 +433,12 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 	saver := r.configSaver
 	r.mu.RUnlock()
 	if saver == nil {
-		return fmt.Errorf("当前部署没有接入机器人配置存储")
+		return false, fmt.Errorf("当前部署没有接入机器人配置存储")
 	}
 	if scoped, ok := saver.(ModelRoleConfigSaver); ok {
 		saved, err := scoped.SaveModelRole(botCfg, roleKey, next[roleKey])
 		if err != nil {
-			return err
+			return false, err
 		}
 		botCfg = saved
 	} else {
@@ -441,10 +448,10 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 		current := sole.WithDefaults()
 		r.mu.RUnlock()
 		if !single {
-			return fmt.Errorf("配置存储不支持按机器人保存模型分配")
+			return false, fmt.Errorf("配置存储不支持按机器人保存模型分配")
 		}
 		if current.OwnerID != botCfg.OwnerID || !boolValue(current.OwnerLLMConfigEnabled, true) {
-			return fmt.Errorf("主人权限或配置开关已变化，请重新请求")
+			return false, fmt.Errorf("主人权限或配置开关已变化，请重新请求")
 		}
 		currentRoles := normalizeModelRoles(current.ModelRoles)
 		if currentRoles == nil {
@@ -462,7 +469,41 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 	r.profileConfigs[botCfg.ID] = botCfg
 	r.updatedAt = time.Now()
 	r.mu.Unlock()
-	return nil
+	return replacedRoute, nil
+}
+
+// nextModelRole 算出这一档改完之后的绑定，并说明原有的分组或后备路由有没有被
+// 这次改动替换掉。
+func nextModelRole(role ModelRole, target llm.Profile, model string, explicitProvider bool) (ModelRole, bool) {
+	switch {
+	// 原来按分组绑定、而新配置仍在那个分组里时保留分组绑定，只换模型：
+	// 分组绑定带故障转移，改成单配置会把这个能力弄丢。
+	case !explicitProvider && role.Group != "" && profileInGroup(target, role.Group):
+		role.Model = model
+		return role, false
+	// 目标正是这一档现在绑的那家供应商，那这次就只是换个主模型，后备路由连同顺序
+	// 原样留着。点没点名这家供应商不影响：主人说「换成 X」和说「换成 A 家的 X」
+	// 要的是同一件事，没有一句是在说「把后备也清掉」。以前这里一律重建成一条光秃
+	// 秃的绑定，WebUI 上排好的后备就此消失，回执还只说换了模型，谁都不会想到去看。
+	case modelRoleProfileID(role) == target.ID:
+		role.Model = model
+		if role.ProviderID != "" {
+			role.ModelID = model
+		}
+		return role, false
+	}
+	// 换到另一家供应商，这一档改成对这家的单绑定，原有的分组或后备路由一并作废
+	// ——它们指向的是上一套路由方案。回执会把这件事说出来，不让它悄悄发生。
+	return ModelRole{ProfileID: target.ID, Model: model}, role.Group != "" || len(role.Fallbacks) > 0
+}
+
+// modelRoleProfileID 报出这条绑定实际指向哪套供应商配置：注册表式绑定写在
+// ProviderID 上，老式绑定写在 ProfileID 上。
+func modelRoleProfileID(role ModelRole) string {
+	if role.ProviderID != "" {
+		return role.ProviderID
+	}
+	return role.ProfileID
 }
 
 func profileInGroup(profile llm.Profile, group string) bool {
