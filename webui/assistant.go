@@ -318,6 +318,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.DELETE(base+"/users/:id/memories", h.clearAssistantUserMemories)
 	router.DELETE(base+"/users/:id/memories/:memory", h.clearAssistantUserMemories)
 	h.registerPersonaRoutes(router, base)
+	h.registerSelfNoteRoutes(router, base)
 	h.registerCharacterCardRoutes(router, base)
 	h.registerWorldBookRoutes(router, base)
 	router.GET(base+"/notebook", h.listNotebook)

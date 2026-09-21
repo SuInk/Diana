@@ -2573,6 +2573,49 @@ export function importPersonas(personas: Persona[]): Promise<PersonaImportResult
   });
 }
 
+/** 机器人自己写下的一条自述。写入只有它自己能做，这里只读、删和清空。 */
+export interface SelfNote {
+  id: string;
+  topic: string;
+  content: string;
+  status: "active" | "superseded" | "deleted";
+  version: number;
+  source_group_id?: string;
+  source_user_id?: string;
+  source_user_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SelfNoteListResult {
+  notes: SelfNote[];
+  /** 这台机器人有没有开自述。关着时列表为空，但「空」和「没开」是两件事。 */
+  enabled: boolean;
+}
+
+// profile 指这条自述属于哪台机器人。自述按机器人隔离，留空时后端落到当前这台。
+function selfNoteQuery(profile: string, includeInactive = false): string {
+  const params = new URLSearchParams();
+  if (profile) params.set("profile", profile);
+  if (includeInactive) params.set("include_inactive", "true");
+  return params.size > 0 ? `?${params.toString()}` : "";
+}
+
+export function listSelfNotes(profile: string, includeInactive = false): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes${selfNoteQuery(profile, includeInactive)}`);
+}
+
+export function deleteSelfNote(profile: string, id: string): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/delete${selfNoteQuery(profile)}`, {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function purgeSelfNotes(profile: string): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/purge${selfNoteQuery(profile)}`, { method: "POST" });
+}
+
 /** YAML 只能在后端解析：这里原样把文件内容发过去。JSON 文件走上面那条。 */
 export function importPersonaSource(source: string): Promise<PersonaImportResult> {
   return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {

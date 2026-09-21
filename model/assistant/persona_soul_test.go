@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -170,5 +171,43 @@ func TestParsePersonaDocumentAcceptsYAMLAndJSON(t *testing.T) {
 	}
 	if _, err := ParsePersonaDocument([]byte("   ")); err == nil {
 		t.Fatal("empty document should fail")
+	}
+}
+
+// 品格要能在「配置 ↔ 接口负载」之间原样往返。WebUI 保存走的就是这条路：中间漏掉
+// 一个字段，界面上填得好好的，保存后就没了，而且不会报错。
+func TestSoulSurvivesPayloadRoundTrip(t *testing.T) {
+	cfg := BotConfig{ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42", Soul: testSoul()}
+	payload := PayloadFromConfig(cfg)
+	if payload.Soul == nil {
+		t.Fatal("payload lost the soul")
+	}
+	restored := ConfigFromPayload(payload, cfg)
+	if restored.Soul.Render() != testSoul().Render() {
+		t.Fatalf("round trip changed the soul:\n%s", restored.Soul.Render())
+	}
+	// 深拷贝：改动还原出来的那份，不能反过来动到原配置。
+	restored.Soul.Values[0].Value = "改过了"
+	if cfg.Soul.Values[0].Value == "改过了" {
+		t.Fatal("round trip shares the values slice with the source config")
+	}
+}
+
+// 品格进「上下文占比」快照，人能在那里看到它每轮实际注入的原文和 token 数。
+func TestSoulAppearsInResidentContext(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{{
+		ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42",
+		SystemPrompt: "说话简短。", Soul: testSoul(),
+	}}})
+	snapshot := runtime.ResidentContextForGroup(context.Background(), "bot-a", "123456")
+	soul := residentBlock(snapshot, ResidentBlockSoul)
+	if !strings.Contains(soul.Content, "【你的品格】") || soul.Tokens <= 0 {
+		t.Fatalf("soul block = %#v", soul)
+	}
+	// 规则那块是 head 去掉品格和人设之后剩下的：同一段文字不能被算两遍。
+	rules := residentBlock(snapshot, ResidentBlockPromptRules)
+	if strings.Contains(rules.Content, "【你的品格】") || strings.Contains(rules.Content, "说话简短。") {
+		t.Fatalf("rules block double-counts persona or soul: %q", rules.Content[:120])
 	}
 }
