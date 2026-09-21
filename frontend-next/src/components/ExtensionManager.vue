@@ -146,7 +146,7 @@
             <div class="field"><label for="extension-access-groups">开放对象 · 群号</label><IdChipInput input-id="extension-access-groups" :model-value="accessGroups" placeholder="填群号后回车，留空 = 不限群" @update:model-value="accessGroups = $event" /></div>
             <p class="hint">两个都留空 = 这一档的所有人。都填则要同时满足：名单里的人，且只在这些群里。主人不受名单限制。</p>
             <p v-if="accessError" class="error-text" role="alert">{{ accessError }}</p>
-            <div><button class="btn" :disabled="savingAccess" @click="saveAudience"><Save :size="15" />保存开放对象</button></div>
+            <button class="btn" :disabled="savingAccess" @click="saveAudience"><Save :size="15" />保存开放对象</button>
           </template>
         </template>
         <p v-if="error" class="error-text" role="alert">{{ error }}</p>
@@ -292,6 +292,6 @@ watch(botScope,load);onMounted(load);
 </script>
 
 <style scoped>
-.extension-manager{padding-top:20px}.preset-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}.extension-list{margin-top:4px}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}/* 分段控件是 inline-flex，但 grid 项默认拉满一行，右边就空出一大截。按内容宽度靠左放。 */
-.extension-form>.segmented,.extension-form .field>.segmented{justify-self:start;max-width:100%}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.extension-info strong{display:flex;align-items:center;gap:8px}.form-divider{border:0;border-top:1px solid var(--border);margin:4px 0 0}.extension-audience-note{color:var(--text-secondary)}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}.extension-doc-link{display:inline-flex;align-items:center;gap:4px;color:var(--accent);font-size:11.5px;text-decoration:underline;text-underline-offset:2px}.extension-doc-link:hover{color:var(--accent-strong)}.link-button{background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer;text-decoration:underline}@media(max-width:600px){.extension-grid{grid-template-columns:1fr}}
+.extension-manager{padding-top:20px}.preset-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}.extension-list{margin-top:4px}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}/* 按钮也是 inline-flex，作为 grid 项同样会被拉满一行：这里按内容宽度靠左。 */
+.extension-form>.btn{justify-self:start}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.extension-info strong{display:flex;align-items:center;gap:8px}.form-divider{border:0;border-top:1px solid var(--border);margin:4px 0 0}.extension-audience-note{color:var(--text-secondary)}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}.extension-doc-link{display:inline-flex;align-items:center;gap:4px;color:var(--accent);font-size:11.5px;text-decoration:underline;text-underline-offset:2px}.extension-doc-link:hover{color:var(--accent-strong)}.link-button{background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer;text-decoration:underline}@media(max-width:600px){.extension-grid{grid-template-columns:1fr}}
 </style>

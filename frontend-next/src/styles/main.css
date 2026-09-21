@@ -4441,6 +4441,14 @@ a.nav-action {
 /* 分段控制 */
 .segmented {
   display: inline-flex;
+  /* inline-flex 只管住行内场景。一旦它成了 grid 项或纵向 flex 的子项（表单、
+     弹窗、筛选栏里到处都是），默认的 stretch 会把这条控件拉满整行——按钮排完
+     右边空出一大截灰底，看着像少渲染了一个选项。
+     fit-content 在这三种容器里都成立，又不像 align-self 那样会改横排工具条里的
+     垂直对齐；max-width 兜住窄屏，超宽时仍由容器自己决定截断或滚动。 */
+  width: fit-content;
+  max-width: 100%;
+  justify-self: start;
   padding: 3px;
   gap: 2px;
   border-radius: var(--radius-md);
