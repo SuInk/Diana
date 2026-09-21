@@ -67,7 +67,7 @@
         </div>
         <p class="plugin-card-desc" :title="entry.preset.summary">{{ entry.preset.summary }}</p>
         <div class="plugin-card-bottom">
-          <div class="plugin-card-meta"><a v-if="entry.preset.docs_url" class="extension-audience-note" :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></div>
+          <div class="plugin-card-meta"><a v-if="entry.preset.docs_url" class="extension-doc-link" :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档<ExternalLink :size="12" aria-hidden="true" /></a></div>
           <footer class="plugin-card-foot">
             <button class="btn small" type="button" :aria-label="`配置 ${entry.preset.title}`" @click="startPreset(entry.preset)"><Save :size="14" />配置</button>
             <button class="btn small danger" type="button" :aria-label="`从列表里去掉 ${entry.preset.title}`" title="用不上，从列表里去掉" @click="hidePreset(entry.preset)"><Trash2 :size="14" /></button>
@@ -158,7 +158,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { KeyRound, LayoutGrid, Plus, RefreshCw, RotateCcw, Rows3, Search, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
+import { ExternalLink, KeyRound, LayoutGrid, Plus, RefreshCw, RotateCcw, Rows3, Search, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
 import Modal from './Modal.vue';
 import { botScope } from '../bot-scope';
 import { extensionLayout, setExtensionLayout } from '../extension-layout';
@@ -292,5 +292,5 @@ watch(botScope,load);onMounted(load);
 </script>
 
 <style scoped>
-.extension-manager{padding-top:20px}.preset-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}.extension-list{margin-top:4px}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.extension-info strong{display:flex;align-items:center;gap:8px}.form-divider{border:0;border-top:1px solid var(--border);margin:4px 0 0}.extension-audience-note{color:var(--text-secondary)}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}.link-button{background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer;text-decoration:underline}@media(max-width:600px){.extension-grid{grid-template-columns:1fr}}
+.extension-manager{padding-top:20px}.preset-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}.extension-list{margin-top:4px}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.extension-info strong{display:flex;align-items:center;gap:8px}.form-divider{border:0;border-top:1px solid var(--border);margin:4px 0 0}.extension-audience-note{color:var(--text-secondary)}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}.extension-doc-link{display:inline-flex;align-items:center;gap:4px;color:var(--accent);font-size:11.5px;text-decoration:underline;text-underline-offset:2px}.extension-doc-link:hover{color:var(--accent-strong)}.link-button{background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer;text-decoration:underline}@media(max-width:600px){.extension-grid{grid-template-columns:1fr}}
 </style>
