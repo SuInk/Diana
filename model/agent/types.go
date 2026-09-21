@@ -270,12 +270,30 @@ func (cfg Config) WithDefaults() Config {
 	}
 	cfg.ManagedSkillRoot = filepath.Clean(cfg.ManagedSkillRoot)
 	if strings.TrimSpace(cfg.MCPConfigPath) == "" {
-		cfg.MCPConfigPath = filepath.Join(workDir, defaultMCPConfigFileName)
+		cfg.MCPConfigPath = defaultMCPConfigPath(workDir)
 	}
 	cfg.BuiltinExtensions = normalizeBuiltinExtensions(cfg.BuiltinExtensions)
 	cfg.BuiltinSkills = normalizeBuiltinSkills(cfg.BuiltinSkills)
 	cfg.ReservedSkillNames = cleanStringList(cfg.ReservedSkillNames)
 	return cfg
+}
+
+// defaultMCPConfigPath 把 MCP 配置放在 Agent 工作目录的隔壁，而不是里面。
+//
+// 这个文件里是 access token 原文。放在工作目录里，它就落在文件工具的可达范围内——
+// 工具只校验「不许走出工作目录」，不看读的是什么，于是一句「读一下 .mcp.json」就能
+// 把令牌打进聊天记录。放到外面，safePath 那道边界本身就够了，不用指望黑名单记全。
+//
+// 黑名单仍然留着（见 agentProtectedFiles）：用户可以把路径显式指回工作目录里，
+// 扩展开关和对象名单也仍然住在里面。run_command 两头都挡不住——命令沙箱只限制写入，
+// 读是放开的。
+func defaultMCPConfigPath(workDir string) string {
+	parent := filepath.Dir(workDir)
+	if parent == "" || parent == workDir {
+		// 工作目录已经是根了，再往上没有位置可放，只能退回原处，靠黑名单挡。
+		return filepath.Join(workDir, defaultMCPConfigFileName)
+	}
+	return filepath.Join(parent, defaultMCPConfigFileName)
 }
 
 func cleanStringList(values []string) []string {
