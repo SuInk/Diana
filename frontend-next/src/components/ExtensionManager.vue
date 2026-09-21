@@ -25,7 +25,23 @@
         <!-- 只读扩展删不掉，但位置要留着：否则每行的开关和按钮左右错开一截。 -->
         <span v-else class="extension-action-slot" aria-hidden="true"></span>
       </article>
-      <p v-if="!items.length">还没有{{ kind === 'skill' ? '自定义 Skill' : 'MCP 服务' }}。</p>
+      <!-- 一条都没有时，与其只说「还没有」，不如把现成的预设直接铺出来：
+           第一次进这一页的人不用先猜「添加」后面藏着什么。 -->
+      <template v-if="!items.length">
+        <p v-if="kind !== 'mcp'">还没有自定义 Skill。</p>
+        <template v-else>
+          <p class="hint">还没有 MCP 服务。下面这些是内置预设，填两个字段就能用；接别的服务点「手动配置」。</p>
+          <article v-for="entry in presets" :key="entry.preset.id" class="preset-row">
+            <div class="extension-info">
+              <strong>{{ entry.preset.title }}</strong>
+              <p>{{ entry.preset.summary }}</p>
+              <small v-if="entry.preset.docs_url"><a :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></small>
+            </div>
+            <button class="btn" @click="startPreset(entry.preset)">添加</button>
+          </article>
+          <p><button class="btn" @click="addManually"><Settings2 :size="15" />手动配置</button></p>
+        </template>
+      </template>
     </div>
     <Modal v-if="presetsOpen" :title="preset ? `添加 ${preset.title}` : '添加 MCP'" @close="closePresets">
       <div class="extension-form">
@@ -144,7 +160,9 @@ const editPresetVerifiable=computed(()=>!!(editing.value&&editPreset.value&&!edi
 const snapshot=ref('');
 const state=()=>JSON.stringify([form.value,transport.value,headers.value,env.value,fromURL.value,editPresetValues.value,editAdvanced.value]);
 let generation=0;
-async function load(){const current=++generation;loading.value=true;loadError.value='';try{const result=await listManagedExtensions(botScope.value);if(current===generation)items.value=result.items.filter(i=>i.kind===props.kind)}catch(e){if(current===generation)loadError.value=String(e instanceof Error?e.message:e)}finally{if(current===generation)loading.value=false}}
+async function load(){const current=++generation;loading.value=true;loadError.value='';try{const result=await listManagedExtensions(botScope.value);if(current===generation)items.value=result.items.filter(i=>i.kind===props.kind)}catch(e){if(current===generation)loadError.value=String(e instanceof Error?e.message:e)}finally{if(current===generation)loading.value=false}
+ // 空列表要把预设铺出来，这份清单得先在手里。
+ if(props.kind==='mcp'&&!items.value.length)void ensurePresets()}
 function openNew(){form.value=blank();headers.value=env.value='{}';fromURL.value=false;transport.value='http';existing.value=readonly.value=false;error.value='';tested.value=false;discovered.value=[];editPreset.value=null;editPresetTransport.value='';editPresetValues.value={};editAdvanced.value=false;verifyNote.value='';permissionName.value='';loadAudienceInputs(null);editing.value=true;snapshot.value=state()}
 async function edit(item:ManagedExtension){try{const data=await manageExtension<any>({operation:'read',kind:props.kind,name:item.name});openNew();existing.value=true;readonly.value=!item.managed;form.value.name=item.name;permissionName.value=item.name;loadAudienceInputs(item);if(props.kind==='skill')form.value.content=data.content;else{const c=data.config;Object.assign(form.value,c,{args:(c.args||[]).join('\n'),enabled_tools:(c.enabled_tools||[]).join('\n'),disabled_tools:(c.disabled_tools||[]).join('\n'),enabled:c.enabled!==false});transport.value=c.command?'stdio':'http';headers.value=JSON.stringify(c.headers||{},null,2);env.value=JSON.stringify(c.env||{},null,2);if(data.preset){const known=await ensurePresets();editPreset.value=known.find(p=>p.id===data.preset)||null;editPresetTransport.value=data.preset_transport||'';editPresetValues.value={...(data.preset_values||{})};editAdvanced.value=!editPreset.value}}snapshot.value=state()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 async function closeEditor(){if(!editing.value||saving.value)return;if(!readonly.value&&snapshot.value!==state()&&!await askConfirm({title:'放弃未保存的修改？',message:'本次编辑尚未保存。',confirmLabel:'放弃'}))return;editing.value=false}
@@ -183,6 +201,8 @@ async function ensurePresets(){if(!presets.value.length){try{presets.value=(awai
 // 没有对上的再手动配置。Skill 没有预设，直接进空白表单。
 function startAdd(){if(props.kind!=='mcp'){openNew();return}void openPresets()}
 function addManually(){presetsOpen.value=false;preset.value=null;openNew()}
+// 从空列表那几张卡片直接进预设表单，省掉「先打开添加弹窗」这一步。
+function startPreset(value:MCPPreset){presetsOpen.value=true;pickPreset(value)}
 async function openPresets(){presetsOpen.value=true;preset.value=null;presetError.value='';verifyNote.value='';try{presets.value=(await listMCPPresets()).items}catch(e){presetError.value=String(e instanceof Error?e.message:e)}}
 function closePresets(){if(presetSaving.value)return;presetsOpen.value=false;preset.value=null}
 function pickPreset(value:MCPPreset){preset.value=value;presetTransport.value=value.transports[0]?.id||'';presetValues.value={};presetName.value=items.value.some(i=>i.name===value.name)?`${value.name}-2`:value.name;presetError.value='';verifyNote.value=''}
