@@ -1545,6 +1545,17 @@
                     读取、检索、按名字找文件不受这个开关影响，始终可用。
                   </span>
                 </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_browser_control_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许使用浏览器控制扩展（browser_ext_*）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。那组工具操作的是你自己浏览器里的页面，带着你的登录态，所以逐台机器人显式打开。
+                    还要在「设置 → 浏览器控制」里打开总开关并授权站点，两边都开才真的能用。
+                  </span>
+                </div>
                 <div class="field">
                   <label for="agent-sandbox">命令沙盒</label>
                   <AppSelect
@@ -3548,6 +3559,7 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
+    agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "owner",
     repository_disclosure: config.repository_disclosure ?? "owner",

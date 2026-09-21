@@ -695,6 +695,11 @@ type BotConfig struct {
 	AgentFileWriteEnabled bool   `json:"agent_file_write_enabled,omitempty"`
 	AgentBrowserCDPURL    string `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS int    `json:"agent_browser_timeout_ms,omitempty"`
+	// AgentBrowserControlEnabled 允许这台机器人使用浏览器控制扩展（browser_ext_*）。
+	// 默认关闭：那组工具操作的是用户日常浏览器里的登录态，多一台机器人能用
+	// 就多一处能借到这份登录态的地方，所以逐台显式打开。全局的总开关、站点
+	// 白名单和读写档位另由 WebUI 的浏览器控制页决定，两边都开才真的能用。
+	AgentBrowserControlEnabled bool `json:"agent_browser_control_enabled,omitempty"`
 }
 
 type ModelRole struct {
@@ -1066,6 +1071,7 @@ type ConfigPayload struct {
 	AgentFileWriteEnabled           bool                      `json:"agent_file_write_enabled,omitempty"`
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
+	AgentBrowserControlEnabled      bool                      `json:"agent_browser_control_enabled,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -2221,6 +2227,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentFileWriteEnabled:             cfg.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
+		AgentBrowserControlEnabled:        cfg.AgentBrowserControlEnabled,
 	}
 }
 
@@ -2429,6 +2436,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,
+		AgentBrowserControlEnabled:      payload.AgentBrowserControlEnabled,
 	}.WithDefaults()
 	if cfg.OneBotHTTPSecret == "" {
 		cfg.OneBotHTTPSecret = existing.OneBotHTTPSecret

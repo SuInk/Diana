@@ -169,6 +169,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
+			BrowserControl:             r.browserControlFor(cfg),
 		}
 		registry := agent.NewToolRegistry()
 		if cfg.AgentEnabled {

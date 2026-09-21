@@ -401,6 +401,7 @@ type Runtime struct {
 	updatedAt                 time.Time
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
+	browserControl            agent.BrowserControlBridge
 	media                     *MediaStore
 	members                   *memberCache
 	now                       func() time.Time
@@ -526,6 +527,26 @@ func (r *Runtime) SetEventListener(listener EventListener) {
 	r.mu.Lock()
 	r.eventListener = listener
 	r.mu.Unlock()
+}
+
+// SetBrowserControl 注入浏览器控制扩展的控制面。没注入时 browser_ext_* 那组
+// 工具在任何机器人上都不登记，和把这一档关掉等价。
+func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
+	r.mu.Lock()
+	r.browserControl = bridge
+	r.mu.Unlock()
+}
+
+// browserControlFor 只在两边都点头时才把控制面交出去：全局注入了控制面，
+// 并且这台机器人自己那档开关也开着。
+func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
+	if !cfg.AgentBrowserControlEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserControl
+	r.mu.RUnlock()
+	return bridge
 }
 
 func (r *Runtime) SetPrivateMessageInterceptor(interceptor PrivateMessageInterceptor) {
@@ -4179,6 +4200,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
+			BrowserControl:             r.browserControlFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry

@@ -358,6 +358,8 @@ export interface BotProfileConfig {
   agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;
   agent_browser_timeout_ms?: number;
+  /** 允许这台机器人使用浏览器控制扩展（browser_ext_*）。默认关闭。 */
+  agent_browser_control_enabled?: boolean;
 }
 
 export interface PluginSettingOption {
@@ -1115,6 +1117,89 @@ export function createOpenAPIKey(name: string): Promise<{ key: OpenAPIKey; token
 
 export function revokeOpenAPIKey(id: string): Promise<{ revoked: boolean }> {
   return requestJSON<{ revoked: boolean }>(`/api/openapi/keys/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export interface BrowserControlPolicy {
+  enabled: boolean;
+  allowed_origins?: string[];
+  allowed_hosts?: string[];
+  denied_hosts?: string[];
+  write_enabled: boolean;
+  command_timeout_ms?: number;
+  commands_per_minute?: number;
+}
+
+export interface BrowserControlToken {
+  id: string;
+  name: string;
+  prefix: string;
+  extension_id?: string;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export interface BrowserControlConnection {
+  id: string;
+  token_id: string;
+  token_name?: string;
+  extension_id: string;
+  extension_name?: string;
+  browser?: string;
+  browser_version?: string;
+  label?: string;
+  connected_at: string;
+  last_seen_at: string;
+  takeover: boolean;
+  takeover_reason?: string;
+  allowed_tabs: number;
+  commands: number;
+}
+
+export interface BrowserControlStatus {
+  policy: BrowserControlPolicy;
+  tokens: BrowserControlToken[];
+  connections: BrowserControlConnection[];
+  ready: boolean;
+  endpoint: string;
+  protocol: number;
+}
+
+export function getBrowserControlStatus(): Promise<BrowserControlStatus> {
+  return requestJSON<BrowserControlStatus>("/api/browser-control/status");
+}
+
+export function saveBrowserControlPolicy(policy: BrowserControlPolicy): Promise<{ policy: BrowserControlPolicy }> {
+  return requestJSON<{ policy: BrowserControlPolicy }>("/api/browser-control/policy", {
+    method: "PUT",
+    body: JSON.stringify(policy)
+  });
+}
+
+/** 返回值里的 plaintext 是唯一一次能拿到的令牌明文，之后任何接口都查不到。 */
+export function createBrowserControlToken(name: string): Promise<{ token: BrowserControlToken; plaintext: string }> {
+  return requestJSON<{ token: BrowserControlToken; plaintext: string }>("/api/browser-control/tokens", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+}
+
+export function revokeBrowserControlToken(id: string): Promise<{ token: BrowserControlToken }> {
+  return requestJSON<{ token: BrowserControlToken }>(`/api/browser-control/tokens/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export function setBrowserControlTakeover(id: string, active: boolean, reason = ""): Promise<{ ok: boolean; active: boolean }> {
+  return requestJSON<{ ok: boolean; active: boolean }>(
+    `/api/browser-control/connections/${encodeURIComponent(id)}/takeover`,
+    { method: "POST", body: JSON.stringify({ active, reason }) }
+  );
+}
+
+export function disconnectBrowserControl(id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(`/api/browser-control/connections/${encodeURIComponent(id)}`, {
     method: "DELETE"
   });
 }

@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Diana 浏览器控制",
+  "version": "0.1.0",
+  "description": "把当前浏览器里已授权站点的页面操作交给 Diana，随时可人工接管。",
+  "permissions": ["storage", "tabs", "scripting", "alarms"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Diana 浏览器控制：点击切换人工接管"
+  }
+}

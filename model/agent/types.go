@@ -94,9 +94,13 @@ type Config struct {
 	CommandSandboxAllowNetwork bool
 	BrowserCDPURL              string
 	BrowserTimeoutMS           int
-	ToolTimeoutMS              int
-	FinalizationReserveMS      int
-	ProtocolRepairLimit        int
+	// BrowserControl 是浏览器控制扩展的控制面句柄，由运行时注入，不是可序列化
+	// 的配置项：为 nil 时 browser_ext_* 那组工具根本不登记。共享扩展底座按
+	// ExtensionScope 取字段，它不在其中，所以不会被带进缓存键。
+	BrowserControl        BrowserControlBridge `json:"-"`
+	ToolTimeoutMS         int
+	FinalizationReserveMS int
+	ProtocolRepairLimit   int
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string
