@@ -76,6 +76,7 @@ type dianaBotConfigSnapshot struct {
 	ErrorReplyPrefix                string                    `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts               int                       `json:"send_retry_attempts"`
 	SendChunkIntervalMS             int                       `json:"send_chunk_interval_ms"`
+	RecurringFailureAlertThreshold  int                       `json:"recurring_failure_alert_threshold"`
 	PrivateClosingGrace             int                       `json:"private_closing_grace"`
 	InboundGroupConcurrency         int                       `json:"inbound_group_concurrency"`
 	InboundPrivateConcurrency       int                       `json:"inbound_private_concurrency"`
@@ -314,6 +315,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
 		SendRetryAttempts:               cfg.SendRetryAttempts,
 		SendChunkIntervalMS:             cfg.SendChunkIntervalMS,
+		RecurringFailureAlertThreshold:  intValue(cfg.RecurringFailureAlertThreshold, defaultRecurringFailureAlertThreshold),
 		PrivateClosingGrace:             cfg.PrivateClosingGrace,
 		InboundGroupConcurrency:         cfg.InboundGroupConcurrency,
 		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,

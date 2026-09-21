@@ -253,6 +253,8 @@ export interface BotProfileConfig {
   error_notify_enabled?: boolean;
   error_reply_prefix?: string;
   send_retry_attempts?: number;
+  /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */
+  recurring_failure_alert_threshold?: number;
   send_chunk_interval_ms?: number;
   private_closing_grace?: number;
   inbound_group_concurrency?: number;
@@ -1432,7 +1434,7 @@ export function listPlugins(profile = ""): Promise<PluginState[]> {
   return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
-export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; error?: string }
+export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; resident?: boolean; keywords?: string[]; error?: string }
 export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
   return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
 }
@@ -1445,6 +1447,29 @@ export function listMCPPresets(): Promise<{items: {preset: MCPPreset; installed:
 }
 export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown>): Promise<T> {
   return requestJSON<T>("/api/assistant/extensions", {method:"POST", body:JSON.stringify(input)});
+}
+
+/** 交互式浏览器接入：模型通过 CDP 操作一个真实浏览器，用的是那个浏览器已有的登录态。 */
+export interface AgentBrowserSettings { profile_id?: string; cdp_url?: string; timeout_ms?: number; tools: string[] }
+export function getAgentBrowser(profile = ""): Promise<AgentBrowserSettings> {
+  return requestJSON(`/api/assistant/agent-browser?profile=${encodeURIComponent(profile)}`);
+}
+export function saveAgentBrowser(profile: string, cdpURL: string, timeoutMS: number): Promise<AgentBrowserSettings> {
+  return requestJSON("/api/assistant/agent-browser", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL, timeout_ms: timeoutMS})});
+}
+export function testAgentBrowser(profile: string, cdpURL: string): Promise<{connected: boolean; browser?: string; error?: string}> {
+  return requestJSON("/api/assistant/agent-browser/test", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL})});
+}
+
+/** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
+export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp"; name: string; description?: string; tools?: string[]; default: boolean; resident?: boolean }
+export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]}> {
+  return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
+}
+export function setAgentResidency(profile: string, id: string, resident: boolean | null): Promise<{ok: boolean}> {
+  const body: Record<string, unknown> = {profile_id: profile, id};
+  if (resident !== null) body.resident = resident;
+  return requestJSON("/api/assistant/agent-residency", {method: "POST", body: JSON.stringify(body)});
 }
 
 export function installPlugin(id: string): Promise<PluginState> {

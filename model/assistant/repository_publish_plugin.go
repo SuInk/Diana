@@ -39,7 +39,7 @@ const (
 	repositoryPublishSettingTokenUsers     = "user_github_token_users"
 	repositoryPublishSettingUserAuth       = "user_github_auth_modes"
 	repositoryPublishSettingTimeout        = "timeout_seconds"
-	defaultRepositoryPublishTimeoutSecs    = 20
+	defaultRepositoryPublishTimeoutSecs    = 90
 	repositoryPublishAuthToken             = "token"
 	repositoryPublishAuthGH                = "gh"
 	repositoryPublishAuthAuto              = "auto"
@@ -539,7 +539,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeNumber,
 				Default:     defaultRepositoryPublishTimeoutSecs,
 				Min:         settingRange(5),
-				Max:         settingRange(60),
+				Max:         settingRange(300),
 				Step:        1,
 				Unit:        "秒",
 			},

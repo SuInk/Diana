@@ -97,6 +97,7 @@ type ToolRegistry struct {
 	parentOnly         map[string]bool
 	hidden             map[string]bool
 	restricted         map[string]bool
+	denied             map[string]bool
 	extensionOverrides map[string]bool
 	activeViews        int
 	closeRequested     bool
@@ -407,9 +408,34 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	return tool, ok
 }
 
+// DenyTools 记下「这个名字本次会话没权限用」。
+//
+// 有些工具的权限门槛在注册之前就判完了——不够格就根本不构造这个工具，注册表自然
+// 也不知道有过这个名字。于是模型问起来只会得到「不存在」，它照字面理解成拼错了，
+// 换个名字接着猜，一路把工具预算耗光（线上真发生过：非主人在群里让机器人开 issue，
+// github 工具因为没权限没注册，模型连猜四个名字直到额度用尽）。
+//
+// 这里只登记名字，不构造也不注册工具：能不能调用完全不受影响，变的只是取不到时
+// 该说哪句话。
+func (r *ToolRegistry) DenyTools(names ...string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			if r.denied == nil {
+				r.denied = map[string]bool{}
+			}
+			r.denied[name] = true
+		}
+	}
+}
+
 // PolicyDenied 回答「这个名字是查无此工具，还是本次会话没权限用」。被身份白名单
-// 摘掉、被机器人开关停用，或只存在于共享底座却不在白名单里的工具都算后者：调用方
-// 据此给出的提示不一样，模型才不会对着同一个名字反复重试。
+// 摘掉、被机器人开关停用、调用方显式登记过没权限，或只存在于共享底座却不在白名单
+// 里的工具都算后者：调用方据此给出的提示不一样，模型才不会对着同一个名字反复重试。
 func (r *ToolRegistry) PolicyDenied(name string) bool {
 	if r == nil || name == "" {
 		return false
@@ -422,11 +448,12 @@ func (r *ToolRegistry) PolicyDenied(name string) bool {
 	_, local := r.tools[name]
 	restricted := r.restricted[name]
 	hidden := r.hidden[name]
+	denied := r.denied[name]
 	allowed := cloneToolAllowlist(r.parentOnly)
 	parent := r.parent
 	r.mu.RUnlock()
 	// 名字还在本地表里却取不出来，只可能是机器人级扩展开关把它关了。
-	if local || restricted || hidden {
+	if local || restricted || hidden || denied {
 		return true
 	}
 	if allowed == nil || allowed[name] {
@@ -697,6 +724,11 @@ func schemaAllowsStrictMode(schema map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// CompactToolDescription 把工具描述压成目录里的一行，界面和提示词共用同一份压法。
+func CompactToolDescription(description string, maxRunes int) string {
+	return compactToolDescription(description, maxRunes)
 }
 
 func compactToolDescription(description string, maxRunes int) string {

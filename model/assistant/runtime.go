@@ -514,6 +514,8 @@ type Runtime struct {
 	historyImageDescBackoff time.Duration
 	agentRegistryMu         sync.Mutex
 	agentRegistryCache      map[string]*agent.ToolRegistry
+	agentResidencyMu        sync.RWMutex
+	agentResidencyCatalog   map[string][]AgentResidencyEntry
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -3216,8 +3218,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
-	stopTyping := r.startTypingIndicator(ctx, event, cfg)
-	defer stopTyping()
+	typing := r.startTypingIndicator(ctx, event, cfg)
+	// 放进 ctx 是为了让发送链路能自己调节：发出一条就静音，还有下一条再点亮。
+	ctx = withTypingIndicator(ctx, typing)
+	defer typing.stop()
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
@@ -3373,6 +3377,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			pluginTools = append(pluginTools, newDianaPlatformTool(r, event))
 		}
 		if fullAgentEnabled {
+			// 因为权限不够而没挂上的工具名。它们不构造、不注册，只是让注册表知道
+			// 「有过这个名字，但这次会话没权限」，取不到时才说得出正确的那句话。
+			var deniedTools []string
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
@@ -3402,6 +3409,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
 			if event.Kind == EventKindGroup || relationship.Owner {
 				extraTools = append(extraTools, newDianaCrossSessionTool(r, event, relationship.Owner))
+			} else {
+				deniedTools = append(deniedTools, dianaCrossSessionToolName)
 			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
@@ -3456,8 +3465,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
-				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
-					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
+				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok {
+					if relationship.Owner || repositoryPublishEventHasAccess(event, settings) {
+						extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
+					} else {
+						// 插件开着、只是这个人这个群不够格。不登记的话模型只会被告知
+						// 「不存在」，然后换个名字接着猜。
+						deniedTools = append(deniedTools, dianaGitHubToolName)
+					}
 				}
 			}
 			// schedule、rss、github 三种订阅合成一个 subscription 工具。github 那种仍然
@@ -3509,6 +3524,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if err != nil {
 				return "", err
 			}
+			agentRegistry.DenyTools(deniedTools...)
 		} else if len(pluginTools) > 0 && relationship.allowsAgentTools() {
 			// Plugin-contributed model tools stay usable without granting the local
 			// filesystem, shell, browser, skills, or MCP surface behind AgentEnabled.
@@ -4207,6 +4223,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
+		// 常驻名单要等注册表建好才算得出来：档位是用户按扩展配的，得知道这一轮
+		// 到底注册了哪些工具、哪条 MCP 带了哪几个。
+		agentCfg.CoreTools = r.agentCoreTools(event, registry)
+		r.rememberAgentResidencyCatalog(event, registry)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {
@@ -6249,6 +6269,8 @@ func dedupeStrings(values []string) []string {
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
 func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	// 扶正写歪的外壳和分隔符，消费的还是正规标记，见 normalizeDianaReplyVariants。
+	msg.Text = normalizeDianaReplyVariants(msg.Text)
 	id, rest, ok := consumeOutgoingReplyControl(msg.Text)
 	if !ok {
 		return msg
@@ -6316,6 +6338,21 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 		return msg
 	}
 	msg.MentionNames = resolved
+	return msg
+}
+
+// normalizeOutgoingMentions 先把写歪的提及标记扶正，再丢掉 id 不可用的那些，见
+// mention_marker.go 里那段说明。放在 resolveOutgoingMentionNames 之前：查昵称是给
+// 留下来的标记用的，先扶正再清理，后面各平台的翻译就只会拿到正规标记和真账号。
+func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	acceptable := func(id string) bool { return mentionIDAcceptable(event.Platform, id) }
+	text := dropUnusableDianaMentions(normalizeDianaMentionVariants(msg.Text), acceptable)
+	text = dropResidualDianaReplyMarkers(text)
+	if text == msg.Text {
+		return msg
+	}
+	log.Printf("diana rewrote mention markers: platform=%s before=%q after=%q", NormalizePlatformID(event.Platform), truncateForError(msg.Text), truncateForError(text))
+	msg.Text = text
 	return msg
 }
 

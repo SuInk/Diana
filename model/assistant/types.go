@@ -576,10 +576,14 @@ type BotConfig struct {
 	// InboundGroupConcurrency / InboundPrivateConcurrency 是同一会话可以同时
 	// 处理的入站事件数。以前是代码里的两个常量（群 3、私聊硬编码 1），现在提到
 	// 配置里，但默认值保持不变。
-	InboundGroupConcurrency      int   `json:"inbound_group_concurrency,omitempty"`
-	InboundPrivateConcurrency    int   `json:"inbound_private_concurrency,omitempty"`
-	BotReplyLoopDetectionEnabled *bool `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplySafetyMasterEnabled     *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	InboundGroupConcurrency   int `json:"inbound_group_concurrency,omitempty"`
+	InboundPrivateConcurrency int `json:"inbound_private_concurrency,omitempty"`
+	// RecurringFailureAlertThreshold 是周期订阅（RSS、定时查询、仓库更新）连续失败
+	// 几次才报一次警。空指针表示没配过，用默认值；0 表示彻底不报，故障只留日志和
+	// 后台状态。用指针是因为 0 在这里是一个有意义的取值，不是「没填」。
+	RecurringFailureAlertThreshold *int  `json:"recurring_failure_alert_threshold,omitempty"`
+	BotReplyLoopDetectionEnabled   *bool `json:"bot_reply_loop_detection_enabled,omitempty"`
+	ReplySafetyMasterEnabled       *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	// ReplyAccountSafetyAuditPrompt 是账号安全判断的自定义规则。留空使用内置范围；
 	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
 	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
@@ -944,67 +948,70 @@ type ConfigPayload struct {
 	WeComEncodingAESKey               string             `json:"wecom_encoding_aes_key,omitempty"`
 	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
-	CallbackPath                  string               `json:"callback_path,omitempty"`
-	NoneBotBridgeEnabled          bool                 `json:"nonebot_bridge_enabled,omitempty"`
-	NoneBotBridgeEndpoint         string               `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeToken            string               `json:"nonebot_bridge_token,omitempty"`
-	NoneBotBridgeTokenConfigured  bool                 `json:"nonebot_bridge_token_configured,omitempty"`
-	BotAccount                    string               `json:"bot_account,omitempty"`
-	OwnerID                       string               `json:"owner_id,omitempty"`
-	OwnerLoginEnabled             bool                 `json:"owner_login_enabled,omitempty"`
-	OwnerLLMConfigEnabled         *bool                `json:"owner_llm_config_enabled,omitempty"`
-	GroupTriggers                 []string             `json:"group_triggers,omitempty"`
-	GroupTriggerMode              AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
-	DisabledGroups                []string             `json:"disabled_groups,omitempty"`
-	DisabledUsers                 []string             `json:"disabled_users,omitempty"`
-	MarkedBotIDs                  []string             `json:"marked_bot_ids,omitempty"`
-	GroupAdmission                GroupAdmission       `json:"group_admission,omitempty"`
-	PrivateAdmission              PrivateAdmission     `json:"private_admission,omitempty"`
-	ReplyGate                     *ReplyGate           `json:"reply_gate,omitempty"`
-	WelcomeEnabled                bool                 `json:"welcome_enabled,omitempty"`
-	WelcomeMessage                string               `json:"welcome_message,omitempty"`
-	WelcomeMode                   WelcomeMode          `json:"welcome_mode,omitempty"`
-	WelcomeTemplates              []string             `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds     int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
-	SystemPrompt                  string               `json:"system_prompt,omitempty"`
-	Soul                          *PersonaSoul         `json:"soul,omitempty"`
-	PersonaID                     string               `json:"persona_id,omitempty"`
-	CustomPersona                 *Persona             `json:"custom_persona,omitempty"`
-	ResponseMode                  ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                    ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled      *bool                `json:"action_description_enabled,omitempty"`
-	PersonaMode                   PersonaMode          `json:"persona_mode,omitempty"`
-	SelfReference                 string               `json:"self_reference,omitempty"`
-	SentenceEnders                string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled              bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode            ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	ModelDisclosure               ModelDisclosure      `json:"model_disclosure,omitempty"`
-	RepositoryDisclosure          RepositoryDisclosure `json:"repository_disclosure,omitempty"`
-	MentionUserMode               ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain               *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled            *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix              string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts             int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS           int                  `json:"send_chunk_interval_ms,omitempty"`
-	PrivateClosingGrace           int                  `json:"private_closing_grace,omitempty"`
-	InboundGroupConcurrency       int                  `json:"inbound_group_concurrency,omitempty"`
-	InboundPrivateConcurrency     int                  `json:"inbound_private_concurrency,omitempty"`
-	PromptInjectTime              *bool                `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules    *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender       *bool                `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint        *bool                `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText        string               `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText      string               `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate            string               `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate     string               `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText           string               `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText            string               `json:"prompt_wake_only_text,omitempty"`
-	AutoImageDescription          *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess           *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles                    map[string]ModelRole `json:"model_roles,omitempty"`
-	BotReplyLoopDetectionEnabled  *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
-	ReplySafetyMasterEnabled      *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
-	ReplyAccountSafetyAuditPrompt string               `json:"reply_account_safety_audit_prompt,omitempty"`
+	CallbackPath                 string           `json:"callback_path,omitempty"`
+	NoneBotBridgeEnabled         bool             `json:"nonebot_bridge_enabled,omitempty"`
+	NoneBotBridgeEndpoint        string           `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeToken           string           `json:"nonebot_bridge_token,omitempty"`
+	NoneBotBridgeTokenConfigured bool             `json:"nonebot_bridge_token_configured,omitempty"`
+	BotAccount                   string           `json:"bot_account,omitempty"`
+	OwnerID                      string           `json:"owner_id,omitempty"`
+	OwnerLoginEnabled            bool             `json:"owner_login_enabled,omitempty"`
+	OwnerLLMConfigEnabled        *bool            `json:"owner_llm_config_enabled,omitempty"`
+	GroupTriggers                []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode             AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	DisabledGroups               []string         `json:"disabled_groups,omitempty"`
+	DisabledUsers                []string         `json:"disabled_users,omitempty"`
+	MarkedBotIDs                 []string         `json:"marked_bot_ids,omitempty"`
+	GroupAdmission               GroupAdmission   `json:"group_admission,omitempty"`
+	PrivateAdmission             PrivateAdmission `json:"private_admission,omitempty"`
+	ReplyGate                    *ReplyGate       `json:"reply_gate,omitempty"`
+	WelcomeEnabled               bool             `json:"welcome_enabled,omitempty"`
+	WelcomeMessage               string           `json:"welcome_message,omitempty"`
+	WelcomeMode                  WelcomeMode      `json:"welcome_mode,omitempty"`
+	WelcomeTemplates             []string         `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds    int              `json:"welcome_llm_cooldown_seconds,omitempty"`
+	SystemPrompt                 string           `json:"system_prompt,omitempty"`
+	// Soul 是品格层，只在机器人级存在：分群配置里没有这个字段，所以某个群改不了
+	// 价值观，只能改说话方式（见 persona_soul.go 开头）。
+	Soul                           *PersonaSoul         `json:"soul,omitempty"`
+	PersonaID                      string               `json:"persona_id,omitempty"`
+	CustomPersona                  *Persona             `json:"custom_persona,omitempty"`
+	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled       *bool                `json:"action_description_enabled,omitempty"`
+	PersonaMode                    PersonaMode          `json:"persona_mode,omitempty"`
+	SelfReference                  string               `json:"self_reference,omitempty"`
+	SentenceEnders                 string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled               bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode             ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure                ModelDisclosure      `json:"model_disclosure,omitempty"`
+	RepositoryDisclosure           RepositoryDisclosure `json:"repository_disclosure,omitempty"`
+	MentionUserMode                ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain                *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled             *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix               string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts              int                  `json:"send_retry_attempts,omitempty"`
+	RecurringFailureAlertThreshold *int                 `json:"recurring_failure_alert_threshold,omitempty"`
+	SendChunkIntervalMS            int                  `json:"send_chunk_interval_ms,omitempty"`
+	PrivateClosingGrace            int                  `json:"private_closing_grace,omitempty"`
+	InboundGroupConcurrency        int                  `json:"inbound_group_concurrency,omitempty"`
+	InboundPrivateConcurrency      int                  `json:"inbound_private_concurrency,omitempty"`
+	PromptInjectTime               *bool                `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules     *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender        *bool                `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint         *bool                `json:"prompt_chinese_slang_hint,omitempty"`
+	PromptChineseSlangText         string               `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText       string               `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate             string               `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate      string               `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText            string               `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText             string               `json:"prompt_wake_only_text,omitempty"`
+	AutoImageDescription           *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess            *bool                `json:"auto_video_preprocess,omitempty"`
+	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled   *bool                `json:"bot_reply_loop_detection_enabled,omitempty"`
+	ReplySafetyMasterEnabled       *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
+	ReplyAccountSafetyAuditPrompt  string               `json:"reply_account_safety_audit_prompt,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
@@ -1433,6 +1440,28 @@ func (s ProfileSet) WithProfileEnabled(id string, enabled bool) (ProfileSet, boo
 	return s, false
 }
 
+// WithAgentBrowser 只改一台机器人的交互式浏览器接入参数。
+//
+// 单独开一条路而不是让界面回存整份配置：交互式浏览器的入口在扩展页，那一页没有、
+// 也不该有整份机器人配置。把整份配置读出来改一个字段再存回去，等于让这一页替所有
+// 别的字段负责——凭据、平台连接、人设，任何一处读回来是脱敏值就会被写坏。
+func (s ProfileSet) WithAgentBrowser(id, cdpURL string, timeoutMS int) (ProfileSet, bool) {
+	id = strings.TrimSpace(id)
+	profiles := make([]BotConfig, len(s.Profiles))
+	copy(profiles, s.Profiles)
+	for i := range profiles {
+		if strings.TrimSpace(profiles[i].ID) != id {
+			continue
+		}
+		profiles[i].AgentBrowserCDPURL = strings.TrimSpace(cdpURL)
+		profiles[i].AgentBrowserTimeoutMS = timeoutMS
+		s.Profiles = profiles
+		// WithDefaults 会把空地址和越界超时补回默认值，省得界面自己复述一遍规则。
+		return s.WithDefaults(), true
+	}
+	return s, false
+}
+
 // WithAllProfilesEnabled 把全部机器人的启用状态统一改成 enabled。
 func (s ProfileSet) WithAllProfilesEnabled(enabled bool) ProfileSet {
 	profiles := make([]BotConfig, len(s.Profiles))
@@ -1740,6 +1769,16 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.SendRetryAttempts > 5 {
 		cfg.SendRetryAttempts = 5
+	}
+	// 只挡明显的错值：负数和 0 一样是不报警，上限挡住「连续失败几百次才吭声」这种
+	// 配置——真到那个量级，订阅早就该当成坏了，而不是继续安静地重试。
+	if cfg.RecurringFailureAlertThreshold != nil {
+		switch value := *cfg.RecurringFailureAlertThreshold; {
+		case value < 0:
+			cfg.RecurringFailureAlertThreshold = intPointer(0)
+		case value > maxRecurringFailureAlertThreshold:
+			cfg.RecurringFailureAlertThreshold = intPointer(maxRecurringFailureAlertThreshold)
+		}
 	}
 	if cfg.ReplyReferenceMode == "" {
 		cfg.ReplyReferenceMode = defaults.ReplyReferenceMode
@@ -2159,6 +2198,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
 		ErrorReplyPrefix:                  cfg.ErrorReplyPrefix,
 		SendRetryAttempts:                 cfg.SendRetryAttempts,
+		RecurringFailureAlertThreshold:    copyIntPointer(cfg.RecurringFailureAlertThreshold),
 		SendChunkIntervalMS:               cfg.SendChunkIntervalMS,
 		PrivateClosingGrace:               cfg.PrivateClosingGrace,
 		InboundGroupConcurrency:           cfg.InboundGroupConcurrency,
@@ -2369,6 +2409,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),
 		ErrorReplyPrefix:                payload.ErrorReplyPrefix,
 		SendRetryAttempts:               payload.SendRetryAttempts,
+		RecurringFailureAlertThreshold:  copyIntPointer(payload.RecurringFailureAlertThreshold),
 		SendChunkIntervalMS:             payload.SendChunkIntervalMS,
 		PrivateClosingGrace:             payload.PrivateClosingGrace,
 		InboundGroupConcurrency:         payload.InboundGroupConcurrency,
@@ -2564,6 +2605,24 @@ func firstNonNilBoolPointer(values ...*bool) *bool {
 	return nil
 }
 
+func intPointer(value int) *int {
+	return &value
+}
+
+func intValue(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func copyIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	return intPointer(*value)
+}
+
 func copyBoolPointer(value *bool) *bool {
 	if value == nil {
 		return nil
@@ -2657,6 +2716,8 @@ const (
 	// 就开始处理，才赶得上并进去；串行时它永远等到上一条发完，连发几句就回几遍。
 	defaultInboundGroupConcurrency   = 3
 	defaultInboundPrivateConcurrency = 2
+	// maxRecurringFailureAlertThreshold 是周期订阅失败告警次数的上限。
+	maxRecurringFailureAlertThreshold = 100
 	// maxInboundSessionConcurrency 只挡明显的错值。同一会话真开到几十路并发，
 	// 回复顺序和上下文都会乱成一团，不是配置该允许的范围。
 	maxInboundSessionConcurrency = 16

@@ -84,6 +84,15 @@ func (h *EventHub) PublishBotEvent(event assistant.EventRecord) {
 	h.Publish("bot_event", event)
 }
 
+// PublishConfigChanged 广播一条配置变更通知。
+//
+// kind 对应前端的配置分区（bot / llm），只说「哪一块变了」，不带配置内容：
+// 这条通知会发给所有订阅者，而配置里有 token 一类的凭据，让各自重新按权限拉
+// 一次比顺手推一份全量安全。
+func (h *EventHub) PublishConfigChanged(kind string) {
+	h.Publish("config_changed", map[string]string{"kind": kind})
+}
+
 // EventStreamHandler 通过 SSE 向前端推送状态、统计和实时事件。
 type EventStreamHandler struct {
 	hub         *EventHub

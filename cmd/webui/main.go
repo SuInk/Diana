@@ -361,7 +361,7 @@ func main() {
 		log.Printf("load system release cache: %v", err)
 	}
 	// 下载线路选择器由 webui 和 updater 共用：界面上改了策略，下一次下载就按新策略走。
-	mirrorSelector := ghmirror.NewSelector(&http.Client{Timeout: 15 * time.Second})
+	mirrorSelector := ghmirror.NewSelector(&http.Client{Timeout: 60 * time.Second})
 	systemHandler.SetGitHubMirrorSelector(mirrorSelector)
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: runtimeVersion,
@@ -495,6 +495,10 @@ func main() {
 		statsCollector.RestoreDurableBaselines(baselines)
 	}
 	eventHub := webui.NewEventHub()
+	// 主人在聊天里让机器人换模型、改屏蔽名单，改的是 WebUI 这同一份机器人配置。
+	// 页面只在自己发过写请求后才重新拉配置，所以不播这一条，开着的控制台会一直
+	// 停在旧值，要手动刷新才对得上。
+	botProfileStore.SetChangeListener(func() { eventHub.PublishConfigChanged("bot") })
 	botRuntime.SetEventListener(func(event assistant.EventRecord) {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if err := sqliteStore.RecordInboundEventAudit(auditCtx, event); err != nil {
@@ -537,7 +541,7 @@ func main() {
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
 	botHandler.SetSQLiteStore(sqliteStore)
-	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 60 * time.Second})
+	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 3 * time.Minute})
 	repoPluginInstaller.MirrorBase = func(ctx context.Context) string {
 		return mirrorSelector.Base(ctx, "https://raw.githubusercontent.com/SuInk/diana/main/model/version/VERSION")
 	}

@@ -28,8 +28,11 @@ import (
 const (
 	rssWatchPluginID = "official.rss-watch"
 
-	rssWatchSettingTimeout   = "timeout_seconds"
-	rssWatchSettingItemLimit = "judge_item_limit"
+	rssWatchSettingTimeout = "timeout_seconds"
+	// rssWatchDefaultTimeoutSeconds 和仓库订阅的默认超时同一个理由：订阅是后台任务，
+	// 等久一点没有代价，等不到才有——超时到了这一轮就整个失败，重试要等下一个周期。
+	rssWatchDefaultTimeoutSeconds = 90
+	rssWatchSettingItemLimit      = "judge_item_limit"
 
 	// Twitter 订阅直接走 FxTwitter 的公开时间线接口，不需要任何额外部署。
 	// 这和链接解析抓单条推文用的是同一个上游，只是换成 v2 的 profile 路由。
@@ -95,9 +98,9 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 				Label:       "抓取超时",
 				Description: "单次 Feed 请求的最长等待时间。",
 				Type:        PluginSettingTypeNumber,
-				Default:     20,
+				Default:     rssWatchDefaultTimeoutSeconds,
 				Min:         settingRange(5),
-				Max:         settingRange(60),
+				Max:         settingRange(300),
 				Step:        1,
 				Unit:        "秒",
 			},
@@ -286,7 +289,7 @@ func (p *RSSWatchPlugin) fetchFresh(ctx context.Context, feedURL string, setting
 	if err != nil {
 		return parsedFeed{}, err
 	}
-	timeout := time.Duration(settings.Int(rssWatchSettingTimeout, 20)) * time.Second
+	timeout := time.Duration(settings.Int(rssWatchSettingTimeout, rssWatchDefaultTimeoutSeconds)) * time.Second
 	if timeout < 5*time.Second {
 		timeout = 5 * time.Second
 	}

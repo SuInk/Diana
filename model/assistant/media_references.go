@@ -119,11 +119,11 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 			}
 			continue
 		}
-		timeout := 8 * time.Second
+		timeout := 30 * time.Second
 		if videoFileSegment(segment) {
-			timeout = 60 * time.Second
+			timeout = 120 * time.Second
 			if data["forward_id"] != "" {
-				timeout = 20 * time.Second
+				timeout = 60 * time.Second
 			}
 		}
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
