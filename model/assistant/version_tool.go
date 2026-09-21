@@ -71,7 +71,7 @@ func (r *Runtime) releaseStatusProvider() ReleaseStatusProvider {
 
 // releaseStatusTimeout 给更新检查的时间上限。它可能要访问 GitHub（结果有 30 分钟
 // 缓存），但聊天回复不能为它干等。
-const releaseStatusTimeout = 6 * time.Second
+const releaseStatusTimeout = 30 * time.Second
 
 // BuildInfo 描述当前这次运行的身份，由启动时注入。
 type BuildInfo struct {

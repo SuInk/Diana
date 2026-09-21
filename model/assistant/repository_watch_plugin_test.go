@@ -2322,3 +2322,133 @@ func TestRepositoryWatchSpacingDoesNotConsumeRequestTimeout(t *testing.T) {
 		t.Fatalf("spacing ate into the request timeout: %v", err)
 	}
 }
+
+// 整轮预算按轮询间隔走，并且两头都钳住：一分钟一轮的订阅也要跑得完一次正常检查，
+// 而再长的间隔也不该让一轮卡着不放。
+func TestRepositoryWatchRoundBudgetFollowsInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{name: "短间隔抬到下限", interval: time.Minute, want: 5 * time.Minute},
+		{name: "按间隔来", interval: 15 * time.Minute, want: 15 * time.Minute},
+		{name: "长间隔压到上限", interval: 6 * time.Hour, want: 30 * time.Minute},
+		{name: "没设间隔也有下限", interval: 0, want: 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := Reminder{IntervalSeconds: int64(tc.interval / time.Second)}
+			if got := repositoryWatchRoundBudget(item); got != tc.want {
+				t.Fatalf("budget = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// 有 Token 时 PR 列表走 GraphQL：REST 的 /pulls 每条附带 head 和 base 两份完整仓库
+// 对象，占响应的六成，而这里只用得上两个分支名。GraphQL 失败要能退回 REST。
+func TestRepositoryWatchPullRequestsPreferGraphQL(t *testing.T) {
+	var mu sync.Mutex
+	var graphQLCalls, restCalls int
+	failGraphQL := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/graphql") {
+			graphQLCalls++
+			if failGraphQL {
+				http.Error(w, `{"message":"graphql down"}`, http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{"nodes":[
+				{"number":7,"title":"GraphQL 来的 PR","body":"正文","state":"MERGED","url":"https://example.invalid/pull/7",
+				 "createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-02T00:00:00Z","closedAt":"2026-09-02T00:00:00Z",
+				 "mergedAt":"2026-09-02T00:00:00Z","mergeCommit":{"oid":"merge-oid"},"author":{"login":"suink"},
+				 "baseRefName":"main","headRefName":"feature"}]}}}}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/pulls") {
+			restCalls++
+			_, _ = w.Write([]byte(`[{"number":9,"title":"REST 来的 PR","state":"open","html_url":"https://example.invalid/pull/9",
+				"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-03T00:00:00Z",
+				"user":{"login":"suink"},"base":{"ref":"main"},"head":{"ref":"feature"}}]`))
+			return
+		}
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
+	settings := SettingValues{repositoryWatchSettingToken: "secret"}
+
+	records, err := plugin.collectPullRecords(context.Background(), "acme/demo", "main", settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	gq, rest := graphQLCalls, restCalls
+	mu.Unlock()
+	if gq != 1 || rest != 0 {
+		t.Fatalf("有 Token 时应当只走 GraphQL：graphql=%d rest=%d", gq, rest)
+	}
+	if len(records) != 1 || records[0].Number != 7 {
+		t.Fatalf("records = %#v", records)
+	}
+	// MERGED 要折成 REST 那套 closed + merged_at，下游先看 MergedAt 再看 state。
+	if records[0].State != "closed" || records[0].MergedAt == nil {
+		t.Fatalf("merged 状态没有对齐 REST：%#v", records[0])
+	}
+	for _, want := range []struct {
+		name, got string
+	}{
+		{"merge commit", records[0].MergeCommitSHA},
+		{"author", records[0].User.Login},
+		{"base", records[0].Base.Ref},
+		{"head", records[0].Head.Ref},
+	} {
+		if strings.TrimSpace(want.got) == "" {
+			t.Fatalf("%s 没有映射过来：%#v", want.name, records[0])
+		}
+	}
+
+	// GraphQL 挂了要退回 REST，而不是让整轮失败。
+	mu.Lock()
+	failGraphQL = true
+	mu.Unlock()
+	records, err = plugin.collectPullRecords(context.Background(), "acme/demo", "main", settings)
+	if err != nil {
+		t.Fatalf("GraphQL 失败后没有退回 REST: %v", err)
+	}
+	if len(records) != 1 || records[0].Number != 9 {
+		t.Fatalf("fallback records = %#v", records)
+	}
+}
+
+// 没有 Token 就只能走 REST，不该白打一次 GraphQL。
+func TestRepositoryWatchPullRequestsUseRESTWithoutToken(t *testing.T) {
+	var mu sync.Mutex
+	var graphQLCalls, restCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/graphql") {
+			graphQLCalls++
+		} else {
+			restCalls++
+		}
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
+	if _, err := plugin.collectPullRecords(context.Background(), "acme/demo", "main", SettingValues{}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if graphQLCalls != 0 || restCalls != 1 {
+		t.Fatalf("没有 Token 时应当直接走 REST：graphql=%d rest=%d", graphQLCalls, restCalls)
+	}
+}

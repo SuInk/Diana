@@ -75,7 +75,7 @@ const dingTalkSessionWebhookTTL = 55 * time.Minute
 func NewDingTalkChannel(cfg DingTalkConfig) *DingTalkChannel {
 	channel := &DingTalkChannel{
 		cfg:             cfg,
-		client:          &http.Client{Timeout: 30 * time.Second},
+		client:          &http.Client{Timeout: 60 * time.Second},
 		status:          ChannelStatus{Endpoint: dingTalkOpenAPIBase + " (stream)", UpdatedAt: time.Now()},
 		sessionWebhooks: map[string]dingTalkSessionWebhook{},
 	}

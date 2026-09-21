@@ -33,9 +33,12 @@ const (
 	// 原来是 20 秒：正常一页 PR（约 130KB）连头带体两秒出头就回来了，20 秒看着
 	// 很宽。但超时打不中「慢」，打中的是「传到一半停住」——出网绕代理时这种停滞
 	// 按十秒计，20 秒刚好卡在上面，于是每天攒出几次 context deadline exceeded，
-	// 一轮轮询失败、三五轮攒够就去群里报一次。订阅是半小时一轮的后台任务，多等
-	// 半分钟没有代价，等不到才有。
-	repositoryWatchDefaultTimeoutSeconds = 45
+	// 一轮轮询失败、三五轮攒够就去群里报一次。
+	//
+	// 订阅是后台任务，等久一点没有代价，等不到才有：超时到了这一轮就整个失败，
+	// 而重试要等下一个轮询周期。所以宁可给足——真正兜住「一轮无限期卡着」的是
+	// repositoryWatchRoundBudget 那道整轮上限，不是这个数。
+	repositoryWatchDefaultTimeoutSeconds = 90
 
 	defaultGitHubAPIURL            = "https://api.github.com"
 	repositoryWatchNoReleaseCursor = "__none__"
@@ -379,7 +382,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeNumber,
 				Default:     repositoryWatchDefaultTimeoutSeconds,
 				Min:         settingRange(5),
-				Max:         settingRange(120),
+				Max:         settingRange(300),
 				Step:        1,
 				Unit:        "秒",
 			},
@@ -721,40 +724,34 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	return commits, latest, max(newCommitCount, verifiedTotal) > limit, nil
 }
 
+// repositoryWatchPullRecord 是两种来源（GraphQL、REST）统一后的 PR 记录。
+// 字段就是通知真正用得到的那些——REST 的 /pulls 每条还会附带 head 和 base 两份完整
+// 仓库对象，占掉响应的六成，解析完直接丢。
+type repositoryWatchPullRecord struct {
+	Number         int        `json:"number"`
+	Title          string     `json:"title"`
+	Body           string     `json:"body"`
+	State          string     `json:"state"`
+	HTMLURL        string     `json:"html_url"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ClosedAt       *time.Time `json:"closed_at"`
+	MergedAt       *time.Time `json:"merged_at"`
+	MergeCommitSHA string     `json:"merge_commit_sha"`
+	User           struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	Head struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}
+
 func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, previousCheckAt time.Time, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, map[int]map[string]bool, error) {
-	query := url.Values{
-		"state":     {"all"},
-		"sort":      {"updated"},
-		"direction": {"desc"},
-		"per_page":  {strconv.Itoa(repositoryWatchPageSize)},
-	}
-	var payload []struct {
-		Number         int        `json:"number"`
-		Title          string     `json:"title"`
-		Body           string     `json:"body"`
-		State          string     `json:"state"`
-		HTMLURL        string     `json:"html_url"`
-		CreatedAt      time.Time  `json:"created_at"`
-		UpdatedAt      time.Time  `json:"updated_at"`
-		ClosedAt       *time.Time `json:"closed_at"`
-		MergedAt       *time.Time `json:"merged_at"`
-		MergeCommitSHA string     `json:"merge_commit_sha"`
-		User           struct {
-			Login string `json:"login"`
-		} `json:"user"`
-		Base struct {
-			Ref string `json:"ref"`
-		} `json:"base"`
-		Head struct {
-			Ref string `json:"ref"`
-		} `json:"head"`
-	}
-	// 分支过滤交给服务端：本地从最近 100 条里挑的话，发往其他分支的 PR 一多，订阅分支的 PR
-	// 就被挤出去了。本地过滤仍保留，兼容不认 base 参数的实现。
-	if trimmedBranch := strings.TrimSpace(branch); trimmedBranch != "" {
-		query.Set("base", trimmedBranch)
-	}
-	if err := p.getJSON(ctx, "/repos/"+repository+"/pulls?"+query.Encode(), settings, &payload); err != nil {
+	payload, err := p.collectPullRecords(ctx, repository, branch, settings)
+	if err != nil {
 		return nil, "", nil, fmt.Errorf("读取 %s pull requests: %w", repository, err)
 	}
 	branch = strings.TrimSpace(branch)
@@ -1194,6 +1191,137 @@ func (p *RepositoryWatchPlugin) collectIssues(ctx context.Context, repository st
 	}
 	return filtered, newestSeen, exhausted, nil, nil
 }
+
+// collectPullRecords 取最近更新的 PR。有 Token 时走 GraphQL：REST 的 /pulls 给每条 PR
+// 内嵌 head 和 base 两份完整仓库对象，占掉响应的六成，而这里只用得上两个分支名——
+// SuInk/Diana 一页 100 条是 1.81MB，其中约 1.1MB 解析完就丢。GraphQL 只要声明过的字段。
+// 失败或没有 Token 时退回 REST，行为和以前一致。
+func (p *RepositoryWatchPlugin) collectPullRecords(ctx context.Context, repository, branch string, settings SettingValues) ([]repositoryWatchPullRecord, error) {
+	if token := repositoryWatchToken(repository, settings); token != "" {
+		records, err := p.collectPullRecordsGraphQL(ctx, repository, branch, token, settings)
+		if err == nil {
+			return records, nil
+		}
+		log.Printf("diana repository_watch graphql pulls failed, falling back to REST: repository=%q err=%v", repository, err)
+	}
+	query := url.Values{
+		"state":     {"all"},
+		"sort":      {"updated"},
+		"direction": {"desc"},
+		"per_page":  {strconv.Itoa(repositoryWatchPageSize)},
+	}
+	// 分支过滤交给服务端：本地从最近一页里挑的话，发往其他分支的 PR 一多，订阅分支的 PR
+	// 就被挤出去了。调用方的本地过滤仍保留，兼容不认 base 参数的实现。
+	if trimmedBranch := strings.TrimSpace(branch); trimmedBranch != "" {
+		query.Set("base", trimmedBranch)
+	}
+	var payload []repositoryWatchPullRecord
+	if err := p.getJSON(ctx, "/repos/"+repository+"/pulls?"+query.Encode(), settings, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (p *RepositoryWatchPlugin) collectPullRecordsGraphQL(ctx context.Context, repository, branch, token string, settings SettingValues) ([]repositoryWatchPullRecord, error) {
+	owner, name, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || name == "" {
+		return nil, fmt.Errorf("仓库名无效：%s", repository)
+	}
+	variables := map[string]any{"owner": owner, "name": name, "first": repositoryWatchPageSize, "base": nil}
+	if trimmedBranch := strings.TrimSpace(branch); trimmedBranch != "" {
+		variables["base"] = trimmedBranch
+	}
+	var data struct {
+		Repository *struct {
+			PullRequests struct {
+				Nodes []struct {
+					Number      int        `json:"number"`
+					Title       string     `json:"title"`
+					Body        string     `json:"body"`
+					State       string     `json:"state"`
+					URL         string     `json:"url"`
+					CreatedAt   time.Time  `json:"createdAt"`
+					UpdatedAt   time.Time  `json:"updatedAt"`
+					ClosedAt    *time.Time `json:"closedAt"`
+					MergedAt    *time.Time `json:"mergedAt"`
+					MergeCommit *struct {
+						OID string `json:"oid"`
+					} `json:"mergeCommit"`
+					Author *struct {
+						Login string `json:"login"`
+					} `json:"author"`
+					BaseRefName string `json:"baseRefName"`
+					HeadRefName string `json:"headRefName"`
+				} `json:"nodes"`
+			} `json:"pullRequests"`
+		} `json:"repository"`
+	}
+	if err := p.awaitRequestSlot(ctx); err != nil {
+		return nil, err
+	}
+	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, repositoryWatchDefaultTimeoutSeconds)) * time.Second
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	err := postGitHubGraphQL(requestCtx, p.client, p.baseURL, token, "Diana-Repository-Watch", repositoryWatchPullsGraphQLQuery, variables, &data)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if data.Repository == nil {
+		return nil, fmt.Errorf("GitHub GraphQL 找不到仓库 %s", repository)
+	}
+	records := make([]repositoryWatchPullRecord, 0, len(data.Repository.PullRequests.Nodes))
+	for _, node := range data.Repository.PullRequests.Nodes {
+		record := repositoryWatchPullRecord{
+			Number:    node.Number,
+			Title:     node.Title,
+			Body:      node.Body,
+			HTMLURL:   node.URL,
+			CreatedAt: node.CreatedAt,
+			UpdatedAt: node.UpdatedAt,
+			ClosedAt:  node.ClosedAt,
+			MergedAt:  node.MergedAt,
+			// GraphQL 的 state 是 OPEN / CLOSED / MERGED 三档，REST 只有 open / closed
+			// 外加 merged_at。统一成 REST 那套：合不合并由 MergedAt 决定，下游本来
+			// 就是先看 MergedAt 再看 state。
+			State: strings.ToLower(node.State),
+		}
+		if record.State == "merged" {
+			record.State = "closed"
+		}
+		if node.MergeCommit != nil {
+			record.MergeCommitSHA = node.MergeCommit.OID
+		}
+		if node.Author != nil {
+			record.User.Login = node.Author.Login
+		}
+		record.Base.Ref = node.BaseRefName
+		record.Head.Ref = node.HeadRefName
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+const repositoryWatchPullsGraphQLQuery = `query($owner: String!, $name: String!, $first: Int!, $base: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: $first, orderBy: {field: UPDATED_AT, direction: DESC}, baseRefName: $base) {
+      nodes {
+        number
+        title
+        body
+        state
+        url
+        createdAt
+        updatedAt
+        closedAt
+        mergedAt
+        mergeCommit { oid }
+        author { login }
+        baseRefName
+        headRefName
+      }
+    }
+  }
+}`
 
 const repositoryWatchIssuesGraphQLQuery = `query($owner: String!, $name: String!, $since: DateTime, $after: String) {
   repository(owner: $owner, name: $name) {

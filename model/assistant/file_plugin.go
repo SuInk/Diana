@@ -58,7 +58,7 @@ func NewFileParserPlugin(client *http.Client) *FileParserPlugin {
 	trustedClient := client
 	if client == nil {
 		client = netguard.NewPublicHTTPClient(15 * time.Second)
-		trustedClient = &http.Client{Timeout: 15 * time.Second}
+		trustedClient = &http.Client{Timeout: 60 * time.Second}
 	}
 	return &FileParserPlugin{
 		client:        client,
