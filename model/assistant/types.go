@@ -534,38 +534,41 @@ type BotConfig struct {
 	GroupTriggerMode            AliasTriggerMode `json:"group_trigger_mode,omitempty"`
 	DisabledGroups              []string         `json:"disabled_groups,omitempty"`
 	// DisabledUsers 已废弃，只为读取旧配置保留：WithDefaults 会把它并进 ReplyGate.BlockedUsers。
-	DisabledUsers             []string             `json:"disabled_users,omitempty"`
-	MarkedBotIDs              []string             `json:"marked_bot_ids,omitempty"`
-	GroupAdmission            GroupAdmission       `json:"group_admission,omitempty"`
-	PrivateAdmission          PrivateAdmission     `json:"private_admission,omitempty"`
-	ReplyGate                 *ReplyGate           `json:"reply_gate,omitempty"`
-	WelcomeEnabled            bool                 `json:"welcome_enabled,omitempty"`
-	WelcomeMessage            string               `json:"welcome_message,omitempty"`
-	WelcomeMode               WelcomeMode          `json:"welcome_mode,omitempty"`
-	WelcomeTemplates          []string             `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
-	SystemPrompt              string               `json:"system_prompt,omitempty"`
-	PersonaID                 string               `json:"persona_id,omitempty"`
-	CustomPersona             *Persona             `json:"custom_persona,omitempty"`
-	ResponseMode              ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                ReplyStyle           `json:"reply_style,omitempty"`
-	PersonaMode               PersonaMode          `json:"persona_mode,omitempty"`
-	ActionDescriptionEnabled  *bool                `json:"action_description_enabled,omitempty"`
-	SelfReference             string               `json:"self_reference,omitempty"`
-	SentenceEnders            string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled          bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode        ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	ModelDisclosure           ModelDisclosure      `json:"model_disclosure,omitempty"`
-	RepositoryDisclosure      RepositoryDisclosure `json:"repository_disclosure,omitempty"`
-	MentionUserMode           ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain           *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled        *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix          string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts         int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS       int                  `json:"send_chunk_interval_ms,omitempty"`
-	AutoImageDescription      *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess       *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles                map[string]ModelRole `json:"model_roles,omitempty"`
+	DisabledUsers             []string         `json:"disabled_users,omitempty"`
+	MarkedBotIDs              []string         `json:"marked_bot_ids,omitempty"`
+	GroupAdmission            GroupAdmission   `json:"group_admission,omitempty"`
+	PrivateAdmission          PrivateAdmission `json:"private_admission,omitempty"`
+	ReplyGate                 *ReplyGate       `json:"reply_gate,omitempty"`
+	WelcomeEnabled            bool             `json:"welcome_enabled,omitempty"`
+	WelcomeMessage            string           `json:"welcome_message,omitempty"`
+	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
+	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
+	SystemPrompt              string           `json:"system_prompt,omitempty"`
+	// Soul 是品格层，只在机器人级存在：分群配置里没有这个字段，所以某个群改不了
+	// 价值观，只能改说话方式（见 persona_soul.go 开头）。
+	Soul                     *PersonaSoul         `json:"soul,omitempty"`
+	PersonaID                string               `json:"persona_id,omitempty"`
+	CustomPersona            *Persona             `json:"custom_persona,omitempty"`
+	ResponseMode             ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle               ReplyStyle           `json:"reply_style,omitempty"`
+	PersonaMode              PersonaMode          `json:"persona_mode,omitempty"`
+	ActionDescriptionEnabled *bool                `json:"action_description_enabled,omitempty"`
+	SelfReference            string               `json:"self_reference,omitempty"`
+	SentenceEnders           string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled         bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode       ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure          ModelDisclosure      `json:"model_disclosure,omitempty"`
+	RepositoryDisclosure     RepositoryDisclosure `json:"repository_disclosure,omitempty"`
+	MentionUserMode          ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain          *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix         string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts        int                  `json:"send_retry_attempts,omitempty"`
+	SendChunkIntervalMS      int                  `json:"send_chunk_interval_ms,omitempty"`
+	AutoImageDescription     *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess      *bool                `json:"auto_video_preprocess,omitempty"`
+	ModelRoles               map[string]ModelRole `json:"model_roles,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -964,6 +967,7 @@ type ConfigPayload struct {
 	WelcomeTemplates              []string             `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds     int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
 	SystemPrompt                  string               `json:"system_prompt,omitempty"`
+	Soul                          *PersonaSoul         `json:"soul,omitempty"`
 	PersonaID                     string               `json:"persona_id,omitempty"`
 	CustomPersona                 *Persona             `json:"custom_persona,omitempty"`
 	ResponseMode                  ResponseMode         `json:"response_mode,omitempty"`
@@ -1669,6 +1673,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ResponseMode = ResponseModeCustom
 	}
 	cfg.SystemPrompt = migratePersonaStyle(cfg.SystemPrompt, &cfg.ReplyStyle, &cfg.ActionDescriptionEnabled)
+	// 品格层在这里清洗一次：裁长度、丢空条目、封顶条数。全空时归零，渲染那边就
+	// 不会为一段空品格写一个光杆开头。
+	cfg.Soul = cfg.Soul.Normalized()
 	if cfg.ActionDescriptionEnabled == nil {
 		cfg.ActionDescriptionEnabled = copyBoolPointer(defaults.ActionDescriptionEnabled)
 	}
@@ -2134,6 +2141,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WelcomeTemplates:                  append([]string(nil), cfg.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:         cfg.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                      cfg.SystemPrompt,
+		Soul:                              cfg.Soul.Clone(),
 		PersonaID:                         cfg.PersonaID,
 		CustomPersona:                     copyCustomPersona(cfg.CustomPersona),
 		ResponseMode:                      cfg.ResponseMode,
@@ -2343,6 +2351,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WelcomeTemplates:                append([]string(nil), payload.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:       payload.WelcomeLLMCooldownSeconds,
 		SystemPrompt:                    payload.SystemPrompt,
+		Soul:                            payload.Soul.Clone(),
 		PersonaID:                       payload.PersonaID,
 		CustomPersona:                   copyCustomPersona(payload.CustomPersona),
 		ResponseMode:                    payload.ResponseMode,

@@ -1176,7 +1176,7 @@
                     </button>
                   </div>
                 </div>
-                <input ref="personaFileInput" type="file" accept="application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
+                <input ref="personaFileInput" type="file" accept="application/json,.json,.yaml,.yml,image/png,.png" style="display: none" @change="importPersonaFile" />
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -1845,6 +1845,7 @@ import {
   savePersona,
   deletePersona,
   importPersonas,
+  importPersonaSource,
   importCharacterCard,
   PERSONA_EXPORT_VERSION,
   type CharacterCardV2,
@@ -2541,7 +2542,17 @@ async function importPersonaFile(event: Event): Promise<void> {
       await importCharacterCardFile(file);
       return;
     }
-    const parsed = JSON.parse(await file.text()) as unknown;
+    const text = await file.text();
+    // YAML 交给后端解析：品格层写成 YAML 才读得下去（有注释、有多行字符串），
+    // 而前端没有 YAML 解析器，为这一件事塞一个进去不值当。
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".yaml") || lowerName.endsWith(".yml")) {
+      const imported = await importPersonaSource(text);
+      savedPersonaLibrary.value = imported.personas ?? [];
+      toastSuccess(`导入 ${imported.imported} 套`);
+      return;
+    }
+    const parsed = JSON.parse(text) as unknown;
     if (looksLikeCharacterCard(parsed)) {
       await importCharacterCardFile(file);
       return;

@@ -224,6 +224,8 @@ export interface BotProfileConfig {
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
   system_prompt?: string;
+  /** 品格层：身份、价值、硬边界。排在系统提示词最前面，分群覆盖动不了它。 */
+  soul?: PersonaSoul;
   /**
    * 人设正文和界面控件谁说了算。
    *
@@ -2503,7 +2505,24 @@ export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promis
   return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
+/** 人设的品格层：身份、价值、硬边界。只有人能改，前端只原样搬运，不逐字段编辑。 */
+export interface PersonaSoul {
+  identity?: string;
+  priority?: { order?: string[]; note?: string };
+  values?: { value: string; why?: string }[];
+  honesty?: string[];
+  self_nature?: string;
+  relationships?: { owner?: string; admins?: string; members?: string };
+  correctable?: string;
+  restraint?: string;
+  hard_limits?: { limit: string; why?: string }[];
+  on_criticism?: string;
+  on_mistake?: string;
+  open_questions?: string[];
+}
+
 export interface Persona {
+  soul?: PersonaSoul;
   id: string;
   name: string;
   system_prompt?: string;
@@ -2551,6 +2570,14 @@ export function importPersonas(personas: Persona[]): Promise<PersonaImportResult
   return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
     method: "POST",
     body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
+  });
+}
+
+/** YAML 只能在后端解析：这里原样把文件内容发过去。JSON 文件走上面那条。 */
+export function importPersonaSource(source: string): Promise<PersonaImportResult> {
+  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
+    method: "POST",
+    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, source })
   });
 }
 

@@ -16,7 +16,8 @@
 
 | 块 | 内容 |
 | --- | --- |
-| 人设正文 | `system_prompt`，只有人能改（WebUI 或 [soul.md](soul-files.md)） |
+| 品格（soul） | 身份、价值、硬边界，排在最前面，分群覆盖动不了，见 [persona-soul.md](persona-soul.md) |
+| 人设正文 | `system_prompt`，只有人能改 |
 | 固定提示词规则 | 系统提示词稳定头部里除人设外的部分 |
 | 世界书常驻设定 | 标了「常驻」的节点，不含按关键词触发的 |
 | 自述 | 机器人自己写的自我认知，默认关闭，见 [self-notes.md](self-notes.md) |

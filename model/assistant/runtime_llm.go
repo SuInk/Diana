@@ -808,6 +808,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		}
 		return false
 	}
+	// 品格层排在人设正文之前，也就是整条系统提示词的最前面：它解释的是「为什么
+	// 会这样做」，后面所有规则都在它的框架里读。它只依赖机器人配置（分群覆盖里
+	// 没有这个字段），所以逐字节稳定，不影响前缀缓存。
+	if soul := cfg.Soul.Render(); soul != "" {
+		builder.WriteString(soul)
+		builder.WriteString("\n")
+	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode))
