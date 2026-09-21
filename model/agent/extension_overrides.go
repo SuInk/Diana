@@ -155,9 +155,7 @@ func (r *ToolRegistry) ApplyExtensionOverrides(values map[string]bool) {
 		if enabled, ok := values["skill:"+skill.Name]; ok && !enabled {
 			continue
 		}
-		if resident := ResidentOverride(values, "skill:"+skill.Name); resident != nil {
-			skill.Resident = *resident
-		}
+		skill.Resident = ResidentOverride(values, "skill:"+skill.Name)
 		skills = append(skills, skill)
 	}
 	r.SetSkills(skills)

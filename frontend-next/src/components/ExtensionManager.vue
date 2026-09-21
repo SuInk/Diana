@@ -11,7 +11,7 @@
         <div class="extension-info">
           <strong>{{ item.name }}<span v-if="item.available===false" class="badge">全局停用</span></strong>
           <p>{{ item.description || (item.transport === 'stdio' ? '本地进程' : item.transport === 'streamable_http' ? 'HTTP MCP' : '') }}</p>
-          <small>{{ item.source || '本地扩展' }} · {{ item.managed ? '可管理' : '只读' }}<template v-if="item.bundled"> · <span title="目录里带脚本或资源；群成员没有命令和文件工具，这部分在成员会话里不会执行">含脚本</span></template><template v-if="audienceSummary(item)"> · <span class="extension-audience-note">{{ audienceSummary(item) }}</span></template></small>
+          <small>{{ item.source || '本地扩展' }} · {{ item.managed ? '可管理' : '只读' }}<template v-if="item.bundled"> · <span title="目录里带脚本或资源；群成员没有命令和文件工具，这部分在成员会话里不会执行">含脚本</span></template><template v-if="audienceSummary(item)"> · <span class="extension-audience-note">{{ audienceSummary(item) }}</span></template><template v-if="item.keywords?.length"> · <span title="SKILL.md 自己声明的触发词：最近两条消息里命中就把正文带进上下文">触发词 {{ item.keywords.join('、') }}</span></template></small>
           <p v-if="item.error" class="error-text">{{ item.error }}</p>
         </div>
         <!-- 停用 / 仅主人 / 群成员是同一件事的三档，合成一个控件：两个开关并排时
@@ -22,7 +22,7 @@
         <!-- Skill 的常驻档位：常驻就是正文直接进上下文，不必再 read_skill。MCP 的档位
              按服务算，放在「上下文」标签里，和内置工具排在一起。 -->
         <div v-if="botScope && kind === 'skill'" class="segmented extension-state" role="group" :aria-label="`${item.name} 的上下文档位`">
-          <button v-for="tier in residencyTiers" :key="String(tier.value)" type="button" :class="{active: residency(item) === tier.value}" :disabled="busy === item.id || item.available===false" :title="tier.hint" @click="setResidency(item, tier.value)">{{ tier.label }}</button>
+          <button v-for="tier in residencyTiers" :key="String(tier.value)" type="button" :class="{active: residency(item) === tier.value}" :disabled="busy === item.id || item.available===false" :title="tierHint(tier.value, item)" @click="setResidency(item, tier.value)">{{ tier.label }}</button>
         </div>
         <!-- 和编辑、删除同一款图标按钮：名单是「去改」的入口，改完的结果写在上面那行小字里。
              档位没放开时留着但置灰，免得每行的按钮左右错位。 -->
@@ -169,7 +169,13 @@ async function setState(item:ManagedExtension,state:ExtensionState){const profil
  }catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
 // 默认档就是「只进目录」。正文常驻解决的是另一个问题：上下文一长，模型按目录去
 // read_skill 这一步经常不做，写得再细的 skill 也读不到。
-const residencyTiers=[{value:null,label:'默认',hint:'跟随默认：只进目录，用到再 read_skill'},{value:true,label:'常驻',hint:'正文直接进上下文，模型不必再 read_skill；长 skill 每轮都要算钱'},{value:false,label:'按需',hint:'只进目录，用到再 read_skill'}] as const;
+const residencyTiers=[{value:null,label:'默认'},{value:true,label:'常驻'},{value:false,label:'按需'}] as const;
+// 「默认」对每个 skill 的含义不一样，取决于它自己声明没声明触发词，所以提示按行算。
+function tierHint(value:boolean|null,item:ManagedExtension){
+ if(value===true)return '正文每轮都进上下文，模型不必再 read_skill；长 skill 每轮都要算钱';
+ if(value===false)return '只进目录，用到再 read_skill；声明过触发词也不再自动带正文';
+ return item.keywords?.length?`跟随默认：最近两条消息命中「${item.keywords.join('、')}」时才带正文，其余时候只进目录`:'跟随默认：只进目录，用到再 read_skill。在 SKILL.md 的 keywords 里写上触发词，就能改成命中才带正文';
+}
 const residency=(item:ManagedExtension)=>item.resident===undefined?null:item.resident;
 async function setResidency(item:ManagedExtension,value:boolean|null){const profile=botScope.value;if(!profile||residency(item)===value)return;busy.value=item.id;
  try{const payload:Record<string,unknown>={operation:'residency',kind:props.kind,name:item.name,profile_id:profile};if(value!==null)payload.resident=value;await manageExtension(payload);toastSuccess('档位已更新，后续会话生效');await load()}catch(e){toastError(String(e instanceof Error?e.message:e))}finally{busy.value=''}}

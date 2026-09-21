@@ -53,7 +53,7 @@ func TestResidentSkillShipsItsBody(t *testing.T) {
 	if strings.Contains(deferred, "照这三步做完") {
 		t.Fatalf("按需档不该带正文:\n%s", deferred)
 	}
-	resident := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path, Resident: true}}, 8000)
+	resident := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path, IncludeBody: true}}, 8000)
 	if !strings.Contains(resident, "照这三步做完") || !strings.Contains(resident, "Resident skill: demo") {
 		t.Fatalf("常驻档没带正文:\n%s", resident)
 	}
@@ -72,7 +72,7 @@ func TestExtensionOverridesCarryResidencyToSkills(t *testing.T) {
 	registry.SetSkills([]SkillMetadata{{Name: "demo", Description: "d", Path: "/tmp/demo/SKILL.md"}})
 	registry.ApplyExtensionOverrides(values)
 	skills := registry.Skills()
-	if len(skills) != 1 || !skills[0].Resident {
+	if len(skills) != 1 || skills[0].Resident == nil || !*skills[0].Resident {
 		t.Fatalf("skills = %#v", skills)
 	}
 	// 退回默认档要真的把键删掉，否则「默认」和「按需」在文件里长得一样。
