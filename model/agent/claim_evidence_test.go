@@ -34,9 +34,7 @@ func TestClaimEvidenceLedgerKeepsPartialSuccess(t *testing.T) {
 		},
 		{ID: "availability", Status: ClaimStatusNotSearched, Summary: "尚未检索指定条件。"},
 	}
-	if reason, ok := ledger.validateFinal(updates); !ok {
-		t.Fatalf("valid partial result rejected: %s", reason)
-	}
+	ledger.applyUpdates(updates)
 	traces := ledger.traces()
 	if len(traces) != 2 || traces[0].Status != ClaimStatusSupported || traces[1].Status != ClaimStatusNotSearched {
 		t.Fatalf("traces=%#v", traces)
@@ -46,7 +44,7 @@ func TestClaimEvidenceLedgerKeepsPartialSuccess(t *testing.T) {
 	}
 }
 
-func TestClaimEvidenceLedgerRejectsUnsupportedAndUnknownSources(t *testing.T) {
+func TestClaimEvidenceLedgerDropsUnretrievedSourceWithoutTouchingTheReply(t *testing.T) {
 	ledger := newClaimEvidenceLedger()
 	ledger.prepareSearch(map[string]any{
 		"claims":    []any{map[string]any{"id": "c1", "statement": "待验证事实"}},
@@ -59,11 +57,13 @@ func TestClaimEvidenceLedgerRejectsUnsupportedAndUnknownSources(t *testing.T) {
 		ID: "c1", Status: ClaimStatusSupported, Summary: "声称已确认",
 		Evidence: []ClaimEvidence{{URL: "https://invented.example/fact", Relation: "supports", SourceType: "secondary", Distance: "direct", Strength: "high"}},
 	}}
-	if reason, ok := ledger.validateFinal(updates); ok || !strings.Contains(reason, "invented.example") {
-		t.Fatalf("unsupported final accepted reason=%q ok=%v traces=%#v", reason, ok, ledger.traces())
+	ledger.applyUpdates(updates)
+	trace := ledger.traces()[0]
+	if trace.Status != ClaimStatusInsufficient {
+		t.Fatalf("status=%q, want insufficient", trace.Status)
 	}
-	if got := ledger.traces()[0].Status; got != ClaimStatusInsufficient {
-		t.Fatalf("status=%q, want insufficient", got)
+	if len(trace.Evidence) != 0 {
+		t.Fatalf("未检索来源不该留在账本里：%#v", trace.Evidence)
 	}
 }
 
@@ -82,9 +82,7 @@ func TestClaimEvidenceLedgerKeepsAllowedSourceWithConservativeMetadata(t *testin
 			URL: "https://official.example/record", Relation: "direct", SourceType: "官方原始资料", Distance: "primary", Strength: "strong",
 		}},
 	}}
-	if reason, ok := ledger.validateFinal(updates); !ok {
-		t.Fatalf("allowed source rejected: %s", reason)
-	}
+	ledger.applyUpdates(updates)
 	evidence := ledger.traces()[0].Evidence[0]
 	if evidence.Relation != "supports" || evidence.SourceType != "unknown" || evidence.Distance != "secondary" || evidence.Strength != "low" {
 		t.Fatalf("evidence was not conservatively normalized: %#v", evidence)

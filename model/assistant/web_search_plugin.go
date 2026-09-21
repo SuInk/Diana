@@ -25,7 +25,6 @@ const (
 	webSearchSettingMaxResults      = "max_results"
 	webSearchSettingProviderTimeout = "provider_timeout_seconds"
 	webSearchSettingTotalTimeout    = "total_timeout_seconds"
-	webSearchSettingEvidenceLedger  = "evidence_ledger_enforced"
 	webSearchSettingSourceRecall    = "claim_source_recall"
 	webSearchSettingLinkPolicy      = "reply_link_policy"
 
@@ -150,13 +149,6 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 				Max:         settingRange(90),
 				Step:        1,
 				Unit:        "秒",
-			},
-			{
-				Key:         webSearchSettingEvidenceLedger,
-				Label:       "证据账本强制校验",
-				Description: "开启后联网研究必须为每条结论绑定已检索或已渲染的来源，绑不上就要求重写。关闭后仍然记录来源和结论，但不再拦截回复，适合以确定性查询为主的场景。",
-				Type:        PluginSettingTypeBool,
-				Default:     true,
 			},
 			{
 				Key:         webSearchSettingSourceRecall,

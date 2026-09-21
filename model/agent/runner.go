@@ -162,7 +162,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	nativeProtocol := false
 	finishReason := "final"
 	claimLedger := newClaimEvidenceLedger()
-	claimLedger.advisory = r.cfg.EvidenceLedgerAdvisory
 	emitRunEvent(ctx, req.Observer, RunEvent{
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
@@ -333,18 +332,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
-			if claimLedger.active {
-				protocolRepairs++
-				reason := "联网研究已启用逐主张证据账本，最终答复必须调用带 claims 的 agent_finalize"
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。\n" + claimLedger.digest()})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
@@ -383,17 +370,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 你这段话里的情绪」反而误中，每次误中都白烧一次修复预算。「预算没用完就别停下来
 			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
 			// 由代码回头猜正文。
-			if reason, valid := claimLedger.validateFinal(action.Claims); !valid {
-				protocolRepairs++
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请只修正不合格的 claims 字段后重新调用 agent_finalize；content 保持原样，不要因证据绑定失败改写、削弱或推翻已查实的结论。\n" + claimLedger.digest()})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
+			claimLedger.applyUpdates(action.Claims)
 			if leak := internalProtocolLeak(action.Content); leak != "" {
 				protocolRepairs++
 				reason := "最终回复里出现了内部协议词「" + leak + "」"
@@ -710,9 +687,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
-		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
-			return finish(claimLedger.groundedFallback(), finishReason), nil
-		}
+		claimLedger.applyUpdates(action.Claims)
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
@@ -731,9 +706,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
-		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
-			return finish(claimLedger.groundedFallback(), finishReason), nil
-		}
+		claimLedger.applyUpdates(action.Claims)
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}

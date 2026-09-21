@@ -53,7 +53,6 @@ type ClaimTrace struct {
 
 type claimEvidenceLedger struct {
 	active            bool
-	advisory          bool
 	order             []string
 	claims            map[string]*ClaimTrace
 	covered           []string
@@ -61,7 +60,6 @@ type claimEvidenceLedger struct {
 	sourceOrder       []string
 	firstPartySources map[string]bool
 	renderedSources   []string
-	rejections        map[string][]string
 	lastRejectedHash  string
 	stopReason        string
 }
@@ -71,7 +69,6 @@ func newClaimEvidenceLedger() *claimEvidenceLedger {
 		claims:            map[string]*ClaimTrace{},
 		allowedSources:    map[string]string{},
 		firstPartySources: map[string]bool{},
-		rejections:        map[string][]string{},
 	}
 }
 
@@ -208,15 +205,12 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 			continue
 		}
 		validEvidence := make([]ClaimEvidence, 0, len(update.Evidence))
-		delete(l.rejections, id)
 		for _, evidence := range update.Evidence {
 			canonical := canonicalEvidenceURL(evidence.URL)
 			if canonical == "" {
-				l.reject(id, "证据 URL "+strings.TrimSpace(evidence.URL)+" 不是合法的 http(s) 地址")
 				continue
 			}
 			if l.allowedSources[canonical] == "" {
-				l.reject(id, "证据 URL "+strings.TrimSpace(evidence.URL)+" 不在本轮已检索或已渲染的来源里")
 				continue
 			}
 			firstParty := l.firstPartySources[canonical]
@@ -227,7 +221,6 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 			evidence.Relation = normalizeEnum(evidence.Relation, "supports", "refutes")
 			if evidence.Relation == "" {
 				if update.Status != ClaimStatusSupported {
-					l.reject(id, "证据 "+evidence.URL+" 缺少 relation，只能填 supports 或 refutes")
 					continue
 				}
 				evidence.Relation = "supports"
@@ -257,114 +250,11 @@ func (l *claimEvidenceLedger) applyUpdates(updates []ClaimUpdate) {
 		status := update.Status
 		if (status == ClaimStatusSupported || status == ClaimStatusConflicting) && len(validEvidence) == 0 {
 			status = ClaimStatusInsufficient
-			if len(update.Evidence) == 0 {
-				l.reject(id, "申报 "+string(update.Status)+" 但没有给出任何证据")
-			}
 		}
 		claim.Status = status
 		claim.Summary = strings.TrimSpace(update.Summary)
 		claim.Evidence = validEvidence
 	}
-}
-
-// validateFinal 结算提交上来的 claims，并一次报出全部不合格字段。逐个报会让每
-// 修一个问题就多花一轮重试，而每轮重试都要重发整个上下文。
-func (l *claimEvidenceLedger) reject(id, reason string) {
-	if l == nil || strings.TrimSpace(reason) == "" {
-		return
-	}
-	if l.rejections == nil {
-		l.rejections = map[string][]string{}
-	}
-	l.rejections[id] = appendUniqueClaimString(l.rejections[id], reason)
-}
-
-// availableSources 列出模型现在真正可以引用的 URL，避免它只被告知“绑定失败”而无从修正。
-func (l *claimEvidenceLedger) availableSources(limit int) []string {
-	if l == nil {
-		return nil
-	}
-	if limit <= 0 {
-		limit = 6
-	}
-	sources := make([]string, 0, limit)
-	for _, raw := range l.renderedSources {
-		if len(sources) >= limit {
-			return sources
-		}
-		sources = appendUniqueClaimString(sources, raw)
-	}
-	for _, id := range l.order {
-		claim := l.claims[id]
-		if claim == nil {
-			continue
-		}
-		for _, raw := range claim.CandidateSources {
-			if len(sources) >= limit {
-				return sources
-			}
-			sources = appendUniqueClaimString(sources, raw)
-		}
-	}
-	return sources
-}
-
-func (l *claimEvidenceLedger) validateFinal(updates []ClaimUpdate) (string, bool) {
-	if l == nil || !l.active {
-		return "", true
-	}
-	// 关掉强制校验后仍然结算并留痕，只是不再拦截 final。
-	if l.advisory {
-		l.applyUpdates(updates)
-		return "", true
-	}
-	if len(updates) == 0 {
-		return "最终动作缺少 claims 证据结算", false
-	}
-	l.applyUpdates(updates)
-	seen := map[string]bool{}
-	requestedStatus := map[string]ClaimStatus{}
-	for _, update := range updates {
-		id := normalizeClaimID(update.ID)
-		seen[id] = true
-		requestedStatus[id] = update.Status
-	}
-	var issues []string
-	for _, id := range l.order {
-		claim := l.claims[id]
-		switch {
-		case claim == nil || !seen[id]:
-			issues = append(issues, id+": 未结算")
-		case !validClaimStatus(claim.Status):
-			issues = append(issues, id+": status 无效")
-		case requestedStatus[id] != claim.Status:
-			issues = append(issues, l.bindingFailure(id, requestedStatus[id])+"，已降级为 "+string(claim.Status))
-		case (claim.Status == ClaimStatusSupported || claim.Status == ClaimStatusConflicting) && len(claim.Evidence) == 0:
-			issues = append(issues, l.bindingFailure(id, claim.Status))
-		}
-	}
-	if len(issues) == 0 {
-		return "", true
-	}
-	return "claims 结算不合格：" + strings.Join(issues, "；"), false
-}
-
-// isActive 报告本轮是否启用了逐主张证据账本。
-func (l *claimEvidenceLedger) isActive() bool {
-	return l != nil && l.active
-}
-
-// bindingFailure 说清楚是哪条证据、因为什么被拒，并给出现在可以引用的来源，
-// 让模型能补齐绑定，而不是只能把结论降级、连带推翻已经写对的正文。
-func (l *claimEvidenceLedger) bindingFailure(id string, requested ClaimStatus) string {
-	message := "claim " + id + " 申报 " + string(requested) + " 但证据没有通过校验"
-	if reasons := l.rejections[id]; len(reasons) > 0 {
-		message += "：" + strings.Join(reasons, "；")
-	}
-	if sources := l.availableSources(6); len(sources) > 0 {
-		message += "。现在可以引用的来源：" + strings.Join(sources, " ")
-	}
-	return message
 }
 
 func (l *claimEvidenceLedger) recordRejectedSearch(input map[string]any, reason string) {
@@ -409,8 +299,7 @@ func (l *claimEvidenceLedger) digest() string {
 	return strings.Join(lines, "\n")
 }
 
-// allowedSourceURLs 按发现顺序返回已检索到的来源。它们会被填进工具 schema 的
-// enum，于是编造出来的来源在解码层就不可能出现，而不是事后拦截再重试。
+// allowedSourceURLs 按发现顺序返回已检索到的来源，供需要收窄 schema 枚举的调用方使用。
 func (l *claimEvidenceLedger) allowedSourceURLs() []string {
 	if l == nil {
 		return nil
@@ -479,41 +368,6 @@ func (l *claimEvidenceLedger) metadata() map[string]any {
 		}
 	}
 	return map[string]any{"claim_count": len(l.order), "claim_statuses": statuses, "source_types": sourceTypes, "evidence_strengths": strengths}
-}
-
-func (l *claimEvidenceLedger) groundedFallback() string {
-	if l == nil || !l.active {
-		return "现有工具结果不足以生成可靠答复。"
-	}
-	var confirmed, unresolved, conflicts []string
-	for _, claim := range l.traces() {
-		line := strings.TrimSpace(claim.Statement)
-		if summary := strings.TrimSpace(claim.Summary); summary != "" {
-			line = summary
-		}
-		for _, evidence := range claim.Evidence {
-			line += "\n来源：" + evidence.URL
-		}
-		switch claim.Status {
-		case ClaimStatusSupported:
-			confirmed = append(confirmed, line)
-		case ClaimStatusConflicting:
-			conflicts = append(conflicts, line)
-		default:
-			unresolved = append(unresolved, strings.TrimSpace(claim.Statement))
-		}
-	}
-	var sections []string
-	if len(confirmed) > 0 {
-		sections = append(sections, "已确认：\n- "+strings.Join(confirmed, "\n- "))
-	}
-	if len(conflicts) > 0 {
-		sections = append(sections, "存在冲突：\n- "+strings.Join(conflicts, "\n- "))
-	}
-	if len(unresolved) > 0 {
-		sections = append(sections, "尚未确认：\n- "+strings.Join(unresolved, "\n- "))
-	}
-	return strings.Join(sections, "\n\n")
 }
 
 func (l *claimEvidenceLedger) traces() []ClaimTrace {
