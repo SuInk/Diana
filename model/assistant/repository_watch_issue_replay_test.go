@@ -57,7 +57,7 @@ func issueReplayPlugin(t *testing.T, server *issueReplayServer, now time.Time) *
 	t.Helper()
 	httpServer := httptest.NewServer(http.HandlerFunc(server.handler))
 	t.Cleanup(httpServer.Close)
-	plugin := newRepositoryWatchPlugin(httpServer.Client(), httpServer.URL)
+	plugin := newTestRepositoryWatchPlugin(httpServer.Client(), httpServer.URL)
 	plugin.now = func() time.Time { return now }
 	return plugin
 }

@@ -410,7 +410,7 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 45 * time.Second
+		timeout = 90 * time.Second
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -454,7 +454,7 @@ func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, 
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 45 * time.Second
+		timeout = 90 * time.Second
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
