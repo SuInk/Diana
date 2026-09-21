@@ -182,6 +182,7 @@ import {
   BrainCircuit,
   CalendarClock,
   FileClock,
+  Globe,
   LayoutGrid,
   MessageCircle,
   LogOut,
@@ -225,6 +226,7 @@ const PluginsView = defineAsyncComponent(() => import("./views/PluginsView.vue")
 const GroupsView = defineAsyncComponent(() => import("./views/GroupsView.vue"));
 const MemoryView = defineAsyncComponent(() => import("./views/MemoryView.vue"));
 const SettingsView = defineAsyncComponent(() => import("./views/SettingsView.vue"));
+const BrowserBoxView = defineAsyncComponent(() => import("./views/BrowserBoxView.vue"));
 
 const VIEW_CACHE_LIMIT = 16;
 
@@ -239,6 +241,7 @@ const viewComponents: Record<ViewID, Component> = {
   groups: GroupsView,
   users: MemoryView,
   notebook: MemoryView,
+  browser: BrowserBoxView,
   logs: RecordsView,
   settings: SettingsView
 };
@@ -320,6 +323,7 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
+  browser: "内置浏览器",
   events: "运行记录",
   tasks: "提醒与订阅",
   setup: "配置向导",
@@ -437,6 +441,7 @@ function navIcon(id: ViewID): Component {
     plugins: PlugZap,
     groups: Users,
     users: BookUser,
+    browser: Globe,
     logs: FileClock,
     settings: Wrench
   };

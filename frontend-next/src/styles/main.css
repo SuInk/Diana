@@ -3725,6 +3725,84 @@ a.nav-action {
 
 /* 人设库是一排可点的卡片：点正文套用，点右上角小叉删除。宽度自适应内容，
    名字下面那行摘要用来区分「猫娘」和「猫娘 v2」这种。 */
+/* 品格里那两组条目是「一句话 + 一句因为」，横着排才看得出配对关系；窄屏下改成
+   纵向，否则两个输入框各剩十来个字宽，谁也写不下。 */
+.soul-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.soul-row .input:first-child {
+  flex: 0 0 34%;
+}
+
+.soul-row .input:nth-child(2) {
+  flex: 1;
+}
+
+.self-notes-block {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.self-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.self-note-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.self-note-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.self-note-topic {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.self-note-content {
+  word-break: break-word;
+}
+
+.self-note-source {
+  flex: none;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .soul-row {
+    flex-wrap: wrap;
+  }
+
+  .soul-row .input:first-child,
+  .soul-row .input:nth-child(2) {
+    flex: 1 1 100%;
+  }
+
+  .self-note-source {
+    display: none;
+  }
+}
+
 .persona-library {
   display: flex;
   flex-wrap: wrap;

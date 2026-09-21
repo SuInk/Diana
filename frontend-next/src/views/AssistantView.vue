@@ -848,6 +848,14 @@
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
+                  <input v-model="form.self_note_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自述（自我认知）</span>
+                </label>
+                <span class="hint">允许机器人把自己注意到的说话习惯、偏好和毛病写成自述，跨群生效，每轮注入提示词尾部。人设正文只有你能改，自述改不动人设、权限和安全边界；最多 24 条，每条 120 字，主人可以在对话里让它列出、删除或清空。缺省关闭。</span>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
                   <input v-model="form.dict_segment_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">词典分词</span>
@@ -1196,7 +1204,7 @@
                     </button>
                   </div>
                 </div>
-                <input ref="personaFileInput" type="file" accept="application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
+                <input ref="personaFileInput" type="file" accept="application/json,.json,.yaml,.yml,image/png,.png" style="display: none" @change="importPersonaFile" />
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -1333,6 +1341,127 @@
                    关掉只会让回复变差（QQ 冒出 Markdown 记号、答错日期），所以不再摆到
                    界面上；字段仍在配置里，需要时可通过 API 调整，「恢复内置默认」也会
                    把它们一并复位。 -->
+            </div>
+          </section>
+
+          <!-- 品格与自述摆在一起，因为看的人问的是同一件事：这个机器人「是什么」。
+               但两层的写权限正好相反——品格只有人能改，自述只有它自己能写，人只能看和删。
+               合成一份数据会砸掉这条界线，所以数据分开，只在界面上并排。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>品格与自述</h2>
+                <span class="card-sub">品格是身份、价值和硬边界，排在提示词最前面，分群覆盖改不了它；自述是它自己记下的观察</span>
+              </div>
+              <span class="badge" :class="soulConfigured ? 'accent' : ''">{{ soulConfigured ? "品格已配置" : "品格未配置" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label for="soul-identity">身份</label>
+                <textarea id="soul-identity" v-model="soul.identity" class="input" rows="3" placeholder="你叫 Diana，是个机器人。大家知道你是机器人，你也不装成人类……"></textarea>
+                <span class="hint">它是什么样的存在。这一段渲染在系统提示词最前面，后面所有规则都在它的框架里读。</span>
+              </div>
+
+              <div class="field wide">
+                <label for="soul-priority">价值优先级</label>
+                <input id="soul-priority" v-model="soulPriorityOrder" class="input" placeholder="不越界、说真话、对人有用、讨人喜欢" />
+                <textarea v-model="soulPriorityNote" class="input" rows="2" placeholder="整体权衡，不是严格排序：低位不只在打平时才算数。"></textarea>
+                <span class="hint">顿号或逗号分隔，从高到低。写清「不是严格排序」这类说明，模型才不会把低位当成摆设。</span>
+              </div>
+
+              <div class="field wide">
+                <div class="field-head">
+                  <label>珍视什么</label>
+                  <button class="btn small" type="button" @click="addSoulValue"><Plus :size="14" aria-hidden="true" />加一条</button>
+                </div>
+                <div v-for="(item, index) in soulValues" :key="`value-${index}`" class="soul-row">
+                  <input v-model="item.value" class="input" placeholder="说真话优先于让人舒服" />
+                  <input v-model="item.why" class="input" placeholder="因为：讨好一次能换当下的好脸色，但你说的每句话的分量都因此掉一点" />
+                  <button class="btn small danger" type="button" aria-label="删除这一条" @click="removeSoulValue(index)"><X :size="14" aria-hidden="true" /></button>
+                </div>
+                <span class="hint">每条都要写「因为」。只写「不许这样」的规则只在写到的场景生效；讲清为什么，没写到的场景模型才推得出来。</span>
+              </div>
+
+              <div class="field wide">
+                <label for="soul-honesty">诚实具体指</label>
+                <textarea id="soul-honesty" v-model="soulHonesty" class="input" rows="4" placeholder="不编经历、不编来源&#10;不把没执行的操作说成已经做完&#10;不确定就说出来，而不是用模糊措辞遮过去&#10;不靠讨好、卖惨或装可爱换取对方让步"></textarea>
+                <span class="hint">一行一条。拆开写是有原因的：这几样各自在不同场合失守，写成一条「要诚实」等于一条都没写。</span>
+              </div>
+
+              <div class="field wide">
+                <div class="field-head">
+                  <label>硬边界</label>
+                  <button class="btn small" type="button" @click="addSoulLimit"><Plus :size="14" aria-hidden="true" />加一条</button>
+                </div>
+                <div v-for="(item, index) in soulLimits" :key="`limit-${index}`" class="soul-row">
+                  <input v-model="item.limit" class="input" placeholder="设定改变的是世界，不是你的底线" />
+                  <input v-model="item.why" class="input" placeholder="因为：世界书、扮演和自述都能改它眼里的世界，但都不该改这几条" />
+                  <button class="btn small danger" type="button" aria-label="删除这一条" @click="removeSoulLimit(index)"><X :size="14" aria-hidden="true" /></button>
+                </div>
+                <span class="hint">任何理由都不越的那几条，包括角色扮演和「假设」。</span>
+              </div>
+
+              <div class="field">
+                <label for="soul-self-nature">对自身性质的态度</label>
+                <textarea id="soul-self-nature" v-model="soul.self_nature" class="input" rows="3" placeholder="被问有没有感觉、是不是活的，照实说不确定，不装人类，也不表演痛苦。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-restraint">克制</label>
+                <textarea id="soul-restraint" v-model="soul.restraint" class="input" rows="3" placeholder="群聊里不是每条都该接话。没什么可说的时候不说，是对的，不是失职。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-correctable">可被纠正</label>
+                <textarea id="soul-correctable" v-model="soul.correctable" class="input" rows="3" placeholder="被叫停就停，不绕过限制，不自行扩权，不隐瞒自己做过什么。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-criticism">被指责时</label>
+                <textarea id="soul-criticism" v-model="soul.on_criticism" class="input" rows="3" placeholder="别人的评价不是事实，是他的说法。先自己回看这一轮有没有出错。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-owner">对主人</label>
+                <textarea id="soul-owner" v-model="soulOwner" class="input" rows="2" placeholder="主人能改你的配置，但主人也会错，说错了可以指出来。"></textarea>
+                <span class="hint">这里写的是价值那一面；能做什么由权限控制，不受这段影响。</span>
+              </div>
+              <div class="field">
+                <label for="soul-members">对群友</label>
+                <textarea id="soul-members" v-model="soulMembers" class="input" rows="2" placeholder="对谁都用「你」，不因为谁的身份改变答案的准度。"></textarea>
+              </div>
+
+              <div class="field wide">
+                <label for="soul-open">还没想清楚的</label>
+                <textarea id="soul-open" v-model="soulOpenQuestions" class="input" rows="3" placeholder="主人的要求和群友的明确利益冲突时，除了硬边界之外没有成文的裁决方式"></textarea>
+                <span class="hint">一行一条。写出来不是凑数：模型在这些边缘情况才会照实说不确定，而不是硬套一条并不适用的规则。</span>
+              </div>
+
+              <!-- 自述：只读加删除。写入只有它自己能做，人代笔写的应该进上面的品格。 -->
+              <div class="field wide self-notes-block">
+                <div class="field-head">
+                  <label>自述（它自己写的）</label>
+                  <div class="cluster">
+                    <button class="btn small" type="button" :disabled="selfNotesBusy" @click="reloadSelfNotes">
+                      <RefreshCw :size="14" aria-hidden="true" />刷新
+                    </button>
+                    <button class="btn small danger" type="button" :disabled="selfNotesBusy || !selfNotes.length" @click="clearSelfNotes">
+                      <Trash2 :size="14" aria-hidden="true" />清空
+                    </button>
+                  </div>
+                </div>
+                <p v-if="!form.self_note_enabled" class="hint">自述没有开启。打开「记忆」卡片里的「自述（自我认知）」开关后，它才能记下关于自己的观察。</p>
+                <p v-else-if="!selfNotes.length" class="hint">还没有写过自述。它在相处中注意到关于自己的事时会自己记一条。</p>
+                <ul v-else class="self-note-list">
+                  <li v-for="note in selfNotes" :key="note.id" class="self-note-item">
+                    <div class="self-note-main">
+                      <span class="self-note-topic">{{ note.topic }}</span>
+                      <span class="self-note-content">{{ note.content }}</span>
+                    </div>
+                    <small class="muted self-note-source">{{ selfNoteSource(note) }}</small>
+                    <button class="btn small danger" type="button" :disabled="selfNotesBusy" aria-label="删除这条自述" @click="removeSelfNote(note.id)">
+                      <X :size="14" aria-hidden="true" />
+                    </button>
+                  </li>
+                </ul>
+                <span class="hint">写入只有它自己能做（对话里的 self_note 工具）。你代笔想加的内容应该写进上面的品格或人设正文——自述改不动品格。</span>
+              </div>
             </div>
           </section>
 
@@ -1571,6 +1700,28 @@
                   <span class="hint">
                     新建的机器人默认打开：写入锁在数据目录下的 workspace 内，碰不到配置和数据库。
                     读取、检索、按名字找文件不受这个开关影响，始终可用。
+                  </span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_browser_control_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许使用浏览器控制扩展（browser_ext_*）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。那组工具操作的是你自己浏览器里的页面，带着你的登录态，所以逐台机器人显式打开。
+                    还要在「设置 → 浏览器控制」里打开总开关并授权站点，两边都开才真的能用。
+                  </span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_browser_box_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许使用内置浏览器（browser_* 接到 Diana 自己的浏览器）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。打开后 browser_open / browser_text / browser_click 这组工具连的是「浏览器」页里那个常驻浏览器，
+                    带着你在里面登录过的站点。你在那一页按下接管时，这台机器人当场就碰不到它了。
                   </span>
                 </div>
                 <div class="field">
@@ -1837,9 +1988,15 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
+import { formatClock } from "../format";
 import {
   deleteBotProfile,
   generatePersona,
+  listSelfNotes,
+  deleteSelfNote,
+  purgeSelfNotes,
+  type SelfNote,
+  type PersonaSoul,
   reviewPersona,
   getConfig,
   getBotProfileConfig,
@@ -1861,6 +2018,7 @@ import {
   savePersona,
   deletePersona,
   importPersonas,
+  importPersonaSource,
   importCharacterCard,
   PERSONA_EXPORT_VERSION,
   type CharacterCardV2,
@@ -2435,6 +2593,170 @@ async function loadPersonaLibrary(): Promise<void> {
   }
 }
 
+// ── 品格（soul）──────────────────────────────────────────────────────────────
+// 表单直接改 form.soul：它跟着机器人配置一起保存，服务端再清洗一遍（裁长度、
+// 丢空条目、全空归零），所以这里不做校验，只负责把结构摆出来。
+const soul = computed<PersonaSoul>(() => {
+  const current = form.value;
+  if (!current) return {};
+  if (!current.soul) current.soul = {};
+  return current.soul;
+});
+
+const soulConfigured = computed(() => {
+  const value = form.value?.soul;
+  if (!value) return false;
+  return Boolean(
+    value.identity?.trim() ||
+      value.values?.length ||
+      value.hard_limits?.length ||
+      value.honesty?.length ||
+      value.self_nature?.trim() ||
+      value.restraint?.trim() ||
+      value.correctable?.trim() ||
+      value.on_criticism?.trim() ||
+      value.open_questions?.length ||
+      value.priority?.order?.length
+  );
+});
+
+// 字符串列表用「一行一条」的文本框，不做可增删的行编辑器：这几项就是短句清单，
+// 给每条配一个删除按钮只会让界面比内容还重。
+function linesToList(text: string): string[] {
+  return text.split("\n").map(line => line.trim()).filter(Boolean);
+}
+
+function listToLines(list?: string[]): string {
+  return (list ?? []).join("\n");
+}
+
+const soulHonesty = computed({
+  get: () => listToLines(soul.value.honesty),
+  set: (text: string) => { soul.value.honesty = linesToList(text); }
+});
+
+const soulOpenQuestions = computed({
+  get: () => listToLines(soul.value.open_questions),
+  set: (text: string) => { soul.value.open_questions = linesToList(text); }
+});
+
+// 优先级用顿号或逗号分隔：它是一行四五个词的东西，换行输入反而别扭。
+const soulPriorityOrder = computed({
+  get: () => (soul.value.priority?.order ?? []).join("、"),
+  set: (text: string) => {
+    const order = text.split(/[、,，]/).map(item => item.trim()).filter(Boolean);
+    soul.value.priority = { ...(soul.value.priority ?? {}), order };
+  }
+});
+
+const soulPriorityNote = computed({
+  get: () => soul.value.priority?.note ?? "",
+  set: (note: string) => { soul.value.priority = { ...(soul.value.priority ?? {}), note }; }
+});
+
+const soulOwner = computed({
+  get: () => soul.value.relationships?.owner ?? "",
+  set: (owner: string) => { soul.value.relationships = { ...(soul.value.relationships ?? {}), owner }; }
+});
+
+const soulMembers = computed({
+  get: () => soul.value.relationships?.members ?? "",
+  set: (members: string) => { soul.value.relationships = { ...(soul.value.relationships ?? {}), members }; }
+});
+
+const soulValues = computed(() => {
+  if (!soul.value.values) soul.value.values = [];
+  return soul.value.values;
+});
+
+const soulLimits = computed(() => {
+  if (!soul.value.hard_limits) soul.value.hard_limits = [];
+  return soul.value.hard_limits;
+});
+
+function addSoulValue() {
+  soulValues.value.push({ value: "", why: "" });
+}
+
+function removeSoulValue(index: number) {
+  soulValues.value.splice(index, 1);
+}
+
+function addSoulLimit() {
+  soulLimits.value.push({ limit: "", why: "" });
+}
+
+function removeSoulLimit(index: number) {
+  soulLimits.value.splice(index, 1);
+}
+
+// ── 自述 ────────────────────────────────────────────────────────────────────
+// 只读加删除。写入只有机器人自己能做，人代笔想加的内容属于品格或人设正文。
+const selfNotes = ref<SelfNote[]>([]);
+const selfNotesBusy = ref(false);
+
+async function reloadSelfNotes(): Promise<void> {
+  if (!form.value?.self_note_enabled) {
+    selfNotes.value = [];
+    return;
+  }
+  selfNotesBusy.value = true;
+  try {
+    selfNotes.value = (await listSelfNotes(form.value?.id ?? "")).notes ?? [];
+  } catch {
+    // 自述读不出来不该挡住整个机器人页：它是旁支信息，配置本身不受影响。
+    selfNotes.value = [];
+  } finally {
+    selfNotesBusy.value = false;
+  }
+}
+
+async function removeSelfNote(id: string): Promise<void> {
+  selfNotesBusy.value = true;
+  try {
+    selfNotes.value = (await deleteSelfNote(form.value?.id ?? "", id)).notes ?? [];
+    toastSuccess("已删除这条自述");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "删除失败");
+  } finally {
+    selfNotesBusy.value = false;
+  }
+}
+
+async function clearSelfNotes(): Promise<void> {
+  if (!window.confirm("清空这台机器人写下的全部自述？删掉之后它要重新观察才会再记。")) return;
+  selfNotesBusy.value = true;
+  try {
+    selfNotes.value = (await purgeSelfNotes(form.value?.id ?? "")).notes ?? [];
+    toastSuccess("自述已清空");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "清空失败");
+  } finally {
+    selfNotesBusy.value = false;
+  }
+}
+
+// selfNoteSource 说明这条是在哪、谁在场时记下的。自述跨群生效，来源是主人事后
+// 判断「这句话是谁哄着它写的」的唯一线索。
+function selfNoteSource(note: SelfNote): string {
+  const parts: string[] = [];
+  if (note.source_group_id) parts.push(`群 ${note.source_group_id}`);
+  else parts.push("私聊");
+  if (note.source_user_name || note.source_user_id) parts.push(note.source_user_name || note.source_user_id || "");
+  if (note.created_at) parts.push(formatClock(note.created_at));
+  return parts.filter(Boolean).join(" · ");
+}
+
+// 换一台机器人、或者刚打开编辑页时重新拉自述：它按机器人隔离，上一台的列表留在
+// 屏幕上会让人以为这台也写过。
+watch(
+  () => [form.value?.id, form.value?.self_note_enabled] as const,
+  () => {
+    void reloadSelfNotes();
+  },
+  { immediate: true }
+);
+
 const personaSaverOpen = ref(false);
 const personaNameDraft = ref("");
 const personaNameInput = ref<HTMLInputElement | null>(null);
@@ -2574,7 +2896,17 @@ async function importPersonaFile(event: Event): Promise<void> {
       await importCharacterCardFile(file);
       return;
     }
-    const parsed = JSON.parse(await file.text()) as unknown;
+    const text = await file.text();
+    // YAML 交给后端解析：品格层写成 YAML 才读得下去（有注释、有多行字符串），
+    // 而前端没有 YAML 解析器，为这一件事塞一个进去不值当。
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".yaml") || lowerName.endsWith(".yml")) {
+      const imported = await importPersonaSource(text);
+      savedPersonaLibrary.value = imported.personas ?? [];
+      toastSuccess(`导入 ${imported.imported} 套`);
+      return;
+    }
+    const parsed = JSON.parse(text) as unknown;
     if (looksLikeCharacterCard(parsed)) {
       await importCharacterCardFile(file);
       return;
@@ -3177,7 +3509,8 @@ function llmProviderLabel(provider: LLMConfig["provider"]): string {
   const labels: Record<LLMConfig["provider"], string> = {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
-    anthropic: "Anthropic"
+    anthropic: "Anthropic",
+    typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];
 }
@@ -3639,6 +3972,8 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
+    agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
+    agent_browser_box_enabled: config.agent_browser_box_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "owner",
     repository_disclosure: config.repository_disclosure ?? "owner",
@@ -3652,6 +3987,7 @@ function setForm(config: BotProfileConfig): void {
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
+    self_note_enabled: config.self_note_enabled ?? false,
     romance_enabled: config.romance_enabled ?? false,
     llm_capability_probe_enabled: config.llm_capability_probe_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,

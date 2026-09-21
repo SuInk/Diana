@@ -563,7 +563,8 @@ function providerLabel(provider: Provider): string {
   const labels: Record<Provider, string> = {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
-    anthropic: "Anthropic"
+    anthropic: "Anthropic",
+    typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];
 }
