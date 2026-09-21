@@ -6233,6 +6233,8 @@ func dedupeStrings(values []string) []string {
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
 func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	// 扶正写歪的外壳和分隔符，消费的还是正规标记，见 normalizeDianaReplyVariants。
+	msg.Text = normalizeDianaReplyVariants(msg.Text)
 	id, rest, ok := consumeOutgoingReplyControl(msg.Text)
 	if !ok {
 		return msg
@@ -6300,6 +6302,21 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 		return msg
 	}
 	msg.MentionNames = resolved
+	return msg
+}
+
+// normalizeOutgoingMentions 先把写歪的提及标记扶正，再丢掉 id 不可用的那些，见
+// mention_marker.go 里那段说明。放在 resolveOutgoingMentionNames 之前：查昵称是给
+// 留下来的标记用的，先扶正再清理，后面各平台的翻译就只会拿到正规标记和真账号。
+func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	acceptable := func(id string) bool { return mentionIDAcceptable(event.Platform, id) }
+	text := dropUnusableDianaMentions(normalizeDianaMentionVariants(msg.Text), acceptable)
+	text = dropResidualDianaReplyMarkers(text)
+	if text == msg.Text {
+		return msg
+	}
+	log.Printf("diana rewrote mention markers: platform=%s before=%q after=%q", NormalizePlatformID(event.Platform), truncateForError(msg.Text), truncateForError(text))
+	msg.Text = text
 	return msg
 }
 

@@ -229,3 +229,115 @@ func TestOutgoingHistoryRendersMentionMarker(t *testing.T) {
 		t.Fatalf("普通发言被改写了：%q", plain.RawMessage)
 	}
 }
+
+// 生产库里捞出来的真实样本：9/20 换上 mimo-x-flash-preview 之后，一天里写出六种
+// 形态，dianaMentionMarkerPattern 一个都不认，全部当正文发进了群。id 还认得出来
+// 的扶正成真提及，认不出来的丢掉。
+func TestOutgoingNormalizesMentionVariantsFromProduction(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "1081572710", UserID: "3083158904"}
+	cases := []struct{ in, want string }{
+		{"@diana-at-3083158904 撤啥呀，那两单早就撤过了", "[diana-at:3083158904]撤啥呀，那两单早就撤过了"},
+		{"<diana-at:160867498>半真半假。官方文档里", "[diana-at:160867498]半真半假。官方文档里"},
+		{"(diana-at:3135003586)没事没事，一整杯都糊脸上了", "[diana-at:3135003586]没事没事，一整杯都糊脸上了"},
+		{"[ diana-at:1368248340]（揉了揉眼睛）三天就把 GPT 额度干完了", "[diana-at:1368248340]（揉了揉眼睛）三天就把 GPT 额度干完了"},
+		{"[ diana-at:3135003586 ]嘿嘿，第三分收下", "[diana-at:3135003586]嘿嘿，第三分收下"},
+		{"[diana-at:3083158904] 撤啥呀", "[diana-at:3083158904] 撤啥呀"},
+		// id 认不出来的整个丢掉，不留半个标记，也不降级成纯文本。
+		{"@diana-at 不难，这仓库还没 CONTRIBUTING.md", "不难，这仓库还没 CONTRIBUTING.md"},
+		{"[diana-at:成员user_id] 撤啥呀", "撤啥呀"},
+		{"[diana-at:im_user_abc] 撤啥呀", "撤啥呀"},
+		{"[diana-at:diana-at-3083158904] 撤啥呀", "撤啥呀"},
+	}
+	for _, item := range cases {
+		got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: item.in}).Text
+		if got != item.want {
+			t.Fatalf("输入 %q\n得到 %q\n期望 %q", item.in, got, item.want)
+		}
+		for _, segment := range TextToOneBotSegments(got) {
+			if segment.Type == "at" && !numericChatID(segment.Data["qq"]) {
+				t.Fatalf("输入 %q 仍然发出了 qq 非数字的 at 段：%#v", item.in, segment)
+			}
+			if segment.Type == "text" && strings.Contains(strings.ToLower(segment.Data["text"]), "diana-at") {
+				t.Fatalf("输入 %q 的正文里还留着标记：%q", item.in, segment.Data["text"])
+			}
+		}
+	}
+}
+
+// 讲实现时把标记写进反引号是在展示写法，不是要提及谁，不能动它。
+func TestMentionNormalizationSkipsCodeSpans(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "1", UserID: "10001"}
+	for _, text := range []string{
+		"提及写成 `[diana-at:<user_id>]`，发送前再翻译喵",
+		"```\n[diana-at:10001]\n```",
+	} {
+		if got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: text}).Text; got != text {
+			t.Fatalf("代码块被改写了：%q -> %q", text, got)
+		}
+	}
+}
+
+// 非数字 ID 的平台不能按 OneBot 的规矩卡：飞书的 open_id 本来就是 ou_ 开头。
+func TestMentionIDAcceptableByPlatform(t *testing.T) {
+	cases := []struct {
+		platform string
+		id       string
+		want     bool
+	}{
+		{PlatformOneBotV11, "3083158904", true},
+		{PlatformOneBotV11, "diana-at-3083158904", false},
+		{PlatformTelegram, "10001", true},
+		{PlatformTelegram, "user_id", false},
+		{PlatformFeishu, "ou_9a8b7c", true},
+		{PlatformFeishu, "im_user_9a8b", false},
+	}
+	for _, item := range cases {
+		if got := mentionIDAcceptable(item.platform, item.id); got != item.want {
+			t.Fatalf("mentionIDAcceptable(%q, %q) = %v", item.platform, item.id, got)
+		}
+	}
+}
+
+// 标记夹在句中时丢掉不能留下两个空格。
+func TestDropUnusableMentionTidiesSpacing(t *testing.T) {
+	got := dropUnusableDianaMentions("那就 [diana-at:成员user_id] 你来说 [diana-at:10002] 呢", numericChatID)
+	if want := "那就 你来说 [diana-at:10002] 呢"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// 引用标记同一家族，写歪的方式也一样。生产库 9/20 那条：冒号两侧多了空格，
+// consumeOutgoingReplyControl 要严格前缀，整条标记当正文发进了群。
+func TestOutgoingNormalizesReplyMarkerVariants(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"[ diana-reply : 1447664451 ]喵？这张图这次没送进我眼里", "[diana-reply:1447664451]喵？这张图这次没送进我眼里"},
+		{"<diana-reply:-1687981517>都没分？", "[diana-reply:-1687981517]都没分？"},
+		{"(diana-reply:1231219659)碑先不刻", "[diana-reply:1231219659]碑先不刻"},
+		{"[diana-reply:1231219659]碑先不刻", "[diana-reply:1231219659]碑先不刻"},
+	}
+	for _, item := range cases {
+		got := normalizeDianaReplyVariants(item.in)
+		if got != item.want {
+			t.Fatalf("输入 %q\n得到 %q\n期望 %q", item.in, got, item.want)
+		}
+		if id, _, ok := consumeOutgoingReplyControl(got); !ok || !validOutgoingReplyMessageID(id) {
+			t.Fatalf("扶正后仍然消费不了：%q", got)
+		}
+	}
+}
+
+// 发送层只认开头那一个引用标记；写在正文中间的没人消费，不能原样发出去。
+func TestOutgoingDropsResidualReplyMarkers(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "1", UserID: "10001"}
+	got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: "这句话里 [diana-reply:123] 混了个引用标记"}).Text
+	if want := "这句话里 混了个引用标记"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	code := "标记写成 `[diana-reply:123]` 这样喵"
+	if got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: code}).Text; got != code {
+		t.Fatalf("代码块被改写了：%q", got)
+	}
+}
