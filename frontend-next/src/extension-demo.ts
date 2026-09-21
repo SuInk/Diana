@@ -9,6 +9,7 @@ const entries: Array<ManagedExtension & {content?:string;config?:Record<string,a
 const overrides:Record<string,Record<string,boolean>>={};
 const memberAccess:Record<string,Record<string,boolean>>={};
 const memberAudience:Record<string,Record<string,{min_role?:string;users:string[];groups:string[]}>>={};
+const hiddenPresets=new Set<string>();
 // demoMCPPresets 复刻 model/agent/mcp_presets.go 的内置清单，只留界面要用的字段。
 const demoMCPPresets=[{
  id:'gitea',name:'gitea',title:'Gitea',
@@ -51,7 +52,10 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
  const operation=method==='GET'?'list':body.operation;
  if(operation==='list')return {items:entries.map(({content,config,...item})=>({...item,enabled:item.enabled&&(overrides[profile]?.[item.id]??true),...(profile?{members_enabled:memberAccess[profile]?.[item.id]??false,...(memberAudience[profile]?.[item.id]?{member_audience:memberAudience[profile][item.id]}:{})}:{})}))};
  // 预设清单和真实部署保持一致：演示里也能走一遍「选预设 → 填字段 → 添加」。
- if(operation==='presets')return {items:demoMCPPresets.map(preset=>({preset,installed:entries.some(i=>i.kind==='mcp'&&i.name===preset.name)}))};
+ if(operation==='presets')return {items:demoMCPPresets.map(preset=>({preset,installed:entries.some(i=>i.kind==='mcp'&&i.name===preset.name),hidden:hiddenPresets.has(preset.id)}))};
+ // 「删掉」预设只是把那一行藏起来，随时能放回来。
+ if(operation==='preset_hide'){hiddenPresets.add(String(body.preset));return {ok:true}}
+ if(operation==='preset_show'){hiddenPresets.delete(String(body.preset));return {ok:true}}
  if(operation==='preset_save'){
   const preset=demoMCPPresets.find(p=>p.id===body.preset);if(!preset)throw Error('预设不存在');
   const transport=preset.transports.find(t=>t.id===body.transport);if(!transport)throw Error('预设没有这种接法');

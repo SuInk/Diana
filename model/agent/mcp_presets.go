@@ -334,6 +334,16 @@ func verifyGiteaToken(ctx context.Context, cfg mcpServerConfig) (string, error) 
 	return account.Login, nil
 }
 
+// presetByID 找到一条内置预设。
+func presetByID(id string) (MCPPreset, bool) {
+	for _, preset := range mcpPresets {
+		if preset.ID == id {
+			return preset, true
+		}
+	}
+	return MCPPreset{}, false
+}
+
 // presetTransportByID 找到某个预设的某种接法。
 func presetTransportByID(presetID, transportID string) (MCPPresetTransport, bool) {
 	for _, preset := range mcpPresets {

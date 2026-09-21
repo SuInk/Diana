@@ -326,3 +326,44 @@ func TestBearerTokenPresetsConfigAndVerify(t *testing.T) {
 		t.Fatalf("被网关拒掉的令牌要判成凭据问题，实际 %v", err)
 	}
 }
+
+// 内置预设默认在列表里占一行，用不上的可以「删掉」——删的是那一行，不是服务本身，
+// 所以要存得住、也放得回来。
+func TestHiddenPresetsRoundTrip(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), ExtensionManagement: true}
+	ctx := context.Background()
+	listHidden := func() map[string]bool {
+		t.Helper()
+		result, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "presets", Kind: "mcp"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		items, _ := result.(map[string]any)["items"].([]map[string]any)
+		hidden := map[string]bool{}
+		for _, item := range items {
+			preset := item["preset"].(MCPPreset)
+			if item["hidden"] == true {
+				hidden[preset.ID] = true
+			}
+		}
+		return hidden
+	}
+	if len(listHidden()) != 0 {
+		t.Fatal("默认不该有隐藏的预设")
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "preset_hide", Kind: "mcp", Preset: "luckin"}); err != nil {
+		t.Fatal(err)
+	}
+	if hidden := listHidden(); !hidden["luckin"] || len(hidden) != 1 {
+		t.Fatalf("隐藏没生效：%#v", hidden)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "preset_show", Kind: "mcp", Preset: "luckin"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(listHidden()) != 0 {
+		t.Fatal("放回来没生效")
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "preset_hide", Kind: "mcp", Preset: "nope"}); err == nil {
+		t.Fatal("不存在的预设应当报错")
+	}
+}

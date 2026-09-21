@@ -104,11 +104,24 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		for name := range m.mcpConfigs {
 			installed[name] = true
 		}
+		hidden, err := loadHiddenPresets(m.cfg.WorkDir)
+		if err != nil {
+			return nil, err
+		}
 		items := []map[string]any{}
 		for _, preset := range MCPPresetList() {
-			items = append(items, map[string]any{"preset": preset, "installed": installed[preset.Name]})
+			items = append(items, map[string]any{"preset": preset, "installed": installed[preset.Name], "hidden": hidden[preset.ID]})
 		}
 		return map[string]any{"items": items}, nil
+	case "preset_hide", "preset_show":
+		if req.Kind != "" && req.Kind != "mcp" {
+			return nil, fmt.Errorf("不支持的扩展类型")
+		}
+		if _, ok := presetByID(req.Preset); !ok {
+			return nil, fmt.Errorf("预设不存在")
+		}
+		// 删的是列表里那一行，服务本身没动：已经装上的那条 MCP 要删还是走 delete。
+		return nil, saveHiddenPreset(m.cfg.WorkDir, req.Preset, req.Operation == "preset_hide")
 	case "enabled":
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整启用状态")
