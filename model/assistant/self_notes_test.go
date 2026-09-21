@@ -110,6 +110,25 @@ func TestSelfNoteContextHonorsStoreAndConfigGate(t *testing.T) {
 	}
 }
 
+// 自述是每台机器人一本：拿不到机器人身份时整层关闭，不写也不读那个共享的空桶，
+// 否则两台机器人会互相改写对方的自我认知。
+func TestSelfNoteRequiresBotIdentity(t *testing.T) {
+	store := &stubSelfNoteStore{notes: []SelfNote{{ID: "n1", Topic: "说话方式", Content: "一句说完就不铺三句"}}}
+	runtime := selfNoteTestRuntime(t, true, store)
+	anonymous := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
+
+	if block, usage := runtime.selfNoteContext(context.Background(), anonymous); block != "" || usage.Layer != "" {
+		t.Fatalf("anonymous context = %q usage=%#v", block, usage)
+	}
+	tool := newDianaSelfNoteTool(runtime, anonymous, RelationshipPolicy{Owner: true})
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "add", "content": "记一条"}); err == nil {
+		t.Fatal("writing without a bot identity should fail")
+	}
+	if len(store.notes) != 1 {
+		t.Fatalf("store mutated: %#v", store.notes)
+	}
+}
+
 func TestSelfNoteContextStopsAtLayerBudget(t *testing.T) {
 	notes := make([]SelfNote, 0, 8)
 	for index := 0; index < 8; index++ {

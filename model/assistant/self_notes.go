@@ -142,8 +142,13 @@ func (r *Runtime) selfNoteStore() SelfNoteStore {
 
 // selfNoteEnabled 报告这台机器人是否开启自述。默认关闭：让机器人改写自己的自我
 // 描述是行为变化，升级后不该自动生效。
+//
+// 拿不到机器人身份时一律关闭。自述是每台机器人一本、跨群生效的自我描述，没有
+// profile_id 的事件会全部落进同一个空桶：那不是「一本共用的自述」，而是两台机器人
+// 互相改写对方的自我认知。笔记本在同样的情况下退回升级前那本共用的（见
+// notebookGlobalScope），因为词条丢了更糟；自述反过来，宁可不记。
 func (r *Runtime) selfNoteEnabled(event MessageEvent) bool {
-	if r.selfNoteStore() == nil {
+	if r.selfNoteStore() == nil || strings.TrimSpace(event.ProfileID) == "" {
 		return false
 	}
 	return boolValue(r.effectiveConfigForEvent(event).SelfNoteEnabled, false)
