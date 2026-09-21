@@ -316,8 +316,9 @@ func cloneDeferredInput(value any) any {
 // 三种：没配这个键就用默认名单的结果，配成 true 把这个扩展的工具全部常驻，配成 false
 // 全部改按需。
 //
-// 返回的顺序跟着 base 走，新增的按扩展 ID 和工具名排序：这个数组直接决定请求里 tools
-// 的顺序，顺序一抖前缀缓存就断。
+// 返回的顺序跟着 base 走，新增的按工具名排序：这个数组直接决定请求里 tools 的顺序，
+// 顺序一抖前缀缓存就断。扩展 ID 也排了一次序，那是另一回事——同一个工具名被两个扩展
+// 声明时，决定谁最后写赢，和输出顺序无关。
 func ResolveCoreTools(base []string, owners map[string][]string, overrides map[string]bool) []string {
 	resident := make(map[string]bool, len(base))
 	for _, name := range base {
