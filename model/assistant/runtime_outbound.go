@@ -127,6 +127,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	}
 	msg = r.resolveOutgoingLocalImages(msg)
 	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
+	msg = r.normalizeOutgoingMentions(event, msg)
 	msg = r.resolveOutgoingMentionNames(event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
