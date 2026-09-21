@@ -10,9 +10,13 @@ Agent 侧 `extension_access` 的 list 会给出 `tier`（本群生效档位）�
 
 ## 运行时配置对工具不可读
 
-MCP 配置（默认 `<Agent 工作目录>/.mcp.json`）里存的是访问令牌原文，扩展开关和对象名单也在同一个目录。这些文件对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
+MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作目录外面**（工作目录的上一级，也就是数据目录里的 `.mcp.json`）。文件工具本来就只能在工作目录内活动，放到外面这道边界自己就够了，不用指望黑名单记全。
 
-这条拦的是文件工具。`run_command` 如果配了能读文件的命令（`cat`、`grep` 之类），仍然能读到这些文件——命令白名单默认为空，放开之前先想清楚这一点。
+老版本默认把它写在工作目录里。启动时会自动搬到新位置并更新 `.extension-paths.json` 里钉住的路径；目标位置已经有文件时不动它，避免覆盖掉一份真配置。
+
+黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及扩展开关 `.extension-overrides.json`、对象名单 `.extension-audience.json`、位置记录 `.extension-paths.json`——这几个按设计就住在工作目录里。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
+
+这条拦的是文件工具。`run_command` 不在此列：命令沙箱限制的是写入范围，读取是放开的（macOS 的 `sandbox-exec` 策略里就是 `allow file-read*`），所以白名单里只要配了 `cat`、`grep` 这类命令，它照样能读到这些文件，搬到工作目录外面也挡不住。命令白名单默认为空，放开之前先想清楚这一点。
 
 ## Skills
 
