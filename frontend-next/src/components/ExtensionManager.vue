@@ -2,7 +2,7 @@
   <section class="extension-manager">
     <header class="view-header">
       <div class="view-title"><h1>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h1><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
-      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button v-if="kind==='mcp'" class="btn" @click="openPresets"><Blocks :size="15" />预设</button><button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
+      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button class="btn primary" @click="startAdd"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
     </header>
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取扩展…</p>
@@ -27,10 +27,10 @@
       </article>
       <p v-if="!items.length">还没有{{ kind === 'skill' ? '自定义 Skill' : 'MCP 服务' }}。</p>
     </div>
-    <Modal v-if="presetsOpen" :title="preset ? `添加 ${preset.title}` : '从预设添加 MCP'" @close="closePresets">
+    <Modal v-if="presetsOpen" :title="preset ? `添加 ${preset.title}` : '添加 MCP'" @close="closePresets">
       <div class="extension-form">
         <template v-if="!preset">
-          <p class="hint">预设只是帮你填好参数，装上之后就是一条普通的 MCP，改配置、停用、删除都和手工添加的一样。少数服务的二进制随 Diana 一起打包，直接填地址和凭据就能用；其余的要自己先把服务跑起来。</p>
+          <p class="hint">下面这些是内置预设，帮你把参数填对——装上之后就是一条普通的 MCP，改配置、停用、删除都和手填的一样。少数服务的二进制随 Diana 一起打包，直接填地址和凭据就能用；其余的要自己先把服务跑起来。接别的服务点下面的「手动配置」。</p>
           <p v-if="presetError" class="error-text" role="alert">{{ presetError }}</p>
           <article v-for="entry in presets" :key="entry.preset.id" class="preset-row">
             <div class="extension-info">
@@ -40,7 +40,7 @@
             </div>
             <button class="btn" @click="pickPreset(entry.preset)">{{ entry.installed ? '再装一个' : '添加' }}</button>
           </article>
-          <p v-if="!presets.length && !presetError">还没有内置预设。</p>
+          <p v-if="!presets.length && !presetError">还没有内置预设，手动配置一条吧。</p>
         </template>
         <template v-else>
           <p class="hint">{{ preset.summary }}<template v-if="preset.docs_url"> <a :href="preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></template></p>
@@ -56,7 +56,7 @@
           <p v-if="presetError" class="error-text" role="alert">{{ presetError }}</p>
         </template>
       </div>
-      <template #footer><button v-if="preset" class="btn" :disabled="presetSaving" @click="preset=null">返回</button><button v-if="presetVerifiable" class="btn" :disabled="presetSaving||verifying" @click="verifyPreset"><KeyRound :size="15" />检测令牌</button><button class="btn" :disabled="presetSaving" @click="closePresets">关闭</button><button v-if="preset" class="btn primary" :disabled="presetSaving" @click="savePreset"><Save :size="15" />添加</button></template>
+      <template #footer><button v-if="preset" class="btn" :disabled="presetSaving" @click="preset=null">返回</button><button v-if="presetVerifiable" class="btn" :disabled="presetSaving||verifying" @click="verifyPreset"><KeyRound :size="15" />检测令牌</button><button v-if="!preset" class="btn" @click="addManually"><Settings2 :size="15" />手动配置</button><button class="btn" :disabled="presetSaving" @click="closePresets">关闭</button><button v-if="preset" class="btn primary" :disabled="presetSaving" @click="savePreset"><Save :size="15" />添加</button></template>
     </Modal>
     <Modal v-if="editing" :title="`${existing ? '编辑' : '添加'} ${kind === 'skill' ? 'Skill' : 'MCP'}`" wide @close="closeEditor">
       <div class="extension-form">
@@ -121,7 +121,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { Blocks, KeyRound, Plus, RefreshCw, RotateCcw, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
+import { KeyRound, Plus, RefreshCw, RotateCcw, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
 import Modal from './Modal.vue';
 import { botScope } from '../bot-scope';
 import { fetchAssistantUserNames, listMCPPresets, listManagedExtensions, manageExtension, type MCPPreset, type ManagedExtension } from '../api';
@@ -179,6 +179,10 @@ const presetTransportHint=computed(()=>preset.value?.transports.find(t=>t.id===p
 const presetVerifiable=computed(()=>!!(preset.value?.transports.find(t=>t.id===presetTransport.value)?.verifiable));
 // 编辑已装好的服务时也要这份清单（拿字段定义），所以取一次存着。
 async function ensurePresets(){if(!presets.value.length){try{presets.value=(await listMCPPresets()).items}catch{return []}}return presets.value.map(entry=>entry.preset)}
+// 「预设」和「添加」做的是同一件事，合成一个入口：点添加先看有没有现成的预设，
+// 没有对上的再手动配置。Skill 没有预设，直接进空白表单。
+function startAdd(){if(props.kind!=='mcp'){openNew();return}void openPresets()}
+function addManually(){presetsOpen.value=false;preset.value=null;openNew()}
 async function openPresets(){presetsOpen.value=true;preset.value=null;presetError.value='';verifyNote.value='';try{presets.value=(await listMCPPresets()).items}catch(e){presetError.value=String(e instanceof Error?e.message:e)}}
 function closePresets(){if(presetSaving.value)return;presetsOpen.value=false;preset.value=null}
 function pickPreset(value:MCPPreset){preset.value=value;presetTransport.value=value.transports[0]?.id||'';presetValues.value={};presetName.value=items.value.some(i=>i.name===value.name)?`${value.name}-2`:value.name;presetError.value='';verifyNote.value=''}
