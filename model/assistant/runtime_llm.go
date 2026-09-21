@@ -902,8 +902,16 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	default:
 		tail.WriteString("\n" + promptToolRuntimeModel)
 	}
-	if agentEnabled && hasTool(dianaVersionToolName) {
+	// 项目地址的披露规则和模型身份同理：everyone 下对谁都一样，进 head；owner 下
+	// 随发言者是不是主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
+	switch everyone := normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) == RepositoryDisclosureEveryone; {
+	case !agentEnabled || !hasTool(dianaVersionToolName):
+	case everyone:
 		builder.WriteString("\n" + promptToolVersion)
+	case relationship.Owner:
+		tail.WriteString("\n" + promptToolVersion)
+	default:
+		tail.WriteString("\n" + promptToolVersionNoRepository)
 	}
 	if agentEnabled && hasTool(dianaNotebookToolName) {
 		builder.WriteString("\n" + promptToolNotebook)

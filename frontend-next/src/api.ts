@@ -244,6 +244,8 @@ export interface BotProfileConfig {
   reply_reference_mode?: "on" | "off" | "auto";
   /** 谁能问出机器人所用的模型：owner 仅主人（默认）、everyone 所有人。主人始终能看和改。 */
   model_disclosure?: "owner" | "everyone";
+  /** 谁能问出项目开源地址：owner 仅主人（默认）、everyone 所有人。 */
+  repository_disclosure?: "owner" | "everyone";
   mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
