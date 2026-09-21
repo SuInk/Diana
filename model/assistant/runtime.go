@@ -3374,6 +3374,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			pluginTools = append(pluginTools, newDianaPlatformTool(r, event))
 		}
 		if fullAgentEnabled {
+			// 因为权限不够而没挂上的工具名。它们不构造、不注册，只是让注册表知道
+			// 「有过这个名字，但这次会话没权限」，取不到时才说得出正确的那句话。
+			var deniedTools []string
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
@@ -3403,6 +3406,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
 			if event.Kind == EventKindGroup || relationship.Owner {
 				extraTools = append(extraTools, newDianaCrossSessionTool(r, event, relationship.Owner))
+			} else {
+				deniedTools = append(deniedTools, dianaCrossSessionToolName)
 			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
@@ -3452,8 +3457,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
-				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
-					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
+				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok {
+					if relationship.Owner || repositoryPublishEventHasAccess(event, settings) {
+						extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
+					} else {
+						// 插件开着、只是这个人这个群不够格。不登记的话模型只会被告知
+						// 「不存在」，然后换个名字接着猜。
+						deniedTools = append(deniedTools, dianaGitHubToolName)
+					}
 				}
 			}
 			// schedule、rss、github 三种订阅合成一个 subscription 工具。github 那种仍然
@@ -3505,6 +3516,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if err != nil {
 				return "", err
 			}
+			agentRegistry.DenyTools(deniedTools...)
 		} else if len(pluginTools) > 0 && relationship.allowsAgentTools() {
 			// Plugin-contributed model tools stay usable without granting the local
 			// filesystem, shell, browser, skills, or MCP surface behind AgentEnabled.
