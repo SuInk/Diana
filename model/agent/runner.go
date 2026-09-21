@@ -105,6 +105,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		Priority: llm.MessagePrioritySystem,
 	})
 	var volatile []llm.Message
+	// skills 目录按会话变(按机器人、按群分档,装卸 skill 也会改它),进系统提示词
+	// 等于每换一个群就把整条前缀缓存作废,所以和时钟一样待在尾部。
+	if catalog := RenderSkillsCatalog(r.registry.Skills(), r.cfg.SkillsListBudget); catalog != "" {
+		volatile = append(volatile, llm.Message{
+			Role:     llm.RoleSystem,
+			Content:  catalog,
+			Priority: llm.MessagePrioritySystem,
+		})
+	}
 	// The caller may already carry a trusted clock in its own prompt; a second
 	// one only wastes tokens and risks the two disagreeing.
 	if !messagesCarryRuntimeClock(req.Messages) {
@@ -949,9 +958,7 @@ func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
 
 // systemPrompt 构造 Agent JSON 动作协议提示词。
 func (r *Runner) systemPrompt() string {
-	skillsPrompt := RenderSkillsPrompt(r.registry.Skills(), r.cfg.SkillsListBudget)
 	extensionsPrompt := RenderExtensionsPrompt(r.registry.Extensions())
-	skillsPrompt = strings.TrimSpace(skillsPrompt)
 	hasTool := func(name string) bool {
 		_, ok := r.registry.Get(name)
 		return ok
@@ -968,8 +975,10 @@ func (r *Runner) systemPrompt() string {
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
 	rules := []string{fmt.Sprintf("- 每个规划步只选择一个工具,看到结果后继续选下一个;这一条回复内你最多可连续调用 %d 次工具。预算没用完就不要停下来向用户要求「继续」,直接接着调用,直到任务完成或预算耗尽。", r.cfg.MaxSteps)}
-	if len(r.registry.Skills()) > 0 && hasTool("read_skill") {
-		rules = append(rules, "- 如果要使用 skill，先调用 read_skill 读取完整 SKILL.md，再按其中说明行动。")
+	if hasTool("read_skill") {
+		// 条件只看工具在不在,不看当前有几个 skill:按 len(Skills()) 判定会让这一行
+		// 随会话开关的 skill 出现和消失,整条系统提示词的前缀缓存跟着断。
+		rules = append(rules, "- 可用 skill 的名称和用途在本轮消息末尾的 Skills 目录里给出，系统提示词不带这份清单；要用先调用 read_skill 读取完整 SKILL.md，再按其中说明行动。目录为空或没有这一段时，说明本次会话没有可用 skill。")
 	}
 	if hasTool("list_capabilities") {
 		rules = append(rules, "- list_capabilities 是统一能力目录，包含现有内置插件、本地 Skills 和 MCP 服务；需要判断当前能力或扩展状态时先查询它。技能正文用 read_skill 读取。")
@@ -1046,9 +1055,6 @@ func (r *Runner) systemPrompt() string {
 		loadedContracts = loader.loadedContracts()
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
-	}
-	if skillsPrompt != "" {
-		sections = append(sections, skillsPrompt)
 	}
 	if extensionsPrompt != "" {
 		sections = append(sections, extensionsPrompt)
