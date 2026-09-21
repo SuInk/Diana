@@ -106,10 +106,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	})
 	var volatile []llm.Message
 	// skills 目录按会话变(按机器人、按群分档,装卸 skill 也会改它),进系统提示词
-	// 等于每换一个群就把整条前缀缓存作废,所以和时钟一样待在尾部。
-	if catalog := RenderSkillsCatalog(r.registry.Skills(), r.cfg.SkillsListBudget); catalog != "" {
+	// 等于每换一个群就把整条前缀缓存作废,所以和时钟一样待在尾部。命中关键词的那几份
+	// 正文也在这一段里,所以它每轮都可能不一样——更该待在断点之后。
+	//
+	// 用 user role:这一段是「本轮随消息带来的资料」,不是恒定的系统约束,和它挨着的
+	// 当前消息同属一轮。
+	skills := SelectSkillBodies(r.registry.Skills(), SkillScanText(req.Messages, r.cfg.SkillTriggerScanDepth))
+	if catalog := RenderSkillsCatalog(skills, r.cfg.SkillsListBudget); catalog != "" {
 		volatile = append(volatile, llm.Message{
-			Role:     llm.RoleSystem,
+			Role:     llm.RoleUser,
 			Content:  catalog,
 			Priority: llm.MessagePrioritySystem,
 		})
