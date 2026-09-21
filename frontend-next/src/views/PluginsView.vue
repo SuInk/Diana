@@ -8,6 +8,7 @@
     </div>
     <ExtensionManager v-if="extensionTab === 'skill' || extensionTab === 'mcp'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
     <AgentResidencyPanel v-else-if="extensionTab === 'residency'" />
+    <AgentBrowserPanel v-else-if="extensionTab === 'browser'" />
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
@@ -642,7 +643,8 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
-const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'},{value:'residency' as const,label:'上下文'}];
+import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'},{value:'residency' as const,label:'上下文'},{value:'browser' as const,label:'浏览器'}];
 type ExtensionTab = typeof extensionTabs[number]['value'];
 const extensionTab = ref<ExtensionTab>('plugins');
 const extensionManager = ref<InstanceType<typeof ExtensionManager> | null>(null);
