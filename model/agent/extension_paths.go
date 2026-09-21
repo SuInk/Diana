@@ -6,11 +6,15 @@ import (
 	"path/filepath"
 )
 
+// extensionPathsFileName 记着 skill 目录和 MCP 配置的位置，和其余运行时配置一起
+// 对工具关闭，见 agentProtectedFiles。
+const extensionPathsFileName = ".extension-paths.json"
+
 // Persist the initial extension locations once so choosing another robot cannot
 // silently switch to another skill tree or MCP configuration file.
 func GlobalExtensionPaths(cfg Config) (Config, error) {
 	cfg = cfg.WithDefaults()
-	path := filepath.Join(cfg.WorkDir, ".extension-paths.json")
+	path := filepath.Join(cfg.WorkDir, extensionPathsFileName)
 	lock := extensionPathLock(path)
 	lock.Lock()
 	defer lock.Unlock()

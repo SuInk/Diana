@@ -20,10 +20,13 @@ const (
 	DefaultFileWriteMaxBytes = 256 * 1024
 	// 读文件默认一次多少行。工具结果统一被截到 MaxToolOutputChars，一次读太多
 	// 只会在截断处白白丢掉，不如让模型按需要翻页。
-	defaultReadFileLines            = 200
-	maxReadFileLines                = 2000
-	DefaultListDirectoryLimit       = 200
-	DefaultSkillsListBudget         = 8000
+	defaultReadFileLines      = 200
+	maxReadFileLines          = 2000
+	DefaultListDirectoryLimit = 200
+	DefaultSkillsListBudget   = 8000
+	// defaultMCPConfigFileName 里存着 MCP 的访问令牌，对文件工具关闭，见
+	// agentProtectedFiles。
+	defaultMCPConfigFileName        = ".mcp.json"
 	DefaultMCPStartupTimeoutMS      = 10_000
 	DefaultMCPToolTimeoutMS         = 60_000
 	DefaultCommandTimeoutMS         = 10_000
@@ -267,7 +270,7 @@ func (cfg Config) WithDefaults() Config {
 	}
 	cfg.ManagedSkillRoot = filepath.Clean(cfg.ManagedSkillRoot)
 	if strings.TrimSpace(cfg.MCPConfigPath) == "" {
-		cfg.MCPConfigPath = filepath.Join(workDir, ".mcp.json")
+		cfg.MCPConfigPath = filepath.Join(workDir, defaultMCPConfigFileName)
 	}
 	cfg.BuiltinExtensions = normalizeBuiltinExtensions(cfg.BuiltinExtensions)
 	cfg.BuiltinSkills = normalizeBuiltinSkills(cfg.BuiltinSkills)
