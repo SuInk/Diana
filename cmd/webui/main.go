@@ -504,6 +504,10 @@ func main() {
 		statsCollector.Observe(event)
 		eventHub.PublishBotEvent(event)
 	})
+	// 人设文件同步要赶在 Start 之前跑完第一轮：文件里改过的人设应该从第一条消息
+	// 起就生效，而不是等第一次轮询。storage.souls_dir 留空时这里什么都不做。
+	stopSoulFileSync := startSoulFileSync(ctx, botRuntime, appCfg.Storage.SoulsDir)
+	defer stopSoulFileSync()
 	// 没有启用的机器人时 Start 返回 ErrBotDisabled，不算错误。
 	if err := botRuntime.Start(ctx); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		log.Printf("assistant start skipped: %v", err)

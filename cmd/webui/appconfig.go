@@ -72,6 +72,9 @@ type storageConfig struct {
 	MediaCacheMB int `yaml:"media_cache_mb"`
 	// LocalMediaBaseURL 为空时按反连握手地址动态推断，见 main。
 	LocalMediaBaseURL string `yaml:"local_media_base_url"`
+	// SoulsDir 是人设文件（每台机器人一份 <机器人 ID>.md）的目录，留空表示不启用。
+	// 文件是导入/导出源，人设的权威副本仍在数据库，见 model/assistant/soul_file.go。
+	SoulsDir string `yaml:"souls_dir"`
 }
 
 type adminConfig struct {
