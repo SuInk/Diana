@@ -282,7 +282,16 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		// 填的也还是配置里当前的值。
 		server.Preset, server.PresetTransport = previous.Preset, previous.PresetTransport
 	}
+	// 凭据只写不读，所以「值留空」只能理解成「保持原值」。但键整个不在提交里，
+	// 那是人把那一行删掉了，就该真的删掉——通用表单里这些键本来就是自己填进去的。
+	//
+	// 预设表单是例外：它只提交自己那几个键，看不见也管不着别人额外注入的变量，
+	// 按「不在提交里就删」处理会把它们连坐清掉，所以那条路径一律保留。
+	keepAll := presetID != ""
 	for key, value := range previous.Headers {
+		if _, submitted := server.Headers[key]; !submitted && !keepAll {
+			continue
+		}
 		if strings.TrimSpace(server.Headers[key]) == "" {
 			if server.Headers == nil {
 				server.Headers = map[string]string{}
@@ -291,6 +300,9 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		}
 	}
 	for key, value := range previous.Env {
+		if _, submitted := server.Env[key]; !submitted && !keepAll {
+			continue
+		}
 		if strings.TrimSpace(server.Env[key]) == "" {
 			if server.Env == nil {
 				server.Env = map[string]string{}
