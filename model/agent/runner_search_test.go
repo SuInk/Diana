@@ -79,13 +79,12 @@ func TestRunnerUnwrapsReplyCompatibilityJSONAfterSearch(t *testing.T) {
 	}
 }
 
-func TestRunnerRepairsFinalThatClaimsUnsupportedFact(t *testing.T) {
+func TestRunnerDoesNotSpendRepairRoundOnUnsupportedClaim(t *testing.T) {
 	searchResult, _ := json.Marshal(webSearchResult{Status: "no_results", StopReason: "all_queries_exhausted"})
 	tool := &recordingSearchTool{output: string(searchResult)}
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"web_search","input":{"query":"verify state","claims":[{"id":"state","statement":"状态是否成立"}],"claim_ids":["state"]}}`,
 		`{"action":"final","content":"确定存在。","claims":[{"id":"state","status":"supported","summary":"确定存在","evidence":[]}]}`,
-		`{"action":"final","content":"当前检索不足，暂时无法确认。","claims":[{"id":"state","status":"insufficient","summary":"没有找到足够证据"}]}`,
 	}}
 	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
 	if err != nil {
@@ -95,11 +94,11 @@ func TestRunnerRepairsFinalThatClaimsUnsupportedFact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Text != "当前检索不足，暂时无法确认。" || len(client.requests) != 3 || resp.Claims[0].Status != ClaimStatusInsufficient {
+	if resp.Text != "确定存在。" || len(client.requests) != 2 {
 		t.Fatalf("response=%#v requests=%d", resp, len(client.requests))
 	}
-	if correction := client.requests[2].Messages[len(client.requests[2].Messages)-1].Content; !strings.Contains(correction, "没有通过校验") || !strings.Contains(correction, "content 保持原样") || !strings.Contains(correction, "证据账本") {
-		t.Fatalf("repair prompt=%q", correction)
+	if resp.Claims[0].Status != ClaimStatusInsufficient {
+		t.Fatalf("无证据的 supported 仍要在账本里降级留痕：%#v", resp.Claims)
 	}
 }
 
@@ -225,4 +224,35 @@ func (t *recordingSearchTool) Run(_ context.Context, input map[string]any) (stri
 	t.calls++
 	t.input = input
 	return t.output, nil
+}
+
+func TestRunnerKeepsFinalReplyWhenEvidenceDoesNotBind(t *testing.T) {
+	searchResult, _ := json.Marshal(webSearchResult{
+		Status: "ok", StopReason: "sufficient_evidence", Sources: []string{"https://source.example/record"}, Content: "source material",
+	})
+	tool := &recordingSearchTool{output: string(searchResult)}
+	reply := "查到了，这场演出改到下周六晚上七点。"
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"web_search","input":{"query":"演出时间","claims":[{"id":"showtime","statement":"演出时间是否变更"}],"claim_ids":["showtime"]}}`,
+		`{"action":"final","content":"` + reply + `","claims":[{"id":"showtime","status":"supported","summary":"官方公告写明改期","evidence":[{"url":"https://source.example/record?utm_source=chat","relation":"supports","source_type":"official_record","distance":"direct","strength":"high"}]}]}`,
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "演出改期了吗"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != reply {
+		t.Fatalf("证据绑不上时不该替换正文：%q", resp.Text)
+	}
+	if len(resp.Claims) != 1 || resp.Claims[0].Status != ClaimStatusInsufficient || len(resp.Claims[0].Evidence) != 0 {
+		t.Fatalf("账本仍要如实留痕：%#v", resp.Claims)
+	}
+	if strings.Contains(resp.Text, "尚未确认") {
+		t.Fatalf("内部账本文案泄漏到正文：%q", resp.Text)
+	}
 }

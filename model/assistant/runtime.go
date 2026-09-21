@@ -1405,16 +1405,6 @@ func (r *Runtime) sandboxedBrowserEnabled(event MessageEvent) bool {
 	return r.plugins.EnabledWithOverrides(sandboxedBrowserPluginID, r.pluginOverridesForEvent(event))
 }
 
-// evidenceLedgerAdvisory 读取联网搜索插件的证据账本开关。关闭后账本仍然结算并留痕，
-// 但不再因为证据绑定失败拦截回复；插件本身没启用时账本也不会激活。
-func (r *Runtime) evidenceLedgerAdvisory(event MessageEvent) bool {
-	settings, enabled := r.webSearchPluginSettings(event)
-	if !enabled {
-		return false
-	}
-	return !settings.Bool(webSearchSettingEvidenceLedger, true)
-}
-
 // replyLinkPolicy 决定联网结论要不要在回复正文里给出 URL。
 func (r *Runtime) replyLinkPolicy(event MessageEvent) string {
 	settings, enabled := r.webSearchPluginSettings(event)
@@ -4189,7 +4179,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
-			EvidenceLedgerAdvisory:     r.evidenceLedgerAdvisory(event),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry

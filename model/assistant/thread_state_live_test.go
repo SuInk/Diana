@@ -80,11 +80,10 @@ func TestLiveGomokuSharedThreadState(t *testing.T) {
 		}
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: instruction})
 		runner, err := agent.NewRunner(client, agent.Config{
-			WorkDir:                t.TempDir(),
-			MaxSteps:               8,
-			ToolTimeoutMS:          30_000,
-			FinalizationReserveMS:  10_000,
-			EvidenceLedgerAdvisory: true,
+			WorkDir:               t.TempDir(),
+			MaxSteps:              8,
+			ToolTimeoutMS:         30_000,
+			FinalizationReserveMS: 10_000,
 		}, agent.NewToolRegistry(newDianaThreadStateTool(runtime, event)))
 		if err != nil {
 			t.Fatal(err)
@@ -410,11 +409,10 @@ func TestLiveGomokuRepeatedAndConflictingUserMoves(t *testing.T) {
 		}
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf("发言者：%s（user_id=%s）\n消息：%s", name, userID, text)})
 		runner, err := agent.NewRunner(client, agent.Config{
-			WorkDir:                t.TempDir(),
-			MaxSteps:               8,
-			ToolTimeoutMS:          30_000,
-			FinalizationReserveMS:  10_000,
-			EvidenceLedgerAdvisory: true,
+			WorkDir:               t.TempDir(),
+			MaxSteps:              8,
+			ToolTimeoutMS:         30_000,
+			FinalizationReserveMS: 10_000,
 		}, agent.NewToolRegistry(newDianaThreadStateTool(runtime, event)))
 		if err != nil {
 			return nil, err
@@ -565,11 +563,10 @@ func TestLiveGuessCharacterGroupGame(t *testing.T) {
 		}
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf("发言者：%s（user_id=%s）\n消息：%s", name, userID, text)})
 		runner, err := agent.NewRunner(client, agent.Config{
-			WorkDir:                t.TempDir(),
-			MaxSteps:               6,
-			ToolTimeoutMS:          30_000,
-			FinalizationReserveMS:  10_000,
-			EvidenceLedgerAdvisory: true,
+			WorkDir:               t.TempDir(),
+			MaxSteps:              6,
+			ToolTimeoutMS:         30_000,
+			FinalizationReserveMS: 10_000,
 		}, agent.NewToolRegistry(newDianaThreadStateTool(runtime, event)))
 		if err != nil {
 			t.Fatal(err)
@@ -736,11 +733,10 @@ func TestLiveGuessCharacterIndependentGuesser(t *testing.T) {
 		}
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "发言者：猜谜的群友（user_id=guesser-model）\n消息：" + text})
 		runner, err := agent.NewRunner(hostClient, agent.Config{
-			WorkDir:                t.TempDir(),
-			MaxSteps:               6,
-			ToolTimeoutMS:          30_000,
-			FinalizationReserveMS:  10_000,
-			EvidenceLedgerAdvisory: true,
+			WorkDir:               t.TempDir(),
+			MaxSteps:              6,
+			ToolTimeoutMS:         30_000,
+			FinalizationReserveMS: 10_000,
 		}, agent.NewToolRegistry(newDianaThreadStateTool(runtime, event)))
 		if err != nil {
 			t.Fatal(err)
@@ -930,7 +926,7 @@ func TestLiveGuessCharacterHostPickVariety(t *testing.T) {
 		runtime.SetThreadStateStore(store)
 		event := MessageEvent{ProfileID: "bot-live", Kind: EventKindGroup, GroupID: fmt.Sprintf("variety-%d", round), UserID: "asker", MessageID: fmt.Sprintf("v%d", round)}
 		runner, err := agent.NewRunner(client, agent.Config{
-			WorkDir: t.TempDir(), MaxSteps: 4, ToolTimeoutMS: 30_000, FinalizationReserveMS: 10_000, EvidenceLedgerAdvisory: true,
+			WorkDir: t.TempDir(), MaxSteps: 4, ToolTimeoutMS: 30_000, FinalizationReserveMS: 10_000,
 		}, agent.NewToolRegistry(newDianaThreadStateTool(runtime, event)))
 		if err != nil {
 			t.Fatal(err)
