@@ -111,17 +111,19 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		return nil, err
 	}
 	registry := NewToolRegistry()
-	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验。
-	registry.Register(&ListFilesTool{root: root, limit: cfg.ListDirectoryLimit})
-	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
+	protected := agentProtectedFiles(cfg)
+	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验；运行时自己的
+	// 配置文件另外由 protected 拦掉，见 agentProtectedFiles。
+	registry.Register(&ListFilesTool{root: root, limit: cfg.ListDirectoryLimit, protected: protected})
+	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes, protected: protected})
 	// 检索和按名字找文件与 read_file 同级：都只读，都锁在工作目录内。
 	// 没有它们的话，模型定位一个文件只能靠 list_files 一层层翻或者猜路径。
-	registry.Register(&GrepTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
-	registry.Register(&FindFilesTool{root: root})
+	registry.Register(&GrepTool{root: root, maxBytes: cfg.ReadFileMaxBytes, protected: protected})
+	registry.Register(&FindFilesTool{root: root, protected: protected})
 	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
 	if cfg.FileWriteEnabled {
-		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes})
-		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes})
+		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
+		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
 	}
 	if len(cfg.CommandAllowlist) > 0 {
 		registry.Register(&RunCommandTool{
@@ -829,8 +831,9 @@ func cloneToolAllowlist(values map[string]bool) map[string]bool {
 }
 
 type ListFilesTool struct {
-	root  string
-	limit int
+	root      string
+	limit     int
+	protected protectedFiles
 }
 
 // Name 返回列目录工具名称。
@@ -873,9 +876,14 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 		Size int64  `json:"size,omitempty"`
 	}
 	out := make([]entry, 0, min(len(entries), limit))
+	hidden := 0
 	for i, item := range entries {
 		if i >= limit {
 			break
+		}
+		if !item.IsDir() && t.protected.blocked(filepath.Join(path, item.Name())) {
+			hidden++
+			continue
 		}
 		itemType := "file"
 		if item.IsDir() {
@@ -892,6 +900,9 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 		"entries": out,
 		// truncated 告诉模型目录没列完，必要时可以继续读更具体路径。
 		"truncated": len(entries) > limit,
+		// 运行时配置不出现在列表里，但也不假装目录是干净的：模型该知道有东西被挡了，
+		// 免得反复去猜文件名。
+		"protected_hidden": hidden,
 	}, "", "  ")
 	if err != nil {
 		return "", err
@@ -900,8 +911,9 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 }
 
 type ReadFileTool struct {
-	root     string
-	maxBytes int
+	root      string
+	maxBytes  int
+	protected protectedFiles
 }
 
 type RunCommandTool struct {
@@ -1110,6 +1122,9 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	path, err := safePath(t.root, rel)
 	if err != nil {
 		return "", err
+	}
+	if t.protected.blocked(path) {
+		return "", errProtectedFile(rel)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -1332,4 +1347,55 @@ func relPathForOutput(root, path string) string {
 		return "."
 	}
 	return filepath.ToSlash(rel)
+}
+
+// protectedFiles 是运行时自己的配置文件集合：MCP 配置里存着访问令牌，扩展覆盖文件
+// 记着每台机器人的开关。它们碰巧就落在 Agent 工作目录里（`MCPConfigPath` 默认就是
+// `<工作目录>/.mcp.json`），而文件工具只拦「不许走出工作目录」，不看读的是什么——
+// 于是一句「读一下 .mcp.json」就能把令牌原文打进聊天记录。
+//
+// 这些文件是给运行时读的，不是给模型读的：要看配置去 WebUI，要用 MCP 由运行时在本地
+// 拼请求。所以按路径整个拦掉，读、搜、写都不放行，列目录里也不出现。
+type protectedFiles map[string]bool
+
+func agentProtectedFiles(cfg Config) protectedFiles {
+	files := protectedFiles{}
+	for _, path := range []string{
+		resolveMCPConfigPath(cfg),
+		// 配置改指到工作目录外面时，目录里可能还躺着一份旧的默认配置，里面的令牌
+		// 一样是真的。
+		filepath.Join(cfg.WorkDir, defaultMCPConfigFileName),
+		extensionOverridePath(cfg.WorkDir),
+		extensionAudiencePath(cfg.WorkDir),
+		filepath.Join(cfg.WorkDir, extensionPathsFileName),
+	} {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			files[abs] = true
+			// 软链接也要认出来：safePath 只保证解析后仍在工作目录内，没说不能指向它。
+			if resolved, err := evalSymlinksAllowMissing(abs); err == nil {
+				files[resolved] = true
+			}
+		}
+	}
+	return files
+}
+
+// blocked 判断这个路径是不是运行时凭据配置。path 必须是已经过 safePath 的绝对路径。
+func (p protectedFiles) blocked(path string) bool {
+	if len(p) == 0 {
+		return false
+	}
+	if p[path] {
+		return true
+	}
+	resolved, err := evalSymlinksAllowMissing(path)
+	return err == nil && p[resolved]
+}
+
+// errProtectedFile 的措辞要让模型能如实转述：这不是「文件不存在」，也不是权限没配好。
+func errProtectedFile(rel string) error {
+	return fmt.Errorf("%s 是 Diana 的运行时配置，里面可能有 MCP 访问令牌，工具不提供读写；要查看或修改请在 WebUI 的扩展页操作", rel)
 }

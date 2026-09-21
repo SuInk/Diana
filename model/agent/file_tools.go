@@ -39,8 +39,9 @@ const (
 
 // WriteFileTool 在 Agent 工作目录内整体写入一个文件。
 type WriteFileTool struct {
-	root     string
-	maxBytes int
+	root      string
+	maxBytes  int
+	protected protectedFiles
 }
 
 func (t *WriteFileTool) Name() string { return "write_file" }
@@ -77,6 +78,9 @@ func (t *WriteFileTool) Run(_ context.Context, input map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
+	if t.protected.blocked(target) {
+		return "", errProtectedFile(rel)
+	}
 	existed := true
 	if info, statErr := os.Stat(target); statErr != nil {
 		if !os.IsNotExist(statErr) {
@@ -111,8 +115,9 @@ func (t *WriteFileTool) writeLimit() int {
 
 // EditFileTool 用精确文本替换改文件的其中几段。
 type EditFileTool struct {
-	root     string
-	maxBytes int
+	root      string
+	maxBytes  int
+	protected protectedFiles
 }
 
 func (t *EditFileTool) Name() string { return "edit_file" }
@@ -156,6 +161,9 @@ func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, err
 	target, err := safePath(t.root, rel)
 	if err != nil {
 		return "", err
+	}
+	if t.protected.blocked(target) {
+		return "", errProtectedFile(rel)
 	}
 	info, err := os.Stat(target)
 	if err != nil {
@@ -261,8 +269,9 @@ func parseFileEdits(raw any) ([]fileEdit, error) {
 
 // GrepTool 在工作目录内按正则检索文件内容。
 type GrepTool struct {
-	root     string
-	maxBytes int
+	root      string
+	maxBytes  int
+	protected protectedFiles
 }
 
 func (t *GrepTool) Name() string { return "grep" }
@@ -323,6 +332,9 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 		truncated bool
 	)
 	err = walkAgentFiles(ctx, base, func(fullPath, rel string, info fs.FileInfo) error {
+		if t.protected.blocked(fullPath) {
+			return nil
+		}
 		if matches >= limit {
 			truncated = true
 			return fs.SkipAll
@@ -388,7 +400,8 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 
 // FindFilesTool 在工作目录内按名字/通配符找文件。
 type FindFilesTool struct {
-	root string
+	root      string
+	protected protectedFiles
 }
 
 func (t *FindFilesTool) Name() string { return "find_files" }
@@ -423,7 +436,10 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 		found     []string
 		truncated bool
 	)
-	err = walkAgentFiles(ctx, base, func(_, rel string, _ fs.FileInfo) error {
+	err = walkAgentFiles(ctx, base, func(fullPath, rel string, _ fs.FileInfo) error {
+		if t.protected.blocked(fullPath) {
+			return nil
+		}
 		if len(found) >= limit {
 			truncated = true
 			return fs.SkipAll
