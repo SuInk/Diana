@@ -481,10 +481,11 @@ func nextModelRole(role ModelRole, target llm.Profile, model string, explicitPro
 	case !explicitProvider && role.Group != "" && profileInGroup(target, role.Group):
 		role.Model = model
 		return role, false
-	// 没点名供应商、目标又正是原来那家，那这次就只是换个模型。后备路由连同顺序
-	// 原样留着：以前这里一律重建成一条光秃秃的绑定，主人在聊天里说一句「换成
-	// X」，WebUI 上排好的后备就被清空了，而回执只说换了模型，谁都不会想到去看。
-	case !explicitProvider && modelRoleProfileID(role) == target.ID:
+	// 目标正是这一档现在绑的那家供应商，那这次就只是换个主模型，后备路由连同顺序
+	// 原样留着。点没点名这家供应商不影响：主人说「换成 X」和说「换成 A 家的 X」
+	// 要的是同一件事，没有一句是在说「把后备也清掉」。以前这里一律重建成一条光秃
+	// 秃的绑定，WebUI 上排好的后备就此消失，回执还只说换了模型，谁都不会想到去看。
+	case modelRoleProfileID(role) == target.ID:
 		role.Model = model
 		if role.ProviderID != "" {
 			role.ModelID = model
