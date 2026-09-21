@@ -96,7 +96,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	registry.Retain(allowed)
 	// 一次性交给注册表：ApplyExtensionOverrides 是整份替换，分两次调用后一次会
 	// 把前一次的机器人级停用覆盖掉。
-	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupDisabledOverrides(groupAccess)))
+	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupExtensionSwitches(groupAccess)))
 	return registry, nil
 }
 
@@ -144,8 +144,10 @@ func resolveMemberExtensions(candidates []string, in extensionAccessInput) (allo
 		if tier == "" {
 			tier = agent.BotExtensionTier(in.overrides, in.audiences, id)
 		}
-		// 停用是「这里没有这个能力」，白名单也放不出来。
-		if tier == agent.ExtensionTierOff || agent.BotExtensionTier(in.overrides, in.audiences, id) == agent.ExtensionTierOff {
+		// 停用是「这里没有这个能力」，白名单也放不出来。看的是本群这一档：机器人
+		// 那个开关只是默认，群里显式设过就以群里为准——某个群单独要用一个默认
+		// 关着的扩展，不该逼着主人先全局打开再一个个群关回去。
+		if tier == agent.ExtensionTierOff {
 			continue
 		}
 		if group.Denied(in.userID) {
@@ -194,7 +196,7 @@ func extensionIDsOf(base *agent.ToolRegistry) []string {
 	return ids
 }
 
-// mergeExtensionOverrides 合并机器人级和群级停用，群里说停用的优先。
+// mergeExtensionOverrides 合并机器人级默认和群级说法，群里显式设过的优先。
 func mergeExtensionOverrides(botLevel, groupLevel map[string]bool) map[string]bool {
 	if len(groupLevel) == 0 {
 		return botLevel
@@ -209,15 +211,22 @@ func mergeExtensionOverrides(botLevel, groupLevel map[string]bool) map[string]bo
 	return merged
 }
 
-// groupDisabledOverrides 把本群停用的扩展表达成注册表认识的停用开关。
-func groupDisabledOverrides(access map[string]GroupExtensionAccess) map[string]bool {
+// groupExtensionSwitches 把本群显式设过的档位表达成注册表认识的开关：本群停用的
+// 关掉，本群显式设了别的档位的打开——后者是「机器人默认不开，这个群单独开」，
+// 不打开的话注册表根本不会加载它，档位算得再对也没有工具可用。
+func groupExtensionSwitches(access map[string]GroupExtensionAccess) map[string]bool {
 	if len(access) == 0 {
 		return nil
 	}
 	values := map[string]bool{}
 	for id, item := range access {
-		if item.Tier == agent.ExtensionTierOff {
+		switch item.Tier {
+		case "":
+			// 没设档位就是跟随机器人，这里不表态。
+		case agent.ExtensionTierOff:
 			values[id] = false
+		default:
+			values[id] = true
 		}
 	}
 	return values
