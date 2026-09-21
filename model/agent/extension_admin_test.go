@@ -439,3 +439,30 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 		t.Fatalf("检测结果不对：%#v", verified)
 	}
 }
+
+// 超时上限只是拦手滑，不该按最慢的服务来卡人：首次启动现拉依赖的 stdio 服务、
+// 构建抓取这类慢工具，都能超过原来的 120/300 秒。
+func TestMCPTimeoutCeilings(t *testing.T) {
+	base := map[string]any{"url": "https://example.com/mcp"}
+	for _, item := range []struct {
+		key      string
+		accepted int
+		rejected int
+	}{
+		{"startup_timeout_sec", 300, 301},
+		{"tool_timeout_sec", 900, 901},
+	} {
+		config := map[string]any{}
+		for key, value := range base {
+			config[key] = value
+		}
+		config[item.key] = item.accepted
+		if _, err := mcpServerConfigFromInput(config); err != nil {
+			t.Fatalf("%s=%d 应当收下：%v", item.key, item.accepted, err)
+		}
+		config[item.key] = item.rejected
+		if _, err := mcpServerConfigFromInput(config); err == nil {
+			t.Fatalf("%s=%d 超出上限却被收下了", item.key, item.rejected)
+		}
+	}
+}
