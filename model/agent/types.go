@@ -20,10 +20,13 @@ const (
 	DefaultFileWriteMaxBytes = 256 * 1024
 	// 读文件默认一次多少行。工具结果统一被截到 MaxToolOutputChars，一次读太多
 	// 只会在截断处白白丢掉，不如让模型按需要翻页。
-	defaultReadFileLines            = 200
-	maxReadFileLines                = 2000
-	DefaultListDirectoryLimit       = 200
-	DefaultSkillsListBudget         = 8000
+	defaultReadFileLines      = 200
+	maxReadFileLines          = 2000
+	DefaultListDirectoryLimit = 200
+	DefaultSkillsListBudget   = 8000
+	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
+	// 只留目录行,退回 read_skill,不会把整轮上下文撑爆。
+	ResidentSkillBodyBudget         = 24000
 	DefaultMCPStartupTimeoutMS      = 10_000
 	DefaultMCPToolTimeoutMS         = 60_000
 	DefaultCommandTimeoutMS         = 10_000

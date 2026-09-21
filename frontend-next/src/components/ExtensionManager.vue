@@ -19,6 +19,11 @@
         <div v-if="botScope" class="segmented extension-state" role="group" :aria-label="`${item.name} 在当前机器人的状态`">
           <button v-for="state in extensionStates" :key="state.value" type="button" :class="{active: currentState(item) === state.value}" :disabled="busy === item.id || item.available===false" :title="state.hint" @click="setState(item, state.value)">{{ state.label }}</button>
         </div>
+        <!-- Skill 的常驻档位：常驻就是正文直接进上下文，不必再 read_skill。MCP 的档位
+             按服务算，放在「上下文」标签里，和内置工具排在一起。 -->
+        <div v-if="botScope && kind === 'skill'" class="segmented extension-state" role="group" :aria-label="`${item.name} 的上下文档位`">
+          <button v-for="tier in residencyTiers" :key="String(tier.value)" type="button" :class="{active: residency(item) === tier.value}" :disabled="busy === item.id || item.available===false" :title="tier.hint" @click="setResidency(item, tier.value)">{{ tier.label }}</button>
+        </div>
         <!-- 和编辑、删除同一款图标按钮：名单是「去改」的入口，改完的结果写在上面那行小字里。
              档位没放开时留着但置灰，免得每行的按钮左右错位。 -->
         <button v-if="botScope" class="btn icon-only" :disabled="busy === item.id || !isOpenTier(item)" :aria-label="`设置 ${item.name} 的开放对象`" :title="audienceTitle(item)" @click="openAccess(item)"><Users :size="16" /></button>
@@ -162,6 +167,12 @@ async function setState(item:ManagedExtension,state:ExtensionState){const profil
   if(members&&!item.members_enabled)await manageExtension({...base,operation:'members',enabled:true});
   await load();
  }catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
+// 默认档就是「只进目录」。正文常驻解决的是另一个问题：上下文一长，模型按目录去
+// read_skill 这一步经常不做，写得再细的 skill 也读不到。
+const residencyTiers=[{value:null,label:'默认',hint:'跟随默认：只进目录，用到再 read_skill'},{value:true,label:'常驻',hint:'正文直接进上下文，模型不必再 read_skill；长 skill 每轮都要算钱'},{value:false,label:'按需',hint:'只进目录，用到再 read_skill'}] as const;
+const residency=(item:ManagedExtension)=>item.resident===undefined?null:item.resident;
+async function setResidency(item:ManagedExtension,value:boolean|null){const profile=botScope.value;if(!profile||residency(item)===value)return;busy.value=item.id;
+ try{const payload:Record<string,unknown>={operation:'residency',kind:props.kind,name:item.name,profile_id:profile};if(value!==null)payload.resident=value;await manageExtension(payload);toastSuccess('档位已更新，后续会话生效');await load()}catch(e){toastError(String(e instanceof Error?e.message:e))}finally{busy.value=''}}
 function openAccess(item:ManagedExtension){accessFor.value=item;accessUsers.value=[...(item.member_audience?.users||[])];accessGroups.value=[...(item.member_audience?.groups||[])];accessError.value=''}
 async function saveAudience(){const item=accessFor.value,profile=botScope.value;if(!item||!profile)return;savingAccess.value=true;accessError.value='';try{await manageExtension({operation:'audience',kind:props.kind,name:item.name,profile_id:profile,audience:{min_role:item.member_audience?.min_role||'',users:accessUsers.value,groups:accessGroups.value}});accessFor.value=null;toastSuccess('开放对象已更新，后续会话生效');await load()}catch(e){accessError.value=String(e instanceof Error?e.message:e)}finally{savingAccess.value=false}}
 async function remove(item:ManagedExtension){if(!await askConfirm({title:`删除 ${item.name}？`,message:'全局删除会影响使用它的所有机器人。',confirmLabel:'删除',danger:true}))return;try{await manageExtension({operation:'delete',kind:props.kind,name:item.name});await load()}catch(e){toastError(String(e instanceof Error?e.message:e))}}

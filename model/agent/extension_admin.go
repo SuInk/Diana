@@ -34,9 +34,21 @@ type ExtensionAdminRequest struct {
 	Transport string            `json:"transport,omitempty"`
 	Values    map[string]string `json:"values,omitempty"`
 	// Audience 只用于 audience 操作：限定这个扩展开放给哪些人、哪些群。
-	Audience     ExtensionAudience `json:"audience,omitempty"`
-	ClearHeaders []string          `json:"clear_headers,omitempty"`
-	ClearEnv     []string          `json:"clear_env,omitempty"`
+	Audience ExtensionAudience `json:"audience,omitempty"`
+	// Resident 只用于 residency 操作：true 常驻、false 按需、不带表示跟随默认档。
+	Resident     *bool    `json:"resident,omitempty"`
+	ClearHeaders []string `json:"clear_headers,omitempty"`
+	ClearEnv     []string `json:"clear_env,omitempty"`
+}
+
+// extensionID 把「类型 + 名称」解析成目录里的扩展 ID，顺带确认它确实存在。
+func (m *ExtensionManager) extensionID(kind, name string) (string, error) {
+	for _, state := range m.Extensions() {
+		if state.Kind == ExtensionKind(kind) && state.Name == name {
+			return state.ID, nil
+		}
+	}
+	return "", fmt.Errorf("扩展不存在")
 }
 
 func extensionAdminManager(cfg Config) (*ExtensionManager, error) {
@@ -78,6 +90,9 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 			if enabled, ok := overrides[states[i].ID]; ok {
 				states[i].Enabled = states[i].Enabled && enabled
 			}
+			if req.ProfileID != "" {
+				states[i].Resident = ResidentOverride(overrides, states[i].ID)
+			}
 			if states[i].Kind != ExtensionKindBuiltin && req.ProfileID != "" {
 				members := overrides[MemberOverrideKey(states[i].ID)]
 				states[i].MembersEnabled = &members
@@ -115,6 +130,16 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 			return nil, fmt.Errorf("扩展不存在")
 		}
 		return nil, saveExtensionOverride(m.cfg.WorkDir, req.ProfileID, req.Kind+":"+req.Name, req.Enabled)
+	case "residency":
+		// 三档只有一个可选的 bool：Resident 不带就是「跟随默认」，把键删掉。
+		if req.ProfileID == "" {
+			return nil, fmt.Errorf("请选择机器人后调整常驻档位")
+		}
+		id, err := m.extensionID(req.Kind, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		return nil, SaveExtensionResidency(m.cfg.WorkDir, req.ProfileID, id, req.Resident)
 	case "members":
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整权限")
