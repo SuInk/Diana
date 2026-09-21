@@ -60,6 +60,12 @@ type contextBudgetRuntime interface {
 	ContextBudgetBreakdownForGroup(string) assistant.ContextBudgetBreakdown
 }
 
+// residentContextRuntime 让事件页拿到「每轮都注入」那几块的原文。和上面那条一样
+// 做成可选接口：它只服务一个页面。
+type residentContextRuntime interface {
+	ResidentContextForGroup(ctx context.Context, profileID, groupID string) assistant.ResidentContextSnapshot
+}
+
 type repositoryWatchRuntime interface {
 	CreateRepositoryWatch(context.Context, assistant.RepositoryWatchCreateInput) (assistant.Reminder, error)
 	UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error)

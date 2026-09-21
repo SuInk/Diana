@@ -2199,6 +2199,7 @@ export interface AssistantEventsResponse {
   query?: string;
   private_chats: AssistantEventPrivateChat[];
   context_budget?: AssistantContextBudget;
+  resident_context?: AssistantResidentContext;
 }
 
 export interface AssistantEventGroup {
@@ -2213,6 +2214,26 @@ export interface AssistantEventPrivateChat {
   events: number;
   user_name?: string;
   bot_profile_id?: string;
+}
+
+/** 每轮都注入、与当前消息无关的一块上下文。 */
+export interface AssistantResidentContextBlock {
+  key: string;
+  label: string;
+  tokens: number;
+  /** 这块所在层的 token 配额；0 表示它不单独占一层配额。 */
+  budget?: number;
+  content?: string;
+  note?: string;
+}
+
+export interface AssistantResidentContext {
+  profile_id?: string;
+  group_id?: string;
+  context_window: number;
+  blocks: AssistantResidentContextBlock[];
+  total_tokens: number;
+  note?: string;
 }
 
 export interface AssistantContextBudgetLayer {

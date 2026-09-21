@@ -101,6 +101,39 @@
         </div>
       </section>
 
+      <section v-if="residentContext && residentContext.blocks.length" class="card resident-context">
+        <div class="card-head">
+          <div>
+            <h2>常驻上下文{{ residentContextScopeLabel }}</h2>
+            <span class="card-sub">
+              每轮都注入、与当前消息无关的内容，合计
+              {{ formatNumber(residentContext.total_tokens) }} token —— 这是这台机器人每轮的底价。
+              {{ residentContext.note }}
+            </span>
+          </div>
+        </div>
+        <div class="card-body">
+          <ul class="resident-list">
+            <li v-for="block in residentContext.blocks" :key="block.key" class="resident-item">
+              <button
+                type="button"
+                class="resident-head"
+                :aria-expanded="expandedResidentBlocks.has(block.key)"
+                @click="toggleResidentBlock(block.key)"
+              >
+                <ChevronDown :size="14" class="resident-caret" :class="{ open: expandedResidentBlocks.has(block.key) }" aria-hidden="true" />
+                <span class="resident-label">{{ block.label }}</span>
+                <span class="resident-tokens mono">{{ block.content ? `${formatNumber(block.tokens)} token` : "空" }}</span>
+                <span v-if="block.budget" class="resident-budget muted">配额 {{ formatNumber(block.budget) }}</span>
+              </button>
+              <p v-if="block.note" class="resident-note muted">{{ block.note }}</p>
+              <pre v-if="expandedResidentBlocks.has(block.key) && block.content" class="resident-body">{{ block.content }}</pre>
+              <p v-else-if="expandedResidentBlocks.has(block.key)" class="resident-body muted">这一块当前是空的，本轮不会注入任何内容。</p>
+            </li>
+          </ul>
+        </div>
+      </section>
+
       <div v-if="summaryLoading" class="event-stats-line" role="status" aria-label="正在加载事件统计">
         <SkeletonBlock width="180px" height="22px" />
         <span class="event-token-skeleton"><SkeletonBlock width="110px" height="22px" /><span class="skeleton skeleton-text" aria-hidden="true">输入 000,000（缓存命中 00%） / 输出 00,000 · 00 次调用</span></span>
@@ -1010,6 +1043,23 @@ function privateChatOption(userID: string, events: number, name?: string): AppSe
 const contextBudget = computed(() => response.value?.context_budget ?? null);
 
 // 每一层在整条窗口里占的宽度。留白单独算，它是「没有分配出去」的部分。
+const residentContext = computed(() => response.value?.resident_context ?? null);
+
+// 展开状态按块记，翻页和刷新之间保持不变：排查串味时常常盯着同一块反复看。
+const expandedResidentBlocks = ref(new Set<string>());
+
+function toggleResidentBlock(key: string) {
+  const next = new Set(expandedResidentBlocks.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedResidentBlocks.value = next;
+}
+
+const residentContextScopeLabel = computed(() => {
+  const group = residentContext.value?.group_id?.trim();
+  return group ? ` · 群 ${group}` : " · 未选群（私聊场景）";
+});
+
 const contextBudgetSegments = computed(() => {
   const budget = contextBudget.value;
   if (!budget || budget.context_window <= 0) return [];
@@ -1506,6 +1556,78 @@ onBeforeUnmount(() => {
 .budget-slice-headroom {
   background: transparent;
   min-width: 0;
+}
+
+/* 常驻上下文是「摆原文」，不是统计：默认收起，点开才占版面，否则一段几千字的
+   人设会把整页事件挤到屏幕外。 */
+.resident-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.resident-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.resident-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.resident-caret {
+  flex: none;
+  transition: transform 120ms ease;
+}
+
+.resident-caret.open {
+  transform: rotate(180deg);
+}
+
+.resident-label {
+  font-weight: 600;
+}
+
+.resident-tokens {
+  margin-left: auto;
+}
+
+.resident-budget {
+  font-size: 12px;
+}
+
+.resident-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.resident-body {
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 人设正文几千字，给它一个自己的滚动区，别把页面拉成长条。 */
+  max-height: 320px;
+  overflow: auto;
 }
 
 .budget-legend {
