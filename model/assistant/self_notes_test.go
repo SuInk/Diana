@@ -102,8 +102,9 @@ func TestSelfNoteContextHonorsStoreAndConfigGate(t *testing.T) {
 	if !strings.HasPrefix(block, selfNoteContextPrefix) {
 		t.Fatalf("missing marker: %q", block)
 	}
-	if !strings.Contains(block, "以人设为准") {
-		t.Fatalf("missing persona precedence: %q", block)
+	// 自述不能凌驾于品格之上：品格只有人能改，这句话要出现在注入的标注里。
+	if !strings.Contains(block, "以那两段为准") || !strings.Contains(block, "品格") {
+		t.Fatalf("missing soul precedence: %q", block)
 	}
 	if usage.Layer != "self_notes" || usage.SelectedItems != 1 || usage.Reason != contextLayerReasonFits {
 		t.Fatalf("usage = %#v", usage)
@@ -134,8 +135,8 @@ func TestSelfNoteContextStopsAtLayerBudget(t *testing.T) {
 	for index := 0; index < 8; index++ {
 		notes = append(notes, SelfNote{ID: itoa(index), Topic: "说话方式", Content: strings.Repeat("很长的一条自我观察", 6)})
 	}
-	// 预算刚够开头（约 140 token）加两三行：尾部几条必须被挡在外面，而且要记账。
-	block, usage := formatSelfNoteContext(notes, 200)
+	// 预算刚够开头（约 160 token）加两三行：尾部几条必须被挡在外面，而且要记账。
+	block, usage := formatSelfNoteContext(notes, 220)
 	if block == "" {
 		t.Fatal("expected a truncated block, got none")
 	}
@@ -146,7 +147,7 @@ func TestSelfNoteContextStopsAtLayerBudget(t *testing.T) {
 		t.Fatalf("reason = %q", usage.Reason)
 	}
 	// 预算小到一条都装不下时不注入光杆开头：只有标题的块什么信息都不带。
-	if block, usage := formatSelfNoteContext(notes, 100); block != "" || usage.SelectedItems != 0 {
+	if block, usage := formatSelfNoteContext(notes, 120); block != "" || usage.SelectedItems != 0 {
 		t.Fatalf("tiny budget block = %q usage=%#v", block, usage)
 	}
 }
