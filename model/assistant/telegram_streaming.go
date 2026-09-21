@@ -14,7 +14,6 @@ import (
 const (
 	telegramDraftUpdateInterval = 750 * time.Millisecond
 	telegramDraftMaxRunes       = 4000
-	telegramTypingRenewInterval = 4 * time.Second
 )
 
 var telegramDraftSequence atomic.Int64
@@ -91,48 +90,4 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 	}
 	d.lastText = text
 	d.lastSent = time.Now()
-}
-
-// startTypingIndicator 在准备回复期间持续显示「正在输入」：Telegram 群聊私聊都支持，
-// OneBot 只支持私聊且可在机器人设置里关闭。
-func (r *Runtime) startTypingIndicator(ctx context.Context, event MessageEvent, cfg BotConfig) func() {
-	platform := NormalizePlatformID(event.Platform)
-	switch platform {
-	case PlatformTelegram:
-	case PlatformOneBotV11:
-		if event.Kind != EventKindPrivate || !boolValue(cfg.QQTypingEnabled, true) {
-			return func() {}
-		}
-	default:
-		return func() {}
-	}
-	r.mu.RLock()
-	channel, ok := r.channel.(ChatActionChannel)
-	r.mu.RUnlock()
-	if !ok {
-		return func() {}
-	}
-	typingCtx, cancel := context.WithCancel(ctx)
-	msg := routeOutgoingToEvent(event, OutgoingMessage{GroupID: event.GroupID, UserID: event.UserID, MessageThreadID: event.MessageThreadID})
-	go func() {
-		defer recoverGoroutinePanic("telegram_streaming.go:startTypingIndicator")
-		// 不是所有 OneBot 实现都有 set_input_status，报错后就不再重复调用。
-		stopOnError := platform == PlatformOneBotV11
-		if err := channel.SendChatAction(typingCtx, msg, "typing"); err != nil && stopOnError {
-			return
-		}
-		ticker := time.NewTicker(telegramTypingRenewInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-typingCtx.Done():
-				return
-			case <-ticker.C:
-				if err := channel.SendChatAction(typingCtx, msg, "typing"); err != nil && stopOnError {
-					return
-				}
-			}
-		}
-	}()
-	return cancel
 }
