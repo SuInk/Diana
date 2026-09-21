@@ -26,7 +26,10 @@ const (
 	DefaultSkillsListBudget   = 8000
 	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
 	// 只留目录行,退回 read_skill,不会把整轮上下文撑爆。
-	ResidentSkillBodyBudget         = 24000
+	ResidentSkillBodyBudget = 24000
+	// DefaultSkillTriggerScanDepth 是关键词扫描回看的用户消息条数。只看最近几条：
+	// 很久以前提过一次的词不该让那份正文从此每轮都在。
+	DefaultSkillTriggerScanDepth    = 2
 	DefaultMCPStartupTimeoutMS      = 10_000
 	DefaultMCPToolTimeoutMS         = 60_000
 	DefaultCommandTimeoutMS         = 10_000
@@ -69,21 +72,23 @@ func DefaultCommandAllowlist() []string {
 }
 
 type Config struct {
-	WorkDir             string
-	MaxSteps            int
-	MaxToolOutputChars  int
-	ReadFileMaxBytes    int
-	ListDirectoryLimit  int
-	SkillRoots          []string
-	ManagedSkillRoot    string
-	SkillsListBudget    int
-	MCPConfigPath       string
-	MCPStartupTimeoutMS int
-	MCPToolTimeoutMS    int
-	ExtensionManagement bool
-	BuiltinExtensions   []BuiltinExtension
-	BuiltinSkills       []SkillMetadata
-	ReservedSkillNames  []string
+	WorkDir            string
+	MaxSteps           int
+	MaxToolOutputChars int
+	ReadFileMaxBytes   int
+	ListDirectoryLimit int
+	SkillRoots         []string
+	ManagedSkillRoot   string
+	SkillsListBudget   int
+	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
+	SkillTriggerScanDepth int
+	MCPConfigPath         string
+	MCPStartupTimeoutMS   int
+	MCPToolTimeoutMS      int
+	ExtensionManagement   bool
+	BuiltinExtensions     []BuiltinExtension
+	BuiltinSkills         []SkillMetadata
+	ReservedSkillNames    []string
 	// FileWriteEnabled 打开 write_file / edit_file。默认关闭：读错文件浪费一次
 	// 调用，写错文件改的是磁盘，这一档该由部署方显式点头。
 	FileWriteEnabled bool
@@ -212,6 +217,9 @@ func (cfg Config) WithDefaults() Config {
 	}
 	if cfg.ListDirectoryLimit <= 0 {
 		cfg.ListDirectoryLimit = DefaultListDirectoryLimit
+	}
+	if cfg.SkillTriggerScanDepth <= 0 {
+		cfg.SkillTriggerScanDepth = DefaultSkillTriggerScanDepth
 	}
 	if cfg.SkillsListBudget <= 0 {
 		cfg.SkillsListBudget = DefaultSkillsListBudget

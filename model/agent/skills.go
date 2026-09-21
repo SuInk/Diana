@@ -16,6 +16,8 @@ import (
 	"unicode"
 
 	"go.yaml.in/yaml/v4"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 const (
@@ -30,9 +32,15 @@ type SkillMetadata struct {
 	ShortDescription string `json:"short_description,omitempty"`
 	Source           string `json:"source,omitempty"`
 	Managed          bool   `json:"managed,omitempty"`
-	// Resident 表示这个 skill 的正文随请求一起下发，模型不必再 read_skill。默认按需：
-	// 目录只给名称和用途。正文很长的 skill 常驻会把每一轮都撑大，档位由用户自己配。
-	Resident bool `json:"resident,omitempty"`
+	// Resident 是用户给这个 skill 配的档位：true 正文每轮都带，false 只进目录、要用
+	// 得 read_skill，nil 跟随默认——声明了 keywords 就命中才带正文，没声明就只进目录。
+	Resident *bool `json:"resident,omitempty"`
+	// Keywords 是 SKILL.md 自己声明的触发词。命中就把正文带上，不必等模型想起来去
+	// read_skill——上下文一长它就是不去读，这是整套按需加载最常见的失效方式。
+	Keywords []string `json:"keywords,omitempty"`
+	// IncludeBody 是本轮的判定结果：正文要不要随这次请求下发。由 Runner 按档位和
+	// 关键词算出来，不来自配置。
+	IncludeBody bool `json:"-"`
 	// Bundled 表示这个 skill 目录里除 SKILL.md 外还带了脚本或资源。正文之外的
 	// 文件只有拿得到 run_command / read_file 的会话才碰得到，权限提示要说清楚。
 	Bundled bool `json:"bundled,omitempty"`
@@ -48,11 +56,49 @@ type skillInstallMetadata struct {
 }
 
 type skillFrontmatter struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
+	Name        string       `yaml:"name"`
+	Description string       `yaml:"description"`
+	Keywords    skillKeyList `yaml:"keywords"`
 	Metadata    struct {
-		ShortDescription string `yaml:"short-description"`
+		ShortDescription string       `yaml:"short-description"`
+		Keywords         skillKeyList `yaml:"keywords"`
 	} `yaml:"metadata"`
+}
+
+// skillKeyList 同时接受 `keywords: a, b` 和 `keywords: [a, b]` 两种写法：两种都是
+// 常见手写形式，为此报一个解析错误、让整个 skill 加载失败不值当。
+type skillKeyList []string
+
+func (l *skillKeyList) UnmarshalYAML(node *yaml.Node) error {
+	var list []string
+	if err := node.Decode(&list); err == nil {
+		*l = cleanSkillKeywords(list)
+		return nil
+	}
+	var single string
+	if err := node.Decode(&single); err != nil {
+		return err
+	}
+	*l = cleanSkillKeywords(strings.Split(single, ","))
+	return nil
+}
+
+func cleanSkillKeywords(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		folded := strings.ToLower(value)
+		if seen[folded] {
+			continue
+		}
+		seen[folded] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 // LoadSkills scans configured roots for local SKILL.md skill folders.
@@ -150,8 +196,10 @@ func parseSkill(path string) (SkillMetadata, error) {
 		Name:             strings.TrimSpace(frontmatter.Name),
 		Description:      strings.TrimSpace(frontmatter.Description),
 		ShortDescription: strings.TrimSpace(frontmatter.Metadata.ShortDescription),
+		Keywords:         append(append([]string(nil), frontmatter.Keywords...), frontmatter.Metadata.Keywords...),
 		Path:             abs,
 	}
+	skill.Keywords = cleanSkillKeywords(skill.Keywords)
 	skill.Bundled = skillFolderHasResources(filepath.Dir(abs))
 	if metadataBody, readErr := os.ReadFile(filepath.Join(filepath.Dir(abs), skillInstallMetadataName)); readErr == nil {
 		var installed skillInstallMetadata
@@ -237,7 +285,7 @@ func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
 			break
 		}
 		builder.WriteString(line)
-		if skill.Resident {
+		if skill.IncludeBody {
 			resident = append(resident, skill)
 		}
 	}
@@ -280,6 +328,69 @@ func skillBody(skill SkillMetadata) string {
 		return ""
 	}
 	return string(data)
+}
+
+// SelectSkillBodies 决定这一轮哪些 skill 的正文随请求下发，返回带 IncludeBody 的副本。
+//
+// 档位优先于关键词：用户把一个 skill 按到「常驻」或「按需」就是不想再让它自己变。
+// 没配过档位的按 SKILL.md 自己声明的 keywords 判定——命中就带正文。用户点名 $skill
+// 时同样带上，省掉一次「先 read_skill 再动手」的往返。
+//
+// 判定放在运行时，而不是让模型自己决定要不要 read_skill：上下文一长模型就是不去读
+// 那一步，写得再细的 skill 也等于没有。
+func SelectSkillBodies(skills []SkillMetadata, scanned string) []SkillMetadata {
+	if len(skills) == 0 {
+		return nil
+	}
+	out := make([]SkillMetadata, 0, len(skills))
+	for _, skill := range skills {
+		if skill.Resident != nil {
+			skill.IncludeBody = *skill.Resident
+			out = append(out, skill)
+			continue
+		}
+		skill.IncludeBody = skillMatchesScan(skill, scanned)
+		out = append(out, skill)
+	}
+	return out
+}
+
+// skillMatchesScan 做大小写不敏感的子串匹配，不按整词。整词匹配对中文是错的——
+// 中文不用空格分词，「点歌」在「帮我点歌」里就不是一个独立的词。
+func skillMatchesScan(skill SkillMetadata, scanned string) bool {
+	scanned = strings.TrimSpace(scanned)
+	if scanned == "" {
+		return false
+	}
+	if hasExplicitSkillMention(scanned, skill.Name) {
+		return true
+	}
+	folded := strings.ToLower(scanned)
+	for _, keyword := range skill.Keywords {
+		if keyword = strings.ToLower(strings.TrimSpace(keyword)); keyword != "" && strings.Contains(folded, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// SkillScanText 取最近 depth 条用户消息拼成关键词扫描文本。
+//
+// 只扫最近几条，不扫整段历史：一个很久以前提过一次的词不该让这份正文从此每轮都在。
+func SkillScanText(messages []llm.Message, depth int) string {
+	if depth <= 0 {
+		depth = DefaultSkillTriggerScanDepth
+	}
+	var parts []string
+	for index := len(messages) - 1; index >= 0 && len(parts) < depth; index-- {
+		if messages[index].Role != llm.RoleUser {
+			continue
+		}
+		if text := strings.TrimSpace(messages[index].Content); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func SelectExplicitSkills(skills []SkillMetadata, text string) []SkillMetadata {

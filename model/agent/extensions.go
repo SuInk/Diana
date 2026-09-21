@@ -51,6 +51,9 @@ type ExtensionState struct {
 	MembersEnabled *bool `json:"members_enabled,omitempty"`
 	// Resident 是这台机器人给这个扩展配的常驻档位：nil 表示跟随默认档。
 	Resident *bool `json:"resident,omitempty"`
+	// Keywords 是 skill 在 SKILL.md 里自己声明的触发词，界面据此说明「默认」这一档
+	// 对它意味着什么。
+	Keywords []string `json:"keywords,omitempty"`
 	// MemberAudience 非空表示这项只开放给名单里的人或群，nil 表示所有群成员。
 	MemberAudience *ExtensionAudience `json:"member_audience,omitempty"`
 	// Bundled 标记带脚本或资源的 skill。
@@ -147,6 +150,7 @@ func (m *ExtensionManager) Extensions() []ExtensionState {
 		states = append(states, ExtensionState{
 			Kind:        ExtensionKindSkill,
 			ID:          "skill:" + skill.Name,
+			Keywords:    append([]string(nil), skill.Keywords...),
 			Name:        skill.Name,
 			Description: skill.Description,
 			Managed:     skill.Managed,
