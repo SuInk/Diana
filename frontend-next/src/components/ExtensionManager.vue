@@ -32,7 +32,7 @@
     <Modal v-if="presetsOpen" :title="preset ? `添加 ${preset.title}` : '从预设添加 MCP'" @close="closePresets">
       <div class="extension-form">
         <template v-if="!preset">
-          <p class="hint">预设只是帮你填好参数，装上之后就是一条普通的 MCP，改配置、停用、删除都和手工添加的一样。服务本身要自己跑，Diana 不打包别人的二进制。</p>
+          <p class="hint">预设只是帮你填好参数，装上之后就是一条普通的 MCP，改配置、停用、删除都和手工添加的一样。少数服务的二进制随 Diana 一起打包，直接填地址和凭据就能用；其余的要自己先把服务跑起来。</p>
           <p v-if="presetError" class="error-text" role="alert">{{ presetError }}</p>
           <article v-for="entry in presets" :key="entry.preset.id" class="preset-row">
             <div class="extension-info">
@@ -83,7 +83,7 @@
           <p class="hint">{{ editPresetTransportLabel }}<template v-if="editPreset.docs_url"> · <a :href="editPreset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></template></p>
           <label v-for="field in editPresetFields" :key="field.key" class="field">
             <span>{{ field.label }}<template v-if="field.required"> *</template></span>
-            <input v-model.trim="editPresetValues[field.key]" class="input" :type="field.secret ? 'password' : 'text'" :placeholder="field.secret && configuredEnv.length ? '留空保持原值' : field.placeholder" :autocomplete="field.secret ? 'new-password' : 'off'" :disabled="readonly" />
+            <input v-model.trim="editPresetValues[field.key]" class="input" :type="field.secret ? 'password' : 'text'" :placeholder="field.secret ? '留空保持原值' : field.placeholder" :autocomplete="field.secret ? 'new-password' : 'off'" :disabled="readonly" />
             <span v-if="field.hint" class="hint">{{ field.hint }}</span>
           </label>
           <label class="switch"><input v-model="form.enabled" type="checkbox" :disabled="readonly" /><span class="track"></span>服务可用</label>

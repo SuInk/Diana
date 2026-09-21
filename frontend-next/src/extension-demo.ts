@@ -38,13 +38,17 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
   for(const field of transport.fields)if(field.required&&!String(body.values?.[field.key]??'').trim())throw Error(`请填写「${field.label}」`);
   const name=body.name||preset.name;if(entries.some(i=>i.kind==='mcp'&&i.name===name))throw Error('名称已存在');
   const url=String(body.values?.url??'');
-  entries.push({kind:'mcp',id:`mcp:${name}`,name,description:preset.summary,source:url||'managed',managed:true,enabled:true,config:{},preset:preset.id,preset_transport:body.transport,preset_values:Object.fromEntries(transport.fields.filter(f=>!f.secret).map(f=>[f.key,String(body.values?.[f.key]??'')])),transport:body.transport==='stdio'?'stdio':'streamable_http'});
+  // 配置照真实后端的样子拼一份，不然演示站里点开编辑是一张空表。
+  const config=body.transport==='stdio'
+   ?{command:String(body.values?.command||'/app/gitea-mcp'),args:['-t','stdio'],env:{GITEA_HOST:String(body.values?.host??''),GITEA_ACCESS_TOKEN:''},enabled:true,startup_timeout_sec:20,tool_timeout_sec:60}
+   :{url,headers:{},enabled:true,startup_timeout_sec:20,tool_timeout_sec:60};
+  entries.push({kind:'mcp',id:`mcp:${name}`,name,description:preset.summary,source:url||'managed',managed:true,enabled:true,config,preset:preset.id,preset_transport:body.transport,preset_values:Object.fromEntries(transport.fields.filter(f=>!f.secret).map(f=>[f.key,String(body.values?.[f.key]??'')])),transport:body.transport==='stdio'?'stdio':'streamable_http'});
   return {ok:true};
  }
  // 演示站不连任何外部服务，也就没法真的验令牌——照实说，不伪造一个「验过了」。
  if(operation==='preset_verify')return {verified:false,supported:false,message:'演示模式不连接外部服务，无法检测令牌，请在真实部署中检测'};
  const item=entries.find(i=>i.kind===body.kind&&i.name===body.name);
- if(operation==='read'){if(!item)throw Error('扩展不存在');return item.kind==='skill'?{content:item.content,managed:item.managed}:{config:item.config,configured_headers:[],configured_env:[],...(item.preset?{preset:item.preset,preset_transport:item.preset_transport,preset_values:item.preset_values}:{})}}
+ if(operation==='read'){if(!item)throw Error('扩展不存在');return item.kind==='skill'?{content:item.content,managed:item.managed}:{config:item.config,configured_headers:Object.keys(item.config?.headers||{}),configured_env:Object.keys(item.config?.env||{}),...(item.preset?{preset:item.preset,preset_transport:item.preset_transport,preset_values:item.preset_values}:{})}}
  if(operation==='test')throw Error('演示模式不连接外部 MCP，请在真实部署中测试');
  if(operation==='enabled'){if(!item||!body.profile_id)throw Error('请选择机器人');(overrides[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
  if(operation==='members'){if(!item)throw Error('扩展不存在');if(!body.profile_id)throw Error('请选择机器人');(memberAccess[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
