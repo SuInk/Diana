@@ -1045,7 +1045,9 @@ function privateChatOption(userID: string, events: number, name?: string): AppSe
 const contextBudget = computed(() => response.value?.context_budget ?? null);
 
 // 每一层在整条窗口里占的宽度。留白单独算，它是「没有分配出去」的部分。
-const residentContext = computed(() => response.value?.resident_context ?? null);
+// 常驻内容跟着概览那次请求走（服务端缓存 15 秒），不跟列表：翻页重算一遍不值当，
+// 后端也因此只在非列表模式下附带它。
+const residentContext = computed(() => summaryResponse.value?.resident_context ?? response.value?.resident_context ?? null);
 
 // 展开状态按块记，翻页和刷新之间保持不变：排查串味时常常盯着同一块反复看。
 const expandedResidentBlocks = ref(new Set<string>());
