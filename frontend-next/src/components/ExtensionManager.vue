@@ -55,21 +55,21 @@
           </footer>
         </div>
       </article>
-      <!-- 内置预设默认就在列表里占一张卡：它是「有这么个服务，只是还没配」，不是
+      <!-- 内置预设默认就在列表里占一张卡：它是「有这么个服务，只是还没添加」，不是
            藏在某个按钮后面的目录。和插件页里没装的插件一样虚着边、没有开关。 -->
       <article v-for="entry in visiblePresets" :key="entry.preset.id" class="plugin-card uninstalled">
         <div class="plugin-card-head">
           <h2 class="plugin-card-name" :title="entry.preset.title">{{ entry.preset.title }}</h2>
         </div>
         <div class="cluster plugin-card-badges">
-          <span class="badge">未配置</span>
+          <span class="badge">未添加</span>
           <span class="badge">内置预设</span>
         </div>
         <p class="plugin-card-desc" :title="entry.preset.summary">{{ entry.preset.summary }}</p>
         <div class="plugin-card-bottom">
           <div class="plugin-card-meta"><a v-if="entry.preset.docs_url" class="extension-doc-link" :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档<ExternalLink :size="12" aria-hidden="true" /></a></div>
           <footer class="plugin-card-foot">
-            <button class="btn small" type="button" :aria-label="`配置 ${entry.preset.title}`" @click="startPreset(entry.preset)"><Save :size="14" />配置</button>
+            <button class="btn small" type="button" :aria-label="`添加 ${entry.preset.title}`" @click="startPreset(entry.preset)"><Plus :size="14" />添加</button>
             <button class="btn small danger" type="button" :aria-label="`从列表里去掉 ${entry.preset.title}`" title="用不上，从列表里去掉" @click="hidePreset(entry.preset)"><Trash2 :size="14" /></button>
           </footer>
         </div>
@@ -77,7 +77,7 @@
     </div>
     <p v-if="!loading && !visibleItems.length && !visiblePresets.length">{{ items.length || pendingPresets.length ? '没有匹配的扩展。' : `还没有${kind === 'skill' ? '自定义 Skill' : 'MCP 服务'}。` }}</p>
     <p v-if="!loading && hiddenPresets.length" class="hint"><button type="button" class="link-button" @click="showHiddenPresets">显示隐藏的预设（{{ hiddenPresets.length }}）</button></p>
-    <Modal v-if="presetsOpen && preset" :title="`配置 ${preset.title}`" @close="closePresets">
+    <Modal v-if="presetsOpen && preset" :title="`添加 ${preset.title}`" @close="closePresets">
       <div class="extension-form">
         <template v-if="preset">
           <p class="hint">{{ preset.summary }}<template v-if="preset.docs_url"> <a :href="preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></template></p>
@@ -187,7 +187,7 @@ const snapshot=ref('');
 const state=()=>JSON.stringify([form.value,transport.value,headers.value,env.value,fromURL.value,editPresetValues.value,editAdvanced.value]);
 let generation=0;
 async function load(){const current=++generation;loading.value=true;loadError.value='';try{const result=await listManagedExtensions(botScope.value);if(current===generation)items.value=result.items.filter(i=>i.kind===props.kind)}catch(e){if(current===generation)loadError.value=String(e instanceof Error?e.message:e)}finally{if(current===generation)loading.value=false}
- // 未配置的预设也要在列表里占一行，这份清单得跟着刷新。
+ // 还没添加的预设也要在列表里占一行，这份清单得跟着刷新。
  if(props.kind==='mcp')await refreshPresets()}
 function openNew(){form.value=blank();headers.value=env.value='{}';fromURL.value=false;transport.value='http';existing.value=readonly.value=false;error.value='';tested.value=false;discovered.value=[];editPreset.value=null;editPresetTransport.value='';editPresetValues.value={};editAdvanced.value=false;verifyNote.value='';permissionName.value='';loadAudienceInputs(null);editing.value=true;snapshot.value=state()}
 async function edit(item:ManagedExtension){try{const data=await manageExtension<any>({operation:'read',kind:props.kind,name:item.name});openNew();existing.value=true;readonly.value=!item.managed;form.value.name=item.name;permissionName.value=item.name;loadAudienceInputs(item);if(props.kind==='skill')form.value.content=data.content;else{const c=data.config;Object.assign(form.value,c,{args:(c.args||[]).join('\n'),enabled_tools:(c.enabled_tools||[]).join('\n'),disabled_tools:(c.disabled_tools||[]).join('\n'),enabled:c.enabled!==false});transport.value=c.command?'stdio':'http';headers.value=JSON.stringify(c.headers||{},null,2);env.value=JSON.stringify(c.env||{},null,2);if(data.preset){const known=await ensurePresets();editPreset.value=known.find(p=>p.id===data.preset)||null;editPresetTransport.value=data.preset_transport||'';editPresetValues.value={...(data.preset_values||{})};editAdvanced.value=!editPreset.value}}snapshot.value=state()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
@@ -224,7 +224,7 @@ const presetVerifiable=computed(()=>!!(preset.value?.transports.find(t=>t.id===p
 // 编辑已装好的服务时也要这份清单（拿字段定义），所以取一次存着。
 async function ensurePresets(){if(!presets.value.length)await refreshPresets();return presets.value.map(entry=>entry.preset)}
 async function refreshPresets(){try{presets.value=(await listMCPPresets()).items}catch{/* 取不到就少这几行，不拖累已装的服务 */}}
-// 列表里那一行直接进预设表单，不用先打开一个目录弹窗。开关是「去配置」的入口，
+// 列表里那一行直接进预设表单，不用先打开一个目录弹窗。开关是「去添加」的入口，
 // 点完要弹回去：没填完凭据它就还没装上，让它停在打开状态是在撒谎。
 function startPreset(value:MCPPreset,event?:Event){if(event)(event.target as HTMLInputElement).checked=false;presetsOpen.value=true;pickPreset(value)}
 // 还没配的内置预设：列表里照样占一行，装上之后这一行就变成真正的那条服务。
@@ -246,7 +246,7 @@ async function hidePreset(value:MCPPreset){if(!await askConfirm({title:`从列�
 async function showHiddenPresets(){try{await Promise.all(hiddenPresets.value.map(entry=>manageExtension({operation:'preset_show',kind:'mcp',preset:entry.preset.id})));await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 function closePresets(){if(presetSaving.value)return;presetsOpen.value=false;preset.value=null}
 function pickPreset(value:MCPPreset){preset.value=value;presetTransport.value=value.transports[0]?.id||'';presetValues.value={};presetName.value=items.value.some(i=>i.name===value.name)?`${value.name}-2`:value.name;presetError.value='';verifyNote.value=''}
-async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'preset_save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess(result.warning||`已配置${presetVerifiedSuffix(result)}，默认仅主人可用，在它那一行的设置里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
+async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'preset_save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess(result.warning||`已添加${presetVerifiedSuffix(result)}，默认仅主人可用，在它那张卡片的「设置」里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
 // 权限跟着正在编辑的那一条走：设置弹窗里改，改完从列表里取回最新的一份。
 const permissionName=ref(''),accessUsers=ref<string[]>([]),accessGroups=ref<string[]>([]),accessError=ref(''),savingAccess=ref(false);
 const permissionItem=computed(()=>editing.value&&botScope.value&&permissionName.value?items.value.find(i=>i.kind===props.kind&&i.name===permissionName.value)||null:null);
