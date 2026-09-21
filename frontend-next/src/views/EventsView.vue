@@ -67,13 +67,13 @@
           <div>
             <h2>上下文预算 · 群 {{ contextBudget.group_id }}</h2>
             <span class="card-sub">
-              窗口 {{ formatNumber(contextBudget.context_window) }} token，四层合计
+              窗口 {{ formatNumber(contextBudget.context_window) }} token，各层合计
               {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出
             </span>
           </div>
         </div>
         <div class="card-body">
-          <div class="budget-bar" role="img" :aria-label="`四层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
+          <div class="budget-bar" role="img" :aria-label="`各层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
             <span
               v-for="segment in contextBudgetSegments"
               :key="segment.key"
@@ -1463,9 +1463,10 @@ onBeforeUnmount(() => {
   max-width: 320px;
 }
 
-/* 四层是同一份窗口切出来的有序片段，不是互不相干的分类，所以用主题色的一条
-   明度梯度，而不是四种色相：既表达了「同一个整体」，也不会跟四套可选主题色
-   里的任何一种撞车。留白用中性色，它不属于任何一层。 */
+/* 各层是同一份窗口切出来的有序片段，不是互不相干的分类，所以用主题色的一条
+   明度梯度，而不是几种色相：既表达了「同一个整体」，也不会跟四套可选主题色
+   里的任何一种撞车。留白用中性色，它不属于任何一层。层是会增减的（自述就是
+   后加的），新层在梯度末尾续一档即可。 */
 .budget-bar {
   display: flex;
   width: 100%;
@@ -1496,6 +1497,10 @@ onBeforeUnmount(() => {
 
 .budget-slice-core_memory {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.budget-slice-self_notes {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .budget-slice-headroom {
