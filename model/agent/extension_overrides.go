@@ -12,8 +12,36 @@ import (
 // 不改文件结构：`mcp:foo` 是这台机器人用不用，`members:mcp:foo` 是群成员能不能用。
 const memberOverridePrefix = "members:"
 
+// 常驻档位共用同一份文件，再加一个前缀：`resident:mcp:foo` 是这台机器人把这条服务
+// 的工具常驻还是按需。键不在就是跟随默认，所以三档只需要「有没有这个键」加一个 bool。
+const residentOverridePrefix = "resident:"
+
 // MemberOverrideKey 返回某个扩展的群成员权限键。
 func MemberOverrideKey(id string) string { return memberOverridePrefix + id }
+
+// ResidentOverrideKey 返回某个扩展的常驻档位键。
+func ResidentOverrideKey(id string) string { return residentOverridePrefix + id }
+
+// ToolResidentID 是单个内置工具在档位表里的 ID。内置工具不属于任何扩展——它们直接挂
+// 在运行时上，按插件分组反而分不出来，所以档位的单位就是工具本身。
+func ToolResidentID(name string) string { return "tool:" + strings.TrimSpace(name) }
+
+// SaveExtensionResidency 写入一个档位；resident 为 nil 表示退回默认档。
+func SaveExtensionResidency(root, profile, id string, resident *bool) error {
+	if resident == nil {
+		return clearExtensionOverride(root, profile, ResidentOverrideKey(id))
+	}
+	return saveExtensionOverride(root, profile, ResidentOverrideKey(id), *resident)
+}
+
+// ResidentOverride 读出某个扩展的档位：nil 表示跟随默认。
+func ResidentOverride(values map[string]bool, id string) *bool {
+	resident, ok := values[ResidentOverrideKey(id)]
+	if !ok {
+		return nil
+	}
+	return &resident
+}
 
 // MemberAllowedExtensionIDs 列出这台机器人放开给群成员的扩展 ID。机器人级停用
 // 优先：关掉的服务不会因为成员开关还开着就恢复。
@@ -63,6 +91,31 @@ func LoadExtensionOverrides(root, profile string) (map[string]bool, error) {
 	}
 	return values[profile], nil
 }
+
+// clearExtensionOverride 删掉一个键，让它退回默认档；saveExtensionOverride 只能写
+// true/false，表达不了「跟随默认」这一档。
+func clearExtensionOverride(root, profile, id string) error {
+	lock := extensionPathLock(extensionOverridePath(root))
+	lock.Lock()
+	defer lock.Unlock()
+	values, err := loadExtensionOverrides(root)
+	if err != nil {
+		return err
+	}
+	if values[profile] == nil {
+		return nil
+	}
+	if _, ok := values[profile][id]; !ok {
+		return nil
+	}
+	delete(values[profile], id)
+	data, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	return saveExtensionFile(extensionOverridePath(root), data)
+}
+
 func saveExtensionOverride(root, profile, id string, enabled bool) error {
 	lock := extensionPathLock(extensionOverridePath(root))
 	lock.Lock()
@@ -99,9 +152,13 @@ func (r *ToolRegistry) ApplyExtensionOverrides(values map[string]bool) {
 	}
 	skills := []SkillMetadata{}
 	for _, skill := range r.Skills() {
-		if enabled, ok := values["skill:"+skill.Name]; !ok || enabled {
-			skills = append(skills, skill)
+		if enabled, ok := values["skill:"+skill.Name]; ok && !enabled {
+			continue
 		}
+		if resident := ResidentOverride(values, "skill:"+skill.Name); resident != nil {
+			skill.Resident = *resident
+		}
+		skills = append(skills, skill)
 	}
 	r.SetSkills(skills)
 	tools := newLiveSkillTools(r.Skills)

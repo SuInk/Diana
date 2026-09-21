@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/SuInk/diana/model/llm"
@@ -306,4 +307,91 @@ func cloneDeferredInput(value any) any {
 	default:
 		return value
 	}
+}
+
+// ResolveCoreTools 按用户配的扩展档位调整常驻工具名单。
+//
+// base 是内置的默认名单，owners 把扩展 ID 映射到它注册的工具名（内置插件、MCP 服务
+// 各自一份），overrides 是 `.extension-overrides.json` 里这台机器人的覆盖值。档位只有
+// 三种：没配这个键就用默认名单的结果，配成 true 把这个扩展的工具全部常驻，配成 false
+// 全部改按需。
+//
+// 返回的顺序跟着 base 走，新增的按工具名排序：这个数组直接决定请求里 tools 的顺序，
+// 顺序一抖前缀缓存就断。扩展 ID 也排了一次序，那是另一回事——同一个工具名被两个扩展
+// 声明时，决定谁最后写赢，和输出顺序无关。
+func ResolveCoreTools(base []string, owners map[string][]string, overrides map[string]bool) []string {
+	resident := make(map[string]bool, len(base))
+	for _, name := range base {
+		if name = strings.TrimSpace(name); name != "" {
+			resident[name] = true
+		}
+	}
+	ids := make([]string, 0, len(owners))
+	for id := range owners {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		override := ResidentOverride(overrides, id)
+		if override == nil {
+			continue
+		}
+		names := append([]string(nil), owners[id]...)
+		sort.Strings(names)
+		for _, name := range names {
+			if name = strings.TrimSpace(name); name != "" {
+				resident[name] = *override
+			}
+		}
+	}
+	out := make([]string, 0, len(resident))
+	seen := map[string]bool{}
+	for _, name := range base {
+		if resident[name] && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	added := make([]string, 0, len(resident))
+	for name, keep := range resident {
+		if keep && !seen[name] {
+			added = append(added, name)
+		}
+	}
+	sort.Strings(added)
+	return append(out, added...)
+}
+
+// ToolOwners 把当前注册表里的工具按「档位单位」分组：MCP 服务的工具归到它自己那条
+// 服务，其余内置工具各自成组。内置工具不属于任何插件——它们直接挂在运行时上，按插件
+// 分组既分不干净，也没法表达「戳一戳常驻、发文件按需」这种逐个工具的要求。
+func (r *ToolRegistry) ToolOwners() map[string][]string {
+	if r == nil {
+		return nil
+	}
+	owners := map[string][]string{}
+	owned := map[string]bool{}
+	for _, state := range r.Extensions() {
+		if state.Kind != ExtensionKindMCP || len(state.Tools) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(state.Tools))
+		for _, name := range state.Tools {
+			if _, ok := r.Get(name); !ok {
+				continue
+			}
+			owned[name] = true
+			names = append(names, name)
+		}
+		if len(names) > 0 {
+			owners[state.ID] = names
+		}
+	}
+	for _, name := range r.Names() {
+		if owned[name] {
+			continue
+		}
+		owners[ToolResidentID(name)] = []string{name}
+	}
+	return owners
 }
