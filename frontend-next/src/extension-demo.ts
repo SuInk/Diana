@@ -25,6 +25,26 @@ const demoMCPPresets=[{
    {key:'authorization',label:'Authorization 请求头',placeholder:'留空表示不带',hint:'只有给 gitea-mcp 另加了鉴权时才需要填。',secret:true}
   ]}
  ]
+},{
+ id:'mcdonalds',name:'mcdonalds',title:'麦当劳中国',
+ summary:'麦当劳中国官方 MCP：查门店、菜单与营养信息，领麦麦省优惠券、积分兑换，以及麦乐送、到店取餐、得来速、团餐点单。令牌等同于点单权限，能直接下单付款。',
+ docs_url:'https://github.com/M-China/mcd-mcp-server',
+ transports:[
+  {id:'http',label:'官方远程服务',hint:'麦当劳中国托管，不用自己跑任何东西，贴上令牌就能用。仅面向中国大陆（不含港澳台），每个令牌每分钟最多 600 次请求。',verifiable:true,fields:[
+   {key:'token',label:'访问令牌',hint:'在 open.mcd.cn/mcp 用手机号登录后于控制台激活。这个令牌等同于你的点单权限，能直接下单付款，所以这条服务默认只有主人能用——放开给群成员等于让别人用你的账号点餐。',required:true,secret:true},
+   {key:'url',label:'服务地址',placeholder:'https://mcp.mcd.cn',hint:'官方地址已经填好，除非官方改了地址，否则不用动。'}
+  ]}
+ ]
+},{
+ id:'luckin',name:'luckin',title:'瑞幸咖啡',
+ summary:'瑞幸官方 MCP：查附近门店和商品、预览价格、一句话点单与再来一单。令牌等同于点单权限，能直接下单付款。',
+ docs_url:'https://open.lkcoffee.com',
+ transports:[
+  {id:'http',label:'官方远程服务',hint:'瑞幸托管，不用自己跑任何东西，贴上令牌就能用。',verifiable:true,fields:[
+   {key:'token',label:'访问令牌',hint:'用日常点单的手机号登录 open.lkcoffee.com 自助获取。这个令牌等同于你的点单权限，能直接下单付款，所以这条服务默认只有主人能用——放开给群成员等于让别人用你的账号点单。',required:true,secret:true},
+   {key:'url',label:'服务地址',placeholder:'https://gwmcp.lkcoffee.com/order/user/mcp',hint:'官方地址已经填好，除非官方改了地址，否则不用动。'}
+  ]}
+ ]
 }];
 
 export function extensionDemoResponse(method:string,profile:string,body:Record<string,any>){
@@ -39,9 +59,10 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
   const name=body.name||preset.name;if(entries.some(i=>i.kind==='mcp'&&i.name===name))throw Error('名称已存在');
   const url=String(body.values?.url??'');
   // 配置照真实后端的样子拼一份，不然演示站里点开编辑是一张空表。
+  const endpoint=url||String(transport.fields.find(f=>f.key==='url')?.placeholder??'');
   const config=body.transport==='stdio'
    ?{command:String(body.values?.command||'/app/gitea-mcp'),args:['-t','stdio'],env:{GITEA_HOST:String(body.values?.host??''),GITEA_ACCESS_TOKEN:''},enabled:true,startup_timeout_sec:20,tool_timeout_sec:60}
-   :{url,headers:{},enabled:true,startup_timeout_sec:20,tool_timeout_sec:60};
+   :{url:endpoint,headers:body.values?.token?{Authorization:''}:{},enabled:true,startup_timeout_sec:20,tool_timeout_sec:60};
   entries.push({kind:'mcp',id:`mcp:${name}`,name,description:preset.summary,source:url||'managed',managed:true,enabled:true,config,preset:preset.id,preset_transport:body.transport,preset_values:Object.fromEntries(transport.fields.filter(f=>!f.secret).map(f=>[f.key,String(body.values?.[f.key]??'')])),transport:body.transport==='stdio'?'stdio':'streamable_http'});
   return {ok:true};
  }

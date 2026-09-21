@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // 预设装出来的必须是一份能过校验的普通 MCP 配置，不然「一键装上」只是把错误
@@ -251,5 +253,76 @@ func TestGiteaPresetValuesForEditing(t *testing.T) {
 	remote.Preset, remote.PresetTransport = "gitea", "http"
 	if _, supported, err := presetVerifyConfig(context.Background(), remote); supported || err != nil {
 		t.Fatalf("HTTP 接法没有凭据可验：supported=%v err=%v", supported, err)
+	}
+}
+
+// 麦当劳和瑞幸都是「官方托管远程 MCP + 一个 Bearer 令牌」，配置要拼对，令牌要能
+// 在保存前验出来——这两条服务的工具是会真的下单的，令牌错了不能等到下单时才发现。
+func TestBearerTokenPresetsConfigAndVerify(t *testing.T) {
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	for _, presetID := range []string{"mcdonalds", "luckin"} {
+		config, err := mcpPresetConfig(presetID, "http", map[string]string{"token": "good-token"}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := mcpServerConfigFromInput(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := server.validate(); err != nil {
+			t.Fatalf("%s 预设配置不合法：%v", presetID, err)
+		}
+		if server.URL == "" {
+			t.Fatalf("%s 没有填地址时应当用官方地址：%#v", presetID, server)
+		}
+		if server.Headers["Authorization"] != "Bearer good-token" {
+			t.Fatalf("%s 的令牌没按 Bearer 拼：%#v", presetID, server.Headers)
+		}
+		// 整行粘贴（自带 Bearer 前缀）不能拼成 "Bearer Bearer …"。
+		pasted, err := mcpPresetConfig(presetID, "http", map[string]string{"token": "Bearer good-token"}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := pasted["headers"].(map[string]any)["Authorization"]; got != "Bearer good-token" {
+			t.Fatalf("%s 重复加了前缀：%v", presetID, got)
+		}
+		// 令牌留空是「沿用旧的」：这时候一个 Authorization 都不能写出去，
+		// 否则保存那段会把 "Bearer " 当成新值，把旧令牌顶掉。
+		blank, err := mcpPresetConfig(presetID, "http", map[string]string{}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := blank["headers"]; ok {
+			t.Fatalf("%s 令牌留空时不该写请求头：%#v", presetID, blank)
+		}
+	}
+
+	// 令牌不对时远程网关在 HTTP 这层就打回来，要判成凭据问题而不是「连不上」。
+	upstream := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return newEchoMCPServer() }, &mcpsdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer good-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		upstream.ServeHTTP(w, r)
+	}))
+	defer remote.Close()
+
+	config, err := mcpPresetConfig("mcdonalds", "http", map[string]string{"token": "good-token", "url": remote.URL}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := mcpServerConfigFromInput(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Preset, server.PresetTransport = "mcdonalds", "http"
+	if _, supported, err := presetVerifyConfig(context.Background(), server); err != nil || !supported {
+		t.Fatalf("有效令牌应当验证通过：supported=%v err=%v", supported, err)
+	}
+
+	server.Headers["Authorization"] = "Bearer stale-token"
+	if _, _, err := presetVerifyConfig(context.Background(), server); !errors.Is(err, ErrPresetCredentialRejected) {
+		t.Fatalf("被网关拒掉的令牌要判成凭据问题，实际 %v", err)
 	}
 }

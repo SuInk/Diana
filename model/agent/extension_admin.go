@@ -357,7 +357,11 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		case err != nil:
 			result["warning"] = fmt.Sprintf("已保存，但没能验证凭据：%v", err)
 		default:
-			result["account"] = account
+			// 验过了才说验过：有的接法根本没法验，不能让界面替它吹。
+			result["verified"] = true
+			if account != "" {
+				result["account"] = account
+			}
 		}
 	}
 	servers[req.Name] = server
