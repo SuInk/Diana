@@ -584,30 +584,36 @@ type BotConfig struct {
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
-	NotebookSharedScopeEnabled *bool           `json:"notebook_shared_scope_enabled,omitempty"`
-	PromptInjectTime           *bool           `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules *bool           `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender    *bool           `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint     *bool           `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText     string          `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText   string          `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate         string          `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate  string          `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText        string          `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText         string          `json:"prompt_wake_only_text,omitempty"`
-	ProactiveReplyRouterPrompt string          `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt       string          `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars              int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyPreserveLineBreaks    *bool           `json:"reply_preserve_line_breaks,omitempty"`
-	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
-	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold      int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode            RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
+	NotebookSharedScopeEnabled *bool  `json:"notebook_shared_scope_enabled,omitempty"`
+	PromptInjectTime           *bool  `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules *bool  `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender    *bool  `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint     *bool  `json:"prompt_chinese_slang_hint,omitempty"`
+	PromptChineseSlangText     string `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText   string `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate         string `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate  string `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText        string `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText         string `json:"prompt_wake_only_text,omitempty"`
+	// ProactiveReplyRouterPrompt 是旧的整段路由提示词。Participation 的评分契约取代
+	// 它之后运行时不再读取（见 proactiveReplyRouterPromptForChatIn），字段保留只为旧
+	// 配置能原样存取；要补判据用 ProactiveReplyExtraCriteria。
+	ProactiveReplyRouterPrompt string `json:"proactive_reply_router_prompt,omitempty"`
+	// ProactiveReplyExtraCriteria 是接话评分的补充判据：本群的称呼、黑话和禁区。
+	// 拼在内置评分提示词尾部，不替代评分口径，也不改变裸 JSON 输出契约。
+	ProactiveReplyExtraCriteria string          `json:"proactive_reply_extra_criteria,omitempty"`
+	ProactiveReplyPrompt        string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars               int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
+	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
+	DirectReplyChunkSize        int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold       int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode             RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy             RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
 	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
@@ -837,6 +843,8 @@ type GroupConfig struct {
 	// nil 跟随机器人；true/false 在本群对主动和直接回复统一开启/关闭账号安全审核。
 	ReplyAccountSafetyAuditEnabled *bool  `json:"reply_account_safety_audit_enabled,omitempty"`
 	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
+	// 本群的补充判据，留空跟随机器人级。
+	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
 	// ExtensionAccess 按群覆盖 MCP / Skill 的开放范围，键是扩展 ID，没写的跟随
 	// 机器人那一档。群管理员只能往严的方向改。
 	ExtensionAccess        map[string]GroupExtensionAccess `json:"extension_access,omitempty"`
@@ -1000,20 +1008,21 @@ type ConfigPayload struct {
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
-	NotebookSharedScopeEnabled *bool           `json:"notebook_shared_scope_enabled,omitempty"`
-	ProactiveReplyRouterPrompt string          `json:"proactive_reply_router_prompt,omitempty"`
-	ProactiveReplyPrompt       string          `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars              int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyPreserveLineBreaks    *bool           `json:"reply_preserve_line_breaks,omitempty"`
-	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
-	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold      int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode            RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
+	NotebookSharedScopeEnabled  *bool           `json:"notebook_shared_scope_enabled,omitempty"`
+	ProactiveReplyRouterPrompt  string          `json:"proactive_reply_router_prompt,omitempty"`
+	ProactiveReplyExtraCriteria string          `json:"proactive_reply_extra_criteria,omitempty"`
+	ProactiveReplyPrompt        string          `json:"proactive_reply_prompt,omitempty"`
+	MaxInputChars               int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
+	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
+	DirectReplyChunkSize        int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold       int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode             RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy             RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
 	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
@@ -1938,6 +1947,9 @@ func (cfg BotConfig) Validate() error {
 	if cfg.WelcomeLLMCooldownSeconds < 0 || cfg.WelcomeLLMCooldownSeconds > 24*60*60 {
 		return fmt.Errorf("欢迎词 LLM 冷却必须在 0 到 86400 秒之间")
 	}
+	if criteria := strings.TrimSpace(cfg.ProactiveReplyExtraCriteria); len([]rune(criteria)) > routerCriteriaMaxRunes {
+		return fmt.Errorf("主动回复补充判据不能超过 %d 字", routerCriteriaMaxRunes)
+	}
 	if cfg.OneBotTransport == "" {
 		cfg.OneBotTransport = OneBotTransportReverseWS
 	}
@@ -2164,6 +2176,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:        cfg.ProactiveReplyRouterPrompt,
+		ProactiveReplyExtraCriteria:       cfg.ProactiveReplyExtraCriteria,
 		ProactiveReplyPrompt:              cfg.ProactiveReplyPrompt,
 		MaxInputChars:                     cfg.MaxInputChars,
 		MaxReplyChars:                     cfg.MaxReplyChars,
@@ -2372,6 +2385,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
 		ProactiveReplyRouterPrompt:      payload.ProactiveReplyRouterPrompt,
+		ProactiveReplyExtraCriteria:     strings.TrimSpace(payload.ProactiveReplyExtraCriteria),
 		ProactiveReplyPrompt:            payload.ProactiveReplyPrompt,
 		MaxInputChars:                   payload.MaxInputChars,
 		MaxReplyChars:                   payload.MaxReplyChars,

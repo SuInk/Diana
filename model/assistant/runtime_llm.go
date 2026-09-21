@@ -120,9 +120,11 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
 // 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
-func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
+func proactiveReplyRouterPromptForChatIn(configured, criteria string, chatIn chatInSettings, social bool) string {
 	if chatIn.Participation != nil {
-		return chatIn.Participation.prompt()
+		// 评分档位和口径由 Participation 决定；管理员的补充判据只拼在尾部，评分契约
+		// （两项、裸 JSON）不交给用户改。configured 是被取代的旧路由提示词，仍然不读。
+		return appendRouterCriteria(chatIn.Participation.prompt(), criteria)
 	}
 	prompt := proactiveReplyRouterSystemPrompt(configured)
 	if chatIn.SuperActive {
