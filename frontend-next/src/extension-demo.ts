@@ -12,17 +12,17 @@ const memberAudience:Record<string,Record<string,{min_role?:string;users:string[
 // demoMCPPresets 复刻 model/agent/mcp_presets.go 的内置清单，只留界面要用的字段。
 const demoMCPPresets=[{
  id:'gitea',name:'gitea',title:'Gitea',
- summary:'接入自建或公有 Gitea 的仓库、Issue 与 Pull Request。需要先自己跑一份 gitea-mcp（官方提供二进制和 Docker 镜像），Diana 不打包它的二进制。',
+ summary:'接入自建或公有 Gitea 的仓库、Issue 与 Pull Request。官方 gitea-mcp 随 Diana 一起打包，填实例地址和访问令牌就能用。',
  docs_url:'https://gitea.com/gitea/gitea-mcp',
  transports:[
-  {id:'http',label:'连接已经跑起来的 gitea-mcp',hint:'推荐：用官方 Docker 镜像跑一份 gitea-mcp（-t http），这里填它的地址。令牌配在那一侧，Diana 不经手。',fields:[
-   {key:'url',label:'gitea-mcp 服务地址',placeholder:'http://127.0.0.1:8080/mcp',required:true},
-   {key:'authorization',label:'Authorization 请求头',placeholder:'留空表示不带',hint:'只有给 gitea-mcp 另加了鉴权时才需要填。',secret:true}
-  ]},
-  {id:'stdio',label:'由 Diana 启动本机的 gitea-mcp',hint:'宿主机部署、且本机已经装了 gitea-mcp 时可用。容器部署里镜像没有这个命令，装上会连不上。',fields:[
+  {id:'stdio',label:'用自带的 gitea-mcp',hint:'推荐：Diana 直接拉起随包发布的 gitea-mcp，令牌只存在这条 MCP 的环境变量里，不经过第三方。',fields:[
    {key:'host',label:'Gitea 实例地址',placeholder:'https://git.example.com',required:true},
    {key:'token',label:'访问令牌',hint:'Gitea 里生成的个人访问令牌，按 MCP 环境变量存放，不回显。',required:true,secret:true},
-   {key:'command',label:'可执行文件',placeholder:'gitea-mcp',hint:'留空按 gitea-mcp 处理；不在 PATH 里就填绝对路径。'}
+   {key:'command',label:'可执行文件',placeholder:'留空用自带的那份',hint:'只有要换成自己编译或另外安装的 gitea-mcp 时才填，可填命令名或绝对路径。'}
+  ]},
+  {id:'http',label:'连接已经跑起来的 gitea-mcp',hint:'已经用官方 Docker 镜像或别的机器跑了一份 gitea-mcp（-t http）时填它的地址。令牌配在那一侧，Diana 不经手。',fields:[
+   {key:'url',label:'gitea-mcp 服务地址',placeholder:'http://127.0.0.1:8080/mcp',required:true},
+   {key:'authorization',label:'Authorization 请求头',placeholder:'留空表示不带',hint:'只有给 gitea-mcp 另加了鉴权时才需要填。',secret:true}
   ]}
  ]
 }];

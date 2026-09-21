@@ -20,6 +20,16 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o /out/diana-webui ./cmd/webui
 
+# 随包发布的 gitea-mcp：只收 Gitea 官方的发布产物，版本和 SHA-256 钉在脚本里，
+# 对不上就在这里构建失败，不会把一个没核对过的二进制发出去。拉取的是目标平台的
+# 产物，构建机自己跑不跑得动它无所谓，所以停在 BUILDPLATFORM 上。
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS gitea-mcp
+ARG TARGETOS
+ARG TARGETARCH
+RUN apk add --no-cache bash curl tar
+COPY scripts/fetch-gitea-mcp.sh /usr/local/bin/fetch-gitea-mcp.sh
+RUN /usr/local/bin/fetch-gitea-mcp.sh "${TARGETOS}" "${TARGETARCH}" /out
+
 # 两个运行时变体共用的轻量基础。
 # ca-certificates 供 Go 进程访问 HTTPS API；fontconfig 是渲染出图的基础；
 # nodejs/npm 供插件/工具链运行；bubblewrap 是 Agent 执行本地命令时的沙盒——
@@ -35,6 +45,9 @@ RUN apk add --no-cache ca-certificates fontconfig nodejs npm git libgcc libstdc+
     && adduser -D -H -h /app/data/home -u 10001 diana \
     && mkdir -p /app/data/home /app/logs \
     && chown -R diana:diana /app/data /app/logs
+# gitea-mcp 放在主程序旁边，MCP 预设按这个位置拉起它；许可证随二进制一起带上。
+COPY --from=gitea-mcp /out/gitea-mcp /app/gitea-mcp
+COPY --from=gitea-mcp /out/gitea-mcp.LICENSE /app/gitea-mcp.LICENSE
 
 # 完整版运行时：预装 Chromium（网页读取/截图）、Noto CJK 字体、ffmpeg、
 # yt-dlp 与 tesseract 及中英语言包（图片文字识别插件的本地离线后端）。
