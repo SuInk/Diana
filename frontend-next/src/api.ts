@@ -1426,7 +1426,7 @@ export function listPlugins(profile = ""): Promise<PluginState[]> {
   return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
-export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; error?: string }
+export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; resident?: boolean; error?: string }
 export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
   return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
 }
@@ -1439,6 +1439,17 @@ export function listMCPPresets(): Promise<{items: {preset: MCPPreset; installed:
 }
 export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown>): Promise<T> {
   return requestJSON<T>("/api/assistant/extensions", {method:"POST", body:JSON.stringify(input)});
+}
+
+/** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
+export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp"; name: string; description?: string; tools?: string[]; default: boolean; resident?: boolean }
+export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]}> {
+  return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
+}
+export function setAgentResidency(profile: string, id: string, resident: boolean | null): Promise<{ok: boolean}> {
+  const body: Record<string, unknown> = {profile_id: profile, id};
+  if (resident !== null) body.resident = resident;
+  return requestJSON("/api/assistant/agent-residency", {method: "POST", body: JSON.stringify(body)});
 }
 
 export function installPlugin(id: string): Promise<PluginState> {

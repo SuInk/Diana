@@ -49,6 +49,8 @@ type ExtensionState struct {
 	Available   *bool         `json:"available,omitempty"`
 	// MembersEnabled 只在按机器人读取目录时返回：nil 表示这类扩展没有成员开关。
 	MembersEnabled *bool `json:"members_enabled,omitempty"`
+	// Resident 是这台机器人给这个扩展配的常驻档位：nil 表示跟随默认档。
+	Resident *bool `json:"resident,omitempty"`
 	// MemberAudience 非空表示这项只开放给名单里的人或群，nil 表示所有群成员。
 	MemberAudience *ExtensionAudience `json:"member_audience,omitempty"`
 	// Bundled 标记带脚本或资源的 skill。

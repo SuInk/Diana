@@ -345,6 +345,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/plugins", h.listPlugins)
 	router.GET(base+"/extensions", h.extensions)
 	router.POST(base+"/extensions", h.extensions)
+	router.GET(base+"/agent-residency", h.agentResidency)
+	router.POST(base+"/agent-residency", h.setAgentResidency)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)

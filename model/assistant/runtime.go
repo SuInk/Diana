@@ -513,6 +513,8 @@ type Runtime struct {
 	historyImageDescBackoff time.Duration
 	agentRegistryMu         sync.Mutex
 	agentRegistryCache      map[string]*agent.ToolRegistry
+	agentResidencyMu        sync.RWMutex
+	agentResidencyCatalog   map[string][]AgentResidencyEntry
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -4202,6 +4204,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
+		// 常驻名单要等注册表建好才算得出来：档位是用户按扩展配的，得知道这一轮
+		// 到底注册了哪些工具、哪条 MCP 带了哪几个。
+		agentCfg.CoreTools = r.agentCoreTools(event, registry)
+		r.rememberAgentResidencyCatalog(event, registry)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {

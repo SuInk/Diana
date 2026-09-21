@@ -699,6 +699,11 @@ func schemaAllowsStrictMode(schema map[string]any) bool {
 	return true
 }
 
+// CompactToolDescription 把工具描述压成目录里的一行，界面和提示词共用同一份压法。
+func CompactToolDescription(description string, maxRunes int) string {
+	return compactToolDescription(description, maxRunes)
+}
+
 func compactToolDescription(description string, maxRunes int) string {
 	description = strings.Join(strings.Fields(description), " ")
 	if maxRunes <= 0 || len([]rune(description)) <= maxRunes {

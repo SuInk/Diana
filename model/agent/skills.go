@@ -30,6 +30,9 @@ type SkillMetadata struct {
 	ShortDescription string `json:"short_description,omitempty"`
 	Source           string `json:"source,omitempty"`
 	Managed          bool   `json:"managed,omitempty"`
+	// Resident 表示这个 skill 的正文随请求一起下发，模型不必再 read_skill。默认按需：
+	// 目录只给名称和用途。正文很长的 skill 常驻会把每一轮都撑大，档位由用户自己配。
+	Resident bool `json:"resident,omitempty"`
 	// Bundled 表示这个 skill 目录里除 SKILL.md 外还带了脚本或资源。正文之外的
 	// 文件只有拿得到 run_command / read_file 的会话才碰得到，权限提示要说清楚。
 	Bundled bool `json:"bundled,omitempty"`
@@ -226,6 +229,7 @@ func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
 	builder.WriteString("## Skills\n")
 	builder.WriteString("A skill is a set of instructions provided through a `SKILL.md` source. The entries below are only names and descriptions; no skill body is included in this request.\n")
 	builder.WriteString("### Available skills\n")
+	var resident []SkillMetadata
 	for _, skill := range skills {
 		line := fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description)
 		if builder.Len()+len(line) > budget {
@@ -233,12 +237,49 @@ func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
 			break
 		}
 		builder.WriteString(line)
+		if skill.Resident {
+			resident = append(resident, skill)
+		}
 	}
 	builder.WriteString("### How to use skills\n")
 	builder.WriteString("- If the user names a skill with `$SkillName`, or the task clearly matches a skill description, use that skill for this turn.\n")
 	builder.WriteString("- A catalog entry is not the skill: always call `read_skill` with its name first, then follow the full `SKILL.md` instructions.\n")
 	builder.WriteString("- When a `SKILL.md` references relative files, resolve them relative to the directory of the `path` returned by `read_skill`.\n")
+	// 常驻 skill 的正文直接跟在目录后面:用户把它配成常驻,就是因为「要用时再读」
+	// 在长上下文里读不到。正文在这里给全,模型不必再 read_skill。
+	remaining := ResidentSkillBodyBudget
+	for _, skill := range resident {
+		body := strings.TrimSpace(skillBody(skill))
+		if body == "" {
+			continue
+		}
+		if len(body) > remaining {
+			builder.WriteString(fmt.Sprintf("\n### %s (resident, body too long)\nCall `read_skill` with %q: it is marked resident but its body did not fit the budget.\n", skill.Name, skill.Name))
+			continue
+		}
+		remaining -= len(body)
+		builder.WriteString("\n### Resident skill: " + skill.Name + "\n")
+		builder.WriteString("Its full `SKILL.md` follows; do not call `read_skill` for it.\n\n")
+		builder.WriteString(body)
+		builder.WriteString("\n")
+	}
 	return strings.TrimSpace(builder.String())
+}
+
+// skillBody 返回 SKILL.md 正文；内嵌 skill 自带正文,本地 skill 现读。读不出来就当
+// 没有正文,目录行仍在,模型还能走 read_skill。
+func skillBody(skill SkillMetadata) string {
+	if skill.Content != "" {
+		return skill.Content
+	}
+	if skill.Path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(skill.Path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func SelectExplicitSkills(skills []SkillMetadata, text string) []SkillMetadata {
