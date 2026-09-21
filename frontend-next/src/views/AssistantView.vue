@@ -3041,9 +3041,21 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
   );
 }
 
+// orderedRoleKeys 按「模型分配」那几行的排法给用途排序，不跟数据来源走。
+// 服务端的 model_roles 是个 map，序列化出来按字母排；草稿又可能在编辑途中被
+// 别处的改动整份换掉，或者因为后加了一档而把新键追加在末尾。键序跟着这些走，
+// 保存出去的配置就会莫名其妙换个样子，配置对比和导出全是噪音。认不出的键按
+// 原样排在后面，别把以后新增的用途悄悄丢掉。
+function orderedRoleKeys(roles: Partial<Record<string, unknown>>): string[] {
+  const known = modelRoleRows.map((row) => row.key).filter((key) => key in roles);
+  return [...known, ...Object.keys(roles).filter((key) => !known.includes(key as RoleKey))];
+}
+
 function setRoleForm(source: BotProfileConfig["model_roles"]): void {
+  const incoming = source ?? {};
   const roles: typeof roleForm.value = {};
-  for (const [key, role] of Object.entries(source ?? {})) {
+  for (const key of orderedRoleKeys(incoming)) {
+    const role = incoming[key];
     roles[key as RoleKey] = {
       profile_id: role.profile_id,
       group: role.group,
@@ -3816,7 +3828,8 @@ async function save(): Promise<void> {
   busy.value = true;
   try {
     const modelRoles: BotProfileConfig["model_roles"] = {};
-    for (const [key, role] of Object.entries(roleForm.value)) {
+    for (const key of orderedRoleKeys(roleForm.value)) {
+      const role = roleForm.value[key as RoleKey];
       if (key !== "chat" && role?.follow_chat) {
         modelRoles[key] = { model: "", follow_chat: true };
         continue;
