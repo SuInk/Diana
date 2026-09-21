@@ -33,9 +33,7 @@ func TestClaimEvidenceLedgerAcceptsRenderedPageAsFirstPartyEvidence(t *testing.T
 		ID: "c1", Status: ClaimStatusSupported, Summary: "官方页面直接写明",
 		Evidence: []ClaimEvidence{{URL: "https://official.example/page", Relation: "supports"}},
 	}}
-	if reason, ok := ledger.validateFinal(updates); !ok {
-		t.Fatalf("已渲染页面被判成无效证据：%s", reason)
-	}
+	ledger.applyUpdates(updates)
 	evidence := ledger.traces()[0].Evidence
 	if len(evidence) != 1 || evidence[0].SourceType != "first_party" || evidence[0].Distance != "direct" {
 		t.Fatalf("evidence=%#v", evidence)
@@ -58,31 +56,10 @@ func TestClaimEvidenceLedgerIgnoresEmptyRenderedPage(t *testing.T) {
 		ID: "c1", Status: ClaimStatusSupported, Summary: "声称已确认",
 		Evidence: []ClaimEvidence{{URL: "https://blank.example/", Relation: "supports"}},
 	}}
-	if reason, ok := ledger.validateFinal(updates); ok || !strings.Contains(reason, "blank.example") {
-		t.Fatalf("reason=%q ok=%v", reason, ok)
-	}
-}
-
-func TestClaimEvidenceLedgerBindingFailureNamesRejectedSourceAndAlternatives(t *testing.T) {
-	ledger := newClaimEvidenceLedger()
-	ledger.prepareSearch(map[string]any{
-		"claims":    []any{map[string]any{"id": "c1", "statement": "待验证事实"}},
-		"claim_ids": []any{"c1"},
-	})
-	searchResult, _ := json.Marshal(webSearchResult{
-		Status: "ok", StopReason: "sufficient_evidence", Sources: []string{"https://searched.example/record"},
-	})
-	ledger.observeSearch(string(searchResult), nil)
-	updates := []ClaimUpdate{{
-		ID: "c1", Status: ClaimStatusSupported, Summary: "声称已确认",
-		Evidence: []ClaimEvidence{{URL: "https://invented.example/fact", Relation: "supports"}},
-	}}
-	reason, ok := ledger.validateFinal(updates)
-	if ok {
-		t.Fatal("未检索来源不应通过校验")
-	}
-	if !strings.Contains(reason, "invented.example") || !strings.Contains(reason, "searched.example") {
-		t.Fatalf("校验失败信息既要点名被拒来源，也要给出可引用来源：%q", reason)
+	ledger.applyUpdates(updates)
+	trace := ledger.traces()[0]
+	if trace.Status != ClaimStatusInsufficient || len(trace.Evidence) != 0 {
+		t.Fatalf("空白页面不该成为可引用证据：%#v", trace)
 	}
 }
 
@@ -172,7 +149,7 @@ func TestRunnerAdvisoryEvidenceLedgerRecordsWithoutBlockingFinal(t *testing.T) {
 		`{"action":"tool","tool":"web_search","input":{"query":"verify state","claims":[{"id":"state","statement":"状态是否成立"}],"claim_ids":["state"]}}`,
 		`{"action":"final","content":"状态成立。","claims":[{"id":"state","status":"supported","summary":"确定存在","evidence":[]}]}`,
 	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 2, EvidenceLedgerAdvisory: true}, NewToolRegistry(tool))
+	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,6 +44,36 @@ func TestClaimSourcesIgnoreClaimsWithoutEvidence(t *testing.T) {
 	}
 }
 
+func TestClaimSourcesFallBackToRetrievedCandidatesWhenNothingWasBound(t *testing.T) {
+	runtime := &Runtime{plugins: NewDefaultPluginManager(), recentClaimSources: map[string][]claimSourceRecord{}}
+	event := MessageEvent{GroupID: "44"}
+	// 模型用纯文本收尾时 claims 不会被结算，但这一轮确实检索过——链接照样留得下来。
+	runtime.rememberClaimSources(event, []agent.ClaimTrace{
+		{
+			ID: "bound", Statement: "官方是否公告过", Summary: "公告写明了",
+			Evidence:         []agent.ClaimEvidence{{URL: "https://official.example/notice"}},
+			CandidateSources: []string{"https://aggregator.example/notice"},
+		},
+		{
+			ID: "unbound", Statement: "时间是否变更", Summary: "检索到但没绑定",
+			CandidateSources: []string{"https://searched.example/schedule"},
+		},
+	})
+	context := runtime.claimSourceContext(event)
+	if !strings.Contains(context, "https://searched.example/schedule") {
+		t.Fatalf("没绑定的 claim 丢掉了已检索来源：%q", context)
+	}
+	if !strings.Contains(context, "https://official.example/notice") {
+		t.Fatalf("已绑定证据应当仍然保留：%q", context)
+	}
+	if strings.Contains(context, "https://aggregator.example/notice") {
+		t.Fatalf("已经绑定过证据的 claim 不该再灌候选来源：%q", context)
+	}
+	if strings.Index(context, "https://official.example/notice") > strings.Index(context, "https://searched.example/schedule") {
+		t.Fatalf("模型自己引用的来源应排在候选之前：%q", context)
+	}
+}
+
 func TestClaimSourcesSwitchStopsRecordingAndClearsWhatWasKept(t *testing.T) {
 	plugins := NewDefaultPluginManager()
 	runtime := &Runtime{plugins: plugins, recentClaimSources: map[string][]claimSourceRecord{}}

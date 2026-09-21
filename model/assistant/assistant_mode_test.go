@@ -38,23 +38,6 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 	}
 }
 
-func TestAssistantEvidenceLedgerRespectsConfiguredPolicy(t *testing.T) {
-	plugins := NewDefaultPluginManager()
-	if _, err := plugins.UpdateSettings(webSearchPluginID, map[string]any{webSearchSettingEvidenceLedger: false}); err != nil {
-		t.Fatal(err)
-	}
-	r := NewRuntime(BotConfig{ResponseMode: ResponseModeAssistant}, nilChannel{}, plugins, nil, nil, nil, nil)
-	if !r.evidenceLedgerAdvisory(MessageEvent{}) {
-		t.Fatal("assistant mode must not override evidence settings")
-	}
-	r.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"standard": {GroupID: "standard", ResponseMode: ResponseModeStandard},
-	}})
-	if !r.evidenceLedgerAdvisory(MessageEvent{Kind: EventKindGroup, GroupID: "standard"}) {
-		t.Fatal("other modes must retain the configured evidence policy")
-	}
-}
-
 func TestAssistantModeDoesNotInjectSilencePolicy(t *testing.T) {
 	r := NewRuntime(BotConfig{ResponseMode: ResponseModeAssistant}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := r.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "u"}, nil)

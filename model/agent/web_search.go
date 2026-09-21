@@ -139,7 +139,7 @@ func (t *WebSearchTool) InputSchema() map[string]any {
 }
 
 // WebSearchInputSchema 构造检索工具的参数 schema。原生声明使用固定无动态枚举
-// 的版本；claim ID 和来源约束由 Runner 证据账本在本地校验。
+// 的版本；传入 claim ID 和来源时会把它们收窄成枚举，运行时目前不传。
 func WebSearchInputSchema(claimIDs, allowedSources []string) map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
 		"query":         toolStringParam("当前最佳搜索词"),
