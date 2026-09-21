@@ -787,11 +787,12 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		if err != nil && finishErr == nil {
 			var noticeErr error
 			noticeAttempted := false
-			if ctx.Err() == nil && repositoryWatchFailureShouldAlert(updated) {
+			threshold := r.recurringFailureAlertThreshold(updated)
+			if ctx.Err() == nil && repositoryWatchFailureShouldAlert(updated, threshold) {
 				noticeAttempted = true
 				noticeErr = r.notifyRepositoryWatchFailure(ctx, updated, err)
 				if noticeErr == nil {
-					updated, noticeErr = r.acknowledgeRepositoryWatchFailureAlert(updated.ID, updated.LastErrorFingerprint, time.Now())
+					updated, noticeErr = r.acknowledgeRepositoryWatchFailureAlert(updated.ID, updated.LastErrorFingerprint, threshold, time.Now())
 				}
 			}
 			r.recordReminderRetryAttempt(updated, err, noticeErr, noticeAttempted)

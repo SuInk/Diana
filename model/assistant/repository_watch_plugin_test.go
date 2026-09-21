@@ -892,7 +892,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	}
 	runtime := newRuntime()
 
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= defaultRecurringFailureAlertThreshold; attempt++ {
 		store.items[0].TriggerAt = time.Now().Add(-time.Second)
 		runtime.fireDueReminders(context.Background())
 		if got := store.items[0].ConsecutiveFailures; got != attempt {
@@ -902,7 +902,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 		sent := append([]OutgoingMessage(nil), channel.sent...)
 		channel.mu.Unlock()
 		wantNotices := 0
-		if attempt == repositoryWatchFailureAlertThreshold {
+		if attempt == defaultRecurringFailureAlertThreshold {
 			wantNotices = 1
 		}
 		if len(sent) != wantNotices {
@@ -916,7 +916,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	channel.mu.Lock()
 	alertText := channel.sent[0].Text
 	channel.mu.Unlock()
-	for _, want := range []string{"acme/demo", "连续 3 次", "仓库更新检查", "自动重试"} {
+	for _, want := range []string{"acme/demo", fmt.Sprintf("连续 %d 次", defaultRecurringFailureAlertThreshold), "仓库更新检查", "自动重试"} {
 		if !strings.Contains(alertText, want) {
 			t.Fatalf("alert %q missing %q", alertText, want)
 		}
@@ -934,7 +934,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	channel.mu.Lock()
 	noticesAfterRestart := len(channel.sent)
 	channel.mu.Unlock()
-	if noticesAfterRestart != 1 || store.items[0].ConsecutiveFailures != 4 {
+	if noticesAfterRestart != 1 || store.items[0].ConsecutiveFailures != defaultRecurringFailureAlertThreshold+1 {
 		t.Fatalf("restart duplicated alert: notices=%d item=%#v", noticesAfterRestart, store.items[0])
 	}
 
@@ -977,23 +977,23 @@ func TestRepositoryWatchFailureStateIsIsolatedAndFingerprintAware(t *testing.T) 
 	}}
 	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, store, nil, nil)
 	pollFailure := repositoryWatchStageFailure(repositoryWatchFailureStagePolling, errors.New("GitHub API 503"))
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < defaultRecurringFailureAlertThreshold; attempt++ {
 		if _, err := runtime.finishRecurringReminder("watch-a", now, pollFailure); err != nil {
 			t.Fatal(err)
 		}
-		if attempt < 2 {
+		if attempt < defaultRecurringFailureAlertThreshold-1 {
 			if _, err := runtime.finishRecurringReminder("watch-b", now, pollFailure); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if store.items[0].ConsecutiveFailures != 3 || store.items[1].ConsecutiveFailures != 2 {
+	if store.items[0].ConsecutiveFailures != defaultRecurringFailureAlertThreshold || store.items[1].ConsecutiveFailures != defaultRecurringFailureAlertThreshold-1 {
 		t.Fatalf("subscription counters leaked: %#v", store.items)
 	}
-	if !repositoryWatchFailureShouldAlert(store.items[0]) || repositoryWatchFailureShouldAlert(store.items[1]) {
+	if !repositoryWatchFailureShouldAlert(store.items[0], defaultRecurringFailureAlertThreshold) || repositoryWatchFailureShouldAlert(store.items[1], defaultRecurringFailureAlertThreshold) {
 		t.Fatalf("threshold state=%#v", store.items)
 	}
-	acknowledged, err := runtime.acknowledgeRepositoryWatchFailureAlert("watch-a", store.items[0].LastErrorFingerprint, now)
+	acknowledged, err := runtime.acknowledgeRepositoryWatchFailureAlert("watch-a", store.items[0].LastErrorFingerprint, defaultRecurringFailureAlertThreshold, now)
 	if err != nil || acknowledged.FailureAlertedAt.IsZero() {
 		t.Fatalf("acknowledge=%#v err=%v", acknowledged, err)
 	}
@@ -1003,7 +1003,7 @@ func TestRepositoryWatchFailureStateIsIsolatedAndFingerprintAware(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changed.ConsecutiveFailures != 1 || changed.LastFailureStage != repositoryWatchFailureStageSummary || !changed.FailureAlertedAt.IsZero() || repositoryWatchFailureShouldAlert(changed) {
+	if changed.ConsecutiveFailures != 1 || changed.LastFailureStage != repositoryWatchFailureStageSummary || !changed.FailureAlertedAt.IsZero() || repositoryWatchFailureShouldAlert(changed, defaultRecurringFailureAlertThreshold) {
 		t.Fatalf("changed fingerprint did not start a new sequence: %#v", changed)
 	}
 }
@@ -1020,7 +1020,7 @@ func TestRepositoryWatchFailureAlertRequiresAcknowledgementAndRedactsGroupMessag
 	runtime.SetAppLogWriter(logs)
 	raw := `request https://private.example/repo?signature=secret Authorization: Bearer owner-token`
 	failure := repositoryWatchStageFailure(repositoryWatchFailureStagePolling, errors.New(raw))
-	for attempt := 0; attempt < repositoryWatchFailureAlertThreshold; attempt++ {
+	for attempt := 0; attempt < defaultRecurringFailureAlertThreshold; attempt++ {
 		if _, err := runtime.finishRecurringReminder("watch-redaction", now, failure); err != nil {
 			t.Fatal(err)
 		}

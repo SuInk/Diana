@@ -251,6 +251,8 @@ export interface BotProfileConfig {
   error_notify_enabled?: boolean;
   error_reply_prefix?: string;
   send_retry_attempts?: number;
+  /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */
+  recurring_failure_alert_threshold?: number;
   send_chunk_interval_ms?: number;
   private_closing_grace?: number;
   inbound_group_concurrency?: number;
