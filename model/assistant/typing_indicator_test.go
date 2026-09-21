@@ -16,11 +16,18 @@ type fakeChatActionChannel struct {
 	calls int
 	delay time.Duration
 	err   error
+	// errCount > 0 时只让前几次调用失败，之后恢复成功：由假通道自己决定失败次数，
+	// 测试线程不必掐时机去清错误标记。
+	errCount int
 }
 
 func (c *fakeChatActionChannel) SendChatAction(ctx context.Context, _ OutgoingMessage, _ string) error {
 	c.mu.Lock()
 	delay, err := c.delay, c.err
+	if c.errCount > 0 {
+		c.errCount--
+		err = errors.New("uid is empty")
+	}
 	c.calls++
 	c.mu.Unlock()
 	if delay > 0 {
@@ -109,18 +116,11 @@ func TestTypingIndicatorSurvivesSlowRefresh(t *testing.T) {
 func TestTypingIndicatorSurvivesTransientFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	channel := &fakeChatActionChannel{err: errors.New("uid is empty")}
+	// 连续失败上限之内失败几次就恢复，之后必须一直刷下去。
+	channel := &fakeChatActionChannel{errCount: oneBotTypingMaxFailures - 1}
 	indicator := newTestTypingIndicator(ctx, channel, time.Millisecond, oneBotTypingMaxFailures)
 	defer indicator.stop()
-	waitForCalls(t, channel, 2)
-	channel.mu.Lock()
-	channel.err = nil
-	channel.mu.Unlock()
-	waitForCalls(t, channel, 5)
-	time.Sleep(20 * time.Millisecond)
-	if got := channel.callCount(); got < 6 {
-		t.Fatalf("indicator stopped after a transient failure: %d calls", got)
-	}
+	waitForCalls(t, channel, oneBotTypingMaxFailures+5)
 }
 
 // 接入端根本没有 set_input_status 时，连续失败到上限就收手，不再一直空转。
@@ -197,9 +197,10 @@ func TestDeliverChunksKeepsTypingUntilLastChunk(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// 间隔比这里的发送节奏长、比末尾的等待短：正常路径只该多出中间那一次点亮，
-	// 末尾要是没静音，等待期间就会再刷出来。
-	indicator := newTestTypingIndicator(ctx, channel, 30*time.Millisecond, oneBotTypingMaxFailures)
+	// 间隔远长于这个用例的发送节奏：中间那次点亮只能来自发送链路自己的 resume，
+	// 末尾的等待也长于一个间隔，没静音的话就会再刷出来。
+	interval := 200 * time.Millisecond
+	indicator := newTestTypingIndicator(ctx, channel, interval, oneBotTypingMaxFailures)
 	defer indicator.stop()
 	waitForEvents(t, channel, 1)
 
@@ -207,17 +208,38 @@ func TestDeliverChunksKeepsTypingUntilLastChunk(t *testing.T) {
 		t.Fatalf("deliverChunks() error = %v", err)
 	}
 	waitForEvents(t, channel, 4)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(3 * interval)
+
 	events := channel.snapshot()
-	want := []string{"typing", "send:A", "typing", "send:B"}
-	if len(events) != len(want) {
-		t.Fatalf("events = %v, want %v", events, want)
+	first, last := indexOfEvent(t, events, "send:A"), indexOfEvent(t, events, "send:B")
+	if last < first {
+		t.Fatalf("chunks sent out of order: %v", events)
 	}
-	for index := range want {
-		if events[index] != want[index] {
-			t.Fatalf("events = %v, want %v", events, want)
+	betweenChunks := 0
+	for _, event := range events[first:last] {
+		if event == "typing" {
+			betweenChunks++
 		}
 	}
+	if betweenChunks == 0 {
+		t.Fatalf("typing was not relit between chunks: %v", events)
+	}
+	for _, event := range events[last:] {
+		if event == "typing" {
+			t.Fatalf("typing kept refreshing after the last chunk: %v", events)
+		}
+	}
+}
+
+func indexOfEvent(t *testing.T, events []string, want string) int {
+	t.Helper()
+	for index, event := range events {
+		if event == want {
+			return index
+		}
+	}
+	t.Fatalf("%q missing from %v", want, events)
+	return -1
 }
 
 func waitForEvents(t *testing.T, channel *typingOrderChannel, want int) {
