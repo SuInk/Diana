@@ -3382,7 +3382,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaNotebookTool(r, event, relationship),
-				newDianaVersionTool(r),
+				newDianaVersionTool(r, repositoryDisclosedTo(cfg, relationship.Owner)),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
 				newDianaBotParticipationTool(r, event),

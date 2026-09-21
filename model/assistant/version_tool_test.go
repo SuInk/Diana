@@ -15,7 +15,12 @@ import (
 
 func runVersionTool(t *testing.T, runtime *Runtime) dianaVersionResult {
 	t.Helper()
-	raw, err := newDianaVersionTool(runtime).Run(context.Background(), nil)
+	return runVersionToolWithDisclosure(t, runtime, true)
+}
+
+func runVersionToolWithDisclosure(t *testing.T, runtime *Runtime, discloseRepository bool) dianaVersionResult {
+	t.Helper()
+	raw, err := newDianaVersionTool(runtime, discloseRepository).Run(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -188,7 +193,7 @@ func TestHumanizeChineseDurationKeepsTwoUnits(t *testing.T) {
 // 注册了版本工具才注入版本规则。
 func TestSystemPromptInjectsVersionRuleWithTool(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	registry := agent.NewToolRegistry(newDianaVersionTool(runtime))
+	registry := agent.NewToolRegistry(newDianaVersionTool(runtime, true))
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(
 		MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"},
 		nil, false, RelationshipPolicy{Owner: true}, true, registry,
@@ -200,5 +205,81 @@ func TestSystemPromptInjectsVersionRuleWithTool(t *testing.T) {
 	member := RelationshipPolicy{}
 	if !member.allowedAgentToolNames()[dianaVersionToolName] {
 		t.Fatal("version tool is hidden from non-owners")
+	}
+}
+
+// 项目地址不公开时，收掉的只有地址这一项：版本、运行时长照答。
+func TestDianaVersionToolWithholdsRepositoryURL(t *testing.T) {
+	provider := &stubReleaseStatusProvider{status: ReleaseStatus{
+		RepositoryURL:   "https://github.com/SuInk/Diana",
+		DeploymentMode:  "release",
+		LatestVersion:   "v0.8.58",
+		UpdateSupported: true,
+	}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetBuildInfo(BuildInfo{Version: "v0.8.57", BuildType: "release"})
+	runtime.SetReleaseStatusProvider(provider)
+
+	result := runVersionToolWithDisclosure(t, runtime, false)
+	if result.RepositoryURL != "" {
+		t.Fatalf("repository url leaked: %q", result.RepositoryURL)
+	}
+	if result.Version != "v0.8.57" || result.LatestVersion != "v0.8.58" {
+		t.Fatalf("其余运行时事实不该跟着一起收掉: %+v", result)
+	}
+	// 说成「查不到」模型就会去帮忙找一个，必须说成「不公开」。
+	if !strings.Contains(result.ReplyGuidance, "不对外公开") {
+		t.Fatalf("reply guidance = %q", result.ReplyGuidance)
+	}
+	if strings.Contains(newDianaVersionTool(runtime, false).Description(), "项目开源地址、") {
+		t.Fatal("工具说明仍在宣称能查开源地址")
+	}
+}
+
+func TestRepositoryDisclosedTo(t *testing.T) {
+	cases := []struct {
+		mode  RepositoryDisclosure
+		owner bool
+		want  bool
+	}{
+		{"", false, false},
+		{"", true, true},
+		{RepositoryDisclosureOwner, false, false},
+		{RepositoryDisclosureEveryone, false, true},
+		{"EVERYONE", false, true},
+		{"乱写", false, false},
+	}
+	for _, tc := range cases {
+		if got := repositoryDisclosedTo(BotConfig{RepositoryDisclosure: tc.mode}, tc.owner); got != tc.want {
+			t.Fatalf("repositoryDisclosedTo(%q, owner=%t) = %t", tc.mode, tc.owner, got)
+		}
+	}
+}
+
+// 默认收紧：普通成员拿到的是「不给地址」那份规则，主人和全公开时照旧。
+func TestSystemPromptVersionRuleFollowsRepositoryDisclosure(t *testing.T) {
+	cases := []struct {
+		name  string
+		mode  RepositoryDisclosure
+		owner bool
+		want  string
+	}{
+		{"默认对成员收紧", "", false, promptToolVersionNoRepository},
+		{"主人照旧", "", true, promptToolVersion},
+		{"全公开", RepositoryDisclosureEveryone, false, promptToolVersion},
+	}
+	for _, tc := range cases {
+		runtime := NewRuntime(BotConfig{RepositoryDisclosure: tc.mode}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		registry := agent.NewToolRegistry(newDianaVersionTool(runtime, repositoryDisclosedTo(BotConfig{RepositoryDisclosure: tc.mode}, tc.owner)))
+		prompt := runtime.systemPromptWithRelationshipAndAgentTools(
+			MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"},
+			nil, false, RelationshipPolicy{Owner: tc.owner}, true, registry,
+		)
+		if !strings.Contains(prompt, tc.want) {
+			t.Fatalf("%s: prompt missing the expected version rule: %s", tc.name, prompt)
+		}
+		if tc.want == promptToolVersionNoRepository && strings.Contains(prompt, promptToolVersion) {
+			t.Fatalf("%s: 收紧时不该还带着公开地址那份规则", tc.name)
+		}
 	}
 }
