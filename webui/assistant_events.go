@@ -71,7 +71,8 @@ type assistantEventsResponse struct {
 	PrivateChats []storage.InboundEventPrivateChat `json:"private_chats"`
 	// ContextBudget 只在筛了具体某个群时给出：预算是按群算的，全部事件混在
 	// 一起没有一个「这个群的预算」可言。
-	ContextBudget *assistant.ContextBudgetBreakdown `json:"context_budget,omitempty"`
+	ContextBudget   *assistant.ContextBudgetBreakdown  `json:"context_budget,omitempty"`
+	ResidentContext *assistant.ResidentContextSnapshot `json:"resident_context,omitempty"`
 }
 
 // assistantEventGroupItem 在事件数之外补上群名：筛选器只列群号的话，
@@ -439,6 +440,12 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 	if budgetRuntime, ok := h.runtime.(contextBudgetRuntime); ok && groupID != "" {
 		breakdown := budgetRuntime.ContextBudgetBreakdownForGroup(groupID)
 		response.ContextBudget = &breakdown
+	}
+	// 常驻上下文不要求选中群：不选群就是这台机器人私聊场景下的底价，选了群再叠上
+	// 分群覆盖和这个会话的便签。它只在概览里给，列表模式每翻一页重算一遍不值当。
+	if residentRuntime, ok := h.runtime.(residentContextRuntime); ok && mode != "list" {
+		snapshot := residentRuntime.ResidentContextForGroup(c.Request.Context(), profileID, groupID)
+		response.ResidentContext = &snapshot
 	}
 	if !since.IsZero() {
 		response.Since = &since

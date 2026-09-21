@@ -224,6 +224,8 @@ export interface BotProfileConfig {
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
   system_prompt?: string;
+  /** 品格层：身份、价值、硬边界。排在系统提示词最前面，分群覆盖动不了它。 */
+  soul?: PersonaSoul;
   /**
    * 人设正文和界面控件谁说了算。
    *
@@ -335,6 +337,8 @@ export interface BotProfileConfig {
   cross_platform_memory_enabled?: boolean;
   /** 这台机器人要不要带上世界书（世界观设定库）；缺省开启，树为空时开着也不注入。 */
   world_book_enabled?: boolean;
+  /** 允许机器人自己写自述（自我认知），只进提示词尾部、改不动人设和权限；缺省关闭。 */
+  self_note_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
   /** 后台空闲时定期探测模型收不收强制指定工具；探测是会计费的真实调用，缺省关闭。 */
@@ -2222,6 +2226,7 @@ export interface AssistantEventsResponse {
   query?: string;
   private_chats: AssistantEventPrivateChat[];
   context_budget?: AssistantContextBudget;
+  resident_context?: AssistantResidentContext;
 }
 
 export interface AssistantEventGroup {
@@ -2236,6 +2241,26 @@ export interface AssistantEventPrivateChat {
   events: number;
   user_name?: string;
   bot_profile_id?: string;
+}
+
+/** 每轮都注入、与当前消息无关的一块上下文。 */
+export interface AssistantResidentContextBlock {
+  key: string;
+  label: string;
+  tokens: number;
+  /** 这块所在层的 token 配额；0 表示它不单独占一层配额。 */
+  budget?: number;
+  content?: string;
+  note?: string;
+}
+
+export interface AssistantResidentContext {
+  profile_id?: string;
+  group_id?: string;
+  context_window: number;
+  blocks: AssistantResidentContextBlock[];
+  total_tokens: number;
+  note?: string;
 }
 
 export interface AssistantContextBudgetLayer {
@@ -2505,7 +2530,24 @@ export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promis
   return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
+/** 人设的品格层：身份、价值、硬边界。只有人能改，前端只原样搬运，不逐字段编辑。 */
+export interface PersonaSoul {
+  identity?: string;
+  priority?: { order?: string[]; note?: string };
+  values?: { value: string; why?: string }[];
+  honesty?: string[];
+  self_nature?: string;
+  relationships?: { owner?: string; admins?: string; members?: string };
+  correctable?: string;
+  restraint?: string;
+  hard_limits?: { limit: string; why?: string }[];
+  on_criticism?: string;
+  on_mistake?: string;
+  open_questions?: string[];
+}
+
 export interface Persona {
+  soul?: PersonaSoul;
   id: string;
   name: string;
   system_prompt?: string;
@@ -2553,6 +2595,57 @@ export function importPersonas(personas: Persona[]): Promise<PersonaImportResult
   return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
     method: "POST",
     body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
+  });
+}
+
+/** 机器人自己写下的一条自述。写入只有它自己能做，这里只读、删和清空。 */
+export interface SelfNote {
+  id: string;
+  topic: string;
+  content: string;
+  status: "active" | "superseded" | "deleted";
+  version: number;
+  source_group_id?: string;
+  source_user_id?: string;
+  source_user_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SelfNoteListResult {
+  notes: SelfNote[];
+  /** 这台机器人有没有开自述。关着时列表为空，但「空」和「没开」是两件事。 */
+  enabled: boolean;
+}
+
+// profile 指这条自述属于哪台机器人。自述按机器人隔离，留空时后端落到当前这台。
+function selfNoteQuery(profile: string, includeInactive = false): string {
+  const params = new URLSearchParams();
+  if (profile) params.set("profile", profile);
+  if (includeInactive) params.set("include_inactive", "true");
+  return params.size > 0 ? `?${params.toString()}` : "";
+}
+
+export function listSelfNotes(profile: string, includeInactive = false): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes${selfNoteQuery(profile, includeInactive)}`);
+}
+
+export function deleteSelfNote(profile: string, id: string): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/delete${selfNoteQuery(profile)}`, {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function purgeSelfNotes(profile: string): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/purge${selfNoteQuery(profile)}`, { method: "POST" });
+}
+
+/** YAML 只能在后端解析：这里原样把文件内容发过去。JSON 文件走上面那条。 */
+export function importPersonaSource(source: string): Promise<PersonaImportResult> {
+  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
+    method: "POST",
+    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, source })
   });
 }
 

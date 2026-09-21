@@ -350,6 +350,7 @@ type Runtime struct {
 	pendingDirect    PendingDirectMessageStore
 	notebook         NotebookStore
 	worldBook        WorldBookStore
+	selfNotes        SelfNoteStore
 	expressionStyles ExpressionStyleStore
 	moodMu           sync.Mutex
 	moods            map[string]*moodState
@@ -3417,6 +3418,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
 			}
+			// 自述默认关着，开关在机器人配置上：工具和注入层要同时受它约束，否则
+			// 模型会写进一个不会被读出来的地方。
+			if r.selfNoteEnabled(event) {
+				extraTools = append(extraTools, newDianaSelfNoteTool(r, event, relationship))
+			}
 			if boolValue(cfg.LongTermMemoryEnabled, true) {
 				r.mu.RLock()
 				memoryAvailable := r.structuredMemory != nil
@@ -3655,6 +3661,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    worldBookContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
+		// 自述和世界书同级：世界书是「我活在什么世界里」，自述是「我注意到的我自己」。
+		// 两者都是理解这条消息所需的背景，都在尾部按记忆优先级让位，都不得覆盖人设。
+		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    selfNoteContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
