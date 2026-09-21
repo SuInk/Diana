@@ -466,3 +466,61 @@ func TestMCPTimeoutCeilings(t *testing.T) {
 		}
 	}
 }
+
+// 环境变量和请求头是自己填进去的，删掉那一行就该真的删掉：值不回显，留空只能
+// 当成「保持原值」，但键整个不在提交里就是删除的意思。预设表单例外——它只提交
+// 自己那几个键，不能连坐清掉别人额外注入的变量。
+func TestMCPSaveDeletesRemovedEnvKeys(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), ExtensionManagement: true}
+	ctx := context.Background()
+	gitea := giteaAPIStub(t, "good-token")
+	path := resolveMCPConfigPath(cfg.WithDefaults())
+
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := loadMCPServers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 自己额外注入一个变量，预设表单看不见它。
+	injected := servers["gitea"]
+	injected.Env["HTTPS_PROXY"] = "http://127.0.0.1:8080"
+	servers["gitea"] = injected
+	if err := saveMCPServers(path, servers); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Values: map[string]string{"host": gitea.URL},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ = loadMCPServers(path)
+	if servers["gitea"].Env["HTTPS_PROXY"] == "" {
+		t.Fatal("预设表单只管自己那几个键，不该把额外注入的变量清掉")
+	}
+
+	// 通用表单提交的是整份环境变量：少了哪个键就是要删哪个，留空的照旧保留。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Replace: true,
+		Config: map[string]any{
+			"command": "/app/gitea-mcp",
+			"args":    []any{"-t", "stdio"},
+			"env":     map[string]any{"GITEA_HOST": gitea.URL, "GITEA_ACCESS_TOKEN": ""},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ = loadMCPServers(path)
+	saved := servers["gitea"]
+	if _, still := saved.Env["HTTPS_PROXY"]; still {
+		t.Fatalf("删掉的那一行还在：%#v", saved.Env)
+	}
+	if saved.Env["GITEA_ACCESS_TOKEN"] != "good-token" {
+		t.Fatalf("留空的凭据应当保持原值：%#v", saved.Env)
+	}
+}
