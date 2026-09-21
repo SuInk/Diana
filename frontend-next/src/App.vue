@@ -32,25 +32,19 @@
           <span class="brand-mark">
             <BotMessageSquare :size="19" aria-hidden="true" />
           </span>
-          <span class="brand-name">
-            <strong>Diana</strong>
-            <button v-if="versionLabel" class="brand-version" type="button" title="查看版本与更新" @click="versionOpen = true">
-              {{ versionLabel }}
-              <span v-if="releaseUpdateAvailable" class="version-dot" aria-label="有新版本"></span>
-            </button>
-          </span>
+          <strong class="brand-name">Diana</strong>
+          <button
+            class="btn ghost icon-only sidebar-toggle"
+            type="button"
+            :aria-label="sidebarToggleLabel"
+            :aria-expanded="sidebarExpanded"
+            aria-controls="app-sidebar"
+            :title="sidebarToggleLabel"
+            @click="toggleSidebar"
+          >
+            <component :is="sidebarToggleIcon" :size="18" aria-hidden="true" />
+          </button>
         </div>
-        <button
-          class="btn ghost icon-only sidebar-toggle"
-          type="button"
-          :aria-label="sidebarToggleLabel"
-          :aria-expanded="sidebarExpanded"
-          aria-controls="app-sidebar"
-          :title="sidebarToggleLabel"
-          @click="toggleSidebar"
-        >
-          <component :is="sidebarToggleIcon" :size="18" aria-hidden="true" />
-        </button>
       </div>
 
       <div v-if="scopeOptions.length > 1" class="bot-scope">
@@ -86,6 +80,17 @@
           <component :is="themeIcon" :size="16" aria-hidden="true" />
           <span class="nav-label">{{ themeModeLabel }}</span>
         </button>
+        <button
+          v-if="versionLabel"
+          class="nav-action version-action"
+          type="button"
+          title="查看版本与更新"
+          @click="versionOpen = true"
+        >
+          <Tag :size="16" aria-hidden="true" />
+          <span class="nav-label version-label-text">{{ versionLabel }}</span>
+          <span v-if="releaseUpdateAvailable" class="version-dot" aria-label="有新版本"></span>
+        </button>
       </div>
     </aside>
 
@@ -102,7 +107,7 @@
         >
           <PanelLeftOpen :size="18" aria-hidden="true" />
         </button>
-        <span class="topbar-title">{{ viewTitle }}</span>
+        <h1 class="topbar-title">{{ viewTitle }}</h1>
         <span class="topbar-spacer" />
         <span v-if="botSummary" class="badge" :class="botSummary.kind" :title="botSummary.hint">
           <span class="status-dot" :class="{ pulse: botSummary.kind === 'ok' }" aria-hidden="true" />
@@ -113,7 +118,7 @@
           <span class="status-dot" :class="stream.connected ? 'text-ok' : 'text-err'" aria-hidden="true" />
           <span class="topbar-stream-text">{{ stream.connected ? "实时连接正常" : "实时连接已断开" }}</span>
         </span>
-        <span v-if="health" class="topbar-uptime mono">{{ health.version }} · 已运行 {{ formatUptime(health.uptime_seconds) }}</span>
+        <span v-if="health" class="topbar-uptime mono">已运行 {{ formatUptime(health.uptime_seconds) }}</span>
         <div class="topbar-actions">
         <a
           class="btn ghost small icon-only topbar-repo"
@@ -187,6 +192,7 @@ import {
   Moon,
   Sun,
   SunMoon,
+  Tag,
   BookUser,
   Users,
   Wrench

@@ -5,7 +5,7 @@
   <section class="browser-panel">
     <header class="view-header">
       <div class="view-title">
-        <h1>交互式浏览器</h1>
+        <h2>交互式浏览器</h2>
         <p>{{ botScope ? '模型通过 CDP 操作一个真实浏览器，用的是那个浏览器已有的登录态' : '选择机器人后配置' }}</p>
       </div>
       <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button></div>

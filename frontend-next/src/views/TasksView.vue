@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>提醒与订阅</h1>
         <p>查看一次性提醒、周期查询和仓库更新订阅的执行状态</p>
       </div>
       <div class="view-actions">
