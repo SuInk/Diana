@@ -31,6 +31,7 @@ import (
 
 	"github.com/SuInk/diana/internal/dlog"
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browserctl"
 	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/llm"
@@ -633,6 +634,14 @@ func main() {
 	browserControlHandler.Register(router)
 	botRuntime.SetBrowserControl(browserControlHub)
 	defer browserControlHub.CloseAll()
+	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
+	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
+	browserBoxManager := browserbox.New(ctx, sqliteStore, dataDir)
+	browserBoxHandler := webui.NewBrowserBoxHandler(browserBoxManager)
+	browserBoxHandler.SetLogStore(sqliteStore)
+	browserBoxHandler.Register(router)
+	botRuntime.SetBrowserBox(browserBoxManager)
+	defer browserBoxManager.Stop()
 	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
 	// main 收尾时判断 restartRequested 原地重启。
 	var restartRequested atomic.Bool

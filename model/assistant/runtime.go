@@ -402,6 +402,7 @@ type Runtime struct {
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
 	browserControl            agent.BrowserControlBridge
+	browserBox                agent.BuiltinBrowserBridge
 	media                     *MediaStore
 	members                   *memberCache
 	now                       func() time.Time
@@ -535,6 +536,25 @@ func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
 	r.mu.Lock()
 	r.browserControl = bridge
 	r.mu.Unlock()
+}
+
+// SetBrowserBox 注入内置浏览器。没注入时 browser_* 那组工具沿用机器人配置里的
+// 外部 CDP 地址，行为和加这一档之前一样。
+func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
+	r.mu.Lock()
+	r.browserBox = bridge
+	r.mu.Unlock()
+}
+
+// browserBoxFor 同样要两边都点头：全局起了内置浏览器，这台机器人也开了那档开关。
+func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
+	if !cfg.AgentBrowserBoxEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserBox
+	r.mu.RUnlock()
+	return bridge
 }
 
 // browserControlFor 只在两边都点头时才把控制面交出去：全局注入了控制面，
@@ -4201,6 +4221,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 			BrowserControl:             r.browserControlFor(cfg),
+			BuiltinBrowser:             r.browserBoxFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry

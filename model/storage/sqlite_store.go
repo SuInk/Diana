@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browserctl"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/llmauth"
@@ -44,6 +45,7 @@ const (
 	updateGitHubTokenKey = "system_update_github_token"
 	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
 	browserControlKey    = "browser_control"
+	browserBoxKey        = "browser_box"
 )
 
 type SQLiteStore struct {
@@ -320,6 +322,18 @@ func (s *SQLiteStore) LoadBrowserControl(ctx context.Context) (browserctl.Docume
 // SaveBrowserControl 保存浏览器控制的策略与令牌。令牌只存哈希，见 browserctl.Token。
 func (s *SQLiteStore) SaveBrowserControl(ctx context.Context, doc browserctl.Document) error {
 	return s.saveJSON(ctx, browserControlKey, doc)
+}
+
+// LoadBrowserBox 读取内置浏览器的配置。
+func (s *SQLiteStore) LoadBrowserBox(ctx context.Context) (browserbox.Document, bool, error) {
+	var doc browserbox.Document
+	ok, err := s.loadJSON(ctx, browserBoxKey, &doc)
+	return doc, ok, err
+}
+
+// SaveBrowserBox 保存内置浏览器的配置。登录态不在这里，它在 profile 目录里。
+func (s *SQLiteStore) SaveBrowserBox(ctx context.Context, doc browserbox.Document) error {
+	return s.saveJSON(ctx, browserBoxKey, doc)
 }
 
 // LoadPluginStates 读取插件状态。

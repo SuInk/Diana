@@ -371,6 +371,7 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 	base := browserToolBase{
 		root:     root,
 		cdpURL:   cfg.BrowserCDPURL,
+		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
 		maxChars: cfg.MaxToolOutputChars,
 	}

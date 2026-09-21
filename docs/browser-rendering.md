@@ -1,6 +1,6 @@
 # Chromium / Chrome 浏览器依赖
 
-本页讲 Diana 自己起的一次性无头浏览器。想让 Diana 操作用户日常浏览器里带登录态的页面，那是另一档能力，见[浏览器控制扩展](browser-control.md)。
+本页讲 Diana 自己起的一次性无头浏览器。另外两档：想让 Diana 操作你日常浏览器里带登录态的页面，见[浏览器控制扩展](browser-control.md)；想给 Diana 一个它自己的、你能看见也能上手的常驻浏览器，见[内置浏览器](browser-builtin.md)。
 
 网页渲染统一使用 Chromium / Google Chrome。插件不再下载或回退到 Obscura；此前手动安装的 Obscura 文件不会被自动删除。
 

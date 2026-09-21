@@ -700,6 +700,11 @@ type BotConfig struct {
 	// 就多一处能借到这份登录态的地方，所以逐台显式打开。全局的总开关、站点
 	// 白名单和读写档位另由 WebUI 的浏览器控制页决定，两边都开才真的能用。
 	AgentBrowserControlEnabled bool `json:"agent_browser_control_enabled,omitempty"`
+	// AgentBrowserBoxEnabled 让这台机器人用 Diana 内置的那个常驻浏览器
+	// （model/browserbox）：browser_* 那组 CDP 工具会接到它上面，带着用户在
+	// 里面登录过的站点。默认关闭，理由和上面一条一样——那份登录态是用户亲手
+	// 建立的，能借到它的机器人要逐台点头。用户按下接管时这一档当场失效。
+	AgentBrowserBoxEnabled bool `json:"agent_browser_box_enabled,omitempty"`
 }
 
 type ModelRole struct {
@@ -1072,6 +1077,7 @@ type ConfigPayload struct {
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
 	AgentBrowserControlEnabled      bool                      `json:"agent_browser_control_enabled,omitempty"`
+	AgentBrowserBoxEnabled          bool                      `json:"agent_browser_box_enabled,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -2228,6 +2234,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
 		AgentBrowserControlEnabled:        cfg.AgentBrowserControlEnabled,
+		AgentBrowserBoxEnabled:            cfg.AgentBrowserBoxEnabled,
 	}
 }
 
@@ -2437,6 +2444,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,
 		AgentBrowserControlEnabled:      payload.AgentBrowserControlEnabled,
+		AgentBrowserBoxEnabled:          payload.AgentBrowserBoxEnabled,
 	}.WithDefaults()
 	if cfg.OneBotHTTPSecret == "" {
 		cfg.OneBotHTTPSecret = existing.OneBotHTTPSecret

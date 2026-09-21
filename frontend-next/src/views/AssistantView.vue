@@ -1556,6 +1556,17 @@
                     还要在「设置 → 浏览器控制」里打开总开关并授权站点，两边都开才真的能用。
                   </span>
                 </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_browser_box_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许使用内置浏览器（browser_* 接到 Diana 自己的浏览器）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。打开后 browser_open / browser_text / browser_click 这组工具连的是「浏览器」页里那个常驻浏览器，
+                    带着你在里面登录过的站点。你在那一页按下接管时，这台机器人当场就碰不到它了。
+                  </span>
+                </div>
                 <div class="field">
                   <label for="agent-sandbox">命令沙盒</label>
                   <AppSelect
@@ -3560,6 +3571,7 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
+    agent_browser_box_enabled: config.agent_browser_box_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "owner",
     repository_disclosure: config.repository_disclosure ?? "owner",

@@ -349,6 +349,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 		BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 		BrowserControl:             r.browserControlFor(cfg),
+		BuiltinBrowser:             r.browserBoxFor(cfg),
 	}
 }
 
