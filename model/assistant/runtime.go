@@ -2295,8 +2295,12 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// 先选好指令再拼消息：llmMessageFromEventWithImagesForContext 可能去抓图片，
 	// 以前这里先按旧契约构造一次，再在评分契约下整条覆盖，那次抓图完全是白做的。
 	routeInstruction := "请从本批群消息中识别机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 Intent Recognition（意图识别）模块，只负责识别回复意图，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"
+	// 同一套判据也按题目摆一份：绑的是只做判断的模型时，它照这张表作答，答案回填
+	// 成下面解析的那个 JSON；绑对话模型时这张表用不上。
+	decisionSpec := proactiveReplyDecisionSpec(candidates)
 	if chatIn.Participation != nil {
 		routeInstruction = "Intent Recognition：请判断当前消息是不是在跟机器人说话（directed 与 reason），并给出闲聊适合度（score 与 reason）。上下文：\n"
+		decisionSpec = participationDecisionSpec()
 	}
 	routeUserMessage := llmMessageFromEventWithImagesForContext(routeCtx, event, routeInstruction+string(payloadJSON), nil)
 	messages := []llm.Message{
@@ -2307,7 +2311,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		routeUserMessage,
 	}
 	raw, err := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: messages})
+		resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: messages, Decision: decisionSpec})
 		if err != nil {
 			return "", err
 		}
@@ -2332,7 +2336,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			retried = true
 			retryMessages := append([]llm.Message{{Role: llm.RoleSystem, Content: participationRatingsRetryReminder}}, messages...)
 			retryRaw, retryErr := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
-				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages})
+				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages, Decision: decisionSpec})
 				if err != nil {
 					return "", err
 				}

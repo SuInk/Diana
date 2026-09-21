@@ -43,6 +43,9 @@ const (
 	ProviderOpenAICompatible Provider = "openai_compatible"
 	ProviderGemini           Provider = "gemini"
 	ProviderAnthropic        Provider = "anthropic"
+	// ProviderTypeSafe 是 TypeSafe 的 System One 模型（Jev）：只回答有类型的判断题，
+	// 不生成文本。它只能服务判断类用途，配到需要出文本的用途上会被直接拒绝。
+	ProviderTypeSafe Provider = "typesafe"
 )
 
 type APIFormat string
@@ -176,6 +179,10 @@ type GenerateRequest struct {
 	// 判为超出上下文」后重试时设置它，用来把请求收缩到更保守的预算；为 0 时按
 	// 配置档取值。
 	MaxContextTokens int64 `json:"-"`
+	// Decision 声明这次调用其实是一道结构化判断题，以及答案该摆回输出 JSON 的
+	// 哪个字段。生成文本的供应商忽略它；只做判断的供应商靠它还原出调用方期待的
+	// JSON，没有它就只能报错。
+	Decision *DecisionSpec `json:"-"`
 }
 
 type Usage struct {
@@ -316,6 +323,8 @@ func NewClient(cfg ProviderConfig, opts ...ClientOption) (LLMClient, error) {
 		return newGeminiClient(cfg, options.httpClient)
 	case ProviderAnthropic:
 		return newAnthropicClient(cfg, options.httpClient), nil
+	case ProviderTypeSafe:
+		return newTypeSafeClient(cfg, options.httpClient), nil
 	default:
 		return nil, fmt.Errorf("llm: unsupported provider %q", cfg.Provider)
 	}
@@ -448,7 +457,7 @@ func (cfg ProviderConfig) ValidateChannel() error {
 // Supported 判断 provider 是否被当前项目支持。
 func (provider Provider) Supported() bool {
 	switch provider {
-	case ProviderOpenAICompatible, ProviderGemini, ProviderAnthropic:
+	case ProviderOpenAICompatible, ProviderGemini, ProviderAnthropic, ProviderTypeSafe:
 		return true
 	default:
 		return false

@@ -36,6 +36,12 @@ export const llmProviderKinds: LLMProviderKind[] = [
     label: "Anthropic 原生",
     hint: "直连 Claude Messages API，不经过 OpenAI 兼容层",
     supportsAPIStyle: false
+  },
+  {
+    id: "typesafe",
+    label: "TypeSafe 判断模型（Jev）",
+    hint: "只回答是非、单选和打分，不生成文本；只能绑给意图识别里的判断类用途",
+    supportsAPIStyle: false
   }
 ];
 
@@ -146,6 +152,26 @@ export const llmServicePresets: LLMServicePreset[] = [
     apiStyle: "",
     baseURL: "",
     model: "",
+    hint: "走代理或自建网关时填写"
+  },
+
+  // —— TypeSafe 判断模型 ——
+  {
+    id: "typesafe-systemone",
+    label: "TypeSafe 官方",
+    provider: "typesafe",
+    apiStyle: "",
+    baseURL: "https://api.typesafe.ai",
+    model: "jev-latest",
+    hint: "直连 api.typesafe.ai 的 System One 接口"
+  },
+  {
+    id: "typesafe-systemone-custom",
+    label: "自定义地址",
+    provider: "typesafe",
+    apiStyle: "",
+    baseURL: "",
+    model: "jev-latest",
     hint: "走代理或自建网关时填写"
   }
 ];
