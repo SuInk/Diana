@@ -324,7 +324,7 @@ func downloadDouyinVideoFile(ctx context.Context, raw string) string {
 }
 
 func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail) string {
-	if detail.AwemeType == 2 || detail.AwemeType == 68 || detail.AwemeType == 150 {
+	if douyinDetailIsImagePost(detail) {
 		return ""
 	}
 	uri := strings.TrimSpace(detail.Video.PlayAddr.URI)
@@ -339,7 +339,18 @@ func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail
 	if cookie := resolverDouyinCookie(ctx); cookie != "" {
 		headers["Cookie"] = cookie
 	}
-	return downloadGenericVideoFile(ctx, fmt.Sprintf(douyinPlayURL, uri), headers)
+	return downloadGenericVideoFile(ctx, douyinPlayAddrURL(uri), headers)
+}
+
+// douyinPlayAddrURL 把 play_addr 的 uri 换成可以直接下载的地址。
+//
+// uri 通常是 video_id，要拼到 play 接口上；但有些作品回的是完整的 CDN 地址，
+// 那时再拼一次只会让 play 接口收到一个 URL 当 video_id，返回 0 字节。
+func douyinPlayAddrURL(uri string) string {
+	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+		return uri
+	}
+	return fmt.Sprintf(douyinPlayURL, uri)
 }
 
 // douyinWebHeaders 组装抖音网页接口的请求头。配置了 Cookie 就一并带上：匿名请求
