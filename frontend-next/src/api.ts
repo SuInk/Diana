@@ -360,6 +360,7 @@ export interface BotProfileConfig {
   agent_browser_timeout_ms?: number;
   /** 允许这台机器人使用浏览器控制扩展（browser_ext_*）。默认关闭。 */
   agent_browser_control_enabled?: boolean;
+  agent_browser_box_enabled?: boolean;
 }
 
 export interface PluginSettingOption {
@@ -1164,6 +1165,8 @@ export interface BrowserControlStatus {
   ready: boolean;
   endpoint: string;
   protocol: number;
+  /** 这个部署里带没带扩展源码；带了才显示下载入口。 */
+  extension_download?: boolean;
 }
 
 export function getBrowserControlStatus(): Promise<BrowserControlStatus> {
@@ -3121,4 +3124,86 @@ export function logoutOAuthProvider(provider: string): Promise<{ providers: LLMO
 
 export function codingAgentSetup(agent: string, operation: "status" | "install" | "test" | "login-start" | "login-status" | "login-cancel"): Promise<{installed: boolean; key_configured: boolean; installable: boolean; message: string; login_url?: string; device_code?: string; login_state?: string}> {
   return requestJSON("/api/assistant/plugins/coding-agent/setup", {method: "POST", body: JSON.stringify({agent, operation})});
+}
+
+// ---------------------------------------------------------------------------
+// 内置浏览器：Diana 自己那个常驻浏览器，画面和输入都走 /api/browser-box。
+// ---------------------------------------------------------------------------
+
+export interface BrowserBoxSettings {
+  enabled: boolean;
+  /** 有头窗口。默认无头——容器里没有显示器，无头是唯一能跑起来的模式。 */
+  headful?: boolean;
+  window_width?: number;
+  window_height?: number;
+  denied_hosts?: string[];
+  executable?: string;
+}
+
+export interface BrowserBoxStatus {
+  settings: BrowserBoxSettings;
+  running: boolean;
+  takeover: boolean;
+  cdp_url?: string;
+  executable?: string;
+  profile_dir?: string;
+  started_at?: string;
+  last_error?: string;
+  available: boolean;
+}
+
+export interface BrowserBoxTab {
+  id: string;
+  title?: string;
+  url?: string;
+}
+
+export function getBrowserBoxStatus(): Promise<BrowserBoxStatus> {
+  return requestJSON<BrowserBoxStatus>("/api/browser-box/status");
+}
+
+export function saveBrowserBoxSettings(
+  settings: BrowserBoxSettings
+): Promise<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }> {
+  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>("/api/browser-box/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export function startBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/start", { method: "POST" });
+}
+
+export function stopBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/stop", { method: "POST" });
+}
+
+export function setBrowserBoxTakeover(active: boolean): Promise<{ ok: boolean; active: boolean }> {
+  return requestJSON<{ ok: boolean; active: boolean }>("/api/browser-box/takeover", {
+    method: "POST",
+    body: JSON.stringify({ active })
+  });
+}
+
+export function listBrowserBoxTabs(): Promise<{ tabs: BrowserBoxTab[] }> {
+  return requestJSON<{ tabs: BrowserBoxTab[] }>("/api/browser-box/tabs");
+}
+
+export function openBrowserBoxTab(url: string): Promise<{ tab: BrowserBoxTab }> {
+  return requestJSON<{ tab: BrowserBoxTab }>("/api/browser-box/tabs", {
+    method: "POST",
+    body: JSON.stringify({ url })
+  });
+}
+
+export function closeBrowserBoxTab(id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(`/api/browser-box/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** 实时画面的 WebSocket 地址。页面是 https 时自动用 wss。 */
+export function browserBoxLiveURL(tabID?: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const query = tabID ? `?tab=${encodeURIComponent(tabID)}` : "";
+  return `${protocol}//${window.location.host}/api/browser-box/live${query}`;
 }

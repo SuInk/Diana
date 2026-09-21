@@ -153,7 +153,21 @@ func (h *Hub) Register(conn Conn, hello Hello, token TokenInfo) (*Connection, We
 		pending:  map[string]chan Result{},
 	}
 	h.conns[id] = c
+	// 同一个扩展重连时顶掉它上一条连接。扩展只会持有一条 socket，旧的那条
+	// 要么已经死了、要么是半开——但控制面要等心跳超时才发现，这段时间里
+	// pickConnection 会看到两条「同一个浏览器」，然后要求调用方点名，
+	// 而两条在模型眼里长得一模一样，等于这段时间工具全不能用。
+	stale := make([]*Connection, 0, 1)
+	for _, other := range h.conns {
+		if other != c && other.hello.ExtensionID != "" && other.hello.ExtensionID == hello.ExtensionID {
+			stale = append(stale, other)
+		}
+	}
 	h.mu.Unlock()
+	// Close 自己要拿 h.mu，放到锁外面关。
+	for _, other := range stale {
+		other.Close()
+	}
 	return c, Welcome{
 		ProtocolVersion:  ProtocolVersion,
 		ConnectionID:     id,

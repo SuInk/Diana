@@ -39,7 +39,7 @@ type Policy struct {
 	// DeniedHosts 优先于白名单。用来在放开一级域之后挖掉子域，
 	// 例如放开 *.example.com 但排除 admin.example.com。
 	DeniedHosts []string `json:"denied_hosts,omitempty"`
-	// WriteEnabled 打开点击、输入与导航。关闭时只剩读取和截图。
+	// WriteEnabled 打开点击、输入与导航。关闭时只剩读取。
 	WriteEnabled bool `json:"write_enabled"`
 	// CommandTimeoutMS 单条指令等待上限。
 	CommandTimeoutMS int `json:"command_timeout_ms,omitempty"`

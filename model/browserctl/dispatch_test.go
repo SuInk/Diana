@@ -42,6 +42,12 @@ func (f *fakeConn) Close() error {
 	return nil
 }
 
+func (f *fakeConn) isClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
+}
+
 func (f *fakeConn) frames() []Frame {
 	f.mu.Lock()
 	defer f.mu.Unlock()

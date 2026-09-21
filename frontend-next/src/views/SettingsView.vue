@@ -250,6 +250,11 @@
               装在浏览器里的扩展反向连到这里，只能操作下面列出的站点。默认只读；点击、输入和导航要单独打开。
               任何时候你都可以在扩展或这一页按下接管，机器人立刻停手。还需要在对应机器人的 Agent 设置里单独打开这一档。
             </p>
+            <p v-if="browserExtensionDownload" class="muted" style="margin: 0; font-size: 12.5px">
+              还没装扩展？
+              <a href="/api/browser-control/extension.zip" download>下载扩展源码包</a>
+              ，解压后在 <code class="mono">chrome://extensions</code> 开启开发者模式、「加载已解压的扩展程序」选那个目录。
+            </p>
 
             <div class="field">
               <label class="switch-row">
@@ -258,7 +263,7 @@
               </label>
               <label class="switch-row">
                 <input v-model="browserPolicy.write_enabled" type="checkbox" :disabled="!browserPolicy.enabled" />
-                <span>允许写操作：点击、输入、导航。关闭时只能读取和截图</span>
+                <span>允许写操作：点击、输入、导航。关闭时只能读取页面</span>
               </label>
             </div>
 
@@ -881,6 +886,7 @@ const browserPolicy = ref<BrowserControlPolicy>({ enabled: false, write_enabled:
 const browserTokens = ref<BrowserControlToken[]>([]);
 const browserConnections = ref<BrowserControlConnection[]>([]);
 const browserReady = ref(false);
+const browserExtensionDownload = ref(false);
 const browserLoading = ref(true);
 const browserSaving = ref(false);
 const browserCreating = ref(false);
@@ -1108,6 +1114,7 @@ async function loadBrowserControl(): Promise<void> {
     browserTokens.value = status.tokens ?? [];
     browserConnections.value = status.connections ?? [];
     browserReady.value = status.ready;
+    browserExtensionDownload.value = status.extension_download ?? false;
     browserOriginsText.value = (status.policy.allowed_origins ?? []).join("\n");
     browserAllowedHostsText.value = (status.policy.allowed_hosts ?? []).join("\n");
     browserDeniedHostsText.value = (status.policy.denied_hosts ?? []).join("\n");

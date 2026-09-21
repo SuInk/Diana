@@ -72,6 +72,28 @@ async function setBadge() {
   } catch {
     // 图标状态只是提示，设置失败不该影响连接。
   }
+  broadcastState();
+}
+
+/**
+ * 取浏览器品牌。userAgentData.brands 里混着一条防嗅探用的假品牌
+ * （"Not)A;Brand" 之类，每版都换写法），挑到它的话 WebUI 的连接列表里
+ * 显示的就是一个不存在的浏览器名。这里按「排除假品牌，优先具体品牌」挑。
+ */
+function browserBrand() {
+  const brands = navigator.userAgentData?.brands ?? [];
+  const real = brands.filter((b) => !/not.*a.*brand/i.test(b.brand || ''));
+  const preferred =
+    real.find((b) => !/^chromium$/i.test(b.brand || '')) || real[0] || null;
+  return { brand: preferred?.brand || 'Chromium', version: preferred?.version || '' };
+}
+
+// 连接、策略、接管状态一变就广播一次，选项页据此重画。没有打开的选项页时
+// sendMessage 会 reject（没有接收方），这属于正常情况，吞掉即可。
+function broadcastState() {
+  status()
+    .then((payload) => chrome.runtime.sendMessage({ type: 'state', state: payload }))
+    .catch(() => {});
 }
 
 async function status() {
@@ -348,8 +370,14 @@ async function connect() {
     await setBadge();
     return;
   }
-  socket = new WebSocket(target);
-  socket.onopen = () => {
+  const active = new WebSocket(target);
+  socket = active;
+  // 所有回调都先确认自己属于当前这条连接。控制面在扩展重连时会顶掉上一条
+  // 连接，那条旧 socket 的 close 事件往往比新连接建好还晚到；不认一认就会
+  // 把刚建好的连接当成自己清掉，然后重连、再被顶掉，两秒一轮停不下来。
+  const stale = () => socket !== active;
+  active.onopen = () => {
+    if (stale()) return;
     // 令牌放在握手帧里，不放在 URL 上：URL 会进访问日志和历史记录。
     send({
       type: 'hello',
@@ -358,14 +386,15 @@ async function connect() {
         token: settings.token,
         extension_id: chrome.runtime.id,
         extension_name: chrome.runtime.getManifest().name,
-        browser: navigator.userAgentData?.brands?.at(-1)?.brand || 'Chromium',
-        browser_version: navigator.userAgentData?.brands?.at(-1)?.version || '',
+        browser: browserBrand().brand,
+        browser_version: browserBrand().version,
         label: settings.label,
         capabilities: ['page.read', 'page.open', 'page.click', 'page.type'],
       },
     });
   };
-  socket.onmessage = (event) => {
+  active.onmessage = (event) => {
+    if (stale()) return;
     let frame;
     try {
       frame = JSON.parse(event.data);
@@ -374,14 +403,17 @@ async function connect() {
     }
     handleFrame(frame);
   };
-  socket.onclose = () => {
+  active.onclose = () => {
+    // 旧连接的收尾不该动当前连接的状态，更不该触发重连。
+    if (stale()) return;
     socket = null;
     policy = null;
     connectionId = '';
     setBadge();
     scheduleReconnect();
   };
-  socket.onerror = () => {
+  active.onerror = () => {
+    if (stale()) return;
     lastError = lastError || '连不上 Diana';
   };
 }

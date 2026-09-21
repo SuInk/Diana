@@ -50,15 +50,19 @@ export function writeOp(op) {
 /**
  * 把站点白名单翻成 chrome.permissions 用的 origin 模式。
  * 只申请白名单里的站点，不申请 <all_urls>：扩展拿到的权限不该比授权范围更大。
+ *
+ * 每个站点要拆成 http 和 https 两条，不能用 scheme 通配：Chrome 要求申请的
+ * 模式落在 manifest 的 optional_host_permissions 里，而那里写的是 http 和
+ * https 两条全站模式；scheme 通配的模式不是其中任何一条的子集，申请时会直接
+ * 抛 "Only permissions specified in the manifest may be requested."，
+ * 用户点「授权这些站点」永远拿不到权限。
  */
 export function originPatterns(policy) {
   const patterns = new Set();
   for (const pattern of policy?.allowed_hosts ?? []) {
-    if (pattern.startsWith('*.')) {
-      patterns.add(`*://*.${pattern.slice(2)}/*`);
-    } else {
-      patterns.add(`*://${pattern}/*`);
-    }
+    const host = pattern.startsWith('*.') ? `*.${pattern.slice(2)}` : pattern;
+    patterns.add(`http://${host}/*`);
+    patterns.add(`https://${host}/*`);
   }
   return [...patterns];
 }

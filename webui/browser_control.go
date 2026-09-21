@@ -74,6 +74,9 @@ func (h *BrowserControlHandler) Register(router gin.IRouter) {
 	router.POST("/api/browser-control/connections/:id/takeover", h.setTakeover)
 	router.DELETE("/api/browser-control/connections/:id", h.disconnect)
 
+	// 扩展源码打包下载：容器部署的用户手上没有仓库检出，这是他们拿到扩展的唯一途径。
+	router.GET("/api/browser-control/extension.zip", h.downloadExtension)
+
 	router.GET("/browser-control/v1/socket", h.socket)
 }
 
@@ -86,7 +89,9 @@ func (h *BrowserControlHandler) status(c *gin.Context) {
 		"connections": h.hub.Connections(),
 		"ready":       h.hub.Ready(),
 		"endpoint":    "/browser-control/v1/socket",
-		"protocol":    browserctl.ProtocolVersion,
+		// 有没有扩展源码可下载，决定 WebUI 上那个下载按钮显不显示。
+		"extension_download": browserControlExtensionDir() != "",
+		"protocol":           browserctl.ProtocolVersion,
 	})
 }
 

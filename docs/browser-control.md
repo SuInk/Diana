@@ -2,7 +2,7 @@
 
 这一档让 Diana 操作**用户自己浏览器里的页面**：页面在用户日常浏览器中打开，登录态归用户，Diana 只通过一个用户自己安装、自己授权的扩展下发有限的几条操作指令。
 
-它和[无头浏览器渲染](browser-rendering.md)是两回事，不互相替代：
+它和[无头浏览器渲染](browser-rendering.md)、[内置浏览器](browser-builtin.md)都是两回事，不互相替代：
 
 | | 无头浏览器（`browser_*`） | 浏览器控制扩展（`browser_ext_*`） |
 | --- | --- | --- |
@@ -21,7 +21,7 @@
 2. **来源白名单**：扩展的 `chrome-extension://<扩展 ID>` 在 `allowed_origins` 里。白名单为空时谁都连不上。
 3. **令牌**：扩展握手时带一把 WebUI 里签发的令牌。令牌只存 SHA-256 哈希，明文只在创建那一刻显示一次；首次握手时会把它钉在那个扩展 ID 上，换扩展要重新签发。
 4. **站点白名单**：目标页面的主机名命中 `allowed_hosts` 且不在 `denied_hosts` 里。白名单为空时一个站点都不允许。
-5. **读写档位**：点击、输入、导航属于写操作，要 `write_enabled` 打开；关闭时只剩读取和截图。
+5. **读写档位**：点击、输入、导航属于写操作，要 `write_enabled` 打开；关闭时只剩读取。
 6. **按机器人开关**：机器人配置里的 `agent_browser_control_enabled`。默认关闭，逐台打开。
 7. **浏览器权限**：用户在扩展选项页把白名单里那些站点的权限授给扩展。
 
@@ -42,12 +42,13 @@
 ## 部署与连接
 
 1. 在 WebUI 打开浏览器控制页，创建一把令牌，记下明文（只显示这一次）。
-2. 在 Chrome 打开 `chrome://extensions`，开启开发者模式，「加载已解压的扩展程序」，选 `packaging/browser-control-extension/`。
-3. 复制扩展页面上的扩展 ID，回 WebUI 把 `chrome-extension://<扩展 ID>` 填进「允许的来源」。
-4. 填站点白名单，决定是否打开写操作，保存策略。
-5. 打开扩展的选项页，填 Diana 的 WebUI 地址和令牌，点「保存并连接」。
-6. 点「授权这些站点」，把白名单里的站点权限给扩展。
-7. 在要用这一档的机器人上打开 `agent_browser_control_enabled`。
+2. 拿到扩展源码：源码部署直接用仓库里的 `packaging/browser-control-extension/`；容器部署在浏览器控制页点「下载扩展源码包」（也可以直接取 `GET /api/browser-control/extension.zip`），解压到本地。
+3. 在 Chrome 打开 `chrome://extensions`，开启开发者模式，「加载已解压的扩展程序」，选上一步那个目录。
+4. 复制扩展页面上的扩展 ID，回 WebUI 把 `chrome-extension://<扩展 ID>` 填进「允许的来源」。
+5. 填站点白名单，决定是否打开写操作，保存策略。
+6. 打开扩展的选项页，填 Diana 的 WebUI 地址和令牌，点「保存并连接」。
+7. 点「授权这些站点」，把白名单里的站点权限给扩展。
+8. 在要用这一档的机器人上打开 `agent_browser_control_enabled`。
 
 连接是**扩展主动连 Diana**，所以 Diana 不需要能访问用户的机器，只要用户的浏览器能访问 Diana 的 WebUI 地址即可。令牌放在握手帧里而不是 URL 上，不会进访问日志、反代日志和浏览器历史。公网部署请务必用 HTTPS：扩展会把 `https://` 地址换成 `wss://`。
 
@@ -70,7 +71,7 @@
 - 控制面本身几乎不吃资源：一条 WebSocket，加上按连接缓存的标签页清单，没有浏览器进程。
 - 指令默认 20 秒超时（上限 120 秒），每分钟默认 60 条（上限 600 条），单条连接最多 8 条指令同时在飞。
 - 单帧上限 8 MiB。
-- MV3 的 Service Worker 空闲会被回收，扩展靠一分钟一次的闹钟重连，所以断线后最多约一分钟恢复。
+- MV3 的 Service Worker 空闲会被回收，扩展靠一分钟一次的闹钟重连，所以断线后最多约一分钟恢复。重连时控制面会顶掉这个扩展的上一条连接，同一个浏览器只会留一条：否则旧连接要等 90 秒心跳超时才消失，这段时间里工具会因为「有多条连接」而要求点名。
 - 同时连多个浏览器时，工具调用要用 `connection` 参数点名，Diana 不替用户猜是哪一个。
 
 ## 接口
@@ -85,8 +86,15 @@
 | DELETE | `/api/browser-control/tokens/:id` | 吊销令牌，并断开用它连着的连接 |
 | POST | `/api/browser-control/connections/:id/takeover` | 切换人工接管 |
 | DELETE | `/api/browser-control/connections/:id` | 断开一条连接 |
+| GET | `/api/browser-control/extension.zip` | 下载扩展源码包（镜像里带了才有，`status` 的 `extension_download` 表示有没有） |
 
 扩展接入端点是 `/browser-control/v1/socket`，不在 `/api` 下：它的鉴权是令牌加来源白名单，跟 WebUI 登录态无关，也不该因为管理员登出就掉线。
+
+## 想要一个 Diana 自己的浏览器？
+
+那是另一档：[内置浏览器](browser-builtin.md)。它不进你的日常浏览器，而是 Diana 自己
+常驻一个 Chrome，profile 留在数据目录里，WebUI 里能看画面、能直接上手。要「用我已经
+登录好的那个浏览器」就用本页这一档，要「给机器人一个它自己的浏览器」就用那一档。
 
 ## 有头容器与远程桌面
 
