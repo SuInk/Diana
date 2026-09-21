@@ -333,6 +333,8 @@ export interface BotProfileConfig {
   cross_platform_memory_enabled?: boolean;
   /** 这台机器人要不要带上世界书（世界观设定库）；缺省开启，树为空时开着也不注入。 */
   world_book_enabled?: boolean;
+  /** 允许机器人自己写自述（自我认知），只进提示词尾部、改不动人设和权限；缺省关闭。 */
+  self_note_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
   /** 后台空闲时定期探测模型收不收强制指定工具；探测是会计费的真实调用，缺省关闭。 */

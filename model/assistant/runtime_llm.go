@@ -922,6 +922,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
 		builder.WriteString("\n" + promptToolThreadState)
 	}
+	// 自述的规则进 head：开关是机器人配置，对同一个群里的所有人逐字相同。
+	if agentEnabled && hasTool(dianaSelfNoteToolName) {
+		builder.WriteString("\n" + promptToolSelfNote)
+	}
 	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
 	}

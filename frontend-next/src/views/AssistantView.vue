@@ -843,6 +843,14 @@
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
+                  <input v-model="form.self_note_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自述（自我认知）</span>
+                </label>
+                <span class="hint">允许机器人把自己注意到的说话习惯、偏好和毛病写成自述，跨群生效，每轮注入提示词尾部。人设正文只有你能改，自述改不动人设、权限和安全边界；最多 24 条，每条 120 字，主人可以在对话里让它列出、删除或清空。缺省关闭。</span>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
                   <input v-model="form.dict_segment_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">词典分词</span>
@@ -3561,6 +3569,7 @@ function setForm(config: BotProfileConfig): void {
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
+    self_note_enabled: config.self_note_enabled ?? false,
     romance_enabled: config.romance_enabled ?? false,
     llm_capability_probe_enabled: config.llm_capability_probe_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,

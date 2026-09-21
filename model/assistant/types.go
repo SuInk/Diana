@@ -642,6 +642,10 @@ type BotConfig struct {
 	// WorldBookEnabled 控制这台机器人要不要带上世界书（世界观设定库）。树是
 	// 全局一棵，这里只决定用不用；树是空的时候开着也不注入任何内容，所以默认开。
 	WorldBookEnabled *bool `json:"world_book_enabled,omitempty"`
+	// SelfNoteEnabled 控制这台机器人能不能自己写自述（自我认知）。默认关闭：
+	// 让机器人改写关于自己的描述是行为变化，不该在升级后突然发生。开着时它写的
+	// 条目只进提示词尾部的自述层，改不动人设正文，也改不动任何权限。
+	SelfNoteEnabled *bool `json:"self_note_enabled,omitempty"`
 	// RomanceEnabled 是人机恋（恋爱模式）的总开关。开着时用户才能和机器人确立
 	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
 	// 升级后突然发生。
@@ -1036,6 +1040,7 @@ type ConfigPayload struct {
 	CrossGroupMemoryEnabled         *bool                     `json:"cross_group_memory_enabled,omitempty"`
 	CrossPlatformMemoryEnabled      *bool                     `json:"cross_platform_memory_enabled,omitempty"`
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
+	SelfNoteEnabled                 *bool                     `json:"self_note_enabled,omitempty"`
 	RomanceEnabled                  *bool                     `json:"romance_enabled,omitempty"`
 	LLMCapabilityProbeEnabled       *bool                     `json:"llm_capability_probe_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
@@ -1584,6 +1589,7 @@ func DefaultBotConfig() BotConfig {
 		CrossGroupMemoryEnabled:     boolPointer(false),
 		CrossPlatformMemoryEnabled:  boolPointer(false),
 		WorldBookEnabled:            boolPointer(true),
+		SelfNoteEnabled:             boolPointer(false),
 		RomanceEnabled:              boolPointer(false),
 		LLMCapabilityProbeEnabled:   boolPointer(false),
 		MoodEnabled:                 boolPointer(false),
@@ -1845,6 +1851,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.WorldBookEnabled == nil {
 		cfg.WorldBookEnabled = boolPointer(true)
+	}
+	if cfg.SelfNoteEnabled == nil {
+		cfg.SelfNoteEnabled = boolPointer(false)
 	}
 	if cfg.RomanceEnabled == nil {
 		cfg.RomanceEnabled = boolPointer(false)
@@ -2191,6 +2200,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
 		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
+		SelfNoteEnabled:                   copyBoolPointer(cfg.SelfNoteEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
 		LLMCapabilityProbeEnabled:         copyBoolPointer(cfg.LLMCapabilityProbeEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
@@ -2399,6 +2409,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		CrossGroupMemoryEnabled:         copyBoolPointer(payload.CrossGroupMemoryEnabled),
 		CrossPlatformMemoryEnabled:      copyBoolPointer(payload.CrossPlatformMemoryEnabled),
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
+		SelfNoteEnabled:                 copyBoolPointer(payload.SelfNoteEnabled),
 		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
 		LLMCapabilityProbeEnabled:       copyBoolPointer(payload.LLMCapabilityProbeEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),

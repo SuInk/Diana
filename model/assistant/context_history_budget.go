@@ -16,6 +16,7 @@ const (
 	longTermMemoryTokenShare      int64 = 10
 	compressedSummaryTokenShare   int64 = 15
 	coreMemoryTokenShare          int64 = 5
+	selfNoteTokenShare            int64 = 5
 	contextShareDenominator       int64 = 100
 	minimumHistoryCandidateTokens int64 = 16
 	minimumRecentHistoryTokens    int64 = 512
@@ -43,6 +44,8 @@ const (
 	// coreMemoryTokenCeiling 限制常驻注入的核心记忆（长期交互要求和高置信要害
 	// 事实）。它不参加相关性排序，所以配额必须小而固定。
 	coreMemoryTokenCeiling int64 = 600
+	// 自述的绝对上限在 self_notes.go 里（selfNoteTokenCeiling）：条数上限和正文
+	// 长度上限都在那边，三个数一起改才对得上。
 )
 
 // contextLayerBudget 取「份额」和「绝对上限」中较小的那个。
@@ -78,6 +81,12 @@ func retrievedMemoryBudget(contextWindow int64) int64 {
 // 两个固定项合起来把历史挤到墙角。
 func coreMemoryBudget(contextWindow int64) int64 {
 	return contextLayerBudget(contextWindow, coreMemoryTokenShare, coreMemoryTokenCeiling)
+}
+
+// selfNoteBudget 返回自述层的预算。它和核心记忆同级：都是每轮常驻、不参加相关性
+// 排序的固定项，所以份额必须小而固定。
+func selfNoteBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, selfNoteTokenShare, selfNoteTokenCeiling)
 }
 
 type historyContextTurn struct {
@@ -660,6 +669,7 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(groupID string) ContextBudgetBr
 			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling, false),
 			newContextBudgetLayer("retrieved_memory", "检索记忆", window, longTermMemoryTokenShare, retrievedMemoryTokenCeiling, false),
 			newContextBudgetLayer("core_memory", "常驻记忆", window, coreMemoryTokenShare, coreMemoryTokenCeiling, false),
+			newContextBudgetLayer("self_notes", "自述", window, selfNoteTokenShare, selfNoteTokenCeiling, false),
 		},
 	}
 	for _, layer := range breakdown.Layers {
