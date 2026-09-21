@@ -28,6 +28,14 @@ const (
 	repositoryWatchSettingLimit   = "summary_commit_limit"
 	repositoryWatchSettingPatch   = "follow_up_include_patch"
 
+	// repositoryWatchDefaultTimeoutSeconds 是单次 GitHub 请求的默认上限。
+	// 原来是 20 秒：正常一页 PR（约 130KB）连头带体两秒出头就回来了，20 秒看着
+	// 很宽。但超时打不中「慢」，打中的是「传到一半停住」——出网绕代理时这种停滞
+	// 按十秒计，20 秒刚好卡在上面，于是每天攒出几次 context deadline exceeded，
+	// 一轮轮询失败、三五轮攒够就去群里报一次。订阅是半小时一轮的后台任务，多等
+	// 半分钟没有代价，等不到才有。
+	repositoryWatchDefaultTimeoutSeconds = 45
+
 	defaultGitHubAPIURL            = "https://api.github.com"
 	repositoryWatchNoReleaseCursor = "__none__"
 	repositoryWatchNoPullCursor    = "__none__"
@@ -318,11 +326,11 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingTimeout,
 				Label:       "仓库检查超时",
-				Description: "单次仓库动态检查的最长等待时间。",
+				Description: "单次 GitHub 请求的最长等待时间。超时会算作一次检查失败，连续失败到阈值才会告警。",
 				Type:        PluginSettingTypeNumber,
-				Default:     20,
+				Default:     repositoryWatchDefaultTimeoutSeconds,
 				Min:         settingRange(5),
-				Max:         settingRange(60),
+				Max:         settingRange(120),
 				Step:        1,
 				Unit:        "秒",
 			},
@@ -1143,7 +1151,7 @@ func (p *RepositoryWatchPlugin) collectIssuesGraphQL(ctx context.Context, reposi
 	if !cursorTime.IsZero() {
 		variables["since"] = cursorTime.UTC().Format(time.RFC3339)
 	}
-	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, 20)) * time.Second
+	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, repositoryWatchDefaultTimeoutSeconds)) * time.Second
 	var items []repositoryWatchIssueRecord
 	reopenTimes := map[int]time.Time{}
 	for page := 1; page <= repositoryWatchIssueScanPages; page++ {
@@ -1444,7 +1452,7 @@ func (p *RepositoryWatchPlugin) getJSON(ctx context.Context, path string, settin
 }
 
 func (p *RepositoryWatchPlugin) getJSONAccept(ctx context.Context, path string, settings SettingValues, accept string, target any) error {
-	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, 20)) * time.Second
+	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, repositoryWatchDefaultTimeoutSeconds)) * time.Second
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, p.baseURL+path, nil)

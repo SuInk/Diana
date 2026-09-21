@@ -227,7 +227,7 @@ func TestDefaultPluginManagerIncludesRepositoryWatch(t *testing.T) {
 		t.Fatalf("repository watch plugin state=%#v found=%v", state, ok)
 	}
 	plugin, settings, enabled := manager.PluginWithSettings(repositoryWatchPluginID, nil)
-	if !enabled || plugin == nil || settings.Int(repositoryWatchSettingTimeout, 0) != 20 {
+	if !enabled || plugin == nil || settings.Int(repositoryWatchSettingTimeout, 0) != repositoryWatchDefaultTimeoutSeconds {
 		t.Fatalf("plugin=%T settings=%#v enabled=%v", plugin, settings, enabled)
 	}
 	if !manager.CanAskAgent(repositoryWatchPluginID, nil, nil) || !manager.CanAskAgent(resolverPluginID, nil, nil) {
