@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>设置</h1>
         <p>控制台自身的配置。机器人怎么说话、回不回复，在「机器人」页里改。</p>
       </div>
     </header>
@@ -34,8 +33,8 @@
       </aside>
 
       <div class="settings-content">
+        <!-- 标题左侧菜单的选中项已经说了一遍，这里只留说明。 -->
         <header class="settings-page-head">
-          <h2>{{ activePageMeta.label }}</h2>
           <p class="settings-page-desc">{{ activePageMeta.hint }}</p>
         </header>
 
@@ -111,10 +110,6 @@
       <div v-show="activePage === 'sessions'" class="settings-section-body">
           <!-- 登录会话 -->
           <section v-if="authRequired || authLoading" class="card">
-          <div class="card-header">
-            <h2>登录会话</h2>
-            <span class="card-sub">机器人发来异常登录提醒时，在这里把对应设备踢下线</span>
-          </div>
           <div class="card-body stack">
             <LoadingSkeleton v-if="sessionsLoading && sessions.length === 0" kind="sessions" :count="2" label="正在加载登录会话" />
             <p v-else-if="sessions.length === 0" class="muted" style="margin: 0; font-size: 13px">当前没有活跃会话。</p>
@@ -160,10 +155,8 @@
           <!-- 对外 API 密钥 -->
           <section class="card">
           <div class="card-header">
-            <h2>对外 API</h2>
             <SkeletonBlock v-if="pluginLoading" width="90px" height="21px" />
             <span v-else class="badge" :class="openAPIPluginEnabled ? 'ok' : 'warn'">{{ openAPIPluginEnabled ? "插件已启用" : "插件未启用" }}</span>
-            <span class="card-sub">让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息</span>
           </div>
           <div class="card-body stack">
             <div class="cluster" style="gap: 8px; align-items: center">
@@ -234,8 +227,7 @@
 
       <div v-show="activePage === 'cache'" class="settings-section-body">
         <section class="download-cache-settings">
-          <div class="card-header">
-            <h2>下载缓存</h2>
+          <div class="card-header" style="justify-content: flex-end">
             <button class="btn small ghost" type="button" :disabled="cacheLoading || cacheSaving" title="刷新缓存设置" aria-label="刷新缓存设置" @click="loadCachePolicy">
               <RefreshCw :size="14" aria-hidden="true" />
             </button>
@@ -339,6 +331,14 @@
                 <span v-if="currentVersionLabel" class="mono">{{ currentVersionLabel }}</span>
               </span>
             </div>
+            <!-- 检查结果要看得见：不然不管有没有新版本，按钮都是一句「下载最新」。 -->
+            <div v-if="systemVersion?.update_supported && updateCheck" class="info-row">
+              <span class="muted info-label">最新版本</span>
+              <span class="info-value cluster" style="gap: 6px; justify-content: flex-end">
+                <span class="badge" :class="updateCheck.update_available ? 'warn' : 'ok'">{{ updateCheck.update_available ? "有新版本" : "已是最新" }}</span>
+                <span v-if="latestVersion" class="mono">{{ latestVersion }}</span>
+              </span>
+            </div>
             <p class="muted" style="font-size: 12.5px; margin: 0">
               {{ deploymentMode === "git" ? "发现新版本时仅显示黄色提示点，确认后才会同步最新稳定 Release。" : systemVersion?.update_supported ? "Release 更新先下载并校验；重启并安装必须单独确认，默认不会自动执行。" : "控制台仅提示新版本；Docker 镜像需由部署环境手动更新。" }}
             </p>
@@ -351,10 +351,28 @@
               <div v-if="updateStatus.dirty" class="badge warn">工作区有未提交修改，更新可能被跳过</div>
             </template>
             <div class="cluster">
-              <button v-if="systemVersion?.update_supported" class="btn primary" type="button" :disabled="operationRunning" @click="runUpdate">
+              <!-- 检查没成功就不提供下载：不知道最新版是什么的时候，先让它重新检一次。 -->
+              <button
+                v-if="systemVersion?.update_supported && !updateCheck && !downloadReadyForLatest"
+                class="btn primary"
+                type="button"
+                :disabled="loading"
+                @click="loadUpdates"
+              >
+                <RefreshCw :size="15" aria-hidden="true" />
+                {{ loading ? "检查中…" : "检查更新" }}
+              </button>
+              <button
+                v-else-if="systemVersion?.update_supported"
+                class="btn primary"
+                type="button"
+                :disabled="operationRunning || upToDate"
+                :title="upToDate ? '已经是最新版本，没有可下载的更新' : undefined"
+                @click="runUpdate"
+              >
                 <RefreshCw v-if="deploymentMode === 'release' && downloadReadyForLatest" :size="15" aria-hidden="true" />
                 <Download v-else :size="15" aria-hidden="true" />
-                {{ operationRunning ? "处理中…" : deploymentMode === "git" ? "重启并安装" : downloadReadyForLatest ? "重启并安装" : "下载最新 Release" }}
+                {{ primaryUpdateLabel }}
               </button>
             </div>
             <p v-if="staleDownloadedVersion" class="muted" style="font-size: 12.5px; margin: 0">
@@ -414,9 +432,6 @@
       <div v-show="activePage === 'status'" class="settings-section-body">
         <!-- 运行状态：版本号只在「系统更新」显示一次，这里只放运行期信息。 -->
         <section class="card">
-          <div class="card-header">
-            <h2>运行状态</h2>
-          </div>
           <div class="card-body stack" style="gap: 8px; font-size: 13px">
             <div class="info-row">
               <span class="muted info-label">运行时长</span>
@@ -435,9 +450,6 @@
       <div v-show="activePage === 'theme'" class="settings-section-body">
         <!-- 主题 -->
         <section class="card">
-          <div class="card-header">
-            <h2>界面主题</h2>
-          </div>
           <div class="card-body stack">
             <div class="field">
               <label>主题模式</label>
@@ -534,11 +546,17 @@ const settingsPages = [
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
 ] as const;
 
-const settingsGroups: { label: string; pages: (typeof settingsPages)[number][] }[] = [
-  { label: "账号与安全", pages: [settingsPages[0], settingsPages[1], settingsPages[2]] },
-  { label: "系统", pages: [settingsPages[3], settingsPages[4], settingsPages[5], settingsPages[6]] },
-  { label: "个性化", pages: [settingsPages[7]] }
-];
+// 按 key 组装而不是按下标：调顺序时不用跟着数数组下标。
+const settingsGroups = (
+  [
+    { label: "个性化", keys: ["theme"] },
+    { label: "账号与安全", keys: ["security", "sessions", "openapi"] },
+    { label: "系统", keys: ["cache", "media", "update", "status"] }
+  ] as const
+).map((group) => ({
+  label: group.label,
+  pages: group.keys.map((key) => settingsPages.find((page) => page.key === key)!)
+}));
 
 const activePage = ref<(typeof settingsPages)[number]["key"]>("security");
 const activePageMeta = computed(() => settingsPages.find((item) => item.key === activePage.value) ?? settingsPages[0]);
@@ -705,6 +723,14 @@ const latestVersion = computed(() => updateCheck.value?.latest_version || "");
 const downloadReadyForLatest = computed(() => updateStatus.value?.download_ready === true
   && Boolean(updateStatus.value.downloaded_version)
   && (!latestVersion.value || updateStatus.value.downloaded_version === latestVersion.value));
+// 检查说没新版本、也没有已下载待安装的包，就没什么可执行的。
+const upToDate = computed(() => updateCheck.value?.update_available === false && !downloadReadyForLatest.value);
+const primaryUpdateLabel = computed(() => {
+  if (operationRunning.value) return "处理中…";
+  if (downloadReadyForLatest.value) return "重启并安装";
+  if (upToDate.value) return "已是最新";
+  return deploymentMode.value === "git" ? "重启并安装" : "下载最新 Release";
+});
 const staleDownloadedVersion = computed(() => updateStatus.value?.download_ready === true
   && Boolean(updateStatus.value.downloaded_version)
   && Boolean(latestVersion.value)
@@ -1189,19 +1215,13 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-/* 选中项的标题和一句话说明：分区名进了侧栏，「这一项管什么」由正文头部交代。 */
+/* 「这一项管什么」由正文头部交代；分区名和选中项都在侧栏里。 */
 .settings-page-head {
   margin: 0 0 14px;
 }
 
-.settings-page-head h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 650;
-}
-
 .settings-page-desc {
-  margin: 4px 0 0;
+  margin: 0;
   font-size: 12.5px;
   color: var(--muted);
 }

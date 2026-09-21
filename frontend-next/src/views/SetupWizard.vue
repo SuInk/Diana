@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>配置向导</h1>
         <p>三步跑通：配置模型 → 接入聊天平台 → 启动验证</p>
       </div>
     </header>

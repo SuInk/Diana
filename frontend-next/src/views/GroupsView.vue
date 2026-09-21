@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>群管理</h1>
         <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽账号、专属人设与插件开关</p>
       </div>
       <div class="group-manual-add">

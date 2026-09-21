@@ -273,23 +273,22 @@ code {
 /* 品牌区 */
 .sidebar-head {
   display: flex;
-  align-items: flex-start;
-  min-height: 60px;
-  padding-right: 44px;
+  align-items: center;
+  padding: 6px 8px 18px;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  flex: 1;
+  width: 100%;
   min-width: 0;
   gap: 10px;
-  padding: 6px 8px 18px;
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
+  flex: none;
   width: 36px;
   height: 36px;
   border-radius: 11px;
@@ -299,56 +298,37 @@ code {
 }
 
 .brand-name {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-}
-
-.brand-name strong {
+  flex: 1;
+  min-width: 0;
   font-size: 14px;
+  line-height: 1.2;
   letter-spacing: 0.02em;
 }
 
-.brand-name small {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.brand-version {
-  /* 胶囊按钮：一眼看出可点击，而不是一行灰字。 */
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  align-self: flex-start;
-  margin-top: 2px;
-  padding: 1px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
+/* 版本入口跟主题切换同一排：这里是整条侧栏宽，
+   v0.8.132-canary.1 这种预发布号也不用缩写。 */
+/* 叠两个类：.nav-action 写在后面，同权重会盖掉字号和内边距。 */
+.nav-action.version-action {
+  /* 11px + 稍窄的左右内边距：13px 时 v0.8.132-canary.1 装不下。 */
+  padding-inline: 10px;
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--muted);
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    border-color 0.15s ease;
 }
 
-.brand-version::after {
-  content: "›";
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1;
-  opacity: 0.7;
-}
-
-.brand-version:hover {
+.nav-action.version-action:hover {
   color: var(--accent);
-  border-color: var(--accent);
+}
+
+/* 兵来将挡：后端返回的 version_label 比侧栏还长时就截断。 */
+.version-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .version-dot {
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1059,7 +1039,9 @@ code {
 }
 
 /* 顶栏 */
+/* 页面唯一的 h1：视图表头里重复的那一行已经删了。 */
 .topbar-title {
+  margin: 0;
   font-size: 16px;
   font-weight: 650;
 }
@@ -1068,10 +1050,10 @@ code {
   flex: 1;
 }
 
+/* 跟品牌同一行排，而不是绝对定位再给它留位：
+   窄屏按钮隐藏时，那块宽度能直接还给品牌。 */
 .sidebar-toggle {
-  position: absolute;
-  top: 16px;
-  right: 14px;
+  flex: none;
   margin: 0;
 }
 
@@ -1396,7 +1378,9 @@ code {
    页面最常做的事。 */
 .view-header {
   display: flex;
-  align-items: flex-end;
+  /* 居中而不是底对齐：删掉重复标题后左边只剩一行字，
+     跟 39px 高的按钮底对齐会差出将近 20px。 */
+  align-items: center;
   flex-wrap: wrap;
   gap: 12px;
   position: sticky;
@@ -1406,8 +1390,10 @@ code {
   /* 不透明，否则滚动的内容会从标题字底下穿过去。表头原本靠 margin 和下方内容
      拉开距离，那段空白在吸顶后同样要被盖住，所以把它换成 padding。 */
   background: var(--bg);
-  padding-bottom: 16px;
-  margin-bottom: 4px;
+  /* 16+4 是给「标题 + 副标题」两行配的；现在只剩一行，
+     再加上按钮把行擑高后文字下方的空隙，总共空了 29px。 */
+  padding-bottom: 8px;
+  margin-bottom: 0;
 }
 
 /* 侧栏底部动作项：和导航项同一套「图标 + 文字」单行样式 */
@@ -1575,14 +1561,22 @@ a.nav-action {
   color: var(--text);
 }
 
-.view-header .view-title h1 {
+/* h2 是顺栏给不了的子页面标题（日志、Skills、上下文……）。 */
+.view-header .view-title h2 {
+  margin: 0;
   font-size: 20px;
+  font-weight: 650;
 }
 
 .view-header .view-title p {
   margin-top: 3px;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* 删掉重复标题后副标题就是这块的第一行，不再需要跟标题拉开。 */
+.view-header .view-title p:first-child {
+  margin-top: 0;
 }
 
 .view-header .view-actions {
@@ -3347,6 +3341,12 @@ a.nav-action {
 }
 
 /* 插件设置弹窗 */
+/* 扩展页顶部的大分类页签：跟下方的视图表头拉开距离，
+   否则「扩展」标题直接贴在标签条底下。 */
+.extension-tabs {
+  margin-bottom: 20px;
+}
+
 .github-settings-tabs {
   width: 100%;
   margin-bottom: 20px;

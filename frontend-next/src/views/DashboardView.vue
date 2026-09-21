@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>总览</h1>
         <p>机器人运行状态、消息量和实时事件</p>
       </div>
       <!-- 一个时间选择管住下面所有卡片，不用每张卡各点各的。 -->
