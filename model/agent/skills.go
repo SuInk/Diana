@@ -210,8 +210,12 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// RenderSkillsPrompt returns the compact skills catalog that the Agent keeps in context.
-func RenderSkillsPrompt(skills []SkillMetadata, budget int) string {
+// RenderSkillsCatalog 渲染 skills 目录：名称加用途，不含正文，也不含磁盘路径。
+//
+// 这份目录按会话变——skill 可以按机器人、按群分档开放，装一个卸一个也会改它。放进
+// 系统提示词就等于每换一个群、每装一个 skill 都把整条 prompt 的前缀缓存作废，和
+// 之前 loadedContracts 夹在中段是同一个坑。调用方把它挂在消息尾部的易变块里。
+func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
 	if len(skills) == 0 {
 		return ""
 	}
@@ -220,10 +224,10 @@ func RenderSkillsPrompt(skills []SkillMetadata, budget int) string {
 	}
 	var builder strings.Builder
 	builder.WriteString("## Skills\n")
-	builder.WriteString("A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator.\n")
+	builder.WriteString("A skill is a set of instructions provided through a `SKILL.md` source. The entries below are only names and descriptions; no skill body is included in this request.\n")
 	builder.WriteString("### Available skills\n")
 	for _, skill := range skills {
-		line := fmt.Sprintf("- %s: %s (file: %s)\n", skill.Name, skill.Description, skill.Path)
+		line := fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description)
 		if builder.Len()+len(line) > budget {
 			builder.WriteString("- ... additional skills omitted because the skills context budget was reached.\n")
 			break
@@ -232,8 +236,8 @@ func RenderSkillsPrompt(skills []SkillMetadata, budget int) string {
 	}
 	builder.WriteString("### How to use skills\n")
 	builder.WriteString("- If the user names a skill with `$SkillName`, or the task clearly matches a skill description, use that skill for this turn.\n")
-	builder.WriteString("- Before using a skill, call `read_skill` for its name and follow the full `SKILL.md` instructions.\n")
-	builder.WriteString("- When a `SKILL.md` references relative files, resolve them relative to the skill file directory.\n")
+	builder.WriteString("- A catalog entry is not the skill: always call `read_skill` with its name first, then follow the full `SKILL.md` instructions.\n")
+	builder.WriteString("- When a `SKILL.md` references relative files, resolve them relative to the directory of the `path` returned by `read_skill`.\n")
 	return strings.TrimSpace(builder.String())
 }
 
