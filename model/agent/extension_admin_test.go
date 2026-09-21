@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -339,5 +340,102 @@ func TestExtensionAudienceLimitsMemberAccess(t *testing.T) {
 	}
 	if got := MemberAllowedExtensionIDsFor(overrides, audiences, "1001", "g1"); strings.Join(got, ",") != "mcp:other" {
 		t.Fatalf("关掉成员开关后仍然开放：%v", got)
+	}
+}
+
+// 从预设装 MCP 时要当场验一次令牌：令牌被 Gitea 拒了就不能落盘，否则装上的是一条
+// 看着正常、一调用就 401 的服务。验过了把换到的用户名报回去，人能确认装的是哪个账号。
+func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), ExtensionManagement: true}
+	ctx := context.Background()
+	gitea := giteaAPIStub(t, "good-token")
+
+	_, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "wrong-token"},
+	})
+	if !errors.Is(err, ErrPresetCredentialRejected) {
+		t.Fatalf("令牌不对应当拒绝保存，实际 %v", err)
+	}
+	if servers, loadErr := loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults())); loadErr == nil && len(servers) != 0 {
+		t.Fatalf("被拒绝的配置不该留在盘上：%#v", servers)
+	}
+
+	result, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, ok := result.(map[string]any); !ok || saved["account"] != "diana" {
+		t.Fatalf("保存结果里应当带上验到的账号：%#v", result)
+	}
+
+	// 编辑时界面要拿回那张表：出身、非机密字段都在，令牌只报「配过」不回显。
+	read, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "read", Kind: "mcp", Name: "gitea"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, ok := read.(map[string]any)
+	if !ok || detail["preset"] != "gitea" || detail["preset_transport"] != "stdio" {
+		t.Fatalf("读回来的配置没带预设出身：%#v", read)
+	}
+	values, ok := detail["preset_values"].(map[string]string)
+	if !ok || values["host"] != gitea.URL || values["token"] != "" {
+		t.Fatalf("预设字段没按预期回填：%#v", detail["preset_values"])
+	}
+
+	// 令牌留空表示沿用旧的：改了别的字段也不用重新贴一次令牌，而且照样验得过。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Values: map[string]string{"host": gitea.URL},
+	}); err != nil {
+		t.Fatalf("留空令牌应当沿用已保存的那个：%v", err)
+	}
+
+	// 预设那张表没有超时和工具名单的输入框，从它改一次地址不能把这些清掉；
+	// 「服务可用」这张表上有，就按表上的来。
+	path := resolveMCPConfigPath(cfg.WithDefaults())
+	servers, err := loadMCPServers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tuned := servers["gitea"]
+	tuned.StartupTimeoutSec, tuned.ToolTimeoutSec = 45, 90
+	tuned.DisabledTools = []string{"delete_repo"}
+	servers["gitea"] = tuned
+	if err := saveMCPServers(path, servers); err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Values: map[string]string{"host": gitea.URL}, Config: map[string]any{"enabled": disabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err = loadMCPServers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := servers["gitea"]
+	if kept.StartupTimeoutSec != 45 || kept.ToolTimeoutSec != 90 || len(kept.DisabledTools) != 1 {
+		t.Fatalf("预设表单改地址时把它管不到的设置清掉了：%#v", kept)
+	}
+	if kept.enabled() {
+		t.Fatalf("表单上的「服务可用」没生效：%#v", kept)
+	}
+
+	// 单独的「检测」不写盘，只回报验的结果。
+	verified, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "preset_verify", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, ok := verified.(map[string]any); !ok || status["verified"] != true || status["account"] != "diana" {
+		t.Fatalf("检测结果不对：%#v", verified)
 	}
 }

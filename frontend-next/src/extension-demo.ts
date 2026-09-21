@@ -1,6 +1,6 @@
 import type { ManagedExtension } from './api';
 
-const entries: Array<ManagedExtension & {content?:string;config?:Record<string,any>}> = [
+const entries: Array<ManagedExtension & {content?:string;config?:Record<string,any>;preset?:string;preset_transport?:string;preset_values?:Record<string,string>}> = [
   {kind:'skill',id:'skill:bot-protocol',name:'bot-protocol',description:'平台群操作与 Diana 回复设置',source:'builtin:bot-protocol',managed:false,enabled:true,content:'---\nname: bot-protocol\ndescription: 平台协议与回复配置\n---\n使用平台协议工具查询群信息，使用 bot_config 修改回复设置。'},
   {kind:'skill',id:'skill:daily-summary',name:'daily-summary',description:'整理讨论中的待办与结论',source:'managed',managed:true,enabled:true,content:'---\nname: daily-summary\ndescription: 整理讨论中的待办与结论\n---\n根据提供的讨论内容整理待办。'},
   {kind:'skill',id:'skill:release-notes',name:'release-notes',description:'按仓库发布记录整理更新说明',source:'managed',managed:true,enabled:true,bundled:true,content:'---\nname: release-notes\ndescription: 按仓库发布记录整理更新说明\n---\n用 browser_render 读取 releases 页面，再按模板整理。'},
@@ -15,7 +15,7 @@ const demoMCPPresets=[{
  summary:'接入自建或公有 Gitea 的仓库、Issue 与 Pull Request。官方 gitea-mcp 随 Diana 一起打包，填实例地址和访问令牌就能用。',
  docs_url:'https://gitea.com/gitea/gitea-mcp',
  transports:[
-  {id:'stdio',label:'用自带的 gitea-mcp',hint:'推荐：Diana 直接拉起随包发布的 gitea-mcp，令牌只存在这条 MCP 的环境变量里，不经过第三方。',fields:[
+  {id:'stdio',label:'用自带的 gitea-mcp',hint:'推荐：Diana 直接拉起随包发布的 gitea-mcp，令牌只存在这条 MCP 的环境变量里，不经过第三方。',verifiable:true,fields:[
    {key:'host',label:'Gitea 实例地址',placeholder:'https://git.example.com',required:true},
    {key:'token',label:'访问令牌',hint:'Gitea 里生成的个人访问令牌，按 MCP 环境变量存放，不回显。',required:true,secret:true},
    {key:'command',label:'可执行文件',placeholder:'留空用自带的那份',hint:'只有要换成自己编译或另外安装的 gitea-mcp 时才填，可填命令名或绝对路径。'}
@@ -38,11 +38,13 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
   for(const field of transport.fields)if(field.required&&!String(body.values?.[field.key]??'').trim())throw Error(`请填写「${field.label}」`);
   const name=body.name||preset.name;if(entries.some(i=>i.kind==='mcp'&&i.name===name))throw Error('名称已存在');
   const url=String(body.values?.url??'');
-  entries.push({kind:'mcp',id:`mcp:${name}`,name,description:preset.summary,source:url||'managed',managed:true,enabled:true,config:{},transport:body.transport==='stdio'?'stdio':'streamable_http'});
+  entries.push({kind:'mcp',id:`mcp:${name}`,name,description:preset.summary,source:url||'managed',managed:true,enabled:true,config:{},preset:preset.id,preset_transport:body.transport,preset_values:Object.fromEntries(transport.fields.filter(f=>!f.secret).map(f=>[f.key,String(body.values?.[f.key]??'')])),transport:body.transport==='stdio'?'stdio':'streamable_http'});
   return {ok:true};
  }
+ // 演示站不连任何外部服务，也就没法真的验令牌——照实说，不伪造一个「验过了」。
+ if(operation==='preset_verify')return {verified:false,supported:false,message:'演示模式不连接外部服务，无法检测令牌，请在真实部署中检测'};
  const item=entries.find(i=>i.kind===body.kind&&i.name===body.name);
- if(operation==='read'){if(!item)throw Error('扩展不存在');return item.kind==='skill'?{content:item.content,managed:item.managed}:{config:item.config,configured_headers:[],configured_env:[]}}
+ if(operation==='read'){if(!item)throw Error('扩展不存在');return item.kind==='skill'?{content:item.content,managed:item.managed}:{config:item.config,configured_headers:[],configured_env:[],...(item.preset?{preset:item.preset,preset_transport:item.preset_transport,preset_values:item.preset_values}:{})}}
  if(operation==='test')throw Error('演示模式不连接外部 MCP，请在真实部署中测试');
  if(operation==='enabled'){if(!item||!body.profile_id)throw Error('请选择机器人');(overrides[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
  if(operation==='members'){if(!item)throw Error('扩展不存在');if(!body.profile_id)throw Error('请选择机器人');(memberAccess[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
