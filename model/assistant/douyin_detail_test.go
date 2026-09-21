@@ -92,3 +92,41 @@ func TestLiveDouyinDetail(t *testing.T) {
 	}
 	t.Logf("aweme_id=%s type=%d desc=%.30s", detail.AwemeID, detail.AwemeType, detail.Desc)
 }
+
+// share/note 形式的图集 aweme_type 是 0，play_addr 指向背景音乐，只看 type 会把它当视频下。
+func TestDouyinDetailIsImagePostByImages(t *testing.T) {
+	note := douyinMediaDetail{AwemeID: "7684990612341317446", AwemeType: 0}
+	note.Video.PlayAddr.URI = "https://sf11-cdn-tos.douyinstatic.com/obj/ies-music/7640489378485209865.mp3"
+	note.Images = append(note.Images, struct {
+		URLList []string `json:"url_list"`
+	}{URLList: []string{"https://example.invalid/1.jpg"}}, struct {
+		URLList []string `json:"url_list"`
+	}{URLList: []string{"https://example.invalid/2.jpg"}})
+
+	if !douyinDetailIsImagePost(note) {
+		t.Fatal("带 images 的作品必须按图集处理")
+	}
+	if path := downloadDouyinMediaDetailFile(context.Background(), note); path != "" {
+		t.Fatalf("图集不该走视频下载，实际拿到 %q", path)
+	}
+	if !douyinDetailIsImagePost(douyinMediaDetail{AwemeID: "1", AwemeType: 68}) {
+		t.Fatal("老的图集 aweme_type 仍要认")
+	}
+
+	video := douyinMediaDetail{AwemeID: "2"}
+	video.Video.PlayAddr.URI = "v0200fg10000dan6mufog65kc7fg7hr0"
+	if douyinDetailIsImagePost(video) {
+		t.Fatal("普通视频不该被当成图集")
+	}
+}
+
+func TestDouyinPlayAddrURL(t *testing.T) {
+	if got := douyinPlayAddrURL("v0200fg10000dan6mufog65kc7fg7hr0"); !strings.Contains(got, "video_id=v0200fg10000dan6mufog65kc7fg7hr0") {
+		t.Fatalf("video_id 形式应拼到 play 接口，实际 %s", got)
+	}
+	// 已经是完整地址时再拼一次，play 接口只会回 0 字节。
+	direct := "https://sf11-cdn-tos.douyinstatic.com/obj/ies-music/7640489378485209865.mp3"
+	if got := douyinPlayAddrURL(direct); got != direct {
+		t.Fatalf("完整地址应原样下载，实际 %s", got)
+	}
+}

@@ -39,7 +39,7 @@ func (t *dianaLLMConfigTool) InputSchema() map[string]any {
 		"role": toolEnumParam("要改哪个用途的模型：chat 对话（默认）、vision 视觉理解、intent 意图识别、image 图片生成。"+
 			"用户说「识图用 X」「生图换成 Y」「意图判断用 Z」时要传对应的值。",
 			"chat", "vision", "intent", "image"),
-		"provider":      toolEnumParam("要切换到的 provider，不改则省略。", "openai_compatible", "gemini", "anthropic"),
+		"provider":      toolEnumParam("要切换到的 provider，不改则省略。", "openai_compatible", "gemini", "anthropic", "typesafe"),
 		"provider_id":   toolStringParam("WebUI 已配置的具体供应商 ID，优先使用 list 返回的 ID。不是机器人 ID。"),
 		"provider_name": toolStringParam("供应商的准确名称；重名时必须改用 provider_id。"),
 		"model":         toolStringParam("要切换到的模型 ID，不改则省略。"),
@@ -156,6 +156,8 @@ func structuredLLMProvider(raw string) (llm.Provider, error) {
 		return llm.ProviderGemini, nil
 	case "anthropic", "claude":
 		return llm.ProviderAnthropic, nil
+	case "typesafe", "jev", "typesafe_systemone":
+		return llm.ProviderTypeSafe, nil
 	default:
 		return "", fmt.Errorf("不支持的 provider %q", raw)
 	}

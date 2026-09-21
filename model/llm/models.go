@@ -18,6 +18,7 @@ import (
 const DefaultOpenAICompatibleModel = ""
 const DefaultGeminiModel = "gemini-3.7-flash"
 const DefaultAnthropicModel = "claude-sonnet-5"
+const DefaultTypeSafeModel = typeSafeDefaultModel
 const DefaultOpenAICompatibleUserAgent = "codex-cli/0.142.0"
 
 type ModelInfo struct {
@@ -42,6 +43,8 @@ func DefaultModel(provider Provider) string {
 		return DefaultGeminiModel
 	case ProviderAnthropic:
 		return DefaultAnthropicModel
+	case ProviderTypeSafe:
+		return DefaultTypeSafeModel
 	default:
 		return ""
 	}
@@ -74,6 +77,10 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 		return listGeminiModels(ctx, cfg, options.httpClient)
 	case ProviderAnthropic:
 		return nil, fmt.Errorf("llm: Anthropic 模型列表无法实时同步，请手动添加上游实际支持的模型 ID")
+	case ProviderTypeSafe:
+		// System One 接口没有模型列表端点。jev-latest 会跟着上游滚动，固定版本号
+		// 需要时在界面里手填。
+		return []ModelInfo{{ID: typeSafeDefaultModel, Name: "Jev（最新）", OwnedBy: "typesafe"}}, nil
 	default:
 		return nil, fmt.Errorf("llm: model listing is not supported for provider %q", cfg.Provider)
 	}

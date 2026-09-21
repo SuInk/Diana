@@ -100,6 +100,16 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	return registry, nil
 }
 
+// agentCoreTools 按这台机器人配的档位算出本轮的常驻工具名单。没配过档位就是内置
+// 默认名单；读不到覆盖文件时同样退回默认，不因为配置读失败就把工具列表抖一遍。
+func (r *Runtime) agentCoreTools(event MessageEvent, registry *agent.ToolRegistry) []string {
+	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), event.ProfileID)
+	if err != nil || len(overrides) == 0 {
+		return replyAgentCoreTools
+	}
+	return agent.ResolveCoreTools(replyAgentCoreTools, registry.ToolOwners(), overrides)
+}
+
 // groupExtensionAccessForEvent 取本群对扩展档位的覆盖，私聊没有群配置。
 func (r *Runtime) groupExtensionAccessForEvent(event MessageEvent) map[string]GroupExtensionAccess {
 	if event.Kind != EventKindGroup {
@@ -357,6 +367,8 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		FileWriteEnabled:           cfg.AgentFileWriteEnabled,
 		BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 		BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
+		BrowserControl:             r.browserControlFor(cfg),
+		BuiltinBrowser:             r.browserBoxFor(cfg),
 	}
 }
 
@@ -614,4 +626,120 @@ func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scop
 			"keep_older_summary": scope.KeepContextSummary,
 		},
 	})
+}
+
+// AgentResidencyEntry 是常驻档位界面里的一行：一个内置工具，或者一条 MCP 服务。
+type AgentResidencyEntry struct {
+	ID          string   `json:"id"`
+	Kind        string   `json:"kind"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+	// Default 是不配档位时这一项的实际结果。
+	Default bool `json:"default"`
+	// Resident 是用户配的档位，nil 表示跟随默认。
+	Resident *bool `json:"resident,omitempty"`
+}
+
+// agentResidencyProtocolTools 是协议本身的工具，不接受档位：它们一定随请求下发，
+// 配成按需等于把加载工具的那个工具也藏起来。
+var agentResidencyProtocolTools = map[string]bool{
+	agent.ToolsLoadToolName:    true,
+	agent.ToolsExecuteToolName: true,
+	"agent_finalize":           true,
+}
+
+// rememberAgentResidencyCatalog 记下这一轮实际注册的工具目录。
+//
+// 界面没法自己造一份这样的目录：内置工具是在组装回复时按平台、按权限、按插件开关
+// 一个个挂上去的，不跑一轮就不知道这台机器人到底有哪些。所以档位界面显示的是最近
+// 一轮真实用过的目录，而不是一份可能对不上的静态清单。
+func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *agent.ToolRegistry) {
+	if r == nil || registry == nil {
+		return
+	}
+	mcpNames := map[string]bool{}
+	entries := []AgentResidencyEntry{}
+	for _, state := range registry.Extensions() {
+		if state.Kind != agent.ExtensionKindMCP || len(state.Tools) == 0 {
+			continue
+		}
+		for _, name := range state.Tools {
+			mcpNames[name] = true
+		}
+		entries = append(entries, AgentResidencyEntry{
+			ID:          state.ID,
+			Kind:        "mcp",
+			Name:        state.Name,
+			Description: state.Description,
+			Tools:       append([]string(nil), state.Tools...),
+		})
+	}
+	for _, name := range registry.Names() {
+		if mcpNames[name] || agentResidencyProtocolTools[name] {
+			continue
+		}
+		description := ""
+		if tool, ok := registry.Get(name); ok {
+			description = agent.CompactToolDescription(tool.Description(), agent.SystemPromptToolDescriptionBudget)
+		}
+		entries = append(entries, AgentResidencyEntry{
+			ID:          agent.ToolResidentID(name),
+			Kind:        "tool",
+			Name:        name,
+			Description: description,
+		})
+	}
+	defaults := map[string]bool{}
+	for _, name := range replyAgentCoreTools {
+		defaults[name] = true
+	}
+	for index := range entries {
+		for _, name := range append([]string{entries[index].Name}, entries[index].Tools...) {
+			if defaults[name] {
+				entries[index].Default = true
+			}
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Kind != entries[j].Kind {
+			return entries[i].Kind < entries[j].Kind
+		}
+		return entries[i].Name < entries[j].Name
+	})
+	r.agentResidencyMu.Lock()
+	if r.agentResidencyCatalog == nil {
+		r.agentResidencyCatalog = map[string][]AgentResidencyEntry{}
+	}
+	r.agentResidencyCatalog[event.ProfileID] = entries
+	r.agentResidencyMu.Unlock()
+}
+
+// AgentResidency 返回这台机器人最近一轮的工具目录和已配档位。
+func (r *Runtime) AgentResidency(profileID string) []AgentResidencyEntry {
+	if r == nil {
+		return nil
+	}
+	r.agentResidencyMu.RLock()
+	entries := append([]AgentResidencyEntry(nil), r.agentResidencyCatalog[profileID]...)
+	r.agentResidencyMu.RUnlock()
+	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), profileID)
+	if err != nil {
+		return entries
+	}
+	for index := range entries {
+		entries[index].Resident = agent.ResidentOverride(overrides, entries[index].ID)
+	}
+	return entries
+}
+
+// SetAgentResidency 写入或清除一个档位。resident 为 nil 表示跟随默认。
+func (r *Runtime) SetAgentResidency(profileID, id string, resident *bool) error {
+	if strings.TrimSpace(profileID) == "" {
+		return errors.New("请选择机器人后调整常驻档位")
+	}
+	if strings.TrimSpace(id) == "" {
+		return errors.New("缺少档位对象")
+	}
+	return agent.SaveExtensionResidency(AgentWorkspaceDir(), profileID, id, resident)
 }

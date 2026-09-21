@@ -120,9 +120,11 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
 // 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
-func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
+func proactiveReplyRouterPromptForChatIn(configured, criteria string, chatIn chatInSettings, social bool) string {
 	if chatIn.Participation != nil {
-		return chatIn.Participation.prompt()
+		// 评分档位和口径由 Participation 决定；管理员的补充判据只拼在尾部，评分契约
+		// （两项、裸 JSON）不交给用户改。configured 是被取代的旧路由提示词，仍然不读。
+		return appendRouterCriteria(chatIn.Participation.prompt(), criteria)
 	}
 	prompt := proactiveReplyRouterSystemPrompt(configured)
 	if chatIn.SuperActive {
@@ -276,6 +278,7 @@ func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (s
 
 func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
@@ -296,6 +299,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		return "", nil
 	}
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	group := ModelBindingGroupOf(llmUsagePurposeFromContext(ctx))
 	if group == "" {
 		group = llm.GroupChat
@@ -499,6 +503,7 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
 	roles := r.modelRolesForContext(ctx)
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(llm.GroupIntent, run)
@@ -808,6 +813,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		}
 		return false
 	}
+	// 品格层排在人设正文之前，也就是整条系统提示词的最前面：它解释的是「为什么
+	// 会这样做」，后面所有规则都在它的框架里读。它只依赖机器人配置（分群覆盖里
+	// 没有这个字段），所以逐字节稳定，不影响前缀缓存。
+	if soul := cfg.Soul.Render(); soul != "" {
+		builder.WriteString(soul)
+		builder.WriteString("\n")
+	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode))
@@ -921,6 +933,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
 		builder.WriteString("\n" + promptToolThreadState)
+	}
+	// 自述的规则进 head：开关是机器人配置，对同一个群里的所有人逐字相同。
+	if agentEnabled && hasTool(dianaSelfNoteToolName) {
+		builder.WriteString("\n" + promptToolSelfNote)
 	}
 	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
@@ -1066,7 +1082,8 @@ func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history 
 	3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
 	4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
 	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进 Markdown 代码块，也不要自己写平台专用的提及写法。
-	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
+	6. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。
+	7. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
 		string(payload),
 		currentSenderMentionRule(cfg),
 		autoDecorationCancelClause(cfg),

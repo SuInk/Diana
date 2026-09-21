@@ -69,7 +69,7 @@ type WeComChannel struct {
 func NewWeComChannel(cfg WeComConfig) *WeComChannel {
 	channel := &WeComChannel{
 		cfg:    cfg,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 60 * time.Second},
 		status: ChannelStatus{Endpoint: weComAPIBase + " (callback " + WeComCallbackPath + ")", UpdatedAt: time.Now()},
 		dedupe: newEventDeduper(10 * time.Minute),
 	}

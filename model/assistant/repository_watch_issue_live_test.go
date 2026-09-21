@@ -25,7 +25,7 @@ func TestLiveRepositoryWatchDoesNotReplayIssuesOnPullRequestHeavyRepository(t *t
 	}
 	token := strings.TrimSpace(os.Getenv("DIANA_LIVE_GITHUB_TOKEN"))
 	client := &http.Client{Timeout: 60 * time.Second}
-	plugin := newRepositoryWatchPlugin(client, "https://api.github.com")
+	plugin := newTestRepositoryWatchPlugin(client, "https://api.github.com")
 	paths := map[string]SettingValues{"rest": {repositoryWatchSettingLimit: 5}}
 	if token != "" {
 		paths["graphql"] = SettingValues{repositoryWatchSettingToken: token, repositoryWatchSettingLimit: 5}
@@ -51,7 +51,7 @@ func TestLiveRepositoryWatchDoesNotReplayIssuesOnPullRequestHeavyRepository(t *t
 			}
 		}
 	}
-	pulls, next, err := plugin.fetchPullRequests(context.Background(), repository, "main", "", time.Time{}, repositoryWatchSelection{PullRequests: true}, paths["rest"])
+	pulls, next, _, err := plugin.fetchPullRequests(context.Background(), repository, "main", "", time.Time{}, repositoryWatchSelection{PullRequests: true}, paths["rest"])
 	if err != nil {
 		t.Fatalf("pull requests: %v", err)
 	}

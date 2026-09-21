@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-const repositoryWatchFailureAlertThreshold = 3
-
 const (
 	repositoryWatchFailureStagePolling  = "polling"
 	repositoryWatchFailureStageSummary  = "summary"
@@ -71,9 +69,12 @@ func updateRepositoryWatchFailureState(item *Reminder, cause error) {
 	item.RecoveryNoticePending = false
 }
 
-func repositoryWatchFailureShouldAlert(item Reminder) bool {
-	return reminderIsRepositoryWatch(item) &&
-		item.ConsecutiveFailures >= repositoryWatchFailureAlertThreshold &&
+// repositoryWatchFailureShouldAlert 的 threshold 见 recurringFailureAlertThreshold：
+// 0 表示后台把失败告警关了，这时连续失败多少次都不出声。
+func repositoryWatchFailureShouldAlert(item Reminder, threshold int) bool {
+	return threshold > 0 &&
+		reminderIsRepositoryWatch(item) &&
+		item.ConsecutiveFailures >= threshold &&
 		strings.TrimSpace(item.LastErrorFingerprint) != "" &&
 		item.FailureAlertedAt.IsZero()
 }
@@ -132,7 +133,7 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 	return nil
 }
 
-func (r *Runtime) acknowledgeRepositoryWatchFailureAlert(id, fingerprint string, alertedAt time.Time) (Reminder, error) {
+func (r *Runtime) acknowledgeRepositoryWatchFailureAlert(id, fingerprint string, threshold int, alertedAt time.Time) (Reminder, error) {
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -141,7 +142,7 @@ func (r *Runtime) acknowledgeRepositoryWatchFailureAlert(id, fingerprint string,
 		if item.ID != id || !reminderIsRepositoryWatch(*item) {
 			continue
 		}
-		if item.LastErrorFingerprint != fingerprint || item.ConsecutiveFailures < repositoryWatchFailureAlertThreshold {
+		if item.LastErrorFingerprint != fingerprint || item.ConsecutiveFailures < threshold {
 			return *item, fmt.Errorf("仓库订阅 %s 的失败状态已变化", id)
 		}
 		if item.FailureAlertedAt.IsZero() {

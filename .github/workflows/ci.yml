@@ -385,16 +385,49 @@ jobs:
             '{schema: 1, releases: [{prerelease: $prerelease, tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS") | .url), assets: $assets}]}' \
             > latest.json
 
-      - name: Write canary release notes
-        if: needs.build-version.outputs.canary == 'true'
+      # Release 页面自带安装指令：从这里进来的人手上通常只有一个版本号，
+      # 不该再跳回 README 才知道怎么装。每条都是能整条复制的完整命令，
+      # 分开放在各自的代码块里——并排写一行复制时会把两条粘在一起。
+      - name: Write release notes
         env:
           COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+          IS_CANARY: ${{ needs.build-version.outputs.canary }}
         run: |
           {
-            echo "main 分支合并后自动构建的 Canary 预览版，未经人工验证，只推送给选择 Canary 更新通道的实例。发布正式版时自动删除。"
+            if [ "${IS_CANARY}" = "true" ]; then
+              echo "main 分支合并后自动构建的 Canary 预览版，未经人工验证，只推送给选择 Canary 更新通道的实例。发布正式版时自动删除。"
+              echo
+              echo "- 提交：${GITHUB_SHA}"
+              echo "- 改动：$(head -n 1 <<<"${COMMIT_SUBJECT}")"
+              echo
+            fi
+            echo "## 安装"
             echo
-            echo "- 提交：${GITHUB_SHA}"
-            echo "- 改动：$(head -n 1 <<<"${COMMIT_SUBJECT}")"
+            echo "**一键安装（Linux / macOS）**"
+            echo
+            echo '```sh'
+            echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sudo sh'
+            echo '```'
+            echo
+            echo "**一键安装（Windows PowerShell）**"
+            echo
+            echo '```powershell'
+            echo 'irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex'
+            echo '```'
+            echo
+            echo "**Docker Compose（完整版，预装 Chromium、字体、ffmpeg、yt-dlp 与 OCR）**"
+            echo
+            echo '```sh'
+            echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh'
+            echo '```'
+            echo
+            echo "**Docker Compose（slim 轻量版，不含上面那些，拉取体积约为五分之一）**"
+            echo
+            echo '```sh'
+            echo 'curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_VARIANT=slim sh'
+            echo '```'
+            echo
+            echo "手动安装：下载下方对应平台的完整包，用 \`SHA256SUMS\` 校验后解压运行 \`run.sh\` / \`run.bat\`。"
           } > release/NOTES.md
 
       - name: Publish release
@@ -402,7 +435,7 @@ jobs:
         with:
           tag_name: ${{ needs.build-version.outputs.value }}
           target_commitish: ${{ github.sha }}
-          body_path: ${{ needs.build-version.outputs.canary == 'true' && 'release/NOTES.md' || '' }}
+          body_path: release/NOTES.md
           name: ${{ needs.build-version.outputs.value }}
           prerelease: ${{ needs.build-version.outputs.channel != 'release' }}
           make_latest: ${{ needs.build-version.outputs.channel == 'release' }}

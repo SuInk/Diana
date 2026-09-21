@@ -580,6 +580,7 @@ func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
 		"session_thread":   sessionThreadBudget(window),
 		"retrieved_memory": retrievedMemoryBudget(window),
 		"core_memory":      coreMemoryBudget(window),
+		"self_notes":       selfNoteBudget(window),
 	}
 	if len(breakdown.Layers) != len(want) {
 		t.Fatalf("layers = %#v", breakdown.Layers)

@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func TestScheduledQueryFailureNotifiesAndSchedulesRetry(t *testing.T) {
 	channel := &recordingChannel{}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001", AgentEnabled: false}, channel, NewPluginManager(), nil, store, nil, nil)
 
-	// 头两次失败只重试、不出声：网络抖一下就往群里吼一嗓子，真出事时没人再看这类消息。
+	// 到阈值之前只重试、不出声：网络抖一下就往群里吼一嗓子，真出事时没人再看这类消息。
 	runtime.fireDueReminders(context.Background())
 	if len(channel.sent) != 0 {
 		t.Fatalf("first failure should stay quiet, sent = %#v", channel.sent)
@@ -43,10 +44,12 @@ func TestScheduledQueryFailureNotifiesAndSchedulesRetry(t *testing.T) {
 		t.Fatalf("schedule state = %#v status=%q", item, scheduleStatus(item))
 	}
 
-	store.items[0].TriggerAt = time.Now().Add(-time.Second)
-	runtime.fireDueReminders(context.Background())
-	if len(channel.sent) != 0 {
-		t.Fatalf("second failure should stay quiet, sent = %#v", channel.sent)
+	for attempt := 2; attempt < defaultRecurringFailureAlertThreshold; attempt++ {
+		store.items[0].TriggerAt = time.Now().Add(-time.Second)
+		runtime.fireDueReminders(context.Background())
+		if len(channel.sent) != 0 {
+			t.Fatalf("failure %d should stay quiet, sent = %#v", attempt, channel.sent)
+		}
 	}
 
 	store.items[0].TriggerAt = time.Now().Add(-time.Second)
@@ -54,7 +57,7 @@ func TestScheduledQueryFailureNotifiesAndSchedulesRetry(t *testing.T) {
 	if len(channel.sent) != 1 || channel.sent[0].GroupID != "123456" {
 		t.Fatalf("failure notices = %#v", channel.sent)
 	}
-	for _, want := range []string{"连续 3 次", "执行失败", "自动重试"} {
+	for _, want := range []string{fmt.Sprintf("连续 %d 次", defaultRecurringFailureAlertThreshold), "执行失败", "自动重试"} {
 		if !strings.Contains(channel.sent[0].Text, want) {
 			t.Fatalf("failure notice missing %q: %q", want, channel.sent[0].Text)
 		}
@@ -120,8 +123,8 @@ func TestScheduledQuerySendFailurePersistsResultAndRetriesWithoutLLM(t *testing.
 		t.Fatalf("first delivery failure should stay quiet: %#v", notices)
 	}
 
-	// 连着第三次还发不出去才出声，而且说清楚结果没丢。
-	for attempt := 2; attempt <= recurringFailureAlertThreshold; attempt++ {
+	// 连着坏够次数还发不出去才出声，而且说清楚结果没丢。
+	for attempt := 2; attempt <= defaultRecurringFailureAlertThreshold; attempt++ {
 		time.Sleep(fastOutboundDeliveryPolicy().DropCooldown + 10*time.Millisecond)
 		store.items[0].TriggerAt = time.Now().Add(-time.Second)
 		runtime.fireDueReminders(ctx)
@@ -130,7 +133,7 @@ func TestScheduledQuerySendFailurePersistsResultAndRetriesWithoutLLM(t *testing.
 		t.Fatalf("delivery retries reran LLM: requests=%d", len(provider.requests))
 	}
 	privateNotices := channel.attemptTexts("")
-	if len(privateNotices) != 1 || !strings.Contains(privateNotices[0], "连续 3 次发送失败") || !strings.Contains(privateNotices[0], "结果已保留") {
+	if len(privateNotices) != 1 || !strings.Contains(privateNotices[0], fmt.Sprintf("连续 %d 次发送失败", defaultRecurringFailureAlertThreshold)) || !strings.Contains(privateNotices[0], "结果已保留") {
 		t.Fatalf("private failure notices = %#v", privateNotices)
 	}
 	if strings.Contains(privateNotices[0], "delivery-fail") {

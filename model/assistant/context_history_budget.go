@@ -16,6 +16,7 @@ const (
 	longTermMemoryTokenShare      int64 = 10
 	compressedSummaryTokenShare   int64 = 15
 	coreMemoryTokenShare          int64 = 5
+	selfNoteTokenShare            int64 = 5
 	contextShareDenominator       int64 = 100
 	minimumHistoryCandidateTokens int64 = 16
 	minimumRecentHistoryTokens    int64 = 512
@@ -43,6 +44,8 @@ const (
 	// coreMemoryTokenCeiling 限制常驻注入的核心记忆（长期交互要求和高置信要害
 	// 事实）。它不参加相关性排序，所以配额必须小而固定。
 	coreMemoryTokenCeiling int64 = 600
+	// 自述的绝对上限在 self_notes.go 里（selfNoteTokenCeiling）：条数上限和正文
+	// 长度上限都在那边，三个数一起改才对得上。
 )
 
 // contextLayerBudget 取「份额」和「绝对上限」中较小的那个。
@@ -78,6 +81,12 @@ func retrievedMemoryBudget(contextWindow int64) int64 {
 // 两个固定项合起来把历史挤到墙角。
 func coreMemoryBudget(contextWindow int64) int64 {
 	return contextLayerBudget(contextWindow, coreMemoryTokenShare, coreMemoryTokenCeiling)
+}
+
+// selfNoteBudget 返回自述层的预算。它和核心记忆同级：都是每轮常驻、不参加相关性
+// 排序的固定项，所以份额必须小而固定。
+func selfNoteBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, selfNoteTokenShare, selfNoteTokenCeiling)
 }
 
 type historyContextTurn struct {
@@ -471,20 +480,22 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 	}
 	breakdown := llm.PlanContextBudget(messages, window, llm.DefaultMaxOutputTokens)
 	metadata := map[string]any{
-		"effective_context_window":  breakdown.ContextWindow,
-		"output_reserve":            breakdown.OutputReserve,
-		"safety_reserve":            breakdown.SafetyReserve,
-		"input_budget":              breakdown.InputBudget,
-		"requested_tokens":          breakdown.RequestedTokens,
-		"selected_tokens":           breakdown.SelectedTokens,
-		"dropped_tokens":            breakdown.DroppedTokens,
-		"over_budget":               breakdown.OverBudget,
-		"categories":                contextBudgetCategoryTrace(breakdown),
-		"category_tokens":           categoryTokens,
-		"history_token_budget":      recentHistoryBudget(window, cfg),
-		"history_token_share":       contextShareBudget(window, recentHistoryTokenShare),
-		"summary_token_budget":      sessionThreadBudget(window),
-		"memory_token_budget":       retrievedMemoryBudget(window) + coreMemoryBudget(window),
+		"effective_context_window": breakdown.ContextWindow,
+		"output_reserve":           breakdown.OutputReserve,
+		"safety_reserve":           breakdown.SafetyReserve,
+		"input_budget":             breakdown.InputBudget,
+		"requested_tokens":         breakdown.RequestedTokens,
+		"selected_tokens":          breakdown.SelectedTokens,
+		"dropped_tokens":           breakdown.DroppedTokens,
+		"over_budget":              breakdown.OverBudget,
+		"categories":               contextBudgetCategoryTrace(breakdown),
+		"category_tokens":          categoryTokens,
+		"history_token_budget":     recentHistoryBudget(window, cfg),
+		"history_token_share":      contextShareBudget(window, recentHistoryTokenShare),
+		"summary_token_budget":     sessionThreadBudget(window),
+		// 自述也按记忆优先级注入，token 记在 categories 的 memory 里，所以这份
+		// 预算也要把它算上，否则「用了多少 / 计划多少」两个数对不上。
+		"memory_token_budget":       retrievedMemoryBudget(window) + coreMemoryBudget(window) + selfNoteBudget(window),
 		"history_selected_messages": len(history),
 		"history_selected_turns":    len(groupHistoryContextTurns(history, event.Time, cfg.BotAccount)),
 		"history_earliest_time":     earliest,
@@ -660,6 +671,7 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(groupID string) ContextBudgetBr
 			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling, false),
 			newContextBudgetLayer("retrieved_memory", "检索记忆", window, longTermMemoryTokenShare, retrievedMemoryTokenCeiling, false),
 			newContextBudgetLayer("core_memory", "常驻记忆", window, coreMemoryTokenShare, coreMemoryTokenCeiling, false),
+			newContextBudgetLayer("self_notes", "自述", window, selfNoteTokenShare, selfNoteTokenCeiling, false),
 		},
 	}
 	for _, layer := range breakdown.Layers {

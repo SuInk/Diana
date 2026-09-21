@@ -62,42 +62,77 @@
         </div>
       </section>
 
-      <section v-if="contextBudget" class="card context-budget">
+      <section v-if="contextBudget || residentContext" class="card context-budget">
         <div class="card-head">
           <div>
-            <h2>上下文预算 · 群 {{ contextBudget.group_id }}</h2>
+            <h2>上下文占比{{ contextScopeLabel }}</h2>
             <span class="card-sub">
-              窗口 {{ formatNumber(contextBudget.context_window) }} token，四层合计
-              {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出
+              <template v-if="contextBudget">
+                窗口 {{ formatNumber(contextBudget.context_window) }} token，各层合计
+                {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出。
+              </template>
+              <template v-if="residentContext">
+                其中每轮都注入、与当前消息无关的内容合计
+                {{ formatNumber(residentContext.total_tokens) }} token，是这台机器人每轮的底价。
+              </template>
             </span>
           </div>
         </div>
         <div class="card-body">
-          <div class="budget-bar" role="img" :aria-label="`四层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
-            <span
-              v-for="segment in contextBudgetSegments"
-              :key="segment.key"
-              class="budget-slice"
-              :class="`budget-slice-${segment.key}`"
-              :style="{ width: `${segment.percent}%` }"
-              :title="`${segment.label} ${segment.tokens} token`"
-            ></span>
-            <span class="budget-slice budget-slice-headroom" :style="{ width: `${contextBudgetHeadroomPercent}%` }"></span>
+          <template v-if="contextBudget">
+            <div class="budget-bar" role="img" :aria-label="`各层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
+              <span
+                v-for="segment in contextBudgetSegments"
+                :key="segment.key"
+                class="budget-slice"
+                :class="`budget-slice-${segment.key}`"
+                :style="{ width: `${segment.percent}%` }"
+                :title="`${segment.label} ${segment.tokens} token`"
+              ></span>
+              <span class="budget-slice budget-slice-headroom" :style="{ width: `${contextBudgetHeadroomPercent}%` }"></span>
+            </div>
+            <ul class="budget-legend">
+              <li v-for="layer in contextBudget.layers" :key="layer.key">
+                <span class="budget-dot" :class="`budget-slice-${layer.key}`" aria-hidden="true"></span>
+                <span class="budget-legend-label">{{ layer.label }}</span>
+                <span class="budget-legend-value mono">{{ formatNumber(layer.tokens) }}</span>
+                <span class="budget-legend-foot">{{ contextBudgetLayerFoot(layer) }}</span>
+              </li>
+              <li>
+                <span class="budget-dot budget-slice-headroom" aria-hidden="true"></span>
+                <span class="budget-legend-label">留白</span>
+                <span class="budget-legend-value mono">{{ formatNumber(contextBudget.headroom) }}</span>
+                <span class="budget-legend-foot">系统提示 / 当前消息 / 工具结果 / 输出</span>
+              </li>
+            </ul>
+          </template>
+
+          <!-- 上面是「窗口怎么切的」，下面是「每轮实际被灌了什么」。放在同一张卡里，
+               因为看的人问的本来就是同一个问题：这点占比到底装了些什么东西。 -->
+          <div v-if="residentContext && residentContext.blocks.length" class="resident-section">
+            <h3 class="resident-title">常驻内容</h3>
+            <p class="resident-intro muted">{{ residentContext.note }}</p>
+            <ul class="resident-list">
+              <li v-for="block in residentContext.blocks" :key="block.key" class="resident-item">
+                <button
+                  type="button"
+                  class="resident-head"
+                  :aria-expanded="expandedResidentBlocks.has(block.key)"
+                  @click="toggleResidentBlock(block.key)"
+                >
+                  <ChevronDown :size="14" class="resident-caret" :class="{ open: expandedResidentBlocks.has(block.key) }" aria-hidden="true" />
+                  <!-- 和上面比例条同层的块用同一个色点，看的人一眼对得上是哪一段。 -->
+                  <span class="budget-dot" :class="`budget-slice-${block.key}`" aria-hidden="true"></span>
+                  <span class="resident-label">{{ block.label }}</span>
+                  <span class="resident-tokens mono">{{ block.content ? `${formatNumber(block.tokens)} token` : "空" }}</span>
+                  <span v-if="block.budget" class="resident-budget muted">配额 {{ formatNumber(block.budget) }}</span>
+                </button>
+                <p v-if="block.note" class="resident-note muted">{{ block.note }}</p>
+                <pre v-if="expandedResidentBlocks.has(block.key) && block.content" class="resident-body">{{ block.content }}</pre>
+                <p v-else-if="expandedResidentBlocks.has(block.key)" class="resident-body muted">这一块当前是空的，本轮不会注入任何内容。</p>
+              </li>
+            </ul>
           </div>
-          <ul class="budget-legend">
-            <li v-for="layer in contextBudget.layers" :key="layer.key">
-              <span class="budget-dot" :class="`budget-slice-${layer.key}`" aria-hidden="true"></span>
-              <span class="budget-legend-label">{{ layer.label }}</span>
-              <span class="budget-legend-value mono">{{ formatNumber(layer.tokens) }}</span>
-              <span class="budget-legend-foot">{{ contextBudgetLayerFoot(layer) }}</span>
-            </li>
-            <li>
-              <span class="budget-dot budget-slice-headroom" aria-hidden="true"></span>
-              <span class="budget-legend-label">留白</span>
-              <span class="budget-legend-value mono">{{ formatNumber(contextBudget.headroom) }}</span>
-              <span class="budget-legend-foot">系统提示 / 当前消息 / 工具结果 / 输出</span>
-            </li>
-          </ul>
         </div>
       </section>
 
@@ -1010,6 +1045,26 @@ function privateChatOption(userID: string, events: number, name?: string): AppSe
 const contextBudget = computed(() => response.value?.context_budget ?? null);
 
 // 每一层在整条窗口里占的宽度。留白单独算，它是「没有分配出去」的部分。
+// 常驻内容跟着概览那次请求走（服务端缓存 15 秒），不跟列表：翻页重算一遍不值当，
+// 后端也因此只在非列表模式下附带它。
+const residentContext = computed(() => summaryResponse.value?.resident_context ?? response.value?.resident_context ?? null);
+
+// 展开状态按块记，翻页和刷新之间保持不变：排查串味时常常盯着同一块反复看。
+const expandedResidentBlocks = ref(new Set<string>());
+
+function toggleResidentBlock(key: string) {
+  const next = new Set(expandedResidentBlocks.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  expandedResidentBlocks.value = next;
+}
+
+// 选了群就报群号；没选群时预算那半边不出现，常驻那半边按私聊场景算，标题要说清楚。
+const contextScopeLabel = computed(() => {
+  const group = contextBudget.value?.group_id?.trim() || residentContext.value?.group_id?.trim();
+  return group ? ` · 群 ${group}` : " · 未选群（私聊场景）";
+});
+
 const contextBudgetSegments = computed(() => {
   const budget = contextBudget.value;
   if (!budget || budget.context_window <= 0) return [];
@@ -1463,9 +1518,10 @@ onBeforeUnmount(() => {
   max-width: 320px;
 }
 
-/* 四层是同一份窗口切出来的有序片段，不是互不相干的分类，所以用主题色的一条
-   明度梯度，而不是四种色相：既表达了「同一个整体」，也不会跟四套可选主题色
-   里的任何一种撞车。留白用中性色，它不属于任何一层。 */
+/* 各层是同一份窗口切出来的有序片段，不是互不相干的分类，所以用主题色的一条
+   明度梯度，而不是几种色相：既表达了「同一个整体」，也不会跟四套可选主题色
+   里的任何一种撞车。留白用中性色，它不属于任何一层。层是会增减的（自述就是
+   后加的），新层在梯度末尾续一档即可。 */
 .budget-bar {
   display: flex;
   width: 100%;
@@ -1498,9 +1554,111 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+.budget-slice-self_notes {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* 人设、固定规则和世界书不在比例条的分层里（前两者属于系统提示，落在留白那段；
+   世界书有自己的配额），给中性点，免得看的人以为比例条上能找到它们。 */
+.budget-dot.budget-slice-persona,
+.budget-dot.budget-slice-prompt_rules,
+.budget-dot.budget-slice-world_book {
+  background: var(--border);
+}
+
 .budget-slice-headroom {
   background: transparent;
   min-width: 0;
+}
+
+/* 常驻内容是「摆原文」，不是统计：默认收起，点开才占版面，否则一段几千字的
+   人设会把整页事件挤到屏幕外。它和比例条同卡，所以先用一条分隔线隔开。 */
+.resident-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.resident-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.resident-intro {
+  margin: 4px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.resident-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.resident-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.resident-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.resident-caret {
+  flex: none;
+  transition: transform 120ms ease;
+}
+
+.resident-caret.open {
+  transform: rotate(180deg);
+}
+
+.resident-label {
+  font-weight: 600;
+}
+
+.resident-tokens {
+  margin-left: auto;
+}
+
+.resident-budget {
+  font-size: 12px;
+}
+
+.resident-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.resident-body {
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 人设正文几千字，给它一个自己的滚动区，别把页面拉成长条。 */
+  max-height: 320px;
+  overflow: auto;
 }
 
 .budget-legend {
@@ -1520,6 +1678,8 @@ onBeforeUnmount(() => {
 }
 
 .budget-dot {
+  /* 常驻内容那几行是 flex 行，不写死就会被长标题压扁成一条缝。 */
+  flex: none;
   width: 10px;
   height: 10px;
   border-radius: 3px;
@@ -2201,21 +2361,18 @@ onBeforeUnmount(() => {
     flex: 1 0 auto;
   }
 
+  /* 每行 3 个、刚好两行。之前是 6 列再让按钮跨 2/3 列，那套值是按 5 个
+     筛选项算的；现在有 6 个，会排成 3 + 2 + 1 的错落三行。 */
   .event-result-filter {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     overflow: visible;
   }
 
   .event-result-filter button {
-    grid-column: span 2;
     justify-content: center;
     min-width: 0;
     padding-inline: 7px;
-  }
-
-  .event-result-filter button:nth-last-child(-n + 2) {
-    grid-column: span 3;
   }
 
   .event-detail-list {

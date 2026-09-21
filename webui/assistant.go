@@ -60,6 +60,12 @@ type contextBudgetRuntime interface {
 	ContextBudgetBreakdownForGroup(string) assistant.ContextBudgetBreakdown
 }
 
+// residentContextRuntime 让事件页拿到「每轮都注入」那几块的原文。和上面那条一样
+// 做成可选接口：它只服务一个页面。
+type residentContextRuntime interface {
+	ResidentContextForGroup(ctx context.Context, profileID, groupID string) assistant.ResidentContextSnapshot
+}
+
 type repositoryWatchRuntime interface {
 	CreateRepositoryWatch(context.Context, assistant.RepositoryWatchCreateInput) (assistant.Reminder, error)
 	UpdateRepositoryWatch(context.Context, string, string, assistant.RepositoryWatchUpdateInput) (assistant.Reminder, error)
@@ -312,6 +318,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.DELETE(base+"/users/:id/memories", h.clearAssistantUserMemories)
 	router.DELETE(base+"/users/:id/memories/:memory", h.clearAssistantUserMemories)
 	h.registerPersonaRoutes(router, base)
+	h.registerSelfNoteRoutes(router, base)
 	h.registerCharacterCardRoutes(router, base)
 	h.registerWorldBookRoutes(router, base)
 	router.GET(base+"/notebook", h.listNotebook)
@@ -345,6 +352,11 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/plugins", h.listPlugins)
 	router.GET(base+"/extensions", h.extensions)
 	router.POST(base+"/extensions", h.extensions)
+	router.GET(base+"/agent-browser", h.agentBrowser)
+	router.POST(base+"/agent-browser", h.setAgentBrowser)
+	router.POST(base+"/agent-browser/test", h.testAgentBrowser)
+	router.GET(base+"/agent-residency", h.agentResidency)
+	router.POST(base+"/agent-residency", h.setAgentResidency)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)

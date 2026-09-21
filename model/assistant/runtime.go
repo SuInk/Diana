@@ -350,6 +350,7 @@ type Runtime struct {
 	pendingDirect    PendingDirectMessageStore
 	notebook         NotebookStore
 	worldBook        WorldBookStore
+	selfNotes        SelfNoteStore
 	expressionStyles ExpressionStyleStore
 	moodMu           sync.Mutex
 	moods            map[string]*moodState
@@ -401,6 +402,8 @@ type Runtime struct {
 	updatedAt                 time.Time
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
+	browserControl            agent.BrowserControlBridge
+	browserBox                agent.BuiltinBrowserBridge
 	media                     *MediaStore
 	members                   *memberCache
 	now                       func() time.Time
@@ -513,6 +516,8 @@ type Runtime struct {
 	historyImageDescBackoff time.Duration
 	agentRegistryMu         sync.Mutex
 	agentRegistryCache      map[string]*agent.ToolRegistry
+	agentResidencyMu        sync.RWMutex
+	agentResidencyCatalog   map[string][]AgentResidencyEntry
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -526,6 +531,45 @@ func (r *Runtime) SetEventListener(listener EventListener) {
 	r.mu.Lock()
 	r.eventListener = listener
 	r.mu.Unlock()
+}
+
+// SetBrowserControl 注入浏览器控制扩展的控制面。没注入时 browser_ext_* 那组
+// 工具在任何机器人上都不登记，和把这一档关掉等价。
+func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
+	r.mu.Lock()
+	r.browserControl = bridge
+	r.mu.Unlock()
+}
+
+// SetBrowserBox 注入内置浏览器。没注入时 browser_* 那组工具沿用机器人配置里的
+// 外部 CDP 地址，行为和加这一档之前一样。
+func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
+	r.mu.Lock()
+	r.browserBox = bridge
+	r.mu.Unlock()
+}
+
+// browserBoxFor 同样要两边都点头：全局起了内置浏览器，这台机器人也开了那档开关。
+func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
+	if !cfg.AgentBrowserBoxEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserBox
+	r.mu.RUnlock()
+	return bridge
+}
+
+// browserControlFor 只在两边都点头时才把控制面交出去：全局注入了控制面，
+// 并且这台机器人自己那档开关也开着。
+func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
+	if !cfg.AgentBrowserControlEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserControl
+	r.mu.RUnlock()
+	return bridge
 }
 
 func (r *Runtime) SetPrivateMessageInterceptor(interceptor PrivateMessageInterceptor) {
@@ -1363,6 +1407,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	if strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt) != "" {
 		cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt)
+	}
+	if strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria) != "" {
+		cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria)
 	}
 	if groupCfg.ReplyGate != nil {
 		// 门槛整份用群里的（界面上那个「为本群单独设置回复规则」开关就是这个意思），
@@ -2292,19 +2339,23 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// 先选好指令再拼消息：llmMessageFromEventWithImagesForContext 可能去抓图片，
 	// 以前这里先按旧契约构造一次，再在评分契约下整条覆盖，那次抓图完全是白做的。
 	routeInstruction := "请从本批群消息中识别机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 Intent Recognition（意图识别）模块，只负责识别回复意图，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"
+	// 同一套判据也按题目摆一份：绑的是只做判断的模型时，它照这张表作答，答案回填
+	// 成下面解析的那个 JSON；绑对话模型时这张表用不上。
+	decisionSpec := proactiveReplyDecisionSpec(candidates)
 	if chatIn.Participation != nil {
 		routeInstruction = "Intent Recognition：请判断当前消息是不是在跟机器人说话（directed 与 reason），并给出闲聊适合度（score 与 reason）。上下文：\n"
+		decisionSpec = participationDecisionSpec()
 	}
 	routeUserMessage := llmMessageFromEventWithImagesForContext(routeCtx, event, routeInstruction+string(payloadJSON), nil)
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
+			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
 		},
 		routeUserMessage,
 	}
 	raw, err := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: messages})
+		resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: messages, Decision: decisionSpec})
 		if err != nil {
 			return "", err
 		}
@@ -2329,7 +2380,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			retried = true
 			retryMessages := append([]llm.Message{{Role: llm.RoleSystem, Content: participationRatingsRetryReminder}}, messages...)
 			retryRaw, retryErr := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
-				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages})
+				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages, Decision: decisionSpec})
 				if err != nil {
 					return "", err
 				}
@@ -3215,8 +3266,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
-	stopTyping := r.startTypingIndicator(ctx, event, cfg)
-	defer stopTyping()
+	typing := r.startTypingIndicator(ctx, event, cfg)
+	// 放进 ctx 是为了让发送链路能自己调节：发出一条就静音，还有下一条再点亮。
+	ctx = withTypingIndicator(ctx, typing)
+	defer typing.stop()
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
@@ -3372,6 +3425,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			pluginTools = append(pluginTools, newDianaPlatformTool(r, event))
 		}
 		if fullAgentEnabled {
+			// 因为权限不够而没挂上的工具名。它们不构造、不注册，只是让注册表知道
+			// 「有过这个名字，但这次会话没权限」，取不到时才说得出正确的那句话。
+			var deniedTools []string
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
@@ -3401,12 +3457,19 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
 			if event.Kind == EventKindGroup || relationship.Owner {
 				extraTools = append(extraTools, newDianaCrossSessionTool(r, event, relationship.Owner))
+			} else {
+				deniedTools = append(deniedTools, dianaCrossSessionToolName)
 			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
 			}
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
+			}
+			// 自述默认关着，开关在机器人配置上：工具和注入层要同时受它约束，否则
+			// 模型会写进一个不会被读出来的地方。
+			if r.selfNoteEnabled(event) {
+				extraTools = append(extraTools, newDianaSelfNoteTool(r, event, relationship))
 			}
 			if boolValue(cfg.LongTermMemoryEnabled, true) {
 				r.mu.RLock()
@@ -3450,8 +3513,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
-				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
-					extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
+				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok {
+					if relationship.Owner || repositoryPublishEventHasAccess(event, settings) {
+						extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
+					} else {
+						// 插件开着、只是这个人这个群不够格。不登记的话模型只会被告知
+						// 「不存在」，然后换个名字接着猜。
+						deniedTools = append(deniedTools, dianaGitHubToolName)
+					}
 				}
 			}
 			// schedule、rss、github 三种订阅合成一个 subscription 工具。github 那种仍然
@@ -3503,6 +3572,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if err != nil {
 				return "", err
 			}
+			agentRegistry.DenyTools(deniedTools...)
 		} else if len(pluginTools) > 0 && relationship.allowsAgentTools() {
 			// Plugin-contributed model tools stay usable without granting the local
 			// filesystem, shell, browser, skills, or MCP surface behind AgentEnabled.
@@ -3639,6 +3709,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    worldBookContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
+		// 自述和世界书同级：世界书是「我活在什么世界里」，自述是「我注意到的我自己」。
+		// 两者都是理解这条消息所需的背景，都在尾部按记忆优先级让位，都不得覆盖人设。
+		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    selfNoteContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})
@@ -4179,6 +4259,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
+			BrowserControl:             r.browserControlFor(cfg),
+			BuiltinBrowser:             r.browserBoxFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry
@@ -4191,6 +4273,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
+		// 常驻名单要等注册表建好才算得出来：档位是用户按扩展配的，得知道这一轮
+		// 到底注册了哪些工具、哪条 MCP 带了哪几个。
+		agentCfg.CoreTools = r.agentCoreTools(event, registry)
+		r.rememberAgentResidencyCatalog(event, registry)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {
@@ -6233,6 +6319,8 @@ func dedupeStrings(values []string) []string {
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
 func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	// 扶正写歪的外壳和分隔符，消费的还是正规标记，见 normalizeDianaReplyVariants。
+	msg.Text = normalizeDianaReplyVariants(msg.Text)
 	id, rest, ok := consumeOutgoingReplyControl(msg.Text)
 	if !ok {
 		return msg
@@ -6300,6 +6388,21 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 		return msg
 	}
 	msg.MentionNames = resolved
+	return msg
+}
+
+// normalizeOutgoingMentions 先把写歪的提及标记扶正，再丢掉 id 不可用的那些，见
+// mention_marker.go 里那段说明。放在 resolveOutgoingMentionNames 之前：查昵称是给
+// 留下来的标记用的，先扶正再清理，后面各平台的翻译就只会拿到正规标记和真账号。
+func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	acceptable := func(id string) bool { return mentionIDAcceptable(event.Platform, id) }
+	text := dropUnusableDianaMentions(normalizeDianaMentionVariants(msg.Text), acceptable)
+	text = dropResidualDianaReplyMarkers(text)
+	if text == msg.Text {
+		return msg
+	}
+	log.Printf("diana rewrote mention markers: platform=%s before=%q after=%q", NormalizePlatformID(event.Platform), truncateForError(msg.Text), truncateForError(text))
+	msg.Text = text
 	return msg
 }
 

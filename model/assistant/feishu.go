@@ -68,7 +68,7 @@ type FeishuChannel struct {
 func NewFeishuChannel(cfg FeishuConfig) *FeishuChannel {
 	channel := &FeishuChannel{
 		cfg:    cfg,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 60 * time.Second},
 		status: ChannelStatus{Endpoint: feishuEndpointLabel(cfg), UpdatedAt: time.Now()},
 		dedupe: newEventDeduper(10 * time.Minute),
 	}

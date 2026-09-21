@@ -68,6 +68,8 @@ RUN apk add --no-cache chromium font-noto-cjk ffmpeg yt-dlp tesseract-ocr tesser
 FROM runtime-base AS runtime-slim
 COPY --from=backend /out/diana-webui /app/diana-webui
 COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
+# 浏览器控制扩展的源码。容器用户没有仓库检出，WebUI 的「下载扩展」就是从这里打包。
+COPY packaging/browser-control-extension /app/browser-control-extension
 ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
 USER diana
@@ -76,6 +78,7 @@ ENTRYPOINT ["/app/diana-webui"]
 FROM runtime-full AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
 COPY --from=frontend-next /src/frontend-next/dist /app/frontend-next/dist
+COPY packaging/browser-control-extension /app/browser-control-extension
 # 应用配置走 config.yaml；镜像内只放一份内置默认配置，挂载同名文件即可覆盖。
 ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080

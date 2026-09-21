@@ -6,6 +6,7 @@ import type {
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
+  BrowserControlToken,
   LLMConfig,
   OpenAPIKey,
   PluginState,
@@ -566,6 +567,18 @@ function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   return llmConfig;
 }
 
+let demoBrowserControlPolicy = {
+  enabled: true,
+  allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
+  allowed_hosts: ["example.com", "*.wiki.example.com"],
+  denied_hosts: ["admin.example.com"],
+  write_enabled: false,
+  command_timeout_ms: 20_000,
+  commands_per_minute: 60
+};
+let demoBrowserControlTokens: BrowserControlToken[] = [
+  { id: "bct-demo", name: "演示台式机 Chrome", prefix: "dianabx_demo0000", extension_id: "abcdefghijklmnopabcdefghijklmnop", created_at: before(1440), last_used_at: before(2) }
+];
 let demoApiKeys: OpenAPIKey[] = [
   { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
 ];
@@ -588,6 +601,31 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       demoMediaCachePolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
     }
     return json(demoMediaCachePolicy);
+  }
+
+  // 演示模式给一块 512 GiB 的盘和一份典型占用，图片/视频最大——真实部署里
+  // 吃掉数据目录的基本就是历史媒体原件。
+  if (path === "/api/system/storage") {
+    return json({
+      collected_at: new Date().toISOString(),
+      path: "/app/data",
+      disk_total_bytes: 549755813888,
+      disk_used_bytes: 236223201280,
+      disk_free_bytes: 313532612608,
+      disk_usage_percent: 43,
+      diana_bytes: 9663676416,
+      diana_files: 48213,
+      categories: [
+        { key: "video", label: "视频", bytes: 5368709120, files: 612 },
+        { key: "image", label: "图片", bytes: 3221225472, files: 45230 },
+        { key: "database", label: "数据库", bytes: 704643072, files: 3 },
+        { key: "audio", label: "音频", bytes: 268435456, files: 2180 },
+        { key: "document", label: "文档与压缩包", bytes: 83886080, files: 164 },
+        { key: "other", label: "其它文件", bytes: 16777216, files: 24 }
+      ],
+      scanned_at: new Date().toISOString(),
+      scanning: false
+    });
   }
 
   if (path === "/api/system/media-base-url") {
@@ -618,6 +656,55 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
     return json({ revoked: true });
   }
+  // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
+  // 看不出授权边界长什么样。写操作在演示里始终关着。
+  if (path === "/api/browser-control/status" && method === "GET")
+    return json({
+      policy: demoBrowserControlPolicy,
+      tokens: demoBrowserControlTokens,
+      connections: [
+        {
+          id: "bc-demo-1",
+          token_id: demoBrowserControlTokens[0]?.id ?? "bct-demo",
+          token_name: demoBrowserControlTokens[0]?.name ?? "演示浏览器",
+          extension_id: "abcdefghijklmnopabcdefghijklmnop",
+          extension_name: "Diana 浏览器控制",
+          browser: "Chromium",
+          browser_version: "141",
+          label: "演示台式机 Chrome",
+          connected_at: before(30),
+          last_seen_at: before(1),
+          takeover: false,
+          allowed_tabs: 2,
+          commands: 7
+        }
+      ],
+      ready: demoBrowserControlPolicy.enabled,
+      endpoint: "/browser-control/v1/socket",
+      protocol: 1
+    });
+  if (path === "/api/browser-control/policy" && method === "PUT") {
+    demoBrowserControlPolicy = { ...demoBrowserControlPolicy, ...(body as unknown as typeof demoBrowserControlPolicy) };
+    return json({ policy: demoBrowserControlPolicy });
+  }
+  if (path === "/api/browser-control/tokens" && method === "GET") return json({ tokens: demoBrowserControlTokens });
+  if (path === "/api/browser-control/tokens" && method === "POST") {
+    const token = {
+      id: `bct-${Date.now()}`,
+      name: String(body.name ?? "未命名"),
+      prefix: "dianabx_demo0000",
+      created_at: new Date().toISOString()
+    };
+    demoBrowserControlTokens = [token, ...demoBrowserControlTokens];
+    return json({ token, plaintext: "dianabx_demo000000000000000000000000000000000000000000000000000000000000" });
+  }
+  if (path.startsWith("/api/browser-control/tokens/") && method === "DELETE") {
+    const tokenID = decodeURIComponent(path.split("/").pop() ?? "");
+    const removed = demoBrowserControlTokens.find((item) => item.id === tokenID);
+    demoBrowserControlTokens = demoBrowserControlTokens.filter((item) => item.id !== tokenID);
+    return json({ token: removed ?? { id: tokenID, name: "", prefix: "", created_at: new Date().toISOString() } });
+  }
+  if (path.startsWith("/api/browser-control/connections/")) return json({ ok: true, active: Boolean(body.active) });
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
   // 三个窗口互相包含（1h ⊂ 12h ⊂ 24h），演示数据也照这个关系给，不然切来切去数字会倒挂。

@@ -76,6 +76,7 @@ type dianaBotConfigSnapshot struct {
 	ErrorReplyPrefix                string                    `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts               int                       `json:"send_retry_attempts"`
 	SendChunkIntervalMS             int                       `json:"send_chunk_interval_ms"`
+	RecurringFailureAlertThreshold  int                       `json:"recurring_failure_alert_threshold"`
 	PrivateClosingGrace             int                       `json:"private_closing_grace"`
 	InboundGroupConcurrency         int                       `json:"inbound_group_concurrency"`
 	InboundPrivateConcurrency       int                       `json:"inbound_private_concurrency"`
@@ -108,6 +109,7 @@ type dianaBotConfigSnapshot struct {
 	CrossGroupMemoryEnabled         bool                      `json:"cross_group_memory_enabled"`
 	CrossPlatformMemoryEnabled      bool                      `json:"cross_platform_memory_enabled"`
 	WorldBookEnabled                bool                      `json:"world_book_enabled"`
+	SelfNoteEnabled                 bool                      `json:"self_note_enabled"`
 	RomanceEnabled                  bool                      `json:"romance_enabled"`
 	MoodEnabled                     bool                      `json:"mood_enabled"`
 	PokeReplyEnabled                bool                      `json:"poke_reply_enabled"`
@@ -313,6 +315,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
 		SendRetryAttempts:               cfg.SendRetryAttempts,
 		SendChunkIntervalMS:             cfg.SendChunkIntervalMS,
+		RecurringFailureAlertThreshold:  intValue(cfg.RecurringFailureAlertThreshold, defaultRecurringFailureAlertThreshold),
 		PrivateClosingGrace:             cfg.PrivateClosingGrace,
 		InboundGroupConcurrency:         cfg.InboundGroupConcurrency,
 		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,
@@ -345,6 +348,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		CrossGroupMemoryEnabled:         boolValue(cfg.CrossGroupMemoryEnabled, false),
 		CrossPlatformMemoryEnabled:      boolValue(cfg.CrossPlatformMemoryEnabled, false),
 		WorldBookEnabled:                boolValue(cfg.WorldBookEnabled, true),
+		SelfNoteEnabled:                 boolValue(cfg.SelfNoteEnabled, false),
 		RomanceEnabled:                  boolValue(cfg.RomanceEnabled, false),
 		MoodEnabled:                     boolValue(cfg.MoodEnabled, false),
 		PokeReplyEnabled:                boolValue(cfg.PokeReplyEnabled, false),

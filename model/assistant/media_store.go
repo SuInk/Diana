@@ -25,7 +25,7 @@ const (
 	defaultMediaMaxBytes = 10 << 20
 	// 缓存目录总量上限，超出后按最后使用时间淘汰最旧的文件。
 	defaultMediaCacheBytes = 512 << 20
-	mediaFetchTimeout      = 20 * time.Second
+	mediaFetchTimeout      = 60 * time.Second
 )
 
 // MediaStore 把图片持久化到本地，后续处理一律读本地文件。

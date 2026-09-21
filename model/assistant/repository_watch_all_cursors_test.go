@@ -42,7 +42,7 @@ func newRepositoryCursorFixture(t *testing.T) (*repositoryCursorFixture, *Reposi
 		_ = json.NewEncoder(w).Encode(value)
 	}))
 	t.Cleanup(server.Close)
-	return f, newRepositoryWatchPlugin(server.Client(), server.URL)
+	return f, newTestRepositoryWatchPlugin(server.Client(), server.URL)
 }
 
 func (f *repositoryCursorFixture) set(path string, value any) {

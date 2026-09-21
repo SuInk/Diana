@@ -30,6 +30,27 @@ if [ -f "$stage/chromium-seccomp.json" ]; then
   mkdir -p scripts/docker
   mv "$stage/chromium-seccomp.json" scripts/docker/chromium-seccomp.json
 fi
+# 镜像变体：默认完整版（预装 Chromium、字体、ffmpeg、yt-dlp、tesseract）。
+# DIANA_VARIANT=slim 换成轻量版，拉取体积约为五分之一，但没有浏览器、媒体和 OCR。
+# 变体写进部署目录的 .env，compose 会自己读，以后 pull 和 up 都跟着走，不用每次带变量。
+variant=${DIANA_VARIANT:-}
+if [ -n "$variant" ]; then
+  case "$variant" in
+    full) image=ghcr.io/suink/diana:latest ;;
+    slim) image=ghcr.io/suink/diana:latest-slim ;;
+    *) fail "DIANA_VARIANT 只认 full 或 slim，收到：$variant" ;;
+  esac
+  # 只改 DIANA_IMAGE 这一行，用户 .env 里的其他内容原样保留。
+  if [ -f .env ]; then
+    grep -v '^DIANA_IMAGE=' .env > "$stage/env" || true
+  else
+    : > "$stage/env"
+  fi
+  printf 'DIANA_IMAGE=%s\n' "$image" >> "$stage/env"
+  mv "$stage/env" .env
+  printf 'Diana Docker: 使用 %s 变体（%s）\n' "$variant" "$image"
+fi
+
 docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml pull
 docker compose -f docker-compose.yml up -d

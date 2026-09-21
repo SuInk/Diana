@@ -69,7 +69,7 @@ type QQOfficialChannel struct {
 func NewQQOfficialChannel(cfg QQOfficialConfig) *QQOfficialChannel {
 	channel := &QQOfficialChannel{
 		cfg:    cfg,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 60 * time.Second},
 		status: ChannelStatus{Endpoint: qqOfficialEndpointLabel(cfg), UpdatedAt: time.Now()},
 	}
 	channel.tokens = &platformTokenCache{fetch: channel.fetchAccessToken}

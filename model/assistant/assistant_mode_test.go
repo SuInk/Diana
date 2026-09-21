@@ -28,7 +28,7 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 			t.Fatalf("decision %#v allowed=%v", d, got)
 		}
 	}
-	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, settings, true)
+	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, "", settings, true)
 	if !strings.Contains(prompt, "闲聊档位：low") || !strings.Contains(prompt, "都不影响 directed") {
 		t.Fatal("assistant mode must retain configured social replies")
 	}

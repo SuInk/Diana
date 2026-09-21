@@ -227,7 +227,7 @@ func TestDefaultPluginManagerIncludesRepositoryWatch(t *testing.T) {
 		t.Fatalf("repository watch plugin state=%#v found=%v", state, ok)
 	}
 	plugin, settings, enabled := manager.PluginWithSettings(repositoryWatchPluginID, nil)
-	if !enabled || plugin == nil || settings.Int(repositoryWatchSettingTimeout, 0) != 20 {
+	if !enabled || plugin == nil || settings.Int(repositoryWatchSettingTimeout, 0) != repositoryWatchDefaultTimeoutSeconds {
 		t.Fatalf("plugin=%T settings=%#v enabled=%v", plugin, settings, enabled)
 	}
 	if !manager.CanAskAgent(repositoryWatchPluginID, nil, nil) || !manager.CanAskAgent(resolverPluginID, nil, nil) {
@@ -277,7 +277,7 @@ func TestRepositoryWatchPluginBuildsBaselineAndChanges(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	settings := SettingValues{repositoryWatchSettingToken: "secret", repositoryWatchSettingTimeout: 5, repositoryWatchSettingLimit: 12}
 
 	baseline, err := plugin.snapshot(context.Background(), "acme/demo", "main", true, true, settings)
@@ -316,7 +316,7 @@ func TestRepositoryWatchPluginClassifiesPullRequestsStarsAndReadsDiffs(t *testin
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{Commits: true, PullRequests: true, Releases: true, Stars: true}
 
 	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
@@ -385,7 +385,7 @@ func TestRepositoryWatchCommitLimitOnlyMarksActualOverflow(t *testing.T) {
 	github := &repositoryWatchTestGitHub{}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	settings := SettingValues{repositoryWatchSettingLimit: 12}
 
 	commits := make([]map[string]any, 0, 14)
@@ -424,7 +424,7 @@ func TestRepositoryWatchMissingCursorDoesNotMarkShortResultTruncated(t *testing.
 	}}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 
 	change, err := plugin.check(context.Background(), "acme/demo", "main", "rewritten-cursor", "", true, false, SettingValues{repositoryWatchSettingLimit: 12})
 	if err != nil {
@@ -526,7 +526,7 @@ func TestRepositoryWatchPluginDetectsFirstReleaseAfterEmptyBaseline(t *testing.T
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 
 	baseline, err := plugin.snapshot(context.Background(), "acme/demo", "", true, true, nil)
 	if err != nil || baseline.ReleaseTag != repositoryWatchNoReleaseCursor {
@@ -548,7 +548,7 @@ func TestRepositoryWatchPluginBuildsOnlyRequestedBaseline(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 
 	baseline, err := plugin.snapshot(context.Background(), "acme/demo", "", true, false, nil)
 	if err != nil || baseline.CommitSHA != "base-sha" || baseline.ReleaseTag != "" {
@@ -575,7 +575,7 @@ func TestRepositoryWatchPluginExplainsPrivateRepositoryAuthentication(t *testing
 		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
 	}))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 
 	_, err := plugin.snapshot(context.Background(), "acme/private", "", true, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "私有仓库请先") {
@@ -615,7 +615,7 @@ func TestRepositoryWatchPluginGuidesRateLimitedRequestsToSettings(t *testing.T) 
 				http.Error(w, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
 			}))
 			defer server.Close()
-			plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+			plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 
 			_, err := plugin.snapshot(context.Background(), "acme/public", "", true, false, test.settings)
 			if err == nil {
@@ -640,7 +640,7 @@ func TestRuntimeCreatesRepositoryWatchForWebUI(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	store := &stubReminderStore{}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(plugin), nil, store, nil, nil)
 	item, err := runtime.CreateRepositoryWatch(context.Background(), RepositoryWatchCreateInput{
@@ -715,7 +715,7 @@ func TestRuntimeRepositoryWatchStaysSilentWithoutChanges(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	store := &stubReminderStore{items: []Reminder{{
 		ID: "watch-1", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", UserID: "owner",
 		Repository: "acme/demo", WatchCommits: true, WatchReleases: true,
@@ -758,7 +758,7 @@ func TestRuntimeRepositoryWatchSummarizesAndAdvancesCursors(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	store := &stubReminderStore{items: []Reminder{{
 		ID: "watch-2", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", GroupID: "123", UserID: "owner",
 		Repository: "acme/demo", WatchCommits: true, WatchPullRequests: true, WatchReleases: true, WatchStars: true,
@@ -836,7 +836,7 @@ func TestRuntimeRepositoryWatchRetriesStoredNotificationAndCommentsOnlyAfterDeli
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	store := &stubReminderStore{items: []Reminder{{
 		ID: "watch-retry", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", GroupID: "123", UserID: "owner",
 		Repository: "acme/demo", WatchCommits: true, LastCommitSHA: "base-sha",
@@ -880,7 +880,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	store := &stubReminderStore{items: []Reminder{{
 		ID: "watch-threshold", Kind: ReminderKindRepositoryWatch, OwnerID: "owner", GroupID: "123", UserID: "owner",
 		Repository: "acme/demo", WatchCommits: true, LastCommitSHA: "base-sha",
@@ -892,7 +892,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	}
 	runtime := newRuntime()
 
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= defaultRecurringFailureAlertThreshold; attempt++ {
 		store.items[0].TriggerAt = time.Now().Add(-time.Second)
 		runtime.fireDueReminders(context.Background())
 		if got := store.items[0].ConsecutiveFailures; got != attempt {
@@ -902,7 +902,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 		sent := append([]OutgoingMessage(nil), channel.sent...)
 		channel.mu.Unlock()
 		wantNotices := 0
-		if attempt == repositoryWatchFailureAlertThreshold {
+		if attempt == defaultRecurringFailureAlertThreshold {
 			wantNotices = 1
 		}
 		if len(sent) != wantNotices {
@@ -916,7 +916,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	channel.mu.Lock()
 	alertText := channel.sent[0].Text
 	channel.mu.Unlock()
-	for _, want := range []string{"acme/demo", "连续 3 次", "仓库更新检查", "自动重试"} {
+	for _, want := range []string{"acme/demo", fmt.Sprintf("连续 %d 次", defaultRecurringFailureAlertThreshold), "仓库更新检查", "自动重试"} {
 		if !strings.Contains(alertText, want) {
 			t.Fatalf("alert %q missing %q", alertText, want)
 		}
@@ -934,7 +934,7 @@ func TestRepositoryWatchFailureAlertThresholdPersistsAcrossRestartAndRecovers(t 
 	channel.mu.Lock()
 	noticesAfterRestart := len(channel.sent)
 	channel.mu.Unlock()
-	if noticesAfterRestart != 1 || store.items[0].ConsecutiveFailures != 4 {
+	if noticesAfterRestart != 1 || store.items[0].ConsecutiveFailures != defaultRecurringFailureAlertThreshold+1 {
 		t.Fatalf("restart duplicated alert: notices=%d item=%#v", noticesAfterRestart, store.items[0])
 	}
 
@@ -977,23 +977,23 @@ func TestRepositoryWatchFailureStateIsIsolatedAndFingerprintAware(t *testing.T) 
 	}}
 	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, store, nil, nil)
 	pollFailure := repositoryWatchStageFailure(repositoryWatchFailureStagePolling, errors.New("GitHub API 503"))
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < defaultRecurringFailureAlertThreshold; attempt++ {
 		if _, err := runtime.finishRecurringReminder("watch-a", now, pollFailure); err != nil {
 			t.Fatal(err)
 		}
-		if attempt < 2 {
+		if attempt < defaultRecurringFailureAlertThreshold-1 {
 			if _, err := runtime.finishRecurringReminder("watch-b", now, pollFailure); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if store.items[0].ConsecutiveFailures != 3 || store.items[1].ConsecutiveFailures != 2 {
+	if store.items[0].ConsecutiveFailures != defaultRecurringFailureAlertThreshold || store.items[1].ConsecutiveFailures != defaultRecurringFailureAlertThreshold-1 {
 		t.Fatalf("subscription counters leaked: %#v", store.items)
 	}
-	if !repositoryWatchFailureShouldAlert(store.items[0]) || repositoryWatchFailureShouldAlert(store.items[1]) {
+	if !repositoryWatchFailureShouldAlert(store.items[0], defaultRecurringFailureAlertThreshold) || repositoryWatchFailureShouldAlert(store.items[1], defaultRecurringFailureAlertThreshold) {
 		t.Fatalf("threshold state=%#v", store.items)
 	}
-	acknowledged, err := runtime.acknowledgeRepositoryWatchFailureAlert("watch-a", store.items[0].LastErrorFingerprint, now)
+	acknowledged, err := runtime.acknowledgeRepositoryWatchFailureAlert("watch-a", store.items[0].LastErrorFingerprint, defaultRecurringFailureAlertThreshold, now)
 	if err != nil || acknowledged.FailureAlertedAt.IsZero() {
 		t.Fatalf("acknowledge=%#v err=%v", acknowledged, err)
 	}
@@ -1003,7 +1003,7 @@ func TestRepositoryWatchFailureStateIsIsolatedAndFingerprintAware(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changed.ConsecutiveFailures != 1 || changed.LastFailureStage != repositoryWatchFailureStageSummary || !changed.FailureAlertedAt.IsZero() || repositoryWatchFailureShouldAlert(changed) {
+	if changed.ConsecutiveFailures != 1 || changed.LastFailureStage != repositoryWatchFailureStageSummary || !changed.FailureAlertedAt.IsZero() || repositoryWatchFailureShouldAlert(changed, defaultRecurringFailureAlertThreshold) {
 		t.Fatalf("changed fingerprint did not start a new sequence: %#v", changed)
 	}
 }
@@ -1020,7 +1020,7 @@ func TestRepositoryWatchFailureAlertRequiresAcknowledgementAndRedactsGroupMessag
 	runtime.SetAppLogWriter(logs)
 	raw := `request https://private.example/repo?signature=secret Authorization: Bearer owner-token`
 	failure := repositoryWatchStageFailure(repositoryWatchFailureStagePolling, errors.New(raw))
-	for attempt := 0; attempt < repositoryWatchFailureAlertThreshold; attempt++ {
+	for attempt := 0; attempt < defaultRecurringFailureAlertThreshold; attempt++ {
 		if _, err := runtime.finishRecurringReminder("watch-redaction", now, failure); err != nil {
 			t.Fatal(err)
 		}
@@ -1352,7 +1352,7 @@ func TestRepositoryWatchFoldsCommitsCoveredByMergedPullRequests(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{Commits: true, PullRequests: true}
 
 	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
@@ -1372,6 +1372,7 @@ func TestRepositoryWatchFoldsCommitsCoveredByMergedPullRequests(t *testing.T) {
 		repositoryWatchPullPayload(2, "统一通知排版", "merged", "merge-sha", "2026-08-14T00:00:00Z"),
 	}
 	github.pullCommits[2] = []map[string]any{{"sha": "pr-commit-a"}, {"sha": "pr-commit-b"}}
+	callsBefore := github.pullCommitCalls
 	github.mu.Unlock()
 
 	change, err := plugin.checkSelected(context.Background(), "acme/demo", "main", baseline, selection, nil)
@@ -1380,6 +1381,14 @@ func TestRepositoryWatchFoldsCommitsCoveredByMergedPullRequests(t *testing.T) {
 	}
 	if len(change.Commits) != 1 || change.Commits[0].SHA != "direct-sha" {
 		t.Fatalf("merged PR commits were not folded: %#v", change.Commits)
+	}
+	// 折叠要用的提交名单和 PR 条目自己要用的是同一个响应。以前分两次请求同一个
+	// /pulls/2/commits，每条 merged PR 都白发一个请求。
+	github.mu.Lock()
+	foldCalls := github.pullCommitCalls - callsBefore
+	github.mu.Unlock()
+	if foldCalls != 1 {
+		t.Fatalf("PR #2 的提交列表请求了 %d 次，折叠应当复用已经拉到的那一份", foldCalls)
 	}
 	if len(change.PullRequests) != 1 || change.PullRequests[0].Number != 2 {
 		t.Fatalf("pull requests = %#v", change.PullRequests)
@@ -1406,7 +1415,7 @@ func TestRepositoryWatchKeepsCommitsWhenPullRequestCommitsAreUnavailable(t *test
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{Commits: true, PullRequests: true}
 
 	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
@@ -1517,7 +1526,7 @@ func TestRepositoryWatchIgnoresStarCountWithoutEvent(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{Stars: true}
 
 	cursor, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
@@ -1622,7 +1631,7 @@ func TestRepositoryWatchNamesStargazersFromEvents(t *testing.T) {
 			}
 			server := httptest.NewServer(http.HandlerFunc(github.handler))
 			defer server.Close()
-			plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+			plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 			cursor := repositoryWatchSnapshot{StarCount: 10, HasStarCount: true, StarEventID: "eu02"}
 
 			change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor, repositoryWatchSelection{Stars: true}, nil)
@@ -1683,7 +1692,7 @@ func TestRepositoryWatchInitialisesStarCursorSilently(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	cursor := repositoryWatchSnapshot{StarCount: 7, HasStarCount: true}
 
 	change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor, repositoryWatchSelection{Stars: true}, nil)
@@ -1704,7 +1713,7 @@ func TestRepositoryWatchMarksEmptyStarHistory(t *testing.T) {
 	github := &repositoryWatchTestGitHub{starCount: 0}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 
 	cursor, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", repositoryWatchSelection{Stars: true}, nil)
 	if err != nil || cursor.StarEventID != repositoryWatchNoStarEvent {
@@ -1734,7 +1743,7 @@ func TestRepositoryWatchRejectsDuplicateSubscription(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	store := &stubReminderStore{}
 	runtime := NewRuntime(BotConfig{RequestTimeout: 5 * time.Second}, &recordingChannel{}, NewPluginManager(plugin), nil, store, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "owner"}
@@ -1803,7 +1812,7 @@ func TestRepositoryWatchFetchesDiffOnlyWhenRequested(t *testing.T) {
 	t.Run("关掉时一次都不拉", func(t *testing.T) {
 		github, server := newServer()
 		defer server.Close()
-		plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+		plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 		change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor,
 			repositoryWatchSelection{Commits: true, PullRequests: true}, nil)
 		if err != nil {
@@ -1826,7 +1835,7 @@ func TestRepositoryWatchFetchesDiffOnlyWhenRequested(t *testing.T) {
 	t.Run("打开时拉到并能压成参考资料", func(t *testing.T) {
 		_, server := newServer()
 		defer server.Close()
-		plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+		plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 		change, err := plugin.checkSelected(context.Background(), "acme/demo", "", cursor,
 			repositoryWatchSelection{Commits: true, PullRequests: true, Diff: true}, nil)
 		if err != nil {
@@ -1916,7 +1925,7 @@ func TestRepositoryWatchPluginReportsOpenedUpdatedAndClosedPullRequests(t *testi
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{PullRequests: true}
 
 	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "main", selection, nil)
@@ -1989,7 +1998,7 @@ func TestRepositoryWatchPluginClassifiesIssues(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{Issues: true}
 
 	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
@@ -2050,7 +2059,7 @@ func TestRepositoryWatchPluginDoesNotRepeatReopenForLaterUpdates(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{Issues: true}
 
 	baseline, err := plugin.snapshotSelected(context.Background(), "acme/demo", "", selection, nil)
@@ -2118,7 +2127,7 @@ func TestRepositoryWatchPluginHonoursSelectedEventKinds(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
 	defer server.Close()
-	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
 	selection := repositoryWatchSelection{
 		PullRequests: true, Issues: true,
 		PullRequestEvents: []string{"opened", "merged"},
@@ -2233,5 +2242,213 @@ func TestRepositoryWatchEventSelectionJSONPreservesEmpty(t *testing.T) {
 	}
 	if got := EffectiveRepositoryWatchPullRequestEvents(restored.WatchPullRequestEvents); got == nil || len(got) != 0 {
 		t.Fatalf("显式全不选回显 = %#v", got)
+	}
+}
+
+// newTestRepositoryWatchPlugin 建一个不节流的插件：真实间隔（repositoryWatchRequestSpacing）
+// 乘上整包测试的桩请求数是好几分钟。节流本身由
+// TestRepositoryWatchSpreadsRequestsOverTime 单独盯着。
+func newTestRepositoryWatchPlugin(client *http.Client, baseURL string) *RepositoryWatchPlugin {
+	plugin := newRepositoryWatchPlugin(client, baseURL)
+	plugin.requestSpacing = 0
+	return plugin
+}
+
+// 一轮检查要连打好几个接口。原来是背靠背发的，链路抖一下就整轮一起失败——
+// 生产上 2026-09-21 一天 62 次轮次失败就是这么来的。拉开之后，同一个抖动窗口
+// 最多打掉其中一个请求。
+func TestRepositoryWatchSpreadsRequestsOverTime(t *testing.T) {
+	var mu sync.Mutex
+	var arrivals []time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		arrivals = append(arrivals, time.Now())
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	const spacing = 40 * time.Millisecond
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin.requestSpacing = spacing
+
+	started := time.Now()
+	for i := 0; i < 4; i++ {
+		var payload []struct{}
+		if err := plugin.getJSON(context.Background(), "/repos/acme/demo/commits", SettingValues{}, &payload); err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(arrivals) != 4 {
+		t.Fatalf("arrivals = %d", len(arrivals))
+	}
+	// 第一个请求不等：节流是拉开间隔，不是给每轮加一个固定的起步延迟。
+	if first := arrivals[0].Sub(started); first > spacing {
+		t.Fatalf("first request waited %s, spacing should not delay the opening request", first)
+	}
+	for i := 1; i < len(arrivals); i++ {
+		if gap := arrivals[i].Sub(arrivals[i-1]); gap < spacing/2 {
+			t.Fatalf("request %d came %s after the previous one, want >= %s", i, gap, spacing)
+		}
+	}
+}
+
+// 节流的等待不能吃掉单请求自己的超时预算：等待发生在 WithTimeout 之前。
+// 否则把间隔调大就等于把超时调小，两个设置互相拆台。
+func TestRepositoryWatchSpacingDoesNotConsumeRequestTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 比 timeout_seconds 短、但比「timeout 减去节流间隔」长：
+		// 如果等待算进了预算，这次请求就会超时。
+		time.Sleep(700 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	plugin := newRepositoryWatchPlugin(server.Client(), server.URL)
+	plugin.requestSpacing = 600 * time.Millisecond
+	settings := SettingValues{repositoryWatchSettingTimeout: 1}
+
+	var payload []struct{}
+	// 先走一次把节流水位抬起来，第二次才会真的等。
+	if err := plugin.getJSON(context.Background(), "/repos/acme/demo/commits", settings, &payload); err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	if err := plugin.getJSON(context.Background(), "/repos/acme/demo/commits", settings, &payload); err != nil {
+		t.Fatalf("spacing ate into the request timeout: %v", err)
+	}
+}
+
+// 整轮预算按轮询间隔走，并且两头都钳住：一分钟一轮的订阅也要跑得完一次正常检查，
+// 而再长的间隔也不该让一轮卡着不放。
+func TestRepositoryWatchRoundBudgetFollowsInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{name: "短间隔抬到下限", interval: time.Minute, want: 5 * time.Minute},
+		{name: "按间隔来", interval: 15 * time.Minute, want: 15 * time.Minute},
+		{name: "长间隔压到上限", interval: 6 * time.Hour, want: 30 * time.Minute},
+		{name: "没设间隔也有下限", interval: 0, want: 5 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := Reminder{IntervalSeconds: int64(tc.interval / time.Second)}
+			if got := repositoryWatchRoundBudget(item); got != tc.want {
+				t.Fatalf("budget = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// 有 Token 时 PR 列表走 GraphQL：REST 的 /pulls 每条附带 head 和 base 两份完整仓库
+// 对象，占响应的六成，而这里只用得上两个分支名。GraphQL 失败要能退回 REST。
+func TestRepositoryWatchPullRequestsPreferGraphQL(t *testing.T) {
+	var mu sync.Mutex
+	var graphQLCalls, restCalls int
+	failGraphQL := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/graphql") {
+			graphQLCalls++
+			if failGraphQL {
+				http.Error(w, `{"message":"graphql down"}`, http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{"nodes":[
+				{"number":7,"title":"GraphQL 来的 PR","body":"正文","state":"MERGED","url":"https://example.invalid/pull/7",
+				 "createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-02T00:00:00Z","closedAt":"2026-09-02T00:00:00Z",
+				 "mergedAt":"2026-09-02T00:00:00Z","mergeCommit":{"oid":"merge-oid"},"author":{"login":"suink"},
+				 "baseRefName":"main","headRefName":"feature"}]}}}}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/pulls") {
+			restCalls++
+			_, _ = w.Write([]byte(`[{"number":9,"title":"REST 来的 PR","state":"open","html_url":"https://example.invalid/pull/9",
+				"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-03T00:00:00Z",
+				"user":{"login":"suink"},"base":{"ref":"main"},"head":{"ref":"feature"}}]`))
+			return
+		}
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
+	settings := SettingValues{repositoryWatchSettingToken: "secret"}
+
+	records, err := plugin.collectPullRecords(context.Background(), "acme/demo", "main", settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	gq, rest := graphQLCalls, restCalls
+	mu.Unlock()
+	if gq != 1 || rest != 0 {
+		t.Fatalf("有 Token 时应当只走 GraphQL：graphql=%d rest=%d", gq, rest)
+	}
+	if len(records) != 1 || records[0].Number != 7 {
+		t.Fatalf("records = %#v", records)
+	}
+	// MERGED 要折成 REST 那套 closed + merged_at，下游先看 MergedAt 再看 state。
+	if records[0].State != "closed" || records[0].MergedAt == nil {
+		t.Fatalf("merged 状态没有对齐 REST：%#v", records[0])
+	}
+	for _, want := range []struct {
+		name, got string
+	}{
+		{"merge commit", records[0].MergeCommitSHA},
+		{"author", records[0].User.Login},
+		{"base", records[0].Base.Ref},
+		{"head", records[0].Head.Ref},
+	} {
+		if strings.TrimSpace(want.got) == "" {
+			t.Fatalf("%s 没有映射过来：%#v", want.name, records[0])
+		}
+	}
+
+	// GraphQL 挂了要退回 REST，而不是让整轮失败。
+	mu.Lock()
+	failGraphQL = true
+	mu.Unlock()
+	records, err = plugin.collectPullRecords(context.Background(), "acme/demo", "main", settings)
+	if err != nil {
+		t.Fatalf("GraphQL 失败后没有退回 REST: %v", err)
+	}
+	if len(records) != 1 || records[0].Number != 9 {
+		t.Fatalf("fallback records = %#v", records)
+	}
+}
+
+// 没有 Token 就只能走 REST，不该白打一次 GraphQL。
+func TestRepositoryWatchPullRequestsUseRESTWithoutToken(t *testing.T) {
+	var mu sync.Mutex
+	var graphQLCalls, restCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/graphql") {
+			graphQLCalls++
+		} else {
+			restCalls++
+		}
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer server.Close()
+
+	plugin := newTestRepositoryWatchPlugin(server.Client(), server.URL)
+	if _, err := plugin.collectPullRecords(context.Background(), "acme/demo", "main", SettingValues{}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if graphQLCalls != 0 || restCalls != 1 {
+		t.Fatalf("没有 Token 时应当直接走 REST：graphql=%d rest=%d", graphQLCalls, restCalls)
 	}
 }
