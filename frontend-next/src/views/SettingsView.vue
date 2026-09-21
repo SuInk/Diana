@@ -411,6 +411,76 @@
         </section>
       </div>
 
+      <div v-show="activePage === 'storage'" class="settings-section-body">
+        <section class="card">
+          <div class="card-header">
+            <h2>存储空间</h2>
+            <button class="btn small ghost" type="button" :disabled="storageLoading" title="重新统计存储占用" aria-label="重新统计存储占用" @click="loadStorageUsage">
+              <RefreshCw :size="14" aria-hidden="true" />
+            </button>
+          </div>
+          <div class="card-body">
+            <p v-if="storageError" class="error" role="alert">{{ storageError }}</p>
+            <LoadingSkeleton v-if="!storage" kind="chart" label="正在统计存储占用" />
+            <template v-else>
+              <div class="storage-overview">
+                <StorageDonut
+                  :segments="diskSegments"
+                  :total="diskTotal"
+                  :center-value="diskCenterValue"
+                  :center-label="diskCenterLabel"
+                />
+                <ul class="storage-legend">
+                  <li v-for="segment in diskSegments" :key="segment.key" class="storage-legend-row">
+                    <span class="storage-legend-dot" :style="{ background: segment.color }" aria-hidden="true"></span>
+                    <span class="storage-legend-label">{{ segment.label }}</span>
+                    <span class="storage-legend-size">{{ formatBytes(segment.bytes) }}</span>
+                    <span class="storage-legend-percent muted">{{ storageShareLabel(segment.bytes, diskTotal) }}</span>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- 上面那圈的分母是整块盘，Diana 常常连 1% 都不到；类型拆分换成以
+                   数据目录自己为分母的一条，分类才看得见。 -->
+              <div class="storage-breakdown">
+                <div class="storage-breakdown-head">
+                  <h3>数据目录里是什么</h3>
+                  <span class="muted">{{ formatBytes(storage.diana_bytes) }} · {{ formatNumber(storage.diana_files) }} 个文件</span>
+                </div>
+                <div v-if="categorySegments.length > 0" class="storage-bar" role="img" :aria-label="categoryBarLabel">
+                  <span
+                    v-for="segment in categorySegments"
+                    :key="segment.key"
+                    class="storage-bar-part"
+                    :style="{ background: segment.color, width: storageWidth(segment.bytes, storage.diana_bytes) }"
+                    :title="`${segment.label} ${formatBytes(segment.bytes)}`"
+                  ></span>
+                </div>
+                <ul class="storage-legend storage-legend-wide">
+                  <li v-for="segment in categorySegments" :key="segment.key" class="storage-legend-row">
+                    <span class="storage-legend-dot" :style="{ background: segment.color }" aria-hidden="true"></span>
+                    <span class="storage-legend-label">{{ segment.label }}</span>
+                    <span class="storage-legend-size">{{ formatBytes(segment.bytes) }}</span>
+                    <span class="storage-legend-percent muted">{{ storageShareLabel(segment.bytes, storage.diana_bytes) }}</span>
+                  </li>
+                </ul>
+                <EmptyState v-if="categorySegments.length === 0 && !storage.scanning" title="数据目录还是空的" hint="机器人收到媒体后这里会出现分类占用" />
+              </div>
+
+              <p v-if="storage.disk_unavailable" class="hint">
+                读不到磁盘容量（{{ storage.disk_unavailable }}），上面那圈只按数据目录的分类画。
+              </p>
+              <p class="hint">
+                数据目录 <code class="mono">{{ storage.path }}</code>。
+                <template v-if="storage.scanning">正在重新统计，稍后自动刷新。</template>
+                <template v-else-if="storage.scanned_at">统计于 {{ formatTime(storage.scanned_at) }}。</template>
+                占得多的话：图片、视频、音频这些历史原件由「媒体与文件」的保留策略清理，下载缓存由「下载缓存」清理。
+              </p>
+            </template>
+          </div>
+        </section>
+      </div>
+
       <div v-show="activePage === 'cache'" class="settings-section-body">
         <section class="download-cache-settings">
           <div class="card-header">
@@ -651,11 +721,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import PluginSettingField from "../components/PluginSettingField.vue";
-import { Activity, Download, Eye, EyeOff, Globe, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import StorageDonut from "../components/StorageDonut.vue";
+import { Activity, Download, Eye, EyeOff, Globe, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, Plug, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -674,6 +746,8 @@ import {
   restartSystem,
   getMediaCachePolicy,
   saveMediaCachePolicy,
+  getStorageUsage,
+  type StorageUsage,
   type MediaCachePolicy,
   getHistoryMediaPolicy,
   saveHistoryMediaPolicy,
@@ -706,7 +780,8 @@ import {
 } from "../api";
 import { askConfirm } from "../confirm";
 import { accentOptions, theme } from "../theme";
-import { formatTime, formatUptime } from "../format";
+import { formatBytes, formatNumber, formatTime, formatUptime } from "../format";
+import { storageCategorySegments, storageDiskSegments, storageDiskTotal, storageShareLabel, storageWidth } from "../storage-usage";
 import { toastError, toastSuccess } from "../toast";
 
 // 侧栏菜单按「改的是谁的」分组：账号与安全决定谁能进来，系统是这台服务本身，
@@ -716,6 +791,7 @@ const settingsPages = [
   { key: "sessions", label: "登录会话", hint: "机器人发来异常登录提醒时，在这里把对应设备踢下线。", icon: MonitorSmartphone },
   { key: "openapi", label: "对外 API", hint: "让 CI、监控这类外部系统通过 HTTP 接口给机器人推送消息。", icon: Plug },
   { key: "browser-control", label: "浏览器控制", hint: "让机器人操作你自己浏览器里已授权站点的页面，随时可人工接管。", icon: Globe },
+  { key: "storage", label: "存储空间", hint: "这台机器的磁盘还剩多少，以及 Diana 的数据目录被哪类文件占掉了。", icon: PieChart },
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
   { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略，以及发送文件时接入端回源拉取媒体的地址。", icon: Images },
   { key: "update", label: "系统更新", hint: "检查、下载并安装新版本，以及原地重启服务。", icon: Download },
@@ -725,12 +801,61 @@ const settingsPages = [
 
 const settingsGroups: { label: string; pages: (typeof settingsPages)[number][] }[] = [
   { label: "账号与安全", pages: [settingsPages[0], settingsPages[1], settingsPages[2], settingsPages[3]] },
-  { label: "系统", pages: [settingsPages[4], settingsPages[5], settingsPages[6], settingsPages[7]] },
-  { label: "个性化", pages: [settingsPages[8]] }
+  { label: "系统", pages: [settingsPages[4], settingsPages[5], settingsPages[6], settingsPages[7], settingsPages[8]] },
+  { label: "个性化", pages: [settingsPages[9]] }
 ];
 
 const activePage = ref<(typeof settingsPages)[number]["key"]>("security");
 const activePageMeta = computed(() => settingsPages.find((item) => item.key === activePage.value) ?? settingsPages[0]);
+
+// 存储卡片：后端遍历数据目录不便宜，所以只在真的打开这一页时才请求，
+// 并且在它报告「还在扫」的时候自己轮询，不让用户对着空饼图点刷新。
+const storage = ref<StorageUsage | null>(null);
+const storageLoading = ref(false);
+const storageError = ref("");
+let storageRetryTimer: number | undefined;
+
+const diskSegments = computed(() => storageDiskSegments(storage.value));
+const categorySegments = computed(() => storageCategorySegments(storage.value));
+const diskTotal = computed(() => storageDiskTotal(storage.value));
+const diskCenterValue = computed(() => {
+  const usage = storage.value;
+  if (!usage) return "—";
+  return formatBytes(usage.disk_total_bytes ? usage.disk_free_bytes ?? 0 : usage.diana_bytes);
+});
+const diskCenterLabel = computed(() => {
+  const usage = storage.value;
+  if (!usage) return "";
+  return usage.disk_total_bytes ? `可用 / 共 ${formatBytes(usage.disk_total_bytes)}` : "数据目录";
+});
+const categoryBarLabel = computed(
+  () => `数据目录占用：${categorySegments.value.map((segment) => `${segment.label} ${formatBytes(segment.bytes)}`).join("，")}`
+);
+
+async function loadStorageUsage() {
+  storageLoading.value = true;
+  storageError.value = "";
+  try {
+    const usage = await getStorageUsage();
+    storage.value = usage;
+    if (storageRetryTimer !== undefined) window.clearTimeout(storageRetryTimer);
+    if (usage.scanning) {
+      storageRetryTimer = window.setTimeout(() => void loadStorageUsage(), 2000);
+    }
+  } catch (error) {
+    storageError.value = error instanceof Error ? error.message : "读取存储占用失败";
+  } finally {
+    storageLoading.value = false;
+  }
+}
+
+watch(
+  activePage,
+  (page) => {
+    if (page === "storage" && !storage.value) void loadStorageUsage();
+  },
+  { immediate: true }
+);
 
 const cachePolicy = ref<MediaCachePolicy | null>(null);
 const historyMediaDays = ref(-1);
@@ -1402,10 +1527,97 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
 	if (updateStatusPollTimer !== undefined) window.clearInterval(updateStatusPollTimer);
+	if (storageRetryTimer !== undefined) window.clearTimeout(storageRetryTimer);
 });
 </script>
 
 <style scoped>
+.storage-overview {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.storage-breakdown {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 12px;
+}
+
+.storage-breakdown-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.storage-breakdown-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.storage-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.storage-bar-part {
+  min-width: 2px;
+}
+
+.storage-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 260px;
+  min-width: 240px;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.storage-legend-wide {
+  flex: none;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  column-gap: 20px;
+}
+
+.storage-legend-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.storage-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.storage-legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storage-legend-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-legend-percent {
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
 .update-token-field {
   display: grid;
   gap: 4px;
