@@ -1842,6 +1842,35 @@ export function saveMediaCachePolicy(policy: MediaCachePolicy): Promise<MediaCac
   });
 }
 
+/** 设置页存储卡片的载荷：整块盘的容量 + Diana 数据目录按文件类型的拆分。 */
+export interface StorageUsageCategory {
+  key: string;
+  label: string;
+  bytes: number;
+  files: number;
+}
+
+export interface StorageUsage {
+  collected_at: string;
+  path: string;
+  disk_total_bytes?: number;
+  disk_used_bytes?: number;
+  disk_free_bytes?: number;
+  disk_usage_percent?: number;
+  diana_bytes: number;
+  diana_files: number;
+  categories: StorageUsageCategory[];
+  /** 后台遍历完成的时间；从没跑完过时缺省 */
+  scanned_at?: string;
+  /** 正在后台遍历数据目录，拆分结果还是上一次的（或为空） */
+  scanning: boolean;
+  disk_unavailable?: string;
+}
+
+export function getStorageUsage(): Promise<StorageUsage> {
+  return requestJSON<StorageUsage>("/api/system/storage");
+}
+
 export interface HistoryMediaPolicy { retention_days: number; max_mb: number; }
 export function getHistoryMediaPolicy(): Promise<HistoryMediaPolicy> { return requestJSON<HistoryMediaPolicy>("/api/system/history-media"); }
 export function saveHistoryMediaPolicy(policy: HistoryMediaPolicy): Promise<HistoryMediaPolicy> {

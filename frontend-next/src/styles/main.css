@@ -41,6 +41,16 @@
   --accent-soft: rgba(224, 87, 143, 0.12);
   --accent-contrast: #ffffff;
 
+  /* 存储饼图的分类色：和主题强调色无关，换配色时扇区含义不能跟着变。 */
+  --storage-image: #4f8ef7;
+  --storage-video: #a367ef;
+  --storage-audio: #17a67a;
+  --storage-document: #d99320;
+  --storage-database: #e0578f;
+  --storage-other: #7b8794;
+  --storage-system: #8a93a1;
+  --storage-free: #ddd7dd;
+
   --sidebar-width: 236px;
   --topbar-height: 56px;
 }
@@ -82,6 +92,14 @@
   --ok: #2dbd83;
   --warn: #e0a04a;
   --err: #e56a6a;
+  --storage-image: #6ba4ff;
+  --storage-video: #b98bf5;
+  --storage-audio: #34c396;
+  --storage-document: #e9ad45;
+  --storage-database: #ef7fae;
+  --storage-other: #97a3b0;
+  --storage-system: #767f8e;
+  --storage-free: #3a3542;
 }
 
 /* ---------- Base ---------- */
