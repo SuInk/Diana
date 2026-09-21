@@ -21,6 +21,8 @@ const (
 	ProtocolOpenAIResponses   Protocol = "openai-responses"
 	ProtocolAnthropicMessages Protocol = "anthropic-messages"
 	ProtocolGemini            Protocol = "gemini"
+	// ProtocolTypeSafeSystemOne 是 TypeSafe 的 System One 接口，不是 OpenAI 兼容的。
+	ProtocolTypeSafeSystemOne Protocol = "typesafe-systemone"
 )
 
 type ProviderDefinition struct {
@@ -77,6 +79,7 @@ type ChatRequest struct {
 	MaxTokens        int64            `json:"maxTokens,omitempty"`
 	Tools            []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice       string           `json:"toolChoice,omitempty"`
+	Decision         *DecisionSpec    `json:"-"`
 }
 
 type ChatEventType string
@@ -177,6 +180,8 @@ func RegistryFromDocument(document ProviderRegistryDocument) (*ProviderRegistry,
 			cfg.Provider = ProviderAnthropic
 		case ProtocolGemini:
 			cfg.Provider = ProviderGemini
+		case ProtocolTypeSafeSystemOne:
+			cfg.Provider = ProviderTypeSafe
 		case ProtocolOpenAICompletions:
 			cfg.Provider, cfg.APIFormat = ProviderOpenAICompatible, APIFormatChatCompletions
 		default:
@@ -321,7 +326,7 @@ func (a clientAdapter) Generate(ctx context.Context, model ModelDefinition, req 
 		return ChatResponse{}, err
 	}
 	messages := chatMessagesToLegacy(req.Messages)
-	response, err := client.Generate(ctx, GenerateRequest{Model: model.ModelID, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey})
+	response, err := client.Generate(ctx, GenerateRequest{Model: model.ModelID, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -333,7 +338,7 @@ func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req Ch
 	if err != nil {
 		return nil, err
 	}
-	legacy := GenerateRequest{Model: model.ModelID, Messages: chatMessagesToLegacy(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey}
+	legacy := GenerateRequest{Model: model.ModelID, Messages: chatMessagesToLegacy(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision}
 	if streamable, ok := client.(interface {
 		Stream(context.Context, GenerateRequest) (<-chan ChatEvent, error)
 	}); ok {
@@ -398,6 +403,8 @@ func protocolForConfig(cfg ProviderConfig) Protocol {
 		return ProtocolAnthropicMessages
 	case ProviderGemini:
 		return ProtocolGemini
+	case ProviderTypeSafe:
+		return ProtocolTypeSafeSystemOne
 	}
 	if cfg.APIFormatWithDefault() == APIFormatChatCompletions {
 		return ProtocolOpenAICompletions
@@ -487,7 +494,7 @@ func (c RegistryClient) Stream(ctx context.Context, req GenerateRequest) (<-chan
 	if c.Registry == nil {
 		return nil, fmt.Errorf("llm: provider registry is not configured")
 	}
-	return c.Registry.Stream(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: legacyMessagesToChat(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey})
+	return c.Registry.Stream(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: legacyMessagesToChat(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
 }
 
 func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
@@ -495,7 +502,7 @@ func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*Gen
 		return nil, fmt.Errorf("llm: provider registry is not configured")
 	}
 	messages := legacyMessagesToChat(req.Messages)
-	response, err := c.Registry.Generate(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey})
+	response, err := c.Registry.Generate(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
 	if err != nil {
 		return nil, err
 	}

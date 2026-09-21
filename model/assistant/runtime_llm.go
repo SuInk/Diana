@@ -276,6 +276,7 @@ func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (s
 
 func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
@@ -296,6 +297,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		return "", nil
 	}
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	group := ModelBindingGroupOf(llmUsagePurposeFromContext(ctx))
 	if group == "" {
 		group = llm.GroupChat
@@ -499,6 +501,7 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
 	roles := r.modelRolesForContext(ctx)
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(llm.GroupIntent, run)
