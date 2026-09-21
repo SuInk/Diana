@@ -603,6 +603,31 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(demoMediaCachePolicy);
   }
 
+  // 演示模式给一块 512 GiB 的盘和一份典型占用，图片/视频最大——真实部署里
+  // 吃掉数据目录的基本就是历史媒体原件。
+  if (path === "/api/system/storage") {
+    return json({
+      collected_at: new Date().toISOString(),
+      path: "/app/data",
+      disk_total_bytes: 549755813888,
+      disk_used_bytes: 236223201280,
+      disk_free_bytes: 313532612608,
+      disk_usage_percent: 43,
+      diana_bytes: 9663676416,
+      diana_files: 48213,
+      categories: [
+        { key: "video", label: "视频", bytes: 5368709120, files: 612 },
+        { key: "image", label: "图片", bytes: 3221225472, files: 45230 },
+        { key: "database", label: "数据库", bytes: 704643072, files: 3 },
+        { key: "audio", label: "音频", bytes: 268435456, files: 2180 },
+        { key: "document", label: "文档与压缩包", bytes: 83886080, files: 164 },
+        { key: "other", label: "其它文件", bytes: 16777216, files: 24 }
+      ],
+      scanned_at: new Date().toISOString(),
+      scanning: false
+    });
+  }
+
   if (path === "/api/system/media-base-url") {
     if (method === "POST") {
       demoMediaBaseURL = { base_url: String(body.base_url ?? ""), source: "database" };
