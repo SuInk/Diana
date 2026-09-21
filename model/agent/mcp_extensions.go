@@ -429,11 +429,14 @@ func validateMCPConfigValues(server mcpServerConfig) error {
 	if err := server.validate(); err != nil {
 		return err
 	}
-	if server.StartupTimeoutSec > 120 {
-		return errors.New("startup_timeout_sec cannot exceed 120")
+	// 上限放宽的理由：stdio 服务首次启动要现拉依赖（npx 下载能跑好几分钟），
+	// 工具侧也有构建、抓取这类本来就慢的调用。上限只是防手滑写出一个近乎不超时
+	// 的值，不该替人决定他的服务该多快。
+	if server.StartupTimeoutSec > 300 {
+		return errors.New("startup_timeout_sec cannot exceed 300")
 	}
-	if server.ToolTimeoutSec > 300 {
-		return errors.New("tool_timeout_sec cannot exceed 300")
+	if server.ToolTimeoutSec > 900 {
+		return errors.New("tool_timeout_sec cannot exceed 900")
 	}
 	for key := range server.Env {
 		if !environmentKeyPattern.MatchString(key) {

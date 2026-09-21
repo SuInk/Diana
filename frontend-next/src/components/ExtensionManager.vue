@@ -98,7 +98,7 @@
           <label class="field">{{ transport==='http' ? '请求头 JSON' : '环境变量 JSON' }}<textarea v-model="secrets" class="input code-input" rows="4" spellcheck="false" placeholder='{"Authorization":"Bearer …"}'></textarea></label>
           <p class="hint">已有凭据留空表示保留；勾选下方项目才清除。</p>
           <label v-for="key in secretKeys" :key="key" class="secret-clear"><input v-model="clearSecrets" type="checkbox" :value="key" />清除 {{ key }}</label>
-          <div class="extension-grid"><label class="field">连接超时（秒）<input v-model.number="form.startup_timeout_sec" class="input" type="number" min="1" max="120" /></label><label class="field">工具超时（秒）<input v-model.number="form.tool_timeout_sec" class="input" type="number" min="1" max="300" /></label></div>
+          <div class="extension-grid"><label class="field">连接超时（秒）<input v-model.number="form.startup_timeout_sec" class="input" type="number" min="1" max="300" /><span class="hint">最长 300，首次启动要现拉依赖的服务往大了填。</span></label><label class="field">工具超时（秒）<input v-model.number="form.tool_timeout_sec" class="input" type="number" min="1" max="900" /><span class="hint">最长 900，构建、抓取这类慢工具才需要调高。</span></label></div>
           <label class="field">允许的工具（每行一个，留空全部）<textarea v-model="form.enabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="field">禁用的工具（每行一个）<textarea v-model="form.disabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="switch"><input v-model="form.enabled" type="checkbox" /><span class="track"></span>服务可用</label>
