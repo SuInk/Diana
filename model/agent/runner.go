@@ -452,9 +452,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				break
 			}
 			// 工具不存在时把可用工具列表告诉模型，而不是直接失败整个 Agent。
+			// 但「没权限」不是「不存在」：把目录再抄一遍只会让模型换个名字接着猜，
+			// 而换哪个名字都一样没权限。
+			repair := fmt.Sprintf("工具 %q 不存在。可用工具：\n%s", action.Tool, r.registry.Descriptions())
+			if r.registry.PolicyDenied(action.Tool) {
+				repair = deniedToolError(action.Tool).Error()
+			}
 			messages = append(messages, llm.Message{
 				Role:    llm.RoleUser,
-				Content: fmt.Sprintf("工具 %q 不存在。可用工具：\n%s", action.Tool, r.registry.Descriptions()),
+				Content: repair,
 			})
 			continue
 		}
