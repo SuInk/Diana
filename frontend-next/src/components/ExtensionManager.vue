@@ -1,14 +1,32 @@
 <template>
   <section class="extension-manager">
-    <header class="view-header">
+    <!-- 工具条和插件页共用 .plugins-view-header 那几条：控件同高、不换行。 -->
+    <header class="view-header plugins-view-header">
       <div class="view-title"><h1>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h1><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
-      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button><button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button></div>
+      <div class="view-actions">
+        <div class="plugin-search">
+          <Search :size="14" aria-hidden="true" />
+          <input v-model="query" class="input" type="search" :placeholder="`搜索${kind === 'skill' ? ' Skill' : ' MCP'}名称或说明`" :aria-label="`搜索${kind === 'skill' ? ' Skill' : ' MCP'}`" />
+        </div>
+        <div class="segmented plugin-status-filter" role="radiogroup" aria-label="按状态筛选">
+          <button v-for="option in statusFilters" :key="option.value" type="button" role="radio" :aria-checked="status === option.value" :class="{active: status === option.value}" @click="status = option.value">
+            <span>{{ option.label }}</span>
+            <span class="plugin-filter-count">{{ option.count }}</span>
+          </button>
+        </div>
+        <div class="segmented plugin-layout-switch" role="group" aria-label="排列方式">
+          <button type="button" :class="{active: layout === 'tiles'}" title="方块：一行一行往右排" aria-label="方块排列" @click="setLayout('tiles')"><LayoutGrid :size="14" aria-hidden="true" /></button>
+          <button type="button" :class="{active: layout === 'rows'}" title="横排：一行一个，信息更紧凑" aria-label="横排排列" @click="setLayout('rows')"><Rows3 :size="14" aria-hidden="true" /></button>
+        </div>
+        <button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" :class="{spin: loading}" />刷新</button>
+        <button class="btn primary" @click="openNew"><Plus :size="15" />{{ kind === 'skill' ? '添加 Skill' : '添加 MCP' }}</button>
+      </div>
     </header>
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取扩展…</p>
     <!-- 版式跟插件页走：同一套卡片，扫一眼就知道这三处（插件 / Skills / MCP）是一类东西。 -->
-    <div v-else class="plugin-tiles extension-list">
-      <article v-for="item in items" :key="item.id" class="plugin-card" :class="{off: botScope && !item.enabled}">
+    <div v-else class="extension-list" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
+      <article v-for="item in visibleItems" :key="item.id" class="plugin-card" :class="{off: botScope && !item.enabled}">
         <div class="plugin-card-head">
           <h2 class="plugin-card-name" :title="item.name">{{ item.name }}</h2>
           <!-- 卡片上只管「这台机器人用不用它」。给谁用、限定哪些人都在设置里，
@@ -28,14 +46,18 @@
         </div>
         <p class="plugin-card-desc" :title="item.description || item.source">{{ item.description || item.source || '本地扩展' }}</p>
         <p v-if="item.error" class="error-text">{{ item.error }}</p>
-        <footer class="plugin-card-foot">
-          <button class="btn" :aria-label="`查看或编辑 ${item.name}`" @click="edit(item)"><Settings2 :size="15" />设置</button>
-          <button v-if="item.managed" class="btn ghost danger icon-only" :aria-label="`删除 ${item.name}`" title="删除" @click="remove(item)"><Trash2 :size="16" /></button>
-        </footer>
+        <!-- 结构照插件卡片来：左边轻量信息、右边操作，横排版式靠这层排序。 -->
+        <div class="plugin-card-bottom">
+          <div class="plugin-card-meta"><span class="extension-audience-note">{{ item.managed ? '可管理' : '只读' }}</span></div>
+          <footer class="plugin-card-foot">
+            <button class="btn small" type="button" :aria-label="`查看或编辑 ${item.name}`" @click="edit(item)"><Settings2 :size="14" />设置</button>
+            <button v-if="item.managed" class="btn small danger" type="button" :aria-label="`删除 ${item.name}`" title="删除" @click="remove(item)"><Trash2 :size="14" /></button>
+          </footer>
+        </div>
       </article>
       <!-- 内置预设默认就在列表里占一张卡：它是「有这么个服务，只是还没配」，不是
            藏在某个按钮后面的目录。和插件页里没装的插件一样虚着边、没有开关。 -->
-      <article v-for="entry in pendingPresets" :key="entry.preset.id" class="plugin-card uninstalled">
+      <article v-for="entry in visiblePresets" :key="entry.preset.id" class="plugin-card uninstalled">
         <div class="plugin-card-head">
           <h2 class="plugin-card-name" :title="entry.preset.title">{{ entry.preset.title }}</h2>
         </div>
@@ -44,14 +66,16 @@
           <span class="badge">内置预设</span>
         </div>
         <p class="plugin-card-desc" :title="entry.preset.summary">{{ entry.preset.summary }}</p>
-        <footer class="plugin-card-foot">
-          <button class="btn primary" :aria-label="`配置 ${entry.preset.title}`" @click="startPreset(entry.preset)"><Save :size="15" />配置</button>
-          <a v-if="entry.preset.docs_url" class="btn ghost" :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a>
-          <button class="btn ghost danger icon-only" :aria-label="`从列表里去掉 ${entry.preset.title}`" title="用不上，从列表里去掉" @click="hidePreset(entry.preset)"><Trash2 :size="16" /></button>
-        </footer>
+        <div class="plugin-card-bottom">
+          <div class="plugin-card-meta"><a v-if="entry.preset.docs_url" class="extension-audience-note" :href="entry.preset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></div>
+          <footer class="plugin-card-foot">
+            <button class="btn small" type="button" :aria-label="`配置 ${entry.preset.title}`" @click="startPreset(entry.preset)"><Save :size="14" />配置</button>
+            <button class="btn small danger" type="button" :aria-label="`从列表里去掉 ${entry.preset.title}`" title="用不上，从列表里去掉" @click="hidePreset(entry.preset)"><Trash2 :size="14" /></button>
+          </footer>
+        </div>
       </article>
     </div>
-    <p v-if="!loading && !items.length && !pendingPresets.length">还没有{{ kind === 'skill' ? '自定义 Skill' : 'MCP 服务' }}。</p>
+    <p v-if="!loading && !visibleItems.length && !visiblePresets.length">{{ items.length || pendingPresets.length ? '没有匹配的扩展。' : `还没有${kind === 'skill' ? '自定义 Skill' : 'MCP 服务'}。` }}</p>
     <p v-if="!loading && hiddenPresets.length" class="hint"><button type="button" class="link-button" @click="showHiddenPresets">显示隐藏的预设（{{ hiddenPresets.length }}）</button></p>
     <Modal v-if="presetsOpen && preset" :title="`配置 ${preset.title}`" @close="closePresets">
       <div class="extension-form">
@@ -134,15 +158,20 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { KeyRound, Plus, RefreshCw, RotateCcw, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
+import { KeyRound, LayoutGrid, Plus, RefreshCw, RotateCcw, Rows3, Search, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
 import Modal from './Modal.vue';
 import { botScope } from '../bot-scope';
+import { extensionLayout, setExtensionLayout } from '../extension-layout';
 import { fetchAssistantUserNames, listMCPPresets, listManagedExtensions, manageExtension, type MCPPreset, type ManagedExtension } from '../api';
 import IdChipInput from './IdChipInput.vue';
 import { askConfirm } from '../confirm';
 import { toastError, toastSuccess } from '../toast';
 
 const props=defineProps<{kind:'skill'|'mcp'}>();
+// 搜索、状态筛选、排列方式都照插件页那一套；排列方式是同一份设置，翻标签不会变。
+const query=ref(''),status=ref<'all'|'on'|'off'>('all');
+const layout=extensionLayout,setLayout=setExtensionLayout;
+const matches=(text:string)=>{const q=query.value.trim().toLowerCase();return !q||text.toLowerCase().includes(q)};
 const items=ref<ManagedExtension[]>([]),loading=ref(false),loadError=ref(''),busy=ref(''),editing=ref(false),existing=ref(false),readonly=ref(false),saving=ref(false),error=ref('');
 const fromURL=ref(false),transport=ref<'http'|'stdio'>('http'),tested=ref(false),discovered=ref<string[]>([]),headers=ref('{}'),env=ref('{}');
 const blank=()=>({name:'',content:'',source_url:'',url:'',command:'',args:'',cwd:'',enabled:true,startup_timeout_sec:20,tool_timeout_sec:60,enabled_tools:'',disabled_tools:''});
@@ -200,6 +229,16 @@ async function refreshPresets(){try{presets.value=(await listMCPPresets()).items
 function startPreset(value:MCPPreset,event?:Event){if(event)(event.target as HTMLInputElement).checked=false;presetsOpen.value=true;pickPreset(value)}
 // 还没配的内置预设：列表里照样占一行，装上之后这一行就变成真正的那条服务。
 const pendingPresets=computed(()=>props.kind==='mcp'?presets.value.filter(entry=>!entry.hidden&&!entry.installed&&!items.value.some(item=>item.name===entry.preset.name)):[]);
+const searchedItems=computed(()=>items.value.filter(item=>matches(`${item.name} ${item.description||''} ${item.source||''}`)));
+const enabledCount=computed(()=>searchedItems.value.filter(item=>item.enabled).length);
+const visibleItems=computed(()=>status.value==='all'?searchedItems.value:searchedItems.value.filter(item=>item.enabled===(status.value==='on')));
+// 还没配凭据的预设既不算启用也不算停用，只在「全部」里出现。
+const visiblePresets=computed(()=>status.value!=='all'?[]:pendingPresets.value.filter(entry=>matches(`${entry.preset.title} ${entry.preset.name} ${entry.preset.summary}`)));
+const statusFilters=computed(()=>[
+ {value:'all' as const,label:'全部',count:searchedItems.value.length+visiblePresets.value.length},
+ {value:'on' as const,label:'已启用',count:enabledCount.value},
+ {value:'off' as const,label:'已停用',count:searchedItems.value.length-enabledCount.value},
+]);
 const hiddenPresets=computed(()=>props.kind==='mcp'?presets.value.filter(entry=>entry.hidden):[]);
 // 删掉的是列表里那一行，不是服务：随时能放回来，所以底下留一句找得回来的话。
 async function hidePreset(value:MCPPreset){if(!await askConfirm({title:`从列表里去掉 ${value.title}？`,message:'只是不再显示这一行，随时可以在下面「显示隐藏的预设」里放回来。已经配好的服务不受影响。',confirmLabel:'去掉'}))return;
@@ -253,5 +292,5 @@ watch(botScope,load);onMounted(load);
 </script>
 
 <style scoped>
-.extension-manager{padding-top:20px}.preset-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}.extension-list{margin-top:4px}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.plugin-card-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.extension-info strong{display:flex;align-items:center;gap:8px}.form-divider{border:0;border-top:1px solid var(--border);margin:4px 0 0}.extension-audience-note{color:var(--text-secondary)}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}.link-button{background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer;text-decoration:underline}@media(max-width:600px){.extension-grid{grid-template-columns:1fr}}
+.extension-manager{padding-top:20px}.preset-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--border)}.extension-list{margin-top:4px}.extension-info{flex:1;min-width:0;overflow-wrap:anywhere}.extension-info p{margin:6px 0;color:var(--muted)}.extension-info small{color:var(--muted)}.extension-form{display:grid;gap:14px}.code-input{font-family:monospace;resize:vertical;min-width:0;white-space:pre-wrap}.extension-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.extension-info strong{display:flex;align-items:center;gap:8px}.form-divider{border:0;border-top:1px solid var(--border);margin:4px 0 0}.extension-audience-note{color:var(--text-secondary)}.tool-name{overflow-wrap:anywhere}.error-text{color:var(--danger)}.link-button{background:none;border:0;padding:0;color:var(--accent);font:inherit;cursor:pointer;text-decoration:underline}@media(max-width:600px){.extension-grid{grid-template-columns:1fr}}
 </style>
