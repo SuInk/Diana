@@ -715,10 +715,20 @@
                 <AppSelect
                   id="bot-model-disclosure"
                   :model-value="form.model_disclosure ?? 'owner'"
-                  :options="modelDisclosureOptions"
+                  :options="disclosureOptions"
                   @update:model-value="(value) => { if (form) form.model_disclosure = value as 'owner' | 'everyone'; }"
                 />
                 <span class="hint">默认只对主人如实回答模型 ID 和供应商，主人也始终能在聊天里查看和切换模型；其他人问起时机器人会含糊带过，也不会凭训练记忆自报家门。</span>
+              </div>
+              <div class="field">
+                <label for="bot-repository-disclosure">谁能问出项目地址</label>
+                <AppSelect
+                  id="bot-repository-disclosure"
+                  :model-value="form.repository_disclosure ?? 'owner'"
+                  :options="disclosureOptions"
+                  @update:model-value="(value) => { if (form) form.repository_disclosure = value as 'owner' | 'everyone'; }"
+                />
+                <span class="hint">默认只对主人报开源仓库地址；其他人问「你源码在哪」时机器人会带过去，不给链接也不会编一个。地址本身是公开的，但知道地址就知道去哪看默认提示词和全部工具实现。</span>
               </div>
             </div>
           </section>
@@ -2313,7 +2323,7 @@ const replyReferenceModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-const modelDisclosureOptions: AppSelectOption[] = [
+const disclosureOptions: AppSelectOption[] = [
   { value: "owner", label: "仅主人" },
   { value: "everyone", label: "所有人" }
 ];
@@ -3540,6 +3550,7 @@ function setForm(config: BotProfileConfig): void {
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "owner",
+    repository_disclosure: config.repository_disclosure ?? "owner",
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,

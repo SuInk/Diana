@@ -556,6 +556,7 @@ type BotConfig struct {
 	DebugModeEnabled          bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode        ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	ModelDisclosure           ModelDisclosure      `json:"model_disclosure,omitempty"`
+	RepositoryDisclosure      RepositoryDisclosure `json:"repository_disclosure,omitempty"`
 	MentionUserMode           ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain           *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled        *bool                `json:"error_notify_enabled,omitempty"`
@@ -970,6 +971,7 @@ type ConfigPayload struct {
 	DebugModeEnabled              bool                 `json:"debug_mode_enabled,omitempty"`
 	ReplyReferenceMode            ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
 	ModelDisclosure               ModelDisclosure      `json:"model_disclosure,omitempty"`
+	RepositoryDisclosure          RepositoryDisclosure `json:"repository_disclosure,omitempty"`
 	MentionUserMode               ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain               *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled            *bool                `json:"error_notify_enabled,omitempty"`
@@ -1730,6 +1732,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ReplyReferenceMode = defaults.ReplyReferenceMode
 	}
 	cfg.ModelDisclosure = normalizeModelDisclosure(cfg.ModelDisclosure)
+	cfg.RepositoryDisclosure = normalizeRepositoryDisclosure(cfg.RepositoryDisclosure)
 	if cfg.MentionUserMode == "" {
 		cfg.MentionUserMode = defaults.MentionUserMode
 	}
@@ -2133,6 +2136,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		DebugModeEnabled:                  cfg.DebugModeEnabled,
 		ReplyReferenceMode:                cfg.ReplyReferenceMode,
 		ModelDisclosure:                   cfg.ModelDisclosure,
+		RepositoryDisclosure:              cfg.RepositoryDisclosure,
 		MentionUserMode:                   cfg.MentionUserMode,
 		MarkdownToPlain:                   copyBoolPointer(cfg.MarkdownToPlain),
 		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
@@ -2340,6 +2344,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		DebugModeEnabled:                payload.DebugModeEnabled,
 		ReplyReferenceMode:              payload.ReplyReferenceMode,
 		ModelDisclosure:                 payload.ModelDisclosure,
+		RepositoryDisclosure:            payload.RepositoryDisclosure,
 		MentionUserMode:                 payload.MentionUserMode,
 		MarkdownToPlain:                 copyBoolPointer(payload.MarkdownToPlain),
 		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),
