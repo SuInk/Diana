@@ -361,7 +361,7 @@ func main() {
 		log.Printf("load system release cache: %v", err)
 	}
 	// 下载线路选择器由 webui 和 updater 共用：界面上改了策略，下一次下载就按新策略走。
-	mirrorSelector := ghmirror.NewSelector(&http.Client{Timeout: 15 * time.Second})
+	mirrorSelector := ghmirror.NewSelector(&http.Client{Timeout: 60 * time.Second})
 	systemHandler.SetGitHubMirrorSelector(mirrorSelector)
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: runtimeVersion,
@@ -540,7 +540,7 @@ func main() {
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
 	botHandler.SetSQLiteStore(sqliteStore)
-	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 60 * time.Second})
+	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 3 * time.Minute})
 	repoPluginInstaller.MirrorBase = func(ctx context.Context) string {
 		return mirrorSelector.Base(ctx, "https://raw.githubusercontent.com/SuInk/diana/main/model/version/VERSION")
 	}

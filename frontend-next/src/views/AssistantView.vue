@@ -993,6 +993,29 @@
                 <label for="bot-retry">发送重试次数（1–5）</label>
                 <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="subscriptionFailureAlertEnabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">订阅失败时发通知</span>
+                </label>
+                <span class="hint">RSS、定时查询、仓库订阅坏了要不要说一声。关掉之后失败只留日志和后台状态，聊天里再也不报错。</span>
+              </div>
+              <div v-if="subscriptionFailureAlertEnabled" class="field">
+                <label for="bot-subscription-failure">连续失败几次才报</label>
+                <input
+                  id="bot-subscription-failure"
+                  v-model.number="form.recurring_failure_alert_threshold"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumRecurringFailureAlertThreshold"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="留空按 5"
+                />
+                <span class="hint">抖一下就报警只会让人不再看这类消息，所以连着坏够次数才出声，而且一轮故障只报一次。可设置 1–{{ maximumRecurringFailureAlertThreshold }} 次。</span>
+              </div>
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
                 <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
@@ -2272,6 +2295,23 @@ type EditorTab = (typeof editorTabs)[number]["key"];
 const editorTab = ref<EditorTab>("access");
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
+// 和后端 maxRecurringFailureAlertThreshold 对齐：再大就不是「连续失败」而是订阅已经坏了。
+const maximumRecurringFailureAlertThreshold = 100;
+// 开关和次数共用 recurring_failure_alert_threshold 一个字段：0 就是关掉。
+// 多存一个布尔会让「关着但次数是 5」这种状态存在，重新打开时该听谁的说不清。
+const subscriptionFailureAlertEnabled = computed<boolean>({
+  // 只有明确的 0 才算关掉。空输入框（清空次数准备重填）不能顺手把开关也关了，
+  // 否则输入框当场消失，人还没打完第二个数字。
+  get: () => {
+    const configured = form.value?.recurring_failure_alert_threshold;
+    return configured === undefined || configured === null || `${configured}`.trim() === "" || Number(configured) !== 0;
+  },
+  set: (enabled) => {
+    if (!form.value) return;
+    // 打开时清空而不是填回具体次数：留空的含义就是「按默认来」，默认值改了也跟着走。
+    form.value.recurring_failure_alert_threshold = enabled ? undefined : 0;
+  }
+});
 const platforms = ref<BotPlatform[]>([]);
 
 // 能不能渲染 Markdown 由后端的平台注册表说了算，前端不另维护一份清单——
@@ -3795,6 +3835,20 @@ async function save(): Promise<void> {
     toastError("反向 WebSocket 模式必须配置 Access Token，需与 OneBot v11 客户端保持一致");
     return;
   }
+  // 留空 = 没配过，提交时整个字段不带上，后端按默认 5 次；填 0 才是「出错别通知」。
+  const failureAlertThresholdDraft = current.recurring_failure_alert_threshold;
+  const failureAlertThreshold =
+    failureAlertThresholdDraft === undefined || failureAlertThresholdDraft === null || `${failureAlertThresholdDraft}`.trim() === ""
+      ? undefined
+      : Number(failureAlertThresholdDraft);
+  if (
+    failureAlertThreshold !== undefined &&
+    failureAlertThreshold !== 0 &&
+    (!Number.isInteger(failureAlertThreshold) || failureAlertThreshold < 1 || failureAlertThreshold > maximumRecurringFailureAlertThreshold)
+  ) {
+    toastError(`连续失败几次才报请输入 1 到 ${maximumRecurringFailureAlertThreshold} 之间的整数`);
+    return;
+  }
   const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
   if (
     current.recall_reply_auto_delete_enabled &&
@@ -3871,6 +3925,7 @@ async function save(): Promise<void> {
         .filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
       agent_command_allowlist: splitList(allowlistDraft.value),
+      recurring_failure_alert_threshold: failureAlertThreshold,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,

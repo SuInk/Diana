@@ -787,11 +787,12 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		if err != nil && finishErr == nil {
 			var noticeErr error
 			noticeAttempted := false
-			if ctx.Err() == nil && repositoryWatchFailureShouldAlert(updated) {
+			threshold := r.recurringFailureAlertThreshold(updated)
+			if ctx.Err() == nil && repositoryWatchFailureShouldAlert(updated, threshold) {
 				noticeAttempted = true
 				noticeErr = r.notifyRepositoryWatchFailure(ctx, updated, err)
 				if noticeErr == nil {
-					updated, noticeErr = r.acknowledgeRepositoryWatchFailureAlert(updated.ID, updated.LastErrorFingerprint, time.Now())
+					updated, noticeErr = r.acknowledgeRepositoryWatchFailureAlert(updated.ID, updated.LastErrorFingerprint, threshold, time.Now())
 				}
 			}
 			r.recordReminderRetryAttempt(updated, err, noticeErr, noticeAttempted)
@@ -882,6 +883,20 @@ func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (
 	return startedAt, r.sendSubscriberNotice(ctx, source, message)
 }
 
+// repositoryWatchRoundBudget 是一轮检查的总时长上限：按订阅自己的轮询间隔来，
+// 一轮最多跑到下一轮该开始的时候。下限 5 分钟，免得一分钟一轮的订阅连一次正常
+// 检查都跑不完；上限 30 分钟，再长就不该继续等了。
+func repositoryWatchRoundBudget(item Reminder) time.Duration {
+	budget := time.Duration(item.IntervalSeconds) * time.Second
+	if budget < 5*time.Minute {
+		budget = 5 * time.Minute
+	}
+	if budget > 30*time.Minute {
+		budget = 30 * time.Minute
+	}
+	return budget
+}
+
 func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) (time.Time, error) {
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
@@ -898,8 +913,13 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if !enabled || !ok {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStagePolling, fmt.Errorf("仓库更新订阅插件已停用，无法检查 %s", item.Repository))
 	}
+	// 单请求超时给得很宽（默认 90 秒），一轮又要打几十个请求，所以整轮要另有上限：
+	// 没有它，一串卡住的请求能把这条订阅拖过好几个轮询周期——订阅被认领期间不会
+	// 重复执行，于是表现成「这个仓库不动了」，而不是一次干脆的失败。
+	roundCtx, cancelRound := context.WithTimeout(ctx, repositoryWatchRoundBudget(item))
+	defer cancelRound()
 	change, err := plugin.checkSelected(
-		ctx,
+		roundCtx,
 		item.Repository,
 		item.RepositoryBranch,
 		repositoryWatchSnapshot{

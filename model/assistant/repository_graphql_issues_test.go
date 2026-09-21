@@ -102,7 +102,7 @@ func newGraphQLRepoPlugin(t *testing.T, server *graphQLRepoServer, now time.Time
 	t.Helper()
 	httpServer := httptest.NewServer(http.HandlerFunc(server.handler))
 	t.Cleanup(httpServer.Close)
-	plugin := newRepositoryWatchPlugin(httpServer.Client(), httpServer.URL)
+	plugin := newTestRepositoryWatchPlugin(httpServer.Client(), httpServer.URL)
 	plugin.now = func() time.Time { return now }
 	return plugin
 }
@@ -158,7 +158,7 @@ func TestRepositoryWatchIssuesFallBackToRESTWhenGraphQLFails(t *testing.T) {
 func TestRepositoryWatchPullRequestsFilterBranchOnServer(t *testing.T) {
 	server := &graphQLRepoServer{}
 	plugin := newGraphQLRepoPlugin(t, server, time.Now())
-	if _, _, err := plugin.fetchPullRequests(context.Background(), "acme/demo", "main", "", time.Time{}, repositoryWatchSelection{PullRequests: true}, SettingValues{}); err != nil {
+	if _, _, _, err := plugin.fetchPullRequests(context.Background(), "acme/demo", "main", "", time.Time{}, repositoryWatchSelection{PullRequests: true}, SettingValues{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(server.pullQueries) != 1 || !strings.Contains(server.pullQueries[0], "base=main") {

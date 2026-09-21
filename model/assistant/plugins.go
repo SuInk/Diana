@@ -1224,14 +1224,14 @@ const (
 	resolverSettingProxyURL       = "proxy_url"
 
 	defaultResolverMaxLinks        = 5
-	defaultResolverTimeoutSeconds  = 8
-	maxResolverTimeoutSeconds      = 30
+	defaultResolverTimeoutSeconds  = 20
+	maxResolverTimeoutSeconds      = 120
 	defaultResolverBrowserCDPURL   = "http://127.0.0.1:9222"
 	defaultResolverSummaryMaxRunes = 140
 	defaultResolverCacheTTLMinutes = 10
 
 	// 浏览器渲染要等页面 JS 补齐内容，超时独立于普通抓取，宽松一些。
-	resolverBrowserTimeout = 15 * time.Second
+	resolverBrowserTimeout = 45 * time.Second
 )
 
 // browserFetchFunc 通过 CDP 渲染页面并提取元数据，测试里可注入桩实现。

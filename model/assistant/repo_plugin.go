@@ -631,11 +631,15 @@ type RepoPluginInstaller struct {
 	MirrorBase func(context.Context) string
 }
 
+// repoPluginInstallHTTPTimeout 是拉取插件源码的上限。这是个人按一下等着的动作，
+// 但下载的是整个仓库压缩包，网络一抖就得从头再来一遍——宁可多等。
+const repoPluginInstallHTTPTimeout = 3 * time.Minute
+
 // NewRepoPluginInstaller 创建安装器。dataDir 是 SQLite 所在的数据目录，
 // 插件源码落在 <dataDir>/plugin-sources/<id>/。
 func NewRepoPluginInstaller(dataDir string, client *http.Client) *RepoPluginInstaller {
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = &http.Client{Timeout: repoPluginInstallHTTPTimeout}
 	}
 	return &RepoPluginInstaller{
 		Client:      client,

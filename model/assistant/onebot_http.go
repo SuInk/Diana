@@ -30,7 +30,7 @@ type OneBotHTTPChannel struct {
 func NewOneBotHTTPChannel(cfg OneBotConfig) *OneBotHTTPChannel {
 	return &OneBotHTTPChannel{
 		OneBotReverseServer: NewOneBotReverseServer(cfg),
-		client:              &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		client:              &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
