@@ -41,3 +41,5 @@ Canary 标签由 CI 在合并提交上创建，标记为 GitHub Prerelease，不
 CI 自动将 Beta/RC 标记为 GitHub Prerelease，不设置为最新正式 Release；完整包、SHA256SUMS 和 latest.json 与正式版使用相同的构建和校验流程。latest.json 包含 prerelease 标记。中文更新说明、平台产物检查和下载校验仍按 AGENTS.md 发布要求完成。
 
 Docker 保留每个完整版本标签（及对应的 `-slim` 标签）。正式版更新 `latest` / `latest-slim`，Beta 和 RC 更新 `beta` / `beta-slim`，Canary 更新 `canary` / `canary-slim`；预发布不会覆盖 latest。需要修正或回退 `latest` / `latest-slim` 时，手动运行 `Docker Retag Latest` 工作流并填入已发布的正式版标签，它会把两个标签重新指向该版本的完整版和 slim 镜像，不重新构建。默认安装脚本仍安装正式版，完整包用户安装后可在版本面板切换 Beta；Docker 用户使用 `ghcr.io/suink/diana:beta`、`ghcr.io/suink/diana:canary` 或具体版本标签，并由原部署环境拉取和重建容器。
+
+安装脚本 `scripts/docker.sh` 只在完整版和 slim 之间做选择（交互时提问，非交互默认完整版，`DIANA_VARIANT=full|slim` 可预先指定），通道固定为 Release。选定的镜像写进部署目录 `.env` 的 `DIANA_IMAGE=`，脚本重复执行不会覆盖已有取值；换通道同样改这一行，例如 `DIANA_IMAGE=ghcr.io/suink/diana:beta-slim`。
