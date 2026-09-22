@@ -437,17 +437,64 @@ jobs:
       # Release 页面自带安装指令：从这里进来的人手上通常只有一个版本号，
       # 不该再跳回 README 才知道怎么装。每条都是能整条复制的完整命令，
       # 分开放在各自的代码块里——并排写一行复制时会把两条粘在一起。
+      # 改动列表自己调 API 生成并写在安装说明前面：交给 action 的
+      # generate_release_notes 只会追加到正文末尾，升级的人得先翻过一屏安装命令。
       - name: Write release notes
         env:
-          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
           IS_CANARY: ${{ needs.build-version.outputs.canary }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build-version.outputs.value }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
+          # 基线交给 generate-notes 去算（它自己分得清正式版和预发布该跟谁比），
+          # 只从它的 compare 链接里取上一个 tag；正文不用它生成的那份：
+          # 那份只列合并的 PR，直推 main 的提交会整条漏掉。
+          previous_tag=$(
+            gh api "repos/${RELEASE_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="${RELEASE_TAG}" \
+              -f target_commitish="${GITHUB_SHA}" \
+              --jq .body 2>/dev/null |
+              sed -n 's#.*/compare/\(.*\)\.\.\..*#\1#p' | head -n 1
+          )
+          : > release/CHANGELOG.md
+          if [ -n "${previous_tag}" ]; then
+            entries=$(
+              # 按提交列，直推 main 的才不会漏；走 PR 的把末尾的 (#N) 提出来当引用，
+              # GitHub 会渲染成 PR 链接，直推的没有 PR 号就退回短 SHA。
+              # 合并提交本身没有内容，跳过。光一行标题看不出改了什么，所以再补一行
+              # 提交正文的第一段——那段写的是为什么改；要点清单和重复标题那一段跳过。
+              gh api "repos/${RELEASE_REPOSITORY}/compare/${previous_tag}...${GITHUB_SHA}" --paginate \
+                --jq '
+                  .commits[] | select((.parents | length) < 2)
+                  | (.commit.message | split("\n")) as $lines
+                  | ($lines[0] | sub(" \\(#[0-9]+\\)$"; "")) as $title
+                  | (.author.login // .commit.author.name) as $author
+                  | (if ($lines[0] | test(" \\(#[0-9]+\\)$"))
+                     then "#" + ($lines[0] | capture(" \\(#(?<n>[0-9]+)\\)$").n)
+                     else .sha[0:7] end) as $ref
+                  | ([$lines[1:][] | select(test("^\\s*[-*+] ") | not)]
+                     | join("\n") | split("\n\n") | map(gsub("\n"; "") | gsub("^\\s+|\\s+$"; ""))
+                     | map(select(. != "" and (. | contains($title)) == false)) | .[0] // "") as $why
+                  | "* \($title) —— @\($author) \($ref)"
+                    + (if $why == "" then "" else "\n  \(if ($why | length) > 64 then ($why[0:64] + "…") else $why end)" end)'
+            )
+            # 区间里一个提交都没有就整段不写，别留个空标题。
+            if [ -n "${entries}" ]; then
+              {
+                echo "## 更新内容"
+                printf '%s\n' "${entries}"
+                echo
+                echo "**完整对比**：https://github.com/${RELEASE_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG}"
+              } > release/CHANGELOG.md
+            fi
+          fi
           {
             if [ "${IS_CANARY}" = "true" ]; then
-              echo "main 分支合并后自动构建的 Canary 预览版，未经人工验证，只推送给选择 Canary 更新通道的实例。发布正式版时自动删除。"
+              echo "Canary 预览版：main 每次合并自动构建，未经人工验证，发正式版时删除。"
               echo
-              echo "- 提交：${GITHUB_SHA}"
-              echo "- 改动：$(head -n 1 <<<"${COMMIT_SUBJECT}")"
+            fi
+            if [ -s release/CHANGELOG.md ]; then
+              cat release/CHANGELOG.md
               echo
             fi
             echo "## 安装"
@@ -478,6 +525,7 @@ jobs:
             echo
             echo "手动安装：下载下方对应平台的完整包，用 \`SHA256SUMS\` 校验后解压运行 \`run.sh\` / \`run.bat\`。"
           } > release/NOTES.md
+          rm -f release/CHANGELOG.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -488,7 +536,6 @@ jobs:
           name: ${{ needs.build-version.outputs.value }}
           prerelease: ${{ needs.build-version.outputs.channel != 'release' }}
           make_latest: ${{ needs.build-version.outputs.channel == 'release' }}
-          generate_release_notes: true
           files: |
             release/*.tar.gz
             release/*.zip
