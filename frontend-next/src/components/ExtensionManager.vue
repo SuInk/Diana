@@ -213,7 +213,7 @@ const presetSavedMessage=(r:{account?:string;verified?:boolean})=>r.account?`已
 function presetPayload(operation:string){return {operation,kind:'mcp',name:form.value.name,replace:true,preset:editPreset.value?.id,transport:editPresetTransport.value,values:editPresetValues.value,config:{enabled:form.value.enabled}}}
 async function save(){saving.value=true;error.value='';try{
  // 预设那张表只回传它管的字段，剩下的（超时、工具名单）由服务端沿用已保存的。
- if(editPreset.value&&!editAdvanced.value){const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>(presetPayload('save'));editing.value=false;toastSuccess(result.warning||presetSavedMessage(result))}
+ if(editPreset.value&&!editAdvanced.value){const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>(presetPayload('save'));editing.value=false;if(result.warning)toastError(result.warning);else toastSuccess(presetSavedMessage(result))}
  else{await manageExtension(payload('save'));editing.value=false;toastSuccess('扩展已保存，后续会话生效')}
  await load()}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
 // 令牌对不对，保存前就问一次 Gitea。gitea-mcp 的握手不碰令牌，光看「测试连接」
@@ -252,7 +252,7 @@ async function hidePreset(value:MCPPreset){if(!await askConfirm({title:`从列�
 async function showHiddenPresets(){try{await Promise.all(hiddenPresets.value.map(entry=>manageExtension({operation:'presets',action:'show',kind:'mcp',preset:entry.preset.id})));await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 function closePresets(){if(presetSaving.value)return;presetsOpen.value=false;preset.value=null}
 function pickPreset(value:MCPPreset){preset.value=value;presetTransport.value=value.transports[0]?.id||'';presetValues.value={};presetName.value=items.value.some(i=>i.name===value.name)?`${value.name}-2`:value.name;presetError.value='';verifyNote.value=''}
-async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess(result.warning||`已添加${presetVerifiedSuffix(result)}，默认仅主人可用，在它那张卡片的「设置」里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
+async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;if(result.warning)toastError(result.warning);else toastSuccess(`已添加${presetVerifiedSuffix(result)}，默认仅主人可用，在它那张卡片的「设置」里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
 // 权限跟着正在编辑的那一条走：设置弹窗里改，改完从列表里取回最新的一份。
 const permissionName=ref(''),accessUsers=ref<string[]>([]),accessGroups=ref<string[]>([]),accessError=ref(''),savingAccess=ref(false);
 const permissionItem=computed(()=>editing.value&&botScope.value&&permissionName.value?items.value.find(i=>i.kind===props.kind&&i.name===permissionName.value)||null:null);
@@ -264,7 +264,7 @@ const openTiers=extensionStates.filter(state=>state.value!=='off');
 const tierLabel=(item:ManagedExtension)=>extensionStates.find(state=>state.value===currentState(item))?.label||'';
 // 开关只管启用与否：成员档和名单原样留着，关掉再打开还是原来那一档。
 async function toggleEnabled(item:ManagedExtension){const profile=botScope.value;if(!profile)return;busy.value=item.id;
- try{await manageExtension({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile,enabled:!item.enabled});await load()}
+ try{const result=await manageExtension<{warning?:string}>({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile,enabled:!item.enabled});if(result?.warning)toastError(result.warning);await load()}
  catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
 const currentState=(item:ManagedExtension):ExtensionState=>!item.enabled?'off':!item.members_enabled?'owner':item.member_audience?.min_role==='admin'?'admins':'members';
 const isOpenTier=(item:ManagedExtension)=>{const state=currentState(item);return state==='members'||state==='admins'};
@@ -284,7 +284,7 @@ async function setState(item:ManagedExtension,state:ExtensionState){const profil
   // 收紧的那一步先做：先摘权限再改启用，不会出现「已开放但还没限制住」的瞬间。
   if(!members&&item.members_enabled)await manageExtension({...base,operation:'members',enabled:false});
   if(members&&audience.min_role!==(item.member_audience?.min_role||''))await manageExtension({...base,operation:'audience',audience});
-  if((state==='off')!==!item.enabled)await manageExtension({...base,operation:'enabled',enabled:state!=='off'});
+  if((state==='off')!==!item.enabled){const result=await manageExtension<{warning?:string}>({...base,operation:'enabled',enabled:state!=='off'});if(result?.warning)toastError(result.warning)}
   if(members&&!item.members_enabled)await manageExtension({...base,operation:'members',enabled:true});
   await load();
  }catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
