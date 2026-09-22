@@ -50,6 +50,11 @@ type mcpServerConfig struct {
 	ToolTimeoutSec    int               `json:"tool_timeout_sec,omitempty" toml:"tool_timeout_sec,omitempty"`
 	EnabledTools      []string          `json:"enabled_tools,omitempty" toml:"enabled_tools,omitempty"`
 	DisabledTools     []string          `json:"disabled_tools,omitempty" toml:"disabled_tools,omitempty"`
+	// Preset/PresetTransport 记的是这条服务从哪个预设装出来的，界面按它把编辑框
+	// 换回预设那张表（填地址和令牌），而不是让人对着命令行参数和环境变量 JSON 改。
+	// 只记出身，不复制字段值：值仍然只有配置本身这一份，手改过也不会和表单对不上。
+	Preset          string `json:"preset,omitempty" toml:"preset,omitempty"`
+	PresetTransport string `json:"preset_transport,omitempty" toml:"preset_transport,omitempty"`
 }
 
 func (cfg mcpServerConfig) enabled() bool {

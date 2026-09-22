@@ -401,17 +401,19 @@
         </div>
         <div v-if="extensions.length" class="field wide">
           <label>本群扩展</label>
-          <p class="hint">按群覆盖 MCP 与 Skill：档位不设就跟随机器人，白名单里的人不看档位也能用，黑名单一律不给。判定顺序是停用 &gt; 黑名单 &gt; 白名单 &gt; 档位，「停用」对所有人生效，主人也一样。</p>
+          <p class="hint">按群覆盖 MCP 与 Skill：档位不设就跟随机器人，白名单里的人不看档位也能用，黑名单一律不给。判定顺序是停用 &gt; 黑名单 &gt; 白名单 &gt; 档位，「停用」对所有人生效，主人也一样。机器人那一档是默认值——扩展页关掉的服务，在这里给本群选一个档位就能单独用起来；只有扩展页里的全局「服务可用」关掉时，本群怎么选都没用。</p>
           <div class="row-list" style="margin-top: 6px">
             <div v-for="item in extensions" :key="item.id" class="row-item group-plugin-row">
               <div class="group-plugin-row-head">
                 <div class="row-main">
                   <div class="row-title">{{ item.name }}<span class="badge">{{ item.kind === 'skill' ? 'Skill' : 'MCP' }}</span></div>
-                  <div class="row-sub">机器人：{{ extensionTierLabel(botTierOf(item)) }}</div>
+                  <!-- 全局停用和「这台机器人默认不开」是两回事：前者本群怎么选都没用，
+                       说清楚，别让人对着一排点不动的按钮猜。 -->
+                  <div class="row-sub">{{ item.available === false ? '全局停用，本群改不动' : `机器人：${extensionTierLabel(botTierOf(item))}` }}</div>
                 </div>
                 <div class="segmented">
-                  <button type="button" :class="{ active: !tierOf(item.id) }" @click="setTier(item.id, undefined)">跟随</button>
-                  <button v-for="tier in extensionTiers" :key="tier.value" type="button" :class="{ active: tierOf(item.id) === tier.value }" :title="tier.hint" @click="setTier(item.id, tier.value)">{{ tier.label }}</button>
+                  <button type="button" :disabled="item.available === false" :class="{ active: !tierOf(item.id) }" @click="setTier(item.id, undefined)">跟随</button>
+                  <button v-for="tier in extensionTiers" :key="tier.value" type="button" :disabled="item.available === false" :class="{ active: tierOf(item.id) === tier.value }" :title="tier.hint" @click="setTier(item.id, tier.value)">{{ tier.label }}</button>
                 </div>
               </div>
               <!-- 「跟随」是本群完全不干预，连名单也不该有；停用时两份名单同样没有意义。 -->

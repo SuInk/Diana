@@ -690,6 +690,7 @@ import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
 import { botScope } from "../bot-scope";
+import { extensionLayout, setExtensionLayout } from "../extension-layout";
 import { pluginForBot } from "../plugin-settings";
 
 const plugins = ref<PluginState[]>([]);
@@ -1158,18 +1159,9 @@ function pluginPlatformBadges(plugin: PluginState): Array<{ id: string; label: s
   }));
 }
 
-type PluginLayout = "tiles" | "rows";
-const LAYOUT_KEY = "dqb-next:plugin-layout";
-// 只认 "rows"，其余一律当方块：早先存的是 "masonry"，同一个档位换了名字，
-// 不值得为它写一次迁移。
-const layout = ref<PluginLayout>(
-  window.localStorage.getItem(LAYOUT_KEY) === "rows" ? "rows" : "tiles"
-);
-
-function setLayout(next: PluginLayout): void {
-  layout.value = next;
-  window.localStorage.setItem(LAYOUT_KEY, next);
-}
+// 排列方式和 Skills、MCP 共用一份：三个标签在同一个页面里，各存各的会互相打架。
+const layout = extensionLayout;
+const setLayout = setExtensionLayout;
 
 // 没有任何可点的动作时不渲染 footer，省掉一整行「无可配置项」。
 // 内置插件卸载不了，没有设置项就真的没事可做。

@@ -695,6 +695,28 @@ func TestGroupExtensionAccessOverridesBotTier(t *testing.T) {
 	if !visible(private, owner) {
 		t.Fatal("群配置影响到了私聊")
 	}
+
+	// 机器人那个开关只是默认：默认关着的扩展，某个群可以单独打开。否则想让一个群
+	// 用它，只能先全局打开再把别的群一个个关回去。
+	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(`{"bot-a":{"mcp:probe":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	groupAccess(GroupExtensionAccess{})
+	if visible(event, member) || visible(event, owner) {
+		t.Fatal("机器人默认关着、群里没说话时不该有这个扩展")
+	}
+	groupAccess(GroupExtensionAccess{Tier: "members"})
+	if !visible(event, member) {
+		t.Fatal("群里单独打开没有生效")
+	}
+	if !visible(event, owner) {
+		t.Fatal("群里打开了，主人在这个群反而用不了")
+	}
+	// 本群显式停用仍然压过一切。
+	groupAccess(GroupExtensionAccess{Tier: "off"})
+	if visible(event, member) || visible(event, owner) {
+		t.Fatal("本群停用没有对所有人生效")
+	}
 }
 
 // 机器人级停用只是默认档，群里单独设过就该以群里那一档为准。

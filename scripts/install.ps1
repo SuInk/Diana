@@ -203,7 +203,7 @@ try {
     New-Item -ItemType Directory -Force -Path $runtimeBackup, $dataBackup | Out-Null
 
     $hadPrevious = $false
-    foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next")) {
+    foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next", "gitea-mcp.exe", "gitea-mcp.LICENSE")) {
         $current = Join-Path $installDir $item
         if (Test-Path $current) {
             $hadPrevious = $true
@@ -300,7 +300,7 @@ try {
         if (-not $healthy) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             if ($hadPrevious) {
-                foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next")) {
+                foreach ($item in @($binaryName, $compatBinaryName, "run.bat", "uninstall.ps1", "frontend-next", "gitea-mcp.exe", "gitea-mcp.LICENSE")) {
                     $current = Join-Path $installDir $item
                     $backup = Join-Path $runtimeBackup $item
                     if (Test-Path $current) { Remove-Item -Recurse -Force $current }

@@ -215,6 +215,9 @@ jobs:
           # the first package that introduces the stable runtime name.
           cp "${package_dir}/${runtime_name}" "${package_dir}/${binary_name}"
           cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
+          # 自带官方 gitea-mcp：校验和对不上就在这里失败，不会发出去。MCP 预设按
+          # 主程序旁边的位置拉起它，所以必须和 diana-webui 放在同一层。
+          scripts/fetch-gitea-mcp.sh "${{ matrix.goos }}" "${{ matrix.goarch }}" "${package_dir}"
           printf '%s\n' \
             "Diana ${BUILD_VERSION}" \
             '' \
