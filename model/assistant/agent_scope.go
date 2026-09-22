@@ -500,10 +500,14 @@ func (r *Runtime) agentBuiltinExtensions(event MessageEvent) []agent.BuiltinExte
 		return nil
 	}
 	overrides := r.pluginOverridesForEvent(event)
+	// 插件带来的工具要能整条配档位，目录里就得记得谁带来了什么。这一步只构造工具
+	// 对象读名字，不发请求、不起进程。
+	toolOwners := r.plugins.AgentToolOwners(r.currentPlatform(event), overrides, r.pluginSettingOverridesForEvent(event))
 	states := r.plugins.List()
 	extensions := make([]agent.BuiltinExtension, 0, len(states))
 	for _, state := range states {
 		extensions = append(extensions, agent.BuiltinExtension{
+			Tools:       append([]string(nil), toolOwners[state.Manifest.ID]...),
 			ID:          state.Manifest.ID,
 			Name:        state.Manifest.Name,
 			Version:     state.Manifest.Version,
@@ -627,15 +631,28 @@ func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scop
 
 // AgentResidencyEntry 是常驻档位界面里的一行：一个内置工具，或者一条 MCP 服务。
 type AgentResidencyEntry struct {
-	ID          string   `json:"id"`
-	Kind        string   `json:"kind"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Tools       []string `json:"tools,omitempty"`
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Detail 是没被压过的描述。列表里显示的 Description 只有一行，而要不要常驻恰恰
+	// 得看完整那段，所以全文一起发过去，由界面决定什么时候展开。
+	Detail string   `json:"detail,omitempty"`
+	Tools  []string `json:"tools,omitempty"`
 	// Default 是不配档位时这一项的实际结果。
 	Default bool `json:"default"`
 	// Resident 是用户配的档位，nil 表示跟随默认。
 	Resident *bool `json:"resident,omitempty"`
+	// ResidentTokens 和 DeferredTokens 是这一项两档各占的 token：常驻是整份工具
+	// 定义，按需只是目录里的一行。界面靠它把「常驻越多越贵」说成具体数字。
+	ResidentTokens int64 `json:"resident_tokens,omitempty"`
+	DeferredTokens int64 `json:"deferred_tokens,omitempty"`
+	// Parent 是这个工具所属的插件或 MCP 服务的 ID。有 Parent 的工具不表态时跟着那一条
+	// 走，界面据此把「跟随」算出来；Default 始终是内置名单的结果，不掺已配的档位。
+	Parent string `json:"parent,omitempty"`
+	// Stale 表示这一项只是从档位文件里反推出来的：进程重启后目录还没重新攒出来，
+	// 但配过的档位仍然在生效，不能让界面显示成「没配过」。
+	Stale bool `json:"stale,omitempty"`
 }
 
 // agentResidencyProtocolTools 是协议本身的工具，不接受档位：它们一定随请求下发，
@@ -655,37 +672,62 @@ func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *ag
 	if r == nil || registry == nil {
 		return
 	}
-	mcpNames := map[string]bool{}
+	// 一个工具可能同时属于两级：它所在的插件或 MCP 服务，和它自己。两级都摆出来，
+	// 整条一档管大局，单个工具那一档用来破例。
+	owner := map[string]string{}
 	entries := []AgentResidencyEntry{}
 	for _, state := range registry.Extensions() {
-		if state.Kind != agent.ExtensionKindMCP || len(state.Tools) == 0 {
+		kind := ""
+		switch state.Kind {
+		case agent.ExtensionKindMCP:
+			kind = "mcp"
+		case agent.ExtensionKindBuiltin:
+			kind = "plugin"
+		default:
 			continue
 		}
+		tools := []string{}
 		for _, name := range state.Tools {
-			mcpNames[name] = true
+			// 插件自报的工具名未必这一轮都注册上了（设置关掉了其中一个、平台不支持），
+			// 以注册表为准，否则界面会列出一个根本不存在的工具。
+			if _, ok := registry.Get(name); !ok || agentResidencyProtocolTools[name] {
+				continue
+			}
+			tools = append(tools, name)
+			owner[name] = state.ID
 		}
-		entries = append(entries, AgentResidencyEntry{
+		if len(tools) == 0 {
+			continue
+		}
+		entry := AgentResidencyEntry{
 			ID:          state.ID,
-			Kind:        "mcp",
+			Kind:        kind,
 			Name:        state.Name,
-			Description: state.Description,
-			Tools:       append([]string(nil), state.Tools...),
-		})
+			Description: agent.CompactToolDescription(state.Description, agent.SystemPromptToolDescriptionBudget),
+			Detail:      strings.TrimSpace(state.Description),
+			Tools:       tools,
+		}
+		// 整条的档位管它全部的工具，开销也按全部工具加起来算。
+		for _, name := range tools {
+			if tool, ok := registry.Get(name); ok {
+				resident, deferred := agent.ResidencyCost(tool)
+				entry.ResidentTokens += resident
+				entry.DeferredTokens += deferred
+			}
+		}
+		entries = append(entries, entry)
 	}
 	for _, name := range registry.Names() {
-		if mcpNames[name] || agentResidencyProtocolTools[name] {
+		if agentResidencyProtocolTools[name] {
 			continue
 		}
-		description := ""
+		entry := AgentResidencyEntry{ID: agent.ToolResidentID(name), Kind: "tool", Name: name, Parent: owner[name]}
 		if tool, ok := registry.Get(name); ok {
-			description = agent.CompactToolDescription(tool.Description(), agent.SystemPromptToolDescriptionBudget)
+			entry.Description = agent.CompactToolDescription(tool.Description(), agent.SystemPromptToolDescriptionBudget)
+			entry.Detail = strings.Join(strings.Fields(tool.Description()), " ")
+			entry.ResidentTokens, entry.DeferredTokens = agent.ResidencyCost(tool)
 		}
-		entries = append(entries, AgentResidencyEntry{
-			ID:          agent.ToolResidentID(name),
-			Kind:        "tool",
-			Name:        name,
-			Description: description,
-		})
+		entries = append(entries, entry)
 	}
 	defaults := map[string]bool{}
 	for _, name := range replyAgentCoreTools {
@@ -712,31 +754,67 @@ func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *ag
 	r.agentResidencyMu.Unlock()
 }
 
-// AgentResidency 返回这台机器人最近一轮的工具目录和已配档位。
-func (r *Runtime) AgentResidency(profileID string) []AgentResidencyEntry {
+// AgentResidency 返回这台机器人最近一轮的工具目录、以及名单里有哪些。
+//
+// 第二个返回值是「这台机器人有没有自己的名单」。界面必须分得清「不在名单里」和
+// 「还没列过名单」：前者就是不常驻，后者跟着内置推荐走，两种情况下同一个工具的
+// 显示结果可能正相反。
+func (r *Runtime) AgentResidency(profileID string) ([]AgentResidencyEntry, bool) {
 	if r == nil {
-		return nil
+		return nil, false
 	}
 	r.agentResidencyMu.RLock()
 	entries := append([]AgentResidencyEntry(nil), r.agentResidencyCatalog[profileID]...)
 	r.agentResidencyMu.RUnlock()
 	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), profileID)
 	if err != nil {
-		return entries
+		return entries, false
 	}
+	listed := agent.ResidencyListed(overrides)
+	known := make(map[string]bool, len(entries))
 	for index := range entries {
 		entries[index].Resident = agent.ResidentOverride(overrides, entries[index].ID)
+		known[entries[index].ID] = true
 	}
-	return entries
+	// 目录还没攒出来的时候，配过档位的项也要露面：它们仍然在生效，界面说「没配过」
+	// 会让人以为配置丢了，于是又配一遍。
+	for _, id := range agent.ResidentOverrideIDs(overrides) {
+		if known[id] {
+			continue
+		}
+		kind, name := "plugin", id
+		switch prefix, rest, _ := strings.Cut(id, ":"); prefix {
+		case "tool", "mcp":
+			kind, name = prefix, rest
+		case "skill":
+			// skill: 的档位归 Skills 标签管，不在这一页里露面。
+			continue
+		}
+		// 插件 ID 没有前缀（official.music 这种），剩下的都按插件算：与其因为认不出
+		// 前缀而把它藏了，不如显示出来——它确实还在生效。
+		entries = append(entries, AgentResidencyEntry{
+			ID: id, Kind: kind, Name: name, Stale: true,
+			Resident: agent.ResidentOverride(overrides, id),
+		})
+	}
+	return entries, listed
 }
 
-// SetAgentResidency 写入或清除一个档位。resident 为 nil 表示跟随默认。
+// SetAgentResidency 把一个 ID 加进常驻名单或拿出去。
 func (r *Runtime) SetAgentResidency(profileID, id string, resident *bool) error {
 	if strings.TrimSpace(profileID) == "" {
-		return errors.New("请选择机器人后调整常驻档位")
+		return errors.New("请选择机器人后改常驻名单")
 	}
 	if strings.TrimSpace(id) == "" {
-		return errors.New("缺少档位对象")
+		return errors.New("缺少要增删的对象")
 	}
-	return agent.SaveExtensionResidency(AgentWorkspaceDir(), profileID, id, resident)
+	return agent.SaveExtensionResidency(AgentWorkspaceDir(), profileID, id, resident, agent.RecommendedResidencyIDs(replyAgentCoreTools))
+}
+
+// SaveAgentResidencyList 整份写下这台机器人的常驻名单；ids 为 nil 表示退回推荐名单。
+func (r *Runtime) SaveAgentResidencyList(profileID string, ids []string) error {
+	if strings.TrimSpace(profileID) == "" {
+		return errors.New("请选择机器人后改常驻名单")
+	}
+	return agent.SaveResidencyList(AgentWorkspaceDir(), profileID, ids)
 }

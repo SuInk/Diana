@@ -3,6 +3,7 @@
 
 import { extensionDemoResponse } from './extension-demo';
 import type {
+  AgentResidencyEntry,
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
@@ -597,6 +598,28 @@ function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   return llmConfig;
 }
 
+// 档位演示数据：真实目录是每轮对话攒出来的，演示站没有对话，就按一份典型的目录
+// 摆出来——两档的 token 差距照着线上量级给，不然这一页最要紧的那组数字失真。
+const residencyEntries: AgentResidencyEntry[] = [
+  {id: "tool:ai_image_detect", kind: "tool", name: "ai_image_detect", description: "检测一张聊天图片是不是 AI 生成的：解析图片里的 AI 生成标识（C2PA 内容凭证、IPTC 数字来源类型、Google SynthID）。", detail: "检测一张聊天图片是不是 AI 生成的：解析图片里的 AI 生成标识（C2PA 内容凭证、IPTC 数字来源类型、Google SynthID/［Made with Google AI］标注、国内 AIGC 隐式标识、Stable Diffusion 等常见生成器写进 EXIF 的参数），命中就直接给出来源；都没有只说「没查到标识」，不做画风猜测。input: {url?: string}", default: false, resident_tokens: 412, deferred_tokens: 44},
+  {id: "tool:bot_config", kind: "tool", name: "bot_config", description: "读取或修改 Diana 的相关度、闲聊门槛及闲聊冷却。get 读取，update 局部修改。", detail: "读取或修改 Diana 的相关度、闲聊门槛及闲聊冷却。get 读取，update 局部修改；scope=group 只改当前群（主人或实时核验的群管理员），scope=bot 仅主人修改当前机器人。关闭所有主动接话同时设置 relevance=0 与 idle_chat=off。input: {action: \"get\"|\"update\", scope?: \"group\"|\"bot\"}", default: true, resident_tokens: 588, deferred_tokens: 38},
+  {id: "tool:browser_click", kind: "tool", name: "browser_click", description: "点击当前页面中的元素。", detail: "点击当前页面中的元素。input: {selector: string}", default: false, resident_tokens: 96, deferred_tokens: 14},
+  {id: "tool:web_search", kind: "tool", name: "web_search", description: "联网搜索，返回标题、摘要和链接。", detail: "联网搜索，返回标题、摘要和链接。input: {query: string, limit?: number}", default: true, resident_tokens: 168, deferred_tokens: 18},
+  {id: "official.sandboxed-browser-renderer", kind: "plugin", name: "浏览器渲染", description: "把网页渲染成图片交给模型看，跑在沙盒里。", detail: "把网页渲染成图片交给模型看，跑在沙盒里。", tools: ["browser_render", "browser_open", "browser_text"], default: true, resident_tokens: 486, deferred_tokens: 58},
+  {id: "tool:browser_render", kind: "tool", parent: "official.sandboxed-browser-renderer", name: "browser_render", description: "渲染网页为图片。", detail: "渲染网页为图片。input: {url: string, full_page?: boolean}", default: true, resident_tokens: 280, deferred_tokens: 20},
+  {id: "tool:browser_open", kind: "tool", parent: "official.sandboxed-browser-renderer", name: "browser_open", description: "通过 Chrome DevTools Protocol 打开网页。需要 Chrome 启用 remote debugging。", detail: "通过 Chrome DevTools Protocol 打开网页。需要 Chrome 启用 remote debugging。input: {url: string}", default: false, resident_tokens: 132, deferred_tokens: 26},
+  {id: "tool:browser_text", kind: "tool", parent: "official.sandboxed-browser-renderer", name: "browser_text", description: "读取当前浏览器页面文本。", detail: "读取当前浏览器页面文本。input: {}", default: false, resident_tokens: 74, deferred_tokens: 12},
+  {id: "official.music", kind: "plugin", name: "音乐增强", description: "群里丢来的歌变成语音，也支持点歌。", detail: "群里丢来的歌变成语音，也支持点歌。", tools: ["music"], default: false, resident_tokens: 356, deferred_tokens: 34},
+  {id: "tool:music", kind: "tool", parent: "official.music", name: "music", description: "按描述点一首歌并发成语音。", detail: "按描述点一首歌并发成语音。input: {query: string}", default: false, resident_tokens: 356, deferred_tokens: 34},
+  {id: "mcp:gitea", kind: "mcp", name: "gitea", description: "自建 Gitea 的仓库、议题和合并请求。", detail: "自建 Gitea 的仓库、议题和合并请求。", tools: ["gitea_issue", "gitea_repo", "gitea_pull"], default: false, resident_tokens: 1_240, deferred_tokens: 96},
+  {id: "tool:gitea_issue", kind: "tool", parent: "mcp:gitea", name: "gitea_issue", description: "读写议题。", detail: "读写议题。input: {repo: string, action: string}", default: false, resident_tokens: 520, deferred_tokens: 32},
+  {id: "tool:gitea_repo", kind: "tool", parent: "mcp:gitea", name: "gitea_repo", description: "仓库信息与文件读取。", detail: "仓库信息与文件读取。input: {repo: string}", default: false, resident_tokens: 410, deferred_tokens: 32},
+  {id: "tool:gitea_pull", kind: "tool", parent: "mcp:gitea", name: "gitea_pull", description: "合并请求的列表与详情。", detail: "合并请求的列表与详情。input: {repo: string}", default: false, resident_tokens: 310, deferred_tokens: 32},
+];
+
+// 演示数据从「还没列过名单」开始，跟着内置推荐走——新装的机器人就是这个样子。
+let residencyListed = false;
+
 let demoBrowserControlPolicy = {
   enabled: true,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
@@ -856,6 +879,9 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/start") { demoStatus.running = true; return json(demoStatus); }
   if (path === "/api/assistant/stop") { demoStatus.running = false; return json(demoStatus); }
   if (path === "/api/assistant/features") return json({ group_test: true });
+  // 回补在演示里不做任何事，但要有个回应：按钮从机器人配置挪到运行记录之后，
+  // 演示站点一点它就弹「未授权」，看起来像是这一页坏了。
+  if (path === "/api/assistant/backfill") return json({ requested: true, window_hours: 24 });
   if (path === "/api/assistant/group-test") return json({ group_id: String(body.group_id ?? url.searchParams.get("group_id") ?? ""), message: String(body.message ?? "模拟通道测试"), message_id: "demo-group-test", sent: true, send_result: { status: "ok" }, channel: demoStatus.channel, recent_events: demoStatus.recent_events, status: demoStatus });
 
   if (path === "/api/assistant/plugins/dependencies")
@@ -867,6 +893,28 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
+  if (path === "/api/assistant/agent-residency") {
+    if (method === "POST") {
+      if (body.reset) {
+        residencyListed = false;
+        for (const entry of residencyEntries) delete entry.resident;
+      } else if (Array.isArray(body.ids)) {
+        // 和后端同一个口径：只有名单成员写 resident，其余留空。「不在名单里」由
+        // listed 这个标志推出来，不是给每一项写一个 false。
+        const listed = new Set(body.ids.map(String));
+        residencyListed = true;
+        for (const entry of residencyEntries) {
+          if (listed.has(entry.id)) entry.resident = true;
+          else delete entry.resident;
+        }
+      } else {
+        const entry = residencyEntries.find((item) => item.id === String(body.id ?? ""));
+        if (entry) entry.resident = Boolean(body.resident);
+      }
+      return json({ ok: true });
+    }
+    return json({ items: residencyEntries, listed: residencyListed });
+  }
   if (path === "/api/assistant/extensions") {
     try { return json(extensionDemoResponse(method,url.searchParams.get('profile')||'',body)); }
     catch(error) { return json({error:error instanceof Error?error.message:String(error)},400); }

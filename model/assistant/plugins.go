@@ -1169,6 +1169,65 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 	return tools, nil
 }
 
+// AgentToolOwners 说出每个插件这一轮贡献了哪些工具名。
+//
+// 插件供给工具的那条路原来只吐一个扁平的工具数组，谁带来的在函数里就丢了。档位
+// 界面因此只能把它们摊成一堆互不相干的内置工具：浏览器插件的三个工具排在三处，
+// 想整个停掉得挨个点。常驻是按「一次运行用不用得上」判断的，而这个判断的单位天然
+// 是插件，不是它碰巧拆成了几个工具。
+func (m *PluginManager) AgentToolOwners(platform string, enabledOverrides map[string]bool, settingOverrides PluginSettingOverrides) map[string][]string {
+	if m == nil {
+		return nil
+	}
+	owners := map[string][]string{}
+	m.mu.RLock()
+	ids := make([]string, 0, len(m.catalog))
+	for id := range m.catalog {
+		ids = append(ids, id)
+	}
+	m.mu.RUnlock()
+	slices.Sort(ids)
+	for _, id := range ids {
+		m.mu.RLock()
+		plugin := m.catalog[id]
+		state := m.states[id]
+		m.mu.RUnlock()
+		enabled := state.Enabled
+		if override, ok := enabledOverrides[id]; ok {
+			enabled = override
+		}
+		if !state.Installed || !enabled || !pluginSupportsPlatform(state.Manifest, platform) {
+			continue
+		}
+		var provided []agent.Tool
+		switch typed := plugin.(type) {
+		case PlatformAgentToolPlugin:
+			// 构造失败的那一个不该连累整份归属表：少一条归属只是界面少一组，
+			// 而这里报错会让整个档位列表变空。
+			provided, _ = typed.AgentToolsForPlatform(platform, scopedPluginSettings(state, settingOverrides))
+		case AgentToolPlugin:
+			provided, _ = typed.AgentTools(scopedPluginSettings(state, settingOverrides))
+		case AgentToolProviderPlugin:
+			provided = typed.AgentTools()
+		default:
+			continue
+		}
+		names := make([]string, 0, len(provided))
+		for _, tool := range provided {
+			if tool == nil {
+				continue
+			}
+			if name := strings.TrimSpace(tool.Name()); name != "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) > 0 {
+			owners[id] = names
+		}
+	}
+	return owners
+}
+
 func (m *PluginManager) SetLocalMediaSharer(sharer LocalMediaSharer) {
 	if m == nil {
 		return

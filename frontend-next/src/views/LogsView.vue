@@ -3,6 +3,20 @@
 
 <template>
   <div>
+    <!-- 刷新是整页的动作，和事件那一档的刷新落在同一个位置：两档共用一排页头，
+         动作在档之间跳来跳去，人每次都得重新找一遍。 -->
+    <Teleport v-if="actionsHost" :to="actionsHost">
+      <label class="switch">
+        <input v-model="autoRefresh" type="checkbox" />
+        <span class="track" aria-hidden="true"></span>
+        <span class="switch-label">自动刷新</span>
+      </label>
+      <button class="btn" type="button" :disabled="loading" @click="reload">
+        <RefreshCw :size="15" aria-hidden="true" />
+        刷新
+      </button>
+    </Teleport>
+
     <header class="view-header">
       <div class="view-title">
         <h2>日志</h2>
@@ -13,15 +27,6 @@
           <button type="button" :class="{ active: kind === 'operation' }" @click="switchKind('operation')">操作日志</button>
           <button type="button" :class="{ active: kind === 'error' }" @click="switchKind('error')">错误日志</button>
         </div>
-        <label class="switch" style="margin-left: 4px">
-          <input v-model="autoRefresh" type="checkbox" />
-          <span class="track" aria-hidden="true"></span>
-          <span class="switch-label">自动刷新</span>
-        </label>
-        <button class="btn" type="button" :disabled="loading" @click="reload">
-          <RefreshCw :size="15" aria-hidden="true" />
-          刷新
-        </button>
       </div>
     </header>
 
@@ -57,15 +62,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { RefreshCw } from "@lucide/vue";
 import { listAppLogs, type AppLogEntry, type AppLogKind } from "../api";
 import { formatTime } from "../format";
 import { displayChatIdentity } from "../message-display";
 import { toastError } from "../toast";
+import { recordsActionsHost } from "../records-actions";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+
+// 页头动作位由 RecordsView 提供；拿不到就说明这一档被单独用在别处，按钮不渲染。
+const actionsHost = inject(recordsActionsHost, ref<HTMLElement | null>(null));
 
 const kind = ref<AppLogKind>("operation");
 const logs = ref<AppLogEntry[]>([]);

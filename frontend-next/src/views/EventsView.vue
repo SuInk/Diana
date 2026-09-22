@@ -3,6 +3,26 @@
 
 <template>
   <div>
+    <!-- 刷新和回补是整页的动作，不是筛选条件：teleport 到页头那排标签的右边去。 -->
+    <Teleport v-if="actionsHost" :to="actionsHost">
+      <button class="btn" type="button" :disabled="loading" @click="load(true)">
+        <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
+        刷新
+      </button>
+      <!-- 回补原来在机器人配置的页头。但发现「有消息漏了」是在这一页：翻记录时
+           看见某段时间一条都没有，手要伸的地方就该在手边，而不是跳去配置页。 -->
+      <button
+        v-if="canBackfill"
+        class="btn"
+        type="button"
+        :disabled="backfilling"
+        title="重新拉取最近 24 小时的会话历史，补入错过的消息（已处理过的消息会自动去重）"
+        @click="triggerBackfill"
+      >
+        <History :size="15" aria-hidden="true" />
+        回补消息
+      </button>
+    </Teleport>
 
     <div class="stack">
       <section class="event-filter-band" aria-label="事件筛选">
@@ -41,10 +61,7 @@
               @search="applySearch"
             />
           </div>
-          <button class="btn event-filter-refresh" type="button" :disabled="loading" @click="load(true)">
-            <RefreshCw :size="15" :class="{ spin: loading }" aria-hidden="true" />
-            刷新
-          </button>
+
         </div>
         <div class="segmented event-result-filter" role="radiogroup" aria-label="按处理结果筛选事件">
             <button
@@ -459,6 +476,13 @@
           {{ formatNumber(residentContext.total_tokens) }} token，是这台机器人每轮的底价。
         </template>
       </p>
+      <!-- 这里只说「这一轮长什么样」，改在机器人配置里：看见代价的地方给入口，
+           但不在排查现场编辑配置。 -->
+      <p class="card-sub">
+        底价里工具定义占多少、哪几项常驻，在机器人配置的
+        <a href="#" @click.prevent="openContextSettings">上下文</a>
+        标签里调。
+      </p>
       <template v-if="contextBudget">
         <div class="budget-bar" role="img" :aria-label="`各层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
           <span
@@ -518,7 +542,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { botScope } from "../bot-scope";
 import type { Component } from "vue";
 import {
@@ -528,6 +552,7 @@ import {
   ChevronDown,
   ChevronRight,
   Gauge,
+  History,
   ImageOff,
   LoaderCircle,
   MessageCircle,
@@ -545,6 +570,7 @@ import {
 import {
   getAssistantEventTrace,
   getAssistantEvents,
+  requestBotBackfill,
   type AppLogEntry,
   type AssistantEventDetail,
   type AssistantEventMemory,
@@ -556,10 +582,12 @@ import {
   type AssistantContextBudgetLayer
 } from "../api";
 import { formatClock, formatNumber } from "../format";
+import { askConfirm } from "../confirm";
 import { displayMessageText, displayChatIdentity } from "../message-display";
-import { currentView } from "../router";
+import { currentView, navigate } from "../router";
+import { recordsActionsHost } from "../records-actions";
 import { stream } from "../stream";
-import { toastError } from "../toast";
+import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -1058,6 +1086,40 @@ function privateChatOption(userID: string, events: number, name?: string): AppSe
   };
 }
 
+// 回补是「会产生后果」的动作：它真的去拉 24 小时历史并补处理，所以先问一句。
+// 页头动作位由 RecordsView 提供；拿不到就说明这一档被单独用在别处，按钮留在原地不渲染。
+const actionsHost = inject(recordsActionsHost, ref<HTMLElement | null>(null));
+const backfilling = ref(false);
+// 只在运行时起着、而且确实有 OneBot 通道时才给这个按钮：别的平台没有这条补拉的路。
+const canBackfill = computed(() => {
+  const status = stream.status;
+  if (!status?.running) return false;
+  const channels = status.channels ?? (status.channel ? [status.channel] : []);
+  return channels.some((channel) => (channel.platform ?? "").startsWith("onebot"));
+});
+async function triggerBackfill(): Promise<void> {
+  const ok = await askConfirm({
+    title: "回补最近 24 小时消息",
+    message: "将重新拉取各会话最近 24 小时的历史并补入错过的消息。已处理过的消息会自动去重，但从未处理过的旧消息可能触发回复。",
+    confirmLabel: "开始回补"
+  });
+  if (!ok) return;
+  backfilling.value = true;
+  try {
+    await requestBotBackfill();
+    toastSuccess("回补已触发，进度见系统日志（backfill_completed 表示完成）");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "回补触发失败");
+  } finally {
+    backfilling.value = false;
+  }
+}
+
+function openContextSettings(): void {
+  contextOpen.value = false;
+  navigate("bot", { tab: "context" });
+}
+
 const contextBudget = computed(() => response.value?.context_budget ?? null);
 
 // 每一层在整条窗口里占的宽度。留白单独算，它是「没有分配出去」的部分。
@@ -1491,10 +1553,6 @@ onBeforeUnmount(() => {
   height: 30px;
   padding: 0 10px 0 28px;
   font-size: 12px;
-}
-
-.event-filter-refresh {
-  margin-left: auto;
 }
 
 /* 这几个数字是参考值，卡片给它们的分量太重了：一张卡就要一百多像素高，

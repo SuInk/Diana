@@ -37,7 +37,8 @@ type ExtensionAdminRequest struct {
 	Values    map[string]string `json:"values,omitempty"`
 	// Audience 只用于 audience 操作：限定这个扩展开放给哪些人、哪些群。
 	Audience ExtensionAudience `json:"audience,omitempty"`
-	// Resident 只用于 residency 操作：true 常驻、false 按需、不带表示跟随默认档。
+	// Resident 只用于 residency 操作：true 加进常驻名单，false 拿出去。Skill 例外，
+	// 它不在名单里，不带 Resident 表示退回「看触发词」。
 	Resident     *bool    `json:"resident,omitempty"`
 	ClearHeaders []string `json:"clear_headers,omitempty"`
 	ClearEnv     []string `json:"clear_env,omitempty"`
@@ -175,11 +176,18 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整常驻档位")
 		}
+		// 档位只有插件、MCP 服务和 Skill 三种单位。别的 kind 写进去也没人读，
+		// 留下的是一条永远不生效的死配置，不如当场说不行。
+		switch ExtensionKind(req.Kind) {
+		case ExtensionKindBuiltin, ExtensionKindMCP, ExtensionKindSkill:
+		default:
+			return nil, fmt.Errorf("只有插件、MCP 服务和 Skill 支持常驻档位")
+		}
 		id, err := m.extensionID(req.Kind, req.Name)
 		if err != nil {
 			return nil, err
 		}
-		return nil, SaveExtensionResidency(m.cfg.WorkDir, req.ProfileID, id, req.Resident)
+		return nil, SaveExtensionResidency(m.cfg.WorkDir, req.ProfileID, id, req.Resident, RecommendedResidencyIDs(m.cfg.CoreTools))
 	case "members":
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整权限")

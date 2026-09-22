@@ -31,6 +31,10 @@ type BuiltinExtension struct {
 	Installed   bool     `json:"installed"`
 	Enabled     bool     `json:"enabled"`
 	Permissions []string `json:"permissions,omitempty"`
+	// Tools 是这个插件本轮供给 Agent 的工具名。插件是档位的一个单位：一个插件
+	// 带来的几个工具要么一起常驻要么一起按需，分开配没有意义——用不用得上是按
+	// 插件判断的，它碰巧拆成几个工具是实现细节。
+	Tools []string `json:"tools,omitempty"`
 }
 
 // ExtensionState is the redacted common view of built-in plugins, local
@@ -144,6 +148,7 @@ func (m *ExtensionManager) Extensions() []ExtensionState {
 			Installed:   item.Installed,
 			Enabled:     item.Enabled,
 			Permissions: append([]string(nil), item.Permissions...),
+			Tools:       append([]string(nil), item.Tools...),
 		})
 	}
 	for _, skill := range skills {

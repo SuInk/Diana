@@ -52,11 +52,7 @@ func (l *deferredToolLoader) catalog() string {
 		if !ok {
 			continue
 		}
-		builder.WriteString("- ")
-		builder.WriteString(name)
-		builder.WriteString(": ")
-		builder.WriteString(compactToolDescription(tool.Description(), SystemPromptToolDescriptionBudget))
-		builder.WriteByte('\n')
+		builder.WriteString(deferredCatalogLine(tool))
 	}
 	return strings.TrimSpace(builder.String())
 }
@@ -309,38 +305,34 @@ func cloneDeferredInput(value any) any {
 	}
 }
 
-// ResolveCoreTools 按用户配的扩展档位调整常驻工具名单。
+// ResolveCoreTools 算出这一轮每步都带完整定义的工具。
 //
-// base 是内置的默认名单，owners 把扩展 ID 映射到它注册的工具名（内置插件、MCP 服务
-// 各自一份），overrides 是 `.extension-overrides.json` 里这台机器人的覆盖值。档位只有
-// 三种：没配这个键就用默认名单的结果，配成 true 把这个扩展的工具全部常驻，配成 false
-// 全部改按需。
+// base 是内置推荐名单，owners 把 ID 映射到它注册的工具名（插件、MCP 服务各自一份，
+// 每个工具自己也有一条），overrides 是 `.extension-overrides.json` 里这台机器人的值。
 //
-// 返回的顺序跟着 base 走，新增的按工具名排序：这个数组直接决定请求里 tools 的顺序，
-// 顺序一抖前缀缓存就断。扩展 ID 也排了一次序，那是另一回事——同一个工具名被两个扩展
-// 声明时，决定谁最后写赢，和输出顺序无关。
+// 这台机器人列过自己的名单，就完全以名单为准：名单里的 ID 展开成工具，没列进去的
+// 一律按需。名单是一份清单而不是一组「相对默认的修改」——用户要的是「加进来」和
+// 「拿出去」两个动作，那么存下来的就该是动作的结果本身。代价是以后版本往推荐名单里
+// 加的新工具不会自动进已经列过名单的机器人，界面上「恢复推荐名单」退回跟随。
+//
+// 没列过就原样用推荐名单。
+//
+// 返回的顺序跟着 base 走，剩下的按工具名排序：这个数组直接决定请求里 tools 的顺序，
+// 顺序一抖前缀缓存就断。
 func ResolveCoreTools(base []string, owners map[string][]string, overrides map[string]bool) []string {
-	resident := make(map[string]bool, len(base))
-	for _, name := range base {
-		if name = strings.TrimSpace(name); name != "" {
-			resident[name] = true
+	resident := map[string]bool{}
+	if listed, ok := ResidencyList(overrides); ok {
+		for _, id := range listed {
+			for _, name := range owners[id] {
+				if name = strings.TrimSpace(name); name != "" {
+					resident[name] = true
+				}
+			}
 		}
-	}
-	ids := make([]string, 0, len(owners))
-	for id := range owners {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		override := ResidentOverride(overrides, id)
-		if override == nil {
-			continue
-		}
-		names := append([]string(nil), owners[id]...)
-		sort.Strings(names)
-		for _, name := range names {
+	} else {
+		for _, name := range base {
 			if name = strings.TrimSpace(name); name != "" {
-				resident[name] = *override
+				resident[name] = true
 			}
 		}
 	}
@@ -362,17 +354,20 @@ func ResolveCoreTools(base []string, owners map[string][]string, overrides map[s
 	return append(out, added...)
 }
 
-// ToolOwners 把当前注册表里的工具按「档位单位」分组：MCP 服务的工具归到它自己那条
-// 服务，其余内置工具各自成组。内置工具不属于任何插件——它们直接挂在运行时上，按插件
-// 分组既分不干净，也没法表达「戳一戳常驻、发文件按需」这种逐个工具的要求。
+// ToolOwners 把当前注册表里的工具按「档位单位」分组，一个工具可以属于两个单位：
+// 它所在的 MCP 服务或插件（整条一档），以及它自己（`tool:` 那条，单独覆盖）。
+// 两层都要：常驻与否通常按整条判断——一次运行要么用得上这套浏览器工具要么用不上——
+// 但偶尔就是有「这条服务留着，其中最贵的那个工具踢出去」的需求。
+//
+// 直接挂在运行时上的内置工具不属于任何扩展，只有自己那一条。
 func (r *ToolRegistry) ToolOwners() map[string][]string {
 	if r == nil {
 		return nil
 	}
 	owners := map[string][]string{}
-	owned := map[string]bool{}
 	for _, state := range r.Extensions() {
-		if state.Kind != ExtensionKindMCP || len(state.Tools) == 0 {
+		// MCP 服务和供给工具的插件都按整条配档；Skill 不在此列，它的正文走另一条路。
+		if len(state.Tools) == 0 || (state.Kind != ExtensionKindMCP && state.Kind != ExtensionKindBuiltin) {
 			continue
 		}
 		names := make([]string, 0, len(state.Tools))
@@ -380,7 +375,6 @@ func (r *ToolRegistry) ToolOwners() map[string][]string {
 			if _, ok := r.Get(name); !ok {
 				continue
 			}
-			owned[name] = true
 			names = append(names, name)
 		}
 		if len(names) > 0 {
@@ -388,9 +382,6 @@ func (r *ToolRegistry) ToolOwners() map[string][]string {
 		}
 	}
 	for _, name := range r.Names() {
-		if owned[name] {
-			continue
-		}
 		owners[ToolResidentID(name)] = []string{name}
 	}
 	return owners

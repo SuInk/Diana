@@ -1567,13 +1567,18 @@ export function testAgentBrowser(profile: string, cdpURL: string): Promise<{conn
 }
 
 /** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
-export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp"; name: string; description?: string; tools?: string[]; default: boolean; resident?: boolean }
-export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]}> {
+export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp" | "plugin"; name: string; description?: string; detail?: string; tools?: string[]; default: boolean; resident?: boolean; resident_tokens?: number; deferred_tokens?: number; parent?: string; stale?: boolean }
+export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]; listed?: boolean}> {
   return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
 }
 export function setAgentResidency(profile: string, id: string, resident: boolean | null): Promise<{ok: boolean}> {
   const body: Record<string, unknown> = {profile_id: profile, id};
   if (resident !== null) body.resident = resident;
+  return requestJSON("/api/assistant/agent-residency", {method: "POST", body: JSON.stringify(body)});
+}
+/** 整份写下常驻名单；ids 传 null 表示退回内置推荐名单，往后跟着版本走。 */
+export function saveAgentResidencyList(profile: string, ids: string[] | null): Promise<{ok: boolean}> {
+  const body: Record<string, unknown> = ids === null ? {profile_id: profile, reset: true} : {profile_id: profile, ids};
   return requestJSON("/api/assistant/agent-residency", {method: "POST", body: JSON.stringify(body)});
 }
 

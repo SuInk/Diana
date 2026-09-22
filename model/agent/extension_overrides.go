@@ -12,9 +12,15 @@ import (
 // 不改文件结构：`mcp:foo` 是这台机器人用不用，`members:mcp:foo` 是群成员能不能用。
 const memberOverridePrefix = "members:"
 
-// 常驻档位共用同一份文件，再加一个前缀：`resident:mcp:foo` 是这台机器人把这条服务
-// 的工具常驻还是按需。键不在就是跟随默认，所以三档只需要「有没有这个键」加一个 bool。
+// 常驻名单共用同一份文件，再加一个前缀：`resident:mcp:foo` 表示这条服务在名单里，
+// 它的工具每轮都带完整定义。名单是一份清单，不是三档开关——`resident:` 的键只会是
+// true，删掉键就是把它从名单里拿走。
 const residentOverridePrefix = "resident:"
+
+// residencyListKey 记录「这台机器人自己列过名单」。没有它就跟随内置推荐名单，有了
+// 它就以清单为准——包括清单是空的那种情况，那是「一个工具都不常驻」，不是「没配过」。
+// 它不带 resident: 前缀，免得被当成一个扩展 ID 读出来。
+const residencyListKey = "residency:list"
 
 // MemberOverrideKey 返回某个扩展的群成员权限键。
 func MemberOverrideKey(id string) string { return memberOverridePrefix + id }
@@ -24,23 +30,141 @@ func ResidentOverrideKey(id string) string { return residentOverridePrefix + id 
 
 // ToolResidentID 是单个内置工具在档位表里的 ID。内置工具不属于任何扩展——它们直接挂
 // 在运行时上，按插件分组反而分不出来，所以档位的单位就是工具本身。
-func ToolResidentID(name string) string { return "tool:" + strings.TrimSpace(name) }
+func ToolResidentID(name string) string { return toolResidentPrefix + strings.TrimSpace(name) }
 
-// SaveExtensionResidency 写入一个档位；resident 为 nil 表示退回默认档。
-func SaveExtensionResidency(root, profile, id string, resident *bool) error {
-	if resident == nil {
-		return clearExtensionOverride(root, profile, ResidentOverrideKey(id))
+// toolResidentPrefix 区分「单个工具」和「整条扩展」两级档位，档位解析靠它定先后。
+const toolResidentPrefix = "tool:"
+
+// SaveExtensionResidency 把一个 ID 加进名单或拿出去。整份名单由 SaveResidencyList
+// 写，这里是给「就地加一个 / 删一个」用的：第一次这么写会把当前生效的推荐名单固定
+// 下来，之后这台机器人就以自己的名单为准。
+func SaveExtensionResidency(root, profile, id string, resident *bool, recommended []string) error {
+	// Skill 不在名单里，它仍是三态：不带 resident 就是退回「看触发词」。
+	if strings.HasPrefix(id, skillResidentPrefix) {
+		if resident == nil {
+			return clearExtensionOverride(root, profile, ResidentOverrideKey(id))
+		}
+		return saveExtensionOverride(root, profile, ResidentOverrideKey(id), *resident)
 	}
-	return saveExtensionOverride(root, profile, ResidentOverrideKey(id), *resident)
+	values, err := LoadExtensionOverrides(root, profile)
+	if err != nil {
+		return err
+	}
+	ids, listed := ResidencyList(values)
+	if !listed {
+		ids = append([]string(nil), recommended...)
+	}
+	next := make([]string, 0, len(ids)+1)
+	for _, existing := range ids {
+		if existing != id {
+			next = append(next, existing)
+		}
+	}
+	if resident != nil && *resident {
+		next = append(next, id)
+	}
+	return SaveResidencyList(root, profile, next)
 }
 
-// ResidentOverride 读出某个扩展的档位：nil 表示跟随默认。
+// ResidentOverride 读出某个 ID 有没有被写进名单：nil 表示没写过。
+//
+// 不写过 ≠ 不常驻：一个工具可能因为它所属的插件在名单里而常驻，也可能因为这台机器人
+// 还没列过名单而跟着推荐走。那两件事各有各的出处（ResidencyListed、owners 展开），
+// 这里只回答「这一条自己写过没有」——把「没写过」直接当成 false 是上一版的错，它让
+// 整条插件进名单之后，它旗下的工具反而个个成了明确的「不常驻」。
 func ResidentOverride(values map[string]bool, id string) *bool {
 	resident, ok := values[ResidentOverrideKey(id)]
 	if !ok {
 		return nil
 	}
 	return &resident
+}
+
+// skillResidentPrefix 是 Skill 的 ID 前缀，它不受常驻名单管。
+const skillResidentPrefix = "skill:"
+
+// ResidencyListed 报告这台机器人有没有自己的常驻名单。
+func ResidencyListed(values map[string]bool) bool { return values[residencyListKey] }
+
+// SaveResidencyList 整份写下这台机器人的常驻名单。
+//
+// 一次写完，不是逐项写：名单本来就是一整件事，分成几次写中间会有「插件已经进去、
+// 它里面被排除的那个还没拿掉」这种谁都不想要的中间态；而这份名单每变一次，所有会话
+// 的工具列表就跟着变一次。ids 传 nil 表示退回推荐名单。
+func SaveResidencyList(root, profile string, ids []string) error {
+	lock := extensionPathLock(extensionOverridePath(root))
+	lock.Lock()
+	defer lock.Unlock()
+	values, err := loadExtensionOverrides(root)
+	if err != nil {
+		return err
+	}
+	if values[profile] == nil {
+		values[profile] = map[string]bool{}
+	}
+	for key := range values[profile] {
+		// Skill 的档位不归名单管，重写名单时要原样留着。
+		if strings.HasPrefix(key, residentOverridePrefix) && !strings.HasPrefix(key, residentOverridePrefix+skillResidentPrefix) {
+			delete(values[profile], key)
+		}
+	}
+	if ids == nil {
+		delete(values[profile], residencyListKey)
+	} else {
+		values[profile][residencyListKey] = true
+		for _, id := range ids {
+			if id = strings.TrimSpace(id); id != "" {
+				values[profile][ResidentOverrideKey(id)] = true
+			}
+		}
+	}
+	data, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	return saveExtensionFile(extensionOverridePath(root), data)
+}
+
+// RecommendedResidencyIDs 把内置推荐名单（工具名）换算成名单里的 ID。第一次就地
+// 增删时要用它把当前生效的那份固定下来，否则「加一个」会顺带把推荐的全清空。
+func RecommendedResidencyIDs(coreTools []string) []string {
+	ids := make([]string, 0, len(coreTools))
+	for _, name := range coreTools {
+		if name = strings.TrimSpace(name); name != "" {
+			ids = append(ids, ToolResidentID(name))
+		}
+	}
+	return ids
+}
+
+// ResidencyList 读出这台机器人的名单；第二个返回值是「有没有列过」。
+func ResidencyList(values map[string]bool) ([]string, bool) {
+	if !ResidencyListed(values) {
+		return nil, false
+	}
+	ids := []string{}
+	for _, id := range ResidentOverrideIDs(values) {
+		if !strings.HasPrefix(id, skillResidentPrefix) && values[ResidentOverrideKey(id)] {
+			ids = append(ids, id)
+		}
+	}
+	return ids, true
+}
+
+// ResidentOverrideIDs 列出名单里的 ID。目录是每轮对话现攒的，进程重启后就空了，
+// 而名单还在文件里生效——界面得靠这份清单说清「列过的还在，只是暂时列不出细节」。
+func ResidentOverrideIDs(values map[string]bool) []string {
+	ids := []string{}
+	for key := range values {
+		if !strings.HasPrefix(key, residentOverridePrefix) {
+			continue
+		}
+		if id := strings.TrimPrefix(key, residentOverridePrefix); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // MemberAllowedExtensionIDs 列出这台机器人放开给群成员的扩展 ID。机器人级停用
