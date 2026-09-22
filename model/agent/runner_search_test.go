@@ -210,6 +210,34 @@ func TestRunnerPromptRequiresSearchForSpecificProductOpinions(t *testing.T) {
 	}
 }
 
+// 这条规则是「该搜没搜」的唯一防线：证据账本只有在模型已经调过 web_search
+// 之后才会 active，不搜就直接按 plain_text 收口，一点校验都不过。线上真实
+// case：群里问某个开源项目有没有现成的非阻塞 subagent 实现，模型凭印象答了
+// 「生态里没有」，实际有四个包；它踩的正是「当前上下文已经足够」这个例外——
+// 那个群当天一直在聊这个项目，上下文里全是相关讨论，但没有一条是核实过的。
+func TestRunnerPromptRequiresSearchForEcosystemAndAvailabilityClaims(t *testing.T) {
+	runner, err := NewRunner(&scriptedClient{}, Config{MaxSteps: 3}, NewToolRegistry(&recordingSearchTool{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := runner.systemPrompt()
+	for _, expected := range []string{
+		// 「有没有现成实现」这类问题要明确落进典型场景，不能靠模型自己归类。
+		"开源项目或服务是否支持某项能力",
+		"有没有现成实现或插件",
+		"当前版本与 API 现状",
+		// 堵住把聊天记录当已核实事实的漏洞。
+		"聊天记录里讨论过这个话题不等于其中的事实已经核实",
+		"不能拿来替代检索",
+		// 讲原理和断言现状要分开。
+		"讲原理可以直接答",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("search guidance missing %q: %s", expected, prompt)
+		}
+	}
+}
+
 type recordingSearchTool struct {
 	output string
 	calls  int
