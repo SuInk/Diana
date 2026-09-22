@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -135,13 +136,37 @@ func (p *ResolverPlugin) resolveDouyin(ctx context.Context, req PluginRequest, r
 	return resolverPlatformResult{Context: strings.TrimSpace(metaText), ImageURLs: cover, VideoURLs: []string{videoPath}, ForwardMessages: nodes}
 }
 
+// ensureRendererBrowser 在没有可用浏览器时自己装一个，不让用户去点「依赖管理」。
+//
+// 三条路本来就有：系统包管理器、容器预装、以及 Linux 上把 Chrome for Testing 下载进
+// data 目录（免 root）。缺的只是触发点——原来只有 WebUI 里那个一键安装按钮会走它，
+// 而撞上「没浏览器」的人是在群里发了个链接，他既不知道有这个按钮，也不该去按。
+//
+// 只做一次：装不上就别每条链接都重试一遍，几十 MB 的下载失败重试会把带宽和日志都打满。
+func (p *ResolverPlugin) ensureRendererBrowser(ctx context.Context) {
+	p.browserInstallOnce.Do(func() {
+		if status := agent.ProbeHeadlessBrowser(ctx, ""); status.Available {
+			return
+		}
+		result, err := installBrowserDependency(ctx)
+		if err != nil {
+			log.Printf("diana resolver: 没有可用浏览器，自动安装也没成功：%v", err)
+			return
+		}
+		log.Printf("diana resolver: 自动装好了渲染用浏览器（%s）", strings.TrimSpace(result.Dependency.Path))
+	})
+}
+
 // xiaohongshuRenderers 按「不需要用户配置」的优先级给出可用的渲染方式：先是自己会拉起
 // 浏览器的沙盒渲染器，再是需要外部 CDP 端口的那条。
-func (p *ResolverPlugin) xiaohongshuRenderers() []func(context.Context, string) (agent.RenderedPage, error) {
+func (p *ResolverPlugin) xiaohongshuRenderers(ctx context.Context) []func(context.Context, string) (agent.RenderedPage, error) {
 	renderers := []func(context.Context, string) (agent.RenderedPage, error){}
 	if p.pageRenderer != nil {
 		renderers = append(renderers, p.pageRenderer.Render)
 	} else {
+		// 只有真要用自带渲染器时才检查、必要时自动装一个：注入了渲染器的调用方
+		// （包括测试）不该被顺手拖去下载一个浏览器。
+		p.ensureRendererBrowser(ctx)
 		headless := true
 		renderers = append(renderers, agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Headless: &headless}).Render)
 	}
@@ -163,7 +188,7 @@ func (p *ResolverPlugin) xiaohongshuBrowserFallback(ctx context.Context, req Plu
 	// 先用会自己拉起 Chrome/Chromium 的渲染器：它不需要外部调试端口，也不需要任何设置。
 	// p.browserFetch 走的是 CDP（默认 127.0.0.1:9222），只有配过「交互式浏览器」的机器
 	// 才连得上——生产机上实测 9222 没人监听，指望它兜底等于没有兜底。
-	for _, render := range p.xiaohongshuRenderers() {
+	for _, render := range p.xiaohongshuRenderers(ctx) {
 		if page, err := render(ctx, raw); err == nil {
 			title := compactWhitespace(page.Title)
 			if looksLikeBlockedPage(title) {
