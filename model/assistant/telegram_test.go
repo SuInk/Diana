@@ -832,11 +832,11 @@ func TestTelegramGroupCommandToSelfSetsToMe(t *testing.T) {
 		MessageID: 113954,
 		Date:      1789054343,
 		Text:      "/status@examplebot",
-		Entities:  []telegramEntity{{Type: "bot_command", Offset: 0, Length: 16}},
-		From:      &telegramUser{ID: 8082828784},
-		Chat:      &telegramChat{ID: -1004402809405, Type: "supergroup"},
+		Entities:  []telegramEntity{{Type: "bot_command", Offset: 0, Length: 18}},
+		From:      &telegramUser{ID: 70002},
+		Chat:      &telegramChat{ID: -100200400, Type: "supergroup"},
 	}
-	event := telegramMessageToEvent(msg, "8738773088", "examplebot")
+	event := telegramMessageToEvent(msg, "99999", "examplebot")
 	if !event.ToMe {
 		t.Fatal("群里 /status@examplebot 是发给本机器人的命令，应判为 ToMe")
 	}

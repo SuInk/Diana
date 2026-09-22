@@ -5479,7 +5479,7 @@ func TestBotAliasesIncludePlatformUsername(t *testing.T) {
 		t.Fatalf("没有平台用户名时别名不该变化，实际 %#v", got)
 	}
 
-	dup := BotConfig{GroupTriggers: []string{"@MikuaBot"}}
+	dup := BotConfig{GroupTriggers: []string{"@ExampleBot"}}
 	if got := botAliasesForEvent(MessageEvent{SelfUsername: "examplebot"}, dup); len(got) != 1 {
 		t.Fatalf("已配置的同名别名不该重复，实际 %#v", got)
 	}
