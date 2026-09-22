@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 )
 
@@ -19,7 +20,26 @@ const DefaultOpenAICompatibleModel = ""
 const DefaultGeminiModel = "gemini-3.7-flash"
 const DefaultAnthropicModel = "claude-sonnet-5"
 const DefaultTypeSafeModel = typeSafeDefaultModel
-const DefaultOpenAICompatibleUserAgent = "codex-cli/0.142.0"
+
+// DefaultOpenAICompatibleUserAgent 是配置档没填 User-Agent 时发出去的客户端标识。
+//
+// 以前这里写死 "codex-cli/0.142.0"，冒充官方 Codex CLI。伪装有两处代价。一是版本号
+// 只能是常量：上游哪天按最低版本卡，这个值就过期了，而表现是一个看不出所以然的
+// 拒绝，没人会第一时间想到是 UA 里的版本号。二是订阅转发网关普遍按「originator 精确
+// 匹配 + User-Agent 子串匹配」双因子认客户端（sub2api 的 AllowedClientEntry 明确
+// 拒绝只有单因子的配置），只伪装 UA 本来就是半套。
+//
+// 改成自报家门，格式跟 pi 一致（它发的是 "pi (darwin 24.6.0; arm64)"）：产品名加
+// 平台和架构，不带版本号，所以不存在过期。pi 和 OpenCode 走的都是 Codex 的 OAuth
+// 流程，但在授权时就声明 originator 是自己，没有一个假装成 codex-cli。
+//
+// 确实需要冒充特定客户端的部署，在配置档里填 User-Agent 覆盖它即可；配套的
+// originator 之类走自定义请求头。两者都不需要改代码。
+var DefaultOpenAICompatibleUserAgent = buildDefaultUserAgent()
+
+func buildDefaultUserAgent() string {
+	return fmt.Sprintf("diana (%s; %s)", runtime.GOOS, runtime.GOARCH)
+}
 
 type ModelInfo struct {
 	ID                  string   `json:"id"`

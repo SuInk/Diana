@@ -390,7 +390,10 @@
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field">
           <label for="llm-ua">User-Agent（可选）</label>
-          <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="codex-cli/0.142.0" />
+          <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="跟随内置默认" />
+          <span class="hint">
+            留空用内置默认值，形如 <code>diana (darwin; arm64)</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
+          </span>
         </div>
         <div class="field wide">
           <label for="llm-desc">备注（可选）</label>
