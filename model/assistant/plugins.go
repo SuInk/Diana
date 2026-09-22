@@ -39,6 +39,10 @@ type PluginManifest struct {
 	// 这类能力是其它功能的前提，暴露成一个可关的开关只会制造「别的插件莫名
 	// 其妙不工作」的排查成本。
 	Internal bool `json:"internal,omitempty"`
+	// ReportsErrors 标记这个插件会把失败告诉用户（订阅抓取失败、后台任务跑挂等）。
+	// 标了就自动带上「发送错误通知」开关，用户可以单独关掉某个插件的报错，而不必
+	// 把整台机器人的错误提示都关掉。插件自己不用声明这个设置项，也不该自己判断它。
+	ReportsErrors bool `json:"reports_errors,omitempty"`
 	// DefaultDisabled 标记「随包发布但默认不开」的内置插件。内置只说明它跟着
 	// 程序一起装好、不能卸载，不代表所有人都想要它——会自己开口说话的功能尤其
 	// 如此，装完就生效等于替用户做了决定。用户开过一次之后由存下来的状态说了算。
@@ -67,7 +71,37 @@ func pluginSupportsPlatform(manifest PluginManifest, platform string) bool {
 	return slices.Contains(manifest.Platforms, NormalizePlatformID(platform))
 }
 
+// pluginErrorNoticeSetting 是「会报错的插件」统一带上的开关键名。所有插件共用同一个
+// 键，用户在不同插件页看到的是同一个语义，运行时也只有一处判断。
+const pluginErrorNoticeSetting = "error_notice"
+
+// withErrorNoticeSetting 给 ReportsErrors 的插件补上「发送错误通知」开关。
+// 统一在这里加，插件清单里不用重复写，也不会有插件漏掉。
+func withErrorNoticeSetting(manifest PluginManifest) PluginManifest {
+	if !manifest.ReportsErrors {
+		return manifest
+	}
+	for _, spec := range manifest.Settings {
+		if spec.Key == pluginErrorNoticeSetting {
+			return manifest
+		}
+	}
+	// 必须先复制：插件返回的是自己那份清单的切片，直接 append 可能写进它的底层数组，
+	// 把同一批里别的插件设置项覆盖掉（第一版就是这样让视频抽帧的开关失了效）。
+	settings := make([]PluginSettingSpec, len(manifest.Settings), len(manifest.Settings)+1)
+	copy(settings, manifest.Settings)
+	manifest.Settings = append(settings, PluginSettingSpec{
+		Key:         pluginErrorNoticeSetting,
+		Label:       "发送错误通知",
+		Description: "这个插件失败时是否在聊天里说明。关掉后失败仍然记入事件和日志，只是不再打扰聊天。机器人的「错误提示」关掉时，这里开着也不会发。",
+		Type:        PluginSettingTypeBool,
+		Default:     true,
+	})
+	return manifest
+}
+
 func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
+	manifest = withErrorNoticeSetting(manifest)
 	if !manifest.BuiltIn || len(manifest.Platforms) > 0 {
 		return manifest
 	}
@@ -245,9 +279,12 @@ type PluginResponse struct {
 
 // PluginTask describes work that should outlive the incoming message request.
 type PluginTask struct {
-	Kind string
-	Name string
-	Key  string
+	// PluginID 是提交这个任务的插件，由运行时在收响应时盖戳，插件自己不用填。
+	// 任务失败的提示要按这个插件的「发送错误通知」开关决定发不发。
+	PluginID string
+	Kind     string
+	Name     string
+	Key      string
 	// SupersedeKey groups tasks where only the newest result remains useful.
 	// Reserving a newer task cancels queued/running older tasks in the group.
 	SupersedeKey string
@@ -1165,7 +1202,16 @@ func safeHandlePlugin(ctx context.Context, id string, plugin Plugin, req PluginR
 			err = fmt.Errorf("diana: plugin %q panicked: %v", id, recovered)
 		}
 	}()
-	return plugin.Handle(ctx, req)
+	resp, err = plugin.Handle(ctx, req)
+	if resp != nil {
+		// 任务要能追回是谁提交的：后台任务失败时按那个插件的开关决定发不发提示。
+		for index := range resp.Tasks {
+			if resp.Tasks[index].PluginID == "" {
+				resp.Tasks[index].PluginID = id
+			}
+		}
+	}
+	return resp, err
 }
 
 func recordPluginFailure(ctx context.Context, req PluginRequest, id string, err error) {
