@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
 
@@ -486,5 +487,74 @@ func TestConsoleGroupsCapsProactiveReplyExtraCriteria(t *testing.T) {
 	saved, ok := store.ConfigForGroup(profileID, "50007")
 	if !ok || saved.ProactiveReplyExtraCriteria != "本群叫鸽子是催更" {
 		t.Fatalf("saved = %q, ok = %v", saved.ProactiveReplyExtraCriteria, ok)
+	}
+}
+
+// 额度是个「悄悄生效」的闸门：用满之后机器人就是不说话。群列表里必须带上用了多少
+// 和生效上限，不然界面上没人知道是撞了额度还是坏了。
+func TestConsoleGroupsReportsQuotaUsage(t *testing.T) {
+	base := assistant.DefaultBotConfig()
+	base.ModelTokenQuota = 500_000
+	base.ModelCallQuota = 400
+	runtime := assistant.NewRuntime(base, consoleGroupListChannel{result: map[string]any{"items": []any{}}}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	store := NewMemoryBotGroupConfigStore()
+	// 40001 跟随机器人，40002 自己填了一档 token 上限。
+	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "40001", Enabled: true, EnabledSet: true}, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "40002", Enabled: true, EnabledSet: true, ModelTokenQuota: 20_000}, base); err != nil {
+		t.Fatal(err)
+	}
+	sqlite, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "quota.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlite.Close()
+	ctx := context.Background()
+	now := time.Now()
+	for _, entry := range []struct {
+		groupID string
+		tokens  int
+		at      time.Time
+	}{
+		{"40001", 1200, now.Add(-time.Minute)},
+		{"40001", 800, now.Add(-2 * time.Minute)},
+		{"40002", 25_000, now.Add(-3 * time.Minute)},
+		// 窗口之外的不该算进来。
+		{"40001", 999_000, now.Add(-assistant.GroupModelQuotaWindow() - time.Hour)},
+	} {
+		meta := map[string]any{"group_id": entry.groupID, "total_tokens": entry.tokens}
+		if err := sqlite.AppendLog(ctx, applog.Entry{Action: "llm_usage", CreatedAt: entry.at, Metadata: meta}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := NewBotHandler(ctx, runtime)
+	handler.SetGroupConfigStore(store)
+	handler.SetSQLiteStore(sqlite)
+	router := botTestRouter(handler)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response consoleGroupsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.QuotaWindowSeconds != int(assistant.GroupModelQuotaWindow()/time.Second) {
+		t.Fatalf("窗口长度没带出来: %d", response.QuotaWindowSeconds)
+	}
+	groups := make(map[string]consoleGroupItem, len(response.Groups))
+	for _, group := range response.Groups {
+		groups[group.GroupID] = group
+	}
+	// 群里没填就该显示机器人那一档，显示的上限必须和真正拦人的那个一致。
+	if group := groups["40001"]; group.QuotaTokenLimit != 500_000 || group.QuotaCallLimit != 400 || group.QuotaTokensUsed != 2000 || group.QuotaCallsUsed != 2 {
+		t.Fatalf("跟随机器人的群 = %#v", group)
+	}
+	// 群里填了以群为准，次数那一档仍旧跟随机器人。
+	if group := groups["40002"]; group.QuotaTokenLimit != 20_000 || group.QuotaCallLimit != 400 || group.QuotaTokensUsed != 25_000 {
+		t.Fatalf("自己填了额度的群 = %#v", group)
 	}
 }
