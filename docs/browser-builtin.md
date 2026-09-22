@@ -27,10 +27,27 @@ noVNC。反过来，你在画面上的鼠标键盘操作走 `Input.dispatch*` �
 
 中文输入走的是 `Input.insertText`：输入法上屏的是整段文字，不是一串按键。
 
-`headful` 只在有图形界面的机器上才打得开。官方 Docker 镜像里没有 X server，也没有
-虚拟显示，Linux 上没有 `DISPLAY` / `WAYLAND_DISPLAY` 时保存这一项会当场被拒绝，理由
-就写在返回里——不是存下去再让浏览器起不来。想在容器里用有头，得自己补一个虚拟显示
-（Xvfb 之类）并把 `DISPLAY` 传进来；但实时画面本来就不依赖它，多数情况没有必要。
+## 有头模式
+
+`headful` 打开后，Chromium 会真开一个窗口。桌面机器上用的是你自己的图形会话；
+服务器和容器里没有显示器，Diana 会自己拉一块 Xvfb 虚拟屏，把 `DISPLAY` 传给
+Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方镜像和 Steel 的
+容器都是这个形状——**浏览器在虚拟显示里真开窗口，看画面仍然走 CDP screencast**，
+所以这里不需要、也没有 VNC / noVNC。
+
+官方镜像默认不带 Xvfb：Alpine 的 Xvfb 链着 mesa 的 libGL，而镜像为了省体积把
+mesa 的软件渲染栈删掉了（Chromium 用不到），连 Xvfb 一起装回来要多背约 245MB。
+要用有头，在宿主机执行一次：
+
+```sh
+docker exec -u root <容器名> sh -c 'apk add --no-cache xvfb && apk fix mesa mesa-gl mesa-dri-gallium llvm20-libs'
+```
+
+装完重新打开这个开关即可。没有显示器也没有 Xvfb 时，保存这一项会当场被拒绝并给出
+上面这条命令——不是存下去再让浏览器起不来。
+
+有头值不值得开，看你要什么：扩展弹窗、系统对话框这类画布之外的东西只有有头才有；
+页面渲染、截图、实时画面和接管，无头全都能做，而且省一块屏的内存。
 
 ## 人工接管
 

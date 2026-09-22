@@ -51,6 +51,11 @@ COPY --from=gitea-mcp /out/gitea-mcp.LICENSE /app/gitea-mcp.LICENSE
 
 # 完整版运行时：预装 Chromium（网页读取/截图）、Noto CJK 字体、ffmpeg、
 # yt-dlp 与 tesseract 及中英语言包（图片文字识别插件的本地离线后端）。
+#
+# 不预装 xvfb：内置浏览器的「有头」那一档要它，但 Alpine 的 Xvfb 链着 mesa 的
+# libGL，而下面正好删掉了 mesa 的软件渲染栈（Chromium 用不到，省 245MB）。为一个
+# 少数人才开的模式让所有人多背 245MB 不划算，装它的那一行写在 docs/browser-builtin.md
+# 里，Diana 在开有头时自己找 Xvfb，找不到就把这行命令报给用户。
 FROM runtime-base AS runtime-full
 RUN apk add --no-cache chromium font-noto-cjk ffmpeg yt-dlp tesseract-ocr tesseract-ocr-data-chi_sim tesseract-ocr-data-eng \
     # 容器里只用 --headless=new 做无头截图/读网页，软件渲染由 chromium 自带实现，

@@ -102,11 +102,11 @@ func TestDebugHTTPBase(t *testing.T) {
 	}
 }
 
-// 没有显示器时打开有头，必须在落盘前就被挡下来：存下去等于把正在跑的无头换成
-// 一个永远起不来的开关。
+// 既没有图形会话、也没有 Xvfb 时打开有头，必须在落盘前就被挡下来：存下去等于
+// 把正在跑的无头换成一个永远起不来的开关。
 func TestSetSettingsRejectsHeadfulWithoutDisplay(t *testing.T) {
-	if displayAvailable() {
-		t.Skip("这台机器有显示器，挡不住也是对的")
+	if systemDisplayAvailable() || xvfbAvailable() {
+		t.Skip("这台机器凑得出屏幕，挡不住也是对的")
 	}
 	store := &memoryStore{}
 	manager := New(context.Background(), store, t.TempDir())
@@ -140,4 +140,42 @@ func TestExitErrorMessageKeepsDiagnostics(t *testing.T) {
 	if got := exitErrorMessage(errors.New("exit status 1"), nil); !strings.Contains(got, "exit status 1") {
 		t.Fatalf("没有诊断输出时也要给出退出码：%s", got)
 	}
+}
+
+// 装了 Xvfb 就不该再拦：容器里的有头靠的正是它，拦掉等于把这条路堵死。
+func TestHeadfulAllowedWithXvfb(t *testing.T) {
+	if !xvfbAvailable() {
+		t.Skip("这台机器没有 Xvfb")
+	}
+	if err := checkHeadful(Settings{Enabled: true, Headful: true}); err != nil {
+		t.Fatalf("有 Xvfb 时不该拦：%v", err)
+	}
+}
+
+// 虚拟屏要真的起得来，并且报回一个能用的显示号——显示号是交给 Xvfb 自己挑的，
+// 挑错或者没报回来，Chromium 会连到一块不存在的屏上。
+func TestStartVirtualDisplay(t *testing.T) {
+	if !xvfbAvailable() {
+		t.Skip("这台机器没有 Xvfb")
+	}
+	display, err := startVirtualDisplay(800, 600)
+	if err != nil {
+		t.Fatalf("虚拟显示起不来：%v", err)
+	}
+	defer display.Stop()
+	if !strings.HasPrefix(display.display, ":") || len(display.display) < 2 {
+		t.Fatalf("显示号不像话：%q", display.display)
+	}
+	if env := display.Env(); len(env) != 1 || env[0] != "DISPLAY="+display.display {
+		t.Fatalf("没把 DISPLAY 传给浏览器：%v", env)
+	}
+}
+
+// 没起虚拟屏时（宿主机自己有图形会话，或者无头）不能凭空往环境里塞 DISPLAY。
+func TestNilVirtualDisplayIsInert(t *testing.T) {
+	var display *virtualDisplay
+	if env := display.Env(); len(env) != 0 {
+		t.Fatalf("不该有额外环境变量：%v", env)
+	}
+	display.Stop()
 }

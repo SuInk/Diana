@@ -64,6 +64,7 @@ type Manager struct {
 	mu         sync.RWMutex
 	settings   Settings
 	cmd        *exec.Cmd
+	display    *virtualDisplay
 	cdpURL     string
 	executable string
 	startedAt  time.Time
@@ -265,6 +266,23 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := checkHeadful(settings); err != nil {
 		return err
 	}
+	// 有头而又没有现成的图形会话时，自己拉一块虚拟屏。容器里的有头就是这么跑的：
+	// 浏览器在 Xvfb 上真开窗口，画面照旧走 screencast，不需要 VNC。
+	var display *virtualDisplay
+	if settings.Headful && !systemDisplayAvailable() {
+		created, err := startVirtualDisplay(settings.WindowWidth, settings.WindowHeight)
+		if err != nil {
+			return err
+		}
+		display = created
+	}
+	// 后面任何一条失败的出路都要把它带走，否则每失败一次就多留一个 Xvfb。
+	started := false
+	defer func() {
+		if !started {
+			display.Stop()
+		}
+	}()
 
 	executable, err := agent.FindBrowserExecutable(settings.Executable)
 	if err != nil {
@@ -280,7 +298,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		!settings.Headful, 0, settings.WindowWidth, settings.WindowHeight)
 	cmd := exec.Command(executable, args...)
 	cmd.Dir = m.rootDir()
-	cmd.Env = agent.BrowserLaunchEnvironment(os.Environ(), m.rootDir())
+	cmd.Env = append(agent.BrowserLaunchEnvironment(os.Environ(), m.rootDir()), display.Env()...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("读浏览器输出失败：%w", err)
@@ -311,8 +329,10 @@ func (m *Manager) Start(ctx context.Context) error {
 			m.Stop()
 			return err
 		}
+		started = true
 		m.mu.Lock()
 		m.cmd = cmd
+		m.display = display
 		m.cdpURL = httpURL
 		m.executable = executable
 		m.startedAt = time.Now()
@@ -340,13 +360,17 @@ func (m *Manager) Stop() {
 	}
 	m.mu.Lock()
 	cmd := m.cmd
+	display := m.display
 	m.stopping = true
 	m.cmd = nil
+	m.display = nil
 	m.cdpURL = ""
 	m.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}
+	// 浏览器没了这块虚拟屏就没人用了，留着只是一个占内存的孤儿进程。
+	display.Stop()
 	m.notify()
 }
 
@@ -359,8 +383,10 @@ func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64, diagnostics *dia
 	current := m.generation == generation
 	stopping := m.stopping
 	enabled := m.settings.Enabled
+	display := m.display
 	if current {
 		m.cmd = nil
+		m.display = nil
 		m.cdpURL = ""
 		if !stopping && err != nil {
 			// 只写 exit status 1 等于没说：真正的原因（缺显示器、profile 被占用、
@@ -369,6 +395,10 @@ func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64, diagnostics *dia
 		}
 	}
 	m.mu.Unlock()
+	if current {
+		// 这一次的进程走完了，它那块屏也跟着走：重启会另开一块。
+		display.Stop()
+	}
 	if !current || stopping || !enabled {
 		return
 	}
