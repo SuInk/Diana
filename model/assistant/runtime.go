@@ -450,11 +450,18 @@ type Runtime struct {
 	inboundWake           chan struct{}
 	inboundManualBackfill chan time.Duration
 	// 重连后 seq 缺口检测的状态，见 inbound_gap.go。
-	inboundSeqProbe     chan groupSeqProbe
-	seqProbeMu          sync.Mutex
-	seqProbeArmed       bool
-	seqProbed           map[string]struct{}
-	seqGapRunning       map[string]struct{}
+	inboundSeqProbe chan groupSeqProbe
+	seqProbeMu      sync.Mutex
+	seqProbeArmed   bool
+	seqProbed       map[string]struct{}
+	seqGapRunning   map[string]struct{}
+	// liveSeq 记住每个群最近一条实时消息的 seq，用来发现「连接一直好着、却漏了
+	// 中间某一条」。断线重连那一档由 seqProbed 负责，这一档负责连接正常时的零星
+	// 丢失——桥接漏推一条事件不会断线，原来的探测完全看不到。
+	liveSeq map[string]int64
+	// liveSeqProbedAt 是每个群上一次因连续缺口发起探测的时间，用来限流：seq 也会
+	// 被撤回和系统提示占用，不限流的话这类正常跳号会把回补请求刷爆。
+	liveSeqProbedAt     map[string]time.Time
 	seqGapActive        atomic.Int32
 	historyBackfillBusy atomic.Bool
 	historyFetchMu      sync.Mutex
