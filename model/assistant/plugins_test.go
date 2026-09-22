@@ -18,6 +18,8 @@ import (
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestResolverPlatformHostMatchingRejectsLookalikes(t *testing.T) {
@@ -1496,11 +1498,30 @@ func TestXiaohongshuUnreadableDefersToBrowser(t *testing.T) {
 	if strings.TrimSpace(withBrowser.Context) != "" {
 		t.Fatalf("交给浏览器之后不该再发一段解析失败的文字：%q", withBrowser.Context)
 	}
-	withoutBrowser := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
-	if withoutBrowser.DeferToBrowser {
-		t.Fatal("没开沙盒浏览器时无处可交")
+	// 没开沙盒浏览器也不该把事情推给用户：直接用内置无头浏览器渲染一次。
+	plugin.browserFetch = func(context.Context, string, string) (agent.RenderedPage, error) {
+		return agent.RenderedPage{Title: "18Pro冰川蓝建议改为丰川蓝", Text: "这个壳真的超绝适配"}, nil
 	}
-	if strings.Contains(withoutBrowser.Context, "笔记不存在") || strings.Contains(withoutBrowser.Context, "已删除") {
-		t.Fatalf("读不到不等于笔记没了，别给笔记定罪：%q", withoutBrowser.Context)
+	rendered := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
+	if rendered.DeferToBrowser {
+		t.Fatal("没开沙盒浏览器时无处可交，应当自己渲染")
+	}
+	if !strings.Contains(rendered.Context, "丰川蓝") {
+		t.Fatalf("渲染出来的标题应当进结果：%q", rendered.Context)
+	}
+	if strings.Contains(rendered.Context, "笔记不存在") || strings.Contains(rendered.Context, "已删除") {
+		t.Fatalf("读不到不等于笔记没了，别给笔记定罪：%q", rendered.Context)
+	}
+
+	// 连浏览器都没有时才回文字，而且话要说清楚是「这条路读不到」。
+	plugin.browserFetch = func(context.Context, string, string) (agent.RenderedPage, error) {
+		return agent.RenderedPage{}, errors.New("no browser")
+	}
+	noBrowser := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
+	if strings.Contains(noBrowser.Context, "笔记不存在") || strings.Contains(noBrowser.Context, "已删除") {
+		t.Fatalf("没浏览器也不能给笔记定罪：%q", noBrowser.Context)
+	}
+	if !strings.Contains(noBrowser.Context, "浏览器") {
+		t.Fatalf("要说清楚缺的是浏览器：%q", noBrowser.Context)
 	}
 }

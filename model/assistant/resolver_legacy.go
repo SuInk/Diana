@@ -133,6 +133,32 @@ func (p *ResolverPlugin) resolveDouyin(ctx context.Context, req PluginRequest, r
 	return resolverPlatformResult{Context: strings.TrimSpace(metaText), ImageURLs: cover, VideoURLs: []string{videoPath}, ForwardMessages: nodes}
 }
 
+// xiaohongshuBrowserFallback 在抓不到笔记时自动改用浏览器渲染，不要求用户先去打开
+// 什么开关：开了沙盒浏览器就交给它，否则直接用内置的无头浏览器渲染一次，拿标题和摘要。
+// 两条都走不通才回文字，而且文字里说的是「这条路读不到」，不是「笔记不存在」。
+func (p *ResolverPlugin) xiaohongshuBrowserFallback(ctx context.Context, req PluginRequest, raw, nickname, reason string) resolverPlatformResult {
+	if req.SandboxedBrowserEnabled {
+		return resolverPlatformResult{DeferToBrowser: true}
+	}
+	if p.browserFetch != nil {
+		if page, err := p.browserFetch(ctx, "", raw); err == nil {
+			title := compactWhitespace(page.Title)
+			if looksLikeBlockedPage(title) {
+				title = ""
+			}
+			summary := compactWhitespace(firstNonEmpty(page.Description, page.Text))
+			if looksLikeBlockedPage(summary) {
+				summary = ""
+			}
+			if title != "" || summary != "" {
+				text := fmt.Sprintf("%s识别内容来自：【小红书】\n%s", nickname, strings.TrimSpace(title+"\n"+truncateRunes(summary, defaultResolverSummaryMaxRunes)))
+				return resolverPlatformTextResult(text)
+			}
+		}
+	}
+	return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n%s，用浏览器渲染也没读到内容。这台机器上可能没有可用的浏览器（容器基础版不预装 Chromium），或者页面本身打不开。", nickname, reason))
+}
+
 func (p *ResolverPlugin) resolveXiaohongshu(ctx context.Context, req PluginRequest, raw string) resolverPlatformResult {
 	nickname := resolverNickname()
 	note, status := fetchXiaohongshuNote(ctx, raw)
@@ -140,10 +166,7 @@ func (p *ResolverPlugin) resolveXiaohongshu(ctx context.Context, req PluginReque
 	case "missing_cookie":
 		// 没配 Cookie 也先让浏览器试一次：实测未登录的浏览器照样读得到笔记，
 		// 没理由因为少一份 Cookie 就直接回一句「没配 ck」。
-		if req.SandboxedBrowserEnabled {
-			return resolverPlatformResult{DeferToBrowser: true}
-		}
-		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n没有配置小红书 Cookie，也没有开沙盒浏览器，这条链接读不了。", nickname))
+		return p.xiaohongshuBrowserFallback(ctx, req, raw, nickname, "没有配置小红书 Cookie")
 	case "expired_link":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n分享链接已失效，或者对应直播已经结束。", nickname))
 	case "live_link":
@@ -155,10 +178,7 @@ func (p *ResolverPlugin) resolveXiaohongshu(ctx context.Context, req PluginReque
 		// 就到头了——但用浏览器打开同一条链接是能看到笔记的（09-22 实测：未登录的
 		// 浏览器里 __INITIAL_STATE__ 有 noteDetailMap，而同一时刻直接抓 HTML 是空的）。
 		// 所以这不是「笔记没了」，是这条抓取路径读不到，该换浏览器渲染去读。
-		if req.SandboxedBrowserEnabled {
-			return resolverPlatformResult{DeferToBrowser: true}
-		}
-		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n小红书没有在页面里直接给出笔记数据（分享链接会先跳到登录页），当前只能靠沙盒浏览器渲染后读取；请在链接解析设置里打开沙盒浏览器，或换一份登录后的 Cookie（要带 web_session）。", nickname))
+		return p.xiaohongshuBrowserFallback(ctx, req, raw, nickname, "小红书没有在页面里直接给出笔记数据")
 	case "request_failed":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n页面暂时无法读取，不能据此判断ck已经失效。", nickname))
 	}
