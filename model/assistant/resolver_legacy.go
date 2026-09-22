@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // resolverPlatformResult preserves the original platform-specific forwarding
@@ -133,6 +135,24 @@ func (p *ResolverPlugin) resolveDouyin(ctx context.Context, req PluginRequest, r
 	return resolverPlatformResult{Context: strings.TrimSpace(metaText), ImageURLs: cover, VideoURLs: []string{videoPath}, ForwardMessages: nodes}
 }
 
+// xiaohongshuRenderers 按「不需要用户配置」的优先级给出可用的渲染方式：先是自己会拉起
+// 浏览器的沙盒渲染器，再是需要外部 CDP 端口的那条。
+func (p *ResolverPlugin) xiaohongshuRenderers() []func(context.Context, string) (agent.RenderedPage, error) {
+	renderers := []func(context.Context, string) (agent.RenderedPage, error){}
+	if p.pageRenderer != nil {
+		renderers = append(renderers, p.pageRenderer.Render)
+	} else {
+		headless := true
+		renderers = append(renderers, agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Headless: &headless}).Render)
+	}
+	if p.browserFetch != nil {
+		renderers = append(renderers, func(ctx context.Context, raw string) (agent.RenderedPage, error) {
+			return p.browserFetch(ctx, "", raw)
+		})
+	}
+	return renderers
+}
+
 // xiaohongshuBrowserFallback 在抓不到笔记时自动改用浏览器渲染，不要求用户先去打开
 // 什么开关：开了沙盒浏览器就交给它，否则直接用内置的无头浏览器渲染一次，拿标题和摘要。
 // 两条都走不通才回文字，而且文字里说的是「这条路读不到」，不是「笔记不存在」。
@@ -140,8 +160,11 @@ func (p *ResolverPlugin) xiaohongshuBrowserFallback(ctx context.Context, req Plu
 	if req.SandboxedBrowserEnabled {
 		return resolverPlatformResult{DeferToBrowser: true}
 	}
-	if p.browserFetch != nil {
-		if page, err := p.browserFetch(ctx, "", raw); err == nil {
+	// 先用会自己拉起 Chrome/Chromium 的渲染器：它不需要外部调试端口，也不需要任何设置。
+	// p.browserFetch 走的是 CDP（默认 127.0.0.1:9222），只有配过「交互式浏览器」的机器
+	// 才连得上——生产机上实测 9222 没人监听，指望它兜底等于没有兜底。
+	for _, render := range p.xiaohongshuRenderers() {
+		if page, err := render(ctx, raw); err == nil {
 			title := compactWhitespace(page.Title)
 			if looksLikeBlockedPage(title) {
 				title = ""

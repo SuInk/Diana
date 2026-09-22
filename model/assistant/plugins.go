@@ -1284,10 +1284,12 @@ const (
 type browserFetchFunc func(ctx context.Context, cdpURL string, pageURL string) (agent.RenderedPage, error)
 
 type ResolverPlugin struct {
-	client          *http.Client
-	sharedSocial    sharedResultCache[resolverSocialResult]
-	sharedPages     sharedResultCache[pageMeta]
-	browserFetch    browserFetchFunc
+	client       *http.Client
+	sharedSocial sharedResultCache[resolverSocialResult]
+	sharedPages  sharedResultCache[pageMeta]
+	browserFetch browserFetchFunc
+	// pageRenderer 是会自己拉起浏览器的渲染器，测试里注入桩实现；为 nil 时按需新建。
+	pageRenderer    agent.PageRenderer
 	mediaDownloader func(context.Context, string) string
 	// videoDownloader is the legacy injection point retained for the complete
 	// resolver implementation and its integrations.

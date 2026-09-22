@@ -1486,6 +1486,16 @@ func TestXiaohongshuLoginBounceAndCookieSession(t *testing.T) {
 	}
 }
 
+// stubPageRenderer 让用例不用真的拉起浏览器。
+type stubPageRenderer struct {
+	page agent.RenderedPage
+	err  error
+}
+
+func (s stubPageRenderer) Render(context.Context, string) (agent.RenderedPage, error) {
+	return s.page, s.err
+}
+
 // 抓不到笔记时要交给沙盒浏览器，而不是把「这条抓取路径失败」写成「内容不存在」发进群。
 // 09-22 实测：未登录的浏览器里 __INITIAL_STATE__ 有 noteDetailMap，同一时刻直接抓 HTML
 // 却是空的——所以这就是抓取方式的问题，不是笔记的问题。
@@ -1498,10 +1508,8 @@ func TestXiaohongshuUnreadableDefersToBrowser(t *testing.T) {
 	if strings.TrimSpace(withBrowser.Context) != "" {
 		t.Fatalf("交给浏览器之后不该再发一段解析失败的文字：%q", withBrowser.Context)
 	}
-	// 没开沙盒浏览器也不该把事情推给用户：直接用内置无头浏览器渲染一次。
-	plugin.browserFetch = func(context.Context, string, string) (agent.RenderedPage, error) {
-		return agent.RenderedPage{Title: "18Pro冰川蓝建议改为丰川蓝", Text: "这个壳真的超绝适配"}, nil
-	}
+	// 没开沙盒浏览器也不该把事情推给用户：直接用会自己拉起浏览器的渲染器渲染一次。
+	plugin.pageRenderer = stubPageRenderer{page: agent.RenderedPage{Title: "18Pro冰川蓝建议改为丰川蓝", Text: "这个壳真的超绝适配"}}
 	rendered := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
 	if rendered.DeferToBrowser {
 		t.Fatal("没开沙盒浏览器时无处可交，应当自己渲染")
@@ -1514,8 +1522,9 @@ func TestXiaohongshuUnreadableDefersToBrowser(t *testing.T) {
 	}
 
 	// 连浏览器都没有时才回文字，而且话要说清楚是「这条路读不到」。
+	plugin.pageRenderer = stubPageRenderer{err: errors.New("no browser")}
 	plugin.browserFetch = func(context.Context, string, string) (agent.RenderedPage, error) {
-		return agent.RenderedPage{}, errors.New("no browser")
+		return agent.RenderedPage{}, errors.New("no cdp")
 	}
 	noBrowser := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
 	if strings.Contains(noBrowser.Context, "笔记不存在") || strings.Contains(noBrowser.Context, "已删除") {
