@@ -55,8 +55,9 @@ func TestPurposeGroupOnlyFillsInWhenCallSiteGroupHasNoBinding(t *testing.T) {
 		"intent": bindingRole("cheap-router"),
 	})
 
-	// embedding 分组没绑定，记忆抽取归属 intent，于是落到 intent 而不是 chat。
-	role, ok := modelRoleFor(roles, PurposeMemoryExtract, llm.GroupEmbedding)
+	// embedding 分组没绑定，发送前审核归属 intent，于是落到 intent 而不是 chat。
+	// （记忆抽取已经挪到后台生成那一档，这里换一个仍归 intent 的用途。）
+	role, ok := modelRoleFor(roles, PurposeReplySendAudit, llm.GroupEmbedding)
 	if !ok || role.Model != "cheap-router" {
 		t.Fatalf("该落到用途归属的 intent，实际 role=%#v ok=%v", role, ok)
 	}

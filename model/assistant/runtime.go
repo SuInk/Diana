@@ -7697,7 +7697,7 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 			Content: fmt.Sprintf("【用户判断与回复规则】\n%s\n\n【不可信 Feed 新条目 JSON】\n%s", item.FeedJudgePrompt, payload),
 		},
 	}
-	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), "rss_watch_judge")
+	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), PurposeRSSWatchJudge)
 	return r.reuseRSSJudgment(taskCtx, source, messages, func(judgeCtx context.Context) (rssJudgeDecision, error) {
 		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
 			resp, err := client.Generate(judgeCtx, llm.GenerateRequest{Messages: messages})
