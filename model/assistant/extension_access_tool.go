@@ -30,7 +30,7 @@ func newDianaExtensionAccessTool(runtime *Runtime, event MessageEvent) *dianaExt
 func (t *dianaExtensionAccessTool) Name() string { return dianaExtensionAccessToolName }
 
 func (t *dianaExtensionAccessTool) Description() string {
-	return `读写 MCP 服务和 Skill 的开放范围，仅主人可用。list 查看机器人默认档和本群覆盖；bot_tier 改机器人默认档；group_tier 改某个群的档位；allow / deny 改某个群的白名单、黑名单。档位取值 off（停用）、owner（仅主人）、admins（群主和群管理员）、members（群成员）；group_tier 传空档位表示这个群跟随机器人，会连本群名单一起清掉。判定顺序是停用 > 黑名单 > 白名单 > 档位，白名单里的人不看档位和群身份，黑名单一律不给，两份名单都不作用于主人。写操作第一次会被拒绝并给出确认码，等用户原样回复后再重发。`
+	return `读写 MCP 服务和 Skill 的开放范围，仅主人可用。list 查看本群生效档位（tier）、机器人默认档和本群覆盖；bot_tier 改机器人默认档；group_tier 改某个群的档位；allow / deny 改某个群的白名单、黑名单。档位取值 off（停用）、owner（仅主人）、admins（群主和群管理员）、members（群成员）；group_tier 传空档位表示这个群跟随机器人，会连本群名单一起清掉。判定顺序是停用 > 黑名单 > 白名单 > 档位，白名单里的人不看档位和群身份，黑名单一律不给，两份名单都不作用于主人。写操作第一次会被拒绝并给出确认码，等用户原样回复后再重发。`
 }
 
 func (t *dianaExtensionAccessTool) InputSchema() map[string]any {
@@ -91,9 +91,13 @@ func (t *dianaExtensionAccessTool) list(ctx context.Context, base BotConfig, gro
 	}
 	group, _ := t.groupConfig(base, groupID)
 	type item struct {
-		ID       string   `json:"id"`
-		Name     string   `json:"name"`
-		Kind     string   `json:"kind"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Kind string `json:"kind"`
+		// Tier 是这个群当前真正生效的档位。回答「这里能不能用」只看它：以前只给
+		// bot_tier 和 group_tier 两个值，模型就把两档一起念出来，听的人还得自己
+		// 推谁说了算。
+		Tier     string   `json:"tier"`
 		BotTier  string   `json:"bot_tier"`
 		GroupSet string   `json:"group_tier,omitempty"`
 		Allow    []string `json:"group_allow,omitempty"`
@@ -102,11 +106,17 @@ func (t *dianaExtensionAccessTool) list(ctx context.Context, base BotConfig, gro
 	items := make([]item, 0, len(states))
 	for _, state := range states {
 		access := group.ExtensionAccess[state.ID]
+		botTier := extensionStateTier(state)
+		effective := botTier
+		if access.Tier != "" {
+			effective = access.Tier
+		}
 		items = append(items, item{
 			ID:       state.ID,
 			Name:     state.Name,
 			Kind:     string(state.Kind),
-			BotTier:  extensionStateTier(state),
+			Tier:     effective,
+			BotTier:  botTier,
 			GroupSet: access.Tier,
 			Allow:    access.Allow,
 			Deny:     access.Deny,
@@ -116,7 +126,7 @@ func (t *dianaExtensionAccessTool) list(ctx context.Context, base BotConfig, gro
 		"group_id":    groupID,
 		"extensions":  items,
 		"tier_order":  []string{"off", "owner", "admins", "members"},
-		"explanation": "bot_tier 是机器人默认档，group_tier 非空表示这个群单独设过。判定顺序：停用 > 黑名单 > 白名单 > 档位。",
+		"explanation": "tier 是这个群当前生效的档位，回答能不能用只看它；bot_tier 是机器人默认档，group_tier 非空表示这个群单独设过并已经盖掉默认档。判定顺序：停用 > 黑名单 > 白名单 > 档位。",
 	})
 }
 

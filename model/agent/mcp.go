@@ -133,6 +133,10 @@ func resolveMCPConfigPath(cfg Config) string {
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
 	}
+	if path == "" {
+		// 没配就按默认位置算，不然会拼成工作目录本身，调用方拿到一个目录当配置文件。
+		return filepath.Clean(defaultMCPConfigPath(cfg.WithDefaults().WorkDir))
+	}
 	base, err := filepath.Abs(cfg.WorkDir)
 	if err != nil {
 		base = cfg.WorkDir
