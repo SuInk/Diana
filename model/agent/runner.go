@@ -191,11 +191,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	modelTurns := 0
 	toolCalls := 0
 	protocolRepairs := 0
+	forceSearchNextTurn := false
 	lastToolSignature := ""
 	imageTaskQueued := false
 	nativeProtocol := false
 	finishReason := "final"
 	claimLedger := newClaimEvidenceLedger()
+	// 没有 web_search 就没法要求证据，硬要只会把回复卡在修复循环里。
+	if _, searchAvailable := r.registry.Get(webSearchToolName); searchAvailable {
+		claimLedger.required = req.RequireEvidence
+	}
+	// 用户自己贴的链接、历史消息里出现过的链接，模型复述不算编造来源。
+	for _, message := range req.Messages {
+		claimLedger.noteCitableText(message.Content)
+	}
 	emitRunEvent(ctx, req.Observer, RunEvent{
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
@@ -260,7 +269,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		definitions := r.turnDefinitions(claimLedger, imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		resp, err := r.client.Generate(planningCtx, llm.GenerateRequest{Messages: messages, Tools: definitions})
+		planningRequest := llm.GenerateRequest{Messages: messages, Tools: definitions}
+		if forceSearchNextTurn {
+			// 话术退回对某些模型无效：实测 gemini-3.8-flash-low 被连退三次仍然
+			// 一个工具都不调，只是把正文改得更含糊。这一步直接用供应商的
+			// tool_choice 把选择权收走，让它只能发出一次检索。
+			planningRequest.ToolChoice = webSearchToolName
+			forceSearchNextTurn = false
+		}
+		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}
@@ -366,6 +383,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
+			if claimLedger.missingRequiredSearch() {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: evidenceRequiredRepairPrompt})
+				forceSearchNextTurn = true
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					// 失败按放行处理：模型死活不搜也不能把这条回复卡掉。
+					finishReason = "evidence_required_unmet"
+					break
+				}
+				continue
+			}
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
@@ -405,6 +435,33 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
 			// 由代码回头猜正文。
 			claimLedger.applyUpdates(action.Claims)
+			if claimLedger.missingRequiredSearch() {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: evidenceRequiredRepairPrompt})
+				forceSearchNextTurn = true
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "evidence_required_unmet"
+					break
+				}
+				continue
+			}
+			if unbound := claimLedger.unboundCitations(action.Content); len(unbound) > 0 {
+				protocolRepairs++
+				reason := "正文引用了本轮没有检索到的来源：" + strings.Join(unbound, " ")
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason +
+					"。只能引用这一轮检索或渲染真正返回的链接，以及对话里本来就出现过的链接；" +
+					"凭记忆写出的网址即使看起来合理也不算来源。请删掉这些链接，或改成如实说明这一点没有查到，再重新调用 agent_finalize。\n" +
+					claimLedger.digest()})
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "unbound_citation"
+					break
+				}
+				continue
+			}
 			if leak := internalProtocolLeak(action.Content); leak != "" {
 				protocolRepairs++
 				reason := "最终回复里出现了内部协议词「" + leak + "」"
@@ -644,6 +701,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
+		claimLedger.noteCitableText(rawOutput)
 		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls) + parallelDropNotice
 		if action.Tool == webSearchToolName && claimLedger.active {
 			observationText += "\n\n" + claimLedger.digest()
