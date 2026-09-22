@@ -1648,6 +1648,12 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 		}
 		if legacyResolver && isKnownResolverPlatformURL(raw) {
 			media := p.resolveKnownPlatform(mediaCtx, req, raw)
+			// 平台接口读不出来但页面渲染能读到的，交给沙盒浏览器，别把「这条抓取
+			// 路径失败」写成「内容不存在」发进群。
+			if media.DeferToBrowser && req.SandboxedBrowserEnabled {
+				deferredToBrowser = true
+				continue
+			}
 			if strings.TrimSpace(media.Context) != "" {
 				parts = append(parts, media.Context)
 				directParts = append(directParts, media.Context)
