@@ -213,14 +213,14 @@ const presetSavedMessage=(r:{account?:string;verified?:boolean})=>r.account?`已
 function presetPayload(operation:string){return {operation,kind:'mcp',name:form.value.name,replace:true,preset:editPreset.value?.id,transport:editPresetTransport.value,values:editPresetValues.value,config:{enabled:form.value.enabled}}}
 async function save(){saving.value=true;error.value='';try{
  // 预设那张表只回传它管的字段，剩下的（超时、工具名单）由服务端沿用已保存的。
- if(editPreset.value&&!editAdvanced.value){const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>(presetPayload('preset_save'));editing.value=false;toastSuccess(result.warning||presetSavedMessage(result))}
+ if(editPreset.value&&!editAdvanced.value){const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>(presetPayload('save'));editing.value=false;toastSuccess(result.warning||presetSavedMessage(result))}
  else{await manageExtension(payload('save'));editing.value=false;toastSuccess('扩展已保存，后续会话生效')}
  await load()}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
 // 令牌对不对，保存前就问一次 Gitea。gitea-mcp 的握手不碰令牌，光看「测试连接」
 // 是绿的说明不了什么。
 async function runVerify(input:Record<string,unknown>,report:(message:string)=>void){verifying.value=true;verifyNote.value='';try{const result=await manageExtension<{verified:boolean;supported:boolean;account?:string;message?:string}>(input);verifyNote.value=result.verified?`令牌可用${result.account?`，对应账号 ${result.account}`:''}`:(result.message||'这条接法没法提前验凭据')}catch(e){report(String(e instanceof Error?e.message:e))}finally{verifying.value=false}}
-const verifyEditPreset=()=>runVerify(presetPayload('preset_verify'),message=>{error.value=message});
-const verifyPreset=()=>runVerify({operation:'preset_verify',kind:'mcp',name:presetName.value,preset:preset.value?.id,transport:presetTransport.value,values:presetValues.value},message=>{presetError.value=message});
+const verifyEditPreset=()=>runVerify(presetPayload('verify'),message=>{error.value=message});
+const verifyPreset=()=>runVerify({operation:'verify',kind:'mcp',name:presetName.value,preset:preset.value?.id,transport:presetTransport.value,values:presetValues.value},message=>{presetError.value=message});
 async function testConnection(){saving.value=true;error.value='';tested.value=false;discovered.value=[];try{const result=await manageExtension<{connected:boolean;tools:string[]}>(payload('test'));tested.value=result.connected;discovered.value=result.tools}catch(e){error.value=String(e instanceof Error?e.message:e)}finally{saving.value=false}}
 // 预设：服务端给字段清单，这里只负责渲染和回填，拼配置仍在服务端做。
 const presetsOpen=ref(false),presets=ref<{preset:MCPPreset;installed:boolean;hidden?:boolean}[]>([]),preset=ref<MCPPreset|null>(null),presetTransport=ref(''),presetValues=ref<Record<string,string>>({}),presetName=ref(''),presetSaving=ref(false),presetError=ref('');
@@ -248,11 +248,11 @@ const statusFilters=computed(()=>[
 const hiddenPresets=computed(()=>props.kind==='mcp'?presets.value.filter(entry=>entry.hidden):[]);
 // 删掉的是列表里那一行，不是服务：随时能放回来，所以底下留一句找得回来的话。
 async function hidePreset(value:MCPPreset){if(!await askConfirm({title:`从列表里去掉 ${value.title}？`,message:'只是不再显示这一行，随时可以在下面「显示隐藏的预设」里放回来。已经配好的服务不受影响。',confirmLabel:'去掉'}))return;
- try{await manageExtension({operation:'preset_hide',kind:'mcp',preset:value.id});await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
-async function showHiddenPresets(){try{await Promise.all(hiddenPresets.value.map(entry=>manageExtension({operation:'preset_show',kind:'mcp',preset:entry.preset.id})));await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
+ try{await manageExtension({operation:'presets',action:'hide',kind:'mcp',preset:value.id});await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
+async function showHiddenPresets(){try{await Promise.all(hiddenPresets.value.map(entry=>manageExtension({operation:'presets',action:'show',kind:'mcp',preset:entry.preset.id})));await refreshPresets()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 function closePresets(){if(presetSaving.value)return;presetsOpen.value=false;preset.value=null}
 function pickPreset(value:MCPPreset){preset.value=value;presetTransport.value=value.transports[0]?.id||'';presetValues.value={};presetName.value=items.value.some(i=>i.name===value.name)?`${value.name}-2`:value.name;presetError.value='';verifyNote.value=''}
-async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'preset_save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess(result.warning||`已添加${presetVerifiedSuffix(result)}，默认仅主人可用，在它那张卡片的「设置」里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
+async function savePreset(){if(!preset.value)return;presetSaving.value=true;presetError.value='';try{const result=await manageExtension<{account?:string;warning?:string;verified?:boolean}>({operation:'save',kind:'mcp',name:presetName.value,preset:preset.value.id,transport:presetTransport.value,values:presetValues.value});presetsOpen.value=false;preset.value=null;toastSuccess(result.warning||`已添加${presetVerifiedSuffix(result)}，默认仅主人可用，在它那张卡片的「设置」里开放`);await load()}catch(e){presetError.value=String(e instanceof Error?e.message:e)}finally{presetSaving.value=false}}
 // 权限跟着正在编辑的那一条走：设置弹窗里改，改完从列表里取回最新的一份。
 const permissionName=ref(''),accessUsers=ref<string[]>([]),accessGroups=ref<string[]>([]),accessError=ref(''),savingAccess=ref(false);
 const permissionItem=computed(()=>editing.value&&botScope.value&&permissionName.value?items.value.find(i=>i.kind===props.kind&&i.name===permissionName.value)||null:null);

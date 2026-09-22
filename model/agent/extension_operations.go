@@ -15,19 +15,19 @@ package agent
 
 // ExtensionOperations 是 AdministerExtensions 支持的全部操作，测试据此检查分类是否漏项。
 var ExtensionOperations = []string{
-	"list", "read", "presets", "preset_verify", "test",
-	"enabled", "members", "audience", "residency", "preset_hide", "preset_show",
-	"save", "preset_save", "delete",
+	"list", "read", "presets", "verify", "test",
+	"enabled", "members", "audience", "residency",
+	"save", "delete",
 }
 
 // ExtensionOperationChangesDefinition 表示这次写入改了扩展的定义本身（装、改、卸）。
 // 缓存的共享底座必须扔掉重建，否则新装的 MCP 要等下次重启才出现在工具目录里。
 //
-// preset_save 要到 AdministerExtensions 内部才被改写成 save，调用方看到的始终是
-// preset_save，所以它必须显式列在这里。
+// 预设不再有自己的操作名：从预设装也是 save，只是多带了 preset/transport/values。
+// 早先那套 preset_save 正是漏在这张名单外，装完要等重启才生效。
 func ExtensionOperationChangesDefinition(operation string) bool {
 	switch operation {
-	case "save", "preset_save", "delete":
+	case "save", "delete":
 		return true
 	default:
 		return false
@@ -38,14 +38,32 @@ func ExtensionOperationChangesDefinition(operation string) bool {
 // 日志。比上一个宽：启用开关、成员档位、对象名单、常驻档位、以及把预设从列表里藏起来
 // 都算——它们不改扩展定义，但确实改了状态。
 //
-// 纯查询（list / read / presets / preset_verify）和 test 不算。test 会真的连一次服务，
-// 但连完就断，没有任何东西被改动。
+// 纯查询（list / read / verify）不算，test 也不算：它会真的连一次服务，但连完就断，
+// 没有任何东西被改动。presets 的 hide / show 会改清单显隐，所以它按 action 另判，
+// 见 ExtensionRequestMutatesState。
 func ExtensionOperationMutatesState(operation string) bool {
 	if ExtensionOperationChangesDefinition(operation) {
 		return true
 	}
 	switch operation {
-	case "enabled", "members", "audience", "residency", "preset_hide", "preset_show":
+	case "enabled", "members", "audience", "residency":
+		return true
+	default:
+		return false
+	}
+}
+
+// ExtensionRequestMutatesState 是按整个请求判断，比只看操作名准：presets 默认是查询，
+// 但 action=hide / show 会改清单显隐，那是写。调用方能拿到请求就用这个。
+func ExtensionRequestMutatesState(req ExtensionAdminRequest) bool {
+	if ExtensionOperationMutatesState(req.Operation) {
+		return true
+	}
+	if req.Operation != "presets" {
+		return false
+	}
+	switch req.Action {
+	case "hide", "show":
 		return true
 	default:
 		return false

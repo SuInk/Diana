@@ -12,8 +12,8 @@ import (
 // 分类漏项的代价线上见过：preset_save 没被认成「改了定义」，从预设装的 MCP 要等重启
 // 才出现。这里把两件事都钉住——每个操作都被归类，且归类结果和实际行为一致。
 func TestExtensionOperationClassification(t *testing.T) {
-	definition := map[string]bool{"save": true, "preset_save": true, "delete": true}
-	state := map[string]bool{"enabled": true, "members": true, "audience": true, "residency": true, "preset_hide": true, "preset_show": true}
+	definition := map[string]bool{"save": true, "delete": true}
+	state := map[string]bool{"enabled": true, "members": true, "audience": true, "residency": true}
 	for _, operation := range ExtensionOperations {
 		if got := ExtensionOperationChangesDefinition(operation); got != definition[operation] {
 			t.Fatalf("%s 改定义 = %v，期望 %v", operation, got, definition[operation])
