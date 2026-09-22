@@ -43,6 +43,13 @@ const (
 	PurposeUpstreamRejectionNotice = "upstream_rejection_notice"
 	PurposeAccountSafetyNotice     = "account_safety_notice"
 	PurposeErrorNotice             = "error_notice"
+	// 下面几个以前只是调用点里的字面量，没进这张表：界面上指不了，也没法单独绑，
+	// 实际跟着「本次调用的分组」跑。它们问的都要写出成段文字（RSS 那个还要写出
+	// 发给用户的通知正文），归后台生成。
+	PurposeRSSWatchJudge      = "rss_watch_judge"
+	PurposeDirectReplyTopic   = "direct_reply_topic"
+	PurposeReplySemanticDedup = "reply_semantic_dedup"
+	PurposeSemanticTextRef    = "semantic_text_reference"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -82,14 +89,10 @@ var llmPurposeGroup = map[string]string{
 	PurposeUpstreamRejectionNotice: llm.GroupBackground,
 	PurposeAccountSafetyNotice:     llm.GroupBackground,
 	PurposeErrorNotice:             llm.GroupBackground,
-}
-
-// modelBindingParent 说明某个分组没单独配时跟着谁。
-//
-// background 是从 intent 里拆出来的：拆之前这些调用一直跟着 intent 跑，拆完要是
-// 直接落到 chat，老配置升上来就会把记忆抽取和好感度评估悄悄换成对话模型。
-var modelBindingParent = map[string]string{
-	llm.GroupBackground: llm.GroupIntent,
+	PurposeRSSWatchJudge:           llm.GroupBackground,
+	PurposeDirectReplyTopic:        llm.GroupBackground,
+	PurposeReplySemanticDedup:      llm.GroupBackground,
+	PurposeSemanticTextRef:         llm.GroupBackground,
 }
 
 // modelBindingGroups 是必须绑定的分组。// modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批
@@ -181,13 +184,6 @@ func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (Mod
 		if owner := ModelBindingGroupOf(purpose); owner != "" {
 			if role, ok := roles[owner]; ok {
 				return resolveIfFollowChat(roles, role)
-			}
-			// 这一档没单独配就跟着上一级：background 拆出来之前一直跟着 intent，
-			// 老配置升上来不该因为多了一档就换模型。
-			if parent := modelBindingParent[owner]; parent != "" {
-				if role, ok := roles[modelRoleKeyForGroup(parent)]; ok {
-					return resolveIfFollowChat(roles, role)
-				}
 			}
 		}
 	}

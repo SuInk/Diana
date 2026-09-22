@@ -31,17 +31,19 @@ func TestBackgroundGroupSplitsFromIntent(t *testing.T) {
 	}
 }
 
-// 老配置只有 intent 一档：后台没单独配时必须跟着它，不能掉到对话模型上。
-// 拆分本身不该改变任何人的行为。
-func TestBackgroundFallsBackToIntentWhenUnset(t *testing.T) {
+// 后台生成没单独配时跟随对话——和界面上其余几档的默认一致。
+//
+// 这条是刻意的行为变化：拆分之前这些调用跟着 intent 跑。升级之后想保持原样，
+// 就把「后台生成」显式指到原来那一档。
+func TestBackgroundFollowsChatWhenUnset(t *testing.T) {
 	roles := map[string]ModelRole{
-		"intent": {ProfileID: "gemini", Model: "gemini-flash"},
+		"intent": {ProfileID: "jev", Model: "jev-latest"},
 		"chat":   {ProfileID: "terra", Model: "gpt-terra"},
 	}
-	for _, purpose := range []string{PurposeMemoryExtract, PurposeRelationshipEvaluate, PurposeContextSummary} {
+	for _, purpose := range []string{PurposeMemoryExtract, PurposeRelationshipEvaluate, PurposeContextSummary, PurposeRSSWatchJudge} {
 		role, ok := modelRoleFor(roles, purpose, llm.GroupBackground)
-		if !ok || role.Model != "gemini-flash" {
-			t.Fatalf("%s 该跟着 intent：%#v", purpose, role)
+		if !ok || role.Model != "gpt-terra" {
+			t.Fatalf("%s 没单独配时该跟随对话：%#v", purpose, role)
 		}
 	}
 }

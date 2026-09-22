@@ -166,7 +166,7 @@ func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event Messag
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	callCtx = withLLMUsagePurpose(callCtx, "semantic_text_reference")
+	callCtx = withLLMUsagePurpose(callCtx, PurposeSemanticTextRef)
 	raw, err := r.runLLMRouterProviderOnce(callCtx, func(provider LLMProvider) (string, error) {
 		response, err := provider.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: semanticTextReferencePrompt},
