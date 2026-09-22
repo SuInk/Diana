@@ -337,10 +337,6 @@
             <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
           </ul>
         </div>
-        <div v-if="form.provider === 'openai_compatible'" class="field">
-          <label for="llm-ua">User-Agent（可选）</label>
-          <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="codex-cli/0.142.0" />
-        </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
           <label for="llm-header-name">自定义请求头（可选）</label>
           <div class="header-row">
@@ -391,6 +387,10 @@
             中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
             <br />已保存的头出于和 API Key 同样的理由不回显值，留空则沿用，填了新值才覆盖；删掉整行才是删除这个头。
           </span>
+        </div>
+        <div v-if="form.provider === 'openai_compatible'" class="field">
+          <label for="llm-ua">User-Agent（可选）</label>
+          <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="codex-cli/0.142.0" />
         </div>
         <div class="field wide">
           <label for="llm-desc">备注（可选）</label>
