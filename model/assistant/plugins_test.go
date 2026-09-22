@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestResolverPlatformHostMatchingRejectsLookalikes(t *testing.T) {
@@ -1451,5 +1454,74 @@ func TestAgentToolsAreFilteredByCurrentPlatform(t *testing.T) {
 	}
 	if !names["capabilities"] || !names["web_search"] || !names["music"] {
 		t.Fatalf("cross-platform tools missing on Telegram: %#v", names)
+	}
+}
+
+// 小红书把分享链接甩到 /login，笔记地址塞在 redirectPath 里。线上 09-22 撞到的就是
+// 这个：笔记好好的（同一条链接用浏览器打开看得见），报的却是「笔记不存在、已删除」。
+func TestXiaohongshuLoginBounceAndCookieSession(t *testing.T) {
+	bounce := "https://www.xiaohongshu.com/login?redirectPath=" + url.QueryEscape("http://www.xiaohongshu.com/discovery/item/abc123?xsec_token=tok&xsec_source=app_share")
+	if !xiaohongshuLoginBounce(bounce) {
+		t.Fatal("登录页应当被认出来")
+	}
+	if xiaohongshuLoginBounce("https://www.xiaohongshu.com/explore/abc123") {
+		t.Fatal("普通笔记地址不是登录页")
+	}
+	if xiaohongshuLoginBounce("https://example.com/login") {
+		t.Fatal("别的站的登录页与小红书无关")
+	}
+	// 被甩到登录页之后仍然要把笔记地址解出来：带着 xsec_token 去试一次，成不成是另一回事。
+	if page := xiaohongshuPageURL(bounce); !strings.Contains(page, "abc123") || !strings.Contains(page, "xsec_token=tok") {
+		t.Fatalf("redirectPath 里的笔记地址没解出来：%s", page)
+	}
+
+	if xiaohongshuCookieLoggedIn("a1=x; webId=y; gid=z") {
+		t.Fatal("只有匿名标识的 Cookie 不算登录")
+	}
+	if !xiaohongshuCookieLoggedIn("a1=x; web_session=040069b1; webId=y") {
+		t.Fatal("带 web_session 的 Cookie 应当算登录")
+	}
+	if xiaohongshuCookieLoggedIn("a1=x; web_session=; webId=y") {
+		t.Fatal("web_session 是空值时不算登录")
+	}
+}
+
+// 抓不到笔记时要交给沙盒浏览器，而不是把「这条抓取路径失败」写成「内容不存在」发进群。
+// 09-22 实测：未登录的浏览器里 __INITIAL_STATE__ 有 noteDetailMap，同一时刻直接抓 HTML
+// 却是空的——所以这就是抓取方式的问题，不是笔记的问题。
+func TestXiaohongshuUnreadableDefersToBrowser(t *testing.T) {
+	plugin := NewResolverPlugin(nil)
+	withBrowser := plugin.resolveXiaohongshu(context.Background(), PluginRequest{SandboxedBrowserEnabled: true}, "https://www.xiaohongshu.com/explore/abc123")
+	if !withBrowser.DeferToBrowser {
+		t.Fatal("开了沙盒浏览器时应当交给浏览器兜底")
+	}
+	if strings.TrimSpace(withBrowser.Context) != "" {
+		t.Fatalf("交给浏览器之后不该再发一段解析失败的文字：%q", withBrowser.Context)
+	}
+	// 没开沙盒浏览器也不该把事情推给用户：直接用内置无头浏览器渲染一次。
+	plugin.browserFetch = func(context.Context, string, string) (agent.RenderedPage, error) {
+		return agent.RenderedPage{Title: "18Pro冰川蓝建议改为丰川蓝", Text: "这个壳真的超绝适配"}, nil
+	}
+	rendered := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
+	if rendered.DeferToBrowser {
+		t.Fatal("没开沙盒浏览器时无处可交，应当自己渲染")
+	}
+	if !strings.Contains(rendered.Context, "丰川蓝") {
+		t.Fatalf("渲染出来的标题应当进结果：%q", rendered.Context)
+	}
+	if strings.Contains(rendered.Context, "笔记不存在") || strings.Contains(rendered.Context, "已删除") {
+		t.Fatalf("读不到不等于笔记没了，别给笔记定罪：%q", rendered.Context)
+	}
+
+	// 连浏览器都没有时才回文字，而且话要说清楚是「这条路读不到」。
+	plugin.browserFetch = func(context.Context, string, string) (agent.RenderedPage, error) {
+		return agent.RenderedPage{}, errors.New("no browser")
+	}
+	noBrowser := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
+	if strings.Contains(noBrowser.Context, "笔记不存在") || strings.Contains(noBrowser.Context, "已删除") {
+		t.Fatalf("没浏览器也不能给笔记定罪：%q", noBrowser.Context)
+	}
+	if !strings.Contains(noBrowser.Context, "浏览器") {
+		t.Fatalf("要说清楚缺的是浏览器：%q", noBrowser.Context)
 	}
 }
