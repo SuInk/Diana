@@ -326,21 +326,7 @@
             </div>
           </div>
         </div>
-        <div class="field">
-          <label for="llm-temp">Temperature（可选）</label>
-          <input id="llm-temp" v-model="form.temperature" class="input" inputmode="decimal" placeholder="跟随模型默认" />
-          <span class="hint">
-            留空就不发这个参数，由模型用自己的默认值——多数情况下这才是对的。推理模型（gpt-5.x、o 系列、Claude 思考模式等）只接受默认温度，填了<strong>不是被忽略，而是整个请求被拒</strong>。中转网关的模型名认不出背后的真实型号，填之前先确认这套配置实际连的是什么。
-          </span>
-        </div>
-        <div class="field">
-          <label for="llm-maxtokens">最大输出 Token</label>
-          <input id="llm-maxtokens" v-model="form.max_output_tokens" class="input" inputmode="numeric" placeholder="跟随模型默认" />
-          <span class="hint">
-            限制单次回复的长度。留空时 OpenAI 兼容端点不发这个参数、由模型自己决定，Anthropic 则用适配层的保守默认值。它同时影响输入预算：请求要为输出预留空间，留空按默认值预留，填小能给历史腾出更多位置。
-          </span>
-        </div>
-        <div class="field">
+        <div class="field wide">
           <label for="llm-window">模型上下文窗口</label>
           <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" :placeholder="contextWindowPlaceholder" />
           <span class="hint">
@@ -350,13 +336,6 @@
           <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
             <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
           </ul>
-        </div>
-        <div class="field">
-          <label for="llm-maxcontext">单次请求上下文上限</label>
-          <input id="llm-maxcontext" v-model="form.max_context_tokens" class="input" inputmode="numeric" placeholder="跟随窗口" />
-          <span class="hint">
-            {{ effectiveMaxContextHint }}近期历史、长期记忆等预算都按它按比例分配，调小可以省钱，调大能记住更多对话。
-          </span>
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field">
           <label for="llm-ua">User-Agent（可选）</label>
@@ -479,10 +458,7 @@ interface LLMFormState {
   oauth_provider: string;
   user_agent: string;
   description: string;
-  temperature: string;
   context_window_tokens: string;
-  max_context_tokens: string;
-  max_output_tokens: string;
 }
 
 const emptyForm: LLMFormState = {
@@ -496,10 +472,7 @@ const emptyForm: LLMFormState = {
   oauth_provider: "",
   user_agent: "",
   description: "",
-  temperature: "",
   context_window_tokens: "",
-  max_context_tokens: "",
-  max_output_tokens: ""
 };
 
 const profileSet = ref<LLMConfig | null>(null);
@@ -776,10 +749,7 @@ function startEdit(profile: LLMConfig): void {
     oauth_provider: profile.oauth_provider ?? "",
     user_agent: profile.user_agent ?? "",
     description: profile.description ?? "",
-    temperature: profile.temperature === null || profile.temperature === undefined ? "" : String(profile.temperature),
     context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
-    max_context_tokens: profile.max_context_tokens ? String(profile.max_context_tokens) : "",
-    max_output_tokens: profile.max_output_tokens ? String(profile.max_output_tokens) : ""
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
@@ -835,14 +805,6 @@ const contextWindowBindings = computed(() =>
     return `${owner}：${binding.model}`;
   })
 );
-
-const effectiveMaxContextHint = computed(() => {
-  const budget = editingProfile.value?.effective_max_context_tokens;
-  if (!budget) {
-    return "留空即用满窗口。";
-  }
-  return `留空即用满窗口，当前为 ${budget.toLocaleString("en-US")}。`;
-});
 
 // resolvedDefaultModel 决定提交给后端的 model。
 //
@@ -919,18 +881,13 @@ function formToPayload(): LLMConfig {
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
     description: form.value.description.trim() || undefined
   };
-  const temperature = form.value.temperature.trim();
-  if (temperature !== "" && !Number.isNaN(Number(temperature))) {
-    payload.temperature = Number(temperature);
-  }
-  const maxTokens = form.value.max_output_tokens.trim();
-  if (maxTokens !== "" && !Number.isNaN(Number(maxTokens))) {
-    payload.max_output_tokens = Number(maxTokens);
-  }
-  // 这两个字段必须每次都提交：留空表示「改回按模型自动推断」，省略掉的话后端
-  // 会当成「这个客户端没提交」而保留旧值，于是填过的数字永远删不掉。
+  // 窗口必须每次都提交：留空表示「改回按模型自动推断」，省略掉的话后端会当成
+  // 「这个客户端没提交」而保留旧值，于是填过的数字永远删不掉。
+  //
+  // temperature、max_output_tokens、max_context_tokens 界面上已经没有入口，所以
+  // 一律不提交——nil 在后端表示「没碰过」，通过 API 设过值的部署不会被这个表单
+  // 悄悄清掉。
   payload.context_window_tokens = optionalTokenInput(form.value.context_window_tokens);
-  payload.max_context_tokens = optionalTokenInput(form.value.max_context_tokens);
   return payload;
 }
 
