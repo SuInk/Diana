@@ -61,6 +61,7 @@ func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	router.DELETE("/api/assistant/groups/:id", h.deleteConsoleGroup)
 	router.GET("/api/assistant/groups/:id/relations", h.groupRelationGraph)
 	router.GET("/api/assistant/groups/:id/avatar", h.groupAvatar)
+	h.registerAvatarRoutes(router)
 }
 
 // consoleGroupSwitchesPayload 是群管理页那排批量操作：一键开关当前列出的群，
@@ -243,6 +244,9 @@ func (h *BotHandler) deleteConsoleGroup(c *gin.Context) {
 
 // groupAvatar 把群头像从平台取回来再转发给控制台。
 //
+// 已被 /api/assistant/avatars/:kind/:id 取代（那条按内容哈希发地址、带 ETag 和
+// 回源校验）。这条路由留着，是因为用户浏览器里还缓存着旧界面发出的地址。
+//
 // 之所以要代理：Telegram 的文件地址形如 /file/bot<token>/<path>，Bot Token 就在
 // URL 里，直接交给浏览器等于把凭据发出去。这条路由在 /api 下面，本身受登录会话
 // 保护，头像字节由服务端取回后转发，Token 始终留在进程内。
@@ -312,7 +316,9 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 	set := assistant.GroupConfigSet{Groups: h.groupConfigs.Groups().GroupsForProfile(profileID)}
 	refresh := queryBool(c.Query("refresh"))
 	liveGroups, liveAvailable, warning := h.consoleGroupSources(c.Request.Context(), profileID, refresh)
-	groups := mergeConsoleGroupItems(base, set, liveGroups, h.isOneBotProfile, h.botConfigResolver())
+	groups := mergeConsoleGroupItems(base, set, liveGroups, func(profileID, groupID string) string {
+		return h.consoleAvatarURL(avatarKindGroup, profileID, groupID)
+	}, h.botConfigResolver())
 	for index := range groups {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
 		groups[index].SharedWith = h.groupSharedBots(profileID, groups[index].GroupID)
@@ -538,8 +544,9 @@ type groupNameCacheEntry struct {
 	fetchedAt time.Time
 }
 
-// consoleGroupAvatarURL 拼出走本机代理的群头像地址。取不到头像时这条地址回 404，
-// 前端按图片加载失败处理，显示占位图即可。
+// consoleGroupAvatarURL 拼出走本机代理的群头像地址。
+//
+// 已停止使用，新地址由 consoleAvatarURL 给出；保留是为了老接口的兼容性测试。
 func consoleGroupAvatarURL(groupID, profileID string) string {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
@@ -616,14 +623,20 @@ func (h *BotHandler) liveConsoleGroups(ctx context.Context, refresh bool) ([]bot
 	return liveGroups, true, ""
 }
 
-// qqAvatarForProfile 判断某台机器人的群能否套用 QQ 群头像地址规则。传函数而不是
-// 整个 handler，是为了让 mergeConsoleGroupItems 保持成可单测的纯函数。
-type qqAvatarForProfile func(profileID string) bool
+// groupAvatarURLForProfile 给出某个群的头像地址。传函数而不是整个 handler，
+// 是为了让 mergeConsoleGroupItems 保持成可单测的纯函数。
+type groupAvatarURLForProfile func(profileID, groupID string) string
 
 // mergeConsoleGroupItems 汇总控制台群列表。「全部机器人」视图里 set 混着好几台
 // 机器人的群，resolve 让每个群各自跟自己那台取默认值，别把当前这台的人设显示
 // 成别人的——那份回显被前端一提交就会真的存进去。
-func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []botAutoGroupInfo, qqAvatar qqAvatarForProfile, resolve assistant.BotConfigResolver) []consoleGroupItem {
+func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigSet, liveGroups []botAutoGroupInfo, avatarURLFor groupAvatarURLForProfile, resolve assistant.BotConfigResolver) []consoleGroupItem {
+	groupAvatar := func(profileID, groupID string) string {
+		if avatarURLFor == nil {
+			return ""
+		}
+		return avatarURLFor(profileID, groupID)
+	}
 	baseFor := func(profileID string) assistant.BotConfig {
 		if resolve == nil || strings.TrimSpace(profileID) == "" {
 			return base
@@ -657,12 +670,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 			// 还没配过的群跟着它所在的那台机器人给默认值。
 			cfg = assistant.DefaultGroupConfig(groupID, baseFor(live.BotProfileID))
 		}
-		avatarURL := ""
-		if live.QQAvatar {
-			avatarURL = freshAvatarURL(assistant.OneBotGroupAvatarURL(groupID))
-		} else {
-			avatarURL = consoleGroupAvatarURL(groupID, live.BotProfileID)
-		}
+		avatarURL := groupAvatar(live.BotProfileID, groupID)
 		items = append(items, consoleGroupItem{
 			GroupConfig:    cfg.WithDefaultsResolved(groupID, base, resolve),
 			GroupName:      strings.TrimSpace(live.GroupName),
@@ -676,12 +684,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 	}
 	for groupID, cfg := range saved {
 		// 已保存的群配置自带归属机器人，据此判断能不能用 QQ 的头像规则。
-		avatarURL := ""
-		if qqAvatar == nil || qqAvatar(strings.TrimSpace(cfg.BotProfileID)) {
-			avatarURL = freshAvatarURL(assistant.OneBotGroupAvatarURL(groupID))
-		} else {
-			avatarURL = consoleGroupAvatarURL(groupID, cfg.BotProfileID)
-		}
+		avatarURL := groupAvatar(cfg.BotProfileID, groupID)
 		items = append(items, consoleGroupItem{
 			GroupConfig: cfg,
 			AvatarURL:   avatarURL,
