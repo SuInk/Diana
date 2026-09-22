@@ -18,9 +18,13 @@ import (
 const agentScopeContextRadius = 1
 
 type agentReplyScope struct {
-	Routed                bool
-	ToolNames             []string
-	ContextMessageIDs     []string
+	Routed            bool
+	ToolNames         []string
+	ContextMessageIDs []string
+	// NeedsEvidence 表示这一轮的答案必须建立在本轮检索到的外部事实之上。
+	// 它和「tools 里有没有 web_search」是两件事：工具选择按「拿不准就保留」
+	// 宽选，拿它当强制门控会逼着闲聊也去搜；这个字段按「拿不准就填 false」严选。
+	NeedsEvidence         bool
 	KeepContextSummary    bool
 	KeepContextSummarySet bool
 }
@@ -739,4 +743,21 @@ func (r *Runtime) SetAgentResidency(profileID, id string, resident *bool) error 
 		return errors.New("缺少档位对象")
 	}
 	return agent.SaveExtensionResidency(AgentWorkspaceDir(), profileID, id, resident)
+}
+
+// requireEvidenceContextKey 把路由器的 needs_evidence 判断带到 Agent 运行处。
+// 中间隔着 generateReply 一层，走 context 比给一路函数加参数干净，和同一段里
+// replyRuleContextKey 的做法一致。
+type requireEvidenceContextKey struct{}
+
+// withRequireEvidence 标记这一轮必须先检索再收口。
+func withRequireEvidence(ctx context.Context) context.Context {
+	return context.WithValue(ctx, requireEvidenceContextKey{}, true)
+}
+
+// requireEvidenceFromContext 读回标记。没有标记时返回 false，也就是保持原来的
+// 行为：该不该搜由模型自己判断。
+func requireEvidenceFromContext(ctx context.Context) bool {
+	required, _ := ctx.Value(requireEvidenceContextKey{}).(bool)
+	return required
 }
