@@ -3994,6 +3994,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
 		currentText += "\n\n【图片上下文提示】" + notice
 	}
+	if annotation := r.avatarMatchAnnotation(ctx, event); annotation != "" {
+		currentText += "\n\n" + annotation
+	}
 	currentMessage, currentImageFailures := llmMessageFromEventWithVideoFramesDiagnostics(ctx, messageEvent, currentText, contextImageURLs)
 	if len(currentImageFailures) > 0 {
 		return "", newImageMediaUnavailableError(currentImageFailures)

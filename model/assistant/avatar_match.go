@@ -6,6 +6,8 @@ package assistant
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -24,16 +26,39 @@ const (
 	avatarMatchMinimumScore   = 0.82
 	avatarMatchMinimumLead    = 0.08
 	avatarMatchTimeout        = 10 * time.Second
+	// 自动匹配不能拖慢回复：比不完就算了，模型还能自己调 match_avatar 补。
+	avatarMatchAnnotationTimeout = 4 * time.Second
+	// 自动匹配前的白跑闸门。工具路径放宽到 5:4（用户可能截了个大致方形的图来问），
+	// 自动路径必须严：头像就是 1:1，差 2% 以内才算。群里方形的表情包不少，宽一点
+	// 就要为每张表情包比一遍全群头像。
+	avatarAnnotationMaxRatio = 1.02
+	// 头像原件不会太大也不会太小。几千像素的方形图是照片或壁纸，不是谁的头像。
+	avatarAnnotationMinSide = 32
+	avatarAnnotationMaxSide = 1280
+	// 同一张图在群里会被反复发（表情包尤其），结果按内容缓存，不重复比。
+	avatarAnnotationCacheTTL  = 12 * time.Hour
+	avatarAnnotationCacheSize = 512
 )
 
+// avatarAnnotationCache 按图片内容记住上次比对的结论。
+var avatarAnnotationCache sync.Map // content key -> avatarAnnotationCacheEntry
+
+type avatarAnnotationCacheEntry struct {
+	annotation string
+	storedAt   time.Time
+}
+
 type groupMemberAvatarMatch struct {
-	CandidatesComplete bool    `json:"candidates_complete"`
-	Matched            bool    `json:"matched"`
-	UserID             string  `json:"user_id,omitempty"`
-	DisplayName        string  `json:"display_name,omitempty"`
-	Score              float64 `json:"score,omitempty"`
-	RunnerUpScore      float64 `json:"runner_up_score,omitempty"`
-	Compared           int     `json:"compared"`
+	CandidatesComplete bool `json:"candidates_complete"`
+	// ImageSource 说明比的是哪张图：current_message 还是 quoted_message。
+	// 引用别人的图问「这是谁的头像」时，模型据此知道自己比的不是当前消息。
+	ImageSource   string  `json:"image_source,omitempty"`
+	Matched       bool    `json:"matched"`
+	UserID        string  `json:"user_id,omitempty"`
+	DisplayName   string  `json:"display_name,omitempty"`
+	Score         float64 `json:"score,omitempty"`
+	RunnerUpScore float64 `json:"runner_up_score,omitempty"`
+	Compared      int     `json:"compared"`
 }
 
 type avatarMatchCandidate struct {
@@ -45,9 +70,9 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
 		return groupMemberAvatarMatch{}, fmt.Errorf("头像匹配只能在群聊中使用")
 	}
-	segment, ok := firstStillImageSegment(event.Segments)
+	segment, imageSource, ok := avatarMatchImageSegment(event)
 	if !ok {
-		return groupMemberAvatarMatch{}, fmt.Errorf("当前消息没有可匹配的图片")
+		return groupMemberAvatarMatch{}, fmt.Errorf("当前消息和被引用的消息里都没有可匹配的图片")
 	}
 	body, _, err := ReadMessageImageSegment(ctx, segment)
 	if err != nil {
@@ -59,7 +84,7 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 	}
 	shortSide, longSide := min(config.Width, config.Height), max(config.Width, config.Height)
 	if shortSide <= 0 || longSide > shortSide*5/4 {
-		return groupMemberAvatarMatch{}, nil
+		return groupMemberAvatarMatch{ImageSource: imageSource}, nil
 	}
 	source, err := avatarFingerprint(body)
 	if err != nil {
@@ -91,11 +116,11 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 					if _, err := r.getGroupMemberInfoForEvent(matchCtx, event, event.GroupID, member.UserID); err != nil {
 						continue
 					}
-					avatar, err := provider.MemberAvatar(withDirectoryEvent(matchCtx, event), member.UserID)
+					avatar, err := cachedMemberAvatar(matchCtx, r, event, provider, member.UserID)
 					if err != nil {
 						continue
 					}
-					fingerprint, err := avatarFingerprint(avatar.Data)
+					fingerprint, err := avatarFingerprint(avatar)
 					if err != nil {
 						continue
 					}
@@ -147,7 +172,7 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 		candidates = append(candidates, candidate)
 	}
 	sort.Slice(candidates, func(left, right int) bool { return candidates[left].score > candidates[right].score })
-	result := groupMemberAvatarMatch{Compared: len(candidates), CandidatesComplete: complete && len(candidates) == len(members)}
+	result := groupMemberAvatarMatch{ImageSource: imageSource, Compared: len(candidates), CandidatesComplete: complete && len(candidates) == len(members)}
 	if len(candidates) == 0 {
 		return result, nil
 	}
@@ -162,6 +187,26 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 	result.UserID = candidates[0].member.UserID
 	result.DisplayName = candidates[0].member.DisplayName()
 	return result, nil
+}
+
+// avatarMatchImageSegment 找这次要比的图：先看当前消息，没有就用被引用的那条。
+//
+// 「回复一张图，问这是谁的头像」是最自然的问法，而当前消息里只有一个 reply 段，
+// 一张图都没有，所以这条路以前必然报「没有可匹配的图片」——线上第一次有人用这个
+// 工具就撞上了。图还在 event.Quoted.Segments 里，语音转写那边早就是这么回落的。
+//
+// 语义引用（Diana 自己推断「这个」指哪条）不算：那是猜出来的指向，比错了图还会
+// 一本正经地报出某个成员，不如让模型看见没有图。
+func avatarMatchImageSegment(event MessageEvent) (MessageSegment, string, bool) {
+	if segment, ok := firstStillImageSegment(event.Segments); ok {
+		return segment, "current_message", true
+	}
+	if event.Quoted != nil && !event.Quoted.Semantic {
+		if segment, ok := firstStillImageSegment(event.Quoted.Segments); ok {
+			return segment, "quoted_message", true
+		}
+	}
+	return MessageSegment{}, "", false
 }
 
 func firstStillImageSegment(segments []MessageSegment) (MessageSegment, bool) {
@@ -274,4 +319,140 @@ func imageEvidenceNewSinceLastBot(event MessageEvent, history []MessageEvent, bo
 		}
 	}
 	return false
+}
+
+// avatarMatchAnnotation 群里有人直接发一张头像时，先自己比一次，比中了把结论附在
+// 当前消息后面。
+//
+// 只挂工具不够：模型得先想到「这可能是谁的头像」才会去调，多数时候它直接就着画面
+// 说话了，或者像线上那次一样看到「未附加原图」就认定做不到。本地比对便宜（成员头像
+// 按天缓存，一天只下一次），先算好再交给模型，比让它自己想起来可靠。
+//
+// 只处理当前消息里新发的图。引用里的旧图不自动比：那通常是在聊图本身，不是在问
+// 「这是谁」，要问模型再调工具。没比中就什么都不附——群里表情包一条接一条，每条
+// 都加一句「未匹配」是纯粹的 token 开销。
+func (r *Runtime) avatarMatchAnnotation(ctx context.Context, event MessageEvent) string {
+	if r == nil || event.Kind != EventKindGroup || event.Outbound {
+		return ""
+	}
+	if _, ok := firstStillImageSegment(event.Segments); !ok {
+		return ""
+	}
+	segment, ok := firstStillImageSegment(event.Segments)
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, avatarMatchAnnotationTimeout)
+	defer cancel()
+	// 先读图判尺寸。这一步只碰本地缓存并解 JPEG/PNG 的头，不下载任何成员头像，
+	// 不是头像比例的图到此为止——群里绝大多数图走的是这条路。
+	body, _, err := ReadMessageImageSegment(ctx, segment)
+	if err != nil || !looksLikeAvatarImage(body) {
+		return ""
+	}
+	cacheKey := avatarAnnotationCacheKey(segment, body)
+	if cached, ok := loadAvatarAnnotation(cacheKey, event.GroupID); ok {
+		return cached
+	}
+	match, err := r.matchCurrentGroupMemberAvatar(ctx, event)
+	if err != nil {
+		return ""
+	}
+	if !match.Matched {
+		storeAvatarAnnotation(cacheKey, event.GroupID, "")
+		return ""
+	}
+	annotation := fmt.Sprintf("【头像匹配】当前图片与群成员 %s（user_id=%s）的头像本地逐像素比对一致（分数 %.2f，第二名 %.2f）。这是本地比对结果，不是看图猜的；要复核可调 match_avatar。",
+		match.DisplayName, match.UserID, match.Score, match.RunnerUpScore)
+	storeAvatarAnnotation(cacheKey, event.GroupID, annotation)
+	return annotation
+}
+
+// looksLikeAvatarImage 只看图片头：正方形、尺寸在头像的常见范围内才值得比。
+func looksLikeAvatarImage(body []byte) bool {
+	config, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	shortSide, longSide := min(config.Width, config.Height), max(config.Width, config.Height)
+	if shortSide < avatarAnnotationMinSide || longSide > avatarAnnotationMaxSide {
+		return false
+	}
+	return float64(longSide)/float64(shortSide) <= avatarAnnotationMaxRatio
+}
+
+// avatarAnnotationCacheKey 优先用内容哈希：同一张图在不同消息里 URL 不一样，
+// 按 URL 缓存等于不缓存。
+func avatarAnnotationCacheKey(segment MessageSegment, body []byte) string {
+	if sha := strings.TrimSpace(segment.Data[imageContentSHA256Key]); sha != "" {
+		return sha
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// 结论是按群缓存的：同一张头像在另一个群里对应的可能是别人，也可能谁都不是。
+func avatarAnnotationCacheScope(key, groupID string) string { return groupID + "\x00" + key }
+
+func loadAvatarAnnotation(key, groupID string) (string, bool) {
+	value, ok := avatarAnnotationCache.Load(avatarAnnotationCacheScope(key, groupID))
+	if !ok {
+		return "", false
+	}
+	entry, ok := value.(avatarAnnotationCacheEntry)
+	if !ok || time.Since(entry.storedAt) > avatarAnnotationCacheTTL {
+		avatarAnnotationCache.Delete(avatarAnnotationCacheScope(key, groupID))
+		return "", false
+	}
+	return entry.annotation, true
+}
+
+func storeAvatarAnnotation(key, groupID, annotation string) {
+	// sync.Map 不会自己变小，攒到上限就整个丢掉重来。这里存的是可以随时重算的
+	// 结论，清空最多让下一次多比一遍。
+	count := 0
+	avatarAnnotationCache.Range(func(any, any) bool { count++; return count < avatarAnnotationCacheSize })
+	if count >= avatarAnnotationCacheSize {
+		avatarAnnotationCache.Clear()
+	}
+	avatarAnnotationCache.Store(avatarAnnotationCacheScope(key, groupID), avatarAnnotationCacheEntry{annotation: annotation, storedAt: time.Now()})
+}
+
+// cachedMemberAvatar 按天缓存成员头像字节。
+//
+// 走 MemberAvatarChannel 的平台（Telegram）每次取头像都是两次 Bot API 调用：
+// getUserProfilePhotos 再 getFile 下载。比一次头像要遍历整群，不缓存就是一群人
+// × 两次调用，而且每张图都来一遍。OneBot 那条路早就有缓存——头像 URL 上挂了
+// diana_avatar_day，落到同一个磁盘媒体缓存里，一天只下一次；这里对齐同样的做法，
+// 连缓存目录都是同一个。
+//
+// 按天过期是因为头像会换：当天换的头像要到第二天才认得出来，代价可以接受，
+// 每次都重下不行。
+func cachedMemberAvatar(ctx context.Context, r *Runtime, event MessageEvent, provider MemberAvatarChannel, userID string) ([]byte, error) {
+	fetch := func(ctx context.Context) ([]byte, string, string, error) {
+		avatar, err := provider.MemberAvatar(withDirectoryEvent(ctx, event), userID)
+		if err != nil {
+			return nil, "", "", err
+		}
+		return avatar.Data, avatar.ContentType, "", nil
+	}
+	dir, err := historyMediaDir()
+	if err != nil {
+		body, _, _, fetchErr := fetch(ctx)
+		return body, fetchErr
+	}
+	key := strings.Join([]string{
+		"member-avatar",
+		r.currentPlatform(event),
+		strings.TrimSpace(event.ProfileID),
+		strings.TrimSpace(event.GroupID),
+		strings.TrimSpace(userID),
+		time.Now().Format("20060102"),
+	}, ":")
+	path, err := fetchMediaContent(ctx, dir, key, maxHistoryImageBytes, fetch)
+	if err != nil {
+		return nil, err
+	}
+	body, _, err := readHistoryImageSource(ctx, path, 0)
+	return body, err
 }

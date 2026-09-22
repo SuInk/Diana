@@ -110,6 +110,15 @@ type BotHandler struct {
 	groupNameCache    map[string]groupNameCacheEntry
 	userNameMu        sync.Mutex
 	userNameCache     map[string]userNameCacheEntry
+	avatarsOnce       sync.Once
+	avatars           *avatarCache
+}
+
+// avatarStore 懒初始化头像缓存：BotHandler 有好几个构造入口，放在 once 里比
+// 每个入口补一行可靠。
+func (h *BotHandler) avatarStore() *avatarCache {
+	h.avatarsOnce.Do(func() { h.avatars = newAvatarCache() })
+	return h.avatars
 }
 
 type BotFeatureFlags struct {

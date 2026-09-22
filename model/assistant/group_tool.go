@@ -68,7 +68,7 @@ func (t *dianaGroupTool) Description() string {
 	if !t.runtime.groupToolUsesPlatform(t.event) {
 		return t.runtime.groupToolPrompt(t.event) + " 此工具只读；Diana 回复设置使用 bot_config。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
 	}
-	return `本地群成员头像匹配：把当前图片与可用成员头像做模式比对，不凭视觉猜身份。群资料、名单和成员查询使用 platform；Diana 回复设置使用 bot_config。此工具只读。`
+	return `本地群成员头像匹配：把图片与可用成员头像做模式比对，不凭视觉猜身份。取当前消息里的图，当前消息没有图就取被引用消息里的图，所以「回复一张图问这是谁的头像」可以直接调。群资料、名单和成员查询使用 platform；Diana 回复设置使用 bot_config。此工具只读。`
 }
 
 // InputSchema 声明参数契约。取值范围引用与校验同一份常量。
@@ -130,9 +130,13 @@ func (t *dianaGroupTool) Run(ctx context.Context, input map[string]any) (string,
 		if err != nil {
 			return "", err
 		}
-		message := "当前图片未达到可靠的群成员头像匹配阈值。"
+		subject := "当前图片"
+		if match.ImageSource == "quoted_message" {
+			subject = "被引用消息里的图片"
+		}
+		message := subject + "未达到可靠的群成员头像匹配阈值。"
 		if match.Matched {
-			message = fmt.Sprintf("当前图片与群成员 %s 的头像匹配。", match.DisplayName)
+			message = fmt.Sprintf("%s与群成员 %s 的头像匹配。", subject, match.DisplayName)
 		}
 		return marshalDianaGroupResult(dianaGroupResult{
 			OK: true, Action: "match_avatar", Message: message, AvatarMatch: &match, Limited: !match.CandidatesComplete,

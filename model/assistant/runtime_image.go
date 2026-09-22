@@ -390,7 +390,11 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 	for _, source := range sources {
 		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyImageCachedDescriptions(ctx, source)))
 	}
-	return "【当前消息引用的历史图片仍未附加原图】\n" + strings.Join(lines, "\n")
+	// 摘要是给理解用的，不是判断依据。没附原图不等于工具也读不到：history_media
+	// 和 match_avatar 都按 message_id 自己去取原图。线上出过一次——引用一张图问
+	// 「这是谁的头像」，模型看见「未附加原图」就直接收尾说匹配失败，工具一次都没调，
+	// 失败原因还是照着摘要编的。
+	return "【当前消息引用的历史图片仍未附加原图】\n需要看原图或做图片比对时调用工具自行读取（history_media 取原图，match_avatar 比对群成员头像），不要拿下面的摘要当结论，也不要因为没附原图就说做不到。\n" + strings.Join(lines, "\n")
 }
 
 func segmentsWithoutHistoricalStillImages(segments []MessageSegment) []MessageSegment {

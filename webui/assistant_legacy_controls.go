@@ -328,14 +328,15 @@ func (h *BotHandler) uploadGroupTestFile(c *gin.Context) {
 
 func (h *BotHandler) autoInfo(c *gin.Context) {
 	status := h.runtime.Status()
+	profileID := botProfileScope(c)
 	info := botAutoInfoResponse{
 		BotAccount: strings.TrimSpace(status.Channel.SelfID),
-		AvatarURL:  assistant.OneBotMemberAvatarURL(status.Channel.SelfID),
+		AvatarURL:  h.consoleAvatarURL(avatarKindMember, profileID, status.Channel.SelfID),
 	}
 	if data, err := h.runtime.CallOneBotAPI(c.Request.Context(), "get_login_info", map[string]any{}); err == nil {
 		if userID := firstNonEmptyWebUI(stringFromAnyWebUI(data["user_id"]), stringFromAnyWebUI(data["self_id"])); userID != "" {
 			info.BotAccount = userID
-			info.AvatarURL = assistant.OneBotMemberAvatarURL(userID)
+			info.AvatarURL = h.consoleAvatarURL(avatarKindMember, profileID, userID)
 		}
 		info.Nickname = firstNonEmptyWebUI(stringFromAnyWebUI(data["nickname"]), stringFromAnyWebUI(data["user_name"]), stringFromAnyWebUI(data["name"]))
 	}

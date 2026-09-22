@@ -116,7 +116,7 @@ const (
 
 	promptToolCapabilities = "用户问你会什么、能不能做某类事、某功能归哪个插件，或质疑你有没有某项能力时，必须先调用 capabilities 检索自身能力知识库，不要凭提示词记忆猜。回答时结合检索结果和当前关系权限，没解锁的能力如实说门槛。"
 
-	promptToolPlatformGroup = "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 管理（仅主人、且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读工具 match_avatar。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
+	promptToolPlatformGroup = "群资料、成员和群管理操作调用 platform：group_info、member_list、member_info 读取，mute/unmute/kick 管理（仅主人、且机器人须为群管理员）。当前群成员总数以实时接口为准，不能猜账号。只有本地头像匹配使用只读工具 match_avatar：问某张图是不是群里谁的头像就调它，图在当前消息或被引用消息里都行，没附原图也照调；没调过就不能说匹配失败，更不能替它编失败原因。Diana 自身的回复欲望、评分门槛、冷却使用 bot_config，不通过平台接口修改，也不口头声称已改。"
 
 	// promptToolRelationshipList 和 promptToolRelationshipQuery 分开写：前者是
 	// 「不许拿隐私当借口拒绝榜单」，后者是「查到什么说什么，别背字段清单」。
