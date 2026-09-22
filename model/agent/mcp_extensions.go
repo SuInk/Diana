@@ -366,6 +366,15 @@ func (m *ExtensionManager) mcpExtensionStates() []ExtensionState {
 		}
 		tools := toolsByName[name]
 		sort.Strings(tools)
+		// 运行期没有记到错误时，仍然便宜地查一次本地命令在不在。目录页本来就不
+		// 启进程（见 AdministerExtensions 的注释），少了这一下，缺二进制的服务在
+		// 卡片上和正常的一模一样，要等某次对话调用工具才暴露。
+		message := errorsByName[name]
+		if message == "" {
+			if err := checkLocalMCPCommand(server); err != nil {
+				message = localMCPCommandError(server, err).Error()
+			}
+		}
 		states = append(states, ExtensionState{
 			Kind:      ExtensionKindMCP,
 			ID:        "mcp:" + name,
@@ -376,7 +385,7 @@ func (m *ExtensionManager) mcpExtensionStates() []ExtensionState {
 			Source:    source,
 			Transport: server.transport(),
 			Tools:     tools,
-			Error:     errorsByName[name],
+			Error:     message,
 		})
 	}
 	return states
