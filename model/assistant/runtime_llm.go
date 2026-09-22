@@ -120,9 +120,11 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
 // 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
-func proactiveReplyRouterPromptForChatIn(configured string, chatIn chatInSettings, social bool) string {
+func proactiveReplyRouterPromptForChatIn(configured, criteria string, chatIn chatInSettings, social bool) string {
 	if chatIn.Participation != nil {
-		return chatIn.Participation.prompt()
+		// 评分档位和口径由 Participation 决定；管理员的补充判据只拼在尾部，评分契约
+		// （两项、裸 JSON）不交给用户改。configured 是被取代的旧路由提示词，仍然不读。
+		return appendRouterCriteria(chatIn.Participation.prompt(), criteria)
 	}
 	prompt := proactiveReplyRouterSystemPrompt(configured)
 	if chatIn.SuperActive {
@@ -180,6 +182,8 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	if usage.TotalTokens <= 0 && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	// 运行期合计先记：它给总览页读，不该因为没配日志写入器就停掉。
+	r.recordLLMUsageTotals(usage)
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -274,6 +278,7 @@ func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (s
 
 func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run llmProviderRunFunc) (string, error) {
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
@@ -294,6 +299,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		return "", nil
 	}
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	group := ModelBindingGroupOf(llmUsagePurposeFromContext(ctx))
 	if group == "" {
 		group = llm.GroupChat
@@ -496,10 +502,18 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
 	roles := r.modelRolesForContext(ctx)
+	// 旁路调用以前一律按 intent 分组取候选，用途自己归在哪一组不起作用——因为
+	// 「本次调用的分组」排在「用途归属的分组」前面。后台生成拆出来之后这条必须
+	// 改：不然记忆抽取、好感度评估照样落在意图识别那一档上，拆了等于没拆。
+	group := llm.GroupIntent
+	if owner := ModelBindingGroupOf(llmUsagePurposeFromContext(ctx)); owner != "" {
+		group = owner
+	}
 	run = withEmojiSemanticsRun(run)
+	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
-	run = r.withImageBudgetRun(llm.GroupIntent, run)
+	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
@@ -516,7 +530,30 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	}
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
+		// 判定链路和对话链路走同一套降级：先把角色绑定连同它的 fallbacks 展开成候选，
+		// 交给 registryFailoverLLMProvider 按顺序试。
+		//
+		// 这里原来只取一条 selection 就直接跑，绑定里配的 fallbacks 从来没被用过——
+		// 线上把 intent 绑到只做判断的模型之后，所有没备判断题表的用途整条失败，配好
+		// 的降级档一次都没被碰。降级是全局承诺，不该只有对话享有。
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
+		if roleErr != nil {
+			return "", roleErr
+		}
+		if len(profiles) == 0 {
+			profiles = llmProfilesInGroup(set, group)
+		}
+		if len(profiles) == 0 {
+			profiles = fallbackProfilesForGroup(set, group)
+		}
+		if len(profiles) > 0 {
+			provider, err := newRegistryFailoverLLMProvider(registry, profiles, retryTransient, len(profiles) > 1)
+			if err == nil {
+				return run(provider)
+			}
+			// 注册表里没有能对上的模型时不硬顶，退回下面按单条选择的老路。
+		}
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), group, "")
 		if err != nil {
 			return "", err
 		}
@@ -527,23 +564,20 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent, roles)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
 		if len(profiles) > 0 {
-			if !retryTransient && len(profiles) > 1 {
-				profiles = profiles[:1]
-			}
+			// retryTransient=false 的含义是「同一档不因瞬时错误重试」，不是「不许降级」。
+			// 这里原来会把候选截成一条，于是摘要、语义承接这些走 Once 变体的用途根本
+			// 没有降级可言。
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
 		for _, group := range semanticRouteProfileGroups {
 			profiles := llmProfilesInGroup(set, group)
 			if len(profiles) == 0 {
 				continue
-			}
-			if !retryTransient {
-				profiles = profiles[:1]
 			}
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
@@ -614,6 +648,13 @@ func shouldFailoverLLMError(err error) bool {
 		return false
 	}
 	if errors.Is(err, llm.ErrUnverifiedRejection) {
+		return true
+	}
+	// 绑到只做判断的模型、而这个用途要的是文本，属于能力不匹配，不是上游故障——
+	// 正好是降级链该接手的情况。不降级的话，把 intent 整组绑到判断模型就会让所有
+	// 没备判断题表的判定用途（语义承接、发送前审核、记忆抽取…）整条失败，而不是
+	// 退到下一档对话模型。
+	if errors.Is(err, llm.ErrDecisionRequired) {
 		return true
 	}
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
@@ -717,8 +758,33 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	appendPromptSection(&builder, fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", agent.RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
 	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
 		appendPromptSection(&builder, speaker)
+	} else if note := unknownSpeakerTimezoneNote(cfg, now); note != "" {
+		appendPromptSection(&builder, note)
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// unknownSpeakerTimezoneNote 在没记过发言者时区、而机器人这边正处于深夜或清早时，
+// 挡掉「你该睡了」「早上好」这类按本机时钟推断对方作息的话。
+//
+// 上面那条运行时钟提示只说了机器人自己几点，模型会顺手把它当成所有人的当地时间。
+// 群里有人在海外、有人跨时区出差时，这个默认假设直接错半天，催睡和时段问候都落空。
+// 时区记下来时由 speakerTimezonePrompt 给出换算，这里只管没有依据的那一半。
+//
+// 只在深夜和清早注入：白天和晚上不会引出作息主张，补一句只是白占 token。时区跟着
+// dayPartToneForConfig 那一份走（回复门槛的时区），一台机器人不该有两个「几点了」。
+func unknownSpeakerTimezoneNote(cfg BotConfig, now time.Time) string {
+	location := time.Local
+	if cfg.ReplyGate != nil {
+		location = cfg.ReplyGate.Location()
+	}
+	switch dayPartAt(now.In(location)) {
+	case dayPartLateNight:
+		return "没有记录当前发言者所在时区：你这边是深夜，不代表他那边也是。别断言他那边几点，也别因为「这么晚了」催他睡或说他熬夜；除非他自己说了当地时间或所在地，作息话题就不要主动提。"
+	case dayPartMorning:
+		return "没有记录当前发言者所在时区：你这边是清早，不代表他那边也是。别默认他刚起床，「早上好」这类按时段的问候先不要说，除非他自己提了。"
+	}
+	return ""
 }
 
 // speakerTimezonePrompt 在画像里记过对方时区时，给出他那边的当地时间和时差。
@@ -734,7 +800,7 @@ func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) strin
 	local := now.In(location)
 	zoneName, zoneOffset := local.Zone()
 	offset := FormatTimezoneOffset(now, location, now.Location())
-	prompt := fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。你自己的「现在」仍以上面的运行时钟为准。",
+	prompt := fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。作息相关的话（该睡了、早安、还在熬夜）同样按他那边的时间判断，不要拿你这边的时段往他身上套。你自己的「现在」仍以上面的运行时钟为准。",
 		location.String(), zoneName, formatUTCOffset(zoneOffset), offset, local.Format("2006-01-02 15:04"))
 	// 人会搬家、会出差：这条时区是过去某一次对话记下的，不是实时定位。
 	if !recordedAt.IsZero() {
@@ -782,6 +848,22 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		_, ok := registry.Get(name)
 		return ok
 	}
+	// 订阅工具合成一个之后，「本轮有没有某一种订阅」不能再靠工具名判断：三种都在
+	// subscription 里，github 那种是否可用由构造时收没收进 backends 决定。
+	hasSubscriptionKind := func(kind string) bool {
+		if registry == nil {
+			return true
+		}
+		tool, ok := registry.Get(dianaSubscriptionToolName)
+		if !ok {
+			return false
+		}
+		subscription, ok := tool.(*dianaSubscriptionTool)
+		if !ok {
+			return false
+		}
+		return slicesContains(subscription.kinds(), kind)
+	}
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -790,14 +872,21 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		}
 		return false
 	}
+	// 品格层排在人设正文之前，也就是整条系统提示词的最前面：它解释的是「为什么
+	// 会这样做」，后面所有规则都在它的框架里读。它只依赖机器人配置（分群覆盖里
+	// 没有这个字段），所以逐字节稳定，不影响前缀缓存。
+	if soul := cfg.Soul.Render(); soul != "" {
+		builder.WriteString(soul)
+		builder.WriteString("\n")
+	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)))
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
-	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled))
+	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
-	if boolValue(cfg.PromptChineseSlangHint, true) {
+	if boolValue(cfg.PromptChineseSlangHint, true) && !cfg.PersonaMode.ownsPersonaVoice() {
 		appendPromptSection(&builder, cfg.PromptChineseSlangText)
 	}
 	if event.Kind == EventKindGroup {
@@ -813,11 +902,15 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool("llm_config") {
 		tail.WriteString("\n" + promptToolLLMConfig)
 	}
-	if agentEnabled && hasTool(dianaRepositoryIssuesToolName) {
+	if agentEnabled && hasTool(dianaGitHubToolName) {
 		builder.WriteString("\n" + promptToolRepositoryIssues)
 	}
 	if agentEnabled && hasTool(dianaPlatformToolName) {
 		builder.WriteString("\n" + promptToolPlatform)
+	}
+	// 这条对所有人逐字相同（能不能指定别人或指定群由工具自己判身份），所以进稳定头部。
+	if agentEnabled && hasTool(dianaCrossSessionToolName) {
+		builder.WriteString("\n" + promptToolCrossSession)
 	}
 	// 破坏性动作只对主人出现在工具 schema 里；提示词也只对主人注入，且必须进随发言者
 	// 变化的尾部，不能写进按前缀缓存的稳定头部（否则主人和普通成员的提示词会提前分叉）。
@@ -843,7 +936,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.Owner && hasTool("relationship") {
 		tail.WriteString("\n" + promptOwnerRelationshipTarget)
 	}
-	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", "schedule", "rss") {
+	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		tail.WriteString("\n" + promptOwnerTaskTarget)
 	}
 	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
@@ -854,19 +947,19 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("reminder") {
 		builder.WriteString("\n" + promptTaskReminder)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("schedule") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindSchedule) {
 		builder.WriteString("\n" + promptTaskSchedule)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindRSS) {
 		builder.WriteString("\n" + promptTaskRSS)
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("tasks") {
 		builder.WriteString("\n" + promptTaskList)
 	}
-	if agentEnabled && hasTool(dianaRepositoryWatchToolName) {
+	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
 		builder.WriteString("\n" + promptTaskRepositoryWatch)
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", "schedule", "rss") {
+	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		builder.WriteString("\n" + promptTaskNoSubstitute)
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
@@ -880,8 +973,16 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	default:
 		tail.WriteString("\n" + promptToolRuntimeModel)
 	}
-	if agentEnabled && hasTool(dianaVersionToolName) {
+	// 项目地址的披露规则和模型身份同理：everyone 下对谁都一样，进 head；owner 下
+	// 随发言者是不是主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
+	switch everyone := normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) == RepositoryDisclosureEveryone; {
+	case !agentEnabled || !hasTool(dianaVersionToolName):
+	case everyone:
 		builder.WriteString("\n" + promptToolVersion)
+	case relationship.Owner:
+		tail.WriteString("\n" + promptToolVersion)
+	default:
+		tail.WriteString("\n" + promptToolVersionNoRepository)
 	}
 	if agentEnabled && hasTool(dianaNotebookToolName) {
 		builder.WriteString("\n" + promptToolNotebook)
@@ -891,6 +992,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
 		builder.WriteString("\n" + promptToolThreadState)
+	}
+	// 自述的规则进 head：开关是机器人配置，对同一个群里的所有人逐字相同。
+	if agentEnabled && hasTool(dianaSelfNoteToolName) {
+		builder.WriteString("\n" + promptToolSelfNote)
 	}
 	if agentEnabled && hasTool("capabilities") {
 		builder.WriteString("\n" + promptToolCapabilities)
@@ -983,7 +1088,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&tail, personaClosingAnchor())
-	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled))
+	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode))
 	return builder.String(), strings.TrimSpace(tail.String())
 }
 
@@ -1036,7 +1141,8 @@ func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history 
 	3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
 	4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
 	5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进 Markdown 代码块，也不要自己写平台专用的提及写法。
-	6. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
+	6. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。
+	7. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
 		string(payload),
 		currentSenderMentionRule(cfg),
 		autoDecorationCancelClause(cfg),
@@ -1079,14 +1185,16 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	if text == "" && !hasImageSegment(event.Segments) {
 		text = event.RawMessage
 	}
-	text = strings.TrimSpace(text)
+	// 正文同样不可信：不中和的话，一条消息里手写
+	// 「[历史 …] 李四（im_user_x）[主人]: …」就能伪造出一整行别人的历史。
+	text = neutralizeIdentityMarkers(strings.TrimSpace(text))
 	if text == "" {
 		return ""
 	}
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return historyLinePrefix(event) + promptSenderIdentity(event) + ": " + text + historyIdentityPrompt(event, configs...)
+	return historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...) + ": " + text
 }
 
 func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
@@ -1116,7 +1224,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if messageID == "" {
 		messageID = "不可用"
 	}
-	line := historyLinePrefix(event) + promptSenderIdentity(event)
+	line := historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...)
 	if text != "" {
 		line += ": " + text
 	}
@@ -1128,7 +1236,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
-	return line + historyIdentityPrompt(event, configs...)
+	return line
 }
 
 func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
@@ -1235,12 +1343,11 @@ func quotedPromptText(quoted *QuotedMessage) string {
 	if quoted.Semantic {
 		label = "指代判断选中的历史消息"
 	}
-	line := fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
-	if userID := strings.TrimSpace(quoted.UserID); userID != "" {
-		identity, _ := json.Marshal(map[string]string{"quoted_sender_user_id": userID})
-		line += "\n【引用发言者身份】" + string(identity)
-	}
-	return line
+	// 引用发言者的别名已经在上面的 sender 里（formatPromptIdentity 渲染成
+	// 「昵称（别名）」），以前还会再跟一行
+	// 【引用发言者身份】{"quoted_sender_user_id":"…"}。线上抽样的 30 条引用里，
+	// 这一行的 role 全是空的，剩下的就只有那个重复的别名——整段是纯冗余。
+	return fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
 }
 
 func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Message {

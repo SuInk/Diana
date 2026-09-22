@@ -22,11 +22,41 @@ import (
 
 const defaultScreenshotPath = ".agent-browser/screenshot.png"
 
+// BuiltinBrowserBridge 是内置浏览器的句柄，由 model/browserbox.Manager 实现。
+//
+// 地址每次调用现取，而不是登记工具时定死：用户在 WebUI 里按下接管之后，
+// 下一条工具调用就该被拒，而不是等机器人重建工具表。
+type BuiltinBrowserBridge interface {
+	// AgentCDPURL 返回可用的调试地址；关着、没起来或有人在接管时返回空串。
+	AgentCDPURL() string
+	// Unavailable 说明现在为什么用不了，这句话会原样交给模型。
+	Unavailable() string
+}
+
 type browserToolBase struct {
 	root     string
 	cdpURL   string
+	builtin  BuiltinBrowserBridge
 	timeout  time.Duration
 	maxChars int
+}
+
+// endpoint 决定这次调用连哪个浏览器。内置浏览器可用时优先用它：它是 Diana
+// 自己的浏览器，登录态留在数据目录里，比一个可能根本没开的外部调试端口有用。
+func (b browserToolBase) endpoint() (string, error) {
+	if b.builtin != nil {
+		if url := strings.TrimSpace(b.builtin.AgentCDPURL()); url != "" {
+			return strings.TrimRight(url, "/"), nil
+		}
+		if reason := strings.TrimSpace(b.builtin.Unavailable()); reason != "" {
+			return "", errors.New(reason)
+		}
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(b.cdpURL), "/")
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:9222"
+	}
+	return baseURL, nil
 }
 
 type BrowserOpenTool struct {
@@ -64,7 +94,13 @@ func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (string
 			return "", err
 		}
 	}
-	_ = client.waitReady(ctx)
+	// 新开标签页时 /json/new 立刻就返回了，页面还停在 about:blank：这时候直接读
+	// 会得到一份空快照，而模型会把它当成「这一页就是空的」。等到真的跳过去为止。
+	if pageURL != "" && pageURL != "about:blank" {
+		_ = client.waitNavigated(ctx)
+	} else {
+		_ = client.waitReady(ctx)
+	}
 	return t.base.pageSnapshot(ctx, client, "")
 }
 
@@ -284,9 +320,9 @@ return {
 func (b browserToolBase) pageClient(ctx context.Context, pageURL string, newTab bool) (*cdpClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
-	baseURL := strings.TrimRight(strings.TrimSpace(b.cdpURL), "/")
-	if baseURL == "" {
-		baseURL = "http://127.0.0.1:9222"
+	baseURL, err := b.endpoint()
+	if err != nil {
+		return nil, err
 	}
 	target, err := b.pickTarget(ctx, baseURL, pageURL, newTab)
 	if err != nil {
@@ -314,12 +350,40 @@ func (b browserToolBase) pickTarget(ctx context.Context, baseURL, pageURL string
 	if err != nil {
 		return browserTarget{}, err
 	}
+	// 挑一个真的载着网页的标签页。一次性浏览器里通常只有一个标签页，随便挑都对；
+	// 内置浏览器是常驻的，开机那个 about:blank 会一直排在列表里，照单全收的话
+	// browser_text 读到的永远是空白页——刚 browser_open 打开的那一页反而读不到。
+	var fallback browserTarget
 	for _, target := range targets {
-		if target.Type == "page" && target.WebSocketDebuggerURL != "" {
-			return target, nil
+		if target.Type != "page" || target.WebSocketDebuggerURL == "" {
+			continue
 		}
+		if isBlankBrowserTarget(target.URL) {
+			if fallback.WebSocketDebuggerURL == "" {
+				fallback = target
+			}
+			continue
+		}
+		return target, nil
+	}
+	if fallback.WebSocketDebuggerURL != "" {
+		return fallback, nil
 	}
 	return newBrowserTarget(ctx, baseURL, firstNonEmptyString(pageURL, "about:blank"))
+}
+
+// isBlankBrowserTarget 判断一个标签页是不是「还没装东西」的那种：新标签页、
+// 空白页和浏览器自己的内部页都算。
+func isBlankBrowserTarget(rawURL string) bool {
+	trimmed := strings.TrimSpace(strings.ToLower(rawURL))
+	switch {
+	case trimmed == "", trimmed == "about:blank":
+		return true
+	case strings.HasPrefix(trimmed, "chrome://"), strings.HasPrefix(trimmed, "edge://"),
+		strings.HasPrefix(trimmed, "devtools://"), strings.HasPrefix(trimmed, "chrome-extension://"):
+		return true
+	}
+	return false
 }
 
 type browserTarget struct {
@@ -477,6 +541,29 @@ window.addEventListener("load", done, {once:true});
 setTimeout(done, 3000);
 })`)
 	return err
+}
+
+// waitNavigated 等页面真的离开 about:blank 并加载完。轮询而不是监听事件：
+// 这条客户端只做请求响应，加事件订阅要改的不止一处，而这里的等待窗口很短。
+func (c *cdpClient) waitNavigated(ctx context.Context) error {
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		value, err := c.evaluate(ctx, `(() => location.href !== "about:blank" && document.readyState !== "loading")()`)
+		if err != nil {
+			return err
+		}
+		var ready bool
+		if json.Unmarshal(value, &ready) == nil && ready {
+			// 文档已经换过去了，再等一次 load 让首屏内容落定。
+			return c.waitReady(ctx)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	return nil
 }
 
 func validateBrowserURL(value string) error {

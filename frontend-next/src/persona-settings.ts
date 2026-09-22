@@ -4,6 +4,9 @@ export function personaFromSettings(current: BotProfileConfig, name: string) {
   return {
     name,
     system_prompt: current.system_prompt ?? "",
+    // 品格层跟着人设走，不在这里逐字段拆开：它只有人能改，前端只负责原样搬运。
+    soul: current.soul,
+    persona_mode: current.persona_mode ?? "fill",
     action_description_enabled: current.action_description_enabled ?? false,
     daypart_tone_enabled: current.daypart_tone_enabled ?? false,
     self_reference: current.self_reference ?? "",
@@ -16,6 +19,9 @@ export function applyPersonaSettings(current: BotProfileConfig, persona: Persona
   return {
     ...current,
     system_prompt: prompt.trim() && (replacePrompt || !current.system_prompt?.trim()) ? prompt : current.system_prompt,
+    soul: persona.soul ?? current.soul,
+    // 档位跟着正文一起换：这份人设的正文带不带段头，只有它自己的档位说了算。
+    persona_mode: persona.persona_mode ?? "fill",
     action_description_enabled: persona.action_description_enabled ?? false,
     daypart_tone_enabled: persona.daypart_tone_enabled ?? current.daypart_tone_enabled,
     self_reference: persona.self_reference ?? "",
@@ -40,6 +46,8 @@ export function currentPersonaSelection(current: BotProfileConfig, personas: Per
   const actual = personaFromSettings(current, "");
   const expected = personaFromSettings(preset as BotProfileConfig, "");
   for (const key of Object.keys(actual) as (keyof typeof actual)[]) {
+    // soul 是对象，=== 比的是引用，逐字段比较会把每套预设都判成「自定义」。
+    if (key === "soul") continue;
     if (key === "name" || (key === "system_prompt" && !preset.system_prompt?.trim()) || (key === "daypart_tone_enabled" && preset.daypart_tone_enabled === undefined)) continue;
     if (actual[key] !== expected[key]) return "custom";
   }

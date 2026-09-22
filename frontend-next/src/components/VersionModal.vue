@@ -747,7 +747,7 @@ async function pollInstallResult(): Promise<void> {
     // 服务切换期间请求会短暂失败，保留升级中状态并继续等待新进程。
     if (installStartedAt > 0 && Date.now() - installStartedAt > 150_000) {
       installTracking.value = false;
-      operationError.value = `重启并安装 ${installTarget || "目标版本"} 后服务超过 150 秒仍未恢复，请检查 .diana-updates/last-update.log`;
+      operationError.value = `重启并安装 ${installTarget || "目标版本"} 后服务超过 150 秒仍未恢复，请检查数据目录下的 .diana-updates/last-update.log`;
       toastError(operationError.value);
     }
   }

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/browserbox"
+	"github.com/SuInk/diana/model/browserctl"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/llmauth"
 	"github.com/SuInk/diana/model/updater"
@@ -42,6 +44,8 @@ const (
 	releaseCacheKey      = "system_release_cache"
 	updateGitHubTokenKey = "system_update_github_token"
 	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
+	browserControlKey    = "browser_control"
+	browserBoxKey        = "browser_box"
 )
 
 type SQLiteStore struct {
@@ -55,6 +59,30 @@ type SQLiteStore struct {
 	historyVectors bool
 	userMemoryMu   sync.Mutex
 	retryMu        sync.Mutex
+	// memoryEventJobDelay 覆盖事件记忆任务的攒批窗口，nil 表示沿用默认值。
+	memoryEventJobDelay *time.Duration
+	// walCancel/walDone 控制 WAL 回收巡检，见 wal_maintenance.go。
+	walCancel context.CancelFunc
+	walDone   chan struct{}
+}
+
+// SetMemoryEventJobDelay 覆盖事件记忆任务入队后的等待时间。0 表示入队即可领取，
+// 测试用它去掉攒批窗口。只在启动时或测试里设置一次。
+func (s *SQLiteStore) SetMemoryEventJobDelay(delay time.Duration) {
+	if s == nil {
+		return
+	}
+	if delay < 0 {
+		delay = 0
+	}
+	s.memoryEventJobDelay = &delay
+}
+
+func (s *SQLiteStore) memoryEventDelay() time.Duration {
+	if s == nil || s.memoryEventJobDelay == nil {
+		return assistant.MemoryEventJobDelay
+	}
+	return *s.memoryEventJobDelay
 }
 
 // NewSQLiteStore 打开 SQLite 数据库并执行迁移。
@@ -98,6 +126,7 @@ PRAGMA foreign_keys = ON;
 		_ = db.Close()
 		return nil, err
 	}
+	store.startWALMaintenance()
 	return store, nil
 }
 
@@ -115,6 +144,7 @@ func (s *SQLiteStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.stopWALMaintenance()
 	var readErr error
 	if s.readDB != nil {
 		readErr = s.readDB.Close()
@@ -285,6 +315,30 @@ func (s *SQLiteStore) LoadWebUIAPIKeys(ctx context.Context) (WebUIAPIKeySet, boo
 // SaveWebUIAPIKeys 保存对外开放接口密钥集合。
 func (s *SQLiteStore) SaveWebUIAPIKeys(ctx context.Context, set WebUIAPIKeySet) error {
 	return s.saveJSON(ctx, webuiAPIKeysKey, set)
+}
+
+// LoadBrowserControl 读取浏览器控制的策略与令牌。
+func (s *SQLiteStore) LoadBrowserControl(ctx context.Context) (browserctl.Document, bool, error) {
+	var doc browserctl.Document
+	ok, err := s.loadJSON(ctx, browserControlKey, &doc)
+	return doc, ok, err
+}
+
+// SaveBrowserControl 保存浏览器控制的策略与令牌。令牌只存哈希，见 browserctl.Token。
+func (s *SQLiteStore) SaveBrowserControl(ctx context.Context, doc browserctl.Document) error {
+	return s.saveJSON(ctx, browserControlKey, doc)
+}
+
+// LoadBrowserBox 读取内置浏览器的配置。
+func (s *SQLiteStore) LoadBrowserBox(ctx context.Context) (browserbox.Document, bool, error) {
+	var doc browserbox.Document
+	ok, err := s.loadJSON(ctx, browserBoxKey, &doc)
+	return doc, ok, err
+}
+
+// SaveBrowserBox 保存内置浏览器的配置。登录态不在这里，它在 profile 目录里。
+func (s *SQLiteStore) SaveBrowserBox(ctx context.Context, doc browserbox.Document) error {
+	return s.saveJSON(ctx, browserBoxKey, doc)
 }
 
 // LoadPluginStates 读取插件状态。

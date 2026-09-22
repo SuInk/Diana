@@ -25,9 +25,12 @@ type promptContextPreload struct {
 	threadStates        []ThreadState
 	memoryContext       string
 	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
-	memoryUsage       contextLayerUsage
-	notebookContext   string
-	worldBookContext  string
+	memoryUsage      contextLayerUsage
+	notebookContext  string
+	worldBookContext string
+	selfNoteContext  string
+	// selfNoteUsage 是自述层进入全局预算之前的自有账。
+	selfNoteUsage     contextLayerUsage
 	expressionContext string
 	mediaIndex        string
 }
@@ -44,7 +47,7 @@ func (r *Runtime) startPromptContextPreload(
 ) *promptContextPreload {
 	preload := &promptContextPreload{}
 
-	preload.wg.Add(6)
+	preload.wg.Add(7)
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:48")
 		defer preload.wg.Done()
@@ -75,6 +78,11 @@ func (r *Runtime) startPromptContextPreload(
 		defer preload.wg.Done()
 		preload.expressionContext = r.expressionStyleContext(ctx, event)
 	}()
+	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:72")
+		defer preload.wg.Done()
+		preload.selfNoteContext, preload.selfNoteUsage = r.selfNoteContext(ctx, event)
+	}()
 	if wantMediaIndex {
 		preload.wg.Add(1)
 		go func() {
@@ -96,7 +104,7 @@ func (p *promptContextPreload) wait() {
 // layerUsage 汇总各层的自有账。authoritativePluginContext 那条路径上 preload 为
 // nil，此时只有便签那份（也多半是零值），照样要能取。
 func (p *promptContextPreload) layerUsage(extra ...contextLayerUsage) []contextLayerUsage {
-	layers := make([]contextLayerUsage, 0, len(extra)+1)
+	layers := make([]contextLayerUsage, 0, len(extra)+2)
 	for _, usage := range extra {
 		if usage.Layer != "" {
 			layers = append(layers, usage)
@@ -104,6 +112,9 @@ func (p *promptContextPreload) layerUsage(extra ...contextLayerUsage) []contextL
 	}
 	if p != nil && p.memoryUsage.Layer != "" {
 		layers = append(layers, p.memoryUsage)
+	}
+	if p != nil && p.selfNoteUsage.Layer != "" {
+		layers = append(layers, p.selfNoteUsage)
 	}
 	return layers
 }

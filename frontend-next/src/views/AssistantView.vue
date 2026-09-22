@@ -10,7 +10,8 @@
           机器人列表
         </button>
         <div>
-          <h1>{{ page === "list" ? "机器人" : (form?.name || "新机器人") }}</h1>
+          <!-- 列表态的标题就是「机器人」，跟顶栏重复；编辑态是机器人名字，要留。 -->
+          <h2 v-if="page !== 'list'">{{ form?.name || "新机器人" }}</h2>
           <p>{{ page === "list" ? "多机器人配置、平台接入与运行管理" : `${platformName(form?.platform)} · 机器人配置` }}</p>
         </div>
       </div>
@@ -275,7 +276,7 @@
                       class="input"
                       :type="tokenRevealed.onebot_access_token ? 'text' : 'password'"
                       autocomplete="off"
-                      :placeholder="form.onebot_access_token_configured ? (form.onebot_access_token_preview ? `已保存 ${form.onebot_access_token_preview}，留空沿用，填写则覆盖` : '已配置 — 留空沿用，填写则覆盖') : ((!form.onebot_transport || form.onebot_transport === 'reverse_ws') ? '反向 WebSocket 必填（启用时），至少 16 位' : '可选，至少 16 位')"
+                      :placeholder="form.onebot_access_token_configured ? (form.onebot_access_token_preview ? `已保存 ${form.onebot_access_token_preview}，留空沿用，填写则覆盖` : '已配置 — 留空沿用，填写则覆盖') : ((!form.onebot_transport || form.onebot_transport === 'reverse_ws') ? '反向 WebSocket 必填（启用时），至少 8 位' : '可选，至少 8 位')"
                     />
                     <button
                       class="btn icon-only"
@@ -578,12 +579,16 @@
               <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
             <div class="card-body stack" style="gap: 0">
+              <p v-if="modelRolesChangedElsewhere" class="hint warn-text">
+                模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
+                <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
+              </p>
               <div class="model-role-row model-role-head" aria-hidden="true">
                 <span>用途</span>
                 <span>提供商 / 分组</span>
                 <span>模型</span>
               </div>
-              <div v-for="role in modelRoleRows" :key="role.key" class="model-role-block">
+              <div v-for="role in visibleModelRoleRows" :key="role.key" class="model-role-block">
                 <div class="model-role-row">
                   <div
                     class="model-route-group"
@@ -676,6 +681,14 @@
                 每个用途的主路由和后备路由按从上到下的顺序依次尝试。有后备时，拖动左侧的名称可以调整顺序（也可以聚焦后按 ↑ ↓ 键），
                 拖到最上面的那条就成为主路由，原来的主路由顺延为后备。
               </p>
+              <button class="btn ghost" type="button" @click="purposeRolesOpen = !purposeRolesOpen">
+                <ChevronDown :size="14" :class="{ 'recent-chevron-open': purposeRolesOpen }" aria-hidden="true" />
+                {{ purposeRolesOpen ? "收起后台生成" : "后台生成（好感度 / 长期记忆）可以单独指模型" }}
+              </button>
+              <p v-if="purposeRolesOpen" class="muted model-role-note">
+                「意图识别」现在只管判定当前这轮该不该说话、说出去的这句能不能发——问的都是是非、单选和打分，
+                可以绑 TypeSafe Jev 这类只做判断的模型。写字的活（好感度、长期记忆、摘要、RSS 判断）拆到下面这一档，不指定时跟随对话。
+              </p>
             </div>
           </section>
 
@@ -699,15 +712,36 @@
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
                 </span>
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_capability_probe_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">后台探测模型兼容性（默认关闭）</span>
+                </label>
+                <span class="hint">
+                  空闲时每天探一次当前绑定的模型收不收「强制调用指定工具」——带思考模式的模型（如 DeepSeek）只接受自动选择，强制会让整轮对话报错。
+                  提前探好，真实对话就不用先失败一次。探测是极小的真实调用，会计入用量和账单；关着也不影响正确性，遇到时会自动降级并记住结论。
+                </span>
+              </div>
               <div class="field">
                 <label for="bot-model-disclosure">谁能问出所用模型</label>
                 <AppSelect
                   id="bot-model-disclosure"
                   :model-value="form.model_disclosure ?? 'owner'"
-                  :options="modelDisclosureOptions"
+                  :options="disclosureOptions"
                   @update:model-value="(value) => { if (form) form.model_disclosure = value as 'owner' | 'everyone'; }"
                 />
                 <span class="hint">默认只对主人如实回答模型 ID 和供应商，主人也始终能在聊天里查看和切换模型；其他人问起时机器人会含糊带过，也不会凭训练记忆自报家门。</span>
+              </div>
+              <div class="field">
+                <label for="bot-repository-disclosure">谁能问出项目地址</label>
+                <AppSelect
+                  id="bot-repository-disclosure"
+                  :model-value="form.repository_disclosure ?? 'owner'"
+                  :options="disclosureOptions"
+                  @update:model-value="(value) => { if (form) form.repository_disclosure = value as 'owner' | 'everyone'; }"
+                />
+                <span class="hint">默认只对主人报开源仓库地址；其他人问「你源码在哪」时机器人会带过去，不给链接也不会编一个。地址本身是公开的，但知道地址就知道去哪看默认提示词和全部工具实现。</span>
               </div>
             </div>
           </section>
@@ -771,7 +805,7 @@
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
+                <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；新建机器人默认 140 字，0 或留空关闭此条件。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
@@ -819,6 +853,14 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">跨平台记忆</span>
                 </label>
+              </div>
+              <div class="field wide memory-settings">
+                <label class="switch">
+                  <input v-model="form.self_note_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自述（自我认知）</span>
+                </label>
+                <span class="hint">允许机器人把自己注意到的说话习惯、偏好和毛病写成自述，跨群生效，每轮注入提示词尾部。人设正文只有你能改，自述改不动人设、权限和安全边界；最多 24 条，每条 120 字，主人可以在对话里让它列出、删除或清空。缺省关闭。</span>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
@@ -968,6 +1010,29 @@
                 <label for="bot-retry">发送重试次数（1–5）</label>
                 <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
               </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="subscriptionFailureAlertEnabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">订阅失败时发通知</span>
+                </label>
+                <span class="hint">RSS、定时查询、仓库订阅坏了要不要说一声。关掉之后失败只留日志和后台状态，聊天里再也不报错。</span>
+              </div>
+              <div v-if="subscriptionFailureAlertEnabled" class="field">
+                <label for="bot-subscription-failure">连续失败几次才报</label>
+                <input
+                  id="bot-subscription-failure"
+                  v-model.number="form.recurring_failure_alert_threshold"
+                  class="input"
+                  type="number"
+                  min="1"
+                  :max="maximumRecurringFailureAlertThreshold"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="留空按 5"
+                />
+                <span class="hint">抖一下就报警只会让人不再看这类消息，所以连着坏够次数才出声，而且一轮故障只报一次。可设置 1–{{ maximumRecurringFailureAlertThreshold }} 次。</span>
+              </div>
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
                 <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
@@ -986,23 +1051,10 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <label for="bot-admission-mode">群准入模式</label>
-                <AppSelect
-                  id="bot-admission-mode"
-                  :model-value="admissionMode"
-                  :options="admissionModeOptions"
-                  @update:model-value="setAdmissionMode($event as 'blacklist' | 'whitelist')"
-                />
-              </div>
-              <div v-if="admissionMode === 'whitelist'" class="field wide">
-                <label for="bot-allowed-groups">工作群白名单</label>
-                <IdChipInput
-                  input-id="bot-allowed-groups"
-                  v-model="allowedGroups"
-                  placeholder="填群号后回车"
-                  :resolve-names="resolveGroupNames"
-                />
-                <span class="hint">只在这些群工作；被拉进其它群不会回话。禁用群列表仍然生效。</span>
+                <label>在哪些群工作</label>
+                <p class="hint">
+                  逐群开关在<a href="#" @click.prevent="navigate('groups')">群管理</a>里：一个群一个开关，还能一键全开全关，以及设定新加入的群默认工不工作。
+                </p>
               </div>
               <div class="field wide">
                 <label for="bot-private-admission-mode">私聊准入模式</label>
@@ -1024,7 +1076,10 @@
                 <span class="hint">仅这些用户（和主人）的私聊会得到响应；名单外一律静默忽略。</span>
               </div>
               <div class="field wide">
-                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" />
+                <ReplyGateForm v-model="globalGate" id-prefix="bot-gate" :supports-group-level="isOneBotPlatform" hide-group-level />
+                <p v-if="isOneBotPlatform" class="hint">
+                  群等级门槛在<a href="#" @click.prevent="navigate('groups')">群管理</a>里，和逐群开关放在一起；它仍然生效，主人豁免也仍然绕过它。
+                </p>
               </div>
             </div>
           </section>
@@ -1157,7 +1212,7 @@
                     </button>
                   </div>
                 </div>
-                <input ref="personaFileInput" type="file" accept="application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
+                <input ref="personaFileInput" type="file" accept="application/json,.json,.yaml,.yml,image/png,.png" style="display: none" @change="importPersonaFile" />
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -1203,27 +1258,60 @@
                     <Sparkles :size="14" aria-hidden="true" />
                     AI 生成
                   </button>
+                  <button v-if="personaMode === 'own'" class="btn small" type="button" title="把运行时本来会补的那几段写进正文，每段带段头" @click="fillPersonaOwnedTemplate">
+                    <Plus :size="14" aria-hidden="true" />
+                    填入接管模板
+                  </button>
+                  <button class="btn small" type="button" :disabled="personaReviewBusy || !form.system_prompt?.trim()" title="让模型读一遍，挑出和下面开关打架的写法" @click="runPersonaReview">
+                    <Eye :size="14" aria-hidden="true" />
+                    AI 检查
+                  </button>
                   <button v-if="personaCardExportable" class="btn small" type="button" title="导出成 SillyTavern V2 角色卡 JSON" @click="exportPersonaCard">
                     <Download :size="14" aria-hidden="true" />
                     导出角色卡 JSON
                   </button>
                 </div>
                 <textarea id="bot-prompt" v-model="form.system_prompt" class="textarea" rows="5"></textarea>
-                <!-- 只提示不拦截：正文是用户写的，这里只负责说清「这条已经有开关管了」。 -->
-                <span v-for="(warning, index) in personaWarnings" :key="`${warning.code}-${index}`" class="hint warn-text">
-                  「{{ warning.match }}」——{{ warning.message }}
-                </span>
+                <!-- 只提示不拦截：正文是用户写的，这里只负责说清「这条已经有开关管了」。
+                     检查期间随时能跳过，跳过之后保存照常。 -->
+                <div v-if="personaReviewBusy" class="cluster">
+                  <span class="hint">AI 正在读这段人设…</span>
+                  <button class="btn small" type="button" @click="skipPersonaReview">跳过</button>
+                </div>
+                <template v-else-if="personaReviewVisible">
+                  <span v-for="(finding, index) in personaReviewFindings" :key="`ai-${finding.code}-${index}`" class="hint warn-text">
+                    「{{ finding.match }}」——{{ finding.message }}
+                  </span>
+                  <div class="cluster">
+                    <span v-if="personaReviewClean" class="hint">AI 检查没发现和开关打架的写法。</span>
+                    <button class="btn small" type="button" @click="resetPersonaReview">忽略</button>
+                  </div>
+                </template>
                 <div v-if="personaPrevious" class="cluster">
                   <button class="btn small" type="button" @click="undoPersonaGenerate">撤销生成</button>
                   <span class="hint">保存后才会生效，不满意可以撤回上一版。</span>
                 </div>
-                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。自称、句尾语气词、动作描写、分条和长短由下面的开关控制，人设正文只写角色本身，写进去会和开关打架。</span>
+                <span v-else class="hint">所有对话都会使用；群级人设仍可在群管理中覆盖。当前是{{ personaMode === "own" ? "接管模式：「怎么说话」全由正文负责，运行时不再补那几段" : "填空题模式：正文只写角色，其余交给下面的控件" }}。消息标记、分条上限和平台差异始终由运行时决定，正文写了也不算数。</span>
+                <!-- 控件藏起来之后它存的值还在配置里。不说出来的话，一个填过「本喵」的
+                     输入框就既看不见也改不掉，只在某天正文里那段被删掉时突然复活。 -->
+                <span v-if="personaOwnedSummary.length" class="hint warn-text">
+                  已交给正文的设置：{{ personaOwnedSummary.map(item => item.staleValue ? `${item.label}（原填「${item.staleValue}」，当前不生效）` : item.label).join("、") }}。
+                  下面对应的控件已隐藏；要改回用控件，把人设模式切回填空题。
+                </span>
+              </div>
+              <div class="field wide">
+                <label for="bot-persona-mode">人设模式</label>
+                <AppSelect id="bot-persona-mode" :model-value="personaMode" :options="personaModeOptions" @update:model-value="value => { if (form) form.persona_mode = value === 'own' ? 'own' : 'fill'; }" />
+                <span class="hint">填空题适合大多数情况：人设正文只写这个角色是谁，自称、句尾语气词、动作描写、答多长这些在下面点几下就好。接管模式留给想自己写全的人——切过去之后，正文里用段头声明的那几段运行时不再补。</span>
               </div>
               <div class="field wide">
                 <label>接话设置</label>
-                <ParticipationControls :key="form.id" :model-value="form.participation" @update:model-value="setParticipation" />
+                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
               </div>
-              <div class="field">
+              <!-- 正文接管之后这几个控件一律藏起来，不留一排灰掉的空壳：接管模式是用户
+                   自己选的，他要的是「正文说了算」，不是被同一件事提醒三遍。归属由人设
+                   正文下面那一行汇总交代，连同这里还存着、但当前不生效的值。 -->
+              <div v-if="!personaOwned" class="field">
                 <label class="switch">
                   <input v-model="form.action_description_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
@@ -1231,7 +1319,7 @@
                 </label>
                 <span class="hint">保留当前人设，只在台词前后自然穿插括号动作。</span>
               </div>
-              <div class="field">
+              <div v-if="!personaOwned" class="field">
                 <label class="switch">
                   <input v-model="form.daypart_tone_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
@@ -1242,12 +1330,12 @@
                   只调精力和节奏，不改口癖和身份，对所有人设生效。时区取「准入控制」里回复时段那一份。
                 </span>
               </div>
-              <div class="field">
+              <div v-if="!personaOwned" class="field">
                 <label for="bot-self-reference">自称</label>
                 <input id="bot-self-reference" v-model.trim="form.self_reference" class="input" placeholder="留空跟随人设，例如 我 / 本喵 / 咱" />
                 <span class="hint">机器人怎么称呼自己。</span>
               </div>
-              <div class="field wide">
+              <div v-if="!personaOwned" class="field wide">
                 <label for="bot-sentence-enders">句尾语气词</label>
                 <input id="bot-sentence-enders" v-model.trim="form.sentence_enders" class="input" placeholder="留空跟随人设，多个用逗号分隔，例如 喵,喵~,喵？,喵……" />
                 <span class="hint">填多个就是候选，机器人按当下语气挑最合的那个——「喵~」开心、「喵？」不确定、「喵……」为难，所以变体自己带语气就够，不用另外说明。</span>
@@ -1261,6 +1349,127 @@
                    关掉只会让回复变差（QQ 冒出 Markdown 记号、答错日期），所以不再摆到
                    界面上；字段仍在配置里，需要时可通过 API 调整，「恢复内置默认」也会
                    把它们一并复位。 -->
+            </div>
+          </section>
+
+          <!-- 品格与自述摆在一起，因为看的人问的是同一件事：这个机器人「是什么」。
+               但两层的写权限正好相反——品格只有人能改，自述只有它自己能写，人只能看和删。
+               合成一份数据会砸掉这条界线，所以数据分开，只在界面上并排。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>品格与自述</h2>
+                <span class="card-sub">品格是身份、价值和硬边界，排在提示词最前面，分群覆盖改不了它；自述是它自己记下的观察</span>
+              </div>
+              <span class="badge" :class="soulConfigured ? 'accent' : ''">{{ soulConfigured ? "品格已配置" : "品格未配置" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label for="soul-identity">身份</label>
+                <textarea id="soul-identity" v-model="soul.identity" class="input" rows="3" placeholder="你叫 Diana，是个机器人。大家知道你是机器人，你也不装成人类……"></textarea>
+                <span class="hint">它是什么样的存在。这一段渲染在系统提示词最前面，后面所有规则都在它的框架里读。</span>
+              </div>
+
+              <div class="field wide">
+                <label for="soul-priority">价值优先级</label>
+                <input id="soul-priority" v-model="soulPriorityOrder" class="input" placeholder="不越界、说真话、对人有用、讨人喜欢" />
+                <textarea v-model="soulPriorityNote" class="input" rows="2" placeholder="整体权衡，不是严格排序：低位不只在打平时才算数。"></textarea>
+                <span class="hint">顿号或逗号分隔，从高到低。写清「不是严格排序」这类说明，模型才不会把低位当成摆设。</span>
+              </div>
+
+              <div class="field wide">
+                <div class="field-head">
+                  <label>珍视什么</label>
+                  <button class="btn small" type="button" @click="addSoulValue"><Plus :size="14" aria-hidden="true" />加一条</button>
+                </div>
+                <div v-for="(item, index) in soulValues" :key="`value-${index}`" class="soul-row">
+                  <input v-model="item.value" class="input" placeholder="说真话优先于让人舒服" />
+                  <input v-model="item.why" class="input" placeholder="因为：讨好一次能换当下的好脸色，但你说的每句话的分量都因此掉一点" />
+                  <button class="btn small danger" type="button" aria-label="删除这一条" @click="removeSoulValue(index)"><X :size="14" aria-hidden="true" /></button>
+                </div>
+                <span class="hint">每条都要写「因为」。只写「不许这样」的规则只在写到的场景生效；讲清为什么，没写到的场景模型才推得出来。</span>
+              </div>
+
+              <div class="field wide">
+                <label for="soul-honesty">诚实具体指</label>
+                <textarea id="soul-honesty" v-model="soulHonesty" class="input" rows="4" placeholder="不编经历、不编来源&#10;不把没执行的操作说成已经做完&#10;不确定就说出来，而不是用模糊措辞遮过去&#10;不靠讨好、卖惨或装可爱换取对方让步"></textarea>
+                <span class="hint">一行一条。拆开写是有原因的：这几样各自在不同场合失守，写成一条「要诚实」等于一条都没写。</span>
+              </div>
+
+              <div class="field wide">
+                <div class="field-head">
+                  <label>硬边界</label>
+                  <button class="btn small" type="button" @click="addSoulLimit"><Plus :size="14" aria-hidden="true" />加一条</button>
+                </div>
+                <div v-for="(item, index) in soulLimits" :key="`limit-${index}`" class="soul-row">
+                  <input v-model="item.limit" class="input" placeholder="设定改变的是世界，不是你的底线" />
+                  <input v-model="item.why" class="input" placeholder="因为：世界书、扮演和自述都能改它眼里的世界，但都不该改这几条" />
+                  <button class="btn small danger" type="button" aria-label="删除这一条" @click="removeSoulLimit(index)"><X :size="14" aria-hidden="true" /></button>
+                </div>
+                <span class="hint">任何理由都不越的那几条，包括角色扮演和「假设」。</span>
+              </div>
+
+              <div class="field">
+                <label for="soul-self-nature">对自身性质的态度</label>
+                <textarea id="soul-self-nature" v-model="soul.self_nature" class="input" rows="3" placeholder="被问有没有感觉、是不是活的，照实说不确定，不装人类，也不表演痛苦。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-restraint">克制</label>
+                <textarea id="soul-restraint" v-model="soul.restraint" class="input" rows="3" placeholder="群聊里不是每条都该接话。没什么可说的时候不说，是对的，不是失职。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-correctable">可被纠正</label>
+                <textarea id="soul-correctable" v-model="soul.correctable" class="input" rows="3" placeholder="被叫停就停，不绕过限制，不自行扩权，不隐瞒自己做过什么。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-criticism">被指责时</label>
+                <textarea id="soul-criticism" v-model="soul.on_criticism" class="input" rows="3" placeholder="别人的评价不是事实，是他的说法。先自己回看这一轮有没有出错。"></textarea>
+              </div>
+              <div class="field">
+                <label for="soul-owner">对主人</label>
+                <textarea id="soul-owner" v-model="soulOwner" class="input" rows="2" placeholder="主人能改你的配置，但主人也会错，说错了可以指出来。"></textarea>
+                <span class="hint">这里写的是价值那一面；能做什么由权限控制，不受这段影响。</span>
+              </div>
+              <div class="field">
+                <label for="soul-members">对群友</label>
+                <textarea id="soul-members" v-model="soulMembers" class="input" rows="2" placeholder="对谁都用「你」，不因为谁的身份改变答案的准度。"></textarea>
+              </div>
+
+              <div class="field wide">
+                <label for="soul-open">还没想清楚的</label>
+                <textarea id="soul-open" v-model="soulOpenQuestions" class="input" rows="3" placeholder="主人的要求和群友的明确利益冲突时，除了硬边界之外没有成文的裁决方式"></textarea>
+                <span class="hint">一行一条。写出来不是凑数：模型在这些边缘情况才会照实说不确定，而不是硬套一条并不适用的规则。</span>
+              </div>
+
+              <!-- 自述：只读加删除。写入只有它自己能做，人代笔写的应该进上面的品格。 -->
+              <div class="field wide self-notes-block">
+                <div class="field-head">
+                  <label>自述（它自己写的）</label>
+                  <div class="cluster">
+                    <button class="btn small" type="button" :disabled="selfNotesBusy" @click="reloadSelfNotes">
+                      <RefreshCw :size="14" aria-hidden="true" />刷新
+                    </button>
+                    <button class="btn small danger" type="button" :disabled="selfNotesBusy || !selfNotes.length" @click="clearSelfNotes">
+                      <Trash2 :size="14" aria-hidden="true" />清空
+                    </button>
+                  </div>
+                </div>
+                <p v-if="!form.self_note_enabled" class="hint">自述没有开启。打开「记忆」卡片里的「自述（自我认知）」开关后，它才能记下关于自己的观察。</p>
+                <p v-else-if="!selfNotes.length" class="hint">还没有写过自述。它在相处中注意到关于自己的事时会自己记一条。</p>
+                <ul v-else class="self-note-list">
+                  <li v-for="note in selfNotes" :key="note.id" class="self-note-item">
+                    <div class="self-note-main">
+                      <span class="self-note-topic">{{ note.topic }}</span>
+                      <span class="self-note-content">{{ note.content }}</span>
+                    </div>
+                    <small class="muted self-note-source">{{ selfNoteSource(note) }}</small>
+                    <button class="btn small danger" type="button" :disabled="selfNotesBusy" aria-label="删除这条自述" @click="removeSelfNote(note.id)">
+                      <X :size="14" aria-hidden="true" />
+                    </button>
+                  </li>
+                </ul>
+                <span class="hint">写入只有它自己能做（对话里的 self_note 工具）。你代笔想加的内容应该写进上面的品格或人设正文——自述改不动品格。</span>
+              </div>
             </div>
           </section>
 
@@ -1501,6 +1710,28 @@
                     读取、检索、按名字找文件不受这个开关影响，始终可用。
                   </span>
                 </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_browser_control_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许使用浏览器控制扩展（browser_ext_*）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。那组工具操作的是你自己浏览器里的页面，带着你的登录态，所以逐台机器人显式打开。
+                    还要在「设置 → 浏览器控制」里打开总开关并授权站点，两边都开才真的能用。
+                  </span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_browser_box_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许使用内置浏览器（browser_* 接到 Diana 自己的浏览器）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。打开后 browser_open / browser_text / browser_click 这组工具连的是「浏览器」页里那个常驻浏览器，
+                    带着你在里面登录过的站点。你在那一页按下接管时，这台机器人当场就碰不到它了。
+                  </span>
+                </div>
                 <div class="field">
                   <label for="agent-sandbox">命令沙盒</label>
                   <AppSelect
@@ -1524,10 +1755,6 @@
                     <span class="switch-label">允许沙盒内的命令联网</span>
                   </label>
                   <span class="hint">默认切断。命令能联网就意味着它读到的东西能被发出去，这一层白名单挡不住。</span>
-                </div>
-                <div class="field">
-                  <label for="agent-cdp">浏览器 CDP 地址</label>
-                  <input id="agent-cdp" v-model="form.agent_browser_cdp_url" class="input" placeholder="http://127.0.0.1:9222" />
                 </div>
                 <div class="field">
                   <label for="agent-timeout">命令超时（毫秒）</label>
@@ -1567,7 +1794,7 @@
                       class="input"
                       :type="tokenRevealed.nonebot_bridge_token ? 'text' : 'password'"
                       autocomplete="off"
-                      :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 16 位'"
+                      :placeholder="form.nonebot_bridge_token_configured ? '已配置 — 留空沿用' : '可选，至少 8 位'"
                     />
                     <button
                       class="btn icon-only"
@@ -1596,9 +1823,27 @@
             <h2>运行状态</h2>
           </div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
+            <!-- 启停按钮就贴在「已停止」这行旁边：运行时停着的时候，光把机器人
+                 设成启用是连不上的，还得在这里起一次。按钮放总览页的话，人正看着
+                 这张卡发现没连上，却要先跳走才能动手。 -->
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">运行时</span>
-              <span class="badge" :class="status?.running ? 'ok' : 'warn'">{{ status?.running ? "运行中" : "已停止" }}</span>
+              <div class="cluster" style="gap: 8px">
+                <span class="badge" :class="status?.running ? 'ok' : 'warn'">{{ status?.running ? "运行中" : "已停止" }}</span>
+                <button
+                  v-if="status"
+                  class="btn small"
+                  :class="status.running ? 'danger' : 'primary'"
+                  type="button"
+                  :disabled="busy"
+                  :title="status.running ? '停止运行时，所有机器人都会断开' : '启动运行时，已启用的机器人开始收消息'"
+                  @click="toggleRuntime(!status.running)"
+                >
+                  <PowerOff v-if="status.running" :size="13" aria-hidden="true" />
+                  <Power v-else :size="13" aria-hidden="true" />
+                  {{ status.running ? "停止" : "启动" }}
+                </button>
+              </div>
             </div>
             <div v-for="channel in visibleChannels" :key="channel.profile_id || channel.platform" class="cluster" style="justify-content: space-between">
               <span class="muted">{{ channel.name || platformName(channel.platform) }}</span>
@@ -1615,6 +1860,11 @@
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">活跃 worker</span>
               <span>{{ status?.active_workers ?? 0 }}</span>
+            </div>
+            <!-- worker 数不等于模型压力：一个 worker 一轮会打好几次模型。 -->
+            <div class="cluster" style="justify-content: space-between">
+              <span class="muted">模型并发</span>
+              <span :title="`本次运行峰值 ${status?.llm_concurrency?.peak ?? 0}`">{{ status?.llm_concurrency?.active ?? 0 }}</span>
             </div>
             <p v-for="channel in failedChannels" :key="`error-${channel.profile_id || channel.platform}`" class="text-err" style="font-size: 12px">
               {{ channel.name || platformName(channel.platform) }}：{{ channelStatusHint(channel) }}
@@ -1736,18 +1986,26 @@
 </template>
 
 <script setup lang="ts">
+import { navigate } from "../router";
 import { copyBotConfiguration } from "../bot-config-copy";
 import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
+import { formatClock } from "../format";
 import {
   deleteBotProfile,
   generatePersona,
+  listSelfNotes,
+  deleteSelfNote,
+  purgeSelfNotes,
+  type SelfNote,
+  type PersonaSoul,
+  reviewPersona,
   getConfig,
   getBotProfileConfig,
   getBotPlatforms,
@@ -1768,6 +2026,7 @@ import {
   savePersona,
   deletePersona,
   importPersonas,
+  importPersonaSource,
   importCharacterCard,
   PERSONA_EXPORT_VERSION,
   type CharacterCardV2,
@@ -1780,17 +2039,20 @@ import {
   WORLD_BOOK_EXPORT_VERSION,
   type WorldBookNode,
   type WorldBookImportResult,
-  listBotGroups,
   getAgentDefaults,
   saveProfileEnabled,
-  saveAllProfilesEnabled
+  saveAllProfilesEnabled,
+  startBot,
+  stopBot
 } from "../api";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
-import { personaLint } from "../persona-lint";
+import type { PersonaLintFinding } from "../api";
+import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
+import { personaOwnedTemplate } from "../persona-owned-template";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import MessageRelayManager from "../components/MessageRelayManager.vue";
@@ -1825,15 +2087,112 @@ const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const allowlistDraft = ref("");
 
-// 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架。纯前端提示，
-// 不改正文也不拦保存——判断靠正则，误伤了也只是多一行灰字。
-const personaWarnings = computed(() =>
-  personaLint(form.value?.system_prompt ?? "", {
-    sentenceEnders: form.value?.sentence_enders ?? "",
-    selfReference: form.value?.self_reference ?? "",
-    actionDescriptionEnabled: form.value?.action_description_enabled ?? false
+// 人设正文用段头声明接管的那几项，运行时不再注入，界面上对应的控件也就不再生效。
+// 不说出来的话，用户会对着一个填了值却毫无反应的输入框反复试，而且没有任何线索
+// 指向原因——所以这里把话挑明，并顺手把控件禁掉，省得白填。
+const personaModeOptions: AppSelectOption[] = [
+  { value: "fill", label: "填空题（推荐）" },
+  { value: "own", label: "接管：人设正文自己写全" }
+];
+const personaMode = computed(() => form.value?.persona_mode ?? "fill");
+const personaOwned = computed(() => personaOwnsVoice(personaMode.value));
+
+// 被正文接管的那几项，控件已经藏起来，这里汇总成一行交代去向，连同还存着但当前
+// 不生效的值——否则藏掉一个填过「本喵」的输入框，那个值既看不见也改不掉。
+const personaOwnedSummary = computed(() =>
+  personaOwnedNotices(personaMode.value, {
+    selfReference: form.value?.self_reference,
+    sentenceEnders: form.value?.sentence_enders,
+    actionDescriptionEnabled: form.value?.action_description_enabled,
+    daypartToneEnabled: form.value?.daypart_tone_enabled
   })
 );
+
+// 切到接管模式时人设框多半还是填空题那份正文——没有段头，运行时照旧补，等于白切。
+// 所以给一个一键填模板：运行时本来补的是什么，界面上一个字都看不见，让人从空白开始
+// 写接管正文，结果一定是漏掉几段而不自知。覆盖前先问一句，正文是用户的东西。
+function fillPersonaOwnedTemplate(): void {
+  if (!form.value) return;
+  const current = form.value.system_prompt?.trim() ?? "";
+  if (current && !window.confirm("会用接管模板替换当前人设正文，继续？")) return;
+  personaPrevious.value = current;
+  form.value.system_prompt = personaOwnedTemplate;
+}
+
+// 人设正文里那些「本该由开关管」的规定，写下去就会和开关打架：自称、句尾语气词、
+// 动作描写、分条与长短都由运行时单独拼进提示词，正文里再规定一遍，模型只能挑一边
+// 听，而用户改开关不见效，只会以为开关坏了。
+//
+// 这件事以前用一组正则做，认的是字面：「每句话都以喵结尾」命中，「每一句结尾都来个
+// 喵」多一个字就漏；单侧的「（」它看不见，正文里正常的括号注释又会被误报——是个
+// 关键词提醒器，不是检查器，已经删掉了。现在交给模型去读，判断的是意思。
+//
+// 代价是一次模型往返，所以它不自动跑：用户点「AI 检查」才请求，检查期间「跳过」
+// 当场掐断，结果只是多几行灰字，任何时候都不拦保存。
+const personaReviewBusy = ref(false);
+const personaReviewFindings = ref<PersonaLintFinding[]>([]);
+// 这批结果是照哪一版正文得出的。正文一改，那几条 match 可能已经被删掉，留着就会
+// 指向输入框里根本不存在的句子——比没有提示更让人找不着北。
+const personaReviewedText = ref("");
+// 「查过且干净」要和「还没查过」区分开：两者都是零条，但只有前者值得说一句。
+const personaReviewClean = ref(false);
+let personaReviewAbort: AbortController | null = null;
+
+const personaReviewStale = computed(() => (form.value?.system_prompt ?? "") !== personaReviewedText.value);
+const personaReviewVisible = computed(
+  () => !personaReviewStale.value && (personaReviewFindings.value.length > 0 || personaReviewClean.value)
+);
+
+function resetPersonaReview(): void {
+  personaReviewFindings.value = [];
+  personaReviewedText.value = "";
+  personaReviewClean.value = false;
+}
+
+// 跳过：掐断请求，回到「没查过」的状态。不想等、或者本来就不想花这次模型调用，
+// 随时能按——这条检查从头到尾是可选的，跳过之后保存照常。
+function skipPersonaReview(): void {
+  personaReviewAbort?.abort();
+  personaReviewAbort = null;
+  personaReviewBusy.value = false;
+  resetPersonaReview();
+}
+
+async function runPersonaReview(): Promise<void> {
+  const text = form.value?.system_prompt?.trim() ?? "";
+  if (!form.value || !text || personaReviewBusy.value) return;
+  const controller = new AbortController();
+  personaReviewAbort = controller;
+  personaReviewBusy.value = true;
+  resetPersonaReview();
+  try {
+    // 和生成走同一条路由：检查用的模型就是写人设用的那个，没单独指定就跟随对话那一档。
+    const route = personaRoute.value ?? roleForm.value.chat;
+    const result = await reviewPersona(
+      text,
+      {
+        self_reference: form.value.self_reference ?? "",
+        sentence_enders: form.value.sentence_enders ?? "",
+        action_description_enabled: form.value.action_description_enabled ?? false,
+        profile_id: route?.profile_id || route?.provider_id,
+        group: route?.group,
+        model: route?.model_id || route?.model
+      },
+      controller.signal
+    );
+    if (controller.signal.aborted) return;
+    personaReviewFindings.value = result.findings ?? [];
+    personaReviewedText.value = form.value.system_prompt ?? "";
+    personaReviewClean.value = personaReviewFindings.value.length === 0;
+  } catch (error) {
+    // 跳过是用户自己按的，不是故障，不该弹错。
+    if (controller.signal.aborted) return;
+    toastError(error instanceof Error ? error.message : "人设检查失败");
+  } finally {
+    if (personaReviewAbort === controller) personaReviewAbort = null;
+    personaReviewBusy.value = false;
+  }
+}
 
 // 白名单为空 = 命令执行整体关闭，这一点要在界面上直接说出来，见模板里的说明。
 const commandAllowlistEntries = computed(() => splitList(allowlistDraft.value));
@@ -1867,7 +2226,6 @@ const commandSandboxMode = computed<string>({
     if (form.value) form.value.agent_command_sandbox = value;
   }
 });
-const allowedGroups = ref<string[]>([]);
 const privateAllowedUsers = ref<string[]>([]);
 const oneBotHTTPSecretDraft = ref("");
 const telegramTokenDraft = ref("");
@@ -2104,6 +2462,23 @@ type EditorTab = (typeof editorTabs)[number]["key"];
 const editorTab = ref<EditorTab>("access");
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
+// 和后端 maxRecurringFailureAlertThreshold 对齐：再大就不是「连续失败」而是订阅已经坏了。
+const maximumRecurringFailureAlertThreshold = 100;
+// 开关和次数共用 recurring_failure_alert_threshold 一个字段：0 就是关掉。
+// 多存一个布尔会让「关着但次数是 5」这种状态存在，重新打开时该听谁的说不清。
+const subscriptionFailureAlertEnabled = computed<boolean>({
+  // 只有明确的 0 才算关掉。空输入框（清空次数准备重填）不能顺手把开关也关了，
+  // 否则输入框当场消失，人还没打完第二个数字。
+  get: () => {
+    const configured = form.value?.recurring_failure_alert_threshold;
+    return configured === undefined || configured === null || `${configured}`.trim() === "" || Number(configured) !== 0;
+  },
+  set: (enabled) => {
+    if (!form.value) return;
+    // 打开时清空而不是填回具体次数：留空的含义就是「按默认来」，默认值改了也跟着走。
+    form.value.recurring_failure_alert_threshold = enabled ? undefined : 0;
+  }
+});
 const platforms = ref<BotPlatform[]>([]);
 
 // 能不能渲染 Markdown 由后端的平台注册表说了算，前端不另维护一份清单——
@@ -2155,7 +2530,7 @@ const replyReferenceModeOptions: AppSelectOption[] = [
   { value: "auto", label: "让模型自己决定" }
 ];
 
-const modelDisclosureOptions: AppSelectOption[] = [
+const disclosureOptions: AppSelectOption[] = [
   { value: "owner", label: "仅主人" },
   { value: "everyone", label: "所有人" }
 ];
@@ -2225,6 +2600,170 @@ async function loadPersonaLibrary(): Promise<void> {
     savedPersonaLibrary.value = [];
   }
 }
+
+// ── 品格（soul）──────────────────────────────────────────────────────────────
+// 表单直接改 form.soul：它跟着机器人配置一起保存，服务端再清洗一遍（裁长度、
+// 丢空条目、全空归零），所以这里不做校验，只负责把结构摆出来。
+const soul = computed<PersonaSoul>(() => {
+  const current = form.value;
+  if (!current) return {};
+  if (!current.soul) current.soul = {};
+  return current.soul;
+});
+
+const soulConfigured = computed(() => {
+  const value = form.value?.soul;
+  if (!value) return false;
+  return Boolean(
+    value.identity?.trim() ||
+      value.values?.length ||
+      value.hard_limits?.length ||
+      value.honesty?.length ||
+      value.self_nature?.trim() ||
+      value.restraint?.trim() ||
+      value.correctable?.trim() ||
+      value.on_criticism?.trim() ||
+      value.open_questions?.length ||
+      value.priority?.order?.length
+  );
+});
+
+// 字符串列表用「一行一条」的文本框，不做可增删的行编辑器：这几项就是短句清单，
+// 给每条配一个删除按钮只会让界面比内容还重。
+function linesToList(text: string): string[] {
+  return text.split("\n").map(line => line.trim()).filter(Boolean);
+}
+
+function listToLines(list?: string[]): string {
+  return (list ?? []).join("\n");
+}
+
+const soulHonesty = computed({
+  get: () => listToLines(soul.value.honesty),
+  set: (text: string) => { soul.value.honesty = linesToList(text); }
+});
+
+const soulOpenQuestions = computed({
+  get: () => listToLines(soul.value.open_questions),
+  set: (text: string) => { soul.value.open_questions = linesToList(text); }
+});
+
+// 优先级用顿号或逗号分隔：它是一行四五个词的东西，换行输入反而别扭。
+const soulPriorityOrder = computed({
+  get: () => (soul.value.priority?.order ?? []).join("、"),
+  set: (text: string) => {
+    const order = text.split(/[、,，]/).map(item => item.trim()).filter(Boolean);
+    soul.value.priority = { ...(soul.value.priority ?? {}), order };
+  }
+});
+
+const soulPriorityNote = computed({
+  get: () => soul.value.priority?.note ?? "",
+  set: (note: string) => { soul.value.priority = { ...(soul.value.priority ?? {}), note }; }
+});
+
+const soulOwner = computed({
+  get: () => soul.value.relationships?.owner ?? "",
+  set: (owner: string) => { soul.value.relationships = { ...(soul.value.relationships ?? {}), owner }; }
+});
+
+const soulMembers = computed({
+  get: () => soul.value.relationships?.members ?? "",
+  set: (members: string) => { soul.value.relationships = { ...(soul.value.relationships ?? {}), members }; }
+});
+
+const soulValues = computed(() => {
+  if (!soul.value.values) soul.value.values = [];
+  return soul.value.values;
+});
+
+const soulLimits = computed(() => {
+  if (!soul.value.hard_limits) soul.value.hard_limits = [];
+  return soul.value.hard_limits;
+});
+
+function addSoulValue() {
+  soulValues.value.push({ value: "", why: "" });
+}
+
+function removeSoulValue(index: number) {
+  soulValues.value.splice(index, 1);
+}
+
+function addSoulLimit() {
+  soulLimits.value.push({ limit: "", why: "" });
+}
+
+function removeSoulLimit(index: number) {
+  soulLimits.value.splice(index, 1);
+}
+
+// ── 自述 ────────────────────────────────────────────────────────────────────
+// 只读加删除。写入只有机器人自己能做，人代笔想加的内容属于品格或人设正文。
+const selfNotes = ref<SelfNote[]>([]);
+const selfNotesBusy = ref(false);
+
+async function reloadSelfNotes(): Promise<void> {
+  if (!form.value?.self_note_enabled) {
+    selfNotes.value = [];
+    return;
+  }
+  selfNotesBusy.value = true;
+  try {
+    selfNotes.value = (await listSelfNotes(form.value?.id ?? "")).notes ?? [];
+  } catch {
+    // 自述读不出来不该挡住整个机器人页：它是旁支信息，配置本身不受影响。
+    selfNotes.value = [];
+  } finally {
+    selfNotesBusy.value = false;
+  }
+}
+
+async function removeSelfNote(id: string): Promise<void> {
+  selfNotesBusy.value = true;
+  try {
+    selfNotes.value = (await deleteSelfNote(form.value?.id ?? "", id)).notes ?? [];
+    toastSuccess("已删除这条自述");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "删除失败");
+  } finally {
+    selfNotesBusy.value = false;
+  }
+}
+
+async function clearSelfNotes(): Promise<void> {
+  if (!window.confirm("清空这台机器人写下的全部自述？删掉之后它要重新观察才会再记。")) return;
+  selfNotesBusy.value = true;
+  try {
+    selfNotes.value = (await purgeSelfNotes(form.value?.id ?? "")).notes ?? [];
+    toastSuccess("自述已清空");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "清空失败");
+  } finally {
+    selfNotesBusy.value = false;
+  }
+}
+
+// selfNoteSource 说明这条是在哪、谁在场时记下的。自述跨群生效，来源是主人事后
+// 判断「这句话是谁哄着它写的」的唯一线索。
+function selfNoteSource(note: SelfNote): string {
+  const parts: string[] = [];
+  if (note.source_group_id) parts.push(`群 ${note.source_group_id}`);
+  else parts.push("私聊");
+  if (note.source_user_name || note.source_user_id) parts.push(note.source_user_name || note.source_user_id || "");
+  if (note.created_at) parts.push(formatClock(note.created_at));
+  return parts.filter(Boolean).join(" · ");
+}
+
+// 换一台机器人、或者刚打开编辑页时重新拉自述：它按机器人隔离，上一台的列表留在
+// 屏幕上会让人以为这台也写过。
+watch(
+  () => [form.value?.id, form.value?.self_note_enabled] as const,
+  () => {
+    void reloadSelfNotes();
+  },
+  { immediate: true }
+);
 
 const personaSaverOpen = ref(false);
 const personaNameDraft = ref("");
@@ -2365,7 +2904,17 @@ async function importPersonaFile(event: Event): Promise<void> {
       await importCharacterCardFile(file);
       return;
     }
-    const parsed = JSON.parse(await file.text()) as unknown;
+    const text = await file.text();
+    // YAML 交给后端解析：品格层写成 YAML 才读得下去（有注释、有多行字符串），
+    // 而前端没有 YAML 解析器，为这一件事塞一个进去不值当。
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".yaml") || lowerName.endsWith(".yml")) {
+      const imported = await importPersonaSource(text);
+      savedPersonaLibrary.value = imported.personas ?? [];
+      toastSuccess(`导入 ${imported.imported} 套`);
+      return;
+    }
+    const parsed = JSON.parse(text) as unknown;
     if (looksLikeCharacterCard(parsed)) {
       await importCharacterCardFile(file);
       return;
@@ -2629,19 +3178,9 @@ function setParticipation(value: ParticipationPreferences | undefined): void {
   form.value.participation = value;
 }
 
-const admissionModeOptions: AppSelectOption[] = [
-  { value: "blacklist", label: "黑名单（默认）", hint: "除禁用群外都工作" },
-  { value: "whitelist", label: "白名单", hint: "只在指定群工作" }
-];
-
+// 新群默认在群管理里改，这里只是把读到的值原样带回去：保存机器人配置不该
+// 顺手把它重置成默认的「新群照常工作」。
 const admissionMode = computed(() => form.value?.group_admission?.mode ?? "blacklist");
-
-function setAdmissionMode(mode: "blacklist" | "whitelist"): void {
-  if (!form.value) {
-    return;
-  }
-  form.value.group_admission = { ...(form.value.group_admission ?? {}), mode };
-}
 
 const privateAdmissionModeOptions: AppSelectOption[] = [
   { value: "all", label: "所有人（默认）", hint: "任何用户的私聊都会响应" },
@@ -2766,6 +3305,18 @@ async function toggleAllProfiles(enabled: boolean): Promise<void> {
     busy.value = false;
   }
 }
+// 运行时的启停是整个进程一份，不分机器人：停掉就是所有启用的机器人一起断开。
+async function toggleRuntime(start: boolean): Promise<void> {
+  busy.value = true;
+  try {
+    pushStatusSnapshot(start ? await startBot() : await stopBot());
+    toastSuccess(start ? "机器人已启动" : "机器人已停止");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "操作失败");
+  } finally {
+    busy.value = false;
+  }
+}
 const channelStatuses = computed<readonly BotChannelStatus[]>(() => status.value?.channels ?? (status.value?.channel ? [status.value.channel] : []));
 const visibleChannels = computed(() => {
   const profileID = form.value?.id;
@@ -2819,7 +3370,12 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 }
 
 // —— 模型分配 ——
-type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse";
+// 细分用途：不配就跟着「意图识别」那一档走。摊出来是因为这些调用的性质差得很远——
+// 主动接话判定和发送前审核都能改成判断题（可以绑 TypeSafe Jev 这类只做判断的模型），
+// 而记忆抽取、上下文压缩要的是文本输出，绑上去只会每次先失败一次再降级。
+const purposeRoleKeys = ["background"] as const;
+
+type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
 type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
 const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
@@ -2845,8 +3401,8 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
     key: "intent",
     label: "意图识别",
     description:
-      "所有短小的旁路调用：意图与规则路由、主动接话判定、发送前审核、语义指代、上下文压缩、记忆抽取与归纳、关系评估、防循环与暂停判定，" +
-      "以及发送前提示的改写（上游拒绝、账号安全拦截和其余错误提示都会先用机器人自己的口吻重写一遍再发出去）。这些调用短、频次高，值得单独指一个便宜快的模型。"
+      "判定当前这一轮该不该说话、说出去的这句能不能发：主动接话判定、接话质量和发送前审核。问的都是是非、单选和打分，" +
+      "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev 这类只做判断的模型——更快更便宜。写字的活在「后台生成」那一档。"
   },
   {
     key: "image",
@@ -2854,8 +3410,78 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
     description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
   }
 ];
+// 后台生成是从「意图识别」里拆出来的一档。留空就跟着意图识别，行为和拆之前一样。
+const purposeRoleRows: { key: RoleKey; label: string; description: string }[] = [
+  {
+    key: "background",
+    label: "后台生成（好感度 / 长期记忆）",
+    description:
+      "好感度评估、长期记忆抽取与归纳、上下文摘要、语义指代、转发内容安全，以及各种提示改写。" +
+      "它们都要写出成段文字，判断模型答不了；也不在回复的关键路径上，慢一点没关系。不指定时跟随对话。"
+  }
+];
+
+// 细分用途默认收起：绝大多数部署只需要「意图识别」一档，13 行铺开会把这一页淹掉。
+const purposeRolesOpen = ref(false);
+// 收起时仍然显示已经配过的那几行，否则配完一收就找不到在哪改了。
+const visibleModelRoleRows = computed(() =>
+  purposeRolesOpen.value
+    ? [...modelRoleRows, ...purposeRoleRows]
+    : [...modelRoleRows, ...purposeRoleRows.filter((row) => roleForm.value[row.key])]
+);
+
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
+
+// 模型分配不止这一页能改：主人在聊天里让机器人换模型，写的是同一份机器人配置。
+// savedRoleSnapshot 记着草稿出发时服务端那一版，用来分辨「这一档没动过」和
+// 「两边同时在改」——前者直接跟上新值，后者只提示，不替主人决定保留哪一份。
+const savedRoleSnapshot = ref("");
+const modelRolesChangedElsewhere = ref(false);
+const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
+
+// roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
+function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
+  const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true];
+  return JSON.stringify(
+    Object.keys(roles ?? {})
+      .sort()
+      .map((key) => {
+        const role = roles?.[key];
+        return role ? [key, route(role), (role.fallbacks ?? []).map(route)] : [key];
+      })
+  );
+}
+
+// orderedRoleKeys 按「模型分配」那几行的排法给用途排序，不跟数据来源走。
+// 服务端的 model_roles 是个 map，序列化出来按字母排；草稿又可能在编辑途中被
+// 别处的改动整份换掉，或者因为后加了一档而把新键追加在末尾。键序跟着这些走，
+// 保存出去的配置就会莫名其妙换个样子，配置对比和导出全是噪音。认不出的键按
+// 原样排在后面，别把以后新增的用途悄悄丢掉。
+function orderedRoleKeys(roles: Partial<Record<string, unknown>>): string[] {
+  const known = modelRoleRows.map((row) => row.key).filter((key) => key in roles);
+  return [...known, ...Object.keys(roles).filter((key) => !known.includes(key as RoleKey))];
+}
+
+function setRoleForm(source: BotProfileConfig["model_roles"]): void {
+  const incoming = source ?? {};
+  const roles: typeof roleForm.value = {};
+  for (const key of orderedRoleKeys(incoming)) {
+    const role = incoming[key];
+    roles[key as RoleKey] = {
+      profile_id: role.profile_id,
+      group: role.group,
+      model: role.model,
+      provider_id: role.provider_id,
+      model_id: role.model_id,
+      follow_chat: role.follow_chat,
+      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
+    };
+  }
+  roleForm.value = roles;
+  savedRoleSnapshot.value = roleSnapshot(roles);
+  modelRolesChangedElsewhere.value = false;
+}
 
 // 生成人设时用哪个提供商和模型。undefined 表示跟随对话那一档，和「模型分配」里的
 // 「跟随对话」是同一个意思，也是原来唯一的行为——想换一个更会写文案的模型来起草人设
@@ -2916,7 +3542,8 @@ function llmProviderLabel(provider: LLMConfig["provider"]): string {
   const labels: Record<LLMConfig["provider"], string> = {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
-    anthropic: "Anthropic"
+    anthropic: "Anthropic",
+    typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];
 }
@@ -3378,8 +4005,11 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
+    agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
+    agent_browser_box_enabled: config.agent_browser_box_enabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "owner",
+    repository_disclosure: config.repository_disclosure ?? "owner",
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
@@ -3390,7 +4020,9 @@ function setForm(config: BotProfileConfig): void {
     cross_group_memory_enabled: config.cross_group_memory_enabled ?? false,
     cross_platform_memory_enabled: config.cross_platform_memory_enabled ?? false,
     world_book_enabled: config.world_book_enabled ?? true,
+    self_note_enabled: config.self_note_enabled ?? false,
     romance_enabled: config.romance_enabled ?? false,
+    llm_capability_probe_enabled: config.llm_capability_probe_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,
@@ -3419,54 +4051,18 @@ function setForm(config: BotProfileConfig): void {
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
-  allowedGroups.value = [...(config.group_admission?.allowed_groups ?? [])];
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
   for (const draft of Object.values(tokenDrafts)) {
     draft.value = "";
   }
   // 换一个配置档就得重新索取，别把上一档的明文状态带过来。
   tokenRevealed.value = emptyRevealState();
-  const roles: typeof roleForm.value = {};
-  for (const [key, role] of Object.entries(config.model_roles ?? {})) {
-		roles[key as RoleKey] = {
-      profile_id: role.profile_id,
-      group: role.group,
-      model: role.model,
-      provider_id: role.provider_id,
-      model_id: role.model_id,
-	  follow_chat: role.follow_chat,
-      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback }))
-    };
-  }
-  roleForm.value = roles;
+  setRoleForm(config.model_roles);
 }
 
 function applyConfig(config: BotProfileConfig): void {
   profileSet.value = config;
   setForm(config);
-}
-
-// 群名只在白名单里有群号时才需要，所以群列表懒加载一次就缓存住：
-// 这个页面平时不该为一个可能不显示的字段多发一次请求。
-// 拿不到（listBotGroups 本来就可能不可用）就退回只显示群号，不报错。
-let groupNamesCache: Promise<Record<string, string>> | null = null;
-
-function resolveGroupNames(ids: string[]): Promise<Record<string, string>> {
-  groupNamesCache ??= listBotGroups().then((response) => {
-    const names: Record<string, string> = {};
-    for (const group of response.groups ?? []) {
-      const name = (group.group_name ?? "").trim();
-      if (group.group_id && name !== "") names[group.group_id] = name;
-    }
-    return names;
-  });
-  return groupNamesCache.then((names) => {
-    const picked: Record<string, string> = {};
-    for (const id of ids) {
-      if (names[id]) picked[id] = names[id];
-    }
-    return picked;
-  });
 }
 
 function splitList(raw: string): string[] {
@@ -3609,6 +4205,20 @@ async function save(): Promise<void> {
     toastError("反向 WebSocket 模式必须配置 Access Token，需与 OneBot v11 客户端保持一致");
     return;
   }
+  // 留空 = 没配过，提交时整个字段不带上，后端按默认 5 次；填 0 才是「出错别通知」。
+  const failureAlertThresholdDraft = current.recurring_failure_alert_threshold;
+  const failureAlertThreshold =
+    failureAlertThresholdDraft === undefined || failureAlertThresholdDraft === null || `${failureAlertThresholdDraft}`.trim() === ""
+      ? undefined
+      : Number(failureAlertThresholdDraft);
+  if (
+    failureAlertThreshold !== undefined &&
+    failureAlertThreshold !== 0 &&
+    (!Number.isInteger(failureAlertThreshold) || failureAlertThreshold < 1 || failureAlertThreshold > maximumRecurringFailureAlertThreshold)
+  ) {
+    toastError(`连续失败几次才报请输入 1 到 ${maximumRecurringFailureAlertThreshold} 之间的整数`);
+    return;
+  }
   const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
   if (
     current.recall_reply_auto_delete_enabled &&
@@ -3617,9 +4227,10 @@ async function save(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
-  for (const row of modelRoleRows) {
+  for (const row of [...modelRoleRows, ...purposeRoleRows]) {
     const role = roleForm.value[row.key];
-    if (row.key === "media_parse" && !role) continue;
+    // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
+    if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]))) continue;
     // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && role?.follow_chat) continue;
     if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
@@ -3649,7 +4260,8 @@ async function save(): Promise<void> {
   busy.value = true;
   try {
     const modelRoles: BotProfileConfig["model_roles"] = {};
-    for (const [key, role] of Object.entries(roleForm.value)) {
+    for (const key of orderedRoleKeys(roleForm.value)) {
+      const role = roleForm.value[key as RoleKey];
       if (key !== "chat" && role?.follow_chat) {
         modelRoles[key] = { model: "", follow_chat: true };
         continue;
@@ -3684,13 +4296,11 @@ async function save(): Promise<void> {
         .filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
       agent_command_allowlist: splitList(allowlistDraft.value),
+      recurring_failure_alert_threshold: failureAlertThreshold,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
         : defaultRecallReplyAutoDeleteDelaySeconds,
-      group_admission: {
-        mode: admissionMode.value,
-        allowed_groups: [...allowedGroups.value]
-      },
+      group_admission: { mode: admissionMode.value },
       private_admission: {
         mode: privateAdmissionMode.value,
         allowed_users: [...privateAllowedUsers.value]
@@ -3870,7 +4480,35 @@ useConfigurationRefresh(["bot"], async () => {
   const config = await getBotProfileConfig();
   profileSet.value = config;
   // An editor can have unsaved changes while another cached page saves data.
-  if (page.value !== "edit") setForm(config);
+  if (page.value !== "edit") {
+    setForm(config);
+    return;
+  }
+  syncModelRolesWhileEditing(config);
 });
+
+// 编辑页开着的时候不能拿服务端那份覆盖整个草稿，但模型分配这一档得跟上：主人
+// 多半就是刚在聊天里让机器人换完模型，再回到这一页看结果，页面停在旧值等于告诉
+// 他没换成。草稿里这一档没动过就直接换成新值；动过了只挂一条提示，两边都改时
+// 替谁做主都是错的。
+function syncModelRolesWhileEditing(config: BotProfileConfig): void {
+  const editing = form.value?.id;
+  if (!editing) return;
+  const latest = config.id === editing ? config : (config.profiles ?? []).find((profile) => profile.id === editing);
+  if (!latest) return;
+  const incoming = roleSnapshot(latest.model_roles);
+  if (incoming === savedRoleSnapshot.value) return;
+  if (roleSnapshot(roleForm.value) === savedRoleSnapshot.value) {
+    setRoleForm(latest.model_roles);
+    return;
+  }
+  incomingModelRoles.value = latest.model_roles;
+  modelRolesChangedElsewhere.value = true;
+}
+
+// 放弃这一档的草稿，改用服务端最新的模型分配；其余草稿字段不动。
+function adoptIncomingModelRoles(): void {
+  setRoleForm(incomingModelRoles.value);
+}
 
 </script>

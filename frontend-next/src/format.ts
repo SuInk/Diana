@@ -82,6 +82,28 @@ export function formatNumber(value: number | undefined | null): string {
   return value.toLocaleString("zh-CN");
 }
 
+// Token 这类数字动辄七八位，逐位数「这是一百三十八万还是一千三百八十万」是读不出来的。
+// 按 K/M/B 收成三位以内，和各家模型计费页、控制台的写法一致；原始数字放在 hint 里。
+export function formatCompactNumber(value: number | undefined | null): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return "0";
+  }
+  const magnitude = Math.abs(value);
+  if (magnitude < 1000) {
+    return formatNumber(value);
+  }
+  const units = [
+    { limit: 1e9, suffix: "B" },
+    { limit: 1e6, suffix: "M" },
+    { limit: 1e3, suffix: "K" }
+  ];
+  const unit = units.find((entry) => magnitude >= entry.limit) ?? units[units.length - 1];
+  const amount = value / unit.limit;
+  // 三位有效数字：99.9K 之后进位成 0.1M 反而更难比较，所以整数位越多小数位越少。
+  const digits = Math.abs(amount) >= 100 ? 0 : Math.abs(amount) >= 10 ? 1 : 2;
+  return `${amount.toFixed(digits)}${unit.suffix}`;
+}
+
 export function formatBytes(value: number | undefined | null): string {
   if (value === undefined || value === null || !Number.isFinite(value) || value < 0) {
     return "—";

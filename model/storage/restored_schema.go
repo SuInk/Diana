@@ -214,6 +214,17 @@ CREATE TABLE IF NOT EXISTS onebot_requests (
   decided_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS pending_direct_messages (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL,
+  platform TEXT,
+  user_id TEXT NOT NULL,
+  source_session TEXT,
+  message TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS outbound_delivery_steps (
   turn_id TEXT NOT NULL,
   step_key TEXT NOT NULL,
@@ -313,6 +324,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_jobs_claim ON memory_jobs(status, availabl
 CREATE INDEX IF NOT EXISTS idx_memory_jobs_lease ON memory_jobs(status, lease_until);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_states_active_scope ON thread_states(profile_id, session, user_id, task_kind) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_thread_states_active_expiry ON thread_states(status, expires_at, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pending_direct_messages_target ON pending_direct_messages(profile_id, user_id, expires_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_onebot_requests_identity ON onebot_requests(profile_id, request_type, sub_type, flag);
 CREATE INDEX IF NOT EXISTS idx_onebot_requests_profile_status_time ON onebot_requests(profile_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_claim_time ON inbound_events(status, available_at, event_time, created_at, id);
@@ -322,6 +334,9 @@ CREATE INDEX IF NOT EXISTS idx_inbound_events_session_time ON inbound_events(ses
 CREATE INDEX IF NOT EXISTS idx_inbound_events_group_time ON inbound_events(group_id, event_time DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_time ON inbound_events(event_time DESC, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_inbound_events_outbound_message ON inbound_events(outbound_message_id) WHERE outbound_message_id IS NOT NULL;
+-- 总览页按时间窗统计回复量和耗时是按完成时间筛的，没有这个索引就得全表扫。
+-- 只索引已完成的行：处理中的行 completed_at 是 NULL，从来不参与这类查询。
+CREATE INDEX IF NOT EXISTS idx_inbound_events_completed_at ON inbound_events(completed_at) WHERE completed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_inbound_events_priority_claim ON inbound_events(status, available_at, priority DESC, event_time, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repository_issue_drafts(group_id, status, created_at DESC);
 `)
@@ -347,6 +362,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 		return err
 	}
 	if err := s.migrateMessageReactions(); err != nil {
+		return err
+	}
+	if err := s.migrateSelfNotes(); err != nil {
 		return err
 	}
 	if err := s.migrateNotebookGlobalScopeToBot(); err != nil {

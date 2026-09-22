@@ -58,7 +58,7 @@ func (p *CapabilityKnowledgePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          capabilityKnowledgePluginID,
 		Name:        "能力知识库",
-		Version:     "0.1.5",
+		Version:     "0.1.6",
 		Description: "索引 Diana 核心能力和实时插件清单，通过本地稀疏检索向 Agent 提供与问题相关的能力说明。",
 		Official:    true,
 		BuiltIn:     true,
@@ -141,6 +141,9 @@ func (p *CapabilityKnowledgePlugin) documents(platform, platformRules string) []
 func (t *dianaCapabilitiesTool) Name() string {
 	return "capabilities"
 }
+
+// 从本地能力知识库检索，问的是「我会什么」，不改任何东西。
+func (t *dianaCapabilitiesTool) Introspection(map[string]any) bool { return true }
 
 func (t *dianaCapabilitiesTool) Description() string {
 	return `从 Diana 自身能力知识库检索相关能力、工具、权限门槛和实时插件状态。用户问「你会什么」「能不能处理某事」「哪个插件负责某功能」或质疑机器人能力时必须先调用，不要凭提示词记忆猜测。`
@@ -252,6 +255,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:ocr", Title: "文件与 OCR", Content: "能解析 PDF 和文件；macOS 使用 PDFKit/Vision，本地原生路径不可用时回退 PDFium 与视觉 LLM。", Source: "core", Enabled: true, Required: "熟悉"},
 	{ID: "core:group", Title: "群资料与成员", Content: "群资料和成员统一用 platform：group_info 读群资料和人数，member_list 拉成员候选，member_info 按账号实时核验成员。TG 的成员候选是管理员与已知账号，不是完整名单。回复欲望、评分门槛和冷却由 bot_config 更新 participation；关闭主动插话用 desire_level=off，不用平台禁言。头像来源通过图片工具指定，由运行时按平台获取；本地头像图片匹配用只读 group，不能把部分候选当成全群。", Source: "core", Enabled: true},
 	{ID: "core:group-admin", Title: "禁言与踢人", Content: "群管理操作用 platform 的 mute（禁言）、unmute（解禁）、kick（踢人）：仅机器人主人可用，群管理员和群主都不行；还要求机器人本身是该群管理员，否则直接说做不到，不去猜。目前支持 OneBot v11 和 Telegram，其余平台会明确说不支持。禁言必须给正的时长（秒），OneBot 上限 30 天；只认账号 ID，不按昵称猜，也不能对主人或机器人自己下手。", Source: "core", Enabled: true},
+	{ID: "core:cross-session-message", Title: "跨会话发消息与主动私聊", Content: "群里有人要求「私聊发给我」「私信我」「别发群里」时，可调用 cross_session_message 当场把完整内容发进和对方的私聊窗口，不需要对方先来私聊，也不需要切换会话。主人还能用它把内容发到指定的群。目的地不能是当前这条会话；默认只能发给当前说话的人，指定别人或指定群只有主人可以。私聊准入没放行的人、屏蔽名单里的人、没准入或被关掉的群都不发；同一个目标不连着发，同一个来源会话十分钟内有条数上限。QQ 上会先查好友名册：是好友走普通私聊，不是好友就借发起那条群的共同群走临时会话。临时会话也走不通时内容会被存下来，等对方加上好友后自动发出去，七天内有效，同一个人最多存三条；这时要告诉对方来加好友，并说清好友请求仍然要机器人主人在 onebot_requests 里同意——机器人不会因为有东西要发就替主人放人进来。", Source: "core", Enabled: true},
 	{ID: "core:platform", Title: "平台接口协议", Content: "platform 是跨平台的群操作接口，动词按当前平台映射到原生动作（OneBot v11 或 Telegram Bot API）。读操作对成员开放，禁言/踢人仅主人且需机器人为群管理员。好友请求、成员入群申请和机器人群邀请（OneBot）会持久化并私聊通知主人，由主人通过 onebot_requests 批准或拒绝。", Source: "core", Enabled: true},
 	{ID: "core:runtime-model", Title: "自己在用什么模型", Content: "runtime_model 支持本轮实际模型、所有分组及细分用途的当前配置、语音识别和语音合成服务信息。group=all 查看所有用途，group=history 按当前引用或 message_id 查询本会话已发送图片的实际模型记录，包括备用切换。配置不能代替历史执行证据，旧图片没有记录时明确无法确认；外部语音服务不公开权重名时不能猜。工具只读；主人修改模型分配由 llm_config 完成。", Source: "core", Enabled: true},
 	{ID: "core:version", Title: "自己的版本与更新状态", Content: "通过 version 报出当前版本号、是正式发布版还是源码构建、这台机器上这个版本什么时候装上的、本次运行了多久、跑在什么系统架构上，以及项目的开源地址、最新发布版本、有没有新版本可用、这台机器能不能自更新。", Source: "core", Enabled: true},

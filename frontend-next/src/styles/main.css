@@ -41,6 +41,16 @@
   --accent-soft: rgba(224, 87, 143, 0.12);
   --accent-contrast: #ffffff;
 
+  /* 存储饼图的分类色：和主题强调色无关，换配色时扇区含义不能跟着变。 */
+  --storage-image: #4f8ef7;
+  --storage-video: #a367ef;
+  --storage-audio: #17a67a;
+  --storage-document: #d99320;
+  --storage-database: #e0578f;
+  --storage-other: #7b8794;
+  --storage-system: #8a93a1;
+  --storage-free: #ddd7dd;
+
   --sidebar-width: 236px;
   --topbar-height: 56px;
 }
@@ -82,6 +92,14 @@
   --ok: #2dbd83;
   --warn: #e0a04a;
   --err: #e56a6a;
+  --storage-image: #6ba4ff;
+  --storage-video: #b98bf5;
+  --storage-audio: #34c396;
+  --storage-document: #e9ad45;
+  --storage-database: #ef7fae;
+  --storage-other: #97a3b0;
+  --storage-system: #767f8e;
+  --storage-free: #3a3542;
 }
 
 /* ---------- Base ---------- */
@@ -273,23 +291,22 @@ code {
 /* 品牌区 */
 .sidebar-head {
   display: flex;
-  align-items: flex-start;
-  min-height: 60px;
-  padding-right: 44px;
+  align-items: center;
+  padding: 6px 8px 18px;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  flex: 1;
+  width: 100%;
   min-width: 0;
   gap: 10px;
-  padding: 6px 8px 18px;
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
+  flex: none;
   width: 36px;
   height: 36px;
   border-radius: 11px;
@@ -299,56 +316,37 @@ code {
 }
 
 .brand-name {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-}
-
-.brand-name strong {
+  flex: 1;
+  min-width: 0;
   font-size: 14px;
+  line-height: 1.2;
   letter-spacing: 0.02em;
 }
 
-.brand-name small {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.brand-version {
-  /* 胶囊按钮：一眼看出可点击，而不是一行灰字。 */
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  align-self: flex-start;
-  margin-top: 2px;
-  padding: 1px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
+/* 版本入口跟主题切换同一排：这里是整条侧栏宽，
+   v0.8.132-canary.1 这种预发布号也不用缩写。 */
+/* 叠两个类：.nav-action 写在后面，同权重会盖掉字号和内边距。 */
+.nav-action.version-action {
+  /* 11px + 稍窄的左右内边距：13px 时 v0.8.132-canary.1 装不下。 */
+  padding-inline: 10px;
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 11px;
   color: var(--muted);
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    border-color 0.15s ease;
 }
 
-.brand-version::after {
-  content: "›";
-  font-family: inherit;
-  font-size: 11px;
-  line-height: 1;
-  opacity: 0.7;
-}
-
-.brand-version:hover {
+.nav-action.version-action:hover {
   color: var(--accent);
-  border-color: var(--accent);
+}
+
+/* 兵来将挡：后端返回的 version_label 比侧栏还长时就截断。 */
+.version-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .version-dot {
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1059,7 +1057,9 @@ code {
 }
 
 /* 顶栏 */
+/* 页面唯一的 h1：视图表头里重复的那一行已经删了。 */
 .topbar-title {
+  margin: 0;
   font-size: 16px;
   font-weight: 650;
 }
@@ -1068,10 +1068,10 @@ code {
   flex: 1;
 }
 
+/* 跟品牌同一行排，而不是绝对定位再给它留位：
+   窄屏按钮隐藏时，那块宽度能直接还给品牌。 */
 .sidebar-toggle {
-  position: absolute;
-  top: 16px;
-  right: 14px;
+  flex: none;
   margin: 0;
 }
 
@@ -1396,7 +1396,9 @@ code {
    页面最常做的事。 */
 .view-header {
   display: flex;
-  align-items: flex-end;
+  /* 居中而不是底对齐：删掉重复标题后左边只剩一行字，
+     跟 39px 高的按钮底对齐会差出将近 20px。 */
+  align-items: center;
   flex-wrap: wrap;
   gap: 12px;
   position: sticky;
@@ -1406,8 +1408,10 @@ code {
   /* 不透明，否则滚动的内容会从标题字底下穿过去。表头原本靠 margin 和下方内容
      拉开距离，那段空白在吸顶后同样要被盖住，所以把它换成 padding。 */
   background: var(--bg);
-  padding-bottom: 16px;
-  margin-bottom: 4px;
+  /* 16+4 是给「标题 + 副标题」两行配的；现在只剩一行，
+     再加上按钮把行擑高后文字下方的空隙，总共空了 29px。 */
+  padding-bottom: 8px;
+  margin-bottom: 0;
 }
 
 /* 侧栏底部动作项：和导航项同一套「图标 + 文字」单行样式 */
@@ -1575,14 +1579,22 @@ a.nav-action {
   color: var(--text);
 }
 
-.view-header .view-title h1 {
+/* h2 是顺栏给不了的子页面标题（日志、Skills、上下文……）。 */
+.view-header .view-title h2 {
+  margin: 0;
   font-size: 20px;
+  font-weight: 650;
 }
 
 .view-header .view-title p {
   margin-top: 3px;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* 删掉重复标题后副标题就是这块的第一行，不再需要跟标题拉开。 */
+.view-header .view-title p:first-child {
+  margin-top: 0;
 }
 
 .view-header .view-actions {
@@ -1793,6 +1805,59 @@ a.nav-action {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* 可点的卡片是 button，得把浏览器默认的按钮外观抹平，再补回卡片自己的对齐方式，
+   否则文字会居中、字体也换成系统字体。 */
+.stat-card-clickable {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.stat-card-clickable:hover {
+  border-color: var(--accent);
+}
+
+.stat-card-clickable:active {
+  transform: translateY(1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-card-clickable {
+    transition: none;
+  }
+
+  .stat-card-clickable:active {
+    transform: none;
+  }
+}
+
+/* Token 明细弹窗：分段控件占满一行，合计那一行按卡面的字号给，一眼能认出是同一个数。 */
+.usage-range {
+  display: flex;
+  width: 100%;
+}
+
+.usage-range button {
+  flex: 1;
+}
+
+.usage-detail-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usage-detail-total strong {
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 指标瓦片的统一排版：总览的统计卡片和系统资源共用同一套。 */
@@ -2601,6 +2666,85 @@ a.nav-action {
   gap: 8px;
 }
 
+/* 新群默认和批量开关各占一边：开关那半要垂直居中（.group-list-summary 的
+   baseline 对齐会让开关和文字错位），按钮那半把说明放在按钮下面，挤在同一行
+   会把按钮顶到边上。 */
+.group-scope-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.group-scope-default {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.group-scope-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.group-scope-copy strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.group-scope-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.group-scope-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 群等级那两项是所有群的默认，和上面那栏同宽，两列各占一半。 */
+.group-scope-levels {
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 12px 32px;
+}
+
+.group-scope-level {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.group-scope-level label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.group-scope-level .input,
+.group-scope-level .app-select {
+  max-width: 220px;
+}
+
 .group-search {
   display: flex;
   align-items: center;
@@ -2644,6 +2788,46 @@ a.nav-action {
   background: var(--warn-soft);
   color: var(--warn);
   font-size: 12.5px;
+}
+
+.group-connection-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -2px 0 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted, var(--surface));
+  font-size: 12.5px;
+}
+
+.group-connection-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.group-connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group-connection-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.group-connection-list .connection-all-groups {
+  color: var(--warn);
 }
 
 .group-grid {
@@ -3215,6 +3399,12 @@ a.nav-action {
 }
 
 /* 插件设置弹窗 */
+/* 扩展页顶部的大分类页签：跟下方的视图表头拉开距离，
+   否则「扩展」标题直接贴在标签条底下。 */
+.extension-tabs {
+  margin-bottom: 20px;
+}
+
 .github-settings-tabs {
   width: 100%;
   margin-bottom: 20px;
@@ -3577,8 +3767,100 @@ a.nav-action {
   min-width: 0;
 }
 
+/* 按群授权的那一格里摞着两个下拉：选哪个群，以及这条授权要求什么群身份。
+   身份那个宽度固定，群名再长也不会把它挤没。 */
+.target-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+@media (max-width: 620px) {
+  .target-group { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* 人设库是一排可点的卡片：点正文套用，点右上角小叉删除。宽度自适应内容，
    名字下面那行摘要用来区分「猫娘」和「猫娘 v2」这种。 */
+/* 品格里那两组条目是「一句话 + 一句因为」，横着排才看得出配对关系；窄屏下改成
+   纵向，否则两个输入框各剩十来个字宽，谁也写不下。 */
+.soul-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.soul-row .input:first-child {
+  flex: 0 0 34%;
+}
+
+.soul-row .input:nth-child(2) {
+  flex: 1;
+}
+
+.self-notes-block {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.self-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.self-note-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.self-note-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.self-note-topic {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.self-note-content {
+  word-break: break-word;
+}
+
+.self-note-source {
+  flex: none;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .soul-row {
+    flex-wrap: wrap;
+  }
+
+  .soul-row .input:first-child,
+  .soul-row .input:nth-child(2) {
+    flex: 1 1 100%;
+  }
+
+  .self-note-source {
+    display: none;
+  }
+}
+
 .persona-library {
   display: flex;
   flex-wrap: wrap;
@@ -4295,6 +4577,14 @@ a.nav-action {
 /* 分段控制 */
 .segmented {
   display: inline-flex;
+  /* inline-flex 只管住行内场景。一旦它成了 grid 项或纵向 flex 的子项（表单、
+     弹窗、筛选栏里到处都是），默认的 stretch 会把这条控件拉满整行——按钮排完
+     右边空出一大截灰底，看着像少渲染了一个选项。
+     fit-content 在这三种容器里都成立，又不像 align-self 那样会改横排工具条里的
+     垂直对齐；max-width 兜住窄屏，超宽时仍由容器自己决定截断或滚动。 */
+  width: fit-content;
+  max-width: 100%;
+  justify-self: start;
   padding: 3px;
   gap: 2px;
   border-radius: var(--radius-md);
@@ -4548,20 +4838,49 @@ a.nav-action {
   margin: -2px;
 }
 
+/* 两排共用同一套列：统计卡的竖边要和下面洞察卡的竖边对齐，各排各的就会错位。
+   统计卡是六块，列数跟着它走，三张洞察卡各占两格正好补满一排。 */
 .dashboard-stats,
 .dashboard-insights {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
 }
 
 .dashboard-insights > .card {
   min-width: 0;
+  grid-column: span 2;
 }
 
-.dashboard-chart {
-  grid-column: span 2;
+/* 列数一多每列就窄：运行信息里「3 天 8 小时」这种值先被挤成省略号，再往下卡片
+   标题也开始断行。所以列数跟着可用宽度退，两排一起退，竖边就一直对得上。
+   185px 是运行信息那几行不出省略号的下限，130px 是标题不断行的下限，下面两个
+   断点按这两个宽度反推，并按「侧栏已经收成抽屉」之后的内容宽度算。 */
+@media (max-width: 1280px) {
+  .dashboard-stats,
+  .dashboard-insights {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dashboard-insights > .card {
+    grid-column: span 1;
+  }
+
+  .dashboard-insights > .dashboard-chart {
+    grid-column: span 3;
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard-stats,
+  .dashboard-insights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-insights > .dashboard-chart {
+    grid-column: span 2;
+  }
 }
 
 .setup-callout {
@@ -5213,6 +5532,19 @@ a.nav-action {
     width: 100%;
   }
 
+  .group-scope-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .group-scope-actions {
+    align-items: stretch;
+  }
+
+  .group-scope-buttons .btn {
+    flex: 1;
+  }
+
   .group-search {
     width: auto;
     flex: 1;
@@ -5234,6 +5566,11 @@ a.nav-action {
   .stat-grid,
   .dashboard-insights {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* 两列网格里 span 3 会撑出第三列，走势图退回整行宽。 */
+  .dashboard-chart {
+    grid-column: span 2;
   }
 
   .form-grid {

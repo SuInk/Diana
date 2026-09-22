@@ -9,7 +9,6 @@ import (
 	"log"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -385,16 +384,20 @@ func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProf
 		builder.WriteString(profile.UserID)
 		builder.WriteString("）")
 	}
-	builder.WriteString("\n好感度：")
-	builder.WriteString(strconv.Itoa(profile.Favorability))
-	builder.WriteString("；关系等级：")
-	builder.WriteString(policy.Name)
-	// 不再列「已授权能力」：那份清单每个等级都一样，摆进上下文只会被复述成
-	// 本等级的特权。能力问题由 capabilities 负责。语气要求和恋爱关系同理
-	// 不在这里重复，它们由 relationshipPermissionContext 放在系统尾部（见
-	// formatUserMemoryContext 上的说明）。
-	builder.WriteString("；累计互动：")
-	builder.WriteString(strconv.Itoa(profile.MessageCount))
+	// 只留关系等级，不再写好感度数值和累计互动次数。
+	//
+	// 这两个数在提示词里是纯负担：promptLongTermMemory 本来就规定「不要报出好感度
+	// 数值，除非用户明确问起」，而真被问起时 relationship 工具的描述又要求「必须调用，
+	// 不要根据上下文猜测」——也就是说这两个数平时不让用、要用时必须另外查，摆在这里
+	// 从来不会被正当引用。
+	//
+	// 代价却很实在：累计互动**每条消息都加一**。这一段排在历史之后，数字一变，它后面
+	// 的媒体索引、来源、工具记录、对话对象、时钟全部整体位移，供应商前缀缓存从这里断。
+	// 本机实测连发两条，前 70 条消息逐字相同，却只命中到系统提示词结束（16128），历史
+	// 段一个 token 都没算进去。
+	//
+	// 关系等级保留：它决定语气，取值稳定（同一个人连续几百条消息都是同一档），不会
+	// 每轮推动后面的内容。
 	// 画像和好感度、关系等级一样属于固定核心：它答的是「这个人是谁」，被预算
 	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
 	// 度可控，不参与下面各段的裁剪。

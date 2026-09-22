@@ -130,6 +130,7 @@ for item in \
   diana-webui diana-webui-linux-amd64 diana-webui-linux-arm64 \
   diana-webui-darwin-amd64 diana-webui-darwin-arm64 \
   Diana.app frontend-next run.sh run.bat start-installed.sh \
+  gitea-mcp gitea-mcp.LICENSE \
   uninstall.ps1 .installed-version .diana.pid .diana-updates; do
   rm -rf -- "$install_dir/$item"
 done

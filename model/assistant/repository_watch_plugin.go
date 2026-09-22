@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,17 @@ const (
 	repositoryWatchSettingTimeout = "timeout_seconds"
 	repositoryWatchSettingLimit   = "summary_commit_limit"
 	repositoryWatchSettingPatch   = "follow_up_include_patch"
+
+	// repositoryWatchDefaultTimeoutSeconds 是单次 GitHub 请求的默认上限。
+	// 原来是 20 秒：正常一页 PR（约 130KB）连头带体两秒出头就回来了，20 秒看着
+	// 很宽。但超时打不中「慢」，打中的是「传到一半停住」——出网绕代理时这种停滞
+	// 按十秒计，20 秒刚好卡在上面，于是每天攒出几次 context deadline exceeded，
+	// 一轮轮询失败、三五轮攒够就去群里报一次。
+	//
+	// 订阅是后台任务，等久一点没有代价，等不到才有：超时到了这一轮就整个失败，
+	// 而重试要等下一个轮询周期。所以宁可给足——真正兜住「一轮无限期卡着」的是
+	// repositoryWatchRoundBudget 那道整轮上限，不是这个数。
+	repositoryWatchDefaultTimeoutSeconds = 90
 
 	defaultGitHubAPIURL            = "https://api.github.com"
 	repositoryWatchNoReleaseCursor = "__none__"
@@ -45,12 +57,56 @@ type RepositoryWatchPlugin struct {
 	baseURL string
 	// now 只给测试注入时钟；为空时用 time.Now。
 	now func() time.Time
+	// paceMu / lastRequestAt / requestSpacing 把发往 GitHub 的请求拉开距离，见 awaitRequestSlot。
+	// requestSpacing 只有测试会改成 0——几百个桩请求各等 700ms 会让整包测试多跑几分钟。
+	paceMu         sync.Mutex
+	lastRequestAt  time.Time
+	requestSpacing time.Duration
+}
+
+// awaitRequestSlot 保证两次 GitHub 请求之间至少隔 repositoryWatchRequestSpacing。
+//
+// 一轮检查要连打 commits、PR、issue、release、events 五六个接口，原来是背靠背发的：
+// 一条链路正在抖的时候，这几个请求全落在同一个抖动窗口里，于是整轮一起失败。拉开
+// 之后它们落在不同的时刻，抖动最多打掉其中一个，而不是整轮。
+//
+// 等待发生在单请求超时开始计时之前（调用方随后才 WithTimeout），所以间隔不会吃掉
+// 请求自己的预算。多个订阅同时到点时它们共享同一个节流点，这正是想要的：对 GitHub
+// 的总发送速率被压平，而不是每个订阅各自开闸。
+func (p *RepositoryWatchPlugin) awaitRequestSlot(ctx context.Context) error {
+	p.paceMu.Lock()
+	now := p.clock()
+	wait := p.requestSpacing - now.Sub(p.lastRequestAt)
+	if wait < 0 {
+		wait = 0
+	}
+	p.lastRequestAt = now.Add(wait)
+	p.paceMu.Unlock()
+	if wait == 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 const (
 	// repositoryWatchCheckClockSkew：游标是 __none__ 时拿上次检查的本机时间和 GitHub 的
 	// updated_at 比较，留一点余量，免得本机时钟偏快把刚好卡在检查前后的记录漏掉。
 	repositoryWatchCheckClockSkew = time.Minute
+	// repositoryWatchRequestSpacing 是相邻两次 GitHub 请求之间的最小间隔，见 awaitRequestSlot。
+	// 700ms 是按「一轮五六个请求，整体只多花三四秒」定的：订阅半小时一轮，这点延迟
+	// 看不出来，但足以让一轮里的请求不再挤在同一个抖动窗口里。
+	repositoryWatchRequestSpacing = 700 * time.Millisecond
+	// repositoryWatchPageSize 是列表接口的分页大小。原来一律 per_page=100，而每类动态
+	// 默认只展示 summary_commit_limit（10）条——多取的九成解析完就扔。取 30 是给
+	// 「两轮之间攒了一批」留的余量：命中游标就停，攒多了才会翻第二页。
+	repositoryWatchPageSize = 30
 	// repositoryWatchIssueScanPages 是没有可用游标时，为了找到最新 issue 最多翻的页数。
 	repositoryWatchIssueScanPages = 5
 	// repositoryWatchEventPages 是仓库事件流最多翻的页数，GitHub 最多只给 300 条。
@@ -104,9 +160,11 @@ type repositoryWatchSelection struct {
 	// Diff 只在这一轮确实有人要读 diff 时才置位（目前是跟评）。通知正文从不展示
 	// diff，无条件拉取等于每轮白花一次 compare 加每个 PR 一次 files。
 	Diff bool
-	// PullRequestEvents / IssueEvents 为 nil 时兼容旧订阅并表示全选；显式空数组表示全不选。
+	// PullRequestEvents / IssueEvents / ReleaseKinds 为 nil 时兼容旧订阅并表示全选；
+	// 显式空数组表示全不选。
 	PullRequestEvents []string
 	IssueEvents       []string
+	ReleaseKinds      []string
 }
 
 // wants 判断某一类动态要不要报。nil 是旧订阅的“未存字段”，仍按全选处理；
@@ -148,6 +206,7 @@ type repositoryWatchRelease struct {
 	Body        string    `json:"body,omitempty"`
 	URL         string    `json:"url,omitempty"`
 	PublishedAt time.Time `json:"published_at,omitempty"`
+	Prerelease  bool      `json:"prerelease,omitempty"`
 }
 
 type repositoryWatchPullRequest struct {
@@ -247,19 +306,24 @@ func newRepositoryWatchPlugin(client *http.Client, baseURL string) *RepositoryWa
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &RepositoryWatchPlugin{client: client, baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/")}
+	return &RepositoryWatchPlugin{
+		client:         client,
+		baseURL:        strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		requestSpacing: repositoryWatchRequestSpacing,
+	}
 }
 
 func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID:          repositoryWatchPluginID,
-		Name:        "仓库订阅",
-		Version:     "0.2.6",
-		Description: "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。",
-		Official:    true,
-		BuiltIn:     true,
-		CanAskAgent: true,
-		Permissions: []string{"network:https", "task:persistent", "message:send", "llm:generate"},
+		ID:            repositoryWatchPluginID,
+		Name:          "仓库订阅",
+		Version:       "0.2.8",
+		Description:   "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。",
+		Official:      true,
+		BuiltIn:       true,
+		CanAskAgent:   true,
+		ReportsErrors: true,
+		Permissions:   []string{"network:https", "task:persistent", "message:send", "llm:generate"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         pluginSettingAskAgent,
@@ -315,11 +379,11 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryWatchSettingTimeout,
 				Label:       "仓库检查超时",
-				Description: "单次仓库动态检查的最长等待时间。",
+				Description: "单次 GitHub 请求的最长等待时间。超时会算作一次检查失败，连续失败到阈值才会告警。",
 				Type:        PluginSettingTypeNumber,
-				Default:     20,
+				Default:     repositoryWatchDefaultTimeoutSeconds,
 				Min:         settingRange(5),
-				Max:         settingRange(60),
+				Max:         settingRange(300),
 				Step:        1,
 				Unit:        "秒",
 			},
@@ -451,17 +515,19 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 			change.Truncated = truncated
 		}
 	}
+	var pullRequestCommitSHAs map[int]map[string]bool
 	if selection.PullRequests {
-		pullRequests, snapshot, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, cursor.CheckedAt, selection, settings)
+		pullRequests, snapshot, commitSHAs, err := p.fetchPullRequests(ctx, repository, branch, cursor.PullRequestCursor, cursor.CheckedAt, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
 			change.PullRequests = pullRequests
 			change.Snapshot.PullRequestCursor = snapshot
+			pullRequestCommitSHAs = commitSHAs
 		}
 	}
 	if selection.Commits && selection.PullRequests && len(change.Commits) > 0 && len(change.PullRequests) > 0 {
-		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, settings)
+		change.Commits = p.foldMergedPullRequestCommits(ctx, repository, change.Commits, change.PullRequests, pullRequestCommitSHAs, settings)
 	}
 	if selection.Issues {
 		issues, snapshot, err := p.fetchIssues(ctx, repository, cursor.IssueCursor, cursor.CheckedAt, selection, settings)
@@ -473,7 +539,7 @@ func (p *RepositoryWatchPlugin) checkSelected(ctx context.Context, repository, b
 		}
 	}
 	if selection.Releases {
-		releases, snapshot, err := p.fetchReleases(ctx, repository, cursor, settings)
+		releases, snapshot, err := p.fetchReleases(ctx, repository, cursor, selection, settings)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -596,7 +662,7 @@ func repositoryWatchDiffFiles(payload []repositoryWatchDiffFilePayload, limit in
 }
 
 func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, branch, cursor string, settings SettingValues) ([]repositoryWatchCommit, string, bool, error) {
-	query := url.Values{"per_page": {"100"}}
+	query := url.Values{"per_page": {strconv.Itoa(repositoryWatchPageSize)}}
 	if strings.TrimSpace(branch) != "" {
 		query.Set("sha", strings.TrimSpace(branch))
 	}
@@ -659,41 +725,35 @@ func (p *RepositoryWatchPlugin) fetchCommits(ctx context.Context, repository, br
 	return commits, latest, max(newCommitCount, verifiedTotal) > limit, nil
 }
 
-func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, previousCheckAt time.Time, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, error) {
-	query := url.Values{
-		"state":     {"all"},
-		"sort":      {"updated"},
-		"direction": {"desc"},
-		"per_page":  {"100"},
-	}
-	var payload []struct {
-		Number         int        `json:"number"`
-		Title          string     `json:"title"`
-		Body           string     `json:"body"`
-		State          string     `json:"state"`
-		HTMLURL        string     `json:"html_url"`
-		CreatedAt      time.Time  `json:"created_at"`
-		UpdatedAt      time.Time  `json:"updated_at"`
-		ClosedAt       *time.Time `json:"closed_at"`
-		MergedAt       *time.Time `json:"merged_at"`
-		MergeCommitSHA string     `json:"merge_commit_sha"`
-		User           struct {
-			Login string `json:"login"`
-		} `json:"user"`
-		Base struct {
-			Ref string `json:"ref"`
-		} `json:"base"`
-		Head struct {
-			Ref string `json:"ref"`
-		} `json:"head"`
-	}
-	// 分支过滤交给服务端：本地从最近 100 条里挑的话，发往其他分支的 PR 一多，订阅分支的 PR
-	// 就被挤出去了。本地过滤仍保留，兼容不认 base 参数的实现。
-	if trimmedBranch := strings.TrimSpace(branch); trimmedBranch != "" {
-		query.Set("base", trimmedBranch)
-	}
-	if err := p.getJSON(ctx, "/repos/"+repository+"/pulls?"+query.Encode(), settings, &payload); err != nil {
-		return nil, "", fmt.Errorf("读取 %s pull requests: %w", repository, err)
+// repositoryWatchPullRecord 是两种来源（GraphQL、REST）统一后的 PR 记录。
+// 字段就是通知真正用得到的那些——REST 的 /pulls 每条还会附带 head 和 base 两份完整
+// 仓库对象，占掉响应的六成，解析完直接丢。
+type repositoryWatchPullRecord struct {
+	Number         int        `json:"number"`
+	Title          string     `json:"title"`
+	Body           string     `json:"body"`
+	State          string     `json:"state"`
+	HTMLURL        string     `json:"html_url"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	ClosedAt       *time.Time `json:"closed_at"`
+	MergedAt       *time.Time `json:"merged_at"`
+	MergeCommitSHA string     `json:"merge_commit_sha"`
+	User           struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	Head struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}
+
+func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repository, branch, cursor string, previousCheckAt time.Time, selection repositoryWatchSelection, settings SettingValues) ([]repositoryWatchPullRequest, string, map[int]map[string]bool, error) {
+	payload, err := p.collectPullRecords(ctx, repository, branch, settings)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("读取 %s pull requests: %w", repository, err)
 	}
 	branch = strings.TrimSpace(branch)
 	filtered := payload[:0]
@@ -703,7 +763,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		}
 	}
 	if len(filtered) == 0 {
-		return nil, observedRepositoryWatchCursor(repository, "pull_request", cursor, repositoryWatchNoPullCursor), nil
+		return nil, observedRepositoryWatchCursor(repository, "pull_request", cursor, repositoryWatchNoPullCursor), nil, nil
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
 		return filtered[i].UpdatedAt.After(filtered[j].UpdatedAt) || filtered[i].UpdatedAt.Equal(filtered[j].UpdatedAt) && filtered[i].Number > filtered[j].Number
@@ -714,10 +774,12 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 	}
 	latest := observedRepositoryWatchCursor(repository, "pull_request", cursor, observed)
 	if strings.TrimSpace(cursor) == "" {
-		return nil, latest, nil
+		return nil, latest, nil, nil
 	}
 	limit := settings.Int(repositoryWatchSettingLimit, repositoryWatchDefaultLimit)
 	result := make([]repositoryWatchPullRequest, 0, min(limit, len(filtered)))
+	// 每条 PR 的全量提交 SHA：合并折叠复用它，不再为同一个 PR 重复请求一次提交列表。
+	commitSHAs := make(map[int]map[string]bool, min(limit, len(filtered)))
 	for _, item := range filtered {
 		if !repositoryWatchRecordAfterCursor(item.UpdatedAt, item.Number, cursor, previousCheckAt) {
 			continue
@@ -752,10 +814,11 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 		if status == "updated" {
 			since = repositoryWatchPullCursorTime(cursor)
 		}
-		commits, omittedCommits, rewrittenCommits, err := p.fetchPullRequestCommits(ctx, repository, item.Number, since, limit, settings)
+		commits, omittedCommits, rewrittenCommits, allSHAs, err := p.fetchPullRequestCommits(ctx, repository, item.Number, since, limit, settings)
 		if err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
+		commitSHAs[item.Number] = allSHAs
 		var files []repositoryWatchDiffFile
 		filesTruncated := false
 		if selection.Diff {
@@ -782,7 +845,7 @@ func (p *RepositoryWatchPlugin) fetchPullRequests(ctx context.Context, repositor
 			RewrittenCommits: rewrittenCommits,
 		})
 	}
-	return result, latest, nil
+	return result, latest, commitSHAs, nil
 }
 
 // repositoryWatchPullCursorTime 取出游标里的时间部分，也就是上一轮轮询的水位线。
@@ -809,7 +872,10 @@ func repositoryWatchPullCursorTime(cursor string) time.Time {
 // 给了标题、作者、分支和链接，逐个提交只是重复。
 //
 // 拿不到某个 PR 的提交列表时保留原样：宁可多报，不能因为一次 API 失败就把提交吞掉。
-func (p *RepositoryWatchPlugin) foldMergedPullRequestCommits(ctx context.Context, repository string, commits []repositoryWatchCommit, pullRequests []repositoryWatchPullRequest, settings SettingValues) []repositoryWatchCommit {
+// known 是 fetchPullRequests 顺手带回来的「每条 PR 的全部提交 SHA」。它和这里要的是
+// 同一份数据、来自同一个响应，所以先查它；只有查不到时才补一次请求。以前无条件请求，
+// 每条 merged PR 都会对同一个 /pulls/{n}/commits 发两遍。
+func (p *RepositoryWatchPlugin) foldMergedPullRequestCommits(ctx context.Context, repository string, commits []repositoryWatchCommit, pullRequests []repositoryWatchPullRequest, known map[int]map[string]bool, settings SettingValues) []repositoryWatchCommit {
 	covered := make(map[string]bool)
 	for _, pullRequest := range pullRequests {
 		if !strings.EqualFold(strings.TrimSpace(pullRequest.Status), "merged") {
@@ -819,9 +885,13 @@ func (p *RepositoryWatchPlugin) foldMergedPullRequestCommits(ctx context.Context
 		if sha := strings.ToLower(strings.TrimSpace(pullRequest.MergeCommitSHA)); sha != "" {
 			covered[sha] = true
 		}
-		shas, err := p.fetchPullRequestCommitSHAs(ctx, repository, pullRequest.Number, settings)
-		if err != nil {
-			continue
+		shas, ok := known[pullRequest.Number]
+		if !ok {
+			fetched, err := p.fetchPullRequestCommitSHAs(ctx, repository, pullRequest.Number, settings)
+			if err != nil {
+				continue
+			}
+			shas = fetched
 		}
 		for sha := range shas {
 			covered[sha] = true
@@ -870,7 +940,9 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommitSHAs(ctx context.Context, 
 // 后一种没办法，也不必要。前一种能靠 author date 认出来：变基只刷 committer date，
 // author date 原样保留，所以「committer 新、author 旧」就是被重写的既有提交。它们
 // 单独计数，不混进新增列表，免得一次变基看上去像一批新改动。
-func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues) ([]repositoryWatchPullCommit, int, int, error) {
+// 返回值里的 allSHAs 是这个 PR 的全部提交 SHA。合并提交折叠（foldMergedPullRequestCommits）
+// 要的就是这份名单，而它和这里解析的是同一个响应——分开再请求一次纯属白发。
+func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, repository string, number int, since time.Time, limit int, settings SettingValues) (fresh []repositoryWatchPullCommit, omitted, rewritten int, allSHAs map[string]bool, err error) {
 	if limit <= 0 {
 		limit = repositoryWatchDefaultLimit
 	}
@@ -892,11 +964,14 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, rep
 	}
 	path := fmt.Sprintf("/repos/%s/pulls/%d/commits?per_page=100", repository, number)
 	if err := p.getJSON(ctx, path, settings, &payload); err != nil {
-		return nil, 0, 0, fmt.Errorf("读取 %s PR #%d 提交: %w", repository, number, err)
+		return nil, 0, 0, nil, fmt.Errorf("读取 %s PR #%d 提交: %w", repository, number, err)
 	}
-	fresh := make([]repositoryWatchPullCommit, 0, len(payload))
-	rewritten := 0
+	fresh = make([]repositoryWatchPullCommit, 0, len(payload))
+	allSHAs = make(map[string]bool, len(payload))
 	for _, item := range payload {
+		if sha := strings.ToLower(strings.TrimSpace(item.SHA)); sha != "" {
+			allSHAs[sha] = true
+		}
 		committedAt := item.Commit.Committer.Date
 		if !since.IsZero() && !committedAt.IsZero() && !committedAt.After(since) {
 			continue
@@ -923,9 +998,9 @@ func (p *RepositoryWatchPlugin) fetchPullRequestCommits(ctx context.Context, rep
 		fresh[left], fresh[right] = fresh[right], fresh[left]
 	}
 	if len(fresh) > limit {
-		return fresh[:limit], len(fresh) - limit, rewritten, nil
+		return fresh[:limit], len(fresh) - limit, rewritten, allSHAs, nil
 	}
-	return fresh, 0, rewritten, nil
+	return fresh, 0, rewritten, allSHAs, nil
 }
 
 func repositoryWatchPullCursor(updatedAt time.Time, number int) string {
@@ -965,7 +1040,7 @@ func (p *RepositoryWatchPlugin) fetchIssues(ctx context.Context, repository, cur
 		"state":     {"all"},
 		"sort":      {"updated"},
 		"direction": {"desc"},
-		"per_page":  {"100"},
+		"per_page":  {strconv.Itoa(repositoryWatchPageSize)},
 	}
 	// issues 接口会把 PR 一起返回。有可用游标时只拉游标之后更新过的，PR 再多也挤不掉 issue；
 	// 没有游标时最多翻几页找最新的 issue。
@@ -1118,6 +1193,137 @@ func (p *RepositoryWatchPlugin) collectIssues(ctx context.Context, repository st
 	return filtered, newestSeen, exhausted, nil, nil
 }
 
+// collectPullRecords 取最近更新的 PR。有 Token 时走 GraphQL：REST 的 /pulls 给每条 PR
+// 内嵌 head 和 base 两份完整仓库对象，占掉响应的六成，而这里只用得上两个分支名——
+// SuInk/Diana 一页 100 条是 1.81MB，其中约 1.1MB 解析完就丢。GraphQL 只要声明过的字段。
+// 失败或没有 Token 时退回 REST，行为和以前一致。
+func (p *RepositoryWatchPlugin) collectPullRecords(ctx context.Context, repository, branch string, settings SettingValues) ([]repositoryWatchPullRecord, error) {
+	if token := repositoryWatchToken(repository, settings); token != "" {
+		records, err := p.collectPullRecordsGraphQL(ctx, repository, branch, token, settings)
+		if err == nil {
+			return records, nil
+		}
+		log.Printf("diana repository_watch graphql pulls failed, falling back to REST: repository=%q err=%v", repository, err)
+	}
+	query := url.Values{
+		"state":     {"all"},
+		"sort":      {"updated"},
+		"direction": {"desc"},
+		"per_page":  {strconv.Itoa(repositoryWatchPageSize)},
+	}
+	// 分支过滤交给服务端：本地从最近一页里挑的话，发往其他分支的 PR 一多，订阅分支的 PR
+	// 就被挤出去了。调用方的本地过滤仍保留，兼容不认 base 参数的实现。
+	if trimmedBranch := strings.TrimSpace(branch); trimmedBranch != "" {
+		query.Set("base", trimmedBranch)
+	}
+	var payload []repositoryWatchPullRecord
+	if err := p.getJSON(ctx, "/repos/"+repository+"/pulls?"+query.Encode(), settings, &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (p *RepositoryWatchPlugin) collectPullRecordsGraphQL(ctx context.Context, repository, branch, token string, settings SettingValues) ([]repositoryWatchPullRecord, error) {
+	owner, name, ok := strings.Cut(repository, "/")
+	if !ok || owner == "" || name == "" {
+		return nil, fmt.Errorf("仓库名无效：%s", repository)
+	}
+	variables := map[string]any{"owner": owner, "name": name, "first": repositoryWatchPageSize, "base": nil}
+	if trimmedBranch := strings.TrimSpace(branch); trimmedBranch != "" {
+		variables["base"] = trimmedBranch
+	}
+	var data struct {
+		Repository *struct {
+			PullRequests struct {
+				Nodes []struct {
+					Number      int        `json:"number"`
+					Title       string     `json:"title"`
+					Body        string     `json:"body"`
+					State       string     `json:"state"`
+					URL         string     `json:"url"`
+					CreatedAt   time.Time  `json:"createdAt"`
+					UpdatedAt   time.Time  `json:"updatedAt"`
+					ClosedAt    *time.Time `json:"closedAt"`
+					MergedAt    *time.Time `json:"mergedAt"`
+					MergeCommit *struct {
+						OID string `json:"oid"`
+					} `json:"mergeCommit"`
+					Author *struct {
+						Login string `json:"login"`
+					} `json:"author"`
+					BaseRefName string `json:"baseRefName"`
+					HeadRefName string `json:"headRefName"`
+				} `json:"nodes"`
+			} `json:"pullRequests"`
+		} `json:"repository"`
+	}
+	if err := p.awaitRequestSlot(ctx); err != nil {
+		return nil, err
+	}
+	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, repositoryWatchDefaultTimeoutSeconds)) * time.Second
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	err := postGitHubGraphQL(requestCtx, p.client, p.baseURL, token, "Diana-Repository-Watch", repositoryWatchPullsGraphQLQuery, variables, &data)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if data.Repository == nil {
+		return nil, fmt.Errorf("GitHub GraphQL 找不到仓库 %s", repository)
+	}
+	records := make([]repositoryWatchPullRecord, 0, len(data.Repository.PullRequests.Nodes))
+	for _, node := range data.Repository.PullRequests.Nodes {
+		record := repositoryWatchPullRecord{
+			Number:    node.Number,
+			Title:     node.Title,
+			Body:      node.Body,
+			HTMLURL:   node.URL,
+			CreatedAt: node.CreatedAt,
+			UpdatedAt: node.UpdatedAt,
+			ClosedAt:  node.ClosedAt,
+			MergedAt:  node.MergedAt,
+			// GraphQL 的 state 是 OPEN / CLOSED / MERGED 三档，REST 只有 open / closed
+			// 外加 merged_at。统一成 REST 那套：合不合并由 MergedAt 决定，下游本来
+			// 就是先看 MergedAt 再看 state。
+			State: strings.ToLower(node.State),
+		}
+		if record.State == "merged" {
+			record.State = "closed"
+		}
+		if node.MergeCommit != nil {
+			record.MergeCommitSHA = node.MergeCommit.OID
+		}
+		if node.Author != nil {
+			record.User.Login = node.Author.Login
+		}
+		record.Base.Ref = node.BaseRefName
+		record.Head.Ref = node.HeadRefName
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+const repositoryWatchPullsGraphQLQuery = `query($owner: String!, $name: String!, $first: Int!, $base: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: $first, orderBy: {field: UPDATED_AT, direction: DESC}, baseRefName: $base) {
+      nodes {
+        number
+        title
+        body
+        state
+        url
+        createdAt
+        updatedAt
+        closedAt
+        mergedAt
+        mergeCommit { oid }
+        author { login }
+        baseRefName
+        headRefName
+      }
+    }
+  }
+}`
+
 const repositoryWatchIssuesGraphQLQuery = `query($owner: String!, $name: String!, $since: DateTime, $after: String) {
   repository(owner: $owner, name: $name) {
     issues(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}, filterBy: {since: $since}) {
@@ -1140,7 +1346,7 @@ func (p *RepositoryWatchPlugin) collectIssuesGraphQL(ctx context.Context, reposi
 	if !cursorTime.IsZero() {
 		variables["since"] = cursorTime.UTC().Format(time.RFC3339)
 	}
-	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, 20)) * time.Second
+	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, repositoryWatchDefaultTimeoutSeconds)) * time.Second
 	var items []repositoryWatchIssueRecord
 	reopenTimes := map[int]time.Time{}
 	for page := 1; page <= repositoryWatchIssueScanPages; page++ {
@@ -1172,6 +1378,9 @@ func (p *RepositoryWatchPlugin) collectIssuesGraphQL(ctx context.Context, reposi
 					} `json:"nodes"`
 				} `json:"issues"`
 			} `json:"repository"`
+		}
+		if err := p.awaitRequestSlot(ctx); err != nil {
+			return nil, false, nil, err
 		}
 		requestCtx, cancel := context.WithTimeout(ctx, timeout)
 		err := postGitHubGraphQL(requestCtx, p.client, p.baseURL, token, "Diana-Repository-Watch", repositoryWatchIssuesGraphQLQuery, variables, &data)
@@ -1214,7 +1423,7 @@ func (p *RepositoryWatchPlugin) fetchIssueReopenTimes(ctx context.Context, repos
 			Number int `json:"number"`
 		} `json:"issue"`
 	}
-	if err := p.getJSON(ctx, "/repos/"+repository+"/issues/events?per_page=100", settings, &payload); err != nil {
+	if err := p.getJSON(ctx, fmt.Sprintf("/repos/%s/issues/events?per_page=%d", repository, repositoryWatchPageSize), settings, &payload); err != nil {
 		return nil, fmt.Errorf("读取 %s issue events: %w", repository, err)
 	}
 	times := make(map[int]time.Time, len(payload))
@@ -1287,12 +1496,8 @@ func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository strin
 	for _, item := range events {
 		state.EventID, state.EventAt = advanceStarCursor(state.EventID, state.EventAt, item)
 	}
-	if state.EventID == cursor.StarEventID && cursor.StarEventID != "" && cursor.StarEventID != repositoryWatchNoStarEvent && (len(events) == 0 || events[0].ID != state.EventID) {
-		observed := repositoryWatchNoStarEvent
-		if len(events) > 0 {
-			observed = events[0].ID
-		}
-		logRepositoryOpaqueCursorRetained(repository, "star", cursor.StarEventID, observed, "empty_or_older_response")
+	if starCursorStalled(events, cursor.StarEventID, state.EventID) {
+		logRepositoryOpaqueCursorRetained(repository, "star", cursor.StarEventID, events[0].ID, "older_response")
 	}
 	// 首轮只记游标：把仓库历史上的 star 一次性全播出去毫无意义。
 	if strings.TrimSpace(cursor.StarEventID) == "" {
@@ -1317,6 +1522,20 @@ func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository strin
 	}, state, nil
 }
 
+// starCursorStalled 判断这一轮要不要记一行「游标没往前走」。
+//
+// 只有「拿到了 star 事件，但游标停在原地」才值得记：那说明返回的顺序或内容和预期对不
+// 上，是真该看一眼的事。事件流里一条 star 都没有是常态，不是异常——/repos/{repo}/events
+// 只保留最近一段的事件，活跃仓库每分钟都有 push、PR、release 把它挤走，上一次 star 隔天
+// 就翻不到了。原先这种情况也照记不误：线上两个仓库各 547 行/天，日志涨到 18 MB，每一行
+// 都在说「今天也没人 star」。
+func starCursorStalled(events []repositoryWatchStargazer, previous, next string) bool {
+	if len(events) == 0 || previous == "" || previous == repositoryWatchNoStarEvent {
+		return false
+	}
+	return next == previous && events[0].ID != previous
+}
+
 // fetchStarEvents 从仓库事件流里挑出 star 事件，按 GitHub 的顺序（新的在前）返回。
 //
 // 事件流是所有类型混在一起的（push、PR、评论……）。以前只看第一页 100 条，两次检查之间
@@ -1337,7 +1556,7 @@ func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository,
 	var payload []eventPayload
 	for page := 1; page <= repositoryWatchEventPages; page++ {
 		var batch []eventPayload
-		if err := p.getJSON(ctx, fmt.Sprintf("/repos/%s/events?per_page=100&page=%d", repository, page), settings, &batch); err != nil {
+		if err := p.getJSON(ctx, fmt.Sprintf("/repos/%s/events?per_page=%d&page=%d", repository, repositoryWatchPageSize, page), settings, &batch); err != nil {
 			if page > 1 {
 				break
 			}
@@ -1352,7 +1571,7 @@ func (p *RepositoryWatchPlugin) fetchStarEvents(ctx context.Context, repository,
 			}
 		}
 		// 首轮（还没有游标）只记最新位置，第一页就够。
-		if len(batch) < 100 || seenLast || lastEventID == "" || lastEventID == repositoryWatchNoStarEvent {
+		if len(batch) < repositoryWatchPageSize || seenLast || lastEventID == "" || lastEventID == repositoryWatchNoStarEvent {
 			break
 		}
 	}
@@ -1441,7 +1660,10 @@ func (p *RepositoryWatchPlugin) getJSON(ctx context.Context, path string, settin
 }
 
 func (p *RepositoryWatchPlugin) getJSONAccept(ctx context.Context, path string, settings SettingValues, accept string, target any) error {
-	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, 20)) * time.Second
+	if err := p.awaitRequestSlot(ctx); err != nil {
+		return err
+	}
+	timeout := time.Duration(settings.Int(repositoryWatchSettingTimeout, repositoryWatchDefaultTimeoutSeconds)) * time.Second
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, p.baseURL+path, nil)

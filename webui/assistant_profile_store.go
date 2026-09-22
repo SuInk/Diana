@@ -21,6 +21,7 @@ type BotProfileStore interface {
 }
 
 type MemoryBotProfileStore struct {
+	botProfileChangeNotifier
 	mu   sync.RWMutex
 	data assistant.ProfileSet
 }
@@ -43,7 +44,13 @@ func (s *MemoryBotProfileStore) Profiles() assistant.ProfileSet {
 }
 
 // SaveProfiles 更新内存中的机器人配置集。
-func (s *MemoryBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
+func (s *MemoryBotProfileStore) SaveProfiles(set assistant.ProfileSet) (err error) {
+	// 先注册后执行：defer 后进先出，这一条最后跑，那时写锁已经放开。
+	defer func() {
+		if err == nil {
+			s.notifyChanged()
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = set.WithDefaults()
@@ -51,7 +58,12 @@ func (s *MemoryBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
 }
 
 // SaveProfileConfig 按机器人 ID 覆盖内存里这台机器人的配置。
-func (s *MemoryBotProfileStore) SaveProfileConfig(cfg assistant.BotConfig) error {
+func (s *MemoryBotProfileStore) SaveProfileConfig(cfg assistant.BotConfig) (err error) {
+	defer func() {
+		if err == nil {
+			s.notifyChanged()
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next, err := upsertProfileConfig(s.data, cfg)
@@ -63,6 +75,7 @@ func (s *MemoryBotProfileStore) SaveProfileConfig(cfg assistant.BotConfig) error
 }
 
 type PersistentBotProfileStore struct {
+	botProfileChangeNotifier
 	mu    sync.RWMutex
 	data  assistant.ProfileSet
 	store *storage.SQLiteStore
@@ -94,7 +107,12 @@ func (s *PersistentBotProfileStore) Profiles() assistant.ProfileSet {
 // SaveProfiles 保存机器人配置集。
 // 落库失败必须往上抛:以前这里把错误丢了,磁盘写不进去时接口照样回 200,
 // 前端提示「保存成功」,重启后配置又变回旧值,查起来完全没有线索。
-func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) error {
+func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) (err error) {
+	defer func() {
+		if err == nil {
+			s.notifyChanged()
+		}
+	}()
 	set = set.WithDefaults()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -106,7 +124,12 @@ func (s *PersistentBotProfileStore) SaveProfiles(set assistant.ProfileSet) error
 }
 
 // SaveProfileConfig 按机器人 ID 覆盖这台机器人的配置并落库。
-func (s *PersistentBotProfileStore) SaveProfileConfig(cfg assistant.BotConfig) error {
+func (s *PersistentBotProfileStore) SaveProfileConfig(cfg assistant.BotConfig) (err error) {
+	defer func() {
+		if err == nil {
+			s.notifyChanged()
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	set, err := upsertProfileConfig(s.data, cfg)

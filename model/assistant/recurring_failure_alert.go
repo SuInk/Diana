@@ -16,18 +16,33 @@ import (
 //
 // 仓库订阅早就是这个规矩，这里把同一套判断推广到其余周期订阅上，阈值也共用一个。
 
-const recurringFailureAlertThreshold = repositoryWatchFailureAlertThreshold
+const defaultRecurringFailureAlertThreshold = 5
+
+// recurringFailureAlertThreshold 取这条订阅生效的告警阈值：没配过用默认 5，
+// 配成 0 就是彻底不报。阈值是机器人级配置，群级覆盖里没有它，所以按订阅来源
+// 取到的就是那个机器人的设置。
+func (r *Runtime) recurringFailureAlertThreshold(item Reminder) int {
+	cfg := r.effectiveConfigForEvent(reminderSourceEvent(item))
+	if cfg.RecurringFailureAlertThreshold == nil {
+		return defaultRecurringFailureAlertThreshold
+	}
+	if value := *cfg.RecurringFailureAlertThreshold; value > 0 {
+		return value
+	}
+	return 0
+}
 
 // recurringFailureShouldAlert 判断这次失败要不要打扰订阅者。
-func recurringFailureShouldAlert(item Reminder) bool {
+func recurringFailureShouldAlert(item Reminder, threshold int) bool {
 	if reminderIsRepositoryWatch(item) {
-		return repositoryWatchFailureShouldAlert(item)
+		return repositoryWatchFailureShouldAlert(item, threshold)
 	}
 	if !reminderIsRecurring(item) {
-		// 一次性提醒：失败即报。
+		// 一次性提醒：失败即报。它没有「下个周期」，阈值管不到它——
+		// 不报就等于这条提醒悄悄丢了。
 		return true
 	}
-	return item.ConsecutiveFailures >= recurringFailureAlertThreshold && item.FailureAlertedAt.IsZero()
+	return threshold > 0 && item.ConsecutiveFailures >= threshold && item.FailureAlertedAt.IsZero()
 }
 
 // resetRecurringFailureStateAfterSuccess 一次成功就把失败流水清掉；如果这轮故障确实报过警，
@@ -52,7 +67,7 @@ func recurringSubscriptionKindLabel(item Reminder) string {
 // markReminderFailureAlerted 记下「这轮故障已经报过警了」，让后续失败保持安静。
 // 只有当失败状态没变（仍然连续失败到阈值、还没标记过）时才落库，
 // 否则说明中途已经恢复又坏了，那是新的一轮，应当重新计数。
-func (r *Runtime) markReminderFailureAlerted(id string, alertedAt time.Time) (Reminder, error) {
+func (r *Runtime) markReminderFailureAlerted(id string, threshold int, alertedAt time.Time) (Reminder, error) {
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -61,7 +76,7 @@ func (r *Runtime) markReminderFailureAlerted(id string, alertedAt time.Time) (Re
 		if item.ID != id || !reminderIsRecurring(*item) {
 			continue
 		}
-		if item.ConsecutiveFailures < recurringFailureAlertThreshold {
+		if item.ConsecutiveFailures < threshold {
 			return *item, fmt.Errorf("周期订阅 %s 的失败状态已变化", id)
 		}
 		if item.FailureAlertedAt.IsZero() {
@@ -81,7 +96,7 @@ func (r *Runtime) notifyRecurringFailureRecovery(ctx context.Context, item Remin
 		return ctx.Err()
 	}
 	notice := fmt.Sprintf("%s已恢复，后续结果会继续正常发送。", recurringSubscriptionKindLabel(item))
-	return r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
+	return r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), reminderDiagnosticPluginID(item), notice)
 }
 
 // clearReminderRecoveryNotice 把「待发恢复通知」标记落下去，避免重复通知。
@@ -108,12 +123,13 @@ func (r *Runtime) clearReminderRecoveryNotice(id string) error {
 func (r *Runtime) reportRecurringReminderFailure(ctx context.Context, item Reminder, cause error) {
 	var noticeErr error
 	noticeAttempted := false
-	if ctx.Err() == nil && recurringFailureShouldAlert(item) {
+	threshold := r.recurringFailureAlertThreshold(item)
+	if ctx.Err() == nil && recurringFailureShouldAlert(item, threshold) {
 		noticeAttempted = true
 		noticeErr = r.notifyReminderFailure(ctx, item, cause)
 		if noticeErr == nil {
 			// 发出去了才记标记：发送失败时留着零值，下个周期还会再试一次。
-			if alerted, markErr := r.markReminderFailureAlerted(item.ID, time.Now()); markErr != nil {
+			if alerted, markErr := r.markReminderFailureAlerted(item.ID, threshold, time.Now()); markErr != nil {
 				noticeErr = markErr
 			} else {
 				item = alerted

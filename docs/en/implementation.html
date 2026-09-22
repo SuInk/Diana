@@ -86,7 +86,7 @@
           <tr><td>Configuration, credentials, sessions, messages, memory, tasks</td><td><code>data/diana.db</code></td><td>Must be backed up, keeping the main database consistent with WAL/SHM.</td></tr>
           <tr><td>Inbound media</td><td><code>data/media</code></td><td>Can be evicted by size; back it up when historical image recognition matters.</td></tr>
           <tr><td>Runtime logs</td><td><code>logs/diana.log</code></td><td>Rotate regularly; never publish platform events or debug context.</td></tr>
-          <tr><td>Install and update backups</td><td><code>.installer/backups</code>, <code>.diana-updates</code></td><td>Keep the last known-good version and the evidence needed to restore it.</td></tr>
+          <tr><td>Install and update backups</td><td><code>.installer/backups</code>, <code>.diana-updates</code> under the data directory</td><td>Keep the last known-good version and the evidence needed to restore it.</td></tr>
         </tbody></table></div>
       </section>
 

@@ -128,6 +128,7 @@ type repoPluginManifestFile struct {
 	Platforms     []string            `json:"platforms,omitempty"`
 	PlatformNotes map[string]string   `json:"platform_notes,omitempty"`
 	Settings      []PluginSettingSpec `json:"settings,omitempty"`
+	ReportsErrors bool                `json:"reports_errors,omitempty"`
 	Entry         string              `json:"entry"`
 	Files         []string            `json:"files,omitempty"`
 	MinDiana      string              `json:"min_diana,omitempty"`
@@ -336,6 +337,7 @@ func (m repoPluginManifestFile) pluginManifest() PluginManifest {
 		PlatformNotes: notes,
 		Permissions:   append([]string(nil), m.Permissions...),
 		Settings:      m.Settings,
+		ReportsErrors: m.ReportsErrors,
 	}
 }
 
@@ -631,11 +633,15 @@ type RepoPluginInstaller struct {
 	MirrorBase func(context.Context) string
 }
 
+// repoPluginInstallHTTPTimeout 是拉取插件源码的上限。这是个人按一下等着的动作，
+// 但下载的是整个仓库压缩包，网络一抖就得从头再来一遍——宁可多等。
+const repoPluginInstallHTTPTimeout = 3 * time.Minute
+
 // NewRepoPluginInstaller 创建安装器。dataDir 是 SQLite 所在的数据目录，
 // 插件源码落在 <dataDir>/plugin-sources/<id>/。
 func NewRepoPluginInstaller(dataDir string, client *http.Client) *RepoPluginInstaller {
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = &http.Client{Timeout: repoPluginInstallHTTPTimeout}
 	}
 	return &RepoPluginInstaller{
 		Client:      client,

@@ -21,14 +21,35 @@ import (
 // 线上 7 天的数据：真人在 10 分钟内最多被回复 17 次，两台 AI 分别是 40 和 67 次。
 const (
 	replyDampingWindow = 10 * time.Minute
-	// 10 分钟内回同一个账号达到这么多条，发送前审核开始判这一串来回有没有目的。
-	replyDampingDenseLimit = 10
-	// 被管理员标记成机器人的账号更早开始判。
-	replyDampingMarkedBotDenseLimit = 2
+	// 10 分钟内回同一个账号达到这么多条，就把密度证据交给发送前审核，让它判这一串
+	// 来回有没有目的；降欲望期间点名消息的冷却也从这条起按条累加。
+	//
+	// 这个数以前是 10，照着上面那句「真人 10 分钟内最多被回复 17 次」留的余量。但
+	// 密度在这里决定的不是结论，只是什么时候该问一句「这是在干什么」，而问这一句
+	// 不额外花钱：空转判断和表达质量、账号安全共用发送前那一次审核调用，密度只是
+	// 同一份载荷里多一个字段。既然问是免费的，就没有理由让它先转够十轮。
+	//
+	// 两条起判：一来一回两次之后才谈得上「一连串来回」，再早就没有东西可判。判成
+	// 「无目的」的后果由审核自己的判据兜底——有明确任务在推进一律 false、拿不准一律
+	// false——密度只负责把问题递上去。被标记成机器人的账号走的也是这个数，不再单设
+	// 一档：判据本来就与对方是不是机器人无关。
+	replyDampingDenseLimit = 2
 	// 降欲望期间点名消息的冷却，每多回一条就再加一档。
 	replyDampingCooldownStep = 20 * time.Second
-	// 判到无目的之后，降欲望持续这么久；期间只要再判到有目的就立刻解除。
+	// 判到空转之后，降欲望持续这么久，从判定那一刻起算。
+	//
+	// 曾经改成「每放掉一条就续上」，让对方一直刷就一直停。那样新内容也跟着被连坐：
+	// 降欲望是按账号收口的，续期之后这个人只要不点名就永远说不上话。真正该一直挡住
+	// 的是复读，而复读现在逐条判、逐条丢（见 botReplyLoopAIDecision.selfRepeatDropsReply），
+	// 不需要靠这一层续期来兜。期间只要再判到有目的，仍然立刻解除。
 	replyDampingPurposelessRetention = 10 * time.Minute
+)
+
+// 降欲望的三种起因，原样写进事件理由。
+const (
+	replyDampingCausePurposeless = "最近判断这串来回没有明确目的"
+	replyDampingCauseMeaningless = "最近判断这一来一回已经没有实质内容"
+	replyDampingCauseSelfRepeat  = "最近判断机器人在把自己说过的话换个说法重复"
 )
 
 type replyDampingHit struct {
@@ -38,8 +59,12 @@ type replyDampingHit struct {
 
 type replyDampingState struct {
 	Sent []replyDampingHit
-	// PurposelessAt 是最近一次判到「高频且无目的」的时间，零值表示当前没有降欲望。
+	// PurposelessAt 是最近一次判到空转的时间，零值表示当前没有降欲望。
 	PurposelessAt time.Time
+	// PurposelessCause 是那次判的是哪一种空转。写进事件理由时要如实说：停下来的
+	// 原因可能是「在复读自己」，而不是「这串来回没有目的」——理由写错会让下一个
+	// 排查的人照着错的方向找。
+	PurposelessCause string
 }
 
 type replyDamping struct {
@@ -76,13 +101,6 @@ func (r *Runtime) replyDampingApplies(event MessageEvent) bool {
 	}
 	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
 	return userID != botID && (event.Kind == EventKindGroup || event.Kind == EventKindPrivate)
-}
-
-func (r *Runtime) replyDampingDenseLimit(event MessageEvent) int {
-	if r.accountMarkedAsBot(event) {
-		return replyDampingMarkedBotDenseLimit
-	}
-	return replyDampingDenseLimit
 }
 
 // replyDampingStateLocked 取出并清理这个账号的状态；调用方持有锁。
@@ -133,14 +151,15 @@ func (r *Runtime) replyDensityForAudit(event MessageEvent, now time.Time) (reply
 	r.replyDamping.mu.Lock()
 	defer r.replyDamping.mu.Unlock()
 	state := r.replyDampingStateLocked(event, now, false)
-	if state == nil || len(state.Sent) < r.replyDampingDenseLimit(event) {
+	if state == nil || len(state.Sent) < replyDampingDenseLimit {
 		return replyDensity{}, false
 	}
 	return replyDensity{BotRepliesToSender: len(state.Sent), WindowMinutes: int(replyDampingWindow / time.Minute)}, true
 }
 
-// markReplyPurpose 记下审核对这一串高频来回的判断：无目的就开始降欲望，有目的就解除。
-func (r *Runtime) markReplyPurpose(event MessageEvent, purposeless bool, now time.Time) {
+// markReplyPurpose 记下审核对这一串来回的判断：判到空转就开始降欲望，判到有目的就解除。
+// cause 说明这次是哪一种空转，只在 purposeless 为真时有意义。
+func (r *Runtime) markReplyPurpose(event MessageEvent, purposeless bool, cause string, now time.Time) {
 	if !r.replyDampingApplies(event) {
 		return
 	}
@@ -148,9 +167,9 @@ func (r *Runtime) markReplyPurpose(event MessageEvent, purposeless bool, now tim
 	defer r.replyDamping.mu.Unlock()
 	state := r.replyDampingStateLocked(event, now, true)
 	if purposeless {
-		state.PurposelessAt = now
+		state.PurposelessAt, state.PurposelessCause = now, cause
 	} else {
-		state.PurposelessAt = time.Time{}
+		state.PurposelessAt, state.PurposelessCause = time.Time{}, ""
 	}
 }
 
@@ -175,14 +194,18 @@ func (r *Runtime) replyDampingJudge(event MessageEvent, text string, proactive b
 		return replyDampingVerdict{}
 	}
 	sent := len(state.Sent)
-	prefix := fmt.Sprintf("回复欲望衰减：%d 分钟内已回复该账号 %d 次，最近判断这串来回没有明确目的", int(replyDampingWindow/time.Minute), sent)
+	cause := state.PurposelessCause
+	if strings.TrimSpace(cause) == "" {
+		cause = replyDampingCausePurposeless
+	}
+	prefix := fmt.Sprintf("回复欲望衰减：%d 分钟内已回复该账号 %d 次，%s", int(replyDampingWindow/time.Minute), sent, cause)
 	if proactive {
 		return replyDampingVerdict{Skip: true, Reason: prefix + "，暂不主动接它的话"}
 	}
 	if !named {
 		return replyDampingVerdict{Skip: true, Reason: prefix + "，只接 @、引用或叫名字的消息"}
 	}
-	dense := r.replyDampingDenseLimit(event)
+	dense := replyDampingDenseLimit
 	if sent < dense || len(state.Sent) == 0 {
 		return replyDampingVerdict{}
 	}

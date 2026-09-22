@@ -26,6 +26,21 @@ type Tool interface {
 	Run(ctx context.Context, input map[string]any) (string, error)
 }
 
+// IntrospectionTool 由工具自己声明「这次调用只是打听 Diana 自己」。声明了就不占
+// MaxSteps，改走自省配额（见 runner.go 的 maxIntrospectionCallsPerAgentRun）。
+//
+// 门槛是三条同时成立，不是「跑得快」：
+//   - 只读：不改任何状态，也不对外部世界产生动作；
+//   - 本地：不走外部往返，耗时不取决于别人的服务；
+//   - 自省：答案是 Diana 自身的能力、身份、配置，而不是任务本身的进展。
+//
+// 快但会写的工具（改配置、发消息、戳一戳）不在此列——步数预算约束的是干活，不是延迟。
+// 带 input 是因为同一个工具可能一半只读一半是动作（extension_access 的 list 与改档位）。
+type IntrospectionTool interface {
+	Tool
+	Introspection(input map[string]any) bool
+}
+
 // ToolInputSchema optionally exposes the tool's JSON Schema to providers with
 // native function calling. Existing tools remain compatible with a permissive
 // object schema until they provide a strict schema.
@@ -96,6 +111,8 @@ type ToolRegistry struct {
 	parent             *ToolRegistry
 	parentOnly         map[string]bool
 	hidden             map[string]bool
+	restricted         map[string]bool
+	denied             map[string]bool
 	extensionOverrides map[string]bool
 	activeViews        int
 	closeRequested     bool
@@ -110,22 +127,25 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		return nil, err
 	}
 	registry := NewToolRegistry()
-	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验。
-	registry.Register(&ListFilesTool{root: root, limit: cfg.ListDirectoryLimit})
-	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
+	protected := agentProtectedFiles(cfg)
+	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验；运行时自己的
+	// 配置文件另外由 protected 拦掉，见 agentProtectedFiles。
+	registry.Register(&ListFilesTool{root: root, limit: cfg.ListDirectoryLimit, protected: protected})
+	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes, protected: protected})
 	// 检索和按名字找文件与 read_file 同级：都只读，都锁在工作目录内。
 	// 没有它们的话，模型定位一个文件只能靠 list_files 一层层翻或者猜路径。
-	registry.Register(&GrepTool{root: root, maxBytes: cfg.ReadFileMaxBytes})
-	registry.Register(&FindFilesTool{root: root})
+	registry.Register(&GrepTool{root: root, maxBytes: cfg.ReadFileMaxBytes, protected: protected})
+	registry.Register(&FindFilesTool{root: root, protected: protected})
 	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
 	if cfg.FileWriteEnabled {
-		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes})
-		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes})
+		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
+		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected})
 	}
 	if len(cfg.CommandAllowlist) > 0 {
 		registry.Register(&RunCommandTool{
 			root:           root,
 			allowlist:      commandAllowlistSet(cfg.CommandAllowlist),
+			protected:      protected,
 			timeout:        time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
 			maxBytes:       cfg.MaxToolOutputChars,
 			sandboxMode:    cfg.CommandSandbox,
@@ -134,6 +154,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		})
 	}
 	registry.RegisterBrowserTools(root, cfg)
+	registry.RegisterBrowserControlTools(root, cfg)
 	return registry, nil
 }
 
@@ -262,7 +283,13 @@ func (r *ToolRegistry) SetSkills(skills []SkillMetadata) {
 // RegisterBuiltinSkills exposes only embedded, trusted instructions. It does
 // not scan local skill roots or create MCP connections.
 func (r *ToolRegistry) RegisterBuiltinSkills(skills []SkillMetadata) {
-	r.SetSkills(normalizeBuiltinSkills(skills))
+	r.RegisterScopedSkills(skills, nil, nil)
+}
+
+// RegisterScopedSkills 固定这份视图能看到的 skill：内置的那几份，加上显式放开的
+// extra。设过之后不会再继承共享底座上的其他 skill，read_skill 也读不到它们。
+func (r *ToolRegistry) RegisterScopedSkills(builtin, extra []SkillMetadata, reservedNames []string) {
+	r.SetSkills(mergeBuiltinSkills(builtin, extra, reservedNames))
 	tools := newLiveSkillTools(r.Skills)
 	r.Register(tools.Read)
 }
@@ -363,6 +390,7 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 	base := browserToolBase{
 		root:     root,
 		cdpURL:   cfg.BrowserCDPURL,
+		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
 		maxChars: cfg.MaxToolOutputChars,
 	}
@@ -400,6 +428,75 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	return tool, ok
 }
 
+// DenyTools 记下「这个名字本次会话没权限用」。
+//
+// 有些工具的权限门槛在注册之前就判完了——不够格就根本不构造这个工具，注册表自然
+// 也不知道有过这个名字。于是模型问起来只会得到「不存在」，它照字面理解成拼错了，
+// 换个名字接着猜，一路把工具预算耗光（线上真发生过：非主人在群里让机器人开 issue，
+// github 工具因为没权限没注册，模型连猜四个名字直到额度用尽）。
+//
+// 这里只登记名字，不构造也不注册工具：能不能调用完全不受影响，变的只是取不到时
+// 该说哪句话。
+func (r *ToolRegistry) DenyTools(names ...string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			if r.denied == nil {
+				r.denied = map[string]bool{}
+			}
+			r.denied[name] = true
+		}
+	}
+}
+
+// PolicyDenied 回答「这个名字是查无此工具，还是本次会话没权限用」。被身份白名单
+// 摘掉、被机器人开关停用、调用方显式登记过没权限，或只存在于共享底座却不在白名单
+// 里的工具都算后者：调用方据此给出的提示不一样，模型才不会对着同一个名字反复重试。
+func (r *ToolRegistry) PolicyDenied(name string) bool {
+	if r == nil || name == "" {
+		return false
+	}
+	// 拿得到就不是权限问题：这个判断要能独立回答，不能依赖调用方先试过 Get。
+	if _, ok := r.Get(name); ok {
+		return false
+	}
+	r.mu.RLock()
+	_, local := r.tools[name]
+	restricted := r.restricted[name]
+	hidden := r.hidden[name]
+	denied := r.denied[name]
+	allowed := cloneToolAllowlist(r.parentOnly)
+	parent := r.parent
+	r.mu.RUnlock()
+	// 名字还在本地表里却取不出来，只可能是机器人级扩展开关把它关了。
+	if local || restricted || hidden || denied {
+		return true
+	}
+	if allowed == nil || allowed[name] {
+		// 白名单没挡住的话，剩下的可能是机器人级扩展开关把这个 MCP 关了。
+		if parent != nil {
+			if tool, ok := parent.Get(name); ok && !r.extensionToolAllowed(tool) {
+				return true
+			}
+		}
+		return false
+	}
+	// MCP 工具名由本进程按固定前缀生成，白名单外的这类名字就是权限问题，
+	// 不必为了区分而把整套共享扩展拉起来。
+	if strings.HasPrefix(name, mcpToolNamePrefix) {
+		return true
+	}
+	if parent == nil {
+		return false
+	}
+	_, existsInBase := parent.Get(name)
+	return existsInBase
+}
+
 // Retain removes every tool not present in allowed. A nil allowlist keeps all
 // tools and is used only for the bot Owner's unrestricted registry.
 func (r *ToolRegistry) Retain(allowed map[string]bool) {
@@ -414,6 +511,10 @@ func (r *ToolRegistry) Retain(allowed map[string]bool) {
 			order = append(order, name)
 			continue
 		}
+		if r.restricted == nil {
+			r.restricted = map[string]bool{}
+		}
+		r.restricted[name] = true
 		delete(r.tools, name)
 	}
 	r.order = order
@@ -645,6 +746,11 @@ func schemaAllowsStrictMode(schema map[string]any) bool {
 	return true
 }
 
+// CompactToolDescription 把工具描述压成目录里的一行，界面和提示词共用同一份压法。
+func CompactToolDescription(description string, maxRunes int) string {
+	return compactToolDescription(description, maxRunes)
+}
+
 func compactToolDescription(description string, maxRunes int) string {
 	description = strings.Join(strings.Fields(description), " ")
 	if maxRunes <= 0 || len([]rune(description)) <= maxRunes {
@@ -775,8 +881,9 @@ func cloneToolAllowlist(values map[string]bool) map[string]bool {
 }
 
 type ListFilesTool struct {
-	root  string
-	limit int
+	root      string
+	limit     int
+	protected protectedFiles
 }
 
 // Name 返回列目录工具名称。
@@ -819,9 +926,14 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 		Size int64  `json:"size,omitempty"`
 	}
 	out := make([]entry, 0, min(len(entries), limit))
+	hidden := 0
 	for i, item := range entries {
 		if i >= limit {
 			break
+		}
+		if !item.IsDir() && t.protected.blocked(filepath.Join(path, item.Name())) {
+			hidden++
+			continue
 		}
 		itemType := "file"
 		if item.IsDir() {
@@ -838,6 +950,9 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 		"entries": out,
 		// truncated 告诉模型目录没列完，必要时可以继续读更具体路径。
 		"truncated": len(entries) > limit,
+		// 运行时配置不出现在列表里，但也不假装目录是干净的：模型该知道有东西被挡了，
+		// 免得反复去猜文件名。
+		"protected_hidden": hidden,
 	}, "", "  ")
 	if err != nil {
 		return "", err
@@ -846,8 +961,9 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 }
 
 type ReadFileTool struct {
-	root     string
-	maxBytes int
+	root      string
+	maxBytes  int
+	protected protectedFiles
 }
 
 type RunCommandTool struct {
@@ -855,6 +971,9 @@ type RunCommandTool struct {
 	allowlist map[string]bool
 	timeout   time.Duration
 	maxBytes  int
+	// protected 是凭据配置文件。文件工具按它拒绝读写，沙盒按它把这些路径挡在
+	// 命令的视野之外——白名单里配了 cat、grep 时，那是唯一还拦得住的一层。
+	protected protectedFiles
 	// sandboxMode 见 CommandSandbox* 常量；sandbox 是当前平台探测到的实现。
 	sandboxMode    string
 	sandbox        commandSandbox
@@ -999,7 +1118,7 @@ func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []
 		}
 		return exec.CommandContext(ctx, command, args...), "", nil
 	}
-	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, command, args), t.sandbox.kind, nil
+	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, t.protected.existingPaths(), command, args), t.sandbox.kind, nil
 }
 
 func (t *RunCommandTool) commandAllowed(command string) bool {
@@ -1056,6 +1175,9 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	path, err := safePath(t.root, rel)
 	if err != nil {
 		return "", err
+	}
+	if t.protected.blocked(path) {
+		return "", errProtectedFile(rel)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -1278,4 +1400,71 @@ func relPathForOutput(root, path string) string {
 		return "."
 	}
 	return filepath.ToSlash(rel)
+}
+
+// protectedFiles 是运行时自己的配置文件集合：MCP 配置里存着访问令牌，扩展覆盖文件
+// 记着每台机器人的开关。它们碰巧就落在 Agent 工作目录里（`MCPConfigPath` 默认就是
+// `<工作目录>/.mcp.json`），而文件工具只拦「不许走出工作目录」，不看读的是什么——
+// 于是一句「读一下 .mcp.json」就能把令牌原文打进聊天记录。
+//
+// 这些文件是给运行时读的，不是给模型读的：要看配置去 WebUI，要用 MCP 由运行时在本地
+// 拼请求。所以按路径整个拦掉，读、搜、写都不放行，列目录里也不出现。
+type protectedFiles map[string]bool
+
+func agentProtectedFiles(cfg Config) protectedFiles {
+	files := protectedFiles{}
+	for _, path := range []string{
+		resolveMCPConfigPath(cfg),
+		// 配置改指到工作目录外面时，目录里可能还躺着一份旧的默认配置，里面的令牌
+		// 一样是真的。
+		filepath.Join(cfg.WorkDir, defaultMCPConfigFileName),
+		extensionOverridePath(cfg.WorkDir),
+		extensionAudiencePath(cfg.WorkDir),
+		filepath.Join(cfg.WorkDir, extensionPathsFileName),
+	} {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			files[abs] = true
+			// 软链接也要认出来：safePath 只保证解析后仍在工作目录内，没说不能指向它。
+			if resolved, err := evalSymlinksAllowMissing(abs); err == nil {
+				files[resolved] = true
+			}
+		}
+	}
+	return files
+}
+
+// blocked 判断这个路径是不是运行时凭据配置。path 必须是已经过 safePath 的绝对路径。
+func (p protectedFiles) blocked(path string) bool {
+	if len(p) == 0 {
+		return false
+	}
+	if p[path] {
+		return true
+	}
+	resolved, err := evalSymlinksAllowMissing(path)
+	return err == nil && p[resolved]
+}
+
+// existingPaths 返回当前真实存在的凭据文件，排序后给沙盒用。不存在的路径不能交给
+// bubblewrap：--ro-bind 的目标不存在会让整条命令起不来，而「配置还没生成」是常态。
+func (p protectedFiles) existingPaths() []string {
+	if len(p) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(p))
+	for path := range p {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			out = append(out, path)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// errProtectedFile 的措辞要让模型能如实转述：这不是「文件不存在」，也不是权限没配好。
+func errProtectedFile(rel string) error {
+	return fmt.Errorf("%s 是 Diana 的运行时配置，里面可能有 MCP 访问令牌，工具不提供读写；要查看或修改请在 WebUI 的扩展页操作", rel)
 }

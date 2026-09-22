@@ -32,13 +32,24 @@ const (
 	PurposeRelationshipEvaluate  = "relationship_evaluate"
 	PurposeForwardContentSafety  = "forward_content_safety"
 	PurposeReplyAccountSafety    = "reply_account_safety"
-	PurposeReplySuppression      = "reply_suppression_notice"
-	PurposeBotReplyLoop          = "bot_reply_loop_detection"
+	// PurposeReplySendAudit 是实际发出这次审核调用时用的用途名。它以前只是
+	// proactive_reply_quality.go 里的一个字面量，没进这张表，于是界面上指不了、
+	// 也没法单独绑——而它是量最大的判定之一。
+	PurposeReplySendAudit   = "reply_send_audit"
+	PurposeReplySuppression = "reply_suppression_notice"
+	PurposeBotReplyLoop     = "bot_reply_loop_detection"
 	// 三种发送前提示的改写。它们以前只是散在代码里的字面量，没进这张表，
 	// 于是在模型绑定界面上看不见也指不了，只能跟着调用函数走。
 	PurposeUpstreamRejectionNotice = "upstream_rejection_notice"
 	PurposeAccountSafetyNotice     = "account_safety_notice"
 	PurposeErrorNotice             = "error_notice"
+	// 下面几个以前只是调用点里的字面量，没进这张表：界面上指不了，也没法单独绑，
+	// 实际跟着「本次调用的分组」跑。它们问的都要写出成段文字（RSS 那个还要写出
+	// 发给用户的通知正文），归后台生成。
+	PurposeRSSWatchJudge      = "rss_watch_judge"
+	PurposeDirectReplyTopic   = "direct_reply_topic"
+	PurposeReplySemanticDedup = "reply_semantic_dedup"
+	PurposeSemanticTextRef    = "semantic_text_reference"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -50,32 +61,44 @@ var llmPurposeGroup = map[string]string{
 	PurposeSubagent:   llm.GroupChat,
 	PurposeSubtask:    llm.GroupChat,
 
-	// 路由、判定这类调用短、频次高，值得单独指一个便宜快的模型。
-	PurposeReplyIntentRouter:     llm.GroupIntent,
-	PurposeReplyRuleRouter:       llm.GroupIntent,
+	// 意图识别：判定当前这一轮该不该说话、说出去的这句能不能发。问的都是是非、
+	// 单选和打分，发请求时带着判断题表，所以这一档可以绑只做判断的模型。
 	PurposeProactiveReplyRouter:  llm.GroupIntent,
 	PurposeProactiveReplyQuality: llm.GroupIntent,
-	PurposeSemanticReference:     llm.GroupIntent,
-	PurposeInboundMediaReference: llm.GroupIntent,
-	PurposeContextSummary:        llm.GroupIntent,
-	PurposeMemoryExtract:         llm.GroupIntent,
-	PurposeMemorySummary:         llm.GroupIntent,
-	PurposeRelationshipEvaluate:  llm.GroupIntent,
-	PurposeForwardContentSafety:  llm.GroupIntent,
-	PurposeReplyAccountSafety:    llm.GroupIntent,
-	PurposeReplySuppression:      llm.GroupIntent,
-	PurposeBotReplyLoop:          llm.GroupIntent,
+	PurposeReplySendAudit:        llm.GroupIntent,
 
-	// 改写只是把一句固定文案换个说法，和审核、路由同档，用便宜快的那个就够。
-	PurposeUpstreamRejectionNotice: llm.GroupIntent,
-	PurposeAccountSafetyNotice:     llm.GroupIntent,
-	PurposeErrorNotice:             llm.GroupIntent,
+	// 下面这些也是判定，但眼下还没有各自的判断题表，先留在后台那一档：归进意图
+	// 识别只会让它们在绑判断模型时每次先失败一次再降级。题表补上再挪过来。
+	PurposeReplyIntentRouter: llm.GroupBackground,
+	PurposeReplyRuleRouter:   llm.GroupBackground,
+	PurposeBotReplyLoop:      llm.GroupBackground,
+
+	// 后台生成：好感度、长期记忆、摘要、指代消解这些都要写出成段文字，判断模型
+	// 答不了。它们也不在回复的关键路径上，慢一点没关系。
+	PurposeRelationshipEvaluate:  llm.GroupBackground,
+	PurposeMemoryExtract:         llm.GroupBackground,
+	PurposeMemorySummary:         llm.GroupBackground,
+	PurposeContextSummary:        llm.GroupBackground,
+	PurposeSemanticReference:     llm.GroupBackground,
+	PurposeInboundMediaReference: llm.GroupBackground,
+	PurposeForwardContentSafety:  llm.GroupBackground,
+	PurposeReplyAccountSafety:    llm.GroupBackground,
+	PurposeReplySuppression:      llm.GroupBackground,
+
+	// 改写只是把一句固定文案换个说法，跟着后台那一档就够。
+	PurposeUpstreamRejectionNotice: llm.GroupBackground,
+	PurposeAccountSafetyNotice:     llm.GroupBackground,
+	PurposeErrorNotice:             llm.GroupBackground,
+	PurposeRSSWatchJudge:           llm.GroupBackground,
+	PurposeDirectReplyTopic:        llm.GroupBackground,
+	PurposeReplySemanticDedup:      llm.GroupBackground,
+	PurposeSemanticTextRef:         llm.GroupBackground,
 }
 
-// modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批
+// modelBindingGroups 是必须绑定的分组。// modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批
 // 用途没有模型可用。
 var modelBindingGroups = []string{
-	llm.GroupChat, llm.GroupVision, llm.GroupIntent, llm.GroupImage, llm.GroupEmbedding,
+	llm.GroupChat, llm.GroupVision, llm.GroupIntent, llm.GroupBackground, llm.GroupImage, llm.GroupEmbedding,
 }
 
 // modelRoleKeyForGroup 返回分组在 model_roles 里用的键。默认分组的键历史上是
@@ -89,7 +112,7 @@ func modelRoleKeyForGroup(group string) string {
 
 // ModelBindingKeys 返回所有可绑定的键：先是分组，再是用途。前端按这个顺序渲染。
 func ModelBindingKeys() []string {
-	keys := make([]string, 0, len(modelBindingGroups)+len(llmPurposeGroup))
+	keys := make([]string, 0, len(modelBindingGroups)+len(llmPurposeGroup)+2)
 	for _, group := range modelBindingGroups {
 		keys = append(keys, modelRoleKeyForGroup(group))
 	}

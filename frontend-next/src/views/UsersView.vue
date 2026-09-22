@@ -5,7 +5,7 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>人员</h1>
+        <h2>人员</h2>
         <p>机器人记住的人员画像、长期记忆与好感度</p>
       </div>
       <div class="view-actions">
@@ -113,10 +113,25 @@
             <input id="user-score" v-model.number="draft.favorability" class="input" type="number" min="-100" max="200" step="1" />
           </div>
           <h3 class="detail-section-title">人员画像</h3>
+          <p class="muted" style="font-size: 12.5px">每一栏都常驻在这里，没推断出来的留空。手填的按「当面记下」保存，机器人后面自己观察到的会接着往上叠。</p>
           <div v-for="(trait, index) in draft.portrait" :key="index" class="edit-row">
             <label :for="`trait-${index}`">{{ trait.label }}</label>
-            <input :id="`trait-${index}`" v-model="trait.value" class="input" maxlength="1000" @input="trait.source = 'manual'" />
-            <button class="btn ghost small" :aria-label="`删除画像 ${trait.label}`" title="删除画像" @click="draft.portrait?.splice(index, 1)"><Trash2 :size="15" /></button>
+            <input
+              :id="`trait-${index}`"
+              v-model="trait.value"
+              class="input"
+              maxlength="1000"
+              :placeholder="portraitHint(trait.field)"
+              @input="trait.source = 'manual'"
+            />
+            <button
+              v-if="trait.value.trim() !== ''"
+              class="btn ghost small"
+              :aria-label="`清空画像 ${trait.label}`"
+              title="清空这一栏"
+              @click="trait.value = ''; trait.source = 'manual'"
+            ><Trash2 :size="15" /></button>
+            <span v-else class="edit-row-spacer" aria-hidden="true"></span>
           </div>
           <h3 class="detail-section-title">最近发言（排查缓冲）</h3>
           <div v-for="(memory, index) in draft.memories" :key="index" class="edit-row">
@@ -143,7 +158,9 @@
                 <span v-for="(trait, index) in group.traits" :key="index" class="portrait-value">
                   {{ trait.value }}
                   <span v-if="trait.source === 'inferred'" class="badge" title="机器人根据聊天推断，不是本人明说">推断</span>
+                  <span v-else-if="trait.source === 'manual'" class="badge" title="在这里手动标上的，不是机器人推断的">手动</span>
                 </span>
+                <span v-if="group.traits.length === 0" class="portrait-value muted">未记录</span>
               </div>
             </div>
           </div>
@@ -155,7 +172,18 @@
         </section>
 
         <section>
-          <h3 class="detail-section-title">长期记忆（{{ structuredMemories.length }} 条）</h3>
+          <h3 class="detail-section-title">
+            <span>长期记忆（{{ structuredMemories.length }} 条）</span>
+            <button
+              v-if="structuredMemories.length > 0"
+              class="btn ghost memory-clear-all"
+              type="button"
+              :disabled="clearingMemory"
+              @click="confirmClearMemories = true"
+            >
+              <Trash2 :size="13" />清空
+            </button>
+          </h3>
           <div v-if="structuredMemories.length > 0" class="stack" style="gap: 8px">
             <article v-for="memory in structuredMemories" :key="memory.id" class="memory-item">
               <div class="cluster" style="gap: 6px">
@@ -163,6 +191,15 @@
                 <strong style="font-size: 13px">{{ memory.topic || memory.entity || "未命名记忆" }}</strong>
                 <span v-if="memory.sensitive" class="badge warn">敏感</span>
                 <span v-if="memory.source_type === 'inferred'" class="badge" title="机器人根据聊天推断，不是本人明说">推断</span>
+                <button
+                  class="btn ghost memory-forget"
+                  type="button"
+                  title="删除这一条长期记忆"
+                  :disabled="clearingMemory"
+                  @click="confirmForget = memory"
+                >
+                  <Trash2 :size="13" />
+                </button>
               </div>
               <p class="memory-text" style="margin-top: 4px">{{ memory.content }}</p>
               <p class="log-detail">
@@ -235,7 +272,7 @@
       <template #footer>
         <template v-if="detail && !detailLoading">
           <button class="btn ghost" :disabled="saving" @click="confirmDelete = true"><Trash2 :size="15" />删除人员</button>
-          <button v-if="!draft" class="btn primary" @click="draft = JSON.parse(JSON.stringify(detail.profile))"><Pencil :size="15" />修改</button>
+          <button v-if="!draft" class="btn primary" @click="startEdit()"><Pencil :size="15" />修改</button>
           <template v-else>
             <button class="btn ghost" :disabled="saving" @click="draft = null">取消修改</button>
             <button class="btn primary" :disabled="saving" @click="saveUser()"><Save :size="15" />{{ saving ? "保存中…" : "保存" }}</button>
@@ -243,8 +280,29 @@
         </template>
       </template>
     </Modal>
+    <Modal v-if="confirmClearMemories && detail" title="清空长期记忆" @close="!clearingMemory && (confirmClearMemories = false)">
+      <p>
+        清空 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的 {{ structuredMemories.length }} 条长期记忆？
+        画像、好感度和聊天记录都保留。清空之后再聊到同样的事，机器人会重新记一遍——这是清空，不是不许再记。
+      </p>
+      <template #footer>
+        <button class="btn ghost" :disabled="clearingMemory" @click="confirmClearMemories = false">取消</button>
+        <button class="btn" :disabled="clearingMemory" @click="clearMemories()">
+          <Trash2 :size="15" />{{ clearingMemory ? "清空中…" : "清空" }}
+        </button>
+      </template>
+    </Modal>
+    <Modal v-if="confirmForget" title="删除这条长期记忆" @close="!clearingMemory && (confirmForget = null)">
+      <p>删除「{{ confirmForget.content }}」？</p>
+      <template #footer>
+        <button class="btn ghost" :disabled="clearingMemory" @click="confirmForget = null">取消</button>
+        <button class="btn" :disabled="clearingMemory" @click="clearMemories(confirmForget.id)">
+          <Trash2 :size="15" />{{ clearingMemory ? "删除中…" : "删除" }}
+        </button>
+      </template>
+    </Modal>
     <Modal v-if="confirmDelete && detail" title="删除人员记录" @close="!saving && (confirmDelete = false)">
-      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史和恋人状态？结构化长期记忆和聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录。</p>
+      <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史、恋人状态和结构化长期记忆？聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录，机器人也会重新记住新说的事。</p>
       <template #footer>
         <button class="btn ghost" :disabled="saving" @click="confirmDelete = false">取消</button>
         <button class="btn" :disabled="saving" @click="saveUser(true)"><Trash2 :size="15" />{{ saving ? "删除中…" : "删除人员" }}</button>
@@ -260,6 +318,7 @@ import { ChevronDown, ChevronRight, ChevronUp, Pencil, RefreshCw, Save, Trash2 }
 import {
   getAssistantUser,
   listAssistantUsers,
+  clearAssistantUserMemories,
   saveAssistantUser,
   type AssistantUserDetailResponse,
   type AssistantUsersOrder,
@@ -297,11 +356,43 @@ const detailLoading = ref(false);
 const draft = ref<UserMemoryProfile | null>(null);
 const saving = ref(false);
 const confirmDelete = ref(false);
+const confirmClearMemories = ref(false);
+const confirmForget = ref<UserStructuredMemory | null>(null);
+const clearingMemory = ref(false);
 let listRequest = 0;
+
+// 编辑态把每一栏都摆出来：栏目表由后端给，没值的留一个空行。这样「手动标上时区」
+// 不需要先等机器人自己推断出来，也不用去别处新增一条。
+function startEdit(): void {
+  const profile = detail.value?.profile;
+  if (!profile) return;
+  const copy: UserMemoryProfile = JSON.parse(JSON.stringify(profile));
+  const specs = detail.value?.portrait_fields ?? [];
+  const existing = copy.portrait ?? [];
+  const rows: UserPortraitTrait[] = [];
+  for (const spec of specs) {
+    const matched = existing.filter((trait) => trait.field === spec.field);
+    rows.push(...matched);
+    // 栏位还没满就留一个空行；满了再加一行，填了也会被后端挤掉最旧的那条。
+    if (matched.length < (spec.capacity || 1)) {
+      rows.push({ field: spec.field, label: spec.label, value: "", source: "manual" });
+    }
+  }
+  // 栏目表里没有的字段（旧数据）照样留着，不能因为改版把人家的记录吃掉。
+  rows.push(...existing.filter((trait) => !specs.some((spec) => spec.field === trait.field)));
+  copy.portrait = rows;
+  draft.value = copy;
+}
+
+const portraitHint = (field: string): string => detail.value?.portrait_fields?.find((spec) => spec.field === field)?.hint ?? "";
 
 async function saveUser(remove = false): Promise<void> {
   const profile = remove ? detail.value?.profile : draft.value;
   if (!profile || saving.value) return;
+  if (!remove && profile.portrait) {
+    // 空行是「这一栏没有」，不是一条画像：留着会被后端按内容为空打回来。
+    profile.portrait = profile.portrait.filter((trait) => trait.value.trim() !== "");
+  }
   if (!remove && (!Number.isInteger(profile.favorability) || profile.favorability < -100 || profile.favorability > 200)) {
     toastError("好感度请输入 -100 到 200 之间的整数");
     return;
@@ -317,6 +408,27 @@ async function saveUser(remove = false): Promise<void> {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally { saving.value = false; }
 }
+// 清空长期记忆：memoryID 为空是整个清空，给了就只删那一条。
+// 接口要求显式传机器人作用域，这里取详情里那条记录自己的 bot_profile_id，
+// 而不是列表当前的筛选值——筛选可能是「全部机器人」，清空不能靠猜。
+async function clearMemories(memoryID = ""): Promise<void> {
+  const profile = detail.value?.profile;
+  if (!profile || clearingMemory.value) return;
+  clearingMemory.value = true;
+  try {
+    const result = await clearAssistantUserMemories(profile.user_id, profile.bot_profile_id ?? "", memoryID);
+    confirmClearMemories.value = false;
+    confirmForget.value = null;
+    toastSuccess(memoryID ? "已删除这条长期记忆" : `已清空 ${result.cleared} 条长期记忆`);
+    detail.value = await getAssistantUser(profile.user_id, profile.bot_profile_id ?? "");
+    reload();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "清空失败");
+  } finally {
+    clearingMemory.value = false;
+  }
+}
+
 // 最近发言默认收起：它是排查用的原始缓冲，展开后会把画像和长期记忆挤出屏幕。
 const recentOpen = ref(false);
 
@@ -324,17 +436,20 @@ const structuredMemories = computed<UserStructuredMemory[]>(() => detail.value?.
 
 const hasMore = computed(() => users.value.length < total.value);
 
-// 画像按后端给的栏目顺序排，空栏不显示：一整列「暂无」比没有更难读。
+// 栏目常驻：后端给的每一栏都占一行，没推断出来的留空。空栏原先是藏起来的，但那样
+// 看不出「这一栏是还没记，还是根本没有这一栏」，也就看不出哪一栏该自己手动标上。
 const portraitGroups = computed<{ field: string; label: string; traits: UserPortraitTrait[] }[]>(() => {
   const traits = detail.value?.profile.portrait ?? [];
-  if (traits.length === 0) return [];
   const specs = detail.value?.portrait_fields ?? [];
   const order = specs.length > 0 ? specs : traits.map((trait) => ({ field: trait.field, label: trait.label }));
   const groups: { field: string; label: string; traits: UserPortraitTrait[] }[] = [];
   for (const spec of order) {
-    const matched = traits.filter((trait) => trait.field === spec.field);
-    if (matched.length > 0) {
-      groups.push({ field: spec.field, label: spec.label, traits: matched });
+    groups.push({ field: spec.field, label: spec.label, traits: traits.filter((trait) => trait.field === spec.field) });
+  }
+  // 栏目表里没有的字段（旧数据）排在后面，不能因为改版就从页面上消失。
+  for (const trait of traits) {
+    if (!order.some((spec) => spec.field === trait.field)) {
+      groups.push({ field: trait.field, label: trait.label, traits: [trait] });
     }
   }
   return groups;
@@ -404,9 +519,11 @@ async function openDetail(user: UserMemoryProfile): Promise<void> {
 }
 
 function closeDetail(): void {
-  if (saving.value) return;
+  if (saving.value || clearingMemory.value) return;
   draft.value = null;
   confirmDelete.value = false;
+  confirmClearMemories.value = false;
+  confirmForget.value = null;
   selected.value = null;
   detail.value = null;
 }
@@ -506,8 +623,31 @@ onMounted(() => {
   font-size: 13px;
   margin: 0 0 8px;
   color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
+/* 清空和单条删除都放在不显眼的位置：日常看记忆的人远多于删记忆的人。 */
+.memory-clear-all {
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+.memory-forget {
+  margin-left: auto;
+  padding: 2px 6px;
+  color: var(--text-secondary);
+}
+
+.memory-forget:hover:not(:disabled) {
+  color: var(--danger, #d64545);
+}
+
+.edit-row-spacer {
+  width: 32px;
+}
 .portrait-table {
   display: flex;
   flex-direction: column;

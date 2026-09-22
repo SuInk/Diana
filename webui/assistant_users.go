@@ -8,12 +8,25 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
+
+// portraitTraitRejection 把「这一栏为什么不收」说成能照着改的一句话。
+func portraitTraitRejection(trait assistant.UserPortraitTrait) string {
+	field, ok := assistant.NormalizePortraitField(string(trait.Field))
+	if !ok {
+		return "画像栏目或内容无效"
+	}
+	if field == assistant.PortraitFieldTimezone {
+		return "时区要填 IANA 时区名，例如 Asia/Shanghai、Europe/Berlin；「在德国」「比我慢六小时」这类描述换算不了时间，不能收"
+	}
+	return "「" + assistant.PortraitFieldLabel(field) + "」这一栏的内容无效"
+}
 
 func (h *BotHandler) editAssistantUser(c *gin.Context) {
 	if h.sqlite == nil {
@@ -44,12 +57,23 @@ func (h *BotHandler) editAssistantUser(c *gin.Context) {
 				return
 			}
 		}
+		// 手填的画像要走和模型写入同一道归一：补栏目名、收紧空白、按栏校验取值。
+		// 时区那一栏尤其不能放过——存进一句「在德国」不会报错，但它换算不出时间，
+		// 跨时区那条链路只会当成「没记过」，人还以为自己已经标上了。
+		normalized := make([]assistant.UserPortraitTrait, 0, len(p.Portrait))
 		for _, trait := range p.Portrait {
 			if _, ok := assistant.NormalizePortraitField(string(trait.Field)); !ok || strings.TrimSpace(trait.Value) == "" || len([]rune(trait.Value)) > 1000 {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "画像栏目或内容无效"})
 				return
 			}
+			clean, ok := assistant.NormalizePortraitTrait(trait, time.Now())
+			if !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": portraitTraitRejection(trait)})
+				return
+			}
+			normalized = append(normalized, clean)
 		}
+		p.Portrait = normalized
 	}
 	err := h.sqlite.EditUserMemory(c.Request.Context(), p.BotProfileID, strings.TrimSpace(c.Param("id")), p, remove)
 	if err != nil {
@@ -197,6 +221,41 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 		PortraitFields:      assistant.PortraitFieldSpecs(),
 		StructuredMemories:  memories,
 	})
+}
+
+// clearAssistantUserMemories 清空一个人身上的长期记忆，或只清其中一条。
+//
+// 人员记录本身不动：好感度、画像和原始发言缓冲都留着。要连人一起删走
+// DELETE /users/:id。
+func (h *BotHandler) clearAssistantUserMemories(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "人员画像存储未配置"})
+		return
+	}
+	// 必须显式指定机器人作用域：留空在这里不是「全部机器人」而是「只匹配没有
+	// 命名空间的旧记录」，清空这种不可逆的操作不能靠猜。
+	scope, supplied := c.GetQuery("profile")
+	if !supplied || strings.TrimSpace(scope) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "必须指定记忆所属机器人"})
+		return
+	}
+	userID := strings.TrimSpace(c.Param("id"))
+	memoryID := strings.TrimSpace(c.Param("memory"))
+	cleared, err := h.sqlite.ForgetStructuredMemoriesBySubject(c.Request.Context(), strings.TrimSpace(scope), userID, memoryID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	message := "长期记忆已清空"
+	if memoryID != "" {
+		message = "单条长期记忆已删除"
+	}
+	recordRequestOperation(c, h.logs, "user_memories_clear", message, userID, map[string]any{
+		"bot_profile_id": strings.TrimSpace(scope),
+		"memory_id":      memoryID,
+		"cleared":        cleared,
+	})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "cleared": cleared})
 }
 
 // botProfileScope 读控制台传来的机器人作用域。留空表示「全部机器人」。

@@ -21,9 +21,13 @@ func TestLoadSkillsAndReadTool(t *testing.T) {
 	if len(skills) != 1 || skills[0].Name != "demo-skill" {
 		t.Fatalf("skills = %#v", skills)
 	}
-	prompt := RenderSkillsPrompt(skills, 8000)
-	if !strings.Contains(prompt, "demo-skill") || !strings.Contains(prompt, "read_skill") {
-		t.Fatalf("prompt did not include skill guidance: %s", prompt)
+	catalog := RenderSkillsCatalog(skills, 8000)
+	if !strings.Contains(catalog, "demo-skill") || !strings.Contains(catalog, "read_skill") {
+		t.Fatalf("catalog did not include skill guidance: %s", catalog)
+	}
+	// 目录只给名称和用途:磁盘路径既是噪音也是泄露,正文路径由 read_skill 自己返回。
+	if strings.Contains(catalog, skills[0].Path) {
+		t.Fatalf("catalog leaked the skill path: %s", catalog)
 	}
 	tools := NewSkillTools(skills)
 	got, err := tools.Read.Run(context.Background(), map[string]any{"name": "demo-skill"})
@@ -61,7 +65,8 @@ func TestConfigDefaultsUseWorkDirSkillsAndMCPConfig(t *testing.T) {
 	if !containsString(cfg.SkillRoots, wantSkills) {
 		t.Fatalf("SkillRoots = %#v, missing %q", cfg.SkillRoots, wantSkills)
 	}
-	wantMCP := filepath.Join(workDir, ".mcp.json")
+	// MCP 配置默认在工作目录外面：里面存着令牌，放在目录里就落进文件工具的可达范围。
+	wantMCP := defaultMCPConfigPath(workDir)
 	if cfg.MCPConfigPath != wantMCP {
 		t.Fatalf("MCPConfigPath = %q, want %q", cfg.MCPConfigPath, wantMCP)
 	}
@@ -76,7 +81,7 @@ func TestConfigRelativeExtensionPathsResolveOnceFromWorkDir(t *testing.T) {
 	if want := filepath.Join(base, ".agents", "skills"); cfg.ManagedSkillRoot != want {
 		t.Fatalf("ManagedSkillRoot = %q, want %q", cfg.ManagedSkillRoot, want)
 	}
-	if want := filepath.Join(base, ".mcp.json"); resolveMCPConfigPath(cfg) != want {
+	if want := defaultMCPConfigPath(base); resolveMCPConfigPath(cfg) != want {
 		t.Fatalf("resolved MCPConfigPath = %q, want %q", resolveMCPConfigPath(cfg), want)
 	}
 

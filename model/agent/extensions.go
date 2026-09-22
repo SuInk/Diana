@@ -47,11 +47,22 @@ type ExtensionState struct {
 	Installed   bool          `json:"installed"`
 	Enabled     bool          `json:"enabled"`
 	Available   *bool         `json:"available,omitempty"`
-	Source      string        `json:"source,omitempty"`
-	Transport   string        `json:"transport,omitempty"`
-	Tools       []string      `json:"tools,omitempty"`
-	Permissions []string      `json:"permissions,omitempty"`
-	Error       string        `json:"error,omitempty"`
+	// MembersEnabled 只在按机器人读取目录时返回：nil 表示这类扩展没有成员开关。
+	MembersEnabled *bool `json:"members_enabled,omitempty"`
+	// Resident 是这台机器人给这个扩展配的常驻档位：nil 表示跟随默认档。
+	Resident *bool `json:"resident,omitempty"`
+	// Keywords 是 skill 在 SKILL.md 里自己声明的触发词，界面据此说明「默认」这一档
+	// 对它意味着什么。
+	Keywords []string `json:"keywords,omitempty"`
+	// MemberAudience 非空表示这项只开放给名单里的人或群，nil 表示所有群成员。
+	MemberAudience *ExtensionAudience `json:"member_audience,omitempty"`
+	// Bundled 标记带脚本或资源的 skill。
+	Bundled     bool     `json:"bundled,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Transport   string   `json:"transport,omitempty"`
+	Tools       []string `json:"tools,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
 
 type ExtensionCatalog interface {
@@ -139,12 +150,14 @@ func (m *ExtensionManager) Extensions() []ExtensionState {
 		states = append(states, ExtensionState{
 			Kind:        ExtensionKindSkill,
 			ID:          "skill:" + skill.Name,
+			Keywords:    append([]string(nil), skill.Keywords...),
 			Name:        skill.Name,
 			Description: skill.Description,
 			Managed:     skill.Managed,
 			Installed:   true,
 			Enabled:     true,
 			Source:      skill.Source,
+			Bundled:     skill.Bundled,
 		})
 	}
 	states = append(states, m.mcpExtensionStates()...)
@@ -280,6 +293,9 @@ func NewExtensionsListTool(catalog ExtensionCatalog, managementEnabled bool) *Ex
 }
 
 func (t *ExtensionsListTool) Name() string { return "list_capabilities" }
+
+// 只读能力目录，本地一次遍历，不改任何东西。
+func (t *ExtensionsListTool) Introspection(map[string]any) bool { return true }
 
 func (t *ExtensionsListTool) Description() string {
 	return `列出 Diana 的统一能力目录，包括默认内置插件、本地 Skills、MCP 服务、启用状态和 MCP 工具名。技能正文用 read_skill 读取。`

@@ -50,6 +50,11 @@ type mcpServerConfig struct {
 	ToolTimeoutSec    int               `json:"tool_timeout_sec,omitempty" toml:"tool_timeout_sec,omitempty"`
 	EnabledTools      []string          `json:"enabled_tools,omitempty" toml:"enabled_tools,omitempty"`
 	DisabledTools     []string          `json:"disabled_tools,omitempty" toml:"disabled_tools,omitempty"`
+	// Preset/PresetTransport 记的是这条服务从哪个预设装出来的，界面按它把编辑框
+	// 换回预设那张表（填地址和令牌），而不是让人对着命令行参数和环境变量 JSON 改。
+	// 只记出身，不复制字段值：值仍然只有配置本身这一份，手改过也不会和表单对不上。
+	Preset          string `json:"preset,omitempty" toml:"preset,omitempty"`
+	PresetTransport string `json:"preset_transport,omitempty" toml:"preset_transport,omitempty"`
 }
 
 func (cfg mcpServerConfig) enabled() bool {
@@ -132,6 +137,10 @@ func resolveMCPConfigPath(cfg Config) string {
 	path := strings.TrimSpace(cfg.MCPConfigPath)
 	if filepath.IsAbs(path) {
 		return filepath.Clean(path)
+	}
+	if path == "" {
+		// 没配就按默认位置算，不然会拼成工作目录本身，调用方拿到一个目录当配置文件。
+		return filepath.Clean(defaultMCPConfigPath(cfg.WithDefaults().WorkDir))
 	}
 	base, err := filepath.Abs(cfg.WorkDir)
 	if err != nil {
@@ -799,8 +808,11 @@ func closeMCPClosers(closers []closeableTool) {
 	}
 }
 
+// mcpToolNamePrefix 是 MCP 工具在模型侧的固定前缀，权限提示据此识别这类名字。
+const mcpToolNamePrefix = "mcp__"
+
 func mcpModelToolName(server, tool string) string {
-	name := "mcp__" + sanitizeToolName(server) + "__" + sanitizeToolName(tool)
+	name := mcpToolNamePrefix + sanitizeToolName(server) + "__" + sanitizeToolName(tool)
 	if len(name) <= 64 {
 		return name
 	}

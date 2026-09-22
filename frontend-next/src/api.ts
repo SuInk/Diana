@@ -4,7 +4,7 @@
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
 
-export type Provider = "openai_compatible" | "gemini" | "anthropic";
+export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
 export interface LLMRoleBinding {
   bot_id?: string;
@@ -209,7 +209,7 @@ export interface BotProfileConfig {
   /** 流式调用模型，用于统计首 token 时间；回复仍是攒齐了再发。不设等同关闭。 */
   llm_streaming_enabled?: boolean;
   disabled_groups?: string[];
-  /** 群准入模式与白名单；不设等同 blacklist，行为与旧配置一致。 */
+  /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
   /** 私聊准入；不设等同 all，所有用户的私聊都会响应。 */
   private_admission?: PrivateAdmission;
@@ -224,6 +224,16 @@ export interface BotProfileConfig {
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
   system_prompt?: string;
+  /** 品格层：身份、价值、硬边界。排在系统提示词最前面，分群覆盖动不了它。 */
+  soul?: PersonaSoul;
+  /**
+   * 人设正文和界面控件谁说了算。
+   *
+   * fill（默认）＝填空题：正文只写角色，自称、句尾语气词、动作描写、答多长这些由
+   * 控件和运行时负责，正文里的段头不生效。own＝接管：正文用段头声明哪几段自己写，
+   * 运行时对那几段让位，界面上对应的控件停用。不填按 fill 处理。
+   */
+  persona_mode?: "fill" | "own";
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   action_description_enabled?: boolean;
   /** 机器人怎么称呼自己；留空跟随人设。 */
@@ -236,11 +246,15 @@ export interface BotProfileConfig {
   reply_reference_mode?: "on" | "off" | "auto";
   /** 谁能问出机器人所用的模型：owner 仅主人（默认）、everyone 所有人。主人始终能看和改。 */
   model_disclosure?: "owner" | "everyone";
+  /** 谁能问出项目开源地址：owner 仅主人（默认）、everyone 所有人。 */
+  repository_disclosure?: "owner" | "everyone";
   mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
   error_reply_prefix?: string;
   send_retry_attempts?: number;
+  /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */
+  recurring_failure_alert_threshold?: number;
   send_chunk_interval_ms?: number;
   private_closing_grace?: number;
   inbound_group_concurrency?: number;
@@ -276,8 +290,10 @@ export interface BotProfileConfig {
   prompt_group_sender_template?: string;
   prompt_image_only_text?: string;
   prompt_wake_only_text?: string;
-  /** 群聊未显式唤醒机器人时，用于判断是否应主动回复。 */
+  /** @deprecated 旧的整段路由提示词，已被接话评分契约取代，后端不再读取。 */
   proactive_reply_router_prompt?: string;
+  /** 接话评分的补充判据：本群的称呼、黑话和禁区，拼在内置评分提示词尾部，最多 1000 字。 */
+  proactive_reply_extra_criteria?: string;
   /** 主动回复路由放行后，注入最终回复模型的生成约束。 */
   proactive_reply_prompt?: string;
   /** 主动回复路由放行后的确定性采样率，范围 0~1。 */
@@ -323,8 +339,12 @@ export interface BotProfileConfig {
   cross_platform_memory_enabled?: boolean;
   /** 这台机器人要不要带上世界书（世界观设定库）；缺省开启，树为空时开着也不注入。 */
   world_book_enabled?: boolean;
+  /** 允许机器人自己写自述（自我认知），只进提示词尾部、改不动人设和权限；缺省关闭。 */
+  self_note_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
+  /** 后台空闲时定期探测模型收不收强制指定工具；探测是会计费的真实调用，缺省关闭。 */
+  llm_capability_probe_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;
   /** 被戳一戳时回一句（OneBot）；缺省关闭。 */
@@ -346,6 +366,9 @@ export interface BotProfileConfig {
   agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;
   agent_browser_timeout_ms?: number;
+  /** 允许这台机器人使用浏览器控制扩展（browser_ext_*）。默认关闭。 */
+  agent_browser_control_enabled?: boolean;
+  agent_browser_box_enabled?: boolean;
 }
 
 export interface PluginSettingOption {
@@ -543,6 +566,11 @@ export interface BotGroupConfig {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群接话评分的补充判据；留空跟随机器人，最多 1000 字。 */
+  proactive_reply_extra_criteria?: string;
+  /** 本群对 MCP / Skill 的覆盖：档位（off/owner/admins/members，留空跟随机器人）加白名单、黑名单。
+   *  判定顺序是停用 > 黑名单 > 白名单 > 档位。 */
+  extension_access?: Record<string, { tier?: string; allow?: string[]; deny?: string[] }>;
   plugin_overrides?: Record<string, boolean>;
   /** 按插件、按字段保存的群级非密钥设置覆盖；缺失字段沿用全局。 */
   plugin_setting_overrides?: Record<string, Record<string, unknown>>;
@@ -558,13 +586,24 @@ export interface BotGroupSummary extends BotGroupConfig {
   max_member_count?: number;
   configured: boolean;
   joined: boolean;
+  /** 复用同一条连接、在这个群也开着的其它机器人：这个群会收到多份回复。 */
+  shared_with?: BotGroupSharedBot[];
 }
 
-/** 群准入模式：blacklist 为默认（除禁用群外都工作），whitelist 只在指定群工作。 */
+export interface BotGroupSharedBot {
+  bot_profile_id: string;
+  name?: string;
+}
+
+/**
+ * 新群默认：blacklist 表示新加入的群默认工作，whitelist 表示默认不工作。
+ * 逐群开关在群管理里，一个群一份，见 saveBotGroupSwitches。
+ */
 export type GroupAdmissionMode = "blacklist" | "whitelist";
 
 export interface GroupAdmission {
   mode?: GroupAdmissionMode;
+  /** @deprecated 已迁进群配置的逐群开关，后端不再写这份名单。 */
   allowed_groups?: string[];
 }
 
@@ -738,6 +777,10 @@ export interface BotStatus {
   plugins: PluginState[];
   recent_events?: BotEvent[];
   active_workers: number;
+  /** 正在飞的模型调用。和 active_workers 不是一个量级：一个 worker 一轮会打好几次模型。 */
+  llm_concurrency?: LLMConcurrency;
+  /** 这些调用花掉的 token。两个桶都只从本次启动算起，重启清零。 */
+  llm_usage?: LLMUsageTotals;
   /** 正在跑的后台子任务（生成图片、文档 OCR 等）。 */
   subagent_tasks?: SubagentTask[];
   active_subagent_tasks?: number;
@@ -745,6 +788,39 @@ export interface BotStatus {
   pending_events?: number;
   last_error?: string;
   updated_at: string;
+}
+
+/** 模型调用并发：此刻有多少次请求发出去还没回来。 */
+export interface LLMConcurrency {
+  active: number;
+  /** 本次运行以来的最高并发。瞬时值落回低谷时用它判断峰值有多高。 */
+  peak: number;
+  models?: LLMConcurrencyModel[];
+}
+
+/** 单个模型上的在飞调用。 */
+export interface LLMConcurrencyModel {
+  provider?: string;
+  model: string;
+  active: number;
+  /** 这一组里最早发出、还没回来的那次调用的起点。 */
+  started_at: string;
+}
+
+/** 模型调用的 token 用量。today 跨日清零，session 从本次启动算起。 */
+export interface LLMUsageTotals {
+  today: LLMUsageCounters;
+  session: LLMUsageCounters;
+}
+
+export interface LLMUsageCounters {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+  /** 上游没报用量的调用数；不为 0 时 token 合计只会偏少。 */
+  missing_usage_calls: number;
 }
 
 /** 运行中的后台子任务。跑完即从状态里消失，历史记录见事件详情的 subtasks。 */
@@ -1056,6 +1132,91 @@ export function revokeOpenAPIKey(id: string): Promise<{ revoked: boolean }> {
   });
 }
 
+export interface BrowserControlPolicy {
+  enabled: boolean;
+  allowed_origins?: string[];
+  allowed_hosts?: string[];
+  denied_hosts?: string[];
+  write_enabled: boolean;
+  command_timeout_ms?: number;
+  commands_per_minute?: number;
+}
+
+export interface BrowserControlToken {
+  id: string;
+  name: string;
+  prefix: string;
+  extension_id?: string;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export interface BrowserControlConnection {
+  id: string;
+  token_id: string;
+  token_name?: string;
+  extension_id: string;
+  extension_name?: string;
+  browser?: string;
+  browser_version?: string;
+  label?: string;
+  connected_at: string;
+  last_seen_at: string;
+  takeover: boolean;
+  takeover_reason?: string;
+  allowed_tabs: number;
+  commands: number;
+}
+
+export interface BrowserControlStatus {
+  policy: BrowserControlPolicy;
+  tokens: BrowserControlToken[];
+  connections: BrowserControlConnection[];
+  ready: boolean;
+  endpoint: string;
+  protocol: number;
+  /** 这个部署里带没带扩展源码；带了才显示下载入口。 */
+  extension_download?: boolean;
+}
+
+export function getBrowserControlStatus(): Promise<BrowserControlStatus> {
+  return requestJSON<BrowserControlStatus>("/api/browser-control/status");
+}
+
+export function saveBrowserControlPolicy(policy: BrowserControlPolicy): Promise<{ policy: BrowserControlPolicy }> {
+  return requestJSON<{ policy: BrowserControlPolicy }>("/api/browser-control/policy", {
+    method: "PUT",
+    body: JSON.stringify(policy)
+  });
+}
+
+/** 返回值里的 plaintext 是唯一一次能拿到的令牌明文，之后任何接口都查不到。 */
+export function createBrowserControlToken(name: string): Promise<{ token: BrowserControlToken; plaintext: string }> {
+  return requestJSON<{ token: BrowserControlToken; plaintext: string }>("/api/browser-control/tokens", {
+    method: "POST",
+    body: JSON.stringify({ name })
+  });
+}
+
+export function revokeBrowserControlToken(id: string): Promise<{ token: BrowserControlToken }> {
+  return requestJSON<{ token: BrowserControlToken }>(`/api/browser-control/tokens/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
+export function setBrowserControlTakeover(id: string, active: boolean, reason = ""): Promise<{ ok: boolean; active: boolean }> {
+  return requestJSON<{ ok: boolean; active: boolean }>(
+    `/api/browser-control/connections/${encodeURIComponent(id)}/takeover`,
+    { method: "POST", body: JSON.stringify({ active, reason }) }
+  );
+}
+
+export function disconnectBrowserControl(id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(`/api/browser-control/connections/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  });
+}
+
 export interface OwnerLoginStatus {
   available: boolean;
 }
@@ -1187,6 +1348,46 @@ export function generatePersona(
   return requestJSON<PersonaGenerateResponse>("/api/llm/persona", {
     method: "POST",
     body: JSON.stringify({ description, name, current, ...rest, ...(card ? { card } : {}) })
+  });
+}
+
+/** 人设检查报出的一条。 */
+export interface PersonaLintFinding {
+  /** sentence-enders | self-reference | action-description | formatting | venue */
+  code: string;
+  /** 正文里被命中的原话，后端保证能在提交的正文里逐字找到。 */
+  match: string;
+  message: string;
+}
+
+export interface PersonaReviewResponse {
+  findings: PersonaLintFinding[];
+  model?: string;
+  provider?: string;
+}
+
+/**
+ * 让模型读一遍人设正文，挑出「和界面开关抢同一件事」的地方。
+ *
+ * 这是人设正文唯一的检查：判断的是意思不是字面，代价是一次模型往返。所以它由用户
+ * 点按钮触发，signal 用来让「跳过」当场掐断请求。
+ */
+export function reviewPersona(
+  text: string,
+  options?: {
+    self_reference?: string;
+    sentence_enders?: string;
+    action_description_enabled?: boolean;
+    profile_id?: string;
+    group?: string;
+    model?: string;
+  },
+  signal?: AbortSignal
+): Promise<PersonaReviewResponse> {
+  return requestJSON<PersonaReviewResponse>("/api/llm/persona/lint", {
+    method: "POST",
+    body: JSON.stringify({ text, ...(options ?? {}) }),
+    signal
   });
 }
 
@@ -1325,12 +1526,42 @@ export function listPlugins(profile = ""): Promise<PluginState[]> {
   return requestJSON<PluginState[]>(`/api/assistant/plugins?profile=${encodeURIComponent(profile)}`);
 }
 
-export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; transport?: string; tools?: string[]; error?: string }
+export interface ManagedExtension { kind: "skill" | "mcp"; id: string; name: string; description?: string; source?: string; managed?: boolean; enabled: boolean; available?: boolean; members_enabled?: boolean; member_audience?: {min_role?: string; users?: string[]; groups?: string[]}; bundled?: boolean; transport?: string; tools?: string[]; resident?: boolean; keywords?: string[]; error?: string }
 export function listManagedExtensions(profile = ""): Promise<{items: ManagedExtension[]}> {
   return requestJSON(`/api/assistant/extensions?profile=${encodeURIComponent(profile)}`);
 }
+/** 内置的 MCP 接入模板：界面照着字段渲染表单，拼配置在服务端做。 */
+export interface MCPPresetField { key: string; label: string; placeholder?: string; hint?: string; required?: boolean; secret?: boolean }
+export interface MCPPresetTransport { id: string; label: string; hint?: string; fields: MCPPresetField[]; verifiable?: boolean }
+export interface MCPPreset { id: string; name: string; title: string; summary: string; docs_url?: string; transports: MCPPresetTransport[] }
+export function listMCPPresets(): Promise<{items: {preset: MCPPreset; installed: boolean; hidden?: boolean}[]}> {
+  return requestJSON("/api/assistant/extensions", {method: "POST", body: JSON.stringify({operation: "presets", kind: "mcp"})});
+}
 export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown>): Promise<T> {
   return requestJSON<T>("/api/assistant/extensions", {method:"POST", body:JSON.stringify(input)});
+}
+
+/** 交互式浏览器接入：模型通过 CDP 操作一个真实浏览器，用的是那个浏览器已有的登录态。 */
+export interface AgentBrowserSettings { profile_id?: string; cdp_url?: string; timeout_ms?: number; tools: string[] }
+export function getAgentBrowser(profile = ""): Promise<AgentBrowserSettings> {
+  return requestJSON(`/api/assistant/agent-browser?profile=${encodeURIComponent(profile)}`);
+}
+export function saveAgentBrowser(profile: string, cdpURL: string, timeoutMS: number): Promise<AgentBrowserSettings> {
+  return requestJSON("/api/assistant/agent-browser", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL, timeout_ms: timeoutMS})});
+}
+export function testAgentBrowser(profile: string, cdpURL: string): Promise<{connected: boolean; browser?: string; error?: string}> {
+  return requestJSON("/api/assistant/agent-browser/test", {method: "POST", body: JSON.stringify({profile_id: profile, cdp_url: cdpURL})});
+}
+
+/** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
+export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp"; name: string; description?: string; tools?: string[]; default: boolean; resident?: boolean }
+export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]}> {
+  return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
+}
+export function setAgentResidency(profile: string, id: string, resident: boolean | null): Promise<{ok: boolean}> {
+  const body: Record<string, unknown> = {profile_id: profile, id};
+  if (resident !== null) body.resident = resident;
+  return requestJSON("/api/assistant/agent-residency", {method: "POST", body: JSON.stringify(body)});
 }
 
 export function installPlugin(id: string): Promise<PluginState> {
@@ -1611,6 +1842,35 @@ export function saveMediaCachePolicy(policy: MediaCachePolicy): Promise<MediaCac
   });
 }
 
+/** 设置页存储卡片的载荷：整块盘的容量 + Diana 数据目录按文件类型的拆分。 */
+export interface StorageUsageCategory {
+  key: string;
+  label: string;
+  bytes: number;
+  files: number;
+}
+
+export interface StorageUsage {
+  collected_at: string;
+  path: string;
+  disk_total_bytes?: number;
+  disk_used_bytes?: number;
+  disk_free_bytes?: number;
+  disk_usage_percent?: number;
+  diana_bytes: number;
+  diana_files: number;
+  categories: StorageUsageCategory[];
+  /** 后台遍历完成的时间；从没跑完过时缺省 */
+  scanned_at?: string;
+  /** 正在后台遍历数据目录，拆分结果还是上一次的（或为空） */
+  scanning: boolean;
+  disk_unavailable?: string;
+}
+
+export function getStorageUsage(): Promise<StorageUsage> {
+  return requestJSON<StorageUsage>("/api/system/storage");
+}
+
 export interface HistoryMediaPolicy { retention_days: number; max_mb: number; }
 export function getHistoryMediaPolicy(): Promise<HistoryMediaPolicy> { return requestJSON<HistoryMediaPolicy>("/api/system/history-media"); }
 export function saveHistoryMediaPolicy(policy: HistoryMediaPolicy): Promise<HistoryMediaPolicy> {
@@ -1674,11 +1934,24 @@ export interface RollbackResponse {
   result: UpdateResult;
 }
 
+/** 同一条连接上的另一台机器人及其群归属：路由表散在各台自己的配置里，这是那张全貌。 */
+export interface ConnectionPeer {
+  bot_profile_id: string;
+  name?: string;
+  /** 这台机器人本身启不启用。停用的不参与回复。 */
+  enabled: boolean;
+  /** 新群默认工作：相当于这台收所有群，白名单模式才是划分。 */
+  new_group_enabled: boolean;
+  /** 明确开着的群号。新群默认为开时，这份名单之外的群它也照收。 */
+  enabled_groups?: string[];
+}
+
 export interface ConsoleGroupsResponse {
   groups: BotGroupSummary[];
   plugins: PluginState[];
   live_available: boolean;
   warning?: string;
+  connection_peers?: ConnectionPeer[];
 }
 
 export function listBotGroups(refresh = false, profile = ""): Promise<ConsoleGroupsResponse> {
@@ -1689,8 +1962,26 @@ export function listBotGroups(refresh = false, profile = ""): Promise<ConsoleGro
   return requestJSON<ConsoleGroupsResponse>(`/api/assistant/groups${suffix}`);
 }
 
-export function saveBotGroup(config: BotGroupConfig): Promise<{ config: BotGroupConfig }> {
-  return requestJSON<{ config: BotGroupConfig }>("/api/assistant/groups", {
+/**
+ * saveBotGroupSwitches 是群管理里那排批量操作：一键开关传进来的这些群，
+ * 以及「新加入的群默认工作吗」。两件事可以一起提交，也可以只提一件。
+ */
+export function saveBotGroupSwitches(payload: {
+  bot_profile_id: string;
+  group_ids?: string[];
+  enabled?: boolean;
+  new_group_enabled?: boolean;
+  min_group_level?: number;
+  level_unknown_policy?: "allow" | "deny";
+}): Promise<{ ok: boolean; updated: number; warning?: string }> {
+  return requestJSON<{ ok: boolean; updated: number; warning?: string }>("/api/assistant/groups/switches", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function saveBotGroup(config: BotGroupConfig): Promise<{ config: BotGroupConfig; warning?: string }> {
+  return requestJSON<{ config: BotGroupConfig; warning?: string }>("/api/assistant/groups", {
     method: "POST",
     body: JSON.stringify({ config })
   });
@@ -1865,6 +2156,47 @@ export function getStats(): Promise<StatsSnapshot> {
   return requestJSON<StatsSnapshot>("/api/stats");
 }
 
+/** 总览页能切的时间窗。today 走实时统计，其余走库里的窗口查询。 */
+export type StatsRangeID = "1h" | "12h" | "24h";
+
+/** 一个时间窗内的模型用量。cached_input_tokens 已包含在 input_tokens 里。 */
+export interface LLMUsageSummary {
+  since: string;
+  until: string;
+  recorded_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cached_input_tokens: number;
+}
+
+/** 一个时间窗内总览页要用的全部数字。 */
+export interface StatsRange {
+  id: StatsRangeID;
+  since: string;
+  until: string;
+  messages: number;
+  handled: number;
+  errors: number;
+  avg_reply_ms: number;
+  /** 平均耗时的样本数；为 0 说明这段时间没有可计时的回复，平均值不该显示成 0。 */
+  replies_measured: number;
+  usage: LLMUsageSummary;
+}
+
+export interface StatsRanges {
+  until: string;
+  ranges: StatsRange[];
+}
+
+/**
+ * 按时间窗读总览页统计。数字来自库里的队列事件和用量日志而非进程内累加器，
+ * 所以跨重启仍然成立，和「今日」那一档不是同一个口径。
+ */
+export function getStatsRanges(): Promise<StatsRanges> {
+  return requestJSON<StatsRanges>("/api/stats/ranges");
+}
+
 export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";
 export type AssistantEventResultFilter = "all" | "replied" | "not_replied" | "pending" | "error" | "notice";
 
@@ -2028,6 +2360,7 @@ export interface AssistantEventsResponse {
   query?: string;
   private_chats: AssistantEventPrivateChat[];
   context_budget?: AssistantContextBudget;
+  resident_context?: AssistantResidentContext;
 }
 
 export interface AssistantEventGroup {
@@ -2042,6 +2375,26 @@ export interface AssistantEventPrivateChat {
   events: number;
   user_name?: string;
   bot_profile_id?: string;
+}
+
+/** 每轮都注入、与当前消息无关的一块上下文。 */
+export interface AssistantResidentContextBlock {
+  key: string;
+  label: string;
+  tokens: number;
+  /** 这块所在层的 token 配额；0 表示它不单独占一层配额。 */
+  budget?: number;
+  content?: string;
+  note?: string;
+}
+
+export interface AssistantResidentContext {
+  profile_id?: string;
+  group_id?: string;
+  context_window: number;
+  blocks: AssistantResidentContextBlock[];
+  total_tokens: number;
+  note?: string;
 }
 
 export interface AssistantContextBudgetLayer {
@@ -2284,6 +2637,15 @@ export function saveAssistantUser(profile: UserMemoryProfile, remove = false): P
   });
 }
 
+/** 清空一个人的结构化长期记忆；给 memoryID 就只删那一条。profile 必须显式指定。 */
+export function clearAssistantUserMemories(userID: string, profile: string, memoryID = ""): Promise<{ ok: boolean; cleared: number }> {
+  const suffix = memoryID ? `/${encodeURIComponent(memoryID)}` : "";
+  return requestJSON(
+    `/api/assistant/users/${encodeURIComponent(userID)}/memories${suffix}?profile=${encodeURIComponent(profile)}`,
+    { method: "DELETE" }
+  );
+}
+
 export function deleteBotGroup(groupID: string, profile = ""): Promise<{ ok: boolean }> {
   return requestJSON(`/api/assistant/groups/${encodeURIComponent(groupID)}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" });
 }
@@ -2302,10 +2664,29 @@ export function fetchAssistantUserNames(userIDs: string[], profile = ""): Promis
   return requestJSON<AssistantUserNamesResponse>(`/api/assistant/user-names?${params.toString()}`);
 }
 
+/** 人设的品格层：身份、价值、硬边界。只有人能改，前端只原样搬运，不逐字段编辑。 */
+export interface PersonaSoul {
+  identity?: string;
+  priority?: { order?: string[]; note?: string };
+  values?: { value: string; why?: string }[];
+  honesty?: string[];
+  self_nature?: string;
+  relationships?: { owner?: string; admins?: string; members?: string };
+  correctable?: string;
+  restraint?: string;
+  hard_limits?: { limit: string; why?: string }[];
+  on_criticism?: string;
+  on_mistake?: string;
+  open_questions?: string[];
+}
+
 export interface Persona {
+  soul?: PersonaSoul;
   id: string;
   name: string;
   system_prompt?: string;
+  /** 跟着正文走：带段头的接管正文套到填空题档上会和运行时重复。 */
+  persona_mode?: "fill" | "own";
   action_description_enabled?: boolean;
   daypart_tone_enabled?: boolean;
   self_reference?: string;
@@ -2348,6 +2729,57 @@ export function importPersonas(personas: Persona[]): Promise<PersonaImportResult
   return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
     method: "POST",
     body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
+  });
+}
+
+/** 机器人自己写下的一条自述。写入只有它自己能做，这里只读、删和清空。 */
+export interface SelfNote {
+  id: string;
+  topic: string;
+  content: string;
+  status: "active" | "superseded" | "deleted";
+  version: number;
+  source_group_id?: string;
+  source_user_id?: string;
+  source_user_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SelfNoteListResult {
+  notes: SelfNote[];
+  /** 这台机器人有没有开自述。关着时列表为空，但「空」和「没开」是两件事。 */
+  enabled: boolean;
+}
+
+// profile 指这条自述属于哪台机器人。自述按机器人隔离，留空时后端落到当前这台。
+function selfNoteQuery(profile: string, includeInactive = false): string {
+  const params = new URLSearchParams();
+  if (profile) params.set("profile", profile);
+  if (includeInactive) params.set("include_inactive", "true");
+  return params.size > 0 ? `?${params.toString()}` : "";
+}
+
+export function listSelfNotes(profile: string, includeInactive = false): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes${selfNoteQuery(profile, includeInactive)}`);
+}
+
+export function deleteSelfNote(profile: string, id: string): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/delete${selfNoteQuery(profile)}`, {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+}
+
+export function purgeSelfNotes(profile: string): Promise<SelfNoteListResult> {
+  return requestJSON<SelfNoteListResult>(`/api/assistant/self-notes/purge${selfNoteQuery(profile)}`, { method: "POST" });
+}
+
+/** YAML 只能在后端解析：这里原样把文件内容发过去。JSON 文件走上面那条。 */
+export function importPersonaSource(source: string): Promise<PersonaImportResult> {
+  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
+    method: "POST",
+    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, source })
   });
 }
 
@@ -2571,6 +3003,7 @@ export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "
 // 空数组表示「全部种类都要」——后端也是这么存的，别把空当成「一条都不要」。
 export type RepositoryWatchPullEvent = "opened" | "updated" | "closed" | "merged";
 export type RepositoryWatchIssueEvent = "opened" | "updated" | "closed" | "reopened";
+export type RepositoryWatchReleaseKind = "stable" | "prerelease";
 export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
 
 export interface AssistantTask {
@@ -2601,6 +3034,7 @@ export interface AssistantTask {
   watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues?: boolean;
   watch_releases?: boolean;
+  watch_release_kinds?: RepositoryWatchReleaseKind[];
   watch_stars?: boolean;
   star_notify_mode?: "growth" | "milestone";
   star_notify_threshold?: number;
@@ -2644,6 +3078,7 @@ export interface RepositoryWatchInput {
   watch_issue_events?: RepositoryWatchIssueEvent[];
   watch_issues: boolean;
   watch_releases: boolean;
+  watch_release_kinds?: RepositoryWatchReleaseKind[];
   watch_stars: boolean;
   star_notify_mode?: "growth" | "milestone";
   star_notify_threshold?: number;
@@ -2853,4 +3288,86 @@ export function logoutOAuthProvider(provider: string): Promise<{ providers: LLMO
 
 export function codingAgentSetup(agent: string, operation: "status" | "install" | "test" | "login-start" | "login-status" | "login-cancel"): Promise<{installed: boolean; key_configured: boolean; installable: boolean; message: string; login_url?: string; device_code?: string; login_state?: string}> {
   return requestJSON("/api/assistant/plugins/coding-agent/setup", {method: "POST", body: JSON.stringify({agent, operation})});
+}
+
+// ---------------------------------------------------------------------------
+// 内置浏览器：Diana 自己那个常驻浏览器，画面和输入都走 /api/browser-box。
+// ---------------------------------------------------------------------------
+
+export interface BrowserBoxSettings {
+  enabled: boolean;
+  /** 有头窗口。默认无头——容器里没有显示器，无头是唯一能跑起来的模式。 */
+  headful?: boolean;
+  window_width?: number;
+  window_height?: number;
+  denied_hosts?: string[];
+  executable?: string;
+}
+
+export interface BrowserBoxStatus {
+  settings: BrowserBoxSettings;
+  running: boolean;
+  takeover: boolean;
+  cdp_url?: string;
+  executable?: string;
+  profile_dir?: string;
+  started_at?: string;
+  last_error?: string;
+  available: boolean;
+}
+
+export interface BrowserBoxTab {
+  id: string;
+  title?: string;
+  url?: string;
+}
+
+export function getBrowserBoxStatus(): Promise<BrowserBoxStatus> {
+  return requestJSON<BrowserBoxStatus>("/api/browser-box/status");
+}
+
+export function saveBrowserBoxSettings(
+  settings: BrowserBoxSettings
+): Promise<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }> {
+  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>("/api/browser-box/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export function startBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/start", { method: "POST" });
+}
+
+export function stopBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/stop", { method: "POST" });
+}
+
+export function setBrowserBoxTakeover(active: boolean): Promise<{ ok: boolean; active: boolean }> {
+  return requestJSON<{ ok: boolean; active: boolean }>("/api/browser-box/takeover", {
+    method: "POST",
+    body: JSON.stringify({ active })
+  });
+}
+
+export function listBrowserBoxTabs(): Promise<{ tabs: BrowserBoxTab[] }> {
+  return requestJSON<{ tabs: BrowserBoxTab[] }>("/api/browser-box/tabs");
+}
+
+export function openBrowserBoxTab(url: string): Promise<{ tab: BrowserBoxTab }> {
+  return requestJSON<{ tab: BrowserBoxTab }>("/api/browser-box/tabs", {
+    method: "POST",
+    body: JSON.stringify({ url })
+  });
+}
+
+export function closeBrowserBoxTab(id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(`/api/browser-box/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** 实时画面的 WebSocket 地址。页面是 https 时自动用 wss。 */
+export function browserBoxLiveURL(tabID?: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const query = tabID ? `?tab=${encodeURIComponent(tabID)}` : "";
+  return `${protocol}//${window.location.host}/api/browser-box/live${query}`;
 }

@@ -52,6 +52,16 @@ Docker Compose（预构建镜像，无需 clone 仓库）。首次在部署目�
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
+在终端里直接运行时，脚本会问装**完整版**还是**基础版**：完整版预装 Chromium、中文字体、ffmpeg、yt-dlp 和 tesseract，网页渲染、截图、媒体下载和 OCR 开箱可用；基础版都不装，拉取约 67 MB，完整版约 447 MB。拿不准就选完整版。
+
+用管道执行（上面那条命令）不会提问，首次部署默认完整版；想要基础版就先声明：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_VARIANT=slim sh
+```
+
+选择写在部署目录的 `.env` 里（`DIANA_IMAGE=`），重复执行安装脚本不会把它改掉。之后想换一种，在终端里重新运行安装脚本，或直接改这一行。
+
 以后更新只需在同一目录执行：
 
 ```sh
@@ -114,7 +124,7 @@ docker compose pull && docker compose up -d
 
 **Docker：** 镜像预装 Chromium 与 Noto CJK 中文字体，网页渲染和中文截图无需在容器内临时安装浏览器。启动时加载上方的 seccomp 配置，为 Chromium 沙箱开放所需的命名空间调用；无需 `--privileged`、`SYS_ADMIN` 或关闭浏览器沙箱。已有容器需按新启动参数重建。详见[浏览器依赖与容器配置](docs/browser-rendering.md)。镜像随每个版本发布（`ghcr.io/suink/diana:latest` 及版本号 tag）。OneBot 客户端连 `ws://<宿主机>:18080/onebot/v11/ws`。想预置配置（无人值守部署），把改好的 `config.yaml` 以只读方式挂到 `/app/config.yaml`；先创建该文件，再取消 Compose 中配置文件挂载行的注释。从克隆的仓库本地构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。升级拉新镜像重建容器即可，数据都在挂出来的 `data/` 里。
 
-**slim 轻量镜像：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.126-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的五分之一，适合不需要网页渲染、媒体下载和 OCR 的部署。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> apk add --no-cache chromium font-noto-cjk` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
+**slim 轻量镜像（基础版）：** 同一仓库同时发布 `-slim` 变体（如 `ghcr.io/suink/diana:latest-slim`、`ghcr.io/suink/diana:v0.8.131-slim`）：不预装 Chromium、Noto CJK 字体、ffmpeg、yt-dlp 与 tesseract，体积约为完整版的五分之一（拉取 67 MB / 落盘 274 MB，完整版 447 MB / 1.48 GB），适合不需要网页渲染、媒体下载和 OCR 的部署。安装脚本会问你要哪一种，选择写进部署目录的 `.env`（`DIANA_IMAGE=`），以后 `docker compose pull` 自动跟着走；已部署的想切换，在终端里重跑安装脚本，或直接改 `.env` 里那一行再 `docker compose pull && docker compose up -d`（没有这个文件就新建，Compose 会自动读取）。内置浏览器这一档在 slim 上会明确报「找不到浏览器」并给出安装命令，不会悄悄失效。之后想用网页渲染，在宿主机执行 `docker exec -u root <容器名> apk add --no-cache chromium font-noto-cjk` 即可（WebUI 依赖管理里点一键安装会因进程非 root 失败，报错会直接附上这条命令）。注意容器重建后需重新安装，数据在挂出的 `data/` 里不受影响。
 
 **手动下载：** 从 [Releases](https://github.com/SuInk/Diana/releases) 下载你平台的**完整包**（`.tar.gz` / `.zip`，含后端、编译好的 WebUI 和启动脚本），校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`。无需单独部署 WebUI 或安装 Node.js。Release 不再单独提供裸二进制；自定义部署可从完整包提取程序和前端资源。
 
@@ -143,7 +153,7 @@ Telegram 主人账号支持数字 ID、用户名和 `@用户名`，按平台真�
 
 | 平台 | 要准备的凭据 | 连接方向 |
 | --- | --- | --- |
-| **OneBot v11**（NapCat、Lagrange.Core、go-cqhttp 等） | 支持正向 WS、反向 WS、HTTP API + HTTP 事件上报，在机器人页选择连接方式 | 连接方向取决于所选方式，可在局域网使用 |
+| **OneBot v11**（Snowluma、NapCat、Lagrange 等） | 支持正向 WS、反向 WS、HTTP API + HTTP 事件上报，在机器人页选择连接方式 | 连接方向取决于所选方式，可在局域网使用 |
 | **Telegram** | BotFather 的 Bot Token（国内网络通常还要代理地址） | Diana 主动出站，无需公网 |
 | **QQ 官方机器人** | 开放平台的 AppID + AppSecret（未上架可用沙箱） | Diana 主动出站，无需公网 |
 | **钉钉** | 应用的 Client ID + Client Secret（Stream 模式） | Diana 主动出站，无需公网 |

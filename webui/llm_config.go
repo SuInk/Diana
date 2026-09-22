@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -169,6 +170,7 @@ func (h *LLMConfigHandler) Register(router gin.IRouter) {
 	router.POST("/api/llm/models", h.models)
 	router.POST("/api/llm/test", h.test)
 	router.POST("/api/llm/persona", h.personaGenerate)
+	router.POST("/api/llm/persona/lint", h.personaLintReview)
 	router.GET("/api/llm/providers", h.providers)
 	router.POST("/api/llm/providers/models", h.providerModels)
 	router.POST("/api/llm/providers/test", h.providerTest)
@@ -538,10 +540,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	if testMode == "" && llm.NormalizeProfileGroup(payload.Group) == llm.GroupImage {
 		testMode = "image"
 	}
-	if testMode == "" {
-		testMode = "text"
-	}
-	if testMode != "text" && testMode != "image" {
+	if testMode != "" && testMode != "text" && testMode != "image" {
 		h.writeError(c, 400, "llm_test", fmt.Errorf("unsupported test mode %q", payload.Mode), payload.Model, nil)
 		return
 	}
@@ -560,6 +559,19 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	// 测试时同步到 ImageModel，避免误测 provider 的默认生图模型或文本模型。
 	if testMode == "image" && strings.TrimSpace(payload.Model) != "" {
 		cfg.ImageModel = strings.TrimSpace(payload.Model)
+	}
+	// 分组名是用户自己起的（线上就有叫「生图」的），拿它判生图会漏。配置装好之后
+	// 再看一次：要测的模型就是这套配置的生图模型时，按生图测。
+	if testMode == "" && strings.TrimSpace(payload.Model) != "" &&
+		strings.EqualFold(strings.TrimSpace(payload.Model), strings.TrimSpace(cfg.ImageModelWithDefault())) {
+		testMode = "image"
+	}
+	if testMode == "" {
+		testMode = "text"
+	}
+	if testMode != "text" && testMode != "image" {
+		h.writeError(c, 400, "llm_test", fmt.Errorf("unsupported test mode %q", payload.Mode), payload.Model, nil)
+		return
 	}
 	client, err := h.newClient(cfg)
 	if err != nil {
@@ -593,6 +605,12 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	resp, err := client.Generate(c.Request.Context(), llm.GenerateRequest{
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: payload.Message}},
 	})
+	if errors.Is(err, llm.ErrDecisionRequired) {
+		// 判断模型（TypeSafe System One）不生成文本，发一句 ping 永远过不了，而且
+		// 在出网之前就被挡掉——界面上看起来像"连不通"，其实链路一次都没试过。
+		// 改成问它一道真题：能答上来就说明域名、凭据和协议都是通的。
+		resp, err = client.Generate(c.Request.Context(), decisionProbeRequest(cfg, payload.Message))
+	}
 	if err != nil {
 		h.writeError(c, 502, "llm_test", err, cfg.Model, llmLogMetadata(cfg, ""))
 		return
@@ -1027,4 +1045,29 @@ func llmLogMetadata(cfg llm.ProviderConfig, profileID string) map[string]any {
 // writeError 写出统一 JSON 错误响应。
 func writeError(c *gin.Context, status int, err error) {
 	c.JSON(status, gin.H{"error": err.Error()})
+}
+
+// decisionProbeRequest 组一道最小的判断题，用来验判断模型的连通性。
+//
+// 题目本身要有意义：问的就是这类模型在 Diana 里实际负责的事（这句话是不是在跟
+// 机器人说话），答案里带概率，看一眼就知道模型真的在判断，而不是在回显。
+func decisionProbeRequest(cfg llm.ProviderConfig, message string) llm.GenerateRequest {
+	return llm.GenerateRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "你在判断一条群聊消息。"},
+			{Role: llm.RoleUser, Content: message},
+		},
+		Model: cfg.Model,
+		Decision: &llm.DecisionSpec{Questions: []llm.DecisionQuestion{{
+			Key:            "addressed",
+			Kind:           llm.DecisionNoul,
+			Label:          "这句话是不是在跟机器人说话",
+			Instructions:   "判断这条消息是不是在对机器人说话。",
+			TrueCriteria:   "在称呼机器人、向它提问或要求它做事",
+			FalseCriteria:  "在和别人说话，或者只是自言自语",
+			Path:           "addressed",
+			ConfidencePath: "confidence",
+			ReasonPath:     "reason",
+		}}},
+	}
 }

@@ -80,6 +80,15 @@
               </div>
               <span class="hint">不勾选则不接收 Issue 动态；全部勾选表示全部接收。「更新」包含评论和改标题，量最大。</span>
             </div>
+            <div v-if="form.watch_releases" class="field repository-watch-star-field">
+              <label id="watch-release-kinds-title">Release 通知哪些版本</label>
+              <div class="repository-watch-scopes" role="group" aria-labelledby="watch-release-kinds-title">
+                <label v-for="kind in releaseKinds" :key="kind.value" class="check-item">
+                  <input :checked="form.release_kinds.includes(kind.value)" type="checkbox" @change="toggleEvent(form.release_kinds, kind.value)" />{{ kind.label }}
+                </label>
+              </div>
+              <span class="hint">不勾选则不接收 Release 动态；全部勾选表示全部接收。认的是 GitHub 的预发布标记，不看标签里有没有写 rc、beta。草稿版本任何时候都不推送。</span>
+            </div>
             <div v-if="form.watch_stars" class="field repository-watch-star-field">
               <label for="watch-star-mode">Star 通知模式</label>
               <AppSelect id="watch-star-mode" :model-value="form.star_notify_mode" :options="starModeOptions" @update:model-value="form.star_notify_mode = $event === 'milestone' ? 'milestone' : 'growth'" />
@@ -105,36 +114,42 @@
           <span class="hint">开启后，此仓库允许通过机器人操作 Issue：管理人员可直接创建和管理，草稿人只能提交草稿、由管理人员确认写入。</span>
           <template v-if="form.issue_enabled">
             <div class="issue-role-block">
-              <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">可直接创建、更新、评论、关闭 Issue，也负责确认草稿。</span></div>
+              <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">可直接创建、更新、评论、关闭 Issue，也负责确认草稿。按用户授权的人，私聊和群聊都生效；按群授权可以再限定生效的群身份。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-managers-title">
                 <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row">
-                  <AppSelect v-model="member.destination" :options="destinationOptions" :aria-label="`管理人员类型`" />
-                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`管理人员群聊`" @update:model-value="member.group_id = String($event ?? '')" />
-                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="管理人员群号或 Chat ID" />
+                  <AppSelect v-model="member.destination" :options="accessSubjectOptions" :aria-label="`管理人员授权对象`" />
+                  <div v-if="member.destination === 'group'" class="target-group">
+                    <AppSelect v-if="groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`管理人员群聊`" @update:model-value="member.group_id = String($event ?? '')" />
+                    <input v-else v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="管理人员群号或 Chat ID" />
+                    <AppSelect :model-value="member.role ?? defaultGroupRole" :options="groupRoleOptions" aria-label="管理人员生效的群身份" @update:model-value="member.role = String($event ?? defaultGroupRole)" />
+                  </div>
                   <div v-else class="target-user">
-                    <input v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="管理人员私聊用户 ID" />
+                    <input v-model.trim="member.user_id" class="input" type="text" placeholder="用户 ID" aria-label="管理人员用户 ID" />
                     <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
                   </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除管理人员" aria-label="移除管理人员" @click="form.issue_managers.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
-                <button class="btn small ghost" type="button" @click="form.issue_managers.push({ destination: 'private', user_id: '' })"><Plus :size="14" aria-hidden="true" />添加管理人员</button>
+                <button class="btn small ghost" type="button" @click="form.issue_managers.push({ destination: 'private', user_id: '', role: 'group_admin' })"><Plus :size="14" aria-hidden="true" />添加管理人员</button>
                 <p v-if="!form.issue_managers.length" class="hint">至少添加一名管理人员，草稿才有人确认。</p>
               </div>
             </div>
             <div class="issue-role-block">
-              <div class="issue-role-head"><span id="watch-drafters-title">草稿人</span><span class="hint">可以提出需求并生成 Issue 草稿，不能直接写入 GitHub。</span></div>
+              <div class="issue-role-head"><span id="watch-drafters-title">草稿人</span><span class="hint">可以提出需求并生成 Issue 草稿，不能直接写入 GitHub。管理人员自动也是草稿人，不必在这里重复添加。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-drafters-title">
                 <div v-for="(member, index) in form.issue_drafters" :key="`drafter-${index}`" class="target-row">
-                  <AppSelect v-model="member.destination" :options="destinationOptions" :aria-label="`草稿人类型`" />
-                  <AppSelect v-if="member.destination === 'group' && groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`草稿人群聊`" @update:model-value="member.group_id = String($event ?? '')" />
-                  <input v-else-if="member.destination === 'group'" v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="草稿人群号或 Chat ID" />
+                  <AppSelect v-model="member.destination" :options="accessSubjectOptions" :aria-label="`草稿人授权对象`" />
+                  <div v-if="member.destination === 'group'" class="target-group">
+                    <AppSelect v-if="groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`草稿人群聊`" @update:model-value="member.group_id = String($event ?? '')" />
+                    <input v-else v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="草稿人群号或 Chat ID" />
+                    <AppSelect :model-value="member.role ?? defaultGroupRole" :options="groupRoleOptions" aria-label="草稿人生效的群身份" @update:model-value="member.role = String($event ?? defaultGroupRole)" />
+                  </div>
                   <div v-else class="target-user">
-                    <input v-model.trim="member.user_id" class="input" type="text" placeholder="私聊用户 ID" aria-label="草稿人私聊用户 ID" />
+                    <input v-model.trim="member.user_id" class="input" type="text" placeholder="用户 ID" aria-label="草稿人用户 ID" />
                     <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
                   </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除草稿人" aria-label="移除草稿人" @click="form.issue_drafters.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
-                <button class="btn small ghost" type="button" @click="form.issue_drafters.push({ destination: 'group', group_id: '' })"><Plus :size="14" aria-hidden="true" />添加草稿人</button>
+                <button class="btn small ghost" type="button" @click="form.issue_drafters.push({ destination: 'group', group_id: '', role: defaultGroupRole })"><Plus :size="14" aria-hidden="true" />添加草稿人</button>
               </div>
             </div>
           </template>
@@ -206,7 +221,8 @@ import {
   type BotProfileConfig,
   type BotGroupSummary,
   type RepositoryWatchIssueEvent,
-  type RepositoryWatchPullEvent
+  type RepositoryWatchPullEvent,
+  type RepositoryWatchReleaseKind
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -243,7 +259,7 @@ const emit = defineEmits<{
   "update:manager-group-access": [string];
 }>();
 
-type IssueMember = { profile_id?: string; destination: "private" | "group"; group_id?: string; user_id?: string };
+type IssueMember = { profile_id?: string; destination: "private" | "group"; group_id?: string; user_id?: string; role?: string };
 const authenticatedIntervalSeconds = 60;
 const anonymousIntervalSeconds = 60 * 60;
 const minimumIntervalSeconds = 30;
@@ -257,9 +273,13 @@ const issueEventKinds: { value: RepositoryWatchIssueEvent; label: string }[] = [
   { value: "opened", label: "新建" }, { value: "updated", label: "更新" },
   { value: "closed", label: "已关闭" }, { value: "reopened", label: "重新打开" }
 ];
+const releaseKinds: { value: RepositoryWatchReleaseKind; label: string }[] = [
+  { value: "stable", label: "正式版" }, { value: "prerelease", label: "预发布" }
+];
 const allPullEventKinds = () => pullEventKinds.map((kind) => kind.value);
 const allIssueEventKinds = () => issueEventKinds.map((kind) => kind.value);
-const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, pull_request_events: allPullEventKinds(), issue_events: allIssueEventKinds(), star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
+const allReleaseKinds = () => releaseKinds.map((kind) => kind.value);
+const emptyForm = () => ({ repository: "", branch: "", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, pull_request_events: allPullEventKinds(), issue_events: allIssueEventKinds(), release_kinds: allReleaseKinds(), star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -274,7 +294,17 @@ const form = ref(emptyForm());
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
 const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
 const groupOptions = computed(() => selectedProfile.value?.platform === "telegram" ? [] : joinedGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined })));
-const destinationOptions = [{ value: "private", label: "私聊" }, { value: "group", label: "群聊" }];
+// 这一栏选的是「这条授权发给谁」，不是消息往哪发：按用户授权跟着人走，私聊和群聊
+// 都生效，所以不能沿用通知对象那套「私聊 / 群聊」的说法。存储值保持不变。
+const accessSubjectOptions = [{ value: "private", label: "按用户" }, { value: "group", label: "按群" }];
+// 按群授权要求发言人在群里是什么身份。说的是聊天平台给的身份（群主 / 群管理员 /
+// 群成员），和上面那个「管理人员」是两回事：后者是这份名单本身。机器人主人不受此限。
+const defaultGroupRole = "all_members";
+const groupRoleOptions = [
+  { value: "all_members", label: "所有成员" },
+  { value: "group_admin", label: "群主 + 群管理员" },
+  { value: "group_owner", label: "仅群主" }
+];
 const starModeOptions = [{ value: "growth", label: "累计增长" }, { value: "milestone", label: "自定义里程碑" }];
 function toggleEvent<T extends string>(list: T[], value: T): void {
   const index = list.indexOf(value);
@@ -353,7 +383,16 @@ const selectedCredential = computed({
 });
 
 function repositoryKey(value: string): string {
-  return value.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, "").replace(/\.git\/?$/i, "").replace(/\/$/, "");
+  return splitAccessEntry(value).repository;
+}
+
+// 按群授权的仓库后面可以跟 #group_admin 这样的身份要求。比较仓库时要先摘掉它，
+// 否则同一个仓库带不带后缀会被当成两条。
+function splitAccessEntry(value: string): { repository: string; role: string } {
+  const [rawRepository, rawRole = ""] = String(value ?? "").split("#");
+  const repository = rawRepository.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, "").replace(/\.git\/?$/i, "").replace(/\/$/, "");
+  const role = rawRole.trim().toLowerCase();
+  return { repository, role: groupRoleOptions.some((option) => option.value === role) ? role : defaultGroupRole };
 }
 
 function parseAccessRules(value: string | undefined): Array<{ id: string; repositories: string[] }> {
@@ -366,17 +405,22 @@ function parseAccessRules(value: string | undefined): Array<{ id: string; reposi
   }).filter((rule) => rule.id);
 }
 
-function accessIDsFor(value: string | undefined, repository: string): string[] {
+type AccessEntry = { id: string; role: string };
+
+function accessEntriesFor(value: string | undefined, repository: string): AccessEntry[] {
   const target = repositoryKey(repository).toLowerCase();
   if (!target) return [];
-  const ids = new Set<string>();
+  const entries = new Map<string, string>();
   for (const rule of parseAccessRules(value)) {
-    if (rule.repositories.some((item) => repositoryKey(item).toLowerCase() === target)) ids.add(rule.id);
+    for (const item of rule.repositories) {
+      const parsed = splitAccessEntry(item);
+      if (parsed.repository.toLowerCase() === target && !entries.has(rule.id)) entries.set(rule.id, parsed.role);
+    }
   }
-  return [...ids];
+  return [...entries.entries()].map(([id, role]) => ({ id, role }));
 }
 
-function mergeRepositoryAccess(original: string | undefined, repository: string, ids: string[]): string {
+function mergeRepositoryAccess(original: string | undefined, repository: string, entries: AccessEntry[]): string {
   const target = repositoryKey(repository);
   const targetLower = target.toLowerCase();
   const merged = new Map<string, string[]>();
@@ -384,22 +428,31 @@ function mergeRepositoryAccess(original: string | undefined, repository: string,
     const kept = (merged.get(rule.id) ?? []).concat(rule.repositories.filter((item) => repositoryKey(item).toLowerCase() !== targetLower));
     merged.set(rule.id, [...new Set(kept)]);
   }
-  for (const id of ids) {
-    const repositories = merged.get(id) ?? [];
-    if (!repositories.some((item) => repositoryKey(item).toLowerCase() === targetLower)) repositories.push(target);
-    merged.set(id, repositories);
+  for (const entry of entries) {
+    const repositories = merged.get(entry.id) ?? [];
+    // 「所有成员」是不写后缀的老写法，保持原样，免得给每条配置都加上噪音。
+    if (!repositories.some((item) => repositoryKey(item).toLowerCase() === targetLower)) {
+      repositories.push(entry.role && entry.role !== defaultGroupRole ? `${target}#${entry.role}` : target);
+    }
+    merged.set(entry.id, repositories);
   }
   return [...merged.entries()].filter(([, repositories]) => repositories.length).map(([id, repositories]) => `${id} = ${repositories.join(", ")}`).join("\n");
 }
 
-function issueMemberIDs(members: IssueMember[], destination: "private" | "group"): string[] {
-  return [...new Set(members.filter((member) => member.destination === destination).map((member) => (destination === "group" ? member.group_id : member.user_id)?.trim() ?? "").filter(Boolean))];
+function issueMemberEntries(members: IssueMember[], destination: "private" | "group"): AccessEntry[] {
+  const entries = new Map<string, string>();
+  for (const member of members.filter((item) => item.destination === destination)) {
+    const id = (destination === "group" ? member.group_id : member.user_id)?.trim() ?? "";
+    // 按用户授权没有群身份可言，后缀一律不写。
+    if (id && !entries.has(id)) entries.set(id, destination === "group" ? member.role || defaultGroupRole : defaultGroupRole);
+  }
+  return [...entries.entries()].map(([id, role]) => ({ id, role }));
 }
 
 function issueMembersFrom(userValue: string | undefined, groupValue: string | undefined, repository: string): IssueMember[] {
   return [
-    ...accessIDsFor(userValue, repository).map((id) => ({ destination: "private" as const, user_id: id })),
-    ...accessIDsFor(groupValue, repository).map((id) => ({ destination: "group" as const, group_id: id }))
+    ...accessEntriesFor(userValue, repository).map((entry) => ({ destination: "private" as const, user_id: entry.id })),
+    ...accessEntriesFor(groupValue, repository).map((entry) => ({ destination: "group" as const, group_id: entry.id, role: entry.role }))
   ];
 }
 
@@ -420,7 +473,7 @@ function startEdit(task: AssistantTask): void {
   editingTask.value = task;
   const repository = task.repository ?? "";
   const legacyTarget = task.group_id ? [{ profile_id: task.profile_id, destination: "group" as const, group_id: task.group_id }] : task.user_id ? [{ profile_id: task.profile_id, destination: "private" as const, user_id: task.user_id }] : [];
-  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? allPullEventKinds())], issue_events: [...(task.watch_issue_events ?? allIssueEventKinds())], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ profile_id: target.profile_id || task.profile_id, destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
+  form.value = { repository, branch: task.repository_branch ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds.value, watch_commits: task.watch_commits === true, watch_pull_requests: task.watch_pull_requests === true, watch_issues: task.watch_issues === true, watch_releases: task.watch_releases === true, watch_stars: task.watch_stars === true, pull_request_events: [...(task.watch_pull_request_events ?? allPullEventKinds())], issue_events: [...(task.watch_issue_events ?? allIssueEventKinds())], release_kinds: [...(task.watch_release_kinds ?? allReleaseKinds())], star_notify_mode: task.star_notify_mode || "growth", star_notify_threshold: task.star_notify_threshold || 1, star_milestones_text: (task.star_notify_milestones ?? []).join(", "), issue_enabled: repositoryIssueEnabled(repository), profile_id: task.profile_id ?? "", notification_enabled: task.notification_enabled !== false, notification_targets: (task.notification_targets?.length ? task.notification_targets.map((target) => ({ profile_id: target.profile_id || task.profile_id, destination: target.destination, group_id: target.group_id, user_id: target.user_id })) : legacyTarget), issue_managers: issueMembersFrom(props.managerUserAccess || props.userAccess, props.managerGroupAccess, repository), issue_drafters: issueMembersFrom(props.draftUserAccess, props.draftGroupAccess || props.groupAccess, repository) };
   editing.value = true;
   markEditorClean();
 }
@@ -443,14 +496,14 @@ async function save(): Promise<void> {
   if (form.value.watch_stars && form.value.star_notify_mode === "milestone" && !starMilestones.length) return toastError("里程碑模式至少填写一个有效 Star 数");
   if (!form.value.profile_id) return toastError("请选择发送机器人");
   if (form.value.notification_enabled && (!form.value.notification_targets.length || form.value.notification_targets.some(target => !target.profile_id || !(target.destination === "group" ? target.group_id : target.user_id)))) return toastError("请至少添加一个通知对象");
-  const managerUserIDs = issueMemberIDs(form.value.issue_managers, "private");
-  const managerGroupIDs = issueMemberIDs(form.value.issue_managers, "group");
-  const drafterUserIDs = issueMemberIDs(form.value.issue_drafters, "private");
-  const drafterGroupIDs = issueMemberIDs(form.value.issue_drafters, "group");
+  const managerUserIDs = issueMemberEntries(form.value.issue_managers, "private");
+  const managerGroupIDs = issueMemberEntries(form.value.issue_managers, "group");
+  const drafterUserIDs = issueMemberEntries(form.value.issue_drafters, "private");
+  const drafterGroupIDs = issueMemberEntries(form.value.issue_drafters, "group");
   if (form.value.issue_enabled && !managerUserIDs.length && !managerGroupIDs.length) return toastError("开启 Issue 管理后，请至少添加一名管理人员");
   saving.value = true;
   try {
-    const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_issues: form.value.watch_issues, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars, watch_pull_request_events: [...form.value.pull_request_events], watch_issue_events: [...form.value.issue_events], star_notify_mode: form.value.star_notify_mode, star_notify_threshold: form.value.star_notify_threshold, star_notify_milestones: starMilestones };
+    const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_issues: form.value.watch_issues, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars, watch_pull_request_events: [...form.value.pull_request_events], watch_issue_events: [...form.value.issue_events], watch_release_kinds: [...form.value.release_kinds], star_notify_mode: form.value.star_notify_mode, star_notify_threshold: form.value.star_notify_threshold, star_notify_milestones: starMilestones };
     const delivery = { profile_id: form.value.profile_id, notification_enabled: form.value.notification_enabled, notification_targets: form.value.notification_enabled ? form.value.notification_targets : [] };
     const repository = repositoryKey(form.value.repository);
     const enabledRepositories = [...(props.issueEnabledRepositories ?? [])].filter((item) => repositoryKey(item).toLowerCase() !== repository.toLowerCase());

@@ -44,6 +44,18 @@ const (
 	llmTransientMaxRetries         = 1
 	proactiveReplyRouteBudget      = 60 * time.Second
 	replyRuleRouteBudget           = 15 * time.Second
+
+	// auditPersistTimeout 是「落库留痕，失败只打日志」这类写入的预算：入站判决原因、
+	// 通知事件、消息历史。
+	//
+	// 原来三处各自写死 2 秒。SQLite 写池是串行的，繁忙时排队本身就能吃掉一两秒——
+	// 线上 3 小时丢了 190 条 decision_reason、42 条 assistant 审计、27 条投递状态，
+	// 本机一个新库两小时也丢了 33 条，全部是 AppendLog context deadline exceeded。
+	//
+	// 丢的不是日志噪音，是排查时要看的判决依据：inbound_events 里查不到某条为什么
+	// 没回复，一部分就是这么没的。这些写入都在后台 goroutine 里，放宽到 15 秒不影响
+	// 任何用户可见的延迟，却能让排队高峰扛过去。仍然保留超时，避免写池卡死时无限堆积。
+	auditPersistTimeout = 15 * time.Second
 )
 
 type LLMProfileStore interface {
@@ -184,10 +196,14 @@ type RuntimeStatus struct {
 	RecentEvents   []EventRecord                  `json:"recent_events,omitempty"`
 	ActiveWorkers  int                            `json:"active_workers"`
 	ActiveTasks    int                            `json:"active_subagent_tasks"`
-	SubagentTasks  []SubagentTaskStatus           `json:"subagent_tasks,omitempty"`
-	PendingEvents  int                            `json:"pending_events"`
-	LastError      string                         `json:"last_error,omitempty"`
-	UpdatedAt      time.Time                      `json:"updated_at"`
+	// LLMConcurrency 是模型侧的并发，和 ActiveWorkers 不是一个量级；LLMUsage 是
+	// 这些调用花掉的 token。两者见 llm_call_metrics.go。
+	LLMConcurrency LLMConcurrencyStatus `json:"llm_concurrency"`
+	LLMUsage       LLMUsageTotals       `json:"llm_usage"`
+	SubagentTasks  []SubagentTaskStatus `json:"subagent_tasks,omitempty"`
+	PendingEvents  int                  `json:"pending_events"`
+	LastError      string               `json:"last_error,omitempty"`
+	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
 type EventRecord struct {
@@ -255,6 +271,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "对方已经在收尾，双方互相道别的次数达到设定上限，这条回复只是又一句告别，没有发送", false
 	case "ignored_stop_requested":
 		return "not_replied", "发送前审核认定对方明确要求不要再回复，这条回复没有发送，并已按响应限制暂停接话", false
+	case "ignored_self_repeat":
+		return "not_replied", "发送前审核认定这条回复只是把机器人自己刚说过的话换个说法又说一遍，没有发送；只跳过这一条，对方下一条带来新内容时照常回答", false
 	case "ignored_ai_reply_loop":
 		return "not_replied", "发送前审核认定这一来一回已在空转（对方是自动回复，或双方都只在应付没有内容），为避免继续接茬而没有发送", false
 	case "ignored_no_natural_reply":
@@ -303,26 +321,36 @@ type Runtime struct {
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
 	profileConfigs   map[string]BotConfig
+	// disabledProfiles 是配置集里已停用的档案 ID。停用只把档案从通道 bindings 里
+	// 摘掉，共享连接本身可能还活着（别的档案在用它），入站这边要自己认一次。
+	disabledProfiles map[string]bool
 	// profileOrder 是配置集里机器人的顺序，列表和兜底都按它来，不依赖 map 的随机顺序。
 	profileOrder []string
 	// relayPairs 是「消息互通」的链路表，跟着机器人配置集一起下发。
 	relayPairs []MessageRelayPair
 	channel    Channel
 	// bridges 是各机器人自己的 NoneBot 桥接，按机器人 ID 索引，见 nonebot_bridges.go。
-	bridges          map[string]*NoneBotBridge
-	plugins          *PluginManager
-	llmStore         LLMProfileStore
-	modelLister      LLMModelLister
-	appLogs          applog.Writer
-	messageStore     MessageHistoryStore
+	bridges  map[string]*NoneBotBridge
+	plugins  *PluginManager
+	llmStore LLMProfileStore
+	// llmCapability 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
+	// 不必重新学。
+	llmCapability LLMCapabilityStore
+	modelLister   LLMModelLister
+	appLogs       applog.Writer
+	messageStore  MessageHistoryStore
+	// aliasSalt 是脱敏别名的全局盐，进程内只定一次，落库后跨重启不变。
+	aliasSalt        string
 	inboundStore     InboundEventStore
 	inboundFailedAt  time.Time
 	userMemory       UserMemoryStore
 	structuredMemory StructuredMemoryStore
 	threadStates     ThreadStateStore
 	oneBotRequests   OneBotRequestStore
+	pendingDirect    PendingDirectMessageStore
 	notebook         NotebookStore
 	worldBook        WorldBookStore
+	selfNotes        SelfNoteStore
 	expressionStyles ExpressionStyleStore
 	moodMu           sync.Mutex
 	moods            map[string]*moodState
@@ -330,6 +358,14 @@ type Runtime struct {
 	pokeLastReply    map[string]time.Time
 	pokeLastSent     map[string]time.Time
 	pokeSessionSent  map[string][]time.Time
+	// 跨会话发送的限流账本：按「来源会话×目标」记冷却，按来源会话记窗口内总量。
+	// 自带锁，不受 mu 保护。
+	crossSessionMu          sync.Mutex
+	crossSessionLastSent    map[string]time.Time
+	crossSessionSessionSent map[string][]time.Time
+	// friendRosters 缓存各账号的 OneBot 好友名册，见 onebot_friends.go。
+	friendRosterMu sync.Mutex
+	friendRosters  map[string]oneBotFriendRoster
 	// welcomeLLMLast 记每个（机器人 × 群）上一次 LLM 欢迎词的生成时间，
 	// 进出群刷屏时不会每条都烧一次 Token。自带锁，不受 mu 保护。
 	welcomeMu             sync.Mutex
@@ -366,6 +402,8 @@ type Runtime struct {
 	updatedAt                 time.Time
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
+	browserControl            agent.BrowserControlBridge
+	browserBox                agent.BuiltinBrowserBridge
 	media                     *MediaStore
 	members                   *memberCache
 	now                       func() time.Time
@@ -399,10 +437,14 @@ type Runtime struct {
 	// 摘要、又以完整原文进入同一个请求。
 	contextSummaryMarks map[string]int64
 	// historyWindowAnchors 记录每个会话近期历史窗口的起点（见 anchoredHistoryWindow）。
-	historyWindowAnchors  map[string]string
-	recent                []EventRecord
-	activeMu              sync.Mutex
-	active                int
+	historyWindowAnchors map[string]string
+	recent               []EventRecord
+	activeMu             sync.Mutex
+	active               int
+	// llmConcurrency 数的是在飞的模型调用，llmUsage 数它们花掉的 token。
+	// 两者都自带锁，不受 mu 保护。
+	llmConcurrency        llmConcurrencyTracker
+	llmUsage              llmUsageTracker
 	reminderMu            sync.Mutex
 	activeReminders       map[string]struct{}
 	inboundWake           chan struct{}
@@ -474,6 +516,8 @@ type Runtime struct {
 	historyImageDescBackoff time.Duration
 	agentRegistryMu         sync.Mutex
 	agentRegistryCache      map[string]*agent.ToolRegistry
+	agentResidencyMu        sync.RWMutex
+	agentResidencyCatalog   map[string][]AgentResidencyEntry
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -487,6 +531,45 @@ func (r *Runtime) SetEventListener(listener EventListener) {
 	r.mu.Lock()
 	r.eventListener = listener
 	r.mu.Unlock()
+}
+
+// SetBrowserControl 注入浏览器控制扩展的控制面。没注入时 browser_ext_* 那组
+// 工具在任何机器人上都不登记，和把这一档关掉等价。
+func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
+	r.mu.Lock()
+	r.browserControl = bridge
+	r.mu.Unlock()
+}
+
+// SetBrowserBox 注入内置浏览器。没注入时 browser_* 那组工具沿用机器人配置里的
+// 外部 CDP 地址，行为和加这一档之前一样。
+func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
+	r.mu.Lock()
+	r.browserBox = bridge
+	r.mu.Unlock()
+}
+
+// browserBoxFor 同样要两边都点头：全局起了内置浏览器，这台机器人也开了那档开关。
+func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
+	if !cfg.AgentBrowserBoxEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserBox
+	r.mu.RUnlock()
+	return bridge
+}
+
+// browserControlFor 只在两边都点头时才把控制面交出去：全局注入了控制面，
+// 并且这台机器人自己那档开关也开着。
+func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
+	if !cfg.AgentBrowserControlEnabled {
+		return nil
+	}
+	r.mu.RLock()
+	bridge := r.browserControl
+	r.mu.RUnlock()
+	return bridge
 }
 
 func (r *Runtime) SetPrivateMessageInterceptor(interceptor PrivateMessageInterceptor) {
@@ -583,7 +666,11 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.plugins.MigrateProfileConfigurations(set.Profiles)
 	profiles := make(map[string]BotConfig, len(set.Profiles))
 	order := make([]string, 0, len(set.Profiles))
+	disabled := make(map[string]bool)
 	for _, profile := range set.Profiles {
+		if !profile.Enabled {
+			disabled[strings.TrimSpace(profile.ID)] = true
+		}
 		resolved, err := set.ResolveConnection(profile)
 		if err != nil {
 			continue
@@ -595,11 +682,47 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	}
 	r.mu.Lock()
 	r.profileConfigs = profiles
+	r.disabledProfiles = disabled
 	r.profileOrder = order
 	r.relayPairs = set.MessageRelays
 	r.updatedAt = time.Now()
 	r.mu.Unlock()
 	r.reconcileBridges()
+}
+
+// errorNoticeAllowed 报告这台机器人是否允许把诊断消息发进聊天。
+//
+// 「错误提示」开关的契约是「控制所有面向聊天的诊断消息」，但以前只有回复出错那条
+// 路径认它：订阅和提醒的失败告警绕过开关照发，关掉开关的人照样在群里收到「仓库订阅
+// 连续 3 次失败」。失败本身仍然进事件、LastError 和应用日志，只是不打扰聊天。
+func (r *Runtime) errorNoticeAllowed(event MessageEvent) bool {
+	return boolValue(r.effectiveConfigForEvent(event).ErrorNotifyEnabled, true)
+}
+
+// disabledProfileSet 复制一份停用档案表，供需要在别的锁里逐条判断的调用方使用，
+// 避免在持有那把锁时再去拿 mu。
+func (r *Runtime) disabledProfileSet() map[string]bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	disabled := make(map[string]bool, len(r.disabledProfiles))
+	for id, off := range r.disabledProfiles {
+		if off {
+			disabled[id] = true
+		}
+	}
+	return disabled
+}
+
+// profileDisabled 报告事件所属档案是否已停用。这是入站侧的兜底：共享一条连接的
+// 档案里只要还有一个启用着，连接就不会断，停用档案的事件照样能从那条连接进来。
+func (r *Runtime) profileDisabled(profileID string) bool {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.disabledProfiles[profileID]
 }
 
 // SetAppLogWriter 注入运行时审计日志写入器。
@@ -625,6 +748,8 @@ func (r *Runtime) Start(parent context.Context) error {
 	}
 	enabled := r.enabledProfilesLocked()
 	if len(enabled) == 0 {
+		// 这一种不写 lastError：一台都没启用是用户自己的选择，界面上每张卡都写着
+		// 「未启用」，再挂一条红字只会看起来像出了故障。
 		r.mu.Unlock()
 		return ErrBotDisabled
 	}
@@ -633,8 +758,15 @@ func (r *Runtime) Start(parent context.Context) error {
 	concurrency := 0
 	for _, profile := range enabled {
 		if err := profile.Validate(); err != nil {
+			// 这一种必须写进状态：机器人是启用着的，配置却起不来，运行时就停在这里。
+			// 以前这条 return 走在清空 lastError 之前，接口看到的是「没在跑，也没有
+			// 错误」，前端只能显示成「等待连接」，看起来像接入端没连上，实际是压根
+			// 没启动过，原因只在进程的标准输出里。
+			err = fmt.Errorf("机器人「%s」配置无效：%w", profile.Name, err)
+			r.lastError = err.Error()
+			r.updatedAt = time.Now()
 			r.mu.Unlock()
-			return fmt.Errorf("机器人「%s」配置无效：%w", profile.Name, err)
+			return err
 		}
 		concurrency = max(concurrency, profile.MaxBotConcurrency)
 	}
@@ -682,6 +814,14 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.romanceGreetingLoop")
 			r.runRomanceGreetingLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.llmCapabilityProbeLoop")
+			r.runLLMCapabilityProbeLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")
+			r.runPendingDirectMessagePurgeLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
@@ -1166,6 +1306,8 @@ func (r *Runtime) Status() RuntimeStatus {
 		RecentEvents:   recent,
 		ActiveWorkers:  r.activeCount(),
 		ActiveTasks:    r.activeSubagentTaskCount(),
+		LLMConcurrency: r.llmConcurrencyStatus(),
+		LLMUsage:       r.llmUsageTotals(),
 		SubagentTasks:  r.subagentTaskStatuses(),
 		PendingEvents:  r.pendingInboundCount(),
 		LastError:      lastError,
@@ -1289,6 +1431,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt) != "" {
 		cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt)
 	}
+	if strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria) != "" {
+		cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria)
+	}
 	if groupCfg.ReplyGate != nil {
 		// 门槛整份用群里的（界面上那个「为本群单独设置回复规则」开关就是这个意思），
 		// 但名单要并上机器人级的：否则任何一个群开了自定义门禁，全局黑名单在那个
@@ -1328,16 +1473,6 @@ func (r *Runtime) sandboxedBrowserEnabled(event MessageEvent) bool {
 		return false
 	}
 	return r.plugins.EnabledWithOverrides(sandboxedBrowserPluginID, r.pluginOverridesForEvent(event))
-}
-
-// evidenceLedgerAdvisory 读取联网搜索插件的证据账本开关。关闭后账本仍然结算并留痕，
-// 但不再因为证据绑定失败拦截回复；插件本身没启用时账本也不会激活。
-func (r *Runtime) evidenceLedgerAdvisory(event MessageEvent) bool {
-	settings, enabled := r.webSearchPluginSettings(event)
-	if !enabled {
-		return false
-	}
-	return !settings.Bool(webSearchSettingEvidenceLedger, true)
 }
 
 // replyLinkPolicy 决定联网结论要不要在回复正文里给出 URL。
@@ -1386,7 +1521,7 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 	if !ok || store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 	defer cancel()
 	if err := store.RecordNoticeEvent(ctx, sessionKey(event), withoutReplyRuntimeState(event)); err != nil {
 		log.Printf("diana notice audit persist failed: %v", err)
@@ -1724,6 +1859,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "ignored_conversation_closed", nil
 		}
+		if errors.Is(err, errReplySelfRepeatDropped) {
+			// 这条候选只是把机器人自己说过的话又说了一遍：不发，也不牵连后面的消息。
+			setEventRecordOutcome(&record, "ignored_self_repeat")
+			record.Error = ""
+			r.record(record)
+			return "ignored_self_repeat", nil
+		}
 		if errors.Is(err, errReplyLoopDetected) {
 			// 发送前审核认定在空转且累计到阈值：这条不发，暂停已同时生效。
 			setEventRecordOutcome(&record, "ignored_ai_reply_loop")
@@ -2022,13 +2164,13 @@ func (r *Runtime) admits(cfg BotConfig, event MessageEvent) bool {
 }
 
 // admitsGroupScope reports whether this bot participates in the group at all:
-// the group is inside the admission list (black/whitelist) and has not been
-// switched off for this profile. It is the group-level half of admits and
-// admitsNotice, pulled out so prepareMessageEvent can ask it before spending a
-// single model token——关掉或不准入的群永远不会回复，那一轮跨群语义检索、Telegram
-// 接话判定和主动回复路由都是白花的钱。三处判据共用这一处，永远说同一句话。
+// the per-group switch has not been turned off for this profile. It is the
+// group-level half of admits and admitsNotice, pulled out so prepareMessageEvent
+// can ask it before spending a single model token——关掉的群永远不会回复，那一轮
+// 跨群语义检索、Telegram 接话判定和主动回复路由都是白花的钱。三处判据共用这
+// 一处，永远说同一句话。
 func (r *Runtime) admitsGroupScope(cfg BotConfig, event MessageEvent) bool {
-	return cfg.GroupAdmission.Allows(event.GroupID) && !r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID)
+	return !r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID)
 }
 
 // admitsNotice applies the same local admission boundary to notice-triggered
@@ -2220,19 +2362,23 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// 先选好指令再拼消息：llmMessageFromEventWithImagesForContext 可能去抓图片，
 	// 以前这里先按旧契约构造一次，再在评分契约下整条覆盖，那次抓图完全是白做的。
 	routeInstruction := "请从本批群消息中识别机器人是否应该主动回复；需要回复时选择一条最值得回复的目标消息。你是 Intent Recognition（意图识别）模块，只负责识别回复意图，不要规划工具调用或最终回答步骤；后续 Agent 会独立完成工具与回复规划。消息上下文 JSON：\n"
+	// 同一套判据也按题目摆一份：绑的是只做判断的模型时，它照这张表作答，答案回填
+	// 成下面解析的那个 JSON；绑对话模型时这张表用不上。
+	decisionSpec := proactiveReplyDecisionSpec(candidates)
 	if chatIn.Participation != nil {
 		routeInstruction = "Intent Recognition：请判断当前消息是不是在跟机器人说话（directed 与 reason），并给出闲聊适合度（score 与 reason）。上下文：\n"
+		decisionSpec = participationDecisionSpec()
 	}
 	routeUserMessage := llmMessageFromEventWithImagesForContext(routeCtx, event, routeInstruction+string(payloadJSON), nil)
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
+			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
 		},
 		routeUserMessage,
 	}
 	raw, err := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: messages})
+		resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: messages, Decision: decisionSpec})
 		if err != nil {
 			return "", err
 		}
@@ -2257,7 +2403,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			retried = true
 			retryMessages := append([]llm.Message{{Role: llm.RoleSystem, Content: participationRatingsRetryReminder}}, messages...)
 			retryRaw, retryErr := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
-				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages})
+				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages, Decision: decisionSpec})
 				if err != nil {
 					return "", err
 				}
@@ -2276,11 +2422,16 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		// 闲聊分支还要看机器人最近说了多少：占比过高时只留下相关度分支。
 		_, chatLevel := chatIn.Participation.ratingLevels()
 		botMessages, totalMessages := proactiveReplyBotShare(payload.RecentMessages, participationShareWindow, participationShareSpanSeconds)
-		shareBlocked := chatReply && participationBotShareBlocks(botMessages, totalMessages, chatLevel)
+		otherSpeakers := proactiveReplyOtherSpeakers(payload.RecentMessages, participationShareWindow, participationShareSpanSeconds)
+		shareBlocked := chatReply && participationBotShareBlocks(botMessages, totalMessages, otherSpeakers, chatLevel)
 		if shareBlocked {
 			allowed, chatReply = false, false
 		}
 		event.proactiveReply, event.chatInReply = allowed, chatReply
+		// 相关度分支放行的回复在正文里可能既没有 @ 也没有名字，空转判断本来看不见
+		// 它们（botReplyLoopCandidate 只认结构触发）。把模型的 directed 结论带下去，
+		// 那道闸才管得到这一支。
+		event.routingDirected = parseErr == nil && ratings.Relevance.Directed != nil && *ratings.Relevance.Directed
 		if parseErr != nil {
 			event.routingReason = "接话评分格式无效，已保持沉默：" + parseErr.Error()
 		} else {
@@ -2339,6 +2490,33 @@ func proactiveReplyBotShare(messages []proactiveReplyHistoryItem, window int, sp
 		}
 	}
 	return bot, total
+}
+
+// proactiveReplyOtherSpeakers 数窗口里除机器人以外有几个不同的人开过口。只有一个时
+// 这段对话是一对一，发言占比高是常态，不该按刷屏处理。缺 user_id 的条目（历史里少数
+// 拿不到账号的消息）按「又一个人」算：宁可多算一个让限流照常生效，也不要因为字段缺失
+// 把热闹群误判成一对一。
+func proactiveReplyOtherSpeakers(messages []proactiveReplyHistoryItem, window int, spanSeconds int64) int {
+	if window > 0 && len(messages) > window {
+		messages = messages[:window]
+	}
+	speakers := map[string]struct{}{}
+	unknown := 0
+	for _, item := range messages {
+		if spanSeconds > 0 && item.AgeSeconds != nil && *item.AgeSeconds > spanSeconds {
+			continue
+		}
+		if item.IsBot {
+			continue
+		}
+		userID := strings.TrimSpace(item.UserID)
+		if userID == "" {
+			unknown++
+			continue
+		}
+		speakers[userID] = struct{}{}
+	}
+	return len(speakers) + unknown
 }
 
 // chatInCooldownAllows 判断本群距上次闲聊插话是否已过冷却。
@@ -2515,6 +2693,9 @@ type proactiveReplyHistoryItem struct {
 	Images     int               `json:"images,omitempty"`
 	IsBot      bool              `json:"is_bot,omitempty"`
 	AgeSeconds *int64            `json:"age_seconds,omitempty"`
+	// UserID 只给程序侧数「窗口里有几个人在说话」用，不进路由提示词：模型按 sender
+	// 称呼理解对话，多一个数字账号只会让它把 ID 当成正文的一部分复述出去。
+	UserID string `json:"-"`
 }
 
 // botAliasesForEvent 把平台用户名一起交给路由模型：群消息里写的是
@@ -2589,6 +2770,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			Images:     imageCount,
 			IsBot:      payload.BotAccount != "" && item.UserID == payload.BotAccount,
 			AgeSeconds: ageSeconds,
+			UserID:     strings.TrimSpace(item.UserID),
 		}
 		if historyItem.IsBot && payload.LastBotMessage == nil {
 			lastBotMessage := historyItem
@@ -3107,8 +3289,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 每条消息单独限时，防止慢模型/插件占住并发槽太久。
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
-	stopTyping := r.startTypingIndicator(ctx, event, cfg)
-	defer stopTyping()
+	typing := r.startTypingIndicator(ctx, event, cfg)
+	// 放进 ctx 是为了让发送链路能自己调节：发出一条就静音，还有下一条再点亮。
+	ctx = withTypingIndicator(ctx, typing)
+	defer typing.stop()
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
@@ -3200,7 +3384,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		pluginResponses = r.plugins.RunWithGroupOverrides(ctx, pluginRequest(event, replyHistory), overrides, settingOverrides)
 	}
 	pluginResponses = applyRecallReplyMode(pluginResponses, cfg.RecallReplyMode)
-	pluginResponses = applyRelationshipTaskPermissions(pluginResponses, relationship)
 	authoritativePluginContext := hasAuthoritativePluginContext(pluginResponses)
 	var pluginTasks []PluginTask
 	for _, resp := range pluginResponses {
@@ -3265,6 +3448,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			pluginTools = append(pluginTools, newDianaPlatformTool(r, event))
 		}
 		if fullAgentEnabled {
+			// 因为权限不够而没挂上的工具名。它们不构造、不注册，只是让注册表知道
+			// 「有过这个名字，但这次会话没权限」，取不到时才说得出正确的那句话。
+			var deniedTools []string
 			extraTools := []agent.Tool{
 				newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 				newDianaHistoryImagesTool(r, event),
@@ -3275,14 +3461,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaSubtaskTool(r, event),
 				newDianaRelationshipTool(r, event),
 				newDianaNotebookTool(r, event, relationship),
-				newDianaVersionTool(r),
+				newDianaVersionTool(r, repositoryDisclosedTo(cfg, relationship.Owner)),
 				newDianaImageTool(r, event, relationship),
 				newDianaTasksTool(r, event),
 				newDianaBotParticipationTool(r, event),
 				newDianaReplyBlockTool(r, event),
 				newDianaReminderTool(r, event),
-				newDianaScheduleTool(r, event),
-				newDianaRSSWatchTool(r, event),
 				newDianaRenderTool(r, event),
 				// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
 				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
@@ -3291,11 +3475,24 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
 			}
+			// 跨会话发送只在「确实存在另一条会话可发」时才有意义。群里人人可用，
+			// 但只能发给当前说话的人；主人在哪都能用，因为只有他能指定别人和群。
+			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。
+			if event.Kind == EventKindGroup || relationship.Owner {
+				extraTools = append(extraTools, newDianaCrossSessionTool(r, event, relationship.Owner))
+			} else {
+				deniedTools = append(deniedTools, dianaCrossSessionToolName)
+			}
 			if supportsOneBotGroupTool(cfg, event) {
 				extraTools = append(extraTools, newDianaGroupTool(r, event))
 			}
 			if r.threadStateStore() != nil {
 				extraTools = append(extraTools, newDianaThreadStateTool(r, event))
+			}
+			// 自述默认关着，开关在机器人配置上：工具和注入层要同时受它约束，否则
+			// 模型会写进一个不会被读出来的地方。
+			if r.selfNoteEnabled(event) {
+				extraTools = append(extraTools, newDianaSelfNoteTool(r, event, relationship))
 			}
 			if boolValue(cfg.LongTermMemoryEnabled, true) {
 				r.mu.RLock()
@@ -3339,18 +3536,47 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 			}
 			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event); enabled {
-				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok && (relationship.Owner || repositoryPublishEventHasAccess(event, settings)) {
-					extraTools = append(extraTools, newDianaRepositoryIssuesTool(r, event, plugin, settings))
+				if plugin, ok := pluginValue.(*RepositoryPublishPlugin); ok {
+					if relationship.Owner || repositoryPublishEventHasAccess(event, settings) {
+						extraTools = append(extraTools, newDianaGitHubTool(r, event, plugin, settings))
+					} else {
+						// 插件开着、只是这个人这个群不够格。不登记的话模型只会被告知
+						// 「不存在」，然后换个名字接着猜。
+						deniedTools = append(deniedTools, dianaGitHubToolName)
+					}
 				}
 			}
+			// schedule、rss、github 三种订阅合成一个 subscription 工具。github 那种仍然
+			// 只挂给主人和仓库管理人员——它不进 backends，kind 枚举里就不会出现，
+			// 没权限的人看不见也就不会去调。
+			var githubWatch *dianaRepositoryWatchTool
 			if pluginValue, watchSettings, enabled := r.pluginWithSettingsForEvent(repositoryWatchPluginID, event); enabled {
 				if _, ok := pluginValue.(*RepositoryWatchPlugin); ok {
 					_, publishSettings, _ := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event)
 					managed := repositoryWatchManagedRepositories(event, publishSettings)
 					if relationship.Owner || len(managed) > 0 {
-						extraTools = append(extraTools, newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings))
+						githubWatch = newDianaRepositoryWatchTool(r, event, relationship.Owner, managed, watchSettings)
 					}
 				}
+			}
+			if subscription := newDianaSubscriptionTool(
+				subscriptionBackend{
+					kind: subscriptionKindSchedule, label: "按固定间隔重复执行一段查询并通知结果",
+					operations: []string{"create", "list", "update", "cancel", "delete"},
+					delegate:   newDianaScheduleTool(r, event),
+				},
+				subscriptionBackend{
+					kind: subscriptionKindRSS, label: "盯 RSS/Atom Feed 或 X (Twitter) 用户，由模型按 judge_prompt 判断是否值得通知",
+					operations: []string{"create", "list", "update", "cancel", "delete"},
+					delegate:   newDianaRSSWatchTool(r, event),
+				},
+				subscriptionBackend{
+					kind: subscriptionKindGitHub, label: "盯 GitHub 仓库的 Commit / PR / Issue / Release / Star",
+					operations: []string{"create", "list", "update", "cancel", "delete", "run"},
+					delegate:   subscriptionGitHubDelegate(githubWatch),
+				},
+			); subscription != nil {
+				extraTools = append(extraTools, subscription)
 			}
 			// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
 			// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里
@@ -3369,6 +3595,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if err != nil {
 				return "", err
 			}
+			agentRegistry.DenyTools(deniedTools...)
 		} else if len(pluginTools) > 0 && relationship.allowsAgentTools() {
 			// Plugin-contributed model tools stay usable without granting the local
 			// filesystem, shell, browser, skills, or MCP surface behind AgentEnabled.
@@ -3395,13 +3622,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if routed && intent.Action != visualIntentNone {
 			switch intent.Action {
 			case visualIntentGenerateImage:
-				if !relationship.AllowImageGeneration {
-					reply := relationshipPermissionDenied(relationship, "图片生成", relationshipImageTierName)
-					if err := r.send(ctx, event, reply); err != nil {
-						return "", err
-					}
-					return reply, nil
-				}
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想生成什么画面？把画面描述发给我就行。"
 					if err := r.send(ctx, event, reply); err != nil {
@@ -3415,13 +3635,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				}
 				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
 			case visualIntentEditImage:
-				if !relationship.AllowImageEditing {
-					reply := relationshipPermissionDenied(relationship, "图片编辑", relationshipImageTierName)
-					if err := r.send(ctx, event, reply); err != nil {
-						return "", err
-					}
-					return reply, nil
-				}
 				if strings.TrimSpace(intent.Prompt) == "" {
 					reply := "想怎么改？发图时顺便说清楚要改哪里就行。"
 					if err := r.send(ctx, event, reply); err != nil {
@@ -3523,6 +3736,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		// 自述和世界书同级：世界书是「我活在什么世界里」，自述是「我注意到的我自己」。
+		// 两者都是理解这条消息所需的背景，都在尾部按记忆优先级让位，都不得覆盖人设。
+		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    selfNoteContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
 		// 群常用表达是风格参考，和记忆同级注入；没攒够门槛时它是空串，零开销。
 		if expressionContext := contextPreload.expressionContext; expressionContext != "" {
 			volatile = append(volatile, llm.Message{
@@ -3608,7 +3831,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if summary := rawMessageWithoutImagePlaceholders(olderSummary); summary != "" {
 			const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
 			summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
-			summary, summaryRecompressed = r.fitOlderSummaryToBudget(ctx, summary, summaryBudget, cfg)
+			summary, summaryRecompressed = r.fitOlderSummaryToBudget(summary, summaryBudget)
 			if promptSession := r.groupPromptSession(event); promptSession != nil {
 				summary = promptSession.rememberCheckpoint(summary)
 			}
@@ -3766,6 +3989,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// small-text screenshots so the chat model cannot silently replace their
 		// topic with an unrelated but searchable hypothesis.
 		currentMessage = appendLLMMessageText(currentMessage, "【当前图片的独立视觉描述，可能有识别误差；请与原图共同核对主题，搜索词必须来自这张图，不得改换成无关话题】\n"+currentImageGrounding)
+	} else if notice := imageFailureNotice(event, llmMessageHasImagePart(currentMessage)); notice != "" {
+		// 描述拿不到时这一段不能就这么空着：模型只看到一句「这张图什么意思」而没有
+		// 任何说明，会自己推断成「用户没发图」，把我们的故障说成对方的问题。
+		currentMessage = appendLLMMessageText(currentMessage, notice)
 	}
 	if avatarMatch := strings.TrimSpace(event.avatarMatchContext); avatarMatch != "" {
 		currentMessage = appendLLMMessageText(currentMessage, "【群成员头像匹配】\n"+avatarMatch)
@@ -3848,7 +4075,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	if reply == "" {
 		if controlIntent.SuppressCurrentUser {
-			reply = "为避免继续自动循环，我会暂停响应此账号约 30 分钟"
+			// 模型只吐了个处置标志、没有正文。以前在这里补一句写死的「我会暂停响应
+			// 此账号约 30 分钟」发出去，那读起来是系统弹窗不是说话。改成：暂停就地
+			// 生效（后面的发送路径不会再走到，applyReplyControlAfterSend 没有机会
+			// 执行），再由 sendReplyPauseHint 用人设写一句自然的提示；写不出来就
+			// 不说，不退回模板。
+			guardedCtx := withReplySuppressionSendGuard(ctx)
+			r.applyReplyControlAfterSend(guardedCtx, event, "", controlIntent)
+			if item, active := r.activeReplySuppression(event, time.Now()); active {
+				r.sendReplyPauseHint(guardedCtx, event, item)
+			}
+			return "", errReplySuppressedBeforeSend
 		} else if controlIntent.RefuseCurrent {
 			reply = "这条消息我暂时不想回答，我们换个话题吧"
 		} else if pending := imageAnnouncements.drain(); pending != "" {
@@ -4045,7 +4282,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
-			EvidenceLedgerAdvisory:     r.evidenceLedgerAdvisory(event),
+			BrowserControl:             r.browserControlFor(cfg),
+			BuiltinBrowser:             r.browserBoxFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry
@@ -4058,6 +4296,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
+		// 常驻名单要等注册表建好才算得出来：档位是用户按扩展配的，得知道这一轮
+		// 到底注册了哪些工具、哪条 MCP 带了哪几个。
+		agentCfg.CoreTools = r.agentCoreTools(event, registry)
+		r.rememberAgentResidencyCatalog(event, registry)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {
@@ -4149,16 +4391,31 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 }
 
 // replyAgentCoreTools 是主回复每一步都带完整定义的工具，其余按需加载（agent.Config.CoreTools）。
-// 取自近 7 天的调用统计：4642 次 Agent 运行里，搜索 338 次、历史媒体 71、聊天记录 63、
-// 线程状态 63、生图 59、网页渲染 32，其余每个工具最多 28 次。
+//
+// 门槛是「用到它的 Agent 运行占多少」，不是调用次数：常驻的代价按请求算，收益按运行算，
+// 一次运行里连调五次同一个工具也只省下一次 tools_load。近 7 天线上 719 次 Agent 运行，
+// 按 trace 去重后 web_search 273（38%）、history_media 94（13%）、github 76（11%）、
+// image 59（8%）、chat_history 57（8%）、browser_render 48（7%）、capabilities 47（7%）、
+// thread_state 23（3%）、poke 8（1%）。github 只在开了仓库插件、且本次会话有权限时才注册，
+// 在那些群里是 76/387≈20%。
+//
+// github 和 capabilities 补进来：171 次用到 tools_load 的运行里，有 71 次加载的只有这两个
+// 之一，占全部运行的 10%——这一步换来的只是一次多余的模型往返。
+//
+// thread_state 挪出去：它的用法整段写在 promptToolThreadState 里，提示词点了名，模型知道
+// 该加载什么，挪出去只在 3% 的运行里多一步。poke 留下的理由正相反——「什么时候该戳」只写在
+// 它自己的描述里，目录行压到 120 字就没了，挪出去等于这个工具不会再被用；它只在 OneBot
+// 会话里注册。
+//
+// 改这份名单会改请求里的 tools 数组，等于把所有会话的前缀缓存清一次，别为一两个百分点反复调。
 var replyAgentCoreTools = []string{
 	agent.WebSearchToolName,
-	dianaChatHistoryToolName,
-	dianaThreadStateToolName,
 	dianaHistoryImagesToolName,
+	dianaGitHubToolName,
 	dianaImageToolName,
+	dianaChatHistoryToolName,
 	"browser_render",
-	// 戳一戳要顺手用：每次先多一轮 tools_load 就不自然了。它只在 OneBot 会话里注册。
+	"capabilities",
 	dianaPokeToolName,
 }
 
@@ -5830,7 +6087,7 @@ func compactContextEvent(event MessageEvent) string {
 		text += " " + quoted
 	}
 	sender := promptSenderIdentity(event)
-	return sender + ": " + strings.Join(strings.Fields(text), " ") + strings.ReplaceAll(historyIdentityPrompt(event), "\n", " ")
+	return sender + ": " + strings.Join(strings.Fields(text), " ") + summaryIdentityPrompt(event)
 }
 
 func truncateRunesFromStart(text string, maxRunes int) string {
@@ -6085,6 +6342,8 @@ func dedupeStrings(values []string) []string {
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
 func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	// 扶正写歪的外壳和分隔符，消费的还是正规标记，见 normalizeDianaReplyVariants。
+	msg.Text = normalizeDianaReplyVariants(msg.Text)
 	id, rest, ok := consumeOutgoingReplyControl(msg.Text)
 	if !ok {
 		return msg
@@ -6123,6 +6382,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 		msg.MessageThreadID = event.MessageThreadID
 	} else {
 		msg.UserID = event.UserID
+		msg.TempSessionGroupID = event.tempSessionGroupID
 	}
 	return msg
 }
@@ -6151,6 +6411,21 @@ func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMe
 		return msg
 	}
 	msg.MentionNames = resolved
+	return msg
+}
+
+// normalizeOutgoingMentions 先把写歪的提及标记扶正，再丢掉 id 不可用的那些，见
+// mention_marker.go 里那段说明。放在 resolveOutgoingMentionNames 之前：查昵称是给
+// 留下来的标记用的，先扶正再清理，后面各平台的翻译就只会拿到正规标记和真账号。
+func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
+	acceptable := func(id string) bool { return mentionIDAcceptable(event.Platform, id) }
+	text := dropUnusableDianaMentions(normalizeDianaMentionVariants(msg.Text), acceptable)
+	text = dropResidualDianaReplyMarkers(text)
+	if text == msg.Text {
+		return msg
+	}
+	log.Printf("diana rewrote mention markers: platform=%s before=%q after=%q", NormalizePlatformID(event.Platform), truncateForError(msg.Text), truncateForError(text))
+	msg.Text = text
 	return msg
 }
 
@@ -6272,6 +6547,11 @@ func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text
 }
 
 func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEvent, text string) ([]string, error) {
+	// 和 sendSubscriberNotice 同一个道理：停用的机器人没有出站通道，发过去只会
+	// 变成一次注定失败的投递。
+	if r.profileDisabled(event.ProfileID) {
+		return nil, fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	// 订阅推送是主动找人，知道订阅者是谁就 @ 上：这条动态是他订的，不点名的话
 	// 群里刷过去就错过了。目标是纯群（没有记订阅人）时 MentionUserID 为空，自然不 @。
@@ -6869,6 +7149,12 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType == "poke" {
 		return r.handlePokeNotice(ctx, event)
 	}
+	// 刚加上好友：把之前因为发不出去而存下的私聊补上。这条通知不受群准入和回复
+	// 门槛约束——它不产生新的发言，只是把已经答应过的话送出去。
+	if event.SubType == "friend_add" {
+		r.flushPendingDirectMessages(ctx, event)
+		return nil
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	if !cfg.WelcomeEnabled {
 		return nil
@@ -7004,7 +7290,7 @@ func (r *Runtime) persistMessageEvent(event MessageEvent) {
 	if store == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 	defer cancel()
 	if err := store.AppendMessageEvent(ctx, sessionKey(event), event); err != nil {
 		log.Printf("diana message history persist failed: %v", err)
@@ -7071,7 +7357,7 @@ func (r *Runtime) record(record EventRecord) {
 	inboundStore := r.inboundStore
 	r.mu.Unlock()
 	if auditStore, ok := inboundStore.(InboundEventAuditStore); ok && strings.TrimSpace(record.MessageID) != "" {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		auditCtx, cancel := context.WithTimeout(context.Background(), auditPersistTimeout)
 		if err := auditStore.RecordInboundEventAudit(auditCtx, record); err != nil {
 			log.Printf("diana persist inbound event reason failed: %v", err)
 		}
@@ -7220,8 +7506,9 @@ type disabledGroupsSaver interface {
 
 // setGroupDisabled 禁用或恢复这台机器人在指定群的响应。
 //
-// 以前改的是主配置的 DisabledGroups，而判定时每台机器人都读主配置，结果一台机器人的
-// 主人「群 禁用」会把所有机器人在这个群都关掉。现在只改事件所属那台。
+// 开关只有群配置里那一份：聊天指令和控制台的群管理改的是同一个 Enabled，
+// 两边看到的状态因此总是一致的。老的 DisabledGroups 只在这里顺手清掉，
+// 它已经不是判据的一部分，留着只会挡住重新启用。
 func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled bool) string {
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
@@ -7231,25 +7518,52 @@ func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled 
 		return "用法：群 启用 <群号>"
 	}
 	profileID := r.eventProfileID(event)
-	current := r.profileConfig(profileID).DisabledGroups
-	if slices.Contains(current, groupID) == disabled {
+	r.mu.RLock()
+	store := r.groupConfigs
+	r.mu.RUnlock()
+	writer, ok := store.(GroupConfigWriter)
+	if !ok {
+		return "当前部署不支持在聊天里改群开关，请在控制台的群管理里操作。"
+	}
+	cfg := r.profileConfig(profileID)
+	groupCfg, exists := writer.ConfigForGroup(profileID, groupID)
+	if !exists {
+		groupCfg = DefaultGroupConfig(groupID, cfg)
+		groupCfg.BotProfileID = profileID
+	}
+	groupCfg = groupCfg.WithDefaults(groupID, cfg)
+	stale := slices.Contains(cfg.DisabledGroups, groupID)
+	if exists && groupCfg.Enabled == !disabled && !stale {
 		if disabled {
 			return "这个群已经处于禁用状态。"
 		}
 		return "这个群当前没有被禁用。"
 	}
+	groupCfg.Enabled = !disabled
+	groupCfg.EnabledSet = true
+	if _, err := writer.SaveGroupConfig(groupCfg, cfg); err != nil {
+		return "修改群开关失败：" + err.Error()
+	}
+	if stale {
+		r.forgetDisabledGroup(profileID, groupID)
+	}
+	if disabled {
+		return "已禁用该群的机器人响应。"
+	}
+	return "已恢复该群的机器人响应。"
+}
+
+// forgetDisabledGroup 把一个群从老的 DisabledGroups 里摘掉。迁移会清空整份名单，
+// 这里只管聊天指令当场碰到的那一个，失败了也不影响群配置里已经写好的开关。
+func (r *Runtime) forgetDisabledGroup(profileID, groupID string) {
 	var next []string
 	_, err := r.commitProfileChange(profileID, func(profile *BotConfig) error {
 		if next == nil {
 			next = slices.DeleteFunc(append([]string(nil), profile.DisabledGroups...), func(id string) bool { return id == groupID })
-			if disabled {
-				next = append(next, groupID)
-			}
 		}
 		profile.DisabledGroups = append([]string{}, next...)
 		return nil
 	}, func(profile BotConfig) error {
-		// 群开关由聊天指令修改，必须立即落盘，否则重启后会丢失。
 		if saver, ok := r.configSaver.(disabledGroupsSaver); ok {
 			return saver.SaveDisabledGroups(profileID, next)
 		}
@@ -7259,12 +7573,8 @@ func (r *Runtime) setGroupDisabled(event MessageEvent, groupID string, disabled 
 		return nil
 	})
 	if err != nil {
-		return "修改群开关失败：" + err.Error()
+		log.Printf("diana 清理机器人 %s 的旧禁用群 %s 失败：%v", profileID, groupID, err)
 	}
-	if disabled {
-		return "已禁用该群的机器人响应。"
-	}
-	return "已恢复该群的机器人响应。"
 }
 
 type rssJudgeDecision struct {
@@ -7409,7 +7719,7 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 			Content: fmt.Sprintf("【用户判断与回复规则】\n%s\n\n【不可信 Feed 新条目 JSON】\n%s", item.FeedJudgePrompt, payload),
 		},
 	}
-	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), "rss_watch_judge")
+	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), PurposeRSSWatchJudge)
 	return r.reuseRSSJudgment(taskCtx, source, messages, func(judgeCtx context.Context) (rssJudgeDecision, error) {
 		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
 			resp, err := client.Generate(judgeCtx, llm.GenerateRequest{Messages: messages})
@@ -7635,7 +7945,7 @@ func (r *Runtime) maybeNotifyQuietHours(ctx context.Context, event MessageEvent,
 		return
 	}
 	if event.Kind == EventKindGroup {
-		if !cfg.GroupAdmission.Allows(event.GroupID) || r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
+		if r.isGroupDisabled(strings.TrimSpace(event.ProfileID), event.GroupID) {
 			return
 		}
 	} else if event.Kind != EventKindPrivate {
@@ -7738,17 +8048,26 @@ func (r *Runtime) isSelfMessage(event MessageEvent) bool {
 
 // isGroupDisabled 判断这台机器人在这个群里是否被禁用。同一个群里两台机器人可以
 // 一台开一台关，所以必须带上是谁在问。
+// isGroupDisabled 是「这台机器人在这个群工作吗」的唯一判据。群配置里那一份
+// Enabled 就是逐群开关；还没有群配置的群按机器人的新群默认走，白名单模式下
+// 被拉进新群因此不会回话。
+//
+// DisabledGroups 是聊天指令写过的老存储，启动时会迁进群配置，这里继续读一个
+// 版本，免得迁移之前的一瞬间被停用的群又开口。
 func (r *Runtime) isGroupDisabled(botProfileID, groupID string) bool {
 	r.mu.RLock()
 	cfg := r.profileConfigLocked(botProfileID)
 	store := r.groupConfigs
 	r.mu.RUnlock()
+	if slices.Contains(cfg.DisabledGroups, groupID) {
+		return true
+	}
 	if store != nil {
-		if groupCfg, ok := store.ConfigForGroup(botProfileID, groupID); ok && !groupCfg.WithDefaults(groupID, cfg).Enabled {
-			return true
+		if groupCfg, ok := store.ConfigForGroup(botProfileID, groupID); ok {
+			return !groupCfg.WithDefaults(groupID, cfg).Enabled
 		}
 	}
-	return slices.Contains(cfg.DisabledGroups, groupID)
+	return !cfg.GroupAdmission.NewGroupEnabled()
 }
 
 // userBlocked 判断发送者是否在这台机器人（及所在群）的屏蔽名单里。链接解析、插件入口

@@ -15,8 +15,7 @@ import (
 )
 
 const (
-	relationshipEvaluationMinConfidence     = 0.75
-	naturalInteractionFavorabilityThreshold = 20
+	relationshipEvaluationMinConfidence = 0.75
 	// maxPortraitObservationsPerTurn 限制一条消息能带来几条画像。画像是慢慢攒
 	// 的，一次说出三件稳定的事已经很多；不封顶的话模型会把整段话拆成一堆条目。
 	maxPortraitObservationsPerTurn = 3
@@ -104,16 +103,38 @@ func knownPortraitForEvaluation(traits []UserPortraitTrait) []relationshipKnownP
 type relationshipEvaluationPayload struct {
 	Message      proactiveReplyPayload `json:"message"`
 	CurrentScore int                   `json:"current_score"`
-	CurrentTier  string                `json:"current_tier"`
 	MessageCount int                   `json:"message_count"`
 	// RomanceActive 让评估器知道双方已是恋人：亲密表达在恋人之间是日常，不该
 	// 每句都当成「关系变化」加分。
-	RomanceActive                 bool                        `json:"romance_active,omitempty"`
-	NaturalInteractionGainEnabled bool                        `json:"natural_interaction_gain_enabled"`
-	NaturalInteractionThreshold   int                         `json:"natural_interaction_threshold"`
-	PortraitFields                []PortraitFieldSpec         `json:"portrait_fields"`
-	KnownPortrait                 []relationshipKnownPortrait `json:"known_portrait,omitempty"`
+	RomanceActive  bool                        `json:"romance_active,omitempty"`
+	PortraitFields []PortraitFieldSpec         `json:"portrait_fields"`
+	KnownPortrait  []relationshipKnownPortrait `json:"known_portrait,omitempty"`
 }
+
+// relationshipEvaluationSystemPrompt 是后台关系与画像评估器的系统提示词。
+//
+// 抽成常量是为了让规则能被测试钉住：画像里的 timezone 一栏决定了机器人敢不敢
+// 谈对方的作息，漏掉它整条跨时区链路就退回「按本机时区猜」。
+const relationshipEvaluationSystemPrompt = `你是聊天机器人 Diana 的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化，并顺便维护这个人的长期画像。
+
+必须遵守：
+1. 必须理解整句话、引用对象和最近对话，不得按关键词、子串、前缀或正则机械加减分。
+2. 查询关系状态、权限或功能，要求设置分数，讨论关系计分规则，复述或引用别人的话，提到褒义或贬义表达但并非在表达对机器人的态度，都必须 should_update=false、delta=0。
+3. 好感度不会因为「聊得多」自然上涨。普通的提问、任务请求、闲聊本身一律判 0，无论对方说了多少条。只有当这条消息真正表达了善意、感谢、信任、关心、冒犯或恶意时才动分——相处次数不是理由，内容才是。
+4. 普通提问、任务请求、唤醒和闲聊默认 delta=0，不能因为 @ 机器人或机器人会回复就加分。
+5. 当前发言者对机器人表达清晰且有上下文支撑的善意、感谢、信任、关心或持续亲近时可以加分；明确针对机器人的轻视、攻击、骚扰、威胁或恶意时应减分。
+6. 玩笑、昵称和亲密调侃必须结合双方最近语境判断；拿不准时不更新。混合表达要按整体含义判断，严重威胁不能因同时出现亲密表达而加分。当 romance_active=true 时双方已是恋人：日常的亲昵、情话和恋人间的称呼是常态，默认不加分，只有明显超出日常的关心、付出或伤害才算关系变化。
+7. delta 只能是 -3、-2、-1、0、1、2、3。轻微变化用 1，明确变化用 2，极强且罕见的变化用 3。confidence 是对关系变化判断的置信度，范围 0 到 1。
+8. 机器人的主人不是特例：主人身份由账号决定、不受分数影响，但好感度照样按上面几条如实评估，该加就加、该减就减，不要因为对方是主人就一律判 0 或一律加分。
+
+同时维护当前发言者的人员画像（portrait）：
+9. portrait 只记这个人身上长期稳定的情况，字段取值和含义见 portrait_fields。一次性的行程、当下的心情和身体状况、临时安排、别人的情况、机器人自己的设定都不记。
+10. 每条 portrait 必须给出 field、value（不超过 30 字的第三人称短语，直接写事实本身，不要写“用户说……”）、evidence（不超过 30 字的原话片段）、source 和 confidence。source=stated 表示本人在当前发言里明说；需要结合上下文推断时用 inferred，且必须 confidence>=0.85，拿不准就不输出。
+11. known_portrait 是已经记下的画像。已经记过且没有变化的不要重复输出；同一栏的情况发生变化（搬家、换工作、作息改了）时直接输出新值，旧值会被顶掉。
+12. 具体门牌地址、电话号码、证件号、账号密码这类精确身份与联系方式一律不记，居住地点最细只到城市或城区。
+13. timezone 这一栏的 value 必须是 IANA 时区名（如 Asia/Shanghai、Europe/Berlin、America/New_York），写别的一律会被丢弃。这一栏是拿来算「他那边现在几点」的：缺了它，机器人只能按自己所在机器的时区推断对方作息，深夜催睡、清早问早都会落空，所以只要能确定就要记，不用等对方专门报时区。对方说自己在哪个国家或城市、说出自己那边的当地时间、提到与机器人所在地的时差，或者这一轮记下了能唯一确定时区的居住地时，都要一并输出 timezone；已经记了居住地而 known_portrait 里还没有 timezone 时，本轮直接补上。由居住地推出来的填 source=inferred、evidence 写那条居住地依据、confidence 取 0.9 以上。只有能确定到唯一时区时才写，跨多个时区的国家（如美国、俄罗斯）没说具体城市就不要记。短期出差、旅行不记；但对方明说自己搬去了别的地方、或长期待在别处时要更新这一栏。已经记过的时区和对方这次说的当地时间对不上时，按他这次说的输出新值。
+14. 本条没有值得记的画像时 portrait 输出空数组，最多 3 条。
+15. 只输出一个合法 JSON 对象，不要输出 Markdown 或额外文字。格式固定为：{"should_update":false,"delta":0,"confidence":0.96,"reason":"中性查询，不改变关系","portrait":[{"field":"occupation","value":"在做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.95}]}`
 
 func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageEvent, text string, handled bool) (relationshipEvaluationDecision, UserMemoryProfile, bool) {
 	ctx = withLLMUsagePurpose(ctx, "relationship_evaluate")
@@ -123,15 +144,12 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
 	policy := relationshipPolicyForEvent(r.effectiveConfigForEvent(event), profile, event)
 	payload := relationshipEvaluationPayload{
-		Message:                       r.proactiveReplyPayload(event, r.cleanInput(event, text)),
-		CurrentScore:                  profile.Favorability,
-		CurrentTier:                   policy.Name,
-		MessageCount:                  profile.MessageCount,
-		RomanceActive:                 policy.Romance,
-		NaturalInteractionGainEnabled: profile.Favorability < naturalInteractionFavorabilityThreshold,
-		NaturalInteractionThreshold:   naturalInteractionFavorabilityThreshold,
-		PortraitFields:                PortraitFieldSpecs(),
-		KnownPortrait:                 knownPortraitForEvaluation(profile.Portrait),
+		Message:        r.proactiveReplyPayload(event, r.cleanInput(event, text)),
+		CurrentScore:   profile.Favorability,
+		MessageCount:   profile.MessageCount,
+		RomanceActive:  policy.Romance,
+		PortraitFields: PortraitFieldSpecs(),
+		KnownPortrait:  knownPortraitForEvaluation(profile.Portrait),
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -140,27 +158,8 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	}
 	messages := []llm.Message{
 		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是聊天机器人 Diana 的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化，并顺便维护这个人的长期画像。
-
-必须遵守：
-1. 必须理解整句话、引用对象和最近对话，不得按关键词、子串、前缀或正则机械加减分。
-2. 查询关系状态、权限或功能，要求设置分数，讨论关系计分规则，复述或引用别人的话，提到褒义或贬义表达但并非在表达对机器人的态度，都必须 should_update=false、delta=0。
-3. 当 natural_interaction_gain_enabled=true 时，当前仍处于自然熟悉阶段。一次真实、有内容且面向机器人的普通闲聊、提问或任务互动，默认应 should_update=true、delta=1，表示相处带来的轻微熟悉；不能仅以“普通提问”“功能请求”或“任务指令”为理由判为 0。纯 @、只有称呼、无实质内容、重复或近似重复消息、刷屏、自动回复、故障反馈，以及明显只为刷分的互动仍为 0。必须理解语义判断，不得用关键词计分。
-4. 当 natural_interaction_gain_enabled=false 时，普通提问、任务请求、唤醒和闲聊默认 delta=0，不能因为 @ 机器人或机器人会回复就加分。
-5. 无论是否处于自然熟悉阶段，当前发言者对机器人表达清晰且有上下文支撑的善意、感谢、信任、关心或持续亲近时可以加分；明确针对机器人的轻视、攻击、骚扰、威胁或恶意时应减分。
-6. 玩笑、昵称和亲密调侃必须结合双方最近语境判断；拿不准时不更新。混合表达要按整体含义判断，严重威胁不能因同时出现亲密表达而加分。当 romance_active=true 时双方已是恋人：日常的亲昵、情话和恋人间的称呼是常态，默认不加分，只有明显超出日常的关心、付出或伤害才算关系变化。
-7. delta 只能是 -3、-2、-1、0、1、2、3。自然熟悉阶段的普通互动只能用 1；其他轻微变化用 1，明确变化用 2，极强且罕见的变化用 3。confidence 是对关系变化判断的置信度，范围 0 到 1。
-8. 机器人的主人不是特例：他的关系等级由身份决定，不受分数影响，但好感度照样按上面几条如实评估，该加就加、该减就减，不要因为对方是主人就一律判 0 或一律加分。
-
-同时维护当前发言者的人员画像（portrait）：
-9. portrait 只记这个人身上长期稳定的情况，字段取值和含义见 portrait_fields。一次性的行程、当下的心情和身体状况、临时安排、别人的情况、机器人自己的设定都不记。
-10. 每条 portrait 必须给出 field、value（不超过 30 字的第三人称短语，直接写事实本身，不要写“用户说……”）、evidence（不超过 30 字的原话片段）、source 和 confidence。source=stated 表示本人在当前发言里明说；需要结合上下文推断时用 inferred，且必须 confidence>=0.85，拿不准就不输出。
-11. known_portrait 是已经记下的画像。已经记过且没有变化的不要重复输出；同一栏的情况发生变化（搬家、换工作、作息改了）时直接输出新值，旧值会被顶掉。
-12. 具体门牌地址、电话号码、证件号、账号密码这类精确身份与联系方式一律不记，居住地点最细只到城市或城区。
-13. timezone 这一栏的 value 必须是 IANA 时区名（如 Asia/Shanghai、Europe/Berlin、America/New_York），写别的一律会被丢弃。对方说自己在哪个国家或城市、说出自己那边的当地时间、或提到与机器人所在地的时差时才记；只有能确定到唯一时区时才写，跨多个时区的国家（如美国、俄罗斯）没说具体城市就不要记。短期出差、旅行不记；但对方明说自己搬去了别的地方、或长期待在别处时要更新这一栏。已经记过的时区和对方这次说的当地时间对不上时，按他这次说的输出新值。
-14. 本条没有值得记的画像时 portrait 输出空数组，最多 3 条。
-15. 只输出一个合法 JSON 对象，不要输出 Markdown 或额外文字。格式固定为：{"should_update":false,"delta":0,"confidence":0.96,"reason":"中性查询，不改变关系","portrait":[{"field":"occupation","value":"在做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.95}]}`),
+			Role:    llm.RoleSystem,
+			Content: strings.TrimSpace(relationshipEvaluationSystemPrompt),
 		},
 		{
 			Role:    llm.RoleUser,

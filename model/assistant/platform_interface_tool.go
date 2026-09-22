@@ -48,6 +48,12 @@ const (
 	platformOpKick       = "kick"
 )
 
+// 撤回自成一类：不是只读，但也不是对别人动手的群管理操作，所以不归主人专属。
+// 它只能作用于机器人自己刚发出的消息，谁都可以让它改口。
+var platformSelfOperations = map[string]bool{
+	platformOpRecall: true,
+}
+
 var platformReadOperations = map[string]bool{
 	platformOpGroupInfo:  true,
 	platformOpMemberInfo: true,
@@ -73,7 +79,7 @@ func (p *PlatformInterfacePlugin) Manifest() PluginManifest {
 		ID:          platformInterfacePluginID,
 		Name:        "平台接口",
 		Version:     "0.1.1",
-		Description: "官方内置的跨平台群操作能力：读取群资料与成员，主人可在机器人具备管理员身份时禁言、解禁和踢人。支持 OneBot v11 与 Telegram，其余平台不支持的操作会明确说明。",
+		Description: "官方内置的跨平台群操作能力：读取群资料与成员，撤回机器人自己发出的消息，主人可在机器人具备管理员身份时禁言、解禁和踢人。支持 OneBot v11 与 Telegram，其余平台不支持的操作会明确说明。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"platform:group:read", "platform:group:moderate:owner"},
@@ -103,7 +109,7 @@ func newDianaPlatformTool(runtime *Runtime, event MessageEvent) *dianaPlatformTo
 func (t *dianaPlatformTool) Name() string { return dianaPlatformToolName }
 
 func (t *dianaPlatformTool) Description() string {
-	base := "跨平台群操作接口。group_info 读群资料，member_info 按 user_id 实时核验成员，member_list 拉成员候选。只在用户明确要求读取群信息或执行群操作时调用；被拒绝后不要换别的工具绕过，也不要在没有成功结果时声称已完成。"
+	base := "跨平台群操作接口。group_info 读群资料，member_info 按 user_id 实时核验成员，member_list 拉成员候选。只在用户明确要求读取群信息或执行群操作时调用；被拒绝后不要换别的工具绕过，也不要在没有成功结果时声称已完成。recall 撤回我自己刚发出的消息：发现自己说错、发错内容，要真的撤回就必须调用它，只写「当我没说」「收回刚才那句」并不会让消息消失，没调用成功就不许说自己撤回了。它只能作用于我自己发出的消息，message_id 取自历史里我自己的发言，不按内容猜；撤回失败（不支持、超时限、没权限）时原消息仍在，如实说明并直接发更正内容。"
 	if t.owner {
 		base += " 禁言（mute）、解禁（unmute）、踢人（kick）仅主人可用，且需要机器人本身是该群管理员；mute 必须给正的时长（秒），unmute 解除禁言，kick 可带 reject_add_request 决定是否拒绝再次加群。只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手。不支持该操作的平台会明确说明。"
 	}
@@ -111,17 +117,18 @@ func (t *dianaPlatformTool) Description() string {
 }
 
 func (t *dianaPlatformTool) InputSchema() map[string]any {
-	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList}
+	operations := []string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpRecall}
 	properties := map[string]any{
-		"group_id": toolStringParam("目标群 ID；省略时用当前群。"),
-		"user_id":  toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或成员查询结果。不要按昵称猜 ID，拿不准就先查成员或问清楚。member_info 必填；member_info 省略时用当前引用消息的发送者。"),
+		"message_id": toolStringParam("recall 专用：要撤回的消息 ID，只能是我自己刚发出的那条，取自历史里我自己的发言标识。省略时撤回我在本会话最近发出的一条。不要按内容或印象编 ID。"),
+		"group_id":   toolStringParam("目标群 ID；省略时用当前群。"),
+		"user_id":    toolStringParam("目标账号 ID，必须取自消息里 @ 的结构化信息、被引用消息的发送者，或成员查询结果。不要按昵称猜 ID，拿不准就先查成员或问清楚。member_info 必填；member_info 省略时用当前引用消息的发送者。"),
 	}
 	if t.owner {
 		operations = append(operations, platformOpMute, platformOpUnmute, platformOpKick)
 		properties["duration"] = toolIntParam("mute 专用：禁言时长（秒），必须为正；超过平台上限时按上限执行。", 1, telegramMaxMuteSeconds)
 		properties["reject_add_request"] = toolBoolParam("kick 专用：为 true 时同时拒绝该账号再次加群（OneBot 的 reject_add_request；Telegram 保持封禁而非仅移出）。默认 false，只移出、允许再加。")
 	}
-	properties["operation"] = toolEnumParam("要执行的操作。group_info/member_info/member_list 只读；mute/unmute/kick 是群管理操作，仅主人可用。", operations...)
+	properties["operation"] = toolEnumParam("要执行的操作。group_info/member_info/member_list 只读；recall 撤回我自己刚发出的消息；mute/unmute/kick 是群管理操作，仅主人可用。", operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
 }
 
@@ -138,8 +145,8 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 	if operation == "" {
 		return "", fmt.Errorf("operation 不能为空")
 	}
-	if !platformReadOperations[operation] && !platformDestructiveOperations[operation] {
-		return "", fmt.Errorf("operation 必须是 group_info、member_info、member_list、mute、unmute 或 kick")
+	if !platformReadOperations[operation] && !platformDestructiveOperations[operation] && !platformSelfOperations[operation] {
+		return "", fmt.Errorf("operation 必须是 group_info、member_info、member_list、recall、mute、unmute 或 kick")
 	}
 	if !t.runtime.platformInterfaceEnabled(t.event) {
 		err := fmt.Errorf("平台接口未启用，或当前平台不支持群操作")
@@ -147,6 +154,9 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 		return "", err
 	}
 
+	if platformSelfOperations[operation] {
+		return t.runRecall(ctx, input, access, owner)
+	}
 	if platformDestructiveOperations[operation] {
 		return t.runModeration(ctx, input, operation, owner, access)
 	}
@@ -505,8 +515,8 @@ func (r *Runtime) platformInterfaceBuiltinSkills(event MessageEvent) []agent.Ski
 	}
 	return []agent.SkillMetadata{{
 		Name:             "platform",
-		Description:      "Read group information and members, and perform owner-only moderation (mute, unmute, kick) through the current platform when the bot is a group administrator.",
-		ShortDescription: "跨平台群资料读取与主人专属禁言/踢人",
+		Description:      "Read group information and members, recall the bot's own recently sent messages, and perform owner-only moderation (mute, unmute, kick) through the current platform when the bot is a group administrator.",
+		ShortDescription: "跨平台群资料读取、撤回自己发出的消息与主人专属禁言/踢人",
 		Path:             "builtin://platform/SKILL.md",
 		Source:           platformInterfaceSkillSource,
 		Content:          platformskill.Markdown(),

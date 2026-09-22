@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-const repositoryWatchFailureAlertThreshold = 3
-
 const (
 	repositoryWatchFailureStagePolling  = "polling"
 	repositoryWatchFailureStageSummary  = "summary"
@@ -71,9 +69,12 @@ func updateRepositoryWatchFailureState(item *Reminder, cause error) {
 	item.RecoveryNoticePending = false
 }
 
-func repositoryWatchFailureShouldAlert(item Reminder) bool {
-	return reminderIsRepositoryWatch(item) &&
-		item.ConsecutiveFailures >= repositoryWatchFailureAlertThreshold &&
+// repositoryWatchFailureShouldAlert 的 threshold 见 recurringFailureAlertThreshold：
+// 0 表示后台把失败告警关了，这时连续失败多少次都不出声。
+func repositoryWatchFailureShouldAlert(item Reminder, threshold int) bool {
+	return threshold > 0 &&
+		reminderIsRepositoryWatch(item) &&
+		item.ConsecutiveFailures >= threshold &&
 		strings.TrimSpace(item.LastErrorFingerprint) != "" &&
 		item.FailureAlertedAt.IsZero()
 }
@@ -115,7 +116,7 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 	acknowledged := false
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		_, delivered, err := r.sendErrorNoticeWithEvidence(ctx, target, notice)
+		_, delivered, err := r.sendDiagnosticNoticeWithEvidence(ctx, target, repositoryWatchPluginID, notice)
 		if delivered {
 			acknowledged = true
 		}
@@ -127,12 +128,17 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 		return firstErr
 	}
 	if !acknowledged {
+		// 开关关闭时这里也拿不到确认，但那是「不必发」而不是「没发出去」：
+		// 照常返回 nil，调用方才会记下「已告警」，不再每个周期重试一次。
+		if !r.diagnosticAllowed(reminderSourceEvent(item), repositoryWatchPluginID) {
+			return nil
+		}
 		return fmt.Errorf("仓库订阅失败告警未取得发送确认")
 	}
 	return nil
 }
 
-func (r *Runtime) acknowledgeRepositoryWatchFailureAlert(id, fingerprint string, alertedAt time.Time) (Reminder, error) {
+func (r *Runtime) acknowledgeRepositoryWatchFailureAlert(id, fingerprint string, threshold int, alertedAt time.Time) (Reminder, error) {
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -141,7 +147,7 @@ func (r *Runtime) acknowledgeRepositoryWatchFailureAlert(id, fingerprint string,
 		if item.ID != id || !reminderIsRepositoryWatch(*item) {
 			continue
 		}
-		if item.LastErrorFingerprint != fingerprint || item.ConsecutiveFailures < repositoryWatchFailureAlertThreshold {
+		if item.LastErrorFingerprint != fingerprint || item.ConsecutiveFailures < threshold {
 			return *item, fmt.Errorf("仓库订阅 %s 的失败状态已变化", id)
 		}
 		if item.FailureAlertedAt.IsZero() {
@@ -160,7 +166,7 @@ func (r *Runtime) notifyRepositoryWatchRecovery(ctx context.Context, item Remind
 		return ctx.Err()
 	}
 	notice := fmt.Sprintf("仓库订阅 %s 已恢复，后续更新将继续正常推送。", item.Repository)
-	if err := r.sendRepositoryWatch(ctx, item, notice); err != nil {
+	if err := r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), repositoryWatchPluginID, notice); err != nil {
 		return err
 	}
 	return nil

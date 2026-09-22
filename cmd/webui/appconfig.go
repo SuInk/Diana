@@ -84,7 +84,10 @@ type updateConfig struct {
 	Root           string `yaml:"root"`
 	ApplyEnabled   *bool  `yaml:"apply_enabled"`
 	ReleaseEnabled *bool  `yaml:"release_enabled"`
-	GroupTest      *bool  `yaml:"group_test_enabled"`
+	// WorkDir 覆盖 Release 更新的工作目录，留空时跟着数据目录走。
+	// 只读根文件系统或数据目录不可写的部署才需要单独指定。
+	WorkDir   string `yaml:"work_dir"`
+	GroupTest *bool  `yaml:"group_test_enabled"`
 }
 
 type napcatConfig struct {

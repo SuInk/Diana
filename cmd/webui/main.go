@@ -31,6 +31,8 @@ import (
 
 	"github.com/SuInk/diana/internal/dlog"
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/browserbox"
+	"github.com/SuInk/diana/model/browserctl"
 	"github.com/SuInk/diana/model/ghmirror"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/llmauth"
@@ -172,6 +174,12 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 					continue
 				}
 				oneBotAdded = true
+				// 空 token 曾经等于「不鉴权」，现在一律拒绝握手。升级上来的旧配置
+				// 会就此静默掉线：客户端每几秒被拒一次，机器人一条消息都收不到。
+				// 这种配置必须在启动时说清楚，而不是让人去翻握手日志。
+				if strings.TrimSpace(profile.OneBotAccessToken) == "" {
+					log.Printf("diana 机器人「%s」(%s) 收不到消息：反向 WebSocket 必须配置 Access Token，当前为空，所有握手都会被拒绝（reason=server_token_unset）。请在「机器人 → 配置 → 接入」填写，并与 OneBot 客户端保持一致", profile.Name, profile.ID)
+				}
 				oneBotServer.SetConfig(assistant.OneBotConfig{
 					Endpoint:    profile.OneBotReverseWSEndpoint,
 					AccessToken: profile.OneBotAccessToken,
@@ -310,6 +318,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// 逐群开关以前分在群配置、聊天指令和白名单三处，现在只剩群配置里那一份。
+	// 迁移要赶在运行时读配置之前跑完，否则这一瞬间被关掉的群会开口说话。
+	if err := webui.MigrateGroupScopeSwitches(botProfileStore, botGroupConfigStore); err != nil {
+		log.Fatal(err)
+	}
 	reminderStore, err := webui.NewPersistentReminderStore(ctx, sqliteStore)
 	if err != nil {
 		log.Fatal(err)
@@ -350,7 +363,7 @@ func main() {
 		log.Printf("load system release cache: %v", err)
 	}
 	// 下载线路选择器由 webui 和 updater 共用：界面上改了策略，下一次下载就按新策略走。
-	mirrorSelector := ghmirror.NewSelector(&http.Client{Timeout: 15 * time.Second})
+	mirrorSelector := ghmirror.NewSelector(&http.Client{Timeout: 60 * time.Second})
 	systemHandler.SetGitHubMirrorSelector(mirrorSelector)
 	releaseUpdater, err := updater.NewReleasePackageUpdater(updater.ReleasePackageOptions{
 		CurrentVersion: runtimeVersion,
@@ -360,6 +373,7 @@ func main() {
 		HealthURL:      "http://" + net.JoinHostPort(displayHost(host), port) + "/api/health",
 		Arguments:      os.Args[1:],
 		Shutdown:       cancel,
+		UpdatesDir:     appCfg.Update.WorkDir,
 		Disable:        !boolOr(appCfg.Update.ReleaseEnabled, true),
 	})
 	if err != nil {
@@ -423,11 +437,14 @@ func main() {
 	botRuntime.SetMessageHistoryStore(sqliteStore)
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
+	botRuntime.SetLLMCapabilityStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetThreadStateStore(sqliteStore)
 	botRuntime.SetOneBotRequestStore(sqliteStore)
+	botRuntime.SetPendingDirectMessageStore(sqliteStore)
 	botRuntime.SetNotebookStore(sqliteStore)
 	botRuntime.SetWorldBookStore(sqliteStore)
+	botRuntime.SetSelfNoteStore(sqliteStore)
 	botRuntime.SetExpressionStyleStore(sqliteStore)
 	// 版本号只活在构建期注入的变量里，机器人自己看不到就只能按训练记忆编一个。
 	// 「有没有新版本」的判断只该有一份，在更新器那边；机器人问它要结论。
@@ -480,6 +497,10 @@ func main() {
 		statsCollector.RestoreDurableBaselines(baselines)
 	}
 	eventHub := webui.NewEventHub()
+	// 主人在聊天里让机器人换模型、改屏蔽名单，改的是 WebUI 这同一份机器人配置。
+	// 页面只在自己发过写请求后才重新拉配置，所以不播这一条，开着的控制台会一直
+	// 停在旧值，要手动刷新才对得上。
+	botProfileStore.SetChangeListener(func() { eventHub.PublishConfigChanged("bot") })
 	botRuntime.SetEventListener(func(event assistant.EventRecord) {
 		auditCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		if err := sqliteStore.RecordInboundEventAudit(auditCtx, event); err != nil {
@@ -522,7 +543,7 @@ func main() {
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
 	botHandler.SetSQLiteStore(sqliteStore)
-	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 60 * time.Second})
+	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 3 * time.Minute})
 	repoPluginInstaller.MirrorBase = func(ctx context.Context) string {
 		return mirrorSelector.Base(ctx, "https://raw.githubusercontent.com/SuInk/diana/main/model/version/VERSION")
 	}
@@ -536,7 +557,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path())
+	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path()).WithRangeReaders(sqliteStore, sqliteStore)
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
 	healthHandler := webui.NewHealthHandlerWithVersion(runtimeVersion)
@@ -594,6 +615,7 @@ func main() {
 	systemHandler.Register(router)
 	mediaCacheHandler.Register(router)
 	historyMediaHandler.Register(router)
+	webui.NewStorageUsageHandler(sqliteStore.Path()).Register(router)
 	mediaBaseURLHandler.Register(router)
 	botHandler.Register(router)
 	ownerLoginHandler := webui.NewOwnerLoginHandler(authManager, botRuntime)
@@ -608,6 +630,24 @@ func main() {
 	openAPIHandler := webui.NewOpenAPIHandler(webui.NewOpenAPIKeyManager(sqliteStore), botRuntime, plugins)
 	openAPIHandler.SetLogStore(sqliteStore)
 	openAPIHandler.Register(router)
+	// 浏览器控制扩展：/api/browser-control 下的管理接口走会话鉴权，
+	// /browser-control/v1/socket 由令牌加来源白名单自行鉴权。默认全关，
+	// 策略里没打开总开关、没列站点之前，工具那一侧连注册都不会发生。
+	browserControlRegistry := browserctl.NewRegistry(ctx, sqliteStore)
+	browserControlHub := browserctl.NewHub(browserControlRegistry)
+	browserControlHandler := webui.NewBrowserControlHandler(browserControlRegistry, browserControlHub)
+	browserControlHandler.SetLogStore(sqliteStore)
+	browserControlHandler.Register(router)
+	botRuntime.SetBrowserControl(browserControlHub)
+	defer browserControlHub.CloseAll()
+	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
+	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
+	browserBoxManager := browserbox.New(ctx, sqliteStore, dataDir)
+	browserBoxHandler := webui.NewBrowserBoxHandler(browserBoxManager)
+	browserBoxHandler.SetLogStore(sqliteStore)
+	browserBoxHandler.Register(router)
+	botRuntime.SetBrowserBox(browserBoxManager)
+	defer browserBoxManager.Stop()
 	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
 	// main 收尾时判断 restartRequested 原地重启。
 	var restartRequested atomic.Bool

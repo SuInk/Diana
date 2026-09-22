@@ -207,3 +207,38 @@ func TestMalformedToolArgumentsRemainErrorsInFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestChatStreamRetriesForcedToolChoiceWithoutLeavingStreaming(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		var body openAIChatCompletionRequest
+		json.NewDecoder(r.Body).Decode(&body)
+		if !body.Stream {
+			t.Error("tool_choice fallback stopped streaming")
+		}
+		if body.ToolChoice != nil {
+			w.WriteHeader(400)
+			fmt.Fprint(w, `{"error":{"message":"Thinking mode does not support this tool_choice"}}`)
+			return
+		}
+		if len(body.Tools) != 1 {
+			t.Errorf("tools were dropped along with tool_choice: %#v", body.Tools)
+		}
+		writeChatEvents(w, `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+	}))
+	defer server.Close()
+	client := newOpenAICompatibleClient(ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "key", BaseURL: server.URL, Model: "test", APIFormat: APIFormatChatCompletions}, server.Client())
+	events, err := client.Stream(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hi"}}, ToolChoice: "lookup", Tools: []ToolDefinition{{Name: "lookup", Parameters: map[string]any{"type": "object"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for e := range events {
+		if e.Type == ChatEventError {
+			t.Fatal(e.Error)
+		}
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts=%d", attempts)
+	}
+}

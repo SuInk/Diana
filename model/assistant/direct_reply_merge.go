@@ -275,7 +275,7 @@ func (r *Runtime) classifyDirectReplyTopic(ctx context.Context, root MessageEven
 	if err != nil {
 		return "uncertain"
 	}
-	ctx = withLLMUsagePurpose(ctx, "direct_reply_topic")
+	ctx = withLLMUsagePurpose(ctx, PurposeDirectReplyTopic)
 	ctx, cancel := context.WithTimeout(ctx, directReplyTopicTimeout)
 	defer cancel()
 	raw, err := r.runLLMRouterProviderOnce(ctx, func(client LLMProvider) (string, error) {

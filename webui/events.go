@@ -84,6 +84,15 @@ func (h *EventHub) PublishBotEvent(event assistant.EventRecord) {
 	h.Publish("bot_event", event)
 }
 
+// PublishConfigChanged 广播一条配置变更通知。
+//
+// kind 对应前端的配置分区（bot / llm），只说「哪一块变了」，不带配置内容：
+// 这条通知会发给所有订阅者，而配置里有 token 一类的凭据，让各自重新按权限拉
+// 一次比顺手推一份全量安全。
+func (h *EventHub) PublishConfigChanged(kind string) {
+	h.Publish("config_changed", map[string]string{"kind": kind})
+}
+
 // EventStreamHandler 通过 SSE 向前端推送状态、统计和实时事件。
 type EventStreamHandler struct {
 	hub         *EventHub
@@ -167,7 +176,9 @@ func statusSignature(status assistant.RuntimeStatus) string {
 		)
 	}
 	bridgeEnabled, bridgeConnected := status.BridgeSummary()
-	return fmt.Sprintf("%t|%t|%s|%s|%s|%t|%t|%d|%s|%s|%s",
+	// 模型并发和 token 合计进指纹：它们每秒都可能变，而 UpdatedAt 只在运行时状态
+	// 改动时才动。不带上它们，前端要等下一次别的变化才会看到这两个数刷新。
+	return fmt.Sprintf("%t|%t|%s|%s|%s|%t|%t|%d|%d|%d|%d|%d|%s|%s|%s",
 		status.Running,
 		status.Channel.Connected,
 		status.Channel.SelfID,
@@ -176,6 +187,10 @@ func statusSignature(status assistant.RuntimeStatus) string {
 		bridgeEnabled,
 		bridgeConnected,
 		status.ActiveWorkers,
+		status.LLMConcurrency.Active,
+		status.LLMConcurrency.Peak,
+		status.LLMUsage.Today.Calls,
+		status.LLMUsage.Today.TotalTokens,
 		status.LastError,
 		status.UpdatedAt.Format(time.RFC3339Nano),
 		recentAt,

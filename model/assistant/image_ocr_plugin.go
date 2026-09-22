@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -80,7 +81,7 @@ func NewImageOCRPlugin(client *http.Client) *ImageOCRPlugin {
 
 func (p *ImageOCRPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.0",
+		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.1",
 		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走提供商配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。识别结果按图片内容哈希缓存并落库，同一张图或表情包在不同人、不同群、重启之后都只识别一次。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "llm:generate"},
@@ -409,7 +410,7 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 45 * time.Second
+		timeout = 90 * time.Second
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -426,6 +427,13 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	}
 	if err != nil {
 		// 转写只是辅助信息，失败不值得打断回复，也不缓存失败结果。
+		return ""
+	}
+	// 走 vision 分组时，模型拿不到图不会报错，而是回一句「没收到图片」。它和转写结果
+	// 一样是 200，缓存下来同一张图就永远是这个答案，理由见 vision_refusal.go。本地和
+	// HTTP OCR 后端的输出是图里的原文，截图里恰好有这句话时不该误判，所以只查 LLM 后端。
+	if cfg.Backend != imageOCRBackendLocal && cfg.Backend != imageOCRBackendHTTP && VisionDescriptionRefused(text) {
+		log.Printf("diana image ocr: vision model received no image, skipping cache: %s", truncateRunes(text, 60))
 		return ""
 	}
 	text = sanitizeFileTextString(text, imageOCRPerImageMax)
@@ -446,13 +454,18 @@ func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, 
 	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 45 * time.Second
+		timeout = 90 * time.Second
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	text, err := r.llmImageDescription(callCtx, event, cfg, imageURL)
 	if err != nil {
+		return ""
+	}
+	// 同上：模型说没收到图片时那句话不是描述，不能缓存。
+	if VisionDescriptionRefused(text) {
+		log.Printf("diana image describe: vision model received no image, skipping cache: %s", truncateRunes(text, 60))
 		return ""
 	}
 	text = sanitizeFileTextString(text, imageOCRPerImageMax)

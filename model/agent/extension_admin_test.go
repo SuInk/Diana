@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -118,7 +119,7 @@ func TestExtensionAdminMCPDoesNotConnectUntilTestAndRedactsSecrets(t *testing.T)
 	if _, err := AdministerExtensions(ctx, cfg, request); err != nil {
 		t.Fatal(err)
 	}
-	servers, err := loadMCPServers(filepath.Join(cfg.WorkDir, ".mcp.json"))
+	servers, err := loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults()))
 	if err != nil || servers["echo"].Headers["Authorization"] != "secret-token" {
 		t.Fatal("blank save lost credential")
 	}
@@ -126,11 +127,11 @@ func TestExtensionAdminMCPDoesNotConnectUntilTestAndRedactsSecrets(t *testing.T)
 	if _, err := AdministerExtensions(ctx, cfg, request); err != nil {
 		t.Fatal(err)
 	}
-	servers, _ = loadMCPServers(filepath.Join(cfg.WorkDir, ".mcp.json"))
+	servers, _ = loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults()))
 	if servers["echo"].Headers["Authorization"] != "" {
 		t.Fatal("explicit secret clear failed")
 	}
-	info, _ := os.Stat(filepath.Join(cfg.WorkDir, ".mcp.json"))
+	info, _ := os.Stat(resolveMCPConfigPath(cfg.WithDefaults()))
 	if info.Mode().Perm() != 0600 {
 		t.Fatal("insecure permissions")
 	}
@@ -195,5 +196,331 @@ func TestExtensionAdminCannotReplaceReadonlySkill(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(external, "SKILL.md"))
 	if string(data) != content {
 		t.Fatal("external file changed")
+	}
+}
+
+func TestExtensionAdminMemberPermissionDefaultsToOwnerOnly(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), MCPConfigPath: "mcp.json"}
+	ctx := context.Background()
+	config := map[string]any{"url": "https://example.com/mcp", "enabled": true}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: "probe", Config: config}); err != nil {
+		t.Fatal(err)
+	}
+	members := func() *bool {
+		result, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "list", ProfileID: "bot-a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, state := range result.(map[string]any)["items"].([]ExtensionState) {
+			if state.ID == "mcp:probe" {
+				return state.MembersEnabled
+			}
+		}
+		t.Fatal("saved MCP missing from catalog")
+		return nil
+	}
+	if value := members(); value == nil || *value {
+		t.Fatalf("new MCP defaults to members_enabled=%v, want false", value)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if value := members(); value == nil || !*value {
+		t.Fatalf("members_enabled = %v after opening the service", value)
+	}
+	values, err := LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(values); strings.Join(ids, ",") != "mcp:probe" {
+		t.Fatalf("member extensions = %v", ids)
+	}
+	// 机器人级停用优先：服务在这台机器人上关掉后，成员开关不再生效。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "enabled", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	values, err = LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(values); len(ids) != 0 {
+		t.Fatalf("disabled service still open to members: %v", ids)
+	}
+	// 另一台机器人不受影响，默认仍是仅主人。
+	other, err := LoadExtensionOverrides(cfg.WorkDir, "bot-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(other); len(ids) != 0 {
+		t.Fatalf("member permission crossed robots: %v", ids)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "builtin", Name: "probe", ProfileID: "bot-a", Enabled: true}); err == nil {
+		t.Fatal("builtin plugin accepted a member permission it cannot enforce")
+	}
+	// Skill 走同一套开关，内置插件不参与。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "skill", Name: "guide", Content: "---\nname: guide\ndescription: Member guide\n---\nHello"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "skill", Name: "guide", ProfileID: "bot-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	values, err = LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := MemberAllowedExtensionIDs(values); strings.Join(ids, ",") != "skill:guide" {
+		t.Fatalf("member extensions = %v", ids)
+	}
+}
+
+func TestExtensionAudienceLimitsMemberAccess(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), MCPConfigPath: "mcp.json"}
+	ctx := context.Background()
+	config := map[string]any{"url": "https://example.com/mcp", "enabled": true}
+	for _, name := range []string{"probe", "other"} {
+		if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: name, Config: config}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "mcp", Name: name, ProfileID: "bot-a", Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	audience := ExtensionAudience{Users: []string{" 1001 ", "1002", "1001"}, Groups: []string{"g1"}}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "audience", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Audience: audience}); err != nil {
+		t.Fatal(err)
+	}
+	overrides, err := LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	audiences, err := LoadExtensionAudiences(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := audiences["mcp:probe"]
+	if strings.Join(saved.Users, ",") != "1001,1002" || strings.Join(saved.Groups, ",") != "g1" {
+		t.Fatalf("audience = %#v，重复和空白没有清掉", saved)
+	}
+	cases := []struct {
+		user, group string
+		want        string
+	}{
+		{"1001", "g1", "mcp:other,mcp:probe"},
+		{"1003", "g1", "mcp:other"},
+		{"1001", "g2", "mcp:other"},
+		{"1001", "", "mcp:other"},
+	}
+	for _, tt := range cases {
+		got := MemberAllowedExtensionIDsFor(overrides, audiences, tt.user, tt.group)
+		if strings.Join(got, ",") != tt.want {
+			t.Fatalf("user=%q group=%q allowed=%v want=%s", tt.user, tt.group, got, tt.want)
+		}
+	}
+	// 名单清空就是不限制，同时不在文件里留空记录。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "audience", Kind: "mcp", Name: "probe", ProfileID: "bot-a"}); err != nil {
+		t.Fatal(err)
+	}
+	audiences, err = LoadExtensionAudiences(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audiences) != 0 {
+		t.Fatalf("清空后仍有记录：%#v", audiences)
+	}
+	if got := MemberAllowedExtensionIDsFor(overrides, audiences, "1003", "g9"); strings.Join(got, ",") != "mcp:other,mcp:probe" {
+		t.Fatalf("清空后仍在限制：%v", got)
+	}
+	// 关掉成员开关后，名单不能把权限找回来。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "members", Kind: "mcp", Name: "probe", ProfileID: "bot-a", Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	overrides, err = LoadExtensionOverrides(cfg.WorkDir, "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := MemberAllowedExtensionIDsFor(overrides, audiences, "1001", "g1"); strings.Join(got, ",") != "mcp:other" {
+		t.Fatalf("关掉成员开关后仍然开放：%v", got)
+	}
+}
+
+// 从预设装 MCP 时要当场验一次令牌：令牌被 Gitea 拒了就不能落盘，否则装上的是一条
+// 看着正常、一调用就 401 的服务。验过了把换到的用户名报回去，人能确认装的是哪个账号。
+func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), ExtensionManagement: true}
+	ctx := context.Background()
+	gitea := giteaAPIStub(t, "good-token")
+
+	_, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "wrong-token"},
+	})
+	if !errors.Is(err, ErrPresetCredentialRejected) {
+		t.Fatalf("令牌不对应当拒绝保存，实际 %v", err)
+	}
+	if servers, loadErr := loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults())); loadErr == nil && len(servers) != 0 {
+		t.Fatalf("被拒绝的配置不该留在盘上：%#v", servers)
+	}
+
+	result, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, ok := result.(map[string]any); !ok || saved["account"] != "diana" {
+		t.Fatalf("保存结果里应当带上验到的账号：%#v", result)
+	}
+
+	// 编辑时界面要拿回那张表：出身、非机密字段都在，令牌只报「配过」不回显。
+	read, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "read", Kind: "mcp", Name: "gitea"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, ok := read.(map[string]any)
+	if !ok || detail["preset"] != "gitea" || detail["preset_transport"] != "stdio" {
+		t.Fatalf("读回来的配置没带预设出身：%#v", read)
+	}
+	values, ok := detail["preset_values"].(map[string]string)
+	if !ok || values["host"] != gitea.URL || values["token"] != "" {
+		t.Fatalf("预设字段没按预期回填：%#v", detail["preset_values"])
+	}
+
+	// 令牌留空表示沿用旧的：改了别的字段也不用重新贴一次令牌，而且照样验得过。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Values: map[string]string{"host": gitea.URL},
+	}); err != nil {
+		t.Fatalf("留空令牌应当沿用已保存的那个：%v", err)
+	}
+
+	// 预设那张表没有超时和工具名单的输入框，从它改一次地址不能把这些清掉；
+	// 「服务可用」这张表上有，就按表上的来。
+	path := resolveMCPConfigPath(cfg.WithDefaults())
+	servers, err := loadMCPServers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tuned := servers["gitea"]
+	tuned.StartupTimeoutSec, tuned.ToolTimeoutSec = 45, 90
+	tuned.DisabledTools = []string{"delete_repo"}
+	servers["gitea"] = tuned
+	if err := saveMCPServers(path, servers); err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Values: map[string]string{"host": gitea.URL}, Config: map[string]any{"enabled": disabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err = loadMCPServers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := servers["gitea"]
+	if kept.StartupTimeoutSec != 45 || kept.ToolTimeoutSec != 90 || len(kept.DisabledTools) != 1 {
+		t.Fatalf("预设表单改地址时把它管不到的设置清掉了：%#v", kept)
+	}
+	if kept.enabled() {
+		t.Fatalf("表单上的「服务可用」没生效：%#v", kept)
+	}
+
+	// 单独的「检测」不写盘，只回报验的结果。
+	verified, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "verify", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, ok := verified.(map[string]any); !ok || status["verified"] != true || status["account"] != "diana" {
+		t.Fatalf("检测结果不对：%#v", verified)
+	}
+}
+
+// 超时上限只是拦手滑，不该按最慢的服务来卡人：首次启动现拉依赖的 stdio 服务、
+// 构建抓取这类慢工具，都能超过原来的 120/300 秒。
+func TestMCPTimeoutCeilings(t *testing.T) {
+	base := map[string]any{"url": "https://example.com/mcp"}
+	for _, item := range []struct {
+		key      string
+		accepted int
+		rejected int
+	}{
+		{"startup_timeout_sec", 300, 301},
+		{"tool_timeout_sec", 900, 901},
+	} {
+		config := map[string]any{}
+		for key, value := range base {
+			config[key] = value
+		}
+		config[item.key] = item.accepted
+		if _, err := mcpServerConfigFromInput(config); err != nil {
+			t.Fatalf("%s=%d 应当收下：%v", item.key, item.accepted, err)
+		}
+		config[item.key] = item.rejected
+		if _, err := mcpServerConfigFromInput(config); err == nil {
+			t.Fatalf("%s=%d 超出上限却被收下了", item.key, item.rejected)
+		}
+	}
+}
+
+// 环境变量和请求头是自己填进去的，删掉那一行就该真的删掉：值不回显，留空只能
+// 当成「保持原值」，但键整个不在提交里就是删除的意思。预设表单例外——它只提交
+// 自己那几个键，不能连坐清掉别人额外注入的变量。
+func TestMCPSaveDeletesRemovedEnvKeys(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), ExtensionManagement: true}
+	ctx := context.Background()
+	gitea := giteaAPIStub(t, "good-token")
+	path := resolveMCPConfigPath(cfg.WithDefaults())
+
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := loadMCPServers(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 自己额外注入一个变量，预设表单看不见它。
+	injected := servers["gitea"]
+	injected.Env["HTTPS_PROXY"] = "http://127.0.0.1:8080"
+	servers["gitea"] = injected
+	if err := saveMCPServers(path, servers); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Values: map[string]string{"host": gitea.URL},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ = loadMCPServers(path)
+	if servers["gitea"].Env["HTTPS_PROXY"] == "" {
+		t.Fatal("预设表单只管自己那几个键，不该把额外注入的变量清掉")
+	}
+
+	// 通用表单提交的是整份环境变量：少了哪个键就是要删哪个，留空的照旧保留。
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
+		Operation: "save", Kind: "mcp", Name: "gitea", Replace: true,
+		Config: map[string]any{
+			"command": "/app/gitea-mcp",
+			"args":    []any{"-t", "stdio"},
+			"env":     map[string]any{"GITEA_HOST": gitea.URL, "GITEA_ACCESS_TOKEN": ""},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ = loadMCPServers(path)
+	saved := servers["gitea"]
+	if _, still := saved.Env["HTTPS_PROXY"]; still {
+		t.Fatalf("删掉的那一行还在：%#v", saved.Env)
+	}
+	if saved.Env["GITEA_ACCESS_TOKEN"] != "good-token" {
+		t.Fatalf("留空的凭据应当保持原值：%#v", saved.Env)
 	}
 }

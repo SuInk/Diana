@@ -84,7 +84,7 @@
           <tr><td>配置、凭据、会话、消息、记忆、任务</td><td><code>data/diana.db</code></td><td>必须备份，并保持主库与 WAL/SHM 一致。</td></tr>
           <tr><td>入站媒体</td><td><code>data/media</code></td><td>可按容量淘汰；历史识图需要时一并备份。</td></tr>
           <tr><td>运行日志</td><td><code>logs/diana.log</code></td><td>定期轮转，不公开平台事件和调试上下文。</td></tr>
-          <tr><td>安装与更新备份</td><td><code>.installer/backups</code>、<code>.diana-updates</code></td><td>保留最近可用版本和恢复证据。</td></tr>
+          <tr><td>安装与更新备份</td><td><code>.installer/backups</code>、数据目录下的 <code>.diana-updates</code></td><td>保留最近可用版本和恢复证据。</td></tr>
         </tbody></table></div>
       </section>
 

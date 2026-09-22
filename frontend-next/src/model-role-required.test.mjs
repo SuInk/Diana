@@ -23,7 +23,7 @@ test("saving requires an explicit provider and model for each role", async () =>
       const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
       roles[key] = invalid;
       const busy = { value: false };
-      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, toastError: message => errors.push(message), busy });
+      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, toastError: message => errors.push(message), busy });
       await loadFunction("save", context)();
       assert.equal(busy.value, false);
       assert.equal(errors.length, 1);
@@ -110,4 +110,55 @@ test("persona generator picks its own provider and model, defaulting to follow c
   // 跟随时模型不可改。
   context.setPersonaModel("m1");
   assert.equal(personaRoute.value, undefined);
+});
+
+// 细分用途留空表示「跟随意图识别」，不能被当成漏配拦下保存。
+test("purpose-level roles may be left unset", async () => {
+  const keys = ["chat", "vision", "intent", "image"];
+  const errors = [];
+  const busy = { value: false };
+  const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
+  const context = vm.createContext({
+    connectionConflict: { value: undefined },
+    form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } },
+    roleForm: { value: roles },
+    modelRoleRows: keys.map(key => ({ key, label: key })),
+    purposeRoleRows: [{ key: "reply_account_safety", label: "发送前审核" }, { key: "memory_extract", label: "记忆抽取" }],
+    purposeRoleKeys: ["reply_account_safety", "memory_extract"],
+    editorTab: { value: "access" },
+    validWebSocketURL: () => true,
+    roleModelIsSelectable: () => true,
+    toastError: message => errors.push(message),
+    busy
+  });
+  // save 走过校验之后还会碰上沙箱里没有的依赖，这里只关心校验这一段：
+  // 留空的细分用途不该产生任何针对它的报错。
+  await loadFunction("save", context)().catch(() => {});
+  const complaints = errors.filter((message) => message.startsWith("发送前审核") || message.startsWith("记忆抽取"));
+  assert.deepEqual(complaints, [], `细分用途留空不该报错：${errors.join(" | ")}`);
+});
+
+// 配了的细分用途照常校验：指了提供商却没选模型要拦下来。
+test("a configured purpose role still needs a model", async () => {
+  const keys = ["chat", "vision", "intent", "image"];
+  const errors = [];
+  const busy = { value: false };
+  const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
+  roles.reply_account_safety = { profile_id: "p", model: "" };
+  const context = vm.createContext({
+    connectionConflict: { value: undefined },
+    form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } },
+    roleForm: { value: roles },
+    modelRoleRows: keys.map(key => ({ key, label: key })),
+    purposeRoleRows: [{ key: "reply_account_safety", label: "发送前审核" }],
+    purposeRoleKeys: ["reply_account_safety"],
+    editorTab: { value: "access" },
+    validWebSocketURL: () => true,
+    roleModelIsSelectable: () => true,
+    toastError: message => errors.push(message),
+    busy
+  });
+  await loadFunction("save", context)();
+  assert.equal(errors.length, 1);
+  assert.ok(errors[0].startsWith("发送前审核"), errors[0]);
 });

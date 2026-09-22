@@ -20,10 +20,19 @@ const (
 	DefaultFileWriteMaxBytes = 256 * 1024
 	// 读文件默认一次多少行。工具结果统一被截到 MaxToolOutputChars，一次读太多
 	// 只会在截断处白白丢掉，不如让模型按需要翻页。
-	defaultReadFileLines            = 200
-	maxReadFileLines                = 2000
-	DefaultListDirectoryLimit       = 200
-	DefaultSkillsListBudget         = 8000
+	defaultReadFileLines      = 200
+	maxReadFileLines          = 2000
+	DefaultListDirectoryLimit = 200
+	DefaultSkillsListBudget   = 8000
+	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
+	// 只留目录行,退回 read_skill,不会把整轮上下文撑爆。
+	ResidentSkillBodyBudget = 24000
+	// DefaultSkillTriggerScanDepth 是关键词扫描回看的用户消息条数。只看最近几条：
+	// 很久以前提过一次的词不该让那份正文从此每轮都在。
+	DefaultSkillTriggerScanDepth = 2
+	// defaultMCPConfigFileName 里存着 MCP 的访问令牌，对文件工具关闭，见
+	// agentProtectedFiles。
+	defaultMCPConfigFileName        = ".mcp.json"
 	DefaultMCPStartupTimeoutMS      = 10_000
 	DefaultMCPToolTimeoutMS         = 60_000
 	DefaultCommandTimeoutMS         = 10_000
@@ -66,21 +75,23 @@ func DefaultCommandAllowlist() []string {
 }
 
 type Config struct {
-	WorkDir             string
-	MaxSteps            int
-	MaxToolOutputChars  int
-	ReadFileMaxBytes    int
-	ListDirectoryLimit  int
-	SkillRoots          []string
-	ManagedSkillRoot    string
-	SkillsListBudget    int
-	MCPConfigPath       string
-	MCPStartupTimeoutMS int
-	MCPToolTimeoutMS    int
-	ExtensionManagement bool
-	BuiltinExtensions   []BuiltinExtension
-	BuiltinSkills       []SkillMetadata
-	ReservedSkillNames  []string
+	WorkDir            string
+	MaxSteps           int
+	MaxToolOutputChars int
+	ReadFileMaxBytes   int
+	ListDirectoryLimit int
+	SkillRoots         []string
+	ManagedSkillRoot   string
+	SkillsListBudget   int
+	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
+	SkillTriggerScanDepth int
+	MCPConfigPath         string
+	MCPStartupTimeoutMS   int
+	MCPToolTimeoutMS      int
+	ExtensionManagement   bool
+	BuiltinExtensions     []BuiltinExtension
+	BuiltinSkills         []SkillMetadata
+	ReservedSkillNames    []string
 	// FileWriteEnabled 打开 write_file / edit_file。默认关闭：读错文件浪费一次
 	// 调用，写错文件改的是磁盘，这一档该由部署方显式点头。
 	FileWriteEnabled bool
@@ -94,12 +105,17 @@ type Config struct {
 	CommandSandboxAllowNetwork bool
 	BrowserCDPURL              string
 	BrowserTimeoutMS           int
-	ToolTimeoutMS              int
-	FinalizationReserveMS      int
-	ProtocolRepairLimit        int
-	// EvidenceLedgerAdvisory 让逐主张证据账本只记录不拦截：claims 仍然写进
-	// trace 和运行元数据，但不再因为证据绑定失败要求模型重写 final。
-	EvidenceLedgerAdvisory bool
+	// BrowserControl 是浏览器控制扩展的控制面句柄，由运行时注入，不是可序列化
+	// 的配置项：为 nil 时 browser_ext_* 那组工具根本不登记。共享扩展底座按
+	// ExtensionScope 取字段，它不在其中，所以不会被带进缓存键。
+	BrowserControl BrowserControlBridge `json:"-"`
+	// BuiltinBrowser 是内置浏览器（model/browserbox）的句柄，同样由运行时注入。
+	// 它在时 browser_* 那组 CDP 工具就接到 Diana 自己那个常驻浏览器上，带着
+	// 用户在里面建立的登录态；不在时沿用 BrowserCDPURL 指的外部浏览器。
+	BuiltinBrowser        BuiltinBrowserBridge `json:"-"`
+	ToolTimeoutMS         int
+	FinalizationReserveMS int
+	ProtocolRepairLimit   int
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string
@@ -213,6 +229,9 @@ func (cfg Config) WithDefaults() Config {
 	if cfg.ListDirectoryLimit <= 0 {
 		cfg.ListDirectoryLimit = DefaultListDirectoryLimit
 	}
+	if cfg.SkillTriggerScanDepth <= 0 {
+		cfg.SkillTriggerScanDepth = DefaultSkillTriggerScanDepth
+	}
 	if cfg.SkillsListBudget <= 0 {
 		cfg.SkillsListBudget = DefaultSkillsListBudget
 	}
@@ -270,12 +289,30 @@ func (cfg Config) WithDefaults() Config {
 	}
 	cfg.ManagedSkillRoot = filepath.Clean(cfg.ManagedSkillRoot)
 	if strings.TrimSpace(cfg.MCPConfigPath) == "" {
-		cfg.MCPConfigPath = filepath.Join(workDir, ".mcp.json")
+		cfg.MCPConfigPath = defaultMCPConfigPath(workDir)
 	}
 	cfg.BuiltinExtensions = normalizeBuiltinExtensions(cfg.BuiltinExtensions)
 	cfg.BuiltinSkills = normalizeBuiltinSkills(cfg.BuiltinSkills)
 	cfg.ReservedSkillNames = cleanStringList(cfg.ReservedSkillNames)
 	return cfg
+}
+
+// defaultMCPConfigPath 把 MCP 配置放在 Agent 工作目录的隔壁，而不是里面。
+//
+// 这个文件里是 access token 原文。放在工作目录里，它就落在文件工具的可达范围内——
+// 工具只校验「不许走出工作目录」，不看读的是什么，于是一句「读一下 .mcp.json」就能
+// 把令牌打进聊天记录。放到外面，safePath 那道边界本身就够了，不用指望黑名单记全。
+//
+// 黑名单仍然留着（见 agentProtectedFiles）：用户可以把路径显式指回工作目录里，
+// 扩展开关和对象名单也仍然住在里面。run_command 两头都挡不住——命令沙箱只限制写入，
+// 读是放开的。
+func defaultMCPConfigPath(workDir string) string {
+	parent := filepath.Dir(workDir)
+	if parent == "" || parent == workDir {
+		// 工作目录已经是根了，再往上没有位置可放，只能退回原处，靠黑名单挡。
+		return filepath.Join(workDir, defaultMCPConfigFileName)
+	}
+	return filepath.Join(parent, defaultMCPConfigFileName)
 }
 
 func cleanStringList(values []string) []string {

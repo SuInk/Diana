@@ -23,8 +23,8 @@ func TestBotOwnerLabelsNeverCollideWithGroupOwnerRole(t *testing.T) {
 		string(GroupRoleOwner): true, string(GroupRoleAdmin): true, string(GroupRoleMember): true,
 	}
 
-	if groupRoles[string(RelationshipOwner)] {
-		t.Fatalf("关系等级 %q 和群成员角色撞名了", RelationshipOwner)
+	if groupRoles[RelationshipOwnerRole] {
+		t.Fatalf("关系等级 %q 和群成员角色撞名了", RelationshipOwnerRole)
 	}
 	for _, role := range identityAliasRoles {
 		if groupRoles[role] {
@@ -102,7 +102,7 @@ func TestGroupRoleVocabularyIsPlatformNeutral(t *testing.T) {
 	// 取值里不能出现平台名，也不能和主人撞名。
 	for _, role := range []GroupRole{GroupRoleOwner, GroupRoleAdmin, GroupRoleMember} {
 		if !strings.HasPrefix(string(role), "group_") {
-			t.Errorf("身份取值 %q 没带 group_ 前缀，和主人的 %s 分不开", role, RelationshipOwner)
+			t.Errorf("身份取值 %q 没带 group_ 前缀，和主人的 %s 分不开", role, RelationshipOwnerRole)
 		}
 		for _, platform := range []string{"qq", "onebot", "telegram", "dingtalk", "feishu", "wecom"} {
 			if strings.Contains(string(role), platform) {
@@ -118,7 +118,7 @@ func TestGroupRoleVocabularyIsPlatformNeutral(t *testing.T) {
 		t.Error("普通成员和未知身份不该能配置本群")
 	}
 	// 主人不是群身份：他的权限走身份判断，不该从这条路径混进来。
-	if GroupRoleCanConfigure(GroupRole(RelationshipOwner)) {
-		t.Errorf("%s 被当成了群身份", RelationshipOwner)
+	if GroupRoleCanConfigure(GroupRole(RelationshipOwnerRole)) {
+		t.Errorf("%s 被当成了群身份", RelationshipOwnerRole)
 	}
 }

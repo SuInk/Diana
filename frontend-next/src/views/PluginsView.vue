@@ -6,11 +6,12 @@
     <div class="segmented extension-tabs" role="tablist" aria-label="扩展类型">
       <button v-for="tab in extensionTabs" :key="tab.value" type="button" role="tab" :aria-selected="extensionTab === tab.value" :class="{active:extensionTab === tab.value}" @click="changeExtensionTab(tab.value)">{{ tab.label }}</button>
     </div>
-    <ExtensionManager v-if="extensionTab !== 'plugins'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
+    <ExtensionManager v-if="extensionTab === 'skill' || extensionTab === 'mcp'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
+    <AgentResidencyPanel v-else-if="extensionTab === 'residency'" />
+    <AgentBrowserPanel v-else-if="extensionTab === 'browser'" />
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
-        <h1>扩展</h1>
         <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置" }} · OpenAPI 位于系统设置</p>
       </div>
       <div class="view-actions">
@@ -640,10 +641,13 @@
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
-const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
-const extensionTab = ref<'plugins' | 'skill' | 'mcp'>('plugins');
+import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
+import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'},{value:'residency' as const,label:'上下文'},{value:'browser' as const,label:'浏览器'}];
+type ExtensionTab = typeof extensionTabs[number]['value'];
+const extensionTab = ref<ExtensionTab>('plugins');
 const extensionManager = ref<InstanceType<typeof ExtensionManager> | null>(null);
-async function changeExtensionTab(value:'plugins'|'skill'|'mcp') {
+async function changeExtensionTab(value:ExtensionTab) {
   if (value === extensionTab.value) return;
   if (extensionManager.value && !await extensionManager.value.prepareLeave()) return;
   if (settingsTarget.value) { await closeSettings(); if (settingsTarget.value) return; }
@@ -686,6 +690,7 @@ import RSSWatchManager from "../components/RSSWatchManager.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
 import { botScope } from "../bot-scope";
+import { extensionLayout, setExtensionLayout } from "../extension-layout";
 import { pluginForBot } from "../plugin-settings";
 
 const plugins = ref<PluginState[]>([]);
@@ -1154,18 +1159,9 @@ function pluginPlatformBadges(plugin: PluginState): Array<{ id: string; label: s
   }));
 }
 
-type PluginLayout = "tiles" | "rows";
-const LAYOUT_KEY = "dqb-next:plugin-layout";
-// 只认 "rows"，其余一律当方块：早先存的是 "masonry"，同一个档位换了名字，
-// 不值得为它写一次迁移。
-const layout = ref<PluginLayout>(
-  window.localStorage.getItem(LAYOUT_KEY) === "rows" ? "rows" : "tiles"
-);
-
-function setLayout(next: PluginLayout): void {
-  layout.value = next;
-  window.localStorage.setItem(LAYOUT_KEY, next);
-}
+// 排列方式和 Skills、MCP 共用一份：三个标签在同一个页面里，各存各的会互相打架。
+const layout = extensionLayout;
+const setLayout = setExtensionLayout;
 
 // 没有任何可点的动作时不渲染 footer，省掉一整行「无可配置项」。
 // 内置插件卸载不了，没有设置项就真的没事可做。

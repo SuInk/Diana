@@ -32,7 +32,36 @@ const (
 	dianaImageToolName           = "image"
 	imageTaskPendingState        = "pending"
 	maxWebSearchCallsPerAgentRun = 3
+
+	// maxToolLoadCallsPerAgentRun 给 tools_load 单独的配额，不占 MaxSteps。
+	//
+	// tools_load 不做任何外部动作，只从注册表里取 schema——线上实测 3 毫秒。让它扣一格
+	// 工具预算是双重惩罚：延迟加载本来就已经多花一次模型往返（先调 tools_load、看结果、
+	// 再调真工具），再扣预算等于「需要一个延迟工具的回合只剩 MaxSteps-1 格干正事」。
+	//
+	// 但也不能完全不设限，否则模型交替加载不同工具就能空转。单独给一个配额：既不挤占
+	// 干活的预算，又保证循环一定会终止。一次调用可以带多个名字，所以这个数很够用。
+	maxToolLoadCallsPerAgentRun = 4
+
+	// maxIntrospectionCallsPerAgentRun 是「只读自省工具」共用的配额，同样不占 MaxSteps。
+	//
+	// 这几个工具问的都是 Diana 自己：注册表里有什么能力、这个账号是谁、某条服务开放给谁。
+	// 它们不对外产生任何动作，线上实测都在毫秒级（capabilities 是本地检索，identity_check
+	// 只在显式要群身份时才走一次平台查询，自带 4 秒超时）。它们和 tools_load 一样是「为了
+	// 把活干对而先问一句」，扣正事的预算等于逼模型少问、凭记忆猜——线上 09-22 抓到一次：
+	// 8 格预算里 tools_load、extension_access、capabilities 各占一格，真正干活只剩 3 格。
+	//
+	// 共用一个配额而不是各给各的：「反复打听」这类空转只需要一条闸，也不会因为以后工具
+	// 变多就把总量悄悄放大。
+	maxIntrospectionCallsPerAgentRun = 6
 )
+
+// isIntrospectionCall 问工具自己这次调用算不算打听。判断放在工具那一侧：runner 认不得
+// 后面还会加的工具，写死一张名单只会漏，而每个工具最清楚自己改不改东西。
+func isIntrospectionCall(tool Tool, input map[string]any) bool {
+	probe, ok := tool.(IntrospectionTool)
+	return ok && probe.Introspection(input)
+}
 
 // internalProtocolTermPattern 是证据账本协议里的固定字段名和术语。它们是代码定义的
 // 协议词，不是自然语言，按字面拦截是准确的。
@@ -95,6 +124,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		Priority: llm.MessagePrioritySystem,
 	})
 	var volatile []llm.Message
+	// skills 目录按会话变(按机器人、按群分档,装卸 skill 也会改它),进系统提示词
+	// 等于每换一个群就把整条前缀缓存作废,所以和时钟一样待在尾部。命中关键词的那几份
+	// 正文也在这一段里,所以它每轮都可能不一样——更该待在断点之后。
+	//
+	// 用 user role:这一段是「本轮随消息带来的资料」,不是恒定的系统约束,和它挨着的
+	// 当前消息同属一轮。
+	skills := SelectSkillBodies(r.registry.Skills(), SkillScanText(req.Messages, r.cfg.SkillTriggerScanDepth))
+	if catalog := RenderSkillsCatalog(skills, r.cfg.SkillsListBudget); catalog != "" {
+		volatile = append(volatile, llm.Message{
+			Role:     llm.RoleUser,
+			Content:  catalog,
+			Priority: llm.MessagePrioritySystem,
+		})
+	}
 	// The caller may already carry a trusted clock in its own prompt; a second
 	// one only wastes tokens and risks the two disagreeing.
 	if !messagesCarryRuntimeClock(req.Messages) {
@@ -143,6 +186,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var lastModel string
 	var usage llm.Usage
 	webSearchCalls := 0
+	toolLoadCalls := 0
+	introspectionCalls := 0
 	modelTurns := 0
 	toolCalls := 0
 	protocolRepairs := 0
@@ -151,7 +196,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	nativeProtocol := false
 	finishReason := "final"
 	claimLedger := newClaimEvidenceLedger()
-	claimLedger.advisory = r.cfg.EvidenceLedgerAdvisory
 	emitRunEvent(ctx, req.Observer, RunEvent{
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
@@ -288,6 +332,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					len(resp.ToolCalls), nativeCall.Name, strings.Join(dropped, "、"))
 			}
 		}
+		if !ok {
+			// 模型没走 function calling，但正文本身就是 agent_finalize 信封时，
+			// 按收尾解码，别把信封当正文发出去。
+			if envelope, decoded := finalizeEnvelopeFromText(lastText); decoded {
+				action = envelope
+				ok = true
+			}
+		}
 		if imageTaskQueued && ((!ok && !looksLikeAgentAction(lastText)) || (ok && action.Action == "final" && !imageTaskFinalIsPending(action))) {
 			protocolRepairs++
 			reason := "图片工具返回 queued=true 后，agent_finalize 的 task_state 必须是 pending"
@@ -312,18 +364,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					Role:    llm.RoleUser,
 					Content: "Agent 动作无法解析。请直接调用工具或 agent_finalize；只有在不支持原生 function calling 时才输出单个合法的 tool 或 final JSON 对象。",
 				})
-				continue
-			}
-			if claimLedger.active {
-				protocolRepairs++
-				reason := "联网研究已启用逐主张证据账本，最终答复必须调用带 claims 的 agent_finalize"
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。\n" + claimLedger.digest()})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
 				continue
 			}
 			return finish(action.Content, "plain_text"), nil
@@ -364,17 +404,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 你这段话里的情绪」反而误中，每次误中都白烧一次修复预算。「预算没用完就别停下来
 			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
 			// 由代码回头猜正文。
-			if reason, valid := claimLedger.validateFinal(action.Claims); !valid {
-				protocolRepairs++
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请只修正不合格的 claims 字段后重新调用 agent_finalize；content 保持原样，不要因证据绑定失败改写、削弱或推翻已查实的结论。\n" + claimLedger.digest()})
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
-					break
-				}
-				continue
-			}
+			claimLedger.applyUpdates(action.Claims)
 			if leak := internalProtocolLeak(action.Content); leak != "" {
 				protocolRepairs++
 				reason := "最终回复里出现了内部协议词「" + leak + "」"
@@ -447,9 +477,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				break
 			}
 			// 工具不存在时把可用工具列表告诉模型，而不是直接失败整个 Agent。
+			// 但「没权限」不是「不存在」：把目录再抄一遍只会让模型换个名字接着猜，
+			// 而换哪个名字都一样没权限。
+			repair := fmt.Sprintf("工具 %q 不存在。可用工具：\n%s", action.Tool, r.registry.Descriptions())
+			if r.registry.PolicyDenied(action.Tool) {
+				repair = deniedToolError(action.Tool).Error()
+			}
 			messages = append(messages, llm.Message{
 				Role:    llm.RoleUser,
-				Content: fmt.Sprintf("工具 %q 不存在。可用工具：\n%s", action.Tool, r.registry.Descriptions()),
+				Content: repair,
 			})
 			continue
 		}
@@ -505,7 +541,39 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			webSearchCalls++
 		}
-		toolCalls++
+		if isIntrospectionCall(tool, action.Input) {
+			// 只读自省不占 MaxSteps；自己的配额兜住「反复打听」的空转。
+			if introspectionCalls >= maxIntrospectionCallsPerAgentRun {
+				protocolRepairs++
+				limitErr := fmt.Sprintf("本轮查询自身能力和身份的次数已达上限 %d；请用已经问到的信息继续，或直接给出最终回复", maxIntrospectionCallsPerAgentRun)
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
+				messages = appendToolRepair(messages, resp, lastText, limitErr)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
+			introspectionCalls++
+		} else if action.Tool == ToolsLoadToolName {
+			// 只取 schema，不做外部动作，不占 MaxSteps；用自己的配额兜住空转。
+			if toolLoadCalls >= maxToolLoadCallsPerAgentRun {
+				protocolRepairs++
+				limitErr := fmt.Sprintf("本轮 %s 次数已达上限 %d；需要的工具请一次性列全，或直接用已加载的工具继续", ToolsLoadToolName, maxToolLoadCallsPerAgentRun)
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
+				messages = appendToolRepair(messages, resp, lastText, limitErr)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
+			toolLoadCalls++
+		} else {
+			toolCalls++
+		}
 		lastToolSignature = signature
 		inputKeys := sortedInputKeys(action.Input)
 		toolMetadata := mergeRunMetadata(webSearchRunMetadataFromInput(action.Tool, action.Input), claimMetadata)
@@ -674,9 +742,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
-		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
-			return finish(claimLedger.groundedFallback(), finishReason), nil
-		}
+		claimLedger.applyUpdates(action.Claims)
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
@@ -695,9 +761,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if issue := finalizeLayoutIssue(action); issue != "" {
 			return fail(fmt.Errorf("finalize_layout: %s（finish_reason=%s）", issue, finishReason))
 		}
-		if _, valid := claimLedger.validateFinal(action.Claims); !valid {
-			return finish(claimLedger.groundedFallback(), finishReason), nil
-		}
+		claimLedger.applyUpdates(action.Claims)
 		if imageTaskQueued && !imageTaskFinalIsPending(action) {
 			return finish("图片任务已经开始生成，完成后会自动发送。", finishReason), nil
 		}
@@ -913,9 +977,7 @@ func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
 
 // systemPrompt 构造 Agent JSON 动作协议提示词。
 func (r *Runner) systemPrompt() string {
-	skillsPrompt := RenderSkillsPrompt(r.registry.Skills(), r.cfg.SkillsListBudget)
 	extensionsPrompt := RenderExtensionsPrompt(r.registry.Extensions())
-	skillsPrompt = strings.TrimSpace(skillsPrompt)
 	hasTool := func(name string) bool {
 		_, ok := r.registry.Get(name)
 		return ok
@@ -932,8 +994,10 @@ func (r *Runner) systemPrompt() string {
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
 	rules := []string{fmt.Sprintf("- 每个规划步只选择一个工具,看到结果后继续选下一个;这一条回复内你最多可连续调用 %d 次工具。预算没用完就不要停下来向用户要求「继续」,直接接着调用,直到任务完成或预算耗尽。", r.cfg.MaxSteps)}
-	if len(r.registry.Skills()) > 0 && hasTool("read_skill") {
-		rules = append(rules, "- 如果要使用 skill，先调用 read_skill 读取完整 SKILL.md，再按其中说明行动。")
+	if hasTool("read_skill") {
+		// 条件只看工具在不在,不看当前有几个 skill:按 len(Skills()) 判定会让这一行
+		// 随会话开关的 skill 出现和消失,整条系统提示词的前缀缓存跟着断。
+		rules = append(rules, "- 可用 skill 的名称和用途在本轮消息末尾的 Skills 目录里给出，系统提示词不带这份清单；要用先调用 read_skill 读取完整 SKILL.md，再按其中说明行动。目录为空或没有这一段时，说明本次会话没有可用 skill。")
 	}
 	if hasTool("list_capabilities") {
 		rules = append(rules, "- list_capabilities 是统一能力目录，包含现有内置插件、本地 Skills 和 MCP 服务；需要判断当前能力或扩展状态时先查询它。技能正文用 read_skill 读取。")
@@ -992,23 +1056,33 @@ func (r *Runner) systemPrompt() string {
 		"这一轮确实不需要说话时，调用 agent_finalize 并填 silent=true、content 留空，本轮就不发任何消息；silent_reason 里用一句话说明原因，只进日志。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 	}
+	// loadedContracts 是整段系统提示词里唯一会在会话中途增长的内容：每次
+	// tools_load 都往里追加一份契约。它以前紧跟在工具目录后面，也就是夹在系统提示词
+	// 中段——一变，后面的 Skills、扩展说明和规则全部整体位移，供应商的前缀缓存从该点
+	// 起全部作废。
+	//
+	// 线上 prompt_cache_divergence 抓得很清楚：purpose=unlabeled、segment=system 的
+	// 分叉六小时内 165 次，平均落在 byte_offset≈20744，可复用前缀 0。系统提示词排在
+	// 最前面，它作废等于整条 prompt 重新 prefill。
+	//
+	// 现在把它挪到所有固定内容之后单独成段：前面那一大段逐字不变，缓存能一直命中到
+	// 规则结束；新加载一个工具只让末尾变长，不再推动前面的任何字节。
+	var loadedContracts string
 	if loader := r.loader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		section := "按需加载的工具（没有随请求带完整定义；需要时先调用 " + ToolsLoadToolName + " 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function）：\n" + loader.catalog()
-		if loaded := loader.loadedContracts(); loaded != "" {
-			section += "\n\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" + loaded
-		}
-		sections = append(sections, section)
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义；需要时先调用 "+ToolsLoadToolName+" 取得完整描述和 inputSchema，再通过 tools_execute 的 name/input 调用；目录名称不是可直接调用的 function）：\n"+loader.catalog())
+		loadedContracts = loader.loadedContracts()
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
-	}
-	if skillsPrompt != "" {
-		sections = append(sections, skillsPrompt)
 	}
 	if extensionsPrompt != "" {
 		sections = append(sections, extensionsPrompt)
 	}
 	sections = append(sections, "规则：\n"+strings.Join(rules, "\n"))
+	// 唯一会在会话中途变长的一段，放在最后，前面的字节位置永远不动。
+	if loadedContracts != "" {
+		sections = append(sections, "当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n"+loadedContracts)
+	}
 	return strings.TrimSpace(strings.Join(sections, "\n\n"))
 }
 

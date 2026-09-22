@@ -38,6 +38,14 @@ func (r *Runtime) Plugins() *PluginManager {
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 	profileID := r.eventProfileID(event)
+	// 停用的机器人：所有插件一律按停用算。
+	//
+	// 「停用」这台机器人的直觉是它整个安静下来，而不是只停回复——插件还在后台抓
+	// Feed、拉仓库、跑任务，只是结果发不出去。这里一刀切在唯一的开关聚合点上，
+	// 比让每个插件各自记得判断可靠：新插件不用做任何事就自动遵守。
+	if r.profileDisabled(profileID) {
+		return allPluginsDisabled(r.plugins)
+	}
 	out := r.plugins.ProfileOverrides(profileID)
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
@@ -169,7 +177,8 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
-			EvidenceLedgerAdvisory:     r.evidenceLedgerAdvisory(MessageEvent{}),
+			BrowserControl:             r.browserControlFor(cfg),
+			BuiltinBrowser:             r.browserBoxFor(cfg),
 		}
 		registry := agent.NewToolRegistry()
 		if cfg.AgentEnabled {
@@ -480,7 +489,20 @@ func nestedForwardPluginResponse(responses []PluginResponse) *PluginResponse {
 //
 // 走通知的分条而不是聊天的：这类推送是一条完整的事实——提醒原文、订阅摘要、
 // 「本次发送失败，将在 X 自动重试」——按句子拆开就成了半句一条，读的人得自己拼。
+// ErrDeliveryTargetDisabled 表示这个投递目标属于一台已停用的机器人。
+//
+// 它不是故障，是配置状态：停用是长期的，重试多少次都不会好。分出来单独一个错误
+// 是为了让上层的扇出能跳过这个目标而不是把整条订阅判成失败——一条订阅同时投 QQ
+// 群和 Telegram 群时，停用 Telegram 那台不该让 QQ 那份跟着反复重试、攒够次数还
+// 给主人发一条失败告警。
+var ErrDeliveryTargetDisabled = errors.New("diana: delivery target belongs to a disabled bot profile")
+
 func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
+	// 所有「到点了主动找人」的投递都从这里过，判断放在这一个路口：RSS、仓库订阅、
+	// 定时查询、一次性提醒、编码任务回报、失败告警，谁都不用各自记得检查一遍。
+	if r.profileDisabled(event.ProfileID) {
+		return fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
 		MentionUserID: strings.TrimSpace(event.UserID),
@@ -736,6 +758,8 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	if r.reminders == nil {
 		return nil
 	}
+	// 先取停用名单再上 reminderMu：两把锁不嵌套，就不会和别处的加锁顺序冲突。
+	disabledProfiles := r.disabledProfileSet()
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -745,6 +769,12 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	due := make([]Reminder, 0, len(items))
 	for _, item := range items {
 		if !item.CancelledAt.IsZero() {
+			continue
+		}
+		// 机器人关掉之后它的提醒和订阅不该继续跑：抓回来也发不出去，只会每隔几分钟
+		// 失败一次，再把失败通知推给主人——关掉的那台反而比开着时更吵。这里连认领都
+		// 不认领，所以既不会请求 GitHub，也不会产生失败告警；重新启用后按原周期继续。
+		if disabledProfiles[strings.TrimSpace(item.ProfileID)] {
 			continue
 		}
 		if !reminderIsRecurring(item) && !item.LastRunAt.IsZero() {
@@ -762,10 +792,47 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	return due
 }
 
+// reminderRunInterrupted 判断这次失败是不是我们自己把它掐了——机器人停用或进程退出
+// 时，在途的 GitHub / Feed 请求会带着 context canceled 回来。那不是订阅坏了，不该计进
+// 连败：计进去之后，下一次真失败就更快攒够阈值，于是「关掉机器人」反而把告警推了出去。
+// 只认「父 ctx 已经结束」这一种，任务自己的超时仍然算失败。
+func reminderRunInterrupted(ctx context.Context, runErr error) bool {
+	return runErr != nil && ctx.Err() != nil && errors.Is(runErr, context.Canceled)
+}
+
+// rescheduleInterruptedReminder 把被打断的周期任务排到下一个周期，失败状态原样保留：
+// 既不计连败，也不按退避提前重试——这次根本没跑完，不该影响订阅的健康判断。
+func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) {
+	r.reminderMu.Lock()
+	items := r.reminders.Reminders()
+	found := false
+	for index := range items {
+		if items[index].ID != id || !reminderIsRecurring(items[index]) {
+			continue
+		}
+		found = true
+		items[index].LastRunAt = startedAt
+		items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
+		break
+	}
+	var saveErr error
+	if found {
+		saveErr = r.reminders.SaveReminders(items)
+	}
+	r.reminderMu.Unlock()
+	if saveErr != nil {
+		r.setError(saveErr.Error())
+	}
+}
+
 func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	defer r.releaseClaimedReminder(item.ID)
 	if reminderIsRSSWatch(item) {
 		startedAt, err := r.runClaimedRSSWatch(ctx, item)
+		if reminderRunInterrupted(ctx, err) {
+			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -781,6 +848,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	}
 	if reminderIsRepositoryWatch(item) {
 		startedAt, err := r.runClaimedRepositoryWatch(ctx, item)
+		if reminderRunInterrupted(ctx, err) {
+			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -788,11 +859,12 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		if err != nil && finishErr == nil {
 			var noticeErr error
 			noticeAttempted := false
-			if ctx.Err() == nil && repositoryWatchFailureShouldAlert(updated) {
+			threshold := r.recurringFailureAlertThreshold(updated)
+			if ctx.Err() == nil && repositoryWatchFailureShouldAlert(updated, threshold) {
 				noticeAttempted = true
 				noticeErr = r.notifyRepositoryWatchFailure(ctx, updated, err)
 				if noticeErr == nil {
-					updated, noticeErr = r.acknowledgeRepositoryWatchFailureAlert(updated.ID, updated.LastErrorFingerprint, time.Now())
+					updated, noticeErr = r.acknowledgeRepositoryWatchFailureAlert(updated.ID, updated.LastErrorFingerprint, threshold, time.Now())
 				}
 			}
 			r.recordReminderRetryAttempt(updated, err, noticeErr, noticeAttempted)
@@ -809,6 +881,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	}
 	if reminderIsScheduledQuery(item) {
 		startedAt, err := r.runClaimedScheduledQuery(ctx, item)
+		if reminderRunInterrupted(ctx, err) {
+			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -828,6 +904,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
 	}
 	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
+	if reminderRunInterrupted(ctx, err) {
+		// 进程正在退出：这条提醒还没送到，保持原样等下次启动后再投。
+		return
+	}
 	if err != nil {
 		updated, retryErr := r.rescheduleOneTimeReminder(item.ID, err)
 		if retryErr != nil {
@@ -883,6 +963,20 @@ func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (
 	return startedAt, r.sendSubscriberNotice(ctx, source, message)
 }
 
+// repositoryWatchRoundBudget 是一轮检查的总时长上限：按订阅自己的轮询间隔来，
+// 一轮最多跑到下一轮该开始的时候。下限 5 分钟，免得一分钟一轮的订阅连一次正常
+// 检查都跑不完；上限 30 分钟，再长就不该继续等了。
+func repositoryWatchRoundBudget(item Reminder) time.Duration {
+	budget := time.Duration(item.IntervalSeconds) * time.Second
+	if budget < 5*time.Minute {
+		budget = 5 * time.Minute
+	}
+	if budget > 30*time.Minute {
+		budget = 30 * time.Minute
+	}
+	return budget
+}
+
 func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) (time.Time, error) {
 	startedAt := time.Now()
 	source := reminderSourceEvent(item)
@@ -899,8 +993,13 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 	if !enabled || !ok {
 		return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStagePolling, fmt.Errorf("仓库更新订阅插件已停用，无法检查 %s", item.Repository))
 	}
+	// 单请求超时给得很宽（默认 90 秒），一轮又要打几十个请求，所以整轮要另有上限：
+	// 没有它，一串卡住的请求能把这条订阅拖过好几个轮询周期——订阅被认领期间不会
+	// 重复执行，于是表现成「这个仓库不动了」，而不是一次干脆的失败。
+	roundCtx, cancelRound := context.WithTimeout(ctx, repositoryWatchRoundBudget(item))
+	defer cancelRound()
 	change, err := plugin.checkSelected(
-		ctx,
+		roundCtx,
 		item.Repository,
 		item.RepositoryBranch,
 		repositoryWatchSnapshot{
@@ -917,6 +1016,7 @@ func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) 
 			// 加每个 PR 一次 files——这正是当初把 diff 整个摘掉的原因。
 			Diff:              r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)),
 			PullRequestEvents: item.WatchPullRequestEvents, IssueEvents: item.WatchIssueEvents,
+			ReleaseKinds: item.WatchReleaseKinds,
 		},
 		settings,
 	)
@@ -1010,6 +1110,10 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 		}
 		messageIDs, err := r.sendNotificationWithIDs(ctx, target, text)
 		if err != nil {
+			if errors.Is(err, ErrDeliveryTargetDisabled) {
+				// 目标机器人停用了：跳过，别把整条订阅判成失败。
+				continue
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -1075,6 +1179,9 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	// 轮询的 ctx 在这一轮检查结束时就会取消，跟评必须有自己的预算，
 	// 否则仓库拉取慢一点跟评就永远赶不上开口。
 	for _, target := range repositoryWatchDeliveryTargets(item) {
+		if r.profileDisabled(target.ProfileID) {
+			continue
+		}
 		timeout := r.effectiveConfigForEvent(target).WithDefaults().RequestTimeout
 		followCtx, cancel := detachFollowUpContext(ctx, timeout)
 		comment := r.followUpCommentWithReference(followCtx, followUpKindRepositoryWatch, target, notification, reference)
@@ -1283,12 +1390,19 @@ func renderRepositoryWatchChangesWithTemplates(change repositoryWatchChange, tem
 			} else if label == "" {
 				label = strings.TrimSpace(release.Name)
 			}
+			// 两类版本混在一条通知里时，正式版不标、预发布标出来，和 GitHub 自己
+			// 只给预发布挂标签的做法一致。
+			prerelease := ""
+			if release.Prerelease {
+				prerelease = "（预发布）"
+			}
 			entries.add(renderRepositoryWatchTemplate(templates.Release, map[string]string{
-				"label": label,
-				"tag":   strings.TrimSpace(release.Tag),
-				"name":  strings.TrimSpace(release.Name),
-				"time":  formatRepositoryWatchTime(release.PublishedAt),
-				"url":   strings.TrimSpace(release.URL),
+				"label":      label,
+				"tag":        strings.TrimSpace(release.Tag),
+				"name":       strings.TrimSpace(release.Name),
+				"prerelease": prerelease,
+				"time":       formatRepositoryWatchTime(release.PublishedAt),
+				"url":        strings.TrimSpace(release.URL),
 			}))
 		}
 	}
@@ -1695,4 +1809,19 @@ func reminderSourceEvent(item Reminder) MessageEvent {
 		event.GroupID = item.GroupID
 	}
 	return event
+}
+
+// allPluginsDisabled 给出「这台机器人的每个插件都停用」的覆盖表。
+func allPluginsDisabled(plugins *PluginManager) map[string]bool {
+	if plugins == nil {
+		return map[string]bool{}
+	}
+	states := plugins.List()
+	out := make(map[string]bool, len(states))
+	for _, state := range states {
+		if id := strings.TrimSpace(state.Manifest.ID); id != "" {
+			out[id] = false
+		}
+	}
+	return out
 }

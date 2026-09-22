@@ -1,0 +1,41 @@
+name: PR Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  # squash 合并时落到 main 的正文就是这里的 PR 正文，而 Release 正文每条改动下面
+  # 那行「为什么改」取的正是它的第一段。正文只有要点清单的话，那行就是空的。
+  body:
+    name: PR 正文
+    runs-on: ubuntu-latest
+    steps:
+      - name: 正文得有一段说明
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          case "${TITLE}" in
+            'chore(release)'*)
+              echo "发版 PR，跳过。"
+              exit 0
+              ;;
+          esac
+          # 标题、要点、引用、代码块、注释和表格都不算说明；剩下的第一行要够长。
+          paragraph=$(
+            printf '%s\n' "${BODY}" |
+              tr -d '\r' |
+              sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
+              awk '/^```/ { fence = !fence; next } !fence' |
+              grep -vE '^([-*+>|#]|[0-9]+\.|<!--|$)' |
+              awk '{ if (length($0) >= 20) { print; exit } }'
+          )
+          if [ -z "${paragraph}" ]; then
+            echo "::error::PR 正文缺少说明段落。开头写一段为什么改——这段会随 squash 落到 main，Release 正文里每条改动下面那行就是取的它。"
+            exit 1
+          fi
+          echo "找到说明段落：${paragraph}"

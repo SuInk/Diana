@@ -5,7 +5,6 @@
   <div class="provider-view">
     <header class="view-header">
       <div class="view-title">
-        <h1>提供商</h1>
         <p>管理提供商、凭据、分组与可用模型；机器人按用途选择提供商和模型</p>
       </div>
       <div class="view-actions">
@@ -613,7 +612,8 @@ function providerLabel(provider: Provider): string {
   const labels: Record<Provider, string> = {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
-    anthropic: "Anthropic"
+    anthropic: "Anthropic",
+    typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];
 }
@@ -673,6 +673,18 @@ const groupedProfiles = computed<{ group: string; items: LLMConfig[] }[]>(() => 
 
 function groupOf(profile: LLMConfig): string {
   return profile.group?.trim() || "default";
+}
+
+// shouldTestAsImage 判断这次测试该不该走生图路径。
+//
+// 只看分组名会漏：分组名是用户自己起的，线上就有叫「生图」的那一档，它永远等不到
+// group === "image"，于是拿生图模型去跑文本测试，必然失败。所以再看一眼要测的模型
+// 是不是这套配置的生图模型。
+function shouldTestAsImage(profile: LLMConfig): boolean {
+  if (groupOf(profile) === "image") return true;
+  const model = (profile.model ?? "").trim().toLowerCase();
+  const imageModel = (profile.image_model ?? "").trim().toLowerCase();
+  return model !== "" && model === imageModel;
 }
 
 function groupLabel(group: string): string {
@@ -1086,7 +1098,7 @@ async function runTest(): Promise<void> {
     // model 用弹窗里选的那个覆盖：后端 /api/llm/test 直接认请求体里的 model，
     // 于是同一套配置能逐个模型验，不用为了测一个模型去改保存的配置。
     const probe = target ? { ...target, model: testModel.value.trim() || target.model } : undefined;
-    if (probe && groupOf(probe) === "image") {
+    if (probe && shouldTestAsImage(probe)) {
       const result = await testLLMImage(testMessage.value.trim(), probe);
       testImages.value = result.images;
       testUsage.value = `${result.model || probe.model} · 已生成 ${result.images.length} 张`;

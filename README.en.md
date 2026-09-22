@@ -52,6 +52,16 @@ Docker Compose (prebuilt image; no clone required). Run once in your deployment 
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
+When run directly in a terminal, the script asks which image you want. The **full** image preinstalls Chromium, CJK fonts, ffmpeg, yt-dlp and tesseract, so page rendering, screenshots, media downloads and OCR work out of the box; the **slim** image ships none of them (~67 MB to pull, versus ~447 MB for the full one). Pick full if unsure.
+
+Piped execution (the command above) never prompts and installs the full image on a first deployment. To get the slim one, say so up front:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | DIANA_VARIANT=slim sh
+```
+
+The choice is stored as `DIANA_IMAGE=` in the deployment directory's `.env`, and re-running the installer leaves it alone. To switch later, re-run the installer in a terminal or edit that line.
+
 For subsequent updates, run in the same directory:
 
 ```sh
@@ -112,7 +122,7 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 <details>
 <summary>Docker details / manual download / building from source</summary>
 
-**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags). OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), mount your `config.yaml` read-only at `/app/config.yaml`; uncomment the optional config volume in `docker-compose.yml` after creating that file. For source builds from a cloned repository, run `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`. To upgrade, pull the new image and recreate the container — your data lives in the mounted `data/` directory.
+**Docker:** Chromium and Noto CJK fonts are preinstalled. Load the supplied seccomp profile as shown above to allow Chromium to create its browser sandbox; privileged mode, SYS_ADMIN and disabling the browser sandbox are not required. Recreate existing containers with the new option. An image is published with every release (`ghcr.io/suink/diana:latest` plus version tags), alongside a slim variant (`ghcr.io/suink/diana:latest-slim`) without Chromium, CJK fonts, ffmpeg, yt-dlp and tesseract. To switch an existing deployment, change `DIANA_IMAGE=` in the deployment directory's `.env` and run `docker compose pull && docker compose up -d`. OneBot clients connect to `ws://<docker-host>:18080/onebot/v11/ws`. To pre-seed configuration (unattended deployments), mount your `config.yaml` read-only at `/app/config.yaml`; uncomment the optional config volume in `docker-compose.yml` after creating that file. For source builds from a cloned repository, run `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`. To upgrade, pull the new image and recreate the container — your data lives in the mounted `data/` directory.
 
 **Manual download:** grab the **full package** for your platform (`.tar.gz` / `.zip`, includes the backend, prebuilt WebUI and launch scripts) from [Releases](https://github.com/SuInk/Diana/releases), verify `SHA256SUMS`, extract it, then run `run.sh` / `run.bat`. No separate WebUI deployment or Node.js installation is needed. Releases no longer provide standalone binaries; for custom deployments, extract the executable and frontend assets from the full package.
 
@@ -137,7 +147,7 @@ Every enabled bot profile is online at the same time, and replies always go back
 
 | Platform | Credentials you need | Connection direction |
 | --- | --- | --- |
-| **OneBot v11** (NapCat, Lagrange.Core, go-cqhttp, …) | Point your OneBot client's reverse WebSocket at Diana and agree on an access token | Client → Diana, no public address needed |
+| **OneBot v11** (Snowluma, NapCat, Lagrange, …) | Point your OneBot client's reverse WebSocket at Diana and agree on an access token | Client → Diana, no public address needed |
 | **Telegram** | Bot Token from BotFather (a proxy address is often needed from mainland China) | Diana connects outbound, no public address needed |
 | **QQ Official Bot** | AppID + AppSecret from the open platform (sandbox available before listing) | Diana connects outbound, no public address needed |
 | **DingTalk** | App Client ID + Client Secret (Stream mode) | Diana connects outbound, no public address needed |

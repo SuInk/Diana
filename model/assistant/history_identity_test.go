@@ -81,12 +81,16 @@ func TestHistoryIdentityAutomaticCrossGroupAndMediaPrompts(t *testing.T) {
 		t.Fatal("missing cross-group text")
 	}
 	text := historyPromptTextAt(cross, 2, cfg)
-	if !strings.HasPrefix(text, "[跨群历史 ") || !strings.Contains(text, `"sender_role":"bot_owner"`) || strings.Contains(text, "500005") {
+	if !strings.HasPrefix(text, "[跨群历史 ") || strings.Contains(text, "500005") {
 		t.Fatalf("wrong cross-group identity or source-group leak: %s", text)
+	}
+	// 角色跟在发送者后面、正文之前，不再是行尾单独一段 JSON。
+	if !strings.Contains(text, "（100001）"+historySenderTagOwner+": ") {
+		t.Fatalf("owner tag is not attached to the sender: %s", text)
 	}
 	event.Segments = []MessageSegment{{Type: "image", Data: map[string]string{"file": "image.jpg"}}}
 	media := agentImageHistoryPromptTextWithDescriptions(event, 2, []string{"图片摘要"}, cfg)
-	if !strings.Contains(media, `"sender_role":"bot_owner"`) || !strings.Contains(media, `"sender_user_id":"100001"`) {
+	if !strings.Contains(media, "（100001）"+historySenderTagOwner) {
 		t.Fatalf("media identity missing: %s", media)
 	}
 	scope := newIdentityPrivacyScope()
@@ -118,7 +122,7 @@ func TestHistoryIdentityRuntimeKeepsCrossGroupSelfNickname(t *testing.T) {
 	}
 	for _, request := range provider.requests {
 		for _, message := range request.Messages {
-			if strings.Contains(message.Content, "old bot card") && strings.Contains(message.Content, `"sender_role":"bot"`) && strings.Contains(message.Content, "im_bot_") {
+			if strings.Contains(message.Content, "old bot card") && strings.Contains(message.Content, historySenderTagBot) && strings.Contains(message.Content, "im_bot_") {
 				return
 			}
 		}

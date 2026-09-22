@@ -324,7 +324,7 @@ func downloadDouyinVideoFile(ctx context.Context, raw string) string {
 }
 
 func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail) string {
-	if detail.AwemeType == 2 || detail.AwemeType == 68 || detail.AwemeType == 150 {
+	if douyinDetailIsImagePost(detail) {
 		return ""
 	}
 	uri := strings.TrimSpace(detail.Video.PlayAddr.URI)
@@ -339,7 +339,18 @@ func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail
 	if cookie := resolverDouyinCookie(ctx); cookie != "" {
 		headers["Cookie"] = cookie
 	}
-	return downloadGenericVideoFile(ctx, fmt.Sprintf(douyinPlayURL, uri), headers)
+	return downloadGenericVideoFile(ctx, douyinPlayAddrURL(uri), headers)
+}
+
+// douyinPlayAddrURL 把 play_addr 的 uri 换成可以直接下载的地址。
+//
+// uri 通常是 video_id，要拼到 play 接口上；但有些作品回的是完整的 CDN 地址，
+// 那时再拼一次只会让 play 接口收到一个 URL 当 video_id，返回 0 字节。
+func douyinPlayAddrURL(uri string) string {
+	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+		return uri
+	}
+	return fmt.Sprintf(douyinPlayURL, uri)
 }
 
 // douyinWebHeaders 组装抖音网页接口的请求头。配置了 Cookie 就一并带上：匿名请求
@@ -922,6 +933,31 @@ func xiaohongshuRequestParts(raw string) (id string, xsecSource string, xsecToke
 // returned to non-browser clients. Share links currently redirect to an http://
 // note URL; browsers upgrade it through HSTS and attach the site cookies, while
 // net/http follows the downgrade and can end at /login?redirectPath=....
+// xiaohongshuLoginBounce 判断这个地址是不是小红书的登录页。没登录时分享链接会被甩到
+// /login，真正的笔记地址（带 xsec_token）塞在 redirectPath 查询参数里。
+func xiaohongshuLoginBounce(raw string) bool {
+	parsed, err := url.Parse(html.UnescapeString(strings.TrimSpace(raw)))
+	if err != nil || !hostMatchesDomain(strings.ToLower(parsed.Hostname()), "xiaohongshu.com") {
+		return false
+	}
+	return strings.TrimSuffix(parsed.Path, "/") == "/login"
+}
+
+// xiaohongshuCookieLoggedIn 判断这份 Cookie 有没有登录态。小红书的登录会话是
+// web_session；只有 a1、webId 这些匿名标识时，笔记详情一律读不出来。
+func xiaohongshuCookieLoggedIn(cookie string) bool {
+	for _, part := range strings.Split(cookie, ";") {
+		name, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(name), "web_session") {
+			return strings.TrimSpace(value) != ""
+		}
+	}
+	return false
+}
+
 func xiaohongshuPageURL(raw string) string {
 	parsed, err := url.Parse(html.UnescapeString(strings.TrimSpace(raw)))
 	if err != nil || !hostMatchesDomain(strings.ToLower(parsed.Hostname()), "xiaohongshu.com") {
@@ -955,6 +991,10 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	}
 	headers := xiaohongshuPageHeaders(cookie)
 	pageURL := raw
+	// 没登录时小红书把分享短链甩到登录页，笔记地址塞在 redirectPath 里。
+	// xiaohongshuPageURL 会把它解出来，但「被甩过」这件事得记住：解出来的地址照样
+	// 拿不到笔记，那不是笔记的问题，是这份 Cookie 没登录。
+	bouncedToLogin := xiaohongshuLoginBounce(raw)
 	if urlMatchesDomain(raw, xiaohongshuShortLinkHosts...) {
 		finalURL, statusCode, err := fetchFinalURLDetails(ctx, raw, headers)
 		if err != nil {
@@ -967,6 +1007,7 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 			return nil, "request_failed"
 		}
 		if finalURL != "" {
+			bouncedToLogin = bouncedToLogin || xiaohongshuLoginBounce(finalURL)
 			pageURL = xiaohongshuPageURL(finalURL)
 		}
 	}
@@ -990,6 +1031,11 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	}
 	note := xiaohongshuNoteData(state, xhsID)
 	if len(note) == 0 {
+		// 被甩到过登录页，或者这份 Cookie 本来就没有登录态：那么「读不到笔记」说明
+		// 不了笔记有没有问题，只说明我们没有登录。报错要指到能动手的地方。
+		if bouncedToLogin || !xiaohongshuCookieLoggedIn(cookie) {
+			return nil, "login_required"
+		}
 		return nil, "note_unavailable"
 	}
 	note["noteId"] = xhsID

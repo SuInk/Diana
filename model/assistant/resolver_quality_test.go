@@ -77,21 +77,15 @@ func TestDownloadFailureHintNamesMissingCredential(t *testing.T) {
 	t.Setenv("xhs_ck", "")
 
 	ctx := context.Background()
-	if got := resolverCredentialFailureHint(ctx, "https://www.douyin.com/video/123"); !strings.Contains(got, "抖音 Cookie") {
-		t.Fatalf("抖音缺 Cookie 时应明确指出，实际：%s", got)
-	}
 	if got := resolverCredentialFailureHint(ctx, "https://www.xiaohongshu.com/explore/abc"); !strings.Contains(got, "小红书 Cookie") {
 		t.Fatalf("小红书缺 Cookie 时应明确指出，实际：%s", got)
 	}
 
-	// 配了 Cookie 之后提示应转向「可能已失效」而不是「未配置」。
-	withCookie := withResolverCredentials(ctx, resolverCredentials{DouyinCookie: "x"})
-	got := resolverCredentialFailureHint(withCookie, "https://www.douyin.com/video/123")
-	if strings.Contains(got, "未配置") {
-		t.Fatalf("已配置 Cookie 时不该提示未配置，实际：%s", got)
-	}
-	if !strings.Contains(got, "失效") {
-		t.Fatalf("已配置 Cookie 时应提示可能失效，实际：%s", got)
+	// 抖音不靠 Cookie 解析，下载失败提 Cookie 只会让人白换一轮。
+	for _, hintCtx := range []context.Context{ctx, withResolverCredentials(ctx, resolverCredentials{DouyinCookie: "x"})} {
+		if got := resolverCredentialFailureHint(hintCtx, "https://www.douyin.com/video/123"); strings.Contains(got, "Cookie") {
+			t.Fatalf("抖音下载失败不该甩锅 Cookie，实际：%s", got)
+		}
 	}
 }
 

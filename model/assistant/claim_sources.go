@@ -40,24 +40,39 @@ type claimSourceRecord struct {
 	SavedAt   time.Time
 }
 
-// rememberClaimSources 把本轮结论真正绑定的证据来源留到会话里。
+// rememberClaimSources 把本轮检索到的来源留到会话里。模型自己绑定的证据排在前面，
+// 没绑定的 claim 退回它这一轮检索到的候选来源——两者都是机器人真的读过的页面。
 func (r *Runtime) rememberClaimSources(event MessageEvent, claims []agent.ClaimTrace) {
 	if r == nil || len(claims) == 0 || !r.claimSourceRecallEnabled(event) {
 		return
 	}
 	fresh := make([]claimSourceRecord, 0, recentClaimSourceLimit)
 	now := time.Now()
-	for _, claim := range claims {
-		statement := strings.TrimSpace(claim.Summary)
-		if statement == "" {
-			statement = strings.TrimSpace(claim.Statement)
+	statementOf := func(claim agent.ClaimTrace) string {
+		if summary := strings.TrimSpace(claim.Summary); summary != "" {
+			return summary
 		}
+		return strings.TrimSpace(claim.Statement)
+	}
+	for _, claim := range claims {
 		for _, evidence := range claim.Evidence {
 			url := strings.TrimSpace(evidence.URL)
 			if url == "" {
 				continue
 			}
-			fresh = append(fresh, claimSourceRecord{Statement: statement, URL: url, SavedAt: now})
+			fresh = append(fresh, claimSourceRecord{Statement: statementOf(claim), URL: url, SavedAt: now})
+		}
+	}
+	for _, claim := range claims {
+		if len(claim.Evidence) > 0 {
+			continue
+		}
+		for _, candidate := range claim.CandidateSources {
+			url := strings.TrimSpace(candidate)
+			if url == "" {
+				continue
+			}
+			fresh = append(fresh, claimSourceRecord{Statement: statementOf(claim), URL: url, SavedAt: now})
 		}
 	}
 	if len(fresh) == 0 {

@@ -50,3 +50,16 @@ func TestBrowserSkipsCQImageURLWithTrailingStickerLabel(t *testing.T) {
 		t.Fatalf("render URLs=%v", urls)
 	}
 }
+
+// 把 intent 整组绑到只做判断的模型（TypeSafe Jev）之后，没备判断题表的判定用途
+// 会拿到 ErrDecisionRequired。那是能力不匹配，不是上游故障，必须降级到下一档
+// 对话模型——否则语义承接、发送前审核、记忆抽取这些会整条失败，线上实测过。
+func TestDecisionOnlyProviderFallsOverToNextProfile(t *testing.T) {
+	if !shouldFailoverLLMError(llm.ErrDecisionRequired) {
+		t.Fatal("判断模型答不了文本时必须降级")
+	}
+	wrapped := fmt.Errorf("绑定的是只做判断的模型（%w）", llm.ErrDecisionRequired)
+	if !shouldFailoverLLMError(wrapped) {
+		t.Fatal("包装过的同一个错误也要降级")
+	}
+}

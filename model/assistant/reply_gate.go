@@ -31,12 +31,14 @@ const (
 	LevelUnknownDeny  = "deny"
 )
 
-// GroupAdmission 决定机器人在哪些群工作，全局唯一，不按群覆盖。
+// GroupAdmission 只剩一件事：还没有群配置的群，这台机器人默认工不工作。
+//
+// 逐群开关统一在群配置的 Enabled 上，一个群一份，改哪里都是改它，见
+// Runtime.isGroupDisabled。whitelist 表示新群默认不工作，也就是「被拉进新群
+// 不会回话」；blacklist（默认）表示新群默认工作。
 type GroupAdmission struct {
-	// Mode 为 whitelist 时只在 AllowedGroups 里的群工作；
-	// 为 blacklist（默认）时沿用原有的 DisabledGroups 语义。
 	Mode string `json:"mode,omitempty"`
-	// AllowedGroups 仅 whitelist 模式生效。
+	// Deprecated: 逐群开关已经收敛到群配置，这份名单只在迁移时读一次，之后清空。
 	AllowedGroups []string `json:"allowed_groups,omitempty"`
 }
 
@@ -87,23 +89,9 @@ func (a GroupAdmission) WithDefaults() GroupAdmission {
 	return a
 }
 
-// Allows 判断某个群是否在准入范围内。
-func (a GroupAdmission) Allows(groupID string) bool {
-	a = a.WithDefaults()
-	if a.Mode != GroupAdmissionWhitelist {
-		// 黑名单模式下由 DisabledGroups 负责拦截，这里一律放行。
-		return true
-	}
-	groupID = strings.TrimSpace(groupID)
-	if groupID == "" {
-		return false
-	}
-	for _, allowed := range a.AllowedGroups {
-		if allowed == groupID {
-			return true
-		}
-	}
-	return false
+// NewGroupEnabled 返回还没有群配置的群默认工不工作。
+func (a GroupAdmission) NewGroupEnabled() bool {
+	return a.WithDefaults().Mode != GroupAdmissionWhitelist
 }
 
 // 私聊准入模式。空串等同 all，保证老配置行为完全不变。

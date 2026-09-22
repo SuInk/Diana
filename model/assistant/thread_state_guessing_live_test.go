@@ -38,7 +38,7 @@ func TestLiveGroupGuessingGameKeepsLockedSecret(t *testing.T) {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: state, Priority: llm.MessagePriorityPlugin, AtomicText: true})
 		}
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "【当前需要回复的消息】群聊 1081572710，发送者 " + sender + "（" + userID + "）：" + text})
-		runner, err := agent.NewRunner(client, agent.Config{WorkDir: t.TempDir(), MaxSteps: 8, ToolTimeoutMS: 30_000, FinalizationReserveMS: 10_000, EvidenceLedgerAdvisory: true},
+		runner, err := agent.NewRunner(client, agent.Config{WorkDir: t.TempDir(), MaxSteps: 8, ToolTimeoutMS: 30_000, FinalizationReserveMS: 10_000},
 			agent.NewToolRegistry(newDianaThreadStateTool(runtime, event)))
 		if err != nil {
 			t.Fatal(err)

@@ -320,7 +320,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 		}
 		if ctx.Err() == nil || rootCtx.Err() == nil {
 			message := fmt.Sprintf("后台任务「%s」执行失败：%s", item.task.Name, publicChatErrorMessage(err))
-			_ = r.sendSubagentFollowup(rootCtx, item.event, message)
+			_ = r.sendDiagnosticFollowup(rootCtx, item.event, subagentTaskPluginID(item), message)
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务执行失败", err.Error())
 			r.persistSubagentTask(item, "failed", PluginTaskProgress{}, err, true)
 		}
@@ -342,7 +342,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 			r.setError(err.Error())
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务结果发送失败", err.Error())
 			r.persistSubagentTask(item, "failed", PluginTaskProgress{}, err, true)
-			_ = r.sendSubagentFollowup(rootCtx, item.event, fmt.Sprintf("后台任务「%s」已经完成，但结果发送失败：%s", item.task.Name, publicChatErrorMessage(err)))
+			_ = r.sendDiagnosticFollowup(rootCtx, item.event, subagentTaskPluginID(item), fmt.Sprintf("后台任务「%s」已经完成，但结果发送失败：%s", item.task.Name, publicChatErrorMessage(err)))
 			r.removeSubagentTask(item.key, item.id)
 			return
 		}

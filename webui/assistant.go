@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -57,6 +58,12 @@ type groupAvatarRuntime interface {
 // 塞进 BotRuntime：它只服务一个页面，测试里的假运行时不必为此实现一个空方法。
 type contextBudgetRuntime interface {
 	ContextBudgetBreakdownForGroup(string) assistant.ContextBudgetBreakdown
+}
+
+// residentContextRuntime 让事件页拿到「每轮都注入」那几块的原文。和上面那条一样
+// 做成可选接口：它只服务一个页面。
+type residentContextRuntime interface {
+	ResidentContextForGroup(ctx context.Context, profileID, groupID string) assistant.ResidentContextSnapshot
 }
 
 type repositoryWatchRuntime interface {
@@ -166,6 +173,17 @@ type groupAdminConfigResponse struct {
 	ExpiresAt time.Time               `json:"expires_at,omitempty"`
 	Config    assistant.GroupConfig   `json:"config"`
 	Plugins   []assistant.PluginState `json:"plugins"`
+	// Extensions 只给群管理员看「有哪些扩展、机器人给到哪一档」，不带工具清单。
+	Extensions []groupAdminExtension `json:"extensions"`
+}
+
+type groupAdminExtension struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Bundled     bool   `json:"bundled,omitempty"`
+	BotTier     string `json:"bot_tier"`
 }
 
 type groupTestResponse struct {
@@ -179,7 +197,10 @@ type groupTestResponse struct {
 	Status       assistant.RuntimeStatus `json:"status"`
 }
 
-const minBotTokenChars = 16
+// 反向 WebSocket 的监听器只绑在本机，token 防的是同机上的其他进程冒连，不是公网
+// 爆破。16 位挡掉了不少既有的、够用的 token（miku 线上那个就是 15 位），升级后只能
+// 重新生成并同步改客户端。8 位是个能拦住手滑写个 "1234" 的下限。
+const minBotTokenChars = 8
 
 // NewBotHandler 创建 BotHandler 实例。
 func NewBotHandler(ctx context.Context, runtime BotRuntime) *BotHandler {
@@ -294,7 +315,10 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/users/:id", h.getAssistantUser)
 	router.PUT(base+"/users/:id", h.editAssistantUser)
 	router.DELETE(base+"/users/:id", h.editAssistantUser)
+	router.DELETE(base+"/users/:id/memories", h.clearAssistantUserMemories)
+	router.DELETE(base+"/users/:id/memories/:memory", h.clearAssistantUserMemories)
 	h.registerPersonaRoutes(router, base)
+	h.registerSelfNoteRoutes(router, base)
 	h.registerCharacterCardRoutes(router, base)
 	h.registerWorldBookRoutes(router, base)
 	router.GET(base+"/notebook", h.listNotebook)
@@ -328,6 +352,11 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/plugins", h.listPlugins)
 	router.GET(base+"/extensions", h.extensions)
 	router.POST(base+"/extensions", h.extensions)
+	router.GET(base+"/agent-browser", h.agentBrowser)
+	router.POST(base+"/agent-browser", h.setAgentBrowser)
+	router.POST(base+"/agent-browser/test", h.testAgentBrowser)
+	router.GET(base+"/agent-residency", h.agentResidency)
+	router.POST(base+"/agent-residency", h.setAgentResidency)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)
@@ -583,6 +612,26 @@ type profileEnabledPayload struct {
 	Enabled   bool   `json:"enabled"`
 }
 
+// startRuntimeAfterEnable 在「把机器人设成启用」之后把停着的运行时拉起来。
+//
+// ApplyProfiles 只会重启本来就在跑的运行时，停着的它一概不碰（runtime.ApplyProfiles
+// 里 !wasRunning 直接返回）。于是「运行时停着的时候启用一台机器人」这个操作以前
+// 会返回 200、界面把开关点亮，实际什么都没启动，也没有任何提示——接入端反连过来
+// 一律被 503 挡掉，控制台却只显示「等待连接」。启用本身就是「我要它跑起来」，
+// 这里顺手补上那一次 Start。
+//
+// 只在启用路径上做，配置保存这类路径不碰：用户明确按过「停止」之后再去改配置，
+// 不该被一次保存悄悄复活。起不来时不让整个请求失败——配置已经存好了，启动失败的
+// 原因留在运行时状态里（Start 会写进 lastError），前端照常能读到。
+func (h *BotHandler) startRuntimeAfterEnable() {
+	if h.runtime == nil || h.runtime.Status().Running {
+		return
+	}
+	if err := h.runtime.Start(h.ctx); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		log.Printf("enable requested but runtime start failed: %v", err)
+	}
+}
+
 // setProfileEnabled 只切换单台机器人的启用状态，其他机器人不受影响；
 // 启停某一台不需要重配其余档案。
 func (h *BotHandler) setProfileEnabled(c *gin.Context) {
@@ -614,6 +663,7 @@ func (h *BotHandler) setProfileEnabled(c *gin.Context) {
 	status := "机器人已停用"
 	if payload.Enabled {
 		status = "机器人已启用"
+		h.startRuntimeAfterEnable()
 	}
 	recordRequestOperation(c, h.logs, "profile_enabled", status, current.ID, botLogMetadata(current))
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, current.ID))
@@ -649,6 +699,7 @@ func (h *BotHandler) setAllProfilesEnabled(c *gin.Context) {
 	status := "全部机器人已停用"
 	if payload.Enabled {
 		status = "全部机器人已启用"
+		h.startRuntimeAfterEnable()
 	}
 	recordRequestOperation(c, h.logs, "profiles_enabled", status, "", map[string]any{"enabled": payload.Enabled})
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, botProfileScope(c)))

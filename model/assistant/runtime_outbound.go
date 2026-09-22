@@ -94,6 +94,9 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			if interval <= 0 {
 				interval = sendChunkInterval
 			}
+			// 这一轮还没发完，等待期间重新点亮输入状态：空着的话，多条回复中间
+			// 看上去就是「正在输入」断了。
+			typingIndicatorFromContext(ctx).resume()
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -127,6 +130,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	}
 	msg = r.resolveOutgoingLocalImages(msg)
 	msg = r.applyOutgoingReplyMarker(ctx, event, msg)
+	msg = r.normalizeOutgoingMentions(event, msg)
 	msg = r.resolveOutgoingMentionNames(event, msg)
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
@@ -209,6 +213,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	if !r.rememberTelegramPhotoResults(ctx, event, msg, result) {
 		r.rememberOutgoingWithMessageID(ctx, event, msg, messageID)
 	}
+	// 回复已经发出去了，「正在输入」到此为止：平台自己会清掉状态，这一轮剩下的
+	// 后处理期间不该再刷新，不然最后一条回复之后还会再闪几次。
+	typingIndicatorFromContext(ctx).pause()
 	return result, nil
 }
 

@@ -26,7 +26,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			switch runEvent.Tool {
 			case dianaPlatformToolName:
 				runError = "[platform tool error omitted]"
-			case dianaRepositoryIssuesToolName:
+			case dianaGitHubToolName:
 				runError = "[repository issue tool error omitted]"
 			}
 		}
@@ -119,7 +119,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			toolInput := runEvent.ToolInput
 			if runEvent.Tool == dianaPlatformToolName {
 				toolInput, toolOutput = sanitizePlatformDebugToolCall(toolInput, toolOutput)
-			} else if runEvent.Tool == dianaRepositoryIssuesToolName {
+			} else if runEvent.Tool == dianaGitHubToolName {
 				toolInput, toolOutput = sanitizeRepositoryIssuesDebugToolCall(toolInput, toolOutput)
 			}
 			// thread_state 的参数和结果照实记下：调用链只在后台可见，而多轮任务出错时（比如

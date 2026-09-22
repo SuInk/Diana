@@ -6,6 +6,7 @@ import type {
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
+  BrowserControlToken,
   LLMConfig,
   OpenAPIKey,
   PluginState,
@@ -26,6 +27,36 @@ import type {
 } from "./api";
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
+
+const demoContextBudget = {
+  context_window: 128_000,
+  allocated: 56_320,
+  headroom: 71_680,
+  layers: [
+    { key: "recent_history", label: "近期对话", share_percent: 26, ceiling: 40_000, tokens: 33_280, capped_by_ceiling: false, configurable: true },
+    { key: "retrieved_memory", label: "检索记忆", share_percent: 8, ceiling: 12_000, tokens: 10_240, capped_by_ceiling: false, configurable: true },
+    { key: "core_memory", label: "核心记忆", share_percent: 4, ceiling: 6_000, tokens: 5_120, capped_by_ceiling: false, configurable: true },
+    { key: "world_book", label: "世界书", share_percent: 3, ceiling: 4_000, tokens: 3_840, capped_by_ceiling: false, configurable: true },
+    { key: "session_thread", label: "会话便签", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
+    { key: "self_notes", label: "自述", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
+    { key: "persona", label: "人设", share_percent: 1, ceiling: 2_000, tokens: 846, capped_by_ceiling: false, configurable: false },
+    { key: "prompt_rules", label: "提示词规则", share_percent: 1, ceiling: 9_000, tokens: 594, capped_by_ceiling: false, configurable: false }
+  ]
+};
+
+const demoResidentContext = {
+  context_window: 128_000,
+  total_tokens: 8_867,
+  note: "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。",
+  blocks: [
+    { key: "soul", label: "品格（soul）", tokens: 0, note: "身份、价值、硬边界，排在系统提示词最前面。只有人能改，分群覆盖动不了它。" },
+    { key: "persona", label: "人设正文", tokens: 846, content: "你是 Diana，一个住在群里的助手。说话短，先给结论。", note: "系统提示词稳定头部的第一行，只有人能改（WebUI 或 soul.md）。" },
+    { key: "prompt_rules", label: "固定提示词规则", tokens: 8_021, content: "（演示数据：这里是按「全部工具都注册」展开的规则正文。）", note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。" },
+    { key: "world_book", label: "世界书常驻设定", tokens: 0, budget: 1_200, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
+    { key: "self_notes", label: "自述", tokens: 0, budget: 1_200, note: "机器人自己写的自我认知，默认关闭。" },
+    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" }
+  ]
+};
 
 const now = Date.now();
 const before = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
@@ -56,7 +87,7 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
-  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
+  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, llm_capability_probe_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },
@@ -462,7 +493,19 @@ export const demoStatus: BotStatus = {
     { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
     { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
   ],
-  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2, updated_at: before(1)
+  nonebot_bridges: {}, plugins, recent_events: demoEvents, active_workers: 2,
+  llm_concurrency: {
+    active: 3, peak: 9,
+    models: [
+      { provider: "openai_compatible", model: "gpt-5.4-mini", active: 2, started_at: before(0.2) },
+      { provider: "anthropic", model: "claude-sonnet-5", active: 1, started_at: before(0.6) }
+    ]
+  },
+  llm_usage: {
+    today: { calls: 412, input_tokens: 1_284_600, output_tokens: 96_420, cached_input_tokens: 742_180, total_tokens: 1_381_020, missing_usage_calls: 0 },
+    session: { calls: 1_486, input_tokens: 4_612_880, output_tokens: 338_940, cached_input_tokens: 2_604_310, total_tokens: 4_951_820, missing_usage_calls: 3 }
+  },
+  updated_at: before(1)
 };
 
 let tasks: AssistantTask[] = [
@@ -472,9 +515,15 @@ let tasks: AssistantTask[] = [
   { id: "task-rss-04", kind: "rss_watch", platform: "telegram", profile_id: "bot-telegram", owner_id: "", user_id: "880024", message: "Diana Release Feed", status: "active", trigger_at: after(4), interval_seconds: 300, last_run_at: before(4), feed_url: "https://github.com/SuInk/Diana/releases.atom", feed_source: "rss", feed_sources: [{ feed_url: "https://github.com/SuInk/Diana/releases.atom", source: "rss", name: "Diana Release Feed" }], feed_judge_prompt: "仅在稳定版发布时提醒并总结更新点", last_feed_item_id: "tag:github.com,2008:Repository/", created_at: before(2200), consumes_quota: true }
 ];
 
+// 与后端 SupportedPlatforms 注册表保持一致：配置向导和机器人页的平台下拉都
+// 按它渲染，少一个平台，演示站就看不到那一套接入表单。
 const platforms: BotPlatform[] = [
-  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 NapCat、Lagrange 或 go-cqhttp 接入 OneBot v11。" },
-  { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。" }
+  { id: "onebot-v11", name: "QQ · OneBot v11", protocol: "onebot-v11", category: "qq", category_label: "QQ", description: "通过 Snowluma、NapCat 或 Lagrange 接入 OneBot v11。", inbound: "reverse_ws" },
+  { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。", inbound: "outbound", rich_text: true },
+  { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound" },
+  { id: "dingtalk", name: "钉钉", protocol: "dingtalk-stream-ws", category: "dingtalk", category_label: "钉钉", description: "Stream 模式出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
+  { id: "feishu", name: "飞书", protocol: "feishu-event-callback", category: "feishu", category_label: "飞书", description: "事件订阅回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/feishu/callback", rich_text: true },
+  { id: "wecom", name: "企业微信", protocol: "wecom-event-callback", category: "wecom", category_label: "企业微信", description: "应用回调，需要一个公网可达的回调地址", inbound: "callback", callback_path: "/api/channels/wecom/callback", rich_text: true }
 ];
 
 type DemoIssueDraft = {
@@ -548,6 +597,18 @@ function mutateLLM(action: string, body: Record<string, unknown>): LLMConfig {
   return llmConfig;
 }
 
+let demoBrowserControlPolicy = {
+  enabled: true,
+  allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
+  allowed_hosts: ["example.com", "*.wiki.example.com"],
+  denied_hosts: ["admin.example.com"],
+  write_enabled: false,
+  command_timeout_ms: 20_000,
+  commands_per_minute: 60
+};
+let demoBrowserControlTokens: BrowserControlToken[] = [
+  { id: "bct-demo", name: "演示台式机 Chrome", prefix: "dianabx_demo0000", extension_id: "abcdefghijklmnopabcdefghijklmnop", created_at: before(1440), last_used_at: before(2) }
+];
 let demoApiKeys: OpenAPIKey[] = [
   { id: "key-1", name: "ci-notify", prefix: "diana_3fa8c2e1", created_at: before(4320), last_used_at: before(35) }
 ];
@@ -570,6 +631,31 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       demoMediaCachePolicy = { retention_days: Number(body.retention_days), max_mb: Number(body.max_mb) };
     }
     return json(demoMediaCachePolicy);
+  }
+
+  // 演示模式给一块 512 GiB 的盘和一份典型占用，图片/视频最大——真实部署里
+  // 吃掉数据目录的基本就是历史媒体原件。
+  if (path === "/api/system/storage") {
+    return json({
+      collected_at: new Date().toISOString(),
+      path: "/app/data",
+      disk_total_bytes: 549755813888,
+      disk_used_bytes: 236223201280,
+      disk_free_bytes: 313532612608,
+      disk_usage_percent: 43,
+      diana_bytes: 9663676416,
+      diana_files: 48213,
+      categories: [
+        { key: "video", label: "视频", bytes: 5368709120, files: 612 },
+        { key: "image", label: "图片", bytes: 3221225472, files: 45230 },
+        { key: "database", label: "数据库", bytes: 704643072, files: 3 },
+        { key: "audio", label: "音频", bytes: 268435456, files: 2180 },
+        { key: "document", label: "文档与压缩包", bytes: 83886080, files: 164 },
+        { key: "other", label: "其它文件", bytes: 16777216, files: 24 }
+      ],
+      scanned_at: new Date().toISOString(),
+      scanning: false
+    });
   }
 
   if (path === "/api/system/media-base-url") {
@@ -600,8 +686,85 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
     return json({ revoked: true });
   }
+  // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
+  // 看不出授权边界长什么样。写操作在演示里始终关着。
+  if (path === "/api/browser-control/status" && method === "GET")
+    return json({
+      policy: demoBrowserControlPolicy,
+      tokens: demoBrowserControlTokens,
+      connections: [
+        {
+          id: "bc-demo-1",
+          token_id: demoBrowserControlTokens[0]?.id ?? "bct-demo",
+          token_name: demoBrowserControlTokens[0]?.name ?? "演示浏览器",
+          extension_id: "abcdefghijklmnopabcdefghijklmnop",
+          extension_name: "Diana 浏览器控制",
+          browser: "Chromium",
+          browser_version: "141",
+          label: "演示台式机 Chrome",
+          connected_at: before(30),
+          last_seen_at: before(1),
+          takeover: false,
+          allowed_tabs: 2,
+          commands: 7
+        }
+      ],
+      ready: demoBrowserControlPolicy.enabled,
+      endpoint: "/browser-control/v1/socket",
+      protocol: 1
+    });
+  if (path === "/api/browser-control/policy" && method === "PUT") {
+    demoBrowserControlPolicy = { ...demoBrowserControlPolicy, ...(body as unknown as typeof demoBrowserControlPolicy) };
+    return json({ policy: demoBrowserControlPolicy });
+  }
+  if (path === "/api/browser-control/tokens" && method === "GET") return json({ tokens: demoBrowserControlTokens });
+  if (path === "/api/browser-control/tokens" && method === "POST") {
+    const token = {
+      id: `bct-${Date.now()}`,
+      name: String(body.name ?? "未命名"),
+      prefix: "dianabx_demo0000",
+      created_at: new Date().toISOString()
+    };
+    demoBrowserControlTokens = [token, ...demoBrowserControlTokens];
+    return json({ token, plaintext: "dianabx_demo000000000000000000000000000000000000000000000000000000000000" });
+  }
+  if (path.startsWith("/api/browser-control/tokens/") && method === "DELETE") {
+    const tokenID = decodeURIComponent(path.split("/").pop() ?? "");
+    const removed = demoBrowserControlTokens.find((item) => item.id === tokenID);
+    demoBrowserControlTokens = demoBrowserControlTokens.filter((item) => item.id !== tokenID);
+    return json({ token: removed ?? { id: tokenID, name: "", prefix: "", created_at: new Date().toISOString() } });
+  }
+  if (path.startsWith("/api/browser-control/connections/")) return json({ ok: true, active: Boolean(body.active) });
   if (path === "/api/health") return json({ status: "ok", started_at: demoStats.started_at, uptime_seconds: demoStats.uptime_seconds, version: "v0.8.6-demo", repository: "SuInk/Diana", repository_url: "https://github.com/SuInk/Diana" });
   if (path === "/api/stats") return json(demoStats);
+  // 三个窗口互相包含（1h ⊂ 12h ⊂ 24h），演示数据也照这个关系给，不然切来切去数字会倒挂。
+  if (path === "/api/stats/ranges") {
+    const until = new Date().toISOString();
+    const ranges = [
+      { id: "1h", minutes: 60, messages: 41, handled: 33, errors: 0, avg_reply_ms: 4_820, replies_measured: 33, calls: 37, input: 118_420, output: 9_260, total: 127_680, cached: 68_310 },
+      { id: "12h", minutes: 720, messages: 486, handled: 372, errors: 3, avg_reply_ms: 5_140, replies_measured: 372, calls: 296, input: 921_540, output: 71_880, total: 993_420, cached: 534_260 },
+      { id: "24h", minutes: 1440, messages: 908, handled: 694, errors: 5, avg_reply_ms: 5_260, replies_measured: 694, calls: 508, input: 1_602_310, output: 124_970, total: 1_727_280, cached: 928_640 }
+    ].map((entry) => ({
+      id: entry.id,
+      since: before(entry.minutes),
+      until,
+      messages: entry.messages,
+      handled: entry.handled,
+      errors: entry.errors,
+      avg_reply_ms: entry.avg_reply_ms,
+      replies_measured: entry.replies_measured,
+      usage: {
+        since: before(entry.minutes),
+        until,
+        recorded_calls: entry.calls,
+        input_tokens: entry.input,
+        output_tokens: entry.output,
+        total_tokens: entry.total,
+        cached_input_tokens: entry.cached
+      }
+    }));
+    return json({ until, ranges });
+  }
 
   // 授权登录：演示模式给出内置提供商的未登录状态，登录流程本身不模拟——
   // 真去打一次 OAuth 授权页在演示环境里既做不到也不该做。
@@ -831,6 +994,30 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const index = groups.findIndex((group) => group.group_id === config.group_id);
     if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, reply_preserve_line_breaks: config.reply_preserve_line_breaks, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
+  }
+
+  if (path === "/api/assistant/groups/switches" && method === "POST") {
+    if (typeof body.min_group_level === "number" || typeof body.level_unknown_policy === "string") {
+      const gate = { ...(assistantConfig.reply_gate ?? {}) };
+      if (typeof body.min_group_level === "number") gate.min_group_level = body.min_group_level;
+      if (typeof body.level_unknown_policy === "string") gate.level_unknown_policy = body.level_unknown_policy as "allow" | "deny";
+      assistantConfig = { ...assistantConfig, reply_gate: gate };
+    }
+    if (typeof body.new_group_enabled === "boolean") {
+      const mode = body.new_group_enabled ? "blacklist" : "whitelist";
+      assistantConfig = { ...assistantConfig, group_admission: { mode } };
+    }
+    let updated = 0;
+    if (typeof body.enabled === "boolean") {
+      const wanted = new Set((body.group_ids as string[] | undefined) ?? []);
+      for (const group of groups) {
+        if (!wanted.has(group.group_id) || group.enabled === body.enabled) continue;
+        group.enabled = body.enabled as boolean;
+        group.configured = true;
+        updated += 1;
+      }
+    }
+    return json({ ok: true, updated });
   }
 
   if (path === "/api/assistant/users") {
@@ -1081,7 +1268,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       private_chats: [
         { user_id: "880024", user_name: "Demo User", events: 46, bot_profile_id: "bot-telegram" },
         { user_id: "100200711", user_name: "青禾", events: 12, bot_profile_id: "bot-onebot" }
-      ]
+      ],
+      // 上下文占比和常驻内容以前在演示里整块缺席：入口那一行永远不出现，
+      // 看不出真实排版，也没法点进去看弹窗。
+      context_budget: demoContextBudget,
+      resident_context: demoResidentContext
     });
   }
   const traceMatch = path.match(/^\/api\/assistant\/events\/([^/]+)\/trace$/);

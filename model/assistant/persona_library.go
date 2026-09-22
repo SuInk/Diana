@@ -37,15 +37,24 @@ const (
 
 // Persona 是一套具名人设。
 type Persona struct {
-	ID                       string     `json:"id"`
-	Name                     string     `json:"name"`
-	SystemPrompt             string     `json:"system_prompt,omitempty"`
-	ReplyStyle               ReplyStyle `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled *bool      `json:"action_description_enabled,omitempty"`
-	DaypartToneEnabled       *bool      `json:"daypart_tone_enabled,omitempty"`
-	SelfReference            string     `json:"self_reference,omitempty"`
-	SentenceEnders           string     `json:"sentence_enders,omitempty"`
-	UpdatedAt                time.Time  `json:"updated_at,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
+	// Soul 是品格层：身份、价值、硬边界。正文说「怎么说话」，它说「是什么、
+	// 珍视什么、为什么」。分群覆盖动不了它，见 persona_soul.go。
+	Soul *PersonaSoul `json:"soul,omitempty"`
+	// Voice 只在导入时出现：YAML 里把表达层写成一个块，清洗时摊平进下面那几个
+	// 字段。摊平而不是新开一层，是为了让老人设和新写法在运行时完全一样。
+	Voice *PersonaVoice `json:"voice,omitempty"`
+	// PersonaMode 跟着正文走：一份接管模式的正文（带段头）只在接管档下成立，
+	// 套到填空题档上，段头不生效而运行时照旧注入，同一件事说两遍。
+	PersonaMode              PersonaMode `json:"persona_mode,omitempty"`
+	ReplyStyle               ReplyStyle  `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled *bool       `json:"action_description_enabled,omitempty"`
+	DaypartToneEnabled       *bool       `json:"daypart_tone_enabled,omitempty"`
+	SelfReference            string      `json:"self_reference,omitempty"`
+	SentenceEnders           string      `json:"sentence_enders,omitempty"`
+	UpdatedAt                time.Time   `json:"updated_at,omitempty"`
 }
 
 // PersonaSet 是整个人设库。
@@ -61,11 +70,75 @@ func copyCustomPersona(persona *Persona) *Persona {
 	copy.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
 	copy.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
 	copy.SystemPrompt = migratePersonaStyle(copy.SystemPrompt, &copy.ReplyStyle, &copy.ActionDescriptionEnabled)
+	copy.Soul = persona.Soul.Clone()
 	return &copy
 }
 
-// Normalized 清洗单套人设：补 ID、迁移旧风格、裁长度。
+// PersonaVoice 是导入格式里的表达层。它不进运行时：Normalized 会把它摊平到
+// SystemPrompt / SelfReference / SentenceEnders 上。
+type PersonaVoice struct {
+	Style                    string            `json:"style,omitempty"`
+	SelfReference            string            `json:"self_reference,omitempty"`
+	SentenceEnders           string            `json:"sentence_enders,omitempty"`
+	ActionDescriptionEnabled *bool             `json:"action_description_enabled,omitempty"`
+	Examples                 []PersonaExchange `json:"examples,omitempty"`
+}
+
+// PersonaExchange 是一组示例对话。示例比形容词管用：「说话简短」不如给一句
+// 真的简短的回答。
+type PersonaExchange struct {
+	User  string `json:"user"`
+	Reply string `json:"reply"`
+}
+
+// flattenVoice 把 voice 块摊平到老字段上。已经填了的老字段优先，不被覆盖：
+// 同一份文件里两种写法都有时，显式写在外层的那个是作者后改的。
+func (persona Persona) flattenVoice() Persona {
+	voice := persona.Voice
+	persona.Voice = nil
+	if voice == nil {
+		return persona
+	}
+	if strings.TrimSpace(persona.SystemPrompt) == "" {
+		persona.SystemPrompt = renderPersonaVoice(voice)
+	}
+	if strings.TrimSpace(persona.SelfReference) == "" {
+		persona.SelfReference = voice.SelfReference
+	}
+	if strings.TrimSpace(persona.SentenceEnders) == "" {
+		persona.SentenceEnders = voice.SentenceEnders
+	}
+	if persona.ActionDescriptionEnabled == nil {
+		persona.ActionDescriptionEnabled = copyBoolPointer(voice.ActionDescriptionEnabled)
+	}
+	return persona
+}
+
+// renderPersonaVoice 把表达层拼成人设正文：风格描述在前，示例对话跟在后面。
+func renderPersonaVoice(voice *PersonaVoice) string {
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(voice.Style))
+	if len(voice.Examples) > 0 {
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString("示例——")
+		for _, example := range voice.Examples {
+			user := strings.TrimSpace(example.User)
+			reply := strings.TrimSpace(example.Reply)
+			if user == "" || reply == "" {
+				continue
+			}
+			builder.WriteString("\n用户：" + user + "\n你：" + reply)
+		}
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+// Normalized 清洗单套人设：补 ID、摊平 voice、迁移旧风格、裁长度。
 func (persona Persona) Normalized() Persona {
+	persona = persona.flattenVoice()
+	persona.Soul = persona.Soul.Normalized()
 	persona.ActionDescriptionEnabled = copyBoolPointer(persona.ActionDescriptionEnabled)
 	persona.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
 	persona.ID = strings.TrimSpace(persona.ID)
@@ -76,12 +149,16 @@ func (persona Persona) Normalized() Persona {
 	persona.SystemPrompt = mergePersonaStyleWithinLimit(persona.SystemPrompt, &persona.ReplyStyle, &persona.ActionDescriptionEnabled)
 	persona.SelfReference = strings.TrimSpace(persona.SelfReference)
 	persona.SentenceEnders = strings.TrimSpace(persona.SentenceEnders)
+	if persona.PersonaMode != PersonaModeOwn {
+		persona.PersonaMode = ""
+	}
 	return persona
 }
 
 // Empty 报告这套人设是不是什么都没填。名字不算内容——只有名字的空壳留着没意义。
 func (persona Persona) Empty() bool {
-	return strings.TrimSpace(persona.SystemPrompt) == "" &&
+	return persona.Soul.Empty() &&
+		strings.TrimSpace(persona.SystemPrompt) == "" &&
 		strings.TrimSpace(string(persona.ReplyStyle)) == "" &&
 		persona.ActionDescriptionEnabled == nil &&
 		persona.DaypartToneEnabled == nil &&
@@ -234,7 +311,8 @@ func (persona Persona) sameContent(other Persona) bool {
 		(persona.DaypartToneEnabled == nil) == (other.DaypartToneEnabled == nil) &&
 		boolValue(persona.DaypartToneEnabled, false) == boolValue(other.DaypartToneEnabled, false) &&
 		persona.SelfReference == other.SelfReference &&
-		persona.SentenceEnders == other.SentenceEnders
+		persona.SentenceEnders == other.SentenceEnders &&
+		persona.PersonaMode == other.PersonaMode
 }
 
 // Import 把外部来的几套人设并进库里。

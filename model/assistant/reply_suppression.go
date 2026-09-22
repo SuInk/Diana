@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,7 +19,11 @@ import (
 )
 
 const (
-	replySuppressionDuration          = 30 * time.Minute
+	// 暂停时长在这个区间里随机取，不再固定三十分钟：固定值等于给对方一个精确的
+	// 时刻表，而且每次都一样的「恰好三十分钟」本身就很像机器。
+	replySuppressionNoticeTimeout     = 60 * time.Second
+	replySuppressionMinDuration       = 10 * time.Minute
+	replySuppressionMaxDuration       = 30 * time.Minute
 	replySuppressionMarker            = "[[DIANA_IGNORE_CURRENT_USER_30M]]"
 	replyRefusalMarker                = "[[DIANA_REFUSE_CURRENT]]"
 	replyRefusalThreshold             = 4
@@ -27,7 +32,6 @@ const (
 	botReplyLoopWindow                = 30 * time.Minute
 	botReplyLoopAIConfidenceThreshold = 0.90
 	botReplyLoopClassificationTimeout = 20 * time.Second
-	replySuppressionNoticeTimeout     = 60 * time.Second
 	replyRefusalAuditConfidence       = 0.90
 )
 
@@ -38,6 +42,10 @@ var errReplySuppressedBeforeSend = errors.New("diana: reply suppressed before se
 // errReplyLoopDetected 表示发送前审核认定这一来一回已经在空转，且累计次数够了。
 // 这条回复因此不发出去，暂停也从这一刻起生效。
 var errReplyLoopDetected = errors.New("chatbot: reply loop detected before send")
+
+// errReplySelfRepeatDropped 表示这条候选回复只是把机器人自己说过的话又说了一遍。
+// 只丢这一条，不开降欲望也不暂停：对方下一条要是带来了新东西，照常回答。
+var errReplySelfRepeatDropped = errors.New("chatbot: candidate reply repeats the bot's own recent replies")
 
 type replySuppressionSendGuardKey struct{}
 
@@ -99,18 +107,60 @@ type botReplyLoopAIDecision struct {
 	MeaninglessLoop bool `json:"meaningless_loop"`
 	// PurposelessLoop 是「回得很密、而且这一连串来回没有明确任务」：漫无目的地互相接戏、
 	// 续剧情、斗嘴。下棋报步、解题、一起做事且在推进的不算。
-	PurposelessLoop bool    `json:"purposeless_loop"`
-	Confidence      float64 `json:"confidence"`
-	Reason          string  `json:"reason"`
+	PurposelessLoop bool `json:"purposeless_loop"`
+	// SelfRepeat 只看机器人自己最近几条回复：这一条是不是把它们又说了一遍。
+	//
+	// 另外三项都要先对发送者或这一来一回下判断——对方是不是 AI、对方这条有没有内容、
+	// 这串来回密不密。机器人和另一台机器人互道晚安时这三项全落空：对方的话像真人，
+	// 每条都有内容，密度也说不上异常，可机器人自己已经把同一句「晚安、被窝、明天那页」
+	// 换着说了七遍。判据换成只看自己说过什么，那七遍才藏不住。
+	//
+	// 字面统计做不了这件事：2026-09-20 那段循环用字符二元组 Dice、内容字重合、新词率
+	// 三种度量回放 5 天 2959 条发言，都和正常对话分不开——重复的是「又道了一次别」这个
+	// 语义动作，措辞每条都新，而群里大量连续答同一个技术问题的发言在字面上比它还重复。
+	SelfRepeat bool    `json:"self_repeat"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
 }
 
-// counts 决定这次结论算不算一次空转。只有「没内容」或「没目的」才算：对方是不是 AI
-// 只记录不计数——两台 AI 正经下棋、做题，不该因为对面是 AI 就被停掉。
+// counts 决定这次结论算不算一次空转。只有「没内容」「没目的」或「在复读自己」才算：
+// 对方是不是 AI 只记录不计数——两台 AI 正经下棋、做题，不该因为对面是 AI 就被停掉。
 func (decision botReplyLoopAIDecision) counts() bool {
+	if !decision.MeaninglessLoop && !decision.PurposelessLoop && !decision.SelfRepeat {
+		return false
+	}
+	return decision.confident()
+}
+
+// damps 决定这次结论要不要进降欲望。降欲望是按账号的：开了以后这个人后面没点名的
+// 消息一律不接，直到保留期过去。「没内容」和「没目的」说的是这一整串来回的状态，
+// 按账号收口说得通；「在复读自己」说的只是候选回复这一条——下一条要是带来了新东西，
+// 本来就该照常回答，不该被前一条的结论连坐。所以复读只丢当前这条（见
+// selfRepeatDropsReply），不进这一层。
+func (decision botReplyLoopAIDecision) damps() bool {
 	if !decision.MeaninglessLoop && !decision.PurposelessLoop {
 		return false
 	}
+	return decision.confident()
+}
+
+// selfRepeatDropsReply 报告这条候选回复是不是该就地丢掉：判到复读自己就不发这一条，
+// 不牵连这个账号后面的消息。
+func (decision botReplyLoopAIDecision) selfRepeatDropsReply() bool {
+	return decision.SelfRepeat && decision.confident()
+}
+
+func (decision botReplyLoopAIDecision) confident() bool {
 	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
+}
+
+// replyDampingCause 把这次空转结论翻译成写进事件理由的那句话。复读自己不在其中：
+// 它只丢当前这条回复，不开降欲望，见 botReplyLoopAIDecision.damps。
+func replyDampingCause(decision botReplyLoopAIDecision) string {
+	if decision.MeaninglessLoop {
+		return replyDampingCauseMeaningless
+	}
+	return replyDampingCausePurposeless
 }
 
 type botReplyLoopClassificationPayload struct {
@@ -274,6 +324,16 @@ func (r *Runtime) activateReplySuppressionWithinOutboundGate(event MessageEvent,
 	return item, true
 }
 
+// randomReplySuppressionDuration 在 [replySuppressionMinDuration, replySuppressionMaxDuration]
+// 里取一个随机时长。用 math/rand 就够：这不是安全边界，只是不想每次都停一样久。
+func randomReplySuppressionDuration() time.Duration {
+	spread := replySuppressionMaxDuration - replySuppressionMinDuration
+	if spread <= 0 {
+		return replySuppressionMinDuration
+	}
+	return replySuppressionMinDuration + time.Duration(rand.Int63n(int64(spread)+1))
+}
+
 func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now time.Time) (ReplySuppression, bool) {
 	cfg := r.effectiveConfigForEvent(event)
 	userID := strings.TrimSpace(event.UserID)
@@ -289,7 +349,7 @@ func (r *Runtime) newReplySuppression(event MessageEvent, reason string, now tim
 		TriggerMessageID: strings.TrimSpace(event.MessageID),
 		Reason:           truncateRunesFromStart(strings.TrimSpace(reason), 240),
 		CreatedAt:        now,
-		Until:            now.Add(replySuppressionDuration),
+		Until:            now.Add(randomReplySuppressionDuration()),
 	}, true
 }
 
@@ -366,7 +426,13 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	default:
 		return botReplyLoopCandidate{}, false
 	}
-	directBotFollowup := eventRepliesToBot(event, cfg)
+	// routingDirected 和「引用了机器人那条」在这里是同一件事的两种形态：都表示这条
+	// 消息冲着机器人来。结构形态（@、引用、名字）以外还要认语义形态，否则相关度
+	// 分支放行的回复永远进不了空转判断——2026-09-20 深夜 1049765710 群里就是这样：
+	// 另一台机器人和 Diana 互道晚安刷了十几轮，每条评分都是「在跟机器人说话：是」，
+	// 但正文里既没有 @ 也没有名字，bot_reply_loop_classification 从 23:56 起就再没
+	// 跑过一次，回复欲望衰减的密度计数自然也一直是空的。
+	directBotFollowup := eventRepliesToBot(event, cfg) || event.routingDirected
 	if strings.TrimSpace(readableEventText(event, text)) == "" || (!directBotFollowup && !r.shouldHandleChat(event, text)) {
 		return botReplyLoopCandidate{}, false
 	}
@@ -392,6 +458,11 @@ func (r *Runtime) botReplyLoopCandidate(event MessageEvent, text string) (botRep
 	}
 	if event.ToMe {
 		return botReplyLoopCandidate{TriggerKind: "direct"}, true
+	}
+	// 结构上找不到触发点，但评分模型认定对方在跟机器人说话。单独一种 trigger_kind：
+	// 这一支的判据来自模型而不是消息本身，日志里要能和 mention/quote/alias 分开看。
+	if event.routingDirected {
+		return botReplyLoopCandidate{TriggerKind: "directed"}, true
 	}
 	return botReplyLoopCandidate{}, false
 }
@@ -512,9 +583,9 @@ func (r *Runtime) recordBotReplyLoopClassification(ctx context.Context, event Me
 		Metadata: map[string]any{
 			"group_id": event.GroupID, "user_id": event.UserID, "trigger_kind": candidate.TriggerKind,
 			"automated_ai_reply": decision.AutomatedAIReply, "meaningless_loop": decision.MeaninglessLoop,
-			"purposeless_loop": decision.PurposelessLoop,
-			"confidence":       decision.Confidence,
-			"reason":           decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
+			"purposeless_loop": decision.PurposelessLoop, "self_repeat": decision.SelfRepeat,
+			"confidence": decision.Confidence,
+			"reason":     decision.Reason, "counted": decision.counts(), "hit_count": hitCount,
 			"threshold": botReplyLoopThreshold, "window_minutes": int(botReplyLoopWindow / time.Minute),
 			"suppression_allowed": suppressionAllowed,
 		},
@@ -636,13 +707,13 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 	if !ok {
 		return
 	}
-	noticeBase := withReplySuppressionOutboundGateHeld(withReplySuppressionSendGuard(context.Background()))
-	noticeCtx, cancel := context.WithTimeout(noticeBase, replySuppressionNoticeTimeout)
-	defer cancel()
-	if err := r.sendReplyRefusalCooldownNotice(noticeCtx, event, item); err != nil {
-		return
-	}
+	// 暂停先生效，再提示。原先顺序反着：通知发失败就直接 return，暂停跟着一起不生效，
+	// 攒够了次数却还在继续回。提示发不出去不该影响暂停。
 	r.activateReplySuppressionWithinOutboundGate(event, reason, now)
+	hintBase := withReplySuppressionOutboundGateHeld(withReplySuppressionSendGuard(context.Background()))
+	hintCtx, cancel := context.WithTimeout(hintBase, replySuppressionNoticeTimeout)
+	defer cancel()
+	r.sendReplyPauseHint(hintCtx, event, item)
 }
 
 func (r *Runtime) persistReplySuppressionsLocked() error {
@@ -753,55 +824,46 @@ func formatReplySuppressionRemaining(remaining time.Duration) string {
 	return fmt.Sprintf("约 %d 分钟", minutes)
 }
 
-func (r *Runtime) sendReplySuppressionActivationNotice(ctx context.Context, event MessageEvent, item ReplySuppression) {
-	notice, generationErr := r.generateReplySuppressionActivationNotice(ctx, event, item)
-	llmGenerated := generationErr == nil && notice != ""
-	if !llmGenerated {
-		notice = "为避免机器人互相循环，已暂停响应此账号" + formatReplySuppressionRemaining(time.Until(item.Until)) + "，期间不再接续消息。"
+// 暂停时提示一句，但这句必须由人设生成，不能是写死的模板。
+//
+// 以前三处各有一条硬编码：「为避免机器人互相循环，已暂停响应此账号约 30 分钟，期间
+// 不再接续消息。」「短时间内已累计拒绝 N 次请求，现暂停响应此账号…」「为避免继续
+// 自动循环，我会暂停响应此账号约 30 分钟」。它们读起来像系统弹窗，而且把「账号」
+// 「响应」「暂停」这套后台词汇直接倒进群聊。现在统一走 generateReplyPauseHint，由主
+// 模型带人设写一句自然的话；写不出来就什么都不发——宁可不说，也不要退回模板。
+//
+// 提示里不说具体多久：时长本来就是 10 到 30 分钟之间随机的（见
+// randomReplySuppressionDuration），报一个精确数字既不准，也正是那股机器味的来源。
+func (r *Runtime) sendReplyPauseHint(ctx context.Context, event MessageEvent, item ReplySuppression) {
+	hint, err := r.generateReplyPauseHint(ctx, event)
+	if err != nil || hint == "" {
+		r.recordReplySuppressionNotice(event, item, false, err, nil)
+		return
 	}
-	msg := OutgoingMessage{Text: notice}
+	msg := OutgoingMessage{Text: hint}
 	if event.Kind == EventKindGroup {
 		msg.GroupID = event.GroupID
 	} else {
 		msg.UserID = event.UserID
 	}
 	sendErr := r.sendOutgoing(ctx, event, msg)
-	r.recordReplySuppressionNotice(event, item, llmGenerated, generationErr, sendErr)
+	r.recordReplySuppressionNotice(event, item, true, nil, sendErr)
 }
 
-func (r *Runtime) sendReplyRefusalCooldownNotice(ctx context.Context, event MessageEvent, item ReplySuppression) error {
-	msg := OutgoingMessage{Text: fmt.Sprintf(
-		"短时间内已累计拒绝 %d 次请求，现暂停响应此账号%s；期间消息不会在到期后补发。",
-		replyRefusalThreshold,
-		formatReplySuppressionRemaining(time.Until(item.Until)),
-	)}
-	if event.Kind == EventKindGroup {
-		msg.GroupID = event.GroupID
-	} else {
-		msg.UserID = event.UserID
-	}
-	sendErr := r.sendOutgoing(ctx, event, msg)
-	r.recordReplySuppressionNotice(event, item, false, nil, sendErr)
-	return sendErr
-}
-
-func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, event MessageEvent, item ReplySuppression) (string, error) {
+func (r *Runtime) generateReplyPauseHint(ctx context.Context, event MessageEvent) (string, error) {
 	ctx = withLLMUsagePurpose(ctx, "reply_suppression_notice")
 	messages := r.withUserFacingPersona(event, []llm.Message{
 		{
 			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你为 群聊生成一条简短的系统状态提示。
+			Content: strings.TrimSpace(`用你自己的语气说一句话，告诉对方你接下来一段时间不接话了。
 要求：
-1. 说明为避免机器人互相循环，机器人已暂时停止响应“此账号”。
-2. 说明暂停的大约时长。
-3. 只输出一句自然中文纯文本，不要解释检测细节，不要责怪对方。
-4. 不得使用 @、账号、昵称、引用、CQ 码、Markdown、表情或引号。
-5. 最多 70 个汉字。`),
+1. 就是随口提一句，像人要去忙别的了那样，不是系统通知。
+2. 不要说具体停多久，不要出现「暂停」「响应」「账号」「循环」「检测」这类词。
+3. 不要解释原因，不要责怪对方，不要说教。
+4. 只输出一句自然中文纯文本，不得使用 @、账号、昵称、引用、CQ 码、Markdown、表情或引号。
+5. 最多 30 个汉字。`),
 		},
-		{
-			Role:    llm.RoleUser,
-			Content: "暂停时长：" + formatReplySuppressionRemaining(time.Until(item.Until)),
-		},
+		{Role: llm.RoleUser, Content: "现在说这一句。"},
 	})
 	callCtx, cancel := context.WithTimeout(ctx, replySuppressionNoticeTimeout)
 	defer cancel()
@@ -815,53 +877,33 @@ func (r *Runtime) generateReplySuppressionActivationNotice(ctx context.Context, 
 	if err != nil {
 		return "", err
 	}
-	notice := sanitizeReplySuppressionNotice(raw)
-	if notice == "" || !strings.Contains(notice, "暂停") || !strings.Contains(notice, "响应") || !strings.Contains(notice, "此账号") {
-		return "", fmt.Errorf("响应限制提示未包含必要状态")
+	hint := sanitizeReplyPauseHint(raw)
+	if hint == "" {
+		return "", fmt.Errorf("收声提示为空或含有不该出现的内容")
 	}
-	return notice, nil
+	return hint, nil
 }
 
-func sanitizeReplySuppressionNotice(raw string) string {
+// sanitizeReplyPauseHint 拦掉点名、账号和后台词汇：这句话要读起来像人随口说的，
+// 漏出「暂停响应此账号」里的任何一个词都会立刻把它打回系统通知。
+func sanitizeReplyPauseHint(raw string) string {
 	if strings.Contains(raw, "@") || strings.Contains(raw, "[CQ:") || replySuppressionAccountPattern.MatchString(raw) {
 		return ""
 	}
-	raw = strings.Trim(strings.TrimSpace(raw), "`\"' ")
+	// 中文引号一起剥掉：提示词里写了不要加引号，模型照样常给「」括起来，留着就成了
+	// 一句被引述的话，不是它自己在说。
+	raw = strings.Trim(strings.TrimSpace(raw), "`\"' 「」“”‘’")
 	raw = PlainText(CQToSegments(raw))
 	raw = normalizeChatWhitespace(raw)
-	if len([]rune(raw)) > 70 {
-		raw = string([]rune(raw)[:70])
+	for _, banned := range []string{"暂停", "响应", "账号", "循环", "检测", "系统"} {
+		if strings.Contains(raw, banned) {
+			return ""
+		}
+	}
+	if len([]rune(raw)) > 30 {
+		return ""
 	}
 	return strings.TrimSpace(raw)
-}
-
-func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppression, action, message string, operationErr error) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	kind := applog.KindOperation
-	level := applog.LevelInfo
-	detail := ""
-	if operationErr != nil {
-		kind = applog.KindError
-		level = applog.LevelError
-		detail = operationErr.Error()
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = writer.AppendLog(ctx, applog.Entry{
-		Kind: kind, Level: level, Action: action, Message: message, Detail: detail,
-		Actor: oneBotEventActor(event), Target: item.UserID,
-		Metadata: map[string]any{
-			"group_id": item.GroupID, "user_id": item.UserID, "until": item.Until,
-			"trigger_message_id": item.TriggerMessageID, "reason": item.Reason,
-		},
-	})
-}
-
-func (r *Runtime) recordReplySuppressionBlocked(event MessageEvent, item ReplySuppression) {
-	r.recordReplySuppression(event, item, "response_suppression_blocked", "响应限制已拦截用户消息", nil)
 }
 
 func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySuppression, llmGenerated bool, generationErr, sendErr error) {
@@ -894,4 +936,33 @@ func (r *Runtime) recordReplySuppressionNotice(event MessageEvent, item ReplySup
 		Kind: kind, Level: level, Action: action, Message: message, Detail: detail,
 		Actor: oneBotEventActor(event), Target: item.UserID, Metadata: metadata,
 	})
+}
+
+func (r *Runtime) recordReplySuppression(event MessageEvent, item ReplySuppression, action, message string, operationErr error) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	kind := applog.KindOperation
+	level := applog.LevelInfo
+	detail := ""
+	if operationErr != nil {
+		kind = applog.KindError
+		level = applog.LevelError
+		detail = operationErr.Error()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind: kind, Level: level, Action: action, Message: message, Detail: detail,
+		Actor: oneBotEventActor(event), Target: item.UserID,
+		Metadata: map[string]any{
+			"group_id": item.GroupID, "user_id": item.UserID, "until": item.Until,
+			"trigger_message_id": item.TriggerMessageID, "reason": item.Reason,
+		},
+	})
+}
+
+func (r *Runtime) recordReplySuppressionBlocked(event MessageEvent, item ReplySuppression) {
+	r.recordReplySuppression(event, item, "response_suppression_blocked", "响应限制已拦截用户消息", nil)
 }

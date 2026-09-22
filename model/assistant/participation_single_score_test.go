@@ -146,22 +146,28 @@ func TestParticipationBotShareBlocksChatIn(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		bot, total int
+		others     int
 		level      string
 		want       bool
 	}{
-		{"quiet_bot", 4, 20, "medium", false},
-		{"at_threshold", 5, 20, "medium", true},
-		{"just_below_threshold", 4, 17, "medium", false},
-		{"dominating_small_group", 12, 20, "low", true},
-		{"always_never_blocked", 18, 20, "always", false},
-		{"no_history", 0, 0, "medium", false},
-		{"bot_silent", 0, 20, "medium", false},
+		{"quiet_bot", 4, 20, 3, "medium", false},
+		{"at_threshold", 5, 20, 3, "medium", true},
+		{"just_below_threshold", 4, 17, 3, "medium", false},
+		{"dominating_small_group", 12, 20, 2, "low", true},
+		{"always_never_blocked", 18, 20, 3, "always", false},
+		{"no_history", 0, 0, 0, "medium", false},
+		{"bot_silent", 0, 20, 3, "medium", false},
 		// 安静群里一来一回的占比天然很高，机器人只说了两句就不算刷屏。
-		{"quiet_back_and_forth", 2, 4, "medium", false},
-		{"three_in_a_row", 3, 4, "medium", true},
+		{"quiet_back_and_forth", 2, 4, 2, "medium", false},
+		{"three_in_a_row", 3, 4, 2, "medium", true},
+		// 窗口里只有一个人在跟机器人说话：这是一对一，占比高是常态，顺口接一句不拦。
+		{"one_on_one_never_blocked", 12, 20, 1, "medium", false},
+		{"one_on_one_extreme_share", 18, 20, 1, "low", false},
+		// 多了第二个人就恢复限流，免得拿「一对一」把热闹群也放过去。
+		{"second_speaker_restores_limit", 12, 20, 2, "medium", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := participationBotShareBlocks(tc.bot, tc.total, tc.level); got != tc.want {
+			if got := participationBotShareBlocks(tc.bot, tc.total, tc.others, tc.level); got != tc.want {
 				t.Fatalf("bot=%d total=%d level=%s got=%v want=%v", tc.bot, tc.total, tc.level, got, tc.want)
 			}
 		})
@@ -183,14 +189,27 @@ func TestParticipationBotShareBlocksChatIn(t *testing.T) {
 	aged := make([]proactiveReplyHistoryItem, 0, 12)
 	for i := 0; i < 12; i++ {
 		age := int64(i) * 120
-		aged = append(aged, proactiveReplyHistoryItem{IsBot: i%2 == 0, AgeSeconds: &age})
+		item := proactiveReplyHistoryItem{IsBot: i%2 == 0, AgeSeconds: &age}
+		if !item.IsBot {
+			// 两个不同的群友轮流说话，这一段才算热闹群而不是一对一。
+			item.UserID = fmt.Sprintf("speaker-%d", i%4)
+		}
+		aged = append(aged, item)
 	}
 	bot, total := proactiveReplyBotShare(aged, participationShareWindow, participationShareSpanSeconds)
 	if bot != 3 || total != 6 {
 		t.Fatalf("span-limited bot=%d total=%d", bot, total)
 	}
-	if !participationBotShareBlocks(bot, total, "medium") {
+	others := proactiveReplyOtherSpeakers(aged, participationShareWindow, participationShareSpanSeconds)
+	if others != 2 {
+		t.Fatalf("span-limited other speakers=%d，want 2", others)
+	}
+	if !participationBotShareBlocks(bot, total, others, "medium") {
 		t.Fatal("half of the last ten minutes is the bot and must pause the chat branch")
+	}
+	// 同一段对话只剩一个人在说：一对一，占比再高也不拦。
+	if participationBotShareBlocks(bot, total, 1, "medium") {
+		t.Fatal("一对一不该按刷屏拦掉闲聊")
 	}
 	// 缺 age_seconds 的条目按刚发生处理，不会因为缺字段被悄悄漏掉。
 	if bot, total := proactiveReplyBotShare([]proactiveReplyHistoryItem{{IsBot: true}}, participationShareWindow, participationShareSpanSeconds); bot != 1 || total != 1 {
@@ -435,5 +454,39 @@ func TestParticipationRatingsPromptAndConfig(t *testing.T) {
 		if a != wantRelevance || b != level {
 			t.Fatalf("lost levels %s %s", a, b)
 		}
+	}
+}
+
+// proactiveReplyOtherSpeakers 只数机器人以外的人，并且按账号去重；缺 user_id 的
+// 条目宁可多算一个，也不要把热闹群误判成一对一、顺手把限流关掉。
+func TestProactiveReplyOtherSpeakers(t *testing.T) {
+	age := func(seconds int64) *int64 { return &seconds }
+	for _, tc := range []struct {
+		name     string
+		messages []proactiveReplyHistoryItem
+		want     int
+	}{
+		{"empty", nil, 0},
+		{"bot_only", []proactiveReplyHistoryItem{{IsBot: true}, {IsBot: true}}, 0},
+		{"one_on_one", []proactiveReplyHistoryItem{
+			{IsBot: true}, {UserID: "a"}, {IsBot: true}, {UserID: "a"},
+		}, 1},
+		{"two_speakers", []proactiveReplyHistoryItem{
+			{IsBot: true}, {UserID: "a"}, {UserID: "b"}, {UserID: "a"},
+		}, 2},
+		{"missing_user_id_counts_separately", []proactiveReplyHistoryItem{
+			{UserID: "a"}, {UserID: ""}, {UserID: " "},
+		}, 3},
+		{"outside_span_ignored", []proactiveReplyHistoryItem{
+			{UserID: "a", AgeSeconds: age(10)},
+			{UserID: "b", AgeSeconds: age(participationShareSpanSeconds + 1)},
+		}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := proactiveReplyOtherSpeakers(tc.messages, participationShareWindow, participationShareSpanSeconds)
+			if got != tc.want {
+				t.Fatalf("other speakers = %d，want %d", got, tc.want)
+			}
+		})
 	}
 }

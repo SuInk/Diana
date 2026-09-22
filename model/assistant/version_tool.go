@@ -71,7 +71,7 @@ func (r *Runtime) releaseStatusProvider() ReleaseStatusProvider {
 
 // releaseStatusTimeout 给更新检查的时间上限。它可能要访问 GitHub（结果有 30 分钟
 // 缓存），但聊天回复不能为它干等。
-const releaseStatusTimeout = 6 * time.Second
+const releaseStatusTimeout = 30 * time.Second
 
 // BuildInfo 描述当前这次运行的身份，由启动时注入。
 type BuildInfo struct {
@@ -104,6 +104,11 @@ func (r *Runtime) currentBuildInfo() BuildInfo {
 
 type dianaVersionTool struct {
 	runtime *Runtime
+	// discloseRepository 决定这一轮要不要报项目地址，由 RepositoryDisclosure 和
+	// 发言者是不是主人共同决定。不给的时候连字段带工具说明一起收掉：只把结果里
+	// 那一项留空、说明里照旧写着「能查开源地址」的话，模型会以为是查失败，转头
+	// 自己编一个 GitHub 链接。
+	discloseRepository bool
 }
 
 type dianaVersionResult struct {
@@ -129,18 +134,32 @@ type dianaVersionResult struct {
 	ReplyGuidance     string `json:"reply_guidance,omitempty"`
 }
 
-const dianaVersionReplyGuidance = "像回答一句闲聊那样说，别把字段抄成清单：问版本就说版本号，" +
-	"问「多久没更新」再讲更新时间和已经跑了多久，问「有没有新版本」再讲最新版和能不能升，" +
+const dianaVersionReplyGuidanceCommon = "像回答一句闲聊那样说，别把字段抄成清单：问版本就说版本号，" +
+	"问「多久没更新」再讲更新时间和已经跑了多久，问「有没有新版本」再讲最新版和能不能升。"
+
+const dianaVersionReplyGuidance = dianaVersionReplyGuidanceCommon +
 	"问项目地址就把 repository_url 原样发出来。" +
 	"查不到的项直接说不知道，不要编（链接尤其不能编），也不要把系统信息一股脑全倒出来。"
 
-func newDianaVersionTool(botRuntime *Runtime) *dianaVersionTool {
-	return &dianaVersionTool{runtime: botRuntime}
+// dianaVersionReplyGuidanceNoRepository 用在项目地址不对这个人公开时。必须明说
+// 「不公开」而不是「查不到」：说成查不到，模型接下来就会好心去帮忙找一个。
+const dianaVersionReplyGuidanceNoRepository = dianaVersionReplyGuidanceCommon +
+	"项目地址不对外公开：有人问源码在哪就用自己的口吻轻松带过说不方便讲，别给链接、别猜，也别拿网上同名的项目顶上。" +
+	"查不到的项直接说不知道，不要编，也不要把系统信息一股脑全倒出来。"
+
+func newDianaVersionTool(botRuntime *Runtime, discloseRepository bool) *dianaVersionTool {
+	return &dianaVersionTool{runtime: botRuntime, discloseRepository: discloseRepository}
 }
 
 func (*dianaVersionTool) Name() string { return dianaVersionToolName }
 
-func (*dianaVersionTool) Description() string {
+func (t *dianaVersionTool) Description() string {
+	if t == nil || !t.discloseRepository {
+		return "读取 Diana 自己的运行时事实：版本号、正式版还是源码构建、这台机器上的更新时间、本次已运行时长、" +
+			"系统和架构，以及最新发布版本、有没有新版本可用、能不能自更新。" +
+			"用户问你是什么版本、什么时候更新的、跑了多久、有没有新版本、跑在什么系统上时调用；" +
+			"不要凭记忆或按历史消息猜。项目开源地址这里不提供，也不要自己编 GitHub 链接。无需参数。"
+	}
 	return "读取 Diana 自己的运行时事实：版本号、正式版还是源码构建、这台机器上的更新时间、本次已运行时长、" +
 		"系统和架构、项目开源地址，以及最新发布版本、有没有新版本可用、能不能自更新。" +
 		"用户问你是什么版本、什么时候更新的、跑了多久、有没有新版本、跑在什么系统上、项目地址或源码在哪时调用；" +
@@ -159,10 +178,14 @@ func (t *dianaVersionTool) Run(ctx context.Context, _ map[string]any) (string, e
 		return "", fmt.Errorf("diana version: runtime is not configured")
 	}
 	info := t.runtime.currentBuildInfo()
+	guidance := dianaVersionReplyGuidance
+	if !t.discloseRepository {
+		guidance = dianaVersionReplyGuidanceNoRepository
+	}
 	result := dianaVersionResult{
 		Version:       info.Version,
 		BuildType:     buildTypeLabel(info.BuildType),
-		ReplyGuidance: dianaVersionReplyGuidance,
+		ReplyGuidance: guidance,
 	}
 	now := time.Now()
 	// 「跑了多久」和有没有注入版本号无关：没注入时用进程自己的启动时刻，
@@ -204,7 +227,9 @@ func (t *dianaVersionTool) applyReleaseStatus(ctx context.Context, result *diana
 		result.UpdateState = "查不到最新版本（更新检查失败），只能说说本地这份。"
 		return
 	}
-	result.RepositoryURL = status.RepositoryURL
+	if t.discloseRepository {
+		result.RepositoryURL = status.RepositoryURL
+	}
 	result.DeploymentMode = deploymentModeLabel(status.DeploymentMode)
 	result.LatestVersion = status.LatestVersion
 	if !status.LatestPublishedAt.IsZero() {

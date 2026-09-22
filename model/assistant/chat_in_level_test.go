@@ -134,11 +134,11 @@ func TestChatInRouterPromptReflectsSwitch(t *testing.T) {
 	enabled := chatInSettingsFrom(boolPointer(true), ChatInLevelHigh, 0, 0, 0)
 	disabled := chatInSettingsFrom(boolPointer(false), ChatInLevelHigh, 0, 0, 0)
 
-	onPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", enabled, false)
+	onPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", "", enabled, false)
 	if !strings.Contains(onPrompt, "当前闲聊插话档位") || !strings.Contains(onPrompt, string(ChatInLevelHigh)) {
 		t.Fatalf("enabled prompt missing level: %q", onPrompt)
 	}
-	offPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", disabled, false)
+	offPrompt := proactiveReplyRouterPromptForChatIn("路由器提示词", "", disabled, false)
 	if !strings.Contains(offPrompt, "禁止使用 category=chat_in") {
 		t.Fatalf("disabled prompt should ban the category: %q", offPrompt)
 	}
@@ -149,8 +149,8 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 	disabled := chatInSettingsFrom(boolPointer(false), ChatInLevelLow, 0, 0, 0)
 
 	for _, prompt := range []string{
-		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled, false),
-		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", disabled, false),
+		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", "", enabled, false),
+		proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", "", disabled, false),
 	} {
 		for _, want := range []string{
 			"没有点名机器人不等于不需要回复",
@@ -164,7 +164,7 @@ func TestProactiveRouterPromptKeepsShortQuestionAndTopicGuidance(t *testing.T) {
 		}
 	}
 
-	onPrompt := proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", enabled, false)
+	onPrompt := proactiveReplyRouterPromptForChatIn("旧版自定义路由提示词", "", enabled, false)
 	for _, want := range []string{
 		"围绕上下文中可识别的话题",
 		"按 chat_in 判断 substantive",
@@ -344,12 +344,12 @@ func TestChatInCooldownIsNotConsumedByRoutingAlone(t *testing.T) {
 func TestSocialReplyGuardOnlyAppearsWhenEnabled(t *testing.T) {
 	chatIn := chatInSettings{Enabled: true, Level: ChatInLevelMedium, Threshold: 0.9}
 
-	off := proactiveReplyRouterPromptForChatIn("", chatIn, false)
+	off := proactiveReplyRouterPromptForChatIn("", "", chatIn, false)
 	if strings.Contains(off, socialReplyGuard) {
 		t.Fatalf("开关关着却注入了社交性回应规则：\n%s", off)
 	}
 
-	on := proactiveReplyRouterPromptForChatIn("", chatIn, true)
+	on := proactiveReplyRouterPromptForChatIn("", "", chatIn, true)
 	if !strings.Contains(on, socialReplyGuard) {
 		t.Fatalf("开关打开却没有注入社交性回应规则：\n%s", on)
 	}

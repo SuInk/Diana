@@ -140,7 +140,7 @@ func TestUserFacingPersonaCarriesStylePromptAndClosingAnchor(t *testing.T) {
 		t.Fatalf("persona was not prepended: %#v", messages)
 	}
 	persona := messages[0].Content
-	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true, personaVoice{}), personaClosingAnchor()} {
+	for _, want := range []string{base.SystemPrompt, replyPresentationPrompt(true, personaVoice{}, PersonaModeFill), personaClosingAnchor()} {
 		if !strings.Contains(persona, want) {
 			t.Fatalf("persona missing %q: %q", want, persona)
 		}
@@ -317,7 +317,7 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		t.Fatal("owner-only tool rules leaked to an ordinary member")
 	}
 	for _, item := range []string{alice, bob, owner} {
-		if !strings.Contains(item, promptRelationshipTierRules) || !strings.Contains(item, "关系等级：") {
+		if !strings.Contains(item, promptRelationshipTierRules) || !strings.Contains(item, "当前好感度：") {
 			t.Fatal("relationship permission context missing from the prompt")
 		}
 		if !strings.HasSuffix(item, personaClosingAnchor()) {
@@ -636,13 +636,13 @@ func TestRoleplayAndCatgirlDoNotContradictEachOther(t *testing.T) {
 }
 
 func TestActionDescriptionIsAnIndependentPersonaPreservingLayer(t *testing.T) {
-	combined := actionDescriptionPrompt(true) + "\n" + actionDescriptionClosingAnchor(true)
+	combined := actionDescriptionPrompt(true, PersonaModeFill) + "\n" + actionDescriptionClosingAnchor(true, PersonaModeFill)
 	for _, want := range []string{"原有人设和表达风格", "不必只写一处", "台词前、中间或结尾", "不额外变得黏人或亲密", "每条含自然语言的回复至少"} {
 		if !strings.Contains(combined, want) {
 			t.Fatalf("动作描写提示缺少 %q：%q", want, combined)
 		}
 	}
-	if got := actionDescriptionPrompt(false); got != "" {
+	if got := actionDescriptionPrompt(false, PersonaModeFill); got != "" {
 		t.Fatalf("关闭动作描写后仍注入了提示：%q", got)
 	}
 }
@@ -654,7 +654,7 @@ func TestCatgirlActionDescriptionToggleProducesUnambiguousPrompt(t *testing.T) {
 	}
 
 	withActions := ReplyStyleCatgirl.promptWithActions(true, personaVoice{}, true) + "\n" +
-		actionDescriptionPrompt(true) + "\n" + actionDescriptionClosingAnchor(true)
+		actionDescriptionPrompt(true, PersonaModeFill) + "\n" + actionDescriptionClosingAnchor(true, PersonaModeFill)
 	if strings.Contains(withActions, catgirlNoActionRule) {
 		t.Fatalf("开启动作描写后仍保留了冲突的禁止规则：%q", withActions)
 	}
@@ -667,7 +667,7 @@ func TestCatgirlSystemPromptEndsWithMandatoryActionAnchor(t *testing.T) {
 	cfg := BotConfig{ReplyStyle: ReplyStyleCatgirl, ActionDescriptionEnabled: boolPointer(true)}.WithDefaults()
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
-	anchor := actionDescriptionClosingAnchor(true)
+	anchor := actionDescriptionClosingAnchor(true, PersonaModeFill)
 	if !strings.HasSuffix(prompt, anchor) {
 		t.Fatalf("最终提示词没有以动作描写锚点收尾：%q", prompt)
 	}
@@ -730,7 +730,7 @@ func TestGroupSocialReplyOverridesAndInherits(t *testing.T) {
 // 自己那份独有的内容。
 func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 	for _, natural := range []bool{true, false} {
-		if prompt := replyPresentationPrompt(natural, personaVoice{}); !strings.Contains(prompt, replyBlankLineRule) {
+		if prompt := replyPresentationPrompt(natural, personaVoice{}, PersonaModeFill); !strings.Contains(prompt, replyBlankLineRule) {
 			t.Fatalf("换行协议的出处不见了：%q", prompt)
 		}
 	}
@@ -750,5 +750,81 @@ func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 	// 标记本身和它们的语义一个字都不许动：发送层只认这两串。
 	if notificationSplitMarker != "[diana-msg]" || notificationLineMarker != "[diana-line]" {
 		t.Fatalf("投递标记被改了：%q %q", notificationSplitMarker, notificationLineMarker)
+	}
+}
+
+// 档位要能存下来。它走的是 BotConfig ⇄ ConfigPayload 这条往返：界面读的是 payload，
+// 保存回来的也是 payload，任何一个方向漏掉这个字段，用户选了接管模式、点一下保存
+// 就变回填空题，而界面上看不出发生了什么。
+func TestPersonaModeSurvivesThePayloadRoundTrip(t *testing.T) {
+	cfg := BotConfig{PersonaMode: PersonaModeOwn}.WithDefaults()
+	payload := PayloadFromConfig(cfg)
+	if payload.PersonaMode != PersonaModeOwn {
+		t.Fatalf("档位没进 payload，界面读不到：%q", payload.PersonaMode)
+	}
+	if back := ConfigFromPayload(payload, BotConfig{}).WithDefaults(); back.PersonaMode != PersonaModeOwn {
+		t.Fatalf("档位没从 payload 存回来，保存一次就丢：%q", back.PersonaMode)
+	}
+	// 存量 payload 里根本没有这个字段，反序列化出来是零值——必须落回填空题。
+	if back := ConfigFromPayload(ConfigPayload{}, BotConfig{}).WithDefaults(); back.PersonaMode != PersonaModeFill {
+		t.Fatalf("空档位没落回填空题：%q", back.PersonaMode)
+	}
+}
+
+// 接管档下，「这个角色怎么说话」那几段一律不注入——判据只有档位，不去猜正文里
+// 写没写。早先按段头逐段判重那条路要拿字符串匹配用户写的散文，段头少个标点就悄悄
+// 改变行为，已经删掉。
+func TestOwnModeDropsEveryVoiceRule(t *testing.T) {
+	voice := personaVoiceFrom("本喵", "喵,喵~")
+	fill := replyPresentationPrompt(true, voice, PersonaModeFill)
+	for _, want := range []string{replyProportionRule, replyEmojiRule, replyCompactPacingRule, replyConversationalIntentRule, replyDocumentDeliveryRule, "自称偏好是"} {
+		if !strings.Contains(fill, want) {
+			t.Fatalf("填空题档要照给这段规则：%q", want)
+		}
+	}
+	own := replyPresentationPrompt(true, voice, PersonaModeOwn)
+	for _, unwanted := range []string{replyProportionRule, replyEmojiRule, replyCompactPacingRule, replyConversationalIntentRule, replyDocumentDeliveryRule, "自称偏好是"} {
+		if strings.Contains(own, unwanted) {
+			t.Fatalf("接管档不该再注入这段规则：%q", unwanted)
+		}
+	}
+	// 投递机制不跟着关：正文写死了也不作数，关掉只会让消息发不出去。
+	for _, want := range []string{replyBlankLineRule, replySegmentationRule, replyDeliveryChoiceRule, replyLineBreakChoiceRule} {
+		if !strings.Contains(own, want) {
+			t.Fatalf("投递机制任何档位都要注入：%q", want)
+		}
+	}
+}
+
+// 动作描写和时段语气这两个开关同样跟着档位走：接管档下开着也不生效。
+func TestOwnModeDropsActionAndDaypartToggles(t *testing.T) {
+	if got := actionDescriptionPrompt(true, PersonaModeFill); got == "" {
+		t.Fatal("填空题档下开着的动作描写开关要给出说明")
+	}
+	for _, got := range []string{actionDescriptionPrompt(true, PersonaModeOwn), actionDescriptionClosingAnchor(true, PersonaModeOwn)} {
+		if got != "" {
+			t.Fatalf("接管档下动作描写开关不生效：%q", got)
+		}
+	}
+	// 深夜才有东西可注入：白天是基线，本来就不补。时区跟着 dayPartToneForConfig
+	// 走本地，所以这里也按本地构造。
+	now := time.Date(2026, 9, 21, 2, 0, 0, 0, time.Local)
+	on := BotConfig{DaypartToneEnabled: boolPointer(true)}.WithDefaults()
+	if dayPartToneForConfig(on, now) == "" {
+		t.Fatal("填空题档下开着的时段语气要生效")
+	}
+	on.PersonaMode = PersonaModeOwn
+	if got := dayPartToneForConfig(on, now); got != "" {
+		t.Fatalf("接管档下时段语气开关不生效：%q", got)
+	}
+}
+
+// 默认档位必须是填空题：存量配置里这个字段根本不存在，反序列化出来是零值。
+func TestDefaultPersonaModeIsFill(t *testing.T) {
+	if (BotConfig{}).WithDefaults().PersonaMode != PersonaModeFill {
+		t.Fatal("默认档位必须是填空题，存量配置升上来不能改变行为")
+	}
+	if PersonaMode("").ownsPersonaVoice() {
+		t.Fatal("零值档位必须等同填空题")
 	}
 }

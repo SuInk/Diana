@@ -28,30 +28,13 @@ func TestAssistantModeIntentPolicy(t *testing.T) {
 			t.Fatalf("decision %#v allowed=%v", d, got)
 		}
 	}
-	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, settings, true)
+	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, "", settings, true)
 	if !strings.Contains(prompt, "闲聊档位：low") || !strings.Contains(prompt, "都不影响 directed") {
 		t.Fatal("assistant mode must retain configured social replies")
 	}
 	restored := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
 	if restored.ResponseMode != ResponseModeAssistant || restored.chatInSettings().Participation.Desire != 25 {
 		t.Fatal("assistant mode lost in config round trip")
-	}
-}
-
-func TestAssistantEvidenceLedgerRespectsConfiguredPolicy(t *testing.T) {
-	plugins := NewDefaultPluginManager()
-	if _, err := plugins.UpdateSettings(webSearchPluginID, map[string]any{webSearchSettingEvidenceLedger: false}); err != nil {
-		t.Fatal(err)
-	}
-	r := NewRuntime(BotConfig{ResponseMode: ResponseModeAssistant}, nilChannel{}, plugins, nil, nil, nil, nil)
-	if !r.evidenceLedgerAdvisory(MessageEvent{}) {
-		t.Fatal("assistant mode must not override evidence settings")
-	}
-	r.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"standard": {GroupID: "standard", ResponseMode: ResponseModeStandard},
-	}})
-	if !r.evidenceLedgerAdvisory(MessageEvent{Kind: EventKindGroup, GroupID: "standard"}) {
-		t.Fatal("other modes must retain the configured evidence policy")
 	}
 }
 

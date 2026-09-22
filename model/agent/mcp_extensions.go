@@ -366,6 +366,15 @@ func (m *ExtensionManager) mcpExtensionStates() []ExtensionState {
 		}
 		tools := toolsByName[name]
 		sort.Strings(tools)
+		// 运行期没有记到错误时，仍然便宜地查一次本地命令在不在。目录页本来就不
+		// 启进程（见 AdministerExtensions 的注释），少了这一下，缺二进制的服务在
+		// 卡片上和正常的一模一样，要等某次对话调用工具才暴露。
+		message := errorsByName[name]
+		if message == "" {
+			if err := checkLocalMCPCommand(server); err != nil {
+				message = localMCPCommandError(server, err).Error()
+			}
+		}
 		states = append(states, ExtensionState{
 			Kind:      ExtensionKindMCP,
 			ID:        "mcp:" + name,
@@ -376,7 +385,7 @@ func (m *ExtensionManager) mcpExtensionStates() []ExtensionState {
 			Source:    source,
 			Transport: server.transport(),
 			Tools:     tools,
-			Error:     errorsByName[name],
+			Error:     message,
 		})
 	}
 	return states
@@ -429,11 +438,14 @@ func validateMCPConfigValues(server mcpServerConfig) error {
 	if err := server.validate(); err != nil {
 		return err
 	}
-	if server.StartupTimeoutSec > 120 {
-		return errors.New("startup_timeout_sec cannot exceed 120")
+	// 上限放宽的理由：stdio 服务首次启动要现拉依赖（npx 下载能跑好几分钟），
+	// 工具侧也有构建、抓取这类本来就慢的调用。上限只是防手滑写出一个近乎不超时
+	// 的值，不该替人决定他的服务该多快。
+	if server.StartupTimeoutSec > 300 {
+		return errors.New("startup_timeout_sec cannot exceed 300")
 	}
-	if server.ToolTimeoutSec > 300 {
-		return errors.New("tool_timeout_sec cannot exceed 300")
+	if server.ToolTimeoutSec > 900 {
+		return errors.New("tool_timeout_sec cannot exceed 900")
 	}
 	for key := range server.Env {
 		if !environmentKeyPattern.MatchString(key) {

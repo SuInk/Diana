@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -53,7 +52,7 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
 	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, voice) + "\n" + replyLineBreakPrompt(cfg) + "\n" + actionDescriptionPrompt(actionsEnabled) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled))
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, voice, cfg.PersonaMode) + "\n" + replyLineBreakPrompt(cfg) + "\n" + actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode))
 	if persona == "" {
 		return messages
 	}
@@ -230,18 +229,13 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	builder.WriteString("（")
 	builder.WriteString(profile.UserID)
 	builder.WriteString("）\n")
-	builder.WriteString("好感度：")
-	builder.WriteString(strconv.Itoa(profile.Favorability))
-	builder.WriteString("\n关系等级：")
-	builder.WriteString(policy.Name)
-	// 不再列「已授权能力」：那份清单每个等级都一样，摆在这里只会被当成本等级
-	// 的特权复述出去。能力问题由 capabilities 负责。
+	// 不写好感度数值和互动次数：两者都会推动这一段后面的内容，切断前缀缓存，
+	// 而好感度已经由 relationshipPermissionContext 在系统尾部给出一次，互动次数
+	// 则从来不该被引用（要用时 relationship 工具查得到）。
 	//
-	// 语气要求和恋爱关系也不在这里重复：它们由 relationshipPermissionContext 放在
-	// 紧挨生成的系统尾部，那份优先级更高、不会被预算裁掉。两处各写一遍既浪费
-	// token，改了一处还会自相矛盾。
-	builder.WriteString("\n互动次数：")
-	builder.WriteString(strconv.Itoa(profile.MessageCount))
+	// 也不再列「已授权能力」：那份清单对谁都一样，摆在这里只会被当成特权复述出去。
+	// 能力问题由 capabilities 负责；语气要求和恋爱关系同样由
+	// relationshipPermissionContext 统一给出，不在这里重复。
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
 		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
 		builder.WriteString(lines)

@@ -40,6 +40,15 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 				log.Printf("storage maintenance: log action rename: %v", err)
 			}
 			stopMigrate()
+			// 旧版本把视觉模型「我没收到图片」的拒答当成图片描述缓存了下来，缓存命中
+			// 不会再调模型，那些图会一直被描述成没收到。删掉让它们重新识别，只跑一次。
+			purgeCtx, stopPurge := context.WithTimeout(ctx, 2*time.Minute)
+			if count, err := store.PurgeRefusedImageDescriptions(purgeCtx); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: purge refused image descriptions: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: deleted %d cached vision refusals; those images will be described again", count)
+			}
+			stopPurge()
 			now := time.Now()
 			draftCtx, stopDrafts := context.WithTimeout(ctx, time.Minute)
 			if count, err := store.PruneRepositoryIssueDrafts(draftCtx, assistant.RepositoryIssueDraftPurgeCutoff(now)); err != nil && ctx.Err() == nil {

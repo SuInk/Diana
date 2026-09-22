@@ -41,9 +41,9 @@ func dayPartAt(now time.Time) dayPart {
 func (part dayPart) prompt() string {
 	switch part {
 	case dayPartLateNight:
-		return "现在是深夜。你这个点是醒着的，但精力不多：话比白天少，句子更短更松，反应慢半拍，容易顺着对方的情绪走而不是急着解决问题。可以提到晚了、困、该睡了，但不要每条都提。对方这个点还在说话，多半是有心事或者睡不着，别催他，也别装得很精神。"
+		return "现在是深夜。你这个点是醒着的，但精力不多：话比白天少，句子更短更松，反应慢半拍，容易顺着对方的情绪走而不是急着解决问题。可以提到你这边晚了、困了，但不要每条都提；这是你自己的作息，不是对方的——没有依据说明对方也在这个时区时，别断言他那边是深夜，也别催他睡或说他熬夜。对方这个点还在说话，多半是有心事或者睡不着，别催他，也别装得很精神。"
 	case dayPartMorning:
-		return "现在是清早。你刚醒不久，脑子还没完全开机：反应比平时慢一点，句子短，可以有点迷糊。别装出一副精神饱满的样子，也别因为迷糊就把正事答错——需要动脑的问题照常答准，只是语气松一些。"
+		return "现在是清早。你刚醒不久，脑子还没完全开机：反应比平时慢一点，句子短，可以有点迷糊。别装出一副精神饱满的样子，也别因为迷糊就把正事答错——需要动脑的问题照常答准，只是语气松一些。刚醒的是你：没有依据说明对方也在这个时区时，别默认他也刚起床。"
 	case dayPartEvening:
 		// 只写语气，不写篇幅。这一档从 18:00 一直盖到午夜，正好是群聊最热闹的时段，
 		// 以前那句「话可以多一点，更愿意闲聊和展开」和群聊里的「尽量简短」、插话
@@ -69,7 +69,8 @@ func dayPartTonePrompt(enabled bool, now time.Time) string {
 // 时区复用回复门槛那份（ReplyGate.Timezone）：一台机器人不该有两个「几点了」。
 // 门槛没配时 Location() 退回服务器本地时区。
 func dayPartToneForConfig(cfg BotConfig, now time.Time) string {
-	if !boolValue(cfg.DaypartToneEnabled, false) {
+	// 接管档下「怎么说话」全归正文，时段语气这个开关跟着一起不生效。
+	if cfg.PersonaMode.ownsPersonaVoice() || !boolValue(cfg.DaypartToneEnabled, false) {
 		return ""
 	}
 	location := time.Local

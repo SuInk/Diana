@@ -13,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +50,12 @@ type OneBotReverseServer struct {
 	lastUnauthorizedReason string
 	lastUnauthorizedClient string
 	lastUnauthorizedLog    time.Time
+	lastConflictClient     string
+	lastConflictLog        time.Time
+	connectedAt            time.Time
+	// 同上，机器人停用期间接入端也会几秒一次地重连。
+	lastDetachedClient string
+	lastDetachedLog    time.Time
 }
 
 func (s *OneBotReverseServer) OutboundBackoffEnabled() bool { return true }
@@ -100,6 +105,15 @@ func (s *OneBotReverseServer) Connect(ctx context.Context, handler EventHandler)
 	superseded := s.connectGeneration != generation
 	s.mu.RUnlock()
 	if !superseded {
+		// 通道被拆掉了，handler 也必须跟着走。监听器是进程内共享的一个实例：
+		// 停用机器人只会让它从 bindings 里消失，没人关这个 handler 的话，接入端
+		// 下次重连上来的事件仍旧喂给一个已经不该收它的运行时。
+		s.mu.Lock()
+		if s.connectGeneration == generation {
+			s.handler = nil
+			s.ctx = nil
+		}
+		s.mu.Unlock()
 		_ = s.Close()
 	}
 	return ctx.Err()
@@ -110,6 +124,11 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if ok, reason := s.authorized(r); !ok {
 		s.recordUnauthorized(r, reason)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !s.handlerAttached() {
+		s.recordDetached(r)
+		http.Error(w, "onebot reverse websocket has no running bot", http.StatusServiceUnavailable)
 		return
 	}
 	clientFingerprint := oneBotClientFingerprint(r)
@@ -123,7 +142,26 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		s.status.LastConnectionEvent = "duplicate_client_conflict"
 		s.status.LastConnectionEventTime = &now
 		s.status.UpdatedAt = now
+		// 连接位被一个不再收发的连接占住时，接入端每次重连都撞这里。以前这条路径
+		// 一行日志都不写：机器人整段时间收不到消息，日志里却干干净净，只能手动发
+		// 一次握手才看得出来。和鉴权失败同样按分钟限流记一条。
+		shouldLog := s.lastConflictClient != clientFingerprint ||
+			s.lastConflictLog.IsZero() ||
+			now.Sub(s.lastConflictLog) >= time.Minute
+		if shouldLog {
+			s.lastConflictClient = clientFingerprint
+			s.lastConflictLog = now
+		}
+		holder := s.status.ConnectionOwner
+		heldFor := time.Duration(0)
+		if !s.connectedAt.IsZero() {
+			heldFor = now.Sub(s.connectedAt).Truncate(time.Second)
+		}
 		s.connMu.Unlock()
+		if shouldLog {
+			log.Printf("onebot reverse handshake rejected: reason=duplicate_client_conflict client=%s holder=%s held_for=%s",
+				clientFingerprint, orUnknownClient(holder), heldFor)
+		}
 		http.Error(w, "onebot reverse websocket already has an active client", http.StatusConflict)
 		return
 	}
@@ -166,14 +204,17 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	s.status.LastError = ""
 	s.status.ConnectionEpoch++
 	s.status.ConnectionOwner = clientFingerprint
+	s.connectedAt = now
 	s.status.LastConnectionEvent = "connection_opened"
 	s.status.LastConnectionEventTime = &now
 	s.status.UpdatedAt = now
 	s.connMu.Unlock()
 
+	refresh, stopKeepalive := startOneBotKeepalive(conn, &s.writeMu)
 	go func() {
 		defer recoverGoroutinePanic("onebotReverse.readLoop")
-		s.readLoop(conn)
+		defer stopKeepalive()
+		s.readLoop(conn, refresh)
 	}()
 }
 
@@ -184,27 +225,10 @@ func (s *OneBotReverseServer) Send(ctx context.Context, msg OutgoingMessage) err
 }
 
 // SendWithResult sends a message and preserves the OneBot response message_id.
+// 正反向连接发的是同一套 OneBot action，组包逻辑共用 sendOneBotMessage：各写一份
+// 的时候，临时会话这类新参数只会被加到其中一份上，另一条连接静悄悄地少一半能力。
 func (s *OneBotReverseServer) SendWithResult(ctx context.Context, msg OutgoingMessage) (map[string]any, error) {
-	if strings.TrimSpace(msg.Text) == "" && len(msg.Segments) == 0 && len(msg.ImageURLs) == 0 && len(msg.VideoURLs) == 0 && len(msg.AudioURLs) == 0 {
-		return nil, nil
-	}
-	params := map[string]any{"message": buildOutgoingSegments(msg)}
-	action := "send_private_msg"
-	if msg.GroupID != "" {
-		action = "send_group_msg"
-		groupID, err := strconv.ParseInt(msg.GroupID, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		params["group_id"] = groupID
-	} else {
-		userID, err := strconv.ParseInt(msg.UserID, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		params["user_id"] = userID
-	}
-	return s.CallAPI(ctx, action, params)
+	return sendOneBotMessage(ctx, msg, s.CallAPI)
 }
 
 func (s *OneBotReverseServer) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
@@ -232,6 +256,7 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 		"echo":   echo,
 	}
 	s.writeMu.Lock()
+	_ = conn.SetWriteDeadline(time.Now().Add(oneBotWriteTimeout))
 	err := conn.WriteJSON(req)
 	s.writeMu.Unlock()
 	if err != nil {
@@ -316,12 +341,16 @@ func (s *OneBotReverseServer) Close() error {
 }
 
 // readLoop 持续读取反向 WebSocket 事件帧。
-func (s *OneBotReverseServer) readLoop(conn *websocket.Conn) {
+func (s *OneBotReverseServer) readLoop(conn *websocket.Conn, refresh func()) {
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			s.disconnectIfCurrent(conn, err.Error())
+			s.disconnectIfCurrent(conn, oneBotReadError(err))
 			return
+		}
+		// 对端还在说话就不算死，哪怕它不回 pong。
+		if refresh != nil {
+			refresh()
 		}
 		if err := s.handleFrame(data); err != nil {
 			s.setStatus(s.Status().Connected, s.Status().SelfID, err.Error())
@@ -479,6 +508,45 @@ func oneBotClientFingerprint(r *http.Request) string {
 	}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("client-%x", sum[:8])
+}
+
+func orUnknownClient(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
+}
+
+// handlerAttached 报告有没有运行中的通道登记了事件处理器。没有就说明用这条反连
+// 的机器人都已停用或尚未启动，这时握手必须当场拒掉：接受连接再把事件丢掉的话，
+// 接入端和控制台两边都显示「已连接」，看不出机器人其实是关着的。
+func (s *OneBotReverseServer) handlerAttached() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.handler != nil
+}
+
+// recordDetached 记录「凭据对得上、但没有机器人在跑」这一类拒绝。它不是鉴权失败，
+// 不计进 UnauthorizedConnections，否则会把「机器人关着」看成「token 配错了」。
+func (s *OneBotReverseServer) recordDetached(r *http.Request) {
+	fingerprint := oneBotClientFingerprint(r)
+	now := time.Now()
+	s.connMu.Lock()
+	s.status.LastRejectedClient = fingerprint
+	s.status.LastConnectionEvent = "rejected:bot_disabled"
+	s.status.LastConnectionEventTime = &now
+	s.status.UpdatedAt = now
+	shouldLog := s.lastDetachedClient != fingerprint ||
+		s.lastDetachedLog.IsZero() ||
+		now.Sub(s.lastDetachedLog) >= time.Minute
+	if shouldLog {
+		s.lastDetachedClient = fingerprint
+		s.lastDetachedLog = now
+	}
+	s.connMu.Unlock()
+	if shouldLog {
+		log.Printf("onebot reverse handshake rejected: reason=bot_disabled client=%s", fingerprint)
+	}
 }
 
 // recordUnauthorized 记录一次握手鉴权失败，写进状态并按需打一行日志。

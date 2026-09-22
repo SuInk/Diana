@@ -5,7 +5,6 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <h1>群管理</h1>
         <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽账号、专属人设与插件开关</p>
       </div>
       <div class="group-manual-add">
@@ -42,6 +41,77 @@
             <RefreshCw :size="14" :class="{ spin: refreshing }" aria-hidden="true" />
             {{ refreshing ? "同步中…" : "刷新群列表" }}
           </button>
+        </div>
+      </div>
+
+      <div v-if="loaded && botScope" class="group-scope-bar">
+        <div class="group-scope-default">
+          <label class="switch" :title="newGroupEnabled ? '新加入的群默认工作' : '新加入的群默认不工作'">
+            <input type="checkbox" :checked="newGroupEnabled" :disabled="bulkBusy" @change="setNewGroupDefault($event)" />
+            <span class="track" aria-hidden="true"></span>
+          </label>
+          <span class="group-scope-copy">
+            <strong>{{ newGroupEnabled ? "新加入的群默认工作" : "新加入的群默认不工作" }}</strong>
+            <span>没有单独设过的群按这个来</span>
+          </span>
+        </div>
+        <div class="group-scope-actions">
+          <div class="group-scope-buttons">
+            <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(true)">全部启用</button>
+            <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(false)">全部停用</button>
+          </div>
+          <span>只改下面列出的 {{ filteredGroups.length }} 个群，新加入的群不受影响</span>
+        </div>
+      </div>
+
+      <div v-if="loaded && botScope && supportsGroupLevel" class="group-scope-bar group-scope-levels">
+        <div class="group-scope-level">
+          <label for="group-default-level">群等级门槛</label>
+          <input
+            id="group-default-level"
+            class="input"
+            inputmode="numeric"
+            :value="defaultMinGroupLevel"
+            :disabled="bulkBusy"
+            @change="saveMinGroupLevel($event)"
+          />
+          <span>0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。单个群可以在它的配置里覆盖。</span>
+        </div>
+        <div class="group-scope-level">
+          <label for="group-default-unknown">等级读不到时</label>
+          <AppSelect
+            id="group-default-unknown"
+            :model-value="defaultLevelUnknownPolicy"
+            :options="levelUnknownOptions"
+            :disabled="bulkBusy"
+            @update:model-value="saveLevelUnknownPolicy($event as 'allow' | 'deny')"
+          />
+          <span>部分 OneBot 实现不提供群等级。选「拦截」会让这些实现下的群整体静音。</span>
+        </div>
+      </div>
+
+      <div v-if="connectionPeers.length > 0" class="group-connection-note" role="status">
+        <Share2 :size="16" aria-hidden="true" />
+        <div class="group-connection-body">
+          <p>
+            这条连接上还有 {{ connectionPeers.length }} 台机器人。它们共用同一个平台账号：一条群消息会交给每一台，各自按自己的群开关决定回不回——同一个群有两台开着，群里看到的就是这个号连发几条。
+          </p>
+          <ul class="group-connection-list">
+            <li v-for="peer in connectionPeers" :key="peer.bot_profile_id">
+              <strong>{{ peer.name || peer.bot_profile_id }}</strong>
+              <span v-if="!peer.enabled" class="muted">已停用，不参与回复</span>
+              <template v-else>
+                <span :class="{ 'connection-all-groups': peer.new_group_enabled }">
+                  {{ peer.new_group_enabled ? "新群默认工作：没单独配过的群它都收" : "新群默认不工作" }}
+                </span>
+                <span v-if="peer.enabled_groups?.length" class="muted">
+                  已开 {{ peer.enabled_groups.length }} 个群：{{ peer.enabled_groups.slice(0, 8).join("、")
+                  }}<template v-if="peer.enabled_groups.length > 8">…</template>
+                </span>
+                <span v-else-if="!peer.new_group_enabled" class="muted">没有开着的群</span>
+              </template>
+            </li>
+          </ul>
         </div>
       </div>
 
@@ -92,6 +162,9 @@
             <span v-else-if="group.configured && group.reply_account_safety_audit_enabled === true" class="badge accent">本群开启安全审核</span>
             <span v-if="group.configured && blockedUserCount(group) > 0" class="badge">屏蔽 {{ blockedUserCount(group) }} 人</span>
             <span v-if="group.configured && hasOtherReplyGateRules(group)" class="badge">专属回复规则</span>
+            <span v-if="group.shared_with?.length" class="badge warn" :title="sharedBotsTitle(group)">
+              同连接 {{ group.shared_with.length + 1 }} 台都在回
+            </span>
           </div>
           <p class="group-card-desc">
             {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
@@ -195,9 +268,9 @@
             <p>{{ inheritedPersona }}</p>
           </details>
         </div>
-        <div class="field">
+        <div class="field wide">
           <label>接话设置</label>
-          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" inheritable @update:model-value="setGroupParticipation" />
+          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
         </div>
         <div class="field wide">
           <label>本群补充标记的机器人</label>
@@ -351,6 +424,49 @@
           <label>本群回复时间与屏蔽账号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
         </div>
+        <div v-if="extensions.length" class="field wide">
+          <label>本群扩展</label>
+          <p class="hint">按群覆盖 MCP 与 Skill：档位不设就跟随机器人，白名单里的人不看档位也能用，黑名单一律不给。判定顺序是停用 &gt; 黑名单 &gt; 白名单 &gt; 档位，「停用」对所有人生效，主人也一样。机器人那一档是默认值——扩展页关掉的服务，在这里给本群选一个档位就能单独用起来；只有扩展页里的全局「服务可用」关掉时，本群怎么选都没用。</p>
+          <div class="row-list" style="margin-top: 6px">
+            <div v-for="item in extensions" :key="item.id" class="row-item group-plugin-row">
+              <div class="group-plugin-row-head">
+                <div class="row-main">
+                  <div class="row-title">{{ item.name }}<span class="badge">{{ item.kind === 'skill' ? 'Skill' : 'MCP' }}</span></div>
+                  <!-- 全局停用和「这台机器人默认不开」是两回事：前者本群怎么选都没用，
+                       说清楚，别让人对着一排点不动的按钮猜。 -->
+                  <div class="row-sub">{{ item.available === false ? '全局停用，本群改不动' : `机器人：${extensionTierLabel(botTierOf(item))}` }}</div>
+                </div>
+                <div class="segmented">
+                  <button type="button" :disabled="item.available === false" :class="{ active: !tierOf(item.id) }" @click="setTier(item.id, undefined)">跟随</button>
+                  <button v-for="tier in extensionTiers" :key="tier.value" type="button" :disabled="item.available === false" :class="{ active: tierOf(item.id) === tier.value }" :title="tier.hint" @click="setTier(item.id, tier.value)">{{ tier.label }}</button>
+                </div>
+              </div>
+              <!-- 「跟随」是本群完全不干预，连名单也不该有；停用时两份名单同样没有意义。 -->
+              <div v-if="tierOf(item.id) && tierOf(item.id) !== 'off'" class="group-extension-lists">
+                <div class="field">
+                  <label :for="`group-extension-allow-${item.id}`">本群白名单</label>
+                  <IdChipInput
+                    :input-id="`group-extension-allow-${item.id}`"
+                    :model-value="listOf(item.id, 'allow')"
+                    placeholder="填账号后回车，这些人不看档位也能用"
+                    :resolve-names="resolveAccountNames"
+                    @update:model-value="setList(item.id, 'allow', $event)"
+                  />
+                </div>
+                <div class="field">
+                  <label :for="`group-extension-deny-${item.id}`">本群黑名单</label>
+                  <IdChipInput
+                    :input-id="`group-extension-deny-${item.id}`"
+                    :model-value="listOf(item.id, 'deny')"
+                    placeholder="填账号后回车，这些人一律不给用"
+                    :resolve-names="resolveAccountNames"
+                    @update:model-value="setList(item.id, 'deny', $event)"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="field wide">
           <label>本群插件</label>
           <div class="row-list" style="margin-top: 6px">
@@ -398,15 +514,21 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
+import { askConfirm } from "../confirm";
 import { botScope } from "../bot-scope";
 import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
 import {
+  type ConnectionPeer,
   getBotProfileConfig,
   getBotPlatforms,
   listBotGroups,
   saveBotGroup,
+  saveBotGroupSwitches,
   deleteBotGroup,
   getGroupRelations,
+  fetchAssistantUserNames,
+  listManagedExtensions,
+  type ManagedExtension,
   type PluginState,
   type BotGroupConfig,
   type BotGroupSummary,
@@ -414,6 +536,7 @@ import {
   type GroupRelationGraph
 } from "../api";
 import EmptyState from "../components/EmptyState.vue";
+import IdChipInput from "../components/IdChipInput.vue";
 import GroupRelationChart from "../components/GroupRelationChart.vue";
 import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
@@ -466,10 +589,19 @@ async function removeGroup(): Promise<void> {
 // 群等级只有 OneBot v11 有；按当前激活的机器人平台决定要不要显示这一项。
 const supportsGroupLevel = ref(true);
 const plugins = ref<PluginState[]>([]);
+const extensions = ref<ManagedExtension[]>([]);
+const extensionTiers = [
+  { value: "off", label: "停用", hint: "本群谁都不用它，主人也一样" },
+  { value: "owner", label: "仅主人", hint: "本群只有主人能用" },
+  { value: "admins", label: "群管", hint: "本群群主和管理员也能用" },
+  { value: "members", label: "群成员", hint: "本群成员都能用" }
+] as const;
 const loaded = ref(false);
 const refreshing = ref(false);
 const liveAvailable = ref(false);
 const syncWarning = ref("");
+// 复用同一条连接的其它机器人：路由表散在各台自己的配置里，这份是那张全貌。
+const connectionPeers = ref<ConnectionPeer[]>([]);
 const searchQuery = ref("");
 const newGroupID = ref("");
 const relationRangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
@@ -635,14 +767,18 @@ function hasOtherReplyGateRules(group: BotGroupConfig): boolean {
 async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
-    const [response, configAndPlatforms] = await Promise.all([
+    const [response, configAndPlatforms, extensionList] = await Promise.all([
       listBotGroups(showFeedback, botScope.value),
-      Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null)
+      Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null),
+      // 扩展目录和群列表互不依赖：取不到就不显示这一栏，不拖累整页。
+      botScope.value ? listManagedExtensions(botScope.value).catch(() => null) : Promise.resolve(null)
     ]);
     groups.value = response.groups;
     plugins.value = response.plugins;
+    extensions.value = extensionList?.items ?? [];
     liveAvailable.value = response.live_available;
     syncWarning.value = response.warning ?? "";
+    connectionPeers.value = response.connection_peers ?? [];
     if (showFeedback) {
       if (response.live_available) {
         toastSuccess(`已同步 ${response.groups.filter((group) => group.joined).length} 个群`);
@@ -666,6 +802,9 @@ async function load(showFeedback = false): Promise<void> {
         ["", { name: current.name ?? "", prompt: current.system_prompt ?? "" }],
         ...(config.profiles ?? []).map((profile) => [profile.id, { name: profile.name ?? "", prompt: profile.system_prompt ?? "" }])
       ]);
+      newGroupEnabled.value = (current.group_admission?.mode ?? "blacklist") !== "whitelist";
+      defaultMinGroupLevel.value = current.reply_gate?.min_group_level ?? 0;
+      defaultLevelUnknownPolicy.value = current.reply_gate?.level_unknown_policy === "deny" ? "deny" : "allow";
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
@@ -736,6 +875,65 @@ function hideBrokenAvatar(event: Event): void {
   (event.currentTarget as HTMLImageElement).hidden = true;
 }
 
+// 机器人那一档由扩展页的启用开关和成员档位推出来，和后端 BotExtensionTier 同一套规则。
+function botTierOf(item: ManagedExtension): string {
+  if (!item.enabled || item.available === false) {
+    return "off";
+  }
+  if (!item.members_enabled) {
+    return "owner";
+  }
+  return item.member_audience?.min_role === "admin" ? "admins" : "members";
+}
+
+function extensionTierLabel(tier: string): string {
+  return extensionTiers.find((item) => item.value === tier)?.label ?? "仅主人";
+}
+
+async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
+  const response = await fetchAssistantUserNames(ids);
+  return response.names ?? {};
+}
+
+function accessOf(extensionID: string): { tier?: string; allow?: string[]; deny?: string[] } {
+  return editing.value?.extension_access?.[extensionID] ?? {};
+}
+
+function tierOf(extensionID: string): string | undefined {
+  return accessOf(extensionID).tier || undefined;
+}
+
+function listOf(extensionID: string, kind: "allow" | "deny"): string[] {
+  return accessOf(extensionID)[kind] ?? [];
+}
+
+function patchAccess(extensionID: string, patch: { tier?: string; allow?: string[]; deny?: string[] }): void {
+  if (!editing.value) {
+    return;
+  }
+  const access = { ...(editing.value.extension_access ?? {}) };
+  const next = { ...(access[extensionID] ?? {}), ...patch };
+  if (!next.tier && !(next.allow ?? []).length && !(next.deny ?? []).length) {
+    delete access[extensionID];
+  } else {
+    access[extensionID] = next;
+  }
+  editing.value.extension_access = access;
+}
+
+function setTier(extensionID: string, tier: string | undefined): void {
+  // 切回跟随就把本群那两份名单一起清掉：留着看不见的名单，下次改档位会莫名其妙生效。
+  if (!tier || tier === "off") {
+    patchAccess(extensionID, { tier: tier ?? "", allow: [], deny: [] });
+    return;
+  }
+  patchAccess(extensionID, { tier });
+}
+
+function setList(extensionID: string, kind: "allow" | "deny", accounts: string[]): void {
+  patchAccess(extensionID, kind === "allow" ? { allow: accounts } : { deny: accounts });
+}
+
 function overrideOf(pluginID: string): boolean | undefined {
   return editing.value?.plugin_overrides?.[pluginID];
 }
@@ -770,6 +968,103 @@ function setPluginSettingOverrides(pluginID: string, values: Record<string, unkn
   editing.value.plugin_setting_overrides = overrides;
 }
 
+// 新群默认和一键开关都写在机器人这一侧：前者是「没有群配置的群怎么办」，
+// 后者只作用于当前列出来的群，两者合起来才是完整的一份逐群开关。
+const newGroupEnabled = ref(true);
+const bulkBusy = ref(false);
+
+const defaultMinGroupLevel = ref(0);
+const defaultLevelUnknownPolicy = ref<"allow" | "deny">("allow");
+const levelUnknownOptions: AppSelectOption[] = [
+  { value: "allow", label: "放行（推荐）", hint: "读不到等级时照常回复" },
+  { value: "deny", label: "拦截", hint: "读不到等级时不回复" }
+];
+
+async function saveMinGroupLevel(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const level = Math.max(0, Math.trunc(Number(input.value)) || 0);
+  if (level === defaultMinGroupLevel.value) {
+    input.value = String(level);
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    await saveBotGroupSwitches({ bot_profile_id: botScope.value, min_group_level: level });
+    defaultMinGroupLevel.value = level;
+    input.value = String(level);
+    toastSuccess(level > 0 ? `群等级门槛设为 Lv.${level}` : "群等级门槛已取消");
+  } catch (error) {
+    input.value = String(defaultMinGroupLevel.value);
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
+async function saveLevelUnknownPolicy(policy: "allow" | "deny"): Promise<void> {
+  if (policy === defaultLevelUnknownPolicy.value) {
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    await saveBotGroupSwitches({ bot_profile_id: botScope.value, level_unknown_policy: policy });
+    defaultLevelUnknownPolicy.value = policy;
+    toastSuccess(policy === "allow" ? "等级读不到时放行" : "等级读不到时拦截");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
+function sharedBotsTitle(group: BotGroupSummary): string {
+  const names = (group.shared_with ?? []).map((bot) => `「${bot.name || "未命名机器人"}」`).join("");
+  return `${names}复用同一条连接，在这个群也开着：群里会收到多份回复。要只留一台说话，把别的台在这个群关掉。`;
+}
+
+async function setNewGroupDefault(event: Event): Promise<void> {
+  const enabled = (event.target as HTMLInputElement).checked;
+  bulkBusy.value = true;
+  try {
+    const result = await saveBotGroupSwitches({ bot_profile_id: botScope.value, new_group_enabled: enabled });
+    newGroupEnabled.value = enabled;
+    toastSuccess(enabled ? "新加入的群默认工作" : "新加入的群默认不工作");
+    if (result.warning) toastError(result.warning);
+  } catch (error) {
+    (event.target as HTMLInputElement).checked = !enabled;
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
+async function setAllGroups(enabled: boolean): Promise<void> {
+  const groupIDs = filteredGroups.value.map((group) => group.group_id).filter(Boolean);
+  if (!groupIDs.length) {
+    return;
+  }
+  const ok = await askConfirm({
+    title: enabled ? "全部启用" : "全部停用",
+    message: `确定把下面列出的 ${groupIDs.length} 个群${enabled ? "全部启用" : "全部停用"}吗？新加入的群不受影响，仍按「新群默认」决定。`,
+    confirmLabel: enabled ? "全部启用" : "全部停用",
+    danger: !enabled
+  });
+  if (!ok) {
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    const result = await saveBotGroupSwitches({ bot_profile_id: botScope.value, group_ids: groupIDs, enabled });
+    toastSuccess(`已${enabled ? "启用" : "停用"} ${result.updated} 个群`);
+    if (result.warning) toastError(result.warning);
+    await load();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
 async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> {
   const enabled = (event.target as HTMLInputElement).checked;
   togglingGroupID.value = group.group_id;
@@ -777,6 +1072,9 @@ async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> 
     const saved = await saveBotGroup({ ...groupConfigOf(group), bot_profile_id: botScope.value || group.bot_profile_id, enabled });
     upsert(saved.config);
     toastSuccess(enabled ? `群 ${group.group_id} 已启用` : `群 ${group.group_id} 已停用`);
+    if (saved.warning) toastError(saved.warning);
+    // 冲突提示来自别的机器人的配置，本页那枚「同连接 N 台都在回」的角标也得跟着变。
+    await load();
   } catch (error) {
     (event.target as HTMLInputElement).checked = !enabled;
     toastError(error instanceof Error ? error.message : "保存失败");
@@ -822,6 +1120,7 @@ async function saveEditing(): Promise<void> {
     upsert(saved.config);
     editing.value = null;
     toastSuccess(`群 ${payload.group_id} 配置已保存`);
+    if (saved.warning) toastError(saved.warning);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally {
@@ -877,4 +1176,7 @@ useConfigurationRefresh(["bot"], () => load());
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.group-extension-lists{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+@media(max-width:700px){.group-extension-lists{grid-template-columns:1fr}}
 </style>
