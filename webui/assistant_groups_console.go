@@ -659,7 +659,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		}
 		avatarURL := ""
 		if live.QQAvatar {
-			avatarURL = assistant.OneBotGroupAvatarURL(groupID)
+			avatarURL = freshAvatarURL(assistant.OneBotGroupAvatarURL(groupID))
 		} else {
 			avatarURL = consoleGroupAvatarURL(groupID, live.BotProfileID)
 		}
@@ -678,7 +678,7 @@ func mergeConsoleGroupItems(base assistant.BotConfig, set assistant.GroupConfigS
 		// 已保存的群配置自带归属机器人，据此判断能不能用 QQ 的头像规则。
 		avatarURL := ""
 		if qqAvatar == nil || qqAvatar(strings.TrimSpace(cfg.BotProfileID)) {
-			avatarURL = assistant.OneBotGroupAvatarURL(groupID)
+			avatarURL = freshAvatarURL(assistant.OneBotGroupAvatarURL(groupID))
 		} else {
 			avatarURL = consoleGroupAvatarURL(groupID, cfg.BotProfileID)
 		}

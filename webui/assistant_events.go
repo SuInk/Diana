@@ -102,7 +102,7 @@ func (h *BotHandler) namedEventGroups(ctx context.Context, profileID string, gro
 			GroupName:         names[groupID],
 			// 头像地址是纯拼接，不需要额外请求；由后端给而不是前端拼，
 			// 免得把 QQ 的地址格式写死在界面里——别的平台不长这样。
-			AvatarURL: assistant.OneBotGroupAvatarURL(groupID),
+			AvatarURL: freshAvatarURL(assistant.OneBotGroupAvatarURL(groupID)),
 		})
 	}
 	return items
@@ -388,7 +388,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 			}
 		}
 		// 头像放在这里算：上面那段可能刚从实时记录里补上 platform，早算会漏掉。
-		detail.SenderAvatarURL = assistant.MemberAvatarURL(detail.Platform, detail.UserID)
+		detail.SenderAvatarURL = freshAvatarURL(assistant.MemberAvatarURL(detail.Platform, detail.UserID))
 		events = append(events, detail)
 	}
 	response := assistantEventsResponse{
