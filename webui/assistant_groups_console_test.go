@@ -450,3 +450,41 @@ func TestGroupRelationGraphEndpoint(t *testing.T) {
 		t.Fatalf("没有消息存储时应当 503，实际 %d", unavailable.Code)
 	}
 }
+
+// 群级补充判据和机器人级共用一个上限：后端不卡住的话，超长文本会一路拼到评分
+// 提示词尾部，而这条链路解析失败的兜底是整群沉默。
+func TestConsoleGroupsCapsProactiveReplyExtraCriteria(t *testing.T) {
+	base := assistant.DefaultBotConfig()
+	runtime := assistant.NewRuntime(base, consoleGroupListChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	store := NewMemoryBotGroupConfigStore()
+	handler := NewBotHandler(context.Background(), runtime)
+	handler.SetGroupConfigStore(store)
+	router := botTestRouter(handler)
+
+	save := func(criteria string) *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]any{"config": map[string]any{
+			"group_id": "50007", "enabled": true, "enabled_set": true,
+			"proactive_reply_extra_criteria": criteria,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/assistant/groups", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := save(strings.Repeat("规", assistant.ProactiveReplyExtraCriteriaMaxRunes+1)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec := save("  本群叫鸽子是催更  "); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	profileID := handler.profiles.Profiles().Profiles[0].ID
+	saved, ok := store.ConfigForGroup(profileID, "50007")
+	if !ok || saved.ProactiveReplyExtraCriteria != "本群叫鸽子是催更" {
+		t.Fatalf("saved = %q, ok = %v", saved.ProactiveReplyExtraCriteria, ok)
+	}
+}
