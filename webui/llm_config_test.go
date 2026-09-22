@@ -54,11 +54,16 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	if err := json.NewDecoder(getRec.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if payload.Name != "主配置" || payload.Group != "chat" || payload.Description != "主力 OpenAI 配置" || payload.UpdatedAt == "" || len(payload.Models) != 2 || payload.Models[1].ID != "gpt-vision" || payload.TimeoutMS != 5000 || payload.ImageModel != "gpt-image-1-mini" || payload.UserAgent != "codex-test/1.0" || payload.Headers["X-Relay"] != "earlyso" || payload.MaxOutputTokens != 128 {
+	if payload.Name != "主配置" || payload.Group != "chat" || payload.Description != "主力 OpenAI 配置" || payload.UpdatedAt == "" || len(payload.Models) != 2 || payload.Models[1].ID != "gpt-vision" || payload.TimeoutMS != 5000 || payload.ImageModel != "gpt-image-1-mini" || payload.UserAgent != "codex-test/1.0" || payload.MaxOutputTokens != 128 {
 		t.Fatalf("payload = %#v", payload)
 	}
 	if payload.APIKey != "" || !payload.APIKeyConfigured || payload.APIKeyPreview != "new…123" {
 		t.Fatalf("api key leaked or configured flag wrong: %#v", payload)
+	}
+	// 请求头和 api_key 同等对待：回显只保留键名，值一律清空。中转网关常用
+	// x-api-key 一类的头认证，值明文回显等于把凭据发进浏览器和抓包。
+	if value, ok := payload.Headers["X-Relay"]; !ok || value != "" {
+		t.Fatalf("自定义请求头的值泄漏或键名丢失: %#v", payload.Headers)
 	}
 	if len(payload.Profiles) != 1 {
 		t.Fatalf("profiles = %#v", payload.Profiles)

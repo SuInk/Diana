@@ -642,7 +642,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		ImageOrigin:      cfg.ImageOrigin,
 		ImageTimeoutMS:   cfg.ImageTimeout.Milliseconds(),
 		UserAgent:        cfg.UserAgentWithDefault(),
-		Headers:          cfg.NormalizedHeaders(),
+		Headers:          maskLLMHeaders(cfg.NormalizedHeaders()),
 		Temperature:      cfg.Temperature,
 		ReasoningEffort:  cfg.ReasoningEffort,
 		MaxOutputTokens:  cfg.MaxOutputTokens,
@@ -673,6 +673,53 @@ func tokenLimitValue(value *int64) int64 {
 		return 0
 	}
 	return *value
+}
+
+// maskLLMHeaders 回显自定义请求头时只保留键名，值一律清空。请求头里可能放着
+// token（中转网关常用 x-api-key 之类的头认证），而配置接口的响应会进浏览器内存、
+// 前端状态和任何抓包，跟 api_key 一样不该明文回显。保留键名是为了让界面显示
+// 「这套配置已经配了哪几个头」，改值就重新填，删除就把那一行去掉。
+func maskLLMHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	masked := make(map[string]string, len(headers))
+	for name := range headers {
+		masked[name] = ""
+	}
+	return masked
+}
+
+// mergeLLMHeaders 合并一次请求头提交。
+//
+// 值被脱敏回显成空串，所以提交上来的空值只能理解为「这个头不变」，不能当成
+// 「把它改成空」——否则界面原样把读到的配置写回去就会把所有头洗掉。
+//
+// 键集合则以提交的为准：文本域里那些键名是用户看得见的，删掉一行就是要删掉这个
+// 头。没提交 headers 字段（nil）才表示这个客户端根本没碰它，整体保留旧值。
+func mergeLLMHeaders(existing, submitted map[string]string) map[string]string {
+	if submitted == nil {
+		return existing
+	}
+	merged := make(map[string]string, len(submitted))
+	for name, value := range submitted {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if strings.TrimSpace(value) == "" {
+			// 空值沿用已存的那个；已存的也没有就说明这个头没有值，丢弃。
+			if old, ok := existing[name]; ok && strings.TrimSpace(old) != "" {
+				merged[name] = old
+			}
+			continue
+		}
+		merged[name] = value
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
 
 func maskLLMAPIKey(value string) string {
@@ -872,9 +919,7 @@ func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.Provi
 	if payload.ImageTimeoutMS == 0 {
 		cfg.ImageTimeout = existing.ImageTimeout
 	}
-	if payload.Headers == nil {
-		cfg.Headers = existing.Headers
-	}
+	cfg.Headers = mergeLLMHeaders(existing.Headers, payload.Headers)
 	if strings.TrimSpace(payload.ReasoningEffort) == "" {
 		cfg.ReasoningEffort = existing.ReasoningEffort
 	}

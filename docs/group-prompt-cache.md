@@ -8,7 +8,7 @@
 
 - [Manus：Context Engineering for AI Agents](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus)：保持历史与观察只追加、序列化确定；动态增删工具会破坏缓存，并让历史工具调用失去定义。本项目保留按需加载以控制初始工具体积，加载后则在同群后续轮次保留。
 - [Aider：Prompt caching](https://aider.chat/docs/usage/caching.html)：将系统提示词、只读文件、仓库映射等组织成可缓存材料。这里对应稳定系统头部与已渲染群历史；没有增加收费的定时保活请求。
-- [Sub2API 会话调度源码](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/openai_gateway_scheduling.go)：显式会话信号包含请求体的 `prompt_cache_key`，无显式信号时才按内容推导。工具和首条消息变化可能影响内容推导。本项目补充稳定、匿名的路由键。
+- [Sub2API 会话调度源码](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/openai_gateway_scheduling.go)：显式会话信号先查请求头（`session-id`、`session_id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`），再回落到请求体的 `prompt_cache_key`，无显式信号时才按内容推导。工具和首条消息变化可能影响内容推导。本项目补充稳定、匿名的路由键，并按同一摘要写入请求头。
 - [OpenAI：Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)：缓存需要匹配实际渲染前缀，工具定义和设置也参与匹配；路由键不能代替稳定内容，更不能保证缓存永久驻留。
 - [OpenCode V2：Compaction](https://opencode.ai/v2/docs/compaction)：在完整请求接近窗口时生成可校验检查点，保留近期原文；固定系统提示和工具定义本身超限时，压缩历史无济于事。
 - [OpenClaw：Compaction 与 session pruning](https://docs.openclaw.ai/concepts/compaction)：摘要与近期原文组合使用，工具调用和结果必须成对保留；旧工具结果可以单独裁剪，但原始会话档案继续保存。
@@ -34,6 +34,12 @@
 
 `prompt_cache_key` 使用会话身份与调用用途的 SHA-256 摘要，不携带明文群号和用户名称，不随同群发言者或工具加载变化。Responses、Chat Completions、流式及 Registry 转接路径均保留此字段。该字段供支持它的 OpenAI 兼容端点使用，Anthropic/Gemini 不会收到此 OpenAI 专用字段。
 
+同一个摘要还会写进 `X-Session-Affinity`、`X-Session-Id`、`X-Conversation-Id` 三个请求头。`prompt_cache_key` 是 OpenAI 专有的 body 字段，中转网关未必读它；请求头则是中转普遍使用的会话亲和信号。按 sub2api 当前源码，`explicitOpenAIRequestSessionID` 无条件先查请求头（`session-id`、`session_id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`），再回落到 body 的 `prompt_cache_key`，两样都没有时才按模型、系统提示词、工具和首条用户消息推导——而工具定义和首条消息恰恰会变。
+
+三个头只发给会话类请求，图片等无状态端点不带；配置档里已经写过同名头时以配置档为准，不覆盖部署方对自己网关的了解。值与 `prompt_cache_key` 同源，同样不含明文群号和用户名称。OpenCode 核心不会自动稳定缓存键，其生态靠 `opencode-context-cache` 一类插件补同一个洞，做法也是把同一个哈希同时写进键和请求头。
+
+请求头的实测结果是**没有额外收益**，见下文对照：只发请求头、不发 `prompt_cache_key` 时命中 0%。上游源码里这几个头是无条件优先读取的，所以原因不在协议设计，可能是测试端点的部署版本早于该逻辑、边缘回源时丢头，或对照只发了一个头名而该版本认的是列表里的其他名字——三者都没有排除。这几个头保留下来是因为它们成本可忽略、不造成回归，且面向的是「只读请求头、不读 body 字段」这类中转；不要据此宣称它们在当前链路上带来了命中率提升。
+
 ## 跨群和权限边界
 
 - 跨群内容继续经过已有检索、成员可见性和脱敏检查，但只进入本轮尾部，绝不写进目标群的持久历史。关闭跨群记忆后，旧检索结果也不会从持久前缀复活。
@@ -54,6 +60,8 @@
 | 未发送 | 引用放在历史后 | 31,233 | 0 | 0% |
 | 稳定键 | 引用插在历史前 | 31,239 | 0 | 0% |
 | 稳定键 | 引用放在历史后 | 31,233 | 30,720 | 98.36% |
+
+另一组 2026-09-21 的对照单独检验请求头，同样 3 臂各 4 轮：不发任何信号 0%（31,089 token 命中 0）、只发 `X-Session-Affinity` 不发 `prompt_cache_key` 同样 0%（31,089 命中 0）、发 `prompt_cache_key` 并由适配层补上三个头 96.33%（31,092 命中 29,952）。结论是 body 字段在该端点有效、请求头无额外收益，且三个头不造成回归。复现见 `TestLiveSessionAffinityHeader`。
 
 带稳定路由键的新排列中，首次请求缓存为 0，之后三次每次命中 10,240 / 10,411 token。旧排列和新排列的热请求完成耗时中位数分别为 3,318 ms 与 3,316 ms；这组小样本没有证明端到端延迟显著下降，也不能推断生产全流量命中率。
 

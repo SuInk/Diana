@@ -187,6 +187,40 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 // 一次丢掉三成最旧的历史，对话连贯性几乎不受影响，而重锚之间能隔上百条消息。
 const historyWindowLowWatermarkPercent int64 = 70
 
+// contextSummaryMinIntervalPercent 是两次上下文压缩之间至少要攒下的新消息，按
+// RecentContextLimit 的百分比算。
+//
+// 压缩量是「触发条数减去保留条数」，这两个配置本来各管各的：一个说什么时候压，
+// 一个说压完留多少。但触发条数填得不比保留条数大时，旧代码把它夹平到保留条数，
+// 压缩量就恒为 1——历史被钉死在保留条数上，此后每来一条消息都超出一条、都触发
+// 一次压缩和一次 memory_summary 调用，再也回不去。群组页能调保留条数却没有触发
+// 条数这个字段，机器人级默认是 100，所以「群里把保留条数调到 100 以上」这个组合
+// 在真实配置里够得着。
+//
+// 现在改成先给触发条数留出一个间隔再夹，两个配置怎么组合都不会退化。取 50%：
+// 压完回落到保留条数，要再攒够一半才压下一次，和 historyWindowLowWatermarkPercent
+// 那边压缩后留出增长空间是同一个意思。
+const contextSummaryMinIntervalPercent = 50
+
+// contextSummaryTriggerThreshold 返回真正生效的压缩触发条数。它保证触发点比保留
+// 条数高出至少一个间隔，压缩量因此恒为正。
+func contextSummaryTriggerThreshold(limit, threshold int) int {
+	if limit <= 0 {
+		limit = 20
+	}
+	if threshold <= 0 {
+		threshold = limit * 2
+	}
+	interval := limit * contextSummaryMinIntervalPercent / 100
+	if interval < 1 {
+		interval = 1
+	}
+	if minimum := limit + interval; threshold < minimum {
+		threshold = minimum
+	}
+	return threshold
+}
+
 // anchoredHistoryWindow 给近期历史窗口加滞回，让窗口的起点在多轮之间保持不动。
 //
 // 没有它时窗口是「从最新往回填满预算」：历史一旦顶到预算，每来一条新消息，最旧

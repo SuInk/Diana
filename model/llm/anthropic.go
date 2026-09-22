@@ -17,6 +17,24 @@ import (
 
 const defaultAnthropicMaxTokens int64 = 1024
 
+// anthropicMaxTokens 决定发给 Anthropic 的 MaxTokens。
+//
+// 别的适配器在没配置时干脆不发这个参数，让模型用自己的上限；Anthropic 的 Messages
+// API 把 max_tokens 列为必填，不发直接被拒，所以这里必须给出一个数。
+//
+// 既然躲不掉，就别由我们拍脑袋：优先用同步下来的模型清单里这个模型自己报的输出
+// 上限，清单没有才退回常量。写死的 1024 对现在的模型太小——会思考的模型先写
+// reasoning 再写正文，额度可能在思考阶段就用光，返回里只剩 reasoning 没有正文。
+func anthropicMaxTokens(cfg ProviderConfig, req GenerateRequest) int64 {
+	if req.MaxOutputTokens > 0 {
+		return req.MaxOutputTokens
+	}
+	if info, ok := cfg.ModelInfoFor(req.Model); ok && info.MaxOutputTokens > 0 {
+		return info.MaxOutputTokens
+	}
+	return defaultAnthropicMaxTokens
+}
+
 type anthropicClient struct {
 	cfg    ProviderConfig
 	client anthropic.Client
@@ -54,10 +72,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 	if messagesHaveInputAudio(req.Messages) {
 		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
 	}
-	if req.MaxOutputTokens == 0 {
-		// Anthropic messages API 要求 MaxTokens，未配置时给一个保守默认值。
-		req.MaxOutputTokens = defaultAnthropicMaxTokens
-	}
+	req.MaxOutputTokens = anthropicMaxTokens(c.cfg, req)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
@@ -120,9 +135,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
 	}
-	if req.MaxOutputTokens == 0 {
-		req.MaxOutputTokens = defaultAnthropicMaxTokens
-	}
+	req.MaxOutputTokens = anthropicMaxTokens(c.cfg, req)
 	system, messages := splitSystemPrompt(req.Messages)
 	params := anthropic.MessageNewParams{Model: anthropic.Model(req.Model), MaxTokens: req.MaxOutputTokens, Messages: anthropicMessages(messages, req.Tools), Tools: anthropicTools(req.Tools), ToolChoice: anthropicToolChoice(req)}
 	if system != "" {

@@ -189,7 +189,7 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 	if len(req.Tools) > 0 {
 		params.ParallelToolCalls = param.NewOpt(false)
 	}
-	stream := c.client.Responses.NewStreaming(ctx, params)
+	stream := c.client.Responses.NewStreaming(ctx, params, c.sessionAffinityRequestOptions(req.PromptCacheKey)...)
 	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
@@ -767,7 +767,7 @@ func (c *openAICompatibleClient) generateChatCompletion(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := c.newOpenAIRequest(ctx, "chat/completions", body)
+	httpReq, err := c.newOpenAIRequest(ctx, "chat/completions", body, req.PromptCacheKey)
 	if err != nil {
 		return nil, err
 	}
@@ -969,7 +969,7 @@ func (c *openAICompatibleClient) newResponse(ctx context.Context, params respons
 	if err != nil {
 		return nil, err, capture
 	}
-	req, err := c.newOpenAIRequest(ctx, "responses", body)
+	req, err := c.newOpenAIRequest(ctx, "responses", body, params.PromptCacheKey.Or(""))
 	if err != nil {
 		return nil, err, capture
 	}
@@ -998,15 +998,55 @@ func (c *openAICompatibleClient) newResponse(ctx context.Context, params respons
 	return &out, nil, capture
 }
 
-func (c *openAICompatibleClient) newOpenAIRequest(ctx context.Context, endpoint string, body []byte) (*http.Request, error) {
-	return c.newOpenAIRequestWithBaseURL(ctx, c.cfg.BaseURL, endpoint, body)
+// sessionAffinityHeaders 是中转网关用来做会话亲和的请求头。
+//
+// 缓存命中靠前缀逐字节匹配，但缓存状态存在具体某台上游机器上：请求得落到持有
+// 那份缓存的机器才读得到。prompt_cache_key 是 OpenAI 的 body 字段，中转网关未必
+// 读它——sub2api 的调度就是先查这几个请求头、再回落到 body 的 prompt_cache_key，
+// 两样都没有时才按内容推导，而内容推导会被工具定义和首条消息的变化带偏。
+//
+// 值和 prompt_cache_key 用同一个哈希：它已经脱敏，不含群号和用户名，也不随同群
+// 发言者或工具加载变化。只发会话类请求；图片这类无状态端点不带。
+var sessionAffinityHeaders = []string{"X-Session-Affinity", "X-Session-Id", "X-Conversation-Id"}
+
+// sessionAffinityRequestOptions 给 SDK 路径补同样的头。客户端级的自定义头在构造
+// 时就烘进去了，所以这里同样跳过用户配过的名字。
+func (c *openAICompatibleClient) sessionAffinityRequestOptions(key string) []option.RequestOption {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil
+	}
+	names := c.sessionAffinityHeaderNames()
+	opts := make([]option.RequestOption, 0, len(names))
+	for _, name := range names {
+		opts = append(opts, option.WithHeader(name, key))
+	}
+	return opts
+}
+
+// sessionAffinityHeaderNames 去掉用户已经在配置档里显式写过的同名头：那是部署方
+// 对自己网关的了解，不该被我们覆盖。
+func (c *openAICompatibleClient) sessionAffinityHeaderNames() []string {
+	configured := normalizeHeaders(c.cfg.NormalizedHeaders())
+	names := make([]string, 0, len(sessionAffinityHeaders))
+	for _, name := range sessionAffinityHeaders {
+		if _, ok := configured[http.CanonicalHeaderKey(name)]; ok {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func (c *openAICompatibleClient) newOpenAIRequest(ctx context.Context, endpoint string, body []byte, sessionAffinity string) (*http.Request, error) {
+	return c.newOpenAIRequestWithBaseURL(ctx, c.cfg.BaseURL, endpoint, body, sessionAffinity)
 }
 
 func (c *openAICompatibleClient) newImageRequest(ctx context.Context, endpoint string, body []byte) (*http.Request, error) {
-	return c.newOpenAIRequestWithBaseURL(ctx, c.cfg.ImageBaseURLWithDefault(), endpoint, body)
+	return c.newOpenAIRequestWithBaseURL(ctx, c.cfg.ImageBaseURLWithDefault(), endpoint, body, "")
 }
 
-func (c *openAICompatibleClient) newOpenAIRequestWithBaseURL(ctx context.Context, configuredBaseURL string, endpoint string, body []byte) (*http.Request, error) {
+func (c *openAICompatibleClient) newOpenAIRequestWithBaseURL(ctx context.Context, configuredBaseURL string, endpoint string, body []byte, sessionAffinity string) (*http.Request, error) {
 	baseURL := strings.TrimSpace(configuredBaseURL)
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
@@ -1020,6 +1060,12 @@ func (c *openAICompatibleClient) newOpenAIRequestWithBaseURL(ctx context.Context
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	// 先写会话亲和头，再写配置档里的自定义头：同名时以部署方配置的为准。
+	if sessionAffinity = strings.TrimSpace(sessionAffinity); sessionAffinity != "" {
+		for _, name := range c.sessionAffinityHeaderNames() {
+			req.Header.Set(name, sessionAffinity)
+		}
+	}
 	for name, value := range normalizeHeaders(c.cfg.NormalizedHeaders()) {
 		req.Header.Set(name, value)
 	}

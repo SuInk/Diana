@@ -671,3 +671,70 @@ func TestGroupLevelHistoryBudgetReachesEffectiveConfig(t *testing.T) {
 		t.Fatalf("未配置的群没有跟随机器人：%d", other.RecentHistoryTokenBudget)
 	}
 }
+
+func TestContextSummaryTriggerThresholdKeepsAnInterval(t *testing.T) {
+	for _, item := range []struct {
+		name             string
+		limit, threshold int
+		want             int
+	}{
+		{"默认配置不受影响", 40, 100, 100},
+		{"阈值等于保留条数时留出间隔", 100, 100, 150},
+		{"阈值低于保留条数时同样留出间隔", 100, 40, 150},
+		{"阈值本来就够大就不动它", 40, 300, 300},
+		{"保留条数很小时间隔至少为 1", 1, 1, 2},
+		{"两项都没填时回落到默认形状", 0, 0, 40},
+	} {
+		if got := contextSummaryTriggerThreshold(item.limit, item.threshold); got != item.want {
+			t.Fatalf("%s: contextSummaryTriggerThreshold(%d, %d) = %d, want %d", item.name, item.limit, item.threshold, got, item.want)
+		}
+	}
+}
+
+// TestContextSummaryDoesNotCompactOnEveryMessage 盯住一个会自锁的配置组合。触发条数
+// 不比保留条数大时，压缩量曾经恒为 len(history)-limit == 1：历史被钉死在保留条数上，
+// 此后每来一条消息都超出一条、都触发一次压缩和一次 memory_summary 调用，再也回不去。
+// 群组页能调保留条数却没有触发条数这个字段，这个组合在真实配置里够得着。
+func TestContextSummaryDoesNotCompactOnEveryMessage(t *testing.T) {
+	const (
+		limit = 10
+		total = 60
+	)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: limit, ContextSummaryThreshold: limit}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+
+	base := int64(1700000000)
+	session := ""
+	compactions := 0
+	previous := int64(0)
+	for index := 0; index < total; index++ {
+		event := MessageEvent{
+			Kind:       EventKindPrivate,
+			UserID:     "10001",
+			SenderName: "Alice",
+			MessageID:  fmt.Sprintf("msg-%02d", index),
+			Time:       base + int64(index)*60,
+			RawMessage: fmt.Sprintf("第 %d 句", index),
+		}
+		if session == "" {
+			session = sessionKey(event)
+		}
+		runtime.remember(event)
+		// 压缩发生在 remember() 内部，历史长度在两次观测之间不会回落，只会钉在保留
+		// 条数上，所以按长度数不出压缩次数。改看水位：每压一次它都会前移。
+		runtime.mu.RLock()
+		current := runtime.contextSummaryMarks[session]
+		runtime.mu.RUnlock()
+		if current > previous {
+			compactions++
+		}
+		previous = current
+	}
+
+	if compactions == 0 {
+		t.Fatal("这个组合下完全没有触发压缩，历史会无限增长")
+	}
+	interval := limit * contextSummaryMinIntervalPercent / 100
+	if maximum := total/interval + 1; compactions > maximum {
+		t.Fatalf("压缩触发 %d 次，超过间隔允许的 %d 次：压缩量又退化了", compactions, maximum)
+	}
+}
