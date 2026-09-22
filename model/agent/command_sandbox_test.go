@@ -45,7 +45,7 @@ func TestConfigDefaultsSandboxToAuto(t *testing.T) {
 }
 
 func TestSandboxExecProfileConfinesWritesAndNetwork(t *testing.T) {
-	profile := sandboxExecProfile("/tmp/agent work", false)
+	profile := sandboxExecProfile("/tmp/agent work", false, nil)
 	for _, want := range []string{
 		"(deny default)",
 		"(allow file-read*)",
@@ -58,7 +58,7 @@ func TestSandboxExecProfileConfinesWritesAndNetwork(t *testing.T) {
 	if strings.Contains(profile, "(allow network*)") {
 		t.Fatal("network must stay denied unless explicitly allowed")
 	}
-	if allowed := sandboxExecProfile("/tmp/work", true); !strings.Contains(allowed, "(allow network*)") {
+	if allowed := sandboxExecProfile("/tmp/work", true, nil); !strings.Contains(allowed, "(allow network*)") {
 		t.Fatalf("profile with network = %q", allowed)
 	}
 }
@@ -206,5 +206,44 @@ func TestRunCommandSandboxAllowsWriteInsideWorkdir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "inside.txt")); err != nil {
 		t.Fatalf("file inside the work directory was not created: %v", err)
+	}
+}
+
+// TestSandboxHidesCredentialFilesFromCommands 白名单里一旦有 cat、grep、head，
+// 「能跑哪个程序」这层就拦不住读取了，凭据文件只能靠沙盒挡。
+func TestSandboxHidesCredentialFilesFromCommands(t *testing.T) {
+	secrets := []string{"/data/.mcp.json"}
+	profile := sandboxExecProfile("/tmp/work", false, secrets)
+	if !strings.Contains(profile, `(deny file-read* (literal "/data/.mcp.json"))`) {
+		t.Fatalf("SBPL 没有挡住凭据文件：%s", profile)
+	}
+	// 顺序要紧：SBPL 里后写的规则覆盖先写的，deny 必须排在 allow file-read* 后面。
+	if strings.Index(profile, "(allow file-read*)") > strings.Index(profile, `(deny file-read* (literal "/data/.mcp.json"))`) {
+		t.Fatalf("deny 排在了 allow 前面，等于没挡：%s", profile)
+	}
+
+	cmd := wrapWithBubblewrap("bwrap")(context.Background(), "/tmp/work", false, secrets, "cat", []string{"/data/.mcp.json"})
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "--ro-bind "+os.DevNull+" /data/.mcp.json") {
+		t.Fatalf("bubblewrap 没有把凭据文件盖掉：%v", cmd.Args)
+	}
+}
+
+// TestProtectedExistingPathsSkipsMissingFiles bubblewrap 绑定一个不存在的路径会让
+// 整条命令起不来，而「配置还没生成」是常态。
+func TestProtectedExistingPathsSkipsMissingFiles(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "present.json")
+	if err := os.WriteFile(present, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	protected := protectedFiles{present: true, filepath.Join(dir, "missing.json"): true, dir: true}
+	got := protected.existingPaths()
+	if len(got) != 1 || got[0] != present {
+		t.Fatalf("existingPaths = %v", got)
+	}
+	var empty protectedFiles
+	if empty.existingPaths() != nil {
+		t.Fatal("空集合不该返回路径")
 	}
 }
