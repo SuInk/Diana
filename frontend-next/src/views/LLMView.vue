@@ -357,18 +357,54 @@
           <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="codex-cli/0.142.0" />
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
-          <label for="llm-headers">自定义请求头（可选）</label>
-          <textarea
-            id="llm-headers"
-            v-model="form.headers"
-            class="textarea"
-            rows="3"
-            spellcheck="false"
-            placeholder='{"X-Session-Affinity": "my-session"}'
-          ></textarea>
+          <label for="llm-header-name">自定义请求头（可选）</label>
+          <div class="input-group">
+            <input
+              id="llm-header-name"
+              v-model="headerNameDraft"
+              class="input"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="请求头名，如 X-Session-Affinity"
+              @keydown.enter.prevent="addHeader"
+            />
+            <input
+              v-model="headerValueDraft"
+              class="input"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="值"
+              @keydown.enter.prevent="addHeader"
+            />
+            <button class="btn" type="button" :disabled="headerNameDraft.trim() === ''" @click="addHeader">
+              <Plus :size="14" aria-hidden="true" />
+              添加
+            </button>
+          </div>
+          <div v-if="headerRows.length > 0" class="stack" style="gap: 6px; margin-top: 8px">
+            <div v-for="(row, index) in headerRows" :key="row.name" class="input-group">
+              <input class="input" :value="row.name" readonly :title="row.name" />
+              <input
+                v-model="row.value"
+                class="input"
+                autocomplete="off"
+                spellcheck="false"
+                :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
+              />
+              <button
+                class="btn ghost icon-only"
+                type="button"
+                :title="`删除请求头 ${row.name}`"
+                :aria-label="`删除请求头 ${row.name}`"
+                @click="removeHeader(index)"
+              >
+                <X :size="14" :stroke-width="2.25" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
           <span class="hint">
-            字符串键值 JSON。中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
-            <br />已保存的头只回显键名，值一律留空：值留空表示沿用已存的那个，填了新值才会覆盖，<strong>把整行删掉才是删除这个头</strong>。
+            中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
+            <br />已保存的头出于和 API Key 同样的理由不回显值，留空则沿用，填了新值才覆盖；删掉整行才是删除这个头。
           </span>
         </div>
         <div class="field wide">
@@ -436,7 +472,6 @@ interface LLMFormState {
   api_key: string;
   oauth_provider: string;
   user_agent: string;
-  headers: string;
   description: string;
   temperature: string;
   context_window_tokens: string;
@@ -454,7 +489,6 @@ const emptyForm: LLMFormState = {
   api_key: "",
   oauth_provider: "",
   user_agent: "",
-  headers: "",
   description: "",
   temperature: "",
   context_window_tokens: "",
@@ -477,6 +511,11 @@ const form = ref<LLMFormState>({ ...emptyForm });
 const selectedService = ref("openai");
 const modelOptions = ref<LLMModelInfo[]>([]);
 const manualModelDraft = ref("");
+// 请求头按「名字 + 值」逐行编辑，和正上方的模型列表用同一套范式。configured 记住
+// 这一行是从服务端读回来的：它的值被脱敏成空串，留空表示沿用而不是改成空。
+const headerRows = ref<{ name: string; value: string; configured: boolean }[]>([]);
+const headerNameDraft = ref("");
+const headerValueDraft = ref("");
 const modelsLoading = ref(false);
 // invalidField 记的是「这次失败该回去改哪一格」，由报错文本推出来（见 llmErrorField）。
 const invalidField = ref<LLMErrorField>("");
@@ -622,6 +661,7 @@ function startCreate(): void {
   selectedService.value = "openai";
   applyServicePreset("openai");
   modelOptions.value = [];
+  resetHeaderRows(undefined);
   invalidField.value = "";
   editorOpen.value = true;
 }
@@ -729,7 +769,6 @@ function startEdit(profile: LLMConfig): void {
     api_key: "",
     oauth_provider: profile.oauth_provider ?? "",
     user_agent: profile.user_agent ?? "",
-    headers: profile.headers && Object.keys(profile.headers).length ? JSON.stringify(profile.headers, null, 2) : "",
     description: profile.description ?? "",
     temperature: profile.temperature === null || profile.temperature === undefined ? "" : String(profile.temperature),
     context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
@@ -740,6 +779,7 @@ function startEdit(profile: LLMConfig): void {
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
   selectedService.value = detectLLMService(profile.base_url, profile.provider);
   modelOptions.value = [...(profile.models ?? [])];
+  resetHeaderRows(profile.headers);
   invalidField.value = "";
   editorOpen.value = true;
 }
@@ -801,25 +841,45 @@ function resolvedDefaultModel(): string {
   return modelOptions.value[0]?.id ?? current;
 }
 
-// parseHeaderMap 把输入框里的 JSON 解析成字符串键值对。解析失败直接抛，由保存
-// 那层的 catch 弹出来——静默丢掉用户填的头比报错更糟，他会以为已经生效了。
-function parseHeaderMap(raw: string): Record<string, string> {
-  const text = raw.trim();
-  if (!text) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("自定义请求头不是合法 JSON");
+function resetHeaderRows(headers: Record<string, string> | undefined): void {
+  headerRows.value = Object.keys(headers ?? {})
+    .sort()
+    .map((name) => ({ name, value: "", configured: true }));
+  headerNameDraft.value = "";
+  headerValueDraft.value = "";
+}
+
+function addHeader(): void {
+  const name = headerNameDraft.value.trim();
+  if (!name) {
+    return;
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("自定义请求头必须是 JSON 对象");
+  const value = headerValueDraft.value;
+  const existing = headerRows.value.findIndex((row) => row.name.toLowerCase() === name.toLowerCase());
+  if (existing >= 0) {
+    // 同名不新增一行：HTTP 头名大小写不敏感，两行同名在界面上看不出谁生效。
+    headerRows.value[existing].value = value;
+  } else {
+    headerRows.value = [...headerRows.value, { name, value, configured: false }];
   }
+  headerNameDraft.value = "";
+  headerValueDraft.value = "";
+}
+
+function removeHeader(index: number): void {
+  headerRows.value = headerRows.value.filter((_, at) => at !== index);
+}
+
+// headersFromRows 按后端契约拼提交值：值留空表示沿用已存的那个，所以从服务端读回
+// 来的行即使没改也要原样带上；删掉的行不出现在结果里，后端据此删除。没配过的新行
+// 留空则没有意义，直接丢弃。
+function headersFromRows(): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof value !== "string") throw new Error(`请求头 ${name} 的值必须是字符串`);
-    if (!name.trim()) throw new Error("请求头名不能为空");
-    result[name.trim()] = value;
+  for (const row of headerRows.value) {
+    const name = row.name.trim();
+    if (!name) continue;
+    if (!row.configured && row.value.trim() === "") continue;
+    result[name] = row.value;
   }
   return result;
 }
@@ -839,7 +899,7 @@ function formToPayload(): LLMConfig {
     user_agent: form.value.user_agent.trim() || undefined,
     // 必须每次都提交：后端把缺省的 headers 当成「这个客户端没提交」而保留旧值，
     // 省略掉的话清空输入框永远删不掉已经填过的头。
-    headers: form.value.provider === "openai_compatible" ? parseHeaderMap(form.value.headers) : {},
+    headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
     description: form.value.description.trim() || undefined
   };
   const temperature = form.value.temperature.trim();
