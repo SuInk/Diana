@@ -343,6 +343,21 @@
           <label for="llm-ua">User-Agent（可选）</label>
           <input id="llm-ua" v-model="form.user_agent" class="input" placeholder="codex-cli/0.142.0" />
         </div>
+        <div v-if="form.provider === 'openai_compatible'" class="field wide">
+          <label for="llm-headers">自定义请求头（可选）</label>
+          <textarea
+            id="llm-headers"
+            v-model="form.headers"
+            class="textarea"
+            rows="3"
+            spellcheck="false"
+            placeholder='{"X-Session-Affinity": "my-session"}'
+          ></textarea>
+          <span class="hint">
+            字符串键值 JSON。中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
+            <br />已保存的头只回显键名，值一律留空：值留空表示沿用已存的那个，填了新值才会覆盖，<strong>把整行删掉才是删除这个头</strong>。
+          </span>
+        </div>
         <div class="field wide">
           <label for="llm-desc">备注（可选）</label>
           <input id="llm-desc" v-model="form.description" class="input" placeholder="这套配置的用途" />
@@ -408,6 +423,7 @@ interface LLMFormState {
   api_key: string;
   oauth_provider: string;
   user_agent: string;
+  headers: string;
   description: string;
   temperature: string;
   context_window_tokens: string;
@@ -425,6 +441,7 @@ const emptyForm: LLMFormState = {
   api_key: "",
   oauth_provider: "",
   user_agent: "",
+  headers: "",
   description: "",
   temperature: "",
   context_window_tokens: "",
@@ -699,6 +716,7 @@ function startEdit(profile: LLMConfig): void {
     api_key: "",
     oauth_provider: profile.oauth_provider ?? "",
     user_agent: profile.user_agent ?? "",
+    headers: profile.headers && Object.keys(profile.headers).length ? JSON.stringify(profile.headers, null, 2) : "",
     description: profile.description ?? "",
     temperature: profile.temperature === null || profile.temperature === undefined ? "" : String(profile.temperature),
     context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
@@ -770,6 +788,29 @@ function resolvedDefaultModel(): string {
   return modelOptions.value[0]?.id ?? current;
 }
 
+// parseHeaderMap 把输入框里的 JSON 解析成字符串键值对。解析失败直接抛，由保存
+// 那层的 catch 弹出来——静默丢掉用户填的头比报错更糟，他会以为已经生效了。
+function parseHeaderMap(raw: string): Record<string, string> {
+  const text = raw.trim();
+  if (!text) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("自定义请求头不是合法 JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("自定义请求头必须是 JSON 对象");
+  }
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value !== "string") throw new Error(`请求头 ${name} 的值必须是字符串`);
+    if (!name.trim()) throw new Error("请求头名不能为空");
+    result[name.trim()] = value;
+  }
+  return result;
+}
+
 function formToPayload(): LLMConfig {
   const payload: LLMConfig = {
     id: editingID.value,
@@ -783,6 +824,9 @@ function formToPayload(): LLMConfig {
     oauth_provider: form.value.oauth_provider.trim() || undefined,
     models: modelOptions.value,
     user_agent: form.value.user_agent.trim() || undefined,
+    // 必须每次都提交：后端把缺省的 headers 当成「这个客户端没提交」而保留旧值，
+    // 省略掉的话清空输入框永远删不掉已经填过的头。
+    headers: form.value.provider === "openai_compatible" ? parseHeaderMap(form.value.headers) : {},
     description: form.value.description.trim() || undefined
   };
   const temperature = form.value.temperature.trim();
