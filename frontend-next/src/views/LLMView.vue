@@ -328,21 +328,21 @@
         </div>
         <div class="field">
           <label for="llm-temp">Temperature（可选）</label>
-          <input id="llm-temp" v-model="form.temperature" class="input" inputmode="decimal" placeholder="0.7" />
+          <input id="llm-temp" v-model="form.temperature" class="input" inputmode="decimal" placeholder="跟随模型默认" />
           <span class="hint">
             留空就不发这个参数，由模型用自己的默认值——多数情况下这才是对的。推理模型（gpt-5.x、o 系列、Claude 思考模式等）只接受默认温度，填了<strong>不是被忽略，而是整个请求被拒</strong>。中转网关的模型名认不出背后的真实型号，填之前先确认这套配置实际连的是什么。
           </span>
         </div>
         <div class="field">
           <label for="llm-maxtokens">最大输出 Token</label>
-          <input id="llm-maxtokens" v-model="form.max_output_tokens" class="input" inputmode="numeric" placeholder="1024" />
+          <input id="llm-maxtokens" v-model="form.max_output_tokens" class="input" inputmode="numeric" placeholder="跟随模型默认" />
           <span class="hint">
             限制单次回复的长度。留空时 OpenAI 兼容端点不发这个参数、由模型自己决定，Anthropic 则用适配层的保守默认值。它同时影响输入预算：请求要为输出预留空间，留空按默认值预留，填小能给历史腾出更多位置。
           </span>
         </div>
         <div class="field">
           <label for="llm-window">模型上下文窗口</label>
-          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="跟随模型" />
+          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" :placeholder="contextWindowPlaceholder" />
           <span class="hint">
             只填你想强制覆盖的值。{{ effectiveContextHint }}
             <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
@@ -804,6 +804,17 @@ function optionalTokenInput(raw: string): number {
 // 编辑器里这两个框留空是常态，所以要如实说明「留空时到底用多少、这个数哪来的」，
 // 而不是把推断值预填进输入框冒充用户设置。
 // 窗口只认手填：不填就是兜底值，不再按模型清单或模型名去猜。清单里的数只作参考。
+// 四个可选数值框统一一套占位符约定：灰字只写「留空会怎样」，不写「建议你填什么」。
+//
+// Temperature 和最大输出以前写的是建议值（0.7 / 1024），而灰色的数字看起来和已经
+// 生效的设置几乎一样——有人据此以为系统默认温度就是 0.7，其实留空时这个参数根本
+// 不发。窗口那个更糟：占位符写着「跟随模型」，下面的说明却写着「留空按 128,000
+// 计算，不会自动去猜模型的真实窗口」，两句话直接打架。
+const contextWindowPlaceholder = computed(() => {
+  const window = editingProfile.value?.effective_context_window_tokens;
+  return window ? `默认 ${window.toLocaleString("en-US")}` : "默认内置兜底值";
+});
+
 const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const window = profile?.effective_context_window_tokens;
