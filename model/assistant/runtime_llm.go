@@ -623,6 +623,13 @@ func shouldFailoverLLMError(err error) bool {
 	if errors.Is(err, llm.ErrUnverifiedRejection) {
 		return true
 	}
+	// 绑到只做判断的模型、而这个用途要的是文本，属于能力不匹配，不是上游故障——
+	// 正好是降级链该接手的情况。不降级的话，把 intent 整组绑到判断模型就会让所有
+	// 没备判断题表的判定用途（语义承接、发送前审核、记忆抽取…）整条失败，而不是
+	// 退到下一档对话模型。
+	if errors.Is(err, llm.ErrDecisionRequired) {
+		return true
+	}
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
 		return false
 	}
