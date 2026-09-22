@@ -96,7 +96,7 @@ func (r *Runtime) notifyRecurringFailureRecovery(ctx context.Context, item Remin
 		return ctx.Err()
 	}
 	notice := fmt.Sprintf("%s已恢复，后续结果会继续正常发送。", recurringSubscriptionKindLabel(item))
-	return r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
+	return r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), reminderDiagnosticPluginID(item), notice)
 }
 
 // clearReminderRecoveryNotice 把「待发恢复通知」标记落下去，避免重复通知。

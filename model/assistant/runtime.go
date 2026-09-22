@@ -690,6 +690,29 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.reconcileBridges()
 }
 
+// errorNoticeAllowed 报告这台机器人是否允许把诊断消息发进聊天。
+//
+// 「错误提示」开关的契约是「控制所有面向聊天的诊断消息」，但以前只有回复出错那条
+// 路径认它：订阅和提醒的失败告警绕过开关照发，关掉开关的人照样在群里收到「仓库订阅
+// 连续 3 次失败」。失败本身仍然进事件、LastError 和应用日志，只是不打扰聊天。
+func (r *Runtime) errorNoticeAllowed(event MessageEvent) bool {
+	return boolValue(r.effectiveConfigForEvent(event).ErrorNotifyEnabled, true)
+}
+
+// disabledProfileSet 复制一份停用档案表，供需要在别的锁里逐条判断的调用方使用，
+// 避免在持有那把锁时再去拿 mu。
+func (r *Runtime) disabledProfileSet() map[string]bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	disabled := make(map[string]bool, len(r.disabledProfiles))
+	for id, off := range r.disabledProfiles {
+		if off {
+			disabled[id] = true
+		}
+	}
+	return disabled
+}
+
 // profileDisabled 报告事件所属档案是否已停用。这是入站侧的兜底：共享一条连接的
 // 档案里只要还有一个启用着，连接就不会断，停用档案的事件照样能从那条连接进来。
 func (r *Runtime) profileDisabled(profileID string) bool {

@@ -737,6 +737,8 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	if r.reminders == nil {
 		return nil
 	}
+	// 先取停用名单再上 reminderMu：两把锁不嵌套，就不会和别处的加锁顺序冲突。
+	disabledProfiles := r.disabledProfileSet()
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
 	items := r.reminders.Reminders()
@@ -746,6 +748,12 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	due := make([]Reminder, 0, len(items))
 	for _, item := range items {
 		if !item.CancelledAt.IsZero() {
+			continue
+		}
+		// 机器人关掉之后它的提醒和订阅不该继续跑：抓回来也发不出去，只会每隔几分钟
+		// 失败一次，再把失败通知推给主人——关掉的那台反而比开着时更吵。这里连认领都
+		// 不认领，所以既不会请求 GitHub，也不会产生失败告警；重新启用后按原周期继续。
+		if disabledProfiles[strings.TrimSpace(item.ProfileID)] {
 			continue
 		}
 		if !reminderIsRecurring(item) && !item.LastRunAt.IsZero() {
@@ -763,10 +771,47 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	return due
 }
 
+// reminderRunInterrupted 判断这次失败是不是我们自己把它掐了——机器人停用或进程退出
+// 时，在途的 GitHub / Feed 请求会带着 context canceled 回来。那不是订阅坏了，不该计进
+// 连败：计进去之后，下一次真失败就更快攒够阈值，于是「关掉机器人」反而把告警推了出去。
+// 只认「父 ctx 已经结束」这一种，任务自己的超时仍然算失败。
+func reminderRunInterrupted(ctx context.Context, runErr error) bool {
+	return runErr != nil && ctx.Err() != nil && errors.Is(runErr, context.Canceled)
+}
+
+// rescheduleInterruptedReminder 把被打断的周期任务排到下一个周期，失败状态原样保留：
+// 既不计连败，也不按退避提前重试——这次根本没跑完，不该影响订阅的健康判断。
+func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) {
+	r.reminderMu.Lock()
+	items := r.reminders.Reminders()
+	found := false
+	for index := range items {
+		if items[index].ID != id || !reminderIsRecurring(items[index]) {
+			continue
+		}
+		found = true
+		items[index].LastRunAt = startedAt
+		items[index].TriggerAt = nextScheduledTrigger(startedAt, time.Duration(items[index].IntervalSeconds)*time.Second, time.Now())
+		break
+	}
+	var saveErr error
+	if found {
+		saveErr = r.reminders.SaveReminders(items)
+	}
+	r.reminderMu.Unlock()
+	if saveErr != nil {
+		r.setError(saveErr.Error())
+	}
+}
+
 func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	defer r.releaseClaimedReminder(item.ID)
 	if reminderIsRSSWatch(item) {
 		startedAt, err := r.runClaimedRSSWatch(ctx, item)
+		if reminderRunInterrupted(ctx, err) {
+			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -782,6 +827,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	}
 	if reminderIsRepositoryWatch(item) {
 		startedAt, err := r.runClaimedRepositoryWatch(ctx, item)
+		if reminderRunInterrupted(ctx, err) {
+			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -811,6 +860,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	}
 	if reminderIsScheduledQuery(item) {
 		startedAt, err := r.runClaimedScheduledQuery(ctx, item)
+		if reminderRunInterrupted(ctx, err) {
+			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -830,6 +883,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
 	}
 	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
+	if reminderRunInterrupted(ctx, err) {
+		// 进程正在退出：这条提醒还没送到，保持原样等下次启动后再投。
+		return
+	}
 	if err != nil {
 		updated, retryErr := r.rescheduleOneTimeReminder(item.ID, err)
 		if retryErr != nil {
