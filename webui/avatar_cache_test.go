@@ -135,3 +135,48 @@ func onePixelPNG(seed string) []byte {
 	// 不必是真 PNG：这几条用例只关心字节内容和哈希，不解码。
 	return []byte("PNG:" + strings.Repeat(seed, 3))
 }
+
+// 一波消息同时进来，同一张头像正好过期：只能有一次回源，不能几十个请求一起去撞
+// qlogo。过期后的并发校验要收敛成一次，其余的等这一次的结果。
+func TestAvatarCacheCollapsesConcurrentRefresh(t *testing.T) {
+	var fetches atomic.Int64
+	release := make(chan struct{})
+	cache := newAvatarCache()
+	now := time.Now()
+	cache.now = func() time.Time { return now }
+	fetch := func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error) {
+		fetches.Add(1)
+		// 卡住第一次回源，让后来的请求必然撞上「正在取」。
+		<-release
+		return &avatarEntry{sha: "abc", contentType: "image/png", body: onePixelPNG("x")}, nil
+	}
+
+	const callers = 32
+	results := make(chan *avatarEntry, callers)
+	for range callers {
+		go func() {
+			entry, _ := cache.load(context.Background(), "member:10001", fetch)
+			results <- entry
+		}()
+	}
+	// 等到确实有人在等这一次回源，再放行。
+	deadline := time.Now().Add(2 * time.Second)
+	for fetches.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+
+	for range callers {
+		select {
+		case entry := <-results:
+			if entry == nil || entry.sha != "abc" {
+				t.Fatalf("并发调用没拿到结果：%+v", entry)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("并发调用卡住了")
+		}
+	}
+	if got := fetches.Load(); got != 1 {
+		t.Fatalf("同一张头像同时回源了 %d 次，应当只有 1 次", got)
+	}
+}
