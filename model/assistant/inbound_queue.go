@@ -18,23 +18,28 @@ import (
 )
 
 const (
-	// inboundPollInterval 是兜底轮询的起始间隔，不是响应延迟：新事件进来会敲
-	// inboundWake，worker 立刻醒。轮询只覆盖三种拿不到唤醒的情况——
+	// inboundPollInterval 是协调者那一圈的节拍：连接状态、回补调度都跟着它走，
+	// 和 worker 领活没关系，保持原样。
+	inboundPollInterval = 500 * time.Millisecond
+	// inboundWorkerPollInterval 是 worker 兜底轮询的起始间隔，不是响应延迟：新事件
+	// 进来会敲 inboundWake，worker 立刻醒。轮询只覆盖三种拿不到唤醒的情况——
 	//   1. 唤醒丢了：inboundWake 是缓冲 1 的非阻塞发送，所有 worker 都在忙时后续
-	//      唤醒会被丢弃，得等某个 worker 忙完，量级是「一个回合」，几秒到几十秒；
+	//      唤醒会被丢弃。影响也就是慢一拍：worker 领到一条之后会在内层循环里一直
+	//      领到队列空，不会漏；
 	//   2. 租约过期要重投（inboundLeaseDuration 10 分钟，分钟级）；
-	//   3. 重试到期（走 inboundRetryDelay 的退避表，秒级起）。
-	// 三种都不需要亚秒级的粒度。
+	//   3. 重试到期（走 inboundRetryDelay 的退避表，秒级起；实际到期时
+	//      ReplayInboundRetries 也会显式唤醒）。
+	// 三种都不需要亚秒级粒度。
 	//
-	// 这个值原来是 500 毫秒，是入站队列第一版随手写的，没有依据。对齐同样「有推送
-	// 通知 + 轮询兜底」的成熟实现：River（Go + Postgres，LISTEN/NOTIFY）默认
-	// FetchPollInterval 1 秒，GoodJob（Rails + Postgres，同样有 NOTIFY）默认 10 秒；
-	// 而没有推送、只能靠轮询发现的 Solid Queue，worker 默认 0.1 秒——Diana 有唤醒
-	// 通道，属于前一类，取 1 秒。
-	inboundPollInterval = time.Second
-	// inboundIdlePollMax 是空闲时轮询间隔的上限。空手而归就翻倍，一路退到这里；
-	// 8 秒仍然远小于「唤醒丢失」要兜住的那个量级（一个回合），够用。
-	inboundIdlePollMax      = 8 * time.Second
+	// worker 这一路原来直接复用协调者的 500 毫秒，是入站队列第一版随手写的，没有
+	// 依据。对齐同样「有推送通知 + 轮询兜底」的成熟实现：River（Go + Postgres，
+	// LISTEN/NOTIFY）默认 FetchPollInterval 1 秒，GoodJob（Rails + Postgres，同样有
+	// NOTIFY）默认 10 秒；而没有推送、只能靠轮询发现的 Solid Queue，worker 默认
+	// 0.1 秒。Diana 有唤醒通道，属于前一类，取 2 秒。
+	inboundWorkerPollInterval = 2 * time.Second
+	// inboundWorkerPollMax 是空闲时的上限，空手而归就翻倍一路退到这里。30 秒是按
+	// 「三条唤醒路径全失灵时最久等多久」定的，不是按响应速度定的。
+	inboundWorkerPollMax    = 30 * time.Second
 	inboundLeaseDuration    = 10 * time.Minute
 	historyInitialDelay     = time.Second
 	historyRetryDelay       = 30 * time.Second
@@ -532,7 +537,7 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 // 等待时间从 1.4 秒线性累加到 11 秒，而 elapsed_ms 和 pool_wait_ms_delta 几乎相等——
 // 时间全在排队，不是 SQLite 慢。
 func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store InboundEventStore) {
-	delay := inboundPollInterval
+	delay := inboundWorkerPollInterval
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	for {
@@ -542,7 +547,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 		case <-timer.C:
 		case <-r.inboundWake:
 			// 有人明确说有活了，退避立刻清零。
-			delay = inboundPollInterval
+			delay = inboundWorkerPollInterval
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -613,7 +618,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 		}
 		// 领到过就回到最短间隔：刚忙完的时候后面往往还有；一直空手才慢慢拉长。
 		if claimed {
-			delay = inboundPollInterval
+			delay = inboundWorkerPollInterval
 		} else {
 			delay = nextInboundPollDelay(delay)
 		}
@@ -625,8 +630,8 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 // 跳到上限：刚空下来的那几秒最可能又来消息，这时候还该反应快。
 func nextInboundPollDelay(current time.Duration) time.Duration {
 	next := current * 2
-	if next > inboundIdlePollMax {
-		next = inboundIdlePollMax
+	if next > inboundWorkerPollMax {
+		next = inboundWorkerPollMax
 	}
 	return next
 }
