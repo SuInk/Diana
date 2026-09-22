@@ -7,6 +7,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -125,4 +126,66 @@ func unrelatedAvatar(size int) image.Image {
 		}
 	}
 	return img
+}
+
+// 线上第一次有人用这个工具就撞上了：回复一张图问「这是哪个群成员头像」，当前消息里
+// 只有一个 reply 段，一张图都没有，工具直接报「没有可匹配的图片」。图在引用消息里。
+func TestAvatarMatchUsesQuotedImageWhenCurrentMessageHasNone(t *testing.T) {
+	image := MessageSegment{Type: "image", Data: map[string]string{"url": "https://example.invalid/avatar.png"}}
+
+	current := MessageEvent{Segments: []MessageSegment{image}}
+	if segment, source, ok := avatarMatchImageSegment(current); !ok || source != "current_message" || segment.Data["url"] != image.Data["url"] {
+		t.Fatalf("当前消息里的图没被选中：ok=%v source=%q", ok, source)
+	}
+
+	quoted := MessageEvent{
+		Segments: []MessageSegment{{Type: "reply", Data: map[string]string{"id": "-421668118"}}},
+		Quoted:   &QuotedMessage{MessageID: "-421668118", Segments: []MessageSegment{image}},
+	}
+	segment, source, ok := avatarMatchImageSegment(quoted)
+	if !ok {
+		t.Fatal("引用消息里的图没被用上，这条路就是线上报错的那条")
+	}
+	if source != "quoted_message" {
+		t.Fatalf("没有说明比的是引用里的图：source=%q", source)
+	}
+	if segment.Data["url"] != image.Data["url"] {
+		t.Fatalf("取错了图：%#v", segment)
+	}
+}
+
+// 语义引用是 Diana 自己推断「这个」指哪条，不是用户点的。比错了图还会一本正经报出
+// 某个成员，不如让模型看见没有图。
+func TestAvatarMatchIgnoresSemanticQuote(t *testing.T) {
+	event := MessageEvent{
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个是谁的头像"}}},
+		Quoted: &QuotedMessage{
+			MessageID: "guessed",
+			Semantic:  true,
+			Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.invalid/guessed.png"}}},
+		},
+	}
+	if _, _, ok := avatarMatchImageSegment(event); ok {
+		t.Fatal("语义引用里的图被当成了用户指定的图")
+	}
+}
+
+// 视频抽帧不是用户发的图，不能拿来比对。
+func TestAvatarMatchSkipsVideoFrames(t *testing.T) {
+	event := MessageEvent{Segments: []MessageSegment{
+		{Type: "image", Data: map[string]string{"url": "https://example.invalid/frame.png", "source_type": "video_frame"}},
+	}}
+	if _, _, ok := avatarMatchImageSegment(event); ok {
+		t.Fatal("视频抽帧被当成了可匹配的图片")
+	}
+}
+
+// 两边都没有图时，错误信息要说清楚两边都找过了，否则用户以为补发一张就行。
+func TestAvatarMatchErrorMentionsBothPlaces(t *testing.T) {
+	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001"}, &recordingChannel{}, NewPluginManager(), nil, &stubReminderStore{}, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "10001"}
+	_, err := runtime.matchCurrentGroupMemberAvatar(t.Context(), event)
+	if err == nil || !strings.Contains(err.Error(), "被引用") {
+		t.Fatalf("错误信息没提到引用消息：%v", err)
+	}
 }

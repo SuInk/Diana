@@ -27,13 +27,16 @@ const (
 )
 
 type groupMemberAvatarMatch struct {
-	CandidatesComplete bool    `json:"candidates_complete"`
-	Matched            bool    `json:"matched"`
-	UserID             string  `json:"user_id,omitempty"`
-	DisplayName        string  `json:"display_name,omitempty"`
-	Score              float64 `json:"score,omitempty"`
-	RunnerUpScore      float64 `json:"runner_up_score,omitempty"`
-	Compared           int     `json:"compared"`
+	CandidatesComplete bool `json:"candidates_complete"`
+	// ImageSource 说明比的是哪张图：current_message 还是 quoted_message。
+	// 引用别人的图问「这是谁的头像」时，模型据此知道自己比的不是当前消息。
+	ImageSource   string  `json:"image_source,omitempty"`
+	Matched       bool    `json:"matched"`
+	UserID        string  `json:"user_id,omitempty"`
+	DisplayName   string  `json:"display_name,omitempty"`
+	Score         float64 `json:"score,omitempty"`
+	RunnerUpScore float64 `json:"runner_up_score,omitempty"`
+	Compared      int     `json:"compared"`
 }
 
 type avatarMatchCandidate struct {
@@ -45,9 +48,9 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
 		return groupMemberAvatarMatch{}, fmt.Errorf("头像匹配只能在群聊中使用")
 	}
-	segment, ok := firstStillImageSegment(event.Segments)
+	segment, imageSource, ok := avatarMatchImageSegment(event)
 	if !ok {
-		return groupMemberAvatarMatch{}, fmt.Errorf("当前消息没有可匹配的图片")
+		return groupMemberAvatarMatch{}, fmt.Errorf("当前消息和被引用的消息里都没有可匹配的图片")
 	}
 	body, _, err := ReadMessageImageSegment(ctx, segment)
 	if err != nil {
@@ -59,7 +62,7 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 	}
 	shortSide, longSide := min(config.Width, config.Height), max(config.Width, config.Height)
 	if shortSide <= 0 || longSide > shortSide*5/4 {
-		return groupMemberAvatarMatch{}, nil
+		return groupMemberAvatarMatch{ImageSource: imageSource}, nil
 	}
 	source, err := avatarFingerprint(body)
 	if err != nil {
@@ -147,7 +150,7 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 		candidates = append(candidates, candidate)
 	}
 	sort.Slice(candidates, func(left, right int) bool { return candidates[left].score > candidates[right].score })
-	result := groupMemberAvatarMatch{Compared: len(candidates), CandidatesComplete: complete && len(candidates) == len(members)}
+	result := groupMemberAvatarMatch{ImageSource: imageSource, Compared: len(candidates), CandidatesComplete: complete && len(candidates) == len(members)}
 	if len(candidates) == 0 {
 		return result, nil
 	}
@@ -162,6 +165,26 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 	result.UserID = candidates[0].member.UserID
 	result.DisplayName = candidates[0].member.DisplayName()
 	return result, nil
+}
+
+// avatarMatchImageSegment 找这次要比的图：先看当前消息，没有就用被引用的那条。
+//
+// 「回复一张图，问这是谁的头像」是最自然的问法，而当前消息里只有一个 reply 段，
+// 一张图都没有，所以这条路以前必然报「没有可匹配的图片」——线上第一次有人用这个
+// 工具就撞上了。图还在 event.Quoted.Segments 里，语音转写那边早就是这么回落的。
+//
+// 语义引用（Diana 自己推断「这个」指哪条）不算：那是猜出来的指向，比错了图还会
+// 一本正经地报出某个成员，不如让模型看见没有图。
+func avatarMatchImageSegment(event MessageEvent) (MessageSegment, string, bool) {
+	if segment, ok := firstStillImageSegment(event.Segments); ok {
+		return segment, "current_message", true
+	}
+	if event.Quoted != nil && !event.Quoted.Semantic {
+		if segment, ok := firstStillImageSegment(event.Quoted.Segments); ok {
+			return segment, "quoted_message", true
+		}
+	}
+	return MessageSegment{}, "", false
 }
 
 func firstStillImageSegment(segments []MessageSegment) (MessageSegment, bool) {
