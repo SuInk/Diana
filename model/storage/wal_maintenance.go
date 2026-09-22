@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -29,6 +30,13 @@ const (
 	// walCheckpointTimeout 给单次 checkpoint 封顶。它占着唯一那条写连接，等太久等于
 	// 把业务写入一起拖着；超时就放掉，下一轮再来。
 	walCheckpointTimeout = 30 * time.Second
+	// walCheckpointBusyTimeoutMS 是做 checkpoint 期间临时调小的 busy_timeout。写连接
+	// 平时是 5000 毫秒——那是为业务写入准备的耐心，checkpoint 不配：读事务占着的时候
+	// 它该立刻放手，而不是攥着唯一那条写连接干等 5 秒。rqlite 这里用的是 250 毫秒，
+	// 同一个道理。
+	walCheckpointBusyTimeoutMS = 250
+	// walWriteBusyTimeoutMS 是写连接平时的 busy_timeout，checkpoint 完要原样还回去。
+	walWriteBusyTimeoutMS = 5000
 	// walBusyWarnStreak 是连续做不成多少次之后开始报警。偶尔赶上读事务很正常，
 	// 一直做不成说明有人长期占着快照，那是另一个要查的问题。
 	walBusyWarnStreak = 3
@@ -132,18 +140,35 @@ func (s *SQLiteStore) checkpointWALIfLarge(ctx context.Context, busyStreak int) 
 
 // checkpointWAL 做一次 checkpoint 并报出耗时。耗时要记：这件事发生在唯一那条写连接上，
 // 它慢多久，后面排队的写入就多等多久，光看「做没做成」看不出代价。
+//
+// 整段钉在同一条连接上，因为 busy_timeout 是连接级的：先调小、做完还原，中间不能被
+// 别的连接串进来。调小是为了让 checkpoint 撞上读事务时立刻放手——攥着唯一那条写连接
+// 干等 5 秒，比 WAL 大一点严重得多。
 func (s *SQLiteStore) checkpointWAL(ctx context.Context, mode string) (busy, checkpointed, total int, elapsed time.Duration, err error) {
 	ctx, cancel := context.WithTimeout(ctx, walCheckpointTimeout)
 	defer cancel()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", walCheckpointBusyTimeoutMS)); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	defer func() {
+		if _, resetErr := conn.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("PRAGMA busy_timeout = %d", walWriteBusyTimeoutMS)); resetErr != nil && err == nil {
+			err = fmt.Errorf("restore busy_timeout: %w", resetErr)
+		}
+	}()
 	startedAt := time.Now()
 	// PRAGMA wal_checkpoint 返回一行三列：busy、日志总页数、已搬回主库的页数。
-	row := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`)
-	if err := row.Scan(&busy, &total, &checkpointed); err != nil {
+	row := conn.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`)
+	if scanErr := row.Scan(&busy, &total, &checkpointed); scanErr != nil {
 		elapsed = time.Since(startedAt)
-		if err == sql.ErrNoRows {
+		if scanErr == sql.ErrNoRows {
 			return 0, 0, 0, elapsed, nil
 		}
-		return 0, 0, 0, elapsed, err
+		return 0, 0, 0, elapsed, scanErr
 	}
 	return busy, checkpointed, total, time.Since(startedAt), nil
 }

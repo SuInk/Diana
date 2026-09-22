@@ -90,3 +90,24 @@ func TestCheckpointYieldsToBusyWriter(t *testing.T) {
 		t.Fatal("写连接被占着时巡检应当立刻让开，而不是排队等锁")
 	}
 }
+
+// checkpoint 期间把 busy_timeout 调小、做完还原：攥着唯一那条写连接干等 5 秒，
+// 比 WAL 大一点严重得多。做完不还原则更糟——后面的业务写入会跟着变得一碰就失败。
+func TestCheckpointRestoresBusyTimeout(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "diana.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, _, _, _, err := store.checkpointWAL(ctx, "PASSIVE"); err != nil {
+		t.Fatal(err)
+	}
+	var busyTimeout int
+	if err := store.db.QueryRowContext(ctx, `PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if busyTimeout != walWriteBusyTimeoutMS {
+		t.Fatalf("checkpoint 之后 busy_timeout 应当还原成 %d，实际 %d", walWriteBusyTimeoutMS, busyTimeout)
+	}
+}
