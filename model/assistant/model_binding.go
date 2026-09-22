@@ -88,12 +88,16 @@ const (
 // llmPurposeClass 只收 intent 分组底下的用途：别的分组没有这个分界。
 // 判断模型答不了的那几个必须留在 text_judges——它们要的是成段文字，不是选项。
 var llmPurposeClass = map[string]string{
+	// 这一拨在发请求时真的带上了判断题表，绑判断模型不会先失败一次。
 	PurposeProactiveReplyRouter:  RoleDecisionJudges,
 	PurposeProactiveReplyQuality: RoleDecisionJudges,
 	PurposeReplySendAudit:        RoleDecisionJudges,
-	PurposeReplyIntentRouter:     RoleDecisionJudges,
-	PurposeReplyRuleRouter:       RoleDecisionJudges,
-	PurposeBotReplyLoop:          RoleDecisionJudges,
+
+	// 意图路由、规则路由、防循环问的也都是是非题，但眼下还没有各自的判断题表：
+	// 归进判断类只会让它们每次先失败一次再降级。等题表补上再挪过来。
+	PurposeReplyIntentRouter: RoleTextJudges,
+	PurposeReplyRuleRouter:   RoleTextJudges,
+	PurposeBotReplyLoop:      RoleTextJudges,
 
 	PurposeSemanticReference:       RoleTextJudges,
 	PurposeInboundMediaReference:   RoleTextJudges,
