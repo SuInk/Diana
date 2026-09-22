@@ -693,6 +693,17 @@ func EstimateTextTokens(text string) int64 {
 	return estimateTextTokens(text)
 }
 
+// EstimateToolDefinitionTokens 估算单个工具定义在每轮请求里占的 token。档位界面
+// 拿它把「常驻更贵」换算成具体数字；口径和 estimateToolDefinitionsTokens 一致，
+// 只是不含整份数组的固定开销。
+func EstimateToolDefinitionTokens(tool ToolDefinition) int64 {
+	raw, err := json.Marshal(tool)
+	if err != nil {
+		return 0
+	}
+	return estimateTextTokens(string(raw))
+}
+
 // EstimateMessageTokens includes role framing, tool calls and media reserves.
 func EstimateMessageTokens(message Message) int64 {
 	return estimateMessageTokens(message)

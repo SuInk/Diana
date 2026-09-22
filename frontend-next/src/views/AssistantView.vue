@@ -16,19 +16,21 @@
         </div>
       </div>
       <div v-if="page === 'edit'" class="view-actions">
-        <!-- 回补会真的去拉 24 小时历史并补处理，属于「会产生后果」的动作，不能用
-             ghost：那是给取消、关闭这类退让动作留的，无边框无底色，夹在绿色的保存
-             旁边看起来像是禁用了。默认样式有边框有底色，明确可点，又不跟主动作抢。 -->
+        <!-- 运行时的启停挪到页头：机器人连不上的时候，人正盯着的是这一页顶上的名字
+             和状态，启停却埋在右侧卡片里，得先找一遍。回补消息搬去了运行记录——
+             它要看的是「哪几条消息漏了」，那些内容在记录页，不在配置页。 -->
         <button
-          v-if="status && status.running && isOneBotPlatform"
+          v-if="status"
           class="btn"
+          :class="status.running ? 'danger' : 'primary'"
           type="button"
           :disabled="busy"
-          title="重新拉取最近 24 小时的会话历史，补入错过的消息（已处理过的消息会自动去重）"
-          @click="triggerBackfill"
+          :title="status.running ? '停止运行时，所有机器人都会断开' : '启动运行时，已启用的机器人开始收消息'"
+          @click="toggleRuntime(!status.running)"
         >
-          <History :size="15" aria-hidden="true" />
-          回补消息
+          <PowerOff v-if="status.running" :size="15" aria-hidden="true" />
+          <Power v-else :size="15" aria-hidden="true" />
+          {{ status.running ? "停止运行" : "启动运行" }}
         </button>
         <button class="btn primary" type="button" :disabled="busy || !form" @click="save">
           <Save :size="15" aria-hidden="true" />
@@ -813,11 +815,6 @@
                 <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
               </div>
               <div class="field">
-                <label for="bot-history-budget">回复历史 token 预算</label>
-                <input id="bot-history-budget" v-model.number="form.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空按 16000" />
-                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条；同时受模型窗口 55% 约束，填了只会收紧不会放宽。</span>
-              </div>
-              <div class="field">
                 <label for="bot-token-quota">模型额度 · 5 小时 token（默认单位 K）</label>
                 <input id="bot-token-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空不限" />
                 <span class="hint">{{ tokenQuotaReadoutText }}</span>
@@ -826,16 +823,6 @@
                 <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
                 <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" inputmode="numeric" placeholder="留空不限" />
                 <span class="hint">按次数计，不带单位。两档各自独立、先到先得：刷得勤的群先撞次数，句句带图的先撞 token。额度是按群算的，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。统计口径含判定、路由和工具步，不只是最终那句回复。主人不受限。</span>
-              </div>
-              <div class="field">
-                <label for="bot-maxcontext">单次请求上下文上限</label>
-                <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
-                <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
-              </div>
-              <div class="field">
-                <label for="bot-context">历史查询条数上限</label>
-                <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
-                <span class="hint">意图路由、指代消解和记忆门控这些旁路往回看几条，不影响正式回复的历史长度。</span>
               </div>
               <div class="field">
                 <label for="bot-backfill-limit">断线回补条数</label>
@@ -1653,6 +1640,42 @@
 
         </div>
 
+        <!-- 上下文：分同一个窗口的几件事放在一起。工具档位原来在扩展页，那一排标签
+             其余几项都是「装了什么」，只有它是「这些东西占多少预算」，和这里的几个
+             上限才是一回事。 -->
+        <div v-show="editorTab === 'context'" class="stack">
+          <section class="card">
+            <div class="card-header">
+              <h2>每轮带什么</h2>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <span class="hint">下面几项分的是同一个模型窗口：历史占一块，工具定义占一块，剩下才是这一轮的新消息。想看某一轮真实的构成，在<a href="#" @click.prevent="navigate('events')">运行记录</a>里。</span>
+              </div>
+              <div class="field">
+                <label for="bot-history-budget">回复历史 token 预算</label>
+                <input id="bot-history-budget" v-model.number="form.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空按 16000" />
+                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条；同时受模型窗口 55% 约束，填了只会收紧不会放宽。</span>
+              </div>
+              <div class="field">
+                <label for="bot-maxcontext">单次请求上下文上限</label>
+                <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
+                <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
+              </div>
+              <div class="field">
+                <label for="bot-context">历史查询条数上限</label>
+                <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
+                <span class="hint">意图路由、指代消解和记忆门控这些旁路往回看几条，不影响正式回复的历史长度。</span>
+              </div>
+            </div>
+          </section>
+          <section class="card">
+            <div class="card-body">
+              <AgentResidencyPanel ref="residencyPanel" :profile="form.id || ''" />
+            </div>
+          </section>
+        </div>
+
         <div v-show="editorTab === 'advanced'" class="stack">
           <!-- Agent -->
           <section class="card">
@@ -1833,27 +1856,11 @@
             <h2>运行状态</h2>
           </div>
           <div class="card-body stack" style="gap: 10px; font-size: 13px">
-            <!-- 启停按钮就贴在「已停止」这行旁边：运行时停着的时候，光把机器人
-                 设成启用是连不上的，还得在这里起一次。按钮放总览页的话，人正看着
-                 这张卡发现没连上，却要先跳走才能动手。 -->
+            <!-- 启停按钮在页头，不在这里再放一个：同一个动作摆两处，人会以为它们
+                 管的是不同的东西。这张卡只负责说清现在什么状态。 -->
             <div class="cluster" style="justify-content: space-between">
               <span class="muted">运行时</span>
-              <div class="cluster" style="gap: 8px">
-                <span class="badge" :class="status?.running ? 'ok' : 'warn'">{{ status?.running ? "运行中" : "已停止" }}</span>
-                <button
-                  v-if="status"
-                  class="btn small"
-                  :class="status.running ? 'danger' : 'primary'"
-                  type="button"
-                  :disabled="busy"
-                  :title="status.running ? '停止运行时，所有机器人都会断开' : '启动运行时，已启用的机器人开始收消息'"
-                  @click="toggleRuntime(!status.running)"
-                >
-                  <PowerOff v-if="status.running" :size="13" aria-hidden="true" />
-                  <Power v-else :size="13" aria-hidden="true" />
-                  {{ status.running ? "停止" : "启动" }}
-                </button>
-              </div>
+              <span class="badge" :class="status?.running ? 'ok' : 'warn'">{{ status?.running ? "运行中" : "已停止" }}</span>
             </div>
             <div v-for="channel in visibleChannels" :key="channel.profile_id || channel.platform" class="cluster" style="justify-content: space-between">
               <span class="muted">{{ channel.name || platformName(channel.platform) }}</span>
@@ -1996,14 +2003,15 @@
 </template>
 
 <script setup lang="ts">
-import { navigate } from "../router";
+import { navigate, viewQuery } from "../router";
+import { botScope } from "../bot-scope";
 import { copyBotConfiguration } from "../bot-config-copy";
 import { findWebSocketConnectionConflict } from "../bot-connection-conflicts";
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, History, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { formatClock } from "../format";
@@ -2020,7 +2028,6 @@ import {
   getBotProfileConfig,
   getBotPlatforms,
   listLLMModels,
-  requestBotBackfill,
   saveBotProfileConfig,
   createBotProfileConfig,
   getNewBotProfileDefaults,
@@ -2059,6 +2066,7 @@ import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
+import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import type { PersonaLintFinding } from "../api";
@@ -2477,10 +2485,12 @@ const editorTabs = [
   { key: "model", label: "模型" },
   { key: "persona", label: "人设" },
   { key: "behavior", label: "行为" },
+  { key: "context", label: "上下文" },
   { key: "advanced", label: "高级" }
 ] as const;
 type EditorTab = (typeof editorTabs)[number]["key"];
 const editorTab = ref<EditorTab>("access");
+const residencyPanel = ref<InstanceType<typeof AgentResidencyPanel> | null>(null);
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 // 和后端 maxRecurringFailureAlertThreshold 对齐：再大就不是「连续失败」而是订阅已经坏了。
@@ -4332,6 +4342,13 @@ async function save(): Promise<void> {
     const saved = await (creating.value ? createBotProfileConfig(payload) : saveBotProfileConfig(payload));
     applyConfig(saved);
     creating.value = false;
+    // 档位走自己的接口，但用户看到的是同一个保存按钮：配置存好之后立刻补上，
+    // 失败了单独报，不能把「机器人配置已保存」这句也一起吞掉。
+    try {
+      await residencyPanel.value?.applyPending();
+    } catch (error) {
+      toastError(error instanceof Error ? `档位没保存成功：${error.message}` : "档位没保存成功");
+    }
     toastSuccess("机器人配置已保存");
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
@@ -4349,25 +4366,6 @@ function validWebSocketURL(value: string): boolean {
   }
 }
 
-async function triggerBackfill(): Promise<void> {
-  const ok = await askConfirm({
-    title: "回补最近 24 小时消息",
-    message: "将重新拉取各会话最近 24 小时的历史并补入错过的消息。已处理过的消息会自动去重，但从未处理过的旧消息可能触发回复。",
-    confirmLabel: "开始回补"
-  });
-  if (!ok) {
-    return;
-  }
-  busy.value = true;
-  try {
-    await requestBotBackfill();
-    toastSuccess("回补已触发，进度见系统日志（backfill_completed 表示完成）");
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : "回补触发失败");
-  } finally {
-    busy.value = false;
-  }
-}
 
 // 编辑哪台机器人只是这个页面自己的状态：直接用列表里的那台填表单，不通知服务端。
 // 以前这里会先调用「切换激活」，把选中的机器人写成全局的当前机器人，影响运行时判断，
@@ -4492,8 +4490,21 @@ async function load(): Promise<void> {
 
 onMounted(() => {
   trackHeaderHeight();
-  void load();
+  void load().then(openRequestedTab);
 });
+
+// 别处（运行记录里的上下文构成）跳过来时带着 ?tab=context：那边看到工具占了多少，
+// 这边才是改它的地方。跳过来要落在正确的机器人上，所以按顶栏的作用域挑；没选作用域
+// 又只有一台时就是它，再多就停在列表让人自己点。
+function openRequestedTab(): void {
+  const requested = viewQuery().get("tab") as EditorTab | null;
+  if (!requested || !editorTabs.some((tab) => tab.key === requested)) return;
+  const target = profiles.value.find((profile) => profile.id === botScope.value) ?? (profiles.value.length === 1 ? profiles.value[0] : undefined);
+  if (!target) return;
+  void editProfile(target).then(() => {
+    editorTab.value = requested;
+  });
+}
 useConfigurationRefresh(["llm"], async () => {
   const config = await getConfig();
   llmChannels.value = config.profiles ?? [];

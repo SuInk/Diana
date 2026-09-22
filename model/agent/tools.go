@@ -654,22 +654,40 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 		if !ok {
 			continue
 		}
-		schema := map[string]any{"type": "object", "additionalProperties": true}
-		strict := false
-		if typed, ok := tool.(ToolInputSchema); ok {
-			if provided := typed.InputSchema(); provided != nil {
-				schema = provided
-				strict = schemaAllowsStrictMode(provided)
-			}
-		}
-		if typed, ok := tool.(StrictDecodingTool); ok && typed.PrefersStrictDecoding() {
-			strict = true
-		}
-		definitions = append(definitions, llm.ToolDefinition{
-			Name: tool.Name(), Description: tool.Description(), Parameters: schema, Strict: strict,
-		})
+		definitions = append(definitions, ToolDefinitionFor(tool))
 	}
 	return definitions
+}
+
+// ToolDefinitionFor 渲染一个工具的原生声明。档位界面按它估算常驻的开销，估的就是
+// 请求里真正发出去的那份，不是另算一套。
+func ToolDefinitionFor(tool Tool) llm.ToolDefinition {
+	schema := map[string]any{"type": "object", "additionalProperties": true}
+	strict := false
+	if typed, ok := tool.(ToolInputSchema); ok {
+		if provided := typed.InputSchema(); provided != nil {
+			schema = provided
+			strict = schemaAllowsStrictMode(provided)
+		}
+	}
+	if typed, ok := tool.(StrictDecodingTool); ok && typed.PrefersStrictDecoding() {
+		strict = true
+	}
+	return llm.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: schema, Strict: strict}
+}
+
+// ResidencyCost 报告一个工具两档各占多少 token：常驻是整份原生声明，按需是目录里
+// 的那一行。界面拿这两个数字告诉用户改档位到底贵多少、省多少。
+func ResidencyCost(tool Tool) (resident, deferred int64) {
+	if tool == nil {
+		return 0, 0
+	}
+	return llm.EstimateToolDefinitionTokens(ToolDefinitionFor(tool)), llm.EstimateTextTokens(deferredCatalogLine(tool))
+}
+
+// deferredCatalogLine 是按需目录里的一行，catalog 和开销估算共用同一份格式。
+func deferredCatalogLine(tool Tool) string {
+	return "- " + tool.Name() + ": " + compactToolDescription(tool.Description(), SystemPromptToolDescriptionBudget) + "\n"
 }
 
 // SystemPromptCatalog 为系统提示词渲染一份每行一个工具的目录。每轮请求都会带上

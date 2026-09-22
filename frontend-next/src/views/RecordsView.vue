@@ -9,6 +9,9 @@
 -->
 <template>
   <div class="records-view">
+    <!-- 页级动作（刷新、回补）由当前这一档自己 teleport 进右边那个位置：它们不是
+         筛选条件，挤在筛选行里既会被挤到第二行，也让人以为改的是筛选结果。 -->
+    <div class="records-head">
     <div class="segmented records-tabs" role="tablist" aria-label="运行记录类型">
       <button
         v-for="tab in tabs"
@@ -23,6 +26,8 @@
         {{ tab.label }}
       </button>
     </div>
+      <div ref="actionsHost" class="records-actions"></div>
+    </div>
 
     <EventsView v-if="active === 'events'" />
     <LogsView v-else />
@@ -30,11 +35,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, provide, ref } from "vue";
 import { Activity, FileClock } from "@lucide/vue";
 import { currentView, navigate, type ViewID } from "../router";
+import { recordsActionsHost } from "../records-actions";
 import EventsView from "./EventsView.vue";
 import LogsView from "./LogsView.vue";
+
+// 两档各自把自己的页级动作 teleport 到这里：动作属于哪一档只有那一档自己知道，
+// 但位置该是固定的，不能一会儿在页头、一会儿在卡片里。
+const actionsHost = ref<HTMLElement | null>(null);
+provide(recordsActionsHost, actionsHost);
 
 const tabs = [
   { id: "events" as ViewID, label: "事件明细", icon: Activity },
@@ -53,8 +64,20 @@ function select(view: ViewID): void {
 </script>
 
 <style scoped>
-.records-tabs {
+.records-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 16px;
+}
+
+.records-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .records-tabs button {

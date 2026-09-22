@@ -4328,8 +4328,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
-		// 常驻名单要等注册表建好才算得出来：档位是用户按扩展配的，得知道这一轮
-		// 到底注册了哪些工具、哪条 MCP 带了哪几个。
+		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
+		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
 		r.rememberAgentResidencyCatalog(event, registry)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
