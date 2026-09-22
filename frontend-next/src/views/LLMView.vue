@@ -319,7 +319,7 @@
             <div v-if="modelOptions.length > 0" class="model-chips">
               <span v-for="model in modelOptions" :key="model.id" class="model-chip">
                 <span class="model-chip-id" :title="model.id">{{ model.id }}</span>
-                <button type="button" class="model-chip-remove" :title="`移除模型 ${model.id}`" :aria-label="`移除模型 ${model.id}`" @click="removeModel(model.id)">
+                <button type="button" class="inline-remove" :title="`移除模型 ${model.id}`" :aria-label="`移除模型 ${model.id}`" @click="removeModel(model.id)">
                   <X :size="14" :stroke-width="2.25" aria-hidden="true" />
                 </button>
               </span>
@@ -373,7 +373,7 @@
                 :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
               />
               <button
-                class="btn ghost icon-only"
+                class="inline-remove"
                 type="button"
                 :title="`删除请求头 ${row.name}`"
                 :aria-label="`删除请求头 ${row.name}`"
@@ -1165,9 +1165,16 @@ useConfigurationRefresh(["bot", "llm"], reload);
   align-items: center;
 }
 
+/* 「添加」撑满尾列，删除保持图标尺寸并在列内居中——撑满会变成一个很大的空框，
+   里面浮着一个小 X。删除用的是模型清单那边同一个 .inline-remove，两处移除动作
+   在同一张表单里长得一样。 */
 .header-row > .btn {
   width: 100%;
   justify-content: center;
+}
+
+.header-row > .inline-remove {
+  justify-self: center;
 }
 
 /* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */

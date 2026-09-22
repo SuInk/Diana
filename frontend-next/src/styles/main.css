@@ -4480,7 +4480,7 @@ a.nav-action {
   font-family: var(--font-mono);
 }
 
-.model-chip-remove {
+.inline-remove {
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
@@ -4498,25 +4498,25 @@ a.nav-action {
   transition: background 0.15s ease, color 0.15s ease;
 }
 
-.model-chip-remove > svg {
+.inline-remove > svg {
   flex: none;
   width: 14px;
   height: 14px;
 }
 
-.model-chip-remove:hover {
+.inline-remove:hover {
   background: var(--err-soft);
   color: var(--err);
 }
 
-.model-chip-remove:focus-visible {
+.inline-remove:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   background: var(--accent-soft);
 }
 
 @media (pointer: coarse) {
-  .model-chip-remove { width: 32px; height: 32px; }
+  .inline-remove { width: 32px; height: 32px; }
 }
 
 /* 布局工具 */

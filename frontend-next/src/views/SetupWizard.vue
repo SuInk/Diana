@@ -133,7 +133,7 @@
               <div v-if="modelOptions.length > 0" class="model-chips">
                 <span v-for="model in modelOptions" :key="model.id" class="model-chip">
                   <span class="model-chip-id" :title="model.id">{{ model.id }}</span>
-                  <button type="button" class="model-chip-remove" :title="`移除模型 ${model.id}`" :aria-label="`移除模型 ${model.id}`" @click="removeModel(model.id)">
+                  <button type="button" class="inline-remove" :title="`移除模型 ${model.id}`" :aria-label="`移除模型 ${model.id}`" @click="removeModel(model.id)">
                     <X :size="14" :stroke-width="2.25" aria-hidden="true" />
                   </button>
                 </span>
