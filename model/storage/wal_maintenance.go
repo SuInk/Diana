@@ -26,6 +26,9 @@ const (
 	// walCheckpointThresholdBytes 是触发阈值。自动 checkpoint 的线是 4 MB，这里留足
 	// 余量，只在明显回收不掉时才插手——正常波动不该惊动它。
 	walCheckpointThresholdBytes = 32 << 20
+	// walCheckpointTimeout 给单次 checkpoint 封顶。它占着唯一那条写连接，等太久等于
+	// 把业务写入一起拖着；超时就放掉，下一轮再来。
+	walCheckpointTimeout = 30 * time.Second
 	// walBusyWarnStreak 是连续做不成多少次之后开始报警。偶尔赶上读事务很正常，
 	// 一直做不成说明有人长期占着快照，那是另一个要查的问题。
 	walBusyWarnStreak = 3
@@ -75,44 +78,72 @@ func (s *SQLiteStore) walSizeBytes() int64 {
 	return info.Size()
 }
 
-// checkpointWALIfLarge 在 WAL 超过阈值时做一次 TRUNCATE checkpoint，返回新的连续失败
-// 计数。返回值而不是改字段：巡检只有一个 goroutine 在跑，状态留在栈上更好推理。
+// checkpointWALIfLarge 在 WAL 超过阈值时回收一次，返回新的连续失败计数。返回值而不是
+// 改字段：巡检只有一个 goroutine 在跑，状态留在栈上更好推理。
+//
+// 两件事决定它不会自己变成新的卡顿源：
+//
+//  1. 写连接正忙就直接跳过这一轮。整个 store 只有一条写连接，业务写入全排在它上面；
+//     巡检插队等于把「回收日志」的时间加在某条消息的回复延迟里。5 分钟一轮，等下一轮
+//     没有任何损失。
+//  2. 先 PASSIVE 再决定要不要 TRUNCATE。PASSIVE 不抢锁、不等读事务，能搬多少搬多少，
+//     日常靠它就够；只有搬完文件还是很大（说明尾部被读事务钉住）才升级到 TRUNCATE，
+//     那一下是要抢锁的，能少做就少做。
 func (s *SQLiteStore) checkpointWALIfLarge(ctx context.Context, busyStreak int) int {
+	if s.db.Stats().InUse > 0 {
+		// 有人正在用写连接，这一轮让开——先看这个再看大小：忙的时候连 stat 都不必做，
+		// 更不该排队等锁。
+		return busyStreak
+	}
 	before := s.walSizeBytes()
 	if before < walCheckpointThresholdBytes {
 		return 0
 	}
-	busy, checkpointed, total, err := s.checkpointWAL(ctx)
+	busy, checkpointed, total, elapsed, err := s.checkpointWAL(ctx, "PASSIVE")
 	if err != nil {
-		log.Printf("diana sqlite wal checkpoint failed: wal_bytes=%d err=%v", before, err)
+		log.Printf("diana sqlite wal checkpoint failed: mode=PASSIVE wal_bytes=%d err=%v", before, err)
 		return busyStreak + 1
 	}
 	after := s.walSizeBytes()
+	if after < walCheckpointThresholdBytes {
+		log.Printf("diana sqlite wal checkpoint: mode=PASSIVE wal_bytes %d -> %d checkpointed=%d total=%d elapsed_ms=%d", before, after, checkpointed, total, elapsed.Milliseconds())
+		return 0
+	}
+	// PASSIVE 搬完还是大：尾部被读事务钉着，或者根本没搬动。TRUNCATE 会等写锁并把
+	// 文件截掉，代价大但一劳永逸。
+	busy, checkpointed, total, elapsed, err = s.checkpointWAL(ctx, "TRUNCATE")
+	if err != nil {
+		log.Printf("diana sqlite wal checkpoint failed: mode=TRUNCATE wal_bytes=%d err=%v", after, err)
+		return busyStreak + 1
+	}
+	truncated := s.walSizeBytes()
 	if busy != 0 {
 		busyStreak++
 		// 一次两次做不成很正常（正好有读事务在），连着做不成才值得说一句：
 		// 那通常意味着有个长活读事务一直占着快照，WAL 只会继续涨。
 		if busyStreak >= walBusyWarnStreak {
-			log.Printf("diana sqlite wal checkpoint blocked %d times: wal_bytes=%d checkpointed=%d total=%d（有长活读事务占着快照？）", busyStreak, after, checkpointed, total)
+			log.Printf("diana sqlite wal checkpoint blocked %d times: wal_bytes=%d checkpointed=%d total=%d elapsed_ms=%d（有长活读事务占着快照？）", busyStreak, truncated, checkpointed, total, elapsed.Milliseconds())
 		}
 		return busyStreak
 	}
-	log.Printf("diana sqlite wal checkpoint: wal_bytes %d -> %d checkpointed=%d total=%d", before, after, checkpointed, total)
+	log.Printf("diana sqlite wal checkpoint: mode=TRUNCATE wal_bytes %d -> %d checkpointed=%d total=%d elapsed_ms=%d", before, truncated, checkpointed, total, elapsed.Milliseconds())
 	return 0
 }
 
-// checkpointWAL 做一次 TRUNCATE checkpoint：把 WAL 里的页全部搬回主库，然后把文件截到
-// 零长度。PASSIVE 只搬不截，解决不了「文件一直很大」这件事。
-func (s *SQLiteStore) checkpointWAL(ctx context.Context) (busy, checkpointed, total int, err error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+// checkpointWAL 做一次 checkpoint 并报出耗时。耗时要记：这件事发生在唯一那条写连接上，
+// 它慢多久，后面排队的写入就多等多久，光看「做没做成」看不出代价。
+func (s *SQLiteStore) checkpointWAL(ctx context.Context, mode string) (busy, checkpointed, total int, elapsed time.Duration, err error) {
+	ctx, cancel := context.WithTimeout(ctx, walCheckpointTimeout)
 	defer cancel()
+	startedAt := time.Now()
 	// PRAGMA wal_checkpoint 返回一行三列：busy、日志总页数、已搬回主库的页数。
-	row := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	row := s.db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(`+mode+`)`)
 	if err := row.Scan(&busy, &total, &checkpointed); err != nil {
+		elapsed = time.Since(startedAt)
 		if err == sql.ErrNoRows {
-			return 0, 0, 0, nil
+			return 0, 0, 0, elapsed, nil
 		}
-		return 0, 0, 0, err
+		return 0, 0, 0, elapsed, err
 	}
-	return busy, checkpointed, total, nil
+	return busy, checkpointed, total, time.Since(startedAt), nil
 }
