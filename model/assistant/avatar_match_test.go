@@ -2,12 +2,18 @@ package assistant
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -187,5 +193,99 @@ func TestAvatarMatchErrorMentionsBothPlaces(t *testing.T) {
 	_, err := runtime.matchCurrentGroupMemberAvatar(t.Context(), event)
 	if err == nil || !strings.Contains(err.Error(), "被引用") {
 		t.Fatalf("错误信息没提到引用消息：%v", err)
+	}
+}
+
+// avatarDirectoryChannel 是带成员名单和成员头像的假通道，用来把整条匹配链路真跑一遍：
+// 取图 → 解码 → 指纹 → 和成员头像比分。
+type avatarDirectoryChannel struct {
+	*recordingChannel
+	members map[string][]byte
+}
+
+func (c *avatarDirectoryChannel) GroupMember(_ context.Context, groupID, userID string) (OneBotGroupMemberInfo, error) {
+	if _, ok := c.members[userID]; !ok {
+		return OneBotGroupMemberInfo{}, fmt.Errorf("不是群成员")
+	}
+	return OneBotGroupMemberInfo{GroupID: groupID, UserID: userID, Nickname: "成员" + userID, MembershipVerified: true}, nil
+}
+
+func (c *avatarDirectoryChannel) GroupMembers(_ context.Context, groupID string) (GroupMemberDirectory, error) {
+	members := make([]OneBotGroupMemberInfo, 0, len(c.members))
+	for userID := range c.members {
+		members = append(members, OneBotGroupMemberInfo{GroupID: groupID, UserID: userID, Nickname: "成员" + userID, MembershipVerified: true})
+	}
+	sort.Slice(members, func(left, right int) bool { return members[left].UserID < members[right].UserID })
+	return GroupMemberDirectory{Members: members, Complete: true, Total: len(members), TotalKnown: true}, nil
+}
+
+func (c *avatarDirectoryChannel) MemberAvatar(_ context.Context, userID string) (GroupAvatar, error) {
+	body, ok := c.members[userID]
+	if !ok {
+		return GroupAvatar{}, fmt.Errorf("没有头像")
+	}
+	return GroupAvatar{Data: body, ContentType: "image/png"}, nil
+}
+
+// 整条链路跑一遍：用户回复一张图问「这是谁的头像」，当前消息里没有图，图在引用里，
+// 而且是从 URL 现取的。要真的认出人来，不是「没报错」就算过。
+func TestAvatarMatchResolvesQuotedImageEndToEnd(t *testing.T) {
+	var target, other bytes.Buffer
+	if err := png.Encode(&target, patternedAvatar(256)); err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(&other, unrelatedAvatar(256)); err != nil {
+		t.Fatal(err)
+	}
+	// 用户发的那张图：同一张头像被重新编码成 JPEG、尺寸也不一样，和真实转发一致。
+	var posted bytes.Buffer
+	if err := jpeg.Encode(&posted, patternedAvatar(384), &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatal(err)
+	}
+
+	var requested atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requested.Add(1)
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(posted.Bytes())
+	}))
+	defer server.Close()
+
+	channel := &avatarDirectoryChannel{
+		recordingChannel: &recordingChannel{},
+		members:          map[string][]byte{"20002": target.Bytes(), "20003": other.Bytes()},
+	}
+	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001"}, channel, NewPluginManager(), nil, &stubReminderStore{}, nil, nil)
+
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "266007836",
+		Segments: []MessageSegment{
+			{Type: "reply", Data: map[string]string{"id": "-421668118"}},
+			{Type: "text", Data: map[string]string{"text": "这个是哪个群成员头像"}},
+		},
+		Quoted: &QuotedMessage{
+			MessageID: "-421668118",
+			Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": server.URL + "/quoted.jpg"}}},
+		},
+	}
+
+	match, err := runtime.matchCurrentGroupMemberAvatar(t.Context(), event)
+	if err != nil {
+		t.Fatalf("匹配报错了：%v", err)
+	}
+	if requested.Load() == 0 {
+		t.Fatal("引用消息里的图根本没被取过")
+	}
+	if !match.Matched {
+		t.Fatalf("没认出人来：%+v", match)
+	}
+	if match.UserID != "20002" {
+		t.Fatalf("认错人了：%+v", match)
+	}
+	if match.ImageSource != "quoted_message" {
+		t.Fatalf("没说明比的是引用里的图：%+v", match)
+	}
+	if match.Compared != 2 || !match.CandidatesComplete {
+		t.Fatalf("候选统计不对：%+v", match)
 	}
 }
