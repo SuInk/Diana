@@ -31,6 +31,13 @@ const livePromptSamples = 6
 
 func liveLLMClient(t *testing.T) llm.LLMClient {
 	t.Helper()
+	return liveLLMClientWithHeaders(t, nil)
+}
+
+// liveLLMClientWithHeaders 允许一次真机对照单独控制请求头，用来把「网关读的是
+// 请求头还是 body 字段」这两条路分开量。
+func liveLLMClientWithHeaders(t *testing.T, headers map[string]string) llm.LLMClient {
+	t.Helper()
 	if os.Getenv("DIANA_LIVE_LLM") != "1" {
 		t.Skip("set DIANA_LIVE_LLM=1 and DIANA_TEST_LLM_API_KEY to run prompt compliance against a real model")
 	}
@@ -49,6 +56,7 @@ func liveLLMClient(t *testing.T) llm.LLMClient {
 		Model:    model,
 		APIStyle: llm.APIStyle(strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_API_STYLE"))),
 		Timeout:  90 * time.Second,
+		Headers:  headers,
 	}
 	if raw := strings.TrimSpace(os.Getenv("DIANA_TEST_MAX_CONTEXT_TOKENS")); raw != "" {
 		limit, parseErr := strconv.ParseInt(raw, 10, 64)

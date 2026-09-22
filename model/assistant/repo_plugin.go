@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -339,6 +340,51 @@ func (m repoPluginManifestFile) pluginManifest() PluginManifest {
 		Settings:      m.Settings,
 		ReportsErrors: m.ReportsErrors,
 	}
+}
+
+// 同 ID 安装的版本关系，安装确认框据此提示升级还是降级。
+const (
+	RepoPluginVersionUpgrade   = "upgrade"
+	RepoPluginVersionDowngrade = "downgrade"
+	RepoPluginVersionSame      = "same"
+)
+
+// RepoPluginInstalledVersion 描述「这个 ID 已经被占用」的情况。
+type RepoPluginInstalledVersion struct {
+	Version string `json:"version"`
+	// Change 是即将安装的版本相对已装版本的关系。
+	Change string `json:"change"`
+	// BuiltIn 为 true 表示占用这个 ID 的是内置插件，不能被替换。
+	BuiltIn bool `json:"built_in,omitempty"`
+}
+
+// CompareRepoPluginVersions 比较两个 x.y.z 版本。清单校验已经保证了格式，
+// 解析不出的段按 0 处理，不额外报错。
+func CompareRepoPluginVersions(next, installed string) string {
+	parse := func(raw string) [3]int {
+		var out [3]int
+		for index, part := range strings.SplitN(strings.TrimPrefix(strings.TrimSpace(raw), "v"), ".", 3) {
+			if index > 2 {
+				break
+			}
+			value, err := strconv.Atoi(part)
+			if err != nil {
+				value = 0
+			}
+			out[index] = value
+		}
+		return out
+	}
+	left, right := parse(next), parse(installed)
+	for index := range left {
+		switch {
+		case left[index] > right[index]:
+			return RepoPluginVersionUpgrade
+		case left[index] < right[index]:
+			return RepoPluginVersionDowngrade
+		}
+	}
+	return RepoPluginVersionSame
 }
 
 // RepoPluginPermission 是权限词表条目，安装确认框据此翻译与排序。
@@ -858,6 +904,13 @@ func checkTagVersion(ref RepoPluginRef, version string) error {
 // expectedCommit 非空时必须与归档的提交一致：预览之后仓库有新提交就拒绝，
 // 避免装进去的不是用户确认过的那一版。调用方负责把插件登记进 PluginManager 并持久化状态。
 func (i *RepoPluginInstaller) Install(ctx context.Context, rawURL, expectedCommit string) (*RepoPlugin, RepoPluginSource, error) {
+	return i.InstallGuarded(ctx, rawURL, expectedCommit, nil)
+}
+
+// InstallGuarded 在清单校验通过、真正落盘之前先让调用方过目一次。安装是
+// 「先覆盖目录再登记」，等拿到插件实例才发现 ID 被占用，目标目录已经没了，
+// 所以同 ID 冲突这类判断必须在这个点做。guard 返回错误即中止，磁盘不受影响。
+func (i *RepoPluginInstaller) InstallGuarded(ctx context.Context, rawURL, expectedCommit string, guard func(PluginManifest) error) (*RepoPlugin, RepoPluginSource, error) {
 	snapshot, err := i.loadSnapshot(ctx, rawURL)
 	if err != nil {
 		return nil, RepoPluginSource{}, err
@@ -866,6 +919,11 @@ func (i *RepoPluginInstaller) Install(ctx context.Context, rawURL, expectedCommi
 		return nil, RepoPluginSource{}, ErrRepoPluginChanged
 	}
 	manifest := snapshot.manifest
+	if guard != nil {
+		if err := guard(manifest); err != nil {
+			return nil, RepoPluginSource{}, err
+		}
+	}
 	root := filepath.Join(i.DataDir, repoPluginSourceDir)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, RepoPluginSource{}, err
@@ -992,7 +1050,9 @@ func stripArchiveRoot(name string) (string, bool) {
 
 // RemoveRepoPlugin 删除已安装第三方插件的落盘目录。来源记录由调用方清。
 func RemoveRepoPlugin(dataDir, id string) error {
-	if strings.TrimSpace(id) == "" || strings.ContainsAny(id, `/\`) {
+	// 按安装时同一套 ID 规则校验，而不是临时挡掉路径分隔符：".." 不含分隔符，
+	// 却会让下面这个 RemoveAll 删到整个数据目录。
+	if !pluginIDPattern.MatchString(strings.TrimSpace(id)) {
 		return fmt.Errorf("diana: 非法插件 ID %q", id)
 	}
 	return os.RemoveAll(filepath.Join(dataDir, repoPluginSourceDir, id))

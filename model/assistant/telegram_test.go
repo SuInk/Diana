@@ -832,7 +832,7 @@ func TestTelegramGroupCommandToSelfSetsToMe(t *testing.T) {
 		MessageID: 113954,
 		Date:      1789054343,
 		Text:      "/status@examplebot",
-		Entities:  []telegramEntity{{Type: "bot_command", Offset: 0, Length: 16}},
+		Entities:  []telegramEntity{{Type: "bot_command", Offset: 0, Length: 18}},
 		From:      &telegramUser{ID: 70002},
 		Chat:      &telegramChat{ID: -100200400, Type: "supergroup"},
 	}

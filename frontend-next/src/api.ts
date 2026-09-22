@@ -1626,6 +1626,16 @@ export interface RepoPluginPreview {
   permissions: RepoPluginPermission[];
   files: string[];
   risk: RepoPluginRisk;
+  /** 这个 ID 已经被占用时出现：已装版本、升降级关系、是否内置。 */
+  installed?: RepoPluginInstalledVersion;
+}
+
+/** 同 ID 已被占用时的情况；内置插件不可替换，第三方覆盖需要显式确认。 */
+export interface RepoPluginInstalledVersion {
+  version: string;
+  /** upgrade / downgrade / same */
+  change?: string;
+  built_in?: boolean;
 }
 
 export function previewRepoPlugin(url: string): Promise<RepoPluginPreview> {
@@ -1635,10 +1645,15 @@ export function previewRepoPlugin(url: string): Promise<RepoPluginPreview> {
   });
 }
 
-export function installRepoPlugin(url: string, acceptRisk: boolean, commit: string): Promise<PluginState> {
+export function installRepoPlugin(
+  url: string,
+  acceptRisk: boolean,
+  commit: string,
+  replace = false
+): Promise<PluginState> {
   return requestJSON<PluginState>("/api/assistant/plugins/repo/install", {
     method: "POST",
-    body: JSON.stringify({ url, accept_risk: acceptRisk, commit })
+    body: JSON.stringify({ url, accept_risk: acceptRisk, commit, replace })
   });
 }
 

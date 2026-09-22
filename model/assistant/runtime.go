@@ -457,6 +457,13 @@ type Runtime struct {
 	seqProbeArmed   bool
 	seqProbed       map[string]struct{}
 	seqGapRunning   map[string]struct{}
+	// liveSeq 记住每个群最近一条实时消息的 seq，用来发现「连接一直好着、却漏了
+	// 中间某一条」。断线重连那一档由 seqProbed 负责，这一档负责连接正常时的零星
+	// 丢失——桥接漏推一条事件不会断线，原来的探测完全看不到。
+	liveSeq map[string]int64
+	// liveSeqProbedAt 是每个群上一次因连续缺口发起探测的时间，用来限流：seq 也会
+	// 被撤回和系统提示占用，不限流的话这类正常跳号会把回补请求刷爆。
+	liveSeqProbedAt map[string]time.Time
 	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
 	groupQuota          groupModelQuotaCache
 	seqGapActive        atomic.Int32
@@ -7242,13 +7249,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	if limit <= 0 {
 		limit = 20
 	}
-	threshold := cfg.ContextSummaryThreshold
-	if threshold <= 0 {
-		threshold = limit * 2
-	}
-	if threshold < limit {
-		threshold = limit
-	}
+	threshold := contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold)
 	if len(history) > threshold {
 		compressCount := len(history) - limit
 		if compressCount > 0 {

@@ -745,6 +745,13 @@ func (m *PluginManager) RegisterPlugin(p Plugin) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if state, ok := m.states[manifest.ID]; ok {
+		// 已登记的内置插件不能被外来插件顶替。判据是「登记表里这个 ID 已经是
+		// 内置的」，不是 ID 前缀——前缀只是命名约定，group_relations 就是个
+		// 不带 official. 前缀的内置插件，只看前缀等于给它留了个后门：第三方
+		// 清单写成这个 ID 就能换掉插件对象，还继承它已配好的设置。
+		if state.Manifest.BuiltIn && !manifest.BuiltIn {
+			return fmt.Errorf("%w: %s 是内置插件，不能被第三方插件替换", ErrBuiltInPluginAction, manifest.ID)
+		}
 		state.Manifest = manifest
 		m.states[manifest.ID] = state
 	} else {
@@ -1071,6 +1078,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 		id       string
 		plugin   AgentToolPlugin
 		settings SettingValues
+		builtIn  bool
 	}
 
 	m.mu.RLock()
@@ -1092,12 +1100,36 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 			id:       id,
 			plugin:   toolPlugin,
 			settings: scopedPluginSettings(state, settingOverrides),
+			builtIn:  state.Manifest.BuiltIn,
 		})
 	}
 	m.mu.RUnlock()
-	slices.SortFunc(providers, func(a, b provider) int { return strings.Compare(a.id, b.id) })
+	// 内置插件排在前面：工具重名时先到的留下，顺带保证第三方抢不到内置工具的
+	// 名字。其余按插件 ID 排序，保持每轮工具顺序稳定。
+	slices.SortFunc(providers, func(a, b provider) int {
+		if a.builtIn != b.builtIn {
+			if a.builtIn {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.id, b.id)
+	})
 
 	var tools []agent.Tool
+	seen := map[string]bool{}
+	appendTools := func(id string, provided []agent.Tool) {
+		for _, tool := range provided {
+			name := tool.Name()
+			if seen[name] {
+				// 重名工具一起发给模型，调哪个是未定义行为。留下先到的那个。
+				log.Printf("diana: plugin %q tool %q duplicates an earlier tool, skipped", id, name)
+				continue
+			}
+			seen[name] = true
+			tools = append(tools, tool)
+		}
+	}
 	for _, item := range providers {
 		var provided []agent.Tool
 		var err error
@@ -1107,9 +1139,11 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 			provided, err = item.plugin.AgentTools(item.settings)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("diana: plugin %q agent tools: %w", item.id, err)
+			// 一个插件出问题不该让这一轮所有工具都消失——包括内置的。
+			log.Printf("diana: plugin %q agent tools: %v", item.id, err)
+			continue
 		}
-		tools = append(tools, provided...)
+		appendTools(item.id, provided)
 	}
 
 	m.mu.RLock()
@@ -1130,7 +1164,7 @@ func (m *PluginManager) AgentToolsForPlatformWithGroupOverrides(platform string,
 	}
 	m.mu.RUnlock()
 	for _, provider := range legacyProviders {
-		tools = append(tools, provider.AgentTools()...)
+		appendTools("", provider.AgentTools())
 	}
 	return tools, nil
 }

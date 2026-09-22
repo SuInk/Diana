@@ -129,6 +129,10 @@ type Request struct {
 	LoadedTools []string
 	// ToolsLoaded is called immediately, including when a later model call fails.
 	ToolsLoaded func([]string)
+	// RequireEvidence 让本轮必须先检索再收口：模型不调用 web_search 就直接
+	// 给终稿时会被打回，要求它先查。调用方判断这一轮在问外部事实时置位。
+	// 没有 web_search 工具时该标记自动失效，不会把回复卡死。
+	RequireEvidence bool
 }
 
 type Response struct {

@@ -509,6 +509,19 @@
             </ul>
             <p class="hint">凭据类设置安装后请到插件设置里配置；读接口不回传明文。</p>
           </section>
+          <p v-if="repoPreview.installed" class="repo-install-error" role="alert">
+            <template v-if="repoPreview.installed.built_in">
+              这个 ID 属于内置插件，不能被第三方插件替换。
+            </template>
+            <template v-else>
+              已安装同 ID 插件 v{{ repoPreview.installed.version }}，这次是
+              v{{ repoPreview.manifest.version }}（{{ repoReplaceLabel }}）。覆盖会连带接管它已配置的设置与凭据。
+            </template>
+          </p>
+          <label v-if="repoPreview.installed && !repoPreview.installed.built_in" class="repo-risk-ack">
+            <input v-model="repoReplaceAccepted" type="checkbox" />
+            <span>我确认要覆盖已安装的版本</span>
+          </label>
           <ul class="repo-risk-list">
             <li v-for="(warning, index) in repoPreview.risk.warnings" :key="index">{{ warning }}</li>
           </ul>
@@ -522,7 +535,7 @@
       <template #footer>
         <template v-if="repoPreview">
           <button class="btn" type="button" :disabled="repoInstallBusy" @click="resetRepoPreview">返回</button>
-          <button class="btn primary" type="button" :disabled="!repoRiskAccepted || repoInstallBusy" @click="confirmRepoInstall">
+          <button class="btn primary" type="button" :disabled="!repoRiskAccepted || repoInstallBlocked || repoInstallBusy" @click="confirmRepoInstall">
             {{ repoInstallBusy ? "安装中…" : "确认安装" }}
           </button>
         </template>
@@ -987,6 +1000,27 @@ const repoInstallError = ref("");
 const repoCheckBusy = ref(false);
 const repoInstallBusy = ref(false);
 const repoRiskAccepted = ref(false);
+const repoReplaceAccepted = ref(false);
+
+const repoReplaceLabel = computed(() => {
+  switch (repoPreview.value?.installed?.change) {
+    case "upgrade":
+      return "升级";
+    case "downgrade":
+      return "降级";
+    default:
+      return "同版本覆盖";
+  }
+});
+
+// 内置插件占用的 ID 装不了；同 ID 覆盖要先勾确认。
+const repoInstallBlocked = computed(() => {
+  const installed = repoPreview.value?.installed;
+  if (!installed) {
+    return false;
+  }
+  return installed.built_in === true || !repoReplaceAccepted.value;
+});
 
 const repoPreviewLink = computed(() => {
   const source = repoPreview.value?.source;
@@ -1022,6 +1056,7 @@ function resetRepoPreview(): void {
   repoPreview.value = null;
   repoInstallError.value = "";
   repoRiskAccepted.value = false;
+  repoReplaceAccepted.value = false;
 }
 
 async function checkRepoPlugin(): Promise<void> {
@@ -1034,6 +1069,7 @@ async function checkRepoPlugin(): Promise<void> {
   try {
     repoPreview.value = await previewRepoPlugin(url);
     repoRiskAccepted.value = false;
+    repoReplaceAccepted.value = false;
   } catch (error) {
     repoPreview.value = null;
     repoInstallError.value = error instanceof Error ? error.message : "检查失败";
@@ -1050,7 +1086,7 @@ async function confirmRepoInstall(): Promise<void> {
   }
   repoInstallBusy.value = true;
   try {
-    upsert(await installRepoPlugin(url, true, preview.commit));
+    upsert(await installRepoPlugin(url, true, preview.commit, Boolean(preview.installed)));
     toastSuccess(`已安装 ${preview.manifest.name}`);
     repoInstallOpen.value = false;
     await reload();
