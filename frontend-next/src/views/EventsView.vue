@@ -62,79 +62,20 @@
         </div>
       </section>
 
-      <section v-if="contextBudget || residentContext" class="card context-budget">
-        <div class="card-head">
-          <div>
-            <h2>上下文占比{{ contextScopeLabel }}</h2>
-            <span class="card-sub">
-              <template v-if="contextBudget">
-                窗口 {{ formatNumber(contextBudget.context_window) }} token，各层合计
-                {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出。
-              </template>
-              <template v-if="residentContext">
-                其中每轮都注入、与当前消息无关的内容合计
-                {{ formatNumber(residentContext.total_tokens) }} token，是这台机器人每轮的底价。
-              </template>
-            </span>
-          </div>
-        </div>
-        <div class="card-body">
-          <template v-if="contextBudget">
-            <div class="budget-bar" role="img" :aria-label="`各层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
-              <span
-                v-for="segment in contextBudgetSegments"
-                :key="segment.key"
-                class="budget-slice"
-                :class="`budget-slice-${segment.key}`"
-                :style="{ width: `${segment.percent}%` }"
-                :title="`${segment.label} ${segment.tokens} token`"
-              ></span>
-              <span class="budget-slice budget-slice-headroom" :style="{ width: `${contextBudgetHeadroomPercent}%` }"></span>
-            </div>
-            <ul class="budget-legend">
-              <li v-for="layer in contextBudget.layers" :key="layer.key">
-                <span class="budget-dot" :class="`budget-slice-${layer.key}`" aria-hidden="true"></span>
-                <span class="budget-legend-label">{{ layer.label }}</span>
-                <span class="budget-legend-value mono">{{ formatNumber(layer.tokens) }}</span>
-                <span class="budget-legend-foot">{{ contextBudgetLayerFoot(layer) }}</span>
-              </li>
-              <li>
-                <span class="budget-dot budget-slice-headroom" aria-hidden="true"></span>
-                <span class="budget-legend-label">留白</span>
-                <span class="budget-legend-value mono">{{ formatNumber(contextBudget.headroom) }}</span>
-                <span class="budget-legend-foot">系统提示 / 当前消息 / 工具结果 / 输出</span>
-              </li>
-            </ul>
-          </template>
-
-          <!-- 上面是「窗口怎么切的」，下面是「每轮实际被灌了什么」。放在同一张卡里，
-               因为看的人问的本来就是同一个问题：这点占比到底装了些什么东西。 -->
-          <div v-if="residentContext && residentContext.blocks.length" class="resident-section">
-            <h3 class="resident-title">常驻内容</h3>
-            <p class="resident-intro muted">{{ residentContext.note }}</p>
-            <ul class="resident-list">
-              <li v-for="block in residentContext.blocks" :key="block.key" class="resident-item">
-                <button
-                  type="button"
-                  class="resident-head"
-                  :aria-expanded="expandedResidentBlocks.has(block.key)"
-                  @click="toggleResidentBlock(block.key)"
-                >
-                  <ChevronDown :size="14" class="resident-caret" :class="{ open: expandedResidentBlocks.has(block.key) }" aria-hidden="true" />
-                  <!-- 和上面比例条同层的块用同一个色点，看的人一眼对得上是哪一段。 -->
-                  <span class="budget-dot" :class="`budget-slice-${block.key}`" aria-hidden="true"></span>
-                  <span class="resident-label">{{ block.label }}</span>
-                  <span class="resident-tokens mono">{{ block.content ? `${formatNumber(block.tokens)} token` : "空" }}</span>
-                  <span v-if="block.budget" class="resident-budget muted">配额 {{ formatNumber(block.budget) }}</span>
-                </button>
-                <p v-if="block.note" class="resident-note muted">{{ block.note }}</p>
-                <pre v-if="expandedResidentBlocks.has(block.key) && block.content" class="resident-body">{{ block.content }}</pre>
-                <p v-else-if="expandedResidentBlocks.has(block.key)" class="resident-body muted">这一块当前是空的，本轮不会注入任何内容。</p>
-              </li>
-            </ul>
-          </div>
-        </div>
-      </section>
+      <!-- 这张卡原先一直摊在事件列表上面，手机上要滚过大半屏才看得到第一条事件。
+           它是「偶尔查一次」的东西，不是每次打开这一页都要读的，所以收成一行入口，
+           内容搬进弹窗，默认不占版面。 -->
+      <button
+        v-if="contextBudget || residentContext"
+        type="button"
+        class="context-budget-trigger"
+        @click="contextOpen = true"
+      >
+        <PieChart :size="15" aria-hidden="true" />
+        <span class="context-budget-trigger-label">上下文占比{{ contextScopeLabel }}</span>
+        <span class="context-budget-trigger-value mono">{{ contextTriggerSummary }}</span>
+        <ChevronRight :size="15" class="context-budget-trigger-caret" aria-hidden="true" />
+      </button>
 
       <div v-if="summaryLoading" class="event-stats-line" role="status" aria-label="正在加载事件统计">
         <SkeletonBlock width="180px" height="22px" />
@@ -501,6 +442,78 @@
         </div>
       </div>
     </Teleport>
+
+    <Modal
+      v-if="contextOpen && (contextBudget || residentContext)"
+      :title="`上下文占比${contextScopeLabel}`"
+      wide
+      @close="contextOpen = false"
+    >
+      <p class="card-sub context-budget-intro">
+        <template v-if="contextBudget">
+          窗口 {{ formatNumber(contextBudget.context_window) }} token，各层合计
+          {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出。
+        </template>
+        <template v-if="residentContext">
+          其中每轮都注入、与当前消息无关的内容合计
+          {{ formatNumber(residentContext.total_tokens) }} token，是这台机器人每轮的底价。
+        </template>
+      </p>
+      <template v-if="contextBudget">
+        <div class="budget-bar" role="img" :aria-label="`各层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
+          <span
+            v-for="segment in contextBudgetSegments"
+            :key="segment.key"
+            class="budget-slice"
+            :class="`budget-slice-${segment.key}`"
+            :style="{ width: `${segment.percent}%` }"
+            :title="`${segment.label} ${segment.tokens} token`"
+          ></span>
+          <span class="budget-slice budget-slice-headroom" :style="{ width: `${contextBudgetHeadroomPercent}%` }"></span>
+        </div>
+        <ul class="budget-legend">
+          <li v-for="layer in contextBudget.layers" :key="layer.key">
+            <span class="budget-dot" :class="`budget-slice-${layer.key}`" aria-hidden="true"></span>
+            <span class="budget-legend-label">{{ layer.label }}</span>
+            <span class="budget-legend-value mono">{{ formatNumber(layer.tokens) }}</span>
+            <span class="budget-legend-foot">{{ contextBudgetLayerFoot(layer) }}</span>
+          </li>
+          <li>
+            <span class="budget-dot budget-slice-headroom" aria-hidden="true"></span>
+            <span class="budget-legend-label">留白</span>
+            <span class="budget-legend-value mono">{{ formatNumber(contextBudget.headroom) }}</span>
+            <span class="budget-legend-foot">系统提示 / 当前消息 / 工具结果 / 输出</span>
+          </li>
+        </ul>
+      </template>
+
+      <!-- 上面是「窗口怎么切的」，下面是「每轮实际被灌了什么」。放在同一个弹窗里，
+           因为看的人问的本来就是同一个问题：这点占比到底装了些什么东西。 -->
+      <div v-if="residentContext && residentContext.blocks.length" class="resident-section">
+        <h3 class="resident-title">常驻内容</h3>
+        <p class="resident-intro muted">{{ residentContext.note }}</p>
+        <ul class="resident-list">
+          <li v-for="block in residentContext.blocks" :key="block.key" class="resident-item">
+            <button
+              type="button"
+              class="resident-head"
+              :aria-expanded="expandedResidentBlocks.has(block.key)"
+              @click="toggleResidentBlock(block.key)"
+            >
+              <ChevronDown :size="14" class="resident-caret" :class="{ open: expandedResidentBlocks.has(block.key) }" aria-hidden="true" />
+              <!-- 和上面比例条同层的块用同一个色点，看的人一眼对得上是哪一段。 -->
+              <span class="budget-dot" :class="`budget-slice-${block.key}`" aria-hidden="true"></span>
+              <span class="resident-label">{{ block.label }}</span>
+              <span class="resident-tokens mono">{{ block.content ? `${formatNumber(block.tokens)} token` : "空" }}</span>
+              <span v-if="block.budget" class="resident-budget muted">配额 {{ formatNumber(block.budget) }}</span>
+            </button>
+            <p v-if="block.note" class="resident-note muted">{{ block.note }}</p>
+            <pre v-if="expandedResidentBlocks.has(block.key) && block.content" class="resident-body">{{ block.content }}</pre>
+            <p v-else-if="expandedResidentBlocks.has(block.key)" class="resident-body muted">这一块当前是空的，本轮不会注入任何内容。</p>
+          </li>
+        </ul>
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -513,12 +526,14 @@ import {
   Bug,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Gauge,
   ImageOff,
   LoaderCircle,
   MessageCircle,
   MessageCircleOff,
   MessageCircleReply,
+  PieChart,
   RefreshCw,
   Search,
   Sigma,
@@ -546,6 +561,7 @@ import { currentView } from "../router";
 import { stream } from "../stream";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
+import Modal from "../components/Modal.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 
@@ -1050,6 +1066,15 @@ const contextBudget = computed(() => response.value?.context_budget ?? null);
 const residentContext = computed(() => summaryResponse.value?.resident_context ?? response.value?.resident_context ?? null);
 
 // 展开状态按块记，翻页和刷新之间保持不变：排查串味时常常盯着同一块反复看。
+// 上下文占比默认收起：它是偶尔查一次的东西，摊开在列表上面每次都要滚过去。
+const contextOpen = ref(false);
+// 入口那一行只报一个数，报「每轮底价」——它才是看的人真正想盯的那个。
+const contextTriggerSummary = computed(() => {
+  if (residentContext.value) return `每轮底价 ${formatNumber(residentContext.value.total_tokens)} token`;
+  if (contextBudget.value) return `各层合计 ${formatNumber(contextBudget.value.allocated)} token`;
+  return "";
+});
+
 const expandedResidentBlocks = ref(new Set<string>());
 
 function toggleResidentBlock(key: string) {
@@ -1571,8 +1596,51 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
+/* 上下文占比整块收成一行入口：比例条、图例和常驻原文加起来能占掉一屏，
+   而它是偶尔查一次的东西，摊在事件列表上面等于每次进这一页都要滚过去。 */
+.context-budget-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-budget-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.context-budget-trigger-label {
+  font-weight: 600;
+}
+
+.context-budget-trigger-value {
+  color: var(--muted);
+}
+
+.context-budget-trigger-caret {
+  margin-left: auto;
+  color: var(--muted);
+  flex: none;
+}
+
+.context-budget-intro {
+  display: block;
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 /* 常驻内容是「摆原文」，不是统计：默认收起，点开才占版面，否则一段几千字的
-   人设会把整页事件挤到屏幕外。它和比例条同卡，所以先用一条分隔线隔开。 */
+   人设会把弹窗撑成一条长卷。它和比例条同窗，所以先用一条分隔线隔开。 */
 .resident-section {
   margin-top: 16px;
   padding-top: 14px;
