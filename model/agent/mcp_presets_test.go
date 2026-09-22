@@ -351,19 +351,19 @@ func TestHiddenPresetsRoundTrip(t *testing.T) {
 	if len(listHidden()) != 0 {
 		t.Fatal("默认不该有隐藏的预设")
 	}
-	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "preset_hide", Kind: "mcp", Preset: "luckin"}); err != nil {
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "presets", Action: "hide", Kind: "mcp", Preset: "luckin"}); err != nil {
 		t.Fatal(err)
 	}
 	if hidden := listHidden(); !hidden["luckin"] || len(hidden) != 1 {
 		t.Fatalf("隐藏没生效：%#v", hidden)
 	}
-	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "preset_show", Kind: "mcp", Preset: "luckin"}); err != nil {
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "presets", Action: "show", Kind: "mcp", Preset: "luckin"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(listHidden()) != 0 {
 		t.Fatal("放回来没生效")
 	}
-	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "preset_hide", Kind: "mcp", Preset: "nope"}); err == nil {
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "presets", Action: "hide", Kind: "mcp", Preset: "nope"}); err == nil {
 		t.Fatal("不存在的预设应当报错")
 	}
 }

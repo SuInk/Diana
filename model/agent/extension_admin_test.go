@@ -351,7 +351,7 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 	gitea := giteaAPIStub(t, "good-token")
 
 	_, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
-		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
 		Values: map[string]string{"host": gitea.URL, "token": "wrong-token"},
 	})
 	if !errors.Is(err, ErrPresetCredentialRejected) {
@@ -362,7 +362,7 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 	}
 
 	result, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
-		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
 		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
 	})
 	if err != nil {
@@ -388,7 +388,7 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 
 	// 令牌留空表示沿用旧的：改了别的字段也不用重新贴一次令牌，而且照样验得过。
 	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
-		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
 		Values: map[string]string{"host": gitea.URL},
 	}); err != nil {
 		t.Fatalf("留空令牌应当沿用已保存的那个：%v", err)
@@ -410,7 +410,7 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 	}
 	disabled := false
 	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
-		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
 		Values: map[string]string{"host": gitea.URL}, Config: map[string]any{"enabled": disabled},
 	}); err != nil {
 		t.Fatal(err)
@@ -429,7 +429,7 @@ func TestExtensionAdminPresetVerifiesTokenBeforeSaving(t *testing.T) {
 
 	// 单独的「检测」不写盘，只回报验的结果。
 	verified, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
-		Operation: "preset_verify", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Operation: "verify", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
 		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
 	})
 	if err != nil {
@@ -477,7 +477,7 @@ func TestMCPSaveDeletesRemovedEnvKeys(t *testing.T) {
 	path := resolveMCPConfigPath(cfg.WithDefaults())
 
 	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
-		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio",
 		Values: map[string]string{"host": gitea.URL, "token": "good-token"},
 	}); err != nil {
 		t.Fatal(err)
@@ -494,7 +494,7 @@ func TestMCPSaveDeletesRemovedEnvKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{
-		Operation: "preset_save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
+		Operation: "save", Kind: "mcp", Name: "gitea", Preset: "gitea", Transport: "stdio", Replace: true,
 		Values: map[string]string{"host": gitea.URL},
 	}); err != nil {
 		t.Fatal(err)

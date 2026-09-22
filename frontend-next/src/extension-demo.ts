@@ -54,9 +54,9 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
  // 预设清单和真实部署保持一致：演示里也能走一遍「选预设 → 填字段 → 添加」。
  if(operation==='presets')return {items:demoMCPPresets.map(preset=>({preset,installed:entries.some(i=>i.kind==='mcp'&&i.name===preset.name),hidden:hiddenPresets.has(preset.id)}))};
  // 「删掉」预设只是把那一行藏起来，随时能放回来。
- if(operation==='preset_hide'){hiddenPresets.add(String(body.preset));return {ok:true}}
- if(operation==='preset_show'){hiddenPresets.delete(String(body.preset));return {ok:true}}
- if(operation==='preset_save'){
+ if(operation==='presets'&&body.action==='hide'){hiddenPresets.add(String(body.preset));return {ok:true}}
+ if(operation==='presets'&&body.action==='show'){hiddenPresets.delete(String(body.preset));return {ok:true}}
+ if(operation==='save'&&body.preset){
   const preset=demoMCPPresets.find(p=>p.id===body.preset);if(!preset)throw Error('预设不存在');
   const transport=preset.transports.find(t=>t.id===body.transport);if(!transport)throw Error('预设没有这种接法');
   for(const field of transport.fields)if(field.required&&!String(body.values?.[field.key]??'').trim())throw Error(`请填写「${field.label}」`);
@@ -71,7 +71,7 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
   return {ok:true};
  }
  // 演示站不连任何外部服务，也就没法真的验令牌——照实说，不伪造一个「验过了」。
- if(operation==='preset_verify')return {verified:false,supported:false,message:'演示模式不连接外部服务，无法检测令牌，请在真实部署中检测'};
+ if(operation==='verify')return {verified:false,supported:false,message:'演示模式不连接外部服务，无法检测令牌，请在真实部署中检测'};
  const item=entries.find(i=>i.kind===body.kind&&i.name===body.name);
  if(operation==='read'){if(!item)throw Error('扩展不存在');return item.kind==='skill'?{content:item.content,managed:item.managed}:{config:item.config,configured_headers:Object.keys(item.config?.headers||{}),configured_env:Object.keys(item.config?.env||{}),...(item.preset?{preset:item.preset,preset_transport:item.preset_transport,preset_values:item.preset_values}:{})}}
  if(operation==='test')throw Error('演示模式不连接外部 MCP，请在真实部署中测试');

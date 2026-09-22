@@ -42,7 +42,26 @@ const (
 	// 但也不能完全不设限，否则模型交替加载不同工具就能空转。单独给一个配额：既不挤占
 	// 干活的预算，又保证循环一定会终止。一次调用可以带多个名字，所以这个数很够用。
 	maxToolLoadCallsPerAgentRun = 4
+
+	// maxIntrospectionCallsPerAgentRun 是「只读自省工具」共用的配额，同样不占 MaxSteps。
+	//
+	// 这几个工具问的都是 Diana 自己：注册表里有什么能力、这个账号是谁、某条服务开放给谁。
+	// 它们不对外产生任何动作，线上实测都在毫秒级（capabilities 是本地检索，identity_check
+	// 只在显式要群身份时才走一次平台查询，自带 4 秒超时）。它们和 tools_load 一样是「为了
+	// 把活干对而先问一句」，扣正事的预算等于逼模型少问、凭记忆猜——线上 09-22 抓到一次：
+	// 8 格预算里 tools_load、extension_access、capabilities 各占一格，真正干活只剩 3 格。
+	//
+	// 共用一个配额而不是各给各的：「反复打听」这类空转只需要一条闸，也不会因为以后工具
+	// 变多就把总量悄悄放大。
+	maxIntrospectionCallsPerAgentRun = 6
 )
+
+// isIntrospectionCall 问工具自己这次调用算不算打听。判断放在工具那一侧：runner 认不得
+// 后面还会加的工具，写死一张名单只会漏，而每个工具最清楚自己改不改东西。
+func isIntrospectionCall(tool Tool, input map[string]any) bool {
+	probe, ok := tool.(IntrospectionTool)
+	return ok && probe.Introspection(input)
+}
 
 // internalProtocolTermPattern 是证据账本协议里的固定字段名和术语。它们是代码定义的
 // 协议词，不是自然语言，按字面拦截是准确的。
@@ -168,6 +187,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var usage llm.Usage
 	webSearchCalls := 0
 	toolLoadCalls := 0
+	introspectionCalls := 0
 	modelTurns := 0
 	toolCalls := 0
 	protocolRepairs := 0
@@ -521,7 +541,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			webSearchCalls++
 		}
-		if action.Tool == ToolsLoadToolName {
+		if isIntrospectionCall(tool, action.Input) {
+			// 只读自省不占 MaxSteps；自己的配额兜住「反复打听」的空转。
+			if introspectionCalls >= maxIntrospectionCallsPerAgentRun {
+				protocolRepairs++
+				limitErr := fmt.Sprintf("本轮查询自身能力和身份的次数已达上限 %d；请用已经问到的信息继续，或直接给出最终回复", maxIntrospectionCallsPerAgentRun)
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
+				messages = appendToolRepair(messages, resp, lastText, limitErr)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break
+				}
+				continue
+			}
+			introspectionCalls++
+		} else if action.Tool == ToolsLoadToolName {
 			// 只取 schema，不做外部动作，不占 MaxSteps；用自己的配额兜住空转。
 			if toolLoadCalls >= maxToolLoadCallsPerAgentRun {
 				protocolRepairs++

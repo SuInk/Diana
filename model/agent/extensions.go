@@ -294,6 +294,9 @@ func NewExtensionsListTool(catalog ExtensionCatalog, managementEnabled bool) *Ex
 
 func (t *ExtensionsListTool) Name() string { return "list_capabilities" }
 
+// 只读能力目录，本地一次遍历，不改任何东西。
+func (t *ExtensionsListTool) Introspection(map[string]any) bool { return true }
+
 func (t *ExtensionsListTool) Description() string {
 	return `列出 Diana 的统一能力目录，包括默认内置插件、本地 Skills、MCP 服务、启用状态和 MCP 工具名。技能正文用 read_skill 读取。`
 }
