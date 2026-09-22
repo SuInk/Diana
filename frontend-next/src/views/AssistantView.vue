@@ -818,6 +818,16 @@
                 <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条；同时受模型窗口 55% 约束，填了只会收紧不会放宽。</span>
               </div>
               <div class="field">
+                <label for="bot-token-quota">模型额度 · 5 小时 token（默认单位 K）</label>
+                <input id="bot-token-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空不限" />
+                <span class="hint">{{ tokenQuotaReadoutText }}</span>
+              </div>
+              <div class="field">
+                <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
+                <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">按次数计，不带单位。两档各自独立、先到先得：刷得勤的群先撞次数，句句带图的先撞 token。额度是按群算的，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。统计口径含判定、路由和工具步，不只是最终那句回复。主人不受限。</span>
+              </div>
+              <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
                 <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
@@ -2050,6 +2060,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
+import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import type { PersonaLintFinding } from "../api";
 import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
 import { personaOwnedTemplate } from "../persona-owned-template";
@@ -2065,6 +2076,16 @@ import { toastError, toastSuccess } from "../toast";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../channel-status";
 
 const form = ref<BotProfileConfig | null>(null);
+
+const tokenQuotaDraft = ref("");
+
+const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空不限。"));
+
+watch(tokenQuotaDraft, (value) => {
+  if (!form.value) return;
+  const parsed = parseTokenQuota(value);
+  form.value.model_token_quota = parsed === undefined ? 0 : parsed;
+});
 const loading = ref(true);
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
@@ -4048,6 +4069,7 @@ function setForm(config: BotProfileConfig): void {
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
     prompt_chinese_slang_hint: config.prompt_chinese_slang_hint ?? true
   };
+  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");

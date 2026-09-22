@@ -165,6 +165,9 @@
             <span v-if="group.shared_with?.length" class="badge warn" :title="sharedBotsTitle(group)">
               同连接 {{ group.shared_with.length + 1 }} 台都在回
             </span>
+            <span v-if="quotaBadge(group)" class="badge" :class="quotaBadge(group)!.tone" :title="quotaBadge(group)!.title">
+              {{ quotaBadge(group)!.text }}
+            </span>
           </div>
           <p class="group-card-desc">
             {{ group.system_prompt ? truncate(group.system_prompt, 68) : group.configured ? "沿用全局人设与默认行为。" : "尚未设置群级覆盖，当前跟随全局配置。" }}
@@ -326,6 +329,31 @@
           />
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
+        <div class="field">
+          <label for="group-quota">模型额度 · 5 小时 token（默认单位 K）</label>
+          <input id="group-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空跟随机器人" />
+          <span class="hint">{{ tokenQuotaReadoutText }}</span>
+        </div>
+        <div class="field">
+          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
+          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">按次数计，不带单位。留空跟随机器人那一档。</span>
+        </div>
+        <div v-if="editingQuota" class="field wide quota-usage">
+          <div class="cluster" style="justify-content: space-between; gap: 8px">
+            <span class="muted">{{ quotaWindowLabel }}已用</span>
+            <span>{{ editingQuota.text }}</span>
+          </div>
+          <div class="quota-track" role="img" :aria-label="`${editingQuota.text}，用满 ${editingQuota.percent}%`">
+            <span :class="{ full: editingQuota.percent >= 100 }" :style="{ width: `${Math.min(100, editingQuota.percent)}%` }"></span>
+          </div>
+          <span class="hint">{{ editingQuota.detail }}</span>
+        </div>
+        <p class="hint field wide">
+          留空跟随机器人配置里的同名两档，两边都没填才是不限。两档各自独立、先到先得：句句短但刷个不停的群先撞次数，只说几句却每句带图的先撞 token。统计的是这个群名下所有模型调用，
+          判定、路由和工具步都算，不只是最终那句回复。用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
+          窗口滚过去自动恢复，不需要手动解除。主人不受限。
+        </p>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
           <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
@@ -543,6 +571,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
+import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 
@@ -652,6 +681,81 @@ async function loadRelations(): Promise<void> {
 }
 
 const editing = ref<BotGroupConfig | null>(null);
+
+const quotaWindowSeconds = ref(0);
+
+// 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。两档都设了就都画出来，
+// 进度条按吃紧的那一档走——先撞哪一档就先停在哪一档。
+const editingQuota = computed(() => {
+  const groupID = editing.value?.group_id;
+  if (!groupID) return undefined;
+  const summary = groups.value.find((group) => group.group_id === groupID);
+  if (!summary) return undefined;
+  const tokenLimit = summary.quota_token_limit ?? 0;
+  const callLimit = summary.quota_call_limit ?? 0;
+  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
+  const tokensUsed = summary.quota_tokens_used ?? 0;
+  const callsUsed = summary.quota_calls_used ?? 0;
+  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
+  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
+  const parts: string[] = [];
+  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")} / ${tokenLimit.toLocaleString("en-US")}`);
+  if (callLimit > 0) parts.push(`调用 ${callsUsed} / ${callLimit} 次`);
+  const percent = Math.round(Math.max(tokenRatio, callRatio) * 100);
+  const detail =
+    percent >= 100
+      ? "已用满，这个群暂停一切花 token 的环节；消息照常进历史和长期记忆，窗口滚过去自动恢复。"
+      : `剩 ${tokenLimit > 0 ? `${formatTokenCount(Math.max(0, tokenLimit - tokensUsed))} token` : ""}${
+          tokenLimit > 0 && callLimit > 0 ? "、" : ""
+        }${callLimit > 0 ? `${Math.max(0, callLimit - callsUsed)} 次调用` : ""}。窗口是滚动的，不在整点清零。`;
+  return { text: parts.join("，"), detail, percent };
+});
+
+
+const quotaWindowLabel = computed(() => {
+  const hours = quotaWindowSeconds.value / 3600;
+  if (hours <= 0) return "额度窗口";
+  return Number.isInteger(hours) ? `最近 ${hours} 小时` : `最近 ${hours.toFixed(1)} 小时`;
+});
+
+// 额度是个「悄悄生效」的闸门：用满之后机器人就是不说话，不摆出进度来没人知道
+// 是撞了额度还是坏了。所以两档里谁更吃紧就先显示谁，快满和已满分开着色。
+function quotaBadge(group: BotGroupSummary): { text: string; title: string; tone: string } | undefined {
+  const tokenLimit = group.quota_token_limit ?? 0;
+  const callLimit = group.quota_call_limit ?? 0;
+  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
+  const tokensUsed = group.quota_tokens_used ?? 0;
+  const callsUsed = group.quota_calls_used ?? 0;
+  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
+  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
+  const byTokens = tokenRatio >= callRatio;
+  const ratio = Math.max(tokenRatio, callRatio);
+  const text = byTokens
+    ? `额度 ${formatTokenCount(tokensUsed)}/${formatTokenCount(tokenLimit)}`
+    : `额度 ${callsUsed}/${callLimit} 次`;
+  const parts: string[] = [];
+  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")}/${tokenLimit.toLocaleString("en-US")}`);
+  if (callLimit > 0) parts.push(`调用 ${callsUsed}/${callLimit} 次`);
+  const tone = ratio >= 1 ? "warn" : ratio >= 0.8 ? "accent" : "";
+  const suffix = ratio >= 1 ? "，已暂停一切花 token 的环节，窗口滚过去自动恢复" : "";
+  return { text, title: `${quotaWindowLabel.value}：${parts.join("，")}${suffix}`, tone };
+}
+
+function formatTokenCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
+  return String(value);
+}
+
+const tokenQuotaDraft = ref("");
+
+const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空跟随机器人。"));
+
+watch(tokenQuotaDraft, (value) => {
+  if (!editing.value) return;
+  const parsed = parseTokenQuota(value);
+  editing.value.model_token_quota = parsed === undefined ? 0 : parsed;
+});
 const editingGroupName = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
@@ -779,6 +883,7 @@ async function load(showFeedback = false): Promise<void> {
     liveAvailable.value = response.live_available;
     syncWarning.value = response.warning ?? "";
     connectionPeers.value = response.connection_peers ?? [];
+    quotaWindowSeconds.value = response.quota_window_seconds ?? 0;
     if (showFeedback) {
       if (response.live_available) {
         toastSuccess(`已同步 ${response.groups.filter((group) => group.joined).length} 个群`);
@@ -860,6 +965,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
+  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
@@ -1179,4 +1285,28 @@ useConfigurationRefresh(["bot"], () => load());
 
 .group-extension-lists{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
 @media(max-width:700px){.group-extension-lists{grid-template-columns:1fr}}
+.quota-usage {
+  display: grid;
+  gap: 6px;
+}
+
+.quota-track {
+  height: 7px;
+  overflow: hidden;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.quota-track span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
+.quota-track span.full {
+  background: var(--danger);
+}
 </style>
