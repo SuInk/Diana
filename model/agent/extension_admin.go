@@ -154,7 +154,22 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if !found {
 			return nil, fmt.Errorf("扩展不存在")
 		}
-		return nil, saveExtensionOverride(m.cfg.WorkDir, req.ProfileID, req.Kind+":"+req.Name, req.Enabled)
+		if err := saveExtensionOverride(m.cfg.WorkDir, req.ProfileID, req.Kind+":"+req.Name, req.Enabled); err != nil {
+			return nil, err
+		}
+		// 启用一条 MCP 时真连一次。以前这一步只写一条覆盖就返回，连不上的服务
+		// 照样显示为「已启用」，失败只在后台日志里——用户要到某次对话里工具没
+		// 反应才知道。开关仍然照常保存：连不上常常只是对面还没起来。
+		if req.Enabled && ExtensionKind(req.Kind) == ExtensionKindMCP {
+			if server, ok := m.mcpConfigs[req.Name]; ok {
+				names, err := probeMCPServer(ctx, req.Name, server, m.cfg)
+				if err != nil {
+					return map[string]any{"ok": true, "warning": fmt.Sprintf("已启用，但连接测试没通过：%v。这条服务现在还不能用。", err)}, nil
+				}
+				return map[string]any{"ok": true, "connected": true, "tools": names}, nil
+			}
+		}
+		return nil, nil
 	case "residency":
 		// 三档只有一个可选的 bool：Resident 不带就是「跟随默认」，把键删掉。
 		if req.ProfileID == "" {
@@ -371,17 +386,19 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		return map[string]any{"verified": true, "supported": true, "account": account}, nil
 	}
 	if req.Operation == "test" {
-		runtime, err := startMCPServerRuntime(ctx, req.Name, server, m.cfg, map[string]bool{})
+		names, err := probeMCPServer(ctx, req.Name, server, m.cfg)
 		if err != nil {
-			return nil, fmt.Errorf("MCP 连接或工具发现失败，请检查地址、命令及凭据")
-		}
-		defer runtime.Close()
-		names := []string{}
-		for _, tool := range runtime.tools {
-			names = append(names, tool.Name())
+			// 原文照带：以前这里统一成一句「请检查地址、命令及凭据」，用户看不到
+			// 到底是二进制没有、地址不对还是令牌过期，只能去翻后台日志。
+			return nil, fmt.Errorf("MCP 连接或工具发现失败：%w", err)
 		}
 		return map[string]any{"connected": true, "tools": names}, nil
 	}
+	// 本地进程形态的 MCP 缺二进制时，这台机器上它永远起不来。仍然保存：二进制可能
+	// 是等会儿才挂上去的，为此拦住保存等于让人连配置都改不了。但必须当场说清楚，
+	// 不能像以前那样只在后台日志里留一行 executable file not found。
+	var warnings []string
+	commandMissing := checkLocalMCPCommand(server)
 	// 预设装出来的服务在落盘前验一次凭据：令牌被明确拒绝就不保存，省得装上一条
 	// 表面正常、一调用就 401 的服务。连不上只当警告——内网实例、先配置后联网都是
 	// 常事，为此拦住保存反而更难用。
@@ -393,7 +410,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		case errors.Is(err, ErrPresetCredentialRejected):
 			return nil, err
 		case err != nil:
-			result["warning"] = fmt.Sprintf("已保存，但没能验证凭据：%v", err)
+			warnings = append(warnings, fmt.Sprintf("没能验证凭据：%v", err))
 		default:
 			// 验过了才说验过：有的接法根本没法验，不能让界面替它吹。
 			result["verified"] = true
@@ -401,6 +418,25 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 				result["account"] = account
 			}
 		}
+		// 凭据对不代表这条服务跑得起来：gitea-mcp 的握手和工具发现根本不碰令牌，
+		// 反过来令牌验得过也不代表进程在。所以保存时强制真连一次。命令都不在时
+		// 不必再花一次启动超时去确认这件事。
+		switch {
+		case commandMissing != nil:
+			warnings = append(warnings, localMCPCommandError(server, commandMissing).Error())
+		default:
+			if names, err := probeMCPServer(ctx, req.Name, server, m.cfg); err != nil {
+				warnings = append(warnings, fmt.Sprintf("连接测试没通过：%v", err))
+			} else {
+				result["connected"] = true
+				result["tools"] = names
+			}
+		}
+	} else if commandMissing != nil {
+		warnings = append(warnings, localMCPCommandError(server, commandMissing).Error())
+	}
+	if len(warnings) > 0 {
+		result["warning"] = "已保存，但" + strings.Join(warnings, "；") + "。这条服务现在还不能用，修好后可以在它的卡片里重新「测试连接」。"
 	}
 	servers[req.Name] = server
 	if err := saveMCPServers(path, servers); err != nil {

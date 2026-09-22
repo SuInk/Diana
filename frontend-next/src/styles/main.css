@@ -2790,6 +2790,46 @@ a.nav-action {
   font-size: 12.5px;
 }
 
+.group-connection-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -2px 0 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted, var(--surface));
+  font-size: 12.5px;
+}
+
+.group-connection-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.group-connection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group-connection-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.group-connection-list .connection-all-groups {
+  color: var(--warn);
+}
+
 .group-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));

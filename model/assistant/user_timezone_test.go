@@ -105,3 +105,88 @@ func TestSpeakerTimezonePromptConvertsForTheOtherSide(t *testing.T) {
 		t.Fatalf("runtime clock prompt = %q", clock)
 	}
 }
+
+// TestUnknownSpeakerTimezoneBlocksSleepNudge 没记过对方时区时，深夜和清早不许按本机
+// 时钟推断对方的作息：群里有人在海外，「该睡了」就是在对着下午三点的人说。
+func TestUnknownSpeakerTimezoneBlocksSleepNudge(t *testing.T) {
+	cfg := BotConfig{ReplyGate: &ReplyGate{Timezone: "Asia/Shanghai"}}
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Skipf("时区库不可用：%v", err)
+	}
+	lateNight := unknownSpeakerTimezoneNote(cfg, time.Date(2026, 9, 21, 2, 0, 0, 0, shanghai))
+	for _, want := range []string{"没有记录当前发言者所在时区", "催他睡"} {
+		if !strings.Contains(lateNight, want) {
+			t.Fatalf("深夜提示缺少 %q：%s", want, lateNight)
+		}
+	}
+	morning := unknownSpeakerTimezoneNote(cfg, time.Date(2026, 9, 21, 7, 0, 0, 0, shanghai))
+	if !strings.Contains(morning, "早上好") {
+		t.Fatalf("清早提示缺少时段问候约束：%s", morning)
+	}
+	// 白天和晚上引不出作息主张，不该白占 token。
+	for _, hour := range []int{12, 21} {
+		if got := unknownSpeakerTimezoneNote(cfg, time.Date(2026, 9, 21, hour, 0, 0, 0, shanghai)); got != "" {
+			t.Fatalf("%d 点注入了多余的时区提示：%s", hour, got)
+		}
+	}
+	// 时区按回复门槛那一份算，不是运行测试的机器所在时区。
+	utc := BotConfig{ReplyGate: &ReplyGate{Timezone: "UTC"}}
+	if unknownSpeakerTimezoneNote(utc, time.Date(2026, 9, 21, 2, 0, 0, 0, shanghai)) != "" {
+		t.Fatal("没有按机器人配置的时区判断时段")
+	}
+}
+
+// TestRuntimeClockPromptPicksOneTimezoneStance 记过时区走换算，没记过走「别假设」，
+// 两条不能同时出现在一轮提示词里。
+func TestRuntimeClockPromptPicksOneTimezoneStance(t *testing.T) {
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Skipf("时区库不可用：%v", err)
+	}
+	now := time.Date(2026, 9, 21, 2, 0, 0, 0, shanghai)
+	runtime := NewRuntime(BotConfig{ReplyGate: &ReplyGate{Timezone: "Asia/Shanghai"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.now = func() time.Time { return now }
+
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "u1"}
+	if prompt := runtime.runtimeClockPrompt(event); !strings.Contains(prompt, "没有记录当前发言者所在时区") {
+		t.Fatalf("画像没加载时也算不知道时区：%s", prompt)
+	}
+	event.userProfileLoaded = true
+	event.userProfile = UserMemoryProfile{Portrait: []UserPortraitTrait{{Field: PortraitFieldTimezone, Value: "Europe/Berlin", UpdatedAt: now.Add(-24 * time.Hour)}}}
+	prompt := runtime.runtimeClockPrompt(event)
+	if strings.Contains(prompt, "没有记录当前发言者所在时区") {
+		t.Fatalf("记过时区却还在说不知道：%s", prompt)
+	}
+	if !strings.Contains(prompt, "作息相关的话") {
+		t.Fatalf("记过时区时没把作息话题钉到对方当地时间：%s", prompt)
+	}
+}
+
+// TestRelationshipEvaluatorDerivesTimezoneFromResidence 时区必须能被后台评估自动记进
+// 画像：等对方专门报一句「我在 Europe/Berlin」是等不到的，而这一栏一旦空着，
+// 跨时区那条链路就永远退回「按本机时区猜」（见 unknownSpeakerTimezoneNote）。
+func TestRelationshipEvaluatorDerivesTimezoneFromResidence(t *testing.T) {
+	prompt := relationshipEvaluationSystemPrompt
+	for _, want := range []string{
+		"不用等对方专门报时区",
+		"记下了能唯一确定时区的居住地",
+		"known_portrait 里还没有 timezone",
+		"source=inferred",
+		"跨多个时区的国家",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("评估器提示词缺少 %q", want)
+		}
+	}
+	// 字段说明是随 payload 一起发给评估器的，两边不能各说各的。
+	var hint string
+	for _, spec := range PortraitFieldSpecs() {
+		if spec.Field == PortraitFieldTimezone {
+			hint = spec.Hint
+		}
+	}
+	if !strings.Contains(hint, "居住城市或国家能唯一确定时区时一并记下") {
+		t.Fatalf("时区字段说明没有跟上：%q", hint)
+	}
+}

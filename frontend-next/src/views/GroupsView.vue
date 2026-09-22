@@ -90,6 +90,31 @@
         </div>
       </div>
 
+      <div v-if="connectionPeers.length > 0" class="group-connection-note" role="status">
+        <Share2 :size="16" aria-hidden="true" />
+        <div class="group-connection-body">
+          <p>
+            这条连接上还有 {{ connectionPeers.length }} 台机器人。它们共用同一个平台账号：一条群消息会交给每一台，各自按自己的群开关决定回不回——同一个群有两台开着，群里看到的就是这个号连发几条。
+          </p>
+          <ul class="group-connection-list">
+            <li v-for="peer in connectionPeers" :key="peer.bot_profile_id">
+              <strong>{{ peer.name || peer.bot_profile_id }}</strong>
+              <span v-if="!peer.enabled" class="muted">已停用，不参与回复</span>
+              <template v-else>
+                <span :class="{ 'connection-all-groups': peer.new_group_enabled }">
+                  {{ peer.new_group_enabled ? "新群默认工作：没单独配过的群它都收" : "新群默认不工作" }}
+                </span>
+                <span v-if="peer.enabled_groups?.length" class="muted">
+                  已开 {{ peer.enabled_groups.length }} 个群：{{ peer.enabled_groups.slice(0, 8).join("、")
+                  }}<template v-if="peer.enabled_groups.length > 8">…</template>
+                </span>
+                <span v-else-if="!peer.new_group_enabled" class="muted">没有开着的群</span>
+              </template>
+            </li>
+          </ul>
+        </div>
+      </div>
+
       <div v-if="syncWarning" class="group-sync-warning" role="status">
         <WifiOff :size="16" aria-hidden="true" />
         <span>{{ syncWarning }}</span>
@@ -243,9 +268,9 @@
             <p>{{ inheritedPersona }}</p>
           </details>
         </div>
-        <div class="field">
+        <div class="field wide">
           <label>接话设置</label>
-          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" inheritable @update:model-value="setGroupParticipation" />
+          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
         </div>
         <div class="field wide">
           <label>本群补充标记的机器人</label>
@@ -493,6 +518,7 @@ import { askConfirm } from "../confirm";
 import { botScope } from "../bot-scope";
 import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
 import {
+  type ConnectionPeer,
   getBotProfileConfig,
   getBotPlatforms,
   listBotGroups,
@@ -574,6 +600,8 @@ const loaded = ref(false);
 const refreshing = ref(false);
 const liveAvailable = ref(false);
 const syncWarning = ref("");
+// 复用同一条连接的其它机器人：路由表散在各台自己的配置里，这份是那张全貌。
+const connectionPeers = ref<ConnectionPeer[]>([]);
 const searchQuery = ref("");
 const newGroupID = ref("");
 const relationRangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
@@ -750,6 +778,7 @@ async function load(showFeedback = false): Promise<void> {
     extensions.value = extensionList?.items ?? [];
     liveAvailable.value = response.live_available;
     syncWarning.value = response.warning ?? "";
+    connectionPeers.value = response.connection_peers ?? [];
     if (showFeedback) {
       if (response.live_available) {
         toastSuccess(`已同步 ${response.groups.filter((group) => group.joined).length} 个群`);
@@ -997,9 +1026,10 @@ async function setNewGroupDefault(event: Event): Promise<void> {
   const enabled = (event.target as HTMLInputElement).checked;
   bulkBusy.value = true;
   try {
-    await saveBotGroupSwitches({ bot_profile_id: botScope.value, new_group_enabled: enabled });
+    const result = await saveBotGroupSwitches({ bot_profile_id: botScope.value, new_group_enabled: enabled });
     newGroupEnabled.value = enabled;
     toastSuccess(enabled ? "新加入的群默认工作" : "新加入的群默认不工作");
+    if (result.warning) toastError(result.warning);
   } catch (error) {
     (event.target as HTMLInputElement).checked = !enabled;
     toastError(error instanceof Error ? error.message : "保存失败");
@@ -1026,6 +1056,7 @@ async function setAllGroups(enabled: boolean): Promise<void> {
   try {
     const result = await saveBotGroupSwitches({ bot_profile_id: botScope.value, group_ids: groupIDs, enabled });
     toastSuccess(`已${enabled ? "启用" : "停用"} ${result.updated} 个群`);
+    if (result.warning) toastError(result.warning);
     await load();
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
@@ -1041,6 +1072,9 @@ async function toggleGroup(group: BotGroupSummary, event: Event): Promise<void> 
     const saved = await saveBotGroup({ ...groupConfigOf(group), bot_profile_id: botScope.value || group.bot_profile_id, enabled });
     upsert(saved.config);
     toastSuccess(enabled ? `群 ${group.group_id} 已启用` : `群 ${group.group_id} 已停用`);
+    if (saved.warning) toastError(saved.warning);
+    // 冲突提示来自别的机器人的配置，本页那枚「同连接 N 台都在回」的角标也得跟着变。
+    await load();
   } catch (error) {
     (event.target as HTMLInputElement).checked = !enabled;
     toastError(error instanceof Error ? error.message : "保存失败");
@@ -1086,6 +1120,7 @@ async function saveEditing(): Promise<void> {
     upsert(saved.config);
     editing.value = null;
     toastSuccess(`群 ${payload.group_id} 配置已保存`);
+    if (saved.warning) toastError(saved.warning);
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
   } finally {

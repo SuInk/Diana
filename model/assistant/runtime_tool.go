@@ -38,6 +38,14 @@ func (r *Runtime) Plugins() *PluginManager {
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 	profileID := r.eventProfileID(event)
+	// 停用的机器人：所有插件一律按停用算。
+	//
+	// 「停用」这台机器人的直觉是它整个安静下来，而不是只停回复——插件还在后台抓
+	// Feed、拉仓库、跑任务，只是结果发不出去。这里一刀切在唯一的开关聚合点上，
+	// 比让每个插件各自记得判断可靠：新插件不用做任何事就自动遵守。
+	if r.profileDisabled(profileID) {
+		return allPluginsDisabled(r.plugins)
+	}
 	out := r.plugins.ProfileOverrides(profileID)
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
@@ -481,7 +489,20 @@ func nestedForwardPluginResponse(responses []PluginResponse) *PluginResponse {
 //
 // 走通知的分条而不是聊天的：这类推送是一条完整的事实——提醒原文、订阅摘要、
 // 「本次发送失败，将在 X 自动重试」——按句子拆开就成了半句一条，读的人得自己拼。
+// ErrDeliveryTargetDisabled 表示这个投递目标属于一台已停用的机器人。
+//
+// 它不是故障，是配置状态：停用是长期的，重试多少次都不会好。分出来单独一个错误
+// 是为了让上层的扇出能跳过这个目标而不是把整条订阅判成失败——一条订阅同时投 QQ
+// 群和 Telegram 群时，停用 Telegram 那台不该让 QQ 那份跟着反复重试、攒够次数还
+// 给主人发一条失败告警。
+var ErrDeliveryTargetDisabled = errors.New("diana: delivery target belongs to a disabled bot profile")
+
 func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
+	// 所有「到点了主动找人」的投递都从这里过，判断放在这一个路口：RSS、仓库订阅、
+	// 定时查询、一次性提醒、编码任务回报、失败告警，谁都不用各自记得检查一遍。
+	if r.profileDisabled(event.ProfileID) {
+		return fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
 		MentionUserID: strings.TrimSpace(event.UserID),
@@ -1089,6 +1110,10 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 		}
 		messageIDs, err := r.sendNotificationWithIDs(ctx, target, text)
 		if err != nil {
+			if errors.Is(err, ErrDeliveryTargetDisabled) {
+				// 目标机器人停用了：跳过，别把整条订阅判成失败。
+				continue
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -1154,6 +1179,9 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	// 轮询的 ctx 在这一轮检查结束时就会取消，跟评必须有自己的预算，
 	// 否则仓库拉取慢一点跟评就永远赶不上开口。
 	for _, target := range repositoryWatchDeliveryTargets(item) {
+		if r.profileDisabled(target.ProfileID) {
+			continue
+		}
 		timeout := r.effectiveConfigForEvent(target).WithDefaults().RequestTimeout
 		followCtx, cancel := detachFollowUpContext(ctx, timeout)
 		comment := r.followUpCommentWithReference(followCtx, followUpKindRepositoryWatch, target, notification, reference)
@@ -1781,4 +1809,19 @@ func reminderSourceEvent(item Reminder) MessageEvent {
 		event.GroupID = item.GroupID
 	}
 	return event
+}
+
+// allPluginsDisabled 给出「这台机器人的每个插件都停用」的覆盖表。
+func allPluginsDisabled(plugins *PluginManager) map[string]bool {
+	if plugins == nil {
+		return map[string]bool{}
+	}
+	states := plugins.List()
+	out := make(map[string]bool, len(states))
+	for _, state := range states {
+		if id := strings.TrimSpace(state.Manifest.ID); id != "" {
+			out[id] = false
+		}
+	}
+	return out
 }

@@ -31,8 +31,8 @@ const (
 type commandSandbox struct {
 	// kind 是实现名，用于日志和工具输出：sandbox-exec、bubblewrap 或空串。
 	kind string
-	// wrap 把原始命令包装成沙盒命令。
-	wrap func(ctx context.Context, root string, allowNetwork bool, name string, args []string) *exec.Cmd
+	// wrap 把原始命令包装成沙盒命令。secrets 是必须读不到的凭据文件绝对路径。
+	wrap func(ctx context.Context, root string, allowNetwork bool, secrets []string, name string, args []string) *exec.Cmd
 }
 
 // CommandSandboxStatus 描述这台机器上的沙盒到底能不能用。
@@ -152,7 +152,7 @@ func runSandboxProbe(sandbox commandSandbox) error {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(root) }()
-	cmd := sandbox.wrap(ctx, root, false, "true", nil)
+	cmd := sandbox.wrap(ctx, root, false, nil, "true", nil)
 	cmd.Dir = root
 	return cmd.Run()
 }
@@ -164,12 +164,18 @@ func (s commandSandbox) available() bool { return s.wrap != nil }
 // sandboxExecProfile 生成 SBPL 策略：默认拒绝，只放开跑一个程序所必需的读取和
 // 工作目录内的写入。读取保持宽松是有意的——动态链接、locale、证书散落在系统各处，
 // 逐条放行会让常用命令直接跑不起来；真正的边界是「不能改」和「不能外发」。
-func sandboxExecProfile(root string, allowNetwork bool) string {
+func sandboxExecProfile(root string, allowNetwork bool, secrets []string) string {
 	var builder strings.Builder
 	builder.WriteString("(version 1)(deny default)")
 	builder.WriteString("(allow process-exec)(allow process-fork)(allow signal (target self))")
 	builder.WriteString("(allow sysctl-read)(allow mach-lookup)")
 	builder.WriteString("(allow file-read*)")
+	// 放开读之后再逐条挡掉凭据文件：SBPL 后写的规则覆盖先写的，所以这几行必须留在
+	// (allow file-read*) 后面。白名单里一旦有 cat、grep、head，读取这一层就是唯一
+	// 的边界了。
+	for _, path := range secrets {
+		builder.WriteString(fmt.Sprintf("(deny file-read* (literal %s))", sbplString(path)))
+	}
 	// 写入只开工作目录和临时目录；/dev/null 一类字符设备是命令的常规去处。
 	for _, path := range sandboxWritableRoots(root) {
 		builder.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))", sbplString(path)))
@@ -200,17 +206,17 @@ func sbplString(value string) string {
 	return `"` + replacer.Replace(value) + `"`
 }
 
-func wrapWithSandboxExec(sandboxExecPath string) func(context.Context, string, bool, string, []string) *exec.Cmd {
-	return func(ctx context.Context, root string, allowNetwork bool, name string, args []string) *exec.Cmd {
-		full := append([]string{"-p", sandboxExecProfile(root, allowNetwork), name}, args...)
+func wrapWithSandboxExec(sandboxExecPath string) func(context.Context, string, bool, []string, string, []string) *exec.Cmd {
+	return func(ctx context.Context, root string, allowNetwork bool, secrets []string, name string, args []string) *exec.Cmd {
+		full := append([]string{"-p", sandboxExecProfile(root, allowNetwork, secrets), name}, args...)
 		return exec.CommandContext(ctx, sandboxExecPath, full...)
 	}
 }
 
 // wrapWithBubblewrap 用挂载命名空间把根文件系统整体只读挂进来，只有工作目录和
 // 临时目录可写；--unshare-net 直接摘掉网络协议栈，比按域名过滤更难绕过。
-func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, string, []string) *exec.Cmd {
-	return func(ctx context.Context, root string, allowNetwork bool, name string, args []string) *exec.Cmd {
+func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, []string, string, []string) *exec.Cmd {
+	return func(ctx context.Context, root string, allowNetwork bool, secrets []string, name string, args []string) *exec.Cmd {
 		full := []string{
 			"--ro-bind", "/", "/",
 			"--dev", "/dev",
@@ -222,6 +228,11 @@ func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, st
 			"--unshare-uts",
 			"--die-with-parent",
 			"--new-session",
+		}
+		// 凭据文件用 /dev/null 盖住：容器里读到的是一个空文件，而不是令牌原文。
+		// 整个根目录是只读挂进来的，挡读取只能靠把它换掉。
+		for _, path := range secrets {
+			full = append(full, "--ro-bind", os.DevNull, path)
 		}
 		if !allowNetwork {
 			full = append(full, "--unshare-net")

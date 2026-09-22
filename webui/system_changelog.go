@@ -60,7 +60,11 @@ func (r ReleaseEntry) asset(name string) (ReleaseAsset, bool) {
 	return ReleaseAsset{}, false
 }
 
-const releaseNotesMaxRunes = 600
+const releaseNotesMaxRunes = 1000
+
+// 版本历史里看更新说明的人早就装好了，安装那一段对他们是纯噪音，而且它比
+// 改动列表还长——不切掉的话截断配额会整个花在 curl 命令上，一条改动都露不出来。
+const releaseNotesInstallHeading = "## 安装"
 
 type githubRateLimitError struct {
 	StatusCode int
@@ -151,6 +155,9 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 			continue
 		}
 		notes := strings.TrimSpace(item.Body)
+		if idx := strings.Index(notes, releaseNotesInstallHeading); idx >= 0 {
+			notes = strings.TrimSpace(notes[:idx])
+		}
 		if runes := []rune(notes); len(runes) > releaseNotesMaxRunes {
 			notes = string(runes[:releaseNotesMaxRunes]) + "…"
 		}

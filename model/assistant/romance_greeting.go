@@ -83,7 +83,9 @@ func (r *Runtime) romanceEnabledConfigs() []BotConfig {
 	seen := map[string]bool{}
 	appendConfig := func(cfg BotConfig) {
 		id := strings.TrimSpace(cfg.ID)
-		if seen[id] || !boolValue(cfg.RomanceEnabled, false) {
+		// 停用的机器人不做任何后台活儿：纪念日问候要扫一遍用户表再让模型写一段话，
+		// 发不出去还照样花钱。停用就该是安静的。
+		if seen[id] || r.disabledProfiles[id] || !boolValue(cfg.RomanceEnabled, false) {
 			return
 		}
 		seen[id] = true

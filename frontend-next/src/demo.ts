@@ -28,6 +28,36 @@ import type {
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
 
+const demoContextBudget = {
+  context_window: 128_000,
+  allocated: 56_320,
+  headroom: 71_680,
+  layers: [
+    { key: "recent_history", label: "近期对话", share_percent: 26, ceiling: 40_000, tokens: 33_280, capped_by_ceiling: false, configurable: true },
+    { key: "retrieved_memory", label: "检索记忆", share_percent: 8, ceiling: 12_000, tokens: 10_240, capped_by_ceiling: false, configurable: true },
+    { key: "core_memory", label: "核心记忆", share_percent: 4, ceiling: 6_000, tokens: 5_120, capped_by_ceiling: false, configurable: true },
+    { key: "world_book", label: "世界书", share_percent: 3, ceiling: 4_000, tokens: 3_840, capped_by_ceiling: false, configurable: true },
+    { key: "session_thread", label: "会话便签", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
+    { key: "self_notes", label: "自述", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
+    { key: "persona", label: "人设", share_percent: 1, ceiling: 2_000, tokens: 846, capped_by_ceiling: false, configurable: false },
+    { key: "prompt_rules", label: "提示词规则", share_percent: 1, ceiling: 9_000, tokens: 594, capped_by_ceiling: false, configurable: false }
+  ]
+};
+
+const demoResidentContext = {
+  context_window: 128_000,
+  total_tokens: 8_867,
+  note: "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。",
+  blocks: [
+    { key: "soul", label: "品格（soul）", tokens: 0, note: "身份、价值、硬边界，排在系统提示词最前面。只有人能改，分群覆盖动不了它。" },
+    { key: "persona", label: "人设正文", tokens: 846, content: "你是 Diana，一个住在群里的助手。说话短，先给结论。", note: "系统提示词稳定头部的第一行，只有人能改（WebUI 或 soul.md）。" },
+    { key: "prompt_rules", label: "固定提示词规则", tokens: 8_021, content: "（演示数据：这里是按「全部工具都注册」展开的规则正文。）", note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。" },
+    { key: "world_book", label: "世界书常驻设定", tokens: 0, budget: 1_200, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
+    { key: "self_notes", label: "自述", tokens: 0, budget: 1_200, note: "机器人自己写的自我认知，默认关闭。" },
+    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" }
+  ]
+};
+
 const now = Date.now();
 const before = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
 const after = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
@@ -1238,7 +1268,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       private_chats: [
         { user_id: "880024", user_name: "Demo User", events: 46, bot_profile_id: "bot-telegram" },
         { user_id: "100200711", user_name: "青禾", events: 12, bot_profile_id: "bot-onebot" }
-      ]
+      ],
+      // 上下文占比和常驻内容以前在演示里整块缺席：入口那一行永远不出现，
+      // 看不出真实排版，也没法点进去看弹窗。
+      context_budget: demoContextBudget,
+      resident_context: demoResidentContext
     });
   }
   const traceMatch = path.match(/^\/api\/assistant\/events\/([^/]+)\/trace$/);

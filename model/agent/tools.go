@@ -145,6 +145,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		registry.Register(&RunCommandTool{
 			root:           root,
 			allowlist:      commandAllowlistSet(cfg.CommandAllowlist),
+			protected:      protected,
 			timeout:        time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
 			maxBytes:       cfg.MaxToolOutputChars,
 			sandboxMode:    cfg.CommandSandbox,
@@ -970,6 +971,9 @@ type RunCommandTool struct {
 	allowlist map[string]bool
 	timeout   time.Duration
 	maxBytes  int
+	// protected 是凭据配置文件。文件工具按它拒绝读写，沙盒按它把这些路径挡在
+	// 命令的视野之外——白名单里配了 cat、grep 时，那是唯一还拦得住的一层。
+	protected protectedFiles
 	// sandboxMode 见 CommandSandbox* 常量；sandbox 是当前平台探测到的实现。
 	sandboxMode    string
 	sandbox        commandSandbox
@@ -1114,7 +1118,7 @@ func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []
 		}
 		return exec.CommandContext(ctx, command, args...), "", nil
 	}
-	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, command, args), t.sandbox.kind, nil
+	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, t.protected.existingPaths(), command, args), t.sandbox.kind, nil
 }
 
 func (t *RunCommandTool) commandAllowed(command string) bool {
@@ -1442,6 +1446,22 @@ func (p protectedFiles) blocked(path string) bool {
 	}
 	resolved, err := evalSymlinksAllowMissing(path)
 	return err == nil && p[resolved]
+}
+
+// existingPaths 返回当前真实存在的凭据文件，排序后给沙盒用。不存在的路径不能交给
+// bubblewrap：--ro-bind 的目标不存在会让整条命令起不来，而「配置还没生成」是常态。
+func (p protectedFiles) existingPaths() []string {
+	if len(p) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(p))
+	for path := range p {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			out = append(out, path)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // errProtectedFile 的措辞要让模型能如实转述：这不是「文件不存在」，也不是权限没配好。
