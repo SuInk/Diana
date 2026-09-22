@@ -1289,8 +1289,10 @@ type ResolverPlugin struct {
 	sharedPages  sharedResultCache[pageMeta]
 	browserFetch browserFetchFunc
 	// pageRenderer 是会自己拉起浏览器的渲染器，测试里注入桩实现；为 nil 时按需新建。
-	pageRenderer    agent.PageRenderer
-	mediaDownloader func(context.Context, string) string
+	pageRenderer agent.PageRenderer
+	// browserInstallOnce 保证「没浏览器就自动装一个」这件事一个进程里只做一次。
+	browserInstallOnce sync.Once
+	mediaDownloader    func(context.Context, string) string
 	// videoDownloader is the legacy injection point retained for the complete
 	// resolver implementation and its integrations.
 	videoDownloader        func(context.Context, string) string
