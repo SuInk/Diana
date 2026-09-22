@@ -19,8 +19,12 @@ const (
 const (
 	GroupChat   = DefaultProfileGroup
 	GroupIntent = "intent"
-	GroupImage  = "image"
-	GroupVision = "vision"
+	// GroupBackground 是后台生成：好感度评估、长期记忆抽取与归纳、上下文摘要、
+	// 语义指代这些。它们和意图识别的差别不在频次，而在输出形状——这一组要写出
+	// 成段文字，只做判断的模型答不了。没单独配时跟着 intent，升级不改变行为。
+	GroupBackground = "background"
+	GroupImage      = "image"
+	GroupVision     = "vision"
 	// GroupEmbedding 分组的配置档用于语义检索的向量化(/embeddings 接口)。
 	GroupEmbedding = "embedding"
 )

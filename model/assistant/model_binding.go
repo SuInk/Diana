@@ -54,74 +54,48 @@ var llmPurposeGroup = map[string]string{
 	PurposeSubagent:   llm.GroupChat,
 	PurposeSubtask:    llm.GroupChat,
 
-	// 路由、判定这类调用短、频次高，值得单独指一个便宜快的模型。
-	PurposeReplyIntentRouter:     llm.GroupIntent,
-	PurposeReplyRuleRouter:       llm.GroupIntent,
+	// 意图识别：判定当前这一轮该不该说话、说出去的这句能不能发。问的都是是非、
+	// 单选和打分，发请求时带着判断题表，所以这一档可以绑只做判断的模型。
 	PurposeProactiveReplyRouter:  llm.GroupIntent,
 	PurposeProactiveReplyQuality: llm.GroupIntent,
-	PurposeSemanticReference:     llm.GroupIntent,
-	PurposeInboundMediaReference: llm.GroupIntent,
-	PurposeContextSummary:        llm.GroupIntent,
-	PurposeMemoryExtract:         llm.GroupIntent,
-	PurposeMemorySummary:         llm.GroupIntent,
-	PurposeRelationshipEvaluate:  llm.GroupIntent,
-	PurposeForwardContentSafety:  llm.GroupIntent,
-	PurposeReplyAccountSafety:    llm.GroupIntent,
 	PurposeReplySendAudit:        llm.GroupIntent,
-	PurposeReplySuppression:      llm.GroupIntent,
-	PurposeBotReplyLoop:          llm.GroupIntent,
 
-	// 改写只是把一句固定文案换个说法，和审核、路由同档，用便宜快的那个就够。
-	PurposeUpstreamRejectionNotice: llm.GroupIntent,
-	PurposeAccountSafetyNotice:     llm.GroupIntent,
-	PurposeErrorNotice:             llm.GroupIntent,
+	// 下面这些也是判定，但眼下还没有各自的判断题表，先留在后台那一档：归进意图
+	// 识别只会让它们在绑判断模型时每次先失败一次再降级。题表补上再挪过来。
+	PurposeReplyIntentRouter: llm.GroupBackground,
+	PurposeReplyRuleRouter:   llm.GroupBackground,
+	PurposeBotReplyLoop:      llm.GroupBackground,
+
+	// 后台生成：好感度、长期记忆、摘要、指代消解这些都要写出成段文字，判断模型
+	// 答不了。它们也不在回复的关键路径上，慢一点没关系。
+	PurposeRelationshipEvaluate:  llm.GroupBackground,
+	PurposeMemoryExtract:         llm.GroupBackground,
+	PurposeMemorySummary:         llm.GroupBackground,
+	PurposeContextSummary:        llm.GroupBackground,
+	PurposeSemanticReference:     llm.GroupBackground,
+	PurposeInboundMediaReference: llm.GroupBackground,
+	PurposeForwardContentSafety:  llm.GroupBackground,
+	PurposeReplyAccountSafety:    llm.GroupBackground,
+	PurposeReplySuppression:      llm.GroupBackground,
+
+	// 改写只是把一句固定文案换个说法，跟着后台那一档就够。
+	PurposeUpstreamRejectionNotice: llm.GroupBackground,
+	PurposeAccountSafetyNotice:     llm.GroupBackground,
+	PurposeErrorNotice:             llm.GroupBackground,
 }
 
-// 判定类用途分成两拨：备了判断题表的可以绑只做判断的模型（TypeSafe Jev 这类），
-// 要写字的不能。这两个键摆在用途和分组之间——按用途逐个配太细（十几行），按分组
-// 配又太粗（一绑就把要写字的那几个一起绑坏），能用和不能用才是这里真正的分界线。
-const (
-	RoleDecisionJudges = "decision_judges"
-	RoleTextJudges     = "text_judges"
-)
-
-// llmPurposeClass 只收 intent 分组底下的用途：别的分组没有这个分界。
-// 判断模型答不了的那几个必须留在 text_judges——它们要的是成段文字，不是选项。
-var llmPurposeClass = map[string]string{
-	// 这一拨在发请求时真的带上了判断题表，绑判断模型不会先失败一次。
-	PurposeProactiveReplyRouter:  RoleDecisionJudges,
-	PurposeProactiveReplyQuality: RoleDecisionJudges,
-	PurposeReplySendAudit:        RoleDecisionJudges,
-
-	// 意图路由、规则路由、防循环问的也都是是非题，但眼下还没有各自的判断题表：
-	// 归进判断类只会让它们每次先失败一次再降级。等题表补上再挪过来。
-	PurposeReplyIntentRouter: RoleTextJudges,
-	PurposeReplyRuleRouter:   RoleTextJudges,
-	PurposeBotReplyLoop:      RoleTextJudges,
-
-	PurposeSemanticReference:       RoleTextJudges,
-	PurposeInboundMediaReference:   RoleTextJudges,
-	PurposeContextSummary:          RoleTextJudges,
-	PurposeMemoryExtract:           RoleTextJudges,
-	PurposeMemorySummary:           RoleTextJudges,
-	PurposeRelationshipEvaluate:    RoleTextJudges,
-	PurposeForwardContentSafety:    RoleTextJudges,
-	PurposeReplyAccountSafety:      RoleTextJudges,
-	PurposeReplySuppression:        RoleTextJudges,
-	PurposeUpstreamRejectionNotice: RoleTextJudges,
-	PurposeAccountSafetyNotice:     RoleTextJudges,
-	PurposeErrorNotice:             RoleTextJudges,
+// modelBindingParent 说明某个分组没单独配时跟着谁。
+//
+// background 是从 intent 里拆出来的：拆之前这些调用一直跟着 intent 跑，拆完要是
+// 直接落到 chat，老配置升上来就会把记忆抽取和好感度评估悄悄换成对话模型。
+var modelBindingParent = map[string]string{
+	llm.GroupBackground: llm.GroupIntent,
 }
 
-// ModelBindingClassOf 返回用途所属的那一拨，供界面回答「不单独配的话跟着谁」。
-func ModelBindingClassOf(purpose string) string {
-	return llmPurposeClass[strings.TrimSpace(purpose)]
-}
-
-// modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批
+// modelBindingGroups 是必须绑定的分组。// modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批
 // 用途没有模型可用。
 var modelBindingGroups = []string{
-	llm.GroupChat, llm.GroupVision, llm.GroupIntent, llm.GroupImage, llm.GroupEmbedding,
+	llm.GroupChat, llm.GroupVision, llm.GroupIntent, llm.GroupBackground, llm.GroupImage, llm.GroupEmbedding,
 }
 
 // modelRoleKeyForGroup 返回分组在 model_roles 里用的键。默认分组的键历史上是
@@ -139,7 +113,6 @@ func ModelBindingKeys() []string {
 	for _, group := range modelBindingGroups {
 		keys = append(keys, modelRoleKeyForGroup(group))
 	}
-	keys = append(keys, RoleDecisionJudges, RoleTextJudges)
 	purposes := make([]string, 0, len(llmPurposeGroup))
 	for purpose := range llmPurposeGroup {
 		purposes = append(purposes, purpose)
@@ -159,9 +132,6 @@ func ModelBindingGroupOf(purpose string) string {
 
 func isModelBindingKey(key string) bool {
 	if _, ok := llmPurposeGroup[key]; ok {
-		return true
-	}
-	if key == RoleDecisionJudges || key == RoleTextJudges {
 		return true
 	}
 	for _, group := range modelBindingGroups {
@@ -204,15 +174,6 @@ func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (Mod
 			return resolveIfFollowChat(roles, role)
 		}
 	}
-	// 类排在分组之前：绑了「判断类」就该盖过笼统的 intent 一档，否则这两个键
-	// 形同虚设。
-	if purpose != "" {
-		if class := ModelBindingClassOf(purpose); class != "" {
-			if role, ok := roles[class]; ok {
-				return resolveIfFollowChat(roles, role)
-			}
-		}
-	}
 	if role, ok := roles[groupKey]; ok {
 		return resolveIfFollowChat(roles, role)
 	}
@@ -220,6 +181,13 @@ func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (Mod
 		if owner := ModelBindingGroupOf(purpose); owner != "" {
 			if role, ok := roles[owner]; ok {
 				return resolveIfFollowChat(roles, role)
+			}
+			// 这一档没单独配就跟着上一级：background 拆出来之前一直跟着 intent，
+			// 老配置升上来不该因为多了一档就换模型。
+			if parent := modelBindingParent[owner]; parent != "" {
+				if role, ok := roles[modelRoleKeyForGroup(parent)]; ok {
+					return resolveIfFollowChat(roles, role)
+				}
 			}
 		}
 	}

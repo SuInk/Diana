@@ -683,11 +683,11 @@
               </p>
               <button class="btn ghost" type="button" @click="purposeRolesOpen = !purposeRolesOpen">
                 <ChevronDown :size="14" :class="{ 'recent-chevron-open': purposeRolesOpen }" aria-hidden="true" />
-                {{ purposeRolesOpen ? "收起判定用途细分" : "判定用途还能再拆成两拨单独指模型" }}
+                {{ purposeRolesOpen ? "收起后台生成" : "后台生成（好感度 / 长期记忆）可以单独指模型" }}
               </button>
               <p v-if="purposeRolesOpen" class="muted model-role-note">
-                「意图识别」底下其实是两类调用：一类问是非、单选和打分，另一类要写出成段文字。留空即跟随「意图识别」；
-                分开指之后，判断类可以换更便宜的判断模型，文本类继续用对话类模型。
+                「意图识别」现在只管判定当前这轮该不该说话、说出去的这句能不能发——问的都是是非、单选和打分，
+                可以绑 TypeSafe Jev 这类只做判断的模型。写字的活（好感度、长期记忆、摘要）拆到下面这一档，留空即跟随意图识别。
               </p>
             </div>
           </section>
@@ -3373,7 +3373,7 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 // 细分用途：不配就跟着「意图识别」那一档走。摊出来是因为这些调用的性质差得很远——
 // 主动接话判定和发送前审核都能改成判断题（可以绑 TypeSafe Jev 这类只做判断的模型），
 // 而记忆抽取、上下文压缩要的是文本输出，绑上去只会每次先失败一次再降级。
-const purposeRoleKeys = ["decision_judges", "text_judges"] as const;
+const purposeRoleKeys = ["background"] as const;
 
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
@@ -3401,8 +3401,8 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
     key: "intent",
     label: "意图识别",
     description:
-      "所有短小的旁路调用：意图与规则路由、主动接话判定、发送前审核、语义指代、上下文压缩、记忆抽取与归纳、关系评估、防循环与暂停判定，" +
-      "以及发送前提示的改写（上游拒绝、账号安全拦截和其余错误提示都会先用机器人自己的口吻重写一遍再发出去）。这些调用短、频次高，值得单独指一个便宜快的模型。"
+      "判定当前这一轮该不该说话、说出去的这句能不能发：主动接话判定、接话质量和发送前审核。问的都是是非、单选和打分，" +
+      "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev 这类只做判断的模型——更快更便宜。写字的活在「后台生成」那一档。"
   },
   {
     key: "image",
@@ -3410,21 +3410,14 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
     description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
   }
 ];
-// 判定类用途分两拨。留空就跟着「意图识别」那一档。
+// 后台生成是从「意图识别」里拆出来的一档。留空就跟着意图识别，行为和拆之前一样。
 const purposeRoleRows: { key: RoleKey; label: string; description: string }[] = [
   {
-    key: "decision_judges",
-    label: "判断类用途",
+    key: "background",
+    label: "后台生成（好感度 / 长期记忆）",
     description:
-      "主动接话判定和发送前审核——问的都是是非、单选和打分，而且发请求时真的带上了判断题表，" +
-      "可以绑 TypeSafe Jev 这类只做判断的模型：更快更便宜，也不会跑偏成写作文。"
-  },
-  {
-    key: "text_judges",
-    label: "文本类用途",
-    description:
-      "上下文压缩、记忆抽取与归纳、语义指代、关系评估、转发内容安全、提示改写，以及暂时还没有判断题表的意图路由、规则路由和防循环——" +
-      "目前都得绑对话类模型；绑成只做判断的模型会每次先失败一次再降级。"
+      "好感度评估、长期记忆抽取与归纳、上下文摘要、语义指代、转发内容安全，以及各种提示改写。" +
+      "它们都要写出成段文字，判断模型答不了；也不在回复的关键路径上，慢一点没关系。留空即跟随「意图识别」。"
   }
 ];
 
