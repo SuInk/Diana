@@ -481,7 +481,20 @@ func nestedForwardPluginResponse(responses []PluginResponse) *PluginResponse {
 //
 // 走通知的分条而不是聊天的：这类推送是一条完整的事实——提醒原文、订阅摘要、
 // 「本次发送失败，将在 X 自动重试」——按句子拆开就成了半句一条，读的人得自己拼。
+// ErrDeliveryTargetDisabled 表示这个投递目标属于一台已停用的机器人。
+//
+// 它不是故障，是配置状态：停用是长期的，重试多少次都不会好。分出来单独一个错误
+// 是为了让上层的扇出能跳过这个目标而不是把整条订阅判成失败——一条订阅同时投 QQ
+// 群和 Telegram 群时，停用 Telegram 那台不该让 QQ 那份跟着反复重试、攒够次数还
+// 给主人发一条失败告警。
+var ErrDeliveryTargetDisabled = errors.New("diana: delivery target belongs to a disabled bot profile")
+
 func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
+	// 所有「到点了主动找人」的投递都从这里过，判断放在这一个路口：RSS、仓库订阅、
+	// 定时查询、一次性提醒、编码任务回报、失败告警，谁都不用各自记得检查一遍。
+	if r.profileDisabled(event.ProfileID) {
+		return fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
 		MentionUserID: strings.TrimSpace(event.UserID),
@@ -1089,6 +1102,10 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 		}
 		messageIDs, err := r.sendNotificationWithIDs(ctx, target, text)
 		if err != nil {
+			if errors.Is(err, ErrDeliveryTargetDisabled) {
+				// 目标机器人停用了：跳过，别把整条订阅判成失败。
+				continue
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -1154,6 +1171,9 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	// 轮询的 ctx 在这一轮检查结束时就会取消，跟评必须有自己的预算，
 	// 否则仓库拉取慢一点跟评就永远赶不上开口。
 	for _, target := range repositoryWatchDeliveryTargets(item) {
+		if r.profileDisabled(target.ProfileID) {
+			continue
+		}
 		timeout := r.effectiveConfigForEvent(target).WithDefaults().RequestTimeout
 		followCtx, cancel := detachFollowUpContext(ctx, timeout)
 		comment := r.followUpCommentWithReference(followCtx, followUpKindRepositoryWatch, target, notification, reference)

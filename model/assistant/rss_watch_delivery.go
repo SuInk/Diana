@@ -19,6 +19,11 @@ func (r *Runtime) sendRSSWatchTargets(ctx context.Context, item Reminder, messag
 			continue
 		}
 		if err := r.sendSubscriberNotice(ctx, target, message); err != nil {
+			if errors.Is(err, ErrDeliveryTargetDisabled) {
+				// 机器人停用是长期状态，重试不会好。跳过这个目标，别让它把整条
+				// 订阅拖成「连续失败」——重新启用之后下一轮自然会投。
+				continue
+			}
 			failures = append(failures, err)
 			continue
 		}

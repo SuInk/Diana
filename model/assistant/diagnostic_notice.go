@@ -24,6 +24,11 @@ import (
 // 「发送错误通知」都开着才发。pluginID 为空表示这条诊断不属于任何插件（例如核心的
 // 一次性提醒），只看机器人那个开关。
 func (r *Runtime) diagnosticAllowed(event MessageEvent, pluginID string) bool {
+	// 停用的机器人不该收到任何诊断消息：它的通道已经从 bindings 里摘掉了，发过去
+	// 只会变成一条投递失败，再由失败告警变成第二条发不出去的消息。
+	if r.profileDisabled(event.ProfileID) {
+		return false
+	}
 	if !r.errorNoticeAllowed(event) {
 		return false
 	}
