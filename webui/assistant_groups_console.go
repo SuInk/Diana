@@ -26,6 +26,9 @@ type consoleGroupsResponse struct {
 	Plugins       []assistant.PluginState `json:"plugins"`
 	LiveAvailable bool                    `json:"live_available"`
 	Warning       string                  `json:"warning,omitempty"`
+	// ConnectionPeers 是复用同一条连接的其它机器人及其群归属。路由表散在各台自己的
+	// 配置里，跨机器人看不到全貌；这一份就是那张全貌。
+	ConnectionPeers []consoleConnectionPeer `json:"connection_peers,omitempty"`
 }
 
 type consoleGroupItem struct {
@@ -125,7 +128,25 @@ func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
 			recordRequestOperation(c, h.logs, "groups_switches", fmt.Sprintf("%s %d 个群", action, updated), "", map[string]any{"bot_profile_id": profileID, "bot_profile_name": profileName})
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "updated": updated})
+	response := gin.H{"ok": true, "updated": updated}
+	var warnings []string
+	// 刚把一批群打开：哪几个会被同连接的别的机器人一起接走，现在就说。
+	if payload.Enabled != nil && *payload.Enabled {
+		if conflict := h.connectionConflictWarning(profileID, payload.GroupIDs); conflict != "" {
+			warnings = append(warnings, conflict)
+		}
+	}
+	// 「新群默认工作」在复用连接上等于「这台收所有群」。几台都这么配就是同群多回，
+	// 而这件事在任何单个群的配置页上都看不出来。
+	if payload.NewGroupEnabled != nil && *payload.NewGroupEnabled {
+		if defaults := h.connectionDefaultOnWarning(profileID); defaults != "" {
+			warnings = append(warnings, defaults)
+		}
+	}
+	if len(warnings) > 0 {
+		response["warning"] = strings.Join(warnings, " ")
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // groupDefaults 把这次请求里的「群默认」项折成一个改配置的函数，顺带给出
@@ -297,10 +318,11 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 		groups[index].SharedWith = h.groupSharedBots(profileID, groups[index].GroupID)
 	}
 	c.JSON(http.StatusOK, consoleGroupsResponse{
-		Groups:        groups,
-		Plugins:       assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profileID)),
-		LiveAvailable: liveAvailable,
-		Warning:       warning,
+		Groups:          groups,
+		Plugins:         assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profileID)),
+		LiveAvailable:   liveAvailable,
+		Warning:         warning,
+		ConnectionPeers: h.connectionPeers(profileID),
 	})
 }
 
@@ -723,7 +745,15 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "groups_save", "群配置已保存（控制台）", groupID, groupConfigAuditMetadata(previous, saved, profileName))
-	c.JSON(http.StatusOK, gin.H{"config": h.groupConfigForAPI(saved.WithDefaults(groupID, base))})
+	response := gin.H{"config": h.groupConfigForAPI(saved.WithDefaults(groupID, base))}
+	// 这个群开着的话，顺手看一眼同一条连接上还有没有别的机器人也在这个群里。
+	// 只是告警：一个群里有多台机器人说话是合法配置，保存照常完成。
+	if saved.WithDefaults(groupID, base).Enabled {
+		if conflict := h.connectionConflictWarning(profileID, []string{groupID}); conflict != "" {
+			response["warning"] = conflict
+		}
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // botConfigResolver 让群配置能按 bot_profile_id 找回自己那台机器人的配置。
