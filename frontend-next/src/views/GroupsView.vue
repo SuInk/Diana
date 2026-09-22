@@ -268,21 +268,9 @@
             <p>{{ inheritedPersona }}</p>
           </details>
         </div>
-        <div class="field">
-          <label>接话设置</label>
-          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" inheritable @update:model-value="setGroupParticipation" />
-        </div>
         <div class="field wide">
-          <label for="group-proactive-criteria">本群接话补充判据（留空跟随机器人）</label>
-          <textarea
-            id="group-proactive-criteria"
-            v-model="editing.proactive_reply_extra_criteria"
-            class="textarea"
-            rows="4"
-            :maxlength="proactiveCriteriaMaxLength"
-            placeholder="例：群里叫「鸽子」是催更不是骂人；不要接和考试答案有关的话题。"
-          ></textarea>
-          <span class="hint">本群特有的称呼、黑话和禁区，帮它判断接不接话。填了就只用这里的，不和机器人那份叠加；只补充理解，不改评分口径和档位，最多 {{ proactiveCriteriaMaxLength }} 字。</span>
+          <label>接话设置</label>
+          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
         </div>
         <div class="field wide">
           <label>本群补充标记的机器人</label>
@@ -554,7 +542,7 @@ import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
-import { participationFromConfig, participationLevelLabel, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../participation";
+import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 

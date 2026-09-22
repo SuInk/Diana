@@ -1306,19 +1306,7 @@
               </div>
               <div class="field wide">
                 <label>接话设置</label>
-                <ParticipationControls :key="form.id" :model-value="form.participation" @update:model-value="setParticipation" />
-              </div>
-              <div class="field wide">
-                <label for="bot-proactive-criteria">接话补充判据</label>
-                <textarea
-                  id="bot-proactive-criteria"
-                  v-model="form.proactive_reply_extra_criteria"
-                  class="textarea"
-                  rows="4"
-                  :maxlength="proactiveCriteriaMaxLength"
-                  placeholder="例：群里叫「鸽子」是催更不是骂人；不要接和考试答案有关的话题。"
-                ></textarea>
-                <span class="hint">写这些群里特有的称呼、黑话和禁区，拼在内置评分提示词尾部帮它判断接不接话。它只补充理解，不改评分口径，也改不了档位；最多 {{ proactiveCriteriaMaxLength }} 字，留空就只用内置判据。</span>
+                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
               </div>
               <!-- 正文接管之后这几个控件一律藏起来，不留一排灰掉的空壳：接管模式是用户
                    自己选的，他要的是「正文说了算」，不是被同一件事提醒三遍。归属由人设
@@ -2061,7 +2049,7 @@ import AccountNameHint from "../components/AccountNameHint.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
-import { participationFromConfig, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../participation";
+import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import type { PersonaLintFinding } from "../api";
 import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
 import { personaOwnedTemplate } from "../persona-owned-template";
