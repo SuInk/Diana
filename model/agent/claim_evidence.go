@@ -6,6 +6,7 @@ package agent
 import (
 	"encoding/json"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -52,7 +53,19 @@ type ClaimTrace struct {
 }
 
 type claimEvidenceLedger struct {
-	active            bool
+	active bool
+	// searched 记录本轮是否真的发起过检索。它和 active 不是一回事：active 要求
+	// 模型同时声明了 claims，而模型完全可以只调 web_search 不带 claims——用
+	// active 当门控判据会把这种模型反复打回，直到撞上修复上限才放行。
+	searched bool
+	// citable 是本轮正文里可以合法出现的链接：上下文里本来就有的、工具输出
+	// 带回来的。它比 allowedSources 宽，因为复述用户贴的链接不算编造来源。
+	citable map[string]bool
+	// required 表示本轮必须拿证据才能收口，由调用方在进入循环前置位。
+	// active 只有在模型自己调过 web_search 并声明 claims 之后才会为真，
+	// 所以整套证据校验原本都够不着「压根没搜」这种情况——模型不搜，纯文本
+	// 终稿直接放行。required 就是补这一段：该搜的轮次先立规矩，再让模型跑。
+	required          bool
 	order             []string
 	claims            map[string]*ClaimTrace
 	covered           []string
@@ -72,10 +85,18 @@ func newClaimEvidenceLedger() *claimEvidenceLedger {
 	}
 }
 
+// missingRequiredSearch 表示这一轮要求证据、但模型还没产生任何检索。
+// 只看有没有检索过，不要求声明 claims：门控管的是「不许不查就下结论」，
+// 证据账本那套结构化校验是检索发生之后的事。
+func (l *claimEvidenceLedger) missingRequiredSearch() bool {
+	return l != nil && l.required && !l.searched
+}
+
 func (l *claimEvidenceLedger) prepareSearch(input map[string]any) map[string]any {
 	if l == nil {
 		return nil
 	}
+	l.searched = true
 	definitions := decodeClaimDefinitions(input["claims"])
 	if len(definitions) > 0 {
 		l.active = true
@@ -475,4 +496,76 @@ func appendUniqueClaimString(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+// 本轮要求证据却一次都没检索时，退回去让模型先搜。措辞只讲「这一轮要先查」，
+// 不替模型判断该查什么——查什么是它的事，我们只管住「不查不许收口」。
+const (
+	evidenceRequiredRepairReason = "这一轮需要外部事实支撑，但还没有进行任何检索"
+	evidenceRequiredRepairPrompt = "这一轮的问题需要外部事实支撑，你还没有调用过 web_search。" +
+		"聊天记录里的说法、你先前的回复和记忆摘要都只是线索，不能替代检索；" +
+		"熟悉某个项目的原理也不代表知道它此刻的实现、插件、版本或生态现状。" +
+		"请先调用 web_search 查证，再用 agent_finalize 收尾。" +
+		"如果查完确实没有可用结果，就在正文里如实说明没查到，不要凭印象断言。"
+)
+
+// citationURLPattern 从任意文本里抓 http(s) 链接。字符集按 URL 允许的那些收窄，
+// 而不是「非空白」——中文正文里「见 https://a.example/b。」这种写法很常见，
+// 用非空白匹配会把后面整句中文一起吞进链接里。
+var citationURLPattern = regexp.MustCompile(`https?://[A-Za-z0-9\-._~:/?#@!$&*+,;=%()\[\]]+`)
+
+// 尾部标点交给 trim：链接结尾的句号、右括号通常属于句子而不属于链接。
+const citationTrailingPunctuation = `.,;:!?)]}>*_`
+
+// extractCitationURLs 返回文本里出现的链接，已规范化并去重。
+func extractCitationURLs(text string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, raw := range citationURLPattern.FindAllString(text, -1) {
+		raw = strings.TrimRight(raw, citationTrailingPunctuation)
+		canonical := canonicalEvidenceURL(raw)
+		if canonical == "" || seen[canonical] {
+			continue
+		}
+		seen[canonical] = true
+		out = append(out, raw)
+	}
+	return out
+}
+
+// noteCitableText 把文本里出现过的链接登记为「正文可以引用」。对话上下文里
+// 用户自己贴的链接、工具输出里带回来的链接都走这里：模型复述它们不算编造。
+func (l *claimEvidenceLedger) noteCitableText(text string) {
+	if l == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	for _, raw := range extractCitationURLs(text) {
+		canonical := canonicalEvidenceURL(raw)
+		if canonical == "" {
+			continue
+		}
+		if l.citable == nil {
+			l.citable = map[string]bool{}
+		}
+		l.citable[canonical] = true
+	}
+}
+
+// unboundCitations 返回正文里那些既不是本轮检索到的、也没在上下文或工具输出
+// 里出现过的链接。claims 侧的证据 URL 早就按 allowedSources 过滤了，但那只
+// 清洗内部账本——用户看到的是正文，正文里的链接此前完全没人管。
+func (l *claimEvidenceLedger) unboundCitations(content string) []string {
+	if l == nil || !l.searched {
+		// 本轮没检索就不是在做考证，正文里提一句网址不该被当成伪造来源。
+		return nil
+	}
+	var unbound []string
+	for _, raw := range extractCitationURLs(content) {
+		canonical := canonicalEvidenceURL(raw)
+		if canonical == "" || l.allowedSources[canonical] != "" || l.citable[canonical] {
+			continue
+		}
+		unbound = append(unbound, raw)
+	}
+	return unbound
 }
