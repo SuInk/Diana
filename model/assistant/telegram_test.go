@@ -453,7 +453,7 @@ func TestTelegramMapsAndCachesIncomingPhoto(t *testing.T) {
 		Chat:      &telegramChat{ID: -100999, Type: "supergroup"},
 		Photo:     []telegramPhoto{{FileID: "small"}, {FileID: "largest", FileUniqueID: "stable-photo", FileSize: int64(len(body))}},
 	}
-	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	event := telegramMessageToEvent(msg, "8888", "examplebot")
 	if len(event.Segments) != 2 || event.Segments[1].Type != "image" || event.Segments[1].Data["file_id"] != "largest" {
 		t.Fatalf("photo mapping = %#v", event.Segments)
 	}
@@ -469,7 +469,7 @@ func TestTelegramMapsAndCachesIncomingPhoto(t *testing.T) {
 	// A fresh channel and changed download ID reuse the durable unique-id index.
 	msg.MessageID++
 	msg.Photo[1].FileID = "largest-refreshed"
-	again := telegramMessageToEvent(msg, "8888", "mikuabot")
+	again := telegramMessageToEvent(msg, "8888", "examplebot")
 	again = api.channel().resolveIncomingMedia(context.Background(), again, msg)
 	if again.Segments[1].Data["cached_file"] != path || len(api.callsOf("getFile")) != 1 {
 		t.Fatalf("repeated Telegram file downloaded again: %#v", again.Segments)
@@ -495,7 +495,7 @@ func TestTelegramMapsAndCachesStaticStickerAsImage(t *testing.T) {
 			FileID: "sticker-file", FileUniqueID: "sticker-unique", Emoji: "😾", SetName: "cats", Type: "regular", FileSize: int64(len(body)),
 		},
 	}
-	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	event := telegramMessageToEvent(msg, "8888", "examplebot")
 	if len(event.Segments) != 2 {
 		t.Fatalf("sticker mapping = %#v", event.Segments)
 	}
@@ -526,7 +526,7 @@ func TestTelegramUsesAnimatedStickerThumbnailForVision(t *testing.T) {
 			Thumbnail: &telegramPhoto{FileID: "animated-preview", FileSize: 123},
 		},
 	}
-	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	event := telegramMessageToEvent(msg, "8888", "examplebot")
 	segment := event.Segments[1]
 	if segment.Type != "image" || segment.Data["file_id"] != "animated-preview" || segment.Data["sticker_file_id"] != "animated-tgs" {
 		t.Fatalf("animated sticker preview = %#v", segment)
@@ -543,7 +543,7 @@ func TestTelegramMapsAllSupportedIncomingMedia(t *testing.T) {
 		Audio:     &telegramFile{FileID: "audio", FileName: "a.mp3"},
 		Document:  &telegramFile{FileID: "document", FileName: "a.pdf"},
 	}
-	event := telegramMessageToEvent(msg, "8888", "mikuabot")
+	event := telegramMessageToEvent(msg, "8888", "examplebot")
 	var kinds []string
 	for _, segment := range event.Segments {
 		if segment.Type != "text" {
@@ -831,16 +831,16 @@ func TestTelegramGroupCommandToSelfSetsToMe(t *testing.T) {
 	msg := &telegramMessage{
 		MessageID: 113954,
 		Date:      1789054343,
-		Text:      "/status@mikuabot",
+		Text:      "/status@examplebot",
 		Entities:  []telegramEntity{{Type: "bot_command", Offset: 0, Length: 16}},
 		From:      &telegramUser{ID: 8082828784},
 		Chat:      &telegramChat{ID: -1004402809405, Type: "supergroup"},
 	}
-	event := telegramMessageToEvent(msg, "8738773088", "mikuabot")
+	event := telegramMessageToEvent(msg, "8738773088", "examplebot")
 	if !event.ToMe {
-		t.Fatal("群里 /status@mikuabot 是发给本机器人的命令，应判为 ToMe")
+		t.Fatal("群里 /status@examplebot 是发给本机器人的命令，应判为 ToMe")
 	}
-	if event.SelfUsername != "mikuabot" {
+	if event.SelfUsername != "examplebot" {
 		t.Fatalf("事件应带上本机器人用户名，实际 %q", event.SelfUsername)
 	}
 }

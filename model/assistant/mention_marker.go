@@ -123,7 +123,7 @@ func utf16Length(text string) int {
 // 标记的语法是模型手写的，写歪就没人认得出来。线上 9/20 换上 mimo-x-flash-preview
 // 之后一天里写出六种形态：<diana-at:ID>、(diana-at:ID)、[ diana-at:ID ]、
 // @diana-at-ID，以及光秃秃一个 @diana-at。dianaMentionMarkerPattern 一个都不认，
-// 于是它们原样当正文发进群——截图里那句「@diana-at-3083158904 撤啥呀」就是这么来的。
+// 于是它们原样当正文发进群——截图里那句「@diana-at-30007 撤啥呀」就是这么来的。
 //
 // 提示词已经写明唯一合法写法，但小模型记得有这个标记、不记得确切语法是常态，
 // 只靠提示词堵不住。出站前因此过两道：

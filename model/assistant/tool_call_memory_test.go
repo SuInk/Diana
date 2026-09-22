@@ -16,7 +16,7 @@ func TestToolCallMemoryTellsNextTurnWhatWasSearched(t *testing.T) {
 	now := time.Date(2026, 9, 15, 20, 6, 0, 0, time.Local)
 	runtime := &Runtime{}
 	runtime.now = func() time.Time { return now }
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "1103673848"}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20006"}
 	runtime.rememberToolCalls(event, []agent.Step{
 		{Tool: "web_search", Input: map[string]any{"query": "iCloud 由云上贵州运营 条款与条件 更新"}},
 		{Tool: "browser_render", Input: map[string]any{"url": "https://www.apple.com/legal/"}, Error: "timeout"},

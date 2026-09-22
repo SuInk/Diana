@@ -47,7 +47,7 @@ func TestRSSFanoutSkipsDisabledTargetWithoutFailing(t *testing.T) {
 	runtime := runtimeWithDisabledProfile(t, "telegram-bot")
 	item := Reminder{
 		ID: "watch-1", OwnerID: "owner", ProfileID: "qq-bot", Kind: ReminderKindRSSWatch,
-		GroupID: "1081572710",
+		GroupID: "20005",
 		NotificationTargetsJSON: encodeReminderDeliveryTargets([]ReminderDeliveryTarget{
 			{ProfileID: "telegram-bot", Platform: PlatformTelegram, GroupID: "-1004402809405"},
 		}),

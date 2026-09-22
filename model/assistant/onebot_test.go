@@ -663,14 +663,14 @@ func TestPlainTextRendersNeutralReplyMarker(t *testing.T) {
 // at 段带昵称时渲染成「@昵称（账号）」，只有号码时退回「@QQ」。
 func TestPlainTextRendersAtMentionsWithNicknames(t *testing.T) {
 	segments := []MessageSegment{
-		{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "小满"}},
+		{Type: "at", Data: map[string]string{"qq": "90001", "name": "小满"}},
 		{Type: "at", Data: map[string]string{"qq": "4200000001", "card": "群名片"}},
 		{Type: "at", Data: map[string]string{"qq": "9999999999"}},
 		{Type: "at", Data: map[string]string{"qq": "all"}},
 		{Type: "text", Data: map[string]string{"text": "少回复点"}},
 	}
 	got := PlainText(segments)
-	for _, want := range []string{"@小满（3129583166）", "@群名片（4200000001）", "@9999999999", "少回复点"} {
+	for _, want := range []string{"@小满（90001）", "@群名片（4200000001）", "@9999999999", "少回复点"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("plain text missing %q: %q", want, got)
 		}

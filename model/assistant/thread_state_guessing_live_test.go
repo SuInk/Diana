@@ -28,7 +28,7 @@ func TestLiveGroupGuessingGameKeepsLockedSecret(t *testing.T) {
 
 	runTurn := func(userID, sender, messageID, text string) *agent.Response {
 		t.Helper()
-		event := MessageEvent{ProfileID: "bot-live", Kind: EventKindGroup, GroupID: "1081572710", UserID: userID, SenderName: sender, MessageID: messageID}
+		event := MessageEvent{ProfileID: "bot-live", Kind: EventKindGroup, GroupID: "20005", UserID: userID, SenderName: sender, MessageID: messageID}
 		messages := []llm.Message{{
 			Role: llm.RoleSystem,
 			Content: "你是 QQ 群里的机器人然然，回复简短口语化。当前是群聊，群里多个人都可能接着和你说话。\n" +
@@ -37,7 +37,7 @@ func TestLiveGroupGuessingGameKeepsLockedSecret(t *testing.T) {
 		if state := runtime.privateThreadStateContext(context.Background(), event); state != "" {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: state, Priority: llm.MessagePriorityPlugin, AtomicText: true})
 		}
-		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "【当前需要回复的消息】群聊 1081572710，发送者 " + sender + "（" + userID + "）：" + text})
+		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "【当前需要回复的消息】群聊 20005，发送者 " + sender + "（" + userID + "）：" + text})
 		runner, err := agent.NewRunner(client, agent.Config{WorkDir: t.TempDir(), MaxSteps: 8, ToolTimeoutMS: 30_000, FinalizationReserveMS: 10_000},
 			agent.NewToolRegistry(newDianaThreadStateTool(runtime, event)))
 		if err != nil {
@@ -104,8 +104,8 @@ func TestLiveGroupGuessingGameKeepsLockedSecret(t *testing.T) {
 	}
 
 	turns := []struct{ user, sender, id, text string }{
-		{"160867498", "Rim de Lacent", "m2", "@然然 是 winter 用过的吗"},
-		{"3083158904", "Winter", "m3", "@然然 是两个字吗"},
+		{"30003", "Rim de Lacent", "m2", "@然然 是 winter 用过的吗"},
+		{"30007", "Winter", "m3", "@然然 是两个字吗"},
 		{"934542274", "轩诺", "m4", "@然然 能吃吗"},
 	}
 	for _, turn := range turns {

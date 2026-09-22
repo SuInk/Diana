@@ -89,8 +89,8 @@ func TestPrivateClosingAnswersGraceThenWithholds(t *testing.T) {
 	texts := []string{"嗯 拜", "拜拜", "嗯 晚安"}
 	outcomes := make([]string, 0, len(texts))
 	for index, text := range texts {
-		rememberPrivateBotReply(runtime, "380726517", "bot-"+text, time.Now())
-		event := privateEvent("380726517", "m"+string(rune('1'+index)), text)
+		rememberPrivateBotReply(runtime, "30004", "bot-"+text, time.Now())
+		event := privateEvent("30004", "m"+string(rune('1'+index)), text)
 		outcome, err := runtime.replyAndRecord(context.Background(), event, text, "replied")
 		if err != nil {
 			t.Fatalf("turn %d: %v", index+1, err)
@@ -107,7 +107,7 @@ func TestPrivateClosingAnswersGraceThenWithholds(t *testing.T) {
 		t.Fatalf("sent %d replies, want exactly the two answered closers: %#v", len(channel.sent), channel.sent)
 	}
 	// 收尾拦截不开暂停：对方只是在道别，不是要求停止。
-	if _, blocked := runtime.activeReplySuppression(privateEvent("380726517", "x", "x"), time.Now()); blocked {
+	if _, blocked := runtime.activeReplySuppression(privateEvent("30004", "x", "x"), time.Now()); blocked {
 		t.Fatal("closing withholding must not activate a 30 minute suppression")
 	}
 }
@@ -122,8 +122,8 @@ func TestPrivateClosingCountResetsOnSubstantiveMessage(t *testing.T) {
 
 	turns := []string{"嗯 拜", "拜拜", "等下 明天几点开会", "行 拜", "嗯 晚安"}
 	for index, text := range turns {
-		rememberPrivateBotReply(runtime, "380726517", "bot-"+text, time.Now())
-		event := privateEvent("380726517", "reset-m"+string(rune('1'+index)), text)
+		rememberPrivateBotReply(runtime, "30004", "bot-"+text, time.Now())
+		event := privateEvent("30004", "reset-m"+string(rune('1'+index)), text)
 		outcome, err := runtime.replyAndRecord(context.Background(), event, text, "replied")
 		if err != nil {
 			t.Fatalf("turn %d: %v", index+1, err)
@@ -145,8 +145,8 @@ func TestPrivateStopRequestWithholdsAndSuppresses(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner", PrivateClosingGrace: 2},
 		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 
-	rememberPrivateBotReply(runtime, "380726517", "bot-1", time.Now())
-	event := privateEvent("380726517", "stop-1", "别回了 睡了")
+	rememberPrivateBotReply(runtime, "30004", "bot-1", time.Now())
+	event := privateEvent("30004", "stop-1", "别回了 睡了")
 	outcome, err := runtime.replyAndRecord(context.Background(), event, event.RawMessage, "replied")
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +200,7 @@ func TestPrivateFirstMessagePaysNoClosingAudit(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner", ReplySafetyMasterEnabled: boolPointer(false)},
 		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 
-	event := privateEvent("380726517", "first", "在吗")
+	event := privateEvent("30004", "first", "在吗")
 	if _, err := runtime.replyAndRecord(context.Background(), event, event.RawMessage, "replied"); err != nil {
 		t.Fatal(err)
 	}
@@ -218,8 +218,8 @@ func TestPrivateClosingAuditSkippedAfterLongSilence(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner", ReplySafetyMasterEnabled: boolPointer(false)},
 		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 
-	rememberPrivateBotReply(runtime, "380726517", "old", time.Now().Add(-privateClosingAuditWindow-time.Minute))
-	event := privateEvent("380726517", "next-day", "早")
+	rememberPrivateBotReply(runtime, "30004", "old", time.Now().Add(-privateClosingAuditWindow-time.Minute))
+	event := privateEvent("30004", "next-day", "早")
 	if _, err := runtime.replyAndRecord(context.Background(), event, event.RawMessage, "replied"); err != nil {
 		t.Fatal(err)
 	}
@@ -237,8 +237,8 @@ func TestPrivateClosingIgnoresLowConfidence(t *testing.T) {
 		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 
 	for index, text := range []string{"嗯 拜", "拜拜", "晚安"} {
-		rememberPrivateBotReply(runtime, "380726517", "bot-low-"+text, time.Now())
-		event := privateEvent("380726517", "low-m"+string(rune('1'+index)), text)
+		rememberPrivateBotReply(runtime, "30004", "bot-low-"+text, time.Now())
+		event := privateEvent("30004", "low-m"+string(rune('1'+index)), text)
 		outcome, err := runtime.replyAndRecord(context.Background(), event, text, "replied")
 		if err != nil {
 			t.Fatal(err)
@@ -306,7 +306,7 @@ func TestReplyAuditPromptDescribesClosingContract(t *testing.T) {
 func TestOwnerReleaseClearsClosingCount(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "10001"},
 		nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	event := privateEvent("380726517", "closed-1", "拜拜")
+	event := privateEvent("30004", "closed-1", "拜拜")
 	now := time.Now()
 	if got := runtime.notePrivateClosingExchange(event, now); got != 1 {
 		t.Fatalf("closing count = %d, want 1", got)
@@ -317,7 +317,7 @@ func TestOwnerReleaseClearsClosingCount(t *testing.T) {
 	if _, ok := runtime.activateReplySuppression(event, "test", now); !ok {
 		t.Fatal("activateReplySuppression() = false")
 	}
-	if _, ok := runtime.clearReplySuppression(event, "380726517"); !ok {
+	if _, ok := runtime.clearReplySuppression(event, "30004"); !ok {
 		t.Fatal("clearReplySuppression() = false")
 	}
 	if got := runtime.privateClosingCount(event, now); got != 0 {
@@ -328,7 +328,7 @@ func TestOwnerReleaseClearsClosingCount(t *testing.T) {
 // TestPrivateClosingCountExpires 计数跟着对话过期：隔了半小时再说话是新的一段。
 func TestPrivateClosingCountExpires(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	event := privateEvent("380726517", "expire-1", "拜拜")
+	event := privateEvent("30004", "expire-1", "拜拜")
 	start := time.Now()
 	runtime.notePrivateClosingExchange(event, start)
 	runtime.notePrivateClosingExchange(event, start)

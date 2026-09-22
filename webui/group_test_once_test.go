@@ -10,7 +10,7 @@ import (
 func TestGroupTestOneShotPreservesImageLink(t *testing.T) {
 	channel := &restoredControlChannel{responses: map[string]map[string]any{"send_group_msg": {"message_id": 42}}}
 	router := botTestRouter(restoredControlHandler(channel))
-	response := performJSONRequest(router, http.MethodPost, "/api/assistant/group-test", `{"group_id":"765205730","one_shot":true,"message":"[CQ:image,file=http://example.test/media/token]"}`)
+	response := performJSONRequest(router, http.MethodPost, "/api/assistant/group-test", `{"group_id":"20002","one_shot":true,"message":"[CQ:image,file=http://example.test/media/token]"}`)
 	if response.Code != 200 {
 		t.Fatalf("%d %s", response.Code, response.Body.String())
 	}

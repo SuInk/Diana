@@ -5,7 +5,7 @@ import "testing"
 func directedLoopRuntime(t *testing.T) *Runtime {
 	t.Helper()
 	return NewRuntime(BotConfig{
-		BotAccount:    "3129583166",
+		BotAccount:    "90001",
 		OwnerID:       "owner",
 		GroupTriggers: []string{"嘉然", "然然", "Diana"},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -14,8 +14,8 @@ func directedLoopRuntime(t *testing.T) *Runtime {
 func directedLoopEvent(text string) MessageEvent {
 	return MessageEvent{
 		Kind:       EventKindGroup,
-		GroupID:    "1049765710",
-		UserID:     "380726517",
+		GroupID:    "20003",
+		UserID:     "30004",
 		MessageID:  "yuki-1",
 		SenderRole: "member",
 		RawMessage: text,
@@ -23,7 +23,7 @@ func directedLoopEvent(text string) MessageEvent {
 	}
 }
 
-// 2026-09-20 深夜 1049765710 群里另一台机器人和 Diana 互道晚安刷了十几轮，每条的
+// 2026-09-20 深夜 20003 群里另一台机器人和 Diana 互道晚安刷了十几轮，每条的
 // 接话评分都是「在跟机器人说话：是」，但正文里既没有 @、引用也没有名字，于是
 // bot_reply_loop_classification 从 23:56 起再没跑过一次，回复欲望衰减的密度计数
 // 一直是空的，没有任何一层能刹车。
@@ -56,7 +56,7 @@ func TestBotReplyLoopCandidateDirectedKeepsExistingGuards(t *testing.T) {
 
 	self := directedLoopEvent("晚安宝宝喵")
 	self.routingDirected = true
-	self.UserID = "3129583166"
+	self.UserID = "90001"
 	if _, ok := runtime.botReplyLoopCandidate(self, self.RawMessage); ok {
 		t.Fatal("机器人自己的消息不该进空转判断")
 	}

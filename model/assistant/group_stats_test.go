@@ -98,8 +98,8 @@ func TestOneBotEmojiLikeBecomesReactionNotice(t *testing.T) {
 		raw   string
 		added bool
 	}{
-		{`{"time":1789500000,"self_id":3129583166,"post_type":"notice","notice_type":"group_msg_emoji_like","group_id":1049765710,"user_id":160867498,"message_id":-1281528691,"likes":[{"emoji_id":"76","count":1}],"is_add":true,"message_seq":123}`, true},
-		{`{"time":1789500001,"self_id":3129583166,"post_type":"notice","notice_type":"group_msg_emoji_like","group_id":1049765710,"user_id":160867498,"message_id":-1281528691,"likes":[{"emoji_id":76,"count":1}],"is_add":false}`, false},
+		{`{"time":1789500000,"self_id":90001,"post_type":"notice","notice_type":"group_msg_emoji_like","group_id":20003,"user_id":30003,"message_id":-1281528691,"likes":[{"emoji_id":"76","count":1}],"is_add":true,"message_seq":123}`, true},
+		{`{"time":1789500001,"self_id":90001,"post_type":"notice","notice_type":"group_msg_emoji_like","group_id":20003,"user_id":30003,"message_id":-1281528691,"likes":[{"emoji_id":76,"count":1}],"is_add":false}`, false},
 	} {
 		var envelope oneBotEnvelope
 		if err := json.Unmarshal([]byte(tc.raw), &envelope); err != nil {
@@ -109,8 +109,8 @@ func TestOneBotEmojiLikeBecomesReactionNotice(t *testing.T) {
 		if !ok {
 			t.Fatalf("没认出贴表情：%s", tc.raw)
 		}
-		if reaction.MessageID != "-1281528691" || reaction.UserID != "160867498" || !reflect.DeepEqual(reaction.Emojis, []string{"76"}) ||
-			reaction.Replace || reaction.Added != tc.added || !strings.HasSuffix(reaction.Session, "group:1049765710") {
+		if reaction.MessageID != "-1281528691" || reaction.UserID != "30003" || !reflect.DeepEqual(reaction.Emojis, []string{"76"}) ||
+			reaction.Replace || reaction.Added != tc.added || !strings.HasSuffix(reaction.Session, "group:20003") {
 			t.Fatalf("reaction = %#v", reaction)
 		}
 	}
@@ -120,7 +120,7 @@ func TestOneBotEmojiLikeBecomesReactionNotice(t *testing.T) {
 func TestRuntimeRecordsReactionWithoutReplying(t *testing.T) {
 	store := &fakeGroupStatsStore{}
 	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{ID: "qq", BotAccount: "3129583166"}.WithDefaults(), channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ID: "qq", BotAccount: "90001"}.WithDefaults(), channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	event := MessageEvent{
 		Kind: EventKindNotice, SubType: messageReactionSubType, GroupID: "100", UserID: "20002", SenderName: "Alice", MessageID: "m1", Time: 10,
@@ -140,11 +140,11 @@ func TestRuntimeRecordsReactionWithoutReplying(t *testing.T) {
 // 线上：让机器人「导出点赞名单」，它拿发言排行冒充。两个统计要分开给，说明里写清是什么。
 func TestChatHistorySpeakerAndReactionStats(t *testing.T) {
 	store := &fakeGroupStatsStore{
-		speakers: []GroupStatsRank{{UserID: "a", UserName: "Mio", Count: 6317}, {UserID: "3129583166", UserName: "Diana", Count: 500}, {UserID: "b", UserName: "RR", Count: 3208}},
+		speakers: []GroupStatsRank{{UserID: "a", UserName: "Mio", Count: 6317}, {UserID: "90001", UserName: "Diana", Count: 500}, {UserID: "b", UserName: "RR", Count: 3208}},
 		givers:   []GroupStatsRank{{UserID: "b", UserName: "RR", Count: 12}},
 		rows:     []MessageReactionRow{{MessageID: "662", UserID: "b", UserName: "RR", Emoji: "👍"}, {MessageID: "662", UserID: "b", UserName: "RR", Emoji: "❤"}, {MessageID: "662", UserID: "c", Emoji: "🔥"}},
 	}
-	runtime := NewRuntime(BotConfig{ID: "qq", BotAccount: "3129583166", MarkedBotIDs: []string{"b"}}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ID: "qq", BotAccount: "90001", MarkedBotIDs: []string{"b"}}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "u", Time: 1_000_000})
 

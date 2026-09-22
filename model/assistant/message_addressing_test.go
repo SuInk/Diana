@@ -53,7 +53,7 @@ func TestMessageAddressingDistinguishesReplyTargets(t *testing.T) {
 }
 
 func TestTelegramOtherBotMentionAndReplyRemainExplicit(t *testing.T) {
-	text := "😀 @kosamerobot 你说呢"
+	text := "😀 @otherrobot 你说呢"
 	event := telegramMessageToEvent(&telegramMessage{MessageID: 108162, Chat: &telegramChat{ID: -100, Type: "supergroup"}, From: &telegramUser{ID: 10001}, Text: text,
 		Entities: []telegramEntity{{Type: "mention", Offset: 3, Length: 12}},
 		ReplyTo:  &telegramMessage{MessageID: 108158, From: &telegramUser{ID: 10002, FirstName: "other"}, Text: "hello"},
@@ -71,7 +71,7 @@ func TestTelegramOtherBotMentionAndReplyRemainExplicit(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := addressingForEvent(restored, BotConfig{})
-	if got.ReplyTarget != "other" || !got.MentionsOther || got.MentionsSelf || len(got.Mentions) != 1 || got.Mentions[0].Username != "kosamerobot" {
+	if got.ReplyTarget != "other" || !got.MentionsOther || got.MentionsSelf || len(got.Mentions) != 1 || got.Mentions[0].Username != "otherrobot" {
 		t.Fatalf("addressing=%+v", got)
 	}
 	unknown := telegramMentionTargets(text, []telegramEntity{{Type: "mention", Offset: 3, Length: 12}}, "99999", "")

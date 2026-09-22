@@ -203,7 +203,7 @@ func TestProviderTestReturnsAndLogsRedactedUpstreamError(t *testing.T) {
 	}
 }
 
-// 日志里的 actor 形如 qq:1255848531，光一串号码认不出是谁——和事件列表是同一个问题。
+// 日志里的 actor 形如 qq:30001，光一串号码认不出是谁——和事件列表是同一个问题。
 func TestAppLogsResolveActorNames(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "logs.db"))
@@ -213,13 +213,13 @@ func TestAppLogsResolveActorNames(t *testing.T) {
 	defer func() { _ = store.Close() }()
 
 	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{
-		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "1255848531", SenderName: "吊图吧群友",
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "30001", SenderName: "吊图吧群友",
 		MessageID: "m1", RawMessage: "在的", Time: 1_700_000_000,
 	}, assistant.UserMemoryUpdate{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range []storage.AppLogEntry{
-		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "test_named", Message: "有名字的", Actor: "qq:1255848531"},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "test_named", Message: "有名字的", Actor: "qq:30001"},
 		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "test_unknown", Message: "查不到名字的", Actor: "qq:99999999"},
 		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "test_console", Message: "控制台操作者", Actor: "webui:admin"},
 	} {
@@ -255,14 +255,14 @@ func TestAppLogsResolveActorNames(t *testing.T) {
 
 func TestAppLogActorUserID(t *testing.T) {
 	cases := map[string]string{
-		"qq:1255848531": "1255848531",
-		"1255848531":    "1255848531",
-		" qq:123 ":      "123",
-		"qq:unknown":    "",
-		"webui:admin":   "",
-		"admin":         "",
-		"":              "",
-		"qq:":           "",
+		"qq:30001":    "30001",
+		"30001":       "30001",
+		" qq:123 ":    "123",
+		"qq:unknown":  "",
+		"webui:admin": "",
+		"admin":       "",
+		"":            "",
+		"qq:":         "",
 	}
 	for actor, want := range cases {
 		if got := appLogActorUserID(actor); got != want {

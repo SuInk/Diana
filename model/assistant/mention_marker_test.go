@@ -235,19 +235,19 @@ func TestOutgoingHistoryRendersMentionMarker(t *testing.T) {
 // 的扶正成真提及，认不出来的丢掉。
 func TestOutgoingNormalizesMentionVariantsFromProduction(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "1081572710", UserID: "3083158904"}
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "20005", UserID: "30007"}
 	cases := []struct{ in, want string }{
-		{"@diana-at-3083158904 撤啥呀，那两单早就撤过了", "[diana-at:3083158904]撤啥呀，那两单早就撤过了"},
-		{"<diana-at:160867498>半真半假。官方文档里", "[diana-at:160867498]半真半假。官方文档里"},
+		{"@diana-at-30007 撤啥呀，那两单早就撤过了", "[diana-at:30007]撤啥呀，那两单早就撤过了"},
+		{"<diana-at:30003>半真半假。官方文档里", "[diana-at:30003]半真半假。官方文档里"},
 		{"(diana-at:3135003586)没事没事，一整杯都糊脸上了", "[diana-at:3135003586]没事没事，一整杯都糊脸上了"},
 		{"[ diana-at:1368248340]（揉了揉眼睛）三天就把 GPT 额度干完了", "[diana-at:1368248340]（揉了揉眼睛）三天就把 GPT 额度干完了"},
 		{"[ diana-at:3135003586 ]嘿嘿，第三分收下", "[diana-at:3135003586]嘿嘿，第三分收下"},
-		{"[diana-at:3083158904] 撤啥呀", "[diana-at:3083158904] 撤啥呀"},
+		{"[diana-at:30007] 撤啥呀", "[diana-at:30007] 撤啥呀"},
 		// id 认不出来的整个丢掉，不留半个标记，也不降级成纯文本。
 		{"@diana-at 不难，这仓库还没 CONTRIBUTING.md", "不难，这仓库还没 CONTRIBUTING.md"},
 		{"[diana-at:成员user_id] 撤啥呀", "撤啥呀"},
 		{"[diana-at:im_user_abc] 撤啥呀", "撤啥呀"},
-		{"[diana-at:diana-at-3083158904] 撤啥呀", "撤啥呀"},
+		{"[diana-at:diana-at-30007] 撤啥呀", "撤啥呀"},
 	}
 	for _, item := range cases {
 		got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: item.in}).Text
@@ -286,8 +286,8 @@ func TestMentionIDAcceptableByPlatform(t *testing.T) {
 		id       string
 		want     bool
 	}{
-		{PlatformOneBotV11, "3083158904", true},
-		{PlatformOneBotV11, "diana-at-3083158904", false},
+		{PlatformOneBotV11, "30007", true},
+		{PlatformOneBotV11, "diana-at-30007", false},
 		{PlatformTelegram, "10001", true},
 		{PlatformTelegram, "user_id", false},
 		{PlatformFeishu, "ou_9a8b7c", true},

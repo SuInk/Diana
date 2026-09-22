@@ -39,7 +39,7 @@ type appLogActorNamer interface {
 	ResolveUserDisplayNames(ctx context.Context, userIDs []string) (map[string]string, error)
 }
 
-// appLogEntry 在存储行之外补一个昵称。日志里的 actor 形如 "qq:1255848531"，
+// appLogEntry 在存储行之外补一个昵称。日志里的 actor 形如 "qq:30001"，
 // 光一串号码认不出是谁——和事件列表是同一个问题。
 type appLogEntry struct {
 	storage.AppLogEntry

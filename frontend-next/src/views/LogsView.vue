@@ -75,7 +75,7 @@ const autoRefresh = ref(false);
 
 let timer: number | undefined;
 
-// 日志里的 actor 形如 qq:1255848531，光一串号码认不出是谁。查到昵称就显示
+// 日志里的 actor 形如 qq:30001，光一串号码认不出是谁。查到昵称就显示
 // 「昵称（账号）」，原样的 actor 退到悬浮提示里。
 function actorLabel(log: AppLogEntry): string {
   const actor = (log.actor ?? "").trim();

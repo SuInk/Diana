@@ -73,7 +73,7 @@ func TestCodingApprovalRemembersAlwaysAllow(t *testing.T) {
 	if _, needed := codingHookNeedsApproval(policy, "Bash", command); !needed {
 		t.Fatal("一开始就该问")
 	}
-	if err := rememberCodingAlwaysAllow("git push", "3083158904", command); err != nil {
+	if err := rememberCodingAlwaysAllow("git push", "30007", command); err != nil {
 		t.Fatal(err)
 	}
 	// hook 每次执行都现读清单：同一个任务里说过之后，后面的步骤就不再问。
@@ -86,7 +86,7 @@ func TestCodingApprovalRemembersAlwaysAllow(t *testing.T) {
 		t.Error("只该放行说过的那一类")
 	}
 	// 记两次不重复。
-	if err := rememberCodingAlwaysAllow("GIT PUSH", "3083158904", command); err != nil {
+	if err := rememberCodingAlwaysAllow("GIT PUSH", "30007", command); err != nil {
 		t.Fatal(err)
 	}
 	if entries := readCodingAlwaysAllow(codingAlwaysAllowPath()); len(entries) != 1 {

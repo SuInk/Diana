@@ -452,12 +452,12 @@ func TestThreadMemoryKeyIsNormalizedOnWriteAndFoundByScope(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	const session = "group:765205730"
+	const session = "group:20002"
 	threadKey := assistant.ThreadMemoryKey(session)
 	if _, err := store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
 		Session:         session,
 		EventKind:       assistant.EventKindGroup,
-		GroupID:         "765205730",
+		GroupID:         "20002",
 		SourceMessageID: "summary:job-1",
 		SourceEventTime: time.Unix(100, 0),
 		Candidates: []assistant.MemoryCandidate{{
@@ -490,7 +490,7 @@ func TestThreadMemoryKeyIsNormalizedOnWriteAndFoundByScope(t *testing.T) {
 	if items[0].Key == threadKey {
 		t.Fatalf("落库 key 居然没被归一化，这条用例的前提没了: %q", items[0].Key)
 	}
-	if items[0].Key != "thread.group765205730" {
+	if items[0].Key != "thread.group20002" {
 		t.Fatalf("落库 key = %q", items[0].Key)
 	}
 	if !strings.Contains(items[0].Content, "层内埋点") {

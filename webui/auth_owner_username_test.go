@@ -10,21 +10,21 @@ import (
 func TestTelegramUsernameOwnerPrivateLogin(t *testing.T) {
 	runtime := ownerLoginRuntime()
 	runtime.cfg.Platform = assistant.PlatformTelegram
-	runtime.cfg.OwnerID = "@Ruaneko"
+	runtime.cfg.OwnerID = "@Owneruser"
 	router, _, handler := newOwnerLoginTestRouter(t, runtime)
 	code, _ := createOwnerPairing(t, router)
-	event := assistant.MessageEvent{Kind: assistant.EventKindPrivate, Platform: assistant.PlatformTelegram, UserID: "1061423117", SenderName: "ruaneko", SenderUsername: "someone"}
+	event := assistant.MessageEvent{Kind: assistant.EventKindPrivate, Platform: assistant.PlatformTelegram, UserID: "70001", SenderName: "owneruser", SenderUsername: "someone"}
 	if handler.ConsumePrivateMessage(context.Background(), event, code) {
 		t.Fatal("display-name impostor approved login")
 	}
-	event.SenderUsername = "ruaneko"
+	event.SenderUsername = "owneruser"
 	if !handler.ConsumePrivateMessage(context.Background(), event, code) {
 		t.Fatal("username owner could not approve login")
 	}
-	if len(runtime.calls) != 1 || runtime.calls[0].action != "sendMessage" || runtime.calls[0].params["chat_id"] != int64(1061423117) {
+	if len(runtime.calls) != 1 || runtime.calls[0].action != "sendMessage" || runtime.calls[0].params["chat_id"] != int64(70001) {
 		t.Fatalf("receipt did not use verified numeric ID: %#v", runtime.calls)
 	}
-	if runtime.cfg.OwnerID != "@Ruaneko" {
+	if runtime.cfg.OwnerID != "@Owneruser" {
 		t.Fatal("login rewrote persisted owner")
 	}
 }

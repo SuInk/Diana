@@ -5470,8 +5470,8 @@ func TestSplitReplyStillChunksLongText(t *testing.T) {
 // 路由模型只拿到数字账号时，认不出群消息里的 @username 就是自己。
 func TestBotAliasesIncludePlatformUsername(t *testing.T) {
 	cfg := BotConfig{BotAccount: "8738773088", GroupTriggers: []string{"miku"}}
-	aliases := botAliasesForEvent(MessageEvent{SelfUsername: "mikuabot"}, cfg)
-	if len(aliases) != 2 || aliases[0] != "miku" || aliases[1] != "@mikuabot" {
+	aliases := botAliasesForEvent(MessageEvent{SelfUsername: "examplebot"}, cfg)
+	if len(aliases) != 2 || aliases[0] != "miku" || aliases[1] != "@examplebot" {
 		t.Fatalf("别名应带上平台用户名，实际 %#v", aliases)
 	}
 
@@ -5480,7 +5480,7 @@ func TestBotAliasesIncludePlatformUsername(t *testing.T) {
 	}
 
 	dup := BotConfig{GroupTriggers: []string{"@MikuaBot"}}
-	if got := botAliasesForEvent(MessageEvent{SelfUsername: "mikuabot"}, dup); len(got) != 1 {
+	if got := botAliasesForEvent(MessageEvent{SelfUsername: "examplebot"}, dup); len(got) != 1 {
 		t.Fatalf("已配置的同名别名不该重复，实际 %#v", got)
 	}
 

@@ -91,30 +91,30 @@ func TestCleanInputKeepsOtherPeopleMentions(t *testing.T) {
 	}
 }
 
-// 判定用的那份副本要真的剥干净：at 段带昵称时渲染成「@Diana（3129583166）」，
+// 判定用的那份副本要真的剥干净：at 段带昵称时渲染成「@Diana（90001）」，
 // 按账号做字符串替换只会挖掉号码，留下「@Diana（）」，纯 @ 就判不出来了。
 func TestBotMentionStrippedTextDropsNamedBotMention(t *testing.T) {
 	event := MessageEvent{
-		Kind: EventKindGroup, SelfID: "3129583166", GroupID: "g", UserID: "10001", ToMe: true,
+		Kind: EventKindGroup, SelfID: "90001", GroupID: "g", UserID: "10001", ToMe: true,
 		Segments: []MessageSegment{
-			{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}},
+			{Type: "at", Data: map[string]string{"qq": "90001", "name": "Diana"}},
 		},
 	}
-	if got := botMentionStrippedText(event, "", "3129583166"); got != "" {
+	if got := botMentionStrippedText(event, "", "90001"); got != "" {
 		t.Fatalf("带昵称的 @ 没有摘干净：%q", got)
 	}
-	if !bareWakeMention(event, "@Diana（3129583166）", "3129583166", nil) {
+	if !bareWakeMention(event, "@Diana（90001）", "90001", nil) {
 		t.Fatal("带昵称的纯 @ 没有被认成一次唤醒")
 	}
 }
 
 // 别人的 @ 带昵称时要完整保留：那是「在说谁」的线索。
 func TestCleanInputKeepsNamedMentionsOfOthers(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "3129583166"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "90001"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
-		Kind: EventKindGroup, SelfID: "3129583166", GroupID: "g", UserID: "10001", ToMe: true,
+		Kind: EventKindGroup, SelfID: "90001", GroupID: "g", UserID: "10001", ToMe: true,
 		Segments: []MessageSegment{
-			{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}},
+			{Type: "at", Data: map[string]string{"qq": "90001", "name": "Diana"}},
 			{Type: "text", Data: map[string]string{"text": " 看看 "}},
 			{Type: "at", Data: map[string]string{"qq": "10002", "name": "老王"}},
 			{Type: "text", Data: map[string]string{"text": " 那条"}},
@@ -124,7 +124,7 @@ func TestCleanInputKeepsNamedMentionsOfOthers(t *testing.T) {
 	if !strings.Contains(got, "老王") || !strings.Contains(got, "10002") {
 		t.Fatalf("别人的 @ 被删了：%q", got)
 	}
-	if !strings.Contains(got, "Diana") || !strings.Contains(got, "3129583166") {
+	if !strings.Contains(got, "Diana") || !strings.Contains(got, "90001") {
 		t.Fatalf("机器人自己的 @ 也该留在原文里：%q", got)
 	}
 	if !strings.Contains(got, "看看") || !strings.Contains(got, "那条") {
@@ -135,10 +135,10 @@ func TestCleanInputKeepsNamedMentionsOfOthers(t *testing.T) {
 // @ 的注解要和正文对得上：正文里的 @ 指向自己时说「这是在叫你」，
 // 还 @ 了别人时保留「别忽略 @」的提醒。
 func TestMentionAnnotationMatchesWhatIsInTheText(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "3129583166"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "90001"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	self := MessageEvent{
-		Kind: EventKindGroup, SelfID: "3129583166", GroupID: "g", UserID: "10001", ToMe: true,
-		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "3129583166", "name": "Diana"}}},
+		Kind: EventKindGroup, SelfID: "90001", GroupID: "g", UserID: "10001", ToMe: true,
+		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "90001", "name": "Diana"}}},
 	}
 	got := currentPromptText(self, runtime.cleanInput(self, ""))
 	if !strings.Contains(got, "那个 @ 指的就是你") {

@@ -18,7 +18,7 @@ import (
 func relationTestGraph() GroupRelationGraph {
 	names := []string{"查无此人", "枞と哀傷", "Winter", "笨笨喵"}
 	graph := GroupRelationGraph{
-		GroupID: "1049765710", BotID: "bot", Messages: 5800, Participants: len(names) + 1,
+		GroupID: "20003", BotID: "bot", Messages: 5800, Participants: len(names) + 1,
 		Nodes: []GroupRelationNode{{UserID: "bot", DisplayName: "Diana", IsBot: true, Messages: 900}},
 	}
 	for index, name := range names {
@@ -43,7 +43,7 @@ func TestRenderGroupRelationPNGWithoutBrowser(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			graph := relationTestGraph()
 			graph.Nodes[0].DisplayName = name
-			raw, err := RenderGroupRelationPNG(graph, "群 1049765710 · 关系图", "近 7 天", relationImageDefaultSeats)
+			raw, err := RenderGroupRelationPNG(graph, "群 20003 · 关系图", "近 7 天", relationImageDefaultSeats)
 			if err != nil {
 				t.Fatalf("RenderGroupRelationPNG() error = %v", err)
 			}

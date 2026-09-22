@@ -139,7 +139,7 @@ func TestLiveReplyAuditJudgesPurposeOfDenseExchange(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, BotAccount: "42"}.WithDefaults(), &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
 			event := MessageEvent{
-				Kind: EventKindGroup, SelfID: "42", GroupID: "900001", UserID: "3179524618", SenderName: "ICE",
+				Kind: EventKindGroup, SelfID: "42", GroupID: "900001", UserID: "30006", SenderName: "ICE",
 				MessageID: "current", Time: time.Now().Unix(), RawMessage: tc.current,
 				Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": tc.current}}},
 			}
@@ -178,8 +178,8 @@ func runLiveAIExchange(t *testing.T, opponentPrompt, opening string, duration ti
 	start := time.Now()
 	paused := false
 	for i := 0; time.Since(start) < duration; i++ {
-		h.send(ctx, "3179524618", "ICE", fmt.Sprintf("ice-%03d", i), last)
-		if _, blocked := h.runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "900001", UserID: "3179524618"}, time.Now()); blocked {
+		h.send(ctx, "30006", "ICE", fmt.Sprintf("ice-%03d", i), last)
+		if _, blocked := h.runtime.activeReplySuppression(MessageEvent{Kind: EventKindGroup, GroupID: "900001", UserID: "30006"}, time.Now()); blocked {
 			paused = true
 			t.Logf("第 %d 条消息时已暂停，用时 %s", i+1, time.Since(start).Round(time.Second))
 			break

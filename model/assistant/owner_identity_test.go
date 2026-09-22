@@ -10,12 +10,12 @@ import (
 )
 
 func TestTelegramOwnerUsernameFromAuthenticatedSender(t *testing.T) {
-	msg := &telegramMessage{MessageID: 1, Chat: &telegramChat{ID: -100, Type: "supergroup"}, From: &telegramUser{ID: 1061423117, Username: "ruaneko", FirstName: "error"}, Text: "模型切到 gpt-5.6-terra"}
-	event := telegramMessageToEvent(msg, "42", "mikuabot")
+	msg := &telegramMessage{MessageID: 1, Chat: &telegramChat{ID: -100, Type: "supergroup"}, From: &telegramUser{ID: 70001, Username: "owneruser", FirstName: "error"}, Text: "模型切到 gpt-5.6-terra"}
+	event := telegramMessageToEvent(msg, "42", "examplebot")
 	event.ProfileID = "tg"
-	for _, owner := range []string{"ruaneko", "@ruaneko", " @Ruaneko ", "1061423117"} {
+	for _, owner := range []string{"owneruser", "@owneruser", " @Owneruser ", "70001"} {
 		cfg := BotConfig{ID: "tg", Platform: PlatformTelegram, OwnerID: owner}
-		if !cfg.IsOwnerEvent(event) || cfg.OwnerIDForEvent(event) != "1061423117" {
+		if !cfg.IsOwnerEvent(event) || cfg.OwnerIDForEvent(event) != "70001" {
 			t.Fatalf("owner %q not matched", owner)
 		}
 		data, err := json.Marshal(event)
@@ -34,24 +34,27 @@ func TestTelegramOwnerUsernameFromAuthenticatedSender(t *testing.T) {
 		name   string
 		change func(*telegramMessage)
 	}{
-		{"display name", func(m *telegramMessage) { m.From.Username = "someone"; m.From.FirstName = "ruaneko" }},
+		{"display name", func(m *telegramMessage) { m.From.Username = "someone"; m.From.FirstName = "owneruser" }},
 		{"missing username", func(m *telegramMessage) { m.From.Username = "" }},
 		{"anonymous sender", func(m *telegramMessage) { m.SenderChat = &telegramChat{ID: -100, Type: "supergroup"} }},
 		{"bot account", func(m *telegramMessage) { m.From.IsBot = true }},
-		{"mentioned owner", func(m *telegramMessage) { m.From.Username = "someone"; m.Text = "@ruaneko 模型切到 gpt-5.6-terra" }},
+		{"mentioned owner", func(m *telegramMessage) {
+			m.From.Username = "someone"
+			m.Text = "@owneruser 模型切到 gpt-5.6-terra"
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			copyMsg := *msg
 			copyFrom := *msg.From
 			copyMsg.From = &copyFrom
 			tc.change(&copyMsg)
-			got := telegramMessageToEvent(&copyMsg, "42", "mikuabot")
-			if (BotConfig{Platform: PlatformTelegram, OwnerID: "ruaneko"}).IsOwnerEvent(got) {
+			got := telegramMessageToEvent(&copyMsg, "42", "examplebot")
+			if (BotConfig{Platform: PlatformTelegram, OwnerID: "owneruser"}).IsOwnerEvent(got) {
 				t.Fatal("untrusted identity became owner")
 			}
 		})
 	}
-	cfg := BotConfig{ID: "other", Platform: PlatformTelegram, OwnerID: "ruaneko"}
+	cfg := BotConfig{ID: "other", Platform: PlatformTelegram, OwnerID: "owneruser"}
 	if cfg.IsOwnerEvent(event) {
 		t.Fatal("identity crossed robot profiles")
 	}
@@ -64,12 +67,12 @@ func TestTelegramOwnerUsernameFromAuthenticatedSender(t *testing.T) {
 
 func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{{ID: "main", Name: "main", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "test", Model: "old", Models: []llm.ModelInfo{{ID: "old"}, {ID: "new"}}}}}}}
-	cfg := BotConfig{ID: "tg", Platform: PlatformTelegram, OwnerID: "@ruaneko", ModelRoles: map[string]ModelRole{"chat": {ProfileID: "main", Model: "old"}}}
+	cfg := BotConfig{ID: "tg", Platform: PlatformTelegram, OwnerID: "@owneruser", ModelRoles: map[string]ModelRole{"chat": {ProfileID: "main", Model: "old"}}}
 	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), store, nil, &restoredConfigSaver{}, nil)
 	r.SetLLMModelLister(func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return []llm.ModelInfo{{ID: "old"}, {ID: "new"}}, nil
 	})
-	event := telegramMessageToEvent(&telegramMessage{MessageID: 1, Chat: &telegramChat{ID: -100, Type: "supergroup"}, From: &telegramUser{ID: 1061423117, Username: "ruaneko"}, Text: "切换模型"}, "42", "mikuabot")
+	event := telegramMessageToEvent(&telegramMessage{MessageID: 1, Chat: &telegramChat{ID: -100, Type: "supergroup"}, From: &telegramUser{ID: 70001, Username: "owneruser"}, Text: "切换模型"}, "42", "examplebot")
 	event.ProfileID = "tg"
 	if !r.relationshipPolicy(context.Background(), event).Owner {
 		t.Fatal("username owner did not receive owner policy")
@@ -88,11 +91,11 @@ func TestTelegramUsernameOwnerCanChangeModel(t *testing.T) {
 	if _, err := newTestLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "new"}); err != nil {
 		t.Fatal(err)
 	}
-	if r.ProfileConfig("").ModelRoles["chat"].Model != "new" || r.ProfileConfig("").OwnerID != "@ruaneko" {
+	if r.ProfileConfig("").ModelRoles["chat"].Model != "new" || r.ProfileConfig("").OwnerID != "@owneruser" {
 		t.Fatal("model not changed or saved owner was rewritten")
 	}
 	event.SenderUsername = "someone"
-	event.SenderName = "ruaneko"
+	event.SenderName = "owneruser"
 	if _, err := newTestLLMConfigTool(r, event).Run(context.Background(), map[string]any{"model": "old"}); err == nil {
 		t.Fatal("display-name impostor changed model")
 	}

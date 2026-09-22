@@ -288,7 +288,7 @@ func TestHistoryBackfillDropsHistoricalPrivateOutsideRecentContacts(t *testing.T
 	store := newMemoryInboundEventStore()
 	store.sessions = []HistorySession{
 		{Kind: EventKindGroup, ID: "123", LastEventTime: 10},
-		{Kind: EventKindPrivate, ID: "3083158904", LastEventTime: 10},
+		{Kind: EventKindPrivate, ID: "30007", LastEventTime: 10},
 	}
 	channel := newQueueTestChannel()
 	channel.responses["get_group_list"] = map[string]any{"items": []any{map[string]any{"group_id": "123"}}}
@@ -309,12 +309,12 @@ func TestHistoryBackfillDropsHistoricalPrivateOutsideRecentContacts(t *testing.T
 
 func TestHistoryBackfillSkipsUnresolvableRecentPrivate(t *testing.T) {
 	store := newMemoryInboundEventStore()
-	store.sessions = []HistorySession{{Kind: EventKindPrivate, ID: "3083158904", LastEventTime: 10}}
+	store.sessions = []HistorySession{{Kind: EventKindPrivate, ID: "30007", LastEventTime: 10}}
 	channel := newQueueTestChannel()
 	channel.responses["get_recent_contact"] = map[string]any{"items": []any{
-		map[string]any{"peerUin": "3083158904", "chatType": 1},
+		map[string]any{"peerUin": "30007", "chatType": 1},
 	}}
-	channel.errors["get_friend_msg_history"] = fmt.Errorf("failed to resolve UID for UIN 3083158904")
+	channel.errors["get_friend_msg_history"] = fmt.Errorf("failed to resolve UID for UIN 30007")
 	runtime := newQueuedTestRuntime(channel, store, nil)
 
 	sessions, err := runtime.backfillInboundHistoryFromSessions(context.Background(), store, store.sessions, 10)

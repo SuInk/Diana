@@ -513,7 +513,7 @@
                     v-model="form.owner_id"
                     class="input"
                     :inputmode="isOneBotPlatform ? 'numeric' : 'text'"
-                    :placeholder="form.platform === 'telegram' ? '数字用户 ID 或 @用户名，例如 1061423117 / @ruaneko' : isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : '平台用户 ID，用于管理指令'"
+                    :placeholder="form.platform === 'telegram' ? '数字用户 ID 或 @用户名，例如 70001 / @owneruser' : isOneBotPlatform ? '例如 123456789，用于管理指令和私聊登录' : '平台用户 ID，用于管理指令'"
                   />
                   <AccountNameHint :user-id="form.owner_id" :profile="form.id" />
                   <span v-if="form.platform === 'telegram'" class="hint">支持数字 ID、用户名或 @用户名，不区分用户名大小写；按 Telegram 发送者账号核验，不按显示昵称。用户名变更后需更新此处。</span>

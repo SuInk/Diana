@@ -30,7 +30,7 @@ func TestOneBotHistoryIdentityIgnoresActiveTelegramProfile(t *testing.T) {
 	})
 
 	event := runtime.bindInboundEventIdentity(
-		MessageEvent{Kind: EventKindGroup, GroupID: "765205730", UserID: "494942782"})
+		MessageEvent{Kind: EventKindGroup, GroupID: "20002", UserID: "30002"})
 
 	if event.ProfileID != "qq" {
 		t.Fatalf("ProfileID = %q，回填的 QQ 消息应当绑到 OneBot 那台", event.ProfileID)

@@ -676,7 +676,7 @@ const ownerLabel = computed(() =>
   isOneBotPlatform.value || botForm.value.platform === "telegram" ? "主人账号" : "主人用户 ID"
 );
 const ownerPlaceholder = computed(() => {
-  if (botForm.value.platform === "telegram") return "数字用户 ID 或 @用户名，例如 1061423117 / @ruaneko";
+  if (botForm.value.platform === "telegram") return "数字用户 ID 或 @用户名，例如 70001 / @owneruser";
   if (isOneBotPlatform.value) return "例如 123456789，用于管理指令和私聊登录";
   return "平台用户 ID，用于管理指令";
 });

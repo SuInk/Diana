@@ -12,7 +12,7 @@ import (
 // 启动恢复时被当成非法值丢掉：主人在 WebUI 里填好的工作区，重启后就没了。
 func TestPluginTextSettingSurvivesSaveAndRestore(t *testing.T) {
 	specs := []PluginSettingSpec{{Key: "workspaces", Type: PluginSettingTypeText}}
-	const value = "  diana=git@github.com:SuInk/Diana.git\nweb=/Users/diana/project/web  "
+	const value = "  diana=git@github.com:SuInk/Diana.git\nweb=/opt/example/web  "
 	saved, err := normalizePluginSettings(specs, map[string]any{"workspaces": value})
 	if err != nil {
 		t.Fatalf("多行设置应该能保存：%v", err)

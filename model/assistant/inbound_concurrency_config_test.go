@@ -115,7 +115,7 @@ func TestPrivateBurstFoldsIntoActiveDirectReply(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"relation":"repeat","confidence":0.95,"reason":"同一个请求再说一遍"}`}
 	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"},
 		nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
-	root := privateEvent("380726517", "burst-1", "戳我一下")
+	root := privateEvent("30004", "burst-1", "戳我一下")
 	if key := directReplyMergeKey(root); key == "" {
 		t.Fatal("private chat has no direct reply merge key")
 	}
@@ -123,7 +123,7 @@ func TestPrivateBurstFoldsIntoActiveDirectReply(t *testing.T) {
 	defer finish()
 
 	for _, follow := range []string{"burst-2", "burst-3"} {
-		event := privateEvent("380726517", follow, "戳我")
+		event := privateEvent("30004", follow, "戳我")
 		if rootID, merged := runtime.mergeIntoActiveDirectReply(ctx, event, event.RawMessage); !merged || rootID != "burst-1" {
 			t.Fatalf("private follow-up %s merged=%v root=%q", follow, merged, rootID)
 		}
@@ -172,7 +172,7 @@ func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive, 
 	ids := make([]string, 0, 3)
 	for _, messageID := range []string{"p-1", "p-2", "p-3"} {
 		event := MessageEvent{
-			Kind: EventKindPrivate, Time: time.Now().Unix(), SelfID: "42", UserID: "380726517",
+			Kind: EventKindPrivate, Time: time.Now().Unix(), SelfID: "42", UserID: "30004",
 			MessageID: messageID, RawMessage: "连发一句",
 			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "连发一句"}}},
 		}

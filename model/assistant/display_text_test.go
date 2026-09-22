@@ -19,7 +19,7 @@ func textSegment(text string) MessageSegment {
 
 // 「最近发言」是给人翻的，@ 和引用不能停在一串号码上。
 func TestDisplayEventTextResolvesMentionsAndReplies(t *testing.T) {
-	names := map[string]string{"3129583166": "小明", "10002": "阿花"}
+	names := map[string]string{"90001": "小明", "10002": "阿花"}
 	resolve := func(userID string) string { return names[userID] }
 
 	cases := []struct {
@@ -30,16 +30,16 @@ func TestDisplayEventTextResolvesMentionsAndReplies(t *testing.T) {
 		{
 			name: "平台没给昵称时按档案补上",
 			event: MessageEvent{Segments: []MessageSegment{
-				atSegment("3129583166", ""), textSegment("看看这个"),
+				atSegment("90001", ""), textSegment("看看这个"),
 			}},
-			want: "@小明（3129583166） 看看这个",
+			want: "@小明（90001） 看看这个",
 		},
 		{
 			name: "平台自己带了昵称就不查档案",
 			event: MessageEvent{Segments: []MessageSegment{
-				atSegment("3129583166", "群里的小明"), textSegment("在吗"),
+				atSegment("90001", "群里的小明"), textSegment("在吗"),
 			}},
-			want: "@群里的小明（3129583166） 在吗",
+			want: "@群里的小明（90001） 在吗",
 		},
 		{
 			name: "查不到昵称时退回号码，和改动前一致",
@@ -148,9 +148,9 @@ func TestDisplayEventTextResolvesMentionsAndReplies(t *testing.T) {
 // 没有解析器时行为要和改动前一样，只是引用不再写成 [diana-reply:ID]。
 func TestDisplayEventTextWithoutResolver(t *testing.T) {
 	event := MessageEvent{Segments: []MessageSegment{
-		atSegment("3129583166", ""), textSegment("在吗"),
+		atSegment("90001", ""), textSegment("在吗"),
 	}}
-	if got := DisplayEventText(event, nil); got != "@3129583166 在吗" {
+	if got := DisplayEventText(event, nil); got != "@90001 在吗" {
 		t.Fatalf("text = %q", got)
 	}
 }

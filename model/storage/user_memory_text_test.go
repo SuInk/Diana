@@ -23,7 +23,7 @@ func TestUserMemoryBufferResolvesMarkers(t *testing.T) {
 
 	// 先让被 @ 的人和被引用的人各自建档，昵称才查得到。
 	for _, seed := range []assistant.MessageEvent{
-		{Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "3129583166", SenderName: "小明", MessageID: "s1", RawMessage: "大家好", Time: 1_700_000_000},
+		{Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "90001", SenderName: "小明", MessageID: "s1", RawMessage: "大家好", Time: 1_700_000_000},
 		{Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "10002", SenderName: "阿花", MessageID: "s2", RawMessage: "下周要去上海出差", Time: 1_700_000_010},
 	} {
 		if _, err := store.UpdateUserMemory(ctx, seed, assistant.UserMemoryUpdate{}); err != nil {
@@ -36,7 +36,7 @@ func TestUserMemoryBufferResolvesMarkers(t *testing.T) {
 		MessageID: "m1", Time: 1_700_000_100,
 		Segments: []assistant.MessageSegment{
 			{Type: "reply", Data: map[string]string{"id": "s2"}},
-			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "at", Data: map[string]string{"qq": "90001"}},
 			{Type: "text", Data: map[string]string{"text": "你也去吗"}},
 		},
 		Quoted: &assistant.QuotedMessage{
@@ -50,7 +50,7 @@ func TestUserMemoryBufferResolvesMarkers(t *testing.T) {
 	if len(profile.Memories) != 1 {
 		t.Fatalf("memories = %#v", profile.Memories)
 	}
-	want := "[回复 阿花：下周要去上海出差] @小明（3129583166） 你也去吗"
+	want := "[回复 阿花：下周要去上海出差] @小明（90001） 你也去吗"
 	if profile.Memories[0].Text != want {
 		t.Fatalf("text = %q, want %q", profile.Memories[0].Text, want)
 	}

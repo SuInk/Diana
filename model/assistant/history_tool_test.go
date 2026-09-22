@@ -674,14 +674,14 @@ func TestCrossGroupSearchErrorNamesActualReason(t *testing.T) {
 	}
 }
 
-// 线上现象：Telegram 机器人的主人填的是用户名 @ruaneko，私聊里发来的是数字 ID。
+// 线上现象：Telegram 机器人的主人填的是用户名 @owneruser，私聊里发来的是数字 ID。
 // 主人判定要按用户名认出来，否则主人自己也会被挡。
 func TestCrossGroupSearchRecognizesTelegramUsernameOwner(t *testing.T) {
 	store, err := privateCrossGroupSearch(t,
-		BotConfig{Platform: PlatformTelegram, OwnerID: "ruaneko", CrossGroupMemoryEnabled: boolPointer(true)},
+		BotConfig{Platform: PlatformTelegram, OwnerID: "owneruser", CrossGroupMemoryEnabled: boolPointer(true)},
 		MessageEvent{
 			Kind: EventKindPrivate, Platform: PlatformTelegram, Time: 200,
-			UserID: "1061423117", SenderUsername: "ruaneko", ContextNamespace: "bot-tg",
+			UserID: "70001", SenderUsername: "owneruser", ContextNamespace: "bot-tg",
 		},
 	)
 	if err != nil {

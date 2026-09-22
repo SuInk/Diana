@@ -579,10 +579,10 @@ func TestListInboundEventDetailsResolvesMentionNicknames(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	stamp := now.Format(time.RFC3339Nano)
 
-	// 3129583166 只有全局资料名；4200000001 还发过言，群名片应当优先。
+	// 90001 只有全局资料名；4200000001 还发过言，群名片应当优先。
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO user_profiles (user_id, display_name, favorability, message_count, memories, updated_at)
-VALUES ('3129583166', '小满', 0, 0, '[]', ?), ('4200000001', '全局名', 0, 0, '[]', ?)
+VALUES ('90001', '小满', 0, 0, '[]', ?), ('4200000001', '全局名', 0, 0, '[]', ?)
 `, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +597,7 @@ VALUES ('older-card', 'group:104970', 'group', '104970', '4200000001', 'm-old', 
 	payload, err := json.Marshal(assistant.MessageEvent{
 		Kind: "group", GroupID: "104970", UserID: "10001",
 		Segments: []assistant.MessageSegment{
-			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "at", Data: map[string]string{"qq": "90001"}},
 			{Type: "at", Data: map[string]string{"qq": "4200000001"}},
 			{Type: "at", Data: map[string]string{"qq": "9999999999"}},
 			{Type: "text", Data: map[string]string{"text": "少回复点"}},
@@ -633,7 +633,7 @@ VALUES ('mention', 'group:104970', 'group', '104970', '10001', 'message-1', ?, '
 			text = event.Text
 		}
 	}
-	if !strings.Contains(text, "@小满（3129583166）") {
+	if !strings.Contains(text, "@小满（90001）") {
 		t.Fatalf("profile display name not applied: %q", text)
 	}
 	// 群名片比全局资料名更贴近群里看到的称呼，而且要取最近一次的。
@@ -874,21 +874,21 @@ func TestListInboundEventDetailsDoesNotDuplicatePerBotProfile(t *testing.T) {
 	// 同一个 user_id 在两台机器人下各有一份画像，显示名还不一样。
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
-VALUES ('bot-a', '494942782', 'A 认识的名字', 0, 0, '[]', ?),
-       ('bot-b', '494942782', 'B 认识的名字', 0, 0, '[]', ?)
+VALUES ('bot-a', '30002', 'A 认识的名字', 0, 0, '[]', ?),
+       ('bot-b', '30002', 'B 认识的名字', 0, 0, '[]', ?)
 `, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
 
 	payload, err := json.Marshal(assistant.MessageEvent{
-		Kind: "group", GroupID: "765205730", UserID: "494942782", ProfileID: "bot-a", RawMessage: "[图片]",
+		Kind: "group", GroupID: "20002", UserID: "30002", ProfileID: "bot-a", RawMessage: "[图片]",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, status, attempts, available_at, outcome, created_at, updated_at)
-VALUES ('evt-1', 'group:765205730', 'group', 'bot-a', '765205730', '494942782', '1053190582', ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
+VALUES ('evt-1', 'group:20002', 'group', 'bot-a', '20002', '30002', '30005', ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
 `, now.Unix(), string(payload), now.Unix(), now.UnixNano(), now.UnixNano()); err != nil {
 		t.Fatal(err)
 	}
@@ -924,20 +924,20 @@ func TestListInboundEventDetailsFallsBackToLegacyUnscopedProfile(t *testing.T) {
 
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
-VALUES ('', '494942782', '老数据里的名字', 0, 0, '[]', ?)
+VALUES ('', '30002', '老数据里的名字', 0, 0, '[]', ?)
 `, stamp); err != nil {
 		t.Fatal(err)
 	}
 
 	payload, err := json.Marshal(assistant.MessageEvent{
-		Kind: "group", GroupID: "765205730", UserID: "494942782", ProfileID: "bot-a", RawMessage: "[图片]",
+		Kind: "group", GroupID: "20002", UserID: "30002", ProfileID: "bot-a", RawMessage: "[图片]",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, status, attempts, available_at, outcome, created_at, updated_at)
-VALUES ('evt-legacy', 'group:765205730', 'group', 'bot-a', '765205730', '494942782', 'm-1', ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
+VALUES ('evt-legacy', 'group:20002', 'group', 'bot-a', '20002', '30002', 'm-1', ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
 `, now.Unix(), string(payload), now.Unix(), now.UnixNano(), now.UnixNano()); err != nil {
 		t.Fatal(err)
 	}
@@ -972,21 +972,21 @@ func TestListInboundEventDetailsUnderBotScopeStaysSingleRow(t *testing.T) {
 
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
-VALUES ('bot-qq', '494942782', 'QQ 那台认识的', 0, 0, '[]', ?),
-       ('bot-tg', '494942782', 'TG 那台认识的', 0, 0, '[]', ?)
+VALUES ('bot-qq', '30002', 'QQ 那台认识的', 0, 0, '[]', ?),
+       ('bot-tg', '30002', 'TG 那台认识的', 0, 0, '[]', ?)
 `, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
 
 	add := func(id string, profileID string) {
 		t.Helper()
-		payload, err := json.Marshal(assistant.MessageEvent{Kind: "group", GroupID: "765205730", UserID: "494942782", ProfileID: profileID})
+		payload, err := json.Marshal(assistant.MessageEvent{Kind: "group", GroupID: "20002", UserID: "30002", ProfileID: profileID})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.db.ExecContext(ctx, `
 INSERT INTO inbound_events (id, session, kind, profile_id, group_id, user_id, message_id, event_time, payload, priority, status, attempts, available_at, outcome, created_at, updated_at)
-VALUES (?, 'group:765205730', 'group', ?, '765205730', '494942782', ?, ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
+VALUES (?, 'group:20002', 'group', ?, '20002', '30002', ?, ?, ?, 0, 'done', 1, ?, 'ignored', ?, ?)
 `, id, profileID, id, now.Unix(), string(payload), now.Unix(), now.UnixNano(), now.UnixNano()); err != nil {
 			t.Fatal(err)
 		}
@@ -1024,7 +1024,7 @@ func TestListInboundEventDetailsRendersMentionsAndReplies(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 	for _, seed := range []struct{ userID, displayName string }{
-		{"3129583166", "小明"},
+		{"90001", "小明"},
 		{"10002", "阿花"},
 	} {
 		if _, err := store.db.ExecContext(ctx, `
@@ -1040,7 +1040,7 @@ VALUES (?, ?, 0, 0, '[]', ?)
 		SenderName: "阿强", Time: now.Unix(),
 		Segments: []assistant.MessageSegment{
 			{Type: "reply", Data: map[string]string{"id": "message-0"}},
-			{Type: "at", Data: map[string]string{"qq": "3129583166"}},
+			{Type: "at", Data: map[string]string{"qq": "90001"}},
 			{Type: "text", Data: map[string]string{"text": "你也去吗"}},
 		},
 		Quoted: &assistant.QuotedMessage{
@@ -1055,7 +1055,7 @@ VALUES (?, ?, 0, 0, '[]', ?)
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
 VALUES ('markers', 'group:20001', 'group', '20001', '10003', 'message-1', '阿强', ?, ?, ?, ?)
-`, now.Unix(), "[diana-reply:message-0]@3129583166 你也去吗", string(payload), now.Format(time.RFC3339Nano)); err != nil {
+`, now.Unix(), "[diana-reply:message-0]@90001 你也去吗", string(payload), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
@@ -1073,7 +1073,7 @@ VALUES ('markers', 'group:20001', 'group', '20001', '10003', 'message-1', ?, ?, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "[回复 阿花：下周要去上海出差] @小明（3129583166） 你也去吗"
+	want := "[回复 阿花：下周要去上海出差] @小明（90001） 你也去吗"
 	if len(page.Events) != 1 {
 		t.Fatalf("events = %#v", page.Events)
 	}
@@ -1094,7 +1094,7 @@ func TestListInboundEventDetailsFallsBackToPayloadSenderName(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 	event := assistant.MessageEvent{
-		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "1255848531", MessageID: "message-1",
+		Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "30001", MessageID: "message-1",
 		SenderName: "吊图吧群友", Time: now.Unix(),
 		Segments: []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "昨天打手打了十几个小时"}}},
 	}
@@ -1104,7 +1104,7 @@ func TestListInboundEventDetailsFallsBackToPayloadSenderName(t *testing.T) {
 	}
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
-VALUES ('payload-name', 'group:20001', 'group', '20001', '1255848531', 'message-1', '', ?, ?, ?, ?)
+VALUES ('payload-name', 'group:20001', 'group', '20001', '30001', 'message-1', '', ?, ?, ?, ?)
 `, now.Unix(), "昨天打手打了十几个小时", string(payload), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
@@ -1113,7 +1113,7 @@ INSERT INTO inbound_events (
   id, session, kind, group_id, user_id, message_id, event_time, payload, priority,
   status, attempts, available_at, outcome, created_at, updated_at, completed_at
 )
-VALUES ('payload-name', 'group:20001', 'group', '20001', '1255848531', 'message-1', ?, ?, 0,
+VALUES ('payload-name', 'group:20001', 'group', '20001', '30001', 'message-1', ?, ?, 0,
   'done', 0, ?, 'ignored', ?, ?, ?)
 `, now.Unix(), string(payload), now.UnixNano(), now.UnixNano(), now.UnixNano(), now.UnixNano()); err != nil {
 		t.Fatal(err)

@@ -38,7 +38,7 @@ func runThreadStateTool(t *testing.T, runtime *Runtime, event MessageEvent, inpu
 // 谜底存进 session 并锁定后，每个人的轮次都看得到同一个谜底，谁也改不了它。
 func TestThreadStateGroupGuessingGameKeepsOneLockedSecret(t *testing.T) {
 	runtime, store := threadStateTestRuntime(t)
-	base := MessageEvent{ProfileID: "bot-1", Kind: EventKindGroup, GroupID: "1081572710"}
+	base := MessageEvent{ProfileID: "bot-1", Kind: EventKindGroup, GroupID: "20005"}
 	starter := base
 	starter.UserID, starter.MessageID = "741083048", "start"
 	if _, err := runThreadStateTool(t, runtime, starter, map[string]any{
@@ -48,7 +48,7 @@ func TestThreadStateGroupGuessingGameKeepsOneLockedSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for index, userID := range []string{"160867498", "3083158904", "934542274"} {
+	for index, userID := range []string{"30003", "30007", "934542274"} {
 		player := base
 		player.UserID, player.MessageID = userID, "q"+userID
 		if context := runtime.privateThreadStateContext(context.Background(), player); !strings.Contains(context, `"secret_word":"耳机"`) {

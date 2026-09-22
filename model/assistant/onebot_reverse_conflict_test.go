@@ -72,7 +72,7 @@ func TestReverseServerLogsDuplicateClientConflict(t *testing.T) {
 	// 换一个客户端撞上来是新情况，必须记下来——否则看不出是谁在抢连接位。
 	other := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
 	other.Header.Set("Authorization", "Bearer "+token)
-	other.Header.Set("X-Self-ID", "3129583166")
+	other.Header.Set("X-Self-ID", "90001")
 	other.RemoteAddr = "10.1.2.3:54321"
 	recorder = httptest.NewRecorder()
 	server.ServeHTTP(recorder, other)

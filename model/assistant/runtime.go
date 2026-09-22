@@ -5379,7 +5379,7 @@ func (r *Runtime) cleanInput(event MessageEvent, text string) string {
 
 // botMentionStrippedText 返回摘掉机器人自己那个 @ 之后的正文，仅供判定使用。
 //
-// 摘段而不是剥字符串：at 段带了昵称时会渲染成「@Diana（3129583166）」，
+// 摘段而不是剥字符串：at 段带了昵称时会渲染成「@Diana（90001）」，
 // 按账号做字符串替换只会挖掉号码，留下「@Diana（）」的残渣，文本照样不空。
 // 没有 segment、只能退回 RawMessage 的那条路上还是得按字符串剥。
 func botMentionStrippedText(event MessageEvent, fallback string, botID string) string {

@@ -40,7 +40,7 @@ func (s *memoryAliasSaltStore) SaveIdentityAliasSalt(_ context.Context, salt str
 // 供应商的前缀缓存在历史这一段永远命不中。改之前每个 scope 一个随机盐，而 scope 每轮
 // 对话新建一次，本机实测同一个人换一轮就换别名。
 func TestIdentityAliasStaysStableAcrossTurns(t *testing.T) {
-	const realID = "3083158904"
+	const realID = "30007"
 	store := &memoryAliasSaltStore{}
 
 	aliasFor := func(r *Runtime) string {

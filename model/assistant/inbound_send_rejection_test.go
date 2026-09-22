@@ -71,7 +71,7 @@ func TestPermanentSendRejectionDropsWithoutRegenerating(t *testing.T) {
 	runtime := newQueuedTestRuntime(channel, store, provider)
 
 	event := MessageEvent{
-		Kind: EventKindPrivate, Time: time.Now().Unix(), SelfID: "42", UserID: "380726517",
+		Kind: EventKindPrivate, Time: time.Now().Unix(), SelfID: "42", UserID: "30004",
 		MessageID: "rejected-1", RawMessage: "在吗",
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
 	}
