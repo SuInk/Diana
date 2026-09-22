@@ -50,10 +50,11 @@ func TestPluginProfileSwitchIsolationAndRestore(t *testing.T) {
 func TestRuntimePluginSwitchUsesEventProfileAndGroupOverride(t *testing.T) {
 	m := NewDefaultPluginManager()
 	r := NewRuntime(BotConfig{ID: "qq-a"}, nilChannel{}, m, nil, nil, nil, nil)
+	// Enabled 要显式写：零值是「停用」，而停用的档案现在所有插件一律按停用算。
 	r.SetProfiles(ProfileSet{Profiles: []BotConfig{
-		{ID: "qq-a", Platform: PlatformOneBotV11},
-		{ID: "qq-b", Platform: PlatformOneBotV11},
-		{ID: "tg", Platform: PlatformTelegram},
+		{ID: "qq-a", Platform: PlatformOneBotV11, Enabled: true},
+		{ID: "qq-b", Platform: PlatformOneBotV11, Enabled: true},
+		{ID: "tg", Platform: PlatformTelegram, Enabled: true},
 	}})
 	if _, err := m.SetEnabledForProfile(statusCommandPluginID, "qq-a", true); err != nil {
 		t.Fatal(err)

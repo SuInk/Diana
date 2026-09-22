@@ -256,6 +256,11 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 	sources := make([]gateSource, 0, len(payloads))
 	for _, payload := range payloads {
 		event := payload.Event
+		// 停用的机器人不做后台活儿：记忆抽取要花一次模型调用，而这台机器人既不
+		// 收消息也不回消息，抽出来的东西没人会用。任务照常完成，不在队列里积压。
+		if r.profileDisabled(event.ProfileID) {
+			continue
+		}
 		text := memoryEventText(event)
 		if !memoryEventEligible(r.effectiveConfigForEvent(event), event, text) {
 			continue
@@ -404,6 +409,9 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	ctx = withLLMUsagePurpose(ctx, "memory_summary")
 	events := job.Payload.Events
 	if len(events) == 0 {
+		return nil
+	}
+	if r.profileDisabled(events[len(events)-1].ProfileID) {
 		return nil
 	}
 	if len(events) > memorySummaryMaxEvents {
