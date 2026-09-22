@@ -329,10 +329,16 @@
         <div class="field">
           <label for="llm-temp">Temperature（可选）</label>
           <input id="llm-temp" v-model="form.temperature" class="input" inputmode="decimal" placeholder="0.7" />
+          <span class="hint">
+            留空就不发这个参数，由模型用自己的默认值——多数情况下这才是对的。推理模型（gpt-5.x、o 系列、Claude 思考模式等）只接受默认温度，填了<strong>不是被忽略，而是整个请求被拒</strong>。中转网关的模型名认不出背后的真实型号，填之前先确认这套配置实际连的是什么。
+          </span>
         </div>
         <div class="field">
           <label for="llm-maxtokens">最大输出 Token</label>
           <input id="llm-maxtokens" v-model="form.max_output_tokens" class="input" inputmode="numeric" placeholder="1024" />
+          <span class="hint">
+            限制单次回复的长度。留空时 OpenAI 兼容端点不发这个参数、由模型自己决定，Anthropic 则用适配层的保守默认值。它同时影响输入预算：请求要为输出预留空间，留空按默认值预留，填小能给历史腾出更多位置。
+          </span>
         </div>
         <div class="field">
           <label for="llm-window">模型上下文窗口</label>
