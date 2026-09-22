@@ -358,7 +358,7 @@
         </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
           <label for="llm-header-name">自定义请求头（可选）</label>
-          <div class="input-group">
+          <div class="header-row">
             <input
               id="llm-header-name"
               v-model="headerNameDraft"
@@ -382,7 +382,7 @@
             </button>
           </div>
           <div v-if="headerRows.length > 0" class="stack" style="gap: 6px; margin-top: 8px">
-            <div v-for="(row, index) in headerRows" :key="row.name" class="input-group">
+            <div v-for="(row, index) in headerRows" :key="row.name" class="header-row">
               <input class="input" :value="row.name" readonly :title="row.name" />
               <input
                 v-model="row.value"
@@ -1180,6 +1180,22 @@ useConfigurationRefresh(["bot", "llm"], reload);
 </script>
 
 <style scoped>
+/* 请求头的草稿行和已添加行必须逐列对齐。原先两行都用 .input-group（flex 配
+   .input{flex:1}），而尾列一个是带文字的「添加」、一个是纯图标的删除，宽度差了
+   48px，剩余空间被两个输入框平分之后两行就错开了。改成共用同一套网格，尾列按
+   「添加」的实际宽度固定，删除按钮撑满该列。 */
+.header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 80px;
+  gap: 8px;
+  align-items: center;
+}
+
+.header-row > .btn {
+  width: 100%;
+  justify-content: center;
+}
+
 /* 模型分配引用列表：跟在 hint 后面的一小段列表，排版继承 hint 的字号和颜色。 */
 .context-binding-list {
   margin: 2px 0 0;
