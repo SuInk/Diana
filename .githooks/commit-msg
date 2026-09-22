@@ -1,0 +1,12 @@
+#!/bin/sh
+# 去掉 AI 工具自动加的署名：Co-Authored-By: Claude … / Claude-Session … / Generated with Claude Code
+# 启用：git config core.hooksPath .githooks
+msg_file="$1"
+pattern='^[Cc]o-[Aa]uthored-[Bb]y:.*([Cc]laude|anthropic\.com)|^[Cc]laude-[Ss]ession:|Generated with \[?Claude Code'
+grep -qE "$pattern" "$msg_file" || exit 0
+
+tmp="$msg_file.tmp.$$"
+# 删掉署名行，再去掉末尾因此多出来的空行
+grep -vE "$pattern" "$msg_file" | awk '{ lines[NR] = $0 } END { n = NR; while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print lines[i] }' > "$tmp"
+mv "$tmp" "$msg_file"
+echo "commit-msg: 已去掉 Claude 署名" >&2
