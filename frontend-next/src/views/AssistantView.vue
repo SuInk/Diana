@@ -683,11 +683,11 @@
               </p>
               <button class="btn ghost" type="button" @click="purposeRolesOpen = !purposeRolesOpen">
                 <ChevronDown :size="14" :class="{ 'recent-chevron-open': purposeRolesOpen }" aria-hidden="true" />
-                {{ purposeRolesOpen ? "收起细分用途" : "细分用途（意图识别底下这些可以单独指模型）" }}
+                {{ purposeRolesOpen ? "收起判定用途细分" : "判定用途还能再拆成两拨单独指模型" }}
               </button>
               <p v-if="purposeRolesOpen" class="muted model-role-note">
-                下面这些默认全部跟着「意图识别」。它们的性质差得很远：主动接话判定和发送前审核问的是是非题，可以绑只做判断的模型
-                （TypeSafe Jev 这类）；上下文压缩、记忆抽取、记忆归纳要的是文本输出，绑判断模型会每次先失败一次再降级。留空即跟随。
+                「意图识别」底下其实是两类调用：一类问是非、单选和打分，另一类要写出成段文字。留空即跟随「意图识别」；
+                分开指之后，判断类可以换更便宜的判断模型，文本类继续用对话类模型。
               </p>
             </div>
           </section>
@@ -3373,21 +3373,7 @@ function onMessageRelaysSaved(config: BotProfileConfig): void {
 // 细分用途：不配就跟着「意图识别」那一档走。摊出来是因为这些调用的性质差得很远——
 // 主动接话判定和发送前审核都能改成判断题（可以绑 TypeSafe Jev 这类只做判断的模型），
 // 而记忆抽取、上下文压缩要的是文本输出，绑上去只会每次先失败一次再降级。
-const purposeRoleKeys = [
-  "proactive_reply_router",
-  "reply_intent_router",
-  "reply_rule_router",
-  "proactive_reply_quality",
-  "reply_account_safety",
-  "bot_reply_loop_detection",
-  "semantic_reference",
-  "inbound_media_reference",
-  "context_summary_compaction",
-  "memory_extract",
-  "memory_summary",
-  "relationship_evaluate",
-  "forward_content_safety"
-] as const;
+const purposeRoleKeys = ["decision_judges", "text_judges"] as const;
 
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
@@ -3424,21 +3410,22 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
     description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
   }
 ];
-// 细分用途的行。全部可留空：留空就跟着「意图识别」。
+// 判定类用途分两拨。留空就跟着「意图识别」那一档。
 const purposeRoleRows: { key: RoleKey; label: string; description: string }[] = [
-  { key: "proactive_reply_router", label: "主动接话判定", description: "群里没人点名时，判断该不该接话、接哪一条。调用量最大的一档；它备了判断题表，可以绑只做判断的模型。" },
-  { key: "reply_intent_router", label: "意图路由", description: "判断这条消息想让机器人做什么。" },
-  { key: "reply_rule_router", label: "规则路由", description: "按自定义回复规则挑执行哪一条。" },
-  { key: "proactive_reply_quality", label: "接话质量评估", description: "接话前再看一眼这句话值不值得说。" },
-  { key: "reply_account_safety", label: "发送前审核", description: "发出去之前过一遍账号安全和准确度。它和主动接话判定是两件事，值得分开指模型。" },
-  { key: "bot_reply_loop_detection", label: "防循环判定", description: "识别和另一个机器人来回空转，决定要不要刹车。" },
-  { key: "semantic_reference", label: "语义指代", description: "把「这个」「上面那条」对回具体消息。" },
-  { key: "inbound_media_reference", label: "媒体指代", description: "判断这条消息指的是哪张图或哪段视频。" },
-  { key: "context_summary_compaction", label: "上下文压缩", description: "较早历史超预算时压成摘要。要文本输出，不能绑判断模型。" },
-  { key: "memory_extract", label: "记忆抽取", description: "从消息里提炼长期记忆候选。要文本输出。" },
-  { key: "memory_summary", label: "记忆归纳", description: "把一段会话归纳成摘要记忆。要文本输出。" },
-  { key: "relationship_evaluate", label: "关系评估", description: "判断这条消息该不该动好感度，并维护人员画像。" },
-  { key: "forward_content_safety", label: "转发内容安全", description: "转发前检查内容是否可发。" }
+  {
+    key: "decision_judges",
+    label: "判断类用途",
+    description:
+      "主动接话判定、发送前审核、意图与规则路由、防循环——问的都是是非、单选和打分，各自备好了判断题表，" +
+      "可以绑 TypeSafe Jev 这类只做判断的模型：更快更便宜，也不会跑偏成写作文。"
+  },
+  {
+    key: "text_judges",
+    label: "文本类用途",
+    description:
+      "上下文压缩、记忆抽取与归纳、语义指代、关系评估、转发内容安全和各种提示改写——它们要写出成段文字，" +
+      "必须绑对话类模型；绑成只做判断的模型会每次先失败一次再降级。"
+  }
 ];
 
 // 细分用途默认收起：绝大多数部署只需要「意图识别」一档，13 行铺开会把这一页淹掉。

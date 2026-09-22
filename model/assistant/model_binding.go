@@ -32,8 +32,12 @@ const (
 	PurposeRelationshipEvaluate  = "relationship_evaluate"
 	PurposeForwardContentSafety  = "forward_content_safety"
 	PurposeReplyAccountSafety    = "reply_account_safety"
-	PurposeReplySuppression      = "reply_suppression_notice"
-	PurposeBotReplyLoop          = "bot_reply_loop_detection"
+	// PurposeReplySendAudit 是实际发出这次审核调用时用的用途名。它以前只是
+	// proactive_reply_quality.go 里的一个字面量，没进这张表，于是界面上指不了、
+	// 也没法单独绑——而它是量最大的判定之一。
+	PurposeReplySendAudit   = "reply_send_audit"
+	PurposeReplySuppression = "reply_suppression_notice"
+	PurposeBotReplyLoop     = "bot_reply_loop_detection"
 	// 三种发送前提示的改写。它们以前只是散在代码里的字面量，没进这张表，
 	// 于是在模型绑定界面上看不见也指不了，只能跟着调用函数走。
 	PurposeUpstreamRejectionNotice = "upstream_rejection_notice"
@@ -63,6 +67,7 @@ var llmPurposeGroup = map[string]string{
 	PurposeRelationshipEvaluate:  llm.GroupIntent,
 	PurposeForwardContentSafety:  llm.GroupIntent,
 	PurposeReplyAccountSafety:    llm.GroupIntent,
+	PurposeReplySendAudit:        llm.GroupIntent,
 	PurposeReplySuppression:      llm.GroupIntent,
 	PurposeBotReplyLoop:          llm.GroupIntent,
 
@@ -70,6 +75,43 @@ var llmPurposeGroup = map[string]string{
 	PurposeUpstreamRejectionNotice: llm.GroupIntent,
 	PurposeAccountSafetyNotice:     llm.GroupIntent,
 	PurposeErrorNotice:             llm.GroupIntent,
+}
+
+// 判定类用途分成两拨：备了判断题表的可以绑只做判断的模型（TypeSafe Jev 这类），
+// 要写字的不能。这两个键摆在用途和分组之间——按用途逐个配太细（十几行），按分组
+// 配又太粗（一绑就把要写字的那几个一起绑坏），能用和不能用才是这里真正的分界线。
+const (
+	RoleDecisionJudges = "decision_judges"
+	RoleTextJudges     = "text_judges"
+)
+
+// llmPurposeClass 只收 intent 分组底下的用途：别的分组没有这个分界。
+// 判断模型答不了的那几个必须留在 text_judges——它们要的是成段文字，不是选项。
+var llmPurposeClass = map[string]string{
+	PurposeProactiveReplyRouter:  RoleDecisionJudges,
+	PurposeProactiveReplyQuality: RoleDecisionJudges,
+	PurposeReplySendAudit:        RoleDecisionJudges,
+	PurposeReplyIntentRouter:     RoleDecisionJudges,
+	PurposeReplyRuleRouter:       RoleDecisionJudges,
+	PurposeBotReplyLoop:          RoleDecisionJudges,
+
+	PurposeSemanticReference:       RoleTextJudges,
+	PurposeInboundMediaReference:   RoleTextJudges,
+	PurposeContextSummary:          RoleTextJudges,
+	PurposeMemoryExtract:           RoleTextJudges,
+	PurposeMemorySummary:           RoleTextJudges,
+	PurposeRelationshipEvaluate:    RoleTextJudges,
+	PurposeForwardContentSafety:    RoleTextJudges,
+	PurposeReplyAccountSafety:      RoleTextJudges,
+	PurposeReplySuppression:        RoleTextJudges,
+	PurposeUpstreamRejectionNotice: RoleTextJudges,
+	PurposeAccountSafetyNotice:     RoleTextJudges,
+	PurposeErrorNotice:             RoleTextJudges,
+}
+
+// ModelBindingClassOf 返回用途所属的那一拨，供界面回答「不单独配的话跟着谁」。
+func ModelBindingClassOf(purpose string) string {
+	return llmPurposeClass[strings.TrimSpace(purpose)]
 }
 
 // modelBindingGroups 是必须绑定的分组。它们就是「用途的归属地」，缺一个就有一批
@@ -89,10 +131,11 @@ func modelRoleKeyForGroup(group string) string {
 
 // ModelBindingKeys 返回所有可绑定的键：先是分组，再是用途。前端按这个顺序渲染。
 func ModelBindingKeys() []string {
-	keys := make([]string, 0, len(modelBindingGroups)+len(llmPurposeGroup))
+	keys := make([]string, 0, len(modelBindingGroups)+len(llmPurposeGroup)+2)
 	for _, group := range modelBindingGroups {
 		keys = append(keys, modelRoleKeyForGroup(group))
 	}
+	keys = append(keys, RoleDecisionJudges, RoleTextJudges)
 	purposes := make([]string, 0, len(llmPurposeGroup))
 	for purpose := range llmPurposeGroup {
 		purposes = append(purposes, purpose)
@@ -112,6 +155,9 @@ func ModelBindingGroupOf(purpose string) string {
 
 func isModelBindingKey(key string) bool {
 	if _, ok := llmPurposeGroup[key]; ok {
+		return true
+	}
+	if key == RoleDecisionJudges || key == RoleTextJudges {
 		return true
 	}
 	for _, group := range modelBindingGroups {
@@ -152,6 +198,15 @@ func modelRoleFor(roles map[string]ModelRole, purpose string, group string) (Mod
 	if purpose = strings.TrimSpace(purpose); purpose != "" {
 		if role, ok := roles[purpose]; ok {
 			return resolveIfFollowChat(roles, role)
+		}
+	}
+	// 类排在分组之前：绑了「判断类」就该盖过笼统的 intent 一档，否则这两个键
+	// 形同虚设。
+	if purpose != "" {
+		if class := ModelBindingClassOf(purpose); class != "" {
+			if role, ok := roles[class]; ok {
+				return resolveIfFollowChat(roles, role)
+			}
 		}
 	}
 	if role, ok := roles[groupKey]; ok {

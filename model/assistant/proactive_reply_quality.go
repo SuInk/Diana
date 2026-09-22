@@ -444,6 +444,9 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 				{Role: llm.RoleSystem, Content: replyQualityPromptForConfig(cfg)},
 				auditMessage,
 			},
+			// 同一套判据也按题摆一份：绑的是只做判断的模型时它照这张表作答，
+			// 答案回填成下面解析的那个 JSON；绑对话模型时这张表用不上。
+			Decision: replyAuditDecisionSpec(need),
 		})
 		if generateErr != nil {
 			return "", generateErr
@@ -575,7 +578,7 @@ func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, inp
 		prepared.skip = true
 		return prepared
 	}
-	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
+	ctx = withLLMUsagePurpose(ctx, PurposeReplySendAudit)
 	evidence := botReplyLoopEvidence{}
 	if need.Loop {
 		evidence = r.collectBotReplyLoopEvidence(event, r.contextHistory(event))
@@ -597,7 +600,7 @@ func (r *Runtime) applyReplyAudit(ctx context.Context, event MessageEvent, cfg B
 		log.Printf("diana reply audit skipped: %v", err)
 		return replyControlIntent{}, nil
 	}
-	ctx = withLLMUsagePurpose(ctx, "reply_send_audit")
+	ctx = withLLMUsagePurpose(ctx, PurposeReplySendAudit)
 	intent := replyControlIntentFromAudit(decision)
 	// 收尾判断排在最前：对方都开口说「别回了」了，再去纠结这条回复够不够准确
 	// 没有意义——无论审核的其他几项怎么判，这条都不该发。
