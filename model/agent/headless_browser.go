@@ -113,6 +113,8 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 	if err := validateSandboxedBrowserURL(ctx, rawURL); err != nil {
 		return RenderedPage{}, err
 	}
+	// 所有渲染最终都走到这里，装浏览器这件事就挂在这一处。
+	EnsureBrowser(ctx)
 	var sourceErr error
 	if apiURL, ok := githubReleaseAPIURL(rawURL); ok {
 		var page RenderedPage
