@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1451,5 +1452,35 @@ func TestAgentToolsAreFilteredByCurrentPlatform(t *testing.T) {
 	}
 	if !names["capabilities"] || !names["web_search"] || !names["music"] {
 		t.Fatalf("cross-platform tools missing on Telegram: %#v", names)
+	}
+}
+
+// 没登录时小红书把分享链接甩到 /login，笔记地址塞在 redirectPath 里。线上 09-22 撞到
+// 的就是这个：笔记好好的，报的却是「笔记不存在、已删除」——错误指错了地方，人只会去
+// 反复换链接，而不是去换 Cookie。
+func TestXiaohongshuLoginBounceAndCookieSession(t *testing.T) {
+	bounce := "https://www.xiaohongshu.com/login?redirectPath=" + url.QueryEscape("http://www.xiaohongshu.com/discovery/item/abc123?xsec_token=tok&xsec_source=app_share")
+	if !xiaohongshuLoginBounce(bounce) {
+		t.Fatal("登录页应当被认出来")
+	}
+	if xiaohongshuLoginBounce("https://www.xiaohongshu.com/explore/abc123") {
+		t.Fatal("普通笔记地址不是登录页")
+	}
+	if xiaohongshuLoginBounce("https://example.com/login") {
+		t.Fatal("别的站的登录页与小红书无关")
+	}
+	// 被甩到登录页之后仍然要把笔记地址解出来：带着 xsec_token 去试一次，成不成是另一回事。
+	if page := xiaohongshuPageURL(bounce); !strings.Contains(page, "abc123") || !strings.Contains(page, "xsec_token=tok") {
+		t.Fatalf("redirectPath 里的笔记地址没解出来：%s", page)
+	}
+
+	if xiaohongshuCookieLoggedIn("a1=x; webId=y; gid=z") {
+		t.Fatal("只有匿名标识的 Cookie 不算登录")
+	}
+	if !xiaohongshuCookieLoggedIn("a1=x; web_session=040069b1; webId=y") {
+		t.Fatal("带 web_session 的 Cookie 应当算登录")
+	}
+	if xiaohongshuCookieLoggedIn("a1=x; web_session=; webId=y") {
+		t.Fatal("web_session 是空值时不算登录")
 	}
 }

@@ -142,6 +142,9 @@ func (p *ResolverPlugin) resolveXiaohongshu(ctx context.Context, req PluginReque
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n这是小红书直播链接，不是普通笔记；将继续尝试用沙盒浏览器读取直播页面。", nickname))
 	case "unsupported_link":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n该链接不是可识别的普通笔记链接。", nickname))
+	case "login_required":
+		// 说清楚是登录态的问题，并且别顺手给笔记定罪：换一份登录后的 Cookie 往往就好了。
+		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n当前小红书 Cookie 没有登录态，分享链接被跳到了登录页，读不到笔记内容（笔记本身不一定有问题）。请在 WebUI 的插件设置里换一份登录后的 Cookie（要带 web_session）。", nickname))
 	case "note_unavailable":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n笔记不存在、已删除，或当前分享参数已经过期。", nickname))
 	case "page_unavailable", "request_failed":
