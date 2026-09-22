@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/assistant"
 
 	"github.com/gin-gonic/gin"
@@ -29,6 +30,9 @@ type consoleGroupsResponse struct {
 	// ConnectionPeers 是复用同一条连接的其它机器人及其群归属。路由表散在各台自己的
 	// 配置里，跨机器人看不到全貌；这一份就是那张全貌。
 	ConnectionPeers []consoleConnectionPeer `json:"connection_peers,omitempty"`
+	// QuotaWindowSeconds 是额度统计窗口的长度，前端用它写「最近 N 小时」。
+	// 窗口口径定在后端，前端跟着变，不要两边各写一个 5。
+	QuotaWindowSeconds int `json:"quota_window_seconds,omitempty"`
 }
 
 type consoleGroupItem struct {
@@ -42,6 +46,12 @@ type consoleGroupItem struct {
 	// SharedWith 是复用同一条连接、并且在这个群也开着的其它机器人。
 	// 同一个平台账号上多台机器人都放行一个群，这个群就会收到多份回复。
 	SharedWith []consoleGroupSharedBot `json:"shared_with,omitempty"`
+	// 额度用了多少、上限是多少。上限是算过继承的生效值（群里没填就是机器人那档），
+	// 展示出来的数得和真正拦人的那个一致，不然进度条就成了误导。
+	QuotaTokensUsed int64 `json:"quota_tokens_used,omitempty"`
+	QuotaCallsUsed  int64 `json:"quota_calls_used,omitempty"`
+	QuotaTokenLimit int64 `json:"quota_token_limit,omitempty"`
+	QuotaCallLimit  int64 `json:"quota_call_limit,omitempty"`
 }
 
 type consoleGroupSharedBot struct {
@@ -317,12 +327,14 @@ func (h *BotHandler) listConsoleGroups(c *gin.Context) {
 		groups[index].GroupConfig = h.groupConfigForAPI(groups[index].GroupConfig)
 		groups[index].SharedWith = h.groupSharedBots(profileID, groups[index].GroupID)
 	}
+	h.attachGroupQuotaUsage(c.Request.Context(), profileID, base, groups)
 	c.JSON(http.StatusOK, consoleGroupsResponse{
-		Groups:          groups,
-		Plugins:         assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profileID)),
-		LiveAvailable:   liveAvailable,
-		Warning:         warning,
-		ConnectionPeers: h.connectionPeers(profileID),
+		Groups:             groups,
+		Plugins:            assistant.RedactStates(h.runtime.Plugins().ListVisibleForProfile(profileID)),
+		LiveAvailable:      liveAvailable,
+		Warning:            warning,
+		ConnectionPeers:    h.connectionPeers(profileID),
+		QuotaWindowSeconds: int(assistant.GroupModelQuotaWindow() / time.Second),
 	})
 }
 
@@ -819,4 +831,45 @@ func groupConfigAuditMetadata(before, after assistant.GroupConfig, profileName s
 	metadata["account_safety_before"] = map[string]any{"enabled": before.ReplyAccountSafetyAuditEnabled, "custom_rules": strings.TrimSpace(before.ReplyAccountSafetyAuditPrompt) != ""}
 	metadata["account_safety_after"] = map[string]any{"enabled": after.ReplyAccountSafetyAuditEnabled, "custom_rules": strings.TrimSpace(after.ReplyAccountSafetyAuditPrompt) != ""}
 	return metadata
+}
+
+// attachGroupQuotaUsage 给每个群补上本窗口已用的 token 和调用次数。
+//
+// 额度是个「悄悄生效」的闸门：不把用了多少摆在配置旁边，用满了也只表现为机器人
+// 忽然不说话，没人知道是撞了额度还是坏了。所以列表里就得能看见进度。
+//
+// 读不到用量时整段留空，让前端不画进度条——写个 0 会让人以为这个窗口一次没用过。
+func (h *BotHandler) attachGroupQuotaUsage(ctx context.Context, profileID string, base assistant.BotConfig, groups []consoleGroupItem) {
+	if len(groups) == 0 {
+		return
+	}
+	limited := false
+	for index := range groups {
+		botCfg := base
+		if owner := strings.TrimSpace(groups[index].BotProfileID); owner != "" && owner != profileID {
+			botCfg = h.botConfigForProfile(owner)
+		}
+		tokens, calls := assistant.EffectiveGroupModelQuota(botCfg, groups[index].GroupConfig)
+		groups[index].QuotaTokenLimit, groups[index].QuotaCallLimit = tokens, calls
+		if tokens > 0 || calls > 0 {
+			limited = true
+		}
+	}
+	// 一个群都没设额度就不查了：那次全表扫描算出来的数没人会看。
+	if !limited {
+		return
+	}
+	reader, ok := h.logs.(applog.GroupUsageBulkReader)
+	if !ok {
+		return
+	}
+	until := time.Now()
+	usage, err := reader.GroupLLMUsageSinceByProfile(ctx, profileID, until.Add(-assistant.GroupModelQuotaWindow()), until)
+	if err != nil {
+		return
+	}
+	for index := range groups {
+		used := usage[strings.TrimSpace(groups[index].GroupID)]
+		groups[index].QuotaTokensUsed, groups[index].QuotaCallsUsed = used.Tokens, used.Calls
+	}
 }
