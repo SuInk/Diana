@@ -32,7 +32,9 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 
 黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及扩展开关 `.extension-overrides.json`、对象名单 `.extension-audience.json`、位置记录 `.extension-paths.json`——这几个按设计就住在工作目录里。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
 
-这条拦的是文件工具。`run_command` 不在此列：命令沙箱限制的是写入范围，读取是放开的（macOS 的 `sandbox-exec` 策略里就是 `allow file-read*`），所以白名单里只要配了 `cat`、`grep` 这类命令，它照样能读到这些文件，搬到工作目录外面也挡不住。命令白名单默认为空，放开之前先想清楚这一点。
+`run_command` 走另一条路：白名单只管得到「能跑哪个程序」，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把这些路径盖成空文件。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
+
+**前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），命令就是以 Diana 自己的进程权限裸跑的，这一层不存在。`require` 模式下没有沙箱直接拒绝执行。命令白名单默认为空，放开读取类命令之前先确认沙箱状态——WebUI 和启动日志里都能看到。
 
 ## Skills
 
