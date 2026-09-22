@@ -523,6 +523,29 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	}
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
+		// 判定链路和对话链路走同一套降级：先把角色绑定连同它的 fallbacks 展开成候选，
+		// 交给 registryFailoverLLMProvider 按顺序试。
+		//
+		// 这里原来只取一条 selection 就直接跑，绑定里配的 fallbacks 从来没被用过——
+		// 线上把 intent 绑到只做判断的模型之后，所有没备判断题表的用途整条失败，配好
+		// 的降级档一次都没被碰。降级是全局承诺，不该只有对话享有。
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent, roles)
+		if roleErr != nil {
+			return "", roleErr
+		}
+		if len(profiles) == 0 {
+			profiles = llmProfilesInGroup(set, llm.GroupIntent)
+		}
+		if len(profiles) == 0 {
+			profiles = fallbackProfilesForGroup(set, llm.GroupIntent)
+		}
+		if len(profiles) > 0 {
+			provider, err := newRegistryFailoverLLMProvider(registry, profiles, retryTransient, len(profiles) > 1)
+			if err == nil {
+				return run(provider)
+			}
+			// 注册表里没有能对上的模型时不硬顶，退回下面按单条选择的老路。
+		}
 		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
 		if err != nil {
 			return "", err
@@ -539,18 +562,15 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			return "", roleErr
 		}
 		if len(profiles) > 0 {
-			if !retryTransient && len(profiles) > 1 {
-				profiles = profiles[:1]
-			}
+			// retryTransient=false 的含义是「同一档不因瞬时错误重试」，不是「不许降级」。
+			// 这里原来会把候选截成一条，于是摘要、语义承接这些走 Once 变体的用途根本
+			// 没有降级可言。
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
 		for _, group := range semanticRouteProfileGroups {
 			profiles := llmProfilesInGroup(set, group)
 			if len(profiles) == 0 {
 				continue
-			}
-			if !retryTransient {
-				profiles = profiles[:1]
 			}
 			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
@@ -621,6 +641,13 @@ func shouldFailoverLLMError(err error) bool {
 		return false
 	}
 	if errors.Is(err, llm.ErrUnverifiedRejection) {
+		return true
+	}
+	// 绑到只做判断的模型、而这个用途要的是文本，属于能力不匹配，不是上游故障——
+	// 正好是降级链该接手的情况。不降级的话，把 intent 整组绑到判断模型就会让所有
+	// 没备判断题表的判定用途（语义承接、发送前审核、记忆抽取…）整条失败，而不是
+	// 退到下一档对话模型。
+	if errors.Is(err, llm.ErrDecisionRequired) {
 		return true
 	}
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) {
