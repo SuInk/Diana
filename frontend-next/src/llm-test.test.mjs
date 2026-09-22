@@ -45,3 +45,20 @@ test("model test keeps the upstream reason when available", () => {
     "Gemini · second-model 测试失败：provider returned 429: quota exceeded"
   );
 });
+
+test("网关 HTML 错误页只留一句出处，不整段贴出来", () => {
+  const body = `<!DOCTYPE html>
+<html class="no-js" lang="en-US"><head><title>earlyso.com | 502: Bad gateway</title>
+<meta charset="UTF-8" /></head><body>${"x".repeat(5000)}</body></html>`;
+  const error = Object.assign(new Error("后端出错（HTTP 502）"), { responseBody: body });
+  const message = describeLLMTestError(error, "TypeSafe 判断模型", "jev-latest");
+  assert.match(message, /来自反向代理或网关/);
+  assert.match(message, /earlyso\.com \| 502: Bad gateway/);
+  assert.doesNotMatch(message, /<!DOCTYPE/i);
+  assert.ok(message.length < 300, `错误文案不该被 HTML 撑爆：${message.length}`);
+});
+
+test("非 HTML 的纯文本正文仍然原样展示", () => {
+  const error = Object.assign(new Error("后端出错（HTTP 502）"), { responseBody: "upstream reset the connection" });
+  assert.match(describeLLMTestError(error, "Gemini", "x"), /响应正文：\nupstream reset the connection/);
+});
