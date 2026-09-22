@@ -474,6 +474,10 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 	if len([]rune(cfg.ReplyAccountSafetyAuditPrompt)) > 8000 {
 		return assistant.GroupConfig{}, fmt.Errorf("账号安全审核规则不能超过 8000 字")
 	}
+	cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(cfg.ProactiveReplyExtraCriteria)
+	if len([]rune(cfg.ProactiveReplyExtraCriteria)) > assistant.ProactiveReplyExtraCriteriaMaxRunes {
+		return assistant.GroupConfig{}, fmt.Errorf("接话补充判据不能超过 %d 字", assistant.ProactiveReplyExtraCriteriaMaxRunes)
+	}
 	access, err := normalizeGroupExtensionAccess(cfg.ExtensionAccess)
 	if err != nil {
 		return assistant.GroupConfig{}, err
