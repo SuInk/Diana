@@ -80,12 +80,13 @@ func NewCodingAgentPlugin() *CodingAgentPlugin { return &CodingAgentPlugin{} }
 
 func (p *CodingAgentPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID:          codingAgentPluginID,
-		Name:        "编码代理",
-		Version:     "0.1.2",
-		Description: "把 Claude Code、Codex 这类编码 CLI 接进对话：在持久工作区里长时间改代码，完成后汇报，运行途中可以随时查询进度。仅机器人主人可用。",
-		Official:    true,
-		BuiltIn:     true,
+		ID:            codingAgentPluginID,
+		Name:          "编码代理",
+		Version:       "0.1.3",
+		Description:   "把 Claude Code、Codex 这类编码 CLI 接进对话：在持久工作区里长时间改代码，完成后汇报，运行途中可以随时查询进度。仅机器人主人可用。",
+		Official:      true,
+		BuiltIn:       true,
+		ReportsErrors: true,
 		// 它会在后台改代码、还会自己开口汇报结果，装完就生效等于替用户做了决定。
 		DefaultDisabled: true,
 		Permissions:     []string{"运行外部编码 CLI", "读写白名单仓库", "执行 git 操作"},

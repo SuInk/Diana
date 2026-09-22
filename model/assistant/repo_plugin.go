@@ -128,6 +128,7 @@ type repoPluginManifestFile struct {
 	Platforms     []string            `json:"platforms,omitempty"`
 	PlatformNotes map[string]string   `json:"platform_notes,omitempty"`
 	Settings      []PluginSettingSpec `json:"settings,omitempty"`
+	ReportsErrors bool                `json:"reports_errors,omitempty"`
 	Entry         string              `json:"entry"`
 	Files         []string            `json:"files,omitempty"`
 	MinDiana      string              `json:"min_diana,omitempty"`
@@ -336,6 +337,7 @@ func (m repoPluginManifestFile) pluginManifest() PluginManifest {
 		PlatformNotes: notes,
 		Permissions:   append([]string(nil), m.Permissions...),
 		Settings:      m.Settings,
+		ReportsErrors: m.ReportsErrors,
 	}
 }
 

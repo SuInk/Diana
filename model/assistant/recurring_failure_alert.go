@@ -96,7 +96,7 @@ func (r *Runtime) notifyRecurringFailureRecovery(ctx context.Context, item Remin
 		return ctx.Err()
 	}
 	notice := fmt.Sprintf("%s已恢复，后续结果会继续正常发送。", recurringSubscriptionKindLabel(item))
-	return r.sendSubscriberNotice(ctx, reminderSourceEvent(item), notice)
+	return r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), reminderDiagnosticPluginID(item), notice)
 }
 
 // clearReminderRecoveryNotice 把「待发恢复通知」标记落下去，避免重复通知。
@@ -142,13 +142,6 @@ func (r *Runtime) reportRecurringReminderFailure(ctx context.Context, item Remin
 // deliverRecurringRecoveryNotice 在报过警的订阅重新跑通后补一条恢复通知。
 func (r *Runtime) deliverRecurringRecoveryNotice(ctx context.Context, item Reminder) {
 	if !item.RecoveryNoticePending || ctx.Err() != nil {
-		return
-	}
-	// 失败告警被开关挡下时，「已恢复」也没有意义：用户没见过那条失败。
-	if !r.errorNoticeAllowed(reminderSourceEvent(item)) {
-		if err := r.clearReminderRecoveryNotice(item.ID); err != nil {
-			r.setError(err.Error())
-		}
 		return
 	}
 	if err := r.notifyRecurringFailureRecovery(ctx, item); err != nil {

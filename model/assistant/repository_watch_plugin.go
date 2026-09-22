@@ -315,14 +315,15 @@ func newRepositoryWatchPlugin(client *http.Client, baseURL string) *RepositoryWa
 
 func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID:          repositoryWatchPluginID,
-		Name:        "仓库订阅",
-		Version:     "0.2.7",
-		Description: "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。",
-		Official:    true,
-		BuiltIn:     true,
-		CanAskAgent: true,
-		Permissions: []string{"network:https", "task:persistent", "message:send", "llm:generate"},
+		ID:            repositoryWatchPluginID,
+		Name:          "仓库订阅",
+		Version:       "0.2.8",
+		Description:   "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。",
+		Official:      true,
+		BuiltIn:       true,
+		CanAskAgent:   true,
+		ReportsErrors: true,
+		Permissions:   []string{"network:https", "task:persistent", "message:send", "llm:generate"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         pluginSettingAskAgent,

@@ -105,11 +105,6 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	// 关掉「错误提示」的机器人不往聊天里发失败告警。返回 nil 让调用方照常记「已告警」，
-	// 否则每个周期都会重试发送一次。
-	if !r.errorNoticeAllowed(reminderSourceEvent(item)) {
-		return nil
-	}
 	stage, _, reason := repositoryWatchFailureDetails(cause)
 	notice := fmt.Sprintf(
 		"仓库订阅 %s 连续 %d 次%s失败：%s Diana 会继续自动重试。",
@@ -121,7 +116,7 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 	acknowledged := false
 	var firstErr error
 	for _, target := range repositoryWatchDeliveryTargets(item) {
-		_, delivered, err := r.sendErrorNoticeWithEvidence(ctx, target, notice)
+		_, delivered, err := r.sendDiagnosticNoticeWithEvidence(ctx, target, repositoryWatchPluginID, notice)
 		if delivered {
 			acknowledged = true
 		}
@@ -133,6 +128,11 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 		return firstErr
 	}
 	if !acknowledged {
+		// 开关关闭时这里也拿不到确认，但那是「不必发」而不是「没发出去」：
+		// 照常返回 nil，调用方才会记下「已告警」，不再每个周期重试一次。
+		if !r.diagnosticAllowed(reminderSourceEvent(item), repositoryWatchPluginID) {
+			return nil
+		}
 		return fmt.Errorf("仓库订阅失败告警未取得发送确认")
 	}
 	return nil
@@ -165,12 +165,8 @@ func (r *Runtime) notifyRepositoryWatchRecovery(ctx context.Context, item Remind
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	// 失败告警没发出去过，「已恢复」也不必发。
-	if !r.errorNoticeAllowed(reminderSourceEvent(item)) {
-		return nil
-	}
 	notice := fmt.Sprintf("仓库订阅 %s 已恢复，后续更新将继续正常推送。", item.Repository)
-	if err := r.sendRepositoryWatch(ctx, item, notice); err != nil {
+	if err := r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), repositoryWatchPluginID, notice); err != nil {
 		return err
 	}
 	return nil

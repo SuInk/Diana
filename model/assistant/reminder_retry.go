@@ -119,10 +119,6 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	// 关掉「错误提示」就不该再往聊天里发诊断消息，订阅和提醒的失败告警同样算。
-	if !r.errorNoticeAllowed(reminderSourceEvent(item)) {
-		return nil
-	}
 	notice := reminderFailureNotice(item, cause)
 	target := reminderSourceEvent(item)
 	if target.Kind == EventKindGroup && errors.Is(cause, errOutboundSend) {
@@ -131,13 +127,13 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 	if strings.TrimSpace(target.UserID) == "" && target.Kind == EventKindPrivate {
 		return fmt.Errorf("提醒失败通知缺少订阅者账号")
 	}
-	if err := r.sendSubscriberNotice(ctx, target, notice); err == nil {
+	if err := r.sendDiagnosticNotice(ctx, target, reminderDiagnosticPluginID(item), notice); err == nil {
 		return nil
 	} else if target.Kind != EventKindGroup || strings.TrimSpace(item.UserID) == "" {
 		return err
 	} else {
 		privateTarget := reminderPrivateFallbackTarget(item)
-		if privateErr := r.sendSubscriberNotice(ctx, privateTarget, notice); privateErr != nil {
+		if privateErr := r.sendDiagnosticNotice(ctx, privateTarget, reminderDiagnosticPluginID(item), notice); privateErr != nil {
 			return errors.Join(err, privateErr)
 		}
 		return nil
