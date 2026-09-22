@@ -426,6 +426,10 @@ func main() {
 	newLLMClient := func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
 		return llm.NewClient(cfg, llm.ClientOptionsFor(cfg, oauthManager)...)
 	}
+	// 整个进程只需要一个浏览器：网页渲染、browser_render 工具、链接解析兜底共用它。
+	// 在这里把「没有就装一个」接上，之后任何一条渲染路径撞上缺浏览器都会自己解决，
+	// 不用人去依赖管理页点安装。
+	assistant.RegisterBrowserInstaller()
 	botRuntime := assistant.NewRuntime(firstBotProfile(botSet), channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
 		return newLLMClient(store.Current())
 	})
