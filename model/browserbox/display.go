@@ -17,9 +17,8 @@ import (
 // ErrNoDisplay 是「有头要一块屏幕，这台机器上一块都凑不出来」：既没有现成的
 // X/Wayland 会话，也没有 Xvfb 可以自己拉一块。
 var ErrNoDisplay = errors.New("有头模式需要图形界面：当前环境既没有 DISPLAY/WAYLAND_DISPLAY，" +
-	"也没装 Xvfb。官方镜像默认不带（Alpine 的 Xvfb 链着 mesa，连它一起装要多背 245MB），" +
-	"要用就在宿主机执行：docker exec -u root <容器名> sh -c " +
-	"'apk add --no-cache xvfb && apk fix mesa mesa-gl mesa-dri-gallium llvm20-libs'，装完重开这个开关。" +
+	"也没装 Xvfb。完整版镜像自带 Xvfb；slim 镜像和自建的裸机部署要自己装（Debian/Ubuntu：" +
+	"apt-get install -y xvfb，容器里加 docker exec -u root <容器名>），装完重开这个开关。" +
 	"另一条路是干脆关掉「有头」——实时画面走 CDP screencast，无头一样看得见、也能接管")
 
 // x11SocketDir 是 X 服务端放 socket 的地方。
@@ -139,10 +138,9 @@ func xvfbFailureReason(diagnostics *diagnosticTail) string {
 		return "它没有报出显示号，也没有留下任何输出"
 	}
 	if strings.Contains(tail, "libGL") || strings.Contains(tail, "libgallium") {
-		// 官方完整版镜像删掉了 mesa 的软件渲染栈（Chromium 用不到，省 245MB），
-		// 而 Alpine 的 Xvfb 链着它。补回来就能用，命令直接给出来。
-		return tail + "（Xvfb 链着 mesa，而镜像里删掉了它。在宿主机执行：" +
-			"docker exec -u root <容器名> apk add --no-cache mesa-gl mesa-dri-gallium llvm20-libs）"
+		// Xvfb 链着 mesa 的 libGL，被精简掉的镜像里会缺。补回来就能用。
+		return tail + "（Xvfb 链着 mesa 的 libGL，这个环境里缺。Debian/Ubuntu 上装 libgl1 与 " +
+			"libglx-mesa0 即可）"
 	}
 	return tail
 }

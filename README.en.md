@@ -52,7 +52,7 @@ Docker Compose (prebuilt image; no clone required). Run once in your deployment 
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
-When run directly in a terminal, the script asks which image you want. The **full** image preinstalls Chromium, CJK fonts, ffmpeg, yt-dlp and tesseract, so page rendering, screenshots, media downloads and OCR work out of the box; the **slim** image ships none of them (~67 MB to pull, versus ~447 MB for the full one). Pick full if unsure.
+When run directly in a terminal, the script asks which image you want. The **full** image preinstalls Chromium, CJK fonts, ffmpeg, yt-dlp and tesseract, so page rendering, screenshots, media downloads and OCR work out of the box; the **slim** image ships none of them (~156 MB to pull, versus ~619 MB for the full one). Pick full if unsure.
 
 Piped execution (the command above) never prompts and installs the full image on a first deployment. To get the slim one, say so up front:
 

@@ -23,8 +23,8 @@ import (
 	"syscall"
 	"time"
 
-	// 把 IANA 时区表编进二进制。运行镜像是不带 tzdata 的 alpine，
-	// Release 里的裸二进制在 Windows 上也没有系统时区库；缺了它
+	// 把 IANA 时区表编进二进制。运行镜像带不带 tzdata 不由我们决定（精简镜像
+	// 常常不带），Release 里的裸二进制在 Windows 上也没有系统时区库；缺了它
 	// LoadLocation("Asia/Shanghai") 会静默退回 UTC，让按时区配置的
 	// 回复时段整体偏移几个小时。
 	_ "time/tzdata"

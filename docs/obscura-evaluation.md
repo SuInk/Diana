@@ -30,7 +30,7 @@
 
 可以作为轻量读取引擎候选，但当前实现尚不适合直接宣称 Docker 开箱即用：
 
-1. 上游 Linux 发行流程构建 `*-unknown-linux-gnu`，基于 Ubuntu 22.04；Diana 当前运行镜像是 Alpine 3.22/musl。需要选择 glibc 运行镜像或验证兼容层，不能直接复制发行二进制。
+1. 上游 Linux 发行流程构建 `*-unknown-linux-gnu`，基于 Ubuntu 22.04；Diana 当前运行镜像是 Debian（glibc），可以直接用上游的发行二进制，不需要兼容层。
 2. 需明确网页就绪判断：GitHub 长连接/资源加载场景下，严格等待网络空闲容易耗尽外层超时。短等待可用于受控策略，但不代表 SPA 已加载完整。
 3. 需补齐字体并做中文截图验收；“PNG 有效”不能替代文字可读性检查。
 4. 上游发行包同时包含 `obscura` 与 `obscura-worker`；容器集成应保留完整运行组件，再验证非 root、资源限制及 amd64/arm64 行为。

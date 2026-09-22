@@ -35,16 +35,10 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
 容器都是这个形状——**浏览器在虚拟显示里真开窗口，看画面仍然走 CDP screencast**，
 所以这里不需要、也没有 VNC / noVNC。
 
-官方镜像默认不带 Xvfb：Alpine 的 Xvfb 链着 mesa 的 libGL，而镜像为了省体积把
-mesa 的软件渲染栈删掉了（Chromium 用不到），连 Xvfb 一起装回来要多背约 245MB。
-要用有头，在宿主机执行一次：
-
-```sh
-docker exec -u root <容器名> sh -c 'apk add --no-cache xvfb && apk fix mesa mesa-gl mesa-dri-gallium llvm20-libs'
-```
-
-装完重新打开这个开关即可。没有显示器也没有 Xvfb 时，保存这一项会当场被拒绝并给出
-上面这条命令——不是存下去再让浏览器起不来。
+完整版镜像自带 Xvfb，打开开关就能用。slim 镜像和自建的裸机部署要自己装
+（Debian/Ubuntu 上是 `apt-get install -y xvfb`，容器里前面加
+`docker exec -u root <容器名>`）。既没有显示器也没有 Xvfb 时，保存这一项会当场被
+拒绝并把这条命令给出来——不是存下去再让浏览器起不来。
 
 有头值不值得开，看你要什么：扩展弹窗、系统对话框这类画布之外的东西只有有头才有；
 页面渲染、截图、实时画面和接管，无头全都能做，而且省一块屏的内存。
@@ -77,7 +71,8 @@ docker exec -u root <容器名> sh -c 'apk add --no-cache xvfb && apk fix mesa m
 
 - **完整版容器镜像**自带 chromium，打开开关即可。
 - **slim 镜像**没有浏览器，在宿主机执行
-  `docker exec -u root <容器名> apk add --no-cache chromium font-noto-cjk` 之后再开。
+  `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'`
+  之后再开；有头还要一个 `xvfb`。
 - **裸机部署**会按常见安装路径找 Chrome/Chromium，也认 WebUI 下载的 Chrome for Testing。
 - profile 在 `<数据目录>/browser-box/profile`。用 compose 的默认挂载时它跟着 `./data`
   走，容器重建后登录态还在；换句话说，**这个目录等价于一份浏览器登录态，备份和权限

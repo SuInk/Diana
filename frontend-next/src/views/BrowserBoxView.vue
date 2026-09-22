@@ -12,7 +12,7 @@
       <div class="card-body stack">
         <p v-if="!status.available" class="muted" style="margin: 0; font-size: 13px">
           这台机器上没找到 Chrome/Chromium。容器完整版镜像自带 chromium；slim 版可以在宿主机执行
-          <code class="mono">docker exec -u root &lt;容器名&gt; apk add --no-cache chromium font-noto-cjk</code>。
+          <code class="mono">docker exec -u root &lt;容器名&gt; sh -c 'apt-get update &amp;&amp; apt-get install -y chromium fonts-noto-cjk'</code>。
         </p>
         <div class="field">
           <label class="switch-row">
