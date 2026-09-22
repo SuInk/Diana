@@ -272,3 +272,86 @@ func TestBotHandlerRepoPluginRoutesRequireInstaller(t *testing.T) {
 		t.Fatalf("未注入安装器: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// repoPluginPreviewCommit 先走一次预览拿 commit：安装接口要求带上它，
+// 免得用户没看确认框就装。
+func repoPluginPreviewCommit(t *testing.T, router http.Handler, url string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repo/preview",
+		strings.NewReader(`{"url":"`+url+`"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("预览失败: %d %s", rec.Code, rec.Body.String())
+	}
+	var preview struct {
+		Commit    string `json:"commit"`
+		Installed *struct {
+			Version string `json:"version"`
+			Change  string `json:"change"`
+			BuiltIn bool   `json:"built_in"`
+		} `json:"installed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &preview); err != nil {
+		t.Fatal(err)
+	}
+	return preview.Commit
+}
+
+// 同 ID 覆盖会连带接管已装插件配置好的设置与凭据，不能静默发生。
+func TestBotHandlerRepoPluginInstallRefusesSilentOverwrite(t *testing.T) {
+	h, _, _, _, _ := newRepoPluginTestHandler(t, repoPluginManifest(), map[string]string{
+		"SKILL.md": repoPluginSkill(),
+	}, "HEAD")
+	router := botTestRouter(h)
+	const repoURL = "github.com/SuInk/diana-plugin-hello"
+	install := func(replace bool) *httptest.ResponseRecorder {
+		commit := repoPluginPreviewCommit(t, router, repoURL)
+		body := `{"url":"` + repoURL + `","accept_risk":true,"commit":"` + commit + `"`
+		if replace {
+			body += `,"replace":true`
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+			"/api/assistant/plugins/repo/install", strings.NewReader(body+`}`)))
+		return rec
+	}
+
+	if rec := install(false); rec.Code != http.StatusOK {
+		t.Fatalf("首次安装应成功: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := install(false)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("同 ID 覆盖被静默放行了: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "已安装") {
+		t.Fatalf("错误信息应说明已装版本: %s", rec.Body.String())
+	}
+	if rec := install(true); rec.Code != http.StatusOK {
+		t.Fatalf("确认覆盖后应成功: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// group_relations 是不带 official. 前缀的内置插件，安装器要认出来。
+func TestBotHandlerRepoPluginRefusesBuiltInID(t *testing.T) {
+	manifest := repoPluginManifest()
+	manifest["id"] = assistant.GroupRelationsPluginID
+	h, _, _, _, _ := newRepoPluginTestHandler(t, manifest, map[string]string{
+		"SKILL.md": repoPluginSkill(),
+	}, "HEAD")
+	router := botTestRouter(h)
+
+	commit := repoPluginPreviewCommit(t, router, "github.com/SuInk/diana-plugin-hello")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/repo/install",
+		strings.NewReader(`{"url":"github.com/SuInk/diana-plugin-hello","accept_risk":true,"replace":true,"commit":"`+commit+`"}`)))
+	if rec.Code == http.StatusOK {
+		t.Fatalf("占用内置 ID 的插件被装上了: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "内置插件") {
+		t.Fatalf("错误信息应说明是内置插件: %s", rec.Body.String())
+	}
+	state, ok := h.runtime.Plugins().Get(assistant.GroupRelationsPluginID)
+	if !ok || !state.Manifest.BuiltIn {
+		t.Fatalf("内置插件被改写: %+v", state.Manifest)
+	}
+}

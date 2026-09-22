@@ -5,6 +5,7 @@ package webui
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -25,6 +26,57 @@ type repoPluginInstallPayload struct {
 	URL        string `json:"url"`
 	AcceptRisk bool   `json:"accept_risk"`
 	Commit     string `json:"commit"`
+	// Replace 必须由前端在用户看过「将覆盖已装的 x.y.z」之后显式置 true。
+	// 同 ID 覆盖会连带接管已有的设置与凭据，不能静默发生。
+	Replace bool `json:"replace,omitempty"`
+}
+
+// repoPluginPreviewResponse 在预览之外补一条「这个 ID 已经被谁占着」。用嵌入而
+// 不是手写字段表：预览结构以后加字段，这里不会悄悄漏掉。
+type repoPluginPreviewResponse struct {
+	assistant.RepoPluginPreview
+	Installed *assistant.RepoPluginInstalledVersion `json:"installed,omitempty"`
+}
+
+// repoPluginInstalledVersion 查这个 ID 现在被谁占着，返回 nil 表示没被占用。
+func (h *BotHandler) repoPluginInstalledVersion(id, next string) *assistant.RepoPluginInstalledVersion {
+	manager := h.runtime.Plugins()
+	if manager == nil {
+		return nil
+	}
+	state, ok := manager.Get(id)
+	if !ok {
+		return nil
+	}
+	if state.Manifest.BuiltIn {
+		return &assistant.RepoPluginInstalledVersion{Version: state.Manifest.Version, BuiltIn: true}
+	}
+	if !state.Installed {
+		return nil
+	}
+	return &assistant.RepoPluginInstalledVersion{
+		Version: state.Manifest.Version,
+		Change:  assistant.CompareRepoPluginVersions(next, state.Manifest.Version),
+	}
+}
+
+// repoPluginOccupancyGuard 在落盘之前拦住「顶掉内置」和「静默覆盖同 ID」。
+func (h *BotHandler) repoPluginOccupancyGuard(replace bool) func(assistant.PluginManifest) error {
+	return func(incoming assistant.PluginManifest) error {
+		occupied := h.repoPluginInstalledVersion(incoming.ID, incoming.Version)
+		if occupied == nil {
+			return nil
+		}
+		if occupied.BuiltIn {
+			return fmt.Errorf("%w: %s 是内置插件，不能被第三方插件替换",
+				assistant.ErrBuiltInPluginAction, incoming.ID)
+		}
+		if !replace {
+			return fmt.Errorf("diana: %s 已安装 %s 版，这次是 %s 版；确认覆盖后再安装",
+				incoming.ID, occupied.Version, incoming.Version)
+		}
+		return nil
+	}
 }
 
 // SetRepoPluginInstaller 注入第三方插件安装器；未注入时相关接口返回 501，
@@ -63,7 +115,10 @@ func (h *BotHandler) previewRepoPlugin(c *gin.Context) {
 		h.writeRepoPluginError(c, "plugin_repo_preview", err, payload.URL)
 		return
 	}
-	c.JSON(http.StatusOK, preview)
+	c.JSON(http.StatusOK, repoPluginPreviewResponse{
+		RepoPluginPreview: preview,
+		Installed:         h.repoPluginInstalledVersion(preview.Manifest.ID, preview.Manifest.Version),
+	})
 }
 
 // installRepoPlugin 安装第三方插件：校验、下载归档、落盘、登记进插件管理器
@@ -86,7 +141,8 @@ func (h *BotHandler) installRepoPlugin(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "plugin_repo_install", errors.New("diana: 请先预览插件，确认后再安装"), payload.URL, nil)
 		return
 	}
-	plugin, source, err := installer.Install(c.Request.Context(), payload.URL, payload.Commit)
+	plugin, source, err := installer.InstallGuarded(c.Request.Context(), payload.URL, payload.Commit,
+		h.repoPluginOccupancyGuard(payload.Replace))
 	if err != nil {
 		h.writeRepoPluginError(c, "plugin_repo_install", err, payload.URL)
 		return
