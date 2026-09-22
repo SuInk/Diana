@@ -37,13 +37,15 @@ report_matches \
 report_matches \
 	"credential-like value found" \
 	'(sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|https?://[^/@[:space:]]+:[^/@[:space:]]+@)' \
-	'' \
+	'://(user|USER):(pass|password|secret)@' \
 	. ':!scripts/check-public-repo.sh'
 
+# 100200xxx 是 demo 数据约定的演示号段，123456789/12345678/87654321 是顺序占位，
+# 都不是真实账号，放行它们，规则继续盯真实长度的号码。
 report_matches \
 	"long QQ identity found; use synthetic five-digit fixture ranges" \
 	'((SelfID|UserID|GroupID|OperatorID|OwnerID|BotQQ):[[:space:]]*"[0-9]{8,12}"|"(self_id|user_id|group_id|operator_id|owner_id|uin)"[[:space:]]*:[[:space:]]*"?[0-9]{8,12}|(CQ:at,qq=|NAPCAT_QUICK_ACCOUNT[^0-9]*|QQBOT_QQ[^0-9]*)[0-9]{8,12})' \
-	'' \
+	'"?(100200[0-9]{3}|12345678(90?)?|987654321?|87654321|700000001)"?' \
 	'*.go' '*.js' '*.ts' '*.vue' '*.md' '*.yml' '*.yaml'
 
 tracked_runtime_files="$(git ls-files | grep -E '(^|/)(runtime\.env|\.env|.*\.(db|sqlite|sqlite3)(-(shm|wal))?|.*\.log|cookies[^/]*\.txt)$' | grep -vE '(^|/)\.env\.example$' || true)"

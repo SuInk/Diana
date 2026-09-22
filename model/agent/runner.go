@@ -191,11 +191,20 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	modelTurns := 0
 	toolCalls := 0
 	protocolRepairs := 0
+	forceSearchNextTurn := false
 	lastToolSignature := ""
 	imageTaskQueued := false
 	nativeProtocol := false
 	finishReason := "final"
 	claimLedger := newClaimEvidenceLedger()
+	// 没有 web_search 就没法要求证据，硬要只会把回复卡在修复循环里。
+	if _, searchAvailable := r.registry.Get(webSearchToolName); searchAvailable {
+		claimLedger.required = req.RequireEvidence
+	}
+	// 用户自己贴的链接、历史消息里出现过的链接，模型复述不算编造来源。
+	for _, message := range req.Messages {
+		claimLedger.noteCitableText(message.Content)
+	}
 	emitRunEvent(ctx, req.Observer, RunEvent{
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
@@ -260,7 +269,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		definitions := r.turnDefinitions(claimLedger, imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		resp, err := r.client.Generate(planningCtx, llm.GenerateRequest{Messages: messages, Tools: definitions})
+		planningRequest := llm.GenerateRequest{Messages: messages, Tools: definitions}
+		if forceSearchNextTurn {
+			// 话术退回对某些模型无效：实测 gemini-3.8-flash-low 被连退三次仍然
+			// 一个工具都不调，只是把正文改得更含糊。这一步直接用供应商的
+			// tool_choice 把选择权收走，让它只能发出一次检索。
+			planningRequest.ToolChoice = webSearchToolName
+			forceSearchNextTurn = false
+		}
+		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}
@@ -366,6 +383,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				continue
 			}
+			if claimLedger.missingRequiredSearch() {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: evidenceRequiredRepairPrompt})
+				forceSearchNextTurn = true
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					// 失败按放行处理：模型死活不搜也不能把这条回复卡掉。
+					finishReason = "evidence_required_unmet"
+					break
+				}
+				continue
+			}
 			return finish(action.Content, "plain_text"), nil
 		}
 		if action.Action == "final" {
@@ -405,6 +435,33 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
 			// 由代码回头猜正文。
 			claimLedger.applyUpdates(action.Claims)
+			if claimLedger.missingRequiredSearch() {
+				protocolRepairs++
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, evidenceRequiredRepairReason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: evidenceRequiredRepairPrompt})
+				forceSearchNextTurn = true
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "evidence_required_unmet"
+					break
+				}
+				continue
+			}
+			if unbound := claimLedger.unboundCitations(action.Content); len(unbound) > 0 {
+				protocolRepairs++
+				reason := "正文引用了本轮没有检索到的来源：" + strings.Join(unbound, " ")
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				messages = appendAssistantEcho(messages, lastText)
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason +
+					"。只能引用这一轮检索或渲染真正返回的链接，以及对话里本来就出现过的链接；" +
+					"凭记忆写出的网址即使看起来合理也不算来源。请删掉这些链接，或改成如实说明这一点没有查到，再重新调用 agent_finalize。\n" +
+					claimLedger.digest()})
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "unbound_citation"
+					break
+				}
+				continue
+			}
 			if leak := internalProtocolLeak(action.Content); leak != "" {
 				protocolRepairs++
 				reason := "最终回复里出现了内部协议词「" + leak + "」"
@@ -644,6 +701,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 		}
 		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
+		claimLedger.noteCitableText(rawOutput)
 		observationText := toolObservationMessage(action.Tool, output, err == nil, r.cfg.MaxSteps-toolCalls) + parallelDropNotice
 		if action.Tool == webSearchToolName && claimLedger.active {
 			observationText += "\n\n" + claimLedger.digest()
@@ -1007,7 +1065,8 @@ func (r *Runner) systemPrompt() string {
 	}
 	if hasTool(webSearchToolName) {
 		rules = append(rules,
-			"- 遇到需要外部事实、可能随时间变化、自己不能可靠确认或适合参考公开评价的问题，先调用 web_search 再回答。典型场景包括新闻、价格、规则、日程、人物或机构现状，以及具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议；不要凭印象编造亲身体验或把不确定判断说成事实。纯闲聊、创作请求以及完全可由当前上下文回答的问题不需要搜索。",
+			"- 遇到需要外部事实、可能随时间变化、自己不能可靠确认或适合参考公开评价的问题，先调用 web_search 再回答。典型场景包括新闻、价格、规则、日程、人物或机构现状，具体商品、品牌、餐饮、作品的口碑、味道、规格和购买建议，以及某个软件、库、开源项目或服务是否支持某项能力、有没有现成实现或插件、当前版本与 API 现状；不要凭印象编造亲身体验或把不确定判断说成事实。纯闲聊、创作请求以及完全可由当前上下文回答的问题不需要搜索。",
+			"- 「当前上下文已经足够」只在答案本身就写在上下文里时成立。聊天记录里讨论过这个话题不等于其中的事实已经核实：别人的说法、你自己先前的回复和记忆摘要都只是线索，不能拿来替代检索。同样，熟悉一个项目的设计或原理，不代表你知道它此刻有哪些实现、插件、版本或生态现状——讲原理可以直接答，断言「有没有」「支不支持」「有哪些」必须先搜。",
 			"- 搜索词是可迭代假设，不是必须一次猜对的最终关键词。web_search 的 query 传当前最佳假设；存在拼写、别名、缩写、音译、语言或限定条件不确定性时，用 queries 追加 1–3 个有覆盖差异的候选，按信息增益从高到低排序。不要把完整聊天记录、用户身份或无关字段塞进搜索词。",
 			"- web_search 会在统一 deadline 和调用预算内自动规范化查询、逐步放宽引号/标点/括号约束并回退 provider。一次回复最多调用 "+fmt.Sprintf("%d", maxWebSearchCallsPerAgentRun)+" 次，并与总计 "+fmt.Sprintf("%d", r.cfg.MaxSteps)+" 个工具步骤共享预算；不要重复相同 query 或只机械替换一个词。",
 			"- 多部分检索必须先拆成可独立验证的通用 claims。首次搜索在 input.claims 声明每个 id/statement，并用 claim_ids 标明本次查询覆盖项；后续搜索先用 claim_updates 结算已有证据，再优先覆盖 insufficient 或 not_searched。不得按品牌、站点或垂直领域硬编码 claim。",

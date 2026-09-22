@@ -92,6 +92,16 @@ jobs:
           echo "value=${BUILD_VERSION}" >> "${GITHUB_OUTPUT}"
           echo "canary=${CANARY}" >> "${GITHUB_OUTPUT}"
 
+  audit:
+    name: Public Repo Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scan tracked files
+        run: ./scripts/check-public-repo.sh
+
   backend:
     name: Go Test
     runs-on: ubuntu-latest

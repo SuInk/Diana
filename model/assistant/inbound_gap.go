@@ -111,22 +111,54 @@ func (r *Runtime) observeLiveGroupSeq(event MessageEvent) {
 	}
 	key := groupSeqProbeKey(event)
 	r.seqProbeMu.Lock()
-	if !r.seqProbeArmed {
+	// 连接一直好着也会丢消息：桥接漏推一条事件不会断线，重连探测那一档完全看不到。
+	// 2026-09-22 线上就是这样丢了一条——前后消息都正常推，唯独中间那条没来，靠
+	// 手动回补才补回来。所以除了重连那次，每条实时消息都顺手比一下 seq。
+	if r.liveSeq == nil {
+		r.liveSeq = map[string]int64{}
+	}
+	previous, hadPrevious := r.liveSeq[key]
+	if seq > previous {
+		r.liveSeq[key] = seq
+	}
+	armed := r.seqProbeArmed
+	_, probed := r.seqProbed[key]
+	if armed && !probed {
+		r.seqProbed[key] = struct{}{}
+		r.seqProbeMu.Unlock()
+		r.emitSeqProbe(event, seq, key)
+		return
+	}
+	// 断线探测轮不到这条时，看看和上一条之间是不是跳号了。
+	if !hadPrevious || seq <= previous+1 {
 		r.seqProbeMu.Unlock()
 		return
 	}
-	if _, probed := r.seqProbed[key]; probed {
+	if r.liveSeqProbedAt == nil {
+		r.liveSeqProbedAt = map[string]time.Time{}
+	}
+	now := time.Now()
+	if last, ok := r.liveSeqProbedAt[key]; ok && now.Sub(last) < liveSeqProbeCooldown {
 		r.seqProbeMu.Unlock()
 		return
 	}
-	r.seqProbed[key] = struct{}{}
+	r.liveSeqProbedAt[key] = now
 	r.seqProbeMu.Unlock()
+	r.emitSeqProbe(event, seq, key)
+}
+
+// liveSeqProbeCooldown 限制同一个群因连续缺口发起探测的频率。撤回和系统提示同样
+// 占 seq，跳号未必是丢消息；查一次要打一轮历史接口，不限流会把它刷爆。
+const liveSeqProbeCooldown = 2 * time.Minute
+
+func (r *Runtime) emitSeqProbe(event MessageEvent, seq int64, key string) {
 	select {
 	case r.inboundSeqProbe <- groupSeqProbe{event: event, seq: seq}:
 	default:
 		// 探测队列满了：放掉这条，让这个群的下一条实时消息再试。
 		r.seqProbeMu.Lock()
 		delete(r.seqProbed, key)
+		delete(r.liveSeqProbedAt, key)
 		r.seqProbeMu.Unlock()
 	}
 }

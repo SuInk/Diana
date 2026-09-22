@@ -43,7 +43,7 @@ func (c *openAICompatibleClient) streamChatCompletion(ctx context.Context, req G
 		if err != nil {
 			return nil, err
 		}
-		httpReq, err := c.newOpenAIRequest(ctx, "chat/completions", body)
+		httpReq, err := c.newOpenAIRequest(ctx, "chat/completions", body, req.PromptCacheKey)
 		if err != nil {
 			return nil, err
 		}
