@@ -64,7 +64,7 @@ var portraitFieldSpecs = []PortraitFieldSpec{
 	{Field: PortraitFieldRelation, Label: "家庭与关系", Hint: "同住的家人、宠物等稳定关系", Capacity: 3},
 	// 时区要拿来算时间，所以只收 IANA 名称：「在德国」「比你慢六小时」这类描述
 	// 换算不了，NormalizePortraitTrait 会把它们丢掉。
-	{Field: PortraitFieldTimezone, Label: "时区", Hint: "IANA 时区名，如 Asia/Shanghai、Europe/Berlin；只在能确定到具体时区时才记", Capacity: 1},
+	{Field: PortraitFieldTimezone, Label: "时区", Hint: "IANA 时区名，如 Asia/Shanghai、Europe/Berlin；居住城市或国家能唯一确定时区时一并记下，不用等对方专门报时区；确定不到唯一时区就不记", Capacity: 1},
 	{Field: PortraitFieldOther, Label: "其他", Hint: "上面几栏装不下、但确实稳定的个人情况", Capacity: 4},
 }
 

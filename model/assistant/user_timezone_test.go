@@ -162,3 +162,31 @@ func TestRuntimeClockPromptPicksOneTimezoneStance(t *testing.T) {
 		t.Fatalf("记过时区时没把作息话题钉到对方当地时间：%s", prompt)
 	}
 }
+
+// TestRelationshipEvaluatorDerivesTimezoneFromResidence 时区必须能被后台评估自动记进
+// 画像：等对方专门报一句「我在 Europe/Berlin」是等不到的，而这一栏一旦空着，
+// 跨时区那条链路就永远退回「按本机时区猜」（见 unknownSpeakerTimezoneNote）。
+func TestRelationshipEvaluatorDerivesTimezoneFromResidence(t *testing.T) {
+	prompt := relationshipEvaluationSystemPrompt
+	for _, want := range []string{
+		"不用等对方专门报时区",
+		"记下了能唯一确定时区的居住地",
+		"known_portrait 里还没有 timezone",
+		"source=inferred",
+		"跨多个时区的国家",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("评估器提示词缺少 %q", want)
+		}
+	}
+	// 字段说明是随 payload 一起发给评估器的，两边不能各说各的。
+	var hint string
+	for _, spec := range PortraitFieldSpecs() {
+		if spec.Field == PortraitFieldTimezone {
+			hint = spec.Hint
+		}
+	}
+	if !strings.Contains(hint, "居住城市或国家能唯一确定时区时一并记下") {
+		t.Fatalf("时区字段说明没有跟上：%q", hint)
+	}
+}
