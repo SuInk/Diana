@@ -59,6 +59,15 @@ func probeBrowserDependencies() []ResolverDependency {
 	return append(browserDependenciesFromStatus(status, runtime.GOOS, lookResolverCommand), cjkFontDependency())
 }
 
+// RegisterBrowserInstaller 把「没浏览器就装一个」接到 agent 那一处公共闸上。生产在
+// 启动时调一次；不调的话 agent.EnsureBrowser 是空操作，库使用者和测试不会被拖去下载。
+func RegisterBrowserInstaller() {
+	agent.SetBrowserInstaller(func(ctx context.Context) error {
+		_, err := installBrowserDependency(ctx)
+		return err
+	})
+}
+
 func browserDependenciesFromStatus(status agent.HeadlessBrowserStatus, goos string, lookPath func(string) (string, error)) []ResolverDependency {
 	dep := ResolverDependency{
 		Name:    browserDependencyName,
