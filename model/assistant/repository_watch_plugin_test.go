@@ -2452,3 +2452,20 @@ func TestRepositoryWatchPullRequestsUseRESTWithoutToken(t *testing.T) {
 		t.Fatalf("没有 Token 时应当直接走 REST：graphql=%d rest=%d", graphQLCalls, restCalls)
 	}
 }
+
+// 「今天也没人 star」不是异常，不该每分钟记一行——线上两个仓库各 547 行/天，日志 18 MB。
+func TestStarCursorStalledOnlyOnRealAnomaly(t *testing.T) {
+	events := []repositoryWatchStargazer{{ID: "200"}, {ID: "100"}}
+	if starCursorStalled(nil, "100", "100") {
+		t.Fatal("事件流里没有 star 事件是常态，不该记")
+	}
+	if starCursorStalled(events, "200", "200") {
+		t.Fatal("最新一条就是游标本身，说明没有新 star，不该记")
+	}
+	if starCursorStalled(events, "", "") || starCursorStalled(events, repositoryWatchNoStarEvent, repositoryWatchNoStarEvent) {
+		t.Fatal("还没有游标时无从谈起「没往前走」")
+	}
+	if !starCursorStalled(events, "100", "100") {
+		t.Fatal("拿到了比游标新的事件、游标却没动，这才是该记的异常")
+	}
+}
