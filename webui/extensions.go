@@ -33,7 +33,10 @@ func (h *BotHandler) extensions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if c.Request.Method == http.MethodPost && req.Operation != "read" && req.Operation != "list" {
+	// 只有真的改了东西才记操作日志。原来按「不是 read 和 list」判断，presets、
+	// preset_verify 这类纯查询也被记成「扩展管理操作已完成」，翻审计记录时分不出
+	// 谁改过扩展。分类收在 agent.ExtensionOperationMutatesState 一处。
+	if c.Request.Method == http.MethodPost && agent.ExtensionOperationMutatesState(req.Operation) {
 		recordRequestOperation(c, h.logs, "extensions_"+req.Operation, "扩展管理操作已完成", req.Name, map[string]any{"kind": req.Kind, "profile_id": req.ProfileID})
 	}
 	if result == nil {
