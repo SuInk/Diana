@@ -26,6 +26,21 @@ type Tool interface {
 	Run(ctx context.Context, input map[string]any) (string, error)
 }
 
+// IntrospectionTool 由工具自己声明「这次调用只是打听 Diana 自己」。声明了就不占
+// MaxSteps，改走自省配额（见 runner.go 的 maxIntrospectionCallsPerAgentRun）。
+//
+// 门槛是三条同时成立，不是「跑得快」：
+//   - 只读：不改任何状态，也不对外部世界产生动作；
+//   - 本地：不走外部往返，耗时不取决于别人的服务；
+//   - 自省：答案是 Diana 自身的能力、身份、配置，而不是任务本身的进展。
+//
+// 快但会写的工具（改配置、发消息、戳一戳）不在此列——步数预算约束的是干活，不是延迟。
+// 带 input 是因为同一个工具可能一半只读一半是动作（extension_access 的 list 与改档位）。
+type IntrospectionTool interface {
+	Tool
+	Introspection(input map[string]any) bool
+}
+
 // ToolInputSchema optionally exposes the tool's JSON Schema to providers with
 // native function calling. Existing tools remain compatible with a permissive
 // object schema until they provide a strict schema.

@@ -123,6 +123,20 @@ func TestToolsLoadHasItsOwnQuota(t *testing.T) {
 	t.Logf("tools_load 执行 %d 次后被拦，协议修复 %d 次，模型调用 %d 次", started, repaired, client.calls)
 }
 
+// probeTool 是声明了自省的测试工具；onlyList 时只认 action=list，模拟一半只读一半动作。
+type probeTool struct {
+	countingTool
+	onlyList bool
+}
+
+func (t *probeTool) Introspection(input map[string]any) bool {
+	if !t.onlyList {
+		return true
+	}
+	action, _ := input["action"].(string)
+	return action == "list"
+}
+
 // askThenWorkClient 先把几个只读自省工具各问一遍，再把 MaxSteps 格预算全用于真工具。
 type askThenWorkClient struct {
 	asked    int
@@ -161,9 +175,9 @@ func TestIntrospectionToolsDoNotConsumeStepBudget(t *testing.T) {
 	rare := &countingTool{name: "rare"}
 	runner, err := NewRunner(client, Config{MaxSteps: 2, CoreTools: []string{"rare", "capabilities", "identity_check", "extension_access"}}, NewToolRegistry(
 		rare,
-		&countingTool{name: "capabilities"},
-		&countingTool{name: "identity_check"},
-		&countingTool{name: "extension_access"},
+		&probeTool{countingTool: countingTool{name: "capabilities"}},
+		&probeTool{countingTool: countingTool{name: "identity_check"}},
+		&probeTool{countingTool: countingTool{name: "extension_access"}, onlyList: true},
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -178,27 +192,29 @@ func TestIntrospectionToolsDoNotConsumeStepBudget(t *testing.T) {
 	}
 }
 
-// 写操作即使便宜也得占预算：extension_access 只有 action=list 那一路是只读的。
-func TestExtensionAccessWriteStillCostsStep(t *testing.T) {
-	if isIntrospectionCall("extension_access", map[string]any{"action": "bot_tier", "id": "mcp:gitea", "tier": "members"}) {
+// 判断交给工具自己：没声明的一律占预算，声明了的还能按入参分开看。
+func TestIntrospectionIsDeclaredByTheToolItself(t *testing.T) {
+	plain := &countingTool{name: "config"}
+	if isIntrospectionCall(plain, map[string]any{"action": "list"}) {
+		t.Fatal("没声明自省的工具不该因为入参长得像就放行")
+	}
+	listOnly := &probeTool{countingTool: countingTool{name: "extension_access"}, onlyList: true}
+	if isIntrospectionCall(listOnly, map[string]any{"action": "bot_tier", "tier": "members"}) {
 		t.Fatal("改档位是真动作，不该按只读自省放行")
 	}
-	if !isIntrospectionCall("extension_access", map[string]any{"action": "list"}) {
+	if !isIntrospectionCall(listOnly, map[string]any{"action": "list"}) {
 		t.Fatal("action=list 是只读的，应当放行")
-	}
-	if isIntrospectionCall("config", map[string]any{"action": "list"}) {
-		t.Fatal("名单之外的工具不该因为入参长得像就放行")
 	}
 }
 
 // 不占预算不等于无限量：反复打听必须被自己的配额拦住。
 func TestIntrospectionQuotaStopsLoop(t *testing.T) {
 	client := &askThenWorkClient{budget: 0}
-	probe := &countingTool{name: "capabilities"}
+	probe := &probeTool{countingTool: countingTool{name: "capabilities"}}
 	runner, err := NewRunner(client, Config{MaxSteps: 2, CoreTools: []string{"capabilities", "identity_check", "extension_access"}}, NewToolRegistry(
 		probe,
-		&countingTool{name: "identity_check"},
-		&countingTool{name: "extension_access"},
+		&probeTool{countingTool: countingTool{name: "identity_check"}},
+		&probeTool{countingTool: countingTool{name: "extension_access"}, onlyList: true},
 	))
 	if err != nil {
 		t.Fatal(err)

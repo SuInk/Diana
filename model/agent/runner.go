@@ -53,28 +53,14 @@ const (
 	//
 	// 共用一个配额而不是各给各的：「反复打听」这类空转只需要一条闸，也不会因为以后工具
 	// 变多就把总量悄悄放大。
-	maxIntrospectionCallsPerAgentRun = 4
+	maxIntrospectionCallsPerAgentRun = 6
 )
 
-// introspectionToolNames 是只读自省工具。加进来的前提是：只读 Diana 自己的状态、不改
-// 任何东西、也不对外部世界产生副作用。会写的工具即使便宜也不能进——那是干活。
-var introspectionToolNames = map[string]bool{
-	"list_capabilities": true,
-	"capabilities":      true,
-	"identity_check":    true,
-}
-
-// isIntrospectionCall 判断这次调用是不是纯打听。extension_access 只有 action=list 那一路
-// 只读，改档位和名单都是真动作，所以按入参分开看，不能整个工具放行。
-func isIntrospectionCall(tool string, input map[string]any) bool {
-	if introspectionToolNames[tool] {
-		return true
-	}
-	if tool != "extension_access" {
-		return false
-	}
-	action, _ := input["action"].(string)
-	return strings.TrimSpace(action) == "list"
+// isIntrospectionCall 问工具自己这次调用算不算打听。判断放在工具那一侧：runner 认不得
+// 后面还会加的工具，写死一张名单只会漏，而每个工具最清楚自己改不改东西。
+func isIntrospectionCall(tool Tool, input map[string]any) bool {
+	probe, ok := tool.(IntrospectionTool)
+	return ok && probe.Introspection(input)
 }
 
 // internalProtocolTermPattern 是证据账本协议里的固定字段名和术语。它们是代码定义的
@@ -555,7 +541,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			webSearchCalls++
 		}
-		if isIntrospectionCall(action.Tool, action.Input) {
+		if isIntrospectionCall(tool, action.Input) {
 			// 只读自省不占 MaxSteps；自己的配额兜住「反复打听」的空转。
 			if introspectionCalls >= maxIntrospectionCallsPerAgentRun {
 				protocolRepairs++

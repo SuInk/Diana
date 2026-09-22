@@ -142,6 +142,9 @@ func (t *dianaCapabilitiesTool) Name() string {
 	return "capabilities"
 }
 
+// 从本地能力知识库检索，问的是「我会什么」，不改任何东西。
+func (t *dianaCapabilitiesTool) Introspection(map[string]any) bool { return true }
+
 func (t *dianaCapabilitiesTool) Description() string {
 	return `从 Diana 自身能力知识库检索相关能力、工具、权限门槛和实时插件状态。用户问「你会什么」「能不能处理某事」「哪个插件负责某功能」或质疑机器人能力时必须先调用，不要凭提示词记忆猜测。`
 }
