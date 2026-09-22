@@ -5,9 +5,11 @@ package assistant
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,4 +146,93 @@ func TestReverseKeepaliveAcceptsHeartbeatInsteadOfPong(t *testing.T) {
 	if !server.Status().Connected {
 		t.Fatalf("还在推心跳的连接被误杀了：%q", server.Status().LastError)
 	}
+}
+
+// 上面那条用「客户端不回 pong」模拟死连接，和线上真实情况还差一层：真断的时候整条
+// socket 被吞掉，我们写出去的 ping 也石沉大海，内核缓冲区收得下就连写错误都不报。
+// 这条在中间放一个代理，连上之后两个方向都只收不转、socket 也不关，复刻容器被 kill
+// 或 NAT 表项过期之后的样子。
+func TestReverseKeepaliveSurvivesBlackholedConnection(t *testing.T) {
+	shrinkOneBotKeepalive(t, 150*time.Millisecond, 30*time.Millisecond)
+	server, endpoint := startReverseTestServer(t)
+
+	var blackhole atomic.Bool
+	proxyEndpoint := startBlackholeProxy(t, endpoint, &blackhole)
+
+	conn := dialReverse(t, proxyEndpoint)
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	if !waitUntil(t, time.Second, func() bool { return server.Status().Connected }) {
+		t.Fatal("连接没有登记上")
+	}
+
+	// 从这一刻起两边都还以为连着，实际谁也收不到谁的。
+	blackhole.Store(true)
+
+	if !waitUntil(t, 3*time.Second, func() bool { return !server.Status().Connected }) {
+		t.Fatal("黑洞连接没有被判死，连接位仍然被占着")
+	}
+	if !waitUntil(t, time.Second, func() bool {
+		return server.Status().LastConnectionEvent == "disconnected"
+	}) {
+		t.Fatalf("状态没有回到断开：%+v", server.Status())
+	}
+
+	// 位子交出来了，接入端重连要能接上——线上卡住的就是这一步。
+	dialReverse(t, endpoint)
+	if !waitUntil(t, time.Second, func() bool { return server.Status().Connected }) {
+		t.Fatal("重连没有被接受，连接位没有真正释放")
+	}
+}
+
+// startBlackholeProxy 转发到 backend，blackhole 置位后两个方向都只读不写，
+// 连接保持打开——正是硬断之后 TCP 迟迟不来 FIN 的那种状态。
+func startBlackholeProxy(t *testing.T, backend string, blackhole *atomic.Bool) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听失败：%v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	target := strings.TrimPrefix(backend, "ws://")
+	if index := strings.Index(target, "/"); index >= 0 {
+		target = target[:index]
+	}
+	pipe := func(dst net.Conn, src net.Conn) {
+		buffer := make([]byte, 4096)
+		for {
+			n, err := src.Read(buffer)
+			if n > 0 && !blackhole.Load() {
+				if _, err := dst.Write(buffer[:n]); err != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			upstream, err := net.Dial("tcp", target)
+			if err != nil {
+				_ = client.Close()
+				return
+			}
+			t.Cleanup(func() { _ = client.Close(); _ = upstream.Close() })
+			go pipe(upstream, client)
+			go pipe(client, upstream)
+		}
+	}()
+	return "ws://" + listener.Addr().String() + "/onebot/v11/ws"
 }
