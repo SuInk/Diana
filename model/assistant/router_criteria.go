@@ -10,7 +10,10 @@ import "strings"
 // 这里不是第二份评分提示词，只是几句「本群的称呼、黑话和禁区」。放宽到账号安全
 // 规则那种 8000 字的量级，用户就会把整套判断逻辑抄进来，接着就会想改输出格式，
 // 而评分契约不能改——解析失败的兜底是沉默，代价由群里所有人承担。
-const routerCriteriaMaxRunes = 1000
+const routerCriteriaMaxRunes = ProactiveReplyExtraCriteriaMaxRunes
+
+// ProactiveReplyExtraCriteriaMaxRunes 导出同一个上限，群配置的保存校验在 webui 包里。
+const ProactiveReplyExtraCriteriaMaxRunes = 1000
 
 // 补充判据走独立字段，不复用 ProactiveReplyRouterPrompt。
 //

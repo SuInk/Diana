@@ -1306,7 +1306,7 @@
               </div>
               <div class="field wide">
                 <label>接话设置</label>
-                <ParticipationControls :key="form.id" :model-value="form.participation" @update:model-value="setParticipation" />
+                <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
               </div>
               <!-- 正文接管之后这几个控件一律藏起来，不留一排灰掉的空壳：接管模式是用户
                    自己选的，他要的是「正文说了算」，不是被同一件事提醒三遍。归属由人设
