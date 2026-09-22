@@ -305,9 +305,26 @@ func TestCodingWorkspaceRunsOneJobAtATime(t *testing.T) {
 	waitForCondition(t, 10*time.Second, func() bool { return !codingProcessAlive(job.PID) })
 
 	// 取消后工作区要立刻放开，不然一次误派活就把工作区锁到进程退出为止。
-	if _, err := rt.launchCodingJob(context.Background(), event, cfg, ws, "第三件活", ""); err != nil {
+	third, err := rt.launchCodingJob(context.Background(), event, cfg, ws, "第三件活", "")
+	if err != nil {
 		t.Fatalf("取消之后应当能重新派活：%v", err)
 	}
+	// 派出去就得在本用例里收干净。看护 goroutine 活得比测试长：测试一结束
+	// t.TempDir() 被清掉，假 CLI 没了，进程以退出码 2 失败，看护这才去汇报。
+	// 而 useTempCodingWorkspace 用的是 t.Setenv，那时 APP_DB_PATH 已经还原成
+	// main_test.go 的 TestMain 给整包设的那一个，AgentWorkspaceDir() 于是指向
+	// 整包共享的工作区根目录，
+	// 这条失败汇报就被下一个启动的 Runtime 当成「重启接回」的遗留任务捡走，
+	// 用它自己的 channel 发出去——TestPrivateBurstUnderConcurrency 随机多出
+	// 一条发送就是这么来的。
+	if _, err := rt.cancelCodingJob(context.Background(), third.ID); err != nil {
+		t.Fatalf("cancel third: %v", err)
+	}
+	waitForCondition(t, 10*time.Second, func() bool { return !codingProcessAlive(third.PID) })
+	waitForCondition(t, 10*time.Second, func() bool {
+		saved, err := loadCodingJob(third.ID)
+		return err == nil && !saved.FinishedAt.IsZero()
+	})
 }
 
 func TestCancelledCodingJobIsNotReportedTwice(t *testing.T) {
