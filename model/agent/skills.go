@@ -452,6 +452,10 @@ func (t *SkillsReadTool) Name() string {
 	return "read_skill"
 }
 
+// 读本地 SKILL.md。按需加载本来就多花一次往返（先读、再照着做），再扣一格预算就是
+// 双重惩罚——和 tools_load 同一个理由。
+func (t *SkillsReadTool) Introspection(map[string]any) bool { return true }
+
 func (t *SkillsReadTool) Description() string {
 	return `读取某个 skill 的完整 SKILL.md。`
 }

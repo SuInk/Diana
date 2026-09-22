@@ -29,8 +29,9 @@ type ExtensionAdminRequest struct {
 	SourceURL string         `json:"source_url,omitempty"`
 	Replace   bool           `json:"replace,omitempty"`
 	Config    map[string]any `json:"config,omitempty"`
-	// Preset/Transport/Values 只用于 preset_save：按内置模板拼出 Config，
-	// 拼完之后和手填的 save 走同一条路。
+	// Preset/Transport/Values 让 save 和 verify 按内置模板拼出 Config，拼完之后和
+	// 手填的配置走同一条路。Action 目前只有 presets 用：list（默认）/ hide / show。
+	Action    string            `json:"action,omitempty"`
 	Preset    string            `json:"preset,omitempty"`
 	Transport string            `json:"transport,omitempty"`
 	Values    map[string]string `json:"values,omitempty"`
@@ -115,6 +116,17 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if req.Kind != "" && req.Kind != "mcp" {
 			return nil, fmt.Errorf("不支持的扩展类型")
 		}
+		// 藏起来和放回来是同一件事的两个方向，跟着 presets 走：它们改的是这份清单的
+		// 显隐，不是某条服务。已经装上的那条 MCP 要卸还是走 delete。
+		if action := strings.TrimSpace(req.Action); action != "" && action != "list" {
+			if action != "hide" && action != "show" {
+				return nil, fmt.Errorf("presets 只认 list、hide、show")
+			}
+			if _, ok := presetByID(req.Preset); !ok {
+				return nil, fmt.Errorf("预设不存在")
+			}
+			return nil, saveHiddenPreset(m.cfg.WorkDir, req.Preset, action == "hide")
+		}
 		installed := map[string]bool{}
 		for name := range m.mcpConfigs {
 			installed[name] = true
@@ -128,15 +140,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 			items = append(items, map[string]any{"preset": preset, "installed": installed[preset.Name], "hidden": hidden[preset.ID]})
 		}
 		return map[string]any{"items": items}, nil
-	case "preset_hide", "preset_show":
-		if req.Kind != "" && req.Kind != "mcp" {
-			return nil, fmt.Errorf("不支持的扩展类型")
-		}
-		if _, ok := presetByID(req.Preset); !ok {
-			return nil, fmt.Errorf("预设不存在")
-		}
-		// 删的是列表里那一行，服务本身没动：已经装上的那条 MCP 要删还是走 delete。
-		return nil, saveHiddenPreset(m.cfg.WorkDir, req.Preset, req.Operation == "preset_hide")
+
 	case "enabled":
 		if req.ProfileID == "" {
 			return nil, fmt.Errorf("请选择机器人后调整启用状态")
@@ -228,10 +232,11 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 	if req.Kind != "mcp" {
 		return nil, fmt.Errorf("不支持的扩展类型")
 	}
-	// preset_save 和 preset_verify 都先按预设把字段拼成配置；前者接着走普通保存，
-	// 后者拼完只拿去验一次凭据，不落盘。
+	// 带了 preset 就先按预设把字段拼成配置，之后和手填的配置走同一条路：save 落盘、
+	// verify 只验凭据不落盘。预设不再有自己的一套操作名——多一套名字就多一处要记得
+	// 同步的地方，preset_save 当初正是这样漏在「要不要重建底座」的名单外。
 	presetID, presetTransport := "", ""
-	if req.Operation == "preset_save" || req.Operation == "preset_verify" {
+	if strings.TrimSpace(req.Preset) != "" && (req.Operation == "save" || req.Operation == "verify") {
 		// 编辑已经装好的那条时，令牌留空表示沿用旧的。
 		_, installed := existingMCPServer(m, req.Name)
 		config, err := mcpPresetConfig(req.Preset, req.Transport, req.Values, installed)
@@ -242,11 +247,6 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		// 「服务可用」不在预设的字段表里，但那张表上有这个开关，原样带过去。
 		if enabled, ok := req.Config["enabled"]; ok {
 			config["enabled"] = enabled
-		}
-		// 拼好就当成一次普通保存：写入、校验、凭据保留全部沿用原来那段，
-		// 预设没有自己的写入路径。
-		if req.Operation == "preset_save" {
-			req.Operation = "save"
 		}
 		req.Config = config
 	}
@@ -293,7 +293,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		delete(servers, req.Name)
 		return nil, saveMCPServers(path, servers)
 	}
-	if req.Operation != "save" && req.Operation != "test" && req.Operation != "preset_verify" {
+	if req.Operation != "save" && req.Operation != "test" && req.Operation != "verify" {
 		return nil, fmt.Errorf("不支持的操作")
 	}
 	if req.Operation == "save" && exists && !req.Replace {
@@ -360,7 +360,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 	if err := validateMCPConfigValues(server); err != nil {
 		return nil, err
 	}
-	if req.Operation == "preset_verify" {
+	if req.Operation == "verify" {
 		account, supported, err := presetVerifyConfig(ctx, server)
 		if !supported {
 			return map[string]any{"verified": false, "supported": false, "message": "这种接法的凭据不经 Diana 的手，没法提前验，请用「测试连接」"}, nil
