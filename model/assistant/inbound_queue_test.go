@@ -1582,17 +1582,17 @@ func TestInboundBacklogRoutesHeldProactiveCandidatesTogether(t *testing.T) {
 	}
 }
 
-// 空闲时不该一直空手敲库：4 个 worker 固定 500 毫秒轮询，一分钟 480 次；改成 1 秒起步
-// 加空手退避之后是 40 次（River 那种固定 1 秒是 240 次）。新事件走 inboundWake 立刻
-// 唤醒，所以这笔省下来的开销不换延迟。
+// 空闲时不该一直空手敲库：4 个 worker 固定 500 毫秒轮询，一分钟 480 次；改成 2 秒起步、
+// 空手翻倍封顶 30 秒之后是 20 次（River 那种固定 1 秒是 240 次，GoodJob 固定 10 秒是
+// 24 次）。入队、重试到期、通道上线都会显式唤醒，所以这笔省下来的开销不换延迟。
 func TestInboundIdlePollBacksOff(t *testing.T) {
-	delay := inboundPollInterval
+	delay := inboundWorkerPollInterval
 	seen := []time.Duration{}
 	for i := 0; i < 6; i++ {
 		delay = nextInboundPollDelay(delay)
 		seen = append(seen, delay)
 	}
-	if seen[0] != 2*inboundPollInterval {
+	if seen[0] != 2*inboundWorkerPollInterval {
 		t.Fatalf("第一次空手应当翻倍，实际 %v", seen[0])
 	}
 	for i := 1; i < len(seen); i++ {
@@ -1600,11 +1600,11 @@ func TestInboundIdlePollBacksOff(t *testing.T) {
 			t.Fatalf("退避只能变长：%v -> %v", seen[i-1], seen[i])
 		}
 	}
-	if last := seen[len(seen)-1]; last != inboundIdlePollMax {
-		t.Fatalf("退避应当封顶在 %v，实际 %v", inboundIdlePollMax, last)
+	if last := seen[len(seen)-1]; last != inboundWorkerPollMax {
+		t.Fatalf("退避应当封顶在 %v，实际 %v", inboundWorkerPollMax, last)
 	}
 	// 封顶之后不能再涨：否则一台空闲久了的机器人要好几十秒才兜底轮询一次。
-	if next := nextInboundPollDelay(inboundIdlePollMax); next != inboundIdlePollMax {
+	if next := nextInboundPollDelay(inboundWorkerPollMax); next != inboundWorkerPollMax {
 		t.Fatalf("封顶之后不该继续翻倍，实际 %v", next)
 	}
 }
