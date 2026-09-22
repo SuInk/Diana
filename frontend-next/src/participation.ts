@@ -14,6 +14,10 @@ export interface ParticipationPreferences {
 export const defaultParticipationCooldownSeconds = 30;
 export const defaultParticipationScoreThreshold = 60;
 
+// proactiveCriteriaMaxLength 镜像 model/assistant/router_criteria.go 的
+// ProactiveReplyExtraCriteriaMaxRunes：超出后端直接拒绝保存，输入框先卡住。
+export const proactiveCriteriaMaxLength = 1000;
+
 // participationLevelThresholds 镜像 model/assistant/participation_single_score.go 里 ratingPasses
 // 的门槛表：模型给出的分数 >= 门槛才算这一项达标，off 不参与判断，always 跳过该项门槛。
 // 注意档位和门槛是反的：参与度档位越高，分数门槛越低，所以「极低」最严（0.90）、「极高」最松（0.10）。
