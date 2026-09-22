@@ -1934,11 +1934,24 @@ export interface RollbackResponse {
   result: UpdateResult;
 }
 
+/** 同一条连接上的另一台机器人及其群归属：路由表散在各台自己的配置里，这是那张全貌。 */
+export interface ConnectionPeer {
+  bot_profile_id: string;
+  name?: string;
+  /** 这台机器人本身启不启用。停用的不参与回复。 */
+  enabled: boolean;
+  /** 新群默认工作：相当于这台收所有群，白名单模式才是划分。 */
+  new_group_enabled: boolean;
+  /** 明确开着的群号。新群默认为开时，这份名单之外的群它也照收。 */
+  enabled_groups?: string[];
+}
+
 export interface ConsoleGroupsResponse {
   groups: BotGroupSummary[];
   plugins: PluginState[];
   live_available: boolean;
   warning?: string;
+  connection_peers?: ConnectionPeer[];
 }
 
 export function listBotGroups(refresh = false, profile = ""): Promise<ConsoleGroupsResponse> {
@@ -1960,15 +1973,15 @@ export function saveBotGroupSwitches(payload: {
   new_group_enabled?: boolean;
   min_group_level?: number;
   level_unknown_policy?: "allow" | "deny";
-}): Promise<{ ok: boolean; updated: number }> {
-  return requestJSON<{ ok: boolean; updated: number }>("/api/assistant/groups/switches", {
+}): Promise<{ ok: boolean; updated: number; warning?: string }> {
+  return requestJSON<{ ok: boolean; updated: number; warning?: string }>("/api/assistant/groups/switches", {
     method: "POST",
     body: JSON.stringify(payload)
   });
 }
 
-export function saveBotGroup(config: BotGroupConfig): Promise<{ config: BotGroupConfig }> {
-  return requestJSON<{ config: BotGroupConfig }>("/api/assistant/groups", {
+export function saveBotGroup(config: BotGroupConfig): Promise<{ config: BotGroupConfig; warning?: string }> {
+  return requestJSON<{ config: BotGroupConfig; warning?: string }>("/api/assistant/groups", {
     method: "POST",
     body: JSON.stringify({ config })
   });
