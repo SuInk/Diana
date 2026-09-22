@@ -631,6 +631,14 @@ type BotConfig struct {
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
+	// ModelTokenQuota / ModelCallQuota 是这台机器人的每群额度默认值：滚动 5 小时
+	// 窗口内，单个群能用掉的 token 和调用次数。群配置里填了就以群为准，留空跟随
+	// 这里；两边都是 0 表示不限。
+	//
+	// 按群算而不是按机器人算：一个群刷起来不该把别的群一起饿死。
+	ModelTokenQuota int64 `json:"model_token_quota,omitempty"`
+	ModelCallQuota  int64 `json:"model_call_quota,omitempty"`
+
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
 	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
@@ -836,11 +844,13 @@ type GroupConfig struct {
 	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
 	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
-	// ModelTokenQuota 是这个群在滚动 5 小时窗口里能用掉的 token 上限，0 表示不限。
+	// ModelTokenQuota 是这个群在滚动 5 小时窗口里能用掉的 token 上限。留空跟随
+	// 机器人那一档，两边都没填表示不限。
+	//
 	// 口径和用量统计一致：这个群名下所有模型调用都算，包括判定、路由和工具步，
 	// 不只是最终那句回复。主人不受限——额度用完还能让主人改配置，不然就锁死了。
 	ModelTokenQuota int64 `json:"model_token_quota,omitempty"`
-	// ModelCallQuota 是同一窗口里的模型调用次数上限，0 表示不限。它和 token 上限
+	// ModelCallQuota 是同一窗口里的模型调用次数上限，同样留空跟随机器人。它和 token 上限
 	// 各自独立、先到先得：一个群可以句句短但刷个不停（次数先到），也可以只说几句
 	// 却每句都带图（token 先到），两种超用形态不一样，只卡一种会漏掉另一种。
 	ModelCallQuota           int64 `json:"model_call_quota,omitempty"`

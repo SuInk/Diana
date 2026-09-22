@@ -70,13 +70,24 @@ func (r *Runtime) groupModelQuotaExceeded(ctx context.Context, event MessageEven
 	if groupID == "" {
 		return groupQuotaVerdict{}
 	}
-	groupCfg, ok := r.groupConfigForEvent(event)
-	if !ok || (groupCfg.ModelTokenQuota <= 0 && groupCfg.ModelCallQuota <= 0) {
+	// 群里填了以群为准，留空跟随机器人那一档：和这张表单里其它「留空跟随机器人」
+	// 的设置一个规矩，不必为额度单独记一套。
+	botCfg := r.effectiveConfigForEvent(event)
+	tokenQuota, callQuota := botCfg.ModelTokenQuota, botCfg.ModelCallQuota
+	if groupCfg, ok := r.groupConfigForEvent(event); ok {
+		if groupCfg.ModelTokenQuota > 0 {
+			tokenQuota = groupCfg.ModelTokenQuota
+		}
+		if groupCfg.ModelCallQuota > 0 {
+			callQuota = groupCfg.ModelCallQuota
+		}
+	}
+	if tokenQuota <= 0 && callQuota <= 0 {
 		return groupQuotaVerdict{}
 	}
-	verdict := groupQuotaVerdict{Tokens: groupCfg.ModelTokenQuota, Calls: groupCfg.ModelCallQuota}
+	verdict := groupQuotaVerdict{Tokens: tokenQuota, Calls: callQuota}
 	// 主人不受限：额度用完之后改配置、查用量这些还得靠主人，锁死自己没有道理。
-	if r.effectiveConfigForEvent(event).IsOwnerEvent(event) {
+	if botCfg.IsOwnerEvent(event) {
 		return verdict
 	}
 	reader, ok := r.appLogWriter().(applog.GroupUsageReader)
@@ -99,12 +110,12 @@ func (r *Runtime) groupModelQuotaExceeded(ctx context.Context, event MessageEven
 	}
 	verdict.Usage = reading.usage
 	switch {
-	case groupCfg.ModelTokenQuota > 0 && reading.usage.Tokens >= groupCfg.ModelTokenQuota:
+	case tokenQuota > 0 && reading.usage.Tokens >= tokenQuota:
 		verdict.Exceeded = true
-		verdict.Reason = fmt.Sprintf("token 用量 %d/%d", reading.usage.Tokens, groupCfg.ModelTokenQuota)
-	case groupCfg.ModelCallQuota > 0 && reading.usage.Calls >= groupCfg.ModelCallQuota:
+		verdict.Reason = fmt.Sprintf("token 用量 %d/%d", reading.usage.Tokens, tokenQuota)
+	case callQuota > 0 && reading.usage.Calls >= callQuota:
 		verdict.Exceeded = true
-		verdict.Reason = fmt.Sprintf("调用次数 %d/%d", reading.usage.Calls, groupCfg.ModelCallQuota)
+		verdict.Reason = fmt.Sprintf("调用次数 %d/%d", reading.usage.Calls, callQuota)
 	}
 	return verdict
 }

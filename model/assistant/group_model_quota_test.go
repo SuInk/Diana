@@ -161,3 +161,49 @@ func TestGroupQuotaReportsWhicheverHitsFirst(t *testing.T) {
 		t.Fatalf("token 先到该报 token：%#v", verdict)
 	}
 }
+
+// 群里留空就跟随机器人那一档，和这张表单里其它「留空跟随机器人」的设置一个规矩。
+func TestGroupQuotaFallsBackToBotConfig(t *testing.T) {
+	usage := &stubGroupUsageLog{tokens: 1500}
+	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001", ModelTokenQuota: 1000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(usage)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"20001": {GroupID: "20001", BotProfileID: "qq", Enabled: true},
+	}})
+	event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002"}
+	verdict := runtime.groupModelQuotaExceeded(context.Background(), event)
+	if !verdict.Exceeded || verdict.Tokens != 1000 {
+		t.Fatalf("群里没填该跟随机器人那一档：%#v", verdict)
+	}
+}
+
+// 群里填了以群为准，哪怕比机器人那档宽。
+func TestGroupQuotaOverridesBotConfig(t *testing.T) {
+	usage := &stubGroupUsageLog{tokens: 1500}
+	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001", ModelTokenQuota: 1000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(usage)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"20001": {GroupID: "20001", BotProfileID: "qq", Enabled: true, ModelTokenQuota: 100000},
+	}})
+	event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002"}
+	if verdict := runtime.groupModelQuotaExceeded(context.Background(), event); verdict.Exceeded {
+		t.Fatalf("群里放宽了就该按群的来：%#v", verdict)
+	}
+}
+
+// 两边都没填 = 不限，一次用量都不查。
+func TestGroupQuotaUnsetEverywhereSkipsLookup(t *testing.T) {
+	usage := &stubGroupUsageLog{tokens: 99999999}
+	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetAppLogWriter(usage)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"20001": {GroupID: "20001", BotProfileID: "qq", Enabled: true},
+	}})
+	event := MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002"}
+	if runtime.groupModelQuotaExceeded(context.Background(), event).Exceeded {
+		t.Fatal("两边都没填不该拦")
+	}
+	if usage.calls != 0 {
+		t.Fatalf("两边都没填不该去查用量，实际查了 %d 次", usage.calls)
+	}
+}
