@@ -66,3 +66,22 @@ func TestDiagnosticNoticeSkipsDisabledProfile(t *testing.T) {
 		t.Fatal("停用的机器人不该收到诊断消息")
 	}
 }
+
+// 停用的机器人不该做任何后台活儿。纪念日问候要扫一遍用户表、再让模型写一段话，
+// 发不出去还照样花钱——停用就该是安静的。
+func TestRomanceGreetingSkipsDisabledProfile(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{
+		{ID: "on", Enabled: true, RomanceEnabled: boolPtr(true)},
+		{ID: "off", Enabled: false, RomanceEnabled: boolPtr(true)},
+	}})
+	configs := runtime.romanceEnabledConfigs()
+	for _, cfg := range configs {
+		if cfg.ID == "off" {
+			t.Fatalf("停用的机器人不该参与纪念日问候：%#v", configs)
+		}
+	}
+	if len(configs) != 1 || configs[0].ID != "on" {
+		t.Fatalf("启用的那台该照常参与：%#v", configs)
+	}
+}
