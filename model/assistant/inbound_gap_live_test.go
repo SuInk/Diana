@@ -11,7 +11,7 @@ import (
 func liveSeqEvent(seq string) MessageEvent {
 	return MessageEvent{
 		Kind: EventKindGroup, Platform: PlatformOneBotV11,
-		ProfileID: "qq", GroupID: "20003", UserID: "917568554",
+		ProfileID: "qq", GroupID: "20003", UserID: "30001",
 		MessageID: "m" + seq, MessageSeq: seq, Time: time.Now().Unix(),
 	}
 }
