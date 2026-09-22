@@ -61,6 +61,9 @@ type SQLiteStore struct {
 	retryMu        sync.Mutex
 	// memoryEventJobDelay 覆盖事件记忆任务的攒批窗口，nil 表示沿用默认值。
 	memoryEventJobDelay *time.Duration
+	// walCancel/walDone 控制 WAL 回收巡检，见 wal_maintenance.go。
+	walCancel context.CancelFunc
+	walDone   chan struct{}
 }
 
 // SetMemoryEventJobDelay 覆盖事件记忆任务入队后的等待时间。0 表示入队即可领取，
@@ -123,6 +126,7 @@ PRAGMA foreign_keys = ON;
 		_ = db.Close()
 		return nil, err
 	}
+	store.startWALMaintenance()
 	return store, nil
 }
 
@@ -140,6 +144,7 @@ func (s *SQLiteStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	s.stopWALMaintenance()
 	var readErr error
 	if s.readDB != nil {
 		readErr = s.readDB.Close()
