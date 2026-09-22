@@ -3690,6 +3690,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// Planner output is advisory only. The Agent owns context selection and
 		// tool planning; planner suggestions are retained for observability.
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
+		// 工具选择是建议，这一条不是：路由器判定答案必须落在外部事实上时，
+		// Agent 不检索就不许收口。没有 web_search 时 Runner 会自动忽略这个标记。
+		if agentScope.NeedsEvidence {
+			ctx = withRequireEvidence(ctx)
+		}
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
 	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
@@ -4353,11 +4358,12 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		promptSession := r.groupPromptSession(event)
 		resp, err := agentRunner.Run(ctx, agent.Request{
-			Messages:    messages,
-			TraceID:     traceID,
-			Observer:    r.agentRunObserver(event),
-			LoadedTools: promptSession.loadedTools(),
-			ToolsLoaded: promptSession.rememberTools,
+			Messages:        messages,
+			TraceID:         traceID,
+			Observer:        r.agentRunObserver(event),
+			LoadedTools:     promptSession.loadedTools(),
+			ToolsLoaded:     promptSession.rememberTools,
+			RequireEvidence: requireEvidenceFromContext(ctx),
 		})
 		if err != nil {
 			return "", err
@@ -4725,42 +4731,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 	if err != nil {
 		return visualIntentDecision{}, agentReplyScope{}, false
 	}
-	systemPrompt := strings.TrimSpace(`你是聊天机器人 Diana 的功能路由器。你的任务只是在语义层面判断当前消息是否需要调用内置图片功能。
-
-必须遵守：
-1. 只根据消息含义判断，不要套用固定关键词、前缀或正则，但判断要非常保守。
-2. 只输出 JSON，不要输出解释、Markdown 或额外文本。
-3. action 只能是 "none"、"generate_image"、"edit_image"。
-4. 只有用户明确要求“生成/画/绘制/出图/做成图片/做头像图片/改图/修图/编辑图片/重绘图片”等实际图片产出时，才调用图片功能。
-5. 用户只是要创意方案、头像建议、文案、审美评价、看图分析、解释图片内容、聊天吐槽、链接解析、搜索、配置、提醒、记忆时，都必须输出 action="none"。
-6. 只有请求不需要保留任何已有图片或真实对象身份时，才使用 action="generate_image"。
-7. 用户想修改、重绘、调色、替换、加工已有图片，或者需要以已有图片中的真实对象身份为基础创作时，使用 action="edit_image"。已有图片可能在当前消息、引用消息、最近聊天图片、群头像、成员头像或 available_identity_images 里。
-8. available_identity_images 表示当前请求可直接使用的真实身份参考图。用户要求描绘、风格化、装扮或变换某个被 @ 的成员时，只要这里有对应成员，就必须使用 action="edit_image"；即使用户把这件事表述为“生成、画、做一张照片”，也不能当成无参考图的纯文字生图。
-9. “头像方案/头像风格/头像建议/帮我想个头像”不是生图，除非用户明确要求生成或画出头像图片。
-10. prompt 只在 action 不是 none 时填写，保留用户要求中的具体画面或编辑意图；action="edit_image" 时补充要求保持参考对象的身份特征，只修改或创作用户明确要求的部分。
-11. recent_messages 按从旧到新排列，用于理解省略了对象或细节的连续对话。当前消息是对机器人上一轮澄清、确认或选项提问的简短回答时，必须继承该待确认操作及其图片上下文；若回答选择或确认了实际图片产出，就按完整请求选择 generate_image 或 edit_image，不能把短回答孤立地降级为闲聊。其他“改一下”“按刚才说的做”等简短要求也应在语义连贯的近期图片讨论中找出具体修改要求并合并；忽略无关聊天，不要臆造要求。
-12. 生成的 prompt 必须自包含并明确列出所有相关修改项。上下文已经给出具体要求时，不得退化为“适当修改和优化”之类没有可执行细节的描述。
-13. edit_image 只能用于从现有参考图里实际可见的像素、区域、人物或对象进行编辑或衍生创作。不要因为当前消息或引用消息带图，就假定用户要的目标画面已经存在于图中。
-14. 如果用户要先识别图片中的文字、编号或线索，再去网页、数据库或其他外部来源查找并发送另一张图片、封面、商品图或页面截图，这是检索/浏览器任务，必须输出 action="none"，由普通 Agent 处理；不能让图片编辑模型凭空补出外部内容。
-15. “裁剪/截取/提取”只有在目标区域确实可见于当前或引用图片时才是 edit_image；若目标只由文字或编号指向、原图中并不存在，则必须输出 action="none"。
-16. 如果图片产出依赖尚未执行的联网搜索、网页核验、外部资料读取或实时事实，必须输出 action="none"，让普通 Agent 先调用搜索/浏览器工具，再把确认后的结果交给 image；不得在搜索前直接生成，也不得臆造搜索结果。`)
-	userPrompt := "请判断这条当前消息是否要调用图片功能。消息上下文 JSON：\n"
-	outputFormat := `{"action":"none","prompt":""}`
-	if registry != nil {
-		systemPrompt += strings.TrimSpace(`
-
-同时为普通回复选择本轮上下文和工具：
-17. available_tools 是当前用户已获授权的紧凑工具目录。tools 只能填写其中真实存在的名称；普通聊天和无需外部操作的问题必须返回空数组。
-18. 只选择完成当前请求实际可能用到的工具。多步任务要一次选全可能需要的后续工具，例如先搜索再读网页或出图；拿不准某个工具是否会用到时保留它，确定无关才删除。
-19. context_message_ids 只能填写 recent_messages 中真实存在的 message_id。保留所有可能帮助理解当前指代、话题延续、约束或用户意图的消息；只删除确定无关的旁支聊天，不要为了追求数量少而丢上下文。
-20. 当前消息的直接引用和语义指向会由运行时强制保留，不必依靠关键词。older_summary_available=true 且当前问题确实延续更早话题时，keep_older_summary=true；独立新问题则为 false。
-21. 工具参数应保持最小且符合工具说明。搜索只需要工具根据当前信息缺口整理出的 query，不要把聊天记录、工具目录或系统说明塞进搜索词。
-22. available_tools 中存在 web_search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
-23. tools、context_message_ids 和 keep_older_summary 三个字段必须始终给出，即使它们为空或为 false。`)
-		userPrompt = "请判断图片动作，并选择本轮真正可能有用的上下文和工具。消息上下文 JSON：\n"
-		outputFormat = `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`
-	}
-	systemPrompt += "\n\n输出格式：\n" + outputFormat
+	systemPrompt, userPrompt := replyIntentPrompts(registry)
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
@@ -4895,6 +4866,8 @@ func parseReplyIntentDecision(raw string, registry *agent.ToolRegistry) (visualI
 		Tools             *[]string `json:"tools"`
 		ContextMessageIDs *[]string `json:"context_message_ids"`
 		KeepOlderSummary  *bool     `json:"keep_older_summary"`
+		// 可选：老模型漏填时按 false 处理，不影响其余路由结果。
+		NeedsEvidence *bool `json:"needs_evidence"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &payload); err != nil {
 		return visualIntentDecision{}, agentReplyScope{}, false
@@ -4920,6 +4893,7 @@ func parseReplyIntentDecision(raw string, registry *agent.ToolRegistry) (visualI
 			}
 		}
 		scope.ContextMessageIDs = dedupeStrings(*payload.ContextMessageIDs)
+		scope.NeedsEvidence = payload.NeedsEvidence != nil && *payload.NeedsEvidence
 	}
 	return decision, scope, true
 }
@@ -8505,4 +8479,48 @@ func isClauseBreak(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// replyIntentPrompts 拼路由器的系统提示词和用户提示词。抽出来是为了能直接断言
+// 里面的规则——这套提示词同时决定图片动作、上下文裁剪、工具选择和是否强制检索，
+// 改坏一条没有编译错误，只会在线上悄悄变笨。
+func replyIntentPrompts(registry *agent.ToolRegistry) (systemPrompt, userPrompt string) {
+	systemPrompt = strings.TrimSpace(`你是聊天机器人 Diana 的功能路由器。你的任务只是在语义层面判断当前消息是否需要调用内置图片功能。
+
+必须遵守：
+1. 只根据消息含义判断，不要套用固定关键词、前缀或正则，但判断要非常保守。
+2. 只输出 JSON，不要输出解释、Markdown 或额外文本。
+3. action 只能是 "none"、"generate_image"、"edit_image"。
+4. 只有用户明确要求“生成/画/绘制/出图/做成图片/做头像图片/改图/修图/编辑图片/重绘图片”等实际图片产出时，才调用图片功能。
+5. 用户只是要创意方案、头像建议、文案、审美评价、看图分析、解释图片内容、聊天吐槽、链接解析、搜索、配置、提醒、记忆时，都必须输出 action="none"。
+6. 只有请求不需要保留任何已有图片或真实对象身份时，才使用 action="generate_image"。
+7. 用户想修改、重绘、调色、替换、加工已有图片，或者需要以已有图片中的真实对象身份为基础创作时，使用 action="edit_image"。已有图片可能在当前消息、引用消息、最近聊天图片、群头像、成员头像或 available_identity_images 里。
+8. available_identity_images 表示当前请求可直接使用的真实身份参考图。用户要求描绘、风格化、装扮或变换某个被 @ 的成员时，只要这里有对应成员，就必须使用 action="edit_image"；即使用户把这件事表述为“生成、画、做一张照片”，也不能当成无参考图的纯文字生图。
+9. “头像方案/头像风格/头像建议/帮我想个头像”不是生图，除非用户明确要求生成或画出头像图片。
+10. prompt 只在 action 不是 none 时填写，保留用户要求中的具体画面或编辑意图；action="edit_image" 时补充要求保持参考对象的身份特征，只修改或创作用户明确要求的部分。
+11. recent_messages 按从旧到新排列，用于理解省略了对象或细节的连续对话。当前消息是对机器人上一轮澄清、确认或选项提问的简短回答时，必须继承该待确认操作及其图片上下文；若回答选择或确认了实际图片产出，就按完整请求选择 generate_image 或 edit_image，不能把短回答孤立地降级为闲聊。其他“改一下”“按刚才说的做”等简短要求也应在语义连贯的近期图片讨论中找出具体修改要求并合并；忽略无关聊天，不要臆造要求。
+12. 生成的 prompt 必须自包含并明确列出所有相关修改项。上下文已经给出具体要求时，不得退化为“适当修改和优化”之类没有可执行细节的描述。
+13. edit_image 只能用于从现有参考图里实际可见的像素、区域、人物或对象进行编辑或衍生创作。不要因为当前消息或引用消息带图，就假定用户要的目标画面已经存在于图中。
+14. 如果用户要先识别图片中的文字、编号或线索，再去网页、数据库或其他外部来源查找并发送另一张图片、封面、商品图或页面截图，这是检索/浏览器任务，必须输出 action="none"，由普通 Agent 处理；不能让图片编辑模型凭空补出外部内容。
+15. “裁剪/截取/提取”只有在目标区域确实可见于当前或引用图片时才是 edit_image；若目标只由文字或编号指向、原图中并不存在，则必须输出 action="none"。
+16. 如果图片产出依赖尚未执行的联网搜索、网页核验、外部资料读取或实时事实，必须输出 action="none"，让普通 Agent 先调用搜索/浏览器工具，再把确认后的结果交给 image；不得在搜索前直接生成，也不得臆造搜索结果。`)
+	userPrompt = "请判断这条当前消息是否要调用图片功能。消息上下文 JSON：\n"
+	outputFormat := `{"action":"none","prompt":""}`
+	if registry != nil {
+		systemPrompt += strings.TrimSpace(`
+
+同时为普通回复选择本轮上下文和工具：
+17. available_tools 是当前用户已获授权的紧凑工具目录。tools 只能填写其中真实存在的名称；普通聊天和无需外部操作的问题必须返回空数组。
+18. 只选择完成当前请求实际可能用到的工具。多步任务要一次选全可能需要的后续工具，例如先搜索再读网页或出图；拿不准某个工具是否会用到时保留它，确定无关才删除。
+19. context_message_ids 只能填写 recent_messages 中真实存在的 message_id。保留所有可能帮助理解当前指代、话题延续、约束或用户意图的消息；只删除确定无关的旁支聊天，不要为了追求数量少而丢上下文。
+20. 当前消息的直接引用和语义指向会由运行时强制保留，不必依靠关键词。older_summary_available=true 且当前问题确实延续更早话题时，keep_older_summary=true；独立新问题则为 false。
+21. 工具参数应保持最小且符合工具说明。搜索只需要工具根据当前信息缺口整理出的 query，不要把聊天记录、工具目录或系统说明塞进搜索词。
+22. available_tools 中存在 web_search 时，凡回答依赖外部事实、信息可能随时间变化、模型不能可靠确认，或适合参考公开评价，都应保留该工具。具体商品、品牌、餐饮、作品的口碑、味道、规格、价格、现状和“好不好/怎么样/值得买吗”等问题属于搜索场景；不要把它们误判成无需工具的主观闲聊。纯创作、寒暄，或完全可由当前消息和已保留上下文回答的问题才不需要搜索。
+23. tools、context_message_ids、keep_older_summary 和 needs_evidence 四个字段必须始终给出，即使它们为空或为 false。
+24. needs_evidence 表示这一轮的答案必须建立在本轮检索到的外部事实之上，运行时会据此要求先检索再收口。只有当回答的核心就是外部事实、而这些事实不在当前消息和已保留上下文里时才填 true：某个产品、项目或服务此刻是否支持某功能、有没有现成实现或插件、版本与价格现状、新闻、规则、人物或机构近况、公开评价等。讲原理、讲概念、写代码、创作、闲聊，以及答案本来就写在上下文里的问题一律 false。聊天记录里别人提过某件事不等于已经核实，不能据此填 false。它比 tools 是否保留 web_search 严格得多：tools 拿不准就保留，needs_evidence 拿不准就填 false。`)
+		userPrompt = "请判断图片动作，并选择本轮真正可能有用的上下文和工具。消息上下文 JSON：\n"
+		outputFormat = `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false,"needs_evidence":false}`
+	}
+	systemPrompt += "\n\n输出格式：\n" + outputFormat
+	return systemPrompt, userPrompt
 }
