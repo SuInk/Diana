@@ -111,7 +111,9 @@ func giteaMCPPreset() MCPPreset {
 				values: func(cfg mcpServerConfig) map[string]string {
 					values := map[string]string{"host": cfg.Env["GITEA_HOST"]}
 					// 自带的那份是留空的意思，回填成绝对路径会让人以为自己填过。
-					if command := strings.TrimSpace(cfg.Command); command != "" && command != bundledGiteaMCPCommand() {
+					// 裸名字同样算自带：没带这份二进制的旧版本就是这么存下来的。
+					if command := strings.TrimSpace(cfg.Command); command != "" &&
+						command != bundledGiteaMCPCommand() && command != giteaMCPBinaryName() {
 						values["command"] = command
 					}
 					return values
@@ -394,10 +396,7 @@ func presetVerifyConfig(ctx context.Context, cfg mcpServerConfig) (string, bool,
 // 旁边，不在 PATH 里，所以必须给绝对路径。找不到就退回裸名字交给 PATH：宿主机
 // 自己装过的照样能用，真的两头都没有时报的是「找不到命令」，比在这里提前失败好查。
 func bundledGiteaMCPCommand() string {
-	name := "gitea-mcp"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
+	name := giteaMCPBinaryName()
 	executable, err := os.Executable()
 	if err != nil {
 		return name
@@ -409,13 +408,29 @@ func bundledGiteaMCPCommand() string {
 	return bundledCommandIn(filepath.Dir(executable), name)
 }
 
+// giteaMCPBinaryName 是这份二进制在各平台上的文件名。
+func giteaMCPBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "gitea-mcp.exe"
+	}
+	return "gitea-mcp"
+}
+
 // bundledCommandIn 在指定目录里找这个命令，没有就退回裸名字交给 PATH。
 func bundledCommandIn(dir, name string) string {
-	path := filepath.Join(dir, name)
-	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+	if path, ok := bundledCommandPath(dir, name); ok {
 		return path
 	}
 	return name
+}
+
+// bundledCommandPath 判断这个目录里到底有没有这份二进制。
+func bundledCommandPath(dir, name string) (string, bool) {
+	path := filepath.Join(dir, name)
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		return path, true
+	}
+	return "", false
 }
 
 // MCPPresetList 返回内置清单，供界面渲染。

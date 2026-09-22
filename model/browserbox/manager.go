@@ -153,6 +153,13 @@ func (m *Manager) SetSettings(ctx context.Context, next Settings) (Settings, err
 		return Settings{}, errors.New("内置浏览器未初始化")
 	}
 	next = next.WithDefaults()
+	// 起不来的有头配置在落盘前就挡掉：存下去的话，正在跑的无头会被这次重启杀掉，
+	// 换来一个永远起不来的开关，用户下次打开界面看到的是「开着但没在跑」。
+	if next.Enabled {
+		if err := checkHeadful(next); err != nil {
+			return m.Settings(), err
+		}
+	}
 	m.mu.Lock()
 	previous := m.settings
 	m.settings = next
@@ -255,6 +262,10 @@ func (m *Manager) Start(ctx context.Context) error {
 	generation := m.generation
 	m.mu.Unlock()
 
+	if err := checkHeadful(settings); err != nil {
+		return err
+	}
+
 	executable, err := agent.FindBrowserExecutable(settings.Executable)
 	if err != nil {
 		return fmt.Errorf("找不到 Chrome/Chromium：%w", err)
@@ -284,11 +295,13 @@ func (m *Manager) Start(ctx context.Context) error {
 		defer recoverGoroutinePanic("scanEndpoint")
 		scanDevToolsEndpoint(io.TeeReader(stderr, diagnostics), found)
 	}()
+	// exited 由 waitProcess 在 cmd.Wait() 一返回就关掉，而不是等它做完退避重启：
+	// 关在整个函数末尾的话，下面那个「进程自己退了就别再等满超时」的分支永远轮不到，
+	// 每一次起不来都要白等 30 秒。
 	exited := make(chan struct{})
 	go func() {
 		defer recoverGoroutinePanic("waitProcess")
-		defer close(exited)
-		m.waitProcess(cmd, generation)
+		m.waitProcess(cmd, generation, diagnostics, exited)
 	}()
 
 	select {
@@ -339,8 +352,9 @@ func (m *Manager) Stop() {
 
 // waitProcess 等进程退出。开关还开着、又不是我们主动停的，就按退避重启：
 // 浏览器崩掉之后静悄悄地没了，比崩掉本身更难排查。
-func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64) {
+func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64, diagnostics *diagnosticTail, exited chan<- struct{}) {
 	err := cmd.Wait()
+	close(exited)
 	m.mu.Lock()
 	current := m.generation == generation
 	stopping := m.stopping
@@ -349,7 +363,9 @@ func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64) {
 		m.cmd = nil
 		m.cdpURL = ""
 		if !stopping && err != nil {
-			m.lastError = "浏览器进程退出：" + err.Error()
+			// 只写 exit status 1 等于没说：真正的原因（缺显示器、profile 被占用、
+			// 缺依赖）在进程自己打印的那几行里，状态里不带上就只能去翻后台日志。
+			m.lastError = exitErrorMessage(err, diagnostics)
 		}
 	}
 	m.mu.Unlock()
@@ -358,15 +374,30 @@ func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64) {
 	}
 	m.notify()
 	time.Sleep(restartBackoff)
+	// 退避期间配置可能已经改过，新的进程也可能已经起来了。generation 变了就说明
+	// 这一条重启链已经被接替，继续下去只会把新状态的错误信息覆盖成旧的那条。
 	m.mu.RLock()
+	stale := m.generation != generation
 	stillEnabled := m.settings.Enabled && m.cmd == nil
 	m.mu.RUnlock()
-	if !stillEnabled {
+	if stale || !stillEnabled {
 		return
 	}
 	if err := m.Start(context.Background()); err != nil {
 		m.setLastError(err)
 	}
+}
+
+// exitErrorMessage 把退出码和进程最后的输出拼成一句能照着查的话。
+func exitErrorMessage(err error, diagnostics *diagnosticTail) string {
+	message := "浏览器进程退出：" + err.Error()
+	if diagnostics == nil {
+		return message
+	}
+	if tail := diagnostics.String(); tail != "" {
+		message += "。最后的输出：" + tail
+	}
+	return message
 }
 
 func (m *Manager) setLastError(err error) {

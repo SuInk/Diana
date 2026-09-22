@@ -5,6 +5,8 @@ package browserbox
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -97,5 +99,45 @@ func TestDebugHTTPBase(t *testing.T) {
 	}
 	if _, err := debugHTTPBase("nonsense"); err == nil {
 		t.Fatal("看不懂的地址应该报错")
+	}
+}
+
+// 没有显示器时打开有头，必须在落盘前就被挡下来：存下去等于把正在跑的无头换成
+// 一个永远起不来的开关。
+func TestSetSettingsRejectsHeadfulWithoutDisplay(t *testing.T) {
+	if displayAvailable() {
+		t.Skip("这台机器有显示器，挡不住也是对的")
+	}
+	store := &memoryStore{}
+	manager := New(context.Background(), store, t.TempDir())
+	if _, err := manager.SetSettings(context.Background(), Settings{Enabled: true, Headful: true}); !errors.Is(err, ErrNoDisplay) {
+		t.Fatalf("应报缺显示器，实际 %v", err)
+	}
+	if manager.Settings().Headful {
+		t.Fatal("被拒绝的配置不该落到内存里")
+	}
+	if store.ok {
+		t.Fatal("被拒绝的配置不该落盘")
+	}
+}
+
+// 关着的时候不碰进程，有头配置也就没必要拦——留给用户在没开的状态下先填好。
+func TestSetSettingsAllowsHeadfulWhileDisabled(t *testing.T) {
+	manager := New(context.Background(), &memoryStore{}, t.TempDir())
+	if _, err := manager.SetSettings(context.Background(), Settings{Headful: true}); err != nil {
+		t.Fatalf("没启用时不该因为有头报错：%v", err)
+	}
+}
+
+// 进程退出的理由要带上它自己打印的那几行，只写 exit status 1 等于没说。
+func TestExitErrorMessageKeepsDiagnostics(t *testing.T) {
+	tail := &diagnosticTail{limit: 2048}
+	_, _ = tail.Write([]byte("Missing X server or $DISPLAY\n"))
+	message := exitErrorMessage(errors.New("exit status 1"), tail)
+	if !strings.Contains(message, "exit status 1") || !strings.Contains(message, "Missing X server") {
+		t.Fatalf("退出原因丢了：%s", message)
+	}
+	if got := exitErrorMessage(errors.New("exit status 1"), nil); !strings.Contains(got, "exit status 1") {
+		t.Fatalf("没有诊断输出时也要给出退出码：%s", got)
 	}
 }

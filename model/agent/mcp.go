@@ -388,7 +388,7 @@ func connectMCPSession(ctx context.Context, name string, cfg mcpServerConfig, wo
 		transport mcpsdk.Transport
 		stderr    *lockedBuffer
 	)
-	if command := strings.TrimSpace(cfg.Command); command != "" {
+	if command := resolveLocalMCPCommand(cfg.Command); command != "" {
 		cmd := exec.Command(command, cfg.Args...)
 		if cwd := strings.TrimSpace(cfg.CWD); cwd != "" {
 			if !filepath.IsAbs(cwd) {
