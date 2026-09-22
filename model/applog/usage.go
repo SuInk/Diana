@@ -20,3 +20,9 @@ type UsageSummary struct {
 type UsageReader interface {
 	LLMUsageSince(context.Context, time.Time, time.Time) (UsageSummary, error)
 }
+
+// GroupUsageReader 是可选能力：按群统计窗口内的 token 用量，供按群额度使用。
+// 存储没实现它时额度功能自动失效（不限额），而不是把所有群都当成超额。
+type GroupUsageReader interface {
+	GroupLLMTokensSince(ctx context.Context, profileID, groupID string, since, until time.Time) (int64, error)
+}

@@ -291,6 +291,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", replyBlockedDecisionReason, false
 	case "ignored_policy":
 		return "not_replied", "消息未通过当前用户、群聊或回复权限规则", false
+	case "ignored_model_quota":
+		return "not_replied", "本群的模型额度在当前窗口内已用完，到点自动恢复；期间消息照常进历史和长期记忆", false
 	case "superseded_proactive":
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
 	case "dropped_outbound_delivery":
@@ -450,11 +452,13 @@ type Runtime struct {
 	inboundWake           chan struct{}
 	inboundManualBackfill chan time.Duration
 	// 重连后 seq 缺口检测的状态，见 inbound_gap.go。
-	inboundSeqProbe     chan groupSeqProbe
-	seqProbeMu          sync.Mutex
-	seqProbeArmed       bool
-	seqProbed           map[string]struct{}
-	seqGapRunning       map[string]struct{}
+	inboundSeqProbe chan groupSeqProbe
+	seqProbeMu      sync.Mutex
+	seqProbeArmed   bool
+	seqProbed       map[string]struct{}
+	seqGapRunning   map[string]struct{}
+	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
+	groupQuota          groupModelQuotaCache
 	seqGapActive        atomic.Int32
 	historyBackfillBusy atomic.Bool
 	historyFetchMu      sync.Mutex
@@ -1594,6 +1598,22 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.record(r.decisionEventRecord(event, text, outcome))
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
+	}
+	// 群额度用完：和「这个群没开放」走同一条路——消息照样进历史、进长期记忆和用户
+	// 画像，但所有要花 token 的环节全部跳过。额度是按窗口滚动的，到点自己恢复，
+	// 不需要任何人来解除。
+	if event.Kind == EventKindGroup && !r.isOwnerReplySuppressionCommand(event, text) {
+		if exceeded, used, quota := r.groupModelQuotaExceeded(ctx, event); exceeded {
+			r.enqueueEventMemory(event, memoryEventText(event))
+			if profile, stored := r.updateUserMemory(event, 0); stored {
+				event.userProfile = profile
+				event.userProfileLoaded = true
+			}
+			event.routingReason = fmt.Sprintf("本群模型额度已用完（近 %s 用掉 %d / %d token），到点自动恢复", groupModelQuotaWindow, used, quota)
+			r.recordGroupModelQuotaExceeded(ctx, event, used, quota)
+			r.record(r.decisionEventRecord(event, text, "ignored_model_quota"))
+			return event, text, false, "ignored_model_quota"
+		}
 	}
 	// 已授权的本地重置无需走语义路由，也不能被积压消息合并吞掉。
 	if r.isOwnerContextResetCommand(event, text) && r.admits(r.effectiveConfigForEvent(event), event) {

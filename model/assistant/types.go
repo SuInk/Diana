@@ -836,10 +836,14 @@ type GroupConfig struct {
 	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
 	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
-	MaxContextTokens          int64            `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget  int64            `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit        int              `json:"recent_context_limit,omitempty"`
-	MaxReplyChars             int              `json:"max_reply_chars,omitempty"`
+	// ModelTokenQuota 是这个群在滚动 5 小时窗口里能用掉的 token 上限，0 表示不限。
+	// 口径和用量统计一致：这个群名下所有模型调用都算，包括判定、路由和工具步，
+	// 不只是最终那句回复。主人不受限——额度用完还能让主人改配置，不然就锁死了。
+	ModelTokenQuota          int64 `json:"model_token_quota,omitempty"`
+	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
+	MaxReplyChars            int   `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。

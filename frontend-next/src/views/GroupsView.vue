@@ -327,6 +327,14 @@
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
         <div class="field">
+          <label for="group-quota">模型额度（5 小时 token 上限）</label>
+          <input id="group-quota" v-model.number="editing.model_token_quota" class="input" inputmode="numeric" placeholder="留空或 0 表示不限" />
+          <span class="hint">
+            这个群名下所有模型调用都算（判定、路由、工具步，不只是最终那句回复）。用满之后这个群暂停一切花 token 的环节，
+            消息照常进历史和长期记忆，窗口滚过去自动恢复，不需要手动解除。主人不受限。
+          </span>
+        </div>
+        <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
           <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
         </div>
