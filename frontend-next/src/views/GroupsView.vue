@@ -268,7 +268,7 @@
             <p>{{ inheritedPersona }}</p>
           </details>
         </div>
-        <div class="field">
+        <div class="field wide">
           <label>接话设置</label>
           <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" inheritable @update:model-value="setGroupParticipation" />
         </div>
@@ -327,18 +327,20 @@
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
         <div class="field">
-          <label for="group-quota">模型额度 · 5 小时 token 上限</label>
-          <input id="group-quota" v-model.number="editing.model_token_quota" class="input" inputmode="numeric" placeholder="留空或 0 表示不限" />
+          <label for="group-quota">模型额度 · 5 小时 token（默认单位 K）</label>
+          <input id="group-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空或 0 表示不限" />
+          <span class="hint">{{ tokenQuotaReadout }}</span>
         </div>
         <div class="field">
-          <label for="group-call-quota">模型额度 · 5 小时调用次数上限</label>
+          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
           <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" inputmode="numeric" placeholder="留空或 0 表示不限" />
-          <span class="hint">
-            两档各自独立、先到先得：句句短但刷个不停的群会先撞次数，只说几句却每句带图的会先撞 token。
-            统计口径是这个群名下所有模型调用（判定、路由、工具步，不只是最终那句回复）。用满之后这个群暂停一切花 token 的环节，
-            消息照常进历史和长期记忆，窗口滚过去自动恢复，不需要手动解除。主人不受限。
-          </span>
+          <span class="hint">按次数计，不带单位。</span>
         </div>
+        <p class="hint field wide">
+          两档各自独立、先到先得：句句短但刷个不停的群先撞次数，只说几句却每句带图的先撞 token。统计的是这个群名下所有模型调用，
+          判定、路由和工具步都算，不只是最终那句回复。用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
+          窗口滚过去自动恢复，不需要手动解除。主人不受限。
+        </p>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
           <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
@@ -665,6 +667,43 @@ async function loadRelations(): Promise<void> {
 }
 
 const editing = ref<BotGroupConfig | null>(null);
+
+// token 额度按 K 记：五位数以上的 token 数一个个数零太费眼，而写额度的人心里
+// 想的本来就是「五十万」。裸数字按 K 算，带单位时以单位为准，换算结果实时写在
+// 提示里——默认单位最怕的就是「我到底填的是五十万还是五亿」，那就把它显出来。
+const tokenQuotaDraft = ref("");
+
+function parseTokenQuota(text: string): number | undefined {
+  const raw = (text ?? "").trim().toLowerCase().replace(/[,，_\s]/g, "");
+  if (raw === "") return undefined;
+  const matched = /^(\d+(?:\.\d+)?)(k|m|w|万|token|t)?$/.exec(raw);
+  if (!matched) return undefined;
+  const amount = Number(matched[1]);
+  if (!Number.isFinite(amount)) return undefined;
+  const unit = matched[2] ?? "k";
+  const scale = unit === "m" ? 1_000_000 : unit === "w" || unit === "万" ? 10_000 : unit === "token" || unit === "t" ? 1 : 1_000;
+  return Math.round(amount * scale);
+}
+
+function formatTokenQuota(value: number | undefined): string {
+  if (!value || value <= 0) return "";
+  if (value % 1000 === 0) return String(value / 1000);
+  return `${value}token`;
+}
+
+const tokenQuotaReadout = computed(() => {
+  const parsed = parseTokenQuota(tokenQuotaDraft.value);
+  if (tokenQuotaDraft.value.trim() === "") return "留空或 0 表示不限。可写 500（＝500K）、1.5m、50万、8000token。";
+  if (parsed === undefined) return "看不懂这个写法，可写 500、500k、1.5m、50万、8000token。";
+  if (parsed <= 0) return "0 表示不限。";
+  return `= ${parsed.toLocaleString("en-US")} token`;
+});
+
+watch(tokenQuotaDraft, (value) => {
+  if (!editing.value) return;
+  const parsed = parseTokenQuota(value);
+  editing.value.model_token_quota = parsed === undefined ? 0 : parsed;
+});
 const editingGroupName = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
@@ -873,6 +912,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
+  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
