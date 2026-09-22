@@ -96,7 +96,7 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	registry.Retain(allowed)
 	// 一次性交给注册表：ApplyExtensionOverrides 是整份替换，分两次调用后一次会
 	// 把前一次的机器人级停用覆盖掉。
-	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupExtensionSwitches(groupAccess)))
+	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupExtensionOverrides(groupAccess)))
 	return registry, nil
 }
 
@@ -154,9 +154,8 @@ func resolveMemberExtensions(candidates []string, in extensionAccessInput) (allo
 		if tier == "" {
 			tier = agent.BotExtensionTier(in.overrides, in.audiences, id)
 		}
-		// 停用是「这里没有这个能力」，白名单也放不出来。看的是本群这一档：机器人
-		// 那个开关只是默认，群里显式设过就以群里为准——某个群单独要用一个默认
-		// 关着的扩展，不该逼着主人先全局打开再一个个群关回去。
+		// 停用是「这里没有这个能力」，白名单也放不出来。本群设过档位时只看本群这一档：
+		// 机器人级停用是默认值，不该再回头否决群里的决定。
 		if tier == agent.ExtensionTierOff {
 			continue
 		}
@@ -206,7 +205,7 @@ func extensionIDsOf(base *agent.ToolRegistry) []string {
 	return ids
 }
 
-// mergeExtensionOverrides 合并机器人级默认和群级说法，群里显式设过的优先。
+// mergeExtensionOverrides 合并机器人级和群级开关，群里设过的优先。
 func mergeExtensionOverrides(botLevel, groupLevel map[string]bool) map[string]bool {
 	if len(groupLevel) == 0 {
 		return botLevel
@@ -221,23 +220,21 @@ func mergeExtensionOverrides(botLevel, groupLevel map[string]bool) map[string]bo
 	return merged
 }
 
-// groupExtensionSwitches 把本群显式设过的档位表达成注册表认识的开关：本群停用的
-// 关掉，本群显式设了别的档位的打开——后者是「机器人默认不开，这个群单独开」，
-// 不打开的话注册表根本不会加载它，档位算得再对也没有工具可用。
-func groupExtensionSwitches(access map[string]GroupExtensionAccess) map[string]bool {
+// groupExtensionOverrides 把本群的档位表达成注册表认识的启停开关。
+//
+// 机器人那一份是默认档，群级设过就直接盖上去——两个方向都盖。以前这里只翻译「停用」，
+// 于是群管理页开了也没用：机器人级停用会在合并后继续赢，用户开完还被告知没启用，群级
+// 那个开关等于摆设。跟随档（空档位）在读取时就被滤掉，不会进到这里。
+func groupExtensionOverrides(access map[string]GroupExtensionAccess) map[string]bool {
 	if len(access) == 0 {
 		return nil
 	}
 	values := map[string]bool{}
 	for id, item := range access {
-		switch item.Tier {
-		case "":
-			// 没设档位就是跟随机器人，这里不表态。
-		case agent.ExtensionTierOff:
-			values[id] = false
-		default:
-			values[id] = true
+		if item.Tier == "" {
+			continue
 		}
+		values[id] = item.Tier != agent.ExtensionTierOff
 	}
 	return values
 }

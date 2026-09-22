@@ -718,3 +718,81 @@ func TestGroupExtensionAccessOverridesBotTier(t *testing.T) {
 		t.Fatal("本群停用没有对所有人生效")
 	}
 }
+
+// 机器人级停用只是默认档，群里单独设过就该以群里那一档为准。
+//
+// 以前群级只能往严了改：群管理页把 MCP 开到群成员，机器人级那个停用仍然赢，用户开完
+// 还被回一句「没启用」，群里那个开关等于摆设。
+func TestGroupExtensionTierOverridesBotLevelDisable(t *testing.T) {
+	dbDir := t.TempDir()
+	t.Setenv("APP_DB_PATH", filepath.Join(dbDir, "diana.db"))
+	workDir := AgentWorkspaceDir()
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// 机器人级：这条 MCP 停用。
+	if err := os.WriteFile(filepath.Join(workDir, ".extension-overrides.json"), []byte(`{"bot-a":{"mcp:probe":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultBotConfig()
+	cfg.ID = "bot-a"
+	cfg.OwnerID = "owner"
+	cfg.AgentSkillRoots = []string{filepath.Join(dbDir, "skills")}
+	cfg.AgentMCPConfigPath = filepath.Join(dbDir, "missing-mcp.json")
+	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "member", ProfileID: "bot-a"}
+
+	baseCfg := runtime.agentRegistryConfig(cfg.WithDefaults(), event, true)
+	_, key, err := agentRegistryCacheKey(baseCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := agent.NewToolRegistry(&scopeTestTool{name: "mcp__probe__ping"})
+	base.SetExtensionCatalog(stubExtensionCatalog{states: []agent.ExtensionState{{
+		Kind: agent.ExtensionKindMCP, ID: "mcp:probe", Name: "probe", Installed: true, Enabled: true,
+		Tools: []string{"mcp__probe__ping"},
+	}}})
+	runtime.agentRegistryCache = map[string]*agent.ToolRegistry{key: base}
+
+	groupAccess := func(access map[string]GroupExtensionAccess) {
+		groupCfg := DefaultGroupConfig("g1", cfg.WithDefaults())
+		groupCfg.BotProfileID = "bot-a"
+		groupCfg.ExtensionAccess = access
+		runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{"g1": groupCfg}})
+	}
+	visible := func(e MessageEvent, policy RelationshipPolicy) bool {
+		registry, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), e, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer registry.Close()
+		_, ok := registry.Get("mcp__probe__ping")
+		return ok
+	}
+	member := RelationshipPolicy{Score: 60}
+	owner := RelationshipPolicy{Owner: true}
+
+	// 本群没设过：跟随机器人，停用照旧。
+	groupAccess(nil)
+	if visible(event, owner) || visible(event, member) {
+		t.Fatal("机器人级停用在没有群级覆盖时失效了")
+	}
+	// 本群开到群成员：机器人级停用只是默认档，群里这一档说了算。
+	groupAccess(map[string]GroupExtensionAccess{"mcp:probe": {Tier: "members"}})
+	if !visible(event, member) {
+		t.Fatal("群级开启没有盖过机器人级停用")
+	}
+	// 本群只给主人：主人能用，群成员不能。
+	groupAccess(map[string]GroupExtensionAccess{"mcp:probe": {Tier: "owner"}})
+	if !visible(event, owner) {
+		t.Fatal("群级仅主人档没有把停用的扩展放出来")
+	}
+	if visible(event, member) {
+		t.Fatal("群成员越过了仅主人档")
+	}
+	// 本群停用：两边都用不了。
+	groupAccess(map[string]GroupExtensionAccess{"mcp:probe": {Tier: "off"}})
+	if visible(event, owner) || visible(event, member) {
+		t.Fatal("群级停用没有生效")
+	}
+}
