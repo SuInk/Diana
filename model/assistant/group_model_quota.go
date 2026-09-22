@@ -59,6 +59,25 @@ type groupQuotaVerdict struct {
 	Calls    int64
 }
 
+// GroupModelQuotaWindow 是额度的统计窗口，控制台画进度条时要用同一个口径。
+func GroupModelQuotaWindow() time.Duration { return groupModelQuotaWindow }
+
+// EffectiveGroupModelQuota 算出一个群实际生效的两档额度：群里填了以群为准，
+// 留空或 0 跟随机器人，两边都没填返回 0 表示不限。
+//
+// 运行时判定和控制台展示都走这里——展示出来的上限要是和真正拦人的那个不一样，
+// 进度条就成了误导。
+func EffectiveGroupModelQuota(bot BotConfig, group GroupConfig) (tokens, calls int64) {
+	tokens, calls = bot.ModelTokenQuota, bot.ModelCallQuota
+	if group.ModelTokenQuota > 0 {
+		tokens = group.ModelTokenQuota
+	}
+	if group.ModelCallQuota > 0 {
+		calls = group.ModelCallQuota
+	}
+	return tokens, calls
+}
+
 // groupModelQuotaExceeded 判断这个群是不是已经用超了本窗口的额度。
 //
 // 读不到用量时一律放行：额度是省钱用的，不该因为日志存储不可用就让整个群哑掉。
@@ -73,15 +92,8 @@ func (r *Runtime) groupModelQuotaExceeded(ctx context.Context, event MessageEven
 	// 群里填了以群为准，留空跟随机器人那一档：和这张表单里其它「留空跟随机器人」
 	// 的设置一个规矩，不必为额度单独记一套。
 	botCfg := r.effectiveConfigForEvent(event)
-	tokenQuota, callQuota := botCfg.ModelTokenQuota, botCfg.ModelCallQuota
-	if groupCfg, ok := r.groupConfigForEvent(event); ok {
-		if groupCfg.ModelTokenQuota > 0 {
-			tokenQuota = groupCfg.ModelTokenQuota
-		}
-		if groupCfg.ModelCallQuota > 0 {
-			callQuota = groupCfg.ModelCallQuota
-		}
-	}
+	groupCfg, _ := r.groupConfigForEvent(event)
+	tokenQuota, callQuota := EffectiveGroupModelQuota(botCfg, groupCfg)
 	if tokenQuota <= 0 && callQuota <= 0 {
 		return groupQuotaVerdict{}
 	}

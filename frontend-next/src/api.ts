@@ -596,6 +596,11 @@ export interface BotGroupSummary extends BotGroupConfig {
   joined: boolean;
   /** 复用同一条连接、在这个群也开着的其它机器人：这个群会收到多份回复。 */
   shared_with?: BotGroupSharedBot[];
+  /** 额度窗口内已用的 token 和调用次数，以及算过继承后真正生效的两档上限。 */
+  quota_tokens_used?: number;
+  quota_calls_used?: number;
+  quota_token_limit?: number;
+  quota_call_limit?: number;
 }
 
 export interface BotGroupSharedBot {
@@ -1960,6 +1965,8 @@ export interface ConsoleGroupsResponse {
   live_available: boolean;
   warning?: string;
   connection_peers?: ConnectionPeer[];
+  /** 额度统计窗口长度，前端据此写「最近 N 小时」，不要自己写死 5。 */
+  quota_window_seconds?: number;
 }
 
 export function listBotGroups(refresh = false, profile = ""): Promise<ConsoleGroupsResponse> {

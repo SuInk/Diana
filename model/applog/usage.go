@@ -33,3 +33,9 @@ type GroupUsage struct {
 type GroupUsageReader interface {
 	GroupLLMUsageSince(ctx context.Context, profileID, groupID string, since, until time.Time) (GroupUsage, error)
 }
+
+// GroupUsageBulkReader 一次问出一台机器人名下所有群的窗口用量。控制台要在群列表
+// 里画进度条，逐群查会变成 N 次全表扫描；额度判断只关心一个群，两条路径各用各的。
+type GroupUsageBulkReader interface {
+	GroupLLMUsageSinceByProfile(ctx context.Context, profileID string, since, until time.Time) (map[string]GroupUsage, error)
+}
