@@ -373,13 +373,14 @@
                 :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
               />
               <button
-                class="btn ghost icon-only"
+                class="btn ghost"
                 type="button"
                 :title="`删除请求头 ${row.name}`"
                 :aria-label="`删除请求头 ${row.name}`"
                 @click="removeHeader(index)"
               >
                 <X :size="14" :stroke-width="2.25" aria-hidden="true" />
+                删除
               </button>
             </div>
           </div>
@@ -1157,7 +1158,10 @@ useConfigurationRefresh(["bot", "llm"], reload);
 /* 请求头的草稿行和已添加行必须逐列对齐。原先两行都用 .input-group（flex 配
    .input{flex:1}），而尾列一个是带文字的「添加」、一个是纯图标的删除，宽度差了
    48px，剩余空间被两个输入框平分之后两行就错开了。改成共用同一套网格，尾列按
-   「添加」的实际宽度固定，删除按钮撑满该列。 */
+   「添加」的实际宽度固定。
+
+   尾列那两个按钮做成同形：都是 .btn，都带图标加文字，都撑满该列。只放一个图标的
+   话按钮里会空出一大片，和正上方的「添加」看着不像一套。 */
 .header-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 80px;
