@@ -6547,6 +6547,11 @@ func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text
 }
 
 func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEvent, text string) ([]string, error) {
+	// 和 sendSubscriberNotice 同一个道理：停用的机器人没有出站通道，发过去只会
+	// 变成一次注定失败的投递。
+	if r.profileDisabled(event.ProfileID) {
+		return nil, fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	// 订阅推送是主动找人，知道订阅者是谁就 @ 上：这条动态是他订的，不点名的话
 	// 群里刷过去就错过了。目标是纯群（没有记订阅人）时 MentionUserID 为空，自然不 @。
