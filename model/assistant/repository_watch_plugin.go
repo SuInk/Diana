@@ -1495,12 +1495,8 @@ func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository strin
 	for _, item := range events {
 		state.EventID, state.EventAt = advanceStarCursor(state.EventID, state.EventAt, item)
 	}
-	if state.EventID == cursor.StarEventID && cursor.StarEventID != "" && cursor.StarEventID != repositoryWatchNoStarEvent && (len(events) == 0 || events[0].ID != state.EventID) {
-		observed := repositoryWatchNoStarEvent
-		if len(events) > 0 {
-			observed = events[0].ID
-		}
-		logRepositoryOpaqueCursorRetained(repository, "star", cursor.StarEventID, observed, "empty_or_older_response")
+	if starCursorStalled(events, cursor.StarEventID, state.EventID) {
+		logRepositoryOpaqueCursorRetained(repository, "star", cursor.StarEventID, events[0].ID, "older_response")
 	}
 	// 首轮只记游标：把仓库历史上的 star 一次性全播出去毫无意义。
 	if strings.TrimSpace(cursor.StarEventID) == "" {
@@ -1523,6 +1519,20 @@ func (p *RepositoryWatchPlugin) fetchStars(ctx context.Context, repository strin
 		DetectedAt: time.Now(),
 		AddedUsers: added,
 	}, state, nil
+}
+
+// starCursorStalled 判断这一轮要不要记一行「游标没往前走」。
+//
+// 只有「拿到了 star 事件，但游标停在原地」才值得记：那说明返回的顺序或内容和预期对不
+// 上，是真该看一眼的事。事件流里一条 star 都没有是常态，不是异常——/repos/{repo}/events
+// 只保留最近一段的事件，活跃仓库每分钟都有 push、PR、release 把它挤走，上一次 star 隔天
+// 就翻不到了。原先这种情况也照记不误：线上两个仓库各 547 行/天，日志涨到 18 MB，每一行
+// 都在说「今天也没人 star」。
+func starCursorStalled(events []repositoryWatchStargazer, previous, next string) bool {
+	if len(events) == 0 || previous == "" || previous == repositoryWatchNoStarEvent {
+		return false
+	}
+	return next == previous && events[0].ID != previous
 }
 
 // fetchStarEvents 从仓库事件流里挑出 star 事件，按 GitHub 的顺序（新的在前）返回。
