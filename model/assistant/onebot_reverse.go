@@ -210,9 +210,11 @@ func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	s.status.UpdatedAt = now
 	s.connMu.Unlock()
 
+	refresh, stopKeepalive := startOneBotKeepalive(conn, &s.writeMu)
 	go func() {
 		defer recoverGoroutinePanic("onebotReverse.readLoop")
-		s.readLoop(conn)
+		defer stopKeepalive()
+		s.readLoop(conn, refresh)
 	}()
 }
 
@@ -254,6 +256,7 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 		"echo":   echo,
 	}
 	s.writeMu.Lock()
+	_ = conn.SetWriteDeadline(time.Now().Add(oneBotWriteTimeout))
 	err := conn.WriteJSON(req)
 	s.writeMu.Unlock()
 	if err != nil {
@@ -338,12 +341,16 @@ func (s *OneBotReverseServer) Close() error {
 }
 
 // readLoop 持续读取反向 WebSocket 事件帧。
-func (s *OneBotReverseServer) readLoop(conn *websocket.Conn) {
+func (s *OneBotReverseServer) readLoop(conn *websocket.Conn, refresh func()) {
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			s.disconnectIfCurrent(conn, err.Error())
+			s.disconnectIfCurrent(conn, oneBotReadError(err))
 			return
+		}
+		// 对端还在说话就不算死，哪怕它不回 pong。
+		if refresh != nil {
+			refresh()
 		}
 		if err := s.handleFrame(data); err != nil {
 			s.setStatus(s.Status().Connected, s.Status().SelfID, err.Error())

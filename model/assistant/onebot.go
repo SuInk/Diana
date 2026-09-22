@@ -155,6 +155,8 @@ func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error
 	}
 
 	conn.SetReadLimit(maxOneBotWebSocketFrameBytes)
+	refresh, stopKeepalive := startOneBotKeepalive(conn, &c.writeMu)
+	defer stopKeepalive()
 	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopCancel()
 	defer conn.Close()
@@ -198,9 +200,10 @@ func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error
 
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			c.setStatus(false, c.Status().SelfID, err.Error())
+			c.setStatus(false, c.Status().SelfID, oneBotReadError(err))
 			return err
 		}
+		refresh()
 		if err := c.handleFrame(ctx, handler, data); err != nil {
 			c.setStatus(c.Status().Connected, c.Status().SelfID, err.Error())
 		}
@@ -428,7 +431,7 @@ func (c *OneBotChannel) CallAPI(ctx context.Context, action string, params map[s
 		"echo":   echo,
 	}
 	c.writeMu.Lock()
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(oneBotWriteTimeout))
 	err := conn.WriteJSON(req)
 	c.writeMu.Unlock()
 	if err != nil {
