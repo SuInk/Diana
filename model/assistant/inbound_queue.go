@@ -18,7 +18,10 @@ import (
 )
 
 const (
-	inboundPollInterval     = 500 * time.Millisecond
+	inboundPollInterval = 500 * time.Millisecond
+	// inboundIdlePollMax 是空闲时轮询间隔的上限。新事件走 inboundWake 立刻唤醒，
+	// 所以拉长这个间隔不会让响应变慢，只是把「空手敲数据库」的次数降下来。
+	inboundIdlePollMax      = 8 * time.Second
 	inboundLeaseDuration    = 10 * time.Minute
 	historyInitialDelay     = time.Second
 	historyRetryDelay       = 30 * time.Second
@@ -507,17 +510,37 @@ func (r *Runtime) runInboundCoordinator(ctx context.Context, leaseOwner string, 
 	}
 }
 
+// runInboundWorker 领一条事件、处理、再领下一条。空闲时按退避拉长轮询间隔：新事件
+// 进来会敲 inboundWake，轮询只是兜底（漏掉唤醒、租约过期重投），不该按「最坏情况」
+// 的频率一直空敲。
+//
+// 线上（miku）实测过代价：N 个 worker 各自 500 毫秒一跳，队列空着也照敲，全部挤在唯一
+// 那条写连接上；一次回合结束大家又被一起唤醒，日志里看到 7 个 claim 在同一秒完成、
+// 等待时间从 1.4 秒线性累加到 11 秒，而 elapsed_ms 和 pool_wait_ms_delta 几乎相等——
+// 时间全在排队，不是 SQLite 慢。
 func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store InboundEventStore) {
-	ticker := time.NewTicker(inboundPollInterval)
-	defer ticker.Stop()
+	delay := inboundPollInterval
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		case <-r.inboundWake:
+			// 有人明确说有活了，退避立刻清零。
+			delay = inboundPollInterval
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
+		claimed := false
 		if !r.inboundProcessingReady() {
+			delay = nextInboundPollDelay(delay)
+			timer.Reset(delay)
 			continue
 		}
 		for r.inboundProcessingReady() {
@@ -534,6 +557,10 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			if !ok {
 				break
 			}
+			claimed = true
+			// 自己领到了活，说明队列里可能还有：叫醒一个同伴一起干。没有这一下，
+			// 退避期间的突发消息会被一个 worker 串行地慢慢消化。
+			r.wakeInboundWorkers()
 			outcome, processErr := r.processInboundQueueItem(ctx, item)
 			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			switch {
@@ -571,7 +598,24 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 				return
 			}
 		}
+		// 领到过就回到最短间隔：刚忙完的时候后面往往还有；一直空手才慢慢拉长。
+		if claimed {
+			delay = inboundPollInterval
+		} else {
+			delay = nextInboundPollDelay(delay)
+		}
+		timer.Reset(delay)
 	}
+}
+
+// nextInboundPollDelay 空手而归时把间隔翻倍，封顶 inboundIdlePollMax。翻倍而不是直接
+// 跳到上限：刚空下来的那几秒最可能又来消息，这时候还该反应快。
+func nextInboundPollDelay(current time.Duration) time.Duration {
+	next := current * 2
+	if next > inboundIdlePollMax {
+		next = inboundIdlePollMax
+	}
+	return next
 }
 
 func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueueItem) (string, error) {

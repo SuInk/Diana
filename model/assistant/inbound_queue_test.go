@@ -1581,3 +1581,29 @@ func TestInboundBacklogRoutesHeldProactiveCandidatesTogether(t *testing.T) {
 		t.Fatalf("同轮消息=%#v, want message-2", event.backlogTurn)
 	}
 }
+
+// 空闲时不该一直空手敲库：4 个 worker 固定 500 毫秒轮询，一分钟就是 480 次；退避之后
+// 是 44 次。新事件走 inboundWake 立刻唤醒，所以这笔省下来的开销不换延迟。
+func TestInboundIdlePollBacksOff(t *testing.T) {
+	delay := inboundPollInterval
+	seen := []time.Duration{}
+	for i := 0; i < 6; i++ {
+		delay = nextInboundPollDelay(delay)
+		seen = append(seen, delay)
+	}
+	if seen[0] != time.Second {
+		t.Fatalf("第一次空手应当翻倍到 1s，实际 %v", seen[0])
+	}
+	for i := 1; i < len(seen); i++ {
+		if seen[i] < seen[i-1] {
+			t.Fatalf("退避只能变长：%v -> %v", seen[i-1], seen[i])
+		}
+	}
+	if last := seen[len(seen)-1]; last != inboundIdlePollMax {
+		t.Fatalf("退避应当封顶在 %v，实际 %v", inboundIdlePollMax, last)
+	}
+	// 封顶之后不能再涨：否则一台空闲久了的机器人要好几十秒才兜底轮询一次。
+	if next := nextInboundPollDelay(inboundIdlePollMax); next != inboundIdlePollMax {
+		t.Fatalf("封顶之后不该继续翻倍，实际 %v", next)
+	}
+}
