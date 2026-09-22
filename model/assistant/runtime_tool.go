@@ -38,6 +38,14 @@ func (r *Runtime) Plugins() *PluginManager {
 
 func (r *Runtime) pluginOverridesForEvent(event MessageEvent) map[string]bool {
 	profileID := r.eventProfileID(event)
+	// 停用的机器人：所有插件一律按停用算。
+	//
+	// 「停用」这台机器人的直觉是它整个安静下来，而不是只停回复——插件还在后台抓
+	// Feed、拉仓库、跑任务，只是结果发不出去。这里一刀切在唯一的开关聚合点上，
+	// 比让每个插件各自记得判断可靠：新插件不用做任何事就自动遵守。
+	if r.profileDisabled(profileID) {
+		return allPluginsDisabled(r.plugins)
+	}
 	out := r.plugins.ProfileOverrides(profileID)
 	groupCfg, ok := r.groupConfigForEvent(event)
 	if !ok || len(groupCfg.PluginOverrides) == 0 {
@@ -1801,4 +1809,19 @@ func reminderSourceEvent(item Reminder) MessageEvent {
 		event.GroupID = item.GroupID
 	}
 	return event
+}
+
+// allPluginsDisabled 给出「这台机器人的每个插件都停用」的覆盖表。
+func allPluginsDisabled(plugins *PluginManager) map[string]bool {
+	if plugins == nil {
+		return map[string]bool{}
+	}
+	states := plugins.List()
+	out := make(map[string]bool, len(states))
+	for _, state := range states {
+		if id := strings.TrimSpace(state.Manifest.ID); id != "" {
+			out[id] = false
+		}
+	}
+	return out
 }
