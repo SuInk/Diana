@@ -119,7 +119,7 @@ func TestExtensionAdminMCPDoesNotConnectUntilTestAndRedactsSecrets(t *testing.T)
 	if _, err := AdministerExtensions(ctx, cfg, request); err != nil {
 		t.Fatal(err)
 	}
-	servers, err := loadMCPServers(filepath.Join(cfg.WorkDir, ".mcp.json"))
+	servers, err := loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults()))
 	if err != nil || servers["echo"].Headers["Authorization"] != "secret-token" {
 		t.Fatal("blank save lost credential")
 	}
@@ -127,11 +127,11 @@ func TestExtensionAdminMCPDoesNotConnectUntilTestAndRedactsSecrets(t *testing.T)
 	if _, err := AdministerExtensions(ctx, cfg, request); err != nil {
 		t.Fatal(err)
 	}
-	servers, _ = loadMCPServers(filepath.Join(cfg.WorkDir, ".mcp.json"))
+	servers, _ = loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults()))
 	if servers["echo"].Headers["Authorization"] != "" {
 		t.Fatal("explicit secret clear failed")
 	}
-	info, _ := os.Stat(filepath.Join(cfg.WorkDir, ".mcp.json"))
+	info, _ := os.Stat(resolveMCPConfigPath(cfg.WithDefaults()))
 	if info.Mode().Perm() != 0600 {
 		t.Fatal("insecure permissions")
 	}
