@@ -1455,9 +1455,8 @@ func TestAgentToolsAreFilteredByCurrentPlatform(t *testing.T) {
 	}
 }
 
-// 没登录时小红书把分享链接甩到 /login，笔记地址塞在 redirectPath 里。线上 09-22 撞到
-// 的就是这个：笔记好好的，报的却是「笔记不存在、已删除」——错误指错了地方，人只会去
-// 反复换链接，而不是去换 Cookie。
+// 小红书把分享链接甩到 /login，笔记地址塞在 redirectPath 里。线上 09-22 撞到的就是
+// 这个：笔记好好的（同一条链接用浏览器打开看得见），报的却是「笔记不存在、已删除」。
 func TestXiaohongshuLoginBounceAndCookieSession(t *testing.T) {
 	bounce := "https://www.xiaohongshu.com/login?redirectPath=" + url.QueryEscape("http://www.xiaohongshu.com/discovery/item/abc123?xsec_token=tok&xsec_source=app_share")
 	if !xiaohongshuLoginBounce(bounce) {
@@ -1482,5 +1481,26 @@ func TestXiaohongshuLoginBounceAndCookieSession(t *testing.T) {
 	}
 	if xiaohongshuCookieLoggedIn("a1=x; web_session=; webId=y") {
 		t.Fatal("web_session 是空值时不算登录")
+	}
+}
+
+// 抓不到笔记时要交给沙盒浏览器，而不是把「这条抓取路径失败」写成「内容不存在」发进群。
+// 09-22 实测：未登录的浏览器里 __INITIAL_STATE__ 有 noteDetailMap，同一时刻直接抓 HTML
+// 却是空的——所以这就是抓取方式的问题，不是笔记的问题。
+func TestXiaohongshuUnreadableDefersToBrowser(t *testing.T) {
+	plugin := NewResolverPlugin(nil)
+	withBrowser := plugin.resolveXiaohongshu(context.Background(), PluginRequest{SandboxedBrowserEnabled: true}, "https://www.xiaohongshu.com/explore/abc123")
+	if !withBrowser.DeferToBrowser {
+		t.Fatal("开了沙盒浏览器时应当交给浏览器兜底")
+	}
+	if strings.TrimSpace(withBrowser.Context) != "" {
+		t.Fatalf("交给浏览器之后不该再发一段解析失败的文字：%q", withBrowser.Context)
+	}
+	withoutBrowser := plugin.resolveXiaohongshu(context.Background(), PluginRequest{}, "https://www.xiaohongshu.com/explore/abc123")
+	if withoutBrowser.DeferToBrowser {
+		t.Fatal("没开沙盒浏览器时无处可交")
+	}
+	if strings.Contains(withoutBrowser.Context, "笔记不存在") || strings.Contains(withoutBrowser.Context, "已删除") {
+		t.Fatalf("读不到不等于笔记没了，别给笔记定罪：%q", withoutBrowser.Context)
 	}
 }
