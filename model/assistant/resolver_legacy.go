@@ -18,6 +18,9 @@ type resolverPlatformResult struct {
 	ImageURLs       []string
 	VideoURLs       []string
 	ForwardMessages []OutgoingMessage
+	// DeferToBrowser 表示这条链接按平台接口读不出来，但渲染一次页面多半能读到：
+	// 交给沙盒浏览器，而不是回一句「解析失败」。沙盒浏览器没开时才退回文字说明。
+	DeferToBrowser bool
 }
 
 func (p *ResolverPlugin) resolveKnownPlatform(ctx context.Context, req PluginRequest, raw string) resolverPlatformResult {
@@ -135,19 +138,28 @@ func (p *ResolverPlugin) resolveXiaohongshu(ctx context.Context, req PluginReque
 	note, status := fetchXiaohongshuNote(ctx, raw)
 	switch status {
 	case "missing_cookie":
-		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n无法获取到管理员设置的小红书ck！", nickname))
+		// 没配 Cookie 也先让浏览器试一次：实测未登录的浏览器照样读得到笔记，
+		// 没理由因为少一份 Cookie 就直接回一句「没配 ck」。
+		if req.SandboxedBrowserEnabled {
+			return resolverPlatformResult{DeferToBrowser: true}
+		}
+		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n没有配置小红书 Cookie，也没有开沙盒浏览器，这条链接读不了。", nickname))
 	case "expired_link":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n分享链接已失效，或者对应直播已经结束。", nickname))
 	case "live_link":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n这是小红书直播链接，不是普通笔记；将继续尝试用沙盒浏览器读取直播页面。", nickname))
 	case "unsupported_link":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n该链接不是可识别的普通笔记链接。", nickname))
-	case "login_required":
-		// 说清楚是登录态的问题，并且别顺手给笔记定罪：换一份登录后的 Cookie 往往就好了。
-		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n当前小红书 Cookie 没有登录态，分享链接被跳到了登录页，读不到笔记内容（笔记本身不一定有问题）。请在 WebUI 的插件设置里换一份登录后的 Cookie（要带 web_session）。", nickname))
-	case "note_unavailable":
-		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n笔记不存在、已删除，或当前分享参数已经过期。", nickname))
-	case "page_unavailable", "request_failed":
+	case "login_required", "note_unavailable", "page_unavailable":
+		// 小红书把分享链接甩到登录页、或者 HTML 里根本没带笔记数据时，抓页面这条路
+		// 就到头了——但用浏览器打开同一条链接是能看到笔记的（09-22 实测：未登录的
+		// 浏览器里 __INITIAL_STATE__ 有 noteDetailMap，而同一时刻直接抓 HTML 是空的）。
+		// 所以这不是「笔记没了」，是这条抓取路径读不到，该换浏览器渲染去读。
+		if req.SandboxedBrowserEnabled {
+			return resolverPlatformResult{DeferToBrowser: true}
+		}
+		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n小红书没有在页面里直接给出笔记数据（分享链接会先跳到登录页），当前只能靠沙盒浏览器渲染后读取；请在链接解析设置里打开沙盒浏览器，或换一份登录后的 Cookie（要带 web_session）。", nickname))
+	case "request_failed":
 		return resolverPlatformTextResult(fmt.Sprintf("%s识别内容来自：【小红书】\n页面暂时无法读取，不能据此判断ck已经失效。", nickname))
 	}
 	if len(note) == 0 {
