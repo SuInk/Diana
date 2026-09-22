@@ -255,14 +255,14 @@ func TestAppLogsResolveActorNames(t *testing.T) {
 
 func TestAppLogActorUserID(t *testing.T) {
 	cases := map[string]string{
-		"qq:30001": "30001",
-		"30001":    "30001",
-		" qq:123 ":      "123",
-		"qq:unknown":    "",
-		"webui:admin":   "",
-		"admin":         "",
-		"":              "",
-		"qq:":           "",
+		"qq:30001":    "30001",
+		"30001":       "30001",
+		" qq:123 ":    "123",
+		"qq:unknown":  "",
+		"webui:admin": "",
+		"admin":       "",
+		"":            "",
+		"qq:":         "",
 	}
 	for actor, want := range cases {
 		if got := appLogActorUserID(actor); got != want {

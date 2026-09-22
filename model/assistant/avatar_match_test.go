@@ -157,8 +157,8 @@ func TestAvatarMatchUsesQuotedImageWhenCurrentMessageHasNone(t *testing.T) {
 	}
 
 	quoted := MessageEvent{
-		Segments: []MessageSegment{{Type: "reply", Data: map[string]string{"id": "-421668118"}}},
-		Quoted:   &QuotedMessage{MessageID: "-421668118", Segments: []MessageSegment{image}},
+		Segments: []MessageSegment{{Type: "reply", Data: map[string]string{"id": "-9001"}}},
+		Quoted:   &QuotedMessage{MessageID: "-9001", Segments: []MessageSegment{image}},
 	}
 	segment, source, ok := avatarMatchImageSegment(quoted)
 	if !ok {
@@ -272,13 +272,13 @@ func TestAvatarMatchResolvesQuotedImageEndToEnd(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001"}, channel, NewPluginManager(), nil, &stubReminderStore{}, nil, nil)
 
 	event := MessageEvent{
-		Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "266007836",
+		Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "9002",
 		Segments: []MessageSegment{
-			{Type: "reply", Data: map[string]string{"id": "-421668118"}},
+			{Type: "reply", Data: map[string]string{"id": "-9001"}},
 			{Type: "text", Data: map[string]string{"text": "这个是哪个群成员头像"}},
 		},
 		Quoted: &QuotedMessage{
-			MessageID: "-421668118",
+			MessageID: "-9001",
 			Segments:  []MessageSegment{{Type: "image", Data: map[string]string{"url": server.URL + "/quoted.jpg"}}},
 		},
 	}

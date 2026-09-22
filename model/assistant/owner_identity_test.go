@@ -38,7 +38,10 @@ func TestTelegramOwnerUsernameFromAuthenticatedSender(t *testing.T) {
 		{"missing username", func(m *telegramMessage) { m.From.Username = "" }},
 		{"anonymous sender", func(m *telegramMessage) { m.SenderChat = &telegramChat{ID: -100, Type: "supergroup"} }},
 		{"bot account", func(m *telegramMessage) { m.From.IsBot = true }},
-		{"mentioned owner", func(m *telegramMessage) { m.From.Username = "someone"; m.Text = "@owneruser 模型切到 gpt-5.6-terra" }},
+		{"mentioned owner", func(m *telegramMessage) {
+			m.From.Username = "someone"
+			m.Text = "@owneruser 模型切到 gpt-5.6-terra"
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			copyMsg := *msg
