@@ -85,3 +85,54 @@ func TestRomanceGreetingSkipsDisabledProfile(t *testing.T) {
 		t.Fatalf("启用的那台该照常参与：%#v", configs)
 	}
 }
+
+// 「停用」的直觉是这台机器人整个安静下来。插件的开关聚合点只有一个，停用档案
+// 在这里一刀切：新加的插件不用做任何事就自动遵守。
+func TestDisabledProfileDisablesEveryPlugin(t *testing.T) {
+	plugins := NewDefaultPluginManager()
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, plugins, nil, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{
+		{ID: "on", Enabled: true},
+		{ID: "off", Enabled: false},
+	}})
+
+	overrides := runtime.pluginOverridesForEvent(MessageEvent{ProfileID: "off"})
+	if len(overrides) == 0 {
+		t.Fatal("停用档案该拿到一张全关的覆盖表")
+	}
+	for id, enabled := range overrides {
+		if enabled {
+			t.Fatalf("插件 %s 在停用的机器人上仍然是启用的", id)
+		}
+	}
+	// 启用的那台不受影响：这里不该把别人一起关掉。
+	for id, enabled := range runtime.pluginOverridesForEvent(MessageEvent{ProfileID: "on"}) {
+		if !enabled && id == rssWatchPluginID {
+			t.Fatalf("启用的机器人不该被连坐关掉插件：%s", id)
+		}
+	}
+}
+
+// 记忆抽取要花一次模型调用，停用的机器人不该继续烧这个钱。
+func TestMemoryExtractionSkipsDisabledProfile(t *testing.T) {
+	memory := &testStructuredMemoryStore{}
+	provider := &capturingLLMProvider{reply: `{"memories":[]}`}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	runtime.SetStructuredMemoryStore(memory)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{{ID: "off", Enabled: false}}})
+
+	err := runtime.processEventMemoryJobs(context.Background(), memory, []MemoryJobPayload{{
+		Kind: MemoryJobEvent, Session: "off:group:1", Event: MessageEvent{
+			ProfileID: "off", Kind: EventKindGroup, GroupID: "1", UserID: "u", MessageID: "m1",
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "我养了只猫"}}},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("停用的机器人不该产生记忆抽取调用，实际 %d 次", provider.calls)
+	}
+}

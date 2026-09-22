@@ -885,6 +885,11 @@ func (r *Runtime) cancelCodingJob(ctx context.Context, id string) (CodingJob, er
 // 就按日志收尾并把欠下的汇报补上。
 func (r *Runtime) ResumeCodingJobs(ctx context.Context) {
 	for _, job := range listCodingJobs() {
+		// 停用的机器人不接手它的编码任务：接回来也没人能收到汇报，盯着进程只是
+		// 白占一个 goroutine。重新启用后这一轮会重新接手。
+		if r.profileDisabled(job.Target.event().ProfileID) {
+			continue
+		}
 		if job.finished() {
 			if !job.Reported {
 				r.reportCodingJob(ctx, job)
