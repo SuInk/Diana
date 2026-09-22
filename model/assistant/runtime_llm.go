@@ -758,8 +758,33 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	appendPromptSection(&builder, fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", agent.RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
 	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
 		appendPromptSection(&builder, speaker)
+	} else if note := unknownSpeakerTimezoneNote(cfg, now); note != "" {
+		appendPromptSection(&builder, note)
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// unknownSpeakerTimezoneNote 在没记过发言者时区、而机器人这边正处于深夜或清早时，
+// 挡掉「你该睡了」「早上好」这类按本机时钟推断对方作息的话。
+//
+// 上面那条运行时钟提示只说了机器人自己几点，模型会顺手把它当成所有人的当地时间。
+// 群里有人在海外、有人跨时区出差时，这个默认假设直接错半天，催睡和时段问候都落空。
+// 时区记下来时由 speakerTimezonePrompt 给出换算，这里只管没有依据的那一半。
+//
+// 只在深夜和清早注入：白天和晚上不会引出作息主张，补一句只是白占 token。时区跟着
+// dayPartToneForConfig 那一份走（回复门槛的时区），一台机器人不该有两个「几点了」。
+func unknownSpeakerTimezoneNote(cfg BotConfig, now time.Time) string {
+	location := time.Local
+	if cfg.ReplyGate != nil {
+		location = cfg.ReplyGate.Location()
+	}
+	switch dayPartAt(now.In(location)) {
+	case dayPartLateNight:
+		return "没有记录当前发言者所在时区：你这边是深夜，不代表他那边也是。别断言他那边几点，也别因为「这么晚了」催他睡或说他熬夜；除非他自己说了当地时间或所在地，作息话题就不要主动提。"
+	case dayPartMorning:
+		return "没有记录当前发言者所在时区：你这边是清早，不代表他那边也是。别默认他刚起床，「早上好」这类按时段的问候先不要说，除非他自己提了。"
+	}
+	return ""
 }
 
 // speakerTimezonePrompt 在画像里记过对方时区时，给出他那边的当地时间和时差。
@@ -775,7 +800,7 @@ func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) strin
 	local := now.In(location)
 	zoneName, zoneOffset := local.Zone()
 	offset := FormatTimezoneOffset(now, location, now.Location())
-	prompt := fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。你自己的「现在」仍以上面的运行时钟为准。",
+	prompt := fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。作息相关的话（该睡了、早安、还在熬夜）同样按他那边的时间判断，不要拿你这边的时段往他身上套。你自己的「现在」仍以上面的运行时钟为准。",
 		location.String(), zoneName, formatUTCOffset(zoneOffset), offset, local.Format("2006-01-02 15:04"))
 	// 人会搬家、会出差：这条时区是过去某一次对话记下的，不是实时定位。
 	if !recordedAt.IsZero() {
