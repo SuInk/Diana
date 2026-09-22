@@ -1532,9 +1532,9 @@ export function listManagedExtensions(profile = ""): Promise<{items: ManagedExte
 }
 /** 内置的 MCP 接入模板：界面照着字段渲染表单，拼配置在服务端做。 */
 export interface MCPPresetField { key: string; label: string; placeholder?: string; hint?: string; required?: boolean; secret?: boolean }
-export interface MCPPresetTransport { id: string; label: string; hint?: string; fields: MCPPresetField[] }
+export interface MCPPresetTransport { id: string; label: string; hint?: string; fields: MCPPresetField[]; verifiable?: boolean }
 export interface MCPPreset { id: string; name: string; title: string; summary: string; docs_url?: string; transports: MCPPresetTransport[] }
-export function listMCPPresets(): Promise<{items: {preset: MCPPreset; installed: boolean}[]}> {
+export function listMCPPresets(): Promise<{items: {preset: MCPPreset; installed: boolean; hidden?: boolean}[]}> {
   return requestJSON("/api/assistant/extensions", {method: "POST", body: JSON.stringify({operation: "presets", kind: "mcp"})});
 }
 export function manageExtension<T = {ok: boolean}>(input: Record<string, unknown>): Promise<T> {
