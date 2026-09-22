@@ -502,11 +502,18 @@ func (r *Runtime) runLLMRouterProviderOnce(ctx context.Context, run llmProviderR
 
 func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransient bool, run llmProviderRunFunc) (string, error) {
 	roles := r.modelRolesForContext(ctx)
+	// 旁路调用以前一律按 intent 分组取候选，用途自己归在哪一组不起作用——因为
+	// 「本次调用的分组」排在「用途归属的分组」前面。后台生成拆出来之后这条必须
+	// 改：不然记忆抽取、好感度评估照样落在意图识别那一档上，拆了等于没拆。
+	group := llm.GroupIntent
+	if owner := ModelBindingGroupOf(llmUsagePurposeFromContext(ctx)); owner != "" {
+		group = owner
+	}
 	run = withEmojiSemanticsRun(run)
 	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
-	run = r.withImageBudgetRun(llm.GroupIntent, run)
+	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
@@ -529,15 +536,15 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		// 这里原来只取一条 selection 就直接跑，绑定里配的 fallbacks 从来没被用过——
 		// 线上把 intent 绑到只做判断的模型之后，所有没备判断题表的用途整条失败，配好
 		// 的降级档一次都没被碰。降级是全局承诺，不该只有对话享有。
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent, roles)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}
 		if len(profiles) == 0 {
-			profiles = llmProfilesInGroup(set, llm.GroupIntent)
+			profiles = llmProfilesInGroup(set, group)
 		}
 		if len(profiles) == 0 {
-			profiles = fallbackProfilesForGroup(set, llm.GroupIntent)
+			profiles = fallbackProfilesForGroup(set, group)
 		}
 		if len(profiles) > 0 {
 			provider, err := newRegistryFailoverLLMProvider(registry, profiles, retryTransient, len(profiles) > 1)
@@ -546,7 +553,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			}
 			// 注册表里没有能对上的模型时不硬顶，退回下面按单条选择的老路。
 		}
-		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), llm.GroupIntent, "")
+		selection, ok, err := registrySelectionForGroup(registry, set, roles, llmUsagePurposeFromContext(ctx), group, "")
 		if err != nil {
 			return "", err
 		}
@@ -557,7 +564,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent, roles)
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, group, roles)
 		if roleErr != nil {
 			return "", roleErr
 		}

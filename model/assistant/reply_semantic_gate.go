@@ -121,7 +121,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 	}
 	judgeCtx, cancel := context.WithTimeout(ctx, replySemanticDedupeTimeout)
 	defer cancel()
-	judgeCtx = withLLMUsagePurpose(judgeCtx, "reply_semantic_dedup")
+	judgeCtx = withLLMUsagePurpose(judgeCtx, PurposeReplySemanticDedup)
 	judgeCtx = context.WithValue(judgeCtx, textDeltaObserverKey{}, struct{}{})
 	raw, err := r.runLLMRouterProviderOnce(judgeCtx, func(client LLMProvider) (string, error) {
 		resp, callErr := client.Generate(judgeCtx, llm.GenerateRequest{Messages: []llm.Message{
