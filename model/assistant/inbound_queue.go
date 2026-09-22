@@ -18,9 +18,22 @@ import (
 )
 
 const (
-	inboundPollInterval = 500 * time.Millisecond
-	// inboundIdlePollMax 是空闲时轮询间隔的上限。新事件走 inboundWake 立刻唤醒，
-	// 所以拉长这个间隔不会让响应变慢，只是把「空手敲数据库」的次数降下来。
+	// inboundPollInterval 是兜底轮询的起始间隔，不是响应延迟：新事件进来会敲
+	// inboundWake，worker 立刻醒。轮询只覆盖三种拿不到唤醒的情况——
+	//   1. 唤醒丢了：inboundWake 是缓冲 1 的非阻塞发送，所有 worker 都在忙时后续
+	//      唤醒会被丢弃，得等某个 worker 忙完，量级是「一个回合」，几秒到几十秒；
+	//   2. 租约过期要重投（inboundLeaseDuration 10 分钟，分钟级）；
+	//   3. 重试到期（走 inboundRetryDelay 的退避表，秒级起）。
+	// 三种都不需要亚秒级的粒度。
+	//
+	// 这个值原来是 500 毫秒，是入站队列第一版随手写的，没有依据。对齐同样「有推送
+	// 通知 + 轮询兜底」的成熟实现：River（Go + Postgres，LISTEN/NOTIFY）默认
+	// FetchPollInterval 1 秒，GoodJob（Rails + Postgres，同样有 NOTIFY）默认 10 秒；
+	// 而没有推送、只能靠轮询发现的 Solid Queue，worker 默认 0.1 秒——Diana 有唤醒
+	// 通道，属于前一类，取 1 秒。
+	inboundPollInterval = time.Second
+	// inboundIdlePollMax 是空闲时轮询间隔的上限。空手而归就翻倍，一路退到这里；
+	// 8 秒仍然远小于「唤醒丢失」要兜住的那个量级（一个回合），够用。
 	inboundIdlePollMax      = 8 * time.Second
 	inboundLeaseDuration    = 10 * time.Minute
 	historyInitialDelay     = time.Second

@@ -1582,8 +1582,9 @@ func TestInboundBacklogRoutesHeldProactiveCandidatesTogether(t *testing.T) {
 	}
 }
 
-// 空闲时不该一直空手敲库：4 个 worker 固定 500 毫秒轮询，一分钟就是 480 次；退避之后
-// 是 44 次。新事件走 inboundWake 立刻唤醒，所以这笔省下来的开销不换延迟。
+// 空闲时不该一直空手敲库：4 个 worker 固定 500 毫秒轮询，一分钟 480 次；改成 1 秒起步
+// 加空手退避之后是 40 次（River 那种固定 1 秒是 240 次）。新事件走 inboundWake 立刻
+// 唤醒，所以这笔省下来的开销不换延迟。
 func TestInboundIdlePollBacksOff(t *testing.T) {
 	delay := inboundPollInterval
 	seen := []time.Duration{}
@@ -1591,8 +1592,8 @@ func TestInboundIdlePollBacksOff(t *testing.T) {
 		delay = nextInboundPollDelay(delay)
 		seen = append(seen, delay)
 	}
-	if seen[0] != time.Second {
-		t.Fatalf("第一次空手应当翻倍到 1s，实际 %v", seen[0])
+	if seen[0] != 2*inboundPollInterval {
+		t.Fatalf("第一次空手应当翻倍，实际 %v", seen[0])
 	}
 	for i := 1; i < len(seen); i++ {
 		if seen[i] < seen[i-1] {
