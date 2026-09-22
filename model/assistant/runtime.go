@@ -1603,14 +1603,14 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	// 画像，但所有要花 token 的环节全部跳过。额度是按窗口滚动的，到点自己恢复，
 	// 不需要任何人来解除。
 	if event.Kind == EventKindGroup && !r.isOwnerReplySuppressionCommand(event, text) {
-		if exceeded, used, quota := r.groupModelQuotaExceeded(ctx, event); exceeded {
+		if verdict := r.groupModelQuotaExceeded(ctx, event); verdict.Exceeded {
 			r.enqueueEventMemory(event, memoryEventText(event))
 			if profile, stored := r.updateUserMemory(event, 0); stored {
 				event.userProfile = profile
 				event.userProfileLoaded = true
 			}
-			event.routingReason = fmt.Sprintf("本群模型额度已用完（近 %s 用掉 %d / %d token），到点自动恢复", groupModelQuotaWindow, used, quota)
-			r.recordGroupModelQuotaExceeded(ctx, event, used, quota)
+			event.routingReason = fmt.Sprintf("本群模型额度已用完（近 %s 的%s），到点自动恢复", groupModelQuotaWindow, verdict.Reason)
+			r.recordGroupModelQuotaExceeded(ctx, event, verdict)
 			r.record(r.decisionEventRecord(event, text, "ignored_model_quota"))
 			return event, text, false, "ignored_model_quota"
 		}

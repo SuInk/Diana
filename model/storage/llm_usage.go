@@ -62,22 +62,23 @@ AND action = 'llm_usage'`,
 	return stats, rows.Err()
 }
 
-// GroupLLMTokensSince 统计某个群在窗口内用掉的 token 总量，供按群额度判断。
+// GroupLLMUsageSince 统计某个群在窗口内的用量（token 和调用次数），供按群额度判断。
 //
 // 只数带 group_id 的调用：私聊、后台任务和没有会话归属的调用不算进群额度。
 // 口径和 LLMUsageSince 一致——total_tokens 缺失时按 input+output 兜底，缓存命中
 // 已经含在 input 里，不重复相加。
-func (s *SQLiteStore) GroupLLMTokensSince(ctx context.Context, profileID, groupID string, since, until time.Time) (int64, error) {
-	defer s.observeStorage(ctx, "GroupLLMTokensSince", "read")()
+func (s *SQLiteStore) GroupLLMUsageSince(ctx context.Context, profileID, groupID string, since, until time.Time) (applog.GroupUsage, error) {
+	defer s.observeStorage(ctx, "GroupLLMUsageSince", "read")()
+	var usage applog.GroupUsage
 	if s == nil || s.db == nil {
-		return 0, fmt.Errorf("usage storage unavailable")
+		return usage, fmt.Errorf("usage storage unavailable")
 	}
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
-		return 0, nil
+		return usage, nil
 	}
 	if !since.Before(until) {
-		return 0, fmt.Errorf("invalid usage window")
+		return usage, fmt.Errorf("invalid usage window")
 	}
 	const seconds = "2006-01-02T15:04:05"
 	rows, err := s.eventReader().QueryContext(ctx, `SELECT metadata FROM app_logs
@@ -86,15 +87,14 @@ AND action = 'llm_usage'
 AND json_extract(metadata, '$.group_id') = ?`,
 		since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds), groupID)
 	if err != nil {
-		return 0, err
+		return usage, err
 	}
 	defer rows.Close()
 	profileID = strings.TrimSpace(profileID)
-	var total int64
 	for rows.Next() {
 		var metadata sql.NullString
 		if err := rows.Scan(&metadata); err != nil {
-			return 0, err
+			return usage, err
 		}
 		var meta map[string]any
 		if err := json.Unmarshal([]byte(metadata.String), &meta); err != nil {
@@ -110,7 +110,8 @@ AND json_extract(metadata, '$.group_id') = ?`,
 		if amount <= 0 {
 			amount = int64FromAny(meta["input_tokens"]) + int64FromAny(meta["output_tokens"])
 		}
-		total += amount
+		usage.Tokens += amount
+		usage.Calls++
 	}
-	return total, rows.Err()
+	return usage, rows.Err()
 }

@@ -327,10 +327,15 @@
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
         <div class="field">
-          <label for="group-quota">模型额度（5 小时 token 上限）</label>
+          <label for="group-quota">模型额度 · 5 小时 token 上限</label>
           <input id="group-quota" v-model.number="editing.model_token_quota" class="input" inputmode="numeric" placeholder="留空或 0 表示不限" />
+        </div>
+        <div class="field">
+          <label for="group-call-quota">模型额度 · 5 小时调用次数上限</label>
+          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" inputmode="numeric" placeholder="留空或 0 表示不限" />
           <span class="hint">
-            这个群名下所有模型调用都算（判定、路由、工具步，不只是最终那句回复）。用满之后这个群暂停一切花 token 的环节，
+            两档各自独立、先到先得：句句短但刷个不停的群会先撞次数，只说几句却每句带图的会先撞 token。
+            统计口径是这个群名下所有模型调用（判定、路由、工具步，不只是最终那句回复）。用满之后这个群暂停一切花 token 的环节，
             消息照常进历史和长期记忆，窗口滚过去自动恢复，不需要手动解除。主人不受限。
           </span>
         </div>

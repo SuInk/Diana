@@ -839,7 +839,11 @@ type GroupConfig struct {
 	// ModelTokenQuota 是这个群在滚动 5 小时窗口里能用掉的 token 上限，0 表示不限。
 	// 口径和用量统计一致：这个群名下所有模型调用都算，包括判定、路由和工具步，
 	// 不只是最终那句回复。主人不受限——额度用完还能让主人改配置，不然就锁死了。
-	ModelTokenQuota          int64 `json:"model_token_quota,omitempty"`
+	ModelTokenQuota int64 `json:"model_token_quota,omitempty"`
+	// ModelCallQuota 是同一窗口里的模型调用次数上限，0 表示不限。它和 token 上限
+	// 各自独立、先到先得：一个群可以句句短但刷个不停（次数先到），也可以只说几句
+	// 却每句都带图（token 先到），两种超用形态不一样，只卡一种会漏掉另一种。
+	ModelCallQuota           int64 `json:"model_call_quota,omitempty"`
 	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`
 	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
 	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`

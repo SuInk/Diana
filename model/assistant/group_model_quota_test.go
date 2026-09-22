@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,35 +14,38 @@ import (
 
 type stubGroupUsageLog struct {
 	applog.Writer
-	tokens  int64
-	err     error
-	calls   int
-	lastWin time.Duration
+	tokens    int64
+	usedCalls int64
+	err       error
+	calls     int
+	lastWin   time.Duration
 }
 
 func (s *stubGroupUsageLog) AppendLog(context.Context, applog.Entry) error { return nil }
 
-func (s *stubGroupUsageLog) GroupLLMTokensSince(_ context.Context, _, _ string, since, until time.Time) (int64, error) {
+func (s *stubGroupUsageLog) GroupLLMUsageSince(_ context.Context, _, _ string, since, until time.Time) (applog.GroupUsage, error) {
 	s.calls++
 	s.lastWin = until.Sub(since)
-	return s.tokens, s.err
+	return applog.GroupUsage{Tokens: s.tokens, Calls: s.usedCalls}, s.err
 }
 
 func quotaRuntime(t *testing.T, usage *stubGroupUsageLog, quota int64) (*Runtime, MessageEvent) {
+	return quotaRuntimeWith(t, usage, GroupConfig{GroupID: "20001", BotProfileID: "qq", Enabled: true, ModelTokenQuota: quota})
+}
+
+func quotaRuntimeWith(t *testing.T, usage *stubGroupUsageLog, cfg GroupConfig) (*Runtime, MessageEvent) {
 	t.Helper()
 	runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetAppLogWriter(usage)
-	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"20001": {GroupID: "20001", BotProfileID: "qq", Enabled: true, ModelTokenQuota: quota},
-	}})
-	return runtime, MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: "20001", UserID: "20002"}
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{cfg.GroupID: cfg}})
+	return runtime, MessageEvent{Kind: EventKindGroup, ProfileID: "qq", GroupID: cfg.GroupID, UserID: "20002"}
 }
 
 // 额度按滚动 5 小时算，和按 token 计费的套餐窗口一致。
 func TestGroupQuotaUsesFiveHourWindow(t *testing.T) {
 	usage := &stubGroupUsageLog{tokens: 10}
 	runtime, event := quotaRuntime(t, usage, 1000)
-	if exceeded, _, _ := runtime.groupModelQuotaExceeded(context.Background(), event); exceeded {
+	if runtime.groupModelQuotaExceeded(context.Background(), event).Exceeded {
 		t.Fatal("没超额不该拦")
 	}
 	if usage.lastWin != 5*time.Hour {
@@ -53,9 +57,9 @@ func TestGroupQuotaUsesFiveHourWindow(t *testing.T) {
 func TestGroupQuotaBlocksWhenExhausted(t *testing.T) {
 	usage := &stubGroupUsageLog{tokens: 1200}
 	runtime, event := quotaRuntime(t, usage, 1000)
-	exceeded, used, quota := runtime.groupModelQuotaExceeded(context.Background(), event)
-	if !exceeded || used != 1200 || quota != 1000 {
-		t.Fatalf("exceeded=%v used=%d quota=%d", exceeded, used, quota)
+	verdict := runtime.groupModelQuotaExceeded(context.Background(), event)
+	if !verdict.Exceeded || verdict.Usage.Tokens != 1200 || verdict.Tokens != 1000 {
+		t.Fatalf("verdict = %#v", verdict)
 	}
 }
 
@@ -64,7 +68,7 @@ func TestGroupQuotaExemptsOwner(t *testing.T) {
 	usage := &stubGroupUsageLog{tokens: 99999}
 	runtime, event := quotaRuntime(t, usage, 1000)
 	event.UserID = "10001"
-	if exceeded, _, _ := runtime.groupModelQuotaExceeded(context.Background(), event); exceeded {
+	if runtime.groupModelQuotaExceeded(context.Background(), event).Exceeded {
 		t.Fatal("主人不该被额度拦住")
 	}
 }
@@ -73,7 +77,7 @@ func TestGroupQuotaExemptsOwner(t *testing.T) {
 func TestGroupQuotaFailsOpen(t *testing.T) {
 	usage := &stubGroupUsageLog{err: context.DeadlineExceeded}
 	runtime, event := quotaRuntime(t, usage, 1)
-	if exceeded, _, _ := runtime.groupModelQuotaExceeded(context.Background(), event); exceeded {
+	if runtime.groupModelQuotaExceeded(context.Background(), event).Exceeded {
 		t.Fatal("读不到用量时该放行")
 	}
 }
@@ -82,7 +86,7 @@ func TestGroupQuotaFailsOpen(t *testing.T) {
 func TestGroupQuotaSkipsWhenUnset(t *testing.T) {
 	usage := &stubGroupUsageLog{tokens: 99999}
 	runtime, event := quotaRuntime(t, usage, 0)
-	if exceeded, _, _ := runtime.groupModelQuotaExceeded(context.Background(), event); exceeded {
+	if runtime.groupModelQuotaExceeded(context.Background(), event).Exceeded {
 		t.Fatal("没配额度不该拦")
 	}
 	if usage.calls != 0 {
@@ -108,5 +112,52 @@ func TestGroupQuotaSurvivesNormalization(t *testing.T) {
 	normalized := cfg.WithDefaults("20001", BotConfig{ID: "qq"})
 	if normalized.ModelTokenQuota != 500000 {
 		t.Fatalf("归一化之后额度 = %d", normalized.ModelTokenQuota)
+	}
+}
+
+// 次数上限独立于 token：句句短但刷个不停的群，token 还没用完就该被次数拦住。
+func TestGroupQuotaBlocksOnCallCount(t *testing.T) {
+	usage := &stubGroupUsageLog{tokens: 10, usedCalls: 300}
+	runtime, event := quotaRuntimeWith(t, usage, GroupConfig{
+		GroupID: "20001", BotProfileID: "qq", Enabled: true,
+		ModelTokenQuota: 1000000, ModelCallQuota: 200,
+	})
+	verdict := runtime.groupModelQuotaExceeded(context.Background(), event)
+	if !verdict.Exceeded {
+		t.Fatalf("次数用满该拦：%#v", verdict)
+	}
+	if verdict.Reason == "" || verdict.Usage.Calls != 300 {
+		t.Fatalf("理由要写清是哪一档先到：%#v", verdict)
+	}
+}
+
+// 只配次数、不配 token 时照样生效。
+func TestGroupQuotaCallOnly(t *testing.T) {
+	usage := &stubGroupUsageLog{tokens: 999999, usedCalls: 5}
+	runtime, event := quotaRuntimeWith(t, usage, GroupConfig{
+		GroupID: "20001", BotProfileID: "qq", Enabled: true, ModelCallQuota: 10,
+	})
+	if runtime.groupModelQuotaExceeded(context.Background(), event).Exceeded {
+		t.Fatal("次数没用满、又没配 token 上限，不该拦")
+	}
+	usage2 := &stubGroupUsageLog{usedCalls: 10}
+	runtime2, event2 := quotaRuntimeWith(t, usage2, GroupConfig{
+		GroupID: "20001", BotProfileID: "qq", Enabled: true, ModelCallQuota: 10,
+	})
+	if !runtime2.groupModelQuotaExceeded(context.Background(), event2).Exceeded {
+		t.Fatal("次数正好用满该拦")
+	}
+}
+
+// 两档都配时先到先得：token 先满就报 token，次数先满就报次数。
+func TestGroupQuotaReportsWhicheverHitsFirst(t *testing.T) {
+	usage := &stubGroupUsageLog{tokens: 5000, usedCalls: 3}
+	runtime, event := quotaRuntimeWith(t, usage, GroupConfig{
+		GroupID: "20001", BotProfileID: "qq", Enabled: true,
+		ModelTokenQuota: 1000, ModelCallQuota: 100,
+	})
+	verdict := runtime.groupModelQuotaExceeded(context.Background(), event)
+	if !verdict.Exceeded || !strings.Contains(verdict.Reason, "token") {
+		t.Fatalf("token 先到该报 token：%#v", verdict)
 	}
 }

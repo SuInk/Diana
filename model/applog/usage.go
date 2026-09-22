@@ -21,8 +21,15 @@ type UsageReader interface {
 	LLMUsageSince(context.Context, time.Time, time.Time) (UsageSummary, error)
 }
 
-// GroupUsageReader 是可选能力：按群统计窗口内的 token 用量，供按群额度使用。
+// GroupUsage 是一个群在窗口内的用量。token 和次数分开给：两种超用的形态不一样，
+// 一个群可以句句短但刷个不停，也可以只说几句却每句都带图。
+type GroupUsage struct {
+	Tokens int64 `json:"tokens"`
+	Calls  int64 `json:"calls"`
+}
+
+// GroupUsageReader 是可选能力：按群统计窗口内的用量，供按群额度使用。
 // 存储没实现它时额度功能自动失效（不限额），而不是把所有群都当成超额。
 type GroupUsageReader interface {
-	GroupLLMTokensSince(ctx context.Context, profileID, groupID string, since, until time.Time) (int64, error)
+	GroupLLMUsageSince(ctx context.Context, profileID, groupID string, since, until time.Time) (GroupUsage, error)
 }

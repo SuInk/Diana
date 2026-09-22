@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +22,8 @@ const groupModelQuotaWindow = 5 * time.Hour
 const groupModelQuotaCacheTTL = 30 * time.Second
 
 type groupQuotaReading struct {
-	tokens  int64
-	readAt  time.Time
-	overrun bool
+	usage  applog.GroupUsage
+	readAt time.Time
 }
 
 type groupModelQuotaCache struct {
@@ -50,49 +50,68 @@ func (c *groupModelQuotaCache) put(key string, reading groupQuotaReading) {
 	c.readings[key] = reading
 }
 
+// groupQuotaVerdict 是一次额度判断的结论。两档各自独立，谁先到就按谁拦。
+type groupQuotaVerdict struct {
+	Exceeded bool
+	Reason   string
+	Usage    applog.GroupUsage
+	Tokens   int64
+	Calls    int64
+}
+
 // groupModelQuotaExceeded 判断这个群是不是已经用超了本窗口的额度。
 //
 // 读不到用量时一律放行：额度是省钱用的，不该因为日志存储不可用就让整个群哑掉。
-func (r *Runtime) groupModelQuotaExceeded(ctx context.Context, event MessageEvent) (bool, int64, int64) {
+func (r *Runtime) groupModelQuotaExceeded(ctx context.Context, event MessageEvent) groupQuotaVerdict {
 	if r == nil || event.Kind != EventKindGroup {
-		return false, 0, 0
+		return groupQuotaVerdict{}
 	}
 	groupID := strings.TrimSpace(event.GroupID)
 	if groupID == "" {
-		return false, 0, 0
+		return groupQuotaVerdict{}
 	}
 	groupCfg, ok := r.groupConfigForEvent(event)
-	if !ok || groupCfg.ModelTokenQuota <= 0 {
-		return false, 0, 0
+	if !ok || (groupCfg.ModelTokenQuota <= 0 && groupCfg.ModelCallQuota <= 0) {
+		return groupQuotaVerdict{}
 	}
+	verdict := groupQuotaVerdict{Tokens: groupCfg.ModelTokenQuota, Calls: groupCfg.ModelCallQuota}
 	// 主人不受限：额度用完之后改配置、查用量这些还得靠主人，锁死自己没有道理。
 	if r.effectiveConfigForEvent(event).IsOwnerEvent(event) {
-		return false, 0, groupCfg.ModelTokenQuota
+		return verdict
 	}
 	reader, ok := r.appLogWriter().(applog.GroupUsageReader)
 	if !ok || reader == nil {
-		return false, 0, groupCfg.ModelTokenQuota
+		return verdict
 	}
 	profileID := strings.TrimSpace(r.eventProfileID(event))
 	key := profileID + "\x00" + groupID
 	now := time.Now()
-	if reading, fresh := r.groupQuota.get(key, now); fresh {
-		return reading.overrun, reading.tokens, groupCfg.ModelTokenQuota
+	reading, fresh := r.groupQuota.get(key, now)
+	if !fresh {
+		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		usage, err := reader.GroupLLMUsageSince(readCtx, profileID, groupID, now.Add(-groupModelQuotaWindow), now)
+		cancel()
+		if err != nil {
+			return verdict
+		}
+		reading = groupQuotaReading{usage: usage, readAt: now}
+		r.groupQuota.put(key, reading)
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	tokens, err := reader.GroupLLMTokensSince(readCtx, profileID, groupID, now.Add(-groupModelQuotaWindow), now)
-	cancel()
-	if err != nil {
-		return false, 0, groupCfg.ModelTokenQuota
+	verdict.Usage = reading.usage
+	switch {
+	case groupCfg.ModelTokenQuota > 0 && reading.usage.Tokens >= groupCfg.ModelTokenQuota:
+		verdict.Exceeded = true
+		verdict.Reason = fmt.Sprintf("token 用量 %d/%d", reading.usage.Tokens, groupCfg.ModelTokenQuota)
+	case groupCfg.ModelCallQuota > 0 && reading.usage.Calls >= groupCfg.ModelCallQuota:
+		verdict.Exceeded = true
+		verdict.Reason = fmt.Sprintf("调用次数 %d/%d", reading.usage.Calls, groupCfg.ModelCallQuota)
 	}
-	overrun := tokens >= groupCfg.ModelTokenQuota
-	r.groupQuota.put(key, groupQuotaReading{tokens: tokens, readAt: now, overrun: overrun})
-	return overrun, tokens, groupCfg.ModelTokenQuota
+	return verdict
 }
 
 // recordGroupModelQuotaExceeded 把超额写进应用日志。只在读数刚刷新时写一次，
 // 靠缓存天然去重：窗口里每条消息都写一行的话，日志里全是同一件事。
-func (r *Runtime) recordGroupModelQuotaExceeded(ctx context.Context, event MessageEvent, used, quota int64) {
+func (r *Runtime) recordGroupModelQuotaExceeded(ctx context.Context, event MessageEvent, verdict groupQuotaVerdict) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
@@ -102,13 +121,16 @@ func (r *Runtime) recordGroupModelQuotaExceeded(ctx context.Context, event Messa
 		Level:   applog.LevelInfo,
 		Action:  "group_model_quota_exceeded",
 		Message: "本群模型额度已用完，暂停花 token 的环节",
+		Detail:  verdict.Reason,
 		Actor:   oneBotEventActor(event),
 		Target:  event.GroupID,
 		Metadata: map[string]any{
 			"group_id":       event.GroupID,
 			"bot_profile_id": event.ProfileID,
-			"used_tokens":    used,
-			"quota_tokens":   quota,
+			"used_tokens":    verdict.Usage.Tokens,
+			"used_calls":     verdict.Usage.Calls,
+			"quota_tokens":   verdict.Tokens,
+			"quota_calls":    verdict.Calls,
 			"window":         groupModelQuotaWindow.String(),
 		},
 	})
