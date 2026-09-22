@@ -8,12 +8,25 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
+
+// portraitTraitRejection 把「这一栏为什么不收」说成能照着改的一句话。
+func portraitTraitRejection(trait assistant.UserPortraitTrait) string {
+	field, ok := assistant.NormalizePortraitField(string(trait.Field))
+	if !ok {
+		return "画像栏目或内容无效"
+	}
+	if field == assistant.PortraitFieldTimezone {
+		return "时区要填 IANA 时区名，例如 Asia/Shanghai、Europe/Berlin；「在德国」「比我慢六小时」这类描述换算不了时间，不能收"
+	}
+	return "「" + assistant.PortraitFieldLabel(field) + "」这一栏的内容无效"
+}
 
 func (h *BotHandler) editAssistantUser(c *gin.Context) {
 	if h.sqlite == nil {
@@ -44,12 +57,23 @@ func (h *BotHandler) editAssistantUser(c *gin.Context) {
 				return
 			}
 		}
+		// 手填的画像要走和模型写入同一道归一：补栏目名、收紧空白、按栏校验取值。
+		// 时区那一栏尤其不能放过——存进一句「在德国」不会报错，但它换算不出时间，
+		// 跨时区那条链路只会当成「没记过」，人还以为自己已经标上了。
+		normalized := make([]assistant.UserPortraitTrait, 0, len(p.Portrait))
 		for _, trait := range p.Portrait {
 			if _, ok := assistant.NormalizePortraitField(string(trait.Field)); !ok || strings.TrimSpace(trait.Value) == "" || len([]rune(trait.Value)) > 1000 {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "画像栏目或内容无效"})
 				return
 			}
+			clean, ok := assistant.NormalizePortraitTrait(trait, time.Now())
+			if !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": portraitTraitRejection(trait)})
+				return
+			}
+			normalized = append(normalized, clean)
 		}
+		p.Portrait = normalized
 	}
 	err := h.sqlite.EditUserMemory(c.Request.Context(), p.BotProfileID, strings.TrimSpace(c.Param("id")), p, remove)
 	if err != nil {
