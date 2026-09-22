@@ -282,10 +282,23 @@
               <span v-if="modelOptions.length > 0" class="hint">当前有 {{ modelOptions.length }} 个可用模型，可同步刷新或手动补充。</span>
               <span v-else class="hint">从服务同步模型列表，也可手动添加中转或自建模型 ID。</span>
             </div>
-            <button class="btn" type="button" :disabled="modelsLoading" @click="loadModels(false)">
-              <RefreshCw :size="14" aria-hidden="true" />
-              {{ modelsLoading ? "同步中…" : "同步模型列表" }}
-            </button>
+            <span class="cluster" style="gap: 8px">
+              <button
+                v-if="modelOptions.length > 0"
+                class="btn ghost"
+                type="button"
+                :disabled="modelsLoading"
+                title="移除全部模型，然后手动补上要留的那几个"
+                @click="clearModels"
+              >
+                <Trash2 :size="14" aria-hidden="true" />
+                清空
+              </button>
+              <button class="btn" type="button" :disabled="modelsLoading" @click="loadModels(false)">
+                <RefreshCw :size="14" aria-hidden="true" />
+                {{ modelsLoading ? "同步中…" : "同步模型列表" }}
+              </button>
+            </span>
           </div>
           <!-- 中转和自建 endpoint 常常不实现 /models，拉不到时得能手填，
                否则机器人页的「模型分配」和这里的连通测试都无从选起。 -->
@@ -981,6 +994,32 @@ function addManualModels(): void {
   }
   manualModelDraft.value = "";
   toastSuccess(added > 0 ? `已添加 ${added} 个模型` : "这些模型已在列表里");
+}
+
+// clearModels 一次清掉整张模型清单。同步会把服务端返回的全部模型拉进来，中转动辄
+// 上百个，而一套配置通常只用其中两三个——逐个点 X 不现实，这个洞正是「清空之后
+// 手动补上要留的那几个」这个用法要补的。
+//
+// 只改本地状态，保存后才落库。save() 在清单为空时会自动重新同步，所以清空之后
+// 必须先手动添加再保存，否则保存会把整张清单原样拉回来。
+async function clearModels(): Promise<void> {
+  const count = modelOptions.value.length;
+  if (count === 0) {
+    return;
+  }
+  const ok = await askConfirm({
+    title: "清空模型列表",
+    message: `确定移除全部 ${count} 个模型吗？保存前可以重新同步找回；保存时如果清单仍为空，会自动重新同步拉回全部模型。`,
+    confirmLabel: "清空",
+    danger: true
+  });
+  if (!ok) {
+    return;
+  }
+  modelOptions.value = [];
+  if (form.value) {
+    form.value.model = "";
+  }
 }
 
 function removeModel(id: string): void {
