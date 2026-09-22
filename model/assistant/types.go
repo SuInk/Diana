@@ -1759,9 +1759,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ContextSummaryThreshold <= 0 {
 		cfg.ContextSummaryThreshold = defaults.ContextSummaryThreshold
 	}
-	if cfg.ContextSummaryThreshold < cfg.RecentContextLimit {
-		cfg.ContextSummaryThreshold = cfg.RecentContextLimit
-	}
+	cfg.ContextSummaryThreshold = contextSummaryTriggerThreshold(cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
 	if cfg.LongTermMemoryEnabled == nil {
 		cfg.LongTermMemoryEnabled = boolPointer(true)
 	}

@@ -6936,13 +6936,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	if limit <= 0 {
 		limit = 20
 	}
-	threshold := cfg.ContextSummaryThreshold
-	if threshold <= 0 {
-		threshold = limit * 2
-	}
-	if threshold < limit {
-		threshold = limit
-	}
+	threshold := contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold)
 	if len(history) > threshold {
 		compressCount := len(history) - limit
 		if compressCount > 0 {
