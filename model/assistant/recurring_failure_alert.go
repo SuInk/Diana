@@ -144,6 +144,13 @@ func (r *Runtime) deliverRecurringRecoveryNotice(ctx context.Context, item Remin
 	if !item.RecoveryNoticePending || ctx.Err() != nil {
 		return
 	}
+	// 失败告警被开关挡下时，「已恢复」也没有意义：用户没见过那条失败。
+	if !r.errorNoticeAllowed(reminderSourceEvent(item)) {
+		if err := r.clearReminderRecoveryNotice(item.ID); err != nil {
+			r.setError(err.Error())
+		}
+		return
+	}
 	if err := r.notifyRecurringFailureRecovery(ctx, item); err != nil {
 		r.setError(err.Error())
 		return

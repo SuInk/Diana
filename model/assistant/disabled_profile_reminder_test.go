@@ -131,3 +131,49 @@ func TestRescheduleInterruptedReminderKeepsFailureState(t *testing.T) {
 		t.Fatalf("应排到下一个周期，实际 %s 后就重试", wait)
 	}
 }
+
+// 「错误提示」开关的契约是「控制所有面向聊天的诊断消息」，但订阅的失败告警以前绕过
+// 它照发：关掉开关的人照样在群里收到「仓库订阅连续 3 次失败」。
+func TestErrorNoticeSwitchSilencesSubscriptionAlerts(t *testing.T) {
+	off := false
+	on := true
+	now := time.Now()
+	newRuntime := func(enabled *bool) (*Runtime, *stubReminderStore, *recordingChannel) {
+		store := &stubReminderStore{items: []Reminder{{
+			ID:                  "watch-alert",
+			Kind:                ReminderKindRepositoryWatch,
+			ProfileID:           "qq",
+			OwnerID:             "10001",
+			UserID:              "10001",
+			Repository:          "SuInk/Diana",
+			TriggerAt:           now.Add(-time.Minute),
+			IntervalSeconds:     int64(15 * time.Minute / time.Second),
+			CreatedAt:           now.Add(-time.Hour),
+			ConsecutiveFailures: defaultRecurringFailureAlertThreshold,
+		}}}
+		channel := &recordingChannel{}
+		runtime := NewRuntime(BotConfig{ID: "qq", OwnerID: "10001", ErrorNotifyEnabled: enabled}, channel, NewPluginManager(), nil, store, nil, nil)
+		runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{{ID: "qq", OwnerID: "10001", Enabled: true, ErrorNotifyEnabled: enabled}}})
+		return runtime, store, channel
+	}
+
+	runtime, store, channel := newRuntime(&off)
+	if err := runtime.notifyRepositoryWatchFailure(context.Background(), store.items[0], fmt.Errorf("读取失败")); err != nil {
+		t.Fatalf("开关关闭时应当静默返回，却报错：%v", err)
+	}
+	if len(channel.sent) != 0 {
+		t.Fatalf("关掉「错误提示」后仍然发出了失败告警：%#v", channel.sent)
+	}
+	if err := runtime.notifyRepositoryWatchRecovery(context.Background(), store.items[0]); err != nil || len(channel.sent) != 0 {
+		t.Fatalf("恢复通知也不该发：err=%v sent=%#v", err, channel.sent)
+	}
+
+	// 开着的时候照常发，否则这个开关就变成「永远不报」了。
+	runtime, store, channel = newRuntime(&on)
+	if err := runtime.notifyRepositoryWatchFailure(context.Background(), store.items[0], fmt.Errorf("读取失败")); err != nil {
+		t.Fatalf("开关打开时发送失败：%v", err)
+	}
+	if len(channel.sent) == 0 {
+		t.Fatal("开关打开时应当发出失败告警")
+	}
+}

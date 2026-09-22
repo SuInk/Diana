@@ -119,6 +119,10 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// 关掉「错误提示」就不该再往聊天里发诊断消息，订阅和提醒的失败告警同样算。
+	if !r.errorNoticeAllowed(reminderSourceEvent(item)) {
+		return nil
+	}
 	notice := reminderFailureNotice(item, cause)
 	target := reminderSourceEvent(item)
 	if target.Kind == EventKindGroup && errors.Is(cause, errOutboundSend) {
