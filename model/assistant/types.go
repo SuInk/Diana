@@ -725,11 +725,16 @@ type BotConfig struct {
 	// 就多一处能借到这份登录态的地方，所以逐台显式打开。全局的总开关、站点
 	// 白名单和读写档位另由 WebUI 的浏览器控制页决定，两边都开才真的能用。
 	AgentBrowserControlEnabled bool `json:"agent_browser_control_enabled,omitempty"`
-	// AgentBrowserBoxEnabled 让这台机器人用 Diana 内置的那个常驻浏览器
-	// （model/browserbox）：browser_* 那组 CDP 工具会接到它上面，带着用户在
-	// 里面登录过的站点。默认关闭，理由和上面一条一样——那份登录态是用户亲手
-	// 建立的，能借到它的机器人要逐台点头。用户按下接管时这一档当场失效。
-	AgentBrowserBoxEnabled bool `json:"agent_browser_box_enabled,omitempty"`
+	// AgentBrowserBoxDisabled 关掉这台机器人对 Diana 内置常驻浏览器
+	// （model/browserbox）的使用：browser_* 那组 CDP 工具本来会接到它上面，带着
+	// 用户在里面登录过的站点。
+	//
+	// 默认是开的，写成「关闭」而不是「启用」：内置浏览器本身就要用户先去那一页
+	// 打开、还要有浏览器可用，都做到了却还要逐台机器人再点一次，等于装好了默认
+	// 不能用。登录态的那层担心由身份挡着——browser_* 不在非主人的工具白名单里
+	// （见 RelationshipPolicy.allowedAgentToolNames），群成员拿不到这组工具，只有
+	// 主人能驱动它；用户按下接管时连主人也当场失效。
+	AgentBrowserBoxDisabled bool `json:"agent_browser_box_disabled,omitempty"`
 }
 
 type ModelRole struct {
@@ -1120,7 +1125,7 @@ type ConfigPayload struct {
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
 	AgentBrowserControlEnabled      bool                      `json:"agent_browser_control_enabled,omitempty"`
-	AgentBrowserBoxEnabled          bool                      `json:"agent_browser_box_enabled,omitempty"`
+	AgentBrowserBoxDisabled         bool                      `json:"agent_browser_box_disabled,omitempty"`
 }
 
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
@@ -2321,7 +2326,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
 		AgentBrowserControlEnabled:        cfg.AgentBrowserControlEnabled,
-		AgentBrowserBoxEnabled:            cfg.AgentBrowserBoxEnabled,
+		AgentBrowserBoxDisabled:           cfg.AgentBrowserBoxDisabled,
 	}
 }
 
@@ -2535,7 +2540,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,
 		AgentBrowserControlEnabled:      payload.AgentBrowserControlEnabled,
-		AgentBrowserBoxEnabled:          payload.AgentBrowserBoxEnabled,
+		AgentBrowserBoxDisabled:         payload.AgentBrowserBoxDisabled,
 	}.WithDefaults()
 	if cfg.OneBotHTTPSecret == "" {
 		cfg.OneBotHTTPSecret = existing.OneBotHTTPSecret

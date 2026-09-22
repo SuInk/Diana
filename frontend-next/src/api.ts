@@ -372,7 +372,7 @@ export interface BotProfileConfig {
   agent_browser_timeout_ms?: number;
   /** 允许这台机器人使用浏览器控制扩展（browser_ext_*）。默认关闭。 */
   agent_browser_control_enabled?: boolean;
-  agent_browser_box_enabled?: boolean;
+  agent_browser_box_disabled?: boolean;
 }
 
 export interface PluginSettingOption {

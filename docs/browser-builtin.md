@@ -11,12 +11,18 @@ Diana 自己的那个浏览器：一个常驻的 Chrome/Chromium 进程，profil
 | 浏览器 | 一次性 Chromium，每次全新 profile | 用户日常浏览器 | Diana 自己的常驻浏览器 |
 | 登录态 | 没有 | 用户的，Diana 不碰 Cookie | 用户在这个浏览器里自己登的，留在 profile 目录 |
 | 用户能不能看见 | 看不见 | 就在自己浏览器里 | WebUI 里有实时画面，能直接上手 |
-| 默认 | 开启 | 全关，逐项授权 | 关闭，开了才有进程 |
+| 默认 | 开启 | 全关，逐项授权 | 那一页打开才有进程；起来后机器人默认就能用 |
+| 谁能驱动 | 群成员也能（`browser_render`） | 主人 | 只有主人 |
 
 打开这一档之后，`browser_open` / `browser_text` / `browser_click` / `browser_type` /
 `browser_screenshot` 这组工具会自动接到内置浏览器上，不再指向机器人配置里那个外部
-CDP 地址。两个前提：WebUI 里启用了内置浏览器，机器人自己的
-`agent_browser_box_enabled` 也打开了。
+CDP 地址。只有一个前提：在 WebUI 的「浏览器」页把内置浏览器打开。机器人那一侧默认
+就允许，想让某台机器人彻底不碰它，把它的 `agent_browser_box_disabled` 勾上。
+
+**这组工具只有主人能用。** 它连的是带着你登录态的常驻浏览器，所以群成员的工具面里
+根本没有它们（见 `RelationshipPolicy.allowedAgentToolNames`）——群成员能用的是
+`browser_render` 那条一次性无头渲染：临时 profile、用完即删、不带任何登录态。
+接管打开时连主人也拿不到。
 
 ## 实时画面是怎么来的
 
