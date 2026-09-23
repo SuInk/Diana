@@ -10,7 +10,7 @@ import (
 
 func routerPromptForConfig(cfg BotConfig) string {
 	cfg = cfg.WithDefaults()
-	return proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)
+	return proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)
 }
 
 // 这条是这次修复的本体：以前 configured 在 Participation 分支里根本没被读过。

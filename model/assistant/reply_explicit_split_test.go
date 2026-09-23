@@ -100,15 +100,15 @@ func TestCasualPacingPromptDoesNotApplyToRoutedRequests(t *testing.T) {
 func TestLegacySingleMessagePromptMigratesWithoutChangingCustomPrompts(t *testing.T) {
 	for _, original := range []string{"", legacySingleMessageProactiveReplyPrompt, "  " + legacySingleMessageProactiveReplyPrompt + "\n"} {
 		cfg := (BotConfig{ProactiveReplyPrompt: original}).WithDefaults()
-		if cfg.ProactiveReplyPrompt != defaultProactiveReplyPrompt {
+		if cfg.prompt(promptProactiveReplySpec) != defaultProactiveReplyPrompt {
 			t.Fatal("legacy default was not migrated")
 		}
-		if got := ConfigFromPayload(PayloadFromConfig(cfg), cfg).WithDefaults(); got.ProactiveReplyPrompt != defaultProactiveReplyPrompt {
+		if got := ConfigFromPayload(PayloadFromConfig(cfg), cfg).WithDefaults(); got.prompt(promptProactiveReplySpec) != defaultProactiveReplyPrompt {
 			t.Fatal("migrated prompt did not survive config round trip")
 		}
 	}
 	custom := "我的规则：最终只发送一条简洁完整的回复。"
-	if got := (BotConfig{ProactiveReplyPrompt: custom}).WithDefaults(); got.ProactiveReplyPrompt != custom {
+	if got := (BotConfig{ProactiveReplyPrompt: custom}).WithDefaults(); got.prompt(promptProactiveReplySpec) != custom {
 		t.Fatal("custom prompt was overwritten")
 	}
 }

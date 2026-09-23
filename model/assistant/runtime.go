@@ -2403,7 +2403,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
+			Content: proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, chatIn, boolValue(cfg.SocialReplyEnabled, false)),
 		},
 		routeUserMessage,
 	}
@@ -3982,7 +3982,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	messageEvent := attachInboundTurnMedia(event, directReplySupplementEvents(append(r.directReplySupplements(ctx), backlogReplyTurnFromContext(ctx)...)))
 	currentText := currentPromptTextWithSemanticContext(event, cleanText, semanticContext, promptAnnotation{
 		BotID:        firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount)),
-		WakeGuidance: cfg.PromptWakeOnlyText,
+		WakeGuidance: cfg.prompt(promptWakeOnlySpec),
 		TriggerWords: cfg.GroupTriggers,
 	})
 	currentText = updatedReplyRequestText(currentText, r.pendingReplyRequestContexts(r.directReplySupplements(ctx), event))
@@ -5375,11 +5375,11 @@ func (r *Runtime) cleanInput(event MessageEvent, text string) string {
 	// 优先使用 segment 转出的可读文本，保留 @ 和触发词，但不把 CQ 协议码直接交给模型。
 	original := strings.TrimSpace(readableEventText(event, text))
 	if imageOnlyPrompt(botMentionStrippedText(event, text, botID), event) {
-		return cfg.PromptImageOnlyText
+		return cfg.prompt(promptImageOnlySpec)
 	}
 	if original == "" {
 		// 连原话都没有（无 segment、RawMessage 也空），没有可保留的东西。
-		return cfg.PromptWakeOnlyText
+		return cfg.prompt(promptWakeOnlySpec)
 	}
 	return original
 }

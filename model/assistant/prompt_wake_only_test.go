@@ -12,7 +12,7 @@ import (
 // 光说「请自然回应」太空，模型会退回报到。
 func TestWakeOnlyPromptForbidsPresenceAnnouncements(t *testing.T) {
 	cfg := BotConfig{}.WithDefaults()
-	prompt := cfg.PromptWakeOnlyText
+	prompt := cfg.prompt(promptWakeOnlySpec)
 	if strings.TrimSpace(prompt) == "" {
 		t.Fatal("唤醒提示词不该为空")
 	}
@@ -45,11 +45,11 @@ func TestBareMentionKeepsOriginalTextAndAppendsWakeGuidance(t *testing.T) {
 	if !strings.Contains(clean, "Diana") || !strings.Contains(clean, "@") {
 		t.Fatalf("原话没有留下来：%q", clean)
 	}
-	if clean == runtime.ProfileConfig("").PromptWakeOnlyText {
+	if clean == runtime.ProfileConfig("").prompt(promptWakeOnlySpec) {
 		t.Fatalf("正文被唤醒提示词顶替了：%q", clean)
 	}
-	prompt := currentPromptTextWithSemanticContext(bare, clean, semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.ProfileConfig("").PromptWakeOnlyText})
-	if !strings.Contains(prompt, runtime.ProfileConfig("").PromptWakeOnlyText) {
+	prompt := currentPromptTextWithSemanticContext(bare, clean, semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.ProfileConfig("").prompt(promptWakeOnlySpec)})
+	if !strings.Contains(prompt, runtime.ProfileConfig("").prompt(promptWakeOnlySpec)) {
 		t.Fatalf("唤醒指引没有作为注解附上：%q", prompt)
 	}
 	if !strings.Contains(prompt, "Diana") {
@@ -58,11 +58,11 @@ func TestBareMentionKeepsOriginalTextAndAppendsWakeGuidance(t *testing.T) {
 
 	spoken := bare
 	spoken.Segments = append(append([]MessageSegment{}, bare.Segments...), MessageSegment{Type: "text", Data: map[string]string{"text": "在干嘛"}})
-	got := currentPromptTextWithSemanticContext(spoken, runtime.cleanInput(spoken, ""), semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.ProfileConfig("").PromptWakeOnlyText})
+	got := currentPromptTextWithSemanticContext(spoken, runtime.cleanInput(spoken, ""), semanticReferenceContext{}, promptAnnotation{BotID: "42", WakeGuidance: runtime.ProfileConfig("").prompt(promptWakeOnlySpec)})
 	if !strings.Contains(got, "在干嘛") {
 		t.Fatalf("带内容的消息正文丢了：%q", got)
 	}
-	if strings.Contains(got, runtime.ProfileConfig("").PromptWakeOnlyText) {
+	if strings.Contains(got, runtime.ProfileConfig("").prompt(promptWakeOnlySpec)) {
 		t.Fatalf("说了话的消息不该附唤醒指引：%q", got)
 	}
 }
@@ -184,7 +184,7 @@ func TestMentionsSomeoneElse(t *testing.T) {
 // 只喊一声名字和只 @ 一下是同一件事，都会招来「在呢」，所以都要附唤醒指引。
 func TestBareTriggerWordAlsoGetsWakeGuidance(t *testing.T) {
 	cfg := BotConfig{BotAccount: "42", GroupTriggers: []string{"Diana"}}.WithDefaults()
-	annotation := promptAnnotation{BotID: "42", WakeGuidance: cfg.PromptWakeOnlyText, TriggerWords: cfg.GroupTriggers}
+	annotation := promptAnnotation{BotID: "42", WakeGuidance: cfg.prompt(promptWakeOnlySpec), TriggerWords: cfg.GroupTriggers}
 	event := MessageEvent{
 		Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "10001", ToMe: true,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana"}}},
@@ -193,7 +193,7 @@ func TestBareTriggerWordAlsoGetsWakeGuidance(t *testing.T) {
 	if !strings.Contains(got, "Diana") {
 		t.Fatalf("原话丢了：%q", got)
 	}
-	if !strings.Contains(got, cfg.PromptWakeOnlyText) {
+	if !strings.Contains(got, cfg.prompt(promptWakeOnlySpec)) {
 		t.Fatalf("只喊名字没有附唤醒指引：%q", got)
 	}
 
@@ -201,7 +201,7 @@ func TestBareTriggerWordAlsoGetsWakeGuidance(t *testing.T) {
 	spoken := event
 	spoken.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 帮我看看这个"}}}
 	got = currentPromptTextWithSemanticContext(spoken, "Diana 帮我看看这个", semanticReferenceContext{}, annotation)
-	if strings.Contains(got, cfg.PromptWakeOnlyText) {
+	if strings.Contains(got, cfg.prompt(promptWakeOnlySpec)) {
 		t.Fatalf("说了话的消息不该附唤醒指引：%q", got)
 	}
 }
@@ -209,7 +209,7 @@ func TestBareTriggerWordAlsoGetsWakeGuidance(t *testing.T) {
 // 唤醒指引已经把「这是一次有效唤醒」说清楚了，不要再叠一句泛泛的重复。
 func TestWakeGuidanceReplacesGenericMentionOnlyNotice(t *testing.T) {
 	cfg := BotConfig{BotAccount: "42"}.WithDefaults()
-	annotation := promptAnnotation{BotID: "42", WakeGuidance: cfg.PromptWakeOnlyText}
+	annotation := promptAnnotation{BotID: "42", WakeGuidance: cfg.prompt(promptWakeOnlySpec)}
 	event := MessageEvent{
 		Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "10001", ToMe: true,
 		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}},

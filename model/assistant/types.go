@@ -608,19 +608,22 @@ type BotConfig struct {
 	ProactiveReplyRouterPrompt string `json:"proactive_reply_router_prompt,omitempty"`
 	// ProactiveReplyExtraCriteria 是接话评分的补充判据：本群的称呼、黑话和禁区。
 	// 拼在内置评分提示词尾部，不替代评分口径，也不改变裸 JSON 输出契约。
-	ProactiveReplyExtraCriteria string          `json:"proactive_reply_extra_criteria,omitempty"`
-	ProactiveReplyPrompt        string          `json:"proactive_reply_prompt,omitempty"`
-	MaxInputChars               int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
-	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
-	DirectReplyChunkSize        int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold       int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode             RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy             RefusalStrategy `json:"refusal_strategy,omitempty"`
+	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
+	ProactiveReplyPrompt        string `json:"proactive_reply_prompt,omitempty"`
+	// PromptOverrides 是管理员改过的内置提示词正文，按 PromptSpec.Key 存。只存改过的，
+	// 没出现的键用内置默认值，见 prompt_overrides.go。
+	PromptOverrides            PromptOverrides `json:"prompt_overrides,omitempty"`
+	MaxInputChars              int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
+	ReplyPreserveLineBreaks    *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
+	DirectReplyChunkSize       int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold      int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode            RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy            RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// DaypartToneEnabled 让语气跟着一天的时间走（深夜话少、清早迷糊、晚上松弛）。
 	// 默认关闭：按时钟改变语气是用户能感知的行为变化，不该在升级后突然发生。
 	DaypartToneEnabled *bool `json:"daypart_tone_enabled,omitempty"`
@@ -1060,6 +1063,7 @@ type ConfigPayload struct {
 	ProactiveReplyRouterPrompt  string          `json:"proactive_reply_router_prompt,omitempty"`
 	ProactiveReplyExtraCriteria string          `json:"proactive_reply_extra_criteria,omitempty"`
 	ProactiveReplyPrompt        string          `json:"proactive_reply_prompt,omitempty"`
+	PromptOverrides             PromptOverrides `json:"prompt_overrides,omitempty"`
 	MaxInputChars               int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
@@ -1616,12 +1620,6 @@ func DefaultBotConfig() BotConfig {
 		PersonaMode:               PersonaModeFill,
 		ResponseMode:              ResponseModeStandard,
 		ActionDescriptionEnabled:  boolPointer(false),
-		PromptChineseSlangText:    defaultPromptChineseSlang,
-		PromptPlaintextRulesText:  defaultPromptPlaintextRules,
-		PromptTimeTemplate:        defaultPromptTimeTemplate,
-		PromptGroupSenderTemplate: defaultPromptGroupSenderTemplate,
-		PromptImageOnlyText:       defaultPromptImageOnly,
-		PromptWakeOnlyText:        defaultPromptWakeOnly,
 		ErrorReplyPrefix:          "出错了：",
 		SendRetryAttempts:         3,
 		// 连发间隔和每条长度取的是聊天体量：几百字一坨、300ms 连发怎么看都不像
@@ -1631,8 +1629,6 @@ func DefaultBotConfig() BotConfig {
 		PrivateClosingGrace:          defaultPrivateClosingGrace,
 		InboundGroupConcurrency:      defaultInboundGroupConcurrency,
 		InboundPrivateConcurrency:    defaultInboundPrivateConcurrency,
-		ProactiveReplyRouterPrompt:   defaultProactiveReplyRouterPrompt,
-		ProactiveReplyPrompt:         defaultProactiveReplyPrompt,
 		ChatInEnabled:                boolPointer(true),
 		ChatInLevel:                  defaultChatInLevel,
 		NaturalInterjectionEnabled:   boolPointer(false),
@@ -1754,30 +1750,10 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
 	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
-	if strings.TrimSpace(cfg.PromptChineseSlangText) == "" {
-		cfg.PromptChineseSlangText = defaults.PromptChineseSlangText
-	}
-	if strings.TrimSpace(cfg.PromptPlaintextRulesText) == "" {
-		cfg.PromptPlaintextRulesText = defaults.PromptPlaintextRulesText
-	}
-	if strings.TrimSpace(cfg.PromptTimeTemplate) == "" {
-		cfg.PromptTimeTemplate = defaults.PromptTimeTemplate
-	}
-	if strings.TrimSpace(cfg.PromptGroupSenderTemplate) == "" {
-		cfg.PromptGroupSenderTemplate = defaults.PromptGroupSenderTemplate
-	}
-	if strings.TrimSpace(cfg.PromptImageOnlyText) == "" {
-		cfg.PromptImageOnlyText = defaults.PromptImageOnlyText
-	}
-	if strings.TrimSpace(cfg.PromptWakeOnlyText) == "" {
-		cfg.PromptWakeOnlyText = defaults.PromptWakeOnlyText
-	}
-	if strings.TrimSpace(cfg.ProactiveReplyRouterPrompt) == "" {
-		cfg.ProactiveReplyRouterPrompt = defaults.ProactiveReplyRouterPrompt
-	}
-	if strings.TrimSpace(cfg.ProactiveReplyPrompt) == "" || strings.TrimSpace(cfg.ProactiveReplyPrompt) == legacySingleMessageProactiveReplyPrompt {
-		cfg.ProactiveReplyPrompt = defaults.ProactiveReplyPrompt
-	}
+	// 旧的整段提示词字段不再填默认值：用户写过的搬进覆盖表，化石丢掉，见
+	// migrateLegacyPromptFields。运行时统一从 PromptOverrides 取正文。
+	cfg = migrateLegacyPromptFields(cfg)
+	cfg.PromptOverrides = normalizePromptOverrides(cfg.PromptOverrides)
 	if cfg.ChatInEnabled == nil {
 		cfg.ChatInEnabled = defaults.ChatInEnabled
 	}
@@ -2038,6 +2014,9 @@ func (cfg BotConfig) Validate() error {
 	if criteria := strings.TrimSpace(cfg.ProactiveReplyExtraCriteria); len([]rune(criteria)) > routerCriteriaMaxRunes {
 		return fmt.Errorf("主动回复补充判据不能超过 %d 字", routerCriteriaMaxRunes)
 	}
+	if err := validatePromptOverrides(cfg.PromptOverrides); err != nil {
+		return err
+	}
 	if cfg.OneBotTransport == "" {
 		cfg.OneBotTransport = OneBotTransportReverseWS
 	}
@@ -2268,6 +2247,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ProactiveReplyRouterPrompt:        cfg.ProactiveReplyRouterPrompt,
 		ProactiveReplyExtraCriteria:       cfg.ProactiveReplyExtraCriteria,
 		ProactiveReplyPrompt:              cfg.ProactiveReplyPrompt,
+		PromptOverrides:                   normalizePromptOverrides(cfg.PromptOverrides),
 		MaxInputChars:                     cfg.MaxInputChars,
 		MaxReplyChars:                     cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
@@ -2482,6 +2462,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ProactiveReplyRouterPrompt:      payload.ProactiveReplyRouterPrompt,
 		ProactiveReplyExtraCriteria:     strings.TrimSpace(payload.ProactiveReplyExtraCriteria),
 		ProactiveReplyPrompt:            payload.ProactiveReplyPrompt,
+		PromptOverrides:                 normalizePromptOverrides(payload.PromptOverrides),
 		MaxInputChars:                   payload.MaxInputChars,
 		MaxReplyChars:                   payload.MaxReplyChars,
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),

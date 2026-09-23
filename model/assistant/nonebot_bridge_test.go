@@ -64,21 +64,22 @@ func TestConfigPayloadKeepsProactiveReplyChance(t *testing.T) {
 }
 
 func TestConfigPayloadKeepsEditablePrompts(t *testing.T) {
+	// 旧客户端仍按旧字段提交：内容迁进覆盖表，读回来时在 prompt_overrides 里。
 	cfg := ConfigFromPayload(ConfigPayload{
 		Enabled:                    true,
 		SystemPrompt:               "custom system prompt",
 		ProactiveReplyRouterPrompt: "custom router prompt",
 		ProactiveReplyPrompt:       "custom proactive reply prompt",
-	}, BotConfig{})
+	}, BotConfig{}).WithDefaults()
 	payload := PayloadFromConfig(cfg)
 
 	if payload.SystemPrompt != "custom system prompt" {
 		t.Fatalf("SystemPrompt = %q", payload.SystemPrompt)
 	}
-	if payload.ProactiveReplyRouterPrompt != "custom router prompt" {
-		t.Fatalf("ProactiveReplyRouterPrompt = %q", payload.ProactiveReplyRouterPrompt)
+	if got := payload.PromptOverrides[promptLegacyRouterSpec.Key]; got != "custom router prompt" {
+		t.Fatalf("router override = %q", got)
 	}
-	if payload.ProactiveReplyPrompt != "custom proactive reply prompt" {
-		t.Fatalf("ProactiveReplyPrompt = %q", payload.ProactiveReplyPrompt)
+	if got := payload.PromptOverrides[promptProactiveReplySpec.Key]; got != "custom proactive reply prompt" {
+		t.Fatalf("proactive reply override = %q", got)
 	}
 }

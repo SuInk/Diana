@@ -102,7 +102,7 @@ func markdownToPlainForConfig(cfg BotConfig) bool {
 // 的限制塞进模型上下文。自定义纯文本规则仍然保留，但只在本轮确实会降级时注入。
 func platformOutputRulesForConfig(cfg BotConfig) string {
 	if markdownToPlainForConfig(cfg) {
-		return strings.TrimSpace(cfg.PromptPlaintextRulesText)
+		return strings.TrimSpace(cfg.prompt(promptPlaintextRulesSpec))
 	}
 	def, ok := PlatformByID(cfg.Platform)
 	if ok && def.RichText {

@@ -751,7 +751,7 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	now := r.clock()
 	zoneName, zoneOffset := now.Zone()
 	var builder strings.Builder
-	builder.WriteString(renderPromptTemplate(cfg.PromptTimeTemplate, map[string]string{
+	builder.WriteString(renderPromptTemplate(cfg.prompt(promptTimeTemplateSpec), map[string]string{
 		"datetime": now.Format("2006-01-02 15:04:05"),
 		"weekday":  chineseWeekday(now.Weekday()),
 	}))
@@ -887,7 +887,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) && !cfg.PersonaMode.ownsPersonaVoice() {
-		appendPromptSection(&builder, cfg.PromptChineseSlangText)
+		appendPromptSection(&builder, cfg.prompt(promptChineseSlangSpec))
 	}
 	if event.Kind == EventKindGroup {
 		// 场景说明分「被触发」和「主动接话」两串：后者那一轮没人点名机器人，
@@ -1045,7 +1045,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if proactiveTriggered {
 		builder.WriteString("\n")
-		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
+		builder.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
 		builder.WriteString("\n" + proactiveReplyToolResultPrompt)
 	}
 	if event.chatInReply {
@@ -1072,7 +1072,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	appendPromptSection(&tail, relationshipPermissionContext(relationship))
 	if event.Kind == EventKindGroup {
 		if boolValue(cfg.PromptInjectGroupSender, true) {
-			appendPromptSection(&tail, renderPromptTemplate(cfg.PromptGroupSenderTemplate, map[string]string{
+			appendPromptSection(&tail, renderPromptTemplate(cfg.prompt(promptGroupSenderSpec), map[string]string{
 				"sender": promptSenderIdentity(event),
 			}))
 		}
