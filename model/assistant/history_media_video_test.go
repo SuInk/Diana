@@ -52,7 +52,7 @@ func TestCacheMessageEventVideosPersistsFrames(t *testing.T) {
 	}
 }
 
-func TestCacheMessageEventVideosWaitsForNapCatPath(t *testing.T) {
+func TestCacheMessageEventVideosWaitsForOneBotPath(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
@@ -81,11 +81,11 @@ func TestCacheMessageEventVideosWaitsForNapCatPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if frames := cachedVideoFrameURLs(event.Segments); len(frames) == 0 {
-		t.Fatalf("delayed NapCat video was not cached: %#v", event.Segments)
+		t.Fatalf("delayed OneBot video was not cached: %#v", event.Segments)
 	}
 }
 
-func TestCacheMessageEventVideosIgnoresNapCatThumbnailAndWaitsForMP4(t *testing.T) {
+func TestCacheMessageEventVideosIgnoresOneBotThumbnailAndWaitsForMP4(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
@@ -116,7 +116,7 @@ func TestCacheMessageEventVideosIgnoresNapCatThumbnailAndWaitsForMP4(t *testing.
 	event := cacheMessageEventVideos(context.Background(), MessageEvent{
 		Kind:      EventKindPrivate,
 		UserID:    "user-1",
-		MessageID: "napcat-thumbnail-first",
+		MessageID: "onebot-thumbnail-first",
 		Segments: []MessageSegment{{Type: "video", Data: map[string]string{
 			"file": "incoming.mp4",
 			"url":  pendingPath,
@@ -227,7 +227,7 @@ func TestRuntimeRefreshesExpiredImageURLThroughGetImageLocalPath(t *testing.T) {
 	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
 	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
 	body := tinyJPEGBytes(t)
-	localPath := filepath.Join(t.TempDir(), "napcat-image.jpg")
+	localPath := filepath.Join(t.TempDir(), "onebot-image.jpg")
 	if err := os.WriteFile(localPath, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestRuntimeRefreshesExpiredImageURLThroughGetImageLocalPath(t *testing.T) {
 		UserID:    "user-1",
 		MessageID: "expired-rkey-local",
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
-			"file": "napcat-image-token",
+			"file": "onebot-image-token",
 			"url":  server.URL + "/expired.jpg",
 		}}},
 	})
@@ -253,17 +253,17 @@ func TestRuntimeRefreshesExpiredImageURLThroughGetImageLocalPath(t *testing.T) {
 		t.Fatal(event.imageLoadErr)
 	}
 	if event.Segments[0].Data["path"] != localPath || event.Segments[0].Data["cached_file"] == "" {
-		t.Fatalf("NapCat local image was not cached: %#v", event.Segments[0].Data)
+		t.Fatalf("OneBot local image was not cached: %#v", event.Segments[0].Data)
 	}
 	if calls := recordedCallsByAction(channel.callsSnapshot(), "get_image"); len(calls) != 1 {
 		t.Fatalf("get_image calls = %#v", calls)
 	}
 }
 
-func TestRuntimeUsesStableImageIDAndNapCatSourcePath(t *testing.T) {
+func TestRuntimeUsesStableImageIDAndOneBotSourcePath(t *testing.T) {
 	t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
 	body := tinyJPEGBytes(t)
-	localPath := filepath.Join(t.TempDir(), "napcat-source.jpg")
+	localPath := filepath.Join(t.TempDir(), "onebot-source.jpg")
 	if err := os.WriteFile(localPath, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -284,17 +284,17 @@ func TestRuntimeUsesStableImageIDAndNapCatSourcePath(t *testing.T) {
 		MessageID: "stable-image-id",
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{
 			"file":    "display-name.jpg",
-			"file_id": "napcat-stable-image-id",
+			"file_id": "onebot-stable-image-id",
 		}}},
 	})
 	if event.imageLoadErr != nil {
 		t.Fatal(event.imageLoadErr)
 	}
 	if event.Segments[0].Data["path"] != localPath || event.Segments[0].Data["cached_file"] == "" {
-		t.Fatalf("NapCat sourcePath was not cached: %#v", event.Segments[0].Data)
+		t.Fatalf("OneBot sourcePath was not cached: %#v", event.Segments[0].Data)
 	}
 	calls := recordedCallsByAction(channel.callsSnapshot(), "get_image")
-	if len(calls) != 1 || calls[0].params["file"] != "napcat-stable-image-id" {
+	if len(calls) != 1 || calls[0].params["file"] != "onebot-stable-image-id" {
 		t.Fatalf("get_image calls = %#v", calls)
 	}
 }
@@ -571,7 +571,7 @@ func TestRuntimeRefreshesExpiredGetImageSourceThroughGetMsg(t *testing.T) {
 	}))
 	defer refreshedServer.Close()
 
-	channel := &stagedNapCatImageChannel{
+	channel := &stagedOneBotImageChannel{
 		imageToken:   "original-image-token",
 		expiredURL:   expiredServer.URL + "/expired.jpg",
 		refreshedURL: refreshedServer.URL + "/refreshed.jpg",
@@ -594,7 +594,7 @@ func TestRuntimeRefreshesExpiredGetImageSourceThroughGetMsg(t *testing.T) {
 	}
 }
 
-type stagedNapCatImageChannel struct {
+type stagedOneBotImageChannel struct {
 	imageToken    string
 	expiredURL    string
 	refreshedURL  string
@@ -602,11 +602,11 @@ type stagedNapCatImageChannel struct {
 	calls         []string
 }
 
-func (c *stagedNapCatImageChannel) Connect(context.Context, EventHandler) error { return nil }
-func (c *stagedNapCatImageChannel) Send(context.Context, OutgoingMessage) error { return nil }
-func (c *stagedNapCatImageChannel) Status() ChannelStatus                       { return ChannelStatus{} }
-func (c *stagedNapCatImageChannel) Close() error                                { return nil }
-func (c *stagedNapCatImageChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+func (c *stagedOneBotImageChannel) Connect(context.Context, EventHandler) error { return nil }
+func (c *stagedOneBotImageChannel) Send(context.Context, OutgoingMessage) error { return nil }
+func (c *stagedOneBotImageChannel) Status() ChannelStatus                       { return ChannelStatus{} }
+func (c *stagedOneBotImageChannel) Close() error                                { return nil }
+func (c *stagedOneBotImageChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
 	switch action {
 	case "get_image":
 		token := stringFromAny(params["file"])
@@ -778,7 +778,7 @@ func TestRuntimeVideoFileUsesFileParserFormatLimit(t *testing.T) {
 	}
 }
 
-func TestRuntimeReplacesUnavailableNapCatVideoPath(t *testing.T) {
+func TestRuntimeReplacesUnavailableOneBotVideoPath(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
@@ -796,7 +796,7 @@ func TestRuntimeReplacesUnavailableNapCatVideoPath(t *testing.T) {
 	event := runtime.enrichMediaReferences(context.Background(), MessageEvent{
 		Kind:      EventKindGroup,
 		GroupID:   "group-1",
-		MessageID: "napcat-video",
+		MessageID: "onebot-video",
 		Segments: []MessageSegment{{Type: "video", Data: map[string]string{
 			"file": "video.mp4", "url": missingPath,
 		}}},
@@ -813,12 +813,12 @@ func TestRuntimeReplacesUnavailableNapCatVideoPath(t *testing.T) {
 	}
 }
 
-func TestRuntimeDownloadsVideoWithNapCatFileToken(t *testing.T) {
+func TestRuntimeDownloadsVideoWithOneBotFileToken(t *testing.T) {
 	videoPath := filepath.Join(t.TempDir(), "downloaded.mp4")
 	if err := os.WriteFile(videoPath, []byte("video"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	const token = "napcat-video-token"
+	const token = "onebot-video-token"
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_file": {"file": videoPath},
 	}}
@@ -839,7 +839,7 @@ func TestRuntimeDownloadsVideoWithNapCatFileToken(t *testing.T) {
 	}
 }
 
-func TestRuntimeRefreshesNapCatVideoTokenThroughGetMsg(t *testing.T) {
+func TestRuntimeRefreshesOneBotVideoTokenThroughGetMsg(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg is not installed")
 	}
@@ -849,7 +849,7 @@ func TestRuntimeRefreshesNapCatVideoTokenThroughGetMsg(t *testing.T) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("create sample video: %v: %s", err, output)
 	}
-	channel := &stagedNapCatVideoChannel{
+	channel := &stagedOneBotVideoChannel{
 		fileName:  "incoming.mp4",
 		videoPath: videoPath,
 	}
@@ -875,14 +875,14 @@ func TestRuntimeRefreshesNapCatVideoTokenThroughGetMsg(t *testing.T) {
 	}
 }
 
-type stagedNapCatVideoChannel struct {
+type stagedOneBotVideoChannel struct {
 	recordingChannel
 	fileName  string
 	videoPath string
 	refreshed bool
 }
 
-func (c *stagedNapCatVideoChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+func (c *stagedOneBotVideoChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
 	c.calls = append(c.calls, recordingAPICall{action: action, params: params})
 	switch action {
 	case "get_msg":

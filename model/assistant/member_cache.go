@@ -31,7 +31,7 @@ type memberInfo struct {
 // memberCache 缓存群成员的群等级与身份。
 //
 // 取值分三层，绝大多数情况一次 API 都不发：
-//  1. 消息事件自带 level 时直接被动写入（免费，NapCat 等实现走的就是这条）；
+//  1. 消息事件自带 level 时直接被动写入（免费，多数实现走的就是这条）；
 //  2. 命中缓存；
 //  3. 都没有才走 get_group_member_info 兜底，异步回填，当前这条消息按
 //     调用方的 fail-open 策略放行。

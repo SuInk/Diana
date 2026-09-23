@@ -15,7 +15,7 @@ import (
 
 func TestReplyAndRecordStopsAfterTerminalGroupSendFailure(t *testing.T) {
 	channel := &failingOutboundChannel{
-		err:      errors.New("opaque NapCat send failure"),
+		err:      errors.New("opaque OneBot send failure"),
 		groupIDs: []string{"123456", "20005"},
 	}
 	runtime := NewRuntime(BotConfig{OwnerID: "10001"}, channel, NewPluginManager(), nil, nil, nil, nil)
@@ -130,7 +130,7 @@ func TestGroupOutboundGateDefersWhileChannelOffline(t *testing.T) {
 		t.Fatalf("offline send used a terminal classification: %v", err)
 	}
 	if got := len(scripted.attemptTexts("123456")); got != 0 {
-		t.Fatalf("offline send reached NapCat %d times", got)
+		t.Fatalf("offline send reached OneBot %d times", got)
 	}
 
 	// 账号风控（WS 正常但账号异常）同样延后发送而不是消耗失败窗口。
@@ -139,7 +139,7 @@ func TestGroupOutboundGateDefersWhileChannelOffline(t *testing.T) {
 		t.Fatalf("account-down send error = %v", err)
 	}
 	if got := len(scripted.attemptTexts("123456")); got != 0 {
-		t.Fatalf("account-down send reached NapCat %d times", got)
+		t.Fatalf("account-down send reached OneBot %d times", got)
 	}
 
 	channel.setStatus(ChannelStatus{Connected: true})
@@ -153,7 +153,7 @@ func TestGroupOutboundGateDefersWhileChannelOffline(t *testing.T) {
 
 func TestGroupSendFailureNotMarkedUnavailableWhileOffline(t *testing.T) {
 	failing := &failingOutboundChannel{
-		err:      errors.New("opaque NapCat send failure"),
+		err:      errors.New("opaque OneBot send failure"),
 		groupIDs: []string{"123456"},
 	}
 	channel := &statusOverrideChannel{Channel: failing}
@@ -269,7 +269,7 @@ func TestGroupOutboundBackoffDropsAfterFailureWindow(t *testing.T) {
 		t.Fatalf("cooldown send error = %v", err)
 	}
 	if got := len(channel.attemptTexts("123456")); got != attemptsBeforeCooldown {
-		t.Fatalf("cooldown reached NapCat: attempts=%d want=%d", got, attemptsBeforeCooldown)
+		t.Fatalf("cooldown reached OneBot: attempts=%d want=%d", got, attemptsBeforeCooldown)
 	}
 
 	otherEvent := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "10002", MessageID: "other-1"}
@@ -302,7 +302,7 @@ func TestResolverAlternativeUsesSameBackoffGate(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	channel := newScriptedBackoffChannel("123456")
-	channel.attemptErrors = []error{errors.New("NapCat rejected direct video")}
+	channel.attemptErrors = []error{errors.New("OneBot rejected direct video")}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/token"})
 	ctx := withOutboundDeliveryPolicy(context.Background(), fastOutboundDeliveryPolicy())

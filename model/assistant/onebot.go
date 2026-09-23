@@ -68,7 +68,7 @@ type oneBotEnvelope struct {
 	TargetID    any             `json:"target_id,omitempty"`
 	Message     json.RawMessage `json:"message,omitempty"`
 	RawMessage  string          `json:"raw_message,omitempty"`
-	// Likes 和 IsAdd 是 NapCat 贴表情通知（group_msg_emoji_like）的字段：
+	// Likes 和 IsAdd 是贴表情通知（group_msg_emoji_like）的字段：
 	// 谁给哪条消息贴上或取消了哪个表情。
 	Likes []struct {
 		EmojiID any `json:"emoji_id"`
@@ -144,7 +144,7 @@ func (c *OneBotChannel) Connect(ctx context.Context, handler EventHandler) error
 
 	header := http.Header{}
 	if c.cfg.AccessToken != "" {
-		// 正向 WebSocket 连接时 token 放在 Authorization 里，兼容 go-cqhttp/NapCat 常见配置。
+		// 正向 WebSocket 连接时 token 放在 Authorization 里，兼容常见 OneBot 客户端配置。
 		header.Set("Authorization", "Bearer "+c.cfg.AccessToken)
 	}
 
@@ -253,7 +253,7 @@ func sendOneBotMessage(ctx context.Context, msg OutgoingMessage, call func(conte
 	return call(ctx, action, params)
 }
 
-// sendOneBotInputStatus 用 NapCat 的 set_input_status 显示「对方正在输入」。
+// sendOneBotInputStatus 用 set_input_status 显示「对方正在输入」。
 // 该扩展只对私聊生效，群聊直接跳过。
 func sendOneBotInputStatus(ctx context.Context, msg OutgoingMessage, action string, call func(context.Context, string, map[string]any) (map[string]any, error)) error {
 	if strings.TrimSpace(msg.GroupID) != "" || strings.TrimSpace(action) != "typing" {
@@ -275,7 +275,7 @@ func (c *OneBotChannel) SendChatAction(ctx context.Context, msg OutgoingMessage,
 func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 	segments := make([]map[string]any, 0, 3+len(msg.ImageURLs)+len(msg.VideoURLs))
 	if msg.ReplyMessageID != "" {
-		// 群聊回复先带 reply，再 at 原发送者，NapCat 会按 OneBot segment 顺序发送。
+		// 群聊回复先带 reply，再 at 原发送者，接入端会按 OneBot segment 顺序发送。
 		segments = append(segments, map[string]any{
 			"type": "reply",
 			"data": map[string]string{"id": msg.ReplyMessageID},
@@ -579,7 +579,7 @@ func envelopeStatusOK(envelope oneBotEnvelope) bool {
 	if envelope.RetCode == 0 {
 		return true
 	}
-	// NapCat 某些响应会给 status=ok 但 retcode 不稳定，这里兼容 status 字符串。
+	// 部分实现的响应会给 status=ok 但 retcode 不稳定，这里兼容 status 字符串。
 	status, ok := envelope.Status.(string)
 	return ok && strings.EqualFold(status, "ok")
 }
@@ -684,7 +684,7 @@ func messageEventFromEnvelope(envelope oneBotEnvelope) MessageEvent {
 	return event
 }
 
-// oneBotEmojiLikeEvent 把 NapCat 的贴表情通知翻成统一的 message_reaction 通知。
+// oneBotEmojiLikeEvent 把贴表情通知翻成统一的 message_reaction 通知。
 // 每次只带一个表情的贴上或取消，所以按增删处理；不带 is_add 的老版本按贴上算。
 func oneBotEmojiLikeEvent(envelope oneBotEnvelope, messageID string) MessageEvent {
 	emojis := make([]string, 0, len(envelope.Likes))
@@ -992,7 +992,7 @@ func imageSegmentCount(segments []MessageSegment) int {
 	return count
 }
 
-// VideoURLs 提取 OneBot 视频段里的远程 URL 或 NapCat 提供的本地绝对路径。
+// VideoURLs 提取 OneBot 视频段里的远程 URL 或接入端提供的本地绝对路径。
 func VideoURLs(segments []MessageSegment) []string {
 	var out []string
 	seen := map[string]struct{}{}

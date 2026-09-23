@@ -247,6 +247,24 @@ func TestLoadAppConfigRejectsBrokenYAML(t *testing.T) {
 	}
 }
 
+// TestLoadAppConfigIgnoresRetiredNapCatSection 老安装器会写 napcat.webui_url /
+// webui_token。对应的登录管理删掉后这段不再有人读，但升级上来的配置里还留着，
+// 不能因此启动失败。
+func TestLoadAppConfigIgnoresRetiredNapCatSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "server:\n  port: \"18080\"\nnapcat:\n  webui_url: \"http://127.0.0.1:6099\"\n  webui_token: \"secret\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadAppConfig(path)
+	if err != nil {
+		t.Fatalf("retired napcat section must not fail startup: %v", err)
+	}
+	if cfg.Server.Port != "18080" {
+		t.Fatalf("port = %q", cfg.Server.Port)
+	}
+}
+
 // TestResolveConfigPathPrefersExplicitFlag 固定查找顺序：--config 高于
 // DIANA_CONFIG，两者都没有才看约定位置。
 func TestResolveConfigPathPrefersExplicitFlag(t *testing.T) {

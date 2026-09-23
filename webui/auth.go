@@ -525,10 +525,10 @@ func authExemptPath(path string) bool {
 		// 健康检查供监控探活。
 		return true
 	case strings.HasPrefix(path, "/onebot/"):
-		// NapCat 反向 WebSocket 由 OneBot access token 单独鉴权。
+		// OneBot 反向 WebSocket 由 OneBot access token 单独鉴权。
 		return true
 	case strings.HasPrefix(path, "/api/assistant/media/"):
-		// 临时媒体使用高熵、短有效期 token，供 NapCat 在独立进程或容器中拉取。
+		// 临时媒体使用高熵、短有效期 token，供接入端在独立进程或容器中拉取。
 		return true
 	case strings.HasPrefix(path, "/api/assistant/group-admin"):
 		// 群管理页有自己的一次性群验证码 token 流程。

@@ -538,7 +538,7 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 		ForwardUIN:  selfID,
 		ForwardTime: time.Now().Unix(),
 	}}, cfg.Name, selfID)
-	// NapCat can create a forged forward containing text and media nodes, but a
+	// OneBot clients can create a forged forward containing text and media nodes, but a
 	// forward card nested inside another forged forward becomes unreliable as
 	// the node count grows. Keep the summary and originals in one flat card.
 	outerNodes := append(summaryNodes, innerNodes...)

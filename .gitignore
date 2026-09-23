@@ -16,7 +16,6 @@ secrets/
 *.pfx
 cookies*.txt
 *session*.json
-napcat-qrcode*.png
 dist/
 logs/*
 !logs/.gitkeep

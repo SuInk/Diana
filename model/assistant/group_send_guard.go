@@ -344,7 +344,7 @@ func isOutboundPayloadRejection(err error) bool {
 // 这里匹配的是 OneBot 实现回给我们的错误正文，不是用户说了什么——和
 // isOutboundPayloadRejection 同一性质，跟「不许用关键词猜用户意图」那条规矩无关。
 //
-// 「请先添加对方为好友」（NapCat result=16）是实测那次的原话：对方把机器人删了
+// 「请先添加对方为好友」（result=16）是实测那次的原话：对方把机器人删了
 // 好友，之后每一条私聊回复都被这句挡回来。重试五次的结果是同一条消息重新生成
 // 五遍回复、再被拒五次，除了烧钱什么也没换来。
 var permanentSendRejectionMarkers = []string{
@@ -538,8 +538,8 @@ func (r *Runtime) wrapOutboundSendError(ctx context.Context, event MessageEvent,
 	groupID := strings.TrimSpace(event.GroupID)
 	unavailable := false
 	if event.Kind == EventKindGroup && groupID != "" {
-		// NapCat error wording is not a stable protocol. Confirm terminal group
-		// failures against its structured group list instead of matching text.
+		// Client error wording is not a stable protocol. Confirm terminal group
+		// failures against the structured group list instead of matching text.
 		unavailable, _ = r.groupMissingFromOneBot(event)
 	}
 	wrapped := &outboundSendError{
@@ -690,7 +690,7 @@ func (r *Runtime) markGroupSendUnavailable(ctx context.Context, event MessageEve
 }
 
 // ignoreUnavailableGroupEvent keeps persisted and already queued events from
-// starting another LLM request after NapCat reports that the bot left a group.
+// starting another LLM request after the client reports that the bot left a group.
 // A genuinely newer live event proves that the bot has rejoined and clears it.
 func (r *Runtime) ignoreUnavailableGroupEvent(event MessageEvent) bool {
 	if event.Kind != EventKindGroup {

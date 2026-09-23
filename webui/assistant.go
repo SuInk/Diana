@@ -354,7 +354,6 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 		router.POST(base+"/group-test", h.sendGroupTest)
 		router.POST(base+"/group-test/recall", h.recallGroupTestMessage)
 		router.POST(base+"/group-test/file", h.parseGroupTestFile)
-		router.POST(base+"/group-test/napcat-qrcode", h.shareNapCatQRCode)
 		router.POST(base+"/group-test/upload-file", h.uploadGroupTestFile)
 		router.POST(base+"/group-test/onebot", h.callGroupTestOneBot)
 	}

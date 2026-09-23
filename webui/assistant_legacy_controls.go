@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -254,28 +253,6 @@ func (h *BotHandler) dashboardStats(c *gin.Context) {
 	}
 	stats.Server = collectDashboardServerStats(time.Now())
 	c.JSON(http.StatusOK, stats)
-}
-
-func (h *BotHandler) shareNapCatQRCode(c *gin.Context) {
-	if h.localMedia == nil {
-		h.writeError(c, http.StatusServiceUnavailable, "group_test_napcat_qrcode", fmt.Errorf("local media store is unavailable"), "napcat-qrcode", nil)
-		return
-	}
-	path := strings.TrimSpace(os.Getenv("DIANA_NAPCAT_QRCODE_PATH"))
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			h.writeError(c, http.StatusInternalServerError, "group_test_napcat_qrcode", err, "napcat-qrcode", nil)
-			return
-		}
-		path = filepath.Join(home, "Library", "Containers", "com.tencent.qq", "Data", "Library", "Application Support", "QQ", "NapCat", "cache", "qrcode.png")
-	}
-	sharedURL, ok := h.localMedia.Share(path, 2*time.Minute)
-	if !ok {
-		h.writeError(c, http.StatusNotFound, "group_test_napcat_qrcode", fmt.Errorf("NapCat login QR code is unavailable"), "napcat-qrcode", nil)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"url": sharedURL, "expires_in_seconds": 120})
 }
 
 func (h *BotHandler) listGroupTestFiles(c *gin.Context) {
