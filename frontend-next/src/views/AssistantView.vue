@@ -683,17 +683,6 @@
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
                 </span>
               </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_capability_probe_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">后台探测模型兼容性（默认关闭）</span>
-                </label>
-                <span class="hint">
-                  空闲时每天探一次当前绑定的模型收不收「强制调用指定工具」——带思考模式的模型（如 DeepSeek）只接受自动选择，强制会让整轮对话报错。
-                  提前探好，真实对话就不用先失败一次。探测是极小的真实调用，会计入用量和账单；关着也不影响正确性，遇到时会自动降级并记住结论。
-                </span>
-              </div>
               <div class="field">
                 <label for="bot-model-disclosure">谁能问出所用模型</label>
                 <AppSelect
@@ -4124,7 +4113,6 @@ function setForm(config: BotProfileConfig): void {
     world_book_enabled: config.world_book_enabled ?? true,
     self_note_enabled: config.self_note_enabled ?? false,
     romance_enabled: config.romance_enabled ?? false,
-    llm_capability_probe_enabled: config.llm_capability_probe_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,

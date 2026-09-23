@@ -4,7 +4,6 @@
 package llm
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -14,8 +13,7 @@ import (
 )
 
 // DowngradeMemoTTL 是一条降级结论的保质期。结论不能永久钉死：网关升级、模型
-// 换代之后原本被拒的字段可能又能用了，过期即视为未知，由后台探测或下一次真实
-// 请求重新学。
+// 换代之后原本被拒的字段可能又能用了，过期即视为未知，由下一次真实请求重新学。
 const DowngradeMemoTTL = 7 * 24 * time.Hour
 
 // downgradeMemo 记住「某个端点的某个模型拒过哪些字段」。它必须活在进程级：
@@ -62,16 +60,6 @@ func (m *downgradeMemo) remember(key string, fields map[string]bool) {
 	}
 	for field := range fields {
 		m.rejected[key][field] = m.clock()
-	}
-}
-
-// forget 抹掉一条结论，用于探测发现这个字段现在能用了。
-func (m *downgradeMemo) forget(key, field string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.rejected[key], field)
-	if len(m.rejected[key]) == 0 {
-		delete(m.rejected, key)
 	}
 }
 
@@ -240,63 +228,4 @@ func paramRejectionStatus(err error) int {
 		return 0
 	}
 	return reqErr.statusCode
-}
-
-// ForcedToolChoiceProber 由能探测「收不收强制具名工具」的 provider 实现。只有
-// OpenAI 兼容这条线有这个毛病，Anthropic 和 Gemini 都按自己的协议正常处理，
-// 所以上层按接口断言，断言不通过就跳过。
-type ForcedToolChoiceProber interface {
-	ProbeForcedToolChoice(ctx context.Context) (ProbeResult, error)
-}
-
-// ProbeResult 带回探测这一次真实调用的账单信息，供上层按普通调用记用量——探测
-// 的回复虽然不发给任何人，钱是真花了。
-type ProbeResult struct {
-	Provider Provider
-	Model    string
-	Usage    Usage
-}
-
-// probeToolName 只是探测用的占位工具，模型调不调、调成什么都不重要，我们只看
-// 网关收不收这个请求。
-const probeToolName = "diana_capability_probe"
-
-// probeMaxOutputTokens 压到刚好够吐一次工具调用。
-const probeMaxOutputTokens = 64
-
-// ProbeForcedToolChoice 用一条极小请求测这个端点+模型收不收强制具名工具，并把
-// 结论写进记忆。它故意绕开 Generate 的记忆与梯子，直接发原始请求——否则已经记住
-// 的结论会让请求预先摘掉 tool_choice，探测就永远测不到真实行为，结论也就再没有
-// 翻身的机会。
-//
-// 只有「明确被拒」和「明确通过」两种结果会改动记忆。鉴权失败、限流、超时这些
-// 与字段无关的错误原样返回，记忆保持不变。
-func (c *openAICompatibleClient) ProbeForcedToolChoice(ctx context.Context) (ProbeResult, error) {
-	req := GenerateRequest{
-		Messages:        []Message{{Role: RoleUser, Content: "ping"}},
-		MaxOutputTokens: probeMaxOutputTokens,
-		Tools:           []ToolDefinition{{Name: probeToolName, Description: "capability probe", Parameters: map[string]any{"type": "object", "properties": map[string]any{}}}},
-		ToolChoice:      probeToolName,
-	}.withDefaults(c.cfg)
-	// 思考模式本身就是 DeepSeek 拒绝强制工具的前提，所以探测必须带上配置档真实
-	// 会用的推理档位，否则探到的是另一种请求的结论。
-	key := downgradeMemoKey(c.cfg, req.Model)
-	response, err := c.generateForAPIFormat(ctx, req)
-	result := ProbeResult{Provider: c.cfg.Provider, Model: req.Model}
-	if response != nil {
-		result.Usage = response.Usage
-		if strings.TrimSpace(response.Model) != "" {
-			result.Model = response.Model
-		}
-	}
-	switch {
-	case err == nil:
-		rememberedDowngrades.forget(key, downgradeFieldToolChoice)
-		return result, nil
-	case forcedToolChoiceRejected(err):
-		rememberedDowngrades.remember(key, map[string]bool{downgradeFieldToolChoice: true})
-		return result, nil
-	default:
-		return result, err
-	}
 }
