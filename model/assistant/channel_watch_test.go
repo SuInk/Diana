@@ -129,3 +129,39 @@ func TestChannelWatchThrottlesConnectionErrors(t *testing.T) {
 		t.Fatalf("error logs after the interval = %d, last = %#v", got, entries[len(entries)-1])
 	}
 }
+
+// 断开那一刻上报的错误就是断开原因：并进断开日志，不能再多记一条「连接报错」。
+// 第一个 OneBot 连接的断开归协调器记，这里也不能把它的断开原因当成报错补一条。
+func TestChannelWatchFoldsDisconnectErrorIntoDisconnect(t *testing.T) {
+	primary := &multiChannelProbe{status: ChannelStatus{Connected: true}}
+	telegram := &multiChannelProbe{status: ChannelStatus{Connected: true}}
+	channel := NewMultiChannel([]ChannelBinding{
+		{ProfileID: "qq-main", Platform: PlatformOneBotV11, Channel: primary},
+		{ProfileID: "tg", Platform: PlatformTelegram, Channel: telegram},
+	})
+	r := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	r.SetInboundEventStore(newMemoryInboundEventStore())
+	logs := &captureAppLogs{}
+	r.SetAppLogWriter(logs)
+	states := map[string]*channelWatchState{}
+	now := time.Now()
+	r.observeChannels(t.Context(), states, now)
+
+	primary.status = ChannelStatus{LastError: "websocket: close 1005 (no status)"}
+	telegram.status = ChannelStatus{LastError: "read: connection reset by peer"}
+	r.observeChannels(t.Context(), states, now.Add(5*time.Second))
+	r.observeChannels(t.Context(), states, now.Add(10*time.Second))
+
+	entries := logs.entriesSnapshot()
+	if hasAppLogAction(entries, "channel_error") {
+		t.Fatalf("disconnect reason logged as a separate error: %v", appLogActions(entries))
+	}
+	for _, entry := range entries {
+		if entry.Action == "channel_disconnected" && entry.Detail != "read: connection reset by peer" {
+			t.Fatalf("disconnect entry = %#v", entry)
+		}
+	}
+	if got := countAppLogAction(entries, "channel_disconnected"); got != 1 {
+		t.Fatalf("disconnect logs = %d, want 1 (primary belongs to the coordinator)", got)
+	}
+}

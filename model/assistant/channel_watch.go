@@ -59,8 +59,18 @@ func (r *Runtime) observeChannels(ctx context.Context, states map[string]*channe
 			state = &channelWatchState{}
 			states[key] = state
 		}
+		// 断开那一刻连接上报的错误（比如 websocket: close 1005）就是断开的原因，
+		// 并进断开那条日志，不再单独记一条「连接报错」。
+		disconnected := seen && state.connected && !status.Connected
 		if key != skip {
 			r.observeChannelConnection(ctx, status, state, seen)
+		} else {
+			state.connected = status.Connected
+			state.accountDown = channelAccountDown(status)
+		}
+		if disconnected {
+			state.lastError = strings.TrimSpace(status.LastError)
+			continue
 		}
 		r.observeChannelError(ctx, status, state, now)
 	}
@@ -74,7 +84,7 @@ func (r *Runtime) observeChannelConnection(ctx context.Context, status ChannelSt
 	case status.Connected && (!seen || !state.connected):
 		r.recordChannelLog(ctx, status, applog.KindOperation, applog.LevelInfo, "channel_connected", "连接已建立", "")
 	case !status.Connected && seen && state.connected:
-		r.recordChannelLog(ctx, status, applog.KindError, applog.LevelError, "channel_disconnected", "连接已断开", "")
+		r.recordChannelLog(ctx, status, applog.KindError, applog.LevelError, "channel_disconnected", "连接已断开", strings.TrimSpace(status.LastError))
 	}
 	if status.Connected && seen && state.connected {
 		switch {
