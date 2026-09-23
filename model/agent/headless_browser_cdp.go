@@ -42,6 +42,10 @@ type browserDOMProbe struct {
 	TextLength        int    `json:"text_length"`
 	SemanticSignature string `json:"semantic_signature"`
 	DOMChanges        int64  `json:"dom_changes"`
+	// PendingTimers 是页面还排着多少个没烧完的定时器；Instrumented 说明这个数
+	// 到底有没有采到（脚本注入失败、页面自己换掉了 setTimeout 都会采不到）。
+	PendingTimers int  `json:"pending_timers"`
+	Instrumented  bool `json:"instrumented"`
 }
 
 func (p browserDOMProbe) meaningful() bool {
@@ -228,7 +232,7 @@ func (r *renderReadiness) observe(now time.Time, probe browserDOMProbe, activity
 		(probe.ReadyState == "loading" && stableFor >= loadingStableWindow)
 	contentStable := documentReady && probe.meaningful() && navigationQuiet && stableFor >= cfg.StabilityWindow
 	settled := contentStable && ((!activity.Loading && networkQuiet) || semanticOverride)
-	minimumObserved := now.Sub(r.started) >= cfg.VirtualTimeBudget
+	minimumObserved := now.Sub(r.started) >= cfg.VirtualTimeBudget || nothingLeftToWaitFor(probe, activity, settled, networkQuiet)
 
 	reason := "waiting_for_dom"
 	switch {
@@ -463,6 +467,13 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	if deadline.After(hardDeadline) {
 		deadline = hardDeadline
 	}
+	// 观察要比整个请求早一点收手，留出最后抓一张快照的时间。
+	//
+	// 这两个时间本来是同一刻（外层 ctx 就是按 cfg.Timeout 建的），谁先醒是抽签：
+	// 抽到循环自己，就带着页面现有内容收尾；抽到 ctx，走的是「一张快照都没有就
+	// 直接抛错」那条路，抛的还是光秃秃的 context deadline exceeded。慢站点上这两种
+	// 结果完全随机——mimo.xiaomi.com 线上就是抛错那一种。
+	deadline = withFinalCaptureReserve(ctx, deadline, b.cfg.Timeout)
 	var deadlineNavigation time.Time
 	ticker := time.NewTicker(b.cfg.PollInterval)
 	defer ticker.Stop()
@@ -484,6 +495,9 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			if deadline.After(hardDeadline) {
 				deadline = hardDeadline
 			}
+			// 页面跳转会把观察时间顺延，但顺延不能把收尾的预留吃掉：
+			// 重定向站点上一吃掉就又变成「直接抛错」那条路。
+			deadline = withFinalCaptureReserve(ctx, deadline, b.cfg.Timeout)
 		}
 		now := time.Now()
 		if !now.Before(deadline) {
@@ -494,7 +508,9 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			if len(captures) > 0 {
 				return b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, lastProbe, lastDecision, tracker.snapshot(), captures, false, "request_cancelled_returning_last_non_empty_snapshot")
 			}
-			return RenderedPage{}, ctx.Err()
+			// 连一张快照都没有：说清楚是超时且页面始终没给出可抓取的内容，
+			// 别只抛一句 context deadline exceeded 让人以为是网络问题。
+			return RenderedPage{}, fmt.Errorf("headless browser render ended after %s with no capturable content: %w", time.Since(renderStarted).Round(time.Millisecond), ctx.Err())
 		case <-ticker.C:
 		}
 
@@ -506,6 +522,12 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 		if err != nil {
 			if transientBrowserEvaluationError(err) {
 				continue
+			}
+			switch probeFailureAction(err, browserCtx.Err()) {
+			case probeRetry:
+				continue
+			case probeFinish:
+				return b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, lastProbe, lastDecision, tracker.snapshot(), captures, false, "probe_deadline_returning_last_non_empty_snapshot")
 			}
 			return RenderedPage{}, fmt.Errorf("inspect rendered DOM: %w", err)
 		}
@@ -645,6 +667,86 @@ func dedupeConsecutiveStrings(values []string) []string {
 	return out
 }
 
+// browserFinalCaptureReserve 是留给「最后抓一张快照」的时间。抓取本身有
+// browserCaptureTimeout 的预算，这里按它留，同时不超过总时长的五分之一——
+// 短超时的调用不该把大半预算花在收尾上。
+func withFinalCaptureReserve(ctx context.Context, deadline time.Time, timeout time.Duration) time.Time {
+	ctxDeadline, ok := ctx.Deadline()
+	if !ok {
+		return deadline
+	}
+	reserve := min(browserCaptureTimeout, timeout/5)
+	if reserve <= 0 {
+		return deadline
+	}
+	reserved := ctxDeadline.Add(-reserve)
+	if reserved.Before(deadline) {
+		return reserved
+	}
+	return deadline
+}
+
+// nothingLeftToWaitFor 判断这个页面是不是确凿地没有后手了，有就不必等满最短
+// 观察窗。
+//
+// 最短观察窗（VirtualTimeBudget，默认 8 秒）存在的理由只有一个：页面可能过几秒
+// 才跳转、才补内容，早收手就会拿到半成品。代价是连一张静态页也要等满 8 秒，
+// 而工具总预算才 60 秒。
+//
+// 但「过几秒才动」这件事是可以直接看出来的：延迟跳转、延迟渲染都要先排个
+// setTimeout/setInterval。注入脚本把没烧完的回调数记下来，这里连同「文档已
+// complete、网络静了、DOM 稳了、没有在途请求」一起看——全都成立时，页面确实
+// 没有任何已排期的后续动作，再等下去也只是空耗。
+//
+// 采不到这个信号（脚本没注进去、页面自己换掉了 setTimeout）就退回按时间等，
+// 宁可慢也不要拿半成品。
+func nothingLeftToWaitFor(probe browserDOMProbe, activity browserActivitySnapshot, settled, networkQuiet bool) bool {
+	return settled &&
+		networkQuiet &&
+		probe.Instrumented &&
+		probe.PendingTimers == 0 &&
+		probe.ReadyState == "complete" &&
+		!activity.Loading &&
+		activity.PendingRequests == 0
+}
+
+// probeAction 是一次 DOM 探针失败之后该怎么办。
+type probeAction int
+
+const (
+	// probeFail：探针说的是页面本身有问题，这次渲染到此为止。
+	probeFail probeAction = iota
+	// probeRetry：下一拍再探一次。
+	probeRetry
+	// probeFinish：渲染的总时间也到了，用手上已有的快照收尾。
+	probeFinish
+)
+
+// probeFailureAction 判断一次 DOM 探针失败该重试、收尾还是判死。
+//
+// 探针自己只有 browserProbeTimeout 那点预算，而它要的是页面主线程空出来。某一刻
+// 主线程被长任务占着探不动，只说明这一刻忙，不说明这次渲染失败——判死是渲染总
+// 截止时间的事，手上已经抓到的快照更不该因此丢掉。
+//
+// 线上就是这么丢的：一次 3 秒探针超时，整页直接报「沙盒无头浏览器渲染失败」，
+// 而同一个会话下一秒渲染别的站点完全正常。
+func probeFailureAction(err error, browserCtxErr error) probeAction {
+	switch {
+	case err == nil:
+		return probeRetry
+	case transientBrowserEvaluationError(err):
+		return probeRetry
+	case !errors.Is(err, context.DeadlineExceeded):
+		return probeFail
+	case browserCtxErr == nil:
+		// 只是这一拍探不动，整次渲染的时间还有。
+		return probeRetry
+	default:
+		// 连浏览器上下文都到期了，别再探，拿手上的收尾。
+		return probeFinish
+	}
+}
+
 func transientBrowserEvaluationError(err error) bool {
 	if err == nil {
 		return false
@@ -657,12 +759,54 @@ func transientBrowserEvaluationError(err error) bool {
 }
 
 const browserMutationObserverScript = `(function () {
-  const state = { mutations: 0, lastMutationAt: Date.now() };
+  const state = { mutations: 0, lastMutationAt: Date.now(), pendingTimers: 0, instrumented: false };
   Object.defineProperty(globalThis, "__dianaRenderState", {
     configurable: false,
     enumerable: false,
     value: state
   });
+  // 记还有多少「已排期但还没烧完」的回调。页面靠 setTimeout 延迟跳转、延迟补内容
+  // 是最常见的一类慢，光看 DOM 和网络都是静的，看这个才知道它还有后手。
+  // setInterval 只要没 clear 就一直算挂着。
+  try {
+    const timeout = globalThis.setTimeout;
+    const interval = globalThis.setInterval;
+    const clearT = globalThis.clearTimeout;
+    const clearI = globalThis.clearInterval;
+    const live = new Set();
+    globalThis.setTimeout = function (fn, delay, ...rest) {
+      if (typeof fn !== "function") return timeout.apply(this, arguments);
+      let id;
+      const wrapped = function () {
+        live.delete(id);
+        state.pendingTimers = live.size;
+        return fn.apply(this, arguments);
+      };
+      id = timeout.call(this, wrapped, delay, ...rest);
+      live.add(id);
+      state.pendingTimers = live.size;
+      return id;
+    };
+    globalThis.setInterval = function (fn, delay, ...rest) {
+      const id = interval.apply(this, arguments);
+      live.add(id);
+      state.pendingTimers = live.size;
+      return id;
+    };
+    globalThis.clearTimeout = function (id) {
+      live.delete(id);
+      state.pendingTimers = live.size;
+      return clearT.apply(this, arguments);
+    };
+    globalThis.clearInterval = function (id) {
+      live.delete(id);
+      state.pendingTimers = live.size;
+      return clearI.apply(this, arguments);
+    };
+    state.instrumented = true;
+  } catch (_) {
+    // 包不上就当没有这个信号，退回按最短观察窗等。
+  }
   const install = () => {
     if (!document.documentElement) return;
     const observer = new MutationObserver((records) => {
@@ -729,7 +873,9 @@ const browserDOMProbeScript = `(() => {
     description,
     text_length: text.length,
     semantic_signature: (hash >>> 0).toString(16) + ":" + semantic.length,
-    dom_changes: Number(state.mutations || 0)
+    dom_changes: Number(state.mutations || 0),
+    pending_timers: Number(state.pendingTimers || 0),
+    instrumented: Boolean(state.instrumented)
   };
 })()`
 

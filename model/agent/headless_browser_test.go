@@ -5,6 +5,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -464,5 +466,118 @@ func TestDownloadedChromePathsFollowBrowserDir(t *testing.T) {
 		if filepath.Base(path) != "chrome" {
 			t.Fatalf("下载路径 %q 没有指向 chrome 可执行文件", path)
 		}
+	}
+}
+
+// 线上那次：渲染 claude-opus-5-5.riba2534.cn 报「沙盒无头浏览器渲染失败」，
+// detail 是 inspect rendered DOM: context deadline exceeded——DOM 探针自己那 3 秒
+// 预算到了。探针要的是页面主线程空出来，主线程被长任务占着探不动只说明这一刻忙，
+// 不说明渲染失败：同一个会话下一秒渲染别的站点完全正常。近五次渲染报错里有三次
+// 是这一类。
+func TestProbeTimeoutDoesNotKillTheWholeRender(t *testing.T) {
+	for _, item := range []struct {
+		name          string
+		err           error
+		browserCtxErr error
+		want          probeAction
+	}{
+		{"主线程忙，渲染时间还有", context.DeadlineExceeded, nil, probeRetry},
+		{"包装过的探针超时", fmt.Errorf("evaluate: %w", context.DeadlineExceeded), nil, probeRetry},
+		{"浏览器上下文也到期了，用手上的收尾", context.DeadlineExceeded, context.DeadlineExceeded, probeFinish},
+		{"整个请求被取消", context.DeadlineExceeded, context.Canceled, probeFinish},
+		{"页面换了执行上下文", errors.New("Cannot find context with specified id"), nil, probeRetry},
+		{"标签页没了", errors.New("target closed"), nil, probeRetry},
+		{"页面本身报错", errors.New("Uncaught TypeError: x is not a function"), nil, probeFail},
+	} {
+		if got := probeFailureAction(item.err, item.browserCtxErr); got != item.want {
+			t.Fatalf("%s: probeFailureAction = %v, want %v", item.name, got, item.want)
+		}
+	}
+}
+
+// 观察循环的截止时间和外层请求的超时本来是同一刻（外层 ctx 就是按 cfg.Timeout
+// 建的），谁先醒是抽签：抽到循环自己，会带着页面现有内容收尾；抽到 ctx，走的是
+// 「一张快照都没有就直接抛错」那条路。慢站点上两种结果完全随机——线上
+// mimo.xiaomi.com 就是抛错那一种，而且抛的是光秃秃的 context deadline exceeded。
+func TestObservationDeadlineLeavesRoomForTheFinalCapture(t *testing.T) {
+	const timeout = 30 * time.Second
+	now := time.Now()
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(timeout))
+	defer cancel()
+
+	// 循环的截止时间和 ctx 撞在一起：必须往前挪出收尾时间。
+	got := withFinalCaptureReserve(ctx, now.Add(timeout), timeout)
+	if reserve := now.Add(timeout).Sub(got); reserve < browserCaptureTimeout {
+		t.Fatalf("没给收尾留时间：只提前了 %s", reserve)
+	}
+
+	// 已经比 ctx 早收手的，不要再往前挪。
+	early := now.Add(time.Second)
+	if got := withFinalCaptureReserve(ctx, early, timeout); !got.Equal(early) {
+		t.Fatalf("提前收手的截止时间被改了：%s", got)
+	}
+
+	// 超时本身就很短时，预留按比例缩，不能把大半预算花在收尾上。
+	const short = 5 * time.Second
+	shortCtx, cancelShort := context.WithDeadline(context.Background(), now.Add(short))
+	defer cancelShort()
+	shortGot := withFinalCaptureReserve(shortCtx, now.Add(short), short)
+	if reserve := now.Add(short).Sub(shortGot); reserve != short/5 {
+		t.Fatalf("短超时的预留不对：%s", reserve)
+	}
+
+	// 没有超时的 ctx 不受影响。
+	plain := now.Add(timeout)
+	if got := withFinalCaptureReserve(context.Background(), plain, timeout); !got.Equal(plain) {
+		t.Fatalf("无超时的 ctx 被动了：%s", got)
+	}
+}
+
+// 最短观察窗（默认 8 秒）是为了接住「过几秒才跳转、才补内容」的页面，代价是连
+// 一张静态页也要等满 8 秒——工具总预算才 60 秒。但「过几秒才动」是能直接看出来
+// 的：延迟跳转、延迟渲染都得先排个 setTimeout/setInterval。没有任何已排期的回调、
+// 文档也 complete、网络也静了，就没什么可等的了。
+func TestStaticPageDoesNotWaitOutTheObservationWindow(t *testing.T) {
+	settledProbe := browserDOMProbe{ReadyState: "complete", Title: "静态页", TextLength: 120, Instrumented: true}
+	quiet := browserActivitySnapshot{Loading: false, PendingRequests: 0}
+
+	if !nothingLeftToWaitFor(settledProbe, quiet, true, true) {
+		t.Fatal("页面已经没有后手了，还在空等")
+	}
+
+	// 排着定时器：延迟跳转的站点就是这样，必须等满观察窗。
+	pending := settledProbe
+	pending.PendingTimers = 1
+	if nothingLeftToWaitFor(pending, quiet, true, true) {
+		t.Fatal("还排着回调就早退了，会拿到半成品")
+	}
+
+	// 采不到这个信号（脚本没注进去、页面自己换掉了 setTimeout）：退回按时间等，
+	// 宁可慢也不要拿半成品。
+	blind := settledProbe
+	blind.Instrumented = false
+	if nothingLeftToWaitFor(blind, quiet, true, true) {
+		t.Fatal("没采到定时器信号却当成没有后手")
+	}
+
+	// 文档还没 complete、还有在途请求、还在加载：都不算稳。
+	loading := settledProbe
+	loading.ReadyState = "interactive"
+	if nothingLeftToWaitFor(loading, quiet, true, true) {
+		t.Fatal("文档还没 complete 就早退了")
+	}
+	if nothingLeftToWaitFor(settledProbe, browserActivitySnapshot{PendingRequests: 2}, true, true) {
+		t.Fatal("还有在途请求就早退了")
+	}
+	if nothingLeftToWaitFor(settledProbe, browserActivitySnapshot{Loading: true}, true, true) {
+		t.Fatal("页面还在加载就早退了")
+	}
+
+	// 内容本身还没稳下来，早退更不行。
+	if nothingLeftToWaitFor(settledProbe, quiet, false, true) {
+		t.Fatal("内容没稳就早退了")
+	}
+	if nothingLeftToWaitFor(settledProbe, quiet, true, false) {
+		t.Fatal("网络没静就早退了")
 	}
 }
