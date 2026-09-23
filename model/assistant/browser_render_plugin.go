@@ -37,7 +37,7 @@ func (p *SandboxedBrowserRenderPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          sandboxedBrowserPluginID,
 		Name:        "网页渲染",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "使用 Chromium / Google Chrome，在一次性隔离配置中执行 JavaScript。缺少浏览器时可在依赖管理中安装；支持无头或显示调试窗口。",
 		Official:    true,
 		BuiltIn:     true,
