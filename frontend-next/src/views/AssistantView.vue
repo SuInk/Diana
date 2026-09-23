@@ -543,27 +543,6 @@
         </div>
 
         <div v-show="editorTab === 'model'" class="stack">
-          <!-- 聊天内模型管理 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>聊天内模型管理</h2>
-              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
-                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
-                </label>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
-              </div>
-            </div>
-          </section>
-
-
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
@@ -738,6 +717,25 @@
             </div>
           </section>
 
+          <!-- 聊天内模型管理：主人专用的开关，平时用不上，排在模型分配和调用参数之后。 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>聊天内模型管理</h2>
+              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
+                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
+                </label>
+                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div v-show="editorTab === 'behavior'" class="stack">
