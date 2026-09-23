@@ -3,7 +3,7 @@
   浏览器这一页只回答一个问题：机器人用哪个浏览器。
 
   Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有主人能驱动、
-  能点能输入——区别只在用谁的。和 Claude 设置页一样一行一个开关，可以都开着；都开着
+  能点能输入——区别只在用谁的。一行一个勾选框，打勾就是启用，可以都勾上；都勾上
   时可以调优先级，排在上面的先用，它用不了时自动换另一个（见 model/browsersource）。一次性无头
   渲染不在这里：它不带登录态，读公开网页、出图都靠它，一直可用，依赖和参数在插件页
   的「网页渲染」里。以前三者并排成「三档」，用户得先弄懂三者区别才能开始用。
@@ -16,16 +16,23 @@
         <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
       </div>
       <div class="card-body stack">
-        <!-- 和 Claude 设置页一样一行一项、开关在右，按优先级从上往下排。开关只管启用；
+        <!-- 一行一项，打勾就是启用（和「上下文」页的勾选列表同一种写法），按优先级从上往下排；
              两个都启用时才出现「优先用」，排在上面的先用，它用不了时自动换下一个。 -->
         <div class="browser-toggle-list">
           <div v-for="(key, index) in orderedKeys" :key="key" class="browser-toggle-row">
+            <input
+              :id="`browser-source-${key}`"
+              type="checkbox"
+              :checked="sourceState?.[key].enabled"
+              :disabled="savingSource || !sourceState"
+              @change="toggleSource(key, ($event.target as HTMLInputElement).checked)"
+            />
             <div class="browser-toggle-copy">
               <div class="browser-toggle-title">
+                <label :for="`browser-source-${key}`">{{ sourceMeta[key].title }}</label>
                 <span v-if="enabledCount > 1 && sourceState?.[key].enabled" class="browser-toggle-rank" :title="`优先级 ${index + 1}`">
-                  {{ index + 1 }}
+                  第 {{ index + 1 }} 优先
                 </span>
-                <strong>{{ sourceMeta[key].title }}</strong>
                 <span v-if="sourceState && sourceState.active === key" class="badge ok">正在用</span>
                 <span v-else-if="sourceState?.[key].enabled && sourceState[key].usable" class="badge">备用</span>
                 <span v-else-if="sourceState?.[key].enabled" class="badge warn">{{ key === "box" ? "没找到 Chrome" : "等扩展连接" }}</span>
@@ -64,16 +71,6 @@
                 <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
               </div>
             </div>
-            <label class="switch" :title="sourceState?.[key].enabled ? '点击关闭' : '点击打开'">
-              <input
-                type="checkbox"
-                :checked="sourceState?.[key].enabled"
-                :disabled="savingSource || !sourceState"
-                :aria-label="sourceMeta[key].title"
-                @change="toggleSource(key, ($event.target as HTMLInputElement).checked)"
-              />
-              <span class="track" aria-hidden="true"></span>
-            </label>
           </div>
         </div>
 
@@ -133,7 +130,7 @@
         {{
           dependenciesTarget === "box"
             ? "内置浏览器要一个 Chrome/Chromium，中文页面截图要中文字体；显示器只影响能不能开真窗口，没有也能无头跑。"
-            : "扩展装在你自己的 Chrome 里、反向连到这里。打开开关后在下面的「浏览器控制扩展」里下载扩展源码包。"
+            : "扩展装在你自己的 Chrome 里、反向连到这里。勾上「我自己的 Chrome」后，点「下载扩展」拿到扩展源码包。"
         }}
       </p>
       <PluginDependencyList
@@ -375,7 +372,7 @@ async function patchSource(patch: Parameters<typeof saveBrowserSource>[0]): Prom
   }
 }
 
-// 开关只管启用，不动顺序；顺序用「优先用」调。
+// 打勾只管启用，不动顺序；顺序用「优先用」调。
 function toggleSource(key: SourceKey, checked: boolean): void {
   void patchSource(key === "box" ? { box_enabled: checked } : { extension_enabled: checked });
 }
@@ -601,11 +598,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
-/* 一行一项：左边标题、说明、小链接，开关和标题对齐在右上。 */
+/* 一行一项：勾选框在行首，和标题第一行对齐；右边是标题、说明、小链接。 */
 .browser-toggle-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
   padding: 14px 0;
   border-top: 1px solid var(--border);
 }
@@ -619,9 +617,17 @@ onBeforeUnmount(() => {
   padding-bottom: 0;
 }
 
-.browser-toggle-row > .switch {
-  flex: none;
-  margin-top: 1px;
+.browser-toggle-row > input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 4px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.browser-toggle-title label {
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .browser-toggle-copy {
@@ -642,16 +648,8 @@ onBeforeUnmount(() => {
 }
 
 .browser-toggle-rank {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
   color: var(--muted);
-  background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
 
 .browser-toggle-desc {
