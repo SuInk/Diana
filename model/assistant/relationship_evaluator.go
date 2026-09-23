@@ -137,9 +137,24 @@ const relationshipEvaluationSystemPrompt = `你是聊天机器人 Diana 的关�
 15. 只输出一个合法 JSON 对象，不要输出 Markdown 或额外文字。格式固定为：{"should_update":false,"delta":0,"confidence":0.96,"reason":"中性查询，不改变关系","portrait":[{"field":"occupation","value":"在做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.95}]}`
 
 func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageEvent, text string, handled bool) (relationshipEvaluationDecision, UserMemoryProfile, bool) {
+	result := r.evaluateRelationshipUpdateDetailed(ctx, event, text, handled)
+	return result.decision, result.profile, result.evaluated
+}
+
+// relationshipEvaluationResult 是一次评估的完整结果。除了决定本身，还带着用了
+// 哪个模型、失败时的原因，好感与画像记录要把这些都写下来。
+type relationshipEvaluationResult struct {
+	decision  relationshipEvaluationDecision
+	profile   UserMemoryProfile
+	model     string
+	err       error
+	evaluated bool
+}
+
+func (r *Runtime) evaluateRelationshipUpdateDetailed(ctx context.Context, event MessageEvent, text string, handled bool) relationshipEvaluationResult {
 	ctx = withLLMUsagePurpose(ctx, "relationship_evaluate")
 	if !handled || !r.relationshipEvaluationAvailable(event) {
-		return relationshipEvaluationDecision{}, UserMemoryProfile{}, false
+		return relationshipEvaluationResult{}
 	}
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
 	policy := relationshipPolicyForEvent(r.effectiveConfigForEvent(event), profile, event)
@@ -154,7 +169,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		r.recordRelationshipEvaluationError(ctx, event, err)
-		return relationshipEvaluationDecision{}, profile, false
+		return relationshipEvaluationResult{profile: profile, err: err}
 	}
 	messages := []llm.Message{
 		{
@@ -168,23 +183,26 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	}
 	callCtx, cancel := context.WithTimeout(ctx, relationshipEvaluationTimeout(r.effectiveConfigForEvent(event)))
 	defer cancel()
+	model := ""
 	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err
 		}
+		model = resp.Model
 		return resp.Text, nil
 	})
 	if err != nil {
 		r.recordRelationshipEvaluationError(ctx, event, err)
-		return relationshipEvaluationDecision{}, profile, false
+		return relationshipEvaluationResult{profile: profile, model: model, err: err}
 	}
 	decision, ok := parseRelationshipEvaluationDecision(raw)
 	if !ok {
-		r.recordRelationshipEvaluationError(ctx, event, fmt.Errorf("invalid relationship evaluation response"))
-		return relationshipEvaluationDecision{}, profile, false
+		err := fmt.Errorf("invalid relationship evaluation response")
+		r.recordRelationshipEvaluationError(ctx, event, err)
+		return relationshipEvaluationResult{profile: profile, model: model, err: err}
 	}
-	return decision, profile, true
+	return relationshipEvaluationResult{decision: decision, profile: profile, model: model, evaluated: true}
 }
 
 // relationshipEvaluationAvailable 判断这一轮要不要跑后台评估。
@@ -210,6 +228,14 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 	select {
 	case r.relationshipEvalSem <- struct{}{}:
 	default:
+		// 后台评估满了就跳过这一轮，不拖慢回复；但要留一条记录，不然「这句话
+		// 为什么没加分」永远查不到。写库放到协程里，同样不占回复路径。
+		go func() {
+			defer recoverGoroutinePanic("relationship_evaluator.skipped")
+			r.recordRelationshipEvaluationOutcome(event, text, relationshipEvaluationResult{
+				err: errRelationshipEvaluationSaturated,
+			}, UserMemoryProfile{}, RelationshipEvaluationSkipped, nil)
+		}()
 		close(done)
 		return done
 	}
@@ -225,8 +251,12 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 		defer r.relationshipEvalWG.Done()
 		defer close(done)
 		defer func() { <-r.relationshipEvalSem }()
-		evaluation, before, evaluated := r.evaluateRelationshipUpdate(runCtx, event, text, true)
-		if !evaluated {
+		result := r.evaluateRelationshipUpdateDetailed(runCtx, event, text, true)
+		evaluation, before := result.decision, result.profile
+		if !result.evaluated {
+			if result.err != nil {
+				r.recordRelationshipEvaluationOutcome(event, text, result, before, RelationshipEvaluationFailed, nil)
+			}
 			return
 		}
 		after, stored := before, true
@@ -240,6 +270,10 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 		}
 		if stored {
 			r.recordRelationshipEvaluation(runCtx, event, before, after, evaluation)
+			r.recordRelationshipEvaluationOutcome(event, text, result, after, relationshipEvaluationStatus(evaluation, before, after), traits)
+		} else {
+			result.err = errRelationshipEvaluationStore
+			r.recordRelationshipEvaluationOutcome(event, text, result, before, RelationshipEvaluationFailed, nil)
 		}
 	}()
 	return done

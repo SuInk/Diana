@@ -2603,6 +2603,91 @@ export interface UserMemoryProfile {
   updated_at?: string;
 }
 
+// RelationshipEvaluationStatus 是一次后台好感度评估的结果分类。
+export type RelationshipEvaluationStatus = "changed" | "capped" | "unchanged" | "low_confidence" | "failed" | "skipped";
+
+// RelationshipEvaluation 是一次后台好感度评估：不只是分数变了的，判 0、把握不够、
+// 失败和排满跳过的也在里面。
+export interface RelationshipEvaluation {
+  id: number;
+  bot_profile_id?: string;
+  user_id: string;
+  sender_name?: string;
+  group_id?: string;
+  message_id?: string;
+  message_text?: string;
+  status: RelationshipEvaluationStatus;
+  proposed_delta: number;
+  applied_delta: number;
+  before_score: number;
+  after_score: number;
+  confidence: number;
+  reason?: string;
+  model?: string;
+  error?: string;
+  // 同一次评估里记下的画像：分数没动、只记下了「职业是程序员」也算一次变化。
+  portrait?: RelationshipEvaluationPortrait[];
+  created_at: string;
+}
+
+export interface RelationshipEvaluationPortrait {
+  field: string;
+  label: string;
+  value: string;
+  source?: string;
+}
+
+export interface RelationshipEvaluationsResponse {
+  evaluations: RelationshipEvaluation[];
+  // 画像栏目表，高级筛选按它列可选栏目。
+  portrait_fields?: { field: string; label: string }[];
+  next_before_id?: number;
+}
+
+export interface RelationshipEvaluationsQuery {
+  profile?: string;
+  userID?: string;
+  // search 什么都搜（人、群、原话、原因、画像、模型、失败原因）；person 按 QQ 号或
+  // 昵称模糊找人；groupID 按群号精确筛；since 是 Unix 秒，只要这之后的。
+  search?: string;
+  person?: string;
+  groupID?: string;
+  since?: number;
+  statuses?: RelationshipEvaluationStatus[];
+  // portraitOnly 只要记下了画像的。
+  portraitOnly?: boolean;
+  // direction 按实际生效的分数：up 加分、down 减分、changed 有变化、none 没变。
+  direction?: "" | "up" | "down" | "changed" | "none";
+  chat?: "" | "group" | "private";
+  portraitFields?: string[];
+  portraitSource?: "" | "stated" | "inferred";
+  minConfidence?: number;
+  model?: string;
+  beforeID?: number;
+  limit?: number;
+}
+
+export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery = {}): Promise<RelationshipEvaluationsResponse> {
+  const params = new URLSearchParams({ limit: String(query.limit ?? 50) });
+  if (query.profile) params.set("profile", query.profile);
+  if (query.userID) params.set("user_id", query.userID);
+  if (query.search) params.set("q", query.search);
+  if (query.person) params.set("person", query.person);
+  if (query.groupID) params.set("group_id", query.groupID);
+  if (query.since) params.set("since", String(query.since));
+  // 传了空列表是「一个都不要」，和不传（不限）不一样，所以只看有没有，不看长度。
+  if (query.statuses) params.set("status", query.statuses.join(","));
+  if (query.portraitOnly) params.set("portrait", "1");
+  if (query.direction) params.set("direction", query.direction);
+  if (query.chat) params.set("chat", query.chat);
+  if (query.portraitFields) params.set("portrait_field", query.portraitFields.join(","));
+  if (query.portraitSource) params.set("portrait_source", query.portraitSource);
+  if (query.minConfidence) params.set("min_confidence", String(query.minConfidence));
+  if (query.model) params.set("model", query.model);
+  if (query.beforeID) params.set("before_id", String(query.beforeID));
+  return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);
+}
+
 export interface UserFavorabilityChange {
   id: number;
   user_id: string;
