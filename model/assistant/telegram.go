@@ -236,6 +236,16 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) {
 	}
 	c.observeMemberUpdate(update.ChatMember, false)
 	c.observeMemberUpdate(update.MyChatMember, true)
+	if event := telegramBotMuteEvent(update.MyChatMember, c.Status().SelfID); event.Kind != "" {
+		c.mu.RLock()
+		handler := c.handler
+		c.mu.RUnlock()
+		if handler != nil {
+			if err := handler(ctx, event); err != nil {
+				log.Printf("telegram: handle mute change failed: update_id=%d chat_id=%s err=%v", update.UpdateID, event.GroupID, err)
+			}
+		}
+	}
 	if update.MessageReaction != nil {
 		c.mu.RLock()
 		handler := c.handler

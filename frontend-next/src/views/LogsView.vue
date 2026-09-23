@@ -34,7 +34,7 @@
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px">
           <div class="input-group" style="flex: 1; max-width: 360px">
-            <input v-model="query" class="input" placeholder="按动作 / 内容 / 操作人过滤…" />
+            <input v-model="query" class="input" placeholder="按内容 / 操作人过滤…" />
           </div>
           <SkeletonBlock v-if="loading && !logs.length" width="48px" height="18px" />
           <span v-else class="muted" style="font-size: 12.5px">{{ filteredLogs.length }} 条</span>
@@ -44,8 +44,7 @@
           <article v-for="log in filteredLogs" :key="log.id" class="log-row">
             <span class="log-time">{{ formatTime(log.created_at) }}</span>
             <div class="log-main">
-              <div class="cluster" style="gap: 6px; margin-bottom: 2px">
-                <span class="badge" :class="log.level === 'error' ? 'err' : 'ok'">{{ log.action }}</span>
+              <div v-if="log.actor || log.target" class="cluster" style="gap: 6px; margin-bottom: 2px">
                 <span v-if="log.actor" class="muted" style="font-size: 11.5px" :title="log.actor">{{ actorLabel(log) }}</span>
                 <span v-if="log.target" class="muted mono" style="font-size: 11.5px">→ {{ log.target }}</span>
               </div>

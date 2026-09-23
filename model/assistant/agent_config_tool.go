@@ -73,8 +73,17 @@ type dianaBotConfigSnapshot struct {
 	MentionUserMode                 ReplyDecorationMode       `json:"mention_user_mode"`
 	MarkdownToPlain                 bool                      `json:"markdown_to_plain"`
 	ErrorNotifyEnabled              bool                      `json:"error_notify_enabled"`
+	MutedReplyPauseEnabled          bool                      `json:"muted_reply_pause_enabled"`
+	MutedVoiceTranscriptionEnabled  bool                      `json:"muted_voice_transcription_enabled"`
+	MutedImageDescriptionEnabled    bool                      `json:"muted_image_description_enabled"`
+	MutedReplyJudgmentEnabled       bool                      `json:"muted_reply_judgment_enabled"`
 	ErrorReplyPrefix                string                    `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts               int                       `json:"send_retry_attempts"`
+	SendBackoffInitialSeconds       int                       `json:"send_backoff_initial_seconds"`
+	SendBackoffMaxSeconds           int                       `json:"send_backoff_max_seconds"`
+	SendFailureWindowMinutes        int                       `json:"send_failure_window_minutes"`
+	SendDropCooldownMinutes         int                       `json:"send_drop_cooldown_minutes"`
+	InboundRetryMaxAttempts         int                       `json:"inbound_retry_max_attempts"`
 	SendChunkIntervalMS             int                       `json:"send_chunk_interval_ms"`
 	RecurringFailureAlertThreshold  int                       `json:"recurring_failure_alert_threshold"`
 	PrivateClosingGrace             int                       `json:"private_closing_grace"`
@@ -312,8 +321,17 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		MentionUserMode:                 mentionUserMode(cfg),
 		MarkdownToPlain:                 markdownToPlainForConfig(cfg),
 		ErrorNotifyEnabled:              boolValue(cfg.ErrorNotifyEnabled, true),
+		MutedReplyPauseEnabled:          cfg.mutedReplyPauseEnabled(),
+		MutedVoiceTranscriptionEnabled:  cfg.mutedVoiceTranscriptionEnabled(),
+		MutedImageDescriptionEnabled:    cfg.mutedImageDescriptionEnabled(),
+		MutedReplyJudgmentEnabled:       cfg.mutedReplyJudgmentEnabled(),
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
 		SendRetryAttempts:               cfg.SendRetryAttempts,
+		SendBackoffInitialSeconds:       cfg.SendBackoffInitialSeconds,
+		SendBackoffMaxSeconds:           cfg.SendBackoffMaxSeconds,
+		SendFailureWindowMinutes:        cfg.SendFailureWindowMinutes,
+		SendDropCooldownMinutes:         cfg.SendDropCooldownMinutes,
+		InboundRetryMaxAttempts:         cfg.InboundRetryMaxAttempts,
 		SendChunkIntervalMS:             cfg.SendChunkIntervalMS,
 		RecurringFailureAlertThreshold:  intValue(cfg.RecurringFailureAlertThreshold, defaultRecurringFailureAlertThreshold),
 		PrivateClosingGrace:             cfg.PrivateClosingGrace,

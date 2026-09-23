@@ -68,7 +68,8 @@ const (
 )
 
 const (
-	// inboundMaxAttempts 是同一条入站事件的最大处理次数。超过后落终态，避免
+	// inboundMaxAttempts 是同一条入站事件默认的最大处理次数（可按机器人/分群配置，见
+	// send_retry_policy.go）。超过后落终态，避免
 	// 一条永远失败的消息按退避节奏无限重跑。
 	inboundMaxAttempts = 5
 	// inboundOutcomeRetriesExhausted 标记因重试次数用尽而停止的事件。
@@ -594,7 +595,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 				r.recordInboundSendRejected(item, processErr)
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, inboundOutcomeSendRejected)
 				r.clearOutboundSteps(item.ID)
-			case ctx.Err() == nil && inboundRetriesExhausted(item.Attempts):
+			case ctx.Err() == nil && inboundRetriesExhausted(item.Attempts, r.inboundRetryMaxAttemptsForEvent(item.Event)):
 				// 无限重试只会让同一条消息反复重发。到达上限后落终态，并把最后
 				// 一次失败原因写进事件明细，等人处理而不是继续骚扰群里。
 				log.Printf("diana inbound event %s dropped after %d attempts: %v", item.ID, item.Attempts, processErr)
@@ -954,8 +955,11 @@ func historyBackfillWatermarkWithPadding(watermark int64, cutoff time.Time) int6
 }
 
 // inboundRetriesExhausted 判断这条事件是否已经用尽重试次数。
-func inboundRetriesExhausted(attempts int) bool {
-	return attempts >= inboundMaxAttempts
+func inboundRetriesExhausted(attempts, maxAttempts int) bool {
+	if maxAttempts <= 0 {
+		maxAttempts = inboundMaxAttempts
+	}
+	return attempts >= maxAttempts
 }
 
 // recordInboundDeliveryExhausted 把「重试次数用尽」写进这条事件的投递审计，

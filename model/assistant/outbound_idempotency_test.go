@@ -99,10 +99,10 @@ func TestSendOutgoingStillSendsWithoutATurnOrLedger(t *testing.T) {
 }
 
 func TestInboundRetriesExhaustedStopsAtTheAttemptCap(t *testing.T) {
-	if inboundRetriesExhausted(inboundMaxAttempts - 1) {
+	if inboundRetriesExhausted(inboundMaxAttempts-1, 0) {
 		t.Fatal("stopped retrying before reaching the cap")
 	}
-	if !inboundRetriesExhausted(inboundMaxAttempts) {
+	if !inboundRetriesExhausted(inboundMaxAttempts, 0) {
 		t.Fatal("kept retrying at the cap")
 	}
 	if decision, _, handled := DescribeEventOutcome(inboundOutcomeRetriesExhausted); decision != "error" || handled {

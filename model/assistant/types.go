@@ -184,6 +184,10 @@ type MessageEvent struct {
 	// Persisted outgoing events still use the regular message fields above.
 	botReply      string
 	routingReason string
+	// mutedJudgeOnly 非空表示机器人在本群被禁言、但配置了照常做回复判断：判断
+	// 跑完后不生成、不发送，内容是禁言说明。mutedSkipImages 表示这期间不识图。
+	mutedJudgeOnly  string
+	mutedSkipImages bool
 	// tempSessionGroupID 只在「给非好友发私聊」时有值：QQ 的临时会话要靠共同群
 	// 才发得出去。它是一次投递的路由提示，不是会话身份的一部分——写成导出字段
 	// 就会跟着事件落库，让这条私聊在历史里看起来像发生在那个群里。
@@ -564,11 +568,21 @@ type BotConfig struct {
 	MarkdownToPlain          *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
 	ErrorReplyPrefix         string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts        int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS      int                  `json:"send_chunk_interval_ms,omitempty"`
-	AutoImageDescription     *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess      *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles               map[string]ModelRole `json:"model_roles,omitempty"`
+	// MutedReplyPauseEnabled 为空或 true 时，机器人在群里被禁言期间只记上下文、
+	// 不做回复判断和生成（见 bot_mute.go）。
+	MutedReplyPauseEnabled *bool `json:"muted_reply_pause_enabled,omitempty"`
+	// 暂停回复期间哪些环节照常执行（见 bot_mute.go）：语音转文字、图片识别默认
+	// 照常，保证解禁后上下文完整；回复判断默认不做，开了只记录判断结果。
+	MutedVoiceTranscriptionEnabled *bool `json:"muted_voice_transcription_enabled,omitempty"`
+	MutedImageDescriptionEnabled   *bool `json:"muted_image_description_enabled,omitempty"`
+	MutedReplyJudgmentEnabled      *bool `json:"muted_reply_judgment_enabled,omitempty"`
+	SendRetryAttempts              int   `json:"send_retry_attempts,omitempty"`
+	// 群退避与入站重跑的五个参数，见 send_retry_policy.go。
+	sendRetrySettings
+	SendChunkIntervalMS  int                  `json:"send_chunk_interval_ms,omitempty"`
+	AutoImageDescription *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess  *bool                `json:"auto_video_preprocess,omitempty"`
+	ModelRoles           map[string]ModelRole `json:"model_roles,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -614,6 +628,9 @@ type BotConfig struct {
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS        int             `json:"typing_delay_per_char_ms,omitempty"`
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -671,11 +688,6 @@ type BotConfig struct {
 	// 恋人关系。默认关闭：机器人愿不愿意谈恋爱是部署者该亲手做的决定，不该在
 	// 升级后突然发生。
 	RomanceEnabled *bool `json:"romance_enabled,omitempty"`
-	// LLMCapabilityProbeEnabled 让后台在空闲时定期探测这台机器人绑着的模型收不
-	// 收「强制调用指定工具」，把结论提前学好，真实对话就不用先撞一次 400。默认
-	// 关闭：探测是会计费的真实调用，花不花这个钱该由部署者决定。关着也不影响
-	// 正确性，请求路径上的降级会在撞到时自己学一次。
-	LLMCapabilityProbeEnabled *bool `json:"llm_capability_probe_enabled,omitempty"`
 	// MoodEnabled 让机器人有随相处涨落、随时间回落的心情，只影响语气。
 	// 默认关闭：可感知的行为变化不该在升级后突然发生。
 	MoodEnabled *bool `json:"mood_enabled,omitempty"`
@@ -826,6 +838,9 @@ type ReplyRule struct {
 
 type GroupConfig struct {
 	ReplyPreserveLineBreaks *bool `json:"reply_preserve_line_breaks,omitempty"`
+	// ReplyLineSplitEnabled 的 nil 同样保留，发送时跟随所属机器人。
+	ReplyLineSplitEnabled *bool `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled    *bool `json:"typing_delay_enabled,omitempty"`
 	// Zero follows the bot's current merge threshold.
 	ReplyMergeConfidencePercent int      `json:"reply_merge_confidence_percent,omitempty"`
 	MarkedBotIDs                []string `json:"marked_bot_ids,omitempty"`
@@ -889,6 +904,13 @@ type GroupConfig struct {
 	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
 	// 本群的补充判据，留空跟随机器人级。
 	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
+	// 本群的发送退避和入站重跑参数，每项 0 表示跟随机器人。
+	sendRetrySettings
+	// 本群被禁言时是否暂停回复、暂停期间是否转写语音；nil 跟随机器人。
+	MutedReplyPauseEnabled         *bool `json:"muted_reply_pause_enabled,omitempty"`
+	MutedVoiceTranscriptionEnabled *bool `json:"muted_voice_transcription_enabled,omitempty"`
+	MutedImageDescriptionEnabled   *bool `json:"muted_image_description_enabled,omitempty"`
+	MutedReplyJudgmentEnabled      *bool `json:"muted_reply_judgment_enabled,omitempty"`
 	// ExtensionAccess 按群覆盖 MCP / Skill 的开放范围，键是扩展 ID，没写的跟随
 	// 机器人那一档。群管理员只能往严的方向改。
 	ExtensionAccess        map[string]GroupExtensionAccess `json:"extension_access,omitempty"`
@@ -1030,8 +1052,13 @@ type ConfigPayload struct {
 	MentionUserMode                ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain                *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled             *bool                `json:"error_notify_enabled,omitempty"`
+	MutedReplyPauseEnabled         *bool                `json:"muted_reply_pause_enabled,omitempty"`
+	MutedVoiceTranscriptionEnabled *bool                `json:"muted_voice_transcription_enabled,omitempty"`
+	MutedImageDescriptionEnabled   *bool                `json:"muted_image_description_enabled,omitempty"`
+	MutedReplyJudgmentEnabled      *bool                `json:"muted_reply_judgment_enabled,omitempty"`
 	ErrorReplyPrefix               string               `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts              int                  `json:"send_retry_attempts,omitempty"`
+	sendRetrySettings
 	RecurringFailureAlertThreshold *int                 `json:"recurring_failure_alert_threshold,omitempty"`
 	SendChunkIntervalMS            int                  `json:"send_chunk_interval_ms,omitempty"`
 	PrivateClosingGrace            int                  `json:"private_closing_grace,omitempty"`
@@ -1064,6 +1091,9 @@ type ConfigPayload struct {
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS        int             `json:"typing_delay_per_char_ms,omitempty"`
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -1095,7 +1125,6 @@ type ConfigPayload struct {
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
 	SelfNoteEnabled                 *bool                     `json:"self_note_enabled,omitempty"`
 	RomanceEnabled                  *bool                     `json:"romance_enabled,omitempty"`
-	LLMCapabilityProbeEnabled       *bool                     `json:"llm_capability_probe_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
 	ExpressionLearningEnabled       *bool                     `json:"expression_learning_enabled,omitempty"`
@@ -1173,6 +1202,7 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
 	cfg.ReplyMergeConfidencePercent = max(0, min(100, cfg.ReplyMergeConfidencePercent))
+	cfg.sendRetrySettings = cfg.sendRetrySettings.clamped()
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultGroupConfig(groupID, base)
@@ -1668,7 +1698,6 @@ func DefaultBotConfig() BotConfig {
 		WorldBookEnabled:            boolPointer(true),
 		SelfNoteEnabled:             boolPointer(false),
 		RomanceEnabled:              boolPointer(false),
-		LLMCapabilityProbeEnabled:   boolPointer(false),
 		MoodEnabled:                 boolPointer(false),
 		PokeReplyEnabled:            boolPointer(false),
 		ExpressionLearningEnabled:   boolPointer(false),
@@ -1814,6 +1843,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendRetryAttempts > 5 {
 		cfg.SendRetryAttempts = 5
 	}
+	cfg.sendRetrySettings = cfg.sendRetrySettings.clamped().withFallback(defaultSendRetrySettings())
 	// 只挡明显的错值：负数和 0 一样是不报警，上限挡住「连续失败几百次才吭声」这种
 	// 配置——真到那个量级，订阅早就该当成坏了，而不是继续安静地重试。
 	if cfg.RecurringFailureAlertThreshold != nil {
@@ -1838,6 +1868,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendChunkIntervalMS > 5000 {
 		cfg.SendChunkIntervalMS = 5000
 	}
+	cfg.TypingDelayPerCharMS = max(0, min(maxTypingDelayPerCharMS, cfg.TypingDelayPerCharMS))
 	// 0 表示没配过，用默认；负数是明显的错值，同样退回默认。想「第一声再见就
 	// 不回」的人把它设成 1，那是配置的自由，不是这里该纠正的。
 	if cfg.PrivateClosingGrace < 0 {
@@ -1945,9 +1976,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.RomanceEnabled == nil {
 		cfg.RomanceEnabled = boolPointer(false)
-	}
-	if cfg.LLMCapabilityProbeEnabled == nil {
-		cfg.LLMCapabilityProbeEnabled = boolPointer(false)
 	}
 	if cfg.MoodEnabled == nil {
 		cfg.MoodEnabled = boolPointer(false)
@@ -2241,8 +2269,13 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MentionUserMode:                   cfg.MentionUserMode,
 		MarkdownToPlain:                   copyBoolPointer(cfg.MarkdownToPlain),
 		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
+		MutedReplyPauseEnabled:            copyBoolPointer(cfg.MutedReplyPauseEnabled),
+		MutedVoiceTranscriptionEnabled:    copyBoolPointer(cfg.MutedVoiceTranscriptionEnabled),
+		MutedImageDescriptionEnabled:      copyBoolPointer(cfg.MutedImageDescriptionEnabled),
+		MutedReplyJudgmentEnabled:         copyBoolPointer(cfg.MutedReplyJudgmentEnabled),
 		ErrorReplyPrefix:                  cfg.ErrorReplyPrefix,
 		SendRetryAttempts:                 cfg.SendRetryAttempts,
+		sendRetrySettings:                 cfg.sendRetrySettings,
 		RecurringFailureAlertThreshold:    copyIntPointer(cfg.RecurringFailureAlertThreshold),
 		SendChunkIntervalMS:               cfg.SendChunkIntervalMS,
 		PrivateClosingGrace:               cfg.PrivateClosingGrace,
@@ -2273,6 +2306,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
+		ReplyLineSplitEnabled:             copyBoolPointer(cfg.ReplyLineSplitEnabled),
+		TypingDelayEnabled:                copyBoolPointer(cfg.TypingDelayEnabled),
+		TypingDelayPerCharMS:              cfg.TypingDelayPerCharMS,
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
@@ -2296,7 +2332,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
 		SelfNoteEnabled:                   copyBoolPointer(cfg.SelfNoteEnabled),
 		RomanceEnabled:                    copyBoolPointer(cfg.RomanceEnabled),
-		LLMCapabilityProbeEnabled:         copyBoolPointer(cfg.LLMCapabilityProbeEnabled),
 		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
 		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
@@ -2455,8 +2490,13 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MentionUserMode:                 payload.MentionUserMode,
 		MarkdownToPlain:                 copyBoolPointer(payload.MarkdownToPlain),
 		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),
+		MutedReplyPauseEnabled:          copyBoolPointer(payload.MutedReplyPauseEnabled),
+		MutedVoiceTranscriptionEnabled:  copyBoolPointer(payload.MutedVoiceTranscriptionEnabled),
+		MutedImageDescriptionEnabled:    copyBoolPointer(payload.MutedImageDescriptionEnabled),
+		MutedReplyJudgmentEnabled:       copyBoolPointer(payload.MutedReplyJudgmentEnabled),
 		ErrorReplyPrefix:                payload.ErrorReplyPrefix,
 		SendRetryAttempts:               payload.SendRetryAttempts,
+		sendRetrySettings:               payload.sendRetrySettings,
 		RecurringFailureAlertThreshold:  copyIntPointer(payload.RecurringFailureAlertThreshold),
 		SendChunkIntervalMS:             payload.SendChunkIntervalMS,
 		PrivateClosingGrace:             payload.PrivateClosingGrace,
@@ -2487,6 +2527,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:     payload.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:         copyBoolPointer(payload.ReplyPreserveLineBreaks),
+		ReplyLineSplitEnabled:           copyBoolPointer(payload.ReplyLineSplitEnabled),
+		TypingDelayEnabled:              copyBoolPointer(payload.TypingDelayEnabled),
+		TypingDelayPerCharMS:            payload.TypingDelayPerCharMS,
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
@@ -2510,7 +2553,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		SelfNoteEnabled:                 copyBoolPointer(payload.SelfNoteEnabled),
 		RomanceEnabled:                  copyBoolPointer(payload.RomanceEnabled),
-		LLMCapabilityProbeEnabled:       copyBoolPointer(payload.LLMCapabilityProbeEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
 		ExpressionLearningEnabled:       copyBoolPointer(payload.ExpressionLearningEnabled),

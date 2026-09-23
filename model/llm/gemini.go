@@ -6,8 +6,11 @@ package llm
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"iter"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"google.golang.org/genai"
@@ -84,17 +87,19 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 		temperature := float32(*req.Temperature)
 		config.Temperature = &temperature
 	}
-	if req.MaxOutputTokens > 0 {
-		maxOutputTokens, err := geminiOutputTokenLimit(req.MaxOutputTokens)
-		if err != nil {
-			return nil, err
-		}
-		config.MaxOutputTokens = maxOutputTokens
+	implicitLimit, err := setGeminiOutputTokenLimit(config, req.MaxOutputTokens)
+	if err != nil {
+		return nil, err
 	}
 	config.Tools = geminiTools(req.Tools)
 	config.ToolConfig = geminiToolConfig(req)
 
-	resp, err := c.client.Models.GenerateContent(ctx, req.Model, geminiContents(messages, req.Tools), config)
+	contents := geminiContents(messages, req.Tools)
+	resp, err := c.client.Models.GenerateContent(ctx, req.Model, contents, config)
+	if err != nil && implicitLimit && isGeminiOutputLimitRejection(err) {
+		config.MaxOutputTokens = 0
+		resp, err = c.client.Models.GenerateContent(ctx, req.Model, contents, config)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
@@ -108,7 +113,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 	text := strings.TrimSpace(resp.Text())
 	toolCalls := geminiToolCalls(resp, req.Tools)
 	if text == "" && len(toolCalls) == 0 {
-		return nil, fmt.Errorf("llm: gemini response has no text")
+		return nil, geminiEmptyOutputError(resp, config.MaxOutputTokens)
 	}
 
 	return &GenerateResponse{
@@ -139,23 +144,20 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		value := float32(*req.Temperature)
 		config.Temperature = &value
 	}
-	if req.MaxOutputTokens > 0 {
-		value, err := geminiOutputTokenLimit(req.MaxOutputTokens)
-		if err != nil {
-			return nil, err
-		}
-		config.MaxOutputTokens = value
+	implicitLimit, err := setGeminiOutputTokenLimit(config, req.MaxOutputTokens)
+	if err != nil {
+		return nil, err
 	}
 	config.Tools = geminiTools(req.Tools)
 	config.ToolConfig = geminiToolConfig(req)
-	iterator := c.client.Models.GenerateContentStream(ctx, req.Model, geminiContents(messages, req.Tools), config)
+	contents := geminiContents(messages, req.Tools)
 	out := make(chan ChatEvent, 4)
 	go func() {
 		defer close(out)
 		defer recoverChatStreamPanic(ctx, out, "gemini")
 		var last Usage
-		finished := false
-		for response, err := range iterator {
+		finished, emitted := false, false
+		for response, err := range c.streamContent(ctx, req.Model, contents, config, implicitLimit) {
 			if err != nil {
 				sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error()})
 				return
@@ -173,6 +175,11 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 				if reason == genai.FinishReasonStop {
 					finished = true
 				} else if reason != "" {
+					if !emitted && !geminiHasOutput(response, req.Tools) {
+						err := geminiEmptyOutputError(response, config.MaxOutputTokens)
+						sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: err.Error(), ErrorCause: err})
+						return
+					}
 					sendChatEvent(ctx, out, ChatEvent{Type: ChatEventError, Error: "llm: incomplete gemini stream: " + string(reason)})
 					return
 				}
@@ -185,6 +192,8 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 					event := ChatEvent{Type: ChatEventTextDelta, Text: part.Text}
 					if part.Thought {
 						event = ChatEvent{Type: ChatEventReasoning, Reasoning: part.Text}
+					} else {
+						emitted = true
 					}
 					if !sendChatEvent(ctx, out, event) {
 						return
@@ -192,6 +201,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 				}
 			}
 			for _, call := range geminiToolCalls(response, req.Tools) {
+				emitted = true
 				if !sendChatEvent(ctx, out, ChatEvent{Type: ChatEventToolCall, ToolCall: &call}) {
 					return
 				}
@@ -211,6 +221,65 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 	return out, nil
 }
 
+// streamContent 打开流。代发的默认上限被拒时，400 会在第一个响应之前回来，此时
+// 还没有任何输出，去掉上限重开一次即可，调用方看到的仍是一条完整的流。
+func (c *geminiClient) streamContent(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig, implicitLimit bool) iter.Seq2[*genai.GenerateContentResponse, error] {
+	return func(yield func(*genai.GenerateContentResponse, error) bool) {
+		first := true
+		for response, err := range c.client.Models.GenerateContentStream(ctx, model, contents, config) {
+			if first && err != nil && implicitLimit && isGeminiOutputLimitRejection(err) {
+				config.MaxOutputTokens = 0
+				for response, err := range c.client.Models.GenerateContentStream(ctx, model, contents, config) {
+					if !yield(response, err) {
+						return
+					}
+				}
+				return
+			}
+			first = false
+			if !yield(response, err) {
+				return
+			}
+		}
+	}
+}
+
+// geminiImplicitMaxOutputTokens 是没填「最大输出 Token」时代发的上限，取 Gemini
+// 2.5/3.x 的输出上限。不带这个字段并不等于「按模型最大」：antigravity 这类网关看到
+// 缺省会按思考预算自己补一个（实测补成 9216），模型把整份文件写进工具参数时就会
+// 被截断。它只下发到请求里，不参与上下文预算：Gemini 的输入和输出上限是分开算的。
+const geminiImplicitMaxOutputTokens int32 = 65536
+
+// setGeminiOutputTokenLimit 写入输出上限，返回这个值是不是代填的。
+func setGeminiOutputTokenLimit(config *genai.GenerateContentConfig, requested int64) (bool, error) {
+	if requested > 0 {
+		value, err := geminiOutputTokenLimit(requested)
+		if err != nil {
+			return false, err
+		}
+		config.MaxOutputTokens = value
+		return false, nil
+	}
+	config.MaxOutputTokens = geminiImplicitMaxOutputTokens
+	return true, nil
+}
+
+// isGeminiOutputLimitRejection 认出「上限超出该模型范围」的 400。上限更低的老模型
+// 会这样拒绝代填的值，这时去掉字段重发，退回由服务端决定的缺省行为。
+func isGeminiOutputLimitRejection(err error) bool {
+	var apiErr genai.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != http.StatusBadRequest {
+		return false
+	}
+	text := strings.ToLower(apiErr.Message)
+	for _, marker := range []string{"max_output_tokens", "maxoutputtokens", "max output tokens"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func geminiContentBlock(response *genai.GenerateContentResponse) *ContentBlockedError {
 	if feedback := response.PromptFeedback; feedback != nil {
 		switch feedback.BlockReason {
@@ -228,6 +297,46 @@ func geminiContentBlock(response *genai.GenerateContentResponse) *ContentBlocked
 		}
 	}
 	return nil
+}
+
+// geminiEmptyOutputError 解释一次既没有正文也没有工具调用的结果。最常见的是
+// MAX_TOKENS：模型把整份文件写进工具参数，写到一半撞上输出上限，Gemini 会把残缺的
+// 调用整段丢掉，只剩一个空 text part。诊断里带上本次实际发出的上限（unset 表示
+// 代填值被拒后去掉了字段，由网关决定），才看得出该调大哪边。
+// 截断和 OpenAI 那边用同一个哨兵：同一模型原样重发还会截在同一处，交给降级链。
+func geminiEmptyOutputError(response *genai.GenerateContentResponse, maxOutputTokens int32) error {
+	reason := "none"
+	if len(response.Candidates) > 0 && response.Candidates[0] != nil {
+		if value := strings.TrimSpace(string(response.Candidates[0].FinishReason)); value != "" {
+			reason = value
+		}
+	}
+	limit := "unset"
+	if maxOutputTokens > 0 {
+		limit = strconv.FormatInt(int64(maxOutputTokens), 10)
+	}
+	usage := geminiUsage(response)
+	diagnostics := fmt.Sprintf("(finish_reason=%s max_output_tokens=%s usage={input_tokens:%d output_tokens:%d})",
+		reason, limit, usage.InputTokens, usage.OutputTokens)
+	if reason == string(genai.FinishReasonMaxTokens) {
+		return fmt.Errorf("llm: gemini output hit the max output token limit before any text or complete tool call %s: %w", diagnostics, ErrCompletionTruncatedNoText)
+	}
+	return fmt.Errorf("llm: gemini response has no text %s", diagnostics)
+}
+
+func geminiHasOutput(response *genai.GenerateContentResponse, definitions []ToolDefinition) bool {
+	if len(geminiToolCalls(response, definitions)) > 0 {
+		return true
+	}
+	if len(response.Candidates) == 0 || response.Candidates[0] == nil || response.Candidates[0].Content == nil {
+		return false
+	}
+	for _, part := range response.Candidates[0].Content.Parts {
+		if part != nil && !part.Thought && part.Text != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func geminiUsage(response *genai.GenerateContentResponse) Usage {

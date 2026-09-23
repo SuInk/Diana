@@ -102,72 +102,6 @@ func TestDowngradeRecordsRoundTrip(t *testing.T) {
 	}
 }
 
-// 探测必须绕开已经记住的结论，否则结论再没有翻身的机会：网关改好了也测不出来。
-func TestProbeForcedToolChoiceBypassesAndClearsMemo(t *testing.T) {
-	accept := false
-	var sawToolChoice []bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		sawToolChoice = append(sawToolChoice, body["tool_choice"] != nil)
-		w.Header().Set("Content-Type", "application/json")
-		if body["tool_choice"] != nil && !accept {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"message":"Thinking mode does not support this tool_choice"}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"id":"c","model":"test","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
-	}))
-	defer server.Close()
-
-	now := time.Now()
-	restore := stubDowngradeMemoClock(func() time.Time { return now })
-	defer restore()
-
-	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "k", BaseURL: server.URL + "/v1", APIFormat: APIFormatChatCompletions, Model: "thinking"}
-	client := newOpenAICompatibleClient(cfg, server.Client())
-	key := downgradeMemoKey(cfg, cfg.Model)
-
-	if _, err := client.ProbeForcedToolChoice(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if !rememberedDowngrades.seen(key, downgradeFieldToolChoice) {
-		t.Fatal("the probe did not record the rejection")
-	}
-
-	// 网关改好了：探测仍然带着 tool_choice 去问，并把旧结论抹掉。
-	accept = true
-	sawToolChoice = nil
-	if _, err := client.ProbeForcedToolChoice(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(sawToolChoice) != 1 || !sawToolChoice[0] {
-		t.Fatalf("the probe reused the remembered downgrade: %#v", sawToolChoice)
-	}
-	if rememberedDowngrades.seen(key, downgradeFieldToolChoice) {
-		t.Fatal("the stale conclusion survived a successful probe")
-	}
-}
-
-// 与字段无关的失败（鉴权等）不该动结论。
-func TestProbeForcedToolChoiceKeepsMemoOnUnrelatedFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
-	}))
-	defer server.Close()
-
-	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "k", BaseURL: server.URL + "/v1", APIFormat: APIFormatChatCompletions, Model: "thinking"}
-	client := newOpenAICompatibleClient(cfg, server.Client())
-	if _, err := client.ProbeForcedToolChoice(context.Background()); err == nil {
-		t.Fatal("ProbeForcedToolChoice error = nil, want the auth failure")
-	}
-	if rememberedDowngrades.seen(downgradeMemoKey(cfg, cfg.Model), downgradeFieldToolChoice) {
-		t.Fatal("an unrelated failure was recorded as a rejection")
-	}
-}
-
 // stubDowngradeMemoClock 拨快记忆的表，并在结束时清干净，免得污染其他用例。
 func stubDowngradeMemoClock(now func() time.Time) func() {
 	rememberedDowngrades.mu.Lock()
@@ -178,5 +112,16 @@ func stubDowngradeMemoClock(now func() time.Time) func() {
 		rememberedDowngrades.mu.Lock()
 		rememberedDowngrades.now = previous
 		rememberedDowngrades.mu.Unlock()
+	}
+}
+
+// forget 抹掉一条结论。生产代码不会主动忘，结论只按 TTL 过期；测试用它把进程级
+// 记忆恢复干净。
+func (m *downgradeMemo) forget(key, field string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.rejected[key], field)
+	if len(m.rejected[key]) == 0 {
+		delete(m.rejected, key)
 	}
 }
