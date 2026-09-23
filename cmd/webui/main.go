@@ -643,6 +643,15 @@ func main() {
 	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
 	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
 	browserBoxManager := browserbox.New(ctx, sqliteStore, dataDir)
+	// 新装时替用户把内置浏览器打开：本机找得到 Chrome 就开，有显示器（或能起 Xvfb）
+	// 就开真窗口。已经在用扩展的不动——两者二选一，打开这边会把那边挤掉。
+	if !browserControlRegistry.Policy().Enabled {
+		if enabled, err := browserBoxManager.EnableByDefault(ctx); err != nil {
+			log.Printf("diana 内置浏览器已按本机条件默认打开，但没能启动：%v", err)
+		} else if enabled {
+			log.Printf("diana 内置浏览器已按本机条件默认打开（有头：%v）", browserBoxManager.Settings().Headful)
+		}
+	}
 	browserBoxHandler := webui.NewBrowserBoxHandler(browserBoxManager)
 	browserBoxHandler.SetLogStore(sqliteStore)
 	browserBoxHandler.Register(router)

@@ -75,6 +75,8 @@ type Manager struct {
 	// 状态清掉——和扩展那边旧 socket 的 close 是同一类坑。
 	generation uint64
 	watchers   map[chan struct{}]struct{}
+	// saved 表示配置落过盘。没落过盘的才轮得到 EnableByDefault 按本机条件自动打开。
+	saved bool
 }
 
 // New 创建管理器并读取已保存的配置。开着的话顺手把浏览器拉起来。
@@ -88,6 +90,7 @@ func New(ctx context.Context, store Store, dataDir string) *Manager {
 	if store != nil {
 		if doc, ok, err := store.LoadBrowserBox(ctx); err == nil && ok {
 			m.settings = doc.Settings.WithDefaults()
+			m.saved = true
 		}
 	}
 	if m.settings.Enabled {
@@ -96,6 +99,41 @@ func New(ctx context.Context, store Store, dataDir string) *Manager {
 		}
 	}
 	return m
+}
+
+// 本机条件的探测，测试里替换掉。
+var (
+	findBrowserExecutable = func() bool {
+		_, err := agent.FindBrowserExecutable("")
+		return err == nil
+	}
+	headfulDisplayAvailable = func() bool { return systemDisplayAvailable() || xvfbAvailable() }
+)
+
+// EnableByDefault 在内置浏览器从没保存过配置时，按本机条件替用户打开它：找得到
+// Chrome/Chromium 就开；有显示器，或者能自己拉起 Xvfb（完整版容器镜像自带），就开
+// 真窗口，否则无头。返回这次有没有打开。
+//
+// 只看「落没落过盘」：用户关过、改过的配置一律不动。找不到浏览器时也不落盘，这样
+// 以后装上了，下次启动还会再探测一次。调用方负责别的前提，例如用户已经在用浏览器
+// 控制扩展时不该调它——两边互斥，打开这边会把那边挤掉。
+func (m *Manager) EnableByDefault(ctx context.Context) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	m.mu.RLock()
+	saved := m.saved
+	next := m.settings
+	m.mu.RUnlock()
+	if saved || next.Enabled || !findBrowserExecutable() {
+		return false, nil
+	}
+	next.Enabled = true
+	next.Headful = headfulDisplayAvailable()
+	if _, err := m.SetSettings(ctx, next); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // ProfileDir 是登录态所在目录。放在数据目录下而不是临时目录：这一档的全部意义
@@ -172,6 +210,9 @@ func (m *Manager) SetSettings(ctx context.Context, next Settings) (Settings, err
 			m.mu.Unlock()
 			return previous, err
 		}
+		m.mu.Lock()
+		m.saved = true
+		m.mu.Unlock()
 	}
 	switch {
 	case !next.Enabled:

@@ -623,7 +623,7 @@ let residencyListed = false;
 
 // 浏览器来源在演示里从「Diana 内置」开始：它是推荐的那个。扩展那边的配置照样
 // 预填好，切过去就能看到授权边界长什么样。
-let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true };
+let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true, headful: true };
 let demoBrowserControlPolicy = {
   enabled: false,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],

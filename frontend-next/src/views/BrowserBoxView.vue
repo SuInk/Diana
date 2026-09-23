@@ -56,7 +56,7 @@
           <div class="field">
             <label class="switch-row">
               <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
-              <span>开一个真窗口（只有本机有显示器时才有意义；容器里保持关闭，实时画面照常）</span>
+              <span>开一个真窗口（新装时按本机条件自动选：有显示器、或能自己拉起虚拟屏时打开；无头也有实时画面）</span>
             </label>
           </div>
 

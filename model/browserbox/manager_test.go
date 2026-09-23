@@ -179,3 +179,56 @@ func TestNilVirtualDisplayIsInert(t *testing.T) {
 	}
 	display.Stop()
 }
+
+func stubDetection(t *testing.T, browser, display bool) {
+	t.Helper()
+	oldBrowser, oldDisplay := findBrowserExecutable, headfulDisplayAvailable
+	findBrowserExecutable = func() bool { return browser }
+	headfulDisplayAvailable = func() bool { return display }
+	t.Cleanup(func() { findBrowserExecutable, headfulDisplayAvailable = oldBrowser, oldDisplay })
+}
+
+// 找不到浏览器时不开，也不落盘：以后装上了，下次启动还要再探测。
+func TestEnableByDefaultSkipsWithoutBrowser(t *testing.T) {
+	stubDetection(t, false, true)
+	store := &memoryStore{}
+	manager := New(context.Background(), store, t.TempDir())
+	enabled, err := manager.EnableByDefault(context.Background())
+	if err != nil || enabled {
+		t.Fatalf("没有浏览器时不该打开：enabled=%v err=%v", enabled, err)
+	}
+	if store.ok {
+		t.Fatal("没有浏览器时不该落盘")
+	}
+}
+
+// 保存过的配置一律不动，哪怕用户当时是关着的。
+func TestEnableByDefaultRespectsSavedSettings(t *testing.T) {
+	stubDetection(t, true, true)
+	store := &memoryStore{doc: Document{Settings: Settings{Enabled: false}}, ok: true}
+	manager := New(context.Background(), store, t.TempDir())
+	enabled, err := manager.EnableByDefault(context.Background())
+	if err != nil || enabled || manager.Settings().Enabled {
+		t.Fatalf("保存过的配置不该被改：enabled=%v err=%v settings=%+v", enabled, err, manager.Settings())
+	}
+}
+
+// 新装且找得到浏览器：打开，并按有没有显示器决定有头还是无头。
+func TestEnableByDefaultPicksHeadfulByDisplay(t *testing.T) {
+	for _, display := range []bool{true, false} {
+		stubDetection(t, true, display)
+		store := &memoryStore{}
+		manager := New(context.Background(), store, t.TempDir())
+		// 指向一个不存在的可执行文件，不在开发机上真拉起浏览器；这里只关心配置有没有
+		// 按探测结果落盘。
+		manager.settings.Executable = "/nonexistent/diana-test-chrome"
+		enabled, _ := manager.EnableByDefault(context.Background())
+		t.Cleanup(manager.Stop)
+		if !enabled {
+			t.Fatalf("display=%v：找得到浏览器时应打开", display)
+		}
+		if !store.ok || !store.doc.Settings.Enabled || store.doc.Settings.Headful != display {
+			t.Fatalf("display=%v：落盘的配置不对 %+v", display, store.doc.Settings)
+		}
+	}
+}

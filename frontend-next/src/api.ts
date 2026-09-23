@@ -3331,7 +3331,7 @@ export function codingAgentSetup(agent: string, operation: "status" | "install" 
 
 export interface BrowserBoxSettings {
   enabled: boolean;
-  /** 有头窗口。默认无头——容器里没有显示器，无头是唯一能跑起来的模式。 */
+  /** 有头窗口。新装时按本机条件自动选：有显示器或能起 Xvfb 就开。 */
   headful?: boolean;
   window_width?: number;
   window_height?: number;
