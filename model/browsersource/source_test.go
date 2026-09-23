@@ -3,34 +3,44 @@
 
 package browsersource
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
-func TestResolvePrefersBoxThenExtension(t *testing.T) {
+func TestWithDefaultsNormalizesOrder(t *testing.T) {
 	cases := []struct {
-		box, extension bool
-		want           string
+		in, want []string
 	}{
-		{false, false, Off},
-		{true, false, Box},
-		{false, true, Extension},
-		{true, true, Box},
+		{nil, []string{Box, Extension}},
+		{[]string{Extension}, []string{Extension, Box}},
+		{[]string{"cdp", Extension, Extension, Box}, []string{Extension, Box}},
 	}
 	for _, tc := range cases {
-		if got := Resolve(tc.box, tc.extension); got != tc.want {
-			t.Fatalf("Resolve(%v, %v) = %q, want %q", tc.box, tc.extension, got, tc.want)
+		if got := (Settings{Order: tc.in}).WithDefaults().Order; !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("WithDefaults(%v) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }
 
-func TestValid(t *testing.T) {
-	for _, value := range []string{Off, Box, Extension} {
-		if !Valid(value) {
-			t.Fatalf("Valid(%q) = false", value)
-		}
+// 排在前面的用不了就换下一个；都用不了就是不用。
+func TestPickFallsBackInOrder(t *testing.T) {
+	usable := map[string]bool{}
+	pick := func(order ...string) string {
+		return Pick(order, func(source string) bool { return usable[source] })
 	}
-	for _, value := range []string{"", "render", "Box"} {
-		if Valid(value) {
-			t.Fatalf("Valid(%q) = true", value)
-		}
+	if got := pick(Extension, Box); got != Off {
+		t.Fatalf("都用不了时应是 Off，实际 %q", got)
+	}
+	usable[Box] = true
+	if got := pick(Extension, Box); got != Box {
+		t.Fatalf("扩展用不了时应换内置，实际 %q", got)
+	}
+	usable[Extension] = true
+	if got := pick(Extension, Box); got != Extension {
+		t.Fatalf("两个都能用时按顺序取扩展，实际 %q", got)
+	}
+	if got := pick(Box, Extension); got != Box {
+		t.Fatalf("两个都能用时按顺序取内置，实际 %q", got)
 	}
 }
