@@ -717,7 +717,7 @@ func collectForwardMediaMap(node map[string]any, source forwardMediaSource, dept
 		return
 	}
 
-	// NapCat returns full OneBot message objects for received merged forwards,
+	// Some clients return full OneBot message objects for received merged forwards,
 	// while go-cqhttp-style implementations may return node segments.
 	source = forwardMediaSourceFromMap(source, node)
 	collectForwardMediaSegments(firstNonNil(node["message"], node["content"]), source, depth+1, out)

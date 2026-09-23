@@ -81,7 +81,7 @@ func NewOneBotReverseServer(cfg OneBotConfig) *OneBotReverseServer {
 			UpdatedAt:             time.Now(),
 		},
 		upgrader: websocket.Upgrader{
-			// NapCat does not send Origin. Browser clients must be same-origin so a
+			// OneBot clients do not send Origin. Browser clients must be same-origin so a
 			// hostile page cannot reuse a token embedded in a WebSocket URL.
 			CheckOrigin: sameOriginWebSocketRequest,
 		},
@@ -103,7 +103,7 @@ func (s *OneBotReverseServer) SetConfig(cfg OneBotConfig) {
 // Connect 在反向模式下登记事件处理器并等待关闭。
 func (s *OneBotReverseServer) Connect(ctx context.Context, handler EventHandler) error {
 	s.mu.Lock()
-	// 反向模式下 Connect 不主动拨号，只登记 handler 等待 NapCat 连进来。
+	// 反向模式下 Connect 不主动拨号，只登记 handler 等待接入端连进来。
 	s.connectGeneration++
 	generation := s.connectGeneration
 	s.ctx = ctx
@@ -130,7 +130,7 @@ func (s *OneBotReverseServer) Connect(ctx context.Context, handler EventHandler)
 	return ctx.Err()
 }
 
-// ServeHTTP 接受 NapCat 反向 WebSocket 连接。
+// ServeHTTP 接受 OneBot 反向 WebSocket 连接。
 func (s *OneBotReverseServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ok, reason := s.authorized(r); !ok {
 		s.recordUnauthorized(r, reason)
@@ -310,7 +310,7 @@ func oneBotRequestOrigin(r *http.Request) string {
 }
 
 // IsOneBotReverseHandshake 判断请求是否为 OneBot 反向 WebSocket 握手。
-// NapCat 系客户端握手时会带 X-Self-ID / X-Client-Role 头，据此可以在任意
+// OneBot 客户端握手时会带 X-Self-ID / X-Client-Role 头，据此可以在任意
 // 路径上识别（包括用户只填 ws://host:port 裸地址时打到 "/" 的情况），
 // 不依赖固定的 /onebot/v11/ws 后缀。鉴权仍由 server 自身的 token 校验负责。
 func IsOneBotReverseHandshake(r *http.Request) bool {
@@ -455,9 +455,9 @@ func (s *OneBotReverseServer) updateAccountStatus(raw any) {
 	}
 	message := ""
 	if !online {
-		message = "账号已离线，请在 NapCat 中检查登录状态并重新登录"
+		message = "账号已离线，请在 OneBot 客户端中检查登录状态并重新登录"
 	} else if !good {
-		message = "NapCat 报告账号状态异常，请检查账号风控、网络或登录状态"
+		message = "OneBot 客户端报告账号状态异常，请检查账号风控、网络或登录状态"
 	}
 	s.connMu.Lock()
 	s.status.AccountStatusKnown = true

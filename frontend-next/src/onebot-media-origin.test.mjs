@@ -31,10 +31,10 @@ test("cross-machine forward ws and http endpoints warn about media origin", () =
   const warn = "媒体回源基址";
 
   // 反向 ws 永远不警告（媒体回源按握手地址推断，不需要用户干预）。
-  assert.equal(warningFor("reverse_ws", "ws://napcat.example.com:6700", "", "diana.local"), "");
+  assert.equal(warningFor("reverse_ws", "ws://onebot.example.com:6700", "", "diana.local"), "");
   // 正向 ws 填另一台主机：警告，且文案里带显式配置项。
-  const forward = warningFor("forward_ws", "ws://napcat.example.com:6700", "", "diana.local");
-  assert.ok(forward.includes("napcat.example.com"));
+  const forward = warningFor("forward_ws", "ws://onebot.example.com:6700", "", "diana.local");
+  assert.ok(forward.includes("onebot.example.com"));
   assert.ok(forward.includes(warn));
   // HTTP 接入同理。
   const http = warningFor("http", "", "http://192.168.1.20:5700", "diana.local");

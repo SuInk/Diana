@@ -46,7 +46,7 @@ const (
 	historyBaselineOverlap  = 5 * time.Second
 	inboundReplayPadding    = 30 * time.Minute
 	inboundCheckpointPeriod = 30 * time.Second
-	// NapCat history calls can stall when several large responses are requested
+	// OneBot history calls can stall when several large responses are requested
 	// concurrently. Serialize the small session set to keep backfill complete.
 	historyFetchWorkers = 1
 	historyPageSize     = 100
@@ -1050,7 +1050,7 @@ func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
 }
 
 // channelAccountDown reports a heartbeat-confirmed unhealthy bot account: the
-// transport may be fine while NapCat cannot receive messages for the account.
+// transport may be fine while the OneBot client cannot receive messages for the account.
 func channelAccountDown(status ChannelStatus) bool {
 	return status.AccountStatusKnown && (!status.AccountOnline || !status.AccountGood)
 }
@@ -1210,7 +1210,7 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 }
 
 func (r *Runtime) backfillInboundHistorySessions(ctx context.Context, store InboundEventStore, sessions []HistorySession, fallbackWatermark int64) ([]HistorySession, historyBackfillStats, error) {
-	// This backfill protocol is made of OneBot/NapCat APIs. Persisted sessions
+	// This backfill protocol is made of OneBot APIs. Persisted sessions
 	// from Telegram and other transports must keep their own signed/string IDs
 	// and must never be replayed through OneBot's positive numeric group rules.
 	oneBotSessions := sessions[:0]
@@ -1373,7 +1373,7 @@ func (r *Runtime) enqueueBackfilledEvents(ctx context.Context, store InboundEven
 	return insertedCount, errs
 }
 
-// fetchHistorySerialized 让整体回补和各群的缺口复查排队拉历史：NapCat 同时处理几个
+// fetchHistorySerialized 让整体回补和各群的缺口复查排队拉历史：接入端同时处理几个
 // 大的历史请求时会卡住（见 historyFetchWorkers）。
 func (r *Runtime) fetchHistorySerialized(ctx context.Context, session HistorySession) ([]MessageEvent, error) {
 	r.historyFetchMu.Lock()

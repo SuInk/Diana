@@ -22,7 +22,6 @@ if ($extraConfigFile -and -not (Test-Path $extraConfigFile)) {
 # 键名沿用环境变量的写法只是为了让调用方式不变,实际写进的是 config.yaml。
 $optionalSections = @(
     @{ Section = "storage"; Keys = @{ "DIANA_LOCAL_MEDIA_BASE_URL" = "local_media_base_url" } },
-    @{ Section = "napcat"; Keys = [ordered]@{ "DIANA_NAPCAT_WEBUI_URL" = "webui_url"; "DIANA_NAPCAT_WEBUI_TOKEN" = "webui_token" } },
     @{ Section = "llm"; Keys = [ordered]@{ "LLM_API_KEY" = "api_key"; "LLM_BASE_URL" = "base_url"; "LLM_MODEL" = "model"; "LLM_API_FORMAT" = "api_format"; "LLM_IMAGE_MODEL" = "image_model" } }
 )
 

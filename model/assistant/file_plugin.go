@@ -452,7 +452,7 @@ func oneBotFileResolveRequests(ref fileRef) []oneBotFileResolveRequest {
 		appendRequest("get_group_file_url", "file_id", ref.FileID, extra)
 	}
 	if name := strings.TrimSpace(ref.Name); name != "" && name != "文件" {
-		// NapCat keeps the mapping behind incoming file IDs in memory. After a
+		// Some OneBot clients keep the mapping behind incoming file IDs in memory. After a
 		// restart, its local filename search can still recover an already cached file.
 		appendRequest("get_file", "file", name, nil)
 	}

@@ -2145,7 +2145,7 @@ func (cfg BotConfig) Validate() error {
 	// 掉线。正向 WS / HTTP 是 Diana 主动外连，token 发不发由接入端决定，
 	// 留空合法，不做限制。
 	if cfg.OneBotTransport == OneBotTransportReverseWS && cfg.Enabled && strings.TrimSpace(cfg.OneBotAccessToken) == "" {
-		return fmt.Errorf("OneBot 反向 WebSocket 必须配置 Access Token，且需与接入端（如 NapCat）填写的 token 一致")
+		return fmt.Errorf("OneBot 反向 WebSocket 必须配置 Access Token，且需与接入端填写的 token 一致")
 	}
 	endpoint := strings.TrimSpace(cfg.OneBotReverseWSEndpoint)
 	if cfg.OneBotTransport == OneBotTransportForwardWS {

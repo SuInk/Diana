@@ -309,7 +309,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">显示「对方正在输入」</span>
                   </label>
-                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要 NapCat 等支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
+                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
                 </div>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">

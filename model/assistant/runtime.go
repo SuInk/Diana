@@ -5911,7 +5911,7 @@ func collectNestedForwardIDs(value any, depth int, out *[]string, seen map[strin
 			collectNestedForwardIDs(inline, depth+1, out, seen)
 			return
 		}
-		// node 段、以及 NapCat 直接返回的完整消息对象，内容都可能挂在这几个键下。
+		// node 段、以及部分实现直接返回的完整消息对象，内容都可能挂在这几个键下。
 		for _, container := range []map[string]any{item, data} {
 			for _, key := range []string{"content", "message", "messages", "forward"} {
 				if nested, ok := container[key]; ok {

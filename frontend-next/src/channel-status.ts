@@ -19,8 +19,8 @@ export function channelStatusLabel(channel: BotChannelStatus): string {
 }
 
 export function channelStatusHint(channel: BotChannelStatus): string {
-  if (channel.account_status_message) return `${channel.account_status_message}；NapCat WebSocket 仍保持连接。`;
+  if (channel.account_status_message) return `${channel.account_status_message}；OneBot 连接仍保持。`;
   if (channel.last_error) return channel.last_error;
   if (!channel.connected) return "请确认 OneBot 接入端已启动，并检查连接方式、服务地址与鉴权配置。";
-  return "NapCat WebSocket 与账号状态正常。";
+  return "OneBot 连接与账号状态正常。";
 }

@@ -149,7 +149,7 @@ func TestRuntimeAllowsLowLevelGroupAdministrator(t *testing.T) {
 	}
 }
 
-func TestRuntimeFallsBackToNapCatWhenSenderLevelIsMissing(t *testing.T) {
+func TestRuntimeFallsBackToOneBotWhenSenderLevelIsMissing(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_info": {"user_id": "10001", "role": "member", "level": "9"},
 	}}
@@ -169,7 +169,7 @@ func TestRuntimeFallsBackToNapCatWhenSenderLevelIsMissing(t *testing.T) {
 		t.Fatalf("ignored = %v, decision = %#v", ignored, decision)
 	}
 	if len(channel.calls) != 1 || channel.calls[0].action != "get_group_member_info" {
-		t.Fatalf("NapCat calls = %#v", channel.calls)
+		t.Fatalf("OneBot calls = %#v", channel.calls)
 	}
 }
 

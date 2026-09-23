@@ -73,7 +73,7 @@ func (r *Runtime) prepareEventImages(ctx context.Context, event MessageEvent) Me
 
 	// A syntactically valid CDN URL is not proof that its rkey still works.
 	// First validate get_image directly; only if that source also fails do we ask
-	// get_msg to refresh NapCat's message-media map and retry get_image.
+	// get_msg to refresh the client's message-media map and retry get_image.
 	for range 2 {
 		event, resolveFailures = r.enrichMediaReferencesDetailed(ctx, event)
 		diagnostics = append(diagnostics, resolveFailures...)

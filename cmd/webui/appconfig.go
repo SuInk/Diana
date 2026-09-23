@@ -21,7 +21,7 @@ import (
 
 // 配置分两层，边界就是「这项能不能在 WebUI 里改」：
 //
-//   - server / storage / admin / update / napcat 是基础设施，WebUI 里没有对应
+//   - server / storage / admin / update 是基础设施，WebUI 里没有对应
 //     入口，config.yaml 是唯一来源，每次启动都读。
 //   - bot / llm 是业务配置，唯一真相源是数据库，WebUI 随时可改。config.yaml
 //     里的这两段只在数据库为空时用作首启播种，供无人值守部署使用。
@@ -34,7 +34,6 @@ type appConfig struct {
 	Storage storageConfig `yaml:"storage"`
 	Admin   adminConfig   `yaml:"admin"`
 	Update  updateConfig  `yaml:"update"`
-	NapCat  napcatConfig  `yaml:"napcat"`
 	// Bot 和 LLM 用 yaml.Node 收着，后面按 JSON tag 解码，好让 config.yaml 的
 	// 字段名和 WebUI 接口的 payload 完全一致，不用维护第二套字段名。
 	Bot yaml.Node `yaml:"bot"`
@@ -88,11 +87,6 @@ type updateConfig struct {
 	// 只读根文件系统或数据目录不可写的部署才需要单独指定。
 	WorkDir   string `yaml:"work_dir"`
 	GroupTest *bool  `yaml:"group_test_enabled"`
-}
-
-type napcatConfig struct {
-	WebUIURL   string `yaml:"webui_url"`
-	WebUIToken string `yaml:"webui_token"`
 }
 
 // configPathEnv 是唯一保留的环境变量：它不是配置，是指向配置文件的引导指针。

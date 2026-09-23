@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-// napcatFriendRejection 是实测那次的原话（NapCat result=16）：对方把机器人删了
+// friendRejection 是实测那次的原话（result=16）：对方把机器人删了
 // 好友，之后每条私聊回复都被同一句挡回来。
-const napcatFriendRejection = "send private message rejected: result=16 err=发送失败，请先添加对方为好友"
+const friendRejection = "send private message rejected: result=16 err=发送失败，请先添加对方为好友"
 
 type rejectingQueueChannel struct {
 	*queueTestChannel
@@ -40,7 +40,7 @@ func (c *rejectingQueueChannel) sendAttempts() int {
 }
 
 func TestIsPermanentSendRejection(t *testing.T) {
-	rejected := &outboundSendError{Cause: errors.New("diana: send failed after 1 attempts: " + napcatFriendRejection)}
+	rejected := &outboundSendError{Cause: errors.New("diana: send failed after 1 attempts: " + friendRejection)}
 	if !isPermanentSendRejection(rejected) {
 		t.Fatal("result=16 friend rejection was not classified as permanent")
 	}
@@ -62,7 +62,7 @@ func TestIsPermanentSendRejection(t *testing.T) {
 // 五遍回复再被拒五次。
 func TestPermanentSendRejectionDropsWithoutRegenerating(t *testing.T) {
 	store := newMemoryInboundEventStore()
-	channel := &rejectingQueueChannel{queueTestChannel: newQueueTestChannel(), err: errors.New(napcatFriendRejection)}
+	channel := &rejectingQueueChannel{queueTestChannel: newQueueTestChannel(), err: errors.New(friendRejection)}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"none","prompt":""}`, "第一次回复",
 		`{"action":"none","prompt":""}`, "不该有的第二次回复",

@@ -272,7 +272,7 @@ func persistInlineImageSegments(platform string, eventTime int64, targetKind, gr
 func imageSourceCandidates(segment MessageSegment) []string {
 	var out []string
 	seen := map[string]struct{}{}
-	// Prefer the newest NapCat resolution. An older entry is commonly the same
+	// Prefer the newest client resolution. An older entry is commonly the same
 	// expired-rkey URL that triggered the fallback and may otherwise cost 8s again.
 	for index := 8; index >= 1; index-- {
 		value := strings.TrimSpace(segment.Data[fmt.Sprintf("%s%d", imageResolvedSourceKey, index)])

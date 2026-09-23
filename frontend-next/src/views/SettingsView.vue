@@ -366,7 +366,7 @@
             <div class="field wide">
               <label for="media-base-url">回源基址</label>
               <input id="media-base-url" v-model="mediaBaseURL" class="input mono" placeholder="留空自动推断，例如 http://192.168.1.10:18080/media/resolver" :disabled="mediaBaseURLLoading || mediaBaseURLSaving" />
-              <span class="hint">发送文件/图片时，接入端（NapCat 等）按这个地址回源拉取媒体。留空时按接入方式自动推断：反向 ws 用握手地址，正向 ws / HTTP 用接入端地址推主机名 + Diana 的 Web 端口。跨机或反向代理部署收不到文件时，把接入端实际可访问的 Diana 地址填到这里。当前生效来源：{{ mediaBaseURLSourceLabel }}。</span>
+              <span class="hint">发送文件/图片时，接入端按这个地址回源拉取媒体。留空时按接入方式自动推断：反向 ws 用握手地址，正向 ws / HTTP 用接入端地址推主机名 + Diana 的 Web 端口。跨机或反向代理部署收不到文件时，把接入端实际可访问的 Diana 地址填到这里。当前生效来源：{{ mediaBaseURLSourceLabel }}。</span>
             </div>
             <div class="field wide">
               <button class="btn primary" type="submit" :disabled="mediaBaseURLLoading || mediaBaseURLSaving">

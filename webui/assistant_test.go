@@ -439,7 +439,7 @@ func TestBotPlatforms(t *testing.T) {
 		}
 	}
 	for _, platform := range body.Platforms {
-		if platform.ID == "napcat" || platform.ID == "lagrange" || platform.ID == "go-cqhttp" {
+		if platform.ID == "lagrange" || platform.ID == "go-cqhttp" {
 			t.Fatalf("legacy implementation exposed as platform: %#v", platform)
 		}
 	}

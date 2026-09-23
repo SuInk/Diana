@@ -213,7 +213,7 @@ func TestMessageEventFromEnvelopeNoticeGroupIncrease(t *testing.T) {
 	}
 }
 
-// TestMessageEventFromEnvelopeNoticeTypeGroupRecall 验证 NapCat/OneBot 撤回 notice_type 能映射到内部 SubType。
+// TestMessageEventFromEnvelopeNoticeTypeGroupRecall 验证 OneBot 撤回 notice_type 能映射到内部 SubType。
 func TestMessageEventFromEnvelopeNoticeTypeGroupRecall(t *testing.T) {
 	event := messageEventFromEnvelope(oneBotEnvelope{
 		Time:       123,
@@ -320,7 +320,7 @@ func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t 
 	headers := http.Header{
 		"Authorization": []string{"Bearer test-token"},
 		"X-Self-ID":     []string{"42"},
-		"User-Agent":    []string{"napcat-primary"},
+		"User-Agent":    []string{"onebot-primary"},
 	}
 
 	primary, response, err := websocket.DefaultDialer.Dial(wsURL, headers)
@@ -334,7 +334,7 @@ func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t 
 	}
 
 	duplicateHeaders := headers.Clone()
-	duplicateHeaders.Set("User-Agent", "napcat-duplicate")
+	duplicateHeaders.Set("User-Agent", "onebot-duplicate")
 	duplicate, response, err := websocket.DefaultDialer.Dial(wsURL, duplicateHeaders)
 	if duplicate != nil {
 		_ = duplicate.Close()
@@ -501,7 +501,7 @@ func TestReverseServerRejectsCrossOriginBrowser(t *testing.T) {
 	request := httptest.NewRequest("GET", "http://bot.example/onebot/v11/ws", nil)
 	request.Host = "bot.example"
 	if !sameOriginWebSocketRequest(request) {
-		t.Fatal("origin-less NapCat request was rejected")
+		t.Fatal("origin-less OneBot request was rejected")
 	}
 	request.Header.Set("Origin", "https://attacker.example")
 	if sameOriginWebSocketRequest(request) {

@@ -102,21 +102,21 @@ func TestVideoFrameCountGrowsWithDuration(t *testing.T) {
 	}
 }
 
-func TestVideoContextPathAllowedForNapCatMacClientStorage(t *testing.T) {
+func TestVideoContextPathAllowedForMacQQClientStorage(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(home, "Library", "Application Support", "QQ", "nt_qq_test", "nt_data", "Video", "2026-07", "Ori", "video.mp4")
 	if !videoContextPathAllowed(path) {
-		t.Fatalf("expected NapCat macOS QQ video path to be allowed: %s", path)
+		t.Fatalf("expected macOS QQ video path to be allowed: %s", path)
 	}
 }
 
-func TestNapCatVideoFromEnvironmentReachesLLMImages(t *testing.T) {
-	videoPath := strings.TrimSpace(os.Getenv("DIANA_TEST_NAPCAT_VIDEO"))
+func TestOneBotVideoFromEnvironmentReachesLLMImages(t *testing.T) {
+	videoPath := strings.TrimSpace(os.Getenv("DIANA_TEST_ONEBOT_VIDEO"))
 	if videoPath == "" {
-		t.Skip("DIANA_TEST_NAPCAT_VIDEO is not set")
+		t.Skip("DIANA_TEST_ONEBOT_VIDEO is not set")
 	}
 	msg := llmMessageFromEventWithVideoFrames(context.Background(), MessageEvent{
 		RawMessage: "这个视频是什么内容",
@@ -132,7 +132,7 @@ func TestNapCatVideoFromEnvironmentReachesLLMImages(t *testing.T) {
 		}
 	}
 	if imageParts < minVideoContextFrames {
-		t.Fatalf("real NapCat video produced %d LLM image parts, want at least %d", imageParts, minVideoContextFrames)
+		t.Fatalf("real OneBot video produced %d LLM image parts, want at least %d", imageParts, minVideoContextFrames)
 	}
 }
 
