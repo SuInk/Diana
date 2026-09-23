@@ -45,3 +45,30 @@ func TestListLogsFiltersByActionAndProfile(t *testing.T) {
 		t.Fatalf("只按动作筛时应拿到所有机器人和两种级别的记录，实际 %d 条", len(all))
 	}
 }
+
+// 日志页的「全部」是操作加错误，调试追踪不混进来。
+func TestListLogsFiltersByKinds(t *testing.T) {
+	s, err := NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	now := time.Now()
+	for _, entry := range []AppLogEntry{
+		{ID: "op", Kind: LogKindOperation, CreatedAt: now},
+		{ID: "err", Kind: LogKindError, CreatedAt: now.Add(time.Second)},
+		{ID: "debug", Kind: LogKindDebug, CreatedAt: now.Add(2 * time.Second)},
+	} {
+		if err := s.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListLogs(ctx, AppLogFilter{Kinds: []AppLogKind{LogKindOperation, LogKindError}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != "err" || got[1].ID != "op" {
+		t.Fatalf("全部应只含操作和错误并按时间倒序：%+v", got)
+	}
+}

@@ -81,6 +81,14 @@ func (s *SQLiteStore) ListLogs(ctx context.Context, filter AppLogFilter) ([]AppL
 		where = append(where, "level = ?")
 		args = append(args, string(filter.Level))
 	}
+	if len(filter.Kinds) > 0 {
+		placeholders := make([]string, 0, len(filter.Kinds))
+		for _, kind := range filter.Kinds {
+			placeholders = append(placeholders, "?")
+			args = append(args, string(kind))
+		}
+		where = append(where, "kind IN ("+strings.Join(placeholders, ", ")+")")
+	}
 	if len(filter.Actions) > 0 {
 		placeholders := make([]string, 0, len(filter.Actions))
 		for _, action := range filter.Actions {

@@ -42,7 +42,9 @@ type Entry struct {
 
 // Filter 目前只保留前端需要的筛选项；新增筛选条件时先扩展这里，再改 SQLite 查询。
 type Filter struct {
-	Kind  Kind
+	Kind Kind
+	// Kinds 非空时取其中任一种，和 Kind 同时给时两个条件都要满足。
+	Kinds []Kind
 	Level Level
 	// Actions 非空时只取这些动作。
 	Actions []string

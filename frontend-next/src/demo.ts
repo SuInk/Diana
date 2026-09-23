@@ -1393,7 +1393,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path === "/api/logs") {
     const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
-    return json({ logs: url.searchParams.get("kind") === "error" ? errorLogs : logs });
+    const kind = url.searchParams.get("kind");
+    if (kind === "all") {
+      return json({ logs: [...logs, ...errorLogs].sort((a, b) => b.created_at.localeCompare(a.created_at)) });
+    }
+    return json({ logs: kind === "error" ? errorLogs : logs });
   }
 
   if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", build_type: "release", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });

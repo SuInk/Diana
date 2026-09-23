@@ -2064,7 +2064,8 @@ export function getChangelog(): Promise<ChangelogResponse> {
   return requestJSON<ChangelogResponse>("/api/system/update/changelog");
 }
 
-export function listAppLogs(kind?: AppLogKind, limit = 100): Promise<AppLogsResponse> {
+/** "all" 是操作和错误合在一起（不含调试追踪）。 */
+export function listAppLogs(kind?: AppLogKind | "all", limit = 100): Promise<AppLogsResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (kind) {
     params.set("kind", kind);
@@ -2087,7 +2088,7 @@ export const browserActivityActions = [
 
 /** 取浏览器相关的操作记录；带 botID 时只取这台机器人的。成功和失败的都在里面。 */
 export function listBrowserActivity(botID?: string, limit = 30): Promise<AppLogsResponse> {
-  const params = new URLSearchParams({ limit: String(limit), action: browserActivityActions.join(",") });
+  const params = new URLSearchParams({ kind: "all", limit: String(limit), action: browserActivityActions.join(",") });
   if (botID) params.set("profile", botID);
   return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
 }

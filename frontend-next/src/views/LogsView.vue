@@ -24,6 +24,7 @@
       </div>
       <div class="view-actions">
         <div class="segmented" role="tablist" aria-label="日志类型">
+          <button type="button" :class="{ active: kind === 'all' }" @click="switchKind('all')">全部</button>
           <button type="button" :class="{ active: kind === 'operation' }" @click="switchKind('operation')">操作日志</button>
           <button type="button" :class="{ active: kind === 'error' }" @click="switchKind('error')">错误日志</button>
         </div>
@@ -77,7 +78,8 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 // 页头动作位由 RecordsView 提供；拿不到就说明这一档被单独用在别处，按钮不渲染。
 const actionsHost = inject(recordsActionsHost, ref<HTMLElement | null>(null));
 
-const kind = ref<AppLogKind>("operation");
+type LogTab = Extract<AppLogKind, "operation" | "error"> | "all";
+const kind = ref<LogTab>("all");
 const logs = ref<AppLogEntry[]>([]);
 const loading = ref(true);
 const query = ref("");
@@ -124,7 +126,7 @@ async function reload(): Promise<void> {
   }
 }
 
-function switchKind(next: AppLogKind): void {
+function switchKind(next: LogTab): void {
   if (kind.value !== next) {
     kind.value = next;
     void reload();
