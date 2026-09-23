@@ -51,23 +51,25 @@ type callResult struct {
 }
 
 type oneBotEnvelope struct {
-	Time        int64           `json:"time,omitempty"`
-	SelfID      any             `json:"self_id,omitempty"`
-	PostType    string          `json:"post_type,omitempty"`
-	MessageType string          `json:"message_type,omitempty"`
-	SubType     string          `json:"sub_type,omitempty"`
-	NoticeType  string          `json:"notice_type,omitempty"`
-	RequestType string          `json:"request_type,omitempty"`
-	Comment     string          `json:"comment,omitempty"`
-	Flag        string          `json:"flag,omitempty"`
-	MessageID   any             `json:"message_id,omitempty"`
-	MessageSeq  any             `json:"message_seq,omitempty"`
-	UserID      any             `json:"user_id,omitempty"`
-	GroupID     any             `json:"group_id,omitempty"`
-	OperatorID  any             `json:"operator_id,omitempty"`
-	TargetID    any             `json:"target_id,omitempty"`
-	Message     json.RawMessage `json:"message,omitempty"`
-	RawMessage  string          `json:"raw_message,omitempty"`
+	Time        int64  `json:"time,omitempty"`
+	SelfID      any    `json:"self_id,omitempty"`
+	PostType    string `json:"post_type,omitempty"`
+	MessageType string `json:"message_type,omitempty"`
+	SubType     string `json:"sub_type,omitempty"`
+	NoticeType  string `json:"notice_type,omitempty"`
+	RequestType string `json:"request_type,omitempty"`
+	Comment     string `json:"comment,omitempty"`
+	Flag        string `json:"flag,omitempty"`
+	MessageID   any    `json:"message_id,omitempty"`
+	MessageSeq  any    `json:"message_seq,omitempty"`
+	UserID      any    `json:"user_id,omitempty"`
+	GroupID     any    `json:"group_id,omitempty"`
+	OperatorID  any    `json:"operator_id,omitempty"`
+	TargetID    any    `json:"target_id,omitempty"`
+	// Duration 是 group_ban 通知的禁言秒数。
+	Duration   any             `json:"duration,omitempty"`
+	Message    json.RawMessage `json:"message,omitempty"`
+	RawMessage string          `json:"raw_message,omitempty"`
 	// Likes 和 IsAdd 是 NapCat 贴表情通知（group_msg_emoji_like）的字段：
 	// 谁给哪条消息贴上或取消了哪个表情。
 	Likes []struct {
@@ -722,6 +724,7 @@ func noticeSegmentsFromEnvelope(envelope oneBotEnvelope, subType string, message
 	add("message_id", messageID)
 	add("target_id", stringifyID(envelope.TargetID))
 	add("operator_id", stringifyID(envelope.OperatorID))
+	add("duration", stringifyID(envelope.Duration))
 	if len(data) == 0 {
 		return nil
 	}

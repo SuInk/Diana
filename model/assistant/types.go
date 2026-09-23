@@ -184,6 +184,10 @@ type MessageEvent struct {
 	// Persisted outgoing events still use the regular message fields above.
 	botReply      string
 	routingReason string
+	// mutedJudgeOnly 非空表示机器人在本群被禁言、但配置了照常做回复判断：判断
+	// 跑完后不生成、不发送，内容是禁言说明。mutedSkipImages 表示这期间不识图。
+	mutedJudgeOnly  string
+	mutedSkipImages bool
 	// tempSessionGroupID 只在「给非好友发私聊」时有值：QQ 的临时会话要靠共同群
 	// 才发得出去。它是一次投递的路由提示，不是会话身份的一部分——写成导出字段
 	// 就会跟着事件落库，让这条私聊在历史里看起来像发生在那个群里。
@@ -564,7 +568,15 @@ type BotConfig struct {
 	MarkdownToPlain          *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
 	ErrorReplyPrefix         string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts        int                  `json:"send_retry_attempts,omitempty"`
+	// MutedReplyPauseEnabled 为空或 true 时，机器人在群里被禁言期间只记上下文、
+	// 不做回复判断和生成（见 bot_mute.go）。
+	MutedReplyPauseEnabled *bool `json:"muted_reply_pause_enabled,omitempty"`
+	// 暂停回复期间哪些环节照常执行（见 bot_mute.go）：语音转文字、图片识别默认
+	// 照常，保证解禁后上下文完整；回复判断默认不做，开了只记录判断结果。
+	MutedVoiceTranscriptionEnabled *bool `json:"muted_voice_transcription_enabled,omitempty"`
+	MutedImageDescriptionEnabled   *bool `json:"muted_image_description_enabled,omitempty"`
+	MutedReplyJudgmentEnabled      *bool `json:"muted_reply_judgment_enabled,omitempty"`
+	SendRetryAttempts              int   `json:"send_retry_attempts,omitempty"`
 	// 群退避与入站重跑的五个参数，见 send_retry_policy.go。
 	sendRetrySettings
 	SendChunkIntervalMS  int                  `json:"send_chunk_interval_ms,omitempty"`
@@ -893,6 +905,11 @@ type GroupConfig struct {
 	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
 	// 本群的发送退避和入站重跑参数，每项 0 表示跟随机器人。
 	sendRetrySettings
+	// 本群被禁言时是否暂停回复、暂停期间是否转写语音；nil 跟随机器人。
+	MutedReplyPauseEnabled         *bool `json:"muted_reply_pause_enabled,omitempty"`
+	MutedVoiceTranscriptionEnabled *bool `json:"muted_voice_transcription_enabled,omitempty"`
+	MutedImageDescriptionEnabled   *bool `json:"muted_image_description_enabled,omitempty"`
+	MutedReplyJudgmentEnabled      *bool `json:"muted_reply_judgment_enabled,omitempty"`
 	// ExtensionAccess 按群覆盖 MCP / Skill 的开放范围，键是扩展 ID，没写的跟随
 	// 机器人那一档。群管理员只能往严的方向改。
 	ExtensionAccess        map[string]GroupExtensionAccess `json:"extension_access,omitempty"`
@@ -1018,24 +1035,28 @@ type ConfigPayload struct {
 	SystemPrompt                 string           `json:"system_prompt,omitempty"`
 	// Soul 是品格层，只在机器人级存在：分群配置里没有这个字段，所以某个群改不了
 	// 价值观，只能改说话方式（见 persona_soul.go 开头）。
-	Soul                     *PersonaSoul         `json:"soul,omitempty"`
-	PersonaID                string               `json:"persona_id,omitempty"`
-	CustomPersona            *Persona             `json:"custom_persona,omitempty"`
-	ResponseMode             ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle               ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled *bool                `json:"action_description_enabled,omitempty"`
-	PersonaMode              PersonaMode          `json:"persona_mode,omitempty"`
-	SelfReference            string               `json:"self_reference,omitempty"`
-	SentenceEnders           string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled         bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode       ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	ModelDisclosure          ModelDisclosure      `json:"model_disclosure,omitempty"`
-	RepositoryDisclosure     RepositoryDisclosure `json:"repository_disclosure,omitempty"`
-	MentionUserMode          ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain          *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix         string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts        int                  `json:"send_retry_attempts,omitempty"`
+	Soul                           *PersonaSoul         `json:"soul,omitempty"`
+	PersonaID                      string               `json:"persona_id,omitempty"`
+	CustomPersona                  *Persona             `json:"custom_persona,omitempty"`
+	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled       *bool                `json:"action_description_enabled,omitempty"`
+	PersonaMode                    PersonaMode          `json:"persona_mode,omitempty"`
+	SelfReference                  string               `json:"self_reference,omitempty"`
+	SentenceEnders                 string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled               bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode             ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure                ModelDisclosure      `json:"model_disclosure,omitempty"`
+	RepositoryDisclosure           RepositoryDisclosure `json:"repository_disclosure,omitempty"`
+	MentionUserMode                ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain                *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled             *bool                `json:"error_notify_enabled,omitempty"`
+	MutedReplyPauseEnabled         *bool                `json:"muted_reply_pause_enabled,omitempty"`
+	MutedVoiceTranscriptionEnabled *bool                `json:"muted_voice_transcription_enabled,omitempty"`
+	MutedImageDescriptionEnabled   *bool                `json:"muted_image_description_enabled,omitempty"`
+	MutedReplyJudgmentEnabled      *bool                `json:"muted_reply_judgment_enabled,omitempty"`
+	ErrorReplyPrefix               string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts              int                  `json:"send_retry_attempts,omitempty"`
 	sendRetrySettings
 	RecurringFailureAlertThreshold *int                 `json:"recurring_failure_alert_threshold,omitempty"`
 	SendChunkIntervalMS            int                  `json:"send_chunk_interval_ms,omitempty"`
@@ -2248,8 +2269,13 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MentionUserMode:                   cfg.MentionUserMode,
 		MarkdownToPlain:                   copyBoolPointer(cfg.MarkdownToPlain),
 		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
+		MutedReplyPauseEnabled:            copyBoolPointer(cfg.MutedReplyPauseEnabled),
+		MutedVoiceTranscriptionEnabled:    copyBoolPointer(cfg.MutedVoiceTranscriptionEnabled),
+		MutedImageDescriptionEnabled:      copyBoolPointer(cfg.MutedImageDescriptionEnabled),
+		MutedReplyJudgmentEnabled:         copyBoolPointer(cfg.MutedReplyJudgmentEnabled),
 		ErrorReplyPrefix:                  cfg.ErrorReplyPrefix,
 		SendRetryAttempts:                 cfg.SendRetryAttempts,
+		sendRetrySettings:                 cfg.sendRetrySettings,
 		RecurringFailureAlertThreshold:    copyIntPointer(cfg.RecurringFailureAlertThreshold),
 		SendChunkIntervalMS:               cfg.SendChunkIntervalMS,
 		PrivateClosingGrace:               cfg.PrivateClosingGrace,
@@ -2279,7 +2305,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxReplyChars:                     cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
-		sendRetrySettings:                 cfg.sendRetrySettings,
 		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
@@ -2463,8 +2488,13 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MentionUserMode:                 payload.MentionUserMode,
 		MarkdownToPlain:                 copyBoolPointer(payload.MarkdownToPlain),
 		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),
+		MutedReplyPauseEnabled:          copyBoolPointer(payload.MutedReplyPauseEnabled),
+		MutedVoiceTranscriptionEnabled:  copyBoolPointer(payload.MutedVoiceTranscriptionEnabled),
+		MutedImageDescriptionEnabled:    copyBoolPointer(payload.MutedImageDescriptionEnabled),
+		MutedReplyJudgmentEnabled:       copyBoolPointer(payload.MutedReplyJudgmentEnabled),
 		ErrorReplyPrefix:                payload.ErrorReplyPrefix,
 		SendRetryAttempts:               payload.SendRetryAttempts,
+		sendRetrySettings:               payload.sendRetrySettings,
 		RecurringFailureAlertThreshold:  copyIntPointer(payload.RecurringFailureAlertThreshold),
 		SendChunkIntervalMS:             payload.SendChunkIntervalMS,
 		PrivateClosingGrace:             payload.PrivateClosingGrace,
@@ -2498,7 +2528,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
-		sendRetrySettings:               payload.sendRetrySettings,
 		DirectReplyChunkSize:            payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:           payload.ForwardReplyThreshold,
 		RecallReplyMode:                 payload.RecallReplyMode,

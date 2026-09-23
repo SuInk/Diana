@@ -977,6 +977,42 @@
                   并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。表达质量拦截始终静默，不受此开关影响。
                 </span>
               </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.muted_reply_pause_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">被禁言时暂停回复</span>
+                </label>
+                <span class="hint">
+                  机器人在群里被禁言（或全员禁言且机器人不是管理员）期间，消息照常记入上下文和记忆，但不生成回复（回复判断默认也不做），
+                  也不白发再重试。解禁后从新消息开始回复，禁言期间的消息不补发。禁言和解禁会记在事件页的「通知」里。
+                  关闭后按原来的方式照常生成和重试。
+                </span>
+              </div>
+              <div v-if="form.muted_reply_pause_enabled" class="field wide">
+                <label>暂停期间照常执行</label>
+                <div class="stack">
+                  <label class="switch">
+                    <input v-model="form.muted_image_description_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">图片识别成文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_voice_transcription_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">语音转文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_reply_judgment_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">回复判断</span>
+                  </label>
+                </div>
+                <span class="hint">
+                  图片识别和语音转文字默认开，解禁后历史里的图片、语音有文字，上下文才完整；关掉能省下这段时间的费用。
+                  回复判断默认关：判断了也发不出去。打开后照常判断，该回的消息在事件页记为「判断该回，但禁言中未发送」，不生成也不发送。
+                </span>
+              </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.recall_reply_auto_delete_enabled" type="checkbox" />
@@ -4062,6 +4098,10 @@ function setForm(config: BotProfileConfig): void {
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
+    muted_reply_pause_enabled: config.muted_reply_pause_enabled ?? true,
+    muted_voice_transcription_enabled: config.muted_voice_transcription_enabled ?? true,
+    muted_image_description_enabled: config.muted_image_description_enabled ?? true,
+    muted_reply_judgment_enabled: config.muted_reply_judgment_enabled ?? false,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
