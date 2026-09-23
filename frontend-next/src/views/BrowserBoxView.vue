@@ -16,19 +16,19 @@
         <span class="card-sub">机器人要不要用浏览器、用谁的。选中的那个带着登录态，只有主人能让机器人驱动它</span>
       </div>
       <div class="card-body stack">
-        <div class="browser-sources" role="radiogroup" aria-label="机器人用哪个浏览器">
-          <label v-for="item in sources" :key="item.key" class="browser-source">
+        <!-- 两个开关互斥：打开一个会关掉另一个，两个都关就是不用浏览器。 -->
+        <div v-for="item in sources" :key="item.key" class="field wide">
+          <label class="switch">
             <input
-              type="radio"
-              name="browser-source"
-              :value="item.key"
+              type="checkbox"
               :checked="source === item.key"
               :disabled="switching || source === null"
-              @change="chooseSource(item.key)"
+              @change="toggleSource(item.key, ($event.target as HTMLInputElement).checked)"
             />
-            <span class="browser-source-name">{{ item.label }}</span>
-            <span class="browser-source-hint">{{ item.hint }}</span>
+            <span class="track" aria-hidden="true"></span>
+            <span class="switch-label">{{ item.label }}</span>
           </label>
+          <span class="hint">{{ item.hint }}</span>
         </div>
         <p class="muted" style="margin: 0; font-size: 12.5px">
           读公开网页、出图、渲染 PDF 用的是另一个一次性无头浏览器，不带登录态、群成员也能用，一直开着，不用在这里选；
@@ -63,11 +63,13 @@
             这台机器上没找到 Chrome/Chromium。容器完整版镜像自带 chromium；slim 版可以在宿主机执行
             <code class="mono">docker exec -u root &lt;容器名&gt; sh -c 'apt-get update &amp;&amp; apt-get install -y chromium fonts-noto-cjk'</code>。
           </p>
-          <div class="field">
-            <label class="switch-row">
+          <div class="field wide">
+            <label class="switch">
               <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
-              <span>开一个真窗口（新装时按本机条件自动选：有显示器、或能自己拉起虚拟屏时打开；无头也有实时画面）</span>
+              <span class="track" aria-hidden="true"></span>
+              <span class="switch-label">开一个真窗口</span>
             </label>
+            <span class="hint">新装时按本机条件自动选：有显示器、或能自己拉起虚拟屏时打开。无头也有实时画面。</span>
           </div>
 
           <div class="row gap">
@@ -219,11 +221,15 @@ interface LiveFrame {
   scale: number;
 }
 
-const sources: { key: BrowserSource; label: string; hint: string }[] = [
-  { key: "box", label: "Diana 内置（推荐）", hint: "Diana 自己的常驻浏览器，你能看画面、随时上手" },
-  { key: "extension", label: "我自己的 Chrome", hint: "装一个扩展，机器人用你日常浏览器的登录态" },
-  { key: "off", label: "不用", hint: "机器人只读公开网页，不碰任何登录态" }
+const sources: { key: Exclude<BrowserSource, "off">; label: string; hint: string }[] = [
+  { key: "box", label: "Diana 内置浏览器（推荐）", hint: "Diana 自己的常驻浏览器，你能看画面、随时上手。打开它会关掉下面的 Chrome。" },
+  { key: "extension", label: "我自己的 Chrome", hint: "装一个扩展，机器人用你日常浏览器的登录态。打开它会关掉上面的内置浏览器。" }
 ];
+// 打开一个就切到它（后端顺手关掉另一个）；关掉当前那个就是不用浏览器。
+function toggleSource(key: Exclude<BrowserSource, "off">, checked: boolean): void {
+  void chooseSource(checked ? key : "off");
+}
+
 // 当前机器人。页面按作用域重建（App 里 KeepAlive 以它为 key），这里取挂载时的值即可。
 // 空串是「全部机器人」：各台的浏览器互相隔离，没法合在一起显示。
 const botID = botScope.value;
@@ -490,43 +496,6 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.browser-sources {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-/* 单选一行：圆点、名字、说明排成一行，窄屏时说明折到名字下面。 */
-.browser-source {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: 8px;
-  row-gap: 2px;
-  cursor: pointer;
-}
-
-.browser-source input {
-  flex: none;
-  margin: 0;
-  accent-color: var(--accent);
-  align-self: center;
-}
-
-.browser-source:has(input:disabled) {
-  cursor: default;
-}
-
-.browser-source-name {
-  font-weight: 600;
-  font-size: 13.5px;
-}
-
-.browser-source-hint {
-  font-size: 12.5px;
-  color: var(--muted);
-}
-
 .browser-activity-target {
   font-size: 11.5px;
   max-width: 360px;
