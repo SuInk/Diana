@@ -1457,6 +1457,34 @@ code {
   }
 }
 
+/* 人设 YAML 有十几万字，编辑框占满弹窗高度，等宽字体让缩进看得清。 */
+.persona-yaml-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.persona-yaml-text {
+  width: 100%;
+  min-height: min(60vh, 640px);
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+
+.persona-yaml-error {
+  margin: 0;
+  color: var(--err);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .prompt-advanced > summary {
   cursor: pointer;
   padding: 8px 0;

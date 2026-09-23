@@ -66,6 +66,48 @@ func (h *BotHandler) registerPersonaRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/personas", h.savePersona)
 	router.POST(base+"/personas/delete", h.deletePersona)
 	router.POST(base+"/personas/import", h.importPersonas)
+	router.POST(base+"/personas/yaml", h.renderPersonaYAML)
+	router.POST(base+"/personas/parse", h.parsePersonaSource)
+}
+
+type personaYAMLPayload struct {
+	Personas []assistant.Persona `json:"personas"`
+}
+
+// renderPersonaYAML 把人设渲染成 YAML，给导出分享和 YAML 编辑器用。YAML 只在服务端
+// 生成和解析：前端没有 YAML 库，两头各写一份迟早对不上。
+func (h *BotHandler) renderPersonaYAML(c *gin.Context) {
+	var payload personaYAMLPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "personas_yaml", err, "", nil)
+		return
+	}
+	if len(payload.Personas) == 0 {
+		h.writeError(c, http.StatusBadRequest, "personas_yaml", errPersonaImportEmpty, "", nil)
+		return
+	}
+	out, err := assistant.RenderPersonaYAML(payload.Personas)
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "personas_yaml", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"yaml": string(out)})
+}
+
+// parsePersonaSource 只解析不入库：YAML 编辑器点「应用」时把结果填回表单，
+// 保存与否仍由用户按保存决定。
+func (h *BotHandler) parsePersonaSource(c *gin.Context) {
+	var payload personaImportPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "personas_parse", err, "", nil)
+		return
+	}
+	document, err := assistant.ParsePersonaDocument([]byte(payload.Source))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "personas_parse", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"personas": document.Personas})
 }
 
 func (h *BotHandler) loadPersonaSet(c *gin.Context) (assistant.PersonaSet, bool) {
@@ -164,6 +206,12 @@ func (h *BotHandler) importPersonas(c *gin.Context) {
 	if len(payload.Personas) == 0 {
 		h.writeError(c, http.StatusBadRequest, "personas_import", errPersonaImportEmpty, "", nil)
 		return
+	}
+	for _, persona := range payload.Personas {
+		if err := assistant.CheckPersonaPrompts(persona); err != nil {
+			h.writeError(c, http.StatusBadRequest, "personas_import", err, strings.TrimSpace(persona.Name), nil)
+			return
+		}
 	}
 	personaLibraryMu.Lock()
 	defer personaLibraryMu.Unlock()

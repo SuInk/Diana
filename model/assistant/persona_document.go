@@ -63,6 +63,11 @@ func ParsePersonaDocument(raw []byte) (PersonaDocument, error) {
 		return PersonaDocument{}, ErrPersonaDocumentEmpty
 	}
 	for index, persona := range document.Personas {
+		// 先查完整性再清洗：Normalized 会把和默认值相同的条目丢掉，丢完就分不出
+		// 「写了但没改」和「根本没写」。
+		if err := checkPersonaPrompts(persona); err != nil {
+			return PersonaDocument{}, err
+		}
 		document.Personas[index] = persona.Normalized()
 	}
 	return document, nil

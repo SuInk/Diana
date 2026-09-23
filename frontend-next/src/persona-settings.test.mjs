@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { asCustomPersona, currentPersonaSelection, selectPersona, applyPersonaSettings, personaFromSettings, unusedPersonaName } from "./persona-settings.ts";
+import { applyPersonaDocument, asCustomPersona, currentPersonaSelection, selectPersona, applyPersonaSettings, personaFromSettings, unusedPersonaName } from "./persona-settings.ts";
 
 test("personas bundle expression settings without runtime configuration", () => {
   const current = { system_prompt: "  Diana 已写好的自定义正文\n保留原文。", action_description_enabled: true, daypart_tone_enabled: true, self_reference: "咱", sentence_enders: "呀", participation: { desire: 87 }, marked_bot_ids: ["123"] };
@@ -69,4 +69,30 @@ test("人设库存取带着人设模式", () => {
   // 没写档位的人设（存量库里全是这种）一律按填空题套用，行为不变。
   const legacy = applyPersonaSettings({ system_prompt: "", persona_mode: "own" }, { id: "y", name: "旧人设", system_prompt: "你是一只猫娘。" }, true);
   assert.equal(legacy.persona_mode, "fill");
+});
+
+test("prompt overrides travel with the persona", () => {
+  const bot = { name: "bot", system_prompt: "喵", prompt_overrides: { "reply.wake_only": "叫我就接着说" } };
+  assert.deepEqual(personaFromSettings(bot, "猫娘").prompts, { "reply.wake_only": "叫我就接着说" });
+  const applied = applyPersonaSettings(bot, { id: "p", name: "另一套", system_prompt: "汪" }, true);
+  assert.equal(applied.prompt_overrides, undefined, "a persona without prompts means all defaults");
+  const withPrompts = applyPersonaSettings(bot, { id: "p", name: "另一套", prompts: { "reply.image_only": "看图" } }, true);
+  assert.deepEqual(withPrompts.prompt_overrides, { "reply.image_only": "看图" });
+});
+
+test("editing prompts turns a library persona into a custom one", () => {
+  const preset = { id: "p", name: "猫娘", system_prompt: "喵", prompts: { "reply.wake_only": "叫我就接着说" } };
+  const bot = { ...applyPersonaSettings({ name: "bot" }, preset, true), persona_id: "p" };
+  assert.equal(currentPersonaSelection(bot, [preset]), "p");
+  assert.equal(currentPersonaSelection({ ...bot, prompt_overrides: { "reply.wake_only": "改了" } }, [preset]), "custom");
+  assert.equal(currentPersonaSelection({ ...bot, prompt_overrides: undefined }, [preset]), "custom");
+});
+
+test("a YAML document replaces the whole persona, soul included", () => {
+  const bot = { name: "bot", system_prompt: "旧", soul: { identity: "旧品格" }, prompt_overrides: { "reply.wake_only": "旧" } };
+  const next = applyPersonaDocument(bot, { id: "", name: "新", system_prompt: "新正文" });
+  assert.equal(next.system_prompt, "新正文");
+  assert.equal(next.soul, undefined);
+  assert.equal(next.prompt_overrides, undefined);
+  assert.equal(next.persona_id, "");
 });

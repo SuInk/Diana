@@ -54,7 +54,11 @@ type Persona struct {
 	DaypartToneEnabled       *bool       `json:"daypart_tone_enabled,omitempty"`
 	SelfReference            string      `json:"self_reference,omitempty"`
 	SentenceEnders           string      `json:"sentence_enders,omitempty"`
-	UpdatedAt                time.Time   `json:"updated_at,omitempty"`
+	// Prompts 是这套人设改过的内置提示词，和 BotConfig.PromptOverrides 同一个形状：
+	// 只存改过的，套用时整份替换机器人的覆盖表。提示词跟着人设走，分享一份人设文件
+	// 就是分享它的全部提示词配置，见 persona_prompts.go。
+	Prompts   PromptOverrides `json:"prompts,omitempty"`
+	UpdatedAt time.Time       `json:"updated_at,omitempty"`
 }
 
 // PersonaSet 是整个人设库。
@@ -71,6 +75,7 @@ func copyCustomPersona(persona *Persona) *Persona {
 	copy.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
 	copy.SystemPrompt = migratePersonaStyle(copy.SystemPrompt, &copy.ReplyStyle, &copy.ActionDescriptionEnabled)
 	copy.Soul = persona.Soul.Clone()
+	copy.Prompts = copyPromptOverrides(persona.Prompts)
 	return &copy
 }
 
@@ -152,6 +157,7 @@ func (persona Persona) Normalized() Persona {
 	if persona.PersonaMode != PersonaModeOwn {
 		persona.PersonaMode = ""
 	}
+	persona.Prompts = normalizePromptOverrides(persona.Prompts)
 	return persona
 }
 
@@ -163,7 +169,8 @@ func (persona Persona) Empty() bool {
 		persona.ActionDescriptionEnabled == nil &&
 		persona.DaypartToneEnabled == nil &&
 		strings.TrimSpace(persona.SelfReference) == "" &&
-		strings.TrimSpace(persona.SentenceEnders) == ""
+		strings.TrimSpace(persona.SentenceEnders) == "" &&
+		len(persona.Prompts) == 0
 }
 
 // WithDefaults 清洗整库：去掉空条目和重复 ID，按最近更新排前面。

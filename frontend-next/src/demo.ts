@@ -10,6 +10,7 @@ import type {
   BrowserControlToken,
   LLMConfig,
   OpenAPIKey,
+  Persona,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
@@ -1140,6 +1141,30 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       imported++;
     }
     return json({ personas: demoPersonas, imported, skipped, renamed, dropped, unknown_styles: unknownStyles });
+  }
+  // 演示站没有后端的 YAML 库：JSON 本身就是合法的 YAML，渲染成 JSON、解析也只认 JSON，
+  // 够用来看编辑器长什么样。prompts 同样列全，和真实文件的完整性要求一致。
+  if (path === "/api/assistant/personas/yaml") {
+    const personas = ((body.personas as Persona[]) ?? []).map(({ id: _id, updated_at: _updated, ...persona }) => ({
+      ...persona,
+      prompts: Object.fromEntries(demoPromptCatalog.prompts.map((spec) => [spec.key, persona.prompts?.[spec.key] || spec.default]))
+    }));
+    const document = personas.length === 1 ? personas[0] : { version: 1, personas };
+    return json({ yaml: `# 演示模式：用 JSON 写法展示（JSON 也是合法的 YAML）。\n${JSON.stringify(document, null, 2)}\n` });
+  }
+  if (path === "/api/assistant/personas/parse") {
+    try {
+      const parsed = JSON.parse(String(body.source ?? "").replace(/^#.*$/gm, "")) as Persona | { personas: Persona[] };
+      const personas = "personas" in parsed ? parsed.personas : [parsed];
+      for (const persona of personas) {
+        const missing = demoPromptCatalog.prompts.filter((spec) => persona.prompts && !(spec.key in persona.prompts));
+        if (missing.length) return json({ error: `人设「${persona.name}」的 prompts 缺少 ${missing.length} 段提示词：${missing.map((spec) => spec.key).join("、")}` }, 400);
+        persona.prompts = Object.fromEntries(Object.entries(persona.prompts ?? {}).filter(([key, value]) => value.trim() !== demoPromptCatalog.prompts.find((spec) => spec.key === key)?.default));
+      }
+      return json({ personas });
+    } catch {
+      return json({ error: "演示模式只能解析 JSON 写法的人设文件" }, 400);
+    }
   }
   if (path === "/api/assistant/personas/delete") {
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));

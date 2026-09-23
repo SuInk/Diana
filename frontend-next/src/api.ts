@@ -2761,6 +2761,8 @@ export interface Persona {
   daypart_tone_enabled?: boolean;
   self_reference?: string;
   sentence_enders?: string;
+  /** 这套人设改过的内置提示词（只存改过的），套用时整份替换机器人的 prompt_overrides。 */
+  prompts?: Record<string, string>;
   updated_at?: string;
 }
 
@@ -2851,6 +2853,24 @@ export function importPersonaSource(source: string): Promise<PersonaImportResult
     method: "POST",
     body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, source })
   });
+}
+
+/** 人设渲染成 YAML：一套写在顶层，多套放进 personas。prompts 总是列出全部内置提示词。 */
+export async function renderPersonaYAML(personas: Persona[]): Promise<string> {
+  const response = await requestJSON<{ yaml: string }>("/api/assistant/personas/yaml", {
+    method: "POST",
+    body: JSON.stringify({ personas })
+  });
+  return response.yaml;
+}
+
+/** 只解析不入库：YAML 编辑器「应用」用。prompts 缺段或有不认识的键时后端直接报错。 */
+export async function parsePersonaSource(source: string): Promise<Persona[]> {
+  const response = await requestJSON<{ personas: Persona[] }>("/api/assistant/personas/parse", {
+    method: "POST",
+    body: JSON.stringify({ source })
+  });
+  return response.personas ?? [];
 }
 
 export function deletePersona(id: string): Promise<{ personas: Persona[] }> {
