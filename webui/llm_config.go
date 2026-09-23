@@ -88,7 +88,11 @@ type llmConfigPayload struct {
 	// 界面用它提示「这个模型写着多少，可以照着填」，它不参与任何计算。
 	CatalogContextWindowTokens int64 `json:"catalog_context_window_tokens,omitempty"`
 	MaxOutputTokens            int64 `json:"max_output_tokens,omitempty"`
-	TimeoutMS                  int64 `json:"timeout_ms,omitempty"`
+	// EffectiveMaxOutputTokens 和 MaxOutputTokensSource 是只读回显：默认模型在调用方
+	// 没覆盖时实际发出的输出上限和它的来源；0 表示不发，由服务端按模型处理。
+	EffectiveMaxOutputTokens int64                     `json:"effective_max_output_tokens,omitempty"`
+	MaxOutputTokensSource    llm.MaxOutputTokensSource `json:"max_output_tokens_source,omitempty"`
+	TimeoutMS                int64                     `json:"timeout_ms,omitempty"`
 }
 
 // llmRoleBinding 是「某个机器人的某个用途绑到了这套配置的哪个模型」。
@@ -655,6 +659,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 	payload.EffectiveMaxContextTokens = cfg.MaxContextTokensWithDefault()
 	payload.ContextWindowSource = source
 	payload.CatalogContextWindowTokens = raw.CatalogContextWindowTokens(cfg.Model)
+	payload.EffectiveMaxOutputTokens, payload.MaxOutputTokensSource = cfg.ResolveMaxOutputTokens(cfg.Model)
 	return payload
 }
 

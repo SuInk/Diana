@@ -886,3 +886,25 @@ func TestLLMPayloadWithoutBotSourceHasNoBindings(t *testing.T) {
 		t.Fatalf("bindings = %+v", payload.Profiles[0].RoleBindings)
 	}
 }
+
+// 输出上限没有输入框，界面要如实说明默认模型实际发多少、这个数从哪来。
+func TestLLMPayloadReportsEffectiveMaxOutputTokens(t *testing.T) {
+	for _, item := range []struct {
+		name       string
+		cfg        llm.ProviderConfig
+		want       int64
+		wantSource llm.MaxOutputTokensSource
+	}{
+		{"Gemini 按内置表", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "k", Model: "gemini-3.8-flash-low"}, 65536, llm.MaxOutputTokensSourceBuiltin},
+		{"Anthropic 按内置表", llm.ProviderConfig{Provider: llm.ProviderAnthropic, APIKey: "k", Model: "claude-opus-4-6"}, 128000, llm.MaxOutputTokensSourceBuiltin},
+		{"Responses 不发", llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "gpt-5.5"}, 0, llm.MaxOutputTokensSourceProvider},
+		{"用户填的值", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "k", Model: "gemini-3.8-flash-low", MaxOutputTokens: 4096}, 4096, llm.MaxOutputTokensSourceUser},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			payload := payloadFromConfig(item.cfg)
+			if payload.EffectiveMaxOutputTokens != item.want || payload.MaxOutputTokensSource != item.wantSource {
+				t.Fatalf("effective = %d, %q; want %d, %q", payload.EffectiveMaxOutputTokens, payload.MaxOutputTokensSource, item.want, item.wantSource)
+			}
+		})
+	}
+}

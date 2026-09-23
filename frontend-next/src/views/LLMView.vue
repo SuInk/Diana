@@ -336,6 +336,10 @@
             <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
           </ul>
         </div>
+        <div v-if="maxOutputHint" class="field wide">
+          <span class="field-static-label">输出上限</span>
+          <span class="hint">{{ maxOutputHint }}</span>
+        </div>
         <div v-if="form.provider === 'openai_compatible'" class="field wide">
           <label for="llm-header-name">自定义请求头（可选）</label>
           <div class="header-row">
@@ -812,6 +816,33 @@ const effectiveContextHint = computed(() => {
     ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}，可以照着填。`
     : "";
   return `留空按 ${fallback} 计算，不会自动去猜模型的真实窗口。${reference}`;
+});
+
+// 输出上限没有输入框：留空时按模型上限发，免得长文件写进工具参数时被网关的缺省
+// 值截断。这里如实说明默认模型实际发多少、这个数从哪来；显示的是已保存的配置。
+const maxOutputHint = computed(() => {
+  const profile = editingProfile.value;
+  if (!profile) {
+    return "";
+  }
+  const limit = (profile.effective_max_output_tokens ?? 0).toLocaleString("en-US");
+  const model = profile.model;
+  switch (profile.max_output_tokens_source) {
+    case "user":
+      return `按这套配置设定的 ${limit} 发送。`;
+    case "builtin":
+      return `${model} 的输出上限是 ${limit}（内置的主流模型上限表），请求按这个数发送。`;
+    case "catalog":
+      return `内置表里没有 ${model}，按模型清单里写的 ${limit} 发送。`;
+    case "fallback":
+      return profile.provider === "gemini"
+        ? `内置表里没有 ${model}，按 Gemini 现行上限 ${limit} 发送；模型不接受时自动去掉这个参数。`
+        : `内置表和模型清单里都没有 ${model}，按 ${limit} 发送。`;
+    case "provider":
+      return "不发送这个参数，由服务端按模型上限处理。";
+    default:
+      return "";
+  }
 });
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。

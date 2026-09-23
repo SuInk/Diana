@@ -87,7 +87,8 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 		temperature := float32(*req.Temperature)
 		config.Temperature = &temperature
 	}
-	implicitLimit, err := setGeminiOutputTokenLimit(config, req.MaxOutputTokens)
+	req = c.cfg.withImplicitMaxOutputTokens(ProviderGemini, req, false)
+	implicitLimit, err := setGeminiOutputTokenLimit(config, req)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +145,8 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 		value := float32(*req.Temperature)
 		config.Temperature = &value
 	}
-	implicitLimit, err := setGeminiOutputTokenLimit(config, req.MaxOutputTokens)
+	req = c.cfg.withImplicitMaxOutputTokens(ProviderGemini, req, false)
+	implicitLimit, err := setGeminiOutputTokenLimit(config, req)
 	if err != nil {
 		return nil, err
 	}
@@ -244,24 +246,22 @@ func (c *geminiClient) streamContent(ctx context.Context, model string, contents
 	}
 }
 
-// geminiImplicitMaxOutputTokens 是没填「最大输出 Token」时代发的上限，取 Gemini
-// 2.5/3.x 的输出上限。不带这个字段并不等于「按模型最大」：antigravity 这类网关看到
-// 缺省会按思考预算自己补一个（实测补成 9216），模型把整份文件写进工具参数时就会
-// 被截断。它只下发到请求里，不参与上下文预算：Gemini 的输入和输出上限是分开算的。
-const geminiImplicitMaxOutputTokens int32 = 65536
+// geminiFallbackMaxOutputTokens 是内置表不认识的模型名在 Gemini 协议下代发的上限，
+// 取 Gemini 2.5/3.x 的输出上限。只下发到请求里，不参与上下文预算：Gemini 的输入和
+// 输出上限是分开算的。
+const geminiFallbackMaxOutputTokens int32 = 65536
 
 // setGeminiOutputTokenLimit 写入输出上限，返回这个值是不是代填的。
-func setGeminiOutputTokenLimit(config *genai.GenerateContentConfig, requested int64) (bool, error) {
-	if requested > 0 {
-		value, err := geminiOutputTokenLimit(requested)
-		if err != nil {
-			return false, err
-		}
-		config.MaxOutputTokens = value
+func setGeminiOutputTokenLimit(config *genai.GenerateContentConfig, req GenerateRequest) (bool, error) {
+	if req.MaxOutputTokens <= 0 {
 		return false, nil
 	}
-	config.MaxOutputTokens = geminiImplicitMaxOutputTokens
-	return true, nil
+	value, err := geminiOutputTokenLimit(req.MaxOutputTokens)
+	if err != nil {
+		return false, err
+	}
+	config.MaxOutputTokens = value
+	return req.implicitMaxOutputTokens, nil
 }
 
 // isGeminiOutputLimitRejection 认出「上限超出该模型范围」的 400。上限更低的老模型

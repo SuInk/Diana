@@ -3701,8 +3701,9 @@ a.nav-action {
 }
 
 /* 组名不是某个具体控件的 label（一组复选框没有单一控件可指），
-   但视觉上要和 .field > label 一致。 */
-.plugin-setting-group-label {
+   但视觉上要和 .field > label 一致。只读回显的字段名同理。 */
+.plugin-setting-group-label,
+.field-static-label {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-secondary);

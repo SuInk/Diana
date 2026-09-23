@@ -9,31 +9,18 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 )
 
+// Anthropic 的 Messages API 把 max_tokens 列为必填，不发直接被拒。没配置时按模型
+// 上限要（见 ResolveMaxOutputTokens），内置表和模型清单都没有才退回这个常量。
 const defaultAnthropicMaxTokens int64 = 1024
 
-// anthropicMaxTokens 决定发给 Anthropic 的 MaxTokens。
-//
-// 别的适配器在没配置时干脆不发这个参数，让模型用自己的上限；Anthropic 的 Messages
-// API 把 max_tokens 列为必填，不发直接被拒，所以这里必须给出一个数。
-//
-// 既然躲不掉，就别由我们拍脑袋：优先用同步下来的模型清单里这个模型自己报的输出
-// 上限，清单没有才退回常量。写死的 1024 对现在的模型太小——会思考的模型先写
-// reasoning 再写正文，额度可能在思考阶段就用光，返回里只剩 reasoning 没有正文。
-func anthropicMaxTokens(cfg ProviderConfig, req GenerateRequest) int64 {
-	if req.MaxOutputTokens > 0 {
-		return req.MaxOutputTokens
-	}
-	if info, ok := cfg.ModelInfoFor(req.Model); ok && info.MaxOutputTokens > 0 {
-		return info.MaxOutputTokens
-	}
-	return defaultAnthropicMaxTokens
-}
+const anthropicNonStreamingTimeout = 10 * time.Minute
 
 type anthropicClient struct {
 	cfg    ProviderConfig
@@ -72,11 +59,11 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 	if messagesHaveInputAudio(req.Messages) {
 		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
 	}
-	req.MaxOutputTokens = anthropicMaxTokens(c.cfg, req)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
+	req = c.cfg.withImplicitMaxOutputTokens(ProviderAnthropic, req, true)
 
 	system, messages := splitSystemPrompt(req.Messages)
 	params := anthropic.MessageNewParams{
@@ -96,7 +83,13 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 	params.Tools = anthropicTools(req.Tools)
 	params.ToolChoice = anthropicToolChoice(req)
 
-	resp, err := c.client.Messages.New(ctx, params)
+	var opts []option.RequestOption
+	if req.implicitMaxOutputTokens && c.cfg.Timeout <= 0 {
+		// SDK 在没设超时时按 max_tokens 估算耗时，超过 21333 就拒绝非流式请求。代发的
+		// 是模型上限而不是预期长度，这里给出 SDK 自己推荐的 10 分钟，和它平时的缺省一致。
+		opts = append(opts, option.WithRequestTimeout(anthropicNonStreamingTimeout))
+	}
+	resp, err := c.client.Messages.New(ctx, params, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
@@ -135,7 +128,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
 	}
-	req.MaxOutputTokens = anthropicMaxTokens(c.cfg, req)
+	req = c.cfg.withImplicitMaxOutputTokens(ProviderAnthropic, req, true)
 	system, messages := splitSystemPrompt(req.Messages)
 	params := anthropic.MessageNewParams{Model: anthropic.Model(req.Model), MaxTokens: req.MaxOutputTokens, Messages: anthropicMessages(messages, req.Tools), Tools: anthropicTools(req.Tools), ToolChoice: anthropicToolChoice(req)}
 	if system != "" {
