@@ -472,9 +472,26 @@ code {
   font-weight: 600;
 }
 
-@media (max-width: 720px) {
+/* 折行看卡片本身多宽，不看窗口：右边有运行状态栏时，窗口再宽卡片也可能很窄，
+   按窗口断点会让下拉框撑出卡片、被右栏盖住。 */
+.model-role-list {
+  container-type: inline-size;
+}
+
+@container (max-width: 520px) {
   .model-role-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px;
+    row-gap: 8px;
+  }
+
+  .model-route-group > :first-child {
+    grid-column: 1 / -1;
+  }
+
+  .model-role-name {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
   }
 
   .model-role-head {
@@ -483,6 +500,17 @@ code {
 
   .model-role-desc {
     margin: 8px 0 0;
+  }
+}
+
+/* 再窄就提供商独占一行，模型和 +／删除 按钮并排。 */
+@container (max-width: 360px) {
+  .model-role-row {
+    grid-template-columns: minmax(0, 1fr) 34px;
+  }
+
+  .model-route-group > :nth-child(2) {
+    grid-column: 1 / -1;
   }
 }
 

@@ -580,7 +580,7 @@
               <h2>模型分配</h2>
               <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
-            <div class="card-body stack" style="gap: 0">
+            <div class="card-body stack model-role-list" style="gap: 0">
               <p v-if="modelRolesChangedElsewhere" class="hint warn-text">
                 模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
                 <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
