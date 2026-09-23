@@ -543,37 +543,6 @@
         </div>
 
         <div v-show="editorTab === 'model'" class="stack">
-          <!-- 聊天内模型管理 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>聊天内模型管理</h2>
-              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
-                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
-                </label>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
-              </div>
-            </div>
-          </section>
-
-
-          <section class="card">
-            <div class="card-header"><h2>媒体预处理</h2></div>
-            <div class="card-body stack">
-              <label><input v-model="form.auto_image_description" type="checkbox" /> 自动生成图片描述</label>
-              <label><input v-model="form.auto_video_preprocess" type="checkbox" /> 自动下载视频并提取关键帧</label>
-              <p class="muted">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</p>
-              <p class="muted">图片描述、视频帧描述和模型 OCR 用的是下方「模型分配」里的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</p>
-            </div>
-          </section>
-
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
@@ -748,6 +717,25 @@
             </div>
           </section>
 
+          <!-- 聊天内模型管理：主人专用的开关，平时用不上，排在模型分配和调用参数之后。 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>聊天内模型管理</h2>
+              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
+                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
+                </label>
+                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div v-show="editorTab === 'behavior'" class="stack">
@@ -1112,6 +1100,31 @@
                   <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
                 </label>
                 <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 30 分钟。主人不受影响。</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 媒体预处理原来在「模型」标签，因为它花的是「媒体解析」那个模型的额度。但它回答的
+               是「收到图片、视频时后台做不做」，和机器人识别、发送前审核是一类事；用哪个模型
+               仍在模型标签里，这里给一个跳转。 -->
+          <section class="card">
+            <div class="card-header"><h2>媒体预处理</h2></div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_image_description" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动生成图片描述</span>
+                </label>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_video_preprocess" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动下载视频并提取关键帧</span>
+                </label>
+                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
+                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
               </div>
             </div>
           </section>
