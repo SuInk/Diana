@@ -109,18 +109,23 @@ func TestRelationshipEvaluationRecordsSaturationSkip(t *testing.T) {
 		return &capturingLLMProvider{reply: `{"should_update":true,"delta":1,"confidence":0.9,"reason":"x"}`}, nil
 	})
 	runtime.SetUserMemoryStore(memory)
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
 	for range cap(runtime.relationshipEvalSem) {
 		runtime.relationshipEvalSem <- struct{}{}
 	}
 	event := evaluationTestEvent()
 	<-runtime.enqueueRelationshipEvaluation(event, PlainText(event.Segments))
 	deadline := time.Now().Add(2 * time.Second)
-	for len(memory.snapshot()) == 0 && time.Now().Before(deadline) {
+	for (len(memory.snapshot()) == 0 || !hasAppLogAction(logs.entriesSnapshot(), "relationship_evaluation_skipped")) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	records := memory.snapshot()
 	if len(records) != 1 || records[0].Status != RelationshipEvaluationSkipped || records[0].Error == "" || records[0].UserID != "user" {
 		t.Fatalf("records = %#v", records)
+	}
+	if !hasAppLogAction(logs.entriesSnapshot(), "relationship_evaluation_skipped") {
+		t.Fatalf("skip not in the run log: %v", appLogActions(logs.entriesSnapshot()))
 	}
 }
 
@@ -137,5 +142,32 @@ func TestRelationshipEvaluationStatusDetectsCap(t *testing.T) {
 	down := relationshipEvaluationDecision{ShouldUpdate: true, Delta: -2, Confidence: 0.9}
 	if got := relationshipEvaluationStatus(down, UserMemoryProfile{Favorability: -100}, UserMemoryProfile{Favorability: -100}); got != RelationshipEvaluationCapped {
 		t.Fatalf("floor status = %q", got)
+	}
+}
+
+// 运行日志里每次评估以前都是同一句「模型已完成关系与画像评估」；现在要看得出是谁、
+// 加减了多少、为什么没加上，记下了什么画像。
+func TestRelationshipEvaluationLogMessage(t *testing.T) {
+	event := MessageEvent{UserID: "10001", SenderName: "小林"}
+	cases := []struct {
+		name     string
+		before   int
+		after    int
+		decision relationshipEvaluationDecision
+		status   string
+		portrait []string
+		want     string
+	}{
+		{"changed", 10, 12, relationshipEvaluationDecision{ShouldUpdate: true, Delta: 2, Confidence: 0.9}, RelationshipEvaluationChanged, nil, "小林：好感度 +2（10 → 12）"},
+		{"down", 5, 2, relationshipEvaluationDecision{ShouldUpdate: true, Delta: -3, Confidence: 0.9}, RelationshipEvaluationChanged, nil, "小林：好感度 -3（5 → 2）"},
+		{"capped", 200, 200, relationshipEvaluationDecision{ShouldUpdate: true, Delta: 2, Confidence: 0.9}, RelationshipEvaluationCapped, nil, "小林：好感度已到头（200），模型给的 +2 没加上"},
+		{"low confidence", 25, 25, relationshipEvaluationDecision{ShouldUpdate: true, Delta: -1, Confidence: 0.55}, RelationshipEvaluationLowConfidence, nil, "小林：模型想 -1，但把握不够（55%），好感度不变"},
+		{"portrait only", 12, 12, relationshipEvaluationDecision{Confidence: 0.97}, RelationshipEvaluationUnchanged, []string{"居住地点 杭州", "兴趣爱好 爬山"}, "小林：好感度不变；记下画像：居住地点 杭州、兴趣爱好 爬山"},
+	}
+	for _, tc := range cases {
+		got := relationshipEvaluationLogMessage(event, UserMemoryProfile{Favorability: tc.before}, UserMemoryProfile{Favorability: tc.after}, tc.decision, tc.status, tc.portrait)
+		if got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
