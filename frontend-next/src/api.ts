@@ -47,7 +47,11 @@ export interface LLMConfig {
   context_window_source?: "user" | "fallback";
   /** 只读回显：模型清单里记的窗口，只作参考值，不参与计算。 */
   catalog_context_window_tokens?: number;
-  max_output_tokens?: number;
+  /** 用户手填的输出上限；0 或缺省表示按模型上限。 */
+  max_output_tokens?: number | null;
+  /** 只读回显：默认模型没被调用方覆盖时实际发出的输出上限及来源；0 表示不发。 */
+  effective_max_output_tokens?: number;
+  max_output_tokens_source?: "user" | "builtin" | "default" | "provider";
   timeout_ms?: number;
 }
 

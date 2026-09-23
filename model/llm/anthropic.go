@@ -6,34 +6,27 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 )
 
-const defaultAnthropicMaxTokens int64 = 1024
+// Anthropic 的 Messages API 把 max_tokens 列为必填，不发直接被拒；没配置时按模型
+// 上限要（见 ResolveMaxOutputTokens）。代发的值超出模型上限时，报错里会写出上限，
+// 按它重发一次；写不出来才退回这个各代 Claude 都接受的值。
+const anthropicRejectedMaxTokensRetry int64 = 8192
 
-// anthropicMaxTokens 决定发给 Anthropic 的 MaxTokens。
-//
-// 别的适配器在没配置时干脆不发这个参数，让模型用自己的上限；Anthropic 的 Messages
-// API 把 max_tokens 列为必填，不发直接被拒，所以这里必须给出一个数。
-//
-// 既然躲不掉，就别由我们拍脑袋：优先用同步下来的模型清单里这个模型自己报的输出
-// 上限，清单没有才退回常量。写死的 1024 对现在的模型太小——会思考的模型先写
-// reasoning 再写正文，额度可能在思考阶段就用光，返回里只剩 reasoning 没有正文。
-func anthropicMaxTokens(cfg ProviderConfig, req GenerateRequest) int64 {
-	if req.MaxOutputTokens > 0 {
-		return req.MaxOutputTokens
-	}
-	if info, ok := cfg.ModelInfoFor(req.Model); ok && info.MaxOutputTokens > 0 {
-		return info.MaxOutputTokens
-	}
-	return defaultAnthropicMaxTokens
-}
+var anthropicMaxTokensLimitPattern = regexp.MustCompile(`max_tokens:\s*\d+\s*>\s*(\d+)`)
+
+const anthropicNonStreamingTimeout = 10 * time.Minute
 
 type anthropicClient struct {
 	cfg    ProviderConfig
@@ -72,11 +65,11 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 	if messagesHaveInputAudio(req.Messages) {
 		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
 	}
-	req.MaxOutputTokens = anthropicMaxTokens(c.cfg, req)
 	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
+	req = c.cfg.withImplicitMaxOutputTokens(ProviderAnthropic, req, true)
 
 	system, messages := splitSystemPrompt(req.Messages)
 	params := anthropic.MessageNewParams{
@@ -96,7 +89,19 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 	params.Tools = anthropicTools(req.Tools)
 	params.ToolChoice = anthropicToolChoice(req)
 
-	resp, err := c.client.Messages.New(ctx, params)
+	var opts []option.RequestOption
+	if req.implicitMaxOutputTokens && c.cfg.Timeout <= 0 {
+		// SDK 在没设超时时按 max_tokens 估算耗时，超过 21333 就拒绝非流式请求。代发的
+		// 是模型上限而不是预期长度，这里给出 SDK 自己推荐的 10 分钟，和它平时的缺省一致。
+		opts = append(opts, option.WithRequestTimeout(anthropicNonStreamingTimeout))
+	}
+	resp, err := c.client.Messages.New(ctx, params, opts...)
+	if err != nil && req.implicitMaxOutputTokens {
+		if limit, ok := anthropicMaxTokensRejection(err); ok && limit < params.MaxTokens {
+			params.MaxTokens = limit
+			resp, err = c.client.Messages.New(ctx, params, opts...)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
@@ -135,7 +140,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
 	}
-	req.MaxOutputTokens = anthropicMaxTokens(c.cfg, req)
+	req = c.cfg.withImplicitMaxOutputTokens(ProviderAnthropic, req, true)
 	system, messages := splitSystemPrompt(req.Messages)
 	params := anthropic.MessageNewParams{Model: anthropic.Model(req.Model), MaxTokens: req.MaxOutputTokens, Messages: anthropicMessages(messages, req.Tools), Tools: anthropicTools(req.Tools), ToolChoice: anthropicToolChoice(req)}
 	if system != "" {
@@ -388,4 +393,24 @@ func anthropicText(blocks []anthropic.ContentBlockUnion) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// anthropicMaxTokensRejection 认出「max_tokens 超出模型上限」的 400，返回可以重发的
+// 上限。报错形如 max_tokens: 65536 > 64000, which is the maximum allowed number of
+// output tokens for claude-opus-4-5。
+func anthropicMaxTokensRejection(err error) (int64, bool) {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		return 0, false
+	}
+	text := apiErr.Error()
+	if !strings.Contains(strings.ToLower(text), "max_tokens") {
+		return 0, false
+	}
+	if match := anthropicMaxTokensLimitPattern.FindStringSubmatch(text); match != nil {
+		if limit, parseErr := strconv.ParseInt(match[1], 10, 64); parseErr == nil && limit > 0 {
+			return limit, true
+		}
+	}
+	return anthropicRejectedMaxTokensRetry, true
 }
