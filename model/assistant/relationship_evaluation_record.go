@@ -71,7 +71,7 @@ type RelationshipEvaluationPortrait struct {
 // RelationshipEvaluationFilter 是好感与画像列表的筛选条件。Statuses 为空表示不限；
 // HasPortrait 只要记下了画像的；Query 什么都搜（人、群、原话、原因、画像、模型、
 // 失败原因）；Person 按 QQ 号或昵称模糊找人；Since 只要这之后的；BeforeID 用来
-// 往前翻页，只返回 ID 更小的记录。
+// 往前翻页，只返回 ID 更小的记录。其余几项见各字段。
 type RelationshipEvaluationFilter struct {
 	BotProfileID string
 	UserID       string
@@ -81,9 +81,30 @@ type RelationshipEvaluationFilter struct {
 	Since        time.Time
 	Statuses     []string
 	HasPortrait  bool
-	BeforeID     int64
-	Limit        int
+	// Direction 按实际生效的分数筛：up 加分、down 减分、changed 有变化、none 没变。
+	Direction string
+	// ChatKind 是 group 或 private，按有没有群号区分。
+	ChatKind string
+	// PortraitFields 只要记下了这些栏目之一的；PortraitSource 只要有这种来源的画像。
+	PortraitFields []string
+	PortraitSource string
+	// MinConfidence 只要置信度不低于这个值的（0 到 1）。
+	MinConfidence float64
+	// Model 按模型名模糊匹配。
+	Model    string
+	BeforeID int64
+	Limit    int
 }
+
+// 筛选里认的取值，别的值一律当不限处理。
+const (
+	RelationshipDirectionUp      = "up"
+	RelationshipDirectionDown    = "down"
+	RelationshipDirectionChanged = "changed"
+	RelationshipDirectionNone    = "none"
+	RelationshipChatGroup        = "group"
+	RelationshipChatPrivate      = "private"
+)
 
 // RelationshipEvaluationStore 持久化后台好感度评估记录。
 type RelationshipEvaluationStore interface {

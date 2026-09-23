@@ -104,7 +104,7 @@
 
     <!-- 高级筛选是精确条件：搜索框什么都搜，要限定「就是这个人、就是这个群、就这几天」时
          才用得上。弹窗里改的是草稿，点「应用」才生效，取消不动当前的筛选。 -->
-    <Modal v-if="advancedOpen" title="高级筛选" @close="advancedOpen = false">
+    <Modal v-if="advancedOpen" title="高级筛选" wide @close="advancedOpen = false">
       <form class="evaluation-advanced" @submit.prevent="applyAdvanced">
         <div class="field">
           <label for="evaluation-person">人</label>
@@ -115,26 +115,56 @@
           <input id="evaluation-group" v-model="draft.group" class="input" inputmode="numeric" placeholder="完整群号" />
         </div>
         <div class="field">
-          <label>时间</label>
-          <div class="segmented evaluation-range" role="radiogroup" aria-label="时间范围">
-            <button
-              v-for="option in RANGE_OPTIONS"
-              :key="option.value"
-              type="button"
-              role="radio"
-              :aria-checked="draft.range === option.value"
-              :class="{ active: draft.range === option.value }"
-              @click="draft.range = option.value"
-            >
-              {{ option.label }}
-            </button>
+          <label>聊天</label>
+          <div class="segmented" role="radiogroup" aria-label="聊天类型">
+            <button v-for="option in CHAT_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="draft.chat === option.value" :class="{ active: draft.chat === option.value }" @click="draft.chat = option.value">{{ option.label }}</button>
           </div>
+        </div>
+        <div class="field">
+          <label>时间</label>
+          <div class="segmented" role="radiogroup" aria-label="时间范围">
+            <button v-for="option in RANGE_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="draft.range === option.value" :class="{ active: draft.range === option.value }" @click="draft.range = option.value">{{ option.label }}</button>
+          </div>
+        </div>
+        <div class="field wide">
+          <label>好感度</label>
+          <div class="segmented" role="radiogroup" aria-label="好感度变化方向">
+            <button v-for="option in DIRECTION_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="draft.direction === option.value" :class="{ active: draft.direction === option.value }" @click="draft.direction = option.value">{{ option.label }}</button>
+          </div>
+        </div>
+        <div class="field wide">
+          <label>结果 <span class="field-note">可多选，不选即不限</span></label>
+          <div class="filter-chips">
+            <button v-for="option in STATUS_OPTIONS" :key="option.value" type="button" class="filter-chip" :aria-pressed="draft.statuses.includes(option.value)" :class="{ active: draft.statuses.includes(option.value) }" @click="toggle(draft.statuses, option.value)">{{ option.label }}</button>
+          </div>
+        </div>
+        <div class="field wide">
+          <label>画像栏目 <span class="field-note">可多选，记下了其中任一栏就算</span></label>
+          <div class="filter-chips">
+            <button v-for="field in portraitFields" :key="field.field" type="button" class="filter-chip" :aria-pressed="draft.portraitFields.includes(field.field)" :class="{ active: draft.portraitFields.includes(field.field) }" @click="toggle(draft.portraitFields, field.field)">{{ field.label }}</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>画像来源</label>
+          <div class="segmented" role="radiogroup" aria-label="画像来源">
+            <button v-for="option in SOURCE_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="draft.portraitSource === option.value" :class="{ active: draft.portraitSource === option.value }" @click="draft.portraitSource = option.value">{{ option.label }}</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>最低置信度</label>
+          <div class="segmented" role="radiogroup" aria-label="最低置信度">
+            <button v-for="option in CONFIDENCE_OPTIONS" :key="option.value" type="button" role="radio" :aria-checked="draft.minConfidence === option.value" :class="{ active: draft.minConfidence === option.value }" @click="draft.minConfidence = option.value">{{ option.label }}</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="evaluation-model">模型</label>
+          <input id="evaluation-model" v-model="draft.model" class="input" placeholder="模型名，模糊匹配" />
         </div>
         <!-- 回车直接应用：表单里没有这个按钮，浏览器不会把回车当提交。 -->
         <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
       </form>
       <template #footer>
-        <button class="btn ghost evaluation-reset" type="button" :disabled="!draftActive" @click="resetDraft">重置</button>
+        <button class="btn ghost evaluation-reset" type="button" :disabled="countActive(draft) === 0" @click="Object.assign(draft, emptyAdvanced())">重置</button>
         <button class="btn ghost" type="button" @click="advancedOpen = false">取消</button>
         <button class="btn primary" type="button" @click="applyAdvanced">应用</button>
       </template>
@@ -145,7 +175,12 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { RefreshCw, Search, SlidersHorizontal } from "@lucide/vue";
-import { listRelationshipEvaluations, type RelationshipEvaluation, type RelationshipEvaluationStatus } from "../api";
+import {
+  listRelationshipEvaluations,
+  type RelationshipEvaluation,
+  type RelationshipEvaluationStatus,
+  type RelationshipEvaluationsQuery
+} from "../api";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
 import { navigate, viewQuery } from "../router";
@@ -181,17 +216,85 @@ const RANGE_OPTIONS: { value: RangeFilter; label: string }[] = [
   { value: 7, label: "近 7 天" },
   { value: 30, label: "近 30 天" }
 ];
+const CHAT_OPTIONS: { value: "" | "group" | "private"; label: string }[] = [
+  { value: "", label: "不限" },
+  { value: "group", label: "群聊" },
+  { value: "private", label: "私聊" }
+];
+// 好感度按实际生效的分数算：到上限、把握不够这些模型想动却没动的，算「没变」。
+const DIRECTION_OPTIONS: { value: "" | "up" | "down" | "changed" | "none"; label: string }[] = [
+  { value: "", label: "不限" },
+  { value: "up", label: "加分" },
+  { value: "down", label: "减分" },
+  { value: "changed", label: "有变化" },
+  { value: "none", label: "没变" }
+];
+const STATUS_OPTIONS: { value: RelationshipEvaluationStatus; label: string }[] = [
+  { value: "changed", label: "已变化" },
+  { value: "capped", label: "到上限" },
+  { value: "unchanged", label: "不变" },
+  { value: "low_confidence", label: "把握不够" },
+  { value: "failed", label: "评估失败" },
+  { value: "skipped", label: "排满跳过" }
+];
+const SOURCE_OPTIONS: { value: "" | "stated" | "inferred"; label: string }[] = [
+  { value: "", label: "不限" },
+  { value: "stated", label: "本人明说" },
+  { value: "inferred", label: "推断" }
+];
+const CONFIDENCE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "不限" },
+  { value: 0.5, label: "50%" },
+  { value: 0.75, label: "75%" },
+  { value: 0.9, label: "90%" }
+];
+
+interface AdvancedFilters {
+  person: string;
+  group: string;
+  chat: "" | "group" | "private";
+  range: RangeFilter;
+  direction: "" | "up" | "down" | "changed" | "none";
+  statuses: RelationshipEvaluationStatus[];
+  portraitFields: string[];
+  portraitSource: "" | "stated" | "inferred";
+  minConfidence: number;
+  model: string;
+}
+
+function emptyAdvanced(): AdvancedFilters {
+  return { person: "", group: "", chat: "", range: 0, direction: "", statuses: [], portraitFields: [], portraitSource: "", minConfidence: 0, model: "" };
+}
+
+// 数的是生效了几项，按钮上显示「高级筛选（N）」。
+function countActive(filters: AdvancedFilters): number {
+  return [
+    filters.person.trim() !== "",
+    filters.group.trim() !== "",
+    filters.chat !== "",
+    filters.range !== 0,
+    filters.direction !== "",
+    filters.statuses.length > 0,
+    filters.portraitFields.length > 0,
+    filters.portraitSource !== "",
+    filters.minConfidence > 0,
+    filters.model.trim() !== ""
+  ].filter(Boolean).length;
+}
+
+function toggle<T>(list: T[], value: T): void {
+  const index = list.indexOf(value);
+  if (index >= 0) list.splice(index, 1);
+  else list.push(value);
+}
 
 const searchFilter = ref("");
 const advancedOpen = ref(false);
-const draft = reactive<{ person: string; group: string; range: RangeFilter }>({ person: "", group: "", range: 0 });
-const draftActive = computed(() => draft.person.trim() !== "" || draft.group.trim() !== "" || draft.range !== 0);
-const personFilter = ref("");
-const groupFilter = ref("");
-const rangeFilter = ref<RangeFilter>(0);
-const advancedCount = computed(
-  () => [personFilter.value.trim() !== "", groupFilter.value.trim() !== "", rangeFilter.value !== 0].filter(Boolean).length
-);
+// applied 是正在生效的条件；draft 是弹窗里正在改的那份，点「应用」才拷回去。
+const applied = reactive<AdvancedFilters>(emptyAdvanced());
+const draft = reactive<AdvancedFilters>(emptyAdvanced());
+const portraitFields = ref<{ field: string; label: string }[]>([]);
+const advancedCount = computed(() => countActive(applied));
 const filtersActive = computed(() => kindFilter.value !== "all" || searchFilter.value.trim() !== "" || advancedCount.value > 0);
 
 // 「今天」从本地零点算，其余按整天往前推。
@@ -205,41 +308,42 @@ function rangeSince(days: RangeFilter): number {
 // 从人员详情跳过来时只看这一个人。
 const userFilter = ref(typeof window === "undefined" ? "" : viewQuery().get("user_id") ?? "");
 
-function query(beforeID = 0) {
+function query(beforeID = 0): RelationshipEvaluationsQuery {
   const kind = kindFilter.value;
   return {
     profile: botScope.value,
     userID: userFilter.value,
     search: searchFilter.value.trim(),
-    person: personFilter.value.trim(),
-    groupID: groupFilter.value.trim(),
-    since: rangeSince(rangeFilter.value),
-    statuses: kind === "favorability" ? (["changed"] as RelationshipEvaluationStatus[]) : undefined,
+    person: applied.person.trim(),
+    groupID: applied.group.trim(),
+    chat: applied.chat,
+    since: rangeSince(applied.range),
+    // 顶上「好感度变化」一档就是「分数有变化」；弹窗里选了更具体的方向时以弹窗为准。
+    direction: applied.direction || (kind === "favorability" ? "changed" : ""),
+    statuses: applied.statuses.length > 0 ? [...applied.statuses] : undefined,
     portraitOnly: kind === "portrait",
+    portraitFields: [...applied.portraitFields],
+    portraitSource: applied.portraitSource,
+    minConfidence: applied.minConfidence,
+    model: applied.model.trim(),
     beforeID,
     limit: PAGE_SIZE
   };
 }
 
+function copyFilters(target: AdvancedFilters, source: AdvancedFilters): void {
+  Object.assign(target, { ...source, statuses: [...source.statuses], portraitFields: [...source.portraitFields] });
+}
+
 function openAdvanced(): void {
-  draft.person = personFilter.value;
-  draft.group = groupFilter.value;
-  draft.range = rangeFilter.value;
+  copyFilters(draft, applied);
   advancedOpen.value = true;
 }
 
-function resetDraft(): void {
-  draft.person = "";
-  draft.group = "";
-  draft.range = 0;
-}
-
-// 三个条件一次性生效，只查一次。
+// 所有条件一次性生效，只查一次；没改就不查。
 function applyAdvanced(): void {
-  const changed = personFilter.value !== draft.person.trim() || groupFilter.value !== draft.group.trim() || rangeFilter.value !== draft.range;
-  personFilter.value = draft.person.trim();
-  groupFilter.value = draft.group.trim();
-  rangeFilter.value = draft.range;
+  const changed = JSON.stringify(draft) !== JSON.stringify(applied);
+  copyFilters(applied, draft);
   advancedOpen.value = false;
   if (changed) void reload();
 }
@@ -250,6 +354,7 @@ async function reload(): Promise<void> {
     const response = await listRelationshipEvaluations(query());
     evaluations.value = response.evaluations;
     nextBeforeID.value = response.next_before_id ?? 0;
+    if (response.portrait_fields?.length) portraitFields.value = response.portrait_fields;
   } catch (error) {
     toastError(error instanceof Error ? error.message : "加载好感与画像失败");
   } finally {
@@ -387,13 +492,53 @@ onMounted(() => {
 }
 
 .evaluation-advanced {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 18px;
 }
 
-.evaluation-range button {
+@media (max-width: 640px) {
+  .evaluation-advanced {
+    grid-template-columns: 1fr;
+  }
+}
+
+.evaluation-advanced .segmented button {
   white-space: nowrap;
+}
+
+.field-note {
+  margin-left: 6px;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 11.5px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip {
+  padding: 4px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.filter-chip:hover {
+  border-color: var(--accent);
+}
+
+.filter-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 /* 重置靠左，和取消、应用分开：它清的是弹窗里的草稿，不是关掉弹窗。 */

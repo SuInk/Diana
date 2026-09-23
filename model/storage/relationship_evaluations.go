@@ -142,6 +142,44 @@ func (s *SQLiteStore) ListRelationshipEvaluations(ctx context.Context, filter as
 	if filter.HasPortrait {
 		conditions = append(conditions, "portrait_count > 0")
 	}
+	switch filter.Direction {
+	case assistant.RelationshipDirectionUp:
+		conditions = append(conditions, "applied_delta > 0")
+	case assistant.RelationshipDirectionDown:
+		conditions = append(conditions, "applied_delta < 0")
+	case assistant.RelationshipDirectionChanged:
+		conditions = append(conditions, "applied_delta != 0")
+	case assistant.RelationshipDirectionNone:
+		conditions = append(conditions, "applied_delta = 0")
+	}
+	switch filter.ChatKind {
+	case assistant.RelationshipChatGroup:
+		conditions = append(conditions, "group_id != ''")
+	case assistant.RelationshipChatPrivate:
+		conditions = append(conditions, "group_id = ''")
+	}
+	// 画像按 JSON 片段匹配：写入时字段顺序固定、不转义中文，"field":"interest" 这样的
+	// 片段只会出现在对应栏目上。栏目名里的下划线是 LIKE 通配符，照样要转义。
+	if len(filter.PortraitFields) > 0 {
+		parts := make([]string, 0, len(filter.PortraitFields))
+		for _, field := range filter.PortraitFields {
+			parts = append(parts, `portrait LIKE ? ESCAPE '\'`)
+			args = append(args, "%"+escapeSQLiteLike(`"field":"`+strings.TrimSpace(field)+`"`)+"%")
+		}
+		conditions = append(conditions, "("+strings.Join(parts, " OR ")+")")
+	}
+	if source := strings.TrimSpace(filter.PortraitSource); source != "" {
+		conditions = append(conditions, `portrait LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeSQLiteLike(`"source":"`+source+`"`)+"%")
+	}
+	if filter.MinConfidence > 0 {
+		conditions = append(conditions, "confidence >= ?")
+		args = append(args, filter.MinConfidence)
+	}
+	if model := strings.TrimSpace(filter.Model); model != "" {
+		conditions = append(conditions, `model LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeSQLiteLike(model)+"%")
+	}
 	if filter.BeforeID > 0 {
 		conditions = append(conditions, "id < ?")
 		args = append(args, filter.BeforeID)

@@ -2614,6 +2614,8 @@ export interface RelationshipEvaluationPortrait {
 
 export interface RelationshipEvaluationsResponse {
   evaluations: RelationshipEvaluation[];
+  // 画像栏目表，高级筛选按它列可选栏目。
+  portrait_fields?: { field: string; label: string }[];
   next_before_id?: number;
 }
 
@@ -2629,6 +2631,13 @@ export interface RelationshipEvaluationsQuery {
   statuses?: RelationshipEvaluationStatus[];
   // portraitOnly 只要记下了画像的。
   portraitOnly?: boolean;
+  // direction 按实际生效的分数：up 加分、down 减分、changed 有变化、none 没变。
+  direction?: "" | "up" | "down" | "changed" | "none";
+  chat?: "" | "group" | "private";
+  portraitFields?: string[];
+  portraitSource?: "" | "stated" | "inferred";
+  minConfidence?: number;
+  model?: string;
   beforeID?: number;
   limit?: number;
 }
@@ -2643,6 +2652,12 @@ export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery 
   if (query.since) params.set("since", String(query.since));
   if (query.statuses?.length) params.set("status", query.statuses.join(","));
   if (query.portraitOnly) params.set("portrait", "1");
+  if (query.direction) params.set("direction", query.direction);
+  if (query.chat) params.set("chat", query.chat);
+  if (query.portraitFields?.length) params.set("portrait_field", query.portraitFields.join(","));
+  if (query.portraitSource) params.set("portrait_source", query.portraitSource);
+  if (query.minConfidence) params.set("min_confidence", String(query.minConfidence));
+  if (query.model) params.set("model", query.model);
   if (query.beforeID) params.set("before_id", String(query.beforeID));
   return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);
 }

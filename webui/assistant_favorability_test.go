@@ -48,6 +48,13 @@ func TestRelationshipEvaluationsEndpoint(t *testing.T) {
 	if len(changed.Evaluations) != 3 || changed.NextBeforeID != 0 {
 		t.Fatalf("changed = %#v", changed)
 	}
+	if len(changed.PortraitFields) == 0 {
+		t.Fatal("response must carry portrait field specs for the filter dialog")
+	}
+	// 不认识的取值当不限：不能报错，也不能把条件拼进 SQL。
+	if loose := get("profile=bot-a&direction=sideways&chat=x&portrait_field=nope&portrait_source=x&min_confidence=7"); len(loose.Evaluations) != 4 {
+		t.Fatalf("unknown filter values must be ignored: %#v", loose)
+	}
 	first := get("profile=bot-a&limit=2")
 	if len(first.Evaluations) != 2 || first.NextBeforeID != first.Evaluations[1].ID {
 		t.Fatalf("first page = %#v", first)

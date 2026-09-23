@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,7 +125,7 @@ func TestRelationshipEvaluationsSearchEverythingAndSince(t *testing.T) {
 	records := []assistant.RelationshipEvaluationRecord{
 		{UserID: "10001", SenderName: "小林", GroupID: "30001", MessageText: "周末去爬山", Reason: "自我介绍", Model: "gpt-a",
 			Status: assistant.RelationshipEvaluationUnchanged, CreatedAt: now.Add(-10 * 24 * time.Hour),
-			Portrait: []assistant.RelationshipEvaluationPortrait{{Field: "location", Label: "居住地点", Value: "杭州"}}},
+			Portrait: []assistant.RelationshipEvaluationPortrait{{Field: "residence", Label: "居住地点", Value: "杭州"}}},
 		{UserID: "10002", SenderName: "阿树", GroupID: "30002", MessageText: "你好慢", Reason: "可能在抱怨", Model: "gpt-b",
 			Status: assistant.RelationshipEvaluationFailed, Error: "context deadline exceeded", CreatedAt: now.Add(-time.Hour)},
 	}
@@ -145,5 +146,61 @@ func TestRelationshipEvaluationsSearchEverythingAndSince(t *testing.T) {
 	recent, _ := store.ListRelationshipEvaluations(ctx, assistant.RelationshipEvaluationFilter{Since: now.Add(-7 * 24 * time.Hour)})
 	if len(recent) != 1 || recent[0].UserID != "10002" {
 		t.Fatalf("since = %#v", recent)
+	}
+}
+
+// 高级筛选的每一项：好感度方向、群聊私聊、画像栏目与来源、最低置信度、模型。
+func TestRelationshipEvaluationsAdvancedFilters(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	records := []assistant.RelationshipEvaluationRecord{
+		{UserID: "up", GroupID: "g1", Status: assistant.RelationshipEvaluationChanged, AppliedDelta: 2, Confidence: 0.95, Model: "gpt-mini",
+			Portrait: []assistant.RelationshipEvaluationPortrait{{Field: "occupation", Label: "职业", Value: "程序员", Source: "stated"}}},
+		{UserID: "down", GroupID: "g1", Status: assistant.RelationshipEvaluationChanged, AppliedDelta: -3, Confidence: 0.8, Model: "claude-x"},
+		{UserID: "flat", Status: assistant.RelationshipEvaluationLowConfidence, Confidence: 0.5, Model: "gpt-mini",
+			Portrait: []assistant.RelationshipEvaluationPortrait{{Field: "interest", Label: "兴趣爱好", Value: "猫", Source: "inferred"}}},
+	}
+	for _, record := range records {
+		if err := store.RecordRelationshipEvaluation(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	users := func(filter assistant.RelationshipEvaluationFilter) string {
+		t.Helper()
+		found, err := store.ListRelationshipEvaluations(ctx, filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, record := range found {
+			ids = append(ids, record.UserID)
+		}
+		return strings.Join(ids, ",")
+	}
+	cases := []struct {
+		name   string
+		filter assistant.RelationshipEvaluationFilter
+		want   string
+	}{
+		{"up", assistant.RelationshipEvaluationFilter{Direction: assistant.RelationshipDirectionUp}, "up"},
+		{"down", assistant.RelationshipEvaluationFilter{Direction: assistant.RelationshipDirectionDown}, "down"},
+		{"changed", assistant.RelationshipEvaluationFilter{Direction: assistant.RelationshipDirectionChanged}, "down,up"},
+		{"none", assistant.RelationshipEvaluationFilter{Direction: assistant.RelationshipDirectionNone}, "flat"},
+		{"private", assistant.RelationshipEvaluationFilter{ChatKind: assistant.RelationshipChatPrivate}, "flat"},
+		{"group", assistant.RelationshipEvaluationFilter{ChatKind: assistant.RelationshipChatGroup}, "down,up"},
+		{"portrait field", assistant.RelationshipEvaluationFilter{PortraitFields: []string{"interest", "residence"}}, "flat"},
+		{"portrait source", assistant.RelationshipEvaluationFilter{PortraitSource: "stated"}, "up"},
+		{"min confidence", assistant.RelationshipEvaluationFilter{MinConfidence: 0.75}, "down,up"},
+		{"model", assistant.RelationshipEvaluationFilter{Model: "gpt"}, "flat,up"},
+		{"combined", assistant.RelationshipEvaluationFilter{Model: "gpt", Direction: assistant.RelationshipDirectionUp, ChatKind: assistant.RelationshipChatGroup}, "up"},
+	}
+	for _, tc := range cases {
+		if got := users(tc.filter); got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
