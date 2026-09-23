@@ -50,9 +50,10 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
 	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
+	limits := chatSplitLimitsForEvent(cfg, event)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
 	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, voice, cfg.PersonaMode) + "\n" + replyLineBreakPrompt(cfg) + "\n" + actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode))
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!limits.SingleMessage, voice, cfg.PersonaMode) + "\n" + replyLineBreakPrompt(cfg) + "\n" + replyLineSplitPrompt(limits) + "\n" + actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor() + "\n" + actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode))
 	if persona == "" {
 		return messages
 	}
