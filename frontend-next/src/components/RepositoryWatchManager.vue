@@ -14,7 +14,7 @@
       </button>
     </div>
 
-    <form v-if="editing" class="repository-watch-editor" @submit.prevent="save">
+    <form v-if="editing" class="repository-watch-editor" @submit.prevent="saveEditor">
       <div class="form-grid repository-watch-form">
         <div class="field wide">
           <label for="plugin-watch-repository">GitHub 仓库</label>
@@ -354,8 +354,9 @@ async function confirmDiscardEditor(): Promise<boolean> {
   });
 }
 
-// 外层设置弹窗关闭时要把这里的未保存状态算进去，否则从弹窗右上角关掉会静默丢掉编辑器内容。
-defineExpose({ hasUnsavedChanges: editorDirty });
+// 外层设置弹窗关闭时要把这里的未保存状态算进去，否则从弹窗右上角关掉会静默丢掉编辑器内容；
+// 外层「保存」也要能把正在编辑的仓库一起提交，否则点了保存订阅却没落库。
+defineExpose({ hasUnsavedChanges: editorDirty, saveEditor });
 
 // 凭据下拉：留空表示沿用公共 Token，与后端「未绑定就回落」的行为一致。
 const credentialOptions = computed(() => [
@@ -486,21 +487,22 @@ async function stopEditing(): Promise<void> {
   editorSnapshot.value = "";
 }
 
-async function save(): Promise<void> {
+async function saveEditor(): Promise<boolean> {
 	if (form.value.notification_enabled && form.value.notification_targets[0]?.profile_id) form.value.profile_id = form.value.notification_targets[0].profile_id;
-  if (!form.value.repository) return toastError("请填写 GitHub 仓库");
-  if (form.value.interval_seconds < minimumIntervalSeconds) return toastError("检查周期不能低于 30 秒");
-  if (form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期不能超过 365 天");
-  if (!form.value.watch_commits && !form.value.watch_pull_requests && !form.value.watch_issues && !form.value.watch_releases && !form.value.watch_stars) return toastError("Commit、PR、Issue、Release 和 Star 至少选择一项");
+  if (!form.value.repository) return rejectEditor("请填写 GitHub 仓库");
+  if (form.value.interval_seconds < minimumIntervalSeconds) return rejectEditor("检查周期不能低于 30 秒");
+  if (form.value.interval_seconds > maximumIntervalSeconds) return rejectEditor("检查周期不能超过 365 天");
+  if (!form.value.watch_commits && !form.value.watch_pull_requests && !form.value.watch_issues && !form.value.watch_releases && !form.value.watch_stars) return rejectEditor("Commit、PR、Issue、Release 和 Star 至少选择一项");
   const starMilestones = parseStarMilestones(form.value.star_milestones_text);
-  if (form.value.watch_stars && form.value.star_notify_mode === "milestone" && !starMilestones.length) return toastError("里程碑模式至少填写一个有效 Star 数");
-  if (!form.value.profile_id) return toastError("请选择发送机器人");
-  if (form.value.notification_enabled && (!form.value.notification_targets.length || form.value.notification_targets.some(target => !target.profile_id || !(target.destination === "group" ? target.group_id : target.user_id)))) return toastError("请至少添加一个通知对象");
+  if (form.value.watch_stars && form.value.star_notify_mode === "milestone" && !starMilestones.length) return rejectEditor("里程碑模式至少填写一个有效 Star 数");
+  if (!form.value.profile_id) return rejectEditor("请选择发送机器人");
+  if (form.value.notification_enabled && (!form.value.notification_targets.length || form.value.notification_targets.some(target => !target.profile_id || !(target.destination === "group" ? target.group_id : target.user_id)))) return rejectEditor("请至少添加一个通知对象");
   const managerUserIDs = issueMemberEntries(form.value.issue_managers, "private");
   const managerGroupIDs = issueMemberEntries(form.value.issue_managers, "group");
   const drafterUserIDs = issueMemberEntries(form.value.issue_drafters, "private");
   const drafterGroupIDs = issueMemberEntries(form.value.issue_drafters, "group");
-  if (form.value.issue_enabled && !managerUserIDs.length && !managerGroupIDs.length) return toastError("开启 Issue 管理后，请至少添加一名管理人员");
+  if (form.value.issue_enabled && !managerUserIDs.length && !managerGroupIDs.length) return rejectEditor("开启 Issue 管理后，请至少添加一名管理人员");
+  if (saving.value) return false;
   saving.value = true;
   try {
     const common = { repository: form.value.repository, branch: form.value.branch, interval_seconds: form.value.interval_seconds, watch_commits: form.value.watch_commits, watch_pull_requests: form.value.watch_pull_requests, watch_issues: form.value.watch_issues, watch_releases: form.value.watch_releases, watch_stars: form.value.watch_stars, watch_pull_request_events: [...form.value.pull_request_events], watch_issue_events: [...form.value.issue_events], watch_release_kinds: [...form.value.release_kinds], star_notify_mode: form.value.star_notify_mode, star_notify_threshold: form.value.star_notify_threshold, star_notify_milestones: starMilestones };
@@ -530,11 +532,18 @@ async function save(): Promise<void> {
     editing.value = false;
     editingTask.value = null;
     await load();
+    return true;
   } catch (error) {
     toastError(error instanceof Error ? error.message : "仓库订阅保存失败");
+    return false;
   } finally {
     saving.value = false;
   }
+}
+
+function rejectEditor(message: string): false {
+  toastError(message);
+  return false;
 }
 
 
