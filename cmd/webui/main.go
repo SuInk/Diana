@@ -437,7 +437,7 @@ func main() {
 	botRuntime.SetMessageHistoryStore(sqliteStore)
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
-	botRuntime.SetLLMCapabilityStore(sqliteStore)
+	botRuntime.SetLLMDowngradeStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetThreadStateStore(sqliteStore)
 	botRuntime.SetOneBotRequestStore(sqliteStore)

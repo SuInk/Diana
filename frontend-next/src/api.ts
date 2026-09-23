@@ -3,6 +3,7 @@
 
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
+import type { SendRetrySettings } from "./send-retry-settings";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
@@ -128,7 +129,8 @@ export interface MessageRelayPair {
   endpoints: MessageRelayEndpoint[];
 }
 
-export interface BotProfileConfig {
+/** 群退避与入站重跑参数见 SendRetrySettings；机器人级 0 或留空按默认值。 */
+export interface BotProfileConfig extends SendRetrySettings {
   connection_profile_id?: string;
   persona_id?: string;
   custom_persona?: Persona;
@@ -251,6 +253,14 @@ export interface BotProfileConfig {
   mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
+  /** 机器人在群里被禁言时暂停回复（只记上下文）；缺省开启。 */
+  muted_reply_pause_enabled?: boolean;
+  /** 暂停回复期间语音是否照常转文字；缺省开启。 */
+  muted_voice_transcription_enabled?: boolean;
+  /** 暂停回复期间图片是否照常识别成文字；缺省开启。 */
+  muted_image_description_enabled?: boolean;
+  /** 暂停回复期间是否照常做回复判断（只记录结果，不生成不发送）；缺省关闭。 */
+  muted_reply_judgment_enabled?: boolean;
   error_reply_prefix?: string;
   send_retry_attempts?: number;
   /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */
@@ -347,8 +357,6 @@ export interface BotProfileConfig {
   self_note_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
-  /** 后台空闲时定期探测模型收不收强制指定工具；探测是会计费的真实调用，缺省关闭。 */
-  llm_capability_probe_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;
   /** 被戳一戳时回一句（OneBot）；缺省关闭。 */
@@ -504,7 +512,8 @@ export interface ResolverDependencyInstallResponse {
   installer?: string;
 }
 
-export interface BotGroupConfig {
+/** 分群的 SendRetrySettings 留空跟随机器人。 */
+export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
   bot_profile_id?: string;
@@ -574,6 +583,12 @@ export interface BotGroupConfig {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群被禁言时是否暂停回复；不设表示跟随机器人。 */
+  muted_reply_pause_enabled?: boolean;
+  /** 本群暂停回复期间是否转写语音、识别图片、做回复判断；不设表示跟随机器人。 */
+  muted_voice_transcription_enabled?: boolean;
+  muted_image_description_enabled?: boolean;
+  muted_reply_judgment_enabled?: boolean;
   /** 本群接话评分的补充判据；留空跟随机器人，最多 1000 字。 */
   proactive_reply_extra_criteria?: string;
   /** 本群对 MCP / Skill 的覆盖：档位（off/owner/admins/members，留空跟随机器人）加白名单、黑名单。

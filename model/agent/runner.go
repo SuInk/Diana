@@ -131,7 +131,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 用 user role:这一段是「本轮随消息带来的资料」,不是恒定的系统约束,和它挨着的
 	// 当前消息同属一轮。
 	skills := SelectSkillBodies(r.registry.Skills(), SkillScanText(req.Messages, r.cfg.SkillTriggerScanDepth))
-	if catalog := RenderSkillsCatalog(skills, r.cfg.SkillsListBudget); catalog != "" {
+	catalog, deliveredSkills := renderSkillsCatalog(skills, r.cfg.SkillsListBudget)
+	if catalog != "" {
 		volatile = append(volatile, llm.Message{
 			Role:     llm.RoleUser,
 			Content:  catalog,
@@ -147,7 +148,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
-	if skillHint := r.explicitSkillPrompt(req); skillHint != "" {
+	if skillHint := r.explicitSkillPrompt(req, deliveredSkills); skillHint != "" {
 		volatile = append(volatile, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  skillHint,
@@ -1164,14 +1165,19 @@ func toolExecutionErrorForModel(toolName, message string) string {
 		"说明：该工具已注册并已进入执行阶段。请依据 error 原文修正参数、重试或如实说明具体失败原因；除非另有明确的 tool not found 结果，否则不得声称工具不存在、未接入或没有该能力。"
 }
 
-func (r *Runner) explicitSkillPrompt(req Request) string {
+// explicitSkillPrompt 提醒模型先读被点名的 skill。正文已经随目录下发的不再提醒：
+// 点名本身就会让正文随请求带上，再叫它 read_skill 是自相矛盾的两条指令，还白跑
+// 一次往返。
+func (r *Runner) explicitSkillPrompt(req Request, delivered map[string]bool) string {
 	selected := SelectExplicitSkills(r.registry.Skills(), requestText(req))
-	if len(selected) == 0 {
-		return ""
-	}
 	var builder strings.Builder
-	builder.WriteString("### Explicitly Mentioned Skills\n")
 	for _, skill := range selected {
+		if delivered[skill.Name] {
+			continue
+		}
+		if builder.Len() == 0 {
+			builder.WriteString("### Explicitly Mentioned Skills\n")
+		}
 		builder.WriteString("- ")
 		builder.WriteString(skill.Name)
 		builder.WriteString(": call `read_skill` before acting.\n")

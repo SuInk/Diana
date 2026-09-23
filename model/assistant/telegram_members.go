@@ -36,6 +36,9 @@ type telegramChatMember struct {
 	Status      string       `json:"status"`
 	IsMember    bool         `json:"is_member"`
 	CustomTitle string       `json:"custom_title"`
+	// 受限成员（restricted）才有这两项：能不能发消息，以及限制到什么时候（0 为永久）。
+	CanSendMessages *bool `json:"can_send_messages,omitempty"`
+	UntilDate       int64 `json:"until_date,omitempty"`
 }
 type telegramMemberUpdate struct {
 	Chat telegramChat       `json:"chat"`

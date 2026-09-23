@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v4"
 
@@ -267,15 +268,22 @@ func fileExists(path string) bool {
 // 系统提示词就等于每换一个群、每装一个 skill 都把整条 prompt 的前缀缓存作废，和
 // 之前 loadedContracts 夹在中段是同一个坑。调用方把它挂在消息尾部的易变块里。
 func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
+	catalog, _ := renderSkillsCatalog(skills, budget)
+	return catalog
+}
+
+// renderSkillsCatalog 额外返回正文真正写进去的那几份。IncludeBody 只是判定，正文
+// 读不出来或超了预算就没有下发，「先 read_skill」的提示要按实际下发的算。
+func renderSkillsCatalog(skills []SkillMetadata, budget int) (string, map[string]bool) {
 	if len(skills) == 0 {
-		return ""
+		return "", nil
 	}
 	if budget <= 0 {
 		budget = DefaultSkillsListBudget
 	}
 	var builder strings.Builder
 	builder.WriteString("## Skills\n")
-	builder.WriteString("A skill is a set of instructions provided through a `SKILL.md` source. The entries below are only names and descriptions; no skill body is included in this request.\n")
+	builder.WriteString("A skill is a set of instructions provided through a `SKILL.md` source. The entries below are only names and descriptions; a skill's body is included only where it appears in full further down.\n")
 	builder.WriteString("### Available skills\n")
 	var resident []SkillMetadata
 	for _, skill := range skills {
@@ -291,11 +299,12 @@ func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
 	}
 	builder.WriteString("### How to use skills\n")
 	builder.WriteString("- If the user names a skill with `$SkillName`, or the task clearly matches a skill description, use that skill for this turn.\n")
-	builder.WriteString("- A catalog entry is not the skill: always call `read_skill` with its name first, then follow the full `SKILL.md` instructions.\n")
+	builder.WriteString("- A catalog entry is not the skill: unless its full `SKILL.md` appears below, call `read_skill` with its name first, then follow those instructions.\n")
 	builder.WriteString("- When a `SKILL.md` references relative files, resolve them relative to the directory of the `path` returned by `read_skill`.\n")
 	// 常驻 skill 的正文直接跟在目录后面:用户把它配成常驻,就是因为「要用时再读」
 	// 在长上下文里读不到。正文在这里给全,模型不必再 read_skill。
 	remaining := ResidentSkillBodyBudget
+	delivered := map[string]bool{}
 	for _, skill := range resident {
 		body := strings.TrimSpace(skillBody(skill))
 		if body == "" {
@@ -306,12 +315,13 @@ func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
 			continue
 		}
 		remaining -= len(body)
+		delivered[skill.Name] = true
 		builder.WriteString("\n### Resident skill: " + skill.Name + "\n")
 		builder.WriteString("Its full `SKILL.md` follows; do not call `read_skill` for it.\n\n")
 		builder.WriteString(body)
 		builder.WriteString("\n")
 	}
-	return strings.TrimSpace(builder.String())
+	return strings.TrimSpace(builder.String()), delivered
 }
 
 // skillBody 返回 SKILL.md 正文；内嵌 skill 自带正文,本地 skill 现读。读不出来就当
@@ -406,6 +416,10 @@ func SelectExplicitSkills(skills []SkillMetadata, text string) []SkillMetadata {
 	return selected
 }
 
+// hasExplicitSkillMention 认 `$名字`，前后紧挨着名字字符的不算（$demo 不命中
+// $demo-skill）。边界只看 ASCII：中文不用空格分词，「用$music帮我点歌」里 music
+// 后面紧跟汉字也是点名。以前按字节取前后字符，汉字的 UTF-8 首字节被当成 å、ç 这类
+// 拉丁字母，后面接中文的点名一律落空。
 func hasExplicitSkillMention(text, name string) bool {
 	if name == "" {
 		return false
@@ -413,10 +427,9 @@ func hasExplicitSkillMention(text, name string) bool {
 	pattern := regexp.MustCompile(`\$` + regexp.QuoteMeta(name))
 	matches := pattern.FindAllStringIndex(text, -1)
 	for _, match := range matches {
-		beforeOK := match[0] == 0 || !isSkillNameRune(rune(text[match[0]-1]))
-		afterIndex := match[1]
-		afterOK := afterIndex >= len(text) || !isSkillNameRune(rune(text[afterIndex]))
-		if beforeOK && afterOK {
+		before, _ := utf8.DecodeLastRuneInString(text[:match[0]])
+		after, _ := utf8.DecodeRuneInString(text[match[1]:])
+		if !isSkillNameRune(before) && !isSkillNameRune(after) {
 			return true
 		}
 	}
@@ -424,7 +437,7 @@ func hasExplicitSkillMention(text, name string) bool {
 }
 
 func isSkillNameRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
+	return r < utf8.RuneSelf && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-')
 }
 
 type SkillTools struct {

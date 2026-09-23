@@ -673,7 +673,11 @@ var agentResidencyProtocolTools = map[string]bool{
 // 界面没法自己造一份这样的目录：内置工具是在组装回复时按平台、按权限、按插件开关
 // 一个个挂上去的，不跑一轮就不知道这台机器人到底有哪些。所以档位界面显示的是最近
 // 一轮真实用过的目录，而不是一份可能对不上的静态清单。
-func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *agent.ToolRegistry) {
+//
+// 只有主人那一轮整份替换。群成员一句闲聊不拉起 MCP 底座，能用的内置工具也只是主人
+// 的子集；以前每轮都整份覆盖，一句群聊就把主人会话记下的 MCP 和插件冲掉，名单页上
+// 那几栏就一直是空的。成员那一轮只补充和刷新，不删东西。
+func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *agent.ToolRegistry, authoritative bool) {
 	if r == nil || registry == nil {
 		return
 	}
@@ -745,18 +749,29 @@ func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *ag
 			}
 		}
 	}
+	r.agentResidencyMu.Lock()
+	defer r.agentResidencyMu.Unlock()
+	if r.agentResidencyCatalog == nil {
+		r.agentResidencyCatalog = map[string][]AgentResidencyEntry{}
+	}
+	if !authoritative {
+		seen := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			seen[entry.ID] = true
+		}
+		for _, previous := range r.agentResidencyCatalog[event.ProfileID] {
+			if !seen[previous.ID] {
+				entries = append(entries, previous)
+			}
+		}
+	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Kind != entries[j].Kind {
 			return entries[i].Kind < entries[j].Kind
 		}
 		return entries[i].Name < entries[j].Name
 	})
-	r.agentResidencyMu.Lock()
-	if r.agentResidencyCatalog == nil {
-		r.agentResidencyCatalog = map[string][]AgentResidencyEntry{}
-	}
 	r.agentResidencyCatalog[event.ProfileID] = entries
-	r.agentResidencyMu.Unlock()
 }
 
 // AgentResidency 返回这台机器人最近一轮的工具目录、以及名单里有哪些。
@@ -792,7 +807,7 @@ func (r *Runtime) AgentResidency(profileID string) ([]AgentResidencyEntry, bool)
 		case "tool", "mcp":
 			kind, name = prefix, rest
 		case "skill":
-			// skill: 的档位归 Skills 标签管，不在这一页里露面。
+			// skill: 的档位不进工具名单，在同一页另一块里单独列，这里不重复。
 			continue
 		}
 		// 插件 ID 没有前缀（official.music 这种），剩下的都按插件算：与其因为认不出

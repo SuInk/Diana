@@ -23,7 +23,7 @@ test("saving requires an explicit provider and model for each role", async () =>
       const roles = Object.fromEntries(keys.map(key => [key, { profile_id: "p", model: "m" }]));
       roles[key] = invalid;
       const busy = { value: false };
-      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, toastError: message => errors.push(message), busy });
+      const context = vm.createContext({ connectionConflict: { value: undefined }, form: { value: { onebot_reverse_ws_endpoint: "ws://localhost" } }, roleForm: { value: roles }, modelRoleRows: keys.map(key => ({ key, label: key })), purposeRoleRows: [], purposeRoleKeys: [], editorTab: { value: "access" }, validWebSocketURL: () => true, roleModelIsSelectable: () => true, sendRetryValidationError: () => "", toastError: message => errors.push(message), busy });
       await loadFunction("save", context)();
       assert.equal(busy.value, false);
       assert.equal(errors.length, 1);
@@ -128,6 +128,7 @@ test("purpose-level roles may be left unset", async () => {
     editorTab: { value: "access" },
     validWebSocketURL: () => true,
     roleModelIsSelectable: () => true,
+    sendRetryValidationError: () => "",
     toastError: message => errors.push(message),
     busy
   });
@@ -155,6 +156,7 @@ test("a configured purpose role still needs a model", async () => {
     editorTab: { value: "access" },
     validWebSocketURL: () => true,
     roleModelIsSelectable: () => true,
+    sendRetryValidationError: () => "",
     toastError: message => errors.push(message),
     busy
   });

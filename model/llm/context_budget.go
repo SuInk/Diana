@@ -704,6 +704,12 @@ func EstimateToolDefinitionTokens(tool ToolDefinition) int64 {
 	return estimateTextTokens(string(raw))
 }
 
+// EstimateToolDefinitionsTokens 估算一整份工具数组，含数组本身的固定开销，和编排
+// 请求时算固定开销用的是同一个函数。
+func EstimateToolDefinitionsTokens(tools []ToolDefinition) int64 {
+	return estimateToolDefinitionsTokens(tools, "")
+}
+
 // EstimateMessageTokens includes role framing, tool calls and media reserves.
 func EstimateMessageTokens(message Message) int64 {
 	return estimateMessageTokens(message)

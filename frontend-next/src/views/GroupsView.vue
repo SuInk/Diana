@@ -371,6 +371,26 @@
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
+          <label for="group-muted-pause">本群被禁言时暂停回复</label>
+          <AppSelect
+            id="group-muted-pause"
+            :model-value="editing.muted_reply_pause_enabled == null ? '' : editing.muted_reply_pause_enabled ? 'on' : 'off'"
+            :options="groupMutedReplyPauseOptions"
+            @update:model-value="(value) => { if (editing) editing.muted_reply_pause_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">暂停期间消息只记入上下文，不生成回复；解禁后从新消息开始回复。</span>
+        </div>
+        <div v-for="item in mutedStepItems" :key="item.key" class="field">
+          <label :for="`group-${item.key}`">{{ item.label }}</label>
+          <AppSelect
+            :id="`group-${item.key}`"
+            :model-value="editing[item.key] == null ? '' : editing[item.key] ? 'on' : 'off'"
+            :options="followBotOptions(mutedStepDefaults[item.key], item.fallback)"
+            @update:model-value="(value) => { if (editing) editing[item.key] = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">{{ item.hint }}</span>
+        </div>
+        <div class="field wide">
           <label for="group-natural-split">本群允许多条发送</label>
           <AppSelect
             id="group-natural-split"
@@ -447,6 +467,21 @@
             step="1"
             inputmode="numeric"
           />
+        </div>
+        <div v-for="field in sendRetryFields" :key="field.key" class="field">
+          <label :for="`group-${field.key}`">{{ field.label }}</label>
+          <input
+            :id="`group-${field.key}`"
+            v-model.number="editing[field.key]"
+            class="input"
+            type="number"
+            :min="field.min"
+            :max="field.max"
+            step="1"
+            inputmode="numeric"
+            :placeholder="`跟随机器人（${botSendRetryValue(field)}）`"
+          />
+          <span class="hint">{{ field.hint }}</span>
         </div>
         <div class="field wide">
           <label>本群回复时间与屏蔽账号</label>
@@ -574,6 +609,7 @@ import { participationFromConfig, participationLevelLabel, participationPresetNa
 import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
 
 // 空值代表「跟随全局」，与后端把空字符串当成未覆盖的约定一致。
 const groupTriggerModeOptions: AppSelectOption[] = [
@@ -769,6 +805,35 @@ const defaultNaturalReplySplitEnabled = computed(() =>
     ?? naturalReplySplitDefaults.value[""]
     ?? true
 );
+// 被禁言时暂停回复，以及暂停期间哪些环节照常执行。缺省值跟机器人配置那边一致。
+type MutedStepKey = "muted_image_description_enabled" | "muted_voice_transcription_enabled" | "muted_reply_judgment_enabled";
+const mutedStepItems: { key: MutedStepKey; label: string; fallback: boolean; hint: string }[] = [
+  { key: "muted_image_description_enabled", label: "暂停期间识别图片", fallback: true, hint: "关掉能省下识图费用，但这段历史里的图片没有文字描述。" },
+  { key: "muted_voice_transcription_enabled", label: "暂停期间语音转文字", fallback: true, hint: "关掉能省下转写费用，但这段历史里的语音没有文字。" },
+  { key: "muted_reply_judgment_enabled", label: "暂停期间回复判断", fallback: false, hint: "开启后照常判断，该回的记为「判断该回，但禁言中未发送」，不生成也不发送。" }
+];
+const mutedReplyPauseDefaults = ref<Record<string, boolean>>({});
+const mutedStepDefaults = ref<Record<MutedStepKey, Record<string, boolean>>>({
+  muted_image_description_enabled: {},
+  muted_voice_transcription_enabled: {},
+  muted_reply_judgment_enabled: {}
+});
+function followBotOptions(defaults: Record<string, boolean>, fallback = true): AppSelectOption[] {
+  const botDefault = defaults[editing.value?.bot_profile_id || botScope.value] ?? defaults[""] ?? fallback;
+  return [
+    { value: "", label: `跟随机器人（${botDefault ? "开启" : "关闭"}）` },
+    { value: "on", label: "开启" },
+    { value: "off", label: "关闭" }
+  ];
+}
+const groupMutedReplyPauseOptions = computed(() => followBotOptions(mutedReplyPauseDefaults.value));
+// 分群的重发参数留空跟随机器人，占位符显示机器人当前生效的值。
+const sendRetryDefaults = ref<Record<string, SendRetrySettings>>({});
+function botSendRetryValue(field: SendRetryField): number {
+  const bot = sendRetryDefaults.value[editing.value?.bot_profile_id || botScope.value] ?? sendRetryDefaults.value[""];
+  const value = Number(bot?.[field.key]);
+  return Number.isInteger(value) && value > 0 ? value : field.fallback;
+}
 const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
   { value: "", label: `跟随机器人（${defaultNaturalReplySplitEnabled.value ? "开启" : "关闭"}）` },
   { value: "on", label: "开启" },
@@ -916,6 +981,17 @@ async function load(showFeedback = false): Promise<void> {
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
       ]);
       defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
+      mutedReplyPauseDefaults.value = Object.fromEntries([
+        ["", current.muted_reply_pause_enabled ?? true],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.muted_reply_pause_enabled ?? true])
+      ]);
+      for (const item of mutedStepItems) {
+        mutedStepDefaults.value[item.key] = Object.fromEntries([
+          ["", current[item.key] ?? item.fallback],
+          ...(config.profiles ?? []).map((profile) => [profile.id, profile[item.key] ?? item.fallback])
+        ]);
+      }
+      sendRetryDefaults.value = Object.fromEntries([["", current], ...(config.profiles ?? []).map((profile) => [profile.id, profile])]);
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
@@ -962,6 +1038,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
+  withUnsetSendRetryCleared(config);
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
@@ -1202,10 +1279,16 @@ async function saveEditing(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
+  const sendRetryError = sendRetryValidationError(current);
+  if (sendRetryError) {
+    toastError(sendRetryError);
+    return;
+  }
   saving.value = true;
   try {
     const payload: BotGroupConfig = {
       ...current,
+      ...sendRetryPayload(current),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
