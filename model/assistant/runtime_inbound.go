@@ -42,6 +42,10 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if isRecallNotice(event) && r.isBotOwnRecall(event) {
 		return nil
 	}
+	// 机器人自己被禁言的通知 user_id 就是机器人，放在自发消息过滤之前处理。
+	if r.observeBotMuteNotice(ctx, event) {
+		return nil
+	}
 	if !isRecallNotice(event) && r.isSelfMessage(event) {
 		r.observeSelfMessage(ctx, event)
 		return nil

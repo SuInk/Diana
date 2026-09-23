@@ -64,6 +64,7 @@ type outboundSendError struct {
 	GroupUnavailable bool
 	DeliveryDropped  bool
 	ChannelOffline   bool
+	BotMuted         bool
 }
 
 func (e *outboundSendError) Error() string {
@@ -89,7 +90,8 @@ func (e *outboundSendError) Is(target error) bool {
 	}
 	return (e.GroupUnavailable && target == errGroupSendUnavailable) ||
 		(e.DeliveryDropped && target == errOutboundDeliveryDropped) ||
-		(e.ChannelOffline && target == errOutboundChannelOffline)
+		(e.ChannelOffline && target == errOutboundChannelOffline) ||
+		(e.BotMuted && target == errBotMuted)
 }
 
 func defaultOutboundDeliveryPolicy() outboundDeliveryPolicy {
@@ -206,9 +208,15 @@ func (r *Runtime) executeOutboundCall(
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr
 	}
+	if mutedErr := r.botMutedSendError(event); mutedErr != nil {
+		return nil, mutedErr
+	}
 	groupID := strings.TrimSpace(event.GroupID)
 	if event.Kind != EventKindGroup || groupID == "" || !r.outboundBackoffEnabled(event) {
 		result, err := call(ctx)
+		if err == nil {
+			r.clearBotMute(event)
+		}
 		return result, r.wrapOutboundSendError(ctx, event, err)
 	}
 
@@ -269,6 +277,7 @@ func (r *Runtime) executeOutboundCall(
 
 		result, err := call(ctx)
 		if err == nil {
+			r.clearBotMute(event)
 			failures := gate.failures
 			gate.reset()
 			if failures > 0 {
@@ -286,7 +295,7 @@ func (r *Runtime) executeOutboundCall(
 			return nil, ctx.Err()
 		}
 		wrapped := r.wrapOutboundSendError(ctx, event, err)
-		if errors.Is(wrapped, errGroupSendUnavailable) {
+		if errors.Is(wrapped, errGroupSendUnavailable) || errors.Is(wrapped, errBotMuted) {
 			return nil, wrapped
 		}
 
@@ -548,6 +557,9 @@ func (r *Runtime) wrapOutboundSendError(ctx context.Context, event MessageEvent,
 	}
 	if unavailable {
 		r.markGroupSendUnavailable(ctx, event, err)
+	} else if groupID != "" {
+		// 机器人还在群里却发不出去，看看是不是被禁言了。是的话直接收手，不进退避。
+		wrapped.BotMuted = r.checkBotMuteAfterSendFailure(ctx, event)
 	}
 	return wrapped
 }

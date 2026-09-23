@@ -259,6 +259,10 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "error", "回复生成失败；当前机器人已关闭错误提示，错误仅记录到事件与日志", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
+	case "ignored_bot_muted":
+		return "not_replied", "机器人在本群被禁言，暂停回复：消息已记入上下文，没有做回复判断和生成", false
+	case "ignored_bot_muted_judged":
+		return "not_replied", "机器人在本群被禁言：回复判断认为这条该回，但暂停期间不生成也不发送", false
 	case "ignored_member_level":
 		return "not_replied", "发送者群等级低于该群设置的最低回复等级", false
 	case "ignored_response_suppression":
@@ -510,6 +514,8 @@ type Runtime struct {
 	replyTurns              map[string]replyTurnRecord
 	replyBatches            map[string]*replyBatchGate
 	unavailableGroupMu      sync.RWMutex
+	botMuteMu               sync.RWMutex
+	botMutes                map[string]botMuteState
 	unavailableGroups       map[string]unavailableGroupSend
 	outboundDeliveryMu      sync.Mutex
 	outboundDeliveries      map[string]*groupOutboundDelivery
@@ -1451,6 +1457,18 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria)
 	}
 	cfg.sendRetrySettings = groupCfg.sendRetrySettings.withFallback(cfg.sendRetrySettings)
+	if groupCfg.MutedReplyPauseEnabled != nil {
+		cfg.MutedReplyPauseEnabled = copyBoolPointer(groupCfg.MutedReplyPauseEnabled)
+	}
+	if groupCfg.MutedVoiceTranscriptionEnabled != nil {
+		cfg.MutedVoiceTranscriptionEnabled = copyBoolPointer(groupCfg.MutedVoiceTranscriptionEnabled)
+	}
+	if groupCfg.MutedImageDescriptionEnabled != nil {
+		cfg.MutedImageDescriptionEnabled = copyBoolPointer(groupCfg.MutedImageDescriptionEnabled)
+	}
+	if groupCfg.MutedReplyJudgmentEnabled != nil {
+		cfg.MutedReplyJudgmentEnabled = copyBoolPointer(groupCfg.MutedReplyJudgmentEnabled)
+	}
 	if groupCfg.ReplyGate != nil {
 		// 门槛整份用群里的（界面上那个「为本群单独设置回复规则」开关就是这个意思），
 		// 但名单要并上机器人级的：否则任何一个群开了自定义门禁，全局黑名单在那个
@@ -1546,6 +1564,21 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
+	event, text, handled, outcome := r.routeMessageEvent(ctx, event)
+	if handled && event.mutedJudgeOnly != "" {
+		// 被禁言但照常做了回复判断，判断认为该回：到这里为止，不生成也不发送。
+		event.routingReason = event.mutedJudgeOnly + "；回复判断认为这条该回，暂停期间不生成也不发送"
+		r.record(r.decisionEventRecord(event, text, "ignored_bot_muted_judged"))
+		if !event.mutedSkipImages {
+			r.enqueueHistoryImageDescriptions(event)
+		}
+		return event, text, false, "ignored_bot_muted_judged"
+	}
+	return event, text, handled, outcome
+}
+
+// routeMessageEvent 做入站预处理和回复判断，决定这条消息要不要回复。
+func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
 	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, event), event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
@@ -1560,7 +1593,9 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	r.forwardToBridge(event)
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
-	event = r.prepareIncomingVoice(ctx, event)
+	if !r.skipVoiceTranscriptionWhileMuted(event) {
+		event = r.prepareIncomingVoice(ctx, event)
+	}
 	if r.effectiveConfigForEvent(event).AgentEnabled {
 		event = r.prepareCurrentEventImages(ctx, event)
 	} else {
@@ -1611,6 +1646,29 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.record(r.decisionEventRecord(event, text, outcome))
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
+	}
+	// 机器人在本群被禁言：和上面一样只记上下文，跳过所有花 token 的环节。解禁后
+	// 从新消息开始回复，这期间的消息不补发。放在额度检查之前：它只查本地状态。
+	if reason, muted := r.botMutedForReply(event); muted {
+		cfg := r.effectiveConfigForEvent(event)
+		event.mutedSkipImages = !cfg.mutedImageDescriptionEnabled()
+		if cfg.mutedReplyJudgmentEnabled() {
+			// 照常判断，只是不生成不发送：判断结果留在事件页上，由 prepareMessageEvent
+			// 在最后收住。判断要花 token，所以下面的群额度照样管。
+			event.mutedJudgeOnly = reason
+		} else {
+			r.enqueueEventMemory(event, memoryEventText(event))
+			if profile, stored := r.updateUserMemory(event, 0); stored {
+				event.userProfile = profile
+				event.userProfileLoaded = true
+			}
+			if !event.mutedSkipImages {
+				r.enqueueHistoryImageDescriptions(event)
+			}
+			event.routingReason = reason
+			r.record(r.decisionEventRecord(event, text, "ignored_bot_muted"))
+			return event, text, false, "ignored_bot_muted"
+		}
 	}
 	// 群额度用完：和「这个群没开放」走同一条路——消息照样进历史、进长期记忆和用户
 	// 画像，但所有要花 token 的环节全部跳过。额度是按窗口滚动的，到点自己恢复，
@@ -1664,7 +1722,9 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	event.replyHistoryLoaded = true
 	ctx = r.withIdentityPrivacyContext(ctx, event, history)
 	finishWithoutReply := func(outcome string) (MessageEvent, string, bool, string) {
-		r.enqueueHistoryImageDescriptions(event)
+		if !event.mutedSkipImages {
+			r.enqueueHistoryImageDescriptions(event)
+		}
 		return event, text, false, outcome
 	}
 	if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, event); ignored {
@@ -1945,6 +2005,12 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 				setEventRecordOutcome(&record, "ignored_unavailable_group")
 				r.record(record)
 				return "ignored_unavailable_group", nil
+			case errors.Is(err, errBotMuted):
+				// 回复生成后才发现被禁言（错过了禁言通知）。不重试：解禁后补发一条
+				// 过时的回复比不发更怪。
+				setEventRecordOutcome(&record, "ignored_bot_muted")
+				r.record(record)
+				return "ignored_bot_muted", nil
 			case errors.Is(err, errOutboundDeliveryDropped):
 				// 只有通道在线时仍持续失败才是终态；离线期间的丢弃说明失败
 				// 窗口是被断连耗尽的，恢复后必须把这条回复补出去。
@@ -1998,6 +2064,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 				setEventRecordOutcome(&record, "ignored_unavailable_group")
 				r.record(record)
 				return "ignored_unavailable_group", nil
+			}
+			if errors.Is(sendErr, errBotMuted) {
+				setEventRecordOutcome(&record, "ignored_bot_muted")
+				r.record(record)
+				return "ignored_bot_muted", nil
 			}
 			if errors.Is(sendErr, errOutboundDeliveryDropped) {
 				setEventRecordOutcome(&record, "dropped_outbound_delivery")
