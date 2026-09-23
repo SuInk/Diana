@@ -533,6 +533,8 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
 .browser-advanced-toggle {
   align-self: flex-start;
 }
