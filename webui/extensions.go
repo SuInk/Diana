@@ -30,7 +30,7 @@ func (h *BotHandler) extensions(c *gin.Context) {
 	defer cancel()
 	result, err := r.AdministerExtensions(ctx, req)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusBadRequest, "extensions_"+req.Operation, err, req.Name, map[string]any{"kind": req.Kind, "profile_id": req.ProfileID})
 		return
 	}
 	// 只有真的改了东西才记操作日志。原来按「不是 read 和 list」判断，presets、

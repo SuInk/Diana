@@ -79,17 +79,19 @@ func (h *MediaCacheHandler) save(c *gin.Context) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.store.SaveMediaDownloadCachePolicy(c.Request.Context(), policy); err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "system_media_cache_save", err, "", nil)
 		return
 	}
 	// Validation precedes persistence; applying this exact policy cannot fail.
 	if err := assistant.ConfigureMediaDownloadCache(policy.RetentionDays, policy.MaxMB<<20); err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "system_media_cache_save", err, "", nil)
 		return
 	}
 	h.policy = policy
 	if err := assistant.CleanupMediaDownloadCache(); err != nil {
 		log.Printf("download cache policy applied; cleanup deferred: %v", err)
+		// 策略已经生效，清理推迟不算失败，但得让人知道这次没清下去。
+		recordError(c.Request.Context(), h.logs, "system_media_cache_cleanup", err, "", nil)
 	}
 	recordRequestOperation(c, h.logs, "system.media-cache.save", "下载缓存策略已更新", "", map[string]any{"retention_days": policy.RetentionDays, "max_mb": policy.MaxMB})
 	c.JSON(http.StatusOK, policy)

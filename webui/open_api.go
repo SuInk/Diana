@@ -300,6 +300,50 @@ type OpenAPIHandler struct {
 	plugins OpenAPIPluginGate
 	logs    AppLogWriter
 	limiter *openAPIRateLimiter
+	// rejectLog 给鉴权失败和限流的错误日志节流。这是公网打得到的端点，不节流的话
+	// 有人拿错密钥一直刷，运行日志就只剩这一种。
+	rejectLog rejectionLogThrottle
+}
+
+// rejectionLogThrottle 同一个 key 一分钟只放行一次。
+type rejectionLogThrottle struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func (t *rejectionLogThrottle) allow(key string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.last == nil {
+		t.last = map[string]time.Time{}
+	}
+	if previous, ok := t.last[key]; ok && now.Sub(previous) < time.Minute {
+		return false
+	}
+	// 表只增不减会被伪造的来源撑大：过了间隔的旧项顺手清掉。
+	for stale, at := range t.last {
+		if now.Sub(at) >= time.Minute {
+			delete(t.last, stale)
+		}
+	}
+	t.last[key] = now
+	return true
+}
+
+// rejectRequest 拒掉一次对外 API 调用，并按「原因 + 来源」节流地记一条错误日志。
+func (h *OpenAPIHandler) rejectRequest(c *gin.Context, status int, action string, err error, actor string) {
+	if h.rejectLog.allow(action+"|"+err.Error()+"|"+c.ClientIP()+"|"+actor, time.Now()) {
+		recordAppLog(c.Request.Context(), h.logs, storage.AppLogEntry{
+			Kind:     storage.LogKindError,
+			Level:    storage.LogLevelError,
+			Action:   action,
+			Message:  err.Error(),
+			Actor:    actor,
+			Target:   c.ClientIP(),
+			Metadata: map[string]any{"status": status, "path": c.FullPath()},
+		})
+	}
+	writeError(c, status, err)
 }
 
 // NewOpenAPIHandler 创建对外开放接口处理器。
@@ -387,18 +431,18 @@ func (h *OpenAPIHandler) authenticateRequest(c *gin.Context) (OpenAPIKeyInfo, bo
 	scheme, token, found := strings.Cut(header, " ")
 	if !found || !strings.EqualFold(strings.TrimSpace(scheme), "Bearer") {
 		c.Header("WWW-Authenticate", "Bearer")
-		writeError(c, http.StatusUnauthorized, errors.New("missing bearer token"))
+		h.rejectRequest(c, http.StatusUnauthorized, "openapi_auth_rejected", errors.New("missing bearer token"), "")
 		return OpenAPIKeyInfo{}, false
 	}
 	info, ok := h.manager.Authenticate(token)
 	if !ok {
 		c.Header("WWW-Authenticate", "Bearer")
-		writeError(c, http.StatusUnauthorized, errors.New("invalid api key"))
+		h.rejectRequest(c, http.StatusUnauthorized, "openapi_auth_rejected", errors.New("invalid api key"), "")
 		return OpenAPIKeyInfo{}, false
 	}
 	if allowed, wait := h.limiter.allow(info.ID, assistant.OpenAPIRateLimitPerMinute(settings)); !allowed {
 		c.Header("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
-		writeError(c, http.StatusTooManyRequests, errors.New("rate limit exceeded"))
+		h.rejectRequest(c, http.StatusTooManyRequests, "openapi_rate_limited", errors.New("rate limit exceeded"), "openapi:"+info.Name)
 		return OpenAPIKeyInfo{}, false
 	}
 	return info, true

@@ -81,7 +81,7 @@ func (h *BotHandler) editAssistantUser(c *gin.Context) {
 		if errors.Is(err, storage.ErrUserMemoryConflict) {
 			status = http.StatusConflict
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		h.writeError(c, status, "users_save", err, c.Param("id"), map[string]any{"bot_profile_id": p.BotProfileID, "remove": remove})
 		return
 	}
 	action, message := "users_save", "人员记录已修改"
@@ -135,7 +135,7 @@ func (h *BotHandler) listAssistantUsers(c *gin.Context) {
 	sort, order := storage.NormalizeUserMemorySort(c.Query("sort"), c.Query("order"))
 	profiles, total, err := h.sqlite.ListUserMemoriesSorted(c.Request.Context(), botProfileScope(c), query, sort, order, limit, offset)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "users_list", err, "", nil)
 		return
 	}
 	userIDsByProfile := make(map[string][]string)
@@ -186,7 +186,7 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 		profile, found, err = h.sqlite.GetUserMemoryExact(c.Request.Context(), botProfileScope(c), userID)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "users_get", err, userID, nil)
 		return
 	}
 	if !found {
@@ -195,7 +195,7 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 	}
 	changes, err := h.sqlite.ListUserFavorabilityChangesExact(c.Request.Context(), profile.BotProfileID, userID, 50)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "users_get", err, userID, nil)
 		return
 	}
 	if changes == nil {
@@ -209,7 +209,7 @@ func (h *BotHandler) getAssistantUser(c *gin.Context) {
 	}
 	memories, err := h.sqlite.ListStructuredMemoriesBySubject(c.Request.Context(), profile.BotProfileID, userID, 100)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "users_get", err, userID, nil)
 		return
 	}
 	if memories == nil {
@@ -243,7 +243,7 @@ func (h *BotHandler) clearAssistantUserMemories(c *gin.Context) {
 	memoryID := strings.TrimSpace(c.Param("memory"))
 	cleared, err := h.sqlite.ForgetStructuredMemoriesBySubject(c.Request.Context(), strings.TrimSpace(scope), userID, memoryID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "users_memories_clear", err, c.Param("id"), nil)
 		return
 	}
 	message := "长期记忆已清空"
