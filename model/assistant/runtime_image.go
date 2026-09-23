@@ -904,7 +904,7 @@ func historicalNonImageMediaDescriptions(segments []MessageSegment) []string {
 			line := fmt.Sprintf("文件%d摘要=文件名：%s；格式：%s", fileIndex, name, format)
 			if description != "" {
 				line += "；内容摘要：" + truncateRunes(strings.Join(strings.Fields(description), " "), historyImageDescriptionMaxRunes)
-			} else if isSupportedFileName(name) {
+			} else if isSupportedFileName(name) || isSniffableFileName(name, segment.Data["size"]) {
 				line += "；正文尚未解析"
 			} else {
 				line += "；当前格式不支持正文解析"
