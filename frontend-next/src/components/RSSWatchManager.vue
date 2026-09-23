@@ -11,7 +11,7 @@
       <button class="btn small primary" type="button" @click="startCreate"><Plus :size="14" aria-hidden="true" />添加订阅</button>
     </div>
 
-    <form v-if="editing" class="repository-watch-editor" @submit.prevent="save">
+    <form v-if="editing" class="repository-watch-editor" @submit.prevent="saveEditor">
       <div class="form-grid repository-watch-form">
         <div class="field wide">
           <label>订阅来源</label>
@@ -120,7 +120,8 @@ function markEditorClean(): void { editorSnapshot.value = JSON.stringify(form.va
 
 function editorDirty(): boolean { return editing.value && JSON.stringify(form.value) !== editorSnapshot.value; }
 
-defineExpose({ hasUnsavedChanges: editorDirty });
+// 外层弹窗的「保存」也要能把正在编辑的订阅一起提交，否则点了保存订阅却没落库。
+defineExpose({ hasUnsavedChanges: editorDirty, saveEditor });
 function taskSources(task: AssistantTask): RSSWatchSource[] {
   // 老任务没有 feed_sources，按单来源字段回落，编辑框不会一打开就空一格。
   if (task.feed_sources?.length) return task.feed_sources;
@@ -151,15 +152,16 @@ async function stopEditing(): Promise<void> {
   editingTask.value = null;
   editorSnapshot.value = "";
 }
-async function save(): Promise<void> {
+async function saveEditor(): Promise<boolean> {
   const handles = filledSources(form.value.twitter_handles);
   const urls = filledSources(form.value.feed_urls);
-  if (form.value.source === "twitter" && !handles.length) return toastError("请填写 Twitter 用户");
-  if (form.value.source === "rss" && !urls.length) return toastError("请填写 Feed URL");
-  if (!form.value.judge_prompt) return toastError("请填写判断与回复规则");
-  if (form.value.interval_seconds < minimumIntervalSeconds || form.value.interval_seconds > maximumIntervalSeconds) return toastError("检查周期必须在 5 分钟到 365 天之间");
+  if (form.value.source === "twitter" && !handles.length) return rejectEditor("请填写 Twitter 用户");
+  if (form.value.source === "rss" && !urls.length) return rejectEditor("请填写 Feed URL");
+  if (!form.value.judge_prompt) return rejectEditor("请填写判断与回复规则");
+  if (form.value.interval_seconds < minimumIntervalSeconds || form.value.interval_seconds > maximumIntervalSeconds) return rejectEditor("检查周期必须在 5 分钟到 365 天之间");
 
-  if (!form.value.notification_targets.length || form.value.notification_targets.some(t => !t.profile_id || !(t.destination === "group" ? t.group_id : t.user_id))) return toastError("请为每个通知目标选择机器人并填写会话 ID");
+  if (!form.value.notification_targets.length || form.value.notification_targets.some(t => !t.profile_id || !(t.destination === "group" ? t.group_id : t.user_id))) return rejectEditor("请为每个通知目标选择机器人并填写会话 ID");
+  if (saving.value) return false;
   saving.value = true;
   try {
     await props.prepareAccess?.();
@@ -167,8 +169,10 @@ async function save(): Promise<void> {
     const common = { notification_targets: form.value.notification_targets, ...source, judge_prompt: form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
     if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.notification_targets[0]?.profile_id });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();
-  } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅保存失败"); } finally { saving.value = false; }
+    return true;
+  } catch (error) { toastError(error instanceof Error ? error.message : "RSS 订阅保存失败"); return false; } finally { saving.value = false; }
 }
+function rejectEditor(message: string): false { toastError(message); return false; }
 async function cancel(task: AssistantTask): Promise<void> { if (!await askConfirm({ title: "取消 RSS 订阅", message: `停止 ${watchTitle(task)} 的订阅？`, confirmLabel: "取消订阅", danger: true })) return; busyID.value = task.id; try { await cancelRSSWatch(task.id); toastSuccess("RSS 订阅已取消"); await load(); } catch (error) { toastError(error instanceof Error ? error.message : "取消失败"); } finally { busyID.value = ""; } }
 async function remove(task: AssistantTask): Promise<void> { if (!await askConfirm({ title: "删除 RSS 订阅", message: `永久删除 ${watchTitle(task)} 的订阅记录？`, confirmLabel: "删除", danger: true })) return; busyID.value = task.id; try { await deleteRSSWatch(task.id); toastSuccess("RSS 订阅已删除"); await load(); } catch (error) { toastError(error instanceof Error ? error.message : "删除失败"); } finally { busyID.value = ""; } }
 function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value; }
