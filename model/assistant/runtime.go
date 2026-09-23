@@ -848,6 +848,10 @@ func (r *Runtime) Start(parent context.Context) error {
 			r.runPendingDirectMessagePurgeLoop(ctx)
 		}()
 		go func() {
+			defer recoverGoroutinePanic("runtime.channelWatch")
+			r.runChannelWatch(ctx)
+		}()
+		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
 			r.runInboundCoordinator(ctx, leaseOwner, concurrency, releaseStaleLeases, inboundDone)
 		}()

@@ -5,12 +5,11 @@ package assistant
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +17,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/SuInk/diana/model/applog"
 )
 
 const maxOneBotWebSocketFrameBytes = 8 << 20
@@ -56,6 +57,16 @@ type OneBotReverseServer struct {
 	// 同上，机器人停用期间接入端也会几秒一次地重连。
 	lastDetachedClient string
 	lastDetachedLog    time.Time
+	// appLogs 让握手被拒写进运行日志。监听器比运行时活得久：机器人全停用时运行时
+	// 已经退出，接入端却还在重连，这种拒绝只有监听器自己能记。
+	appLogs applog.Writer
+}
+
+// SetAppLogWriter 设置握手被拒时写入的运行日志。
+func (s *OneBotReverseServer) SetAppLogWriter(writer applog.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appLogs = writer
 }
 
 func (s *OneBotReverseServer) OutboundBackoffEnabled() bool { return true }
@@ -497,17 +508,44 @@ func (s *OneBotReverseServer) setStatus(connected bool, selfID string, lastError
 	s.status.UpdatedAt = time.Now()
 }
 
+// oneBotClientFingerprint 标识是哪个接入端在连，既用来节流日志，也直接显示在
+// 运行日志里，所以写成人看得懂的「IP · QQ 号 · 客户端名」。
+//
+// 不带端口：接入端每次重连都换一个本地端口，带上端口同一个客户端每次都是新指纹，
+// 「同一客户端一分钟一条」的节流就形同虚设，token 填错时几秒一条刷满日志。
+// 以前还做成哈希，同一台机器两次握手看着像两个陌生客户端，排查时认不出是谁。
 func oneBotClientFingerprint(r *http.Request) string {
 	if r == nil {
 		return "unknown"
 	}
-	identity := strings.Join([]string{
-		strings.TrimSpace(r.RemoteAddr),
-		strings.TrimSpace(r.Header.Get("X-Self-ID")),
-		strings.TrimSpace(r.Header.Get("User-Agent")),
-	}, "\x00")
-	sum := sha256.Sum256([]byte(identity))
-	return fmt.Sprintf("client-%x", sum[:8])
+	parts := make([]string, 0, 3)
+	host := strings.TrimSpace(r.RemoteAddr)
+	if split, _, err := net.SplitHostPort(host); err == nil {
+		host = split
+	}
+	if host != "" {
+		parts = append(parts, host)
+	}
+	if selfID := strings.TrimSpace(r.Header.Get("X-Self-ID")); selfID != "" {
+		parts = append(parts, "QQ "+selfID)
+	}
+	if agent := oneBotClientAgent(r.Header.Get("User-Agent")); agent != "" {
+		parts = append(parts, agent)
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// oneBotClientAgent 只取 User-Agent 的第一段（通常是「客户端/版本」），整串太长，
+// 后面的平台信息对认出是哪个接入端也没帮助。
+func oneBotClientAgent(value string) string {
+	agent, _, _ := strings.Cut(strings.TrimSpace(value), " ")
+	if runes := []rune(agent); len(runes) > 40 {
+		agent = string(runes[:40])
+	}
+	return agent
 }
 
 func orUnknownClient(value string) string {
@@ -546,6 +584,7 @@ func (s *OneBotReverseServer) recordDetached(r *http.Request) {
 	s.connMu.Unlock()
 	if shouldLog {
 		log.Printf("onebot reverse handshake rejected: reason=bot_disabled client=%s", fingerprint)
+		s.recordRejectionLog("bot_disabled", fingerprint)
 	}
 }
 
@@ -572,7 +611,42 @@ func (s *OneBotReverseServer) recordUnauthorized(r *http.Request, reason string)
 	s.connMu.Unlock()
 	if shouldLog {
 		log.Printf("onebot reverse handshake rejected: reason=%s client=%s", reason, fingerprint)
+		s.recordRejectionLog(reason, fingerprint)
 	}
+}
+
+// oneBotRejectionMessages 把拒绝原因翻成排查时能直接照做的话。
+var oneBotRejectionMessages = map[string]string{
+	"server_token_unset": "OneBot 反向连接被拒：Diana 这边还没配 Access Token",
+	"token_missing":      "OneBot 反向连接被拒：接入端没有带 Access Token",
+	"token_mismatch":     "OneBot 反向连接被拒：接入端的 Access Token 和机器人配置不一致",
+	"bot_disabled":       "OneBot 反向连接被拒：用这条反连的机器人都已停用",
+}
+
+// recordRejectionLog 把一次握手被拒写进运行日志。去重沿用调用方的节流（同一原因
+// 和客户端一分钟一条），这里只负责写；token 本身任何时候都不落日志。
+func (s *OneBotReverseServer) recordRejectionLog(reason, client string) {
+	s.mu.RLock()
+	writer := s.appLogs
+	s.mu.RUnlock()
+	if writer == nil {
+		return
+	}
+	message := oneBotRejectionMessages[reason]
+	if message == "" {
+		message = "OneBot 反向连接被拒：" + reason
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind:      applog.KindError,
+		Level:     applog.LevelError,
+		Action:    "onebot_handshake_rejected",
+		Message:   message,
+		Target:    client,
+		Metadata:  map[string]any{"reason": reason, "client": client},
+		CreatedAt: time.Now(),
+	})
 }
 
 // authorized 校验反向 WebSocket 请求鉴权，第二个返回值是失败原因。
