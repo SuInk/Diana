@@ -611,9 +611,15 @@
                       @keydown="(event) => onRouteHandleKeydown(role.key, 0, event)"
                     >
                       <GripVertical :size="14" aria-hidden="true" />
-                      {{ role.label }}
+                      <span class="model-role-name">
+                        {{ role.label }}
+                        <small v-if="role.sublabel">{{ role.sublabel }}</small>
+                      </span>
                     </button>
-                    <span v-else class="model-role-label">{{ role.label }}</span>
+                    <span v-else class="model-role-label model-role-name">
+                      {{ role.label }}
+                      <small v-if="role.sublabel">{{ role.sublabel }}</small>
+                    </span>
                     <AppSelect
                       :model-value="roleSelectionValue(role.key)"
                       :options="channelOptionsFor(role.key)"
@@ -679,17 +685,18 @@
                 </div>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
-              <p class="muted model-role-note">
-                每个用途的主路由和后备路由按从上到下的顺序依次尝试。有后备时，拖动左侧的名称可以调整顺序（也可以聚焦后按 ↑ ↓ 键），
-                拖到最上面的那条就成为主路由，原来的主路由顺延为后备。
-              </p>
-              <button class="btn ghost" type="button" @click="purposeRolesOpen = !purposeRolesOpen">
+              <button
+                v-if="!roleForm.background || purposeRolesOpen"
+                class="btn ghost small model-role-more"
+                type="button"
+                @click="purposeRolesOpen = !purposeRolesOpen"
+              >
                 <ChevronDown :size="14" :class="{ 'recent-chevron-open': purposeRolesOpen }" aria-hidden="true" />
                 {{ purposeRolesOpen ? "收起后台生成" : "后台生成（好感度 / 长期记忆）可以单独指模型" }}
               </button>
-              <p v-if="purposeRolesOpen" class="muted model-role-note">
-                「意图识别」现在只管判定当前这轮该不该说话、说出去的这句能不能发——问的都是是非、单选和打分，
-                可以绑 TypeSafe Jev 这类只做判断的模型。写字的活（好感度、长期记忆、摘要、RSS 判断）拆到下面这一档，不指定时跟随对话。
+              <p class="muted model-role-note">
+                每个用途的主路由和后备路由按从上到下的顺序依次尝试。有后备时，拖动左侧的名称可以调整顺序（也可以聚焦后按 ↑ ↓ 键），
+                拖到最上面的那条就成为主路由，原来的主路由顺延为后备。
               </p>
             </div>
           </section>
@@ -3410,7 +3417,8 @@ const purposeRoleKeys = ["background"] as const;
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
 type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
-const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
+type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
+const modelRoleRows: ModelRoleRow[] = [
   {
     key: "chat",
     label: "对话",
@@ -3423,7 +3431,8 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
   },
   {
     key: "media_parse",
-    label: "媒体解析（可选）",
+    label: "媒体解析",
+    sublabel: "可选",
     description:
       "后台批量识图：历史图片和视频每一帧的描述、表情包语义简介，以及图片识别插件的看图与模型 OCR。这些调用量大、在后台排队逐张执行，" +
       "建议单独指一个便宜、快、识图稳定的视觉模型并配上后备。跟随视觉理解时，更换对话模型会连带换掉它，换成慢模型会让识图队列积压；" +
@@ -3443,10 +3452,11 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
   }
 ];
 // 后台生成是从「意图识别」里拆出来的一档。留空就跟着意图识别，行为和拆之前一样。
-const purposeRoleRows: { key: RoleKey; label: string; description: string }[] = [
+const purposeRoleRows: ModelRoleRow[] = [
   {
     key: "background",
-    label: "后台生成（好感度 / 长期记忆）",
+    label: "后台生成",
+    sublabel: "好感度 · 记忆",
     description:
       "好感度评估、长期记忆抽取与归纳、上下文摘要、语义指代、转发内容安全，以及各种提示改写。" +
       "它们都要写出成段文字，判断模型答不了；也不在回复的关键路径上，慢一点没关系。不指定时跟随对话。"
