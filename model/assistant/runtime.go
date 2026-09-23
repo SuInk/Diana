@@ -21,6 +21,7 @@ import (
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/browsersource"
 	"github.com/SuInk/diana/model/llm"
 
 	"github.com/google/uuid"
@@ -409,7 +410,8 @@ type Runtime struct {
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
 	browserControl            agent.BrowserControlBridge
-	browserBox                agent.BuiltinBrowserBridge
+	browserBox                BuiltinBrowserProvider
+	browserSource             func() string
 	media                     *MediaStore
 	members                   *memberCache
 	now                       func() time.Time
@@ -564,32 +566,71 @@ func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
 	r.mu.Unlock()
 }
 
+// BuiltinBrowserProvider 按机器人交出内置浏览器，由 model/browserbox.Manager 实现。
+// 每台机器人各有一份登录态，A 机器人拿到的句柄碰不到 B 机器人的浏览器。
+type BuiltinBrowserProvider interface {
+	BrowserFor(botID string) agent.BuiltinBrowserBridge
+}
+
 // SetBrowserBox 注入内置浏览器。没注入时 browser_* 那组工具沿用机器人配置里的
 // 外部 CDP 地址，行为和加这一档之前一样。
-func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
+func (r *Runtime) SetBrowserBox(provider BuiltinBrowserProvider) {
 	r.mu.Lock()
-	r.browserBox = bridge
+	r.browserBox = provider
 	r.mu.Unlock()
 }
 
-// browserBoxFor 交出内置浏览器的句柄。用户在「浏览器」页把它打开就算数，不再要求
+// SetBrowserSource 注入浏览器来源的读取函数（见 browsersource）。没注入时内置浏览器
+// 和扩展都按各自的开关登记，行为和加这个选择之前一样。
+func (r *Runtime) SetBrowserSource(current func() string) {
+	r.mu.Lock()
+	r.browserSource = current
+	r.mu.Unlock()
+}
+
+// browserSourceAllows 判断当前来源是否是 source。没注入来源时一律放行。
+func (r *Runtime) browserSourceAllows(source string) bool {
+	r.mu.RLock()
+	current := r.browserSource
+	r.mu.RUnlock()
+	return current == nil || current() == source
+}
+
+// defaultAgentBrowserCDPURL 是没配外部浏览器时的 CDP 地址。配置里总会带着它，
+// 所以「机器人自己配了外部浏览器」只能按「和它不同」来认。
+const defaultAgentBrowserCDPURL = "http://127.0.0.1:9222"
+
+// browserToolsDisabledFor 决定 browser_open 那组 CDP 工具登不登记。它们接的是内置
+// 浏览器，所以跟着「Diana 内置」走；例外是机器人自己改过外部 CDP 地址——那是
+// 显式指定的浏览器，不该被全局选择悄悄收走。
+func (r *Runtime) browserToolsDisabledFor(cfg BotConfig) bool {
+	if cdpURL := strings.TrimSpace(cfg.AgentBrowserCDPURL); cdpURL != "" && cdpURL != defaultAgentBrowserCDPURL {
+		return false
+	}
+	return !r.browserSourceAllows(browsersource.Box)
+}
+
+// browserBoxFor 交出这台机器人自己的内置浏览器。用户在「浏览器」页把它打开就算数，不再要求
 // 每台机器人另点一次开关——那一步挡的是「登录态被借走」，而这件事由身份挡得更准：
 // browser_* 不在非主人的工具白名单里，只有主人能驱动它。想让某台机器人彻底碰不到，
 // 把这一档显式关掉。
 func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
-	if cfg.AgentBrowserBoxDisabled {
+	if cfg.AgentBrowserBoxDisabled || !r.browserSourceAllows(browsersource.Box) {
 		return nil
 	}
 	r.mu.RLock()
-	bridge := r.browserBox
+	provider := r.browserBox
 	r.mu.RUnlock()
-	return bridge
+	if provider == nil {
+		return nil
+	}
+	return provider.BrowserFor(cfg.ID)
 }
 
-// browserControlFor 只在两边都点头时才把控制面交出去：全局注入了控制面，
-// 并且这台机器人自己那档开关也开着。
+// browserControlFor 只在都点头时才把控制面交出去：全局注入了控制面、浏览器来源
+// 选的是扩展，并且这台机器人自己那档开关也开着。
 func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
-	if !cfg.AgentBrowserControlEnabled {
+	if !cfg.AgentBrowserControlEnabled || !r.browserSourceAllows(browsersource.Extension) {
 		return nil
 	}
 	r.mu.RLock()
@@ -4416,6 +4457,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 			BrowserControl:             r.browserControlFor(cfg),
 			BuiltinBrowser:             r.browserBoxFor(cfg),
+			BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry

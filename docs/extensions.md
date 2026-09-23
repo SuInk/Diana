@@ -4,7 +4,7 @@
 
 ## 浏览器
 
-交互式浏览器的接入参数（CDP 地址、单次操作超时）按机器人配置，在侧栏“浏览器”页的「外接浏览器（CDP）」一档里，和一次性无头渲染、内置浏览器、浏览器控制扩展并排。接上之后模型可用 `browser_open`、`browser_text`、`browser_click`、`browser_type`、`browser_screenshot`。
+交互式浏览器的接入参数（CDP 地址、单次操作超时）按机器人配置，在侧栏“浏览器”页底部折叠的「高级：外接浏览器（CDP）」里；只在这一轮没用上内置浏览器时生效（它关着、用不上，或排在前面的扩展正在用）。接上之后模型可用 `browser_open`、`browser_text`、`browser_click`、`browser_type`、`browser_screenshot`。
 
 保存旁边有「测试连接」：探一次 `/json/version`，连不上就把失败原文摆在界面上——不测的话只能等模型某次调用失败才知道地址是错的。地址连不上不会自动停用这些工具，它们只是会调用失败。
 

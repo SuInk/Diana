@@ -81,6 +81,27 @@ func (s *SQLiteStore) ListLogs(ctx context.Context, filter AppLogFilter) ([]AppL
 		where = append(where, "level = ?")
 		args = append(args, string(filter.Level))
 	}
+	if len(filter.Kinds) > 0 {
+		placeholders := make([]string, 0, len(filter.Kinds))
+		for _, kind := range filter.Kinds {
+			placeholders = append(placeholders, "?")
+			args = append(args, string(kind))
+		}
+		where = append(where, "kind IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(filter.Actions) > 0 {
+		placeholders := make([]string, 0, len(filter.Actions))
+		for _, action := range filter.Actions {
+			placeholders = append(placeholders, "?")
+			args = append(args, action)
+		}
+		where = append(where, "action IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if filter.ProfileID != "" {
+		// 机器人 ID 只在 metadata 里：各子系统的 target 含义不同，不能拿它当机器人 ID。
+		where = append(where, "json_extract(NULLIF(metadata, ''), '$.profile_id') = ?")
+		args = append(args, filter.ProfileID)
+	}
 	query := `
 SELECT id, kind, level, action, message, detail, actor, target, metadata, created_at
 FROM app_logs`

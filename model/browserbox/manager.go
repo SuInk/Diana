@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,9 +32,11 @@ type Document struct {
 	Settings Settings `json:"settings"`
 }
 
-// Status 是管理接口看到的运行状态。
+// Status 是管理接口看到的运行状态。Bot 为空时只有配置和 Available，进程相关的
+// 字段都属于某一台机器人。
 type Status struct {
 	Settings   Settings  `json:"settings"`
+	Bot        string    `json:"bot,omitempty"`
 	Running    bool      `json:"running"`
 	Takeover   bool      `json:"takeover"`
 	CDPURL     string    `json:"cdp_url,omitempty"`
@@ -55,14 +58,29 @@ const (
 
 var devToolsLine = regexp.MustCompile(`DevTools listening on (ws://[^\s]+)`)
 
-// Manager 看管内置浏览器进程：起、停、崩了自动拉起，以及对外回答
-// 「现在能不能用、CDP 在哪」。
+// Manager 看管内置浏览器：一份全局配置，加上每台机器人各自的一个进程。
+//
+// 每台机器人各用一个 profile、各起一个进程，是为了让登录态互不相通：A 机器人里登录
+// 的账号，B 机器人看不到也用不了。Chrome 的 BrowserContext 也能隔离，但它不落盘，
+// 重启就丢登录态，而「登录一次以后一直有效」正是这一档的意义，所以只能分进程。
+//
+// 进程按需起：机器人第一次要用、或者用户在 WebUI 上点启动时才拉起，不会一开机就
+// 为每台机器人各起一个 Chrome。
 type Manager struct {
 	store   Store
 	dataDir string
 
-	mu         sync.RWMutex
-	settings   Settings
+	mu       sync.RWMutex
+	settings Settings
+	bots     map[string]*instance
+	watchers map[chan struct{}]struct{}
+	// saved 表示配置落过盘。没落过盘的才轮得到 EnableByDefault 按本机条件自动打开。
+	saved bool
+}
+
+// instance 是一台机器人的浏览器进程。字段都由 Manager.mu 保护。
+type instance struct {
+	id         string
 	cmd        *exec.Cmd
 	display    *virtualDisplay
 	cdpURL     string
@@ -74,42 +92,132 @@ type Manager struct {
 	// generation 用来分辨「这次退出属于哪一次启动」，避免旧进程的退出把新进程的
 	// 状态清掉——和扩展那边旧 socket 的 close 是同一类坑。
 	generation uint64
-	watchers   map[chan struct{}]struct{}
+	// starting 在拉起过程中非空，同一台机器人的并发启动等同一次结果。
+	starting chan struct{}
+	startErr error
 }
 
-// New 创建管理器并读取已保存的配置。开着的话顺手把浏览器拉起来。
+// New 创建管理器并读取已保存的配置。不在这里拉起任何进程：进程按机器人按需起。
 func New(ctx context.Context, store Store, dataDir string) *Manager {
 	m := &Manager{
 		store:    store,
 		dataDir:  strings.TrimSpace(dataDir),
 		settings: Settings{}.WithDefaults(),
+		bots:     map[string]*instance{},
 		watchers: map[chan struct{}]struct{}{},
 	}
 	if store != nil {
 		if doc, ok, err := store.LoadBrowserBox(ctx); err == nil && ok {
 			m.settings = doc.Settings.WithDefaults()
-		}
-	}
-	if m.settings.Enabled {
-		if err := m.Start(ctx); err != nil {
-			m.setLastError(err)
+			m.saved = true
 		}
 	}
 	return m
 }
 
-// ProfileDir 是登录态所在目录。放在数据目录下而不是临时目录：这一档的全部意义
-// 就是「登录一次以后一直有效」，profile 跟着挂卷走才谈得上持久。
-func (m *Manager) ProfileDir() string {
+// 本机条件的探测，测试里替换掉。
+var (
+	findBrowserExecutable = func() bool {
+		_, err := agent.FindBrowserExecutable("")
+		return err == nil
+	}
+	headfulDisplayAvailable = func() bool { return systemDisplayAvailable() || xvfbAvailable() }
+)
+
+// EnableByDefault 在内置浏览器从没保存过配置时，按本机条件替用户打开它：找得到
+// Chrome/Chromium 就开；有显示器，或者能自己拉起 Xvfb（完整版容器镜像自带），就开
+// 真窗口，否则无头。返回这次有没有打开。
+//
+// 只看「落没落过盘」：用户关过、改过的配置一律不动。找不到浏览器时也不落盘，这样
+// 以后装上了，下次启动还会再探测一次。
+func (m *Manager) EnableByDefault(ctx context.Context) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	m.mu.RLock()
+	saved := m.saved
+	next := m.settings
+	m.mu.RUnlock()
+	if saved || next.Enabled || !findBrowserExecutable() {
+		return false, nil
+	}
+	next.Enabled = true
+	next.Headful = headfulDisplayAvailable()
+	if _, err := m.SetSettings(ctx, next); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (m *Manager) rootDir() string     { return filepath.Join(m.dataDir, "browser-box") }
+func (m *Manager) profilesDir() string { return filepath.Join(m.rootDir(), "profiles") }
+
+// legacyProfileDir 是按机器人拆分之前那一份共用的 profile。
+func (m *Manager) legacyProfileDir() string { return filepath.Join(m.rootDir(), "profile") }
+
+// botDir 是一台机器人的数据目录：profile、缓存和崩溃转储都在下面。
+func (m *Manager) botDir(id string) string { return filepath.Join(m.profilesDir(), id) }
+
+// ProfileDir 是一台机器人登录态所在的目录。放在数据目录下而不是临时目录：这一档的
+// 全部意义就是「登录一次以后一直有效」，profile 跟着挂卷走才谈得上持久。
+func (m *Manager) ProfileDir(botID string) string {
 	if m == nil || m.dataDir == "" {
 		return ""
 	}
-	return filepath.Join(m.dataDir, "browser-box", "profile")
+	return filepath.Join(m.botDir(normalizeBotID(botID)), "profile")
 }
 
-func (m *Manager) cacheDir() string { return filepath.Join(m.dataDir, "browser-box", "cache") }
-func (m *Manager) crashDir() string { return filepath.Join(m.dataDir, "browser-box", "crash") }
-func (m *Manager) rootDir() string  { return filepath.Join(m.dataDir, "browser-box") }
+// AdoptLegacyProfile 把拆分之前那份共用的 profile 交给 botID，登录态不丢。只在那台
+// 机器人还没有自己的 profile 时搬；搬过之后旧目录就不在了，重复调用没有副作用。
+func (m *Manager) AdoptLegacyProfile(botID string) error {
+	if m == nil || m.dataDir == "" || strings.TrimSpace(botID) == "" {
+		return nil
+	}
+	legacy := m.legacyProfileDir()
+	if _, err := os.Stat(legacy); err != nil {
+		return nil
+	}
+	target := m.ProfileDir(botID)
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return fmt.Errorf("建机器人浏览器目录失败：%w", err)
+	}
+	if err := os.Rename(legacy, target); err != nil {
+		return fmt.Errorf("迁移旧的浏览器登录态失败：%w", err)
+	}
+	return nil
+}
+
+// normalizeBotID 把机器人 ID 变成能直接当目录名的样子。ID 本来就是字母数字和连字符，
+// 这里只是防御：带路径分隔符或别的字符的 ID 不能拿去拼路径。
+func normalizeBotID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "default"
+	}
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+// instanceLocked 取（没有就建）一台机器人的实例。调用方持有写锁。
+func (m *Manager) instanceLocked(id string) *instance {
+	inst := m.bots[id]
+	if inst == nil {
+		inst = &instance{id: id}
+		m.bots[id] = inst
+	}
+	return inst
+}
 
 // Settings 返回当前配置副本。
 func (m *Manager) Settings() Settings {
@@ -121,21 +229,29 @@ func (m *Manager) Settings() Settings {
 	return m.settings
 }
 
-// Status 汇总当前状态。
+// Status 汇总配置和本机能不能找到浏览器，不涉及任何一台机器人。
 func (m *Manager) Status() Status {
+	return m.statusFor("")
+}
+
+func (m *Manager) statusFor(botID string) Status {
 	if m == nil {
 		return Status{Settings: Settings{}.WithDefaults()}
 	}
 	m.mu.RLock()
-	status := Status{
-		Settings:   m.settings,
-		Running:    m.cmd != nil && m.cdpURL != "",
-		Takeover:   m.takeover,
-		CDPURL:     m.cdpURL,
-		Executable: m.executable,
-		ProfileDir: m.ProfileDir(),
-		StartedAt:  m.startedAt,
-		LastError:  m.lastError,
+	status := Status{Settings: m.settings}
+	if botID != "" {
+		id := normalizeBotID(botID)
+		status.Bot = id
+		status.ProfileDir = m.ProfileDir(id)
+		if inst := m.bots[id]; inst != nil {
+			status.Running = inst.cmd != nil && inst.cdpURL != ""
+			status.Takeover = inst.takeover
+			status.CDPURL = inst.cdpURL
+			status.Executable = inst.executable
+			status.StartedAt = inst.startedAt
+			status.LastError = inst.lastError
+		}
 	}
 	configured := m.settings.Executable
 	m.mu.RUnlock()
@@ -148,7 +264,8 @@ func (m *Manager) Status() Status {
 	return status
 }
 
-// SetSettings 保存配置，并按 Enabled 的新值启停进程。
+// SetSettings 保存配置。关掉就停掉所有机器人的进程；无头/尺寸/程序路径变了就把正在
+// 跑的那些重开。打开时不主动起进程，由各台机器人按需起。
 func (m *Manager) SetSettings(ctx context.Context, next Settings) (Settings, error) {
 	if m == nil {
 		return Settings{}, errors.New("内置浏览器未初始化")
@@ -172,25 +289,25 @@ func (m *Manager) SetSettings(ctx context.Context, next Settings) (Settings, err
 			m.mu.Unlock()
 			return previous, err
 		}
+		m.mu.Lock()
+		m.saved = true
+		m.mu.Unlock()
 	}
+	var firstErr error
 	switch {
 	case !next.Enabled:
-		m.Stop()
-	case !previous.Enabled && next.Enabled:
-		if err := m.Start(ctx); err != nil {
-			m.setLastError(err)
-			return next, err
-		}
+		m.StopAll()
 	case renderingChanged(previous, next):
 		// 尺寸或无头模式变了要重开进程才生效，但登录态不受影响：profile 目录没动。
-		m.Stop()
-		if err := m.Start(ctx); err != nil {
-			m.setLastError(err)
-			return next, err
+		for _, id := range m.runningBots() {
+			m.stop(id)
+			if err := m.start(ctx, id); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	m.notify()
-	return next, nil
+	return next, firstErr
 }
 
 func renderingChanged(previous, next Settings) bool {
@@ -200,69 +317,170 @@ func renderingChanged(previous, next Settings) bool {
 		previous.Executable != next.Executable
 }
 
-// SetTakeover 切换人工接管。接管打开时模型拿不到 CDP 地址，一条指令都下不去，
-// 用户自己在实时画面里点。
-func (m *Manager) SetTakeover(active bool) {
+func (m *Manager) runningBots() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ids := make([]string, 0, len(m.bots))
+	for id, inst := range m.bots {
+		if inst.cmd != nil {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// StopAll 停掉所有机器人的浏览器进程。登录态留在各自的 profile 里。
+func (m *Manager) StopAll() {
 	if m == nil {
 		return
 	}
+	for _, id := range m.runningBots() {
+		m.stop(id)
+	}
+}
+
+// Stop 是 StopAll 的旧名字，进程退出时 defer 调它。
+func (m *Manager) Stop() { m.StopAll() }
+
+// Bot 返回一台机器人的浏览器句柄。它同时是交给工具那一侧的 agent.BuiltinBrowserBridge。
+func (m *Manager) Bot(botID string) *Bot {
+	return &Bot{m: m, id: normalizeBotID(botID)}
+}
+
+// BrowserFor 实现 assistant.BuiltinBrowserProvider：运行时按机器人取浏览器。
+func (m *Manager) BrowserFor(botID string) agent.BuiltinBrowserBridge {
+	return m.Bot(botID)
+}
+
+// Bot 是一台机器人的内置浏览器。
+type Bot struct {
+	m  *Manager
+	id string
+}
+
+// ID 是规范化后的机器人 ID。
+func (b *Bot) ID() string { return b.id }
+
+// Status 返回这台机器人的状态。
+func (b *Bot) Status() Status { return b.m.statusFor(b.id) }
+
+// Start 拉起这台机器人的浏览器。已经在跑就什么都不做。
+func (b *Bot) Start(ctx context.Context) error {
+	if !b.m.Settings().Enabled {
+		return errors.New("内置浏览器没有打开：先在「浏览器」页把来源选成「Diana 内置」")
+	}
+	return b.m.start(ctx, b.id)
+}
+
+// Stop 结束这台机器人的浏览器。登录态留在 profile 目录里，下次起来还在。
+func (b *Bot) Stop() { b.m.stop(b.id) }
+
+// SetTakeover 切换人工接管。接管打开时模型拿不到这台机器人的浏览器，一条指令都
+// 下不去，用户自己在实时画面里点。
+func (b *Bot) SetTakeover(active bool) {
+	b.m.mu.Lock()
+	b.m.instanceLocked(b.id).takeover = active
+	b.m.mu.Unlock()
+	b.m.notify()
+}
+
+// Takeover 返回这台机器人当前是否由人接管。
+func (b *Bot) Takeover() bool {
+	b.m.mu.RLock()
+	defer b.m.mu.RUnlock()
+	if inst := b.m.bots[b.id]; inst != nil {
+		return inst.takeover
+	}
+	return false
+}
+
+// CDPURL 返回调试地址，给 WebUI 的实时画面用。它不看接管状态：接管时用户自己要
+// 操作，画面和输入照样得通。
+func (b *Bot) CDPURL() string {
+	b.m.mu.RLock()
+	defer b.m.mu.RUnlock()
+	if inst := b.m.bots[b.id]; inst != nil {
+		return inst.cdpURL
+	}
+	return ""
+}
+
+// Endpoint 返回交给模型那一侧的调试地址，实现 agent.BuiltinBrowserBridge。
+//
+// 没打开时返回空串和 nil，工具那一侧回落到机器人配置里的外部 CDP 地址；打开了但
+// 进程还没起来就当场拉起；有人在接管或起不来时返回一句模型能看懂的原因。拉起不跟着
+// 这次工具调用的超时走：起到一半被取消的话，下一次调用还得从头再等一遍。
+func (b *Bot) Endpoint(ctx context.Context) (string, error) {
+	b.m.mu.RLock()
+	enabled := b.m.settings.Enabled
+	var takeover bool
+	var cdpURL string
+	if inst := b.m.bots[b.id]; inst != nil {
+		takeover = inst.takeover
+		cdpURL = inst.cdpURL
+	}
+	b.m.mu.RUnlock()
+	switch {
+	case !enabled:
+		return "", nil
+	case takeover:
+		return "", errors.New("用户正在人工接管内置浏览器，本轮不要操作它；等用户交还控制权再试")
+	case cdpURL != "":
+		return cdpURL, nil
+	}
+	if err := b.m.start(context.WithoutCancel(ctx), b.id); err != nil {
+		return "", fmt.Errorf("内置浏览器没能启动：%w", err)
+	}
+	if url := b.CDPURL(); url != "" {
+		return url, nil
+	}
+	return "", errors.New("内置浏览器还没起来，稍后再试")
+}
+
+// start 拉起一台机器人的浏览器进程。已经在跑就什么都不做；正在起就等那一次的结果。
+func (m *Manager) start(ctx context.Context, id string) error {
 	m.mu.Lock()
-	m.takeover = active
-	m.mu.Unlock()
-	m.notify()
-}
-
-// Takeover 返回当前接管状态。
-func (m *Manager) Takeover() bool {
-	if m == nil {
-		return false
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.takeover
-}
-
-// CDPURL 返回调试地址，给 WebUI 的实时画面用。它不看接管状态：接管时用户
-// 自己要操作，画面和输入照样得通。
-func (m *Manager) CDPURL() string {
-	if m == nil {
-		return ""
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.cdpURL
-}
-
-// AgentCDPURL 返回交给模型那一侧的调试地址。没开、没起来或有人在接管时返回空串，
-// 对应的效果是 browser_* 那组工具在这台机器人上根本不登记。
-func (m *Manager) AgentCDPURL() string {
-	if m == nil {
-		return ""
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.settings.Enabled || m.takeover {
-		return ""
-	}
-	return m.cdpURL
-}
-
-// Start 拉起浏览器进程。已经在跑就什么都不做。
-func (m *Manager) Start(ctx context.Context) error {
-	if m == nil {
-		return errors.New("内置浏览器未初始化")
-	}
-	m.mu.Lock()
-	if m.cmd != nil {
+	inst := m.instanceLocked(id)
+	if inst.cmd != nil {
 		m.mu.Unlock()
 		return nil
 	}
+	if inst.starting != nil {
+		wait := inst.starting
+		m.mu.Unlock()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		m.mu.RLock()
+		err := inst.startErr
+		m.mu.RUnlock()
+		return err
+	}
+	done := make(chan struct{})
+	inst.starting = done
 	settings := m.settings
-	m.stopping = false
-	m.generation++
-	generation := m.generation
+	inst.stopping = false
+	inst.generation++
+	generation := inst.generation
 	m.mu.Unlock()
 
+	err := m.launch(ctx, inst, settings, generation)
+	m.mu.Lock()
+	inst.starting = nil
+	inst.startErr = err
+	if err != nil {
+		inst.lastError = err.Error()
+	}
+	m.mu.Unlock()
+	close(done)
+	m.notify()
+	return err
+}
+
+func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings, generation uint64) error {
 	if err := checkHeadful(settings); err != nil {
 		return err
 	}
@@ -288,17 +506,21 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("找不到 Chrome/Chromium：%w", err)
 	}
-	for _, dir := range []string{m.ProfileDir(), m.cacheDir(), m.crashDir()} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir := m.botDir(inst.id)
+	profileDir := filepath.Join(dir, "profile")
+	cacheDir := filepath.Join(dir, "cache")
+	crashDir := filepath.Join(dir, "crash")
+	for _, path := range []string{profileDir, cacheDir, crashDir} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
 			return fmt.Errorf("建浏览器数据目录失败：%w", err)
 		}
 	}
-	clearSingletonLocks(m.ProfileDir())
-	args := agent.PersistentBrowserArgs(m.ProfileDir(), m.cacheDir(), m.crashDir(),
+	clearSingletonLocks(profileDir)
+	args := agent.PersistentBrowserArgs(profileDir, cacheDir, crashDir,
 		!settings.Headful, 0, settings.WindowWidth, settings.WindowHeight)
 	cmd := exec.Command(executable, args...)
-	cmd.Dir = m.rootDir()
-	cmd.Env = append(agent.BrowserLaunchEnvironment(os.Environ(), m.rootDir()), display.Env()...)
+	cmd.Dir = dir
+	cmd.Env = append(agent.BrowserLaunchEnvironment(os.Environ(), dir), display.Env()...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("读浏览器输出失败：%w", err)
@@ -319,26 +541,25 @@ func (m *Manager) Start(ctx context.Context) error {
 	exited := make(chan struct{})
 	go func() {
 		defer recoverGoroutinePanic("waitProcess")
-		m.waitProcess(cmd, generation, diagnostics, exited)
+		m.waitProcess(inst, cmd, generation, diagnostics, exited)
 	}()
 
 	select {
 	case wsURL := <-found:
 		httpURL, err := debugHTTPBase(wsURL)
 		if err != nil {
-			m.Stop()
+			_ = cmd.Process.Kill()
 			return err
 		}
 		started = true
 		m.mu.Lock()
-		m.cmd = cmd
-		m.display = display
-		m.cdpURL = httpURL
-		m.executable = executable
-		m.startedAt = time.Now()
-		m.lastError = ""
+		inst.cmd = cmd
+		inst.display = display
+		inst.cdpURL = httpURL
+		inst.executable = executable
+		inst.startedAt = time.Now()
+		inst.lastError = ""
 		m.mu.Unlock()
-		m.notify()
 		return nil
 	case <-exited:
 		// 进程自己退了就别再等满超时：绝大多数情况是 profile 被占用或者缺依赖，
@@ -353,18 +574,20 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 }
 
-// Stop 结束进程。登录态留在 profile 目录里，下次起来还在。
-func (m *Manager) Stop() {
-	if m == nil {
+// stop 结束一台机器人的进程。
+func (m *Manager) stop(id string) {
+	m.mu.Lock()
+	inst := m.bots[id]
+	if inst == nil {
+		m.mu.Unlock()
 		return
 	}
-	m.mu.Lock()
-	cmd := m.cmd
-	display := m.display
-	m.stopping = true
-	m.cmd = nil
-	m.display = nil
-	m.cdpURL = ""
+	cmd := inst.cmd
+	display := inst.display
+	inst.stopping = true
+	inst.cmd = nil
+	inst.display = nil
+	inst.cdpURL = ""
 	m.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
@@ -376,22 +599,22 @@ func (m *Manager) Stop() {
 
 // waitProcess 等进程退出。开关还开着、又不是我们主动停的，就按退避重启：
 // 浏览器崩掉之后静悄悄地没了，比崩掉本身更难排查。
-func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64, diagnostics *diagnosticTail, exited chan<- struct{}) {
+func (m *Manager) waitProcess(inst *instance, cmd *exec.Cmd, generation uint64, diagnostics *diagnosticTail, exited chan<- struct{}) {
 	err := cmd.Wait()
 	close(exited)
 	m.mu.Lock()
-	current := m.generation == generation
-	stopping := m.stopping
+	current := inst.generation == generation && inst.cmd == cmd
+	stopping := inst.stopping
 	enabled := m.settings.Enabled
-	display := m.display
+	display := inst.display
 	if current {
-		m.cmd = nil
-		m.display = nil
-		m.cdpURL = ""
+		inst.cmd = nil
+		inst.display = nil
+		inst.cdpURL = ""
 		if !stopping && err != nil {
 			// 只写 exit status 1 等于没说：真正的原因（缺显示器、profile 被占用、
 			// 缺依赖）在进程自己打印的那几行里，状态里不带上就只能去翻后台日志。
-			m.lastError = exitErrorMessage(err, diagnostics)
+			inst.lastError = exitErrorMessage(err, diagnostics)
 		}
 	}
 	m.mu.Unlock()
@@ -407,15 +630,13 @@ func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64, diagnostics *dia
 	// 退避期间配置可能已经改过，新的进程也可能已经起来了。generation 变了就说明
 	// 这一条重启链已经被接替，继续下去只会把新状态的错误信息覆盖成旧的那条。
 	m.mu.RLock()
-	stale := m.generation != generation
-	stillEnabled := m.settings.Enabled && m.cmd == nil
+	stale := inst.generation != generation
+	stillEnabled := m.settings.Enabled && inst.cmd == nil && !inst.stopping
 	m.mu.RUnlock()
 	if stale || !stillEnabled {
 		return
 	}
-	if err := m.Start(context.Background()); err != nil {
-		m.setLastError(err)
-	}
+	_ = m.start(context.Background(), inst.id)
 }
 
 // exitErrorMessage 把退出码和进程最后的输出拼成一句能照着查的话。
@@ -428,16 +649,6 @@ func exitErrorMessage(err error, diagnostics *diagnosticTail) string {
 		message += "。最后的输出：" + tail
 	}
 	return message
-}
-
-func (m *Manager) setLastError(err error) {
-	if err == nil {
-		return
-	}
-	m.mu.Lock()
-	m.lastError = err.Error()
-	m.mu.Unlock()
-	m.notify()
 }
 
 // Watch 返回一个状态变更通知通道，WebUI 用它把状态推给前端。
@@ -530,26 +741,4 @@ func debugHTTPBase(wsURL string) (string, error) {
 		return "", fmt.Errorf("看不懂浏览器报出的调试地址：%s", wsURL)
 	}
 	return "http://" + host, nil
-}
-
-// Unavailable 说明现在为什么用不了内置浏览器。这句话会原样交给模型，
-// 所以要能让它知道下一步该干什么：是去开开关，还是等用户交还控制权。
-func (m *Manager) Unavailable() string {
-	if m == nil {
-		return "内置浏览器未初始化"
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	switch {
-	case !m.settings.Enabled:
-		return ""
-	case m.takeover:
-		return "用户正在人工接管内置浏览器，本轮不要操作它；等用户交还控制权再试"
-	case m.cdpURL == "":
-		if m.lastError != "" {
-			return "内置浏览器没有运行：" + m.lastError
-		}
-		return "内置浏览器还没起来，稍后再试"
-	}
-	return ""
 }

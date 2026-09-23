@@ -2093,11 +2093,32 @@ export function getChangelog(): Promise<ChangelogResponse> {
   return requestJSON<ChangelogResponse>("/api/system/update/changelog");
 }
 
-export function listAppLogs(kind?: AppLogKind, limit = 100): Promise<AppLogsResponse> {
+/** "all" 是操作和错误合在一起（不含调试追踪）。 */
+export function listAppLogs(kind?: AppLogKind | "all", limit = 100): Promise<AppLogsResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (kind) {
     params.set("kind", kind);
   }
+  return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
+}
+
+/** 浏览器页的操作记录：机器人的浏览器动作，加上你在浏览器页上的启停、接管和打开网页。 */
+export const browserActivityActions = [
+  "browser_action",
+  "browser_box_start",
+  "browser_box_stop",
+  "browser_box_takeover",
+  "browser_box_navigate",
+  "browser_source",
+  "browser_control_connect",
+  "browser_control_disconnect",
+  "browser_control_takeover"
+];
+
+/** 取浏览器相关的操作记录；带 botID 时只取这台机器人的。成功和失败的都在里面。 */
+export function listBrowserActivity(botID?: string, limit = 30): Promise<AppLogsResponse> {
+  const params = new URLSearchParams({ kind: "all", limit: String(limit), action: browserActivityActions.join(",") });
+  if (botID) params.set("profile", botID);
   return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
 }
 
@@ -3454,7 +3475,7 @@ export function codingAgentSetup(agent: string, operation: "status" | "install" 
 
 export interface BrowserBoxSettings {
   enabled: boolean;
-  /** 有头窗口。默认无头——容器里没有显示器，无头是唯一能跑起来的模式。 */
+  /** 有头窗口。新装时按本机条件自动选：有显示器或能起 Xvfb 就开。 */
   headful?: boolean;
   window_width?: number;
   window_height?: number;
@@ -3480,52 +3501,98 @@ export interface BrowserBoxTab {
   url?: string;
 }
 
-export function getBrowserBoxStatus(): Promise<BrowserBoxStatus> {
-  return requestJSON<BrowserBoxStatus>("/api/browser-box/status");
+/** 机器人用的浏览器：Diana 内置、用户自己的 Chrome（扩展）；off 表示这一轮一个都用不上。 */
+export type BrowserSource = "off" | "box" | "extension";
+
+export interface BrowserSourceSwitch {
+  enabled: boolean;
+  /** 这一轮能用上：内置是找得到 Chrome，扩展是有扩展连着且没被接管。 */
+  usable: boolean;
+  /** 检测到了：内置是本机找得到 Chrome，扩展是有扩展连上来过。 */
+  detected: boolean;
+  /** 运行依赖，和插件页同一种形状；内置那边的 display 是可选项。 */
+  dependencies: ResolverDependency[];
+}
+
+/** 两个开关各自独立，按 order 每一轮取第一个开着且用得上的，就是 active。 */
+export interface BrowserSourceState {
+  order: Exclude<BrowserSource, "off">[];
+  active: BrowserSource;
+  box: BrowserSourceSwitch;
+  extension: BrowserSourceSwitch;
+}
+
+export function getBrowserSource(): Promise<BrowserSourceState> {
+  return requestJSON<BrowserSourceState>("/api/browser-source");
+}
+
+export function saveBrowserSource(patch: {
+  order?: Exclude<BrowserSource, "off">[];
+  box_enabled?: boolean;
+  extension_enabled?: boolean;
+}): Promise<BrowserSourceState> {
+  return requestJSON<BrowserSourceState>("/api/browser-source", {
+    method: "PUT",
+    body: JSON.stringify(patch)
+  });
+}
+
+// 内置浏览器按机器人各用一份登录态，进程相关的接口都带上 ?bot=。不带时 status
+// 只回全局配置和本机能不能找到浏览器。
+function browserBoxPath(path: string, botID?: string, extra?: Record<string, string>): string {
+  const params = new URLSearchParams();
+  if (botID) params.set("bot", botID);
+  for (const [key, value] of Object.entries(extra ?? {})) params.set(key, value);
+  const query = params.toString();
+  return `/api/browser-box/${path}${query ? `?${query}` : ""}`;
+}
+
+export function getBrowserBoxStatus(botID?: string): Promise<BrowserBoxStatus> {
+  return requestJSON<BrowserBoxStatus>(browserBoxPath("status", botID));
 }
 
 export function saveBrowserBoxSettings(
-  settings: BrowserBoxSettings
+  settings: BrowserBoxSettings,
+  botID?: string
 ): Promise<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }> {
-  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>("/api/browser-box/settings", {
+  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>(browserBoxPath("settings", botID), {
     method: "PUT",
     body: JSON.stringify(settings)
   });
 }
 
-export function startBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
-  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/start", { method: "POST" });
+export function startBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("start", botID), { method: "POST" });
 }
 
-export function stopBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
-  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/stop", { method: "POST" });
+export function stopBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("stop", botID), { method: "POST" });
 }
 
-export function setBrowserBoxTakeover(active: boolean): Promise<{ ok: boolean; active: boolean }> {
-  return requestJSON<{ ok: boolean; active: boolean }>("/api/browser-box/takeover", {
+export function setBrowserBoxTakeover(botID: string, active: boolean): Promise<{ ok: boolean; active: boolean }> {
+  return requestJSON<{ ok: boolean; active: boolean }>(browserBoxPath("takeover", botID), {
     method: "POST",
     body: JSON.stringify({ active })
   });
 }
 
-export function listBrowserBoxTabs(): Promise<{ tabs: BrowserBoxTab[] }> {
-  return requestJSON<{ tabs: BrowserBoxTab[] }>("/api/browser-box/tabs");
+export function listBrowserBoxTabs(botID: string): Promise<{ tabs: BrowserBoxTab[] }> {
+  return requestJSON<{ tabs: BrowserBoxTab[] }>(browserBoxPath("tabs", botID));
 }
 
-export function openBrowserBoxTab(url: string): Promise<{ tab: BrowserBoxTab }> {
-  return requestJSON<{ tab: BrowserBoxTab }>("/api/browser-box/tabs", {
+export function openBrowserBoxTab(botID: string, url: string): Promise<{ tab: BrowserBoxTab }> {
+  return requestJSON<{ tab: BrowserBoxTab }>(browserBoxPath("tabs", botID), {
     method: "POST",
     body: JSON.stringify({ url })
   });
 }
 
-export function closeBrowserBoxTab(id: string): Promise<{ ok: boolean }> {
-  return requestJSON<{ ok: boolean }>(`/api/browser-box/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
+export function closeBrowserBoxTab(botID: string, id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(browserBoxPath(`tabs/${encodeURIComponent(id)}`, botID), { method: "DELETE" });
 }
 
 /** 实时画面的 WebSocket 地址。页面是 https 时自动用 wss。 */
-export function browserBoxLiveURL(tabID?: string): string {
+export function browserBoxLiveURL(botID: string, tabID?: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const query = tabID ? `?tab=${encodeURIComponent(tabID)}` : "";
-  return `${protocol}//${window.location.host}/api/browser-box/live${query}`;
+  return `${protocol}//${window.location.host}${browserBoxPath("live", botID, tabID ? { tab: tabID } : undefined)}`;
 }

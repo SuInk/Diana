@@ -2,7 +2,7 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <!-- 浏览器页里的一档，卡片头和另外几档用同一套：标题、一句说明、右侧小刷新。 -->
+  <!-- 浏览器页「高级」里的外接浏览器，卡片头和页面其余卡片用同一套：标题、一句说明、右侧小刷新。 -->
   <section class="card">
     <div class="card-header">
       <h2>外接浏览器（CDP）</h2>
@@ -15,7 +15,7 @@
     <template v-else-if="!botScope"><p class="hint">先在顶部选一个机器人。</p></template>
     <template v-else>
       <!-- 这一条要摆在输入框前面：它是这个功能唯一的真实风险，看到地址再想起来就晚了。 -->
-      <p class="hint">这几个工具操作的是一个已经开着的浏览器，它登录着谁的账号，模型就以谁的身份点下去。只接你自己起的、专门给它用的浏览器实例，别接日常那个。要读公开网页用不着它——那是上面的「一次性无头渲染」，不带登录态。</p>
+      <p class="hint">这几个工具操作的是一个已经开着的浏览器，它登录着谁的账号，模型就以谁的身份点下去。只接你自己起的、专门给它用的浏览器实例，别接日常那个。要读公开网页用不着它——那是一次性无头渲染，不带登录态、一直可用。</p>
       <div class="browser-form">
         <label class="field">
           CDP 地址

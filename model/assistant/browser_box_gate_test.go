@@ -3,7 +3,12 @@
 
 package assistant
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/SuInk/diana/model/agent"
+)
 
 // 开关要能从 WebUI 存进配置再读回来。配置在这一层是逐字段抄的，
 // 漏抄一个字段的表现是「WebUI 上点了，保存后又变回原样」，界面上看不出原因。
@@ -57,5 +62,36 @@ func TestBrowserBoxToolsStayOwnerOnly(t *testing.T) {
 
 type stubBuiltinBrowser struct{ url string }
 
-func (s stubBuiltinBrowser) AgentCDPURL() string { return s.url }
-func (s stubBuiltinBrowser) Unavailable() string { return "" }
+func (s stubBuiltinBrowser) Endpoint(context.Context) (string, error) { return s.url, nil }
+
+// BrowserFor 让同一个桩同时充当按机器人取浏览器的提供方。
+func (s stubBuiltinBrowser) BrowserFor(string) agent.BuiltinBrowserBridge { return s }
+
+// recordingBrowserProvider 记下运行时按哪台机器人取的浏览器。
+type recordingBrowserProvider struct{ asked []string }
+
+func (p *recordingBrowserProvider) BrowserFor(botID string) agent.BuiltinBrowserBridge {
+	p.asked = append(p.asked, botID)
+	return stubBuiltinBrowser{url: "http://127.0.0.1:1234/" + botID}
+}
+
+// 每台机器人各用一份登录态：运行时必须按这台机器人自己的 ID 去取浏览器。
+func TestBrowserBoxIsPerBot(t *testing.T) {
+	provider := &recordingBrowserProvider{}
+	runtime := &Runtime{}
+	runtime.SetBrowserBox(provider)
+	for _, id := range []string{"bot-a", "bot-b"} {
+		cfg := DefaultBotConfig()
+		cfg.ID = id
+		bridge := runtime.browserBoxFor(cfg)
+		if bridge == nil {
+			t.Fatalf("%s 应拿到内置浏览器", id)
+		}
+		if url, _ := bridge.Endpoint(context.Background()); url != "http://127.0.0.1:1234/"+id {
+			t.Fatalf("%s 拿到的是别人的浏览器：%s", id, url)
+		}
+	}
+	if len(provider.asked) != 2 || provider.asked[0] != "bot-a" || provider.asked[1] != "bot-b" {
+		t.Fatalf("运行时没有按机器人取浏览器：%v", provider.asked)
+	}
+}

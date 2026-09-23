@@ -7,6 +7,7 @@ import type {
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
+  BrowserBoxSettings,
   BrowserControlToken,
   LLMConfig,
   OpenAPIKey,
@@ -635,8 +636,12 @@ const residencyEntries: AgentResidencyEntry[] = [
 // 演示数据从「还没列过名单」开始，跟着内置推荐走——新装的机器人就是这个样子。
 let residencyListed = false;
 
+// 浏览器来源在演示里从「Diana 内置」开始：它是推荐的那个。扩展那边的配置照样
+// 预填好，切过去就能看到授权边界长什么样。
+let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true, headful: true };
+let demoBrowserSourceOrder: ("box" | "extension")[] = ["box", "extension"];
 let demoBrowserControlPolicy = {
-  enabled: true,
+  enabled: false,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
   allowed_hosts: ["example.com", "*.wiki.example.com"],
   denied_hosts: ["admin.example.com"],
@@ -723,6 +728,53 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const keyID = decodeURIComponent(path.split("/").pop() ?? "");
     demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
     return json({ revoked: true });
+  }
+  // 浏览器来源：演示里内置浏览器找得到 Chrome，扩展有一条连着（见下面的 connections）。
+  const demoBrowserSourceState = () => {
+    const box = {
+      enabled: Boolean(demoBrowserBoxSettings.enabled),
+      usable: Boolean(demoBrowserBoxSettings.enabled),
+      detected: true,
+      dependencies: [
+        { name: "browser-renderer", purpose: "网页渲染：使用系统 Chromium / Google Chrome", available: true, version: "Chromium 141", installable: true },
+        { name: "cjk-font", purpose: "中文字体：关系图与中文截图", available: false, detail: "没有找到能画中文的字体文件", installable: true, installer: "apt-get" },
+        { name: "display", purpose: "开真窗口：图形会话或 Xvfb 虚拟屏（可选）", available: true, version: "Xvfb 虚拟屏", installable: false }
+      ]
+    };
+    const extension = {
+      enabled: demoBrowserControlPolicy.enabled,
+      usable: demoBrowserControlPolicy.enabled,
+      detected: true,
+      dependencies: [
+        { name: "browser-extension", purpose: "Diana 浏览器控制扩展：装在你的 Chrome 里，反向连到这里", available: true, version: "Chromium 141", installable: false }
+      ]
+    };
+    const active = demoBrowserSourceOrder.find((key) => (key === "box" ? box : extension).usable) ?? "off";
+    return { order: demoBrowserSourceOrder, active, box, extension };
+  };
+  if (path === "/api/browser-source" && method === "GET") return json(demoBrowserSourceState());
+  if (path === "/api/browser-source" && method === "PUT") {
+    if (typeof body.box_enabled === "boolean") demoBrowserBoxSettings = { ...demoBrowserBoxSettings, enabled: body.box_enabled };
+    if (typeof body.extension_enabled === "boolean") demoBrowserControlPolicy = { ...demoBrowserControlPolicy, enabled: body.extension_enabled };
+    if (Array.isArray(body.order)) demoBrowserSourceOrder = body.order as ("box" | "extension")[];
+    return json(demoBrowserSourceState());
+  }
+  // 内置浏览器在演示里不起进程：开着但没在跑，画面那块不会去连实时流。每台机器人
+  // 各有一份登录态目录，和真实后端一样按 ?bot= 区分。
+  const demoBrowserBoxStatus = () => {
+    const bot = url.searchParams.get("bot") ?? "";
+    return {
+      settings: demoBrowserBoxSettings,
+      running: false,
+      takeover: false,
+      available: true,
+      ...(bot ? { bot, profile_dir: `/data/browser-box/profiles/${bot}/profile` } : {})
+    };
+  };
+  if (path === "/api/browser-box/status" && method === "GET") return json(demoBrowserBoxStatus());
+  if (path === "/api/browser-box/settings" && method === "PUT") {
+    demoBrowserBoxSettings = { ...demoBrowserBoxSettings, ...(body as unknown as BrowserBoxSettings) };
+    return json({ settings: demoBrowserBoxSettings, status: demoBrowserBoxStatus() });
   }
   // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
   // 看不出授权边界长什么样。写操作在演示里始终关着。
@@ -1406,9 +1458,28 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(task);
   }
 
+  // 浏览器页的操作记录：按 action 和 profile 筛，和真实后端一致。
+  if (path === "/api/logs" && url.searchParams.get("action")) {
+    const actions = new Set((url.searchParams.get("action") ?? "").split(","));
+    const profile = url.searchParams.get("profile") ?? "";
+    const browserLogs: AppLogEntry[] = [
+      { id: "browser-log-1", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里打开网页", actor: "qq:100200711", actor_name: "青禾", target: "https://github.com/SuInk/Diana/releases", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(3) },
+      { id: "browser-log-2", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里读取页面", actor: "qq:100200711", actor_name: "青禾", target: ".release-header", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(3) },
+      { id: "browser-log-3", kind: "error", level: "error", action: "browser_action", message: "机器人在内置浏览器里点击失败", detail: "找不到元素：button.download（模拟数据）", actor: "qq:100200711", actor_name: "青禾", target: "button.download", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(4) },
+      { id: "browser-log-4", kind: "operation", level: "info", action: "browser_box_takeover", message: "你在画面上动手，内置浏览器已自动转为你接管", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
+      { id: "browser-log-5", kind: "operation", level: "info", action: "browser_box_navigate", message: "你在内置浏览器里打开了网页", actor: "webui:demo", target: "https://accounts.example.com/login", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
+      { id: "browser-log-6", kind: "operation", level: "info", action: "browser_box_start", message: "你启动了内置浏览器", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(13) },
+      { id: "browser-log-7", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里截图", actor: "telegram:880024", target: "", metadata: { profile_id: "bot-telegram", source: "box" }, created_at: before(40) }
+    ];
+    return json({ logs: browserLogs.filter((log) => actions.has(log.action) && (!profile || log.metadata?.profile_id === profile)) });
+  }
   if (path === "/api/logs") {
     const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
-    return json({ logs: url.searchParams.get("kind") === "error" ? errorLogs : logs });
+    const kind = url.searchParams.get("kind");
+    if (kind === "all") {
+      return json({ logs: [...logs, ...errorLogs].sort((a, b) => b.created_at.localeCompare(a.created_at)) });
+    }
+    return json({ logs: kind === "error" ? errorLogs : logs });
   }
 
   if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", build_type: "release", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });
