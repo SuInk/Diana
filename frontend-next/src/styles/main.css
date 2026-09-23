@@ -412,11 +412,6 @@ code {
   font-weight: 500;
 }
 
-.model-role-more {
-  align-self: flex-start;
-  margin: 0 0 12px -8px;
-}
-
 .model-role-note {
   margin: 0;
   padding-top: 12px;

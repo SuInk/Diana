@@ -623,14 +623,14 @@
                     <AppSelect
                       :model-value="roleSelectionValue(role.key)"
                       :options="channelOptionsFor(role.key)"
-                      placeholder="请选择提供商 / 分组"
+                      :placeholder="isPurposeRole(role.key) ? '不指定，跟随对话' : '请选择提供商 / 分组'"
                       @update:model-value="(value) => setRoleChannel(role.key, value)"
                     />
                     <AppSelect
                       :model-value="roleModelValue(role.key)"
                       :options="modelOptionsFor(role.key)"
-                      :disabled="roleForm[role.key]?.follow_chat || (role.key === 'media_parse' && !roleForm[role.key])"
-                      :placeholder="role.key === 'media_parse' && !roleForm[role.key] ? '跟随视觉理解模型' : roleForm[role.key]?.follow_chat ? '跟随对话模型' : '请选择模型（必填）'"
+                      :disabled="roleForm[role.key]?.follow_chat || (isOptionalRole(role.key) && !roleForm[role.key])"
+                      :placeholder="roleModelPlaceholder(role.key)"
                       @update:model-value="(value) => setRoleModel(role.key, value)"
                     />
                     <button
@@ -685,15 +685,6 @@
                 </div>
                 <p class="model-role-desc muted">{{ role.description }}</p>
               </div>
-              <button
-                v-if="!roleForm.background || purposeRolesOpen"
-                class="btn ghost small model-role-more"
-                type="button"
-                @click="purposeRolesOpen = !purposeRolesOpen"
-              >
-                <ChevronDown :size="14" :class="{ 'recent-chevron-open': purposeRolesOpen }" aria-hidden="true" />
-                {{ purposeRolesOpen ? "收起后台生成" : "后台生成（好感度 / 长期记忆）可以单独指模型" }}
-              </button>
               <p class="muted model-role-note">
                 每个用途的主路由和后备路由按从上到下的顺序依次尝试。有后备时，拖动左侧的名称可以调整顺序（也可以聚焦后按 ↑ ↓ 键），
                 拖到最上面的那条就成为主路由，原来的主路由顺延为后备。
@@ -2019,7 +2010,7 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { formatClock } from "../format";
@@ -3451,7 +3442,7 @@ const modelRoleRows: ModelRoleRow[] = [
     description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
   }
 ];
-// 后台生成是从「意图识别」里拆出来的一档。留空就跟着意图识别，行为和拆之前一样。
+// 后台生成是从「意图识别」里拆出来的一档。留空时后端按用途归属找不到绑定，回落到对话。
 const purposeRoleRows: ModelRoleRow[] = [
   {
     key: "background",
@@ -3463,14 +3454,25 @@ const purposeRoleRows: ModelRoleRow[] = [
   }
 ];
 
-// 细分用途默认收起：绝大多数部署只需要「意图识别」一档，13 行铺开会把这一页淹掉。
-const purposeRolesOpen = ref(false);
-// 收起时仍然显示已经配过的那几行，否则配完一收就找不到在哪改了。
-const visibleModelRoleRows = computed(() =>
-  purposeRolesOpen.value
-    ? [...modelRoleRows, ...purposeRoleRows]
-    : [...modelRoleRows, ...purposeRoleRows.filter((row) => roleForm.value[row.key])]
-);
+// 细分用途只剩后台生成一档，直接和其他用途一起铺开，不再折叠。
+const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows];
+
+function isPurposeRole(role: RoleKey): boolean {
+  return purposeRoleKeys.includes(role as (typeof purposeRoleKeys)[number]);
+}
+
+// 媒体解析和细分用途可以不配，不配时模型一栏锁定，占位文字说明它跟着谁走。
+function isOptionalRole(role: RoleKey): boolean {
+  return role === "media_parse" || isPurposeRole(role);
+}
+
+function roleModelPlaceholder(role: RoleKey): string {
+  if (!roleForm.value[role]) {
+    if (role === "media_parse") return "跟随视觉理解模型";
+    if (isPurposeRole(role)) return "跟随对话模型";
+  }
+  return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
+}
 
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
