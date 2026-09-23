@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/applog"
 )
 
 // forwardTimeoutChannel 让打包发送在真实投递结果未知的情况下超时。
@@ -205,5 +207,44 @@ func TestResolverForwardFallsBackToStagingWhenCustomNodesRejected(t *testing.T) 
 	}
 	if sent := base.sentSnapshot(); len(sent) != 0 {
 		t.Fatalf("fallback degraded all the way to direct sends: %#v", sent)
+	}
+}
+
+// 合并转发整个发不出去时退回逐条发送，群里看到的就是刷屏；这一步以前只打到终端，
+// 现在必须在运行日志里留一条。
+type forwardRejectingChannel struct {
+	*recordingChannel
+}
+
+func (c *forwardRejectingChannel) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	if action == "send_group_forward_msg" {
+		return nil, fmt.Errorf("forward message is not supported")
+	}
+	return c.recordingChannel.CallAPI(ctx, action, params)
+}
+
+func TestResolverForwardFallbackIsLogged(t *testing.T) {
+	base := resolverForwardChannel()
+	channel := &forwardRejectingChannel{recordingChannel: base}
+	runtime := NewRuntime(BotConfig{BotAccount: "42", Name: "Diana"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "m1", SelfID: "42"}
+	resp := resolverForwardTestResponse()
+
+	if err := runtime.sendForwardPluginResponse(context.Background(), event, resp, runtime.effectiveConfigForEvent(event)); err != nil {
+		t.Fatalf("direct fallback failed: %v", err)
+	}
+	if sent := base.sentSnapshot(); len(sent) == 0 {
+		t.Fatal("forward failure did not fall back to direct sends")
+	}
+	var fallback *applog.Entry
+	for _, entry := range logs.entriesSnapshot() {
+		if entry.Action == "resolver_forward_fallback" {
+			fallback = &entry
+		}
+	}
+	if fallback == nil || fallback.Target != "m1" || fallback.Metadata["count"] != len(resp.ForwardMessages) || !strings.Contains(fallback.Detail, "not supported") {
+		t.Fatalf("fallback log = %#v", fallback)
 	}
 }

@@ -459,6 +459,7 @@ func main() {
 	}
 	botRuntime.SetLLMModelLister(modelListFactory)
 	botRuntime.SetAppLogWriter(sqliteStore)
+	oneBotServer.SetAppLogWriter(sqliteStore)
 	configuredMediaBaseURL := strings.TrimSpace(appCfg.Storage.LocalMediaBaseURL)
 	localMediaBaseURL := stringOr(
 		configuredMediaBaseURL,

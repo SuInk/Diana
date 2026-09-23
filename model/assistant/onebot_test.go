@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -461,6 +462,38 @@ func TestReverseServerRecordsUnauthorizedHandshake(t *testing.T) {
 	status := server.Status()
 	if status.UnauthorizedConnections != 1 || status.LastConnectionEvent != "unauthorized:token_mismatch" || status.LastRejectedClient == "" {
 		t.Fatalf("status = %#v", status)
+	}
+}
+
+// 握手被拒以前只打到终端。机器人全停用时运行时已经退出，只有监听器自己能记，
+// 所以由它直接写运行日志；接入端几秒重连一次，同一原因和客户端一分钟只记一条。
+func TestReverseServerWritesRejectionToAppLog(t *testing.T) {
+	const token = "0123456789abcdef"
+	server := NewOneBotReverseServer(OneBotConfig{AccessToken: token})
+	logs := &captureAppLogs{}
+	server.SetAppLogWriter(logs)
+	// 接入端每次重连换一个本地端口，仍然是同一个客户端。
+	for port := range 3 {
+		request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+		request.RemoteAddr = fmt.Sprintf("172.18.0.3:%d", 40000+port)
+		request.Header.Set("Authorization", "Bearer wrong-token-value")
+		request.Header.Set("X-Self-ID", "10001")
+		request.Header.Set("User-Agent", "SnowLuma/1.2 (linux)")
+		server.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("rejection logs = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != "onebot_handshake_rejected" || entry.Metadata["reason"] != "token_mismatch" || !strings.Contains(entry.Message, "不一致") {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if entry.Target != "172.18.0.3 · QQ 10001 · SnowLuma/1.2" {
+		t.Fatalf("client label = %q", entry.Target)
+	}
+	if strings.Contains(entry.Message+entry.Detail+entry.Target, "wrong-token-value") {
+		t.Fatal("rejection log leaked the presented token")
 	}
 }
 
