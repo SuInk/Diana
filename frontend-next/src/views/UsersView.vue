@@ -248,6 +248,9 @@
 
         <section>
           <h3 class="detail-section-title">好感度变更（最近 {{ detail.favorability_changes.length }} 条）</h3>
+          <p class="muted" style="font-size: 12.5px; margin-bottom: 8px">
+            <button type="button" class="btn ghost small" @click="openEvaluations(detail.profile)">查看每一次后台评估</button>
+          </p>
           <div v-if="detail.favorability_changes.length > 0" class="stack" style="gap: 8px">
             <article v-for="change in detail.favorability_changes" :key="change.id" class="memory-item">
               <div class="cluster" style="gap: 6px">
@@ -312,8 +315,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { botScope } from "../bot-scope";
+import { navigate, viewQuery } from "../router";
 import { ChevronDown, ChevronRight, ChevronUp, Pencil, RefreshCw, Save, Trash2 } from "@lucide/vue";
 import {
   getAssistantUser,
@@ -456,7 +460,8 @@ const portraitGroups = computed<{ field: string; label: string; traits: UserPort
 });
 const detailTitle = computed(() => {
   if (!selected.value) return "";
-  const name = selected.value.display_name || selected.value.user_id;
+  // 从别的页面按账号直接打开时，列表项里还没有名字，等详情回来再用档案里的。
+  const name = selected.value.display_name || detail.value?.profile.display_name || selected.value.user_id;
   return `${name} 的画像与记忆`;
 });
 
@@ -573,8 +578,21 @@ watch(botScope, () => {
   reload();
 });
 
+// 后台评估的时间线在「记录 → 好感变化」，从这里跳过去只看这一个人。
+function openEvaluations(profile: UserMemoryProfile): void {
+  navigate("favorability", { user_id: profile.user_id });
+}
+
 onMounted(() => {
   reload();
+  // 从好感变化页点名字跳过来时直接打开这个人的详情。
+  const params = viewQuery();
+  const userID = params.get("user")?.trim();
+  if (userID) {
+    // 必须是响应式对象：openDetail 靠 selected.value === user 判断回来的请求是否还作数，
+    // ref 里存的是代理，传普通对象进去永远对不上，详情就一直停在加载中。
+    void openDetail(reactive({ user_id: userID, bot_profile_id: params.get("profile") ?? botScope.value }) as UserMemoryProfile);
+  }
 });
 </script>
 

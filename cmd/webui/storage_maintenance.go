@@ -57,6 +57,14 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 				log.Printf("storage maintenance: deleted %d expired repository issue drafts", count)
 			}
 			stopDrafts()
+			// 好感度评估记录每条回复一条，和日志一样按普通日志的保留天数清理。
+			evalCtx, stopEval := context.WithTimeout(ctx, 2*time.Minute)
+			if count, err := store.PruneRelationshipEvaluations(evalCtx, logRetentionCutoff(now, cfg.LogRetentionDays, 30)); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: prune relationship evaluations: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: deleted %d expired relationship evaluations", count)
+			}
+			stopEval()
 			runCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
 			count, err := store.PruneLogs(runCtx,
 				logRetentionCutoff(now, cfg.DebugLogRetentionDays, 7),

@@ -16,6 +16,7 @@ export type ViewID =
   | "plugins"
   | "browser"
   | "logs"
+  | "favorability"
   | "settings";
 
 // NavGroupID 是侧边栏的分组。分组本来就存在，只是以前只写在下面这段注释里：
@@ -55,7 +56,7 @@ export const navItems: NavItem[] = [
   { id: "users", label: "记忆", hint: "机器人记住的人和事", group: "operate", covers: ["notebook"] },
   { id: "tasks", label: "任务", hint: "提醒、周期查询与仓库订阅", group: "operate" },
   { id: "browser", label: "浏览器", hint: "Diana 内置浏览器：看画面、自己上手", group: "operate" },
-  { id: "events", label: "记录", hint: "消息处理、回复决策与运行日志", group: "operate", covers: ["logs"] },
+  { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感变化", group: "operate", covers: ["logs", "favorability"] },
   { id: "settings", label: "设置", hint: "主题与系统更新" }
 ];
 
@@ -84,7 +85,7 @@ export function navSections(): { group?: NavGroup; items: NavItem[] }[] {
   return sections;
 }
 
-const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "plugins", "browser", "logs", "settings"]);
+const validViews = new Set<ViewID>(["dashboard", "events", "tasks", "setup", "provider", "bot", "groups", "users", "notebook", "plugins", "browser", "logs", "favorability", "settings"]);
 
 // 首页：地址栏里是根路径，也是所有认不出来的地址的落点。
 const homeView: ViewID = "dashboard";

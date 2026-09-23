@@ -23,6 +23,7 @@ import type {
   StatsSnapshot,
   UpdateStatus,
   UserFavorabilityChange,
+  RelationshipEvaluation,
   UserMemoryProfile,
   WorldBookNode
 } from "./api";
@@ -438,6 +439,17 @@ const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
     { id: 4, user_id: "100200888", delta: -3, before_score: -5, after_score: -8, source: "interaction", reason: "重复发送广告内容", group_id: "100200519", created_at: before(3000) }
   ]
 };
+
+// 后台好感度评估：每种结果各给一两条，演示站打开「显示未变化」能看到全部分类。
+const demoRelationshipEvaluations: RelationshipEvaluation[] = [
+  { id: 9, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "@Diana 帮我总结一下今天的发布变更，谢啦", status: "changed", proposed_delta: 1, applied_delta: 1, before_score: 61, after_score: 62, confidence: 0.92, reason: "真诚道谢，互动友好", model: "gpt-5.4-mini", created_at: before(2) },
+  { id: 8, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "画一张雨夜城市里的复古电车", status: "unchanged", proposed_delta: 0, applied_delta: 0, before_score: 35, after_score: 35, confidence: 0.96, reason: "普通的生图请求，不影响关系", model: "gpt-5.4-mini", created_at: before(31) },
+  { id: 7, bot_profile_id: "bot-onebot", user_id: "100201014", sender_name: "白榆", group_id: "100200418", message_text: "你今天好像有点笨哦", status: "low_confidence", proposed_delta: -1, applied_delta: 0, before_score: 12, after_score: 12, confidence: 0.55, reason: "可能是玩笑，也可能在抱怨，不好判断", model: "gpt-5.4-mini", created_at: before(47) },
+  { id: 6, bot_profile_id: "bot-onebot", user_id: "100200001", sender_name: "主人", message_text: "今天也辛苦你了", status: "capped", proposed_delta: 2, applied_delta: 0, before_score: 200, after_score: 200, confidence: 0.9, reason: "主人的关心", model: "gpt-5.4-mini", created_at: before(95) },
+  { id: 5, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "刚才那张图太好看了！", status: "skipped", proposed_delta: 0, applied_delta: 0, before_score: 0, after_score: 0, confidence: 0, error: "后台评估同时进行的数量已满，这一轮跳过", created_at: before(120) },
+  { id: 4, bot_profile_id: "bot-onebot", user_id: "100200888", sender_name: "路人甲", group_id: "100200519", message_text: "加群领福利，私聊我", status: "changed", proposed_delta: -3, applied_delta: -3, before_score: -5, after_score: -8, confidence: 0.97, reason: "重复发送广告内容", model: "gpt-5.4-mini", created_at: before(3000) },
+  { id: 3, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "部署好了，多亏你", status: "failed", proposed_delta: 0, applied_delta: 0, before_score: 60, after_score: 60, confidence: 0, error: "context deadline exceeded（模拟数据）", created_at: before(3200) }
+];
 
 export const demoEvents: AssistantEventDetail[] = [
   { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, reply_models: ["gpt-5.4"], models: [{ model: "gpt-5.4-mini", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.4", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
@@ -1066,6 +1078,14 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     }
     return json({ ok: true, updated });
+  }
+
+  if (path === "/api/assistant/favorability/evaluations") {
+    const statuses = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
+    const userID = url.searchParams.get("user_id") ?? "";
+    const evaluations = demoRelationshipEvaluations.filter((item) =>
+      (statuses.length === 0 || statuses.includes(item.status)) && (!userID || item.user_id === userID));
+    return json({ evaluations });
   }
 
   if (path === "/api/assistant/users") {

@@ -2578,6 +2578,53 @@ export interface UserMemoryProfile {
   updated_at?: string;
 }
 
+// RelationshipEvaluationStatus 是一次后台好感度评估的结果分类。
+export type RelationshipEvaluationStatus = "changed" | "capped" | "unchanged" | "low_confidence" | "failed" | "skipped";
+
+// RelationshipEvaluation 是一次后台好感度评估：不只是分数变了的，判 0、把握不够、
+// 失败和排满跳过的也在里面。
+export interface RelationshipEvaluation {
+  id: number;
+  bot_profile_id?: string;
+  user_id: string;
+  sender_name?: string;
+  group_id?: string;
+  message_id?: string;
+  message_text?: string;
+  status: RelationshipEvaluationStatus;
+  proposed_delta: number;
+  applied_delta: number;
+  before_score: number;
+  after_score: number;
+  confidence: number;
+  reason?: string;
+  model?: string;
+  error?: string;
+  created_at: string;
+}
+
+export interface RelationshipEvaluationsResponse {
+  evaluations: RelationshipEvaluation[];
+  next_before_id?: number;
+}
+
+export interface RelationshipEvaluationsQuery {
+  profile?: string;
+  userID?: string;
+  statuses?: RelationshipEvaluationStatus[];
+  beforeID?: number;
+  limit?: number;
+}
+
+export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery = {}): Promise<RelationshipEvaluationsResponse> {
+  const params = new URLSearchParams({ limit: String(query.limit ?? 50) });
+  if (query.profile) params.set("profile", query.profile);
+  if (query.userID) params.set("user_id", query.userID);
+  if (query.statuses?.length) params.set("status", query.statuses.join(","));
+  if (query.beforeID) params.set("before_id", String(query.beforeID));
+  return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);
+}
+
 export interface UserFavorabilityChange {
   id: number;
   user_id: string;
