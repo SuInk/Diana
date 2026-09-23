@@ -3682,6 +3682,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if platform := NormalizePlatformID(event.Platform); platform == PlatformTelegram || IsOneBotPlatform(platform) {
 				if _, settings, enabled := r.pluginWithSettingsForEvent(fileDeliveryPluginID, event); enabled {
 					extraTools = append(extraTools, newDianaFileDeliveryTool(r, event, settings, relationship))
+					if settings.Bool(fileDeliverySettingRenderMedia, true) {
+						extraTools = append(extraTools, newDianaRenderMediaTool(r, event, settings, relationship))
+					}
 				}
 			}
 			// 图片溯源同样按插件开关走：反查要把图片上传给第三方图库，不是每个

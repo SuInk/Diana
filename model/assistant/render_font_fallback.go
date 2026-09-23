@@ -215,6 +215,16 @@ func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []
 // Download only fonts required by visible text. System faces remain the first
 // choice; downloaded faces are staged beside the generated HTML for Chromium.
 func prepareRenderFontHTML(ctx context.Context, page string) (string, []string, error) {
+	return prepareRenderFonts(ctx, page, true)
+}
+
+// prepareAuthoredHTMLFonts 给模型自己写样式的 HTML 备字体。和上面的区别是不
+// 用 !important 压字体：页面自己指定的字体优先，没指定的地方才落到兜底栈。
+func prepareAuthoredHTMLFonts(ctx context.Context, page string) (string, []string, error) {
+	return prepareRenderFonts(ctx, page, false)
+}
+
+func prepareRenderFonts(ctx context.Context, page string, forced bool) (string, []string, error) {
 	groups, unknown := renderFontNeeds(visibleRenderText(page))
 	var files []string
 	covered := []*sfnt.Font{}
@@ -314,12 +324,20 @@ func prepareRenderFontHTML(ctx context.Context, page string) (string, []string, 
 		families = append(families, fmt.Sprintf("%q", family))
 	}
 	stack := strings.Join(families, ",") + "," + renderFontStack
+	if !forced {
+		fmt.Fprintf(&css, `:where(html){font-family:%s}</style>`, stack)
+		return insertHeadHTML(page, css.String()), files, nil
+	}
 	fmt.Fprintf(&css, `body,.render-root,svg text,svg tspan,svg foreignObject *{font-family:%s!important}code,pre,kbd,samp{font-family:"SFMono-Regular",Menlo,Consolas,%s,monospace!important}</style>`, stack, strings.Join(families, ","))
+	return insertHeadHTML(page, css.String()), files, nil
+}
+
+func insertHeadHTML(page, css string) string {
 	insertion := strings.Index(strings.ToLower(page), "</head>")
 	if insertion < 0 {
-		return css.String() + page, files, nil
+		return css + page
 	}
-	return page[:insertion] + css.String() + page[insertion:], files, nil
+	return page[:insertion] + css + page[insertion:]
 }
 
 // The Go raster path uses one font and no complex shaping. Route these labels
