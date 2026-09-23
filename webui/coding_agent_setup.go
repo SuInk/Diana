@@ -36,7 +36,7 @@ func (h *BotHandler) codingAgentSetup(c *gin.Context) {
 		result, err = assistant.CodingAgentSetup(c.Request.Context(), settings, payload.Agent, payload.Operation)
 	}
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusBadRequest, "coding_setup", err, payload.Agent, map[string]any{"operation": payload.Operation})
 		return
 	}
 	if payload.Operation != "status" && payload.Operation != "login-status" {

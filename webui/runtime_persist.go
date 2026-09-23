@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -22,6 +23,14 @@ func (p *RuntimePersistor) SaveModelRole(cfg assistant.BotConfig, role string, n
 
 type RuntimePersistor struct {
 	store BotProfileStore
+	logs  AppLogWriter
+}
+
+// SetAppLogWriter 设置落盘失败时写入的运行日志。
+func (p *RuntimePersistor) SetAppLogWriter(logs AppLogWriter) {
+	if p != nil {
+		p.logs = logs
+	}
 }
 
 // NewRuntimePersistor 创建机器人运行态配置持久化器。
@@ -38,5 +47,7 @@ func (p *RuntimePersistor) SaveBotConfig(cfg assistant.BotConfig) {
 	// 但至少要留一行日志，否则改完配置重启又变回去时没有任何线索。
 	if err := p.store.SaveProfileConfig(cfg); err != nil {
 		log.Printf("persist diana runtime config failed: %v", err)
+		recordError(context.Background(), p.logs, "runtime_config_persist", err, cfg.ID,
+			map[string]any{"note": "机器人指令改的配置没存下来，重启后会变回原样"})
 	}
 }

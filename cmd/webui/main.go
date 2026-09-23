@@ -381,6 +381,7 @@ func main() {
 	systemHandler.SetReleasePackageUpdater(releaseUpdater)
 	systemHandler.StartAutoUpdate(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
+	runtimePersistor.SetAppLogWriter(sqliteStore)
 	plugins := assistant.NewDefaultPluginManager()
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
 		log.Fatal(err)

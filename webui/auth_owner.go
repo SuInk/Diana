@@ -145,12 +145,12 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 
 	code, err := randomOwnerCode()
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "auth_owner_pair_create", err, "", nil)
 		return
 	}
 	token, err := randomOwnerPairingToken()
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "auth_owner_pair_create", err, "", nil)
 		return
 	}
 
@@ -165,19 +165,19 @@ func (h *OwnerLoginHandler) createPairing(c *gin.Context) {
 	if since := now.Sub(h.lastCreated[requestIP]); since < ownerPairingCreateDelay {
 		h.mu.Unlock()
 		wait := int((ownerPairingCreateDelay - since).Seconds()) + 1
-		writeError(c, http.StatusTooManyRequests, fmt.Errorf("请求过于频繁，请 %d 秒后再试", wait))
+		logAndWriteError(c, h.logs, http.StatusTooManyRequests, "auth_owner_pair_create", fmt.Errorf("请求过于频繁，请 %d 秒后再试", wait), "", nil)
 		return
 	}
 	if len(h.pairings) >= ownerPairingMaxActive || h.activeForIPLocked(requestIP) >= ownerPairingMaxActivePerIP {
 		h.mu.Unlock()
-		writeError(c, http.StatusTooManyRequests, errors.New("待确认登录过多，请稍后再试"))
+		logAndWriteError(c, h.logs, http.StatusTooManyRequests, "auth_owner_pair_create", errors.New("待确认登录过多，请稍后再试"), "", nil)
 		return
 	}
 	for h.codeIndex[codeHash] != "" {
 		code, err = randomOwnerCode()
 		if err != nil {
 			h.mu.Unlock()
-			writeError(c, http.StatusInternalServerError, err)
+			logAndWriteError(c, h.logs, http.StatusInternalServerError, "auth_owner_pair_create", err, "", nil)
 			return
 		}
 		codeHash = hashOwnerCode(code)
@@ -263,7 +263,7 @@ func (h *OwnerLoginHandler) claimPairing(c *gin.Context) {
 	throttleKey := c.ClientIP()
 	if wait := h.throttle.RetryAfter(throttleKey, time.Now()); wait > 0 {
 		c.Header("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
-		writeError(c, http.StatusTooManyRequests, fmt.Errorf("尝试过于频繁，请 %s 后再试", formatRetryAfter(wait)))
+		logAndWriteError(c, h.logs, http.StatusTooManyRequests, "auth_owner_pair_claim", fmt.Errorf("尝试过于频繁，请 %s 后再试", formatRetryAfter(wait)), "", nil)
 		return
 	}
 
@@ -283,7 +283,11 @@ func (h *OwnerLoginHandler) claimPairing(c *gin.Context) {
 		// 「没这个码」和「还没在私聊里确认」回同一句话，免得这个端点变成枚举
 		// 验证码的探针。主人自己知道有没有发出去。
 		time.Sleep(400 * time.Millisecond)
-		h.throttle.Fail(throttleKey, time.Now())
+		// 触发锁定时单独记一条操作日志，和密码登录一样：主人得能看见有人在穷举验证码。
+		if lock := h.throttle.Fail(throttleKey, time.Now()); lock > 0 {
+			recordRequestOperation(c, h.logs, "auth_owner_pair_claim.throttled",
+				fmt.Sprintf("验证码连续错误过多，该来源已锁定 %s", formatRetryAfter(lock)), "", nil)
+		}
 		logAndWriteError(c, h.logs, http.StatusUnauthorized, "auth_owner_pair_claim",
 			errors.New("验证码无效、已过期，或还没有在私聊里确认"), "", nil)
 		return
@@ -300,7 +304,7 @@ func (h *OwnerLoginHandler) issueOwnerSession(c *gin.Context, action, message st
 	metadata.DeviceName = "主人私聊确认"
 	token, err := h.auth.IssueSessionWithMetadata(metadata)
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, action, err, "", nil)
 		return false
 	}
 	authSetSessionCookie(c, token, int(authSessionTTL/time.Second))

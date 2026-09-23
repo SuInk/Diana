@@ -638,6 +638,7 @@ func (h *BotHandler) startRuntimeAfterEnable() {
 	}
 	if err := h.runtime.Start(h.ctx); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		log.Printf("enable requested but runtime start failed: %v", err)
+		recordError(h.ctx, h.logs, "runtime_start", err, "", map[string]any{"trigger": "enable"})
 	}
 }
 

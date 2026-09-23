@@ -65,7 +65,7 @@ func (h *BotHandler) listNotebook(c *gin.Context) {
 	}
 	scopes, err := h.sqlite.ListNotebookScopes(c.Request.Context())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "notebook_list", err, "", nil)
 		return
 	}
 	scopes = h.filterNotebookScopesForBot(scopes, botProfileScope(c))
@@ -94,7 +94,7 @@ func (h *BotHandler) listNotebook(c *gin.Context) {
 		IncludeDeleted: includeDeleted,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "notebook_list", err, "", nil)
 		return
 	}
 	if entries == nil {
@@ -160,7 +160,7 @@ func (h *BotHandler) getNotebookEntry(c *gin.Context) {
 	}
 	entry, found, err := h.sqlite.NotebookEntryDetail(c.Request.Context(), scope, term)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "notebook_get", err, term, map[string]any{"scope": scope})
 		return
 	}
 	if !found {
@@ -194,7 +194,7 @@ func (h *BotHandler) saveNotebookEntry(c *gin.Context) {
 		EditorName: "控制台",
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "notebook_save", err, request.Term, map[string]any{"scope": request.Scope})
 		return
 	}
 	action := "notebook_update"
@@ -216,7 +216,7 @@ func (h *BotHandler) deleteNotebookEntry(c *gin.Context) {
 	entry, found, err := h.sqlite.DeleteNotebookEntry(c.Request.Context(), request.Scope, request.Term,
 		"", "控制台", assistant.TruncateNotebookText(request.Note, assistant.NotebookNoteMaxRunes), time.Now())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "notebook_delete", err, request.Term, map[string]any{"scope": request.Scope})
 		return
 	}
 	if !found {
@@ -236,7 +236,7 @@ func (h *BotHandler) restoreNotebookEntry(c *gin.Context) {
 	}
 	entry, found, err := h.sqlite.RestoreNotebookEntry(c.Request.Context(), request.Scope, request.Term, "", "控制台", time.Now())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusInternalServerError, "notebook_restore", err, request.Term, map[string]any{"scope": request.Scope})
 		return
 	}
 	if !found {

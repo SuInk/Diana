@@ -675,6 +675,8 @@ func (h *AuthHandler) logout(c *gin.Context) {
 		h.manager.Logout(token)
 	}
 	h.setSessionCookie(c, "", -1)
+	// 登录有审计、退出没有的话，会话列表里少了一台设备时查不出是主动退出还是过期。
+	recordRequestOperation(c, h.logs, "auth_logout", "WebUI 已退出登录", "", nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

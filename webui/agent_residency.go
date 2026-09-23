@@ -57,7 +57,7 @@ func (h *BotHandler) setAgentResidency(c *gin.Context) {
 			ids = nil
 		}
 		if err := r.SaveAgentResidencyList(payload.ProfileID, ids); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			h.writeError(c, http.StatusBadRequest, "agent_residency", err, payload.ProfileID, nil)
 			return
 		}
 		recordRequestOperation(c, h.logs, "agent_residency", "常驻名单已更新", payload.ProfileID, map[string]any{"profile_id": payload.ProfileID, "count": len(ids), "reset": payload.Reset})
@@ -65,7 +65,7 @@ func (h *BotHandler) setAgentResidency(c *gin.Context) {
 		return
 	}
 	if err := r.SetAgentResidency(payload.ProfileID, payload.ID, payload.Resident); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		h.writeError(c, http.StatusBadRequest, "agent_residency", err, payload.ID, map[string]any{"profile_id": payload.ProfileID})
 		return
 	}
 	recordRequestOperation(c, h.logs, "agent_residency", "常驻名单已更新", payload.ID, map[string]any{"profile_id": payload.ProfileID, "resident": payload.Resident})

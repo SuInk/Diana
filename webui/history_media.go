@@ -73,13 +73,13 @@ func (h *HistoryMediaHandler) save(c *gin.Context) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.store.SaveHistoryMediaRetentionPolicy(c.Request.Context(), policy); err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "system_history_media_save", err, "", nil)
 		return
 	}
 	_ = assistant.ConfigureHistoryMediaRetention(policy)
 	result, err := assistant.CleanupHistoryMedia()
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "system_history_media_cleanup", err, "", nil)
 		return
 	}
 	h.policy = policy

@@ -141,14 +141,16 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 	if target == "" {
 		target = "about:blank"
 	} else if !h.manager.Settings().HostAllowed(target) {
-		writeError(c, http.StatusForbidden, errors.New("这个地址不在内置浏览器允许的范围内"))
+		logAndWriteError(c, h.logs, http.StatusForbidden, "browser_box_tab_open", errors.New("这个地址不在内置浏览器允许的范围内"), target, nil)
 		return
 	}
 	tab, err := browserbox.OpenTab(c.Request.Context(), base, target)
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err)
+		logAndWriteError(c, h.logs, http.StatusBadGateway, "browser_box_tab_open", err, target, nil)
 		return
 	}
+	// 从控制台让内置浏览器打开地址是一次真实的外部访问，要留审计。
+	recordRequestOperation(c, h.logs, "browser_box_tab_open", "内置浏览器已打开标签页", target, nil)
 	c.JSON(http.StatusOK, gin.H{"tab": tab})
 }
 
@@ -159,9 +161,10 @@ func (h *BrowserBoxHandler) closeTab(c *gin.Context) {
 		return
 	}
 	if err := browserbox.CloseTab(c.Request.Context(), base, c.Param("id")); err != nil {
-		writeError(c, http.StatusBadGateway, err)
+		logAndWriteError(c, h.logs, http.StatusBadGateway, "browser_box_tab_close", err, c.Param("id"), nil)
 		return
 	}
+	recordRequestOperation(c, h.logs, "browser_box_tab_close", "内置浏览器已关闭标签页", c.Param("id"), nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
