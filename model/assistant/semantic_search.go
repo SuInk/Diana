@@ -172,6 +172,8 @@ func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
 	vectors, err := r.embedTextsFunc()(ctx, cfg, texts)
 	if err != nil {
 		log.Printf("semantic index embed failed (%d items dropped): %v", len(batch), err)
+		r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量生成失败，这批消息以后按语义搜不到", "", err,
+			map[string]any{"dropped": len(batch), "model": cfg.Model})
 		return
 	}
 	if len(vectors) != len(batch) {
@@ -180,6 +182,8 @@ func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
 	for index, item := range batch {
 		if err := store.SaveMessageEventVector(ctx, item.session, item.messageID, cfg.Model, vectors[index]); err != nil {
 			log.Printf("semantic index save failed: %v", err)
+			r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量写入失败，这批消息以后按语义搜不到", "semantic_index_save_failed", err,
+				map[string]any{"dropped": len(batch) - index, "model": cfg.Model})
 			return
 		}
 	}
