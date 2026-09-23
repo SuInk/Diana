@@ -14,7 +14,7 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
-// 好感变化接口：按结果筛选、非法结果值直接忽略、多于一页时给出下一页游标。
+// 好感与画像接口：按结果筛选、非法结果值直接忽略、多于一页时给出下一页游标。
 func TestRelationshipEvaluationsEndpoint(t *testing.T) {
 	store, router := newAssistantUsersTestRouter(t)
 	ctx := context.Background()

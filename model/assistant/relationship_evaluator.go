@@ -142,7 +142,7 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 }
 
 // relationshipEvaluationResult 是一次评估的完整结果。除了决定本身，还带着用了
-// 哪个模型、失败时的原因，好感变化记录要把这些都写下来。
+// 哪个模型、失败时的原因，好感与画像记录要把这些都写下来。
 type relationshipEvaluationResult struct {
 	decision  relationshipEvaluationDecision
 	profile   UserMemoryProfile

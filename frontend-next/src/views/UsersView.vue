@@ -578,14 +578,14 @@ watch(botScope, () => {
   reload();
 });
 
-// 后台评估的时间线在「记录 → 好感变化」，从这里跳过去只看这一个人。
+// 后台评估的时间线在「记录 → 好感与画像」，从这里跳过去只看这一个人。
 function openEvaluations(profile: UserMemoryProfile): void {
   navigate("favorability", { user_id: profile.user_id });
 }
 
 onMounted(() => {
   reload();
-  // 从好感变化页点名字跳过来时直接打开这个人的详情。
+  // 从好感与画像页点名字跳过来时直接打开这个人的详情。
   const params = viewQuery();
   const userID = params.get("user")?.trim();
   if (userID) {

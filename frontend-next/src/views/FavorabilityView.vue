@@ -17,7 +17,7 @@
 
     <header class="view-header">
       <div class="view-title">
-        <h2>好感变化</h2>
+        <h2>好感与画像</h2>
         <p>后台每一次好感度与画像评估的结果</p>
       </div>
     </header>
@@ -76,7 +76,7 @@
           :title="filtersActive ? '没有符合筛选条件的评估' : '最近没有好感度或画像变化'"
           :hint="filtersActive ? '换个条件试试，或者清除筛选。' : '结果选「全部评估」可以看到判了 0、把握不够或评估失败的记录。'"
         />
-        <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载好感变化" />
+        <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载好感与画像" />
       </div>
     </section>
   </div>
@@ -151,7 +151,7 @@ async function reload(): Promise<void> {
     evaluations.value = response.evaluations;
     nextBeforeID.value = response.next_before_id ?? 0;
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "加载好感变化失败");
+    toastError(error instanceof Error ? error.message : "加载好感与画像失败");
   } finally {
     loading.value = false;
   }

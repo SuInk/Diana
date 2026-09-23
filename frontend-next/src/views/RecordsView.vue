@@ -52,7 +52,7 @@ provide(recordsActionsHost, actionsHost);
 const tabs = [
   { id: "events" as ViewID, label: "事件明细", icon: Activity },
   { id: "logs" as ViewID, label: "运行日志", icon: FileClock },
-  { id: "favorability" as ViewID, label: "好感变化", icon: Heart }
+  { id: "favorability" as ViewID, label: "好感与画像", icon: Heart }
 ];
 
 // 当前档位直接读路由，不另存一份状态：浏览器前进后退、深链和侧边栏跳转都只有

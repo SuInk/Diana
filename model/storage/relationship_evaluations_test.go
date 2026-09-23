@@ -12,7 +12,7 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
-// 好感变化页按机器人、人、群和结果筛选，按时间倒序往前翻页；过期记录按天清理。
+// 好感与画像页按机器人、人、群和结果筛选，按时间倒序往前翻页；过期记录按天清理。
 func TestRelationshipEvaluationsFilterPageAndPrune(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
