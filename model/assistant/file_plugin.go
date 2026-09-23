@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/netguard"
 )
@@ -28,6 +27,7 @@ const (
 	defaultFileParserMaxBytes      = 32 * 1024 * 1024
 	defaultFileParserMaxVideoBytes = 200 * 1024 * 1024
 	defaultFileParserMaxChars      = 24000
+	fileParserMinCharsPerFile      = 2000
 
 	fileParserSettingMaxFileBytes      = "max_file_bytes"
 	fileParserSettingMaxVideoFileBytes = "max_video_file_bytes"
@@ -51,6 +51,8 @@ type fileRef struct {
 	BusID     string
 	GroupID   string
 	Trusted   bool
+	// Sniff 表示扩展名看不出类型，下载后按内容判断是否为文本，见 file_text.go。
+	Sniff bool
 }
 
 // NewFileParserPlugin 创建官方内置文件解析插件。
@@ -74,8 +76,8 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          fileParserPluginID,
 		Name:        "文件解析",
-		Version:     "0.3.2",
-		Description: "官方内置文件解析插件；支持文本、代码、PDF、Office（docx/xlsx/pptx）、ODF、EPUB 和视频关键帧。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
+		Version:     "0.3.3",
+		Description: "官方内置文件解析插件；按内容识别文本与编码（UTF-8/UTF-16/GBK），支持文本、代码、SVG、PDF、Office（docx/xlsx/pptx）、ODF、EPUB 和视频关键帧。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "message:read", "file:parse", "llm:multiple", "task:notify"},
@@ -101,7 +103,7 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 			{
 				Key:         fileParserSettingMaxChars,
 				Label:       "提取文本上限",
-				Description: "单个文件提取进 LLM 上下文的最大字符数，超出截断。",
+				Description: "单个文件提取进 LLM 上下文的最大字符数，超出时保留开头和结尾。同一条消息里有多个文件时合计不超过该值的 1.5 倍，按文件数平分，文件太多时只展开前几个。",
 				Type:        PluginSettingTypeNumber,
 				Default:     defaultFileParserMaxChars,
 				Min:         settingRange(500),
@@ -111,6 +113,21 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 			},
 		},
 	}
+}
+
+// fileParserTurnBudget 给一轮里的文件分字数，返回每个文件的上限和最多展开几个文件。
+// 文件原文是受保护的插件证据，预算编排时排在聊天历史和长期记忆前面：一次丢五个文件、
+// 每个都按单文件上限塞，挤掉的就是这轮对话本身的上下文。所以一轮合计严格不超过单文件
+// 上限的 1.5 倍，多个文件平分；平分后每个不到 fileParserMinCharsPerFile 字就少展开几个，
+// 而不是每个都切成看不出内容的碎片。
+func fileParserTurnBudget(maxChars int, files int) (perFile int, expand int) {
+	if maxChars <= 0 || files <= 1 {
+		return maxChars, files
+	}
+	total := maxChars * 3 / 2
+	floor := min(maxChars, fileParserMinCharsPerFile)
+	expand = min(files, max(1, total/floor))
+	return min(maxChars, total/expand), expand
 }
 
 func fileParserVideoMaxBytes(settings SettingValues) int64 {
@@ -124,11 +141,15 @@ func (p *FileParserPlugin) Handle(ctx context.Context, req PluginRequest) (*Plug
 		return nil, nil
 	}
 	maxBytes := req.Settings.Bytes(fileParserSettingMaxFileBytes, p.maxBytes)
-	maxChars := req.Settings.Int(fileParserSettingMaxChars, p.maxChars)
+	maxChars, expand := fileParserTurnBudget(req.Settings.Int(fileParserSettingMaxChars, p.maxChars), len(refs))
 
 	parts := make([]string, 0, len(refs))
 	scannedDocuments := make([]scannedPDFDocument, 0, len(refs))
-	for _, ref := range refs {
+	for i, ref := range refs {
+		if i >= expand {
+			parts = append(parts, fmt.Sprintf("- %s\n  状态：这条消息里文件太多，为了不挤掉对话上下文没有展开；需要时让用户单独发这个文件", ref.Name))
+			continue
+		}
 		result := p.parseRef(ctx, req.Channel, ref, maxBytes, maxChars)
 		if result.Context != "" {
 			parts = append(parts, result.Context)
@@ -139,7 +160,7 @@ func (p *FileParserPlugin) Handle(ctx context.Context, req PluginRequest) (*Plug
 	}
 	contextText := ""
 	if len(parts) > 0 {
-		contextText = "文件解析结果：\n" + strings.Join(parts, "\n")
+		contextText = fileContentNotice + strings.Join(parts, "\n")
 	}
 	if len(scannedDocuments) > 0 {
 		return &PluginResponse{
@@ -173,7 +194,7 @@ func collectFileRefs(req PluginRequest) []fileRef {
 		if ref.Name == "" || ref.Name == "." {
 			ref.Name = "文件"
 		}
-		if !isSupportedFileName(ref.Name) && !isSupportedFileURL(ref.URL) && !isSupportedLocalFile(ref.LocalPath) {
+		if !ref.Sniff && !isSupportedFileName(ref.Name) && !isSupportedFileURL(ref.URL) && !isSupportedLocalFile(ref.LocalPath) {
 			return
 		}
 		key := firstNonEmpty(ref.URL, ref.LocalPath, ref.FileID, ref.Name)
@@ -209,13 +230,14 @@ func collectFileRefs(req PluginRequest) []fileRef {
 				GroupID: groupID,
 				URL:     raw,
 				Trusted: true,
+				Sniff:   isSniffableFileName(name, segment.Data["size"]),
 			}
 			if req.Event.Platform == PlatformOneBotV11 {
 				ref.MD5 = explicitMediaMD5(segment.Data)
 			}
 			if normalizedFileURL(raw) != "" {
 				ref.URL = raw
-			} else if isSupportedLocalFile(raw) {
+			} else if isSupportedLocalFile(raw) || (ref.Sniff && filepath.IsAbs(strings.TrimPrefix(raw, "file://"))) {
 				ref.URL = ""
 				ref.LocalPath = strings.TrimSpace(strings.TrimPrefix(raw, "file://"))
 			} else {
@@ -253,6 +275,9 @@ type parsedFileRef struct {
 // parseRef 下载并解析单个文件引用。
 func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fileRef, maxBytes int64, maxChars int) parsedFileRef {
 	ref = p.resolveOneBotFile(ctx, channel, ref)
+	if ref.Sniff {
+		maxBytes = min(maxBytes, fileParserSniffMaxBytes)
+	}
 	data, source, contentType, err := p.readRef(ctx, ref, maxBytes)
 	if err != nil {
 		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  状态：%v", ref.Name, source, err)}
@@ -261,7 +286,7 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 		nativeResult, nativeAvailable, nativeErr := runNativeMacPDF(ctx, data, "text", defaultOCRMaxPagesPerFile, defaultOCRPageMaxChars)
 		if nativeAvailable && nativeErr == nil && nativeMacPDFHasText(nativeResult) {
 			text := formatNativeMacPDFText(nativeResult, maxChars)
-			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF（macOS PDFKit 文本层）\n  内容：\n%s", ref.Name, source, indentText(text, "  "))}
+			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF（macOS PDFKit 文本层）\n%s", ref.Name, source, fileContentBlock(ref.Name, text))}
 		}
 		extracted := extractPDFText(ctx, p.pdfRenderer, data, maxChars)
 		text := sanitizeFileTextString(extracted.Text, maxChars)
@@ -274,7 +299,7 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 				Hash:   hex.EncodeToString(hash[:]),
 			}}
 		}
-		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF\n  内容：\n%s", ref.Name, source, indentText(text, "  "))}
+		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF\n%s", ref.Name, source, fileContentBlock(ref.Name, text))}
 	}
 	if kind := officeKindFromName(ref.Name); kind != "" && looksZipArchive(data) {
 		extracted, err := extractOfficeText(kind, data, maxChars)
@@ -285,22 +310,37 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 		if text == "" {
 			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n  状态：未提取到文本", ref.Name, source, officeKindLabel(kind))}
 		}
-		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n  内容：\n%s", ref.Name, source, officeKindLabel(kind), indentText(text, "  "))}
+		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n%s", ref.Name, source, officeKindLabel(kind), fileContentBlock(ref.Name, text))}
 	}
 	if !looksTextual(ref.Name, contentType, data) {
+		if ref.Sniff {
+			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  状态：扩展名不认识，内容也不是文本，暂不支持", ref.Name, source)}
+		}
 		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  状态：暂不支持该文件类型", ref.Name, source)}
+	}
+	raw := string(data)
+	encodingNote := ""
+	if decoded, encoding, ok := decodeFileText(data); ok {
+		raw = decoded
+		if encoding != "UTF-8" {
+			encodingNote = "\n  编码：" + encoding
+		}
 	}
 	if looksMarkup(ref.Name, contentType) {
 		// HTML 直接塞原始标签会把上下文撑爆，先抽正文再截断。
-		if text := sanitizeFileTextString(stripMarkupText(data, maxChars), maxChars); text != "" {
-			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：网页文本\n  内容：\n%s", ref.Name, source, indentText(text, "  "))}
+		if text := sanitizeFileTextString(stripMarkupText([]byte(raw), maxChars), maxChars); text != "" {
+			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：网页文本%s\n%s", ref.Name, source, encodingNote, fileContentBlock(ref.Name, text))}
 		}
 	}
-	text := sanitizeFileText(data, maxChars)
+	text := sanitizeFileTextString(raw, maxChars)
 	if text == "" {
 		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  状态：未提取到文本", ref.Name, source)}
 	}
-	return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  内容：\n%s", ref.Name, source, indentText(text, "  "))}
+	if strings.EqualFold(path.Ext(ref.Name), ".svg") {
+		// 标明是源码：模型拿到的是图形元素而不是画面，要从 path、文字和注释里推断画了什么。
+		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：SVG 矢量图源码%s\n%s", ref.Name, source, encodingNote, fileContentBlock(ref.Name, text))}
+	}
+	return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s%s\n%s", ref.Name, source, encodingNote, fileContentBlock(ref.Name, text))}
 }
 
 func (p *FileParserPlugin) readRef(ctx context.Context, ref fileRef, maxBytes int64) ([]byte, string, string, error) {
@@ -632,11 +672,13 @@ var supportedFileExts = map[string]struct{}{
 	".conf":       {},
 	".properties": {},
 	".xml":        {},
-	".html":       {},
-	".htm":        {},
-	".srt":        {},
-	".vtt":        {},
-	".ass":        {},
+	// SVG 是 XML 写的矢量图，读源码就能知道画了什么；按图片处理反而拿不到内容。
+	".svg":  {},
+	".html": {},
+	".htm":  {},
+	".srt":  {},
+	".vtt":  {},
+	".ass":  {},
 	// 代码：群里最常见的是直接丢一段脚本或源文件求解释
 	".go":     {},
 	".py":     {},
@@ -709,8 +751,28 @@ func isSupportedLocalFile(localPath string) bool {
 }
 
 func isSupportedFileName(name string) bool {
-	_, ok := supportedFileExts[strings.ToLower(path.Ext(name))]
+	ext := strings.ToLower(path.Ext(name))
+	if _, ok := supportedFileExts[ext]; ok {
+		return true
+	}
+	// app.log.1、app.log.2026-09-23 这类轮转文件：去掉序号或日期后缀再看一次。
+	if !isRotationSuffix(ext) {
+		return false
+	}
+	_, ok := supportedFileExts[strings.ToLower(path.Ext(strings.TrimSuffix(name, path.Ext(name))))]
 	return ok
+}
+
+func isRotationSuffix(ext string) bool {
+	if len(ext) < 2 {
+		return false
+	}
+	for _, r := range ext[1:] {
+		if (r < '0' || r > '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func looksPDF(name string, contentType string, data []byte) bool {
@@ -746,11 +808,9 @@ func looksTextual(name string, contentType string, data []byte) bool {
 	if _, ok := supportedFileExts[strings.ToLower(path.Ext(name))]; ok {
 		return true
 	}
-	// 没有可靠扩展名或 content-type 时，用 UTF-8 和 NUL 字节做最后的文本判断。
-	if !utf8.Valid(data) {
-		return false
-	}
-	return bytes.IndexByte(data, 0) < 0
+	// 没有可靠扩展名或 content-type 时，按字节内容判断，规则见 decodeFileText。
+	_, _, ok := decodeFileText(data)
+	return ok
 }
 
 type pdfTextExtraction struct {
@@ -822,12 +882,7 @@ func sanitizeFileTextString(text string, maxChars int) string {
 	text = strings.ReplaceAll(text, "\r", "\n")
 	text = stripControlChars(text)
 	text = strings.TrimSpace(text)
-	runes := []rune(text)
-	if maxChars > 0 && len(runes) > maxChars {
-		// 按 rune 截断，避免中文文本被按字节截坏。
-		text = string(runes[:maxChars]) + "\n...[已截断]"
-	}
-	return text
+	return clipHeadTail(text, maxChars)
 }
 
 // stripControlChars 移除文件文本中的控制字符。
