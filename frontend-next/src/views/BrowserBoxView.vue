@@ -13,123 +13,47 @@
     <div class="card">
       <div class="card-header">
         <h2>浏览器</h2>
-        <span class="card-sub">带着登录态、只有主人能让机器人驱动的浏览器。两个可以都开着，按下面的顺序先用排在前面的</span>
+        <span v-if="sourceState" class="badge" :class="sourceState.active === 'off' ? 'warn' : 'ok'">
+          {{ sourceState.active === "off" ? "没在用" : `正在用${sourceMeta[sourceState.active].short}` }}
+        </span>
+        <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
       </div>
       <div class="card-body stack">
-        <!-- 和插件页同一种卡片：开关、状态、说明，左下角是运行依赖。序号就是优先级。 -->
-        <div v-if="sourceState" class="plugin-tiles browser-source-tiles">
-          <article
-            v-for="(key, index) in sourceState.order"
+        <!-- 选中哪个就用哪个；它用不了时自动换另一个，不用另外配置。 -->
+        <div class="segmented browser-source-tabs" role="tablist" aria-label="用哪个浏览器">
+          <button
+            v-for="key in sourceKeys"
             :key="key"
-            class="plugin-card"
-            :class="{ off: !sourceState[key].enabled }"
+            type="button"
+            role="tab"
+            :aria-selected="preferred === key"
+            :class="{ active: preferred === key }"
+            :disabled="savingSource || !sourceState"
+            @click="preferSource(key)"
           >
-            <div class="plugin-card-head">
-              <h2 class="plugin-card-name">
-                <span class="browser-source-rank" :title="`优先级 ${index + 1}`">{{ index + 1 }}</span>
-                {{ sourceMeta[key].label }}
-              </h2>
-              <label class="switch" :title="switchTitle(key)">
-                <input
-                  type="checkbox"
-                  :checked="sourceState[key].enabled"
-                  :disabled="savingSource || (key === 'box' && !sourceState.box.detected && !sourceState.box.enabled)"
-                  @change="toggleSource(key, ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="track" aria-hidden="true"></span>
-              </label>
-            </div>
-            <div class="cluster plugin-card-badges">
-              <span class="badge" :class="sourceStatus(key).tone">{{ sourceStatus(key).text }}</span>
-              <span v-if="key === 'box'" class="badge">推荐</span>
-              <span class="badge">只有主人能用</span>
-            </div>
-            <p class="plugin-card-desc">{{ sourceMeta[key].hint }}</p>
-            <div class="plugin-card-bottom">
-              <div class="plugin-card-meta">
-                <button class="plugin-dependencies-head" type="button" title="查看运行依赖" @click="dependenciesTarget = key">
-                  <span>运行依赖</span>
-                  <span class="plugin-dependency-count" :class="{ warn: dependencyProblem(key) }">
-                    {{ sourceState[key].dependencies.filter((dep) => dep.available).length }}/{{ sourceState[key].dependencies.length }}
-                  </span>
-                </button>
-              </div>
-              <footer class="plugin-card-foot">
-                <button
-                  class="btn small"
-                  type="button"
-                  :disabled="savingSource || index === 0"
-                  :aria-label="`${sourceMeta[key].label}：优先级往前挪`"
-                  @click="moveSource(index, -1)"
-                >
-                  <ArrowUp :size="14" aria-hidden="true" />
-                  优先
-                </button>
-                <button
-                  class="btn small"
-                  type="button"
-                  :disabled="savingSource || index === sourceState.order.length - 1"
-                  :aria-label="`${sourceMeta[key].label}：优先级往后挪`"
-                  @click="moveSource(index, 1)"
-                >
-                  <ArrowDown :size="14" aria-hidden="true" />
-                  靠后
-                </button>
-              </footer>
-            </div>
-          </article>
+            {{ sourceMeta[key].label }}
+          </button>
         </div>
-        <p v-if="sourceState" class="hint" style="margin: 0">
-          {{
-            sourceState.active === "off"
-              ? "现在机器人不用浏览器：两个都关着，或者开着的那个眼下用不上。"
-              : `这一轮机器人用「${sourceMeta[sourceState.active].label}」；排在前面的用不了时会自动换下一个。`
-          }}
-        </p>
-        <p class="muted" style="margin: 0; font-size: 12.5px">
-          读公开网页、出图、渲染 PDF 用的是另一个一次性无头浏览器，不带登录态、群成员也能用，一直开着，不用在这里选；
-          它缺什么依赖在「扩展」页的「网页渲染」里看。
-        </p>
-      </div>
-    </div>
 
-    <div v-if="sourceState?.box.enabled && !botID" class="card">
-      <div class="card-header">
-        <h2>Diana 内置浏览器</h2>
-        <span class="card-sub">每台机器人各用一个浏览器、各有一份登录态，互相看不到</span>
-      </div>
-      <div class="card-body">
-        <p class="muted" style="margin: 0; font-size: 13px">
-          在顶部选一台机器人，就能看到它的浏览器画面、在里面登录或接管。
-        </p>
-      </div>
-    </div>
-
-    <template v-else-if="sourceState?.box.enabled">
-      <div class="card">
-        <div class="card-header">
-          <h2>Diana 内置浏览器</h2>
-          <span class="badge" :class="status.running ? 'ok' : 'warn'">
-            {{ status.running ? (status.takeover ? "你在操作" : "运行中") : "未启动" }}
-          </span>
-          <span class="card-sub">这台机器人自己的浏览器，登录态只属于它；机器人要用时会自动启动</span>
+        <div v-if="sourceState && preferred" class="browser-source-status">
+          <span class="muted">{{ preferredStatus }}</span>
+          <button class="plugin-dependencies-head" type="button" title="查看运行依赖" @click="dependenciesTarget = preferred">
+            <span>运行依赖</span>
+            <span class="plugin-dependency-count" :class="{ warn: dependencyProblem(preferred) }">
+              {{ sourceState[preferred].dependencies.filter((dep) => dep.available).length }}/{{ sourceState[preferred].dependencies.length }}
+            </span>
+          </button>
         </div>
-        <div class="card-body stack">
-          <p v-if="!status.available" class="muted" style="margin: 0; font-size: 13px">
-            这台机器上没找到 Chrome/Chromium。容器完整版镜像自带 chromium；slim 版可以在宿主机执行
-            <code class="mono">docker exec -u root &lt;容器名&gt; sh -c 'apt-get update &amp;&amp; apt-get install -y chromium fonts-noto-cjk'</code>。
+        <p v-else-if="sourceState" class="muted" style="margin: 0; font-size: 13px">
+          浏览器关着，机器人只能读公开网页。点上面任一个就会打开。
+        </p>
+
+        <template v-if="preferred === 'box'">
+          <p v-if="!botID" class="muted" style="margin: 0; font-size: 13px">
+            每台机器人各用一个浏览器，登录态互不相通。在顶部选一台机器人，就能看到它的画面、在里面登录。
           </p>
-          <div class="field wide">
-            <label class="switch">
-              <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
-              <span class="track" aria-hidden="true"></span>
-              <span class="switch-label">开一个真窗口</span>
-            </label>
-            <span class="hint">新装时按本机条件自动选：有显示器、或能自己拉起虚拟屏时打开。无头也有实时画面。</span>
-          </div>
-
-          <div class="row gap">
-            <button class="btn small" type="button" :disabled="busy || !settings.enabled" @click="start">启动</button>
+          <div v-else class="row gap">
+            <button class="btn small" type="button" :disabled="busy || status.running" @click="start">启动</button>
             <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
             <button
               class="btn small"
@@ -140,64 +64,60 @@
             >
               {{ status.takeover ? "交还给机器人" : "我来操作" }}
             </button>
-            <span class="muted" style="font-size: 12.5px">
-              你在画面上点一下就自动接管；交还之前机器人不会碰这个浏览器。
-            </span>
+            <span class="muted" style="font-size: 12.5px">机器人要用时会自己启动；在画面上点一下就是你接管。</span>
           </div>
-
-          <p v-if="status.last_error" class="muted" style="margin: 0; font-size: 12.5px">
+          <p v-if="botID && status.last_error" class="muted" style="margin: 0; font-size: 12.5px">
             最近一次错误：{{ status.last_error }}
           </p>
-          <p v-if="status.profile_dir" class="muted" style="margin: 0; font-size: 12.5px">
-            这台机器人的登录态目录：<code class="mono">{{ status.profile_dir }}</code>
-          </p>
-        </div>
+        </template>
+        <p v-else-if="preferred === 'extension'" class="muted" style="margin: 0; font-size: 13px">
+          把扩展装进你的 Chrome：<a href="/api/browser-control/extension.zip" download>下载扩展</a>，解压后在
+          <code class="mono">chrome://extensions</code> 打开开发者模式、加载这个目录。连接令牌和允许的网站在下面「更多设置」里。
+        </p>
       </div>
+    </div>
 
-      <div v-if="status.running" class="card">
-        <div class="card-header">
-          <h2>画面</h2>
-          <span class="card-sub">{{ currentTitle || "空白页" }}</span>
-        </div>
-        <div class="card-body stack">
-          <div class="row gap">
-            <button class="btn small ghost" type="button" @click="send({ type: 'back' })">后退</button>
-            <button class="btn small ghost" type="button" @click="send({ type: 'reload' })">刷新</button>
-            <input
-              v-model="addressInput"
-              class="input"
-              style="flex: 1; min-width: 220px"
-              placeholder="https://example.com"
-              @keydown.enter.prevent="navigate"
-            />
-            <button class="btn small" type="button" @click="navigate">打开</button>
-          </div>
-
-          <div class="browser-stage" @contextmenu.prevent>
-            <img
-              v-if="frame"
-              ref="screen"
-              class="browser-screen"
-              :src="`data:image/jpeg;base64,${frame.data}`"
-              alt="内置浏览器画面"
-              tabindex="0"
-              @mousedown.prevent="onMouse($event, 'mousePressed')"
-              @mouseup.prevent="onMouse($event, 'mouseReleased')"
-              @mousemove="onMouseMove"
-              @wheel.prevent="onWheel"
-              @keydown.prevent="onKey($event, 'keyDown')"
-              @keyup.prevent="onKey($event, 'keyUp')"
-            />
-            <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
-          </div>
-          <p class="muted" style="margin: 0; font-size: 12.5px">
-            点一下画面再打字，键盘事件才会送到页面。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
-          </p>
-        </div>
+    <div v-if="preferred === 'box' && botID && status.running" class="card">
+      <div class="card-header">
+        <h2>画面</h2>
+        <span class="card-sub">{{ currentTitle || "空白页" }}</span>
       </div>
-    </template>
+      <div class="card-body stack">
+        <div class="row gap">
+          <button class="btn small ghost" type="button" @click="send({ type: 'back' })">后退</button>
+          <button class="btn small ghost" type="button" @click="send({ type: 'reload' })">刷新</button>
+          <input
+            v-model="addressInput"
+            class="input"
+            style="flex: 1; min-width: 220px"
+            placeholder="https://example.com"
+            @keydown.enter.prevent="navigate"
+          />
+          <button class="btn small" type="button" @click="navigate">打开</button>
+        </div>
 
-    <BrowserControlPanel v-if="sourceState?.extension.enabled" />
+        <div class="browser-stage" @contextmenu.prevent>
+          <img
+            v-if="frame"
+            ref="screen"
+            class="browser-screen"
+            :src="`data:image/jpeg;base64,${frame.data}`"
+            alt="内置浏览器画面"
+            tabindex="0"
+            @mousedown.prevent="onMouse($event, 'mousePressed')"
+            @mouseup.prevent="onMouse($event, 'mouseReleased')"
+            @mousemove="onMouseMove"
+            @wheel.prevent="onWheel"
+            @keydown.prevent="onKey($event, 'keyDown')"
+            @keyup.prevent="onKey($event, 'keyUp')"
+          />
+          <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
+        </div>
+        <p class="muted" style="margin: 0; font-size: 12.5px">
+          点一下画面再打字，键盘事件才会送到页面。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
+        </p>
+      </div>
+    </div>
 
     <Modal
       v-if="dependenciesTarget && sourceState"
@@ -254,27 +174,53 @@
         </p>
       </div>
     </div>
-    <!-- 外接 CDP 是给自己另起了一个带调试端口的 Chrome 的人用的，属于技术细节，默认收起。
-         它原来是扩展页的一个标签，后来挪到这里当第四档；改成开关加优先级之后不再算一档。 -->
+    <!-- 开箱即用：默认什么都不用配。其余的（关掉浏览器、开真窗口、扩展的令牌和网站名单、
+         外接 CDP）都收在这里。 -->
     <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
       <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
-      高级：外接浏览器（CDP）
+      更多设置
     </button>
     <template v-if="advancedOpen">
-      <p class="muted" style="margin: 0; font-size: 12.5px">
-        给某台机器人指一个你自己另起的、开着调试端口的 Chrome。只在这一轮没用上内置浏览器时生效：它关着、用不上，或者排在前面的 Chrome 正在用。
-      </p>
+      <div class="card">
+        <div class="card-body stack">
+          <div class="field wide">
+            <label class="switch">
+              <input
+                type="checkbox"
+                :checked="Boolean(preferred)"
+                :disabled="savingSource || !sourceState"
+                @change="setBrowserAllowed(($event.target as HTMLInputElement).checked)"
+              />
+              <span class="track" aria-hidden="true"></span>
+              <span class="switch-label">允许机器人用浏览器</span>
+            </label>
+            <span class="hint">关掉后机器人只能读公开网页，不碰任何登录态。</span>
+          </div>
+          <div v-if="preferred === 'box' && botID" class="field wide">
+            <label class="switch">
+              <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
+              <span class="track" aria-hidden="true"></span>
+              <span class="switch-label">开一个真窗口</span>
+            </label>
+            <span class="hint">
+              默认按本机条件自动选；无头也有实时画面。这台机器人的登录态在
+              <code class="mono">{{ status.profile_dir }}</code>。
+            </span>
+          </div>
+        </div>
+      </div>
+      <BrowserControlPanel v-if="sourceState?.extension.enabled || preferred === 'extension'" />
       <AgentBrowserPanel />
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
 import { navigate as navigateToView } from "../router";
-import { ArrowDown, ArrowUp, ChevronDown } from "@lucide/vue";
+import { ChevronDown } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
 import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -308,9 +254,10 @@ interface LiveFrame {
 }
 
 type SourceKey = Exclude<BrowserSource, "off">;
-const sourceMeta: Record<SourceKey, { label: string; hint: string }> = {
-  box: { label: "Diana 内置浏览器", hint: "Diana 自己的常驻浏览器，你能看画面、随时上手。本机找得到 Chrome 时会自动打开。" },
-  extension: { label: "我自己的 Chrome", hint: "装一个扩展，机器人用你日常浏览器的登录态。操作的是你真实的浏览器，要你自己打开。" }
+const sourceKeys: SourceKey[] = ["box", "extension"];
+const sourceMeta: Record<SourceKey, { label: string; short: string }> = {
+  box: { label: "Diana 内置", short: "内置浏览器" },
+  extension: { label: "我自己的 Chrome", short: "你的 Chrome" }
 };
 // null 表示还没读到：读到之前不显示任何一边的配置。
 const sourceState = ref<BrowserSourceState | null>(null);
@@ -324,11 +271,26 @@ function dependencyProblem(key: SourceKey): boolean {
   return (sourceState.value?.[key].dependencies ?? []).some((dep) => !dep.available && dep.name !== "display");
 }
 
-function switchTitle(key: SourceKey): string {
-  const item = sourceState.value?.[key];
-  if (key === "box" && item && !item.detected && !item.enabled) return "没检测到 Chrome，先在运行依赖里装上";
-  return item?.enabled ? "点击关闭" : "点击打开";
-}
+// 选中的那个：排在第一位、而且开着。都关着就是 null，页面显示「浏览器关着」。
+const preferred = computed<SourceKey | null>(() => {
+  const state = sourceState.value;
+  if (!state) return null;
+  const first = state.order[0];
+  if (first && state[first].enabled) return first;
+  const next = state.order.find((key) => state[key].enabled);
+  return next ?? null;
+});
+
+// 选中那个现在的情况：在用、暂时换成了另一个、还是卡在哪。
+const preferredStatus = computed(() => {
+  const state = sourceState.value;
+  const key = preferred.value;
+  if (!state || !key) return "";
+  if (state.active === key) return key === "box" ? "已就绪，机器人会用它。" : "扩展已连上，机器人会用它。";
+  const reason = key === "box" ? "本机没找到 Chrome" : "扩展还没连上";
+  if (state.active !== "off") return `${reason}，暂时用「${sourceMeta[state.active].label}」。`;
+  return `${reason}，机器人这会儿用不了浏览器。`;
+});
 
 // 重新检测复用插件页那套：刷新浏览器探测的缓存，再把这一页的状态读一遍。
 async function redetect(): Promise<void> {
@@ -422,27 +384,19 @@ async function patchSource(patch: Parameters<typeof saveBrowserSource>[0]): Prom
   }
 }
 
-function toggleSource(key: SourceKey, checked: boolean): void {
-  void patchSource(key === "box" ? { box_enabled: checked } : { extension_enabled: checked });
+// 选一个：排到第一位并打开它。另一个保持原样，选中的用不了时自动顶上。
+function preferSource(key: SourceKey): void {
+  const order = [key, ...sourceKeys.filter((other) => other !== key)];
+  void patchSource(key === "box" ? { order, box_enabled: true } : { order, extension_enabled: true });
 }
 
-function moveSource(index: number, delta: -1 | 1): void {
-  const order = [...(sourceState.value?.order ?? [])];
-  const target = index + delta;
-  if (target < 0 || target >= order.length) return;
-  [order[index], order[target]] = [order[target], order[index]];
-  void patchSource({ order });
-}
-
-// 每一行右边那枚标签：这一轮是不是在用它、用不上的话卡在哪。
-function sourceStatus(key: SourceKey): { text: string; tone: string } {
-  const state = sourceState.value;
-  if (!state) return { text: "读取中", tone: "" };
-  const item = state[key];
-  if (state.active === key) return { text: "正在用", tone: "ok" };
-  if (!item.enabled) return { text: item.detected ? (key === "box" ? "检测到 Chrome" : "检测到扩展") : "已关闭", tone: "" };
-  if (item.usable) return { text: "备用", tone: "" };
-  return { text: key === "box" ? "没找到 Chrome" : "等扩展连接", tone: "warn" };
+// 「更多设置」里的总开关：关掉两个都关；打开就打开排在第一位的那个。
+function setBrowserAllowed(allowed: boolean): void {
+  if (!allowed) {
+    void patchSource({ box_enabled: false, extension_enabled: false });
+    return;
+  }
+  preferSource(sourceState.value?.order[0] ?? "box");
 }
 
 async function refresh(): Promise<void> {
@@ -649,24 +603,16 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* 只有两张卡，并排放；窄屏时插件页的网格会自己折成一列。 */
-.browser-source-tiles {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+.browser-source-tabs {
+  align-self: flex-start;
 }
 
-.browser-source-rank {
-  display: inline-flex;
+.browser-source-status {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  margin-right: 6px;
-  border-radius: 50%;
-  vertical-align: 2px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--muted);
-  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  gap: 8px 12px;
+  font-size: 13px;
 }
 
 .browser-advanced-toggle {
