@@ -50,43 +50,14 @@
           </div>
           <button
             class="btn advanced-toggle"
-            :class="{ active: advancedOpen || advancedCount > 0 }"
+            :class="{ active: advancedCount > 0 }"
             type="button"
-            :aria-expanded="advancedOpen"
-            aria-controls="evaluation-advanced"
-            @click="advancedOpen = !advancedOpen"
+            aria-haspopup="dialog"
+            @click="openAdvanced"
           >
             <SlidersHorizontal :size="15" aria-hidden="true" />
             高级筛选<template v-if="advancedCount > 0">（{{ advancedCount }}）</template>
           </button>
-        </div>
-        <!-- 高级筛选是精确条件：搜索框什么都搜，要限定「就是这个人、就是这个群、就这几天」时才用得上。 -->
-        <div v-if="advancedOpen" id="evaluation-advanced" class="evaluation-advanced">
-          <div class="field">
-            <label for="evaluation-person">人</label>
-            <input id="evaluation-person" v-model="personFilter" class="input" placeholder="QQ 号或昵称" />
-          </div>
-          <div class="field">
-            <label for="evaluation-group">群号</label>
-            <input id="evaluation-group" v-model="groupFilter" class="input" inputmode="numeric" placeholder="完整群号" />
-          </div>
-          <div class="field evaluation-range">
-            <label>时间</label>
-            <div class="segmented" role="radiogroup" aria-label="时间范围">
-              <button
-                v-for="option in RANGE_OPTIONS"
-                :key="option.value"
-                type="button"
-                role="radio"
-                :aria-checked="rangeFilter === option.value"
-                :class="{ active: rangeFilter === option.value }"
-                @click="rangeFilter = option.value"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-          </div>
-          <button class="btn ghost small evaluation-reset" type="button" :disabled="advancedCount === 0" @click="resetAdvanced">重置</button>
         </div>
         <div v-if="userFilter" class="cluster" style="padding: 0 0 4px">
           <span class="badge">只看 {{ userFilter }}</span>
@@ -130,11 +101,49 @@
         <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载好感与画像" />
       </div>
     </section>
+
+    <!-- 高级筛选是精确条件：搜索框什么都搜，要限定「就是这个人、就是这个群、就这几天」时
+         才用得上。弹窗里改的是草稿，点「应用」才生效，取消不动当前的筛选。 -->
+    <Modal v-if="advancedOpen" title="高级筛选" @close="advancedOpen = false">
+      <form class="evaluation-advanced" @submit.prevent="applyAdvanced">
+        <div class="field">
+          <label for="evaluation-person">人</label>
+          <input id="evaluation-person" v-model="draft.person" class="input" placeholder="QQ 号或昵称" />
+        </div>
+        <div class="field">
+          <label for="evaluation-group">群号</label>
+          <input id="evaluation-group" v-model="draft.group" class="input" inputmode="numeric" placeholder="完整群号" />
+        </div>
+        <div class="field">
+          <label>时间</label>
+          <div class="segmented evaluation-range" role="radiogroup" aria-label="时间范围">
+            <button
+              v-for="option in RANGE_OPTIONS"
+              :key="option.value"
+              type="button"
+              role="radio"
+              :aria-checked="draft.range === option.value"
+              :class="{ active: draft.range === option.value }"
+              @click="draft.range = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+        <!-- 回车直接应用：表单里没有这个按钮，浏览器不会把回车当提交。 -->
+        <button type="submit" hidden aria-hidden="true" tabindex="-1"></button>
+      </form>
+      <template #footer>
+        <button class="btn ghost evaluation-reset" type="button" :disabled="!draftActive" @click="resetDraft">重置</button>
+        <button class="btn ghost" type="button" @click="advancedOpen = false">取消</button>
+        <button class="btn primary" type="button" @click="applyAdvanced">应用</button>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { RefreshCw, Search, SlidersHorizontal } from "@lucide/vue";
 import { listRelationshipEvaluations, type RelationshipEvaluation, type RelationshipEvaluationStatus } from "../api";
 import { botScope } from "../bot-scope";
@@ -144,6 +153,7 @@ import { recordsActionsHost } from "../records-actions";
 import { toastError } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import Modal from "../components/Modal.vue";
 
 const PAGE_SIZE = 50;
 
@@ -174,6 +184,8 @@ const RANGE_OPTIONS: { value: RangeFilter; label: string }[] = [
 
 const searchFilter = ref("");
 const advancedOpen = ref(false);
+const draft = reactive<{ person: string; group: string; range: RangeFilter }>({ person: "", group: "", range: 0 });
+const draftActive = computed(() => draft.person.trim() !== "" || draft.group.trim() !== "" || draft.range !== 0);
 const personFilter = ref("");
 const groupFilter = ref("");
 const rangeFilter = ref<RangeFilter>(0);
@@ -209,10 +221,27 @@ function query(beforeID = 0) {
   };
 }
 
-function resetAdvanced(): void {
-  personFilter.value = "";
-  groupFilter.value = "";
-  rangeFilter.value = 0;
+function openAdvanced(): void {
+  draft.person = personFilter.value;
+  draft.group = groupFilter.value;
+  draft.range = rangeFilter.value;
+  advancedOpen.value = true;
+}
+
+function resetDraft(): void {
+  draft.person = "";
+  draft.group = "";
+  draft.range = 0;
+}
+
+// 三个条件一次性生效，只查一次。
+function applyAdvanced(): void {
+  const changed = personFilter.value !== draft.person.trim() || groupFilter.value !== draft.group.trim() || rangeFilter.value !== draft.range;
+  personFilter.value = draft.person.trim();
+  groupFilter.value = draft.group.trim();
+  rangeFilter.value = draft.range;
+  advancedOpen.value = false;
+  if (changed) void reload();
 }
 
 async function reload(): Promise<void> {
@@ -318,11 +347,11 @@ function metaLine(item: RelationshipEvaluation): string {
 
 // 打字时不要每敲一个字就查一次：停手 300ms 再查。结果下拉和机器人切换立刻生效。
 let typingTimer: number | undefined;
-watch([searchFilter, personFilter, groupFilter], () => {
+watch(searchFilter, () => {
   window.clearTimeout(typingTimer);
   typingTimer = window.setTimeout(() => void reload(), 300);
 });
-watch([kindFilter, rangeFilter, botScope], () => void reload());
+watch([kindFilter, botScope], () => void reload());
 onBeforeUnmount(() => window.clearTimeout(typingTimer));
 
 onMounted(() => {
@@ -359,31 +388,17 @@ onMounted(() => {
 
 .evaluation-advanced {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  margin-bottom: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-2);
+  flex-direction: column;
+  gap: 14px;
 }
 
-.evaluation-advanced .field {
-  flex: 1 1 160px;
-}
-
-/* 时间几档按内容宽度排，不跟着输入框一起被压窄，不然每个字都会折成一行。 */
-.evaluation-advanced .evaluation-range {
-  flex: 0 0 auto;
-}
-
-.evaluation-range .segmented button {
+.evaluation-range button {
   white-space: nowrap;
 }
 
+/* 重置靠左，和取消、应用分开：它清的是弹窗里的草稿，不是关掉弹窗。 */
 .evaluation-reset {
-  margin-left: auto;
+  margin-right: auto;
 }
 
 .link-button {
