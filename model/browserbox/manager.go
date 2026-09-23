@@ -64,6 +64,7 @@ type Manager struct {
 	mu         sync.RWMutex
 	settings   Settings
 	cmd        *exec.Cmd
+	display    *virtualDisplay
 	cdpURL     string
 	executable string
 	startedAt  time.Time
@@ -153,6 +154,13 @@ func (m *Manager) SetSettings(ctx context.Context, next Settings) (Settings, err
 		return Settings{}, errors.New("内置浏览器未初始化")
 	}
 	next = next.WithDefaults()
+	// 起不来的有头配置在落盘前就挡掉：存下去的话，正在跑的无头会被这次重启杀掉，
+	// 换来一个永远起不来的开关，用户下次打开界面看到的是「开着但没在跑」。
+	if next.Enabled {
+		if err := checkHeadful(next); err != nil {
+			return m.Settings(), err
+		}
+	}
 	m.mu.Lock()
 	previous := m.settings
 	m.settings = next
@@ -255,6 +263,27 @@ func (m *Manager) Start(ctx context.Context) error {
 	generation := m.generation
 	m.mu.Unlock()
 
+	if err := checkHeadful(settings); err != nil {
+		return err
+	}
+	// 有头而又没有现成的图形会话时，自己拉一块虚拟屏。容器里的有头就是这么跑的：
+	// 浏览器在 Xvfb 上真开窗口，画面照旧走 screencast，不需要 VNC。
+	var display *virtualDisplay
+	if settings.Headful && !systemDisplayAvailable() {
+		created, err := startVirtualDisplay(settings.WindowWidth, settings.WindowHeight)
+		if err != nil {
+			return err
+		}
+		display = created
+	}
+	// 后面任何一条失败的出路都要把它带走，否则每失败一次就多留一个 Xvfb。
+	started := false
+	defer func() {
+		if !started {
+			display.Stop()
+		}
+	}()
+
 	executable, err := agent.FindBrowserExecutable(settings.Executable)
 	if err != nil {
 		return fmt.Errorf("找不到 Chrome/Chromium：%w", err)
@@ -269,7 +298,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		!settings.Headful, 0, settings.WindowWidth, settings.WindowHeight)
 	cmd := exec.Command(executable, args...)
 	cmd.Dir = m.rootDir()
-	cmd.Env = agent.BrowserLaunchEnvironment(os.Environ(), m.rootDir())
+	cmd.Env = append(agent.BrowserLaunchEnvironment(os.Environ(), m.rootDir()), display.Env()...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("读浏览器输出失败：%w", err)
@@ -284,11 +313,13 @@ func (m *Manager) Start(ctx context.Context) error {
 		defer recoverGoroutinePanic("scanEndpoint")
 		scanDevToolsEndpoint(io.TeeReader(stderr, diagnostics), found)
 	}()
+	// exited 由 waitProcess 在 cmd.Wait() 一返回就关掉，而不是等它做完退避重启：
+	// 关在整个函数末尾的话，下面那个「进程自己退了就别再等满超时」的分支永远轮不到，
+	// 每一次起不来都要白等 30 秒。
 	exited := make(chan struct{})
 	go func() {
 		defer recoverGoroutinePanic("waitProcess")
-		defer close(exited)
-		m.waitProcess(cmd, generation)
+		m.waitProcess(cmd, generation, diagnostics, exited)
 	}()
 
 	select {
@@ -298,8 +329,10 @@ func (m *Manager) Start(ctx context.Context) error {
 			m.Stop()
 			return err
 		}
+		started = true
 		m.mu.Lock()
 		m.cmd = cmd
+		m.display = display
 		m.cdpURL = httpURL
 		m.executable = executable
 		m.startedAt = time.Now()
@@ -327,46 +360,74 @@ func (m *Manager) Stop() {
 	}
 	m.mu.Lock()
 	cmd := m.cmd
+	display := m.display
 	m.stopping = true
 	m.cmd = nil
+	m.display = nil
 	m.cdpURL = ""
 	m.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}
+	// 浏览器没了这块虚拟屏就没人用了，留着只是一个占内存的孤儿进程。
+	display.Stop()
 	m.notify()
 }
 
 // waitProcess 等进程退出。开关还开着、又不是我们主动停的，就按退避重启：
 // 浏览器崩掉之后静悄悄地没了，比崩掉本身更难排查。
-func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64) {
+func (m *Manager) waitProcess(cmd *exec.Cmd, generation uint64, diagnostics *diagnosticTail, exited chan<- struct{}) {
 	err := cmd.Wait()
+	close(exited)
 	m.mu.Lock()
 	current := m.generation == generation
 	stopping := m.stopping
 	enabled := m.settings.Enabled
+	display := m.display
 	if current {
 		m.cmd = nil
+		m.display = nil
 		m.cdpURL = ""
 		if !stopping && err != nil {
-			m.lastError = "浏览器进程退出：" + err.Error()
+			// 只写 exit status 1 等于没说：真正的原因（缺显示器、profile 被占用、
+			// 缺依赖）在进程自己打印的那几行里，状态里不带上就只能去翻后台日志。
+			m.lastError = exitErrorMessage(err, diagnostics)
 		}
 	}
 	m.mu.Unlock()
+	if current {
+		// 这一次的进程走完了，它那块屏也跟着走：重启会另开一块。
+		display.Stop()
+	}
 	if !current || stopping || !enabled {
 		return
 	}
 	m.notify()
 	time.Sleep(restartBackoff)
+	// 退避期间配置可能已经改过，新的进程也可能已经起来了。generation 变了就说明
+	// 这一条重启链已经被接替，继续下去只会把新状态的错误信息覆盖成旧的那条。
 	m.mu.RLock()
+	stale := m.generation != generation
 	stillEnabled := m.settings.Enabled && m.cmd == nil
 	m.mu.RUnlock()
-	if !stillEnabled {
+	if stale || !stillEnabled {
 		return
 	}
 	if err := m.Start(context.Background()); err != nil {
 		m.setLastError(err)
 	}
+}
+
+// exitErrorMessage 把退出码和进程最后的输出拼成一句能照着查的话。
+func exitErrorMessage(err error, diagnostics *diagnosticTail) string {
+	message := "浏览器进程退出：" + err.Error()
+	if diagnostics == nil {
+		return message
+	}
+	if tail := diagnostics.String(); tail != "" {
+		message += "。最后的输出：" + tail
+	}
+	return message
 }
 
 func (m *Manager) setLastError(err error) {

@@ -323,7 +323,7 @@ const SETUP_DISMISS_KEY = "dqb-next:setup-seen";
 
 const viewTitles: Record<ViewID, string> = {
   dashboard: "总览",
-  browser: "内置浏览器",
+  browser: "浏览器",
   events: "运行记录",
   tasks: "提醒与订阅",
   setup: "配置向导",

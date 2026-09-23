@@ -560,9 +560,12 @@ func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
 	r.mu.Unlock()
 }
 
-// browserBoxFor 同样要两边都点头：全局起了内置浏览器，这台机器人也开了那档开关。
+// browserBoxFor 交出内置浏览器的句柄。用户在「浏览器」页把它打开就算数，不再要求
+// 每台机器人另点一次开关——那一步挡的是「登录态被借走」，而这件事由身份挡得更准：
+// browser_* 不在非主人的工具白名单里，只有主人能驱动它。想让某台机器人彻底碰不到，
+// 把这一档显式关掉。
 func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
-	if !cfg.AgentBrowserBoxEnabled {
+	if cfg.AgentBrowserBoxDisabled {
 		return nil
 	}
 	r.mu.RLock()

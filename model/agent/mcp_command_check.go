@@ -21,10 +21,45 @@ import (
 //
 // 保存这一步手上已经有命令名了，在这里查掉最便宜，也最容易说清怎么修。
 
+// resolveLocalMCPCommand 把裸命令名解析成真正要拉起的可执行文件。PATH 里有就用
+// PATH 的；没有再看主程序旁边有没有随包发布的同名二进制——镜像和安装包把 gitea-mcp
+// 放在主程序旁边，那个目录不在 PATH 里。
+//
+// 解析放在拉起这一步，而不是只在保存预设时做一次：配置里存的命令名是保存那天写下的，
+// 那时没带这份二进制的版本会存成裸名字，升级到带它的版本以后还是拉不起来，而用户
+// 从界面上看这条 MCP 什么都没变，只是一直报「PATH 里找不到命令」。
+func resolveLocalMCPCommand(command string) string {
+	executable, err := os.Executable()
+	if err != nil {
+		return strings.TrimSpace(command)
+	}
+	// 一键安装会在 PATH 里放软链，顺着链接找才能落到真正的安装目录。
+	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
+		executable = resolved
+	}
+	return resolveLocalMCPCommandIn(command, filepath.Dir(executable))
+}
+
+// resolveLocalMCPCommandIn 是上面那套规则的可测形态：bundledDir 就是主程序所在目录。
+func resolveLocalMCPCommandIn(command, bundledDir string) string {
+	command = strings.TrimSpace(command)
+	if command == "" || strings.ContainsRune(command, filepath.Separator) || filepath.IsAbs(command) {
+		return command
+	}
+	// PATH 优先：用户自己装过一份的话，那份才是他期望被拉起来的。
+	if _, err := exec.LookPath(command); err == nil {
+		return command
+	}
+	if path, ok := bundledCommandPath(bundledDir, command); ok {
+		return path
+	}
+	return command
+}
+
 // checkLocalMCPCommand 确认本地进程形态的 MCP 当真有一个可执行文件可以拉起。
 // 远程接法（只有 url）返回 nil：它没有本地命令可查。
 func checkLocalMCPCommand(server mcpServerConfig) error {
-	command := strings.TrimSpace(server.Command)
+	command := resolveLocalMCPCommand(server.Command)
 	if command == "" {
 		return nil
 	}

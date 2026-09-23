@@ -1751,18 +1751,19 @@
                   </label>
                   <span class="hint">
                     默认关闭。那组工具操作的是你自己浏览器里的页面，带着你的登录态，所以逐台机器人显式打开。
-                    还要在「设置 → 浏览器控制」里打开总开关并授权站点，两边都开才真的能用。
+                    还要在「浏览器 → 浏览器控制扩展」里打开总开关并授权站点，两边都开才真的能用。
                   </span>
                 </div>
                 <div class="field wide">
                   <label class="switch">
-                    <input v-model="form.agent_browser_box_enabled" type="checkbox" />
+                    <input v-model="form.agent_browser_box_disabled" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">允许使用内置浏览器（browser_* 接到 Diana 自己的浏览器）</span>
+                    <span class="switch-label">禁止这台机器人使用内置浏览器</span>
                   </label>
                   <span class="hint">
-                    默认关闭。打开后 browser_open / browser_text / browser_click 这组工具连的是「浏览器」页里那个常驻浏览器，
-                    带着你在里面登录过的站点。你在那一页按下接管时，这台机器人当场就碰不到它了。
+                    默认允许：只要你在「浏览器 → 内置浏览器」里把它打开，browser_open / browser_text / browser_click 这组工具就连到它上面，
+                    带着你在里面登录过的站点。这组工具只有主人能用，群成员拿不到（他们只有一次性无头渲染，临时 profile、用完即删）；
+                    你在那一页按下接管时，连主人也当场碰不到它。勾上这一项表示这台机器人彻底不碰它。
                   </span>
                 </div>
                 <div class="field">
@@ -4037,7 +4038,7 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
-    agent_browser_box_enabled: config.agent_browser_box_enabled ?? false,
+    agent_browser_box_disabled: config.agent_browser_box_disabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "owner",
     repository_disclosure: config.repository_disclosure ?? "owner",
