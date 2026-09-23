@@ -196,7 +196,9 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
-			"group_id":            event.GroupID,
+			"group_id": event.GroupID,
+			// profile_id 让同一个群里的两台机器人各算各的额度。
+			"profile_id":          event.ProfileID,
 			"user_id":             event.UserID,
 			"message_id":          event.MessageID,
 			"provider":            string(provider),
@@ -883,6 +885,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
+	appendPromptSection(&builder, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
 	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。

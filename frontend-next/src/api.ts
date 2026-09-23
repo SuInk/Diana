@@ -3,6 +3,7 @@
 
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
+import type { SendRetrySettings } from "./send-retry-settings";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
@@ -46,7 +47,11 @@ export interface LLMConfig {
   context_window_source?: "user" | "fallback";
   /** 只读回显：模型清单里记的窗口，只作参考值，不参与计算。 */
   catalog_context_window_tokens?: number;
-  max_output_tokens?: number;
+  /** 用户手填的输出上限；0 或缺省表示按模型上限。 */
+  max_output_tokens?: number | null;
+  /** 只读回显：默认模型没被调用方覆盖时实际发出的输出上限及来源；0 表示不发。 */
+  effective_max_output_tokens?: number;
+  max_output_tokens_source?: "user" | "builtin" | "default" | "provider";
   timeout_ms?: number;
 }
 
@@ -128,7 +133,8 @@ export interface MessageRelayPair {
   endpoints: MessageRelayEndpoint[];
 }
 
-export interface BotProfileConfig {
+/** 群退避与入站重跑参数见 SendRetrySettings；机器人级 0 或留空按默认值。 */
+export interface BotProfileConfig extends SendRetrySettings {
   connection_profile_id?: string;
   persona_id?: string;
   custom_persona?: Persona;
@@ -251,6 +257,14 @@ export interface BotProfileConfig {
   mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
+  /** 机器人在群里被禁言时暂停回复（只记上下文）；缺省开启。 */
+  muted_reply_pause_enabled?: boolean;
+  /** 暂停回复期间语音是否照常转文字；缺省开启。 */
+  muted_voice_transcription_enabled?: boolean;
+  /** 暂停回复期间图片是否照常识别成文字；缺省开启。 */
+  muted_image_description_enabled?: boolean;
+  /** 暂停回复期间是否照常做回复判断（只记录结果，不生成不发送）；缺省关闭。 */
+  muted_reply_judgment_enabled?: boolean;
   error_reply_prefix?: string;
   send_retry_attempts?: number;
   /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */
@@ -316,6 +330,12 @@ export interface BotProfileConfig {
   /** 连续消息合并置信度百分比，1–100；未设置时默认 75。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 换行分条：消息内每次换行另发一条，列表、表格和代码块整块不拆；需允许多条发送。 */
+  reply_line_split_enabled?: boolean;
+  /** 模拟打字延时：连发时按下一条的字数等待，不低于分段发送间隔，最长 6 秒。 */
+  typing_delay_enabled?: boolean;
+  /** 模拟打字每字毫秒数，1–1000；留空按 100。 */
+  typing_delay_per_char_ms?: number;
   social_reply_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
@@ -329,10 +349,10 @@ export interface BotProfileConfig {
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
@@ -347,8 +367,6 @@ export interface BotProfileConfig {
   self_note_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
-  /** 后台空闲时定期探测模型收不收强制指定工具；探测是会计费的真实调用，缺省关闭。 */
-  llm_capability_probe_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;
   /** 被戳一戳时回一句（OneBot）；缺省关闭。 */
@@ -504,7 +522,8 @@ export interface ResolverDependencyInstallResponse {
   installer?: string;
 }
 
-export interface BotGroupConfig {
+/** 分群的 SendRetrySettings 留空跟随机器人。 */
+export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
   bot_profile_id?: string;
@@ -533,10 +552,10 @@ export interface BotGroupConfig {
   welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
@@ -544,6 +563,10 @@ export interface BotGroupConfig {
   /** 本群连续消息合并置信度百分比；未设置时跟随机器人。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 本群的换行分条开关；不设表示跟随机器人。 */
+  reply_line_split_enabled?: boolean;
+  /** 本群的模拟打字延时开关；不设表示跟随机器人。 */
+  typing_delay_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
@@ -574,6 +597,12 @@ export interface BotGroupConfig {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群被禁言时是否暂停回复；不设表示跟随机器人。 */
+  muted_reply_pause_enabled?: boolean;
+  /** 本群暂停回复期间是否转写语音、识别图片、做回复判断；不设表示跟随机器人。 */
+  muted_voice_transcription_enabled?: boolean;
+  muted_image_description_enabled?: boolean;
+  muted_reply_judgment_enabled?: boolean;
   /** 本群接话评分的补充判据；留空跟随机器人，最多 1000 字。 */
   proactive_reply_extra_criteria?: string;
   /** 本群对 MCP / Skill 的覆盖：档位（off/owner/admins/members，留空跟随机器人）加白名单、黑名单。
@@ -596,10 +625,8 @@ export interface BotGroupSummary extends BotGroupConfig {
   joined: boolean;
   /** 复用同一条连接、在这个群也开着的其它机器人：这个群会收到多份回复。 */
   shared_with?: BotGroupSharedBot[];
-  /** 额度窗口内已用的 token 和调用次数，以及算过继承后真正生效的两档上限。 */
-  quota_tokens_used?: number;
+  /** 额度窗口内已用的调用次数，以及算过继承后真正生效的上限。 */
   quota_calls_used?: number;
-  quota_token_limit?: number;
   quota_call_limit?: number;
 }
 
@@ -2576,6 +2603,91 @@ export interface UserMemoryProfile {
   portrait_count?: number;
   last_seen_at?: string;
   updated_at?: string;
+}
+
+// RelationshipEvaluationStatus 是一次后台好感度评估的结果分类。
+export type RelationshipEvaluationStatus = "changed" | "capped" | "unchanged" | "low_confidence" | "failed" | "skipped";
+
+// RelationshipEvaluation 是一次后台好感度评估：不只是分数变了的，判 0、把握不够、
+// 失败和排满跳过的也在里面。
+export interface RelationshipEvaluation {
+  id: number;
+  bot_profile_id?: string;
+  user_id: string;
+  sender_name?: string;
+  group_id?: string;
+  message_id?: string;
+  message_text?: string;
+  status: RelationshipEvaluationStatus;
+  proposed_delta: number;
+  applied_delta: number;
+  before_score: number;
+  after_score: number;
+  confidence: number;
+  reason?: string;
+  model?: string;
+  error?: string;
+  // 同一次评估里记下的画像：分数没动、只记下了「职业是程序员」也算一次变化。
+  portrait?: RelationshipEvaluationPortrait[];
+  created_at: string;
+}
+
+export interface RelationshipEvaluationPortrait {
+  field: string;
+  label: string;
+  value: string;
+  source?: string;
+}
+
+export interface RelationshipEvaluationsResponse {
+  evaluations: RelationshipEvaluation[];
+  // 画像栏目表，高级筛选按它列可选栏目。
+  portrait_fields?: { field: string; label: string }[];
+  next_before_id?: number;
+}
+
+export interface RelationshipEvaluationsQuery {
+  profile?: string;
+  userID?: string;
+  // search 什么都搜（人、群、原话、原因、画像、模型、失败原因）；person 按 QQ 号或
+  // 昵称模糊找人；groupID 按群号精确筛；since 是 Unix 秒，只要这之后的。
+  search?: string;
+  person?: string;
+  groupID?: string;
+  since?: number;
+  statuses?: RelationshipEvaluationStatus[];
+  // portraitOnly 只要记下了画像的。
+  portraitOnly?: boolean;
+  // direction 按实际生效的分数：up 加分、down 减分、changed 有变化、none 没变。
+  direction?: "" | "up" | "down" | "changed" | "none";
+  chat?: "" | "group" | "private";
+  portraitFields?: string[];
+  portraitSource?: "" | "stated" | "inferred";
+  minConfidence?: number;
+  model?: string;
+  beforeID?: number;
+  limit?: number;
+}
+
+export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery = {}): Promise<RelationshipEvaluationsResponse> {
+  const params = new URLSearchParams({ limit: String(query.limit ?? 50) });
+  if (query.profile) params.set("profile", query.profile);
+  if (query.userID) params.set("user_id", query.userID);
+  if (query.search) params.set("q", query.search);
+  if (query.person) params.set("person", query.person);
+  if (query.groupID) params.set("group_id", query.groupID);
+  if (query.since) params.set("since", String(query.since));
+  // 传了空列表是「一个都不要」，和不传（不限）不一样，所以只看有没有，不看长度。
+  if (query.statuses) params.set("status", query.statuses.join(","));
+  if (query.portraitOnly) params.set("portrait", "1");
+  if (query.direction) params.set("direction", query.direction);
+  if (query.chat) params.set("chat", query.chat);
+  if (query.portraitFields) params.set("portrait_field", query.portraitFields.join(","));
+  if (query.portraitSource) params.set("portrait_source", query.portraitSource);
+  if (query.minConfidence) params.set("min_confidence", String(query.minConfidence));
+  if (query.model) params.set("model", query.model);
+  if (query.beforeID) params.set("before_id", String(query.beforeID));
+  return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);
 }
 
 export interface UserFavorabilityChange {

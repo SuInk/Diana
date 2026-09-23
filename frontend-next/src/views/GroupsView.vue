@@ -330,14 +330,14 @@
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
         <div class="field">
-          <label for="group-quota">模型额度 · 5 小时 token（默认单位 K）</label>
-          <input id="group-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空跟随机器人" />
-          <span class="hint">{{ tokenQuotaReadoutText }}</span>
+          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
+          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">这个群名下的每次模型调用都算，含路由判断和工具步。留空跟随机器人那一档。</span>
         </div>
         <div class="field">
-          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
-          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">按次数计，不带单位。留空跟随机器人那一档。</span>
+          <label for="group-sample">回复抽样率（%）</label>
+          <input id="group-sample" v-model.number="editing.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复。</span>
         </div>
         <div v-if="editingQuota" class="field wide quota-usage">
           <div class="cluster" style="justify-content: space-between; gap: 8px">
@@ -350,9 +350,8 @@
           <span class="hint">{{ editingQuota.detail }}</span>
         </div>
         <p class="hint field wide">
-          留空跟随机器人配置里的同名两档，两边都没填才是不限。两档各自独立、先到先得：句句短但刷个不停的群先撞次数，只说几句却每句带图的先撞 token。统计的是这个群名下所有模型调用，
-          判定、路由和工具步都算，不只是最终那句回复。用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
-          窗口滚过去自动恢复，不需要手动解除。主人不受限。
+          两项留空都跟随机器人配置，两边都没填就是不限额、不抽样。额度用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
+          窗口滚过去自动恢复，不需要手动解除。主人不受额度和抽样限制。
         </p>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
@@ -371,6 +370,26 @@
           <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
         </div>
         <div class="field wide">
+          <label for="group-muted-pause">本群被禁言时暂停回复</label>
+          <AppSelect
+            id="group-muted-pause"
+            :model-value="editing.muted_reply_pause_enabled == null ? '' : editing.muted_reply_pause_enabled ? 'on' : 'off'"
+            :options="groupMutedReplyPauseOptions"
+            @update:model-value="(value) => { if (editing) editing.muted_reply_pause_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">暂停期间消息只记入上下文，不生成回复；解禁后从新消息开始回复。</span>
+        </div>
+        <div v-for="item in mutedStepItems" :key="item.key" class="field">
+          <label :for="`group-${item.key}`">{{ item.label }}</label>
+          <AppSelect
+            :id="`group-${item.key}`"
+            :model-value="editing[item.key] == null ? '' : editing[item.key] ? 'on' : 'off'"
+            :options="followBotOptions(mutedStepDefaults[item.key], item.fallback)"
+            @update:model-value="(value) => { if (editing) editing[item.key] = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">{{ item.hint }}</span>
+        </div>
+        <div class="field wide">
           <label for="group-natural-split">本群允许多条发送</label>
           <AppSelect
             id="group-natural-split"
@@ -378,7 +397,27 @@
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">换行不分条；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+          <span class="hint">换行不分条（开启换行分条除外）；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-line-split">本群换行分条发送</label>
+          <AppSelect
+            id="group-line-split"
+            :model-value="editing.reply_line_split_enabled == null ? '' : editing.reply_line_split_enabled ? 'on' : 'off'"
+            :options="groupLineSplitOptions"
+            @update:model-value="(value) => { if (editing) editing.reply_line_split_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">每换一行另发一条；列表、表格和代码块整块发。本群不允许多条发送时不生效。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-typing-delay">本群模拟打字延时</label>
+          <AppSelect
+            id="group-typing-delay"
+            :model-value="editing.typing_delay_enabled == null ? '' : editing.typing_delay_enabled ? 'on' : 'off'"
+            :options="groupTypingDelayOptions"
+            @update:model-value="(value) => { if (editing) editing.typing_delay_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">连发时按下一条的字数停顿；打字速度跟随机器人设置。</span>
         </div>
         <div class="field wide">
           <label for="group-preserve-lines">本群普通段落换行</label>
@@ -447,6 +486,21 @@
             step="1"
             inputmode="numeric"
           />
+        </div>
+        <div v-for="field in sendRetryFields" :key="field.key" class="field">
+          <label :for="`group-${field.key}`">{{ field.label }}</label>
+          <input
+            :id="`group-${field.key}`"
+            v-model.number="editing[field.key]"
+            class="input"
+            type="number"
+            :min="field.min"
+            :max="field.max"
+            step="1"
+            inputmode="numeric"
+            :placeholder="`跟随机器人（${botSendRetryValue(field)}）`"
+          />
+          <span class="hint">{{ field.hint }}</span>
         </div>
         <div class="field wide">
           <label>本群回复时间与屏蔽账号</label>
@@ -571,9 +625,9 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
-import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
 
 // 空值代表「跟随全局」，与后端把空字符串当成未覆盖的约定一致。
 const groupTriggerModeOptions: AppSelectOption[] = [
@@ -684,31 +738,21 @@ const editing = ref<BotGroupConfig | null>(null);
 
 const quotaWindowSeconds = ref(0);
 
-// 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。两档都设了就都画出来，
-// 进度条按吃紧的那一档走——先撞哪一档就先停在哪一档。
+// 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。
 const editingQuota = computed(() => {
   const groupID = editing.value?.group_id;
   if (!groupID) return undefined;
   const summary = groups.value.find((group) => group.group_id === groupID);
   if (!summary) return undefined;
-  const tokenLimit = summary.quota_token_limit ?? 0;
   const callLimit = summary.quota_call_limit ?? 0;
-  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
-  const tokensUsed = summary.quota_tokens_used ?? 0;
+  if (callLimit <= 0) return undefined;
   const callsUsed = summary.quota_calls_used ?? 0;
-  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
-  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
-  const parts: string[] = [];
-  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")} / ${tokenLimit.toLocaleString("en-US")}`);
-  if (callLimit > 0) parts.push(`调用 ${callsUsed} / ${callLimit} 次`);
-  const percent = Math.round(Math.max(tokenRatio, callRatio) * 100);
+  const percent = Math.round((callsUsed / callLimit) * 100);
   const detail =
     percent >= 100
       ? "已用满，这个群暂停一切花 token 的环节；消息照常进历史和长期记忆，窗口滚过去自动恢复。"
-      : `剩 ${tokenLimit > 0 ? `${formatTokenCount(Math.max(0, tokenLimit - tokensUsed))} token` : ""}${
-          tokenLimit > 0 && callLimit > 0 ? "、" : ""
-        }${callLimit > 0 ? `${Math.max(0, callLimit - callsUsed)} 次调用` : ""}。窗口是滚动的，不在整点清零。`;
-  return { text: parts.join("，"), detail, percent };
+      : `剩 ${Math.max(0, callLimit - callsUsed)} 次调用。窗口是滚动的，不在整点清零。`;
+  return { text: `调用 ${callsUsed} / ${callLimit} 次`, detail, percent };
 });
 
 
@@ -719,43 +763,16 @@ const quotaWindowLabel = computed(() => {
 });
 
 // 额度是个「悄悄生效」的闸门：用满之后机器人就是不说话，不摆出进度来没人知道
-// 是撞了额度还是坏了。所以两档里谁更吃紧就先显示谁，快满和已满分开着色。
+// 是撞了额度还是坏了。快满和已满分开着色。
 function quotaBadge(group: BotGroupSummary): { text: string; title: string; tone: string } | undefined {
-  const tokenLimit = group.quota_token_limit ?? 0;
   const callLimit = group.quota_call_limit ?? 0;
-  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
-  const tokensUsed = group.quota_tokens_used ?? 0;
+  if (callLimit <= 0) return undefined;
   const callsUsed = group.quota_calls_used ?? 0;
-  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
-  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
-  const byTokens = tokenRatio >= callRatio;
-  const ratio = Math.max(tokenRatio, callRatio);
-  const text = byTokens
-    ? `额度 ${formatTokenCount(tokensUsed)}/${formatTokenCount(tokenLimit)}`
-    : `额度 ${callsUsed}/${callLimit} 次`;
-  const parts: string[] = [];
-  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")}/${tokenLimit.toLocaleString("en-US")}`);
-  if (callLimit > 0) parts.push(`调用 ${callsUsed}/${callLimit} 次`);
+  const ratio = callsUsed / callLimit;
   const tone = ratio >= 1 ? "warn" : ratio >= 0.8 ? "accent" : "";
   const suffix = ratio >= 1 ? "，已暂停一切花 token 的环节，窗口滚过去自动恢复" : "";
-  return { text, title: `${quotaWindowLabel.value}：${parts.join("，")}${suffix}`, tone };
+  return { text: `额度 ${callsUsed}/${callLimit} 次`, title: `${quotaWindowLabel.value}：调用 ${callsUsed}/${callLimit} 次${suffix}`, tone };
 }
-
-function formatTokenCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
-  return String(value);
-}
-
-const tokenQuotaDraft = ref("");
-
-const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空跟随机器人。"));
-
-watch(tokenQuotaDraft, (value) => {
-  if (!editing.value) return;
-  const parsed = parseTokenQuota(value);
-  editing.value.model_token_quota = parsed === undefined ? 0 : parsed;
-});
 const editingGroupName = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
@@ -769,11 +786,53 @@ const defaultNaturalReplySplitEnabled = computed(() =>
     ?? naturalReplySplitDefaults.value[""]
     ?? true
 );
+// 被禁言时暂停回复，以及暂停期间哪些环节照常执行。缺省值跟机器人配置那边一致。
+type MutedStepKey = "muted_image_description_enabled" | "muted_voice_transcription_enabled" | "muted_reply_judgment_enabled";
+const mutedStepItems: { key: MutedStepKey; label: string; fallback: boolean; hint: string }[] = [
+  { key: "muted_image_description_enabled", label: "暂停期间识别图片", fallback: true, hint: "关掉能省下识图费用，但这段历史里的图片没有文字描述。" },
+  { key: "muted_voice_transcription_enabled", label: "暂停期间语音转文字", fallback: true, hint: "关掉能省下转写费用，但这段历史里的语音没有文字。" },
+  { key: "muted_reply_judgment_enabled", label: "暂停期间回复判断", fallback: false, hint: "开启后照常判断，该回的记为「判断该回，但禁言中未发送」，不生成也不发送。" }
+];
+const mutedReplyPauseDefaults = ref<Record<string, boolean>>({});
+const mutedStepDefaults = ref<Record<MutedStepKey, Record<string, boolean>>>({
+  muted_image_description_enabled: {},
+  muted_voice_transcription_enabled: {},
+  muted_reply_judgment_enabled: {}
+});
+function followBotOptions(defaults: Record<string, boolean>, fallback = true): AppSelectOption[] {
+  const botDefault = defaults[editing.value?.bot_profile_id || botScope.value] ?? defaults[""] ?? fallback;
+  return [
+    { value: "", label: `跟随机器人（${botDefault ? "开启" : "关闭"}）` },
+    { value: "on", label: "开启" },
+    { value: "off", label: "关闭" }
+  ];
+}
+const groupMutedReplyPauseOptions = computed(() => followBotOptions(mutedReplyPauseDefaults.value));
+// 分群的重发参数留空跟随机器人，占位符显示机器人当前生效的值。
+const sendRetryDefaults = ref<Record<string, SendRetrySettings>>({});
+function botSendRetryValue(field: SendRetryField): number {
+  const bot = sendRetryDefaults.value[editing.value?.bot_profile_id || botScope.value] ?? sendRetryDefaults.value[""];
+  const value = Number(bot?.[field.key]);
+  return Number.isInteger(value) && value > 0 ? value : field.fallback;
+}
 const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
   { value: "", label: `跟随机器人（${defaultNaturalReplySplitEnabled.value ? "开启" : "关闭"}）` },
   { value: "on", label: "开启" },
   { value: "off", label: "关闭" }
 ]);
+// 换行分条和模拟打字默认关闭，同样按所属机器人显示继承值。
+const lineSplitDefaults = ref<Record<string, boolean>>({});
+const typingDelayDefaults = ref<Record<string, boolean>>({});
+function inheritedSwitchOptions(defaults: Record<string, boolean>): AppSelectOption[] {
+  const inherited = defaults[editing.value?.bot_profile_id || botScope.value] ?? defaults[""] ?? false;
+  return [
+    { value: "", label: `跟随机器人（${inherited ? "开启" : "关闭"}）` },
+    { value: "on", label: "开启" },
+    { value: "off", label: "关闭" }
+  ];
+}
+const groupLineSplitOptions = computed(() => inheritedSwitchOptions(lineSplitDefaults.value));
+const groupTypingDelayOptions = computed(() => inheritedSwitchOptions(typingDelayDefaults.value));
 const groupAccountSafetyOptions: AppSelectOption[] = [
   { value: "", label: "跟随机器人" },
   { value: "on", label: "开启（主动和直接回复）" },
@@ -915,7 +974,26 @@ async function load(showFeedback = false): Promise<void> {
         ["", current.natural_reply_split_enabled ?? true],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
       ]);
+      lineSplitDefaults.value = Object.fromEntries([
+        ["", current.reply_line_split_enabled ?? false],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.reply_line_split_enabled ?? false])
+      ]);
+      typingDelayDefaults.value = Object.fromEntries([
+        ["", current.typing_delay_enabled ?? false],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.typing_delay_enabled ?? false])
+      ]);
       defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
+      mutedReplyPauseDefaults.value = Object.fromEntries([
+        ["", current.muted_reply_pause_enabled ?? true],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.muted_reply_pause_enabled ?? true])
+      ]);
+      for (const item of mutedStepItems) {
+        mutedStepDefaults.value[item.key] = Object.fromEntries([
+          ["", current[item.key] ?? item.fallback],
+          ...(config.profiles ?? []).map((profile) => [profile.id, profile[item.key] ?? item.fallback])
+        ]);
+      }
+      sendRetryDefaults.value = Object.fromEntries([["", current], ...(config.profiles ?? []).map((profile) => [profile.id, profile])]);
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
@@ -962,10 +1040,10 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
+  withUnsetSendRetryCleared(config);
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
-  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
@@ -1202,11 +1280,20 @@ async function saveEditing(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
+  const sendRetryError = sendRetryValidationError(current);
+  if (sendRetryError) {
+    toastError(sendRetryError);
+    return;
+  }
   saving.value = true;
   try {
     const payload: BotGroupConfig = {
       ...current,
+      ...sendRetryPayload(current),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
+      model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
@@ -1243,6 +1330,8 @@ function upsert(config: BotGroupConfig): void {
       // 恢复继承时响应会省略这个字段，不能保留列表里先前的显式开关。
       natural_reply_split_enabled: config.natural_reply_split_enabled,
       reply_preserve_line_breaks: config.reply_preserve_line_breaks,
+      reply_line_split_enabled: config.reply_line_split_enabled,
+      typing_delay_enabled: config.typing_delay_enabled,
       configured: true
     };
   } else {

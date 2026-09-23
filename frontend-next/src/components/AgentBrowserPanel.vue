@@ -2,20 +2,20 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <section class="browser-panel">
-    <header class="view-header">
-      <div class="view-title">
-        <h2>交互式浏览器</h2>
-        <p>{{ botScope ? '模型通过 CDP 操作一个真实浏览器，用的是那个浏览器已有的登录态' : '选择机器人后配置' }}</p>
-      </div>
-      <div class="view-actions"><button class="btn" :disabled="loading" @click="load"><RefreshCw :size="15" />刷新</button></div>
-    </header>
+  <!-- 浏览器页里的一档，卡片头和另外几档用同一套：标题、一句说明、右侧小刷新。 -->
+  <section class="card">
+    <div class="card-header">
+      <h2>外接浏览器（CDP）</h2>
+      <span class="card-sub">{{ botScope ? '模型通过 CDP 操作一个真实浏览器，用的是那个浏览器已有的登录态' : '选择机器人后配置' }}</span>
+      <button class="btn small ghost" type="button" :disabled="loading" title="刷新" aria-label="刷新外接浏览器配置" @click="load"><RefreshCw :size="14" aria-hidden="true" /></button>
+    </div>
+    <div class="card-body">
     <p v-if="loadError" role="alert" class="error-text">{{ loadError }}</p>
     <p v-if="loading">正在读取…</p>
     <template v-else-if="!botScope"><p class="hint">先在顶部选一个机器人。</p></template>
     <template v-else>
       <!-- 这一条要摆在输入框前面：它是这个功能唯一的真实风险，看到地址再想起来就晚了。 -->
-      <p class="hint">这几个工具操作的是一个已经开着的浏览器，它登录着谁的账号，模型就以谁的身份点下去。只接你自己起的、专门给它用的浏览器实例，别接日常那个。要读公开网页用不着它——那是插件页的「网页渲染」，走一次性沙箱，不带登录态。</p>
+      <p class="hint">这几个工具操作的是一个已经开着的浏览器，它登录着谁的账号，模型就以谁的身份点下去。只接你自己起的、专门给它用的浏览器实例，别接日常那个。要读公开网页用不着它——那是上面的「一次性无头渲染」，不带登录态。</p>
       <div class="browser-form">
         <label class="field">
           CDP 地址
@@ -35,6 +35,7 @@
       </div>
       <p class="hint">接上之后模型可用：{{ tools.join('、') }}。地址连不上时这些工具会调用失败，不会自动停用。</p>
     </template>
+    </div>
   </section>
 </template>
 
@@ -99,5 +100,5 @@ onMounted(load);
 </script>
 
 <style scoped>
-.browser-panel{padding-top:20px}.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-actions{margin-top:16px;gap:8px}.error-text{color:var(--danger)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
+.browser-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.browser-actions{margin-top:16px;gap:8px}.error-text{color:var(--danger)}@media(max-width:600px){.browser-form{grid-template-columns:1fr}}
 </style>

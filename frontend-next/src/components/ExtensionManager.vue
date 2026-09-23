@@ -47,11 +47,9 @@
         </div>
         <p class="plugin-card-desc" :title="item.description || item.source">{{ item.description || item.source || '本地扩展' }}</p>
         <p v-if="item.error" class="error-text">{{ item.error }}</p>
-        <!-- Skill 的常驻档位：常驻就是正文直接进上下文，不必再 read_skill。MCP 的档位
-             按服务算，放在「上下文」标签里，和内置工具排在一起。 -->
-        <div v-if="botScope && kind === 'skill'" class="segmented" role="group" :aria-label="`${item.name} 的上下文档位`">
-          <button v-for="tier in residencyTiers" :key="String(tier.value)" type="button" :class="{active: residency(item) === tier.value}" :disabled="busy === item.id || item.available===false" :title="tierHint(tier.value, item)" @click="setResidency(item, tier.value)">{{ tier.label }}</button>
-        </div>
+        <!-- Skill 正文带不带在「机器人 → 上下文」里改，和工具名单同一页：这里是「装了
+             什么」，那里是「每轮花多少」。卡片上只显示当前档位。 -->
+        <p v-if="botScope && kind === 'skill' && item.enabled && item.resident !== undefined" class="plugin-card-desc">正文：{{ item.resident ? '常驻' : '按需' }}（在机器人配置「上下文」里改）</p>
         <!-- 结构照插件卡片来：左边轻量信息、右边操作，横排版式靠这层排序。 -->
         <div class="plugin-card-bottom">
           <div class="plugin-card-meta"><span class="extension-audience-note">{{ item.managed ? '可管理' : '只读' }}</span></div>
@@ -290,18 +288,6 @@ async function setState(item:ManagedExtension,state:ExtensionState){const profil
  }catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
 function loadAudienceInputs(item:ManagedExtension|null){accessUsers.value=[...(item?.member_audience?.users||[])];accessGroups.value=[...(item?.member_audience?.groups||[])];accessError.value=''}
 async function saveAudience(){const item=permissionItem.value,profile=botScope.value;if(!item||!profile)return;savingAccess.value=true;accessError.value='';try{await manageExtension({operation:'audience',kind:props.kind,name:item.name,profile_id:profile,audience:{min_role:item.member_audience?.min_role||'',users:accessUsers.value,groups:accessGroups.value}});toastSuccess('开放对象已更新，后续会话生效');await load()}catch(e){accessError.value=String(e instanceof Error?e.message:e)}finally{savingAccess.value=false}}
-// 默认档就是「只进目录」。正文常驻解决的是另一个问题：上下文一长，模型按目录去
-// read_skill 这一步经常不做，写得再细的 skill 也读不到。
-const residencyTiers=[{value:null,label:'默认'},{value:true,label:'常驻'},{value:false,label:'按需'}] as const;
-// 「默认」对每个 skill 的含义不一样，取决于它自己声明没声明触发词，所以提示按行算。
-function tierHint(value:boolean|null,item:ManagedExtension){
- if(value===true)return '正文每轮都进上下文，模型不必再 read_skill；长 skill 每轮都要算钱';
- if(value===false)return '只进目录，用到再 read_skill；声明过触发词也不再自动带正文';
- return item.keywords?.length?`跟随默认：最近两条消息命中「${item.keywords.join('、')}」时才带正文，其余时候只进目录`:'跟随默认：只进目录，用到再 read_skill。在 SKILL.md 的 keywords 里写上触发词，就能改成命中才带正文';
-}
-const residency=(item:ManagedExtension)=>item.resident===undefined?null:item.resident;
-async function setResidency(item:ManagedExtension,value:boolean|null){const profile=botScope.value;if(!profile||residency(item)===value)return;busy.value=item.id;
- try{const payload:Record<string,unknown>={operation:'residency',kind:props.kind,name:item.name,profile_id:profile};if(value!==null)payload.resident=value;await manageExtension(payload);toastSuccess('档位已更新，后续会话生效');await load()}catch(e){toastError(String(e instanceof Error?e.message:e))}finally{busy.value=''}}
 async function remove(item:ManagedExtension){if(!await askConfirm({title:`删除 ${item.name}？`,message:'全局删除会影响使用它的所有机器人。',confirmLabel:'删除',danger:true}))return;try{await manageExtension({operation:'delete',kind:props.kind,name:item.name});await load()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
 watch(() => state(),()=>{tested.value=false;discovered.value=[]});
 async function prepareLeave(){await closeEditor();return !editing.value}

@@ -183,6 +183,9 @@ type GenerateRequest struct {
 	// 哪个字段。生成文本的供应商忽略它；只做判断的供应商靠它还原出调用方期待的
 	// JSON，没有它就只能报错。
 	Decision *DecisionSpec `json:"-"`
+	// implicitMaxOutputTokens 标记 MaxOutputTokens 是按内置表代填的，不是调用方或
+	// 配置档给的。上游拒绝这个值时可以去掉字段重发；显式给的值被拒就照实报错。
+	implicitMaxOutputTokens bool
 }
 
 type Usage struct {
