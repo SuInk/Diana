@@ -26,7 +26,7 @@
 
 没有 `prompts` 这一节的文件（这个功能之前导出的人设、手写的最小人设、角色卡）照样能导入，按全部默认值处理：它们从来没声明过提示词，谈不上缺了哪段。
 
-YAML 只在后端生成和解析（`POST /api/assistant/personas/yaml`、`/personas/parse`），前端没有 YAML 库。演示站没有后端，用 `frontend-next/src/demo-yaml.ts` 在前端模拟，写法与后端一致。
+YAML 只在后端生成和解析（`POST /api/assistant/personas/yaml`、`/personas/parse`），前端没有 YAML 库。演示站没有后端，用 `frontend-next/src/demo-yaml.ts` 在前端模拟，写法与后端一致；提示词目录是 `frontend-next/src/demo-prompt-catalog.json`，和登记表逐字相同，由 `webui/demo_prompt_catalog_test.go` 生成并校验（登记表一变测试就失败，按提示重新生成）。
 
 ## 分享
 

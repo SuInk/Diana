@@ -3,6 +3,8 @@
 
 import { extensionDemoResponse } from './extension-demo';
 import { parseYAML, toYAML } from './demo-yaml';
+// 和后端登记表逐字相同的提示词目录，由 webui/demo_prompt_catalog_test.go 生成并校验。
+import demoPromptCatalogData from './demo-prompt-catalog.json';
 import type {
   AgentResidencyEntry,
   AppLogEntry,
@@ -12,6 +14,7 @@ import type {
   LLMConfig,
   OpenAPIKey,
   Persona,
+  PromptCatalog,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
@@ -1146,21 +1149,19 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   // 演示站没有后端：人设 YAML 用 demo-yaml.ts 在前端模拟生成和解析，写法与后端一致，
   // prompts 同样列全，读回时同样要求一段不少、一段不多。
   if (path === "/api/assistant/personas/yaml") {
-    const personas = ((body.personas as Persona[]) ?? []).map(({ id: _id, updated_at: _updated, ...persona }) => ({
+    const personas = ((body.personas as Persona[]) ?? []).map(({ id: _id, updated_at: _updated, prompts, extra_criteria, account_safety_rules, ...persona }) => ({
       ...persona,
+      extra_criteria: extra_criteria ?? "",
+      account_safety_rules: account_safety_rules ?? "",
       prompts: Object.fromEntries(
         demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [
-          [spec.key, persona.prompts?.[spec.key] || spec.default],
-          ...(spec.format_key ? [[spec.format_key, persona.prompts?.[spec.format_key] || (spec.contract ?? "").trim()] as [string, string]] : [])
+          [spec.key, prompts?.[spec.key] || spec.default],
+          ...(spec.format_key ? [[spec.format_key, prompts?.[spec.format_key] || (spec.contract ?? "").trim()] as [string, string]] : [])
         ])
-      ),
-      extra_criteria: persona.extra_criteria ?? "",
-      account_safety_rules: persona.account_safety_rules ?? ""
+      )
     }));
-    const comments = Object.fromEntries(demoPromptCatalog.prompts.map((spec) => [spec.key, `${spec.title}：${spec.usage}`]));
     const document = personas.length === 1 ? personas[0] : { version: 1, personas };
-    const blockKeys = new Set(demoPromptCatalog.prompts.flatMap((spec) => (spec.format_key ? [spec.key, spec.format_key] : [spec.key])));
-    return json({ yaml: toYAML(document as never, "Diana 人设文件（演示模式）。prompts 列出全部内置提示词，读回时必须一段不少、一段不多。", comments, blockKeys) });
+    return json({ yaml: toYAML(document as never, demoPersonaYAMLHeader, demoPromptComments(), demoPromptBlockKeys()) });
   }
   if (path === "/api/assistant/personas/parse") {
     try {
@@ -1431,38 +1432,36 @@ export function installDemoMode(): void {
   window.fetch = demoFetch;
 }
 
-// 演示用的提示词目录只挑几条代表：普通正文、带占位符的模板、锁了输出格式的判断提示词。
-// 真实目录由后端登记表生成，这里不追求齐全。
-const demoPromptCatalog = {
-  max_runes: 20000,
-  groups: [
-    { id: "reply_base", label: "回复 · 基础文案", description: "正式回复里紧跟人设的几段：梗与修辞、排版、时间、发言者、只发图或只叫一声时的替代正文。" },
-    { id: "routing", label: "接话与意图判断", description: "决定这条消息要不要回、回哪一条、指的是哪条的判断模型提示词。" }
-  ],
-  prompts: [
-    {
-      key: "reply.group_sender",
-      group: "reply_base",
-      title: "群聊发言者",
-      usage: "群聊里「注入发言者」打开时，放在历史之后，告诉模型这一轮是谁在说话。",
-      default: "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称（用户 ID）: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。",
-      vars: [{ name: "sender", description: "当前发言者的昵称和用户 ID" }]
-    },
-    {
-      key: "reply.image_only",
-      group: "reply_base",
-      title: "只发图片时的正文",
-      usage: "用户 @ 机器人只发了一张图、没写字时，用这句代替用户正文。",
-      default: "请分析这张图片，并直接回答用户关于图片的问题。"
-    },
-    {
-      key: "routing.demo_classifier",
-      group: "routing",
-      title: "连续消息关系判断",
-      usage: "同一个人连发几条时，判断后一条是补充、更正还是新话题。",
-      default: "判断两条消息之间的关系：后一条是在补充前一条、更正前一条，还是开了一个新话题。",
-      contract: "\n\n只输出一个 JSON 对象：{\"relation\": \"supplement|correction|new\"}，不要代码围栏。",
-      format_key: "routing.demo_classifier.format"
+const demoPromptCatalog = demoPromptCatalogData as PromptCatalog;
+
+const demoPersonaYAMLHeader = `Diana 人设文件。prompts 列出全部内置提示词：没改过的是默认原文，改哪段就改哪段的正文。
+读回时 prompts 必须一段不少、一段不多；正文和默认原文相同的不会存成覆盖，以后默认文案更新会跟着走。
+{名字} 这样的占位符由运行时填入，删掉的话那项信息就不再进提示词。`;
+
+// 注释和后端 persona_prompts.go 写的一样：分组第一条带组标题，每条写标题、用途、占位符，
+// 输出格式那条带警告。
+function demoPromptComments(): Record<string, string> {
+  const groups = new Map(demoPromptCatalog.groups.map((group) => [group.id, group]));
+  const comments: Record<string, string> = {
+    extra_criteria: "接话评分的补充判据：本群的称呼、黑话和禁区，拼在接话评分尾部。留空不加。套用人设时填进机器人配置，分群仍可单独覆盖。",
+    account_safety_rules: "发送前审核的账号安全规则：填了就替代默认的账号安全风险范围。留空用默认范围。套用人设时填进机器人配置，分群仍可单独覆盖。"
+  };
+  let lastGroup = "";
+  for (const spec of demoPromptCatalog.prompts) {
+    const lines: string[] = [];
+    if (spec.group !== lastGroup) {
+      const group = groups.get(spec.group);
+      lines.push(`──── ${group?.label ?? spec.group} ────`, group?.description ?? "", "");
+      lastGroup = spec.group;
     }
-  ]
-};
+    lines.push(`${spec.title}：${spec.usage}`);
+    for (const variable of spec.vars ?? []) lines.push(`占位符 {${variable.name}}：${variable.description}`);
+    comments[spec.key] = lines.join("\n");
+    if (spec.format_key) comments[spec.format_key] = "↑ 这段的输出格式，程序按它解析模型的回答。改动时字段名、取值和结构要和程序对得上，改坏了这条链路会沉默或放行。";
+  }
+  return comments;
+}
+
+function demoPromptBlockKeys(): Set<string> {
+  return new Set(demoPromptCatalog.prompts.flatMap((spec) => (spec.format_key ? [spec.key, spec.format_key] : [spec.key])));
+}

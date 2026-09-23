@@ -30,3 +30,16 @@ test("prompt bodies render as literal blocks even on one line", () => {
   assert.match(text, /reply\.image_only: \|-\n    看图: 一句 # 注释/);
   assert.deepEqual(parseYAML(text), { prompts: { "reply.image_only": "看图: 一句 # 注释" } });
 });
+
+test("every real default prompt survives the demo YAML round trip", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const catalog = JSON.parse(await readFile(new URL("./demo-prompt-catalog.json", import.meta.url), "utf8"));
+  const prompts = {};
+  for (const spec of catalog.prompts) {
+    prompts[spec.key] = spec.default;
+    if (spec.format_key) prompts[spec.format_key] = spec.contract.trim();
+  }
+  const keys = new Set(Object.keys(prompts));
+  const text = toYAML({ name: "全量", extra_criteria: "", prompts }, "", {}, keys);
+  assert.deepEqual(parseYAML(text).prompts, prompts);
+});
