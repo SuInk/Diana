@@ -1,6 +1,6 @@
 <!-- Copyright (c) 2025-now SuInk. Licensed under the Limited Redistribution License. -->
 <!--
-  浏览器这一页是三档浏览器的唯一入口。以前它们各在一处——内置浏览器在这里、浏览器
+  浏览器这一页是各档浏览器的唯一入口。以前它们各在一处——内置浏览器在这里、浏览器
   控制扩展在「设置」里、一次性无头渲染在插件页——而用户要回答的第一个问题恰恰是
   「我该用哪一档」，三处分开就没人能回答。这里按「谁的浏览器、带不带登录态」并排
   列出来，配置跟着各自那一档走。
@@ -8,9 +8,9 @@
 <template>
   <section class="stack">
     <div class="card">
-      <div class="card-head">
+      <div class="card-header">
         <h2>浏览器</h2>
-        <span class="card-sub">三档浏览器，区别在于用谁的浏览器、带不带你的登录态</span>
+        <span class="card-sub">几档浏览器，区别在于用谁的浏览器、带不带你的登录态</span>
       </div>
       <div class="card-body">
         <div class="browser-tiers">
@@ -32,7 +32,7 @@
 
     <template v-if="tab === 'render'">
       <div class="card">
-        <div class="card-head">
+        <div class="card-header">
           <h2>一次性无头渲染</h2>
           <span class="badge" :class="browserDependency?.available ? 'ok' : 'warn'">
             {{ browserDependency?.available ? "可用" : "缺浏览器" }}
@@ -42,7 +42,7 @@
         <div class="card-body stack">
           <p class="muted" style="margin: 0; font-size: 13px">
             Markdown / Mermaid / SVG 出图、PDF 渲染、网页读取与截图走的都是它，链接解析器抓 JS 渲染的页面也一样。
-            因为不带登录态，它是三档里唯一对群成员开放的（工具名 <code class="mono">browser_render</code>）。
+            因为不带登录态，它是几档里唯一对群成员开放的（工具名 <code class="mono">browser_render</code>）。
             渲染尺寸、窗口模式这些参数在插件页的「网页渲染」里。
           </p>
           <PluginDependencyList
@@ -60,7 +60,7 @@
 
     <template v-if="tab === 'box'">
     <div class="card">
-      <div class="card-head">
+      <div class="card-header">
         <h2>内置浏览器</h2>
         <span class="badge" :class="status.running ? 'ok' : 'warn'">
           {{ status.running ? (status.takeover ? "你在操作" : "运行中") : status.settings.enabled ? "未启动" : "未启用" }}
@@ -110,7 +110,7 @@
     </div>
 
     <div v-if="status.running" class="card">
-      <div class="card-head">
+      <div class="card-header">
         <h2>画面</h2>
         <span class="card-sub">{{ currentTitle || "空白页" }}</span>
       </div>
@@ -153,11 +153,15 @@
     </template>
 
     <BrowserControlPanel v-if="tab === 'control'" />
+    <!-- 外接 CDP 原来是扩展页的一个标签，和「装了什么」那几项并列却说的是浏览器，
+         挪到这里跟另外三档放在一起。 -->
+    <AgentBrowserPanel v-if="tab === 'cdp'" />
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import {
@@ -187,7 +191,8 @@ interface LiveFrame {
 const tiers = [
   { key: "render" as const, label: "一次性无头渲染", hint: "全新 profile，用完即删", who: "群成员也能用" },
   { key: "box" as const, label: "内置浏览器", hint: "Diana 自己的常驻浏览器", who: "只有主人" },
-  { key: "control" as const, label: "浏览器控制扩展", hint: "你自己日常用的浏览器", who: "只有主人" }
+  { key: "control" as const, label: "浏览器控制扩展", hint: "你自己日常用的浏览器", who: "只有主人" },
+  { key: "cdp" as const, label: "外接浏览器（CDP）", hint: "你另起的专用 Chrome", who: "按机器人配置" }
 ];
 const tab = ref<(typeof tiers)[number]["key"]>("box");
 
@@ -433,10 +438,23 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 四档一排：auto-fit 在常见宽度下会排成 3+1，剩下那张孤零零挂在第二行。 */
 .browser-tiers {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+@media (max-width: 960px) {
+  .browser-tiers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .browser-tiers {
+    grid-template-columns: 1fr;
+  }
 }
 
 .browser-tier {
@@ -461,10 +479,20 @@ onBeforeUnmount(() => {
   font-size: 13.5px;
 }
 
-.browser-tier-hint,
-.browser-tier-who {
+.browser-tier-hint {
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--muted);
+}
+
+/* 谁能用是选档时最要紧的那句，单独成一枚小标签，不和说明混成同一种灰字。 */
+.browser-tier-who {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
 
 .browser-stage {

@@ -7,7 +7,6 @@
       <button v-for="tab in extensionTabs" :key="tab.value" type="button" role="tab" :aria-selected="extensionTab === tab.value" :class="{active:extensionTab === tab.value}" @click="changeExtensionTab(tab.value)">{{ tab.label }}</button>
     </div>
     <ExtensionManager v-if="extensionTab === 'skill' || extensionTab === 'mcp'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
-    <AgentBrowserPanel v-else-if="extensionTab === 'browser'" />
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
@@ -653,8 +652,7 @@
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
-import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
-const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'},{value:'browser' as const,label:'浏览器'}];
+const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
 type ExtensionTab = typeof extensionTabs[number]['value'];
 const extensionTab = ref<ExtensionTab>('plugins');
 const extensionManager = ref<InstanceType<typeof ExtensionManager> | null>(null);
