@@ -5,12 +5,11 @@ package assistant
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -509,17 +508,44 @@ func (s *OneBotReverseServer) setStatus(connected bool, selfID string, lastError
 	s.status.UpdatedAt = time.Now()
 }
 
+// oneBotClientFingerprint 标识是哪个接入端在连，既用来节流日志，也直接显示在
+// 运行日志里，所以写成人看得懂的「IP · QQ 号 · 客户端名」。
+//
+// 不带端口：接入端每次重连都换一个本地端口，带上端口同一个客户端每次都是新指纹，
+// 「同一客户端一分钟一条」的节流就形同虚设，token 填错时几秒一条刷满日志。
+// 以前还做成哈希，同一台机器两次握手看着像两个陌生客户端，排查时认不出是谁。
 func oneBotClientFingerprint(r *http.Request) string {
 	if r == nil {
 		return "unknown"
 	}
-	identity := strings.Join([]string{
-		strings.TrimSpace(r.RemoteAddr),
-		strings.TrimSpace(r.Header.Get("X-Self-ID")),
-		strings.TrimSpace(r.Header.Get("User-Agent")),
-	}, "\x00")
-	sum := sha256.Sum256([]byte(identity))
-	return fmt.Sprintf("client-%x", sum[:8])
+	parts := make([]string, 0, 3)
+	host := strings.TrimSpace(r.RemoteAddr)
+	if split, _, err := net.SplitHostPort(host); err == nil {
+		host = split
+	}
+	if host != "" {
+		parts = append(parts, host)
+	}
+	if selfID := strings.TrimSpace(r.Header.Get("X-Self-ID")); selfID != "" {
+		parts = append(parts, "QQ "+selfID)
+	}
+	if agent := oneBotClientAgent(r.Header.Get("User-Agent")); agent != "" {
+		parts = append(parts, agent)
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// oneBotClientAgent 只取 User-Agent 的第一段（通常是「客户端/版本」），整串太长，
+// 后面的平台信息对认出是哪个接入端也没帮助。
+func oneBotClientAgent(value string) string {
+	agent, _, _ := strings.Cut(strings.TrimSpace(value), " ")
+	if runes := []rune(agent); len(runes) > 40 {
+		agent = string(runes[:40])
+	}
+	return agent
 }
 
 func orUnknownClient(value string) string {

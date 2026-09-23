@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -471,9 +472,13 @@ func TestReverseServerWritesRejectionToAppLog(t *testing.T) {
 	server := NewOneBotReverseServer(OneBotConfig{AccessToken: token})
 	logs := &captureAppLogs{}
 	server.SetAppLogWriter(logs)
-	for range 3 {
+	// 接入端每次重连换一个本地端口，仍然是同一个客户端。
+	for port := range 3 {
 		request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+		request.RemoteAddr = fmt.Sprintf("172.18.0.3:%d", 40000+port)
 		request.Header.Set("Authorization", "Bearer wrong-token-value")
+		request.Header.Set("X-Self-ID", "10001")
+		request.Header.Set("User-Agent", "SnowLuma/1.2 (linux)")
 		server.ServeHTTP(httptest.NewRecorder(), request)
 	}
 	entries := logs.entriesSnapshot()
@@ -483,6 +488,9 @@ func TestReverseServerWritesRejectionToAppLog(t *testing.T) {
 	entry := entries[0]
 	if entry.Action != "onebot_handshake_rejected" || entry.Metadata["reason"] != "token_mismatch" || !strings.Contains(entry.Message, "不一致") {
 		t.Fatalf("entry = %#v", entry)
+	}
+	if entry.Target != "172.18.0.3 · QQ 10001 · SnowLuma/1.2" {
+		t.Fatalf("client label = %q", entry.Target)
 	}
 	if strings.Contains(entry.Message+entry.Detail+entry.Target, "wrong-token-value") {
 		t.Fatal("rejection log leaked the presented token")
