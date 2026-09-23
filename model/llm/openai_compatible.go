@@ -497,6 +497,14 @@ func (c *openAICompatibleClient) imageEditInput(ctx context.Context, value strin
 // 抽成包级函数是为了让 Gemini 那条生图链路用同一套输入规则——同一张图在两个提供商
 // 之间换来换去时，能不能读、读成什么 MIME，不该取决于选中了谁。
 func imageEditInputFrom(ctx context.Context, httpClient *http.Client, value string, index int) (imageEditInputData, error) {
+	input, err := rawImageEditInputFrom(ctx, httpClient, value, index)
+	if err != nil {
+		return imageEditInputData{}, err
+	}
+	return normalizeImageEditInput(input, index)
+}
+
+func rawImageEditInputFrom(ctx context.Context, httpClient *http.Client, value string, index int) (imageEditInputData, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return imageEditInputData{}, errors.New("llm: image edit input is empty")

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"mime"
@@ -29,6 +30,14 @@ const (
 	// 数量不设上限的话一条消息就能把配额和后台队列吃干净。
 	dianaImageMaxEachSources = 6
 )
+
+// errImageEditSourceNotFound 在受理时返回给模型，模型据此让用户补图，
+// 不会先答应「在画了」。
+var errImageEditSourceNotFound = errors.New("没有找到可编辑的图片：当前消息、引用链、最近聊天记录和上一次改图任务里都没有图。这次没有开始画，不要对用户说「在画了」；请让用户重新发送图片，或直接引用那张图片再说要怎么改")
+
+// imageEditSourceMissingInstruction 是意图路由判定要改图、却找不到原图时给正文
+// 生成的提示。
+const imageEditSourceMissingInstruction = "【本轮图片任务】用户想改图，但当前消息、引用链、最近聊天记录和上一次改图任务里都没有找到原图，这次没有开始画。不要说「在画了」「马上发出来」，也不要假装已经受理；用一句话请用户重新发送图片，或直接引用那张图片再说要怎么改。"
 
 const (
 	dianaImageToolName       = "image"
@@ -66,6 +75,12 @@ type dianaImageToolRequest struct {
 	// SourceMode 决定多张参考图怎么用：combine 把它们合成一张（默认，也是历史行为），
 	// each 对每张各做一次编辑，最后一起发出。
 	SourceMode string
+	// SourceMessageIDs 是模型指认的原图所在消息。指代由模型自己判断（它看得到
+	// 聊天记录里每条媒体的 message_id），运行时只负责把这些消息里的图取出来。
+	SourceMessageIDs []string
+	// Sources 是受理时就解析好的原图。在受理时解析，找不到图能当场告诉模型，
+	// 而不是先回一句「在画了」，过一会儿再发一条失败通知。
+	Sources []string
 }
 
 type dianaImageTaskOutput struct {
@@ -174,6 +189,11 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 				strconv.Itoa(maxAvatarImageSources) + ` 个。`)
 	}
 	if t.relationship.AllowImageEditing {
+		properties["source_message_ids"] = toolStringArrayParam(
+			`operation="edit" 时要改的图在哪几条消息里：填聊天记录或媒体索引里的 message_id，可以多条，每条消息里的所有图片都会作为原图。` +
+				`用户说「这张」「刚才那几张」「重试」「继续改」而原图不在当前消息或引用消息里时，先认出是哪几条消息再填；` +
+				`重试或继续改上一张时填最初那张原图（或上一次生成结果）所在的消息。当前消息或引用消息本身带图时不用填。最多 ` +
+				strconv.Itoa(maxImageEditSourceMessages) + ` 条。`)
 		properties["source_labels"] = toolStringArrayParam(
 			`与 identity_sources 一一对应的说明文字，可选，逐张发送时原样作为对应图片附带的说明发出（例如「Winter 的头像」），让大家知道每张是谁的。` +
 				`填写时数量必须与 identity_sources 相同。`)
@@ -265,7 +285,14 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 		}
 	}
 	identitySources := configToolStringSlice(input, "identity_sources")
-	if operation == "edit" && len(identitySources) == 0 {
+	var sourceMessageIDs []string
+	if operation == "edit" {
+		sourceMessageIDs = configToolStringSlice(input, "source_message_ids")
+		if len(sourceMessageIDs) > maxImageEditSourceMessages {
+			return dianaImageToolRequest{}, fmt.Errorf("source_message_ids 最多 %d 条", maxImageEditSourceMessages)
+		}
+	}
+	if operation == "edit" && len(identitySources) == 0 && len(sourceMessageIDs) == 0 {
 		identitySources = defaultAvatarIdentitySources(t.event, t.runtime.effectiveConfigForEvent(t.event).BotAccount)
 	}
 	sourceMode := strings.ToLower(strings.TrimSpace(configToolString(input, "source_mode")))
@@ -280,6 +307,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	return dianaImageToolRequest{
 		Operation: operation, Prompt: prompt, Caption: caption,
 		IdentitySources: identitySources, SourceLabels: sourceLabels, SourceMode: sourceMode,
+		SourceMessageIDs: sourceMessageIDs,
 	}, nil
 }
 
@@ -287,6 +315,21 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	name := "图片生成"
 	if request.Operation == "edit" {
 		name = "图片编辑"
+		if len(request.Sources) == 0 && len(request.SourceMessageIDs) > 0 {
+			sources, err := t.runtime.imageEditSourcesFromMessages(ctx, t.event, request.SourceMessageIDs)
+			if err != nil {
+				return dianaImageToolResult{}, err
+			}
+			// 「按某人头像的样子改这张图」：点名的头像跟在原图后面一起交给图片模型。
+			request.Sources = appendImageEditSourceImages(sources, t.runtime.avatarIdentityImageURLs(ctx, t.event, request.IdentitySources)...)
+		}
+		if len(request.Sources) == 0 {
+			request.Sources = t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
+		}
+		if len(request.Sources) == 0 {
+			return dianaImageToolResult{}, errImageEditSourceNotFound
+		}
+		t.runtime.imageEditSources.remember(sessionKey(t.event), request.Sources, time.Now())
 	}
 	// 图片工具是通用工具，不为某种任务单独适配。以前这里会扫 prompt 里有没有
 	// 「五子棋 / 棋盘」，命中就把图片绑到共享棋局状态的版本上，防旧图盖掉新落子。
@@ -393,9 +436,12 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		action = "image_generate"
 		message = "Agent 图片生成已完成"
 	case "edit":
-		sources := t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
+		sources := append([]string(nil), request.Sources...)
 		if len(sources) == 0 {
-			return dianaImageTaskOutput{}, fmt.Errorf("没有找到可编辑的图片；请让用户发送图片或引用图片消息")
+			sources = t.runtime.imageEditSourceImages(ctx, t.event, request.IdentitySources)
+		}
+		if len(sources) == 0 {
+			return dianaImageTaskOutput{}, errImageEditSourceNotFound
 		}
 		// combine 把所有参考图交给一次编辑（合成一张）；each 对每张各编辑一次，
 		// 产出多张。以前只有前者，「把每个人的头像都改一下」这类请求做不出来。
@@ -535,7 +581,7 @@ func dianaImageResultCaption(caption string, delivered, dropped, failed int) str
 func dianaImageTaskKey(event MessageEvent, request dianaImageToolRequest) string {
 	payload := strings.Join(append([]string{
 		sessionKey(event), event.MessageID, request.Operation, request.Prompt, request.SourceMode,
-	}, request.IdentitySources...), "\x00")
+	}, append(append([]string(nil), request.IdentitySources...), request.SourceMessageIDs...)...), "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("image:%x", digest[:12])
 }

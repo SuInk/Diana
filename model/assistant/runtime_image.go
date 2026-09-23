@@ -205,10 +205,20 @@ func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent,
 	out = appendImageEditSourceImages(out, availableImageURLs(event.Segments)...)
 	if event.Quoted != nil {
 		out = appendImageEditSourceImages(out, availableImageURLs(event.Quoted.Segments)...)
+		if len(out) == 0 {
+			out = appendImageEditSourceImages(out, r.quotedChainImageURLs(ctx, event)...)
+		}
 	}
 	out = appendImageEditSourceImages(out, r.semanticReferenceImageURLs(ctx, event)...)
 	if len(out) > 0 {
 		return out
+	}
+	// 引用的是机器人自己的失败通知或「在画了」：用户是在接着上一次改图说话，
+	// 上一次的原图比头像和最近聊天记录都更贴近他指的那张。
+	if r.quotedBotTextWithoutImage(event) {
+		if remembered := r.imageEditSources.recall(sessionKey(event), time.Now()); len(remembered) > 0 {
+			return remembered
+		}
 	}
 	out = appendImageEditSourceImages(out, r.avatarIdentityImageURLs(ctx, event, identitySources)...)
 	if len(out) > 0 {
@@ -216,7 +226,10 @@ func (r *Runtime) imageEditSourceImages(ctx context.Context, event MessageEvent,
 	}
 	history := r.contextHistory(event)
 	out = appendImageEditSourceImages(out, r.preparedRecentHistoryImageBatch(ctx, history, event.MessageID)...)
-	return out
+	if len(out) > 0 {
+		return out
+	}
+	return r.imageEditSources.recall(sessionKey(event), time.Now())
 }
 
 func recentHistoryImageBatch(history []MessageEvent, currentMessageID string) []string {
