@@ -345,10 +345,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
@@ -548,10 +548,10 @@ export interface BotGroupConfig extends SendRetrySettings {
   welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
@@ -621,10 +621,8 @@ export interface BotGroupSummary extends BotGroupConfig {
   joined: boolean;
   /** 复用同一条连接、在这个群也开着的其它机器人：这个群会收到多份回复。 */
   shared_with?: BotGroupSharedBot[];
-  /** 额度窗口内已用的 token 和调用次数，以及算过继承后真正生效的两档上限。 */
-  quota_tokens_used?: number;
+  /** 额度窗口内已用的调用次数，以及算过继承后真正生效的上限。 */
   quota_calls_used?: number;
-  quota_token_limit?: number;
   quota_call_limit?: number;
 }
 

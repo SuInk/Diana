@@ -13,8 +13,8 @@ import (
 	"github.com/SuInk/diana/model/applog"
 )
 
-// groupModelQuotaWindow 是额度的统计窗口：滚动 5 小时，和上游按 token 计费的
-// 套餐窗口一致。
+// groupModelQuotaWindow 是额度的统计窗口：滚动 5 小时，和上游订阅套餐的窗口
+// 一致。
 const groupModelQuotaWindow = 5 * time.Hour
 
 // groupModelQuotaCacheTTL 是用量读数的缓存时长。每条消息都去扫一遍日志太贵，
@@ -50,32 +50,27 @@ func (c *groupModelQuotaCache) put(key string, reading groupQuotaReading) {
 	c.readings[key] = reading
 }
 
-// groupQuotaVerdict 是一次额度判断的结论。两档各自独立，谁先到就按谁拦。
+// groupQuotaVerdict 是一次额度判断的结论。
 type groupQuotaVerdict struct {
 	Exceeded bool
 	Reason   string
 	Usage    applog.GroupUsage
-	Tokens   int64
 	Calls    int64
 }
 
 // GroupModelQuotaWindow 是额度的统计窗口，控制台画进度条时要用同一个口径。
 func GroupModelQuotaWindow() time.Duration { return groupModelQuotaWindow }
 
-// EffectiveGroupModelQuota 算出一个群实际生效的两档额度：群里填了以群为准，
+// EffectiveGroupModelQuota 算出一个群实际生效的调用次数上限：群里填了以群为准，
 // 留空或 0 跟随机器人，两边都没填返回 0 表示不限。
 //
 // 运行时判定和控制台展示都走这里——展示出来的上限要是和真正拦人的那个不一样，
 // 进度条就成了误导。
-func EffectiveGroupModelQuota(bot BotConfig, group GroupConfig) (tokens, calls int64) {
-	tokens, calls = bot.ModelTokenQuota, bot.ModelCallQuota
-	if group.ModelTokenQuota > 0 {
-		tokens = group.ModelTokenQuota
-	}
+func EffectiveGroupModelQuota(bot BotConfig, group GroupConfig) int64 {
 	if group.ModelCallQuota > 0 {
-		calls = group.ModelCallQuota
+		return group.ModelCallQuota
 	}
-	return tokens, calls
+	return bot.ModelCallQuota
 }
 
 // groupModelQuotaExceeded 判断这个群是不是已经用超了本窗口的额度。
@@ -93,11 +88,11 @@ func (r *Runtime) groupModelQuotaExceeded(ctx context.Context, event MessageEven
 	// 的设置一个规矩，不必为额度单独记一套。
 	botCfg := r.effectiveConfigForEvent(event)
 	groupCfg, _ := r.groupConfigForEvent(event)
-	tokenQuota, callQuota := EffectiveGroupModelQuota(botCfg, groupCfg)
-	if tokenQuota <= 0 && callQuota <= 0 {
+	callQuota := EffectiveGroupModelQuota(botCfg, groupCfg)
+	if callQuota <= 0 {
 		return groupQuotaVerdict{}
 	}
-	verdict := groupQuotaVerdict{Tokens: tokenQuota, Calls: callQuota}
+	verdict := groupQuotaVerdict{Calls: callQuota}
 	// 主人不受限：额度用完之后改配置、查用量这些还得靠主人，锁死自己没有道理。
 	if botCfg.IsOwnerEvent(event) {
 		return verdict
@@ -121,11 +116,7 @@ func (r *Runtime) groupModelQuotaExceeded(ctx context.Context, event MessageEven
 		r.groupQuota.put(key, reading)
 	}
 	verdict.Usage = reading.usage
-	switch {
-	case tokenQuota > 0 && reading.usage.Tokens >= tokenQuota:
-		verdict.Exceeded = true
-		verdict.Reason = fmt.Sprintf("token 用量 %d/%d", reading.usage.Tokens, tokenQuota)
-	case callQuota > 0 && reading.usage.Calls >= callQuota:
+	if reading.usage.Calls >= callQuota {
 		verdict.Exceeded = true
 		verdict.Reason = fmt.Sprintf("调用次数 %d/%d", reading.usage.Calls, callQuota)
 	}
@@ -150,9 +141,7 @@ func (r *Runtime) recordGroupModelQuotaExceeded(ctx context.Context, event Messa
 		Metadata: map[string]any{
 			"group_id":       event.GroupID,
 			"bot_profile_id": event.ProfileID,
-			"used_tokens":    verdict.Usage.Tokens,
 			"used_calls":     verdict.Usage.Calls,
-			"quota_tokens":   verdict.Tokens,
 			"quota_calls":    verdict.Calls,
 			"window":         groupModelQuotaWindow.String(),
 		},
