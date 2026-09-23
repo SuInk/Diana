@@ -235,6 +235,10 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 			r.recordRelationshipEvaluationOutcome(event, text, relationshipEvaluationResult{
 				err: errRelationshipEvaluationSaturated,
 			}, UserMemoryProfile{}, RelationshipEvaluationSkipped, nil)
+			// 排满往往成批出现（群里一下子很热闹），运行日志一分钟记一条就够说明问题，
+			// 逐条的记录在「好感与画像」里。
+			r.recordBackgroundFailure("relationship_evaluation_skipped", "后台好感度评估排满，有消息这一轮没评（详见「好感与画像」）", "", errRelationshipEvaluationSaturated,
+				map[string]any{"group_id": event.GroupID, "user_id": event.UserID})
 		}()
 		close(done)
 		return done
@@ -269,8 +273,9 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 			after, stored = r.applyEvaluatedRelationshipUpdate(event, delta, evaluation.Reason, traits)
 		}
 		if stored {
-			r.recordRelationshipEvaluation(runCtx, event, before, after, evaluation)
-			r.recordRelationshipEvaluationOutcome(event, text, result, after, relationshipEvaluationStatus(evaluation, before, after), traits)
+			status := relationshipEvaluationStatus(evaluation, before, after)
+			r.recordRelationshipEvaluation(runCtx, event, before, after, evaluation, status, traits)
+			r.recordRelationshipEvaluationOutcome(event, text, result, after, status, traits)
 		} else {
 			result.err = errRelationshipEvaluationStore
 			r.recordRelationshipEvaluationOutcome(event, text, result, before, RelationshipEvaluationFailed, nil)
@@ -335,30 +340,59 @@ func parseRelationshipEvaluationDecision(raw string) (relationshipEvaluationDeci
 	return decision, true
 }
 
-func (r *Runtime) recordRelationshipEvaluation(ctx context.Context, event MessageEvent, before UserMemoryProfile, after UserMemoryProfile, decision relationshipEvaluationDecision) {
+func (r *Runtime) recordRelationshipEvaluation(ctx context.Context, event MessageEvent, before UserMemoryProfile, after UserMemoryProfile, decision relationshipEvaluationDecision, status string, traits []UserPortraitTrait) {
 	writer := r.appLogWriter()
 	if writer == nil {
 		return
+	}
+	portrait := make([]string, 0, len(traits))
+	for _, trait := range traits {
+		portrait = append(portrait, trait.Label+" "+trait.Value)
 	}
 	_ = writer.AppendLog(ctx, applog.Entry{
 		Kind:    applog.KindOperation,
 		Level:   applog.LevelInfo,
 		Action:  "relationship_evaluation",
-		Message: "模型已完成关系与画像评估",
+		Message: relationshipEvaluationLogMessage(event, before, after, decision, status, portrait),
+		Detail:  truncateRunesFromStart(decision.Reason, 240),
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
 			"group_id":       event.GroupID,
 			"user_id":        event.UserID,
+			"status":         status,
 			"before_score":   before.Favorability,
 			"after_score":    after.Favorability,
 			"delta":          decision.effectiveDelta(),
+			"proposed_delta": decision.Delta,
 			"confidence":     decision.Confidence,
 			"should_update":  decision.ShouldUpdate,
 			"reason":         truncateRunesFromStart(decision.Reason, 240),
+			"portrait":       portrait,
 			"portrait_count": len(after.Portrait),
 		},
 	})
+}
+
+// relationshipEvaluationLogMessage 是运行日志里这次评估的一句话。以前一律写
+// 「模型已完成关系与画像评估」，每条回复一条、条条一样，看不出是谁、加了还是减了。
+func relationshipEvaluationLogMessage(event MessageEvent, before, after UserMemoryProfile, decision relationshipEvaluationDecision, status string, portrait []string) string {
+	who := strings.TrimSpace(event.SenderNameOrID())
+	var message string
+	switch status {
+	case RelationshipEvaluationChanged:
+		message = fmt.Sprintf("%s：好感度 %+d（%d → %d）", who, after.Favorability-before.Favorability, before.Favorability, after.Favorability)
+	case RelationshipEvaluationCapped:
+		message = fmt.Sprintf("%s：好感度已到头（%d），模型给的 %+d 没加上", who, after.Favorability, decision.Delta)
+	case RelationshipEvaluationLowConfidence:
+		message = fmt.Sprintf("%s：模型想 %+d，但把握不够（%d%%），好感度不变", who, decision.Delta, int(decision.Confidence*100+0.5))
+	default:
+		message = fmt.Sprintf("%s：好感度不变", who)
+	}
+	if len(portrait) > 0 {
+		message += "；记下画像：" + strings.Join(portrait, "、")
+	}
+	return message
 }
 
 func (r *Runtime) recordRelationshipEvaluationError(ctx context.Context, event MessageEvent, err error) {
