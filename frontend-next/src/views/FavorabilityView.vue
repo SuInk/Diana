@@ -2,9 +2,9 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <!--
-  后台好感度评估的时间线。人员详情里只有某一个人「分数真的变了」的几条；这里是
-  所有人的每一次评估，默认只看分数或画像变了的；结果选「全部评估」或具体某一类，
-  才能回答「这句话为什么没加分」：判了 0、把握不够、评估失败、排满跳过。
+  后台好感度与画像评估的时间线。人员详情里只有某一个人「分数真的变了」的几条；
+  这里是所有人的每一次评估。「全部」里也有没加分的那些（判了 0、把握不够、评估
+  失败、排满跳过），标签上写着原因，用来回答「这句话为什么没加分」。
 -->
 <template>
   <div>
@@ -24,15 +24,20 @@
 
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
-        <!-- 「全部评估」回答的是「这句话为什么没加分」：判了 0、把握不够、失败、排满跳过。 -->
         <div class="cluster" style="padding: 8px 0 12px">
-          <AppSelect
-            class="result-filter"
-            :model-value="resultFilter"
-            :options="RESULT_OPTIONS"
-            aria-label="评估结果"
-            @update:model-value="(value) => (resultFilter = value as ResultFilter)"
-          />
+          <div class="segmented" role="tablist" aria-label="评估类型">
+            <button
+              v-for="option in KIND_OPTIONS"
+              :key="option.value"
+              type="button"
+              role="tab"
+              :aria-selected="kindFilter === option.value"
+              :class="{ active: kindFilter === option.value }"
+              @click="kindFilter = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
           <div class="input-group" style="flex: 1; min-width: 160px; max-width: 240px">
             <input v-model="personFilter" class="input" placeholder="QQ 号或昵称" aria-label="按人筛选" />
           </div>
@@ -77,8 +82,8 @@
         </div>
         <EmptyState
           v-else-if="!loading"
-          :title="filtersActive ? '没有符合筛选条件的评估' : '最近没有好感度或画像变化'"
-          :hint="filtersActive ? '换个条件试试，或者清除筛选。' : '结果选「全部评估」可以看到判了 0、把握不够或评估失败的记录。'"
+          :title="filtersActive ? '没有符合筛选条件的评估' : '还没有好感度或画像评估'"
+          :hint="filtersActive ? '换个条件试试，或者清除筛选。' : '机器人回复之后才会在后台评估一次。'"
         />
         <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载好感与画像" />
       </div>
@@ -95,24 +100,18 @@ import { formatTime } from "../format";
 import { navigate, viewQuery } from "../router";
 import { recordsActionsHost } from "../records-actions";
 import { toastError } from "../toast";
-import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const PAGE_SIZE = 50;
 
-// 结果筛选。「有变化」包括顶到上下限的（模型要加分却没加上，也是分数这件事上发生的
-// 事）和只记下了画像的；后面几项对应单一结果，用来回答「这句话为什么没加分」。
-type ResultFilter = "changed" | "all" | "portrait" | RelationshipEvaluationStatus;
-const RESULT_OPTIONS: AppSelectOption[] = [
-  { value: "changed", label: "有变化", hint: "分数变了或记下了画像", group: "范围" },
-  { value: "all", label: "全部评估", hint: "每一次评估都列出来", group: "范围" },
-  { value: "portrait", label: "记下画像", hint: "只看记下了画像的", group: "范围" },
-  { value: "capped", label: "到上限", hint: "要加减分，但分数已到头", group: "没加分的原因" },
-  { value: "unchanged", label: "不变", hint: "模型判断不影响关系", group: "没加分的原因" },
-  { value: "low_confidence", label: "把握不够", hint: "想加减分，置信度不到 75%", group: "没加分的原因" },
-  { value: "failed", label: "评估失败", hint: "调用出错或返回格式不对", group: "没加分的原因" },
-  { value: "skipped", label: "排满跳过", hint: "后台评估排满，这一轮没评", group: "没加分的原因" }
+// 类型筛选。好感度变化只算分数真的动了的；到上限、把握不够这些没动的留在「全部」里，
+// 标签上写着原因。
+type KindFilter = "all" | "favorability" | "portrait";
+const KIND_OPTIONS: { value: KindFilter; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "favorability", label: "好感度变化" },
+  { value: "portrait", label: "画像生成" }
 ];
 
 const actionsHost = inject(recordsActionsHost, ref<HTMLElement | null>(null));
@@ -121,30 +120,29 @@ const evaluations = ref<RelationshipEvaluation[]>([]);
 const nextBeforeID = ref(0);
 const loading = ref(true);
 const loadingMore = ref(false);
-const resultFilter = ref<ResultFilter>("changed");
+const kindFilter = ref<KindFilter>("all");
 const personFilter = ref("");
 const groupFilter = ref("");
-const filtersActive = computed(() => resultFilter.value !== "changed" || personFilter.value.trim() !== "" || groupFilter.value.trim() !== "");
+const filtersActive = computed(() => kindFilter.value !== "all" || personFilter.value.trim() !== "" || groupFilter.value.trim() !== "");
 // 从人员详情跳过来时只看这一个人。
 const userFilter = ref(typeof window === "undefined" ? "" : viewQuery().get("user_id") ?? "");
 
 function query(beforeID = 0) {
-  const result = resultFilter.value;
+  const kind = kindFilter.value;
   return {
     profile: botScope.value,
     userID: userFilter.value,
     search: personFilter.value.trim(),
     groupID: groupFilter.value.trim(),
-    changedOnly: result === "changed",
-    portraitOnly: result === "portrait",
-    statuses: result === "changed" || result === "all" || result === "portrait" ? undefined : [result],
+    statuses: kind === "favorability" ? (["changed"] as RelationshipEvaluationStatus[]) : undefined,
+    portraitOnly: kind === "portrait",
     beforeID,
     limit: PAGE_SIZE
   };
 }
 
 function resetFilters(): void {
-  resultFilter.value = "changed";
+  kindFilter.value = "all";
   personFilter.value = "";
   groupFilter.value = "";
 }
@@ -256,7 +254,7 @@ watch([personFilter, groupFilter], () => {
   window.clearTimeout(typingTimer);
   typingTimer = window.setTimeout(() => void reload(), 300);
 });
-watch([resultFilter, botScope], () => void reload());
+watch([kindFilter, botScope], () => void reload());
 onBeforeUnmount(() => window.clearTimeout(typingTimer));
 
 onMounted(() => {
@@ -265,11 +263,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.result-filter {
-  width: 148px;
-  flex: none;
-}
-
 .link-button {
   padding: 0;
   border: none;

@@ -65,7 +65,7 @@ func TestRelationshipEvaluationsFilterPageAndPrune(t *testing.T) {
 	}
 }
 
-// 画像和好感度出自同一次评估：只记下画像、分数没动的也算「有变化」；
+// 画像和好感度出自同一次评估：画像生成按 portrait_count 筛，分数没动的也算；
 // 按人找支持 QQ 号和昵称的模糊匹配，% 和 _ 按字面匹配。
 func TestRelationshipEvaluationsPortraitAndPersonFilters(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
@@ -93,9 +93,6 @@ func TestRelationshipEvaluationsPortraitAndPersonFilters(t *testing.T) {
 		}
 		return result
 	}
-	if changed := list(assistant.RelationshipEvaluationFilter{ChangedOnly: true}); len(changed) != 2 {
-		t.Fatalf("changed only = %#v", changed)
-	}
 	portrait := list(assistant.RelationshipEvaluationFilter{HasPortrait: true})
 	if len(portrait) != 1 || len(portrait[0].Portrait) != 1 || portrait[0].Portrait[0].Label != "职业" || portrait[0].Portrait[0].Value != "程序员" {
 		t.Fatalf("portrait only = %#v", portrait)
@@ -109,7 +106,7 @@ func TestRelationshipEvaluationsPortraitAndPersonFilters(t *testing.T) {
 	if literal := list(assistant.RelationshipEvaluationFilter{Query: "_100%"}); len(literal) != 1 || literal[0].UserID != "10002" {
 		t.Fatalf("literal wildcard = %#v", literal)
 	}
-	if byGroup := list(assistant.RelationshipEvaluationFilter{GroupID: "g1", ChangedOnly: true}); len(byGroup) != 1 {
-		t.Fatalf("group + changed = %#v", byGroup)
+	if byGroup := list(assistant.RelationshipEvaluationFilter{GroupID: "g1", HasPortrait: true}); len(byGroup) != 1 {
+		t.Fatalf("group + portrait = %#v", byGroup)
 	}
 }

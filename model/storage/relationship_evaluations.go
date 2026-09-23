@@ -123,10 +123,6 @@ func (s *SQLiteStore) ListRelationshipEvaluations(ctx context.Context, filter as
 		}
 		conditions = append(conditions, "status IN ("+strings.Join(placeholders, ", ")+")")
 	}
-	if filter.ChangedOnly {
-		conditions = append(conditions, "(status IN (?, ?) OR portrait_count > 0)")
-		args = append(args, assistant.RelationshipEvaluationChanged, assistant.RelationshipEvaluationCapped)
-	}
 	if filter.HasPortrait {
 		conditions = append(conditions, "portrait_count > 0")
 	}

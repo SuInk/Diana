@@ -29,7 +29,7 @@ var relationshipEvaluationStatuses = map[string]bool{
 }
 
 // listRelationshipEvaluations 列出后台好感度评估记录。status 用逗号分隔多个结果，
-// 留空表示全部；changed=1 只要分数变了或记下了画像的，portrait=1 只要记下了画像的；
+// 留空表示全部；portrait=1 只要记下了画像的；
 // q 按 QQ 号或昵称模糊找人，group_id 按群精确筛。
 func (h *BotHandler) listRelationshipEvaluations(c *gin.Context) {
 	if h.sqlite == nil {
@@ -54,7 +54,6 @@ func (h *BotHandler) listRelationshipEvaluations(c *gin.Context) {
 		GroupID:      strings.TrimSpace(c.Query("group_id")),
 		Query:        strings.TrimSpace(c.Query("q")),
 		Statuses:     statuses,
-		ChangedOnly:  c.Query("changed") == "1",
 		HasPortrait:  c.Query("portrait") == "1",
 		BeforeID:     beforeID,
 		Limit:        limit + 1,

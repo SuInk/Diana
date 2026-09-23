@@ -2624,8 +2624,7 @@ export interface RelationshipEvaluationsQuery {
   search?: string;
   groupID?: string;
   statuses?: RelationshipEvaluationStatus[];
-  // changedOnly 只要分数变了或记下了画像的；portraitOnly 只要记下了画像的。
-  changedOnly?: boolean;
+  // portraitOnly 只要记下了画像的。
   portraitOnly?: boolean;
   beforeID?: number;
   limit?: number;
@@ -2638,7 +2637,6 @@ export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery 
   if (query.search) params.set("q", query.search);
   if (query.groupID) params.set("group_id", query.groupID);
   if (query.statuses?.length) params.set("status", query.statuses.join(","));
-  if (query.changedOnly) params.set("changed", "1");
   if (query.portraitOnly) params.set("portrait", "1");
   if (query.beforeID) params.set("before_id", String(query.beforeID));
   return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);

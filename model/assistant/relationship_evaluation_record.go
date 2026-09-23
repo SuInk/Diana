@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// 后台好感度评估的结果分类。好感与画像页默认只看有变化的（分数变了或记下画像），其余几种
+// 后台好感度评估的结果分类。好感与画像页的「好感度变化」只看 changed，其余几种
 // 是「这句话为什么没加分」的答案，以前一条都查不到。
 const (
 	// RelationshipEvaluationChanged 分数按模型给的幅度变了。
@@ -69,7 +69,7 @@ type RelationshipEvaluationPortrait struct {
 }
 
 // RelationshipEvaluationFilter 是好感与画像列表的筛选条件。Statuses 为空表示不限；
-// ChangedOnly 只要分数变了或记下了画像的；HasPortrait 只要记下了画像的；Query 按
+// HasPortrait 只要记下了画像的；Query 按
 // QQ 号或昵称模糊找人；BeforeID 用来往前翻页，只返回 ID 更小的记录。
 type RelationshipEvaluationFilter struct {
 	BotProfileID string
@@ -77,7 +77,6 @@ type RelationshipEvaluationFilter struct {
 	GroupID      string
 	Query        string
 	Statuses     []string
-	ChangedOnly  bool
 	HasPortrait  bool
 	BeforeID     int64
 	Limit        int
