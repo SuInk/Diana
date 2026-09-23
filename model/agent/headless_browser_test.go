@@ -494,3 +494,41 @@ func TestProbeTimeoutDoesNotKillTheWholeRender(t *testing.T) {
 		}
 	}
 }
+
+// 观察循环的截止时间和外层请求的超时本来是同一刻（外层 ctx 就是按 cfg.Timeout
+// 建的），谁先醒是抽签：抽到循环自己，会带着页面现有内容收尾；抽到 ctx，走的是
+// 「一张快照都没有就直接抛错」那条路。慢站点上两种结果完全随机——线上
+// mimo.xiaomi.com 就是抛错那一种，而且抛的是光秃秃的 context deadline exceeded。
+func TestObservationDeadlineLeavesRoomForTheFinalCapture(t *testing.T) {
+	const timeout = 30 * time.Second
+	now := time.Now()
+	ctx, cancel := context.WithDeadline(context.Background(), now.Add(timeout))
+	defer cancel()
+
+	// 循环的截止时间和 ctx 撞在一起：必须往前挪出收尾时间。
+	got := withFinalCaptureReserve(ctx, now.Add(timeout), timeout)
+	if reserve := now.Add(timeout).Sub(got); reserve < browserCaptureTimeout {
+		t.Fatalf("没给收尾留时间：只提前了 %s", reserve)
+	}
+
+	// 已经比 ctx 早收手的，不要再往前挪。
+	early := now.Add(time.Second)
+	if got := withFinalCaptureReserve(ctx, early, timeout); !got.Equal(early) {
+		t.Fatalf("提前收手的截止时间被改了：%s", got)
+	}
+
+	// 超时本身就很短时，预留按比例缩，不能把大半预算花在收尾上。
+	const short = 5 * time.Second
+	shortCtx, cancelShort := context.WithDeadline(context.Background(), now.Add(short))
+	defer cancelShort()
+	shortGot := withFinalCaptureReserve(shortCtx, now.Add(short), short)
+	if reserve := now.Add(short).Sub(shortGot); reserve != short/5 {
+		t.Fatalf("短超时的预留不对：%s", reserve)
+	}
+
+	// 没有超时的 ctx 不受影响。
+	plain := now.Add(timeout)
+	if got := withFinalCaptureReserve(context.Background(), plain, timeout); !got.Equal(plain) {
+		t.Fatalf("无超时的 ctx 被动了：%s", got)
+	}
+}

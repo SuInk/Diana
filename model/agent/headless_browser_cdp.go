@@ -463,6 +463,13 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	if deadline.After(hardDeadline) {
 		deadline = hardDeadline
 	}
+	// 观察要比整个请求早一点收手，留出最后抓一张快照的时间。
+	//
+	// 这两个时间本来是同一刻（外层 ctx 就是按 cfg.Timeout 建的），谁先醒是抽签：
+	// 抽到循环自己，就带着页面现有内容收尾；抽到 ctx，走的是「一张快照都没有就
+	// 直接抛错」那条路，抛的还是光秃秃的 context deadline exceeded。慢站点上这两种
+	// 结果完全随机——mimo.xiaomi.com 线上就是抛错那一种。
+	deadline = withFinalCaptureReserve(ctx, deadline, b.cfg.Timeout)
 	var deadlineNavigation time.Time
 	ticker := time.NewTicker(b.cfg.PollInterval)
 	defer ticker.Stop()
@@ -484,6 +491,9 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			if deadline.After(hardDeadline) {
 				deadline = hardDeadline
 			}
+			// 页面跳转会把观察时间顺延，但顺延不能把收尾的预留吃掉：
+			// 重定向站点上一吃掉就又变成「直接抛错」那条路。
+			deadline = withFinalCaptureReserve(ctx, deadline, b.cfg.Timeout)
 		}
 		now := time.Now()
 		if !now.Before(deadline) {
@@ -494,7 +504,9 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			if len(captures) > 0 {
 				return b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, lastProbe, lastDecision, tracker.snapshot(), captures, false, "request_cancelled_returning_last_non_empty_snapshot")
 			}
-			return RenderedPage{}, ctx.Err()
+			// 连一张快照都没有：说清楚是超时且页面始终没给出可抓取的内容，
+			// 别只抛一句 context deadline exceeded 让人以为是网络问题。
+			return RenderedPage{}, fmt.Errorf("headless browser render ended after %s with no capturable content: %w", time.Since(renderStarted).Round(time.Millisecond), ctx.Err())
 		case <-ticker.C:
 		}
 
@@ -649,6 +661,25 @@ func dedupeConsecutiveStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+// browserFinalCaptureReserve 是留给「最后抓一张快照」的时间。抓取本身有
+// browserCaptureTimeout 的预算，这里按它留，同时不超过总时长的五分之一——
+// 短超时的调用不该把大半预算花在收尾上。
+func withFinalCaptureReserve(ctx context.Context, deadline time.Time, timeout time.Duration) time.Time {
+	ctxDeadline, ok := ctx.Deadline()
+	if !ok {
+		return deadline
+	}
+	reserve := min(browserCaptureTimeout, timeout/5)
+	if reserve <= 0 {
+		return deadline
+	}
+	reserved := ctxDeadline.Add(-reserve)
+	if reserved.Before(deadline) {
+		return reserved
+	}
+	return deadline
 }
 
 // probeAction 是一次 DOM 探针失败之后该怎么办。
