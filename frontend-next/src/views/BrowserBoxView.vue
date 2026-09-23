@@ -3,8 +3,8 @@
   浏览器这一页只回答一个问题：机器人用哪个浏览器。
 
   Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有主人能驱动、
-  能点能输入——区别只在用谁的。两个可以同时开着，排一个优先级：每一轮用排在前面、
-  开着而且用得上的那个，前一个用不了就换下一个（见 model/browsersource）。一次性无头
+  能点能输入——区别只在用谁的。和 Claude 设置页一样一行一个开关，可以都开着：最后
+  打开的那个先用，它用不了时自动换另一个（见 model/browsersource）。一次性无头
   渲染不在这里：它不带登录态，读公开网页、出图都靠它，一直可用，依赖和参数在插件页
   的「网页渲染」里。以前三者并排成「三档」，用户得先弄懂三者区别才能开始用。
 -->
@@ -19,34 +19,36 @@
         <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
       </div>
       <div class="card-body stack">
-        <!-- 选中哪个就用哪个；它用不了时自动换另一个，不用另外配置。 -->
-        <div class="segmented browser-source-tabs" role="tablist" aria-label="用哪个浏览器">
-          <button
-            v-for="key in sourceKeys"
-            :key="key"
-            type="button"
-            role="tab"
-            :aria-selected="preferred === key"
-            :class="{ active: preferred === key }"
-            :disabled="savingSource || !sourceState"
-            @click="preferSource(key)"
-          >
-            {{ sourceMeta[key].label }}
-          </button>
+        <!-- 和 Claude 设置页一样一行一项、开关在右。可以都开着：最后打开的那个先用，
+             它用不了时自动换另一个。 -->
+        <div class="browser-toggle-list">
+          <div v-for="key in sourceKeys" :key="key" class="browser-toggle-row">
+            <div class="browser-toggle-copy">
+              <div class="browser-toggle-title">
+                <strong>{{ sourceMeta[key].title }}</strong>
+                <span v-if="sourceState && sourceState.active === key" class="badge ok">正在用</span>
+                <span v-else-if="sourceState?.[key].enabled && sourceState[key].usable" class="badge">备用</span>
+                <span v-else-if="sourceState?.[key].enabled" class="badge warn">{{ key === "box" ? "没找到 Chrome" : "等扩展连接" }}</span>
+              </div>
+              <span class="hint">
+                {{ sourceMeta[key].hint }}
+                <button v-if="sourceState" class="browser-toggle-deps" type="button" @click="dependenciesTarget = key">
+                  运行依赖 {{ sourceState[key].dependencies.filter((dep) => dep.available).length }}/{{ sourceState[key].dependencies.length }}
+                </button>
+              </span>
+            </div>
+            <label class="switch" :title="sourceState?.[key].enabled ? '点击关闭' : '点击打开'">
+              <input
+                type="checkbox"
+                :checked="sourceState?.[key].enabled"
+                :disabled="savingSource || !sourceState"
+                :aria-label="sourceMeta[key].title"
+                @change="toggleSource(key, ($event.target as HTMLInputElement).checked)"
+              />
+              <span class="track" aria-hidden="true"></span>
+            </label>
+          </div>
         </div>
-
-        <div v-if="sourceState && preferred" class="browser-source-status">
-          <span class="muted">{{ preferredStatus }}</span>
-          <button class="plugin-dependencies-head" type="button" title="查看运行依赖" @click="dependenciesTarget = preferred">
-            <span>运行依赖</span>
-            <span class="plugin-dependency-count" :class="{ warn: dependencyProblem(preferred) }">
-              {{ sourceState[preferred].dependencies.filter((dep) => dep.available).length }}/{{ sourceState[preferred].dependencies.length }}
-            </span>
-          </button>
-        </div>
-        <p v-else-if="sourceState" class="muted" style="margin: 0; font-size: 13px">
-          浏览器关着，机器人只能读公开网页。点上面任一个就会打开。
-        </p>
 
         <template v-if="preferred === 'box'">
           <p v-if="!botID" class="muted" style="margin: 0; font-size: 13px">
@@ -174,8 +176,8 @@
         </p>
       </div>
     </div>
-    <!-- 开箱即用：默认什么都不用配。其余的（关掉浏览器、开真窗口、扩展的令牌和网站名单、
-         外接 CDP）都收在这里。 -->
+    <!-- 开箱即用：默认什么都不用配。其余的（开真窗口、扩展的令牌和网站名单、外接 CDP）
+         都收在这里。 -->
     <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
       <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
       更多设置
@@ -183,19 +185,6 @@
     <template v-if="advancedOpen">
       <div class="card">
         <div class="card-body stack">
-          <div class="field wide">
-            <label class="switch">
-              <input
-                type="checkbox"
-                :checked="Boolean(preferred)"
-                :disabled="savingSource || !sourceState"
-                @change="setBrowserAllowed(($event.target as HTMLInputElement).checked)"
-              />
-              <span class="track" aria-hidden="true"></span>
-              <span class="switch-label">允许机器人用浏览器</span>
-            </label>
-            <span class="hint">关掉后机器人只能读公开网页，不碰任何登录态。</span>
-          </div>
           <div v-if="preferred === 'box' && botID" class="field wide">
             <label class="switch">
               <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
@@ -255,9 +244,19 @@ interface LiveFrame {
 
 type SourceKey = Exclude<BrowserSource, "off">;
 const sourceKeys: SourceKey[] = ["box", "extension"];
-const sourceMeta: Record<SourceKey, { label: string; short: string }> = {
-  box: { label: "Diana 内置", short: "内置浏览器" },
-  extension: { label: "我自己的 Chrome", short: "你的 Chrome" }
+const sourceMeta: Record<SourceKey, { label: string; short: string; title: string; hint: string }> = {
+  box: {
+    label: "Diana 内置",
+    short: "内置浏览器",
+    title: "Diana 内置浏览器",
+    hint: "Diana 自己的浏览器，每台机器人一份登录态，你能看画面、随时接管。"
+  },
+  extension: {
+    label: "我自己的 Chrome",
+    short: "你的 Chrome",
+    title: "我自己的 Chrome",
+    hint: "装一个扩展，机器人用你日常 Chrome 的登录态，只能碰你允许的网站。"
+  }
 };
 // null 表示还没读到：读到之前不显示任何一边的配置。
 const sourceState = ref<BrowserSourceState | null>(null);
@@ -279,17 +278,6 @@ const preferred = computed<SourceKey | null>(() => {
   if (first && state[first].enabled) return first;
   const next = state.order.find((key) => state[key].enabled);
   return next ?? null;
-});
-
-// 选中那个现在的情况：在用、暂时换成了另一个、还是卡在哪。
-const preferredStatus = computed(() => {
-  const state = sourceState.value;
-  const key = preferred.value;
-  if (!state || !key) return "";
-  if (state.active === key) return key === "box" ? "已就绪，机器人会用它。" : "扩展已连上，机器人会用它。";
-  const reason = key === "box" ? "本机没找到 Chrome" : "扩展还没连上";
-  if (state.active !== "off") return `${reason}，暂时用「${sourceMeta[state.active].label}」。`;
-  return `${reason}，机器人这会儿用不了浏览器。`;
 });
 
 // 重新检测复用插件页那套：刷新浏览器探测的缓存，再把这一页的状态读一遍。
@@ -384,19 +372,16 @@ async function patchSource(patch: Parameters<typeof saveBrowserSource>[0]): Prom
   }
 }
 
+// 打开一个：排到第一位并打开它，另一个保持原样当备用；关掉只关它自己。
+function toggleSource(key: SourceKey, checked: boolean): void {
+  if (checked) preferSource(key);
+  else void patchSource(key === "box" ? { box_enabled: false } : { extension_enabled: false });
+}
+
 // 选一个：排到第一位并打开它。另一个保持原样，选中的用不了时自动顶上。
 function preferSource(key: SourceKey): void {
   const order = [key, ...sourceKeys.filter((other) => other !== key)];
   void patchSource(key === "box" ? { order, box_enabled: true } : { order, extension_enabled: true });
-}
-
-// 「更多设置」里的总开关：关掉两个都关；打开就打开排在第一位的那个。
-function setBrowserAllowed(allowed: boolean): void {
-  if (!allowed) {
-    void patchSource({ box_enabled: false, extension_enabled: false });
-    return;
-  }
-  preferSource(sourceState.value?.order[0] ?? "box");
 }
 
 async function refresh(): Promise<void> {
@@ -603,16 +588,48 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.browser-source-tabs {
-  align-self: flex-start;
+.browser-toggle-list {
+  display: flex;
+  flex-direction: column;
 }
 
-.browser-source-status {
+.browser-toggle-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
-  font-size: 13px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.browser-toggle-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.browser-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.browser-toggle-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.browser-toggle-deps {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
 }
 
 .browser-advanced-toggle {
