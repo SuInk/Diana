@@ -389,8 +389,8 @@ func (r *Runtime) botGroupMemberData(ctx context.Context, event MessageEvent) (m
 //
 // 这两个字段都不在 OneBot 11 标准里，是各实现的扩展：
 //   - 个人禁言看 get_group_member_info 的 shut_up_timestamp（禁言结束的 Unix 秒，
-//     未禁言为 0）。go-cqhttp、NapCat、SnowLuma 都有。
-//   - 全员禁言看 get_group_info 的 group_all_shut（NapCat、SnowLuma：开启为 -1，
+//     未禁言为 0）。常见实现都有。
+//   - 全员禁言看 get_group_info 的 group_all_shut（常见实现：开启为 -1，
 //     关闭为 0）。没有这个字段的实现当作没开，全员禁言就退回原来的处理方式。
 func (r *Runtime) probeBotMute(ctx context.Context, event MessageEvent) (botMuteState, bool) {
 	data, ok := r.botGroupMemberData(ctx, event)

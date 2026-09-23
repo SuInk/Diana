@@ -186,7 +186,7 @@ func (c *mutedOneBotChannel) Send(context.Context, OutgoingMessage) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.attempts++
-	return errors.New("opaque NapCat send failure")
+	return errors.New("opaque OneBot send failure")
 }
 func (c *mutedOneBotChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
 	switch action {
@@ -199,7 +199,7 @@ func (c *mutedOneBotChannel) CallAPI(_ context.Context, action string, params ma
 		}
 		return map[string]any{"user_id": "10000", "role": role, "shut_up_timestamp": strconv.FormatInt(c.until, 10)}, nil
 	case "get_group_info":
-		// SnowLuma / NapCat：全员禁言开启时为 -1。
+		// 常见实现：全员禁言开启时为 -1。
 		return map[string]any{"group_id": "20006", "group_all_shut": c.allShut}, nil
 	}
 	return nil, errors.New("unsupported")
