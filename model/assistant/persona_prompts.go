@@ -33,16 +33,23 @@ func CheckPersonaPrompts(persona Persona) error {
 }
 
 func checkPersonaPrompts(persona Persona) error {
-	if persona.Prompts == nil {
-		return nil
-	}
 	name := strings.TrimSpace(persona.Name)
 	if name == "" {
 		name = "未命名"
 	}
+	// 判据超长直接报错：落库时的清洗会截断，从文件读进来的话截断就是悄悄改了别人的配置。
+	if len([]rune(strings.TrimSpace(persona.ExtraCriteria))) > ProactiveReplyExtraCriteriaMaxRunes {
+		return fmt.Errorf("人设「%s」的补充判据超过 %d 字", name, ProactiveReplyExtraCriteriaMaxRunes)
+	}
+	if len([]rune(strings.TrimSpace(persona.AccountSafetyRules))) > AccountSafetyRulesMaxRunes {
+		return fmt.Errorf("人设「%s」的账号安全规则超过 %d 字", name, AccountSafetyRulesMaxRunes)
+	}
+	if persona.Prompts == nil {
+		return nil
+	}
 	var unknown []string
 	for key := range persona.Prompts {
-		if _, ok := promptRegistryByKey[strings.TrimSpace(key)]; !ok {
+		if _, _, ok := promptOverrideDefault(key); !ok {
 			unknown = append(unknown, key)
 		}
 	}
@@ -54,6 +61,9 @@ func checkPersonaPrompts(persona Persona) error {
 	for _, spec := range promptRegistry {
 		if _, ok := persona.Prompts[spec.Key]; !ok {
 			missing = append(missing, spec.Key)
+		}
+		if _, ok := persona.Prompts[spec.FormatKey]; spec.FormatKey != "" && !ok {
+			missing = append(missing, spec.FormatKey)
 		}
 	}
 	if len(missing) > 0 {
@@ -130,6 +140,9 @@ func personaYAMLNode(persona Persona) (*yaml.Node, error) {
 	// 不带 ID 和时间戳：ID 是本机的，导到别处只会撞车（导入时一律重新分配），
 	// 时间按对方导入的那一刻记。
 	dropMappingKeys(node, "id", "updated_at", "voice")
+	// 判据空着也写出来：YAML 是全部提示词配置，看文件的人得知道这两栏存在。
+	ensureMappingKey(node, "extra_criteria", "接话评分的补充判据：本群的称呼、黑话和禁区，拼在接话评分尾部。留空不加。套用人设时填进机器人配置，分群仍可单独覆盖。")
+	ensureMappingKey(node, "account_safety_rules", "发送前审核的账号安全规则：填了就替代默认的账号安全风险范围。留空用默认范围。套用人设时填进机器人配置，分群仍可单独覆盖。")
 	useBlockStyle(node)
 	node.Content = append(node.Content, yamlString("prompts"), promptsYAMLNode(prompts))
 	return node, nil
@@ -154,20 +167,37 @@ func promptsYAMLNode(overrides PromptOverrides) *yaml.Node {
 		for _, variable := range spec.Vars {
 			comment = append(comment, "占位符 {"+variable.Name+"}："+variable.Description)
 		}
-		if spec.Contract != "" {
-			comment = append(comment, "输出格式由程序锁定，总是拼在这段之后，不在这里编辑。")
-		}
 		key := yamlString(spec.Key)
 		key.HeadComment = strings.Join(comment, "\n")
 		value := yamlString(overrides.body(&spec))
 		value.Style = yaml.LiteralStyle
 		node.Content = append(node.Content, key, value)
+		if spec.FormatKey != "" {
+			formatKey := yamlString(spec.FormatKey)
+			formatKey.HeadComment = "↑ 这段的输出格式，程序按它解析模型的回答。改动时字段名、取值和结构要和程序对得上，改坏了这条链路会沉默或放行。"
+			format := yamlString(strings.TrimSpace(overrides.contract(&spec)))
+			format.Style = yaml.LiteralStyle
+			node.Content = append(node.Content, formatKey, format)
+		}
 	}
 	return node
 }
 
 func yamlString(value string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+}
+
+// ensureMappingKey 保证映射里有这个键（没有就补一个空串），并挂上注释。
+func ensureMappingKey(node *yaml.Node, key, comment string) {
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			node.Content[index].HeadComment = comment
+			return
+		}
+	}
+	name := yamlString(key)
+	name.HeadComment = comment
+	node.Content = append(node.Content, name, yamlString(""))
 }
 
 func dropMappingKeys(node *yaml.Node, keys ...string) {

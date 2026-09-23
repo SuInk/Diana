@@ -152,7 +152,7 @@ func proactiveReplyRouterPromptForChatIn(configured, criteria string, chatIn cha
 	if chatIn.Participation != nil {
 		// 评分档位和口径由 Participation 决定；管理员的补充判据只拼在尾部，评分契约
 		// （两项、裸 JSON）不交给用户改。configured 是被取代的旧路由提示词，仍然不读。
-		return appendRouterCriteria(chatIn.Participation.promptWith(overrides), criteria)
+		return appendRouterCriteria(chatIn.Participation.promptWith(overrides), criteria, overrides)
 	}
 	prompt := proactiveReplyRouterSystemPrompt(configured, configs...)
 	if chatIn.SuperActive {

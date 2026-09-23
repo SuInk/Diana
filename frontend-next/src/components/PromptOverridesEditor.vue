@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, useId } from "vue";
 import { ChevronRight, RotateCcw } from "@lucide/vue";
 import { getPromptCatalog, type PromptCatalog, type PromptSpec } from "../api";
-import { customizedPromptCount, missingPromptVars, promptOverrideValue, withPromptOverride } from "../prompt-overrides";
+import { customizedPromptCount, isPromptCustomized, isPromptFormatCustomized, missingPromptVars, promptFormatValue, promptOverrideValue, withoutPromptCustomization, withPromptFormat, withPromptOverride } from "../prompt-overrides";
 
 // 覆盖表只存改过的正文：输入框里显示的是「当前生效的正文」，和默认值一样就从表里删掉，
 // 不把默认值抄进配置——那样以后内置文案更新了，这台机器人还停在旧版上。
@@ -45,7 +45,7 @@ const sections = computed(() => {
 });
 
 function isCustomized(spec: PromptSpec): boolean {
-  return (overrides.value[spec.key] ?? "").trim() !== "";
+  return isPromptCustomized(spec, overrides.value);
 }
 
 function toggle(key: string): void {
@@ -59,8 +59,12 @@ function update(spec: PromptSpec, value: string): void {
   emit("update:modelValue", withPromptOverride(overrides.value, spec, value));
 }
 
+function updateFormat(spec: PromptSpec, value: string): void {
+  emit("update:modelValue", withPromptFormat(overrides.value, spec, value));
+}
+
 function reset(spec: PromptSpec): void {
-  emit("update:modelValue", withPromptOverride(overrides.value, spec, spec.default));
+  emit("update:modelValue", withoutPromptCustomization(overrides.value, spec));
 }
 
 function resetAll(): void {
@@ -105,7 +109,8 @@ function runeCount(text: string): number {
           <ChevronRight :size="16" class="prompt-chevron" aria-hidden="true" />
           <span class="prompt-title">{{ spec.title }}</span>
           <span v-if="isCustomized(spec)" class="badge accent">已修改</span>
-          <span v-if="spec.contract" class="badge" title="输出格式已锁定">格式锁定</span>
+          <span v-if="isPromptFormatCustomized(spec, overrides)" class="badge warn" title="输出格式改过，程序可能解析不了模型的回答">格式已改</span>
+          <span v-else-if="spec.contract" class="badge" title="这段带输出格式，程序按它解析模型的回答">含输出格式</span>
         </button>
         <p class="prompt-usage">{{ spec.usage }}</p>
         <div v-if="expanded.has(spec.key)" :id="`${id}-${spec.key}`" class="prompt-body">
@@ -132,9 +137,17 @@ function runeCount(text: string): number {
           <p v-if="missingPromptVars(spec, overrides).length" class="prompt-warning">
             正文里没有 {{ missingPromptVars(spec, overrides).map(placeholder).join("、") }}，这些运行时信息不会再进提示词。
           </p>
-          <div v-if="spec.contract" class="prompt-contract">
-            <span class="prompt-contract-label">锁定的输出格式（程序要解析，不能改，总是拼在正文后面）</span>
-            <pre>{{ spec.contract.trim() }}</pre>
+          <div v-if="spec.format_key" class="prompt-contract">
+            <span class="prompt-contract-label">输出格式（拼在正文后面，程序按它解析模型的回答。字段名、取值和结构要和程序对得上，改坏了这条链路会沉默或放行）</span>
+            <textarea
+              class="textarea prompt-text prompt-format"
+              :aria-label="`${spec.title} · 输出格式`"
+              :value="promptFormatValue(spec, overrides)"
+              :maxlength="catalog?.max_runes"
+              rows="4"
+              spellcheck="false"
+              @input="updateFormat(spec, ($event.target as HTMLTextAreaElement).value)"
+            ></textarea>
           </div>
         </div>
       </article>
@@ -168,7 +181,7 @@ function runeCount(text: string): number {
 .prompt-warning { margin: 0; color: var(--warn); font-size: 12px; line-height: 1.6; }
 .prompt-contract { display: grid; gap: 4px; min-width: 0; }
 .prompt-contract-label { color: var(--muted); font-size: 12px; }
-.prompt-contract pre { margin: 0; padding: 8px 10px; max-height: 220px; overflow: auto; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prompt-format { border-style: dashed; font-size: 12px; }
 @media (max-width: 640px) {
   .prompt-usage, .prompt-body { margin-left: 0; }
 }

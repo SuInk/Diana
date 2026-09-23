@@ -295,14 +295,31 @@ func replyQualityPromptForConfig(cfg BotConfig) string {
 	// 顺序，挪到格式前面会让默认配置下的整段提示词换了字节。
 	prompt := cfg.prompt(promptReplyQualitySpec)
 	if policy := strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt); policy != "" {
-		prompt += "\n\n【管理员配置的账号安全审核规则】\n" + policy + `
-这段规则替代上文默认的账号安全风险范围；只影响 account_safe、account_risk 和
-account_risk_reason，不得改变准确度、拒答、空转判断或 JSON 输出格式。未被这段
-规则明确列为风险的内容应给 account_safe 高分。`
+		prompt += "\n\n" + cfg.promptf(promptReplySafetyRulesSpec, map[string]string{"rules": policy})
 	}
-	prompt += "\n正常的寒暄、简短情绪回应、接梗和自然追问不等于准确性错误。仍只检查可见的准确性与完整性问题，不重新判断是否需要回复；账号安全和独立的循环判断规则保持不变。"
+	prompt += "\n" + cfg.prompt(promptReplyQualityClosingSpec)
 	return prompt
 }
+
+var promptReplySafetyRulesSpec = registerPrompt(PromptSpec{
+	Key:   "audit.safety_rules_wrapper",
+	Group: PromptGroupAudit,
+	Title: "发送前审核 · 账号安全规则的包装",
+	Usage: "填了账号安全规则时，把规则包进发送前审核的这段说明。{rules} 换成填写的规则；删掉它规则就不会进审核。",
+	Default: "【管理员配置的账号安全审核规则】\n{rules}" + `
+这段规则替代上文默认的账号安全风险范围；只影响 account_safe、account_risk 和
+account_risk_reason，不得改变准确度、拒答、空转判断或 JSON 输出格式。未被这段
+规则明确列为风险的内容应给 account_safe 高分。`,
+	Vars: []PromptVar{{Name: "rules", Description: "机器人或本群填写的账号安全规则"}},
+})
+
+var promptReplyQualityClosingSpec = registerPrompt(PromptSpec{
+	Key:     "audit.quality_closing",
+	Group:   PromptGroupAudit,
+	Title:   "发送前审核 · 收尾提醒",
+	Usage:   "发送前审核提示词的最后一句，排在输出格式和账号安全规则之后：提醒审核器别把寒暄和接梗当成错误。",
+	Default: "正常的寒暄、简短情绪回应、接梗和自然追问不等于准确性错误。仍只检查可见的准确性与完整性问题，不重新判断是否需要回复；账号安全和独立的循环判断规则保持不变。",
+})
 
 // accuracyIssueLabels 是会拦截发送的准确性类别；none 和 wording 放行。
 var accuracyIssueLabels = map[string]string{

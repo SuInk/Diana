@@ -1480,7 +1480,10 @@ export interface PromptSpec {
   usage: string;
   default: string;
   vars?: PromptVar[];
+  /** 输出格式，拼在正文之后。可以改，但改坏了程序解析不了模型的回答。 */
   contract?: string;
+  /** 覆盖输出格式时用的键（<key>.format），只有带 contract 的条目才有。 */
+  format_key?: string;
 }
 
 export interface PromptCatalog {
@@ -2763,6 +2766,10 @@ export interface Persona {
   sentence_enders?: string;
   /** 这套人设改过的内置提示词（只存改过的），套用时整份替换机器人的 prompt_overrides。 */
   prompts?: Record<string, string>;
+  /** 接话评分的补充判据，套用时填进机器人的 proactive_reply_extra_criteria。 */
+  extra_criteria?: string;
+  /** 账号安全规则，套用时填进机器人的 reply_account_safety_audit_prompt。 */
+  account_safety_rules?: string;
   updated_at?: string;
 }
 

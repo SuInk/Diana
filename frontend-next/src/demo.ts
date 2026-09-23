@@ -2,6 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { extensionDemoResponse } from './extension-demo';
+import { parseYAML, toYAML } from './demo-yaml';
 import type {
   AgentResidencyEntry,
   AppLogEntry,
@@ -1142,28 +1143,41 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json({ personas: demoPersonas, imported, skipped, renamed, dropped, unknown_styles: unknownStyles });
   }
-  // 演示站没有后端的 YAML 库：JSON 本身就是合法的 YAML，渲染成 JSON、解析也只认 JSON，
-  // 够用来看编辑器长什么样。prompts 同样列全，和真实文件的完整性要求一致。
+  // 演示站没有后端：人设 YAML 用 demo-yaml.ts 在前端模拟生成和解析，写法与后端一致，
+  // prompts 同样列全，读回时同样要求一段不少、一段不多。
   if (path === "/api/assistant/personas/yaml") {
     const personas = ((body.personas as Persona[]) ?? []).map(({ id: _id, updated_at: _updated, ...persona }) => ({
       ...persona,
-      prompts: Object.fromEntries(demoPromptCatalog.prompts.map((spec) => [spec.key, persona.prompts?.[spec.key] || spec.default]))
+      prompts: Object.fromEntries(
+        demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [
+          [spec.key, persona.prompts?.[spec.key] || spec.default],
+          ...(spec.format_key ? [[spec.format_key, persona.prompts?.[spec.format_key] || (spec.contract ?? "").trim()] as [string, string]] : [])
+        ])
+      ),
+      extra_criteria: persona.extra_criteria ?? "",
+      account_safety_rules: persona.account_safety_rules ?? ""
     }));
+    const comments = Object.fromEntries(demoPromptCatalog.prompts.map((spec) => [spec.key, `${spec.title}：${spec.usage}`]));
     const document = personas.length === 1 ? personas[0] : { version: 1, personas };
-    return json({ yaml: `# 演示模式：用 JSON 写法展示（JSON 也是合法的 YAML）。\n${JSON.stringify(document, null, 2)}\n` });
+    const blockKeys = new Set(demoPromptCatalog.prompts.flatMap((spec) => (spec.format_key ? [spec.key, spec.format_key] : [spec.key])));
+    return json({ yaml: toYAML(document as never, "Diana 人设文件（演示模式）。prompts 列出全部内置提示词，读回时必须一段不少、一段不多。", comments, blockKeys) });
   }
   if (path === "/api/assistant/personas/parse") {
     try {
-      const parsed = JSON.parse(String(body.source ?? "").replace(/^#.*$/gm, "")) as Persona | { personas: Persona[] };
+      const parsed = parseYAML(String(body.source ?? "")) as unknown as Persona | { personas: Persona[] };
       const personas = "personas" in parsed ? parsed.personas : [parsed];
       for (const persona of personas) {
-        const missing = demoPromptCatalog.prompts.filter((spec) => persona.prompts && !(spec.key in persona.prompts));
-        if (missing.length) return json({ error: `人设「${persona.name}」的 prompts 缺少 ${missing.length} 段提示词：${missing.map((spec) => spec.key).join("、")}` }, 400);
-        persona.prompts = Object.fromEntries(Object.entries(persona.prompts ?? {}).filter(([key, value]) => value.trim() !== demoPromptCatalog.prompts.find((spec) => spec.key === key)?.default));
+        const defaults = new Map<string, string>(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
+        const known = new Set(defaults.keys());
+        const unknown = Object.keys(persona.prompts ?? {}).filter((key) => !known.has(key));
+        if (unknown.length) return json({ error: `人设「${persona.name}」的 prompts 里有不认识的提示词：${unknown.join("、")}` }, 400);
+        const missing = [...known].filter((key) => persona.prompts && !(key in persona.prompts));
+        if (missing.length) return json({ error: `人设「${persona.name}」的 prompts 缺少 ${missing.length} 段提示词：${missing.join("、")}` }, 400);
+        persona.prompts = Object.fromEntries(Object.entries(persona.prompts ?? {}).filter(([key, value]) => String(value ?? "").trim() !== defaults.get(key)));
       }
       return json({ personas });
-    } catch {
-      return json({ error: "演示模式只能解析 JSON 写法的人设文件" }, 400);
+    } catch (error) {
+      return json({ error: `YAML 解析失败：${error instanceof Error ? error.message : String(error)}` }, 400);
     }
   }
   if (path === "/api/assistant/personas/delete") {
@@ -1447,7 +1461,8 @@ const demoPromptCatalog = {
       title: "连续消息关系判断",
       usage: "同一个人连发几条时，判断后一条是补充、更正还是新话题。",
       default: "判断两条消息之间的关系：后一条是在补充前一条、更正前一条，还是开了一个新话题。",
-      contract: "\n\n只输出一个 JSON 对象：{\"relation\": \"supplement|correction|new\"}，不要代码围栏。"
+      contract: "\n\n只输出一个 JSON 对象：{\"relation\": \"supplement|correction|new\"}，不要代码围栏。",
+      format_key: "routing.demo_classifier.format"
     }
   ]
 };

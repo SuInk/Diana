@@ -471,7 +471,7 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 		return assistant.GroupConfig{}, fmt.Errorf("欢迎词 LLM 冷却不能超过 86400 秒")
 	}
 	cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt)
-	if len([]rune(cfg.ReplyAccountSafetyAuditPrompt)) > 8000 {
+	if len([]rune(cfg.ReplyAccountSafetyAuditPrompt)) > assistant.AccountSafetyRulesMaxRunes {
 		return assistant.GroupConfig{}, fmt.Errorf("账号安全审核规则不能超过 8000 字")
 	}
 	cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(cfg.ProactiveReplyExtraCriteria)

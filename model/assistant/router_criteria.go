@@ -48,10 +48,30 @@ func customRouterCriteria(configured string) string {
 // 用追加而不是替换：评分提示词的输出是裸 JSON，解析失败只重试一次，再失败就按沉默
 // 处理。允许整段覆盖的话，最典型的故障不是机器人变笨，而是它突然不说话了，日志里只
 // 留一句「接话评分格式无效」，用户无从把这件事和自己改过的那段文本联系起来。
-func appendRouterCriteria(prompt, configured string) string {
+func appendRouterCriteria(prompt, configured string, overrides ...PromptOverrides) string {
 	criteria := customRouterCriteria(configured)
 	if criteria == "" {
 		return prompt
 	}
-	return strings.TrimRight(prompt, "\n") + "\n\n" + routerCriteriaHeading + "\n" + criteria + "\n" + routerCriteriaContractGuard
+	var custom PromptOverrides
+	if len(overrides) > 0 {
+		custom = overrides[0]
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\n" + custom.text(promptRouterCriteriaHeadingSpec) + "\n" + criteria + "\n" + custom.text(promptRouterCriteriaGuardSpec)
 }
+
+var promptRouterCriteriaHeadingSpec = registerPrompt(PromptSpec{
+	Key:     "routing.criteria.heading",
+	Group:   PromptGroupRouting,
+	Title:   "补充判据 · 段头",
+	Usage:   "填了补充判据时，拼在接话评分尾部的那一段的标题。",
+	Default: routerCriteriaHeading,
+})
+
+var promptRouterCriteriaGuardSpec = registerPrompt(PromptSpec{
+	Key:     "routing.criteria.guard",
+	Group:   PromptGroupRouting,
+	Title:   "补充判据 · 收尾",
+	Usage:   "跟在补充判据后面、整段评分提示词的最后一句：说明判据怎么用，再把输出格式重申一遍。它是模型读到的最后一句，改动时保留「只输出那个 JSON」的要求。",
+	Default: routerCriteriaContractGuard,
+})

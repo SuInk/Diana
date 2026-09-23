@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 )
 
@@ -36,6 +35,14 @@ const (
 
 // participationRatingsRetryReminder 是评分解析失败后重试时插在最前面的提醒。
 const participationRatingsRetryReminder = "只输出一个裸 JSON 对象：以左花括号开头、右花括号结尾，不要 Markdown 代码围栏，不要任何其他文字"
+
+var promptParticipationRetrySpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.retry",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 解析失败后的提醒",
+	Usage:   "评分结果解析失败、重问一次时插在最前面的提醒。第二次还解析不出来就按沉默处理。",
+	Default: participationRatingsRetryReminder,
+})
 
 // participationBotShareBlocks 判断机器人近期发言占比是否高到应当暂停闲聊插话。
 // 「总是」档位是用户明确要求的高频陪聊，不参与限流；样本为空、或机器人自己在窗口里
@@ -150,16 +157,60 @@ func (p ParticipationPreferences) prompt() string {
 	return p.promptWith(nil)
 }
 
-// promptWith 用机器人的提示词覆盖拼评分提示词。开头那行开关与档位由程序填，不开放
-// 修改：它只是把配置念给模型听，改它只会让模型对错档位。
+// promptWith 用机器人的提示词覆盖拼评分提示词。开头那行把开关与档位念给模型听，
+// 取值由程序填进占位符。
 func (p ParticipationPreferences) promptWith(overrides PromptOverrides) string {
 	r, c := p.ratingLevels()
 	relevance := "开"
 	if r == "off" {
 		relevance = "关"
 	}
-	return fmt.Sprintf("本轮回应提问：%s；闲聊档位：%s。开关和档位由程序执行，不要按它们倒推评分。\n", relevance, c) + participationScorePromptWith(overrides)
+	return overrides.render(promptParticipationHeaderSpec, map[string]string{"relevance": relevance, "chat_level": c}) + "\n" + participationScorePromptWith(overrides)
 }
+
+var promptParticipationHeaderSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.header",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 本轮开关与档位",
+	Usage:   "接话评分提示词的第一行，把本轮「回应提问」开关和闲聊档位告诉模型。开关和档位由程序执行，这行只是念给模型听。",
+	Default: "本轮回应提问：{relevance}；闲聊档位：{chat_level}。开关和档位由程序执行，不要按它们倒推评分。",
+	Vars: []PromptVar{
+		{Name: "relevance", Description: "回应提问开关：开 或 关"},
+		{Name: "chat_level", Description: "闲聊档位名，如 low、medium"},
+	},
+})
+
+var promptParticipationIntroSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.intro",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 任务说明",
+	Usage:   "接话评分模块的身份和任务：评哪两项、要不要带理由。",
+	Default: "你是群聊接话评分模块。结合当前消息和最近对话评估两项，各带简短 reason，不输出总分或开关。",
+})
+
+var promptParticipationRelevanceIntroSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.relevance_intro",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · relevance 的含义",
+	Usage:   "说明 relevance 这一项评什么、怎么填。字段名 relevance、directed 由程序解析，改动时保持不变。",
+	Default: "relevance：当前消息是不是明确在跟机器人说话，directed 只填 true 或 false，不打分。",
+})
+
+var promptParticipationChatInIntroSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.chat_in_intro",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · chat_in 的含义",
+	Usage:   "说明 chat_in 这一项评什么、分数范围。字段名 chat_in、score 由程序解析，改动时保持不变。",
+	Default: "chat_in：给 0 到 1 的 score（两位小数）。没人找机器人时，插一句是否自然。",
+})
+
+var promptParticipationAnchorsSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.anchors",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 闲聊分锚点",
+	Usage:   "闲聊分的刻度参考：多少分对应什么情形。只影响会生成文本的评分模型；绑定判断模型时，它按程序里固定的六档作答。档位阈值由程序判断，这里改的是模型怎么打分。",
+	Default: participationChatInAnchors,
+})
 
 // participationScorePrompt 只让模型评两项。
 //
@@ -175,16 +226,25 @@ var participationScorePrompt = participationScorePromptWith(nil)
 // participationScorePromptWith 按覆盖拼评分提示词。可改的只有下面登记的几段判据，
 // 骨架（两项字段的含义、分数刻度）和结尾的输出格式固定：它们就是解析契约。
 func participationScorePromptWith(overrides PromptOverrides) string {
-	return `你是群聊接话评分模块。结合当前消息和最近对话评估两项，各带简短 reason，不输出总分或开关。
-relevance：当前消息是不是明确在跟机器人说话，directed 只填 true 或 false，不打分。
+	return overrides.text(promptParticipationIntroSpec) + `
+` + overrides.text(promptParticipationRelevanceIntroSpec) + `
 true：` + overrides.text(promptParticipationRelevanceTrueSpec) + `
 false：` + overrides.text(promptParticipationRelevanceFalseSpec) + `
 ` + overrides.text(promptParticipationRelevanceNoteSpec) + `
-chat_in：给 0 到 1 的 score（两位小数）。没人找机器人时，插一句是否自然。
-` + participationChatInAnchors + `
+` + overrides.text(promptParticipationChatInIntroSpec) + `
+` + overrides.text(promptParticipationAnchorsSpec) + `
 ` + overrides.text(promptParticipationChatInNoteSpec) + `
-` + overrides.text(promptParticipationSharedNoteSpec) + participationScoreContract
+` + overrides.text(promptParticipationSharedNoteSpec) + `
+` + overrides.text(promptParticipationFormatSpec)
 }
+
+var promptParticipationFormatSpec = registerPrompt(PromptSpec{
+	Key:     "routing.participation.format",
+	Group:   PromptGroupRouting,
+	Title:   "接话评分 · 输出格式",
+	Usage:   "接话评分的最后一句：要求模型只输出那个 JSON。程序按它解析，改动时字段名和结构必须保持，否则解析失败会按沉默处理。",
+	Default: strings.TrimPrefix(participationScoreContract, "\n"),
+})
 
 const participationScoreContract = `
 只输出裸 JSON，以左花括号开头、右花括号结尾，不要代码围栏和前后说明。例如：{"relevance":{"directed":true,"reason":"在接机器人刚才的话"},"chat_in":{"score":0.35,"reason":"顺着梗接"}}。`

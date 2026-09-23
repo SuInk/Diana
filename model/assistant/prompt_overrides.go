@@ -18,9 +18,10 @@ import (
 // WithDefaults 把当时的默认值写进库，之后每次改默认文案，存量机器人都还跑着旧版，
 // 而且从字段上看不出那是用户写的还是化石（见 legacyPromptFields）。
 //
-// 需要解析输出的提示词（评分、审核、分类）把输出格式拆到 Contract 里：界面只读，
-// 运行时永远拼在正文之后。正文随便改，格式说明改坏一个字，这条链路的兜底就是沉默
-// 或放行，而用户看到的只有「机器人突然不说话了」。
+// 需要解析输出的提示词（评分、审核、分类）把输出格式拆到 Contract 里，运行时永远拼在
+// 正文之后。格式也能改（键是 <Key>.format），但单独成一栏、带着警告：正文随便改，
+// 格式改坏一个字，这条链路的兜底就是沉默或放行，而用户看到的只有「机器人突然不说话了」。
+// 分开放，改判据的人就不会顺手把格式也改了。
 
 // PromptGroup 是提示词在界面上的分组，顺序见 promptGroupOrder。
 type PromptGroup string
@@ -82,9 +83,11 @@ type PromptSpec struct {
 	// Vars 列出正文里会被替换的占位符。覆盖时删掉占位符不会报错，只是那项信息
 	// 不再进提示词，界面会提醒。
 	Vars []PromptVar `json:"vars,omitempty"`
-	// Contract 是锁定的输出格式，运行时原样拼在正文之后，界面只读。它自带与正文
-	// 之间的分隔符，默认正文 + Contract 与改造前的整段提示词逐字节相同。
+	// Contract 是输出格式，运行时拼在正文之后。它自带与正文之间的分隔符，默认正文 +
+	// Contract 与改造前的整段提示词逐字节相同。覆盖它用 FormatKey，见 formatKey。
 	Contract string `json:"contract,omitempty"`
+	// FormatKey 是覆盖输出格式时用的键，只有带 Contract 的条目才有。
+	FormatKey string `json:"format_key,omitempty"`
 }
 
 var (
@@ -103,6 +106,9 @@ func registerPrompt(spec PromptSpec) *PromptSpec {
 	}
 	if _, exists := promptRegistryByKey[spec.Key]; exists {
 		panic("assistant: duplicate prompt spec " + spec.Key)
+	}
+	if spec.Contract != "" {
+		spec.FormatKey = spec.Key + promptFormatSuffix
 	}
 	registered := &spec
 	promptRegistry = append(promptRegistry, registered)
@@ -135,9 +141,26 @@ const PromptOverrideMaxRunes = 20000
 // PromptOverrides 是按 PromptSpec.Key 存放的覆盖正文。没出现的键、空串都表示用内置默认值。
 type PromptOverrides map[string]string
 
-// text 返回这段提示词本轮实际使用的正文（含锁定的输出格式）。
+// promptFormatSuffix 接在键后面，表示覆盖的是这段的输出格式。
+const promptFormatSuffix = ".format"
+
+// text 返回这段提示词本轮实际使用的正文（含输出格式）。
 func (o PromptOverrides) text(spec *PromptSpec) string {
-	return o.body(spec) + spec.Contract
+	return o.body(spec) + o.contract(spec)
+}
+
+// contract 返回输出格式：覆盖过就用覆盖值，并沿用默认格式前面的分隔符（覆盖值是
+// 修剪过的，分隔符由程序补）；没覆盖过就是默认格式。
+func (o PromptOverrides) contract(spec *PromptSpec) string {
+	if spec == nil || spec.Contract == "" {
+		return ""
+	}
+	custom := strings.TrimSpace(o[spec.FormatKey])
+	if custom == "" {
+		return spec.Contract
+	}
+	separator := spec.Contract[:len(spec.Contract)-len(strings.TrimLeft(spec.Contract, " \n"))]
+	return separator + custom
 }
 
 // body 返回正文部分：覆盖过就用覆盖值，否则用默认值。不含 Contract。
@@ -173,9 +196,26 @@ func replacePromptVars(text string, vars map[string]string) string {
 	return strings.NewReplacer(pairs...).Replace(text)
 }
 
-// isCustomized 报告这段提示词是否被覆盖过。
+// isCustomized 报告这段提示词（正文或输出格式）是否被覆盖过。
 func (o PromptOverrides) isCustomized(spec *PromptSpec) bool {
-	return spec != nil && strings.TrimSpace(o[spec.Key]) != ""
+	if spec == nil {
+		return false
+	}
+	return strings.TrimSpace(o[spec.Key]) != "" || (spec.FormatKey != "" && strings.TrimSpace(o[spec.FormatKey]) != "")
+}
+
+// promptOverrideDefault 按覆盖键找它对应的默认文本：正文键对 Default，格式键对 Contract。
+func promptOverrideDefault(key string) (*PromptSpec, string, bool) {
+	key = strings.TrimSpace(key)
+	if spec, ok := promptRegistryByKey[key]; ok {
+		return spec, spec.Default, true
+	}
+	if base, found := strings.CutSuffix(key, promptFormatSuffix); found {
+		if spec, ok := promptRegistryByKey[base]; ok && spec.Contract != "" {
+			return spec, spec.Contract, true
+		}
+	}
+	return nil, "", false
 }
 
 // prompt 是 cfg.PromptOverrides.text 的简写，调用处大多手里只有 cfg。
@@ -199,15 +239,15 @@ func normalizePromptOverrides(overrides PromptOverrides) PromptOverrides {
 	}
 	normalized := PromptOverrides{}
 	for key, value := range overrides {
-		spec, ok := promptRegistryByKey[strings.TrimSpace(key)]
+		_, fallback, ok := promptOverrideDefault(key)
 		if !ok {
 			continue
 		}
 		value = strings.TrimSpace(strings.ReplaceAll(value, "\r\n", "\n"))
-		if value == "" || value == strings.TrimSpace(spec.Default) {
+		if value == "" || value == strings.TrimSpace(fallback) {
 			continue
 		}
-		normalized[spec.Key] = value
+		normalized[strings.TrimSpace(key)] = value
 	}
 	if len(normalized) == 0 {
 		return nil
@@ -234,7 +274,7 @@ func validatePromptOverrides(overrides PromptOverrides) error {
 			continue
 		}
 		title := key
-		if spec, ok := promptRegistryByKey[key]; ok {
+		if spec, _, ok := promptOverrideDefault(key); ok {
 			title = spec.Title
 		}
 		return fmt.Errorf("提示词「%s」不能超过 %d 字", title, PromptOverrideMaxRunes)

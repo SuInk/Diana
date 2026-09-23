@@ -28,3 +28,15 @@ test("only registered keys count as customized", () => {
   assert.deepEqual(withoutPromptOverrides({ a: "1", b: "2" }, ["a"]), { b: "2" });
   assert.equal(withoutPromptOverrides({ a: "1" }, ["a"]), undefined);
 });
+
+const parsed = { key: "routing.x", group: "routing", title: "分类", usage: "", default: "判断关系。", contract: "\n\n只输出 JSON。", format_key: "routing.x.format" };
+
+test("output formats are editable and reset together with the body", async () => {
+  const { promptFormatValue, withPromptFormat, isPromptCustomized, isPromptFormatCustomized, withoutPromptCustomization } = await import("./prompt-overrides.ts");
+  assert.equal(promptFormatValue(parsed, undefined), "只输出 JSON。");
+  const changed = withPromptFormat(undefined, parsed, "只输出 {\"relation\":\"new\"}");
+  assert.deepEqual(changed, { "routing.x.format": "只输出 {\"relation\":\"new\"}" });
+  assert.ok(isPromptCustomized(parsed, changed) && isPromptFormatCustomized(parsed, changed));
+  assert.equal(withPromptFormat(changed, parsed, "只输出 JSON。\n"), undefined);
+  assert.equal(withoutPromptCustomization({ "routing.x": "改", "routing.x.format": "改" }, parsed), undefined);
+});

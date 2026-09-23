@@ -99,3 +99,56 @@ func TestPersonaWithOnlyPromptsIsNotEmpty(t *testing.T) {
 		t.Fatal("a persona that only customizes prompts should be savable")
 	}
 }
+
+// 判据跟着人设走：空着也写进文件，读回来原样；输出格式改过的也能往返。
+func TestPersonaYAMLCarriesCriteriaAndFormats(t *testing.T) {
+	persona := Persona{
+		Name:               "群管",
+		SystemPrompt:       "说话短",
+		ExtraCriteria:      "群里叫「糖宝」的是另一位群友",
+		AccountSafetyRules: "不许发外链",
+		Prompts:            PromptOverrides{promptParticipationFormatSpec.Key: "只输出 JSON"},
+	}
+	out, err := RenderPersonaYAML([]Persona{persona})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blank, err := RenderPersonaYAML([]Persona{{Name: "空"}}); err != nil || !strings.Contains(string(blank), "extra_criteria: \"\"") || !strings.Contains(string(blank), "account_safety_rules: \"\"") {
+		t.Fatalf("empty criteria should still be listed: %v", err)
+	}
+	for _, spec := range PromptSpecs() {
+		if spec.FormatKey != "" && !strings.Contains(string(out), "\n  "+spec.FormatKey+":") {
+			t.Fatalf("format of %s missing from YAML", spec.Key)
+		}
+	}
+	document, err := ParsePersonaDocument(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := document.Personas[0]
+	if got.ExtraCriteria != persona.ExtraCriteria || got.AccountSafetyRules != persona.AccountSafetyRules || len(got.Prompts) != 1 {
+		t.Fatalf("criteria/prompts changed: %#v", got)
+	}
+}
+
+// 输出格式能改：覆盖值替换默认格式，分隔符由程序补。
+func TestPromptFormatOverride(t *testing.T) {
+	spec := firstSpecWithContract()
+	custom := PromptOverrides{spec.FormatKey: "只输出 {\"keep\":true}"}
+	got := custom.text(spec)
+	if !strings.HasSuffix(got, "只输出 {\"keep\":true}") || !strings.HasPrefix(got, spec.Default) {
+		t.Fatalf("format override = %q", got)
+	}
+	if normalizePromptOverrides(PromptOverrides{spec.FormatKey: spec.Contract}) != nil {
+		t.Fatal("a format equal to the default should not be stored")
+	}
+}
+
+func firstSpecWithContract() *PromptSpec {
+	for _, spec := range promptRegistry {
+		if spec.Contract != "" {
+			return spec
+		}
+	}
+	panic("no spec with a contract")
+}

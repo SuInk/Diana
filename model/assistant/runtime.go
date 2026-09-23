@@ -2458,7 +2458,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			// 宽松解析仍然失败时再问一次模型：同样的上下文，只在最前面多一条提醒。
 			// 第二次还是解析不出来才按沉默处理。
 			retried = true
-			retryMessages := append([]llm.Message{{Role: llm.RoleSystem, Content: participationRatingsRetryReminder}}, messages...)
+			retryMessages := append([]llm.Message{{Role: llm.RoleSystem, Content: cfg.prompt(promptParticipationRetrySpec)}}, messages...)
 			retryRaw, retryErr := r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
 				resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: retryMessages, Decision: decisionSpec})
 				if err != nil {
@@ -8593,15 +8593,31 @@ func isClauseBreak(r rune) bool {
 func replyIntentPrompts(registry *agent.ToolRegistry, overrides PromptOverrides) (systemPrompt, userPrompt string) {
 	systemPrompt = overrides.text(promptReplyIntentImageSpec)
 	userPrompt = "请判断这条当前消息是否要调用图片功能。消息上下文 JSON：\n"
-	outputFormat := `{"action":"none","prompt":""}`
+	outputFormat := overrides.text(promptReplyIntentImageFormatSpec)
 	if registry != nil {
 		systemPrompt += overrides.text(promptReplyIntentToolsSpec)
 		userPrompt = "请判断图片动作，并选择本轮真正可能有用的上下文和工具。消息上下文 JSON：\n"
-		outputFormat = `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false,"needs_evidence":false}`
+		outputFormat = overrides.text(promptReplyIntentToolsFormatSpec)
 	}
-	systemPrompt += "\n\n输出格式：\n" + outputFormat
+	systemPrompt += "\n\n" + outputFormat
 	return systemPrompt, userPrompt
 }
+
+var promptReplyIntentImageFormatSpec = registerPrompt(PromptSpec{
+	Key:     "routing.reply_intent.image_format",
+	Group:   PromptGroupRouting,
+	Title:   "功能路由 · 输出格式（只判断图片）",
+	Usage:   "本轮没有工具目录时，功能路由的输出格式。程序按它解析，字段名和结构必须保持，改坏了图片功能和工具选择都会失效。",
+	Default: "输出格式：\n" + `{"action":"none","prompt":""}`,
+})
+
+var promptReplyIntentToolsFormatSpec = registerPrompt(PromptSpec{
+	Key:     "routing.reply_intent.tools_format",
+	Group:   PromptGroupRouting,
+	Title:   "功能路由 · 输出格式（含工具与上下文选择）",
+	Usage:   "本轮带工具目录时，功能路由的输出格式。程序按它解析，字段名和结构必须保持，改坏了图片功能和工具选择都会失效。",
+	Default: "输出格式：\n" + `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false,"needs_evidence":false}`,
+})
 
 const replyIntentImagePrompt = `你是聊天机器人 Diana 的功能路由器。你的任务只是在语义层面判断当前消息是否需要调用内置图片功能。
 

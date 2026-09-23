@@ -57,8 +57,13 @@ type Persona struct {
 	// Prompts 是这套人设改过的内置提示词，和 BotConfig.PromptOverrides 同一个形状：
 	// 只存改过的，套用时整份替换机器人的覆盖表。提示词跟着人设走，分享一份人设文件
 	// 就是分享它的全部提示词配置，见 persona_prompts.go。
-	Prompts   PromptOverrides `json:"prompts,omitempty"`
-	UpdatedAt time.Time       `json:"updated_at,omitempty"`
+	Prompts PromptOverrides `json:"prompts,omitempty"`
+	// ExtraCriteria 和 AccountSafetyRules 是判据：接话评分的补充判据、发送前审核的
+	// 账号安全规则。它们在机器人配置里各有字段（分群仍可覆盖），跟着人设走是为了
+	// 让一份人设文件就是全部提示词配置，套用时填进机器人的那两个字段。
+	ExtraCriteria      string    `json:"extra_criteria,omitempty"`
+	AccountSafetyRules string    `json:"account_safety_rules,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
 }
 
 // PersonaSet 是整个人设库。
@@ -158,6 +163,8 @@ func (persona Persona) Normalized() Persona {
 		persona.PersonaMode = ""
 	}
 	persona.Prompts = normalizePromptOverrides(persona.Prompts)
+	persona.ExtraCriteria = truncateRunesPlain(strings.TrimSpace(persona.ExtraCriteria), ProactiveReplyExtraCriteriaMaxRunes)
+	persona.AccountSafetyRules = truncateRunesPlain(strings.TrimSpace(persona.AccountSafetyRules), AccountSafetyRulesMaxRunes)
 	return persona
 }
 
@@ -170,8 +177,13 @@ func (persona Persona) Empty() bool {
 		persona.DaypartToneEnabled == nil &&
 		strings.TrimSpace(persona.SelfReference) == "" &&
 		strings.TrimSpace(persona.SentenceEnders) == "" &&
-		len(persona.Prompts) == 0
+		len(persona.Prompts) == 0 &&
+		strings.TrimSpace(persona.ExtraCriteria) == "" &&
+		strings.TrimSpace(persona.AccountSafetyRules) == ""
 }
+
+// AccountSafetyRulesMaxRunes 是账号安全规则的长度上限，群配置的保存校验用的同一个数。
+const AccountSafetyRulesMaxRunes = 8000
 
 // WithDefaults 清洗整库：去掉空条目和重复 ID，按最近更新排前面。
 func (set PersonaSet) WithDefaults() PersonaSet {
