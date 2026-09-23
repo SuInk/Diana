@@ -848,23 +848,27 @@ type GroupConfig struct {
 	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
 	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
 	// 归给当时的当前配置档。
-	BotProfileID              string           `json:"bot_profile_id,omitempty"`
-	GroupID                   string           `json:"group_id"`
-	Enabled                   bool             `json:"enabled"`
-	EnabledSet                bool             `json:"enabled_set,omitempty"`
-	GroupTriggers             []string         `json:"group_triggers,omitempty"`
-	GroupTriggerMode          AliasTriggerMode `json:"group_trigger_mode,omitempty"`
-	SystemPrompt              string           `json:"system_prompt,omitempty"`
-	ResponseMode              ResponseMode     `json:"response_mode,omitempty"`
-	ReplyStyle                ReplyStyle       `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled  *bool            `json:"action_description_enabled,omitempty"`
-	SelfReference             string           `json:"self_reference,omitempty"`
-	SentenceEnders            string           `json:"sentence_enders,omitempty"`
-	WelcomeEnabled            bool             `json:"welcome_enabled,omitempty"`
-	WelcomeMessage            string           `json:"welcome_message,omitempty"`
-	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
-	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
+	BotProfileID     string           `json:"bot_profile_id,omitempty"`
+	GroupID          string           `json:"group_id"`
+	Enabled          bool             `json:"enabled"`
+	EnabledSet       bool             `json:"enabled_set,omitempty"`
+	GroupTriggers    []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	// PersonaID 表示本群的人设绑定在人设库的某一套上：下面的正文、表达风格、
+	// 动作描写、自称、句尾语气词都是那一套的内容，库里改了会同步写过来（见
+	// group_persona_link.go）。空值表示没绑定：正文留空跟随机器人，填了是本群自定义。
+	PersonaID                 string       `json:"persona_id,omitempty"`
+	SystemPrompt              string       `json:"system_prompt,omitempty"`
+	ResponseMode              ResponseMode `json:"response_mode,omitempty"`
+	ReplyStyle                ReplyStyle   `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled  *bool        `json:"action_description_enabled,omitempty"`
+	SelfReference             string       `json:"self_reference,omitempty"`
+	SentenceEnders            string       `json:"sentence_enders,omitempty"`
+	WelcomeEnabled            bool         `json:"welcome_enabled,omitempty"`
+	WelcomeMessage            string       `json:"welcome_message,omitempty"`
+	WelcomeMode               WelcomeMode  `json:"welcome_mode,omitempty"`
+	WelcomeTemplates          []string     `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds int          `json:"welcome_llm_cooldown_seconds,omitempty"`
 	// ModelCallQuota 是这个群在滚动 5 小时窗口里能发起的模型调用次数上限。留空跟随
 	// 机器人那一档，两边都没填表示不限。
 	//

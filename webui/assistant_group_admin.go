@@ -326,6 +326,7 @@ func (h *BotHandler) saveGroupAdminConfig(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "group_admin_config_save", err, session.groupID, map[string]any{"group_id": session.groupID})
 		return
 	}
+	cfg = h.resolveGroupPersonaLink(c.Request.Context(), h.keepGroupPersonaLink(c.Request.Context(), cfg, current))
 	if session.userID != profile.OwnerID {
 		if err := h.groupExtensionAccessWithinBotLimits(profile.ID, current.ExtensionAccess, cfg.ExtensionAccess); err != nil {
 			h.writeError(c, http.StatusForbidden, "group_admin_config_save", err, session.groupID, map[string]any{"group_id": session.groupID})

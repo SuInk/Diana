@@ -20,6 +20,8 @@ import (
 // 这一层刻意和 BotConfig 完全解耦：库里存什么、机器人当前跑什么，是两回事。
 // 「套用」发生在界面上——点一下把四个字段填进表单，用户看着它改、自己按保存。
 // 因此这里没有任何 activate/current 的概念，也不需要在 BotConfig 上挂 persona_id。
+// 例外是群人设可以绑定库里的一套：库保存或删除时把变化写到绑定它的群，见
+// group_persona_link.go。
 // 见 persona_library.go 顶部关于「套用来源而不是活绑定」的那段。
 
 type personaSavePayload struct {
@@ -117,8 +119,14 @@ func (h *BotHandler) savePersona(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "personas_save", err, saved.Name, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "personas_save", "人设已保存", saved.Name, map[string]any{"persona_id": saved.ID})
-	c.JSON(http.StatusOK, gin.H{"persona": saved, "personas": updated.Personas})
+	// 绑定这一套的群跟着更新。库已经存好了，同步失败不回滚库，只报出来。
+	synced, syncErr := h.syncGroupsLinkedToPersona(saved)
+	recordRequestOperation(c, h.logs, "personas_save", "人设已保存", saved.Name, map[string]any{"persona_id": saved.ID, "groups_synced": synced})
+	response := gin.H{"persona": saved, "personas": updated.Personas, "groups_synced": synced}
+	if syncErr != nil {
+		response["warning"] = "人设已保存，但同步到绑定它的群时失败：" + syncErr.Error()
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // deletePersona 删掉一套人设。这只动库，不影响任何已经套用过它的机器人配置。
@@ -141,8 +149,14 @@ func (h *BotHandler) deletePersona(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "personas_delete", err, persona.Name, nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "personas_delete", "人设已删除", persona.Name, map[string]any{"persona_id": strings.TrimSpace(payload.ID)})
-	c.JSON(http.StatusOK, gin.H{"personas": updated.Personas})
+	// 绑定它的群保留现有文字，改成本群自定义。
+	unlinked, unlinkErr := h.unlinkGroupsFromPersona(payload.ID)
+	recordRequestOperation(c, h.logs, "personas_delete", "人设已删除", persona.Name, map[string]any{"persona_id": strings.TrimSpace(payload.ID), "groups_unlinked": unlinked})
+	response := gin.H{"personas": updated.Personas, "groups_unlinked": unlinked}
+	if unlinkErr != nil {
+		response["warning"] = "人设已删除，但解除群绑定时失败：" + unlinkErr.Error()
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // importPersonas 把导出文件并进库里。合并在这里做而不是前端逐条 POST：一次读改写

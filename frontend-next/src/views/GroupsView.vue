@@ -148,7 +148,8 @@
               <Users :size="12" aria-hidden="true" />
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
             </span>
-            <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
+            <span v-if="group.configured && group.persona_id" class="badge accent">人设：{{ personaNameOf(group.persona_id) }}</span>
+            <span v-else-if="group.configured && group.system_prompt" class="badge">专属人设</span>
             <span v-if="group.configured && group.participation" class="badge accent">{{ participationSummary(group.participation) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
@@ -257,16 +258,28 @@
           <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
         </div>
         <div class="field wide">
-          <label for="group-prompt">本群专属人设（留空跟随{{ inheritedPersonaOwner }}的人设）</label>
+          <label for="group-persona-source">本群人设</label>
+          <AppSelect
+            id="group-persona-source"
+            :model-value="personaSource"
+            :options="personaSourceOptions"
+            @update:model-value="(value) => setPersonaSource(String(value))"
+          />
           <textarea
+            v-if="personaSource !== ''"
             id="group-prompt"
             v-model="editing.system_prompt"
             class="textarea"
             rows="3"
+            :readonly="Boolean(editing.persona_id)"
             :placeholder="personaPlaceholder"
           ></textarea>
-          <span class="hint">留空表示本群一直跟着{{ inheritedPersonaOwner }}走，改机器人人设时本群也跟着变；填了就只用这里的文字。</span>
-          <details v-if="inheritedPersona" class="inherited-persona">
+          <span v-if="editing.persona_id" class="hint">
+            内容来自人设库「{{ linkedPersonaName }}」，连同表达风格、自称和句尾语气词一起生效。人设库里修改后本群自动更新；要单独改，把来源切到「本群自定义」。
+          </span>
+          <span v-else-if="personaSource === 'custom'" class="hint">只用这里的文字，改机器人人设或人设库都不影响本群。</span>
+          <span v-else class="hint">本群一直跟着{{ inheritedPersonaOwner }}走，改机器人人设时本群也跟着变。</span>
+          <details v-if="inheritedPersona && !editing.persona_id" class="inherited-persona">
             <summary>{{ inheritedPersonaOwner }}当前的人设</summary>
             <p>{{ inheritedPersona }}</p>
           </details>
@@ -285,8 +298,10 @@
             id="group-action-description"
             :model-value="editing.action_description_enabled === undefined ? '' : editing.action_description_enabled ? 'on' : 'off'"
             :options="groupActionDescriptionOptions"
+            :disabled="Boolean(editing.persona_id)"
             @update:model-value="(value) => { if (editing) editing.action_description_enabled = value === '' ? undefined : value === 'on'; }"
           />
+          <span v-if="editing.persona_id" class="hint">跟着人设库「{{ linkedPersonaName }}」走。</span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -610,7 +625,9 @@ import {
   getGroupRelations,
   fetchAssistantUserNames,
   listManagedExtensions,
+  listPersonas,
   type ManagedExtension,
+  type Persona,
   type PluginState,
   type BotGroupConfig,
   type BotGroupSummary,
@@ -851,6 +868,62 @@ const inheritedPersonaOwner = computed(() => {
   const name = inheritedPersonaProfile.value?.name?.trim();
   return name ? `「${name}」` : "所属机器人";
 });
+// 人设库：群人设可以绑定其中一套，库里改了由后端同步写进群配置。
+const personaLibrary = ref<Persona[]>([]);
+function personaNameOf(id?: string): string {
+  return personaLibrary.value.find((persona) => persona.id === id)?.name ?? "已删除的人设";
+}
+const linkedPersonaName = computed(() => personaNameOf(editing.value?.persona_id));
+// 来源三选一：留空跟随机器人、本群自定义、绑定人设库里的一套。
+const personaSource = computed(() => {
+  const current = editing.value;
+  if (!current) return "";
+  if (current.persona_id) return current.persona_id;
+  return current.system_prompt?.trim() ? "custom" : "";
+});
+const personaSourceOptions = computed<AppSelectOption[]>(() => {
+  const options: AppSelectOption[] = [
+    { value: "", label: `跟随${inheritedPersonaOwner.value}` },
+    { value: "custom", label: "本群自定义" },
+    ...personaLibrary.value.map((persona) => ({ value: persona.id, label: `人设库：${persona.name}` }))
+  ];
+  const linked = editing.value?.persona_id;
+  if (linked && !personaLibrary.value.some((persona) => persona.id === linked)) {
+    options.push({ value: linked, label: "人设库：已删除的人设（保存后改为本群自定义）" });
+  }
+  return options;
+});
+function clearLinkedPersonaFields(config: BotGroupConfig): void {
+  config.persona_id = undefined;
+  config.system_prompt = "";
+  config.self_reference = "";
+  config.sentence_enders = "";
+  config.action_description_enabled = undefined;
+}
+function setPersonaSource(value: string): void {
+  const current = editing.value;
+  if (!current || value === personaSource.value) return;
+  if (value === "") {
+    // 跟随机器人：本群不留任何人设覆盖。绑定带进来的自称、语气词也一并清掉。
+    if (current.persona_id) clearLinkedPersonaFields(current);
+    else current.system_prompt = "";
+    return;
+  }
+  if (value === "custom") {
+    // 解除绑定、保留现有文字，从这里开始手改。
+    current.persona_id = undefined;
+    if (!current.system_prompt?.trim()) current.system_prompt = inheritedPersona.value;
+    return;
+  }
+  const persona = personaLibrary.value.find((item) => item.id === value);
+  if (!persona) return;
+  // 先在表单里预览；保存时后端按绑定用人设库里的内容为准。
+  current.persona_id = persona.id;
+  current.system_prompt = persona.system_prompt ?? "";
+  current.self_reference = persona.self_reference ?? "";
+  current.sentence_enders = persona.sentence_enders ?? "";
+  current.action_description_enabled = persona.action_description_enabled ?? false;
+}
 const personaPlaceholder = computed(() =>
   inheritedPersona.value
     ? `留空跟随${inheritedPersonaOwner.value}：${truncate(inheritedPersona.value, 40)}`
@@ -930,13 +1003,15 @@ function hasOtherReplyGateRules(group: BotGroupConfig): boolean {
 async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
-    const [response, configAndPlatforms, extensionList] = await Promise.all([
+    const [response, configAndPlatforms, extensionList, personaList] = await Promise.all([
       listBotGroups(showFeedback, botScope.value),
       Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null),
       // 扩展目录和群列表互不依赖：取不到就不显示这一栏，不拖累整页。
-      botScope.value ? listManagedExtensions(botScope.value).catch(() => null) : Promise.resolve(null)
+      botScope.value ? listManagedExtensions(botScope.value).catch(() => null) : Promise.resolve(null),
+      listPersonas().catch(() => null)
     ]);
     groups.value = response.groups;
+    personaLibrary.value = personaList?.personas ?? [];
     plugins.value = response.plugins;
     extensions.value = extensionList?.items ?? [];
     liveAvailable.value = response.live_available;

@@ -533,6 +533,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";
+  /** 绑定的人设库条目；绑定时人设各项由人设库同步，库里改了自动更新。 */
+  persona_id?: string;
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
   /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
