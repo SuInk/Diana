@@ -13,9 +13,6 @@
     <div class="card">
       <div class="card-header">
         <h2>浏览器</h2>
-        <span v-if="sourceState" class="badge" :class="sourceState.active === 'off' ? 'warn' : 'ok'">
-          {{ sourceState.active === "off" ? "没在用" : `正在用${sourceMeta[sourceState.active].short}` }}
-        </span>
         <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
       </div>
       <div class="card-body stack">
@@ -33,23 +30,40 @@
                 <span v-else-if="sourceState?.[key].enabled && sourceState[key].usable" class="badge">备用</span>
                 <span v-else-if="sourceState?.[key].enabled" class="badge warn">{{ key === "box" ? "没找到 Chrome" : "等扩展连接" }}</span>
               </div>
-              <span class="hint">
-                {{ sourceMeta[key].hint }}
-                <button v-if="sourceState" class="browser-toggle-deps" type="button" @click="dependenciesTarget = key">
+              <p class="browser-toggle-desc">{{ sourceMeta[key].hint }}</p>
+              <div v-if="sourceState" class="browser-toggle-meta">
+                <button type="button" :class="{ warn: dependencyProblem(key) }" @click="dependenciesTarget = key">
                   运行依赖 {{ sourceState[key].dependencies.filter((dep) => dep.available).length }}/{{ sourceState[key].dependencies.length }}
                 </button>
-              </span>
+                <button
+                  v-if="enabledCount > 1 && sourceState[key].enabled && index > 0"
+                  type="button"
+                  :disabled="savingSource"
+                  @click="moveSource(index, -1)"
+                >
+                  <ArrowUp :size="13" aria-hidden="true" />
+                  优先用
+                </button>
+                <a v-if="key === 'extension' && sourceState.extension.enabled && !sourceState.extension.detected" href="/api/browser-control/extension.zip" download>
+                  下载扩展
+                </a>
+              </div>
+              <!-- 内置浏览器的启停和接管属于这一行，别飘在列表外面。 -->
+              <div v-if="key === 'box' && sourceState?.box.enabled && botID" class="browser-toggle-actions">
+                <button class="btn small" type="button" :disabled="busy || status.running" @click="start">启动</button>
+                <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
+                <button
+                  class="btn small"
+                  :class="status.takeover ? 'warn' : 'ghost'"
+                  type="button"
+                  :disabled="busy || !status.running"
+                  @click="toggleTakeover"
+                >
+                  {{ status.takeover ? "交还给机器人" : "我来操作" }}
+                </button>
+                <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
+              </div>
             </div>
-            <button
-              v-if="enabledCount > 1 && sourceState?.[key].enabled && index > 0"
-              class="btn small ghost browser-toggle-promote"
-              type="button"
-              :disabled="savingSource"
-              @click="moveSource(index, -1)"
-            >
-              <ArrowUp :size="14" aria-hidden="true" />
-              优先用
-            </button>
             <label class="switch" :title="sourceState?.[key].enabled ? '点击关闭' : '点击打开'">
               <input
                 type="checkbox"
@@ -63,36 +77,12 @@
           </div>
         </div>
 
-        <template v-if="preferred === 'box'">
-          <p v-if="!botID" class="muted" style="margin: 0; font-size: 13px">
-            每台机器人各用一个浏览器，登录态互不相通。在顶部选一台机器人，就能看到它的画面、在里面登录。
-          </p>
-          <div v-else class="row gap">
-            <button class="btn small" type="button" :disabled="busy || status.running" @click="start">启动</button>
-            <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
-            <button
-              class="btn small"
-              :class="status.takeover ? 'warn' : 'ghost'"
-              type="button"
-              :disabled="busy || !status.running"
-              @click="toggleTakeover"
-            >
-              {{ status.takeover ? "交还给机器人" : "我来操作" }}
-            </button>
-            <span class="muted" style="font-size: 12.5px">机器人要用时会自己启动；在画面上点一下就是你接管。</span>
-          </div>
-          <p v-if="botID && status.last_error" class="muted" style="margin: 0; font-size: 12.5px">
-            最近一次错误：{{ status.last_error }}
-          </p>
-        </template>
-        <p v-else-if="preferred === 'extension'" class="muted" style="margin: 0; font-size: 13px">
-          把扩展装进你的 Chrome：<a href="/api/browser-control/extension.zip" download>下载扩展</a>，解压后在
-          <code class="mono">chrome://extensions</code> 打开开发者模式、加载这个目录。连接令牌和允许的网站在下面「更多设置」里。
+        <p v-if="sourceState?.box.enabled && !botID" class="muted" style="margin: 0; font-size: 13px">
+          每台机器人各用一个内置浏览器，登录态互不相通。在顶部选一台机器人，就能看到它的画面、在里面登录。
         </p>
       </div>
     </div>
-
-    <div v-if="preferred === 'box' && botID && status.running" class="card">
+    <div v-if="sourceState?.box.enabled && botID && status.running" class="card">
       <div class="card-header">
         <h2>画面</h2>
         <span class="card-sub">{{ currentTitle || "空白页" }}</span>
@@ -198,7 +188,7 @@
     <template v-if="advancedOpen">
       <div class="card">
         <div class="card-body stack">
-          <div v-if="preferred === 'box' && botID" class="field wide">
+          <div v-if="sourceState?.box.enabled && botID" class="field wide">
             <label class="switch">
               <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
               <span class="track" aria-hidden="true"></span>
@@ -611,12 +601,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
+/* 一行一项：左边标题、说明、小链接，开关和标题对齐在右上。 */
 .browser-toggle-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: 16px;
-  padding: 12px 0;
+  padding: 14px 0;
   border-top: 1px solid var(--border);
 }
 
@@ -625,11 +615,21 @@ onBeforeUnmount(() => {
   padding-top: 0;
 }
 
+.browser-toggle-row:last-child {
+  padding-bottom: 0;
+}
+
+.browser-toggle-row > .switch {
+  flex: none;
+  margin-top: 1px;
+}
+
 .browser-toggle-copy {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 0;
 }
 
 .browser-toggle-title {
@@ -637,6 +637,7 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  min-height: 24px;
   font-size: 14px;
 }
 
@@ -653,19 +654,55 @@ onBeforeUnmount(() => {
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
 
-.browser-toggle-promote {
-  flex: none;
-  margin-left: auto;
+.browser-toggle-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
 }
 
-.browser-toggle-deps {
-  margin-left: 4px;
+.browser-toggle-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12.5px;
+}
+
+.browser-toggle-meta button,
+.browser-toggle-meta a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   padding: 0;
   border: 0;
   background: none;
   color: var(--accent);
   font: inherit;
+  text-decoration: none;
   cursor: pointer;
+}
+
+.browser-toggle-meta button.warn {
+  color: var(--warn);
+}
+
+.browser-toggle-meta button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.browser-toggle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.browser-toggle-error {
+  font-size: 12.5px;
+  color: var(--warn);
 }
 
 .browser-advanced-toggle {
