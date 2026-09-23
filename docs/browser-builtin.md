@@ -1,8 +1,17 @@
 # 内置浏览器
 
-Diana 自己的那个浏览器：一个常驻的 Chrome/Chromium 进程，profile 落在数据目录下的
-`browser-box/profile` 里，登录态跨重启保留。WebUI 的「浏览器」页能看到它的实时画面，
-也能直接用鼠标键盘操作——登录、过验证码、临时接管，都由你自己来。
+Diana 自己的浏览器：**每台机器人各一个** Chrome/Chromium 进程，profile 落在数据目录下的
+`browser-box/profiles/<机器人 ID>/profile` 里，登录态跨重启保留。WebUI 的「浏览器」页
+（顶部选中某台机器人时）能看到它的实时画面，也能直接用鼠标键盘操作——登录、过验证码、
+临时接管，都由你自己来。
+
+**机器人之间互相隔离。** A 机器人里登录的账号，B 机器人看不到也用不了；接管也只作用于
+那一台。Chrome 的 BrowserContext 也能隔离，但它不落盘、重启就丢登录态，所以这里是一台
+机器人一个进程、一个 profile。进程按需起：机器人第一次调用浏览器工具、或你在页面上点
+「启动」时才拉起，不会一开机就为每台机器人各起一个。
+
+从按机器人拆分之前的版本升级时，原来那份共用的 `browser-box/profile` 会在启动时整个
+搬给第一台机器人，其他机器人从空白 profile 开始，需要的话各自重新登录。
 
 它和另外两档不重叠：
 
@@ -93,7 +102,7 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
   `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'`
   之后再开；有头还要一个 `xvfb`。
 - **裸机部署**会按常见安装路径找 Chrome/Chromium，也认 WebUI 下载的 Chrome for Testing。
-- profile 在 `<数据目录>/browser-box/profile`。用 compose 的默认挂载时它跟着 `./data`
+- profile 在 `<数据目录>/browser-box/profiles/<机器人 ID>/profile`。用 compose 的默认挂载时它跟着 `./data`
   走，容器重建后登录态还在；换句话说，**这个目录等价于一份浏览器登录态，备份和权限
   按敏感数据对待**。
 
@@ -101,18 +110,21 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/browser-box/status` | 配置、运行状态、接管状态、profile 目录 |
-| PUT | `/api/browser-box/settings` | 覆盖配置；关掉总开关会结束进程 |
+| GET | `/api/browser-box/status` | 配置和本机能否找到浏览器；带 `?bot=` 时再加这台机器人的运行状态、接管状态、profile 目录 |
+| PUT | `/api/browser-box/settings` | 覆盖全局配置；关掉总开关会结束所有机器人的进程 |
 | POST | `/api/browser-box/start` / `/stop` | 手动起停 |
 | POST | `/api/browser-box/takeover` | 切换人工接管 |
 | GET/POST | `/api/browser-box/tabs` | 列出、新开标签页 |
 | DELETE | `/api/browser-box/tabs/:id` | 关掉一个标签页 |
 | GET | `/api/browser-box/live` | 实时画面 WebSocket：出去是画面帧，进来是鼠标键盘事件 |
 
+除 `status` 和 `settings` 外，这些接口都要带 `?bot=<机器人 ID>`，不带直接 400：每台
+机器人各有一份登录态，服务端不替你猜是哪一台。
+
 实时画面端点在 `/api` 下，走 WebUI 会话鉴权，并且只接受同源升级请求：能连上它就等于
 能看你的浏览器。
 
 ## 资源开销
 
-一个常驻 Chrome 大约吃 200–400 MB 内存，空闲时 CPU 接近 0。实时画面只在 WebUI 那一页
+一个常驻 Chrome 大约吃 200–400 MB 内存，空闲时 CPU 接近 0；每台用过浏览器的机器人各占一份。实时画面只在 WebUI 那一页
 打开时才推帧，关掉页面就停；每帧是质量 60 的 JPEG，1280×800 下通常几十 KB。

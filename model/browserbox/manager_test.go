@@ -6,6 +6,8 @@ package browserbox
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -34,15 +36,13 @@ func (s *memoryStore) SaveBrowserBox(_ context.Context, doc Document) error {
 // 关着的时候不该有进程，也不该给模型任何地址。
 func TestManagerStartsDisabled(t *testing.T) {
 	manager := New(context.Background(), &memoryStore{}, t.TempDir())
-	status := manager.Status()
+	status := manager.Bot("bot-a").Status()
 	if status.Running || status.Settings.Enabled {
 		t.Fatalf("默认应是关着的，实际 %+v", status)
 	}
-	if manager.AgentCDPURL() != "" {
-		t.Fatal("没启用时不该给出 CDP 地址")
-	}
-	if manager.Unavailable() != "" {
-		t.Fatal("没启用时应让位给外部 CDP 地址，不该报不可用")
+	// 没启用时给空地址且不报错：让位给机器人配置里的外部 CDP 地址。
+	if url, err := manager.Bot("bot-a").Endpoint(context.Background()); url != "" || err != nil {
+		t.Fatalf("没启用时应让位给外部 CDP 地址，实际 %q %v", url, err)
 	}
 }
 
@@ -64,27 +64,69 @@ func TestManagerPersistsSettings(t *testing.T) {
 	}
 }
 
-// 接管打开时模型那一侧必须当场失效，且理由要说清楚是谁在占着。
+// 接管打开时模型那一侧必须当场失效，且理由要说清楚是谁在占着；接管只作用于那一台机器人。
 func TestTakeoverHidesCDPURLFromAgent(t *testing.T) {
 	manager := New(context.Background(), &memoryStore{}, t.TempDir())
 	manager.mu.Lock()
 	manager.settings.Enabled = true
-	manager.cdpURL = "http://127.0.0.1:12345"
+	manager.instanceLocked("bot-a").cdpURL = "http://127.0.0.1:12345"
+	manager.instanceLocked("bot-b").cdpURL = "http://127.0.0.1:23456"
 	manager.mu.Unlock()
+	ctx := context.Background()
 
-	if manager.AgentCDPURL() == "" {
-		t.Fatal("正常状态下应给出地址")
+	if url, err := manager.Bot("bot-a").Endpoint(ctx); err != nil || url != "http://127.0.0.1:12345" {
+		t.Fatalf("正常状态下应给出自己的地址，实际 %q %v", url, err)
 	}
-	manager.SetTakeover(true)
-	if manager.AgentCDPURL() != "" {
-		t.Fatal("接管时不该再给模型地址")
+	manager.Bot("bot-a").SetTakeover(true)
+	if _, err := manager.Bot("bot-a").Endpoint(ctx); err == nil || !strings.Contains(err.Error(), "接管") {
+		t.Fatalf("接管时要给模型一句能看懂的理由，实际 %v", err)
 	}
-	if reason := manager.Unavailable(); reason == "" {
-		t.Fatal("接管时要给模型一句能看懂的理由")
+	if url, err := manager.Bot("bot-b").Endpoint(ctx); err != nil || url != "http://127.0.0.1:23456" {
+		t.Fatalf("接管 A 不该影响 B，实际 %q %v", url, err)
 	}
-	manager.SetTakeover(false)
-	if manager.AgentCDPURL() == "" {
+	manager.Bot("bot-a").SetTakeover(false)
+	if url, _ := manager.Bot("bot-a").Endpoint(ctx); url == "" {
 		t.Fatal("交还控制权后应恢复")
+	}
+}
+
+// 每台机器人的登录态目录互不相同，ID 里带路径分隔符也拼不出别人的目录。
+func TestProfileDirIsPerBot(t *testing.T) {
+	manager := New(context.Background(), &memoryStore{}, t.TempDir())
+	a, b := manager.ProfileDir("bot-a"), manager.ProfileDir("bot-b")
+	if a == b {
+		t.Fatalf("两台机器人共用了登录态目录：%s", a)
+	}
+	if escaped := manager.ProfileDir("../bot-a"); strings.Contains(escaped, "..") || escaped == a {
+		t.Fatalf("ID 里的路径分隔符没挡住：%s", escaped)
+	}
+}
+
+// 拆分之前那份共用的登录态交给第一台机器人，升级后不用重新登录；它已经有自己的就不动。
+func TestAdoptLegacyProfile(t *testing.T) {
+	dir := t.TempDir()
+	manager := New(context.Background(), &memoryStore{}, dir)
+	legacy := filepath.Join(dir, "browser-box", "profile")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "Cookies"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AdoptLegacyProfile("bot-a"); err != nil {
+		t.Fatalf("迁移失败：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(manager.ProfileDir("bot-a"), "Cookies")); err != nil {
+		t.Fatalf("旧登录态没搬到第一台机器人名下：%v", err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatal("搬完旧目录应该不在了")
+	}
+	if err := manager.AdoptLegacyProfile("bot-b"); err != nil {
+		t.Fatalf("重复调用不该报错：%v", err)
+	}
+	if _, err := os.Stat(manager.ProfileDir("bot-b")); !os.IsNotExist(err) {
+		t.Fatal("旧登录态只该给一台机器人")
 	}
 }
 
@@ -219,11 +261,10 @@ func TestEnableByDefaultPicksHeadfulByDisplay(t *testing.T) {
 		stubDetection(t, true, display)
 		store := &memoryStore{}
 		manager := New(context.Background(), store, t.TempDir())
-		// 指向一个不存在的可执行文件，不在开发机上真拉起浏览器；这里只关心配置有没有
-		// 按探测结果落盘。
-		manager.settings.Executable = "/nonexistent/diana-test-chrome"
-		enabled, _ := manager.EnableByDefault(context.Background())
-		t.Cleanup(manager.Stop)
+		enabled, err := manager.EnableByDefault(context.Background())
+		if err != nil {
+			t.Fatalf("display=%v：打开时不该起进程，也就不该报错：%v", display, err)
+		}
 		if !enabled {
 			t.Fatalf("display=%v：找得到浏览器时应打开", display)
 		}

@@ -406,7 +406,7 @@ type Runtime struct {
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
 	browserControl            agent.BrowserControlBridge
-	browserBox                agent.BuiltinBrowserBridge
+	browserBox                BuiltinBrowserProvider
 	browserSource             func() string
 	media                     *MediaStore
 	members                   *memberCache
@@ -554,11 +554,17 @@ func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
 	r.mu.Unlock()
 }
 
+// BuiltinBrowserProvider 按机器人交出内置浏览器，由 model/browserbox.Manager 实现。
+// 每台机器人各有一份登录态，A 机器人拿到的句柄碰不到 B 机器人的浏览器。
+type BuiltinBrowserProvider interface {
+	BrowserFor(botID string) agent.BuiltinBrowserBridge
+}
+
 // SetBrowserBox 注入内置浏览器。没注入时 browser_* 那组工具沿用机器人配置里的
 // 外部 CDP 地址，行为和加这一档之前一样。
-func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
+func (r *Runtime) SetBrowserBox(provider BuiltinBrowserProvider) {
 	r.mu.Lock()
-	r.browserBox = bridge
+	r.browserBox = provider
 	r.mu.Unlock()
 }
 
@@ -592,7 +598,7 @@ func (r *Runtime) browserToolsDisabledFor(cfg BotConfig) bool {
 	return !r.browserSourceAllows(browsersource.Box)
 }
 
-// browserBoxFor 交出内置浏览器的句柄。用户在「浏览器」页把它打开就算数，不再要求
+// browserBoxFor 交出这台机器人自己的内置浏览器。用户在「浏览器」页把它打开就算数，不再要求
 // 每台机器人另点一次开关——那一步挡的是「登录态被借走」，而这件事由身份挡得更准：
 // browser_* 不在非主人的工具白名单里，只有主人能驱动它。想让某台机器人彻底碰不到，
 // 把这一档显式关掉。
@@ -601,9 +607,12 @@ func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
 		return nil
 	}
 	r.mu.RLock()
-	bridge := r.browserBox
+	provider := r.browserBox
 	r.mu.RUnlock()
-	return bridge
+	if provider == nil {
+		return nil
+	}
+	return provider.BrowserFor(cfg.ID)
 }
 
 // browserControlFor 只在都点头时才把控制面交出去：全局注入了控制面、浏览器来源

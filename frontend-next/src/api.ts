@@ -3371,52 +3371,62 @@ export function saveBrowserSource(source: BrowserSource): Promise<{ source: Brow
   });
 }
 
-export function getBrowserBoxStatus(): Promise<BrowserBoxStatus> {
-  return requestJSON<BrowserBoxStatus>("/api/browser-box/status");
+// 内置浏览器按机器人各用一份登录态，进程相关的接口都带上 ?bot=。不带时 status
+// 只回全局配置和本机能不能找到浏览器。
+function browserBoxPath(path: string, botID?: string, extra?: Record<string, string>): string {
+  const params = new URLSearchParams();
+  if (botID) params.set("bot", botID);
+  for (const [key, value] of Object.entries(extra ?? {})) params.set(key, value);
+  const query = params.toString();
+  return `/api/browser-box/${path}${query ? `?${query}` : ""}`;
+}
+
+export function getBrowserBoxStatus(botID?: string): Promise<BrowserBoxStatus> {
+  return requestJSON<BrowserBoxStatus>(browserBoxPath("status", botID));
 }
 
 export function saveBrowserBoxSettings(
-  settings: BrowserBoxSettings
+  settings: BrowserBoxSettings,
+  botID?: string
 ): Promise<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }> {
-  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>("/api/browser-box/settings", {
+  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>(browserBoxPath("settings", botID), {
     method: "PUT",
     body: JSON.stringify(settings)
   });
 }
 
-export function startBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
-  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/start", { method: "POST" });
+export function startBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("start", botID), { method: "POST" });
 }
 
-export function stopBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
-  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/stop", { method: "POST" });
+export function stopBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("stop", botID), { method: "POST" });
 }
 
-export function setBrowserBoxTakeover(active: boolean): Promise<{ ok: boolean; active: boolean }> {
-  return requestJSON<{ ok: boolean; active: boolean }>("/api/browser-box/takeover", {
+export function setBrowserBoxTakeover(botID: string, active: boolean): Promise<{ ok: boolean; active: boolean }> {
+  return requestJSON<{ ok: boolean; active: boolean }>(browserBoxPath("takeover", botID), {
     method: "POST",
     body: JSON.stringify({ active })
   });
 }
 
-export function listBrowserBoxTabs(): Promise<{ tabs: BrowserBoxTab[] }> {
-  return requestJSON<{ tabs: BrowserBoxTab[] }>("/api/browser-box/tabs");
+export function listBrowserBoxTabs(botID: string): Promise<{ tabs: BrowserBoxTab[] }> {
+  return requestJSON<{ tabs: BrowserBoxTab[] }>(browserBoxPath("tabs", botID));
 }
 
-export function openBrowserBoxTab(url: string): Promise<{ tab: BrowserBoxTab }> {
-  return requestJSON<{ tab: BrowserBoxTab }>("/api/browser-box/tabs", {
+export function openBrowserBoxTab(botID: string, url: string): Promise<{ tab: BrowserBoxTab }> {
+  return requestJSON<{ tab: BrowserBoxTab }>(browserBoxPath("tabs", botID), {
     method: "POST",
     body: JSON.stringify({ url })
   });
 }
 
-export function closeBrowserBoxTab(id: string): Promise<{ ok: boolean }> {
-  return requestJSON<{ ok: boolean }>(`/api/browser-box/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
+export function closeBrowserBoxTab(botID: string, id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(browserBoxPath(`tabs/${encodeURIComponent(id)}`, botID), { method: "DELETE" });
 }
 
 /** 实时画面的 WebSocket 地址。页面是 https 时自动用 wss。 */
-export function browserBoxLiveURL(tabID?: string): string {
+export function browserBoxLiveURL(botID: string, tabID?: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const query = tabID ? `?tab=${encodeURIComponent(tabID)}` : "";
-  return `${protocol}//${window.location.host}/api/browser-box/live${query}`;
+  return `${protocol}//${window.location.host}${browserBoxPath("live", botID, tabID ? { tab: tabID } : undefined)}`;
 }

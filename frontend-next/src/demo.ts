@@ -721,12 +721,22 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     demoBrowserControlPolicy = { ...demoBrowserControlPolicy, enabled: source === "extension" };
     return json({ source });
   }
-  // 内置浏览器在演示里不起进程：开着但没在跑，画面那块不会去连实时流。
-  if (path === "/api/browser-box/status" && method === "GET")
-    return json({ settings: demoBrowserBoxSettings, running: false, takeover: false, available: true, profile_dir: "/data/browser-box/profile" });
+  // 内置浏览器在演示里不起进程：开着但没在跑，画面那块不会去连实时流。每台机器人
+  // 各有一份登录态目录，和真实后端一样按 ?bot= 区分。
+  const demoBrowserBoxStatus = () => {
+    const bot = url.searchParams.get("bot") ?? "";
+    return {
+      settings: demoBrowserBoxSettings,
+      running: false,
+      takeover: false,
+      available: true,
+      ...(bot ? { bot, profile_dir: `/data/browser-box/profiles/${bot}/profile` } : {})
+    };
+  };
+  if (path === "/api/browser-box/status" && method === "GET") return json(demoBrowserBoxStatus());
   if (path === "/api/browser-box/settings" && method === "PUT") {
     demoBrowserBoxSettings = { ...demoBrowserBoxSettings, ...(body as unknown as BrowserBoxSettings) };
-    return json({ settings: demoBrowserBoxSettings, status: { settings: demoBrowserBoxSettings, running: false, takeover: false, available: true } });
+    return json({ settings: demoBrowserBoxSettings, status: demoBrowserBoxStatus() });
   }
   // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
   // 看不出授权边界长什么样。写操作在演示里始终关着。

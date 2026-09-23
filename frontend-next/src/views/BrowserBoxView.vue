@@ -39,14 +39,26 @@
       </div>
     </div>
 
-    <template v-if="source === 'box'">
+    <div v-if="source === 'box' && !botID" class="card">
+      <div class="card-header">
+        <h2>Diana 内置浏览器</h2>
+        <span class="card-sub">每台机器人各用一个浏览器、各有一份登录态，互相看不到</span>
+      </div>
+      <div class="card-body">
+        <p class="muted" style="margin: 0; font-size: 13px">
+          在顶部选一台机器人，就能看到它的浏览器画面、在里面登录或接管。
+        </p>
+      </div>
+    </div>
+
+    <template v-else-if="source === 'box'">
       <div class="card">
         <div class="card-header">
           <h2>Diana 内置浏览器</h2>
           <span class="badge" :class="status.running ? 'ok' : 'warn'">
-            {{ status.running ? (status.takeover ? "你在操作" : "运行中") : status.settings.enabled ? "未启动" : "未启用" }}
+            {{ status.running ? (status.takeover ? "你在操作" : "运行中") : "未启动" }}
           </span>
-          <span class="card-sub">Diana 自己的浏览器，登录态留在数据目录里，你随时可以直接上手</span>
+          <span class="card-sub">这台机器人自己的浏览器，登录态只属于它；机器人要用时会自动启动</span>
         </div>
         <div class="card-body stack">
           <p v-if="!status.available" class="muted" style="margin: 0; font-size: 13px">
@@ -81,7 +93,7 @@
             最近一次错误：{{ status.last_error }}
           </p>
           <p v-if="status.profile_dir" class="muted" style="margin: 0; font-size: 12.5px">
-            登录态目录：<code class="mono">{{ status.profile_dir }}</code>
+            这台机器人的登录态目录：<code class="mono">{{ status.profile_dir }}</code>
           </p>
         </div>
       </div>
@@ -135,6 +147,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { botScope } from "../bot-scope";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
 import {
   browserBoxLiveURL,
@@ -163,6 +176,9 @@ const sources: { key: BrowserSource; label: string; hint: string }[] = [
   { key: "extension", label: "我自己的 Chrome", hint: "装一个扩展，机器人用你日常浏览器的登录态" },
   { key: "off", label: "不用", hint: "机器人只读公开网页，不碰任何登录态" }
 ];
+// 当前机器人。页面按作用域重建（App 里 KeepAlive 以它为 key），这里取挂载时的值即可。
+// 空串是「全部机器人」：各台的浏览器互相隔离，没法合在一起显示。
+const botID = botScope.value;
 // null 表示还没读到：读到之前不显示任何一边的配置，也不让切换。
 const source = ref<BrowserSource | null>(null);
 const switching = ref(false);
@@ -209,10 +225,10 @@ async function chooseSource(next: BrowserSource): Promise<void> {
 
 async function refresh(): Promise<void> {
   try {
-    const next = await getBrowserBoxStatus();
+    const next = await getBrowserBoxStatus(botID || undefined);
     Object.assign(status, next);
     Object.assign(settings, next.settings);
-    if (next.running && !socket) connectLive();
+    if (next.running && !socket && botID) connectLive();
     if (!next.running && socket) disconnectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "读取内置浏览器状态失败");
@@ -222,10 +238,10 @@ async function refresh(): Promise<void> {
 async function saveSettings(): Promise<void> {
   saving.value = true;
   try {
-    const result = await saveBrowserBoxSettings({ ...settings });
+    const result = await saveBrowserBoxSettings({ ...settings }, botID || undefined);
     Object.assign(status, result.status);
     Object.assign(settings, result.settings);
-    if (status.running) connectLive();
+    if (status.running && botID) connectLive();
     else disconnectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "保存失败");
@@ -238,7 +254,7 @@ async function saveSettings(): Promise<void> {
 async function start(): Promise<void> {
   busy.value = true;
   try {
-    const result = await startBrowserBox();
+    const result = await startBrowserBox(botID);
     Object.assign(status, result.status);
     connectLive();
   } catch (err) {
@@ -251,7 +267,7 @@ async function start(): Promise<void> {
 async function stop(): Promise<void> {
   busy.value = true;
   try {
-    const result = await stopBrowserBox();
+    const result = await stopBrowserBox(botID);
     Object.assign(status, result.status);
     disconnectLive();
   } catch (err) {
@@ -264,7 +280,7 @@ async function stop(): Promise<void> {
 async function toggleTakeover(): Promise<void> {
   busy.value = true;
   try {
-    const result = await setBrowserBoxTakeover(!status.takeover);
+    const result = await setBrowserBoxTakeover(botID, !status.takeover);
     status.takeover = result.active;
   } catch (err) {
     toastError(err instanceof Error ? err.message : "切换失败");
@@ -275,7 +291,7 @@ async function toggleTakeover(): Promise<void> {
 
 function connectLive(): void {
   disconnectLive();
-  const ws = new WebSocket(browserBoxLiveURL());
+  const ws = new WebSocket(browserBoxLiveURL(botID));
   socket = ws;
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data) as { type: string; frame?: LiveFrame; tab?: { url?: string; title?: string } };

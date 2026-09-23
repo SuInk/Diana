@@ -58,8 +58,23 @@ func (h *BrowserBoxHandler) Register(router gin.IRouter) {
 	router.GET("/api/browser-box/live", h.live)
 }
 
+// botFor 取请求里 ?bot= 指的那台机器人的浏览器。每台机器人各有一份登录态，
+// 进程相关的操作不指明机器人就无从下手，这里直接拒掉而不是猜一台。
+func (h *BrowserBoxHandler) botFor(c *gin.Context) (*browserbox.Bot, bool) {
+	botID := strings.TrimSpace(c.Query("bot"))
+	if botID == "" {
+		writeError(c, http.StatusBadRequest, errors.New("内置浏览器按机器人各用一份登录态，请先选一台机器人"))
+		return nil, false
+	}
+	return h.manager.Bot(botID), true
+}
+
 func (h *BrowserBoxHandler) status(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
+	if botID := strings.TrimSpace(c.Query("bot")); botID != "" {
+		c.JSON(http.StatusOK, h.manager.Bot(botID).Status())
+		return
+	}
 	c.JSON(http.StatusOK, h.manager.Status())
 }
 
@@ -78,22 +93,34 @@ func (h *BrowserBoxHandler) setSettings(c *gin.Context) {
 		"enabled": saved.Enabled,
 		"headful": saved.Headful,
 	})
-	c.JSON(http.StatusOK, gin.H{"settings": saved, "status": h.manager.Status()})
+	status := h.manager.Status()
+	if botID := strings.TrimSpace(c.Query("bot")); botID != "" {
+		status = h.manager.Bot(botID).Status()
+	}
+	c.JSON(http.StatusOK, gin.H{"settings": saved, "status": status})
 }
 
 func (h *BrowserBoxHandler) start(c *gin.Context) {
-	if err := h.manager.Start(c.Request.Context()); err != nil {
-		logAndWriteError(c, h.logs, http.StatusInternalServerError, "browser_box_start", err, "", nil)
+	bot, ok := h.botFor(c)
+	if !ok {
 		return
 	}
-	recordRequestOperation(c, h.logs, "browser_box_start", "内置浏览器已启动", "", nil)
-	c.JSON(http.StatusOK, gin.H{"status": h.manager.Status()})
+	if err := bot.Start(c.Request.Context()); err != nil {
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "browser_box_start", err, bot.ID(), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "browser_box_start", "内置浏览器已启动", bot.ID(), nil)
+	c.JSON(http.StatusOK, gin.H{"status": bot.Status()})
 }
 
 func (h *BrowserBoxHandler) stop(c *gin.Context) {
-	h.manager.Stop()
-	recordRequestOperation(c, h.logs, "browser_box_stop", "内置浏览器已停止", "", nil)
-	c.JSON(http.StatusOK, gin.H{"status": h.manager.Status()})
+	bot, ok := h.botFor(c)
+	if !ok {
+		return
+	}
+	bot.Stop()
+	recordRequestOperation(c, h.logs, "browser_box_stop", "内置浏览器已停止", bot.ID(), nil)
+	c.JSON(http.StatusOK, gin.H{"status": bot.Status()})
 }
 
 func (h *BrowserBoxHandler) setTakeover(c *gin.Context) {
@@ -104,13 +131,21 @@ func (h *BrowserBoxHandler) setTakeover(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("请求格式错误"))
 		return
 	}
-	h.manager.SetTakeover(payload.Active)
-	recordRequestOperation(c, h.logs, "browser_box_takeover", "内置浏览器接管状态已切换", "", map[string]any{"active": payload.Active})
+	bot, ok := h.botFor(c)
+	if !ok {
+		return
+	}
+	bot.SetTakeover(payload.Active)
+	recordRequestOperation(c, h.logs, "browser_box_takeover", "内置浏览器接管状态已切换", bot.ID(), map[string]any{"active": payload.Active})
 	c.JSON(http.StatusOK, gin.H{"ok": true, "active": payload.Active})
 }
 
 func (h *BrowserBoxHandler) listTabs(c *gin.Context) {
-	base := h.manager.CDPURL()
+	bot, ok := h.botFor(c)
+	if !ok {
+		return
+	}
+	base := bot.CDPURL()
 	if base == "" {
 		writeError(c, http.StatusServiceUnavailable, errors.New("内置浏览器没有运行"))
 		return
@@ -132,7 +167,11 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("请求格式错误"))
 		return
 	}
-	base := h.manager.CDPURL()
+	bot, ok := h.botFor(c)
+	if !ok {
+		return
+	}
+	base := bot.CDPURL()
 	if base == "" {
 		writeError(c, http.StatusServiceUnavailable, errors.New("内置浏览器没有运行"))
 		return
@@ -153,7 +192,11 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 }
 
 func (h *BrowserBoxHandler) closeTab(c *gin.Context) {
-	base := h.manager.CDPURL()
+	bot, ok := h.botFor(c)
+	if !ok {
+		return
+	}
+	base := bot.CDPURL()
 	if base == "" {
 		writeError(c, http.StatusServiceUnavailable, errors.New("内置浏览器没有运行"))
 		return
@@ -181,7 +224,11 @@ const (
 
 // live 把一个标签页的画面推给前端，并把前端的鼠标键盘事件送回浏览器。
 func (h *BrowserBoxHandler) live(c *gin.Context) {
-	base := h.manager.CDPURL()
+	bot, ok := h.botFor(c)
+	if !ok {
+		return
+	}
+	base := bot.CDPURL()
 	if base == "" {
 		writeError(c, http.StatusServiceUnavailable, errors.New("内置浏览器没有运行"))
 		return
@@ -228,7 +275,7 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 			if err := conn.ReadJSON(&message); err != nil {
 				return
 			}
-			h.handleLiveMessage(c.Request.Context(), live, message)
+			h.handleLiveMessage(c.Request.Context(), bot, live, message)
 		}
 	}()
 
@@ -255,29 +302,29 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 //
 // 用户在这块画面上的操作等于人工接管，所以第一次输入就把接管打开：不这样的话
 // 用户正在填表，模型同时在点别的地方，两边抢同一个页面。
-func (h *BrowserBoxHandler) handleLiveMessage(ctx context.Context, live *browserbox.Live, message liveMessage) {
+func (h *BrowserBoxHandler) handleLiveMessage(ctx context.Context, bot *browserbox.Bot, live *browserbox.Live, message liveMessage) {
 	switch message.Type {
 	case "mouse":
 		if message.Mouse == nil {
 			return
 		}
-		h.manager.SetTakeover(true)
+		bot.SetTakeover(true)
 		_ = live.Mouse(ctx, *message.Mouse)
 	case "key":
 		if message.Key == nil {
 			return
 		}
-		h.manager.SetTakeover(true)
+		bot.SetTakeover(true)
 		_ = live.Key(ctx, *message.Key)
 	case "text":
-		h.manager.SetTakeover(true)
+		bot.SetTakeover(true)
 		_ = live.Text(ctx, message.Text)
 	case "navigate":
 		target := strings.TrimSpace(message.URL)
 		if target == "" || !h.manager.Settings().HostAllowed(target) {
 			return
 		}
-		h.manager.SetTakeover(true)
+		bot.SetTakeover(true)
 		_ = live.Navigate(ctx, target)
 	case "reload":
 		_ = live.Reload(ctx)

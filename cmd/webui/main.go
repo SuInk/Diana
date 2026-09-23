@@ -643,6 +643,10 @@ func main() {
 	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
 	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
 	browserBoxManager := browserbox.New(ctx, sqliteStore, dataDir)
+	// 按机器人拆分之前所有机器人共用一份登录态，交给第一台机器人，免得升级后要重新登录。
+	if err := browserBoxManager.AdoptLegacyProfile(firstBotProfile(botSet).ID); err != nil {
+		log.Printf("diana 内置浏览器旧登录态迁移失败：%v", err)
+	}
 	// 新装时替用户把内置浏览器打开：本机找得到 Chrome 就开，有显示器（或能起 Xvfb）
 	// 就开真窗口。已经在用扩展的不动——两者二选一，打开这边会把那边挤掉。
 	if !browserControlRegistry.Policy().Enabled {
