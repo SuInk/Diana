@@ -327,6 +327,9 @@ type Runtime struct {
 	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
+	// imageEditSources 记住每个会话最近一次改图用的原图，「重试」「继续」时靠它
+	// 找回原图。自带锁，不受 mu 保护。
+	imageEditSources imageEditSourceMemory
 	profileConfigs   map[string]BotConfig
 	// disabledProfiles 是配置集里已停用的档案 ID。停用只把档案从通道 bindings 里
 	// 摘掉，共享连接本身可能还活着（别的档案在用它），入站这边要自己认一次。
@@ -3818,10 +3821,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return reply, nil
 				}
 				queued, err := r.enqueueImageReplyTask(ctx, event, relationship, "edit", intent.Prompt, "")
-				if err != nil {
+				switch {
+				case errors.Is(err, errImageEditSourceNotFound):
+					// 找不到原图就别受理：让这一轮回复直接请用户补图，而不是先说
+					// 「在画了」再补一条失败通知。
+					asyncImageTaskNotice = imageEditSourceMissingInstruction
+				case err != nil:
 					return "", err
+				default:
+					asyncImageTaskNotice = asyncImageReplyInstruction(queued)
 				}
-				asyncImageTaskNotice = asyncImageReplyInstruction(queued)
 			}
 		}
 	}

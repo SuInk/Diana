@@ -3951,7 +3951,7 @@ func TestRuntimeImageGenerationRepliesWhileImageRunsInBackground(t *testing.T) {
 	}
 }
 
-func TestRuntimeImmediateImageFailureFollowsMainReply(t *testing.T) {
+func TestRuntimeImageEditWithoutSourceAsksForImageInsteadOfQueueing(t *testing.T) {
 	channel := &recordingChannel{}
 	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible, APIKey: "secret", BaseURL: "https://example.test/v1",
@@ -3959,7 +3959,7 @@ func TestRuntimeImmediateImageFailureFollowsMainReply(t *testing.T) {
 	})}
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"action":"edit_image","prompt":"把他画成室内自拍"}`,
-		"（抬爪比了个取景框）在画了，我会做一张室内日常感的半身自拍照",
+		"没找到要改的图，重新发一下或者直接引用那张图吧",
 	}}
 	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, channel, NewPluginManager(), store, nil, nil, nil)
 	memory := newMemoryUserMemoryStore()
@@ -3976,15 +3976,23 @@ func TestRuntimeImmediateImageFailureFollowsMainReply(t *testing.T) {
 		t.Fatalf("replyTo() error = %v", err)
 	}
 	waitForCondition(t, 2*time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
+	// 找不到原图时不受理任务：只发这一轮回复，不再跟一条「后台任务执行失败」。
 	sent := channel.sentSnapshot()
-	if len(sent) != 2 {
-		t.Fatalf("sent = %#v", sent)
+	if len(sent) != 1 || sent[0].Text != reply {
+		t.Fatalf("sent = %#v, reply = %q", sent, reply)
 	}
-	if sent[0].Text != reply || !strings.Contains(sent[0].Text, "在画了") {
-		t.Fatalf("main reply was not sent first: %#v", sent)
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	instructed := false
+	for _, req := range provider.requests {
+		for _, message := range req.Messages {
+			if strings.Contains(message.Content, imageEditSourceMissingInstruction) {
+				instructed = true
+			}
+		}
 	}
-	if !strings.Contains(sent[1].Text, "图片编辑") || !strings.Contains(sent[1].Text, "没有找到可编辑的图片") {
-		t.Fatalf("failure notification = %#v", sent[1])
+	if !instructed {
+		t.Fatal("reply generation was not told that the edit source is missing")
 	}
 }
 
