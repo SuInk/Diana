@@ -23,11 +23,17 @@
             <span class="rz-bar-off" :style="{width: barPercent(summary.deferredTokens)}"></span>
           </div>
           <dl class="rz-stats">
-            <div><dt><i class="rz-dot on"></i>常驻定义</dt><dd class="mono">{{ formatTokens(summary.residentTokens) }}<small v-if="delta" :class="delta > 0 ? 'up' : 'down'">{{ delta > 0 ? '+' : '−' }}{{ formatTokens(Math.abs(delta)) }}</small></dd></div>
+            <div><dt><i class="rz-dot on"></i>常驻定义</dt><dd class="mono">{{ formatTokens(summary.residentTokens) }}<small class="rz-delta" :class="[delta > 0 ? 'up' : 'down', {idle: !delta}]">{{ delta ? (delta > 0 ? '+' : '−') + formatTokens(Math.abs(delta)) : '+0 tok' }}</small></dd></div>
             <div><dt><i class="rz-dot off"></i>按需目录</dt><dd class="mono">{{ formatTokens(summary.deferredTokens) }}</dd></div>
             <div><dt>工具</dt><dd class="mono">{{ summary.resident }}<span>/{{ summary.resident + summary.deferred }}</span> 常驻</dd></div>
             <div v-if="skills.length"><dt>Skill 正文</dt><dd class="mono">{{ residentSkills.length }}<span>/{{ skills.length }}</span> 常驻</dd></div>
           </dl>
+          <!-- 待保存状态占一行固定高度，常在：以前是改动后才插在列表上方的提示条，一出现就把
+               整个列表往下推，勾一下东西就跳一下。 -->
+          <p class="rz-status" :class="{dirty}" role="status" :title="statusTitle">
+            <span class="rz-status-text">{{ statusText }}</span>
+            <button v-if="dirty" class="link-button" type="button" @click="discard">放弃</button>
+          </p>
         </div>
 
         <div class="rz-toolbar">
@@ -38,12 +44,6 @@
           <button class="link-button rz-expand" type="button" @click="toggleAll">{{ allOpen ? '全部收起' : '全部展开' }}</button>
           <button class="link-button" type="button" :disabled="!savedList && !dirty" @click="resetAll">恢复推荐名单</button>
         </div>
-
-        <p v-if="dirty" class="rz-dirty" role="status">
-          <template v-if="reset">保存后退回推荐名单，之后跟着版本走</template>
-          <template v-else-if="dirtyCount">{{ dirtyCount }} 个工具的待遇会变</template><template v-if="skillDirtyCount">{{ reset || dirtyCount ? '，' : '' }}{{ skillDirtyCount }} 个 Skill 的档位会变</template>。点「保存配置」时才写进去<template v-if="reset || dirtyCount">，那一下会让所有会话的工具列表变一次、缓存重算一轮</template>。
-          <button class="link-button" type="button" @click="discard">放弃</button>
-        </p>
 
         <section v-for="section in sections" :key="section.kind" class="rz-group">
           <h4><span>{{ section.label }}</span><small>{{ section.on }}/{{ section.total }} 常驻<template v-if="section.tokens"> · 每轮 {{ formatTokens(section.tokens) }}</template></small></h4>
@@ -65,7 +65,7 @@
               </li>
               <template v-if="isOpen(row)">
                 <li v-if="hasDetail(row)" class="rz-detail">{{ row.detail }}</li>
-                <li v-for="child in childrenOf(row)" :key="child.id" class="rz-row rz-child" :class="{changed: pending[child.id] !== undefined}">
+                <li v-for="child in childrenOf(row)" :key="child.id" class="rz-row rz-child" :class="{changed: leafChanged(child)}">
                   <span class="rz-caret"></span>
                   <input type="checkbox" :checked="isResident(child)" :aria-label="`${child.name} 常驻`" @change="isResident(child) ? remove(child) : add(child)" />
                   <span class="rz-main wrap"><strong>{{ child.name }}</strong><span class="rz-desc">{{ child.detail || child.description }}</span></span>
@@ -176,6 +176,20 @@ function remove(item: AgentResidencyEntry) {
 function setTier(item: AgentResidencyEntry, value: Tier) {
   if (saved(item) === value && !reset.value) delete pending[item.id];
   else pending[item.id] = value;
+  prunePending();
+}
+// 勾掉再勾回来，屏幕上的结果和已存的一样，但 pending 里可能留着一条「显式写成常驻」：
+// 原来靠推荐名单常驻、现在变成自己写的，效果相同，却让「待保存」亮着、说不出改了什么。
+// 逐条试着拿掉，拿掉后所有工具的结果都不变，就说明它是空改动。
+function prunePending() {
+  if (reset.value) return;
+  const snapshot = () => leaves.value.map(isResident).join(',');
+  const before = snapshot();
+  for (const id of Object.keys(pending)) {
+    const value = pending[id];
+    delete pending[id];
+    if (snapshot() !== before) pending[id] = value;
+  }
 }
 
 const leaves = computed(() => items.value.filter(item => item.kind === 'tool'));
@@ -218,7 +232,7 @@ function setSkillTier(skill: ManagedExtension, value: Tier) {
   if (savedSkillTier(skill) === value) delete skillPending[skill.id];
   else skillPending[skill.id] = value;
 }
-const dirty = computed(() => reset.value || Object.keys(pending).length > 0 || skillDirtyCount.value > 0);
+const dirty = computed(() => reset.value || dirtyCount.value > 0 || skillDirtyCount.value > 0);
 
 // 一条插件或 MCP 服务整条在名单里时，它旗下的工具不再单独列一行：名单上的单位就是
 // 用户加进来的那一个。整条不在名单里、其中某个工具被单独加进来了，那个工具自己上榜。
@@ -249,7 +263,18 @@ const rowOn = (row: AgentResidencyEntry) => {
   return addedWhole(row) || (children.length > 0 && children.every(isResident));
 };
 const rowPartial = (row: AgentResidencyEntry) => row.kind !== 'tool' && !rowOn(row) && childrenOf(row).some(isResident);
-const rowChanged = (row: AgentResidencyEntry) => pending[row.id] !== undefined || childrenOf(row).some(child => pending[child.id] !== undefined);
+// 「改过」按实际结果算，不按点过没有：点了又点回来的不该还标着。
+const leafChanged = (item: AgentResidencyEntry) => isResident(item) !== savedResident(item);
+const rowChanged = (row: AgentResidencyEntry) => childrenOf(row).length ? childrenOf(row).some(leafChanged) : leafChanged(row);
+const statusText = computed(() => {
+  if (!dirty.value) return '没有未保存的改动';
+  const parts: string[] = [];
+  if (reset.value) parts.push('退回推荐名单');
+  else if (dirtyCount.value) parts.push(`${dirtyCount.value} 个工具`);
+  if (skillDirtyCount.value) parts.push(`${skillDirtyCount.value} 个 Skill`);
+  return `未保存：${parts.join('、')}会变，点「保存配置」生效`;
+});
+const statusTitle = computed(() => dirty.value && (reset.value || dirtyCount.value) ? '保存那一下会让所有会话的工具列表变一次、缓存重算一轮' : '');
 function toggleRow(row: AgentResidencyEntry) {
   if (row.kind === 'tool') {
     if (isResident(row)) remove(row);
@@ -358,12 +383,13 @@ onMounted(load);
 .rz-meter{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--border);border-radius:var(--radius-sm)}
 .rz-bar{display:flex;height:8px;border-radius:999px;overflow:hidden;background:var(--surface-2,rgba(127,127,127,.15))}
 .rz-bar-on{background:var(--accent)}.rz-bar-off{background:color-mix(in srgb,var(--accent) 35%,transparent)}
-.rz-stats{display:flex;flex-wrap:wrap;gap:6px 24px;margin:0}
+/* 固定列宽：数字变长变短时，同一行后面几项不跟着左右挪。 */
+.rz-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px 24px;margin:0}
 .rz-stats div{display:flex;align-items:baseline;gap:8px}.rz-stats dt{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px}.rz-stats dd{margin:0;font-size:13px;color:var(--text)}
-.rz-stats dd span{color:var(--muted)}.rz-stats small{margin-left:6px;font-size:11.5px}.rz-stats small.up{color:var(--warn)}.rz-stats small.down{color:var(--ok,#3fb950)}
+.rz-stats dd span{color:var(--muted)}.rz-stats small{margin-left:6px;font-size:11.5px}.rz-delta{display:inline-block;min-width:64px}.rz-delta.idle{visibility:hidden}.rz-stats small.up{color:var(--warn)}.rz-stats small.down{color:var(--ok,#3fb950)}
 .rz-dot{display:inline-block;width:8px;height:8px;border-radius:2px}.rz-dot.on{background:var(--accent)}.rz-dot.off{background:color-mix(in srgb,var(--accent) 35%,transparent)}
 .rz-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.rz-search{flex:1;min-width:180px;max-width:320px}.rz-toolbar .rz-expand{margin-left:auto}
-.rz-dirty{margin:0;padding:8px 12px;border-radius:var(--radius-sm);background:var(--accent-soft);color:var(--text-secondary);font-size:12px}
+.rz-status{display:flex;align-items:center;gap:8px;height:20px;margin:0;font-size:12px;color:var(--muted);white-space:nowrap}.rz-status-text{overflow:hidden;text-overflow:ellipsis}.rz-status.dirty{color:var(--accent)}.rz-status .link-button{flex-shrink:0}
 .rz-group h4{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:4px 0 0;padding:0 2px 6px;border-bottom:1px solid var(--border);font-size:12.5px;color:var(--text-secondary)}
 .rz-group h4 small{font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
 .rz-list{list-style:none;margin:0;padding:0}
