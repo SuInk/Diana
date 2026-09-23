@@ -130,3 +130,16 @@ func TestBrowserExtToolsWithoutBridgeExplainThemselves(t *testing.T) {
 		t.Fatalf("没有控制面时应说清是没启用，得到 %v", err)
 	}
 }
+
+func TestBrowserToolsDisabledSkipsCDPTools(t *testing.T) {
+	registry, err := NewDefaultToolRegistry(Config{WorkDir: t.TempDir(), BrowserToolsDisabled: true})
+	if err != nil {
+		t.Fatalf("创建注册表失败：%v", err)
+	}
+	t.Cleanup(func() { _ = registry.Close() })
+	for _, name := range []string{"browser_open", "browser_text", "browser_click", "browser_type", "browser_screenshot"} {
+		if _, ok := registry.Get(name); ok {
+			t.Fatalf("BrowserToolsDisabled 时不该登记 %s", name)
+		}
+	}
+}

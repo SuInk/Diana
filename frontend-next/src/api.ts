@@ -3357,6 +3357,20 @@ export interface BrowserBoxTab {
   url?: string;
 }
 
+/** 机器人用哪个浏览器：关闭、Diana 内置、用户自己的 Chrome（扩展）。三者互斥。 */
+export type BrowserSource = "off" | "box" | "extension";
+
+export function getBrowserSource(): Promise<{ source: BrowserSource }> {
+  return requestJSON<{ source: BrowserSource }>("/api/browser-source");
+}
+
+export function saveBrowserSource(source: BrowserSource): Promise<{ source: BrowserSource }> {
+  return requestJSON<{ source: BrowserSource }>("/api/browser-source", {
+    method: "PUT",
+    body: JSON.stringify({ source })
+  });
+}
+
 export function getBrowserBoxStatus(): Promise<BrowserBoxStatus> {
   return requestJSON<BrowserBoxStatus>("/api/browser-box/status");
 }

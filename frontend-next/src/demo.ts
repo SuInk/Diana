@@ -7,6 +7,7 @@ import type {
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
+  BrowserBoxSettings,
   BrowserControlToken,
   LLMConfig,
   OpenAPIKey,
@@ -620,8 +621,11 @@ const residencyEntries: AgentResidencyEntry[] = [
 // 演示数据从「还没列过名单」开始，跟着内置推荐走——新装的机器人就是这个样子。
 let residencyListed = false;
 
+// 浏览器来源在演示里从「Diana 内置」开始：它是推荐的那个。扩展那边的配置照样
+// 预填好，切过去就能看到授权边界长什么样。
+let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true };
 let demoBrowserControlPolicy = {
-  enabled: true,
+  enabled: false,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
   allowed_hosts: ["example.com", "*.wiki.example.com"],
   denied_hosts: ["admin.example.com"],
@@ -708,6 +712,21 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const keyID = decodeURIComponent(path.split("/").pop() ?? "");
     demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
     return json({ revoked: true });
+  }
+  if (path === "/api/browser-source" && method === "GET")
+    return json({ source: demoBrowserBoxSettings.enabled ? "box" : demoBrowserControlPolicy.enabled ? "extension" : "off" });
+  if (path === "/api/browser-source" && method === "PUT") {
+    const source = String(body.source ?? "off");
+    demoBrowserBoxSettings = { ...demoBrowserBoxSettings, enabled: source === "box" };
+    demoBrowserControlPolicy = { ...demoBrowserControlPolicy, enabled: source === "extension" };
+    return json({ source });
+  }
+  // 内置浏览器在演示里不起进程：开着但没在跑，画面那块不会去连实时流。
+  if (path === "/api/browser-box/status" && method === "GET")
+    return json({ settings: demoBrowserBoxSettings, running: false, takeover: false, available: true, profile_dir: "/data/browser-box/profile" });
+  if (path === "/api/browser-box/settings" && method === "PUT") {
+    demoBrowserBoxSettings = { ...demoBrowserBoxSettings, ...(body as unknown as BrowserBoxSettings) };
+    return json({ settings: demoBrowserBoxSettings, status: { settings: demoBrowserBoxSettings, running: false, takeover: false, available: true } });
   }
   // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
   // 看不出授权边界长什么样。写操作在演示里始终关着。

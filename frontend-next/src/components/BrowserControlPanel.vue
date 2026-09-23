@@ -2,16 +2,16 @@
 <!--
   浏览器控制扩展这一档的配置面板。它原来长在「设置 → 浏览器控制」里，和另外两档
   浏览器（一次性无头渲染、内置常驻浏览器）各在一处，用户要回答「我该在哪开」得先
-  知道自己用的是哪一档。现在收在「浏览器」页底部的「高级」里，这块单独成组件只是为了不把那
-  一页堆成两千行。
+  知道自己用的是哪一档。现在「浏览器」页上选「我自己的 Chrome」时显示这块；开关由
+  那一页的来源选择管，这里只管扩展自己的授权边界。
 -->
 <template>
   <div class="stack">
     <section class="card">
       <div class="card-header">
         <h2>浏览器控制扩展</h2>
-        <span class="badge" :class="browserPolicy.enabled ? (browserReady ? 'ok' : 'warn') : 'warn'">
-          {{ browserPolicy.enabled ? (browserReady ? "可用" : "已启用，等扩展连接") : "未启用" }}
+        <span class="badge" :class="browserReady ? 'ok' : 'warn'">
+          {{ browserReady ? "已连接" : "等扩展连接" }}
         </span>
         <button class="btn small ghost" type="button" :disabled="browserLoading" title="刷新" aria-label="刷新浏览器控制状态" @click="loadBrowserControl">
           <RefreshCw :size="14" aria-hidden="true" />
@@ -31,11 +31,7 @@
 
         <div class="field">
           <label class="switch-row">
-            <input v-model="browserPolicy.enabled" type="checkbox" />
-            <span>启用浏览器控制（关闭会当场断开所有已连接的扩展）</span>
-          </label>
-          <label class="switch-row">
-            <input v-model="browserPolicy.write_enabled" type="checkbox" :disabled="!browserPolicy.enabled" />
+            <input v-model="browserPolicy.write_enabled" type="checkbox" />
             <span>允许写操作：点击、输入、导航。关闭时只能读取页面</span>
           </label>
         </div>

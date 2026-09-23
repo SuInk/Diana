@@ -1,148 +1,146 @@
 <!-- Copyright (c) 2025-now SuInk. Licensed under the Limited Redistribution License. -->
 <!--
-  浏览器这一页只有一个入口：Diana 自己的内置浏览器。另外两档（一次性无头渲染、
-  浏览器控制扩展）能力都还在，但绝大多数人用不着去选，收在底部「高级」里。
-  以前顶上是三选一的卡片，用户进来先得弄懂三档区别才能开始用。
+  浏览器这一页只回答一个问题：机器人要不要用浏览器，用谁的。
+
+  Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有主人能驱动、
+  能点能输入——区别只在用谁的，所以二选一，后端保证同一时间只有一个生效（见
+  model/browsersource）。一次性无头渲染不在这里：它不带登录态，读公开网页、出图都
+  靠它，一直可用，依赖和参数在插件页的「网页渲染」里。以前三者并排成「三档」，
+  用户得先弄懂三者区别才能开始用。
 -->
 <template>
   <section class="stack">
     <div class="card">
       <div class="card-header">
         <h2>浏览器</h2>
-        <span class="badge" :class="status.running ? 'ok' : 'warn'">
-          {{ status.running ? (status.takeover ? "你在操作" : "运行中") : status.settings.enabled ? "未启动" : "未启用" }}
-        </span>
-        <span class="card-sub">Diana 自己的浏览器，登录态留在数据目录里，你随时可以直接上手</span>
+        <span class="card-sub">机器人要不要用浏览器、用谁的。选中的那个带着登录态，只有主人能让机器人驱动它</span>
       </div>
       <div class="card-body stack">
-        <p v-if="!status.available" class="muted" style="margin: 0; font-size: 13px">
-          这台机器上没找到 Chrome/Chromium。容器完整版镜像自带 chromium；slim 版可以在宿主机执行
-          <code class="mono">docker exec -u root &lt;容器名&gt; sh -c 'apt-get update &amp;&amp; apt-get install -y chromium fonts-noto-cjk'</code>。
-        </p>
-        <div class="field">
-          <label class="switch-row">
-            <input v-model="settings.enabled" type="checkbox" :disabled="saving" @change="saveSettings" />
-            <span>启用内置浏览器（关掉会结束进程，登录态仍保留在 profile 目录）</span>
-          </label>
-          <label class="switch-row">
-            <input v-model="settings.headful" type="checkbox" :disabled="saving || !settings.enabled" @change="saveSettings" />
-            <span>开一个真窗口（只有本机有显示器时才有意义；容器里保持关闭，实时画面照常）</span>
-          </label>
-        </div>
-
-        <div class="row gap">
-          <button class="btn small" type="button" :disabled="busy || !settings.enabled" @click="start">启动</button>
-          <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
+        <div class="browser-sources" role="radiogroup" aria-label="机器人用哪个浏览器">
           <button
-            class="btn small"
-            :class="status.takeover ? 'warn' : 'ghost'"
+            v-for="item in sources"
+            :key="item.key"
+            class="browser-source"
+            :class="{ active: source === item.key }"
             type="button"
-            :disabled="busy || !status.running"
-            @click="toggleTakeover"
+            role="radio"
+            :aria-checked="source === item.key"
+            :disabled="switching || source === null"
+            @click="chooseSource(item.key)"
           >
-            {{ status.takeover ? "交还给机器人" : "我来操作" }}
+            <span class="browser-source-name">{{ item.label }}</span>
+            <span class="browser-source-hint">{{ item.hint }}</span>
           </button>
-          <span class="muted" style="font-size: 12.5px">
-            你在画面上点一下就自动接管；交还之前机器人不会碰这个浏览器。
-          </span>
-        </div>
-
-        <p v-if="status.last_error" class="muted" style="margin: 0; font-size: 12.5px">
-          最近一次错误：{{ status.last_error }}
-        </p>
-        <p v-if="status.profile_dir" class="muted" style="margin: 0; font-size: 12.5px">
-          登录态目录：<code class="mono">{{ status.profile_dir }}</code>
-        </p>
-      </div>
-    </div>
-
-    <div v-if="status.running" class="card">
-      <div class="card-header">
-        <h2>画面</h2>
-        <span class="card-sub">{{ currentTitle || "空白页" }}</span>
-      </div>
-      <div class="card-body stack">
-        <div class="row gap">
-          <button class="btn small ghost" type="button" @click="send({ type: 'back' })">后退</button>
-          <button class="btn small ghost" type="button" @click="send({ type: 'reload' })">刷新</button>
-          <input
-            v-model="addressInput"
-            class="input"
-            style="flex: 1; min-width: 220px"
-            placeholder="https://example.com"
-            @keydown.enter.prevent="navigate"
-          />
-          <button class="btn small" type="button" @click="navigate">打开</button>
-        </div>
-
-        <div class="browser-stage" @contextmenu.prevent>
-          <img
-            v-if="frame"
-            ref="screen"
-            class="browser-screen"
-            :src="`data:image/jpeg;base64,${frame.data}`"
-            alt="内置浏览器画面"
-            tabindex="0"
-            @mousedown.prevent="onMouse($event, 'mousePressed')"
-            @mouseup.prevent="onMouse($event, 'mouseReleased')"
-            @mousemove="onMouseMove"
-            @wheel.prevent="onWheel"
-            @keydown.prevent="onKey($event, 'keyDown')"
-            @keyup.prevent="onKey($event, 'keyUp')"
-          />
-          <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
         </div>
         <p class="muted" style="margin: 0; font-size: 12.5px">
-          点一下画面再打字，键盘事件才会送到页面。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
+          读公开网页、出图、渲染 PDF 用的是另一个一次性无头浏览器，不带登录态、群成员也能用，一直开着，不用在这里选；
+          它缺什么依赖在「扩展」页的「网页渲染」里看。
         </p>
       </div>
     </div>
 
-    <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
-      <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
-      高级：一次性无头渲染、浏览器控制扩展
-    </button>
-    <template v-if="advancedOpen">
+    <template v-if="source === 'box'">
       <div class="card">
         <div class="card-header">
-          <h2>一次性无头渲染</h2>
-          <span class="badge" :class="browserDependency?.available ? 'ok' : 'warn'">
-            {{ browserDependency?.available ? "可用" : "缺浏览器" }}
+          <h2>Diana 内置浏览器</h2>
+          <span class="badge" :class="status.running ? 'ok' : 'warn'">
+            {{ status.running ? (status.takeover ? "你在操作" : "运行中") : status.settings.enabled ? "未启动" : "未启用" }}
           </span>
-          <span class="card-sub">每次开一个全新 profile，用完即删，不带任何登录态</span>
+          <span class="card-sub">Diana 自己的浏览器，登录态留在数据目录里，你随时可以直接上手</span>
         </div>
         <div class="card-body stack">
-          <p class="muted" style="margin: 0; font-size: 13px">
-            Markdown / Mermaid / SVG 出图、PDF 渲染、网页读取与截图走的都是它，链接解析器抓 JS 渲染的页面也一样。
-            因为不带登录态，它是唯一对群成员开放的一档（工具名 <code class="mono">browser_render</code>）。
-            渲染尺寸、窗口模式这些参数在插件页的「网页渲染」里。
+          <p v-if="!status.available" class="muted" style="margin: 0; font-size: 13px">
+            这台机器上没找到 Chrome/Chromium。容器完整版镜像自带 chromium；slim 版可以在宿主机执行
+            <code class="mono">docker exec -u root &lt;容器名&gt; sh -c 'apt-get update &amp;&amp; apt-get install -y chromium fonts-noto-cjk'</code>。
           </p>
-          <PluginDependencyList
-            :dependencies="browserDependencies"
-            :loading="dependenciesLoading"
-            :busy="busyDependency"
-            @install="installDependency"
-          />
-          <p class="muted" style="margin: 0; font-size: 12.5px">
-            容器里 WebUI 的一键安装会因为进程不是 root 而失败，报错里会附上在宿主机执行的那条命令。
+          <div class="field">
+            <label class="switch-row">
+              <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
+              <span>开一个真窗口（只有本机有显示器时才有意义；容器里保持关闭，实时画面照常）</span>
+            </label>
+          </div>
+
+          <div class="row gap">
+            <button class="btn small" type="button" :disabled="busy || !settings.enabled" @click="start">启动</button>
+            <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
+            <button
+              class="btn small"
+              :class="status.takeover ? 'warn' : 'ghost'"
+              type="button"
+              :disabled="busy || !status.running"
+              @click="toggleTakeover"
+            >
+              {{ status.takeover ? "交还给机器人" : "我来操作" }}
+            </button>
+            <span class="muted" style="font-size: 12.5px">
+              你在画面上点一下就自动接管；交还之前机器人不会碰这个浏览器。
+            </span>
+          </div>
+
+          <p v-if="status.last_error" class="muted" style="margin: 0; font-size: 12.5px">
+            最近一次错误：{{ status.last_error }}
+          </p>
+          <p v-if="status.profile_dir" class="muted" style="margin: 0; font-size: 12.5px">
+            登录态目录：<code class="mono">{{ status.profile_dir }}</code>
           </p>
         </div>
       </div>
-      <BrowserControlPanel />
+
+      <div v-if="status.running" class="card">
+        <div class="card-header">
+          <h2>画面</h2>
+          <span class="card-sub">{{ currentTitle || "空白页" }}</span>
+        </div>
+        <div class="card-body stack">
+          <div class="row gap">
+            <button class="btn small ghost" type="button" @click="send({ type: 'back' })">后退</button>
+            <button class="btn small ghost" type="button" @click="send({ type: 'reload' })">刷新</button>
+            <input
+              v-model="addressInput"
+              class="input"
+              style="flex: 1; min-width: 220px"
+              placeholder="https://example.com"
+              @keydown.enter.prevent="navigate"
+            />
+            <button class="btn small" type="button" @click="navigate">打开</button>
+          </div>
+
+          <div class="browser-stage" @contextmenu.prevent>
+            <img
+              v-if="frame"
+              ref="screen"
+              class="browser-screen"
+              :src="`data:image/jpeg;base64,${frame.data}`"
+              alt="内置浏览器画面"
+              tabindex="0"
+              @mousedown.prevent="onMouse($event, 'mousePressed')"
+              @mouseup.prevent="onMouse($event, 'mouseReleased')"
+              @mousemove="onMouseMove"
+              @wheel.prevent="onWheel"
+              @keydown.prevent="onKey($event, 'keyDown')"
+              @keyup.prevent="onKey($event, 'keyUp')"
+            />
+            <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
+          </div>
+          <p class="muted" style="margin: 0; font-size: 12.5px">
+            点一下画面再打字，键盘事件才会送到页面。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
+          </p>
+        </div>
+      </div>
     </template>
+
+    <BrowserControlPanel v-else-if="source === 'extension'" />
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { ChevronDown } from "@lucide/vue";
+import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
-import PluginDependencyList from "../components/PluginDependencyList.vue";
 import {
-  installResolverDependency,
-  listPluginDependencies,
-  type ResolverDependency,
   browserBoxLiveURL,
+  getBrowserSource,
+  saveBrowserSource,
+  type BrowserSource,
   getBrowserBoxStatus,
   saveBrowserBoxSettings,
   setBrowserBoxTakeover,
@@ -151,7 +149,7 @@ import {
   type BrowserBoxSettings,
   type BrowserBoxStatus
 } from "../api";
-import { toastError, toastSuccess } from "../toast";
+import { toastError } from "../toast";
 
 interface LiveFrame {
   data: string;
@@ -160,16 +158,14 @@ interface LiveFrame {
   scale: number;
 }
 
-// 另外两档默认收起：主人要的通常只是内置浏览器那一个。
-const advancedOpen = ref(false);
-
-// 浏览器依赖探测复用插件页那套接口：装不装得上、装在哪，答案只该有一处。
-const sandboxedBrowserPluginID = "official.sandboxed-browser-renderer";
-const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
-const dependenciesLoading = ref(true);
-const busyDependency = ref("");
-const browserDependencies = computed(() => dependencyGroups.value[sandboxedBrowserPluginID] ?? []);
-const browserDependency = computed(() => browserDependencies.value.find((item) => item.name === "browser") ?? browserDependencies.value[0]);
+const sources: { key: BrowserSource; label: string; hint: string }[] = [
+  { key: "box", label: "Diana 内置（推荐）", hint: "Diana 自己的常驻浏览器，你能看画面、随时上手" },
+  { key: "extension", label: "我自己的 Chrome", hint: "装一个扩展，机器人用你日常浏览器的登录态" },
+  { key: "off", label: "不用", hint: "机器人只读公开网页，不碰任何登录态" }
+];
+// null 表示还没读到：读到之前不显示任何一边的配置，也不让切换。
+const source = ref<BrowserSource | null>(null);
+const switching = ref(false);
 
 const status = reactive<BrowserBoxStatus>({
   settings: { enabled: false },
@@ -188,30 +184,26 @@ const busy = ref(false);
 let socket: WebSocket | null = null;
 let statusTimer: number | undefined;
 
-async function loadDependencies(refresh = false): Promise<void> {
-  dependenciesLoading.value = true;
+async function loadSource(): Promise<void> {
   try {
-    const response = await listPluginDependencies(refresh);
-    dependencyGroups.value = response.plugins;
-  } catch {
-    // 依赖探测只是辅助信息，失败不该打断这一页。
-    dependencyGroups.value = {};
-  } finally {
-    dependenciesLoading.value = false;
+    source.value = (await getBrowserSource()).source;
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "读取浏览器来源失败");
   }
 }
 
-async function installDependency(dependency: ResolverDependency): Promise<void> {
-  busyDependency.value = dependency.name;
+// 切换来源由后端同时改两边的总开关；切完重新读一遍，内置浏览器的状态和画面跟着变。
+async function chooseSource(next: BrowserSource): Promise<void> {
+  if (next === source.value || switching.value) return;
+  switching.value = true;
   try {
-    const result = await installResolverDependency(dependency.name);
-    dependencyGroups.value = { ...dependencyGroups.value, ...result.plugins };
-    toastSuccess(`已安装 ${dependency.name}`);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : `安装 ${dependency.name} 失败`);
-    await loadDependencies(true);
+    source.value = (await saveBrowserSource(next)).source;
+    await refresh();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "切换浏览器来源失败");
+    await loadSource();
   } finally {
-    busyDependency.value = "";
+    switching.value = false;
   }
 }
 
@@ -394,7 +386,7 @@ function navigate(): void {
 
 onMounted(() => {
   void refresh();
-  void loadDependencies();
+  void loadSource();
   statusTimer = window.setInterval(() => void refresh(), 5000);
 });
 
@@ -405,16 +397,43 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.browser-advanced-toggle {
-  align-self: flex-start;
+.browser-sources {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
 }
 
-.browser-advanced-toggle > svg {
-  transition: transform 0.15s ease;
+.browser-source {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
-.browser-advanced-open {
-  transform: rotate(180deg);
+.browser-source:disabled {
+  cursor: default;
+}
+
+.browser-source.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.browser-source-name {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.browser-source-hint {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .browser-stage {

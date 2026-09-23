@@ -1692,7 +1692,7 @@ func DefaultBotConfig() BotConfig {
 		AgentCommandSandbox:   agent.CommandSandboxAuto,
 		// 写入锁在数据目录下的 workspace 里，碰不到配置和数据库，所以默认打开。
 		AgentFileWriteEnabled: true,
-		AgentBrowserCDPURL:    "http://127.0.0.1:9222",
+		AgentBrowserCDPURL:    defaultAgentBrowserCDPURL,
 		AgentBrowserTimeoutMS: agent.DefaultBrowserTimeoutMS,
 	}
 }

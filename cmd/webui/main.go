@@ -648,6 +648,11 @@ func main() {
 	browserBoxHandler.Register(router)
 	botRuntime.SetBrowserBox(browserBoxManager)
 	defer browserBoxManager.Stop()
+	// 浏览器来源：Diana 内置和用户自己的 Chrome 二选一（或都不用），同一时间只有一个生效。
+	browserSourceHandler := webui.NewBrowserSourceHandler(browserBoxManager, browserControlRegistry, browserControlHub)
+	browserSourceHandler.SetLogStore(sqliteStore)
+	browserSourceHandler.Register(router)
+	botRuntime.SetBrowserSource(browserSourceHandler.Current)
 	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
 	// main 收尾时判断 restartRequested 原地重启。
 	var restartRequested atomic.Bool

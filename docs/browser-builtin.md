@@ -14,9 +14,17 @@ Diana 自己的那个浏览器：一个常驻的 Chrome/Chromium 进程，profil
 | 默认 | 开启 | 全关，逐项授权 | 那一页打开才有进程；起来后机器人默认就能用 |
 | 谁能驱动 | 群成员也能（`browser_render`） | 主人 | 只有主人 |
 
+**内置浏览器和浏览器控制扩展二选一。** 两者做的是同一件事——带登录态、只有主人能驱动、
+能点能输入——区别只在用谁的浏览器，所以「浏览器」页上只选一个来源：Diana 内置、我自己的
+Chrome，或者不用。后端保证同一时间只有一个生效（`model/browsersource`）：来源不是
+「Diana 内置」时 `browser_open` 这组工具不登记，不是「我自己的 Chrome」时 `browser_ext_*`
+不登记。例外是机器人自己改过外部 CDP 地址（不是默认的 `http://127.0.0.1:9222`），那是
+显式指定的浏览器，`browser_open` 这组照样登记。一次性无头渲染（`browser_render`）不参与
+这个选择，一直可用。
+
 打开这一档之后，`browser_open` / `browser_text` / `browser_click` / `browser_type` /
 `browser_screenshot` 这组工具会自动接到内置浏览器上，不再指向机器人配置里那个外部
-CDP 地址。只有一个前提：在 WebUI 的「浏览器」页里把它打开。机器人那一侧默认
+CDP 地址。只有一个前提：在 WebUI 的「浏览器」页把来源选成「Diana 内置」。机器人那一侧默认
 就允许，想让某台机器人彻底不碰它，把它的 `agent_browser_box_disabled` 勾上。
 
 **这组工具只有主人能用。** 它连的是带着你登录态的常驻浏览器，所以群成员的工具面里
