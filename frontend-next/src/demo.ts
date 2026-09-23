@@ -48,15 +48,18 @@ const demoContextBudget = {
 
 const demoResidentContext = {
   context_window: 128_000,
-  total_tokens: 8_867,
-  note: "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。",
+  total_tokens: 18_709,
+  note: "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、命中触发词的 Skill 正文、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。",
   blocks: [
     { key: "soul", label: "品格（soul）", tokens: 0, note: "身份、价值、硬边界，排在系统提示词最前面。只有人能改，分群覆盖动不了它。" },
     { key: "persona", label: "人设正文", tokens: 846, content: "你是 Diana，一个住在群里的助手。说话短，先给结论。", note: "系统提示词稳定头部的第一行，只有人能改（WebUI 或 soul.md）。" },
     { key: "prompt_rules", label: "固定提示词规则", tokens: 8_021, content: "（演示数据：这里是按「全部工具都注册」展开的规则正文。）", note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。" },
     { key: "world_book", label: "世界书常驻设定", tokens: 0, budget: 1_200, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
     { key: "self_notes", label: "自述", tokens: 0, budget: 1_200, note: "机器人自己写的自我认知，默认关闭。" },
-    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" }
+    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" },
+    { key: "agent_protocol", label: "Agent 协议与按需工具目录", tokens: 4_310, content: "（演示数据：Agent 协议、按需工具目录、扩展说明和规则。）", note: "按需工具只进这份目录（名字加一句用途），要用时先 tools_load。取自这个会话最近一轮回复。" },
+    { key: "agent_tools", label: "常驻工具定义", tokens: 5_102, content: "web_search\nremember\npoke\ntools_load\ntools_execute\nagent_finalize", note: "这些工具每一步都带完整 schema，数字按 schema 估算，正文只列名字。从机器人配置「上下文」的常驻名单里拿掉，就会挪进上面的目录。" },
+    { key: "skills", label: "Skill 目录与常驻正文", tokens: 430, content: "（演示数据：Skill 目录。）", note: "只含配成常驻的 Skill 正文；声明了触发词的要命中才带，不在底价里。" }
   ]
 };
 
@@ -89,7 +92,7 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
-  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, llm_capability_probe_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
+  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },

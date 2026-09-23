@@ -7,6 +7,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/llm"
 )
 
 func residentBlock(snapshot ResidentContextSnapshot, key string) ResidentContextBlock {
@@ -93,5 +96,47 @@ func TestResidentContextKeepsEmptyBlocksVisible(t *testing.T) {
 	// 没选群时按私聊场景取，会话便签自然是空的。
 	if note := residentBlock(snapshot, ResidentBlockSessionNote); note.Content != "" {
 		t.Fatalf("session note without a group = %#v", note)
+	}
+}
+
+// 工具、MCP、Skill 的常驻开销要进快照：档位改的就是这几块，看不到就没法判断一档
+// 值不值。没跑过的会话退回机器人最近一轮，并说明出处。
+func TestResidentContextIncludesAgentFootprint(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{{
+		ID: "bot-a", Platform: PlatformOneBotV11, BotAccount: "42", AgentEnabled: true,
+	}}})
+	before := runtime.ResidentContextForGroup(context.Background(), "bot-a", "123456")
+	if block := residentBlock(before, ResidentBlockAgentTools); block.Content != "" || !strings.Contains(block.Note, "还没有跑过") {
+		t.Fatalf("before first round = %#v", block)
+	}
+
+	registry := agent.NewToolRegistry(&scopeTestTool{name: "common"}, &scopeTestTool{name: "rare"})
+	runner, err := agent.NewRunner(&scopeRouteProvider{}, agent.Config{CoreTools: []string{"common"}}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.rememberAgentFootprint(MessageEvent{Kind: EventKindGroup, ProfileID: "bot-a", GroupID: "123456"}, runner)
+
+	snapshot := runtime.ResidentContextForGroup(context.Background(), "bot-a", "123456")
+	tools := residentBlock(snapshot, ResidentBlockAgentTools)
+	if !strings.Contains(tools.Content, "common") || strings.Contains(tools.Content, "rare") || tools.Tokens <= llm.EstimateTextTokens(tools.Content) {
+		t.Fatalf("tools block = %#v", tools)
+	}
+	protocol := residentBlock(snapshot, ResidentBlockAgentPrompt)
+	if !strings.Contains(protocol.Content, "- rare:") || strings.Contains(protocol.Note, "别处") {
+		t.Fatalf("protocol block = %#v", protocol)
+	}
+	var sum int64
+	for _, block := range snapshot.Blocks {
+		sum += block.Tokens
+	}
+	if sum != snapshot.TotalTokens {
+		t.Fatalf("total %d != sum %d", snapshot.TotalTokens, sum)
+	}
+
+	other := runtime.ResidentContextForGroup(context.Background(), "bot-a", "654321")
+	if block := residentBlock(other, ResidentBlockAgentPrompt); !strings.Contains(block.Note, "别处") {
+		t.Fatalf("fallback note = %q", block.Note)
 	}
 }

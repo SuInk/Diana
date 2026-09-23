@@ -543,37 +543,6 @@
         </div>
 
         <div v-show="editorTab === 'model'" class="stack">
-          <!-- 聊天内模型管理 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>聊天内模型管理</h2>
-              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
-                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
-                </label>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
-              </div>
-            </div>
-          </section>
-
-
-          <section class="card">
-            <div class="card-header"><h2>媒体预处理</h2></div>
-            <div class="card-body stack">
-              <label><input v-model="form.auto_image_description" type="checkbox" /> 自动生成图片描述</label>
-              <label><input v-model="form.auto_video_preprocess" type="checkbox" /> 自动下载视频并提取关键帧</label>
-              <p class="muted">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</p>
-              <p class="muted">图片描述、视频帧描述和模型 OCR 用的是下方「模型分配」里的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</p>
-            </div>
-          </section>
-
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
@@ -714,17 +683,6 @@
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
                 </span>
               </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_capability_probe_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">后台探测模型兼容性（默认关闭）</span>
-                </label>
-                <span class="hint">
-                  空闲时每天探一次当前绑定的模型收不收「强制调用指定工具」——带思考模式的模型（如 DeepSeek）只接受自动选择，强制会让整轮对话报错。
-                  提前探好，真实对话就不用先失败一次。探测是极小的真实调用，会计入用量和账单；关着也不影响正确性，遇到时会自动降级并记住结论。
-                </span>
-              </div>
               <div class="field">
                 <label for="bot-model-disclosure">谁能问出所用模型</label>
                 <AppSelect
@@ -748,6 +706,25 @@
             </div>
           </section>
 
+          <!-- 聊天内模型管理：主人专用的开关，平时用不上，排在模型分配和调用参数之后。 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>聊天内模型管理</h2>
+              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
+                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
+                </label>
+                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div v-show="editorTab === 'behavior'" class="stack">
@@ -977,6 +954,42 @@
                   并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。表达质量拦截始终静默，不受此开关影响。
                 </span>
               </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.muted_reply_pause_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">被禁言时暂停回复</span>
+                </label>
+                <span class="hint">
+                  机器人在群里被禁言（或全员禁言且机器人不是管理员）期间，消息照常记入上下文和记忆，但不生成回复（回复判断默认也不做），
+                  也不白发再重试。解禁后从新消息开始回复，禁言期间的消息不补发。禁言和解禁会记在事件页的「通知」里。
+                  关闭后按原来的方式照常生成和重试。
+                </span>
+              </div>
+              <div v-if="form.muted_reply_pause_enabled" class="field wide">
+                <label>暂停期间照常执行</label>
+                <div class="stack">
+                  <label class="switch">
+                    <input v-model="form.muted_image_description_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">图片识别成文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_voice_transcription_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">语音转文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_reply_judgment_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">回复判断</span>
+                  </label>
+                </div>
+                <span class="hint">
+                  图片识别和语音转文字默认开，解禁后历史里的图片、语音有文字，上下文才完整；关掉能省下这段时间的费用。
+                  回复判断默认关：判断了也发不出去。打开后照常判断，该回的消息在事件页记为「判断该回，但禁言中未发送」，不生成也不发送。
+                </span>
+              </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.recall_reply_auto_delete_enabled" type="checkbox" />
@@ -1006,6 +1019,22 @@
               <div class="field">
                 <label for="bot-retry">发送重试次数（1–5）</label>
                 <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
+                <span class="hint">单次发送内的快速重试，间隔不到一秒。群消息只发一次，失败后交给下面的退避重发。</span>
+              </div>
+              <div v-for="field in sendRetryFields" :key="field.key" class="field">
+                <label :for="`bot-${field.key}`">{{ field.label }}</label>
+                <input
+                  :id="`bot-${field.key}`"
+                  v-model.number="form[field.key]"
+                  class="input"
+                  type="number"
+                  :min="field.min"
+                  :max="field.max"
+                  step="1"
+                  inputmode="numeric"
+                  :placeholder="`默认 ${field.fallback}`"
+                />
+                <span class="hint">{{ field.hint }}</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1096,6 +1125,31 @@
                   <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
                 </label>
                 <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 30 分钟。主人不受影响。</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 媒体预处理原来在「模型」标签，因为它花的是「媒体解析」那个模型的额度。但它回答的
+               是「收到图片、视频时后台做不做」，和机器人识别、发送前审核是一类事；用哪个模型
+               仍在模型标签里，这里给一个跳转。 -->
+          <section class="card">
+            <div class="card-header"><h2>媒体预处理</h2></div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_image_description" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动生成图片描述</span>
+                </label>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_video_preprocess" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动下载视频并提取关键帧</span>
+                </label>
+                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
+                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
               </div>
             </div>
           </section>
@@ -2016,6 +2070,7 @@ import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff,
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { formatClock } from "../format";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
 import {
   deleteBotProfile,
   generatePersona,
@@ -4045,6 +4100,10 @@ function setForm(config: BotProfileConfig): void {
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
+    muted_reply_pause_enabled: config.muted_reply_pause_enabled ?? true,
+    muted_voice_transcription_enabled: config.muted_voice_transcription_enabled ?? true,
+    muted_image_description_enabled: config.muted_image_description_enabled ?? true,
+    muted_reply_judgment_enabled: config.muted_reply_judgment_enabled ?? false,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
@@ -4054,7 +4113,6 @@ function setForm(config: BotProfileConfig): void {
     world_book_enabled: config.world_book_enabled ?? true,
     self_note_enabled: config.self_note_enabled ?? false,
     romance_enabled: config.romance_enabled ?? false,
-    llm_capability_probe_enabled: config.llm_capability_probe_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,
@@ -4260,6 +4318,11 @@ async function save(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
+  const sendRetryError = sendRetryValidationError(current);
+  if (sendRetryError) {
+    toastError(sendRetryError);
+    return;
+  }
   for (const row of [...modelRoleRows, ...purposeRoleRows]) {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
@@ -4321,6 +4384,7 @@ async function save(): Promise<void> {
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
+      ...sendRetryPayload(current),
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value

@@ -172,6 +172,18 @@
         </p>
       </div>
     </div>
+    <!-- 外接 CDP 是给自己另起了一个带调试端口的 Chrome 的人用的，属于技术细节，默认收起。
+         它原来是扩展页的一个标签，后来挪到这里当第四档；改成二选一之后不再算一档。 -->
+    <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
+      <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
+      高级：外接浏览器（CDP）
+    </button>
+    <template v-if="advancedOpen">
+      <p class="muted" style="margin: 0; font-size: 12.5px">
+        给某台机器人指一个你自己另起的、开着调试端口的 Chrome。只在上面没选「Diana 内置」，或这台机器人关掉了内置浏览器时生效。
+      </p>
+      <AgentBrowserPanel />
+    </template>
   </section>
 </template>
 
@@ -180,6 +192,8 @@ import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
 import { navigate as navigateToView } from "../router";
+import { ChevronDown } from "@lucide/vue";
+import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
 import {
   browserBoxLiveURL,
@@ -240,6 +254,7 @@ async function loadActivity(): Promise<void> {
     activityLoaded.value = true;
   }
 }
+const advancedOpen = ref(false);
 
 const status = reactive<BrowserBoxStatus>({
   settings: { enabled: false },
@@ -518,6 +533,16 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+.browser-advanced-toggle {
+  align-self: flex-start;
+}
+
+.browser-advanced-toggle > svg {
+  transition: transform 0.15s ease;
+}
+
+.browser-advanced-open {
+  transform: rotate(180deg);
 }
 
 .browser-stage {
