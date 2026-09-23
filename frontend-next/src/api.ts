@@ -533,6 +533,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";
+  /** 绑定的人设库条目；绑定时人设各项由人设库同步，库里改了自动更新。 */
+  persona_id?: string;
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
   /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
@@ -2850,9 +2852,18 @@ export function listPersonas(): Promise<PersonaListResponse> {
   return requestJSON<PersonaListResponse>("/api/assistant/personas");
 }
 
+/** 人设保存结果。改已有的一套时，绑定它的机器人和群会同步更新，这里报同步了几个。 */
+export interface PersonaSaveResponse {
+  persona: Persona;
+  personas: Persona[];
+  bots_synced?: number;
+  groups_synced?: number;
+  warning?: string;
+}
+
 /** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
-export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ persona: Persona; personas: Persona[] }> {
-  return requestJSON<{ persona: Persona; personas: Persona[] }>("/api/assistant/personas", {
+export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<PersonaSaveResponse> {
+  return requestJSON<PersonaSaveResponse>("/api/assistant/personas", {
     method: "POST",
     body: JSON.stringify({ persona })
   });

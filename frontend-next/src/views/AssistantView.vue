@@ -1278,6 +1278,17 @@
                       <Upload :size="14" aria-hidden="true" />
                       导入
                     </button>
+                    <button
+                      v-if="editedLibraryPersona"
+                      class="btn small"
+                      type="button"
+                      :disabled="personaLibraryBusy || !personaHasContent"
+                      :title="`把当前内容写回人设库「${editedLibraryPersona.name}」，绑定它的机器人和群一起更新`"
+                      @click="updateEditedLibraryPersona"
+                    >
+                      <RefreshCw :size="14" aria-hidden="true" />
+                      更新「{{ editedLibraryPersona.name }}」
+                    </button>
                     <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
                       <component :is="personaSaverOpen ? X : Plus" :size="14" aria-hidden="true" />
                       {{ personaSaverOpen ? "取消" : "存为人设" }}
@@ -1322,6 +1333,7 @@
                   </div>
                 </div>
                 <span v-if="!personaLibrary.length" class="hint">还没存过人设。调整下方设置后，点「存为人设」保存。</span>
+                <span v-else class="hint">选中一套即绑定：人设库里这一套更新后，绑定它的机器人和群自动跟着改。在下方改了内容就变成「自定义」，可以点「更新」写回这一套，或「存为人设」另存一套。</span>
               </div>
               <div class="field wide">
                 <div class="field-head">
@@ -2646,8 +2658,9 @@ const mentionUserModeOptions: AppSelectOption[] = [
 ];
 
 
-// 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
-// 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
+// 人设库。存的是「它是谁、怎么说话」的配置组合，选中一套是把它们填进下面的表单，
+// 并在 persona_id 里记下绑定：库里这一套更新时，后端把新内容写进绑定它的机器人
+// 和群（见 model/assistant/persona_link.go）。表单里改了内容就解除绑定。
 const savedPersonaLibrary = ref<Persona[]>([]);
 const personaLibrary = computed(() => withBuiltinPersonas(savedPersonaLibrary.value));
 const personaLibraryLoaded = ref(false);
@@ -2662,7 +2675,22 @@ function choosePersona(id: string): void {
 watch(() => ({ id: form.value?.persona_id, selection: selectedPersonaID.value, ready: personaLibraryLoaded.value, settings: JSON.stringify(form.value && personaFromSettings(form.value, "")) }), (next, previous) => {
   if (!next.ready || !form.value?.persona_id) return;
   const edited = previous?.ready && previous.id === next.id && previous.settings !== next.settings;
-  if (next.selection === "custom" || edited) form.value = asCustomPersona(form.value);
+  if (next.selection === "custom" || edited) {
+    // 记下是从哪一套改出来的，好提供「写回这一套」。
+    editedFromPersonaID.value = form.value.persona_id;
+    form.value = asCustomPersona(form.value);
+  }
+});
+// 从人设库某一套改出来的「自定义」：可以写回那一套，让绑定它的机器人和群一起更新。
+// 内置人设不在库里，不能写回。
+const editedFromPersonaID = ref("");
+const editedLibraryPersona = computed(() => {
+  if (!editedFromPersonaID.value || selectedPersonaID.value !== "custom") return undefined;
+  const persona = savedPersonaLibrary.value.find((item) => item.id === editedFromPersonaID.value);
+  return persona && !isBuiltinPersona(persona) ? persona : undefined;
+});
+watch(() => form.value?.id, () => {
+  editedFromPersonaID.value = "";
 });
 const personaLibraryBusy = ref(false);
 
@@ -2899,6 +2927,35 @@ async function storeCurrentPersona(): Promise<void> {
   }
 }
 
+async function updateEditedLibraryPersona(): Promise<void> {
+  const current = form.value;
+  const target = editedLibraryPersona.value;
+  if (!current || !target) return;
+  const ok = await askConfirm({
+    title: `更新人设「${target.name}」`,
+    message: "把当前的人设内容写回人设库的这一套。所有绑定它的机器人和群都会改成这份内容，并立即生效。",
+    confirmLabel: "更新"
+  });
+  if (!ok) return;
+  personaLibraryBusy.value = true;
+  try {
+    const response = await savePersona({ ...personaFromSettings(current, target.name), id: target.id });
+    savedPersonaLibrary.value = response.personas ?? [];
+    if (form.value === current) form.value = selectPersona(asCustomPersona(current), response.persona);
+    editedFromPersonaID.value = "";
+    const synced = [
+      response.bots_synced ? `${response.bots_synced} 台机器人` : "",
+      response.groups_synced ? `${response.groups_synced} 个群` : ""
+    ].filter(Boolean).join("、");
+    toastSuccess(synced ? `已更新「${target.name}」，同步到 ${synced}` : `已更新「${target.name}」`);
+    if (response.warning) toastError(response.warning);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设更新失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
 const personaFileInput = ref<HTMLInputElement | null>(null);
 
 function personaFileInputClick(): void {
@@ -3044,7 +3101,7 @@ async function importPersonaFile(event: Event): Promise<void> {
 }
 
 async function removePersona(persona: Persona): Promise<void> {
-  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份，已经保存到机器人上的配置不受影响。", danger: true, confirmLabel: "删除" }))) {
+  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份。绑定它的机器人和群保留现有人设，改为自定义。", danger: true, confirmLabel: "删除" }))) {
     return;
   }
   personaLibraryBusy.value = true;
