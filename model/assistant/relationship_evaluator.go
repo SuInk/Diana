@@ -234,7 +234,7 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 			defer recoverGoroutinePanic("relationship_evaluator.skipped")
 			r.recordRelationshipEvaluationOutcome(event, text, relationshipEvaluationResult{
 				err: errRelationshipEvaluationSaturated,
-			}, UserMemoryProfile{}, RelationshipEvaluationSkipped)
+			}, UserMemoryProfile{}, RelationshipEvaluationSkipped, nil)
 		}()
 		close(done)
 		return done
@@ -255,7 +255,7 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 		evaluation, before := result.decision, result.profile
 		if !result.evaluated {
 			if result.err != nil {
-				r.recordRelationshipEvaluationOutcome(event, text, result, before, RelationshipEvaluationFailed)
+				r.recordRelationshipEvaluationOutcome(event, text, result, before, RelationshipEvaluationFailed, nil)
 			}
 			return
 		}
@@ -270,10 +270,10 @@ func (r *Runtime) enqueueRelationshipEvaluation(event MessageEvent, text string)
 		}
 		if stored {
 			r.recordRelationshipEvaluation(runCtx, event, before, after, evaluation)
-			r.recordRelationshipEvaluationOutcome(event, text, result, after, relationshipEvaluationStatus(evaluation, before, after))
+			r.recordRelationshipEvaluationOutcome(event, text, result, after, relationshipEvaluationStatus(evaluation, before, after), traits)
 		} else {
 			result.err = errRelationshipEvaluationStore
-			r.recordRelationshipEvaluationOutcome(event, text, result, before, RelationshipEvaluationFailed)
+			r.recordRelationshipEvaluationOutcome(event, text, result, before, RelationshipEvaluationFailed, nil)
 		}
 	}()
 	return done

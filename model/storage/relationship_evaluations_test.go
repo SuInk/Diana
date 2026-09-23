@@ -64,3 +64,52 @@ func TestRelationshipEvaluationsFilterPageAndPrune(t *testing.T) {
 		t.Fatalf("remaining = %d", len(remaining))
 	}
 }
+
+// 画像和好感度出自同一次评估：只记下画像、分数没动的也算「有变化」；
+// 按人找支持 QQ 号和昵称的模糊匹配，% 和 _ 按字面匹配。
+func TestRelationshipEvaluationsPortraitAndPersonFilters(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	records := []assistant.RelationshipEvaluationRecord{
+		{UserID: "10001", SenderName: "小林", GroupID: "g1", Status: assistant.RelationshipEvaluationUnchanged,
+			Portrait: []assistant.RelationshipEvaluationPortrait{{Field: "occupation", Label: "职业", Value: "程序员", Source: "stated"}}},
+		{UserID: "10002", SenderName: "阿树_100%", GroupID: "g2", Status: assistant.RelationshipEvaluationChanged, AppliedDelta: 1},
+		{UserID: "10003", SenderName: "路人", GroupID: "g1", Status: assistant.RelationshipEvaluationUnchanged},
+	}
+	for _, record := range records {
+		if err := store.RecordRelationshipEvaluation(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list := func(filter assistant.RelationshipEvaluationFilter) []assistant.RelationshipEvaluationRecord {
+		t.Helper()
+		result, err := store.ListRelationshipEvaluations(ctx, filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if changed := list(assistant.RelationshipEvaluationFilter{ChangedOnly: true}); len(changed) != 2 {
+		t.Fatalf("changed only = %#v", changed)
+	}
+	portrait := list(assistant.RelationshipEvaluationFilter{HasPortrait: true})
+	if len(portrait) != 1 || len(portrait[0].Portrait) != 1 || portrait[0].Portrait[0].Label != "职业" || portrait[0].Portrait[0].Value != "程序员" {
+		t.Fatalf("portrait only = %#v", portrait)
+	}
+	if byName := list(assistant.RelationshipEvaluationFilter{Query: "小林"}); len(byName) != 1 || byName[0].UserID != "10001" {
+		t.Fatalf("by name = %#v", byName)
+	}
+	if byQQ := list(assistant.RelationshipEvaluationFilter{Query: "1000"}); len(byQQ) != 3 {
+		t.Fatalf("by qq prefix = %d", len(byQQ))
+	}
+	if literal := list(assistant.RelationshipEvaluationFilter{Query: "_100%"}); len(literal) != 1 || literal[0].UserID != "10002" {
+		t.Fatalf("literal wildcard = %#v", literal)
+	}
+	if byGroup := list(assistant.RelationshipEvaluationFilter{GroupID: "g1", ChangedOnly: true}); len(byGroup) != 1 {
+		t.Fatalf("group + changed = %#v", byGroup)
+	}
+}

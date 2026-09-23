@@ -3,8 +3,8 @@
 
 <!--
   后台好感度评估的时间线。人员详情里只有某一个人「分数真的变了」的几条；这里是
-  所有人的每一次评估，默认也只看变了的，切到「全部评估」才能回答「这句话为什么
-  没加分」：判了 0、把握不够、评估失败、排满跳过。
+  所有人的每一次评估，默认只看分数或画像变了的；结果选「全部评估」或具体某一类，
+  才能回答「这句话为什么没加分」：判了 0、把握不够、评估失败、排满跳过。
 -->
 <template>
   <div>
@@ -18,20 +18,26 @@
     <header class="view-header">
       <div class="view-title">
         <h2>好感变化</h2>
-        <p>后台每一次好感度评估的结果</p>
-      </div>
-      <div class="view-actions">
-        <!-- 「全部评估」回答的是「这句话为什么没加分」：判了 0、把握不够、失败、排满跳过。 -->
-        <div class="segmented" role="tablist" aria-label="评估范围">
-          <button type="button" :class="{ active: !showAll }" @click="showAll = false">有变化</button>
-          <button type="button" :class="{ active: showAll }" @click="showAll = true">全部评估</button>
-        </div>
+        <p>后台每一次好感度与画像评估的结果</p>
       </div>
     </header>
 
     <section class="card">
       <div class="card-body" style="padding-top: 8px">
-        <div v-if="userFilter" class="cluster" style="padding: 8px 0 4px">
+        <!-- 「全部评估」回答的是「这句话为什么没加分」：判了 0、把握不够、失败、排满跳过。 -->
+        <div class="cluster" style="padding: 8px 0 12px">
+          <select v-model="resultFilter" class="input" style="width: auto" aria-label="评估结果">
+            <option v-for="option in RESULT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+          <div class="input-group" style="flex: 1; min-width: 160px; max-width: 240px">
+            <input v-model="personFilter" class="input" placeholder="QQ 号或昵称" aria-label="按人筛选" />
+          </div>
+          <div class="input-group" style="flex: 1; min-width: 120px; max-width: 180px">
+            <input v-model="groupFilter" class="input" inputmode="numeric" placeholder="群号" aria-label="按群筛选" />
+          </div>
+          <button v-if="filtersActive" class="btn ghost small" type="button" @click="resetFilters">清除筛选</button>
+        </div>
+        <div v-if="userFilter" class="cluster" style="padding: 0 0 4px">
           <span class="badge">只看 {{ userFilter }}</span>
           <button class="btn ghost small" type="button" @click="clearUserFilter">看全部人</button>
         </div>
@@ -51,6 +57,9 @@
                 <span v-if="item.group_id" class="muted" style="font-size: 11.5px">群 {{ item.group_id }}</span>
               </div>
               <p v-if="item.message_text" class="log-message">「{{ item.message_text }}」</p>
+              <p v-if="item.portrait?.length" class="log-detail">
+                记下画像：<template v-for="(trait, index) in item.portrait" :key="trait.field + index"><template v-if="index > 0">；</template>{{ trait.label }} {{ trait.value }}<span v-if="trait.source === 'inferred'" class="muted">（推断）</span></template>
+              </p>
               <p v-if="item.reason" class="log-detail">{{ item.reason }}</p>
               <p v-if="item.error" class="log-detail">{{ item.error }}</p>
               <p v-if="metaLine(item)" class="log-detail">{{ metaLine(item) }}</p>
@@ -64,8 +73,8 @@
         </div>
         <EmptyState
           v-else-if="!loading"
-          :title="showAll ? '还没有好感度评估记录' : '最近没有好感度变化'"
-          :hint="showAll ? '机器人回复之后才会在后台评估一次。' : '切到「全部评估」可以看到判了 0、把握不够或评估失败的记录。'"
+          :title="filtersActive ? '没有符合筛选条件的评估' : '最近没有好感度或画像变化'"
+          :hint="filtersActive ? '换个条件试试，或者清除筛选。' : '结果选「全部评估」可以看到判了 0、把握不够或评估失败的记录。'"
         />
         <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载好感变化" />
       </div>
@@ -74,7 +83,7 @@
 </template>
 
 <script setup lang="ts">
-import { inject, onMounted, ref, watch } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RefreshCw } from "@lucide/vue";
 import { listRelationshipEvaluations, type RelationshipEvaluation, type RelationshipEvaluationStatus } from "../api";
 import { botScope } from "../bot-scope";
@@ -86,8 +95,20 @@ import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 
 const PAGE_SIZE = 50;
-// 「有变化」包括顶到上下限的：模型要加分却没加上，也是分数这件事上发生的事。
-const CHANGED_STATUSES: RelationshipEvaluationStatus[] = ["changed", "capped"];
+
+// 结果筛选。「有变化」包括顶到上下限的（模型要加分却没加上，也是分数这件事上发生的
+// 事）和只记下了画像的；后面几项对应单一结果，用来回答「这句话为什么没加分」。
+type ResultFilter = "changed" | "all" | "portrait" | RelationshipEvaluationStatus;
+const RESULT_OPTIONS: { value: ResultFilter; label: string }[] = [
+  { value: "changed", label: "有变化" },
+  { value: "all", label: "全部评估" },
+  { value: "portrait", label: "记下画像" },
+  { value: "capped", label: "到上限" },
+  { value: "unchanged", label: "不变" },
+  { value: "low_confidence", label: "把握不够" },
+  { value: "failed", label: "评估失败" },
+  { value: "skipped", label: "排满跳过" }
+];
 
 const actionsHost = inject(recordsActionsHost, ref<HTMLElement | null>(null));
 
@@ -95,18 +116,32 @@ const evaluations = ref<RelationshipEvaluation[]>([]);
 const nextBeforeID = ref(0);
 const loading = ref(true);
 const loadingMore = ref(false);
-const showAll = ref(false);
+const resultFilter = ref<ResultFilter>("changed");
+const personFilter = ref("");
+const groupFilter = ref("");
+const filtersActive = computed(() => resultFilter.value !== "changed" || personFilter.value.trim() !== "" || groupFilter.value.trim() !== "");
 // 从人员详情跳过来时只看这一个人。
 const userFilter = ref(typeof window === "undefined" ? "" : viewQuery().get("user_id") ?? "");
 
 function query(beforeID = 0) {
+  const result = resultFilter.value;
   return {
     profile: botScope.value,
     userID: userFilter.value,
-    statuses: showAll.value ? undefined : CHANGED_STATUSES,
+    search: personFilter.value.trim(),
+    groupID: groupFilter.value.trim(),
+    changedOnly: result === "changed",
+    portraitOnly: result === "portrait",
+    statuses: result === "changed" || result === "all" || result === "portrait" ? undefined : [result],
     beforeID,
     limit: PAGE_SIZE
   };
+}
+
+function resetFilters(): void {
+  resultFilter.value = "changed";
+  personFilter.value = "";
+  groupFilter.value = "";
 }
 
 async function reload(): Promise<void> {
@@ -162,7 +197,7 @@ function statusLabel(item: RelationshipEvaluation): string {
     case "capped":
       return item.applied_delta === 0 ? "已到上限" : `${signed(item.applied_delta)}（到上限）`;
     case "unchanged":
-      return "不变";
+      return item.portrait?.length ? "记下画像" : "不变";
     case "low_confidence":
       return "把握不够";
     case "failed":
@@ -184,6 +219,8 @@ function statusClass(item: RelationshipEvaluation): string {
       return "warn";
     case "failed":
       return "err";
+    case "unchanged":
+      return item.portrait?.length ? "accent" : "";
     default:
       return "";
   }
@@ -208,8 +245,14 @@ function metaLine(item: RelationshipEvaluation): string {
   return parts.join(" · ");
 }
 
-watch(showAll, () => void reload());
-watch(botScope, () => void reload());
+// 打字时不要每敲一个字就查一次：停手 300ms 再查。结果下拉和机器人切换立刻生效。
+let typingTimer: number | undefined;
+watch([personFilter, groupFilter], () => {
+  window.clearTimeout(typingTimer);
+  typingTimer = window.setTimeout(() => void reload(), 300);
+});
+watch([resultFilter, botScope], () => void reload());
+onBeforeUnmount(() => window.clearTimeout(typingTimer));
 
 onMounted(() => {
   void reload();

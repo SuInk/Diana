@@ -38,32 +38,47 @@ const relationshipEvaluationTextLimit = 200
 
 // RelationshipEvaluationRecord 是一次后台好感度评估的记录。
 type RelationshipEvaluationRecord struct {
-	ID            int64     `json:"id"`
-	BotProfileID  string    `json:"bot_profile_id,omitempty"`
-	UserID        string    `json:"user_id"`
-	SenderName    string    `json:"sender_name,omitempty"`
-	GroupID       string    `json:"group_id,omitempty"`
-	MessageID     string    `json:"message_id,omitempty"`
-	MessageText   string    `json:"message_text,omitempty"`
-	Status        string    `json:"status"`
-	ProposedDelta int       `json:"proposed_delta"`
-	AppliedDelta  int       `json:"applied_delta"`
-	BeforeScore   int       `json:"before_score"`
-	AfterScore    int       `json:"after_score"`
-	Confidence    float64   `json:"confidence"`
-	Reason        string    `json:"reason,omitempty"`
-	Model         string    `json:"model,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            int64   `json:"id"`
+	BotProfileID  string  `json:"bot_profile_id,omitempty"`
+	UserID        string  `json:"user_id"`
+	SenderName    string  `json:"sender_name,omitempty"`
+	GroupID       string  `json:"group_id,omitempty"`
+	MessageID     string  `json:"message_id,omitempty"`
+	MessageText   string  `json:"message_text,omitempty"`
+	Status        string  `json:"status"`
+	ProposedDelta int     `json:"proposed_delta"`
+	AppliedDelta  int     `json:"applied_delta"`
+	BeforeScore   int     `json:"before_score"`
+	AfterScore    int     `json:"after_score"`
+	Confidence    float64 `json:"confidence"`
+	Reason        string  `json:"reason,omitempty"`
+	Model         string  `json:"model,omitempty"`
+	Error         string  `json:"error,omitempty"`
+	// Portrait 是同一次评估里记下的画像。好感度和画像共用一次模型调用，
+	// 分数没动、只记下了「职业是程序员」的评估也是一次变化。
+	Portrait  []RelationshipEvaluationPortrait `json:"portrait,omitempty"`
+	CreatedAt time.Time                        `json:"created_at"`
+}
+
+// RelationshipEvaluationPortrait 是评估记录里的一条画像，只留排查需要的字段。
+type RelationshipEvaluationPortrait struct {
+	Field  string `json:"field"`
+	Label  string `json:"label"`
+	Value  string `json:"value"`
+	Source string `json:"source,omitempty"`
 }
 
 // RelationshipEvaluationFilter 是好感变化列表的筛选条件。Statuses 为空表示不限；
-// BeforeID 用来往前翻页，只返回 ID 更小的记录。
+// ChangedOnly 只要分数变了或记下了画像的；HasPortrait 只要记下了画像的；Query 按
+// QQ 号或昵称模糊找人；BeforeID 用来往前翻页，只返回 ID 更小的记录。
 type RelationshipEvaluationFilter struct {
 	BotProfileID string
 	UserID       string
 	GroupID      string
+	Query        string
 	Statuses     []string
+	ChangedOnly  bool
+	HasPortrait  bool
 	BeforeID     int64
 	Limit        int
 }
@@ -93,7 +108,7 @@ func relationshipEvaluationStatus(decision relationshipEvaluationDecision, befor
 
 // recordRelationshipEvaluationOutcome 把一次评估写进好感变化记录。存储不支持时
 // 什么也不做；写失败不影响评估本身。
-func (r *Runtime) recordRelationshipEvaluationOutcome(event MessageEvent, text string, result relationshipEvaluationResult, after UserMemoryProfile, status string) {
+func (r *Runtime) recordRelationshipEvaluationOutcome(event MessageEvent, text string, result relationshipEvaluationResult, after UserMemoryProfile, status string, traits []UserPortraitTrait) {
 	r.mu.RLock()
 	store, ok := r.userMemory.(RelationshipEvaluationStore)
 	r.mu.RUnlock()
@@ -124,6 +139,14 @@ func (r *Runtime) recordRelationshipEvaluationOutcome(event MessageEvent, text s
 	}
 	if result.err != nil {
 		record.Error = truncateRunes(result.err.Error(), 500)
+	}
+	for _, trait := range traits {
+		record.Portrait = append(record.Portrait, RelationshipEvaluationPortrait{
+			Field:  string(trait.Field),
+			Label:  trait.Label,
+			Value:  trait.Value,
+			Source: trait.Source,
+		})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

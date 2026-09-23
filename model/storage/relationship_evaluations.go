@@ -5,6 +5,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -35,6 +36,8 @@ CREATE TABLE IF NOT EXISTS relationship_evaluations (
   reason TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
+  portrait TEXT NOT NULL DEFAULT '[]',
+  portrait_count INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_relationship_evaluations_scope ON relationship_evaluations(bot_profile_id, id DESC);
@@ -62,15 +65,24 @@ func (s *SQLiteStore) RecordRelationshipEvaluation(ctx context.Context, record a
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `
+	portrait := record.Portrait
+	if portrait == nil {
+		portrait = []assistant.RelationshipEvaluationPortrait{}
+	}
+	portraitJSON, err := json.Marshal(portrait)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
 INSERT INTO relationship_evaluations (
   bot_profile_id, user_id, sender_name, group_id, message_id, message_text, status,
-  proposed_delta, applied_delta, before_score, after_score, confidence, reason, model, error, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  proposed_delta, applied_delta, before_score, after_score, confidence, reason, model, error,
+  portrait, portrait_count, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(record.BotProfileID), strings.TrimSpace(record.UserID), record.SenderName, record.GroupID,
 		record.MessageID, record.MessageText, record.Status, record.ProposedDelta, record.AppliedDelta,
 		record.BeforeScore, record.AfterScore, record.Confidence, record.Reason, record.Model, record.Error,
-		createdAt.UTC().UnixNano())
+		string(portraitJSON), len(portrait), createdAt.UTC().UnixNano())
 	return err
 }
 
@@ -98,6 +110,11 @@ func (s *SQLiteStore) ListRelationshipEvaluations(ctx context.Context, filter as
 		conditions = append(conditions, "group_id = ?")
 		args = append(args, groupID)
 	}
+	if query := strings.TrimSpace(filter.Query); query != "" {
+		pattern := "%" + escapeSQLiteLike(query) + "%"
+		conditions = append(conditions, `(user_id LIKE ? ESCAPE '\' OR sender_name LIKE ? ESCAPE '\')`)
+		args = append(args, pattern, pattern)
+	}
 	if len(filter.Statuses) > 0 {
 		placeholders := make([]string, 0, len(filter.Statuses))
 		for _, status := range filter.Statuses {
@@ -106,13 +123,20 @@ func (s *SQLiteStore) ListRelationshipEvaluations(ctx context.Context, filter as
 		}
 		conditions = append(conditions, "status IN ("+strings.Join(placeholders, ", ")+")")
 	}
+	if filter.ChangedOnly {
+		conditions = append(conditions, "(status IN (?, ?) OR portrait_count > 0)")
+		args = append(args, assistant.RelationshipEvaluationChanged, assistant.RelationshipEvaluationCapped)
+	}
+	if filter.HasPortrait {
+		conditions = append(conditions, "portrait_count > 0")
+	}
 	if filter.BeforeID > 0 {
 		conditions = append(conditions, "id < ?")
 		args = append(args, filter.BeforeID)
 	}
 	query := `
 SELECT id, bot_profile_id, user_id, sender_name, group_id, message_id, message_text, status,
-       proposed_delta, applied_delta, before_score, after_score, confidence, reason, model, error, created_at
+       proposed_delta, applied_delta, before_score, after_score, confidence, reason, model, error, portrait, created_at
 FROM relationship_evaluations`
 	if len(conditions) > 0 {
 		query += "\nWHERE " + strings.Join(conditions, " AND ")
@@ -128,11 +152,17 @@ FROM relationship_evaluations`
 	for rows.Next() {
 		var record assistant.RelationshipEvaluationRecord
 		var createdAt int64
+		var portrait string
 		if err := rows.Scan(&record.ID, &record.BotProfileID, &record.UserID, &record.SenderName, &record.GroupID,
 			&record.MessageID, &record.MessageText, &record.Status, &record.ProposedDelta, &record.AppliedDelta,
 			&record.BeforeScore, &record.AfterScore, &record.Confidence, &record.Reason, &record.Model, &record.Error,
-			&createdAt); err != nil {
+			&portrait, &createdAt); err != nil {
 			return nil, err
+		}
+		if portrait != "" && portrait != "[]" {
+			if err := json.Unmarshal([]byte(portrait), &record.Portrait); err != nil {
+				return nil, fmt.Errorf("decode relationship evaluation portrait: %w", err)
+			}
 		}
 		record.CreatedAt = time.Unix(0, createdAt).UTC()
 		records = append(records, record)

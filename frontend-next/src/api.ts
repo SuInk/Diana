@@ -2600,7 +2600,16 @@ export interface RelationshipEvaluation {
   reason?: string;
   model?: string;
   error?: string;
+  // 同一次评估里记下的画像：分数没动、只记下了「职业是程序员」也算一次变化。
+  portrait?: RelationshipEvaluationPortrait[];
   created_at: string;
+}
+
+export interface RelationshipEvaluationPortrait {
+  field: string;
+  label: string;
+  value: string;
+  source?: string;
 }
 
 export interface RelationshipEvaluationsResponse {
@@ -2611,7 +2620,13 @@ export interface RelationshipEvaluationsResponse {
 export interface RelationshipEvaluationsQuery {
   profile?: string;
   userID?: string;
+  // search 按 QQ 号或昵称模糊找人；groupID 按群号精确筛。
+  search?: string;
+  groupID?: string;
   statuses?: RelationshipEvaluationStatus[];
+  // changedOnly 只要分数变了或记下了画像的；portraitOnly 只要记下了画像的。
+  changedOnly?: boolean;
+  portraitOnly?: boolean;
   beforeID?: number;
   limit?: number;
 }
@@ -2620,7 +2635,11 @@ export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery 
   const params = new URLSearchParams({ limit: String(query.limit ?? 50) });
   if (query.profile) params.set("profile", query.profile);
   if (query.userID) params.set("user_id", query.userID);
+  if (query.search) params.set("q", query.search);
+  if (query.groupID) params.set("group_id", query.groupID);
   if (query.statuses?.length) params.set("status", query.statuses.join(","));
+  if (query.changedOnly) params.set("changed", "1");
+  if (query.portraitOnly) params.set("portrait", "1");
   if (query.beforeID) params.set("before_id", String(query.beforeID));
   return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);
 }

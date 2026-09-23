@@ -89,6 +89,19 @@ func TestRelationshipEvaluationRecordsEveryOutcome(t *testing.T) {
 	}
 }
 
+// 同一次评估记下的画像跟着这条记录走，分数没动也要看得到。
+func TestRelationshipEvaluationRecordsPortrait(t *testing.T) {
+	record := runEvaluationForTest(t, `{"should_update":false,"delta":0,"confidence":0.95,"reason":"自我介绍",`+
+		`"portrait":[{"field":"occupation","value":"程序员","source":"stated","confidence":0.9},`+
+		`{"field":"hobbies","value":"可能喜欢猫","source":"inferred","confidence":0.5}]}`, 10)
+	if record.Status != RelationshipEvaluationUnchanged || len(record.Portrait) != 1 {
+		t.Fatalf("record = %#v", record)
+	}
+	if got := record.Portrait[0]; got.Field != "occupation" || got.Value != "程序员" || got.Label == "" || got.Source != "stated" {
+		t.Fatalf("portrait = %#v", got)
+	}
+}
+
 // 后台评估排满时这一轮跳过，不拖慢回复，但也得有一条记录。
 func TestRelationshipEvaluationRecordsSaturationSkip(t *testing.T) {
 	memory := &recordingEvaluationMemory{memoryUserMemoryStore: newMemoryUserMemoryStore()}

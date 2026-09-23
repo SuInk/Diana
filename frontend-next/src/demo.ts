@@ -440,10 +440,10 @@ const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
   ]
 };
 
-// 后台好感度评估：每种结果各给一两条，演示站切到「全部评估」能看到全部分类。
+// 后台好感度评估：每种结果各给一两条，有两条带画像，演示站结果选「全部评估」能看到全部分类。
 const demoRelationshipEvaluations: RelationshipEvaluation[] = [
-  { id: 9, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "@Diana 帮我总结一下今天的发布变更，谢啦", status: "changed", proposed_delta: 1, applied_delta: 1, before_score: 61, after_score: 62, confidence: 0.92, reason: "真诚道谢，互动友好", model: "gpt-5.4-mini", created_at: before(2) },
-  { id: 8, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "画一张雨夜城市里的复古电车", status: "unchanged", proposed_delta: 0, applied_delta: 0, before_score: 35, after_score: 35, confidence: 0.96, reason: "普通的生图请求，不影响关系", model: "gpt-5.4-mini", created_at: before(31) },
+  { id: 9, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "@Diana 帮我总结一下今天的发布变更，谢啦", status: "changed", proposed_delta: 1, applied_delta: 1, before_score: 61, after_score: 62, confidence: 0.92, reason: "真诚道谢，互动友好", model: "gpt-5.4-mini", portrait: [{ field: "occupation", label: "职业", value: "后端工程师", source: "stated" }], created_at: before(2) },
+  { id: 8, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "画一张雨夜城市里的复古电车", status: "unchanged", proposed_delta: 0, applied_delta: 0, before_score: 35, after_score: 35, confidence: 0.96, reason: "普通的生图请求，不影响关系", model: "gpt-5.4-mini", portrait: [{ field: "hobbies", label: "兴趣爱好", value: "喜欢复古电车和雨夜街景", source: "inferred" }], created_at: before(31) },
   { id: 7, bot_profile_id: "bot-onebot", user_id: "100201014", sender_name: "白榆", group_id: "100200418", message_text: "你今天好像有点笨哦", status: "low_confidence", proposed_delta: -1, applied_delta: 0, before_score: 12, after_score: 12, confidence: 0.55, reason: "可能是玩笑，也可能在抱怨，不好判断", model: "gpt-5.4-mini", created_at: before(47) },
   { id: 6, bot_profile_id: "bot-onebot", user_id: "100200001", sender_name: "主人", message_text: "今天也辛苦你了", status: "capped", proposed_delta: 2, applied_delta: 0, before_score: 200, after_score: 200, confidence: 0.9, reason: "主人的关心", model: "gpt-5.4-mini", created_at: before(95) },
   { id: 5, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "刚才那张图太好看了！", status: "skipped", proposed_delta: 0, applied_delta: 0, before_score: 0, after_score: 0, confidence: 0, error: "后台评估同时进行的数量已满，这一轮跳过", created_at: before(120) },
@@ -1083,8 +1083,18 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/favorability/evaluations") {
     const statuses = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
     const userID = url.searchParams.get("user_id") ?? "";
+    const search = (url.searchParams.get("q") ?? "").trim();
+    const groupID = url.searchParams.get("group_id") ?? "";
+    const changedOnly = url.searchParams.get("changed") === "1";
+    const portraitOnly = url.searchParams.get("portrait") === "1";
+    const hasPortrait = (item: RelationshipEvaluation) => (item.portrait?.length ?? 0) > 0;
     const evaluations = demoRelationshipEvaluations.filter((item) =>
-      (statuses.length === 0 || statuses.includes(item.status)) && (!userID || item.user_id === userID));
+      (statuses.length === 0 || statuses.includes(item.status)) &&
+      (!userID || item.user_id === userID) &&
+      (!search || item.user_id.includes(search) || (item.sender_name ?? "").includes(search)) &&
+      (!groupID || item.group_id === groupID) &&
+      (!changedOnly || item.status === "changed" || item.status === "capped" || hasPortrait(item)) &&
+      (!portraitOnly || hasPortrait(item)));
     return json({ evaluations });
   }
 
