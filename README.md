@@ -52,7 +52,7 @@ Docker Compose（预构建镜像，无需 clone 仓库）。首次在部署目�
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh
 ```
 
-在终端里直接运行时，脚本会问装**完整版**还是**基础版**：完整版预装 Chromium、中文字体、ffmpeg、yt-dlp 和 tesseract，网页渲染、截图、媒体下载和 OCR 开箱可用；基础版都不装，拉取约 67 MB，完整版约 447 MB。拿不准就选完整版。
+在终端里直接运行时，脚本会问装**完整版**还是**基础版**：完整版预装 Chromium、中文字体、ffmpeg、yt-dlp 和 tesseract，网页渲染、截图、媒体下载和 OCR 开箱可用；基础版都不装，拉取约 156 MB，完整版约 619 MB。拿不准就选完整版。
 
 用管道执行（上面那条命令）不会提问，首次部署默认完整版；想要基础版就先声明：
 
