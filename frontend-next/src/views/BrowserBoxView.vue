@@ -1,67 +1,14 @@
 <!-- Copyright (c) 2025-now SuInk. Licensed under the Limited Redistribution License. -->
 <!--
-  浏览器这一页是三档浏览器的唯一入口。以前它们各在一处——内置浏览器在这里、浏览器
-  控制扩展在「设置」里、一次性无头渲染在插件页——而用户要回答的第一个问题恰恰是
-  「我该用哪一档」，三处分开就没人能回答。这里按「谁的浏览器、带不带登录态」并排
-  列出来，配置跟着各自那一档走。
+  浏览器这一页只有一个入口：Diana 自己的内置浏览器。另外两档（一次性无头渲染、
+  浏览器控制扩展）能力都还在，但绝大多数人用不着去选，收在底部「高级」里。
+  以前顶上是三选一的卡片，用户进来先得弄懂三档区别才能开始用。
 -->
 <template>
   <section class="stack">
     <div class="card">
-      <div class="card-head">
+      <div class="card-header">
         <h2>浏览器</h2>
-        <span class="card-sub">三档浏览器，区别在于用谁的浏览器、带不带你的登录态</span>
-      </div>
-      <div class="card-body">
-        <div class="browser-tiers">
-          <button
-            v-for="item in tiers"
-            :key="item.key"
-            class="browser-tier"
-            :class="{ active: tab === item.key }"
-            type="button"
-            @click="tab = item.key"
-          >
-            <span class="browser-tier-name">{{ item.label }}</span>
-            <span class="browser-tier-hint">{{ item.hint }}</span>
-            <span class="browser-tier-who">{{ item.who }}</span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <template v-if="tab === 'render'">
-      <div class="card">
-        <div class="card-head">
-          <h2>一次性无头渲染</h2>
-          <span class="badge" :class="browserDependency?.available ? 'ok' : 'warn'">
-            {{ browserDependency?.available ? "可用" : "缺浏览器" }}
-          </span>
-          <span class="card-sub">每次开一个全新 profile，用完即删，不带任何登录态</span>
-        </div>
-        <div class="card-body stack">
-          <p class="muted" style="margin: 0; font-size: 13px">
-            Markdown / Mermaid / SVG 出图、PDF 渲染、网页读取与截图走的都是它，链接解析器抓 JS 渲染的页面也一样。
-            因为不带登录态，它是三档里唯一对群成员开放的（工具名 <code class="mono">browser_render</code>）。
-            渲染尺寸、窗口模式这些参数在插件页的「网页渲染」里。
-          </p>
-          <PluginDependencyList
-            :dependencies="browserDependencies"
-            :loading="dependenciesLoading"
-            :busy="busyDependency"
-            @install="installDependency"
-          />
-          <p class="muted" style="margin: 0; font-size: 12.5px">
-            容器里 WebUI 的一键安装会因为进程不是 root 而失败，报错里会附上在宿主机执行的那条命令。
-          </p>
-        </div>
-      </div>
-    </template>
-
-    <template v-if="tab === 'box'">
-    <div class="card">
-      <div class="card-head">
-        <h2>内置浏览器</h2>
         <span class="badge" :class="status.running ? 'ok' : 'warn'">
           {{ status.running ? (status.takeover ? "你在操作" : "运行中") : status.settings.enabled ? "未启动" : "未启用" }}
         </span>
@@ -110,7 +57,7 @@
     </div>
 
     <div v-if="status.running" class="card">
-      <div class="card-head">
+      <div class="card-header">
         <h2>画面</h2>
         <span class="card-sub">{{ currentTitle || "空白页" }}</span>
       </div>
@@ -150,14 +97,45 @@
         </p>
       </div>
     </div>
-    </template>
 
-    <BrowserControlPanel v-if="tab === 'control'" />
+    <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
+      <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
+      高级：一次性无头渲染、浏览器控制扩展
+    </button>
+    <template v-if="advancedOpen">
+      <div class="card">
+        <div class="card-header">
+          <h2>一次性无头渲染</h2>
+          <span class="badge" :class="browserDependency?.available ? 'ok' : 'warn'">
+            {{ browserDependency?.available ? "可用" : "缺浏览器" }}
+          </span>
+          <span class="card-sub">每次开一个全新 profile，用完即删，不带任何登录态</span>
+        </div>
+        <div class="card-body stack">
+          <p class="muted" style="margin: 0; font-size: 13px">
+            Markdown / Mermaid / SVG 出图、PDF 渲染、网页读取与截图走的都是它，链接解析器抓 JS 渲染的页面也一样。
+            因为不带登录态，它是唯一对群成员开放的一档（工具名 <code class="mono">browser_render</code>）。
+            渲染尺寸、窗口模式这些参数在插件页的「网页渲染」里。
+          </p>
+          <PluginDependencyList
+            :dependencies="browserDependencies"
+            :loading="dependenciesLoading"
+            :busy="busyDependency"
+            @install="installDependency"
+          />
+          <p class="muted" style="margin: 0; font-size: 12.5px">
+            容器里 WebUI 的一键安装会因为进程不是 root 而失败，报错里会附上在宿主机执行的那条命令。
+          </p>
+        </div>
+      </div>
+      <BrowserControlPanel />
+    </template>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { ChevronDown } from "@lucide/vue";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import {
@@ -182,14 +160,8 @@ interface LiveFrame {
   scale: number;
 }
 
-// 三档并排：名字之外还要说清「用谁的浏览器、谁能驱动」，这正是用户在这一页要
-// 回答的问题。
-const tiers = [
-  { key: "render" as const, label: "一次性无头渲染", hint: "全新 profile，用完即删", who: "群成员也能用" },
-  { key: "box" as const, label: "内置浏览器", hint: "Diana 自己的常驻浏览器", who: "只有主人" },
-  { key: "control" as const, label: "浏览器控制扩展", hint: "你自己日常用的浏览器", who: "只有主人" }
-];
-const tab = ref<(typeof tiers)[number]["key"]>("box");
+// 另外两档默认收起：主人要的通常只是内置浏览器那一个。
+const advancedOpen = ref(false);
 
 // 浏览器依赖探测复用插件页那套接口：装不装得上、装在哪，答案只该有一处。
 const sandboxedBrowserPluginID = "official.sandboxed-browser-renderer";
@@ -433,38 +405,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.browser-tiers {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+.browser-advanced-toggle {
+  align-self: flex-start;
 }
 
-.browser-tier {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  text-align: left;
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
-  border-radius: 10px;
-  background: transparent;
-  cursor: pointer;
+.browser-advanced-toggle > svg {
+  transition: transform 0.15s ease;
 }
 
-.browser-tier.active {
-  border-color: var(--accent, #7a5cff);
-  background: color-mix(in srgb, var(--accent, #7a5cff) 10%, transparent);
-}
-
-.browser-tier-name {
-  font-weight: 600;
-  font-size: 13.5px;
-}
-
-.browser-tier-hint,
-.browser-tier-who {
-  font-size: 12px;
-  opacity: 0.7;
+.browser-advanced-open {
+  transform: rotate(180deg);
 }
 
 .browser-stage {

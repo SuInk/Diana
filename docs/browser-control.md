@@ -41,7 +41,7 @@
 
 ## 部署与连接
 
-1. 在 WebUI 的「浏览器 → 浏览器控制扩展」里创建一把令牌，记下明文（只显示这一次）。
+1. 在 WebUI 的「浏览器 → 高级 → 浏览器控制扩展」里创建一把令牌，记下明文（只显示这一次）。
 2. 拿到扩展源码：源码部署直接用仓库里的 `packaging/browser-control-extension/`；容器部署在浏览器控制页点「下载扩展源码包」（也可以直接取 `GET /api/browser-control/extension.zip`），解压到本地。
 3. 在 Chrome 打开 `chrome://extensions`，开启开发者模式，「加载已解压的扩展程序」，选上一步那个目录。
 4. 复制扩展页面上的扩展 ID，回 WebUI 把 `chrome-extension://<扩展 ID>` 填进「允许的来源」。

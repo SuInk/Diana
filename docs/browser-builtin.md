@@ -16,7 +16,7 @@ Diana 自己的那个浏览器：一个常驻的 Chrome/Chromium 进程，profil
 
 打开这一档之后，`browser_open` / `browser_text` / `browser_click` / `browser_type` /
 `browser_screenshot` 这组工具会自动接到内置浏览器上，不再指向机器人配置里那个外部
-CDP 地址。只有一个前提：在 WebUI 的「浏览器 → 内置浏览器」里把它打开。机器人那一侧默认
+CDP 地址。只有一个前提：在 WebUI 的「浏览器」页里把它打开。机器人那一侧默认
 就允许，想让某台机器人彻底不碰它，把它的 `agent_browser_box_disabled` 勾上。
 
 **这组工具只有主人能用。** 它连的是带着你登录态的常驻浏览器，所以群成员的工具面里
