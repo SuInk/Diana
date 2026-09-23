@@ -1420,6 +1420,12 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ReplyPreserveLineBreaks != nil {
 		cfg.ReplyPreserveLineBreaks = copyBoolPointer(groupCfg.ReplyPreserveLineBreaks)
 	}
+	if groupCfg.ReplyLineSplitEnabled != nil {
+		cfg.ReplyLineSplitEnabled = copyBoolPointer(groupCfg.ReplyLineSplitEnabled)
+	}
+	if groupCfg.TypingDelayEnabled != nil {
+		cfg.TypingDelayEnabled = copyBoolPointer(groupCfg.TypingDelayEnabled)
+	}
 	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
 	if groupCfg.ReplyMergeConfidencePercent > 0 {
 		cfg.ReplyMergeConfidencePercent = groupCfg.ReplyMergeConfidencePercent
@@ -8281,18 +8287,22 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 		return nil
 	}
 	var out []string
-	for _, segment := range strings.Split(reply, notificationSplitMarker) {
-		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
-		segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
-		if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
-			segment = collapseReplyBlankLinesOutsideCode(segment)
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(restoreExplicitReplyLines(part))
+		pieces := []string{part}
+		if limits.LineSplit && !limits.MarkerOnly {
+			pieces = splitReplyLinesKeepingLists(part)
 		}
-		if segment == "" {
-			continue
-		}
-		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
-		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, chunk)
+		for _, segment := range pieces {
+			segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
+			if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
+				segment = collapseReplyBlankLinesOutsideCode(segment)
+			}
+			if segment == "" {
+				continue
+			}
+			// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
+			out = append(out, chunkTextByLength(segment, limits.ChunkSize)...)
 		}
 	}
 	return out
@@ -8327,6 +8337,9 @@ type chatSplitLimits struct {
 	PreserveBlankLines bool
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
+	// LineSplit 让消息内的每次换行另起一条，列表、表格和代码块整块不拆。
+	// 单条发送和闲聊插话（MarkerOnly）下不生效。
+	LineSplit bool
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
@@ -8338,6 +8351,7 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 		LineBreakMode:        configuredReplyLineBreakMode(cfg),
 		PreserveSoftNewlines: !natural,
 		PreserveBlankLines:   PlatformSupportsRichText(cfg.Platform),
+		LineSplit:            boolValue(cfg.ReplyLineSplitEnabled, false),
 	}
 }
 

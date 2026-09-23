@@ -326,6 +326,12 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 连续消息合并置信度百分比，1–100；未设置时默认 75。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 换行分条：消息内每次换行另发一条，列表、表格和代码块整块不拆；需允许多条发送。 */
+  reply_line_split_enabled?: boolean;
+  /** 模拟打字延时：连发时按下一条的字数等待，不低于分段发送间隔，最长 6 秒。 */
+  typing_delay_enabled?: boolean;
+  /** 模拟打字每字毫秒数，1–1000；留空按 100。 */
+  typing_delay_per_char_ms?: number;
   social_reply_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
@@ -553,6 +559,10 @@ export interface BotGroupConfig extends SendRetrySettings {
   /** 本群连续消息合并置信度百分比；未设置时跟随机器人。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 本群的换行分条开关；不设表示跟随机器人。 */
+  reply_line_split_enabled?: boolean;
+  /** 本群的模拟打字延时开关；不设表示跟随机器人。 */
+  typing_delay_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */

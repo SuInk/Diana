@@ -398,7 +398,27 @@
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">换行不分条；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+          <span class="hint">换行不分条（开启换行分条除外）；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-line-split">本群换行分条发送</label>
+          <AppSelect
+            id="group-line-split"
+            :model-value="editing.reply_line_split_enabled == null ? '' : editing.reply_line_split_enabled ? 'on' : 'off'"
+            :options="groupLineSplitOptions"
+            @update:model-value="(value) => { if (editing) editing.reply_line_split_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">每换一行另发一条；列表、表格和代码块整块发。本群不允许多条发送时不生效。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-typing-delay">本群模拟打字延时</label>
+          <AppSelect
+            id="group-typing-delay"
+            :model-value="editing.typing_delay_enabled == null ? '' : editing.typing_delay_enabled ? 'on' : 'off'"
+            :options="groupTypingDelayOptions"
+            @update:model-value="(value) => { if (editing) editing.typing_delay_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">连发时按下一条的字数停顿；打字速度跟随机器人设置。</span>
         </div>
         <div class="field wide">
           <label for="group-preserve-lines">本群普通段落换行</label>
@@ -839,6 +859,19 @@ const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
   { value: "on", label: "开启" },
   { value: "off", label: "关闭" }
 ]);
+// 换行分条和模拟打字默认关闭，同样按所属机器人显示继承值。
+const lineSplitDefaults = ref<Record<string, boolean>>({});
+const typingDelayDefaults = ref<Record<string, boolean>>({});
+function inheritedSwitchOptions(defaults: Record<string, boolean>): AppSelectOption[] {
+  const inherited = defaults[editing.value?.bot_profile_id || botScope.value] ?? defaults[""] ?? false;
+  return [
+    { value: "", label: `跟随机器人（${inherited ? "开启" : "关闭"}）` },
+    { value: "on", label: "开启" },
+    { value: "off", label: "关闭" }
+  ];
+}
+const groupLineSplitOptions = computed(() => inheritedSwitchOptions(lineSplitDefaults.value));
+const groupTypingDelayOptions = computed(() => inheritedSwitchOptions(typingDelayDefaults.value));
 const groupAccountSafetyOptions: AppSelectOption[] = [
   { value: "", label: "跟随机器人" },
   { value: "on", label: "开启（主动和直接回复）" },
@@ -979,6 +1012,14 @@ async function load(showFeedback = false): Promise<void> {
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
+      ]);
+      lineSplitDefaults.value = Object.fromEntries([
+        ["", current.reply_line_split_enabled ?? false],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.reply_line_split_enabled ?? false])
+      ]);
+      typingDelayDefaults.value = Object.fromEntries([
+        ["", current.typing_delay_enabled ?? false],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.typing_delay_enabled ?? false])
       ]);
       defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
       mutedReplyPauseDefaults.value = Object.fromEntries([
@@ -1326,6 +1367,8 @@ function upsert(config: BotGroupConfig): void {
       // 恢复继承时响应会省略这个字段，不能保留列表里先前的显式开关。
       natural_reply_split_enabled: config.natural_reply_split_enabled,
       reply_preserve_line_breaks: config.reply_preserve_line_breaks,
+      reply_line_split_enabled: config.reply_line_split_enabled,
+      typing_delay_enabled: config.typing_delay_enabled,
       configured: true
     };
   } else {

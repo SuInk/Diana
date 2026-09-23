@@ -766,7 +766,28 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">允许多条发送</span>
                 </label>
-                <span class="hint">仅显式分条标记另发消息；普通换行不分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+                <span class="hint">仅显式分条标记另发消息；普通换行不分条，除非开启下面的换行分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_line_split_enabled" type="checkbox" :disabled="!form.natural_reply_split_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">换行分条发送</span>
+                </label>
+                <span class="hint">消息内每换一行就另发一条；列表、表格和代码块整块发，连同引出它的那一行。需先允许多条发送；闲聊插话和本轮要求一条发送时不生效。</span>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.typing_delay_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">模拟打字延时</span>
+                </label>
+                <span class="hint">连发时按下一条的字数停顿，像边打边发。不低于分段发送间隔，单次最长 6 秒；第一条不额外等待。</span>
+              </div>
+              <div class="field">
+                <label for="bot-typing-speed">打字速度（毫秒/字）</label>
+                <input id="bot-typing-speed" v-model.number="form.typing_delay_per_char_ms" class="input" type="number" min="1" max="1000" step="1" inputmode="numeric" placeholder="留空按 100" :disabled="!form.typing_delay_enabled" />
+                <span class="hint">每个字等多久。100 约等于一秒十个字；越大越慢。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1062,7 +1083,7 @@
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
                 <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。开启模拟打字延时后作为最短停顿。</span>
               </div>
             </div>
           </section>
@@ -4083,6 +4104,8 @@ function setForm(config: BotProfileConfig): void {
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
+    reply_line_split_enabled: config.reply_line_split_enabled ?? false,
+    typing_delay_enabled: config.typing_delay_enabled ?? false,
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
@@ -4385,6 +4408,7 @@ async function save(): Promise<void> {
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...sendRetryPayload(current),
+      typing_delay_per_char_ms: Number(current.typing_delay_per_char_ms) || 0,
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value

@@ -628,6 +628,9 @@ type BotConfig struct {
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS        int             `json:"typing_delay_per_char_ms,omitempty"`
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -835,6 +838,9 @@ type ReplyRule struct {
 
 type GroupConfig struct {
 	ReplyPreserveLineBreaks *bool `json:"reply_preserve_line_breaks,omitempty"`
+	// ReplyLineSplitEnabled 的 nil 同样保留，发送时跟随所属机器人。
+	ReplyLineSplitEnabled *bool `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled    *bool `json:"typing_delay_enabled,omitempty"`
 	// Zero follows the bot's current merge threshold.
 	ReplyMergeConfidencePercent int      `json:"reply_merge_confidence_percent,omitempty"`
 	MarkedBotIDs                []string `json:"marked_bot_ids,omitempty"`
@@ -1085,6 +1091,9 @@ type ConfigPayload struct {
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS        int             `json:"typing_delay_per_char_ms,omitempty"`
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -1859,6 +1868,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendChunkIntervalMS > 5000 {
 		cfg.SendChunkIntervalMS = 5000
 	}
+	cfg.TypingDelayPerCharMS = max(0, min(maxTypingDelayPerCharMS, cfg.TypingDelayPerCharMS))
 	// 0 表示没配过，用默认；负数是明显的错值，同样退回默认。想「第一声再见就
 	// 不回」的人把它设成 1，那是配置的自由，不是这里该纠正的。
 	if cfg.PrivateClosingGrace < 0 {
@@ -2296,6 +2306,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
+		ReplyLineSplitEnabled:             copyBoolPointer(cfg.ReplyLineSplitEnabled),
+		TypingDelayEnabled:                copyBoolPointer(cfg.TypingDelayEnabled),
+		TypingDelayPerCharMS:              cfg.TypingDelayPerCharMS,
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
@@ -2514,6 +2527,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:     payload.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:         copyBoolPointer(payload.ReplyPreserveLineBreaks),
+		ReplyLineSplitEnabled:           copyBoolPointer(payload.ReplyLineSplitEnabled),
+		TypingDelayEnabled:              copyBoolPointer(payload.TypingDelayEnabled),
+		TypingDelayPerCharMS:            payload.TypingDelayPerCharMS,
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
