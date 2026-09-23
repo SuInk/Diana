@@ -2650,11 +2650,12 @@ export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery 
   if (query.person) params.set("person", query.person);
   if (query.groupID) params.set("group_id", query.groupID);
   if (query.since) params.set("since", String(query.since));
-  if (query.statuses?.length) params.set("status", query.statuses.join(","));
+  // 传了空列表是「一个都不要」，和不传（不限）不一样，所以只看有没有，不看长度。
+  if (query.statuses) params.set("status", query.statuses.join(","));
   if (query.portraitOnly) params.set("portrait", "1");
   if (query.direction) params.set("direction", query.direction);
   if (query.chat) params.set("chat", query.chat);
-  if (query.portraitFields?.length) params.set("portrait_field", query.portraitFields.join(","));
+  if (query.portraitFields) params.set("portrait_field", query.portraitFields.join(","));
   if (query.portraitSource) params.set("portrait_source", query.portraitSource);
   if (query.minConfidence) params.set("min_confidence", String(query.minConfidence));
   if (query.model) params.set("model", query.model);

@@ -131,6 +131,10 @@ func (s *SQLiteStore) ListRelationshipEvaluations(ctx context.Context, filter as
 		conditions = append(conditions, "created_at >= ?")
 		args = append(args, filter.Since.UTC().UnixNano())
 	}
+	// nil 是不限；传了空列表是「一个结果都不要」，不能退化成不限。
+	if filter.Statuses != nil && len(filter.Statuses) == 0 {
+		conditions = append(conditions, "0")
+	}
 	if len(filter.Statuses) > 0 {
 		placeholders := make([]string, 0, len(filter.Statuses))
 		for _, status := range filter.Statuses {
@@ -160,8 +164,8 @@ func (s *SQLiteStore) ListRelationshipEvaluations(ctx context.Context, filter as
 	}
 	// 画像按 JSON 片段匹配：写入时字段顺序固定、不转义中文，"field":"interest" 这样的
 	// 片段只会出现在对应栏目上。栏目名里的下划线是 LIKE 通配符，照样要转义。
-	if len(filter.PortraitFields) > 0 {
-		parts := make([]string, 0, len(filter.PortraitFields))
+	if filter.PortraitFields != nil {
+		parts := []string{"portrait_count = 0"}
 		for _, field := range filter.PortraitFields {
 			parts = append(parts, `portrait LIKE ? ESCAPE '\'`)
 			args = append(args, "%"+escapeSQLiteLike(`"field":"`+strings.TrimSpace(field)+`"`)+"%")

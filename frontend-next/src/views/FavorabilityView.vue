@@ -133,15 +133,25 @@
           </div>
         </div>
         <div class="field wide">
-          <label>结果 <span class="field-note">可多选，不选即不限</span></label>
+          <label>
+            结果 <span class="field-note">默认全选，取消的就不看</span>
+            <button type="button" class="chip-bulk" @click="draft.excludedStatuses = draft.excludedStatuses.length ? [] : STATUS_OPTIONS.map((option) => option.value)">
+              {{ draft.excludedStatuses.length ? "全选" : "全不选" }}
+            </button>
+          </label>
           <div class="filter-chips">
-            <button v-for="option in STATUS_OPTIONS" :key="option.value" type="button" class="filter-chip" :aria-pressed="draft.statuses.includes(option.value)" :class="{ active: draft.statuses.includes(option.value) }" @click="toggle(draft.statuses, option.value)">{{ option.label }}</button>
+            <button v-for="option in STATUS_OPTIONS" :key="option.value" type="button" class="filter-chip" :aria-pressed="!draft.excludedStatuses.includes(option.value)" :class="{ active: !draft.excludedStatuses.includes(option.value) }" @click="toggle(draft.excludedStatuses, option.value)">{{ option.label }}</button>
           </div>
         </div>
         <div class="field wide">
-          <label>画像栏目 <span class="field-note">可多选，记下了其中任一栏就算</span></label>
+          <label>
+            画像栏目 <span class="field-note">默认全选，取消的栏目不看；没记画像的记录不受影响</span>
+            <button type="button" class="chip-bulk" @click="draft.excludedPortraitFields = draft.excludedPortraitFields.length ? [] : portraitFields.map((field) => field.field)">
+              {{ draft.excludedPortraitFields.length ? "全选" : "全不选" }}
+            </button>
+          </label>
           <div class="filter-chips">
-            <button v-for="field in portraitFields" :key="field.field" type="button" class="filter-chip" :aria-pressed="draft.portraitFields.includes(field.field)" :class="{ active: draft.portraitFields.includes(field.field) }" @click="toggle(draft.portraitFields, field.field)">{{ field.label }}</button>
+            <button v-for="field in portraitFields" :key="field.field" type="button" class="filter-chip" :aria-pressed="!draft.excludedPortraitFields.includes(field.field)" :class="{ active: !draft.excludedPortraitFields.includes(field.field) }" @click="toggle(draft.excludedPortraitFields, field.field)">{{ field.label }}</button>
           </div>
         </div>
         <div class="field">
@@ -194,12 +204,15 @@ const PAGE_SIZE = 50;
 
 // 类型筛选。好感度变化只算分数真的动了的；到上限、把握不够这些没动的留在「全部」里，
 // 标签上写着原因。
-type KindFilter = "all" | "favorability" | "portrait";
+type KindFilter = "all" | "favorability" | "portrait" | "failed";
 const KIND_OPTIONS: { value: KindFilter; label: string }[] = [
   { value: "all", label: "全部" },
   { value: "favorability", label: "好感度变化" },
-  { value: "portrait", label: "画像生成" }
+  { value: "portrait", label: "画像生成" },
+  { value: "failed", label: "评估失败" }
 ];
+// 「评估失败」一档收的是没评成的两种：调用失败，和排满被跳过。
+const FAILED_STATUSES: RelationshipEvaluationStatus[] = ["failed", "skipped"];
 
 const actionsHost = inject(recordsActionsHost, ref<HTMLElement | null>(null));
 
@@ -255,15 +268,17 @@ interface AdvancedFilters {
   chat: "" | "group" | "private";
   range: RangeFilter;
   direction: "" | "up" | "down" | "changed" | "none";
-  statuses: RelationshipEvaluationStatus[];
-  portraitFields: string[];
+  // 多选项记的是「取消了哪些」：默认全选，取消哪个就不看哪个，全取消就一条都不看。
+  // 记取消的而不是选中的，栏目表晚一步从接口回来也不影响「默认全选」。
+  excludedStatuses: RelationshipEvaluationStatus[];
+  excludedPortraitFields: string[];
   portraitSource: "" | "stated" | "inferred";
   minConfidence: number;
   model: string;
 }
 
 function emptyAdvanced(): AdvancedFilters {
-  return { person: "", group: "", chat: "", range: 0, direction: "", statuses: [], portraitFields: [], portraitSource: "", minConfidence: 0, model: "" };
+  return { person: "", group: "", chat: "", range: 0, direction: "", excludedStatuses: [], excludedPortraitFields: [], portraitSource: "", minConfidence: 0, model: "" };
 }
 
 // 数的是生效了几项，按钮上显示「高级筛选（N）」。
@@ -274,8 +289,8 @@ function countActive(filters: AdvancedFilters): number {
     filters.chat !== "",
     filters.range !== 0,
     filters.direction !== "",
-    filters.statuses.length > 0,
-    filters.portraitFields.length > 0,
+    filters.excludedStatuses.length > 0,
+    filters.excludedPortraitFields.length > 0,
     filters.portraitSource !== "",
     filters.minConfidence > 0,
     filters.model.trim() !== ""
@@ -320,9 +335,11 @@ function query(beforeID = 0): RelationshipEvaluationsQuery {
     since: rangeSince(applied.range),
     // 顶上「好感度变化」一档就是「分数有变化」；弹窗里选了更具体的方向时以弹窗为准。
     direction: applied.direction || (kind === "favorability" ? "changed" : ""),
-    statuses: applied.statuses.length > 0 ? [...applied.statuses] : undefined,
+    statuses: selectedStatuses(kind),
     portraitOnly: kind === "portrait",
-    portraitFields: [...applied.portraitFields],
+    portraitFields: applied.excludedPortraitFields.length > 0
+      ? portraitFields.value.map((field) => field.field).filter((field) => !applied.excludedPortraitFields.includes(field))
+      : undefined,
     portraitSource: applied.portraitSource,
     minConfidence: applied.minConfidence,
     model: applied.model.trim(),
@@ -331,8 +348,21 @@ function query(beforeID = 0): RelationshipEvaluationsQuery {
   };
 }
 
+// 结果条件由顶上一档和弹窗里的取消项叠加：没取消过、也不在「评估失败」档时不传（不限）；
+// 否则传剩下还选着的，可能是空列表（一个都不要）。
+function selectedStatuses(kind: KindFilter): RelationshipEvaluationStatus[] | undefined {
+  if (kind !== "failed" && applied.excludedStatuses.length === 0) return undefined;
+  return STATUS_OPTIONS.map((option) => option.value).filter(
+    (value) => (kind !== "failed" || FAILED_STATUSES.includes(value)) && !applied.excludedStatuses.includes(value)
+  );
+}
+
 function copyFilters(target: AdvancedFilters, source: AdvancedFilters): void {
-  Object.assign(target, { ...source, statuses: [...source.statuses], portraitFields: [...source.portraitFields] });
+  Object.assign(target, {
+    ...source,
+    excludedStatuses: [...source.excludedStatuses],
+    excludedPortraitFields: [...source.excludedPortraitFields]
+  });
 }
 
 function openAdvanced(): void {
@@ -539,6 +569,18 @@ onMounted(() => {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.chip-bulk {
+  margin-left: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 400;
+  cursor: pointer;
 }
 
 /* 重置靠左，和取消、应用分开：它清的是弹窗里的草稿，不是关掉弹窗。 */

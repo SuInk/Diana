@@ -55,6 +55,10 @@ func TestRelationshipEvaluationsEndpoint(t *testing.T) {
 	if loose := get("profile=bot-a&direction=sideways&chat=x&portrait_field=nope&portrait_source=x&min_confidence=7"); len(loose.Evaluations) != 4 {
 		t.Fatalf("unknown filter values must be ignored: %#v", loose)
 	}
+	// 多选全取消：传了空值是一个都不要，不传才是不限。
+	if none := get("profile=bot-a&status="); len(none.Evaluations) != 0 {
+		t.Fatalf("empty status selection must match nothing: %#v", none)
+	}
 	first := get("profile=bot-a&limit=2")
 	if len(first.Evaluations) != 2 || first.NextBeforeID != first.Evaluations[1].ID {
 		t.Fatalf("first page = %#v", first)

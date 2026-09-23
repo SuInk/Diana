@@ -149,7 +149,8 @@ func TestRelationshipEvaluationsSearchEverythingAndSince(t *testing.T) {
 	}
 }
 
-// 高级筛选的每一项：好感度方向、群聊私聊、画像栏目与来源、最低置信度、模型。
+// 高级筛选的每一项：好感度方向、群聊私聊、画像栏目与来源、最低置信度、模型；
+// 多选项传空列表是「一个都不要」，不是不限。
 func TestRelationshipEvaluationsAdvancedFilters(t *testing.T) {
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
@@ -192,7 +193,11 @@ func TestRelationshipEvaluationsAdvancedFilters(t *testing.T) {
 		{"none", assistant.RelationshipEvaluationFilter{Direction: assistant.RelationshipDirectionNone}, "flat"},
 		{"private", assistant.RelationshipEvaluationFilter{ChatKind: assistant.RelationshipChatPrivate}, "flat"},
 		{"group", assistant.RelationshipEvaluationFilter{ChatKind: assistant.RelationshipChatGroup}, "down,up"},
-		{"portrait field", assistant.RelationshipEvaluationFilter{PortraitFields: []string{"interest", "residence"}}, "flat"},
+		// 栏目是「默认全选、取消哪栏不看哪栏」：没记画像的 down 留着，只记了职业的 up 被排除。
+		{"portrait field", assistant.RelationshipEvaluationFilter{PortraitFields: []string{"interest", "residence"}}, "flat,down"},
+		{"no portrait field selected", assistant.RelationshipEvaluationFilter{PortraitFields: []string{}}, "down"},
+		{"no status selected", assistant.RelationshipEvaluationFilter{Statuses: []string{}}, ""},
+		{"status subset", assistant.RelationshipEvaluationFilter{Statuses: []string{assistant.RelationshipEvaluationLowConfidence}}, "flat"},
 		{"portrait source", assistant.RelationshipEvaluationFilter{PortraitSource: "stated"}, "up"},
 		{"min confidence", assistant.RelationshipEvaluationFilter{MinConfidence: 0.75}, "down,up"},
 		{"model", assistant.RelationshipEvaluationFilter{Model: "gpt"}, "flat,up"},

@@ -1082,6 +1082,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === "/api/assistant/favorability/evaluations") {
     const statuses = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
+    const statusGiven = url.searchParams.has("status");
+    const fieldsGiven = url.searchParams.has("portrait_field");
     const userID = url.searchParams.get("user_id") ?? "";
     const search = (url.searchParams.get("q") ?? "").trim();
     const person = (url.searchParams.get("person") ?? "").trim();
@@ -1101,7 +1103,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       !direction || (direction === "up" && delta > 0) || (direction === "down" && delta < 0) ||
       (direction === "changed" && delta !== 0) || (direction === "none" && delta === 0);
     const evaluations = demoRelationshipEvaluations.filter((item) =>
-      (statuses.length === 0 || statuses.includes(item.status)) &&
+      (!statusGiven || statuses.includes(item.status)) &&
       (!userID || item.user_id === userID) &&
       (!search || searchable(item).includes(search)) &&
       (!person || item.user_id.includes(person) || (item.sender_name ?? "").includes(person)) &&
@@ -1110,7 +1112,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       (!portraitOnly || hasPortrait(item)) &&
       directionMatches(item.applied_delta) &&
       (!chat || (chat === "group") === Boolean(item.group_id)) &&
-      (fields.length === 0 || (item.portrait ?? []).some((trait) => fields.includes(trait.field))) &&
+      (!fieldsGiven || !hasPortrait(item) || (item.portrait ?? []).some((trait) => fields.includes(trait.field))) &&
       (!source || (item.portrait ?? []).some((trait) => trait.source === source)) &&
       item.confidence >= minConfidence &&
       (!model || (item.model ?? "").includes(model)));

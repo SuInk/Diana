@@ -69,16 +69,24 @@ func (h *BotHandler) listRelationshipEvaluations(c *gin.Context) {
 	for _, spec := range assistant.PortraitFieldSpecs() {
 		knownFields[string(spec.Field)] = true
 	}
+	// 多选项「没传」是不限，「传了空值」是一个都不要：页面上是默认全选、取消哪个
+	// 就不看哪个，全取消就该什么都没有，不能当成不限。
 	var portraitFields []string
-	for _, field := range strings.Split(c.Query("portrait_field"), ",") {
-		if field = strings.TrimSpace(field); knownFields[field] {
-			portraitFields = append(portraitFields, field)
+	if _, present := c.GetQuery("portrait_field"); present {
+		portraitFields = []string{}
+		for _, field := range strings.Split(c.Query("portrait_field"), ",") {
+			if field = strings.TrimSpace(field); knownFields[field] {
+				portraitFields = append(portraitFields, field)
+			}
 		}
 	}
 	var statuses []string
-	for _, status := range strings.Split(c.Query("status"), ",") {
-		if status = strings.TrimSpace(status); relationshipEvaluationStatuses[status] {
-			statuses = append(statuses, status)
+	if _, present := c.GetQuery("status"); present {
+		statuses = []string{}
+		for _, status := range strings.Split(c.Query("status"), ",") {
+			if status = strings.TrimSpace(status); relationshipEvaluationStatuses[status] {
+				statuses = append(statuses, status)
+			}
 		}
 	}
 	// 多取一条判断还有没有下一页，省一次计数查询。

@@ -68,7 +68,8 @@ type RelationshipEvaluationPortrait struct {
 	Source string `json:"source,omitempty"`
 }
 
-// RelationshipEvaluationFilter 是好感与画像列表的筛选条件。Statuses 为空表示不限；
+// RelationshipEvaluationFilter 是好感与画像列表的筛选条件。Statuses 为 nil 表示不限，
+// 非 nil 的空切片表示一个结果都不要；
 // HasPortrait 只要记下了画像的；Query 什么都搜（人、群、原话、原因、画像、模型、
 // 失败原因）；Person 按 QQ 号或昵称模糊找人；Since 只要这之后的；BeforeID 用来
 // 往前翻页，只返回 ID 更小的记录。其余几项见各字段。
@@ -85,7 +86,9 @@ type RelationshipEvaluationFilter struct {
 	Direction string
 	// ChatKind 是 group 或 private，按有没有群号区分。
 	ChatKind string
-	// PortraitFields 只要记下了这些栏目之一的；PortraitSource 只要有这种来源的画像。
+	// PortraitFields 为 nil 表示不限；非 nil 时只留没记画像的，和记下了其中任一栏的
+	// ——页面上是「默认全选、取消哪栏就不看哪栏」，没记画像的记录不受栏目影响。
+	// PortraitSource 只要有这种来源的画像。
 	PortraitFields []string
 	PortraitSource string
 	// MinConfidence 只要置信度不低于这个值的（0 到 1）。
