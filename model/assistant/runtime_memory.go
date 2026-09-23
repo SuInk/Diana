@@ -183,6 +183,8 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	profile, err := store.UpdateUserMemory(ctx, event, update)
 	if err != nil {
 		log.Printf("diana user memory update failed: %v", err)
+		r.recordBackgroundFailure("user_memory_write_failed", "人员档案写入失败，这次的好感度、画像或互动次数没有记上", "", err,
+			map[string]any{"user_id": event.UserID, "group_id": event.GroupID, "message_id": event.MessageID})
 		return UserMemoryProfile{}, false
 	}
 	return profile, true
