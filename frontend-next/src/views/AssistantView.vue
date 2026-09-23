@@ -1006,6 +1006,22 @@
               <div class="field">
                 <label for="bot-retry">发送重试次数（1–5）</label>
                 <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
+                <span class="hint">单次发送内的快速重试，间隔不到一秒。群消息只发一次，失败后交给下面的退避重发。</span>
+              </div>
+              <div v-for="field in sendRetryFields" :key="field.key" class="field">
+                <label :for="`bot-${field.key}`">{{ field.label }}</label>
+                <input
+                  :id="`bot-${field.key}`"
+                  v-model.number="form[field.key]"
+                  class="input"
+                  type="number"
+                  :min="field.min"
+                  :max="field.max"
+                  step="1"
+                  inputmode="numeric"
+                  :placeholder="`默认 ${field.fallback}`"
+                />
+                <span class="hint">{{ field.hint }}</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -2016,6 +2032,7 @@ import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff,
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { formatClock } from "../format";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
 import {
   deleteBotProfile,
   generatePersona,
@@ -4260,6 +4277,11 @@ async function save(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
+  const sendRetryError = sendRetryValidationError(current);
+  if (sendRetryError) {
+    toastError(sendRetryError);
+    return;
+  }
   for (const row of [...modelRoleRows, ...purposeRoleRows]) {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
@@ -4321,6 +4343,7 @@ async function save(): Promise<void> {
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
+      ...sendRetryPayload(current),
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value

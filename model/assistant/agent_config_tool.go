@@ -79,6 +79,11 @@ type dianaBotConfigSnapshot struct {
 	RecurringFailureAlertThreshold  int                       `json:"recurring_failure_alert_threshold"`
 	PrivateClosingGrace             int                       `json:"private_closing_grace"`
 	InboundGroupConcurrency         int                       `json:"inbound_group_concurrency"`
+	SendBackoffInitialSeconds       int                       `json:"send_backoff_initial_seconds"`
+	SendBackoffMaxSeconds           int                       `json:"send_backoff_max_seconds"`
+	SendFailureWindowMinutes        int                       `json:"send_failure_window_minutes"`
+	SendDropCooldownMinutes         int                       `json:"send_drop_cooldown_minutes"`
+	InboundRetryMaxAttempts         int                       `json:"inbound_retry_max_attempts"`
 	InboundPrivateConcurrency       int                       `json:"inbound_private_concurrency"`
 	PromptInjectTime                bool                      `json:"prompt_inject_time"`
 	PromptInjectPlaintextRules      bool                      `json:"prompt_inject_plaintext_rules"`
@@ -322,6 +327,11 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		PromptInjectTime:                boolValue(cfg.PromptInjectTime, true),
 		PromptInjectPlaintextRules:      boolValue(cfg.PromptInjectPlaintextRules, true),
 		PromptInjectGroupSender:         boolValue(cfg.PromptInjectGroupSender, true),
+		SendBackoffInitialSeconds:       cfg.SendBackoffInitialSeconds,
+		SendBackoffMaxSeconds:           cfg.SendBackoffMaxSeconds,
+		SendFailureWindowMinutes:        cfg.SendFailureWindowMinutes,
+		SendDropCooldownMinutes:         cfg.SendDropCooldownMinutes,
+		InboundRetryMaxAttempts:         cfg.InboundRetryMaxAttempts,
 		PromptChineseSlangHint:          boolValue(cfg.PromptChineseSlangHint, true),
 		PromptChineseSlangChars:         len([]rune(cfg.PromptChineseSlangText)),
 		PromptPlaintextRulesChars:       len([]rune(cfg.PromptPlaintextRulesText)),

@@ -3,6 +3,7 @@
 
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
+import type { SendRetrySettings } from "./send-retry-settings";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
@@ -128,7 +129,8 @@ export interface MessageRelayPair {
   endpoints: MessageRelayEndpoint[];
 }
 
-export interface BotProfileConfig {
+/** 群退避与入站重跑参数见 SendRetrySettings；机器人级 0 或留空按默认值。 */
+export interface BotProfileConfig extends SendRetrySettings {
   connection_profile_id?: string;
   persona_id?: string;
   custom_persona?: Persona;
@@ -504,7 +506,8 @@ export interface ResolverDependencyInstallResponse {
   installer?: string;
 }
 
-export interface BotGroupConfig {
+/** 分群的 SendRetrySettings 留空跟随机器人。 */
+export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
   bot_profile_id?: string;

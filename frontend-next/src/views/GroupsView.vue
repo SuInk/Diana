@@ -448,6 +448,21 @@
             inputmode="numeric"
           />
         </div>
+        <div v-for="field in sendRetryFields" :key="field.key" class="field">
+          <label :for="`group-${field.key}`">{{ field.label }}</label>
+          <input
+            :id="`group-${field.key}`"
+            v-model.number="editing[field.key]"
+            class="input"
+            type="number"
+            :min="field.min"
+            :max="field.max"
+            step="1"
+            inputmode="numeric"
+            :placeholder="`跟随机器人（${botSendRetryValue(field)}）`"
+          />
+          <span class="hint">{{ field.hint }}</span>
+        </div>
         <div class="field wide">
           <label>本群回复时间与屏蔽账号</label>
           <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
@@ -574,6 +589,7 @@ import { participationFromConfig, participationLevelLabel, participationPresetNa
 import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
 
 // 空值代表「跟随全局」，与后端把空字符串当成未覆盖的约定一致。
 const groupTriggerModeOptions: AppSelectOption[] = [
@@ -769,6 +785,13 @@ const defaultNaturalReplySplitEnabled = computed(() =>
     ?? naturalReplySplitDefaults.value[""]
     ?? true
 );
+// 分群的重发参数留空跟随机器人，占位符显示机器人当前生效的值。
+const sendRetryDefaults = ref<Record<string, SendRetrySettings>>({});
+function botSendRetryValue(field: SendRetryField): number {
+  const bot = sendRetryDefaults.value[editing.value?.bot_profile_id || botScope.value] ?? sendRetryDefaults.value[""];
+  const value = Number(bot?.[field.key]);
+  return Number.isInteger(value) && value > 0 ? value : field.fallback;
+}
 const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
   { value: "", label: `跟随机器人（${defaultNaturalReplySplitEnabled.value ? "开启" : "关闭"}）` },
   { value: "on", label: "开启" },
@@ -916,6 +939,7 @@ async function load(showFeedback = false): Promise<void> {
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
       ]);
       defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
+      sendRetryDefaults.value = Object.fromEntries([["", current], ...(config.profiles ?? []).map((profile) => [profile.id, profile])]);
       defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
@@ -962,6 +986,7 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
+  withUnsetSendRetryCleared(config);
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
@@ -1202,10 +1227,16 @@ async function saveEditing(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
+  const sendRetryError = sendRetryValidationError(current);
+  if (sendRetryError) {
+    toastError(sendRetryError);
+    return;
+  }
   saving.value = true;
   try {
     const payload: BotGroupConfig = {
       ...current,
+      ...sendRetryPayload(current),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,

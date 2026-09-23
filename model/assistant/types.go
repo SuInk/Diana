@@ -565,10 +565,12 @@ type BotConfig struct {
 	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
 	ErrorReplyPrefix         string               `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts        int                  `json:"send_retry_attempts,omitempty"`
-	SendChunkIntervalMS      int                  `json:"send_chunk_interval_ms,omitempty"`
-	AutoImageDescription     *bool                `json:"auto_image_description,omitempty"`
-	AutoVideoPreprocess      *bool                `json:"auto_video_preprocess,omitempty"`
-	ModelRoles               map[string]ModelRole `json:"model_roles,omitempty"`
+	// 群退避与入站重跑的五个参数，见 send_retry_policy.go。
+	sendRetrySettings
+	SendChunkIntervalMS  int                  `json:"send_chunk_interval_ms,omitempty"`
+	AutoImageDescription *bool                `json:"auto_image_description,omitempty"`
+	AutoVideoPreprocess  *bool                `json:"auto_video_preprocess,omitempty"`
+	ModelRoles           map[string]ModelRole `json:"model_roles,omitempty"`
 	// PrivateClosingGrace 是私聊里「对方在收尾」时仍然照常回答的轮数。
 	// 第一声再见就闭嘴不像人：正常人会接一两句「拜拜」再停。到这个数之后，
 	// 候选回复只是又一句告别时就不再发出去。明确要求停止不受它约束，当场生效。
@@ -889,6 +891,8 @@ type GroupConfig struct {
 	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
 	// 本群的补充判据，留空跟随机器人级。
 	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
+	// 本群的发送退避和入站重跑参数，每项 0 表示跟随机器人。
+	sendRetrySettings
 	// ExtensionAccess 按群覆盖 MCP / Skill 的开放范围，键是扩展 ID，没写的跟随
 	// 机器人那一档。群管理员只能往严的方向改。
 	ExtensionAccess        map[string]GroupExtensionAccess `json:"extension_access,omitempty"`
@@ -1014,24 +1018,25 @@ type ConfigPayload struct {
 	SystemPrompt                 string           `json:"system_prompt,omitempty"`
 	// Soul 是品格层，只在机器人级存在：分群配置里没有这个字段，所以某个群改不了
 	// 价值观，只能改说话方式（见 persona_soul.go 开头）。
-	Soul                           *PersonaSoul         `json:"soul,omitempty"`
-	PersonaID                      string               `json:"persona_id,omitempty"`
-	CustomPersona                  *Persona             `json:"custom_persona,omitempty"`
-	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
-	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled       *bool                `json:"action_description_enabled,omitempty"`
-	PersonaMode                    PersonaMode          `json:"persona_mode,omitempty"`
-	SelfReference                  string               `json:"self_reference,omitempty"`
-	SentenceEnders                 string               `json:"sentence_enders,omitempty"`
-	DebugModeEnabled               bool                 `json:"debug_mode_enabled,omitempty"`
-	ReplyReferenceMode             ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
-	ModelDisclosure                ModelDisclosure      `json:"model_disclosure,omitempty"`
-	RepositoryDisclosure           RepositoryDisclosure `json:"repository_disclosure,omitempty"`
-	MentionUserMode                ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
-	MarkdownToPlain                *bool                `json:"markdown_to_plain,omitempty"`
-	ErrorNotifyEnabled             *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix               string               `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts              int                  `json:"send_retry_attempts,omitempty"`
+	Soul                     *PersonaSoul         `json:"soul,omitempty"`
+	PersonaID                string               `json:"persona_id,omitempty"`
+	CustomPersona            *Persona             `json:"custom_persona,omitempty"`
+	ResponseMode             ResponseMode         `json:"response_mode,omitempty"`
+	ReplyStyle               ReplyStyle           `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled *bool                `json:"action_description_enabled,omitempty"`
+	PersonaMode              PersonaMode          `json:"persona_mode,omitempty"`
+	SelfReference            string               `json:"self_reference,omitempty"`
+	SentenceEnders           string               `json:"sentence_enders,omitempty"`
+	DebugModeEnabled         bool                 `json:"debug_mode_enabled,omitempty"`
+	ReplyReferenceMode       ReplyDecorationMode  `json:"reply_reference_mode,omitempty"`
+	ModelDisclosure          ModelDisclosure      `json:"model_disclosure,omitempty"`
+	RepositoryDisclosure     RepositoryDisclosure `json:"repository_disclosure,omitempty"`
+	MentionUserMode          ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
+	MarkdownToPlain          *bool                `json:"markdown_to_plain,omitempty"`
+	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
+	ErrorReplyPrefix         string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts        int                  `json:"send_retry_attempts,omitempty"`
+	sendRetrySettings
 	RecurringFailureAlertThreshold *int                 `json:"recurring_failure_alert_threshold,omitempty"`
 	SendChunkIntervalMS            int                  `json:"send_chunk_interval_ms,omitempty"`
 	PrivateClosingGrace            int                  `json:"private_closing_grace,omitempty"`
@@ -1173,6 +1178,7 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
 	cfg.ReplyMergeConfidencePercent = max(0, min(100, cfg.ReplyMergeConfidencePercent))
+	cfg.sendRetrySettings = cfg.sendRetrySettings.clamped()
 	cfg.MarkedBotIDs = cleanStrings(append([]string(nil), cfg.MarkedBotIDs...))
 	cfg.Participation = copyParticipation(cfg.Participation)
 	defaults := DefaultGroupConfig(groupID, base)
@@ -1814,6 +1820,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendRetryAttempts > 5 {
 		cfg.SendRetryAttempts = 5
 	}
+	cfg.sendRetrySettings = cfg.sendRetrySettings.clamped().withFallback(defaultSendRetrySettings())
 	// 只挡明显的错值：负数和 0 一样是不报警，上限挡住「连续失败几百次才吭声」这种
 	// 配置——真到那个量级，订阅早就该当成坏了，而不是继续安静地重试。
 	if cfg.RecurringFailureAlertThreshold != nil {
@@ -2272,6 +2279,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxReplyChars:                     cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
+		sendRetrySettings:                 cfg.sendRetrySettings,
 		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
@@ -2490,6 +2498,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,
+		sendRetrySettings:               payload.sendRetrySettings,
 		DirectReplyChunkSize:            payload.DirectReplyChunkSize,
 		ForwardReplyThreshold:           payload.ForwardReplyThreshold,
 		RecallReplyMode:                 payload.RecallReplyMode,

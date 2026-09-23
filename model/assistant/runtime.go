@@ -1448,6 +1448,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria) != "" {
 		cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria)
 	}
+	cfg.sendRetrySettings = groupCfg.sendRetrySettings.withFallback(cfg.sendRetrySettings)
 	if groupCfg.ReplyGate != nil {
 		// 门槛整份用群里的（界面上那个「为本群单独设置回复规则」开关就是这个意思），
 		// 但名单要并上机器人级的：否则任何一个群开了自定义门禁，全局黑名单在那个
