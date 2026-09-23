@@ -541,6 +541,8 @@ type Runtime struct {
 	agentResidencyCatalog   map[string][]AgentResidencyEntry
 	// agentFootprints 记最近一轮 Agent 的常驻开销，键见 agentFootprintKey。
 	agentFootprints map[string]agentFootprint
+	// backgroundLogThrottle 给后台事件的运行日志节流，见 recordBackgroundFailure。
+	backgroundLogThrottle logThrottle
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。

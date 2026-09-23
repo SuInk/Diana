@@ -129,6 +129,7 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 				return resp, err
 			}
 			log.Printf("diana llm context overflow, retrying with max_context_tokens=%d", shrunk.MaxContextTokens)
+			reportLLMEventFromContext(ctx, llmEvent{Kind: llmEventContextShrink, Model: req.Model, MaxContextTokens: shrunk.MaxContextTokens, Err: err})
 			req = shrunk
 			shrinkAttempts++
 			attempt--
@@ -236,6 +237,7 @@ type profileFailoverLLMProvider struct {
 	wrapGroupError bool
 	group          string
 	current        int
+	report         llmEventReporter
 	clients        []LLMProvider
 	clientErrors   []error
 	clientLoaded   []bool
@@ -256,6 +258,7 @@ type registryFailoverLLMProvider struct {
 	wrapGroupError bool
 	group          string
 	current        int
+	report         llmEventReporter
 }
 
 func newRegistryFailoverLLMProvider(registry *llm.ProviderRegistry, profiles []llm.Profile, retryTransient bool, wrapGroupError bool) (*registryFailoverLLMProvider, error) {
@@ -289,6 +292,7 @@ func newRegistryFailoverLLMProvider(registry *llm.ProviderRegistry, profiles []l
 func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	ctx = withLLMEventReporter(ctx, p.report)
 
 	var lastErr error
 	for offset := 0; offset < len(p.candidates); offset++ {
@@ -321,6 +325,7 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 				next.profile.ID,
 				lastErr,
 			)
+			p.reportFailover(candidate.profile, next.profile, false, lastErr)
 		}
 	}
 	if p.wrapGroupError && len(p.candidates) > 1 {
@@ -345,18 +350,21 @@ func (p *registryFailoverLLMProvider) skipRejectedCandidate(cause error) bool {
 	from := p.candidates[p.current]
 	p.current = (p.current + 1) % len(p.candidates)
 	to := p.candidates[p.current]
+	annotated := annotateLLMProviderAttempt(cause, from.profile, llm.GenerateRequest{})
 	log.Printf(
 		"diana llm stream provider failover: group=%q model=%q from=%q to=%q err=%v",
 		p.group,
 		from.profile.Config.Model,
 		from.profile.ID,
 		to.profile.ID,
-		annotateLLMProviderAttempt(cause, from.profile, llm.GenerateRequest{}),
+		annotated,
 	)
+	p.reportFailover(from.profile, to.profile, true, annotated)
 	return true
 }
 
 func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.GenerateRequest) (<-chan llm.ChatEvent, error) {
+	ctx = withLLMEventReporter(ctx, p.report)
 	p.mu.Lock()
 	start := p.current
 	p.mu.Unlock()
@@ -415,12 +423,20 @@ func (p *registryFailoverLLMProvider) Stream(ctx context.Context, req llm.Genera
 				next.profile.ID,
 				lastErr,
 			)
+			p.reportFailover(candidate.profile, next.profile, true, lastErr)
 		}
 	}
 	if p.wrapGroupError && len(p.candidates) > 1 {
 		return nil, fmt.Errorf("diana: llm streams in group %q are unavailable: %w", p.group, lastErr)
 	}
 	return nil, lastErr
+}
+
+// reportFailover 把一次切档交给运行时写进运行日志。
+func (p *registryFailoverLLMProvider) reportFailover(from, to llm.Profile, stream bool, err error) {
+	if p.report != nil {
+		p.report(llmEvent{Kind: llmEventFailover, Group: p.group, Model: from.Config.Model, From: from.ID, To: to.ID, Stream: stream, Err: err})
+	}
 }
 
 func newProfileFailoverLLMProvider(
@@ -453,6 +469,7 @@ func newProfileFailoverLLMProvider(
 func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	ctx = withLLMEventReporter(ctx, p.report)
 
 	var lastErr error
 	for offset := 0; offset < len(p.profiles); offset++ {
@@ -481,6 +498,11 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		}
 		if !failover {
 			return nil, err
+		}
+		// 这条路径以前连终端日志都没有：换了档、用的是备用模型，哪里都看不出来。
+		if p.report != nil && offset+1 < len(p.profiles) {
+			from, to := p.profiles[index], p.profiles[(p.current+offset+1)%len(p.profiles)]
+			p.report(llmEvent{Kind: llmEventFailover, Group: p.group, Model: from.Config.Model, From: from.ID, To: to.ID, Err: err})
 		}
 	}
 	if lastErr == nil {
