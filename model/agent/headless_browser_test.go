@@ -532,3 +532,52 @@ func TestObservationDeadlineLeavesRoomForTheFinalCapture(t *testing.T) {
 		t.Fatalf("无超时的 ctx 被动了：%s", got)
 	}
 }
+
+// 最短观察窗（默认 8 秒）是为了接住「过几秒才跳转、才补内容」的页面，代价是连
+// 一张静态页也要等满 8 秒——工具总预算才 60 秒。但「过几秒才动」是能直接看出来
+// 的：延迟跳转、延迟渲染都得先排个 setTimeout/setInterval。没有任何已排期的回调、
+// 文档也 complete、网络也静了，就没什么可等的了。
+func TestStaticPageDoesNotWaitOutTheObservationWindow(t *testing.T) {
+	settledProbe := browserDOMProbe{ReadyState: "complete", Title: "静态页", TextLength: 120, Instrumented: true}
+	quiet := browserActivitySnapshot{Loading: false, PendingRequests: 0}
+
+	if !nothingLeftToWaitFor(settledProbe, quiet, true, true) {
+		t.Fatal("页面已经没有后手了，还在空等")
+	}
+
+	// 排着定时器：延迟跳转的站点就是这样，必须等满观察窗。
+	pending := settledProbe
+	pending.PendingTimers = 1
+	if nothingLeftToWaitFor(pending, quiet, true, true) {
+		t.Fatal("还排着回调就早退了，会拿到半成品")
+	}
+
+	// 采不到这个信号（脚本没注进去、页面自己换掉了 setTimeout）：退回按时间等，
+	// 宁可慢也不要拿半成品。
+	blind := settledProbe
+	blind.Instrumented = false
+	if nothingLeftToWaitFor(blind, quiet, true, true) {
+		t.Fatal("没采到定时器信号却当成没有后手")
+	}
+
+	// 文档还没 complete、还有在途请求、还在加载：都不算稳。
+	loading := settledProbe
+	loading.ReadyState = "interactive"
+	if nothingLeftToWaitFor(loading, quiet, true, true) {
+		t.Fatal("文档还没 complete 就早退了")
+	}
+	if nothingLeftToWaitFor(settledProbe, browserActivitySnapshot{PendingRequests: 2}, true, true) {
+		t.Fatal("还有在途请求就早退了")
+	}
+	if nothingLeftToWaitFor(settledProbe, browserActivitySnapshot{Loading: true}, true, true) {
+		t.Fatal("页面还在加载就早退了")
+	}
+
+	// 内容本身还没稳下来，早退更不行。
+	if nothingLeftToWaitFor(settledProbe, quiet, false, true) {
+		t.Fatal("内容没稳就早退了")
+	}
+	if nothingLeftToWaitFor(settledProbe, quiet, true, false) {
+		t.Fatal("网络没静就早退了")
+	}
+}

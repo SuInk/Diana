@@ -42,6 +42,10 @@ type browserDOMProbe struct {
 	TextLength        int    `json:"text_length"`
 	SemanticSignature string `json:"semantic_signature"`
 	DOMChanges        int64  `json:"dom_changes"`
+	// PendingTimers 是页面还排着多少个没烧完的定时器；Instrumented 说明这个数
+	// 到底有没有采到（脚本注入失败、页面自己换掉了 setTimeout 都会采不到）。
+	PendingTimers int  `json:"pending_timers"`
+	Instrumented  bool `json:"instrumented"`
 }
 
 func (p browserDOMProbe) meaningful() bool {
@@ -228,7 +232,7 @@ func (r *renderReadiness) observe(now time.Time, probe browserDOMProbe, activity
 		(probe.ReadyState == "loading" && stableFor >= loadingStableWindow)
 	contentStable := documentReady && probe.meaningful() && navigationQuiet && stableFor >= cfg.StabilityWindow
 	settled := contentStable && ((!activity.Loading && networkQuiet) || semanticOverride)
-	minimumObserved := now.Sub(r.started) >= cfg.VirtualTimeBudget
+	minimumObserved := now.Sub(r.started) >= cfg.VirtualTimeBudget || nothingLeftToWaitFor(probe, activity, settled, networkQuiet)
 
 	reason := "waiting_for_dom"
 	switch {
@@ -682,6 +686,30 @@ func withFinalCaptureReserve(ctx context.Context, deadline time.Time, timeout ti
 	return deadline
 }
 
+// nothingLeftToWaitFor 判断这个页面是不是确凿地没有后手了，有就不必等满最短
+// 观察窗。
+//
+// 最短观察窗（VirtualTimeBudget，默认 8 秒）存在的理由只有一个：页面可能过几秒
+// 才跳转、才补内容，早收手就会拿到半成品。代价是连一张静态页也要等满 8 秒，
+// 而工具总预算才 60 秒。
+//
+// 但「过几秒才动」这件事是可以直接看出来的：延迟跳转、延迟渲染都要先排个
+// setTimeout/setInterval。注入脚本把没烧完的回调数记下来，这里连同「文档已
+// complete、网络静了、DOM 稳了、没有在途请求」一起看——全都成立时，页面确实
+// 没有任何已排期的后续动作，再等下去也只是空耗。
+//
+// 采不到这个信号（脚本没注进去、页面自己换掉了 setTimeout）就退回按时间等，
+// 宁可慢也不要拿半成品。
+func nothingLeftToWaitFor(probe browserDOMProbe, activity browserActivitySnapshot, settled, networkQuiet bool) bool {
+	return settled &&
+		networkQuiet &&
+		probe.Instrumented &&
+		probe.PendingTimers == 0 &&
+		probe.ReadyState == "complete" &&
+		!activity.Loading &&
+		activity.PendingRequests == 0
+}
+
 // probeAction 是一次 DOM 探针失败之后该怎么办。
 type probeAction int
 
@@ -731,12 +759,54 @@ func transientBrowserEvaluationError(err error) bool {
 }
 
 const browserMutationObserverScript = `(function () {
-  const state = { mutations: 0, lastMutationAt: Date.now() };
+  const state = { mutations: 0, lastMutationAt: Date.now(), pendingTimers: 0, instrumented: false };
   Object.defineProperty(globalThis, "__dianaRenderState", {
     configurable: false,
     enumerable: false,
     value: state
   });
+  // 记还有多少「已排期但还没烧完」的回调。页面靠 setTimeout 延迟跳转、延迟补内容
+  // 是最常见的一类慢，光看 DOM 和网络都是静的，看这个才知道它还有后手。
+  // setInterval 只要没 clear 就一直算挂着。
+  try {
+    const timeout = globalThis.setTimeout;
+    const interval = globalThis.setInterval;
+    const clearT = globalThis.clearTimeout;
+    const clearI = globalThis.clearInterval;
+    const live = new Set();
+    globalThis.setTimeout = function (fn, delay, ...rest) {
+      if (typeof fn !== "function") return timeout.apply(this, arguments);
+      let id;
+      const wrapped = function () {
+        live.delete(id);
+        state.pendingTimers = live.size;
+        return fn.apply(this, arguments);
+      };
+      id = timeout.call(this, wrapped, delay, ...rest);
+      live.add(id);
+      state.pendingTimers = live.size;
+      return id;
+    };
+    globalThis.setInterval = function (fn, delay, ...rest) {
+      const id = interval.apply(this, arguments);
+      live.add(id);
+      state.pendingTimers = live.size;
+      return id;
+    };
+    globalThis.clearTimeout = function (id) {
+      live.delete(id);
+      state.pendingTimers = live.size;
+      return clearT.apply(this, arguments);
+    };
+    globalThis.clearInterval = function (id) {
+      live.delete(id);
+      state.pendingTimers = live.size;
+      return clearI.apply(this, arguments);
+    };
+    state.instrumented = true;
+  } catch (_) {
+    // 包不上就当没有这个信号，退回按最短观察窗等。
+  }
   const install = () => {
     if (!document.documentElement) return;
     const observer = new MutationObserver((records) => {
@@ -803,7 +873,9 @@ const browserDOMProbeScript = `(() => {
     description,
     text_length: text.length,
     semantic_signature: (hash >>> 0).toString(16) + ":" + semantic.length,
-    dom_changes: Number(state.mutations || 0)
+    dom_changes: Number(state.mutations || 0),
+    pending_timers: Number(state.pendingTimers || 0),
+    instrumented: Boolean(state.instrumented)
   };
 })()`
 
