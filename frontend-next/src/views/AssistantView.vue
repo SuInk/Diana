@@ -813,14 +813,14 @@
                 <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
               </div>
               <div class="field">
-                <label for="bot-token-quota">模型额度 · 5 小时 token（默认单位 K）</label>
-                <input id="bot-token-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空不限" />
-                <span class="hint">{{ tokenQuotaReadoutText }}</span>
+                <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
+                <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
               </div>
               <div class="field">
-                <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
-                <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">按次数计，不带单位。两档各自独立、先到先得：刷得勤的群先撞次数，句句带图的先撞 token。额度是按群算的，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。统计口径含判定、路由和工具步，不只是最终那句回复。主人不受限。</span>
+                <label for="bot-sample">回复抽样率（%）</label>
+                <input id="bot-sample" v-model.number="form.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空不抽样" />
+                <span class="hint">群里没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复，主人不受限。群配置里填了就以群为准。</span>
               </div>
               <div class="field">
                 <label for="bot-backfill-limit">断线回补条数</label>
@@ -2145,7 +2145,6 @@ import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
-import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import type { PersonaLintFinding } from "../api";
 import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
 import { personaOwnedTemplate } from "../persona-owned-template";
@@ -2162,15 +2161,6 @@ import { channelAccountUnhealthy, channelOperational, channelStatusHint, channel
 
 const form = ref<BotProfileConfig | null>(null);
 
-const tokenQuotaDraft = ref("");
-
-const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空不限。"));
-
-watch(tokenQuotaDraft, (value) => {
-  if (!form.value) return;
-  const parsed = parseTokenQuota(value);
-  form.value.model_token_quota = parsed === undefined ? 0 : parsed;
-});
 const loading = ref(true);
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
@@ -4161,7 +4151,6 @@ function setForm(config: BotProfileConfig): void {
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
     prompt_chinese_slang_hint: config.prompt_chinese_slang_hint ?? true
   };
-  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
@@ -4405,6 +4394,9 @@ async function save(): Promise<void> {
       ...current,
       ...(selectedPersonaID.value === "custom" ? { persona_id: "", custom_persona: asCustomPersona(current).custom_persona } : {}),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
+      model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...sendRetryPayload(current),

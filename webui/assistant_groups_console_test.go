@@ -494,15 +494,14 @@ func TestConsoleGroupsCapsProactiveReplyExtraCriteria(t *testing.T) {
 // 和生效上限，不然界面上没人知道是撞了额度还是坏了。
 func TestConsoleGroupsReportsQuotaUsage(t *testing.T) {
 	base := assistant.DefaultBotConfig()
-	base.ModelTokenQuota = 500_000
 	base.ModelCallQuota = 400
 	runtime := assistant.NewRuntime(base, consoleGroupListChannel{result: map[string]any{"items": []any{}}}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	store := NewMemoryBotGroupConfigStore()
-	// 40001 跟随机器人，40002 自己填了一档 token 上限。
+	// 40001 跟随机器人，40002 自己填了一档次数上限。
 	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "40001", Enabled: true, EnabledSet: true}, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "40002", Enabled: true, EnabledSet: true, ModelTokenQuota: 20_000}, base); err != nil {
+	if _, err := store.SaveGroupConfig(assistant.GroupConfig{GroupID: "40002", Enabled: true, EnabledSet: true, ModelCallQuota: 2}, base); err != nil {
 		t.Fatal(err)
 	}
 	sqlite, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "quota.db"))
@@ -514,16 +513,15 @@ func TestConsoleGroupsReportsQuotaUsage(t *testing.T) {
 	now := time.Now()
 	for _, entry := range []struct {
 		groupID string
-		tokens  int
 		at      time.Time
 	}{
-		{"40001", 1200, now.Add(-time.Minute)},
-		{"40001", 800, now.Add(-2 * time.Minute)},
-		{"40002", 25_000, now.Add(-3 * time.Minute)},
+		{"40001", now.Add(-time.Minute)},
+		{"40001", now.Add(-2 * time.Minute)},
+		{"40002", now.Add(-3 * time.Minute)},
 		// 窗口之外的不该算进来。
-		{"40001", 999_000, now.Add(-assistant.GroupModelQuotaWindow() - time.Hour)},
+		{"40001", now.Add(-assistant.GroupModelQuotaWindow() - time.Hour)},
 	} {
-		meta := map[string]any{"group_id": entry.groupID, "total_tokens": entry.tokens}
+		meta := map[string]any{"group_id": entry.groupID, "total_tokens": 100}
 		if err := sqlite.AppendLog(ctx, applog.Entry{Action: "llm_usage", CreatedAt: entry.at, Metadata: meta}); err != nil {
 			t.Fatal(err)
 		}
@@ -550,11 +548,11 @@ func TestConsoleGroupsReportsQuotaUsage(t *testing.T) {
 		groups[group.GroupID] = group
 	}
 	// 群里没填就该显示机器人那一档，显示的上限必须和真正拦人的那个一致。
-	if group := groups["40001"]; group.QuotaTokenLimit != 500_000 || group.QuotaCallLimit != 400 || group.QuotaTokensUsed != 2000 || group.QuotaCallsUsed != 2 {
+	if group := groups["40001"]; group.QuotaCallLimit != 400 || group.QuotaCallsUsed != 2 {
 		t.Fatalf("跟随机器人的群 = %#v", group)
 	}
-	// 群里填了以群为准，次数那一档仍旧跟随机器人。
-	if group := groups["40002"]; group.QuotaTokenLimit != 20_000 || group.QuotaCallLimit != 400 || group.QuotaTokensUsed != 25_000 {
+	// 群里填了以群为准。
+	if group := groups["40002"]; group.QuotaCallLimit != 2 || group.QuotaCallsUsed != 1 {
 		t.Fatalf("自己填了额度的群 = %#v", group)
 	}
 }

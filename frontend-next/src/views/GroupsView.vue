@@ -330,14 +330,14 @@
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
         <div class="field">
-          <label for="group-quota">模型额度 · 5 小时 token（默认单位 K）</label>
-          <input id="group-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空跟随机器人" />
-          <span class="hint">{{ tokenQuotaReadoutText }}</span>
+          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
+          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">这个群名下的每次模型调用都算，含路由判断和工具步。留空跟随机器人那一档。</span>
         </div>
         <div class="field">
-          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
-          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">按次数计，不带单位。留空跟随机器人那一档。</span>
+          <label for="group-sample">回复抽样率（%）</label>
+          <input id="group-sample" v-model.number="editing.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复。</span>
         </div>
         <div v-if="editingQuota" class="field wide quota-usage">
           <div class="cluster" style="justify-content: space-between; gap: 8px">
@@ -350,9 +350,8 @@
           <span class="hint">{{ editingQuota.detail }}</span>
         </div>
         <p class="hint field wide">
-          留空跟随机器人配置里的同名两档，两边都没填才是不限。两档各自独立、先到先得：句句短但刷个不停的群先撞次数，只说几句却每句带图的先撞 token。统计的是这个群名下所有模型调用，
-          判定、路由和工具步都算，不只是最终那句回复。用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
-          窗口滚过去自动恢复，不需要手动解除。主人不受限。
+          两项留空都跟随机器人配置，两边都没填就是不限额、不抽样。额度用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
+          窗口滚过去自动恢复，不需要手动解除。主人不受额度和抽样限制。
         </p>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
@@ -626,7 +625,6 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
-import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
@@ -740,31 +738,21 @@ const editing = ref<BotGroupConfig | null>(null);
 
 const quotaWindowSeconds = ref(0);
 
-// 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。两档都设了就都画出来，
-// 进度条按吃紧的那一档走——先撞哪一档就先停在哪一档。
+// 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。
 const editingQuota = computed(() => {
   const groupID = editing.value?.group_id;
   if (!groupID) return undefined;
   const summary = groups.value.find((group) => group.group_id === groupID);
   if (!summary) return undefined;
-  const tokenLimit = summary.quota_token_limit ?? 0;
   const callLimit = summary.quota_call_limit ?? 0;
-  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
-  const tokensUsed = summary.quota_tokens_used ?? 0;
+  if (callLimit <= 0) return undefined;
   const callsUsed = summary.quota_calls_used ?? 0;
-  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
-  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
-  const parts: string[] = [];
-  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")} / ${tokenLimit.toLocaleString("en-US")}`);
-  if (callLimit > 0) parts.push(`调用 ${callsUsed} / ${callLimit} 次`);
-  const percent = Math.round(Math.max(tokenRatio, callRatio) * 100);
+  const percent = Math.round((callsUsed / callLimit) * 100);
   const detail =
     percent >= 100
       ? "已用满，这个群暂停一切花 token 的环节；消息照常进历史和长期记忆，窗口滚过去自动恢复。"
-      : `剩 ${tokenLimit > 0 ? `${formatTokenCount(Math.max(0, tokenLimit - tokensUsed))} token` : ""}${
-          tokenLimit > 0 && callLimit > 0 ? "、" : ""
-        }${callLimit > 0 ? `${Math.max(0, callLimit - callsUsed)} 次调用` : ""}。窗口是滚动的，不在整点清零。`;
-  return { text: parts.join("，"), detail, percent };
+      : `剩 ${Math.max(0, callLimit - callsUsed)} 次调用。窗口是滚动的，不在整点清零。`;
+  return { text: `调用 ${callsUsed} / ${callLimit} 次`, detail, percent };
 });
 
 
@@ -775,43 +763,16 @@ const quotaWindowLabel = computed(() => {
 });
 
 // 额度是个「悄悄生效」的闸门：用满之后机器人就是不说话，不摆出进度来没人知道
-// 是撞了额度还是坏了。所以两档里谁更吃紧就先显示谁，快满和已满分开着色。
+// 是撞了额度还是坏了。快满和已满分开着色。
 function quotaBadge(group: BotGroupSummary): { text: string; title: string; tone: string } | undefined {
-  const tokenLimit = group.quota_token_limit ?? 0;
   const callLimit = group.quota_call_limit ?? 0;
-  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
-  const tokensUsed = group.quota_tokens_used ?? 0;
+  if (callLimit <= 0) return undefined;
   const callsUsed = group.quota_calls_used ?? 0;
-  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
-  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
-  const byTokens = tokenRatio >= callRatio;
-  const ratio = Math.max(tokenRatio, callRatio);
-  const text = byTokens
-    ? `额度 ${formatTokenCount(tokensUsed)}/${formatTokenCount(tokenLimit)}`
-    : `额度 ${callsUsed}/${callLimit} 次`;
-  const parts: string[] = [];
-  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")}/${tokenLimit.toLocaleString("en-US")}`);
-  if (callLimit > 0) parts.push(`调用 ${callsUsed}/${callLimit} 次`);
+  const ratio = callsUsed / callLimit;
   const tone = ratio >= 1 ? "warn" : ratio >= 0.8 ? "accent" : "";
   const suffix = ratio >= 1 ? "，已暂停一切花 token 的环节，窗口滚过去自动恢复" : "";
-  return { text, title: `${quotaWindowLabel.value}：${parts.join("，")}${suffix}`, tone };
+  return { text: `额度 ${callsUsed}/${callLimit} 次`, title: `${quotaWindowLabel.value}：调用 ${callsUsed}/${callLimit} 次${suffix}`, tone };
 }
-
-function formatTokenCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
-  return String(value);
-}
-
-const tokenQuotaDraft = ref("");
-
-const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空跟随机器人。"));
-
-watch(tokenQuotaDraft, (value) => {
-  if (!editing.value) return;
-  const parsed = parseTokenQuota(value);
-  editing.value.model_token_quota = parsed === undefined ? 0 : parsed;
-});
 const editingGroupName = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
@@ -1083,7 +1044,6 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
-  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
@@ -1331,6 +1291,9 @@ async function saveEditing(): Promise<void> {
       ...current,
       ...sendRetryPayload(current),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
+      model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)

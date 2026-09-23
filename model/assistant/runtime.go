@@ -469,7 +469,9 @@ type Runtime struct {
 	// 被撤回和系统提示占用，不限流的话这类正常跳号会把回补请求刷爆。
 	liveSeqProbedAt map[string]time.Time
 	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
-	groupQuota          groupModelQuotaCache
+	groupQuota groupModelQuotaCache
+	// replySampleRoll 给回复抽样掷一次 [0,100) 的点数；为 nil 时用 math/rand，测试里替换。
+	replySampleRoll     func() int
 	seqGapActive        atomic.Int32
 	historyBackfillBusy atomic.Bool
 	historyFetchMu      sync.Mutex
@@ -1791,6 +1793,12 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		// 已经回这个账号回得很密了，主动接话直接放掉，连路由模型也不必调。
 		if verdict := r.replyDampingJudge(event, text, true, time.Now()); considerProactive && verdict.Skip {
 			considerProactive, proactiveSkipReason = false, verdict.Reason
+		}
+		// 回复抽样同样挡在路由模型之前：没抽中的消息一次模型调用都不花。
+		if considerProactive {
+			if reason, skip := r.groupReplySampleSkips(event); skip {
+				considerProactive, proactiveSkipReason = false, reason
+			}
 		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
