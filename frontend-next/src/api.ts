@@ -265,6 +265,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   muted_image_description_enabled?: boolean;
   /** 暂停回复期间是否照常做回复判断（只记录结果，不生成不发送）；缺省关闭。 */
   muted_reply_judgment_enabled?: boolean;
+  error_persona_reply_enabled?: boolean;
   error_reply_prefix?: string;
   send_retry_attempts?: number;
   /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */

@@ -2095,10 +2095,16 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		}
 		// 错误提示开关控制所有面向聊天的诊断消息。关闭后仍保留完整事件、
 		// LastError 和应用日志，但不把 LLM、Agent、工具或协议错误发进群聊/私聊。
-		if !boolValue(r.effectiveConfigForEvent(event).ErrorNotifyEnabled, true) {
-			setEventRecordOutcome(&record, "error_silent")
-			r.record(record)
-			return "error_silent", nil
+		// 关闭时可以另开「出错时仍用人设回一句」，让模型按人设说一句：看起来是正常说话，不是报错；
+		// 模型这时本身用不了或改写失败就保持静默，绝不退回错误原文。
+		errorCfg := r.effectiveConfigForEvent(event)
+		personaOnly := !boolValue(errorCfg.ErrorNotifyEnabled, true)
+		if personaOnly {
+			if _, _, _, ok := rejectionNoticeRewriteSource(err); !ok || !boolValue(errorCfg.ErrorPersonaReplyEnabled, false) {
+				setEventRecordOutcome(&record, "error_silent")
+				r.record(record)
+				return "error_silent", nil
+			}
 		}
 		publicDetail := publicChatErrorMessage(err)
 		// 同一会话正在连续失败时，这条并进稍后那条汇总，不再单独刷一遍报错。
@@ -2107,9 +2113,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "error_notice_merged", nil
 		}
-		notice := r.effectiveConfigForEvent(event).ErrorReplyPrefix + publicDetail
+		notice := errorCfg.ErrorReplyPrefix + publicDetail
 		if rewritten, ok := r.rewriteRejectionNotice(replyCtx, event, err); ok {
 			notice = rewritten
+		} else if personaOnly {
+			setEventRecordOutcome(&record, "error_silent")
+			r.record(record)
+			return "error_silent", nil
 		}
 		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, notice)
 		if sendErr != nil {

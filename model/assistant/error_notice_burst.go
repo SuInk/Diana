@@ -216,7 +216,13 @@ func errorNoticeSummaryText(count int, announced bool, detail string) string {
 //
 // 汇总说的是一批消息，不是当前这条，所以不挂引用也不 @：引用其中任意一条都会
 // 让人以为只有那条出了问题。
+//
+// 错误提示关掉时不发：汇总是原样的错误说明，而关掉开关后单条失败最多只会用人设
+// 回一句，不该在安静下来之后又补一条技术汇总。
 func (r *Runtime) sendErrorNoticeSummary(ctx context.Context, event MessageEvent, text string) error {
+	if !r.errorNoticeAllowed(event) {
+		return nil
+	}
 	cfg := r.effectiveConfigForEvent(event)
 	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{})
 	return err
