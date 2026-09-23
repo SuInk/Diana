@@ -335,9 +335,9 @@ type Runtime struct {
 	bridges  map[string]*NoneBotBridge
 	plugins  *PluginManager
 	llmStore LLMProfileStore
-	// llmCapability 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
+	// llmDowngrades 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
 	// 不必重新学。
-	llmCapability LLMCapabilityStore
+	llmDowngrades LLMDowngradeStore
 	modelLister   LLMModelLister
 	appLogs       applog.Writer
 	messageStore  MessageHistoryStore
@@ -830,8 +830,8 @@ func (r *Runtime) Start(parent context.Context) error {
 			r.runRomanceGreetingLoop(ctx)
 		}()
 		go func() {
-			defer recoverGoroutinePanic("runtime.llmCapabilityProbeLoop")
-			r.runLLMCapabilityProbeLoop(ctx)
+			defer recoverGoroutinePanic("runtime.llmDowngradeMemoLoop")
+			r.runLLMDowngradeMemoLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")

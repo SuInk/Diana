@@ -347,8 +347,6 @@ export interface BotProfileConfig {
   self_note_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
-  /** 后台空闲时定期探测模型收不收强制指定工具；探测是会计费的真实调用，缺省关闭。 */
-  llm_capability_probe_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;
   /** 被戳一戳时回一句（OneBot）；缺省关闭。 */
