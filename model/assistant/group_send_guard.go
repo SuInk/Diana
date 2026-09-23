@@ -105,8 +105,7 @@ func withOutboundDeliveryPolicy(ctx context.Context, policy outboundDeliveryPoli
 	return context.WithValue(ctx, outboundDeliveryPolicyContextKey{}, policy)
 }
 
-func outboundDeliveryPolicyFromContext(ctx context.Context) outboundDeliveryPolicy {
-	policy, _ := ctx.Value(outboundDeliveryPolicyContextKey{}).(outboundDeliveryPolicy)
+func normalizeOutboundDeliveryPolicy(policy outboundDeliveryPolicy) outboundDeliveryPolicy {
 	defaults := defaultOutboundDeliveryPolicy()
 	if policy.InitialDelay <= 0 {
 		policy.InitialDelay = defaults.InitialDelay
@@ -222,7 +221,7 @@ func (r *Runtime) executeOutboundCall(
 		return nil, err
 	}
 	defer gate.mu.Unlock()
-	policy := outboundDeliveryPolicyFromContext(ctx)
+	policy := r.outboundDeliveryPolicyForEvent(ctx, event)
 	for {
 		if err := ctx.Err(); err != nil {
 			if gate.failures == 0 || r.runtimeContextStopped() {
