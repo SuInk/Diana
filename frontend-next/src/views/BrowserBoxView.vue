@@ -17,20 +17,18 @@
       </div>
       <div class="card-body stack">
         <div class="browser-sources" role="radiogroup" aria-label="机器人用哪个浏览器">
-          <button
-            v-for="item in sources"
-            :key="item.key"
-            class="browser-source"
-            :class="{ active: source === item.key }"
-            type="button"
-            role="radio"
-            :aria-checked="source === item.key"
-            :disabled="switching || source === null"
-            @click="chooseSource(item.key)"
-          >
+          <label v-for="item in sources" :key="item.key" class="browser-source">
+            <input
+              type="radio"
+              name="browser-source"
+              :value="item.key"
+              :checked="source === item.key"
+              :disabled="switching || source === null"
+              @change="chooseSource(item.key)"
+            />
             <span class="browser-source-name">{{ item.label }}</span>
             <span class="browser-source-hint">{{ item.hint }}</span>
-          </button>
+          </label>
         </div>
         <p class="muted" style="margin: 0; font-size: 12.5px">
           读公开网页、出图、渲染 PDF 用的是另一个一次性无头浏览器，不带登录态、群成员也能用，一直开着，不用在这里选；
@@ -398,32 +396,30 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .browser-sources {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
+/* 单选一行：圆点、名字、说明排成一行，窄屏时说明折到名字下面。 */
 .browser-source {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  text-align: left;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 2px;
   cursor: pointer;
 }
 
-.browser-source:disabled {
-  cursor: default;
+.browser-source input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+  align-self: center;
 }
 
-.browser-source.active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+.browser-source:has(input:disabled) {
+  cursor: default;
 }
 
 .browser-source-name {
@@ -432,7 +428,7 @@ onBeforeUnmount(() => {
 }
 
 .browser-source-hint {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
