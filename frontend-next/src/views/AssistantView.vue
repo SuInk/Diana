@@ -1183,16 +1183,10 @@
                 <h2>人设</h2>
                 <span class="card-sub">机器人是谁、怎么说话、多主动，都在这里定</span>
               </div>
-              <div class="cluster">
-                <button class="btn small" type="button" @click="openPersonaYAML">
-                  <FileCode :size="14" aria-hidden="true" />
-                  YAML
-                </button>
-                <button class="btn small" type="button" @click="resetPromptDefaults">
-                  <RotateCcw :size="14" aria-hidden="true" />
-                  恢复内置默认
-                </button>
-              </div>
+              <button class="btn small" type="button" @click="resetPromptDefaults">
+                <RotateCcw :size="14" aria-hidden="true" />
+                恢复内置默认
+              </button>
             </div>
             <div class="card-body form-grid">
               <!-- 人设库是「套用来源」：点一下把下面四项填好，改不改随你，按保存才生效。
@@ -1236,6 +1230,11 @@
                       <span class="persona-chip-name">自定义</span>
                       <small class="muted">当前编辑</small>
                     </button>
+                    <span class="persona-chip-actions">
+                      <button type="button" class="persona-chip-action" aria-label="编辑当前人设" title="编辑当前人设（YAML）" @click="openPersonaYAML()">
+                        <Pencil :size="13" aria-hidden="true" />
+                      </button>
+                    </span>
                   </div>
                   <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip" :class="{ 'is-active': selectedPersonaID === persona.id }">
                     <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === persona.id" :title="personaSummary(persona)" @click="choosePersona(persona.id)">
@@ -1243,6 +1242,16 @@
                       <small class="muted">{{ isBuiltinPersona(persona) ? "内置 · " : "" }}{{ personaSummary(persona) }}</small>
                     </button>
                     <span class="persona-chip-actions">
+                      <button
+                        type="button"
+                        class="persona-chip-action"
+                        :disabled="personaLibraryBusy"
+                        :aria-label="`编辑人设 ${persona.name}`"
+                        :title="isBuiltinPersona(persona) ? `编辑人设 ${persona.name}（内置的改不了，保存时另存一套）` : `编辑人设 ${persona.name}（YAML）`"
+                        @click="openPersonaYAML(persona)"
+                      >
+                        <Pencil :size="13" aria-hidden="true" />
+                      </button>
                       <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
                         <Download :size="13" aria-hidden="true" />
                       </button>
@@ -1971,11 +1980,11 @@
 
     <!-- 人设 YAML：这一套人设的全部提示词配置写在一个文件里，编辑、复制分享、下载都在这。
          「应用」只填回表单，保存仍然要按保存。 -->
-    <Modal v-if="personaYAMLOpen" title="人设 YAML" wide @close="closePersonaYAML">
+    <Modal v-if="personaYAMLOpen" :title="personaYAMLTitle" wide @close="closePersonaYAML">
       <div class="stack" style="gap: 10px">
         <p class="hint persona-yaml-hint">
-          这里是当前人设的全部提示词配置：正文、品格、自称与语气词，以及 prompts 下的每一段内置提示词（没改过的是默认原文）。
-          应用时 prompts 必须一段不少、一段不多；和默认原文相同的不会存成修改。复制或下载这份文件就能分享给别人，对方在人设库里导入即可。
+          这是这套人设的全部提示词配置：正文、品格、自称与语气词、判据，以及 prompts 下的每一段内置提示词和输出格式（没改过的是默认原文）。
+          保存时 prompts 必须一段不少、一段不多；和默认原文相同的不会存成修改。复制或下载这份文件就能分享给别人，对方在人设库里导入即可。
         </p>
         <textarea
           v-model="personaYAMLSource"
@@ -1997,7 +2006,7 @@
           下载
         </button>
         <button class="btn" type="button" @click="closePersonaYAML">取消</button>
-        <button class="btn primary" type="button" :disabled="personaYAMLBusy || !personaYAMLSource.trim()" @click="applyPersonaYAML">应用到表单</button>
+        <button class="btn primary" type="button" :disabled="personaYAMLBusy || !personaYAMLSource.trim()" @click="applyPersonaYAML">{{ personaYAMLApplyLabel }}</button>
       </template>
     </Modal>
 
@@ -2063,7 +2072,7 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, FileCode, GripVertical, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { applyPersonaDocument, asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { withoutPromptOverrides } from "../prompt-overrides";
@@ -4186,20 +4195,29 @@ const personaYAMLOpen = ref(false);
 const personaYAMLSource = ref("");
 const personaYAMLBusy = ref(false);
 const personaYAMLError = ref("");
+// 编辑的是哪一套：没有就是表单里正在编辑的「自定义」，有就是人设库里的那一套。
+const personaYAMLTarget = ref<Persona | null>(null);
+const personaYAMLTitle = computed(() => (personaYAMLTarget.value ? `编辑人设 · ${personaYAMLTarget.value.name}` : "编辑当前人设"));
+const personaYAMLApplyLabel = computed(() => {
+  const target = personaYAMLTarget.value;
+  if (!target) return "应用到表单";
+  return isBuiltinPersona(target) ? "另存到人设库" : "保存到人设库";
+});
 
 function currentPersonaName(): string {
   const selected = personaLibrary.value.find((persona) => persona.id === selectedPersonaID.value);
   return selected?.name || form.value?.name || "自定义";
 }
 
-async function openPersonaYAML(): Promise<void> {
+async function openPersonaYAML(target?: Persona): Promise<void> {
   if (!form.value) return;
+  personaYAMLTarget.value = target ?? null;
   personaYAMLOpen.value = true;
   personaYAMLSource.value = "";
   personaYAMLError.value = "";
   personaYAMLBusy.value = true;
   try {
-    personaYAMLSource.value = await renderPersonaYAML([{ id: "", ...personaFromSettings(form.value, currentPersonaName()) }]);
+    personaYAMLSource.value = await renderPersonaYAML([target ?? { id: "", ...personaFromSettings(form.value, currentPersonaName()) }]);
   } catch (error) {
     personaYAMLError.value = error instanceof Error ? error.message : "生成 YAML 失败";
   } finally {
@@ -4222,13 +4240,40 @@ async function applyPersonaYAML(): Promise<void> {
       personaYAMLError.value = personas.length ? `这里只能放一套人设，读到了 ${personas.length} 套；多套请在人设库里导入` : "没有读到人设";
       return;
     }
-    form.value = applyPersonaDocument(form.value, personas[0]);
-    personaYAMLOpen.value = false;
-    toastSuccess("已按 YAML 填好人设和提示词，保存配置后生效");
+    const target = personaYAMLTarget.value;
+    if (!target) {
+      form.value = applyPersonaDocument(form.value, personas[0]);
+      personaYAMLOpen.value = false;
+      toastSuccess("已按 YAML 填好人设和提示词，保存配置后生效");
+      return;
+    }
+    await savePersonaFromYAML(target, personas[0]);
   } catch (error) {
     personaYAMLError.value = error instanceof Error ? error.message : "YAML 解析失败";
   } finally {
     personaYAMLBusy.value = false;
+  }
+}
+
+// 人设库里的一套：存回库里。内置的改不了原件，另存成一套新的。库和机器人不是活绑定，
+// 但正在用的就是这一套时，表单也跟着换成改好的，免得改完还得再点一次。
+async function savePersonaFromYAML(target: Persona, edited: Persona): Promise<void> {
+  const builtin = isBuiltinPersona(target);
+  const name = (edited.name ?? "").trim() || target.name;
+  const wasSelected = selectedPersonaID.value === target.id;
+  personaLibraryBusy.value = true;
+  try {
+    const response = await savePersona({
+      ...edited,
+      id: builtin ? "" : target.id,
+      name: builtin ? unusedPersonaName(name, personaLibrary.value) : name
+    });
+    savedPersonaLibrary.value = response.personas ?? [];
+    if (form.value && (wasSelected || builtin)) form.value = selectPersona(form.value, response.persona);
+    personaYAMLOpen.value = false;
+    toastSuccess(builtin ? `已另存为人设「${response.persona.name}」` : `人设「${response.persona.name}」已保存`);
+  } finally {
+    personaLibraryBusy.value = false;
   }
 }
 
@@ -4242,7 +4287,8 @@ async function copyPersonaYAML(): Promise<void> {
 }
 
 function downloadPersonaYAML(): void {
-  downloadPersonaFile(`diana-persona-${personaFileSlug(currentPersonaName())}.yaml`, personaYAMLSource.value, "application/yaml");
+  const name = personaYAMLTarget.value?.name ?? currentPersonaName();
+  downloadPersonaFile(`diana-persona-${personaFileSlug(name)}.yaml`, personaYAMLSource.value, "application/yaml");
 }
 
 function openPersonaComposer(): void {
