@@ -444,7 +444,7 @@ func TestRunnerPromptKeepsSkillsOutOfStableProtocol(t *testing.T) {
 	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
 	runner := &Runner{cfg: Config{SkillsListBudget: 8000}.WithDefaults(), registry: registry}
 	protocol := runner.systemPrompt()
-	hint := runner.explicitSkillPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}})
+	hint := runner.explicitSkillPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}}, nil)
 	if strings.Contains(protocol, "demo-skill") || strings.Contains(protocol, "Available skills") {
 		t.Fatalf("skills catalog leaked into the stable protocol: %s", protocol)
 	}

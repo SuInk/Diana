@@ -529,6 +529,8 @@ type Runtime struct {
 	agentRegistryCache      map[string]*agent.ToolRegistry
 	agentResidencyMu        sync.RWMutex
 	agentResidencyCatalog   map[string][]AgentResidencyEntry
+	// agentFootprints 记最近一轮 Agent 的常驻开销，键见 agentFootprintKey。
+	agentFootprints map[string]agentFootprint
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -4338,7 +4340,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
-		r.rememberAgentResidencyCatalog(event, registry)
+		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {
@@ -4351,6 +4353,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			return "", err
 		}
+		r.rememberAgentFootprint(event, agentRunner)
 		if ownsRegistry {
 			defer agentRunner.Close()
 		}
