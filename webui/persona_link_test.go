@@ -23,6 +23,8 @@ func newGroupPersonaLinkTest(t *testing.T) (http.Handler, *MemoryBotGroupConfigS
 	t.Cleanup(func() { _ = store.Close() })
 	base := assistant.DefaultBotConfig()
 	base.ID, base.Name, base.Enabled = "a", "主号", true
+	// 反向 WS 没配 Access Token 时整份档案过不了校验，同步机器人配置会失败。
+	base.OneBotAccessToken = "token"
 	base.GroupAdmission = assistant.GroupAdmission{Mode: assistant.GroupAdmissionBlacklist}.WithDefaults()
 	runtime := assistant.NewRuntime(base, consoleGroupListChannel{result: map[string]any{"items": []any{}}}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	profiles := NewMemoryBotProfileStoreFromSet(assistant.ProfileSet{Profiles: []assistant.BotConfig{base}})
@@ -140,5 +142,51 @@ func TestKeepGroupPersonaLinkForUnawareClients(t *testing.T) {
 	edited.SystemPrompt = "改过了"
 	if got := handler.keepGroupPersonaLink(ctx, edited, current); got.PersonaID != "" {
 		t.Fatalf("edited persona kept its link: %+v", got)
+	}
+}
+
+// 机器人绑定人设库：库里改了机器人也跟着更新，并且立刻交给运行时；删了就解除绑定、保留人设。
+func TestBotPersonaFollowsLibraryUpdates(t *testing.T) {
+	router, _, handler := newGroupPersonaLinkTest(t)
+	persona := savePersonaForTest(t, router, assistant.Persona{Name: "猫娘", SystemPrompt: "你是一只猫。", SelfReference: "咱", SentenceEnders: "喵"})
+
+	set := handler.profiles.Profiles().WithDefaults()
+	cfg, _ := set.ConfigForProfile("a")
+	linked := cfg.WithLibraryPersona(persona)
+	if err := handler.profiles.SaveProfileConfig(linked); err != nil {
+		t.Fatal(err)
+	}
+
+	persona.SystemPrompt = "你是一只懒猫。"
+	persona.SentenceEnders = "喵~"
+	rec := personaRequest(t, router, http.MethodPost, "/api/assistant/personas", personaSavePayload{Persona: persona})
+	var response struct {
+		BotsSynced int    `json:"bots_synced"`
+		Warning    string `json:"warning"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Warning != "" {
+		t.Fatalf("sync warning: %s", response.Warning)
+	}
+	if response.BotsSynced != 1 {
+		t.Fatalf("bots_synced = %d, want 1 (%s)", response.BotsSynced, rec.Body.String())
+	}
+	got, _ := handler.profiles.Profiles().ConfigForProfile("a")
+	if got.PersonaID != persona.ID || got.SystemPrompt != "你是一只懒猫。" || got.SentenceEnders != "喵~" || got.SelfReference != "咱" {
+		t.Fatalf("bot not synced: persona_id=%q prompt=%q enders=%q", got.PersonaID, got.SystemPrompt, got.SentenceEnders)
+	}
+	if runtimeCfg := handler.runtime.ProfileConfig("a"); runtimeCfg.SystemPrompt != "你是一只懒猫。" {
+		t.Fatalf("runtime still uses %q", runtimeCfg.SystemPrompt)
+	}
+
+	rec = personaRequest(t, router, http.MethodPost, "/api/assistant/personas/delete", personaDeletePayload{ID: persona.ID})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got, _ = handler.profiles.Profiles().ConfigForProfile("a")
+	if got.PersonaID != "" || got.SystemPrompt != "你是一只懒猫。" {
+		t.Fatalf("bot after delete: persona_id=%q prompt=%q", got.PersonaID, got.SystemPrompt)
 	}
 }

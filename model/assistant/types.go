@@ -856,7 +856,7 @@ type GroupConfig struct {
 	GroupTriggerMode AliasTriggerMode `json:"group_trigger_mode,omitempty"`
 	// PersonaID 表示本群的人设绑定在人设库的某一套上：下面的正文、表达风格、
 	// 动作描写、自称、句尾语气词都是那一套的内容，库里改了会同步写过来（见
-	// group_persona_link.go）。空值表示没绑定：正文留空跟随机器人，填了是本群自定义。
+	// persona_link.go）。空值表示没绑定：正文留空跟随机器人，填了是本群自定义。
 	PersonaID                 string       `json:"persona_id,omitempty"`
 	SystemPrompt              string       `json:"system_prompt,omitempty"`
 	ResponseMode              ResponseMode `json:"response_mode,omitempty"`

@@ -5,14 +5,15 @@ package webui
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
 )
 
-// 群人设绑定人设库的控制台侧：保存群配置时按绑定取库里的最新内容，库保存或
-// 删除时把变化写到绑定它的群。为什么是「保存时同步写入」而不是运行时去库里取，
-// 见 model/assistant/group_persona_link.go。
+// 人设库绑定的控制台侧：保存群配置时按绑定取库里的最新内容，库保存或删除时把
+// 变化写到绑定它的机器人和群。为什么是「保存时同步写入」而不是运行时去库里取，
+// 见 model/assistant/persona_link.go。
 
 // findLibraryPersona 在人设库里找一套。库不可用时当作找不到。
 func (h *BotHandler) findLibraryPersona(ctx context.Context, id string) (assistant.Persona, bool) {
@@ -88,4 +89,43 @@ func (h *BotHandler) unlinkGroupsFromPersona(personaID string) (int, error) {
 		updated++
 	}
 	return updated, nil
+}
+
+// syncBotsLinkedToPersona 把库里刚保存的这一套写进所有绑定它的机器人，并让运行时
+// 立刻用上。返回改了几台。
+func (h *BotHandler) syncBotsLinkedToPersona(persona assistant.Persona) (int, error) {
+	if h == nil || h.profiles == nil {
+		return 0, nil
+	}
+	set, changed := h.profiles.Profiles().WithDefaults().SyncLibraryPersona(persona)
+	return len(changed), h.commitProfileChanges(set, changed)
+}
+
+// unlinkBotsFromPersona 在库里删掉一套之后调用：绑定它的机器人保留现有人设，解除绑定。
+func (h *BotHandler) unlinkBotsFromPersona(personaID string) (int, error) {
+	if h == nil || h.profiles == nil {
+		return 0, nil
+	}
+	set, changed := h.profiles.Profiles().WithDefaults().UnlinkLibraryPersona(strings.TrimSpace(personaID))
+	return len(changed), h.commitProfileChanges(set, changed)
+}
+
+// commitProfileChanges 逐台落库改过的机器人配置，再整体交给运行时。
+func (h *BotHandler) commitProfileChanges(set assistant.ProfileSet, changedIDs []string) error {
+	if len(changedIDs) == 0 {
+		return nil
+	}
+	for _, id := range changedIDs {
+		cfg, ok := set.ConfigForProfile(id)
+		if !ok {
+			continue
+		}
+		if err := h.profiles.SaveProfileConfig(cfg); err != nil {
+			return err
+		}
+	}
+	if err := h.applyProfileSet(set); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
+		return err
+	}
+	return nil
 }

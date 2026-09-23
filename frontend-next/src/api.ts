@@ -2852,9 +2852,18 @@ export function listPersonas(): Promise<PersonaListResponse> {
   return requestJSON<PersonaListResponse>("/api/assistant/personas");
 }
 
+/** 人设保存结果。改已有的一套时，绑定它的机器人和群会同步更新，这里报同步了几个。 */
+export interface PersonaSaveResponse {
+  persona: Persona;
+  personas: Persona[];
+  bots_synced?: number;
+  groups_synced?: number;
+  warning?: string;
+}
+
 /** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
-export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ persona: Persona; personas: Persona[] }> {
-  return requestJSON<{ persona: Persona; personas: Persona[] }>("/api/assistant/personas", {
+export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<PersonaSaveResponse> {
+  return requestJSON<PersonaSaveResponse>("/api/assistant/personas", {
     method: "POST",
     body: JSON.stringify({ persona })
   });
