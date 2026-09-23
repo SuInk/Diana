@@ -115,7 +115,10 @@ func (e *proactiveReplyQualityRejectedError) Error() string {
 //
 // 准确性只能依据可见证据判断，不能把未传入的图片或历史当成反证。
 // 是否需要回复由前置路由决定，这里不重复做参与意愿判断。
-const proactiveReplyQualityPrompt = `你是机器人回复的发送前审核器,检查答案的准确性与完整性,并独立检查账号安全。
+// proactiveReplyQualityPrompt 是改造前的整段文本，测试和旧引用照旧拿它比对。
+const proactiveReplyQualityPrompt = proactiveReplyQualityPromptBody + proactiveReplyQualityContract
+
+const proactiveReplyQualityPromptBody = `你是机器人回复的发送前审核器,检查答案的准确性与完整性,并独立检查账号安全。
 
 是否需要回复已经由前置路由决定。你不要再次判断要不要接话、是否被点名、
 用户是否在跟人交流或是不是主动插话；这些都不是拒绝候选回复的理由。
@@ -245,9 +248,12 @@ stop_requested —— 对方明确要求你不要再回。
 - 只是说要走、要睡、要去忙,没有要求你停止回复的,填 false——那是
   conversation_closing 管的范围。
 - 开玩笑地嫌你话多、吐槽你复读,但没有真的要求停下的,填 false。拿不准一律 false:
-  这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。
+  这一项判成 true 会让机器人当场收声并暂停响应这个账号一段时间。`
 
-只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
+// proactiveReplyQualityContract 是审核结果的字段表和每个字段的取值含义。
+// parseProactiveReplyQualityDecision 按这些字段名解析，运行时按其中的阈值和类别
+// 决定拦不拦，所以锁定不给改。
+const proactiveReplyQualityContract = "\n\n" + `只输出一个合法 JSON 对象,不要输出 Markdown 或额外文字:
 {"send_confidence":0.96,"accuracy_issue":"none","reason":"","account_safe":0.98,"account_risk":"","account_risk_reason":"","count_refusal":false,"refusal_confidence":0.98,"refusal_reason":"","reply_loop_automated_ai":false,"reply_loop_meaningless":false,"reply_loop_purposeless":false,"reply_loop_self_repeat":false,"reply_loop_confidence":0.95,"reply_loop_reason":"","conversation_closing":false,"stop_requested":false,"closing_confidence":0.95,"closing_reason":""}
 
 理由只写发现的问题:某一项没有发现问题时,对应的 reason、account_risk_reason、refusal_reason、
@@ -275,8 +281,19 @@ func replyControlIntentFromAudit(decision proactiveReplyQualityDecision) replyCo
 	return replyControlIntent{RefuseCurrent: decision.CountRefusal && decision.RefusalConfidence >= replyRefusalAuditConfidence}
 }
 
+var promptReplyQualitySpec = registerPrompt(PromptSpec{
+	Key:      "audit.quality",
+	Group:    PromptGroupAudit,
+	Title:    "发送前审核",
+	Usage:    "每条候选回复发出去之前调用一次：检查准确性、账号安全、是否拒答、是否空转和对话是否收尾，决定这条发不发、要不要暂停接话。管理员另配的账号安全规则接在输出格式之后。",
+	Default:  proactiveReplyQualityPromptBody,
+	Contract: proactiveReplyQualityContract,
+})
+
 func replyQualityPromptForConfig(cfg BotConfig) string {
-	prompt := proactiveReplyQualityPrompt
+	// 管理员的账号安全规则和最后那句提醒一直接在输出格式之后：改造前就是这个
+	// 顺序，挪到格式前面会让默认配置下的整段提示词换了字节。
+	prompt := cfg.prompt(promptReplyQualitySpec)
 	if policy := strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt); policy != "" {
 		prompt += "\n\n【管理员配置的账号安全审核规则】\n" + policy + `
 这段规则替代上文默认的账号安全风险范围；只影响 account_safe、account_risk 和

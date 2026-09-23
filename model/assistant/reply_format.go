@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -106,7 +105,7 @@ func platformOutputRulesForConfig(cfg BotConfig) string {
 	}
 	def, ok := PlatformByID(cfg.Platform)
 	if ok && def.RichText {
-		return fmt.Sprintf("当前聊天平台是 %s，出站适配器会把支持的 Markdown 转成平台富文本；可以自然使用加粗、斜体、标题、列表、链接和代码等格式，具体不兼容项会由适配器自动降级。不要声称当前窗口不支持 Markdown。", def.Name)
+		return cfg.promptf(promptPlatformRichTextSpec, map[string]string{"platform": def.Name})
 	}
 	name := strings.TrimSpace(cfg.Platform)
 	if ok {
@@ -115,5 +114,23 @@ func platformOutputRulesForConfig(cfg BotConfig) string {
 	if name == "" {
 		name = "当前平台"
 	}
-	return fmt.Sprintf("当前聊天平台是 %s，当前配置会保留 Markdown 原始标记并交给下游客户端处理；不要把其他平台的 Markdown 规则套到这里。", name)
+	return cfg.promptf(promptPlatformMarkdownSpec, map[string]string{"platform": name})
 }
+
+var promptPlatformRichTextSpec = registerPrompt(PromptSpec{
+	Key:     "reply.platform_rich_text",
+	Group:   PromptGroupReplyBase,
+	Title:   "富文本平台说明",
+	Usage:   "平台能渲染富文本（如 Telegram）、本轮保留 Markdown 时，替代纯文本排版规则注入。",
+	Default: "当前聊天平台是 {platform}，出站适配器会把支持的 Markdown 转成平台富文本；可以自然使用加粗、斜体、标题、列表、链接和代码等格式，具体不兼容项会由适配器自动降级。不要声称当前窗口不支持 Markdown。",
+	Vars:    []PromptVar{{Name: "platform", Description: "聊天平台名称，如 Telegram"}},
+})
+
+var promptPlatformMarkdownSpec = registerPrompt(PromptSpec{
+	Key:     "reply.platform_markdown",
+	Group:   PromptGroupReplyBase,
+	Title:   "保留 Markdown 的平台说明",
+	Usage:   "平台本身不渲染富文本、但配置里要求保留 Markdown 时，替代纯文本排版规则注入。",
+	Default: "当前聊天平台是 {platform}，当前配置会保留 Markdown 原始标记并交给下游客户端处理；不要把其他平台的 Markdown 规则套到这里。",
+	Vars:    []PromptVar{{Name: "platform", Description: "聊天平台名称或配置里的平台 ID"}},
+})

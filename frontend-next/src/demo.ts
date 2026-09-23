@@ -840,6 +840,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ items: items.slice(offset, offset + limit), total: items.length });
   }
   if (path === "/api/assistant/platforms") return json({ platforms });
+  if (path === "/api/assistant/prompts") return json(demoPromptCatalog);
   if (path === "/api/assistant/agent-defaults")
     return json({
       agent_command_allowlist: ["uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"],
@@ -1390,3 +1391,38 @@ export function installDemoMode(): void {
   window.__dianaOriginalFetch = window.fetch.bind(window);
   window.fetch = demoFetch;
 }
+
+// 演示用的提示词目录只挑几条代表：普通正文、带占位符的模板、锁了输出格式的判断提示词。
+// 真实目录由后端登记表生成，这里不追求齐全。
+const demoPromptCatalog = {
+  max_runes: 20000,
+  groups: [
+    { id: "reply_base", label: "回复 · 基础文案", description: "正式回复里紧跟人设的几段：梗与修辞、排版、时间、发言者、只发图或只叫一声时的替代正文。" },
+    { id: "routing", label: "接话与意图判断", description: "决定这条消息要不要回、回哪一条、指的是哪条的判断模型提示词。" }
+  ],
+  prompts: [
+    {
+      key: "reply.group_sender",
+      group: "reply_base",
+      title: "群聊发言者",
+      usage: "群聊里「注入发言者」打开时，放在历史之后，告诉模型这一轮是谁在说话。",
+      default: "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称（用户 ID）: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。",
+      vars: [{ name: "sender", description: "当前发言者的昵称和用户 ID" }]
+    },
+    {
+      key: "reply.image_only",
+      group: "reply_base",
+      title: "只发图片时的正文",
+      usage: "用户 @ 机器人只发了一张图、没写字时，用这句代替用户正文。",
+      default: "请分析这张图片，并直接回答用户关于图片的问题。"
+    },
+    {
+      key: "routing.demo_classifier",
+      group: "routing",
+      title: "连续消息关系判断",
+      usage: "同一个人连发几条时，判断后一条是补充、更正还是新话题。",
+      default: "判断两条消息之间的关系：后一条是在补充前一条、更正前一条，还是开了一个新话题。",
+      contract: "\n\n只输出一个 JSON 对象：{\"relation\": \"supplement|correction|new\"}，不要代码围栏。"
+    }
+  ]
+};

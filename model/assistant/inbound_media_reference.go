@@ -148,7 +148,7 @@ func (r *Runtime) competingReferents(event MessageEvent, media []MessageEvent) [
 	return competing
 }
 
-const mediaReferenceSystemPrompt = `你在判断一句话指的是不是紧挨着它的那条媒体消息。
+const mediaReferenceSystemBody = `你在判断一句话指的是不是紧挨着它的那条媒体消息。
 
 场景：同一个人先发了媒体（图片／表情／视频／语音／文件），几秒后又发了一句话。
 这句话有两种可能：
@@ -162,9 +162,20 @@ B. 那条媒体只是他对更早消息的一个反应（比如甩个表情）�
    如果更早那条消息本身就令人费解、值得追问（例如一串密钥、一段报错、一个陌生链接），
    而媒体只是一张表情，那多半是 B。
 4. 用户在问自己刚发的照片、截图、文件时是 A；没人会问自己刚甩的表情是什么。
-5. 拿不准就给低置信度，不要硬选。
+5. 拿不准就给低置信度，不要硬选。`
+
+const mediaReferenceSystemContract = `
 
 只输出 JSON：{"refers_to_media": true/false, "confidence": 0~1, "reason": "简短判据"}`
+
+var promptMediaReferenceSpec = registerPrompt(PromptSpec{
+	Key:      "routing.media_reference",
+	Group:    PromptGroupRouting,
+	Title:    "紧挨媒体的那句话指的是谁",
+	Usage:    "同一个人刚发了图片、表情或文件，紧接着又说了一句话时，判断这句话问的是那条媒体，还是媒体之前别人发的消息。",
+	Default:  mediaReferenceSystemBody,
+	Contract: mediaReferenceSystemContract,
+})
 
 func (r *Runtime) judgeMediaReference(ctx context.Context, event MessageEvent, text string, media, competing []MessageEvent) (mediaReferenceDecision, error) {
 	ctx = withLLMUsagePurpose(ctx, "inbound_media_reference")
@@ -181,7 +192,7 @@ func (r *Runtime) judgeMediaReference(ctx context.Context, event MessageEvent, t
 	defer cancel()
 	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: mediaReferenceSystemPrompt},
+			{Role: llm.RoleSystem, Content: r.effectiveConfigForEvent(event).prompt(promptMediaReferenceSpec)},
 			{Role: llm.RoleUser, Content: string(payload)},
 		}})
 		if err != nil {

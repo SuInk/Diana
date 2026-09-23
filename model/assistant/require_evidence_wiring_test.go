@@ -51,7 +51,7 @@ func TestRequireEvidenceContextRoundTrip(t *testing.T) {
 // 提示词必须把两种严格度分开写：tools 宽选（拿不准就保留），needs_evidence 严选
 // （拿不准就 false）。混用会让闲聊也被逼着检索。
 func TestReplyIntentPromptSeparatesEvidenceFromToolSelection(t *testing.T) {
-	systemPrompt, _ := replyIntentPrompts(agent.NewToolRegistry())
+	systemPrompt, _ := replyIntentPrompts(agent.NewToolRegistry(), nil)
 	for _, expected := range []string{
 		`"needs_evidence":false`,
 		"tools 拿不准就保留，needs_evidence 拿不准就填 false",
@@ -66,7 +66,7 @@ func TestReplyIntentPromptSeparatesEvidenceFromToolSelection(t *testing.T) {
 
 // 没有注册表时是纯图片路由，不该混进工具选择和证据要求那一段。
 func TestReplyIntentPromptWithoutRegistryStaysVisualOnly(t *testing.T) {
-	systemPrompt, _ := replyIntentPrompts(nil)
+	systemPrompt, _ := replyIntentPrompts(nil, nil)
 	if strings.Contains(systemPrompt, "needs_evidence") {
 		t.Fatal("纯图片路由不该出现 needs_evidence")
 	}

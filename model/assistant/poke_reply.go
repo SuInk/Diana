@@ -148,23 +148,42 @@ func (p pokeReaction) sendsText() bool {
 	return (p.Action == pokeReactionText || p.Action == pokeReactionBoth) && strings.TrimSpace(p.Text) != ""
 }
 
+// promptPokeReactionSpec 的四种回应名是解析依据，JSON 那一句锁定在 Contract 里。
+var promptPokeReactionSpec = registerPrompt(PromptSpec{
+	Key:   "social.poke_reaction",
+	Group: PromptGroupSocial,
+	Title: "被戳一戳时的回应",
+	Usage: "有人戳了戳机器人时，让模型像真人一样决定戳回去、说句话、都做还是不理。poke、text、both、none 四个回应名是解析依据，改写时保持不变。",
+	Default: "刚刚 {who} 在{scene}戳了戳你（QQ 的戳一戳，没有文字）。语气要求：{tone}\n{recent_chat}\n" +
+		"像真人一样决定怎么回应，四选一：poke 只戳回去（最常见，适合互相玩闹、熟人随手戳）；text 回一句话（适合对方像是在叫你、刚才的话题没说完、或者你想问问怎么了）；" +
+		"both 戳回去再说一句；none 不理（比如对方刚连着戳、群里正聊别的正事、或者你们不熟没必要回应）。不要每次都问「戳我干嘛」，结合最近聊天说点具体的。" +
+		"text 是 1 到 20 个字的一句话，自然口语，不解释什么是戳一戳，不用括号描写动作，不 @ 对方；action 为 poke 或 none 时 text 留空。",
+	Contract: "只输出一个 JSON 对象：{\"action\":\"poke\",\"text\":\"\"}",
+	Vars: []PromptVar{
+		{Name: "who", Description: "戳机器人的人的昵称，没有昵称时是用户 ID"},
+		{Name: "scene", Description: "「私聊里」或「群里」"},
+		{Name: "tone", Description: "按双方好感度和关系给出的语气要求"},
+		{Name: "recent_chat", Description: "最近几条聊天记录，没有时是一句「最近没有聊天记录。」"},
+	},
+})
+
 // generatePokeReaction 让模型像人一样决定怎么回应这一戳：戳回去、说句话、都做，或者不理。
 func (r *Runtime) generatePokeReaction(ctx context.Context, event MessageEvent) (pokeReaction, error) {
 	ctx = withLLMUsagePurpose(ctx, "poke_reply")
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
-	policy := relationshipPolicyForEvent(r.effectiveConfigForEvent(event), profile, event)
+	cfg := r.effectiveConfigForEvent(event)
+	policy := relationshipPolicyForEvent(cfg, profile, event)
 	who := firstNonEmpty(strings.TrimSpace(profile.DisplayName), event.UserID)
 	scene := "私聊里"
 	if event.GroupID != "" {
 		scene = "群里"
 	}
-	instruction := fmt.Sprintf(
-		"刚刚 %s 在%s戳了戳你（QQ 的戳一戳，没有文字）。语气要求：%s\n%s\n"+
-			"像真人一样决定怎么回应，四选一：poke 只戳回去（最常见，适合互相玩闹、熟人随手戳）；text 回一句话（适合对方像是在叫你、刚才的话题没说完、或者你想问问怎么了）；"+
-			"both 戳回去再说一句；none 不理（比如对方刚连着戳、群里正聊别的正事、或者你们不熟没必要回应）。不要每次都问「戳我干嘛」，结合最近聊天说点具体的。"+
-			"text 是 1 到 20 个字的一句话，自然口语，不解释什么是戳一戳，不用括号描写动作，不 @ 对方；action 为 poke 或 none 时 text 留空。"+
-			"只输出一个 JSON 对象：{\"action\":\"poke\",\"text\":\"\"}",
-		who, scene, policy.Tone, r.pokeRecentChat(event))
+	instruction := cfg.promptf(promptPokeReactionSpec, map[string]string{
+		"who":         who,
+		"scene":       scene,
+		"tone":        policy.Tone,
+		"recent_chat": r.pokeRecentChat(event),
+	})
 	messages := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})
 	callCtx, cancel := context.WithTimeout(ctx, pokeReplyTimeout)
 	defer cancel()

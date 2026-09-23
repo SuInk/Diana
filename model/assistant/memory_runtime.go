@@ -47,7 +47,12 @@ const MemoryEventJobDelay = 45 * time.Second
 
 // memoryGateSystemPrompt 是记忆门控的固定前缀。单条和攒批共用同一份，缓存才有
 // 可能在两种形状之间互相命中。
-const memoryGateSystemPrompt = `你是 Diana 的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
+//
+// 最后一条提交方式拆成锁定的输出格式：门控结果按工具参数解析，这条改坏了候选
+// 就全被丢掉，长期记忆悄无声息地停止生长。
+const memoryGateSystemPrompt = memoryGateRulesPrompt + memoryGateOutputContract
+
+const memoryGateRulesPrompt = `你是 Diana 的长期记忆门控器。消息原文已经单独、永久保存在事件日志中；你的任务不是复述聊天，而是只提议值得形成派生长期记忆的内容。
 
 必须遵守：
 1. 逐句理解语义、指代、引用和最近上下文，不得用关键词、前缀、子串或正则机械判断。
@@ -60,8 +65,47 @@ const memoryGateSystemPrompt = `你是 Diana 的长期记忆门控器。消息�
 8. visibility=session 表示只在当前私聊或群可见；visibility=user 只适用于当前发言者明确陈述、非敏感且跨会话确有帮助的稳定事实/偏好。医疗、心理、财务、身份凭证、住址、联系方式、隐私关系等 sensitive=true，且必须 visibility=session。
 9. importance 和 confidence 均为 0 到 1。只有 importance>=0.45 的内容才输出；明确要求“记住”的重要内容可提高 importance，但仍要按真实语义组织，不照抄命令。
 10. content 必须写成自包含、无歧义的第三人称事实，保留实体；evidence 是不超过 60 字的最小证据片段。最多输出 5 条。
-11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。
+11. 上下文里给的是 current 还是 current_batch 取决于这一轮攒了几条。给 current_batch 时要把整批按时间顺序当成同一个人连续说的话一起理解：跨条的指代、补充和改口都要接上，同一件事不要拆成多条记忆；每条候选必须用 source_index 标明出自 current_batch 的第几条（从 0 开始），最能支撑这条记忆的那一条。整批合计最多输出 5 条。`
+
+const memoryGateOutputContract = `
 12. 调用 memory_submit 提交候选，字段含义以工具参数说明为准；没有候选时提交空数组。只有在不支持工具调用时，才退回输出合法 JSON 对象 {"memories":[...]}，不要 Markdown 或解释。`
+
+var promptMemoryGateSpec = registerPrompt(PromptSpec{
+	Key:      "memory.gate",
+	Group:    PromptGroupMemory,
+	Title:    "长期记忆门控",
+	Usage:    "每攒到一批新消息后在后台运行，判断其中哪些内容值得写成长期记忆。规则里出现的字段名和取值（key、kind、visibility、source_type、source_index 等）是解析依据，改写时保持不变。",
+	Default:  memoryGateRulesPrompt,
+	Contract: memoryGateOutputContract,
+})
+
+// memorySummarySystemPrompt 是会话摘要整合器的系统提示词，同一次调用顺带产出
+// thread 便签。提交方式同样锁定，理由同 memoryGateSystemPrompt。
+const memorySummarySystemPrompt = memorySummaryRulesPrompt + memorySummaryOutputContract
+
+const memorySummaryRulesPrompt = `你是 Diana 的会话记忆整合器。请把一批较早的原始聊天事件整理为按时间和主题组织的长期会话摘要，原始事件会继续保留。
+
+要求：
+1. 理解整段对话后按主题聚合，保留人物、时间、事件、决定、未解决问题和事实变化；删除寒暄、重复和无后续价值的噪声。
+2. 不得按关键词机械摘抄，不得把提问误当事实，不得补充原文没有的信息。
+3. existing_summaries 是同会话已有摘要。相同日期和主题必须复用原 key，并生成包含旧摘要与新事件的完整更新版；不同主题建立新 key。
+4. 若提供 rollup，必须额外输出且只输出一条 key 精确等于 rollup.target_key 的层级摘要，把 source_summaries 合并为自包含的时间线；保留人物、关键事实、决定、变化和未解决事项，不得遗漏相互矛盾的信息。不要为 source_summaries 输出逐条副本。
+5. 普通摘要 key 使用 summary.<YYYY-MM-DD>.<topic>；层级摘要必须使用给定 target_key。topic 简短明确，content 自包含。importance/confidence 为 0 到 1，visibility 固定 session，source_type 固定 summary，sensitive 按内容判断。普通摘要 retention_days=365，month 层级=730，year 层级=3650。
+6. 除普通摘要外，必须再输出且只输出一条 key 精确等于 thread_key 的会话线程便签，kind="thread"：写清这个会话「当前进行到哪」——正在聊的事、已经推进到的步骤、已经做出的决定、以及还悬而未决的问题。它是给下一轮对话直接看的状态便签，不是历史流水。
+7. 写 thread 时以 current_thread 为基础做增量更新：已经完结、被取代或不再推进的话题从 thread 里移走（它们归 summary 管），只保留仍然活着的线索。没有任何进行中的事情时，content 写一句话说明会话处于空闲状态。thread 控制在 300 字以内，retention_days 固定 7。
+8. 最多输出 6 条摘要（thread 不计入）；完全没有长期价值且没有 rollup 时摘要可以为空，但 thread 仍要输出。`
+
+const memorySummaryOutputContract = `
+9. 调用 memory_submit 提交摘要和 thread 便签，字段含义以工具参数说明为准。只有在不支持工具调用时，才退回输出合法 JSON {"memories":[...]}。`
+
+var promptMemorySummarySpec = registerPrompt(PromptSpec{
+	Key:      "memory.session_summary",
+	Group:    PromptGroupMemory,
+	Title:    "会话摘要与进行状态",
+	Usage:    "较早的聊天攒够一批后在后台运行，把它们整理成按日期和主题的长期摘要，并更新一条「会话进行到哪」的便签。key 的命名规则（summary.日期.主题、rollup.target_key、thread_key）是写库依据，改写时保持不变。",
+	Default:  memorySummaryRulesPrompt,
+	Contract: memorySummaryOutputContract,
+})
 
 var memoryProfileGroups = []string{"memory", "memories", "recall"}
 
@@ -334,7 +378,7 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: memoryGateSystemPrompt,
+			Content: r.effectiveConfigForEvent(last.event).prompt(promptMemoryGateSpec),
 		},
 		{
 			Role:    llm.RoleUser,
@@ -414,6 +458,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	if r.profileDisabled(events[len(events)-1].ProfileID) {
 		return nil
 	}
+	summaryCfg := r.effectiveConfigForEvent(events[len(events)-1])
 	if len(events) > memorySummaryMaxEvents {
 		events = events[len(events)-memorySummaryMaxEvents:]
 	}
@@ -478,19 +523,8 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 	}
 	messages := []llm.Message{
 		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana 的会话记忆整合器。请把一批较早的原始聊天事件整理为按时间和主题组织的长期会话摘要，原始事件会继续保留。
-
-要求：
-1. 理解整段对话后按主题聚合，保留人物、时间、事件、决定、未解决问题和事实变化；删除寒暄、重复和无后续价值的噪声。
-2. 不得按关键词机械摘抄，不得把提问误当事实，不得补充原文没有的信息。
-3. existing_summaries 是同会话已有摘要。相同日期和主题必须复用原 key，并生成包含旧摘要与新事件的完整更新版；不同主题建立新 key。
-4. 若提供 rollup，必须额外输出且只输出一条 key 精确等于 rollup.target_key 的层级摘要，把 source_summaries 合并为自包含的时间线；保留人物、关键事实、决定、变化和未解决事项，不得遗漏相互矛盾的信息。不要为 source_summaries 输出逐条副本。
-5. 普通摘要 key 使用 summary.<YYYY-MM-DD>.<topic>；层级摘要必须使用给定 target_key。topic 简短明确，content 自包含。importance/confidence 为 0 到 1，visibility 固定 session，source_type 固定 summary，sensitive 按内容判断。普通摘要 retention_days=365，month 层级=730，year 层级=3650。
-6. 除普通摘要外，必须再输出且只输出一条 key 精确等于 thread_key 的会话线程便签，kind="thread"：写清这个会话「当前进行到哪」——正在聊的事、已经推进到的步骤、已经做出的决定、以及还悬而未决的问题。它是给下一轮对话直接看的状态便签，不是历史流水。
-7. 写 thread 时以 current_thread 为基础做增量更新：已经完结、被取代或不再推进的话题从 thread 里移走（它们归 summary 管），只保留仍然活着的线索。没有任何进行中的事情时，content 写一句话说明会话处于空闲状态。thread 控制在 300 字以内，retention_days 固定 7。
-8. 最多输出 6 条摘要（thread 不计入）；完全没有长期价值且没有 rollup 时摘要可以为空，但 thread 仍要输出。
-9. 调用 memory_submit 提交摘要和 thread 便签，字段含义以工具参数说明为准。只有在不支持工具调用时，才退回输出合法 JSON {"memories":[...]}。`),
+			Role:    llm.RoleSystem,
+			Content: summaryCfg.prompt(promptMemorySummarySpec),
 		},
 		{Role: llm.RoleUser, Content: "请整合这批较早会话。上下文 JSON：\n" + string(inputJSON)},
 	}

@@ -308,6 +308,18 @@ func paragraphAt(prompt string, offset int) string {
 	return paragraph
 }
 
-func personaClosingAnchor() string {
-	return "最后：保持人设中设定的身份和口吻，能力、安全和回答范围的规则仍然有效。\n" + replyDepthClosingAnchor
+const promptPersonaClosingAnchor = "最后：保持人设中设定的身份和口吻，能力、安全和回答范围的规则仍然有效。"
+
+var promptPersonaClosingAnchorSpec = registerPrompt(PromptSpec{
+	Key:     "reply.style.closing_anchor",
+	Group:   PromptGroupReplyStyle,
+	Title:   "收尾：回到人设口吻",
+	Usage:   "每轮放在尾部最后：前面的工具规则都是公文体，离生成最近的这一句把语气拉回人设。",
+	Default: promptPersonaClosingAnchor,
+})
+
+// personaClosingAnchor 拼出尾部最后的语气锚点。configs 传机器人配置时读它的覆盖值。
+func personaClosingAnchor(configs ...BotConfig) string {
+	overrides := promptOverridesOf(configs)
+	return overrides.text(promptPersonaClosingAnchorSpec) + "\n" + overrides.text(promptReplyDepthAnchorSpec)
 }

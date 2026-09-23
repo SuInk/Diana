@@ -91,7 +91,7 @@ func (t *dianaSubtaskTool) Run(ctx context.Context, input map[string]any) (strin
 
 	callCtx, cancel := context.WithTimeout(ctx, subtaskTimeout)
 	defer cancel()
-	answer, err := t.runtime.runSubtask(callCtx, group, question, material)
+	answer, err := t.runtime.runSubtask(callCtx, t.runtime.effectiveConfigForEvent(t.event), group, question, material)
 	if err != nil {
 		return "", fmt.Errorf("diana subtask: %w", err)
 	}
@@ -112,10 +112,24 @@ func (t *dianaSubtaskTool) reserve() error {
 	return nil
 }
 
+var promptSubtaskSpec = registerPrompt(PromptSpec{
+	Key:   "media.subtask",
+	Group: PromptGroupMedia,
+	Title: "独立子问题",
+	Usage: "主回复调用「子任务」工具、把一个自足的小问题连同素材交出去时，那次独立模型调用的系统提示词。",
+	Default: `你在为另一个助手处理一个被拆出来的小问题。只依据 material 里给出的内容回答 question。
+
+要求：
+1. material 是你能看到的全部信息。它没写的一律回答「材料里没有」，不要补充常识、不要推测、不要引用你记得的其他内容。
+2. 直接给结论和必要依据，不要复述材料、不要写开场白和总结句。
+3. 结论会被另一个助手拿去组织成对话回复，所以只写事实，不要带语气、称呼或表情。
+4. 材料自相矛盾或不足以判断时，如实说明矛盾或缺口在哪里。`,
+})
+
 // runSubtask 执行一次子调用。它复用后台任务那套 subagentLLMSem 并发闸，而不是自建
 // 一套：主回复、后台任务和子调用共用同一个「同时能有多少路 LLM 在跑」的额度，
 // 免得三套限流各管各的，加起来把供应商打满。
-func (r *Runtime) runSubtask(ctx context.Context, group, question, material string) (string, error) {
+func (r *Runtime) runSubtask(ctx context.Context, cfg BotConfig, group, question, material string) (string, error) {
 	ctx = withLLMUsagePurpose(ctx, "subtask")
 	sem := r.subagentLLMSem
 	if sem != nil {
@@ -128,14 +142,8 @@ func (r *Runtime) runSubtask(ctx context.Context, group, question, material stri
 	}
 	messages := []llm.Message{
 		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你在为另一个助手处理一个被拆出来的小问题。只依据 material 里给出的内容回答 question。
-
-要求：
-1. material 是你能看到的全部信息。它没写的一律回答「材料里没有」，不要补充常识、不要推测、不要引用你记得的其他内容。
-2. 直接给结论和必要依据，不要复述材料、不要写开场白和总结句。
-3. 结论会被另一个助手拿去组织成对话回复，所以只写事实，不要带语气、称呼或表情。
-4. 材料自相矛盾或不足以判断时，如实说明矛盾或缺口在哪里。`),
+			Role:    llm.RoleSystem,
+			Content: strings.TrimSpace(cfg.prompt(promptSubtaskSpec)),
 		},
 		{
 			Role:     llm.RoleUser,

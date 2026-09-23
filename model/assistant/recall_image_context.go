@@ -560,14 +560,46 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 	}
 }
 
+var promptRecallImageSystemSpec = registerPrompt(PromptSpec{
+	Key:     "media.image_cache.system",
+	Group:   PromptGroupMedia,
+	Title:   "图片缓存描述 · 身份",
+	Usage:   "聊天里的图片需要转成文字时（被引用、撤回留档、超出输入预算），视觉模型给它写一份可复用的描述；这段是那次调用的系统提示词。",
+	Default: "你是 Diana 的图片内容缓存子代理。输出将作为后续聊天和撤回记录的可靠视觉事实。",
+})
+
+var promptRecallImageInstructionSpec = registerPrompt(PromptSpec{
+	Key:     "media.image_cache.instruction",
+	Group:   PromptGroupMedia,
+	Title:   "图片缓存描述 · 要求",
+	Usage:   "和图片一起发给视觉模型的描述要求，写成的描述会缓存下来，之后的聊天和撤回记录都用它代替原图。",
+	Default: "请为这张图片生成可复用的客观中文描述。说明主要人物、物体、场景、界面结构，并完整记录清晰可辨的文字、数字和关键细节。不要回答任何聊天问题，不要推测看不清的内容，不要使用 Markdown，控制在1200字以内。",
+})
+
+var promptStickerSystemSpec = registerPrompt(PromptSpec{
+	Key:     "media.sticker.system",
+	Group:   PromptGroupMedia,
+	Title:   "表情包标注 · 身份",
+	Usage:   "表情包还没有简介时，视觉模型给它写一句语义简介；这段是那次调用的系统提示词。",
+	Default: "你是 Diana 的表情包语义标注器。简介用于按聊天语境检索合适表情，不能编造看不清的文字、角色或梗来源。",
+})
+
+var promptStickerInstructionSpec = registerPrompt(PromptSpec{
+	Key:     "media.sticker.instruction",
+	Group:   PromptGroupMedia,
+	Title:   "表情包标注 · 要求",
+	Usage:   "和表情包图片一起发给视觉模型的简介要求。机器人挑表情时按这份简介匹配聊天语境。",
+	Default: "请为这张聊天表情包生成简短中文简介。重点说明发送者借这张图表达的潜台词、复合情绪、说话视角、典型触发场景和清晰可辨的原始文字，而不是只描述构图或画风。不要回答当前聊天问题，不要使用 Markdown，控制在180字以内。",
+})
+
 func (r *Runtime) describeRecallImage(ctx context.Context, event MessageEvent, source string) (string, error) {
-	const instruction = "请为这张图片生成可复用的客观中文描述。说明主要人物、物体、场景、界面结构，并完整记录清晰可辨的文字、数字和关键细节。不要回答任何聊天问题，不要推测看不清的内容，不要使用 Markdown，控制在1200字以内。"
-	return r.describeCachedImage(ctx, event, source, "你是 Diana 的图片内容缓存子代理。输出将作为后续聊天和撤回记录的可靠视觉事实。", instruction, "image_description_cache")
+	cfg := r.effectiveConfigForEvent(event)
+	return r.describeCachedImage(ctx, event, source, cfg.prompt(promptRecallImageSystemSpec), cfg.prompt(promptRecallImageInstructionSpec), "image_description_cache")
 }
 
 func (r *Runtime) describeStickerImage(ctx context.Context, event MessageEvent, source string) (string, error) {
-	const instruction = "请为这张聊天表情包生成简短中文简介。重点说明发送者借这张图表达的潜台词、复合情绪、说话视角、典型触发场景和清晰可辨的原始文字，而不是只描述构图或画风。不要回答当前聊天问题，不要使用 Markdown，控制在180字以内。"
-	return r.describeCachedImage(ctx, event, source, "你是 Diana 的表情包语义标注器。简介用于按聊天语境检索合适表情，不能编造看不清的文字、角色或梗来源。", instruction, "sticker_description")
+	cfg := r.effectiveConfigForEvent(event)
+	return r.describeCachedImage(ctx, event, source, cfg.prompt(promptStickerSystemSpec), cfg.prompt(promptStickerInstructionSpec), "sticker_description")
 }
 
 func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, source, system, instruction, purpose string) (string, error) {

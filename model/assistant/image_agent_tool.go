@@ -540,18 +540,46 @@ func dianaImageTaskKey(event MessageEvent, request dianaImageToolRequest) string
 	return fmt.Sprintf("image:%x", digest[:12])
 }
 
-func asyncImageReplyInstruction(result dianaImageToolResult) string {
+// 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
+// 「你没有权限」，用户看到的就只剩这句话。
+const (
+	promptAsyncImageReply     = "【本轮图片任务】{status}。{announced}立即继续回复用户的文字部分，不要等待图片，不要再调用 image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。"
+	promptAsyncImageAnnounced = "运行时已经把「开始处理」发给用户了，不要再说一遍。"
+)
+
+var (
+	promptAsyncImageReplySpec = registerPrompt(PromptSpec{
+		Key:     "media.image_async",
+		Group:   PromptGroupMedia,
+		Title:   "后台生图已受理",
+		Usage:   "意图识别判定要生图、任务已提交到后台时，告诉正式回复这一轮只说准备画什么，别说成已经画好。",
+		Default: promptAsyncImageReply,
+		Vars: []PromptVar{
+			{Name: "status", Description: "「已在后台启动」或复用已有任务时的「已在后台处理」"},
+			{Name: "announced", Description: "运行时已经发过开始提示时填入下一条说明，否则为空"},
+		},
+	})
+	promptAsyncImageAnnouncedSpec = registerPrompt(PromptSpec{
+		Key:     "media.image_async.announced",
+		Group:   PromptGroupMedia,
+		Title:   "生图开始提示已发出",
+		Usage:   "运行时已经替机器人发过「开始处理」时，填进上一段的 {announced}，避免重复说。",
+		Default: promptAsyncImageAnnounced,
+	})
+)
+
+// asyncImageReplyInstruction 生成本轮图片任务的说明。configs 传机器人配置时读它的覆盖值。
+func asyncImageReplyInstruction(result dianaImageToolResult, configs ...BotConfig) string {
+	overrides := promptOverridesOf(configs)
 	status := "已在后台启动"
 	if result.Reused {
 		status = "已在后台处理"
 	}
 	announced := ""
 	if result.Announced {
-		announced = "运行时已经把「开始处理」发给用户了，不要再说一遍。"
+		announced = overrides.text(promptAsyncImageAnnouncedSpec)
 	}
-	// 明确堵住几种常见的推脱说法：任务其实已经在后台跑了，这时回一句「做不到」或
-	// 「你没有权限」，用户看到的就只剩这句话。
-	return fmt.Sprintf("【本轮图片任务】%s。%s立即继续回复用户的文字部分，不要等待图片，不要再调用 image。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。不要向用户提及任务编号等内部标识。不得声称无法生图、无法直接修改、需要用户自己操作或用户没有权限——任务已经受理，图片完成后会由运行时自动补发。", status, announced)
+	return overrides.render(promptAsyncImageReplySpec, map[string]string{"status": status, "announced": announced})
 }
 
 func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string) (dianaImageToolResult, error) {

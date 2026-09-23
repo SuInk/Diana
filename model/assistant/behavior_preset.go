@@ -141,12 +141,36 @@ const replyProportionRule = "按当前这一问给最小但足够的回答，直
 // 「怎么说话」，是投递机制和运行时上下文——正文写死了也不作数，关掉只会让消息
 // 发不出去。
 
+// 回复表达规则的覆盖登记。带发送控制标记（分条、消息内换行、模式前缀）的几段，
+// 标记由发送层解析，界面上改措辞时标记本身必须原样保留。
+const replyMarkerUsage = "里面的发送控制标记要原样保留，写错了分条和换行会失效。"
+
+func styleSpec(key, title, usage, text string, vars ...PromptVar) *PromptSpec {
+	return registerPrompt(PromptSpec{Key: "reply.style." + key, Group: PromptGroupReplyStyle, Title: title, Usage: usage, Default: text, Vars: vars})
+}
+
+var (
+	promptReplyConversationalIntentSpec = styleSpec("conversational_intent", "聊天还是求助", "人设不是接管模式时每轮注入：先分清对方在聊天还是求助，闲聊不自动给建议、不追问。", replyConversationalIntentRule)
+	promptReplyCompactPacingSpec        = styleSpec("compact_pacing", "聊天节奏", "人设不是接管模式时每轮注入：尽量少发几条，按自然停顿分条。", replyCompactPacingRule)
+	promptReplyEmojiSpec                = styleSpec("emoji", "不用 emoji", "人设不是接管模式时每轮注入：回复里不用彩色 emoji。", replyEmojiRule)
+	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入（接管模式也在）：不许真实换行，另起消息和消息内换行各用哪个标记。"+replyMarkerUsage, replyBlankLineRule)
+	promptReplySegmentationSpec         = styleSpec("segmentation", "自然分条", "开启自然分条时每轮注入：按意群决定在哪里另起一条。"+replyMarkerUsage, replySegmentationRule)
+	promptReplySegmentationOffSpec      = styleSpec("segmentation_off", "关闭多条发送", "关闭自然分条时替代上一条：默认只发一条。"+replyMarkerUsage, replySegmentationMarkerOnlyRule)
+	promptReplyDocumentDeliverySpec     = styleSpec("document_delivery", "长文分组", "人设不是接管模式时每轮注入：详细长文按主要部分分条，部分内部换行排版。"+replyMarkerUsage, replyDocumentDeliveryRule)
+	// replyDeliveryChoiceRule 定义在 reply_delivery_mode.go，只在这里用，登记也放这里。
+	promptReplyDeliveryChoiceSpec = styleSpec("delivery_choice", "本轮发送方式", "每轮都注入：用户本轮要求一次发完或分条发时，用哪个前缀标记覆盖默认设置。"+replyMarkerUsage, replyDeliveryChoiceRule)
+	promptReplyProportionSpec     = styleSpec("proportion", "回答的篇幅", "人设不是接管模式时每轮注入：按这一问给最小但足够的回答，不罗列参考链接。", replyProportionRule)
+)
+
 // replyPresentationPrompt contains shared delivery rules, independent of persona.
 // 接管模式下只留投递机制那几段，其余交给人设正文。
-func replyPresentationPrompt(naturalSplit bool, voice personaVoice, mode PersonaMode) string {
-	segmentation := replySegmentationRule
+//
+// configs 传机器人配置时读它的覆盖值，不传时用内置默认值。
+func replyPresentationPrompt(naturalSplit bool, voice personaVoice, mode PersonaMode, configs ...BotConfig) string {
+	overrides := promptOverridesOf(configs)
+	segmentation := overrides.text(promptReplySegmentationSpec)
 	if !naturalSplit {
-		segmentation = replySegmentationMarkerOnlyRule
+		segmentation = overrides.text(promptReplySegmentationOffSpec)
 	}
 	// 填空题档照给，接管档留空——留空的项由下面的 TrimSpace/Join 自然吞掉。
 	unless := func(rule string) string {
@@ -156,39 +180,47 @@ func replyPresentationPrompt(naturalSplit bool, voice personaVoice, mode Persona
 		return rule
 	}
 	return strings.TrimSpace(strings.Join([]string{
-		unless(replyConversationalIntentRule),
-		unless(replyCompactPacingRule),
-		unless(replyEmojiRule),
+		unless(overrides.text(promptReplyConversationalIntentSpec)),
+		unless(overrides.text(promptReplyCompactPacingSpec)),
+		unless(overrides.text(promptReplyEmojiSpec)),
 		// 这几段不跟着关：讲的是消息标记和本轮分条上限，是投递机制，不是怎么说话。
-		replyBlankLineRule,
+		overrides.text(promptReplyBlankLineSpec),
 		segmentation,
-		unless(replyDocumentDeliveryRule),
-		replyDeliveryChoiceRule,
-		replyLineBreakChoiceRule,
-		unless(replyProportionRule),
-		unless(voice.prompt()),
+		unless(overrides.text(promptReplyDocumentDeliverySpec)),
+		overrides.text(promptReplyDeliveryChoiceSpec),
+		overrides.text(promptReplyLineBreakChoiceSpec),
+		unless(overrides.text(promptReplyProportionSpec)),
+		unless(voice.promptWith(overrides)),
 	}, "\n"))
 }
 
+const (
+	promptActionDescription = "【动作描写已开启】这只是原有人设和表达风格之外的一层呈现方式：性格、称呼、语气、亲疏和做事方式仍完全跟随基础人设，不要因为开启动作描写就变得更黏人、更主动、更亲密或改成另一种角色。\n" +
+		"把动作或神态放在全角括号里，可以出现在台词前、中间或结尾；一条消息里有几次真实的动作或状态变化，就可以自然穿插几处，不必只写一处，也不要每句台词都机械配一个动作。\n" +
+		"括号里只写角色此刻看得见的动作、视线、姿势或语气变化，每处一句话以内；不写心理独白，不替用户决定动作或反应，不用动作顶替应回答的信息，也不要铺成小说场景。\n" +
+		"每条含自然语言的回复至少写一处短动作；只有整条回复是纯代码、纯命令、纯链接或必须逐字保留的原文时可以不加。"
+	promptActionDescriptionAnchor = "动作描写只叠加在原有人设上：保持原来的性格和语气，每条含自然语言的回复至少用全角括号写一处短动作，不额外变得黏人或亲密；纯代码、命令、链接或原文除外。"
+)
+
+var (
+	promptActionDescriptionSpec       = styleSpec("action_description", "动作描写", "开启动作描写、且人设不是接管模式时注入：动作怎么写、写多少。", promptActionDescription)
+	promptActionDescriptionAnchorSpec = styleSpec("action_description_anchor", "动作描写收尾提醒", "开启动作描写时放在尾部最后，离生成最近，再提醒一次动作只是叠加在人设上。", promptActionDescriptionAnchor)
+)
+
 // actionDescriptionPrompt is an optional rendering layer, not a persona. It may
 // be combined with any reply style without inventing new traits or relationships.
-func actionDescriptionPrompt(enabled bool, mode PersonaMode) string {
+func actionDescriptionPrompt(enabled bool, mode PersonaMode, configs ...BotConfig) string {
 	if !enabled || mode.ownsPersonaVoice() {
 		return ""
 	}
-	return strings.Join([]string{
-		"【动作描写已开启】这只是原有人设和表达风格之外的一层呈现方式：性格、称呼、语气、亲疏和做事方式仍完全跟随基础人设，不要因为开启动作描写就变得更黏人、更主动、更亲密或改成另一种角色。",
-		"把动作或神态放在全角括号里，可以出现在台词前、中间或结尾；一条消息里有几次真实的动作或状态变化，就可以自然穿插几处，不必只写一处，也不要每句台词都机械配一个动作。",
-		"括号里只写角色此刻看得见的动作、视线、姿势或语气变化，每处一句话以内；不写心理独白，不替用户决定动作或反应，不用动作顶替应回答的信息，也不要铺成小说场景。",
-		"每条含自然语言的回复至少写一处短动作；只有整条回复是纯代码、纯命令、纯链接或必须逐字保留的原文时可以不加。",
-	}, "\n")
+	return promptOverridesOf(configs).text(promptActionDescriptionSpec)
 }
 
-func actionDescriptionClosingAnchor(enabled bool, mode PersonaMode) string {
+func actionDescriptionClosingAnchor(enabled bool, mode PersonaMode, configs ...BotConfig) string {
 	if !enabled || mode.ownsPersonaVoice() {
 		return ""
 	}
-	return "动作描写只叠加在原有人设上：保持原来的性格和语气，每条含自然语言的回复至少用全角括号写一处短动作，不额外变得黏人或亲密；纯代码、命令、链接或原文除外。"
+	return promptOverridesOf(configs).text(promptActionDescriptionAnchorSpec)
 }
 
 // 自称和句尾语气词：人设里最常想改、又最不该逼人重写整段人设的两项。
@@ -249,22 +281,39 @@ func (voice personaVoice) empty() bool {
 	return voice.SelfReference == "" && len(voice.Enders) == 0
 }
 
+const (
+	promptVoiceSelfReference = "自称偏好是「{self_reference}」：需要强调自己时可以优先使用，也可以自然地用「我」或省略主语；不要求每句重复自称，不要为了用上它额外加一句话。"
+	promptVoiceEnders        = "句尾语气词偏好是：{enders}。合适时按当下语气挑选，也可以不用，或选其他符合人设的自然语气词；只有一个候选也不必每句添加。别每句都用同一个，也别为了轮换硬凑，分成多条消息后同样不必每条都带语气词。\n" +
+		"问句、感叹句里语气词放在「？」「！」前面；代码、命令、链接、报错原文照原样写，不要往里面塞语气词。"
+	promptVoiceNote = "具体偏好以这里为准，但这些是可选表达，不是逐句必选项；自称和语气词可以独立使用，也可以都省略，以自然、贴合语境为先。"
+)
+
+var (
+	promptVoiceSelfReferenceSpec = styleSpec("voice.self_reference", "自称偏好", "填了自称、且人设不是接管模式时注入。",
+		promptVoiceSelfReference, PromptVar{Name: "self_reference", Description: "配置的自称，如 本喵"})
+	promptVoiceEndersSpec = styleSpec("voice.enders", "句尾语气词偏好", "填了句尾语气词、且人设不是接管模式时注入。",
+		promptVoiceEnders, PromptVar{Name: "enders", Description: "配置的语气词候选，每个带「」、用顿号分隔"})
+	promptVoiceNoteSpec = styleSpec("voice.note", "自称与语气词的补充说明", "填了自称或句尾语气词时跟在它们后面，说明这些是可选表达。", promptVoiceNote)
+)
+
 // prompt describes voice preferences, not mandatory words for every sentence.
 // Style rules and closing anchors must also permit omission and variation.
 func (voice personaVoice) prompt() string {
+	return voice.promptWith(nil)
+}
+
+func (voice personaVoice) promptWith(overrides PromptOverrides) string {
 	if voice.empty() {
 		return ""
 	}
-	lines := make([]string, 0, 4)
+	lines := make([]string, 0, 3)
 	if voice.SelfReference != "" {
-		lines = append(lines, "自称偏好是「"+voice.SelfReference+"」：需要强调自己时可以优先使用，也可以自然地用「我」或省略主语；不要求每句重复自称，不要为了用上它额外加一句话。")
+		lines = append(lines, overrides.render(promptVoiceSelfReferenceSpec, map[string]string{"self_reference": voice.SelfReference}))
 	}
 	if len(voice.Enders) > 0 {
-		lines = append(lines, "句尾语气词偏好是："+quotePersonaEnders(voice.Enders)+"。合适时按当下语气挑选，也可以不用，或选其他符合人设的自然语气词；只有一个候选也不必每句添加。别每句都用同一个，也别为了轮换硬凑，分成多条消息后同样不必每条都带语气词。")
-		lines = append(lines,
-			"问句、感叹句里语气词放在「？」「！」前面；代码、命令、链接、报错原文照原样写，不要往里面塞语气词。")
+		lines = append(lines, overrides.render(promptVoiceEndersSpec, map[string]string{"enders": quotePersonaEnders(voice.Enders)}))
 	}
-	lines = append(lines, "具体偏好以这里为准，但这些是可选表达，不是逐句必选项；自称和语气词可以独立使用，也可以都省略，以自然、贴合语境为先。")
+	lines = append(lines, overrides.text(promptVoiceNoteSpec))
 	return strings.Join(lines, "\n")
 }
 
@@ -293,3 +342,5 @@ const (
 const defaultForwardReplyThreshold = 140
 
 const replyDepthClosingAnchor = "输出前只检查这次究竟问了什么：没有明确要详细说明时，先用一小段给核心答案，通常一两句话，不加攻略式标题、备选方案、小提醒或收尾邀请；多天行程先只说每天的主要安排，不自动细分到每个时段。问如何检查就回答检查，不自作主张补上修改或删除操作。明确要求详细步骤、完整攻略或对比时才展开，仍须覆盖已经给出的条件和必要风险。答案足够回应这一问就停，不为了展示懂得多而补充。"
+
+var promptReplyDepthAnchorSpec = styleSpec("depth_anchor", "收尾：只答问到的", "每轮放在尾部最后、紧跟人设收尾提醒：输出前检查这次究竟问了什么，别展开成攻略。", replyDepthClosingAnchor)

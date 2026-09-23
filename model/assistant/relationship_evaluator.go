@@ -115,7 +115,11 @@ type relationshipEvaluationPayload struct {
 //
 // 抽成常量是为了让规则能被测试钉住：画像里的 timezone 一栏决定了机器人敢不敢
 // 谈对方的作息，漏掉它整条跨时区链路就退回「按本机时区猜」。
-const relationshipEvaluationSystemPrompt = `你是聊天机器人 Diana 的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化，并顺便维护这个人的长期画像。
+//
+// 最后一条 JSON 格式拆成锁定的输出格式：解析失败这一轮就不记分也不记画像。
+const relationshipEvaluationSystemPrompt = relationshipEvaluationRulesPrompt + relationshipEvaluationOutputContract
+
+const relationshipEvaluationRulesPrompt = `你是聊天机器人 Diana 的关系变化评估器。请判断当前发言是否对“当前发言者与机器人之间的关系”产生了真实、明确的变化，并顺便维护这个人的长期画像。
 
 必须遵守：
 1. 必须理解整句话、引用对象和最近对话，不得按关键词、子串、前缀或正则机械加减分。
@@ -133,8 +137,19 @@ const relationshipEvaluationSystemPrompt = `你是聊天机器人 Diana 的关�
 11. known_portrait 是已经记下的画像。已经记过且没有变化的不要重复输出；同一栏的情况发生变化（搬家、换工作、作息改了）时直接输出新值，旧值会被顶掉。
 12. 具体门牌地址、电话号码、证件号、账号密码这类精确身份与联系方式一律不记，居住地点最细只到城市或城区。
 13. timezone 这一栏的 value 必须是 IANA 时区名（如 Asia/Shanghai、Europe/Berlin、America/New_York），写别的一律会被丢弃。这一栏是拿来算「他那边现在几点」的：缺了它，机器人只能按自己所在机器的时区推断对方作息，深夜催睡、清早问早都会落空，所以只要能确定就要记，不用等对方专门报时区。对方说自己在哪个国家或城市、说出自己那边的当地时间、提到与机器人所在地的时差，或者这一轮记下了能唯一确定时区的居住地时，都要一并输出 timezone；已经记了居住地而 known_portrait 里还没有 timezone 时，本轮直接补上。由居住地推出来的填 source=inferred、evidence 写那条居住地依据、confidence 取 0.9 以上。只有能确定到唯一时区时才写，跨多个时区的国家（如美国、俄罗斯）没说具体城市就不要记。短期出差、旅行不记；但对方明说自己搬去了别的地方、或长期待在别处时要更新这一栏。已经记过的时区和对方这次说的当地时间对不上时，按他这次说的输出新值。
-14. 本条没有值得记的画像时 portrait 输出空数组，最多 3 条。
+14. 本条没有值得记的画像时 portrait 输出空数组，最多 3 条。`
+
+const relationshipEvaluationOutputContract = `
 15. 只输出一个合法 JSON 对象，不要输出 Markdown 或额外文字。格式固定为：{"should_update":false,"delta":0,"confidence":0.96,"reason":"中性查询，不改变关系","portrait":[{"field":"occupation","value":"在做后端开发","evidence":"我平时写 Go","source":"stated","confidence":0.95}]}`
+
+var promptRelationshipEvaluationSpec = registerPrompt(PromptSpec{
+	Key:      "memory.relationship",
+	Group:    PromptGroupMemory,
+	Title:    "好感度与人员画像评估",
+	Usage:    "机器人回复之后在后台运行，判断这条消息有没有真的改变双方关系，并顺带更新发言者的长期画像。规则里的字段名和取值（should_update、delta 的档位、portrait 各字段、stated/inferred）是解析依据，改写时保持不变。",
+	Default:  relationshipEvaluationRulesPrompt,
+	Contract: relationshipEvaluationOutputContract,
+})
 
 func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageEvent, text string, handled bool) (relationshipEvaluationDecision, UserMemoryProfile, bool) {
 	ctx = withLLMUsagePurpose(ctx, "relationship_evaluate")
@@ -142,7 +157,8 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 		return relationshipEvaluationDecision{}, UserMemoryProfile{}, false
 	}
 	profile, _ := r.loadUserMemoryProfile(ctx, event)
-	policy := relationshipPolicyForEvent(r.effectiveConfigForEvent(event), profile, event)
+	cfg := r.effectiveConfigForEvent(event)
+	policy := relationshipPolicyForEvent(cfg, profile, event)
 	payload := relationshipEvaluationPayload{
 		Message:        r.proactiveReplyPayload(event, r.cleanInput(event, text)),
 		CurrentScore:   profile.Favorability,
@@ -159,14 +175,14 @@ func (r *Runtime) evaluateRelationshipUpdate(ctx context.Context, event MessageE
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: strings.TrimSpace(relationshipEvaluationSystemPrompt),
+			Content: strings.TrimSpace(cfg.prompt(promptRelationshipEvaluationSpec)),
 		},
 		{
 			Role:    llm.RoleUser,
 			Content: "请评估这条消息是否改变当前发言者与机器人的关系，并给出这一轮观察到的人员画像。上下文 JSON：\n" + string(payloadJSON),
 		},
 	}
-	callCtx, cancel := context.WithTimeout(ctx, relationshipEvaluationTimeout(r.effectiveConfigForEvent(event)))
+	callCtx, cancel := context.WithTimeout(ctx, relationshipEvaluationTimeout(cfg))
 	defer cancel()
 	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})

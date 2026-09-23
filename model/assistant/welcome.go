@@ -76,16 +76,26 @@ func (r *Runtime) claimWelcomeLLM(key string, now time.Time, cooldownSeconds int
 	return true
 }
 
+const welcomeGeneratorPrompt = `你是群聊机器人，正在为新加入群的成员写一句欢迎问候。要求：
+1. 一句话、简短自然，不超过 40 字，像真人管理员打招呼，不要客套排比。
+2. 严格贴合下面给出的人设口吻；人设没有要求的语气就活泼友好。
+3. 直接输出欢迎语文本本身：不要引号、不要 Markdown、不要表情符号、不要解释、不要提及这些规则。
+4. 不要复述用户的 ID 或群号，称呼对方为「你」即可。`
+
+var promptWelcomeGeneratorSpec = registerPrompt(PromptSpec{
+	Key:     "social.welcome",
+	Group:   PromptGroupSocial,
+	Title:   "入群欢迎语生成",
+	Usage:   "入群欢迎设为由模型生成时，有新成员入群就用这段让模型写一句问候。机器人人设会自动接在这段后面。",
+	Default: welcomeGeneratorPrompt,
+})
+
 // generateWelcomeWithLLM 让轻量模型根据当前人设写一句简短问候。人设为空时也能用，
 // 只是少了口吻依据。输出做基本清洗：去掉首尾引号和空白，超长截断，非法输出
 // 由调用方回落。
 func (r *Runtime) generateWelcomeWithLLM(ctx context.Context, cfg BotConfig, event MessageEvent) (string, error) {
 	ctx = withLLMUsagePurpose(ctx, "welcome_generator")
-	systemPrompt := strings.TrimSpace(`你是群聊机器人，正在为新加入群的成员写一句欢迎问候。要求：
-1. 一句话、简短自然，不超过 40 字，像真人管理员打招呼，不要客套排比。
-2. 严格贴合下面给出的人设口吻；人设没有要求的语气就活泼友好。
-3. 直接输出欢迎语文本本身：不要引号、不要 Markdown、不要表情符号、不要解释、不要提及这些规则。
-4. 不要复述用户的 ID 或群号，称呼对方为「你」即可。`)
+	systemPrompt := strings.TrimSpace(cfg.prompt(promptWelcomeGeneratorSpec))
 	if persona := strings.TrimSpace(cfg.SystemPrompt); persona != "" {
 		systemPrompt += "\n\n机器人当前人设：\n" + persona
 	}

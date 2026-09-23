@@ -296,6 +296,8 @@ export interface BotProfileConfig {
   proactive_reply_extra_criteria?: string;
   /** 主动回复路由放行后，注入最终回复模型的生成约束。 */
   proactive_reply_prompt?: string;
+  /** 改过的内置提示词正文，按提示词键存；没出现的键用内置默认值。见「提示词」页。 */
+  prompt_overrides?: Record<string, string>;
   /** 主动回复路由放行后的确定性采样率，范围 0~1。 */
   proactive_reply_chance?: number;
   /** 主动回复最低置信度，范围 0~1，默认 0.9。 */
@@ -913,6 +915,7 @@ function cacheTTL(method: string, url: string): number {
     case "/api/system/version":
     case "/api/assistant/platforms":
     case "/api/assistant/features":
+    case "/api/assistant/prompts":
       return 60_000;
     case "/api/llm/config":
     case "/api/assistant/config":
@@ -1456,6 +1459,38 @@ export function getNewBotProfileDefaults(platform: string): Promise<BotProfileCo
 
 export function createBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {
   return requestJSON<BotProfileConfig>("/api/assistant/config/new", { method: "POST", body: JSON.stringify(config) });
+}
+
+export interface PromptGroupInfo {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface PromptVar {
+  name: string;
+  description: string;
+}
+
+/** 一段可以覆盖的内置提示词。contract 是锁定的输出格式，运行时拼在正文之后，不能改。 */
+export interface PromptSpec {
+  key: string;
+  group: string;
+  title: string;
+  usage: string;
+  default: string;
+  vars?: PromptVar[];
+  contract?: string;
+}
+
+export interface PromptCatalog {
+  groups: PromptGroupInfo[];
+  prompts: PromptSpec[];
+  max_runes: number;
+}
+
+export function getPromptCatalog(): Promise<PromptCatalog> {
+  return requestJSON<PromptCatalog>("/api/assistant/prompts");
 }
 
 export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {

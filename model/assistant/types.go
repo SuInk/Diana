@@ -591,20 +591,21 @@ type BotConfig struct {
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
-	NotebookSharedScopeEnabled *bool  `json:"notebook_shared_scope_enabled,omitempty"`
-	PromptInjectTime           *bool  `json:"prompt_inject_time,omitempty"`
-	PromptInjectPlaintextRules *bool  `json:"prompt_inject_plaintext_rules,omitempty"`
-	PromptInjectGroupSender    *bool  `json:"prompt_inject_group_sender,omitempty"`
-	PromptChineseSlangHint     *bool  `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText     string `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText   string `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate         string `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate  string `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText        string `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText         string `json:"prompt_wake_only_text,omitempty"`
-	// ProactiveReplyRouterPrompt 是旧的整段路由提示词。Participation 的评分契约取代
-	// 它之后运行时不再读取（见 proactiveReplyRouterPromptForChatIn），字段保留只为旧
-	// 配置能原样存取；要补判据用 ProactiveReplyExtraCriteria。
+	NotebookSharedScopeEnabled *bool `json:"notebook_shared_scope_enabled,omitempty"`
+	PromptInjectTime           *bool `json:"prompt_inject_time,omitempty"`
+	PromptInjectPlaintextRules *bool `json:"prompt_inject_plaintext_rules,omitempty"`
+	PromptInjectGroupSender    *bool `json:"prompt_inject_group_sender,omitempty"`
+	PromptChineseSlangHint     *bool `json:"prompt_chinese_slang_hint,omitempty"`
+	// 下面几个整段提示词字段只作输入：读配置时用户写过的内容迁进 PromptOverrides，
+	// 字段随即清空，运行时不再读它们（见 migrateLegacyPromptFields）。
+	PromptChineseSlangText    string `json:"prompt_chinese_slang_text,omitempty"`
+	PromptPlaintextRulesText  string `json:"prompt_plaintext_rules_text,omitempty"`
+	PromptTimeTemplate        string `json:"prompt_time_template,omitempty"`
+	PromptGroupSenderTemplate string `json:"prompt_group_sender_template,omitempty"`
+	PromptImageOnlyText       string `json:"prompt_image_only_text,omitempty"`
+	PromptWakeOnlyText        string `json:"prompt_wake_only_text,omitempty"`
+	// ProactiveReplyRouterPrompt 是旧的整段路由提示词，只在没启用 Participation 的旧
+	// 配置上生效，同样迁进 PromptOverrides；要补判据用 ProactiveReplyExtraCriteria。
 	ProactiveReplyRouterPrompt string `json:"proactive_reply_router_prompt,omitempty"`
 	// ProactiveReplyExtraCriteria 是接话评分的补充判据：本群的称呼、黑话和禁区。
 	// 拼在内置评分提示词尾部，不替代评分口径，也不改变裸 JSON 输出契约。

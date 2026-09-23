@@ -39,10 +39,25 @@ var identityAliasRoles = []string{"bot_owner", "current_user", "bot", "user", "g
 // 这里原本是手写的 im_owner、im_message_xxx 一串字面量。前缀从 qq_ 改成 im_ 那次，
 // 提示词跟着改了，散落在别处讲同一件事的注释没跟上，于是照着注释找 bug 的人会被
 // 带到一个已经不存在的前缀上。拼出来之后，改前缀这一处就够了。
-var llmIdentityPrivacyPrompt = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；" +
-	identityAliasRoleList() + " 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。" +
-	"调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:" + identityAlias("message") + "xxx]、" +
-	"[diana-at:" + identityAlias("user") + "xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。"
+var llmIdentityPrivacyPrompt = llmIdentityPrivacyIntro + llmIdentityPrivacyContract
+
+// 拆成两段：前半段是说明，可以改措辞；后半段教模型原样复制别名，代理靠它把别名换回
+// 真实标识，锁定为 Contract。
+var (
+	llmIdentityPrivacyIntro = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；" +
+		identityAliasRoleList() + " 前缀保留角色语义。理解对话时按角色和昵称判断，不要猜测真实数字。"
+	llmIdentityPrivacyContract = "调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:" + identityAlias("message") + "xxx]、" +
+		"[diana-at:" + identityAlias("user") + "xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。"
+)
+
+var promptIdentityPrivacySpec = registerPrompt(PromptSpec{
+	Key:      "reply.identity_privacy",
+	Group:    PromptGroupReplyRules,
+	Title:    "会话标识隐私代理",
+	Usage:    "开启「对模型隐藏账号 ID」时，加在每次请求第一条 system 消息最前面，说明账号和消息 ID 已换成别名。末尾「原样复制别名」那句是锁定的，代理靠它把别名换回真实标识。",
+	Default:  llmIdentityPrivacyIntro,
+	Contract: llmIdentityPrivacyContract,
+})
 
 // identityAlias 拼出某个角色的别名前缀，例如 im_message_。
 func identityAlias(role string) string {
@@ -83,6 +98,8 @@ type identityPrivacyScope struct {
 	salt        string
 	realToAlias map[string]string
 	aliasToReal map[string]string
+	// overrides 是建 scope 时那台机器人的提示词覆盖，只用来取隐私说明的正文。
+	overrides PromptOverrides
 }
 
 type identityPrivacyProvider struct {
@@ -227,6 +244,7 @@ func (r *Runtime) withIdentityPrivacyContext(ctx context.Context, event MessageE
 	scope := identityPrivacyScopeFromContext(ctx)
 	if scope == nil {
 		scope = newIdentityPrivacyScopeWithSalt(r.identityAliasSalt(ctx))
+		scope.overrides = cfg.PromptOverrides
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
 	scope.register(cfg.OwnerIDForEvent(event), "bot_owner")
@@ -260,6 +278,7 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 	if scope == nil {
 		// 兜底路径同样要用全局盐，否则这一条链路的别名会和主路径对不上。
 		scope = newIdentityPrivacyScopeWithSalt(r.identityAliasSalt(ctx))
+		scope.overrides = r.configForContext(ctx).PromptOverrides
 	}
 	return func(provider LLMProvider) (string, error) {
 		return run(&identityPrivacyProvider{provider: provider, scope: scope})
@@ -524,13 +543,14 @@ func (s *identityPrivacyScope) protectRequest(req llm.GenerateRequest) llm.Gener
 		protectedMessage.ToolCalls = s.protectToolCalls(message.ToolCalls)
 		protected.Messages[index] = protectedMessage
 	}
+	privacyPrompt := s.overrides.text(promptIdentityPrivacySpec)
 	for index := range protected.Messages {
 		if protected.Messages[index].Role == llm.RoleSystem {
-			protected.Messages[index].Content = llmIdentityPrivacyPrompt + "\n\n" + protected.Messages[index].Content
+			protected.Messages[index].Content = privacyPrompt + "\n\n" + protected.Messages[index].Content
 			return protected
 		}
 	}
-	protected.Messages = append([]llm.Message{{Role: llm.RoleSystem, Content: llmIdentityPrivacyPrompt}}, protected.Messages...)
+	protected.Messages = append([]llm.Message{{Role: llm.RoleSystem, Content: privacyPrompt}}, protected.Messages...)
 	return protected
 }
 

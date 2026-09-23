@@ -163,7 +163,7 @@ func directPluginReply(resp PluginResponse) string {
 // tools remain callable even when the full local Agent surface is disabled.
 func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig, messages []llm.Message, extraTools []agent.Tool) (string, error) {
 	cfg = cfg.WithDefaults()
-	messages = withReplyGenerationBudget(messages, cfg.MaxReplyChars, cfg.Platform)
+	messages = withReplyGenerationBudgetForConfig(messages, cfg)
 	if cfg.AgentEnabled || len(extraTools) > 0 {
 		agentCfg := agent.Config{
 			WorkDir:                    AgentWorkspaceDir(),
@@ -1766,6 +1766,26 @@ func nextScheduledTrigger(previous time.Time, interval time.Duration, now time.T
 	return next.Add(missed * interval)
 }
 
+var promptScheduledQuerySystemSpec = registerPrompt(PromptSpec{
+	Key:     "tasks.scheduled_query.system",
+	Group:   PromptGroupTasks,
+	Title:   "定时查询 · 执行要求",
+	Usage:   "周期查询类定时任务到点执行时，接在机器人完整系统提示词之后，要求模型真的调工具去查、并用人设语气交结果。",
+	Default: "本次是后台定时订阅执行。必须实际调用适合的工具完成查询，优先获取最新信息；不要创建、修改或删除其他定时任务。最终只返回本次查询结果，并保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
+})
+
+var promptScheduledQueryRequestSpec = registerPrompt(PromptSpec{
+	Key:     "tasks.scheduled_query.request",
+	Group:   PromptGroupTasks,
+	Title:   "定时查询 · 本次请求",
+	Usage:   "周期查询到点执行时，代替用户消息发给模型的那段话，带上当前时间和用户当初设定的查询要求。",
+	Default: "执行本次定时订阅。当前时间：{time}。\n查询要求：{query}",
+	Vars: []PromptVar{
+		{Name: "time", Description: "执行时的本机时间，如 2026-09-23 14:05:00 CST"},
+		{Name: "query", Description: "用户创建定时任务时写的查询要求"},
+	},
+})
+
 func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Reminder) (string, error) {
 	source := reminderSourceEvent(item)
 	cfg := r.effectiveConfigForEvent(source)
@@ -1779,11 +1799,14 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 		{
 			Role: llm.RoleSystem,
 			Content: r.systemPromptWithRelationship(source, nil, false, relationship) +
-				"\n本次是后台定时订阅执行。必须实际调用适合的工具完成查询，优先获取最新信息；不要创建、修改或删除其他定时任务。最终只返回本次查询结果，并保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
+				"\n" + cfg.prompt(promptScheduledQuerySystemSpec),
 		},
 		{
-			Role:    llm.RoleUser,
-			Content: fmt.Sprintf("【当前需要回复的消息】\n执行本次定时订阅。当前时间：%s。\n查询要求：%s", time.Now().Format("2006-01-02 15:04:05 MST"), item.Message),
+			Role: llm.RoleUser,
+			Content: "【当前需要回复的消息】\n" + cfg.promptf(promptScheduledQueryRequestSpec, map[string]string{
+				"time":  time.Now().Format("2006-01-02 15:04:05 MST"),
+				"query": item.Message,
+			}),
 		},
 	}
 	reply, err := r.generateReply(taskCtx, cfg, source, relationship, messages, nil)

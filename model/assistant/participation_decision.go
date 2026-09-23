@@ -12,17 +12,18 @@ import (
 // 意图识别问的本来就是「是不是」「哪一条」「多自然」，只是过去只能让对话模型把
 // 答案写成 JSON 再解析回来。下面两张表把同一套判据交给只做判断的模型（Jev 这类
 // System One 模型）直接回答，答案按 Path 摆回原来的 JSON 字段，上层的阈值、冷却
-// 和日志一行都不用改。对话模型看不到这两张表，走的仍是提示词里的契约。
+// 和日志一行都不用改。对话模型看不到这两张表，走的仍是提示词里的契约。判据取自
+// 同一份提示词覆盖，改了哪段两种模型都跟着变。
 
-func participationDecisionSpec() *llm.DecisionSpec {
+func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 	return &llm.DecisionSpec{Questions: []llm.DecisionQuestion{
 		{
 			Key:           "relevance",
 			Kind:          llm.DecisionNoul,
 			Label:         "在跟机器人说话",
-			Instructions:  "当前消息是不是明确在跟机器人说话。\n" + participationRelevanceNote + "\n" + participationSharedNote,
-			TrueCriteria:  participationRelevanceTrue,
-			FalseCriteria: participationRelevanceFalse,
+			Instructions:  "当前消息是不是明确在跟机器人说话。\n" + overrides.text(promptParticipationRelevanceNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
+			TrueCriteria:  overrides.text(promptParticipationRelevanceTrueSpec),
+			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
 			Path:          "relevance.directed",
 			ReasonPath:    "relevance.reason",
 		},
@@ -30,7 +31,7 @@ func participationDecisionSpec() *llm.DecisionSpec {
 			Key:          "chat_in",
 			Kind:         llm.DecisionScore,
 			Label:        "闲聊适合度",
-			Instructions: "没人找机器人时，机器人插一句是否自然。\n" + participationChatInNote + "\n" + participationSharedNote,
+			Instructions: "没人找机器人时，机器人插一句是否自然。\n" + overrides.text(promptParticipationChatInNoteSpec) + "\n" + overrides.text(promptParticipationSharedNoteSpec),
 			Levels:       participationChatInLevels,
 			LevelValues:  participationChatInLevelValues,
 			Min:          0,
@@ -44,7 +45,7 @@ func participationDecisionSpec() *llm.DecisionSpec {
 // proactiveReplyDecisionSpec 是旧的 should_reply 契约。target_message_id 是一道单选，
 // turn_message_ids 是逐条候选各问一次——判断模型没有「输出一个数组」这种答案，多选
 // 只能拆成多道是非题。
-func proactiveReplyDecisionSpec(candidates []proactiveReplyCandidate) *llm.DecisionSpec {
+func proactiveReplyDecisionSpec(candidates []proactiveReplyCandidate, overrides PromptOverrides) *llm.DecisionSpec {
 	questions := []llm.DecisionQuestion{
 		{
 			Key:            "should_reply",
@@ -76,9 +77,9 @@ func proactiveReplyDecisionSpec(candidates []proactiveReplyCandidate) *llm.Decis
 			Kind:         llm.DecisionNoul,
 			Label:        "在跟机器人说话",
 			Instructions: "当前消息是不是明确在跟机器人说话。",
-			TrueCriteria: participationRelevanceTrue,
-			// 旧契约里这一项和评分契约的 relevance 问的是同一件事，判据也共用一份。
-			FalseCriteria: participationRelevanceFalse,
+			TrueCriteria: overrides.text(promptParticipationRelevanceTrueSpec),
+			// 旧契约里这一项和评分契约的 relevance 问的是同一件事，判据和覆盖也共用一份。
+			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
 			Path:          "directed_at_bot",
 		},
 		{

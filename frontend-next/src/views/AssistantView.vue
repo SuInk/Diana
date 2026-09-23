@@ -1676,6 +1676,22 @@
           </section>
         </div>
 
+        <!-- 提示词：代码里所有内置提示词的原文都能在这里看、能改。只存改过的正文，
+             没改的跟着版本更新走；要解析输出的那几段把格式锁在正文后面。 -->
+        <div v-show="editorTab === 'prompts'" class="stack">
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>内置提示词</h2>
+                <span class="card-sub">每一段发给模型的内置文案。改过的只作用于这台机器人，保存后生效；没改过的随版本更新。</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <PromptOverridesEditor :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+            </div>
+          </section>
+        </div>
+
         <div v-show="editorTab === 'advanced'" class="stack">
           <!-- Agent -->
           <section class="card">
@@ -2015,6 +2031,7 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
+import { withoutPromptOverrides } from "../prompt-overrides";
 import { formatClock } from "../format";
 import {
   deleteBotProfile,
@@ -2068,6 +2085,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
+import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import type { PersonaLintFinding } from "../api";
@@ -2487,6 +2505,7 @@ const editorTabs = [
   { key: "persona", label: "人设" },
   { key: "behavior", label: "行为" },
   { key: "context", label: "上下文" },
+  { key: "prompts", label: "提示词" },
   { key: "advanced", label: "高级" }
 ] as const;
 type EditorTab = (typeof editorTabs)[number]["key"];
@@ -4125,6 +4144,18 @@ const promptDefaults = {
   proactive_reply_prompt: ""
 };
 
+// 旧的整段提示词字段迁进覆盖表后对应的键，见后端 legacyPromptFields。
+const legacyPromptOverrideKeys = [
+  "reply.chinese_slang",
+  "reply.plaintext_rules",
+  "reply.time_template",
+  "reply.group_sender",
+  "reply.image_only",
+  "reply.wake_only",
+  "reply.proactive_reply",
+  "routing.legacy_router"
+] as const;
+
 function openPersonaComposer(): void {
   personaComposerOpen.value = true;
   void nextTick(() => personaDraftInput.value?.focus());
@@ -4209,6 +4240,9 @@ function resetPromptDefaults(): void {
     prompt_inject_group_sender: true,
     prompt_chinese_slang_hint: true
   });
+  // 这几段以前是上面那几个旧字段，后端已经把它们迁进覆盖表；恢复时一并清掉，
+  // 按钮的效果和迁移前一致。别的提示词在「提示词」页里单独恢复，这里不动。
+  form.value.prompt_overrides = withoutPromptOverrides(form.value.prompt_overrides, legacyPromptOverrideKeys);
   toastSuccess("已恢复内置提示词，保存配置后生效");
 }
 

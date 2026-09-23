@@ -26,18 +26,17 @@ import (
 type PromptGroup string
 
 const (
-	PromptGroupReplyBase   PromptGroup = "reply_base"
-	PromptGroupReplyTools  PromptGroup = "reply_tools"
-	PromptGroupReplyRules  PromptGroup = "reply_rules"
-	PromptGroupReplyStyle  PromptGroup = "reply_style"
-	PromptGroupReplyTail   PromptGroup = "reply_tail"
-	PromptGroupRouting     PromptGroup = "routing"
-	PromptGroupAudit       PromptGroup = "audit"
-	PromptGroupMemory      PromptGroup = "memory"
-	PromptGroupSocial      PromptGroup = "social"
-	PromptGroupMedia       PromptGroup = "media"
-	PromptGroupTasks       PromptGroup = "tasks"
-	PromptGroupPersonaTool PromptGroup = "persona_tool"
+	PromptGroupReplyBase  PromptGroup = "reply_base"
+	PromptGroupReplyTools PromptGroup = "reply_tools"
+	PromptGroupReplyRules PromptGroup = "reply_rules"
+	PromptGroupReplyStyle PromptGroup = "reply_style"
+	PromptGroupReplyTail  PromptGroup = "reply_tail"
+	PromptGroupRouting    PromptGroup = "routing"
+	PromptGroupAudit      PromptGroup = "audit"
+	PromptGroupMemory     PromptGroup = "memory"
+	PromptGroupSocial     PromptGroup = "social"
+	PromptGroupMedia      PromptGroup = "media"
+	PromptGroupTasks      PromptGroup = "tasks"
 )
 
 // PromptGroupInfo 是分组在界面上的标题和一句说明。
@@ -59,7 +58,6 @@ var promptGroupOrder = []PromptGroupInfo{
 	{PromptGroupSocial, "欢迎、戳一戳与纪念日", "不经过正式回复链路的几种社交回应。"},
 	{PromptGroupMedia, "图片、文档与子任务", "看图、OCR、读文档和独立子问题。"},
 	{PromptGroupTasks, "订阅与定时任务", "RSS 筛选和定时查询。"},
-	{PromptGroupPersonaTool, "人设工具", "WebUI 里「用 AI 生成人设」和「检查写法」用的提示词。"},
 }
 
 // PromptGroups 返回界面分组，按展示顺序排列。

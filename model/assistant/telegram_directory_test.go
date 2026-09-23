@@ -233,7 +233,7 @@ func TestGroupToolDefersToPlatformInterface(t *testing.T) {
 		if _, err := tool.Run(context.Background(), map[string]any{"operation": "members"}); err == nil || !strings.Contains(err.Error(), "platform") {
 			t.Fatalf("%s members err = %v, want redirect to platform", platform, err)
 		}
-		if prompt := r.groupToolPrompt(event); strings.Contains(prompt, groupDirectoryToolName) {
+		if prompt := r.groupToolPrompt(event, BotConfig{}); strings.Contains(prompt, groupDirectoryToolName) {
 			t.Fatalf("%s prompt mentions %s while platform is enabled: %s", platform, groupDirectoryToolName, prompt)
 		}
 	}
