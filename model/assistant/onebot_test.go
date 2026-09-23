@@ -464,6 +464,31 @@ func TestReverseServerRecordsUnauthorizedHandshake(t *testing.T) {
 	}
 }
 
+// 握手被拒以前只打到终端。机器人全停用时运行时已经退出，只有监听器自己能记，
+// 所以由它直接写运行日志；接入端几秒重连一次，同一原因和客户端一分钟只记一条。
+func TestReverseServerWritesRejectionToAppLog(t *testing.T) {
+	const token = "0123456789abcdef"
+	server := NewOneBotReverseServer(OneBotConfig{AccessToken: token})
+	logs := &captureAppLogs{}
+	server.SetAppLogWriter(logs)
+	for range 3 {
+		request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+		request.Header.Set("Authorization", "Bearer wrong-token-value")
+		server.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("rejection logs = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != "onebot_handshake_rejected" || entry.Metadata["reason"] != "token_mismatch" || !strings.Contains(entry.Message, "不一致") {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if strings.Contains(entry.Message+entry.Detail+entry.Target, "wrong-token-value") {
+		t.Fatal("rejection log leaked the presented token")
+	}
+}
+
 func TestReverseServerRejectsCrossOriginBrowser(t *testing.T) {
 	request := httptest.NewRequest("GET", "http://bot.example/onebot/v11/ws", nil)
 	request.Host = "bot.example"

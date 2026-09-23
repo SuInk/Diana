@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/SuInk/diana/model/applog"
 )
 
 const maxOneBotWebSocketFrameBytes = 8 << 20
@@ -56,6 +58,16 @@ type OneBotReverseServer struct {
 	// 同上，机器人停用期间接入端也会几秒一次地重连。
 	lastDetachedClient string
 	lastDetachedLog    time.Time
+	// appLogs 让握手被拒写进运行日志。监听器比运行时活得久：机器人全停用时运行时
+	// 已经退出，接入端却还在重连，这种拒绝只有监听器自己能记。
+	appLogs applog.Writer
+}
+
+// SetAppLogWriter 设置握手被拒时写入的运行日志。
+func (s *OneBotReverseServer) SetAppLogWriter(writer applog.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appLogs = writer
 }
 
 func (s *OneBotReverseServer) OutboundBackoffEnabled() bool { return true }
@@ -546,6 +558,7 @@ func (s *OneBotReverseServer) recordDetached(r *http.Request) {
 	s.connMu.Unlock()
 	if shouldLog {
 		log.Printf("onebot reverse handshake rejected: reason=bot_disabled client=%s", fingerprint)
+		s.recordRejectionLog("bot_disabled", fingerprint)
 	}
 }
 
@@ -572,7 +585,42 @@ func (s *OneBotReverseServer) recordUnauthorized(r *http.Request, reason string)
 	s.connMu.Unlock()
 	if shouldLog {
 		log.Printf("onebot reverse handshake rejected: reason=%s client=%s", reason, fingerprint)
+		s.recordRejectionLog(reason, fingerprint)
 	}
+}
+
+// oneBotRejectionMessages 把拒绝原因翻成排查时能直接照做的话。
+var oneBotRejectionMessages = map[string]string{
+	"server_token_unset": "OneBot 反向连接被拒：Diana 这边还没配 Access Token",
+	"token_missing":      "OneBot 反向连接被拒：接入端没有带 Access Token",
+	"token_mismatch":     "OneBot 反向连接被拒：接入端的 Access Token 和机器人配置不一致",
+	"bot_disabled":       "OneBot 反向连接被拒：用这条反连的机器人都已停用",
+}
+
+// recordRejectionLog 把一次握手被拒写进运行日志。去重沿用调用方的节流（同一原因
+// 和客户端一分钟一条），这里只负责写；token 本身任何时候都不落日志。
+func (s *OneBotReverseServer) recordRejectionLog(reason, client string) {
+	s.mu.RLock()
+	writer := s.appLogs
+	s.mu.RUnlock()
+	if writer == nil {
+		return
+	}
+	message := oneBotRejectionMessages[reason]
+	if message == "" {
+		message = "OneBot 反向连接被拒：" + reason
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = writer.AppendLog(ctx, applog.Entry{
+		Kind:      applog.KindError,
+		Level:     applog.LevelError,
+		Action:    "onebot_handshake_rejected",
+		Message:   message,
+		Target:    client,
+		Metadata:  map[string]any{"reason": reason, "client": client},
+		CreatedAt: time.Now(),
+	})
 }
 
 // authorized 校验反向 WebSocket 请求鉴权，第二个返回值是失败原因。
