@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 )
@@ -130,13 +129,19 @@ func TestGroupOverrideCannotChangeSoul(t *testing.T) {
 	}
 }
 
-// 导入：YAML 和 JSON 走同一条路径，voice 块摊平成老字段，老文件照样能用。
-func TestParsePersonaDocumentAcceptsYAMLAndJSON(t *testing.T) {
-	raw, err := os.ReadFile("../../examples/personas/diana-soul.yaml")
+// 导入：品格层原样读回，voice 块摊平成老字段。
+func TestParsePersonaDocumentKeepsSoulAndFlattensVoice(t *testing.T) {
+	out, err := RenderPersonaYAML([]Persona{{Name: "Diana", Soul: testSoul()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := ParsePersonaDocument(raw)
+	const voice = "voice:\n  style: 先给结论再补理由。\n  self_reference: 我\n  examples:\n    - user: 服务起不来\n      reply: 端口被占了，先查谁占着。\n"
+	anchor := "\npersona_version: 1\n"
+	if !strings.Contains(string(out), anchor) {
+		t.Fatalf("persona_version missing:\n%s", string(out)[:400])
+	}
+	raw := strings.Replace(string(out), anchor, anchor+voice, 1)
+	document, err := ParsePersonaDocument([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +149,7 @@ func TestParsePersonaDocumentAcceptsYAMLAndJSON(t *testing.T) {
 		t.Fatalf("personas = %d", len(document.Personas))
 	}
 	persona := document.Personas[0]
-	if persona.Soul == nil || len(persona.Soul.Values) == 0 || persona.Soul.Values[0].Why == "" {
+	if persona.Soul == nil || persona.Soul.Render() != testSoul().Render() {
 		t.Fatalf("soul lost: %#v", persona.Soul)
 	}
 	// voice 摊平进人设正文，运行时只认老字段。
@@ -159,15 +164,6 @@ func TestParsePersonaDocumentAcceptsYAMLAndJSON(t *testing.T) {
 	}
 	if persona.SelfReference != "我" {
 		t.Fatalf("self reference = %q", persona.SelfReference)
-	}
-
-	// 老 JSON 文件照收。
-	legacy, err := os.ReadFile("../../examples/personas/ranran.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if document, err = ParsePersonaDocument(legacy); err != nil || len(document.Personas) != 1 {
-		t.Fatalf("legacy json: %#v err=%v", document, err)
 	}
 	if _, err := ParsePersonaDocument([]byte("   ")); err == nil {
 		t.Fatal("empty document should fail")

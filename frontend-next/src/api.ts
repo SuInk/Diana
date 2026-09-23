@@ -284,18 +284,8 @@ export interface BotProfileConfig {
   prompt_inject_plaintext_rules?: boolean;
   prompt_inject_group_sender?: boolean;
   prompt_chinese_slang_hint?: boolean;
-  prompt_chinese_slang_text?: string;
-  prompt_plaintext_rules_text?: string;
-  prompt_time_template?: string;
-  prompt_group_sender_template?: string;
-  prompt_image_only_text?: string;
-  prompt_wake_only_text?: string;
-  /** @deprecated 旧的整段路由提示词，已被接话评分契约取代，后端不再读取。 */
-  proactive_reply_router_prompt?: string;
   /** 接话评分的补充判据：本群的称呼、黑话和禁区，拼在内置评分提示词尾部，最多 1000 字。 */
   proactive_reply_extra_criteria?: string;
-  /** 主动回复路由放行后，注入最终回复模型的生成约束。 */
-  proactive_reply_prompt?: string;
   /** 改过的内置提示词正文，按提示词键存；没出现的键用内置默认值。见「提示词」页。 */
   prompt_overrides?: Record<string, string>;
   /** 主动回复路由放行后的确定性采样率，范围 0~1。 */
@@ -2800,17 +2790,6 @@ export interface PersonaImportResult {
   unknown_styles?: string[];
 }
 
-/** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
-export const PERSONA_EXPORT_VERSION = 1;
-
-/** 合并在后端做：一次读改写落一次库，中途失败不会留下「导了一半」的状态。 */
-export function importPersonas(personas: Persona[]): Promise<PersonaImportResult> {
-  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
-    method: "POST",
-    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
-  });
-}
-
 /** 机器人自己写下的一条自述。写入只有它自己能做，这里只读、删和清空。 */
 export interface SelfNote {
   id: string;
@@ -2858,7 +2837,7 @@ export function purgeSelfNotes(profile: string): Promise<SelfNoteListResult> {
 export function importPersonaSource(source: string): Promise<PersonaImportResult> {
   return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
     method: "POST",
-    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, source })
+    body: JSON.stringify({ source })
   });
 }
 

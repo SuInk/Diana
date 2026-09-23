@@ -141,62 +141,21 @@ https://HOST/api/channels/wecom/callback</code></pre>
       </section>
 
       <section class="section searchable" id="persona-portability">
-        <div class="section-heading"><p class="eyebrow">Portable personas</p><h2>A persona is a JSON file you can write by hand</h2></div>
-        <p>The persona library stores "who it is and how it talks" as named sets you can switch between. The whole library and a single persona export to the same file format, and both import back — moving machines, keeping a backup, or handing a persona you tuned to someone else is all this one file.</p>
-        <p>The library is a <strong>source to apply from, not a live binding</strong>: picking a set fills those fields into the bot form, and what runs afterwards is the form. Editing the library entry never silently changes a bot you already configured.</p>
-
-        <h3>What the file looks like</h3>
-        <pre><code>{
-  "version": 1,
-  "personas": [
-    {
-      "name": "Ranran",
-      "system_prompt": "You are one of the people in this group chat, not an assistant.",
-      "reply_style": "human",
-      "action_description_enabled": false,
-      "self_reference": "I",
-      "sentence_enders": ""
-    }
-  ]
-}</code></pre>
-        <p>Import accepts three shapes so you never have to reshape a file by hand: the full <code>{"personas": [...]}</code>, a bare array <code>[...]</code>, or a single persona <code>{...}</code>. The file carries no IDs or timestamps — those are local state and are reassigned on import.</p>
-
-        <div class="table-wrap"><table><thead><tr><th>Field</th><th>Required</th><th>Notes</th></tr></thead><tbody>
-          <tr><td><code>name</code></td><td>Yes</td><td>Shown in the library, up to 40 characters.</td></tr>
-          <tr><td><code>system_prompt</code></td><td>No</td><td>The persona body, up to 4000 characters.</td></tr>
-          <tr><td><code>reply_style</code></td><td>No</td><td>Speaking style, see below. Empty means this persona does not pin a style.</td></tr>
-          <tr><td><code>action_description_enabled</code></td><td>No</td><td>Whether to weave parenthesised actions around dialogue. Defaults to <code>false</code>.</td></tr>
-          <tr><td><code>self_reference</code></td><td>No</td><td>How the bot refers to itself.</td></tr>
-          <tr><td><code>sentence_enders</code></td><td>No</td><td>Comma-separated sentence-ending particles. Several values are candidates the model picks from by mood.</td></tr>
-        </tbody></table></div>
-
-        <h3>Valid reply_style values</h3>
-        <div class="table-wrap"><table><thead><tr><th>Value</th><th>Style</th></tr></thead><tbody>
-          <tr><td><code>human</code></td><td>A specific person talking to you — emotions out front, clingy, leaves hooks</td></tr>
-          <tr><td><code>assistant</code></td><td>Default</td></tr>
-          <tr><td><code>gentle</code></td><td>Gentle</td></tr>
-          <tr><td><code>lively</code></td><td>Lively</td></tr>
-          <tr><td><code>concise</code></td><td>Concise</td></tr>
-          <tr><td><code>catgirl</code></td><td>Catgirl</td></tr>
-          <tr><td><code>roleplay</code></td><td>Roleplay — exposed in the UI as the "action description" switch; imports as <code>assistant</code> plus <code>action_description_enabled: true</code></td></tr>
-        </tbody></table></div>
-        <p>An unrecognised value does not fail the import: those personas come in as <code>assistant</code>, and the console names the value it could not resolve so a typo in a hand-written file is easy to find.</p>
-
-        <h3>Import only adds</h3>
+        <div class="section-heading"><p class="eyebrow">Portable personas</p><h2>One persona YAML is the whole prompt configuration</h2></div>
+        <p>The persona library stores "who it is, how it talks and how it judges" as named sets you can switch between. A single persona and the whole library export to the same YAML file, and both import back — moving machines, keeping a backup, or handing a tuned persona to someone else is all this one file. The pencil on each library card opens that YAML for editing.</p>
+        <p>The library is <strong>a source to apply, not a live binding</strong>: picking a set fills the bot form, and the bot runs what is in the form. Editing the library copy never silently changes a bot you already configured.</p>
         <ul class="check-list">
-          <li>Same name, different content → renamed to "Name (2)"; a persona you already tuned is never overwritten.</li>
-          <li>Same name, all six fields identical → skipped, so importing one file twice does not pile up copies.</li>
-          <li>No name, no content, or a full library (50 sets) → ignored.</li>
-          <li>The result reports each of these counts, not just "imported".</li>
+          <li><code>format_version</code> is the file format version and decides how the file is parsed. Files without it (including old JSON exports) are no longer supported; newer versions than this Diana understands are rejected.</li>
+          <li><code>persona_version</code> is the persona's own version. It goes up by one whenever the saved content changes, so people sharing a persona can tell whose copy is newer.</li>
+          <li><code>prompts</code> must list every built-in prompt exactly once — unchanged ones carry the default text, keys ending in <code>.format</code> are output formats. Missing or misspelled keys are errors, never silent defaults.</li>
+          <li>Syntax is checked on save and import: YAML errors report the line, and misspelled field names are rejected instead of ignored.</li>
+          <li>Files carry no IDs or timestamps; imports always assign new ones. Importing never overwrites: same name with different content is renamed, identical content is skipped.</li>
         </ul>
-
-        <h3>What is not in the file</h3>
-        <p>Reply mode (how readily it joins a chat), time-of-day tone, refusal wording and model assignments are not part of a persona file. Those describe how this bot runs in this group, not who it is — the same persona belongs at different chattiness in a work group and a hangout group.</p>
 
         <h3>SillyTavern character cards</h3>
         <p>Import also accepts SillyTavern character cards: V1/V2/V3 JSON files and PNGs with an embedded card (the <code>chara</code>/<code>ccv3</code> tEXt chunk). The card's <code>description</code>, <code>personality</code>, <code>scenario</code>, example dialogue and greeting are composed into one persona prompt (<code>{{char}}</code>/<code>{{user}}</code> macros are expanded in place; past the 4000-character budget, later sections are dropped whole). An embedded <code>character_book</code> is merged into the world book along the way. Alternate greetings, creator notes and other fields with no counterpart are not imported.</p>
 
-        <p>The repository ships hand-written examples you can import directly: <code>examples/personas/</code>.</p>
+        <p>The repository ships example files you can import directly: <code>examples/personas/</code>.</p>
       </section>
 
       <section class="section searchable" id="world-book-romance">

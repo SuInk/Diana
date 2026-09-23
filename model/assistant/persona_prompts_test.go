@@ -83,14 +83,71 @@ func TestPersonaYAMLRejectsIncompletePrompts(t *testing.T) {
 	}
 }
 
-// 这个功能之前导出的人设文件没有 prompts 这一节，照样能读，按默认值处理。
-func TestPersonaDocumentWithoutPromptsStillLoads(t *testing.T) {
-	document, err := ParsePersonaDocument([]byte("name: 老人设\nsystem_prompt: 说话简短\n"))
+// 人设文件按 format_version 解析：没写版本号的旧文件、比当前新的版本都要拒绝并说清原因，
+// 不能按猜的规则读成一套和作者给的不一样的人设。
+func TestPersonaDocumentFormatVersion(t *testing.T) {
+	out, err := RenderPersonaYAML([]Persona{{Name: "猫娘", SystemPrompt: "喵"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document.Personas[0].Prompts != nil {
-		t.Fatalf("prompts = %#v, want none", document.Personas[0].Prompts)
+	text := string(out)
+	if !strings.HasPrefix(text, "format_version: 1\n") {
+		t.Fatalf("rendered YAML lacks format_version: 1:\n%s", text[:200])
+	}
+	document, err := ParsePersonaDocument(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.FormatVersion != PersonaFormatVersion {
+		t.Fatalf("FormatVersion = %d", document.FormatVersion)
+	}
+
+	for name, raw := range map[string]string{
+		"v0 single": "name: 老人设\nsystem_prompt: 说话简短\n",
+		"v0 list":   "version: 1\npersonas:\n  - name: 老人设\n    system_prompt: 说话简短\n",
+		"v0 json":   `{"version":1,"personas":[{"name":"老人设","system_prompt":"说话简短"}]}`,
+	} {
+		if _, err := ParsePersonaDocument([]byte(raw)); err == nil || !strings.Contains(err.Error(), "format_version") {
+			t.Errorf("%s: legacy document accepted or unclear error: %v", name, err)
+		}
+	}
+
+	newer := strings.Replace(text, "format_version: 1", "format_version: 2", 1)
+	if _, err := ParsePersonaDocument([]byte(newer)); err == nil || !strings.Contains(err.Error(), "2") {
+		t.Fatalf("format_version 2 accepted or unclear error: %v", err)
+	}
+	if _, err := ParsePersonaDocument([]byte(strings.Replace(text, "format_version: 1", "format_version: 0", 1))); err == nil {
+		t.Fatal("format_version 0 accepted")
+	}
+}
+
+// 版本 1 严格读：拼错的字段名要报出来，每套都要有名字和 prompts。
+func TestPersonaDocumentV1IsStrict(t *testing.T) {
+	out, err := RenderPersonaYAML([]Persona{{Name: "猫娘", SystemPrompt: "喵"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	typo := strings.Replace(text, "\nsystem_prompt:", "\nsystem_promt:", 1)
+	if typo == text {
+		t.Fatalf("system_prompt not found at top level:\n%s", text[:400])
+	}
+	if _, err := ParsePersonaDocument([]byte(typo)); err == nil || !strings.Contains(err.Error(), "system_promt") {
+		t.Fatalf("unknown field accepted or not named: %v", err)
+	}
+	if _, err := ParsePersonaDocument([]byte("format_version: 1\nsystem_prompt: 喵\n")); err == nil || !strings.Contains(err.Error(), "name") {
+		t.Fatalf("nameless persona accepted: %v", err)
+	}
+	if _, err := ParsePersonaDocument([]byte("format_version: 1\nname: 猫娘\nsystem_prompt: 喵\n")); err == nil || !strings.Contains(err.Error(), "prompts") {
+		t.Fatalf("persona without prompts accepted: %v", err)
+	}
+	library, err := RenderPersonaYAML([]Persona{{Name: "甲", SystemPrompt: "甲"}, {Name: "乙", SystemPrompt: "乙"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := strings.Replace(string(library), "format_version: 1\n", "format_version: 1\nauthor: 某人\n", 1)
+	if _, err := ParsePersonaDocument([]byte(extra)); err == nil || !strings.Contains(err.Error(), "author") {
+		t.Fatalf("unknown top-level field in a library accepted: %v", err)
 	}
 }
 

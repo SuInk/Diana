@@ -596,21 +596,9 @@ type BotConfig struct {
 	PromptInjectPlaintextRules *bool `json:"prompt_inject_plaintext_rules,omitempty"`
 	PromptInjectGroupSender    *bool `json:"prompt_inject_group_sender,omitempty"`
 	PromptChineseSlangHint     *bool `json:"prompt_chinese_slang_hint,omitempty"`
-	// 下面几个整段提示词字段只作输入：读配置时用户写过的内容迁进 PromptOverrides，
-	// 字段随即清空，运行时不再读它们（见 migrateLegacyPromptFields）。
-	PromptChineseSlangText    string `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText  string `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate        string `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate string `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText       string `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText        string `json:"prompt_wake_only_text,omitempty"`
-	// ProactiveReplyRouterPrompt 是旧的整段路由提示词，只在没启用 Participation 的旧
-	// 配置上生效，同样迁进 PromptOverrides；要补判据用 ProactiveReplyExtraCriteria。
-	ProactiveReplyRouterPrompt string `json:"proactive_reply_router_prompt,omitempty"`
 	// ProactiveReplyExtraCriteria 是接话评分的补充判据：本群的称呼、黑话和禁区。
 	// 拼在内置评分提示词尾部，不替代评分口径，也不改变裸 JSON 输出契约。
 	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
-	ProactiveReplyPrompt        string `json:"proactive_reply_prompt,omitempty"`
 	// PromptOverrides 是管理员改过的内置提示词正文，按 PromptSpec.Key 存。只存改过的，
 	// 没出现的键用内置默认值，见 prompt_overrides.go。
 	PromptOverrides            PromptOverrides `json:"prompt_overrides,omitempty"`
@@ -1045,12 +1033,6 @@ type ConfigPayload struct {
 	PromptInjectPlaintextRules     *bool                `json:"prompt_inject_plaintext_rules,omitempty"`
 	PromptInjectGroupSender        *bool                `json:"prompt_inject_group_sender,omitempty"`
 	PromptChineseSlangHint         *bool                `json:"prompt_chinese_slang_hint,omitempty"`
-	PromptChineseSlangText         string               `json:"prompt_chinese_slang_text,omitempty"`
-	PromptPlaintextRulesText       string               `json:"prompt_plaintext_rules_text,omitempty"`
-	PromptTimeTemplate             string               `json:"prompt_time_template,omitempty"`
-	PromptGroupSenderTemplate      string               `json:"prompt_group_sender_template,omitempty"`
-	PromptImageOnlyText            string               `json:"prompt_image_only_text,omitempty"`
-	PromptWakeOnlyText             string               `json:"prompt_wake_only_text,omitempty"`
 	AutoImageDescription           *bool                `json:"auto_image_description,omitempty"`
 	AutoVideoPreprocess            *bool                `json:"auto_video_preprocess,omitempty"`
 	ModelRoles                     map[string]ModelRole `json:"model_roles,omitempty"`
@@ -1061,9 +1043,7 @@ type ConfigPayload struct {
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
 	NotebookSharedScopeEnabled  *bool           `json:"notebook_shared_scope_enabled,omitempty"`
-	ProactiveReplyRouterPrompt  string          `json:"proactive_reply_router_prompt,omitempty"`
 	ProactiveReplyExtraCriteria string          `json:"proactive_reply_extra_criteria,omitempty"`
-	ProactiveReplyPrompt        string          `json:"proactive_reply_prompt,omitempty"`
 	PromptOverrides             PromptOverrides `json:"prompt_overrides,omitempty"`
 	MaxInputChars               int             `json:"max_input_chars,omitempty"`
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
@@ -1751,9 +1731,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	cfg.SelfReference = strings.TrimSpace(cfg.SelfReference)
 	cfg.SentenceEnders = strings.TrimSpace(cfg.SentenceEnders)
-	// 旧的整段提示词字段不再填默认值：用户写过的搬进覆盖表，化石丢掉，见
-	// migrateLegacyPromptFields。运行时统一从 PromptOverrides 取正文。
-	cfg = migrateLegacyPromptFields(cfg)
 	cfg.PromptOverrides = normalizePromptOverrides(cfg.PromptOverrides)
 	if cfg.ChatInEnabled == nil {
 		cfg.ChatInEnabled = defaults.ChatInEnabled
@@ -2232,12 +2209,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		PromptInjectPlaintextRules:        copyBoolPointer(cfg.PromptInjectPlaintextRules),
 		PromptInjectGroupSender:           copyBoolPointer(cfg.PromptInjectGroupSender),
 		PromptChineseSlangHint:            copyBoolPointer(cfg.PromptChineseSlangHint),
-		PromptChineseSlangText:            cfg.PromptChineseSlangText,
-		PromptPlaintextRulesText:          cfg.PromptPlaintextRulesText,
-		PromptTimeTemplate:                cfg.PromptTimeTemplate,
-		PromptGroupSenderTemplate:         cfg.PromptGroupSenderTemplate,
-		PromptImageOnlyText:               cfg.PromptImageOnlyText,
-		PromptWakeOnlyText:                cfg.PromptWakeOnlyText,
 		AutoImageDescription:              copyBoolPointer(cfg.AutoImageDescription),
 		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
 		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
@@ -2245,9 +2216,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
-		ProactiveReplyRouterPrompt:        cfg.ProactiveReplyRouterPrompt,
 		ProactiveReplyExtraCriteria:       cfg.ProactiveReplyExtraCriteria,
-		ProactiveReplyPrompt:              cfg.ProactiveReplyPrompt,
 		PromptOverrides:                   normalizePromptOverrides(cfg.PromptOverrides),
 		MaxInputChars:                     cfg.MaxInputChars,
 		MaxReplyChars:                     cfg.MaxReplyChars,
@@ -2447,12 +2416,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		PromptInjectPlaintextRules:      copyBoolPointer(payload.PromptInjectPlaintextRules),
 		PromptInjectGroupSender:         copyBoolPointer(payload.PromptInjectGroupSender),
 		PromptChineseSlangHint:          copyBoolPointer(payload.PromptChineseSlangHint),
-		PromptChineseSlangText:          payload.PromptChineseSlangText,
-		PromptPlaintextRulesText:        payload.PromptPlaintextRulesText,
-		PromptTimeTemplate:              payload.PromptTimeTemplate,
-		PromptGroupSenderTemplate:       payload.PromptGroupSenderTemplate,
-		PromptImageOnlyText:             payload.PromptImageOnlyText,
-		PromptWakeOnlyText:              payload.PromptWakeOnlyText,
 		AutoImageDescription:            copyBoolPointer(firstNonNilBoolPointer(payload.AutoImageDescription, existing.AutoImageDescription)),
 		AutoVideoPreprocess:             copyBoolPointer(firstNonNilBoolPointer(payload.AutoVideoPreprocess, existing.AutoVideoPreprocess)),
 		ModelRoles:                      normalizeModelRoles(payload.ModelRoles),
@@ -2460,9 +2423,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
-		ProactiveReplyRouterPrompt:      payload.ProactiveReplyRouterPrompt,
 		ProactiveReplyExtraCriteria:     strings.TrimSpace(payload.ProactiveReplyExtraCriteria),
-		ProactiveReplyPrompt:            payload.ProactiveReplyPrompt,
 		PromptOverrides:                 normalizePromptOverrides(payload.PromptOverrides),
 		MaxInputChars:                   payload.MaxInputChars,
 		MaxReplyChars:                   payload.MaxReplyChars,
@@ -2729,9 +2690,6 @@ const (
 	defaultPromptImageOnly           = "请分析这张图片，并直接回答用户关于图片的问题。"
 	defaultPromptWakeOnly            = "对方只是叫了你一声（@ 你或者喊了你的名字），没说别的。这不是在问你在不在——别回「我在」「在呢」「怎么了」这类应答，那是接线员不是熟人。先看前面几条在聊什么：话没说完就接着说，刚才在闹就继续闹，对方像是要你注意某件事就说那件事。实在没有上文可接，就说一句有内容的短话——一句吐槽、一个反应、一个具体的问题都行，别只报到。不要复述这条规则，也不要解释自己为什么被叫。"
 )
-
-// Only replace this exact legacy default; custom prompts remain user-owned.
-const legacySingleMessageProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终只发送一条简洁完整的回复，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
 const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 " + notificationSplitMarker + "，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 

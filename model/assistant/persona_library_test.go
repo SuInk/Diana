@@ -108,6 +108,43 @@ func TestPersonaSetSaveAddsAndUpdates(t *testing.T) {
 	}
 }
 
+// persona_version 只在内容变了时加一：原样再存一次不涨，品格和提示词改了也算改。
+func TestPersonaVersionBumpsOnlyOnContentChange(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	set, saved, err := PersonaSet{}.Save(Persona{Name: "猫娘", SystemPrompt: "你是一只猫"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Version != 1 {
+		t.Fatalf("new persona version = %d, want 1", saved.Version)
+	}
+	set, same, err := set.Save(saved, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same.Version != 1 {
+		t.Fatalf("identical save bumped version to %d", same.Version)
+	}
+	edited := same
+	edited.Prompts = PromptOverrides{promptWakeOnlySpec.Key: "叫我就接着说"}
+	set, edited, err = set.Save(edited, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Version != 2 {
+		t.Fatalf("prompt change version = %d, want 2", edited.Version)
+	}
+	withSoul := edited
+	withSoul.Soul = testSoul()
+	_, withSoul, err = set.Save(withSoul, now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withSoul.Version != 3 {
+		t.Fatalf("soul change version = %d, want 3", withSoul.Version)
+	}
+}
+
 func TestPersonaSetSaveRejectsNamelessAndEmpty(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	var set PersonaSet

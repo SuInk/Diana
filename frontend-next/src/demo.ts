@@ -1116,35 +1116,23 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ persona: demoPersonas[index >= 0 ? index : 0], personas: demoPersonas });
   }
   if (path === "/api/assistant/personas/import") {
-    const incoming = (body.personas as Array<Record<string, unknown>>) ?? [];
+    const parsed = demoParsePersonaSource(String(body.source ?? ""));
+    if ("error" in parsed) return json({ error: parsed.error }, 400);
     let imported = 0;
     let renamed = 0;
     let skipped = 0;
-    let dropped = 0;
-    const unknownStyles: string[] = [];
-    for (const raw of incoming) {
-      const name = String(raw.name ?? "").trim();
-      const persona = {
-        id: `persona-import-${demoPersonas.length + imported + 1}`,
-        name,
-        system_prompt: String(raw.system_prompt ?? ""),
-        self_reference: String(raw.self_reference ?? ""),
-        sentence_enders: String(raw.sentence_enders ?? "")
-      };
-      const hasContent = persona.system_prompt || persona.self_reference || persona.sentence_enders;
-      if (!name || !hasContent) { dropped++; continue; }
-      const existing = demoPersonas.find((item) => item.name === name);
+    for (const incoming of parsed.personas) {
+      const persona = { ...incoming, id: `persona-import-${demoPersonas.length + imported + 1}` };
+      const existing = demoPersonas.find((item) => item.name === persona.name);
       if (existing) {
-        const identical = existing.system_prompt === persona.system_prompt
-          && existing.self_reference === persona.self_reference && existing.sentence_enders === persona.sentence_enders;
-        if (identical) { skipped++; continue; }
-        persona.name = `${name} (2)`;
+        if (JSON.stringify({ ...existing, id: "", name: "" }) === JSON.stringify({ ...persona, id: "", name: "" })) { skipped++; continue; }
+        persona.name = `${persona.name} (2)`;
         renamed++;
       }
       demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
       imported++;
     }
-    return json({ personas: demoPersonas, imported, skipped, renamed, dropped, unknown_styles: unknownStyles });
+    return json({ personas: demoPersonas, imported, skipped, renamed, dropped: 0, unknown_styles: [] });
   }
   // 演示站没有后端：人设 YAML 用 demo-yaml.ts 在前端模拟生成和解析，写法与后端一致，
   // prompts 同样列全，读回时同样要求一段不少、一段不多。
@@ -1164,22 +1152,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ yaml: toYAML(document as never, demoPersonaYAMLHeader, demoPromptComments(), demoPromptBlockKeys()) });
   }
   if (path === "/api/assistant/personas/parse") {
-    try {
-      const parsed = parseYAML(String(body.source ?? "")) as unknown as Persona | { personas: Persona[] };
-      const personas = "personas" in parsed ? parsed.personas : [parsed];
-      for (const persona of personas) {
-        const defaults = new Map<string, string>(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
-        const known = new Set(defaults.keys());
-        const unknown = Object.keys(persona.prompts ?? {}).filter((key) => !known.has(key));
-        if (unknown.length) return json({ error: `人设「${persona.name}」的 prompts 里有不认识的提示词：${unknown.join("、")}` }, 400);
-        const missing = [...known].filter((key) => persona.prompts && !(key in persona.prompts));
-        if (missing.length) return json({ error: `人设「${persona.name}」的 prompts 缺少 ${missing.length} 段提示词：${missing.join("、")}` }, 400);
-        persona.prompts = Object.fromEntries(Object.entries(persona.prompts ?? {}).filter(([key, value]) => String(value ?? "").trim() !== defaults.get(key)));
-      }
-      return json({ personas });
-    } catch (error) {
-      return json({ error: `YAML 解析失败：${error instanceof Error ? error.message : String(error)}` }, 400);
-    }
+    const parsed = demoParsePersonaSource(String(body.source ?? ""));
+    return "error" in parsed ? json({ error: parsed.error }, 400) : json({ personas: parsed.personas });
   }
   if (path === "/api/assistant/personas/delete") {
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
@@ -1464,4 +1438,31 @@ function demoPromptComments(): Record<string, string> {
 
 function demoPromptBlockKeys(): Set<string> {
   return new Set(demoPromptCatalog.prompts.flatMap((spec) => (spec.format_key ? [spec.key, spec.format_key] : [spec.key])));
+}
+
+// 演示站的人设文件解析，规则照后端 ParsePersonaDocument：必须有 format_version，版本 1
+// 要求每套都有名字和完整的 prompts，不认识的提示词键直接报错。
+function demoParsePersonaSource(source: string): { personas: Persona[] } | { error: string } {
+  let root: unknown;
+  try {
+    root = parseYAML(source);
+  } catch (error) {
+    return { error: `YAML 语法错误：${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!root || typeof root !== "object" || Array.isArray(root)) return { error: "人设文件的顶层应该是「键: 值」的映射" };
+  const { format_version: version, ...rest } = root as Record<string, unknown>;
+  if (version === undefined) return { error: "人设文件缺少 format_version：旧格式的人设文件不再支持，请在 Diana 里重新导出" };
+  if (version !== 1) return { error: `人设文件的格式版本是 ${String(version)}，当前 Diana 只认到 1，请先升级 Diana` };
+  const personas = (Array.isArray(rest.personas) ? rest.personas : [rest]) as Persona[];
+  const defaults = new Map<string, string>(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
+  for (const persona of personas) {
+    if (!String(persona.name ?? "").trim()) return { error: "人设缺少 name" };
+    if (!persona.prompts) return { error: `人设「${persona.name}」缺少 prompts：人设文件要列出全部提示词` };
+    const unknown = Object.keys(persona.prompts).filter((key) => !defaults.has(key));
+    if (unknown.length) return { error: `人设「${persona.name}」的 prompts 里有不认识的提示词：${unknown.join("、")}` };
+    const missing = [...defaults.keys()].filter((key) => !(key in persona.prompts!));
+    if (missing.length) return { error: `人设「${persona.name}」的 prompts 缺少 ${missing.length} 段提示词：${missing.slice(0, 8).join("、")}` };
+    persona.prompts = Object.fromEntries(Object.entries(persona.prompts).filter(([key, value]) => String(value ?? "").trim() !== defaults.get(key)));
+  }
+  return { personas };
 }

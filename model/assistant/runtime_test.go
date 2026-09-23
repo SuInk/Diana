@@ -1364,7 +1364,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 // 用户自己写的中文语境提示词不能被默认值覆盖；留空才回落默认。
 func TestPromptChineseSlangKeepsCustomTextAndDefaultsWhenEmpty(t *testing.T) {
 	const custom = "保持冷峻克制的侦探口吻，避免比喻。"
-	if got := (BotConfig{PromptChineseSlangText: custom}).WithDefaults().prompt(promptChineseSlangSpec); got != custom {
+	if got := (BotConfig{PromptOverrides: PromptOverrides{promptChineseSlangSpec.Key: custom}}).WithDefaults().prompt(promptChineseSlangSpec); got != custom {
 		t.Fatalf("custom Chinese context prompt was overwritten: %q", got)
 	}
 	filled := (BotConfig{}).WithDefaults().prompt(promptChineseSlangSpec)
@@ -3065,10 +3065,10 @@ func TestRuntimeProactiveReplySplitsBeforeCompression(t *testing.T) {
 	completeReply := strings.Repeat("先检查端口占用，再看启动日志。", 20)
 	provider := &compressionTestProvider{capturingLLMProvider: capturingLLMProvider{reply: completeReply}}
 	runtime := NewRuntime(BotConfig{
-		AgentEnabled:         false,
-		MaxReplyChars:        120,
-		SendChunkIntervalMS:  1,
-		ProactiveReplyPrompt: "custom concise proactive instruction",
+		AgentEnabled:        false,
+		MaxReplyChars:       120,
+		SendChunkIntervalMS: 1,
+		PromptOverrides:     PromptOverrides{promptProactiveReplySpec.Key: "custom concise proactive instruction"},
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

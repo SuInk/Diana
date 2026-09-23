@@ -4,8 +4,6 @@
 package assistant
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,9 +12,8 @@ import (
 // 内置提示词的覆盖机制：每段写死在代码里的提示词登记成一条 PromptSpec，机器人
 // 配置里的 PromptOverrides 按 Key 存管理员改过的正文，没改过的一律读内置默认值。
 //
-// 覆盖值只存「改过的」，不把默认值抄进配置：旧的那几个提示词字段就是被
-// WithDefaults 把当时的默认值写进库，之后每次改默认文案，存量机器人都还跑着旧版，
-// 而且从字段上看不出那是用户写的还是化石（见 legacyPromptFields）。
+// 覆盖值只存「改过的」，不把默认值抄进配置：默认值一旦写进库，之后每次改默认文案，
+// 存量机器人都还跑着旧版，而且从字段上看不出那是用户写的还是当年的默认值。
 //
 // 需要解析输出的提示词（评分、审核、分类）把输出格式拆到 Contract 里，运行时永远拼在
 // 正文之后。格式也能改（键是 <Key>.format），但单独成一栏、带着警告：正文随便改，
@@ -280,77 +277,6 @@ func validatePromptOverrides(overrides PromptOverrides) error {
 		return fmt.Errorf("提示词「%s」不能超过 %d 字", title, PromptOverrideMaxRunes)
 	}
 	return nil
-}
-
-// legacyPromptField 把旧的整段提示词字段对应到登记表里的条目。
-//
-// 这几个字段早于覆盖表：WithDefaults 会把当时的默认值写进去，前端保存时原样带回，
-// 于是库里存的多半是某一版默认值的化石，而不是用户写的东西。迁移时只把「既不是
-// 当前默认值、也不是任何一版历史默认值」的内容认作用户所写，搬进覆盖表；其余丢掉，
-// 让这台机器人重新跟上当前的默认文案。
-//
-// 历史默认值只存 SHA-256 前 16 位，取自 git 历史里 Go 常量和前端副本的每一个版本。
-// 这张表不需要再维护：迁移之后这几个字段不再被写入默认值，不会再长出新的化石。
-type legacyPromptField struct {
-	spec   **PromptSpec
-	field  func(*BotConfig) *string
-	fossil map[string]bool
-}
-
-var legacyPromptFields = []legacyPromptField{
-	{&promptChineseSlangSpec, func(cfg *BotConfig) *string { return &cfg.PromptChineseSlangText }, fossilSet("460ce709012be871", "a4bc5e9a61c7e2f6")},
-	{&promptPlaintextRulesSpec, func(cfg *BotConfig) *string { return &cfg.PromptPlaintextRulesText }, fossilSet("1c1bf929989089e1", "2f2766b43e193b56", "30d39e6fee47b15a", "3774390a7c42b6a0", "485350f991b86981", "5aa990ba6fa03d20", "832abc2de63d39e4", "9e3427364990cd1b")},
-	{&promptTimeTemplateSpec, func(cfg *BotConfig) *string { return &cfg.PromptTimeTemplate }, fossilSet("b36403e3a9990467")},
-	{&promptGroupSenderSpec, func(cfg *BotConfig) *string { return &cfg.PromptGroupSenderTemplate }, fossilSet("43521de47cde0169", "5173f3852c6b9438", "81864ab9ff310694")},
-	{&promptImageOnlySpec, func(cfg *BotConfig) *string { return &cfg.PromptImageOnlyText }, fossilSet("b2efbef7f6bbb44f")},
-	{&promptWakeOnlySpec, func(cfg *BotConfig) *string { return &cfg.PromptWakeOnlyText }, fossilSet("019e4469d0fc9dcf", "05197f03537dfc97", "cccc00317180699d")},
-	{&promptProactiveReplySpec, func(cfg *BotConfig) *string { return &cfg.ProactiveReplyPrompt }, fossilSet("15d8b3334bb99e4b", "1c02a39a1d812eec", "c96896f74c127f86", "fb1757e746f273e4")},
-	{&promptLegacyRouterSpec, func(cfg *BotConfig) *string { return &cfg.ProactiveReplyRouterPrompt }, fossilSet("09ef706f91ce7d99", "0f2fdefb5c1e7415", "112df717e5d7df6f", "147c07a09b699faa", "17119de57a2ee7af", "3204c9fce0370b5a", "454b6216ca95f68e", "7fa71d5046ada4ed", "a3c03eecc850c24a", "b30bf90212aebc12", "dadec9003d4908ee", "e1f630b437e9598f")},
-}
-
-func fossilSet(hashes ...string) map[string]bool {
-	set := make(map[string]bool, len(hashes))
-	for _, hash := range hashes {
-		set[hash] = true
-	}
-	return set
-}
-
-func promptFossilHash(text string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(text)))
-	return hex.EncodeToString(sum[:])[:16]
-}
-
-// migrateLegacyPromptFields 把旧字段里用户写的内容搬进覆盖表，然后清空旧字段。
-// 覆盖表里已有同一个键时以覆盖表为准：那是在新界面上改的，比旧字段新。
-func migrateLegacyPromptFields(cfg BotConfig) BotConfig {
-	copied := false
-	for _, legacy := range legacyPromptFields {
-		field := legacy.field(&cfg)
-		value := strings.TrimSpace(*field)
-		if value == "" {
-			continue
-		}
-		*field = ""
-		spec := *legacy.spec
-		if value == strings.TrimSpace(spec.Default) || legacy.fossil[promptFossilHash(value)] {
-			continue
-		}
-		if cfg.PromptOverrides.isCustomized(spec) {
-			continue
-		}
-		// 覆盖表可能和别的 BotConfig 副本共用同一个 map（cfg 按值传递，map 不是），
-		// 写之前先复制一份。
-		if !copied {
-			cfg.PromptOverrides = copyPromptOverrides(cfg.PromptOverrides)
-			if cfg.PromptOverrides == nil {
-				cfg.PromptOverrides = PromptOverrides{}
-			}
-			copied = true
-		}
-		cfg.PromptOverrides[spec.Key] = value
-	}
-	return cfg
 }
 
 // customizedPromptKeys 按登记顺序列出被覆盖过的键。

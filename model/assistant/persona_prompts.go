@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -22,16 +24,8 @@ import (
 //
 // 存储仍然只存改过的（normalizePromptOverrides）：完整性只是文件格式上的要求，
 // 落库时和默认值相同的条目照旧丢掉，以后默认文案更新，没改过的那些照样跟着走。
-//
-// 没有 prompts 这一节的文件（这个功能之前导出的人设、手写的最小人设）仍然能读，
-// 按全部用默认值处理：那些文件从来没有声明过提示词，谈不上缺了哪段。
 
-// CheckPersonaPrompts 校验人设文件里的 prompts 是否完整。没有这一节返回 nil。
-// 导入接口收前端已经解析好的 JSON 人设时也要过这一道，不能只在 YAML 路径上查。
-func CheckPersonaPrompts(persona Persona) error {
-	return checkPersonaPrompts(persona)
-}
-
+// checkPersonaPrompts 校验人设文件里的判据和 prompts：判据不超长，prompts 必须有且完整。
 func checkPersonaPrompts(persona Persona) error {
 	name := strings.TrimSpace(persona.Name)
 	if name == "" {
@@ -45,7 +39,7 @@ func checkPersonaPrompts(persona Persona) error {
 		return fmt.Errorf("人设「%s」的账号安全规则超过 %d 字", name, AccountSafetyRulesMaxRunes)
 	}
 	if persona.Prompts == nil {
-		return nil
+		return fmt.Errorf("人设「%s」缺少 prompts：人设文件要列出全部提示词", name)
 	}
 	var unknown []string
 	for key := range persona.Prompts {
@@ -85,10 +79,6 @@ func summarizePromptKeys(keys []string) string {
 	return strings.Join(keys[:shown], "、") + fmt.Sprintf(" 等 %d 个", len(keys))
 }
 
-const personaYAMLHeader = `Diana 人设文件。prompts 列出全部内置提示词：没改过的是默认原文，改哪段就改哪段的正文。
-读回时 prompts 必须一段不少、一段不多；正文和默认原文相同的不会存成覆盖，以后默认文案更新会跟着走。
-{名字} 这样的占位符由运行时填入，删掉的话那项信息就不再进提示词。`
-
 // RenderPersonaYAML 把人设渲染成 YAML。一套时直接写在顶层，多套时放进 personas 数组。
 //
 // 结构按 Persona 的 JSON 形状走（先转 JSON 再读成 YAML 节点，字段顺序和 json tag
@@ -102,16 +92,16 @@ func RenderPersonaYAML(personas []Persona) ([]byte, error) {
 		}
 		nodes = append(nodes, node)
 	}
+	formatVersion := []*yaml.Node{yamlString("format_version"), yamlInt(PersonaFormatVersion)}
 	var root *yaml.Node
 	if len(nodes) == 1 {
 		root = nodes[0]
+		root.Content = append(formatVersion, root.Content...)
 	} else {
-		root = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-			yamlString("version"), {Kind: yaml.ScalarNode, Tag: "!!int", Value: "1"},
-			yamlString("personas"), {Kind: yaml.SequenceNode, Tag: "!!seq", Content: nodes},
-		}}
+		root = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: append(formatVersion,
+			yamlString("personas"), &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: nodes},
+		)}
 	}
-	root.HeadComment = personaYAMLHeader
 	var buffer bytes.Buffer
 	encoder := yaml.NewEncoder(&buffer)
 	encoder.SetIndent(2)
@@ -121,8 +111,12 @@ func RenderPersonaYAML(personas []Persona) ([]byte, error) {
 	if err := encoder.Close(); err != nil {
 		return nil, err
 	}
-	return buffer.Bytes(), nil
+	// 字面块里的空行，编码器会补上缩进空格。只含空格的行清成真正的空行：解析结果
+	// 一样，文件里也不留行尾空白。
+	return blankLinePadding.ReplaceAll(buffer.Bytes(), nil), nil
 }
+
+var blankLinePadding = regexp.MustCompile(`(?m)^[ \t]+$`)
 
 func personaYAMLNode(persona Persona) (*yaml.Node, error) {
 	persona = persona.flattenVoice()
@@ -139,65 +133,101 @@ func personaYAMLNode(persona Persona) (*yaml.Node, error) {
 	node := document.Content[0]
 	// 不带 ID 和时间戳：ID 是本机的，导到别处只会撞车（导入时一律重新分配），
 	// 时间按对方导入的那一刻记。
-	dropMappingKeys(node, "id", "updated_at", "voice")
-	// 判据空着也写出来：YAML 是全部提示词配置，看文件的人得知道这两栏存在。
-	ensureMappingKey(node, "extra_criteria", "接话评分的补充判据：本群的称呼、黑话和禁区，拼在接话评分尾部。留空不加。套用人设时填进机器人配置，分群仍可单独覆盖。")
-	ensureMappingKey(node, "account_safety_rules", "发送前审核的账号安全规则：填了就替代默认的账号安全风险范围。留空用默认范围。套用人设时填进机器人配置，分群仍可单独覆盖。")
+	dropMappingKeys(node, "id", "updated_at", "voice", "persona_version")
+	// 人设版本号紧跟在名字后面：分享出去的文件第一眼就要看到是第几版。
+	version := []*yaml.Node{yamlString("persona_version"), yamlInt(max(persona.Version, 1))}
+	insertAfterKey(node, "name", version...)
+	if len(node.Content) > 0 {
+		node.Content[0].HeadComment = yamlBanner("人设")
+	}
+	// 判据空着也写出来：YAML 是全部提示词配置，看文件的人得知道这两栏存在。挪到人设
+	// 字段后面、提示词前面，自成一节。
+	criteria := takeMappingKey(node, "extra_criteria")
+	safety := takeMappingKey(node, "account_safety_rules")
+	criteria[0].HeadComment = yamlBanner("判据")
+	node.Content = append(node.Content, criteria...)
+	node.Content = append(node.Content, safety...)
 	useBlockStyle(node)
-	node.Content = append(node.Content, yamlString("prompts"), promptsYAMLNode(prompts))
+	promptsKey := yamlString("prompts")
+	promptsKey.HeadComment = yamlBanner("内置提示词")
+	node.Content = append(node.Content, promptsKey, promptsYAMLNode(prompts))
 	return node, nil
+}
+
+// yamlBanner 是一节开头的分隔横幅，前面空一行：文件里一眼就能看出哪儿是人设、
+// 哪儿是接话、哪儿是发送前审核。
+//
+// 注释只有横幅和每段一行标题。用途说明、占位符解释都在界面和文档里，全写进文件
+// 的话两百多段各带三四行注释，正文反而淹没了。
+func yamlBanner(title string) string {
+	rule := strings.Repeat("═", 40)
+	return strings.Join([]string{"", rule, "【" + title + "】", rule}, "\n")
+}
+
+// takeMappingKey 从映射里取出一个键值对（没有就造一个空串），返回后原映射里不再有它。
+func takeMappingKey(node *yaml.Node, key string) []*yaml.Node {
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			pair := []*yaml.Node{node.Content[index], node.Content[index+1]}
+			node.Content = append(node.Content[:index:index], node.Content[index+2:]...)
+			return pair
+		}
+	}
+	return []*yaml.Node{yamlString(key), yamlString("")}
 }
 
 // promptsYAMLNode 列出登记表里的每一段提示词，按界面上的分组排，注释里写标题和用途。
 func promptsYAMLNode(overrides PromptOverrides) *yaml.Node {
-	groupLabels := map[PromptGroup]PromptGroupInfo{}
+	groupLabels := map[PromptGroup]string{}
 	for _, group := range promptGroupOrder {
-		groupLabels[group.ID] = group
+		groupLabels[group.ID] = group.Label
 	}
 	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	var lastGroup PromptGroup
 	for _, spec := range PromptSpecs() {
-		var comment []string
+		// 每段只留一行标题，让 reply.wake_only 这种键看得出是什么；占位符挂在标题后面。
+		title := spec.Title
+		for _, variable := range spec.Vars {
+			title += " {" + variable.Name + "}"
+		}
 		if spec.Group != lastGroup {
-			group := groupLabels[spec.Group]
-			comment = append(comment, "──── "+group.Label+" ────", group.Description, "")
+			title = yamlBanner(groupLabels[spec.Group]) + "\n" + title
 			lastGroup = spec.Group
 		}
-		comment = append(comment, spec.Title+"："+spec.Usage)
-		for _, variable := range spec.Vars {
-			comment = append(comment, "占位符 {"+variable.Name+"}："+variable.Description)
-		}
 		key := yamlString(spec.Key)
-		key.HeadComment = strings.Join(comment, "\n")
+		key.HeadComment = title
 		value := yamlString(overrides.body(&spec))
 		value.Style = yaml.LiteralStyle
 		node.Content = append(node.Content, key, value)
 		if spec.FormatKey != "" {
-			formatKey := yamlString(spec.FormatKey)
-			formatKey.HeadComment = "↑ 这段的输出格式，程序按它解析模型的回答。改动时字段名、取值和结构要和程序对得上，改坏了这条链路会沉默或放行。"
 			format := yamlString(strings.TrimSpace(overrides.contract(&spec)))
 			format.Style = yaml.LiteralStyle
-			node.Content = append(node.Content, formatKey, format)
+			node.Content = append(node.Content, yamlString(spec.FormatKey), format)
 		}
 	}
 	return node
 }
 
-func yamlString(value string) *yaml.Node {
-	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+func yamlInt(value int) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(value)}
 }
 
-// ensureMappingKey 保证映射里有这个键（没有就补一个空串），并挂上注释。
-func ensureMappingKey(node *yaml.Node, key, comment string) {
+// insertAfterKey 把几个节点插到映射里某个键的值后面；没有这个键就插在最前面。
+func insertAfterKey(node *yaml.Node, key string, inserted ...*yaml.Node) {
+	position := 0
 	for index := 0; index+1 < len(node.Content); index += 2 {
 		if node.Content[index].Value == key {
-			node.Content[index].HeadComment = comment
-			return
+			position = index + 2
+			break
 		}
 	}
-	name := yamlString(key)
-	name.HeadComment = comment
-	node.Content = append(node.Content, name, yamlString(""))
+	content := append([]*yaml.Node{}, node.Content[:position]...)
+	content = append(content, inserted...)
+	node.Content = append(content, node.Content[position:]...)
+}
+
+func yamlString(value string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
 }
 
 func dropMappingKeys(node *yaml.Node, keys ...string) {

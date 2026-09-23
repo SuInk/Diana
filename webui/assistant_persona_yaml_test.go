@@ -74,12 +74,20 @@ func TestPersonaYAMLRenderAndParse(t *testing.T) {
 	}
 }
 
-// 前端把 JSON 文件解析好再发 personas 时，也不能绕过完整性检查。
-func TestPersonaImportRejectsPartialPromptsFromJSON(t *testing.T) {
-	recorder := postJSON(t, personaYAMLRouter(), "/api/assistant/personas/import", map[string]any{"personas": []map[string]any{{
-		"name": "半套", "system_prompt": "喵", "prompts": map[string]string{"reply.wake_only": "叫我就接着说"},
+// 导入只收人设文件原文：旧客户端发来的 personas 数组、没写 format_version 的旧文件
+// 都要被拒，并说清原因，不能绕过格式检查进库。
+func TestPersonaImportRejectsLegacyPayloads(t *testing.T) {
+	router := personaYAMLRouter()
+	legacyArray := postJSON(t, router, "/api/assistant/personas/import", map[string]any{"personas": []map[string]any{{
+		"name": "旧客户端", "system_prompt": "喵",
 	}}})
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "缺少") {
-		t.Fatalf("partial prompts imported: %d %s", recorder.Code, recorder.Body.String())
+	if legacyArray.Code != http.StatusBadRequest {
+		t.Fatalf("personas array imported: %d %s", legacyArray.Code, legacyArray.Body.String())
+	}
+	legacyFile := postJSON(t, router, "/api/assistant/personas/import", map[string]string{
+		"source": `{"version":1,"personas":[{"name":"旧文件","system_prompt":"喵"}]}`,
+	})
+	if legacyFile.Code != http.StatusBadRequest || !strings.Contains(legacyFile.Body.String(), "format_version") {
+		t.Fatalf("legacy file imported: %d %s", legacyFile.Code, legacyFile.Body.String())
 	}
 }

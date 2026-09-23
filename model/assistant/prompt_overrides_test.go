@@ -84,51 +84,6 @@ func TestPromptOverridesValidateLength(t *testing.T) {
 	}
 }
 
-// 旧字段里存的多半是某一版默认值：当前默认值和历史默认值都不算用户写的，
-// 迁移时丢掉；只有真的改过的才搬进覆盖表。
-func TestLegacyPromptFieldsMigrateOnlyUserText(t *testing.T) {
-	// git 历史里最早那版纯文本规则，存量库里就可能躺着它。
-	const fossilPlaintext = "QQ 消息不渲染 Markdown，回复必须用纯文本：不要输出 **、#、```、表格或链接语法，列表直接写 1. 2. 3.；回复较长时用 <botbr> 分成两三句一段。"
-	cfg := BotConfig{
-		PromptChineseSlangText:     defaultPromptChineseSlang,
-		PromptPlaintextRulesText:   fossilPlaintext,
-		PromptWakeOnlyText:         "叫我就接着刚才的话说。",
-		ProactiveReplyPrompt:       legacySingleMessageProactiveReplyPrompt,
-		ProactiveReplyRouterPrompt: defaultProactiveReplyRouterPrompt,
-	}.WithDefaults()
-	if cfg.PromptChineseSlangText != "" || cfg.PromptPlaintextRulesText != "" || cfg.PromptWakeOnlyText != "" || cfg.ProactiveReplyPrompt != "" || cfg.ProactiveReplyRouterPrompt != "" {
-		t.Fatalf("legacy fields should be cleared after migration: %#v", cfg)
-	}
-	if len(cfg.PromptOverrides) != 1 || cfg.PromptOverrides[promptWakeOnlySpec.Key] != "叫我就接着刚才的话说。" {
-		t.Fatalf("overrides = %#v, want only the user-written wake text", cfg.PromptOverrides)
-	}
-	if got := cfg.prompt(promptPlaintextRulesSpec); got != defaultPromptPlaintextRules {
-		t.Fatalf("fossil plaintext rules should fall back to the current default, got %q", got)
-	}
-	if got := cfg.prompt(promptProactiveReplySpec); got != defaultProactiveReplyPrompt {
-		t.Fatalf("legacy proactive prompt should fall back to the current default, got %q", got)
-	}
-}
-
-func TestLegacyPromptMigrationPrefersNewOverride(t *testing.T) {
-	cfg := BotConfig{
-		PromptWakeOnlyText: "旧字段里的写法",
-		PromptOverrides:    PromptOverrides{promptWakeOnlySpec.Key: "新界面里的写法"},
-	}.WithDefaults()
-	if got := cfg.prompt(promptWakeOnlySpec); got != "新界面里的写法" {
-		t.Fatalf("prompt = %q", got)
-	}
-}
-
-// cfg 按值传递但 map 不是：迁移不能改到调用方手里那份覆盖表。
-func TestLegacyPromptMigrationDoesNotMutateSharedOverrides(t *testing.T) {
-	shared := PromptOverrides{promptImageOnlySpec.Key: "看图"}
-	_ = BotConfig{PromptWakeOnlyText: "自定义", PromptOverrides: shared}.WithDefaults()
-	if len(shared) != 1 {
-		t.Fatalf("shared overrides were mutated: %#v", shared)
-	}
-}
-
 func TestPromptOverridesRoundTripThroughPayload(t *testing.T) {
 	cfg := DefaultBotConfig()
 	cfg.PromptOverrides = PromptOverrides{promptImageOnlySpec.Key: "看图"}

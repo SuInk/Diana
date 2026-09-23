@@ -1,18 +1,22 @@
 # 人设示例
 
 可以直接在 WebUI「机器人 → 人设 → 导入」里选中的文件。格式说明见
-[配置文档](../../docs/configuration.html#persona-portability)。
+[提示词覆盖文档](../../docs/prompt-overrides.md)。
 
-这些文件是手写的，不是从某台机器导出来的 —— 就是为了说明这个格式**可以**手写：
-没有 ID、没有时间戳、没有任何本机状态。JSON 和 YAML 都收；品格层条目多、每条还带
-一句「因为」，写成 YAML 才读得下去（有注释、有多行字符串），见 `diana-soul.yaml`。
+人设文件只有一种格式：YAML，顶上写 `format_version: 1`。一份文件就是一套人设的全部
+提示词配置——正文、品格、自称与语气词、判据，以及 `prompts` 下的每一段内置提示词
+（没改过的写默认原文）。所以文件很长，也没法再手写一份只有几行的：请在 WebUI 里
+编辑或导出，改好再分享。
 
 | 文件 | 内容 |
 | --- | --- |
-| `ranran.json` | 单套人设：真人感风格 |
-| `oncall.json` | 单套人设：值班助理，简洁风格 |
-| `starter-pack.json` | 三套打包在一个文件里，演示 `personas` 数组 |
-| `diana-soul.yaml` | 带品格层（`soul`）和表达层（`voice`）的写法，YAML |
+| `ranran.yaml` | 单套人设：真人感风格 |
+| `oncall.yaml` | 单套人设：值班助理，简洁风格 |
+| `starter-pack.yaml` | 三套打包在一个文件里，演示 `personas` 数组 |
+| `diana-soul.yaml` | 带品格层（`soul`）的写法 |
+
+内置提示词有增删时这些文件会过期，`webui/example_personas_test.go` 会失败并给出
+重新生成的命令。
 
 导入只增不减：同名但内容不同的会被改成「名字 (2)」，同名且完全一样的会跳过，
 不会覆盖你已经调好的人设。

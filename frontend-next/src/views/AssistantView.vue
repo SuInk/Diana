@@ -1209,7 +1209,7 @@
                     </button>
                   </div>
                 </div>
-                <input ref="personaFileInput" type="file" accept="application/json,.json,.yaml,.yml,image/png,.png" style="display: none" @change="importPersonaFile" />
+                <input ref="personaFileInput" type="file" accept=".yaml,.yml,application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -2075,7 +2075,6 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
 import { applyPersonaDocument, asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
-import { withoutPromptOverrides } from "../prompt-overrides";
 import { formatClock } from "../format";
 import {
   deleteBotProfile,
@@ -2104,7 +2103,6 @@ import {
   listPersonas,
   savePersona,
   deletePersona,
-  importPersonas,
   importPersonaSource,
   parsePersonaSource,
   renderPersonaYAML,
@@ -2998,30 +2996,13 @@ async function importPersonaFile(event: Event): Promise<void> {
       toastSuccess(`导入 ${imported.imported} 套`);
       return;
     }
+    // JSON 只收 SillyTavern 角色卡。人设文件只有 YAML 一种格式，旧的 JSON 导出不再兼容。
     const parsed = JSON.parse(text) as unknown;
     if (looksLikeCharacterCard(parsed)) {
       await importCharacterCardFile(file);
       return;
     }
-    // 导出文件是 {personas: [...]}，但手写或从别处拿到的可能就是个数组，
-    // 甚至是单独一套。三种都收下，没必要为格式挑剔到让人回去改文件。
-    const list = Array.isArray(parsed)
-      ? parsed
-      : Array.isArray((parsed as { personas?: unknown }).personas)
-        ? (parsed as { personas: unknown[] }).personas
-        : [parsed];
-    const result = await importPersonas(list as Persona[]);
-    savedPersonaLibrary.value = result.personas ?? [];
-    const notes = [`导入 ${result.imported} 套`];
-    if (result.renamed) notes.push(`${result.renamed} 套重名已改名`);
-    if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
-    if (result.dropped) notes.push(`${result.dropped} 套无效已忽略`);
-    toastSuccess(notes.join("，"));
-    // 认不出来的风格单独说：它不算失败，导入照常成功，但那几套的语气会退回
-    // 「助手」。混在上面那串数字里说，用户不会注意到自己拼错了。
-    if (result.unknown_styles?.length) {
-      toastError(`旧表达风格无法识别，已保留人设正文导入：${result.unknown_styles.join("、")}`);
-    }
+    toastError("人设文件请用 YAML（在人设库里导出或编辑得到）；JSON 只支持 SillyTavern 角色卡");
   } catch (error) {
     toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
   } finally {
@@ -4157,37 +4138,12 @@ function splitList(raw: string): string[] {
     .filter((item) => item !== "");
 }
 
-// 「恢复内置提示词」要恢复的是后端那套默认值，所以除了人设，这里一律留空：
-// 保存时 BotConfig.WithDefaults 会把空字符串补成它自己的默认文案，前端不再抄一份。
-// 抄过的那几份都烂掉过——排版规则停在一版没有「正文不要输出真实换行符」的旧文案，
-// 主动回复提示词停在后端专门写了迁移去替换掉的 legacySingleMessageProactiveReplyPrompt，
-// 点一次「恢复」等于把旧文案按回配置里。这几个字段本来也没有输入框，留空不会让人看见空白。
-//
-// 人设是例外：它有输入框，恢复后要当场显示出来给人看，所以前端留了一份逐字节副本
-// （builtin-personas.ts 里的 defaultSystemPrompt），由测试盯着它和 Go 常量一致。
+// 「恢复内置默认」：人设正文换回内置那份，内置提示词的覆盖全部清掉。人设正文有输入框，
+// 恢复后要当场显示出来，所以前端留了一份逐字节副本（builtin-personas.ts 里的
+// defaultSystemPrompt），由测试盯着它和 Go 常量一致；提示词的默认值只在后端。
 const promptDefaults = {
-  system_prompt: defaultSystemPrompt,
-  prompt_chinese_slang_text: "",
-  prompt_plaintext_rules_text: "",
-  prompt_time_template: "",
-  prompt_group_sender_template: "",
-  prompt_image_only_text: "",
-  prompt_wake_only_text: "",
-  proactive_reply_router_prompt: "",
-  proactive_reply_prompt: ""
+  system_prompt: defaultSystemPrompt
 };
-
-// 旧的整段提示词字段迁进覆盖表后对应的键，见后端 legacyPromptFields。
-const legacyPromptOverrideKeys = [
-  "reply.chinese_slang",
-  "reply.plaintext_rules",
-  "reply.time_template",
-  "reply.group_sender",
-  "reply.image_only",
-  "reply.wake_only",
-  "reply.proactive_reply",
-  "routing.legacy_router"
-] as const;
 
 // ── 人设 YAML ───────────────────────────────────────────────────────────────
 // YAML 由后端生成和解析：前端没有 YAML 库，两头各写一份迟早对不上。
@@ -4375,9 +4331,7 @@ function resetPromptDefaults(): void {
     prompt_inject_group_sender: true,
     prompt_chinese_slang_hint: true
   });
-  // 这几段以前是上面那几个旧字段，后端已经把它们迁进覆盖表；恢复时一并清掉，
-  // 按钮的效果和迁移前一致。别的提示词在「提示词」页里单独恢复，这里不动。
-  form.value.prompt_overrides = withoutPromptOverrides(form.value.prompt_overrides, legacyPromptOverrideKeys);
+  form.value.prompt_overrides = undefined;
   toastSuccess("已恢复内置提示词，保存配置后生效");
 }
 

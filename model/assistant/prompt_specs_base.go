@@ -3,8 +3,7 @@
 
 package assistant
 
-// 这几段早于覆盖表，原来各有一个独立的配置字段（见 legacyPromptFields）。
-// 默认文案仍在 types.go，这里只登记。
+// 默认文案在 types.go，这里只登记。
 
 var promptChineseSlangSpec = registerPrompt(PromptSpec{
 	Key:     "reply.chinese_slang",
