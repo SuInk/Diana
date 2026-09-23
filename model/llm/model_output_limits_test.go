@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuiltinMaxOutputTokensMatchesFamilies(t *testing.T) {
@@ -51,12 +54,8 @@ func TestBuiltinMaxOutputTokensMatchesFamilies(t *testing.T) {
 }
 
 func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
-	catalog := []ModelInfo{
-		// antigravity 这类网关给每个模型报的占位值，不能压过内置表。
-		{ID: "claude-sonnet-4-6", MaxOutputTokens: 8192},
-		{ID: "relay-claude", MaxOutputTokens: 4096},
-		{ID: "relay-empty"},
-	}
+	// antigravity 这类网关给每个模型报的占位值，不参与取值。
+	catalog := []ModelInfo{{ID: "claude-sonnet-4-6", MaxOutputTokens: 8192}}
 	for _, item := range []struct {
 		name       string
 		cfg        ProviderConfig
@@ -64,14 +63,14 @@ func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
 		want       int64
 		wantSource MaxOutputTokensSource
 	}{
-		{"用户填的值优先", ProviderConfig{Provider: ProviderAnthropic, MaxOutputTokens: 2048}, "claude-sonnet-4-6", 2048, MaxOutputTokensSourceUser},
-		{"Anthropic 内置表压过清单占位值", ProviderConfig{Provider: ProviderAnthropic, Models: catalog}, "claude-sonnet-4-6", 128000, MaxOutputTokensSourceBuiltin},
-		{"Anthropic 表里没有才用清单", ProviderConfig{Provider: ProviderAnthropic, Models: catalog}, "relay-claude", 4096, MaxOutputTokensSourceCatalog},
-		{"Anthropic 清单没写上限不能发 0", ProviderConfig{Provider: ProviderAnthropic, Models: catalog}, "relay-empty", defaultAnthropicMaxTokens, MaxOutputTokensSourceFallback},
+		{"用户填的值优先，可以超过封顶", ProviderConfig{Provider: ProviderAnthropic, MaxOutputTokens: 128000}, "claude-sonnet-4-6", 128000, MaxOutputTokensSourceUser},
+		{"表里的上限封顶 65536", ProviderConfig{Provider: ProviderAnthropic, Models: catalog}, "claude-sonnet-4-6", DefaultOutputTokenCeiling, MaxOutputTokensSourceBuiltin},
+		{"表里更小的上限照用", ProviderConfig{Provider: ProviderAnthropic}, "claude-3-5-sonnet-20241022", 8192, MaxOutputTokensSourceBuiltin},
+		{"表里没有按默认值", ProviderConfig{Provider: ProviderAnthropic}, "relay-claude", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
 		{"Gemini 按表", ProviderConfig{Provider: ProviderGemini}, "gemini-3.8-flash-low", 65536, MaxOutputTokensSourceBuiltin},
-		{"Gemini 不认识的名字按现行上限", ProviderConfig{Provider: ProviderGemini}, "claude", 65536, MaxOutputTokensSourceFallback},
-		{"Chat Completions 按表", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "deepseek-flash", 384000, MaxOutputTokensSourceBuiltin},
-		{"Chat Completions 不认识的不发", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "jev-latest", 0, MaxOutputTokensSourceProvider},
+		{"Gemini 不认识的名字按默认值", ProviderConfig{Provider: ProviderGemini}, "claude", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
+		{"Chat Completions 按表封顶", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "deepseek-flash", DefaultOutputTokenCeiling, MaxOutputTokensSourceBuiltin},
+		{"Chat Completions 不认识的按默认值", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatChatCompletions}, "jev-latest", DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault},
 		{"Responses 不发", ProviderConfig{Provider: ProviderOpenAICompatible, APIFormat: APIFormatResponses}, "gpt-5.5", 0, MaxOutputTokensSourceProvider},
 		{"没传模型时看配置档的默认模型", ProviderConfig{Provider: ProviderGemini, Model: "gemini-2.0-flash"}, "", 8192, MaxOutputTokensSourceBuiltin},
 	} {
@@ -87,8 +86,11 @@ func TestResolveMaxOutputTokensByProtocol(t *testing.T) {
 // 代发值只下发，不进预算；按上下文剩余空间收紧时，至少留出预算预留的那份。
 func TestImplicitMaxOutputTokensClampsToContextRoom(t *testing.T) {
 	cfg := ProviderConfig{Provider: ProviderAnthropic}
-	big := GenerateRequest{Model: "claude-opus-4-6", MaxContextTokens: 128000, Messages: []Message{{Role: RoleUser, Content: strings.Repeat("a", 200000)}}}
+	big := GenerateRequest{Model: "claude-opus-4-6", MaxContextTokens: 128000, Messages: []Message{{Role: RoleUser, Content: strings.Repeat("a", 300000)}}}
 	room := big.MaxContextTokens - estimateRequestInputTokens(big) - contextBudgetSafetyReserve
+	if room >= DefaultOutputTokenCeiling || room <= DefaultMaxOutputTokens {
+		t.Fatalf("fixture room = %d, want it between the reserve and the ceiling", room)
+	}
 	if got := cfg.withImplicitMaxOutputTokens(ProviderAnthropic, big, true); got.MaxOutputTokens != room || !got.implicitMaxOutputTokens {
 		t.Fatalf("clamped = %d (implicit %t), want room %d", got.MaxOutputTokens, got.implicitMaxOutputTokens, room)
 	}
@@ -96,8 +98,8 @@ func TestImplicitMaxOutputTokensClampsToContextRoom(t *testing.T) {
 	if got := cfg.withImplicitMaxOutputTokens(ProviderAnthropic, full, true); got.MaxOutputTokens != DefaultMaxOutputTokens {
 		t.Fatalf("no room left = %d, want the reserved %d", got.MaxOutputTokens, DefaultMaxOutputTokens)
 	}
-	if got := cfg.withImplicitMaxOutputTokens(ProviderAnthropic, big, false); got.MaxOutputTokens != 128000 {
-		t.Fatalf("unclamped = %d, want 128000", got.MaxOutputTokens)
+	if got := cfg.withImplicitMaxOutputTokens(ProviderAnthropic, big, false); got.MaxOutputTokens != DefaultOutputTokenCeiling {
+		t.Fatalf("unclamped = %d, want %d", got.MaxOutputTokens, DefaultOutputTokenCeiling)
 	}
 	explicit := big
 	explicit.MaxOutputTokens = 300
@@ -106,7 +108,7 @@ func TestImplicitMaxOutputTokensClampsToContextRoom(t *testing.T) {
 	}
 }
 
-// 上下文预算只为输出预留 DefaultMaxOutputTokens：代发 128K 的上限不能把 128K 的兜底
+// 上下文预算只为输出预留 DefaultMaxOutputTokens：代发 64K 的上限不能把 128K 的兜底
 // 窗口里的历史挤掉。
 func TestAnthropicSendsModelMaxWithoutShrinkingHistory(t *testing.T) {
 	var body map[string]any
@@ -125,7 +127,7 @@ func TestAnthropicSendsModelMaxWithoutShrinkingHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	maxTokens, _ := body["max_tokens"].(float64)
-	if maxTokens <= 8192 || maxTokens > 128000 {
+	if maxTokens <= 8192 || maxTokens > float64(DefaultOutputTokenCeiling) {
 		t.Fatalf("max_tokens = %v, want the model max clamped to the context room", body["max_tokens"])
 	}
 	if messages, _ := body["messages"].([]any); len(messages) != len(history) {
@@ -175,6 +177,42 @@ func TestChatCompletionsImplicitMaxTokensDowngrade(t *testing.T) {
 			// 新 client 沿用结论，一次就过。
 			if _, err := newOpenAICompatibleClient(cfg, server.Client()).Generate(context.Background(), req); err != nil || len(sent) != 3 || sent[2] != nil {
 				t.Fatalf("remembered downgrade not applied: err=%v sent=%v", err, sent)
+			}
+		})
+	}
+}
+
+// 代发的默认值超出模型上限时，按报错里写的上限重发一次；用户填的值被拒照实报错。
+func TestAnthropicImplicitMaxTokensRetriesWithReportedLimit(t *testing.T) {
+	for _, item := range []struct {
+		name      string
+		userLimit int64
+		wantSent  []float64
+		wantErr   bool
+	}{
+		{name: "implicit", wantSent: []float64{65536, 64000}},
+		{name: "user configured", userLimit: 100000, wantSent: []float64{100000}, wantErr: true},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			var sent []float64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				maxTokens, _ := body["max_tokens"].(float64)
+				sent = append(sent, maxTokens)
+				w.Header().Set("Content-Type", "application/json")
+				if maxTokens > 64000 {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: ` + strconv.FormatFloat(maxTokens, 'f', 0, 64) + ` > 64000, which is the maximum allowed number of output tokens for relay-claude"}}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"relay-claude","content":[{"type":"text","text":"好"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+			}))
+			defer server.Close()
+			client := newAnthropicClient(ProviderConfig{Provider: ProviderAnthropic, APIKey: "test", BaseURL: server.URL, Model: "relay-claude", MaxOutputTokens: item.userLimit, Timeout: time.Minute}, server.Client())
+			_, err := client.Generate(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "你好"}}})
+			if (err != nil) != item.wantErr || !slices.Equal(sent, item.wantSent) {
+				t.Fatalf("err=%v sent=%v, want err=%t sent=%v", err, sent, item.wantErr, item.wantSent)
 			}
 		})
 	}

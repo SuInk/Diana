@@ -116,18 +116,22 @@ func normalizeModelFamily(model string) string {
 	return strings.NewReplacer(".", "-", "_", "-").Replace(name)
 }
 
+// DefaultOutputTokenCeiling 是没填上限时代发值的封顶，也是内置表不认识的模型的
+// 默认值。做法和 opencode 一样（它取 models.dev 的上限、封顶 32000）：按模型上限要，
+// 但不无限要。65536 足够写一个 200KB 左右的文件；DeepSeek 384K 这类上限要满了只会
+// 让 Anthropic SDK 这类按上限估算耗时的客户端拒绝请求。要更长就在配置档里填。
+const DefaultOutputTokenCeiling int64 = 65536
+
 // MaxOutputTokensSource 说明没被调用方覆盖时，请求里的输出上限从哪来，供界面如实标注。
 type MaxOutputTokensSource string
 
 const (
 	// MaxOutputTokensSourceUser 是配置档里显式填的值。
 	MaxOutputTokensSourceUser MaxOutputTokensSource = "user"
-	// MaxOutputTokensSourceBuiltin 是内置表里这个模型的上限。
+	// MaxOutputTokensSourceBuiltin 是内置表里这个模型的上限（封顶 DefaultOutputTokenCeiling）。
 	MaxOutputTokensSourceBuiltin MaxOutputTokensSource = "builtin"
-	// MaxOutputTokensSourceCatalog 是同步下来的模型清单里记的上限。
-	MaxOutputTokensSourceCatalog MaxOutputTokensSource = "catalog"
-	// MaxOutputTokensSourceFallback 是协议级兜底值（Gemini 65536、Anthropic 1024）。
-	MaxOutputTokensSourceFallback MaxOutputTokensSource = "fallback"
+	// MaxOutputTokensSourceDefault 是内置表不认识这个模型时的默认值。
+	MaxOutputTokensSourceDefault MaxOutputTokensSource = "default"
 	// MaxOutputTokensSourceProvider 表示不发这个字段，由服务端按模型处理。
 	MaxOutputTokensSourceProvider MaxOutputTokensSource = "provider"
 )
@@ -135,6 +139,9 @@ const (
 // ResolveMaxOutputTokens 返回调用方没覆盖时实际发出的输出上限和来源。返回 0 表示
 // 不发这个字段。发出的值还会按上下文剩余空间收一次（Gemini 除外，它的输入输出
 // 上限分开算），这里给的是收之前的值。
+//
+// 默认值要多了会被拒，各协议都有退路：Gemini 去掉字段重发，Anthropic 按报错里给的
+// 上限重发，Chat Completions 由参数降级摘掉并记住。要少了则是悄悄截断，没有退路。
 func (cfg ProviderConfig) ResolveMaxOutputTokens(model string) (int64, MaxOutputTokensSource) {
 	if cfg.MaxOutputTokens > 0 {
 		return cfg.MaxOutputTokens, MaxOutputTokensSourceUser
@@ -142,33 +149,14 @@ func (cfg ProviderConfig) ResolveMaxOutputTokens(model string) (int64, MaxOutput
 	if strings.TrimSpace(model) == "" {
 		model = cfg.Model
 	}
-	switch cfg.Provider {
-	case ProviderGemini:
-		if limit, ok := BuiltinMaxOutputTokens(model); ok {
-			return limit, MaxOutputTokensSourceBuiltin
-		}
-		// 不认识的名字按 Gemini 现行上限要；上限更低的模型会以 400 拒绝，届时去掉
-		// 字段重发。宁可要多被拒一次，也不要被网关的缺省值悄悄截断。
-		return int64(geminiFallbackMaxOutputTokens), MaxOutputTokensSourceFallback
-	case ProviderAnthropic:
-		if limit, ok := BuiltinMaxOutputTokens(model); ok {
-			return limit, MaxOutputTokensSourceBuiltin
-		}
-		if info, ok := cfg.ModelInfoFor(model); ok && info.MaxOutputTokens > 0 {
-			return info.MaxOutputTokens, MaxOutputTokensSourceCatalog
-		}
-		return defaultAnthropicMaxTokens, MaxOutputTokensSourceFallback
-	case ProviderOpenAICompatible:
-		// Responses API 缺省就是模型上限，而 Codex 这类订阅网关会拒掉这个字段，不发。
-		// Chat Completions 的缺省值普遍偏小（DeepSeek 默认 4096），按表发；被拒时由
-		// 参数降级摘掉并记住。
-		if cfg.APIFormatWithDefault() == APIFormatChatCompletions {
-			if limit, ok := BuiltinMaxOutputTokens(model); ok {
-				return limit, MaxOutputTokensSourceBuiltin
-			}
-		}
+	// Responses API 缺省就是模型上限，而 Codex 这类订阅网关会拒掉这个字段，不发。
+	if cfg.Provider == ProviderOpenAICompatible && cfg.APIFormatWithDefault() != APIFormatChatCompletions {
+		return 0, MaxOutputTokensSourceProvider
 	}
-	return 0, MaxOutputTokensSourceProvider
+	if limit, ok := BuiltinMaxOutputTokens(model); ok {
+		return min(limit, DefaultOutputTokenCeiling), MaxOutputTokensSourceBuiltin
+	}
+	return DefaultOutputTokenCeiling, MaxOutputTokensSourceDefault
 }
 
 // withImplicitMaxOutputTokens 在调用方和配置档都没给上限时，把代发值写进请求。

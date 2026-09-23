@@ -54,7 +54,7 @@ func TestLLMConfigHandlerGetAndPost(t *testing.T) {
 	if err := json.NewDecoder(getRec.Body).Decode(&payload); err != nil {
 		t.Fatalf("Decode() error = %v", err)
 	}
-	if payload.Name != "主配置" || payload.Group != "chat" || payload.Description != "主力 OpenAI 配置" || payload.UpdatedAt == "" || len(payload.Models) != 2 || payload.Models[1].ID != "gpt-vision" || payload.TimeoutMS != 5000 || payload.ImageModel != "gpt-image-1-mini" || payload.UserAgent != "codex-test/1.0" || payload.MaxOutputTokens != 128 {
+	if payload.Name != "主配置" || payload.Group != "chat" || payload.Description != "主力 OpenAI 配置" || payload.UpdatedAt == "" || len(payload.Models) != 2 || payload.Models[1].ID != "gpt-vision" || payload.TimeoutMS != 5000 || payload.ImageModel != "gpt-image-1-mini" || payload.UserAgent != "codex-test/1.0" || tokenLimitValue(payload.MaxOutputTokens) != 128 {
 		t.Fatalf("payload = %#v", payload)
 	}
 	if payload.APIKey != "" || !payload.APIKeyConfigured || payload.APIKeyPreview != "new…123" {
@@ -896,7 +896,8 @@ func TestLLMPayloadReportsEffectiveMaxOutputTokens(t *testing.T) {
 		wantSource llm.MaxOutputTokensSource
 	}{
 		{"Gemini 按内置表", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "k", Model: "gemini-3.8-flash-low"}, 65536, llm.MaxOutputTokensSourceBuiltin},
-		{"Anthropic 按内置表", llm.ProviderConfig{Provider: llm.ProviderAnthropic, APIKey: "k", Model: "claude-opus-4-6"}, 128000, llm.MaxOutputTokensSourceBuiltin},
+		{"Anthropic 按内置表封顶", llm.ProviderConfig{Provider: llm.ProviderAnthropic, APIKey: "k", Model: "claude-opus-4-6"}, llm.DefaultOutputTokenCeiling, llm.MaxOutputTokensSourceBuiltin},
+		{"表里没有按默认值", llm.ProviderConfig{Provider: llm.ProviderAnthropic, APIKey: "k", Model: "relay-claude"}, llm.DefaultOutputTokenCeiling, llm.MaxOutputTokensSourceDefault},
 		{"Responses 不发", llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", Model: "gpt-5.5"}, 0, llm.MaxOutputTokensSourceProvider},
 		{"用户填的值", llm.ProviderConfig{Provider: llm.ProviderGemini, APIKey: "k", Model: "gemini-3.8-flash-low", MaxOutputTokens: 4096}, 4096, llm.MaxOutputTokensSourceUser},
 	} {
@@ -906,5 +907,34 @@ func TestLLMPayloadReportsEffectiveMaxOutputTokens(t *testing.T) {
 				t.Fatalf("effective = %d, %q; want %d, %q", payload.EffectiveMaxOutputTokens, payload.MaxOutputTokensSource, item.want, item.wantSource)
 			}
 		})
+	}
+}
+
+// 输出上限没提交就保留旧值，提交 0 才是改回「按模型上限」。以前它是普通整数，
+// 界面一保存就把通过 API 设过的值清成 0。
+func TestLLMConfigHandlerMaxOutputTokensOmittedKeepsValue(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{
+		Provider:        llm.ProviderAnthropic,
+		APIKey:          "existing-key",
+		Model:           "claude-sonnet-4-5",
+		MaxOutputTokens: 4096,
+	})
+	router := testRouter(NewLLMConfigHandler(store))
+	id := store.Profiles().Profiles[0].ID
+	post := func(body string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/llm/config", bytes.NewReader([]byte(body))))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+	}
+	post(`{"id":"` + id + `","provider":"anthropic","model":"claude-sonnet-4-5"}`)
+	if got := store.Current().MaxOutputTokens; got != 4096 {
+		t.Fatalf("omitted field changed the stored limit to %d", got)
+	}
+	post(`{"id":"` + id + `","provider":"anthropic","model":"claude-sonnet-4-5","max_output_tokens":0}`)
+	if got := store.Current().MaxOutputTokens; got != 0 {
+		t.Fatalf("explicit 0 kept the stored limit %d", got)
 	}
 }

@@ -6,8 +6,11 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +19,12 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 )
 
-// Anthropic 的 Messages API 把 max_tokens 列为必填，不发直接被拒。没配置时按模型
-// 上限要（见 ResolveMaxOutputTokens），内置表和模型清单都没有才退回这个常量。
-const defaultAnthropicMaxTokens int64 = 1024
+// Anthropic 的 Messages API 把 max_tokens 列为必填，不发直接被拒；没配置时按模型
+// 上限要（见 ResolveMaxOutputTokens）。代发的值超出模型上限时，报错里会写出上限，
+// 按它重发一次；写不出来才退回这个各代 Claude 都接受的值。
+const anthropicRejectedMaxTokensRetry int64 = 8192
+
+var anthropicMaxTokensLimitPattern = regexp.MustCompile(`max_tokens:\s*\d+\s*>\s*(\d+)`)
 
 const anthropicNonStreamingTimeout = 10 * time.Minute
 
@@ -90,6 +96,12 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 		opts = append(opts, option.WithRequestTimeout(anthropicNonStreamingTimeout))
 	}
 	resp, err := c.client.Messages.New(ctx, params, opts...)
+	if err != nil && req.implicitMaxOutputTokens {
+		if limit, ok := anthropicMaxTokensRejection(err); ok && limit < params.MaxTokens {
+			params.MaxTokens = limit
+			resp, err = c.client.Messages.New(ctx, params, opts...)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("llm: provider request failed: %w", err)
 	}
@@ -381,4 +393,24 @@ func anthropicText(blocks []anthropic.ContentBlockUnion) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// anthropicMaxTokensRejection 认出「max_tokens 超出模型上限」的 400，返回可以重发的
+// 上限。报错形如 max_tokens: 65536 > 64000, which is the maximum allowed number of
+// output tokens for claude-opus-4-5。
+func anthropicMaxTokensRejection(err error) (int64, bool) {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		return 0, false
+	}
+	text := apiErr.Error()
+	if !strings.Contains(strings.ToLower(text), "max_tokens") {
+		return 0, false
+	}
+	if match := anthropicMaxTokensLimitPattern.FindStringSubmatch(text); match != nil {
+		if limit, parseErr := strconv.ParseInt(match[1], 10, 64); parseErr == nil && limit > 0 {
+			return limit, true
+		}
+	}
+	return anthropicRejectedMaxTokensRetry, true
 }

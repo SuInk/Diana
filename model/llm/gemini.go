@@ -246,11 +246,6 @@ func (c *geminiClient) streamContent(ctx context.Context, model string, contents
 	}
 }
 
-// geminiFallbackMaxOutputTokens 是内置表不认识的模型名在 Gemini 协议下代发的上限，
-// 取 Gemini 2.5/3.x 的输出上限。只下发到请求里，不参与上下文预算：Gemini 的输入和
-// 输出上限是分开算的。
-const geminiFallbackMaxOutputTokens int32 = 65536
-
 // setGeminiOutputTokenLimit 写入输出上限，返回这个值是不是代填的。
 func setGeminiOutputTokenLimit(config *genai.GenerateContentConfig, req GenerateRequest) (bool, error) {
 	if req.MaxOutputTokens <= 0 {
