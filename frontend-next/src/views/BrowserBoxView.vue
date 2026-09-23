@@ -3,8 +3,8 @@
   浏览器这一页只回答一个问题：机器人用哪个浏览器。
 
   Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有主人能驱动、
-  能点能输入——区别只在用谁的。和 Claude 设置页一样一行一个开关，可以都开着：最后
-  打开的那个先用，它用不了时自动换另一个（见 model/browsersource）。一次性无头
+  能点能输入——区别只在用谁的。和 Claude 设置页一样一行一个开关，可以都开着；都开着
+  时可以调优先级，排在上面的先用，它用不了时自动换另一个（见 model/browsersource）。一次性无头
   渲染不在这里：它不带登录态，读公开网页、出图都靠它，一直可用，依赖和参数在插件页
   的「网页渲染」里。以前三者并排成「三档」，用户得先弄懂三者区别才能开始用。
 -->
@@ -19,12 +19,15 @@
         <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
       </div>
       <div class="card-body stack">
-        <!-- 和 Claude 设置页一样一行一项、开关在右。可以都开着：最后打开的那个先用，
-             它用不了时自动换另一个。 -->
+        <!-- 和 Claude 设置页一样一行一项、开关在右，按优先级从上往下排。开关只管启用；
+             两个都启用时才出现「优先用」，排在上面的先用，它用不了时自动换下一个。 -->
         <div class="browser-toggle-list">
-          <div v-for="key in sourceKeys" :key="key" class="browser-toggle-row">
+          <div v-for="(key, index) in orderedKeys" :key="key" class="browser-toggle-row">
             <div class="browser-toggle-copy">
               <div class="browser-toggle-title">
+                <span v-if="enabledCount > 1 && sourceState?.[key].enabled" class="browser-toggle-rank" :title="`优先级 ${index + 1}`">
+                  {{ index + 1 }}
+                </span>
                 <strong>{{ sourceMeta[key].title }}</strong>
                 <span v-if="sourceState && sourceState.active === key" class="badge ok">正在用</span>
                 <span v-else-if="sourceState?.[key].enabled && sourceState[key].usable" class="badge">备用</span>
@@ -37,6 +40,16 @@
                 </button>
               </span>
             </div>
+            <button
+              v-if="enabledCount > 1 && sourceState?.[key].enabled && index > 0"
+              class="btn small ghost browser-toggle-promote"
+              type="button"
+              :disabled="savingSource"
+              @click="moveSource(index, -1)"
+            >
+              <ArrowUp :size="14" aria-hidden="true" />
+              优先用
+            </button>
             <label class="switch" :title="sourceState?.[key].enabled ? '点击关闭' : '点击打开'">
               <input
                 type="checkbox"
@@ -209,7 +222,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
 import { navigate as navigateToView } from "../router";
-import { ChevronDown } from "@lucide/vue";
+import { ArrowUp, ChevronDown } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
 import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -372,16 +385,21 @@ async function patchSource(patch: Parameters<typeof saveBrowserSource>[0]): Prom
   }
 }
 
-// 打开一个：排到第一位并打开它，另一个保持原样当备用；关掉只关它自己。
+// 开关只管启用，不动顺序；顺序用「优先用」调。
 function toggleSource(key: SourceKey, checked: boolean): void {
-  if (checked) preferSource(key);
-  else void patchSource(key === "box" ? { box_enabled: false } : { extension_enabled: false });
+  void patchSource(key === "box" ? { box_enabled: checked } : { extension_enabled: checked });
 }
 
-// 选一个：排到第一位并打开它。另一个保持原样，选中的用不了时自动顶上。
-function preferSource(key: SourceKey): void {
-  const order = [key, ...sourceKeys.filter((other) => other !== key)];
-  void patchSource(key === "box" ? { order, box_enabled: true } : { order, extension_enabled: true });
+// 按优先级排的行；还没读到时按默认顺序。
+const orderedKeys = computed<SourceKey[]>(() => sourceState.value?.order ?? sourceKeys);
+const enabledCount = computed(() => sourceKeys.filter((key) => sourceState.value?.[key].enabled).length);
+
+function moveSource(index: number, delta: -1 | 1): void {
+  const order = [...orderedKeys.value];
+  const target = index + delta;
+  if (target < 0 || target >= order.length) return;
+  [order[index], order[target]] = [order[target], order[index]];
+  void patchSource({ order });
 }
 
 async function refresh(): Promise<void> {
@@ -620,6 +638,24 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   font-size: 14px;
+}
+
+.browser-toggle-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
+
+.browser-toggle-promote {
+  flex: none;
+  margin-left: auto;
 }
 
 .browser-toggle-deps {
