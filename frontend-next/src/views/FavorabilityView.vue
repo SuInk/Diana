@@ -3,7 +3,7 @@
 
 <!--
   后台好感度评估的时间线。人员详情里只有某一个人「分数真的变了」的几条；这里是
-  所有人的每一次评估，默认也只看变了的，打开「显示未变化」才能回答「这句话为什么
+  所有人的每一次评估，默认也只看变了的，切到「全部评估」才能回答「这句话为什么
   没加分」：判了 0、把握不够、评估失败、排满跳过。
 -->
 <template>
@@ -21,11 +21,11 @@
         <p>后台每一次好感度评估的结果</p>
       </div>
       <div class="view-actions">
-        <label class="switch">
-          <input v-model="showAll" type="checkbox" />
-          <span class="track" aria-hidden="true"></span>
-          <span class="switch-label">显示未变化</span>
-        </label>
+        <!-- 「全部评估」回答的是「这句话为什么没加分」：判了 0、把握不够、失败、排满跳过。 -->
+        <div class="segmented" role="tablist" aria-label="评估范围">
+          <button type="button" :class="{ active: !showAll }" @click="showAll = false">有变化</button>
+          <button type="button" :class="{ active: showAll }" @click="showAll = true">全部评估</button>
+        </div>
       </div>
     </header>
 
@@ -65,7 +65,7 @@
         <EmptyState
           v-else-if="!loading"
           :title="showAll ? '还没有好感度评估记录' : '最近没有好感度变化'"
-          :hint="showAll ? '机器人回复之后才会在后台评估一次。' : '打开「显示未变化」可以看到判了 0、把握不够或评估失败的记录。'"
+          :hint="showAll ? '机器人回复之后才会在后台评估一次。' : '切到「全部评估」可以看到判了 0、把握不够或评估失败的记录。'"
         />
         <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载好感变化" />
       </div>

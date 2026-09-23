@@ -440,7 +440,7 @@ const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
   ]
 };
 
-// 后台好感度评估：每种结果各给一两条，演示站打开「显示未变化」能看到全部分类。
+// 后台好感度评估：每种结果各给一两条，演示站切到「全部评估」能看到全部分类。
 const demoRelationshipEvaluations: RelationshipEvaluation[] = [
   { id: 9, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "@Diana 帮我总结一下今天的发布变更，谢啦", status: "changed", proposed_delta: 1, applied_delta: 1, before_score: 61, after_score: 62, confidence: 0.92, reason: "真诚道谢，互动友好", model: "gpt-5.4-mini", created_at: before(2) },
   { id: 8, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "画一张雨夜城市里的复古电车", status: "unchanged", proposed_delta: 0, applied_delta: 0, before_score: 35, after_score: 35, confidence: 0.96, reason: "普通的生图请求，不影响关系", model: "gpt-5.4-mini", created_at: before(31) },
