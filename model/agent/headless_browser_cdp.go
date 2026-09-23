@@ -507,6 +507,12 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			if transientBrowserEvaluationError(err) {
 				continue
 			}
+			switch probeFailureAction(err, browserCtx.Err()) {
+			case probeRetry:
+				continue
+			case probeFinish:
+				return b.finishObservableRender(browserCtx, executable, rawURL, renderStarted, lastProbe, lastDecision, tracker.snapshot(), captures, false, "probe_deadline_returning_last_non_empty_snapshot")
+			}
 			return RenderedPage{}, fmt.Errorf("inspect rendered DOM: %w", err)
 		}
 		lastProbe = probe
@@ -643,6 +649,43 @@ func dedupeConsecutiveStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+// probeAction 是一次 DOM 探针失败之后该怎么办。
+type probeAction int
+
+const (
+	// probeFail：探针说的是页面本身有问题，这次渲染到此为止。
+	probeFail probeAction = iota
+	// probeRetry：下一拍再探一次。
+	probeRetry
+	// probeFinish：渲染的总时间也到了，用手上已有的快照收尾。
+	probeFinish
+)
+
+// probeFailureAction 判断一次 DOM 探针失败该重试、收尾还是判死。
+//
+// 探针自己只有 browserProbeTimeout 那点预算，而它要的是页面主线程空出来。某一刻
+// 主线程被长任务占着探不动，只说明这一刻忙，不说明这次渲染失败——判死是渲染总
+// 截止时间的事，手上已经抓到的快照更不该因此丢掉。
+//
+// 线上就是这么丢的：一次 3 秒探针超时，整页直接报「沙盒无头浏览器渲染失败」，
+// 而同一个会话下一秒渲染别的站点完全正常。
+func probeFailureAction(err error, browserCtxErr error) probeAction {
+	switch {
+	case err == nil:
+		return probeRetry
+	case transientBrowserEvaluationError(err):
+		return probeRetry
+	case !errors.Is(err, context.DeadlineExceeded):
+		return probeFail
+	case browserCtxErr == nil:
+		// 只是这一拍探不动，整次渲染的时间还有。
+		return probeRetry
+	default:
+		// 连浏览器上下文都到期了，别再探，拿手上的收尾。
+		return probeFinish
+	}
 }
 
 func transientBrowserEvaluationError(err error) bool {

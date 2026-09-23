@@ -5,6 +5,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -463,6 +465,32 @@ func TestDownloadedChromePathsFollowBrowserDir(t *testing.T) {
 		}
 		if filepath.Base(path) != "chrome" {
 			t.Fatalf("下载路径 %q 没有指向 chrome 可执行文件", path)
+		}
+	}
+}
+
+// 线上那次：渲染 claude-opus-5-5.riba2534.cn 报「沙盒无头浏览器渲染失败」，
+// detail 是 inspect rendered DOM: context deadline exceeded——DOM 探针自己那 3 秒
+// 预算到了。探针要的是页面主线程空出来，主线程被长任务占着探不动只说明这一刻忙，
+// 不说明渲染失败：同一个会话下一秒渲染别的站点完全正常。近五次渲染报错里有三次
+// 是这一类。
+func TestProbeTimeoutDoesNotKillTheWholeRender(t *testing.T) {
+	for _, item := range []struct {
+		name          string
+		err           error
+		browserCtxErr error
+		want          probeAction
+	}{
+		{"主线程忙，渲染时间还有", context.DeadlineExceeded, nil, probeRetry},
+		{"包装过的探针超时", fmt.Errorf("evaluate: %w", context.DeadlineExceeded), nil, probeRetry},
+		{"浏览器上下文也到期了，用手上的收尾", context.DeadlineExceeded, context.DeadlineExceeded, probeFinish},
+		{"整个请求被取消", context.DeadlineExceeded, context.Canceled, probeFinish},
+		{"页面换了执行上下文", errors.New("Cannot find context with specified id"), nil, probeRetry},
+		{"标签页没了", errors.New("target closed"), nil, probeRetry},
+		{"页面本身报错", errors.New("Uncaught TypeError: x is not a function"), nil, probeFail},
+	} {
+		if got := probeFailureAction(item.err, item.browserCtxErr); got != item.want {
+			t.Fatalf("%s: probeFailureAction = %v, want %v", item.name, got, item.want)
 		}
 	}
 }
