@@ -180,7 +180,7 @@ let plugins: PluginState[] = [
     installed: true, enabled: true
   },
   {
-    manifest: { id: "official.file-delivery", name: "文件交付", version: "0.1.0", description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown 等文本内容直接作为文件发到会话供下载，并可附带渲染预览图。", official: true, built_in: true, permissions: ["message:send", "file:send", "browser:render"], settings: [{ key: "max_file_bytes", label: "单个文件大小上限", type: "size", default: 1048576 }, { key: "preview", label: "默认附带预览图", type: "bool", default: true }, { key: "owner_only", label: "仅主人可用", type: "bool", default: false }] },
+    manifest: { id: "official.file-delivery", name: "文件交付", version: "0.1.1", description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown 等文本内容直接作为文件发到会话供下载，并可附带渲染预览图；HTML 页面和 SVG 还能直接渲染成图片、MP4 视频或 GIF 发出。", official: true, built_in: true, permissions: ["message:send", "file:send", "browser:render"], settings: [{ key: "max_file_bytes", label: "单个文件大小上限", type: "size", default: 1048576 }, { key: "preview", label: "默认附带预览图", type: "bool", default: true }, { key: "owner_only", label: "仅主人可用", type: "bool", default: false }, { key: "render_media", label: "HTML/动画渲染", type: "bool", default: true }, { key: "max_video_seconds", label: "视频/GIF 最长时长", type: "number", default: 10, min: 1, max: 20, step: 1, unit: "秒" }] },
     installed: true, enabled: true
   },
   {
