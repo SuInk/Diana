@@ -69,6 +69,7 @@ import { formatTime } from "../format";
 import { displayChatIdentity } from "../message-display";
 import { toastError } from "../toast";
 import { recordsActionsHost } from "../records-actions";
+import { viewQuery } from "../router";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -144,11 +145,19 @@ function applyAutoRefresh(): void {
 
 watch(autoRefresh, applyAutoRefresh);
 
+// 别的页面可以带着 ?q= 跳过来（比如浏览器页的「查看全部」），进来就按它过滤。
+function seedQueryFromLocation(): void {
+  const seeded = viewQuery().get("q");
+  if (seeded !== null) query.value = seeded;
+}
+
 onMounted(() => {
+  seedQueryFromLocation();
   void reload();
 });
 
 onActivated(() => {
+  seedQueryFromLocation();
   applyAutoRefresh();
 });
 

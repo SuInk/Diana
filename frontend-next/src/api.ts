@@ -2072,6 +2072,26 @@ export function listAppLogs(kind?: AppLogKind, limit = 100): Promise<AppLogsResp
   return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
 }
 
+/** 浏览器页的操作记录：机器人的浏览器动作，加上你在浏览器页上的启停、接管和打开网页。 */
+export const browserActivityActions = [
+  "browser_action",
+  "browser_box_start",
+  "browser_box_stop",
+  "browser_box_takeover",
+  "browser_box_navigate",
+  "browser_source",
+  "browser_control_connect",
+  "browser_control_disconnect",
+  "browser_control_takeover"
+];
+
+/** 取浏览器相关的操作记录；带 botID 时只取这台机器人的。成功和失败的都在里面。 */
+export function listBrowserActivity(botID?: string, limit = 30): Promise<AppLogsResponse> {
+  const params = new URLSearchParams({ limit: String(limit), action: browserActivityActions.join(",") });
+  if (botID) params.set("profile", botID);
+  return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
+}
+
 export interface StatsHourBucket {
   hour_unix: number;
   total: number;

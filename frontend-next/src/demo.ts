@@ -1376,6 +1376,21 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(task);
   }
 
+  // 浏览器页的操作记录：按 action 和 profile 筛，和真实后端一致。
+  if (path === "/api/logs" && url.searchParams.get("action")) {
+    const actions = new Set((url.searchParams.get("action") ?? "").split(","));
+    const profile = url.searchParams.get("profile") ?? "";
+    const browserLogs: AppLogEntry[] = [
+      { id: "browser-log-1", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里打开网页", actor: "qq:100200711", actor_name: "青禾", target: "https://github.com/SuInk/Diana/releases", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(3) },
+      { id: "browser-log-2", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里读取页面", actor: "qq:100200711", actor_name: "青禾", target: ".release-header", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(3) },
+      { id: "browser-log-3", kind: "error", level: "error", action: "browser_action", message: "机器人在内置浏览器里点击失败", detail: "找不到元素：button.download（模拟数据）", actor: "qq:100200711", actor_name: "青禾", target: "button.download", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(4) },
+      { id: "browser-log-4", kind: "operation", level: "info", action: "browser_box_takeover", message: "你在画面上动手，内置浏览器已自动转为你接管", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
+      { id: "browser-log-5", kind: "operation", level: "info", action: "browser_box_navigate", message: "你在内置浏览器里打开了网页", actor: "webui:demo", target: "https://accounts.example.com/login", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
+      { id: "browser-log-6", kind: "operation", level: "info", action: "browser_box_start", message: "你启动了内置浏览器", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(13) },
+      { id: "browser-log-7", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里截图", actor: "telegram:880024", target: "", metadata: { profile_id: "bot-telegram", source: "box" }, created_at: before(40) }
+    ];
+    return json({ logs: browserLogs.filter((log) => actions.has(log.action) && (!profile || log.metadata?.profile_id === profile)) });
+  }
   if (path === "/api/logs") {
     const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
     return json({ logs: url.searchParams.get("kind") === "error" ? errorLogs : logs });

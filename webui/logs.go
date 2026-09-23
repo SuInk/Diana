@@ -77,9 +77,17 @@ func (h *AppLogHandler) list(c *gin.Context) {
 		c.JSON(http.StatusOK, appLogsResponse{Logs: []appLogEntry{}})
 		return
 	}
+	var actions []string
+	for _, action := range strings.Split(c.Query("action"), ",") {
+		if action = strings.TrimSpace(action); action != "" {
+			actions = append(actions, action)
+		}
+	}
 	logs, err := h.store.ListLogs(c.Request.Context(), storage.AppLogFilter{
-		Kind:  kind,
-		Limit: limit,
+		Kind:      kind,
+		Actions:   actions,
+		ProfileID: strings.TrimSpace(c.Query("profile")),
+		Limit:     limit,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err)

@@ -44,7 +44,11 @@ type Entry struct {
 type Filter struct {
 	Kind  Kind
 	Level Level
-	Limit int
+	// Actions 非空时只取这些动作。
+	Actions []string
+	// ProfileID 非空时只取 metadata.profile_id 等于它的记录。
+	ProfileID string
+	Limit     int
 }
 
 // Writer 是只写日志路径的最小依赖，方便 WebUI 和聊天技能共用。

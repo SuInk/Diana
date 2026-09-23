@@ -4,7 +4,6 @@
 package webui
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -109,7 +108,7 @@ func (h *BrowserBoxHandler) start(c *gin.Context) {
 		logAndWriteError(c, h.logs, http.StatusInternalServerError, "browser_box_start", err, bot.ID(), nil)
 		return
 	}
-	recordRequestOperation(c, h.logs, "browser_box_start", "内置浏览器已启动", bot.ID(), nil)
+	recordRequestOperation(c, h.logs, "browser_box_start", "你启动了内置浏览器", bot.ID(), browserBoxLogMetadata(bot, nil))
 	c.JSON(http.StatusOK, gin.H{"status": bot.Status()})
 }
 
@@ -119,7 +118,7 @@ func (h *BrowserBoxHandler) stop(c *gin.Context) {
 		return
 	}
 	bot.Stop()
-	recordRequestOperation(c, h.logs, "browser_box_stop", "内置浏览器已停止", bot.ID(), nil)
+	recordRequestOperation(c, h.logs, "browser_box_stop", "你停止了内置浏览器", bot.ID(), browserBoxLogMetadata(bot, nil))
 	c.JSON(http.StatusOK, gin.H{"status": bot.Status()})
 }
 
@@ -136,7 +135,11 @@ func (h *BrowserBoxHandler) setTakeover(c *gin.Context) {
 		return
 	}
 	bot.SetTakeover(payload.Active)
-	recordRequestOperation(c, h.logs, "browser_box_takeover", "内置浏览器接管状态已切换", bot.ID(), map[string]any{"active": payload.Active})
+	message := "你把内置浏览器交还给机器人"
+	if payload.Active {
+		message = "你接管了内置浏览器"
+	}
+	recordRequestOperation(c, h.logs, "browser_box_takeover", message, bot.ID(), browserBoxLogMetadata(bot, map[string]any{"active": payload.Active}))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "active": payload.Active})
 }
 
@@ -275,7 +278,7 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 			if err := conn.ReadJSON(&message); err != nil {
 				return
 			}
-			h.handleLiveMessage(c.Request.Context(), bot, live, message)
+			h.handleLiveMessage(c, bot, live, message)
 		}
 	}()
 
@@ -302,35 +305,56 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 //
 // 用户在这块画面上的操作等于人工接管，所以第一次输入就把接管打开：不这样的话
 // 用户正在填表，模型同时在点别的地方，两边抢同一个页面。
-func (h *BrowserBoxHandler) handleLiveMessage(ctx context.Context, bot *browserbox.Bot, live *browserbox.Live, message liveMessage) {
+func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bot, live *browserbox.Live, message liveMessage) {
+	ctx := c.Request.Context()
 	switch message.Type {
 	case "mouse":
 		if message.Mouse == nil {
 			return
 		}
-		bot.SetTakeover(true)
+		h.takeOverFromLive(c, bot)
 		_ = live.Mouse(ctx, *message.Mouse)
 	case "key":
 		if message.Key == nil {
 			return
 		}
-		bot.SetTakeover(true)
+		h.takeOverFromLive(c, bot)
 		_ = live.Key(ctx, *message.Key)
 	case "text":
-		bot.SetTakeover(true)
+		h.takeOverFromLive(c, bot)
 		_ = live.Text(ctx, message.Text)
 	case "navigate":
 		target := strings.TrimSpace(message.URL)
 		if target == "" || !h.manager.Settings().HostAllowed(target) {
 			return
 		}
-		bot.SetTakeover(true)
+		h.takeOverFromLive(c, bot)
+		recordRequestOperation(c, h.logs, "browser_box_navigate", "你在内置浏览器里打开了网页", target, browserBoxLogMetadata(bot, map[string]any{"url": target}))
 		_ = live.Navigate(ctx, target)
 	case "reload":
 		_ = live.Reload(ctx)
 	case "back":
 		_ = live.Back(ctx)
 	}
+}
+
+// takeOverFromLive 在用户第一次在画面上动手时打开接管，并只在这一下记一条：鼠标移动
+// 每秒几十次，逐条记会把操作记录淹掉。
+func (h *BrowserBoxHandler) takeOverFromLive(c *gin.Context, bot *browserbox.Bot) {
+	if bot.Takeover() {
+		return
+	}
+	bot.SetTakeover(true)
+	recordRequestOperation(c, h.logs, "browser_box_takeover", "你在画面上动手，内置浏览器已自动转为你接管", bot.ID(), browserBoxLogMetadata(bot, map[string]any{"active": true, "auto": true}))
+}
+
+// browserBoxLogMetadata 给内置浏览器的操作记录带上机器人 ID，浏览器页按它筛。
+func browserBoxLogMetadata(bot *browserbox.Bot, extra map[string]any) map[string]any {
+	metadata := map[string]any{"profile_id": bot.ID(), "source": "box"}
+	for key, value := range extra {
+		metadata[key] = value
+	}
+	return metadata
 }
 
 func pickBrowserBoxTab(tabs []browserbox.Target, id string) (browserbox.Target, bool) {

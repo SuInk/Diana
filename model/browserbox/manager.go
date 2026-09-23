@@ -386,6 +386,16 @@ func (b *Bot) SetTakeover(active bool) {
 	b.m.notify()
 }
 
+// Takeover 返回这台机器人当前是否由人接管。
+func (b *Bot) Takeover() bool {
+	b.m.mu.RLock()
+	defer b.m.mu.RUnlock()
+	if inst := b.m.bots[b.id]; inst != nil {
+		return inst.takeover
+	}
+	return false
+}
+
 // CDPURL 返回调试地址，给 WebUI 的实时画面用。它不看接管状态：接管时用户自己要
 // 操作，画面和输入照样得通。
 func (b *Bot) CDPURL() string {

@@ -140,12 +140,46 @@
     </template>
 
     <BrowserControlPanel v-else-if="source === 'extension'" />
+
+    <div v-if="source !== null" class="card">
+      <div class="card-header">
+        <h2>操作记录</h2>
+        <span class="card-sub">
+          {{ botID ? "这台机器人" : "所有机器人" }}在浏览器里做过什么、你什么时候启停和接管过；输入的文字只记字数
+        </span>
+        <button class="btn small ghost" type="button" style="margin-left: auto" @click="navigateToView('logs', { q: 'browser' })">
+          查看全部
+        </button>
+      </div>
+      <div class="card-body" style="padding-top: 4px">
+        <article v-for="log in activity" :key="log.id" class="log-row">
+          <span class="log-time">{{ formatTime(log.created_at) }}</span>
+          <div class="log-main">
+            <div class="cluster" style="gap: 6px; margin-bottom: 2px">
+              <span class="badge" :class="log.level === 'error' ? 'err' : log.action === 'browser_action' ? 'ok' : ''">
+                {{ activityWho(log) }}
+              </span>
+              <span class="log-message" style="margin: 0">{{ log.message }}</span>
+              <span v-if="activityTarget(log)" class="muted mono browser-activity-target" :title="activityTarget(log)">
+                {{ activityTarget(log) }}
+              </span>
+            </div>
+            <p v-if="log.detail && log.detail !== log.message" class="log-detail">{{ log.detail }}</p>
+          </div>
+        </article>
+        <p v-if="!activity.length" class="muted" style="margin: 8px 0 0; font-size: 13px">
+          {{ activityLoaded ? "还没有记录。机器人用浏览器、或你在这里启停和接管时会记下来。" : "正在加载……" }}
+        </p>
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { botScope } from "../bot-scope";
+import { formatTime } from "../format";
+import { navigate as navigateToView } from "../router";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
 import {
   browserBoxLiveURL,
@@ -158,7 +192,9 @@ import {
   startBrowserBox,
   stopBrowserBox,
   type BrowserBoxSettings,
-  type BrowserBoxStatus
+  type BrowserBoxStatus,
+  listBrowserActivity,
+  type AppLogEntry
 } from "../api";
 import { toastError } from "../toast";
 
@@ -180,6 +216,30 @@ const botID = botScope.value;
 // null 表示还没读到：读到之前不显示任何一边的配置，也不让切换。
 const source = ref<BrowserSource | null>(null);
 const switching = ref(false);
+const activity = ref<AppLogEntry[]>([]);
+const activityLoaded = ref(false);
+
+function activityWho(log: AppLogEntry): string {
+  if (log.action === "browser_action") return "机器人";
+  if (log.action === "browser_control_connect" || log.action === "browser_control_disconnect") return "扩展";
+  return "你";
+}
+
+// 只有网址和元素值得显示：启停、接管那几条的 target 是机器人 ID，页面上已经知道了。
+function activityTarget(log: AppLogEntry): string {
+  return log.action === "browser_action" || log.action === "browser_box_navigate" ? (log.target ?? "") : "";
+}
+
+// 操作记录跟着状态一起刷：机器人正在用浏览器时，这里应当看得见它刚做了什么。
+async function loadActivity(): Promise<void> {
+  try {
+    activity.value = (await listBrowserActivity(botID || undefined, 20)).logs;
+  } catch {
+    // 记录只是辅助信息，读不到不打断这一页。
+  } finally {
+    activityLoaded.value = true;
+  }
+}
 
 const status = reactive<BrowserBoxStatus>({
   settings: { enabled: false },
@@ -401,7 +461,11 @@ function navigate(): void {
 onMounted(() => {
   void refresh();
   void loadSource();
-  statusTimer = window.setInterval(() => void refresh(), 5000);
+  void loadActivity();
+  statusTimer = window.setInterval(() => {
+    void refresh();
+    void loadActivity();
+  }, 5000);
 });
 
 onBeforeUnmount(() => {
@@ -446,6 +510,14 @@ onBeforeUnmount(() => {
 .browser-source-hint {
   font-size: 12.5px;
   color: var(--muted);
+}
+
+.browser-activity-target {
+  font-size: 11.5px;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .browser-stage {
