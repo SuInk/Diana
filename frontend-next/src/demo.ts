@@ -1084,13 +1084,19 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const statuses = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
     const userID = url.searchParams.get("user_id") ?? "";
     const search = (url.searchParams.get("q") ?? "").trim();
+    const person = (url.searchParams.get("person") ?? "").trim();
+    const since = Number(url.searchParams.get("since") ?? 0) * 1000;
+    const searchable = (item: RelationshipEvaluation) => [item.user_id, item.sender_name, item.group_id, item.message_text, item.reason,
+      item.model, item.error, ...(item.portrait ?? []).flatMap((trait) => [trait.label, trait.value])].join("\n");
     const groupID = url.searchParams.get("group_id") ?? "";
     const portraitOnly = url.searchParams.get("portrait") === "1";
     const hasPortrait = (item: RelationshipEvaluation) => (item.portrait?.length ?? 0) > 0;
     const evaluations = demoRelationshipEvaluations.filter((item) =>
       (statuses.length === 0 || statuses.includes(item.status)) &&
       (!userID || item.user_id === userID) &&
-      (!search || item.user_id.includes(search) || (item.sender_name ?? "").includes(search)) &&
+      (!search || searchable(item).includes(search)) &&
+      (!person || item.user_id.includes(person) || (item.sender_name ?? "").includes(person)) &&
+      (!since || Date.parse(item.created_at) >= since) &&
       (!groupID || item.group_id === groupID) &&
       (!portraitOnly || hasPortrait(item)));
     return json({ evaluations });

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/gin-gonic/gin"
@@ -29,8 +30,8 @@ var relationshipEvaluationStatuses = map[string]bool{
 }
 
 // listRelationshipEvaluations 列出后台好感度评估记录。status 用逗号分隔多个结果，
-// 留空表示全部；portrait=1 只要记下了画像的；
-// q 按 QQ 号或昵称模糊找人，group_id 按群精确筛。
+// 留空表示全部；portrait=1 只要记下了画像的；q 什么都搜；person 按 QQ 号或昵称
+// 模糊找人；group_id 按群精确筛；since 是 Unix 秒，只要这之后的。
 func (h *BotHandler) listRelationshipEvaluations(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "人员画像存储未配置"})
@@ -41,6 +42,10 @@ func (h *BotHandler) listRelationshipEvaluations(c *gin.Context) {
 		limit = 50
 	}
 	beforeID, _ := strconv.ParseInt(c.Query("before_id"), 10, 64)
+	var since time.Time
+	if seconds, err := strconv.ParseInt(c.Query("since"), 10, 64); err == nil && seconds > 0 {
+		since = time.Unix(seconds, 0)
+	}
 	var statuses []string
 	for _, status := range strings.Split(c.Query("status"), ",") {
 		if status = strings.TrimSpace(status); relationshipEvaluationStatuses[status] {
@@ -53,6 +58,8 @@ func (h *BotHandler) listRelationshipEvaluations(c *gin.Context) {
 		UserID:       strings.TrimSpace(c.Query("user_id")),
 		GroupID:      strings.TrimSpace(c.Query("group_id")),
 		Query:        strings.TrimSpace(c.Query("q")),
+		Person:       strings.TrimSpace(c.Query("person")),
+		Since:        since,
 		Statuses:     statuses,
 		HasPortrait:  c.Query("portrait") == "1",
 		BeforeID:     beforeID,

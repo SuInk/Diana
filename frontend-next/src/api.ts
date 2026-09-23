@@ -2620,9 +2620,12 @@ export interface RelationshipEvaluationsResponse {
 export interface RelationshipEvaluationsQuery {
   profile?: string;
   userID?: string;
-  // search 按 QQ 号或昵称模糊找人；groupID 按群号精确筛。
+  // search 什么都搜（人、群、原话、原因、画像、模型、失败原因）；person 按 QQ 号或
+  // 昵称模糊找人；groupID 按群号精确筛；since 是 Unix 秒，只要这之后的。
   search?: string;
+  person?: string;
   groupID?: string;
+  since?: number;
   statuses?: RelationshipEvaluationStatus[];
   // portraitOnly 只要记下了画像的。
   portraitOnly?: boolean;
@@ -2635,7 +2638,9 @@ export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery 
   if (query.profile) params.set("profile", query.profile);
   if (query.userID) params.set("user_id", query.userID);
   if (query.search) params.set("q", query.search);
+  if (query.person) params.set("person", query.person);
   if (query.groupID) params.set("group_id", query.groupID);
+  if (query.since) params.set("since", String(query.since));
   if (query.statuses?.length) params.set("status", query.statuses.join(","));
   if (query.portraitOnly) params.set("portrait", "1");
   if (query.beforeID) params.set("before_id", String(query.beforeID));

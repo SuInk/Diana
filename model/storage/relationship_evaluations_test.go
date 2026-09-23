@@ -97,16 +97,53 @@ func TestRelationshipEvaluationsPortraitAndPersonFilters(t *testing.T) {
 	if len(portrait) != 1 || len(portrait[0].Portrait) != 1 || portrait[0].Portrait[0].Label != "职业" || portrait[0].Portrait[0].Value != "程序员" {
 		t.Fatalf("portrait only = %#v", portrait)
 	}
-	if byName := list(assistant.RelationshipEvaluationFilter{Query: "小林"}); len(byName) != 1 || byName[0].UserID != "10001" {
+	if byName := list(assistant.RelationshipEvaluationFilter{Person: "小林"}); len(byName) != 1 || byName[0].UserID != "10001" {
 		t.Fatalf("by name = %#v", byName)
 	}
-	if byQQ := list(assistant.RelationshipEvaluationFilter{Query: "1000"}); len(byQQ) != 3 {
+	if byQQ := list(assistant.RelationshipEvaluationFilter{Person: "1000"}); len(byQQ) != 3 {
 		t.Fatalf("by qq prefix = %d", len(byQQ))
 	}
-	if literal := list(assistant.RelationshipEvaluationFilter{Query: "_100%"}); len(literal) != 1 || literal[0].UserID != "10002" {
+	if literal := list(assistant.RelationshipEvaluationFilter{Person: "_100%"}); len(literal) != 1 || literal[0].UserID != "10002" {
 		t.Fatalf("literal wildcard = %#v", literal)
 	}
 	if byGroup := list(assistant.RelationshipEvaluationFilter{GroupID: "g1", HasPortrait: true}); len(byGroup) != 1 {
 		t.Fatalf("group + portrait = %#v", byGroup)
+	}
+}
+
+// 搜索框什么都搜：人、群、原话、原因、画像、模型、失败原因都能命中；时间范围按
+// 评估时间截。
+func TestRelationshipEvaluationsSearchEverythingAndSince(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	now := time.Now()
+	records := []assistant.RelationshipEvaluationRecord{
+		{UserID: "10001", SenderName: "小林", GroupID: "30001", MessageText: "周末去爬山", Reason: "自我介绍", Model: "gpt-a",
+			Status: assistant.RelationshipEvaluationUnchanged, CreatedAt: now.Add(-10 * 24 * time.Hour),
+			Portrait: []assistant.RelationshipEvaluationPortrait{{Field: "location", Label: "居住地点", Value: "杭州"}}},
+		{UserID: "10002", SenderName: "阿树", GroupID: "30002", MessageText: "你好慢", Reason: "可能在抱怨", Model: "gpt-b",
+			Status: assistant.RelationshipEvaluationFailed, Error: "context deadline exceeded", CreatedAt: now.Add(-time.Hour)},
+	}
+	for _, record := range records {
+		if err := store.RecordRelationshipEvaluation(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for query, want := range map[string]string{
+		"10002": "10002", "小林": "10001", "30002": "10002", "爬山": "10001", "抱怨": "10002",
+		"杭州": "10001", "居住地点": "10001", "gpt-b": "10002", "deadline": "10002",
+	} {
+		found, err := store.ListRelationshipEvaluations(ctx, assistant.RelationshipEvaluationFilter{Query: query})
+		if err != nil || len(found) != 1 || found[0].UserID != want {
+			t.Fatalf("search %q = %#v err=%v, want %s", query, found, err, want)
+		}
+	}
+	recent, _ := store.ListRelationshipEvaluations(ctx, assistant.RelationshipEvaluationFilter{Since: now.Add(-7 * 24 * time.Hour)})
+	if len(recent) != 1 || recent[0].UserID != "10002" {
+		t.Fatalf("since = %#v", recent)
 	}
 }

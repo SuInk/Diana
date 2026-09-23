@@ -110,10 +110,26 @@ func (s *SQLiteStore) ListRelationshipEvaluations(ctx context.Context, filter as
 		conditions = append(conditions, "group_id = ?")
 		args = append(args, groupID)
 	}
-	if query := strings.TrimSpace(filter.Query); query != "" {
-		pattern := "%" + escapeSQLiteLike(query) + "%"
+	if person := strings.TrimSpace(filter.Person); person != "" {
+		pattern := "%" + escapeSQLiteLike(person) + "%"
 		conditions = append(conditions, `(user_id LIKE ? ESCAPE '\' OR sender_name LIKE ? ESCAPE '\')`)
 		args = append(args, pattern, pattern)
+	}
+	// 搜索框什么都搜：页面上看得到的每一段文字都该能搜到，搜不到会让人以为没这条。
+	// 画像存的是 JSON，中文不转义，直接对整段 LIKE 就能命中栏目名和内容。
+	if query := strings.TrimSpace(filter.Query); query != "" {
+		pattern := "%" + escapeSQLiteLike(query) + "%"
+		columns := []string{"user_id", "sender_name", "group_id", "message_text", "reason", "portrait", "model", "error"}
+		parts := make([]string, 0, len(columns))
+		for _, column := range columns {
+			parts = append(parts, column+` LIKE ? ESCAPE '\'`)
+			args = append(args, pattern)
+		}
+		conditions = append(conditions, "("+strings.Join(parts, " OR ")+")")
+	}
+	if !filter.Since.IsZero() {
+		conditions = append(conditions, "created_at >= ?")
+		args = append(args, filter.Since.UTC().UnixNano())
 	}
 	if len(filter.Statuses) > 0 {
 		placeholders := make([]string, 0, len(filter.Statuses))

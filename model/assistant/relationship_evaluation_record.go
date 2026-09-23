@@ -69,13 +69,16 @@ type RelationshipEvaluationPortrait struct {
 }
 
 // RelationshipEvaluationFilter 是好感与画像列表的筛选条件。Statuses 为空表示不限；
-// HasPortrait 只要记下了画像的；Query 按
-// QQ 号或昵称模糊找人；BeforeID 用来往前翻页，只返回 ID 更小的记录。
+// HasPortrait 只要记下了画像的；Query 什么都搜（人、群、原话、原因、画像、模型、
+// 失败原因）；Person 按 QQ 号或昵称模糊找人；Since 只要这之后的；BeforeID 用来
+// 往前翻页，只返回 ID 更小的记录。
 type RelationshipEvaluationFilter struct {
 	BotProfileID string
 	UserID       string
 	GroupID      string
 	Query        string
+	Person       string
+	Since        time.Time
 	Statuses     []string
 	HasPortrait  bool
 	BeforeID     int64

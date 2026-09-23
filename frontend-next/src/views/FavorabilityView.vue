@@ -38,13 +38,55 @@
               {{ option.label }}
             </button>
           </div>
-          <div class="input-group" style="flex: 1; min-width: 160px; max-width: 240px">
-            <input v-model="personFilter" class="input" placeholder="QQ 号或昵称" aria-label="按人筛选" />
+          <div class="evaluation-search">
+            <Search :size="14" class="evaluation-search-icon" aria-hidden="true" />
+            <input
+              v-model="searchFilter"
+              type="search"
+              class="input evaluation-search-input"
+              placeholder="搜索人、群、原话、画像…"
+              aria-label="搜索评估记录"
+            />
           </div>
-          <div class="input-group" style="flex: 1; min-width: 120px; max-width: 180px">
-            <input v-model="groupFilter" class="input" inputmode="numeric" placeholder="群号" aria-label="按群筛选" />
+          <button
+            class="btn advanced-toggle"
+            :class="{ active: advancedOpen || advancedCount > 0 }"
+            type="button"
+            :aria-expanded="advancedOpen"
+            aria-controls="evaluation-advanced"
+            @click="advancedOpen = !advancedOpen"
+          >
+            <SlidersHorizontal :size="15" aria-hidden="true" />
+            高级筛选<template v-if="advancedCount > 0">（{{ advancedCount }}）</template>
+          </button>
+        </div>
+        <!-- 高级筛选是精确条件：搜索框什么都搜，要限定「就是这个人、就是这个群、就这几天」时才用得上。 -->
+        <div v-if="advancedOpen" id="evaluation-advanced" class="evaluation-advanced">
+          <div class="field">
+            <label for="evaluation-person">人</label>
+            <input id="evaluation-person" v-model="personFilter" class="input" placeholder="QQ 号或昵称" />
           </div>
-          <button v-if="filtersActive" class="btn ghost small" type="button" @click="resetFilters">清除筛选</button>
+          <div class="field">
+            <label for="evaluation-group">群号</label>
+            <input id="evaluation-group" v-model="groupFilter" class="input" inputmode="numeric" placeholder="完整群号" />
+          </div>
+          <div class="field evaluation-range">
+            <label>时间</label>
+            <div class="segmented" role="radiogroup" aria-label="时间范围">
+              <button
+                v-for="option in RANGE_OPTIONS"
+                :key="option.value"
+                type="button"
+                role="radio"
+                :aria-checked="rangeFilter === option.value"
+                :class="{ active: rangeFilter === option.value }"
+                @click="rangeFilter = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
+          <button class="btn ghost small evaluation-reset" type="button" :disabled="advancedCount === 0" @click="resetAdvanced">重置</button>
         </div>
         <div v-if="userFilter" class="cluster" style="padding: 0 0 4px">
           <span class="badge">只看 {{ userFilter }}</span>
@@ -83,7 +125,7 @@
         <EmptyState
           v-else-if="!loading"
           :title="filtersActive ? '没有符合筛选条件的评估' : '还没有好感度或画像评估'"
-          :hint="filtersActive ? '换个条件试试，或者清除筛选。' : '机器人回复之后才会在后台评估一次。'"
+          :hint="filtersActive ? '换个关键词，或者在高级筛选里放宽条件。' : '机器人回复之后才会在后台评估一次。'"
         />
         <LoadingSkeleton v-else kind="logs" :count="6" label="正在加载好感与画像" />
       </div>
@@ -93,7 +135,7 @@
 
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { RefreshCw } from "@lucide/vue";
+import { RefreshCw, Search, SlidersHorizontal } from "@lucide/vue";
 import { listRelationshipEvaluations, type RelationshipEvaluation, type RelationshipEvaluationStatus } from "../api";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
@@ -121,9 +163,33 @@ const nextBeforeID = ref(0);
 const loading = ref(true);
 const loadingMore = ref(false);
 const kindFilter = ref<KindFilter>("all");
+// 时间范围按天数算起点，0 表示不限。
+type RangeFilter = 0 | 1 | 7 | 30;
+const RANGE_OPTIONS: { value: RangeFilter; label: string }[] = [
+  { value: 0, label: "全部时间" },
+  { value: 1, label: "今天" },
+  { value: 7, label: "近 7 天" },
+  { value: 30, label: "近 30 天" }
+];
+
+const searchFilter = ref("");
+const advancedOpen = ref(false);
 const personFilter = ref("");
 const groupFilter = ref("");
-const filtersActive = computed(() => kindFilter.value !== "all" || personFilter.value.trim() !== "" || groupFilter.value.trim() !== "");
+const rangeFilter = ref<RangeFilter>(0);
+const advancedCount = computed(
+  () => [personFilter.value.trim() !== "", groupFilter.value.trim() !== "", rangeFilter.value !== 0].filter(Boolean).length
+);
+const filtersActive = computed(() => kindFilter.value !== "all" || searchFilter.value.trim() !== "" || advancedCount.value > 0);
+
+// 「今天」从本地零点算，其余按整天往前推。
+function rangeSince(days: RangeFilter): number {
+  if (days === 0) return 0;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  return Math.floor(start.getTime() / 1000);
+}
 // 从人员详情跳过来时只看这一个人。
 const userFilter = ref(typeof window === "undefined" ? "" : viewQuery().get("user_id") ?? "");
 
@@ -132,8 +198,10 @@ function query(beforeID = 0) {
   return {
     profile: botScope.value,
     userID: userFilter.value,
-    search: personFilter.value.trim(),
+    search: searchFilter.value.trim(),
+    person: personFilter.value.trim(),
     groupID: groupFilter.value.trim(),
+    since: rangeSince(rangeFilter.value),
     statuses: kind === "favorability" ? (["changed"] as RelationshipEvaluationStatus[]) : undefined,
     portraitOnly: kind === "portrait",
     beforeID,
@@ -141,10 +209,10 @@ function query(beforeID = 0) {
   };
 }
 
-function resetFilters(): void {
-  kindFilter.value = "all";
+function resetAdvanced(): void {
   personFilter.value = "";
   groupFilter.value = "";
+  rangeFilter.value = 0;
 }
 
 async function reload(): Promise<void> {
@@ -250,11 +318,11 @@ function metaLine(item: RelationshipEvaluation): string {
 
 // 打字时不要每敲一个字就查一次：停手 300ms 再查。结果下拉和机器人切换立刻生效。
 let typingTimer: number | undefined;
-watch([personFilter, groupFilter], () => {
+watch([searchFilter, personFilter, groupFilter], () => {
   window.clearTimeout(typingTimer);
   typingTimer = window.setTimeout(() => void reload(), 300);
 });
-watch([kindFilter, botScope], () => void reload());
+watch([kindFilter, rangeFilter, botScope], () => void reload());
 onBeforeUnmount(() => window.clearTimeout(typingTimer));
 
 onMounted(() => {
@@ -263,6 +331,61 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.evaluation-search {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.evaluation-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  color: var(--muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.evaluation-search-input {
+  width: 100%;
+  padding-left: 30px;
+}
+
+/* 展开着或者有条件生效时高亮，收起后也看得出还有筛选挂着。 */
+.advanced-toggle.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.evaluation-advanced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.evaluation-advanced .field {
+  flex: 1 1 160px;
+}
+
+/* 时间几档按内容宽度排，不跟着输入框一起被压窄，不然每个字都会折成一行。 */
+.evaluation-advanced .evaluation-range {
+  flex: 0 0 auto;
+}
+
+.evaluation-range .segmented button {
+  white-space: nowrap;
+}
+
+.evaluation-reset {
+  margin-left: auto;
+}
+
 .link-button {
   padding: 0;
   border: none;
