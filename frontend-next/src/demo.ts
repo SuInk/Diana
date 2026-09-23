@@ -627,6 +627,7 @@ let residencyListed = false;
 // 浏览器来源在演示里从「Diana 内置」开始：它是推荐的那个。扩展那边的配置照样
 // 预填好，切过去就能看到授权边界长什么样。
 let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true, headful: true };
+let demoBrowserSourceOrder: ("box" | "extension")[] = ["box", "extension"];
 let demoBrowserControlPolicy = {
   enabled: false,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
@@ -716,13 +717,35 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
     return json({ revoked: true });
   }
-  if (path === "/api/browser-source" && method === "GET")
-    return json({ source: demoBrowserBoxSettings.enabled ? "box" : demoBrowserControlPolicy.enabled ? "extension" : "off" });
+  // 浏览器来源：演示里内置浏览器找得到 Chrome，扩展有一条连着（见下面的 connections）。
+  const demoBrowserSourceState = () => {
+    const box = {
+      enabled: Boolean(demoBrowserBoxSettings.enabled),
+      usable: Boolean(demoBrowserBoxSettings.enabled),
+      detected: true,
+      dependencies: [
+        { name: "browser-renderer", purpose: "网页渲染：使用系统 Chromium / Google Chrome", available: true, version: "Chromium 141", installable: true },
+        { name: "cjk-font", purpose: "中文字体：关系图与中文截图", available: false, detail: "没有找到能画中文的字体文件", installable: true, installer: "apt-get" },
+        { name: "display", purpose: "开真窗口：图形会话或 Xvfb 虚拟屏（可选）", available: true, version: "Xvfb 虚拟屏", installable: false }
+      ]
+    };
+    const extension = {
+      enabled: demoBrowserControlPolicy.enabled,
+      usable: demoBrowserControlPolicy.enabled,
+      detected: true,
+      dependencies: [
+        { name: "browser-extension", purpose: "Diana 浏览器控制扩展：装在你的 Chrome 里，反向连到这里", available: true, version: "Chromium 141", installable: false }
+      ]
+    };
+    const active = demoBrowserSourceOrder.find((key) => (key === "box" ? box : extension).usable) ?? "off";
+    return { order: demoBrowserSourceOrder, active, box, extension };
+  };
+  if (path === "/api/browser-source" && method === "GET") return json(demoBrowserSourceState());
   if (path === "/api/browser-source" && method === "PUT") {
-    const source = String(body.source ?? "off");
-    demoBrowserBoxSettings = { ...demoBrowserBoxSettings, enabled: source === "box" };
-    demoBrowserControlPolicy = { ...demoBrowserControlPolicy, enabled: source === "extension" };
-    return json({ source });
+    if (typeof body.box_enabled === "boolean") demoBrowserBoxSettings = { ...demoBrowserBoxSettings, enabled: body.box_enabled };
+    if (typeof body.extension_enabled === "boolean") demoBrowserControlPolicy = { ...demoBrowserControlPolicy, enabled: body.extension_enabled };
+    if (Array.isArray(body.order)) demoBrowserSourceOrder = body.order as ("box" | "extension")[];
+    return json(demoBrowserSourceState());
   }
   // 内置浏览器在演示里不起进程：开着但没在跑，画面那块不会去连实时流。每台机器人
   // 各有一份登录态目录，和真实后端一样按 ?bot= 区分。

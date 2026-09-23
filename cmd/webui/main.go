@@ -648,21 +648,19 @@ func main() {
 		log.Printf("diana 内置浏览器旧登录态迁移失败：%v", err)
 	}
 	// 新装时替用户把内置浏览器打开：本机找得到 Chrome 就开，有显示器（或能起 Xvfb）
-	// 就开真窗口。已经在用扩展的不动——两者二选一，打开这边会把那边挤掉。
-	if !browserControlRegistry.Policy().Enabled {
-		if enabled, err := browserBoxManager.EnableByDefault(ctx); err != nil {
-			log.Printf("diana 内置浏览器已按本机条件默认打开，但没能启动：%v", err)
-		} else if enabled {
-			log.Printf("diana 内置浏览器已按本机条件默认打开（有头：%v）", browserBoxManager.Settings().Headful)
-		}
+	// 就开真窗口。和扩展不冲突：两边可以同时开着，由优先级决定每一轮先用谁。
+	if enabled, err := browserBoxManager.EnableByDefault(ctx); err != nil {
+		log.Printf("diana 内置浏览器已按本机条件默认打开，但没能启动：%v", err)
+	} else if enabled {
+		log.Printf("diana 内置浏览器已按本机条件默认打开（有头：%v）", browserBoxManager.Settings().Headful)
 	}
 	browserBoxHandler := webui.NewBrowserBoxHandler(browserBoxManager)
 	browserBoxHandler.SetLogStore(sqliteStore)
 	browserBoxHandler.Register(router)
 	botRuntime.SetBrowserBox(browserBoxManager)
 	defer browserBoxManager.Stop()
-	// 浏览器来源：Diana 内置和用户自己的 Chrome 二选一（或都不用），同一时间只有一个生效。
-	browserSourceHandler := webui.NewBrowserSourceHandler(browserBoxManager, browserControlRegistry, browserControlHub)
+	// 浏览器来源：Diana 内置和用户自己的 Chrome 各自开关，按优先级每一轮取第一个用得上的。
+	browserSourceHandler := webui.NewBrowserSourceHandler(ctx, browserBoxManager, browserControlRegistry, browserControlHub, sqliteStore)
 	browserSourceHandler.SetLogStore(sqliteStore)
 	browserSourceHandler.Register(router)
 	botRuntime.SetBrowserSource(browserSourceHandler.Current)

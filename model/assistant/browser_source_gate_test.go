@@ -9,7 +9,7 @@ import (
 	"github.com/SuInk/diana/model/browsersource"
 )
 
-// 内置浏览器和扩展互斥：选了哪个，另一个的句柄就不交出去，CDP 工具也跟着内置浏览器走。
+// 每一轮只交出一个浏览器：当前来源是哪个，另一个的句柄就不交出去，CDP 工具也跟着内置浏览器走。
 func TestBrowserSourceKeepsOnlyOneBrowser(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.SetBrowserBox(stubBuiltinBrowser{url: "http://127.0.0.1:1234"})

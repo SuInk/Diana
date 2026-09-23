@@ -3393,17 +3393,39 @@ export interface BrowserBoxTab {
   url?: string;
 }
 
-/** 机器人用哪个浏览器：关闭、Diana 内置、用户自己的 Chrome（扩展）。三者互斥。 */
+/** 机器人用的浏览器：Diana 内置、用户自己的 Chrome（扩展）；off 表示这一轮一个都用不上。 */
 export type BrowserSource = "off" | "box" | "extension";
 
-export function getBrowserSource(): Promise<{ source: BrowserSource }> {
-  return requestJSON<{ source: BrowserSource }>("/api/browser-source");
+export interface BrowserSourceSwitch {
+  enabled: boolean;
+  /** 这一轮能用上：内置是找得到 Chrome，扩展是有扩展连着且没被接管。 */
+  usable: boolean;
+  /** 检测到了：内置是本机找得到 Chrome，扩展是有扩展连上来过。 */
+  detected: boolean;
+  /** 运行依赖，和插件页同一种形状；内置那边的 display 是可选项。 */
+  dependencies: ResolverDependency[];
 }
 
-export function saveBrowserSource(source: BrowserSource): Promise<{ source: BrowserSource }> {
-  return requestJSON<{ source: BrowserSource }>("/api/browser-source", {
+/** 两个开关各自独立，按 order 每一轮取第一个开着且用得上的，就是 active。 */
+export interface BrowserSourceState {
+  order: Exclude<BrowserSource, "off">[];
+  active: BrowserSource;
+  box: BrowserSourceSwitch;
+  extension: BrowserSourceSwitch;
+}
+
+export function getBrowserSource(): Promise<BrowserSourceState> {
+  return requestJSON<BrowserSourceState>("/api/browser-source");
+}
+
+export function saveBrowserSource(patch: {
+  order?: Exclude<BrowserSource, "off">[];
+  box_enabled?: boolean;
+  extension_enabled?: boolean;
+}): Promise<BrowserSourceState> {
+  return requestJSON<BrowserSourceState>("/api/browser-source", {
     method: "PUT",
-    body: JSON.stringify({ source })
+    body: JSON.stringify(patch)
   });
 }
 
