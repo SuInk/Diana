@@ -973,6 +973,14 @@
                   并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。表达质量拦截始终静默，不受此开关影响。
                 </span>
               </div>
+              <div v-if="!form.error_notify_enabled" class="field">
+                <label class="switch">
+                  <input v-model="form.error_persona_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">出错时仍用人设回一句</span>
+                </label>
+                <span class="hint">默认关闭。开启后，回复失败时让模型用机器人自己的口吻说一句没接住，不带错误原文和前缀；模型本身用不了或改写失败就保持静默。连续失败的汇总不发。</span>
+              </div>
               <div class="field">
                 <label class="switch">
                   <input v-model="form.muted_reply_pause_enabled" type="checkbox" />
@@ -4186,6 +4194,7 @@ function setForm(config: BotProfileConfig): void {
     muted_voice_transcription_enabled: config.muted_voice_transcription_enabled ?? true,
     muted_image_description_enabled: config.muted_image_description_enabled ?? true,
     muted_reply_judgment_enabled: config.muted_reply_judgment_enabled ?? false,
+    error_persona_reply_enabled: config.error_persona_reply_enabled ?? false,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,

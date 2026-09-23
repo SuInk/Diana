@@ -85,8 +85,7 @@ func TestRejectionRewriteFailureFallsBackOnce(t *testing.T) {
 func TestRejectionRewriteRespectsDisabledNoticesAndOtherErrors(t *testing.T) {
 	provider := &rejectionRewriteProvider{text: "unused"}
 	channel := &recordingChannel{}
-	disabled := false
-	runtime := NewRuntime(BotConfig{ErrorNotifyEnabled: &disabled}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime := NewRuntime(BotConfig{ErrorNotifyEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	outcome, err := runtime.replyAndRecord(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "disabled"}, "request", "replied")
 	if err != nil || outcome != "error_silent" || provider.rewriteCalls != 0 || len(channel.sent) != 0 {
 		t.Fatal("disabled notices still rewrote or sent")
@@ -98,6 +97,43 @@ func TestRejectionRewriteRespectsDisabledNoticesAndOtherErrors(t *testing.T) {
 	cancel()
 	if _, ok := runtime.rewriteRejectionNotice(ctx, MessageEvent{}, llm.ErrUnverifiedRejection); ok || provider.rewriteCalls != 0 {
 		t.Fatal("canceled request rewritten")
+	}
+}
+
+// 关掉错误提示的人不想在聊天里看到报错，但可能也不想说了话没反应：开了「出错时仍用
+// 人设回一句」就让模型按人设回一句。改写失败时保持静默，绝不退回带前缀的错误原文。
+func TestDisabledErrorNoticeStillRepliesInPersona(t *testing.T) {
+	withFastSendTiming(t)
+	channel := &recordingChannel{}
+	provider := &rejectionRewriteProvider{text: "这次没接住，晚点再找我试试喵。"}
+	runtime := NewRuntime(BotConfig{ErrorNotifyEnabled: boolPointer(false), ErrorPersonaReplyEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	outcome, err := runtime.replyAndRecord(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "persona"}, "request", "replied")
+	if err != nil || outcome != "error_replied_upstream_rejection" {
+		t.Fatalf("outcome=%s err=%v", outcome, err)
+	}
+	if provider.rewriteCalls != 1 || len(channel.sent) != 1 || channel.sent[0].Text != provider.text {
+		t.Fatalf("calls=%d sent=%+v", provider.rewriteCalls, channel.sent)
+	}
+
+	failing := &rejectionRewriteProvider{rewriteError: errors.New("rewrite unavailable")}
+	quiet := &recordingChannel{}
+	runtime = NewRuntime(BotConfig{ErrorNotifyEnabled: boolPointer(false), ErrorPersonaReplyEnabled: boolPointer(true)}, quiet, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return failing, nil })
+	outcome, err = runtime.replyAndRecord(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "persona-failed"}, "request", "replied")
+	if err != nil || outcome != "error_silent" || failing.rewriteCalls != 1 || len(quiet.sent) != 0 {
+		t.Fatalf("改写失败后应当静默：outcome=%s calls=%d sent=%+v", outcome, failing.rewriteCalls, quiet.sent)
+	}
+}
+
+// 错误提示关掉后，连续失败的技术汇总也不该在安静下来之后补发。
+func TestDisabledErrorNoticeDropsBurstSummary(t *testing.T) {
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{ErrorNotifyEnabled: boolPointer(false)}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "user"}
+	if err := runtime.sendErrorNoticeSummary(context.Background(), event, "有 3 条消息没能回复：上游超时"); err != nil {
+		t.Fatal(err)
+	}
+	if len(channel.sent) != 0 {
+		t.Fatalf("summary sent while error notices disabled: %+v", channel.sent)
 	}
 }
 

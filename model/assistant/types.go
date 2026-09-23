@@ -567,7 +567,10 @@ type BotConfig struct {
 	MentionUserMode          ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain          *bool                `json:"markdown_to_plain,omitempty"`
 	ErrorNotifyEnabled       *bool                `json:"error_notify_enabled,omitempty"`
-	ErrorReplyPrefix         string               `json:"error_reply_prefix,omitempty"`
+	// ErrorPersonaReplyEnabled 只在错误提示关闭时起作用：回复失败后仍让模型按人设
+	// 回一句，不把错误原文发进聊天。默认关：已关掉错误提示的机器人升级后保持静默。
+	ErrorPersonaReplyEnabled *bool  `json:"error_persona_reply_enabled,omitempty"`
+	ErrorReplyPrefix         string `json:"error_reply_prefix,omitempty"`
 	// MutedReplyPauseEnabled 为空或 true 时，机器人在群里被禁言期间只记上下文、
 	// 不做回复判断和生成（见 bot_mute.go）。
 	MutedReplyPauseEnabled *bool `json:"muted_reply_pause_enabled,omitempty"`
@@ -1059,6 +1062,7 @@ type ConfigPayload struct {
 	MutedVoiceTranscriptionEnabled *bool                `json:"muted_voice_transcription_enabled,omitempty"`
 	MutedImageDescriptionEnabled   *bool                `json:"muted_image_description_enabled,omitempty"`
 	MutedReplyJudgmentEnabled      *bool                `json:"muted_reply_judgment_enabled,omitempty"`
+	ErrorPersonaReplyEnabled       *bool                `json:"error_persona_reply_enabled,omitempty"`
 	ErrorReplyPrefix               string               `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts              int                  `json:"send_retry_attempts,omitempty"`
 	sendRetrySettings
@@ -2276,6 +2280,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MutedVoiceTranscriptionEnabled:    copyBoolPointer(cfg.MutedVoiceTranscriptionEnabled),
 		MutedImageDescriptionEnabled:      copyBoolPointer(cfg.MutedImageDescriptionEnabled),
 		MutedReplyJudgmentEnabled:         copyBoolPointer(cfg.MutedReplyJudgmentEnabled),
+		ErrorPersonaReplyEnabled:          copyBoolPointer(cfg.ErrorPersonaReplyEnabled),
 		ErrorReplyPrefix:                  cfg.ErrorReplyPrefix,
 		SendRetryAttempts:                 cfg.SendRetryAttempts,
 		sendRetrySettings:                 cfg.sendRetrySettings,
@@ -2497,6 +2502,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MutedVoiceTranscriptionEnabled:  copyBoolPointer(payload.MutedVoiceTranscriptionEnabled),
 		MutedImageDescriptionEnabled:    copyBoolPointer(payload.MutedImageDescriptionEnabled),
 		MutedReplyJudgmentEnabled:       copyBoolPointer(payload.MutedReplyJudgmentEnabled),
+		ErrorPersonaReplyEnabled:        copyBoolPointer(payload.ErrorPersonaReplyEnabled),
 		ErrorReplyPrefix:                payload.ErrorReplyPrefix,
 		SendRetryAttempts:               payload.SendRetryAttempts,
 		sendRetrySettings:               payload.sendRetrySettings,
