@@ -66,7 +66,7 @@ func (r *Runtime) sendPokeUnlogged(ctx context.Context, event MessageEvent, targ
 	return r.dispatchPoke(callCtx, event, groupID, target)
 }
 
-// dispatchPoke 按 OneBot 实现的常见命名依次尝试：NapCat/SnowLuma 用 group_poke /
+// dispatchPoke 按 OneBot 实现的常见命名依次尝试：多数实现用 group_poke /
 // friend_poke，部分实现只认 send_poke。
 func (r *Runtime) dispatchPoke(ctx context.Context, event MessageEvent, groupID, target string) (string, error) {
 	type attempt struct {

@@ -28,6 +28,7 @@ func (c *openAICompatibleClient) streamChatCompletion(ctx context.Context, req G
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
+	req = c.cfg.withImplicitMaxOutputTokens(ProviderOpenAICompatible, req, true)
 	req = c.withRememberedDowngrades(req)
 	// 字段被拒都发生在任何 SSE 输出之前。摘掉字段重发同一个流式请求，绝不改用
 	// 非流式，也绝不把工具调用退化成 JSON。每个字段最多摘一次，所以循环会收敛。

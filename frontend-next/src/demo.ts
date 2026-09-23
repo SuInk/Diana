@@ -24,6 +24,7 @@ import type {
   StatsSnapshot,
   UpdateStatus,
   UserFavorabilityChange,
+  RelationshipEvaluation,
   UserMemoryProfile,
   WorldBookNode
 } from "./api";
@@ -78,8 +79,8 @@ let llmConfig: LLMConfig = {
   model: "gpt-5.6",
   api_key_configured: true,
   profiles: [
-    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, max_output_tokens: 4096, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.4-mini" }] },
-    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
+    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, max_output_tokens: 4096, effective_max_output_tokens: 4096, max_output_tokens_source: "user", effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.4-mini" }] },
+    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, max_output_tokens_source: "provider", effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
     { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.4-mini", models: modelCatalog, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "user", catalog_context_window_tokens: 400_000 },
     { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-2", image_model: "gpt-image-2", models: modelCatalog }
   ]
@@ -265,8 +266,8 @@ const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
 `)}`;
 
 const groups: BotGroupSummary[] = [
-  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_token_quota: 500_000, model_call_quota: 400, quota_token_limit: 500_000, quota_call_limit: 400, quota_tokens_used: 317_400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
-  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, quota_token_limit: 500_000, quota_call_limit: 400, quota_tokens_used: 500_000, quota_calls_used: 233, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
+  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_call_quota: 400, reply_sample_percent: 40, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
+  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.sandboxed-browser-renderer": false }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
@@ -442,6 +443,17 @@ const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
     { id: 4, user_id: "100200888", delta: -3, before_score: -5, after_score: -8, source: "interaction", reason: "重复发送广告内容", group_id: "100200519", created_at: before(3000) }
   ]
 };
+
+// 后台好感度评估：每种结果各给一两条，有两条带画像，演示站「全部」里能看到全部分类。
+const demoRelationshipEvaluations: RelationshipEvaluation[] = [
+  { id: 9, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "@Diana 帮我总结一下今天的发布变更，谢啦", status: "changed", proposed_delta: 1, applied_delta: 1, before_score: 61, after_score: 62, confidence: 0.92, reason: "真诚道谢，互动友好", model: "gpt-5.4-mini", portrait: [{ field: "occupation", label: "职业", value: "后端工程师", source: "stated" }], created_at: before(2) },
+  { id: 8, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "画一张雨夜城市里的复古电车", status: "unchanged", proposed_delta: 0, applied_delta: 0, before_score: 35, after_score: 35, confidence: 0.96, reason: "普通的生图请求，不影响关系", model: "gpt-5.4-mini", portrait: [{ field: "interest", label: "兴趣爱好", value: "喜欢复古电车和雨夜街景", source: "inferred" }], created_at: before(31) },
+  { id: 7, bot_profile_id: "bot-onebot", user_id: "100201014", sender_name: "白榆", group_id: "100200418", message_text: "你今天好像有点笨哦", status: "low_confidence", proposed_delta: -1, applied_delta: 0, before_score: 12, after_score: 12, confidence: 0.55, reason: "可能是玩笑，也可能在抱怨，不好判断", model: "gpt-5.4-mini", created_at: before(47) },
+  { id: 6, bot_profile_id: "bot-onebot", user_id: "100200001", sender_name: "主人", message_text: "今天也辛苦你了", status: "capped", proposed_delta: 2, applied_delta: 0, before_score: 200, after_score: 200, confidence: 0.9, reason: "主人的关心", model: "gpt-5.4-mini", created_at: before(95) },
+  { id: 5, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "刚才那张图太好看了！", status: "skipped", proposed_delta: 0, applied_delta: 0, before_score: 0, after_score: 0, confidence: 0, error: "后台评估同时进行的数量已满，这一轮跳过", created_at: before(120) },
+  { id: 4, bot_profile_id: "bot-onebot", user_id: "100200888", sender_name: "路人甲", group_id: "100200519", message_text: "加群领福利，私聊我", status: "changed", proposed_delta: -3, applied_delta: -3, before_score: -5, after_score: -8, confidence: 0.97, reason: "重复发送广告内容", model: "gpt-5.4-mini", created_at: before(3000) },
+  { id: 3, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "部署好了，多亏你", status: "failed", proposed_delta: 0, applied_delta: 0, before_score: 60, after_score: 60, confidence: 0, error: "context deadline exceeded（模拟数据）", created_at: before(3200) }
+];
 
 export const demoEvents: AssistantEventDetail[] = [
   { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, reply_models: ["gpt-5.4"], models: [{ model: "gpt-5.4-mini", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.4", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
@@ -1095,7 +1107,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;
     const index = groups.findIndex((group) => group.group_id === config.group_id);
-    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, reply_preserve_line_breaks: config.reply_preserve_line_breaks, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
+    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, reply_preserve_line_breaks: config.reply_preserve_line_breaks, reply_line_split_enabled: config.reply_line_split_enabled, typing_delay_enabled: config.typing_delay_enabled, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
   }
 
@@ -1121,6 +1133,50 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     }
     return json({ ok: true, updated });
+  }
+
+  if (path === "/api/assistant/favorability/evaluations") {
+    const statuses = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
+    const statusGiven = url.searchParams.has("status");
+    const fieldsGiven = url.searchParams.has("portrait_field");
+    const userID = url.searchParams.get("user_id") ?? "";
+    const search = (url.searchParams.get("q") ?? "").trim();
+    const person = (url.searchParams.get("person") ?? "").trim();
+    const since = Number(url.searchParams.get("since") ?? 0) * 1000;
+    const searchable = (item: RelationshipEvaluation) => [item.user_id, item.sender_name, item.group_id, item.message_text, item.reason,
+      item.model, item.error, ...(item.portrait ?? []).flatMap((trait) => [trait.label, trait.value])].join("\n");
+    const groupID = url.searchParams.get("group_id") ?? "";
+    const portraitOnly = url.searchParams.get("portrait") === "1";
+    const hasPortrait = (item: RelationshipEvaluation) => (item.portrait?.length ?? 0) > 0;
+    const direction = url.searchParams.get("direction") ?? "";
+    const chat = url.searchParams.get("chat") ?? "";
+    const fields = (url.searchParams.get("portrait_field") ?? "").split(",").filter(Boolean);
+    const source = url.searchParams.get("portrait_source") ?? "";
+    const minConfidence = Number(url.searchParams.get("min_confidence") ?? 0);
+    const model = url.searchParams.get("model") ?? "";
+    const directionMatches = (delta: number) =>
+      !direction || (direction === "up" && delta > 0) || (direction === "down" && delta < 0) ||
+      (direction === "changed" && delta !== 0) || (direction === "none" && delta === 0);
+    const evaluations = demoRelationshipEvaluations.filter((item) =>
+      (!statusGiven || statuses.includes(item.status)) &&
+      (!userID || item.user_id === userID) &&
+      (!search || searchable(item).includes(search)) &&
+      (!person || item.user_id.includes(person) || (item.sender_name ?? "").includes(person)) &&
+      (!since || Date.parse(item.created_at) >= since) &&
+      (!groupID || item.group_id === groupID) &&
+      (!portraitOnly || hasPortrait(item)) &&
+      directionMatches(item.applied_delta) &&
+      (!chat || (chat === "group") === Boolean(item.group_id)) &&
+      (!fieldsGiven || !hasPortrait(item) || (item.portrait ?? []).some((trait) => fields.includes(trait.field))) &&
+      (!source || (item.portrait ?? []).some((trait) => trait.source === source)) &&
+      item.confidence >= minConfidence &&
+      (!model || (item.model ?? "").includes(model)));
+    const portraitFields = [
+      { field: "residence", label: "居住地点" }, { field: "occupation", label: "职业" }, { field: "routine", label: "作息" },
+      { field: "habit", label: "生活习惯" }, { field: "interest", label: "兴趣爱好" }, { field: "relation", label: "家庭与关系" },
+      { field: "timezone", label: "时区" }, { field: "other", label: "其他" }
+    ];
+    return json({ evaluations, portrait_fields: portraitFields });
   }
 
   if (path === "/api/assistant/users") {

@@ -43,3 +43,14 @@ test("switching robots changes enabled state without replacing shared settings o
   assert.equal(state.enabled, true);
   assert.strictEqual(pluginForBot(state, ""), state);
 });
+
+test("outer plugin settings save also submits an open subscription editor", async () => {
+  const view = await readFile(new URL("./views/PluginsView.vue", import.meta.url), "utf8");
+  assert.match(view, /\[repositoryWatchRef\.value, rssWatchRef\.value\]\.find\(\(item\) => item\?\.hasUnsavedChanges\(\)\)/);
+  assert.match(view, /await editor\.saveEditor\(\)/);
+  for (const name of ["RepositoryWatchManager", "RSSWatchManager"]) {
+    const source = await readFile(new URL(`./components/${name}.vue`, import.meta.url), "utf8");
+    assert.match(source, /defineExpose\(\{ hasUnsavedChanges: editorDirty, saveEditor \}\)/);
+    assert.match(source, /async function saveEditor\(\): Promise<boolean>/);
+  }
+});

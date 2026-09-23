@@ -44,7 +44,7 @@ report_matches \
 # 都不是真实账号，放行它们，规则继续盯真实长度的号码。
 report_matches \
 	"long QQ identity found; use synthetic five-digit fixture ranges" \
-	'((SelfID|UserID|GroupID|OperatorID|OwnerID|BotQQ):[[:space:]]*"[0-9]{8,12}"|"(self_id|user_id|group_id|operator_id|owner_id|uin)"[[:space:]]*:[[:space:]]*"?[0-9]{8,12}|(CQ:at,qq=|NAPCAT_QUICK_ACCOUNT[^0-9]*|QQBOT_QQ[^0-9]*)[0-9]{8,12})' \
+	'((SelfID|UserID|GroupID|OperatorID|OwnerID|BotQQ):[[:space:]]*"[0-9]{8,12}"|"(self_id|user_id|group_id|operator_id|owner_id|uin)"[[:space:]]*:[[:space:]]*"?[0-9]{8,12}|(CQ:at,qq=|QQBOT_QQ[^0-9]*)[0-9]{8,12})' \
 	'"?(100200[0-9]{3}|12345678(90?)?|987654321?|87654321|700000001)"?' \
 	'*.go' '*.js' '*.ts' '*.vue' '*.md' '*.yml' '*.yaml'
 

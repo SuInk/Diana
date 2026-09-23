@@ -148,7 +148,8 @@
               <Users :size="12" aria-hidden="true" />
               {{ group.member_count }}<template v-if="group.max_member_count"> / {{ group.max_member_count }}</template>
             </span>
-            <span v-if="group.configured && group.system_prompt" class="badge">专属人设</span>
+            <span v-if="group.configured && group.persona_id" class="badge accent">人设：{{ personaNameOf(group.persona_id) }}</span>
+            <span v-else-if="group.configured && group.system_prompt" class="badge">专属人设</span>
             <span v-if="group.configured && group.participation" class="badge accent">{{ participationSummary(group.participation) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
             <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
@@ -257,16 +258,36 @@
           <span class="hint">智能档下，群里谈论机器人而不是叫它的消息不会强制回复。</span>
         </div>
         <div class="field wide">
-          <label for="group-prompt">本群专属人设（留空跟随{{ inheritedPersonaOwner }}的人设）</label>
+          <label for="group-persona-source">本群人设</label>
+          <AppSelect
+            id="group-persona-source"
+            :model-value="personaSource"
+            :options="personaSourceOptions"
+            @update:model-value="(value) => setPersonaSource(String(value))"
+          />
           <textarea
+            v-if="personaSource !== ''"
             id="group-prompt"
             v-model="editing.system_prompt"
             class="textarea"
             rows="3"
             :placeholder="personaPlaceholder"
+            @input="detachEditedPersona"
           ></textarea>
-          <span class="hint">留空表示本群一直跟着{{ inheritedPersonaOwner }}走，改机器人人设时本群也跟着变；填了就只用这里的文字。</span>
-          <details v-if="inheritedPersona" class="inherited-persona">
+          <span v-if="editing.persona_id" class="hint">
+            内容来自人设库「{{ linkedPersonaName }}」，连同表达风格、自称和句尾语气词一起生效，人设库里修改后本群自动更新。在这里改了就变成本群自定义。
+          </span>
+          <template v-else-if="personaSource === 'custom'">
+            <span class="hint">只用这里的文字，改机器人人设或人设库都不影响本群。</span>
+            <div v-if="editedGroupLibraryPersona" class="cluster">
+              <button class="btn small" type="button" :disabled="personaWriteBackBusy" @click="writeBackGroupPersona">
+                更新人设库「{{ editedGroupLibraryPersona.name }}」
+              </button>
+              <span class="hint">写回后本群重新绑定它，绑定这一套的机器人和群一起更新。</span>
+            </div>
+          </template>
+          <span v-else class="hint">本群一直跟着{{ inheritedPersonaOwner }}走，改机器人人设时本群也跟着变。</span>
+          <details v-if="inheritedPersona && !editing.persona_id" class="inherited-persona">
             <summary>{{ inheritedPersonaOwner }}当前的人设</summary>
             <p>{{ inheritedPersona }}</p>
           </details>
@@ -285,8 +306,9 @@
             id="group-action-description"
             :model-value="editing.action_description_enabled === undefined ? '' : editing.action_description_enabled ? 'on' : 'off'"
             :options="groupActionDescriptionOptions"
-            @update:model-value="(value) => { if (editing) editing.action_description_enabled = value === '' ? undefined : value === 'on'; }"
+            @update:model-value="(value) => { if (editing) { detachEditedPersona(); editing.action_description_enabled = value === '' ? undefined : value === 'on'; } }"
           />
+          <span v-if="editing.persona_id" class="hint">跟着人设库「{{ linkedPersonaName }}」走，改了就变成本群自定义。</span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -330,14 +352,14 @@
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
         <div class="field">
-          <label for="group-quota">模型额度 · 5 小时 token（默认单位 K）</label>
-          <input id="group-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空跟随机器人" />
-          <span class="hint">{{ tokenQuotaReadoutText }}</span>
+          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
+          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">这个群名下的每次模型调用都算，含路由判断和工具步。留空跟随机器人那一档。</span>
         </div>
         <div class="field">
-          <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
-          <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">按次数计，不带单位。留空跟随机器人那一档。</span>
+          <label for="group-sample">回复抽样率（%）</label>
+          <input id="group-sample" v-model.number="editing.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
+          <span class="hint">没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复。</span>
         </div>
         <div v-if="editingQuota" class="field wide quota-usage">
           <div class="cluster" style="justify-content: space-between; gap: 8px">
@@ -350,9 +372,8 @@
           <span class="hint">{{ editingQuota.detail }}</span>
         </div>
         <p class="hint field wide">
-          留空跟随机器人配置里的同名两档，两边都没填才是不限。两档各自独立、先到先得：句句短但刷个不停的群先撞次数，只说几句却每句带图的先撞 token。统计的是这个群名下所有模型调用，
-          判定、路由和工具步都算，不只是最终那句回复。用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
-          窗口滚过去自动恢复，不需要手动解除。主人不受限。
+          两项留空都跟随机器人配置，两边都没填就是不限额、不抽样。额度用满之后这个群暂停一切花 token 的环节，消息照常进历史和长期记忆，
+          窗口滚过去自动恢复，不需要手动解除。主人不受额度和抽样限制。
         </p>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
@@ -398,7 +419,27 @@
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">换行不分条；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+          <span class="hint">换行不分条（开启换行分条除外）；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-line-split">本群换行分条发送</label>
+          <AppSelect
+            id="group-line-split"
+            :model-value="editing.reply_line_split_enabled == null ? '' : editing.reply_line_split_enabled ? 'on' : 'off'"
+            :options="groupLineSplitOptions"
+            @update:model-value="(value) => { if (editing) editing.reply_line_split_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">每换一行另发一条；列表、表格和代码块整块发。本群不允许多条发送时不生效。</span>
+        </div>
+        <div class="field wide">
+          <label for="group-typing-delay">本群模拟打字延时</label>
+          <AppSelect
+            id="group-typing-delay"
+            :model-value="editing.typing_delay_enabled == null ? '' : editing.typing_delay_enabled ? 'on' : 'off'"
+            :options="groupTypingDelayOptions"
+            @update:model-value="(value) => { if (editing) editing.typing_delay_enabled = value === '' ? undefined : value === 'on'; }"
+          />
+          <span class="hint">连发时按下一条的字数停顿；打字速度跟随机器人设置。</span>
         </div>
         <div class="field wide">
           <label for="group-preserve-lines">本群普通段落换行</label>
@@ -591,7 +632,10 @@ import {
   getGroupRelations,
   fetchAssistantUserNames,
   listManagedExtensions,
+  listPersonas,
+  savePersona,
   type ManagedExtension,
+  type Persona,
   type PluginState,
   type BotGroupConfig,
   type BotGroupSummary,
@@ -606,7 +650,6 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../participation";
-import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
@@ -720,31 +763,21 @@ const editing = ref<BotGroupConfig | null>(null);
 
 const quotaWindowSeconds = ref(0);
 
-// 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。两档都设了就都画出来，
-// 进度条按吃紧的那一档走——先撞哪一档就先停在哪一档。
+// 弹窗里这一条是「我刚填的这个数，现在用掉多少了」。
 const editingQuota = computed(() => {
   const groupID = editing.value?.group_id;
   if (!groupID) return undefined;
   const summary = groups.value.find((group) => group.group_id === groupID);
   if (!summary) return undefined;
-  const tokenLimit = summary.quota_token_limit ?? 0;
   const callLimit = summary.quota_call_limit ?? 0;
-  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
-  const tokensUsed = summary.quota_tokens_used ?? 0;
+  if (callLimit <= 0) return undefined;
   const callsUsed = summary.quota_calls_used ?? 0;
-  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
-  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
-  const parts: string[] = [];
-  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")} / ${tokenLimit.toLocaleString("en-US")}`);
-  if (callLimit > 0) parts.push(`调用 ${callsUsed} / ${callLimit} 次`);
-  const percent = Math.round(Math.max(tokenRatio, callRatio) * 100);
+  const percent = Math.round((callsUsed / callLimit) * 100);
   const detail =
     percent >= 100
       ? "已用满，这个群暂停一切花 token 的环节；消息照常进历史和长期记忆，窗口滚过去自动恢复。"
-      : `剩 ${tokenLimit > 0 ? `${formatTokenCount(Math.max(0, tokenLimit - tokensUsed))} token` : ""}${
-          tokenLimit > 0 && callLimit > 0 ? "、" : ""
-        }${callLimit > 0 ? `${Math.max(0, callLimit - callsUsed)} 次调用` : ""}。窗口是滚动的，不在整点清零。`;
-  return { text: parts.join("，"), detail, percent };
+      : `剩 ${Math.max(0, callLimit - callsUsed)} 次调用。窗口是滚动的，不在整点清零。`;
+  return { text: `调用 ${callsUsed} / ${callLimit} 次`, detail, percent };
 });
 
 
@@ -755,43 +788,16 @@ const quotaWindowLabel = computed(() => {
 });
 
 // 额度是个「悄悄生效」的闸门：用满之后机器人就是不说话，不摆出进度来没人知道
-// 是撞了额度还是坏了。所以两档里谁更吃紧就先显示谁，快满和已满分开着色。
+// 是撞了额度还是坏了。快满和已满分开着色。
 function quotaBadge(group: BotGroupSummary): { text: string; title: string; tone: string } | undefined {
-  const tokenLimit = group.quota_token_limit ?? 0;
   const callLimit = group.quota_call_limit ?? 0;
-  if (tokenLimit <= 0 && callLimit <= 0) return undefined;
-  const tokensUsed = group.quota_tokens_used ?? 0;
+  if (callLimit <= 0) return undefined;
   const callsUsed = group.quota_calls_used ?? 0;
-  const tokenRatio = tokenLimit > 0 ? tokensUsed / tokenLimit : 0;
-  const callRatio = callLimit > 0 ? callsUsed / callLimit : 0;
-  const byTokens = tokenRatio >= callRatio;
-  const ratio = Math.max(tokenRatio, callRatio);
-  const text = byTokens
-    ? `额度 ${formatTokenCount(tokensUsed)}/${formatTokenCount(tokenLimit)}`
-    : `额度 ${callsUsed}/${callLimit} 次`;
-  const parts: string[] = [];
-  if (tokenLimit > 0) parts.push(`token ${tokensUsed.toLocaleString("en-US")}/${tokenLimit.toLocaleString("en-US")}`);
-  if (callLimit > 0) parts.push(`调用 ${callsUsed}/${callLimit} 次`);
+  const ratio = callsUsed / callLimit;
   const tone = ratio >= 1 ? "warn" : ratio >= 0.8 ? "accent" : "";
   const suffix = ratio >= 1 ? "，已暂停一切花 token 的环节，窗口滚过去自动恢复" : "";
-  return { text, title: `${quotaWindowLabel.value}：${parts.join("，")}${suffix}`, tone };
+  return { text: `额度 ${callsUsed}/${callLimit} 次`, title: `${quotaWindowLabel.value}：调用 ${callsUsed}/${callLimit} 次${suffix}`, tone };
 }
-
-function formatTokenCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
-  return String(value);
-}
-
-const tokenQuotaDraft = ref("");
-
-const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空跟随机器人。"));
-
-watch(tokenQuotaDraft, (value) => {
-  if (!editing.value) return;
-  const parsed = parseTokenQuota(value);
-  editing.value.model_token_quota = parsed === undefined ? 0 : parsed;
-});
 const editingGroupName = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
@@ -839,6 +845,19 @@ const groupNaturalReplySplitOptions = computed<AppSelectOption[]>(() => [
   { value: "on", label: "开启" },
   { value: "off", label: "关闭" }
 ]);
+// 换行分条和模拟打字默认关闭，同样按所属机器人显示继承值。
+const lineSplitDefaults = ref<Record<string, boolean>>({});
+const typingDelayDefaults = ref<Record<string, boolean>>({});
+function inheritedSwitchOptions(defaults: Record<string, boolean>): AppSelectOption[] {
+  const inherited = defaults[editing.value?.bot_profile_id || botScope.value] ?? defaults[""] ?? false;
+  return [
+    { value: "", label: `跟随机器人（${inherited ? "开启" : "关闭"}）` },
+    { value: "on", label: "开启" },
+    { value: "off", label: "关闭" }
+  ];
+}
+const groupLineSplitOptions = computed(() => inheritedSwitchOptions(lineSplitDefaults.value));
+const groupTypingDelayOptions = computed(() => inheritedSwitchOptions(typingDelayDefaults.value));
 const groupAccountSafetyOptions: AppSelectOption[] = [
   { value: "", label: "跟随机器人" },
   { value: "on", label: "开启（主动和直接回复）" },
@@ -857,6 +876,111 @@ const inheritedPersonaOwner = computed(() => {
   const name = inheritedPersonaProfile.value?.name?.trim();
   return name ? `「${name}」` : "所属机器人";
 });
+// 人设库：群人设可以绑定其中一套，库里改了由后端同步写进群配置。
+const personaLibrary = ref<Persona[]>([]);
+function personaNameOf(id?: string): string {
+  return personaLibrary.value.find((persona) => persona.id === id)?.name ?? "已删除的人设";
+}
+const linkedPersonaName = computed(() => personaNameOf(editing.value?.persona_id));
+// 来源三选一：留空跟随机器人、本群自定义、绑定人设库里的一套。
+const personaSource = computed(() => {
+  const current = editing.value;
+  if (!current) return "";
+  if (current.persona_id) return current.persona_id;
+  return current.system_prompt?.trim() ? "custom" : "";
+});
+const personaSourceOptions = computed<AppSelectOption[]>(() => {
+  const options: AppSelectOption[] = [
+    { value: "", label: `跟随${inheritedPersonaOwner.value}` },
+    { value: "custom", label: "本群自定义" },
+    ...personaLibrary.value.map((persona) => ({ value: persona.id, label: `人设库：${persona.name}` }))
+  ];
+  const linked = editing.value?.persona_id;
+  if (linked && !personaLibrary.value.some((persona) => persona.id === linked)) {
+    options.push({ value: linked, label: "人设库：已删除的人设（保存后改为本群自定义）" });
+  }
+  return options;
+});
+// 在绑定状态下手改了人设：解除绑定变成本群自定义，记下是从哪一套改出来的，
+// 好提供「写回人设库」。和机器人页的规则一样。
+const editedFromGroupPersonaID = ref("");
+const personaWriteBackBusy = ref(false);
+const editedGroupLibraryPersona = computed(() =>
+  editedFromGroupPersonaID.value && !editing.value?.persona_id
+    ? personaLibrary.value.find((persona) => persona.id === editedFromGroupPersonaID.value)
+    : undefined
+);
+function detachEditedPersona(): void {
+  const current = editing.value;
+  if (!current?.persona_id) return;
+  editedFromGroupPersonaID.value = current.persona_id;
+  current.persona_id = undefined;
+}
+async function writeBackGroupPersona(): Promise<void> {
+  const current = editing.value;
+  const target = editedGroupLibraryPersona.value;
+  if (!current || !target) return;
+  const ok = await askConfirm({
+    title: `更新人设「${target.name}」`,
+    message: "把本群现在的人设内容写回人设库的这一套。所有绑定它的机器人和群都会改成这份内容，并立即生效。",
+    confirmLabel: "更新"
+  });
+  if (!ok) return;
+  personaWriteBackBusy.value = true;
+  try {
+    const response = await savePersona({
+      ...target,
+      system_prompt: current.system_prompt ?? "",
+      self_reference: current.self_reference ?? "",
+      sentence_enders: current.sentence_enders ?? "",
+      action_description_enabled: current.action_description_enabled ?? false
+    });
+    personaLibrary.value = response.personas ?? personaLibrary.value;
+    if (editing.value === current) current.persona_id = response.persona.id;
+    editedFromGroupPersonaID.value = "";
+    const synced = [
+      response.bots_synced ? `${response.bots_synced} 台机器人` : "",
+      response.groups_synced ? `${response.groups_synced} 个群` : ""
+    ].filter(Boolean).join("、");
+    toastSuccess(synced ? `已更新「${target.name}」，同步到 ${synced}` : `已更新「${target.name}」`);
+    if (response.warning) toastError(response.warning);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设更新失败");
+  } finally {
+    personaWriteBackBusy.value = false;
+  }
+}
+function clearLinkedPersonaFields(config: BotGroupConfig): void {
+  config.persona_id = undefined;
+  config.system_prompt = "";
+  config.self_reference = "";
+  config.sentence_enders = "";
+  config.action_description_enabled = undefined;
+}
+function setPersonaSource(value: string): void {
+  const current = editing.value;
+  if (!current || value === personaSource.value) return;
+  if (value === "") {
+    // 跟随机器人：本群不留任何人设覆盖。绑定带进来的自称、语气词也一并清掉。
+    if (current.persona_id) clearLinkedPersonaFields(current);
+    else current.system_prompt = "";
+    return;
+  }
+  if (value === "custom") {
+    // 解除绑定、保留现有文字，从这里开始手改。
+    current.persona_id = undefined;
+    if (!current.system_prompt?.trim()) current.system_prompt = inheritedPersona.value;
+    return;
+  }
+  const persona = personaLibrary.value.find((item) => item.id === value);
+  if (!persona) return;
+  // 先在表单里预览；保存时后端按绑定用人设库里的内容为准。
+  current.persona_id = persona.id;
+  current.system_prompt = persona.system_prompt ?? "";
+  current.self_reference = persona.self_reference ?? "";
+  current.sentence_enders = persona.sentence_enders ?? "";
+  current.action_description_enabled = persona.action_description_enabled ?? false;
+}
 const personaPlaceholder = computed(() =>
   inheritedPersona.value
     ? `留空跟随${inheritedPersonaOwner.value}：${truncate(inheritedPersona.value, 40)}`
@@ -936,13 +1060,15 @@ function hasOtherReplyGateRules(group: BotGroupConfig): boolean {
 async function load(showFeedback = false): Promise<void> {
   refreshing.value = true;
   try {
-    const [response, configAndPlatforms, extensionList] = await Promise.all([
+    const [response, configAndPlatforms, extensionList, personaList] = await Promise.all([
       listBotGroups(showFeedback, botScope.value),
       Promise.all([getBotProfileConfig(), getBotPlatforms()]).catch(() => null),
       // 扩展目录和群列表互不依赖：取不到就不显示这一栏，不拖累整页。
-      botScope.value ? listManagedExtensions(botScope.value).catch(() => null) : Promise.resolve(null)
+      botScope.value ? listManagedExtensions(botScope.value).catch(() => null) : Promise.resolve(null),
+      listPersonas().catch(() => null)
     ]);
     groups.value = response.groups;
+    personaLibrary.value = personaList?.personas ?? [];
     plugins.value = response.plugins;
     extensions.value = extensionList?.items ?? [];
     liveAvailable.value = response.live_available;
@@ -979,6 +1105,14 @@ async function load(showFeedback = false): Promise<void> {
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
+      ]);
+      lineSplitDefaults.value = Object.fromEntries([
+        ["", current.reply_line_split_enabled ?? false],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.reply_line_split_enabled ?? false])
+      ]);
+      typingDelayDefaults.value = Object.fromEntries([
+        ["", current.typing_delay_enabled ?? false],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile.typing_delay_enabled ?? false])
       ]);
       defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
       mutedReplyPauseDefaults.value = Object.fromEntries([
@@ -1039,10 +1173,10 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
   withUnsetSendRetryCleared(config);
+  editedFromGroupPersonaID.value = "";
   const delay = Number(config.recall_reply_auto_delete_delay_seconds);
   config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
-  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
@@ -1290,6 +1424,9 @@ async function saveEditing(): Promise<void> {
       ...current,
       ...sendRetryPayload(current),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
+      model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
@@ -1326,6 +1463,8 @@ function upsert(config: BotGroupConfig): void {
       // 恢复继承时响应会省略这个字段，不能保留列表里先前的显式开关。
       natural_reply_split_enabled: config.natural_reply_split_enabled,
       reply_preserve_line_breaks: config.reply_preserve_line_breaks,
+      reply_line_split_enabled: config.reply_line_split_enabled,
+      typing_delay_enabled: config.typing_delay_enabled,
       configured: true
     };
   } else {

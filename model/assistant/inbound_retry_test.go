@@ -46,6 +46,28 @@ func TestRetainFailedInboundRequiresDurability(t *testing.T) {
 	}
 }
 
+// 没进队列的消息在事件明细里查不到，暂存和丢失都得在运行日志里留下是哪一条。
+func TestRetainFailedInboundWritesAppLog(t *testing.T) {
+	r := newQueuedTestRuntime(newQueueTestChannel(), newMemoryInboundEventStore(), nil)
+	s := &retryCaptureStore{memoryInboundEventStore: newMemoryInboundEventStore()}
+	r.SetInboundEventStore(s)
+	logs := &captureAppLogs{}
+	r.SetAppLogWriter(logs)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m-1", Platform: PlatformTelegram, Time: time.Now().Unix()}
+	_ = r.retainFailedInbound(event, errors.New("database busy"))
+	s.saveErr = errors.New("disk full")
+	_ = r.retainFailedInbound(event, errors.New("database busy"))
+
+	entries := logs.entriesSnapshot()
+	if len(entries) != 2 || entries[0].Action != "inbound_event_retained" || entries[1].Action != "inbound_event_lost" {
+		t.Fatalf("entries = %v", appLogActions(entries))
+	}
+	lost := entries[1]
+	if lost.Level != "error" || lost.Target != "m-1" || lost.Metadata["group_id"] != "g" || lost.Detail == "" {
+		t.Fatalf("lost entry = %#v", lost)
+	}
+}
+
 func TestInboundFailureBackfillsWithoutReconnect(t *testing.T) {
 	s := newMemoryInboundEventStore()
 	now := time.Now().Unix()

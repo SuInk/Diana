@@ -254,7 +254,6 @@ func main() {
 	} else {
 		log.Printf("no config file found; using built-in defaults (set %s or pass --config)", configPathEnv)
 	}
-	probeMacOSClientAppDataAccess()
 	port := stringOr(appCfg.Server.Port, "18080")
 	host := strings.TrimSpace(appCfg.Server.Host)
 
@@ -415,7 +414,7 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	// NapCat 使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，由通道工厂按
+	// OneBot 接入端使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，由通道工厂按
 	// 机器人配置设置 token/endpoint。
 	oneBotServer := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
 	oneBotHTTPServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
@@ -460,6 +459,7 @@ func main() {
 	}
 	botRuntime.SetLLMModelLister(modelListFactory)
 	botRuntime.SetAppLogWriter(sqliteStore)
+	oneBotServer.SetAppLogWriter(sqliteStore)
 	configuredMediaBaseURL := strings.TrimSpace(appCfg.Storage.LocalMediaBaseURL)
 	localMediaBaseURL := stringOr(
 		configuredMediaBaseURL,
@@ -550,13 +550,6 @@ func main() {
 	botHandler.SetRepoPluginInstaller(repoPluginInstaller)
 	botHandler.SetRepoPluginSourceStore(repoPluginStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)
-	napCatLoginHandler, err := webui.NewNapCatLoginHandler(webui.NapCatLoginConfig{
-		BaseURL: strings.TrimSpace(appCfg.NapCat.WebUIURL),
-		Token:   strings.TrimSpace(appCfg.NapCat.WebUIToken),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
 	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path()).WithRangeReaders(sqliteStore, sqliteStore)
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
@@ -622,7 +615,6 @@ func main() {
 	ownerLoginHandler.SetLogStore(sqliteStore)
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
-	napCatLoginHandler.Register(router)
 	webui.NewChannelCallbackHandler().Register(router)
 	// 对外开放接口：/api/openapi 下的密钥管理走上面的会话鉴权，
 	// /openapi/v1 下的推送接口由 Bearer 密钥自行鉴权，总开关是
@@ -679,7 +671,7 @@ func main() {
 	eventStreamHandler.Register(router)
 	healthHandler.Register(router)
 	// This tokenized endpoint intentionally sits outside /api so a separate
-	// NapCat container can fetch media without a WebUI login session.
+	// OneBot client container can fetch media without a WebUI login session.
 	router.GET("/media/resolver/:token", func(c *gin.Context) {
 		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
 	})
@@ -687,7 +679,7 @@ func main() {
 	router.GET("/api/assistant/media/:token", func(c *gin.Context) {
 		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
 	})
-	// OneBot 路由必须在 SPA fallback 之前注册，否则 NapCat 会拿到前端 HTML 而不是 WebSocket。
+	// OneBot 路由必须在 SPA fallback 之前注册，否则接入端会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
 	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
@@ -742,23 +734,6 @@ func newSystemUpdater(cfg updateConfig) (*updater.GitUpdater, error) {
 		}
 	}
 	return updater.NewGitUpdaterWithOptions(root, options)
-}
-
-func probeMacOSClientAppDataAccess() {
-	if runtime.GOOS != "darwin" {
-		return
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("macOS QQ app data access probe skipped: %v", err)
-		return
-	}
-	path := filepath.Join(home, "Library", "Containers", "com.tencent.qq", "Data", ".config", "QQ", "NapCat", "temp")
-	if _, err := os.ReadDir(path); err != nil {
-		log.Printf("macOS QQ app data access denied: %v", err)
-		return
-	}
-	log.Printf("macOS QQ app data access granted")
 }
 
 func displayHost(host string) string {

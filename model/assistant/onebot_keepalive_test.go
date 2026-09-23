@@ -66,7 +66,7 @@ func waitUntil(t *testing.T, timeout time.Duration, want func() bool) bool {
 }
 
 // 对端被硬断（容器被 kill、宿主机休眠、NAT 表项过期）时 TCP 不会来 FIN，
-// ReadMessage 就一直阻塞。反向模式只有一个连接位，位子被这条死连接占着，NapCat
+// ReadMessage 就一直阻塞。反向模式只有一个连接位，位子被这条死连接占着，接入端
 // 重连上来只拿得到 409，机器人整段时间收不到消息——线上就是这么停的。
 // 现在心跳会把它判死并交出连接位。
 func TestReverseKeepaliveFreesSlotWhenPeerGoesSilent(t *testing.T) {

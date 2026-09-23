@@ -21,11 +21,9 @@ type UsageReader interface {
 	LLMUsageSince(context.Context, time.Time, time.Time) (UsageSummary, error)
 }
 
-// GroupUsage 是一个群在窗口内的用量。token 和次数分开给：两种超用的形态不一样，
-// 一个群可以句句短但刷个不停，也可以只说几句却每句都带图。
+// GroupUsage 是一个群在窗口内的用量：模型调用次数。
 type GroupUsage struct {
-	Tokens int64 `json:"tokens"`
-	Calls  int64 `json:"calls"`
+	Calls int64 `json:"calls"`
 }
 
 // GroupUsageReader 是可选能力：按群统计窗口内的用量，供按群额度使用。

@@ -87,8 +87,14 @@ type llmConfigPayload struct {
 	// CatalogContextWindowTokens 是同步下来的模型清单里记的窗口，只作参考值展示：
 	// 界面用它提示「这个模型写着多少，可以照着填」，它不参与任何计算。
 	CatalogContextWindowTokens int64 `json:"catalog_context_window_tokens,omitempty"`
-	MaxOutputTokens            int64 `json:"max_output_tokens,omitempty"`
-	TimeoutMS                  int64 `json:"timeout_ms,omitempty"`
+	// MaxOutputTokens 和窗口一样用指针：nil 是「这个客户端没提交」，保留旧值；提交 0
+	// 是明确改回「按模型上限」。以前是普通整数，界面不提交它，一保存就被清成 0。
+	MaxOutputTokens *int64 `json:"max_output_tokens"`
+	// EffectiveMaxOutputTokens 和 MaxOutputTokensSource 是只读回显：默认模型在调用方
+	// 没覆盖时实际发出的输出上限和它的来源；0 表示不发，由服务端按模型处理。
+	EffectiveMaxOutputTokens int64                     `json:"effective_max_output_tokens,omitempty"`
+	MaxOutputTokensSource    llm.MaxOutputTokensSource `json:"max_output_tokens_source,omitempty"`
+	TimeoutMS                int64                     `json:"timeout_ms,omitempty"`
 }
 
 // llmRoleBinding 是「某个机器人的某个用途绑到了这套配置的哪个模型」。
@@ -547,7 +553,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 
 	cfg := h.store.Current()
 	// 连通测试允许直接使用表单里的临时配置，成功与否不影响当前已保存配置。
-	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIStyle != "" || payload.APIFormat != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.ImageBaseURL != "" || payload.ImageOrigin != "" || payload.ImageTimeoutMS != 0 || tokenLimitValue(payload.ContextWindowTokens) != 0 || tokenLimitValue(payload.MaxContextTokens) != 0 || payload.MaxOutputTokens != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil || payload.ReasoningEffort != "" {
+	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIStyle != "" || payload.APIFormat != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.ImageBaseURL != "" || payload.ImageOrigin != "" || payload.ImageTimeoutMS != 0 || tokenLimitValue(payload.ContextWindowTokens) != 0 || tokenLimitValue(payload.MaxContextTokens) != 0 || tokenLimitValue(payload.MaxOutputTokens) != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil || payload.ReasoningEffort != "" {
 		cfg = configFromPayload(payload.llmConfigPayload)
 		existing := existingProfileConfig(h.store.Profiles(), payload.llmConfigPayload)
 		cfg = mergeUnsubmittedLLMConfig(payload.llmConfigPayload, cfg, existing)
@@ -645,7 +651,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		Headers:          maskLLMHeaders(cfg.NormalizedHeaders()),
 		Temperature:      cfg.Temperature,
 		ReasoningEffort:  cfg.ReasoningEffort,
-		MaxOutputTokens:  cfg.MaxOutputTokens,
+		MaxOutputTokens:  optionalTokenLimit(cfg.MaxOutputTokens),
 		TimeoutMS:        cfg.Timeout.Milliseconds(),
 	}
 	payload.ContextWindowTokens = optionalTokenLimit(raw.ContextWindowTokens)
@@ -655,6 +661,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 	payload.EffectiveMaxContextTokens = cfg.MaxContextTokensWithDefault()
 	payload.ContextWindowSource = source
 	payload.CatalogContextWindowTokens = raw.CatalogContextWindowTokens(cfg.Model)
+	payload.EffectiveMaxOutputTokens, payload.MaxOutputTokensSource = cfg.ResolveMaxOutputTokens(cfg.Model)
 	return payload
 }
 
@@ -886,7 +893,7 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 		ReasoningEffort:     payload.ReasoningEffort,
 		ContextWindowTokens: tokenLimitValue(payload.ContextWindowTokens),
 		MaxContextTokens:    tokenLimitValue(payload.MaxContextTokens),
-		MaxOutputTokens:     payload.MaxOutputTokens,
+		MaxOutputTokens:     tokenLimitValue(payload.MaxOutputTokens),
 		Timeout:             time.Duration(payload.TimeoutMS) * time.Millisecond,
 	}.WithDefaults()
 	// An explicitly empty model asks the save handler to discover the provider's
@@ -929,6 +936,9 @@ func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.Provi
 	}
 	if payload.MaxContextTokens == nil {
 		cfg.MaxContextTokens = existing.MaxContextTokens
+	}
+	if payload.MaxOutputTokens == nil {
+		cfg.MaxOutputTokens = existing.MaxOutputTokens
 	}
 	if payload.TimeoutMS == 0 {
 		cfg.Timeout = existing.Timeout

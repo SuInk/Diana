@@ -309,7 +309,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">显示「对方正在输入」</span>
                   </label>
-                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要 NapCat 等支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
+                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
                 </div>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
@@ -766,7 +766,28 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">允许多条发送</span>
                 </label>
-                <span class="hint">仅显式分条标记另发消息；普通换行不分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+                <span class="hint">仅显式分条标记另发消息；普通换行不分条，除非开启下面的换行分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_line_split_enabled" type="checkbox" :disabled="!form.natural_reply_split_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">换行分条发送</span>
+                </label>
+                <span class="hint">消息内每换一行就另发一条；列表、表格和代码块整块发，连同引出它的那一行。需先允许多条发送；闲聊插话和本轮要求一条发送时不生效。</span>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.typing_delay_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">模拟打字延时</span>
+                </label>
+                <span class="hint">连发时按下一条的字数停顿，像边打边发。不低于分段发送间隔，单次最长 6 秒；第一条不额外等待。</span>
+              </div>
+              <div class="field">
+                <label for="bot-typing-speed">打字速度（毫秒/字）</label>
+                <input id="bot-typing-speed" v-model.number="form.typing_delay_per_char_ms" class="input" type="number" min="1" max="1000" step="1" inputmode="numeric" placeholder="留空按 100" :disabled="!form.typing_delay_enabled" />
+                <span class="hint">每个字等多久。100 约等于一秒十个字；越大越慢。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -792,14 +813,14 @@
                 <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
               </div>
               <div class="field">
-                <label for="bot-token-quota">模型额度 · 5 小时 token（默认单位 K）</label>
-                <input id="bot-token-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空不限" />
-                <span class="hint">{{ tokenQuotaReadoutText }}</span>
+                <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
+                <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
               </div>
               <div class="field">
-                <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
-                <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">按次数计，不带单位。两档各自独立、先到先得：刷得勤的群先撞次数，句句带图的先撞 token。额度是按群算的，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。统计口径含判定、路由和工具步，不只是最终那句回复。主人不受限。</span>
+                <label for="bot-sample">回复抽样率（%）</label>
+                <input id="bot-sample" v-model.number="form.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空不抽样" />
+                <span class="hint">群里没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复，主人不受限。群配置里填了就以群为准。</span>
               </div>
               <div class="field">
                 <label for="bot-backfill-limit">断线回补条数</label>
@@ -1062,7 +1083,7 @@
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
                 <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。开启模拟打字延时后作为最短停顿。</span>
               </div>
             </div>
           </section>
@@ -1257,6 +1278,17 @@
                       <Upload :size="14" aria-hidden="true" />
                       导入
                     </button>
+                    <button
+                      v-if="editedLibraryPersona"
+                      class="btn small"
+                      type="button"
+                      :disabled="personaLibraryBusy || !personaHasContent"
+                      :title="`把当前内容写回人设库「${editedLibraryPersona.name}」，绑定它的机器人和群一起更新`"
+                      @click="updateEditedLibraryPersona"
+                    >
+                      <RefreshCw :size="14" aria-hidden="true" />
+                      更新「{{ editedLibraryPersona.name }}」
+                    </button>
                     <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
                       <component :is="personaSaverOpen ? X : Plus" :size="14" aria-hidden="true" />
                       {{ personaSaverOpen ? "取消" : "存为人设" }}
@@ -1301,6 +1333,7 @@
                   </div>
                 </div>
                 <span v-if="!personaLibrary.length" class="hint">还没存过人设。调整下方设置后，点「存为人设」保存。</span>
+                <span v-else class="hint">选中一套即绑定：人设库里这一套更新后，绑定它的机器人和群自动跟着改。在下方改了内容就变成「自定义」，可以点「更新」写回这一套，或「存为人设」另存一套。</span>
               </div>
               <div class="field wide">
                 <div class="field-head">
@@ -2124,7 +2157,6 @@ import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
-import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import type { PersonaLintFinding } from "../api";
 import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
 import { personaOwnedTemplate } from "../persona-owned-template";
@@ -2141,15 +2173,6 @@ import { channelAccountUnhealthy, channelOperational, channelStatusHint, channel
 
 const form = ref<BotProfileConfig | null>(null);
 
-const tokenQuotaDraft = ref("");
-
-const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空不限。"));
-
-watch(tokenQuotaDraft, (value) => {
-  if (!form.value) return;
-  const parsed = parseTokenQuota(value);
-  form.value.model_token_quota = parsed === undefined ? 0 : parsed;
-});
 const loading = ref(true);
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
@@ -2635,8 +2658,9 @@ const mentionUserModeOptions: AppSelectOption[] = [
 ];
 
 
-// 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
-// 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
+// 人设库。存的是「它是谁、怎么说话」的配置组合，选中一套是把它们填进下面的表单，
+// 并在 persona_id 里记下绑定：库里这一套更新时，后端把新内容写进绑定它的机器人
+// 和群（见 model/assistant/persona_link.go）。表单里改了内容就解除绑定。
 const savedPersonaLibrary = ref<Persona[]>([]);
 const personaLibrary = computed(() => withBuiltinPersonas(savedPersonaLibrary.value));
 const personaLibraryLoaded = ref(false);
@@ -2651,7 +2675,22 @@ function choosePersona(id: string): void {
 watch(() => ({ id: form.value?.persona_id, selection: selectedPersonaID.value, ready: personaLibraryLoaded.value, settings: JSON.stringify(form.value && personaFromSettings(form.value, "")) }), (next, previous) => {
   if (!next.ready || !form.value?.persona_id) return;
   const edited = previous?.ready && previous.id === next.id && previous.settings !== next.settings;
-  if (next.selection === "custom" || edited) form.value = asCustomPersona(form.value);
+  if (next.selection === "custom" || edited) {
+    // 记下是从哪一套改出来的，好提供「写回这一套」。
+    editedFromPersonaID.value = form.value.persona_id;
+    form.value = asCustomPersona(form.value);
+  }
+});
+// 从人设库某一套改出来的「自定义」：可以写回那一套，让绑定它的机器人和群一起更新。
+// 内置人设不在库里，不能写回。
+const editedFromPersonaID = ref("");
+const editedLibraryPersona = computed(() => {
+  if (!editedFromPersonaID.value || selectedPersonaID.value !== "custom") return undefined;
+  const persona = savedPersonaLibrary.value.find((item) => item.id === editedFromPersonaID.value);
+  return persona && !isBuiltinPersona(persona) ? persona : undefined;
+});
+watch(() => form.value?.id, () => {
+  editedFromPersonaID.value = "";
 });
 const personaLibraryBusy = ref(false);
 
@@ -2888,6 +2927,35 @@ async function storeCurrentPersona(): Promise<void> {
   }
 }
 
+async function updateEditedLibraryPersona(): Promise<void> {
+  const current = form.value;
+  const target = editedLibraryPersona.value;
+  if (!current || !target) return;
+  const ok = await askConfirm({
+    title: `更新人设「${target.name}」`,
+    message: "把当前的人设内容写回人设库的这一套。所有绑定它的机器人和群都会改成这份内容，并立即生效。",
+    confirmLabel: "更新"
+  });
+  if (!ok) return;
+  personaLibraryBusy.value = true;
+  try {
+    const response = await savePersona({ ...personaFromSettings(current, target.name), id: target.id });
+    savedPersonaLibrary.value = response.personas ?? [];
+    if (form.value === current) form.value = selectPersona(asCustomPersona(current), response.persona);
+    editedFromPersonaID.value = "";
+    const synced = [
+      response.bots_synced ? `${response.bots_synced} 台机器人` : "",
+      response.groups_synced ? `${response.groups_synced} 个群` : ""
+    ].filter(Boolean).join("、");
+    toastSuccess(synced ? `已更新「${target.name}」，同步到 ${synced}` : `已更新「${target.name}」`);
+    if (response.warning) toastError(response.warning);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设更新失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
 const personaFileInput = ref<HTMLInputElement | null>(null);
 
 function personaFileInputClick(): void {
@@ -3033,7 +3101,7 @@ async function importPersonaFile(event: Event): Promise<void> {
 }
 
 async function removePersona(persona: Persona): Promise<void> {
-  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份，已经保存到机器人上的配置不受影响。", danger: true, confirmLabel: "删除" }))) {
+  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份。绑定它的机器人和群保留现有人设，改为自定义。", danger: true, confirmLabel: "删除" }))) {
     return;
   }
   personaLibraryBusy.value = true;
@@ -4083,6 +4151,8 @@ function setForm(config: BotProfileConfig): void {
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
+    reply_line_split_enabled: config.reply_line_split_enabled ?? false,
+    typing_delay_enabled: config.typing_delay_enabled ?? false,
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
@@ -4138,7 +4208,6 @@ function setForm(config: BotProfileConfig): void {
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
     prompt_chinese_slang_hint: config.prompt_chinese_slang_hint ?? true
   };
-  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
@@ -4382,9 +4451,13 @@ async function save(): Promise<void> {
       ...current,
       ...(selectedPersonaID.value === "custom" ? { persona_id: "", custom_persona: asCustomPersona(current).custom_persona } : {}),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
+      model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       ...sendRetryPayload(current),
+      typing_delay_per_char_ms: Number(current.typing_delay_per_char_ms) || 0,
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -212,7 +213,7 @@ func TestMessageEventFromEnvelopeNoticeGroupIncrease(t *testing.T) {
 	}
 }
 
-// TestMessageEventFromEnvelopeNoticeTypeGroupRecall 验证 NapCat/OneBot 撤回 notice_type 能映射到内部 SubType。
+// TestMessageEventFromEnvelopeNoticeTypeGroupRecall 验证 OneBot 撤回 notice_type 能映射到内部 SubType。
 func TestMessageEventFromEnvelopeNoticeTypeGroupRecall(t *testing.T) {
 	event := messageEventFromEnvelope(oneBotEnvelope{
 		Time:       123,
@@ -319,7 +320,7 @@ func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t 
 	headers := http.Header{
 		"Authorization": []string{"Bearer test-token"},
 		"X-Self-ID":     []string{"42"},
-		"User-Agent":    []string{"napcat-primary"},
+		"User-Agent":    []string{"onebot-primary"},
 	}
 
 	primary, response, err := websocket.DefaultDialer.Dial(wsURL, headers)
@@ -333,7 +334,7 @@ func TestReverseServerRejectsDuplicateClientWithoutReplacingHealthyConnection(t 
 	}
 
 	duplicateHeaders := headers.Clone()
-	duplicateHeaders.Set("User-Agent", "napcat-duplicate")
+	duplicateHeaders.Set("User-Agent", "onebot-duplicate")
 	duplicate, response, err := websocket.DefaultDialer.Dial(wsURL, duplicateHeaders)
 	if duplicate != nil {
 		_ = duplicate.Close()
@@ -464,11 +465,43 @@ func TestReverseServerRecordsUnauthorizedHandshake(t *testing.T) {
 	}
 }
 
+// 握手被拒以前只打到终端。机器人全停用时运行时已经退出，只有监听器自己能记，
+// 所以由它直接写运行日志；接入端几秒重连一次，同一原因和客户端一分钟只记一条。
+func TestReverseServerWritesRejectionToAppLog(t *testing.T) {
+	const token = "0123456789abcdef"
+	server := NewOneBotReverseServer(OneBotConfig{AccessToken: token})
+	logs := &captureAppLogs{}
+	server.SetAppLogWriter(logs)
+	// 接入端每次重连换一个本地端口，仍然是同一个客户端。
+	for port := range 3 {
+		request := httptest.NewRequest("GET", "http://localhost/onebot/v11/ws", nil)
+		request.RemoteAddr = fmt.Sprintf("172.18.0.3:%d", 40000+port)
+		request.Header.Set("Authorization", "Bearer wrong-token-value")
+		request.Header.Set("X-Self-ID", "10001")
+		request.Header.Set("User-Agent", "SnowLuma/1.2 (linux)")
+		server.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 {
+		t.Fatalf("rejection logs = %d, want 1", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != "onebot_handshake_rejected" || entry.Metadata["reason"] != "token_mismatch" || !strings.Contains(entry.Message, "不一致") {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if entry.Target != "172.18.0.3 · QQ 10001 · SnowLuma/1.2" {
+		t.Fatalf("client label = %q", entry.Target)
+	}
+	if strings.Contains(entry.Message+entry.Detail+entry.Target, "wrong-token-value") {
+		t.Fatal("rejection log leaked the presented token")
+	}
+}
+
 func TestReverseServerRejectsCrossOriginBrowser(t *testing.T) {
 	request := httptest.NewRequest("GET", "http://bot.example/onebot/v11/ws", nil)
 	request.Host = "bot.example"
 	if !sameOriginWebSocketRequest(request) {
-		t.Fatal("origin-less NapCat request was rejected")
+		t.Fatal("origin-less OneBot request was rejected")
 	}
 	request.Header.Set("Origin", "https://attacker.example")
 	if sameOriginWebSocketRequest(request) {

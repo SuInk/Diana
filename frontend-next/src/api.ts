@@ -47,7 +47,11 @@ export interface LLMConfig {
   context_window_source?: "user" | "fallback";
   /** 只读回显：模型清单里记的窗口，只作参考值，不参与计算。 */
   catalog_context_window_tokens?: number;
-  max_output_tokens?: number;
+  /** 用户手填的输出上限；0 或缺省表示按模型上限。 */
+  max_output_tokens?: number | null;
+  /** 只读回显：默认模型没被调用方覆盖时实际发出的输出上限及来源；0 表示不发。 */
+  effective_max_output_tokens?: number;
+  max_output_tokens_source?: "user" | "builtin" | "default" | "provider";
   timeout_ms?: number;
 }
 
@@ -326,6 +330,12 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 连续消息合并置信度百分比，1–100；未设置时默认 75。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 换行分条：消息内每次换行另发一条，列表、表格和代码块整块不拆；需允许多条发送。 */
+  reply_line_split_enabled?: boolean;
+  /** 模拟打字延时：连发时按下一条的字数等待，不低于分段发送间隔，最长 6 秒。 */
+  typing_delay_enabled?: boolean;
+  /** 模拟打字每字毫秒数，1–1000；留空按 100。 */
+  typing_delay_per_char_ms?: number;
   social_reply_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
@@ -339,10 +349,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
@@ -523,6 +533,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";
+  /** 绑定的人设库条目；绑定时人设各项由人设库同步，库里改了自动更新。 */
+  persona_id?: string;
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
   /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
@@ -542,10 +554,10 @@ export interface BotGroupConfig extends SendRetrySettings {
   welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
@@ -553,6 +565,10 @@ export interface BotGroupConfig extends SendRetrySettings {
   /** 本群连续消息合并置信度百分比；未设置时跟随机器人。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 本群的换行分条开关；不设表示跟随机器人。 */
+  reply_line_split_enabled?: boolean;
+  /** 本群的模拟打字延时开关；不设表示跟随机器人。 */
+  typing_delay_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
@@ -611,10 +627,8 @@ export interface BotGroupSummary extends BotGroupConfig {
   joined: boolean;
   /** 复用同一条连接、在这个群也开着的其它机器人：这个群会收到多份回复。 */
   shared_with?: BotGroupSharedBot[];
-  /** 额度窗口内已用的 token 和调用次数，以及算过继承后真正生效的两档上限。 */
-  quota_tokens_used?: number;
+  /** 额度窗口内已用的调用次数，以及算过继承后真正生效的上限。 */
   quota_calls_used?: number;
-  quota_token_limit?: number;
   quota_call_limit?: number;
 }
 
@@ -2614,6 +2628,91 @@ export interface UserMemoryProfile {
   updated_at?: string;
 }
 
+// RelationshipEvaluationStatus 是一次后台好感度评估的结果分类。
+export type RelationshipEvaluationStatus = "changed" | "capped" | "unchanged" | "low_confidence" | "failed" | "skipped";
+
+// RelationshipEvaluation 是一次后台好感度评估：不只是分数变了的，判 0、把握不够、
+// 失败和排满跳过的也在里面。
+export interface RelationshipEvaluation {
+  id: number;
+  bot_profile_id?: string;
+  user_id: string;
+  sender_name?: string;
+  group_id?: string;
+  message_id?: string;
+  message_text?: string;
+  status: RelationshipEvaluationStatus;
+  proposed_delta: number;
+  applied_delta: number;
+  before_score: number;
+  after_score: number;
+  confidence: number;
+  reason?: string;
+  model?: string;
+  error?: string;
+  // 同一次评估里记下的画像：分数没动、只记下了「职业是程序员」也算一次变化。
+  portrait?: RelationshipEvaluationPortrait[];
+  created_at: string;
+}
+
+export interface RelationshipEvaluationPortrait {
+  field: string;
+  label: string;
+  value: string;
+  source?: string;
+}
+
+export interface RelationshipEvaluationsResponse {
+  evaluations: RelationshipEvaluation[];
+  // 画像栏目表，高级筛选按它列可选栏目。
+  portrait_fields?: { field: string; label: string }[];
+  next_before_id?: number;
+}
+
+export interface RelationshipEvaluationsQuery {
+  profile?: string;
+  userID?: string;
+  // search 什么都搜（人、群、原话、原因、画像、模型、失败原因）；person 按 QQ 号或
+  // 昵称模糊找人；groupID 按群号精确筛；since 是 Unix 秒，只要这之后的。
+  search?: string;
+  person?: string;
+  groupID?: string;
+  since?: number;
+  statuses?: RelationshipEvaluationStatus[];
+  // portraitOnly 只要记下了画像的。
+  portraitOnly?: boolean;
+  // direction 按实际生效的分数：up 加分、down 减分、changed 有变化、none 没变。
+  direction?: "" | "up" | "down" | "changed" | "none";
+  chat?: "" | "group" | "private";
+  portraitFields?: string[];
+  portraitSource?: "" | "stated" | "inferred";
+  minConfidence?: number;
+  model?: string;
+  beforeID?: number;
+  limit?: number;
+}
+
+export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery = {}): Promise<RelationshipEvaluationsResponse> {
+  const params = new URLSearchParams({ limit: String(query.limit ?? 50) });
+  if (query.profile) params.set("profile", query.profile);
+  if (query.userID) params.set("user_id", query.userID);
+  if (query.search) params.set("q", query.search);
+  if (query.person) params.set("person", query.person);
+  if (query.groupID) params.set("group_id", query.groupID);
+  if (query.since) params.set("since", String(query.since));
+  // 传了空列表是「一个都不要」，和不传（不限）不一样，所以只看有没有，不看长度。
+  if (query.statuses) params.set("status", query.statuses.join(","));
+  if (query.portraitOnly) params.set("portrait", "1");
+  if (query.direction) params.set("direction", query.direction);
+  if (query.chat) params.set("chat", query.chat);
+  if (query.portraitFields) params.set("portrait_field", query.portraitFields.join(","));
+  if (query.portraitSource) params.set("portrait_source", query.portraitSource);
+  if (query.minConfidence) params.set("min_confidence", String(query.minConfidence));
+  if (query.model) params.set("model", query.model);
+  if (query.beforeID) params.set("before_id", String(query.beforeID));
+  return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);
+}
+
 export interface UserFavorabilityChange {
   id: number;
   user_id: string;
@@ -2774,9 +2873,18 @@ export function listPersonas(): Promise<PersonaListResponse> {
   return requestJSON<PersonaListResponse>("/api/assistant/personas");
 }
 
+/** 人设保存结果。改已有的一套时，绑定它的机器人和群会同步更新，这里报同步了几个。 */
+export interface PersonaSaveResponse {
+  persona: Persona;
+  personas: Persona[];
+  bots_synced?: number;
+  groups_synced?: number;
+  warning?: string;
+}
+
 /** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
-export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ persona: Persona; personas: Persona[] }> {
-  return requestJSON<{ persona: Persona; personas: Persona[] }>("/api/assistant/personas", {
+export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<PersonaSaveResponse> {
+  return requestJSON<PersonaSaveResponse>("/api/assistant/personas", {
     method: "POST",
     body: JSON.stringify({ persona })
   });

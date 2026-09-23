@@ -182,6 +182,7 @@ import {
   BrainCircuit,
   CalendarClock,
   FileClock,
+  Heart,
   Globe,
   LayoutGrid,
   MessageCircle,
@@ -243,6 +244,7 @@ const viewComponents: Record<ViewID, Component> = {
   notebook: MemoryView,
   browser: BrowserBoxView,
   logs: RecordsView,
+  favorability: RecordsView,
   settings: SettingsView
 };
 
@@ -334,6 +336,7 @@ const viewTitles: Record<ViewID, string> = {
   users: "记忆",
   notebook: "记忆",
   logs: "运行记录",
+  favorability: "运行记录",
   settings: "设置"
 };
 
@@ -406,7 +409,7 @@ const botSummary = computed(() => {
   const unhealthy = channels.filter(channelAccountUnhealthy);
   if (unhealthy.length > 0) {
     const first = unhealthy[0];
-    const message = first?.account_status_message || "账号状态异常，请在 NapCat 中检查登录状态";
+    const message = first?.account_status_message || "账号状态异常，请在 OneBot 客户端中检查登录状态";
     const label = first?.account_status_known && !first.account_online ? "账号离线" : "账号状态异常";
     return { kind: "err", label, hint: `${message}；WebSocket 仍已连接。` };
   }
@@ -443,6 +446,7 @@ function navIcon(id: ViewID): Component {
     users: BookUser,
     browser: Globe,
     logs: FileClock,
+    favorability: Heart,
     settings: Wrench
   };
   return icons[id] ?? LayoutGrid;

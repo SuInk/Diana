@@ -471,7 +471,9 @@ type Runtime struct {
 	// 被撤回和系统提示占用，不限流的话这类正常跳号会把回补请求刷爆。
 	liveSeqProbedAt map[string]time.Time
 	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
-	groupQuota          groupModelQuotaCache
+	groupQuota groupModelQuotaCache
+	// replySampleRoll 给回复抽样掷一次 [0,100) 的点数；为 nil 时用 math/rand，测试里替换。
+	replySampleRoll     func() int
 	seqGapActive        atomic.Int32
 	historyBackfillBusy atomic.Bool
 	historyFetchMu      sync.Mutex
@@ -885,6 +887,10 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")
 			r.runPendingDirectMessagePurgeLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.channelWatch")
+			r.runChannelWatch(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
@@ -1461,6 +1467,12 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ReplyPreserveLineBreaks != nil {
 		cfg.ReplyPreserveLineBreaks = copyBoolPointer(groupCfg.ReplyPreserveLineBreaks)
 	}
+	if groupCfg.ReplyLineSplitEnabled != nil {
+		cfg.ReplyLineSplitEnabled = copyBoolPointer(groupCfg.ReplyLineSplitEnabled)
+	}
+	if groupCfg.TypingDelayEnabled != nil {
+		cfg.TypingDelayEnabled = copyBoolPointer(groupCfg.TypingDelayEnabled)
+	}
 	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
 	if groupCfg.ReplyMergeConfidencePercent > 0 {
 		cfg.ReplyMergeConfidencePercent = groupCfg.ReplyMergeConfidencePercent
@@ -1826,6 +1838,12 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		// 已经回这个账号回得很密了，主动接话直接放掉，连路由模型也不必调。
 		if verdict := r.replyDampingJudge(event, text, true, time.Now()); considerProactive && verdict.Skip {
 			considerProactive, proactiveSkipReason = false, verdict.Reason
+		}
+		// 回复抽样同样挡在路由模型之前：没抽中的消息一次模型调用都不花。
+		if considerProactive {
+			if reason, skip := r.groupReplySampleSkips(event); skip {
+				considerProactive, proactiveSkipReason = false, reason
+			}
 		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
@@ -5935,7 +5953,7 @@ func collectNestedForwardIDs(value any, depth int, out *[]string, seen map[strin
 			collectNestedForwardIDs(inline, depth+1, out, seen)
 			return
 		}
-		// node 段、以及 NapCat 直接返回的完整消息对象，内容都可能挂在这几个键下。
+		// node 段、以及部分实现直接返回的完整消息对象，内容都可能挂在这几个键下。
 		for _, container := range []map[string]any{item, data} {
 			for _, key := range []string{"content", "message", "messages", "forward"} {
 				if nested, ok := container[key]; ok {
@@ -8323,18 +8341,22 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 		return nil
 	}
 	var out []string
-	for _, segment := range strings.Split(reply, notificationSplitMarker) {
-		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
-		segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
-		if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
-			segment = collapseReplyBlankLinesOutsideCode(segment)
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(restoreExplicitReplyLines(part))
+		pieces := []string{part}
+		if limits.LineSplit && !limits.MarkerOnly {
+			pieces = splitReplyLinesKeepingLists(part)
 		}
-		if segment == "" {
-			continue
-		}
-		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
-		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, chunk)
+		for _, segment := range pieces {
+			segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
+			if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
+				segment = collapseReplyBlankLinesOutsideCode(segment)
+			}
+			if segment == "" {
+				continue
+			}
+			// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
+			out = append(out, chunkTextByLength(segment, limits.ChunkSize)...)
 		}
 	}
 	return out
@@ -8369,6 +8391,9 @@ type chatSplitLimits struct {
 	PreserveBlankLines bool
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
+	// LineSplit 让消息内的每次换行另起一条，列表、表格和代码块整块不拆。
+	// 单条发送和闲聊插话（MarkerOnly）下不生效。
+	LineSplit bool
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
@@ -8380,6 +8405,7 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 		LineBreakMode:        configuredReplyLineBreakMode(cfg),
 		PreserveSoftNewlines: !natural,
 		PreserveBlankLines:   PlatformSupportsRichText(cfg.Platform),
+		LineSplit:            boolValue(cfg.ReplyLineSplitEnabled, false),
 	}
 }
 

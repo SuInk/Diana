@@ -628,6 +628,9 @@ type BotConfig struct {
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS        int             `json:"typing_delay_per_char_ms,omitempty"`
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -645,13 +648,14 @@ type BotConfig struct {
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
 	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
-	// ModelTokenQuota / ModelCallQuota 是这台机器人的每群额度默认值：滚动 5 小时
-	// 窗口内，单个群能用掉的 token 和调用次数。群配置里填了就以群为准，留空跟随
-	// 这里；两边都是 0 表示不限。
+	// ModelCallQuota 是这台机器人的每群额度默认值：滚动 5 小时窗口内，单个群能
+	// 发起的模型调用次数。群配置里填了就以群为准，留空跟随这里；两边都是 0 表示不限。
 	//
 	// 按群算而不是按机器人算：一个群刷起来不该把别的群一起饿死。
-	ModelTokenQuota int64 `json:"model_token_quota,omitempty"`
-	ModelCallQuota  int64 `json:"model_call_quota,omitempty"`
+	ModelCallQuota int64 `json:"model_call_quota,omitempty"`
+	// ReplySamplePercent 是这台机器人的每群回复抽样率默认值（1–100）：没 @、没引用
+	// 机器人、没叫名字的群消息，只有这个比例会交给模型判断要不要接话。0 表示不抽样。
+	ReplySamplePercent int `json:"reply_sample_percent,omitempty"`
 
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
@@ -835,39 +839,44 @@ type ReplyRule struct {
 
 type GroupConfig struct {
 	ReplyPreserveLineBreaks *bool `json:"reply_preserve_line_breaks,omitempty"`
+	// ReplyLineSplitEnabled 的 nil 同样保留，发送时跟随所属机器人。
+	ReplyLineSplitEnabled *bool `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled    *bool `json:"typing_delay_enabled,omitempty"`
 	// Zero follows the bot's current merge threshold.
 	ReplyMergeConfidencePercent int      `json:"reply_merge_confidence_percent,omitempty"`
 	MarkedBotIDs                []string `json:"marked_bot_ids,omitempty"`
 	// BotProfileID 指明这份群配置属于哪台机器人。两台机器人可以同时在一个群里，
 	// 各自的触发词、回复频率和人格都该各管各的。空值是升级前的老记录，迁移时会
 	// 归给当时的当前配置档。
-	BotProfileID              string           `json:"bot_profile_id,omitempty"`
-	GroupID                   string           `json:"group_id"`
-	Enabled                   bool             `json:"enabled"`
-	EnabledSet                bool             `json:"enabled_set,omitempty"`
-	GroupTriggers             []string         `json:"group_triggers,omitempty"`
-	GroupTriggerMode          AliasTriggerMode `json:"group_trigger_mode,omitempty"`
-	SystemPrompt              string           `json:"system_prompt,omitempty"`
-	ResponseMode              ResponseMode     `json:"response_mode,omitempty"`
-	ReplyStyle                ReplyStyle       `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled  *bool            `json:"action_description_enabled,omitempty"`
-	SelfReference             string           `json:"self_reference,omitempty"`
-	SentenceEnders            string           `json:"sentence_enders,omitempty"`
-	WelcomeEnabled            bool             `json:"welcome_enabled,omitempty"`
-	WelcomeMessage            string           `json:"welcome_message,omitempty"`
-	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
-	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
-	// ModelTokenQuota 是这个群在滚动 5 小时窗口里能用掉的 token 上限。留空跟随
+	BotProfileID     string           `json:"bot_profile_id,omitempty"`
+	GroupID          string           `json:"group_id"`
+	Enabled          bool             `json:"enabled"`
+	EnabledSet       bool             `json:"enabled_set,omitempty"`
+	GroupTriggers    []string         `json:"group_triggers,omitempty"`
+	GroupTriggerMode AliasTriggerMode `json:"group_trigger_mode,omitempty"`
+	// PersonaID 表示本群的人设绑定在人设库的某一套上：下面的正文、表达风格、
+	// 动作描写、自称、句尾语气词都是那一套的内容，库里改了会同步写过来（见
+	// persona_link.go）。空值表示没绑定：正文留空跟随机器人，填了是本群自定义。
+	PersonaID                 string       `json:"persona_id,omitempty"`
+	SystemPrompt              string       `json:"system_prompt,omitempty"`
+	ResponseMode              ResponseMode `json:"response_mode,omitempty"`
+	ReplyStyle                ReplyStyle   `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled  *bool        `json:"action_description_enabled,omitempty"`
+	SelfReference             string       `json:"self_reference,omitempty"`
+	SentenceEnders            string       `json:"sentence_enders,omitempty"`
+	WelcomeEnabled            bool         `json:"welcome_enabled,omitempty"`
+	WelcomeMessage            string       `json:"welcome_message,omitempty"`
+	WelcomeMode               WelcomeMode  `json:"welcome_mode,omitempty"`
+	WelcomeTemplates          []string     `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds int          `json:"welcome_llm_cooldown_seconds,omitempty"`
+	// ModelCallQuota 是这个群在滚动 5 小时窗口里能发起的模型调用次数上限。留空跟随
 	// 机器人那一档，两边都没填表示不限。
 	//
 	// 口径和用量统计一致：这个群名下所有模型调用都算，包括判定、路由和工具步，
 	// 不只是最终那句回复。主人不受限——额度用完还能让主人改配置，不然就锁死了。
-	ModelTokenQuota int64 `json:"model_token_quota,omitempty"`
-	// ModelCallQuota 是同一窗口里的模型调用次数上限，同样留空跟随机器人。它和 token 上限
-	// 各自独立、先到先得：一个群可以句句短但刷个不停（次数先到），也可以只说几句
-	// 却每句都带图（token 先到），两种超用形态不一样，只卡一种会漏掉另一种。
-	ModelCallQuota           int64 `json:"model_call_quota,omitempty"`
+	ModelCallQuota int64 `json:"model_call_quota,omitempty"`
+	// ReplySamplePercent 是这个群的回复抽样率（1–100），留空跟随机器人。
+	ReplySamplePercent       int   `json:"reply_sample_percent,omitempty"`
 	MaxContextTokens         int64 `json:"max_context_tokens,omitempty"`
 	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
 	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
@@ -1085,6 +1094,9 @@ type ConfigPayload struct {
 	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
 	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
 	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS        int             `json:"typing_delay_per_char_ms,omitempty"`
 	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
 	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
 	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
@@ -1859,6 +1871,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SendChunkIntervalMS > 5000 {
 		cfg.SendChunkIntervalMS = 5000
 	}
+	cfg.TypingDelayPerCharMS = max(0, min(maxTypingDelayPerCharMS, cfg.TypingDelayPerCharMS))
 	// 0 表示没配过，用默认；负数是明显的错值，同样退回默认。想「第一声再见就
 	// 不回」的人把它设成 1，那是配置的自由，不是这里该纠正的。
 	if cfg.PrivateClosingGrace < 0 {
@@ -2136,7 +2149,7 @@ func (cfg BotConfig) Validate() error {
 	// 掉线。正向 WS / HTTP 是 Diana 主动外连，token 发不发由接入端决定，
 	// 留空合法，不做限制。
 	if cfg.OneBotTransport == OneBotTransportReverseWS && cfg.Enabled && strings.TrimSpace(cfg.OneBotAccessToken) == "" {
-		return fmt.Errorf("OneBot 反向 WebSocket 必须配置 Access Token，且需与接入端（如 NapCat）填写的 token 一致")
+		return fmt.Errorf("OneBot 反向 WebSocket 必须配置 Access Token，且需与接入端填写的 token 一致")
 	}
 	endpoint := strings.TrimSpace(cfg.OneBotReverseWSEndpoint)
 	if cfg.OneBotTransport == OneBotTransportForwardWS {
@@ -2296,6 +2309,9 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
+		ReplyLineSplitEnabled:             copyBoolPointer(cfg.ReplyLineSplitEnabled),
+		TypingDelayEnabled:                copyBoolPointer(cfg.TypingDelayEnabled),
+		TypingDelayPerCharMS:              cfg.TypingDelayPerCharMS,
 		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
 		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
@@ -2514,6 +2530,9 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
 		ReplyMergeConfidencePercent:     payload.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:         copyBoolPointer(payload.ReplyPreserveLineBreaks),
+		ReplyLineSplitEnabled:           copyBoolPointer(payload.ReplyLineSplitEnabled),
+		TypingDelayEnabled:              copyBoolPointer(payload.TypingDelayEnabled),
+		TypingDelayPerCharMS:            payload.TypingDelayPerCharMS,
 		SocialReplyEnabled:              copyBoolPointer(payload.SocialReplyEnabled),
 		ReplyMaxBubbles:                 payload.ReplyMaxBubbles,
 		ForwardReplyChunkThreshold:      payload.ForwardReplyChunkThreshold,

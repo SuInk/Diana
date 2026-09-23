@@ -783,7 +783,7 @@ func musicOutputDir() string {
 
 // encodeSilkIfConfigured 在配了编码器时把音频转成 Tencent Silk。
 //
-// 没配就原样返回：NapCat、Lagrange 这些客户端自己会转码，逼所有人先装一个
+// 没配就原样返回：常见 OneBot 客户端自己会转码，逼所有人先装一个
 // 编码器才能听歌是没必要的门槛。转码失败也返回原文件——发一条客户端可能转不了的
 // mp3，好过什么都不发。
 func (p *MusicPlugin) encodeSilkIfConfigured(ctx context.Context, cfg musicConfig, audioPath string) (string, error) {

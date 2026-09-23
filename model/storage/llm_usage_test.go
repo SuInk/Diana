@@ -74,7 +74,7 @@ func TestGroupLLMUsageSplitsByGroupAndProfile(t *testing.T) {
 		label string
 	}{
 		{since.Add(time.Minute), map[string]any{"group_id": "111", "profile_id": "bot-a", "total_tokens": 900}, "命中"},
-		{since.Add(2 * time.Minute), map[string]any{"group_id": "111", "profile_id": "bot-a", "input_tokens": 60, "output_tokens": 40}, "无 total 时按输入输出兜底"},
+		{since.Add(2 * time.Minute), map[string]any{"group_id": "111", "profile_id": "bot-a", "input_tokens": 60, "output_tokens": 40}, "上游没报 total 也算一次"},
 		{since.Add(3 * time.Minute), map[string]any{"group_id": "222", "profile_id": "bot-a", "total_tokens": 500}, "另一个群"},
 		{since.Add(4 * time.Minute), map[string]any{"group_id": "111", "profile_id": "bot-b", "total_tokens": 7000}, "同群另一台机器人"},
 		{since.Add(5 * time.Minute), map[string]any{"profile_id": "bot-a", "total_tokens": 3000}, "私聊/后台，没有群归属"},
@@ -88,7 +88,7 @@ func TestGroupLLMUsageSplitsByGroupAndProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Tokens != 1000 || got.Calls != 2 {
+	if got.Calls != 2 {
 		t.Fatalf("单群统计不对: %+v", got)
 	}
 	bulk, err := s.GroupLLMUsageSinceByProfile(ctx, "bot-a", since, until)
@@ -98,7 +98,7 @@ func TestGroupLLMUsageSplitsByGroupAndProfile(t *testing.T) {
 	if bulk["111"] != got {
 		t.Fatalf("两条路径口径不一致: %+v vs %+v", bulk["111"], got)
 	}
-	if bulk["222"].Tokens != 500 || bulk["222"].Calls != 1 {
+	if bulk["222"].Calls != 1 {
 		t.Fatalf("另一个群统计不对: %+v", bulk["222"])
 	}
 	// 没有群归属的调用不该被归到某个群名下，也不该自成一条。

@@ -119,8 +119,9 @@ func RestoreDowngradeRecords(records []DowngradeRecord) {
 
 // 降级字段名，同时是落盘记录里的字段标识，改名会让旧记录失配（退化成重新学一次）。
 const (
-	downgradeFieldToolChoice  = "tool_choice"
-	downgradeFieldStrictTools = "strict_tools"
+	downgradeFieldToolChoice        = "tool_choice"
+	downgradeFieldStrictTools       = "strict_tools"
+	downgradeFieldImplicitMaxTokens = "implicit_max_tokens"
 )
 
 // paramDowngrade 描述一次「上游拒了某个请求字段 → 去掉它重发」的降级。
@@ -132,11 +133,12 @@ type paramDowngrade struct {
 	strip    func(GenerateRequest) (GenerateRequest, bool)
 }
 
-// paramDowngrades 按先精确后兜底排序：tool_choice 按字段名匹配，严格模式只能按
-// 状态码判定，放在后面，否则它会把所有 400 都收走。
+// paramDowngrades 按先精确后兜底排序：tool_choice 和 max_tokens 按字段名匹配，
+// 严格模式只能按状态码判定，放在后面，否则它会把所有 400 都收走。
 func paramDowngrades() []paramDowngrade {
 	return []paramDowngrade{
 		{name: downgradeFieldToolChoice, rejected: forcedToolChoiceRejected, strip: stripForcedToolChoice},
+		{name: downgradeFieldImplicitMaxTokens, rejected: maxTokensRejected, strip: stripImplicitMaxTokens},
 		{name: downgradeFieldStrictTools, rejected: strictToolsRejected, strip: stripStrictTools},
 	}
 }
@@ -215,6 +217,29 @@ func stripForcedToolChoice(req GenerateRequest) (GenerateRequest, bool) {
 		return req, false
 	}
 	req.ToolChoice = ""
+	return req, true
+}
+
+// maxTokensRejected 判断这次失败是不是上游不接受代发的 max_tokens：不认这个字段
+// （OpenAI 的推理模型只认 max_completion_tokens），或者值超出了它的范围。
+func maxTokensRejected(err error) bool {
+	if paramRejectionStatus(err) == 0 {
+		return false
+	}
+	var reqErr *openAIRequestError
+	errors.As(err, &reqErr)
+	detail := strings.ToLower(reqErr.detail)
+	return strings.Contains(detail, "max_tokens") || strings.Contains(detail, "max_completion_tokens") || strings.Contains(detail, "maxtokens")
+}
+
+// stripImplicitMaxTokens 只摘按内置表代填的值，退回不发、由服务端决定；用户自己
+// 填的上限被拒就照实报错，不替用户改设置。
+func stripImplicitMaxTokens(req GenerateRequest) (GenerateRequest, bool) {
+	if !req.implicitMaxOutputTokens || req.MaxOutputTokens <= 0 {
+		return req, false
+	}
+	req.MaxOutputTokens = 0
+	req.implicitMaxOutputTokens = false
 	return req, true
 }
 

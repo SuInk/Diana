@@ -104,7 +104,7 @@ func TestRuntimePersistsRecallIndependentlyAndPluginRestoresIt(t *testing.T) {
 	}
 }
 
-func TestRuntimeRecoversMissingRecallContentFromNapCat(t *testing.T) {
+func TestRuntimeRecoversMissingRecallContentFromOneBot(t *testing.T) {
 	store := newRecallPersistenceStore()
 	channel := &recallGetMsgChannel{}
 	runtime := NewRuntime(BotConfig{DisabledGroups: []string{"123"}}, channel, NewPluginManager(), nil, nil, nil, nil)
@@ -127,11 +127,11 @@ func TestRuntimeRecoversMissingRecallContentFromNapCat(t *testing.T) {
 	if channel.calls != 1 || len(events) != 2 {
 		t.Fatalf("calls=%d events=%#v", channel.calls, events)
 	}
-	if events[0].Kind != EventKindGroup || events[0].RawMessage != "NapCat补回的正文" {
+	if events[0].Kind != EventKindGroup || events[0].RawMessage != "接入端补回的正文" {
 		t.Fatalf("recovered original = %#v", events[0])
 	}
 	recall := events[1]
-	if recall.Kind != EventKindNotice || recall.RawMessage != "NapCat补回的正文" || recall.OriginalTime != 150 || recall.Time != 200 || recall.OperatorID != "admin" {
+	if recall.Kind != EventKindNotice || recall.RawMessage != "接入端补回的正文" || recall.OriginalTime != 150 || recall.Time != 200 || recall.OperatorID != "admin" {
 		t.Fatalf("recovered recall = %#v", recall)
 	}
 }
@@ -254,9 +254,9 @@ func (c *recallGetMsgChannel) CallAPI(_ context.Context, action string, params m
 		"group_id":     "123",
 		"user_id":      "20002",
 		"message_id":   "remote-1",
-		"raw_message":  "NapCat补回的正文",
+		"raw_message":  "接入端补回的正文",
 		"message": []any{
-			map[string]any{"type": "text", "data": map[string]any{"text": "NapCat补回的正文"}},
+			map[string]any{"type": "text", "data": map[string]any{"text": "接入端补回的正文"}},
 		},
 		"sender": map[string]any{"user_id": "20002", "card": "Alice"},
 	}, nil
