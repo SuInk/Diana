@@ -464,6 +464,10 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 		"--disk-cache-dir=" + cacheDir,
 		"--crash-dumps-dir=" + crashDir,
 		"--disable-extensions",
+		// Docker 默认只给 64MB 的 /dev/shm，Chrome 渲染稍大的页面（B 站首页就够）会
+		// 把它撑爆，标签页崩掉、调试连接断开，调用方看到的是 broken pipe 或整个浏览器
+		// 卡死。改用 /tmp 放共享内存，不再依赖容器的 shm 大小；非 Linux 上这个开关无效。
+		"--disable-dev-shm-usage",
 		"--disable-background-networking",
 		"--disable-background-timer-throttling",
 		"--disable-backgrounding-occluded-windows",
