@@ -5,7 +5,7 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <p>查看一次性提醒、周期查询和仓库更新订阅的执行状态</p>
+        <p>查看一次性提醒、事件触发、周期查询和仓库更新订阅的执行状态</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="loading" @click="load()">
@@ -17,7 +17,7 @@
 
     <div class="stack">
       <div class="stat-grid task-stats">
-        <StatCard label="全部任务" :loading="initialLoading" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${scheduleCount} 个周期查询 / ${repositoryWatchCount} 个仓库订阅 / ${rssWatchCount} 个 RSS 订阅`">
+        <StatCard label="全部任务" :loading="initialLoading" :value="formatNumber(tasks.length)" :foot="`${reminderCount} 个提醒 / ${eventTriggerCount} 个事件触发 / ${scheduleCount} 个周期查询 / ${repositoryWatchCount} 个仓库订阅 / ${rssWatchCount} 个 RSS 订阅`">
           <template #icon><ListTodo :size="14" aria-hidden="true" /></template>
         </StatCard>
         <StatCard label="运行中" :loading="initialLoading" :value="formatNumber(activeCount)" :foot="`${retryingCount} 个正在重试`">
@@ -26,7 +26,7 @@
         <StatCard label="占用额度" :loading="initialLoading" :value="formatNumber(quotaCount)" foot="已完成或取消后释放">
           <template #icon><Gauge :size="14" aria-hidden="true" /></template>
         </StatCard>
-        <StatCard label="已结束" :loading="initialLoading" :value="formatNumber(finishedCount)" :foot="`${usedCount} 个已执行 / ${cancelledCount} 个已取消`">
+        <StatCard label="已结束" :loading="initialLoading" :value="formatNumber(finishedCount)" :foot="`${usedCount} 个已执行 / ${cancelledCount} 个已取消 / ${expiredCount} 个已到期`">
           <template #icon><CircleCheck :size="14" aria-hidden="true" /></template>
         </StatCard>
       </div>
@@ -89,6 +89,7 @@
               <Rss v-if="task.kind === 'rss_watch'" :size="17" aria-hidden="true" />
               <Repeat2 v-if="task.kind === 'schedule'" :size="17" aria-hidden="true" />
               <Bell v-if="task.kind === 'reminder'" :size="17" aria-hidden="true" />
+              <Zap v-if="task.kind === 'event_trigger'" :size="17" aria-hidden="true" />
             </span>
 
             <div class="task-main">
@@ -133,10 +134,17 @@
               </div>
               <p v-if="task.kind === 'rss_watch' && task.feed_judge_prompt" class="task-message">判断规则：{{ task.feed_judge_prompt }}</p>
 
+              <div v-if="task.kind === 'event_trigger'" class="task-facts">
+                <span style="overflow-wrap: anywhere; max-width: 100%"><Zap :size="13" aria-hidden="true" />条件 <strong>{{ task.trigger || "—" }}</strong></span>
+                <span>动作 <strong>{{ task.trigger_action === "agent" ? "按指令执行" : "发送提醒" }}</strong></span>
+                <span>已触发 <strong>{{ task.trigger_fire_count ?? 0 }}</strong> 次</span>
+                <span v-if="validTimestamp(task.trigger_expires_at)"><CalendarClock :size="13" aria-hidden="true" />{{ task.status === "expired" ? "到期于" : "有效至" }} {{ formatTime(task.trigger_expires_at) }}</span>
+              </div>
+
               <div class="task-facts">
                 <span v-if="task.kind !== 'repository_watch' && task.kind !== 'rss_watch'">
                   <UserRound :size="13" aria-hidden="true" />
-                  用户 <strong class="mono">{{ task.owner_id || task.user_id || "—" }}</strong>
+                  {{ task.kind === "event_trigger" ? "设置者" : "用户" }} <strong class="mono">{{ task.owner_id || task.user_id || "—" }}</strong>
                 </span>
                 <template v-else-if="task.kind === 'rss_watch'"><SubscriptionDestination v-for="(target, index) in task.notification_targets?.length ? task.notification_targets : [{ platform: task.platform, profile_id: task.profile_id, group_id: task.group_id, user_id: task.user_id }]" :key="index" :platform="target.platform" :profile-id="target.profile_id" :group-id="target.group_id" :user-id="target.user_id" /></template>
                 <span v-else-if="task.user_id && !task.group_id">
@@ -147,7 +155,7 @@
                   <UsersRound :size="13" aria-hidden="true" />
                   群 <strong class="mono">{{ task.group_id }}</strong>
                 </span>
-                <span v-if="task.kind !== 'reminder' && task.interval_seconds">
+                <span v-if="task.kind !== 'reminder' && task.kind !== 'event_trigger' && task.interval_seconds">
                   <Repeat2 :size="13" aria-hidden="true" />
                   每 {{ formatInterval(task.interval_seconds) }}
                 </span>
@@ -157,7 +165,7 @@
                 </span>
                 <span v-if="validTimestamp(task.last_run_at)">
                   <History :size="13" aria-hidden="true" />
-                  最近执行 {{ formatTime(task.last_run_at) }}
+                  {{ task.kind === "event_trigger" ? "最近触发" : "最近执行" }} {{ formatTime(task.last_run_at) }}
                 </span>
                 <span v-if="validTimestamp(task.cancelled_at)">
                   <CircleX :size="13" aria-hidden="true" />
@@ -187,12 +195,23 @@
                   配置 Token
                 </button>
               </div>
+              <!-- 事件触发只能在聊天里创建，条件要从对话里理解出来；这里负责看和收。 -->
+              <div v-if="task.kind === 'event_trigger'" class="cluster">
+                <button v-if="task.status === 'active' || task.status === 'retrying'" class="btn small" type="button" :disabled="busyID === task.id" @click="cancelTrigger(task)">
+                  <CircleX :size="14" aria-hidden="true" />
+                  停止
+                </button>
+                <button class="btn small danger" type="button" :disabled="busyID === task.id" @click="removeTrigger(task)">
+                  <Trash2 :size="14" aria-hidden="true" />
+                  删除
+                </button>
+              </div>
             </div>
           </article>
         </div>
 
         <LoadingSkeleton v-else-if="initialLoading || loading" kind="tasks" :count="4" label="正在加载任务" />
-        <EmptyState v-else :title="tasks.length === 0 ? '还没有提醒或订阅' : '没有匹配的任务'" :hint="tasks.length === 0 ? '仓库订阅可在插件设置中创建，聊天中的提醒和周期查询也会显示在这里' : '调整类型、状态或搜索条件'">
+        <EmptyState v-else :title="tasks.length === 0 ? '还没有提醒或订阅' : '没有匹配的任务'" :hint="tasks.length === 0 ? '仓库订阅可在插件设置中创建，聊天中的提醒、事件触发和周期查询也会显示在这里' : '调整类型、状态或搜索条件'">
           <template #icon><CalendarClock :size="20" aria-hidden="true" /></template>
         </EmptyState>
       </section>
@@ -221,11 +240,15 @@ import {
   Rss,
   Search,
   SlidersHorizontal,
+  Trash2,
   TriangleAlert,
   UserRound,
-  UsersRound
+  UsersRound,
+  Zap
 } from "@lucide/vue";
 import {
+  cancelEventTrigger,
+  deleteEventTrigger,
   getAssistantTasks,
   getBotStatus,
   type AssistantTask,
@@ -235,7 +258,8 @@ import {
 } from "../api";
 import { formatClock, formatNumber, formatTime } from "../format";
 import { navigate } from "../router";
-import { toastError } from "../toast";
+import { askConfirm } from "../confirm";
+import { toastError, toastSuccess } from "../toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -249,6 +273,7 @@ type StatusFilter = "all" | AssistantTaskStatus;
 const kindOptions: Array<{ value: KindFilter; label: string }> = [
   { value: "all", label: "全部" },
   { value: "reminder", label: "一次性提醒" },
+  { value: "event_trigger", label: "事件触发" },
   { value: "schedule", label: "周期查询" },
   { value: "repository_watch", label: "仓库订阅" },
   { value: "rss_watch", label: "RSS 订阅" }
@@ -258,7 +283,8 @@ const statusOptions: Array<{ value: StatusFilter; label: string }> = [
   { value: "active", label: "运行中" },
   { value: "retrying", label: "重试中" },
   { value: "used", label: "已执行" },
-  { value: "cancelled", label: "已取消" }
+  { value: "cancelled", label: "已取消" },
+  { value: "expired", label: "已到期" }
 ];
 
 const tasks = ref<AssistantTask[]>([]);
@@ -278,6 +304,7 @@ let refreshTimer: number | undefined;
 const subagentTasks = ref<SubagentTask[]>([]);
 
 const reminderCount = computed(() => tasks.value.filter((task) => task.kind === "reminder").length);
+const eventTriggerCount = computed(() => tasks.value.filter((task) => task.kind === "event_trigger").length);
 const scheduleCount = computed(() => tasks.value.filter((task) => task.kind === "schedule").length);
 const repositoryWatchCount = computed(() => tasks.value.filter((task) => task.kind === "repository_watch").length);
 const rssWatchCount = computed(() => tasks.value.filter((task) => task.kind === "rss_watch").length);
@@ -286,7 +313,9 @@ const retryingCount = computed(() => tasks.value.filter((task) => task.status ==
 const quotaCount = computed(() => tasks.value.filter((task) => task.consumes_quota).length);
 const usedCount = computed(() => tasks.value.filter((task) => task.status === "used").length);
 const cancelledCount = computed(() => tasks.value.filter((task) => task.status === "cancelled").length);
-const finishedCount = computed(() => usedCount.value + cancelledCount.value);
+const expiredCount = computed(() => tasks.value.filter((task) => task.status === "expired").length);
+const finishedCount = computed(() => usedCount.value + cancelledCount.value + expiredCount.value);
+const busyID = ref("");
 
 function subagentPhaseLabel(phase: string): string {
   switch (phase) {
@@ -320,7 +349,7 @@ const filteredTasks = computed(() => {
     if (kind.value !== "all" && task.kind !== kind.value) return false;
     if (status.value !== "all" && task.status !== status.value) return false;
     if (!keyword) return true;
-    return [task.id, task.message, task.repository, task.repository_branch, task.feed_url, task.feed_handle, task.feed_judge_prompt, task.owner_id, task.user_id, task.group_id, task.platform, task.profile_id]
+    return [task.id, task.message, task.repository, task.repository_branch, task.feed_url, task.feed_handle, task.feed_judge_prompt, task.trigger, task.owner_id, task.user_id, task.group_id, task.platform, task.profile_id]
       .filter((value): value is string => Boolean(value))
       .some((value) => value.toLowerCase().includes(keyword));
   });
@@ -364,13 +393,14 @@ function stopPolling(): void {
 }
 
 function statusLabel(value: AssistantTaskStatus): string {
-  return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value;
+  return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消", expired: "已到期" }[value] ?? value;
 }
 
 function taskKindLabel(value: AssistantTaskKind): string {
   if (value === "repository_watch") return "仓库更新订阅";
   if (value === "rss_watch") return "RSS 条件订阅";
   if (value === "schedule") return "周期查询";
+  if (value === "event_trigger") return "事件触发";
   return "一次性提醒";
 }
 
@@ -403,6 +433,34 @@ function formatInterval(seconds: number): string {
   if (seconds % 3600 === 0) return `${seconds / 3600} 小时`;
   if (seconds % 60 === 0) return `${seconds / 60} 分钟`;
   return `${seconds} 秒`;
+}
+
+async function cancelTrigger(task: AssistantTask): Promise<void> {
+  if (!(await askConfirm({ title: "停止触发任务", message: `停止「${task.message}」这个触发任务？记录会保留。`, confirmLabel: "停止", danger: true }))) return;
+  busyID.value = task.id;
+  try {
+    await cancelEventTrigger(task.id);
+    toastSuccess("触发任务已停止");
+    await load();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "停止失败");
+  } finally {
+    busyID.value = "";
+  }
+}
+
+async function removeTrigger(task: AssistantTask): Promise<void> {
+  if (!(await askConfirm({ title: "删除触发任务", message: `永久删除「${task.message}」这个触发任务的记录？`, confirmLabel: "删除", danger: true }))) return;
+  busyID.value = task.id;
+  try {
+    await deleteEventTrigger(task.id);
+    toastSuccess("触发任务已删除");
+    await load();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "删除失败");
+  } finally {
+    busyID.value = "";
+  }
 }
 
 function showRepositorySettingsGuide(task: AssistantTask): boolean {

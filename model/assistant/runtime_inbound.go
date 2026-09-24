@@ -68,6 +68,10 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 			r.persistMessageEvent(event)
 			r.recordNoticeEvent(event)
 		}
+		if eventTriggerEventType(event) == eventTriggerEventMemberJoin && r.admitsNotice(r.effectiveConfigForEvent(event), event) {
+			_, muted := r.botMutedForReply(eventTriggerDeliveryEvent(event))
+			r.dispatchEventTriggers(ctx, event, "", !muted)
+		}
 		return r.handleNotice(ctx, event)
 	}
 	if event.Kind != EventKindGroup && event.Kind != EventKindPrivate {

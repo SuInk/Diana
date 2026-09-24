@@ -214,9 +214,15 @@ type botTaskPayload struct {
 	FeedSources         []rssWatchSourcePayload `json:"feed_sources,omitempty"`
 	LastFeedItemID      string                  `json:"last_feed_item_id,omitempty"`
 	LastFeedPublishedAt time.Time               `json:"last_feed_published_at,omitempty"`
-	CreatedAt           time.Time               `json:"created_at"`
-	ConsumesQuota       bool                    `json:"consumes_quota"`
-	NotificationEnabled bool                    `json:"notification_enabled,omitempty"`
+	// Trigger* 只在事件触发任务上有值：条件摘要、动作、已触发次数和到期时间。
+	Trigger             string    `json:"trigger,omitempty"`
+	TriggerAction       string    `json:"trigger_action,omitempty"`
+	TriggerRepeat       bool      `json:"trigger_repeat,omitempty"`
+	TriggerFireCount    int       `json:"trigger_fire_count,omitempty"`
+	TriggerExpiresAt    time.Time `json:"trigger_expires_at,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	ConsumesQuota       bool      `json:"consumes_quota"`
+	NotificationEnabled bool      `json:"notification_enabled,omitempty"`
 	// 响应必须和请求用同一个形状：存储层的 ReminderDeliveryTarget 只有 group_id/user_id，
 	// 没有 destination，直接回给前端会让编辑框读不出通知对象类型，一打开全是空行。
 	NotificationTargets []repositoryWatchTargetPayload `json:"notification_targets,omitempty"`
@@ -819,6 +825,51 @@ func (h *BotHandler) deleteRSSWatch(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// 事件触发任务只能在聊天里创建（条件要从对话里理解出来），WebUI 负责看和收。
+func (h *BotHandler) cancelEventTrigger(c *gin.Context) {
+	manager, ok := h.runtime.(eventTriggerRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "event_trigger_cancel", fmt.Errorf("event trigger runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindEventTrigger, "触发任务")
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "event_trigger_cancel", err, c.Param("id"), nil)
+		return
+	}
+	item, err := manager.CancelEventTrigger(ownerID, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "event_trigger_cancel", err, c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "event_trigger_cancel", "触发任务已取消", item.ID, nil)
+	c.JSON(http.StatusOK, botTaskFromReminder(item))
+}
+
+func (h *BotHandler) deleteEventTrigger(c *gin.Context) {
+	manager, ok := h.runtime.(eventTriggerRuntime)
+	if !ok {
+		h.writeError(c, http.StatusServiceUnavailable, "event_trigger_delete", fmt.Errorf("event trigger runtime is unavailable"), c.Param("id"), nil)
+		return
+	}
+	ownerID, err := h.taskOwner(c.Param("id"), assistant.ReminderKindEventTrigger, "触发任务")
+	if err != nil {
+		h.writeError(c, http.StatusNotFound, "event_trigger_delete", err, c.Param("id"), nil)
+		return
+	}
+	removed, err := manager.DeleteEventTrigger(ownerID, c.Param("id"))
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "event_trigger_delete", err, c.Param("id"), nil)
+		return
+	}
+	if !removed {
+		h.writeError(c, http.StatusNotFound, "event_trigger_delete", fmt.Errorf("触发任务不存在"), c.Param("id"), nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "event_trigger_delete", "触发任务已删除", c.Param("id"), nil)
+	c.Status(http.StatusNoContent)
+}
+
 func firstNonEmptyWeb(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -863,6 +914,18 @@ func (h *BotHandler) taskOwner(id string, kind assistant.ReminderKind, label str
 }
 
 func botTaskFromReminder(item assistant.Reminder) botTaskPayload {
+	payload := botTaskPayloadFromReminder(item)
+	if spec, ok := assistant.EventTriggerSpec(item); ok {
+		payload.Trigger = assistant.EventTriggerSummary(item)
+		payload.TriggerAction = spec.Action
+		payload.TriggerRepeat = spec.Repeat
+		payload.TriggerFireCount = spec.FireCount
+		payload.TriggerExpiresAt = spec.ExpiresAt
+	}
+	return payload
+}
+
+func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 	return botTaskPayload{
 		ID: item.ID, Kind: botTaskKind(item), Platform: item.Platform, ProfileID: item.ProfileID,
 		OwnerID: item.OwnerID, GroupID: item.GroupID, UserID: item.UserID, Message: item.Message,
@@ -940,6 +1003,10 @@ func repositoryWatchTargetsFromPayload(values []repositoryWatchTargetPayload, pr
 }
 
 func botTaskKind(item assistant.Reminder) string {
+	// 事件触发任务没有触发时间，落到默认分支会被当成一次性提醒，列表上显示成「已使用」的空提醒。
+	if item.Kind == assistant.ReminderKindEventTrigger {
+		return string(assistant.ReminderKindEventTrigger)
+	}
 	if item.Kind == assistant.ReminderKindRSSWatch && item.IntervalSeconds > 0 {
 		return "rss_watch"
 	}
@@ -953,6 +1020,9 @@ func botTaskKind(item assistant.Reminder) string {
 }
 
 func botTaskStatus(item assistant.Reminder) string {
+	if item.Kind == assistant.ReminderKindEventTrigger {
+		return assistant.EventTriggerStatus(item)
+	}
 	if !item.CancelledAt.IsZero() {
 		return "cancelled"
 	}
@@ -969,6 +1039,9 @@ func botTaskStatus(item assistant.Reminder) string {
 }
 
 func taskConsumesQuota(item assistant.Reminder) bool {
+	if item.Kind == assistant.ReminderKindEventTrigger {
+		return assistant.EventTriggerConsumesQuota(item)
+	}
 	if item.Kind == assistant.ReminderKindRepositoryWatch {
 		return false
 	}

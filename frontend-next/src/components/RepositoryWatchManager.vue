@@ -570,7 +570,7 @@ async function remove(task: AssistantTask): Promise<void> {
   finally { busyID.value = ""; }
 }
 
-function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消" }[value] ?? value; }
+function statusLabel(value: AssistantTaskStatus): string { return { active: "运行中", retrying: "重试中", used: "已执行", cancelled: "已取消", expired: "已到期" }[value] ?? value; }
 function statusTone(value: AssistantTaskStatus): string { return value === "active" ? "ok" : value === "retrying" ? "warn" : value === "cancelled" ? "err" : ""; }
 function watchScopeLabel(task: AssistantTask): string { return [task.watch_commits ? "Commit" : "", task.watch_pull_requests ? "PR" : "", task.watch_issues ? "Issue" : "", task.watch_releases ? "Release" : "", task.watch_stars ? "Star" : ""].filter(Boolean).join(" + "); }
 function parseStarMilestones(value: string): number[] { return [...new Set(value.split(/[\s,，;；]+/).map(Number).filter((item) => Number.isInteger(item) && item >= 1 && item <= 1000000))].sort((a, b) => a - b); }

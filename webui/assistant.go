@@ -74,6 +74,11 @@ type repositoryWatchRuntime interface {
 	RunRepositoryWatchNow(string, string) (assistant.Reminder, error)
 }
 
+type eventTriggerRuntime interface {
+	CancelEventTrigger(string, string) (assistant.Reminder, error)
+	DeleteEventTrigger(string, string) (bool, error)
+}
+
 type historyBackfillRuntime interface {
 	RequestHistoryBackfill(time.Duration) error
 }
@@ -347,6 +352,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.PUT(base+"/tasks/rss-watches/:id", h.updateRSSWatch)
 	router.POST(base+"/tasks/rss-watches/:id/cancel", h.cancelRSSWatch)
 	router.DELETE(base+"/tasks/rss-watches/:id", h.deleteRSSWatch)
+	router.POST(base+"/tasks/event-triggers/:id/cancel", h.cancelEventTrigger)
+	router.DELETE(base+"/tasks/event-triggers/:id", h.deleteEventTrigger)
 	router.POST(base+"/start", h.start)
 	router.POST(base+"/stop", h.stop)
 	router.POST(base+"/backfill", h.requestBackfill)

@@ -28,15 +28,17 @@ type dianaTasksResult struct {
 }
 
 type dianaTask struct {
-	ID                    string    `json:"id"`
-	Kind                  string    `json:"kind"`
-	OwnerID               string    `json:"owner_id"`
-	GroupID               string    `json:"group_id,omitempty"`
-	UserID                string    `json:"user_id,omitempty"`
-	Message               string    `json:"message"`
-	Status                string    `json:"status"`
-	TriggerAt             time.Time `json:"trigger_at"`
-	Interval              string    `json:"interval,omitempty"`
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	OwnerID   string    `json:"owner_id"`
+	GroupID   string    `json:"group_id,omitempty"`
+	UserID    string    `json:"user_id,omitempty"`
+	Message   string    `json:"message"`
+	Status    string    `json:"status"`
+	TriggerAt time.Time `json:"trigger_at"`
+	Interval  string    `json:"interval,omitempty"`
+	// Trigger 是事件触发任务的条件摘要，其他种类为空。
+	Trigger               string    `json:"trigger,omitempty"`
 	LastRunAt             time.Time `json:"last_run_at,omitempty"`
 	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
 	LastError             string    `json:"last_error,omitempty"`
@@ -80,7 +82,7 @@ func (t *dianaTasksTool) Name() string {
 }
 
 func (t *dianaTasksTool) Description() string {
-	return `一次查询持久化存储中的全部一次性提醒和周期订阅，含运行中、已使用、已取消状态以及是否占用额度。用户问「我的所有任务/提醒/订阅」「现在有哪些定时任务」时必须使用本工具，不要分别猜测。`
+	return `一次查询持久化存储中的全部一次性提醒、事件触发任务和周期订阅，含运行中、已使用、已取消状态以及是否占用额度。用户问「我的所有任务/提醒/订阅」「现在有哪些定时任务」时必须使用本工具，不要分别猜测。`
 }
 
 func (t *dianaTasksTool) InputSchema() map[string]any {
@@ -184,7 +186,13 @@ func taskForTool(item Reminder) dianaTask {
 	status := reminderStatus(item)
 	consumesQuota := item.LastRunAt.IsZero() && item.CancelledAt.IsZero()
 	interval := ""
-	if reminderIsRecurring(item) {
+	trigger := ""
+	if spec, ok := EventTriggerSpec(item); ok {
+		kind = string(ReminderKindEventTrigger)
+		status = eventTriggerStatus(item, spec)
+		consumesQuota = eventTriggerArmed(item, spec, time.Now())
+		trigger = eventTriggerSummary(item, spec)
+	} else if reminderIsRecurring(item) {
 		kind = "schedule"
 		if reminderIsRepositoryWatch(item) {
 			kind = "repository_watch"
@@ -208,6 +216,7 @@ func taskForTool(item Reminder) dianaTask {
 		Status:                status,
 		TriggerAt:             item.TriggerAt,
 		Interval:              interval,
+		Trigger:               trigger,
 		LastRunAt:             item.LastRunAt,
 		CancelledAt:           item.CancelledAt,
 		LastError:             item.LastError,

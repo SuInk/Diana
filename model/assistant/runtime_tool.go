@@ -643,6 +643,10 @@ func (r *Runtime) renderReminders(event MessageEvent) string {
 	})
 	lines := []string{"提醒列表："}
 	for _, item := range items {
+		if spec, ok := EventTriggerSpec(item); ok {
+			lines = append(lines, fmt.Sprintf("- %s | %s | %s | %s", item.ID, eventTriggerStatusLabel(eventTriggerStatus(item, spec)), eventTriggerSummary(item, spec), item.Message))
+			continue
+		}
 		state := "待执行"
 		if !item.CancelledAt.IsZero() {
 			state = "已取消"
@@ -777,6 +781,7 @@ func (r *Runtime) runReminderLoop(ctx context.Context) {
 // dispatchDueReminders claims due items and lets each one run independently so
 // a slow LLM query cannot stall later reminders or polling ticks.
 func (r *Runtime) dispatchDueReminders(ctx context.Context) {
+	r.expireEventTriggers(ctx, time.Now())
 	for _, item := range r.claimDueReminders(time.Now()) {
 		item := item
 		go func() {
@@ -808,6 +813,11 @@ func (r *Runtime) claimDueReminders(now time.Time) []Reminder {
 	due := make([]Reminder, 0, len(items))
 	for _, item := range items {
 		if !item.CancelledAt.IsZero() {
+			continue
+		}
+		// 事件触发任务没有触发时间（TriggerAt 为零），按时间认领的话它每秒都「到期」，
+		// 会被当成一次性提醒发出去。它由入站事件点燃，见 dispatchEventTriggers。
+		if reminderIsEventTrigger(item) {
 			continue
 		}
 		// 机器人关掉之后它的提醒和订阅不该继续跑：抓回来也发不出去，只会每隔几分钟

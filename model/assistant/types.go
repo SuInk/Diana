@@ -290,6 +290,9 @@ const (
 	ReminderKindQuery           ReminderKind = "query"
 	ReminderKindRepositoryWatch ReminderKind = "repository_watch"
 	ReminderKindRSSWatch        ReminderKind = "rss_watch"
+	// ReminderKindEventTrigger 不按时间触发，由入站事件点燃，见 event_trigger.go。
+	// 它的 TriggerAt 恒为零，定时轮询必须跳过它。
+	ReminderKindEventTrigger ReminderKind = "event_trigger"
 )
 
 type Reminder struct {
@@ -361,8 +364,11 @@ type Reminder struct {
 	// FeedSourcesJSON 保存一条订阅盯着的全部来源：同一套判断规则可以一次管好几个
 	// Twitter 账号或几个 Feed。上面的单来源字段跟着第一个来源走，老记录和只认单
 	// 来源的读取方仍然读得到东西。
-	FeedSourcesJSON string    `json:"feed_sources,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	FeedSourcesJSON string `json:"feed_sources,omitempty"`
+	// EventTriggerJSON 是事件触发任务的条件和动作（EventTrigger），只对
+	// ReminderKindEventTrigger 有意义。
+	EventTriggerJSON string    `json:"event_trigger,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // ReminderDeliveryTarget is an additional destination for recurring watch

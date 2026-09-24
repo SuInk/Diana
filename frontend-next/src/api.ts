@@ -3220,12 +3220,12 @@ export function restoreNotebookEntry(scope: string, term: string): Promise<Noteb
   });
 }
 
-export type AssistantTaskKind = "reminder" | "schedule" | "repository_watch" | "rss_watch";
+export type AssistantTaskKind = "reminder" | "event_trigger" | "schedule" | "repository_watch" | "rss_watch";
 // 空数组表示「全部种类都要」——后端也是这么存的，别把空当成「一条都不要」。
 export type RepositoryWatchPullEvent = "opened" | "updated" | "closed" | "merged";
 export type RepositoryWatchIssueEvent = "opened" | "updated" | "closed" | "reopened";
 export type RepositoryWatchReleaseKind = "stable" | "prerelease";
-export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled";
+export type AssistantTaskStatus = "active" | "retrying" | "used" | "cancelled" | "expired";
 
 export interface AssistantTask {
   id: string;
@@ -3273,6 +3273,12 @@ export interface AssistantTask {
   feed_judge_prompt?: string;
   last_feed_item_id?: string;
   last_feed_published_at?: string;
+  // 只在事件触发任务上有值。
+  trigger?: string;
+  trigger_action?: "message" | "agent";
+  trigger_repeat?: boolean;
+  trigger_fire_count?: number;
+  trigger_expires_at?: string;
   created_at: string;
   consumes_quota: boolean;
 }
@@ -3378,6 +3384,14 @@ export function cancelRSSWatch(id: string): Promise<AssistantTask> {
 
 export function deleteRSSWatch(id: string): Promise<void> {
   return requestJSON<void>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function cancelEventTrigger(id: string): Promise<AssistantTask> {
+  return requestJSON<AssistantTask>(`/api/assistant/tasks/event-triggers/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+}
+
+export function deleteEventTrigger(id: string): Promise<void> {
+  return requestJSON<void>(`/api/assistant/tasks/event-triggers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function getHealth(): Promise<HealthResponse> {

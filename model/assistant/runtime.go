@@ -1770,6 +1770,10 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 			return event, text, false, "ignored_model_quota"
 		}
 	}
+	// 事件触发任务在这里匹配：群准入、屏蔽和额度都已经过了，而回复判断还没开始——
+	// 触发看的是「发生了什么」，不管机器人这一轮自己回不回。被禁言时只跳过要发回
+	// 本群的任务，发回设置处的照常执行。
+	r.dispatchEventTriggers(ctx, event, text, event.mutedJudgeOnly == "")
 	// 已授权的本地重置无需走语义路由，也不能被积压消息合并吞掉。
 	if r.isOwnerContextResetCommand(event, text) && r.admits(r.effectiveConfigForEvent(event), event) {
 		return event, text, true, "replied"
@@ -3739,6 +3743,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				newDianaBotParticipationTool(r, event),
 				newDianaReplyBlockTool(r, event),
 				newDianaReminderTool(r, event),
+				newDianaEventTriggerTool(r, event),
 				newDianaRenderTool(r, event),
 				// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
 				// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
@@ -7715,6 +7720,9 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 		id := strings.TrimSpace(strings.TrimPrefix(command, "提醒 取消 "))
 		_, err := r.cancelOneTimeReminder(event.UserID, id)
 		if err != nil {
+			if _, triggerErr := r.cancelEventTrigger(event.UserID, id); triggerErr == nil {
+				return "触发任务已取消并释放额度，记录仍保留。", true
+			}
 			return "取消提醒失败：" + err.Error(), true
 		}
 		return "提醒已取消并释放额度，记录仍保留。", true
