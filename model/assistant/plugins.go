@@ -1416,7 +1416,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.3.7",
+		Version:     "0.3.8",
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频，并展开 X 站内长文正文。",
 		Official:    true,
 		BuiltIn:     true,

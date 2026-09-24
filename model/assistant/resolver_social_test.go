@@ -227,3 +227,31 @@ func TestBilibiliResolverResourceKeyUsesAPIBVID(t *testing.T) {
 func failingDouyinDetailFetcher(context.Context, string) (douyinMediaDetail, bool, string) {
 	return douyinMediaDetail{}, false, "request_failed"
 }
+
+// 失败提示不能挂上资源键：挂上了，这条提示一发出去就占住该链接十分钟的去重窗口，
+// 换好 Cookie 立刻重发时成功的结果会被当成重复吞掉（2026-09-25 生产上的小红书就是这样）。
+func TestResolverFailuresDoNotClaimDedupeKeys(t *testing.T) {
+	for _, env := range []string{"DIANA_DOUYIN_CK", "DOUYIN_CK", "douyin_ck", "DIANA_XHS_CK", "XHS_CK", "xhs_ck"} {
+		t.Setenv(env, "")
+	}
+	plugin := NewResolverPlugin(nil)
+	plugin.douyinDetailFetcher = failingDouyinDetailFetcher
+	for _, link := range []string{
+		"https://www.douyin.com/video/1234567890",
+		"https://www.xiaohongshu.com/discovery/item/6aae0fad0000000012034e00",
+	} {
+		resp, err := plugin.Handle(context.Background(), PluginRequest{
+			Text:     link,
+			Settings: SettingValues{resolverSettingDownloadMedia: true},
+		})
+		if err != nil {
+			t.Fatalf("Handle(%s) error = %v", link, err)
+		}
+		if resp == nil || len(resp.ForwardMessages) == 0 {
+			t.Fatalf("Handle(%s) should still tell the group why it failed: %#v", link, resp)
+		}
+		if len(resp.ResolverResourceKeys) != 0 {
+			t.Fatalf("Handle(%s) failure claimed dedupe keys %v", link, resp.ResolverResourceKeys)
+		}
+	}
+}
