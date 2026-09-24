@@ -1112,7 +1112,7 @@ func (r *Runner) systemPrompt() string {
 		if hasTool(webSearchToolName) {
 			prefix = "- 用浏览器搜索"
 		}
-		rules = append(rules, prefix+"：用 "+browserSearchTool+" 打开搜索引擎的结果页，查询词做 URL 编码，优先 https://www.bing.com/search?q=查询词，结果不好再换 https://html.duckduckgo.com/html/?q=查询词 或 https://www.baidu.com/s?wd=查询词；不要用 Google，它会拦自动化访问。结果页只有标题和摘要，关键事实要再打开一两个来源页面核实，最终回答附上实际打开过的来源链接。一次搜不到先换关键词或换引擎，不要因为一页结果为空就断言不存在。")
+		rules = append(rules, prefix+"：用 "+browserSearchTool+" 打开搜索引擎的结果页，查询词做 URL 编码，优先 https://www.google.com/search?q=查询词；落到人机验证页（Google 的 /sorry/、「异常流量」、DuckDuckGo 的 challenge）就换下一家：https://www.bing.com/search?q=查询词、https://duckduckgo.com/?q=查询词（不要用 html.duckduckgo.com，它每次都弹验证）、https://www.baidu.com/s?wd=查询词，不要试图通过验证。结果页只有标题和摘要，关键事实要再打开一两个来源页面核实，最终回答附上实际打开过的来源链接。一次搜不到先换关键词或换引擎，不要因为一页结果为空就断言不存在。")
 	}
 	if hasTool("browser_render") {
 		rules = append(rules, "- 需要读取或渲染网页时优先使用 browser_render；普通页面在一次性沙盒浏览器中运行，GitHub Release 地址优先读取官方 API，不使用用户浏览器登录态。查询 GitHub 最新版本时读取 /owner/repo/releases/latest；核验用户给出的版本时读取 /owner/repo/releases/tag/<tag>，不能以精确 site: 搜索为空替代核验。浏览器失败不等于站点拦截，更不等于版本不存在；来源查询时间与发布时间必须分开。")

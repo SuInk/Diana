@@ -1121,7 +1121,7 @@ func TestRunnerMarksCacheBreakpointsAroundVolatilePrefix(t *testing.T) {
 func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingTool{name: "browser_render"})}
 	prompt := runner.systemPrompt()
-	for _, want := range []string{"没有 web_search 时", "用 browser_render 打开搜索引擎的结果页", "https://www.bing.com/search?q="} {
+	for _, want := range []string{"没有 web_search 时", "用 browser_render 打开搜索引擎的结果页", "https://www.google.com/search?q=", "https://www.bing.com/search?q=", "换下一家"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
