@@ -42,6 +42,12 @@ seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；�
 
 本地 HTML 截图与外部网页读取走不同启动路径，因此截图成功不代表网页沙箱可用；依赖页现已分别验证两者。所有渲染使用临时浏览器配置，不读取用户日常浏览器登录态。
 
+## 隔离、并发与超时
+
+- **每次一份临时 profile。** 网页读取（`browser_render`）和 HTML 截图每次都起一个新的 Chrome 进程，profile 建在系统临时目录下、权限 0700、用完即删。两次调用之间、两个群之间、和主人的内置浏览器之间都不共用 Cookie 或登录态，群成员触发也碰不到主人的账号。
+- **同时最多 3 个。** 一次性浏览器每个都是一整个 Chrome 进程，网页读取和截图共用这份名额。满了就排队，最多等 20 秒，排不上交回「同时运行的一次性浏览器已达上限」，不会无限堆进程拖垮机器。排队时间不算进渲染超时。内存宽裕的机器可以用环境变量 `DIANA_HEADLESS_BROWSER_MAX_CONCURRENT` 调高（上限 16）。
+- **渲染有硬超时。** 默认 25 秒（`DIANA_HEADLESS_BROWSER_TIMEOUT_MS`，最多 60 秒）；到期收尾时拿已经抓到的内容，一点内容都没有就报错，浏览器进程随即结束。调用方取消时进程同样立即结束。
+
 ## seccomp 配置来源
 
 `scripts/docker/chromium-seccomp.json` 基于 [Moby profiles 默认 seccomp](https://github.com/moby/profiles/blob/245180c51918481c0525424b3ee025d2b435d46c/seccomp/default.json)，上游提交 `245180c51918481c0525424b3ee025d2b435d46c`。修改仅为末尾增加上述三个调用的允许规则；`clone3` 继续沿用上游限制。原始 Apache-2.0 许可保存在 `scripts/docker/LICENSE.moby-profiles`。更新上游基线时须保留许可证并重新测试 Linux amd64/arm64 沙箱启动。

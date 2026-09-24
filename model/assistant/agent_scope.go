@@ -371,7 +371,14 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		BrowserControl:             r.browserControlFor(cfg),
 		BuiltinBrowser:             r.browserBoxFor(cfg),
 		BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
+		BrowserSessionKey:          browserSessionKey(cfg, event),
 	}, extensionManagement)
+}
+
+// browserSessionKey 让同一个对话前后几轮接着用同一个标签页，不同的群、不同的私聊各用
+// 各的：主人在两个群里同时让机器人开网页，两边不会抢同一页。
+func browserSessionKey(cfg BotConfig, event MessageEvent) string {
+	return cfg.ID + "\x00" + sessionKey(event)
 }
 
 // withOwnerAgentLimits 给主人的 Agent 放宽到上限：步数用满 agent.MaxAllowedSteps，

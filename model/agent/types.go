@@ -115,7 +115,11 @@ type Config struct {
 	// BuiltinBrowser 是内置浏览器（model/browserbox）的句柄，同样由运行时注入。
 	// 它在时 browser_* 那组 CDP 工具就接到 Diana 自己那个常驻浏览器上，带着
 	// 用户在里面建立的登录态；不在时沿用 BrowserCDPURL 指的外部浏览器。
-	BuiltinBrowser        BuiltinBrowserBridge `json:"-"`
+	BuiltinBrowser BuiltinBrowserBridge `json:"-"`
+	// BrowserSessionKey 认出「同一个对话」：同一个键的前后几轮共用当前标签页，不同的
+	// 键各用各的标签页。运行时按机器人加群或私聊对象拼出来；留空时只在这一张工具表里
+	// 记当前页。
+	BrowserSessionKey     string `json:"-"`
 	ToolTimeoutMS         int
 	FinalizationReserveMS int
 	ProtocolRepairLimit   int

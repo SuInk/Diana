@@ -395,7 +395,8 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
 		maxChars: cfg.MaxToolOutputChars,
-		session:  &browserSession{},
+		session:  browserTabs.session(cfg.BrowserSessionKey),
+		tabs:     browserTabs,
 	}
 	r.Register(&BrowserOpenTool{base: base})
 	r.Register(&BrowserTextTool{base: base})
