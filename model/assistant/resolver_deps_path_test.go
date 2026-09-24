@@ -113,11 +113,18 @@ func TestProbeResolverCommandRequiresTheCommandToRun(t *testing.T) {
 	}
 
 	working := "diana-working-dep"
-	if err := os.WriteFile(filepath.Join(homeBin, working), []byte("#!/bin/sh\necho 1.2.3\n"), 0o755); err != nil {
+	workingPath := filepath.Join(homeBin, working)
+	if err := os.WriteFile(workingPath, []byte("#!/bin/sh\necho 1.2.3\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// macOS 首次执行新写出的文件时，内核会等 Gatekeeper 扫描完才放行，扫描里
+	// 还有一次超时 3 秒的在线公证查询。网络一抖就正好撞上探测的 3 秒上限，
+	// 测试便以 3.01s 失败。先不设时限跑一次，把扫描挪出探测的计时窗口。
+	if err := exec.Command(workingPath).Run(); err != nil {
+		t.Fatalf("precondition: script should run: %v", err)
+	}
 	path, version, ok := probeResolverCommand(working, []string{"--version"})
-	if !ok || version != "1.2.3" || path != filepath.Join(homeBin, working) {
+	if !ok || version != "1.2.3" || path != workingPath {
 		t.Fatalf("probeResolverCommand() = (%q, %q, %t)", path, version, ok)
 	}
 }
