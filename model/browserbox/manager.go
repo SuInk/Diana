@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -516,11 +517,27 @@ func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings,
 		}
 	}
 	clearSingletonLocks(profileDir)
+	tmpDir, err := shortTempDir()
+	if err != nil {
+		return fmt.Errorf("建浏览器临时目录失败：%w", err)
+	}
+	// 进程起来之后由 waitProcess 那条 goroutine 在它退出时收掉；起不来就在这里收。
+	keepTmp := false
+	defer func() {
+		if !keepTmp {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
 	args := agent.PersistentBrowserArgs(profileDir, cacheDir, crashDir,
 		!settings.Headful, 0, settings.WindowWidth, settings.WindowHeight)
 	cmd := exec.Command(executable, args...)
 	cmd.Dir = dir
+	// TMPDIR 不能跟着 dir 走：Chrome 在 TMPDIR 下建单实例用的 Unix 套接字，路径上限
+	// 108 字节（macOS 104），而 dir 是「数据目录/browser-box/profiles/<机器人 UUID>」，
+	// 容器里光这一段就七十多字节，再拼上 org.chromium.Chromium.XXXXXX/SingletonSocket
+	// 就超了，Chrome 报「Socket path too long」直接退出。后写的同名变量覆盖前面的。
 	cmd.Env = append(agent.BrowserLaunchEnvironment(os.Environ(), dir), display.Env()...)
+	cmd.Env = append(cmd.Env, "TMPDIR="+tmpDir)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("读浏览器输出失败：%w", err)
@@ -539,8 +556,11 @@ func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings,
 	// 关在整个函数末尾的话，下面那个「进程自己退了就别再等满超时」的分支永远轮不到，
 	// 每一次起不来都要白等 30 秒。
 	exited := make(chan struct{})
+	keepTmp = true
 	go func() {
 		defer recoverGoroutinePanic("waitProcess")
+		// 放在 recover 之后注册，先执行：进程没了临时目录就该走，panic 也一样。
+		defer os.RemoveAll(tmpDir)
 		m.waitProcess(inst, cmd, generation, diagnostics, exited)
 	}()
 
@@ -692,6 +712,19 @@ func clearSingletonLocks(profileDir string) {
 	for _, name := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
 		_ = os.Remove(filepath.Join(profileDir, name))
 	}
+}
+
+// shortTempDir 给浏览器建一个路径足够短的临时目录，理由见 launch 里 TMPDIR 那段。
+// 类 Unix 系统优先用 /tmp：os.TempDir() 在 macOS 上是 /var/folders/... 下一长串，
+// 本身就吃掉一半预算。
+func shortTempDir() (string, error) {
+	root := os.TempDir()
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat("/tmp"); err == nil && info.IsDir() {
+			root = "/tmp"
+		}
+	}
+	return os.MkdirTemp(root, "dbx-")
 }
 
 // diagnosticTail 留着浏览器最后几行输出，启动失败时把原因带出去。
