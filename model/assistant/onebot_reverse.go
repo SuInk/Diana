@@ -252,7 +252,7 @@ func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params
 	conn := s.conn
 	s.connMu.RUnlock()
 	if conn == nil {
-		return nil, errors.New("diana: onebot reverse websocket is not connected")
+		return nil, newChannelNotConnectedError("diana: onebot reverse websocket is not connected")
 	}
 
 	echo := time.Now().Format("20060102150405.000000000")
