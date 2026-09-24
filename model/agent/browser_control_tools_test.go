@@ -137,7 +137,7 @@ func TestBrowserToolsDisabledSkipsCDPTools(t *testing.T) {
 		t.Fatalf("创建注册表失败：%v", err)
 	}
 	t.Cleanup(func() { _ = registry.Close() })
-	for _, name := range []string{"browser_open", "browser_text", "browser_click", "browser_type", "browser_screenshot"} {
+	for _, name := range InteractiveBrowserToolNames {
 		if _, ok := registry.Get(name); ok {
 			t.Fatalf("BrowserToolsDisabled 时不该登记 %s", name)
 		}

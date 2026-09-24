@@ -12,12 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/gin-gonic/gin"
 )
 
 // interactiveBrowserTools 是接上 CDP 后模型能用的那几个工具，按扩展页展示的顺序列出。
-var interactiveBrowserTools = []string{"browser_open", "browser_text", "browser_click", "browser_type", "browser_screenshot"}
+var interactiveBrowserTools = agent.InteractiveBrowserToolNames
 
 type agentBrowserPayload struct {
 	ProfileID string `json:"profile_id"`

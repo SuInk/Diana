@@ -49,7 +49,7 @@ func TestBrowserBoxToolsStayOwnerOnly(t *testing.T) {
 	if allowed == nil {
 		t.Fatal("非主人应当拿到一份显式白名单")
 	}
-	for _, name := range []string{"browser_open", "browser_text", "browser_click", "browser_type", "browser_screenshot"} {
+	for _, name := range agent.InteractiveBrowserToolNames {
 		if allowed[name] {
 			t.Fatalf("%s 不该开给非主人：它连的是带登录态的常驻浏览器", name)
 		}

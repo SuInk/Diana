@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -14,9 +15,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
+	"github.com/SuInk/diana/model/llm"
 	"github.com/gorilla/websocket"
 )
 
@@ -33,16 +37,64 @@ type BuiltinBrowserBridge interface {
 	Endpoint(ctx context.Context) (string, error)
 }
 
+// BuiltinBrowserURLPolicy 是内置浏览器可选实现的站点边界：用户在「浏览器」页填的
+// denied_hosts。以前只有 WebUI 实时画面那一侧认它，机器人用 browser_open 照样打得开。
+type BuiltinBrowserURLPolicy interface {
+	AllowsURL(rawURL string) bool
+}
+
 type browserToolBase struct {
 	root     string
 	cdpURL   string
 	builtin  BuiltinBrowserBridge
 	timeout  time.Duration
 	maxChars int
+	// session 由同一张工具表里的浏览器工具共用，记着模型正在操作哪个标签页。
+	// 没有它的话每个工具各挑各的页：browser_open 刚打开的页，browser_text 可能读
+	// 的是另一个标签页。
+	session *browserSession
+}
+
+// browserSession 记住当前操作的标签页。
+type browserSession struct {
+	mu       sync.Mutex
+	targetID string
+}
+
+func (s *browserSession) active() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.targetID
+}
+
+func (s *browserSession) setActive(id string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.targetID = strings.TrimSpace(id)
+	s.mu.Unlock()
 }
 
 // endpoint 决定这次调用连哪个浏览器。内置浏览器可用时优先用它：它是 Diana
 // 自己的浏览器，登录态留在数据目录里，比一个可能根本没开的外部调试端口有用。
+// checkURL 在机器人主动打开一个地址之前过一遍用户设的站点黑名单。
+func (b browserToolBase) checkURL(pageURL string) error {
+	if err := validateBrowserURL(pageURL); err != nil {
+		return err
+	}
+	if pageURL == "about:blank" {
+		return nil
+	}
+	if policy, ok := b.builtin.(BuiltinBrowserURLPolicy); ok && !policy.AllowsURL(pageURL) {
+		return fmt.Errorf("%s 在内置浏览器的禁止名单里，不能打开", pageURL)
+	}
+	return nil
+}
+
 func (b browserToolBase) endpoint(ctx context.Context) (string, error) {
 	if b.builtin != nil {
 		url, err := b.builtin.Endpoint(ctx)
@@ -68,6 +120,8 @@ func (t *BrowserOpenTool) Name() string {
 	return "browser_open"
 }
 
+func (t *BrowserOpenTool) RepeatableCalls() bool { return true }
+
 func (t *BrowserOpenTool) Description() string {
 	return `通过 Chrome DevTools Protocol 打开网页。需要 Chrome 启用 remote debugging。`
 }
@@ -81,20 +135,29 @@ func (t *BrowserOpenTool) InputSchema() map[string]any {
 
 func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	pageURL := stringFromInput(input, "url")
-	if err := validateBrowserURL(pageURL); err != nil {
+	if err := t.base.checkURL(pageURL); err != nil {
 		return "", err
 	}
-	newTab := boolFromInput(input, "new_tab", true)
-	client, err := t.base.pageClient(ctx, pageURL, newTab)
+	// 默认沿用当前标签页，和参数说明一致；以前默认开新页，常驻浏览器里的标签页
+	// 越攒越多。
+	newTab := boolFromInput(input, "new_tab", false)
+	var client *cdpClient
+	var err error
+	if newTab {
+		client, err = t.base.pageClient(ctx, pageURL, true)
+	} else {
+		client, err = t.base.pageClient(ctx, "", false)
+		if err == nil {
+			err = client.navigate(ctx, pageURL)
+			if err != nil {
+				client.Close()
+			}
+		}
+	}
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
-	if !newTab {
-		if err := client.call(ctx, "Page.navigate", map[string]any{"url": pageURL}, nil); err != nil {
-			return "", err
-		}
-	}
 	// 新开标签页时 /json/new 立刻就返回了，页面还停在 about:blank：这时候直接读
 	// 会得到一份空快照，而模型会把它当成「这一页就是空的」。等到真的跳过去为止。
 	if pageURL != "" && pageURL != "about:blank" {
@@ -116,6 +179,9 @@ func (t *BrowserTextTool) Name() string {
 func (t *BrowserTextTool) Description() string {
 	return `读取当前浏览器页面文本。`
 }
+
+// RepeatableCalls：页面会变，隔一步再读一次同一页不是原地打转。
+func (t *BrowserTextTool) RepeatableCalls() bool { return true }
 
 func (t *BrowserTextTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
@@ -141,37 +207,92 @@ func (t *BrowserClickTool) Name() string {
 }
 
 func (t *BrowserClickTool) Description() string {
-	return `点击当前页面中的元素。`
+	return `点击当前页面中的元素：给 selector 点元素，或给 x/y 点截图上的那个坐标（视口像素）。走真实鼠标事件。`
 }
 
 func (t *BrowserClickTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"selector"}, map[string]any{
-		"selector": toolStringParam("要点击元素的 CSS 选择器"),
+	return toolObjectSchema(nil, map[string]any{
+		"selector":    toolStringParam("要点击元素的 CSS 选择器"),
+		"x":           toolNumberParam("按坐标点击时的横坐标（视口 CSS 像素，和 browser_screenshot 的图一致）"),
+		"y":           toolNumberParam("按坐标点击时的纵坐标"),
+		"button":      toolEnumParam("鼠标键，默认 left", "left", "right", "middle"),
+		"click_count": toolIntParam("连击次数，双击填 2"),
 	})
 }
 
+// RepeatableCalls 见 RepeatableTool：同一个「下一页」按钮连点两次是正常操作。
+func (t *BrowserClickTool) RepeatableCalls() bool { return true }
+
 func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	selector := stringFromInput(input, "selector")
-	if selector == "" {
-		return "", errors.New("selector is required")
+	x, hasX := numberFromInput(input, "x")
+	y, hasY := numberFromInput(input, "y")
+	if selector == "" && !(hasX && hasY) {
+		return "", errors.New("selector or x/y is required")
+	}
+	button := strings.ToLower(stringFromInput(input, "button"))
+	switch button {
+	case "":
+		button = "left"
+	case "left", "right", "middle":
+	default:
+		return "", fmt.Errorf("unsupported button %q", button)
+	}
+	clicks := intFromInput(input, "click_count", 1)
+	if clicks < 1 || clicks > 3 {
+		clicks = 1
 	}
 	client, err := t.base.pageClient(ctx, "", false)
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
-	expr := fmt.Sprintf(`(() => {
+	if selector != "" {
+		// 先滚到视口中间再取坐标。点击点被别的元素盖住（弹层、吸顶栏）时真实点击
+		// 会落到盖着的那个元素上，这种情况退回 el.click()，保证点到的是要点的元素。
+		expr := fmt.Sprintf(`(() => {
 const el = document.querySelector(%s);
 if (!el) return {ok:false, error:"selector not found"};
 el.scrollIntoView({block:"center", inline:"center"});
-el.click();
-return {ok:true, url: location.href, title: document.title};
+const r = el.getBoundingClientRect();
+const x = r.left + r.width / 2, y = r.top + r.height / 2;
+const hit = document.elementFromPoint(x, y);
+const reachable = r.width > 0 && r.height > 0 && hit && (hit === el || el.contains(hit) || hit.contains(el));
+if (!reachable) { el.click(); return {ok:true, synthetic:true}; }
+return {ok:true, x, y};
 })()`, jsString(selector))
-	raw, err := client.evaluate(ctx, expr)
-	if err != nil {
+		raw, err := client.evaluate(ctx, expr)
+		if err != nil {
+			return "", err
+		}
+		var located struct {
+			OK        bool    `json:"ok"`
+			Error     string  `json:"error"`
+			Synthetic bool    `json:"synthetic"`
+			X         float64 `json:"x"`
+			Y         float64 `json:"y"`
+		}
+		if err := json.Unmarshal(raw, &located); err != nil {
+			return "", err
+		}
+		if !located.OK {
+			return string(raw), nil
+		}
+		if located.Synthetic {
+			return client.pageState(ctx, map[string]any{"clicked": selector, "synthetic": true})
+		}
+		x, y = located.X, located.Y
+	}
+	if err := client.mouseClick(ctx, x, y, button, clicks); err != nil {
 		return "", err
 	}
-	return string(raw), nil
+	// 点击可能触发跳转，给页面一点时间开始换文档，读到的地址和标题才是点完之后的。
+	client.settle(ctx)
+	result := map[string]any{"clicked_at": map[string]float64{"x": x, "y": y}}
+	if selector != "" {
+		result["clicked"] = selector
+	}
+	return client.pageState(ctx, result)
 }
 
 type BrowserTypeTool struct {
@@ -183,61 +304,89 @@ func (t *BrowserTypeTool) Name() string {
 }
 
 func (t *BrowserTypeTool) Description() string {
-	return `向当前页面元素输入文本。`
+	return `向当前页面元素输入文本，走真实键盘输入（React 等框架的受控输入框也认）。省略 selector 时输入到当前焦点。`
 }
 
 func (t *BrowserTypeTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"selector", "text"}, map[string]any{
-		"selector":    toolStringParam("目标输入框的 CSS 选择器"),
+	return toolObjectSchema([]string{"text"}, map[string]any{
+		"selector":    toolStringParam("目标输入框的 CSS 选择器，省略时输入到当前焦点元素"),
 		"text":        toolStringParam("要输入的文本"),
-		"clear":       toolBoolParam("输入前是否清空原有内容"),
+		"clear":       toolBoolParam("输入前是否清空原有内容，默认清空"),
 		"press_enter": toolBoolParam("输入后是否回车提交"),
 	})
 }
 
+func (t *BrowserTypeTool) RepeatableCalls() bool { return true }
+
 func (t *BrowserTypeTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	selector := stringFromInput(input, "selector")
-	if selector == "" {
-		return "", errors.New("selector is required")
-	}
 	text := rawStringFromInput(input, "text")
 	client, err := t.base.pageClient(ctx, "", false)
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
+	// 聚焦和清空在页面里做，文字本身用 Input.insertText 送进去：直接改 value 的话
+	// React、Vue 这类受控输入框不认，页面上看着填了，提交出去还是空的。清空用原生
+	// setter 而不是 el.value = ""，同样是为了让框架的值追踪器看到这次变化。
 	expr := fmt.Sprintf(`(() => {
-const el = document.querySelector(%s);
-if (!el) return {ok:false, error:"selector not found"};
+const selector = %s;
+const el = selector ? document.querySelector(selector) : document.activeElement;
+if (!el) return {ok:false, error: selector ? "selector not found" : "no focused element"};
 el.scrollIntoView({block:"center", inline:"center"});
 el.focus();
-const text = %s;
-const clear = %t;
-if (el.isContentEditable) {
-  el.textContent = clear ? text : (el.textContent || "") + text;
-} else if ("value" in el) {
-  el.value = clear ? text : (el.value || "") + text;
-} else {
-  el.textContent = clear ? text : (el.textContent || "") + text;
-}
-el.dispatchEvent(new Event("input", {bubbles:true}));
-el.dispatchEvent(new Event("change", {bubbles:true}));
 if (%t) {
-  el.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter", code:"Enter", bubbles:true}));
-  el.dispatchEvent(new KeyboardEvent("keyup", {key:"Enter", code:"Enter", bubbles:true}));
-  if (el.form) el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
+  if (el.isContentEditable) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.execCommand("delete");
+  } else if ("value" in el) {
+    const proto = Object.getPrototypeOf(el);
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (setter) setter.call(el, ""); else el.value = "";
+    el.dispatchEvent(new Event("input", {bubbles:true}));
+  }
+} else if ("value" in el && typeof el.setSelectionRange === "function") {
+  try { const n = (el.value || "").length; el.setSelectionRange(n, n); } catch (_) {}
 }
-return {ok:true, url: location.href, title: document.title};
-})()`, jsString(selector), jsString(text), boolFromInput(input, "clear", true), boolFromInput(input, "press_enter", false))
+return {ok:true};
+})()`, jsString(selector), boolFromInput(input, "clear", true))
 	raw, err := client.evaluate(ctx, expr)
 	if err != nil {
 		return "", err
 	}
-	return string(raw), nil
+	var focused struct {
+		OK bool `json:"ok"`
+	}
+	if json.Unmarshal(raw, &focused) != nil || !focused.OK {
+		return string(raw), nil
+	}
+	if text != "" {
+		if err := client.call(ctx, "Input.insertText", map[string]any{"text": text}, nil); err != nil {
+			return "", err
+		}
+	}
+	if boolFromInput(input, "press_enter", false) {
+		if err := client.pressKey(ctx, "Enter"); err != nil {
+			return "", err
+		}
+		client.settle(ctx)
+	}
+	result := map[string]any{"typed_chars": utf8.RuneCountInString(text)}
+	if selector != "" {
+		result["selector"] = selector
+	}
+	return client.pageState(ctx, result)
 }
 
 type BrowserScreenshotTool struct {
 	base browserToolBase
+
+	mu    sync.Mutex
+	parts []llm.ContentPart
 }
 
 func (t *BrowserScreenshotTool) Name() string {
@@ -245,7 +394,23 @@ func (t *BrowserScreenshotTool) Name() string {
 }
 
 func (t *BrowserScreenshotTool) Description() string {
-	return `保存当前页面截图到 Agent 工作目录。`
+	return `截取当前页面可见区域：图片直接给你看，同时存进 Agent 工作目录。图上的像素坐标可以直接交给 browser_click 的 x/y。`
+}
+
+func (t *BrowserScreenshotTool) RepeatableCalls() bool { return true }
+
+// ToolResultParts 把刚截的图交给下一轮模型。以前只回一个文件路径，模型拿到路径也
+// 看不见图，这个工具等于只对人有用。
+func (t *BrowserScreenshotTool) ToolResultParts(string) []llm.ContentPart {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]llm.ContentPart(nil), t.parts...)
+}
+
+func (t *BrowserScreenshotTool) setParts(parts []llm.ContentPart) {
+	t.mu.Lock()
+	t.parts = parts
+	t.mu.Unlock()
 }
 
 func (t *BrowserScreenshotTool) InputSchema() map[string]any {
@@ -255,6 +420,7 @@ func (t *BrowserScreenshotTool) InputSchema() map[string]any {
 }
 
 func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	t.setParts(nil)
 	outPath := stringFromInput(input, "path")
 	if outPath == "" {
 		outPath = defaultScreenshotPath
@@ -284,9 +450,11 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", err
 	}
+	t.setParts([]llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64," + result.Data}})
 	body, err := json.MarshalIndent(map[string]any{
 		"path":  relPathForOutput(t.base.root, path),
 		"bytes": len(data),
+		"note":  "截图已附在这条结果里",
 	}, "", "  ")
 	if err != nil {
 		return "", err
@@ -336,13 +504,14 @@ func (b browserToolBase) pageClient(ctx context.Context, pageURL string, newTab 
 	if err != nil {
 		return nil, err
 	}
+	b.session.setActive(target.ID)
 	_ = client.call(ctx, "Page.enable", map[string]any{}, nil)
 	_ = client.call(ctx, "Runtime.enable", map[string]any{}, nil)
 	return client, nil
 }
 
 func (b browserToolBase) pickTarget(ctx context.Context, baseURL, pageURL string, newTab bool) (browserTarget, error) {
-	if newTab || pageURL != "" {
+	if newTab {
 		if target, err := newBrowserTarget(ctx, baseURL, firstNonEmptyString(pageURL, "about:blank")); err == nil {
 			return target, nil
 		}
@@ -350,6 +519,14 @@ func (b browserToolBase) pickTarget(ctx context.Context, baseURL, pageURL string
 	targets, err := listBrowserTargets(ctx, baseURL)
 	if err != nil {
 		return browserTarget{}, err
+	}
+	// 模型切过或打开过的那个标签页优先；它被关掉了才退回下面的自动挑选。
+	if active := b.session.active(); active != "" {
+		for _, target := range targets {
+			if target.ID == active && target.Type == "page" && target.WebSocketDebuggerURL != "" {
+				return target, nil
+			}
+		}
 	}
 	// 挑一个真的载着网页的标签页。一次性浏览器里通常只有一个标签页，随便挑都对；
 	// 内置浏览器是常驻的，开机那个 about:blank 会一直排在列表里，照单全收的话
@@ -531,7 +708,26 @@ func (c *cdpClient) evaluate(ctx context.Context, expression string) (json.RawMe
 	if len(out.Result.Value) == 0 {
 		return []byte("null"), nil
 	}
-	return out.Result.Value, nil
+	return compactCDPValue(out.Result.Value), nil
+}
+
+// compactCDPValue 把 Chrome 交回的 JSON 重新编码一遍。Chrome 把非 ASCII 字符一律写成
+// \uXXXX，一页中文读回来每个字变成六个字符，模型那边既难读又多花几倍 token。
+func compactCDPValue(raw json.RawMessage) json.RawMessage {
+	// UseNumber：页面里的大整数 ID 走一趟 float64 会丢精度。
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return raw
+	}
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return raw
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n")
 }
 
 func (c *cdpClient) waitReady(ctx context.Context) error {
