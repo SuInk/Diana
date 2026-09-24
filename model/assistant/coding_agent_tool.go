@@ -263,11 +263,13 @@ func (t *dianaCodingTool) tail(input map[string]any) (string, error) {
 func (t *dianaCodingTool) cancel(ctx context.Context, input map[string]any) (string, error) {
 	id := strings.TrimSpace(configToolString(input, "job_id"))
 	if id == "" {
-		running := runningCodingJobs()
+		running := t.runningJobs()
 		if len(running) != 1 {
 			return "", fmt.Errorf("要取消哪个任务？请给出 job_id")
 		}
 		id = running[0].ID
+	} else if _, err := t.loadJob(id); err != nil {
+		return "", err
 	}
 	job, err := t.runtime.cancelCodingJob(ctx, id)
 	if err != nil {
@@ -283,7 +285,7 @@ func (t *dianaCodingTool) cancel(ctx context.Context, input map[string]any) (str
 }
 
 func (t *dianaCodingTool) list() (string, error) {
-	jobs := listCodingJobs()
+	jobs := t.jobs()
 	if len(jobs) > 10 {
 		jobs = jobs[:10]
 	}
@@ -298,20 +300,48 @@ func (t *dianaCodingTool) list() (string, error) {
 // 用户说「进度怎么样了」时指的几乎总是这两者之一。
 func (t *dianaCodingTool) resolveJob(input map[string]any) (CodingJob, error) {
 	if id := strings.TrimSpace(configToolString(input, "job_id")); id != "" {
-		job, err := loadCodingJob(id)
-		if err != nil {
-			return CodingJob{}, fmt.Errorf("找不到任务 %s", id)
-		}
-		return job, nil
+		return t.loadJob(id)
 	}
-	if running := runningCodingJobs(); len(running) == 1 {
+	if running := t.runningJobs(); len(running) == 1 {
 		return running[0], nil
 	}
-	jobs := listCodingJobs()
+	jobs := t.jobs()
 	if len(jobs) == 0 {
 		return CodingJob{}, fmt.Errorf("还没有任何编码任务")
 	}
 	return jobs[0], nil
+}
+
+// loadJob 按任务号读记录，只认这台机器人自己派的。别人的任务和不存在的任务回同
+// 一句话，不替别人确认「有这么个任务」。
+func (t *dianaCodingTool) loadJob(id string) (CodingJob, error) {
+	job, err := loadCodingJob(id)
+	if err != nil || !t.runtime.codingJobVisibleTo(job, t.event) {
+		return CodingJob{}, fmt.Errorf("找不到任务 %s", id)
+	}
+	return job, nil
+}
+
+// jobs 是这台机器人自己派过的任务，按开始时间倒序。
+func (t *dianaCodingTool) jobs() []CodingJob {
+	all := listCodingJobs()
+	out := make([]CodingJob, 0, len(all))
+	for _, job := range all {
+		if t.runtime.codingJobVisibleTo(job, t.event) {
+			out = append(out, job)
+		}
+	}
+	return out
+}
+
+func (t *dianaCodingTool) runningJobs() []CodingJob {
+	out := make([]CodingJob, 0, 4)
+	for _, job := range t.jobs() {
+		if !job.finished() {
+			out = append(out, job)
+		}
+	}
+	return out
 }
 
 // attachPendingApproval 把这个任务正等着的确认填进查询结果。确认码原样给出：
