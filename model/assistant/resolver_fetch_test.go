@@ -183,9 +183,11 @@ func TestResolverOnlyHandlesEnabledPlatforms(t *testing.T) {
 	plugin := NewResolverPlugin(&http.Client{})
 	resp, err := plugin.Handle(context.Background(), PluginRequest{
 		Text: "看 https://www.bilibili.com/video/BV1 和 https://weibo.com/123 和 https://www.xiaohongshu.com/1",
+		// 只看平台过滤，不下载媒体：开着的话 B 站会真的去跑 yt-dlp、打外网。
 		Settings: SettingValues{
-			"fetch_title":       false,
-			"enabled_platforms": []any{"bilibili", "xiaohongshu"},
+			"fetch_title":                false,
+			resolverSettingDownloadMedia: false,
+			"enabled_platforms":          []any{"bilibili", "xiaohongshu"},
 		},
 	})
 	if err != nil {

@@ -1390,6 +1390,8 @@ type ResolverPlugin struct {
 	twitterPostFetcher     func(context.Context, string) (twitterPost, bool)
 	twitterProfileFetcher  func(context.Context, string) (twitterProfile, error)
 	twitterMediaDownloader func(context.Context, twitterMedia) string
+	// douyinDetailFetcher 为空时走真实的抖音接口，测试里注入桩避免打外网。
+	douyinDetailFetcher func(context.Context, string) (douyinMediaDetail, bool, string)
 }
 
 // NewResolverPlugin 创建官方内置链接解析插件。
