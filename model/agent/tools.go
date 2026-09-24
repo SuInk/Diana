@@ -146,6 +146,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 			root:           root,
 			allowlist:      commandAllowlistSet(cfg.CommandAllowlist),
 			protected:      protected,
+			mcpConfigPath:  resolveMCPConfigPath(cfg),
 			timeout:        time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
 			maxBytes:       cfg.MaxToolOutputChars,
 			sandboxMode:    cfg.CommandSandbox,
@@ -1010,6 +1011,9 @@ type RunCommandTool struct {
 	// protected 是凭据配置文件。文件工具按它拒绝读写，沙盒按它把这些路径挡在
 	// 命令的视野之外——白名单里配了 cat、grep 时，那是唯一还拦得住的一层。
 	protected protectedFiles
+	// mcpConfigPath 用来找出 MCP 配置用 ${NAME} 引用的进程环境变量，命令拿不到它们，
+	// 见 commandEnvironment。
+	mcpConfigPath string
 	// sandboxMode 见 CommandSandbox* 常量；sandbox 是当前平台探测到的实现。
 	sandboxMode    string
 	sandbox        commandSandbox
@@ -1064,6 +1068,7 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 		return "", err
 	}
 	cmd.Dir = cwd
+	cmd.Env = t.commandEnvironment()
 	commandOutput, err := os.CreateTemp("", "diana-agent-command-*")
 	if err != nil {
 		return "", err
@@ -1155,6 +1160,22 @@ func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []
 		return exec.CommandContext(ctx, command, args...), "", nil
 	}
 	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, t.protected.existingPaths(), command, args), t.sandbox.kind, nil
+}
+
+// commandEnvironment 是命令继承的环境：Diana 自己的进程环境，去掉 MCP 配置里用
+// ${NAME} 引用的那些变量。主人常把令牌放在进程环境里、配置只写引用，白名单里有
+// env、printenv 时它们就是令牌原文——沙箱挡的是文件，挡不住继承下来的环境变量。
+// 配置读不出来时照常继承：这时也不知道该摘哪些，拦下命令只会让人摸不着头脑。
+func (t *RunCommandTool) commandEnvironment() []string {
+	environ := os.Environ()
+	if strings.TrimSpace(t.mcpConfigPath) == "" {
+		return environ
+	}
+	servers, err := loadMCPServers(t.mcpConfigPath)
+	if err != nil {
+		return environ
+	}
+	return environmentWithout(environ, mcpReferencedEnvironment(servers))
 }
 
 func (t *RunCommandTool) commandAllowed(command string) bool {

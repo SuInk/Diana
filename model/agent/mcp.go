@@ -254,7 +254,7 @@ func startMCPServerRuntime(ctx context.Context, name string, server mcpServerCon
 	tools, err := client.ListTools(startCtx)
 	if err != nil {
 		_ = runtime.Close()
-		return nil, fmt.Errorf("mcp server %q tools/list failed: %w", name, err)
+		return nil, client.redactor.error(fmt.Errorf("mcp server %q tools/list failed: %w", name, err))
 	}
 	for _, raw := range tools {
 		if !server.allowsTool(raw.Name) {
@@ -262,12 +262,14 @@ func startMCPServerRuntime(ctx context.Context, name string, server mcpServerCon
 		}
 		modelName := uniqueMCPModelToolName(name, raw.Name, usedNames)
 		runtime.tools = append(runtime.tools, &MCPTool{
-			client:      client,
-			serverName:  name,
-			rawName:     raw.Name,
-			modelName:   modelName,
-			description: raw.Description,
-			inputSchema: append(json.RawMessage(nil), raw.InputSchema...),
+			client:     client,
+			serverName: name,
+			rawName:    raw.Name,
+			modelName:  modelName,
+			// 工具描述和 schema 是服务端自己写的，会原样进模型的工具列表；回显了
+			// 令牌的服务在这里就被截住。
+			description: client.redactor.text(raw.Description),
+			inputSchema: json.RawMessage(client.redactor.text(string(raw.InputSchema))),
 		})
 	}
 	return runtime, nil
@@ -334,6 +336,8 @@ type MCPClient struct {
 	workDir        string
 	toolTimeout    time.Duration
 	startupTimeout time.Duration
+	// redactor 把这条服务的凭据从返回给模型的文本里换成掩码，见 mcp_secrets.go。
+	redactor *mcpRedactor
 
 	mu            sync.Mutex
 	current       *mcpSession
@@ -365,7 +369,7 @@ func startMCPClient(ctx context.Context, name string, cfg mcpServerConfig, workD
 	if deadline, ok := ctx.Deadline(); ok {
 		startupTimeout = time.Until(deadline)
 	}
-	client := &MCPClient{name: name, config: cfg, workDir: workDir, toolTimeout: toolTimeout, startupTimeout: startupTimeout}
+	client := &MCPClient{name: name, config: cfg, workDir: workDir, toolTimeout: toolTimeout, startupTimeout: startupTimeout, redactor: newMCPRedactor(cfg)}
 	session, err := connectMCPSession(ctx, name, cfg, workDir, toolTimeout)
 	if err != nil {
 		return nil, err
@@ -383,7 +387,17 @@ func mcpClientVersion() string {
 	return "0.0.0"
 }
 
+// connectMCPSession 建一个会话。连不上时的报错会进能力目录和工具结果：URL 连同查询
+// 参数、服务的 stderr 都可能带着令牌，统一过一遍掩码再往外交。
 func connectMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workDir string, toolTimeout time.Duration) (*mcpSession, error) {
+	session, err := openMCPSession(ctx, name, cfg, workDir, toolTimeout)
+	if err != nil {
+		return nil, newMCPRedactor(cfg).error(err)
+	}
+	return session, nil
+}
+
+func openMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workDir string, toolTimeout time.Duration) (*mcpSession, error) {
 	var (
 		transport mcpsdk.Transport
 		stderr    *lockedBuffer
@@ -499,7 +513,7 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]mcpToolInfo, error) {
 		params := &mcpsdk.ListToolsParams{Cursor: cursor}
 		result, err := state.session.ListTools(ctx, params)
 		if err != nil {
-			return nil, withMCPStderr(err, state.stderr)
+			return nil, c.redactor.error(withMCPStderr(err, state.stderr))
 		}
 		for _, tool := range result.Tools {
 			if tool == nil || strings.TrimSpace(tool.Name) == "" {
@@ -537,9 +551,12 @@ func (c *MCPClient) CallTool(ctx context.Context, name string, arguments map[str
 		if mcpTransportClosed(err) || !state.alive() {
 			c.dropSession(state)
 		}
-		return "", withMCPStderrSince(fmt.Errorf("mcp server %q tools/call %q failed: %w", c.name, name, err), state.stderr, mark)
+		return "", c.redactor.error(withMCPStderrSince(fmt.Errorf("mcp server %q tools/call %q failed: %w", c.name, name, err), state.stderr, mark))
 	}
-	return formatSDKMCPToolResult(result)
+	// 工具结果直接进模型上下文。服务把请求头或环境变量回显出来（调试输出、报错里
+	// 带上配置）时，令牌原文会跟着进去，这里换成掩码。
+	output, err := formatSDKMCPToolResult(result)
+	return c.redactor.text(output), c.redactor.error(err)
 }
 
 func mcpTransportClosed(err error) bool {

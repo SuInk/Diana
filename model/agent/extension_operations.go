@@ -15,7 +15,7 @@ package agent
 
 // ExtensionOperations 是 AdministerExtensions 支持的全部操作，测试据此检查分类是否漏项。
 var ExtensionOperations = []string{
-	"list", "read", "presets", "verify", "test",
+	"list", "read", "reveal", "presets", "verify", "test",
 	"enabled", "members", "audience", "residency",
 	"save", "delete",
 }
@@ -38,7 +38,7 @@ func ExtensionOperationChangesDefinition(operation string) bool {
 // 日志。比上一个宽：启用开关、成员档位、对象名单、常驻档位、以及把预设从列表里藏起来
 // 都算——它们不改扩展定义，但确实改了状态。
 //
-// 纯查询（list / read / verify）不算，test 也不算：它会真的连一次服务，但连完就断，
+// 纯查询（list / read / reveal / verify）不算，test 也不算：它会真的连一次服务，但连完就断，
 // 没有任何东西被改动。presets 的 hide / show 会改清单显隐，所以它按 action 另判，
 // 见 ExtensionRequestMutatesState。
 func ExtensionOperationMutatesState(operation string) bool {

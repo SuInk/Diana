@@ -113,9 +113,10 @@
           <p class="hint">{{ editPresetTransportLabel }}<template v-if="editPreset.docs_url"> · <a :href="editPreset.docs_url" target="_blank" rel="noreferrer noopener">官方文档</a></template></p>
           <label v-for="field in editPresetFields" :key="field.key" class="field">
             <span>{{ field.label }}<template v-if="field.required"> *</template></span>
-            <input v-model.trim="editPresetValues[field.key]" class="input" :type="field.secret ? 'password' : 'text'" :placeholder="field.secret ? '留空保持原值' : field.placeholder" :autocomplete="field.secret ? 'new-password' : 'off'" :disabled="readonly" />
+            <input v-model.trim="editPresetValues[field.key]" class="input" :type="field.secret && !revealed ? 'password' : 'text'" :placeholder="field.secret ? (editPresetMasks[field.key] ? `已配置 ${editPresetMasks[field.key]}，留空保持原值` : '留空保持原值') : field.placeholder" :autocomplete="field.secret ? 'new-password' : 'off'" :disabled="readonly" />
             <span v-if="field.hint" class="hint">{{ field.hint }}</span>
           </label>
+          <p v-if="(Object.keys(editPresetMasks).length || Object.values(editPresetValues).some(v => v.includes('****'))) && !readonly && !revealed" class="hint">令牌只显示掩码，<button type="button" class="link-button" :disabled="revealing" @click="revealSecrets">显示明文</button>。</p>
           <label class="switch"><input v-model="form.enabled" type="checkbox" :disabled="readonly" /><span class="track"></span>服务可用</label>
           <p v-if="verifyNote" role="status">{{ verifyNote }}</p>
           <p class="hint">超时、工具名单这些改不到的，切<button type="button" class="link-button" @click="editAdvanced=true">高级配置</button>。</p>
@@ -126,7 +127,7 @@
           <label v-if="transport==='http'" class="field">服务地址<input v-model.trim="form.url" class="input" type="url" placeholder="https://example.com/mcp" /></label>
           <template v-else><label class="field">启动命令<input v-model.trim="form.command" class="input" placeholder="npx" /></label><label class="field">参数（每行一个）<textarea v-model="form.args" class="input code-input" rows="3"></textarea></label><label class="field">工作目录<input v-model.trim="form.cwd" class="input" /></label></template>
           <label class="field">{{ transport==='http' ? '请求头 JSON' : '环境变量 JSON' }}<textarea v-model="secrets" class="input code-input" rows="4" spellcheck="false" placeholder='{"Authorization":"Bearer …"}'></textarea></label>
-          <p class="hint">值保存后不回显，这里只看得到键名：<strong>值留空 = 保持原值</strong>，<strong>删掉整行 = 删掉这一项</strong>。新加一行就是新增。</p>
+          <p class="hint">已保存的值只显示掩码：<strong>掩码原样留着或值留空 = 保持原值</strong>，<strong>删掉整行 = 删掉这一项</strong>。新加一行就是新增。<template v-if="storedSecrets && !readonly && !revealed">要看原文点<button type="button" class="link-button" :disabled="revealing" @click="revealSecrets">显示明文</button>。</template></p>
           <div class="extension-grid"><label class="field">连接超时（秒）<input v-model.number="form.startup_timeout_sec" class="input" type="number" min="1" max="300" /><span class="hint">最长 300，首次启动要现拉依赖的服务往大了填。</span></label><label class="field">工具超时（秒）<input v-model.number="form.tool_timeout_sec" class="input" type="number" min="1" max="900" /><span class="hint">最长 900，构建、抓取这类慢工具才需要调高。</span></label></div>
           <label class="field">允许的工具（每行一个，留空全部）<textarea v-model="form.enabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="field">禁用的工具（每行一个）<textarea v-model="form.disabled_tools" class="input code-input" rows="2"></textarea></label>
@@ -183,6 +184,8 @@ const form=ref(blank());
 const secrets=computed({get:()=>transport.value==='http'?headers.value:env.value,set:v=>{if(transport.value==='http')headers.value=v;else env.value=v}});
 // 从预设装出来的那条，编辑时还给它那张表；editAdvanced 是切回通用表单的后门。
 const editPreset=ref<MCPPreset|null>(null),editPresetTransport=ref(''),editPresetValues=ref<Record<string,string>>({}),editAdvanced=ref(false),verifying=ref(false),verifyNote=ref('');
+// 凭据读出来只有掩码；主人要看原文点「显示明文」，走单独的 reveal，Agent 那边没有这条路。
+const editPresetMasks=ref<Record<string,string>>({}),storedSecrets=ref(false),revealed=ref(false),revealing=ref(false);
 const editPresetTransportInfo=computed(()=>editPreset.value?.transports.find(t=>t.id===editPresetTransport.value));
 const editPresetFields=computed(()=>editPresetTransportInfo.value?.fields||[]);
 const editPresetTransportLabel=computed(()=>editPresetTransportInfo.value?.hint||editPresetTransportInfo.value?.label||'');
@@ -193,8 +196,17 @@ let generation=0;
 async function load(){const current=++generation;loading.value=true;loadError.value='';try{const result=await listManagedExtensions(botScope.value);if(current===generation)items.value=result.items.filter(i=>i.kind===props.kind)}catch(e){if(current===generation)loadError.value=String(e instanceof Error?e.message:e)}finally{if(current===generation)loading.value=false}
  // 还没添加的预设也要在列表里占一行，这份清单得跟着刷新。
  if(props.kind==='mcp')await refreshPresets()}
-function openNew(){form.value=blank();headers.value=env.value='{}';fromURL.value=false;transport.value='http';existing.value=readonly.value=false;error.value='';tested.value=false;discovered.value=[];editPreset.value=null;editPresetTransport.value='';editPresetValues.value={};editAdvanced.value=false;verifyNote.value='';permissionName.value='';loadAudienceInputs(null);editing.value=true;snapshot.value=state()}
-async function edit(item:ManagedExtension){try{const data=await manageExtension<any>({operation:'read',kind:props.kind,name:item.name});openNew();existing.value=true;readonly.value=!item.managed;form.value.name=item.name;permissionName.value=item.name;loadAudienceInputs(item);if(props.kind==='skill')form.value.content=data.content;else{const c=data.config;Object.assign(form.value,c,{args:(c.args||[]).join('\n'),enabled_tools:(c.enabled_tools||[]).join('\n'),disabled_tools:(c.disabled_tools||[]).join('\n'),enabled:c.enabled!==false});transport.value=c.command?'stdio':'http';headers.value=JSON.stringify(c.headers||{},null,2);env.value=JSON.stringify(c.env||{},null,2);if(data.preset){const known=await ensurePresets();editPreset.value=known.find(p=>p.id===data.preset)||null;editPresetTransport.value=data.preset_transport||'';editPresetValues.value={...(data.preset_values||{})};editAdvanced.value=!editPreset.value}}snapshot.value=state()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
+function openNew(){form.value=blank();headers.value=env.value='{}';editPresetMasks.value={};storedSecrets.value=revealed.value=false;fromURL.value=false;transport.value='http';existing.value=readonly.value=false;error.value='';tested.value=false;discovered.value=[];editPreset.value=null;editPresetTransport.value='';editPresetValues.value={};editAdvanced.value=false;verifyNote.value='';permissionName.value='';loadAudienceInputs(null);editing.value=true;snapshot.value=state()}
+async function edit(item:ManagedExtension){try{const data=await manageExtension<any>({operation:'read',kind:props.kind,name:item.name});openNew();existing.value=true;readonly.value=!item.managed;form.value.name=item.name;permissionName.value=item.name;loadAudienceInputs(item);if(props.kind==='skill')form.value.content=data.content;else{const c=data.config;Object.assign(form.value,c,{args:(c.args||[]).join('\n'),enabled_tools:(c.enabled_tools||[]).join('\n'),disabled_tools:(c.disabled_tools||[]).join('\n'),enabled:c.enabled!==false});transport.value=c.command?'stdio':'http';storedSecrets.value=!!((data.configured_headers||[]).length||(data.configured_env||[]).length||String(c.url||'').includes('****'));headers.value=JSON.stringify(c.headers||{},null,2);env.value=JSON.stringify(c.env||{},null,2);if(data.preset){const known=await ensurePresets();editPreset.value=known.find(p=>p.id===data.preset)||null;editPresetTransport.value=data.preset_transport||'';editPresetValues.value={...(data.preset_values||{})};editPresetMasks.value={...(data.preset_secret_masks||{})};editAdvanced.value=!editPreset.value}}snapshot.value=state()}catch(e){toastError(String(e instanceof Error?e.message:e))}}
+// 只替换还是掩码或留空的那些：已经改过的值是人刚填的，不能被旧值盖回去。
+function fillRevealed(raw:string,plain:Record<string,string>){const current:Record<string,string>=stringMap(raw);for(const [key,value] of Object.entries(current)){if(key in plain&&(value===''||value.includes('****')))current[key]=plain[key]}return JSON.stringify(current,null,2)}
+async function revealSecrets(){revealing.value=true;try{const clean=snapshot.value===state();const data=await manageExtension<{url?:string;headers?:Record<string,string>;env?:Record<string,string>;preset_values?:Record<string,string>;preset_secrets?:Record<string,string>}>({operation:'reveal',kind:'mcp',name:form.value.name});
+ // 地址里的查询参数、userinfo 也可能是令牌，读出来同样是掩码，一并换回原文。
+ if(data.url&&form.value.url.includes('****'))form.value.url=data.url;
+ for(const [key,value] of Object.entries(data.preset_values||{}))if((editPresetValues.value[key]||'').includes('****'))editPresetValues.value[key]=value;
+ headers.value=fillRevealed(headers.value,data.headers||{});env.value=fillRevealed(env.value,data.env||{});
+ for(const [key,value] of Object.entries(data.preset_secrets||{}))if(!editPresetValues.value[key])editPresetValues.value[key]=value;
+ revealed.value=true;if(clean)snapshot.value=state()}catch(e){toastError(String(e instanceof Error?e.message:e))}finally{revealing.value=false}}
 async function closeEditor(){if(!editing.value||saving.value)return;if(!readonly.value&&snapshot.value!==state()&&!await askConfirm({title:'放弃未保存的修改？',message:'本次编辑尚未保存。',confirmLabel:'放弃'}))return;editing.value=false}
 async function importFile(event:Event){const file=(event.target as HTMLInputElement).files?.[0];if(!file)return;if(file.size>2*1024*1024){error.value='文件不能超过 2 MB';return}form.value.content=await file.text();fromURL.value=false}
 const lines=(s:string)=>s.split('\n').map(x=>x.trim()).filter(Boolean);

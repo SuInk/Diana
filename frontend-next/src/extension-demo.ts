@@ -82,6 +82,7 @@ export function extensionDemoResponse(method:string,profile:string,body:Record<s
  if(operation==='verify')return {verified:false,supported:false,message:'演示模式不连接外部服务，无法检测令牌，请在真实部署中检测'};
  const item=entries.find(i=>i.kind===body.kind&&i.name===body.name);
  if(operation==='read'){if(!item)throw Error('扩展不存在');return item.kind==='skill'?{content:item.content,managed:item.managed}:{config:item.config,configured_headers:Object.keys(item.config?.headers||{}),configured_env:Object.keys(item.config?.env||{}),...(item.preset?{preset:item.preset,preset_transport:item.preset_transport,preset_values:item.preset_values}:{})}}
+ if(operation==='reveal'){if(!item)throw Error('扩展不存在');return {url:item.config?.url||'',headers:item.config?.headers||{},env:item.config?.env||{},preset_values:item.preset_values||{},preset_secrets:{}}}
  if(operation==='test')throw Error('演示模式不连接外部 MCP，请在真实部署中测试');
  if(operation==='enabled'){if(!item||!body.profile_id)throw Error('请选择机器人');(overrides[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}
  if(operation==='members'){if(!item)throw Error('扩展不存在');if(!body.profile_id)throw Error('请选择机器人');(memberAccess[body.profile_id]??={})[item.id]=body.enabled;return {ok:true}}

@@ -207,8 +207,19 @@ func (m *ExtensionManager) installMCP(ctx context.Context, name string, server m
 	if err != nil {
 		return ExtensionState{}, err
 	}
-	if _, exists := servers[name]; exists && !replace {
+	previous, exists := servers[name]
+	if exists && !replace {
 		return ExtensionState{}, fmt.Errorf("MCP server %q already exists; set replace=true only when the user requested replacement", name)
+	}
+	// 模型只见过掩码。改一条已有服务时想留着令牌，交回来的就是掩码，这里换回原文；
+	// 去处变了就不换，见 restoreMaskedMCPSecrets。
+	if exists {
+		if server, err = restoreMaskedMCPSecrets(previous, server); err != nil {
+			return ExtensionState{}, err
+		}
+	}
+	if err := rejectUnmatchedMasks(server, previous); err != nil {
+		return ExtensionState{}, err
 	}
 
 	var runtime *mcpServerRuntime
@@ -376,16 +387,17 @@ func (m *ExtensionManager) mcpExtensionStates() []ExtensionState {
 			}
 		}
 		states = append(states, ExtensionState{
-			Kind:      ExtensionKindMCP,
-			ID:        "mcp:" + name,
-			Name:      name,
-			Managed:   true,
-			Installed: true,
-			Enabled:   server.enabled(),
-			Source:    source,
-			Transport: server.transport(),
-			Tools:     tools,
-			Error:     message,
+			Kind:        ExtensionKindMCP,
+			ID:          "mcp:" + name,
+			Name:        name,
+			Managed:     true,
+			Installed:   true,
+			Enabled:     server.enabled(),
+			Source:      source,
+			Transport:   server.transport(),
+			Tools:       tools,
+			Credentials: mcpCredentialStates(server),
+			Error:       message,
 		})
 	}
 	return states
