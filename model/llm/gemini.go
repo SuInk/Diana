@@ -25,6 +25,9 @@ type geminiClient struct {
 
 const maxGeminiOutputTokens = int64(1<<31 - 1)
 
+// geminiOAuthPlaceholderKey 是只靠 OAuth 的配置档建 genai 客户端时的占位 API Key。
+const geminiOAuthPlaceholderKey = "oauth-placeholder"
+
 // newGeminiClient 创建 Gemini provider 客户端。
 func newGeminiClient(cfg ProviderConfig, httpClient *http.Client) (*geminiClient, error) {
 	httpOptions := genai.HTTPOptions{}
@@ -36,8 +39,16 @@ func newGeminiClient(cfg ProviderConfig, httpClient *http.Client) (*geminiClient
 	}
 
 	// Gemini SDK 的 client 创建需要 context，但这里不做网络请求，用 background 即可。
+	apiKey := cfg.APIKey
+	if strings.TrimSpace(apiKey) == "" && oauthOnlyTransport(httpClient) {
+		// genai 建客户端时没有 API Key 直接报错，可只靠 OAuth 的配置档本来就没有。
+		// 给个占位值让它建起来：真正的令牌在传输层注入，占位的 x-goog-api-key 也在
+		// 那里摘掉（见 credentialTransport.requireOAuth）；OAuth 取不到凭据时请求根本
+		// 不会发出去。没接上 OAuth 凭据的调用不给占位值，照旧报缺 API Key。
+		apiKey = geminiOAuthPlaceholderKey
+	}
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
-		APIKey:      cfg.APIKey,
+		APIKey:      apiKey,
 		Backend:     genai.BackendGeminiAPI,
 		HTTPClient:  httpClient,
 		HTTPOptions: httpOptions,

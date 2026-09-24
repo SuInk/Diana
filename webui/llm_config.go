@@ -218,6 +218,7 @@ func (h *LLMConfigHandler) providerModels(c *gin.Context) {
 		h.writeError(c, 422, "llm_providers_models", err, payload.ProviderID, nil)
 		return
 	}
+	registry.SetClientOptions(h.clientOptions)
 	// 和 /api/llm/models 同一个上限：供应商不回话时，请求只会跟着浏览器一直挂着。
 	listCtx, cancel := context.WithTimeout(c.Request.Context(), llmModelListTimeout)
 	defer cancel()
@@ -240,6 +241,9 @@ func (h *LLMConfigHandler) providerTest(c *gin.Context) {
 		h.writeError(c, 422, "llm_providers_test", err, payload.ProviderID, nil)
 		return
 	}
+	// 和「测试」「拉取模型」一样按配置档补 OAuth 凭据，否则只靠登录的配置档在这里
+	// 以「没有 API Key」失败，而机器人实际运行是好的。
+	registry.SetClientOptions(h.clientOptions)
 	if strings.TrimSpace(payload.Message) == "" {
 		payload.Message = "ping"
 	}

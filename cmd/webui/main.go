@@ -331,22 +331,29 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// 模型列表必须从当前 provider 后端读取；公共目录只补全后端常常省略的
-	// 模态和 token 限制，失败时保留原列表与“能力未知”状态。
-	modelCatalog := llm.NewModelsDevCatalog(nil)
-	modelListFactory := func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
-		models, err := llm.ListModels(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		return modelCatalog.Enrich(ctx, cfg, models), nil
-	}
 	// OAuth 登录态和 API Key 同库同待遇，落在同一个 sqlite 上。
 	oauthManager := llmauth.NewManager(webui.NewLLMAuthStore(sqliteStore), nil)
 	if err := oauthManager.Restore(ctx); err != nil {
 		// 读不出来不该拦住启动：没有 OAuth 的配置档照常工作，
 		// 绑了 OAuth 的那些会在调用时给出「还没有登录」，比整个服务起不来好。
 		log.Printf("llm oauth: 读取登录态失败，本次以未登录状态启动: %v", err)
+	}
+	// 按配置档取客户端选项：绑了 OAuth 提供商时凭据由 oauthManager 现取现续，没绑
+	// 就返回空，和以前一样只用配置里的 API Key，连 HTTP 客户端都不会被包一层。
+	// 对话、生图改图、embedding、拉模型列表、注册表路由都从这一个口子取，免得
+	// 哪条路漏接，表现成「能聊天但生图说缺 API Key」。
+	llmClientOptions := func(cfg llm.ProviderConfig) []llm.ClientOption {
+		return llm.ClientOptionsFor(cfg, oauthManager)
+	}
+	// 模型列表必须从当前 provider 后端读取；公共目录只补全后端常常省略的
+	// 模态和 token 限制，失败时保留原列表与“能力未知”状态。
+	modelCatalog := llm.NewModelsDevCatalog(nil)
+	modelListFactory := func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
+		models, err := llm.ListModels(ctx, cfg, llmClientOptions(cfg)...)
+		if err != nil {
+			return nil, err
+		}
+		return modelCatalog.Enrich(ctx, cfg, models), nil
 	}
 	handler := webui.NewLLMConfigHandler(store)
 	handler.SetModelListFactory(modelListFactory)
@@ -427,10 +434,8 @@ func main() {
 	oneBotHTTPServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
 	forwardTracker := &forwardWSOriginTracker{}
 	channelSetFactory := newBotChannelSetFactory(oneBotServer, forwardTracker, oneBotHTTPServer)
-	// 配置档绑了 OAuth 提供商时，凭据由 oauthManager 现取现续；没绑就和以前一样
-	// 只用配置里的 API Key，连 HTTP 客户端都不会被包一层。
 	newLLMClient := func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
-		return llm.NewClient(cfg, llm.ClientOptionsFor(cfg, oauthManager)...)
+		return llm.NewClient(cfg, llmClientOptions(cfg)...)
 	}
 	botRuntime := assistant.NewRuntime(firstBotProfile(botSet), channelSetFactory(botSet), plugins, store, reminderStore, runtimePersistor, func() (assistant.LLMProvider, error) {
 		return newLLMClient(store.Current())
@@ -441,6 +446,7 @@ func main() {
 	botRuntime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (assistant.LLMProvider, error) {
 		return newLLMClient(cfg)
 	})
+	botRuntime.SetLLMClientOptions(llmClientOptions)
 	botRuntime.SetGroupConfigStore(botGroupConfigStore)
 	botRuntime.SetMessageHistoryStore(sqliteStore)
 	botRuntime.SetInboundEventStore(sqliteStore)

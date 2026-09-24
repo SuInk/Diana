@@ -88,7 +88,7 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 		opt(&options)
 	}
 	// 拉模型列表和发请求走同一套凭据，否则「测试连接通了但列不出模型」。
-	options.httpClient = httpClientWithCredentials(options.httpClient, options.credentials)
+	options.httpClient = httpClientWithConfigCredentials(options.httpClient, options.credentials, cfg)
 
 	switch cfg.Provider {
 	case ProviderOpenAICompatible:
@@ -108,7 +108,8 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 }
 
 func listGeminiModels(ctx context.Context, cfg ProviderConfig, client *http.Client) ([]ModelInfo, error) {
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	// 和 OpenAI-compatible 一样：绑了 OAuth 的配置档没有 API Key 是正常状态。
+	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	baseURL := normalizeGeminiBaseURL(cfg.BaseURL)
@@ -127,7 +128,9 @@ func listGeminiModels(ctx context.Context, cfg ProviderConfig, client *http.Clie
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("x-goog-api-key", cfg.APIKey)
+		if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+			req.Header.Set("x-goog-api-key", apiKey)
+		}
 		if userAgent := cfg.UserAgentWithDefault(); userAgent != "" {
 			req.Header.Set("User-Agent", userAgent)
 		}

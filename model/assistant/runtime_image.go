@@ -536,7 +536,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
 		started := time.Now()
-		resp, err := llm.GenerateImage(ctx, cfg, request)
+		resp, err := llm.GenerateImage(ctx, cfg, request, r.llmClientOptionsFor(cfg)...)
 		if err == nil {
 			r.recordImageUsage(ctx, cfg, resp, "image_generate", time.Since(started))
 			return resp, cfg, nil
@@ -559,7 +559,7 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
 		started := time.Now()
-		resp, err := llm.EditImage(ctx, cfg, request)
+		resp, err := llm.EditImage(ctx, cfg, request, r.llmClientOptionsFor(cfg)...)
 		if err == nil {
 			r.recordImageUsage(ctx, cfg, resp, "image_edit", time.Since(started))
 			return resp, cfg, nil

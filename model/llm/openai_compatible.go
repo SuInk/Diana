@@ -329,7 +329,8 @@ func (c *openAICompatibleClient) ManagesAttemptTimeout() bool {
 }
 
 // GenerateImage 调用 OpenAI-compatible 图片生成接口。
-func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGenerateRequest) (*ImageGenerateResponse, error) {
+func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGenerateRequest) (_ *ImageGenerateResponse, err error) {
+	defer func() { err = oauthImageError(c.cfg, "生图", err) }()
 	req = imageRequestWithDefaults(req, c.cfg)
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image prompt is required")
@@ -366,7 +367,8 @@ func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGen
 }
 
 // EditImage 调用 OpenAI-compatible 图片编辑接口。
-func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditRequest) (*ImageGenerateResponse, error) {
+func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditRequest) (_ *ImageGenerateResponse, err error) {
+	defer func() { err = oauthImageError(c.cfg, "改图", err) }()
 	req = imageEditRequestWithDefaults(req, c.cfg)
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image edit prompt is required")
@@ -1108,13 +1110,25 @@ func newImageHTTPClient(base *http.Client, cfg ProviderConfig) *http.Client {
 		return &client
 	}
 
-	transport := cloneHTTPTransport(base.Transport)
+	// 凭据注入包在最外层：直接拿它去 clone 会因为它不是 *http.Transport 而退回
+	// 默认传输层，OAuth 令牌跟着整层丢掉。先剥出底下那层改拨号，再原样包回去。
+	credentials, _ := base.Transport.(*credentialTransport)
+	inner := base.Transport
+	if credentials != nil {
+		inner = credentials.base
+	}
+	transport := cloneHTTPTransport(inner)
 	transport.Proxy = nil
 	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	transport.DialContext = func(ctx context.Context, network string, _ string) (net.Conn, error) {
 		return dialer.DialContext(ctx, network, origin)
 	}
 	client.Transport = transport
+	if credentials != nil {
+		rewrapped := *credentials
+		rewrapped.base = transport
+		client.Transport = &rewrapped
+	}
 	return &client
 }
 

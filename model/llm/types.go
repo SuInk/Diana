@@ -317,7 +317,7 @@ func NewClient(cfg ProviderConfig, opts ...ClientOption) (LLMClient, error) {
 		opt(&options)
 	}
 	// 凭据注入放在 HTTP 层，三家 provider 的 SDK 都不必知道 OAuth 的存在。
-	options.httpClient = httpClientWithCredentials(options.httpClient, options.credentials)
+	options.httpClient = httpClientWithConfigCredentials(options.httpClient, options.credentials, cfg)
 
 	// 对外统一 LLMClient 接口，内部按 provider 分发到不同 SDK/HTTP 协议。
 	switch cfg.Provider {

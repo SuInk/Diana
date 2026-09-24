@@ -396,6 +396,7 @@ type Runtime struct {
 	llmFactory            LLMProviderFactory
 	llmCfgFactory         LLMProviderConfigFactory
 	llmRegistry           *llm.ProviderRegistry
+	llmClientOptions      func(llm.ProviderConfig) []llm.ClientOption
 	llmReuseEpoch         uint64
 	rssJudgments          sharedResultCache[rssJudgeDecision]
 	replyInterruptMu      sync.Mutex
@@ -684,7 +685,6 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		channel:                 channel,
 		plugins:                 plugins,
 		llmStore:                llmStore,
-		modelLister:             defaultLLMModelLister,
 		reminders:               reminders,
 		configSaver:             configSaver,
 		llmFactory:              llmFactory,
