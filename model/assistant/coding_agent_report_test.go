@@ -312,3 +312,39 @@ func TestCodingApprovalWaitsForConnectionInsteadOfDenying(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// TestDeferredCodingReportRoutesLegacyProfileToCurrentBot 等连接期间重读的记录还记着
+// 旧号（#760）：汇报要改成现在的 ID 从那台机器人的连接发出，写回的归属也是新 ID。
+func TestDeferredCodingReportRoutesLegacyProfileToCurrentBot(t *testing.T) {
+	useTempCodingWorkspace(t)
+	channelA := &gatedDeliveryChannel{}
+	channelB := &gatedDeliveryChannel{connected: true, epoch: 1}
+	multi := NewMultiChannel([]ChannelBinding{
+		{ProfileID: "bot-a", Platform: PlatformOneBotV11, Name: "A", Channel: channelA},
+		{ProfileID: "bot-b", Platform: PlatformOneBotV11, Name: "B", Channel: channelB},
+	})
+	rt := NewRuntime(BotConfig{ID: "bot-a", BotAccount: "42", OwnerID: "1"}, multi, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	rt.mu.Lock()
+	rt.profileConfigs["bot-b"] = BotConfig{ID: "bot-b", BotAccount: "43", OwnerID: "1"}
+	rt.mu.Unlock()
+	rt.SetProfileAliases(map[string]string{"old-boot": "bot-a"})
+	fastCodingReports(t, rt)
+	job := saveFinishedCodingJob(t, "code-legacy", codingJobTarget{ProfileID: "old-boot", UserID: "7"})
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	rt.ResumeCodingJobs(ctx)
+	waitForCondition(t, 5*time.Second, func() bool { return codingReportRetries(rt) == 1 })
+	channelA.setConnected(true)
+	waitForCondition(t, 5*time.Second, func() bool { return codingJobReported(t, job.ID) })
+	waitForCondition(t, 5*time.Second, func() bool { return codingReportRetries(rt) == 0 })
+	if msgs := channelA.messages(); len(msgs) != 1 || msgs[0].UserID != "7" {
+		t.Fatalf("A 的汇报 = %#v", msgs)
+	}
+	if _, sent := channelB.counts(); sent != 0 {
+		t.Fatalf("汇报从 B 发出去了")
+	}
+	if saved, _ := loadCodingJob(job.ID); saved.Target.ProfileID != "bot-a" {
+		t.Fatalf("写回的归属 = %q", saved.Target.ProfileID)
+	}
+}

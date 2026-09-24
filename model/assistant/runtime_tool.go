@@ -539,11 +539,7 @@ func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, 
 	if r.profileDisabled(event.ProfileID) {
 		return fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
 	}
-	cfg := r.effectiveConfigForEvent(event)
-	_, err := r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
-		MentionUserID: strings.TrimSpace(event.UserID),
-		MentionAlways: true,
-	})
+	_, err := r.deliverNotice(ctx, event, text)
 	return err
 }
 
@@ -863,10 +859,16 @@ func (r *Runtime) rescheduleInterruptedReminder(id string, startedAt time.Time) 
 
 func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	defer r.releaseClaimedReminder(item.ID)
+	// 启动时第一轮调度跑在聊天客户端连上之前（反向 WebSocket 尤其如此）。这里发出的
+	// 消息碰上「连接没就绪」就等连接回来再发，见 deliverNotice。
+	ctx = withScheduledDelivery(ctx)
 	if reminderIsRSSWatch(item) {
 		startedAt, err := r.runClaimedRSSWatch(ctx, item)
 		if reminderRunInterrupted(ctx, err) {
 			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
+		if r.deferNotReadyReminder(item, err) {
 			return
 		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
@@ -886,6 +888,9 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		startedAt, err := r.runClaimedRepositoryWatch(ctx, item)
 		if reminderRunInterrupted(ctx, err) {
 			r.rescheduleInterruptedReminder(item.ID, startedAt)
+			return
+		}
+		if r.deferNotReadyReminder(item, err) {
 			return
 		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
@@ -921,6 +926,9 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 			r.rescheduleInterruptedReminder(item.ID, startedAt)
 			return
 		}
+		if r.deferNotReadyReminder(item, err) {
+			return
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -942,6 +950,9 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), "提醒你："+item.Message)
 	if reminderRunInterrupted(ctx, err) {
 		// 进程正在退出：这条提醒还没送到，保持原样等下次启动后再投。
+		return
+	}
+	if r.deferNotReadyReminder(item, err) {
 		return
 	}
 	if err != nil {

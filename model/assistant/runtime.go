@@ -461,6 +461,7 @@ type Runtime struct {
 	llmUsage              llmUsageTracker
 	reminderMu            sync.Mutex
 	activeReminders       map[string]struct{}
+	scheduledDeliveryWait scheduledDeliveryWaitTiming
 	inboundWake           chan struct{}
 	inboundManualBackfill chan time.Duration
 	// 重连后 seq 缺口检测的状态，见 inbound_gap.go。
@@ -6825,13 +6826,9 @@ func (r *Runtime) sendNotificationWithIDs(ctx context.Context, event MessageEven
 	if r.profileDisabled(event.ProfileID) {
 		return nil, fmt.Errorf("%w: %s", ErrDeliveryTargetDisabled, strings.TrimSpace(event.ProfileID))
 	}
-	cfg := r.effectiveConfigForEvent(event)
 	// 订阅推送是主动找人，知道订阅者是谁就 @ 上：这条动态是他订的，不点名的话
 	// 群里刷过去就错过了。目标是纯群（没有记订阅人）时 MentionUserID 为空，自然不 @。
-	return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
-		MentionUserID: strings.TrimSpace(event.UserID),
-		MentionAlways: true,
-	})
+	return r.deliverNotice(ctx, event, text)
 }
 
 // outboundDecoration 描述这次投递要不要挂引用和 @。

@@ -123,8 +123,14 @@ func (r *Runtime) attemptCodingReport(ctx context.Context, job CodingJob) bool {
 		return false
 	}
 	// 等的这段时间里机器人可能被删掉了：不是本机器人的任务一律不碰（#757）。
-	if !r.ownsCodingJob(job) {
+	owner, ok := r.codingJobOwner(job.Target.ProfileID)
+	if !ok {
 		return false
+	}
+	// 盘上的记录可能还记着旧号（#760）：按旧号发，MultiChannel 找不到连接。和接回
+	// 一样改成现在的 ID 再发，汇报成功后连同 Reported 一起写回。
+	if strings.TrimSpace(job.Target.ProfileID) != "" {
+		job.Target.ProfileID = owner
 	}
 	if err := r.sendSubscriberNotice(ctx, job.Target.event(), renderCodingJobReport(job)); err != nil {
 		if ctx.Err() != nil {
