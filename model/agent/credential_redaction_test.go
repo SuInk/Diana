@@ -200,6 +200,12 @@ func TestProtectRuntimePathsBlocksFilesAndDirectories(t *testing.T) {
 	if out, _ := run("grep", map[string]any{"pattern": "rt_"}); strings.Contains(out, refreshToken) {
 		t.Fatalf("grep 把登录令牌捞出来了：%s", out)
 	}
+	// 发附件、看图走 WorkspaceFileProtected，运行时登记的路径同样要挡。
+	for _, rel := range []string{"coding-runtime/auth/codex/p1/auth.json", "config.yaml"} {
+		if !WorkspaceFileProtected(Config{WorkDir: workDir}, rel) {
+			t.Fatalf("WorkspaceFileProtected 放行了登记过的凭据 %s", rel)
+		}
+	}
 
 	protected := agentProtectedFiles(Config{WorkDir: workDir})
 	existing := protected.existingPaths()
