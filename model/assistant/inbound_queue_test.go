@@ -33,9 +33,7 @@ func TestRuntimeDurableInboxSurvivesRestartAndDeduplicates(t *testing.T) {
 	channel := newQueueTestChannel()
 	provider := &sequenceLLMProvider{replies: []string{`{"action":"none","prompt":""}`, "恢复成功"}}
 	runtime := newQueuedTestRuntime(channel, store, provider)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 3*time.Second, func() bool { return channel.sentCount() == 1 })
 	if err := runtime.Stop(); err != nil {
 		t.Fatal(err)
@@ -45,9 +43,7 @@ func TestRuntimeDurableInboxSurvivesRestartAndDeduplicates(t *testing.T) {
 	}
 
 	restarted := newQueuedTestRuntime(channel, store, nil)
-	if err := restarted.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	startTestRuntime(t, restarted)
 	time.Sleep(700 * time.Millisecond)
 	if err := restarted.Stop(); err != nil {
 		t.Fatal(err)
@@ -81,9 +77,7 @@ func TestRuntimeBackfillsMissedHistoryIntoDurableQueue(t *testing.T) {
 	if channel.sentCount() != 0 {
 		t.Fatal("backfill should enqueue before workers process the message")
 	}
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 3*time.Second, func() bool {
 		return channel.sentCount() == 1 && store.isDone("group:123:901")
 	})
@@ -448,10 +442,7 @@ func TestRuntimeObservesConnectionEpochChangesWithoutDisconnectedEdge(t *testing
 	logs := &captureAppLogs{}
 	runtime := newQueuedTestRuntime(channel, store, nil)
 	runtime.SetAppLogWriter(logs)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Stop()
+	startTestRuntime(t, runtime)
 
 	waitForCondition(t, 2*time.Second, func() bool {
 		return hasAppLogAction(logs.entriesSnapshot(), "connection_opened")
@@ -502,10 +493,7 @@ func TestRuntimeBackfillsAgainWhenConnectionEpochChangesWithoutDisconnectEdge(t 
 		`{"action":"none","prompt":""}`, "第二次补回成功",
 	}}
 	runtime := newQueuedTestRuntime(channel, store, provider)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Stop()
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 4*time.Second, func() bool { return channel.sentCount() == 1 })
 
 	secondTime := time.Now().Unix()
@@ -528,10 +516,7 @@ func TestRuntimeBackfillsWhenAccountRecoversWithoutWSReconnect(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := newQueuedTestRuntime(channel, store, nil)
 	runtime.SetAppLogWriter(logs)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Stop()
+	startTestRuntime(t, runtime)
 
 	waitForCondition(t, 4*time.Second, func() bool {
 		return hasAppLogAction(logs.entriesSnapshot(), "backfill_completed")
@@ -569,10 +554,7 @@ func TestRuntimeManualBackfillRewindsWatermarkWithinWindow(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := newQueuedTestRuntime(channel, store, nil)
 	runtime.SetAppLogWriter(logs)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Stop()
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 4*time.Second, func() bool {
 		return hasAppLogAction(logs.entriesSnapshot(), "backfill_completed")
 	})
@@ -607,10 +589,7 @@ func TestRuntimeManualBackfillDoesNotReplyToDuplicates(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := newQueuedTestRuntime(channel, store, provider)
 	runtime.SetAppLogWriter(logs)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Stop()
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 4*time.Second, func() bool { return channel.sentCount() == 1 })
 
 	// 手动回补会把水位回退，再次拉到同一条消息，但入队去重必须挡住二次回复。
@@ -685,9 +664,7 @@ func TestRuntimeDrainsPendingWhileHistoryBackfillIsSlow(t *testing.T) {
 	channel := newBlockingHistoryChannel()
 	provider := &sequenceLLMProvider{replies: []string{`{"action":"none","prompt":""}`, "队列先恢复"}}
 	runtime := newQueuedTestRuntime(channel, store, provider)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	go func() { _ = runtime.backfillInboundHistory(context.Background(), store) }()
 	waitForSignal(t, channel.historyStarted)
 	waitForCondition(t, 2*time.Second, func() bool { return channel.sentCount() == 1 })
@@ -709,9 +686,7 @@ func TestRuntimeRecoversProcessingMessageWithinReplayWindowAfterRestart(t *testi
 	}
 	channel := newQueueTestChannel()
 	runtime := newQueuedTestRuntime(channel, store, &sequenceLLMProvider{replies: []string{`{"action":"none","prompt":""}`, "旧消息恢复成功"}})
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 3*time.Second, func() bool {
 		return channel.sentCount() == 1 && store.isDone("group:123:old-processing")
 	})
@@ -927,6 +902,26 @@ func newQueuedTestRuntime(channel Channel, store InboundEventStore, provider LLM
 	runtime := NewRuntime(BotConfig{Enabled: true, BotAccount: "42", GroupTriggers: []string{"Diana"}, OneBotAccessToken: "test-token"}, channel, NewPluginManager(), nil, nil, nil, factory)
 	runtime.SetInboundEventStore(store)
 	return runtime
+}
+
+// startTestRuntime 启动运行时，并保证用例无论成败都会停掉它。
+//
+// 用例中途 t.Fatal 时，写在末尾的 Stop 不会执行，运行时的收件协程、提醒循环和
+// 编码任务接管会一直跑到整包结束，和后面的用例抢同一个共享工作区。已经在用例里
+// 手动 Stop 过的，这里不会再停一次。
+func startTestRuntime(t *testing.T, runtime *Runtime) {
+	t.Helper()
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		runtime.mu.Lock()
+		started := runtime.cancel != nil
+		runtime.mu.Unlock()
+		if started {
+			_ = runtime.Stop()
+		}
+	})
 }
 
 func queuedDirectTestEvent(messageID string, eventTime int64) MessageEvent {

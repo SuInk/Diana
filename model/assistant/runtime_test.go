@@ -3399,16 +3399,21 @@ func TestRuntimeDoesNotIncludeVideoURLInLLMText(t *testing.T) {
 }
 
 func TestRuntimeDoesNotExtractVideoFramesForLLM(t *testing.T) {
+	// 视频地址指向本地服务：原先用的是 https://example.com/video.mp4，装了 ffmpeg
+	// 的机器会真的去外网下载，断网时报错文案随网络环境变化，用例跟着翻脸。
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	videoURL := server.URL + "/video.mp4"
 	msg := llmMessageFromEventWithVideoFrames(context.Background(), MessageEvent{
 		Kind:       EventKindPrivate,
 		UserID:     "10001",
 		MessageID:  "video-1",
 		RawMessage: "[视频]",
 		Segments: []MessageSegment{
-			{Type: "video", Data: map[string]string{"url": "https://example.com/video.mp4"}},
+			{Type: "video", Data: map[string]string{"url": videoURL}},
 		},
 	}, "[视频]", nil)
-	if len(msg.Parts) != 0 || strings.Contains(msg.Content, "https://example.com/video.mp4") {
+	if len(msg.Parts) != 0 || strings.Contains(msg.Content, videoURL) {
 		t.Fatalf("message should not include video-derived image context: %#v", msg)
 	}
 }

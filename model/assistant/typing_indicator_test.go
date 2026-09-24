@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -155,6 +156,11 @@ func TestTypingIndicatorNilSafe(t *testing.T) {
 type typingOrderChannel struct {
 	mu     sync.Mutex
 	events []string
+	// holdUntilTyping 里的文本发出前，先等上一条发送之后出现一次输入状态刷新。
+	// resume 只是给看护协程发个信号，真正的刷新在另一个协程里异步发生；两条之间
+	// 只隔 1ms 的话，CI 一卡刷新就落到第二条之后，用例会假报「没有补亮」。
+	// 在发送侧等住它，断言的仍是「补亮发生在两条之间」，只是不再和调度赛跑。
+	holdUntilTyping map[string]bool
 }
 
 func (*typingOrderChannel) Connect(context.Context, EventHandler) error { return nil }
@@ -165,8 +171,29 @@ func (*typingOrderChannel) CallAPI(context.Context, string, map[string]any) (map
 }
 
 func (c *typingOrderChannel) Send(_ context.Context, msg OutgoingMessage) error {
+	if c.holdUntilTyping[msg.Text] {
+		deadline := time.Now().Add(2 * time.Second)
+		for !c.typingSinceLastSend() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+	}
 	c.record("send:" + msg.Text)
 	return nil
+}
+
+// typingSinceLastSend 报告最近一次发送之后有没有刷新过输入状态。
+func (c *typingOrderChannel) typingSinceLastSend() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for index := len(c.events) - 1; index >= 0; index-- {
+		switch {
+		case c.events[index] == "typing":
+			return true
+		case strings.HasPrefix(c.events[index], "send:"):
+			return false
+		}
+	}
+	return false
 }
 
 func (c *typingOrderChannel) SendChatAction(context.Context, OutgoingMessage, string) error {
@@ -190,7 +217,7 @@ func (c *typingOrderChannel) snapshot() []string {
 // 「正在输入」断了，而末尾多刷一次会让状态在回复发完后继续闪。
 func TestDeliverChunksKeepsTypingUntilLastChunk(t *testing.T) {
 	withFastSendTiming(t)
-	channel := &typingOrderChannel{}
+	channel := &typingOrderChannel{holdUntilTyping: map[string]bool{"B": true}}
 	cfg := BotConfig{SendChunkIntervalMS: 1}
 	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, Platform: PlatformOneBotV11, UserID: "42"}

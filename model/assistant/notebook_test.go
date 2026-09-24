@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,8 +19,10 @@ import (
 // 条目和别名都参与「这段话里出现了哪个词」的子串匹配。
 type memoryNotebookStore struct {
 	entries map[string]NotebookEntry
-	touched map[string]int
-	nextID  int
+	// touchedMu 护着 touched：命中回写在运行时的后台协程里做，用例线程同时在读。
+	touchedMu sync.Mutex
+	touched   map[string]int
+	nextID    int
 }
 
 func newMemoryNotebookStore() *memoryNotebookStore {
@@ -134,10 +137,22 @@ func (s *memoryNotebookStore) NotebookEntryDetail(_ context.Context, scopeKey, t
 }
 
 func (s *memoryNotebookStore) TouchNotebookEntries(_ context.Context, ids []string, _ time.Time) error {
+	s.touchedMu.Lock()
+	defer s.touchedMu.Unlock()
 	for _, id := range ids {
 		s.touched[id]++
 	}
 	return nil
+}
+
+func (s *memoryNotebookStore) touchedSnapshot() map[string]int {
+	s.touchedMu.Lock()
+	defer s.touchedMu.Unlock()
+	out := make(map[string]int, len(s.touched))
+	for id, count := range s.touched {
+		out[id] = count
+	}
+	return out
 }
 
 func newNotebookRuntime(t *testing.T, store NotebookStore) *Runtime {
@@ -211,12 +226,9 @@ func TestNotebookContextInjectsMatchedEntries(t *testing.T) {
 	}
 
 	// 命中要回写，否则冷热排序永远不动，笔记本也就无从维护。
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && len(store.touched) == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(store.touched) != 1 {
-		t.Fatalf("touched = %v", store.touched)
+	waitForCondition(t, 2*time.Second, func() bool { return len(store.touchedSnapshot()) > 0 })
+	if touched := store.touchedSnapshot(); len(touched) != 1 {
+		t.Fatalf("touched = %v", touched)
 	}
 
 	if block := runtime.notebookContext(context.Background(), notebookTestEvent("10005", "今天天气不错"), "今天天气不错"); block != "" {
@@ -258,8 +270,8 @@ func TestProactiveRouterReceivesMatchedNotebookContext(t *testing.T) {
 			t.Fatalf("router prompt missing %q: %s", want, prompt)
 		}
 	}
-	if len(store.touched) != 0 {
-		t.Fatalf("routing lookup changed notebook usage counts: %#v", store.touched)
+	if touched := store.touchedSnapshot(); len(touched) != 0 {
+		t.Fatalf("routing lookup changed notebook usage counts: %#v", touched)
 	}
 }
 

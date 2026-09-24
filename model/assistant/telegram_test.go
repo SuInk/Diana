@@ -734,17 +734,16 @@ func TestTelegramCloseStopsPolling(t *testing.T) {
 		done <- ch.Connect(context.Background(), func(context.Context, MessageEvent) error { return nil })
 	}()
 
-	// 等 getMe 完成，说明已经进入轮询。
+	// 等 getMe 的结果真正写进状态，说明已经进入轮询。假 API 在收到请求时就记下
+	// 调用，客户端解析响应、写 SelfID 还在另一个协程里；只等「调用过」再立刻读
+	// 状态，会偶发读到空的 SelfID。
 	deadline := time.After(3 * time.Second)
-	for len(api.callsOf("getMe")) == 0 {
+	for ch.Status().SelfID != "4242" {
 		select {
 		case <-deadline:
-			t.Fatal("等待 getMe 超时")
+			t.Fatalf("应从 getMe 取得 self id，实际 %q（getMe 调用 %d 次）", ch.Status().SelfID, len(api.callsOf("getMe")))
 		case <-time.After(10 * time.Millisecond):
 		}
-	}
-	if ch.Status().SelfID != "4242" {
-		t.Fatalf("应从 getMe 取得 self id，实际 %q", ch.Status().SelfID)
 	}
 
 	_ = ch.Close()

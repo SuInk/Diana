@@ -194,9 +194,7 @@ func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive i
 		}
 		ids = append(ids, id)
 	}
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	// 等到 done 就够了：回复在 CompleteInboundEvent 之前同步发完，done 之后这条链路
 	// 不会再补发。条数对不上时先看失败信息里每条发送的对象，见 #711。
 	waitForCondition(t, 10*time.Second, func() bool {

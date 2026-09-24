@@ -1426,7 +1426,12 @@ func decodeOpenAITextEventStreamWithIdleTimeout(ctx context.Context, body io.Rea
 		result, decodeErr = decodeOpenAITextEventStreamResult(reader)
 		return decodeErr
 	})
-	return result, err
+	if err != nil {
+		// 空闲超时或取消时读取协程可能还在往 result 里写（关掉 body 之后它才会从
+		// 阻塞读里出来），这时去读 result 是数据竞争。出错时调用方本来也不用它。
+		return openAITextEventStreamResult{}, err
+	}
+	return result, nil
 }
 
 func textFromOpenAIStreamEvent(eventName string, data []byte) (openAIStreamEventResult, error) {

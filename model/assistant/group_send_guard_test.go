@@ -214,7 +214,7 @@ func TestGroupOutboundBackoffRetriesExactSendAndRecovers(t *testing.T) {
 	channel := newScriptedBackoffChannel("123456", "20005")
 	channel.failuresRemaining["123456"] = 2
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
-	ctx := withOutboundDeliveryPolicy(context.Background(), fastOutboundDeliveryPolicy())
+	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "retry-1"}
 
 	if err := runtime.send(ctx, event, "same payload"); err != nil {
@@ -239,7 +239,7 @@ func TestGroupOutboundBackoffContinuesRemainingChunksAfterFirstSuccess(t *testin
 	channel := newScriptedBackoffChannel("123456")
 	channel.attemptErrors = []error{nil, errors.New("second chunk failed once"), nil}
 	runtime := NewRuntime(BotConfig{ForwardReplyThreshold: 5000}, channel, NewPluginManager(), nil, nil, nil, nil)
-	ctx := withOutboundDeliveryPolicy(context.Background(), fastOutboundDeliveryPolicy())
+	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "chunks-1"}
 
 	if _, err := runtime.sendWithMessageIDs(ctx, event, "first"+notificationSplitMarker+"second"); err != nil {
@@ -305,7 +305,7 @@ func TestResolverAlternativeUsesSameBackoffGate(t *testing.T) {
 	channel.attemptErrors = []error{errors.New("OneBot rejected direct video")}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/token"})
-	ctx := withOutboundDeliveryPolicy(context.Background(), fastOutboundDeliveryPolicy())
+	ctx := withOutboundDeliveryPolicy(context.Background(), recoveringOutboundDeliveryPolicy())
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "video-1"}
 
 	if err := runtime.sendDirectPluginResponse(ctx, event, "链接解析结果", nil, []string{videoPath}); err != nil {
@@ -323,6 +323,8 @@ func TestResolverAlternativeUsesSameBackoffGate(t *testing.T) {
 	}
 }
 
+// fastOutboundDeliveryPolicy 把退避和失败窗口都压到毫秒级，给「窗口耗尽就丢弃」
+// 这类用例用：它们要的正是窗口很快过去。
 func fastOutboundDeliveryPolicy() outboundDeliveryPolicy {
 	return outboundDeliveryPolicy{
 		InitialDelay:  time.Millisecond,
@@ -330,6 +332,16 @@ func fastOutboundDeliveryPolicy() outboundDeliveryPolicy {
 		FailureWindow: 8 * time.Millisecond,
 		DropCooldown:  50 * time.Millisecond,
 	}
+}
+
+// recoveringOutboundDeliveryPolicy 给「失败几次后恢复」的用例用：退避照样是毫秒级，
+// 失败窗口却放宽到一分钟。8ms 的窗口要求几次重试加上中间的计时器唤醒全部挤在
+// 8ms 内，CI 机器一卡就超出窗口，第一次失败后直接被丢弃，报成「send failed after
+// 1 attempts」——测的是恢复，却因为调度抖动走进了丢弃分支。
+func recoveringOutboundDeliveryPolicy() outboundDeliveryPolicy {
+	policy := fastOutboundDeliveryPolicy()
+	policy.FailureWindow = time.Minute
+	return policy
 }
 
 // statusOverrideChannel 包装任意测试通道并允许用例中途切换连接/账号状态。
