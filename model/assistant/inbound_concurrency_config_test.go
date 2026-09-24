@@ -5,6 +5,8 @@ package assistant
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,8 +141,8 @@ func TestPrivateBurstFoldsIntoActiveDirectReply(t *testing.T) {
 func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("serial", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 1)
-		if replies != 3 || sent != 3 {
-			t.Fatalf("serial burst produced %d replies / %d sends, want 3 / 3", replies, sent)
+		if replies != 3 || len(sent) != 3 {
+			t.Fatalf("serial burst produced %d replies / %d sends, want 3 / 3%s", replies, len(sent), describeSentMessages(sent))
 		}
 		if maxActive != 1 {
 			t.Fatalf("serial burst ran %d generations at once, want 1", maxActive)
@@ -149,8 +151,8 @@ func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	t.Run("parallel", func(t *testing.T) {
 		replies, maxActive, sent := runPrivateBurst(t, 2)
 		// 并发时后到的那句会先问一次「是不是同一件事」，模型调用数可能多一次。
-		if replies < 3 || sent != 3 {
-			t.Fatalf("parallel burst produced %d replies / %d sends, want 3 / 3 when follow-ups are not classified as repeats", replies, sent)
+		if replies < 3 || len(sent) != 3 {
+			t.Fatalf("parallel burst produced %d replies / %d sends, want 3 / 3 when follow-ups are not classified as repeats%s", replies, len(sent), describeSentMessages(sent))
 		}
 		if maxActive < 2 {
 			t.Fatalf("max concurrent generations = %d, want at least 2 under private concurrency 2", maxActive)
@@ -158,7 +160,17 @@ func TestPrivateBurstUnderConcurrency(t *testing.T) {
 	})
 }
 
-func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive, sent int) {
+// describeSentMessages 把每条发送的对象和正文列出来。只报条数的话，多出来的一条
+// 是同一句回复发了两遍、分条补发，还是别处串进来的通知，从失败信息里分不出来。
+func describeSentMessages(sent []OutgoingMessage) string {
+	var builder strings.Builder
+	for index, msg := range sent {
+		fmt.Fprintf(&builder, "\n  send[%d]: user=%q group=%q text=%q", index, msg.UserID, msg.GroupID, truncateRunes(msg.Text, 120))
+	}
+	return builder.String()
+}
+
+func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive int, sent []OutgoingMessage) {
 	t.Helper()
 	store := newMemoryInboundEventStore()
 	channel := newQueueTestChannel()
@@ -185,6 +197,8 @@ func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive, 
 	if err := runtime.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// 等到 done 就够了：回复在 CompleteInboundEvent 之前同步发完，done 之后这条链路
+	// 不会再补发。条数对不上时先看失败信息里每条发送的对象，见 #711。
 	waitForCondition(t, 10*time.Second, func() bool {
 		for _, id := range ids {
 			if !store.isDone(id) {
@@ -198,5 +212,8 @@ func runPrivateBurst(t *testing.T, privateConcurrency int) (replies, maxActive, 
 	}
 
 	replies, maxActive = provider.stats()
-	return replies, maxActive, channel.sentCount()
+	channel.mu.Lock()
+	sent = append([]OutgoingMessage(nil), channel.sent...)
+	channel.mu.Unlock()
+	return replies, maxActive, sent
 }
