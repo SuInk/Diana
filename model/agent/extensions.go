@@ -66,7 +66,10 @@ type ExtensionState struct {
 	Transport   string   `json:"transport,omitempty"`
 	Tools       []string `json:"tools,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	// Credentials 只给 MCP：配了哪些请求头和环境变量、各自的掩码。这是模型侧能看到
+	// 的全部凭据信息，原文只在运行时本地拼请求时用。
+	Credentials []ExtensionCredential `json:"credentials,omitempty"`
+	Error       string                `json:"error,omitempty"`
 }
 
 type ExtensionCatalog interface {

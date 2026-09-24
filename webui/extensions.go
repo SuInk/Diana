@@ -39,6 +39,10 @@ func (h *BotHandler) extensions(c *gin.Context) {
 	if c.Request.Method == http.MethodPost && agent.ExtensionRequestMutatesState(req) {
 		recordRequestOperation(c, h.logs, "extensions_"+req.Operation, "扩展管理操作已完成", req.Name, map[string]any{"kind": req.Kind, "profile_id": req.ProfileID})
 	}
+	// 看明文不改状态，但凭据被谁在什么时候看过值得留痕。日志里只记是哪条服务，不记值。
+	if c.Request.Method == http.MethodPost && req.Operation == "reveal" {
+		recordRequestOperation(c, h.logs, "extensions_reveal", "已查看 MCP 凭据明文", req.Name, map[string]any{"kind": req.Kind})
+	}
 	if result == nil {
 		result = gin.H{"ok": true}
 	}

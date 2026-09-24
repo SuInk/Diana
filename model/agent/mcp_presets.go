@@ -46,8 +46,9 @@ type MCPPresetTransport struct {
 	// 按钮。它由 MCPPresetList 按 verify 是否存在填，不手写，免得和实现对不上。
 	Verifiable bool `json:"verifiable,omitempty"`
 	config     func(map[string]string) map[string]any
-	// values 是 config 的反向：从已保存的配置里取回非机密字段，好让编辑时那张表
-	// 是填好的。机密字段永远不回头取，它们在界面上留空表示「保持原值」。
+	// values 是 config 的反向：从已保存的配置里取回各字段。非机密字段回填进编辑表，
+	// 机密字段只拿去算掩码、或者在主人点「显示」时给 reveal 用，读配置时不回显；
+	// 在界面上留空表示「保持原值」。
 	values func(mcpServerConfig) map[string]string
 	// verify 拿拼好的配置去问一次服务端，确认这套凭据当真能用。收的是最终配置而
 	// 不是表单值：编辑时令牌可以留空表示沿用旧的，只有配置里才有那个旧值。没有
@@ -65,7 +66,8 @@ type MCPPresetField struct {
 	Placeholder string `json:"placeholder,omitempty"`
 	Hint        string `json:"hint,omitempty"`
 	Required    bool   `json:"required,omitempty"`
-	// Secret 的值不回显，和 MCP 的请求头、环境变量一样只写不读。
+	// Secret 的值读配置时只给掩码，和 MCP 的请求头、环境变量一样；原文只有主人在
+	// WebUI 里点「显示明文」走 reveal 才拿得到。
 	Secret bool `json:"secret,omitempty"`
 }
 
@@ -91,7 +93,7 @@ func giteaMCPPreset() MCPPreset {
 				Hint:  "推荐：Diana 直接拉起随包发布的 gitea-mcp，令牌只存在这条 MCP 的环境变量里，不经过第三方。",
 				Fields: []MCPPresetField{
 					{Key: "host", Label: "Gitea 实例地址", Placeholder: "https://git.example.com", Required: true},
-					{Key: "token", Label: "访问令牌", Hint: "Gitea 里生成的个人访问令牌，按 MCP 环境变量存放，不回显。", Required: true, Secret: true},
+					{Key: "token", Label: "访问令牌", Hint: "Gitea 里生成的个人访问令牌，按 MCP 环境变量存放，保存后只显示掩码。", Required: true, Secret: true},
 					{Key: "command", Label: "可执行文件", Placeholder: "留空用自带的那份", Hint: "只有要换成自己编译或另外安装的 gitea-mcp 时才填，可填命令名或绝对路径。"},
 				},
 				config: func(values map[string]string) map[string]any {
@@ -109,7 +111,7 @@ func giteaMCPPreset() MCPPreset {
 					}
 				},
 				values: func(cfg mcpServerConfig) map[string]string {
-					values := map[string]string{"host": cfg.Env["GITEA_HOST"]}
+					values := map[string]string{"host": cfg.Env["GITEA_HOST"], "token": cfg.Env["GITEA_ACCESS_TOKEN"]}
 					// 自带的那份是留空的意思，回填成绝对路径会让人以为自己填过。
 					// 裸名字同样算自带：没带这份二进制的旧版本就是这么存下来的。
 					if command := strings.TrimSpace(cfg.Command); command != "" &&
@@ -136,7 +138,7 @@ func giteaMCPPreset() MCPPreset {
 					return cfg
 				},
 				values: func(cfg mcpServerConfig) map[string]string {
-					return map[string]string{"url": cfg.URL}
+					return map[string]string{"url": cfg.URL, "authorization": cfg.Headers["Authorization"]}
 				},
 				// 这条接法的 Gitea 令牌配在对面那份 gitea-mcp 上，Diana 手里没有，
 				// 验不了；这里的 Authorization 是不是对，要连上去才知道，交给「测试连接」。
@@ -190,7 +192,7 @@ func (spec bearerTokenPreset) preset() MCPPreset {
 					return cfg
 				},
 				values: func(cfg mcpServerConfig) map[string]string {
-					values := map[string]string{}
+					values := map[string]string{"token": cfg.Headers["Authorization"]}
 					if url := strings.TrimSpace(cfg.URL); url != "" && url != spec.Endpoint {
 						values["url"] = url
 					}
@@ -363,13 +365,22 @@ func presetTransportByID(presetID, transportID string) (MCPPresetTransport, bool
 
 // presetValuesFromConfig 把已保存的配置还原成预设表单里的非机密字段。
 func presetValuesFromConfig(cfg mcpServerConfig) map[string]string {
+	return presetFieldValues(cfg, false)
+}
+
+// presetSecretValuesFromConfig 取回预设表单里的机密字段原文，只给算掩码和 reveal 用。
+func presetSecretValuesFromConfig(cfg mcpServerConfig) map[string]string {
+	return presetFieldValues(cfg, true)
+}
+
+func presetFieldValues(cfg mcpServerConfig, secret bool) map[string]string {
 	transport, ok := presetTransportByID(cfg.Preset, cfg.PresetTransport)
 	if !ok || transport.values == nil {
 		return map[string]string{}
 	}
 	values := transport.values(cfg)
 	for _, field := range transport.Fields {
-		if field.Secret {
+		if field.Secret != secret {
 			delete(values, field.Key)
 		}
 	}

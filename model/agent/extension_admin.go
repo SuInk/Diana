@@ -292,22 +292,34 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		data, _ := json.Marshal(previous)
 		var public map[string]any
 		_ = json.Unmarshal(data, &public)
-		headers, env := map[string]string{}, map[string]string{}
-		for key := range previous.Headers {
-			headers[key] = ""
-		}
-		for key := range previous.Env {
-			env[key] = ""
-		}
-		public["headers"], public["env"] = headers, env
+		// 凭据只给掩码：键还是那些键，值从以前的空串换成掩码，人能认出配的是哪一个。
+		// 掩码原样交回来等于「保持原值」，和留空一样，见 keepsStoredSecret。
+		public["headers"], public["env"] = maskedStringMap(previous.Headers), maskedStringMap(previous.Env)
 		result := map[string]any{"config": public, "configured_headers": sortedKeys(previous.Headers), "configured_env": sortedKeys(previous.Env)}
 		// 从预设装出来的，界面还用那张表来改：把出身和非机密字段一起给回去，
-		// 机密字段仍然只报「配过」，值不回显。
+		// 机密字段只报掩码，原文要主人点「显示」走 reveal。
 		if previous.Preset != "" {
 			result["preset"], result["preset_transport"] = previous.Preset, previous.PresetTransport
 			result["preset_values"] = presetValuesFromConfig(previous)
+			masks := map[string]string{}
+			for key, value := range presetSecretValuesFromConfig(previous) {
+				masks[key] = maskSecret(value)
+			}
+			result["preset_secret_masks"] = masks
 		}
 		return result, nil
+	}
+	if req.Operation == "reveal" {
+		// 明文只从这里出去，也只有 WebUI 调它：Agent 那边的扩展工具不转发任意操作，
+		// extension_access 只用 list、members、audience 这几个。
+		if !exists {
+			return nil, fmt.Errorf("MCP 不存在")
+		}
+		return map[string]any{
+			"headers":        cloneStringMap(previous.Headers),
+			"env":            cloneStringMap(previous.Env),
+			"preset_secrets": presetSecretValuesFromConfig(previous),
+		}, nil
 	}
 	if req.Operation == "delete" {
 		if !exists {
@@ -343,8 +355,9 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		// 填的也还是配置里当前的值。
 		server.Preset, server.PresetTransport = previous.Preset, previous.PresetTransport
 	}
-	// 凭据只写不读，所以「值留空」只能理解成「保持原值」。但键整个不在提交里，
-	// 那是人把那一行删掉了，就该真的删掉——通用表单里这些键本来就是自己填进去的。
+	// 凭据读出来只有掩码，所以「值留空」或「原样交回掩码」都只能理解成「保持原值」。
+	// 但键整个不在提交里，那是人把那一行删掉了，就该真的删掉——通用表单里这些键本来
+	// 就是自己填进去的。
 	//
 	// 预设表单是例外：它只提交自己那几个键，看不见也管不着别人额外注入的变量，
 	// 按「不在提交里就删」处理会把它们连坐清掉，所以那条路径一律保留。
@@ -353,7 +366,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if _, submitted := server.Headers[key]; !submitted && !keepAll {
 			continue
 		}
-		if strings.TrimSpace(server.Headers[key]) == "" {
+		if keepsStoredSecret(server.Headers[key], value, true) {
 			if server.Headers == nil {
 				server.Headers = map[string]string{}
 			}
@@ -364,7 +377,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if _, submitted := server.Env[key]; !submitted && !keepAll {
 			continue
 		}
-		if strings.TrimSpace(server.Env[key]) == "" {
+		if keepsStoredSecret(server.Env[key], value, true) {
 			if server.Env == nil {
 				server.Env = map[string]string{}
 			}
@@ -376,6 +389,9 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 	}
 	for _, key := range req.ClearEnv {
 		delete(server.Env, key)
+	}
+	if err := rejectUnmatchedMasks(server, previous); err != nil {
+		return nil, err
 	}
 	if err := server.validate(); err != nil {
 		return nil, err
