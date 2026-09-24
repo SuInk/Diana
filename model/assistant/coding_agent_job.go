@@ -76,7 +76,9 @@ type CodingJob struct {
 	ApprovalTimeoutSeconds int `json:"approval_timeout_seconds,omitempty"`
 	// Reported 标记结果已经发给用户了。重启接回要靠它避免把同一个结果汇报两次。
 	Reported bool `json:"reported,omitempty"`
-	// Target 是派活那条消息的来源，用来在任务结束后找回该往哪个会话汇报。
+	// Target 是派活那条消息的来源，用来在任务结束后找回该往哪个会话汇报。其中的
+	// ProfileID 同时是任务的归属：记录目录可能被几个实例共用，只有这台机器人所在
+	// 的 Runtime 才能接回、汇报和操作它。
 	Target codingJobTarget `json:"target"`
 }
 
@@ -115,6 +117,47 @@ func (t codingJobTarget) event() MessageEvent {
 
 func (j CodingJob) finished() bool {
 	return j.Status != codingJobStatusRunning
+}
+
+// codingJobOwner 把任务或事件上记的机器人档案 ID 对到这台 Runtime 的某台机器人上。
+//
+// 记录目录跟着 APP_DB_PATH 所在目录走，几个实例的数据库放在同一个目录下时会共用
+// 它，扫目录扫到的不一定是自己派的活。档案 ID 落在数据库里、重启不变，不同数据库
+// 各自生成，所以拿它认归属：非空 ID 必须精确命中；空 ID 只在这台 Runtime 只有一台
+// 机器人时归它。这里故意不沿用 lookupProfileLocked「对不上就退回唯一那台」的兜底，
+// 那个兜底恰好会把别的实例的任务认成自己的。
+func (r *Runtime) codingJobOwner(profileID string) (string, bool) {
+	profileID = strings.TrimSpace(profileID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if profileID != "" {
+		_, ok := r.profileConfigs[profileID]
+		return profileID, ok
+	}
+	if len(r.profileConfigs) == 1 {
+		for id := range r.profileConfigs {
+			return strings.TrimSpace(id), true
+		}
+	}
+	return "", false
+}
+
+// ownsCodingJob 报告任务是不是这台 Runtime 上某台机器人派出去的。不是的一律不碰：
+// 不接回、不汇报、不改写记录，留给它真正的主人。
+func (r *Runtime) ownsCodingJob(job CodingJob) bool {
+	_, ok := r.codingJobOwner(job.Target.ProfileID)
+	return ok
+}
+
+// codingJobVisibleTo 报告这条消息所属的机器人能不能看见、操作这个任务。同一个
+// Runtime 里的几台机器人主人可以不同，A 的主人不该查到或取消 B 派的活。
+func (r *Runtime) codingJobVisibleTo(job CodingJob, event MessageEvent) bool {
+	owner, ok := r.codingJobOwner(job.Target.ProfileID)
+	if !ok {
+		return false
+	}
+	caller, ok := r.codingJobOwner(event.ProfileID)
+	return ok && caller == owner
 }
 
 // CodingWorkspaceRoot 是编码代理的工作区根目录。和 Agent 工作目录同一套约定：
@@ -196,16 +239,6 @@ func listCodingJobs() []CodingJob {
 		jobs = jobs[:codingJobRetainCount]
 	}
 	return jobs
-}
-
-func runningCodingJobs() []CodingJob {
-	out := make([]CodingJob, 0, 4)
-	for _, job := range listCodingJobs() {
-		if !job.finished() {
-			out = append(out, job)
-		}
-	}
-	return out
 }
 
 // codingJobSnapshot 是从日志里读出来的实时进度。任务状态的真相在日志里，记录文件
@@ -550,6 +583,12 @@ func (r *Runtime) launchCodingJob(
 	instruction string,
 	resumeSession string,
 ) (CodingJob, error) {
+	// 归属在派活时就钉死：事件没带档案 ID 时补成解析出的那台，重启后按它认领。
+	// 认不出是哪台机器人收到的消息就不派——派出去之后没人能接回和汇报。
+	owner, ok := r.codingJobOwner(event.ProfileID)
+	if !ok {
+		return CodingJob{}, fmt.Errorf("认不出这条消息属于哪台机器人，编码任务派出去后没法汇报")
+	}
 	if err := prepareCodingRuntime(cfg); err != nil {
 		return CodingJob{}, err
 	}
@@ -572,6 +611,7 @@ func (r *Runtime) launchCodingJob(
 		StartedAt:        time.Now(),
 		Target:           codingJobTargetFromEvent(event),
 	}
+	job.Target.ProfileID = owner
 	job.LogPath = codingJobLogPath(job.ID)
 	job.Deadline = job.StartedAt.Add(cfg.MaxRuntime)
 
@@ -671,10 +711,12 @@ func (r *Runtime) watchCodingJob(job CodingJob, cmd *exec.Cmd, approvalTimeout t
 		if approvalTimeout <= 0 {
 			approvalTimeout = defaultCodingApprovalTimeoutMinutes * time.Minute
 		}
-		go func() {
+		// 传一份副本进去：下面等进程结束时要改 job.ExitCode，闭包直接捕获 job 就是
+		// 两个协程同时读写同一个变量。
+		go func(job CodingJob) {
 			defer recoverGoroutinePanic("coding.watchApprovals")
 			r.watchCodingApprovals(approvalCtx, job, approvalTimeout)
-		}()
+		}(job)
 	}
 
 	deadline := job.Deadline
@@ -885,6 +927,11 @@ func (r *Runtime) cancelCodingJob(ctx context.Context, id string) (CodingJob, er
 // 就按日志收尾并把欠下的汇报补上。
 func (r *Runtime) ResumeCodingJobs(ctx context.Context) {
 	for _, job := range listCodingJobs() {
+		// 别的实例派的活不接：它的收件人没跟这台打过交道，用这边的连接发出去就是
+		// 替别人汇报；标上 Reported 还会让真正的主人以后不再汇报。
+		if !r.ownsCodingJob(job) {
+			continue
+		}
 		// 停用的机器人不接手它的编码任务：接回来也没人能收到汇报，盯着进程只是
 		// 白占一个 goroutine。重新启用后这一轮会重新接手。
 		if r.profileDisabled(job.Target.event().ProfileID) {
