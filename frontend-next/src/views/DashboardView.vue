@@ -314,9 +314,9 @@ const llmConcurrencyFoot = computed(() => {
   return busiest ? `${peak} · ${busiest.model} ×${busiest.active}` : peak;
 });
 
-// 总览页只有一个时间选择，所有卡片跟着它走。「今日」读实时统计（进程内累加，重启
-// 清零），其余几档读库里的窗口查询（跨重启仍然成立）——两个口径不混在一起算，
-// 切到哪一档，页面上的数字就全部是那一档的。
+// 总览页只有一个时间选择，所有卡片跟着它走。「今日」读实时统计（从零点算起，启动
+// 时先用库里当天的记录垫底，再在进程内累加），其余几档读库里的窗口查询——两个口径
+// 不混在一起算，切到哪一档，页面上的数字就全部是那一档的。
 type DashboardRange = "today" | StatsRangeID;
 
 const rangeOptions: { value: DashboardRange; label: string }[] = [
@@ -400,7 +400,7 @@ const selectedUsage = computed<UsageDetail | null>(() => {
 
 const usageRangeNote = computed(() => {
   if (selectedRange.value === "today") {
-    return "今日合计由运行时累加，Diana 重启后从零开始计；换成下面几个时间窗读的就是用量日志，不受重启影响。";
+    return "今日合计从本地时间零点算起：Diana 启动时先把当天已记下的用量从日志里读回来，之后实时累加，重启不会清零。";
   }
   return "统计窗口内已写入日志的全部调用，包括路由判断、后台子任务这些不直接产生回复的调用。";
 });
@@ -534,7 +534,7 @@ const detailViews = computed<Record<DetailID, DetailView>>(() => {
               {
                 label: "上游没报用量",
                 value: `${formatNumber(status.value?.llm_usage?.today.missing_usage_calls ?? 0)} 次`,
-                hint: "这些调用的 token 没被计入，合计只会偏少"
+                hint: "这些调用的 token 没被计入，合计只会偏少；这一项只从本次启动算起"
               }
             ]
           : [])
