@@ -9,13 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 const macPDFVisionHelperName = "diana-pdf-vision"
@@ -59,7 +60,7 @@ func runNativeMacPDF(ctx context.Context, data []byte, mode string, maxPages int
 		return nativeMacPDFResult{}, true, fmt.Errorf("close native PDF input: %w", err)
 	}
 
-	command := exec.CommandContext(ctx, helper,
+	command := procgroup.CommandContext(ctx, helper,
 		"--mode", mode,
 		"--max-pages", strconv.Itoa(maxPages),
 		"--page-max-chars", strconv.Itoa(pageMaxChars),

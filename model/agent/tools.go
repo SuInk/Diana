@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -1152,13 +1153,13 @@ func readCommandOutput(file *os.File, maxBytes int, complete bool) (string, bool
 func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []string) (*exec.Cmd, string, error) {
 	mode := normalizeCommandSandboxMode(t.sandboxMode)
 	if mode == CommandSandboxOff {
-		return exec.CommandContext(ctx, command, args...), "", nil
+		return procgroup.CommandContext(ctx, command, args...), "", nil
 	}
 	if !t.sandbox.available() {
 		if mode == CommandSandboxRequire {
 			return nil, "", fmt.Errorf("command sandbox is required but unavailable on this host: install bubblewrap (Linux) or run on macOS with sandbox-exec")
 		}
-		return exec.CommandContext(ctx, command, args...), "", nil
+		return procgroup.CommandContext(ctx, command, args...), "", nil
 	}
 	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, t.protected.existingPaths(), command, args), t.sandbox.kind, nil
 }

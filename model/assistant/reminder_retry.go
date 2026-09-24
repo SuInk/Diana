@@ -149,7 +149,7 @@ func reminderFailureNotice(item Reminder, cause error) string {
 		if strings.TrimSpace(item.PendingDelivery) != "" {
 			return fmt.Sprintf("%s结果连续 %d 次发送失败，结果已保留。将在 %s 自动重试发送。", label, item.ConsecutiveFailures, nextAttempt)
 		}
-		return fmt.Sprintf("%s连续 %d 次执行失败：%s 将在 %s 自动重试。", label, item.ConsecutiveFailures, publicChatErrorMessage(cause), nextAttempt)
+		return fmt.Sprintf("%s连续 %d 次执行失败：%s 将在 %s 自动重试。", label, item.ConsecutiveFailures, publicTaskErrorMessage(cause), nextAttempt)
 	}
 	return fmt.Sprintf("提醒 %s 本次发送失败，将在 %s 自动重试（连续失败 %d 次）。", item.ID, nextAttempt, item.ConsecutiveFailures)
 }

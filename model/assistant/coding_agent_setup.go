@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 const codingAgentSettingKeys = "agent_api_keys"
@@ -65,7 +67,7 @@ func prepareCodingRuntime(cfg codingAgentConfig) error {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := exec.CommandContext(ctx, "git", "init", dir).Run(); err != nil {
+			if err := procgroup.CommandContext(ctx, "git", "init", dir).Run(); err != nil {
 				return fmt.Errorf("无法初始化工作目录，请检查 git 是否安装")
 			}
 		}
@@ -138,7 +140,7 @@ func CodingAgentSetup(ctx context.Context, settings SettingValues, name, operati
 	path, lookErr := exec.LookPath(cfg.Command)
 	if lookErr == nil {
 		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		probe := exec.CommandContext(probeCtx, path, "--version")
+		probe := procgroup.CommandContext(probeCtx, path, "--version")
 		lookErr = probe.Run()
 		cancel()
 	}
@@ -180,7 +182,7 @@ func CodingAgentSetup(ctx context.Context, settings SettingValues, name, operati
 		if _, err := os.Stat(codingManagedCommand(cfg.Backend)); err != nil {
 			return status, fmt.Errorf("安装完成但未找到 CLI")
 		}
-		probe := exec.CommandContext(runCtx, codingManagedCommand(cfg.Backend), "--version")
+		probe := procgroup.CommandContext(runCtx, codingManagedCommand(cfg.Backend), "--version")
 		if err := probe.Run(); err != nil {
 			return status, fmt.Errorf("CLI 已安装但无法启动，请检查系统架构和运行库")
 		}

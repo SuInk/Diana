@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/agent"
 )
 
@@ -534,7 +535,7 @@ func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings,
 	}()
 	args := agent.PersistentBrowserArgs(profileDir, cacheDir, crashDir,
 		!settings.Headful, 0, settings.WindowWidth, settings.WindowHeight)
-	cmd := exec.Command(executable, args...)
+	cmd := procgroup.Isolate(exec.Command(executable, args...))
 	cmd.Dir = dir
 	// TMPDIR 不能跟着 dir 走：Chrome 在 TMPDIR 下建单实例用的 Unix 套接字，路径上限
 	// 108 字节（macOS 104），而 dir 是「数据目录/browser-box/profiles/<机器人 UUID>」，
@@ -572,7 +573,7 @@ func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings,
 	case wsURL := <-found:
 		httpURL, err := debugHTTPBase(wsURL)
 		if err != nil {
-			_ = cmd.Process.Kill()
+			_ = procgroup.Kill(cmd)
 			return err
 		}
 		started = true
@@ -590,10 +591,10 @@ func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings,
 		// 原因就在它刚打印的那几行里，等 30 秒只是把这条信息推迟 30 秒。
 		return fmt.Errorf("浏览器启动后立即退出：%s", diagnostics.String())
 	case <-time.After(launchTimeout):
-		_ = cmd.Process.Kill()
+		_ = procgroup.Kill(cmd)
 		return fmt.Errorf("浏览器启动超时：没有等到 DevTools 调试地址。最后的输出：%s", diagnostics.String())
 	case <-ctx.Done():
-		_ = cmd.Process.Kill()
+		_ = procgroup.Kill(cmd)
 		return ctx.Err()
 	}
 }
@@ -614,7 +615,7 @@ func (m *Manager) stop(id string) {
 	inst.cdpURL = ""
 	m.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		_ = procgroup.Kill(cmd)
 	}
 	// 浏览器没了这块虚拟屏就没人用了，留着只是一个占内存的孤儿进程。
 	display.Stop()

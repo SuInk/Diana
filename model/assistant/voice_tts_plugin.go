@@ -12,13 +12,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/agent"
 )
 
@@ -93,7 +93,7 @@ func NewVoiceTTSPlugin(client *http.Client) *VoiceTTSPlugin {
 	return &VoiceTTSPlugin{
 		client: client,
 		commandRunner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return exec.CommandContext(ctx, name, args...).CombinedOutput()
+			return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
 		},
 	}
 }
@@ -404,7 +404,7 @@ func (p *VoiceTTSPlugin) encodeTencentSilk(ctx context.Context, cfg voiceTTSConf
 
 func (p *VoiceTTSPlugin) runVoiceCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if p.commandRunner == nil {
-		return exec.CommandContext(ctx, name, args...).CombinedOutput()
+		return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
 	}
 	return p.commandRunner(ctx, name, args...)
 }

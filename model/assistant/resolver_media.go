@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/netguard"
 )
 
@@ -175,7 +176,7 @@ func downloadYTDLPVideoFile(ctx context.Context, raw string) string {
 	outputPattern := filepath.Join(workDir, "video.%(ext)s")
 	cmdCtx, cancel := context.WithTimeout(ctx, defaultPlatformTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, ytDLPPath, ytDLPFullVideoDownloadArgs(ctx, outputPattern, raw)...)
+	cmd := procgroup.CommandContext(cmdCtx, ytDLPPath, ytDLPFullVideoDownloadArgs(ctx, outputPattern, raw)...)
 	// yt-dlp 会自己去调 ffmpeg，子进程也得能找到这些目录。
 	cmd.Env = resolverCommandEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -705,7 +706,7 @@ func ytdlpDumpInfo(ctx context.Context, raw string) (ytdlpInfo, bool) {
 	args := []string{"--simulate", "--dump-json", "--no-warnings"}
 	args = appendYTDLPResolverArgs(ctx, args, raw)
 	args = append(args, raw)
-	cmd := exec.CommandContext(cmdCtx, ytDLPPath, args...)
+	cmd := procgroup.CommandContext(cmdCtx, ytDLPPath, args...)
 	cmd.Env = resolverCommandEnv()
 	output, err := cmd.Output()
 	if err != nil {
@@ -1191,7 +1192,7 @@ func mergeMediaToMP4(ctx context.Context, videoPath string, audioPath string, ou
 	}
 	cmdCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(cmdCtx, ffmpegPath, "-hide_banner", "-loglevel", "error", "-y", "-i", videoPath, "-i", audioPath, "-c", "copy", outputPath)
+	cmd := procgroup.CommandContext(cmdCtx, ffmpegPath, "-hide_banner", "-loglevel", "error", "-y", "-i", videoPath, "-i", audioPath, "-c", "copy", outputPath)
 	cmd.Env = resolverCommandEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("resolver ffmpeg merge failed: %v: %s", err, strings.TrimSpace(string(output)))

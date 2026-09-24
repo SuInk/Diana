@@ -16,13 +16,13 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/netguard"
@@ -216,8 +216,15 @@ func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, even
 	wav := filepath.Join(workDir, "audio.wav")
 	callCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
-	if out, err := exec.CommandContext(callCtx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-t", strconv.Itoa(int(cfg.MaxDuration.Seconds())+1), "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav).CombinedOutput(); err != nil {
-		return "", audioHash, 0, false, "unsupported_or_corrupt", fmt.Errorf("ffmpeg normalize: %w: %s", err, strings.TrimSpace(string(out)))
+	if out, err := procgroup.CommandContext(callCtx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-t", strconv.Itoa(int(cfg.MaxDuration.Seconds())+1), "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav).CombinedOutput(); err != nil {
+		// ffmpeg 是被时限或上层取消杀掉的，就不是音频坏了：记成「坏文件」会被当成
+		// 永久失败，不再重试，也让排查的人去怀疑一段其实没问题的语音。
+		code := "unsupported_or_corrupt"
+		if ctxErr := callCtx.Err(); ctxErr != nil {
+			code = voiceSTTContextCode(ctxErr)
+			err = fmt.Errorf("%w (%w)", ctxErr, err)
+		}
+		return "", audioHash, 0, false, code, fmt.Errorf("ffmpeg normalize: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	duration, _ := voiceDuration(callCtx, wav)
 	if duration > cfg.MaxDuration {
@@ -236,6 +243,9 @@ func (p *VoiceSTTPlugin) transcribeSegment(ctx context.Context, r *Runtime, even
 		code := "provider_rejected"
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(callCtx.Err(), context.DeadlineExceeded) {
 			code = "timeout"
+		} else if callCtx.Err() != nil {
+			// 上层取消（停机、重载配置）不是服务商拒绝了这段语音。
+			code = voiceSTTContextCode(callCtx.Err())
 		}
 		return "", audioHash, duration, false, code, err
 	}
@@ -410,7 +420,7 @@ func (r *Runtime) voiceSourceAnalysisWAV(ctx context.Context, event MessageEvent
 		durationLimit = cfg.MaxDuration
 	}
 	wav := filepath.Join(workDir, "analysis.wav")
-	out, err := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-t", strconv.Itoa(int(durationLimit.Seconds())), "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", wav).CombinedOutput()
+	out, err := procgroup.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-t", strconv.Itoa(int(durationLimit.Seconds())), "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", wav).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg prepare voice source: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -473,7 +483,7 @@ func localVoiceTranscription(ctx context.Context, wav string, cfg voiceSTTConfig
 	if cfg.Language != "" && cfg.Language != "auto" {
 		args = append(args, "-l", cfg.Language)
 	}
-	out, err := exec.CommandContext(ctx, cfg.LocalCommand, args...).CombinedOutput()
+	out, err := procgroup.CommandContext(ctx, cfg.LocalCommand, args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("local whisper: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -544,6 +554,15 @@ func (e voiceSTTProviderError) Error() string {
 	return fmt.Sprintf("transcription provider HTTP %d", e.StatusCode)
 }
 
+// voiceSTTContextCode 把 ctx 结束的原因翻成失败码：到时限是 timeout（按瞬时故障
+// 重试），被上层取消是 cancelled（和排队时被取消同一个码）。两种都不是语音本身的问题。
+func voiceSTTContextCode(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "cancelled"
+}
+
 func voiceSTTErrorIsTransient(code string, err error) bool {
 	if code == "timeout" || code == "cache_save_failed" || code == "cache_cleanup_failed" || errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -572,7 +591,7 @@ func (p *VoiceSTTPlugin) acquire(ctx context.Context, concurrency int) (chan str
 }
 
 func voiceDuration(ctx context.Context, path string) (time.Duration, error) {
-	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
+	out, err := procgroup.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
 	if err != nil {
 		return 0, err
 	}

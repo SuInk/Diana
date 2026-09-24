@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/netguard"
 )
 
@@ -258,7 +259,7 @@ func extractLocalVideoFrames(ctx context.Context, videoPath string, limit int) (
 	for i, timestamp := range timestamps {
 		framePath := filepath.Join(workDir, fmt.Sprintf("frame-%02d.jpg", i+1))
 		callCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		cmd := exec.CommandContext(callCtx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", strconv.FormatFloat(timestamp, 'f', 3, 64), "-i", stagedPath, "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-q:v", "3", framePath)
+		cmd := procgroup.CommandContext(callCtx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", strconv.FormatFloat(timestamp, 'f', 3, 64), "-i", stagedPath, "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-q:v", "3", framePath)
 		output, runErr := cmd.CombinedOutput()
 		cancel()
 		if runErr != nil {
@@ -314,7 +315,7 @@ func probeVideoDuration(ctx context.Context, path string) float64 {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(callCtx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
+	output, err := procgroup.CommandContext(callCtx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
 	if err != nil {
 		return 0
 	}

@@ -10,15 +10,17 @@ package hostinfo
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 var processStartedAt = time.Now()
@@ -351,9 +353,15 @@ func ProcessUsage(pid int) (float64, uint64, error) {
 	return RoundPercent(cpu), rssKB * 1024, nil
 }
 
-// CommandOutput 跑一条命令并返回它的标准输出，失败时返回空串。
+// commandOutputTimeout 是查询主机信息的命令的上限。sysctl、ps、vm_stat 平时几毫秒
+// 就返回；系统卡住时不能让状态页的请求陪着一直等。
+const commandOutputTimeout = 5 * time.Second
+
+// CommandOutput 跑一条命令并返回它的标准输出，失败或超时时返回空串。
 func CommandOutput(name string, args ...string) string {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), commandOutputTimeout)
+	defer cancel()
+	cmd := procgroup.CommandContext(ctx, name, args...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {

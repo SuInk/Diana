@@ -91,6 +91,28 @@ func publicChatErrorMessage(err error) string {
 	return sanitizePublicErrorDetail(raw)
 }
 
+// publicTaskErrorMessage 给后台任务（RSS、仓库订阅、周期任务、后台子任务）的失败提示用。
+// publicChatErrorMessage 默认错误来自聊天回复那一次模型调用，所以把任何超时都说成
+// 「上游模型服务请求超时」；后台任务的超时却多半出在抓 Feed、查 GitHub 或任务自己的
+// 时限上，照搬那句话会让主人去查一个没出问题的模型配置。只有错误确实带着模型配置档
+// 身份（经过模型重试链）时才归到模型头上。
+func publicTaskErrorMessage(err error) string {
+	if err != nil && llmProviderAttemptLabel(err) == "" && isTimeoutError(err) {
+		return "请求超时，请稍后重试。"
+	}
+	return publicChatErrorMessage(err)
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client.timeout exceeded while awaiting headers") ||
+		strings.Contains(lower, "timeout awaiting response headers")
+}
+
 // withProviderAttemptLabel 把「哪个配置档、哪个模型」补回那些改写过正文的提示。
 // 这几条提示原本只说「上游超时了」，配了多个配置档时看不出该去查哪一个。
 func withProviderAttemptLabel(message string, err error) string {

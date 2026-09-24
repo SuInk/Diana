@@ -218,7 +218,10 @@ func (h *LLMConfigHandler) providerModels(c *gin.Context) {
 		h.writeError(c, 422, "llm_providers_models", err, payload.ProviderID, nil)
 		return
 	}
-	models, err := registry.ListModels(c.Request.Context(), payload.ProviderID)
+	// 和 /api/llm/models 同一个上限：供应商不回话时，请求只会跟着浏览器一直挂着。
+	listCtx, cancel := context.WithTimeout(c.Request.Context(), llmModelListTimeout)
+	defer cancel()
+	models, err := registry.ListModels(listCtx, payload.ProviderID)
 	if err != nil {
 		h.writeError(c, 502, "llm_providers_models", err, payload.ProviderID, nil)
 		return
@@ -330,7 +333,9 @@ func (h *LLMConfigHandler) saveConfig(c *gin.Context) {
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		if len(cfg.Models) == 0 {
-			models, err := h.listModels(c.Request.Context(), cfg)
+			listCtx, cancel := context.WithTimeout(c.Request.Context(), llmModelListTimeout)
+			models, err := h.listModels(listCtx, cfg)
+			cancel()
 			if err != nil {
 				h.writeError(c, 502, "llm_config_save_models", err, llmLogTarget(payload), llmLogMetadata(cfg, payload.ID))
 				return
