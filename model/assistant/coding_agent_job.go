@@ -526,6 +526,12 @@ type codingJobRegistry struct {
 	watched map[string]bool
 	// approvals 按放行码和拒绝码两个键指向同一个等待项，主人回哪个码都认。
 	approvals map[string]*codingApprovalWait
+	// reportMu 把「读盘确认还没汇报 → 发送 → 落 Reported」串成一步，见 attemptCodingReport。
+	reportMu sync.Mutex
+	// reportRetries 是每个任务正在等连接、等退避的那个汇报协程。
+	reportRetries map[string]*codingReportRetry
+	// reportTiming 只给测试调快节奏，零值走默认。
+	reportTiming codingReportTiming
 }
 
 func (r *Runtime) codingJobs() *codingJobRegistry {
@@ -534,6 +540,8 @@ func (r *Runtime) codingJobs() *codingJobRegistry {
 			running:   map[string]string{},
 			watched:   map[string]bool{},
 			approvals: map[string]*codingApprovalWait{},
+
+			reportRetries: map[string]*codingReportRetry{},
 		}
 	})
 	return r.codingJobRegistry
@@ -829,26 +837,6 @@ func (r *Runtime) finalizeCodingJob(ctx context.Context, job CodingJob, timedOut
 	}
 	r.recordCodingJobLog(ctx, job, kind, level, "编码任务已结束："+job.Status, firstNonEmpty(job.Error, job.Result))
 	r.reportCodingJob(ctx, job)
-}
-
-// reportCodingJob 把结果发回派活的那个会话。汇报成功才落 Reported：发失败时下次
-// 启动还会再试一次，比静默丢掉一小时的工作强。
-func (r *Runtime) reportCodingJob(ctx context.Context, job CodingJob) {
-	if job.Reported || !job.finished() {
-		return
-	}
-	target := job.Target.event()
-	if strings.TrimSpace(target.UserID) == "" && strings.TrimSpace(target.GroupID) == "" {
-		return
-	}
-	if err := r.sendSubscriberNotice(ctx, target, renderCodingJobReport(job)); err != nil {
-		r.setError(err.Error())
-		return
-	}
-	job.Reported = true
-	if err := saveCodingJob(job); err != nil {
-		r.setError(err.Error())
-	}
 }
 
 func renderCodingJobReport(job CodingJob) string {

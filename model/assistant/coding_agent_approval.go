@@ -332,6 +332,19 @@ func (r *Runtime) askCodingApproval(ctx context.Context, job CodingJob, wait *co
 	allowCode, denyCode := wait.allowCode, wait.denyCode
 	defer r.codingJobs().dropApproval(wait)
 
+	// 重启接回的任务可能一启动就在等确认，这时聊天客户端多半还没连上（反向
+	// WebSocket 尤其如此）。先等连接，别一句「未连接」就把操作拒掉；等掉的时间从
+	// 确认时限里扣，总时长不变。
+	waitStarted := time.Now()
+	if !r.waitDeliveryConnection(ctx, r.codingReportProfile(job), timeout, r.codingJobs().timing().poll) && ctx.Err() != nil {
+		return
+	}
+	timeout -= time.Since(waitStarted)
+	if timeout <= 0 {
+		writeCodingApprovalResponse(request, codingApprovalResponse{Reason: "确认时限内聊天连接一直没就绪，没能把确认请求发给主人"})
+		return
+	}
+
 	always := ""
 	if wait.alwaysCode != "" {
 		always = fmt.Sprintf("这类操作（%s）以后都同意就回 %s，", request.Pattern, wait.alwaysCode)
