@@ -348,6 +348,7 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	}
 	detail, ok, status := fetchDetail(ctx, raw)
 	if !ok {
+		result.Failed = true
 		result.Context = "[抖音] 链接已识别，但平台接口解析失败。"
 		recordResolverMediaLog(ctx, req, raw, "douyin", false, status)
 		return result
@@ -386,6 +387,9 @@ func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req Plugin
 	result := resolverSocialResult{Handled: true}
 	note, status := fetchXiaohongshuNote(ctx, raw)
 	if status != "" {
+		// 失败提示不占这条笔记的去重窗口和结果缓存：换好 Cookie 马上重发，
+		// 拿到的该是真结果，而不是被当成「十分钟内已经发过」吞掉。
+		result.Failed = true
 		switch status {
 		case "missing_cookie":
 			result.Context = "[小红书] 需要在插件设置里填写小红书 Cookie（或配置 DIANA_XHS_CK）后才能解析笔记。"
