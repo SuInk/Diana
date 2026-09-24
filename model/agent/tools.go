@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/SuInk/diana/internal/procgroup"
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -1167,20 +1169,35 @@ func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []
 	return t.sandbox.wrap(ctx, t.root, t.sandboxNetwork, t.protected.existingPaths(), command, args), t.sandbox.kind, nil
 }
 
-// commandEnvironment 是命令继承的环境：Diana 自己的进程环境，去掉 MCP 配置里用
-// ${NAME} 引用的那些变量。主人常把令牌放在进程环境里、配置只写引用，白名单里有
-// env、printenv 时它们就是令牌原文——沙箱挡的是文件，挡不住继承下来的环境变量。
-// 配置读不出来时照常继承：这时也不知道该摘哪些，拦下命令只会让人摸不着头脑。
+// commandEnvironment 是命令继承的环境：Diana 自己的进程环境，去掉凭据。
+//
+//   - MCP 配置里用 ${NAME} 引用的那些变量：主人常把令牌放在进程环境里、配置只写引用。
+//   - 名字像凭据的变量（TAVILY_API_KEY、GITHUB_TOKEN、DIANA_BILI_SESSDATA、编码代理
+//     的 api_key_env 之类）和值里嵌着 userinfo 的地址（带账号密码的代理）。
+//
+// 白名单里有 env、printenv 时这些就是令牌原文——沙箱挡的是文件，挡不住继承下来的
+// 环境变量。白名单里的命令是给模型查东西用的，不需要主人的凭据。
 func (t *RunCommandTool) commandEnvironment() []string {
-	environ := os.Environ()
-	if strings.TrimSpace(t.mcpConfigPath) == "" {
-		return environ
+	return commandEnvironmentFor(os.Environ(), t.mcpConfigPath)
+}
+
+func commandEnvironmentFor(environ []string, mcpConfigPath string) []string {
+	drop := secretmask.SensitiveEnvironmentNames(environ)
+	for _, item := range environ {
+		name, value, _ := strings.Cut(item, "=")
+		if secretmask.URLs(value) != value {
+			drop[name] = true
+		}
 	}
-	servers, err := loadMCPServers(t.mcpConfigPath)
-	if err != nil {
-		return environ
+	if strings.TrimSpace(mcpConfigPath) != "" {
+		// 配置读不出来时只少摘这一类：这时也不知道该摘哪些，拦下命令只会让人摸不着头脑。
+		if servers, err := loadMCPServers(mcpConfigPath); err == nil {
+			for name := range mcpReferencedEnvironment(servers) {
+				drop[name] = true
+			}
+		}
 	}
-	return environmentWithout(environ, mcpReferencedEnvironment(servers))
+	return environmentWithout(environ, drop)
 }
 
 func (t *RunCommandTool) commandAllowed(command string) bool {
@@ -1502,16 +1519,59 @@ func agentProtectedFiles(cfg Config) protectedFiles {
 		extensionAudiencePath(cfg.WorkDir),
 		filepath.Join(cfg.WorkDir, extensionPathsFileName),
 	} {
-		for _, form := range protectedPathForms(path) {
-			protected.files[form] = true
-		}
+		protected.add(path, false)
 	}
 	if strings.TrimSpace(cfg.WorkDir) != "" {
 		for _, name := range codingRuntimeCredentialDirs {
-			protected.dirs = append(protected.dirs, protectedPathForms(filepath.Join(cfg.WorkDir, CodingRuntimeDirName, name))...)
+			protected.add(filepath.Join(cfg.WorkDir, CodingRuntimeDirName, name), true)
 		}
 	}
+	runtimeSecretPaths.RLock()
+	for path, dir := range runtimeSecretPaths.paths {
+		protected.add(path, dir)
+	}
+	runtimeSecretPaths.RUnlock()
 	return protected
+}
+
+// runtimeSecretPaths 是运行时登记的其他凭据位置：config.yaml（管理员密码、首启播种
+// 的 API Key）、SQLite 数据库（全部插件凭据和 LLM 密钥）、日志（首启生成的管理员
+// 密码只打印这一次）、内置浏览器的 profile（各站点登录态）、编码代理的登录目录。
+// 它们大多在工作目录外面，文件工具本来就够不着；拦的是 run_command——沙箱只限制
+// 写入，白名单里有 cat、strings 时一句 `cat ../diana.db` 就把所有凭据打进聊天记录。
+var runtimeSecretPaths = struct {
+	sync.RWMutex
+	paths map[string]bool // 值为 true 表示整个目录
+}{paths: map[string]bool{}}
+
+// ProtectRuntimeFiles 登记几份凭据文件，文件工具和命令沙箱都不放行读取。
+func ProtectRuntimeFiles(paths ...string) { protectRuntimePaths(false, paths) }
+
+// ProtectRuntimeDirs 登记几个凭据目录，目录下的一切同样不放行。
+func ProtectRuntimeDirs(paths ...string) { protectRuntimePaths(true, paths) }
+
+func protectRuntimePaths(dir bool, paths []string) {
+	runtimeSecretPaths.Lock()
+	defer runtimeSecretPaths.Unlock()
+	for _, path := range paths {
+		if path = strings.TrimSpace(path); path != "" {
+			runtimeSecretPaths.paths[path] = dir
+		}
+	}
+}
+
+// add 登记一个路径：dir 为 true 时整个目录连同下面的一切都挡。
+func (p *protectedFiles) add(path string, dir bool) {
+	for _, form := range protectedPathForms(path) {
+		if !dir {
+			p.files[form] = true
+			continue
+		}
+		form = strings.TrimRight(form, string(filepath.Separator))
+		if form != "" && !slices.Contains(p.dirs, form) {
+			p.dirs = append(p.dirs, form)
+		}
+	}
 }
 
 // protectedPathForms 返回一个路径的绝对形式和解析软链接之后的真实形式：safePath 只
@@ -1571,6 +1631,7 @@ func (p protectedFiles) matches(path string) bool {
 
 // existingPaths 返回当前真实存在的凭据文件和凭据目录，排序后给沙盒用。不存在的路径
 // 不能交给 bubblewrap：绑定目标不存在会让整条命令起不来，而「配置还没生成」是常态。
+// 目录只认显式登记成目录的那些。
 func (p protectedFiles) existingPaths() []string {
 	if len(p.files) == 0 && len(p.dirs) == 0 {
 		return nil
@@ -1586,11 +1647,14 @@ func (p protectedFiles) existingPaths() []string {
 			out = append(out, dir)
 		}
 	}
+	if len(out) == 0 {
+		return nil
+	}
 	sort.Strings(out)
 	return out
 }
 
 // errProtectedFile 的措辞要让模型能如实转述：这不是「文件不存在」，也不是权限没配好。
 func errProtectedFile(rel string) error {
-	return fmt.Errorf("%s 是 Diana 的运行时配置，里面可能有 MCP 或编码代理的访问令牌，工具不提供读写；要查看或修改请在 WebUI 的扩展页或编码代理设置里操作", rel)
+	return fmt.Errorf("%s 是 Diana 的运行时配置或凭据存储，里面可能有 MCP、编码代理的访问令牌、密钥或登录态，工具不提供读写；要查看或修改请在 WebUI 的扩展页或编码代理设置里操作", rel)
 }

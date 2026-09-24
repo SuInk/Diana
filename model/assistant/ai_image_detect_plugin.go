@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 // AI 图片检测插件：群里丢来一张图问「这是不是 AI 画的」，看图猜是猜不准的——
@@ -158,7 +160,9 @@ func (p *AIImageDetectPlugin) detect(ctx context.Context, cfg aiImageDetectConfi
 	defer cancel()
 	result, err := p.checkSynthID(callCtx, cfg, image)
 	if err != nil {
-		report.SynthID.Error = err.Error()
+		// 报告整份交给模型。检测服务地址是主人填的，令牌可能写在查询参数里，而
+		// HTTP 客户端的报错带着整条地址。
+		report.SynthID.Error = secretmask.Text(err.Error())
 		return report
 	}
 	report.SynthID = result

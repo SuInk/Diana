@@ -84,6 +84,14 @@ func prepareCodingRuntime(cfg codingAgentConfig) error {
 func codingManagedRoot() string {
 	return filepath.Join(AgentWorkspaceDir(), agent.CodingRuntimeDirName)
 }
+
+// CodingAgentCredentialDirs 是编码代理登录态落盘的目录：Codex 的 auth.json、Claude
+// Code 的配置目录。它们就在 Agent 工作目录里，read_file 一句话就能读出来，得交给
+// agent.ProtectRuntimeDirs 挡住。
+func CodingAgentCredentialDirs() []string {
+	root := codingManagedRoot()
+	return []string{filepath.Join(root, "auth"), filepath.Join(root, "state")}
+}
 func codingManagedCommand(backend string) string {
 	name := backend
 	if runtime.GOOS == "windows" {

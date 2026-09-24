@@ -25,6 +25,7 @@ func EmbedTexts(ctx context.Context, cfg ProviderConfig, texts []string, opts ..
 // EmbedTextsWithUsage 和 EmbedTexts 一样，另外带回上游报的 token 用量，供用量统计。
 func EmbedTextsWithUsage(ctx context.Context, cfg ProviderConfig, texts []string, opts ...ClientOption) ([][]float32, Usage, error) {
 	cfg = cfg.WithDefaults()
+	RegisterProviderSecrets(cfg)
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, Usage{}, ErrMissingModel
 	}

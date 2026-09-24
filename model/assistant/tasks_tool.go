@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 type dianaTasksTool struct {
@@ -230,7 +232,7 @@ func taskForTool(item Reminder) dianaTask {
 		LastStarCount:         item.LastStarCount,
 		LastNotifiedStarCount: item.LastNotifiedStarCount,
 		FeedSources:           rssWatchSourceLabels(item),
-		FeedURL:               item.FeedURL,
+		FeedURL:               secretmask.URLs(item.FeedURL),
 		FeedSource:            item.FeedSource,
 		FeedHandle:            item.FeedHandle,
 		FeedJudgePrompt:       item.FeedJudgePrompt,

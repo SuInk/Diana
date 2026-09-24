@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/browsersource"
@@ -670,6 +671,7 @@ func (r *Runtime) SetReplySuppressionStore(ctx context.Context, store ReplySuppr
 // NewRuntime 创建 OneBot v11 机器人运行时。
 func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore LLMProfileStore, reminders ReminderStore, configSaver ConfigSaver, llmFactory LLMProviderFactory) *Runtime {
 	cfg = cfg.WithDefaults()
+	registerBotConfigSecrets(cfg)
 	if plugins == nil {
 		plugins = NewDefaultPluginManager()
 	}
@@ -742,6 +744,7 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	order := make([]string, 0, len(set.Profiles))
 	disabled := make(map[string]bool)
 	for _, profile := range set.Profiles {
+		registerBotConfigSecrets(profile)
 		if !profile.Enabled {
 			disabled[strings.TrimSpace(profile.ID)] = true
 		}
@@ -749,6 +752,7 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 		if err != nil {
 			continue
 		}
+		registerBotConfigSecrets(resolved)
 		id := strings.TrimSpace(profile.ID)
 		profiles[id] = resolved
 		order = append(order, id)
@@ -7965,7 +7969,8 @@ func rssWatchNoticeHeader(source ReminderFeedSource, feedName string) string {
 	if feedName != "" {
 		return "RSS " + feedName
 	}
-	return "RSS " + strings.TrimSpace(source.FeedURL)
+	// 没有标题的 Feed 退回地址发进聊天，地址里的令牌只给掩码。
+	return "RSS " + secretmask.URLs(strings.TrimSpace(source.FeedURL))
 }
 
 // rssJudgePrompt 的输出格式夹在第二行中间，第三行又同时讲格式和内容要求，没有
@@ -7987,6 +7992,8 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 	cfg := r.effectiveConfigForEvent(source)
 	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
+	// 判断器只需要知道条目来自哪个 Feed，订阅地址里的令牌不进提示词。
+	change.FeedURL = secretmask.URLs(change.FeedURL)
 	payload, err := json.Marshal(change)
 	if err != nil {
 		return rssJudgeDecision{}, fmt.Errorf("编码 RSS 条目: %w", err)

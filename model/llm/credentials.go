@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 // 凭据解析层。
@@ -181,6 +183,11 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	name, value := credential.AuthHeader()
 	if name == "" {
 		return base.RoundTrip(req)
+	}
+	// OAuth 令牌不在配置档里，只在这里才拿得到原文，同样登记给 secretmask。
+	secretmask.Register(credential.Token, value)
+	for _, extra := range credential.Headers {
+		secretmask.Register(extra)
 	}
 	// RoundTripper 不允许改传入的请求，按 http.RoundTripper 的约定先浅拷贝。
 	cloned := req.Clone(req.Context())

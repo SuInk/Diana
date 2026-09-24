@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 // MCP 的请求头和环境变量按凭据对待：运行时在本地拼请求时用原文，凡是会进模型上下文
@@ -22,47 +24,17 @@ import (
 // 掩码保留头尾几个字符，够人和模型认出「是不是那一个」，又远不够还原。
 
 // secretMaskMarker 是掩码中间那段。提交回来的值里带着它，就是有人把掩码原样交了回来。
-const secretMaskMarker = "****"
+const secretMaskMarker = secretmask.Marker
 
 // minRedactedSecretLength 以下的值不做文本替换：太短的值在正文里撞车的概率太高，
 // 替换掉会把正常输出改得面目全非，而这么短的值本来也不像令牌。
 const minRedactedSecretLength = 6
 
-// maskSecret 把凭据换成掩码，形如 ghp_****abcd。带认证方案前缀的（Bearer xxx）只遮
-// 后半截，前缀本身不是秘密，留着便于认出这是哪种凭据。
-func maskSecret(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if scheme, credential, ok := cutAuthScheme(value); ok {
-		return scheme + " " + maskSecret(credential)
-	}
-	runes := []rune(value)
-	switch {
-	case len(runes) < 12:
-		return secretMaskMarker
-	case len(runes) < 20:
-		return string(runes[:2]) + secretMaskMarker + string(runes[len(runes)-2:])
-	default:
-		return string(runes[:4]) + secretMaskMarker + string(runes[len(runes)-4:])
-	}
-}
+// maskSecret 把凭据换成掩码，形如 ghp_****abcd，规则见 secretmask.Mask。
+func maskSecret(value string) string { return secretmask.Mask(value) }
 
 // cutAuthScheme 认出「方案 凭据」这种两段式写法，例如 Bearer xxx、token xxx。
-func cutAuthScheme(value string) (string, string, bool) {
-	scheme, credential, ok := strings.Cut(strings.TrimSpace(value), " ")
-	credential = strings.TrimSpace(credential)
-	if !ok || credential == "" || strings.ContainsAny(credential, " \t") || len(scheme) > 12 {
-		return "", "", false
-	}
-	for _, r := range scheme {
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
-			return "", "", false
-		}
-	}
-	return scheme, credential, true
-}
+func cutAuthScheme(value string) (string, string, bool) { return secretmask.CutAuthScheme(value) }
 
 // looksMasked 判断一个提交值是不是掩码。
 func looksMasked(value string) bool {

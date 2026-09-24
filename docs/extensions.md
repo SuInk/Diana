@@ -32,11 +32,20 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 
 黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及扩展开关 `.extension-overrides.json`、对象名单 `.extension-audience.json`、位置记录 `.extension-paths.json`——这几个按设计就住在工作目录里。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
 
-`run_command` 走另一条路：白名单只管得到「能跑哪个程序」，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把这些路径盖成空文件。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
+`run_command` 走另一条路：白名单只管得到「能跑哪个程序」，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
+
+挡读清单不止 MCP 配置。启动时还会登记这些凭据落脚点，文件工具和命令沙箱同样不放行：
+
+- `config.yaml`（管理员密码、首启播种的 API Key）；
+- SQLite 数据库及其 `-wal`、`-shm`、`-journal`（全部插件凭据、LLM 密钥和 OAuth 令牌都在里面）；
+- 日志文件及其轮转副本；
+- 内置浏览器的 profile 目录（各站点的 Cookie 和保存的登录）；
+- 工作目录里编码代理的登录目录 `coding-runtime/auth`、`coding-runtime/state`；
+- yt-dlp 的 cookies 文件（`ytb_cookies.txt`、`DIANA_YTDLP_COOKIES` 或插件设置里的路径，用到时登记）。
 
 **前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），命令就是以 Diana 自己的进程权限裸跑的，这一层不存在。`require` 模式下没有沙箱直接拒绝执行。命令白名单默认为空，放开读取类命令之前先确认沙箱状态——WebUI 和启动日志里都能看到。
 
-沙箱挡的是文件，挡不住继承下来的环境变量。MCP 配置里用 `${NAME}` 引用 Diana 进程环境变量的（令牌放在进程环境、配置只写引用），这些变量不会传给 `run_command`，白名单里有 `env`、`printenv` 也打不出来。stdio 服务子进程自己的环境变量：Linux 的 bubblewrap 另开了 PID 命名空间，命令看不到别的进程的 `/proc/<pid>/environ`；macOS 不向普通进程公开其他进程的环境，沙箱里也起不了 `ps`。
+沙箱挡的是文件，挡不住继承下来的环境变量。所以传给 `run_command` 的环境会摘掉这几类变量，白名单里有 `env`、`printenv` 也打不出来：MCP 配置里用 `${NAME}` 引用的（令牌放在进程环境、配置只写引用）；名字像凭据的（含 `TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`COOKIE`、`SESSDATA`、`_CK` 等，例如 `TAVILY_API_KEY`、`DIANA_BILI_SESSDATA`、编码代理的 `api_key_env`；以 `_FILE`、`_PATH`、`_DIR`、`_URL` 结尾的是位置不是凭据，保留）；值里嵌着账号密码的地址（带认证的代理）。stdio 服务子进程自己的环境变量：Linux 的 bubblewrap 另开了 PID 命名空间，命令看不到别的进程的 `/proc/<pid>/environ`；macOS 不向普通进程公开其他进程的环境，沙箱里也起不了 `ps`。
 
 ## 模型侧只见掩码
 
@@ -48,6 +57,17 @@ MCP 的请求头和环境变量一律按凭据对待。运行时在本地拼请�
 - 哪些值算凭据：请求头的值全部算；环境变量看名字（含 `TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`AUTH`、`COOKIE`、`SESSION` 等），其余的只挑出嵌在 URL 里的用户名、密码和查询参数。实例地址这类普通配置不遮，否则工具结果里的链接会被改坏。短于 6 个字符的值不做文本替换。
 
 Agent 用 `mcp_install` 改一条已有服务时，只见过掩码，想保留令牌就把掩码原样交回，运行时换回原文。服务地址里嵌着的凭据（`?access_token=…` 这类查询参数、`user:token@host` 里的 userinfo）同样如此：模型在报错里看到的是 `?access_token=ghp_****abcd`，原样交回就换回原文。但令牌只跟着原来的去处走：请求头和地址里的凭据要求服务地址同源，环境变量要求启动命令、参数和工作目录都不变。去处变了还交回掩码会被拒绝，需要主人在 WebUI 里重新填令牌——否则模型把地址换成自己的服务、把命令换成 `sh -c env`，再交回掩码，令牌就被送出去了。对不上已保存值的掩码、新装服务时交的掩码，一律拒绝，不会被当成令牌存下去。
+
+## 其他凭据的统一出口
+
+MCP 之外的凭据走同一套掩码（`internal/secretmask`），出口在 Agent 的 Runner：每个工具的结果和报错进模型上下文、进运行记录之前都过一遍。
+
+- **报错按形态遮**：地址里的 userinfo、名字像凭据的查询参数（`?access_token=`、`?key=`、`?token=`……）、Telegram 路径里的 `/bot<token>/`、`Authorization`/`Cookie`/`X-Api-Key` 这类请求头写法。Go 的 HTTP 报错带出整条请求地址，平台接口、插件、订阅抓取、LLM 中转网关的报错都是这个形状，地址其余部分原样保留，模型仍然知道是哪条请求失败。
+- **已登记的原文一律遮**：LLM 配置档的 API Key、自定义请求头的值、base URL 里嵌着的凭据和 OAuth 令牌；各平台的 access token、secret、bot token 以及连接地址里的令牌；插件里声明为凭据的设置（Cookie 串按每一对的值分别登记，按仓库分开的 Token 表逐个登记），普通设置里地址嵌着的凭据；订阅地址里的令牌；进程环境里名字像凭据的变量；管理员密码。短于 8 个字符的值、短于 16 位的纯数字（会和群号、消息 ID 撞车）不登记。
+- **正常输出保守一些**：只遮已登记原文和地址里的 userinfo。网页里签名链接的查询参数（`?signature=`、`?sign=`）是模型接着要用的，不动。
+- `browser_eval` 在常驻浏览器上执行时，结果里出现的当前页面 Cookie 值只给掩码。
+- `config` 工具给出的连接地址、LLM base URL、上次失败的报错只给掩码；RSS 订阅列表里的订阅地址、判断器提示词、没有标题时发进聊天的抬头同样只给掩码。模型改订阅时把掩码地址原样交回，运行时换回原文；对不上的掩码拒绝保存。
+- 外发消息的最后一道：正文里出现已登记的凭据原文就换成掩码，别人贴的链接、代码照常发。聊天里的错误说明原本就会抹掉地址和 `key=` 形态，现在也先换掉已登记原文，中转网关把 Key 原样回显时同样认得出。
 
 令牌落盘仍是明文（文件权限 `0600`，默认在工作目录外）。Diana 目前没有独立于数据目录的密钥来源，把密钥和密文放在同一个数据目录里等于没加密，所以没有做这层。
 

@@ -80,6 +80,7 @@ func ModelPresets(provider Provider) []ModelInfo {
 // ListModels 读取指定 provider 的可用模型列表。
 func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) ([]ModelInfo, error) {
 	cfg = cfg.WithDefaults()
+	RegisterProviderSecrets(cfg)
 	options := clientOptions{
 		httpClient: http.DefaultClient,
 	}

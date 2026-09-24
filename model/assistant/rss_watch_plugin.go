@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/netguard"
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -285,7 +286,16 @@ func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings Set
 	return p.feeds.load(ctx, key, 30*time.Second, 60*time.Second, nil, func(loadCtx context.Context) (parsedFeed, error) { return p.fetchFresh(loadCtx, url, settings) })
 }
 
+// fetchFresh 抓一次 Feed。订阅地址里常带着私有令牌（Gitea、RSSHub 的 ?key=、
+// ?token=），HTTP 客户端报错会把整条地址带出来，而这些报错会进工具结果、订阅的
+// LastError 和运行状态，所以先把地址里的凭据登记给 secretmask，报错出去之前遮掉。
 func (p *RSSWatchPlugin) fetchFresh(ctx context.Context, feedURL string, settings SettingValues) (parsedFeed, error) {
+	secretmask.RegisterURL(feedURL)
+	feed, err := p.fetchFeed(ctx, feedURL, settings)
+	return feed, secretmask.Error(err)
+}
+
+func (p *RSSWatchPlugin) fetchFeed(ctx context.Context, feedURL string, settings SettingValues) (parsedFeed, error) {
 	feedURL, err := normalizeRSSURL(feedURL)
 	if err != nil {
 		return parsedFeed{}, err

@@ -425,6 +425,7 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 	}
 	for _, profile := range set.Profiles {
 		cfg := profile.Config.WithDefaults()
+		RegisterProviderSecrets(cfg)
 		providerID := strings.TrimSpace(profile.ID)
 		if providerID == "" {
 			continue

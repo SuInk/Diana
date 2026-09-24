@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -276,13 +277,24 @@ func (r *Runtime) dianaConfigSnapshot(event MessageEvent) dianaConfigSnapshot {
 	}
 }
 
+// dianaRuntimeFromStatus 给模型的运行状态。LastError 是上一次失败的原始报错：HTTP
+// 客户端报错带着整条请求地址（订阅地址里的令牌、平台地址里的 access_token），
+// 中转网关的报错回显请求头；Endpoint 是主人填的连接地址，令牌可能就写在查询参数里。
+// 这些都只给掩码。
 func dianaRuntimeFromStatus(status RuntimeStatus, profileID string) dianaRuntimeSnapshot {
+	channel := status.Channel
+	channel.Endpoint = secretmask.URLs(channel.Endpoint)
+	channel.LastError = secretmask.Text(channel.LastError)
+	channel.AccountStatusMessage = secretmask.Text(channel.AccountStatusMessage)
+	bridge := status.NoneBotBridges[profileID]
+	bridge.Endpoint = secretmask.URLs(bridge.Endpoint)
+	bridge.LastError = secretmask.Text(bridge.LastError)
 	return dianaRuntimeSnapshot{
 		Running:       status.Running,
-		Channel:       status.Channel,
-		NoneBotBridge: status.NoneBotBridges[profileID],
+		Channel:       channel,
+		NoneBotBridge: bridge,
 		ActiveWorkers: status.ActiveWorkers,
-		LastError:     status.LastError,
+		LastError:     secretmask.Text(status.LastError),
 		UpdatedAt:     status.UpdatedAt,
 	}
 }
@@ -296,13 +308,13 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		AvatarURL:                       cfg.AvatarURL,
 		Enabled:                         cfg.Enabled,
 		OneBotTransport:                 cfg.WithDefaults().OneBotTransport,
-		OneBotWSEndpoint:                cfg.OneBotWSEndpoint,
-		OneBotHTTPURL:                   cfg.OneBotHTTPURL,
+		OneBotWSEndpoint:                secretmask.URLs(cfg.OneBotWSEndpoint),
+		OneBotHTTPURL:                   secretmask.URLs(cfg.OneBotHTTPURL),
 		OneBotHTTPSecretConfigured:      strings.TrimSpace(cfg.OneBotHTTPSecret) != "",
-		OneBotReverseWSEndpoint:         cfg.OneBotReverseWSEndpoint,
+		OneBotReverseWSEndpoint:         secretmask.URLs(cfg.OneBotReverseWSEndpoint),
 		OneBotAccessTokenConfigured:     strings.TrimSpace(cfg.OneBotAccessToken) != "",
 		NoneBotBridgeEnabled:            cfg.NoneBotBridgeEnabled,
-		NoneBotBridgeEndpoint:           cfg.NoneBotBridgeEndpoint,
+		NoneBotBridgeEndpoint:           secretmask.URLs(cfg.NoneBotBridgeEndpoint),
 		NoneBotBridgeTokenConfigured:    strings.TrimSpace(cfg.NoneBotBridgeToken) != "",
 		BotAccount:                      cfg.BotAccount,
 		OwnerID:                         cfg.OwnerID,
@@ -397,7 +409,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 			MCPConfigPath:    cfg.AgentMCPConfigPath,
 			CommandAllowlist: append([]string(nil), cfg.AgentCommandAllowlist...),
 			CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
-			BrowserCDPURL:    cfg.AgentBrowserCDPURL,
+			BrowserCDPURL:    secretmask.URLs(cfg.AgentBrowserCDPURL),
 			BrowserTimeoutMS: cfg.AgentBrowserTimeoutMS,
 		},
 	}
@@ -424,11 +436,11 @@ func (r *Runtime) dianaLLMSnapshot() dianaLLMSnapshot {
 			Description:      profile.Description,
 			Provider:         cfg.Provider,
 			APIKeyConfigured: strings.TrimSpace(cfg.APIKey) != "",
-			BaseURL:          cfg.BaseURL,
+			BaseURL:          secretmask.URLs(cfg.BaseURL),
 			APIFormat:        cfg.APIFormatWithDefault(),
 			Model:            cfg.Model,
 			ImageModel:       cfg.ImageModel,
-			ImageBaseURL:     cfg.ImageBaseURL,
+			ImageBaseURL:     secretmask.URLs(cfg.ImageBaseURL),
 			ImageOrigin:      cfg.ImageOrigin,
 			ImageTimeoutMS:   cfg.ImageTimeout.Milliseconds(),
 			UserAgent:        cfg.UserAgent,

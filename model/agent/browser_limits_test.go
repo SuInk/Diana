@@ -32,6 +32,10 @@ type fakeCDP struct {
 	order   []string
 	targets map[string]string // id → url
 	stopped map[string]int
+	// cookies 是 Network.getCookies 交回的 Cookie 值；evalValue 非空时，普通脚本
+	// 的 Runtime.evaluate 交回它而不是默认的页面摘要。
+	cookies   []string
+	evalValue any
 }
 
 func newFakeCDP(t *testing.T, urls ...string) *fakeCDP {
@@ -144,9 +148,21 @@ func (f *fakeCDP) serve(conn *websocket.Conn, id string) {
 			} else {
 				f.mu.Lock()
 				current := f.targets[id]
+				value := f.evalValue
 				f.mu.Unlock()
-				result["result"] = map[string]any{"type": "object", "value": map[string]any{"url": current, "title": id, "text": "page " + id}}
+				if value == nil {
+					value = map[string]any{"url": current, "title": id, "text": "page " + id}
+				}
+				result["result"] = map[string]any{"type": "object", "value": value}
 			}
+		case "Network.getCookies":
+			f.mu.Lock()
+			cookies := make([]map[string]any, 0, len(f.cookies))
+			for index, value := range f.cookies {
+				cookies = append(cookies, map[string]any{"name": fmt.Sprintf("c%d", index), "value": value})
+			}
+			f.mu.Unlock()
+			result["cookies"] = cookies
 		}
 		if err := conn.WriteJSON(map[string]any{"id": msg.ID, "result": result}); err != nil {
 			return

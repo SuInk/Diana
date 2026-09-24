@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 // 交互式浏览器的第二批动作：标签页、滚动、按键、前进后退、下拉框、等待和执行脚本。
@@ -835,10 +838,56 @@ func (t *BrowserEvalTool) Run(ctx context.Context, input map[string]any) (string
 	if err != nil {
 		return "", err
 	}
-	result := string(raw)
+	// 常驻浏览器带着主人的登录态，脚本读 document.cookie 就能把会话 Cookie 原样交给
+	// 模型。当前页面的 Cookie 值在结果里一律只给掩码：模型要的是页面数据，不是会话。
+	result := maskCookieValues(string(raw), client.pageCookieValues(ctx))
 	if t.base.maxChars > 0 && utf8.RuneCountInString(result) > t.base.maxChars {
 		runes := []rune(result)
 		result = string(runes[:t.base.maxChars]) + fmt.Sprintf("\n…（结果共 %d 字，已截断；需要的话在脚本里只取需要的部分）", len(runes))
 	}
 	return result, nil
+}
+
+// pageCookieValues 取当前页面能看到的 Cookie 值，包括 HttpOnly 的——脚本读不到它们，
+// 但页面自己的接口可能把它们回显在响应里。取不到时返回空：Cookie 遮不上不该让
+// 整次脚本执行失败，已登记的凭据还有 Runner 那一道。
+func (c *cdpClient) pageCookieValues(ctx context.Context) []string {
+	var out struct {
+		Cookies []struct {
+			Value string `json:"value"`
+		} `json:"cookies"`
+	}
+	if err := c.call(ctx, "Network.getCookies", nil, &out); err != nil {
+		return nil
+	}
+	values := make([]string, 0, len(out.Cookies))
+	for _, cookie := range out.Cookies {
+		values = append(values, cookie.Value)
+	}
+	return values
+}
+
+// maskCookieValues 把文本里出现的 Cookie 值换成掩码。太短的值（1、true、zh-CN）
+// 不是会话凭据，换掉只会把正常结果改坏。
+func maskCookieValues(text string, values []string) string {
+	unique := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if len([]rune(value)) < secretmask.MinKnownLength || seen[value] {
+			continue
+		}
+		seen[value] = true
+		unique = append(unique, value)
+	}
+	if len(unique) == 0 {
+		return text
+	}
+	// 长的先换，免得一个值是另一个值的前缀时只换掉一半。
+	sort.Slice(unique, func(i, j int) bool { return len(unique[i]) > len(unique[j]) })
+	pairs := make([]string, 0, len(unique)*2)
+	for _, value := range unique {
+		pairs = append(pairs, value, secretmask.Mask(value))
+	}
+	return strings.NewReplacer(pairs...).Replace(text)
 }

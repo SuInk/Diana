@@ -9,6 +9,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 func (r *Runtime) prepareResolverVideoDelivery(videoURLs []string) resolverVideoDelivery {
@@ -120,6 +122,7 @@ func (r *Runtime) sendOutgoing(ctx context.Context, event MessageEvent, msg Outg
 
 func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent, msg OutgoingMessage) (map[string]any, error) {
 	msg = routeOutgoingToEvent(event, msg)
+	msg = maskOutgoingSecrets(msg)
 	var audioErr error
 	msg, audioErr = r.prepareTelegramAudio(msg)
 	if audioErr != nil {
@@ -356,4 +359,33 @@ func replyChunkCut(runes []rune, chunkSize int) int {
 		}
 	}
 	return chunkSize
+}
+
+// maskOutgoingSecrets 是外发消息的最后一道：正文里出现已登记的凭据原文（API Key、
+// 平台令牌、插件 Cookie……）就换成掩码。模型本不该拿到这些原文，这一道防的是
+// 其他路子漏进来之后被原样发进群——群里的人不是主人，也没有 WebUI 的查看权限。
+// 只认已登记的原文，不按形态猜：聊天里别人贴的链接、代码片段照常发。
+func maskOutgoingSecrets(msg OutgoingMessage) OutgoingMessage {
+	msg.Text = secretmask.Known(msg.Text)
+	if len(msg.Segments) == 0 {
+		return msg
+	}
+	segments := make([]MessageSegment, len(msg.Segments))
+	for index, segment := range msg.Segments {
+		segments[index] = segment
+		text, ok := segment.Data["text"]
+		if !ok {
+			continue
+		}
+		if masked := secretmask.Known(text); masked != text {
+			data := make(map[string]string, len(segment.Data))
+			for key, value := range segment.Data {
+				data[key] = value
+			}
+			data["text"] = masked
+			segments[index].Data = data
+		}
+	}
+	msg.Segments = segments
+	return msg
 }
