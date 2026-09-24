@@ -3713,7 +3713,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				return "", pluginToolsErr
 			}
 		}
-		pluginTools = ensureWebSearchAgentTool(pluginTools)
 		for index, tool := range pluginTools {
 			pluginTools[index] = capabilityToolForConfig(tool, cfg)
 		}

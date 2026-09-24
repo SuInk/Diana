@@ -1095,8 +1095,24 @@ func (r *Runner) systemPrompt() string {
 			"- agent_finalize 必须携带完整 claims 数组，并按 claim 分别表达已确认、冲突和未确认内容。一个 claim 缺证据不得否定其他 claim；没有检索到只能标 insufficient，除非权威来源提供直接否定证据。不得生成搜索未验证的候选渠道、组织、价格或其他事实。",
 			"- claims、claim ID、证据账本、协议字段和校验过程只用于内部结构化校验，绝不能出现在 content。content 必须像普通对话一样直接回答用户；事实证据不足时只限定对应事实，逻辑关系、措辞是否严谨和基于已知前提的推理仍应正常回答。",
 			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分不同事件日期。",
-			"- 如果 web_search 报告没有可用配置，最终回复要说明当前搜索提供商均不可用，不要改用其他方式爬取搜索引擎。",
+			"- web_search 的全部 provider 都失败（provider_error、timeout）时，如果还有浏览器工具，按下面「用浏览器搜索」的办法接着查；浏览器也没有或也失败，才在最终回复里说明这次没能联网查到。",
 		)
+	}
+	// 搜索插件关掉、或者这一轮所有 provider 都挂了，浏览器还在：一样能查，只是换一条路。
+	// 以前没有 web_search 时模型只能凭印象答，甚至被明令「不要改用其他方式爬取搜索引擎」。
+	browserSearchTool := ""
+	for _, name := range []string{"browser_render", "browser_open"} {
+		if hasTool(name) {
+			browserSearchTool = name
+			break
+		}
+	}
+	if browserSearchTool != "" {
+		prefix := "- 没有 web_search 时，遇到需要外部事实、可能随时间变化的问题"
+		if hasTool(webSearchToolName) {
+			prefix = "- 用浏览器搜索"
+		}
+		rules = append(rules, prefix+"：用 "+browserSearchTool+" 打开搜索引擎的结果页，查询词做 URL 编码，优先 https://www.google.com/search?q=查询词；落到人机验证页（Google 的 /sorry/、「异常流量」、DuckDuckGo 的 challenge）就换下一家：https://www.bing.com/search?q=查询词、https://duckduckgo.com/?q=查询词（不要用 html.duckduckgo.com，它每次都弹验证）、https://www.baidu.com/s?wd=查询词，不要试图通过验证。结果页只有标题和摘要，关键事实要再打开一两个来源页面核实，最终回答附上实际打开过的来源链接。一次搜不到先换关键词或换引擎，不要因为一页结果为空就断言不存在。")
 	}
 	if hasTool("browser_render") {
 		rules = append(rules, "- 需要读取或渲染网页时优先使用 browser_render；普通页面在一次性沙盒浏览器中运行，GitHub Release 地址优先读取官方 API，不使用用户浏览器登录态。查询 GitHub 最新版本时读取 /owner/repo/releases/latest；核验用户给出的版本时读取 /owner/repo/releases/tag/<tag>，不能以精确 site: 搜索为空替代核验。浏览器失败不等于站点拦截，更不等于版本不存在；来源查询时间与发布时间必须分开。")

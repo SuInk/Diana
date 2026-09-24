@@ -1115,3 +1115,33 @@ func TestRunnerMarksCacheBreakpointsAroundVolatilePrefix(t *testing.T) {
 		t.Fatalf("cache breakpoints=%#v", marked)
 	}
 }
+
+// 搜索插件关掉之后浏览器还在，模型就该知道能用浏览器开搜索结果页查，而不是只能凭
+// 印象答；那段只对 web_search 有意义的 claims 规则也不该再带。
+func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
+	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingTool{name: "browser_render"})}
+	prompt := runner.systemPrompt()
+	for _, want := range []string{"没有 web_search 时", "用 browser_render 打开搜索引擎的结果页", "https://www.google.com/search?q=", "https://www.bing.com/search?q=", "换下一家"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+	for _, unexpected := range []string{"多部分检索必须先拆成可独立验证的通用 claims", "不要改用其他方式爬取搜索引擎"} {
+		if strings.Contains(prompt, unexpected) {
+			t.Fatalf("prompt unexpectedly contains %q", unexpected)
+		}
+	}
+
+	// 两样都有时：web_search 优先，浏览器是它全部 provider 失败后的退路。
+	runner = &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{}, &countingTool{name: "browser_render"})}
+	prompt = runner.systemPrompt()
+	if !strings.Contains(prompt, "全部 provider 都失败") || !strings.Contains(prompt, "- 用浏览器搜索：用 browser_render") {
+		t.Fatalf("fallback rule missing: %s", prompt)
+	}
+
+	// 什么浏览器都没有就不提。
+	runner = &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingTool{name: "common"})}
+	if prompt = runner.systemPrompt(); strings.Contains(prompt, "bing.com") {
+		t.Fatal("no browser tool, but prompt still suggests browser search")
+	}
+}

@@ -2044,8 +2044,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 		case 1:
 			return `{"message_id":"history-1","confidence":0.96,"reason":"她指近期发言者 Alice"}`, nil
 		case 2:
-			return `{"action":"none"}`, nil
-		case 3:
+			// 没有任何工具可选时不跑工具路由，第二次调用直接就是生成回复。
 			milkAlias = privacyAliasForDisplayName(req, "Alice")
 			currentAlias = privacyAliasForDisplayName(req, "Bob")
 			if milkAlias == "" || currentAlias == "" {
@@ -2101,7 +2100,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 		t.Fatalf("mentioned = %#v, want %#v; segments = %#v", mentioned, wantMentioned, segments)
 	}
 	var systemPrompt strings.Builder
-	for _, message := range provider.requests[2].Messages {
+	for _, message := range provider.requests[len(provider.requests)-1].Messages {
 		if message.Role == llm.RoleSystem {
 			systemPrompt.WriteString(message.Content)
 			systemPrompt.WriteByte('\n')
