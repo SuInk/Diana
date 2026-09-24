@@ -1101,6 +1101,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("reminder") {
 		builder.WriteString("\n" + cfg.prompt(promptTaskReminderSpec))
 	}
+	if agentEnabled && relationship.AllowPersonalSchedule && hasTool(dianaEventTriggerToolName) {
+		builder.WriteString("\n" + cfg.prompt(promptTaskEventTriggerSpec))
+	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindSchedule) {
 		builder.WriteString("\n" + cfg.prompt(promptTaskScheduleSpec))
 	}

@@ -182,6 +182,20 @@ func TestRestoredOneTimeTaskReportsRetryingAndQuota(t *testing.T) {
 	}
 }
 
+// 事件触发任务没有触发时间。落进默认分支会被当成一次性提醒：列表显示「一次性提醒」，
+// 触发过一次的反复任务还会显示成「已执行」并释放额度。
+func TestEventTriggerTaskKeepsOwnKindStatusAndQuota(t *testing.T) {
+	spec := `{"event":"message","user_ids":["30003"],"action":"message","deliver_to":"event","repeat":true,"fire_count":2,"expires_at":"` + time.Now().Add(time.Hour).UTC().Format(time.RFC3339) + `"}`
+	item := assistant.Reminder{ID: "trig", Kind: assistant.ReminderKindEventTrigger, GroupID: "20001", OwnerID: "1", Message: "交作业", LastRunAt: time.Now(), EventTriggerJSON: spec}
+	payload := botTaskFromReminder(item)
+	if payload.Kind != "event_trigger" || payload.Status != "active" || !payload.ConsumesQuota {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if payload.TriggerFireCount != 2 || !payload.TriggerRepeat || !strings.Contains(payload.Trigger, "30003") {
+		t.Fatalf("trigger fields = %#v", payload)
+	}
+}
+
 func TestRepositoryWatchDoesNotConsumePersonalTaskQuota(t *testing.T) {
 	item := assistant.Reminder{Kind: assistant.ReminderKindRepositoryWatch, IntervalSeconds: 30}
 	if taskConsumesQuota(item) {

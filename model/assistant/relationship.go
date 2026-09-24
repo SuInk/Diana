@@ -143,6 +143,8 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaPlatformToolName:  true,
 		dianaImageToolName:     true,
 		"reminder":             true,
+		// 事件触发任务：非主人只能盯当前会话里的自己，由工具自己判，见 parseEventTriggerCreate。
+		dianaEventTriggerToolName: true,
 		// schedule / rss / github 三种订阅现在是同一个工具的 kind 取值。github 那种
 		// 另有自己的授权闸门，不因为这里放行就人人可用。
 		dianaSubscriptionToolName: true,

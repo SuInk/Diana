@@ -5171,6 +5171,11 @@ a.nav-action {
   color: var(--warn);
 }
 
+.task-kind-icon.event_trigger {
+  background: color-mix(in srgb, var(--storage-video) 14%, transparent);
+  color: var(--storage-video);
+}
+
 .task-main {
   min-width: 0;
 }
