@@ -4,10 +4,58 @@
 package assistant
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
 )
+
+// 扩展页第一次就地把一条扩展设成常驻时，这台机器人还没有自己的名单：要先把内置推荐
+// 名单固定下来再加这一条。以前这条路拿到的推荐名单是空的，点一下之后名单里只剩这一
+// 条扩展，推荐的核心工具全被清了出去。
+func TestAdministerExtensionsResidencyKeepsRecommendedCoreTools(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
+	rt := NewRuntime(BotConfig{ID: "bot-a", OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	cfg, err := agent.GlobalExtensionPaths(rt.agentRegistryConfig(rt.profileConfig("bot-a"), MessageEvent{ProfileID: "bot-a"}, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.MCPConfigPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.MCPConfigPath, []byte(`{"mcpServers":{"demo":{"command":"true","enabled":false}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resident := true
+	if _, err := rt.AdministerExtensions(context.Background(), agent.ExtensionAdminRequest{
+		Operation: "residency", Kind: string(agent.ExtensionKindMCP), Name: "demo", ProfileID: "bot-a", Resident: &resident,
+	}); err != nil {
+		t.Fatalf("residency: %v", err)
+	}
+	values, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), "bot-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, listed := agent.ResidencyList(values)
+	if !listed {
+		t.Fatal("就地增删之后这台机器人应当有了自己的名单")
+	}
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	recommended := agent.RecommendedResidencyIDs(replyAgentCoreTools)
+	for _, id := range recommended {
+		if !got[id] {
+			t.Fatalf("推荐的核心工具 %s 被清出了名单：%v", id, ids)
+		}
+	}
+	if len(ids) != len(recommended)+1 {
+		t.Fatalf("名单应当是推荐名单加上 demo，实际 %v", ids)
+	}
+}
 
 // 装、改、卸之后，缓存的共享底座必须扔掉重建。早先从预设装走的是另一个操作名
 // preset_save，漏在这张名单外，后果线上出现过：装好瑞幸之后模型在同一个进程里翻遍
