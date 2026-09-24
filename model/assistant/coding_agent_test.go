@@ -193,7 +193,34 @@ func codingTestRuntime(t *testing.T, cli string, workspace string) (*Runtime, Se
 		codingAgentSettingWorkspaces: "demo=" + workspace,
 	})
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "1", MessageID: "m1"}
+	// 登记在 useTempCodingWorkspace 之后，所以先于 APP_DB_PATH 还原执行。
+	t.Cleanup(func() { drainCodingJobs(t, rt) })
 	return rt, settings, event
+}
+
+// drainCodingJobs 在用例结束前杀掉这个运行时派出去、还没收尾的编码进程，并等看护
+// 协程退出。看护活得比用例长的话，它的收尾和汇报会写进整包共享的工作区根目录，
+// 被下一个启动的 Runtime 当成遗留任务捡走，用那个用例的 channel 发出去（#709、#711）。
+// 靠每个用例自己记得取消拦不住下一次，放在这里统一收。
+func drainCodingJobs(t *testing.T, rt *Runtime) {
+	t.Helper()
+	registry := rt.codingJobs()
+	registry.mu.Lock()
+	jobIDs := make([]string, 0, len(registry.watched))
+	for jobID := range registry.watched {
+		jobIDs = append(jobIDs, jobID)
+	}
+	registry.mu.Unlock()
+	for _, jobID := range jobIDs {
+		if job, err := loadCodingJob(jobID); err == nil && !job.finished() {
+			killCodingProcess(job.PID)
+		}
+	}
+	waitForCondition(t, 10*time.Second, func() bool {
+		registry.mu.Lock()
+		defer registry.mu.Unlock()
+		return len(registry.watched) == 0
+	})
 }
 
 func TestLaunchCodingJobReportsResultAfterProcessExits(t *testing.T) {
@@ -325,6 +352,34 @@ func TestCodingWorkspaceRunsOneJobAtATime(t *testing.T) {
 		saved, err := loadCodingJob(third.ID)
 		return err == nil && !saved.FinishedAt.IsZero()
 	})
+}
+
+// TestCodingTestRuntimeDrainsJobsLeftRunning 钉住上面那条收尾：子用例派了活就走，
+// 不取消也不等，结束后进程必须已经没了，外层工作区里也不能冒出它的任务记录。
+func TestCodingTestRuntimeDrainsJobsLeftRunning(t *testing.T) {
+	useTempCodingWorkspace(t)
+	outerRecords := codingJobRecordDir()
+	var leaked CodingJob
+	t.Run("launch and leave", func(t *testing.T) {
+		useTempCodingWorkspace(t)
+		workspace := t.TempDir()
+		cli := fakeCodingCLI(t, "sleep 30")
+		rt, settings, event := codingTestRuntime(t, cli, workspace)
+		cfg, _ := codingAgentConfigFromSettings(settings)
+		ws, _ := cfg.workspace("demo")
+		job, err := rt.launchCodingJob(context.Background(), event, cfg, ws, "派了就不管的活", "")
+		if err != nil {
+			t.Fatalf("launch: %v", err)
+		}
+		leaked = job
+	})
+	if codingProcessAlive(leaked.PID) {
+		killCodingProcess(leaked.PID)
+		t.Fatalf("子用例结束后编码进程 %d 还活着，看护会在工作区还原之后才收尾", leaked.PID)
+	}
+	if _, err := os.Stat(filepath.Join(outerRecords, leaked.ID+".json")); err == nil {
+		t.Fatalf("子用例的任务记录 %s 写进了外层工作区", leaked.ID)
+	}
 }
 
 func TestCancelledCodingJobIsNotReportedTwice(t *testing.T) {
