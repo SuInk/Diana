@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -23,19 +24,18 @@ import (
 // 合并状态、改动统计和已有 review；pull_files 读改动文件和 patch；comment 与 review 能
 // 写到 PR 上。写入仍然走草稿加确认码。改 PR 本身（合并、关闭、改标题）不开放。
 const (
-	repositoryPullRequestReviewLimit        = 10
-	repositoryPullRequestReviewBodyLimit    = 2_000
-	repositoryPullRequestFilesPerPage       = 100
-	repositoryPullRequestFilesMaxPages      = 30
-	repositoryPullRequestFileListLimit      = 300
+	repositoryPullRequestReviewLimit     = 10
+	repositoryPullRequestReviewBodyLimit = 2_000
+	repositoryPullRequestFilesPerPage    = 100
+	repositoryPullRequestFilesMaxPages   = 30
+	repositoryPullRequestFileListLimit   = 300
+	// repositoryPullRequestPatchLimit 是不传 paths 时每个文件给的 patch 字数；传了
+	// paths 就把单次结果剩下的预算都给这几个文件，见 renderRepositoryDiffFiles。
 	repositoryPullRequestPatchLimit         = 4_000
-	repositoryPullRequestFocusedPatchLimit  = 30_000
-	repositoryPullRequestPatchBudget        = 60_000
 	repositoryPullRequestReviewCommentLimit = 30
 	repositoryPullRequestReviewMaxPages     = 30
 	repositoryFileDefaultLines              = 400
 	repositoryFileMaxLines                  = 1_500
-	repositoryFileCharLimit                 = 60_000
 )
 
 type githubPullRequest struct {
@@ -99,6 +99,12 @@ type repositoryPullRequestFileView struct {
 	PatchTruncated   bool `json:"patch_truncated,omitempty"`
 	PatchOmitted     bool `json:"patch_omitted,omitempty"`
 	PatchUnavailable bool `json:"patch_unavailable,omitempty"`
+	// 只给了 patch 的一段时，说明给的是第几行到第几行（从 1 起）、一共多少行；
+	// 从 hunk 中间接着读时 PatchHunk 是这段所在的 hunk 头，行号靠它算。
+	PatchStartLine  int    `json:"patch_start_line,omitempty"`
+	PatchEndLine    int    `json:"patch_end_line,omitempty"`
+	PatchTotalLines int    `json:"patch_total_lines,omitempty"`
+	PatchHunk       string `json:"patch_hunk,omitempty"`
 }
 
 type githubPullRequestReview struct {
@@ -203,7 +209,7 @@ func (t *dianaGitHubTool) pullFiles(ctx context.Context, repository string, inpu
 	if number <= 0 {
 		return result.fail("invalid_input", "pull_files 必须提供有效的 Pull Request number。")
 	}
-	focus, _, code, message := repositoryIssueStringList(input, "paths", 50)
+	options, code, message := parseRepositoryDiffOptions(input)
 	if code != "" {
 		return result.fail(code, message)
 	}
@@ -228,61 +234,14 @@ func (t *dianaGitHubTool) pullFiles(ctx context.Context, repository string, inpu
 			break
 		}
 	}
-	patchLimit := repositoryPullRequestPatchLimit
-	if len(focus) > 0 {
-		patchLimit = repositoryPullRequestFocusedPatchLimit
-	}
-	budget := repositoryPullRequestPatchBudget
-	matched := 0
-	for _, file := range files {
-		if len(focus) > 0 && !repositoryPullRequestPathMatches(file, focus) {
-			continue
-		}
-		matched++
-		if len(result.Files) >= repositoryPullRequestFileListLimit {
-			result.FilesTruncated = true
-			continue
-		}
-		view := repositoryPullRequestFileView{
-			Path: file.Filename, PreviousPath: file.PreviousFilename, Status: file.Status,
-			Additions: file.Additions, Deletions: file.Deletions,
-		}
-		switch {
-		case file.Patch == "":
-			view.PatchUnavailable = true
-		case budget <= 0:
-			view.PatchOmitted = true
-		default:
-			limit := min(patchLimit, budget)
-			view.Patch, view.PatchTruncated = repositoryIssueDisplayText(file.Patch, limit)
-			budget -= len([]rune(view.Patch))
-		}
-		result.Files = append(result.Files, view)
-	}
 	result.OK = true
 	result.Outcome = "fetched"
 	result.PullRequest = repositoryPullRequestViewFromGitHub(pull)
-	scope := fmt.Sprintf("全部 %d 个文件", matched)
-	if len(focus) > 0 {
-		scope = fmt.Sprintf("paths 匹配的 %d 个文件（共 %d 个）", matched, len(files))
+	note, code, message := renderRepositoryDiffFiles(&result, files, options, repositoryOutputBudget(ctx))
+	if code != "" {
+		return result.fail(code, message)
 	}
-	result.Message = fmt.Sprintf("已读取 %s#%d 的%s。review 的行内评论只能落在 patch 里出现过的行上。", repository, number, scope)
-	var incomplete []string
-	for _, file := range result.Files {
-		if file.PatchTruncated || file.PatchOmitted {
-			incomplete = append(incomplete, file.Path)
-		}
-	}
-	if len(incomplete) > 0 {
-		shown := incomplete
-		if len(shown) > 20 {
-			shown = shown[:20]
-		}
-		result.Message += fmt.Sprintf(" 有 %d 个文件的 patch 没有给全：%s。要看全就把这些路径传给 paths 再调一次 pull_files（每次少传几个），改动周围的代码用 read_file 读。", len(incomplete), strings.Join(shown, "、"))
-		if len(incomplete) > len(shown) {
-			result.Message += "（只列了前 20 个）"
-		}
-	}
+	result.Message = fmt.Sprintf("%s#%d：%s review 的行内评论只能落在 patch 里出现过的行上。", repository, number, note)
 	return result
 }
 
@@ -536,21 +495,40 @@ func (t *dianaGitHubTool) readFile(ctx context.Context, repository string, input
 	if ref != "" {
 		endpoint += "?" + url.Values{"ref": {ref}}.Encode()
 	}
-	var content githubRepositoryContent
-	if apiErr := t.doJSON(ctx, http.MethodGet, endpoint, nil, &content); apiErr != nil {
+	var raw json.RawMessage
+	if apiErr := t.doJSON(ctx, http.MethodGet, endpoint, nil, &raw); apiErr != nil {
 		if apiErr.Code == "not_found" {
-			return result.fail("not_found", "这个版本里没有该文件。被 PR 删除的文件在 PR head 上读不到，要看删除前的内容传 ref 为 base 分支；也可能是路径写错了，按 pull_files 返回的 path 填。")
+			return result.fail("not_found", "这个版本里没有该文件。被 PR 删除的文件在 PR head 上读不到，要看删除前的内容传 ref 为 base 分支；也可能是路径写错了，按 pull_files 返回的 path 填，不确定就先用 list_files 列目录。")
 		}
 		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
-	if content.Type != "file" || content.Encoding != "base64" {
-		return result.fail("invalid_input", "path 指向的不是可读取的文本文件（可能是目录、子模块或超过 1MB 的大文件）。")
+	if strings.HasPrefix(strings.TrimSpace(string(raw)), "[") {
+		return result.fail("invalid_input", "path 指向的是目录，不是文件；用 list_files 看里面有哪些文件。")
 	}
-	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(content.Content, "\n", ""))
-	if err != nil {
-		return result.fail("invalid_response", "GitHub 返回的文件内容无法解码。")
+	var content githubRepositoryContent
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return result.fail("invalid_response", "GitHub 返回的文件信息无法解析。")
 	}
-	text := string(decoded)
+	var data []byte
+	switch {
+	case content.Type == "file" && content.Encoding == "base64":
+		decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(content.Content, "\n", ""))
+		if err != nil {
+			return result.fail("invalid_response", "GitHub 返回的文件内容无法解码。")
+		}
+		data = decoded
+	case content.Type == "file" && content.Encoding == "none":
+		// 超过 1MB 的文件 contents 接口不给内容，按原始格式再取一次。生成的代码、
+		// 大 lockfile、单文件的大模块都在这一档，以前一律报「读不了」。
+		var body repositoryRawBody
+		if apiErr := t.doJSON(ctx, http.MethodGet, endpoint, nil, &body); apiErr != nil {
+			return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+		}
+		data = body.data
+	default:
+		return result.fail("invalid_input", "path 指向的不是可读取的文本文件（可能是子模块、符号链接或超过 GitHub 上限的大文件）。")
+	}
+	text := string(data)
 	if strings.ContainsRune(text, 0) {
 		return result.fail("invalid_input", "这是二进制文件，不能按文本读取。")
 	}
@@ -572,24 +550,33 @@ func (t *dianaGitHubTool) readFile(ctx context.Context, repository string, input
 	if end > len(lines) {
 		end = len(lines)
 	}
-	var builder strings.Builder
-	shownEnd := start - 1
-	for index := start; index <= end; index++ {
-		line := fmt.Sprintf("%d| %s\n", index, lines[index-1])
-		if builder.Len()+len(line) > repositoryFileCharLimit {
-			break
-		}
-		builder.WriteString(line)
-		shownEnd = index
-	}
 	result.OK = true
 	result.Outcome = "fetched"
-	result.File = &repositoryFileView{Path: content.Path, Ref: ref, TotalLines: len(lines), StartLine: start, EndLine: shownEnd, Content: builder.String()}
+	result.File = &repositoryFileView{Path: content.Path, Ref: ref, TotalLines: len(lines), StartLine: start, EndLine: end}
+	// 先按空内容量出结果本身占多少，剩下的才是给代码的；续读位置按真正装进去的行算，
+	// 不然 Runner 再截一刀，模型照着提示续读就跳过了中间那段。
+	room := repositoryOutputBudget(ctx) - repositoryResultRunes(result) - repositoryOutputReserve
+	window := repositoryFillLines(end-start+1, func(i int) string {
+		return strconv.Itoa(start+i) + "| " + lines[start-1+i]
+	}, end-start+1, room)
+	shownEnd := start + window.Count - 1
+	result.File.EndLine, result.File.Content = shownEnd, window.Text
 	result.Message = fmt.Sprintf("已读取 %s 第 %d-%d 行（共 %d 行）。", content.Path, start, shownEnd, len(lines))
+	if window.Cut {
+		result.Message += fmt.Sprintf(" 第 %d 行太长（压缩过的代码或单行数据），只给了开头一段。", shownEnd)
+	}
 	if shownEnd < len(lines) {
 		result.Message += fmt.Sprintf(" 后面还有，要继续读传 start_line=%d。", shownEnd+1)
+		if shownEnd < end {
+			result.Message += " 这次的输出上限装不下你要的全部行，已按上限给到这里。"
+		}
 	}
 	return result
+}
+
+// repositoryRawBody 让 doJSON 按原始格式取文件内容，不做 JSON 解码。
+type repositoryRawBody struct {
+	data []byte
 }
 
 type repositoryFileView struct {
