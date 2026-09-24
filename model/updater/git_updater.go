@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 var (
@@ -552,7 +554,7 @@ func (u *GitUpdater) recordUpdate(at time.Time, output string, restartRequired b
 }
 
 func (u *GitUpdater) runApply(ctx context.Context, targetCommit string) (string, error) {
-	cmd := exec.CommandContext(ctx, u.applyCommand[0], u.applyCommand[1:]...)
+	cmd := procgroup.CommandContext(ctx, u.applyCommand[0], u.applyCommand[1:]...)
 	cmd.Dir = u.root
 	cmd.Env = environmentWithOverrides(os.Environ(),
 		"DIANA_UPDATE_ROOT="+u.root,
@@ -595,7 +597,7 @@ func environmentWithOverrides(base []string, overrides ...string) []string {
 }
 
 func (u *GitUpdater) isAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd := procgroup.CommandContext(ctx, "git", "merge-base", "--is-ancestor", ancestor, descendant)
 	cmd.Dir = u.root
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -616,7 +618,7 @@ func (u *GitUpdater) isAncestor(ctx context.Context, ancestor, descendant string
 }
 
 func (u *GitUpdater) refExists(ctx context.Context, ref string) bool {
-	cmd := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", ref)
+	cmd := procgroup.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", ref)
 	cmd.Dir = u.root
 	return cmd.Run() == nil
 }
@@ -664,7 +666,7 @@ func (u *GitUpdater) gitOutput(ctx context.Context, args ...string) (string, err
 }
 
 func (u *GitUpdater) gitCombined(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := procgroup.CommandContext(ctx, "git", args...)
 	cmd.Dir = u.root
 	var out bytes.Buffer
 	cmd.Stdout = &out

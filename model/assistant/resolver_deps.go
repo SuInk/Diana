@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 const (
@@ -211,7 +213,7 @@ func runDependencyInstallPlan(ctx context.Context, plan resolverInstallPlan, nam
 	defer cancel()
 	for _, command := range plan.commands {
 		output := &limitedCommandOutput{remaining: resolverInstallerOutputLimit}
-		cmd := exec.CommandContext(installCtx, command.path, command.args...)
+		cmd := procgroup.CommandContext(installCtx, command.path, command.args...)
 		cmd.Env = resolverCommandEnv()
 		cmd.Stdout = output
 		cmd.Stderr = output
@@ -448,7 +450,7 @@ func probeCommandVersion(name string, args []string) string {
 func runCommandVersion(path, name string, args []string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := procgroup.CommandContext(ctx, path, args...)
 	cmd.Env = resolverCommandEnv()
 	output, err := cmd.Output()
 	if err != nil {

@@ -264,7 +264,7 @@ func verifyRemoteMCPCredential(ctx context.Context, cfg mcpServerConfig) (string
 		}
 		return "", err
 	}
-	defer func() { _ = session.session.Close() }()
+	defer func() { _ = session.close() }()
 	// 握手只能证明令牌被接受，换不出「这是谁的账号」，所以不硬编一个名字回去。
 	return "", nil
 }

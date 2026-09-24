@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/netguard"
 
 	"golang.org/x/net/html"
@@ -255,7 +256,7 @@ func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowse
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
 	defer cancel()
-	output, err := exec.CommandContext(probeCtx, path, "--version").CombinedOutput()
+	output, err := procgroup.CommandContext(probeCtx, path, "--version").CombinedOutput()
 	if err != nil {
 		detail := "找到了 " + path + "，但它执行失败"
 		if message := compactBrowserError(string(output)); message != "" {

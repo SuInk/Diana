@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/netguard"
 	"github.com/SuInk/diana/model/version"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -350,6 +351,19 @@ type mcpSession struct {
 	session *mcpsdk.ClientSession
 	stderr  *lockedBuffer
 	done    chan struct{}
+	// process 是 stdio 服务的子进程，HTTP 服务为 nil。
+	process *exec.Cmd
+}
+
+// close 先按 SDK 的流程体面地关（关 stdin、等退出、再 TERM/KILL 父进程），再把
+// 进程组里剩下的收掉。npx、uvx 起的服务真正干活的是孙进程：SDK 只杀父进程，
+// 孙进程不认 stdin 关闭的话就一直挂在后台。
+func (s *mcpSession) close() error {
+	err := s.session.Close()
+	if s.process != nil {
+		_ = procgroup.Kill(s.process)
+	}
+	return err
 }
 
 func (s *mcpSession) alive() bool {
@@ -401,9 +415,10 @@ func openMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workD
 	var (
 		transport mcpsdk.Transport
 		stderr    *lockedBuffer
+		process   *mcpProcessTransport
 	)
 	if command := resolveLocalMCPCommand(cfg.Command); command != "" {
-		cmd := exec.Command(command, cfg.Args...)
+		cmd := procgroup.Isolate(exec.Command(command, cfg.Args...))
 		if cwd := strings.TrimSpace(cfg.CWD); cwd != "" {
 			if !filepath.IsAbs(cwd) {
 				cwd = filepath.Join(workDir, cwd)
@@ -413,7 +428,8 @@ func openMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workD
 		cmd.Env = mergedCommandEnvironment(cfg.Env, cfg.inheritEnvironment())
 		stderr = &lockedBuffer{}
 		cmd.Stderr = stderr
-		transport = &mcpsdk.CommandTransport{Command: cmd, TerminateDuration: 2 * time.Second}
+		process = &mcpProcessTransport{inner: &mcpsdk.CommandTransport{Command: cmd, TerminateDuration: 2 * time.Second}}
+		transport = process
 	} else {
 		endpoint := strings.TrimSpace(cfg.URL)
 		if err := netguard.ValidatePublicURL(ctx, endpoint); err != nil {
@@ -437,15 +453,43 @@ func openMCPSession(ctx context.Context, name string, cfg mcpServerConfig, workD
 	})
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
+		if process != nil {
+			process.abandon()
+		}
 		return nil, withMCPStderr(fmt.Errorf("mcp server %q connect failed: %w", name, err), stderr)
 	}
 	state := &mcpSession{session: session, stderr: stderr, done: make(chan struct{})}
+	if process != nil {
+		state.process = process.inner.Command
+	}
 	go func() {
 		defer recoverGoroutinePanic("mcp_session_watcher")
 		_ = session.Wait()
 		close(state.done)
 	}()
 	return state, nil
+}
+
+// mcpProcessTransport 记下 stdio 连接，握手失败时由这里收尾。SDK 在协议版本不支持
+// 等几条失败路径上直接返回错误、不关连接，子进程就没人 Wait，一直占着。
+type mcpProcessTransport struct {
+	inner *mcpsdk.CommandTransport
+	conn  mcpsdk.Connection
+}
+
+func (t *mcpProcessTransport) Connect(ctx context.Context) (mcpsdk.Connection, error) {
+	conn, err := t.inner.Connect(ctx)
+	t.conn = conn
+	return conn, err
+}
+
+// abandon 在握手失败后调用：先整组杀掉，再关连接回收父进程。连接的 Close 幂等，
+// SDK 已经关过也没关系；进程已经被杀，Close 里的 Wait 立即返回。
+func (t *mcpProcessTransport) abandon() {
+	_ = procgroup.Kill(t.inner.Command)
+	if t.conn != nil {
+		_ = t.conn.Close()
+	}
 }
 
 // activeSession 返回可用会话；上一个会话已经断开时先重连。
@@ -498,7 +542,7 @@ func (c *MCPClient) dropSession(state *mcpSession) {
 func closeMCPSessionAsync(state *mcpSession) {
 	go func() {
 		defer recoverGoroutinePanic("mcp_session_close")
-		_ = state.session.Close()
+		_ = state.close()
 	}()
 }
 
@@ -576,7 +620,7 @@ func (c *MCPClient) Close() error {
 	if c.current == nil {
 		return nil
 	}
-	err := c.current.session.Close()
+	err := c.current.close()
 	c.current = nil
 	return err
 }

@@ -129,12 +129,27 @@ func (b *NoneBotBridge) ForwardEvent(event MessageEvent) {
 		return
 	}
 	// 转发失败只更新桥接状态，不能影响机器人本地回复链路。
-	b.writeMu.Lock()
-	err := conn.WriteJSON(payload)
-	b.writeMu.Unlock()
-	if err != nil {
+	if err := b.writeJSON(conn, payload); err != nil {
 		b.setStatus(false, err.Error())
 	}
+}
+
+// nonebotBridgeWriteTimeout 是往 NoneBot 写一帧的上限。ForwardEvent 在收消息的主链路
+// 上同步调用：NoneBot 卡住不读时，没有期限的写会等到 TCP 发送缓冲区腾出空间为止，
+// 后面所有消息都排在 writeMu 上。
+var nonebotBridgeWriteTimeout = 10 * time.Second
+
+// writeJSON 带期限写一帧。写超时以后这条 WebSocket 已经不可用（帧可能只写了一半），
+// 直接关掉，读循环随之出错并重连。
+func (b *NoneBotBridge) writeJSON(conn *websocket.Conn, payload any) error {
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
+	_ = conn.SetWriteDeadline(time.Now().Add(nonebotBridgeWriteTimeout))
+	err := conn.WriteJSON(payload)
+	if err != nil {
+		_ = conn.Close()
+	}
+	return err
 }
 
 // run 持续连接 NoneBot 并处理重连。
@@ -220,9 +235,7 @@ func (b *NoneBotBridge) handleFrame(ctx context.Context, data []byte) {
 		resp["retcode"] = 1
 		resp["wording"] = err.Error()
 	}
-	b.writeMu.Lock()
-	_ = conn.WriteJSON(resp)
-	b.writeMu.Unlock()
+	_ = b.writeJSON(conn, resp)
 }
 
 // setStatus 更新 NoneBot bridge 状态。

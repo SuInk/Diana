@@ -9,13 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
 )
@@ -355,7 +355,7 @@ func encodeRenderMedia(ctx context.Context, ffmpeg string, request agent.HTMLCap
 		args = renderMediaMP4Args(spec.fps, input, outputPath)
 	}
 	stderr := &limitedCommandOutput{remaining: 4096}
-	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd := procgroup.CommandContext(ctx, ffmpeg, args...)
 	cmd.Env = resolverCommandEnv()
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {

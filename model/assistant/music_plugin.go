@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/agent"
 )
 
@@ -142,7 +142,7 @@ func NewMusicPlugin(client *http.Client) *MusicPlugin {
 		fetcher: &musicFetcher{client: client},
 		sources: defaultMusicSources(),
 		commandRunner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			return exec.CommandContext(ctx, name, args...).CombinedOutput()
+			return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
 		},
 	}
 }
@@ -825,7 +825,7 @@ func (p *MusicPlugin) encodeSilkIfConfigured(ctx context.Context, cfg musicConfi
 
 func (p *MusicPlugin) runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if p.commandRunner == nil {
-		return exec.CommandContext(ctx, name, args...).CombinedOutput()
+		return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
 	}
 	return p.commandRunner(ctx, name, args...)
 }

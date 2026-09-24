@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 const (
@@ -632,7 +634,7 @@ func repositoryPublishGHAuthToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", errRepositoryPublishGHUnavailable
 	}
-	cmd := exec.CommandContext(ctx, path, "auth", "token", "--hostname", "github.com")
+	cmd := procgroup.CommandContext(ctx, path, "auth", "token", "--hostname", "github.com")
 	cmd.Env = repositoryPublishGHEnvironment(os.Environ())
 	output, err := cmd.Output()
 	if err != nil {

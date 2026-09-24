@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -552,7 +553,7 @@ func localImageOCRTranscription(ctx context.Context, cfg imageOCRConfig, imageUR
 		args = append(args, "-l", cfg.LocalLanguages)
 	}
 	// tesseract 会把警告写到 stderr，只取 stdout 免得混进转写文本。
-	out, err := exec.CommandContext(ctx, cfg.LocalCommand, args...).Output()
+	out, err := procgroup.CommandContext(ctx, cfg.LocalCommand, args...).Output()
 	if err != nil {
 		detail := ""
 		var exitErr *exec.ExitError

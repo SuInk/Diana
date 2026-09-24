@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/applog"
 
 	"github.com/google/uuid"
@@ -514,7 +515,7 @@ func ensureCodingWorkspace(ctx context.Context, workspace codingWorkspace) error
 	}
 	cloneCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(cloneCtx, "git", "clone", workspace.RepoURL, workspace.Dir)
+	cmd := procgroup.CommandContext(cloneCtx, "git", "clone", workspace.RepoURL, workspace.Dir)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("clone 工作区 %s 失败：%s", workspace.Name, strings.TrimSpace(string(output)))
 	}

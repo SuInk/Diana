@@ -246,8 +246,19 @@ func (s *OneBotReverseServer) SendChatAction(ctx context.Context, msg OutgoingMe
 	return sendOneBotInputStatus(ctx, msg, action, s.CallAPI)
 }
 
+// oneBotReverseCallTimeout 是没有期限的调用等待响应的上限。
+var oneBotReverseCallTimeout = 30 * time.Second
+
 // CallAPI 通过反向连接发送 OneBot action 并等待响应。
 func (s *OneBotReverseServer) CallAPI(ctx context.Context, action string, params map[string]any) (map[string]any, error) {
+	// 调用方没给期限时补一个，和正向连接的 30 秒一致。WebUI 的操作直接传请求 ctx：
+	// 桥收下请求却不回（重连、丢包），不补的话这个请求要等到浏览器放弃才结束。
+	// 调用方自己给了期限（上传大文件会给得更长）就照它的来。
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, oneBotReverseCallTimeout)
+		defer cancel()
+	}
 	s.connMu.RLock()
 	conn := s.conn
 	s.connMu.RUnlock()

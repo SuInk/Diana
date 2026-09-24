@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 // 命令沙盒模式。白名单挡的是「能跑哪个程序」，挡不住「这个程序能碰什么」——
@@ -209,7 +211,7 @@ func sbplString(value string) string {
 func wrapWithSandboxExec(sandboxExecPath string) func(context.Context, string, bool, []string, string, []string) *exec.Cmd {
 	return func(ctx context.Context, root string, allowNetwork bool, secrets []string, name string, args []string) *exec.Cmd {
 		full := append([]string{"-p", sandboxExecProfile(root, allowNetwork, secrets), name}, args...)
-		return exec.CommandContext(ctx, sandboxExecPath, full...)
+		return procgroup.CommandContext(ctx, sandboxExecPath, full...)
 	}
 }
 
@@ -239,7 +241,7 @@ func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, []
 		}
 		full = append(full, "--", name)
 		full = append(full, args...)
-		return exec.CommandContext(ctx, bwrapPath, full...)
+		return procgroup.CommandContext(ctx, bwrapPath, full...)
 	}
 }
 

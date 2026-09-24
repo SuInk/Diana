@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -311,7 +311,7 @@ func launchChromeProcess(ctx context.Context, executable, root string, args []st
 
 func launchChromeProcessWithEnv(ctx context.Context, executable, root string, args, extraEnv []string) (*sandboxedChromeProcess, error) {
 	processCtx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(processCtx, executable, args...)
+	cmd := procgroup.CommandContext(processCtx, executable, args...)
 	cmd.Env = append(sandboxedBrowserEnvironment(os.Environ(), root), extraEnv...)
 	cmd.Stdin = nil
 	cmd.Stdout = io.Discard

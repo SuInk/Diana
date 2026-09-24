@@ -282,11 +282,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}
+		// 必须在 cancel 之前取：cancel 以后 planningCtx.Err() 恒不为空。只看 err 里有没有
+		// DeadlineExceeded 也不行——模型客户端自己的首包超时、流式空闲超时同样包着它，
+		// 那是供应商慢，不是这一轮的规划时间用完了，不能叫模型「直接总结」。
+		planningExpired := errors.Is(planningCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		modelTurns++
 		modelDuration := time.Since(modelStartedAt)
 		if err != nil {
-			if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			if planningExpired && ctx.Err() == nil {
 				finishReason = "finalization_reserved"
 				messages = append(messages, llm.Message{
 					Role:    llm.RoleUser,

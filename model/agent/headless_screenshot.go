@@ -10,10 +10,11 @@ import (
 	"fmt"
 	"image/png"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 // 把一段自包含的 HTML 截成 PNG。
@@ -119,7 +120,7 @@ func captureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 	}
 	args = append(args, "file://"+pagePath)
 
-	command := exec.CommandContext(runCtx, executable, args...)
+	command := procgroup.CommandContext(runCtx, executable, args...)
 	command.Env = sandboxedBrowserEnvironment(os.Environ(), root)
 	diagnosticsPath := filepath.Join(root, "browser.log")
 	diagnostics, err := os.Create(diagnosticsPath)
@@ -158,16 +159,21 @@ func captureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, 
 			if err != nil {
 				continue
 			}
-			_ = command.Process.Kill()
+			_ = procgroup.Kill(command)
 			<-waited
 			return pngBytes, nil
 		case <-runCtx.Done():
-			_ = command.Process.Kill()
+			_ = procgroup.Kill(command)
 			<-waited
 			if pngBytes, err := readCompletedScreenshot(outputPath); err == nil {
 				return pngBytes, nil
 			}
-			return nil, fmt.Errorf("screenshot: 渲染超时（%s）：%s", req.Timeout, screenshotDiagnostics(diagnosticsPath))
+			// 上层取消（对话被打断、工具总时限先到）不是渲染慢，照实交回上层的原因；
+			// 自己的时限到了才报渲染超时，并包上 DeadlineExceeded 供上层归类。
+			if parentErr := ctx.Err(); parentErr != nil {
+				return nil, fmt.Errorf("screenshot: 渲染被中止：%w", parentErr)
+			}
+			return nil, fmt.Errorf("screenshot: 渲染超时（%s）：%s: %w", req.Timeout, screenshotDiagnostics(diagnosticsPath), context.DeadlineExceeded)
 		}
 	}
 }
