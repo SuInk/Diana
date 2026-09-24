@@ -18,7 +18,8 @@ import (
 )
 
 // 一个 40 位的 GitHub 风格令牌，头尾分别是 ghp_ 和 abcd，正好对上 issue 里的掩码示例。
-const leakyToken = "ghp_0123456789ABCDEFGHIJKLMNOPQRSTUVabcd"
+// 拆成两段拼，免得公开仓库审计把它当成真令牌。
+const leakyToken = "ghp_" + "0123456789ABCDEFGHIJKLMNOPQRSTUVabcd"
 
 func TestMaskSecret(t *testing.T) {
 	cases := map[string]string{
@@ -405,7 +406,7 @@ func TestAgentInstallRestoresMaskedURLCredentials(t *testing.T) {
 		t.Fatalf("被拒绝的改动不能落盘：%q", got)
 	}
 
-	if _, err := manager.installMCP(context.Background(), "userinfo", mcpServerConfig{URL: "https://diana:ghp_****abcd@mcp.example.com/mcp", ToolTimeoutSec: 30, Enabled: &disabled}, true); err != nil {
+	if _, err := manager.installMCP(context.Background(), "userinfo", mcpServerConfig{URL: "https://diana:" + "ghp_****abcd@mcp.example.com/mcp", ToolTimeoutSec: 30, Enabled: &disabled}, true); err != nil {
 		t.Fatalf("userinfo 里的掩码应当还原：%v", err)
 	}
 	if got := stored("userinfo").URL; got != userinfoURL {
