@@ -178,6 +178,13 @@ func (r *browserTabRegistry) touch(targetID string) {
 	r.mu.Unlock()
 }
 
+// isOpened 判断这个标签页是不是机器人自己开的。
+func (r *browserTabRegistry) isOpened(targetID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.opened[targetID] != nil
+}
+
 func (r *browserTabRegistry) forget(targetID string) {
 	r.mu.Lock()
 	delete(r.opened, targetID)

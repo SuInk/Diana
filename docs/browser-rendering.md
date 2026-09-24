@@ -40,6 +40,8 @@ seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；�
 
 默认 Docker seccomp 会阻止 Chromium 创建其沙箱所需的命名空间，表现为 `Operation not permitted` 或 CDP 启动失败。项目配置保留默认拒绝策略，只在 Moby 默认配置基础上额外允许 `clone`、`setns`、`unshare`。不需要 `--privileged`、`SYS_ADMIN` 或 `seccomp=unconfined`，网页渲染也不添加 `--no-sandbox`。宿主机另有 AppArmor 或用户命名空间禁令时仍需按管理员策略处理，插件探测会显示实际失败原因。
 
+Docker 默认的 `/dev/shm` 只有 64MB，Chrome 渲染重页面时容易写满它导致渲染进程崩溃。Linux 上启动的所有 Chrome 都带 `--disable-dev-shm-usage`，共享内存改走临时目录，因此 Compose 里不需要再设 `shm_size`，`docker run` 也不用加 `--shm-size`。
+
 本地 HTML 截图与外部网页读取走不同启动路径，因此截图成功不代表网页沙箱可用；依赖页现已分别验证两者。所有渲染使用临时浏览器配置，不读取用户日常浏览器登录态。
 
 ## 隔离、并发与超时

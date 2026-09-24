@@ -113,6 +113,10 @@
             @keydown.prevent="onKey($event, 'keyDown')"
             @keyup.prevent="onKey($event, 'keyUp')"
           />
+          <div v-else-if="liveNotice" class="browser-live-notice">
+            <p style="margin: 0; font-size: 13px">{{ liveNotice }}</p>
+            <button class="btn small ghost" type="button" @click="reconnectLive">重新连接</button>
+          </div>
           <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
         </div>
         <p class="muted" style="margin: 0; font-size: 12.5px">
@@ -350,6 +354,17 @@ const busy = ref(false);
 
 let socket: WebSocket | null = null;
 let statusTimer: number | undefined;
+// 画面连不上或断掉的原因。只在还没有画面时顶替「正在连接画面……」；重连时不清空，
+// 标签页一直卡着的话，用户看到的是原因而不是一闪一闪的「正在连接」。
+const liveNotice = ref("");
+let firstFrameTimer: number | undefined;
+// 连上之后多久还没有第一帧就提示：卡死的页面出不了帧，Page.startScreencast 照样成功。
+const firstFrameTimeoutMS = 10_000;
+
+function clearFirstFrameTimer(): void {
+  if (firstFrameTimer !== undefined) window.clearTimeout(firstFrameTimer);
+  firstFrameTimer = undefined;
+}
 
 async function loadSource(): Promise<void> {
   try {
@@ -456,29 +471,62 @@ async function toggleTakeover(): Promise<void> {
 }
 
 function connectLive(): void {
-  disconnectLive();
+  closeLiveSocket();
   const ws = new WebSocket(browserBoxLiveURL(botID));
   socket = ws;
   ws.onmessage = (event) => {
-    const message = JSON.parse(event.data) as { type: string; frame?: LiveFrame; tab?: { url?: string; title?: string } };
+    const message = JSON.parse(event.data) as {
+      type: string;
+      frame?: LiveFrame;
+      tab?: { url?: string; title?: string };
+      message?: string;
+    };
     if (message.type === "frame" && message.frame) {
+      clearFirstFrameTimer();
+      liveNotice.value = "";
       frame.value = message.frame;
     } else if (message.type === "ready" && message.tab) {
       addressInput.value = message.tab.url ?? "";
       currentTitle.value = message.tab.title ?? "";
+      clearFirstFrameTimer();
+      firstFrameTimer = window.setTimeout(() => {
+        if (socket === ws && !frame.value) {
+          liveNotice.value = "画面 10 秒还没出来：这个页面可能卡住了（脚本卡死或渲染进程崩溃）。可以点「刷新」、在地址栏换个网址，或者重新连接。";
+        }
+      }, firstFrameTimeoutMS);
+    } else if (message.type === "error") {
+      // 标签页卡死或崩溃时后端会说明原因再断开；换掉之前的画面，别让人对着最后一帧干等。
+      clearFirstFrameTimer();
+      frame.value = null;
+      liveNotice.value = message.message || "画面连接出错了";
     }
   };
   ws.onclose = () => {
-    if (socket === ws) socket = null;
+    if (socket !== ws) return;
+    socket = null;
+    clearFirstFrameTimer();
+    // 状态轮询会在几秒内自动重连；还没有画面时先把断开说清楚。
+    if (!frame.value && !liveNotice.value) liveNotice.value = "画面连接断开了，几秒后自动重连。";
   };
 }
 
-function disconnectLive(): void {
+function closeLiveSocket(): void {
+  clearFirstFrameTimer();
   if (!socket) return;
   socket.onclose = null;
   socket.close();
   socket = null;
   frame.value = null;
+}
+
+function disconnectLive(): void {
+  closeLiveSocket();
+  liveNotice.value = "";
+}
+
+function reconnectLive(): void {
+  liveNotice.value = "";
+  connectLive();
 }
 
 function send(payload: Record<string, unknown>): void {
@@ -724,6 +772,16 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   background: var(--surface-2, rgba(0, 0, 0, 0.15));
   overflow: hidden;
+}
+
+.browser-live-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  padding: 16px;
+  text-align: center;
 }
 
 .browser-screen {

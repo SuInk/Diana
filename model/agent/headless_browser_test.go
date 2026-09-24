@@ -61,6 +61,26 @@ func TestSandboxedChromeArgsKeepChromeSandboxEnabled(t *testing.T) {
 	}
 }
 
+// 容器里 /dev/shm 默认只有 64MB，常驻浏览器和一次性浏览器都要把共享内存挪出去，
+// 否则重页面会把渲染进程撑崩。
+func TestChromeArgsMoveSharedMemoryOffDevShm(t *testing.T) {
+	for name, args := range map[string][]string{
+		"sandboxed":  sandboxedChromeArgs("/tmp/profile", "/tmp/cache", "/tmp/crash", sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{})),
+		"persistent": PersistentBrowserArgs("/tmp/profile", "/tmp/cache", "/tmp/crash", true, 0, 1280, 800),
+		"screenshot": sandboxedChromeBaseArgs("/tmp/profile", "/tmp/cache", "/tmp/crash"),
+	} {
+		count := 0
+		for _, arg := range args {
+			if arg == "--disable-dev-shm-usage" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s: --disable-dev-shm-usage appears %d times, want exactly once: %v", name, count, args)
+		}
+	}
+}
+
 func TestVisibleChromeModeOmitsHeadlessFlag(t *testing.T) {
 	visible := false
 	args := sandboxedChromeArgs("/tmp/profile", "/tmp/cache", "/tmp/crash", SandboxedBrowserConfig{Headless: &visible})

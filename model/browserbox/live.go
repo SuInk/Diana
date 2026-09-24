@@ -23,6 +23,18 @@ const (
 	liveAckTimeout = 5 * time.Second
 )
 
+// liveStartTimeout 是连上画面最多等多久。Page.enable 要渲染进程回，页面主线程被脚本
+// 卡死或渲染进程崩了时它永远不回；以前这里跟着请求的 ctx 一直等，WebUI 就一直停在
+// 「正在连接画面……」。是变量只为了测试能调短。
+var liveStartTimeout = 10 * time.Second
+
+// ErrLivePageUnresponsive 表示标签页在 liveStartTimeout 内没回话，画面连不上。
+var ErrLivePageUnresponsive = errors.New("这个标签页 10 秒内没有响应（页面脚本卡住或渲染进程崩溃），画面连不上。机器人下次用浏览器时会把卡住的页救回来；一直这样可以先停止再启动内置浏览器")
+
+// ErrLivePageCrashed 表示画面对应的标签页渲染进程崩了。崩掉的页已经被换回空白页，
+// 重新连上就有画面。
+var ErrLivePageCrashed = errors.New("这个标签页崩溃了（渲染进程退出，常见于页面太重、内存或 /dev/shm 不够），已换回空白页，画面马上重新连上")
+
 // Frame 是一帧画面。
 type Frame struct {
 	// Data 是 base64 编码的 JPEG，直接可以塞进 img 的 src。
@@ -77,6 +89,8 @@ type Live struct {
 
 	mu     sync.Mutex
 	closed bool
+	// err 是画面流为什么断了；正常关闭时为 nil。
+	err error
 }
 
 // StartLive 连上标签页并开始推帧。
@@ -86,13 +100,18 @@ func StartLive(ctx context.Context, websocketURL, tabURL string, width, height i
 		return nil, err
 	}
 	live := &Live{session: session, frames: make(chan Frame, 4), tabURL: tabURL}
-	if err := session.Call(ctx, "Page.enable", nil, nil); err != nil {
+	startCtx, cancel := context.WithTimeout(ctx, liveStartTimeout)
+	defer cancel()
+	// Inspector 域由浏览器进程处理，页面卡着也回；对已经崩掉的标签页，它一开就先推一条
+	// Inspector.targetCrashed，由 pump 认出来。
+	_ = session.Call(startCtx, "Inspector.enable", nil, nil)
+	if err := session.Call(startCtx, "Page.enable", nil, nil); err != nil {
 		session.Close()
-		return nil, err
+		return nil, liveStartError(ctx, startCtx, err)
 	}
 	// 先把焦点给页面，否则无头模式下键盘事件会被丢掉。
-	_ = session.Call(ctx, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}, nil)
-	if err := session.Call(ctx, "Page.startScreencast", map[string]any{
+	_ = session.Call(startCtx, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}, nil)
+	if err := session.Call(startCtx, "Page.startScreencast", map[string]any{
 		"format":        "jpeg",
 		"quality":       liveFrameQuality,
 		"maxWidth":      width,
@@ -100,7 +119,7 @@ func StartLive(ctx context.Context, websocketURL, tabURL string, width, height i
 		"everyNthFrame": 1,
 	}, nil); err != nil {
 		session.Close()
-		return nil, err
+		return nil, liveStartError(ctx, startCtx, err)
 	}
 	go func() {
 		defer recoverGoroutinePanic("screencast")
@@ -109,12 +128,39 @@ func StartLive(ctx context.Context, websocketURL, tabURL string, width, height i
 	return live, nil
 }
 
+// liveStartError 把「连画面时标签页没回话」换成能看懂的原因；调用方自己取消的保持原样。
+func liveStartError(parent, start context.Context, err error) error {
+	if parent.Err() == nil && errors.Is(start.Err(), context.DeadlineExceeded) {
+		return ErrLivePageUnresponsive
+	}
+	return err
+}
+
 // Frames 返回画面流。
 func (l *Live) Frames() <-chan Frame { return l.frames }
+
+// Err 是画面流为什么断了：标签页崩溃时是 ErrLivePageCrashed，正常结束时为 nil。
+// 在 Frames 关闭之后读。
+func (l *Live) Err() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
+}
 
 func (l *Live) pump() {
 	defer close(l.frames)
 	for event := range l.session.Events() {
+		if event.Method == "Inspector.targetCrashed" {
+			// 崩掉的页不会再出帧，别让前端对着最后一帧干等。导航由浏览器进程处理，
+			// 会换一个新的渲染进程，下一次连画面就是一张能用的空白页。
+			resetCtx, cancel := context.WithTimeout(context.Background(), liveAckTimeout)
+			_ = l.session.Call(resetCtx, "Page.navigate", map[string]any{"url": "about:blank"}, nil)
+			cancel()
+			l.mu.Lock()
+			l.err = ErrLivePageCrashed
+			l.mu.Unlock()
+			return
+		}
 		if event.Method != "Page.screencastFrame" {
 			continue
 		}
