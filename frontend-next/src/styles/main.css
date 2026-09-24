@@ -5614,6 +5614,17 @@ a.nav-action {
     flex: 1;
   }
 
+  /* 竖排后 flex-basis 管的是高度：260px 的横排最小宽度会变成每项至少 260px
+     高，输入框下面空出一大片。竖排时按内容高度排。 */
+  .group-scope-level {
+    flex: none;
+  }
+
+  .group-scope-level .input,
+  .group-scope-level .app-select {
+    max-width: none;
+  }
+
   .group-search {
     width: auto;
     flex: 1;
