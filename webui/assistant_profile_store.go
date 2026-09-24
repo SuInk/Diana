@@ -96,7 +96,7 @@ func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStor
 		return nil, err
 	}
 	var data assistant.ProfileSet
-	var seed storage.BotSeedProfile
+	var seed storage.SeedProfile
 	if ok && len(saved.Profiles) > 0 {
 		// 保存过就不再需要种子 ID，只读出以前钉过的旧号映射（如果有）。
 		if seed, _, err = store.LoadBotSeedProfile(ctx); err != nil {
@@ -129,19 +129,19 @@ func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStor
 // 消息里出现过的档案 ID 全是这台种子机器人每次重启换的新号。最近用过的那个接着用，
 // 上次重启以来攒下的记忆和群配置不至于再丢一轮；其余记成旧号，供编码任务认领。
 // 存过配置集的库不收集：那里的历史 ID 可能属于已经删掉的机器人，认不得。
-func stableBotSeedProfile(ctx context.Context, store *storage.SQLiteStore, profilesSaved bool) (storage.BotSeedProfile, error) {
+func stableBotSeedProfile(ctx context.Context, store *storage.SQLiteStore, profilesSaved bool) (storage.SeedProfile, error) {
 	seed, ok, err := store.LoadBotSeedProfile(ctx)
 	if err != nil {
-		return storage.BotSeedProfile{}, err
+		return storage.SeedProfile{}, err
 	}
 	if ok && strings.TrimSpace(seed.ID) != "" {
 		return seed, nil
 	}
-	seed = storage.BotSeedProfile{}
+	seed = storage.SeedProfile{}
 	if !profilesSaved {
 		history, err := store.RecentBotProfileIDs(ctx)
 		if err != nil {
-			return storage.BotSeedProfile{}, err
+			return storage.SeedProfile{}, err
 		}
 		if len(history) > 0 {
 			seed.ID, seed.LegacyIDs = history[0], history[1:]
@@ -151,13 +151,13 @@ func stableBotSeedProfile(ctx context.Context, store *storage.SQLiteStore, profi
 		seed.ID = uuid.NewString()
 	}
 	if err := store.SaveBotSeedProfile(ctx, seed); err != nil {
-		return storage.BotSeedProfile{}, fmt.Errorf("persist diana seed profile id: %w", err)
+		return storage.SeedProfile{}, fmt.Errorf("persist diana seed profile id: %w", err)
 	}
 	return seed, nil
 }
 
 // legacyProfileAliases 把旧号映射到种子机器人现在的 ID。
-func legacyProfileAliases(seed storage.BotSeedProfile) map[string]string {
+func legacyProfileAliases(seed storage.SeedProfile) map[string]string {
 	target := strings.TrimSpace(seed.ID)
 	if target == "" || len(seed.LegacyIDs) == 0 {
 		return nil

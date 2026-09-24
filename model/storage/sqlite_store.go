@@ -33,6 +33,7 @@ const (
 	llmAuthKey           = "llm_oauth"
 	botProfilesKey       = "bot_profiles"
 	botSeedProfileKey    = "bot_seed_profile"
+	llmSeedProfileKey    = "llm_seed_profile"
 	botPersonasKey       = "bot_personas"
 	botWorldBookKey      = "bot_world_book"
 	botGroupConfigKey    = "bot_group_configs"
@@ -207,30 +208,42 @@ func (s *SQLiteStore) SaveBotProfiles(ctx context.Context, set assistant.Profile
 	return s.saveJSON(ctx, botProfilesKey, set)
 }
 
-// BotSeedProfile 记着从 config.yaml 播种出来的那台机器人的档案 ID。
+// SeedProfile 记着从 config.yaml 播种出来的那一份配置档（机器人或模型提供商）的 ID。
 //
-// 机器人配置集只有在 WebUI 保存过之后才落库，没保存过的部署每次启动都从 config.yaml
-// 重新播种；档案 ID 如果也跟着每次重新生成，记忆、群配置、编码任务归属这些按 ID
-// 记的数据一重启就全成了无主数据。所以只把 ID 单独钉在库里，配置本身照旧从
-// config.yaml 读，改了机器人参数重启仍然生效。
-type BotSeedProfile struct {
+// 配置集只有在 WebUI 保存过之后才落库，没保存过的部署每次启动都从 config.yaml
+// 重新播种；档案 ID 如果也跟着每次重新生成，按 ID 记的数据（记忆、群配置、编码任务
+// 归属、机器人的模型绑定）一重启就全对不上了。所以只把 ID 单独钉在库里，配置本身
+// 照旧从 config.yaml 读，改了参数重启仍然生效。
+type SeedProfile struct {
 	ID string `json:"id"`
-	// LegacyIDs 是修复之前这台种子机器人每次重启用过的旧 ID，只在第一次钉 ID 时从
-	// 本库的历史里收集一次。它们都出自本实例自己的数据库，所以能确定是这台机器人的，
-	// 可以用来认领按旧 ID 记下的编码任务。
+	// LegacyIDs 只有机器人用：修复之前这台种子机器人每次重启用过的旧 ID，只在第一次
+	// 钉 ID 时从本库的历史里收集一次。它们都出自本实例自己的数据库，所以能确定是这台
+	// 机器人的，可以用来认领按旧 ID 记下的编码任务。
 	LegacyIDs []string `json:"legacy_ids,omitempty"`
 }
 
 // LoadBotSeedProfile 读取种子机器人的固定档案 ID。
-func (s *SQLiteStore) LoadBotSeedProfile(ctx context.Context) (BotSeedProfile, bool, error) {
-	var seed BotSeedProfile
+func (s *SQLiteStore) LoadBotSeedProfile(ctx context.Context) (SeedProfile, bool, error) {
+	var seed SeedProfile
 	ok, err := s.loadJSON(ctx, botSeedProfileKey, &seed)
 	return seed, ok, err
 }
 
 // SaveBotSeedProfile 保存种子机器人的固定档案 ID。
-func (s *SQLiteStore) SaveBotSeedProfile(ctx context.Context, seed BotSeedProfile) error {
+func (s *SQLiteStore) SaveBotSeedProfile(ctx context.Context, seed SeedProfile) error {
 	return s.saveJSON(ctx, botSeedProfileKey, seed)
+}
+
+// LoadLLMSeedProfile 读取种子模型提供商配置档的固定 ID。
+func (s *SQLiteStore) LoadLLMSeedProfile(ctx context.Context) (SeedProfile, bool, error) {
+	var seed SeedProfile
+	ok, err := s.loadJSON(ctx, llmSeedProfileKey, &seed)
+	return seed, ok, err
+}
+
+// SaveLLMSeedProfile 保存种子模型提供商配置档的固定 ID。
+func (s *SQLiteStore) SaveLLMSeedProfile(ctx context.Context, seed SeedProfile) error {
+	return s.saveJSON(ctx, llmSeedProfileKey, seed)
 }
 
 // RecentBotProfileIDs 列出本库消息记录里出现过的机器人档案 ID，最近用过的在前。

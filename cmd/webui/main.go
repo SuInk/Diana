@@ -302,6 +302,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// 修复前播种的提供商配置档每次启动换 ID，机器人配置里记着旧 ID 的模型绑定
+	// 要在机器人配置的存储读库之前改回来。
+	if err := webui.RepairSeedLLMProfileRefs(ctx, sqliteStore, store.SeedProfileID()); err != nil {
+		log.Fatal(err)
+	}
 	botSeed, botSeeded, err := appCfg.botSeedConfig(defaultOneBotEndpoint(port))
 	if err != nil {
 		log.Fatal(err)
