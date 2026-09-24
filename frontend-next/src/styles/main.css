@@ -3714,6 +3714,65 @@ a.nav-action {
   margin-top: 14px;
 }
 
+.credential-check {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+
+.credential-check-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.credential-check-head h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.credential-check-head .btn {
+  flex-shrink: 0;
+}
+
+.credential-check-list {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.credential-check-list li {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.credential-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.credential-check-list p,
+.credential-check-line {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.credential-check-line .badge {
+  margin-right: 6px;
+}
+
 @media (max-width: 980px) {
   .music-platform-grid {
     grid-template-columns: 1fr;

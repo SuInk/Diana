@@ -16,10 +16,11 @@ import (
 // 网易云音乐曲库。公共层见 music_source.go。
 
 const (
-	neteaseDetailAPI = "https://music.163.com/api/song/detail/?ids=%%5B%s%%5D"
-	neteaseSearchAPI = "https://music.163.com/api/search/get/?type=1&offset=0&limit=5&s=%s"
-	neteaseOuterURL  = "https://music.163.com/song/media/outer/url?id=%s.mp3"
-	neteaseReferer   = "https://music.163.com/"
+	neteaseDetailAPI  = "https://music.163.com/api/song/detail/?ids=%%5B%s%%5D"
+	neteaseSearchAPI  = "https://music.163.com/api/search/get/?type=1&offset=0&limit=5&s=%s"
+	neteaseOuterURL   = "https://music.163.com/song/media/outer/url?id=%s.mp3"
+	neteaseAccountAPI = "https://music.163.com/api/nuser/account/get"
+	neteaseReferer    = "https://music.163.com/"
 )
 
 var (
@@ -33,13 +34,14 @@ var (
 // ——否则「自建 API 挂了要退回官方」这类分支只能靠真的去打线上接口才能验，
 // 测试就成了对外部服务的依赖。其余几家同理。
 type neteaseSource struct {
-	detailAPI string
-	searchAPI string
-	outerURL  string
+	detailAPI  string
+	searchAPI  string
+	outerURL   string
+	accountAPI string
 }
 
 func newNeteaseSource() *neteaseSource {
-	return &neteaseSource{detailAPI: neteaseDetailAPI, searchAPI: neteaseSearchAPI, outerURL: neteaseOuterURL}
+	return &neteaseSource{detailAPI: neteaseDetailAPI, searchAPI: neteaseSearchAPI, outerURL: neteaseOuterURL, accountAPI: neteaseAccountAPI}
 }
 
 func (s *neteaseSource) Key() string     { return "netease" }

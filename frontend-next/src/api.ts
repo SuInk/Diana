@@ -1746,6 +1746,17 @@ export function updatePluginSettings(
   });
 }
 
+export type CredentialState = "valid" | "invalid" | "unverified" | "unconfigured" | "error";
+
+export interface CredentialCheck {
+  key: string;
+  label: string;
+  configured: boolean;
+  state: CredentialState;
+  account?: string;
+  message: string;
+}
+
 export interface MusicConnectionStatus {
   source: string;
   label: string;
@@ -1753,6 +1764,7 @@ export interface MusicConnectionStatus {
   playable: boolean;
   api_configured: boolean;
   cookie_configured: boolean;
+  login?: CredentialCheck;
   message: string;
 }
 
@@ -1762,6 +1774,17 @@ export function testMusicConnections(
   profileID = ""
 ): Promise<{ sources: MusicConnectionStatus[] }> {
   return requestJSON<{ sources: MusicConnectionStatus[] }>(`/api/assistant/plugins/music/test?profile=${encodeURIComponent(profileID)}`, {
+    method: "POST",
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+  });
+}
+
+export function testResolverCredentials(
+  settings: Record<string, unknown>,
+  clearSecrets: string[] = [],
+  profileID = ""
+): Promise<{ credentials: CredentialCheck[] }> {
+  return requestJSON<{ credentials: CredentialCheck[] }>(`/api/assistant/plugins/resolver/test?profile=${encodeURIComponent(profileID)}`, {
     method: "POST",
     body: JSON.stringify({ settings, clear_secrets: clearSecrets })
   });

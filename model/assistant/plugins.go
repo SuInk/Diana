@@ -1392,6 +1392,8 @@ type ResolverPlugin struct {
 	twitterMediaDownloader func(context.Context, twitterMedia) string
 	// douyinDetailFetcher 为空时走真实的抖音接口，测试里注入桩避免打外网。
 	douyinDetailFetcher func(context.Context, string) (douyinMediaDetail, bool, string)
+	// credentialClient 为空时凭据测试走 netguard 的公网客户端，测试里注入桩。
+	credentialClient *http.Client
 }
 
 // NewResolverPlugin 创建官方内置链接解析插件。
@@ -1414,7 +1416,7 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.3.6",
+		Version:     "0.3.7",
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书和抖音的图片或视频，并展开 X 站内长文正文。",
 		Official:    true,
 		BuiltIn:     true,

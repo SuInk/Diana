@@ -281,6 +281,16 @@ func resolverXHSCookie(ctx context.Context) string {
 // text); Go rejects the whole header before the request reaches the platform.
 func sanitizeResolverCookieHeader(raw string) string {
 	raw = strings.TrimSpace(raw)
+	// 从 curl 命令里复制的 -b '...' / -H "cookie: ..." 会连引号和头名一起贴进来。
+	// 不剥掉的话首尾两个字段名值都带着引号，恰好常常就是登录字段。
+	for _, quote := range []string{"'", `"`} {
+		if len(raw) >= 2 && strings.HasPrefix(raw, quote) && strings.HasSuffix(raw, quote) {
+			raw = strings.TrimSpace(raw[1 : len(raw)-1])
+		}
+	}
+	if name, value, ok := strings.Cut(raw, ":"); ok && strings.EqualFold(strings.TrimSpace(name), "cookie") {
+		raw = strings.TrimSpace(value)
+	}
 	// Preserve the historical single-token form used by callers and tests. It
 	// contains no browser-export structure to clean and is safe as an HTTP value.
 	if !strings.Contains(raw, ";") && !strings.Contains(raw, "=") && resolverCookieHeaderASCII(raw) {

@@ -127,7 +127,13 @@ function demoPluginForProfile(plugin: PluginState, profile: string): PluginState
 
 let plugins: PluginState[] = [
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
-  { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"] }, installed: true, enabled: true },
+  { manifest: { id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.0", description: "解析社交媒体链接，支持合并转发图片和限定大小的视频。", official: true, built_in: true, permissions: ["网络请求", "消息发送"],
+      settings: [
+        { key: "bili_sessdata", label: "B 站 SESSDATA", type: "string", default: "", secret: true, description: "所有机器人共用的 B 站 SESSDATA。留空不使用登录凭据。" },
+        { key: "douyin_cookie", label: "抖音 Cookie", type: "string", default: "", secret: true, description: "所有机器人共用的抖音 Cookie。不配置时无法解析需要登录的内容。" },
+        { key: "xhs_cookie", label: "小红书 Cookie", type: "string", default: "", secret: true, description: "所有机器人共用的小红书 Cookie。不配置时无法解析需要登录的内容。" },
+        { key: "ytdlp_cookies_path", label: "yt-dlp Cookie 文件路径", type: "string", default: "", description: "共享的 Netscape 格式 Cookie 文件路径。" }
+      ] }, installed: true, enabled: true },
   {
     manifest: {
       id: "official.music", name: "音乐增强", version: "0.2.1", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐、酷狗并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
@@ -1077,6 +1083,39 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (!plugin) return json({ error: "演示插件不存在或不是仓库插件" }, 404);
     if (!body.accept_risk) return json({ error: "未确认安装风险" }, 400);
     return json(demoPluginForProfile(plugin, ""));
+  }
+  if (path === "/api/assistant/plugins/resolver/test" && method === "POST") {
+    return json({
+      credentials: [
+        { key: "bili_sessdata", label: "B 站 SESSDATA", configured: true, state: "valid", account: "演示账号", message: "已登录，大会员" },
+        { key: "douyin_cookie", label: "抖音 Cookie", configured: false, state: "unconfigured", message: "未填写" },
+        {
+          key: "xhs_cookie",
+          label: "小红书 Cookie",
+          configured: true,
+          state: "invalid",
+          message: "小红书说这份 Cookie 没有登录，需要重新复制。Cookie 里没有 web_session：请从开发者工具 Network 面板任意请求的 Cookie 请求头整段复制，document.cookie 拿不到它。"
+        },
+        { key: "ytdlp_cookies_path", label: "yt-dlp Cookie 文件", configured: true, state: "unverified", message: "文件可读，是 Netscape 格式；是否仍在登录状态要等 yt-dlp 实际下载时才知道。" }
+      ]
+    });
+  }
+  if (path === "/api/assistant/plugins/music/test" && method === "POST") {
+    return json({
+      sources: [
+        {
+          source: "netease", label: "网易云音乐", search_ok: true, playable: true, api_configured: false, cookie_configured: true,
+          login: { key: "netease_cookie", label: "网易云 MUSIC_U", configured: true, state: "valid", account: "云村村民", message: "已登录，会员账号" },
+          message: "搜索与播放地址获取正常"
+        },
+        {
+          source: "qq", label: "QQ 音乐", search_ok: true, playable: false, api_configured: false, cookie_configured: true,
+          login: { key: "qq_cookie", label: "QQ 音乐 Cookie", configured: true, state: "invalid", message: "QQ 音乐说这份 Cookie 没有登录或已过期，需要重新复制；Cookie 里应当有 qqmusic_key 或 qm_keyst。" },
+          message: "搜索正常，但登录态无效，取不到播放地址"
+        },
+        { source: "kugou", label: "酷狗音乐", search_ok: true, playable: true, api_configured: false, cookie_configured: false, message: "搜索与播放地址获取正常" }
+      ]
+    });
   }
   const pluginMatch = path.match(/^\/api\/assistant\/plugins\/([^/]+)\/(install|uninstall|enabled|settings)$/);
   if (pluginMatch) {

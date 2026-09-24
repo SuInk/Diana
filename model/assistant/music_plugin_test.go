@@ -930,3 +930,108 @@ func TestMusicConnectionTestReportsSearchAndPlayback(t *testing.T) {
 		t.Fatalf("disabled source results = %#v", results[1:])
 	}
 }
+
+func musicLoginTestPlugin(t *testing.T, handler http.HandlerFunc) *MusicPlugin {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	plugin := newMusicTestPlugin(server)
+	for _, source := range plugin.sources {
+		switch typed := source.(type) {
+		case *neteaseSource:
+			typed.accountAPI = server.URL + "/netease/account"
+		case *qqSource:
+			typed.vkeyAPI = server.URL + "/qq/musicu?data=%s"
+		}
+	}
+	return plugin
+}
+
+func musicLoginCheck(t *testing.T, plugin *MusicPlugin, source string, cookie string) CredentialCheck {
+	t.Helper()
+	found, ok := plugin.sourceByKey(source)
+	if !ok {
+		t.Fatalf("no source %s", source)
+	}
+	checker, ok := found.(musicLoginChecker)
+	if !ok {
+		t.Fatalf("%s does not check login", source)
+	}
+	cfg := musicConfigFromSettings(SettingValues{musicSourceCookieSetting(source): cookie})
+	return checker.CheckLogin(context.Background(), plugin.fetcher, cfg)
+}
+
+func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
+	plugin := musicLoginTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/netease/account":
+			if r.Header.Get("Cookie") != "MUSIC_U=good" {
+				fmt.Fprint(w, `{"code":200,"account":null,"profile":null}`)
+				return
+			}
+			fmt.Fprint(w, `{"code":200,"account":{"id":1,"vipType":11},"profile":{"nickname":"云村村民","vipType":11}}`)
+		case "/qq/musicu":
+			var request struct {
+				Comm struct {
+					UIN string `json:"uin"`
+				} `json:"comm"`
+			}
+			_ = json.Unmarshal([]byte(r.URL.Query().Get("data")), &request)
+			// 账号接口认 comm.uin，和 vkey 一样；只放 Cookie 不带 uin 会被当游客。
+			if request.Comm.UIN == "12345" && strings.Contains(r.Header.Get("Cookie"), "qqmusic_key=good") {
+				fmt.Fprint(w, `{"code":0,"req_0":{"code":0,"data":{"nick":"企鹅"}}}`)
+				return
+			}
+			fmt.Fprint(w, `{"code":0,"req_0":{"code":1000}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	if got := musicLoginCheck(t, plugin, "netease", "good"); got.State != CredentialValid || got.Account != "云村村民" || got.Message != "已登录，会员账号" {
+		t.Fatalf("netease valid = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "netease", "MUSIC_U=good"); got.State != CredentialInvalid || !strings.Contains(got.Message, "只填 MUSIC_U 的值") {
+		t.Fatalf("netease pasted name = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "qq", "uin=o12345; qqmusic_key=good"); got.State != CredentialValid || got.Account != "企鹅" {
+		t.Fatalf("qq valid = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=stale"); got.State != CredentialInvalid {
+		t.Fatalf("qq expired = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "qq", "qqmusic_key=good"); got.State != CredentialInvalid || !strings.Contains(got.Message, "uin") {
+		t.Fatalf("qq without uin = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "kugou", "token=t; userid=1; dfid=d"); got.State != CredentialUnverified {
+		t.Fatalf("kugou complete = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "kugou", "dfid=d"); got.State != CredentialInvalid || !strings.Contains(got.Message, "token、userid") {
+		t.Fatalf("kugou missing fields = %#v", got)
+	}
+}
+
+func TestMusicConnectionTestPutsInvalidLoginInMessage(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte("audio"))
+	plugin := newMusicTestPlugin(server)
+	for _, source := range plugin.sources {
+		if typed, ok := source.(*neteaseSource); ok {
+			typed.accountAPI = server.URL + "/netease/account-missing"
+		}
+	}
+	settings := musicRequestSettings(server)
+	settings[musicSettingSources] = []string{"netease"}
+	settings[musicSourceCookieSetting("netease")] = "stale"
+
+	results := plugin.TestConnections(context.Background(), settings)
+	if results[0].Login == nil || results[0].Login.State != CredentialError {
+		t.Fatalf("netease login = %#v, want error from the unreachable account API", results[0].Login)
+	}
+	if !results[0].Playable || results[0].Message != "搜索与播放地址获取正常" {
+		t.Fatalf("netease connection = %#v", results[0])
+	}
+	if results[1].Login != nil {
+		t.Fatalf("disabled qq should not be probed: %#v", results[1])
+	}
+}
