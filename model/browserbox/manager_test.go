@@ -273,3 +273,20 @@ func TestEnableByDefaultPicksHeadfulByDisplay(t *testing.T) {
 		}
 	}
 }
+
+// Chrome 的单实例套接字建在 TMPDIR 下，路径超过 108 字节（macOS 104）就直接退出。
+// 按机器人拆 profile 之后数据目录带上了 UUID，TMPDIR 再跟着它走就会超。
+func TestShortTempDirLeavesRoomForSingletonSocket(t *testing.T) {
+	dir, err := shortTempDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	socket := filepath.Join(dir, "org.chromium.Chromium.XXXXXX", "SingletonSocket")
+	if len(socket) > 100 {
+		t.Fatalf("临时目录太长，单实例套接字会超限：%s（%d 字节）", socket, len(socket))
+	}
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("临时目录权限应当是 0700：%v %v", info, err)
+	}
+}
