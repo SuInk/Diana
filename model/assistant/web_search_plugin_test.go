@@ -6,10 +6,11 @@ package assistant
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestWebSearchPluginIsBuiltInAndHonorsOverrides(t *testing.T) {
@@ -80,19 +81,34 @@ func TestWebSearchPluginCanDisableAllProviders(t *testing.T) {
 	}
 }
 
-func TestEnsureWebSearchAgentToolAlwaysKeepsSearchVisible(t *testing.T) {
-	fallback := ensureWebSearchAgentTool(nil)
-	if len(fallback) != 1 || fallback[0].Name() != agent.WebSearchToolName {
-		t.Fatalf("fallback tools = %#v", fallback)
+// 关掉的搜索插件不再塞一个同名占位工具：以前它每轮都带着一整段搜索规则，模型照
+// 规则去搜，必然失败，还会把「搜索没配置」说给用户听。
+func TestRuntimeWithoutSearchPluginRegistersNoSearchTool(t *testing.T) {
+	provider := &privacyAwareTestProvider{}
+	sawAgentTools := false
+	provider.generate = func(call int, req llm.GenerateRequest) (string, error) {
+		for _, tool := range req.Tools {
+			sawAgentTools = true
+			if tool.Name == agent.WebSearchToolName {
+				return "", fmt.Errorf("web_search 仍然登记在工具表里")
+			}
+		}
+		if call == 1 {
+			return `{"action":"none","tools":[],"context_message_ids":[],"keep_older_summary":false}`, nil
+		}
+		return `{"action":"final","content":"好"}`, nil
 	}
-	_, err := fallback[0].Run(context.Background(), map[string]any{"query": "Diana"})
-	if err == nil || !strings.Contains(err.Error(), "工具已注册") || !strings.Contains(err.Error(), "Provider") {
-		t.Fatalf("fallback error = %v", err)
+	runtime := NewRuntime(BotConfig{BotAccount: "10000", AgentEnabled: true, AgentMaxSteps: 3}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "user", MessageID: "no-search", RawMessage: "今天有什么新闻"}
+	if _, err := runtime.replyAndRecord(context.Background(), event, "今天有什么新闻", "replied"); err != nil {
+		t.Fatal(err)
 	}
-
-	configured := &scopeTestTool{name: agent.WebSearchToolName}
-	tools := ensureWebSearchAgentTool([]agent.Tool{configured})
-	if len(tools) != 1 || tools[0] != configured {
-		t.Fatalf("configured search tool was replaced: %#v", tools)
+	if !sawAgentTools {
+		t.Fatal("没有走到 Agent，测不出工具表")
+	}
+	if last := runtime.Status().LastError; last != "" {
+		t.Fatalf("reply failed: %s", last)
 	}
 }
