@@ -64,6 +64,7 @@ func TestResolverPluginCurrentMediaPathAlwaysBuildsMergedForward(t *testing.T) {
 	t.Setenv("DIANA_DOUYIN_CK", "")
 	t.Setenv("DOUYIN_CK", "")
 	plugin := NewResolverPlugin(nil)
+	plugin.douyinDetailFetcher = failingDouyinDetailFetcher
 	resp, err := plugin.Handle(context.Background(), PluginRequest{
 		Text: "https://www.douyin.com/video/1234567890",
 		Settings: SettingValues{
@@ -85,6 +86,7 @@ func TestResolverPluginMergedForwardSettingControlsDelivery(t *testing.T) {
 	t.Setenv("DIANA_DOUYIN_CK", "")
 	t.Setenv("DOUYIN_CK", "")
 	plugin := NewResolverPlugin(nil)
+	plugin.douyinDetailFetcher = failingDouyinDetailFetcher
 	resp, err := plugin.Handle(context.Background(), PluginRequest{
 		Text: "https://www.douyin.com/video/1234567890",
 		Settings: SettingValues{
@@ -219,4 +221,9 @@ func TestBilibiliResolverResourceKeyUsesAPIBVID(t *testing.T) {
 	if got := bilibiliResolverResourceKey(view); got != "bilibili:BV1F48T6PE3X" {
 		t.Fatalf("bilibili resource key = %q", got)
 	}
+}
+
+// failingDouyinDetailFetcher 模拟平台接口解析失败，用例不依赖抖音当下是否拦截游客请求。
+func failingDouyinDetailFetcher(context.Context, string) (douyinMediaDetail, bool, string) {
+	return douyinMediaDetail{}, false, "request_failed"
 }

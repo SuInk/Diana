@@ -342,7 +342,11 @@ func bilibiliResolverResourceKey(view bilibiliViewResponse) string {
 
 func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
 	result := resolverSocialResult{Handled: true}
-	detail, ok, status := fetchDouyinMediaDetail(ctx, raw)
+	fetchDetail := fetchDouyinMediaDetail
+	if p.douyinDetailFetcher != nil {
+		fetchDetail = p.douyinDetailFetcher
+	}
+	detail, ok, status := fetchDetail(ctx, raw)
 	if !ok {
 		result.Context = "[抖音] 链接已识别，但平台接口解析失败。"
 		recordResolverMediaLog(ctx, req, raw, "douyin", false, status)

@@ -3418,6 +3418,9 @@ func TestRuntimeDoesNotExtractVideoFramesForLLM(t *testing.T) {
 }
 
 func TestRuntimePrivateVideoOnlyDoesNotCallLLM(t *testing.T) {
+	// 视频地址指向本地服务，理由同 TestRuntimeDoesNotExtractVideoFramesForLLM。
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
 	channel := &recordingChannel{}
 	var llmCalls atomic.Int32
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -3430,7 +3433,7 @@ func TestRuntimePrivateVideoOnlyDoesNotCallLLM(t *testing.T) {
 		MessageID:  "video-1",
 		RawMessage: "[视频]",
 		Segments: []MessageSegment{
-			{Type: "video", Data: map[string]string{"url": "https://example.com/video.mp4"}},
+			{Type: "video", Data: map[string]string{"url": server.URL + "/video.mp4"}},
 		},
 	})
 	if err != nil {
