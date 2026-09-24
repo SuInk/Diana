@@ -346,6 +346,8 @@ func TestBothBrowserPathsShareSandboxHardening(t *testing.T) {
 		"--host-resolver-rules=MAP localhost ~NOTFOUND, MAP *.localhost ~NOTFOUND, MAP *.local ~NOTFOUND, MAP host.docker.internal ~NOTFOUND, MAP gateway.docker.internal ~NOTFOUND",
 		"--disable-sync",
 		"--no-pings",
+		// 容器默认 64MB 的 /dev/shm 会被 Chrome 撑爆，标签页崩掉、调试连接断开。
+		"--disable-dev-shm-usage",
 		"--password-store=basic",
 		"--user-data-dir=/tmp/p",
 	} {
