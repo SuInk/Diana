@@ -176,11 +176,18 @@ func sandboxExecProfile(root string, allowNetwork bool, secrets []string) string
 	// (allow file-read*) 后面。白名单里一旦有 cat、grep、head，读取这一层就是唯一
 	// 的边界了。
 	for _, path := range secrets {
-		builder.WriteString(fmt.Sprintf("(deny file-read* (literal %s))", sbplString(path)))
+		builder.WriteString(fmt.Sprintf("(deny file-read* (%s %s))", sandboxSecretFilter(path), sbplString(path)))
 	}
 	// 写入只开工作目录和临时目录；/dev/null 一类字符设备是命令的常规去处。
 	for _, path := range sandboxWritableRoots(root) {
 		builder.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))", sbplString(path)))
+	}
+	// 凭据目录在工作目录里面，上面放开工作目录写入时连它一起放开了：再挡一次写，
+	// 命令不能把登录态换掉或者挪走。同样要写在放行规则后面才覆盖得住。
+	for _, path := range secrets {
+		if sandboxSecretIsDir(path) {
+			builder.WriteString(fmt.Sprintf("(deny file-write* (subpath %s))", sbplString(path)))
+		}
 	}
 	builder.WriteString("(allow file-write* (subpath \"/private/tmp\") (subpath \"/private/var/tmp\") (subpath \"/tmp\"))")
 	builder.WriteString("(allow file-write-data (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\"))")
@@ -200,6 +207,22 @@ func sandboxWritableRoots(root string) []string {
 		paths = append(paths, resolved)
 	}
 	return paths
+}
+
+// sandboxSecretIsDir 区分要挡的是单个凭据文件还是整个凭据目录。取不到信息时按文件
+// 处理：existingPaths 只交出存在的路径，这里取不到多半是刚被删掉。
+func sandboxSecretIsDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// sandboxSecretFilter 是 SBPL 里匹配这个凭据路径的写法：目录连同下面的一切用
+// subpath，单个文件用 literal。
+func sandboxSecretFilter(path string) string {
+	if sandboxSecretIsDir(path) {
+		return "subpath"
+	}
+	return "literal"
 }
 
 // sbplString 按 SBPL 的字面量规则转义路径。
@@ -233,7 +256,13 @@ func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, []
 		}
 		// 凭据文件用 /dev/null 盖住：容器里读到的是一个空文件，而不是令牌原文。
 		// 整个根目录是只读挂进来的，挡读取只能靠把它换掉。
+		// 凭据目录换成一个空的 tmpfs：里面有什么文件都看不见，往里写的东西也只落在
+		// 这个一次性的 tmpfs 上，碰不到真正的登录态。
 		for _, path := range secrets {
+			if sandboxSecretIsDir(path) {
+				full = append(full, "--tmpfs", path)
+				continue
+			}
 			full = append(full, "--ro-bind", os.DevNull, path)
 		}
 		if !allowNetwork {

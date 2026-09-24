@@ -371,28 +371,41 @@ func TestPluginTaskDedupIsPerSession(t *testing.T) {
 	}
 }
 
-// 发附件、看图和 read_file 共用一份凭据名单，MCP 配置不能换个工具就发出去。
+// 发附件、看图和 read_file 共用一份凭据名单：MCP 配置和编码代理的登录态都不能换个
+// 工具就发出去。登录态路径按 assistant 自己的布局（codingAuthDir、CLAUDE_CONFIG_DIR）
+// 生成，布局一改、agent 那边的目录名没跟上，这里就会失败。
 func TestLocalAttachmentRefusesRuntimeCredentialFiles(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("APP_DB_PATH", filepath.Join(root, "diana.db"))
 	workspace := AgentWorkspaceDir()
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, ".mcp.json"), []byte(`{"mcpServers":{}}`), 0o600); err != nil {
-		t.Fatal(err)
+	mcpConfig := filepath.Join(workspace, ".mcp.json")
+	codexAuth := filepath.Join(codingAuthDir(codingAgentConfig{Backend: codingBackendCodex}), "auth.json")
+	claudeCreds := filepath.Join(codingManagedRoot(), "state", codingBackendClaude, ".credentials.json")
+	for _, path := range []string{mcpConfig, codexAuth, claudeCreds} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	rt := sharedDirRuntime(t, nil)
-	for _, tool := range []*dianaLocalAttachmentTool{
-		{runtime: rt, event: ownerEventB()},
-		{runtime: rt, event: ownerEventB(), view: true},
-	} {
-		input := map[string]any{"path": ".mcp.json", "mode": "file"}
-		if tool.view {
-			input = map[string]any{"path": ".mcp.json"}
+	for _, abs := range []string{mcpConfig, codexAuth, claudeCreds} {
+		rel, err := filepath.Rel(workspace, abs)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if _, err := tool.Run(context.Background(), input); err == nil || !strings.Contains(err.Error(), "运行时配置") {
-			t.Fatalf("%s 放过了 .mcp.json：%v", tool.Name(), err)
+		for _, tool := range []*dianaLocalAttachmentTool{
+			{runtime: rt, event: ownerEventB()},
+			{runtime: rt, event: ownerEventB(), view: true},
+		} {
+			input := map[string]any{"path": rel, "mode": "file"}
+			if tool.view {
+				input = map[string]any{"path": rel}
+			}
+			if _, err := tool.Run(context.Background(), input); err == nil || !strings.Contains(err.Error(), "运行时配置") {
+				t.Fatalf("%s 放过了 %s：%v", tool.Name(), rel, err)
+			}
 		}
 	}
 }

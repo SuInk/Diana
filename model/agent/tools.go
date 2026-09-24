@@ -951,6 +951,9 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 	if err != nil {
 		return "", err
 	}
+	if t.protected.blocked(path) {
+		return "", errProtectedFile(rel)
+	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return "", err
@@ -970,7 +973,7 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 		if i >= limit {
 			break
 		}
-		if !item.IsDir() && t.protected.blocked(filepath.Join(path, item.Name())) {
+		if t.protected.blocked(filepath.Join(path, item.Name())) {
 			hidden++
 			continue
 		}
@@ -1468,10 +1471,28 @@ func relPathForOutput(root, path string) string {
 //
 // 这些文件是给运行时读的，不是给模型读的：要看配置去 WebUI，要用 MCP 由运行时在本地
 // 拼请求。所以按路径整个拦掉，读、搜、写都不放行，列目录里也不出现。
-type protectedFiles map[string]bool
+//
+// 编码代理的登录态也在这里：托管安装的 Claude Code / Codex 放在工作目录下的
+// coding-runtime 里，ChatGPT 设备登录拿到的 auth.json、CLI 自己的配置目录（Claude
+// Code 的 .credentials.json、Codex 的 auth.json 和会话记录）都在其中。文件名由 CLI
+// 决定、会随版本变，所以这两处按目录整个挡：目录下面的任何文件都不给读写。
+type protectedFiles struct {
+	files map[string]bool
+	// dirs 是整个挡掉的目录，绝对路径，同时收了解析软链接之后的真实路径。
+	dirs []string
+}
+
+// CodingRuntimeDirName 是编码代理托管运行时在工作目录下的目录名。assistant 包按它
+// 安装 CLI、存登录态，这里按它挡凭据目录，两边必须是同一个名字。
+const CodingRuntimeDirName = "coding-runtime"
+
+// codingRuntimeCredentialDirs 是 coding-runtime 下存登录态的目录：auth 放设备登录
+// 拿到的令牌，state 是交给 CLI 当 CLAUDE_CONFIG_DIR / CODEX_HOME 的配置目录。
+// 同级的安装目录和 npm 缓存里没有凭据，不挡。
+var codingRuntimeCredentialDirs = []string{"auth", "state"}
 
 func agentProtectedFiles(cfg Config) protectedFiles {
-	files := protectedFiles{}
+	protected := protectedFiles{files: map[string]bool{}}
 	for _, path := range []string{
 		resolveMCPConfigPath(cfg),
 		// 配置改指到工作目录外面时，目录里可能还躺着一份旧的默认配置，里面的令牌
@@ -1481,18 +1502,34 @@ func agentProtectedFiles(cfg Config) protectedFiles {
 		extensionAudiencePath(cfg.WorkDir),
 		filepath.Join(cfg.WorkDir, extensionPathsFileName),
 	} {
-		if strings.TrimSpace(path) == "" {
-			continue
-		}
-		if abs, err := filepath.Abs(path); err == nil {
-			files[abs] = true
-			// 软链接也要认出来：safePath 只保证解析后仍在工作目录内，没说不能指向它。
-			if resolved, err := evalSymlinksAllowMissing(abs); err == nil {
-				files[resolved] = true
-			}
+		for _, form := range protectedPathForms(path) {
+			protected.files[form] = true
 		}
 	}
-	return files
+	if strings.TrimSpace(cfg.WorkDir) != "" {
+		for _, name := range codingRuntimeCredentialDirs {
+			protected.dirs = append(protected.dirs, protectedPathForms(filepath.Join(cfg.WorkDir, CodingRuntimeDirName, name))...)
+		}
+	}
+	return protected
+}
+
+// protectedPathForms 返回一个路径的绝对形式和解析软链接之后的真实形式：safePath 只
+// 保证解析后仍在工作目录内，没说不能指向凭据；macOS 上临时目录本身就是软链接，沙盒
+// 按真实路径匹配。
+func protectedPathForms(path string) []string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil
+	}
+	out := []string{abs}
+	if resolved, err := evalSymlinksAllowMissing(abs); err == nil && resolved != abs {
+		out = append(out, resolved)
+	}
+	return out
 }
 
 // WorkspaceFileProtected 报告工作目录下的相对路径 rel 是不是运行时自己的凭据配置。
@@ -1507,28 +1544,46 @@ func WorkspaceFileProtected(cfg Config, rel string) bool {
 	return agentProtectedFiles(cfg).blocked(path)
 }
 
-// blocked 判断这个路径是不是运行时凭据配置。path 必须是已经过 safePath 的绝对路径。
+// blocked 判断这个路径是不是运行时凭据配置，或者落在整个挡掉的目录里（含目录本身）。
+// path 必须是已经过 safePath 的绝对路径。
 func (p protectedFiles) blocked(path string) bool {
-	if len(p) == 0 {
+	if len(p.files) == 0 && len(p.dirs) == 0 {
 		return false
 	}
-	if p[path] {
+	if p.matches(path) {
 		return true
 	}
 	resolved, err := evalSymlinksAllowMissing(path)
-	return err == nil && p[resolved]
+	return err == nil && p.matches(resolved)
 }
 
-// existingPaths 返回当前真实存在的凭据文件，排序后给沙盒用。不存在的路径不能交给
-// bubblewrap：--ro-bind 的目标不存在会让整条命令起不来，而「配置还没生成」是常态。
+func (p protectedFiles) matches(path string) bool {
+	if p.files[path] {
+		return true
+	}
+	for _, dir := range p.dirs {
+		if path == dir || strings.HasPrefix(path, dir+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// existingPaths 返回当前真实存在的凭据文件和凭据目录，排序后给沙盒用。不存在的路径
+// 不能交给 bubblewrap：绑定目标不存在会让整条命令起不来，而「配置还没生成」是常态。
 func (p protectedFiles) existingPaths() []string {
-	if len(p) == 0 {
+	if len(p.files) == 0 && len(p.dirs) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(p))
-	for path := range p {
+	out := make([]string, 0, len(p.files)+len(p.dirs))
+	for path := range p.files {
 		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 			out = append(out, path)
+		}
+	}
+	for _, dir := range p.dirs {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			out = append(out, dir)
 		}
 	}
 	sort.Strings(out)
@@ -1537,5 +1592,5 @@ func (p protectedFiles) existingPaths() []string {
 
 // errProtectedFile 的措辞要让模型能如实转述：这不是「文件不存在」，也不是权限没配好。
 func errProtectedFile(rel string) error {
-	return fmt.Errorf("%s 是 Diana 的运行时配置，里面可能有 MCP 访问令牌，工具不提供读写；要查看或修改请在 WebUI 的扩展页操作", rel)
+	return fmt.Errorf("%s 是 Diana 的运行时配置，里面可能有 MCP 或编码代理的访问令牌，工具不提供读写；要查看或修改请在 WebUI 的扩展页或编码代理设置里操作", rel)
 }
