@@ -47,8 +47,23 @@ type ScreenshotRequest struct {
 	VirtualTimeBudget time.Duration
 }
 
-// CaptureHTMLScreenshot 渲染 HTML 并返回 PNG 字节。
+// CaptureHTMLScreenshot 渲染 HTML 并返回 PNG 字节。每次都起一个一次性浏览器，
+// 和网页渲染共用同一份并发名额；排队不占 req.Timeout。
 func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, error) {
+	if strings.TrimSpace(req.HTML) == "" {
+		return nil, errors.New("screenshot: empty html")
+	}
+	release, err := disposableBrowsers.acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("screenshot: %w", err)
+	}
+	defer release()
+	return captureHTMLScreenshot(ctx, req)
+}
+
+// captureHTMLScreenshot 不占并发名额，只给可用性探测用：探测本身有 5 秒上限，
+// 忙的时候去排队只会把「浏览器正忙」误报成「浏览器不能用」。
+func captureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, error) {
 	if strings.TrimSpace(req.HTML) == "" {
 		return nil, errors.New("screenshot: empty html")
 	}

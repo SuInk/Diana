@@ -95,3 +95,25 @@ func TestBrowserBoxIsPerBot(t *testing.T) {
 		t.Fatalf("运行时没有按机器人取浏览器：%v", provider.asked)
 	}
 }
+
+// 交互式浏览器按对话分标签页：同一个群的前后几轮接着用同一页，不同群、不同私聊、
+// 不同机器人各用各的。
+func TestBrowserSessionKeySeparatesConversations(t *testing.T) {
+	bot := BotConfig{ID: "bot-a"}
+	groupOne := MessageEvent{Kind: EventKindGroup, GroupID: "1", UserID: "owner"}
+	if browserSessionKey(bot, groupOne) != browserSessionKey(bot, MessageEvent{Kind: EventKindGroup, GroupID: "1", UserID: "someone"}) {
+		t.Fatal("同一个群的不同消息应当接着用同一个标签页")
+	}
+	distinct := map[string]bool{}
+	for _, key := range []string{
+		browserSessionKey(bot, groupOne),
+		browserSessionKey(bot, MessageEvent{Kind: EventKindGroup, GroupID: "2", UserID: "owner"}),
+		browserSessionKey(bot, MessageEvent{Kind: EventKindPrivate, UserID: "owner"}),
+		browserSessionKey(BotConfig{ID: "bot-b"}, groupOne),
+	} {
+		distinct[key] = true
+	}
+	if len(distinct) != 4 {
+		t.Fatalf("不同对话不能共用标签页记录：%v", distinct)
+	}
+}

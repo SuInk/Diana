@@ -65,17 +65,50 @@ func numberFromInput(input map[string]any, key string) (float64, bool) {
 
 // navigate 跳转并把加载失败（域名解析不到、连接被拒）当成错误交回去。Page.navigate
 // 在这种情况下是「调用成功、结果里带 errorText」，不检查的话模型会读到一张错误页。
+//
+// Page.navigate 要等到响应头回来才返回。服务器一直不回的话它就一直挂着，所以这里
+// 按浏览器超时（机器人配置的 agent_browser_timeout_ms）给它一个硬期限；到期或者
+// 任务被取消，就补发 Page.stopLoading 把这次加载掐掉，不让标签页在后台一直转圈。
 func (c *cdpClient) navigate(ctx context.Context, pageURL string) error {
+	timeout := c.timeout
+	if timeout <= 0 {
+		timeout = DefaultBrowserTimeoutMS * time.Millisecond
+	}
+	navCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	var result struct {
 		ErrorText string `json:"errorText"`
 	}
-	if err := c.call(ctx, "Page.navigate", map[string]any{"url": pageURL}, &result); err != nil {
-		return err
+	if err := c.call(navCtx, "Page.navigate", map[string]any{"url": pageURL}, &result); err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			return err
+		}
+		c.abortLoading()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("打开 %s 时任务已结束，已停止加载：%w", pageURL, ctxErr)
+		}
+		return &browserTimeoutError{message: fmt.Sprintf("打开 %s 超时：%s 内页面没有响应，已停止加载。这个网址可能打不开或响应太慢，换个地址或稍后再试", pageURL, timeout)}
 	}
 	if text := strings.TrimSpace(result.ErrorText); text != "" {
 		return fmt.Errorf("打开 %s 失败：%s", pageURL, text)
 	}
 	return nil
+}
+
+// abortLoading 另开一条连接补发 Page.stopLoading。原来那条连接刚因为超时被拨了读期限，
+// 已经不能再用；调用方的 ctx 也已经结束，所以用自己的短期限。
+func (c *cdpClient) abortLoading() {
+	if c == nil || c.wsURL == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), browserAbortTimeout)
+	defer cancel()
+	fresh, err := newCDPClient(ctx, c.wsURL, browserAbortTimeout)
+	if err != nil {
+		return
+	}
+	defer fresh.Close()
+	_ = fresh.call(ctx, "Page.stopLoading", nil, nil)
 }
 
 // mouseClick 在视口坐标上按真实鼠标事件点击。el.click() 发出去的事件 isTrusted 为
@@ -331,12 +364,16 @@ func (t *BrowserTabsTool) Run(ctx context.Context, input map[string]any) (string
 		if err := t.base.checkURL(pageURL); err != nil {
 			return "", err
 		}
-		client, err := t.base.pageClient(ctx, pageURL, true)
+		client, err := t.base.pageClient(ctx, true)
 		if err != nil {
 			return "", err
 		}
 		defer client.Close()
 		if pageURL != "about:blank" {
+			if err := client.navigate(ctx, pageURL); err != nil {
+				t.base.discardTab(client.baseURL, client.targetID)
+				return "", err
+			}
 			_ = client.waitNavigated(ctx)
 		}
 		return client.pageState(ctx, map[string]any{"tab_id": t.base.session.active()})
@@ -468,7 +505,7 @@ func (t *BrowserScrollTool) Run(ctx context.Context, input map[string]any) (stri
 	default:
 		return "", fmt.Errorf("unsupported direction %q", direction)
 	}
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -538,7 +575,7 @@ func (t *BrowserPressKeyTool) Run(ctx context.Context, input map[string]any) (st
 	if repeat > maxBrowserKeyRepeat {
 		repeat = maxBrowserKeyRepeat
 	}
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -590,7 +627,7 @@ func (t *BrowserNavigateTool) RepeatableCalls() bool { return true }
 
 func (t *BrowserNavigateTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	action := strings.ToLower(stringFromInput(input, "action"))
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -658,7 +695,7 @@ func (t *BrowserSelectTool) Run(ctx context.Context, input map[string]any) (stri
 	if value == "" && label == "" {
 		return "", errors.New("value or label is required")
 	}
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -726,7 +763,7 @@ func (t *BrowserWaitTool) Run(ctx context.Context, input map[string]any) (string
 		}
 		return fmt.Sprintf(`{"ok":true,"waited_ms":%d}`, timeout), nil
 	}
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -789,7 +826,7 @@ func (t *BrowserEvalTool) Run(ctx context.Context, input map[string]any) (string
 	if strings.TrimSpace(script) == "" {
 		return "", errors.New("script is required")
 	}
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}

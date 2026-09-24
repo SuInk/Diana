@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -49,16 +50,27 @@ type browserToolBase struct {
 	builtin  BuiltinBrowserBridge
 	timeout  time.Duration
 	maxChars int
-	// session 由同一张工具表里的浏览器工具共用，记着模型正在操作哪个标签页。
-	// 没有它的话每个工具各挑各的页：browser_open 刚打开的页，browser_text 可能读
-	// 的是另一个标签页。
+	// session 记着这个对话正在操作哪个标签页。同一个对话的前后几轮共用一份（见
+	// Config.BrowserSessionKey），不同对话各用各的：两个群同时让机器人开网页，不会
+	// 一个刚打开、另一个就把同一页跳走。
 	session *browserSession
+	tabs    *browserTabRegistry
 }
 
-// browserSession 记住当前操作的标签页。
+// browserSession 记住一个对话当前操作的标签页。
 type browserSession struct {
 	mu       sync.Mutex
+	key      string
 	targetID string
+	lastUsed time.Time
+	now      func() time.Time
+}
+
+func (s *browserSession) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 func (s *browserSession) active() string {
@@ -76,7 +88,19 @@ func (s *browserSession) setActive(id string) {
 	}
 	s.mu.Lock()
 	s.targetID = strings.TrimSpace(id)
+	s.lastUsed = s.clock()
 	s.mu.Unlock()
+}
+
+func (s *browserSession) snapshot() (string, time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.targetID, s.lastUsed
+}
+
+func (s *browserSession) lastUsedAt() time.Time {
+	_, lastUsed := s.snapshot()
+	return lastUsed
 }
 
 // endpoint 决定这次调用连哪个浏览器。内置浏览器可用时优先用它：它是 Diana
@@ -139,28 +163,23 @@ func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (string
 		return "", err
 	}
 	// 默认沿用当前标签页，和参数说明一致；以前默认开新页，常驻浏览器里的标签页
-	// 越攒越多。
+	// 越攒越多。新开的页也是先开空白页再跳转：/json/new 直接带地址的话，打不开的
+	// 网址会让那个页一直转圈，而这边没有任何超时能管到它。
 	newTab := boolFromInput(input, "new_tab", false)
-	var client *cdpClient
-	var err error
-	if newTab {
-		client, err = t.base.pageClient(ctx, pageURL, true)
-	} else {
-		client, err = t.base.pageClient(ctx, "", false)
-		if err == nil {
-			err = client.navigate(ctx, pageURL)
-			if err != nil {
-				client.Close()
-			}
-		}
-	}
+	client, err := t.base.pageClient(ctx, newTab)
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
-	// 新开标签页时 /json/new 立刻就返回了，页面还停在 about:blank：这时候直接读
-	// 会得到一份空快照，而模型会把它当成「这一页就是空的」。等到真的跳过去为止。
-	if pageURL != "" && pageURL != "about:blank" {
+	if err := client.navigate(ctx, pageURL); err != nil {
+		if newTab {
+			t.base.discardTab(client.baseURL, client.targetID)
+		}
+		return "", err
+	}
+	// Page.navigate 在响应头到了就返回，页面还在加载：直接读会得到一份半截快照。
+	// 等到真的跳过去为止。
+	if pageURL != "about:blank" {
 		_ = client.waitNavigated(ctx)
 	} else {
 		_ = client.waitReady(ctx)
@@ -190,7 +209,7 @@ func (t *BrowserTextTool) InputSchema() map[string]any {
 }
 
 func (t *BrowserTextTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -242,7 +261,7 @@ func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (strin
 	if clicks < 1 || clicks > 3 {
 		clicks = 1
 	}
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -321,7 +340,7 @@ func (t *BrowserTypeTool) RepeatableCalls() bool { return true }
 func (t *BrowserTypeTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	selector := stringFromInput(input, "selector")
 	text := rawStringFromInput(input, "text")
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -429,7 +448,7 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return "", err
 	}
-	client, err := t.base.pageClient(ctx, "", false)
+	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
@@ -486,14 +505,14 @@ return {
 	return string(raw), nil
 }
 
-func (b browserToolBase) pageClient(ctx context.Context, pageURL string, newTab bool) (*cdpClient, error) {
+func (b browserToolBase) pageClient(ctx context.Context, newTab bool) (*cdpClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 	baseURL, err := b.endpoint(ctx)
 	if err != nil {
 		return nil, err
 	}
-	target, err := b.pickTarget(ctx, baseURL, pageURL, newTab)
+	target, err := b.pickTarget(ctx, baseURL, newTab)
 	if err != nil {
 		return nil, err
 	}
@@ -504,17 +523,18 @@ func (b browserToolBase) pageClient(ctx context.Context, pageURL string, newTab 
 	if err != nil {
 		return nil, err
 	}
+	client.baseURL = baseURL
+	client.targetID = target.ID
 	b.session.setActive(target.ID)
+	b.tabRegistry().touch(target.ID)
 	_ = client.call(ctx, "Page.enable", map[string]any{}, nil)
 	_ = client.call(ctx, "Runtime.enable", map[string]any{}, nil)
 	return client, nil
 }
 
-func (b browserToolBase) pickTarget(ctx context.Context, baseURL, pageURL string, newTab bool) (browserTarget, error) {
+func (b browserToolBase) pickTarget(ctx context.Context, baseURL string, newTab bool) (browserTarget, error) {
 	if newTab {
-		if target, err := newBrowserTarget(ctx, baseURL, firstNonEmptyString(pageURL, "about:blank")); err == nil {
-			return target, nil
-		}
+		return b.openTab(ctx, baseURL)
 	}
 	targets, err := listBrowserTargets(ctx, baseURL)
 	if err != nil {
@@ -531,9 +551,14 @@ func (b browserToolBase) pickTarget(ctx context.Context, baseURL, pageURL string
 	// 挑一个真的载着网页的标签页。一次性浏览器里通常只有一个标签页，随便挑都对；
 	// 内置浏览器是常驻的，开机那个 about:blank 会一直排在列表里，照单全收的话
 	// browser_text 读到的永远是空白页——刚 browser_open 打开的那一页反而读不到。
+	// 别的对话正在用的页不挑：挑到了，这边一跳转，那边读到的就是这边的页面。
+	registry := b.tabRegistry()
 	var fallback browserTarget
 	for _, target := range targets {
 		if target.Type != "page" || target.WebSocketDebuggerURL == "" {
+			continue
+		}
+		if registry.heldByOther(target.ID, b.session) {
 			continue
 		}
 		if isBlankBrowserTarget(target.URL) {
@@ -547,7 +572,7 @@ func (b browserToolBase) pickTarget(ctx context.Context, baseURL, pageURL string
 	if fallback.WebSocketDebuggerURL != "" {
 		return fallback, nil
 	}
-	return newBrowserTarget(ctx, baseURL, firstNonEmptyString(pageURL, "about:blank"))
+	return b.openTab(ctx, baseURL)
 }
 
 // isBlankBrowserTarget 判断一个标签页是不是「还没装东西」的那种：新标签页、
@@ -627,6 +652,11 @@ type cdpClient struct {
 	conn    *websocket.Conn
 	nextID  atomic.Int64
 	timeout time.Duration
+	// wsURL 留着给超时之后另开一条连接补发 Page.stopLoading：原来那条连接的读超时
+	// 一旦触发就不能再用了。
+	wsURL    string
+	baseURL  string
+	targetID string
 }
 
 func newCDPClient(ctx context.Context, websocketURL string, timeout time.Duration) (*cdpClient, error) {
@@ -635,7 +665,7 @@ func newCDPClient(ctx context.Context, websocketURL string, timeout time.Duratio
 	if err != nil {
 		return nil, err
 	}
-	return &cdpClient{conn: conn, timeout: timeout}, nil
+	return &cdpClient{conn: conn, timeout: timeout, wsURL: websocketURL}, nil
 }
 
 func (c *cdpClient) Close() error {
@@ -658,12 +688,20 @@ func (c *cdpClient) call(ctx context.Context, method string, params map[string]a
 		_ = c.conn.SetWriteDeadline(deadline)
 		_ = c.conn.SetReadDeadline(deadline)
 	}
+	// 调用方取消时把连接的读写期限拨到现在，阻塞中的读立刻返回。只靠期限的话，
+	// 没有 deadline 的 ctx 被取消后，这里还要白等满 c.timeout。
+	stop := context.AfterFunc(ctx, func() {
+		now := time.Now()
+		_ = c.conn.SetReadDeadline(now)
+		_ = c.conn.SetWriteDeadline(now)
+	})
+	defer stop()
 	if err := c.conn.WriteJSON(map[string]any{
 		"id":     id,
 		"method": method,
 		"params": params,
 	}); err != nil {
-		return err
+		return cdpCallError(ctx, method, err)
 	}
 	for {
 		var resp struct {
@@ -675,7 +713,7 @@ func (c *cdpClient) call(ctx context.Context, method string, params map[string]a
 			} `json:"error,omitempty"`
 		}
 		if err := c.conn.ReadJSON(&resp); err != nil {
-			return err
+			return cdpCallError(ctx, method, err)
 		}
 		if resp.ID != id {
 			continue
@@ -690,6 +728,22 @@ func (c *cdpClient) call(ctx context.Context, method string, params map[string]a
 		}
 		return nil
 	}
+}
+
+// cdpCallError 在 ctx 已经结束时把连接层的 i/o timeout 换成 ctx 的原因，调用方才分得清
+// 是超时、取消还是连接真的断了。
+//
+// 连接的读期限就是 ctx 的期限，两者谁先醒是抽签：读超时先到时 ctx.Err() 可能还是 nil，
+// 这时按时间判断，别把一次正常的到期报成连接故障。
+func cdpCallError(ctx context.Context, method string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("cdp %s: %w", method, ctxErr)
+	}
+	var netErr net.Error
+	if deadline, ok := ctx.Deadline(); ok && errors.As(err, &netErr) && netErr.Timeout() && !time.Now().Before(deadline) {
+		return fmt.Errorf("cdp %s: %w", method, context.DeadlineExceeded)
+	}
+	return err
 }
 
 func (c *cdpClient) evaluate(ctx context.Context, expression string) (json.RawMessage, error) {
@@ -742,6 +796,9 @@ setTimeout(done, 3000);
 
 // waitNavigated 等页面真的离开 about:blank 并加载完。轮询而不是监听事件：
 // 这条客户端只做请求响应，加事件订阅要改的不止一处，而这里的等待窗口很短。
+//
+// 响应头回来了、正文却一直传不完的页面，等满窗口之后停止加载：已经到手的内容照样
+// 能读，标签页也不会在后台一直转圈。
 func (c *cdpClient) waitNavigated(ctx context.Context) error {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
@@ -760,7 +817,7 @@ func (c *cdpClient) waitNavigated(ctx context.Context) error {
 		case <-time.After(150 * time.Millisecond):
 		}
 	}
-	return nil
+	return c.call(ctx, "Page.stopLoading", nil, nil)
 }
 
 func validateBrowserURL(value string) error {

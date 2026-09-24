@@ -131,33 +131,7 @@ setTimeout(() => { const p = document.createElement("p"); p.id = "late"; p.textC
 	pageURL := "http://localhost:" + port + "/"
 
 	root := t.TempDir()
-	args := PersistentBrowserArgs(root+"/profile", root+"/cache", root+"/crash", true, 0, 1280, 800)
-	cmd := exec.Command(executable, append(args, "about:blank")...)
-	cmd.Env = BrowserLaunchEnvironment(os.Environ(), root)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	devtools := make(chan string, 1)
-	go func() {
-		pattern := regexp.MustCompile(`DevTools listening on ws://([^/]+)/`)
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			if match := pattern.FindStringSubmatch(scanner.Text()); match != nil {
-				devtools <- "http://" + match[1]
-			}
-		}
-	}()
-	var cdpURL string
-	select {
-	case cdpURL = <-devtools:
-	case <-time.After(20 * time.Second):
-		t.Fatal("Chrome 没有报出调试地址")
-	}
+	cdpURL := startIntegrationChrome(t, executable, root)
 
 	registry := NewToolRegistry()
 	registry.RegisterBrowserTools(root, Config{BrowserCDPURL: cdpURL}.WithDefaults())
@@ -270,6 +244,133 @@ setTimeout(() => { const p = document.createElement("p"); p.id = "late"; p.textC
 	if after := countPages(); after != before {
 		t.Fatalf("close 之后应当少一页：%d", after)
 	}
+}
+
+// startIntegrationChrome 按常驻浏览器的参数起一个 Chrome，返回调试地址。
+func startIntegrationChrome(t *testing.T, executable, root string) string {
+	t.Helper()
+	args := PersistentBrowserArgs(root+"/profile", root+"/cache", root+"/crash", true, 0, 1280, 800)
+	cmd := exec.Command(executable, append(args, "about:blank")...)
+	cmd.Env = BrowserLaunchEnvironment(os.Environ(), root)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	devtools := make(chan string, 1)
+	go func() {
+		pattern := regexp.MustCompile(`DevTools listening on ws://([^/]+)/`)
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			if match := pattern.FindStringSubmatch(scanner.Text()); match != nil {
+				devtools <- "http://" + match[1]
+			}
+		}
+	}()
+	select {
+	case cdpURL := <-devtools:
+		return cdpURL
+	case <-time.After(20 * time.Second):
+		t.Fatal("Chrome 没有报出调试地址")
+	}
+	return ""
+}
+
+// TestBrowserToolsHangingPageIntegration 用本机 Chrome 验证卡死的页面：服务器永远不回、
+// 或者回了响应头却一直传不完正文。设 DIANA_BROWSER_TOOLS_INTEGRATION=1 才跑。
+func TestBrowserToolsHangingPageIntegration(t *testing.T) {
+	if os.Getenv("DIANA_BROWSER_TOOLS_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_TOOLS_INTEGRATION=1 to run Chrome integration")
+	}
+	executable, err := FindBrowserExecutable("")
+	if err != nil {
+		t.Skip(err)
+	}
+	// released 在浏览器掐掉这条请求（连接断开）时收到一个信号：证明加载真的停了，
+	// 而不只是工具这一侧不等了。
+	released := make(chan string, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/hang":
+			<-r.Context().Done()
+			released <- r.URL.Path
+		case "/stream":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, `<title>stream</title><p>部分内容</p>`)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			released <- r.URL.Path
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, `<title>ok</title><p>正常页面</p>`)
+		}
+	}))
+	defer server.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	base := "http://localhost:" + port
+
+	root := t.TempDir()
+	cdpURL := startIntegrationChrome(t, executable, root)
+	registry := NewToolRegistry()
+	registry.RegisterBrowserTools(root, Config{BrowserCDPURL: cdpURL, BrowserTimeoutMS: 1500}.WithDefaults())
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	run := func(name string, input map[string]any) (string, error) {
+		tool, _ := registry.Get(name)
+		return tool.Run(ctx, input)
+	}
+	waitReleased := func(path string) {
+		t.Helper()
+		select {
+		case got := <-released:
+			if got != path {
+				t.Fatalf("断开的是 %s，想要 %s", got, path)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s 的请求没有被浏览器掐掉，页面还在加载", path)
+		}
+	}
+	countPages := func() int {
+		out, err := run("browser_tabs", map[string]any{"action": "list"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var listed struct {
+			Tabs []json.RawMessage `json:"tabs"`
+		}
+		_ = json.Unmarshal([]byte(out), &listed)
+		return len(listed.Tabs)
+	}
+
+	started := time.Now()
+	if _, err := run("browser_open", map[string]any{"url": base + "/hang"}); err == nil || !strings.Contains(err.Error(), "超时") {
+		t.Fatalf("服务器不回时应当报超时：%v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("超时没按浏览器超时收手：%s", elapsed)
+	}
+	waitReleased("/hang")
+	if out, err := run("browser_open", map[string]any{"url": base + "/"}); err != nil || !strings.Contains(out, "正常页面") {
+		t.Fatalf("超时之后同一个标签页应当还能用：%s %v", out, err)
+	}
+
+	before := countPages()
+	if _, err := run("browser_open", map[string]any{"url": base + "/hang", "new_tab": true}); err == nil {
+		t.Fatal("新标签页打开卡死的地址应当报错")
+	}
+	waitReleased("/hang")
+	if after := countPages(); after != before {
+		t.Fatalf("超时的新标签页应当被关掉：%d → %d", before, after)
+	}
+
+	out, err := run("browser_open", map[string]any{"url": base + "/stream"})
+	if err != nil || !strings.Contains(out, "部分内容") {
+		t.Fatalf("正文传不完的页面应当交回已到手的内容：%s %v", out, err)
+	}
+	waitReleased("/stream")
 }
 
 func TestCompactCDPValueKeepsChineseAndBigNumbers(t *testing.T) {

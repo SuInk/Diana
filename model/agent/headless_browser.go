@@ -108,6 +108,7 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 	if timeout <= 0 {
 		timeout = defaultHeadlessBrowserTimeout
 	}
+	queueCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := validateSandboxedBrowserURL(ctx, rawURL); err != nil {
@@ -121,7 +122,7 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 			return page, nil
 		}
 	}
-	page, err := b.renderBrowser(ctx, rawURL)
+	page, err := b.renderBrowser(queueCtx, ctx, rawURL)
 	if sourceErr != nil {
 		if err != nil {
 			return RenderedPage{}, errors.Join(sourceErr, err)
@@ -132,10 +133,23 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 	return page, err
 }
 
-func (b *SandboxedHeadlessBrowser) renderBrowser(ctx context.Context, rawURL string) (RenderedPage, error) {
+// renderBrowser 先排队拿一次性浏览器的名额，再起进程。排队的时间不算进渲染超时：
+// 渲染的期限在拿到名额之后按原来剩下的时长顺延，没排队时和以前完全一样。
+func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, rawURL string) (RenderedPage, error) {
 	executable, err := findHeadlessBrowserExecutable(b.cfg.Executable)
 	if err != nil {
 		return RenderedPage{}, err
+	}
+	queued := time.Now()
+	release, err := disposableBrowsers.acquire(queueCtx)
+	if err != nil {
+		return RenderedPage{}, err
+	}
+	defer release()
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(queueCtx, deadline.Add(time.Since(queued)))
+		defer cancel()
 	}
 
 	dirs, err := newBrowserSandboxDirs("diana-headless-browser-")
@@ -264,7 +278,7 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
 	defer cancel()
 	executable := status.Path
-	_, err := CaptureHTMLScreenshot(probeCtx, ScreenshotRequest{
+	_, err := captureHTMLScreenshot(probeCtx, ScreenshotRequest{
 		HTML:       `<!doctype html><meta charset="utf-8"><title>Diana browser probe</title><body>ok</body>`,
 		Width:      64,
 		Height:     64,

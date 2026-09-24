@@ -56,13 +56,16 @@ RUN /usr/local/bin/fetch-yt-dlp.sh "${TARGETOS}" "${TARGETARCH}" /out
 # bubblewrap 是 Agent 执行本地命令时的沙盒——装了它不代表一定能用：容器默认的
 # seccomp 或 AppArmor 策略常常禁掉非特权用户命名空间，运行时会实际试跑一次再决定
 # 用不用；但不装则连试的机会都没有，命令只能以主进程权限裸跑。
+# tini 做 PID 1：Chromium 的子进程退出后会过继给 PID 1，diana-webui 不负责回收它们，
+# 没有 init 时每次网页渲染都留下一串僵尸进程。-s 让它在外面又套了一层 init
+# （docker run --init）时也以 subreaper 身份照常回收。
 FROM node:24-bookworm-slim AS runtime-base
 WORKDIR /app
 # data/logs 预建并交给运行用户，容器不挂卷也能直接跑（SQLite 与日志有处可写）。
 # git 供 WebUI 安装的编码 CLI（Codex 等）运行；运行用户的 home 放在数据目录下，
 # 挂卷后 CLI 的设备登录态能跨容器重建保留。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates fontconfig git bubblewrap \
+    && apt-get install -y --no-install-recommends ca-certificates fontconfig git bubblewrap tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -M -d /app/data/home -u 10001 diana \
     && mkdir -p /app/data/home /app/logs \
@@ -98,7 +101,7 @@ COPY packaging/browser-control-extension /app/browser-control-extension
 ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
 USER diana
-ENTRYPOINT ["/app/diana-webui"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/diana-webui"]
 
 FROM runtime-full AS runtime
 COPY --from=backend /out/diana-webui /app/diana-webui
@@ -108,4 +111,4 @@ COPY packaging/browser-control-extension /app/browser-control-extension
 ENV DIANA_CONFIG=/app/config.yaml
 EXPOSE 18080
 USER diana
-ENTRYPOINT ["/app/diana-webui"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/diana-webui"]
