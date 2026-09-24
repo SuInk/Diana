@@ -6,7 +6,9 @@ package assistant
 import (
 	"context"
 	"strings"
+	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -26,6 +28,9 @@ const (
 	ResidentBlockWorldBook   = "world_book"
 	ResidentBlockSelfNotes   = "self_notes"
 	ResidentBlockSessionNote = "session_thread"
+	ResidentBlockAgentPrompt = "agent_protocol"
+	ResidentBlockAgentTools  = "agent_tools"
+	ResidentBlockSkills      = "skills"
 )
 
 // ResidentContextBlock 是快照里的一块。
@@ -54,7 +59,7 @@ type ResidentContextSnapshot struct {
 	Note string `json:"note,omitempty"`
 }
 
-const residentContextNote = "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。"
+const residentContextNote = "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、命中触发词的 Skill 正文、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。"
 
 // ResidentContextForGroup 组装常驻上下文快照。groupID 留空时按私聊场景取，
 // 会话便签那块会因为没有具体会话而为空。
@@ -105,12 +110,101 @@ func (r *Runtime) ResidentContextForGroup(ctx context.Context, profileID, groupI
 		Key: ResidentBlockSessionNote, Label: "会话便签", Content: r.sessionThreadNote(ctx, event), Budget: sessionThreadBudget(window),
 		Note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。",
 	})
+	if cfg.AgentEnabled {
+		r.appendAgentFootprintBlocks(&snapshot, profileID, groupID)
+	}
 	return snapshot
+}
+
+// agentFootprint 是一轮 Agent 常驻开销的摘录。存算好的文本和数字而不是 Runner：
+// Runner 跑完就关，注册表里的 MCP 会话也跟着释放。
+type agentFootprint struct {
+	systemPrompt  string
+	toolNames     []string
+	toolTokens    int64
+	skillsCatalog string
+	at            time.Time
+}
+
+// agentFootprintAnyGroup 是「这台机器人最近一轮，不管哪个会话」的键尾。
+const agentFootprintAnyGroup = "\x00*"
+
+func agentFootprintKey(profileID, groupID string) string {
+	return strings.TrimSpace(profileID) + "\x00" + strings.TrimSpace(groupID)
+}
+
+// rememberAgentFootprint 记下这一轮的常驻开销。和档位目录一样只能取真实跑过的
+// 一轮：工具按平台、权限、群开关逐个挂上去，不跑一轮算不出来。
+func (r *Runtime) rememberAgentFootprint(event MessageEvent, runner *agent.Runner) {
+	if r == nil || runner == nil {
+		return
+	}
+	footprint := runner.ResidentFootprint()
+	names := make([]string, 0, len(footprint.Tools))
+	for _, tool := range footprint.Tools {
+		names = append(names, tool.Name)
+	}
+	entry := agentFootprint{
+		systemPrompt:  footprint.SystemPrompt,
+		toolNames:     names,
+		toolTokens:    llm.EstimateToolDefinitionsTokens(footprint.Tools),
+		skillsCatalog: footprint.SkillsCatalog,
+		at:            time.Now(),
+	}
+	groupID := ""
+	if event.Kind == EventKindGroup {
+		groupID = event.GroupID
+	}
+	r.agentResidencyMu.Lock()
+	if r.agentFootprints == nil {
+		r.agentFootprints = map[string]agentFootprint{}
+	}
+	r.agentFootprints[agentFootprintKey(event.ProfileID, groupID)] = entry
+	r.agentFootprints[strings.TrimSpace(event.ProfileID)+agentFootprintAnyGroup] = entry
+	r.agentResidencyMu.Unlock()
+}
+
+// appendAgentFootprintBlocks 把工具、MCP、Skill 这几块常驻开销补进快照。这几块才是
+// 常驻档位改动的对象，也往往是底价里最大的一截。
+func (r *Runtime) appendAgentFootprintBlocks(snapshot *ResidentContextSnapshot, profileID, groupID string) {
+	r.agentResidencyMu.RLock()
+	footprint, exact := r.agentFootprints[agentFootprintKey(profileID, groupID)]
+	if !exact {
+		footprint = r.agentFootprints[profileID+agentFootprintAnyGroup]
+	}
+	r.agentResidencyMu.RUnlock()
+	if footprint.at.IsZero() {
+		snapshot.appendBlock(ResidentContextBlock{
+			Key: ResidentBlockAgentTools, Label: "工具、MCP 与 Skill",
+			Note: "启动后还没有跑过一轮回复，这几块要等第一条消息之后才算得出来。",
+		})
+		return
+	}
+	source := "取自这个会话最近一轮回复（" + footprint.at.Format("01-02 15:04") + "）"
+	if !exact {
+		source = "这个会话还没回复过，取自这台机器人最近一轮别处的回复（" + footprint.at.Format("01-02 15:04") + "）；群开关和发言者权限不同，工具会有出入"
+	}
+	snapshot.appendBlock(ResidentContextBlock{
+		Key: ResidentBlockAgentPrompt, Label: "Agent 协议与按需工具目录", Content: footprint.systemPrompt,
+		Note: "按需工具只进这份目录（名字加一句用途），要用时先 tools_load。" + source + "。",
+	})
+	snapshot.appendBlock(ResidentContextBlock{
+		Key: ResidentBlockAgentTools, Label: "常驻工具定义", Content: strings.Join(footprint.toolNames, "\n"),
+		Tokens: footprint.toolTokens,
+		Note:   "这些工具每一步都带完整 schema，数字按 schema 估算，正文只列名字。从机器人配置「上下文」的常驻名单里拿掉，就会挪进上面的目录。",
+	})
+	snapshot.appendBlock(ResidentContextBlock{
+		Key: ResidentBlockSkills, Label: "Skill 目录与常驻正文", Content: footprint.skillsCatalog,
+		Note: "只含配成常驻的 Skill 正文；声明了触发词的要命中才带，不在底价里。",
+	})
 }
 
 func (s *ResidentContextSnapshot) appendBlock(block ResidentContextBlock) {
 	block.Content = strings.TrimSpace(block.Content)
-	block.Tokens = llm.EstimateTextTokens(block.Content)
+	// 工具定义的 token 按 schema 算，正文只放名字，由调用方给数。
+	if block.Tokens == 0 {
+		block.Tokens = llm.EstimateTextTokens(block.Content)
+	}
 	s.TotalTokens += block.Tokens
 	s.Blocks = append(s.Blocks, block)
 }

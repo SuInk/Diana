@@ -3,6 +3,7 @@
 
 import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
+import type { SendRetrySettings } from "./send-retry-settings";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
@@ -46,7 +47,11 @@ export interface LLMConfig {
   context_window_source?: "user" | "fallback";
   /** 只读回显：模型清单里记的窗口，只作参考值，不参与计算。 */
   catalog_context_window_tokens?: number;
-  max_output_tokens?: number;
+  /** 用户手填的输出上限；0 或缺省表示按模型上限。 */
+  max_output_tokens?: number | null;
+  /** 只读回显：默认模型没被调用方覆盖时实际发出的输出上限及来源；0 表示不发。 */
+  effective_max_output_tokens?: number;
+  max_output_tokens_source?: "user" | "builtin" | "default" | "provider";
   timeout_ms?: number;
 }
 
@@ -128,7 +133,8 @@ export interface MessageRelayPair {
   endpoints: MessageRelayEndpoint[];
 }
 
-export interface BotProfileConfig {
+/** 群退避与入站重跑参数见 SendRetrySettings；机器人级 0 或留空按默认值。 */
+export interface BotProfileConfig extends SendRetrySettings {
   connection_profile_id?: string;
   persona_id?: string;
   custom_persona?: Persona;
@@ -251,6 +257,15 @@ export interface BotProfileConfig {
   mention_user_mode?: "on" | "off" | "auto";
   markdown_to_plain?: boolean;
   error_notify_enabled?: boolean;
+  /** 机器人在群里被禁言时暂停回复（只记上下文）；缺省开启。 */
+  muted_reply_pause_enabled?: boolean;
+  /** 暂停回复期间语音是否照常转文字；缺省开启。 */
+  muted_voice_transcription_enabled?: boolean;
+  /** 暂停回复期间图片是否照常识别成文字；缺省开启。 */
+  muted_image_description_enabled?: boolean;
+  /** 暂停回复期间是否照常做回复判断（只记录结果，不生成不发送）；缺省关闭。 */
+  muted_reply_judgment_enabled?: boolean;
+  error_persona_reply_enabled?: boolean;
   error_reply_prefix?: string;
   send_retry_attempts?: number;
   /** 周期订阅（RSS、定时查询、仓库订阅）连续失败几次才报一次警。留空按 5 次，0 表示出错不通知。 */
@@ -308,6 +323,12 @@ export interface BotProfileConfig {
   /** 连续消息合并置信度百分比，1–100；未设置时默认 75。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 换行分条：消息内每次换行另发一条，列表、表格和代码块整块不拆；需允许多条发送。 */
+  reply_line_split_enabled?: boolean;
+  /** 模拟打字延时：连发时按下一条的字数等待，不低于分段发送间隔，最长 6 秒。 */
+  typing_delay_enabled?: boolean;
+  /** 模拟打字每字毫秒数，1–1000；留空按 100。 */
+  typing_delay_per_char_ms?: number;
   social_reply_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
@@ -321,10 +342,10 @@ export interface BotProfileConfig {
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
@@ -339,8 +360,6 @@ export interface BotProfileConfig {
   self_note_enabled?: boolean;
   /** 人机恋（恋爱模式）总开关；缺省关闭。 */
   romance_enabled?: boolean;
-  /** 后台空闲时定期探测模型收不收强制指定工具；探测是会计费的真实调用，缺省关闭。 */
-  llm_capability_probe_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;
   /** 被戳一戳时回一句（OneBot）；缺省关闭。 */
@@ -496,7 +515,8 @@ export interface ResolverDependencyInstallResponse {
   installer?: string;
 }
 
-export interface BotGroupConfig {
+/** 分群的 SendRetrySettings 留空跟随机器人。 */
+export interface BotGroupConfig extends SendRetrySettings {
   marked_bot_ids?: string[];
   participation?: import("./participation").ParticipationPreferences;
   bot_profile_id?: string;
@@ -506,6 +526,8 @@ export interface BotGroupConfig {
   group_triggers?: string[];
   /** 本群触发称呼的匹配松紧；空串或不设表示沿用全局配置。 */
   group_trigger_mode?: AliasTriggerMode | "";
+  /** 绑定的人设库条目；绑定时人设各项由人设库同步，库里改了自动更新。 */
+  persona_id?: string;
   /** 群专属人设；留空沿用全局系统提示词。 */
   system_prompt?: string;
   /** 兼容旧版回复模式；新界面统一映射为回复欲望。 */
@@ -525,10 +547,10 @@ export interface BotGroupConfig {
   welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
   recent_history_token_budget?: number;
-  /** 这个群在滚动 5 小时窗口里能用掉的 token 上限；留空或 0 表示不限。 */
-  model_token_quota?: number;
-  /** 同一窗口里的模型调用次数上限；留空或 0 表示不限。和 token 上限先到先得。 */
+  /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
+  /** 回复抽样率（1–100）：没 @ 机器人的群消息只有这个比例交给模型判断要不要接话；留空不抽样。 */
+  reply_sample_percent?: number;
   recent_context_limit?: number;
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
@@ -536,6 +558,10 @@ export interface BotGroupConfig {
   /** 本群连续消息合并置信度百分比；未设置时跟随机器人。 */
   reply_merge_confidence_percent?: number;
   reply_preserve_line_breaks?: boolean;
+  /** 本群的换行分条开关；不设表示跟随机器人。 */
+  reply_line_split_enabled?: boolean;
+  /** 本群的模拟打字延时开关；不设表示跟随机器人。 */
+  typing_delay_enabled?: boolean;
   /** @deprecated 仅兼容历史配置，不再限制聊天分条。 */
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
@@ -566,6 +592,12 @@ export interface BotGroupConfig {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群被禁言时是否暂停回复；不设表示跟随机器人。 */
+  muted_reply_pause_enabled?: boolean;
+  /** 本群暂停回复期间是否转写语音、识别图片、做回复判断；不设表示跟随机器人。 */
+  muted_voice_transcription_enabled?: boolean;
+  muted_image_description_enabled?: boolean;
+  muted_reply_judgment_enabled?: boolean;
   /** 本群接话评分的补充判据；留空跟随机器人，最多 1000 字。 */
   proactive_reply_extra_criteria?: string;
   /** 本群对 MCP / Skill 的覆盖：档位（off/owner/admins/members，留空跟随机器人）加白名单、黑名单。
@@ -588,10 +620,8 @@ export interface BotGroupSummary extends BotGroupConfig {
   joined: boolean;
   /** 复用同一条连接、在这个群也开着的其它机器人：这个群会收到多份回复。 */
   shared_with?: BotGroupSharedBot[];
-  /** 额度窗口内已用的 token 和调用次数，以及算过继承后真正生效的两档上限。 */
-  quota_tokens_used?: number;
+  /** 额度窗口内已用的调用次数，以及算过继承后真正生效的上限。 */
   quota_calls_used?: number;
-  quota_token_limit?: number;
   quota_call_limit?: number;
 }
 
@@ -2092,11 +2122,32 @@ export function getChangelog(): Promise<ChangelogResponse> {
   return requestJSON<ChangelogResponse>("/api/system/update/changelog");
 }
 
-export function listAppLogs(kind?: AppLogKind, limit = 100): Promise<AppLogsResponse> {
+/** "all" 是操作和错误合在一起（不含调试追踪）。 */
+export function listAppLogs(kind?: AppLogKind | "all", limit = 100): Promise<AppLogsResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (kind) {
     params.set("kind", kind);
   }
+  return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
+}
+
+/** 浏览器页的操作记录：机器人的浏览器动作，加上你在浏览器页上的启停、接管和打开网页。 */
+export const browserActivityActions = [
+  "browser_action",
+  "browser_box_start",
+  "browser_box_stop",
+  "browser_box_takeover",
+  "browser_box_navigate",
+  "browser_source",
+  "browser_control_connect",
+  "browser_control_disconnect",
+  "browser_control_takeover"
+];
+
+/** 取浏览器相关的操作记录；带 botID 时只取这台机器人的。成功和失败的都在里面。 */
+export function listBrowserActivity(botID?: string, limit = 30): Promise<AppLogsResponse> {
+  const params = new URLSearchParams({ kind: "all", limit: String(limit), action: browserActivityActions.join(",") });
+  if (botID) params.set("profile", botID);
   return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
 }
 
@@ -2606,6 +2657,91 @@ export interface UserMemoryProfile {
   updated_at?: string;
 }
 
+// RelationshipEvaluationStatus 是一次后台好感度评估的结果分类。
+export type RelationshipEvaluationStatus = "changed" | "capped" | "unchanged" | "low_confidence" | "failed" | "skipped";
+
+// RelationshipEvaluation 是一次后台好感度评估：不只是分数变了的，判 0、把握不够、
+// 失败和排满跳过的也在里面。
+export interface RelationshipEvaluation {
+  id: number;
+  bot_profile_id?: string;
+  user_id: string;
+  sender_name?: string;
+  group_id?: string;
+  message_id?: string;
+  message_text?: string;
+  status: RelationshipEvaluationStatus;
+  proposed_delta: number;
+  applied_delta: number;
+  before_score: number;
+  after_score: number;
+  confidence: number;
+  reason?: string;
+  model?: string;
+  error?: string;
+  // 同一次评估里记下的画像：分数没动、只记下了「职业是程序员」也算一次变化。
+  portrait?: RelationshipEvaluationPortrait[];
+  created_at: string;
+}
+
+export interface RelationshipEvaluationPortrait {
+  field: string;
+  label: string;
+  value: string;
+  source?: string;
+}
+
+export interface RelationshipEvaluationsResponse {
+  evaluations: RelationshipEvaluation[];
+  // 画像栏目表，高级筛选按它列可选栏目。
+  portrait_fields?: { field: string; label: string }[];
+  next_before_id?: number;
+}
+
+export interface RelationshipEvaluationsQuery {
+  profile?: string;
+  userID?: string;
+  // search 什么都搜（人、群、原话、原因、画像、模型、失败原因）；person 按 QQ 号或
+  // 昵称模糊找人；groupID 按群号精确筛；since 是 Unix 秒，只要这之后的。
+  search?: string;
+  person?: string;
+  groupID?: string;
+  since?: number;
+  statuses?: RelationshipEvaluationStatus[];
+  // portraitOnly 只要记下了画像的。
+  portraitOnly?: boolean;
+  // direction 按实际生效的分数：up 加分、down 减分、changed 有变化、none 没变。
+  direction?: "" | "up" | "down" | "changed" | "none";
+  chat?: "" | "group" | "private";
+  portraitFields?: string[];
+  portraitSource?: "" | "stated" | "inferred";
+  minConfidence?: number;
+  model?: string;
+  beforeID?: number;
+  limit?: number;
+}
+
+export function listRelationshipEvaluations(query: RelationshipEvaluationsQuery = {}): Promise<RelationshipEvaluationsResponse> {
+  const params = new URLSearchParams({ limit: String(query.limit ?? 50) });
+  if (query.profile) params.set("profile", query.profile);
+  if (query.userID) params.set("user_id", query.userID);
+  if (query.search) params.set("q", query.search);
+  if (query.person) params.set("person", query.person);
+  if (query.groupID) params.set("group_id", query.groupID);
+  if (query.since) params.set("since", String(query.since));
+  // 传了空列表是「一个都不要」，和不传（不限）不一样，所以只看有没有，不看长度。
+  if (query.statuses) params.set("status", query.statuses.join(","));
+  if (query.portraitOnly) params.set("portrait", "1");
+  if (query.direction) params.set("direction", query.direction);
+  if (query.chat) params.set("chat", query.chat);
+  if (query.portraitFields) params.set("portrait_field", query.portraitFields.join(","));
+  if (query.portraitSource) params.set("portrait_source", query.portraitSource);
+  if (query.minConfidence) params.set("min_confidence", String(query.minConfidence));
+  if (query.model) params.set("model", query.model);
+  if (query.beforeID) params.set("before_id", String(query.beforeID));
+  return requestJSON<RelationshipEvaluationsResponse>(`/api/assistant/favorability/evaluations?${params.toString()}`);
+}
+
 export interface UserFavorabilityChange {
   id: number;
   user_id: string;
@@ -2772,9 +2908,18 @@ export function listPersonas(): Promise<PersonaListResponse> {
   return requestJSON<PersonaListResponse>("/api/assistant/personas");
 }
 
+/** 人设保存结果。改已有的一套时，绑定它的机器人和群会同步更新，这里报同步了几个。 */
+export interface PersonaSaveResponse {
+  persona: Persona;
+  personas: Persona[];
+  bots_synced?: number;
+  groups_synced?: number;
+  warning?: string;
+}
+
 /** 带 id 是改，不带是新增。返回落库后的那一份和整库。 */
-export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<{ persona: Persona; personas: Persona[] }> {
-  return requestJSON<{ persona: Persona; personas: Persona[] }>("/api/assistant/personas", {
+export function savePersona(persona: Persona | Omit<Persona, "id">): Promise<PersonaSaveResponse> {
+  return requestJSON<PersonaSaveResponse>("/api/assistant/personas", {
     method: "POST",
     body: JSON.stringify({ persona })
   });
@@ -3372,7 +3517,7 @@ export function codingAgentSetup(agent: string, operation: "status" | "install" 
 
 export interface BrowserBoxSettings {
   enabled: boolean;
-  /** 有头窗口。默认无头——容器里没有显示器，无头是唯一能跑起来的模式。 */
+  /** 有头窗口。新装时按本机条件自动选：有显示器或能起 Xvfb 就开。 */
   headful?: boolean;
   window_width?: number;
   window_height?: number;
@@ -3398,52 +3543,98 @@ export interface BrowserBoxTab {
   url?: string;
 }
 
-export function getBrowserBoxStatus(): Promise<BrowserBoxStatus> {
-  return requestJSON<BrowserBoxStatus>("/api/browser-box/status");
+/** 机器人用的浏览器：Diana 内置、用户自己的 Chrome（扩展）；off 表示这一轮一个都用不上。 */
+export type BrowserSource = "off" | "box" | "extension";
+
+export interface BrowserSourceSwitch {
+  enabled: boolean;
+  /** 这一轮能用上：内置是找得到 Chrome，扩展是有扩展连着且没被接管。 */
+  usable: boolean;
+  /** 检测到了：内置是本机找得到 Chrome，扩展是有扩展连上来过。 */
+  detected: boolean;
+  /** 运行依赖，和插件页同一种形状；内置那边的 display 是可选项。 */
+  dependencies: ResolverDependency[];
+}
+
+/** 两个开关各自独立，按 order 每一轮取第一个开着且用得上的，就是 active。 */
+export interface BrowserSourceState {
+  order: Exclude<BrowserSource, "off">[];
+  active: BrowserSource;
+  box: BrowserSourceSwitch;
+  extension: BrowserSourceSwitch;
+}
+
+export function getBrowserSource(): Promise<BrowserSourceState> {
+  return requestJSON<BrowserSourceState>("/api/browser-source");
+}
+
+export function saveBrowserSource(patch: {
+  order?: Exclude<BrowserSource, "off">[];
+  box_enabled?: boolean;
+  extension_enabled?: boolean;
+}): Promise<BrowserSourceState> {
+  return requestJSON<BrowserSourceState>("/api/browser-source", {
+    method: "PUT",
+    body: JSON.stringify(patch)
+  });
+}
+
+// 内置浏览器按机器人各用一份登录态，进程相关的接口都带上 ?bot=。不带时 status
+// 只回全局配置和本机能不能找到浏览器。
+function browserBoxPath(path: string, botID?: string, extra?: Record<string, string>): string {
+  const params = new URLSearchParams();
+  if (botID) params.set("bot", botID);
+  for (const [key, value] of Object.entries(extra ?? {})) params.set(key, value);
+  const query = params.toString();
+  return `/api/browser-box/${path}${query ? `?${query}` : ""}`;
+}
+
+export function getBrowserBoxStatus(botID?: string): Promise<BrowserBoxStatus> {
+  return requestJSON<BrowserBoxStatus>(browserBoxPath("status", botID));
 }
 
 export function saveBrowserBoxSettings(
-  settings: BrowserBoxSettings
+  settings: BrowserBoxSettings,
+  botID?: string
 ): Promise<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }> {
-  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>("/api/browser-box/settings", {
+  return requestJSON<{ settings: BrowserBoxSettings; status: BrowserBoxStatus }>(browserBoxPath("settings", botID), {
     method: "PUT",
     body: JSON.stringify(settings)
   });
 }
 
-export function startBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
-  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/start", { method: "POST" });
+export function startBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("start", botID), { method: "POST" });
 }
 
-export function stopBrowserBox(): Promise<{ status: BrowserBoxStatus }> {
-  return requestJSON<{ status: BrowserBoxStatus }>("/api/browser-box/stop", { method: "POST" });
+export function stopBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
+  return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("stop", botID), { method: "POST" });
 }
 
-export function setBrowserBoxTakeover(active: boolean): Promise<{ ok: boolean; active: boolean }> {
-  return requestJSON<{ ok: boolean; active: boolean }>("/api/browser-box/takeover", {
+export function setBrowserBoxTakeover(botID: string, active: boolean): Promise<{ ok: boolean; active: boolean }> {
+  return requestJSON<{ ok: boolean; active: boolean }>(browserBoxPath("takeover", botID), {
     method: "POST",
     body: JSON.stringify({ active })
   });
 }
 
-export function listBrowserBoxTabs(): Promise<{ tabs: BrowserBoxTab[] }> {
-  return requestJSON<{ tabs: BrowserBoxTab[] }>("/api/browser-box/tabs");
+export function listBrowserBoxTabs(botID: string): Promise<{ tabs: BrowserBoxTab[] }> {
+  return requestJSON<{ tabs: BrowserBoxTab[] }>(browserBoxPath("tabs", botID));
 }
 
-export function openBrowserBoxTab(url: string): Promise<{ tab: BrowserBoxTab }> {
-  return requestJSON<{ tab: BrowserBoxTab }>("/api/browser-box/tabs", {
+export function openBrowserBoxTab(botID: string, url: string): Promise<{ tab: BrowserBoxTab }> {
+  return requestJSON<{ tab: BrowserBoxTab }>(browserBoxPath("tabs", botID), {
     method: "POST",
     body: JSON.stringify({ url })
   });
 }
 
-export function closeBrowserBoxTab(id: string): Promise<{ ok: boolean }> {
-  return requestJSON<{ ok: boolean }>(`/api/browser-box/tabs/${encodeURIComponent(id)}`, { method: "DELETE" });
+export function closeBrowserBoxTab(botID: string, id: string): Promise<{ ok: boolean }> {
+  return requestJSON<{ ok: boolean }>(browserBoxPath(`tabs/${encodeURIComponent(id)}`, botID), { method: "DELETE" });
 }
 
 /** 实时画面的 WebSocket 地址。页面是 https 时自动用 wss。 */
-export function browserBoxLiveURL(tabID?: string): string {
+export function browserBoxLiveURL(botID: string, tabID?: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const query = tabID ? `?tab=${encodeURIComponent(tabID)}` : "";
-  return `${protocol}//${window.location.host}/api/browser-box/live${query}`;
+  return `${protocol}//${window.location.host}${browserBoxPath("live", botID, tabID ? { tab: tabID } : undefined)}`;
 }

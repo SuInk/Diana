@@ -57,6 +57,18 @@ func xvfbAvailable() bool {
 	return err == nil
 }
 
+// DisplayStatus 回答「开真窗口有没有屏幕可用」，给浏览器页的运行依赖用：现成的图形
+// 会话，或者能自己拉起的 Xvfb，有一个就行。
+func DisplayStatus() (available bool, detail string) {
+	switch {
+	case systemDisplayAvailable():
+		return true, "图形会话"
+	case xvfbAvailable():
+		return true, "Xvfb 虚拟屏"
+	}
+	return false, "没有显示器也没有 Xvfb：只能无头运行，实时画面照常。要开真窗口请装 xvfb"
+}
+
 // checkHeadful 在启动和保存配置前挡住注定失败的有头模式。
 func checkHeadful(settings Settings) error {
 	if !settings.Headful || systemDisplayAvailable() || xvfbAvailable() {

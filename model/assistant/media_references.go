@@ -166,7 +166,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 			if request.action != "get_msg" {
 				continue
 			}
-			// NapCat registers incoming message media in an in-memory map while
+			// Some OneBot clients register incoming message media in an in-memory map while
 			// converting get_msg. Retry get_file after that conversion, even when
 			// the exposed token is the original filename.
 			token := firstNonEmpty(mediaFileTokenFromOneBotData(response, segment), data["file"], data["file_id"])

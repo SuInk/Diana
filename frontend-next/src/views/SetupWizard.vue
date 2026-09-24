@@ -700,7 +700,7 @@ const tokenRequired = computed(
   () => isOneBotPlatform.value && botForm.value.onebot_transport === "reverse_ws" && !tokenConfigured.value
 );
 const tokenRequiredHint = computed(() =>
-  tokenRequired.value ? "反向 WebSocket 模式下 NapCat 等客户端必须凭这个 token 才能连进来，请与客户端填写保持一致。" : ""
+  tokenRequired.value ? "反向 WebSocket 模式下 OneBot 客户端必须凭这个 token 才能连进来，请与客户端填写保持一致。" : ""
 );
 const channelError = computed(() => stream.status?.channel.last_error ?? "");
 const wsEndpoint = computed(() => botForm.value.onebot_reverse_ws_endpoint.trim());

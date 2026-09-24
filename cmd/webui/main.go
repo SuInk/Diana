@@ -254,7 +254,6 @@ func main() {
 	} else {
 		log.Printf("no config file found; using built-in defaults (set %s or pass --config)", configPathEnv)
 	}
-	probeMacOSClientAppDataAccess()
 	port := stringOr(appCfg.Server.Port, "18080")
 	host := strings.TrimSpace(appCfg.Server.Host)
 
@@ -382,6 +381,7 @@ func main() {
 	systemHandler.SetReleasePackageUpdater(releaseUpdater)
 	systemHandler.StartAutoUpdate(ctx)
 	runtimePersistor := webui.NewRuntimePersistor(botProfileStore)
+	runtimePersistor.SetAppLogWriter(sqliteStore)
 	plugins := assistant.NewDefaultPluginManager()
 	if savedPluginStates, ok, err := sqliteStore.LoadPluginStates(ctx); err != nil {
 		log.Fatal(err)
@@ -415,7 +415,7 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	// NapCat 使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，由通道工厂按
+	// OneBot 接入端使用反向 WebSocket 连接本服务；这里保留同一个 server 实例，由通道工厂按
 	// 机器人配置设置 token/endpoint。
 	oneBotServer := assistant.NewOneBotReverseServer(assistant.OneBotConfig{})
 	oneBotHTTPServer := assistant.NewOneBotHTTPChannel(assistant.OneBotConfig{})
@@ -437,7 +437,7 @@ func main() {
 	botRuntime.SetMessageHistoryStore(sqliteStore)
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
-	botRuntime.SetLLMCapabilityStore(sqliteStore)
+	botRuntime.SetLLMDowngradeStore(sqliteStore)
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetThreadStateStore(sqliteStore)
 	botRuntime.SetOneBotRequestStore(sqliteStore)
@@ -460,6 +460,7 @@ func main() {
 	}
 	botRuntime.SetLLMModelLister(modelListFactory)
 	botRuntime.SetAppLogWriter(sqliteStore)
+	oneBotServer.SetAppLogWriter(sqliteStore)
 	configuredMediaBaseURL := strings.TrimSpace(appCfg.Storage.LocalMediaBaseURL)
 	localMediaBaseURL := stringOr(
 		configuredMediaBaseURL,
@@ -550,13 +551,6 @@ func main() {
 	botHandler.SetRepoPluginInstaller(repoPluginInstaller)
 	botHandler.SetRepoPluginSourceStore(repoPluginStore)
 	logHandler := webui.NewAppLogHandler(sqliteStore)
-	napCatLoginHandler, err := webui.NewNapCatLoginHandler(webui.NapCatLoginConfig{
-		BaseURL: strings.TrimSpace(appCfg.NapCat.WebUIURL),
-		Token:   strings.TrimSpace(appCfg.NapCat.WebUIToken),
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
 	statsHandler := webui.NewStatsHandler(statsCollector, botRuntime, sqliteStore.Path()).WithRangeReaders(sqliteStore, sqliteStore)
 	eventStreamHandler := webui.NewEventStreamHandler(eventHub, botRuntime, statsCollector, sqliteStore.Path())
 	eventStreamHandler.StartWatcher(ctx, 2*time.Second)
@@ -622,7 +616,6 @@ func main() {
 	ownerLoginHandler.SetLogStore(sqliteStore)
 	ownerLoginHandler.Register(router)
 	botRuntime.SetPrivateMessageInterceptor(ownerLoginHandler.ConsumePrivateMessage)
-	napCatLoginHandler.Register(router)
 	webui.NewChannelCallbackHandler().Register(router)
 	// 对外开放接口：/api/openapi 下的密钥管理走上面的会话鉴权，
 	// /openapi/v1 下的推送接口由 Bearer 密钥自行鉴权，总开关是
@@ -643,11 +636,27 @@ func main() {
 	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
 	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
 	browserBoxManager := browserbox.New(ctx, sqliteStore, dataDir)
+	// 按机器人拆分之前所有机器人共用一份登录态，交给第一台机器人，免得升级后要重新登录。
+	if err := browserBoxManager.AdoptLegacyProfile(firstBotProfile(botSet).ID); err != nil {
+		log.Printf("diana 内置浏览器旧登录态迁移失败：%v", err)
+	}
+	// 新装时替用户把内置浏览器打开：本机找得到 Chrome 就开，有显示器（或能起 Xvfb）
+	// 就开真窗口。和扩展不冲突：两边可以同时开着，由优先级决定每一轮先用谁。
+	if enabled, err := browserBoxManager.EnableByDefault(ctx); err != nil {
+		log.Printf("diana 内置浏览器已按本机条件默认打开，但没能启动：%v", err)
+	} else if enabled {
+		log.Printf("diana 内置浏览器已按本机条件默认打开（有头：%v）", browserBoxManager.Settings().Headful)
+	}
 	browserBoxHandler := webui.NewBrowserBoxHandler(browserBoxManager)
 	browserBoxHandler.SetLogStore(sqliteStore)
 	browserBoxHandler.Register(router)
 	botRuntime.SetBrowserBox(browserBoxManager)
 	defer browserBoxManager.Stop()
+	// 浏览器来源：Diana 内置和用户自己的 Chrome 各自开关，按优先级每一轮取第一个用得上的。
+	browserSourceHandler := webui.NewBrowserSourceHandler(ctx, browserBoxManager, browserControlRegistry, browserControlHub, sqliteStore)
+	browserSourceHandler.SetLogStore(sqliteStore)
+	browserSourceHandler.Register(router)
+	botRuntime.SetBrowserSource(browserSourceHandler.Current)
 	// 重启复用 SIGTERM 的优雅关停链路：取消根 ctx 让 Serve 返回，再由
 	// main 收尾时判断 restartRequested 原地重启。
 	var restartRequested atomic.Bool
@@ -663,7 +672,7 @@ func main() {
 	eventStreamHandler.Register(router)
 	healthHandler.Register(router)
 	// This tokenized endpoint intentionally sits outside /api so a separate
-	// NapCat container can fetch media without a WebUI login session.
+	// OneBot client container can fetch media without a WebUI login session.
 	router.GET("/media/resolver/:token", func(c *gin.Context) {
 		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
 	})
@@ -671,7 +680,7 @@ func main() {
 	router.GET("/api/assistant/media/:token", func(c *gin.Context) {
 		localMediaStore.ServeToken(c.Writer, c.Request, c.Param("token"))
 	})
-	// OneBot 路由必须在 SPA fallback 之前注册，否则 NapCat 会拿到前端 HTML 而不是 WebSocket。
+	// OneBot 路由必须在 SPA fallback 之前注册，否则接入端会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
 	router.NoRoute(spaHandler(http.Dir(frontendDistDir(appCfg.Server.FrontendDist))))
@@ -726,23 +735,6 @@ func newSystemUpdater(cfg updateConfig) (*updater.GitUpdater, error) {
 		}
 	}
 	return updater.NewGitUpdaterWithOptions(root, options)
-}
-
-func probeMacOSClientAppDataAccess() {
-	if runtime.GOOS != "darwin" {
-		return
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("macOS QQ app data access probe skipped: %v", err)
-		return
-	}
-	path := filepath.Join(home, "Library", "Containers", "com.tencent.qq", "Data", ".config", "QQ", "NapCat", "temp")
-	if _, err := os.ReadDir(path); err != nil {
-		log.Printf("macOS QQ app data access denied: %v", err)
-		return
-	}
-	log.Printf("macOS QQ app data access granted")
 }
 
 func displayHost(host string) string {

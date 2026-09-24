@@ -309,7 +309,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">显示「对方正在输入」</span>
                   </label>
-                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要 NapCat 等支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
+                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
                 </div>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
@@ -543,44 +543,13 @@
         </div>
 
         <div v-show="editorTab === 'model'" class="stack">
-          <!-- 聊天内模型管理 -->
-          <section class="card">
-            <div class="card-header">
-              <h2>聊天内模型管理</h2>
-              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
-                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
-              </span>
-            </div>
-            <div class="card-body form-grid">
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
-                </label>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
-              </div>
-            </div>
-          </section>
-
-
-          <section class="card">
-            <div class="card-header"><h2>媒体预处理</h2></div>
-            <div class="card-body stack">
-              <label><input v-model="form.auto_image_description" type="checkbox" /> 自动生成图片描述</label>
-              <label><input v-model="form.auto_video_preprocess" type="checkbox" /> 自动下载视频并提取关键帧</label>
-              <p class="muted">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</p>
-              <p class="muted">图片描述、视频帧描述和模型 OCR 用的是下方「模型分配」里的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</p>
-            </div>
-          </section>
-
           <!-- 模型分配 -->
           <section class="card">
             <div class="card-header">
               <h2>模型分配</h2>
               <span class="card-sub">按用途选择提供商与模型；提供商的接入与凭据在「提供商」页管理</span>
             </div>
-            <div class="card-body stack" style="gap: 0">
+            <div class="card-body stack model-role-list" style="gap: 0">
               <p v-if="modelRolesChangedElsewhere" class="hint warn-text">
                 模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
                 <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
@@ -611,20 +580,26 @@
                       @keydown="(event) => onRouteHandleKeydown(role.key, 0, event)"
                     >
                       <GripVertical :size="14" aria-hidden="true" />
-                      {{ role.label }}
+                      <span class="model-role-name">
+                        {{ role.label }}
+                        <small v-if="role.sublabel">{{ role.sublabel }}</small>
+                      </span>
                     </button>
-                    <span v-else class="model-role-label">{{ role.label }}</span>
+                    <span v-else class="model-role-label model-role-name">
+                      {{ role.label }}
+                      <small v-if="role.sublabel">{{ role.sublabel }}</small>
+                    </span>
                     <AppSelect
                       :model-value="roleSelectionValue(role.key)"
                       :options="channelOptionsFor(role.key)"
-                      placeholder="请选择提供商 / 分组"
+                      :placeholder="isPurposeRole(role.key) ? '不指定，跟随对话' : '请选择提供商 / 分组'"
                       @update:model-value="(value) => setRoleChannel(role.key, value)"
                     />
                     <AppSelect
                       :model-value="roleModelValue(role.key)"
                       :options="modelOptionsFor(role.key)"
-                      :disabled="roleForm[role.key]?.follow_chat || (role.key === 'media_parse' && !roleForm[role.key])"
-                      :placeholder="role.key === 'media_parse' && !roleForm[role.key] ? '跟随视觉理解模型' : roleForm[role.key]?.follow_chat ? '跟随对话模型' : '请选择模型（必填）'"
+                      :disabled="roleForm[role.key]?.follow_chat || (isOptionalRole(role.key) && !roleForm[role.key])"
+                      :placeholder="roleModelPlaceholder(role.key)"
                       @update:model-value="(value) => setRoleModel(role.key, value)"
                     />
                     <button
@@ -683,14 +658,6 @@
                 每个用途的主路由和后备路由按从上到下的顺序依次尝试。有后备时，拖动左侧的名称可以调整顺序（也可以聚焦后按 ↑ ↓ 键），
                 拖到最上面的那条就成为主路由，原来的主路由顺延为后备。
               </p>
-              <button class="btn ghost" type="button" @click="purposeRolesOpen = !purposeRolesOpen">
-                <ChevronDown :size="14" :class="{ 'recent-chevron-open': purposeRolesOpen }" aria-hidden="true" />
-                {{ purposeRolesOpen ? "收起后台生成" : "后台生成（好感度 / 长期记忆）可以单独指模型" }}
-              </button>
-              <p v-if="purposeRolesOpen" class="muted model-role-note">
-                「意图识别」现在只管判定当前这轮该不该说话、说出去的这句能不能发——问的都是是非、单选和打分，
-                可以绑 TypeSafe Jev 这类只做判断的模型。写字的活（好感度、长期记忆、摘要、RSS 判断）拆到下面这一档，不指定时跟随对话。
-              </p>
             </div>
           </section>
 
@@ -712,17 +679,6 @@
                 <span class="hint">
                   默认使用流式接收正文、思考和工具调用；思考不会作为聊天正文发送，工具参数完整后才会执行。
                   可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。供应商不支持流式或请求失败时会尝试普通调用。
-                </span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.llm_capability_probe_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">后台探测模型兼容性（默认关闭）</span>
-                </label>
-                <span class="hint">
-                  空闲时每天探一次当前绑定的模型收不收「强制调用指定工具」——带思考模式的模型（如 DeepSeek）只接受自动选择，强制会让整轮对话报错。
-                  提前探好，真实对话就不用先失败一次。探测是极小的真实调用，会计入用量和账单；关着也不影响正确性，遇到时会自动降级并记住结论。
                 </span>
               </div>
               <div class="field">
@@ -748,6 +704,25 @@
             </div>
           </section>
 
+          <!-- 聊天内模型管理：主人专用的开关，平时用不上，排在模型分配和调用参数之后。 -->
+          <section class="card">
+            <div class="card-header">
+              <h2>聊天内模型管理</h2>
+              <span class="badge" :class="form.owner_llm_config_enabled ? 'accent' : ''">
+                {{ form.owner_llm_config_enabled ? "已启用" : "未启用" }}
+              </span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.owner_llm_config_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">允许主人在聊天中修改提供商和模型</span>
+                </label>
+                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div v-show="editorTab === 'behavior'" class="stack">
@@ -789,7 +764,28 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">允许多条发送</span>
                 </label>
-                <span class="hint">仅显式分条标记另发消息；普通换行不分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+                <span class="hint">仅显式分条标记另发消息；普通换行不分条，除非开启下面的换行分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_line_split_enabled" type="checkbox" :disabled="!form.natural_reply_split_enabled" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">换行分条发送</span>
+                </label>
+                <span class="hint">消息内每换一行就另发一条；列表、表格和代码块整块发，连同引出它的那一行。需先允许多条发送；闲聊插话和本轮要求一条发送时不生效。</span>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.typing_delay_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">模拟打字延时</span>
+                </label>
+                <span class="hint">连发时按下一条的字数停顿，像边打边发。不低于分段发送间隔，单次最长 6 秒；第一条不额外等待。</span>
+              </div>
+              <div class="field">
+                <label for="bot-typing-speed">打字速度（毫秒/字）</label>
+                <input id="bot-typing-speed" v-model.number="form.typing_delay_per_char_ms" class="input" type="number" min="1" max="1000" step="1" inputmode="numeric" placeholder="留空按 100" :disabled="!form.typing_delay_enabled" />
+                <span class="hint">每个字等多久。100 约等于一秒十个字；越大越慢。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -815,14 +811,14 @@
                 <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
               </div>
               <div class="field">
-                <label for="bot-token-quota">模型额度 · 5 小时 token（默认单位 K）</label>
-                <input id="bot-token-quota" v-model="tokenQuotaDraft" class="input" placeholder="留空不限" />
-                <span class="hint">{{ tokenQuotaReadoutText }}</span>
+                <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
+                <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
+                <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
               </div>
               <div class="field">
-                <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
-                <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">按次数计，不带单位。两档各自独立、先到先得：刷得勤的群先撞次数，句句带图的先撞 token。额度是按群算的，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。统计口径含判定、路由和工具步，不只是最终那句回复。主人不受限。</span>
+                <label for="bot-sample">回复抽样率（%）</label>
+                <input id="bot-sample" v-model.number="form.reply_sample_percent" class="input" type="number" min="0" max="100" step="1" inputmode="numeric" placeholder="留空不抽样" />
+                <span class="hint">群里没 @、没引用、没叫名字的消息，只有这个比例交给模型判断要不要接话，没抽中的一次调用都不花。被点名的照常回复，主人不受限。群配置里填了就以群为准。</span>
               </div>
               <div class="field">
                 <label for="bot-backfill-limit">断线回补条数</label>
@@ -977,6 +973,50 @@
                   并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。表达质量拦截始终静默，不受此开关影响。
                 </span>
               </div>
+              <div v-if="!form.error_notify_enabled" class="field">
+                <label class="switch">
+                  <input v-model="form.error_persona_reply_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">出错时仍用人设回一句</span>
+                </label>
+                <span class="hint">默认关闭。开启后，回复失败时让模型用机器人自己的口吻说一句没接住，不带错误原文和前缀；模型本身用不了或改写失败就保持静默。连续失败的汇总不发。</span>
+              </div>
+              <div class="field">
+                <label class="switch">
+                  <input v-model="form.muted_reply_pause_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">被禁言时暂停回复</span>
+                </label>
+                <span class="hint">
+                  机器人在群里被禁言（或全员禁言且机器人不是管理员）期间，消息照常记入上下文和记忆，但不生成回复（回复判断默认也不做），
+                  也不白发再重试。解禁后从新消息开始回复，禁言期间的消息不补发。禁言和解禁会记在事件页的「通知」里。
+                  关闭后按原来的方式照常生成和重试。
+                </span>
+              </div>
+              <div v-if="form.muted_reply_pause_enabled" class="field wide">
+                <label>暂停期间照常执行</label>
+                <div class="stack">
+                  <label class="switch">
+                    <input v-model="form.muted_image_description_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">图片识别成文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_voice_transcription_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">语音转文字</span>
+                  </label>
+                  <label class="switch">
+                    <input v-model="form.muted_reply_judgment_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">回复判断</span>
+                  </label>
+                </div>
+                <span class="hint">
+                  图片识别和语音转文字默认开，解禁后历史里的图片、语音有文字，上下文才完整；关掉能省下这段时间的费用。
+                  回复判断默认关：判断了也发不出去。打开后照常判断，该回的消息在事件页记为「判断该回，但禁言中未发送」，不生成也不发送。
+                </span>
+              </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.recall_reply_auto_delete_enabled" type="checkbox" />
@@ -1006,6 +1046,22 @@
               <div class="field">
                 <label for="bot-retry">发送重试次数（1–5）</label>
                 <input id="bot-retry" v-model.number="form.send_retry_attempts" class="input" inputmode="numeric" />
+                <span class="hint">单次发送内的快速重试，间隔不到一秒。群消息只发一次，失败后交给下面的退避重发。</span>
+              </div>
+              <div v-for="field in sendRetryFields" :key="field.key" class="field">
+                <label :for="`bot-${field.key}`">{{ field.label }}</label>
+                <input
+                  :id="`bot-${field.key}`"
+                  v-model.number="form[field.key]"
+                  class="input"
+                  type="number"
+                  :min="field.min"
+                  :max="field.max"
+                  step="1"
+                  inputmode="numeric"
+                  :placeholder="`默认 ${field.fallback}`"
+                />
+                <span class="hint">{{ field.hint }}</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1033,7 +1089,7 @@
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
                 <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。</span>
+                <span class="hint">连续多段之间的停顿，过快容易触发风控。开启模拟打字延时后作为最短停顿。</span>
               </div>
             </div>
           </section>
@@ -1096,6 +1152,31 @@
                   <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
                 </label>
                 <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 30 分钟。主人不受影响。</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- 媒体预处理原来在「模型」标签，因为它花的是「媒体解析」那个模型的额度。但它回答的
+               是「收到图片、视频时后台做不做」，和机器人识别、发送前审核是一类事；用哪个模型
+               仍在模型标签里，这里给一个跳转。 -->
+          <section class="card">
+            <div class="card-header"><h2>媒体预处理</h2></div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_image_description" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动生成图片描述</span>
+                </label>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.auto_video_preprocess" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动下载视频并提取关键帧</span>
+                </label>
+                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
+                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
               </div>
             </div>
           </section>
@@ -1203,6 +1284,17 @@
                       <Upload :size="14" aria-hidden="true" />
                       导入
                     </button>
+                    <button
+                      v-if="editedLibraryPersona"
+                      class="btn small"
+                      type="button"
+                      :disabled="personaLibraryBusy || !personaHasContent"
+                      :title="`把当前内容写回人设库「${editedLibraryPersona.name}」，绑定它的机器人和群一起更新`"
+                      @click="updateEditedLibraryPersona"
+                    >
+                      <RefreshCw :size="14" aria-hidden="true" />
+                      更新「{{ editedLibraryPersona.name }}」
+                    </button>
                     <button class="btn small" type="button" :disabled="personaLibraryBusy || !personaHasContent" @click="togglePersonaSaver">
                       <component :is="personaSaverOpen ? X : Plus" :size="14" aria-hidden="true" />
                       {{ personaSaverOpen ? "取消" : "存为人设" }}
@@ -1262,6 +1354,7 @@
                   </div>
                 </div>
                 <span v-if="!personaLibrary.length" class="hint">还没存过人设。调整下方设置后，点「存为人设」保存。</span>
+                <span v-else class="hint">选中一套即绑定：人设库里这一套更新后，绑定它的机器人和群自动跟着改。在下方改了内容就变成「自定义」，可以点「更新」写回这一套，或「存为人设」另存一套。</span>
               </div>
               <div class="field wide">
                 <div class="field-head">
@@ -1779,7 +1872,7 @@
                   </label>
                   <span class="hint">
                     默认关闭。那组工具操作的是你自己浏览器里的页面，带着你的登录态，所以逐台机器人显式打开。
-                    还要在「浏览器 → 浏览器控制扩展」里打开总开关并授权站点，两边都开才真的能用。
+                    还要在「浏览器」页打开「我自己的 Chrome」并授权站点，两边都开才真的能用；两个浏览器都开着时按那一页的优先级先用排在前面的。
                   </span>
                 </div>
                 <div class="field wide">
@@ -1789,7 +1882,7 @@
                     <span class="switch-label">禁止这台机器人使用内置浏览器</span>
                   </label>
                   <span class="hint">
-                    默认允许：只要你在「浏览器 → 内置浏览器」里把它打开，browser_open / browser_text / browser_click 这组工具就连到它上面，
+                    默认允许：只要「浏览器」页的来源选的是「Diana 内置」，browser_open / browser_text / browser_click 这组工具就连到它上面，
                     带着你在里面登录过的站点。这组工具只有主人能用，群成员拿不到（他们只有一次性无头渲染，临时 profile、用完即删）；
                     你在那一页按下接管时，连主人也当场碰不到它。勾上这一项表示这台机器人彻底不碰它。
                   </span>
@@ -2076,6 +2169,7 @@ import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff,
 import { applyPersonaDocument, asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { formatClock } from "../format";
+import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
 import {
   deleteBotProfile,
   generatePersona,
@@ -2130,7 +2224,6 @@ import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
-import { formatTokenQuota, parseTokenQuota, tokenQuotaReadout } from "../quota-unit";
 import type { PersonaLintFinding } from "../api";
 import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
 import { personaOwnedTemplate } from "../persona-owned-template";
@@ -2147,15 +2240,6 @@ import { channelAccountUnhealthy, channelOperational, channelStatusHint, channel
 
 const form = ref<BotProfileConfig | null>(null);
 
-const tokenQuotaDraft = ref("");
-
-const tokenQuotaReadoutText = computed(() => tokenQuotaReadout(tokenQuotaDraft.value, "留空不限。"));
-
-watch(tokenQuotaDraft, (value) => {
-  if (!form.value) return;
-  const parsed = parseTokenQuota(value);
-  form.value.model_token_quota = parsed === undefined ? 0 : parsed;
-});
 const loading = ref(true);
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
@@ -2641,8 +2725,9 @@ const mentionUserModeOptions: AppSelectOption[] = [
 ];
 
 
-// 人设库。存的是「它是谁、怎么说话」的配置组合，套用是把它们填进下面的表单——
-// 不是活绑定，所以这里没有「当前是哪一套」的概念，也不需要在配置里记 persona_id。
+// 人设库。存的是「它是谁、怎么说话」的配置组合，选中一套是把它们填进下面的表单，
+// 并在 persona_id 里记下绑定：库里这一套更新时，后端把新内容写进绑定它的机器人
+// 和群（见 model/assistant/persona_link.go）。表单里改了内容就解除绑定。
 const savedPersonaLibrary = ref<Persona[]>([]);
 const personaLibrary = computed(() => withBuiltinPersonas(savedPersonaLibrary.value));
 const personaLibraryLoaded = ref(false);
@@ -2657,7 +2742,22 @@ function choosePersona(id: string): void {
 watch(() => ({ id: form.value?.persona_id, selection: selectedPersonaID.value, ready: personaLibraryLoaded.value, settings: JSON.stringify(form.value && personaFromSettings(form.value, "")) }), (next, previous) => {
   if (!next.ready || !form.value?.persona_id) return;
   const edited = previous?.ready && previous.id === next.id && previous.settings !== next.settings;
-  if (next.selection === "custom" || edited) form.value = asCustomPersona(form.value);
+  if (next.selection === "custom" || edited) {
+    // 记下是从哪一套改出来的，好提供「写回这一套」。
+    editedFromPersonaID.value = form.value.persona_id;
+    form.value = asCustomPersona(form.value);
+  }
+});
+// 从人设库某一套改出来的「自定义」：可以写回那一套，让绑定它的机器人和群一起更新。
+// 内置人设不在库里，不能写回。
+const editedFromPersonaID = ref("");
+const editedLibraryPersona = computed(() => {
+  if (!editedFromPersonaID.value || selectedPersonaID.value !== "custom") return undefined;
+  const persona = savedPersonaLibrary.value.find((item) => item.id === editedFromPersonaID.value);
+  return persona && !isBuiltinPersona(persona) ? persona : undefined;
+});
+watch(() => form.value?.id, () => {
+  editedFromPersonaID.value = "";
 });
 const personaLibraryBusy = ref(false);
 
@@ -2895,6 +2995,35 @@ async function storeCurrentPersona(): Promise<void> {
   }
 }
 
+async function updateEditedLibraryPersona(): Promise<void> {
+  const current = form.value;
+  const target = editedLibraryPersona.value;
+  if (!current || !target) return;
+  const ok = await askConfirm({
+    title: `更新人设「${target.name}」`,
+    message: "把当前的人设内容写回人设库的这一套。所有绑定它的机器人和群都会改成这份内容，并立即生效。",
+    confirmLabel: "更新"
+  });
+  if (!ok) return;
+  personaLibraryBusy.value = true;
+  try {
+    const response = await savePersona({ ...personaFromSettings(current, target.name), id: target.id });
+    savedPersonaLibrary.value = response.personas ?? [];
+    if (form.value === current) form.value = selectPersona(asCustomPersona(current), response.persona);
+    editedFromPersonaID.value = "";
+    const synced = [
+      response.bots_synced ? `${response.bots_synced} 台机器人` : "",
+      response.groups_synced ? `${response.groups_synced} 个群` : ""
+    ].filter(Boolean).join("、");
+    toastSuccess(synced ? `已更新「${target.name}」，同步到 ${synced}` : `已更新「${target.name}」`);
+    if (response.warning) toastError(response.warning);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "人设更新失败");
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
 const personaFileInput = ref<HTMLInputElement | null>(null);
 
 function personaFileInputClick(): void {
@@ -3011,7 +3140,7 @@ async function importPersonaFile(event: Event): Promise<void> {
 }
 
 async function removePersona(persona: Persona): Promise<void> {
-  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份，已经保存到机器人上的配置不受影响。", danger: true, confirmLabel: "删除" }))) {
+  if (!(await askConfirm({ title: `删除人设「${persona.name}」？`, message: "只删库里这一份。绑定它的机器人和群保留现有人设，改为自定义。", danger: true, confirmLabel: "删除" }))) {
     return;
   }
   personaLibraryBusy.value = true;
@@ -3443,7 +3572,8 @@ const purposeRoleKeys = ["background"] as const;
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number];
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean };
 type RoleAssignment = RoleRoute & { fallbacks?: RoleRoute[] };
-const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
+type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
+const modelRoleRows: ModelRoleRow[] = [
   {
     key: "chat",
     label: "对话",
@@ -3456,7 +3586,8 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
   },
   {
     key: "media_parse",
-    label: "媒体解析（可选）",
+    label: "媒体解析",
+    sublabel: "可选",
     description:
       "后台批量识图：历史图片和视频每一帧的描述、表情包语义简介，以及图片识别插件的看图与模型 OCR。这些调用量大、在后台排队逐张执行，" +
       "建议单独指一个便宜、快、识图稳定的视觉模型并配上后备。跟随视觉理解时，更换对话模型会连带换掉它，换成慢模型会让识图队列积压；" +
@@ -3475,25 +3606,37 @@ const modelRoleRows: { key: RoleKey; label: string; description: string }[] = [
     description: "生成和编辑图片。选「跟随对话」时，对话模型本身必须支持出图。"
   }
 ];
-// 后台生成是从「意图识别」里拆出来的一档。留空就跟着意图识别，行为和拆之前一样。
-const purposeRoleRows: { key: RoleKey; label: string; description: string }[] = [
+// 后台生成是从「意图识别」里拆出来的一档。留空时后端按用途归属找不到绑定，回落到对话。
+const purposeRoleRows: ModelRoleRow[] = [
   {
     key: "background",
-    label: "后台生成（好感度 / 长期记忆）",
+    label: "后台生成",
+    sublabel: "好感度 · 记忆",
     description:
       "好感度评估、长期记忆抽取与归纳、上下文摘要、语义指代、转发内容安全，以及各种提示改写。" +
       "它们都要写出成段文字，判断模型答不了；也不在回复的关键路径上，慢一点没关系。不指定时跟随对话。"
   }
 ];
 
-// 细分用途默认收起：绝大多数部署只需要「意图识别」一档，13 行铺开会把这一页淹掉。
-const purposeRolesOpen = ref(false);
-// 收起时仍然显示已经配过的那几行，否则配完一收就找不到在哪改了。
-const visibleModelRoleRows = computed(() =>
-  purposeRolesOpen.value
-    ? [...modelRoleRows, ...purposeRoleRows]
-    : [...modelRoleRows, ...purposeRoleRows.filter((row) => roleForm.value[row.key])]
-);
+// 细分用途只剩后台生成一档，直接和其他用途一起铺开，不再折叠。
+const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows];
+
+function isPurposeRole(role: RoleKey): boolean {
+  return purposeRoleKeys.includes(role as (typeof purposeRoleKeys)[number]);
+}
+
+// 媒体解析和细分用途可以不配，不配时模型一栏锁定，占位文字说明它跟着谁走。
+function isOptionalRole(role: RoleKey): boolean {
+  return role === "media_parse" || isPurposeRole(role);
+}
+
+function roleModelPlaceholder(role: RoleKey): string {
+  if (!roleForm.value[role]) {
+    if (role === "media_parse") return "跟随视觉理解模型";
+    if (isPurposeRole(role)) return "跟随对话模型";
+  }
+  return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
+}
 
 const llmChannels = ref<LLMConfig[]>([]);
 const roleForm = ref<Partial<Record<RoleKey, RoleAssignment>>>({});
@@ -4061,6 +4204,8 @@ function setForm(config: BotProfileConfig): void {
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
+    reply_line_split_enabled: config.reply_line_split_enabled ?? false,
+    typing_delay_enabled: config.typing_delay_enabled ?? false,
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
@@ -4078,6 +4223,11 @@ function setForm(config: BotProfileConfig): void {
     mention_user_mode: config.mention_user_mode ?? "auto",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     error_notify_enabled: config.error_notify_enabled ?? true,
+    muted_reply_pause_enabled: config.muted_reply_pause_enabled ?? true,
+    muted_voice_transcription_enabled: config.muted_voice_transcription_enabled ?? true,
+    muted_image_description_enabled: config.muted_image_description_enabled ?? true,
+    muted_reply_judgment_enabled: config.muted_reply_judgment_enabled ?? false,
+    error_persona_reply_enabled: config.error_persona_reply_enabled ?? false,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
     long_term_memory_enabled: config.long_term_memory_enabled ?? true,
@@ -4087,7 +4237,6 @@ function setForm(config: BotProfileConfig): void {
     world_book_enabled: config.world_book_enabled ?? true,
     self_note_enabled: config.self_note_enabled ?? false,
     romance_enabled: config.romance_enabled ?? false,
-    llm_capability_probe_enabled: config.llm_capability_probe_enabled ?? false,
     mood_enabled: config.mood_enabled ?? false,
     poke_reply_enabled: config.poke_reply_enabled ?? false,
     expression_learning_enabled: config.expression_learning_enabled ?? false,
@@ -4113,7 +4262,6 @@ function setForm(config: BotProfileConfig): void {
     prompt_inject_group_sender: config.prompt_inject_group_sender ?? true,
     prompt_chinese_slang_hint: config.prompt_chinese_slang_hint ?? true
   };
-  tokenQuotaDraft.value = formatTokenQuota(config.model_token_quota);
   triggersDraft.value = (config.group_triggers ?? []).join(",");
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   allowlistDraft.value = (config.agent_command_allowlist ?? []).join(",");
@@ -4383,6 +4531,11 @@ async function save(): Promise<void> {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
     return;
   }
+  const sendRetryError = sendRetryValidationError(current);
+  if (sendRetryError) {
+    toastError(sendRetryError);
+    return;
+  }
   for (const row of [...modelRoleRows, ...purposeRoleRows]) {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
@@ -4442,8 +4595,13 @@ async function save(): Promise<void> {
       ...current,
       ...(selectedPersonaID.value === "custom" ? { persona_id: "", custom_persona: asCustomPersona(current).custom_persona } : {}),
       forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
+      model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
+      reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
       forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
+      ...sendRetryPayload(current),
+      typing_delay_per_char_ms: Number(current.typing_delay_per_char_ms) || 0,
       ...secrets,
       group_triggers: splitList(triggersDraft.value),
       welcome_templates: welcomeTemplatesDraft.value

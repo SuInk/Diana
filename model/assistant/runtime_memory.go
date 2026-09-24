@@ -50,9 +50,10 @@ func (r *Runtime) withUserFacingPersona(event MessageEvent, messages []llm.Messa
 	// 语气锚点和风格描述一起注入，让这条旁路的说话方式与主回复链路保持一致。
 	voice := personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
+	limits := chatSplitLimitsForEvent(cfg, event)
 	// 时段语气这条旁路也要带上：漏了的话同一台机器人两条链路在深夜的语气不一样。
 	// 心情同理——主链路蔫着、旁路却活蹦乱跳，一台机器人像两个人。
-	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, voice, cfg.PersonaMode, cfg) + "\n" + replyLineBreakPrompt(cfg) + "\n" + actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode, cfg) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor(cfg) + "\n" + actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode, cfg))
+	persona := strings.TrimSpace(cfg.SystemPrompt + "\n" + replyPresentationPrompt(!limits.SingleMessage, voice, cfg.PersonaMode, cfg) + "\n" + replyLineBreakPrompt(cfg) + "\n" + replyLineSplitPrompt(limits) + "\n" + actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode, cfg) + "\n" + dayPartToneForConfig(cfg, r.clock()) + "\n" + r.moodToneForConfig(cfg, event.ProfileID) + "\n" + personaClosingAnchor(cfg) + "\n" + actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode, cfg))
 	if persona == "" {
 		return messages
 	}
@@ -182,6 +183,8 @@ func (r *Runtime) writeUserMemory(event MessageEvent, update UserMemoryUpdate) (
 	profile, err := store.UpdateUserMemory(ctx, event, update)
 	if err != nil {
 		log.Printf("diana user memory update failed: %v", err)
+		r.recordBackgroundFailure("user_memory_write_failed", "人员档案写入失败，这次的好感度、画像或互动次数没有记上", "", err,
+			map[string]any{"user_id": event.UserID, "group_id": event.GroupID, "message_id": event.MessageID})
 		return UserMemoryProfile{}, false
 	}
 	return profile, true

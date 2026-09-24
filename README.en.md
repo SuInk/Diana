@@ -219,6 +219,17 @@ go test ./...   # backend tests
 
 Before committing, make sure `gofmt` is clean, `go mod tidy` produces no diff, and backend tests plus frontend `vue-tsc` pass — CI enforces all of these. Project conventions are in [AGENTS.md](./AGENTS.md).
 
+### Pull requests
+
+PRs are very welcome! Bug fixes, docs, and features are all fair game; for larger changes, please open an issue first so we can agree on the approach.
+
+- **One change per PR.** Branch off the latest `main` and keep unrelated edits and reformatting out.
+- **Title describes the actual change**, as `type(scope): user-visible change`, e.g. `fix(onebot): add WebSocket heartbeat so dead connections stop holding the only slot`. Common types: `feat` / `fix` / `security` / `docs` / `chore`. Don't title a PR with just a version or number.
+- **Body covers** what changed, why, the impact on users or developers, and how you verified it; bug fixes also state the root cause. Be upfront about anything you didn't actually run.
+- **Merge only on green CI**: Go tests, frontend build, cross-platform builds, and Docker images must all pass. Update `docs/` or the README when behavior changes.
+- When referencing another PR, include its title or a one-line summary, not just a bare `#123`.
+- No agent attribution trailers such as `Co-Authored-By` in the title or body.
+
 ## Documentation
 
 | | |

@@ -796,3 +796,43 @@ func TestGroupExtensionTierOverridesBotLevelDisable(t *testing.T) {
 		t.Fatal("群级停用没有生效")
 	}
 }
+
+// 群成员一句闲聊不拉起 MCP 底座，那一轮注册表里没有扩展。以前档位目录每轮整份覆盖，
+// 主人会话记下的 MCP 被它冲掉，名单页上就一直看不到。
+func TestResidencyCatalogSurvivesMemberRounds(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	withMCP := func(tools ...string) *agent.ToolRegistry {
+		registry := agent.NewToolRegistry()
+		for _, name := range tools {
+			registry.Register(&scopeTestTool{name: name})
+		}
+		registry.SetExtensionCatalog(stubExtensionCatalog{states: []agent.ExtensionState{
+			{Kind: agent.ExtensionKindMCP, ID: "mcp:demo", Name: "demo", Enabled: true, Tools: []string{"mcp__demo__lookup"}},
+		}})
+		return registry
+	}
+	ids := func() map[string]bool {
+		entries, _ := runtime.AgentResidency("bot-a")
+		out := map[string]bool{}
+		for _, entry := range entries {
+			out[entry.ID] = true
+		}
+		return out
+	}
+	event := MessageEvent{Kind: EventKindGroup, ProfileID: "bot-a", GroupID: "1"}
+	runtime.rememberAgentResidencyCatalog(event, withMCP("web_search", "run_command", "mcp__demo__lookup"), true)
+	runtime.rememberAgentResidencyCatalog(event, agent.NewToolRegistry(&scopeTestTool{name: "web_search"}), false)
+	got := ids()
+	for _, id := range []string{"mcp:demo", agent.ToolResidentID("mcp__demo__lookup"), agent.ToolResidentID("run_command"), agent.ToolResidentID("web_search")} {
+		if !got[id] {
+			t.Fatalf("%s lost after a member round: %v", id, got)
+		}
+	}
+
+	// 主人那一轮以它为准：卸掉的 MCP 要能从名单页消失。
+	runtime.rememberAgentResidencyCatalog(event, agent.NewToolRegistry(&scopeTestTool{name: "web_search"}), true)
+	if got := ids(); got["mcp:demo"] || got[agent.ToolResidentID("run_command")] {
+		t.Fatalf("owner round should replace the catalog: %v", got)
+	}
+}

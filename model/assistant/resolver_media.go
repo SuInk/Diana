@@ -1463,6 +1463,7 @@ func dianaOwnedMediaTempDir(dir string) bool {
 	for _, prefix := range []string{
 		"diana-agent-image-",
 		"diana-bili-video-",
+		renderMediaTempPrefix,
 		"diana-resolver-image-",
 		"diana-resolver-video-",
 	} {

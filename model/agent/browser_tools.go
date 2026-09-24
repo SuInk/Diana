@@ -22,15 +22,15 @@ import (
 
 const defaultScreenshotPath = ".agent-browser/screenshot.png"
 
-// BuiltinBrowserBridge 是内置浏览器的句柄，由 model/browserbox.Manager 实现。
+// BuiltinBrowserBridge 是一台机器人的内置浏览器句柄，由 model/browserbox.Bot 实现。
 //
 // 地址每次调用现取，而不是登记工具时定死：用户在 WebUI 里按下接管之后，
 // 下一条工具调用就该被拒，而不是等机器人重建工具表。
 type BuiltinBrowserBridge interface {
-	// AgentCDPURL 返回可用的调试地址；关着、没起来或有人在接管时返回空串。
-	AgentCDPURL() string
-	// Unavailable 说明现在为什么用不了，这句话会原样交给模型。
-	Unavailable() string
+	// Endpoint 返回可用的调试地址。内置浏览器关着时返回空串和 nil，调用方回落到
+	// 外部 CDP 地址；开着但还没起来时按需拉起；接管中或起不来时返回的错误会原样
+	// 交给模型。
+	Endpoint(ctx context.Context) (string, error)
 }
 
 type browserToolBase struct {
@@ -43,13 +43,14 @@ type browserToolBase struct {
 
 // endpoint 决定这次调用连哪个浏览器。内置浏览器可用时优先用它：它是 Diana
 // 自己的浏览器，登录态留在数据目录里，比一个可能根本没开的外部调试端口有用。
-func (b browserToolBase) endpoint() (string, error) {
+func (b browserToolBase) endpoint(ctx context.Context) (string, error) {
 	if b.builtin != nil {
-		if url := strings.TrimSpace(b.builtin.AgentCDPURL()); url != "" {
-			return strings.TrimRight(url, "/"), nil
+		url, err := b.builtin.Endpoint(ctx)
+		if err != nil {
+			return "", err
 		}
-		if reason := strings.TrimSpace(b.builtin.Unavailable()); reason != "" {
-			return "", errors.New(reason)
+		if url = strings.TrimSpace(url); url != "" {
+			return strings.TrimRight(url, "/"), nil
 		}
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(b.cdpURL), "/")
@@ -320,7 +321,7 @@ return {
 func (b browserToolBase) pageClient(ctx context.Context, pageURL string, newTab bool) (*cdpClient, error) {
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
-	baseURL, err := b.endpoint()
+	baseURL, err := b.endpoint(ctx)
 	if err != nil {
 		return nil, err
 	}

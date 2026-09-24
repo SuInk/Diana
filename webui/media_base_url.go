@@ -92,7 +92,7 @@ func (h *MediaBaseURLHandler) save(c *gin.Context) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.store.SaveLocalMediaBaseURL(c.Request.Context(), baseURL); err != nil {
-		writeError(c, http.StatusInternalServerError, err)
+		logAndWriteError(c, h.logs, http.StatusInternalServerError, "system_media_base_url_save", err, "", nil)
 		return
 	}
 	h.baseURL = baseURL

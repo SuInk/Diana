@@ -1,116 +1,86 @@
 <!-- Copyright (c) 2025-now SuInk. Licensed under the Limited Redistribution License. -->
 <!--
-  浏览器这一页是三档浏览器的唯一入口。以前它们各在一处——内置浏览器在这里、浏览器
-  控制扩展在「设置」里、一次性无头渲染在插件页——而用户要回答的第一个问题恰恰是
-  「我该用哪一档」，三处分开就没人能回答。这里按「谁的浏览器、带不带登录态」并排
-  列出来，配置跟着各自那一档走。
+  浏览器这一页只回答一个问题：机器人用哪个浏览器。
+
+  Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有主人能驱动、
+  能点能输入——区别只在用谁的。一行一个勾选框，打勾就是启用，可以都勾上；都勾上
+  时可以调优先级，排在上面的先用，它用不了时自动换另一个（见 model/browsersource）。一次性无头
+  渲染不在这里：它不带登录态，读公开网页、出图都靠它，一直可用，依赖和参数在插件页
+  的「网页渲染」里。以前三者并排成「三档」，用户得先弄懂三者区别才能开始用。
 -->
 <template>
   <section class="stack">
     <div class="card">
-      <div class="card-head">
+      <div class="card-header">
         <h2>浏览器</h2>
-        <span class="card-sub">三档浏览器，区别在于用谁的浏览器、带不带你的登录态</span>
-      </div>
-      <div class="card-body">
-        <div class="browser-tiers">
-          <button
-            v-for="item in tiers"
-            :key="item.key"
-            class="browser-tier"
-            :class="{ active: tab === item.key }"
-            type="button"
-            @click="tab = item.key"
-          >
-            <span class="browser-tier-name">{{ item.label }}</span>
-            <span class="browser-tier-hint">{{ item.hint }}</span>
-            <span class="browser-tier-who">{{ item.who }}</span>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <template v-if="tab === 'render'">
-      <div class="card">
-        <div class="card-head">
-          <h2>一次性无头渲染</h2>
-          <span class="badge" :class="browserDependency?.available ? 'ok' : 'warn'">
-            {{ browserDependency?.available ? "可用" : "缺浏览器" }}
-          </span>
-          <span class="card-sub">每次开一个全新 profile，用完即删，不带任何登录态</span>
-        </div>
-        <div class="card-body stack">
-          <p class="muted" style="margin: 0; font-size: 13px">
-            Markdown / Mermaid / SVG 出图、PDF 渲染、网页读取与截图走的都是它，链接解析器抓 JS 渲染的页面也一样。
-            因为不带登录态，它是三档里唯一对群成员开放的（工具名 <code class="mono">browser_render</code>）。
-            渲染尺寸、窗口模式这些参数在插件页的「网页渲染」里。
-          </p>
-          <PluginDependencyList
-            :dependencies="browserDependencies"
-            :loading="dependenciesLoading"
-            :busy="busyDependency"
-            @install="installDependency"
-          />
-          <p class="muted" style="margin: 0; font-size: 12.5px">
-            容器里 WebUI 的一键安装会因为进程不是 root 而失败，报错里会附上在宿主机执行的那条命令。
-          </p>
-        </div>
-      </div>
-    </template>
-
-    <template v-if="tab === 'box'">
-    <div class="card">
-      <div class="card-head">
-        <h2>内置浏览器</h2>
-        <span class="badge" :class="status.running ? 'ok' : 'warn'">
-          {{ status.running ? (status.takeover ? "你在操作" : "运行中") : status.settings.enabled ? "未启动" : "未启用" }}
-        </span>
-        <span class="card-sub">Diana 自己的浏览器，登录态留在数据目录里，你随时可以直接上手</span>
+        <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
       </div>
       <div class="card-body stack">
-        <p v-if="!status.available" class="muted" style="margin: 0; font-size: 13px">
-          这台机器上没找到 Chrome/Chromium。容器完整版镜像自带 chromium；slim 版可以在宿主机执行
-          <code class="mono">docker exec -u root &lt;容器名&gt; sh -c 'apt-get update &amp;&amp; apt-get install -y chromium fonts-noto-cjk'</code>。
-        </p>
-        <div class="field">
-          <label class="switch-row">
-            <input v-model="settings.enabled" type="checkbox" :disabled="saving" @change="saveSettings" />
-            <span>启用内置浏览器（关掉会结束进程，登录态仍保留在 profile 目录）</span>
-          </label>
-          <label class="switch-row">
-            <input v-model="settings.headful" type="checkbox" :disabled="saving || !settings.enabled" @change="saveSettings" />
-            <span>开一个真窗口（只有本机有显示器时才有意义；容器里保持关闭，实时画面照常）</span>
-          </label>
+        <!-- 一行一项，打勾就是启用（和「上下文」页的勾选列表同一种写法），按优先级从上往下排；
+             两个都启用时才出现「优先用」，排在上面的先用，它用不了时自动换下一个。 -->
+        <div class="browser-toggle-list">
+          <div v-for="(key, index) in orderedKeys" :key="key" class="browser-toggle-row">
+            <input
+              :id="`browser-source-${key}`"
+              type="checkbox"
+              :checked="sourceState?.[key].enabled"
+              :disabled="savingSource || !sourceState"
+              @change="toggleSource(key, ($event.target as HTMLInputElement).checked)"
+            />
+            <div class="browser-toggle-copy">
+              <div class="browser-toggle-title">
+                <label :for="`browser-source-${key}`">{{ sourceMeta[key].title }}</label>
+                <span v-if="enabledCount > 1 && sourceState?.[key].enabled" class="browser-toggle-rank" :title="`优先级 ${index + 1}`">
+                  第 {{ index + 1 }} 优先
+                </span>
+                <span v-if="sourceState && sourceState.active === key" class="badge ok">正在用</span>
+                <span v-else-if="sourceState?.[key].enabled && sourceState[key].usable" class="badge">备用</span>
+                <span v-else-if="sourceState?.[key].enabled" class="badge warn">{{ key === "box" ? "没找到 Chrome" : "等扩展连接" }}</span>
+              </div>
+              <p class="browser-toggle-desc">{{ sourceMeta[key].hint }}</p>
+              <div v-if="sourceState" class="browser-toggle-meta">
+                <button type="button" :class="{ warn: dependencyProblem(key) }" @click="dependenciesTarget = key">
+                  运行依赖 {{ sourceState[key].dependencies.filter((dep) => dep.available).length }}/{{ sourceState[key].dependencies.length }}
+                </button>
+                <button
+                  v-if="enabledCount > 1 && sourceState[key].enabled && index > 0"
+                  type="button"
+                  :disabled="savingSource"
+                  @click="moveSource(index, -1)"
+                >
+                  <ArrowUp :size="13" aria-hidden="true" />
+                  优先用
+                </button>
+                <a v-if="key === 'extension' && sourceState.extension.enabled && !sourceState.extension.detected" href="/api/browser-control/extension.zip" download>
+                  下载扩展
+                </a>
+              </div>
+              <!-- 内置浏览器的启停和接管属于这一行，别飘在列表外面。 -->
+              <div v-if="key === 'box' && sourceState?.box.enabled && botID" class="browser-toggle-actions">
+                <button class="btn small" type="button" :disabled="busy || status.running" @click="start">启动</button>
+                <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
+                <button
+                  class="btn small"
+                  :class="status.takeover ? 'warn' : 'ghost'"
+                  type="button"
+                  :disabled="busy || !status.running"
+                  @click="toggleTakeover"
+                >
+                  {{ status.takeover ? "交还给机器人" : "我来操作" }}
+                </button>
+                <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="row gap">
-          <button class="btn small" type="button" :disabled="busy || !settings.enabled" @click="start">启动</button>
-          <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
-          <button
-            class="btn small"
-            :class="status.takeover ? 'warn' : 'ghost'"
-            type="button"
-            :disabled="busy || !status.running"
-            @click="toggleTakeover"
-          >
-            {{ status.takeover ? "交还给机器人" : "我来操作" }}
-          </button>
-          <span class="muted" style="font-size: 12.5px">
-            你在画面上点一下就自动接管；交还之前机器人不会碰这个浏览器。
-          </span>
-        </div>
-
-        <p v-if="status.last_error" class="muted" style="margin: 0; font-size: 12.5px">
-          最近一次错误：{{ status.last_error }}
-        </p>
-        <p v-if="status.profile_dir" class="muted" style="margin: 0; font-size: 12.5px">
-          登录态目录：<code class="mono">{{ status.profile_dir }}</code>
+        <p v-if="sourceState?.box.enabled && !botID" class="muted" style="margin: 0; font-size: 13px">
+          每台机器人各用一个内置浏览器，登录态互不相通。在顶部选一台机器人，就能看到它的画面、在里面登录。
         </p>
       </div>
     </div>
-
-    <div v-if="status.running" class="card">
-      <div class="card-head">
+    <div v-if="sourceState?.box.enabled && botID && status.running" class="card">
+      <div class="card-header">
         <h2>画面</h2>
         <span class="card-sub">{{ currentTitle || "空白页" }}</span>
       </div>
@@ -150,28 +120,118 @@
         </p>
       </div>
     </div>
-    </template>
 
-    <BrowserControlPanel v-if="tab === 'control'" />
+    <Modal
+      v-if="dependenciesTarget && sourceState"
+      :title="`${sourceMeta[dependenciesTarget].label} · 运行依赖`"
+      @close="dependenciesTarget = null"
+    >
+      <p class="plugin-dependencies-hint">
+        {{
+          dependenciesTarget === "box"
+            ? "内置浏览器要一个 Chrome/Chromium，中文页面截图要中文字体；显示器只影响能不能开真窗口，没有也能无头跑。"
+            : "扩展装在你自己的 Chrome 里、反向连到这里。勾上「我自己的 Chrome」后，点「下载扩展」拿到扩展源码包。"
+        }}
+      </p>
+      <PluginDependencyList
+        :dependencies="sourceState[dependenciesTarget].dependencies"
+        :loading="detecting"
+        :busy="busyDependency"
+        @install="installDependency"
+      />
+      <template #footer>
+        <button class="btn" type="button" :disabled="detecting" @click="redetect">重新检测</button>
+        <button class="btn primary" type="button" @click="dependenciesTarget = null">完成</button>
+      </template>
+    </Modal>
+
+    <div v-if="sourceState !== null" class="card">
+      <div class="card-header">
+        <h2>操作记录</h2>
+        <span class="card-sub">
+          {{ botID ? "这台机器人" : "所有机器人" }}在浏览器里做过什么、你什么时候启停和接管过；输入的文字只记字数
+        </span>
+        <button class="btn small ghost" type="button" style="margin-left: auto" @click="navigateToView('logs', { q: 'browser' })">
+          查看全部
+        </button>
+      </div>
+      <div class="card-body" style="padding-top: 4px">
+        <article v-for="log in activity" :key="log.id" class="log-row">
+          <span class="log-time">{{ formatTime(log.created_at) }}</span>
+          <div class="log-main">
+            <div class="cluster" style="gap: 6px; margin-bottom: 2px">
+              <span class="badge" :class="log.level === 'error' ? 'err' : log.action === 'browser_action' ? 'ok' : ''">
+                {{ activityWho(log) }}
+              </span>
+              <span class="log-message" style="margin: 0">{{ log.message }}</span>
+              <span v-if="activityTarget(log)" class="muted mono browser-activity-target" :title="activityTarget(log)">
+                {{ activityTarget(log) }}
+              </span>
+            </div>
+            <p v-if="log.detail && log.detail !== log.message" class="log-detail">{{ log.detail }}</p>
+          </div>
+        </article>
+        <p v-if="!activity.length" class="muted" style="margin: 8px 0 0; font-size: 13px">
+          {{ activityLoaded ? "还没有记录。机器人用浏览器、或你在这里启停和接管时会记下来。" : "正在加载……" }}
+        </p>
+      </div>
+    </div>
+    <!-- 开箱即用：默认什么都不用配。其余的（开真窗口、扩展的令牌和网站名单、外接 CDP）
+         都收在这里。 -->
+    <button class="btn ghost small browser-advanced-toggle" type="button" :aria-expanded="advancedOpen" @click="advancedOpen = !advancedOpen">
+      <ChevronDown :size="14" :class="{ 'browser-advanced-open': advancedOpen }" aria-hidden="true" />
+      更多设置
+    </button>
+    <template v-if="advancedOpen">
+      <div class="card">
+        <div class="card-body stack">
+          <div v-if="sourceState?.box.enabled && botID" class="field wide">
+            <label class="switch">
+              <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
+              <span class="track" aria-hidden="true"></span>
+              <span class="switch-label">开一个真窗口</span>
+            </label>
+            <span class="hint">
+              默认按本机条件自动选；无头也有实时画面。这台机器人的登录态在
+              <code class="mono">{{ status.profile_dir }}</code>。
+            </span>
+          </div>
+        </div>
+      </div>
+      <BrowserControlPanel v-if="sourceState?.extension.enabled || preferred === 'extension'" />
+      <AgentBrowserPanel />
+    </template>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import BrowserControlPanel from "../components/BrowserControlPanel.vue";
+import { botScope } from "../bot-scope";
+import { formatTime } from "../format";
+import { navigate as navigateToView } from "../router";
+import { ArrowUp, ChevronDown } from "@lucide/vue";
+import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
+import BrowserControlPanel from "../components/BrowserControlPanel.vue";
 import {
+  browserBoxLiveURL,
+  getBrowserSource,
+  saveBrowserSource,
+  type BrowserSource,
+  type BrowserSourceState,
   installResolverDependency,
   listPluginDependencies,
   type ResolverDependency,
-  browserBoxLiveURL,
   getBrowserBoxStatus,
   saveBrowserBoxSettings,
   setBrowserBoxTakeover,
   startBrowserBox,
   stopBrowserBox,
   type BrowserBoxSettings,
-  type BrowserBoxStatus
+  type BrowserBoxStatus,
+  listBrowserActivity,
+  type AppLogEntry
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 
@@ -182,22 +242,97 @@ interface LiveFrame {
   scale: number;
 }
 
-// 三档并排：名字之外还要说清「用谁的浏览器、谁能驱动」，这正是用户在这一页要
-// 回答的问题。
-const tiers = [
-  { key: "render" as const, label: "一次性无头渲染", hint: "全新 profile，用完即删", who: "群成员也能用" },
-  { key: "box" as const, label: "内置浏览器", hint: "Diana 自己的常驻浏览器", who: "只有主人" },
-  { key: "control" as const, label: "浏览器控制扩展", hint: "你自己日常用的浏览器", who: "只有主人" }
-];
-const tab = ref<(typeof tiers)[number]["key"]>("box");
-
-// 浏览器依赖探测复用插件页那套接口：装不装得上、装在哪，答案只该有一处。
-const sandboxedBrowserPluginID = "official.sandboxed-browser-renderer";
-const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
-const dependenciesLoading = ref(true);
+type SourceKey = Exclude<BrowserSource, "off">;
+const sourceKeys: SourceKey[] = ["box", "extension"];
+const sourceMeta: Record<SourceKey, { label: string; short: string; title: string; hint: string }> = {
+  box: {
+    label: "Diana 内置",
+    short: "内置浏览器",
+    title: "Diana 内置浏览器",
+    hint: "Diana 自己的浏览器，每台机器人一份登录态，你能看画面、随时接管。"
+  },
+  extension: {
+    label: "我自己的 Chrome",
+    short: "你的 Chrome",
+    title: "我自己的 Chrome",
+    hint: "装一个扩展，机器人用你日常 Chrome 的登录态，只能碰你允许的网站。"
+  }
+};
+// null 表示还没读到：读到之前不显示任何一边的配置。
+const sourceState = ref<BrowserSourceState | null>(null);
+const savingSource = ref(false);
+const dependenciesTarget = ref<SourceKey | null>(null);
+const detecting = ref(false);
 const busyDependency = ref("");
-const browserDependencies = computed(() => dependencyGroups.value[sandboxedBrowserPluginID] ?? []);
-const browserDependency = computed(() => browserDependencies.value.find((item) => item.name === "browser") ?? browserDependencies.value[0]);
+
+// 显示器是可选的：没有它照样能无头跑，不算「缺依赖」。
+function dependencyProblem(key: SourceKey): boolean {
+  return (sourceState.value?.[key].dependencies ?? []).some((dep) => !dep.available && dep.name !== "display");
+}
+
+// 选中的那个：排在第一位、而且开着。都关着就是 null，页面显示「浏览器关着」。
+const preferred = computed<SourceKey | null>(() => {
+  const state = sourceState.value;
+  if (!state) return null;
+  const first = state.order[0];
+  if (first && state[first].enabled) return first;
+  const next = state.order.find((key) => state[key].enabled);
+  return next ?? null;
+});
+
+// 重新检测复用插件页那套：刷新浏览器探测的缓存，再把这一页的状态读一遍。
+async function redetect(): Promise<void> {
+  detecting.value = true;
+  try {
+    await listPluginDependencies(true);
+    await loadSource();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "检测失败");
+  } finally {
+    detecting.value = false;
+  }
+}
+
+async function installDependency(dependency: ResolverDependency): Promise<void> {
+  busyDependency.value = dependency.name;
+  try {
+    await installResolverDependency(dependency.name);
+    toastSuccess(`已安装 ${dependency.name}`);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : `安装 ${dependency.name} 失败`);
+  } finally {
+    busyDependency.value = "";
+    await redetect();
+  }
+}
+// 当前机器人。页面按作用域重建（App 里 KeepAlive 以它为 key），这里取挂载时的值即可。
+// 空串是「全部机器人」：各台的浏览器互相隔离，没法合在一起显示。
+const botID = botScope.value;
+const activity = ref<AppLogEntry[]>([]);
+const activityLoaded = ref(false);
+
+function activityWho(log: AppLogEntry): string {
+  if (log.action === "browser_action") return "机器人";
+  if (log.action === "browser_control_connect" || log.action === "browser_control_disconnect") return "扩展";
+  return "你";
+}
+
+// 只有网址和元素值得显示：启停、接管那几条的 target 是机器人 ID，页面上已经知道了。
+function activityTarget(log: AppLogEntry): string {
+  return log.action === "browser_action" || log.action === "browser_box_navigate" ? (log.target ?? "") : "";
+}
+
+// 操作记录跟着状态一起刷：机器人正在用浏览器时，这里应当看得见它刚做了什么。
+async function loadActivity(): Promise<void> {
+  try {
+    activity.value = (await listBrowserActivity(botID || undefined, 20)).logs;
+  } catch {
+    // 记录只是辅助信息，读不到不打断这一页。
+  } finally {
+    activityLoaded.value = true;
+  }
+}
+const advancedOpen = ref(false);
 
 const status = reactive<BrowserBoxStatus>({
   settings: { enabled: false },
@@ -216,39 +351,50 @@ const busy = ref(false);
 let socket: WebSocket | null = null;
 let statusTimer: number | undefined;
 
-async function loadDependencies(refresh = false): Promise<void> {
-  dependenciesLoading.value = true;
+async function loadSource(): Promise<void> {
   try {
-    const response = await listPluginDependencies(refresh);
-    dependencyGroups.value = response.plugins;
-  } catch {
-    // 依赖探测只是辅助信息，失败不该打断这一页。
-    dependencyGroups.value = {};
-  } finally {
-    dependenciesLoading.value = false;
+    sourceState.value = await getBrowserSource();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "读取浏览器来源失败");
   }
 }
 
-async function installDependency(dependency: ResolverDependency): Promise<void> {
-  busyDependency.value = dependency.name;
+async function patchSource(patch: Parameters<typeof saveBrowserSource>[0]): Promise<void> {
+  savingSource.value = true;
   try {
-    const result = await installResolverDependency(dependency.name);
-    dependencyGroups.value = { ...dependencyGroups.value, ...result.plugins };
-    toastSuccess(`已安装 ${dependency.name}`);
-  } catch (error) {
-    toastError(error instanceof Error ? error.message : `安装 ${dependency.name} 失败`);
-    await loadDependencies(true);
+    sourceState.value = await saveBrowserSource(patch);
+    await refresh();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "保存浏览器设置失败");
+    await loadSource();
   } finally {
-    busyDependency.value = "";
+    savingSource.value = false;
   }
+}
+
+// 打勾只管启用，不动顺序；顺序用「优先用」调。
+function toggleSource(key: SourceKey, checked: boolean): void {
+  void patchSource(key === "box" ? { box_enabled: checked } : { extension_enabled: checked });
+}
+
+// 按优先级排的行；还没读到时按默认顺序。
+const orderedKeys = computed<SourceKey[]>(() => sourceState.value?.order ?? sourceKeys);
+const enabledCount = computed(() => sourceKeys.filter((key) => sourceState.value?.[key].enabled).length);
+
+function moveSource(index: number, delta: -1 | 1): void {
+  const order = [...orderedKeys.value];
+  const target = index + delta;
+  if (target < 0 || target >= order.length) return;
+  [order[index], order[target]] = [order[target], order[index]];
+  void patchSource({ order });
 }
 
 async function refresh(): Promise<void> {
   try {
-    const next = await getBrowserBoxStatus();
+    const next = await getBrowserBoxStatus(botID || undefined);
     Object.assign(status, next);
     Object.assign(settings, next.settings);
-    if (next.running && !socket) connectLive();
+    if (next.running && !socket && botID) connectLive();
     if (!next.running && socket) disconnectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "读取内置浏览器状态失败");
@@ -258,10 +404,10 @@ async function refresh(): Promise<void> {
 async function saveSettings(): Promise<void> {
   saving.value = true;
   try {
-    const result = await saveBrowserBoxSettings({ ...settings });
+    const result = await saveBrowserBoxSettings({ ...settings }, botID || undefined);
     Object.assign(status, result.status);
     Object.assign(settings, result.settings);
-    if (status.running) connectLive();
+    if (status.running && botID) connectLive();
     else disconnectLive();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "保存失败");
@@ -274,7 +420,7 @@ async function saveSettings(): Promise<void> {
 async function start(): Promise<void> {
   busy.value = true;
   try {
-    const result = await startBrowserBox();
+    const result = await startBrowserBox(botID);
     Object.assign(status, result.status);
     connectLive();
   } catch (err) {
@@ -287,7 +433,7 @@ async function start(): Promise<void> {
 async function stop(): Promise<void> {
   busy.value = true;
   try {
-    const result = await stopBrowserBox();
+    const result = await stopBrowserBox(botID);
     Object.assign(status, result.status);
     disconnectLive();
   } catch (err) {
@@ -300,7 +446,7 @@ async function stop(): Promise<void> {
 async function toggleTakeover(): Promise<void> {
   busy.value = true;
   try {
-    const result = await setBrowserBoxTakeover(!status.takeover);
+    const result = await setBrowserBoxTakeover(botID, !status.takeover);
     status.takeover = result.active;
   } catch (err) {
     toastError(err instanceof Error ? err.message : "切换失败");
@@ -311,7 +457,7 @@ async function toggleTakeover(): Promise<void> {
 
 function connectLive(): void {
   disconnectLive();
-  const ws = new WebSocket(browserBoxLiveURL());
+  const ws = new WebSocket(browserBoxLiveURL(botID));
   socket = ws;
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data) as { type: string; frame?: LiveFrame; tab?: { url?: string; title?: string } };
@@ -422,8 +568,14 @@ function navigate(): void {
 
 onMounted(() => {
   void refresh();
-  void loadDependencies();
-  statusTimer = window.setInterval(() => void refresh(), 5000);
+  void loadSource();
+  void loadActivity();
+  // 扩展连上、断开或被接管都会改变「这一轮用哪个」，跟着状态一起刷。
+  statusTimer = window.setInterval(() => {
+    void refresh();
+    void loadSource();
+    void loadActivity();
+  }, 5000);
 });
 
 onBeforeUnmount(() => {
@@ -433,38 +585,134 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.browser-tiers {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+.browser-activity-target {
+  font-size: 11.5px;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.browser-tier {
+.browser-toggle-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  text-align: left;
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.3));
-  border-radius: 10px;
-  background: transparent;
+}
+
+/* 一行一项：勾选框在行首，和标题第一行对齐；右边是标题、说明、小链接。 */
+.browser-toggle-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.browser-toggle-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.browser-toggle-row:last-child {
+  padding-bottom: 0;
+}
+
+.browser-toggle-row > input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 4px 0 0;
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
-.browser-tier.active {
-  border-color: var(--accent, #7a5cff);
-  background: color-mix(in srgb, var(--accent, #7a5cff) 10%, transparent);
-}
-
-.browser-tier-name {
+.browser-toggle-title label {
   font-weight: 600;
-  font-size: 13.5px;
+  cursor: pointer;
 }
 
-.browser-tier-hint,
-.browser-tier-who {
+.browser-toggle-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.browser-toggle-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 24px;
+  font-size: 14px;
+}
+
+.browser-toggle-rank {
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--muted);
+}
+
+.browser-toggle-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.browser-toggle-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12.5px;
+}
+
+.browser-toggle-meta button,
+.browser-toggle-meta a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.browser-toggle-meta button.warn {
+  color: var(--warn);
+}
+
+.browser-toggle-meta button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.browser-toggle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.browser-toggle-error {
+  font-size: 12.5px;
+  color: var(--warn);
+}
+
+.browser-advanced-toggle {
+  align-self: flex-start;
+}
+
+.browser-advanced-toggle > svg {
+  transition: transform 0.15s ease;
+}
+
+.browser-advanced-open {
+  transform: rotate(180deg);
 }
 
 .browser-stage {

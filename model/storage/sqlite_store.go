@@ -18,6 +18,7 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browserctl"
+	"github.com/SuInk/diana/model/browsersource"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/llmauth"
 	"github.com/SuInk/diana/model/updater"
@@ -46,6 +47,7 @@ const (
 	inboundRecoveryKey   = "bot_inbound_recovery_checkpoint"
 	browserControlKey    = "browser_control"
 	browserBoxKey        = "browser_box"
+	browserSourceKey     = "browser_source"
 )
 
 type SQLiteStore struct {
@@ -329,6 +331,18 @@ func (s *SQLiteStore) SaveBrowserControl(ctx context.Context, doc browserctl.Doc
 	return s.saveJSON(ctx, browserControlKey, doc)
 }
 
+// LoadBrowserSource 读取浏览器来源的优先级。
+func (s *SQLiteStore) LoadBrowserSource(ctx context.Context) (browsersource.Settings, bool, error) {
+	var doc browsersource.Settings
+	ok, err := s.loadJSON(ctx, browserSourceKey, &doc)
+	return doc, ok, err
+}
+
+// SaveBrowserSource 保存浏览器来源的优先级。
+func (s *SQLiteStore) SaveBrowserSource(ctx context.Context, doc browsersource.Settings) error {
+	return s.saveJSON(ctx, browserSourceKey, doc)
+}
+
 // LoadBrowserBox 读取内置浏览器的配置。
 func (s *SQLiteStore) LoadBrowserBox(ctx context.Context) (browserbox.Document, bool, error) {
 	var doc browserbox.Document
@@ -473,6 +487,9 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, t
 		return err
 	}
 	if err := s.ensureStickerAssets(); err != nil {
+		return err
+	}
+	if err := s.migrateRelationshipEvaluations(); err != nil {
 		return err
 	}
 	s.historyFTS = ensureMessageHistoryFTS(s.db)

@@ -259,6 +259,25 @@ func (c *MultiChannel) ChannelStatuses() []ChannelStatus {
 	return statuses
 }
 
+// ConnectionStatuses 每条物理连接返回一份状态，复用同一连接的几台机器人只算一次，
+// 身份取这条连接上的第一台。
+func (c *MultiChannel) ConnectionStatuses() []ChannelStatus {
+	if c == nil {
+		return nil
+	}
+	groups := c.connectionGroups()
+	statuses := make([]ChannelStatus, 0, len(groups))
+	for _, group := range groups {
+		binding := group[0]
+		status := binding.Channel.Status()
+		status.ProfileID = binding.ProfileID
+		status.Platform = binding.Platform
+		status.Name = binding.Name
+		statuses = append(statuses, status)
+	}
+	return statuses
+}
+
 func (c *MultiChannel) Close() error {
 	if c == nil {
 		return nil

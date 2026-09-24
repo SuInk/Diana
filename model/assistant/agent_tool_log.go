@@ -114,6 +114,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			Target:   target,
 			Metadata: metadata,
 		})
+		r.recordBrowserAction(writer, event, runEvent)
 		if runEvent.Phase != agent.RunPhaseModelCompleted {
 			toolOutput := runEvent.ToolOutput
 			toolInput := runEvent.ToolInput

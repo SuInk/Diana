@@ -77,6 +77,17 @@ func publicChatErrorMessage(err error) string {
 	if strings.Contains(lower, "output is empty") {
 		return withProviderAttemptLabel("上游模型服务暂时没有返回有效内容，请稍后重试。", err)
 	}
+	// 下面几条原样发出去是「unexpected EOF」「Invalid image data」这种英文报错，
+	// 群友看不懂也不知道该怎么办。
+	if errors.Is(err, errImageEditSourceNotFound) {
+		return "没有找到要编辑的图片。请重新发送图片，或直接引用那张图片再说要怎么改。"
+	}
+	if strings.Contains(lower, "invalid_image_file") || strings.Contains(lower, "invalid image data") {
+		return withProviderAttemptLabel("图片接口拒绝了这张原图（格式不受支持或数据已损坏）。请换成 PNG 或 JPEG 图片后重试。", err)
+	}
+	if strings.Contains(lower, "unexpected eof") || strings.Contains(lower, "connection reset by peer") {
+		return withProviderAttemptLabel("和上游服务的连接中途断开了，请稍后重试。", err)
+	}
 	return sanitizePublicErrorDetail(raw)
 }
 

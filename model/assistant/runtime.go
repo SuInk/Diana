@@ -21,6 +21,7 @@ import (
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
+	"github.com/SuInk/diana/model/browsersource"
 	"github.com/SuInk/diana/model/llm"
 
 	"github.com/google/uuid"
@@ -259,6 +260,10 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "error", "回复生成失败；当前机器人已关闭错误提示，错误仅记录到事件与日志", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
+	case "ignored_bot_muted":
+		return "not_replied", "机器人在本群被禁言，暂停回复：消息已记入上下文，没有做回复判断和生成", false
+	case "ignored_bot_muted_judged":
+		return "not_replied", "机器人在本群被禁言：回复判断认为这条该回，但暂停期间不生成也不发送", false
 	case "ignored_member_level":
 		return "not_replied", "发送者群等级低于该群设置的最低回复等级", false
 	case "ignored_response_suppression":
@@ -322,6 +327,9 @@ type Runtime struct {
 	// promptCacheProbe 记住每个会话上一次请求的分段指纹，用来定位前缀缓存在哪里断的。
 	// 自带锁，不受 mu 保护。
 	promptCacheProbe promptCacheProbeStore
+	// imageEditSources 记住每个会话最近一次改图用的原图，「重试」「继续」时靠它
+	// 找回原图。自带锁，不受 mu 保护。
+	imageEditSources imageEditSourceMemory
 	profileConfigs   map[string]BotConfig
 	// disabledProfiles 是配置集里已停用的档案 ID。停用只把档案从通道 bindings 里
 	// 摘掉，共享连接本身可能还活着（别的档案在用它），入站这边要自己认一次。
@@ -335,9 +343,9 @@ type Runtime struct {
 	bridges  map[string]*NoneBotBridge
 	plugins  *PluginManager
 	llmStore LLMProfileStore
-	// llmCapability 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
+	// llmDowngrades 落盘「哪个端点的哪个模型拒过哪些请求字段」，重启后
 	// 不必重新学。
-	llmCapability LLMCapabilityStore
+	llmDowngrades LLMDowngradeStore
 	modelLister   LLMModelLister
 	appLogs       applog.Writer
 	messageStore  MessageHistoryStore
@@ -405,7 +413,8 @@ type Runtime struct {
 	eventListener             EventListener
 	privateMessageInterceptor PrivateMessageInterceptor
 	browserControl            agent.BrowserControlBridge
-	browserBox                agent.BuiltinBrowserBridge
+	browserBox                BuiltinBrowserProvider
+	browserSource             func() string
 	media                     *MediaStore
 	members                   *memberCache
 	now                       func() time.Time
@@ -465,7 +474,9 @@ type Runtime struct {
 	// 被撤回和系统提示占用，不限流的话这类正常跳号会把回补请求刷爆。
 	liveSeqProbedAt map[string]time.Time
 	// groupQuota 缓存按群额度的用量读数，避免每条消息都去扫一遍用量日志。
-	groupQuota          groupModelQuotaCache
+	groupQuota groupModelQuotaCache
+	// replySampleRoll 给回复抽样掷一次 [0,100) 的点数；为 nil 时用 math/rand，测试里替换。
+	replySampleRoll     func() int
 	seqGapActive        atomic.Int32
 	historyBackfillBusy atomic.Bool
 	historyFetchMu      sync.Mutex
@@ -510,6 +521,8 @@ type Runtime struct {
 	replyTurns              map[string]replyTurnRecord
 	replyBatches            map[string]*replyBatchGate
 	unavailableGroupMu      sync.RWMutex
+	botMuteMu               sync.RWMutex
+	botMutes                map[string]botMuteState
 	unavailableGroups       map[string]unavailableGroupSend
 	outboundDeliveryMu      sync.Mutex
 	outboundDeliveries      map[string]*groupOutboundDelivery
@@ -529,6 +542,10 @@ type Runtime struct {
 	agentRegistryCache      map[string]*agent.ToolRegistry
 	agentResidencyMu        sync.RWMutex
 	agentResidencyCatalog   map[string][]AgentResidencyEntry
+	// agentFootprints 记最近一轮 Agent 的常驻开销，键见 agentFootprintKey。
+	agentFootprints map[string]agentFootprint
+	// backgroundLogThrottle 给后台事件的运行日志节流，见 recordBackgroundFailure。
+	backgroundLogThrottle logThrottle
 }
 
 // SetGroupConfigStore 注入群级配置存储，运行时会按消息所在群合并群配置。
@@ -552,32 +569,71 @@ func (r *Runtime) SetBrowserControl(bridge agent.BrowserControlBridge) {
 	r.mu.Unlock()
 }
 
+// BuiltinBrowserProvider 按机器人交出内置浏览器，由 model/browserbox.Manager 实现。
+// 每台机器人各有一份登录态，A 机器人拿到的句柄碰不到 B 机器人的浏览器。
+type BuiltinBrowserProvider interface {
+	BrowserFor(botID string) agent.BuiltinBrowserBridge
+}
+
 // SetBrowserBox 注入内置浏览器。没注入时 browser_* 那组工具沿用机器人配置里的
 // 外部 CDP 地址，行为和加这一档之前一样。
-func (r *Runtime) SetBrowserBox(bridge agent.BuiltinBrowserBridge) {
+func (r *Runtime) SetBrowserBox(provider BuiltinBrowserProvider) {
 	r.mu.Lock()
-	r.browserBox = bridge
+	r.browserBox = provider
 	r.mu.Unlock()
 }
 
-// browserBoxFor 交出内置浏览器的句柄。用户在「浏览器」页把它打开就算数，不再要求
+// SetBrowserSource 注入浏览器来源的读取函数（见 browsersource）。没注入时内置浏览器
+// 和扩展都按各自的开关登记，行为和加这个选择之前一样。
+func (r *Runtime) SetBrowserSource(current func() string) {
+	r.mu.Lock()
+	r.browserSource = current
+	r.mu.Unlock()
+}
+
+// browserSourceAllows 判断当前来源是否是 source。没注入来源时一律放行。
+func (r *Runtime) browserSourceAllows(source string) bool {
+	r.mu.RLock()
+	current := r.browserSource
+	r.mu.RUnlock()
+	return current == nil || current() == source
+}
+
+// defaultAgentBrowserCDPURL 是没配外部浏览器时的 CDP 地址。配置里总会带着它，
+// 所以「机器人自己配了外部浏览器」只能按「和它不同」来认。
+const defaultAgentBrowserCDPURL = "http://127.0.0.1:9222"
+
+// browserToolsDisabledFor 决定 browser_open 那组 CDP 工具登不登记。它们接的是内置
+// 浏览器，所以跟着「Diana 内置」走；例外是机器人自己改过外部 CDP 地址——那是
+// 显式指定的浏览器，不该被全局选择悄悄收走。
+func (r *Runtime) browserToolsDisabledFor(cfg BotConfig) bool {
+	if cdpURL := strings.TrimSpace(cfg.AgentBrowserCDPURL); cdpURL != "" && cdpURL != defaultAgentBrowserCDPURL {
+		return false
+	}
+	return !r.browserSourceAllows(browsersource.Box)
+}
+
+// browserBoxFor 交出这台机器人自己的内置浏览器。用户在「浏览器」页把它打开就算数，不再要求
 // 每台机器人另点一次开关——那一步挡的是「登录态被借走」，而这件事由身份挡得更准：
 // browser_* 不在非主人的工具白名单里，只有主人能驱动它。想让某台机器人彻底碰不到，
 // 把这一档显式关掉。
 func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
-	if cfg.AgentBrowserBoxDisabled {
+	if cfg.AgentBrowserBoxDisabled || !r.browserSourceAllows(browsersource.Box) {
 		return nil
 	}
 	r.mu.RLock()
-	bridge := r.browserBox
+	provider := r.browserBox
 	r.mu.RUnlock()
-	return bridge
+	if provider == nil {
+		return nil
+	}
+	return provider.BrowserFor(cfg.ID)
 }
 
-// browserControlFor 只在两边都点头时才把控制面交出去：全局注入了控制面，
-// 并且这台机器人自己那档开关也开着。
+// browserControlFor 只在都点头时才把控制面交出去：全局注入了控制面、浏览器来源
+// 选的是扩展，并且这台机器人自己那档开关也开着。
 func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
-	if !cfg.AgentBrowserControlEnabled {
+	if !cfg.AgentBrowserControlEnabled || !r.browserSourceAllows(browsersource.Extension) {
 		return nil
 	}
 	r.mu.RLock()
@@ -830,12 +886,16 @@ func (r *Runtime) Start(parent context.Context) error {
 			r.runRomanceGreetingLoop(ctx)
 		}()
 		go func() {
-			defer recoverGoroutinePanic("runtime.llmCapabilityProbeLoop")
-			r.runLLMCapabilityProbeLoop(ctx)
+			defer recoverGoroutinePanic("runtime.llmDowngradeMemoLoop")
+			r.runLLMDowngradeMemoLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.pendingDirectMessagePurgeLoop")
 			r.runPendingDirectMessagePurgeLoop(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.channelWatch")
+			r.runChannelWatch(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
@@ -1412,6 +1472,12 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.ReplyPreserveLineBreaks != nil {
 		cfg.ReplyPreserveLineBreaks = copyBoolPointer(groupCfg.ReplyPreserveLineBreaks)
 	}
+	if groupCfg.ReplyLineSplitEnabled != nil {
+		cfg.ReplyLineSplitEnabled = copyBoolPointer(groupCfg.ReplyLineSplitEnabled)
+	}
+	if groupCfg.TypingDelayEnabled != nil {
+		cfg.TypingDelayEnabled = copyBoolPointer(groupCfg.TypingDelayEnabled)
+	}
 	cfg.ReplyMaxBubbles = groupCfg.ReplyMaxBubbles
 	if groupCfg.ReplyMergeConfidencePercent > 0 {
 		cfg.ReplyMergeConfidencePercent = groupCfg.ReplyMergeConfidencePercent
@@ -1447,6 +1513,19 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	if strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria) != "" {
 		cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(groupCfg.ProactiveReplyExtraCriteria)
+	}
+	cfg.sendRetrySettings = groupCfg.sendRetrySettings.withFallback(cfg.sendRetrySettings)
+	if groupCfg.MutedReplyPauseEnabled != nil {
+		cfg.MutedReplyPauseEnabled = copyBoolPointer(groupCfg.MutedReplyPauseEnabled)
+	}
+	if groupCfg.MutedVoiceTranscriptionEnabled != nil {
+		cfg.MutedVoiceTranscriptionEnabled = copyBoolPointer(groupCfg.MutedVoiceTranscriptionEnabled)
+	}
+	if groupCfg.MutedImageDescriptionEnabled != nil {
+		cfg.MutedImageDescriptionEnabled = copyBoolPointer(groupCfg.MutedImageDescriptionEnabled)
+	}
+	if groupCfg.MutedReplyJudgmentEnabled != nil {
+		cfg.MutedReplyJudgmentEnabled = copyBoolPointer(groupCfg.MutedReplyJudgmentEnabled)
 	}
 	if groupCfg.ReplyGate != nil {
 		// 门槛整份用群里的（界面上那个「为本群单独设置回复规则」开关就是这个意思），
@@ -1543,6 +1622,21 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
+	event, text, handled, outcome := r.routeMessageEvent(ctx, event)
+	if handled && event.mutedJudgeOnly != "" {
+		// 被禁言但照常做了回复判断，判断认为该回：到这里为止，不生成也不发送。
+		event.routingReason = event.mutedJudgeOnly + "；回复判断认为这条该回，暂停期间不生成也不发送"
+		r.record(r.decisionEventRecord(event, text, "ignored_bot_muted_judged"))
+		if !event.mutedSkipImages {
+			r.enqueueHistoryImageDescriptions(event)
+		}
+		return event, text, false, "ignored_bot_muted_judged"
+	}
+	return event, text, handled, outcome
+}
+
+// routeMessageEvent 做入站预处理和回复判断，决定这条消息要不要回复。
+func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
 	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, event), event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
@@ -1557,7 +1651,9 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	r.forwardToBridge(event)
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
-	event = r.prepareIncomingVoice(ctx, event)
+	if !r.skipVoiceTranscriptionWhileMuted(event) {
+		event = r.prepareIncomingVoice(ctx, event)
+	}
 	if r.effectiveConfigForEvent(event).AgentEnabled {
 		event = r.prepareCurrentEventImages(ctx, event)
 	} else {
@@ -1608,6 +1704,29 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		r.record(r.decisionEventRecord(event, text, outcome))
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
+	}
+	// 机器人在本群被禁言：和上面一样只记上下文，跳过所有花 token 的环节。解禁后
+	// 从新消息开始回复，这期间的消息不补发。放在额度检查之前：它只查本地状态。
+	if reason, muted := r.botMutedForReply(event); muted {
+		cfg := r.effectiveConfigForEvent(event)
+		event.mutedSkipImages = !cfg.mutedImageDescriptionEnabled()
+		if cfg.mutedReplyJudgmentEnabled() {
+			// 照常判断，只是不生成不发送：判断结果留在事件页上，由 prepareMessageEvent
+			// 在最后收住。判断要花 token，所以下面的群额度照样管。
+			event.mutedJudgeOnly = reason
+		} else {
+			r.enqueueEventMemory(event, memoryEventText(event))
+			if profile, stored := r.updateUserMemory(event, 0); stored {
+				event.userProfile = profile
+				event.userProfileLoaded = true
+			}
+			if !event.mutedSkipImages {
+				r.enqueueHistoryImageDescriptions(event)
+			}
+			event.routingReason = reason
+			r.record(r.decisionEventRecord(event, text, "ignored_bot_muted"))
+			return event, text, false, "ignored_bot_muted"
+		}
 	}
 	// 群额度用完：和「这个群没开放」走同一条路——消息照样进历史、进长期记忆和用户
 	// 画像，但所有要花 token 的环节全部跳过。额度是按窗口滚动的，到点自己恢复，
@@ -1661,7 +1780,9 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 	event.replyHistoryLoaded = true
 	ctx = r.withIdentityPrivacyContext(ctx, event, history)
 	finishWithoutReply := func(outcome string) (MessageEvent, string, bool, string) {
-		r.enqueueHistoryImageDescriptions(event)
+		if !event.mutedSkipImages {
+			r.enqueueHistoryImageDescriptions(event)
+		}
 		return event, text, false, outcome
 	}
 	if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, event); ignored {
@@ -1722,6 +1843,12 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		// 已经回这个账号回得很密了，主动接话直接放掉，连路由模型也不必调。
 		if verdict := r.replyDampingJudge(event, text, true, time.Now()); considerProactive && verdict.Skip {
 			considerProactive, proactiveSkipReason = false, verdict.Reason
+		}
+		// 回复抽样同样挡在路由模型之前：没抽中的消息一次模型调用都不花。
+		if considerProactive {
+			if reason, skip := r.groupReplySampleSkips(event); skip {
+				considerProactive, proactiveSkipReason = false, reason
+			}
 		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
@@ -1942,6 +2069,12 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 				setEventRecordOutcome(&record, "ignored_unavailable_group")
 				r.record(record)
 				return "ignored_unavailable_group", nil
+			case errors.Is(err, errBotMuted):
+				// 回复生成后才发现被禁言（错过了禁言通知）。不重试：解禁后补发一条
+				// 过时的回复比不发更怪。
+				setEventRecordOutcome(&record, "ignored_bot_muted")
+				r.record(record)
+				return "ignored_bot_muted", nil
 			case errors.Is(err, errOutboundDeliveryDropped):
 				// 只有通道在线时仍持续失败才是终态；离线期间的丢弃说明失败
 				// 窗口是被断连耗尽的，恢复后必须把这条回复补出去。
@@ -1965,10 +2098,16 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 		}
 		// 错误提示开关控制所有面向聊天的诊断消息。关闭后仍保留完整事件、
 		// LastError 和应用日志，但不把 LLM、Agent、工具或协议错误发进群聊/私聊。
-		if !boolValue(r.effectiveConfigForEvent(event).ErrorNotifyEnabled, true) {
-			setEventRecordOutcome(&record, "error_silent")
-			r.record(record)
-			return "error_silent", nil
+		// 关闭时可以另开「出错时仍用人设回一句」，让模型按人设说一句：看起来是正常说话，不是报错；
+		// 模型这时本身用不了或改写失败就保持静默，绝不退回错误原文。
+		errorCfg := r.effectiveConfigForEvent(event)
+		personaOnly := !boolValue(errorCfg.ErrorNotifyEnabled, true)
+		if personaOnly {
+			if _, _, _, ok := rejectionNoticeRewriteSource(err, errorCfg.PromptOverrides); !ok || !boolValue(errorCfg.ErrorPersonaReplyEnabled, false) {
+				setEventRecordOutcome(&record, "error_silent")
+				r.record(record)
+				return "error_silent", nil
+			}
 		}
 		publicDetail := publicChatErrorMessage(err)
 		// 同一会话正在连续失败时，这条并进稍后那条汇总，不再单独刷一遍报错。
@@ -1977,9 +2116,13 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 			r.record(record)
 			return "error_notice_merged", nil
 		}
-		notice := r.effectiveConfigForEvent(event).ErrorReplyPrefix + publicDetail
+		notice := errorCfg.ErrorReplyPrefix + publicDetail
 		if rewritten, ok := r.rewriteRejectionNotice(replyCtx, event, err); ok {
 			notice = rewritten
+		} else if personaOnly {
+			setEventRecordOutcome(&record, "error_silent")
+			r.record(record)
+			return "error_silent", nil
 		}
 		_, acknowledged, sendErr := r.sendErrorNoticeWithEvidence(replyCtx, event, notice)
 		if sendErr != nil {
@@ -1995,6 +2138,11 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 				setEventRecordOutcome(&record, "ignored_unavailable_group")
 				r.record(record)
 				return "ignored_unavailable_group", nil
+			}
+			if errors.Is(sendErr, errBotMuted) {
+				setEventRecordOutcome(&record, "ignored_bot_muted")
+				r.record(record)
+				return "ignored_bot_muted", nil
 			}
 			if errors.Is(sendErr, errOutboundDeliveryDropped) {
 				setEventRecordOutcome(&record, "dropped_outbound_delivery")
@@ -3616,6 +3764,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if platform := NormalizePlatformID(event.Platform); platform == PlatformTelegram || IsOneBotPlatform(platform) {
 				if _, settings, enabled := r.pluginWithSettingsForEvent(fileDeliveryPluginID, event); enabled {
 					extraTools = append(extraTools, newDianaFileDeliveryTool(r, event, settings, relationship))
+					if settings.Bool(fileDeliverySettingRenderMedia, true) {
+						extraTools = append(extraTools, newDianaRenderMediaTool(r, event, settings, relationship))
+					}
 				}
 			}
 			// 图片溯源同样按插件开关走：反查要把图片上传给第三方图库，不是每个
@@ -3742,10 +3893,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 					return reply, nil
 				}
 				queued, err := r.enqueueImageReplyTask(ctx, event, relationship, "edit", intent.Prompt, "")
-				if err != nil {
+				switch {
+				case errors.Is(err, errImageEditSourceNotFound):
+					// 找不到原图就别受理：让这一轮回复直接请用户补图，而不是先说
+					// 「在画了」再补一条失败通知。
+					asyncImageTaskNotice = imageEditSourceMissingInstruction
+				case err != nil:
 					return "", err
+				default:
+					asyncImageTaskNotice = asyncImageReplyInstruction(queued, cfg)
 				}
-				asyncImageTaskNotice = asyncImageReplyInstruction(queued, cfg)
 			}
 		}
 	}
@@ -4392,6 +4549,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
 			BrowserControl:             r.browserControlFor(cfg),
 			BuiltinBrowser:             r.browserBoxFor(cfg),
+			BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
 		registry := preparedRegistry
@@ -4407,7 +4565,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
-		r.rememberAgentResidencyCatalog(event, registry)
+		r.rememberAgentResidencyCatalog(event, registry, relationship.Owner)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.Owner) {
@@ -4420,6 +4578,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			return "", err
 		}
+		r.rememberAgentFootprint(event, agentRunner)
 		if ownsRegistry {
 			defer agentRunner.Close()
 		}
@@ -5901,7 +6060,7 @@ func collectNestedForwardIDs(value any, depth int, out *[]string, seen map[strin
 			collectNestedForwardIDs(inline, depth+1, out, seen)
 			return
 		}
-		// node 段、以及 NapCat 直接返回的完整消息对象，内容都可能挂在这几个键下。
+		// node 段、以及部分实现直接返回的完整消息对象，内容都可能挂在这几个键下。
 		for _, container := range []map[string]any{item, data} {
 			for _, key := range []string{"content", "message", "messages", "forward"} {
 				if nested, ok := container[key]; ok {
@@ -8303,18 +8462,22 @@ func splitChatReply(reply string, limits chatSplitLimits) []string {
 		return nil
 	}
 	var out []string
-	for _, segment := range strings.Split(reply, notificationSplitMarker) {
-		segment = strings.TrimSpace(restoreExplicitReplyLines(segment))
-		segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
-		if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
-			segment = collapseReplyBlankLinesOutsideCode(segment)
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		part = strings.TrimSpace(restoreExplicitReplyLines(part))
+		pieces := []string{part}
+		if limits.LineSplit && !limits.MarkerOnly {
+			pieces = splitReplyLinesKeepingLists(part)
 		}
-		if segment == "" {
-			continue
-		}
-		// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
-		for _, chunk := range chunkTextByLength(segment, limits.ChunkSize) {
-			out = append(out, chunk)
+		for _, segment := range pieces {
+			segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
+			if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
+				segment = collapseReplyBlankLinesOutsideCode(segment)
+			}
+			if segment == "" {
+				continue
+			}
+			// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
+			out = append(out, chunkTextByLength(segment, limits.ChunkSize)...)
 		}
 	}
 	return out
@@ -8349,6 +8512,9 @@ type chatSplitLimits struct {
 	PreserveBlankLines bool
 	// Document 表示这条回复是一份行程、清单或方案：按小节分条，不按行分。
 	Document bool
+	// LineSplit 让消息内的每次换行另起一条，列表、表格和代码块整块不拆。
+	// 单条发送和闲聊插话（MarkerOnly）下不生效。
+	LineSplit bool
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
@@ -8360,6 +8526,7 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 		LineBreakMode:        configuredReplyLineBreakMode(cfg),
 		PreserveSoftNewlines: !natural,
 		PreserveBlankLines:   PlatformSupportsRichText(cfg.Platform),
+		LineSplit:            boolValue(cfg.ReplyLineSplitEnabled, false),
 	}
 }
 

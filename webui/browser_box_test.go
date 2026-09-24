@@ -87,7 +87,7 @@ func TestBrowserBoxSettingsRoundTrip(t *testing.T) {
 // 浏览器没跑的时候，标签页和实时画面都该明确说「没运行」。
 func TestBrowserBoxEndpointsRequireRunningBrowser(t *testing.T) {
 	router, _ := newBrowserBoxRouter(t)
-	for _, path := range []string{"/api/browser-box/tabs", "/api/browser-box/live"} {
+	for _, path := range []string{"/api/browser-box/tabs?bot=bot-a", "/api/browser-box/live?bot=bot-a"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		if recorder.Code != http.StatusServiceUnavailable {
@@ -96,20 +96,38 @@ func TestBrowserBoxEndpointsRequireRunningBrowser(t *testing.T) {
 	}
 }
 
+// 每台机器人各有一份登录态：进程相关的接口不指明机器人就拒掉，不替用户猜一台。
+func TestBrowserBoxEndpointsRequireBot(t *testing.T) {
+	router, _ := newBrowserBoxRouter(t)
+	for _, path := range []string{"/api/browser-box/tabs", "/api/browser-box/live"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s 没带机器人时应报 400，得到 %d", path, recorder.Code)
+		}
+	}
+}
+
 // 接管开关要能切，且切完模型那一侧立刻拿不到地址。
 func TestBrowserBoxTakeoverToggle(t *testing.T) {
 	router, manager := newBrowserBoxRouter(t)
-	request := httptest.NewRequest(http.MethodPost, "/api/browser-box/takeover", strings.NewReader(`{"active":true}`))
+	if _, err := manager.SetSettings(context.Background(), browserbox.Settings{Enabled: true}); err != nil {
+		t.Fatalf("打开内置浏览器失败：%v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/browser-box/takeover?bot=bot-a", strings.NewReader(`{"active":true}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("切接管应成功，得到 %d", recorder.Code)
 	}
-	if !manager.Takeover() {
+	if !manager.Bot("bot-a").Status().Takeover {
 		t.Fatal("接管没生效")
 	}
-	if manager.AgentCDPURL() != "" {
+	if manager.Bot("bot-b").Status().Takeover {
+		t.Fatal("接管只该作用于那一台机器人")
+	}
+	if _, err := manager.Bot("bot-a").Endpoint(context.Background()); err == nil {
 		t.Fatal("接管时模型不该拿到地址")
 	}
 }

@@ -227,7 +227,9 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
-			"group_id":            event.GroupID,
+			"group_id": event.GroupID,
+			// profile_id 让同一个群里的两台机器人各算各的额度。
+			"profile_id":          event.ProfileID,
 			"user_id":             event.UserID,
 			"message_id":          event.MessageID,
 			"provider":            string(provider),
@@ -403,6 +405,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			if err != nil {
 				return "", err
 			}
+			provider.report = r.reportLLMEvent
 			return run(provider)
 		}
 	}
@@ -412,7 +415,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 		if profileID, ok := replyRuleLLMProfileID(ctx); ok {
 			for _, profile := range set.Profiles {
 				if strings.TrimSpace(profile.ID) == profileID {
-					return runLLMProviderProfileAttempts(ctx, []llm.Profile{profile}, cfgFactory, true, run)
+					return r.runLLMProviderProfileAttempts(ctx, []llm.Profile{profile}, cfgFactory, true, run)
 				}
 			}
 			return "", fmt.Errorf("diana: reply rule llm profile %q not found", profileID)
@@ -426,6 +429,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			if err != nil {
 				return "", err
 			}
+			provider.report = r.reportLLMEvent
 			return run(provider)
 		}
 		// 没有角色绑定就按本次调用的分组取候选，组内顺序即降级顺序。
@@ -440,6 +444,7 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			if err != nil {
 				return "", err
 			}
+			provider.report = r.reportLLMEvent
 			return run(provider)
 		}
 		return r.runLLMProviderWithFailover(ctx, store, cfgFactory, run)
@@ -590,6 +595,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 		if len(profiles) > 0 {
 			provider, err := newRegistryFailoverLLMProvider(registry, profiles, retryTransient, len(profiles) > 1)
 			if err == nil {
+				provider.report = r.reportLLMEvent
 				return run(provider)
 			}
 			// 注册表里没有能对上的模型时不硬顶，退回下面按单条选择的老路。
@@ -613,17 +619,17 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			// retryTransient=false 的含义是「同一档不因瞬时错误重试」，不是「不许降级」。
 			// 这里原来会把候选截成一条，于是摘要、语义承接这些走 Once 变体的用途根本
 			// 没有降级可言。
-			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
+			return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
 		for _, group := range semanticRouteProfileGroups {
 			profiles := llmProfilesInGroup(set, group)
 			if len(profiles) == 0 {
 				continue
 			}
-			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
+			return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, retryTransient, run)
 		}
 		if current, ok := set.FirstProfile(); ok {
-			return runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
+			return r.runLLMProviderProfileAttempts(ctx, []llm.Profile{current}, cfgFactory, retryTransient, run)
 		}
 		return "", fmt.Errorf("diana: no llm profile is configured")
 	}
@@ -651,7 +657,7 @@ func llmProfilesInGroup(set llm.ProfileSet, group string) []llm.Profile {
 	return profiles
 }
 
-func runLLMProviderProfileAttempts(ctx context.Context, profiles []llm.Profile, factory LLMProviderConfigFactory, retryTransient bool, run llmProviderRunFunc) (string, error) {
+func (r *Runtime) runLLMProviderProfileAttempts(ctx context.Context, profiles []llm.Profile, factory LLMProviderConfigFactory, retryTransient bool, run llmProviderRunFunc) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -659,6 +665,7 @@ func runLLMProviderProfileAttempts(ctx context.Context, profiles []llm.Profile, 
 	if err != nil {
 		return "", err
 	}
+	provider.report = r.reportLLMEvent
 	return run(provider)
 }
 
@@ -681,6 +688,7 @@ func (r *Runtime) runLLMProviderWithFailover(ctx context.Context, store LLMProfi
 	if err != nil {
 		return "", err
 	}
+	provider.report = r.reportLLMEvent
 	return run(provider)
 }
 
@@ -985,6 +993,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
 	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode, cfg))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
+	appendPromptSection(&builder, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
 	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode, cfg))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。

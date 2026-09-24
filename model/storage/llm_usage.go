@@ -62,11 +62,10 @@ AND action = 'llm_usage'`,
 	return stats, rows.Err()
 }
 
-// GroupLLMUsageSince 统计某个群在窗口内的用量（token 和调用次数），供按群额度判断。
+// GroupLLMUsageSince 统计某个群在窗口内的模型调用次数，供按群额度判断。
 //
 // 只数带 group_id 的调用：私聊、后台任务和没有会话归属的调用不算进群额度。
-// 口径和 LLMUsageSince 一致——total_tokens 缺失时按 input+output 兜底，缓存命中
-// 已经含在 input 里，不重复相加。
+// 上游没报用量的调用照样算一次。
 func (s *SQLiteStore) GroupLLMUsageSince(ctx context.Context, profileID, groupID string, since, until time.Time) (applog.GroupUsage, error) {
 	defer s.observeStorage(ctx, "GroupLLMUsageSince", "read")()
 	var usage applog.GroupUsage
@@ -106,11 +105,6 @@ AND json_extract(metadata, '$.group_id') = ?`,
 				continue
 			}
 		}
-		amount := int64FromAny(meta["total_tokens"])
-		if amount <= 0 {
-			amount = int64FromAny(meta["input_tokens"]) + int64FromAny(meta["output_tokens"])
-		}
-		usage.Tokens += amount
 		usage.Calls++
 	}
 	return usage, rows.Err()
@@ -159,12 +153,7 @@ AND json_extract(metadata, '$.group_id') IS NOT NULL`,
 				continue
 			}
 		}
-		amount := int64FromAny(meta["total_tokens"])
-		if amount <= 0 {
-			amount = int64FromAny(meta["input_tokens"]) + int64FromAny(meta["output_tokens"])
-		}
 		entry := usage[groupID]
-		entry.Tokens += amount
 		entry.Calls++
 		usage[groupID] = entry
 	}

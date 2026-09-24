@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
 )
 
@@ -25,6 +26,9 @@ const (
 	fileDeliverySettingMaxFileBytes = "max_file_bytes"
 	fileDeliverySettingPreview      = "preview"
 	fileDeliverySettingOwnerOnly    = "owner_only"
+	// 下面两项管同插件里的 render_media 工具。
+	fileDeliverySettingRenderMedia     = "render_media"
+	fileDeliverySettingMaxVideoSeconds = "max_video_seconds"
 )
 
 // 内容来自模型输出的文本，这些扩展名在接收端双击就会执行或安装，一律不发。
@@ -43,7 +47,7 @@ var fileDeliveryCodeLanguages = map[string]string{
 }
 
 // FileDeliveryPlugin 让模型把自己写好的代码、SVG、文档作为可下载文件发到会话，
-// 可选附带一张渲染预览图。
+// 可选附带一张渲染预览图；也能把 HTML/SVG 直接渲染成图片、视频或 GIF 发出去。
 type FileDeliveryPlugin struct{}
 
 func NewFileDeliveryPlugin() *FileDeliveryPlugin { return &FileDeliveryPlugin{} }
@@ -52,8 +56,8 @@ func (p *FileDeliveryPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          fileDeliveryPluginID,
 		Name:        "文件交付",
-		Version:     "0.1.0",
-		Description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown、配置等文本内容直接打包成文件发到会话供下载，不需要命令工具或工作目录。SVG、Mermaid、Markdown 和代码可附带一张渲染预览图（需启用「网页渲染」插件）。",
+		Version:     "0.1.1",
+		Description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown、配置等文本内容直接打包成文件发到会话供下载，不需要命令工具或工作目录。SVG、Mermaid、Markdown、HTML 和代码可附带一张渲染预览图；HTML 页面和 SVG 还能直接渲染成图片、MP4 视频或 GIF 发出（渲染需启用「网页渲染」插件，视频和 GIF 需要 ffmpeg）。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"message:send", "file:send", "browser:render"},
@@ -70,16 +74,34 @@ func (p *FileDeliveryPlugin) Manifest() PluginManifest {
 			{
 				Key:         fileDeliverySettingPreview,
 				Label:       "默认附带预览图",
-				Description: "发送 SVG、Mermaid、Markdown 或代码文件时，先发一张渲染后的预览图。模型也可以按次关闭。",
+				Description: "发送 SVG、Mermaid、Markdown、HTML 或代码文件时，先发一张渲染后的预览图。模型也可以按次关闭。",
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},
 			{
 				Key:         fileDeliverySettingOwnerOnly,
 				Label:       "仅主人可用",
-				Description: "开启后只有主人触发的对话能让机器人发文件。",
+				Description: "开启后只有主人触发的对话能让机器人发文件或渲染。",
 				Type:        PluginSettingTypeBool,
 				Default:     false,
+			},
+			{
+				Key:         fileDeliverySettingRenderMedia,
+				Label:       "HTML/动画渲染",
+				Description: "允许模型把 HTML 页面或 SVG 渲染成图片、视频或 GIF 发出。页面可以运行脚本，但在断网的无头浏览器里执行，读不到本机文件。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
+			},
+			{
+				Key:         fileDeliverySettingMaxVideoSeconds,
+				Label:       "视频/GIF 最长时长",
+				Description: "单次渲染的视频或 GIF 不能超过这个时长。录制按帧截图，越长越慢。",
+				Type:        PluginSettingTypeNumber,
+				Default:     defaultRenderMediaMaxSeconds,
+				Min:         settingRange(1),
+				Max:         settingRange(maxRenderMediaMaxSeconds),
+				Step:        1,
+				Unit:        "秒",
 			},
 		},
 	}
@@ -106,7 +128,7 @@ func (t *dianaFileDeliveryTool) Description() string {
 	return `把你写好的文本内容保存成文件发到当前会话，对方可以直接下载。` +
 		`适合完整的代码文件、脚本、SVG 图、Markdown 文档、配置文件、CSV 数据等——内容长、要保存或要拿去运行时用它，别把几百行代码塞进聊天正文。` +
 		`filename 带扩展名（如 snake.py、logo.svg、README.md），content 是完整文件内容。` +
-		`preview 为 true 时先发一张渲染预览图：svg 画成图，mmd 按 mermaid 画，md 按 Markdown 排版，代码按等宽代码块排版。` +
+		`preview 为 true 时先发一张渲染预览图：svg 画成图，mmd 按 mermaid 画，md 按 Markdown 排版，html 按网页效果截图，代码按等宽代码块排版。` +
 		`文件由运行时发送，调用后用一句话交代即可，不要在正文里再贴一遍内容。`
 }
 
@@ -164,6 +186,10 @@ func (t *dianaFileDeliveryTool) Run(ctx context.Context, input map[string]any) (
 
 // sendPreview 预览失败不拦文件发送，只把原因带回给模型。
 func (t *dianaFileDeliveryTool) sendPreview(ctx context.Context, name, content string) string {
+	// HTML 预览要跑页面脚本，归 render_media 开关管；关着就退回源码预览。
+	if ext := fileDeliveryExt(name); (ext == "html" || ext == "htm") && t.settings.Bool(fileDeliverySettingRenderMedia, true) {
+		return t.sendHTMLPreview(ctx, content)
+	}
 	format, source := fileDeliveryPreviewSource(name, content)
 	if format == "" {
 		return "skipped: 该类型没有预览"
@@ -175,6 +201,24 @@ func (t *dianaFileDeliveryTool) sendPreview(ctx context.Context, name, content s
 		return "skipped: 「网页渲染」插件没有启用"
 	}
 	png, err := t.runtime.renderContentPNG(ctx, t.event, format, source, "")
+	if err != nil {
+		return "failed: " + firstLineOf(err.Error())
+	}
+	if err := t.runtime.sendPNGImage(ctx, t.event, png); err != nil {
+		return "failed: " + firstLineOf(err.Error())
+	}
+	return "sent"
+}
+
+func (t *dianaFileDeliveryTool) sendHTMLPreview(ctx context.Context, content string) string {
+	if !t.runtime.sandboxedBrowserEnabled(t.event) {
+		return "skipped: 「网页渲染」插件没有启用"
+	}
+	request, err := buildRenderMediaRequest(ctx, renderMediaSpec{format: renderMediaFormatHTML, output: renderMediaOutputImage, content: content, width: renderMediaDefaultSizes[renderMediaOutputImage].width})
+	if err != nil {
+		return "failed: " + firstLineOf(err.Error())
+	}
+	png, _, err := agent.CaptureHTMLStill(ctx, request, renderMediaStillAt)
 	if err != nil {
 		return "failed: " + firstLineOf(err.Error())
 	}

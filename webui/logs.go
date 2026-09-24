@@ -63,7 +63,15 @@ func (h *AppLogHandler) Register(router gin.IRouter) {
 // list 封装当前模块的 list 逻辑。
 func (h *AppLogHandler) list(c *gin.Context) {
 	kind := storage.AppLogKind(strings.TrimSpace(c.Query("kind")))
-	if kind != "" && kind != storage.LogKindOperation && kind != storage.LogKindError {
+	// all 是日志页的「全部」：操作和错误合在一起按时间排。调试追踪不算在内——它是
+	// 按需打开的完整调用链，体量大，混进来会把真正的记录冲掉。
+	var kinds []storage.AppLogKind
+	switch kind {
+	case "", storage.LogKindOperation, storage.LogKindError:
+	case "all":
+		kind = ""
+		kinds = []storage.AppLogKind{storage.LogKindOperation, storage.LogKindError}
+	default:
 		writeError(c, http.StatusBadRequest, fmt.Errorf("unsupported log kind %q", kind))
 		return
 	}
@@ -77,9 +85,18 @@ func (h *AppLogHandler) list(c *gin.Context) {
 		c.JSON(http.StatusOK, appLogsResponse{Logs: []appLogEntry{}})
 		return
 	}
+	var actions []string
+	for _, action := range strings.Split(c.Query("action"), ",") {
+		if action = strings.TrimSpace(action); action != "" {
+			actions = append(actions, action)
+		}
+	}
 	logs, err := h.store.ListLogs(c.Request.Context(), storage.AppLogFilter{
-		Kind:  kind,
-		Limit: limit,
+		Kind:      kind,
+		Kinds:     kinds,
+		Actions:   actions,
+		ProfileID: strings.TrimSpace(c.Query("profile")),
+		Limit:     limit,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err)

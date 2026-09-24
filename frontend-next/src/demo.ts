@@ -10,6 +10,7 @@ import type {
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
+  BrowserBoxSettings,
   BrowserControlToken,
   LLMConfig,
   OpenAPIKey,
@@ -28,6 +29,7 @@ import type {
   StatsSnapshot,
   UpdateStatus,
   UserFavorabilityChange,
+  RelationshipEvaluation,
   UserMemoryProfile,
   WorldBookNode
 } from "./api";
@@ -52,15 +54,18 @@ const demoContextBudget = {
 
 const demoResidentContext = {
   context_window: 128_000,
-  total_tokens: 8_867,
-  note: "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。",
+  total_tokens: 18_709,
+  note: "只列每轮都注入、与当前消息无关的内容。检索记忆、笔记本命中、世界书的触发式设定、命中触发词的 Skill 正文、跨群召回按当前消息命中才进；常驻核心记忆按发言者取，也不在这里。",
   blocks: [
     { key: "soul", label: "品格（soul）", tokens: 0, note: "身份、价值、硬边界，排在系统提示词最前面。只有人能改，分群覆盖动不了它。" },
     { key: "persona", label: "人设正文", tokens: 846, content: "你是 Diana，一个住在群里的助手。说话短，先给结论。", note: "系统提示词稳定头部的第一行，只有人能改（WebUI 或 soul.md）。" },
     { key: "prompt_rules", label: "固定提示词规则", tokens: 8_021, content: "（演示数据：这里是按「全部工具都注册」展开的规则正文。）", note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。" },
     { key: "world_book", label: "世界书常驻设定", tokens: 0, budget: 1_200, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
     { key: "self_notes", label: "自述", tokens: 0, budget: 1_200, note: "机器人自己写的自我认知，默认关闭。" },
-    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" }
+    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" },
+    { key: "agent_protocol", label: "Agent 协议与按需工具目录", tokens: 4_310, content: "（演示数据：Agent 协议、按需工具目录、扩展说明和规则。）", note: "按需工具只进这份目录（名字加一句用途），要用时先 tools_load。取自这个会话最近一轮回复。" },
+    { key: "agent_tools", label: "常驻工具定义", tokens: 5_102, content: "web_search\nremember\npoke\ntools_load\ntools_execute\nagent_finalize", note: "这些工具每一步都带完整 schema，数字按 schema 估算，正文只列名字。从机器人配置「上下文」的常驻名单里拿掉，就会挪进上面的目录。" },
+    { key: "skills", label: "Skill 目录与常驻正文", tokens: 430, content: "（演示数据：Skill 目录。）", note: "只含配成常驻的 Skill 正文；声明了触发词的要命中才带，不在底价里。" }
   ]
 };
 
@@ -79,8 +84,8 @@ let llmConfig: LLMConfig = {
   model: "gpt-5.6",
   api_key_configured: true,
   profiles: [
-    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, max_output_tokens: 4096, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.4-mini" }] },
-    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
+    { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, max_output_tokens: 4096, effective_max_output_tokens: 4096, max_output_tokens_source: "user", effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.4-mini" }] },
+    { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6", models: modelCatalog, max_output_tokens_source: "provider", effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
     { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.4-mini", models: modelCatalog, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "user", catalog_context_window_tokens: 400_000 },
     { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-2", image_model: "gpt-image-2", models: modelCatalog }
   ]
@@ -93,7 +98,7 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: "以准确、自然的方式参与对话；遇到时效性事实时先联网检索。",
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
-  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, llm_capability_probe_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
+  long_term_memory_enabled: true, cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },
@@ -180,7 +185,7 @@ let plugins: PluginState[] = [
     installed: true, enabled: true
   },
   {
-    manifest: { id: "official.file-delivery", name: "文件交付", version: "0.1.0", description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown 等文本内容直接作为文件发到会话供下载，并可附带渲染预览图。", official: true, built_in: true, permissions: ["message:send", "file:send", "browser:render"], settings: [{ key: "max_file_bytes", label: "单个文件大小上限", type: "size", default: 1048576 }, { key: "preview", label: "默认附带预览图", type: "bool", default: true }, { key: "owner_only", label: "仅主人可用", type: "bool", default: false }] },
+    manifest: { id: "official.file-delivery", name: "文件交付", version: "0.1.1", description: "启用内置 Agent 后，模型可以把写好的代码、SVG、Markdown 等文本内容直接作为文件发到会话供下载，并可附带渲染预览图；HTML 页面和 SVG 还能直接渲染成图片、MP4 视频或 GIF 发出。", official: true, built_in: true, permissions: ["message:send", "file:send", "browser:render"], settings: [{ key: "max_file_bytes", label: "单个文件大小上限", type: "size", default: 1048576 }, { key: "preview", label: "默认附带预览图", type: "bool", default: true }, { key: "owner_only", label: "仅主人可用", type: "bool", default: false }, { key: "render_media", label: "HTML/动画渲染", type: "bool", default: true }, { key: "max_video_seconds", label: "视频/GIF 最长时长", type: "number", default: 10, min: 1, max: 20, step: 1, unit: "秒" }] },
     installed: true, enabled: true
   },
   {
@@ -266,8 +271,8 @@ const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
 `)}`;
 
 const groups: BotGroupSummary[] = [
-  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_token_quota: 500_000, model_call_quota: 400, quota_token_limit: 500_000, quota_call_limit: 400, quota_tokens_used: 317_400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
-  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, quota_token_limit: 500_000, quota_call_limit: 400, quota_tokens_used: 500_000, quota_calls_used: 233, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
+  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_call_quota: 400, reply_sample_percent: 40, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
+  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, plugin_overrides: { "official.sandboxed-browser-renderer": false }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
@@ -443,6 +448,17 @@ const demoFavorabilityChanges: Record<string, UserFavorabilityChange[]> = {
     { id: 4, user_id: "100200888", delta: -3, before_score: -5, after_score: -8, source: "interaction", reason: "重复发送广告内容", group_id: "100200519", created_at: before(3000) }
   ]
 };
+
+// 后台好感度评估：每种结果各给一两条，有两条带画像，演示站「全部」里能看到全部分类。
+const demoRelationshipEvaluations: RelationshipEvaluation[] = [
+  { id: 9, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "@Diana 帮我总结一下今天的发布变更，谢啦", status: "changed", proposed_delta: 1, applied_delta: 1, before_score: 61, after_score: 62, confidence: 0.92, reason: "真诚道谢，互动友好", model: "gpt-5.4-mini", portrait: [{ field: "occupation", label: "职业", value: "后端工程师", source: "stated" }], created_at: before(2) },
+  { id: 8, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "画一张雨夜城市里的复古电车", status: "unchanged", proposed_delta: 0, applied_delta: 0, before_score: 35, after_score: 35, confidence: 0.96, reason: "普通的生图请求，不影响关系", model: "gpt-5.4-mini", portrait: [{ field: "interest", label: "兴趣爱好", value: "喜欢复古电车和雨夜街景", source: "inferred" }], created_at: before(31) },
+  { id: 7, bot_profile_id: "bot-onebot", user_id: "100201014", sender_name: "白榆", group_id: "100200418", message_text: "你今天好像有点笨哦", status: "low_confidence", proposed_delta: -1, applied_delta: 0, before_score: 12, after_score: 12, confidence: 0.55, reason: "可能是玩笑，也可能在抱怨，不好判断", model: "gpt-5.4-mini", created_at: before(47) },
+  { id: 6, bot_profile_id: "bot-onebot", user_id: "100200001", sender_name: "主人", message_text: "今天也辛苦你了", status: "capped", proposed_delta: 2, applied_delta: 0, before_score: 200, after_score: 200, confidence: 0.9, reason: "主人的关心", model: "gpt-5.4-mini", created_at: before(95) },
+  { id: 5, bot_profile_id: "bot-onebot", user_id: "100200913", sender_name: "星野", group_id: "100200519", message_text: "刚才那张图太好看了！", status: "skipped", proposed_delta: 0, applied_delta: 0, before_score: 0, after_score: 0, confidence: 0, error: "后台评估同时进行的数量已满，这一轮跳过", created_at: before(120) },
+  { id: 4, bot_profile_id: "bot-onebot", user_id: "100200888", sender_name: "路人甲", group_id: "100200519", message_text: "加群领福利，私聊我", status: "changed", proposed_delta: -3, applied_delta: -3, before_score: -5, after_score: -8, confidence: 0.97, reason: "重复发送广告内容", model: "gpt-5.4-mini", created_at: before(3000) },
+  { id: 3, bot_profile_id: "bot-onebot", user_id: "100200711", sender_name: "青禾", group_id: "100200301", message_text: "部署好了，多亏你", status: "failed", proposed_delta: 0, applied_delta: 0, before_score: 60, after_score: 60, confidence: 0, error: "context deadline exceeded（模拟数据）", created_at: before(3200) }
+];
 
 export const demoEvents: AssistantEventDetail[] = [
   { id: "demo-event-1", at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, reply_models: ["gpt-5.4"], models: [{ model: "gpt-5.4-mini", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.4", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
@@ -625,8 +641,12 @@ const residencyEntries: AgentResidencyEntry[] = [
 // 演示数据从「还没列过名单」开始，跟着内置推荐走——新装的机器人就是这个样子。
 let residencyListed = false;
 
+// 浏览器来源在演示里从「Diana 内置」开始：它是推荐的那个。扩展那边的配置照样
+// 预填好，切过去就能看到授权边界长什么样。
+let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true, headful: true };
+let demoBrowserSourceOrder: ("box" | "extension")[] = ["box", "extension"];
 let demoBrowserControlPolicy = {
-  enabled: true,
+  enabled: false,
   allowed_origins: ["chrome-extension://abcdefghijklmnopabcdefghijklmnop"],
   allowed_hosts: ["example.com", "*.wiki.example.com"],
   denied_hosts: ["admin.example.com"],
@@ -713,6 +733,53 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const keyID = decodeURIComponent(path.split("/").pop() ?? "");
     demoApiKeys = demoApiKeys.filter((item) => item.id !== keyID);
     return json({ revoked: true });
+  }
+  // 浏览器来源：演示里内置浏览器找得到 Chrome，扩展有一条连着（见下面的 connections）。
+  const demoBrowserSourceState = () => {
+    const box = {
+      enabled: Boolean(demoBrowserBoxSettings.enabled),
+      usable: Boolean(demoBrowserBoxSettings.enabled),
+      detected: true,
+      dependencies: [
+        { name: "browser-renderer", purpose: "网页渲染：使用系统 Chromium / Google Chrome", available: true, version: "Chromium 141", installable: true },
+        { name: "cjk-font", purpose: "中文字体：关系图与中文截图", available: false, detail: "没有找到能画中文的字体文件", installable: true, installer: "apt-get" },
+        { name: "display", purpose: "开真窗口：图形会话或 Xvfb 虚拟屏（可选）", available: true, version: "Xvfb 虚拟屏", installable: false }
+      ]
+    };
+    const extension = {
+      enabled: demoBrowserControlPolicy.enabled,
+      usable: demoBrowserControlPolicy.enabled,
+      detected: true,
+      dependencies: [
+        { name: "browser-extension", purpose: "Diana 浏览器控制扩展：装在你的 Chrome 里，反向连到这里", available: true, version: "Chromium 141", installable: false }
+      ]
+    };
+    const active = demoBrowserSourceOrder.find((key) => (key === "box" ? box : extension).usable) ?? "off";
+    return { order: demoBrowserSourceOrder, active, box, extension };
+  };
+  if (path === "/api/browser-source" && method === "GET") return json(demoBrowserSourceState());
+  if (path === "/api/browser-source" && method === "PUT") {
+    if (typeof body.box_enabled === "boolean") demoBrowserBoxSettings = { ...demoBrowserBoxSettings, enabled: body.box_enabled };
+    if (typeof body.extension_enabled === "boolean") demoBrowserControlPolicy = { ...demoBrowserControlPolicy, enabled: body.extension_enabled };
+    if (Array.isArray(body.order)) demoBrowserSourceOrder = body.order as ("box" | "extension")[];
+    return json(demoBrowserSourceState());
+  }
+  // 内置浏览器在演示里不起进程：开着但没在跑，画面那块不会去连实时流。每台机器人
+  // 各有一份登录态目录，和真实后端一样按 ?bot= 区分。
+  const demoBrowserBoxStatus = () => {
+    const bot = url.searchParams.get("bot") ?? "";
+    return {
+      settings: demoBrowserBoxSettings,
+      running: false,
+      takeover: false,
+      available: true,
+      ...(bot ? { bot, profile_dir: `/data/browser-box/profiles/${bot}/profile` } : {})
+    };
+  };
+  if (path === "/api/browser-box/status" && method === "GET") return json(demoBrowserBoxStatus());
+  if (path === "/api/browser-box/settings" && method === "PUT") {
+    demoBrowserBoxSettings = { ...demoBrowserBoxSettings, ...(body as unknown as BrowserBoxSettings) };
+    return json({ settings: demoBrowserBoxSettings, status: demoBrowserBoxStatus() });
   }
   // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
   // 看不出授权边界长什么样。写操作在演示里始终关着。
@@ -1046,7 +1113,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;
     const index = groups.findIndex((group) => group.group_id === config.group_id);
-    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, reply_preserve_line_breaks: config.reply_preserve_line_breaks, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
+    if (index >= 0) groups[index] = { ...groups[index], ...config, natural_reply_split_enabled: config.natural_reply_split_enabled, reply_preserve_line_breaks: config.reply_preserve_line_breaks, reply_line_split_enabled: config.reply_line_split_enabled, typing_delay_enabled: config.typing_delay_enabled, configured: true, joined: true }; else groups.push({ ...config, configured: true, joined: false });
     return json({ config });
   }
 
@@ -1072,6 +1139,50 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     }
     return json({ ok: true, updated });
+  }
+
+  if (path === "/api/assistant/favorability/evaluations") {
+    const statuses = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
+    const statusGiven = url.searchParams.has("status");
+    const fieldsGiven = url.searchParams.has("portrait_field");
+    const userID = url.searchParams.get("user_id") ?? "";
+    const search = (url.searchParams.get("q") ?? "").trim();
+    const person = (url.searchParams.get("person") ?? "").trim();
+    const since = Number(url.searchParams.get("since") ?? 0) * 1000;
+    const searchable = (item: RelationshipEvaluation) => [item.user_id, item.sender_name, item.group_id, item.message_text, item.reason,
+      item.model, item.error, ...(item.portrait ?? []).flatMap((trait) => [trait.label, trait.value])].join("\n");
+    const groupID = url.searchParams.get("group_id") ?? "";
+    const portraitOnly = url.searchParams.get("portrait") === "1";
+    const hasPortrait = (item: RelationshipEvaluation) => (item.portrait?.length ?? 0) > 0;
+    const direction = url.searchParams.get("direction") ?? "";
+    const chat = url.searchParams.get("chat") ?? "";
+    const fields = (url.searchParams.get("portrait_field") ?? "").split(",").filter(Boolean);
+    const source = url.searchParams.get("portrait_source") ?? "";
+    const minConfidence = Number(url.searchParams.get("min_confidence") ?? 0);
+    const model = url.searchParams.get("model") ?? "";
+    const directionMatches = (delta: number) =>
+      !direction || (direction === "up" && delta > 0) || (direction === "down" && delta < 0) ||
+      (direction === "changed" && delta !== 0) || (direction === "none" && delta === 0);
+    const evaluations = demoRelationshipEvaluations.filter((item) =>
+      (!statusGiven || statuses.includes(item.status)) &&
+      (!userID || item.user_id === userID) &&
+      (!search || searchable(item).includes(search)) &&
+      (!person || item.user_id.includes(person) || (item.sender_name ?? "").includes(person)) &&
+      (!since || Date.parse(item.created_at) >= since) &&
+      (!groupID || item.group_id === groupID) &&
+      (!portraitOnly || hasPortrait(item)) &&
+      directionMatches(item.applied_delta) &&
+      (!chat || (chat === "group") === Boolean(item.group_id)) &&
+      (!fieldsGiven || !hasPortrait(item) || (item.portrait ?? []).some((trait) => fields.includes(trait.field))) &&
+      (!source || (item.portrait ?? []).some((trait) => trait.source === source)) &&
+      item.confidence >= minConfidence &&
+      (!model || (item.model ?? "").includes(model)));
+    const portraitFields = [
+      { field: "residence", label: "居住地点" }, { field: "occupation", label: "职业" }, { field: "routine", label: "作息" },
+      { field: "habit", label: "生活习惯" }, { field: "interest", label: "兴趣爱好" }, { field: "relation", label: "家庭与关系" },
+      { field: "timezone", label: "时区" }, { field: "other", label: "其他" }
+    ];
+    return json({ evaluations, portrait_fields: portraitFields });
   }
 
   if (path === "/api/assistant/users") {
@@ -1362,9 +1473,28 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(task);
   }
 
+  // 浏览器页的操作记录：按 action 和 profile 筛，和真实后端一致。
+  if (path === "/api/logs" && url.searchParams.get("action")) {
+    const actions = new Set((url.searchParams.get("action") ?? "").split(","));
+    const profile = url.searchParams.get("profile") ?? "";
+    const browserLogs: AppLogEntry[] = [
+      { id: "browser-log-1", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里打开网页", actor: "qq:100200711", actor_name: "青禾", target: "https://github.com/SuInk/Diana/releases", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(3) },
+      { id: "browser-log-2", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里读取页面", actor: "qq:100200711", actor_name: "青禾", target: ".release-header", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(3) },
+      { id: "browser-log-3", kind: "error", level: "error", action: "browser_action", message: "机器人在内置浏览器里点击失败", detail: "找不到元素：button.download（模拟数据）", actor: "qq:100200711", actor_name: "青禾", target: "button.download", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(4) },
+      { id: "browser-log-4", kind: "operation", level: "info", action: "browser_box_takeover", message: "你在画面上动手，内置浏览器已自动转为你接管", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
+      { id: "browser-log-5", kind: "operation", level: "info", action: "browser_box_navigate", message: "你在内置浏览器里打开了网页", actor: "webui:demo", target: "https://accounts.example.com/login", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
+      { id: "browser-log-6", kind: "operation", level: "info", action: "browser_box_start", message: "你启动了内置浏览器", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(13) },
+      { id: "browser-log-7", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里截图", actor: "telegram:880024", target: "", metadata: { profile_id: "bot-telegram", source: "box" }, created_at: before(40) }
+    ];
+    return json({ logs: browserLogs.filter((log) => actions.has(log.action) && (!profile || log.metadata?.profile_id === profile)) });
+  }
   if (path === "/api/logs") {
     const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
-    return json({ logs: url.searchParams.get("kind") === "error" ? errorLogs : logs });
+    const kind = url.searchParams.get("kind");
+    if (kind === "all") {
+      return json({ logs: [...logs, ...errorLogs].sort((a, b) => b.created_at.localeCompare(a.created_at)) });
+    }
+    return json({ logs: kind === "error" ? errorLogs : logs });
   }
 
   if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", build_type: "release", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });

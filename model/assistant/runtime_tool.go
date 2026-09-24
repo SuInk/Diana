@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -448,7 +449,9 @@ func (r *Runtime) sendForwardPluginResponse(ctx context.Context, event MessageEv
 			// 兜底散装是「合并转发看起来没生效」的唯一入口，必须留痕，否则用户
 			// 只看到刷屏、日志里什么都查不到。
 			log.Printf("diana resolver merged forward failed, attempting %d messages separately: %v", len(forwardMessages), err)
-			if directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages); directErr != nil {
+			directErr := r.sendResolverMessagesDirect(ctx, event, forwardMessages)
+			r.recordResolverForwardFallback(ctx, event, len(forwardMessages), err, directErr)
+			if directErr != nil {
 				return errors.Join(err, directErr)
 			}
 			// 散装兜底送达后同样记账：重跑时若不记，这里会再试一次合并转发，
@@ -497,6 +500,39 @@ func nestedForwardPluginResponse(responses []PluginResponse) *PluginResponse {
 // 给主人发一条失败告警。
 var ErrDeliveryTargetDisabled = errors.New("diana: delivery target belongs to a disabled bot profile")
 
+// recordResolverForwardFallback 把「合并转发发不出去、改成逐条发」写进运行日志。
+// 这是群里突然刷屏的唯一来由，只打到终端的话在界面上根本查不到。
+func (r *Runtime) recordResolverForwardFallback(ctx context.Context, event MessageEvent, count int, forwardErr, directErr error) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	entry := applog.Entry{
+		Kind:    applog.KindOperation,
+		Level:   applog.LevelInfo,
+		Action:  "resolver_forward_fallback",
+		Message: fmt.Sprintf("合并转发发送失败，已改为逐条发送 %d 条", count),
+		Detail:  forwardErr.Error(),
+		Actor:   oneBotEventActor(event),
+		Target:  event.MessageID,
+		Metadata: map[string]any{
+			"profile_id": event.ProfileID,
+			"group_id":   event.GroupID,
+			"count":      count,
+		},
+		CreatedAt: time.Now(),
+	}
+	if directErr != nil {
+		entry.Kind = applog.KindError
+		entry.Level = applog.LevelError
+		entry.Message = "合并转发发送失败，改为逐条发送也失败了"
+		entry.Detail = errors.Join(forwardErr, directErr).Error()
+	}
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
+	_ = writer.AppendLog(logCtx, entry)
+}
+
 func (r *Runtime) sendSubscriberNotice(ctx context.Context, event MessageEvent, text string) error {
 	// 所有「到点了主动找人」的投递都从这里过，判断放在这一个路口：RSS、仓库订阅、
 	// 定时查询、一次性提醒、编码任务回报、失败告警，谁都不用各自记得检查一遍。
@@ -538,7 +574,7 @@ func (r *Runtime) sendNestedForwardPluginResponse(ctx context.Context, event Mes
 		ForwardUIN:  selfID,
 		ForwardTime: time.Now().Unix(),
 	}}, cfg.Name, selfID)
-	// NapCat can create a forged forward containing text and media nodes, but a
+	// OneBot clients can create a forged forward containing text and media nodes, but a
 	// forward card nested inside another forged forward becomes unreliable as
 	// the node count grows. Keep the summary and originals in one flat card.
 	outerNodes := append(summaryNodes, innerNodes...)

@@ -321,6 +321,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/stickers", h.listStickers)
 	router.GET(base+"/stickers/:hash/image", h.stickerImage)
 	router.GET(base+"/users", h.listAssistantUsers)
+	router.GET(base+"/favorability/evaluations", h.listRelationshipEvaluations)
 	router.GET(base+"/user-names", h.lookupAssistantUserNames)
 	router.GET(base+"/users/:id", h.getAssistantUser)
 	router.PUT(base+"/users/:id", h.editAssistantUser)
@@ -355,7 +356,6 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 		router.POST(base+"/group-test", h.sendGroupTest)
 		router.POST(base+"/group-test/recall", h.recallGroupTestMessage)
 		router.POST(base+"/group-test/file", h.parseGroupTestFile)
-		router.POST(base+"/group-test/napcat-qrcode", h.shareNapCatQRCode)
 		router.POST(base+"/group-test/upload-file", h.uploadGroupTestFile)
 		router.POST(base+"/group-test/onebot", h.callGroupTestOneBot)
 	}
@@ -639,6 +639,7 @@ func (h *BotHandler) startRuntimeAfterEnable() {
 	}
 	if err := h.runtime.Start(h.ctx); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		log.Printf("enable requested but runtime start failed: %v", err)
+		recordError(h.ctx, h.logs, "runtime_start", err, "", map[string]any{"trigger": "enable"})
 	}
 }
 

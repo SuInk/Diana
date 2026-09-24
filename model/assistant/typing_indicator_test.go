@@ -111,7 +111,7 @@ func TestTypingIndicatorSurvivesSlowRefresh(t *testing.T) {
 	waitForCalls(t, channel, 5)
 }
 
-// 偶发失败不能把整轮输入状态判死：NapCat 查不到 uid、重连瞬间调用失败都属于这类，
+// 偶发失败不能把整轮输入状态判死：接入端查不到 uid、重连瞬间调用失败都属于这类，
 // 停掉的话用户看到的就是「正在输入」先没了、回复还没出来。
 func TestTypingIndicatorSurvivesTransientFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

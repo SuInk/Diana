@@ -24,6 +24,7 @@
       </div>
       <div class="view-actions">
         <div class="segmented" role="tablist" aria-label="日志类型">
+          <button type="button" :class="{ active: kind === 'all' }" @click="switchKind('all')">全部</button>
           <button type="button" :class="{ active: kind === 'operation' }" @click="switchKind('operation')">操作日志</button>
           <button type="button" :class="{ active: kind === 'error' }" @click="switchKind('error')">错误日志</button>
         </div>
@@ -34,7 +35,7 @@
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px">
           <div class="input-group" style="flex: 1; max-width: 360px">
-            <input v-model="query" class="input" placeholder="按动作 / 内容 / 操作人过滤…" />
+            <input v-model="query" class="input" placeholder="按内容 / 操作人过滤…" />
           </div>
           <SkeletonBlock v-if="loading && !logs.length" width="48px" height="18px" />
           <span v-else class="muted" style="font-size: 12.5px">{{ filteredLogs.length }} 条</span>
@@ -44,8 +45,7 @@
           <article v-for="log in filteredLogs" :key="log.id" class="log-row">
             <span class="log-time">{{ formatTime(log.created_at) }}</span>
             <div class="log-main">
-              <div class="cluster" style="gap: 6px; margin-bottom: 2px">
-                <span class="badge" :class="log.level === 'error' ? 'err' : 'ok'">{{ log.action }}</span>
+              <div v-if="log.actor || log.target" class="cluster" style="gap: 6px; margin-bottom: 2px">
                 <span v-if="log.actor" class="muted" style="font-size: 11.5px" :title="log.actor">{{ actorLabel(log) }}</span>
                 <span v-if="log.target" class="muted mono" style="font-size: 11.5px">→ {{ log.target }}</span>
               </div>
@@ -69,6 +69,7 @@ import { formatTime } from "../format";
 import { displayChatIdentity } from "../message-display";
 import { toastError } from "../toast";
 import { recordsActionsHost } from "../records-actions";
+import { viewQuery } from "../router";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -76,7 +77,8 @@ import SkeletonBlock from "../components/SkeletonBlock.vue";
 // 页头动作位由 RecordsView 提供；拿不到就说明这一档被单独用在别处，按钮不渲染。
 const actionsHost = inject(recordsActionsHost, ref<HTMLElement | null>(null));
 
-const kind = ref<AppLogKind>("operation");
+type LogTab = Extract<AppLogKind, "operation" | "error"> | "all";
+const kind = ref<LogTab>("all");
 const logs = ref<AppLogEntry[]>([]);
 const loading = ref(true);
 const query = ref("");
@@ -123,7 +125,7 @@ async function reload(): Promise<void> {
   }
 }
 
-function switchKind(next: AppLogKind): void {
+function switchKind(next: LogTab): void {
   if (kind.value !== next) {
     kind.value = next;
     void reload();
@@ -144,11 +146,19 @@ function applyAutoRefresh(): void {
 
 watch(autoRefresh, applyAutoRefresh);
 
+// 别的页面可以带着 ?q= 跳过来（比如浏览器页的「查看全部」），进来就按它过滤。
+function seedQueryFromLocation(): void {
+  const seeded = viewQuery().get("q");
+  if (seeded !== null) query.value = seeded;
+}
+
 onMounted(() => {
+  seedQueryFromLocation();
   void reload();
 });
 
 onActivated(() => {
+  seedQueryFromLocation();
   applyAutoRefresh();
 });
 

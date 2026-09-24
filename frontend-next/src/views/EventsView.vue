@@ -769,7 +769,7 @@ function eventCacheHitText(event: AssistantEventDetail): string {
 
 function platformLabel(platform: string): string {
   if (platform === "telegram") return "Telegram";
-  if (["onebot-v11", "onebot", "napcat", "lagrange", "go-cqhttp"].includes(platform)) return "OneBot v11";
+  if (["onebot-v11", "onebot", "lagrange", "go-cqhttp"].includes(platform)) return "OneBot v11";
   return platform;
 }
 
@@ -1641,11 +1641,16 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-/* 人设、固定规则和世界书不在比例条的分层里（前两者属于系统提示，落在留白那段；
-   世界书有自己的配额），给中性点，免得看的人以为比例条上能找到它们。 */
+/* 人设、固定规则、世界书和 Agent 的工具与 Skill 不在比例条的分层里（系统提示和
+   工具定义落在留白那段；世界书有自己的配额），给中性点，免得看的人以为比例条上能
+   找到它们。 */
+.budget-dot.budget-slice-soul,
 .budget-dot.budget-slice-persona,
 .budget-dot.budget-slice-prompt_rules,
-.budget-dot.budget-slice-world_book {
+.budget-dot.budget-slice-world_book,
+.budget-dot.budget-slice-agent_protocol,
+.budget-dot.budget-slice-agent_tools,
+.budget-dot.budget-slice-skills {
   background: var(--border);
 }
 

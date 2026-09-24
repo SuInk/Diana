@@ -92,7 +92,7 @@ func TestTelegramReactionBecomesReplaceNotice(t *testing.T) {
 	}
 }
 
-// NapCat 每次推一个表情的贴上或取消。
+// 接入端每次推一个表情的贴上或取消。
 func TestOneBotEmojiLikeBecomesReactionNotice(t *testing.T) {
 	for _, tc := range []struct {
 		raw   string

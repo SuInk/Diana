@@ -275,7 +275,7 @@ func (h *SystemUpdateHandler) check(c *gin.Context) {
 			h.writeUpdateError(c, "system_update_check", failure.err)
 			return
 		}
-		writeError(c, failure.status, failure.err)
+		logAndWriteError(c, h.logs, failure.status, "system_update_check", failure.err, "", nil)
 		return
 	}
 	h.changelog.mu.Lock()

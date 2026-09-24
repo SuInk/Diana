@@ -46,7 +46,7 @@ const (
 	historyBaselineOverlap  = 5 * time.Second
 	inboundReplayPadding    = 30 * time.Minute
 	inboundCheckpointPeriod = 30 * time.Second
-	// NapCat history calls can stall when several large responses are requested
+	// OneBot history calls can stall when several large responses are requested
 	// concurrently. Serialize the small session set to keep backfill complete.
 	historyFetchWorkers = 1
 	historyPageSize     = 100
@@ -68,7 +68,8 @@ const (
 )
 
 const (
-	// inboundMaxAttempts 是同一条入站事件的最大处理次数。超过后落终态，避免
+	// inboundMaxAttempts 是同一条入站事件默认的最大处理次数（可按机器人/分群配置，见
+	// send_retry_policy.go）。超过后落终态，避免
 	// 一条永远失败的消息按退避节奏无限重跑。
 	inboundMaxAttempts = 5
 	// inboundOutcomeRetriesExhausted 标记因重试次数用尽而停止的事件。
@@ -594,7 +595,7 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 				r.recordInboundSendRejected(item, processErr)
 				err = store.CompleteInboundEvent(commitCtx, item.ID, leaseOwner, inboundOutcomeSendRejected)
 				r.clearOutboundSteps(item.ID)
-			case ctx.Err() == nil && inboundRetriesExhausted(item.Attempts):
+			case ctx.Err() == nil && inboundRetriesExhausted(item.Attempts, r.inboundRetryMaxAttemptsForEvent(item.Event)):
 				// 无限重试只会让同一条消息反复重发。到达上限后落终态，并把最后
 				// 一次失败原因写进事件明细，等人处理而不是继续骚扰群里。
 				log.Printf("diana inbound event %s dropped after %d attempts: %v", item.ID, item.Attempts, processErr)
@@ -954,8 +955,11 @@ func historyBackfillWatermarkWithPadding(watermark int64, cutoff time.Time) int6
 }
 
 // inboundRetriesExhausted 判断这条事件是否已经用尽重试次数。
-func inboundRetriesExhausted(attempts int) bool {
-	return attempts >= inboundMaxAttempts
+func inboundRetriesExhausted(attempts, maxAttempts int) bool {
+	if maxAttempts <= 0 {
+		maxAttempts = inboundMaxAttempts
+	}
+	return attempts >= maxAttempts
 }
 
 // recordInboundDeliveryExhausted 把「重试次数用尽」写进这条事件的投递审计，
@@ -1046,7 +1050,7 @@ func (r *Runtime) RequestHistoryBackfill(window time.Duration) error {
 }
 
 // channelAccountDown reports a heartbeat-confirmed unhealthy bot account: the
-// transport may be fine while NapCat cannot receive messages for the account.
+// transport may be fine while the OneBot client cannot receive messages for the account.
 func channelAccountDown(status ChannelStatus) bool {
 	return status.AccountStatusKnown && (!status.AccountOnline || !status.AccountGood)
 }
@@ -1206,7 +1210,7 @@ func (r *Runtime) backfillInboundHistoryFromSessions(ctx context.Context, store 
 }
 
 func (r *Runtime) backfillInboundHistorySessions(ctx context.Context, store InboundEventStore, sessions []HistorySession, fallbackWatermark int64) ([]HistorySession, historyBackfillStats, error) {
-	// This backfill protocol is made of OneBot/NapCat APIs. Persisted sessions
+	// This backfill protocol is made of OneBot APIs. Persisted sessions
 	// from Telegram and other transports must keep their own signed/string IDs
 	// and must never be replayed through OneBot's positive numeric group rules.
 	oneBotSessions := sessions[:0]
@@ -1369,7 +1373,7 @@ func (r *Runtime) enqueueBackfilledEvents(ctx context.Context, store InboundEven
 	return insertedCount, errs
 }
 
-// fetchHistorySerialized 让整体回补和各群的缺口复查排队拉历史：NapCat 同时处理几个
+// fetchHistorySerialized 让整体回补和各群的缺口复查排队拉历史：接入端同时处理几个
 // 大的历史请求时会卡住（见 historyFetchWorkers）。
 func (r *Runtime) fetchHistorySerialized(ctx context.Context, session HistorySession) ([]MessageEvent, error) {
 	r.historyFetchMu.Lock()

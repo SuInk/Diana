@@ -7,7 +7,6 @@
       <button v-for="tab in extensionTabs" :key="tab.value" type="button" role="tab" :aria-selected="extensionTab === tab.value" :class="{active:extensionTab === tab.value}" @click="changeExtensionTab(tab.value)">{{ tab.label }}</button>
     </div>
     <ExtensionManager v-if="extensionTab === 'skill' || extensionTab === 'mcp'" ref="extensionManager" :key="extensionTab" :kind="extensionTab" />
-    <AgentBrowserPanel v-else-if="extensionTab === 'browser'" />
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
@@ -420,11 +419,11 @@
         :prepare-access="saveSettingsForSubscription"
       />
       <template #footer>
-        <button class="btn ghost small plugin-settings-reset" type="button" :disabled="savingSettings" @click="resetSettings">
+        <button class="btn ghost small plugin-settings-reset" type="button" :disabled="settingsBusy" @click="resetSettings">
           恢复默认
         </button>
-        <button class="btn" type="button" :disabled="savingSettings" @click="closeSettings">取消</button>
-        <button class="btn primary" type="button" :disabled="savingSettings" @click="saveSettings">保存</button>
+        <button class="btn" type="button" :disabled="settingsBusy" @click="closeSettings">取消</button>
+        <button class="btn primary" type="button" :disabled="settingsBusy" @click="saveSettings">保存</button>
       </template>
     </Modal>
 
@@ -653,8 +652,7 @@
 import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, onMounted, ref, watch } from "vue";
 import ExtensionManager from "../components/ExtensionManager.vue";
-import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
-const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'},{value:'browser' as const,label:'浏览器'}];
+const extensionTabs = [{value:'plugins' as const,label:'插件'},{value:'skill' as const,label:'Skills'},{value:'mcp' as const,label:'MCP'}];
 type ExtensionTab = typeof extensionTabs[number]['value'];
 const extensionTab = ref<ExtensionTab>('plugins');
 const extensionManager = ref<InstanceType<typeof ExtensionManager> | null>(null);
@@ -755,8 +753,9 @@ function dependencyHint(pluginID: string): string {
 }
 
 const settingsTarget = ref<PluginState | null>(null);
-const repositoryWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
-const rssWatchRef = ref<{ hasUnsavedChanges: () => boolean } | null>(null);
+type SubscriptionEditorHandle = { hasUnsavedChanges: () => boolean; saveEditor: () => Promise<boolean> };
+const repositoryWatchRef = ref<SubscriptionEditorHandle | null>(null);
+const rssWatchRef = ref<SubscriptionEditorHandle | null>(null);
 // 表单值按 spec.type 渲染成对应控件，这里用宽松类型换取模板里干净的 v-model 绑定。
 const settingsForm = ref<Record<string, any>>({});
 const repositoryPublishForm = ref<Record<string, any>>({});
@@ -798,6 +797,10 @@ function onRepositoryCredentialsChanged(value: Record<string, string>): void {
   settingsForm.value.repository_credentials = JSON.stringify(value);
 }
 const savingSettings = ref(false);
+// 订阅编辑器的提交分两步：先经 prepareAccess 存插件设置，再存订阅。savingSettings 只罩住第一步，
+// 第二步期间也得锁住底部按钮，否则能重复点保存或中途关掉弹窗。
+const savingSubscription = ref(false);
+const settingsBusy = computed(() => savingSettings.value || savingSubscription.value);
 const openedSnapshot = ref("");
 const githubSettingsTab = ref<"config" | "repositories" | "records">("config");
 const joinedGroups = ref<BotGroupSummary[]>([]);
@@ -1258,7 +1261,7 @@ function discardSettings(): void {
 
 async function closeSettings(): Promise<void> {
   // 保存进行中关掉弹窗会让人以为改动没生效，也会把「保存到一半」的状态藏起来。
-  if (savingSettings.value) return;
+  if (settingsBusy.value) return;
   if (settingsDirty()) {
     const confirmed = await askConfirm({
       title: "放弃未保存的改动？",
@@ -1401,6 +1404,24 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
 }
 
 async function saveSettings(): Promise<void> {
+  if (settingsBusy.value) return;
+  // 订阅编辑器开着且有改动时，外层「保存」要连它一起提交：编辑器自己的保存会先把插件设置落库，
+  // 再创建或更新订阅。校验不过或请求失败时它会自己提示，弹窗保持打开，改动不丢。
+  const editor = [repositoryWatchRef.value, rssWatchRef.value].find((item) => item?.hasUnsavedChanges());
+  if (editor) {
+    const target = settingsTarget.value;
+    savingSubscription.value = true;
+    try {
+      if (!(await editor.saveEditor())) return;
+    } finally {
+      savingSubscription.value = false;
+    }
+    if (target && settingsTarget.value?.manifest.id === target.manifest.id) {
+      toastSuccess(`已保存 ${target.manifest.name} 的设置`);
+      discardSettings();
+    }
+    return;
+  }
   try {
     await persistSettings(true);
   } catch (error) {

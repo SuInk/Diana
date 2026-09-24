@@ -90,10 +90,7 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		}
 		sendCtx := ctx
 		if sentChunks > 0 {
-			interval := time.Duration(cfg.SendChunkIntervalMS) * time.Millisecond
-			if interval <= 0 {
-				interval = sendChunkInterval
-			}
+			interval := chunkSendInterval(cfg, chunk)
 			// 这一轮还没发完，等待期间重新点亮输入状态：空着的话，多条回复中间
 			// 看上去就是「正在输入」断了。
 			typingIndicatorFromContext(ctx).resume()

@@ -153,7 +153,9 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 			sandboxNetwork: cfg.CommandSandboxAllowNetwork,
 		})
 	}
-	registry.RegisterBrowserTools(root, cfg)
+	if !cfg.BrowserToolsDisabled {
+		registry.RegisterBrowserTools(root, cfg)
+	}
 	registry.RegisterBrowserControlTools(root, cfg)
 	return registry, nil
 }

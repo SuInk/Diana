@@ -1,8 +1,17 @@
 # 内置浏览器
 
-Diana 自己的那个浏览器：一个常驻的 Chrome/Chromium 进程，profile 落在数据目录下的
-`browser-box/profile` 里，登录态跨重启保留。WebUI 的「浏览器」页能看到它的实时画面，
-也能直接用鼠标键盘操作——登录、过验证码、临时接管，都由你自己来。
+Diana 自己的浏览器：**每台机器人各一个** Chrome/Chromium 进程，profile 落在数据目录下的
+`browser-box/profiles/<机器人 ID>/profile` 里，登录态跨重启保留。WebUI 的「浏览器」页
+（顶部选中某台机器人时）能看到它的实时画面，也能直接用鼠标键盘操作——登录、过验证码、
+临时接管，都由你自己来。
+
+**机器人之间互相隔离。** A 机器人里登录的账号，B 机器人看不到也用不了；接管也只作用于
+那一台。Chrome 的 BrowserContext 也能隔离，但它不落盘、重启就丢登录态，所以这里是一台
+机器人一个进程、一个 profile。进程按需起：机器人第一次调用浏览器工具、或你在页面上点
+「启动」时才拉起，不会一开机就为每台机器人各起一个。
+
+从按机器人拆分之前的版本升级时，原来那份共用的 `browser-box/profile` 会在启动时整个
+搬给第一台机器人，其他机器人从空白 profile 开始，需要的话各自重新登录。
 
 它和另外两档不重叠：
 
@@ -11,12 +20,28 @@ Diana 自己的那个浏览器：一个常驻的 Chrome/Chromium 进程，profil
 | 浏览器 | 一次性 Chromium，每次全新 profile | 用户日常浏览器 | Diana 自己的常驻浏览器 |
 | 登录态 | 没有 | 用户的，Diana 不碰 Cookie | 用户在这个浏览器里自己登的，留在 profile 目录 |
 | 用户能不能看见 | 看不见 | 就在自己浏览器里 | WebUI 里有实时画面，能直接上手 |
-| 默认 | 开启 | 全关，逐项授权 | 那一页打开才有进程；起来后机器人默认就能用 |
+| 默认 | 开启 | 全关，逐项授权 | 新装时找得到 Chrome 就自动打开；起来后机器人默认就能用 |
 | 谁能驱动 | 群成员也能（`browser_render`） | 主人 | 只有主人 |
+
+**新装时自动打开。** 内置浏览器从没保存过配置、也没在用扩展时，Diana 启动会探测本机：
+找得到 Chrome/Chromium 就把来源设成「Diana 内置」并启动；有显示器，或者能自己拉起 Xvfb
+（完整版镜像自带），就开真窗口，否则无头。找不到浏览器时来源保持「不用」，而且不落盘，
+装上之后下次启动还会再探测。保存过的配置一律不动。
+
+**开箱即用，选哪个就用哪个。** 内置浏览器和浏览器控制扩展做的是同一件事——带登录态、
+只有主人能驱动、能点能输入——区别只在用谁的浏览器。「浏览器」页顶部两行勾选「Diana 内置浏览器 /
+我自己的 Chrome」，打勾就是启用；两个都勾上时标出「第 1 / 第 2 优先」，下面那行出现「优先用」，排在上面的先用、另一个当备用；新装时找得到 Chrome 就自动选好内置浏览器，
+什么都不用配。选中的那个用不了（没装 Chrome、扩展没连上、正被接管）而另一个开着时，这一轮
+自动换成另一个（`model/browsersource.Pick`，顺序存在 `app_state` 的 `browser_source` 里）。
+模型每一轮只看到一套浏览器工具：轮到扩展时 `browser_open` 这组不登记，轮到内置时
+`browser_ext_*` 不登记。例外是机器人自己改过外部 CDP 地址（不是默认的
+`http://127.0.0.1:9222`），那是显式指定的浏览器，`browser_open` 这组照样登记。开真窗口、
+扩展的令牌与网站名单、外接 CDP 都在页面底部的「更多设置」里。一次性无头渲染
+（`browser_render`）不参与这个选择，一直可用。
 
 打开这一档之后，`browser_open` / `browser_text` / `browser_click` / `browser_type` /
 `browser_screenshot` 这组工具会自动接到内置浏览器上，不再指向机器人配置里那个外部
-CDP 地址。只有一个前提：在 WebUI 的「浏览器 → 内置浏览器」里把它打开。机器人那一侧默认
+CDP 地址。只有一个前提：WebUI「浏览器」页的「Diana 内置浏览器」开着（本机找得到 Chrome 时会自动打开），并且这一轮轮到它。机器人那一侧默认
 就允许，想让某台机器人彻底不碰它，把它的 `agent_browser_box_disabled` 勾上。
 
 **这组工具只有主人能用。** 它连的是带着你登录态的常驻浏览器，所以群成员的工具面里
@@ -26,7 +51,7 @@ CDP 地址。只有一个前提：在 WebUI 的「浏览器 → 内置浏览器�
 
 ## 实时画面是怎么来的
 
-默认无头（`headful` 关闭），这是容器里唯一能跑起来的模式。画面走 CDP 的 `Page.startScreencast`：浏览器把每一帧渲染结果编成 JPEG 推给 Diana，
+无头模式（`headful` 关闭）哪儿都能跑。画面走 CDP 的 `Page.startScreencast`：浏览器把每一帧渲染结果编成 JPEG 推给 Diana，
 Diana 再转发到 WebUI。所以无头模式照样有画面，容器里不需要虚拟显示器，也不需要
 noVNC。反过来，你在画面上的鼠标键盘操作走 `Input.dispatch*` 送回浏览器，落到页面上
 和真人点是同一条输入管线。
@@ -80,26 +105,44 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
   `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y chromium fonts-noto-cjk'`
   之后再开；有头还要一个 `xvfb`。
 - **裸机部署**会按常见安装路径找 Chrome/Chromium，也认 WebUI 下载的 Chrome for Testing。
-- profile 在 `<数据目录>/browser-box/profile`。用 compose 的默认挂载时它跟着 `./data`
+- profile 在 `<数据目录>/browser-box/profiles/<机器人 ID>/profile`。用 compose 的默认挂载时它跟着 `./data`
   走，容器重建后登录态还在；换句话说，**这个目录等价于一份浏览器登录态，备份和权限
   按敏感数据对待**。
+
+## 操作记录
+
+浏览器带着你的登录态，所以机器人在里面做的每一步都会记下来，浏览器页底部按当前机器人
+列出最近的记录，「查看全部」跳到记录页并按 `browser` 过滤：
+
+- **机器人的动作**（`browser_action`）：打开网页、读取页面、点击、输入、截图，内置浏览器
+  和扩展那组都记。带网址或 CSS 选择器、耗时、失败原因、是谁的消息触发的，以及机器人 ID
+  （`metadata.profile_id`）。**输入的文字只记字数，不记内容**——机器人可能在填登录框。
+- **你的动作**：启动、停止、接管和交还（`browser_box_start` / `_stop` / `_takeover`），在
+  实时画面里打开网页（`browser_box_navigate`），以及在画面上第一次动手触发的自动接管。
+  鼠标移动不逐条记。
+- 一次性无头渲染（`browser_render`）不带登录态，由插件自己记，不混进这里。
+
+`GET /api/logs` 支持 `action=a,b,c` 和 `profile=<机器人 ID>` 两个筛选参数。
 
 ## 接口
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/browser-box/status` | 配置、运行状态、接管状态、profile 目录 |
-| PUT | `/api/browser-box/settings` | 覆盖配置；关掉总开关会结束进程 |
+| GET | `/api/browser-box/status` | 配置和本机能否找到浏览器；带 `?bot=` 时再加这台机器人的运行状态、接管状态、profile 目录 |
+| PUT | `/api/browser-box/settings` | 覆盖全局配置；关掉总开关会结束所有机器人的进程 |
 | POST | `/api/browser-box/start` / `/stop` | 手动起停 |
 | POST | `/api/browser-box/takeover` | 切换人工接管 |
 | GET/POST | `/api/browser-box/tabs` | 列出、新开标签页 |
 | DELETE | `/api/browser-box/tabs/:id` | 关掉一个标签页 |
 | GET | `/api/browser-box/live` | 实时画面 WebSocket：出去是画面帧，进来是鼠标键盘事件 |
 
+除 `status` 和 `settings` 外，这些接口都要带 `?bot=<机器人 ID>`，不带直接 400：每台
+机器人各有一份登录态，服务端不替你猜是哪一台。
+
 实时画面端点在 `/api` 下，走 WebUI 会话鉴权，并且只接受同源升级请求：能连上它就等于
 能看你的浏览器。
 
 ## 资源开销
 
-一个常驻 Chrome 大约吃 200–400 MB 内存，空闲时 CPU 接近 0。实时画面只在 WebUI 那一页
+一个常驻 Chrome 大约吃 200–400 MB 内存，空闲时 CPU 接近 0；每台用过浏览器的机器人各占一份。实时画面只在 WebUI 那一页
 打开时才推帧，关掉页面就停；每帧是质量 60 的 JPEG，1280×800 下通常几十 KB。

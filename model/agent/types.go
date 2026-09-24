@@ -105,6 +105,9 @@ type Config struct {
 	CommandSandboxAllowNetwork bool
 	BrowserCDPURL              string
 	BrowserTimeoutMS           int
+	// BrowserToolsDisabled 为 true 时 browser_open 那组 CDP 工具不登记：浏览器来源
+	// 选的不是内置浏览器，这台机器人也没另配外部 CDP 地址。
+	BrowserToolsDisabled bool
 	// BrowserControl 是浏览器控制扩展的控制面句柄，由运行时注入，不是可序列化
 	// 的配置项：为 nil 时 browser_ext_* 那组工具根本不登记。共享扩展底座按
 	// ExtensionScope 取字段，它不在其中，所以不会被带进缓存键。

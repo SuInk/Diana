@@ -48,10 +48,8 @@ type consoleGroupItem struct {
 	SharedWith []consoleGroupSharedBot `json:"shared_with,omitempty"`
 	// 额度用了多少、上限是多少。上限是算过继承的生效值（群里没填就是机器人那档），
 	// 展示出来的数得和真正拦人的那个一致，不然进度条就成了误导。
-	QuotaTokensUsed int64 `json:"quota_tokens_used,omitempty"`
-	QuotaCallsUsed  int64 `json:"quota_calls_used,omitempty"`
-	QuotaTokenLimit int64 `json:"quota_token_limit,omitempty"`
-	QuotaCallLimit  int64 `json:"quota_call_limit,omitempty"`
+	QuotaCallsUsed int64 `json:"quota_calls_used,omitempty"`
+	QuotaCallLimit int64 `json:"quota_call_limit,omitempty"`
 }
 
 type consoleGroupSharedBot struct {
@@ -751,6 +749,7 @@ func (h *BotHandler) saveConsoleGroup(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "groups_save", err, groupID, map[string]any{"group_id": groupID})
 		return
 	}
+	cfg = h.resolveGroupPersonaLink(c.Request.Context(), cfg)
 	// 群配置跟随它自己那台机器人：拿运行时当前配置当 base，会把另一台的人设和
 	// 默认值写进这个群。
 	base := h.botConfigForProfile(profileID)
@@ -836,7 +835,7 @@ func groupConfigAuditMetadata(before, after assistant.GroupConfig, profileName s
 	return metadata
 }
 
-// attachGroupQuotaUsage 给每个群补上本窗口已用的 token 和调用次数。
+// attachGroupQuotaUsage 给每个群补上本窗口已用的调用次数。
 //
 // 额度是个「悄悄生效」的闸门：不把用了多少摆在配置旁边，用满了也只表现为机器人
 // 忽然不说话，没人知道是撞了额度还是坏了。所以列表里就得能看见进度。
@@ -852,9 +851,9 @@ func (h *BotHandler) attachGroupQuotaUsage(ctx context.Context, profileID string
 		if owner := strings.TrimSpace(groups[index].BotProfileID); owner != "" && owner != profileID {
 			botCfg = h.botConfigForProfile(owner)
 		}
-		tokens, calls := assistant.EffectiveGroupModelQuota(botCfg, groups[index].GroupConfig)
-		groups[index].QuotaTokenLimit, groups[index].QuotaCallLimit = tokens, calls
-		if tokens > 0 || calls > 0 {
+		calls := assistant.EffectiveGroupModelQuota(botCfg, groups[index].GroupConfig)
+		groups[index].QuotaCallLimit = calls
+		if calls > 0 {
 			limited = true
 		}
 	}
@@ -872,7 +871,6 @@ func (h *BotHandler) attachGroupQuotaUsage(ctx context.Context, profileID string
 		return
 	}
 	for index := range groups {
-		used := usage[strings.TrimSpace(groups[index].GroupID)]
-		groups[index].QuotaTokensUsed, groups[index].QuotaCallsUsed = used.Tokens, used.Calls
+		groups[index].QuotaCallsUsed = usage[strings.TrimSpace(groups[index].GroupID)].Calls
 	}
 }

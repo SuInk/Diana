@@ -204,6 +204,9 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			for _, job := range jobs {
 				if memoryJobAttemptsExhausted(job.Attempts) {
 					log.Printf("diana memory job abandoned after %d attempts: id=%s", job.Attempts-1, job.ID)
+					r.recordBackgroundFailure("memory_job_abandoned", memoryJobKindLabel(job.Payload.Kind)+"连续失败，重试次数用完已放弃，这段对话不会再提取记忆",
+						"memory_job_abandoned|"+job.Payload.Session, nil,
+						map[string]any{"job_id": job.ID, "kind": string(job.Payload.Kind), "session": job.Payload.Session, "attempts": job.Attempts - 1})
 					commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					if err := store.CompleteMemoryJob(commitCtx, job.ID, leaseOwner); err != nil {
 						log.Printf("diana memory job state update failed: %v", err)
@@ -219,6 +222,10 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			jobCtx, jobCancel := context.WithTimeout(ctx, memoryExtractionTimeout)
 			err = r.processMemoryJobs(jobCtx, store, live)
 			jobCancel()
+			if err != nil && ctx.Err() == nil {
+				r.recordBackgroundFailure("memory_job_failed", "长期记忆提取失败，稍后自动重试", "", err,
+					map[string]any{"jobs": len(live), "kind": string(live[0].Payload.Kind), "attempts": live[0].Attempts})
+			}
 
 			for _, job := range live {
 				commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -235,6 +242,18 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 				}
 			}
 		}
+	}
+}
+
+// memoryJobKindLabel 是日志里给人看的任务名。
+func memoryJobKindLabel(kind MemoryJobKind) string {
+	switch kind {
+	case MemoryJobSummary:
+		return "会话摘要"
+	case MemoryJobEvent:
+		return "长期记忆提取"
+	default:
+		return "记忆任务"
 	}
 }
 
@@ -706,6 +725,8 @@ func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
 	cancel()
 	if err != nil {
 		log.Printf("diana memory event enqueue failed: %v", err)
+		r.recordBackgroundFailure("memory_enqueue_failed", "消息没能排进长期记忆提取队列，这条不会被记住", "", err,
+			map[string]any{"session": sessionKey(event), "message_id": event.MessageID})
 		return
 	}
 	if inserted {
@@ -733,6 +754,8 @@ func (r *Runtime) enqueueContextSummary(session string, events []MessageEvent) {
 	cancel()
 	if err != nil {
 		log.Printf("diana memory summary enqueue failed: %v", err)
+		r.recordBackgroundFailure("memory_enqueue_failed", "会话摘要没能排进队列，这一段不会生成摘要", "memory_summary_enqueue_failed", err,
+			map[string]any{"session": session, "events": len(events)})
 		return
 	}
 	if inserted {
@@ -773,7 +796,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			seen[group] = true
 			profiles := llmProfilesInGroup(set, group)
 			if len(profiles) > 0 {
-				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+				return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
 		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
@@ -781,7 +804,7 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			return "", roleErr
 		}
 		if len(profiles) > 0 {
-			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+			return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 		}
 		for _, group := range semanticRouteProfileGroups {
 			group = llm.NormalizeProfileGroup(group)
@@ -790,11 +813,11 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			}
 			seen[group] = true
 			if profiles := llmProfilesInGroup(set, group); len(profiles) > 0 {
-				return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+				return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
 		if profiles := llmProfilesInGroup(set, llm.GroupChat); len(profiles) > 0 {
-			return runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
+			return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 		}
 		return "", fmt.Errorf("diana: no text-capable llm profile is configured for memory")
 	}

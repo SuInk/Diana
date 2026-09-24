@@ -443,7 +443,7 @@ func TestAssistantEventTraceEndpointReturnsDebugSteps(t *testing.T) {
 	defer func() { _ = store.Close() }()
 	ctx := context.Background()
 	event := assistant.MessageEvent{
-		Platform:  "napcat",
+		Platform:  "onebot-v11",
 		ProfileID: "onebot-main",
 		Kind:      assistant.EventKindGroup,
 		GroupID:   "group-1",

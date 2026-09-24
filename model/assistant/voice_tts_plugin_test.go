@@ -134,7 +134,7 @@ func TestDianaTTSToolSynthesizesAndReturnsTerminalRecord(t *testing.T) {
 	}
 }
 
-func TestDianaTTSToolPreEncodesTencentSilkForNapCat(t *testing.T) {
+func TestDianaTTSToolPreEncodesTencentSilkForOneBot(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "audio/wav")
 		_, _ = w.Write(testWAVBytes())

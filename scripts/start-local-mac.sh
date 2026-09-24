@@ -58,10 +58,10 @@ load_runtime_env() {
 		fi
 
 		# 应用配置已经搬进 config.yaml，这里只放外部集成用的变量：解析器的站点
-		# cookie 和代理、搜索服务的 key、ffmpeg / NapCat 这些外部程序的路径。
+		# cookie 和代理、搜索服务的 key、ffmpeg 这些外部程序的路径。
 		# 它们在 WebUI 里没有对应项，不存在两个真相源的问题。
 		case "$key" in
-			DIANA_*|EXA_API_KEY*|TAVILY_API_KEY*|BILI_SESSDATA|DOUYIN_CK|XHS_CK|RESOLVER_PROXY|NAPCAT_QQ)
+			DIANA_*|EXA_API_KEY*|TAVILY_API_KEY*|BILI_SESSDATA|DOUYIN_CK|XHS_CK|RESOLVER_PROXY)
 				export "$key=$value"
 				;;
 		esac
@@ -79,15 +79,6 @@ extend_path_from_executable "${DIANA_FFPROBE_PATH:-}"
 extend_path_from_executable "${DIANA_TTS_FFMPEG_PATH:-}"
 
 mkdir -p "$ROOT/data" "$ROOT/logs"
-
-if [[ "$(uname -s)" == "Darwin" && "${DIANA_START_NAPCAT:-true}" != "false" ]]; then
-	NAPCAT_LAUNCHER="$ROOT/scripts/start-napcat-mac.sh"
-	if [[ -x "$NAPCAT_LAUNCHER" ]]; then
-		if ! "$NAPCAT_LAUNCHER" >>"$ROOT/logs/napcat-launch.log" 2>&1; then
-			echo "NapCat auto-start failed; see $ROOT/logs/napcat-launch.log" >&2
-		fi
-	fi
-fi
 
 # 应用配置走 config.yaml。本地开发第一次跑的时候生成一份指向仓库目录的默认
 # 配置；已经存在就原样用，不覆盖开发者自己改过的内容。

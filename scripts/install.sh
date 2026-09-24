@@ -139,7 +139,7 @@ case "$os_name" in
 esac
 
 # sudo 只负责把程序放进固定目录；桌面服务仍归发起安装的用户运行，避免 macOS
-# 的浏览器、麦克风和 NapCat 被丢进没有 GUI 会话的 root 环境。
+# 的浏览器和麦克风被丢进没有 GUI 会话的 root 环境。
 service_user=$(id -un)
 service_uid=$(id -u)
 service_home=$HOME
@@ -430,7 +430,6 @@ sign_macos_app() {
 # 键名沿用环境变量的写法只是为了让调用方式不变,实际写进的是 YAML。
 optional_llm_keys='LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_API_FORMAT LLM_IMAGE_MODEL'
 optional_storage_keys='DIANA_LOCAL_MEDIA_BASE_URL'
-optional_napcat_keys='DIANA_NAPCAT_WEBUI_URL DIANA_NAPCAT_WEBUI_TOKEN'
 
 # yaml_quote 把值包成单引号 YAML 标量,内部单引号按 YAML 规则翻倍。
 yaml_quote() {
@@ -442,8 +441,6 @@ yaml_key() {
   case $1 in
     LLM_*) printf '%s' "$(printf '%s' "${1#LLM_}" | tr 'A-Z' 'a-z')" ;;
     DIANA_LOCAL_MEDIA_BASE_URL) printf 'local_media_base_url' ;;
-    DIANA_NAPCAT_WEBUI_URL) printf 'webui_url' ;;
-    DIANA_NAPCAT_WEBUI_TOKEN) printf 'webui_token' ;;
     *) printf '%s' "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" ;;
   esac
 }
@@ -545,7 +542,6 @@ admin:
   password: $(yaml_quote "$generated_password")
 EOF
   append_optional_section "$config_file" storage $optional_storage_keys
-  append_optional_section "$config_file" napcat $optional_napcat_keys
   append_optional_section "$config_file" llm $optional_llm_keys
   if [ -n "$extra_config_file" ]; then
     # 原样并入:这段由部署者自己写,内容必须是合法 YAML 顶层段。
