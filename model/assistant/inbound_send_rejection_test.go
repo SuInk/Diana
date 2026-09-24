@@ -79,9 +79,7 @@ func TestPermanentSendRejectionDropsWithoutRegenerating(t *testing.T) {
 	if err != nil || !inserted {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 5*time.Second, func() bool { return store.isDone(id) })
 	if err := runtime.Stop(); err != nil {
 		t.Fatal(err)

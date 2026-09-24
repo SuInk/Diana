@@ -33,6 +33,8 @@ func TestEnablingProfileStartsStoppedRuntime(t *testing.T) {
 	// 反连要求配了 Access Token 才算配置有效，否则 Start 会因为校验失败而返回。
 	config.OneBotAccessToken = "enable-start-token"
 	runtime := assistant.NewRuntime(config, blockingChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	// 接口会把运行时拉起来；用例结束时停掉并等收件协程退出，别让它活到后面的用例。
+	t.Cleanup(func() { _ = runtime.Stop() })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	h := NewBotHandlerWithFactory(ctx, runtime, func(assistant.BotConfig) assistant.Channel { return blockingChannel{} })

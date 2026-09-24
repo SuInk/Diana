@@ -118,8 +118,12 @@ func TestSpeedProbeIsSerialAndBounded(t *testing.T) {
 					break
 				}
 			}
-			defer atomic.AddInt64(&inFlight, -1)
 			time.Sleep(60 * time.Millisecond)
+			// 在开始回包之前就退出计数：客户端要读完整段样本才会发下一条测速请求，
+			// 所以串行时下一条一定落在这之后。原先用 defer 在 handler 返回时才减，
+			// 客户端读完最后一块、关掉 body、发出下一条请求时，上一个 handler 可能
+			// 还没走到 return，串行的测速也会被数成并发 2（CI 上出现过）。
+			atomic.AddInt64(&inFlight, -1)
 		}
 		writeSample(w, r, limit, 0, 0)
 	})
@@ -137,12 +141,12 @@ func TestSpeedProbeIsSerialAndBounded(t *testing.T) {
 	selector.client = &http.Client{Timeout: 8 * time.Second, Transport: probeRouter{direct: server.URL, mirrors: routes}}
 
 	selector.Probe(context.Background(), releaseArchiveURL)
-	if peak != 1 {
-		t.Fatalf("测速并发数 = %d，同时测多条会互相抢带宽", peak)
+	if got := atomic.LoadInt64(&peak); got != 1 {
+		t.Fatalf("测速并发数 = %d，同时测多条会互相抢带宽", got)
 	}
 	// 直连 + 握手最快的 speedCandidates 条镜像。
-	if want := int64(speedCandidates + 1); sampled != want {
-		t.Fatalf("测速线路条数 = %d，期望 %d", sampled, want)
+	if want, got := int64(speedCandidates+1), atomic.LoadInt64(&sampled); got != want {
+		t.Fatalf("测速线路条数 = %d，期望 %d", got, want)
 	}
 }
 

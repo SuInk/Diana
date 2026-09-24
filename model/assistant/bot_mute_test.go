@@ -116,11 +116,14 @@ func TestBotMuteIgnoresOtherMembersAndExpires(t *testing.T) {
 	}
 	event := disabledGroupSignalEvent()
 	target := event
-	h.runtime.setBotMute(target, botMuteState{PersonalUntil: time.Now().Add(20 * time.Millisecond)})
-	if _, muted := h.runtime.botMutedForReply(event); !muted {
+	// 禁言期给足余量：20ms 的禁言在 CI 卡一下就已经过期，「刚禁言就该生效」
+	// 这条断言会假失败。到期那一步按实际截止时间等，不靠固定睡眠猜。
+	until := time.Now().Add(200 * time.Millisecond)
+	h.runtime.setBotMute(target, botMuteState{PersonalUntil: until})
+	if _, muted := h.runtime.botMutedForReply(event); !muted && time.Now().Before(until) {
 		t.Fatal("fresh mute not applied")
 	}
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(time.Until(until) + 10*time.Millisecond)
 	if _, muted := h.runtime.botMutedForReply(event); muted {
 		t.Fatal("expired mute still applied")
 	}

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,6 +179,13 @@ func describeVideoContextError(err error, maxBytes int64) string {
 	}
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(text, "timeout") || strings.Contains(text, "Client.Timeout") {
 		return "下载超时"
+	}
+	// 连接层的错误是 *url.Error，Error() 会把完整的下载地址带出来，而这段文字要
+	// 进模型的提示词。QQ 的视频地址带着 rkey 之类的临时凭据，不能原样交出去；
+	// 只留下「连不上、被拒绝」这一层原因。
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err.Error()
 	}
 	return text
 }

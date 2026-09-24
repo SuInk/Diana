@@ -76,10 +76,7 @@ func TestInboundFailureBackfillsWithoutReconnect(t *testing.T) {
 	logs := &captureAppLogs{}
 	r := newQueuedTestRuntime(channel, s, nil)
 	r.SetAppLogWriter(logs)
-	if err := r.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	defer r.Stop()
+	startTestRuntime(t, r)
 	waitForCondition(t, 4*time.Second, func() bool { return hasAppLogAction(logs.entriesSnapshot(), "backfill_completed") })
 	channel.setResponse("get_group_msg_history", map[string]any{"messages": []any{historyTestMessage(967, now-1800, "recovered")}})
 	r.noteFailedInbound(MessageEvent{Platform: PlatformOneBotV11, Time: now - 1800})

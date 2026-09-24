@@ -110,7 +110,9 @@ func musicTestServer(t *testing.T, durationMS int64, audio []byte) *httptest.Ser
 				"http://"+r.Host+"/audio/1974443814.mp3", len(audio))
 		case "/search", "/official/search":
 			keywords := strings.TrimSpace(r.URL.Query().Get("keywords") + r.URL.Query().Get("s"))
-			if !strings.Contains(keywords, "雾里") {
+			// 「晴天 周杰伦」是连接测试固定用的搜索词，也给它一首歌，连接测试才不用
+			// 退回官方接口去打外网。
+			if !strings.Contains(keywords, "雾里") && !strings.Contains(keywords, "晴天") {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprint(w, `{"code":200,"result":{"songs":[]}}`)
 				return
@@ -911,7 +913,9 @@ func TestUnwrapJSONPayloadStripsWrappers(t *testing.T) {
 
 func TestMusicConnectionTestReportsSearchAndPlayback(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte("audio"))
-	plugin := NewMusicPlugin(server.Client())
+	// 原先用的是 NewMusicPlugin：自建接口搜不到连接测试的搜索词时会退回
+	// music.163.com，用例实际上是在测外网，断网就失败。
+	plugin := newMusicTestPlugin(server)
 	settings := musicRequestSettings(server)
 	settings[musicSettingSources] = []string{"netease"}
 

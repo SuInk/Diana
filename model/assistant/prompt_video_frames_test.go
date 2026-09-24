@@ -4,7 +4,9 @@
 package assistant
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -62,6 +64,19 @@ func TestVideoContextErrorNamesTheSizeLimit(t *testing.T) {
 	got := describeVideoContextError(errVideoContextTestOversize, 100*1024*1024)
 	if !strings.Contains(got, "100 MB") {
 		t.Fatalf("超限文案里没有具体上限：%s", got)
+	}
+}
+
+// 连不上下载地址时，原因里只能有连接层的说法，不能把带临时凭据的地址本身带进提示词。
+func TestVideoContextErrorDoesNotLeakSourceURL(t *testing.T) {
+	source := "https://multimedia.example.invalid/download?rkey=temporary-credential"
+	err := &url.Error{Op: "Get", URL: source, Err: errors.New("dial tcp: connect: connection refused")}
+	got := describeVideoContextError(err, 100*1024*1024)
+	if strings.Contains(got, "rkey") || strings.Contains(got, "multimedia.example.invalid") {
+		t.Fatalf("失败原因带出了下载地址：%s", got)
+	}
+	if !strings.Contains(got, "connection refused") {
+		t.Fatalf("失败原因丢了连接层的说法：%s", got)
 	}
 }
 

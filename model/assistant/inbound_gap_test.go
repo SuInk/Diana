@@ -79,10 +79,7 @@ func startGapTestRuntime(t *testing.T, store *memoryInboundEventStore, channel *
 	logs := &captureAppLogs{}
 	runtime := newQueuedTestRuntime(channel, store, nil)
 	runtime.SetAppLogWriter(logs)
-	if err := runtime.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Stop() })
+	startTestRuntime(t, runtime)
 	waitForCondition(t, 4*time.Second, func() bool {
 		return hasAppLogAction(logs.entriesSnapshot(), "backfill_completed")
 	})

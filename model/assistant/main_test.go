@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -32,6 +35,86 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	code := m.Run()
+	if code == 0 {
+		code = checkPackageLeftovers()
+	}
 	_ = os.RemoveAll(workspaceRoot)
 	os.Exit(code)
+}
+
+// checkPackageLeftovers 在整包跑完后检查有没有用例把东西留在了共享状态里。
+//
+// #709、#711 都是同一类问题：某个用例派出去的后台协程活得比用例长，把编码任务
+// 记录写进整包共享的工作区根目录，下一个启动 Runtime 的用例把它当遗留任务捡走，
+// 用自己的 channel 汇报出去，表现成一条与编码毫无关系的用例「多发了一条」。这种
+// 失败只在特定的执行顺序下出现，追查代价很高；在这里把「留下了东西」本身变成
+// 确定的失败，并指出留下的是什么。
+func checkPackageLeftovers() int {
+	code := 0
+	if jobs := listCodingJobs(); len(jobs) > 0 {
+		fmt.Fprintln(os.Stderr, "测试结束后共享工作区里还留着编码任务记录；用到编码任务的用例要先调 useTempCodingWorkspace，并在结束前收干净看护协程（见 codingTestRuntime）：")
+		for _, job := range jobs {
+			fmt.Fprintf(os.Stderr, "  id=%s status=%s workspace=%s instruction=%q\n", job.ID, job.Status, job.Workspace, job.Instruction)
+		}
+		code = 1
+	}
+	if stacks := lingeringPackageGoroutines(10 * time.Second); len(stacks) > 0 {
+		fmt.Fprintf(os.Stderr, "测试结束 10 秒后仍有 %d 个本包的协程没有退出。启动 Runtime、服务器或后台循环的用例要在 t.Cleanup 里停掉并等它退出：\n\n%s\n", len(stacks), strings.Join(stacks, "\n\n"))
+		code = 1
+	}
+	return code
+}
+
+// lingeringPackageGoroutineAllowlist 是允许活过整包的协程：它们按设计就是延时
+// 执行、到点自己退出，不读写共享状态。
+var lingeringPackageGoroutineAllowlist = []string{
+	// 解析出的本地媒体发出去之后延时删除，延时按分钟计；只删自己登记的绝对路径。
+	"model/assistant.cleanupLocalMediaFilesLater",
+}
+
+// lingeringPackageGoroutines 等到 grace 为止，返回仍在运行、栈里带本包代码的协程。
+// 不引入 goleak：只看本包的栈帧就够判断「用例漏了东西」，标准库和第三方包自己的
+// 常驻协程（HTTP 连接池、数据库驱动）不在考察范围里。
+func lingeringPackageGoroutines(grace time.Duration) []string {
+	deadline := time.Now().Add(grace)
+	for {
+		stacks := packageGoroutineStacks()
+		if len(stacks) == 0 || time.Now().After(deadline) {
+			return stacks
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func packageGoroutineStacks() []string {
+	buf := make([]byte, 1<<20)
+	for {
+		n := goruntime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	var lingering []string
+	for _, stack := range strings.Split(string(buf), "\n\n") {
+		if !strings.Contains(stack, "diana/model/assistant.") {
+			continue
+		}
+		// 当前协程就是 TestMain 自己。
+		if strings.Contains(stack, "model/assistant.TestMain") {
+			continue
+		}
+		allowed := false
+		for _, marker := range lingeringPackageGoroutineAllowlist {
+			if strings.Contains(stack, marker) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			lingering = append(lingering, stack)
+		}
+	}
+	return lingering
 }

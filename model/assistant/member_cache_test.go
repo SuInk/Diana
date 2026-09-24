@@ -146,6 +146,13 @@ func TestMemberCacheDedupesInflightFetches(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		cache.LevelFor(groupEvent("100", "42", 0))
 	}
+	// 查询在后台协程里发，先等第一次真的发出去，再多留一段看有没有重复的；
+	// 只睡固定时长的话，协程还没被调度到时 calls 是 0，用例会假失败。
+	waitForCondition(t, 2*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls > 0
+	})
 	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
 	got := calls
