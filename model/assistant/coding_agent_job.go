@@ -123,16 +123,24 @@ func (j CodingJob) finished() bool {
 //
 // 记录目录跟着 APP_DB_PATH 所在目录走，几个实例的数据库放在同一个目录下时会共用
 // 它，扫目录扫到的不一定是自己派的活。档案 ID 落在数据库里、重启不变，不同数据库
-// 各自生成，所以拿它认归属：非空 ID 必须精确命中；空 ID 只在这台 Runtime 只有一台
-// 机器人时归它。这里故意不沿用 lookupProfileLocked「对不上就退回唯一那台」的兜底，
-// 那个兜底恰好会把别的实例的任务认成自己的。
+// 各自生成，所以拿它认归属：非空 ID 必须精确命中现有机器人，或者是本实例登记过的
+// 旧号（见 SetProfileAliases）；空 ID 只在这台 Runtime 只有一台机器人时归它。
+// 这里故意不沿用 lookupProfileLocked「对不上就退回唯一那台」的兜底，那个兜底恰好
+// 会把别的实例的任务认成自己的——认不出的非空 ID 即使只有一台机器人也不认领。
 func (r *Runtime) codingJobOwner(profileID string) (string, bool) {
 	profileID = strings.TrimSpace(profileID)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if profileID != "" {
-		_, ok := r.profileConfigs[profileID]
-		return profileID, ok
+		if _, ok := r.profileConfigs[profileID]; ok {
+			return profileID, true
+		}
+		if current, ok := r.profileAliases[profileID]; ok {
+			if _, exists := r.profileConfigs[current]; exists {
+				return current, true
+			}
+		}
+		return profileID, false
 	}
 	if len(r.profileConfigs) == 1 {
 		for id := range r.profileConfigs {
@@ -140,13 +148,6 @@ func (r *Runtime) codingJobOwner(profileID string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// ownsCodingJob 报告任务是不是这台 Runtime 上某台机器人派出去的。不是的一律不碰：
-// 不接回、不汇报、不改写记录，留给它真正的主人。
-func (r *Runtime) ownsCodingJob(job CodingJob) bool {
-	_, ok := r.codingJobOwner(job.Target.ProfileID)
-	return ok
 }
 
 // codingJobVisibleTo 报告这条消息所属的机器人能不能看见、操作这个任务。同一个
@@ -791,6 +792,10 @@ func (r *Runtime) finalizeCodingJob(ctx context.Context, job CodingJob, timedOut
 		}
 		latest.PID = job.PID
 		latest.ExitCode = job.ExitCode
+		// 归属以调用方为准：重启接回时按旧号认领的任务，已经把归属改成了现在的 ID。
+		if id := strings.TrimSpace(job.Target.ProfileID); id != "" {
+			latest.Target.ProfileID = id
+		}
 		job = latest
 	}
 	snapshot := parseCodingLog(job.LogPath)
@@ -928,9 +933,16 @@ func (r *Runtime) cancelCodingJob(ctx context.Context, id string) (CodingJob, er
 func (r *Runtime) ResumeCodingJobs(ctx context.Context) {
 	for _, job := range listCodingJobs() {
 		// 别的实例派的活不接：它的收件人没跟这台打过交道，用这边的连接发出去就是
-		// 替别人汇报；标上 Reported 还会让真正的主人以后不再汇报。
-		if !r.ownsCodingJob(job) {
+		// 替别人汇报；标上 Reported 还会让真正的主人以后不再汇报。不是这台 Runtime
+		// 上某台机器人派的活一律不碰：不接回、不汇报、不改写记录。
+		owner, ok := r.codingJobOwner(job.Target.ProfileID)
+		if !ok {
 			continue
+		}
+		// 按旧号认领的任务改记成现在的 ID：汇报要按它找连接，收尾写回记录后下次
+		// 启动也不必再查旧号。
+		if strings.TrimSpace(job.Target.ProfileID) != "" {
+			job.Target.ProfileID = owner
 		}
 		// 停用的机器人不接手它的编码任务：接回来也没人能收到汇报，盯着进程只是
 		// 白占一个 goroutine。重新启用后这一轮会重新接手。

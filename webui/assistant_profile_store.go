@@ -11,6 +11,8 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
+
+	"github.com/google/uuid"
 )
 
 type BotProfileStore interface {
@@ -80,21 +82,102 @@ type PersistentBotProfileStore struct {
 	data  assistant.ProfileSet
 	store *storage.SQLiteStore
 	ctx   context.Context
+	// legacyAliases 把种子机器人修复前用过的旧档案 ID 对到它现在的固定 ID。
+	legacyAliases map[string]string
 }
 
 // NewPersistentBotProfileStore 创建 SQLite 持久化版 OneBot v11 机器人配置集存储。
+//
+// WebUI 保存过的配置集直接用；没保存过就从 config.yaml 播种，但种子机器人的档案 ID
+// 取库里钉住的那一个，重启不变。
 func NewPersistentBotProfileStore(ctx context.Context, store *storage.SQLiteStore, fallback assistant.BotConfig) (*PersistentBotProfileStore, error) {
-	data := assistant.NewProfileSet(fallback)
-	if saved, ok, err := store.LoadBotProfiles(ctx); err != nil {
+	saved, ok, err := store.LoadBotProfiles(ctx)
+	if err != nil {
 		return nil, err
-	} else if ok && len(saved.Profiles) > 0 {
-		data = saved.WithDefaults()
+	}
+	var data assistant.ProfileSet
+	var seed storage.BotSeedProfile
+	if ok && len(saved.Profiles) > 0 {
+		// 保存过就不再需要种子 ID，只读出以前钉过的旧号映射（如果有）。
+		if seed, _, err = store.LoadBotSeedProfile(ctx); err != nil {
+			return nil, err
+		}
+		data = saved
+	} else {
+		if seed, err = stableBotSeedProfile(ctx, store, ok); err != nil {
+			return nil, err
+		}
+		data = assistant.NewProfileSet(fallback)
+		data.Profiles[0].ID = seed.ID
 	}
 	return &PersistentBotProfileStore{
-		data:  data.WithDefaults(),
-		store: store,
-		ctx:   ctx,
+		data:          data.WithDefaults(),
+		store:         store,
+		ctx:           ctx,
+		legacyAliases: legacyProfileAliases(seed),
 	}, nil
+}
+
+// stableBotSeedProfile 取出（第一次时生成并落库）种子机器人的固定档案 ID。
+//
+// 只钉 ID、不把整份种子配置落库：落了库，config.yaml 里的机器人参数就再也改不动了，
+// 这对只靠 config.yaml 管理的部署是行为变化。ID 用随机值而不是由固定输入算出来：
+// 几个实例共用编码任务记录目录时靠档案 ID 区分彼此的任务，算出来的 ID 会让所有
+// 实例撞成同一个。
+//
+// 第一次钉 ID 时，如果库里从来没存过配置集，说明这一直是只靠播种跑的部署，历史
+// 消息里出现过的档案 ID 全是这台种子机器人每次重启换的新号。最近用过的那个接着用，
+// 上次重启以来攒下的记忆和群配置不至于再丢一轮；其余记成旧号，供编码任务认领。
+// 存过配置集的库不收集：那里的历史 ID 可能属于已经删掉的机器人，认不得。
+func stableBotSeedProfile(ctx context.Context, store *storage.SQLiteStore, profilesSaved bool) (storage.BotSeedProfile, error) {
+	seed, ok, err := store.LoadBotSeedProfile(ctx)
+	if err != nil {
+		return storage.BotSeedProfile{}, err
+	}
+	if ok && strings.TrimSpace(seed.ID) != "" {
+		return seed, nil
+	}
+	seed = storage.BotSeedProfile{}
+	if !profilesSaved {
+		history, err := store.RecentBotProfileIDs(ctx)
+		if err != nil {
+			return storage.BotSeedProfile{}, err
+		}
+		if len(history) > 0 {
+			seed.ID, seed.LegacyIDs = history[0], history[1:]
+		}
+	}
+	if seed.ID == "" {
+		seed.ID = uuid.NewString()
+	}
+	if err := store.SaveBotSeedProfile(ctx, seed); err != nil {
+		return storage.BotSeedProfile{}, fmt.Errorf("persist diana seed profile id: %w", err)
+	}
+	return seed, nil
+}
+
+// legacyProfileAliases 把旧号映射到种子机器人现在的 ID。
+func legacyProfileAliases(seed storage.BotSeedProfile) map[string]string {
+	target := strings.TrimSpace(seed.ID)
+	if target == "" || len(seed.LegacyIDs) == 0 {
+		return nil
+	}
+	aliases := make(map[string]string, len(seed.LegacyIDs))
+	for _, id := range seed.LegacyIDs {
+		if id = strings.TrimSpace(id); id != "" && id != target {
+			aliases[id] = target
+		}
+	}
+	return aliases
+}
+
+// LegacyProfileAliases 返回种子机器人修复前用过的旧档案 ID → 现在的 ID。
+func (s *PersistentBotProfileStore) LegacyProfileAliases() map[string]string {
+	out := make(map[string]string, len(s.legacyAliases))
+	for legacy, current := range s.legacyAliases {
+		out[legacy] = current
+	}
+	return out
 }
 
 // Profiles 返回持久化存储中的机器人配置集。

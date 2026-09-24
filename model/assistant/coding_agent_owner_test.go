@@ -212,3 +212,50 @@ func TestCodingToolOnlySeesOwnBotsJobs(t *testing.T) {
 		t.Fatalf("B 查不到自己的任务：%#v", status.Job)
 	}
 }
+
+// 修复前种子机器人每次重启都换档案 ID，按旧 ID 记下的任务靠本实例登记的旧号认回来：
+// 旧号对到哪台就由哪台汇报，记录里的归属顺手改成现在的 ID；没登记过的陌生 ID 即使
+// 只有一台机器人也不认。
+func TestResumeCodingJobsClaimsRegisteredLegacyProfileID(t *testing.T) {
+	useTempCodingWorkspace(t)
+	finished, dead := saveLeftoverCodingJobs(t, codingJobTarget{ProfileID: "old-boot", UserID: "7"})
+
+	stranger, strangerChannel := codingOwnerRuntime(t, "bot-a")
+	stranger.ResumeCodingJobs(context.Background())
+	time.Sleep(200 * time.Millisecond)
+	if strangerChannel.count() != 0 {
+		t.Fatalf("没登记过的旧号不该被认领：%#v", strangerChannel.messages())
+	}
+
+	rt, channel := codingOwnerRuntime(t, "bot-a", "bot-b")
+	rt.SetProfileAliases(map[string]string{"old-boot": "bot-a"})
+	asA := newDianaCodingTool(rt, MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-a", UserID: "1"}, codingSettings(nil))
+	if _, err := asA.Run(context.Background(), map[string]any{"operation": "status", "job_id": finished.ID}); err != nil {
+		t.Fatalf("A 看不到自己旧号下的任务：%v", err)
+	}
+	asB := newDianaCodingTool(rt, MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-b", UserID: "1"}, codingSettings(nil))
+	if _, err := asB.Run(context.Background(), map[string]any{"operation": "status", "job_id": finished.ID}); err == nil {
+		t.Fatal("B 看到了 A 旧号下的任务")
+	}
+
+	rt.ResumeCodingJobs(context.Background())
+	waitForCondition(t, 5*time.Second, func() bool { return channel.count() >= 2 })
+	for _, msg := range channel.messages() {
+		if msg.UserID != "7" {
+			t.Fatalf("汇报发错了人：%#v", msg)
+		}
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		a, errA := loadCodingJob(finished.ID)
+		b, errB := loadCodingJob(dead.ID)
+		return errA == nil && errB == nil && a.Reported && b.Reported &&
+			a.Target.ProfileID == "bot-a" && b.Target.ProfileID == "bot-a"
+	})
+
+	// 旧号指向的机器人已经不在了，就不再认领。
+	orphan, _ := codingOwnerRuntime(t, "bot-b")
+	orphan.SetProfileAliases(map[string]string{"old-boot": "bot-a"})
+	if _, ok := orphan.codingJobOwner("old-boot"); ok {
+		t.Fatal("旧号指向已删除的机器人时不该被认领")
+	}
+}

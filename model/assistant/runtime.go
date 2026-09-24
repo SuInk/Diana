@@ -331,6 +331,9 @@ type Runtime struct {
 	// 找回原图。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory
 	profileConfigs   map[string]BotConfig
+	// profileAliases 把种子机器人以前每次重启换过的旧档案 ID 对到它现在的固定 ID，
+	// 只用来认领按旧 ID 记下的编码任务。见 SetProfileAliases。
+	profileAliases map[string]string
 	// disabledProfiles 是配置集里已停用的档案 ID。停用只把档案从通道 bindings 里
 	// 摘掉，共享连接本身可能还活着（别的档案在用它），入站这边要自己认一次。
 	disabledProfiles map[string]bool
@@ -758,6 +761,24 @@ func (r *Runtime) SetProfiles(set ProfileSet) {
 	r.updatedAt = time.Now()
 	r.mu.Unlock()
 	r.reconcileBridges()
+}
+
+// SetProfileAliases 设置旧档案 ID → 现在档案 ID 的映射。
+//
+// 从 config.yaml 播种、没在 WebUI 保存过的机器人，以前每次启动都换一个新 ID。这张表
+// 由启动时从本实例自己的数据库里收集，只收本实例用过的号，不会把别的实例的任务
+// 认成自己的。
+func (r *Runtime) SetProfileAliases(aliases map[string]string) {
+	next := make(map[string]string, len(aliases))
+	for legacy, current := range aliases {
+		legacy, current = strings.TrimSpace(legacy), strings.TrimSpace(current)
+		if legacy != "" && current != "" && legacy != current {
+			next[legacy] = current
+		}
+	}
+	r.mu.Lock()
+	r.profileAliases = next
+	r.mu.Unlock()
 }
 
 // errorNoticeAllowed 报告这台机器人是否允许把诊断消息发进聊天。

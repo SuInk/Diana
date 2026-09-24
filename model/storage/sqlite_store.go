@@ -32,6 +32,7 @@ const (
 	llmRegistryKey       = "llm_provider_registry"
 	llmAuthKey           = "llm_oauth"
 	botProfilesKey       = "bot_profiles"
+	botSeedProfileKey    = "bot_seed_profile"
 	botPersonasKey       = "bot_personas"
 	botWorldBookKey      = "bot_world_book"
 	botGroupConfigKey    = "bot_group_configs"
@@ -204,6 +205,65 @@ func (s *SQLiteStore) LoadBotProfiles(ctx context.Context) (assistant.ProfileSet
 // SaveBotProfiles 保存 OneBot v11 机器人配置集。
 func (s *SQLiteStore) SaveBotProfiles(ctx context.Context, set assistant.ProfileSet) error {
 	return s.saveJSON(ctx, botProfilesKey, set)
+}
+
+// BotSeedProfile 记着从 config.yaml 播种出来的那台机器人的档案 ID。
+//
+// 机器人配置集只有在 WebUI 保存过之后才落库，没保存过的部署每次启动都从 config.yaml
+// 重新播种；档案 ID 如果也跟着每次重新生成，记忆、群配置、编码任务归属这些按 ID
+// 记的数据一重启就全成了无主数据。所以只把 ID 单独钉在库里，配置本身照旧从
+// config.yaml 读，改了机器人参数重启仍然生效。
+type BotSeedProfile struct {
+	ID string `json:"id"`
+	// LegacyIDs 是修复之前这台种子机器人每次重启用过的旧 ID，只在第一次钉 ID 时从
+	// 本库的历史里收集一次。它们都出自本实例自己的数据库，所以能确定是这台机器人的，
+	// 可以用来认领按旧 ID 记下的编码任务。
+	LegacyIDs []string `json:"legacy_ids,omitempty"`
+}
+
+// LoadBotSeedProfile 读取种子机器人的固定档案 ID。
+func (s *SQLiteStore) LoadBotSeedProfile(ctx context.Context) (BotSeedProfile, bool, error) {
+	var seed BotSeedProfile
+	ok, err := s.loadJSON(ctx, botSeedProfileKey, &seed)
+	return seed, ok, err
+}
+
+// SaveBotSeedProfile 保存种子机器人的固定档案 ID。
+func (s *SQLiteStore) SaveBotSeedProfile(ctx context.Context, seed BotSeedProfile) error {
+	return s.saveJSON(ctx, botSeedProfileKey, seed)
+}
+
+// RecentBotProfileIDs 列出本库消息记录里出现过的机器人档案 ID，最近用过的在前。
+//
+// 只看本库的消息和入站事件：这两张表只记本实例收到的消息，里面的 ID 一定是本实例
+// 某台机器人的。空 ID 是多机器人之前的老数据，不算。
+func (s *SQLiteStore) RecentBotProfileIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT profile_id, MAX(event_time) AS last_seen FROM (
+  SELECT profile_id, event_time FROM message_events WHERE COALESCE(profile_id, '') <> ''
+  UNION ALL
+  SELECT profile_id, event_time FROM inbound_events WHERE COALESCE(profile_id, '') <> ''
+)
+GROUP BY profile_id
+ORDER BY last_seen DESC, profile_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	seen := map[string]bool{}
+	for rows.Next() {
+		var id string
+		var lastSeen int64
+		if err := rows.Scan(&id, &lastSeen); err != nil {
+			return nil, err
+		}
+		if id = strings.TrimSpace(id); id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids, rows.Err()
 }
 
 // LoadBotPersonas 读取人设库。

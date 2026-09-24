@@ -430,6 +430,8 @@ func main() {
 		return newLLMClient(store.Current())
 	})
 	botRuntime.SetProfiles(botSet)
+	// 种子机器人修复前每次重启都换档案 ID，按旧 ID 记下的编码任务靠这张表认回来。
+	botRuntime.SetProfileAliases(botProfileStore.LegacyProfileAliases())
 	botRuntime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (assistant.LLMProvider, error) {
 		return newLLMClient(cfg)
 	})
