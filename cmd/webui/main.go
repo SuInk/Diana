@@ -397,6 +397,7 @@ func main() {
 	// 已保存的开关与设置。登记在 Restore 之后、迁移之前，老的持久化数据路径
 	// 不需要为第三方插件做任何特殊处理。
 	dataDir := filepath.Dir(sqliteStore.Path())
+	protectRuntimeSecrets(appCfg, sqliteStore.Path(), dataDir)
 	repoPluginStore := assistant.NewRepoPluginStore(dataDir)
 	if err := repoPluginStore.Load(); err != nil {
 		log.Printf("第三方插件来源记录读取失败，本次跳过恢复: %v", err)
@@ -774,6 +775,9 @@ func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 }
 
 // setupLogging 配置控制台和文件日志输出。
+// logRotationBackups 是日志轮转保留的旧文件数：<log>.1 … <log>.N。
+const logRotationBackups = 5
+
 func setupLogging(logPath string) (io.Writer, func()) {
 	logPath = strings.TrimSpace(logPath)
 	if logPath == "" {
@@ -784,7 +788,7 @@ func setupLogging(logPath string) (io.Writer, func()) {
 		log.Printf("create log directory skipped: %v", err)
 		return os.Stdout, func() {}
 	}
-	file, err := newRotatingLogWriter(logPath, 20<<20, 5)
+	file, err := newRotatingLogWriter(logPath, 20<<20, logRotationBackups)
 	if err != nil {
 		log.Printf("open log file skipped: %v", err)
 		return os.Stdout, func() {}

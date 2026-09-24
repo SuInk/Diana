@@ -490,21 +490,21 @@ type imageEditInputData struct {
 const maxImageEditInputBytes = 20 << 20
 
 func (c *openAICompatibleClient) imageEditInput(ctx context.Context, value string, index int) (imageEditInputData, error) {
-	return imageEditInputFrom(ctx, c.httpClient, value, index)
+	return imageEditInputFrom(ctx, newImageEditSource(c.cfg, c.httpClient), value, index)
 }
 
 // imageEditInputFrom 把一张源图读成字节：data URI、绝对路径的本地文件、http(s) 链接。
 // 抽成包级函数是为了让 Gemini 那条生图链路用同一套输入规则——同一张图在两个提供商
 // 之间换来换去时，能不能读、读成什么 MIME，不该取决于选中了谁。
-func imageEditInputFrom(ctx context.Context, httpClient *http.Client, value string, index int) (imageEditInputData, error) {
-	input, err := rawImageEditInputFrom(ctx, httpClient, value, index)
+func imageEditInputFrom(ctx context.Context, source imageEditSource, value string, index int) (imageEditInputData, error) {
+	input, err := rawImageEditInputFrom(ctx, source, value, index)
 	if err != nil {
 		return imageEditInputData{}, err
 	}
 	return normalizeImageEditInput(input, index)
 }
 
-func rawImageEditInputFrom(ctx context.Context, httpClient *http.Client, value string, index int) (imageEditInputData, error) {
+func rawImageEditInputFrom(ctx context.Context, source imageEditSource, value string, index int) (imageEditInputData, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return imageEditInputData{}, errors.New("llm: image edit input is empty")
@@ -523,7 +523,7 @@ func rawImageEditInputFrom(ctx context.Context, httpClient *http.Client, value s
 		return localImageEditInput(value, index)
 	}
 	if parsed, err := url.Parse(value); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
-		return remoteImageEditInput(ctx, httpClient, value, parsed, index)
+		return remoteImageEditInput(ctx, source.clientFor(parsed), value, parsed, index)
 	}
 	return imageEditInputData{}, fmt.Errorf("llm: unsupported image edit input %q", value)
 }

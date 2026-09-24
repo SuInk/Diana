@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/internal/procgroup"
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/netguard"
 )
 
@@ -215,9 +216,13 @@ func ytDLPFullVideoDownloadArgs(ctx context.Context, outputPattern, raw string) 
 }
 
 func appendYTDLPResolverArgs(ctx context.Context, args []string, raw string) []string {
+	// cookies 文件是站点登录态，路径来自插件设置或环境变量，用到时登记给 Agent 的
+	// 挡读清单：run_command 的沙箱只限写不限读。
 	if cookies := resolverYTDLPCookies(ctx); cookies != "" {
+		agent.ProtectRuntimeFiles(cookies)
 		args = append(args, "--cookies", cookies)
 	} else if cookies := defaultYTDLPCookiesPath(); cookies != "" && !hasResolverCredentials(ctx) {
+		agent.ProtectRuntimeFiles(cookies)
 		args = append(args, "--cookies", cookies)
 	}
 	browser := credentialFromContext(ctx, func(c resolverCredentials) string { return c.CookiesBrowser })

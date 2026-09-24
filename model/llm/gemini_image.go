@@ -50,7 +50,7 @@ func (c *geminiClient) EditImage(ctx context.Context, req ImageEditRequest) (*Im
 	// 源图在前、要求在后：先给模型看图，再说改什么。
 	parts := make([]*genai.Part, 0, len(req.Images)+1)
 	for index, source := range req.Images {
-		input, err := imageEditInputFrom(ctx, c.httpClient, source, index)
+		input, err := imageEditInputFrom(ctx, newImageEditSource(c.cfg, c.httpClient), source, index)
 		if err != nil {
 			return nil, err
 		}

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -662,9 +663,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, DurationMS: toolDuration.Milliseconds()}
 		// 证据登记必须读未截断的原始结果：截断后的 JSON 无法反序列化，
 		// 会让成功的搜索被当成 provider_error、渲染成功的页面登记不上。
+		//
+		// 工具结果和报错原样进模型上下文，也进运行记录（下一轮的 carryover、事件
+		// 记录）。凭据在这里统一遮掉：HTTP 客户端报错带着整条请求地址（查询参数里的
+		// 令牌、userinfo），平台和插件报错回显请求头，命令输出里有继承来的环境变量。
+		// 报错按形态和已登记原文一起遮；正常输出只遮已登记原文和 userinfo，网页里的
+		// 签名链接模型还要接着用。
+		output = secretmask.Output(output)
 		rawOutput := output
 		if err != nil {
-			record.Error = normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS)
+			record.Error = secretmask.Text(normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS))
 			output = toolExecutionErrorForModel(action.Tool, record.Error)
 			rawOutput = ""
 		} else {

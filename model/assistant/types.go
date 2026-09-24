@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 
 	"github.com/google/uuid"
@@ -425,13 +426,20 @@ func decodeReminderFeedSources(raw string) []ReminderFeedSource {
 
 // ReminderFeedSources 读出订阅的全部来源。多来源之前存的记录只有单来源字段，
 // 按它回落成一条，升级后不用迁移数据也能继续跑。
+//
+// 读出来的地址顺手登记给 secretmask：重启之后还没抓过一轮时，订阅的 LastError、
+// 列表里的地址也要认得出里面的令牌。
 func ReminderFeedSources(item Reminder) []ReminderFeedSource {
 	if sources := decodeReminderFeedSources(item.FeedSourcesJSON); len(sources) > 0 {
+		for _, source := range sources {
+			secretmask.RegisterURL(source.FeedURL)
+		}
 		return sources
 	}
 	if strings.TrimSpace(item.FeedURL) == "" {
 		return nil
 	}
+	secretmask.RegisterURL(item.FeedURL)
 	return []ReminderFeedSource{{
 		FeedURL: item.FeedURL, Source: item.FeedSource, Handle: item.FeedHandle,
 		LastItemID: item.LastFeedItemID, LastPublishedAt: item.LastFeedPublishedAt,

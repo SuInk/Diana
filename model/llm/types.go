@@ -305,6 +305,7 @@ var (
 // NewClient 根据 provider 配置创建 LLM 客户端。
 func NewClient(cfg ProviderConfig, opts ...ClientOption) (LLMClient, error) {
 	cfg = cfg.WithDefaults()
+	RegisterProviderSecrets(cfg)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

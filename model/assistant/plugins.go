@@ -728,6 +728,7 @@ func (m *PluginManager) Restore(states map[string]PersistedPluginState) {
 			}
 		}
 		m.states[id] = current
+		registerPluginSecrets(current)
 	}
 }
 
@@ -885,6 +886,7 @@ func (m *PluginManager) UpdateSettingsForProfile(id, profileID string, values ma
 	}
 	state.Settings = normalized
 	m.states[id] = state
+	registerPluginSecrets(state)
 	return state.ForProfile(profileID), nil
 }
 

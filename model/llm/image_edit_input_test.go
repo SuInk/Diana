@@ -35,7 +35,7 @@ func TestImageEditInputConvertsGIFFirstFrameToPNG(t *testing.T) {
 	if err := os.WriteFile(path, testGIFBytes(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := imageEditInputFrom(context.Background(), nil, path, 0)
+	got, err := imageEditInputFrom(context.Background(), imageEditSource{}, path, 0)
 	if err != nil {
 		t.Fatalf("imageEditInputFrom() error = %v", err)
 	}
@@ -62,7 +62,7 @@ func TestImageEditInputUsesSniffedMediaType(t *testing.T) {
 	if err := os.WriteFile(path, jpegData.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := imageEditInputFrom(context.Background(), nil, path, 0)
+	got, err := imageEditInputFrom(context.Background(), imageEditSource{}, path, 0)
 	if err != nil {
 		t.Fatalf("imageEditInputFrom() error = %v", err)
 	}

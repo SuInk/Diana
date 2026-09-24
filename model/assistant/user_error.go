@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -153,7 +154,9 @@ func publicImageMediaErrorMessage(err error) string {
 }
 
 func sanitizePublicErrorDetail(raw string) string {
-	value := strings.TrimSpace(raw)
+	// 已登记的凭据原文先换掉：中转网关把 sk- 开头的 Key、Cookie 串原样回显在报错里
+	// 时，下面这些按形态认的规则认不出来。
+	value := strings.TrimSpace(secretmask.Known(raw))
 	if value == "" {
 		return "请求处理失败，请稍后重试。"
 	}

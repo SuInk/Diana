@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 const (
@@ -338,6 +340,9 @@ func resolveRSSWatchSources(rawURLs, rawHandles []string) ([]ReminderFeedSource,
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
+		if strings.Contains(raw, secretmask.Marker) {
+			return nil, fmt.Errorf("feed_url 里带着掩码（%s），不是令牌原文：要沿用已保存的订阅地址就在修改时原样交回它，要换令牌请让订阅者提供完整地址", secretmask.Marker)
+		}
 		feedURL, err := normalizeRSSURL(raw)
 		if err != nil {
 			return nil, err
@@ -362,7 +367,8 @@ func rssWatchSourceLabel(source ReminderFeedSource) string {
 	if name := strings.TrimSpace(source.Name); name != "" {
 		return name
 	}
-	return strings.TrimSpace(source.FeedURL)
+	// 没有标题时退回地址，它会进提示、任务列表和报错，地址里的令牌只给掩码。
+	return secretmask.URLs(strings.TrimSpace(source.FeedURL))
 }
 
 // rssWatchMessage 是订阅在任务列表里显示的一句话。多来源只列前三个，剩下的
@@ -459,6 +465,10 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		}
 		if input.TwitterHandle != nil {
 			rawHandles = append(rawHandles, *input.TwitterHandle)
+		}
+		rawURLs, err := restoreMaskedFeedURLs(rawURLs, ReminderFeedSources(current))
+		if err != nil {
+			return Reminder{}, err
 		}
 		next, err := resolveRSSWatchSources(rawURLs, rawHandles)
 		if err != nil {
@@ -692,10 +702,40 @@ func rssWatchSourceLabels(item Reminder) []string {
 }
 
 func rssWatchForTool(item Reminder) *dianaRSSWatch {
-	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: item.FeedURL, Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: item.LastError, PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+	// 订阅地址里的令牌（?token=、?key=）只给模型掩码；原样交回掩码改订阅时由
+	// restoreMaskedFeedURLs 换回原文。
+	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, JudgePrompt: item.FeedJudgePrompt, Interval: (time.Duration(item.IntervalSeconds) * time.Second).String(), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
 }
 
 func marshalDianaRSSWatchResult(result dianaRSSWatchResult) (string, error) {
 	body, err := json.MarshalIndent(result, "", "  ")
 	return string(body), err
+}
+
+// restoreMaskedFeedURLs 把模型原样交回的掩码地址换回已保存的原文。模型从订阅列表
+// 里只见过掩码，改判断规则或周期时顺手把 feed_urls 原样带回来，不能因此把掩码当成
+// 新地址存下、让订阅从此抓不到东西。对不上任何已保存地址的掩码留给
+// resolveRSSWatchSources 拒绝。
+func restoreMaskedFeedURLs(rawURLs []string, current []ReminderFeedSource) ([]string, error) {
+	out := make([]string, 0, len(rawURLs))
+	for _, raw := range rawURLs {
+		trimmed := strings.TrimSpace(raw)
+		if !strings.Contains(trimmed, secretmask.Marker) {
+			out = append(out, raw)
+			continue
+		}
+		restored := ""
+		for _, source := range current {
+			stored := strings.TrimSpace(source.FeedURL)
+			if trimmed == secretmask.URLs(stored) || trimmed == secretmask.Output(stored) || trimmed == secretmask.Text(stored) {
+				restored = stored
+				break
+			}
+		}
+		if restored == "" {
+			return nil, fmt.Errorf("feed_url 里带着掩码（%s），但对不上这条订阅已保存的任何地址：要沿用原地址就原样交回列表里给出的那一条，要换令牌请让订阅者提供完整地址", secretmask.Marker)
+		}
+		out = append(out, restored)
+	}
+	return out, nil
 }

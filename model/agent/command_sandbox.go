@@ -176,6 +176,7 @@ func sandboxExecProfile(root string, allowNetwork bool, secrets []string) string
 	// (allow file-read*) 后面。白名单里一旦有 cat、grep、head，读取这一层就是唯一
 	// 的边界了。
 	for _, path := range secrets {
+		// 目录（内置浏览器 profile、编码代理登录目录）按子路径整片挡掉。
 		builder.WriteString(fmt.Sprintf("(deny file-read* (%s %s))", sandboxSecretFilter(path), sbplString(path)))
 	}
 	// 写入只开工作目录和临时目录；/dev/null 一类字符设备是命令的常规去处。
