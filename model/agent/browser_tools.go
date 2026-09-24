@@ -12,19 +12,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/llm"
-	"github.com/gorilla/websocket"
 )
 
 const defaultScreenshotPath = ".agent-browser/screenshot.png"
@@ -172,7 +169,7 @@ func (t *BrowserOpenTool) InputSchema() map[string]any {
 	})
 }
 
-func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	pageURL := stringFromInput(input, "url")
 	if err := t.base.checkURL(pageURL); err != nil {
 		return "", err
@@ -181,17 +178,54 @@ func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (string
 	// 越攒越多。新开的页也是先开空白页再跳转：/json/new 直接带地址的话，打不开的
 	// 网址会让那个页一直转圈，而这边没有任何超时能管到它。
 	newTab := boolFromInput(input, "new_tab", false)
-	client, err := t.base.pageClient(ctx, newTab)
+	client, err := t.base.openClient(ctx, newTab)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
-	if err := client.navigate(ctx, pageURL); err != nil {
-		if newTab {
-			t.base.discardTab(client.baseURL, client.targetID)
-		}
+	defer t.base.releaseWith(client, &err, openRecovery(newTab), "打开 "+pageURL+" 后")
+	if err := t.base.load(ctx, client, pageURL, newTab); err != nil {
 		return "", err
 	}
+	return t.base.pageSnapshot(ctx, client, "")
+}
+
+func openRecovery(newTab bool) pageRecovery {
+	if newTab {
+		return recoverDiscard
+	}
+	return recoverBlank
+}
+
+// openClient 是要跳转的工具用的 pageClient。沿用的标签页如果已经崩了，先把它换回
+// 空白页再连：反正马上要跳走，没必要为此报错让模型重试。
+func (b browserToolBase) openClient(ctx context.Context, newTab bool) (*cdpClient, error) {
+	client, err := b.pageClient(ctx, newTab)
+	if err != nil || newTab {
+		return client, err
+	}
+	if failure := client.pageFailure(); failure != nil && failure.crashed {
+		resetCtx, cancel := context.WithTimeout(ctx, browserRecoverTimeout)
+		resetTabToBlank(resetCtx, client.wsURL)
+		cancel()
+		client.Close()
+		return b.pageClient(ctx, false)
+	}
+	return client, nil
+}
+
+// load 跳转到 pageURL 并等页面落定。
+//
+// 导航本身按浏览器超时收手（见 navigate）；导航之后的等待和取快照再整体收进一个
+// 浏览器超时：页面主线程被脚本卡死时，这之后的 Runtime.evaluate 一条也不会回，
+// 以前会一直耗到 Runner 的 60 秒上限。
+func (b browserToolBase) load(ctx context.Context, client *cdpClient, pageURL string, newTab bool) error {
+	if err := client.navigate(ctx, pageURL); err != nil {
+		if newTab && client.pageFailure() == nil {
+			b.discardTab(client.baseURL, client.targetID)
+		}
+		return err
+	}
+	client.limitFor(b.timeout)
 	// Page.navigate 在响应头到了就返回，页面还在加载：直接读会得到一份半截快照。
 	// 等到真的跳过去为止。
 	if pageURL != "about:blank" {
@@ -199,7 +233,10 @@ func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (string
 	} else {
 		_ = client.waitReady(ctx)
 	}
-	return t.base.pageSnapshot(ctx, client, "")
+	if failure := client.pageFailure(); failure != nil {
+		return failure
+	}
+	return nil
 }
 
 type BrowserTextTool struct {
@@ -223,12 +260,12 @@ func (t *BrowserTextTool) InputSchema() map[string]any {
 	})
 }
 
-func (t *BrowserTextTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserTextTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	return t.base.pageSnapshot(ctx, client, stringFromInput(input, "selector"))
 }
 
@@ -257,7 +294,7 @@ func (t *BrowserClickTool) InputSchema() map[string]any {
 // RepeatableCalls 见 RepeatableTool：同一个「下一页」按钮连点两次是正常操作。
 func (t *BrowserClickTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	selector := stringFromInput(input, "selector")
 	x, hasX := numberFromInput(input, "x")
 	y, hasY := numberFromInput(input, "y")
@@ -280,7 +317,7 @@ func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (strin
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	if selector != "" {
 		// 先滚到视口中间再取坐标。点击点被别的元素盖住（弹层、吸顶栏）时真实点击
 		// 会落到盖着的那个元素上，这种情况退回 el.click()，保证点到的是要点的元素。
@@ -352,14 +389,14 @@ func (t *BrowserTypeTool) InputSchema() map[string]any {
 
 func (t *BrowserTypeTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserTypeTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserTypeTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	selector := stringFromInput(input, "selector")
 	text := rawStringFromInput(input, "text")
 	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	// 聚焦和清空在页面里做，文字本身用 Input.insertText 送进去：直接改 value 的话
 	// React、Vue 这类受控输入框不认，页面上看着填了，提交出去还是空的。清空用原生
 	// setter 而不是 el.value = ""，同样是为了让框架的值追踪器看到这次变化。
@@ -453,7 +490,7 @@ func (t *BrowserScreenshotTool) InputSchema() map[string]any {
 	})
 }
 
-func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	t.setParts(nil)
 	outPath := stringFromInput(input, "path")
 	if outPath == "" {
@@ -467,7 +504,7 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	var result struct {
 		Data string `json:"data"`
 	}
@@ -542,8 +579,12 @@ func (b browserToolBase) pageClient(ctx context.Context, newTab bool) (*cdpClien
 	client.targetID = target.ID
 	b.session.setActive(target.ID)
 	b.tabRegistry().touch(target.ID)
-	_ = client.call(ctx, "Page.enable", map[string]any{}, nil)
-	_ = client.call(ctx, "Runtime.enable", map[string]any{}, nil)
+	// Inspector 域在浏览器进程里处理，页面卡死也照样回；对已经崩掉的标签页，它一开
+	// 就先推一条 Inspector.targetCrashed，这条会话随即记上「崩溃」。Page、Runtime
+	// 两条要渲染进程回，只发不等：页面卡死时等它们，每个工具都要先白等一个浏览器超时。
+	_ = client.call(ctx, "Inspector.enable", nil, nil)
+	client.send("Page.enable")
+	client.send("Runtime.enable")
 	return client, nil
 }
 
@@ -663,123 +704,6 @@ func browserConnectError(baseURL string, err error) error {
 	return fmt.Errorf("browser cdp is unavailable at %s: %w; start Chrome with --remote-debugging-port=9222 or configure DIANA_AGENT_BROWSER_CDP_URL", baseURL, err)
 }
 
-type cdpClient struct {
-	conn    *websocket.Conn
-	nextID  atomic.Int64
-	timeout time.Duration
-	// wsURL 留着给超时之后另开一条连接补发 Page.stopLoading：原来那条连接的读超时
-	// 一旦触发就不能再用了。
-	wsURL    string
-	baseURL  string
-	targetID string
-}
-
-func newCDPClient(ctx context.Context, websocketURL string, timeout time.Duration) (*cdpClient, error) {
-	dialer := websocket.Dialer{HandshakeTimeout: timeout}
-	conn, _, err := dialer.DialContext(ctx, websocketURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &cdpClient{conn: conn, timeout: timeout, wsURL: websocketURL}, nil
-}
-
-func (c *cdpClient) Close() error {
-	if c == nil || c.conn == nil {
-		return nil
-	}
-	return c.conn.Close()
-}
-
-func (c *cdpClient) call(ctx context.Context, method string, params map[string]any, out any) error {
-	id := c.nextID.Add(1)
-	if params == nil {
-		params = map[string]any{}
-	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = c.conn.SetWriteDeadline(deadline)
-		_ = c.conn.SetReadDeadline(deadline)
-	} else if c.timeout > 0 {
-		deadline := time.Now().Add(c.timeout)
-		_ = c.conn.SetWriteDeadline(deadline)
-		_ = c.conn.SetReadDeadline(deadline)
-	}
-	// 调用方取消时把连接的读写期限拨到现在，阻塞中的读立刻返回。只靠期限的话，
-	// 没有 deadline 的 ctx 被取消后，这里还要白等满 c.timeout。
-	stop := context.AfterFunc(ctx, func() {
-		now := time.Now()
-		_ = c.conn.SetReadDeadline(now)
-		_ = c.conn.SetWriteDeadline(now)
-	})
-	defer stop()
-	if err := c.conn.WriteJSON(map[string]any{
-		"id":     id,
-		"method": method,
-		"params": params,
-	}); err != nil {
-		return cdpCallError(ctx, method, err)
-	}
-	for {
-		var resp struct {
-			ID     int64           `json:"id"`
-			Result json.RawMessage `json:"result"`
-			Error  *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"error,omitempty"`
-		}
-		if err := c.conn.ReadJSON(&resp); err != nil {
-			return cdpCallError(ctx, method, err)
-		}
-		if resp.ID != id {
-			continue
-		}
-		if resp.Error != nil {
-			return fmt.Errorf("cdp %s failed: %s", method, resp.Error.Message)
-		}
-		if out != nil && len(resp.Result) > 0 {
-			if err := json.Unmarshal(resp.Result, out); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-}
-
-// cdpCallError 在 ctx 已经结束时把连接层的 i/o timeout 换成 ctx 的原因，调用方才分得清
-// 是超时、取消还是连接真的断了。
-//
-// 连接的读期限就是 ctx 的期限，两者谁先醒是抽签：读超时先到时 ctx.Err() 可能还是 nil，
-// 这时按时间判断，别把一次正常的到期报成连接故障。
-func cdpCallError(ctx context.Context, method string, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return fmt.Errorf("cdp %s: %w", method, ctxErr)
-	}
-	var netErr net.Error
-	if deadline, ok := ctx.Deadline(); ok && errors.As(err, &netErr) && netErr.Timeout() && !time.Now().Before(deadline) {
-		return fmt.Errorf("cdp %s: %w", method, context.DeadlineExceeded)
-	}
-	return err
-}
-
-func (c *cdpClient) evaluate(ctx context.Context, expression string) (json.RawMessage, error) {
-	var out struct {
-		Result struct {
-			Value json.RawMessage `json:"value"`
-		} `json:"result"`
-	}
-	if err := c.call(ctx, "Runtime.evaluate", map[string]any{
-		"expression":    expression,
-		"awaitPromise":  true,
-		"returnByValue": true,
-	}, &out); err != nil {
-		return nil, err
-	}
-	if len(out.Result.Value) == 0 {
-		return []byte("null"), nil
-	}
-	return compactCDPValue(out.Result.Value), nil
-}
-
 // compactCDPValue 把 Chrome 交回的 JSON 重新编码一遍。Chrome 把非 ASCII 字符一律写成
 // \uXXXX，一页中文读回来每个字变成六个字符，模型那边既难读又多花几倍 token。
 func compactCDPValue(raw json.RawMessage) json.RawMessage {
@@ -800,12 +724,18 @@ func compactCDPValue(raw json.RawMessage) json.RawMessage {
 }
 
 func (c *cdpClient) waitReady(ctx context.Context) error {
-	_, err := c.evaluate(ctx, `new Promise(resolve => {
+	// 页面自己的定时器兜底：load 一直不来也按时回话。整体期限（见 limitFor）快到时
+	// 缩短它，留出页面回话的时间——否则一个好好的页面会因为还在等 load 被当成卡死。
+	wait := 3 * time.Second
+	if remaining := c.remaining() - minCDPCallWait; remaining < wait {
+		wait = max(remaining, 0)
+	}
+	_, err := c.evaluate(ctx, fmt.Sprintf(`new Promise(resolve => {
 if (document.readyState === "complete") { resolve(true); return; }
 const done = () => resolve(true);
 window.addEventListener("load", done, {once:true});
-setTimeout(done, 3000);
-})`)
+setTimeout(done, %d);
+})`, wait.Milliseconds()))
 	return err
 }
 
@@ -816,6 +746,9 @@ setTimeout(done, 3000);
 // 能读，标签页也不会在后台一直转圈。
 func (c *cdpClient) waitNavigated(ctx context.Context) error {
 	deadline := time.Now().Add(8 * time.Second)
+	if limit := time.Now().Add(c.remaining() - minCDPCallWait); limit.Before(deadline) {
+		deadline = limit
+	}
 	for time.Now().Before(deadline) {
 		value, err := c.evaluate(ctx, `(() => location.href !== "about:blank" && document.readyState !== "loading")()`)
 		if err != nil {

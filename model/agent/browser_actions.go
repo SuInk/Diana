@@ -98,20 +98,15 @@ func (c *cdpClient) navigate(ctx context.Context, pageURL string) error {
 	return nil
 }
 
-// abortLoading 另开一条连接补发 Page.stopLoading。原来那条连接刚因为超时被拨了读期限，
-// 已经不能再用；调用方的 ctx 也已经结束，所以用自己的短期限。
+// abortLoading 补发 Page.stopLoading。调用方的 ctx 已经结束，所以用自己的短期限；
+// 这条命令由浏览器进程处理，页面卡着也回。
 func (c *cdpClient) abortLoading() {
-	if c == nil || c.wsURL == "" {
+	if c == nil || c.conn == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), browserAbortTimeout)
 	defer cancel()
-	fresh, err := newCDPClient(ctx, c.wsURL, browserAbortTimeout)
-	if err != nil {
-		return
-	}
-	defer fresh.Close()
-	_ = fresh.call(ctx, "Page.stopLoading", nil, nil)
+	_, _ = c.roundTrip(ctx, "Page.stopLoading", nil)
 }
 
 // mouseClick 在视口坐标上按真实鼠标事件点击。el.click() 发出去的事件 isTrusted 为
@@ -263,6 +258,9 @@ func (c *cdpClient) settle(ctx context.Context) {
 		if err == nil && json.Unmarshal(raw, &state) == nil && state != "loading" {
 			return
 		}
+		if c.pageFailure() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -294,8 +292,22 @@ func (c *cdpClient) pageState(ctx context.Context, extra map[string]any) (string
 	return string(body), nil
 }
 
+// evalLimit 是 browser_eval 这一次脚本最多跑多久：默认一个浏览器超时，模型要求更久
+// 时最多放宽到 maxBrowserWaitMS（浏览器超时本身更长时以它为准）。
+func (b browserToolBase) evalLimit(requestedMS int) time.Duration {
+	limit := b.timeout
+	if limit <= 0 {
+		limit = DefaultBrowserTimeoutMS * time.Millisecond
+	}
+	if requestedMS > 0 {
+		limit = min(time.Duration(requestedMS)*time.Millisecond, max(limit, maxBrowserWaitMS*time.Millisecond))
+	}
+	return limit
+}
+
 // evaluateScript 和 evaluate 的区别是把页面里抛出的异常当错误交回去，而不是返回 null。
-func (c *cdpClient) evaluateScript(ctx context.Context, expression string) (json.RawMessage, error) {
+// timeout 大于零时交给 V8：同步执行超过它就被就地打断。
+func (c *cdpClient) evaluateScript(ctx context.Context, expression string, timeout time.Duration) (json.RawMessage, error) {
 	var out struct {
 		Result struct {
 			Type        string          `json:"type"`
@@ -309,12 +321,25 @@ func (c *cdpClient) evaluateScript(ctx context.Context, expression string) (json
 			} `json:"exception"`
 		} `json:"exceptionDetails"`
 	}
-	if err := c.call(ctx, "Runtime.evaluate", map[string]any{
+	params := map[string]any{
 		"expression":    expression,
 		"awaitPromise":  true,
 		"returnByValue": true,
 		"userGesture":   true,
-	}, &out); err != nil {
+	}
+	if timeout > 0 {
+		params["timeout"] = timeout.Milliseconds()
+	}
+	started := time.Now()
+	if err := c.call(ctx, "Runtime.evaluate", params, &out); err != nil {
+		// V8 按 timeout 打断脚本时，Chrome 回的是一条命令错误：不等 Promise 时是
+		// 「Execution was terminated」，等 Promise（awaitPromise）时只有一句
+		// 「Internal error」，只能靠「到点才回」认出来。
+		var remote *cdpRemoteError
+		if timeout > 0 && errors.As(err, &remote) && (strings.Contains(remote.message, "Execution was terminated") ||
+			(strings.Contains(remote.message, "Internal error") && time.Since(started) >= timeout-50*time.Millisecond)) {
+			return nil, fmt.Errorf("脚本 %s 内没有跑完，已中断（检查有没有死循环，或者用 timeout_ms 放宽）", timeout)
+		}
 		return nil, err
 	}
 	if details := out.ExceptionDetails; details != nil {
@@ -356,7 +381,7 @@ func (t *BrowserTabsTool) InputSchema() map[string]any {
 
 func (t *BrowserTabsTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserTabsTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserTabsTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	action := strings.ToLower(stringFromInput(input, "action"))
 	tabID := stringFromInput(input, "tab_id")
 	callCtx, cancel := context.WithTimeout(ctx, t.base.timeout)
@@ -367,17 +392,17 @@ func (t *BrowserTabsTool) Run(ctx context.Context, input map[string]any) (string
 		if err := t.base.checkURL(pageURL); err != nil {
 			return "", err
 		}
-		client, err := t.base.pageClient(ctx, true)
+		// 赋给具名的 err 而不是在这个块里另声明一个：releaseWith 要改写的是返回值。
+		var client *cdpClient
+		client, err = t.base.pageClient(ctx, true)
 		if err != nil {
 			return "", err
 		}
-		defer client.Close()
+		defer t.base.releaseWith(client, &err, recoverDiscard, "打开 "+pageURL+" 后")
 		if pageURL != "about:blank" {
-			if err := client.navigate(ctx, pageURL); err != nil {
-				t.base.discardTab(client.baseURL, client.targetID)
+			if err := t.base.load(ctx, client, pageURL, true); err != nil {
 				return "", err
 			}
-			_ = client.waitNavigated(ctx)
 		}
 		return client.pageState(ctx, map[string]any{"tab_id": t.base.session.active()})
 	case "list", "":
@@ -497,7 +522,7 @@ func (t *BrowserScrollTool) InputSchema() map[string]any {
 
 func (t *BrowserScrollTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserScrollTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserScrollTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	direction := strings.ToLower(stringFromInput(input, "direction"))
 	selector := stringFromInput(input, "selector")
 	if direction == "" && selector == "" {
@@ -512,7 +537,7 @@ func (t *BrowserScrollTool) Run(ctx context.Context, input map[string]any) (stri
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	expr := fmt.Sprintf(`(() => {
 const selector = %s, direction = %s, amount = %d;
 const el = selector ? document.querySelector(selector) : null;
@@ -566,7 +591,7 @@ func (t *BrowserPressKeyTool) InputSchema() map[string]any {
 
 func (t *BrowserPressKeyTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserPressKeyTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserPressKeyTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	key := rawStringFromInput(input, "key")
 	if _, _, err := parseBrowserKey(key); err != nil {
 		return "", err
@@ -582,7 +607,7 @@ func (t *BrowserPressKeyTool) Run(ctx context.Context, input map[string]any) (st
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	if selector := stringFromInput(input, "selector"); selector != "" {
 		raw, err := client.evaluate(ctx, fmt.Sprintf(`(() => {
 const el = document.querySelector(%s);
@@ -628,13 +653,13 @@ func (t *BrowserNavigateTool) InputSchema() map[string]any {
 
 func (t *BrowserNavigateTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserNavigateTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserNavigateTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	action := strings.ToLower(stringFromInput(input, "action"))
 	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	switch action {
 	case "reload":
 		if err := client.call(ctx, "Page.reload", map[string]any{}, nil); err != nil {
@@ -688,7 +713,7 @@ func (t *BrowserSelectTool) InputSchema() map[string]any {
 	})
 }
 
-func (t *BrowserSelectTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserSelectTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	selector := stringFromInput(input, "selector")
 	value := rawStringFromInput(input, "value")
 	label := stringFromInput(input, "label")
@@ -702,7 +727,7 @@ func (t *BrowserSelectTool) Run(ctx context.Context, input map[string]any) (stri
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
 	expr := fmt.Sprintf(`(() => {
 const el = document.querySelector(%s);
 if (!el) return {ok:false, error:"selector not found"};
@@ -747,7 +772,7 @@ func (t *BrowserWaitTool) InputSchema() map[string]any {
 
 func (t *BrowserWaitTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserWaitTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserWaitTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	selector := stringFromInput(input, "selector")
 	text := stringFromInput(input, "text")
 	timeout := intFromInput(input, "timeout_ms", defaultBrowserWaitMS)
@@ -770,7 +795,10 @@ func (t *BrowserWaitTool) Run(ctx context.Context, input map[string]any) (string
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
+	defer t.base.release(client, &err)
+	// 单次探测的上限按这次要等的时长放宽：页面忙一阵（比如刚跳转、在跑重脚本）不该
+	// 在模型说好的等待时间之内就被当成卡死。
+	client.callLimit = max(t.base.timeout, time.Duration(timeout)*time.Millisecond)
 	expr := fmt.Sprintf(`(() => {
 const selector = %s, text = %s;
 if (selector) {
@@ -786,8 +814,13 @@ return true;
 })()`, jsString(selector), jsString(text))
 	deadline := started.Add(time.Duration(timeout) * time.Millisecond)
 	for {
-		// 等的过程中页面可能正在跳转，执行上下文被销毁时的报错不算失败，下一轮再看。
-		if raw, err := client.evaluate(ctx, expr); err == nil {
+		// 等的过程中页面可能正在跳转，执行上下文被销毁时的报错不算失败，下一轮再看；
+		// 页面卡死或崩了就不用再等了。
+		raw, err := client.evaluate(ctx, expr)
+		if failure := client.pageFailure(); failure != nil {
+			return "", failure
+		}
+		if err == nil {
 			var found bool
 			if json.Unmarshal(raw, &found) == nil && found {
 				return client.pageState(ctx, map[string]any{"found": true, "waited_ms": time.Since(started).Milliseconds()})
@@ -818,23 +851,29 @@ func (t *BrowserEvalTool) Description() string {
 
 func (t *BrowserEvalTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"script"}, map[string]any{
-		"script": toolStringParam("JavaScript 表达式；多条语句写成 (() => { ...; return 结果 })()，异步写成 (async () => { ... })()"),
+		"script":     toolStringParam("JavaScript 表达式；多条语句写成 (() => { ...; return 结果 })()，异步写成 (async () => { ... })()"),
+		"timeout_ms": toolIntParam(fmt.Sprintf("脚本最多跑多久，默认等于浏览器超时，最多 %d；超时的同步脚本会被中断", maxBrowserWaitMS)),
 	})
 }
 
 func (t *BrowserEvalTool) RepeatableCalls() bool { return true }
 
-func (t *BrowserEvalTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *BrowserEvalTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
 	script := rawStringFromInput(input, "script")
 	if strings.TrimSpace(script) == "" {
 		return "", errors.New("script is required")
 	}
+	limit := t.base.evalLimit(intFromInput(input, "timeout_ms", 0))
 	client, err := t.base.pageClient(ctx, false)
 	if err != nil {
 		return "", err
 	}
-	defer client.Close()
-	raw, err := client.evaluateScript(ctx, script)
+	defer t.base.releaseWith(client, &err, recoverKeep, "执行脚本时")
+	// 同步的死循环由 V8 按 timeout 就地打断，页面不受影响；一直不结束的 Promise 由
+	// 这次调用的上限兜住，再走卡死的恢复。上限比 V8 那一侧多留一秒，同步超时的
+	// 情况先拿到 V8 的回话，报的原因更准。
+	client.callLimit = limit + time.Second
+	raw, err := client.evaluateScript(ctx, script, limit)
 	if err != nil {
 		return "", err
 	}

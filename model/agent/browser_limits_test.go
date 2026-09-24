@@ -23,7 +23,8 @@ import (
 )
 
 // fakeCDP 是一个只会标签页增删和几条 Page/Runtime 命令的假浏览器。地址里带 "hang"
-// 的页面，Page.navigate 永远不回，模拟服务器一直不响应。
+// 的页面，Page.navigate 永远不回，模拟服务器一直不响应；地址里带 "busy" 的页面跳过去
+// 之后 Runtime.evaluate 永远不回，模拟页面主线程被脚本卡死。
 type fakeCDP struct {
 	server *httptest.Server
 
@@ -36,11 +37,18 @@ type fakeCDP struct {
 	// 的 Runtime.evaluate 交回它而不是默认的页面摘要。
 	cookies   []string
 	evalValue any
+	// busy 是主线程卡死的标签页，crashed 是渲染进程崩了的标签页：两种都不回
+	// Runtime.evaluate，导航回 about:blank 后恢复。terminable 为真时
+	// Runtime.terminateExecution 能打断卡死（真 Chrome 里只有卡住之前就挂上的会话才行）。
+	busy       map[string]bool
+	crashed    map[string]bool
+	terminable bool
+	terminated int
 }
 
 func newFakeCDP(t *testing.T, urls ...string) *fakeCDP {
 	t.Helper()
-	f := &fakeCDP{targets: map[string]string{}, stopped: map[string]int{}}
+	f := &fakeCDP{targets: map[string]string{}, stopped: map[string]int{}, busy: map[string]bool{}, crashed: map[string]bool{}}
 	for _, u := range urls {
 		f.add(u)
 	}
@@ -136,14 +144,44 @@ func (f *fakeCDP) serve(conn *websocket.Conn, id string) {
 			}
 			f.mu.Lock()
 			f.targets[id] = pageURL
+			f.busy[id] = strings.Contains(pageURL, "busy")
+			f.crashed[id] = false
 			f.mu.Unlock()
+		case "Inspector.enable":
+			f.mu.Lock()
+			crashed := f.crashed[id]
+			f.mu.Unlock()
+			if crashed {
+				if err := conn.WriteJSON(map[string]any{"method": "Inspector.targetCrashed", "params": map[string]any{}}); err != nil {
+					return
+				}
+			}
+		case "Runtime.terminateExecution":
+			f.mu.Lock()
+			terminable := f.terminable
+			if terminable {
+				f.busy[id] = false
+				f.terminated++
+			}
+			f.mu.Unlock()
+			if !terminable {
+				continue
+			}
 		case "Page.stopLoading":
 			f.mu.Lock()
 			f.stopped[id]++
 			f.mu.Unlock()
 		case "Runtime.evaluate":
 			expr, _ := msg.Params["expression"].(string)
-			if strings.Contains(expr, "readyState") {
+			f.mu.Lock()
+			stuck := f.busy[id] || f.crashed[id]
+			f.mu.Unlock()
+			if stuck {
+				continue
+			}
+			if expr == "1" {
+				result["result"] = map[string]any{"type": "number", "value": 1}
+			} else if strings.Contains(expr, "readyState") {
 				result["result"] = map[string]any{"type": "boolean", "value": true}
 			} else {
 				f.mu.Lock()

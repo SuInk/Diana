@@ -290,6 +290,11 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 		select {
 		case frame, ok := <-live.Frames():
 			if !ok {
+				// 标签页崩了之类的原因要告诉前端，不然它只会一直显示最后一帧或「正在连接」。
+				if err := live.Err(); err != nil {
+					_ = conn.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
+					_ = conn.WriteJSON(gin.H{"type": "error", "message": err.Error()})
+				}
 				return
 			}
 			_ = conn.SetWriteDeadline(time.Now().Add(liveWriteTimeout))

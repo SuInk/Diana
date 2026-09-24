@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/llm"
+	"github.com/gorilla/websocket"
 )
 
 func TestParseBrowserKey(t *testing.T) {
@@ -371,6 +372,165 @@ func TestBrowserToolsHangingPageIntegration(t *testing.T) {
 		t.Fatalf("正文传不完的页面应当交回已到手的内容：%s %v", out, err)
 	}
 	waitReleased("/stream")
+}
+
+// TestBrowserToolsStuckPageIntegration 用本机 Chrome 验证页面主线程被脚本卡死、渲染进程
+// 崩溃这两种情况：工具在浏览器超时量级内交回清楚的原因，标签页被关掉或救回来，同一个
+// 浏览器之后照常能用。设 DIANA_BROWSER_TOOLS_INTEGRATION=1 才跑。
+func TestBrowserToolsStuckPageIntegration(t *testing.T) {
+	if os.Getenv("DIANA_BROWSER_TOOLS_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_TOOLS_INTEGRATION=1 to run Chrome integration")
+	}
+	executable, err := FindBrowserExecutable("")
+	if err != nil {
+		t.Skip(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/busy" {
+			fmt.Fprint(w, `<title>busy</title><p>卡住之前</p><script>while(true){}</script>`)
+			return
+		}
+		fmt.Fprint(w, `<title>ok</title><p>正常页面</p>`)
+	}))
+	defer server.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	base := "http://localhost:" + port
+
+	const timeout = 3 * time.Second
+	root := t.TempDir()
+	cdpURL := startIntegrationChrome(t, executable, root)
+	registry := NewToolRegistry()
+	registry.RegisterBrowserTools(root, Config{BrowserCDPURL: cdpURL, BrowserTimeoutMS: int(timeout / time.Millisecond)}.WithDefaults())
+	// 和 Runner 给工具的上限一样：修之前卡死的页面会一直耗到这里。
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	run := func(name string, input map[string]any) (string, time.Duration, error) {
+		tool, _ := registry.Get(name)
+		started := time.Now()
+		out, err := tool.Run(ctx, input)
+		return out, time.Since(started), err
+	}
+	// 卡死要等满一个浏览器超时才认得出，恢复再花几秒；远小于 Runner 的 60 秒。
+	within := func(what string, elapsed time.Duration) {
+		t.Helper()
+		t.Logf("%s 用时 %s", what, elapsed.Round(time.Millisecond))
+		if elapsed > timeout+6*time.Second {
+			t.Fatalf("%s 没有在浏览器超时量级内收手：%s", what, elapsed)
+		}
+	}
+	mustOpen := func(what string) {
+		t.Helper()
+		out, _, err := run("browser_open", map[string]any{"url": base + "/"})
+		if err != nil || !strings.Contains(out, "正常页面") {
+			t.Fatalf("%s之后同一个浏览器应当还能正常打开网页：%s %v", what, out, err)
+		}
+	}
+	countPages := func() int {
+		out, _, err := run("browser_tabs", map[string]any{"action": "list"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var listed struct {
+			Tabs []json.RawMessage `json:"tabs"`
+		}
+		_ = json.Unmarshal([]byte(out), &listed)
+		return len(listed.Tabs)
+	}
+	crashActiveTab := func() {
+		t.Helper()
+		tool, _ := registry.Get("browser_open")
+		active := browserToolBaseOf(tool).session.active()
+		targets, err := listBrowserTargets(ctx, cdpURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, target := range targets {
+			if target.ID != active {
+				continue
+			}
+			conn, _, err := websocket.DefaultDialer.Dial(target.WebSocketDebuggerURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.WriteJSON(map[string]any{"id": 1, "method": "Page.crash", "params": map[string]any{}})
+			time.Sleep(500 * time.Millisecond)
+			_ = conn.Close()
+			return
+		}
+		t.Fatalf("找不到当前标签页 %s", active)
+	}
+
+	mustOpen("开局")
+	before := countPages()
+
+	// 新标签页打开卡死的页面：清楚的原因，新开的页被关掉。
+	_, elapsed, err := run("browser_open", map[string]any{"url": base + "/busy", "new_tab": true})
+	if err == nil || !strings.Contains(err.Error(), "没有响应") || !strings.Contains(err.Error(), "关闭") || strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("新标签页打开卡死的页面应当报页面没有响应并关掉标签页：%v", err)
+	}
+	within("new_tab 打开卡死页", elapsed)
+	if after := countPages(); after != before {
+		t.Fatalf("卡死的新标签页应当被关掉：%d → %d", before, after)
+	}
+	mustOpen("新标签页卡死")
+
+	// 沿用当前标签页打开卡死的页面：标签页换回空白页，之后照样能用。
+	_, elapsed, err = run("browser_open", map[string]any{"url": base + "/busy"})
+	if err == nil || !strings.Contains(err.Error(), "没有响应") || !strings.Contains(err.Error(), "空白页") {
+		t.Fatalf("沿用当前页打开卡死的页面应当报页面没有响应并换回空白页：%v", err)
+	}
+	within("沿用当前页打开卡死页", elapsed)
+	if after := countPages(); after != before {
+		t.Fatalf("沿用当前页不该多出或少掉标签页：%d → %d", before, after)
+	}
+	mustOpen("当前页卡死")
+
+	// 页面在别的工具眼皮底下卡死：browser_text 按浏览器超时收手，而不是等满 60 秒。
+	if _, _, err := run("browser_eval", map[string]any{"script": `setTimeout(() => { while (true) {} }, 50); 1`}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_, elapsed, err = run("browser_text", nil)
+	if err == nil || !strings.Contains(err.Error(), "没有响应") {
+		t.Fatalf("卡死的页面上读文本应当报页面没有响应：%v", err)
+	}
+	within("卡死页上 browser_text", elapsed)
+	mustOpen("读卡死页")
+
+	// browser_eval 自己写了死循环：V8 按超时就地打断，页面不受影响。
+	_, elapsed, err = run("browser_eval", map[string]any{"script": `while (true) {}`, "timeout_ms": 1000})
+	if err == nil || !strings.Contains(err.Error(), "没有跑完") {
+		t.Fatalf("死循环脚本应当被中断：%v", err)
+	}
+	within("死循环脚本", elapsed)
+	if out, _, err := run("browser_text", nil); err != nil || !strings.Contains(out, "正常页面") {
+		t.Fatalf("脚本被中断之后页面应当原样可用：%s %v", out, err)
+	}
+	// 一直不结束的 Promise：按调用上限收手，页面留着。
+	_, elapsed, err = run("browser_eval", map[string]any{"script": `new Promise(() => {})`, "timeout_ms": 1000})
+	if err == nil || !strings.Contains(err.Error(), "执行脚本时") {
+		t.Fatalf("不结束的 Promise 应当按上限收手：%v", err)
+	}
+	within("不结束的 Promise", elapsed)
+	if out, _, err := run("browser_text", nil); err != nil || !strings.Contains(out, "正常页面") {
+		t.Fatalf("等 Promise 超时之后页面应当还在：%s %v", out, err)
+	}
+
+	// 渲染进程崩溃：报「崩溃」，标签页换一个新的渲染进程。
+	crashActiveTab()
+	_, elapsed, err = run("browser_text", nil)
+	if err == nil || !strings.Contains(err.Error(), "崩溃") {
+		t.Fatalf("崩掉的页面应当报页面崩溃：%v", err)
+	}
+	within("崩溃页上 browser_text", elapsed)
+	mustOpen("页面崩溃")
+	// 沿用一个已经崩掉的标签页打开网页：直接换掉，不用模型重试。
+	crashActiveTab()
+	mustOpen("沿用崩溃的标签页")
+	if after := countPages(); after != before {
+		t.Fatalf("恢复过程不该多出或少掉标签页：%d → %d", before, after)
+	}
 }
 
 func TestCompactCDPValueKeepsChineseAndBigNumbers(t *testing.T) {
