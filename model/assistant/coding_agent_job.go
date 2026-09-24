@@ -154,12 +154,7 @@ func (r *Runtime) codingJobOwner(profileID string) (string, bool) {
 // codingJobVisibleTo 报告这条消息所属的机器人能不能看见、操作这个任务。同一个
 // Runtime 里的几台机器人主人可以不同，A 的主人不该查到或取消 B 派的活。
 func (r *Runtime) codingJobVisibleTo(job CodingJob, event MessageEvent) bool {
-	owner, ok := r.codingJobOwner(job.Target.ProfileID)
-	if !ok {
-		return false
-	}
-	caller, ok := r.codingJobOwner(event.ProfileID)
-	return ok && caller == owner
+	return r.sameProfileAsEvent(job.Target.ProfileID, event)
 }
 
 // CodingWorkspaceRoot 是编码代理的工作区根目录。和 Agent 工作目录同一套约定：
@@ -210,7 +205,8 @@ func loadCodingJob(id string) (CodingJob, error) {
 	return job, nil
 }
 
-// listCodingJobs 按开始时间倒序返回全部任务记录，并顺手清掉超出保留数量的旧记录。
+// listCodingJobs 按开始时间倒序返回记录目录里的全部任务记录。它只读不删：目录
+// 可能是几台机器人、几个实例共用的，清理要按归属来，见 pruneCodingJobs。
 func listCodingJobs() []CodingJob {
 	entries, err := os.ReadDir(codingJobRecordDir())
 	if err != nil {
@@ -228,19 +224,52 @@ func listCodingJobs() []CodingJob {
 		jobs = append(jobs, job)
 	}
 	sort.Slice(jobs, func(a, b int) bool { return jobs[a].StartedAt.After(jobs[b].StartedAt) })
-	if len(jobs) > codingJobRetainCount {
-		for _, stale := range jobs[codingJobRetainCount:] {
-			if !stale.finished() {
-				continue
-			}
-			_ = os.Remove(codingJobRecordPath(stale.ID))
-			_ = os.Remove(stale.LogPath)
-			_ = os.Remove(codingApprovalPolicyPath(stale.ID))
-			_ = os.Remove(filepath.Join(codingJobRecordDir(), stale.ID+".settings.json"))
-		}
-		jobs = jobs[:codingJobRetainCount]
-	}
 	return jobs
+}
+
+// settled 报告任务是不是彻底了结：结束了，并且结果已经汇报过（或者本来就没有能汇报
+// 的会话）。没了结的记录是重启后补汇报的唯一依据，清理时不能动。
+func (j CodingJob) settled() bool {
+	if !j.finished() {
+		return false
+	}
+	if j.Reported {
+		return true
+	}
+	return strings.TrimSpace(j.Target.UserID) == "" && strings.TrimSpace(j.Target.GroupID) == ""
+}
+
+// pruneCodingJobs 按机器人各自保留最近 codingJobRetainCount 条任务记录，更早且已经
+// 了结的删掉。
+//
+// 以前是全局按时间删，记录目录被几个实例共用时，一台派活多的会把别人还没汇报的
+// 任务连记录带日志删掉，对方重启后就再也补不上那条汇报。现在只清这台 Runtime 认得
+// 出归属的任务，别人的一条不碰；自己的也只删已经了结的。
+func (r *Runtime) pruneCodingJobs() {
+	counts := map[string]int{}
+	for _, job := range listCodingJobs() {
+		owner, ok := r.codingJobOwner(job.Target.ProfileID)
+		if !ok {
+			continue
+		}
+		counts[owner]++
+		if counts[owner] <= codingJobRetainCount || !job.settled() {
+			continue
+		}
+		removeCodingJobFiles(job.ID)
+	}
+}
+
+// removeCodingJobFiles 删掉一个任务在记录目录里的全部文件。路径按任务号现算，不用
+// 记录里存的 LogPath：记录文件是可以被别人改的普通文件，删文件不该跟着它指的路径走。
+func removeCodingJobFiles(id string) {
+	if strings.TrimSpace(id) == "" || strings.ContainsAny(id, `/\`) || id == "." || id == ".." {
+		return
+	}
+	_ = os.Remove(codingJobRecordPath(id))
+	_ = os.Remove(codingJobLogPath(id))
+	_ = os.Remove(codingApprovalPolicyPath(id))
+	_ = os.Remove(filepath.Join(codingJobRecordDir(), id+".settings.json"))
 }
 
 // codingJobSnapshot 是从日志里读出来的实时进度。任务状态的真相在日志里，记录文件
@@ -630,7 +659,8 @@ func (r *Runtime) launchCodingJob(
 		return CodingJob{}, err
 	}
 
-	settingsPath, err := prepareCodingApproval(cfg, job.ID)
+	alwaysAllowPath, _ := r.codingAlwaysAllowPathFor(owner)
+	settingsPath, err := prepareCodingApproval(cfg, job.ID, alwaysAllowPath)
 	if err != nil {
 		registry.release(workspace.Name, job.ID)
 		return CodingJob{}, err
@@ -675,6 +705,7 @@ func (r *Runtime) launchCodingJob(
 		defer recoverGoroutinePanic("coding.watchJob")
 		r.watchCodingJob(job, cmd, cfg.ApprovalTimeout)
 	}()
+	r.pruneCodingJobs()
 	return job, nil
 }
 
@@ -920,6 +951,8 @@ func (r *Runtime) cancelCodingJob(ctx context.Context, id string) (CodingJob, er
 // ResumeCodingJobs 在启动时接回上次留下的编码任务：进程还活着就继续盯，已经没了
 // 就按日志收尾并把欠下的汇报补上。
 func (r *Runtime) ResumeCodingJobs(ctx context.Context) {
+	// 补完汇报再清理：这一轮刚补上汇报的任务也就能算了结了。
+	defer r.pruneCodingJobs()
 	for _, job := range listCodingJobs() {
 		// 别的实例派的活不接：它的收件人没跟这台打过交道，用这边的连接发出去就是
 		// 替别人汇报；标上 Reported 还会让真正的主人以后不再汇报。不是这台 Runtime

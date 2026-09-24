@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
@@ -64,6 +65,9 @@ type codingApprovalRequest struct {
 	// Pattern 是命中的危险模式，主人说「以后都同意」时按它记常驻放行。
 	Pattern   string    `json:"pattern,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// ProfileID 是任务所属的机器人，由 Diana 登记询问时按任务记录补上，不从 hook
+	// 写的文件里读：谁能回这个码、常驻放行记到谁名下，都按它认。
+	ProfileID string `json:"-"`
 }
 
 // codingApprovalResponse 是 Diana 写回去的裁决。
@@ -80,8 +84,68 @@ type codingAlwaysAllowEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-func codingAlwaysAllowPath() string {
+// codingAlwaysAllowMu 串起本进程里对常驻放行清单的「读-改-写」：两条确认码几乎同时
+// 回来时，后写的那次不能把先记下的条目覆盖掉。
+var codingAlwaysAllowMu sync.Mutex
+
+// codingAlwaysAllowPath 是某台机器人自己的常驻放行清单。
+//
+// 清单按机器人档案分文件：记录目录可能被同一进程里的几台机器人、甚至几个实例共用，
+// A 的主人说过「git push 以后都同意」，不能让 B 派的任务也跟着不问。文件名取档案
+// ID 的摘要，档案 ID 里有什么字符都落不出这个目录。
+func codingAlwaysAllowPath(profileID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(profileID)))
+	return filepath.Join(codingApprovalDir(), "always-allow", hex.EncodeToString(sum[:8])+".json")
+}
+
+// codingLegacyAlwaysAllowPath 是分文件之前全部机器人共用的那份清单。只在迁移时读，
+// 不再写。
+func codingLegacyAlwaysAllowPath() string {
 	return filepath.Join(codingApprovalDir(), "always-allow.json")
+}
+
+// codingAlwaysAllowPathFor 返回这台机器人的常驻放行清单路径，第一次用到时把旧共享
+// 清单里认得出是它的条目搬过来。认不出消息属于哪台机器人就不给路径。
+func (r *Runtime) codingAlwaysAllowPathFor(profileID string) (string, bool) {
+	owner, ok := r.codingJobOwner(profileID)
+	if !ok {
+		return "", false
+	}
+	path := codingAlwaysAllowPath(owner)
+	r.migrateLegacyCodingAlwaysAllow(owner, path)
+	return path, true
+}
+
+// migrateLegacyCodingAlwaysAllow 把旧共享清单里属于这台机器人的条目搬进它自己的文件。
+//
+// 旧条目只记了点头的人（OwnerID），没记是哪台机器人。认领规则往「多问一次」那边偏：
+// 记录人就是这台机器人配置的主人才搬；没有记录人的条目只在这台 Runtime 只有一台机器
+// 人时归它。搬过一次就留下这台自己的文件（哪怕是空的），之后不再看旧文件——否则主人
+// 清空之后旧条目又会被搬回来。旧文件本身不动，共用目录的其他实例还要从里面认领。
+func (r *Runtime) migrateLegacyCodingAlwaysAllow(owner, path string) {
+	codingAlwaysAllowMu.Lock()
+	defer codingAlwaysAllowMu.Unlock()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return
+	}
+	legacyPath := codingLegacyAlwaysAllowPath()
+	if _, err := os.Stat(legacyPath); err != nil {
+		return
+	}
+	r.mu.RLock()
+	ownerID := strings.TrimSpace(r.profileConfigs[owner].OwnerID)
+	single := len(r.profileConfigs) == 1
+	r.mu.RUnlock()
+	claimed := make([]codingAlwaysAllowEntry, 0)
+	for _, entry := range readCodingAlwaysAllow(legacyPath) {
+		recordedBy := strings.TrimSpace(entry.OwnerID)
+		if (recordedBy == "" && single) || (recordedBy != "" && recordedBy == ownerID) {
+			claimed = append(claimed, entry)
+		}
+	}
+	if err := writeCodingAlwaysAllow(path, claimed); err != nil {
+		r.setError("迁移编码任务常驻放行清单失败：" + err.Error())
+	}
 }
 
 // loadCodingAlwaysAllow 读常驻放行清单，只返回模式。读不到就当清单为空——
@@ -113,16 +177,37 @@ func readCodingAlwaysAllow(path string) []codingAlwaysAllowEntry {
 	return entries
 }
 
-// rememberCodingAlwaysAllow 记下「这类操作以后都同意」。同一个模式只记一次。
-func rememberCodingAlwaysAllow(pattern, ownerID, example string) error {
+// writeCodingAlwaysAllow 先写临时文件再改名：hook 进程随时在读这份清单。
+func writeCodingAlwaysAllow(path string, entries []codingAlwaysAllowEntry) error {
+	if entries == nil {
+		entries = []codingAlwaysAllowEntry{}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	body, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	temp := path + ".tmp"
+	if err := os.WriteFile(temp, body, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temp, path)
+}
+
+// rememberCodingAlwaysAllow 在 path 这份清单里记下「这类操作以后都同意」。同一个
+// 模式只记一次。
+func rememberCodingAlwaysAllow(path, pattern, ownerID, example string) error {
 	pattern = strings.ToLower(strings.TrimSpace(pattern))
 	if pattern == "" {
 		return fmt.Errorf("这次确认没有对应的操作类别，无法记住")
 	}
-	path := codingAlwaysAllowPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("认不出这是哪台机器人的任务")
 	}
+	codingAlwaysAllowMu.Lock()
+	defer codingAlwaysAllowMu.Unlock()
 	entries := readCodingAlwaysAllow(path)
 	for _, entry := range entries {
 		if strings.EqualFold(strings.TrimSpace(entry.Pattern), pattern) {
@@ -133,20 +218,19 @@ func rememberCodingAlwaysAllow(pattern, ownerID, example string) error {
 		Pattern: pattern, OwnerID: strings.TrimSpace(ownerID),
 		Example: truncateRunes(strings.TrimSpace(example), 200), CreatedAt: time.Now(),
 	})
-	body, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, body, 0o600)
+	return writeCodingAlwaysAllow(path, entries)
 }
 
-// forgetCodingAlwaysAllow 清空常驻放行清单，返回清掉了几条。
-func forgetCodingAlwaysAllow() (int, error) {
-	entries := readCodingAlwaysAllow(codingAlwaysAllowPath())
+// forgetCodingAlwaysAllow 清空 path 这份清单，返回清掉了几条。清空是写一份空清单
+// 而不是删文件：文件在就表示旧共享清单迁移过了，删掉会让旧条目被再搬回来。
+func forgetCodingAlwaysAllow(path string) (int, error) {
+	codingAlwaysAllowMu.Lock()
+	defer codingAlwaysAllowMu.Unlock()
+	entries := readCodingAlwaysAllow(path)
 	if len(entries) == 0 {
 		return 0, nil
 	}
-	if err := os.Remove(codingAlwaysAllowPath()); err != nil && !os.IsNotExist(err) {
+	if err := writeCodingAlwaysAllow(path, nil); err != nil {
 		return 0, err
 	}
 	return len(entries), nil
@@ -304,6 +388,7 @@ func (r *Runtime) watchCodingApprovals(ctx context.Context, job CodingJob, timeo
 			// 登记放在轮询这一轮里同步做完，再交给协程去问：登记如果留在协程
 			// 里，下一轮轮询可能在它跑起来之前又看到同一个请求，主人就会收到
 			// 两条一样的询问。
+			request.ProfileID = job.Target.ProfileID
 			allowCode, alwaysCode, denyCode := codingApprovalCodes(request)
 			if strings.TrimSpace(request.Pattern) == "" {
 				// 没有命中模式（全部写操作档）时不给常驻放行码：记不下来是哪一类。
@@ -409,6 +494,11 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 	}
 	lowered := strings.ToLower(text)
 	for _, request := range pending {
+		// 同一个 Runtime 里几台机器人的主人可以不同：B 的主人不能替 A 派的任务点
+		// 头，常驻放行也只记到任务所属那台的清单里。
+		if !r.sameProfileAsEvent(request.ProfileID, event) {
+			continue
+		}
 		allowCode, alwaysCode, denyCode := codingApprovalCodes(request)
 		if strings.TrimSpace(request.Pattern) == "" {
 			alwaysCode = ""
@@ -434,7 +524,8 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 			}
 			remembered := ""
 			if item.always {
-				if err := rememberCodingAlwaysAllow(request.Pattern, event.UserID, request.Detail); err != nil {
+				path, _ := r.codingAlwaysAllowPathFor(request.ProfileID)
+				if err := rememberCodingAlwaysAllow(path, request.Pattern, event.UserID, request.Detail); err != nil {
 					remembered = "（这类操作没记住：" + err.Error() + "，下次还会问）"
 				} else {
 					remembered = fmt.Sprintf("以后「%s」这类操作我不再问了，想恢复就用编码工具的 approvals 清空。", request.Pattern)
@@ -487,7 +578,8 @@ func isCodeRune(r rune) bool {
 
 // prepareCodingApproval 为一次任务写好 hook 需要的设置和策略文件，返回要传给
 // CLI 的 --settings 路径。审批关闭时返回空串，模板里的 {{settings}} 会被丢掉。
-func prepareCodingApproval(cfg codingAgentConfig, jobID string) (string, error) {
+// alwaysAllowPath 是派活那台机器人自己的常驻放行清单。
+func prepareCodingApproval(cfg codingAgentConfig, jobID, alwaysAllowPath string) (string, error) {
 	if cfg.ApprovalMode == codingApprovalModeOff {
 		return "", nil
 	}
@@ -508,7 +600,7 @@ func prepareCodingApproval(cfg codingAgentConfig, jobID string) (string, error) 
 		JobID:           jobID,
 		Mode:            cfg.ApprovalMode,
 		Patterns:        cfg.ApprovalPatterns,
-		AlwaysAllowPath: codingAlwaysAllowPath(),
+		AlwaysAllowPath: alwaysAllowPath,
 		ApprovalDir:     codingApprovalDir(),
 		TimeoutSeconds:  timeout,
 	}

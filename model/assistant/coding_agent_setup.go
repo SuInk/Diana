@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/internal/procgroup"
+	"github.com/SuInk/diana/model/agent"
 )
 
 const codingAgentSettingKeys = "agent_api_keys"
@@ -77,7 +78,12 @@ func prepareCodingRuntime(cfg codingAgentConfig) error {
 	}
 	return os.MkdirAll(filepath.Join(codingManagedRoot(), "state", cfg.Backend), 0700)
 }
-func codingManagedRoot() string { return filepath.Join(AgentWorkspaceDir(), "coding-runtime") }
+
+// codingManagedRoot 下的 auth/ 和 state/ 存着登录态，Agent 的文件工具、发附件和命令
+// 沙盒都按 agent.CodingRuntimeDirName 把它们挡掉；改这里的布局要同步改那边。
+func codingManagedRoot() string {
+	return filepath.Join(AgentWorkspaceDir(), agent.CodingRuntimeDirName)
+}
 func codingManagedCommand(backend string) string {
 	name := backend
 	if runtime.GOOS == "windows" {

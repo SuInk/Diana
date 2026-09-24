@@ -147,6 +147,11 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 		key := strings.TrimSpace(task.Key)
 		if key == "" {
 			key = task.Kind + ":" + uuid.NewString()
+		} else {
+			// 去重只在同一个会话里算：插件给的键常常只按内容算（比如扫描件 OCR 只
+			// 看文件摘要），两台机器人或两个群收到同一份文件时，后来的那边会被当成
+			// 「同一任务正在处理」，结果却只发回先来的那个会话。
+			key = sessionKey(event) + "\x00" + key
 		}
 		for recentKey, recent := range r.subagentRecent {
 			if now.Sub(recent.UpdatedAt) > 30*time.Minute {
@@ -163,6 +168,8 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 		}
 		supersedeKey := strings.TrimSpace(task.SupersedeKey)
 		if supersedeKey != "" {
+			// 顶替同理只顶替本会话的，不能因为别的群发了新请求就把这边的任务取消掉。
+			supersedeKey = sessionKey(event) + "\x00" + supersedeKey
 			for activeKey, active := range r.subagentTasks {
 				if active.supersedeKey != supersedeKey {
 					continue

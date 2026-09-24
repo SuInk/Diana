@@ -237,9 +237,19 @@ func TestProtectedExistingPathsSkipsMissingFiles(t *testing.T) {
 	if err := os.WriteFile(present, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	protected := protectedFiles{present: true, filepath.Join(dir, "missing.json"): true, dir: true}
+	protected := protectedFiles{files: map[string]bool{present: true, filepath.Join(dir, "missing.json"): true, dir: true}}
 	got := protected.existingPaths()
 	if len(got) != 1 || got[0] != present {
+		t.Fatalf("existingPaths = %v", got)
+	}
+	// 凭据目录按目录交给沙盒；还没建出来的目录同样不交。
+	credDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(credDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	protected.dirs = []string{credDir, filepath.Join(dir, "auth")}
+	got = protected.existingPaths()
+	if len(got) != 2 || got[0] != present || got[1] != credDir {
 		t.Fatalf("existingPaths = %v", got)
 	}
 	var empty protectedFiles

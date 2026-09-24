@@ -81,6 +81,10 @@ func (t *dianaRSSWatchTool) targetOwner(requesterIsOwner bool, fallbackOwner, id
 	if err != nil {
 		return "", err
 	}
+	// 主人只管这台机器人名下的订阅，别的机器人的按没找到处理。
+	if !t.runtime.sameProfileAsEvent(item.ProfileID, t.event) {
+		return "", fmt.Errorf("没有找到 RSS 订阅 %s", strings.TrimSpace(id))
+	}
 	return item.OwnerID, nil
 }
 
@@ -144,6 +148,9 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		}
 		items := make([]dianaRSSWatch, 0, len(stored))
 		for _, item := range stored {
+			if policy.Owner && !t.runtime.sameProfileAsEvent(item.ProfileID, t.event) {
+				continue
+			}
 			items = append(items, *rssWatchForTool(item))
 		}
 		return marshalDianaRSSWatchResult(dianaRSSWatchResult{OK: true, Action: "listed", Message: fmt.Sprintf("当前共有 %d 个 RSS/社交订阅。", len(items)), Items: items})

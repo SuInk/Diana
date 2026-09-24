@@ -90,6 +90,15 @@ func (t *dianaLocalAttachmentTool) Run(ctx context.Context, input map[string]any
 			return "", fmt.Errorf("不支持的附件类型 .%s；可执行文件不会发送，其他格式请先打成 zip 再试", ext)
 		}
 	}
+	// 和 read_file 用同一份凭据名单：工作目录是几台机器人共用的，MCP 配置和编码代理登录态里的令牌
+	// 不能换个工具就当附件发出去。
+	protectedCfg := agent.Config{WorkDir: AgentWorkspaceDir()}
+	if t.runtime != nil {
+		protectedCfg.MCPConfigPath = t.runtime.effectiveConfigForEvent(t.event).AgentMCPConfigPath
+	}
+	if agent.WorkspaceFileProtected(protectedCfg, path) {
+		return "", fmt.Errorf("%s 是 Diana 的运行时配置，里面可能有 MCP 或编码代理的访问令牌，不能作为附件发送或查看", path)
+	}
 	data, err := agent.ReadWorkspaceFile(AgentWorkspaceDir(), path, localAttachmentMaxBytes)
 	if err != nil {
 		return "", err

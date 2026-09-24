@@ -100,6 +100,21 @@ func (r *Runtime) eventProfileID(event MessageEvent) string {
 	return ""
 }
 
+// sameProfileAsEvent 报告一条按机器人归属的记录（提醒、订阅、编码任务）是不是这条
+// 消息所属那台机器人的。
+//
+// 几台机器人共用一个 Runtime 时主人可以各不相同，「主人」只是这一台的主人：A 的主
+// 人不该列出、改动或删掉 B 的记录。认法和 codingJobOwner 一样：非空 ID 必须精确命
+// 中这台 Runtime 的某台机器人；空 ID 只在只有一台机器人时归它，不去猜。
+func (r *Runtime) sameProfileAsEvent(recordProfileID string, event MessageEvent) bool {
+	owner, ok := r.codingJobOwner(recordProfileID)
+	if !ok {
+		return false
+	}
+	caller, ok := r.codingJobOwner(event.ProfileID)
+	return ok && caller == owner
+}
+
 // configForContext 返回一次模型调用所属机器人的配置：按 context 里带的机器人或事件找。
 // 流式输出、身份脱敏这类开关都挂在机器人配置上，不能读某一台「当前」机器人的。
 func (r *Runtime) configForContext(ctx context.Context) BotConfig {

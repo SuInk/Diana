@@ -6,7 +6,9 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +57,19 @@ type browserToolBase struct {
 	// 一个刚打开、另一个就把同一页跳走。
 	session *browserSession
 	tabs    *browserTabRegistry
+}
+
+// defaultScreenshotPath 是没指定 path 时截图落盘的位置，按对话分文件。
+//
+// 工作目录是所有机器人、所有对话共用的：以前固定写 .agent-browser/screenshot.png，
+// A 群刚截完图、正要用 send_attachment 发出去，B 机器人另一个对话的截图就把它覆盖
+// 了，发出去的是别人登录态下的页面。
+func (b browserToolBase) defaultScreenshotPath() string {
+	if b.session == nil || strings.TrimSpace(b.session.key) == "" {
+		return defaultScreenshotPath
+	}
+	sum := sha256.Sum256([]byte(b.session.key))
+	return filepath.Join(filepath.Dir(defaultScreenshotPath), "screenshot-"+hex.EncodeToString(sum[:6])+".png")
 }
 
 // browserSession 记住一个对话当前操作的标签页。
@@ -442,7 +457,7 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	t.setParts(nil)
 	outPath := stringFromInput(input, "path")
 	if outPath == "" {
-		outPath = defaultScreenshotPath
+		outPath = t.base.defaultScreenshotPath()
 	}
 	path, err := safePath(t.base.root, outPath)
 	if err != nil {
