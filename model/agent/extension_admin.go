@@ -295,6 +295,10 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		// 凭据只给掩码：键还是那些键，值从以前的空串换成掩码，人能认出配的是哪一个。
 		// 掩码原样交回来等于「保持原值」，和留空一样，见 keepsStoredSecret。
 		public["headers"], public["env"] = maskedStringMap(previous.Headers), maskedStringMap(previous.Env)
+		// 按查询参数认证的服务令牌就在地址里，地址也只给掩码，交回时同样还原。
+		if previous.URL != "" {
+			public["url"] = maskURLCredentials(previous.URL)
+		}
 		result := map[string]any{"config": public, "configured_headers": sortedKeys(previous.Headers), "configured_env": sortedKeys(previous.Env)}
 		// 从预设装出来的，界面还用那张表来改：把出身和非机密字段一起给回去，
 		// 机密字段只报掩码，原文要主人点「显示」走 reveal。
@@ -316,6 +320,8 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 			return nil, fmt.Errorf("MCP 不存在")
 		}
 		return map[string]any{
+			"url":            previous.URL,
+			"preset_values":  presetFieldValues(previous, false),
 			"headers":        cloneStringMap(previous.Headers),
 			"env":            cloneStringMap(previous.Env),
 			"preset_secrets": presetSecretValuesFromConfig(previous),
@@ -366,22 +372,22 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if _, submitted := server.Headers[key]; !submitted && !keepAll {
 			continue
 		}
-		if keepsStoredSecret(server.Headers[key], value, true) {
+		if restored, ok := restoreStoredSecret(server.Headers[key], value, true); ok {
 			if server.Headers == nil {
 				server.Headers = map[string]string{}
 			}
-			server.Headers[key] = value
+			server.Headers[key] = restored
 		}
 	}
 	for key, value := range previous.Env {
 		if _, submitted := server.Env[key]; !submitted && !keepAll {
 			continue
 		}
-		if keepsStoredSecret(server.Env[key], value, true) {
+		if restored, ok := restoreStoredSecret(server.Env[key], value, true); ok {
 			if server.Env == nil {
 				server.Env = map[string]string{}
 			}
-			server.Env[key] = value
+			server.Env[key] = restored
 		}
 	}
 	for _, key := range req.ClearHeaders {
@@ -389,6 +395,11 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 	}
 	for _, key := range req.ClearEnv {
 		delete(server.Env, key)
+	}
+	// 地址是读配置时给的掩码版本，原样交回就换回原文。WebUI 是主人自己操作，和请求头
+	// 一样不要求同源；Agent 那条路要求同源，见 restoreMaskedMCPSecrets。
+	if restored, ok := restoreMaskedURLCredentials(previous.URL, server.URL); ok {
+		server.URL = restored
 	}
 	if err := rejectUnmatchedMasks(server, previous); err != nil {
 		return nil, err

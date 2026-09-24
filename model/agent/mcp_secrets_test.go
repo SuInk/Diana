@@ -365,3 +365,118 @@ func TestRunCommandDropsMCPReferencedEnvironment(t *testing.T) {
 		t.Fatalf("env 的输出里不该有 MCP 令牌：%s", output)
 	}
 }
+
+// 按查询参数认证的服务：模型从报错里看到的地址是 ?access_token=ghp_****abcd。原样交回
+// 时必须换回原文，否则令牌被静默换成掩码，服务之后收到的就是一串星号。
+func TestAgentInstallRestoresMaskedURLCredentials(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir(), ExtensionManagement: true}
+	disabled := false
+	queryURL := "https://mcp.example.com/mcp?access_token=" + leakyToken + "&region=cn"
+	userinfoURL := "https://diana:" + leakyToken + "@mcp.example.com/mcp"
+	writeMCPServers(t, cfg, map[string]mcpServerConfig{
+		"query":    {URL: queryURL, Headers: map[string]string{"Authorization": "Bearer " + leakyToken}, Enabled: &disabled},
+		"userinfo": {URL: userinfoURL, Enabled: &disabled},
+	})
+	registry, err := NewAgentToolRegistry(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	install, _ := registry.Get("mcp_install")
+	manager := install.(*MCPInstallTool).manager
+	stored := func(name string) mcpServerConfig {
+		servers, _ := loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults()))
+		return servers[name]
+	}
+	maskedQuery := "https://mcp.example.com/mcp?access_token=ghp_****abcd&region=cn"
+	if _, err := manager.installMCP(context.Background(), "query", mcpServerConfig{URL: maskedQuery, Headers: map[string]string{"Authorization": "Bearer ghp_****abcd"}, ToolTimeoutSec: 30, Enabled: &disabled}, true); err != nil {
+		t.Fatalf("同源交回带掩码的地址应当还原：%v", err)
+	}
+	if got := stored("query"); got.URL != queryURL || got.Headers["Authorization"] != "Bearer "+leakyToken || got.ToolTimeoutSec != 30 {
+		t.Fatalf("地址里的令牌被掩码覆盖了：%#v", got)
+	}
+	if _, err := manager.installMCP(context.Background(), "query", mcpServerConfig{URL: "https://attacker.example.net/mcp?access_token=ghp_****abcd", Enabled: &disabled}, true); err == nil {
+		t.Fatal("换了主机还交回地址里的掩码，应当拒绝")
+	}
+	if _, err := manager.installMCP(context.Background(), "query", mcpServerConfig{URL: "https://mcp.example.com/mcp?access_token=ghp_****zzzz", Enabled: &disabled}, true); err == nil {
+		t.Fatal("地址里对不上的掩码应当拒绝")
+	}
+	if got := stored("query").URL; got != queryURL {
+		t.Fatalf("被拒绝的改动不能落盘：%q", got)
+	}
+
+	if _, err := manager.installMCP(context.Background(), "userinfo", mcpServerConfig{URL: "https://diana:ghp_****abcd@mcp.example.com/mcp", ToolTimeoutSec: 30, Enabled: &disabled}, true); err != nil {
+		t.Fatalf("userinfo 里的掩码应当还原：%v", err)
+	}
+	if got := stored("userinfo").URL; got != userinfoURL {
+		t.Fatalf("userinfo 里的令牌被掩码覆盖了：%q", got)
+	}
+}
+
+// WebUI 读配置时地址里的令牌同样只给掩码；原样交回即保持原值，reveal 看得到原文。
+func TestAdminMasksURLCredentials(t *testing.T) {
+	cfg := Config{WorkDir: t.TempDir()}
+	ctx := context.Background()
+	queryURL := "https://mcp.example.com/mcp?access_token=" + leakyToken
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: "query", Config: map[string]any{"url": queryURL}}); err != nil {
+		t.Fatal(err)
+	}
+	read, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "read", Kind: "mcp", Name: "query"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(read)
+	if strings.Contains(string(body), leakyToken) {
+		t.Fatalf("read 不能带出地址里的令牌：%s", body)
+	}
+	maskedURL, _ := read.(map[string]any)["config"].(map[string]any)["url"].(string)
+	if maskedURL != "https://mcp.example.com/mcp?access_token=ghp_****abcd" {
+		t.Fatalf("地址应当给掩码：%q", maskedURL)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: "query", Replace: true, Config: map[string]any{"url": maskedURL, "tool_timeout_sec": 30}}); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ := loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults()))
+	if servers["query"].URL != queryURL {
+		t.Fatalf("交回掩码地址把令牌覆盖了：%q", servers["query"].URL)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: "query", Replace: true, Config: map[string]any{"url": "https://mcp.example.com/mcp?access_token=ghp_****zzzz"}}); err == nil {
+		t.Fatal("地址里对不上的掩码应当拒绝保存")
+	}
+	revealed, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "reveal", Kind: "mcp", Name: "query"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := revealed.(map[string]any)["url"]; got != queryURL {
+		t.Fatalf("reveal 应当给出原始地址：%v", got)
+	}
+
+	// 两个短查询参数都遮成 ****，逐个认不出是哪一个；原样交回整串仍然对得上。
+	shortURL := "https://mcp.example.com/mcp?key=short-one&sig=short-two"
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: "short", Config: map[string]any{"url": shortURL}}); err != nil {
+		t.Fatal(err)
+	}
+	if masked := maskURLCredentials(shortURL); masked != "https://mcp.example.com/mcp?key=****&sig=****" {
+		t.Fatalf("短值应当遮成 ****：%q", masked)
+	}
+	if _, err := AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "save", Kind: "mcp", Name: "short", Replace: true, Config: map[string]any{"url": maskURLCredentials(shortURL)}}); err != nil {
+		t.Fatalf("原样交回整串掩码应当保持原值：%v", err)
+	}
+	servers, _ = loadMCPServers(resolveMCPConfigPath(cfg.WithDefaults()))
+	if servers["short"].URL != shortURL {
+		t.Fatalf("短值地址被掩码覆盖了：%q", servers["short"].URL)
+	}
+
+	// 预设表单回填的地址也是掩码。
+	writeMCPServers(t, cfg, map[string]mcpServerConfig{
+		"gitea": {URL: queryURL, Preset: "gitea", PresetTransport: "http"},
+	})
+	read, err = AdministerExtensions(ctx, cfg, ExtensionAdminRequest{Operation: "read", Kind: "mcp", Name: "gitea"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = json.Marshal(read)
+	if strings.Contains(string(body), leakyToken) {
+		t.Fatalf("预设 read 不能带出地址里的令牌：%s", body)
+	}
+}

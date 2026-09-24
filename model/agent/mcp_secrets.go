@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -89,14 +90,23 @@ func mcpSecretValues(cfg mcpServerConfig) []string {
 		if err != nil {
 			return
 		}
+		// 解码前后两种写法都收：报错和配置里出现的是原始转义形式，服务回显的可能是解码后的。
 		if parsed.User != nil {
 			add(parsed.User.Username())
 			if password, ok := parsed.User.Password(); ok {
 				add(password)
 			}
+			rawUser, rawPassword, _ := strings.Cut(parsed.User.String(), ":")
+			add(rawUser)
+			add(rawPassword)
 		}
 		for _, values := range parsed.Query() {
 			for _, value := range values {
+				add(value)
+			}
+		}
+		for _, pair := range strings.Split(parsed.RawQuery, "&") {
+			if _, value, ok := strings.Cut(pair, "="); ok {
 				add(value)
 			}
 		}
@@ -225,9 +235,70 @@ func keepsStoredSecret(submitted, stored string, allowBlank bool) bool {
 	return looksMasked(submitted) && submitted == maskSecret(stored)
 }
 
+// maskURLCredentials 把地址里嵌着的凭据（userinfo、查询参数）换成掩码，地址其余部分
+// 原样保留。按查询参数认证的服务（?access_token=…）令牌就在地址里。
+func maskURLCredentials(raw string) string {
+	return newMCPRedactor(mcpServerConfig{URL: raw}).text(raw)
+}
+
+// restoreMaskedURLCredentials 是 maskURLCredentials 的反向：把提交值里的掩码换回已保存
+// 地址里对应的原文。两个不同的原文算出同一个掩码时认不出是哪一个，不替换，留给
+// rejectUnmatchedMasks 拒绝。只有全部掩码都换回去了才算成功。
+func restoreMaskedURLCredentials(stored, submitted string) (string, bool) {
+	if !looksMasked(submitted) {
+		return submitted, false
+	}
+	// 原样交回最常见，先整串比：几个短值都遮成 **** 时逐个认不出，整串却对得上。
+	if strings.TrimSpace(submitted) == maskURLCredentials(stored) {
+		return stored, true
+	}
+	originals := map[string]string{}
+	ambiguous := map[string]bool{}
+	for _, secret := range mcpSecretValues(mcpServerConfig{URL: stored}) {
+		mask := maskSecret(secret)
+		if previous, ok := originals[mask]; ok && previous != secret {
+			ambiguous[mask] = true
+		}
+		originals[mask] = secret
+	}
+	masks := make([]string, 0, len(originals))
+	for mask := range originals {
+		if !ambiguous[mask] {
+			masks = append(masks, mask)
+		}
+	}
+	sort.Slice(masks, func(i, j int) bool {
+		if len(masks[i]) != len(masks[j]) {
+			return len(masks[i]) > len(masks[j])
+		}
+		return masks[i] < masks[j]
+	})
+	pairs := make([]string, 0, len(masks)*2)
+	for _, mask := range masks {
+		pairs = append(pairs, mask, originals[mask])
+	}
+	if len(pairs) == 0 {
+		return submitted, false
+	}
+	restored := strings.NewReplacer(pairs...).Replace(submitted)
+	return restored, !looksMasked(restored)
+}
+
+// restoreStoredSecret 把提交值还原成已保存的原文：整串就是它的掩码（或允许时留空），
+// 或者是一个地址、里面嵌着的凭据被遮成了掩码（预设表单回填的实例地址就是这样）。
+func restoreStoredSecret(submitted, stored string, allowBlank bool) (string, bool) {
+	if keepsStoredSecret(submitted, stored, allowBlank) {
+		return stored, true
+	}
+	return restoreMaskedURLCredentials(stored, submitted)
+}
+
 // rejectUnmatchedMasks 挡住没能对上已保存值的掩码：把 ghp_****abcd 当令牌存下去，
 // 这条服务就再也连不上了，而且看起来还像是配过。
 func rejectUnmatchedMasks(server, previous mcpServerConfig) error {
+	if looksMasked(server.URL) && server.URL != previous.URL {
+		return errors.New("服务地址里带着掩码，不是令牌原文；要沿用已保存的值就原样交回它的掩码，要换就填新令牌")
+	}
 	for _, key := range sortedKeys(server.Headers) {
 		if value := server.Headers[key]; looksMasked(value) && value != previous.Headers[key] {
 			return fmt.Errorf("请求头 %s 提交的是掩码，不是令牌原文；要沿用已保存的值就原样交回它的掩码，要换就填新令牌", key)
@@ -249,29 +320,46 @@ func rejectUnmatchedMasks(server, previous mcpServerConfig) error {
 // 把原文填上，令牌就被送出去了。所以去处变了就不填，让它去 WebUI 让主人重新填。
 func restoreMaskedMCPSecrets(previous, server mcpServerConfig) (mcpServerConfig, error) {
 	headersRestorable := sameMCPHTTPOrigin(previous.URL, server.URL)
+	// 地址里的凭据和请求头同一条规矩：只换回到同源的地址上。
+	if looksMasked(server.URL) {
+		if !headersRestorable {
+			return server, errors.New("服务地址里交回的是掩码，但地址换到了别的主机：令牌只跟着原来的地址走，换地址要请主人在 WebUI 里重新填令牌")
+		}
+		if restored, ok := restoreMaskedURLCredentials(previous.URL, server.URL); ok {
+			server.URL = restored
+		}
+	}
 	envRestorable := strings.TrimSpace(previous.Command) != "" &&
 		previous.Command == server.Command &&
 		slices.Equal(previous.Args, server.Args) &&
 		previous.CWD == server.CWD
 	for _, key := range sortedKeys(server.Headers) {
 		stored, ok := previous.Headers[key]
-		if !ok || !keepsStoredSecret(server.Headers[key], stored, false) {
+		if !ok {
+			continue
+		}
+		restored, matched := restoreStoredSecret(server.Headers[key], stored, false)
+		if !matched {
 			continue
 		}
 		if !headersRestorable {
 			return server, fmt.Errorf("请求头 %s 交回的是掩码，但服务地址变了：令牌只跟着原来的地址走，换地址要请主人在 WebUI 里重新填令牌", key)
 		}
-		server.Headers[key] = stored
+		server.Headers[key] = restored
 	}
 	for _, key := range sortedKeys(server.Env) {
 		stored, ok := previous.Env[key]
-		if !ok || !keepsStoredSecret(server.Env[key], stored, false) {
+		if !ok {
+			continue
+		}
+		restored, matched := restoreStoredSecret(server.Env[key], stored, false)
+		if !matched {
 			continue
 		}
 		if !envRestorable {
 			return server, fmt.Errorf("环境变量 %s 交回的是掩码，但启动命令、参数或工作目录变了：令牌只交给原来那条命令，改命令要请主人在 WebUI 里重新填令牌", key)
 		}
-		server.Env[key] = stored
+		server.Env[key] = restored
 	}
 	return server, nil
 }

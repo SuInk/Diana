@@ -363,9 +363,14 @@ func presetTransportByID(presetID, transportID string) (MCPPresetTransport, bool
 	return MCPPresetTransport{}, false
 }
 
-// presetValuesFromConfig 把已保存的配置还原成预设表单里的非机密字段。
+// presetValuesFromConfig 把已保存的配置还原成预设表单里的非机密字段，嵌在地址里的
+// 凭据换成掩码；原样交回时由保存那段换回原文。
 func presetValuesFromConfig(cfg mcpServerConfig) map[string]string {
-	return presetFieldValues(cfg, false)
+	values := presetFieldValues(cfg, false)
+	for key, value := range values {
+		values[key] = maskURLCredentials(value)
+	}
+	return values
 }
 
 // presetSecretValuesFromConfig 取回预设表单里的机密字段原文，只给算掩码和 reveal 用。
@@ -373,6 +378,8 @@ func presetSecretValuesFromConfig(cfg mcpServerConfig) map[string]string {
 	return presetFieldValues(cfg, true)
 }
 
+// presetFieldValues 取回预设表单字段。非机密字段里也可能嵌着凭据（地址里的 userinfo、
+// 查询参数），读配置时要遮掉，所以 maskedPresetValues 在它上面再过一遍。
 func presetFieldValues(cfg mcpServerConfig, secret bool) map[string]string {
 	transport, ok := presetTransportByID(cfg.Preset, cfg.PresetTransport)
 	if !ok || transport.values == nil {
