@@ -341,11 +341,15 @@
               @toggle-clear="toggleClearSecret"
             />
             <p v-if="musicCredentialHint(platform.key)" class="music-credential-hint">{{ musicCredentialHint(platform.key) }}</p>
+            <p v-if="musicTestResults[platform.key]?.login" class="credential-check-line">
+              <span class="badge" :class="credentialBadgeClass(musicTestResults[platform.key].login!.state)">{{ credentialStateLabel(musicTestResults[platform.key].login!) }}</span>
+              {{ musicTestResults[platform.key].login!.message }}
+            </p>
           </section>
         </div>
         <button class="btn music-test-button" type="button" :disabled="testingMusic" @click="testMusicSettings">
           <RefreshCw :size="15" :class="{ spin: testingMusic }" aria-hidden="true" />
-          {{ testingMusic ? "正在测试三家曲库" : "测试连接与播放能力" }}
+          {{ testingMusic ? "正在测试三家曲库" : "测试登录、连接与播放能力" }}
         </button>
         <div class="plugin-settings-section-head plugin-settings-subsection">
           <h3>播放设置</h3>
@@ -374,6 +378,27 @@
           />
         </template>
       </div>
+      <section v-if="isResolverSettings" class="credential-check">
+        <div class="credential-check-head">
+          <div>
+            <h4>登录凭据自检</h4>
+            <span class="hint">用各平台的账号接口实测，框里还没保存的输入也会一起测。</span>
+          </div>
+          <button class="btn small" type="button" :disabled="testingResolver" @click="testResolverSettings">
+            <RefreshCw :size="14" :class="{ spin: testingResolver }" aria-hidden="true" />
+            {{ testingResolver ? "正在测试" : "测试登录凭据" }}
+          </button>
+        </div>
+        <ul v-if="resolverChecks.length" class="credential-check-list">
+          <li v-for="check in resolverChecks" :key="check.key">
+            <div class="credential-check-row">
+              <strong>{{ check.label }}</strong>
+              <span class="badge" :class="credentialBadgeClass(check.state)">{{ credentialStateLabel(check) }}</span>
+            </div>
+            <p v-if="check.state !== 'unconfigured'">{{ check.message }}</p>
+          </li>
+        </ul>
+      </section>
       <RepositoryWatchManager
         v-if="isGitHubSettings && githubSettingsTab === 'repositories'"
         :default-profile-id="botScope"
@@ -673,6 +698,7 @@ import {
   uninstallPlugin,
   updatePluginSettings,
   testMusicConnections,
+  testResolverCredentials,
   listPluginDependencies,
   listBotGroups,
   type PluginSettingSpec,
@@ -680,7 +706,9 @@ import {
   type RepoPluginPreview,
   type ResolverDependency,
   type BotGroupSummary,
-  type MusicConnectionStatus
+  type MusicConnectionStatus,
+  type CredentialCheck,
+  type CredentialState
 } from "../api";
 import { askConfirm } from "../confirm";
 import { toastError, toastSuccess } from "../toast";
@@ -850,7 +878,8 @@ function musicCredentialHint(source: string): string {
 function musicStatusClass(source: string): string {
   const result = musicTestResults.value[source];
   if (!result) return "";
-  return result.playable ? "accent" : result.search_ok ? "warn" : "danger";
+  if (result.login?.state === "invalid") return "err";
+  return result.playable ? "accent" : result.search_ok ? "warn" : "err";
 }
 
 function musicStatusLabel(source: string): string {
@@ -869,6 +898,54 @@ async function testMusicSettings(): Promise<void> {
     toastError(error instanceof Error ? error.message : "音乐连接测试失败");
   } finally {
     testingMusic.value = false;
+  }
+}
+
+const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
+const testingResolver = ref(false);
+const resolverChecks = ref<CredentialCheck[]>([]);
+
+const credentialBadgeClasses: Record<CredentialState, string> = {
+  valid: "ok",
+  invalid: "err",
+  unverified: "warn",
+  error: "warn",
+  unconfigured: ""
+};
+
+function credentialBadgeClass(state: CredentialState): string {
+  return credentialBadgeClasses[state] ?? "";
+}
+
+function credentialStateLabel(check: CredentialCheck): string {
+  switch (check.state) {
+    case "valid":
+      return check.account ? `已登录 · ${check.account}` : "已登录";
+    case "invalid":
+      return "未登录或已失效";
+    case "unverified":
+      return "无法实测";
+    case "error":
+      return "暂时测不了";
+    default:
+      return "未填写";
+  }
+}
+
+async function testResolverSettings(): Promise<void> {
+  testingResolver.value = true;
+  try {
+    const response = await testResolverCredentials(buildSettingsPayload(), clearSecrets.value);
+    resolverChecks.value = response.credentials;
+    const invalid = response.credentials.filter((item) => item.state === "invalid");
+    const valid = response.credentials.filter((item) => item.state === "valid");
+    if (invalid.length > 0) toastError(`${invalid.map((item) => item.label).join("、")} 未登录或已失效`);
+    else if (valid.length > 0) toastSuccess(`${valid.length} 项凭据登录有效`);
+    else toastSuccess("测试完成，没有可实测的已填凭据");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "凭据测试失败");
+  } finally {
+    testingResolver.value = false;
   }
 }
 const repositoryPublishAuthSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "github_auth_mode"));
@@ -1120,6 +1197,7 @@ function openSettings(plugin: PluginState): void {
   credentialTokenDrafts.value = {};
   settingsTarget.value = plugin;
   musicTestResults.value = {};
+  resolverChecks.value = [];
   githubSettingsTab.value = "config";
   openedSnapshot.value = settingsSnapshot();
   if (isGitHubSettings.value) void loadJoinedGroups();

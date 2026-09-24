@@ -143,7 +143,8 @@ type pluginSettingsPayload struct {
 	ClearSecrets []string `json:"clear_secrets,omitempty"`
 }
 
-type musicConnectionTestPayload struct {
+// pluginTestPayload 是设置页「测试」按钮带上来的未保存输入。
+type pluginTestPayload struct {
 	Settings     map[string]any `json:"settings"`
 	ClearSecrets []string       `json:"clear_secrets,omitempty"`
 }
@@ -385,6 +386,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/repo/install", h.installRepoPlugin)
 	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
+	router.POST(base+"/plugins/resolver/test", h.testResolverCredentials)
 	router.POST(base+"/plugins/coding-agent/setup", h.codingAgentSetup)
 	router.POST(base+"/plugins/repository-publish/issues", h.createRepositoryIssue)
 	router.GET(base+"/plugins/repository-publish/drafts", h.listRepositoryIssueDrafts)
@@ -1125,18 +1127,8 @@ func (h *BotHandler) updatePluginSettings(c *gin.Context) {
 }
 
 func (h *BotHandler) testMusicConnections(c *gin.Context) {
-	profileID, scopeOK := h.pluginProfileScope(c)
-	if !scopeOK {
-		return
-	}
-	var payload musicConnectionTestPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		h.writeError(c, http.StatusBadRequest, "plugin_music_test", err, "official.music", nil)
-		return
-	}
-	plugin, settings, ok := h.runtime.Plugins().PluginForConfiguration("official.music", profileID)
+	plugin, settings, ok := h.pluginTestSettings(c, "official.music", "plugin_music_test")
 	if !ok {
-		h.writeError(c, http.StatusNotFound, "plugin_music_test", assistant.ErrPluginNotFound, "official.music", nil)
 		return
 	}
 	music, ok := plugin.(*assistant.MusicPlugin)
@@ -1144,8 +1136,45 @@ func (h *BotHandler) testMusicConnections(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "plugin_music_test", errors.New("music plugin has unexpected implementation"), "official.music", nil)
 		return
 	}
+	c.JSON(http.StatusOK, gin.H{"sources": music.TestConnections(c.Request.Context(), settings)})
+}
+
+func (h *BotHandler) testResolverCredentials(c *gin.Context) {
+	plugin, settings, ok := h.pluginTestSettings(c, assistant.ResolverPluginID, "plugin_resolver_test")
+	if !ok {
+		return
+	}
+	resolver, ok := plugin.(*assistant.ResolverPlugin)
+	if !ok {
+		h.writeError(c, http.StatusInternalServerError, "plugin_resolver_test", errors.New("resolver plugin has unexpected implementation"), assistant.ResolverPluginID, nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"credentials": resolver.TestCredentials(c.Request.Context(), settings)})
+}
+
+// pluginTestSettings 把设置页还没保存的输入叠到已保存的设置上，让人改完先测、
+// 测好再存。凭据框留空表示沿用已保存的值，和保存接口是同一个约定。
+func (h *BotHandler) pluginTestSettings(c *gin.Context, pluginID, action string) (assistant.Plugin, assistant.SettingValues, bool) {
+	profileID, scopeOK := h.pluginProfileScope(c)
+	if !scopeOK {
+		return nil, nil, false
+	}
+	var payload pluginTestPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, action, err, pluginID, nil)
+		return nil, nil, false
+	}
+	plugin, settings, ok := h.runtime.Plugins().PluginForConfiguration(pluginID, profileID)
+	if !ok {
+		h.writeError(c, http.StatusNotFound, action, assistant.ErrPluginNotFound, pluginID, nil)
+		return nil, nil, false
+	}
+	secrets := map[string]bool{}
+	for _, spec := range plugin.Manifest().Settings {
+		secrets[spec.Key] = spec.Secret
+	}
 	for key, value := range payload.Settings {
-		if text, secret := value.(string); secret && strings.TrimSpace(text) == "" && strings.HasSuffix(key, "_cookie") {
+		if text, isText := value.(string); isText && secrets[key] && strings.TrimSpace(text) == "" {
 			continue
 		}
 		settings[key] = value
@@ -1153,7 +1182,7 @@ func (h *BotHandler) testMusicConnections(c *gin.Context) {
 	for _, key := range payload.ClearSecrets {
 		delete(settings, strings.TrimSpace(key))
 	}
-	c.JSON(http.StatusOK, gin.H{"sources": music.TestConnections(c.Request.Context(), settings)})
+	return plugin, settings, true
 }
 
 // writePluginError 按插件错误类型返回合适的 HTTP 状态码。

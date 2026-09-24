@@ -72,7 +72,9 @@ type MusicConnectionStatus struct {
 	Playable         bool   `json:"playable"`
 	APIConfigured    bool   `json:"api_configured"`
 	CookieConfigured bool   `json:"cookie_configured"`
-	Message          string `json:"message"`
+	// Login 只在填了 Cookie 时出现，是账号接口的实测结果。
+	Login   *CredentialCheck `json:"login,omitempty"`
+	Message string           `json:"message"`
 }
 
 // TestConnections performs one small real query per source. It deliberately
@@ -94,15 +96,26 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 			continue
 		}
 		testCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		if checker, ok := source.(musicLoginChecker); ok && status.CookieConfigured {
+			login := checker.CheckLogin(testCtx, p.fetcher, cfg)
+			status.Login = &login
+		}
 		found, ok := source.Search(testCtx, p.fetcher, cfg, "晴天 周杰伦")
 		status.SearchOK = ok
 		if ok {
 			status.Playable = source.PlayableURL(testCtx, p.fetcher, cfg, found.ID) != ""
 		}
 		cancel()
+		loginInvalid := status.Login != nil && status.Login.State == CredentialInvalid
 		switch {
+		case status.Playable && loginInvalid:
+			status.Message = "能取得播放地址，但登录态无效，会员歌曲会放不了"
 		case status.Playable:
 			status.Message = "搜索与播放地址获取正常"
+		case status.SearchOK && loginInvalid:
+			status.Message = "搜索正常，但登录态无效，取不到播放地址"
+		case status.SearchOK && status.Login != nil && status.Login.State == CredentialValid:
+			status.Message = "搜索正常、登录有效，但测试曲没取到播放地址，可能是这家的版权限制"
 		case status.SearchOK:
 			status.Message = "搜索正常，但未取得播放地址；会员凭据可能缺失或失效"
 		default:
@@ -151,7 +164,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.2.3",
+		Version:     "0.2.4",
 		Description: "支持网易云、QQ 音乐和酷狗点歌及链接解析。OneBot QQ 发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
