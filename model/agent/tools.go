@@ -395,12 +395,28 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
 		maxChars: cfg.MaxToolOutputChars,
+		session:  &browserSession{},
 	}
 	r.Register(&BrowserOpenTool{base: base})
 	r.Register(&BrowserTextTool{base: base})
 	r.Register(&BrowserClickTool{base: base})
 	r.Register(&BrowserTypeTool{base: base})
 	r.Register(&BrowserScreenshotTool{base: base})
+	r.Register(&BrowserTabsTool{base: base})
+	r.Register(&BrowserScrollTool{base: base})
+	r.Register(&BrowserPressKeyTool{base: base})
+	r.Register(&BrowserNavigateTool{base: base})
+	r.Register(&BrowserSelectTool{base: base})
+	r.Register(&BrowserWaitTool{base: base})
+	r.Register(&BrowserEvalTool{base: base})
+}
+
+// InteractiveBrowserToolNames 是 RegisterBrowserTools 登记的全部工具，WebUI 和提示词
+// 按这份名单判断「交互式浏览器在不在」，不再各抄一份。
+var InteractiveBrowserToolNames = []string{
+	"browser_open", "browser_text", "browser_click", "browser_type", "browser_screenshot",
+	"browser_tabs", "browser_scroll", "browser_press_key", "browser_navigate",
+	"browser_select", "browser_wait", "browser_eval",
 }
 
 // Get 按名称查找工具。

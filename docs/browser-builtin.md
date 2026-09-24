@@ -39,8 +39,7 @@ Diana 自己的浏览器：**每台机器人各一个** Chrome/Chromium 进程�
 扩展的令牌与网站名单、外接 CDP 都在页面底部的「更多设置」里。一次性无头渲染
 （`browser_render`）不参与这个选择，一直可用。
 
-打开这一档之后，`browser_open` / `browser_text` / `browser_click` / `browser_type` /
-`browser_screenshot` 这组工具会自动接到内置浏览器上，不再指向机器人配置里那个外部
+打开这一档之后，交互式浏览器这组工具会自动接到内置浏览器上，不再指向机器人配置里那个外部
 CDP 地址。只有一个前提：WebUI「浏览器」页的「Diana 内置浏览器」开着（本机找得到 Chrome 时会自动打开），并且这一轮轮到它。机器人那一侧默认
 就允许，想让某台机器人彻底不碰它，把它的 `agent_browser_box_disabled` 勾上。
 
@@ -48,6 +47,37 @@ CDP 地址。只有一个前提：WebUI「浏览器」页的「Diana 内置浏�
 根本没有它们（见 `RelationshipPolicy.allowedAgentToolNames`）——群成员能用的是
 `browser_render` 那条一次性无头渲染：临时 profile、用完即删、不带任何登录态。
 接管打开时连主人也拿不到。
+
+## 主人能让机器人做什么
+
+既然只有主人能驱动，这组工具就不再分「只读」「不许执行脚本」这类档位：主人在自己浏览器里
+能做的，机器人替他也能做。
+
+| 工具 | 做什么 |
+| --- | --- |
+| `browser_open` | 打开网页，默认沿用当前标签页，`new_tab` 才新开 |
+| `browser_text` | 读页面或某个元素的文字 |
+| `browser_screenshot` | 截可见区域，**图直接交给模型看**；图上的坐标能直接交给 `browser_click` |
+| `browser_click` | 按选择器或按 x/y 坐标点击，走真实鼠标事件，支持右键、双击 |
+| `browser_type` | 输入文字，走真实键盘输入（React、Vue 的受控输入框也认），可回车提交 |
+| `browser_press_key` | 按键：Enter、Escape、方向键、PageDown、`Control+A` 这类组合键 |
+| `browser_scroll` | 滚整页、滚某个容器、把元素滚进视口 |
+| `browser_select` | 选下拉框 |
+| `browser_wait` | 等某个元素或某段文字出现 |
+| `browser_navigate` | 后退、前进、刷新 |
+| `browser_tabs` | 列出、切换、关闭、新开标签页；切过去之后其余工具都作用在那一页 |
+| `browser_eval` | 在页面里执行 JavaScript，返回 JSON 结果 |
+
+模型拿到这组工具时，提示词告诉它：主人的请求需要登录后的页面、要在网页上操作、或者
+`browser_render` 读不到时，直接用，不必等主人点名「用浏览器」。付款、删除、发帖、改账号
+设置这类不可逆操作，先说清要做什么，等主人确认再点。
+
+主人这一侧的 Agent 也放宽到上限：步数固定用满 16 步（`agent.MaxAllowedSteps`，机器人
+配置的步数只管群成员），单次工具输出用满 20000 字（`agent.MaxAllowedToolOutputChars`）。
+「登进后台翻十几页」「把一张长表整理出来」这种活，12 步和 8000 字经常做到一半就被截断。
+
+浏览器工具连续两次相同的调用不会被当成原地打转跳过：连按两次 PageDown、连点两次「下一页」
+是正常操作。
 
 ## 实时画面是怎么来的
 
@@ -89,14 +119,18 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
 ## 站点边界
 
 内置浏览器不做「白名单为空就一个站都不许」的失败关闭——那会让这一档没法用来浏览。
-取而代之的是黑名单：`denied_hosts` 里的站点永远打不开，写法与浏览器控制扩展一致
+取而代之的是黑名单：`denied_hosts` 里的站点，你在实时画面里打不开，机器人用
+`browser_open`、`browser_tabs` 主动打开也会被拒；写法与浏览器控制扩展一致
 （`example.com` 只匹配这一个主机名，`*.example.com` 匹配子域但不含主域本身）。
+页面自己跳过去的（点了一个链接、被重定向）不拦：那是在已经允许的页面里继续操作。
 另外只接受 `http` 与 `https`，`file://` 和 `chrome://` 一律拒绝——前者能读到容器里的
 文件，后者能翻出浏览器自己的设置页。
 
-启动参数沿用无头渲染那条路的沙盒加固，其中包含
-`--host-resolver-rules=MAP localhost ~NOTFOUND, ...`：内置浏览器解析不到
-`localhost`、`*.local` 和 `host.docker.internal`，也就碰不到同一台机器上的内网服务。
+启动参数沿用无头渲染那条路的沙盒加固，只有一条例外：**内置浏览器能打开本机和内网地址**
+（`localhost`、`*.local`、`host.docker.internal`、局域网 IP）。一次性渲染带着
+`--host-resolver-rules=MAP localhost ~NOTFOUND, ...`，因为群成员也能触发它，不能让别人
+借机器人探你的内网；内置浏览器只有主人能驱动，路由器后台、NAS、本机起的服务本来就是你
+自己能打开的地址。不想让它碰哪个内网地址，就写进 `denied_hosts`。
 
 ## 部署
 
@@ -114,9 +148,11 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
 浏览器带着你的登录态，所以机器人在里面做的每一步都会记下来，浏览器页底部按当前机器人
 列出最近的记录，「查看全部」跳到记录页并按 `browser` 过滤：
 
-- **机器人的动作**（`browser_action`）：打开网页、读取页面、点击、输入、截图，内置浏览器
-  和扩展那组都记。带网址或 CSS 选择器、耗时、失败原因、是谁的消息触发的，以及机器人 ID
+- **机器人的动作**（`browser_action`）：打开网页、读取页面、点击、输入、截图、按键、滚动、
+  标签页、前进后退、选下拉项、等待、执行脚本，内置浏览器和扩展那组都记。带网址或 CSS
+  选择器、按的键、标签页操作、耗时、失败原因、是谁的消息触发的，以及机器人 ID
   （`metadata.profile_id`）。**输入的文字只记字数，不记内容**——机器人可能在填登录框。
+  执行的脚本记字数和开头 500 字：脚本能读能改整页，事后得看得清它做了什么。
 - **你的动作**：启动、停止、接管和交还（`browser_box_start` / `_stop` / `_takeover`），在
   实时画面里打开网页（`browser_box_navigate`），以及在画面上第一次动手触发的自动接管。
   鼠标移动不逐条记。

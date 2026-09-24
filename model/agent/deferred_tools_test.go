@@ -561,3 +561,36 @@ func TestDeferredExecuteEnvelopeAcceptsCoreTools(t *testing.T) {
 		t.Fatalf("response=%#v common calls=%d requests=%d", response, common.calls, len(client.requests))
 	}
 }
+
+// 模型编出来的工具名不能被当成延迟工具：那条回话让它去 tools_load 一个不存在的东西，
+// 再撞一次「不存在」。直接告诉它没有这个工具、名字要照目录写。
+func TestDeferredDispatchReportsInventedToolAsMissing(t *testing.T) {
+	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "browser_screenshot"})
+	for _, native := range []bool{false, true} {
+		for _, reply := range []*llm.GenerateResponse{
+			dispatchReply(native, "diana.interactive_browser_take_screenshot", map[string]any{"target_url": "https://example.com"}),
+			executeReply(native, "diana.interactive_browser_take_screenshot", map[string]any{}),
+		} {
+			client := &dispatchTestClient{replies: []*llm.GenerateResponse{reply}}
+			runner, _ := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, registry)
+			result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "截个图"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := result.Steps[0]
+			if !first.Skipped || !strings.Contains(first.Error, "不存在") || strings.Contains(first.Error, "请先 tools_load，再") {
+				t.Fatalf("native=%v: %q", native, first.Error)
+			}
+		}
+	}
+	// 真正存在的延迟工具，直接调用时仍然提示先加载。
+	client := &dispatchTestClient{replies: []*llm.GenerateResponse{dispatchReply(false, "browser_screenshot", map[string]any{})}}
+	runner, _ := NewRunner(client, Config{MaxSteps: 5, CoreTools: []string{"common"}}, registry)
+	result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "截个图"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Steps[0].Error, "不能直接调用延迟工具") {
+		t.Fatalf("existing deferred tool: %q", result.Steps[0].Error)
+	}
+}

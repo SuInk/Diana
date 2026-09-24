@@ -215,6 +215,16 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 	return fmt.Errorf("工具 %q 不存在或已禁用；请重新选择 tools_load 名称", name)
 }
 
+// missingToolError 是「根本没有这个工具」时的回话，多半是模型自己编了个名字（线上见过
+// diana.interactive_browser_take_screenshot）。以前这种名字也被当成延迟工具，回一句
+// 「请先 tools_load」，模型照做，再撞一次「不存在」，白烧两步。
+func (l *deferredToolLoader) missingToolError(name string) error {
+	if l.registry.PolicyDenied(name) {
+		return deniedToolError(name)
+	}
+	return fmt.Errorf("工具 %q 不存在。工具名要和目录里的一字不差，不加 diana. 之类的前缀；常驻工具直接调用，目录里的延迟工具先 tools_load 再 tools_execute", name)
+}
+
 func deniedToolError(name string) error {
 	return fmt.Errorf("工具 %q 当前会话没有权限使用：它只对主人开放，或者没有对群成员开放。不要重试，直接说明这件事需要主人来做", name)
 }
@@ -247,6 +257,9 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 			}
 		}
 		if !loaded {
+			if _, exists := l.registry.Get(name); !exists {
+				return action, l.missingToolError(name)
+			}
 			return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tools_load，再 tools_execute", name)
 		}
 		action.Input = coerceToolInputArrays(schema, action.Input)
@@ -276,6 +289,9 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 			return action, validateToolInput(l.InputSchema(), action.Input)
 		}
 		if !l.core[action.Tool] {
+			if _, exists := l.registry.Get(action.Tool); !exists {
+				return action, l.missingToolError(action.Tool)
+			}
 			return action, fmt.Errorf("不能直接调用延迟工具 %q；请先 tools_load，再 tools_execute", action.Tool)
 		}
 	}

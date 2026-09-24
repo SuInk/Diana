@@ -350,7 +350,7 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {
 	// Skills 目录和 MCP 配置路径由 GlobalExtensionPaths 在首次使用时固定下来，
 	// 机器人之间不会因为各自填得不同而切到另一套扩展。
-	return agent.Config{
+	return withOwnerAgentLimits(agent.Config{
 		WorkDir:             AgentWorkspaceDir(),
 		MaxSteps:            cfg.AgentMaxSteps,
 		SkillRoots:          cfg.AgentSkillRoots,
@@ -371,7 +371,24 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		BrowserControl:             r.browserControlFor(cfg),
 		BuiltinBrowser:             r.browserBoxFor(cfg),
 		BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
+	}, extensionManagement)
+}
+
+// withOwnerAgentLimits 给主人的 Agent 放宽到上限：步数用满 agent.MaxAllowedSteps，
+// 单次工具输出用满 agent.MaxAllowedToolOutputChars。
+//
+// 主人这一侧的活是「登进去翻十几页后台」「把这张长表整理出来」这种，12 步和 8000 字
+// 经常不够用，做到一半就被截断。群成员那边照旧用机器人配置的步数和默认输出上限：
+// 他们的每一步都花的是主人的钱。
+func withOwnerAgentLimits(cfg agent.Config, owner bool) agent.Config {
+	if !owner {
+		return cfg
 	}
+	if cfg.MaxSteps < agent.MaxAllowedSteps {
+		cfg.MaxSteps = agent.MaxAllowedSteps
+	}
+	cfg.MaxToolOutputChars = agent.MaxAllowedToolOutputChars
+	return cfg
 }
 
 // agentRegistryCacheKey 规范化共享底座的配置并给出缓存键。底座只放扩展，按

@@ -28,6 +28,13 @@ var browserActionVerbs = map[string]string{
 	"browser_click":      "点击",
 	"browser_type":       "输入",
 	"browser_screenshot": "截图",
+	"browser_tabs":       "管理标签页",
+	"browser_scroll":     "滚动",
+	"browser_press_key":  "按键",
+	"browser_navigate":   "前进后退",
+	"browser_select":     "选择下拉项",
+	"browser_wait":       "等待页面",
+	"browser_eval":       "执行脚本",
 	"browser_ext_tabs":   "查看标签页",
 	"browser_ext_read":   "读取页面",
 	"browser_ext_open":   "打开网页",
@@ -74,6 +81,17 @@ func browserActionEntry(event MessageEvent, runEvent agent.RunEvent) (applog.Ent
 	}
 	if text := inputString(runEvent.ToolInput, "text"); text != "" {
 		metadata["text_chars"] = utf8.RuneCountInString(text)
+	}
+	for _, key := range []string{"action", "tab_id", "key", "direction"} {
+		if value := strings.TrimSpace(inputString(runEvent.ToolInput, key)); value != "" {
+			metadata[key] = value
+		}
+	}
+	// 脚本能读能改整个页面，主人得能事后看清它做了什么，所以记开头一段；和输入文字
+	// 不同，脚本是模型写的，不是从登录框里抄来的。
+	if script := inputString(runEvent.ToolInput, "script"); script != "" {
+		metadata["script_chars"] = utf8.RuneCountInString(script)
+		metadata["script"] = truncateRunes(script, 500)
 	}
 	entry := applog.Entry{
 		Kind:     applog.KindOperation,

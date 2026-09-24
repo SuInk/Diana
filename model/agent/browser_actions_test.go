@@ -1,0 +1,303 @@
+// Copyright (c) 2025-now SuInk.
+// Licensed under the Limited Redistribution License in the repository root.
+
+package agent
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/SuInk/diana/model/llm"
+)
+
+func TestParseBrowserKey(t *testing.T) {
+	cases := []struct {
+		spec      string
+		key, code string
+		keyCode   int
+		modifiers int
+	}{
+		{"Enter", "Enter", "Enter", 13, 0},
+		{"pagedown", "PageDown", "PageDown", 34, 0},
+		{"a", "a", "KeyA", 65, 0},
+		{"Control+A", "A", "KeyA", 65, 2},
+		{"Shift+Tab", "Tab", "Tab", 9, 8},
+		{"Meta+Shift+z", "z", "KeyZ", 90, 12},
+		{"7", "7", "Digit7", 55, 0},
+		{"Control++", "+", "", 0, 2},
+	}
+	for _, tc := range cases {
+		key, modifiers, err := parseBrowserKey(tc.spec)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.spec, err)
+		}
+		if key.key != tc.key || key.code != tc.code || key.keyCode != tc.keyCode || modifiers != tc.modifiers {
+			t.Fatalf("%s: got key=%q code=%q keyCode=%d modifiers=%d", tc.spec, key.key, key.code, key.keyCode, modifiers)
+		}
+	}
+	for _, bad := range []string{"", "Hyper+A", "NotAKey"} {
+		if _, _, err := parseBrowserKey(bad); err == nil {
+			t.Fatalf("%q 应当报错", bad)
+		}
+	}
+}
+
+// 常驻浏览器只有主人能驱动，不屏蔽本机和内网地址；一次性渲染群成员也能触发，照旧屏蔽。
+func TestPersistentBrowserReachesLocalHostsButRenderDoesNot(t *testing.T) {
+	persistent := PersistentBrowserArgs("/tmp/p", "/tmp/c", "/tmp/x", true, 0, 1280, 800)
+	for _, arg := range persistent {
+		if strings.HasPrefix(arg, "--host-resolver-rules=") {
+			t.Fatalf("常驻浏览器不该屏蔽本机地址：%s", arg)
+		}
+	}
+	// 其余加固参数一条不少。
+	for _, want := range []string{"--disable-sync", "--no-pings", "--user-data-dir=/tmp/p", "--disable-blink-features=AutomationControlled"} {
+		if !slices.Contains(persistent, want) {
+			t.Fatalf("常驻浏览器丢了加固参数 %q", want)
+		}
+	}
+	render := sandboxedChromeArgs("/tmp/p", "/tmp/c", "/tmp/x", SandboxedBrowserConfig{})
+	if !slices.ContainsFunc(render, func(arg string) bool { return strings.HasPrefix(arg, "--host-resolver-rules=") }) {
+		t.Fatal("一次性渲染必须继续屏蔽本机地址")
+	}
+}
+
+func TestBrowserToolsAreRepeatable(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.RegisterBrowserTools(t.TempDir(), Config{}.WithDefaults())
+	for _, name := range InteractiveBrowserToolNames {
+		tool, ok := registry.Get(name)
+		if !ok {
+			t.Fatalf("%s 没有登记", name)
+		}
+		if name == "browser_select" {
+			continue
+		}
+		if repeatable, ok := tool.(RepeatableTool); !ok || !repeatable.RepeatableCalls() {
+			t.Fatalf("%s 连续两次相同调用会被 Runner 当成重复跳过", name)
+		}
+	}
+}
+
+// TestBrowserToolsIntegration 用本机 Chrome 实跑一遍整组工具。设
+// DIANA_BROWSER_TOOLS_INTEGRATION=1 才跑。
+func TestBrowserToolsIntegration(t *testing.T) {
+	if os.Getenv("DIANA_BROWSER_TOOLS_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_TOOLS_INTEGRATION=1 to run Chrome integration")
+	}
+	executable, err := FindBrowserExecutable("")
+	if err != nil {
+		t.Skip(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path == "/second" {
+			fmt.Fprint(w, `<title>second</title><p>第二页</p>`)
+			return
+		}
+		fmt.Fprint(w, `<title>first</title>
+<input id="name">
+<p id="mirror"></p>
+<button id="btn">按钮</button>
+<p id="clicks">0</p>
+<select id="fruit"><option value="a">苹果</option><option value="b">香蕉</option></select>
+<p id="keys"></p>
+<a id="next" href="/second">下一页</a>
+<div style="height:4000px"></div>
+<p id="bottom">到底了</p>
+<script>
+let trusted = 0;
+document.getElementById("btn").addEventListener("click", e => { if (e.isTrusted) trusted++; document.getElementById("clicks").textContent = trusted; });
+document.getElementById("name").addEventListener("input", e => { document.getElementById("mirror").textContent = e.target.value; });
+document.addEventListener("keydown", e => { if (e.isTrusted) document.getElementById("keys").textContent += e.key + ","; });
+setTimeout(() => { const p = document.createElement("p"); p.id = "late"; p.textContent = "晚到的元素"; document.body.appendChild(p); }, 800);
+</script>`)
+	}))
+	defer server.Close()
+	// 用 localhost 而不是 127.0.0.1 访问，顺带验证常驻浏览器不再屏蔽本机域名。
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	pageURL := "http://localhost:" + port + "/"
+
+	root := t.TempDir()
+	args := PersistentBrowserArgs(root+"/profile", root+"/cache", root+"/crash", true, 0, 1280, 800)
+	cmd := exec.Command(executable, append(args, "about:blank")...)
+	cmd.Env = BrowserLaunchEnvironment(os.Environ(), root)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	devtools := make(chan string, 1)
+	go func() {
+		pattern := regexp.MustCompile(`DevTools listening on ws://([^/]+)/`)
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			if match := pattern.FindStringSubmatch(scanner.Text()); match != nil {
+				devtools <- "http://" + match[1]
+			}
+		}
+	}()
+	var cdpURL string
+	select {
+	case cdpURL = <-devtools:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Chrome 没有报出调试地址")
+	}
+
+	registry := NewToolRegistry()
+	registry.RegisterBrowserTools(root, Config{BrowserCDPURL: cdpURL}.WithDefaults())
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	run := func(name string, input map[string]any) string {
+		t.Helper()
+		tool, _ := registry.Get(name)
+		out, err := tool.Run(ctx, input)
+		if err != nil {
+			t.Fatalf("%s(%v): %v", name, input, err)
+		}
+		return out
+	}
+	eval := func(script string) string {
+		t.Helper()
+		var value string
+		raw := run("browser_eval", map[string]any{"script": script})
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			t.Fatalf("eval %s: %s", script, raw)
+		}
+		return value
+	}
+
+	if out := run("browser_open", map[string]any{"url": pageURL}); !strings.Contains(out, "first") {
+		t.Fatalf("open: %s", out)
+	}
+	run("browser_type", map[string]any{"selector": "#name", "text": "嘉然"})
+	if got := eval(`document.getElementById("mirror").textContent`); got != "嘉然" {
+		t.Fatalf("输入没有触发 input 事件：%s", got)
+	}
+	run("browser_click", map[string]any{"selector": "#btn"})
+	run("browser_click", map[string]any{"selector": "#btn"})
+	if got := eval(`document.getElementById("clicks").textContent`); got != "2" {
+		t.Fatalf("点击不是真实事件或连点被跳过：%s", got)
+	}
+	run("browser_select", map[string]any{"selector": "#fruit", "label": "香蕉"})
+	if got := eval(`document.getElementById("fruit").value`); got != "b" {
+		t.Fatalf("select: %s", got)
+	}
+	run("browser_press_key", map[string]any{"key": "Escape", "repeat": 2})
+	if got := eval(`document.getElementById("keys").textContent`); got != "Escape,Escape," {
+		t.Fatalf("按键：%s", got)
+	}
+	var scrolled struct {
+		AtBottom bool `json:"at_bottom"`
+	}
+	_ = json.Unmarshal([]byte(run("browser_scroll", map[string]any{"direction": "bottom"})), &scrolled)
+	if !scrolled.AtBottom {
+		t.Fatal("没有滚到底")
+	}
+	if out := run("browser_wait", map[string]any{"selector": "#late", "timeout_ms": 5000}); !strings.Contains(out, `"found":true`) {
+		t.Fatalf("wait: %s", out)
+	}
+	if _, err := registry.tools["browser_eval"].Run(ctx, map[string]any{"script": `(() => { throw new Error("boom") })()`}); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("脚本异常应当交回错误：%v", err)
+	}
+
+	shot := registry.tools["browser_screenshot"].(*BrowserScreenshotTool)
+	out := run("browser_screenshot", nil)
+	parts := shot.ToolResultParts(out)
+	if len(parts) != 1 || parts[0].Type != llm.ContentPartImageURL || !strings.HasPrefix(parts[0].ImageURL, "data:image/png;base64,") {
+		t.Fatalf("截图没有交给模型：%+v", parts)
+	}
+
+	run("browser_click", map[string]any{"selector": "#next"})
+	if out := run("browser_text", nil); !strings.Contains(out, "第二页") {
+		t.Fatalf("点链接没有跳过去：%s", out)
+	}
+	if out := run("browser_navigate", map[string]any{"action": "back"}); !strings.Contains(out, "first") {
+		t.Fatalf("back: %s", out)
+	}
+
+	// 默认沿用当前标签页；new_tab 才多开一页，之后的工具作用在新页上。
+	var listed struct {
+		Tabs []struct {
+			ID     string `json:"tab_id"`
+			URL    string `json:"url"`
+			Active bool   `json:"active"`
+		} `json:"tabs"`
+	}
+	countPages := func() int {
+		listed.Tabs = nil
+		_ = json.Unmarshal([]byte(run("browser_tabs", map[string]any{"action": "list"})), &listed)
+		return len(listed.Tabs)
+	}
+	before := countPages()
+	run("browser_open", map[string]any{"url": pageURL + "second"})
+	if after := countPages(); after != before {
+		t.Fatalf("默认应当沿用当前标签页：%d → %d", before, after)
+	}
+	run("browser_open", map[string]any{"url": pageURL, "new_tab": true})
+	if after := countPages(); after != before+1 {
+		t.Fatalf("new_tab 应当多开一页：%d → %d", before, after)
+	}
+	if out := run("browser_text", nil); !strings.Contains(out, "first") {
+		t.Fatalf("新开的页应当成为当前页：%s", out)
+	}
+	var second string
+	for _, tab := range listed.Tabs {
+		if strings.HasSuffix(tab.URL, "/second") {
+			second = tab.ID
+		}
+	}
+	run("browser_tabs", map[string]any{"action": "switch", "tab_id": second})
+	if out := run("browser_text", nil); !strings.Contains(out, "第二页") {
+		t.Fatalf("切换之后应当读切过去的页：%s", out)
+	}
+	run("browser_tabs", map[string]any{"action": "close"})
+	if after := countPages(); after != before {
+		t.Fatalf("close 之后应当少一页：%d", after)
+	}
+}
+
+func TestCompactCDPValueKeepsChineseAndBigNumbers(t *testing.T) {
+	got := string(compactCDPValue(json.RawMessage(`{"text":"第二页 <b>","id":12345678901234567890}`)))
+	if got != `{"id":12345678901234567890,"text":"第二页 <b>"}` {
+		t.Fatalf("got %s", got)
+	}
+}
+
+type denyingBrowser struct{ denied string }
+
+func (d denyingBrowser) Endpoint(context.Context) (string, error) { return "", nil }
+func (d denyingBrowser) AllowsURL(rawURL string) bool             { return !strings.Contains(rawURL, d.denied) }
+
+// 用户在「浏览器」页填的禁止名单，机器人主动打开时也要认，不能只挡实时画面那一侧。
+func TestBrowserOpenHonoursBuiltinDeniedHosts(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.RegisterBrowserTools(t.TempDir(), Config{BuiltinBrowser: denyingBrowser{denied: "bank.example"}}.WithDefaults())
+	for _, call := range []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"browser_open", map[string]any{"url": "https://bank.example/login"}},
+		{"browser_tabs", map[string]any{"action": "new", "url": "https://bank.example/"}},
+	} {
+		tool, _ := registry.Get(call.tool)
+		if _, err := tool.Run(context.Background(), call.input); err == nil || !strings.Contains(err.Error(), "禁止名单") {
+			t.Fatalf("%s 应当被禁止名单挡下：%v", call.tool, err)
+		}
+	}
+}

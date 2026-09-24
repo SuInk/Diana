@@ -366,6 +366,10 @@ func (b *Bot) ID() string { return b.id }
 // Status 返回这台机器人的状态。
 func (b *Bot) Status() Status { return b.m.statusFor(b.id) }
 
+// AllowsURL 实现 agent.BuiltinBrowserURLPolicy：机器人主动打开的地址和实时画面里
+// 手动打开的一样，要过 denied_hosts。
+func (b *Bot) AllowsURL(rawURL string) bool { return b.m.Settings().HostAllowed(rawURL) }
+
 // Start 拉起这台机器人的浏览器。已经在跑就什么都不做。
 func (b *Bot) Start(ctx context.Context) error {
 	if !b.m.Settings().Enabled {

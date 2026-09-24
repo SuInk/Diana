@@ -4552,6 +4552,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
+		agentCfg = withOwnerAgentLimits(agentCfg, relationship.Owner)
 		registry := preparedRegistry
 		ownsRegistry := false
 		if registry == nil {
