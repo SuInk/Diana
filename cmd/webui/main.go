@@ -302,6 +302,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// 修复前播种的提供商配置档每次启动换 ID，机器人配置里记着旧 ID 的模型绑定
+	// 要在机器人配置的存储读库之前改回来。
+	if err := webui.RepairSeedLLMProfileRefs(ctx, sqliteStore, store.SeedProfileID()); err != nil {
+		log.Fatal(err)
+	}
 	botSeed, botSeeded, err := appCfg.botSeedConfig(defaultOneBotEndpoint(port))
 	if err != nil {
 		log.Fatal(err)
@@ -430,6 +435,8 @@ func main() {
 		return newLLMClient(store.Current())
 	})
 	botRuntime.SetProfiles(botSet)
+	// 种子机器人修复前每次重启都换档案 ID，按旧 ID 记下的编码任务靠这张表认回来。
+	botRuntime.SetProfileAliases(botProfileStore.LegacyProfileAliases())
 	botRuntime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (assistant.LLMProvider, error) {
 		return newLLMClient(cfg)
 	})
