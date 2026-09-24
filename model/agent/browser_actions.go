@@ -87,7 +87,7 @@ func (c *cdpClient) navigate(ctx context.Context, pageURL string) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("打开 %s 时任务已结束，已停止加载：%w", pageURL, ctxErr)
 		}
-		return fmt.Errorf("打开 %s 超时：%s 内页面没有响应，已停止加载。这个网址可能打不开或响应太慢，换个地址或稍后再试", pageURL, timeout)
+		return &browserTimeoutError{message: fmt.Sprintf("打开 %s 超时：%s 内页面没有响应，已停止加载。这个网址可能打不开或响应太慢，换个地址或稍后再试", pageURL, timeout)}
 	}
 	if text := strings.TrimSpace(result.ErrorText); text != "" {
 		return fmt.Errorf("打开 %s 失败：%s", pageURL, text)

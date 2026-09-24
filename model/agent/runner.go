@@ -970,7 +970,10 @@ func normalizeToolError(err error, toolCtx, parentCtx context.Context, timeoutMS
 	if err == nil {
 		return ""
 	}
-	if errors.Is(err, context.DeadlineExceeded) && parentCtx.Err() == nil && toolCtx.Err() != nil {
+	// 只有 Runner 给这次调用的期限真的到了才改写。toolCtx 在这之前已经被 cancel 过，
+	// 光看 Err() != nil 的话，工具自己内部的超时（渲染 10 秒没响应、导航超时）也会被
+	// 改写成「工具执行超时（上限 60000ms）」，模型拿不到真实原因。
+	if errors.Is(err, context.DeadlineExceeded) && parentCtx.Err() == nil && errors.Is(toolCtx.Err(), context.DeadlineExceeded) {
 		return fmt.Sprintf("工具执行超时（上限 %dms）", timeoutMS)
 	}
 	return err.Error()

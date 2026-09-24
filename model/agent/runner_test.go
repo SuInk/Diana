@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -766,6 +767,34 @@ func TestRunnerBoundsEveryToolCall(t *testing.T) {
 	}
 }
 
+// 工具自己内部超时（比如渲染 10 秒没响应）时，模型要拿到工具给的原因，不能被改写成
+// Runner 的「工具执行超时（上限 60000ms）」——那一句会让模型以为是自己调用太慢。
+func TestRunnerKeepsToolsOwnTimeoutError(t *testing.T) {
+	for name, toolErr := range map[string]error{
+		"browser timeout":  &browserTimeoutError{message: "渲染 https://example.com/ 超时：10s 内页面没有响应，已停止加载"},
+		"wrapped deadline": fmt.Errorf("渲染 https://example.com/ 超时：10s 内页面没有响应：%w", context.DeadlineExceeded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			tool := &errorTestTool{err: toolErr}
+			client := &scriptedClient{responses: []string{
+				`{"action":"tool","tool":"error","input":{}}`,
+				`{"action":"final","content":"done"}`,
+			}}
+			runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 1, ToolTimeoutMS: 60_000}, NewToolRegistry(tool))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "执行"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(resp.Steps) != 1 || !strings.Contains(resp.Steps[0].Error, "10s 内页面没有响应") || strings.Contains(resp.Steps[0].Error, "工具执行超时") {
+				t.Fatalf("工具自己的超时原因被改写了：%#v", resp.Steps)
+			}
+		})
+	}
+}
+
 func containsRunPhase(phases []RunPhase, wanted RunPhase) bool {
 	for _, phase := range phases {
 		if phase == wanted {
@@ -806,6 +835,7 @@ type blockingTool struct{}
 
 type errorTestTool struct {
 	message string
+	err     error
 }
 
 type richResultTestTool struct {
@@ -841,6 +871,9 @@ func (*blockingTool) Run(ctx context.Context, _ map[string]any) (string, error) 
 func (*errorTestTool) Name() string        { return "error" }
 func (*errorTestTool) Description() string { return "returns a test error" }
 func (t *errorTestTool) Run(context.Context, map[string]any) (string, error) {
+	if t.err != nil {
+		return "", t.err
+	}
 	return "", errors.New(t.message)
 }
 

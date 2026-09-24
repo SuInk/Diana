@@ -41,6 +41,13 @@ const (
 	browserAbortTimeout = 3 * time.Second
 )
 
+// browserTimeoutError 是浏览器自己的超时：给模型看的是一句能照着改做法的话，
+// errors.Is 仍认得出是 context.DeadlineExceeded（插件据此显示「页面渲染超时」）。
+type browserTimeoutError struct{ message string }
+
+func (e *browserTimeoutError) Error() string { return e.message }
+func (e *browserTimeoutError) Unwrap() error { return context.DeadlineExceeded }
+
 // ---- 一次性浏览器的并发上限 ----
 
 type browserSlots struct {

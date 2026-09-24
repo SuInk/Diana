@@ -424,7 +424,8 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 	if err := chromedp.Run(browserCtx); err != nil {
 		return RenderedPage{}, fmt.Errorf("connect to headless browser CDP: %w", err)
 	}
-	setupCtx, cancelSetup := context.WithTimeout(browserCtx, min(b.cfg.Timeout, browserStartupTimeout))
+	setupTimeout := min(b.cfg.Timeout, browserStartupTimeout)
+	setupCtx, cancelSetup := context.WithTimeout(browserCtx, setupTimeout)
 	err = chromedp.Run(setupCtx,
 		network.Enable(),
 		cdppage.Enable(),
@@ -452,10 +453,16 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			return nil
 		}),
 	)
+	setupTimedOut := errors.Is(setupCtx.Err(), context.DeadlineExceeded)
 	cancelSetup()
 	if err != nil {
 		if blocked := tracker.snapshot().BlockedError; blocked != nil {
 			return RenderedPage{}, blocked
+		}
+		// 服务器一直不回时 Page.navigate 就挂在这里。说清楚是页面没响应，别只交一句
+		// context deadline exceeded：模型和插件都要靠这句话决定换地址还是重试。
+		if setupTimedOut && ctx.Err() == nil {
+			return RenderedPage{}, &browserTimeoutError{message: fmt.Sprintf("渲染 %s 超时：%s 内页面没有响应，已停止加载。这个网址可能打不开或响应太慢，换个地址或稍后再试", rawURL, setupTimeout)}
 		}
 		return RenderedPage{}, fmt.Errorf("headless browser CDP setup failed: %w: %s", err, compactBrowserError(process.diagnostics.String()))
 	}
@@ -510,6 +517,9 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 			}
 			// 连一张快照都没有：说清楚是超时且页面始终没给出可抓取的内容，
 			// 别只抛一句 context deadline exceeded 让人以为是网络问题。
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return RenderedPage{}, &browserTimeoutError{message: fmt.Sprintf("渲染 %s 超时：%s 内页面始终没有可读取的内容", rawURL, time.Since(renderStarted).Round(time.Millisecond))}
+			}
 			return RenderedPage{}, fmt.Errorf("headless browser render ended after %s with no capturable content: %w", time.Since(renderStarted).Round(time.Millisecond), ctx.Err())
 		case <-ticker.C:
 		}

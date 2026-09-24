@@ -266,6 +266,8 @@ func browserRenderFailureText(err error) string {
 	}
 	text := strings.ToLower(err.Error())
 	switch {
+	case errors.Is(err, agent.ErrBrowserBusy):
+		return "同时读取的网页太多，稍后再试"
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(text, "timeout"):
 		return "页面渲染超时"
 	case strings.Contains(text, "private address") || strings.Contains(text, "local host") || strings.Contains(text, "credentials are not allowed"):

@@ -46,6 +46,7 @@ seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；�
 
 - **每次一份临时 profile。** 网页读取（`browser_render`）和 HTML 截图每次都起一个新的 Chrome 进程，profile 建在系统临时目录下、权限 0700、用完即删。两次调用之间、两个群之间、和主人的内置浏览器之间都不共用 Cookie 或登录态，群成员触发也碰不到主人的账号。
 - **同时最多 3 个。** 一次性浏览器每个都是一整个 Chrome 进程，网页读取和截图共用这份名额。满了就排队，最多等 20 秒，排不上交回「同时运行的一次性浏览器已达上限」，不会无限堆进程拖垮机器。排队时间不算进渲染超时。内存宽裕的机器可以用环境变量 `DIANA_HEADLESS_BROWSER_MAX_CONCURRENT` 调高（上限 16）。
+- **容器里有 init 回收子进程。** 官方镜像以 `tini` 作为 PID 1（`ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/diana-webui"]`）。没有它时 Chromium 退出后过继给 PID 1 的子进程没人回收，每次渲染都留下一串僵尸进程；`docker run` 和 Compose 都不用再加 `--init` / `init: true`，加了也无妨。
 - **渲染有硬超时。** 默认 25 秒（`DIANA_HEADLESS_BROWSER_TIMEOUT_MS`，最多 60 秒）；到期收尾时拿已经抓到的内容，一点内容都没有就报错，浏览器进程随即结束。调用方取消时进程同样立即结束。
 
 ## seccomp 配置来源

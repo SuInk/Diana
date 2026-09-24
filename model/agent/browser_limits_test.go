@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/llm"
 	"github.com/gorilla/websocket"
 )
 
@@ -225,6 +226,27 @@ func TestBrowserOpenTimesOutAndStopsLoading(t *testing.T) {
 	// 连接挂掉的那一页之后照样能用。
 	if out, err := runBrowserTool(context.Background(), registry, "browser_open", map[string]any{"url": "https://example.com/next"}); err != nil || !strings.Contains(out, "example.com/next") {
 		t.Fatalf("超时之后同一页应当还能继续用：%s %v", out, err)
+	}
+}
+
+// 走一遍 Runner：模型拿到的是浏览器自己的超时原因，不是「工具执行超时（上限 60000ms）」。
+func TestBrowserTimeoutReachesModelThroughRunner(t *testing.T) {
+	f := newFakeCDP(t, "https://example.com/")
+	registry := browserToolsFor(t, f, newBrowserTabRegistry(), "bot\x00group:1", 300*time.Millisecond)
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"browser_open","input":{"url":"https://hang.example/"}}`,
+		`{"action":"final","content":"打不开"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 1, ToolTimeoutMS: 60_000}, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "打开"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Steps) != 1 || !strings.Contains(resp.Steps[0].Error, "打开 https://hang.example/ 超时") || strings.Contains(resp.Steps[0].Error, "工具执行超时") {
+		t.Fatalf("模型应当拿到浏览器自己的超时原因：%#v", resp.Steps)
 	}
 }
 

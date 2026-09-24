@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -235,5 +236,17 @@ func TestResolverDefersOrdinaryPageToSandboxedBrowser(t *testing.T) {
 	}
 	if requested || resp == nil || !resp.Handled || resp.Context != "" {
 		t.Fatalf("requested=%v resp=%#v", requested, resp)
+	}
+}
+
+// 名额满了和页面超时是两回事：前者稍后再试就行，后者多半是网址本身的问题。
+func TestBrowserRenderFailureTextSeparatesBusyFromTimeout(t *testing.T) {
+	busy := fmt.Errorf("%w：同时运行的一次性浏览器已达上限（3 个）", agent.ErrBrowserBusy)
+	if got := browserRenderFailureText(busy); !strings.Contains(got, "稍后再试") {
+		t.Fatalf("名额满了：%q", got)
+	}
+	timeout := fmt.Errorf("渲染 https://example.com/ 超时：10s 内页面没有响应：%w", context.DeadlineExceeded)
+	if got := browserRenderFailureText(timeout); got != "页面渲染超时" {
+		t.Fatalf("页面超时：%q", got)
 	}
 }
