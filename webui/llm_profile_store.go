@@ -96,7 +96,10 @@ func NewPersistentLLMProfileStore(ctx context.Context, store *storage.SQLiteStor
 	data = data.WithDefaults()
 	// 注册表是从配置集派生出来的缓存。播种的配置集每次启动都从 config.yaml 重新读，
 	// 注册表也得跟着重建，否则它一直停在第一次启动时的 ID 和凭据上。
-	if !registryOK || registry.Version == 0 || seedID != "" {
+	//
+	// 注册表里的提供商后来多了 OAuth 绑定这一项，之前落库的注册表没有它；配置档绑着
+	// OAuth 而注册表对不上时也重建，否则这些配置档走注册表的请求一直不带登录凭据。
+	if !registryOK || registry.Version == 0 || seedID != "" || registryMissesOAuthBinding(registry, data) {
 		migrated, _, migrationErr := llm.NewProviderRegistryFromProfiles(data)
 		if migrationErr != nil {
 			return nil, migrationErr
@@ -139,6 +142,24 @@ func stableLLMSeedProfile(ctx context.Context, store *storage.SQLiteStore, regis
 		return storage.SeedProfile{}, fmt.Errorf("persist llm seed profile id: %w", err)
 	}
 	return seed, nil
+}
+
+// registryMissesOAuthBinding 判断落库的注册表是否漏了配置档上的 OAuth 绑定。
+func registryMissesOAuthBinding(document llm.ProviderRegistryDocument, set llm.ProfileSet) bool {
+	bindings := make(map[string]string, len(document.Providers))
+	for _, provider := range document.Providers {
+		bindings[strings.TrimSpace(provider.ID)] = provider.OAuthProvider
+	}
+	for _, profile := range set.Profiles {
+		want := strings.ToLower(strings.TrimSpace(profile.Config.OAuthProvider))
+		if want == "" {
+			continue
+		}
+		if got, ok := bindings[strings.TrimSpace(profile.ID)]; !ok || got != want {
+			return true
+		}
+	}
+	return false
 }
 
 // SeedProfileID 返回启动时从 config.yaml 播种的那份配置档的 ID；库里有保存过的

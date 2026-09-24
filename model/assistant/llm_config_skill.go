@@ -86,7 +86,7 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		return llmConfigApplyResult{Reply: "当前未接入提供商配置集。"}
 	}
 	if listModels == nil {
-		listModels = defaultLLMModelLister
+		listModels = r.llmModelLister()
 	}
 	set := store.Profiles().WithDefaults()
 	botCfg, configErr := r.modelConfigForEvent(event)
@@ -109,6 +109,8 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 			}
 		}
 	}
+	// 切换前的探测也走注册表，凭据要和机器人真正发请求时一致。
+	registry = r.bindLLMRegistry(registry)
 	bindingRoles := normalizeModelRoles(roles)
 	if registry != nil {
 		for key, role := range bindingRoles {
@@ -582,8 +584,8 @@ func oneBotEventActor(event MessageEvent) string {
 }
 
 // defaultLLMModelLister 使用默认 LLM 模型列表实现。
-func defaultLLMModelLister(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
-	return llm.ListModels(ctx, cfg)
+func defaultLLMModelLister(ctx context.Context, cfg llm.ProviderConfig, opts ...llm.ClientOption) ([]llm.ModelInfo, error) {
+	return llm.ListModels(ctx, cfg, opts...)
 }
 
 // ensureLLMModelAvailable 校验模型确实在这个 provider 的模型清单里。

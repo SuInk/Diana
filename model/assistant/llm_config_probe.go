@@ -37,7 +37,7 @@ func (r *Runtime) probeModelSwitch(ctx context.Context, registry *llm.ProviderRe
 		if factory != nil {
 			client, err = factory(cfg)
 		} else {
-			client, err = llm.NewClient(cfg)
+			client, err = llm.NewClient(cfg, r.llmClientOptionsFor(cfg)...)
 		}
 		if err != nil {
 			return err

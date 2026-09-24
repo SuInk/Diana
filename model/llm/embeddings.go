@@ -61,7 +61,9 @@ func EmbedTextsWithUsage(ctx context.Context, cfg ProviderConfig, texts []string
 	for _, opt := range opts {
 		opt(&options)
 	}
-	client := newTextHTTPClient(options.httpClient, cfg)
+	// embedding 和对话用同一份配置档，凭据也得一样：绑了 OAuth 的配置档没有 API Key，
+	// 不在这里补上令牌，语义检索就会拿一个空的 Bearer 去撞 401。
+	client := newTextHTTPClient(httpClientWithConfigCredentials(options.httpClient, options.credentials, cfg), cfg)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, Usage{}, err

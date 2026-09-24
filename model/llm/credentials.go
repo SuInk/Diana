@@ -5,6 +5,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -159,6 +160,29 @@ func (c *cachedCredentialSource) Invalidate() {
 type credentialTransport struct {
 	base   http.RoundTripper
 	source CredentialSource
+	// requireOAuth 表示配置档没有 API Key 可回退：OAuth 取不到凭据时直接报错，
+	// 不再把一个空鉴权头的请求发出去——那样上游只会回一个「缺 API Key」的 401，
+	// 真正的原因（还没登录、登录过期、续期失败）反而看不见。
+	requireOAuth bool
+}
+
+// OAuthCredentialError 是配置档只靠 OAuth、而 OAuth 这次给不出凭据时的报错。
+type OAuthCredentialError struct {
+	Err error
+}
+
+func (e *OAuthCredentialError) Error() string {
+	if e == nil || e.Err == nil {
+		return "llm: OAuth 凭据不可用，配置档也没有 API Key 可回退"
+	}
+	return "llm: OAuth 凭据不可用（" + e.Err.Error() + "），配置档也没有 API Key 可回退"
+}
+
+func (e *OAuthCredentialError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 // providerAuthHeaders 是各家 SDK 自己会写上的鉴权头。用 OAuth 时必须把它们摘掉：
@@ -175,6 +199,16 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		return base.RoundTrip(req)
 	}
 	credential, err := t.source.Credential(req.Context())
+	if t.requireOAuth && (err != nil || strings.TrimSpace(credential.Token) == "") {
+		// RoundTripper 出错时也要负责关掉请求体。
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		if err == nil {
+			err = errors.New("llm: OAuth 凭据为空")
+		}
+		return nil, &OAuthCredentialError{Err: err}
+	}
 	if err != nil || credential.Kind != CredentialKindOAuth || strings.TrimSpace(credential.Token) == "" {
 		// 解析不出 OAuth 凭据就原样放行，让 SDK 自己写的 API Key 继续生效。
 		// 这条路径覆盖「配置档只填了 API Key」和「续期失败但仍配了 API Key」两种情况。
@@ -192,7 +226,8 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	// RoundTripper 不允许改传入的请求，按 http.RoundTripper 的约定先浅拷贝。
 	cloned := req.Clone(req.Context())
 	cloned.Header.Set(name, value)
-	if credential.ReplaceProviderAuth {
+	// 配置档没有 API Key 时，SDK 写上的鉴权头里只可能是占位值，一律摘掉。
+	if credential.ReplaceProviderAuth || t.requireOAuth {
 		for _, header := range providerAuthHeaders {
 			if strings.EqualFold(header, name) {
 				continue
@@ -217,4 +252,26 @@ func httpClientWithCredentials(client *http.Client, source CredentialSource) *ht
 	wrapped := *client
 	wrapped.Transport = &credentialTransport{base: client.Transport, source: source}
 	return &wrapped
+}
+
+// oauthOnlyTransport 表示这个客户端接上了 OAuth 凭据，且配置档没有 API Key 可回退。
+func oauthOnlyTransport(client *http.Client) bool {
+	if client == nil {
+		return false
+	}
+	transport, ok := client.Transport.(*credentialTransport)
+	return ok && transport.requireOAuth
+}
+
+// httpClientWithConfigCredentials 和 httpClientWithCredentials 一样，另外按配置档
+// 决定 OAuth 失败时还能不能回退到 API Key：配置档没填 API Key 时不能，直接报清楚。
+func httpClientWithConfigCredentials(client *http.Client, source CredentialSource, cfg ProviderConfig) *http.Client {
+	wrapped := httpClientWithCredentials(client, source)
+	if wrapped == nil || wrapped == client {
+		return wrapped
+	}
+	if transport, ok := wrapped.Transport.(*credentialTransport); ok {
+		transport.requireOAuth = strings.TrimSpace(cfg.APIKey) == ""
+	}
+	return wrapped
 }

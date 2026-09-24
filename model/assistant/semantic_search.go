@@ -197,7 +197,7 @@ func (r *Runtime) embedTextsFunc() func(context.Context, llm.ProviderConfig, []s
 		started := time.Now()
 		// embedding 也占着同一份供应商配额，并发计数和下面的用量记账一样要在这里补。
 		release := r.llmConcurrency.begin(string(cfg.Provider), cfg.Model, started)
-		vectors, usage, err := llm.EmbedTextsWithUsage(ctx, cfg, texts)
+		vectors, usage, err := llm.EmbedTextsWithUsage(ctx, cfg, texts, r.llmClientOptionsFor(cfg)...)
 		release()
 		if err == nil {
 			// embedding 不走文本 provider 链，装饰器记不到，在这里补记。
