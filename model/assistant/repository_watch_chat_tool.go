@@ -164,6 +164,13 @@ func (t *dianaRepositoryWatchTool) allows(repository string) bool {
 	return t.managed[strings.ToLower(strings.TrimSpace(repository))]
 }
 
+// allowsItem 判断这个会话能不能碰一条已有的订阅：先得是这台机器人名下的，再看仓库
+// 权限。几台机器人共用一个 Runtime 时主人和仓库管理人员都是按机器人配的，A 这边
+// 的权限不该伸到 B 在 WebUI 里建的订阅上。
+func (t *dianaRepositoryWatchTool) allowsItem(item Reminder) bool {
+	return t.runtime.sameProfileAsEvent(item.ProfileID, t.event) && t.allows(item.Repository)
+}
+
 // resolve 按 ID 找订阅，并顺带做权限判断。找不到和没权限回同一句话：不然
 // 「没有这个订阅」和「有但你动不了」会把别人配的仓库名试探出来。
 func (t *dianaRepositoryWatchTool) resolve(id string) (Reminder, error) {
@@ -172,7 +179,7 @@ func (t *dianaRepositoryWatchTool) resolve(id string) (Reminder, error) {
 		return Reminder{}, fmt.Errorf("必须提供订阅 id，可以先用 list 查")
 	}
 	for _, item := range t.runtime.repositoryWatchItems() {
-		if item.ID == id && t.allows(item.Repository) {
+		if item.ID == id && t.allowsItem(item) {
 			return item, nil
 		}
 	}
@@ -194,7 +201,7 @@ func (t *dianaRepositoryWatchTool) Run(ctx context.Context, input map[string]any
 	case "list":
 		items := make([]dianaRepositoryWatchView, 0)
 		for _, item := range t.runtime.repositoryWatchItems() {
-			if t.allows(item.Repository) {
+			if t.allowsItem(item) {
 				items = append(items, repositoryWatchViewForTool(item))
 			}
 		}

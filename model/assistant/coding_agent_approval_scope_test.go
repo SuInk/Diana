@@ -67,13 +67,14 @@ func TestCodingApprovalRemembersAlwaysAllow(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(root, "diana.db"))
 	policy := codingApprovalPolicy{
 		Mode: codingApprovalModeDangerous, Patterns: defaultCodingApprovalPatterns(),
-		AlwaysAllowPath: codingAlwaysAllowPath(),
+		AlwaysAllowPath: codingAlwaysAllowPath("bot-a"),
 	}
+	path := policy.AlwaysAllowPath
 	const command = `cd "/w/diana" && git push origin main`
 	if _, needed := codingHookNeedsApproval(policy, "Bash", command); !needed {
 		t.Fatal("一开始就该问")
 	}
-	if err := rememberCodingAlwaysAllow("git push", "30007", command); err != nil {
+	if err := rememberCodingAlwaysAllow(path, "git push", "30007", command); err != nil {
 		t.Fatal(err)
 	}
 	// hook 每次执行都现读清单：同一个任务里说过之后，后面的步骤就不再问。
@@ -86,16 +87,16 @@ func TestCodingApprovalRemembersAlwaysAllow(t *testing.T) {
 		t.Error("只该放行说过的那一类")
 	}
 	// 记两次不重复。
-	if err := rememberCodingAlwaysAllow("GIT PUSH", "30007", command); err != nil {
+	if err := rememberCodingAlwaysAllow(path, "GIT PUSH", "30007", command); err != nil {
 		t.Fatal(err)
 	}
-	if entries := readCodingAlwaysAllow(codingAlwaysAllowPath()); len(entries) != 1 {
+	if entries := readCodingAlwaysAllow(path); len(entries) != 1 {
 		t.Fatalf("同一类记了 %d 条", len(entries))
 	}
-	if !strings.HasPrefix(codingAlwaysAllowPath(), filepath.Clean(root)) {
-		t.Fatalf("清单没落在工作区里：%s", codingAlwaysAllowPath())
+	if !strings.HasPrefix(path, filepath.Clean(root)) {
+		t.Fatalf("清单没落在工作区里：%s", path)
 	}
-	removed, err := forgetCodingAlwaysAllow()
+	removed, err := forgetCodingAlwaysAllow(path)
 	if err != nil || removed != 1 {
 		t.Fatalf("清空返回 %d, %v", removed, err)
 	}
@@ -150,7 +151,7 @@ func TestCodingApprovalAlwaysCodeRemembersAndContinues(t *testing.T) {
 	if err != nil || !strings.Contains(string(decision), `"allow":true`) {
 		t.Fatalf("这一步应当放行：%s %v", decision, err)
 	}
-	entries := readCodingAlwaysAllow(codingAlwaysAllowPath())
+	entries := readCodingAlwaysAllow(codingAlwaysAllowPath(""))
 	if len(entries) != 1 || entries[0].Pattern != "git push" || entries[0].OwnerID != "1" {
 		t.Fatalf("常驻放行没记对：%#v", entries)
 	}

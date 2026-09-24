@@ -128,9 +128,14 @@ func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string
 			Message:    codingWorkspaceHint(cfg),
 		})
 	case "approvals":
-		// 主人回过「以后都同意」之后，得有地方看见记了什么、并且能收回。
+		// 主人回过「以后都同意」之后，得有地方看见记了什么、并且能收回。清单按
+		// 机器人分开，看到和清掉的都只是这台自己的。
+		path, ok := t.runtime.codingAlwaysAllowPathFor(t.event.ProfileID)
+		if !ok {
+			return "", fmt.Errorf("认不出这条消息属于哪台机器人，没法查常驻放行")
+		}
 		if boolInput(input, "clear") {
-			removed, err := forgetCodingAlwaysAllow()
+			removed, err := forgetCodingAlwaysAllow(path)
 			if err != nil {
 				return "", fmt.Errorf("清空常驻放行失败：%w", err)
 			}
@@ -139,7 +144,7 @@ func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string
 				Message: fmt.Sprintf("已清空 %d 条常驻放行，这些操作以后会重新问你。", removed),
 			})
 		}
-		allowed := loadCodingAlwaysAllow(codingAlwaysAllowPath())
+		allowed := loadCodingAlwaysAllow(path)
 		message := "还没有常驻放行，危险操作每次都会问。"
 		if len(allowed) > 0 {
 			message = "这些类别以后不再问；要恢复就带 clear=true 再调一次。"

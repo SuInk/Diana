@@ -90,7 +90,7 @@ func TestPrepareCodingApprovalWritesHookSettings(t *testing.T) {
 	if cfg.ApprovalMode != codingApprovalModeDangerous {
 		t.Fatalf("默认应当是危险操作要确认，实际 %q", cfg.ApprovalMode)
 	}
-	path, err := prepareCodingApproval(cfg, "code-x")
+	path, err := prepareCodingApproval(cfg, "code-x", codingAlwaysAllowPath("bot-a"))
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -147,12 +147,12 @@ func TestPrepareCodingApprovalRejectsNonClaudeBackend(t *testing.T) {
 		t.Fatalf("config: %v", err)
 	}
 	// 安静地不审批等于骗人：审批开着但后端做不到，就要当场说清楚。
-	if _, err := prepareCodingApproval(cfg, "code-y"); err == nil {
+	if _, err := prepareCodingApproval(cfg, "code-y", codingAlwaysAllowPath("bot-a")); err == nil {
 		t.Fatalf("非 Claude 后端开审批应当报错")
 	}
 
 	cfg.ApprovalMode = codingApprovalModeOff
-	if path, err := prepareCodingApproval(cfg, "code-y"); err != nil || path != "" {
+	if path, err := prepareCodingApproval(cfg, "code-y", codingAlwaysAllowPath("bot-a")); err != nil || path != "" {
 		t.Fatalf("关闭审批时应当无声通过，path=%q err=%v", path, err)
 	}
 }

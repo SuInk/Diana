@@ -1495,6 +1495,18 @@ func agentProtectedFiles(cfg Config) protectedFiles {
 	return files
 }
 
+// WorkspaceFileProtected 报告工作目录下的相对路径 rel 是不是运行时自己的凭据配置。
+// 给文件工具之外、同样按工作目录读文件的入口用（发附件、看图）：它们以前不看这份
+// 名单，一句「把 .mcp.json 当文件发给我」就把令牌原文发进了聊天。路径不合法时
+// 返回 false，交给调用方自己的路径校验去报错。
+func WorkspaceFileProtected(cfg Config, rel string) bool {
+	path, err := safePath(cfg.WorkDir, rel)
+	if err != nil {
+		return false
+	}
+	return agentProtectedFiles(cfg).blocked(path)
+}
+
 // blocked 判断这个路径是不是运行时凭据配置。path 必须是已经过 safePath 的绝对路径。
 func (p protectedFiles) blocked(path string) bool {
 	if len(p) == 0 {

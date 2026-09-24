@@ -126,8 +126,15 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 	t.runtime.reminderMu.Lock()
 	stored := t.runtime.reminders.Reminders()
 	t.runtime.reminderMu.Unlock()
+	// 查别人的（全部或指定用户）只能查这台机器人名下的：主人权限是按机器人给的，
+	// 同一个 Runtime 里另一台机器人的用户和订阅不归这位主人管。查自己的不按机器人
+	// 过滤，和额度的统计口径保持一致。
+	crossUser := scope == "all" || (targetID != "" && targetID != t.event.UserID)
 	items := make([]dianaTask, 0, len(stored))
 	for _, item := range stored {
+		if crossUser && !t.runtime.sameProfileAsEvent(item.ProfileID, t.event) {
+			continue
+		}
 		if scope == "mine" && item.OwnerID != t.event.UserID {
 			continue
 		}

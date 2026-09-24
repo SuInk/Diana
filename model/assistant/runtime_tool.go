@@ -621,14 +621,20 @@ func (r *Runtime) scheduleMessageDeletes(event MessageEvent, messageIDs []string
 	}()
 }
 
-// renderReminders 渲染提醒列表。
-func (r *Runtime) renderReminders() string {
+// renderReminders 渲染这台机器人的提醒列表。主人命令只管自己那台：几台机器人的
+// 提醒和订阅存在同一份列表里，不过滤的话 A 的主人能看到 B 的用户记的提醒原文。
+func (r *Runtime) renderReminders(event MessageEvent) string {
 	if r.reminders == nil {
 		return "当前未启用提醒功能。"
 	}
 	r.reminderMu.Lock()
 	defer r.reminderMu.Unlock()
-	items := r.reminders.Reminders()
+	items := make([]Reminder, 0)
+	for _, item := range r.reminders.Reminders() {
+		if r.sameProfileAsEvent(item.ProfileID, event) {
+			items = append(items, item)
+		}
+	}
 	if len(items) == 0 {
 		return "当前没有待触发的提醒。"
 	}
@@ -662,8 +668,9 @@ func (r *Runtime) renderReminders() string {
 	return strings.Join(lines, "\n")
 }
 
-// deleteReminder 删除指定提醒。
-func (r *Runtime) deleteReminder(id string) string {
+// deleteReminder 删除这台机器人名下的指定提醒。别的机器人的条目（包括它的 RSS 和
+// 仓库订阅）按「没找到」处理，不替别人删。
+func (r *Runtime) deleteReminder(event MessageEvent, id string) string {
 	if r.reminders == nil {
 		return "当前未启用提醒功能。"
 	}
@@ -673,7 +680,7 @@ func (r *Runtime) deleteReminder(id string) string {
 	next := make([]Reminder, 0, len(items))
 	removed := false
 	for _, item := range items {
-		if item.ID == id {
+		if item.ID == id && r.sameProfileAsEvent(item.ProfileID, event) {
 			removed = true
 			continue
 		}

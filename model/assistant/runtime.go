@@ -7707,7 +7707,7 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 		groupID := strings.TrimSpace(strings.TrimPrefix(command, "群 启用 "))
 		return r.setGroupDisabled(event, groupID, false), true
 	case command == "提醒 列表":
-		return r.renderReminders(), true
+		return r.renderReminders(event), true
 	case strings.HasPrefix(command, "提醒 取消 "):
 		id := strings.TrimSpace(strings.TrimPrefix(command, "提醒 取消 "))
 		_, err := r.cancelOneTimeReminder(event.UserID, id)
@@ -7717,7 +7717,7 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 		return "提醒已取消并释放额度，记录仍保留。", true
 	case strings.HasPrefix(command, "提醒 删除 "):
 		id := strings.TrimSpace(strings.TrimPrefix(command, "提醒 删除 "))
-		return r.deleteReminder(id), true
+		return r.deleteReminder(event, id), true
 	case strings.HasPrefix(command, "提醒 添加 "):
 		args := strings.TrimSpace(strings.TrimPrefix(command, "提醒 添加 "))
 		return r.addReminder(event, args), true
@@ -8298,10 +8298,9 @@ func (r *Runtime) replyGateAllows(cfg BotConfig, event MessageEvent) bool {
 }
 
 func (r *Runtime) allowQuietNotice(event MessageEvent) bool {
-	scope := "private:" + event.UserID
-	if event.Kind == EventKindGroup {
-		scope = "group:" + event.GroupID
-	}
+	// 按会话键限流，里面带着机器人命名空间：两台机器人在同一个群里时，A 发过一次
+	// 休息提示不该让 B 这一小时都闭嘴。
+	scope := sessionKey(event)
 	now := r.clock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
