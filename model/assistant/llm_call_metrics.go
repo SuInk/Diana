@@ -4,10 +4,13 @@
 package assistant
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/model/applog"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -171,8 +174,8 @@ func (c *LLMUsageCounters) add(usage llm.Usage) {
 	}
 }
 
-// LLMUsageTotals 是运行期的 token 用量。两个桶都只从本次启动算起，重启清零——
-// 要按天回溯历史用量得查记录页，那是另一份数据。
+// LLMUsageTotals 是运行期的 token 用量。Session 从本次启动算起，重启清零；Today
+// 启动时由 RestoreLLMUsageToday 用库里当天的用量日志垫底，重启不丢当天已用的量。
 type LLMUsageTotals struct {
 	Today   LLMUsageCounters `json:"today"`
 	Session LLMUsageCounters `json:"session"`
@@ -198,10 +201,29 @@ func (t *llmUsageTracker) observe(usage llm.Usage, now time.Time) {
 	t.totals.Session.add(usage)
 }
 
-func (t *llmUsageTracker) snapshot() LLMUsageTotals {
+// snapshot 返回当前合计。过了零点还没有新调用时，今天那一桶还是昨天的数，这里
+// 按 now 判断，日期不对就当成今天还没用过。
+func (t *llmUsageTracker) snapshot(now time.Time) LLMUsageTotals {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.totals
+	totals := t.totals
+	if t.day != now.Format(time.DateOnly) {
+		totals.Today = LLMUsageCounters{}
+	}
+	return totals
+}
+
+// restoreToday 用库里当天已记下的用量给今天那一桶垫底。只在启动时、第一次调用
+// 之前做：在那之后再垫，已经累加进来的调用会被数两遍。
+func (t *llmUsageTracker) restoreToday(now time.Time, counters LLMUsageCounters) {
+	day := now.Format(time.DateOnly)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.day == day {
+		return
+	}
+	t.day = day
+	t.totals.Today = counters
 }
 
 // recordLLMUsageTotals 把一次调用的用量计入运行期合计。
@@ -217,5 +239,34 @@ func (r *Runtime) llmUsageTotals() LLMUsageTotals {
 	if r == nil {
 		return LLMUsageTotals{}
 	}
-	return r.llmUsage.snapshot()
+	return r.llmUsage.snapshot(r.clock())
+}
+
+// RestoreLLMUsageToday 把库里从当天零点到现在已记下的模型用量垫进「今日」合计。
+//
+// 以前「今日」是纯内存累加，Diana 一重启就从零数起：早上九点半重启过，总览页的
+// 今日 Token 就只剩九点半以后的量，和同一页上跨重启的今日消息数对不上。消息那几
+// 张卡启动时已经从库里恢复基线，这里对齐同一个做法。上游没报用量的调用次数只在
+// 内存里数，库里没有，这一项仍从启动算起。
+func (r *Runtime) RestoreLLMUsageToday(ctx context.Context, reader applog.UsageReader) error {
+	if r == nil || reader == nil {
+		return nil
+	}
+	now := r.clock()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	if !midnight.Before(now) {
+		return nil
+	}
+	summary, err := reader.LLMUsageSince(ctx, midnight, now)
+	if err != nil {
+		return err
+	}
+	r.llmUsage.restoreToday(now, LLMUsageCounters{
+		Calls:             summary.Calls,
+		InputTokens:       summary.InputTokens,
+		OutputTokens:      summary.OutputTokens,
+		CachedInputTokens: summary.CachedInputTokens,
+		TotalTokens:       summary.TotalTokens,
+	})
+	return nil
 }
