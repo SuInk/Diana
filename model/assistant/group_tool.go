@@ -66,7 +66,7 @@ func (t *dianaGroupTool) Name() string {
 
 func (t *dianaGroupTool) Description() string {
 	if !t.runtime.groupToolUsesPlatform(t.event) {
-		return t.runtime.groupToolPrompt(t.event) + " 此工具只读；Diana 回复设置使用 bot_config。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
+		return t.runtime.groupToolPrompt(t.event, t.runtime.effectiveConfigForEvent(t.event)) + " 此工具只读；Diana 回复设置使用 bot_config。match_avatar 仅比较已知且能核验的成员头像，不代表全群匹配。"
 	}
 	return `本地群成员头像匹配：把图片与可用成员头像做模式比对，不凭视觉猜身份。取当前消息里的图，当前消息没有图就取被引用消息里的图，所以「回复一张图问这是谁的头像」可以直接调。群资料、名单和成员查询使用 platform；Diana 回复设置使用 bot_config。此工具只读。`
 }

@@ -38,20 +38,46 @@ func dayPartAt(now time.Time) dayPart {
 	}
 }
 
-func (part dayPart) prompt() string {
+const (
+	promptDayPartLateNight = "现在是深夜。你这个点是醒着的，但精力不多：话比白天少，句子更短更松，反应慢半拍，容易顺着对方的情绪走而不是急着解决问题。可以提到你这边晚了、困了，但不要每条都提；这是你自己的作息，不是对方的——没有依据说明对方也在这个时区时，别断言他那边是深夜，也别催他睡或说他熬夜。对方这个点还在说话，多半是有心事或者睡不着，别催他，也别装得很精神。"
+	promptDayPartMorning   = "现在是清早。你刚醒不久，脑子还没完全开机：反应比平时慢一点，句子短，可以有点迷糊。别装出一副精神饱满的样子，也别因为迷糊就把正事答错——需要动脑的问题照常答准，只是语气松一些。刚醒的是你：没有依据说明对方也在这个时区时，别默认他也刚起床。"
+	// 只写语气，不写篇幅。这一档从 18:00 一直盖到午夜，正好是群聊最热闹的时段，
+	// 以前那句「话可以多一点，更愿意闲聊和展开」和群聊里的「尽量简短」、插话
+	// 节奏里的「一两句说完」正面冲突：线上抓到的主动插话中位数 75 字、26%
+	// 超过两句，晚上的长度失控基本都能追到这句话。
+	promptDayPartEvening = "现在是晚上。一天的事忙完了，你比白天松弛，更愿意接梗，但回复长度照旧。"
+)
+
+var (
+	promptDayPartLateNightSpec = tailSpec("daypart.late_night", "时段语气：深夜", "开启时段语气、机器人这边 0–5 点时放在尾部。", promptDayPartLateNight)
+	promptDayPartMorningSpec   = tailSpec("daypart.morning", "时段语气：清早", "开启时段语气、机器人这边 5–9 点时放在尾部。", promptDayPartMorning)
+	promptDayPartEveningSpec   = tailSpec("daypart.evening", "时段语气：晚上", "开启时段语气、机器人这边 18 点以后时放在尾部。白天不注入任何时段语气。", promptDayPartEvening)
+)
+
+// spec 返回这个时段对应的语气条目。白天是基线，没有条目。
+func (part dayPart) spec() *PromptSpec {
 	switch part {
 	case dayPartLateNight:
-		return "现在是深夜。你这个点是醒着的，但精力不多：话比白天少，句子更短更松，反应慢半拍，容易顺着对方的情绪走而不是急着解决问题。可以提到你这边晚了、困了，但不要每条都提；这是你自己的作息，不是对方的——没有依据说明对方也在这个时区时，别断言他那边是深夜，也别催他睡或说他熬夜。对方这个点还在说话，多半是有心事或者睡不着，别催他，也别装得很精神。"
+		return promptDayPartLateNightSpec
 	case dayPartMorning:
-		return "现在是清早。你刚醒不久，脑子还没完全开机：反应比平时慢一点，句子短，可以有点迷糊。别装出一副精神饱满的样子，也别因为迷糊就把正事答错——需要动脑的问题照常答准，只是语气松一些。刚醒的是你：没有依据说明对方也在这个时区时，别默认他也刚起床。"
+		return promptDayPartMorningSpec
 	case dayPartEvening:
-		// 只写语气，不写篇幅。这一档从 18:00 一直盖到午夜，正好是群聊最热闹的时段，
-		// 以前那句「话可以多一点，更愿意闲聊和展开」和群聊里的「尽量简短」、插话
-		// 节奏里的「一两句说完」正面冲突：线上抓到的主动插话中位数 75 字、26%
-		// 超过两句，晚上的长度失控基本都能追到这句话。
-		return "现在是晚上。一天的事忙完了，你比白天松弛，更愿意接梗，但回复长度照旧。"
+		return promptDayPartEveningSpec
 	}
-	return ""
+	return nil
+}
+
+// prompt 返回这个时段的内置语气，按配置覆盖的版本见 dayPartToneForConfig。
+func (part dayPart) prompt() string {
+	return part.promptWith(nil)
+}
+
+func (part dayPart) promptWith(overrides PromptOverrides) string {
+	spec := part.spec()
+	if spec == nil {
+		return ""
+	}
+	return overrides.text(spec)
 }
 
 // dayPartTonePrompt 返回这一刻要注入的时段语气。关掉、或者时段没有主张时返回空串。
@@ -77,5 +103,6 @@ func dayPartToneForConfig(cfg BotConfig, now time.Time) string {
 	if cfg.ReplyGate != nil {
 		location = cfg.ReplyGate.Location()
 	}
-	return dayPartTonePrompt(true, now.In(location))
+	// 白天不注入任何东西，理由同 dayPartTonePrompt。
+	return dayPartAt(now.In(location)).promptWith(cfg.PromptOverrides)
 }

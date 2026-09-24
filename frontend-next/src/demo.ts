@@ -2,6 +2,9 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { extensionDemoResponse } from './extension-demo';
+import { parseYAML, toYAML } from './demo-yaml';
+// 和后端登记表逐字相同的提示词目录，由 webui/demo_prompt_catalog_test.go 生成并校验。
+import demoPromptCatalogData from './demo-prompt-catalog.json';
 import type {
   AgentResidencyEntry,
   AppLogEntry,
@@ -11,6 +14,8 @@ import type {
   BrowserControlToken,
   LLMConfig,
   OpenAPIKey,
+  Persona,
+  PromptCatalog,
   PluginState,
   BotProfileConfig,
   BotGroupSummary,
@@ -907,6 +912,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ items: items.slice(offset, offset + limit), total: items.length });
   }
   if (path === "/api/assistant/platforms") return json({ platforms });
+  if (path === "/api/assistant/prompts") return json(demoPromptCatalog);
   if (path === "/api/assistant/agent-defaults")
     return json({
       agent_command_allowlist: ["uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"],
@@ -1221,35 +1227,44 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ persona: demoPersonas[index >= 0 ? index : 0], personas: demoPersonas });
   }
   if (path === "/api/assistant/personas/import") {
-    const incoming = (body.personas as Array<Record<string, unknown>>) ?? [];
+    const parsed = demoParsePersonaSource(String(body.source ?? ""));
+    if ("error" in parsed) return json({ error: parsed.error }, 400);
     let imported = 0;
     let renamed = 0;
     let skipped = 0;
-    let dropped = 0;
-    const unknownStyles: string[] = [];
-    for (const raw of incoming) {
-      const name = String(raw.name ?? "").trim();
-      const persona = {
-        id: `persona-import-${demoPersonas.length + imported + 1}`,
-        name,
-        system_prompt: String(raw.system_prompt ?? ""),
-        self_reference: String(raw.self_reference ?? ""),
-        sentence_enders: String(raw.sentence_enders ?? "")
-      };
-      const hasContent = persona.system_prompt || persona.self_reference || persona.sentence_enders;
-      if (!name || !hasContent) { dropped++; continue; }
-      const existing = demoPersonas.find((item) => item.name === name);
+    for (const incoming of parsed.personas) {
+      const persona = { ...incoming, id: `persona-import-${demoPersonas.length + imported + 1}` };
+      const existing = demoPersonas.find((item) => item.name === persona.name);
       if (existing) {
-        const identical = existing.system_prompt === persona.system_prompt
-          && existing.self_reference === persona.self_reference && existing.sentence_enders === persona.sentence_enders;
-        if (identical) { skipped++; continue; }
-        persona.name = `${name} (2)`;
+        if (JSON.stringify({ ...existing, id: "", name: "" }) === JSON.stringify({ ...persona, id: "", name: "" })) { skipped++; continue; }
+        persona.name = `${persona.name} (2)`;
         renamed++;
       }
       demoPersonas.unshift(persona as (typeof demoPersonas)[number]);
       imported++;
     }
-    return json({ personas: demoPersonas, imported, skipped, renamed, dropped, unknown_styles: unknownStyles });
+    return json({ personas: demoPersonas, imported, skipped, renamed, dropped: 0, unknown_styles: [] });
+  }
+  // 演示站没有后端：人设 YAML 用 demo-yaml.ts 在前端模拟生成和解析，写法与后端一致，
+  // prompts 同样列全，读回时同样要求一段不少、一段不多。
+  if (path === "/api/assistant/personas/yaml") {
+    const personas = ((body.personas as Persona[]) ?? []).map(({ id: _id, updated_at: _updated, prompts, extra_criteria, account_safety_rules, ...persona }) => ({
+      ...persona,
+      extra_criteria: extra_criteria ?? "",
+      account_safety_rules: account_safety_rules ?? "",
+      prompts: Object.fromEntries(
+        demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [
+          [spec.key, prompts?.[spec.key] || spec.default],
+          ...(spec.format_key ? [[spec.format_key, prompts?.[spec.format_key] || (spec.contract ?? "").trim()] as [string, string]] : [])
+        ])
+      )
+    }));
+    const document = personas.length === 1 ? personas[0] : { version: 1, personas };
+    return json({ yaml: toYAML(document as never, demoPersonaYAMLHeader, demoPromptComments(), demoPromptBlockKeys()) });
+  }
+  if (path === "/api/assistant/personas/parse") {
+    const parsed = demoParsePersonaSource(String(body.source ?? ""));
+    return "error" in parsed ? json({ error: parsed.error }, 400) : json({ personas: parsed.personas });
   }
   if (path === "/api/assistant/personas/delete") {
     const index = demoPersonas.findIndex((item) => item.id === String(body.id ?? ""));
@@ -1519,4 +1534,65 @@ export function installDemoMode(): void {
   if (!demoMode || window.__dianaOriginalFetch) return;
   window.__dianaOriginalFetch = window.fetch.bind(window);
   window.fetch = demoFetch;
+}
+
+const demoPromptCatalog = demoPromptCatalogData as PromptCatalog;
+
+const demoPersonaYAMLHeader = `Diana 人设文件。prompts 列出全部内置提示词：没改过的是默认原文，改哪段就改哪段的正文。
+读回时 prompts 必须一段不少、一段不多；正文和默认原文相同的不会存成覆盖，以后默认文案更新会跟着走。
+{名字} 这样的占位符由运行时填入，删掉的话那项信息就不再进提示词。`;
+
+// 注释和后端 persona_prompts.go 写的一样：分组第一条带组标题，每条写标题、用途、占位符，
+// 输出格式那条带警告。
+function demoPromptComments(): Record<string, string> {
+  const groups = new Map(demoPromptCatalog.groups.map((group) => [group.id, group]));
+  const comments: Record<string, string> = {
+    extra_criteria: "接话评分的补充判据：本群的称呼、黑话和禁区，拼在接话评分尾部。留空不加。套用人设时填进机器人配置，分群仍可单独覆盖。",
+    account_safety_rules: "发送前审核的账号安全规则：填了就替代默认的账号安全风险范围。留空用默认范围。套用人设时填进机器人配置，分群仍可单独覆盖。"
+  };
+  let lastGroup = "";
+  for (const spec of demoPromptCatalog.prompts) {
+    const lines: string[] = [];
+    if (spec.group !== lastGroup) {
+      const group = groups.get(spec.group);
+      lines.push(`──── ${group?.label ?? spec.group} ────`, group?.description ?? "", "");
+      lastGroup = spec.group;
+    }
+    lines.push(`${spec.title}：${spec.usage}`);
+    for (const variable of spec.vars ?? []) lines.push(`占位符 {${variable.name}}：${variable.description}`);
+    comments[spec.key] = lines.join("\n");
+    if (spec.format_key) comments[spec.format_key] = "↑ 这段的输出格式，程序按它解析模型的回答。改动时字段名、取值和结构要和程序对得上，改坏了这条链路会沉默或放行。";
+  }
+  return comments;
+}
+
+function demoPromptBlockKeys(): Set<string> {
+  return new Set(demoPromptCatalog.prompts.flatMap((spec) => (spec.format_key ? [spec.key, spec.format_key] : [spec.key])));
+}
+
+// 演示站的人设文件解析，规则照后端 ParsePersonaDocument：必须有 format_version，版本 1
+// 要求每套都有名字和完整的 prompts，不认识的提示词键直接报错。
+function demoParsePersonaSource(source: string): { personas: Persona[] } | { error: string } {
+  let root: unknown;
+  try {
+    root = parseYAML(source);
+  } catch (error) {
+    return { error: `YAML 语法错误：${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!root || typeof root !== "object" || Array.isArray(root)) return { error: "人设文件的顶层应该是「键: 值」的映射" };
+  const { format_version: version, ...rest } = root as Record<string, unknown>;
+  if (version === undefined) return { error: "人设文件缺少 format_version：旧格式的人设文件不再支持，请在 Diana 里重新导出" };
+  if (version !== 1) return { error: `人设文件的格式版本是 ${String(version)}，当前 Diana 只认到 1，请先升级 Diana` };
+  const personas = (Array.isArray(rest.personas) ? rest.personas : [rest]) as Persona[];
+  const defaults = new Map<string, string>(demoPromptCatalog.prompts.flatMap((spec): [string, string][] => [[spec.key, spec.default], ...(spec.format_key ? [[spec.format_key, (spec.contract ?? "").trim()] as [string, string]] : [])]));
+  for (const persona of personas) {
+    if (!String(persona.name ?? "").trim()) return { error: "人设缺少 name" };
+    if (!persona.prompts) return { error: `人设「${persona.name}」缺少 prompts：人设文件要列出全部提示词` };
+    const unknown = Object.keys(persona.prompts).filter((key) => !defaults.has(key));
+    if (unknown.length) return { error: `人设「${persona.name}」的 prompts 里有不认识的提示词：${unknown.join("、")}` };
+    const missing = [...defaults.keys()].filter((key) => !(key in persona.prompts!));
+    if (missing.length) return { error: `人设「${persona.name}」的 prompts 缺少 ${missing.length} 段提示词：${missing.slice(0, 8).join("、")}` };
+    persona.prompts = Object.fromEntries(Object.entries(persona.prompts).filter(([key, value]) => String(value ?? "").trim() !== defaults.get(key)));
+  }
+  return { personas };
 }

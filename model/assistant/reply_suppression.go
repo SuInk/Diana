@@ -850,19 +850,28 @@ func (r *Runtime) sendReplyPauseHint(ctx context.Context, event MessageEvent, it
 	r.recordReplySuppressionNotice(event, item, true, nil, sendErr)
 }
 
-func (r *Runtime) generateReplyPauseHint(ctx context.Context, event MessageEvent) (string, error) {
-	ctx = withLLMUsagePurpose(ctx, "reply_suppression_notice")
-	messages := r.withUserFacingPersona(event, []llm.Message{
-		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`用你自己的语气说一句话，告诉对方你接下来一段时间不接话了。
+const replyPauseHintPrompt = `用你自己的语气说一句话，告诉对方你接下来一段时间不接话了。
 要求：
 1. 就是随口提一句，像人要去忙别的了那样，不是系统通知。
 2. 不要说具体停多久，不要出现「暂停」「响应」「账号」「循环」「检测」这类词。
 3. 不要解释原因，不要责怪对方，不要说教。
 4. 只输出一句自然中文纯文本，不得使用 @、账号、昵称、引用、CQ 码、Markdown、表情或引号。
-5. 最多 30 个汉字。`),
-		},
+5. 最多 30 个汉字。`
+
+// 输出只过 sanitizeReplyPauseHint 这道闸，不按格式解析，所以整段都能改；
+// 但那几个后台词汇照样会被拦，改掉第 2 条只会让提示更常发不出去。
+var promptReplyPauseHintSpec = registerPrompt(PromptSpec{
+	Key:     "audit.pause_hint",
+	Group:   PromptGroupAudit,
+	Title:   "收声提示",
+	Usage:   "机器人决定暂时不接某人的话时（空转、连续拒答等），按人设说一句要去忙了。含「暂停」「响应」「账号」「循环」「检测」「系统」、@ 或 CQ 码的结果会被丢掉，这时什么都不发。",
+	Default: replyPauseHintPrompt,
+})
+
+func (r *Runtime) generateReplyPauseHint(ctx context.Context, event MessageEvent) (string, error) {
+	ctx = withLLMUsagePurpose(ctx, "reply_suppression_notice")
+	messages := r.withUserFacingPersona(event, []llm.Message{
+		{Role: llm.RoleSystem, Content: r.effectiveConfigForEvent(event).prompt(promptReplyPauseHintSpec)},
 		{Role: llm.RoleUser, Content: "现在说这一句。"},
 	})
 	callCtx, cancel := context.WithTimeout(ctx, replySuppressionNoticeTimeout)

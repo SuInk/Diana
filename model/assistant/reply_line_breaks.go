@@ -27,11 +27,23 @@ func configuredReplyLineBreakMode(cfg BotConfig) replyLineBreakMode {
 	return replyLinesCompact
 }
 
+var promptReplyLineBreakChoiceSpec = styleSpec("line_break_choice", "本轮段落排版", "每轮都注入：用户本轮要求保留换行或连成一段时，用哪个前缀标记。"+replyMarkerUsage, replyLineBreakChoiceRule)
+
+const (
+	promptLineBreaksPreserve = "当前保留消息内部的段落换行，换行不增加发送条数；本轮明确排版要求优先。"
+	promptLineBreaksCompact  = "当前收拢普通说明中的多余换行，结论、理由和必要补充写在同一段；列表、代码、表格和引用原文保留结构，本轮明确排版要求优先。"
+)
+
+var (
+	promptLineBreaksPreserveSpec = styleSpec("line_breaks.preserve", "保留段落换行", "「保留换行」打开时每轮注入。", promptLineBreaksPreserve)
+	promptLineBreaksCompactSpec  = styleSpec("line_breaks.compact", "收拢多余换行", "「保留换行」关闭时每轮注入，替代上一条。", promptLineBreaksCompact)
+)
+
 func replyLineBreakPrompt(cfg BotConfig) string {
 	if boolValue(cfg.ReplyPreserveLineBreaks, true) {
-		return "当前保留消息内部的段落换行，换行不增加发送条数；本轮明确排版要求优先。"
+		return cfg.prompt(promptLineBreaksPreserveSpec)
 	}
-	return "当前收拢普通说明中的多余换行，结论、理由和必要补充写在同一段；列表、代码、表格和引用原文保留结构，本轮明确排版要求优先。"
+	return cfg.prompt(promptLineBreaksCompactSpec)
 }
 
 // Only unstructured prose is joined. No punctuation or topic classifier is

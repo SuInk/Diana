@@ -705,7 +705,7 @@ func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.
 	if cfg.ProactiveReplyThreshold != 0.9 {
 		t.Fatalf("proactive reply threshold = %v, want 0.9", cfg.ProactiveReplyThreshold)
 	}
-	if strings.TrimSpace(cfg.SystemPrompt) == "" || strings.TrimSpace(cfg.ProactiveReplyRouterPrompt) == "" || strings.TrimSpace(cfg.ProactiveReplyPrompt) == "" {
+	if strings.TrimSpace(cfg.SystemPrompt) == "" || strings.TrimSpace(cfg.prompt(promptLegacyRouterSpec)) == "" || strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)) == "" {
 		t.Fatal("editable prompt defaults must not be empty")
 	}
 }
@@ -1364,10 +1364,10 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 // 用户自己写的中文语境提示词不能被默认值覆盖；留空才回落默认。
 func TestPromptChineseSlangKeepsCustomTextAndDefaultsWhenEmpty(t *testing.T) {
 	const custom = "保持冷峻克制的侦探口吻，避免比喻。"
-	if got := (BotConfig{PromptChineseSlangText: custom}).WithDefaults().PromptChineseSlangText; got != custom {
+	if got := (BotConfig{PromptOverrides: PromptOverrides{promptChineseSlangSpec.Key: custom}}).WithDefaults().prompt(promptChineseSlangSpec); got != custom {
 		t.Fatalf("custom Chinese context prompt was overwritten: %q", got)
 	}
-	filled := (BotConfig{}).WithDefaults().PromptChineseSlangText
+	filled := (BotConfig{}).WithDefaults().prompt(promptChineseSlangSpec)
 	for _, want := range []string{"比喻、拟人、意象、节奏感和角色口吻", "不要只堆形容词", "事实、技术和操作说明仍以清楚准确为先"} {
 		if !strings.Contains(filled, want) {
 			t.Fatalf("default Chinese context prompt is missing %q: %q", want, filled)
@@ -3065,10 +3065,10 @@ func TestRuntimeProactiveReplySplitsBeforeCompression(t *testing.T) {
 	completeReply := strings.Repeat("先检查端口占用，再看启动日志。", 20)
 	provider := &compressionTestProvider{capturingLLMProvider: capturingLLMProvider{reply: completeReply}}
 	runtime := NewRuntime(BotConfig{
-		AgentEnabled:         false,
-		MaxReplyChars:        120,
-		SendChunkIntervalMS:  1,
-		ProactiveReplyPrompt: "custom concise proactive instruction",
+		AgentEnabled:        false,
+		MaxReplyChars:       120,
+		SendChunkIntervalMS: 1,
+		PromptOverrides:     PromptOverrides{promptProactiveReplySpec.Key: "custom concise proactive instruction"},
 	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

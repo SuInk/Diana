@@ -110,10 +110,20 @@ func (r *Runtime) moodToneForConfig(cfg BotConfig, profileID string) string {
 	score := r.moodScore(profileID, r.clock())
 	switch {
 	case score >= moodHappyThreshold:
-		return "你现在心情不错：语气轻快一点，话可以稍微多一点，更愿意接梗。心情是你自己的状态，没人问就不用解释为什么开心。"
+		return cfg.prompt(promptMoodHappySpec)
 	case score <= moodLowThreshold:
-		return "你现在情绪有点低落：话少一点、语气蔫一点，该答的照样答准，但不主动接梗、不硬装活泼。没人问就不要解释，也不要卖惨；有人关心你可以承认心情一般，不编具体理由。"
+		return cfg.prompt(promptMoodLowSpec)
 	default:
 		return ""
 	}
 }
+
+const (
+	promptMoodHappy = "你现在心情不错：语气轻快一点，话可以稍微多一点，更愿意接梗。心情是你自己的状态，没人问就不用解释为什么开心。"
+	promptMoodLow   = "你现在情绪有点低落：话少一点、语气蔫一点，该答的照样答准，但不主动接梗、不硬装活泼。没人问就不要解释，也不要卖惨；有人关心你可以承认心情一般，不编具体理由。"
+)
+
+var (
+	promptMoodHappySpec = tailSpec("mood.happy", "心情：不错", "开启心情、最近被夸得多时放在尾部。", promptMoodHappy)
+	promptMoodLowSpec   = tailSpec("mood.low", "心情：低落", "开启心情、最近被骂得多时放在尾部。", promptMoodLow)
+)

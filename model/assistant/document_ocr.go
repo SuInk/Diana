@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,77 @@ type documentOCRCache struct {
 	Version string            `json:"version"`
 	SavedAt time.Time         `json:"saved_at"`
 	Result  documentOCRResult `json:"result"`
+}
+
+var promptDocumentAnswerSpec = registerPrompt(PromptSpec{
+	Key:   "media.document_answer",
+	Group: PromptGroupMedia,
+	Title: "扫描文档 · 最终回答",
+	Usage: "扫描版 PDF 逐页识别完之后，让模型根据识别结果回答用户对这些文件的提问。",
+	Default: `你是 Diana 的文档分析子代理。请根据已经完成的 OCR 结果回答当前 OneBot v11 消息。
+
+要求：
+- 只回答当前问题；上下文只作参考，不要转而回复旧消息。
+- 不要声称无法读取文件，也不要虚构 OCR 中不存在的内容。
+- 涉及差异或结论时尽量标注文件名和页码。
+- 默认不启用 Markdown，请使用自然的纯文本，避免标题符号、表格语法和过度分条。
+- 内容较长时先给结论，再给必要依据。`,
+})
+
+var promptDocumentPageOCRSpec = registerPrompt(PromptSpec{
+	Key:   "media.document_page_ocr",
+	Group: PromptGroupMedia,
+	Title: "扫描文档 · 逐页转写",
+	Usage: "扫描版 PDF 的每一页渲染成图片后，让视觉模型逐字转写这一页；这段是那次调用的系统提示词。",
+	Default: `你是高精度中文文档 OCR 子代理。严格转写页面中的可辨文字，保持自然阅读顺序。
+
+要求：
+- 不要总结、解释、回答文档内容，也不要补写页面上没有的信息。
+- 标题、正文、脚注、页码都应尽量保留。
+- 表格按行转成清晰纯文本；公式使用可读的纯文本表达。
+- 不使用 Markdown 代码块。页面无可辨文字时只返回“[无可辨文字]”。`,
+})
+
+var promptDocumentPageRequestSpec = registerPrompt(PromptSpec{
+	Key:     "media.document_page_request",
+	Group:   PromptGroupMedia,
+	Title:   "扫描文档 · 单页请求",
+	Usage:   "和每一页图片一起发给视觉模型的那句话，告诉它这是哪个文件的第几页。",
+	Default: "文档《{name}》第 {page}/{total} 页。请完整转写本页。",
+	Vars: []PromptVar{
+		{Name: "name", Description: "文件名"},
+		{Name: "page", Description: "当前页码，从 1 开始"},
+		{Name: "total", Description: "这个文件的总页数"},
+	},
+})
+
+var promptDocumentReduceSpec = registerPrompt(PromptSpec{
+	Key:     "media.document_reduce",
+	Group:   PromptGroupMedia,
+	Title:   "扫描文档 · 分块整理",
+	Usage:   "识别结果太长、装不进最终回答时，先把它切成几块，让模型围绕用户的问题分别整理重点。",
+	Default: "你是文档整理子代理。围绕当前问题整理这段 OCR，保留文件名、页码、关键事实、数字、观点与差异。不要回答最终问题，不要虚构，使用紧凑纯文本。",
+})
+
+type promptOverridesContextKey struct{}
+
+// withPromptOverrides 把机器人的提示词覆盖挂到后台任务的上下文上。文档 OCR 这类
+// 任务跑在 PluginTask 里，手上只有 ctx 和 services，拿不到 Runtime 和配置。
+func withPromptOverrides(ctx context.Context, overrides PromptOverrides) context.Context {
+	if ctx == nil || len(overrides) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, promptOverridesContextKey{}, overrides)
+}
+
+// promptOverridesFromContext 取出 withPromptOverrides 挂上的覆盖；没挂过就是 nil，
+// 全部走内置默认值。
+func promptOverridesFromContext(ctx context.Context) PromptOverrides {
+	if ctx == nil {
+		return nil
+	}
+	overrides, _ := ctx.Value(promptOverridesContextKey{}).(PromptOverrides)
+	return overrides
 }
 
 func newDocumentOCRTask(renderer pdfPageRenderer, prompt string, documents []scannedPDFDocument, knownContext string) PluginTask {
@@ -178,6 +250,7 @@ func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, render
 	if services.Report != nil {
 		services.Report(PluginTaskProgress{Phase: "answer", Message: "OCR 已完成，正在生成最终回复"})
 	}
+	prompts := promptOverridesFromContext(ctx)
 	question := strings.TrimSpace(prompt)
 	if question == "" {
 		question = "请概述这些文件的主要内容，并指出重要结论。"
@@ -190,15 +263,8 @@ func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, render
 	}
 	reply, err := generateReply(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是 Diana 的文档分析子代理。请根据已经完成的 OCR 结果回答当前 OneBot v11 消息。
-
-要求：
-- 只回答当前问题；上下文只作参考，不要转而回复旧消息。
-- 不要声称无法读取文件，也不要虚构 OCR 中不存在的内容。
-- 涉及差异或结论时尽量标注文件名和页码。
-- 默认不启用 Markdown，请使用自然的纯文本，避免标题符号、表格语法和过度分条。
-- 内容较长时先给结论，再给必要依据。`),
+			Role:    llm.RoleSystem,
+			Content: strings.TrimSpace(prompts.text(promptDocumentAnswerSpec)),
 		},
 		{
 			Role:    llm.RoleUser,
@@ -327,17 +393,16 @@ func ocrPDFDocument(ctx context.Context, services PluginTaskServices, renderer p
 func runPageVisionOCR(ctx context.Context, services PluginTaskServices, name string, page int, totalPages int, imageData []byte) (string, error) {
 	callCtx, cancel := context.WithTimeout(ctx, defaultOCRCallTimeout)
 	defer cancel()
-	prompt := fmt.Sprintf("文档《%s》第 %d/%d 页。请完整转写本页。", name, page, totalPages)
+	prompts := promptOverridesFromContext(ctx)
+	prompt := prompts.render(promptDocumentPageRequestSpec, map[string]string{
+		"name":  name,
+		"page":  strconv.Itoa(page),
+		"total": strconv.Itoa(totalPages),
+	})
 	text, err := services.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 		{
-			Role: llm.RoleSystem,
-			Content: strings.TrimSpace(`你是高精度中文文档 OCR 子代理。严格转写页面中的可辨文字，保持自然阅读顺序。
-
-要求：
-- 不要总结、解释、回答文档内容，也不要补写页面上没有的信息。
-- 标题、正文、脚注、页码都应尽量保留。
-- 表格按行转成清晰纯文本；公式使用可读的纯文本表达。
-- 不使用 Markdown 代码块。页面无可辨文字时只返回“[无可辨文字]”。`),
+			Role:    llm.RoleSystem,
+			Content: strings.TrimSpace(prompts.text(promptDocumentPageOCRSpec)),
 		},
 		{
 			Role:    llm.RoleUser,
@@ -404,6 +469,7 @@ func reduceOCRContext(ctx context.Context, services PluginTaskServices, prompt s
 	if workers > maxSubagentLLMConcurrency {
 		workers = maxSubagentLLMConcurrency
 	}
+	prompts := promptOverridesFromContext(ctx)
 	var wg sync.WaitGroup
 	var completed atomic.Int64
 	for worker := 0; worker < workers; worker++ {
@@ -416,7 +482,7 @@ func reduceOCRContext(ctx context.Context, services PluginTaskServices, prompt s
 				result, err := services.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 					{
 						Role:    llm.RoleSystem,
-						Content: "你是文档整理子代理。围绕当前问题整理这段 OCR，保留文件名、页码、关键事实、数字、观点与差异。不要回答最终问题，不要虚构，使用紧凑纯文本。",
+						Content: prompts.text(promptDocumentReduceSpec),
 					},
 					{
 						Role:    llm.RoleUser,

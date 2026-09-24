@@ -27,6 +27,30 @@ const errorNoticeRewritePrompt = `把收到的错误说明改写成一句简短�
 不重新回答原问题，不贴链接、路径、堆栈或技术诊断，不加“出错了”前缀，不使用任何内部控制标记。
 只输出要发送的正文，最多两句话。`
 
+var promptRejectionNoticeSpec = registerPrompt(PromptSpec{
+	Key:     "audit.notice.upstream_rejection",
+	Group:   PromptGroupAudit,
+	Title:   "上游拒绝提示改写",
+	Usage:   "模型供应商拒绝处理这次请求时，把固定的拒绝文案按人设改写成一句话发给用户。写不出来就发原文案。",
+	Default: rejectionNoticeRewritePrompt,
+})
+
+var promptAccountSafetyNoticeSpec = registerPrompt(PromptSpec{
+	Key:     "audit.notice.account_safety",
+	Group:   PromptGroupAudit,
+	Title:   "账号安全拦截提示改写",
+	Usage:   "候选回复没通过账号安全审核、不发了的时候，把固定提示按人设改写成一句话发给用户，不透露被拦的内容。",
+	Default: accountSafetyNoticeRewritePrompt,
+})
+
+var promptErrorNoticeSpec = registerPrompt(PromptSpec{
+	Key:     "audit.notice.error",
+	Group:   PromptGroupAudit,
+	Title:   "错误提示改写",
+	Usage:   "处理失败、要在聊天里说明原因时，把已脱敏的错误说明按人设改写成一句话。模型本身不可用时不调用，直接发原说明。",
+	Default: errorNoticeRewritePrompt,
+})
+
 // llmUnusableForRewrite 判断「这次失败本身就说明模型现在用不了」。
 //
 // 用不了还去调改写，只会等满超时再退回原文，白白把一条本该立刻发出的提示拖慢十秒。
@@ -44,14 +68,14 @@ func llmUnusableForRewrite(cause error) bool {
 // 或错误细节。其余错误交的是 publicChatErrorMessage 的结果——那正是不改写时会原样
 // 发进聊天的那句，已经过 sanitizePublicErrorDetail 抹掉凭据、令牌、URL、主机名和
 // 路径，所以经手改写并不会多暴露任何东西。
-func rejectionNoticeRewriteSource(cause error) (source, prompt, purpose string, ok bool) {
+func rejectionNoticeRewriteSource(cause error, overrides PromptOverrides) (source, prompt, purpose string, ok bool) {
 	if errors.Is(cause, llm.ErrUnverifiedRejection) {
-		return llm.UnverifiedRejectionNotice, rejectionNoticeRewritePrompt, PurposeUpstreamRejectionNotice, true
+		return llm.UnverifiedRejectionNotice, overrides.text(promptRejectionNoticeSpec), PurposeUpstreamRejectionNotice, true
 	}
 	var safetyErr *replyAccountSafetyRejectedError
 	if errors.As(cause, &safetyErr) {
 		// 交给模型的是中性文案，不是 safetyErr 里那段写明命中什么的内部理由。
-		return accountSafetyPublicNotice, accountSafetyNoticeRewritePrompt, PurposeAccountSafetyNotice, true
+		return accountSafetyPublicNotice, overrides.text(promptAccountSafetyNoticeSpec), PurposeAccountSafetyNotice, true
 	}
 	if cause == nil || llmUnusableForRewrite(cause) {
 		return "", "", "", false
@@ -60,15 +84,18 @@ func rejectionNoticeRewriteSource(cause error) (source, prompt, purpose string, 
 	if detail == "" {
 		return "", "", "", false
 	}
-	return detail, errorNoticeRewritePrompt, PurposeErrorNotice, true
+	return detail, overrides.text(promptErrorNoticeSpec), PurposeErrorNotice, true
 }
 
 // The model only ever sees text that is already cleared for the chat: a fixed
 // notice, or the sanitized public error detail. Never the rejected prompt,
 // conversation history, or provider credentials. No Agent/tool loop.
 func (r *Runtime) rewriteRejectionNotice(ctx context.Context, event MessageEvent, cause error) (string, bool) {
-	source, prompt, purpose, ok := rejectionNoticeRewriteSource(cause)
-	if !ok || ctx.Err() != nil {
+	if ctx.Err() != nil {
+		return "", false
+	}
+	source, prompt, purpose, ok := rejectionNoticeRewriteSource(cause, r.effectiveConfigForEvent(event).PromptOverrides)
+	if !ok {
 		return "", false
 	}
 	timeout := 10 * time.Second

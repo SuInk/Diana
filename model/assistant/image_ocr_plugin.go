@@ -473,19 +473,37 @@ func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, 
 	return text
 }
 
-func (r *Runtime) llmImageDescription(callCtx context.Context, event MessageEvent, cfg imageOCRConfig, imageURL string) (string, error) {
-	callCtx = withLLMUsagePurpose(withLLMUsageContext(callCtx, event), "image_describe")
-	systemPrompt := `你是图片理解子代理。对话主模型无法直接查看图片，请客观描述这张图片，让只读文字的人能明白图里是什么。
+const imageDescribePromptBase = `你是图片理解子代理。对话主模型无法直接查看图片，请客观描述这张图片，让只读文字的人能明白图里是什么。
 
 要求：
 - 描述画面主体、场景、动作与显著细节，聊天截图说明谁在说什么，表情包说明表达的情绪。
 - 不要臆测图片外的信息，不确定就说不确定。
 - 用中文陈述，控制在 200 字以内，不使用 Markdown 代码块。`
+
+var promptImageDescribeSpec = registerPrompt(PromptSpec{
+	Key:     "media.image_describe",
+	Group:   PromptGroupMedia,
+	Title:   "图片描述（未开文字转写）",
+	Usage:   "图片识别插件用仅文字模式、且没开文字转写时，让视觉模型把图片描述成文字交给主模型。",
+	Default: imageDescribePromptBase + "\n- 图中若有关键文字，请一并转述出来。",
+})
+
+var promptImageDescribeWithOCRSpec = registerPrompt(PromptSpec{
+	Key:     "media.image_describe_with_ocr",
+	Group:   PromptGroupMedia,
+	Title:   "图片描述（已开文字转写）",
+	Usage:   "图片识别插件用仅文字模式、同时开着文字转写时，让视觉模型描述画面；图里的文字另由转写提供。",
+	Default: imageDescribePromptBase + "\n- 图中文字另有 OCR 转写，不必逐字抄录，点到关键文字即可。",
+})
+
+func (r *Runtime) llmImageDescription(callCtx context.Context, event MessageEvent, cfg imageOCRConfig, imageURL string) (string, error) {
+	callCtx = withLLMUsagePurpose(withLLMUsageContext(callCtx, event), "image_describe")
+	// 转写开着时文字另有来源，描述里只点到为止；两种情况各一段，界面上分开改。
+	spec := promptImageDescribeSpec
 	if cfg.ocrEnabled() {
-		systemPrompt += "\n- 图中文字另有 OCR 转写，不必逐字抄录，点到关键文字即可。"
-	} else {
-		systemPrompt += "\n- 图中若有关键文字，请一并转述出来。"
+		spec = promptImageDescribeWithOCRSpec
 	}
+	systemPrompt := r.effectiveConfigForEvent(event).prompt(spec)
 	prompt := "请描述这张图片的内容。"
 	return r.runLLMProviderForGroup(callCtx, llm.GroupVision, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{
@@ -641,6 +659,21 @@ func imageOCRDataURLBytes(imageURL string) ([]byte, string, error) {
 	return data, ext, nil
 }
 
+// 「无可辨文字」标记会被原样比对，锁在 Contract 里。
+var promptImageOCRSpec = registerPrompt(PromptSpec{
+	Key:   "media.image_ocr",
+	Group: PromptGroupMedia,
+	Title: "图片文字转写",
+	Usage: "图片识别插件用模型做文字转写时，让视觉模型逐字抄出图里的文字。",
+	Default: `你是高精度图片文字转写（OCR）子代理。严格转写图片中的可辨文字，保持自然阅读顺序。
+
+要求：
+- 只转写文字，不要描述画面、总结或回答图片内容，也不要补写图片上没有的信息。
+- 聊天截图保留发言人与内容的对应；表格按行转成清晰纯文本。
+- 不使用 Markdown 代码块。`,
+	Contract: "图片没有可辨文字时只返回“" + imageOCRNoTextMarker + "”。",
+})
+
 func (r *Runtime) llmImageOCRTranscription(callCtx context.Context, event MessageEvent, cfg imageOCRConfig, imageURL string) (string, error) {
 	callCtx = withLLMUsagePurpose(withLLMUsageContext(callCtx, event), "image_ocr")
 	prompt := "请完整转写这张图片里的文字。"
@@ -649,13 +682,8 @@ func (r *Runtime) llmImageOCRTranscription(callCtx context.Context, event Messag
 			Model: cfg.Model,
 			Messages: []llm.Message{
 				{
-					Role: llm.RoleSystem,
-					Content: strings.TrimSpace(`你是高精度图片文字转写（OCR）子代理。严格转写图片中的可辨文字，保持自然阅读顺序。
-
-要求：
-- 只转写文字，不要描述画面、总结或回答图片内容，也不要补写图片上没有的信息。
-- 聊天截图保留发言人与内容的对应；表格按行转成清晰纯文本。
-- 不使用 Markdown 代码块。图片没有可辨文字时只返回“[无可辨文字]”。`),
+					Role:    llm.RoleSystem,
+					Content: strings.TrimSpace(r.effectiveConfigForEvent(event).prompt(promptImageOCRSpec)),
 				},
 				{
 					Role:    llm.RoleUser,

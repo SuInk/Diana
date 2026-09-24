@@ -39,105 +39,107 @@ type dianaRuntimeSnapshot struct {
 }
 
 type dianaBotConfigSnapshot struct {
-	ID                              string                    `json:"id,omitempty"`
-	Name                            string                    `json:"name,omitempty"`
-	Platform                        string                    `json:"platform,omitempty"`
-	AvatarURL                       string                    `json:"avatar_url,omitempty"`
-	Enabled                         bool                      `json:"enabled"`
-	OneBotTransport                 string                    `json:"onebot_transport,omitempty"`
-	OneBotWSEndpoint                string                    `json:"onebot_ws_endpoint,omitempty"`
-	OneBotHTTPURL                   string                    `json:"onebot_http_url,omitempty"`
-	OneBotHTTPSecretConfigured      bool                      `json:"onebot_http_secret_configured"`
-	OneBotReverseWSEndpoint         string                    `json:"onebot_reverse_ws_endpoint,omitempty"`
-	OneBotAccessTokenConfigured     bool                      `json:"onebot_access_token_configured"`
-	NoneBotBridgeEnabled            bool                      `json:"nonebot_bridge_enabled"`
-	NoneBotBridgeEndpoint           string                    `json:"nonebot_bridge_endpoint,omitempty"`
-	NoneBotBridgeTokenConfigured    bool                      `json:"nonebot_bridge_token_configured"`
-	BotAccount                      string                    `json:"bot_account,omitempty"`
-	OwnerID                         string                    `json:"owner_id,omitempty"`
-	OwnerLoginEnabled               bool                      `json:"owner_login_enabled"`
-	GroupTriggers                   []string                  `json:"group_triggers,omitempty"`
-	GroupTriggerMode                AliasTriggerMode          `json:"group_trigger_mode,omitempty"`
-	DisabledGroups                  []string                  `json:"disabled_groups,omitempty"`
-	GroupAdmission                  GroupAdmission            `json:"group_admission"`
-	PrivateAdmission                PrivateAdmission          `json:"private_admission"`
-	ReplyGate                       *ReplyGate                `json:"reply_gate,omitempty"`
-	WelcomeEnabled                  bool                      `json:"welcome_enabled"`
-	WelcomeMessage                  string                    `json:"welcome_message,omitempty"`
-	WelcomeMode                     WelcomeMode               `json:"welcome_mode,omitempty"`
-	WelcomeTemplates                []string                  `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds       int                       `json:"welcome_llm_cooldown_seconds,omitempty"`
-	SystemPromptConfigured          bool                      `json:"system_prompt_configured"`
-	SystemPromptChars               int                       `json:"system_prompt_chars,omitempty"`
-	ReplyReferenceMode              ReplyDecorationMode       `json:"reply_reference_mode"`
-	MentionUserMode                 ReplyDecorationMode       `json:"mention_user_mode"`
-	MarkdownToPlain                 bool                      `json:"markdown_to_plain"`
-	ErrorNotifyEnabled              bool                      `json:"error_notify_enabled"`
-	MutedReplyPauseEnabled          bool                      `json:"muted_reply_pause_enabled"`
-	MutedVoiceTranscriptionEnabled  bool                      `json:"muted_voice_transcription_enabled"`
-	MutedImageDescriptionEnabled    bool                      `json:"muted_image_description_enabled"`
-	MutedReplyJudgmentEnabled       bool                      `json:"muted_reply_judgment_enabled"`
-	ErrorPersonaReplyEnabled        bool                      `json:"error_persona_reply_enabled"`
-	ErrorReplyPrefix                string                    `json:"error_reply_prefix,omitempty"`
-	SendRetryAttempts               int                       `json:"send_retry_attempts"`
-	SendBackoffInitialSeconds       int                       `json:"send_backoff_initial_seconds"`
-	SendBackoffMaxSeconds           int                       `json:"send_backoff_max_seconds"`
-	SendFailureWindowMinutes        int                       `json:"send_failure_window_minutes"`
-	SendDropCooldownMinutes         int                       `json:"send_drop_cooldown_minutes"`
-	InboundRetryMaxAttempts         int                       `json:"inbound_retry_max_attempts"`
-	SendChunkIntervalMS             int                       `json:"send_chunk_interval_ms"`
-	RecurringFailureAlertThreshold  int                       `json:"recurring_failure_alert_threshold"`
-	PrivateClosingGrace             int                       `json:"private_closing_grace"`
-	InboundGroupConcurrency         int                       `json:"inbound_group_concurrency"`
-	InboundPrivateConcurrency       int                       `json:"inbound_private_concurrency"`
-	PromptInjectTime                bool                      `json:"prompt_inject_time"`
-	PromptInjectPlaintextRules      bool                      `json:"prompt_inject_plaintext_rules"`
-	PromptInjectGroupSender         bool                      `json:"prompt_inject_group_sender"`
-	PromptChineseSlangHint          bool                      `json:"prompt_chinese_slang_hint"`
-	PromptChineseSlangChars         int                       `json:"prompt_chinese_slang_chars,omitempty"`
-	PromptPlaintextRulesChars       int                       `json:"prompt_plaintext_rules_chars,omitempty"`
-	PromptTimeTemplateConfigured    bool                      `json:"prompt_time_template_configured"`
-	PromptGroupSenderConfigured     bool                      `json:"prompt_group_sender_template_configured"`
-	PromptImageOnlyConfigured       bool                      `json:"prompt_image_only_text_configured"`
-	PromptWakeOnlyConfigured        bool                      `json:"prompt_wake_only_text_configured"`
-	ModelRoles                      map[string]ModelRole      `json:"model_roles,omitempty"`
-	BotReplyLoopDetectionEnabled    bool                      `json:"bot_reply_loop_detection_enabled"`
-	ProactiveReplyRouterPromptChars int                       `json:"proactive_reply_router_prompt_chars,omitempty"`
-	ProactiveReplyPromptChars       int                       `json:"proactive_reply_prompt_chars,omitempty"`
-	MaxInputChars                   int                       `json:"max_input_chars"`
-	MaxReplyChars                   int                       `json:"max_reply_chars"`
-	DirectReplyChunkSize            int                       `json:"direct_reply_chunk_size"`
-	ForwardReplyThreshold           int                       `json:"forward_reply_threshold"`
-	RecallReplyMode                 RecallReplyMode           `json:"recall_reply_mode"`
-	RecallReplyAutoDeleteEnabled    bool                      `json:"recall_reply_auto_delete_enabled"`
-	RecallReplyTTLSeconds           int                       `json:"recall_reply_auto_delete_delay_seconds"`
-	OwnerLLMConfigEnabled           bool                      `json:"owner_llm_config_enabled"`
-	LLMIdentityMaskingEnabled       bool                      `json:"llm_identity_masking_enabled"`
-	RecentContextLimit              int                       `json:"recent_context_limit"`
-	ContextSummaryThreshold         int                       `json:"context_summary_threshold"`
-	LongTermMemoryEnabled           bool                      `json:"long_term_memory_enabled"`
-	CrossGroupMemoryEnabled         bool                      `json:"cross_group_memory_enabled"`
-	CrossPlatformMemoryEnabled      bool                      `json:"cross_platform_memory_enabled"`
-	WorldBookEnabled                bool                      `json:"world_book_enabled"`
-	SelfNoteEnabled                 bool                      `json:"self_note_enabled"`
-	RomanceEnabled                  bool                      `json:"romance_enabled"`
-	MoodEnabled                     bool                      `json:"mood_enabled"`
-	PokeReplyEnabled                bool                      `json:"poke_reply_enabled"`
-	ExpressionLearningEnabled       bool                      `json:"expression_learning_enabled"`
-	DictSegmentEnabled              bool                      `json:"dict_segment_enabled"`
-	SemanticSearchEnabled           bool                      `json:"semantic_search_enabled"`
-	ProactiveReplyChance            float64                   `json:"proactive_reply_chance"`
-	ProactiveReplyThreshold         float64                   `json:"proactive_reply_threshold"`
-	ChatInEnabled                   bool                      `json:"chat_in_enabled"`
-	ChatInLevel                     string                    `json:"chat_in_level"`
-	Participation                   *ParticipationPreferences `json:"participation"`
-	ChatInThreshold                 float64                   `json:"chat_in_threshold"`
-	ChatInChance                    float64                   `json:"chat_in_chance"`
-	ChatInCooldownSeconds           int                       `json:"chat_in_cooldown_seconds"`
-	ReplyRules                      []ReplyRule               `json:"reply_rules,omitempty"`
-	MaxBotConcurrency               int                       `json:"max_bot_concurrency"`
-	RequestTimeoutMS                int64                     `json:"request_timeout_ms"`
-	Agent                           dianaAgentConfigSnapshot  `json:"agent"`
+	ID                              string               `json:"id,omitempty"`
+	Name                            string               `json:"name,omitempty"`
+	Platform                        string               `json:"platform,omitempty"`
+	AvatarURL                       string               `json:"avatar_url,omitempty"`
+	Enabled                         bool                 `json:"enabled"`
+	OneBotTransport                 string               `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint                string               `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL                   string               `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecretConfigured      bool                 `json:"onebot_http_secret_configured"`
+	OneBotReverseWSEndpoint         string               `json:"onebot_reverse_ws_endpoint,omitempty"`
+	OneBotAccessTokenConfigured     bool                 `json:"onebot_access_token_configured"`
+	NoneBotBridgeEnabled            bool                 `json:"nonebot_bridge_enabled"`
+	NoneBotBridgeEndpoint           string               `json:"nonebot_bridge_endpoint,omitempty"`
+	NoneBotBridgeTokenConfigured    bool                 `json:"nonebot_bridge_token_configured"`
+	BotAccount                      string               `json:"bot_account,omitempty"`
+	OwnerID                         string               `json:"owner_id,omitempty"`
+	OwnerLoginEnabled               bool                 `json:"owner_login_enabled"`
+	GroupTriggers                   []string             `json:"group_triggers,omitempty"`
+	GroupTriggerMode                AliasTriggerMode     `json:"group_trigger_mode,omitempty"`
+	DisabledGroups                  []string             `json:"disabled_groups,omitempty"`
+	GroupAdmission                  GroupAdmission       `json:"group_admission"`
+	PrivateAdmission                PrivateAdmission     `json:"private_admission"`
+	ReplyGate                       *ReplyGate           `json:"reply_gate,omitempty"`
+	WelcomeEnabled                  bool                 `json:"welcome_enabled"`
+	WelcomeMessage                  string               `json:"welcome_message,omitempty"`
+	WelcomeMode                     WelcomeMode          `json:"welcome_mode,omitempty"`
+	WelcomeTemplates                []string             `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds       int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
+	SystemPromptConfigured          bool                 `json:"system_prompt_configured"`
+	SystemPromptChars               int                  `json:"system_prompt_chars,omitempty"`
+	ReplyReferenceMode              ReplyDecorationMode  `json:"reply_reference_mode"`
+	MentionUserMode                 ReplyDecorationMode  `json:"mention_user_mode"`
+	MarkdownToPlain                 bool                 `json:"markdown_to_plain"`
+	ErrorNotifyEnabled              bool                 `json:"error_notify_enabled"`
+	MutedReplyPauseEnabled          bool                 `json:"muted_reply_pause_enabled"`
+	MutedVoiceTranscriptionEnabled  bool                 `json:"muted_voice_transcription_enabled"`
+	MutedImageDescriptionEnabled    bool                 `json:"muted_image_description_enabled"`
+	MutedReplyJudgmentEnabled       bool                 `json:"muted_reply_judgment_enabled"`
+	ErrorPersonaReplyEnabled        bool                 `json:"error_persona_reply_enabled"`
+	ErrorReplyPrefix                string               `json:"error_reply_prefix,omitempty"`
+	SendRetryAttempts               int                  `json:"send_retry_attempts"`
+	SendBackoffInitialSeconds       int                  `json:"send_backoff_initial_seconds"`
+	SendBackoffMaxSeconds           int                  `json:"send_backoff_max_seconds"`
+	SendFailureWindowMinutes        int                  `json:"send_failure_window_minutes"`
+	SendDropCooldownMinutes         int                  `json:"send_drop_cooldown_minutes"`
+	InboundRetryMaxAttempts         int                  `json:"inbound_retry_max_attempts"`
+	SendChunkIntervalMS             int                  `json:"send_chunk_interval_ms"`
+	RecurringFailureAlertThreshold  int                  `json:"recurring_failure_alert_threshold"`
+	PrivateClosingGrace             int                  `json:"private_closing_grace"`
+	InboundGroupConcurrency         int                  `json:"inbound_group_concurrency"`
+	InboundPrivateConcurrency       int                  `json:"inbound_private_concurrency"`
+	PromptInjectTime                bool                 `json:"prompt_inject_time"`
+	PromptInjectPlaintextRules      bool                 `json:"prompt_inject_plaintext_rules"`
+	PromptInjectGroupSender         bool                 `json:"prompt_inject_group_sender"`
+	PromptChineseSlangHint          bool                 `json:"prompt_chinese_slang_hint"`
+	PromptChineseSlangChars         int                  `json:"prompt_chinese_slang_chars,omitempty"`
+	PromptPlaintextRulesChars       int                  `json:"prompt_plaintext_rules_chars,omitempty"`
+	PromptTimeTemplateConfigured    bool                 `json:"prompt_time_template_configured"`
+	PromptGroupSenderConfigured     bool                 `json:"prompt_group_sender_template_configured"`
+	PromptImageOnlyConfigured       bool                 `json:"prompt_image_only_text_configured"`
+	PromptWakeOnlyConfigured        bool                 `json:"prompt_wake_only_text_configured"`
+	ModelRoles                      map[string]ModelRole `json:"model_roles,omitempty"`
+	BotReplyLoopDetectionEnabled    bool                 `json:"bot_reply_loop_detection_enabled"`
+	ProactiveReplyRouterPromptChars int                  `json:"proactive_reply_router_prompt_chars,omitempty"`
+	ProactiveReplyPromptChars       int                  `json:"proactive_reply_prompt_chars,omitempty"`
+	// CustomizedPrompts 列出在界面上改过的内置提示词键，正文不外露。
+	CustomizedPrompts            []string                  `json:"customized_prompts,omitempty"`
+	MaxInputChars                int                       `json:"max_input_chars"`
+	MaxReplyChars                int                       `json:"max_reply_chars"`
+	DirectReplyChunkSize         int                       `json:"direct_reply_chunk_size"`
+	ForwardReplyThreshold        int                       `json:"forward_reply_threshold"`
+	RecallReplyMode              RecallReplyMode           `json:"recall_reply_mode"`
+	RecallReplyAutoDeleteEnabled bool                      `json:"recall_reply_auto_delete_enabled"`
+	RecallReplyTTLSeconds        int                       `json:"recall_reply_auto_delete_delay_seconds"`
+	OwnerLLMConfigEnabled        bool                      `json:"owner_llm_config_enabled"`
+	LLMIdentityMaskingEnabled    bool                      `json:"llm_identity_masking_enabled"`
+	RecentContextLimit           int                       `json:"recent_context_limit"`
+	ContextSummaryThreshold      int                       `json:"context_summary_threshold"`
+	LongTermMemoryEnabled        bool                      `json:"long_term_memory_enabled"`
+	CrossGroupMemoryEnabled      bool                      `json:"cross_group_memory_enabled"`
+	CrossPlatformMemoryEnabled   bool                      `json:"cross_platform_memory_enabled"`
+	WorldBookEnabled             bool                      `json:"world_book_enabled"`
+	SelfNoteEnabled              bool                      `json:"self_note_enabled"`
+	RomanceEnabled               bool                      `json:"romance_enabled"`
+	MoodEnabled                  bool                      `json:"mood_enabled"`
+	PokeReplyEnabled             bool                      `json:"poke_reply_enabled"`
+	ExpressionLearningEnabled    bool                      `json:"expression_learning_enabled"`
+	DictSegmentEnabled           bool                      `json:"dict_segment_enabled"`
+	SemanticSearchEnabled        bool                      `json:"semantic_search_enabled"`
+	ProactiveReplyChance         float64                   `json:"proactive_reply_chance"`
+	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold"`
+	ChatInEnabled                bool                      `json:"chat_in_enabled"`
+	ChatInLevel                  string                    `json:"chat_in_level"`
+	Participation                *ParticipationPreferences `json:"participation"`
+	ChatInThreshold              float64                   `json:"chat_in_threshold"`
+	ChatInChance                 float64                   `json:"chat_in_chance"`
+	ChatInCooldownSeconds        int                       `json:"chat_in_cooldown_seconds"`
+	ReplyRules                   []ReplyRule               `json:"reply_rules,omitempty"`
+	MaxBotConcurrency            int                       `json:"max_bot_concurrency"`
+	RequestTimeoutMS             int64                     `json:"request_timeout_ms"`
+	Agent                        dianaAgentConfigSnapshot  `json:"agent"`
 }
 
 type dianaAgentConfigSnapshot struct {
@@ -343,16 +345,17 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		PromptInjectPlaintextRules:      boolValue(cfg.PromptInjectPlaintextRules, true),
 		PromptInjectGroupSender:         boolValue(cfg.PromptInjectGroupSender, true),
 		PromptChineseSlangHint:          boolValue(cfg.PromptChineseSlangHint, true),
-		PromptChineseSlangChars:         len([]rune(cfg.PromptChineseSlangText)),
-		PromptPlaintextRulesChars:       len([]rune(cfg.PromptPlaintextRulesText)),
-		PromptTimeTemplateConfigured:    strings.TrimSpace(cfg.PromptTimeTemplate) != "",
-		PromptGroupSenderConfigured:     strings.TrimSpace(cfg.PromptGroupSenderTemplate) != "",
-		PromptImageOnlyConfigured:       strings.TrimSpace(cfg.PromptImageOnlyText) != "",
-		PromptWakeOnlyConfigured:        strings.TrimSpace(cfg.PromptWakeOnlyText) != "",
+		PromptChineseSlangChars:         len([]rune(cfg.prompt(promptChineseSlangSpec))),
+		PromptPlaintextRulesChars:       len([]rune(cfg.prompt(promptPlaintextRulesSpec))),
+		PromptTimeTemplateConfigured:    cfg.PromptOverrides.isCustomized(promptTimeTemplateSpec),
+		PromptGroupSenderConfigured:     cfg.PromptOverrides.isCustomized(promptGroupSenderSpec),
+		PromptImageOnlyConfigured:       cfg.PromptOverrides.isCustomized(promptImageOnlySpec),
+		PromptWakeOnlyConfigured:        cfg.PromptOverrides.isCustomized(promptWakeOnlySpec),
 		ModelRoles:                      normalizeModelRoles(cfg.ModelRoles),
 		BotReplyLoopDetectionEnabled:    boolValue(cfg.BotReplyLoopDetectionEnabled, true),
-		ProactiveReplyRouterPromptChars: len([]rune(cfg.ProactiveReplyRouterPrompt)),
-		ProactiveReplyPromptChars:       len([]rune(cfg.ProactiveReplyPrompt)),
+		ProactiveReplyRouterPromptChars: len([]rune(cfg.prompt(promptLegacyRouterSpec))),
+		ProactiveReplyPromptChars:       len([]rune(cfg.prompt(promptProactiveReplySpec))),
+		CustomizedPrompts:               customizedPromptKeys(cfg.PromptOverrides),
 		MaxInputChars:                   cfg.MaxInputChars,
 		MaxReplyChars:                   cfg.MaxReplyChars,
 		DirectReplyChunkSize:            cfg.DirectReplyChunkSize,

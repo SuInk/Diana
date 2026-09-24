@@ -442,7 +442,7 @@ func TestSystemPromptUsesPlaintextOverrideOnlyWhenEnabled(t *testing.T) {
 		{name: "disabled", flag: &off, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			runtime := NewRuntime(BotConfig{Platform: PlatformTelegram, MarkdownToPlain: test.flag, PromptPlaintextRulesText: "只发自定义纯文本"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			runtime := NewRuntime(BotConfig{Platform: PlatformTelegram, MarkdownToPlain: test.flag, PromptOverrides: PromptOverrides{promptPlaintextRulesSpec.Key: "只发自定义纯文本"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 			prompt := runtime.systemPrompt(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, nil)
 			if got := strings.Contains(prompt, "只发自定义纯文本"); got != test.want {
 				t.Fatalf("custom plaintext present=%t, want %t:\n%s", got, test.want, prompt)
@@ -453,11 +453,13 @@ func TestSystemPromptUsesPlaintextOverrideOnlyWhenEnabled(t *testing.T) {
 
 func TestSystemPromptUsesCustomTemplates(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		SystemPrompt:              "自定义人设",
-		PromptChineseSlangText:    "自定义中文语境",
-		PromptPlaintextRulesText:  "自定义输出规则",
-		PromptTimeTemplate:        "时间={datetime}，星期={weekday}",
-		PromptGroupSenderTemplate: "当前发言者={sender}",
+		SystemPrompt: "自定义人设",
+		PromptOverrides: PromptOverrides{
+			promptChineseSlangSpec.Key:   "自定义中文语境",
+			promptPlaintextRulesSpec.Key: "自定义输出规则",
+			promptTimeTemplateSpec.Key:   "时间={datetime}，星期={weekday}",
+			promptGroupSenderSpec.Key:    "当前发言者={sender}",
+		},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
 	event := MessageEvent{
@@ -473,7 +475,7 @@ func TestSystemPromptUsesCustomTemplates(t *testing.T) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	// PromptTimeTemplate 仍然生效，只是渲染到尾部时钟消息而不是人设提示词。
+	// 时间模板仍然生效，只是渲染到尾部时钟消息而不是人设提示词。
 	clock := runtime.runtimeClockPrompt(event)
 	for _, want := range []string{"时间=", "星期="} {
 		if !strings.Contains(clock, want) {
@@ -489,8 +491,10 @@ func TestSystemPromptUsesCustomTemplates(t *testing.T) {
 
 func TestCleanInputUsesCustomFallbackPrompts(t *testing.T) {
 	runtime := NewRuntime(BotConfig{
-		PromptImageOnlyText: "自定义图片请求",
-		PromptWakeOnlyText:  "自定义唤醒回应",
+		PromptOverrides: PromptOverrides{
+			promptImageOnlySpec.Key: "自定义图片请求",
+			promptWakeOnlySpec.Key:  "自定义唤醒回应",
+		},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
 	imageEvent := MessageEvent{

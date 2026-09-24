@@ -57,7 +57,7 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 		},
 	}
 	prefs := ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "medium", Desire: 50}
-	spec := participationDecisionSpec()
+	spec := participationDecisionSpec(nil)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// 路由上下文里本来就带着机器人自己的身份，缺了它「叫没叫它」这道题无从判起。

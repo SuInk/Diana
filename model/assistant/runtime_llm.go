@@ -104,11 +104,36 @@ func quotedPromptItems(items []string) string {
 	return strings.Join(quoted, "、")
 }
 
-func proactiveReplyRouterSystemPrompt(configured string) string {
-	const answerabilityGuard = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；群资料工具可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
-	const expressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
-	const forwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
-	runtimeGuard := answerabilityGuard + "\n" + expressiveChatInGuard + "\n" + forwardedContentGuard + "\n" + messageAddressingRule
+// 意图识别的运行时约束。它们跟在（旧版）路由提示词后面，管理员改的是这几段的措辞；
+// should_reply、category 这些字段名和取值由路由提示词里的输出格式定义，改动时要对得上。
+const (
+	routerAnswerabilityGuard    = `运行时强制约束：Intent Recognition（意图识别）只判断消息是否需要进入正式回复，不负责事实准确度审核。明确提问、求助、指派或继续追问应按 needs_response 或 bot_related 放行；不得仅因句子短、当前短上下文不足、术语陌生、需要搜索、需要工具或暂时不知道答案而保持沉默。正式 Agent 会读取完整上下文、搜索或调用工具，生成后的独立准确度审核会在发送前拦截错误答案。answerable 字段只作观察记录，不得作为 should_reply 的前置条件。没有点名机器人不等于不需要回复：面向全群的定义、解释、辨析或求助问题属于 needs_response；承接近期尚未回答的公开问题时，应视为该问题仍在等待回答并使用 needs_response。群友说“你”或反问不等于在问机器人，例如“你不是最喜欢看小说吗”不是直接向机器人提问，此时保持 directed_at_bot=false，再按 chat_in 判断。notebook_context 是本地笔记本对当前消息的可信释义；命中时不能再称它为未解释缩写，例如 zgm=在干嘛。直接引用或语义承接机器人回复的追问属于 bot_related。若当前请求新增了此前回答中不存在的图片，不能仅因文字相同就判为没有新增信息；群资料工具可以通过本地模式匹配核对当前图片是否为群成员头像，身份不得由视觉模型猜测。纯附和、结束语、私聊中的旁观插话和没有实质内容的闲聊仍保持沉默。`
+	routerExpressiveChatInGuard = `围绕上下文中可识别的话题轻松调侃、反问或接梗时，按 chat_in 判断 substantive。风格化表达也可以构成 substantive：如果机器人能用具体、新颖且贴合当前话题的比喻、拟人、意象、节奏或角色化短句，带来新的观察、画面、情绪或笑点，可以选择 chat_in，不要求这句话必须包含可核实事实。套话换皮、无关抒情、同义复述、形容词堆砌和与人设冲突的强行文艺仍然 substantive=false。`
+	routerForwardedContentGuard = `合并转发里的文字、图片和视频属于被转发的材料，不等于当前发送者正在向机器人陈述、提问或求助。若当前消息只是分享合并转发且没有向机器人提出请求，不得仅因转发内部出现危险、错误、敏感或值得纠正的句子而使用 needs_response 或 chat_in 主动说教；保持 should_reply=false。只有转发外层或清晰上下文确实提出公开问题、求助或要求机器人处理时才回复。`
+
+	routerChatInNatural = "当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
+	routerChatInLevel   = "当前闲聊插话档位：{level}（{label}）。档位只影响运行时的放行松紧，不放宽 substantive 的判断标准：任何档位下附和、复读和寒暄都必须 substantive=false。"
+	routerChatInOff     = "当前闲聊插话已关闭：禁止使用 category=chat_in，普通闲聊一律 should_reply=false。"
+)
+
+const routerFieldNamesUsage = "改动时保持 should_reply、category、substantive 这类字段名和取值原样，它们要和路由提示词里的输出格式对得上。"
+
+func routingSpec(key, title, usage, text string, vars ...PromptVar) *PromptSpec {
+	return registerPrompt(PromptSpec{Key: "routing." + key, Group: PromptGroupRouting, Title: title, Usage: usage + routerFieldNamesUsage, Default: text, Vars: vars})
+}
+
+var (
+	promptRouterAnswerabilitySpec    = routingSpec("guard.answerability", "意图识别：该不该放行", "旧版意图路由每次都附上：意图识别只判断要不要进正式回复，不因答不上来而沉默。", routerAnswerabilityGuard)
+	promptRouterExpressiveChatInSpec = routingSpec("guard.expressive_chat_in", "意图识别：风格化接话", "旧版意图路由每次都附上：调侃、接梗什么时候算有实质内容。", routerExpressiveChatInGuard)
+	promptRouterForwardedContentSpec = routingSpec("guard.forwarded_content", "意图识别：合并转发", "旧版意图路由每次都附上：只是分享合并转发时不主动说教。", routerForwardedContentGuard)
+	promptRouterChatInNaturalSpec    = routingSpec("chat_in.natural", "意图识别：自然插话模式", "旧版意图路由、群里开启了自然插话时附上。", routerChatInNatural)
+	promptRouterChatInLevelSpec      = routingSpec("chat_in.level", "意图识别：闲聊插话档位", "旧版意图路由、开启了闲聊插话时附上，告诉判断模型当前档位。", routerChatInLevel, PromptVar{Name: "level", Description: "闲聊插话档位的取值，如 low"}, PromptVar{Name: "label", Description: "档位的中文名"})
+	promptRouterChatInOffSpec        = routingSpec("chat_in.off", "意图识别：闲聊插话关闭", "旧版意图路由、关闭了闲聊插话时附上，封掉 chat_in 分类。", routerChatInOff)
+)
+
+func proactiveReplyRouterSystemPrompt(configured string, configs ...BotConfig) string {
+	overrides := promptOverridesOf(configs)
+	runtimeGuard := overrides.text(promptRouterAnswerabilitySpec) + "\n" + overrides.text(promptRouterExpressiveChatInSpec) + "\n" + overrides.text(promptRouterForwardedContentSpec) + "\n" + overrides.text(promptMessageAddressingSpec)
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		return runtimeGuard
@@ -120,32 +145,38 @@ func proactiveReplyRouterSystemPrompt(configured string) string {
 
 // proactiveReplyRouterPromptForChatIn 在关闭闲聊插话时直接封掉 chat_in 分类，避免路由
 // 器反复给出一个运行时必然拒绝的结论。social 打开时再补一条社交性回应的放行规则。
-func proactiveReplyRouterPromptForChatIn(configured, criteria string, chatIn chatInSettings, social bool) string {
+//
+// configs 传机器人配置时，运行时约束和档位说明读它的覆盖值；不传时用内置默认值。
+func proactiveReplyRouterPromptForChatIn(configured, criteria string, chatIn chatInSettings, social bool, configs ...BotConfig) string {
+	overrides := promptOverridesOf(configs)
 	if chatIn.Participation != nil {
 		// 评分档位和口径由 Participation 决定；管理员的补充判据只拼在尾部，评分契约
 		// （两项、裸 JSON）不交给用户改。configured 是被取代的旧路由提示词，仍然不读。
-		return appendRouterCriteria(chatIn.Participation.prompt(), criteria)
+		return appendRouterCriteria(chatIn.Participation.promptWith(overrides), criteria, overrides)
 	}
-	prompt := proactiveReplyRouterSystemPrompt(configured)
+	prompt := proactiveReplyRouterSystemPrompt(configured, configs...)
 	if chatIn.SuperActive {
 		if strings.TrimSpace(configured) == "" || strings.TrimSpace(configured) == defaultProactiveReplyRouterPrompt {
-			return superActiveIntentPrompt
+			return overrides.text(promptSuperActiveIntentSpec)
 		}
-		return prompt + "\n\n" + superActiveIntentPrompt
+		return prompt + "\n\n" + overrides.text(promptSuperActiveIntentSpec)
 	}
 	if social {
-		prompt += "\n\n" + socialReplyGuard
+		prompt += "\n\n" + overrides.text(promptSocialReplyGuardSpec)
 	}
 	if chatIn.Assistant {
-		return prompt + "\n\n" + assistantIntentPrompt
+		return prompt + "\n\n" + overrides.text(promptAssistantIntentSpec)
 	}
 	if chatIn.Natural {
-		return prompt + "\n\n当前群已开启自然插话模式：普通群聊只要能基于上下文、稳定知识或可用工具生成具体可靠、可回答且有实质内容的新回复，就使用 category=chat_in、should_reply=true、answerable=true、substantive=true。不要受置信度、抽样率或冷却影响；附和、复读、寒暄、无信息量感想以及只能猜测的内容仍必须保持静默。"
+		return prompt + "\n\n" + overrides.text(promptRouterChatInNaturalSpec)
 	}
 	if chatIn.Enabled {
-		return prompt + fmt.Sprintf("\n\n当前闲聊插话档位：%s（%s）。档位只影响运行时的放行松紧，不放宽 substantive 的判断标准：任何档位下附和、复读和寒暄都必须 substantive=false。", chatIn.Level, chatIn.Level.Label())
+		return prompt + "\n\n" + overrides.render(promptRouterChatInLevelSpec, map[string]string{
+			"level": string(chatIn.Level),
+			"label": chatIn.Level.Label(),
+		})
 	}
-	return prompt + "\n\n当前闲聊插话已关闭：禁止使用 category=chat_in，普通闲聊一律 should_reply=false。"
+	return prompt + "\n\n" + overrides.text(promptRouterChatInOffSpec)
 }
 
 func newRuntimeAgentLLMProvider(runtime *Runtime, ctx context.Context) *runtimeAgentLLMProvider {
@@ -271,8 +302,18 @@ func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event Me
 	if len(lines) == 0 {
 		return prompt
 	}
-	return prompt + "\n\n群聊上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）：\n" + strings.Join(lines, "\n")
+	return prompt + "\n\n" + r.effectiveConfigForEvent(event).prompt(promptImageChatContextSpec) + "\n" + strings.Join(lines, "\n")
 }
+
+const promptImageChatContext = "群聊上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）："
+
+var promptImageChatContextSpec = registerPrompt(PromptSpec{
+	Key:     "media.image_chat_context",
+	Group:   PromptGroupMedia,
+	Title:   "生图时附带的群聊上下文",
+	Usage:   "群聊里生图时，接在画图描述后面、群名和成员头像信息前面，说明这些信息只供理解、别画进图里。",
+	Default: promptImageChatContext,
+})
 
 func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
 	return r.runLLMProviderForGroup(ctx, llm.GroupChat, run)
@@ -749,6 +790,44 @@ func (r *Runtime) systemPromptWithRelationshipAndAgent(event MessageEvent, plugi
 	return r.systemPromptWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, nil)
 }
 
+// 尾部实时时钟与时区的几段文案。时钟那句的开头 agent.RuntimeClockMarker 是 agent
+// 用来认出「调用方已经自带时钟」的标记，由代码拼在前面，不进可覆盖的正文。
+const (
+	promptRuntimeClock            = "{datetime}（时区 {zone}，UTC{utc_offset}）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。"
+	promptUnknownTimezoneNight    = "没有记录当前发言者所在时区：你这边是深夜，不代表他那边也是。别断言他那边几点，也别因为「这么晚了」催他睡或说他熬夜；除非他自己说了当地时间或所在地，作息话题就不要主动提。"
+	promptUnknownTimezoneMorning  = "没有记录当前发言者所在时区：你这边是清早，不代表他那边也是。别默认他刚起床，「早上好」这类按时段的问候先不要说，除非他自己提了。"
+	promptSpeakerTimezone         = "当前发言者所在时区：{timezone}（{zone}，UTC{utc_offset}，{offset}）；他那边现在是 {local_time}。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。作息相关的话（该睡了、早安、还在熬夜）同样按他那边的时间判断，不要拿你这边的时段往他身上套。你自己的「现在」仍以上面的运行时钟为准。{recorded_note}对方说出自己那边的当地时间、或说自己在别的地方，和这条记录对不上时，以他当下说的为准，不要拿旧记录纠正他。"
+	promptSpeakerTimezoneRecorded = "这条时区记于 {recorded_date}（{age}前），不是实时位置。"
+	promptSpeakerTimezoneStale    = "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
+)
+
+func tailSpec(key, title, usage, text string, vars ...PromptVar) *PromptSpec {
+	return registerPrompt(PromptSpec{Key: "reply." + key, Group: PromptGroupReplyTail, Title: title, Usage: usage, Default: text, Vars: vars})
+}
+
+var (
+	promptRuntimeClockSpec = tailSpec("clock", "可信实时时钟", "「注入时间」打开时紧跟在当前时间那行后面，告诉模型这是可信的实时时间。",
+		promptRuntimeClock,
+		PromptVar{Name: "datetime", Description: "机器人所在机器的当前时间，如 2026-09-23 14:05:00"},
+		PromptVar{Name: "zone", Description: "时区缩写，如 CST"},
+		PromptVar{Name: "utc_offset", Description: "相对 UTC 的偏移，如 +08:00"})
+	promptUnknownTimezoneNightSpec   = tailSpec("timezone_unknown.late_night", "发言者时区未知（深夜）", "没记过发言者时区、而机器人这边是深夜时注入，挡掉按本机时钟催人睡觉。", promptUnknownTimezoneNight)
+	promptUnknownTimezoneMorningSpec = tailSpec("timezone_unknown.morning", "发言者时区未知（清早）", "没记过发言者时区、而机器人这边是清早时注入，挡掉按本机时钟说早上好。", promptUnknownTimezoneMorning)
+	promptSpeakerTimezoneSpec        = tailSpec("speaker_timezone", "发言者的时区", "画像里记过发言者时区时注入，给出他那边的当地时间，要求按他的时间说话。",
+		promptSpeakerTimezone,
+		PromptVar{Name: "timezone", Description: "时区名，如 America/New_York"},
+		PromptVar{Name: "zone", Description: "时区缩写，如 EDT"},
+		PromptVar{Name: "utc_offset", Description: "相对 UTC 的偏移，如 -04:00"},
+		PromptVar{Name: "offset", Description: "和机器人这边的时差说明"},
+		PromptVar{Name: "local_time", Description: "他那边的当前时间，如 2026-09-23 02:05"},
+		PromptVar{Name: "recorded_note", Description: "「时区记于何时」那一句，没有记录时间时为空"})
+	promptSpeakerTimezoneRecordedSpec = tailSpec("speaker_timezone.recorded", "发言者时区的记录时间", "发言者时区有记录时间时，填进上一段的 {recorded_note}，提醒这不是实时位置。",
+		promptSpeakerTimezoneRecorded,
+		PromptVar{Name: "recorded_date", Description: "记下时区的日期，如 2026-03-01"},
+		PromptVar{Name: "age", Description: "距今多久，如 3 个月"})
+	promptSpeakerTimezoneStaleSpec = tailSpec("speaker_timezone.stale", "发言者时区记录较旧", "时区记录超过一定时间时接在记录时间后面，提醒约时间前先确认。", promptSpeakerTimezoneStale)
+)
+
 // runtimeClockPrompt 返回本轮的可信实时时间提示。返回值每次调用都不同，只能作为尾部
 // 独立 system 消息注入；拼进人设提示词会让那段最长的前缀每秒失效一次。
 func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
@@ -759,11 +838,15 @@ func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
 	now := r.clock()
 	zoneName, zoneOffset := now.Zone()
 	var builder strings.Builder
-	builder.WriteString(renderPromptTemplate(cfg.PromptTimeTemplate, map[string]string{
+	builder.WriteString(renderPromptTemplate(cfg.prompt(promptTimeTemplateSpec), map[string]string{
 		"datetime": now.Format("2006-01-02 15:04:05"),
 		"weekday":  chineseWeekday(now.Weekday()),
 	}))
-	appendPromptSection(&builder, fmt.Sprintf("%s%s（时区 %s，UTC%s）。这是机器人所在机器提供的可信实时时间；用户询问当前日期或几点时直接据此回答，不要猜测训练数据日期，也不要声称无法访问实时时钟。", agent.RuntimeClockMarker, now.Format("2006-01-02 15:04:05"), zoneName, formatUTCOffset(zoneOffset)))
+	appendPromptSection(&builder, agent.RuntimeClockMarker+cfg.promptf(promptRuntimeClockSpec, map[string]string{
+		"datetime":   now.Format("2006-01-02 15:04:05"),
+		"zone":       zoneName,
+		"utc_offset": formatUTCOffset(zoneOffset),
+	}))
 	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
 		appendPromptSection(&builder, speaker)
 	} else if note := unknownSpeakerTimezoneNote(cfg, now); note != "" {
@@ -788,9 +871,9 @@ func unknownSpeakerTimezoneNote(cfg BotConfig, now time.Time) string {
 	}
 	switch dayPartAt(now.In(location)) {
 	case dayPartLateNight:
-		return "没有记录当前发言者所在时区：你这边是深夜，不代表他那边也是。别断言他那边几点，也别因为「这么晚了」催他睡或说他熬夜；除非他自己说了当地时间或所在地，作息话题就不要主动提。"
+		return cfg.prompt(promptUnknownTimezoneNightSpec)
 	case dayPartMorning:
-		return "没有记录当前发言者所在时区：你这边是清早，不代表他那边也是。别默认他刚起床，「早上好」这类按时段的问候先不要说，除非他自己提了。"
+		return cfg.prompt(promptUnknownTimezoneMorningSpec)
 	}
 	return ""
 }
@@ -805,21 +888,40 @@ func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) strin
 	if location == nil {
 		return ""
 	}
+	cfg := r.effectiveConfigForEvent(event)
 	local := now.In(location)
 	zoneName, zoneOffset := local.Zone()
-	offset := FormatTimezoneOffset(now, location, now.Location())
-	prompt := fmt.Sprintf("当前发言者所在时区：%s（%s，UTC%s，%s）；他那边现在是 %s。跟他说时间点时按他的当地时间说并标明是他那边的时间，必要时再补一句你这边的时间；换算由你来做，不要让对方自己换。作息相关的话（该睡了、早安、还在熬夜）同样按他那边的时间判断，不要拿你这边的时段往他身上套。你自己的「现在」仍以上面的运行时钟为准。",
-		location.String(), zoneName, formatUTCOffset(zoneOffset), offset, local.Format("2006-01-02 15:04"))
 	// 人会搬家、会出差：这条时区是过去某一次对话记下的，不是实时定位。
+	recorded := ""
 	if !recordedAt.IsZero() {
-		prompt += fmt.Sprintf("这条时区记于 %s（%s前），不是实时位置。", recordedAt.In(now.Location()).Format("2006-01-02"), formatApproximateAge(now.Sub(recordedAt)))
+		recorded = cfg.promptf(promptSpeakerTimezoneRecordedSpec, map[string]string{
+			"recorded_date": recordedAt.In(now.Location()).Format("2006-01-02"),
+			"age":           formatApproximateAge(now.Sub(recordedAt)),
+		})
 		if now.Sub(recordedAt) >= PortraitTimezoneStaleAfter {
-			prompt += "记录较旧，约具体时间前先自然地确认一句他现在在哪个时区。"
+			recorded += cfg.prompt(promptSpeakerTimezoneStaleSpec)
 		}
 	}
-	prompt += "对方说出自己那边的当地时间、或说自己在别的地方，和这条记录对不上时，以他当下说的为准，不要拿旧记录纠正他。"
-	return prompt
+	return cfg.promptf(promptSpeakerTimezoneSpec, map[string]string{
+		"timezone":      location.String(),
+		"zone":          zoneName,
+		"utc_offset":    formatUTCOffset(zoneOffset),
+		"offset":        FormatTimezoneOffset(now, location, now.Location()),
+		"local_time":    local.Format("2006-01-02 15:04"),
+		"recorded_note": recorded,
+	})
 }
+
+// 闲聊插话那一轮追加在主动接话说明后面的两段。
+const (
+	promptChatInReply       = "本次回复是主动插话，已根据用户发言偏好决定参与。顺着当前话题自然回应，可以接梗、表达感受或回答问题，不要求增加新知识。遵守人设和用户要求，不复读、不编造事实。"
+	promptChatInNoAgreement = "如果这一轮唯一能做的事只是赞同一个你无法核实的判断，就别发：要么说出一件你确实知道的具体的事，要么放弃这次插话。不要用「确实」「没错」开头去附和一个无法核实的判断，也不要给它补充听起来内行但没有依据的理由。别人凭印象下的结论，你没有证据就是没有证据，说不清楚就直说不确定。"
+)
+
+var (
+	promptChatInReplySpec       = ruleSpec("chat_in_reply", "闲聊插话说明", "机器人闲聊插话的那一轮注入：顺着话题自然回应，不要求新知识。", promptChatInReply)
+	promptChatInNoAgreementSpec = ruleSpec("chat_in_no_agreement", "插话别空口附和", "机器人闲聊插话的那一轮注入：只能附和一个无法核实的判断时就别发。", promptChatInNoAgreement)
+)
 
 // systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者
 // 尾部），给只发一条 system 消息的旁路（定时订阅、后续评论）和测试用。主回复链路
@@ -889,64 +991,64 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	builder.WriteString(cfg.SystemPrompt)
 	actionsEnabled := boolValue(cfg.ActionDescriptionEnabled, false)
-	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode))
+	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, personaVoiceFrom(cfg.SelfReference, cfg.SentenceEnders), cfg.PersonaMode, cfg))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	appendPromptSection(&builder, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
-	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode))
+	appendPromptSection(&builder, actionDescriptionPrompt(actionsEnabled, cfg.PersonaMode, cfg))
 	// 实时时钟不再拼进人设提示词：它每秒都不同，会让这段最长的 system 提示词永远
 	// 无法命中供应商的前缀缓存。改由 runtimeClockPrompt 作为尾部独立 system 消息注入。
 	if boolValue(cfg.PromptChineseSlangHint, true) && !cfg.PersonaMode.ownsPersonaVoice() {
-		appendPromptSection(&builder, cfg.PromptChineseSlangText)
+		appendPromptSection(&builder, cfg.prompt(promptChineseSlangSpec))
 	}
 	if event.Kind == EventKindGroup {
 		// 场景说明分「被触发」和「主动接话」两串：后者那一轮没人点名机器人，
 		// 再说「只有被提到才回复」会和下面的主动插话说明当场打架。
-		builder.WriteString("\n" + groupScopePrompt(event))
-		builder.WriteString("\n" + promptGroupOwnerDistinction)
+		builder.WriteString("\n" + groupScopePrompt(event, cfg))
+		builder.WriteString("\n" + cfg.prompt(promptGroupOwnerDistinctionSpec))
 	}
 	// 称呼不分群聊私聊：私聊里没有触发这回事，但「别人怎么叫你」仍然是身份的一部分。
 	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" {
-		builder.WriteString("\n" + promptAliasPrefix + aliases + promptAliasRule)
+		builder.WriteString("\n" + cfg.promptf(promptAliasSpec, map[string]string{"aliases": aliases}))
 	}
 	if agentEnabled && relationship.Owner && hasTool("llm_config") {
-		tail.WriteString("\n" + promptToolLLMConfig)
+		tail.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
 	}
 	if agentEnabled && hasTool(dianaGitHubToolName) {
-		builder.WriteString("\n" + promptToolRepositoryIssues)
+		builder.WriteString("\n" + cfg.prompt(promptToolRepositoryIssuesSpec))
 	}
 	if agentEnabled && hasTool(dianaPlatformToolName) {
-		builder.WriteString("\n" + promptToolPlatform)
+		builder.WriteString("\n" + cfg.prompt(promptToolPlatformSpec))
 	}
 	// 这条对所有人逐字相同（能不能指定别人或指定群由工具自己判身份），所以进稳定头部。
 	if agentEnabled && hasTool(dianaCrossSessionToolName) {
-		builder.WriteString("\n" + promptToolCrossSession)
+		builder.WriteString("\n" + cfg.prompt(promptToolCrossSessionSpec))
 	}
 	// 破坏性动作只对主人出现在工具 schema 里；提示词也只对主人注入，且必须进随发言者
 	// 变化的尾部，不能写进按前缀缓存的稳定头部（否则主人和普通成员的提示词会提前分叉）。
 	if agentEnabled && relationship.Owner && hasTool(dianaPlatformToolName) {
-		tail.WriteString("\n" + promptToolPlatformModeration)
+		tail.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
 	}
 	if agentEnabled && relationship.Owner && hasTool(dianaOneBotRequestsToolName) {
-		tail.WriteString("\n" + promptToolOneBotRequests)
+		tail.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
 	}
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
-		builder.WriteString("\n" + promptToolHistoryImages)
+		builder.WriteString("\n" + cfg.prompt(promptToolHistoryImagesSpec))
 	}
 	if agentEnabled && hasTool(dianaMemoryToolName) {
-		builder.WriteString("\n长期记忆摘要不够时，先用 memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。")
+		builder.WriteString("\n" + cfg.prompt(promptToolMemorySpec))
 	}
 	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
-		builder.WriteString("\n" + promptInternalIdentifiers)
+		builder.WriteString("\n" + cfg.prompt(promptInternalIdentifiersSpec))
 		// 引用被管理员关掉时不教这一手：那是「永不带引用」的明确配置。
 		if replyReferenceMode(cfg) != ReplyDecorationOff {
-			builder.WriteString("\n" + promptQuoteHistoryMessage)
+			builder.WriteString("\n" + cfg.prompt(promptQuoteHistoryMessageSpec))
 		}
 	}
 	if agentEnabled && relationship.Owner && hasTool("relationship") {
-		tail.WriteString("\n" + promptOwnerRelationshipTarget)
+		tail.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
 	}
 	if agentEnabled && relationship.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
-		tail.WriteString("\n" + promptOwnerTaskTarget)
+		tail.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
 	}
 	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
 	//（见 RelationshipPolicyFor），所以这几段对谁都注入，只随本轮注册了哪些工具
@@ -954,139 +1056,139 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 假设待在尾部，实测占尾部 436 token 里的绝大部分，等于每条消息都重发一遍
 	// 一段人人相同的文本，且永远命不中前缀缓存。
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("reminder") {
-		builder.WriteString("\n" + promptTaskReminder)
+		builder.WriteString("\n" + cfg.prompt(promptTaskReminderSpec))
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindSchedule) {
-		builder.WriteString("\n" + promptTaskSchedule)
+		builder.WriteString("\n" + cfg.prompt(promptTaskScheduleSpec))
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindRSS) {
-		builder.WriteString("\n" + promptTaskRSS)
+		builder.WriteString("\n" + cfg.prompt(promptTaskRSSSpec))
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("tasks") {
-		builder.WriteString("\n" + promptTaskList)
+		builder.WriteString("\n" + cfg.prompt(promptTaskListSpec))
 	}
 	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
-		builder.WriteString("\n" + promptTaskRepositoryWatch)
+		builder.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
-		builder.WriteString("\n" + promptTaskNoSubstitute)
+		builder.WriteString("\n" + cfg.prompt(promptTaskNoSubstituteSpec))
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
 	// 主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
 	switch everyone := normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone; {
 	case !everyone && !relationship.Owner:
-		tail.WriteString("\n" + promptModelUndisclosed)
+		tail.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
 	case !agentEnabled || !hasTool(dianaRuntimeModelToolName):
 	case everyone:
-		builder.WriteString("\n" + promptToolRuntimeModel)
+		builder.WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
 	default:
-		tail.WriteString("\n" + promptToolRuntimeModel)
+		tail.WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
 	}
 	// 项目地址的披露规则和模型身份同理：everyone 下对谁都一样，进 head；owner 下
 	// 随发言者是不是主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
 	switch everyone := normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) == RepositoryDisclosureEveryone; {
 	case !agentEnabled || !hasTool(dianaVersionToolName):
 	case everyone:
-		builder.WriteString("\n" + promptToolVersion)
+		builder.WriteString("\n" + cfg.prompt(promptToolVersionSpec))
 	case relationship.Owner:
-		tail.WriteString("\n" + promptToolVersion)
+		tail.WriteString("\n" + cfg.prompt(promptToolVersionSpec))
 	default:
-		tail.WriteString("\n" + promptToolVersionNoRepository)
+		tail.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))
 	}
 	if agentEnabled && hasTool(dianaNotebookToolName) {
-		builder.WriteString("\n" + promptToolNotebook)
+		builder.WriteString("\n" + cfg.prompt(promptToolNotebookSpec))
 	}
 	if agentEnabled && hasTool(dianaCodingToolName) {
-		builder.WriteString("\n" + promptToolCoding)
+		builder.WriteString("\n" + cfg.prompt(promptToolCodingSpec))
 	}
 	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
-		builder.WriteString("\n" + promptToolThreadState)
+		builder.WriteString("\n" + cfg.prompt(promptToolThreadStateSpec))
 	}
 	// 自述的规则进 head：开关是机器人配置，对同一个群里的所有人逐字相同。
 	if agentEnabled && hasTool(dianaSelfNoteToolName) {
-		builder.WriteString("\n" + promptToolSelfNote)
+		builder.WriteString("\n" + cfg.prompt(promptToolSelfNoteSpec))
 	}
 	if agentEnabled && hasTool("capabilities") {
-		builder.WriteString("\n" + promptToolCapabilities)
+		builder.WriteString("\n" + cfg.prompt(promptToolCapabilitiesSpec))
 	}
 	groupEvent := groupToolEventForConfig(event, cfg)
 	if agentEnabled && hasTool(r.groupToolName(groupEvent)) {
-		builder.WriteString("\n" + r.groupToolPrompt(groupEvent))
+		builder.WriteString("\n" + r.groupToolPrompt(groupEvent, cfg))
 	}
 	if agentEnabled && hasTool(botParticipationToolName) {
-		builder.WriteString("\n修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。")
+		builder.WriteString("\n" + cfg.prompt(promptToolBotConfigSpec))
 	}
 	if agentEnabled && hasTool(replyBlockToolName) {
-		builder.WriteString("\n主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或群成员查询结果，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。")
+		builder.WriteString("\n" + cfg.prompt(promptToolReplyBlockSpec))
 	}
 	if agentEnabled && hasTool("relationship") {
-		builder.WriteString("\n" + promptToolRelationshipList)
-		builder.WriteString("\n" + promptToolRelationshipQuery)
-		builder.WriteString("\n" + promptToolRelationshipPortrait)
+		builder.WriteString("\n" + cfg.prompt(promptToolRelationshipListSpec))
+		builder.WriteString("\n" + cfg.prompt(promptToolRelationshipQuerySpec))
+		builder.WriteString("\n" + cfg.prompt(promptToolRelationshipPortraitSpec))
 		// 恋爱模式的规则跟着配置走：同一台机器人整段稳定，不影响前缀缓存。
 		// 关着时一个字不注入——模型不知道有这回事，被表白就按普通关系自然回应。
 		if boolValue(cfg.RomanceEnabled, false) {
-			builder.WriteString("\n" + promptToolRelationshipRomance)
+			builder.WriteString("\n" + cfg.prompt(promptToolRelationshipRomanceSpec))
 		}
 	}
 	if agentEnabled && hasTool(dianaImageToolName) {
-		builder.WriteString("\n" + promptToolImage)
+		builder.WriteString("\n" + cfg.prompt(promptToolImageSpec))
 	}
 	if agentEnabled && hasTool("tts") {
-		builder.WriteString("\n" + promptToolTTS)
+		builder.WriteString("\n" + cfg.prompt(promptToolTTSSpec))
 	}
-	builder.WriteString("\n" + promptRelationshipTierRules)
-	builder.WriteString("\n" + promptLongTermMemory)
-	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy))
+	builder.WriteString("\n" + cfg.prompt(promptRelationshipTierSpec) + cfg.prompt(promptIdentityAuthoritySpec))
+	builder.WriteString("\n" + cfg.prompt(promptLongTermMemorySpec))
+	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy, cfg))
 	if agentEnabled {
 		// 静默只有 agent_finalize 这一个出口，没开 Agent 时说了也做不到。
 		// 它逐字不变，跟着拒答规则一起留在稳定头部：两条规则读在一起，模型才
 		// 分得清「不说话」和「拒绝」不是一回事。
-		builder.WriteString("\n" + promptSilentFinish)
+		builder.WriteString("\n" + cfg.prompt(promptSilentFinishSpec))
 	}
-	builder.WriteString("\n" + promptToolFindings)
-	builder.WriteString("\n" + promptSelfCharacterization)
-	builder.WriteString("\n" + promptCurrentMessage)
-	builder.WriteString("\n" + promptHistoryFormat)
-	builder.WriteString("\n" + promptAdjacentSupplement)
+	builder.WriteString("\n" + cfg.prompt(promptToolFindingsSpec))
+	builder.WriteString("\n" + cfg.prompt(promptSelfCharacterizationSpec))
+	builder.WriteString("\n" + cfg.prompt(promptCurrentMessageSpec))
+	builder.WriteString("\n" + cfg.prompt(promptHistoryFormatSpec))
+	builder.WriteString("\n" + cfg.prompt(promptAdjacentSupplementSpec))
 	if boolValue(cfg.PromptInjectPlaintextRules, true) {
 		appendPromptSection(&builder, platformOutputRulesForConfig(cfg))
 	}
 	if proactiveTriggered {
 		builder.WriteString("\n")
-		builder.WriteString(strings.TrimSpace(cfg.ProactiveReplyPrompt))
-		builder.WriteString("\n" + proactiveReplyToolResultPrompt)
+		builder.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
+		builder.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
 	}
 	if event.chatInReply {
-		builder.WriteString("\n" + proactiveReplyPacingPrompt)
-		builder.WriteString("\n本次回复是主动插话，已根据用户发言偏好决定参与。顺着当前话题自然回应，可以接梗、表达感受或回答问题，不要求增加新知识。遵守人设和用户要求，不复读、不编造事实。")
+		builder.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
+		builder.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
 		// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
 		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
-		builder.WriteString("\n如果这一轮唯一能做的事只是赞同一个你无法核实的判断，就别发：要么说出一件你确实知道的具体的事，要么放弃这次插话。不要用「确实」「没错」开头去附和一个无法核实的判断，也不要给它补充听起来内行但没有依据的理由。别人凭印象下的结论，你没有证据就是没有证据，说不清楚就直说不确定。")
+		builder.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
 	}
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
-		tail.WriteString("\n" + promptImageReply)
+		tail.WriteString("\n" + cfg.prompt(promptImageReplySpec))
 	}
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
 			continue
 		}
-		builder.WriteString("\n" + promptPluginAuthority)
+		builder.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
 		break
 	}
 	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
 	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
 	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
-	appendPromptSection(&tail, relationshipPermissionContext(relationship))
+	appendPromptSection(&tail, relationshipPermissionContext(relationship, cfg))
 	if event.Kind == EventKindGroup {
 		if boolValue(cfg.PromptInjectGroupSender, true) {
-			appendPromptSection(&tail, renderPromptTemplate(cfg.PromptGroupSenderTemplate, map[string]string{
+			appendPromptSection(&tail, renderPromptTemplate(cfg.prompt(promptGroupSenderSpec), map[string]string{
 				"sender": promptSenderIdentity(event),
 			}))
 		}
 		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" {
-			appendPromptSection(&tail, promptMatchedAliasPrefix+matched+promptMatchedAliasRule)
+			appendPromptSection(&tail, cfg.promptf(promptMatchedAliasSpec, map[string]string{"aliases": matched}))
 		}
 	}
 	// 时段语气紧挨着锚点注入，理由和锚点一样：这两条都是「怎么说」，离生成越近
@@ -1096,8 +1198,8 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
-	appendPromptSection(&tail, personaClosingAnchor())
-	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode))
+	appendPromptSection(&tail, personaClosingAnchor(cfg))
+	appendPromptSection(&tail, actionDescriptionClosingAnchor(actionsEnabled, cfg.PersonaMode, cfg))
 	return builder.String(), strings.TrimSpace(tail.String())
 }
 
@@ -1248,7 +1350,160 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	return line
 }
 
-func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64) string {
+// 下面这些是附在当前消息正文后面的注解：按消息里有没有 @、引用、语义来源、视频、
+// 长图，逐条补一句该怎么读。【…】标记是结构，留在代码里；标记后面的说明可以覆盖。
+var (
+	promptNoteSupplementSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.supplement",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 同轮补充消息",
+		Usage:   "同一轮里用户补发的每条消息前都带这句，放在「【当前同轮补充消息，」之后、「】」之前，要求和最后那条当前消息合起来一并回答。",
+		Default: "必须与最后的当前消息合并理解并一并回答；若本消息明确纠正原要求，以纠正后的条件为准，保留未被修改的要求",
+	})
+	promptNoteMentionOnlySpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.mention_only",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 只有 @ 或引用",
+		Usage:   "当前消息除了 @ 和引用没有别的正文、又没附「只叫一声」指引时，补在正文后面。",
+		Default: "这条当前消息主要由 @ 或引用组成，没有额外正文，也要把它当成一次有效唤醒并自然回复。",
+	})
+	promptNoteAtOtherSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.at_other",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · @ 了别人",
+		Usage:   "当前消息里 @ 了机器人以外的人时，补在正文后面，提醒 @ 关系也是消息的一部分。",
+		Default: "当前消息包含 @ 标记，@ 是当前消息的一部分，不要忽略。",
+	})
+	promptNoteAtSelfSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.at_self",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · @ 了机器人",
+		Usage:   "当前消息里的 @ 只指向机器人自己时，补在正文后面。",
+		Default: "正文里那个 @ 指的就是你，等于有人直接叫了你一声。",
+	})
+	promptNoteReplySpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.reply",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 带引用",
+		Usage:   "当前消息引用或回复了某条消息时，补在正文后面。",
+		Default: "当前消息包含引用/回复标记，引用关系是当前消息的一部分；如果引用内容能从历史参考中看出，可以结合它回复。",
+	})
+	promptNoteSourcesTextImagesSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.sources_text_images",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 多条指代来源（文字和图片）",
+		Usage:   "指代判断为当前消息找到多条历史来源、其中既有文字又附上了图片时，补在正文后面。",
+		Default: "语义指代已定位到 {sources} 条历史来源，其中有 {text_sources} 条文字来源、实际附加 {images} 张可读取图片；必须逐条核对文字并逐张查看图片后综合回答。",
+		Vars:    promptNoteSourceVars("sources", "text_sources", "images"),
+	})
+	promptNoteSourcesImagesSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.sources_images",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 多条指代来源（只有图片）",
+		Usage:   "指代判断为当前消息找到多条历史来源、附上了图片但没有文字来源时，补在正文后面。",
+		Default: "语义指代已定位到 {sources} 条历史来源，实际附加 {images} 张可读取图片；图片按原消息从旧到新排列，必须逐张查看并综合回答。",
+		Vars:    promptNoteSourceVars("sources", "images"),
+	})
+	promptNoteSourcesTextSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.sources_text",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 多条指代来源（只有文字）",
+		Usage:   "指代判断为当前消息找到多条历史来源、只有文字来源没有图片时，补在正文后面。",
+		Default: "语义指代已定位到 {sources} 条历史来源，其中 {text_sources} 条包含文字；完整来源已按顺序列出，必须逐条核对并综合回答。",
+		Vars:    promptNoteSourceVars("sources", "text_sources"),
+	})
+	promptNoteSourcesRecordsSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.sources_records",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 多条指代来源（无文字无图）",
+		Usage:   "指代判断为当前消息找到多条历史来源、但既没有文字来源也没附上图片时，补在正文后面。",
+		Default: "语义指代已定位到 {sources} 条历史来源；必须按已提供的来源记录逐条核对，不要假定存在未附加的图片。",
+		Vars:    promptNoteSourceVars("sources"),
+	})
+	promptNoteSourcesMissingSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.sources_missing",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 指代来源缺失",
+		Usage:   "多条指代来源里有的没能从历史记录里找回时，紧接在上一句来源说明后面（不换行）。",
+		Default: "其中 {missing} 条来源未能从持久化历史解析，必须明确说明缺失范围，不要编造其内容。",
+		Vars:    promptNoteSourceVars("missing"),
+	})
+	promptNoteVideoReadSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.video_read",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 视频已读取",
+		Usage:   "当前消息或它引用的消息里有视频、并且成功取到了画面时，跟在「【媒体读取事实】」后面。",
+		Default: "系统已成功读取并附加当前消息中的视频画面；不得声称媒体为空、未加载、不可见、工具不可用或读取失败。若画面本身难以辨认，只能如实说明无法从已看到的画面确认具体内容。",
+	})
+	promptNoteVideoForwardSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.video_forward",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 合并转发里的视频",
+		Usage:   "视频来自合并转发时，跟在「【合并转发媒体节点】」和节点清单后面，提醒文字和视频是分开的节点。",
+		Default: "转发中的文字和视频是独立节点；除非节点归属明确，不得声称某句文字出现在某个视频里。",
+	})
+	promptNoteVideoQuotedFramesSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.video_quoted_frames",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 引用视频的画面",
+		Usage:   "视频在被引用的消息里、画面已附上时，跟在「【当前引用视频的关键帧如下】」后面。",
+		Default: "请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。" + videoFrameNarrationRule,
+	})
+	promptNoteVideoFramesSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.video_frames",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 视频画面",
+		Usage:   "视频就在当前消息里、画面已附上时，跟在「【当前视频的关键帧如下】」后面。",
+		Default: "请根据这些关键帧回答当前问题。" + videoFrameNarrationRule,
+	})
+	promptNoteVideoFailedSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.video_failed",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 视频读取失败",
+		Usage:   "当前消息里有视频但没取到画面时，跟在「【系统提示】」后面，让模型把具体原因转告用户。",
+		Default: "当前视频没能读出画面，原因：{reason}把这个原因用自己的话告诉用户，别只说一句读不了。不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频。" + videoFrameNarrationRule,
+		Vars:    []PromptVar{{Name: "reason", Description: "读不出画面的原因，如没装 ffmpeg、视频超过大小上限，末尾带一个空格"}},
+	})
+	promptNoteImageOnlySingleSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.image_only_single",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 只发一张图",
+		Usage:   "附图的消息没有文字时，用这句代替正文。和「只发图片时的正文」不同，这句用在已经把图片取好、准备连图一起发给模型的那一步。",
+		Default: "用户发送了一张图片，请根据图片内容回答。",
+	})
+	promptNoteImageOnlyMultiSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.image_only_multi",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 只发多张图",
+		Usage:   "附了多张图、没有文字的消息，用这句代替正文。",
+		Default: "用户发送了 {images} 张图片，请逐张查看并综合回答。",
+		Vars:    promptNoteSourceVars("images"),
+	})
+	promptNoteLongImageSpec = registerPrompt(PromptSpec{
+		Key:     "reply.note.long_image",
+		Group:   PromptGroupReplyRules,
+		Title:   "当前消息注解 · 长图切片",
+		Usage:   "附带的图片里有超长图、被切成多段发送时，跟在「【长图处理】」后面，说明切片顺序和重叠。",
+		Default: "部分超长图片已按“完整总览 → 沿长边顺序切片”展开；相邻切片有重叠，请按收到顺序阅读并合并重复内容。",
+	})
+)
+
+// promptNoteSourceVars 按名字挑出来源注解用到的占位符说明。
+func promptNoteSourceVars(names ...string) []PromptVar {
+	descriptions := map[string]string{
+		"sources":      "指代判断选中的历史来源条数",
+		"text_sources": "其中带文字的来源条数",
+		"images":       "实际附上、模型能看到的图片张数",
+		"missing":      "没能从历史记录里找回的来源条数",
+	}
+	vars := make([]PromptVar, 0, len(names))
+	for _, name := range names {
+		vars = append(vars, PromptVar{Name: name, Description: descriptions[name]})
+	}
+	return vars
+}
+
+func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentTime int64, overrides PromptOverrides) string {
 	text := strings.TrimSpace(PlainText(event.Segments))
 	if text == "" && !hasImageSegment(event.Segments) {
 		text = strings.TrimSpace(firstNonEmpty(fallbackText, event.RawMessage))
@@ -1259,7 +1514,7 @@ func proactiveTurnPromptTextAt(event MessageEvent, fallbackText string, currentT
 	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
-	return fmt.Sprintf("【当前同轮补充消息，必须与最后的当前消息合并理解并一并回答；若本消息明确纠正原要求，以纠正后的条件为准，保留未被修改的要求】%s%s: %s", contextMessageTiming(event.Time, currentTime), promptSenderIdentity(event), text)
+	return "【当前同轮补充消息，" + overrides.text(promptNoteSupplementSpec) + "】" + contextMessageTiming(event.Time, currentTime) + promptSenderIdentity(event) + ": " + text
 }
 
 func currentPromptText(event MessageEvent, text string) string {
@@ -1293,31 +1548,38 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	}
 	if currentMessageOnlyMentionsOrReplies(event, text) && !wakeGuidanceAttached {
 		// 唤醒指引已经把「这是一次有效唤醒、该怎么接」说全了，不再补这句泛泛的。
-		text += "\n\n这条当前消息主要由 @ 或引用组成，没有额外正文，也要把它当成一次有效唤醒并自然回复。"
+		text += "\n\n" + annotation.Overrides.text(promptNoteMentionOnlySpec)
 	}
 	if hasAtSegment {
 		if mentionsSomeoneElseFor(event, botID) {
-			text += "\n\n当前消息包含 @ 标记，@ 是当前消息的一部分，不要忽略。"
+			text += "\n\n" + annotation.Overrides.text(promptNoteAtOtherSpec)
 		} else {
-			text += "\n\n正文里那个 @ 指的就是你，等于有人直接叫了你一声。"
+			text += "\n\n" + annotation.Overrides.text(promptNoteAtSelfSpec)
 		}
 	}
 	if hasReplySegment {
-		text += "\n\n当前消息包含引用/回复标记，引用关系是当前消息的一部分；如果引用内容能从历史参考中看出，可以结合它回复。"
+		text += "\n\n" + annotation.Overrides.text(promptNoteReplySpec)
 	}
 	if sourceContext.RequestedSourceCount > 1 {
+		overrides := annotation.Overrides
+		counts := map[string]string{
+			"sources":      itoa(sourceContext.RequestedSourceCount),
+			"text_sources": itoa(sourceContext.TextSourceCount),
+			"images":       itoa(sourceContext.AttachedImageCount),
+			"missing":      itoa(sourceContext.MissingSourceCount),
+		}
 		switch {
 		case sourceContext.TextSourceCount > 0 && sourceContext.AttachedImageCount > 0:
-			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，其中有 %d 条文字来源、实际附加 %d 张可读取图片；必须逐条核对文字并逐张查看图片后综合回答。", sourceContext.RequestedSourceCount, sourceContext.TextSourceCount, sourceContext.AttachedImageCount)
+			text += "\n\n" + overrides.render(promptNoteSourcesTextImagesSpec, counts)
 		case sourceContext.AttachedImageCount > 0:
-			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，实际附加 %d 张可读取图片；图片按原消息从旧到新排列，必须逐张查看并综合回答。", sourceContext.RequestedSourceCount, sourceContext.AttachedImageCount)
+			text += "\n\n" + overrides.render(promptNoteSourcesImagesSpec, counts)
 		case sourceContext.TextSourceCount > 0:
-			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源，其中 %d 条包含文字；完整来源已按顺序列出，必须逐条核对并综合回答。", sourceContext.RequestedSourceCount, sourceContext.TextSourceCount)
+			text += "\n\n" + overrides.render(promptNoteSourcesTextSpec, counts)
 		default:
-			text += fmt.Sprintf("\n\n语义指代已定位到 %d 条历史来源；必须按已提供的来源记录逐条核对，不要假定存在未附加的图片。", sourceContext.RequestedSourceCount)
+			text += "\n\n" + overrides.render(promptNoteSourcesRecordsSpec, counts)
 		}
 		if sourceContext.MissingSourceCount > 0 {
-			text += fmt.Sprintf("其中 %d 条来源未能从持久化历史解析，必须明确说明缺失范围，不要编造其内容。", sourceContext.MissingSourceCount)
+			text += overrides.render(promptNoteSourcesMissingSpec, counts)
 		}
 	}
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
@@ -1433,23 +1695,22 @@ func llmMessageFromEventWithVideoFramesDiagnostics(ctx context.Context, event Me
 		defer cleanupVideoContextFrames(frames)
 	}
 	if len(videoURLs) > 0 || len(cachedFrames) > 0 {
+		overrides := promptOverridesFromContext(ctx)
 		if len(frames) > 0 {
-			text += "\n\n【媒体读取事实】系统已成功读取并附加当前消息中的视频画面；不得声称媒体为空、未加载、不可见、工具不可用或读取失败。若画面本身难以辨认，只能如实说明无法从已看到的画面确认具体内容。"
+			text += "\n\n【媒体读取事实】" + overrides.text(promptNoteVideoReadSpec)
 			if manifest := forwardVideoFrameManifest(event); manifest != "" {
-				text += "\n【合并转发媒体节点】" + manifest + "转发中的文字和视频是独立节点；除非节点归属明确，不得声称某句文字出现在某个视频里。"
+				text += "\n【合并转发媒体节点】" + manifest + overrides.text(promptNoteVideoForwardSpec)
 			}
 			if quotedVideo {
-				text += "\n\n【当前引用视频的关键帧如下】请只根据这些关键帧回答当前视频问题；不要把历史消息里的其他视频、链接标题或解析结果当成当前视频。" + videoFrameNarrationRule
+				text += "\n\n【当前引用视频的关键帧如下】" + overrides.text(promptNoteVideoQuotedFramesSpec)
 			} else {
-				text += "\n\n【当前视频的关键帧如下】请根据这些关键帧回答当前问题。" + videoFrameNarrationRule
+				text += "\n\n【当前视频的关键帧如下】" + overrides.text(promptNoteVideoFramesSpec)
 			}
 		} else {
 			// 原因照实说出来。以前这里只写「读取或抽帧失败」，模型只能照着复述，
 			// 用户得到一句「我暂时读不了这个视频」——既不知道是这台机器没装
 			// ffmpeg、还是视频超了大小上限，也就不知道该找谁修。
-			text += "\n\n【系统提示】当前视频没能读出画面，原因：" + videoFailureReason(videoFailure) +
-				"把这个原因用自己的话告诉用户，别只说一句读不了。" +
-				"不得使用历史消息里的其他视频、链接标题或解析结果猜测当前视频。" + videoFrameNarrationRule
+			text += "\n\n【系统提示】" + overrides.render(promptNoteVideoFailedSpec, map[string]string{"reason": videoFailureReason(videoFailure)})
 		}
 	}
 	extraImageURLs = append(extraImageURLs, frames...)
@@ -1485,15 +1746,18 @@ func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, eve
 	if len(imageURLs) == 0 {
 		return llm.Message{Role: llm.RoleUser, Content: text}, failures
 	}
+	// 覆盖从 ctx 上取：这条函数的调用方很多，只有正式回复那一路挂了机器人的覆盖，
+	// 其余路径（路由、审核）拿到 nil，照旧用内置默认值。
+	overrides := promptOverridesFromContext(ctx)
 	if imageOnlyPrompt(text, event) {
 		if sourceImageCount == 1 {
-			text = "用户发送了一张图片，请根据图片内容回答。"
+			text = overrides.text(promptNoteImageOnlySingleSpec)
 		} else {
-			text = fmt.Sprintf("用户发送了 %d 张图片，请逐张查看并综合回答。", sourceImageCount)
+			text = overrides.render(promptNoteImageOnlyMultiSpec, map[string]string{"images": itoa(sourceImageCount)})
 		}
 	}
 	if expandedLongImages {
-		text += "\n\n【长图处理】部分超长图片已按“完整总览 → 沿长边顺序切片”展开；相邻切片有重叠，请按收到顺序阅读并合并重复内容。"
+		text += "\n\n【长图处理】" + overrides.text(promptNoteLongImageSpec)
 	}
 	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
 	if text != "" {

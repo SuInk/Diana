@@ -166,7 +166,7 @@ func TestLiveParticipationPreferences(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := BotConfig{ChatInLevel: tc.level, Participation: tc.preferences}.WithDefaults()
 			probe := &liveTopicProbe{LLMProvider: client, t: t}
-			resp, err := probe.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)}, {Role: llm.RoleUser, Content: tc.input}}})
+			resp, err := probe.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)}, {Role: llm.RoleUser, Content: tc.input}}})
 			if err != nil {
 				t.Fatal("real model failed; see redacted log")
 			}

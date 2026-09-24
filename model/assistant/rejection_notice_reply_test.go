@@ -151,7 +151,7 @@ func TestAccountSafetyNoticeHidesInternalReason(t *testing.T) {
 		t.Fatalf("内部理由或风险类别泄漏到了聊天文案里：%q", public)
 	}
 
-	source, prompt, purpose, ok := rejectionNoticeRewriteSource(err)
+	source, prompt, purpose, ok := rejectionNoticeRewriteSource(err, nil)
 	if !ok || purpose != "account_safety_notice" {
 		t.Fatalf("source ok=%v purpose=%q", ok, purpose)
 	}
@@ -183,7 +183,7 @@ func TestAccountSafetyNoticeFallsBackToFixedTextWhenRewriteFails(t *testing.T) {
 
 // 上游拒绝那条路径的用途标签不能被这次改动串掉：运行日志靠它区分两种改写。
 func TestUpstreamRejectionRewriteKeepsItsOwnPurpose(t *testing.T) {
-	source, prompt, purpose, ok := rejectionNoticeRewriteSource(llm.ErrUnverifiedRejection)
+	source, prompt, purpose, ok := rejectionNoticeRewriteSource(llm.ErrUnverifiedRejection, nil)
 	if !ok || purpose != "upstream_rejection_notice" || source != llm.UnverifiedRejectionNotice {
 		t.Fatalf("source=%q purpose=%q ok=%v", source, purpose, ok)
 	}
@@ -192,7 +192,7 @@ func TestUpstreamRejectionRewriteKeepsItsOwnPurpose(t *testing.T) {
 	}
 	// 普通错误现在也交给改写：给模型的是 publicChatErrorMessage 的结果，
 	// 也就是不改写时会原样发进聊天的那句，经手改写不多暴露任何东西。
-	source, _, purpose, ok = rejectionNoticeRewriteSource(errors.New("普通错误"))
+	source, _, purpose, ok = rejectionNoticeRewriteSource(errors.New("普通错误"), nil)
 	if !ok || purpose != PurposeErrorNotice || source == "" {
 		t.Fatalf("普通错误应当走通用改写：source=%q purpose=%q ok=%v", source, purpose, ok)
 	}
@@ -202,7 +202,7 @@ func TestUpstreamRejectionRewriteKeepsItsOwnPurpose(t *testing.T) {
 		errors.New("context deadline exceeded"),
 		errors.New("502 bad gateway"),
 	} {
-		if _, _, _, ok := rejectionNoticeRewriteSource(down); ok {
+		if _, _, _, ok := rejectionNoticeRewriteSource(down, nil); ok {
 			t.Fatalf("模型不可用时不该再调改写：%v", down)
 		}
 	}

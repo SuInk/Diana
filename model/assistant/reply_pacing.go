@@ -30,3 +30,19 @@ func supportsOneBotGroupTool(cfg BotConfig, event MessageEvent) bool {
 const proactiveReplyPacingPrompt = `闲聊插话的发送节奏：默认只写一条简短消息，一两句说完；确实需要分开发言时使用 ` + notificationSplitMarker + `，同一条内部需要换行时使用 ` + notificationLineMarker + `。正文禁止输出真实换行符。不把动作描写单独写成一段。同一发言者连续补充的内容合起来回答，不逐条复述再各答一遍。有人反馈你太吵或要求减少发言时，尊重这个反馈，不用多段道歉或动作表演继续占屏；需要回应时一句即可。`
 
 const proactiveReplyToolResultPrompt = `读取配置不等于修改配置，工具失败不等于执行成功；没有成功的修改结果，不得声称已降低频率、已静音或已改好设置。`
+
+var promptChatInPacingSpec = registerPrompt(PromptSpec{
+	Key:     "reply.chat_in_pacing",
+	Group:   PromptGroupReplyStyle,
+	Title:   "闲聊插话的发送节奏",
+	Usage:   "机器人闲聊插话的那一轮注入：默认一条短消息说完。里面的分条和换行标记写法要原样保留，否则分条会失效。",
+	Default: proactiveReplyPacingPrompt,
+})
+
+var promptProactiveToolResultSpec = registerPrompt(PromptSpec{
+	Key:     "reply.proactive_tool_result",
+	Group:   PromptGroupReplyRules,
+	Title:   "主动回复里的工具结果",
+	Usage:   "意图识别判定要主动回复时，紧跟在主动回复说明后面：没有成功的修改结果就不能说已经改好。",
+	Default: proactiveReplyToolResultPrompt,
+})

@@ -263,6 +263,8 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	// withLLMUsageContext 同时挂上模型配置事件；少了用量这一半，后台任务（文档 OCR、
 	// 图片描述）的调用就归不到触发它的那条消息名下。
 	rootCtx = withLLMUsageContext(rootCtx, item.event)
+	// 插件任务拿不到 Runtime，文档 OCR 这类提示词从 ctx 里取这台机器人的覆盖。
+	rootCtx = withPromptOverrides(rootCtx, r.effectiveConfigForEvent(item.event).PromptOverrides)
 	if item.debugTrace != nil {
 		rootCtx = context.WithValue(rootCtx, debugTraceContextKey{}, item.debugTrace)
 	}

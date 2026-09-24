@@ -48,6 +48,49 @@ const (
 	promptMatchedAliasRule   = "。命中只说明这条消息的触发来源，不代表要删掉或替换这个词，也不代表它一定指别人。"
 )
 
+var promptGroupScopeSpec = registerPrompt(PromptSpec{
+	Key:     "reply.group_scope",
+	Group:   PromptGroupReplyRules,
+	Title:   "群聊场景（被点名）",
+	Usage:   "群聊里有人提到机器人或触发别名、机器人被叫来回复时注入，说明当前是群聊。",
+	Default: promptGroupScope,
+})
+
+var promptGroupScopeProactiveSpec = registerPrompt(PromptSpec{
+	Key:     "reply.group_scope_proactive",
+	Group:   PromptGroupReplyRules,
+	Title:   "群聊场景（主动接话）",
+	Usage:   "群聊里没人点名、机器人主动插话或闲聊接话的那一轮，替代上一条场景说明。",
+	Default: promptGroupScopeProactive,
+})
+
+var promptGroupOwnerDistinctionSpec = registerPrompt(PromptSpec{
+	Key:     "reply.group_owner_distinction",
+	Group:   PromptGroupReplyRules,
+	Title:   "群主与主人的区别",
+	Usage:   "只在群聊注入，说明群身份的取值，并讲清群主不是机器人的主人。",
+	Default: promptGroupOwnerDistinction,
+})
+
+// 别名列表夹在两句中间，合成一段模板，管理员看到的是完整的一句话。
+var promptAliasSpec = registerPrompt(PromptSpec{
+	Key:     "reply.aliases",
+	Group:   PromptGroupReplyRules,
+	Title:   "称呼与触发别名",
+	Usage:   "配置了触发别名时注入（群聊私聊都有），告诉模型别人怎么叫它，以及别名同时是普通词时怎么判断。",
+	Default: promptAliasPrefix + "{aliases}" + promptAliasRule,
+	Vars:    []PromptVar{{Name: "aliases", Description: "配置的全部别名，带引号、用顿号分隔"}},
+})
+
+var promptMatchedAliasSpec = registerPrompt(PromptSpec{
+	Key:     "reply.matched_aliases",
+	Group:   PromptGroupReplyTail,
+	Title:   "本条命中的别名",
+	Usage:   "群聊里当前消息命中了别名时放在尾部，说明命中只是触发来源，不代表要删掉这个词。",
+	Default: promptMatchedAliasPrefix + "{aliases}" + promptMatchedAliasRule,
+	Vars:    []PromptVar{{Name: "aliases", Description: "这条消息实际命中的别名，带引号、用顿号分隔"}},
+})
+
 // 工具调用规则。每条都只在对应工具真的注册给本轮时才注入，未启用的工具不会
 // 出现在提示词里（见 systemPromptWithRelationshipAndAgentTools 的 hasTool）。
 const (
@@ -140,7 +183,61 @@ const (
 	promptToolImage = "调用 image 后图片会在后台生成并自动补发。工具返回 queued=true 就立刻继续输出本轮文字回复，不要等图片、不要重复调用，也不要把生图和文字回复当成二选一。这一轮只是把任务提交了，图还没画出来：用「在画了」「马上发出来」这类进行中的说法，不要说成「已经生成好了」。同时要用一句话讲清这次准备画什么（prompt 里的主体、动作、场景），不能只回一句「已受理」「在画了」就完事，用户得知道你要画的是不是他想要的；但只说打算画的内容，不要描述成品的构图、配色、画风细节或图上写了什么——那张图你还没看到。"
 
 	promptToolTTS = "只有用户明确要求用语音回复、朗读内容或把指定文字说出来时才调用 tts，并把本次完整答复放进 text。普通文字聊天，以及只是在讨论声音、TTS 或语音功能时，一律不得调用。成功后工具会直接发语音，不要再重复发一遍文字。"
+
+	// 下面三条原来是 builder 里的行内字面量，挪成常量才能登记覆盖。
+	promptToolMemory     = "长期记忆摘要不够时，先用 memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。"
+	promptToolBotConfig  = "修改 Diana 回复欲望、相关度或实质性门槛、主动闲聊冷却时按 bot-protocol skill 使用 bot_config。关闭话痨用 desire_level=off，降低活跃度用 low；群管理员只改当前群，机器人默认设置仅主人可改。成功保存后才报告生效，不通过平台禁言或口头承诺代替。"
+	promptToolReplyBlock = "主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或群成员查询结果，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。"
 )
+
+// toolPromptSpec 登记一条工具规则。工具规则都是「本轮注册了这个工具才注入」，
+// 用法说明只差条件那半句，统一在这里拼。
+func toolPromptSpec(key, title, condition, text string) *PromptSpec {
+	return registerPrompt(PromptSpec{
+		Key:     "reply.tool." + key,
+		Group:   PromptGroupReplyTools,
+		Title:   title,
+		Usage:   condition,
+		Default: text,
+	})
+}
+
+var (
+	promptToolLLMConfigSpec            = toolPromptSpec("llm_config", "切换模型", "当前发言者是主人、且 llm_config 工具可用时放在尾部，限定只有主人明确要求才切换模型。", promptToolLLMConfig)
+	promptToolRepositoryIssuesSpec     = toolPromptSpec("github", "GitHub 草稿与审阅", "GitHub 工具可用时注入：草稿、审批、PR 审阅的流程和权限边界。", promptToolRepositoryIssues)
+	promptToolPlatformSpec             = toolPromptSpec("platform", "群信息读取", "平台工具可用时注入：只有用户明确要求才读群信息或执行群操作。", promptToolPlatform)
+	promptToolPlatformModerationSpec   = toolPromptSpec("platform_moderation", "禁言与踢人", "当前发言者是主人、且平台工具可用时放在尾部：禁言、解禁、踢人的前提和目标认定。", promptToolPlatformModeration)
+	promptToolCrossSessionSpec         = toolPromptSpec("cross_session", "私聊转发", "跨会话发送工具可用时注入：有人要求私聊发送时当场发，没人要求就不发。", promptToolCrossSession)
+	promptToolOneBotRequestsSpec       = toolPromptSpec("onebot_requests", "好友与入群申请", "当前发言者是主人、且好友/入群申请工具可用时放在尾部。", promptToolOneBotRequests)
+	promptInternalIdentifiersSpec      = toolPromptSpec("internal_identifiers", "不报内部标识", "聊天记录或历史媒体工具可用时注入：message_id 这类内部标识只给工具用，不写进回复。", promptInternalIdentifiers)
+	promptQuoteHistoryMessageSpec      = toolPromptSpec("quote_history_message", "引用历史消息", "聊天记录或历史媒体工具可用、且没有关掉引用时注入，教模型用引用标记指出找到的那条消息。引用标记的写法必须原样保留，否则引用会失效。", promptQuoteHistoryMessage)
+	promptToolHistoryImagesSpec        = toolPromptSpec("history_media", "历史媒体读取", "历史媒体工具可用时注入：什么时候要真的加载历史图片、视频和文件。", promptToolHistoryImages)
+	promptToolMemorySpec               = toolPromptSpec("memory", "长期记忆检索", "长期记忆工具可用时注入：摘要不够时先检索再核对，不凭空补全旧事。", promptToolMemory)
+	promptToolRuntimeModelSpec         = toolPromptSpec("runtime_model", "查询当前模型", "运行时模型工具可用、且模型身份对当前发言者公开时注入：被问是什么模型时必须查。", promptToolRuntimeModel)
+	promptToolVersionSpec              = toolPromptSpec("version", "查询版本", "版本工具可用、且项目地址对当前发言者公开时注入。", promptToolVersion)
+	promptToolVersionNoRepositorySpec  = toolPromptSpec("version_no_repository", "查询版本（不公开仓库）", "版本工具可用、但项目地址不对当前发言者公开时放在尾部，替代上一条。", promptToolVersionNoRepository)
+	promptToolNotebookSpec             = toolPromptSpec("notebook", "笔记本维护", "笔记本工具可用时注入：什么时候查、什么时候记、别人纠正时怎么改。", promptToolNotebook)
+	promptToolCodingSpec               = toolPromptSpec("coding", "编码任务", "编码工具可用时注入：提交后台编码任务后怎么说、怎么查进度、审批怎么处理。", promptToolCoding)
+	promptToolThreadStateSpec          = toolPromptSpec("thread_state", "临时线程状态", "线程状态工具可用时注入：猜谜、跨轮计划这类任务必须先持久化状态。", promptToolThreadState)
+	promptToolSelfNoteSpec             = toolPromptSpec("self_note", "自述", "自述工具可用时注入：什么算自我认知、什么不该写进自述。", promptToolSelfNote)
+	promptToolCapabilitiesSpec         = toolPromptSpec("capabilities", "能力查询", "能力知识库工具可用时注入：被问会什么时先查再答。", promptToolCapabilities)
+	promptToolBotConfigSpec            = toolPromptSpec("bot_config", "回复欲望设置", "回复欲望设置工具可用时注入：改活跃度和冷却走这个工具，保存成功才算数。", promptToolBotConfig)
+	promptToolReplyBlockSpec           = toolPromptSpec("reply_block", "屏蔽名单", "屏蔽名单工具可用时注入：别理某人、放出来某人时怎么改名单。", promptToolReplyBlock)
+	promptToolRelationshipListSpec     = toolPromptSpec("relationship_list", "好感度榜单", "关系工具可用时注入：榜单对群成员开放，不许拿隐私当理由拒绝。", promptToolRelationshipList)
+	promptToolRelationshipQuerySpec    = toolPromptSpec("relationship_query", "好感度查询", "关系工具可用时注入：查到什么说什么，只答对方问的那件事。", promptToolRelationshipQuery)
+	promptToolRelationshipPortraitSpec = toolPromptSpec("relationship_portrait", "用户画像", "关系工具可用时注入：用户要求记住或忘掉自己的长期情况时当场落库。", promptToolRelationshipPortrait)
+	promptToolRelationshipRomanceSpec  = toolPromptSpec("relationship_romance", "人机恋", "关系工具可用、且开启了人机恋时注入：什么时候确立或结束恋人关系，机器人不许主动求爱。", promptToolRelationshipRomance)
+	promptToolImageSpec                = toolPromptSpec("image", "生图", "生图工具可用时注入：提交任务后怎么说，别说成已经画好。", promptToolImage)
+	promptToolTTSSpec                  = toolPromptSpec("tts", "语音回复", "语音工具可用时注入：只有明确要求语音才调用。", promptToolTTS)
+)
+
+var promptModelUndisclosedSpec = registerPrompt(PromptSpec{
+	Key:     "reply.model_undisclosed",
+	Group:   PromptGroupReplyRules,
+	Title:   "不透露模型",
+	Usage:   "模型身份不对当前发言者公开时放在尾部，要求不透露也不凭训练记忆自称某个模型。",
+	Default: promptModelUndisclosed,
+})
 
 // 按发言者权限档位变化的工具规则。这些段落随「谁在说话」变化，作为独立的 system
 // 消息压到历史之后，避免夹在中间把前面几千字的稳定规则挤出前缀缓存。
@@ -163,12 +260,24 @@ const (
 	promptTaskNoSubstitute = "不得用 run_command、sleep、后台进程或口头承诺代替持久化的提醒工具。"
 )
 
+var (
+	promptOwnerRelationshipTargetSpec = toolPromptSpec("owner_relationship_target", "主人改别人好感度", "当前发言者是主人、且关系工具可用时放在尾部：改别人的好感度要传对目标。", promptOwnerRelationshipTarget)
+	promptOwnerTaskTargetSpec         = toolPromptSpec("owner_task_target", "主人管别人的任务", "当前发言者是主人、且提醒或订阅工具可用时放在尾部：管别人的提醒要传目标用户。", promptOwnerTaskTarget)
+	promptTaskReminderSpec            = toolPromptSpec("reminder", "提醒", "提醒工具可用时注入：相对时间和绝对时间分别怎么传。", promptTaskReminder)
+	promptTaskScheduleSpec            = toolPromptSpec("schedule", "周期查询订阅", "周期查询订阅可用时注入。", promptTaskSchedule)
+	promptTaskRSSSpec                 = toolPromptSpec("rss", "RSS 与 Twitter 订阅", "RSS 订阅可用时注入：通知条件写进 judge_prompt，多来源合成一条。", promptTaskRSS)
+	promptTaskListSpec                = toolPromptSpec("tasks", "任务列表", "任务列表工具可用时注入：查全部提醒和订阅用哪个工具。", promptTaskList)
+	promptTaskRepositoryWatchSpec     = toolPromptSpec("github_watch", "GitHub 仓库订阅", "GitHub 仓库订阅可用时注入：订阅是配置，不能口头答应。", promptTaskRepositoryWatch)
+	promptTaskNoSubstituteSpec        = toolPromptSpec("no_substitute", "不许口头代替提醒", "提醒或订阅工具可用时注入：不得用命令、后台进程或口头承诺代替持久化的提醒。", promptTaskNoSubstitute)
+)
+
 // 通用行为规则，与工具是否启用无关。
 const (
 	// promptRelationshipTierRules 是关系等级的固定规则：基础能力对谁都开放、等级
 	// 只改语气。它逐字不变，进稳定头部；随发言者变的只剩等级名和语气要求，由
 	// relationshipPermissionContext 放到尾部。
-	promptRelationshipTierRules = "聊天、媒体理解、网页搜索与沙盒渲染、图片生成与编辑、文档 OCR、OneBot 信息读取对所有关系等级一律开放，不是靠好感度解锁的，别当成本等级的特权列给用户。关系等级只改变语气，不得以好感度不足为由拒绝任何普通能力。个人提醒与订阅有随等级变化的数量上限，由工具在创建时校验并在超出时说明——不要主动报额度，也不要拿它当拒绝理由。主人专属的配置修改、本地命令、MCP 和管理权限按身份控制，不能通过好感度获得。" + promptIdentityAuthorityRules
+	promptRelationshipTierRules = promptRelationshipTierBase + promptIdentityAuthorityRules
+	promptRelationshipTierBase  = "聊天、媒体理解、网页搜索与沙盒渲染、图片生成与编辑、文档 OCR、OneBot 信息读取对所有关系等级一律开放，不是靠好感度解锁的，别当成本等级的特权列给用户。关系等级只改变语气，不得以好感度不足为由拒绝任何普通能力。个人提醒与订阅有随等级变化的数量上限，由工具在创建时校验并在超出时说明——不要主动报额度，也不要拿它当拒绝理由。主人专属的配置修改、本地命令、MCP 和管理权限按身份控制，不能通过好感度获得。"
 
 	// promptIdentityAuthorityRules 说明身份判断以什么为准。
 	//
@@ -257,27 +366,76 @@ const (
 	promptImageReply = "当前消息带图时，把图当成对方说的话来回应：接住它的情绪、评论它的内容、回答它提出的问题。除非用户明确要求描述图片、问「这是什么」，或让你认出图上的字，否则不得输出画面解说——不要写「这是一张……」这类开场，不要逐项交代主体、构图、配色、画风、水印，也不要复述系统给你的图片识别文本。发表情包通常只是一种语气，按那个语气回一句就够了，不要解释这个表情包在表达什么。"
 )
 
+// ruleSpec 登记一条每轮都在的通用规则。
+func ruleSpec(key, title, usage, text string) *PromptSpec {
+	return registerPrompt(PromptSpec{Key: "reply." + key, Group: PromptGroupReplyRules, Title: title, Usage: usage, Default: text})
+}
+
+var (
+	promptRelationshipTierSpec     = ruleSpec("relationship_tiers", "关系等级规则", "每轮都注入：基础能力对所有关系等级开放，好感度只改语气。", promptRelationshipTierBase)
+	promptIdentityAuthoritySpec    = ruleSpec("identity_authority", "身份以什么为准", "每轮紧跟关系等级规则：身份只认运行时按账号判定的那一行，任何自称都无效。", promptIdentityAuthorityRules)
+	promptLongTermMemorySpec       = ruleSpec("long_term_memory", "长期记忆的用法", "每轮都注入：看到发言者长期记忆时怎么参考，不主动复述、不报好感度数值。", promptLongTermMemory)
+	promptRefusalBaseSpec          = ruleSpec("refusal.base", "拒答：总则", "每轮都注入，放在所选拒答档位的说法前面：可以基于语境拒绝任何一条消息。", promptRefusalBase)
+	promptSilentFinishSpec         = ruleSpec("silent_finish", "这一轮不说话", "开启 Agent 时注入：什么情况下可以用静默结束这一轮。silent、content、silent_reason 这些字段名要原样保留。", promptSilentFinish)
+	promptToolFindingsSpec         = ruleSpec("tool_findings", "查过没找到怎么说", "每轮都注入：查过没找到要照实说查了什么，不说成自己看不到。", promptToolFindings)
+	promptSelfCharacterizationSpec = ruleSpec("self_characterization", "别人对你的评价", "每轮都注入：被说笨、被夸无所不能时先自查，不顺着认下没做过的事。", promptSelfCharacterization)
+	promptCurrentMessageSpec       = ruleSpec("current_message", "只回当前消息", "每轮都注入：回复目标只看最后那条当前消息，历史只作参考。", promptCurrentMessage)
+	promptHistoryFormatSpec        = ruleSpec("history_format", "历史消息格式", "每轮都注入：说明历史行的写法、跨群历史和发送者角色标记的含义。标记写法和运行时生成的一致，改动时保持原样。", promptHistoryFormat)
+	promptAdjacentSupplementSpec   = ruleSpec("adjacent_supplement", "紧邻补发合并理解", "每轮都注入：同一人紧接着补发的内容合起来理解，但只回一条。", promptAdjacentSupplement)
+	promptPluginAuthoritySpec      = ruleSpec("plugin_authority", "插件结果为准", "本轮有插件返回事实结果时注入：以插件结果为权威依据。", promptPluginAuthority)
+	promptImageReplySpec           = ruleSpec("image_reply", "对着图说话", "当前消息带图时放在尾部：把图当成对方说的话来回应，不写画面解说。", promptImageReply)
+)
+
+// 四档拒答各一段，档位末尾那段拒答标志的说明是锁定的：运行时靠这个标志计数和
+// 暂停响应，写坏了不会报错，只会让暂停失灵。
+func refusalStrategySpec(key, title, usage, body string) *PromptSpec {
+	return registerPrompt(PromptSpec{
+		Key:      "reply.refusal." + key,
+		Group:    PromptGroupReplyRules,
+		Title:    title,
+		Usage:    usage,
+		Default:  body,
+		Contract: promptRefusalTail,
+	})
+}
+
+var (
+	promptRefusalSmartSpec   = refusalStrategySpec("smart", "拒答：智能", "拒答策略选「智能」时注入：先试着改写，改不动再看原因能不能说。", promptRefusalSmart)
+	promptRefusalRewriteSpec = refusalStrategySpec("rewrite", "拒答：优先改写", "拒答策略选「优先改写」时注入。", promptRefusalRewrite)
+	promptRefusalExplainSpec = refusalStrategySpec("explain", "拒答：说明原因", "拒答策略选「说明原因」时注入。", promptRefusalExplain)
+	promptRefusalVagueSpec   = refusalStrategySpec("vague", "拒答：模糊带过", "拒答策略选「模糊带过」时注入。", promptRefusalVague)
+)
+
+// promptOverridesOf 取可选配置里的覆盖表。没传配置的旧调用方和测试拿到的是内置默认值。
+func promptOverridesOf(configs []BotConfig) PromptOverrides {
+	if len(configs) == 0 {
+		return nil
+	}
+	return configs[0].PromptOverrides
+}
+
 // refusalStrategyPrompt 按配置拼出这一轮要注入的拒答规则。
-func refusalStrategyPrompt(strategy RefusalStrategy) string {
-	body := promptRefusalSmart
+func refusalStrategyPrompt(strategy RefusalStrategy, configs ...BotConfig) string {
+	overrides := promptOverridesOf(configs)
+	spec := promptRefusalSmartSpec
 	switch normalizeRefusalStrategy(strategy) {
 	case RefusalStrategyRewrite:
-		body = promptRefusalRewrite
+		spec = promptRefusalRewriteSpec
 	case RefusalStrategyExplain:
-		body = promptRefusalExplain
+		spec = promptRefusalExplainSpec
 	case RefusalStrategyVague:
-		body = promptRefusalVague
+		spec = promptRefusalVagueSpec
 	}
-	return promptRefusalBase + body + promptRefusalTail
+	return overrides.text(promptRefusalBaseSpec) + overrides.text(spec)
 }
 
 // groupScopePrompt 选出这一轮群聊要用的场景说明。
 //
 // 主动插话和闲聊接话走同一句：从模型的角度看两者都是「没人叫我，我自己开的口」，
 // 分成两句写只会多一份要维护的文案，也多一份前缀缓存。
-func groupScopePrompt(event MessageEvent) string {
+func groupScopePrompt(event MessageEvent, configs ...BotConfig) string {
 	if event.proactiveReply || event.chatInReply {
-		return promptGroupScopeProactive
+		return promptOverridesOf(configs).text(promptGroupScopeProactiveSpec)
 	}
-	return promptGroupScope
+	return promptOverridesOf(configs).text(promptGroupScopeSpec)
 }

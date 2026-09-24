@@ -86,7 +86,7 @@ func TestEveryReplyStyleTeachesTheSplitMarker(t *testing.T) {
 
 func TestCustomPlaintextRulesAreKept(t *testing.T) {
 	const custom = "只用短句，不要列点。"
-	if got := (BotConfig{PromptPlaintextRulesText: custom}).WithDefaults().PromptPlaintextRulesText; got != custom {
+	if got := (BotConfig{PromptOverrides: PromptOverrides{promptPlaintextRulesSpec.Key: custom}}).WithDefaults().prompt(promptPlaintextRulesSpec); got != custom {
 		t.Fatalf("custom plaintext rules were overwritten: %q", got)
 	}
 }

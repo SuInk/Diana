@@ -31,15 +31,11 @@ type personaDeletePayload struct {
 	ID string `json:"id"`
 }
 
-// personaImportPayload 接的是导出文件的内容。Version 目前只用来在格式变了以后
-// 认出旧文件，现在不参与任何判断——先记下来，比将来无从分辨强。
+// personaImportPayload 接的是人设文件的原文，YAML 只在服务端解析，按文件里的
+// format_version 选规则。以前还收前端解析好的 personas 数组，那条路绕开了格式检查，
+// 旧格式不再兼容，一并去掉。
 type personaImportPayload struct {
-	Version  int                 `json:"version,omitempty"`
-	Personas []assistant.Persona `json:"personas"`
-	// Source 是整份文件的原文，前端读到什么就发什么。YAML 只能在服务端解析
-	// （前端没有 YAML 解析器），而品格层本来就该写成 YAML：十来段带理由的条目，
-	// JSON 里既没有注释也没有多行字符串。老前端仍然发 personas，两条都认。
-	Source string `json:"source,omitempty"`
+	Source string `json:"source"`
 }
 
 type personaImportResponse struct {
@@ -67,6 +63,48 @@ func (h *BotHandler) registerPersonaRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/personas", h.savePersona)
 	router.POST(base+"/personas/delete", h.deletePersona)
 	router.POST(base+"/personas/import", h.importPersonas)
+	router.POST(base+"/personas/yaml", h.renderPersonaYAML)
+	router.POST(base+"/personas/parse", h.parsePersonaSource)
+}
+
+type personaYAMLPayload struct {
+	Personas []assistant.Persona `json:"personas"`
+}
+
+// renderPersonaYAML 把人设渲染成 YAML，给导出分享和 YAML 编辑器用。YAML 只在服务端
+// 生成和解析：前端没有 YAML 库，两头各写一份迟早对不上。
+func (h *BotHandler) renderPersonaYAML(c *gin.Context) {
+	var payload personaYAMLPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "personas_yaml", err, "", nil)
+		return
+	}
+	if len(payload.Personas) == 0 {
+		h.writeError(c, http.StatusBadRequest, "personas_yaml", errPersonaImportEmpty, "", nil)
+		return
+	}
+	out, err := assistant.RenderPersonaYAML(payload.Personas)
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "personas_yaml", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"yaml": string(out)})
+}
+
+// parsePersonaSource 只解析不入库：YAML 编辑器点「应用」时把结果填回表单，
+// 保存与否仍由用户按保存决定。
+func (h *BotHandler) parsePersonaSource(c *gin.Context) {
+	var payload personaImportPayload
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "personas_parse", err, "", nil)
+		return
+	}
+	document, err := assistant.ParsePersonaDocument([]byte(payload.Source))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "personas_parse", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"personas": document.Personas})
 }
 
 func (h *BotHandler) loadPersonaSet(c *gin.Context) (assistant.PersonaSet, bool) {
@@ -168,16 +206,9 @@ func (h *BotHandler) importPersonas(c *gin.Context) {
 		h.writeError(c, http.StatusBadRequest, "personas_import", err, "", nil)
 		return
 	}
-	if len(payload.Personas) == 0 && strings.TrimSpace(payload.Source) != "" {
-		document, err := assistant.ParsePersonaDocument([]byte(payload.Source))
-		if err != nil {
-			h.writeError(c, http.StatusBadRequest, "personas_import", err, "", nil)
-			return
-		}
-		payload.Personas = document.Personas
-	}
-	if len(payload.Personas) == 0 {
-		h.writeError(c, http.StatusBadRequest, "personas_import", errPersonaImportEmpty, "", nil)
+	document, err := assistant.ParsePersonaDocument([]byte(payload.Source))
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "personas_import", err, "", nil)
 		return
 	}
 	personaLibraryMu.Lock()
@@ -187,7 +218,7 @@ func (h *BotHandler) importPersonas(c *gin.Context) {
 	if !ok {
 		return
 	}
-	updated, result := set.Import(payload.Personas, time.Now())
+	updated, result := set.Import(document.Personas, time.Now())
 	if err := h.sqlite.SaveBotPersonas(c.Request.Context(), updated); err != nil {
 		h.writeError(c, http.StatusInternalServerError, "personas_import", err, "", nil)
 		return

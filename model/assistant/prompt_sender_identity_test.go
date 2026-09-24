@@ -43,7 +43,7 @@ func TestConversationPromptContextsIncludeSenderUserID(t *testing.T) {
 
 	for name, text := range map[string]string{
 		"history":      historyPromptTextAt(event, 2),
-		"supplement":   proactiveTurnPromptTextAt(event, "hello", 2),
+		"supplement":   proactiveTurnPromptTextAt(event, "hello", 2, nil),
 		"current":      currentPromptText(event, "hello"),
 		"quoted":       quotedPromptText(quoted),
 		"summary line": compactContextEvent(event),
@@ -137,7 +137,7 @@ func TestPromptSenderOpaqueIDPrivacy(t *testing.T) {
 			for name, content := range map[string]string{
 				"current":    currentPromptText(event, "hello"),
 				"history":    historyPromptTextAt(event, 0),
-				"supplement": proactiveTurnPromptTextAt(event, "hello", 0),
+				"supplement": proactiveTurnPromptTextAt(event, "hello", 0, nil),
 				"quoted":     quotedPromptText(quoted),
 				"summary":    compactContextEvent(event),
 			} {

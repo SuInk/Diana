@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -182,16 +181,26 @@ func (r *Runtime) deliverRomanceGreeting(ctx context.Context, cfg BotConfig, pro
 	_ = writer.AppendLog(ctx, entry)
 }
 
+var promptRomanceGreetingSpec = registerPrompt(PromptSpec{
+	Key:   "social.romance_anniversary",
+	Group: PromptGroupSocial,
+	Title: "恋爱纪念日问候",
+	Usage: "和机器人确立恋人关系的用户到了纪念日，机器人主动发问候时用这段让模型按人设写祝福。",
+	Default: "{note}你和 {who} 是确立了关系的恋人，这条消息由你主动发起，对方还没说话。" +
+		"给对方发一条纪念日问候：1 到 3 句，语气符合你的人设和你们的关系，可以提到在一起的时间和某种具体的心意；" +
+		"不要提系统、提醒、定时任务或机器人身份，不要用括号描写动作，只输出要发送的话。",
+	Vars: []PromptVar{
+		{Name: "note", Description: "纪念日说明，如「今天是你们确立关系满 3 个月的日子。」"},
+		{Name: "who", Description: "对方的昵称，没有昵称时是用户 ID"},
+	},
+})
+
 // generateRomanceGreeting 用人设语气生成祝福；模型不可用时退回朴素模板——
 // 纪念日漏掉比措辞平淡严重得多。
 func (r *Runtime) generateRomanceGreeting(ctx context.Context, event MessageEvent, profile UserMemoryProfile, note string) string {
 	ctx = withLLMUsagePurpose(ctx, "romance_greeting")
 	who := firstNonEmpty(strings.TrimSpace(profile.DisplayName), profile.UserID)
-	instruction := fmt.Sprintf(
-		"%s你和 %s 是确立了关系的恋人，这条消息由你主动发起，对方还没说话。"+
-			"给对方发一条纪念日问候：1 到 3 句，语气符合你的人设和你们的关系，可以提到在一起的时间和某种具体的心意；"+
-			"不要提系统、提醒、定时任务或机器人身份，不要用括号描写动作，只输出要发送的话。",
-		note, who)
+	instruction := r.effectiveConfigForEvent(event).promptf(promptRomanceGreetingSpec, map[string]string{"note": note, "who": who})
 	messages := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})
 	callCtx, cancel := context.WithTimeout(ctx, romanceGreetingTimeout)
 	defer cancel()

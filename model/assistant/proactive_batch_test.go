@@ -75,10 +75,10 @@ func TestProactiveReplyBatchReplacesLegacyRouterPrompt(t *testing.T) {
 		`{"should_reply":true,"confidence":0.97,"category":"needs_response","target_message_id":"message-1","turn_message_ids":["message-1"],"directed_at_bot":false,"answerable":true}`,
 	}}
 	runtime := NewRuntime(BotConfig{
-		BotAccount:                 "42",
-		ProactiveReplyChance:       1,
-		ProactiveReplyThreshold:    0.8,
-		ProactiveReplyRouterPrompt: "custom proactive router prompt",
+		BotAccount:              "42",
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
+		PromptOverrides:         PromptOverrides{promptLegacyRouterSpec.Key: "custom proactive router prompt"},
 	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})

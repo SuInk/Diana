@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -41,8 +42,12 @@ const (
 
 // Persona 是一套具名人设。
 type Persona struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Version 是这套人设自己的版本号，写在分享出去的文件里，用来分辨谁手里的更新。
+	// 存进人设库时内容有变化就加一；文件里写了更大的号（作者自己定的、或导入的
+	// 新版）以文件为准。
+	Version      int    `json:"persona_version,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
 	// Soul 是品格层：身份、价值、硬边界。正文说「怎么说话」，它说「是什么、
 	// 珍视什么、为什么」。分群覆盖动不了它，见 persona_soul.go。
@@ -58,7 +63,16 @@ type Persona struct {
 	DaypartToneEnabled       *bool       `json:"daypart_tone_enabled,omitempty"`
 	SelfReference            string      `json:"self_reference,omitempty"`
 	SentenceEnders           string      `json:"sentence_enders,omitempty"`
-	UpdatedAt                time.Time   `json:"updated_at,omitempty"`
+	// Prompts 是这套人设改过的内置提示词，和 BotConfig.PromptOverrides 同一个形状：
+	// 只存改过的，套用时整份替换机器人的覆盖表。提示词跟着人设走，分享一份人设文件
+	// 就是分享它的全部提示词配置，见 persona_prompts.go。
+	Prompts PromptOverrides `json:"prompts,omitempty"`
+	// ExtraCriteria 和 AccountSafetyRules 是判据：接话评分的补充判据、发送前审核的
+	// 账号安全规则。它们在机器人配置里各有字段（分群仍可覆盖），跟着人设走是为了
+	// 让一份人设文件就是全部提示词配置，套用时填进机器人的那两个字段。
+	ExtraCriteria      string    `json:"extra_criteria,omitempty"`
+	AccountSafetyRules string    `json:"account_safety_rules,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
 }
 
 // PersonaSet 是整个人设库。
@@ -75,6 +89,7 @@ func copyCustomPersona(persona *Persona) *Persona {
 	copy.DaypartToneEnabled = copyBoolPointer(persona.DaypartToneEnabled)
 	copy.SystemPrompt = migratePersonaStyle(copy.SystemPrompt, &copy.ReplyStyle, &copy.ActionDescriptionEnabled)
 	copy.Soul = persona.Soul.Clone()
+	copy.Prompts = copyPromptOverrides(persona.Prompts)
 	return &copy
 }
 
@@ -156,6 +171,12 @@ func (persona Persona) Normalized() Persona {
 	if persona.PersonaMode != PersonaModeOwn {
 		persona.PersonaMode = ""
 	}
+	persona.Prompts = normalizePromptOverrides(persona.Prompts)
+	if persona.Version < 0 {
+		persona.Version = 0
+	}
+	persona.ExtraCriteria = truncateRunesPlain(strings.TrimSpace(persona.ExtraCriteria), ProactiveReplyExtraCriteriaMaxRunes)
+	persona.AccountSafetyRules = truncateRunesPlain(strings.TrimSpace(persona.AccountSafetyRules), AccountSafetyRulesMaxRunes)
 	return persona
 }
 
@@ -167,8 +188,14 @@ func (persona Persona) Empty() bool {
 		persona.ActionDescriptionEnabled == nil &&
 		persona.DaypartToneEnabled == nil &&
 		strings.TrimSpace(persona.SelfReference) == "" &&
-		strings.TrimSpace(persona.SentenceEnders) == ""
+		strings.TrimSpace(persona.SentenceEnders) == "" &&
+		len(persona.Prompts) == 0 &&
+		strings.TrimSpace(persona.ExtraCriteria) == "" &&
+		strings.TrimSpace(persona.AccountSafetyRules) == ""
 }
+
+// AccountSafetyRulesMaxRunes 是账号安全规则的长度上限，群配置的保存校验用的同一个数。
+const AccountSafetyRulesMaxRunes = 8000
 
 // WithDefaults 清洗整库：去掉空条目和重复 ID，按最近更新排前面。
 func (set PersonaSet) WithDefaults() PersonaSet {
@@ -205,10 +232,16 @@ func (set PersonaSet) Save(persona Persona, now time.Time) (PersonaSet, Persona,
 	persona.UpdatedAt = now
 	for index := range set.Personas {
 		if set.Personas[index].ID == persona.ID {
+			existing := set.Personas[index]
+			persona.Version = max(persona.Version, existing.Version)
+			if !existing.sameContent(persona) {
+				persona.Version = max(persona.Version, existing.Version+1)
+			}
 			set.Personas[index] = persona
 			return set.WithDefaults(), persona, nil
 		}
 	}
+	persona.Version = max(persona.Version, 1)
 	if len(set.Personas) >= PersonaLibraryMaxEntries {
 		return set, Persona{}, errPersonaLibraryFull
 	}
@@ -309,14 +342,21 @@ type PersonaImportResult struct {
 
 // sameContent 比四项正文,不比 ID 和时间:判断「这套是不是已经有了」跟它什么时候
 // 存的、在别人机器上是什么 ID 无关。
+// sameContent 比较两套人设的全部内容：正文、品格、开关、提示词、判据。名字、ID、
+// 版本号和时间不算内容。以前只比正文和几个开关，品格和提示词改了也被当成没改，
+// 导入时会把新版当重复跳过，版本号也不会涨。
 func (persona Persona) sameContent(other Persona) bool {
-	return persona.SystemPrompt == other.SystemPrompt &&
-		boolValue(persona.ActionDescriptionEnabled, false) == boolValue(other.ActionDescriptionEnabled, false) &&
-		(persona.DaypartToneEnabled == nil) == (other.DaypartToneEnabled == nil) &&
-		boolValue(persona.DaypartToneEnabled, false) == boolValue(other.DaypartToneEnabled, false) &&
-		persona.SelfReference == other.SelfReference &&
-		persona.SentenceEnders == other.SentenceEnders &&
-		persona.PersonaMode == other.PersonaMode
+	return persona.contentFingerprint() == other.contentFingerprint()
+}
+
+func (persona Persona) contentFingerprint() string {
+	persona = persona.Normalized()
+	persona.ID, persona.Name, persona.Version, persona.UpdatedAt = "", "", 0, time.Time{}
+	encoded, err := json.Marshal(persona)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 // Import 把外部来的几套人设并进库里。
@@ -358,6 +398,7 @@ func (set PersonaSet) Import(incoming []Persona, now time.Time) (PersonaSet, Per
 			continue
 		}
 		persona.UpdatedAt = now
+		persona.Version = max(persona.Version, 1)
 		set.Personas = append(set.Personas, persona)
 		result.Imported = append(result.Imported, persona)
 	}

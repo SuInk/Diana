@@ -1301,7 +1301,7 @@
                     </button>
                   </div>
                 </div>
-                <input ref="personaFileInput" type="file" accept="application/json,.json,.yaml,.yml,image/png,.png" style="display: none" @change="importPersonaFile" />
+                <input ref="personaFileInput" type="file" accept=".yaml,.yml,application/json,.json,image/png,.png" style="display: none" @change="importPersonaFile" />
                 <div v-if="personaSaverOpen" class="persona-saver">
                   <input
                     ref="personaNameInput"
@@ -1322,6 +1322,11 @@
                       <span class="persona-chip-name">自定义</span>
                       <small class="muted">当前编辑</small>
                     </button>
+                    <span class="persona-chip-actions">
+                      <button type="button" class="persona-chip-action" aria-label="编辑当前人设" title="编辑当前人设（YAML）" @click="openPersonaYAML()">
+                        <Pencil :size="13" aria-hidden="true" />
+                      </button>
+                    </span>
                   </div>
                   <div v-for="persona in personaLibrary" :key="persona.id" class="persona-chip" :class="{ 'is-active': selectedPersonaID === persona.id }">
                     <button type="button" class="persona-chip-apply" :disabled="personaLibraryBusy" :aria-pressed="selectedPersonaID === persona.id" :title="personaSummary(persona)" @click="choosePersona(persona.id)">
@@ -1329,6 +1334,16 @@
                       <small class="muted">{{ isBuiltinPersona(persona) ? "内置 · " : "" }}{{ personaSummary(persona) }}</small>
                     </button>
                     <span class="persona-chip-actions">
+                      <button
+                        type="button"
+                        class="persona-chip-action"
+                        :disabled="personaLibraryBusy"
+                        :aria-label="`编辑人设 ${persona.name}`"
+                        :title="isBuiltinPersona(persona) ? `编辑人设 ${persona.name}（内置的改不了，保存时另存一套）` : `编辑人设 ${persona.name}（YAML）`"
+                        @click="openPersonaYAML(persona)"
+                      >
+                        <Pencil :size="13" aria-hidden="true" />
+                      </button>
                       <button type="button" class="persona-chip-action" :aria-label="`导出人设 ${persona.name}`" :title="`导出人设 ${persona.name}`" @click="exportPersona(persona)">
                         <Download :size="13" aria-hidden="true" />
                       </button>
@@ -1731,6 +1746,19 @@
             </div>
           </section>
 
+          <!-- 内置提示词跟着人设走：存进人设库、导出分享、YAML 编辑器里都是这一整套。
+               只存改过的正文，没改的跟着版本更新走；要解析输出的那几段把格式锁在正文后面。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>内置提示词</h2>
+                <span class="card-sub">每一段发给模型的内置文案都在这里，属于当前人设：存进人设库、导出 YAML 时一起带上。改过的保存后生效，没改过的随版本更新。</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <PromptOverridesEditor :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+            </div>
+          </section>
         </div>
 
         <!-- 上下文：分同一个窗口的几件事放在一起。工具档位原来在扩展页，那一排标签
@@ -2043,6 +2071,38 @@
       @saved="onMessageRelaysSaved"
     />
 
+    <!-- 人设 YAML：这一套人设的全部提示词配置写在一个文件里，编辑、复制分享、下载都在这。
+         「应用」只填回表单，保存仍然要按保存。 -->
+    <Modal v-if="personaYAMLOpen" :title="personaYAMLTitle" wide @close="closePersonaYAML">
+      <div class="stack" style="gap: 10px">
+        <p class="hint persona-yaml-hint">
+          这是这套人设的全部提示词配置：正文、品格、自称与语气词、判据，以及 prompts 下的每一段内置提示词和输出格式（没改过的是默认原文）。
+          保存时 prompts 必须一段不少、一段不多；和默认原文相同的不会存成修改。复制或下载这份文件就能分享给别人，对方在人设库里导入即可。
+        </p>
+        <textarea
+          v-model="personaYAMLSource"
+          class="textarea persona-yaml-text"
+          aria-label="人设 YAML"
+          spellcheck="false"
+          :disabled="personaYAMLBusy && !personaYAMLSource"
+          :placeholder="personaYAMLBusy ? '正在生成…' : ''"
+        ></textarea>
+        <p v-if="personaYAMLError" class="persona-yaml-error" role="alert">{{ personaYAMLError }}</p>
+      </div>
+      <template #footer>
+        <button class="btn small" type="button" :disabled="!personaYAMLSource" @click="copyPersonaYAML">
+          <Copy :size="14" aria-hidden="true" />
+          复制
+        </button>
+        <button class="btn small" type="button" :disabled="!personaYAMLSource" @click="downloadPersonaYAML">
+          <Download :size="14" aria-hidden="true" />
+          下载
+        </button>
+        <button class="btn" type="button" @click="closePersonaYAML">取消</button>
+        <button class="btn primary" type="button" :disabled="personaYAMLBusy || !personaYAMLSource.trim()" @click="applyPersonaYAML">{{ personaYAMLApplyLabel }}</button>
+      </template>
+    </Modal>
+
     <Modal
       v-if="personaComposerOpen"
       :title="form?.system_prompt?.trim() ? '按需求改写人设' : 'AI 生成人设'"
@@ -2105,8 +2165,8 @@ import { useConfigurationRefresh } from "../configuration-sync";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
-import { ArrowLeft, Bot, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
-import { asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GripVertical, Pencil, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, Settings2, Shuffle, Sparkles, Trash2, Upload, X } from "@lucide/vue";
+import { applyPersonaDocument, asCustomPersona, currentPersonaSelection, personaFromSettings, selectPersona, unusedPersonaName } from "../persona-settings";
 import { withBuiltinPersonas, isBuiltinPersona, defaultSystemPrompt } from "../builtin-personas";
 import { formatClock } from "../format";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../send-retry-settings";
@@ -2137,10 +2197,10 @@ import {
   listPersonas,
   savePersona,
   deletePersona,
-  importPersonas,
   importPersonaSource,
+  parsePersonaSource,
+  renderPersonaYAML,
   importCharacterCard,
-  PERSONA_EXPORT_VERSION,
   type CharacterCardV2,
   type Persona,
   listWorldBook,
@@ -2162,6 +2222,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
+import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 import { participationFromConfig, type ParticipationPreferences } from "../participation";
 import type { PersonaLintFinding } from "../api";
 import { personaOwnsVoice, personaOwnedNotices } from "../persona-owned";
@@ -2710,6 +2771,7 @@ const personaHasContent = computed(() => {
       current.sentence_enders?.trim() ||
       current.action_description_enabled
       || current.daypart_tone_enabled
+      || Object.keys(current.prompt_overrides ?? {}).length
   );
 });
 
@@ -2968,30 +3030,8 @@ function personaFileInputClick(): void {
   personaFileInput.value?.click();
 }
 
-// 单套和整库导出的是同一种文件（personas 数组里放一个还是放几个而已），
-// 所以单套文件也能直接被导入，不用为它另开一条读取分支。
-// 不导 id 和 updated_at：id 是本机的，导到别处只会撞车（后端也一律重新分配）。
-function personaExportPayload(personas: Persona[]): string {
-  return JSON.stringify(
-    {
-      version: PERSONA_EXPORT_VERSION,
-      exported_at: new Date().toISOString(),
-      personas: personas.map((persona) => ({
-        name: persona.name,
-        system_prompt: persona.system_prompt ?? "",
-        action_description_enabled: persona.action_description_enabled ?? false,
-        daypart_tone_enabled: persona.daypart_tone_enabled,
-        self_reference: persona.self_reference ?? "",
-        sentence_enders: persona.sentence_enders ?? ""
-      }))
-    },
-    null,
-    2
-  );
-}
-
-function downloadPersonaFile(fileName: string, content: string): void {
-  const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+function downloadPersonaFile(fileName: string, content: string, type = "application/json"): void {
+  const url = URL.createObjectURL(new Blob([content], { type }));
   const link = document.createElement("a");
   link.href = url;
   link.download = fileName;
@@ -3007,12 +3047,22 @@ function personaFileSlug(name: string): string {
 }
 
 // 导出直接用内存里那份：它就是整库，再跑一趟接口拿不到别的东西。
-function exportPersonaLibrary(): void {
-  downloadPersonaFile(`diana-personas-${new Date().toISOString().slice(0, 10)}.json`, personaExportPayload(personaLibrary.value));
+// 导出成 YAML：分享出去的是整套人设，包括品格和全部内置提示词。YAML 由后端生成，
+// 以前那份前端拼的 JSON 连品格都没带上。
+async function exportPersonaLibrary(): Promise<void> {
+  await exportPersonas(personaLibrary.value, `diana-personas-${new Date().toISOString().slice(0, 10)}.yaml`);
 }
 
-function exportPersona(persona: Persona): void {
-  downloadPersonaFile(`diana-persona-${personaFileSlug(persona.name)}-${new Date().toISOString().slice(0, 10)}.json`, personaExportPayload([persona]));
+async function exportPersona(persona: Persona): Promise<void> {
+  await exportPersonas([persona], `diana-persona-${personaFileSlug(persona.name)}-${new Date().toISOString().slice(0, 10)}.yaml`);
+}
+
+async function exportPersonas(personas: Persona[], fileName: string): Promise<void> {
+  try {
+    downloadPersonaFile(fileName, await renderPersonaYAML(personas), "application/yaml");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "导出失败");
+  }
 }
 
 // fileToBase64 读出文件的 base64 正文。走 dataURL 再剥前缀：对二进制 PNG 和
@@ -3075,30 +3125,13 @@ async function importPersonaFile(event: Event): Promise<void> {
       toastSuccess(`导入 ${imported.imported} 套`);
       return;
     }
+    // JSON 只收 SillyTavern 角色卡。人设文件只有 YAML 一种格式，旧的 JSON 导出不再兼容。
     const parsed = JSON.parse(text) as unknown;
     if (looksLikeCharacterCard(parsed)) {
       await importCharacterCardFile(file);
       return;
     }
-    // 导出文件是 {personas: [...]}，但手写或从别处拿到的可能就是个数组，
-    // 甚至是单独一套。三种都收下，没必要为格式挑剔到让人回去改文件。
-    const list = Array.isArray(parsed)
-      ? parsed
-      : Array.isArray((parsed as { personas?: unknown }).personas)
-        ? (parsed as { personas: unknown[] }).personas
-        : [parsed];
-    const result = await importPersonas(list as Persona[]);
-    savedPersonaLibrary.value = result.personas ?? [];
-    const notes = [`导入 ${result.imported} 套`];
-    if (result.renamed) notes.push(`${result.renamed} 套重名已改名`);
-    if (result.skipped) notes.push(`${result.skipped} 套重复已跳过`);
-    if (result.dropped) notes.push(`${result.dropped} 套无效已忽略`);
-    toastSuccess(notes.join("，"));
-    // 认不出来的风格单独说：它不算失败，导入照常成功，但那几套的语气会退回
-    // 「助手」。混在上面那串数字里说，用户不会注意到自己拼错了。
-    if (result.unknown_styles?.length) {
-      toastError(`旧表达风格无法识别，已保留人设正文导入：${result.unknown_styles.join("、")}`);
-    }
+    toastError("人设文件请用 YAML（在人设库里导出或编辑得到）；JSON 只支持 SillyTavern 角色卡");
   } catch (error) {
     toastError(error instanceof SyntaxError ? "这个文件不是有效的 JSON" : error instanceof Error ? error.message : "人设导入失败");
   } finally {
@@ -4253,25 +4286,114 @@ function splitList(raw: string): string[] {
     .filter((item) => item !== "");
 }
 
-// 「恢复内置提示词」要恢复的是后端那套默认值，所以除了人设，这里一律留空：
-// 保存时 BotConfig.WithDefaults 会把空字符串补成它自己的默认文案，前端不再抄一份。
-// 抄过的那几份都烂掉过——排版规则停在一版没有「正文不要输出真实换行符」的旧文案，
-// 主动回复提示词停在后端专门写了迁移去替换掉的 legacySingleMessageProactiveReplyPrompt，
-// 点一次「恢复」等于把旧文案按回配置里。这几个字段本来也没有输入框，留空不会让人看见空白。
-//
-// 人设是例外：它有输入框，恢复后要当场显示出来给人看，所以前端留了一份逐字节副本
-// （builtin-personas.ts 里的 defaultSystemPrompt），由测试盯着它和 Go 常量一致。
+// 「恢复内置默认」：人设正文换回内置那份，内置提示词的覆盖全部清掉。人设正文有输入框，
+// 恢复后要当场显示出来，所以前端留了一份逐字节副本（builtin-personas.ts 里的
+// defaultSystemPrompt），由测试盯着它和 Go 常量一致；提示词的默认值只在后端。
 const promptDefaults = {
-  system_prompt: defaultSystemPrompt,
-  prompt_chinese_slang_text: "",
-  prompt_plaintext_rules_text: "",
-  prompt_time_template: "",
-  prompt_group_sender_template: "",
-  prompt_image_only_text: "",
-  prompt_wake_only_text: "",
-  proactive_reply_router_prompt: "",
-  proactive_reply_prompt: ""
+  system_prompt: defaultSystemPrompt
 };
+
+// ── 人设 YAML ───────────────────────────────────────────────────────────────
+// YAML 由后端生成和解析：前端没有 YAML 库，两头各写一份迟早对不上。
+const personaYAMLOpen = ref(false);
+const personaYAMLSource = ref("");
+const personaYAMLBusy = ref(false);
+const personaYAMLError = ref("");
+// 编辑的是哪一套：没有就是表单里正在编辑的「自定义」，有就是人设库里的那一套。
+const personaYAMLTarget = ref<Persona | null>(null);
+const personaYAMLTitle = computed(() => (personaYAMLTarget.value ? `编辑人设 · ${personaYAMLTarget.value.name}` : "编辑当前人设"));
+const personaYAMLApplyLabel = computed(() => {
+  const target = personaYAMLTarget.value;
+  if (!target) return "应用到表单";
+  return isBuiltinPersona(target) ? "另存到人设库" : "保存到人设库";
+});
+
+function currentPersonaName(): string {
+  const selected = personaLibrary.value.find((persona) => persona.id === selectedPersonaID.value);
+  return selected?.name || form.value?.name || "自定义";
+}
+
+async function openPersonaYAML(target?: Persona): Promise<void> {
+  if (!form.value) return;
+  personaYAMLTarget.value = target ?? null;
+  personaYAMLOpen.value = true;
+  personaYAMLSource.value = "";
+  personaYAMLError.value = "";
+  personaYAMLBusy.value = true;
+  try {
+    personaYAMLSource.value = await renderPersonaYAML([target ?? { id: "", ...personaFromSettings(form.value, currentPersonaName()) }]);
+  } catch (error) {
+    personaYAMLError.value = error instanceof Error ? error.message : "生成 YAML 失败";
+  } finally {
+    personaYAMLBusy.value = false;
+  }
+}
+
+function closePersonaYAML(): void {
+  if (personaYAMLBusy.value) return;
+  personaYAMLOpen.value = false;
+}
+
+async function applyPersonaYAML(): Promise<void> {
+  if (!form.value) return;
+  personaYAMLBusy.value = true;
+  personaYAMLError.value = "";
+  try {
+    const personas = await parsePersonaSource(personaYAMLSource.value);
+    if (personas.length !== 1) {
+      personaYAMLError.value = personas.length ? `这里只能放一套人设，读到了 ${personas.length} 套；多套请在人设库里导入` : "没有读到人设";
+      return;
+    }
+    const target = personaYAMLTarget.value;
+    if (!target) {
+      form.value = applyPersonaDocument(form.value, personas[0]);
+      personaYAMLOpen.value = false;
+      toastSuccess("已按 YAML 填好人设和提示词，保存配置后生效");
+      return;
+    }
+    await savePersonaFromYAML(target, personas[0]);
+  } catch (error) {
+    personaYAMLError.value = error instanceof Error ? error.message : "YAML 解析失败";
+  } finally {
+    personaYAMLBusy.value = false;
+  }
+}
+
+// 人设库里的一套：存回库里。内置的改不了原件，另存成一套新的。库和机器人不是活绑定，
+// 但正在用的就是这一套时，表单也跟着换成改好的，免得改完还得再点一次。
+async function savePersonaFromYAML(target: Persona, edited: Persona): Promise<void> {
+  const builtin = isBuiltinPersona(target);
+  const name = (edited.name ?? "").trim() || target.name;
+  const wasSelected = selectedPersonaID.value === target.id;
+  personaLibraryBusy.value = true;
+  try {
+    const response = await savePersona({
+      ...edited,
+      id: builtin ? "" : target.id,
+      name: builtin ? unusedPersonaName(name, personaLibrary.value) : name
+    });
+    savedPersonaLibrary.value = response.personas ?? [];
+    if (form.value && (wasSelected || builtin)) form.value = selectPersona(form.value, response.persona);
+    personaYAMLOpen.value = false;
+    toastSuccess(builtin ? `已另存为人设「${response.persona.name}」` : `人设「${response.persona.name}」已保存`);
+  } finally {
+    personaLibraryBusy.value = false;
+  }
+}
+
+async function copyPersonaYAML(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(personaYAMLSource.value);
+    toastSuccess("已复制，发给别人就能导入");
+  } catch {
+    toastError("复制失败，请手动全选复制");
+  }
+}
+
+function downloadPersonaYAML(): void {
+  const name = personaYAMLTarget.value?.name ?? currentPersonaName();
+  downloadPersonaFile(`diana-persona-${personaFileSlug(name)}.yaml`, personaYAMLSource.value, "application/yaml");
+}
 
 function openPersonaComposer(): void {
   personaComposerOpen.value = true;
@@ -4357,6 +4479,7 @@ function resetPromptDefaults(): void {
     prompt_inject_group_sender: true,
     prompt_chinese_slang_hint: true
   });
+  form.value.prompt_overrides = undefined;
   toastSuccess("已恢复内置提示词，保存配置后生效");
 }
 

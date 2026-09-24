@@ -65,7 +65,10 @@ func (t *recallImageTarget) failurePositions() []recallImagePosition {
 // vision 分组，chat 分组可以是另一个模型，原图对它可能完全可读。所以这里绝不能替模型
 // 断言「你看不了图」——那会让它谎称自己看不见一张其实看得见的图。只说清楚发生了什么，
 // 看得见看不见由模型自己判断。
-func imageFailureNotice(event MessageEvent, imageAttached bool) string {
+//
+// configs 传机器人配置时读它的覆盖值；标题那行是固定的段头，不开放修改。
+func imageFailureNotice(event MessageEvent, imageAttached bool, configs ...BotConfig) string {
+	overrides := promptOverridesOf(configs)
 	counts := map[string]int{}
 	segments := append([]MessageSegment(nil), event.Segments...)
 	if event.Quoted != nil {
@@ -89,17 +92,13 @@ func imageFailureNotice(event MessageEvent, imageAttached bool) string {
 		if count == 0 {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("- %d 张：%s", count, imageFailureExplanations[reason]))
+		lines = append(lines, fmt.Sprintf("- %d 张：%s", count, overrides.text(imageFailureExplanations[reason])))
 	}
 	var tail []string
 	if imageAttached {
-		tail = append(tail, "原图仍附在本条消息里：你能看到就当普通图片正常回应，不必提这段说明。")
+		tail = append(tail, overrides.text(promptImageFailureAttachedSpec))
 	}
-	tail = append(tail,
-		// 不在这里列违禁词：把「接口」「通道」写进提示词，等于先把它们递到模型嘴边。
-		"确实看不到时，按你自己的身份用一句日常说法带过，例如「这张图我这边没打开」，"+
-			"不解释原因，也不提任何内部细节。",
-		"对方确实发了图：任何情况下都不要说没收到图片，也不要说对方没发。")
+	tail = append(tail, overrides.text(promptImageFailureGuidanceSpec))
 	return "【图片处理情况·内部说明，不要照抄给对方，也不要解释技术细节】\n" +
 		strings.Join(lines, "\n") + "\n" + strings.Join(tail, "\n")
 }
@@ -107,10 +106,23 @@ func imageFailureNotice(event MessageEvent, imageAttached bool) string {
 // 解释用平白说法写，不写「视觉链路」这类词：这段虽然禁止照抄，但模型仍会从中取词，
 // 留着内部术语等于把它递到嘴边。每条末尾带上重发口径——能不能让对方重发，正是三种
 // 失败的区别所在。
-var imageFailureExplanations = map[string]string{
-	imageFailureNotDelivered: "图没能送进识图那一步；让对方重发同一张不会有任何变化。",
-	imageFailureUnavailable:  "图片内容没取到，没下下来或者打不开；可以请对方重发。",
-	imageFailureTimeout:      "这一轮没看完；可以说等下再看，不要请对方重发。",
+var imageFailureExplanations = map[string]*PromptSpec{
+	imageFailureNotDelivered: imageFailureSpec("not_delivered", "识图失败：送不进模型", "图片发出去了、但识图模型没收到图片输入时，用这句说明这张图的情况。", "图没能送进识图那一步；让对方重发同一张不会有任何变化。"),
+	imageFailureUnavailable:  imageFailureSpec("unavailable", "识图失败：图没取到", "图片没下载下来或解不开时，用这句说明这张图的情况。", "图片内容没取到，没下下来或者打不开；可以请对方重发。"),
+	imageFailureTimeout:      imageFailureSpec("timeout", "识图失败：超时", "识图模型没在时限内答完时，用这句说明这张图的情况。", "这一轮没看完；可以说等下再看，不要请对方重发。"),
+}
+
+var (
+	promptImageFailureAttachedSpec = imageFailureSpec("attached", "识图失败但原图仍在", "识图失败、但原图仍附在这一轮请求里时追加：能看到就正常回应。", "原图仍附在本条消息里：你能看到就当普通图片正常回应，不必提这段说明。")
+	// 不在这里列违禁词：把「接口」「通道」写进提示词，等于先把它们递到模型嘴边。
+	promptImageFailureGuidanceSpec = imageFailureSpec("guidance", "识图失败时怎么说", "有图识别失败时附在说明末尾：看不到就用一句日常说法带过，不说对方没发图。",
+		"确实看不到时，按你自己的身份用一句日常说法带过，例如「这张图我这边没打开」，"+
+			"不解释原因，也不提任何内部细节。\n"+
+			"对方确实发了图：任何情况下都不要说没收到图片，也不要说对方没发。")
+)
+
+func imageFailureSpec(key, title, usage, text string) *PromptSpec {
+	return registerPrompt(PromptSpec{Key: "media.image_failure." + key, Group: PromptGroupMedia, Title: title, Usage: usage, Default: text})
 }
 
 func llmMessageHasImagePart(message llm.Message) bool {

@@ -65,20 +65,22 @@ func TestConfigPayloadKeepsProactiveReplyChance(t *testing.T) {
 
 func TestConfigPayloadKeepsEditablePrompts(t *testing.T) {
 	cfg := ConfigFromPayload(ConfigPayload{
-		Enabled:                    true,
-		SystemPrompt:               "custom system prompt",
-		ProactiveReplyRouterPrompt: "custom router prompt",
-		ProactiveReplyPrompt:       "custom proactive reply prompt",
-	}, BotConfig{})
+		Enabled:      true,
+		SystemPrompt: "custom system prompt",
+		PromptOverrides: PromptOverrides{
+			promptLegacyRouterSpec.Key:   "custom router prompt",
+			promptProactiveReplySpec.Key: "custom proactive reply prompt",
+		},
+	}, BotConfig{}).WithDefaults()
 	payload := PayloadFromConfig(cfg)
 
 	if payload.SystemPrompt != "custom system prompt" {
 		t.Fatalf("SystemPrompt = %q", payload.SystemPrompt)
 	}
-	if payload.ProactiveReplyRouterPrompt != "custom router prompt" {
-		t.Fatalf("ProactiveReplyRouterPrompt = %q", payload.ProactiveReplyRouterPrompt)
+	if got := payload.PromptOverrides[promptLegacyRouterSpec.Key]; got != "custom router prompt" {
+		t.Fatalf("router override = %q", got)
 	}
-	if payload.ProactiveReplyPrompt != "custom proactive reply prompt" {
-		t.Fatalf("ProactiveReplyPrompt = %q", payload.ProactiveReplyPrompt)
+	if got := payload.PromptOverrides[promptProactiveReplySpec.Key]; got != "custom proactive reply prompt" {
+		t.Fatalf("proactive reply override = %q", got)
 	}
 }

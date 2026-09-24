@@ -54,7 +54,7 @@ func TestLiveQuotedReplyContext(t *testing.T) {
 		correction := quotedPowerEvent("correction", "80")
 		request := llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "根据本轮问题和较晚的纠正给出最终答案。只输出一句耗电量，不要附加解释。"},
-			{Role: llm.RoleUser, Content: proactiveTurnPromptTextAt(correction, "", 0)},
+			{Role: llm.RoleUser, Content: proactiveTurnPromptTextAt(correction, "", 0, nil)},
 			{Role: llm.RoleUser, Content: updatedReplyRequestText(currentPromptText(root, root.RawMessage), replyRequestContexts([]proactiveReplyCandidate{{Event: correction}}))},
 		}}
 		response, err := p.Generate(context.Background(), request)

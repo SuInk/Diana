@@ -300,6 +300,7 @@ func (h *BotHandler) Register(router gin.IRouter) {
 func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/config", h.getConfig)
 	router.GET(base+"/config/defaults", h.newProfileDefaults)
+	router.GET(base+"/prompts", h.promptCatalog)
 	router.POST(base+"/config/new", h.createProfile)
 	router.GET(base+"/platforms", h.platforms)
 	router.POST(base+"/config", h.saveConfig)

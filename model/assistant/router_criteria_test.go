@@ -10,7 +10,7 @@ import (
 
 func routerPromptForConfig(cfg BotConfig) string {
 	cfg = cfg.WithDefaults()
-	return proactiveReplyRouterPromptForChatIn(cfg.ProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)
+	return proactiveReplyRouterPromptForChatIn(cfg.prompt(promptLegacyRouterSpec), cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)
 }
 
 // 这条是这次修复的本体：以前 configured 在 Participation 分支里根本没被读过。
@@ -48,9 +48,9 @@ func TestEmptyCriteriaLeaveNoHeading(t *testing.T) {
 // 旧的整段路由提示词已被评分契约取代，补充判据这条新路不得把它重新激活：
 // 存量库里那一栏存的多半是历代内置默认值的化石，不是用户写的规则。
 func TestLegacyRouterPromptStaysInert(t *testing.T) {
-	prompt := routerPromptForConfig(BotConfig{ProactiveReplyRouterPrompt: "旧规则：没有新信息不能发言"})
+	prompt := routerPromptForConfig(BotConfig{PromptOverrides: PromptOverrides{promptLegacyRouterSpec.Key: "旧规则：没有新信息不能发言"}})
 	if strings.Contains(prompt, "旧规则") || strings.Contains(prompt, routerCriteriaHeading) {
-		t.Fatalf("被取代的旧字段又被读进提示词了")
+		t.Fatalf("被取代的旧路由提示词又被读进提示词了")
 	}
 }
 

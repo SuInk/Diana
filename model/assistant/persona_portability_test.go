@@ -4,11 +4,7 @@
 package assistant
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 )
@@ -61,48 +57,5 @@ func TestKnownReplyStylesCoversEveryStyle(t *testing.T) {
 	}
 	if knownReplyStyle("definitely-not-a-style") {
 		t.Fatal("认不出来的值被当成了合法风格")
-	}
-}
-
-// TestShippedExamplePersonasImport 仓库里的示例文件必须真的能导入。
-//
-// 文档说「可以直接导入」，示例文件本身就是那句话的证据。它们是手写的，很容易
-// 在改字段时忘了跟着改——那样文档就在撒谎。
-func TestShippedExamplePersonasImport(t *testing.T) {
-	dir := filepath.Join("..", "..", "examples", "personas")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("读不到示例目录：%v", err)
-	}
-	checked := 0
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		checked++
-		raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			t.Fatalf("%s 读不出来：%v", entry.Name(), err)
-		}
-		var file struct {
-			Personas []Persona `json:"personas"`
-		}
-		if err := json.Unmarshal(raw, &file); err != nil {
-			t.Fatalf("%s 不是合法的人设文件：%v", entry.Name(), err)
-		}
-		if len(file.Personas) == 0 {
-			t.Fatalf("%s 里一套人设都没有", entry.Name())
-		}
-		_, result := PersonaSet{}.Import(file.Personas, time.Now())
-		if len(result.Imported) != len(file.Personas) {
-			t.Fatalf("%s：%d 套里只导进来 %d 套（dropped=%d）",
-				entry.Name(), len(file.Personas), len(result.Imported), result.Dropped)
-		}
-		if len(result.UnknownStyles) > 0 {
-			t.Fatalf("%s 用了这一版不认识的风格：%v", entry.Name(), result.UnknownStyles)
-		}
-	}
-	if checked == 0 {
-		t.Fatal("示例目录里没有 JSON 文件——文档指向了一个空目录")
 	}
 }

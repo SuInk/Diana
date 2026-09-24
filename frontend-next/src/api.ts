@@ -299,18 +299,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   prompt_inject_plaintext_rules?: boolean;
   prompt_inject_group_sender?: boolean;
   prompt_chinese_slang_hint?: boolean;
-  prompt_chinese_slang_text?: string;
-  prompt_plaintext_rules_text?: string;
-  prompt_time_template?: string;
-  prompt_group_sender_template?: string;
-  prompt_image_only_text?: string;
-  prompt_wake_only_text?: string;
-  /** @deprecated 旧的整段路由提示词，已被接话评分契约取代，后端不再读取。 */
-  proactive_reply_router_prompt?: string;
   /** 接话评分的补充判据：本群的称呼、黑话和禁区，拼在内置评分提示词尾部，最多 1000 字。 */
   proactive_reply_extra_criteria?: string;
-  /** 主动回复路由放行后，注入最终回复模型的生成约束。 */
-  proactive_reply_prompt?: string;
+  /** 改过的内置提示词正文，按提示词键存；没出现的键用内置默认值。见「提示词」页。 */
+  prompt_overrides?: Record<string, string>;
   /** 主动回复路由放行后的确定性采样率，范围 0~1。 */
   proactive_reply_chance?: number;
   /** 主动回复最低置信度，范围 0~1，默认 0.9。 */
@@ -943,6 +935,7 @@ function cacheTTL(method: string, url: string): number {
     case "/api/system/version":
     case "/api/assistant/platforms":
     case "/api/assistant/features":
+    case "/api/assistant/prompts":
       return 60_000;
     case "/api/llm/config":
     case "/api/assistant/config":
@@ -1486,6 +1479,41 @@ export function getNewBotProfileDefaults(platform: string): Promise<BotProfileCo
 
 export function createBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {
   return requestJSON<BotProfileConfig>("/api/assistant/config/new", { method: "POST", body: JSON.stringify(config) });
+}
+
+export interface PromptGroupInfo {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface PromptVar {
+  name: string;
+  description: string;
+}
+
+/** 一段可以覆盖的内置提示词。contract 是锁定的输出格式，运行时拼在正文之后，不能改。 */
+export interface PromptSpec {
+  key: string;
+  group: string;
+  title: string;
+  usage: string;
+  default: string;
+  vars?: PromptVar[];
+  /** 输出格式，拼在正文之后。可以改，但改坏了程序解析不了模型的回答。 */
+  contract?: string;
+  /** 覆盖输出格式时用的键（<key>.format），只有带 contract 的条目才有。 */
+  format_key?: string;
+}
+
+export interface PromptCatalog {
+  groups: PromptGroupInfo[];
+  prompts: PromptSpec[];
+  max_runes: number;
+}
+
+export function getPromptCatalog(): Promise<PromptCatalog> {
+  return requestJSON<PromptCatalog>("/api/assistant/prompts");
 }
 
 export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfileConfig> {
@@ -2862,6 +2890,12 @@ export interface Persona {
   daypart_tone_enabled?: boolean;
   self_reference?: string;
   sentence_enders?: string;
+  /** 这套人设改过的内置提示词（只存改过的），套用时整份替换机器人的 prompt_overrides。 */
+  prompts?: Record<string, string>;
+  /** 接话评分的补充判据，套用时填进机器人的 proactive_reply_extra_criteria。 */
+  extra_criteria?: string;
+  /** 账号安全规则，套用时填进机器人的 reply_account_safety_audit_prompt。 */
+  account_safety_rules?: string;
   updated_at?: string;
 }
 
@@ -2899,17 +2933,6 @@ export interface PersonaImportResult {
   dropped: number;
   /** 旧文件中无法识别的表达风格；忽略该字段并保留人设正文。 */
   unknown_styles?: string[];
-}
-
-/** 导出文件的格式。version 现在不参与判断，只为将来能认出旧文件。 */
-export const PERSONA_EXPORT_VERSION = 1;
-
-/** 合并在后端做：一次读改写落一次库，中途失败不会留下「导了一半」的状态。 */
-export function importPersonas(personas: Persona[]): Promise<PersonaImportResult> {
-  return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
-    method: "POST",
-    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, personas })
-  });
 }
 
 /** 机器人自己写下的一条自述。写入只有它自己能做，这里只读、删和清空。 */
@@ -2959,8 +2982,26 @@ export function purgeSelfNotes(profile: string): Promise<SelfNoteListResult> {
 export function importPersonaSource(source: string): Promise<PersonaImportResult> {
   return requestJSON<PersonaImportResult>("/api/assistant/personas/import", {
     method: "POST",
-    body: JSON.stringify({ version: PERSONA_EXPORT_VERSION, source })
+    body: JSON.stringify({ source })
   });
+}
+
+/** 人设渲染成 YAML：一套写在顶层，多套放进 personas。prompts 总是列出全部内置提示词。 */
+export async function renderPersonaYAML(personas: Persona[]): Promise<string> {
+  const response = await requestJSON<{ yaml: string }>("/api/assistant/personas/yaml", {
+    method: "POST",
+    body: JSON.stringify({ personas })
+  });
+  return response.yaml;
+}
+
+/** 只解析不入库：YAML 编辑器「应用」用。prompts 缺段或有不认识的键时后端直接报错。 */
+export async function parsePersonaSource(source: string): Promise<Persona[]> {
+  const response = await requestJSON<{ personas: Persona[] }>("/api/assistant/personas/parse", {
+    method: "POST",
+    body: JSON.stringify({ source })
+  });
+  return response.personas ?? [];
 }
 
 export function deletePersona(id: string): Promise<{ personas: Persona[] }> {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestParticipationDecisionSpecRendersParsableRatings(t *testing.T) {
-	spec := participationDecisionSpec()
+	spec := participationDecisionSpec(nil)
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("spec is invalid: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestProactiveReplyDecisionSpecRendersParsableDecision(t *testing.T) {
 		{Event: MessageEvent{MessageID: "101"}, Text: "有人知道这个报错吗"},
 		{Event: MessageEvent{MessageID: "102"}, Text: "补一张截图"},
 	}
-	spec := proactiveReplyDecisionSpec(candidates)
+	spec := proactiveReplyDecisionSpec(candidates, nil)
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("spec is invalid: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestProactiveReplyDecisionSpecRendersParsableDecision(t *testing.T) {
 }
 
 func TestProactiveReplyDecisionSpecLetsTheModelPickNoTarget(t *testing.T) {
-	spec := proactiveReplyDecisionSpec([]proactiveReplyCandidate{{Event: MessageEvent{MessageID: "101"}, Text: "草"}})
+	spec := proactiveReplyDecisionSpec([]proactiveReplyCandidate{{Event: MessageEvent{MessageID: "101"}, Text: "草"}}, nil)
 	raw, err := spec.RenderDecisionAnswers(map[string]llm.DecisionAnswer{
 		"should_reply":      {Kind: llm.DecisionNoul, Noul: 0.04},
 		"category":          {Kind: llm.DecisionChoice, Choice: "none", Confidence: 0.9},
