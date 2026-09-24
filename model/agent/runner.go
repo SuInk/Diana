@@ -646,7 +646,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			ToolInput:    cloneToolInput(action.Input),
 			Metadata:     toolMetadata,
 		})
-		toolCtx, toolCancel := contextWithToolBudget(ctx, time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
+		outputLimit := r.toolOutputLimit(tool)
+		toolCtx, toolCancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 		toolStartedAt := time.Now()
 		output, err := tool.Run(toolCtx, action.Input)
 		toolCancel()
@@ -660,7 +661,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			output = toolExecutionErrorForModel(action.Tool, record.Error)
 			rawOutput = ""
 		} else {
-			record.Output = truncateRunes(output, r.cfg.MaxToolOutputChars)
+			record.Output = truncateToolOutput(output, outputLimit)
 			if action.Tool == ToolsLoadToolName {
 				// Loader enforces its own bound atomically; truncating a JSON
 				// contract would mark unseen parameters as loaded.

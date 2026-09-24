@@ -121,6 +121,12 @@ type repositoryIssueResult struct {
 	ReviewsTruncated bool                              `json:"reviews_truncated,omitempty"`
 	Files            []repositoryPullRequestFileView   `json:"files,omitempty"`
 	FilesTruncated   bool                              `json:"files_truncated,omitempty"`
+	// NextFileOffset 是文件太多、一次没列完时下一次传的 file_offset。
+	NextFileOffset int `json:"next_file_offset,omitempty"`
+	// Commit 只在 commit_files 返回，Comparison 只在 compare_files 返回，Tree 只在 list_files 返回。
+	Commit     *repositoryCommitView  `json:"commit,omitempty"`
+	Comparison *repositoryCompareView `json:"comparison,omitempty"`
+	Tree       *repositoryTreeView    `json:"tree,omitempty"`
 	// Repositories 只在 repo_search 返回，RepositoryProfile 只在 repo 返回。
 	Repositories         []repositoryProfileView    `json:"repositories,omitempty"`
 	RepositoryProfile    *repositoryProfileView     `json:"repository_profile,omitempty"`
@@ -350,11 +356,14 @@ func (t *dianaGitHubTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("要执行的操作。repo_search 按关键词找公开仓库，repo 读单个仓库的 star、fork 和最近推送时间——给用户推荐仓库时用这两个，不要靠网页搜索或印象。"+
 			"search 在某个仓库里按关键词找 Issue 或 PR（用 kind 选）；get 读回标题、正文和最近评论，PR 另带分支、合并状态、改动统计和已有 review；"+
-			"pull_files 读 PR 改动的文件和 patch，review 之前必须先调它，只看 PR 描述不算读过代码；read_file 读仓库里某个文件的完整代码。"+
+			"pull_files 读 PR 改动的文件和 patch，review 之前必须先调它，只看 PR 描述不算读过代码；commit_files 读单个提交的改动，compare_files 读两个版本之间的改动；"+
+			"read_file 读仓库里某个文件的代码，list_files 列目录。读仓库代码和 diff 一律用这几个，不要改用网页渲染；用户贴的 GitHub 链接照路径对应："+
+			"/pull/N 用 pull_files，/commit/SHA 用 commit_files，/compare/A...B 用 compare_files，/blob/REF/PATH#L10-L20 用 read_file，/tree/REF/PATH 用 list_files。"+
+			"结果装不下时 message 会给出续读参数（start_line、patch_line、file_offset），照着传就能接着读。"+
 			"review 只提交评论，不批准也不要求修改；合并 PR、关闭 PR、改 PR 本身都不支持。"+
 			"update、close、reopen 只能用于 Issue；get、comment 可用于 Issue 和 PR；pull_files、review 只能用于 PR。"+
 			"要改已有 Issue 之前先 get 读回原文。create 在群聊里由非管理人员发起时会存成草稿，等管理人员 approve 才真正写入。",
-			"repo_search", "repo", "search", "get", "pull_files", "read_file", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
+			"repo_search", "repo", "search", "get", "pull_files", "commit_files", "compare_files", "read_file", "list_files", "create", "update", "comment", "review", "close", "reopen", "approve", "cancel_draft", "list_drafts"),
 		"repository": toolStringParam("目标仓库，写成 owner/repo。repo_search、approve、cancel_draft、list_drafts 不需要。"),
 		"number":     toolIntParam("目标 Issue 或 PR 编号；get、pull_files、review 必填，update、comment、close、reopen 单个目标时用它。", 1, 1_000_000),
 		"numbers":    toolIntArrayParam("update、comment、close、reopen 的批量目标：对这些 Issue 执行同样的改动，一份草稿、一个确认码；最多 "+itoa(repositoryIssueBatchLimit)+" 个。", 1, 1_000_000),
@@ -363,12 +372,17 @@ func (t *dianaGitHubTool) InputSchema() map[string]any {
 		"language":   toolStringParam("repo_search 可选：只要这门语言的仓库，例如 go、rust、typescript。"),
 		"sort": toolEnumParam("repo_search 可选：结果排序。best_match 按相关度（默认）；用户问「最流行」用 stars，问「还有人维护吗」用 updated。",
 			"best_match", "stars", "forks", "updated"),
-		"limit":      toolIntParam("repo_search 可选：最多返回几个仓库，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
-		"path":       toolStringParam("read_file 专用：仓库内文件路径。读 PR 或仓库里的代码一律用本工具，不要改用网页渲染。"),
-		"ref":        toolStringParam("read_file 可选：分支、标签或提交；传了 number 且不传 ref 时读 PR head。"),
-		"start_line": toolIntParam("read_file 可选：从第几行开始读，默认 1。", 1, 10_000_000),
-		"end_line":   toolIntParam("read_file 可选：读到第几行，默认往后 "+itoa(repositoryFileDefaultLines)+" 行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
-		"paths":      toolStringArrayParam("pull_files 专用：只读这些文件或目录的改动，patch 给得更完整；不传则列出全部文件、每个文件只给开头一段 patch。"),
+		"limit":       toolIntParam("repo_search 可选：最多返回几个仓库，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
+		"path":        toolStringParam("read_file 的文件路径；list_files 的目录，不传就是根目录。"),
+		"ref":         toolStringParam("分支、标签或提交 SHA。commit_files 必填（要读的提交）；read_file、list_files 可选，不传读默认分支，read_file 传了 number 且不传 ref 时读 PR head。"),
+		"base":        toolStringParam("compare_files 必填：对比的起点（分支、标签或提交）。"),
+		"head":        toolStringParam("compare_files 必填：对比的终点（分支、标签或提交）。"),
+		"recursive":   toolBoolParam("list_files 可选：true 时列出 path 下所有层级的文件，默认只列这一层。"),
+		"file_offset": toolIntParam("pull_files、commit_files、compare_files、list_files 续读用：跳过前面这么多项，按上一次 message 给的值传。", 0, 1_000_000),
+		"patch_line":  toolIntParam("pull_files、commit_files、compare_files 续读用：从 patch 的第几行开始给，只在 paths 只匹配一个文件时有效，按上一次 message 给的值传。", 1, 10_000_000),
+		"start_line":  toolIntParam("read_file 可选：从第几行开始读，默认 1。", 1, 10_000_000),
+		"end_line":    toolIntParam("read_file 可选：读到第几行，默认往后 "+itoa(repositoryFileDefaultLines)+" 行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
+		"paths":       toolStringArrayParam("pull_files、commit_files、compare_files 可选：只读这些文件或目录的改动，patch 给得更完整；不传则列出全部文件、每个文件只给开头一段 patch。"),
 		"comments": map[string]any{
 			"type":        "array",
 			"description": "review 专用：行内评论，最多 " + itoa(repositoryPullRequestReviewCommentLimit) + " 条。line 必须是 pull_files 的 patch 里出现过的行号；side 为 RIGHT 指新代码（默认），LEFT 指被删掉的旧代码。",
@@ -399,7 +413,7 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 	operation := normalizeRepositoryIssueOperation(configToolString(input, "operation"), configToolString(input, "state"))
 	result := repositoryIssueResult{Operation: operation, Message: "GitHub Issue 操作未执行。"}
 	if operation == "" {
-		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 repo_search、repo、search、get、pull_files、read_file、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
+		return t.finish(ctx, result.fail("invalid_operation", "operation 必须是 repo_search、repo、search、get、pull_files、commit_files、compare_files、read_file、list_files、create、update、comment、review、close、reopen、approve、cancel_draft 或 list_drafts。"))
 	}
 	if t == nil || t.runtime == nil || t.plugin == nil || t.plugin.client == nil {
 		return t.finish(ctx, result.fail("plugin_unavailable", "GitHub Issue 与 PR 插件未正确配置。"))
@@ -424,7 +438,7 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 	}
 	result.Repository = repository
 	owner := t.runtime.relationshipPolicy(ctx, t.event).Owner
-	readOperation := operation == "search" || operation == "get" || operation == "pull_files" || operation == "read_file" || operation == "repo"
+	readOperation := repositoryIssueReadOnlyOperation(operation) && operation != "repo_search"
 	if readOperation {
 		// search 的 query 本地校验先于任何网络探测：注入仓库限定符、布尔操作或
 		// 引号必须零请求被拒，不能先挨一发仓库元信息探测。
@@ -485,6 +499,15 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 		if operation == "read_file" {
 			return t.finish(ctx, t.readFile(ctx, repository, input))
 		}
+		if operation == "commit_files" {
+			return t.finish(ctx, t.commitFiles(ctx, repository, input))
+		}
+		if operation == "compare_files" {
+			return t.finish(ctx, t.compareFiles(ctx, repository, input))
+		}
+		if operation == "list_files" {
+			return t.finish(ctx, t.listFiles(ctx, repository, input))
+		}
 		return t.finish(ctx, t.search(ctx, repository, input))
 	}
 	if code, message := t.validateWriteAccess(repository, owner); code != "" {
@@ -514,6 +537,12 @@ func normalizeRepositoryIssueOperation(operation, state string) string {
 		return "pull_files"
 	case "read_file", "file", "get_file", "file_content":
 		return "read_file"
+	case "commit_files", "commit", "commit_diff", "get_commit":
+		return "commit_files"
+	case "compare_files", "compare", "compare_diff":
+		return "compare_files"
+	case "list_files", "tree", "ls", "list_dir", "list_directory":
+		return "list_files"
 	case "review", "review_pull", "pull_review":
 		return "review"
 	case "comment", "comment_issue", "reply":
@@ -803,7 +832,7 @@ func (t *dianaGitHubTool) finish(ctx context.Context, result repositoryIssueResu
 	if result.OK && result.Outcome != "" && result.Outcome != "draft_pending" && result.Operation != "list_drafts" && !repositoryIssueReadOnlyOperation(result.Operation) {
 		markExternalSideEffect(ctx)
 	}
-	body, err := json.Marshal(result)
+	body, err := marshalRepositoryResult(result)
 	if err != nil {
 		return "", err
 	}
@@ -813,7 +842,11 @@ func (t *dianaGitHubTool) finish(ctx context.Context, result repositoryIssueResu
 // repositoryIssueReadOnlyOperation 圈出纯查询操作：它们不写 GitHub，既不进操作审计，
 // 也不该把这一轮回复标成「有外部副作用、不可打断」。
 func repositoryIssueReadOnlyOperation(operation string) bool {
-	return operation == "search" || operation == "repo_search" || operation == "repo"
+	switch operation {
+	case "search", "repo_search", "repo", "get", "pull_files", "read_file", "commit_files", "compare_files", "list_files":
+		return true
+	}
+	return false
 }
 
 // groupRoleResolver 返回「取当前发言人在本群的身份」的惰性闭包。事件里带就用事件
@@ -3076,7 +3109,11 @@ func (t *dianaGitHubTool) doJSONWithHeadersStatus(ctx context.Context, method, p
 	if err != nil {
 		return nil, &repositoryIssueAPIError{Code: "invalid_request"}
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
+	if _, raw := target.(*repositoryRawBody); raw {
+		req.Header.Set("Accept", "application/vnd.github.raw+json")
+	} else {
+		req.Header.Set("Accept", "application/vnd.github+json")
+	}
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "Diana-Repository-Issues")
 	if payload != nil {
@@ -3152,6 +3189,10 @@ func (t *dianaGitHubTool) doJSONWithHeadersStatus(ctx context.Context, method, p
 	}
 	if len(responseBody) > repositoryIssueResponseLimit {
 		return headers, &repositoryIssueAPIError{Code: "invalid_response", Status: resp.StatusCode, Uncertain: method == http.MethodPost}
+	}
+	if raw, ok := target.(*repositoryRawBody); ok {
+		raw.data = responseBody
+		return headers, nil
 	}
 	if err := json.Unmarshal(responseBody, target); err != nil || !validRepositoryIssueAPIResponse(method, path, target) {
 		return headers, &repositoryIssueAPIError{Code: "invalid_response", Status: resp.StatusCode, Uncertain: method == http.MethodPost}
