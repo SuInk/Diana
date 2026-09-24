@@ -122,7 +122,7 @@ func TestImageEditInputSharedAcrossProviders(t *testing.T) {
 		"file://" + path,
 		"data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
 	} {
-		got, err := imageEditInputFrom(context.Background(), nil, value, 0)
+		got, err := imageEditInputFrom(context.Background(), imageEditSource{}, value, 0)
 		if err != nil {
 			t.Fatalf("读取 %q 失败：%v", value, err)
 		}
@@ -130,7 +130,7 @@ func TestImageEditInputSharedAcrossProviders(t *testing.T) {
 			t.Fatalf("读取 %q 得到 mediaType=%q bytes=%d", value, got.mediaType, len(got.data))
 		}
 	}
-	if _, err := imageEditInputFrom(context.Background(), nil, "ftp://example.invalid/a.png", 0); err == nil {
+	if _, err := imageEditInputFrom(context.Background(), imageEditSource{}, "ftp://example.invalid/a.png", 0); err == nil {
 		t.Fatal("不认识的来源应当报错")
 	}
 }
