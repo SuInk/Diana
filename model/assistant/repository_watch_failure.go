@@ -105,6 +105,11 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if !repositoryWatchHasDeliveryTarget(item) {
+		// 没有投递对象就没人可告警，算「不必发」：返回 nil 让调用方记下已告警，
+		// 不然每个周期都拿空目标重试一次。
+		return nil
+	}
 	stage, _, reason := repositoryWatchFailureDetails(cause)
 	notice := fmt.Sprintf(
 		"仓库订阅 %s 连续 %d 次%s失败：%s Diana 会继续自动重试。",
@@ -164,6 +169,9 @@ func (r *Runtime) acknowledgeRepositoryWatchFailureAlert(id, fingerprint string,
 func (r *Runtime) notifyRepositoryWatchRecovery(ctx context.Context, item Reminder) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if !repositoryWatchHasDeliveryTarget(item) {
+		return nil
 	}
 	notice := fmt.Sprintf("仓库订阅 %s 已恢复，后续更新将继续正常推送。", item.Repository)
 	if err := r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), repositoryWatchPluginID, notice); err != nil {

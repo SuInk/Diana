@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -125,5 +126,27 @@ func TestRepositoryWatchFollowUpPromptCarriesTheNotification(t *testing.T) {
 	final := last[len(last)-1]
 	if final.Role != llm.RoleUser || !strings.Contains(final.Content, notification) {
 		t.Fatalf("跟评提示词里缺少通知正文：%#v", final)
+	}
+}
+
+func TestRepositoryWatchFollowUpSkipsWatchWithoutDeliveryTarget(t *testing.T) {
+	// 线上 d4af1cd4：WebUI 建的订阅关了通知、不填群也不填人。卡片那边早就跳过了，
+	// 跟评却回落到 UserID 为空的私聊目标，白跑一次模型再报 invalid user id ""。
+	runtime, channel, provider := repositoryWatchFollowUpRuntime("这版修得挺快")
+	item := Reminder{ID: "d4af1cd4", Kind: ReminderKindRepositoryWatch, Repository: "SuInk/Diana"}
+
+	if err := runtime.sendRepositoryWatch(context.Background(), item, "GitHub 动态：SuInk/Diana"); err != nil {
+		t.Fatalf("没有投递对象时卡片应直接跳过：%v", err)
+	}
+	runtime.maybeSendRepositoryWatchFollowUp(context.Background(), item, "GitHub 动态：SuInk/Diana", "")
+	if err := runtime.notifyRepositoryWatchFailure(context.Background(), item, errors.New("boom")); err != nil {
+		t.Fatalf("没有投递对象时失败告警应视为不必发：%v", err)
+	}
+
+	if got := len(provider.requestsSnapshot()); got != 0 {
+		t.Fatalf("没有投递对象不该请求模型，实际 %d 次", got)
+	}
+	if got := channel.sentSnapshot(); len(got) != 0 {
+		t.Fatalf("没有投递对象不该发送：%#v", got)
 	}
 }
