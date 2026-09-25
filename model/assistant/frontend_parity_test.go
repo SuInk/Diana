@@ -94,7 +94,7 @@ func frontendParticipationThresholds(t *testing.T, source string) map[string]*fl
 // 调档位，实际过闸的是另一个分数。这条逐档位对照，顺带钉住两边的档位集合一致。
 func TestFrontendParticipationThresholdsMatchRatingPasses(t *testing.T) {
 	// 档位集合以 validParticipationLevel 为准，后端加了新档位而前端没跟上也会红。
-	levels := []string{"off", "minimal", "low", "medium", "high", "extreme", "always"}
+	levels := []string{"off", "minimal", "low", "medium", "high", "always"}
 	for _, level := range levels {
 		if !validParticipationLevel(level) {
 			t.Fatalf("%q 不是后端认的档位，这份档位清单本身过期了", level)

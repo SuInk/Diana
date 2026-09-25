@@ -59,17 +59,16 @@ test("score thresholds have four levels and remain independent of desire and coo
 });
 
 test("每个参与度档位都标出后端的评分门槛", () => {
-  assert.deepEqual(["off", "minimal", "low", "medium", "high", "extreme", "always"].map(level => participationLevelLabel(level)), [
+  assert.deepEqual(["off", "minimal", "low", "medium", "high", "always"].map(level => participationLevelLabel(level)), [
     "关（不判断）",
     "极低（≥0.90，最严）",
     "低（≥0.70）",
     "中（≥0.50）",
-    "高（≥0.30）",
-    "极高（≥0.10，最松）",
+    "高（≥0.30，最松）",
     "总是（不看分数）",
   ]);
   // 摘要里省掉最严/最松，只留门槛本身。
-  assert.deepEqual(["off", "minimal", "medium", "extreme", "always"].map(level => participationLevelLabel(level, { compact: true })), ["关 不判断", "极低 ≥0.90", "中 ≥0.50", "极高 ≥0.10", "总是 不看分数"]);
+  assert.deepEqual(["off", "minimal", "medium", "high", "always"].map(level => participationLevelLabel(level, { compact: true })), ["关 不判断", "极低 ≥0.90", "中 ≥0.50", "高 ≥0.30", "总是 不看分数"]);
   // 选择器里用各自的文案，门槛照样跟着走。
   assert.equal(participationLevelLabel("medium", { label: "适中" }), "适中（≥0.50）");
   assert.equal(participationLevelLabel("always", { label: "完全不限制" }), "完全不限制（不看分数）");

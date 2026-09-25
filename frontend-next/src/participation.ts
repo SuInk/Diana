@@ -20,7 +20,8 @@ export const proactiveCriteriaMaxLength = 1000;
 
 // participationLevelThresholds 镜像 model/assistant/participation_single_score.go 里 ratingPasses
 // 的门槛表：模型给出的分数 >= 门槛才算这一项达标，off 不参与判断，always 跳过该项门槛。
-// 注意档位和门槛是反的：参与度档位越高，分数门槛越低，所以「极低」最严（0.90）、「极高」最松（0.10）。
+// 注意档位和门槛是反的：参与度档位越高，分数门槛越低，所以「极低」最严（0.90）、「高」最松（0.30）。
+// 以前还有「极高」（≥0.10），它把评分判为不该插嘴的消息也放行一半，已去掉；旧配置按「高」显示和执行。
 // 这里的数字是后端判断口径的复述，改动必须和 ratingPasses 同步，否则界面会骗人。
 export const participationLevelThresholds: Record<string, number | null> = {
   off: null,
@@ -28,11 +29,10 @@ export const participationLevelThresholds: Record<string, number | null> = {
   low: 0.7,
   medium: 0.5,
   high: 0.3,
-  extreme: 0.1,
   always: null,
 };
 
-export const participationLevelNames: Record<string, string> = { off: "关", minimal: "极低", low: "低", medium: "中", high: "高", extreme: "极高", always: "总是" };
+export const participationLevelNames: Record<string, string> = { off: "关", minimal: "极低", low: "低", medium: "中", high: "高", always: "总是" };
 
 // participationLevelNote 给出档位对应的分数门槛说明，例如「≥0.50」。
 // compact 用于一行摘要，省略最严/最松的补充。
@@ -44,7 +44,7 @@ export function participationLevelNote(level: string, compact = false): string {
   const text = `≥${threshold.toFixed(2)}`;
   if (compact) return text;
   if (level === "minimal") return `${text}，最严`;
-  if (level === "extreme") return `${text}，最松`;
+  if (level === "high") return `${text}，最松`;
   return text;
 }
 

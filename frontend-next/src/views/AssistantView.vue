@@ -1110,9 +1110,16 @@
                 <span class="hint">
                   机器人决定不正面回答时说什么。说明为什么不能答，本身可能就是那句会出事的话——
                   一句「这个话题涉及敏感政治，我不方便讲」把触发点原样复述了一遍，风险比闭嘴还大。
-                  除「说明原因」外的档位都不会点名或影射触发拒答的具体内容。
-                  30 分钟内累计拒答超过 3 次后暂停响应该账号 30 分钟，这一条不受本项影响；模型拒答标志不向用户展示。
+                  除「说明原因」外的档位都不会点名或影射触发拒答的具体内容。模型拒答标志不向用户展示。
                 </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_refusal_suppression_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">反复拒答后暂停响应该账号</span>
+                </label>
+                <span class="hint">30 分钟内对同一账号拒答满 4 次，暂停响应它 10 到 30 分钟。关掉后拒答照常，只是不再因此暂停。主人不受影响。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1120,7 +1127,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">识别其他机器人的自动回复并停止接续</span>
                 </label>
-                <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 30 分钟。主人不受影响。</span>
+                <span class="hint">回复同一账号过于频繁时（10 分钟 10 条，已标记的机器人 2 条），发送前审核会判断这串来回有没有明确目的：下棋、解题、一起做事照常回；漫无目的地接戏、斗嘴、复读则降低回复欲望（不主动接、只接点名并逐步拉长冷却），30 分钟内累计 3 次暂停响应该账号 10 到 30 分钟。机器人自己把同一个意思说了好几遍时只丢那一条回复，对方是机器人才累计。主人不受影响。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -3654,6 +3661,7 @@ function setForm(config: BotProfileConfig): void {
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
     bot_reply_loop_detection_enabled: config.bot_reply_loop_detection_enabled ?? true,
+    reply_refusal_suppression_enabled: config.reply_refusal_suppression_enabled ?? true,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,

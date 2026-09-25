@@ -29,7 +29,6 @@ const settings = [
       { value: "low", label: "偶尔接话", hint: "比较适合参与时才接一句。" },
       { value: "medium", label: "适度参与", hint: "有合适的话就自然加入。" },
       { value: "high", label: "积极参与", hint: "更容易参与分享和闲聊。" },
-      { value: "extreme", label: "频繁参与", hint: "较弱的接话机会也可能开口。" },
       { value: "always", label: "完全不限制", hint: "不设闲聊评分门槛，仍受冷却和发言占比限制，不是每条必回。" },
     ]),
   },
@@ -47,8 +46,10 @@ const relevanceEnabled = computed(() => {
 function setRelevanceEnabled(enabled: boolean) {
   emit("update:modelValue", { ...value.value, relevance_level: enabled ? "on" : "off" });
 }
+// 「频繁参与」已去掉，后端把旧配置里的 extreme 按「积极参与」执行，这里也照这样显示。
 function displayedLevel(key: RatingKey) {
-  return ratingLevel(key);
+  const level = ratingLevel(key);
+  return level === "extreme" ? "high" : level;
 }
 function setRatingLevel(key: RatingKey, level: string) {
   emit("update:modelValue", { ...value.value, [key]: level });
@@ -121,7 +122,7 @@ function updateCriteria(event: Event) {
         </section>
       </div>
       <p class="hint participation-gate-hint">
-        闲聊档位括号里是后端的评分门槛：档位越积极，要求的分数越低（“很少插话”最严 ≥0.90，“频繁参与”最松 ≥0.10）。
+        闲聊档位括号里是后端的评分门槛：档位越积极，要求的分数越低（“很少插话”最严 ≥0.90，“积极参与”最松 ≥0.30）。
         “回应提问”和“主动闲聊”是两条独立通道，任意一条达标就会开口。
       </p>
       <details class="participation-explanation">

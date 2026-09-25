@@ -276,17 +276,24 @@ func TestChatInExemptsBanterFromEvidenceTest(t *testing.T) {
 	}
 }
 
-func TestParticipationSevenLevelBoundaries(t *testing.T) {
-	for level, threshold := range map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30, "extreme": 0.10} {
+func TestParticipationLevelBoundaries(t *testing.T) {
+	for level, threshold := range map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30} {
 		if !ratingPasses(threshold, level) || ratingPasses(threshold-0.01, level) {
 			t.Fatalf("boundary %s %.2f", level, threshold)
 		}
-		// 闲聊仍是七档；回应提问只剩开关，旧档位名一律读作打开（门槛 0.50）。
+		// 回应提问只剩开关，旧档位名一律读作打开。
 		p := ParticipationPreferences{RelevanceLevel: level, ChatLevel: level}
 		r, c := p.ratingLevels()
 		if r != "on" || c != level {
 			t.Fatalf("lost %s: relevance=%s chat=%s", level, r, c)
 		}
+	}
+	// 「频繁参与」已去掉：旧配置里存的 extreme 读作「积极参与」，0.10~0.29 不再放行。
+	if _, c := (ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "extreme"}).ratingLevels(); c != "high" {
+		t.Fatalf("extreme 读成了 %s，应当按 high 执行", c)
+	}
+	if allowed, _ := (ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "extreme"}).ratingsAllow(testRatings(false, 0.2), true); allowed {
+		t.Fatal("旧的 extreme 配置不该再放行 0.20 的闲聊分")
 	}
 	for value, want := range map[string]string{"on": "on", "off": "off"} {
 		if r, _ := (ParticipationPreferences{RelevanceLevel: value, ChatLevel: "low"}).ratingLevels(); r != want {

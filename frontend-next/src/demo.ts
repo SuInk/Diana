@@ -99,7 +99,7 @@ const oneBotProfile: BotProfileConfig = {
   onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", onebot_access_token_configured: true, onebot_access_token_preview: "d1…2a",
   bot_account: "100000001", owner_id: "100200001", owner_login_enabled: true,
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
-  debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, prompt_inject_time: false,
+  debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
