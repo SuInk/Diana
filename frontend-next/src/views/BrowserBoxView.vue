@@ -1,21 +1,68 @@
 <!-- Copyright (c) 2025-now SuInk. Licensed under the Limited Redistribution License. -->
 <!--
-  浏览器这一页只回答一个问题：机器人用哪个浏览器。
+  机器人用到的浏览器全在这一页，按用途分两组：
 
-  Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有主人能驱动、
-  能点能输入——区别只在用谁的。一行一个勾选框，打勾就是启用，可以都勾上；都勾上
-  时可以调优先级，排在上面的先用，它用不了时自动换另一个（见 model/browsersource）。一次性无头
-  渲染不在这里：它不带登录态，读公开网页、出图都靠它，一直可用，依赖和参数在插件页
-  的「网页渲染」里。以前三者并排成「三档」，用户得先弄懂三者区别才能开始用。
+  - 读网页、出图：网页渲染。每次开一个全新的无头 Chrome，用完就扔，不带登录态，谁的
+    消息都能用。它本身是插件页里的「网页渲染」插件，这里放同一个开关，免得用户以为
+    浏览器只有下面那几个。
+  - 登录、点按钮：Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有
+    主人能驱动——区别只在用谁的。一行一个勾选框，可以都勾上并排优先级，排在上面的先用，
+    它用不了时自动换另一个（见 model/browsersource）。外接 CDP 不参与排序：它是 browser_*
+    那组工具在内置浏览器没在用时改接的地址，所以只显示状态，设置在「更多设置」里。
+
+  四种都复用这台机器上的 Chrome/Chromium，区别在用哪份登录态、谁能驱动。
 -->
 <template>
   <section class="stack">
     <div class="card">
       <div class="card-header">
         <h2>浏览器</h2>
-        <span class="card-sub">机器人要登录、点按钮时用的浏览器，只有主人能让它用</span>
+        <span class="card-sub">机器人用到的浏览器都在这里，全都复用这台机器上的 Chrome，区别在用哪份登录态</span>
       </div>
       <div class="card-body stack">
+        <div class="browser-group-title">
+          <h3>读网页、出图</h3>
+          <span>不带登录态，谁的消息都能用</span>
+        </div>
+        <div class="browser-toggle-list">
+          <div class="browser-toggle-row">
+            <input
+              id="browser-source-render"
+              type="checkbox"
+              :checked="renderPlugin?.enabled"
+              :disabled="savingRender || !renderPlugin"
+              @change="toggleRender(($event.target as HTMLInputElement).checked)"
+            />
+            <div class="browser-toggle-copy">
+              <div class="browser-toggle-title">
+                <label for="browser-source-render">网页渲染</label>
+                <template v-if="renderPlugin?.enabled">
+                  <span v-if="dependencyProblem('render')" class="badge warn">没找到 Chrome</span>
+                  <span v-else class="badge ok">一直在用</span>
+                </template>
+              </div>
+              <p class="browser-toggle-desc">
+                每次开一个全新的无头 Chrome，用完就扔。群里发的链接自动读出来、模型查网页（browser_render）、HTML 转成图片都靠它。
+              </p>
+              <div v-if="renderPlugin" class="browser-toggle-meta">
+                <button type="button" :class="{ warn: dependencyProblem('render') }" @click="dependenciesTarget = 'render'">
+                  运行依赖 {{ renderDependencies.filter((dep) => dep.available).length }}/{{ renderDependencies.length }}
+                </button>
+                <label class="browser-inline-select">
+                  窗口
+                  <select :value="renderWindowMode" :disabled="savingRender" @change="setRenderWindowMode(($event.target as HTMLSelectElement).value)">
+                    <option v-for="option in renderWindowOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="browser-group-title">
+          <h3>登录、点按钮</h3>
+          <span>带登录态，只有主人能让机器人用；都勾上时排在上面的先用</span>
+        </div>
         <!-- 一行一项，打勾就是启用（和「上下文」页的勾选列表同一种写法），按优先级从上往下排；
              两个都启用时才出现「优先用」，排在上面的先用，它用不了时自动换下一个。 -->
         <div class="browser-toggle-list">
@@ -67,6 +114,27 @@
                   <span class="browser-toggle-note">你在画面上动过手，机器人暂时用不了这个浏览器；{{ takeoverIdleMinutes }} 分钟不操作会自动交还</span>
                 </template>
                 <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
+              </div>
+            </div>
+          </div>
+          <!-- 外接 CDP 没有勾选框：配了地址就算有，内置浏览器没在用的时候 browser_* 改接它。 -->
+          <div class="browser-toggle-row">
+            <span class="browser-toggle-spacer" aria-hidden="true"></span>
+            <div class="browser-toggle-copy">
+              <div class="browser-toggle-title">
+                <span class="browser-toggle-label">外接浏览器（CDP）</span>
+                <template v-if="botID">
+                  <span v-if="!externalCDPConfigured" class="badge">没配置</span>
+                  <span v-else-if="sourceState?.active === 'box'" class="badge">内置在用，暂不用它</span>
+                  <span v-else class="badge ok">正在用</span>
+                </template>
+              </div>
+              <p class="browser-toggle-desc">
+                接一个你自己带 --remote-debugging-port 起的浏览器，用它的登录态。只在这台机器人的内置浏览器没在用时顶上。
+              </p>
+              <div class="browser-toggle-meta">
+                <span v-if="externalCDPConfigured" class="mono">{{ agentBrowser?.cdp_url }}</span>
+                <button type="button" @click="openExternalCDPSettings">{{ externalCDPConfigured ? "修改地址" : "配置地址" }}</button>
               </div>
             </div>
           </div>
@@ -126,18 +194,20 @@
 
     <Modal
       v-if="dependenciesTarget && sourceState"
-      :title="`${sourceMeta[dependenciesTarget].label} · 运行依赖`"
+      :title="`${dependenciesTarget === 'render' ? '网页渲染' : sourceMeta[dependenciesTarget].label} · 运行依赖`"
       @close="dependenciesTarget = null"
     >
       <p class="plugin-dependencies-hint">
         {{
-          dependenciesTarget === "box"
-            ? "内置浏览器要一个 Chrome/Chromium，中文页面截图要中文字体；显示器只影响能不能开真窗口，没有也能无头跑。"
-            : "扩展装在你自己的 Chrome 里、反向连到这里。勾上「我自己的 Chrome」后，点「下载扩展」拿到扩展源码包。"
+          dependenciesTarget === "render"
+            ? "网页渲染复用这台机器上的 Chrome/Chromium，缺了可以装；中文字体可一键下载，出图时缺的多语言字体会自动补齐。"
+            : dependenciesTarget === "box"
+              ? "内置浏览器要一个 Chrome/Chromium，中文页面截图要中文字体；显示器只影响能不能开真窗口，没有也能无头跑。"
+              : "扩展装在你自己的 Chrome 里、反向连到这里。勾上「我自己的 Chrome」后，点「下载扩展」拿到扩展源码包。"
         }}
       </p>
       <PluginDependencyList
-        :dependencies="sourceState[dependenciesTarget].dependencies"
+        :dependencies="dependenciesTarget === 'render' ? renderDependencies : sourceState[dependenciesTarget].dependencies"
         :loading="detecting"
         :busy="busyDependency"
         @install="installDependency"
@@ -202,15 +272,18 @@
         </div>
       </div>
       <BrowserControlPanel v-if="sourceState?.extension.enabled || preferred === 'extension'" />
-      <AgentBrowserPanel />
+      <div ref="externalCDPPanel">
+        <AgentBrowserPanel @saved="loadExternalCDP" />
+      </div>
     </template>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref } from "vue";
 import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
+import { pluginForBot } from "../plugin-settings";
 import { navigate as navigateToView } from "../router";
 import { ArrowUp, ChevronDown } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
@@ -233,7 +306,13 @@ import {
   type BrowserBoxSettings,
   type BrowserBoxStatus,
   listBrowserActivity,
-  type AppLogEntry
+  type AppLogEntry,
+  getAgentBrowser,
+  type AgentBrowserSettings,
+  listPlugins,
+  setPluginEnabled,
+  updatePluginSettings,
+  type PluginState
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
 
@@ -251,7 +330,7 @@ const sourceMeta: Record<SourceKey, { label: string; short: string; title: strin
     label: "Diana 内置",
     short: "内置浏览器",
     title: "Diana 内置浏览器",
-    hint: "Diana 自己的浏览器，每台机器人一份登录态，你能看画面、随时接管。"
+    hint: "用这台机器上的 Chrome 单独开一个，不碰你日常浏览器的登录态；每台机器人一份，你能看画面、随时接管。"
   },
   extension: {
     label: "我自己的 Chrome",
@@ -263,13 +342,88 @@ const sourceMeta: Record<SourceKey, { label: string; short: string; title: strin
 // null 表示还没读到：读到之前不显示任何一边的配置。
 const sourceState = ref<BrowserSourceState | null>(null);
 const savingSource = ref(false);
-const dependenciesTarget = ref<SourceKey | null>(null);
+const dependenciesTarget = ref<SourceKey | "render" | null>(null);
 const detecting = ref(false);
 const busyDependency = ref("");
 
 // 显示器是可选的：没有它照样能无头跑，不算「缺依赖」。
-function dependencyProblem(key: SourceKey): boolean {
-  return (sourceState.value?.[key].dependencies ?? []).some((dep) => !dep.available && dep.name !== "display");
+function dependencyProblem(key: SourceKey | "render"): boolean {
+  const dependencies = key === "render" ? renderDependencies.value : (sourceState.value?.[key].dependencies ?? []);
+  return dependencies.some((dep) => !dep.available && dep.name !== "display");
+}
+
+// 网页渲染就是插件页的「网页渲染」插件，这里读写的是同一份开关和设置。
+const renderPluginID = "official.sandboxed-browser-renderer";
+const renderWindowModeKey = "window_mode";
+const renderPlugin = ref<PluginState | null>(null);
+const renderDependencies = ref<ResolverDependency[]>([]);
+const savingRender = ref(false);
+const renderWindowSpec = computed(() => renderPlugin.value?.manifest.settings?.find((spec) => spec.key === renderWindowModeKey));
+const renderWindowOptions = computed(() => renderWindowSpec.value?.options ?? []);
+const renderWindowMode = computed(() => String(renderPlugin.value?.settings?.[renderWindowModeKey] ?? renderWindowSpec.value?.default ?? "auto"));
+
+async function loadRender(refreshDependencies = false): Promise<void> {
+  try {
+    const [plugins, dependencies] = await Promise.all([listPlugins(), listPluginDependencies(refreshDependencies)]);
+    const state = plugins.find((plugin) => plugin.manifest.id === renderPluginID);
+    renderPlugin.value = state ? pluginForBot(state, botID) : null;
+    renderDependencies.value = dependencies.plugins[renderPluginID] ?? [];
+  } catch {
+    // 读不到只是这一行不显示状态，不打断这一页。
+  }
+}
+
+async function toggleRender(enabled: boolean): Promise<void> {
+  savingRender.value = true;
+  try {
+    renderPlugin.value = pluginForBot(await setPluginEnabled(renderPluginID, enabled, botID), botID);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "切换网页渲染失败");
+    await loadRender();
+  } finally {
+    savingRender.value = false;
+  }
+}
+
+async function setRenderWindowMode(mode: string): Promise<void> {
+  if (!renderPlugin.value) return;
+  savingRender.value = true;
+  try {
+    const settings = { ...(renderPlugin.value.settings ?? {}), [renderWindowModeKey]: mode };
+    renderPlugin.value = pluginForBot(await updatePluginSettings(renderPluginID, settings), botID);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "保存网页渲染设置失败");
+    await loadRender();
+  } finally {
+    savingRender.value = false;
+  }
+}
+
+// 外接 CDP 地址按机器人存；默认值 127.0.0.1:9222 等于没配（和后端 defaultAgentBrowserCDPURL 一致）。
+const defaultExternalCDPURL = "http://127.0.0.1:9222";
+const agentBrowser = ref<AgentBrowserSettings | null>(null);
+const externalCDPPanel = ref<HTMLElement | null>(null);
+const externalCDPConfigured = computed(() => {
+  const url = agentBrowser.value?.cdp_url?.trim() ?? "";
+  return url !== "" && url !== defaultExternalCDPURL;
+});
+
+async function loadExternalCDP(): Promise<void> {
+  if (!botID) {
+    agentBrowser.value = null;
+    return;
+  }
+  try {
+    agentBrowser.value = await getAgentBrowser(botID);
+  } catch {
+    agentBrowser.value = null;
+  }
+}
+
+async function openExternalCDPSettings(): Promise<void> {
+  advancedOpen.value = true;
+  await nextTick();
+  externalCDPPanel.value?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // 选中的那个：排在第一位、而且开着。都关着就是 null，页面显示「浏览器关着」。
@@ -286,7 +440,8 @@ const preferred = computed<SourceKey | null>(() => {
 async function redetect(): Promise<void> {
   detecting.value = true;
   try {
-    await listPluginDependencies(true);
+    // 先刷新探测缓存（网页渲染那一行顺带拿到新结果），来源状态里的依赖读的是同一份缓存。
+    await loadRender(true);
     await loadSource();
   } catch (err) {
     toastError(err instanceof Error ? err.message : "检测失败");
@@ -754,6 +909,8 @@ function startPage(): void {
   // 先读来源再读状态：要知道勾没勾上，才能决定要不要自动拉起。
   void loadSource().then(refresh);
   void loadActivity();
+  void loadRender();
+  void loadExternalCDP();
   // 扩展连上、断开或被接管都会改变「这一轮用哪个」，跟着状态一起刷。
   statusTimer = window.setInterval(() => {
     void refresh();
@@ -801,6 +958,56 @@ onBeforeUnmount(() => {
 .browser-toggle-list {
   display: flex;
   flex-direction: column;
+}
+
+/* 两组之间靠小标题分开：读网页、出图 / 登录、点按钮。 */
+.browser-group-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.browser-group-title:not(:first-child) {
+  margin-top: 10px;
+}
+
+.browser-group-title h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.browser-group-title span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* 没有勾选框的行（外接 CDP）用它占住勾选框那一列，标题照样对齐。 */
+.browser-toggle-spacer {
+  width: 16px;
+}
+
+.browser-toggle-label {
+  font-weight: 600;
+}
+
+.browser-inline-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.browser-inline-select select {
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface, transparent);
+  color: var(--text);
+  font: inherit;
 }
 
 /* 一行一项：勾选框在行首，和标题第一行对齐；右边是标题、说明、小链接。 */
