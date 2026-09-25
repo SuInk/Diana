@@ -48,12 +48,16 @@
                 <button type="button" :class="{ warn: dependencyProblem('render') }" @click="dependenciesTarget = 'render'">
                   运行依赖 {{ renderDependencies.filter((dep) => dep.available).length }}/{{ renderDependencies.length }}
                 </button>
-                <label class="browser-inline-select">
-                  窗口
-                  <select :value="renderWindowMode" :disabled="savingRender" @change="setRenderWindowMode(($event.target as HTMLSelectElement).value)">
-                    <option v-for="option in renderWindowOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                  </select>
-                </label>
+                <span class="browser-inline-select">
+                  <label for="browser-render-window">窗口</label>
+                  <AppSelect
+                    id="browser-render-window"
+                    :model-value="renderWindowMode"
+                    :options="renderWindowOptions"
+                    :disabled="savingRender"
+                    @update:model-value="setRenderWindowMode"
+                  />
+                </span>
               </div>
             </div>
           </div>
@@ -319,6 +323,7 @@ import { pluginForBot } from "../plugin-settings";
 import { navigate as navigateToView } from "../router";
 import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, RotateCw, Search } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
+import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import BrowserControlPanel from "../components/BrowserControlPanel.vue";
@@ -391,7 +396,15 @@ const renderPlugin = ref<PluginState | null>(null);
 const renderDependencies = ref<ResolverDependency[]>([]);
 const savingRender = ref(false);
 const renderWindowSpec = computed(() => renderPlugin.value?.manifest.settings?.find((spec) => spec.key === renderWindowModeKey));
-const renderWindowOptions = computed(() => renderWindowSpec.value?.options ?? []);
+// 选项来自插件清单，补一句各自什么时候用：「显示隔离窗口」只在排查渲染问题时有用。
+const renderWindowHints: Record<string, string> = {
+  auto: "后台运行，看不见窗口",
+  headless: "后台运行，看不见窗口",
+  visible: "在跑 Diana 的机器上弹出临时窗口，排查用"
+};
+const renderWindowOptions = computed<AppSelectOption[]>(() =>
+  (renderWindowSpec.value?.options ?? []).map((option) => ({ ...option, hint: renderWindowHints[option.value] }))
+);
 const renderWindowMode = computed(() => String(renderPlugin.value?.settings?.[renderWindowModeKey] ?? renderWindowSpec.value?.default ?? "auto"));
 
 async function loadRender(refreshDependencies = false): Promise<void> {
@@ -1108,15 +1121,14 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   color: var(--muted);
+  white-space: nowrap;
 }
 
-.browser-inline-select select {
-  padding: 1px 4px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface, transparent);
+/* 这一行都是小字链接，下拉跟着缩小，样式仍是全站统一的 AppSelect。 */
+.browser-inline-select :deep(.app-select-trigger) {
+  padding: 3px 10px;
+  font-size: 12.5px;
   color: var(--text);
-  font: inherit;
 }
 
 /* 一行一项：勾选框在行首，和标题第一行对齐；右边是标题、说明、小链接。 */
