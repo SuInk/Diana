@@ -15,10 +15,8 @@ func TestForwardThresholdsDefaultToUnlimitedAndCanBeCleared(t *testing.T) {
 	payload.ForwardReplyThreshold = 0
 	payload.ForwardReplyChunkThreshold = 0
 	cleared := ConfigFromPayload(payload, previous).WithDefaults()
-	group := (GroupConfig{}).WithDefaults("123", previous)
-	if cleared.ForwardReplyThreshold != 0 || cleared.ForwardReplyChunkThreshold != 0 ||
-		group.ForwardReplyThreshold != 0 || group.ForwardReplyChunkThreshold != 0 {
-		t.Fatal("cleared thresholds must not restore defaults or inherit bot thresholds")
+	if cleared.ForwardReplyThreshold != 0 || cleared.ForwardReplyChunkThreshold != 0 {
+		t.Fatal("cleared thresholds must not restore defaults")
 	}
 }
 

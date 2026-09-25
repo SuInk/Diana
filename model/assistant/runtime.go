@@ -1511,8 +1511,12 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		cfg.ReplyMergeConfidencePercent = groupCfg.ReplyMergeConfidencePercent
 	}
 	cfg.DirectReplyChunkSize = groupCfg.DirectReplyChunkSize
-	cfg.ForwardReplyThreshold = groupCfg.ForwardReplyThreshold
-	cfg.ForwardReplyChunkThreshold = groupCfg.ForwardReplyChunkThreshold
+	if groupCfg.ForwardReplyThreshold != nil {
+		cfg.ForwardReplyThreshold = *groupCfg.ForwardReplyThreshold
+	}
+	if groupCfg.ForwardReplyChunkThreshold != nil {
+		cfg.ForwardReplyChunkThreshold = *groupCfg.ForwardReplyChunkThreshold
+	}
 	cfg.ProactiveReplyChance = groupCfg.ProactiveReplyChance
 	cfg.ProactiveReplyThreshold = groupCfg.ProactiveReplyThreshold
 	cfg.ChatInEnabled = groupCfg.ChatInEnabled

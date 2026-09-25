@@ -480,13 +480,13 @@
         </div>
         <div v-if="supportsGroupLevel" class="field">
           <label for="group-forward-len">合并转发字数</label>
-          <input id="group-forward-len" v-model.number="editing.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-          <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；0 或留空关闭此条件。仅 OneBot 支持。</span>
+          <input id="group-forward-len" v-model.number="editing.forward_reply_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" :placeholder="forwardThresholdPlaceholder('forward_reply_threshold', '字')" />
+          <span class="hint">允许多条发送时，整轮正文超过此值触发卡片；留空跟随机器人，填 0 本群关闭此条件。仅 OneBot 支持。</span>
         </div>
         <div v-if="supportsGroupLevel" class="field">
           <label for="group-forward-chunks">合并转发块数</label>
-          <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="无上限" />
-          <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；0 或留空关闭此条件。不按正文行数计数。</span>
+          <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="0" step="1" inputmode="numeric" :placeholder="forwardThresholdPlaceholder('forward_reply_chunk_threshold', '条')" />
+          <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条；留空跟随机器人，填 0 本群关闭此条件。不按正文行数计数。</span>
         </div>
         <div class="field wide">
           <label class="switch">
@@ -811,6 +811,22 @@ const defaultNaturalReplySplitEnabled = computed(() =>
     ?? naturalReplySplitDefaults.value[""]
     ?? true
 );
+// 合并转发两个阈值在群里留空跟随机器人，占位符把机器人当前的值写出来。
+type ForwardThresholdKey = "forward_reply_threshold" | "forward_reply_chunk_threshold";
+const forwardThresholdDefaults = ref<Record<string, Record<ForwardThresholdKey, number>>>({});
+function forwardThresholdPlaceholder(key: ForwardThresholdKey, unit: string): string {
+  const defaults = forwardThresholdDefaults.value[editing.value?.bot_profile_id || botScope.value] ?? forwardThresholdDefaults.value[""];
+  const value = defaults?.[key] ?? 0;
+  return value > 0 ? `留空跟随机器人（${value} ${unit}）` : "留空跟随机器人（未开启）";
+}
+// 群级阈值：空串（输入框被清空）和未设置都不发，后端按跟随机器人处理；0 是本群关掉。
+function optionalForwardThreshold(value: unknown): number | undefined {
+  if (value === "" || value == null) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : undefined;
+}
 // 被禁言时暂停回复，以及暂停期间哪些环节照常执行。缺省值跟机器人配置那边一致。
 type MutedStepKey = "muted_image_description_enabled" | "muted_voice_transcription_enabled" | "muted_reply_judgment_enabled";
 const mutedStepItems: { key: MutedStepKey; label: string; fallback: boolean; hint: string }[] = [
@@ -1102,6 +1118,10 @@ async function load(showFeedback = false): Promise<void> {
       defaultMinGroupLevel.value = current.reply_gate?.min_group_level ?? 0;
       defaultLevelUnknownPolicy.value = current.reply_gate?.level_unknown_policy === "deny" ? "deny" : "allow";
       defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
+      forwardThresholdDefaults.value = Object.fromEntries([
+        ["", forwardThresholdsOf(current)],
+        ...(config.profiles ?? []).map((profile) => [profile.id, forwardThresholdsOf(profile)])
+      ]);
       naturalReplySplitDefaults.value = Object.fromEntries([
         ["", current.natural_reply_split_enabled ?? true],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.natural_reply_split_enabled ?? true])
@@ -1423,11 +1443,11 @@ async function saveEditing(): Promise<void> {
     const payload: BotGroupConfig = {
       ...current,
       ...sendRetryPayload(current),
-      forward_reply_threshold: Number(current.forward_reply_threshold) || 0,
+      forward_reply_threshold: optionalForwardThreshold(current.forward_reply_threshold),
       // 数字框清空后 v-model.number 给的是空串，后端按整数解析会整份拒收。
       model_call_quota: Math.max(0, Math.round(Number(current.model_call_quota) || 0)),
       reply_sample_percent: Math.min(100, Math.max(0, Math.round(Number(current.reply_sample_percent) || 0))),
-      forward_reply_chunk_threshold: Number(current.forward_reply_chunk_threshold) || 0,
+      forward_reply_chunk_threshold: optionalForwardThreshold(current.forward_reply_chunk_threshold),
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay
@@ -1454,6 +1474,13 @@ async function saveEditing(): Promise<void> {
   }
 }
 
+function forwardThresholdsOf(config: { forward_reply_threshold?: number; forward_reply_chunk_threshold?: number }): Record<ForwardThresholdKey, number> {
+  return {
+    forward_reply_threshold: config.forward_reply_threshold ?? 0,
+    forward_reply_chunk_threshold: config.forward_reply_chunk_threshold ?? 0
+  };
+}
+
 function upsert(config: BotGroupConfig): void {
   const index = groups.value.findIndex((group) => group.group_id === config.group_id);
   if (index >= 0) {
@@ -1465,6 +1492,8 @@ function upsert(config: BotGroupConfig): void {
       reply_preserve_line_breaks: config.reply_preserve_line_breaks,
       reply_line_split_enabled: config.reply_line_split_enabled,
       typing_delay_enabled: config.typing_delay_enabled,
+      forward_reply_threshold: config.forward_reply_threshold,
+      forward_reply_chunk_threshold: config.forward_reply_chunk_threshold,
       configured: true
     };
   } else {

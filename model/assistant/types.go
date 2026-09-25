@@ -893,11 +893,14 @@ type GroupConfig struct {
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
-	NaturalReplySplitEnabled     *bool                     `json:"natural_reply_split_enabled,omitempty"`
-	ReplyMaxBubbles              int                       `json:"reply_max_bubbles,omitempty"`
-	DirectReplyChunkSize         int                       `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold        int                       `json:"forward_reply_threshold,omitempty"`
-	ForwardReplyChunkThreshold   int                       `json:"forward_reply_chunk_threshold,omitempty"`
+	NaturalReplySplitEnabled *bool `json:"natural_reply_split_enabled,omitempty"`
+	ReplyMaxBubbles          int   `json:"reply_max_bubbles,omitempty"`
+	DirectReplyChunkSize     int   `json:"direct_reply_chunk_size,omitempty"`
+	// 两个合并转发阈值同理：nil 跟随机器人，显式 0 才是本群关掉这条触发。以前
+	// 这里是 int，群配置一存下来就把当时的值（旧群多半是 0）定死，机器人页后来
+	// 改成 140 也进不了这个群。
+	ForwardReplyThreshold        *int                      `json:"forward_reply_threshold,omitempty"`
+	ForwardReplyChunkThreshold   *int                      `json:"forward_reply_chunk_threshold,omitempty"`
 	ProactiveReplyChance         float64                   `json:"proactive_reply_chance,omitempty"`
 	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold,omitempty"`
 	ChatInEnabled                *bool                     `json:"chat_in_enabled,omitempty"`
@@ -1186,8 +1189,6 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		MaxReplyChars:                base.MaxReplyChars,
 		ReplyMaxBubbles:              base.ReplyMaxBubbles,
 		DirectReplyChunkSize:         base.DirectReplyChunkSize,
-		ForwardReplyThreshold:        base.ForwardReplyThreshold,
-		ForwardReplyChunkThreshold:   base.ForwardReplyChunkThreshold,
 		ProactiveReplyChance:         base.ProactiveReplyChance,
 		ProactiveReplyThreshold:      base.ProactiveReplyThreshold,
 		ChatInEnabled:                base.ChatInEnabled,
@@ -1203,6 +1204,15 @@ func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 		PluginOverrides:              map[string]bool{},
 		PluginSettingOverrides:       PluginSettingOverrides{},
 	}
+}
+
+// clampedOptionalCount 复制一个可选计数并把负数钳到 0；nil 保持 nil，表示跟随上级。
+func clampedOptionalCount(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clamped := max(0, *value)
+	return &clamped
 }
 
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
@@ -1272,8 +1282,8 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	if cfg.DirectReplyChunkSize <= 0 {
 		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
 	}
-	cfg.ForwardReplyThreshold = max(0, cfg.ForwardReplyThreshold)
-	cfg.ForwardReplyChunkThreshold = max(0, cfg.ForwardReplyChunkThreshold)
+	cfg.ForwardReplyThreshold = clampedOptionalCount(cfg.ForwardReplyThreshold)
+	cfg.ForwardReplyChunkThreshold = clampedOptionalCount(cfg.ForwardReplyChunkThreshold)
 	if cfg.ProactiveReplyChance <= 0 {
 		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
 	}

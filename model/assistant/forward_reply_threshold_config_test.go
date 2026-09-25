@@ -57,15 +57,59 @@ func TestZeroForwardThresholdsStayOffAcrossSaveAndReload(t *testing.T) {
 	}
 }
 
-// 群级覆盖跟着机器人走：新建机器人的 140 会带进群配置，群里填 0 仍然是关掉。
+// 群级阈值留空跟随机器人：新建群配置不再抄一份机器人当时的值，机器人页后来
+// 改了也照样生效；群里显式填 0 仍然是关掉，填别的数就用本群自己的。
 func TestGroupConfigInheritsForwardThresholdAndKeepsZeroOff(t *testing.T) {
 	base := DefaultBotConfig().WithDefaults()
 	group := DefaultGroupConfig("12345", base).WithDefaults("12345", base)
-	if group.ForwardReplyThreshold != 140 {
-		t.Fatalf("group inherited threshold=%d, want 140", group.ForwardReplyThreshold)
+	if group.ForwardReplyThreshold != nil || group.ForwardReplyChunkThreshold != nil {
+		t.Fatalf("new group must follow the bot, got %v/%v", group.ForwardReplyThreshold, group.ForwardReplyChunkThreshold)
 	}
-	group.ForwardReplyThreshold = 0
-	if got := group.WithDefaults("12345", base).ForwardReplyThreshold; got != 0 {
-		t.Fatalf("group zero threshold=%d, want it to stay off", got)
+	group.ForwardReplyThreshold = intPointer(0)
+	if got := group.WithDefaults("12345", base).ForwardReplyThreshold; got == nil || *got != 0 {
+		t.Fatalf("group zero threshold=%v, want it to stay off", got)
+	}
+	group.ForwardReplyThreshold = intPointer(-3)
+	if got := group.WithDefaults("12345", base).ForwardReplyThreshold; got == nil || *got != 0 {
+		t.Fatalf("negative group threshold=%v, want clamped to 0", got)
+	}
+}
+
+// 线上报的「合并转发字数不生效」：旧群配置里这项是 0（int 的 omitempty 根本没
+// 写进 JSON），机器人页填 140 后群里的长回复照样散装发出。读回来的旧配置要跟随
+// 机器人，只有群里显式存了数才覆盖。
+func TestGroupForwardThresholdFollowsBotUnlessOverridden(t *testing.T) {
+	var legacy GroupConfig
+	if err := json.Unmarshal([]byte(`{"group_id":"legacy","enabled":true}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	base := BotConfig{ForwardReplyThreshold: 140, ForwardReplyChunkThreshold: 4}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
+		"legacy":   legacy,
+		"off":      {GroupID: "off", ForwardReplyThreshold: intPointer(0), ForwardReplyChunkThreshold: intPointer(0)},
+		"override": {GroupID: "override", ForwardReplyThreshold: intPointer(500)},
+	}})
+	for _, tc := range []struct {
+		group         string
+		chars, chunks int
+	}{
+		{"legacy", 140, 4},
+		{"off", 0, 0},
+		{"override", 500, 4},
+	} {
+		cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: tc.group})
+		if cfg.ForwardReplyThreshold != tc.chars || cfg.ForwardReplyChunkThreshold != tc.chunks {
+			t.Fatalf("group %s thresholds=%d/%d, want %d/%d", tc.group, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold, tc.chars, tc.chunks)
+		}
+	}
+
+	// 显式 0 必须能存下来，不能被 omitempty 吃掉又变回跟随。
+	raw, err := json.Marshal(GroupConfig{GroupID: "off", ForwardReplyThreshold: intPointer(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"forward_reply_threshold":0`) {
+		t.Fatalf("explicit zero was dropped: %s", raw)
 	}
 }
