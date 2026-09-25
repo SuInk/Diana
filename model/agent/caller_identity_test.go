@@ -21,8 +21,8 @@ import (
 var testCaller = CallerIdentity{
 	Platform:  "qq",
 	BotID:     "10001",
-	UserID:    "22223333",
-	GroupID:   "99887766",
+	UserID:    "10002",
+	GroupID:   "20001",
 	MessageID: "-4242",
 	ChatType:  "group",
 	IsOwner:   true,
@@ -89,7 +89,7 @@ func TestMCPCallerIdentityOnlySentToOptedInServer(t *testing.T) {
 	if err := json.Unmarshal(meta[mcpCallerMetaKey], &caller); err != nil {
 		t.Fatalf("meta = %q: %v", got, err)
 	}
-	want := map[string]any{"platform": "qq", "bot_id": "10001", "user_id": "22223333", "group_id": "99887766", "message_id": "-4242", "chat_type": "group", "is_owner": true}
+	want := map[string]any{"platform": "qq", "bot_id": "10001", "user_id": "10002", "group_id": "20001", "message_id": "-4242", "chat_type": "group", "is_owner": true}
 	for key, value := range want {
 		if caller[key] != value {
 			t.Fatalf("caller[%s] = %#v, want %#v (meta %s)", key, caller[key], value, got)
@@ -97,7 +97,7 @@ func TestMCPCallerIdentityOnlySentToOptedInServer(t *testing.T) {
 	}
 
 	// 没开透传的服务一个字都不该收到。
-	if got, err := plain.Run(ctx, nil); err != nil || strings.Contains(got, "22223333") {
+	if got, err := plain.Run(ctx, nil); err != nil || strings.Contains(got, "10002") {
 		t.Fatalf("plain server got %q err=%v", got, err)
 	}
 	// 没有触发消息的运行（定时任务）不带 _meta，也不编一个空身份。
@@ -124,7 +124,7 @@ func TestRunCommandReceivesCallerEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range []string{"DIANA_CALLER_USER_ID=22223333", "DIANA_CALLER_CHAT_TYPE=private", "DIANA_CALLER_IS_OWNER=0", "DIANA_CALLER_PLATFORM=qq"} {
+	for _, line := range []string{"DIANA_CALLER_USER_ID=10002", "DIANA_CALLER_CHAT_TYPE=private", "DIANA_CALLER_IS_OWNER=0", "DIANA_CALLER_PLATFORM=qq"} {
 		if !strings.Contains(out, line) {
 			t.Fatalf("missing %s in:\n%s", line, out)
 		}
