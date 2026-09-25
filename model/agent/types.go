@@ -20,8 +20,11 @@ const (
 	DefaultFileWriteMaxBytes = 256 * 1024
 	// 读文件默认一次多少行。工具结果统一被截到 MaxToolOutputChars，一次读太多
 	// 只会在截断处白白丢掉，不如让模型按需要翻页。
-	defaultReadFileLines      = 200
-	maxReadFileLines          = 2000
+	defaultReadFileLines = 200
+	maxReadFileLines     = 2000
+	// readFileScanMaxBytes 是 read_file 愿意逐行扫的文件上限。再大的文本按行翻页也
+	// 翻不完，该用 grep 找。
+	readFileScanMaxBytes      = 64 << 20
 	DefaultListDirectoryLimit = 200
 	DefaultSkillsListBudget   = 8000
 	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
@@ -92,7 +95,7 @@ type Config struct {
 	BuiltinExtensions     []BuiltinExtension
 	BuiltinSkills         []SkillMetadata
 	ReservedSkillNames    []string
-	// FileWriteEnabled 打开 write_file / edit_file。默认关闭：读错文件浪费一次
+	// FileWriteEnabled 打开 write_file / edit_file 和 manage_files 的写操作。默认关闭：读错文件浪费一次
 	// 调用，写错文件改的是磁盘，这一档该由部署方显式点头。
 	FileWriteEnabled bool
 	// FileWriteMaxBytes 是单次写入的字节上限，留空按 DefaultFileWriteMaxBytes。

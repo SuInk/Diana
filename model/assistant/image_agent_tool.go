@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"mime"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -62,6 +61,10 @@ type dianaImageToolResult struct {
 	// Announced 表示运行时已经替你把「开始处理」发给用户了，final 回复不用再重复
 	// 一遍「正在处理」。
 	Announced bool `json:"announced,omitempty"`
+	// WorkspacePathPrefix 是成品原图在工作目录里的落点（不含扩展名）：图画完后存成
+	// <前缀>.<按格式定的扩展名>，多张时是 <前缀>-2.… 依次往后。只在主人开了文件写入时有。
+	WorkspacePathPrefix string `json:"workspace_path_prefix,omitempty"`
+	WorkspaceNote       string `json:"workspace_note,omitempty"`
 }
 
 type dianaImageToolRequest struct {
@@ -81,6 +84,9 @@ type dianaImageToolRequest struct {
 	// Sources 是受理时就解析好的原图。在受理时解析，找不到图能当场告诉模型，
 	// 而不是先回一句「在画了」，过一会儿再发一条失败通知。
 	Sources []string
+	// WorkspaceStem 是成品在工作目录 outputs/ 里的文件名前缀，受理时定下来，
+	// 这样受理结果里就能告诉模型图会存到哪。为空表示不落盘。
+	WorkspaceStem string
 }
 
 type dianaImageTaskOutput struct {
@@ -335,10 +341,14 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	// 「五子棋 / 棋盘」，命中就把图片绑到共享棋局状态的版本上，防旧图盖掉新落子。
 	// 那是拿关键词猜语义，而且只认五子棋；要防「图片发出来时局面已经变了」，该由
 	// 模型在拿到图之后自己核对状态再决定发不发，不该由通用工具替某个游戏兜底。
+	taskKey := dianaImageTaskKey(t.event, request)
+	if t.persistsToWorkspace() {
+		request.WorkspaceStem = dianaImageWorkspaceStem(taskKey, time.Now())
+	}
 	task := PluginTask{
 		Kind:    "image",
 		Name:    name,
-		Key:     dianaImageTaskKey(t.event, request),
+		Key:     taskKey,
 		Timeout: t.taskTimeout(),
 		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
 			output, err := t.execute(ctx, request, services)
@@ -368,6 +378,10 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	result := dianaImageToolResult{OK: true, Queued: true, Action: request.Operation, Caption: request.Caption}
 	if len(reservation.reserved) > 0 {
 		result.TaskID = reservation.reserved[0].id
+		if request.WorkspaceStem != "" {
+			result.WorkspacePathPrefix = agent.WorkspaceOutputsDir + "/" + request.WorkspaceStem
+			result.WorkspaceNote = "图画完后原图会存进工作目录，文件名以 workspace_path_prefix 开头、扩展名按实际格式定；这时还没画完，文件还不存在。之后要再发或整理，先用 find_files 按这个前缀找到确切路径。"
+		}
 		if sink := imageAnnouncementSinkFrom(ctx); sink != nil {
 			sink.deferTask(
 				func() { t.runtime.startPluginTaskReservation(reservation) },
@@ -419,7 +433,12 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		// 两者都要如实告诉用户，静默少发几张比报错更难查。
 		dropped int
 		failed  int
+		// produced 是这次拿到的全部成品，逐张模式里已经发出去的也在内，落盘用。
+		produced []string
 	)
+	// 成品原图同时存进工作目录，模型之后才能用 send_attachment 再发、用 manage_files
+	// 整理。以前图只进媒体缓存，主人说「存下来」时模型手里没有任何能存的东西。
+	defer func() { t.runtime.persistGeneratedImages(ctx, t.event, request.WorkspaceStem, produced) }()
 	switch operation {
 	case "generate":
 		resp, usedCfg, err := t.runtime.generateImageWithFailover(ctx, llm.ImageGenerateRequest{
@@ -432,6 +451,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		}
 		cfg = usedCfg
 		images = resp.Images
+		produced = append(produced, resp.Images...)
 		models = generatedImageModels(usedCfg, operation, len(resp.Images), resp)
 		action = "image_generate"
 		message = "Agent 图片生成已完成"
@@ -502,6 +522,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 			}
 			cfg = usedCfg
 			sourceCount += len(batch)
+			produced = append(produced, resp.Images...)
 			if streaming {
 				shared, localPaths, shareErr := t.runtime.shareAgentImages(ctx, t.event.Platform, resp.Images)
 				if shareErr == nil && len(shared) > 0 {
@@ -673,11 +694,7 @@ func (r *Runtime) shareAgentImage(ctx context.Context, platform, image string) (
 		if err != nil {
 			return "", "", fmt.Errorf("Telegram 发送前下载生成图片失败: %w", err)
 		}
-		extension := ".png"
-		if extensions, extErr := mime.ExtensionsByType(mediaType); extErr == nil && len(extensions) > 0 {
-			extension = extensions[0]
-		}
-		path, cleanupPath, err := r.cacheAgentImage(data, mediaType, extension)
+		path, cleanupPath, err := r.cacheAgentImage(data, mediaType, generatedImageExtension(mediaType, data))
 		return path, cleanupPath, err
 	}
 	mediaType, encoded, ok := strings.Cut(image, ",")
@@ -693,11 +710,7 @@ func (r *Runtime) shareAgentImage(ctx context.Context, platform, image string) (
 	if err != nil || len(data) == 0 {
 		return "", "", fmt.Errorf("图片接口返回的 base64 图片无效")
 	}
-	extension := ".png"
-	if extensions, err := mime.ExtensionsByType(mediaType); err == nil && len(extensions) > 0 {
-		extension = extensions[0]
-	}
-	path, cleanupPath, err := r.cacheAgentImage(data, mediaType, extension)
+	path, cleanupPath, err := r.cacheAgentImage(data, mediaType, generatedImageExtension(mediaType, data))
 	if err != nil {
 		return "", "", err
 	}
@@ -721,6 +734,97 @@ func (r *Runtime) shareAgentImage(ctx context.Context, platform, image string) (
 		return "", "", fmt.Errorf("生成图片无法通过本地媒体代理共享")
 	}
 	return shared, cleanupPath, nil
+}
+
+// persistsToWorkspace 判断这次的成品要不要落进工作目录：工作目录是主人的，只有主人
+// 自己出的图、且开了文件写入时才存，群成员出图不往主人的磁盘上堆东西。群里别人出
+// 的图主人要存，照样能用 save_to_workspace 从聊天记录里取。
+func (t *dianaImageTool) persistsToWorkspace() bool {
+	if t.runtime == nil || !t.relationship.Owner {
+		return false
+	}
+	cfg := t.runtime.effectiveConfigForEvent(t.event)
+	return cfg.AgentEnabled && cfg.AgentFileWriteEnabled
+}
+
+// dianaImageWorkspaceStem 给一次出图任务定文件名前缀：时间方便人认，任务键的一段
+// 保证同一秒的两个任务不撞名。
+func dianaImageWorkspaceStem(taskKey string, now time.Time) string {
+	suffix := strings.TrimPrefix(taskKey, "image:")
+	if len(suffix) > 6 {
+		suffix = suffix[:6]
+	}
+	return "image-" + now.Format("20060102-150405") + "-" + suffix
+}
+
+// persistGeneratedImages 把成品原图存进工作目录 outputs/。尽力而为：存失败只记日志，
+// 不影响图片投递。内联的 base64 直接写；接口只给了网址的（OneBot 下原样转发、本地
+// 没有副本）在后台另行下载，不拖慢发图。
+func (r *Runtime) persistGeneratedImages(ctx context.Context, event MessageEvent, stem string, images []string) {
+	if r == nil || stem == "" || len(images) == 0 {
+		return
+	}
+	now := time.Now()
+	var remote []int
+	for index, image := range images {
+		if normalizedHTTPURL(image) != "" {
+			remote = append(remote, index)
+			continue
+		}
+		r.persistGeneratedImage(ctx, event, stem, index, len(images), image, now)
+	}
+	if len(remote) == 0 {
+		return
+	}
+	background := context.WithoutCancel(ctx)
+	go func() {
+		defer recoverGoroutinePanic("image_agent_tool.persist")
+		for _, index := range remote {
+			r.persistGeneratedImage(background, event, stem, index, len(images), images[index], now)
+		}
+	}()
+}
+
+func (r *Runtime) persistGeneratedImage(ctx context.Context, event MessageEvent, stem string, index, total int, image string, now time.Time) {
+	var (
+		data []byte
+		err  error
+	)
+	if remote := normalizedHTTPURL(image); remote != "" {
+		data, _, err = downloadImageBytesWithLimit(ctx, remote, dianaImageMaxDecodedSize)
+	} else {
+		data, _, err = decodeInlineHistoryImage(image)
+	}
+	if err != nil {
+		log.Printf("diana image: 成品存进工作目录失败（取图）：%v", err)
+		return
+	}
+	name := stem
+	if total > 1 && index > 0 {
+		name = fmt.Sprintf("%s-%d", stem, index+1)
+	}
+	name += generatedImageExtension("", data)
+	saved, err := r.saveWorkspacePayload(event, workspaceMediaPayload{data: data, kind: "image", generated: true}, agent.WorkspaceOutputsDir+"/"+name, false, now)
+	if err != nil {
+		log.Printf("diana image: 成品存进工作目录失败：%v", err)
+		return
+	}
+	log.Printf("diana image: 成品已存进工作目录 %s", saved.Path)
+}
+
+// generatedImageExtension 给生成图片定扩展名：先按字节认，认不出再看接口报的类型，
+// 都不行才退回 .png。以前用 mime.ExtensionsByType，macOS 上 image/jpeg 排第一的是
+// .jfif，存出来的 image.jfif 连 send_attachment 的白名单都不认。
+func generatedImageExtension(mediaType string, data []byte) string {
+	if sniffed := agent.SniffMediaType(data); strings.HasPrefix(sniffed, "image/") {
+		if ext := agent.CanonicalMediaExtension(sniffed); ext != "" {
+			return ext
+		}
+	}
+	if ext := agent.CanonicalMediaExtension(mediaType); ext != "" && strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+		return ext
+	}
+	return ".png"
 }
 
 func (r *Runtime) cacheAgentImage(data []byte, mediaType, extension string) (string, string, error) {
