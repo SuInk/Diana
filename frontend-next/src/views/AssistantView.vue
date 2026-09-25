@@ -772,10 +772,13 @@
               <div class="field wide">
                 <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" criteria-optional @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }">
                   <template #relevance-criteria>
-                    <PromptOverridesEditor :keys="relevanceCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                    <PromptOverridesEditor title-prefix="接话评分 · " :keys="relevanceCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                   </template>
                   <template #chat-criteria>
-                    <PromptOverridesEditor :keys="chatCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                    <PromptOverridesEditor title-prefix="接话评分 · " :keys="chatCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+                  </template>
+                  <template #scoring-criteria>
+                    <PromptOverridesEditor title-prefix="接话评分 · " :keys="scoringCriteriaKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                   </template>
                 </ParticipationControls>
               </div>
@@ -2024,10 +2027,12 @@ const personaBusy = ref(false);
 // 保留生成前的那一版，生成结果不合适可以一键退回，不用自己 Ctrl+Z。
 const soulEditor = ref<InstanceType<typeof SoulEditor> | null>(null);
 const promptOverridesOpen = ref(false);
-// 接话判据是内置提示词里的几段，在「接话」卡片里跟着各自的开关就地改。评分骨架、
-// 换算和输出格式留在「内置提示词」。
-const relevanceCriteriaKeys = ["routing.participation.relevance_true", "routing.participation.relevance_false"];
-const chatCriteriaKeys = ["routing.participation.willingness"];
+// 接话评分用到的每一段内置提示词都在「接话」卡片里就地改，跟着各自的开关放，顺序和
+// 拼进提示词的顺序一致；和「内置提示词」页读写的是同一份覆盖。评分模型和判断模型
+// 共用这些段落，旧版意图路由的提示词不在这里（启用参与度后不再发送）。
+const relevanceCriteriaKeys = ["routing.participation.relevance_intro", "routing.participation.relevance_true", "routing.participation.relevance_false", "routing.participation.relevance_note"];
+const chatCriteriaKeys = ["routing.participation.chat_in_intro", "routing.participation.willingness", "routing.participation.willingness_scale", "routing.participation.chat_in_note"];
+const scoringCriteriaKeys = ["routing.route_instruction.participation", "routing.participation.header", "routing.participation.intro", "routing.participation.shared_note", "routing.participation.format", "routing.criteria.heading", "routing.criteria.guard", "routing.participation.retry"];
 const promptOverrideCount = computed(() => Object.keys(form.value?.prompt_overrides ?? {}).length);
 
 // 内置提示词 YAML：导出的是编辑器里眼前这一份（可能还没保存），导入只填回编辑器，

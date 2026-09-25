@@ -183,7 +183,7 @@ var promptParticipationHeaderSpec = registerPrompt(PromptSpec{
 var promptParticipationIntroSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.intro",
 	Group:   PromptGroupRouting,
-	Title:   "接话评分 · 任务说明",
+	Title:   "接话评分 · 身份与任务",
 	Usage:   "接话评分模块的身份和任务：评哪两项、要不要带理由。",
 	Default: "你是群聊接话评分模块。结合当前消息和最近对话评估两项，各带简短 reason，不输出总分或开关。",
 })

@@ -9,7 +9,8 @@ import { customizedPromptCount, isPromptCustomized, isPromptFormatCustomized, mi
 // keys 给定时是精简模式：只按这个顺序列这几段，不分组、不带搜索，用来把某一类
 // 提示词（比如接话判据）嵌到它所属的设置卡片里就地改。每段收起时只占一行，
 // 导入导出和恢复默认在展开后的那一行里。
-const props = defineProps<{ modelValue?: Record<string, string>; keys?: string[] }>();
+// titlePrefix：精简模式下各段标题里重复的分类前缀（如「接话评分 · 」），列表里省掉。
+const props = defineProps<{ modelValue?: Record<string, string>; keys?: string[]; titlePrefix?: string }>();
 const emit = defineEmits<{ "update:modelValue": [value: Record<string, string> | undefined] }>();
 const id = useId();
 
@@ -155,9 +156,9 @@ function resetAll(): void {
   emit("update:modelValue", undefined);
 }
 
-// 精简模式下各段同属一类，标题里「接话评分 · 」这种分类前缀是重复信息。
 function displayTitle(spec: PromptSpec): string {
-  return props.keys ? spec.title.replace(/^[^·]+·\s*/, "") : spec.title;
+  const prefix = props.titlePrefix;
+  return prefix && spec.title.startsWith(prefix) ? spec.title.slice(prefix.length) : spec.title;
 }
 
 // 模板里直接写 `{${name}}` 会被 Vue 当成插值结束符，拼好再给模板。

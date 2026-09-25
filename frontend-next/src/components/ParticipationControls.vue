@@ -5,7 +5,8 @@ import { defaultParticipationCooldownSeconds, participationLevelLabel, participa
 
 // criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
 // 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。
-// relevance-criteria / chat-criteria 两个插槽跟在对应开关下面，放各自的判据编辑。
+// relevance-criteria / chat-criteria 两个插槽跟在对应开关下面，放各自的判据编辑；
+// scoring-criteria 放两项共用的评分骨架。
 const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string; criteriaOptional?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: ParticipationPreferences | undefined]; "update:criteria": [value: string] }>();
 const id = useId();
@@ -119,6 +120,15 @@ function updateCriteria(event: Event) {
           </div>
           <div v-if="setting.key === 'chat_level' && $slots['chat-criteria']" class="setting-criteria">
             <slot name="chat-criteria" />
+          </div>
+        </section>
+        <section v-if="$slots['scoring-criteria']" class="participation-setting criteria-setting">
+          <div class="setting-copy">
+            <label>评分通用</label>
+            <p class="setting-help">两项评分共用的部分：任务说明、通用规则、输出格式、补充判据的段头收尾，以及解析失败时的重问。</p>
+          </div>
+          <div class="setting-criteria">
+            <slot name="scoring-criteria" />
           </div>
         </section>
         <section v-if="!criteriaOptional || criteria?.trim()" class="participation-setting criteria-setting">
