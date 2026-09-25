@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -139,35 +140,59 @@ func expandCodeFences(segment string, blocks []string, chunkSize int) []string {
 // 不能按长度直接硬切：切出来的半个围栏在接收端就是一堆字面量反引号，正是这个文件
 // 要修的那个毛病。按行切并给每段补上开合围栏，拆出来的每一条都还是能正常渲染的代码块。
 func splitFencedBlock(block string, chunkSize int) []string {
+	if chunkSize <= 0 || len([]rune(block)) <= chunkSize {
+		return []string{block}
+	}
+	pieces := splitFencedBlockToFit(block, func(piece string) bool { return len([]rune(piece)) <= chunkSize })
+	if len(pieces) == 0 {
+		return []string{block}
+	}
+	return pieces
+}
+
+// splitFencedBlockToFit 是按「放不放得下」拆围栏的通用版：fits 由调用方给，
+// 可以是字数，也可以是平台渲染后的容量（Telegram 按 UTF-16 算，HTML 转义还会变长），
+// 所以这里不自己估算围栏开销，每一段都补齐围栏之后整段去问 fits。
+//
+// 优先在行边界切；只有一行本身就放不下时才在这一行中间硬切——代码行被拆开总比整条
+// 回复发不出去好，而且每段仍是完整围栏，复制回去拼起来就是原文。连一个字符加上
+// 围栏都放不下时返回 nil，由调用方决定怎么报错。
+func splitFencedBlockToFit(block string, fits func(string) bool) []string {
 	lines := strings.Split(block, "\n")
-	if chunkSize <= 0 || len([]rune(block)) <= chunkSize || len(lines) < 3 {
-		return []string{block}
+	if len(lines) < 3 {
+		return nil
 	}
-	opening := lines[0]
-	// 正文预算要扣掉首尾两行围栏本身。
-	budget := chunkSize - len([]rune(opening)) - len("\n```")
-	if budget <= 0 {
-		return []string{block}
-	}
-	seal := func(body []string) string {
-		return opening + "\n" + strings.Join(body, "\n") + "\n```"
+	// 收尾沿用原来的那一行：开头是四个反引号时，收尾也得是四个，否则接收端配不上对。
+	opening, closing := lines[0], lines[len(lines)-1]
+	seal := func(body ...string) string {
+		return opening + "\n" + strings.Join(body, "\n") + "\n" + closing
 	}
 	var out, current []string
-	size := 0
 	for _, line := range lines[1 : len(lines)-1] {
-		length := len([]rune(line)) + 1
-		if len(current) > 0 && size+length > budget {
-			out = append(out, seal(current))
-			current, size = nil, 0
+		candidate := append(append([]string(nil), current...), line)
+		if fits(seal(candidate...)) {
+			current = candidate
+			continue
 		}
-		current = append(current, line)
-		size += length
+		if len(current) > 0 {
+			out = append(out, seal(current...))
+			current = nil
+		}
+		runes := []rune(line)
+		for !fits(seal(string(runes))) {
+			// 前缀越长越放不下，二分找出这一段最多能装多少个字符。
+			cut := sort.Search(len(runes), func(n int) bool { return !fits(seal(string(runes[:n+1]))) })
+			if cut == 0 {
+				return nil
+			}
+			out = append(out, seal(string(runes[:cut])))
+			runes = runes[cut:]
+		}
+		// 硬切剩下的尾巴留在当前段里，后面的短行还能接着装进来。
+		current = []string{string(runes)}
 	}
 	if len(current) > 0 {
-		out = append(out, seal(current))
-	}
-	if len(out) == 0 {
-		return []string{block}
+		out = append(out, seal(current...))
 	}
 	return out
 }
