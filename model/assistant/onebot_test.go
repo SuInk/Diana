@@ -156,6 +156,48 @@ func TestOneBotOutgoingSegmentsIncludeImagesAndVideos(t *testing.T) {
 	}
 }
 
+// TestOneBotOutgoingSegmentsDropNonNumericIDs 验证模型手写的 CQ 码里带着没还原的
+// 脱敏别名时，只丢掉那一段，正文照发，数字账号的 @ 不受影响。
+func TestOneBotOutgoingSegmentsDropNonNumericIDs(t *testing.T) {
+	message := buildOutgoingSegments(OutgoingMessage{
+		Text: "[CQ:reply,id=im_message_abc][CQ:at,qq=im_current_user_547f72c642a] 你说得对 [CQ:at,qq=10001] 看这里 [CQ:at,qq=all][CQ:poke,qq=im_user_x]",
+	})
+	var texts []string
+	var mentions []string
+	for _, segment := range message {
+		data, _ := segment["data"].(map[string]string)
+		switch segment["type"] {
+		case "text":
+			texts = append(texts, data["text"])
+		case "at":
+			mentions = append(mentions, data["qq"])
+		default:
+			t.Fatalf("unexpected segment survived: %#v", message)
+		}
+	}
+	if strings.Join(mentions, ",") != "10001,all" {
+		t.Fatalf("mentions = %v, message = %#v", mentions, message)
+	}
+	joined := strings.Join(texts, "")
+	if strings.Contains(joined, "im_") || !strings.HasPrefix(joined, "你说得对 ") || !strings.Contains(joined, " 看这里 ") {
+		t.Fatalf("texts = %q", texts)
+	}
+
+	valid := buildOutgoingSegments(OutgoingMessage{Text: "[CQ:reply,id=-2147483000][CQ:at,qq=10001] 好"})
+	if len(valid) != 3 || valid[0]["type"] != "reply" || valid[1]["type"] != "at" {
+		t.Fatalf("valid segments changed: %#v", valid)
+	}
+	if data := valid[1]["data"].(map[string]string); data["qq"] != "10001" {
+		t.Fatalf("valid mention changed: %#v", valid)
+	}
+
+	// 入站解析不受影响：收到什么就记什么。
+	inbound := CQToSegments("[CQ:at,qq=im_user_abc]")
+	if len(inbound) != 1 || inbound[0].Type != "at" || inbound[0].Data["qq"] != "im_user_abc" {
+		t.Fatalf("inbound parsing changed: %#v", inbound)
+	}
+}
+
 func TestForwardOutgoingSegmentsRemoveMentions(t *testing.T) {
 	message := buildForwardOutgoingSegments(OutgoingMessage{
 		Text:          "[CQ:at,qq=123] 第一位，@456 第二位",
