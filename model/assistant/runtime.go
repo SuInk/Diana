@@ -3856,6 +3856,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			if IsOneBotPlatform(r.currentPlatform(event)) {
 				extraTools = append(extraTools, newDianaPokeTool(r, event))
 			}
+			// 存二进制文件和 write_file 同一档：都是往磁盘上写，跟着「允许写入文件」走。
+			// 它不在 allowedAgentToolNames 里，群成员拿不到。
+			if cfg.AgentFileWriteEnabled {
+				extraTools = append(extraTools, newDianaSaveToWorkspaceTool(r, event))
+			}
 			// 跨会话发送只在「确实存在另一条会话可发」时才有意义。群里人人可用，
 			// 但只能发给当前说话的人；主人在哪都能用，因为只有他能指定别人和群。
 			// 私聊里给普通成员挂上它，模型看得到就会去调，然后只能被拒绝，白费一轮。

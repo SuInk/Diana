@@ -293,6 +293,7 @@ var coreCapabilityDocuments = []capabilityDocument{
 	{ID: "core:tasks", Title: "提醒与周期订阅", Content: "通过 reminder、schedule、rss 和 tasks 创建、查询、修改、取消和删除提醒、周期查询及 RSS/Twitter 条件订阅；GitHub 仓库更新订阅在 WebUI 管理。", Source: "core", Enabled: true},
 	{ID: "core:history", Title: "聊天历史引用与撤回", Content: "持久保存 OneBot v11 消息、引用、图片和视频关键帧，重启后不丢；可读取合并转发和撤回记录并结合上下文回复。", Source: "core", Enabled: true},
 	{ID: "core:config", Title: "机器人配置与模型配置", Content: "config 可读取脱敏运行配置、LLM、plugins 和 skills；仅主人可用 llm_config 修改 Diana 自己当前的 provider/model。", Source: "core", Enabled: true, Required: "主人"},
+	{ID: "core:workspace-files", Title: "工作目录文件存取与整理", Content: "主人专用的本地工作目录：save_to_workspace 把聊天里的图片、视频、语音、文件（包括机器人自己发出去的生成图）、公网网址上的文件或 MCP 工具产物原样存进来，按内容认类型并纠正扩展名；manage_files 挪动、复制、建目录、查看大小类型和图片宽高，删除只是挪进 .trash 回收站；view_image 看图，send_attachment 把工作目录里的文件发回聊天。主人开着文件写入时，生成的图也会自动存一份进 outputs/。写入类操作需要机器人配置里的「允许写入文件」。", Source: "core", Enabled: true, Required: "主人"},
 	{ID: "core:llm-identity-privacy", Title: "LLM 账号标识脱敏", Content: "默认在本地 LLM 边界把账号和群号替换为带角色语义的稳定别名；模型回复和 Agent 工具参数会在本地执行前还原。真实标识仍保留在本地数据库，不影响消息发送、群工具和长期记忆。", Source: "core", Enabled: true},
 	{ID: "core:capabilities", Title: "自身能力知识库 RAG", Content: "capabilities 使用本地稀疏检索，从核心能力和实时插件清单召回相关条目后交给模型回答。", Source: "core", Enabled: true},
 }

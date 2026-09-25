@@ -125,8 +125,9 @@ func newDianaFileDeliveryTool(runtime *Runtime, event MessageEvent, settings Set
 func (t *dianaFileDeliveryTool) Name() string { return dianaFileDeliveryToolName }
 
 func (t *dianaFileDeliveryTool) Description() string {
-	return `把你写好的文本内容保存成文件发到当前会话，对方可以直接下载。` +
-		`适合完整的代码文件、脚本、SVG 图、Markdown 文档、配置文件、CSV 数据等——内容长、要保存或要拿去运行时用它，别把几百行代码塞进聊天正文。` +
+	return `把你写好的文本内容打包成一个文件发到当前会话，对方可以直接下载。` +
+		`适合完整的代码文件、脚本、SVG 图、Markdown 文档、配置文件、CSV 数据等——内容长、对方要下载保存或要拿去运行时用它，别把几百行代码塞进聊天正文。` +
+		`它只发送、不在本地留存：要把文件存进工作目录用 write_file（文本）或 save_to_workspace（图片等二进制），不要拿它冒充「存好了」。` +
 		`filename 带扩展名（如 snake.py、logo.svg、README.md），content 是完整文件内容。` +
 		`preview 为 true 时先发一张渲染预览图：svg 画成图，mmd 按 mermaid 画，md 按 Markdown 排版，html 按网页效果截图，代码按等宽代码块排版。` +
 		`文件由运行时发送，调用后用一句话交代即可，不要在正文里再贴一遍内容。`

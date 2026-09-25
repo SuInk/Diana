@@ -1581,11 +1581,12 @@
                   <label class="switch">
                     <input v-model="form.agent_file_write_enabled" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">允许写入文件（write_file / edit_file）</span>
+                    <span class="switch-label">允许写入文件（write_file / edit_file / save_to_workspace / manage_files）</span>
                   </label>
                   <span class="hint">
                     新建的机器人默认打开：写入锁在数据目录下的 workspace 内，碰不到配置和数据库。
-                    读取、检索、按名字找文件不受这个开关影响，始终可用。
+                    包括把聊天图片、网址文件存进来，以及挪动、复制、删除（删除只挪进 .trash 回收站）。
+                    读取、检索、按名字找文件、查看文件信息不受这个开关影响，始终可用。
                   </span>
                 </div>
                 <div class="field wide">
