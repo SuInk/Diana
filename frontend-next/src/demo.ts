@@ -784,6 +784,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     };
   };
   if (path === "/api/browser-box/status" && method === "GET") return json(demoBrowserBoxStatus());
+  // 打开浏览器页会自动拉起；演示里不起进程，照实回「没在跑」，别让页面弹错。
+  if (path === "/api/browser-box/start" && method === "POST") return json({ status: demoBrowserBoxStatus() });
   if (path === "/api/browser-box/settings" && method === "PUT") {
     demoBrowserBoxSettings = { ...demoBrowserBoxSettings, ...(body as unknown as BrowserBoxSettings) };
     return json({ settings: demoBrowserBoxSettings, status: demoBrowserBoxStatus() });
@@ -1523,7 +1525,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       { id: "browser-log-3", kind: "error", level: "error", action: "browser_action", message: "机器人在内置浏览器里点击失败", detail: "找不到元素：button.download（模拟数据）", actor: "qq:100200711", actor_name: "青禾", target: "button.download", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(4) },
       { id: "browser-log-4", kind: "operation", level: "info", action: "browser_box_takeover", message: "你在画面上动手，内置浏览器已自动转为你接管", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
       { id: "browser-log-5", kind: "operation", level: "info", action: "browser_box_navigate", message: "你在内置浏览器里打开了网页", actor: "webui:demo", target: "https://accounts.example.com/login", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(12) },
-      { id: "browser-log-6", kind: "operation", level: "info", action: "browser_box_start", message: "你启动了内置浏览器", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(13) },
+      { id: "browser-log-6", kind: "operation", level: "info", action: "browser_box_start", message: "你打开浏览器页，内置浏览器随之启动", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(13) },
       { id: "browser-log-7", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里截图", actor: "telegram:880024", target: "", metadata: { profile_id: "bot-telegram", source: "box" }, created_at: before(40) }
     ];
     return json({ logs: browserLogs.filter((log) => actions.has(log.action) && (!profile || log.metadata?.profile_id === profile)) });
