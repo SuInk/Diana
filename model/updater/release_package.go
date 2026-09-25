@@ -538,7 +538,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err := resignMacOSPath(helperPath); err != nil {
 		log.Printf("updater: sign update helper: %v", err)
 	}
-	backupName := time.Now().UTC().Format("20060102T150405Z") + "-" + safePathComponent(u.currentVersion)
+	backupName := time.Now().UTC().Format(releaseBackupTimeLayout) + "-" + safePathComponent(u.currentVersion)
 	plan := releaseApplyPlan{
 		Schema:           1,
 		ParentPID:        os.Getpid(),

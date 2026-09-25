@@ -238,9 +238,10 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 		return fmt.Errorf("wait for old Diana process: %w", err)
 	}
 	backupsRoot := filepath.Dir(plan.BackupRoot)
-	// Only the current attempt may have a backup. Do not start another copy
-	// if deleting an older backup fails (for example because of permissions).
-	if err := pruneReleaseBackups(backupsRoot, 0); err != nil {
+	// Make room for this attempt's backup within the retention limits. Do not
+	// start another copy if deleting an older backup fails (for example because
+	// of permissions).
+	if err := pruneReleaseBackups(backupsRoot, releaseBackupMaxCount-1, time.Now()); err != nil {
 		return restartPreviousRelease(plan, hooks, fmt.Errorf("remove previous update backups: %w", err), "")
 	}
 	if err := os.MkdirAll(plan.BackupRoot, 0o700); err != nil {
@@ -290,13 +291,13 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 			DatabaseBackup: databaseBackup,
 			At:             time.Now(),
 		}
-		if err := os.RemoveAll(plan.BackupRoot); err != nil {
+		// The database backup stays within the retention limits so data can
+		// still be recovered if the new version turns out to have mangled it.
+		// Only the replaced program files are dropped.
+		if err := os.RemoveAll(filepath.Join(plan.BackupRoot, "package")); err != nil {
 			// A cleanup failure must not roll back a healthy installation.
 			state.CleanupError = err.Error()
 			log.Printf("updater: updated Diana is healthy but backup cleanup failed: %v", err)
-		} else {
-			state.BackupRoot = ""
-			state.DatabaseBackup = ""
 		}
 		if err := writeReleaseState(plan, state); err != nil {
 			log.Printf("updater: record healthy update state: %v", err)
@@ -601,7 +602,19 @@ func readReleaseState(updatesRoot string) (releaseUpdateState, bool) {
 	return state, true
 }
 
-func pruneReleaseBackups(backupsRoot string, keep int) error {
+const (
+	// Update backups, including the database copy, are kept for this long
+	// after the update, and never more than releaseBackupMaxCount at a time.
+	releaseBackupRetention  = 3 * 24 * time.Hour
+	releaseBackupMaxCount   = 5
+	releaseBackupTimeLayout = "20060102T150405Z"
+)
+
+// pruneReleaseBackups removes backups older than releaseBackupRetention, then
+// the oldest remaining ones until at most keep are left. Backup directories
+// are named after their UTC creation time; a directory whose name does not
+// start with such a timestamp is treated as expired.
+func pruneReleaseBackups(backupsRoot string, keep int, now time.Time) error {
 	entries, err := os.ReadDir(backupsRoot)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -609,18 +622,36 @@ func pruneReleaseBackups(backupsRoot string, keep int) error {
 	if err != nil {
 		return err
 	}
-	names := make([]string, 0, len(entries))
+	cutoff := now.Add(-releaseBackupRetention)
+	kept := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
-			names = append(names, entry.Name())
+		if !entry.IsDir() {
+			continue
 		}
-	}
-	sort.Strings(names)
-	for len(names) > keep {
-		if err := os.RemoveAll(filepath.Join(backupsRoot, names[0])); err != nil {
+		name := entry.Name()
+		if createdAt, ok := releaseBackupTime(name); ok && !createdAt.Before(cutoff) {
+			kept = append(kept, name)
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(backupsRoot, name)); err != nil {
 			return err
 		}
-		names = names[1:]
+	}
+	// The fixed-width timestamp prefix sorts chronologically.
+	sort.Strings(kept)
+	for len(kept) > keep {
+		if err := os.RemoveAll(filepath.Join(backupsRoot, kept[0])); err != nil {
+			return err
+		}
+		kept = kept[1:]
 	}
 	return nil
+}
+
+func releaseBackupTime(name string) (time.Time, bool) {
+	if len(name) < len(releaseBackupTimeLayout) {
+		return time.Time{}, false
+	}
+	createdAt, err := time.Parse(releaseBackupTimeLayout, name[:len(releaseBackupTimeLayout)])
+	return createdAt, err == nil
 }

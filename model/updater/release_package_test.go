@@ -304,8 +304,13 @@ func TestApplyReleasePlanBacksUpAndSwitchesHealthyPackage(t *testing.T) {
 	assertUpdaterTestContent(t, plan.ExecutablePath, "new-binary")
 	assertUpdaterTestContent(t, filepath.Join(plan.FrontendPath, "index.html"), "new-frontend")
 	entries, err := os.ReadDir(backupsRoot)
-	if err != nil || len(entries) != 0 {
+	if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(plan.BackupRoot) {
 		t.Fatalf("after success: backups=%d err=%v", len(entries), err)
+	}
+	databaseBackup := filepath.Join(plan.BackupRoot, "database", filepath.Base(plan.DatabasePath))
+	assertUpdaterTestContent(t, databaseBackup, "old-database")
+	if _, err := os.Stat(filepath.Join(plan.BackupRoot, "package")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaced program files were kept after success: %v", err)
 	}
 	if !process.released || process.stopped {
 		t.Fatalf("process = %#v", process)
@@ -314,8 +319,8 @@ func TestApplyReleasePlanBacksUpAndSwitchesHealthyPackage(t *testing.T) {
 	if !ok || state.Status != "healthy" || state.TargetVersion != "v0.5.0" {
 		t.Fatalf("release state = %#v, ok = %v", state, ok)
 	}
-	if state.BackupRoot != "" || state.DatabaseBackup != "" || state.CleanupError != "" {
-		t.Fatalf("healthy state references removed backup: %#v", state)
+	if state.BackupRoot != plan.BackupRoot || state.DatabaseBackup != databaseBackup || state.CleanupError != "" {
+		t.Fatalf("healthy state does not reference the kept backup: %#v", state)
 	}
 }
 
