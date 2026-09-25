@@ -8313,8 +8313,7 @@ func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 	if maxRunes > 0 && len([]rune(reply)) > maxRunes {
 		reply = truncateReplyAtBoundary(reply, maxRunes)
 	}
-	// 收尾的句号在这里就去掉，不留到切分之后：这样返回值、聊天历史、事件详情和群里
-	// 实际收到的是同一份文本。只有分条切出来的中间那几条才需要在切分后再处理一次。
+	// 句号留到切好每条消息之后再去（见 splitChatReply）：长度兜底要按句号断句。
 	return reply
 }
 
@@ -8609,7 +8608,14 @@ func splitReply(reply string, chunkSize int) []string {
 // 排版换行只认 [diana-line]；真实 CR/LF 一律折叠成软空格。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
+// splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）。
 func splitChatReply(reply string, limits chatSplitLimits) []string {
+	return stripBubblePeriods(splitChatReplyKeepingPeriods(reply, limits))
+}
+
+// splitChatReplyKeepingPeriods 切条但保留句号：长度规划（replyLengthPlan）还要在句号
+// 处把超长的那条再细分，句号去早了它就找不到断句点。
+func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string {
 	reply, mode, lines := consumeReplyFormatting(reply)
 	limits = replyDeliveryLimits(limits, mode)
 	if lines != "" {
@@ -8718,19 +8724,6 @@ func boundaryPositions(runes []rune, match func(rune) bool) []int {
 	return out
 }
 
-// trimChatTrailingPeriod 去掉聊天消息末尾那个句号。
-//
-// 提示词里早就有 replyTrailingPunctuationRule 说「结尾不要用句号收尾」，理由是
-// 一条「知道了。」读起来是公事公办的冷淡。但那和分条一样，是押在模型愿不愿意照做
-// 上的；按句子分条之后还更显眼——一段话拆成几条，就有几个句号排在那儿。
-//
-// 只动整条消息最后那一个，而且只动句号：
-//   - 问号和感叹号承载语气，删了意思就变了
-//   - 省略号是话没说完，不是句读
-//   - 英文句点在缩写、域名、版本号里到处都是，v1.0 和 example.com. 分不清，不碰
-//   - 收在引号、括号里的句号属于被引用的内容，不是这条消息自己的句读
-//   - 删完变成空的就不删
-//
 // hasUnclosedQuote 判断末尾的标点是不是落在没闭合的引号或括号里。
 func hasUnclosedQuote(runes []rune) bool {
 	depth := 0
