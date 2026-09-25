@@ -261,6 +261,20 @@ func saveExtensionOverride(root, profile, id string, enabled bool) error {
 
 // Filter only this request view. Other robots retain their shared MCP sessions.
 func (r *ToolRegistry) ApplyExtensionOverrides(values map[string]bool) {
+	// MCP 没写机器人设置的，跟随全局开关。全局关着的服务可能因为别的机器人单独
+	// 打开而在跑，这台机器人没打开就得把它的工具摘掉——哪怕这台一条覆盖都没写过。
+	values = cloneToolAllowlist(values)
+	if values == nil {
+		values = map[string]bool{}
+	}
+	for _, state := range r.Extensions() {
+		if state.Kind != ExtensionKindMCP {
+			continue
+		}
+		if _, ok := values[state.ID]; !ok && !state.Enabled {
+			values[state.ID] = false
+		}
+	}
 	if len(values) == 0 {
 		return
 	}
@@ -326,10 +340,107 @@ type filteredExtensionCatalog struct {
 func (c *filteredExtensionCatalog) Extensions() []ExtensionState {
 	states := c.previous.Extensions()
 	for i := range states {
-		if enabled, ok := c.values[states[i].ID]; ok && !enabled {
-			states[i].Enabled = false
+		enabled, ok := c.values[states[i].ID]
+		if !ok {
+			continue
+		}
+		// 机器人单独打开的 MCP，全局关着也算开着。
+		states[i].Enabled = enabled
+		if !enabled {
 			states[i].Tools = nil
 		}
 	}
 	return states
+}
+
+// MCP 服务的全局开关是各台机器人的默认，不是禁令：`mcp:foo` 写了就以机器人为准，
+// 没写就跟随全局。全局关着、某台机器人单独打开时，服务照样要起进程给它用。
+//
+// 以前全局关掉是硬停用，机器人开关救不回来，那时留在文件里的 `mcp:foo: true` 是
+// 早就作废的旧值。直接换成新规则，这些旧值会让主人关掉的服务（比如能下单付款的点单
+// 服务）在升级后悄悄跑起来。所以先按旧规则清一次：全局关着的服务，它的机器人 true
+// 一律删掉，清完在文件里记一笔，之后写进来的 true 才算数。
+// 标记放在空 profile 下：机器人 ID 不会是空串，这一格不会和真实配置撞。
+const mcpBotDefaultMigrationKey = "migrated:mcp-bot-default"
+
+// migrateLegacyMCPDisable 清掉旧规则下作废的机器人 true，只做一次。
+func migrateLegacyMCPDisable(root string, servers map[string]mcpServerConfig) error {
+	lock := extensionPathLock(extensionOverridePath(root))
+	lock.Lock()
+	defer lock.Unlock()
+	values, err := loadExtensionOverrides(root)
+	if err != nil {
+		return err
+	}
+	if values[""][mcpBotDefaultMigrationKey] {
+		return nil
+	}
+	for name, server := range servers {
+		if server.enabled() {
+			continue
+		}
+		id := "mcp:" + name
+		for profile, overrides := range values {
+			if overrides[id] {
+				delete(values[profile], id)
+			}
+		}
+	}
+	if values[""] == nil {
+		values[""] = map[string]bool{}
+	}
+	values[""][mcpBotDefaultMigrationKey] = true
+	data, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	return saveExtensionFile(extensionOverridePath(root), data)
+}
+
+// mcpBotOptIns 列出至少有一台机器人单独打开的 MCP 服务 ID。全局关着的服务靠它决定
+// 要不要起进程。
+func mcpBotOptIns(root string) (map[string]bool, error) {
+	values, err := loadExtensionOverrides(root)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for profile, overrides := range values {
+		if profile == "" {
+			continue
+		}
+		for key, enabled := range overrides {
+			if enabled && strings.HasPrefix(key, "mcp:") {
+				out[key] = true
+			}
+		}
+	}
+	return out, nil
+}
+
+// clearBotEnabledOverrides 删掉所有机器人对某个扩展的启用设置，让它们重新跟随全局。
+// 只动启用键，群成员档位、常驻名单这些各管各的，不跟着清。
+func clearBotEnabledOverrides(root, id string) error {
+	lock := extensionPathLock(extensionOverridePath(root))
+	lock.Lock()
+	defer lock.Unlock()
+	values, err := loadExtensionOverrides(root)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for profile, overrides := range values {
+		if _, ok := overrides[id]; ok {
+			delete(values[profile], id)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	data, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	return saveExtensionFile(extensionOverridePath(root), data)
 }

@@ -34,6 +34,16 @@ func ExtensionOperationChangesDefinition(operation string) bool {
 	}
 }
 
+// ExtensionRequestChangesDefinition 是按整个请求判断要不要重建底座。MCP 的启用开关
+// 不改服务定义，却会改「哪些服务要起进程」：全局关着的服务，有机器人单独打开才起，
+// 全局打开或关掉也要跟着起停。只看操作名的话，这些要等下次重启才生效。
+func ExtensionRequestChangesDefinition(req ExtensionAdminRequest) bool {
+	if ExtensionOperationChangesDefinition(req.Operation) {
+		return true
+	}
+	return req.Operation == "enabled" && ExtensionKind(req.Kind) == ExtensionKindMCP
+}
+
 // ExtensionOperationMutatesState 表示这次调用改了某些会留下来的东西，值得记一条操作
 // 日志。比上一个宽：启用开关、成员档位、对象名单、常驻档位、以及把预设从列表里藏起来
 // 都算——它们不改扩展定义，但确实改了状态。

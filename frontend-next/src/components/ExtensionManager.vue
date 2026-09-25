@@ -2,7 +2,7 @@
   <section class="extension-manager">
     <!-- 工具条和插件页共用 .plugins-view-header 那几条：控件同高、不换行。 -->
     <header class="view-header plugins-view-header">
-      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : '选择机器人后调整启用状态' }}</p></div>
+      <div class="view-title"><h2>{{ kind === 'skill' ? 'Skills' : 'MCP' }}</h2><p>配置全局共享 · {{ botScope ? '启用状态与权限仅影响当前机器人' : kind === 'mcp' ? '这里的开关是所有机器人的默认，选择机器人后可单独调整' : '选择机器人后调整启用状态' }}</p></div>
       <div class="view-actions">
         <div class="plugin-search">
           <Search :size="14" aria-hidden="true" />
@@ -26,12 +26,12 @@
     <p v-if="loading">正在读取扩展…</p>
     <!-- 版式跟插件页走：同一套卡片，扫一眼就知道这三处（插件 / Skills / MCP）是一类东西。 -->
     <div v-else class="extension-list" :class="layout === 'rows' ? 'plugin-rows' : 'plugin-tiles'">
-      <article v-for="item in visibleItems" :key="item.id" class="plugin-card" :class="{off: botScope && !item.enabled}">
+      <article v-for="item in visibleItems" :key="item.id" class="plugin-card" :class="{off: (botScope || kind==='mcp') && !item.enabled}">
         <div class="plugin-card-head">
           <h2 class="plugin-card-name" :title="item.name">{{ item.name }}</h2>
-          <!-- 卡片上只管「这台机器人用不用它」。给谁用、限定哪些人都在设置里，
-               和这条服务自己的配置放在一起看才说得清。 -->
-          <label v-if="botScope" class="switch" :title="item.available===false ? '全局停用，先在设置里打开「服务可用」' : item.enabled ? '点击停用' : '点击启用'">
+          <!-- 卡片上始终只有一个开关，管什么跟着顶部选的范围走：选了机器人是「这台用不用」，
+               全部机器人时（只有 MCP）是全局默认。给谁用、限定哪些人都在设置里。 -->
+          <label v-if="botScope || kind==='mcp'" class="switch" :title="item.available===false ? '全局停用，先在设置里打开「服务可用」' : !botScope ? (item.enabled ? '所有机器人默认启用，点击统一停用' : '所有机器人默认停用，点击统一启用') : item.enabled ? '点击停用' : '点击启用'">
             <input type="checkbox" :checked="item.enabled" :disabled="busy === item.id || item.available===false" @change="toggleEnabled(item)" />
             <span class="track" aria-hidden="true"></span>
           </label>
@@ -117,7 +117,6 @@
             <span v-if="field.hint" class="hint">{{ field.hint }}</span>
           </label>
           <p v-if="(Object.keys(editPresetMasks).length || Object.values(editPresetValues).some(v => v.includes('****'))) && !readonly && !revealed" class="hint">令牌只显示掩码，<button type="button" class="link-button" :disabled="revealing" @click="revealSecrets">显示明文</button>。</p>
-          <label class="switch"><input v-model="form.enabled" type="checkbox" :disabled="readonly" /><span class="track"></span>服务可用</label>
           <p v-if="verifyNote" role="status">{{ verifyNote }}</p>
           <p class="hint">超时、工具名单这些改不到的，切<button type="button" class="link-button" @click="editAdvanced=true">高级配置</button>。</p>
         </template>
@@ -131,7 +130,6 @@
           <div class="extension-grid"><label class="field">连接超时（秒）<input v-model.number="form.startup_timeout_sec" class="input" type="number" min="1" max="300" /><span class="hint">最长 300，首次启动要现拉依赖的服务往大了填。</span></label><label class="field">工具超时（秒）<input v-model.number="form.tool_timeout_sec" class="input" type="number" min="1" max="900" /><span class="hint">最长 900，构建、抓取这类慢工具才需要调高。</span></label></div>
           <label class="field">允许的工具（每行一个，留空全部）<textarea v-model="form.enabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="field">禁用的工具（每行一个）<textarea v-model="form.disabled_tools" class="input code-input" rows="2"></textarea></label>
-          <label class="switch"><input v-model="form.enabled" type="checkbox" /><span class="track"></span>服务可用</label>
           <p class="hint">测试连接会访问服务；stdio 会启动配置的本地进程。</p>
           <p v-if="tested" role="status">连接成功，发现 {{ discovered.length }} 个工具</p><ul v-if="discovered.length"><li v-for="name in discovered" :key="name" class="tool-name">{{ name }}</li></ul>
         </template>
@@ -273,8 +271,11 @@ type ExtensionState=typeof extensionStates[number]['value'];
 const openTiers=extensionStates.filter(state=>state.value!=='off');
 const tierLabel=(item:ManagedExtension)=>extensionStates.find(state=>state.value===currentState(item))?.label||'';
 // 开关只管启用与否：成员档和名单原样留着，关掉再打开还是原来那一档。
-async function toggleEnabled(item:ManagedExtension){const profile=botScope.value;if(!profile)return;busy.value=item.id;
- try{const result=await manageExtension<{warning?:string}>({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile,enabled:!item.enabled});if(result?.warning)toastError(result.warning);await load()}
+async function toggleEnabled(item:ManagedExtension){const profile=botScope.value;if(!profile&&props.kind!=='mcp')return;
+ // 全局这一下会把每台机器人单独的开关都清掉，统一跟随，所以先问一句。
+ if(!profile&&!await askConfirm({title:`所有机器人${item.enabled?'停用':'启用'} ${item.name}？`,message:`每台机器人单独设过的开关都会被覆盖，统一${item.enabled?'停用':'启用'}。之后在某台机器人上单独${item.enabled?'打开':'关掉'}，那台照样按它自己的来。`,confirmLabel:item.enabled?'全部停用':'全部启用'}))return;
+ busy.value=item.id;
+ try{const result=await manageExtension<{warning?:string}>({operation:'enabled',kind:props.kind,name:item.name,profile_id:profile||undefined,enabled:!item.enabled});if(result?.warning)toastError(result.warning);await load()}
  catch(e){toastError(String(e instanceof Error?e.message:e));await load()}finally{busy.value=''}}
 const currentState=(item:ManagedExtension):ExtensionState=>!item.enabled?'off':!item.members_enabled?'owner':item.member_audience?.min_role==='admin'?'admins':'members';
 const isOpenTier=(item:ManagedExtension)=>{const state=currentState(item);return state==='members'||state==='admins'};

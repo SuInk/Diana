@@ -151,6 +151,13 @@ func (m *ExtensionManager) loadMCP(ctx context.Context) error {
 	m.mu.Lock()
 	m.mcpConfigs = cloneMCPConfigs(servers)
 	m.mu.Unlock()
+	if err := migrateLegacyMCPDisable(m.cfg.WorkDir, servers); err != nil {
+		return fmt.Errorf("migrate MCP bot overrides: %w", err)
+	}
+	optIns, err := mcpBotOptIns(m.cfg.WorkDir)
+	if err != nil {
+		return fmt.Errorf("load MCP bot overrides: %w", err)
+	}
 	usedNames := m.usedToolNames(nil)
 	started := make([]*mcpServerRuntime, 0, len(servers))
 	for _, name := range sortedMCPServerNames(servers) {
@@ -166,7 +173,8 @@ func (m *ExtensionManager) loadMCP(ctx context.Context) error {
 			}
 			continue
 		}
-		if !server.enabled() {
+		// 全局关着但有机器人单独打开，照样要起：每台机器人用不用由请求视图过滤。
+		if !server.enabled() && !optIns["mcp:"+name] {
 			continue
 		}
 		runtime, startErr := startMCPServerRuntime(ctx, name, server, m.cfg, usedNames)
@@ -269,6 +277,13 @@ func (m *ExtensionManager) setMCPEnabled(ctx context.Context, name string, enabl
 	}
 	servers[name] = server
 	if err := saveMCPServers(path, servers); err != nil {
+		if runtime != nil {
+			_ = runtime.Close()
+		}
+		return ExtensionState{}, err
+	}
+	// 全局开关覆盖各台机器人：拨一下，所有机器人都回到跟随全局。
+	if err := clearBotEnabledOverrides(m.cfg.WorkDir, "mcp:"+name); err != nil {
 		if runtime != nil {
 			_ = runtime.Close()
 		}
