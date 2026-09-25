@@ -289,7 +289,7 @@ const participationScoreContract = `
 // 会各自演化，同一个群的判断口径就跟着绑的模型变了。覆盖也按块登记而不是整段：
 // 管理员改的是判据本身，两个消费者读到的就还是同一份。
 
-const participationRelevanceTrue = `@ 或引用机器人；叫它的名字或称呼；紧接着它刚才的话、冲着它回应、追问、反驳或调侃；话里的「你」明确指它。`
+const participationRelevanceTrue = `@ 或引用机器人；叫它的名字或称呼；紧接着它刚才的话（中间没有别人插进来），冲着它回应、追问、反驳或调侃；话里的「你」明确指它。`
 
 var promptParticipationRelevanceTrueSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_true",
@@ -299,7 +299,7 @@ var promptParticipationRelevanceTrueSpec = registerPrompt(PromptSpec{
 	Default: participationRelevanceTrue,
 })
 
-const participationRelevanceFalse = `群友之间聊天；只提到机器人会的话题、没在叫它；在讨论机器人（它的功能、配置、它刚才说的话）而不是对它说——几个人正你来我往时，「你」「你这里」默认指正在对话的那个人；问某个具体群友本人才知道的事（去不去、做没做、在哪、什么时候），或指定了机器人以外的人来回答——「@某人 Iwasawa 理论是什么」这种谁都能答的知识问题不算指定别人，按有没有在叫机器人判断；叫它停、嫌它吵或多嘴。拿不准就填 false，交给闲聊判断。`
+const participationRelevanceFalse = `群友之间聊天；只提到机器人会的话题、没在叫它；在讨论机器人（它的功能、配置、它刚才说的话）而不是对它说——机器人说完之后别人已经接过话、当前这句跟的是最近那个人；几个人正你来我往时，「你」「你这里」默认指正在对话的那个人；问某个具体群友本人才知道的事（去不去、做没做、在哪、什么时候），或指定了机器人以外的人来回答——「@某人 Iwasawa 理论是什么」这种谁都能答的知识问题不算指定别人，按有没有在叫机器人判断；叫它停、嫌它吵或多嘴。拿不准就填 false，交给闲聊判断。`
 
 var promptParticipationRelevanceFalseSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_false",
