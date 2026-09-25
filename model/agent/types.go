@@ -122,7 +122,12 @@ type Config struct {
 	// BrowserSessionKey 认出「同一个对话」：同一个键的前后几轮共用当前标签页，不同的
 	// 键各用各的标签页。运行时按机器人加群或私聊对象拼出来；留空时只在这一张工具表里
 	// 记当前页。
-	BrowserSessionKey     string `json:"-"`
+	BrowserSessionKey string `json:"-"`
+	// WorkspaceBotID 是这张工具表所属的机器人（配置档 ID），决定长期保存区落在
+	// keep/<机器人>/ 下；留空时长期区不可写。WorkspaceActorID 是本轮发言者，记进
+	// 长期区索引的 saved_by。两者都随事件变化，不进扩展底座的缓存键。
+	WorkspaceBotID        string `json:"-"`
+	WorkspaceActorID      string `json:"-"`
 	ToolTimeoutMS         int
 	FinalizationReserveMS int
 	ProtocolRepairLimit   int

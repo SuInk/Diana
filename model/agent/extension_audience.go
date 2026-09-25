@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -166,11 +165,11 @@ func NormalizeExtensionAudience(audience ExtensionAudience) (ExtensionAudience, 
 }
 
 func extensionAudiencePath(root string) string {
-	return filepath.Join(root, ".extension-audience.json")
+	return extensionAudienceState.path(root)
 }
 
 func loadExtensionAudienceFile(root string) (map[string]map[string]ExtensionAudience, error) {
-	data, err := os.ReadFile(extensionAudiencePath(root))
+	data, err := extensionAudienceState.read(root)
 	if os.IsNotExist(err) {
 		return map[string]map[string]ExtensionAudience{}, nil
 	}
@@ -224,7 +223,7 @@ func saveExtensionAudience(root, profile, id string, audience ExtensionAudience)
 	if err != nil {
 		return err
 	}
-	return saveExtensionFile(extensionAudiencePath(root), data)
+	return extensionAudienceState.save(root, data)
 }
 
 // MemberAllowedExtensionIDsFor 在成员开关的基础上再按对象名单过滤。身份门槛不在

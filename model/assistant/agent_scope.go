@@ -372,6 +372,9 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		BuiltinBrowser:             r.browserBoxFor(cfg),
 		BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
 		BrowserSessionKey:          browserSessionKey(cfg, event),
+		// 长期保存区按机器人分目录，索引里记下是谁让存的。
+		WorkspaceBotID:   firstNonEmpty(event.ProfileID, cfg.ID),
+		WorkspaceActorID: event.UserID,
 	}, extensionManagement)
 }
 

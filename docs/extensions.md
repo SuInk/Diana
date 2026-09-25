@@ -28,11 +28,13 @@ Agent 侧 `extension_access` 的 list 会给出 `tier`（本群生效档位）�
 
 MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作目录外面**（工作目录的上一级，也就是数据目录里的 `.mcp.json`）。文件工具本来就只能在工作目录内活动，放到外面这道边界自己就够了，不用指望黑名单记全。
 
-老版本默认把它写在工作目录里。启动时会自动搬到新位置并更新 `.extension-paths.json` 里钉住的路径；目标位置已经有文件时不动它，避免覆盖掉一份真配置。
+老版本默认把它写在工作目录里。启动时会自动搬到新位置并更新 `.diana/extension-paths.json` 里钉住的路径；目标位置已经有文件时不动它，避免覆盖掉一份真配置。MCP 配置不搬进 `.diana/`：放在工作目录外面比放在里面再挡更稳。
 
-黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及扩展开关 `.extension-overrides.json`、对象名单 `.extension-audience.json`、位置记录 `.extension-paths.json`——这几个按设计就住在工作目录里。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file`、`manage_files`、`save_to_workspace` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
+其余运行时状态收在工作目录的 `.diana/` 目录里：扩展开关 `.diana/extension-overrides.json`、对象名单 `.diana/extension-audience.json`、位置记录 `.diana/extension-paths.json`、隐藏的 MCP 预设 `.diana/mcp-presets-hidden.json`，以及长期保存区的索引 `.diana/keep-index/<机器人>.json`。老版本把前四份直接放在工作目录根下（`.extension-overrides.json` 这类点开头的文件），启动时自动搬进 `.diana/`；搬之前（或搬失败时）照旧读根下那份，下一次保存写到新位置并删掉旧的。两处都有时以 `.diana/` 里的为准。这些文件都不需要手改，改开关走 WebUI 扩展页。
 
-`run_command` 走另一条路：白名单只管得到「能跑哪个程序」，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
+黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及 `.diana/` 整个目录和根下尚未迁走的旧文件。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file`、`manage_files`、`save_to_workspace` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
+
+`run_command` 走另一条路：白名单只管得到「能跑哪个程序」，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。macOS 上单个文件只挡得住读、挡不住写（工作目录整体可写），这正是运行时状态收进 `.diana/` 的原因：目录会在放开工作目录写入之后再 `deny file-write*`，白名单里有 `rm`、`mv` 也删不掉、换不掉开关文件。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
 
 挡读清单不止 MCP 配置。启动时还会登记这些凭据落脚点，文件工具和命令沙箱同样不放行：
 
@@ -40,6 +42,7 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 - SQLite 数据库及其 `-wal`、`-shm`、`-journal`（全部插件凭据、LLM 密钥和 OAuth 令牌都在里面）；
 - 日志文件及其轮转副本；
 - 内置浏览器的 profile 目录（各站点的 Cookie 和保存的登录）；
+- 工作目录里的运行时状态目录 `.diana/`；
 - 工作目录里编码代理的登录目录 `coding-runtime/auth`、`coding-runtime/state`；
 - yt-dlp 的 cookies 文件（`ytb_cookies.txt`、`DIANA_YTDLP_COOKIES` 或插件设置里的路径，用到时登记）。
 
@@ -95,11 +98,11 @@ Skills 和 MCP 的版式和插件页完全一致：同一套卡片，同一条�
 
 选中“群管”或“群成员”时，同一个弹窗里会多出**开放对象**的用户名单和群号名单：两个都留空就是这一档的所有人，都填则要同时满足（名单里的人，且只在这些群里），改完点“保存开放对象”。名单和身份门槛叠加，只收紧不放宽；主人不受任何一项限制。
 
-开放状态保存在 `.extension-overrides.json`，身份门槛和对象名单保存在 `.extension-audience.json`，都按机器人分开。MCP 的全局开关不再放在编辑弹窗里，也不会让单台机器人的开关置灰。
+开放状态保存在 `.diana/extension-overrides.json`，身份门槛和对象名单保存在 `.diana/extension-audience.json`，都按机器人分开。MCP 的全局开关不再放在编辑弹窗里，也不会让单台机器人的开关置灰。
 
 ### 内置预设
 
-内置预设默认就在 MCP 列表里各占一张卡片，标着「未添加」，和插件页里没装的插件一样虚着边、没有开关——它表示「有这么个服务，只是还没填凭据」。接口上预设没有自己的一套操作：从预设装走的还是 `save`，只是多带 `preset`/`transport`/`values` 三个字段；验凭据是 `verify`；预设清单的显隐是 `presets` 带 `action=hide|show`。点卡片上的「添加」进预设表单，填完就变成列表里一张普通的 MCP 卡片——之后再改地址、换令牌走的是那张卡片上的「设置」。「添加」是装上它，「设置」是改已经装好的，两个词不混用。用不上的预设可以删掉，删的是那张卡片不是服务，列表底部的「显示隐藏的预设（N）」随时放回来；隐藏名单存在工作目录的 `.mcp-presets-hidden.json`。「添加 MCP」进的是手动配置的空白表单，用来接预设之外的服务。预设只决定界面问哪几个字段，装上以后就是一条普通 MCP，改配置、停用、删除都和手填的一样。
+内置预设默认就在 MCP 列表里各占一张卡片，标着「未添加」，和插件页里没装的插件一样虚着边、没有开关——它表示「有这么个服务，只是还没填凭据」。接口上预设没有自己的一套操作：从预设装走的还是 `save`，只是多带 `preset`/`transport`/`values` 三个字段；验凭据是 `verify`；预设清单的显隐是 `presets` 带 `action=hide|show`。点卡片上的「添加」进预设表单，填完就变成列表里一张普通的 MCP 卡片——之后再改地址、换令牌走的是那张卡片上的「设置」。「添加」是装上它，「设置」是改已经装好的，两个词不混用。用不上的预设可以删掉，删的是那张卡片不是服务，列表底部的「显示隐藏的预设（N）」随时放回来；隐藏名单存在工作目录的 `.diana/mcp-presets-hidden.json`。「添加 MCP」进的是手动配置的空白表单，用来接预设之外的服务。预设只决定界面问哪几个字段，装上以后就是一条普通 MCP，改配置、停用、删除都和手填的一样。
 
 目前有三条：Gitea、麦当劳中国、瑞幸咖啡。
 
@@ -173,8 +176,8 @@ Skills 和 MCP 的版式和插件页完全一致：同一套卡片，同一条�
 
 启用扩展不等于提权：自定义 Skills 和 MCP 仍受既有 Agent 权限控制。默认只有主人会话可使用这些扩展；普通群成员只可读取内置协议 skill，不会因为启用开关打开就获得自定义 Skill、外部 MCP 或本地命令权限。例外是显式设成“群成员可用”的 MCP 服务和 Skill：成员只拿到这个服务发现的工具、或这一份 Skill 的正文，本地文件、命令、浏览器、其他 Skill 和扩展管理都不跟着开放，能力目录 `list_capabilities` 也仍然只给主人。WebUI 管理接口沿用控制台认证，群管理员接口没有扩展管理权限。
 
-群成员权限与机器人启用开关保存在同一个 `.extension-overrides.json` 里，键名加 `members:` 前缀区分（`members:mcp:<名称>`、`members:skill:<名称>`）。共享底座只有一份：放开后成员用的是主人那套 MCP 进程，不会另起一份。没有任何服务放开给成员时，群消息也不会因此拉起 MCP。
+群成员权限与机器人启用开关保存在同一个 `.diana/extension-overrides.json` 里，键名加 `members:` 前缀区分（`members:mcp:<名称>`、`members:skill:<名称>`）。共享底座只有一份：放开后成员用的是主人那套 MCP 进程，不会另起一份。没有任何服务放开给成员时，群消息也不会因此拉起 MCP。
 
-首次访问或启动 Agent 时，将当前运行配置的 Skill 目录和 MCP 配置路径记入工作目录的 `.extension-paths.json`。之后切换机器人不会换用另一套路径；其他旧机器人专用路径不会自动合并。机器人独立开关保存在同一工作目录的 `.extension-overrides.json`。迁移前保留原目录与配置文件，外部文件不会被删除。
+首次访问或启动 Agent 时，将当前运行配置的 Skill 目录和 MCP 配置路径记入工作目录的 `.diana/extension-paths.json`。之后切换机器人不会换用另一套路径；其他旧机器人专用路径不会自动合并。机器人独立开关保存在同一工作目录的 `.diana/extension-overrides.json`。迁移前保留原目录与配置文件，外部文件不会被删除。
 
 修改共享扩展会刷新后续 Agent 注册表。旧的运行中会话使用自己的视图完成处理，新请求读到新配置；外部文件直接编辑后可在界面重新保存受管理配置以刷新。配置有解析错误时明确提示，不宣称工具已经生效。

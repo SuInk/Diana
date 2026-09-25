@@ -49,7 +49,7 @@ func TestStorageMaintenanceShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	stop := startStorageMaintenance(context.Background(), s, storageConfig{})
+	stop := startStorageMaintenance(context.Background(), s, storageConfig{}, nil)
 	done := make(chan struct{})
 	go func() { stop(); close(done) }()
 	select {
@@ -85,7 +85,7 @@ func TestStorageMaintenanceStartup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	stop := startStorageMaintenance(ctx, s, storageConfig{LogRetentionDays: -1})
+	stop := startStorageMaintenance(ctx, s, storageConfig{LogRetentionDays: -1}, nil)
 	defer stop()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
