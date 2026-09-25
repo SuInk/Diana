@@ -72,13 +72,14 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 	}
 
 	naturalInterjectionEnabled := true
+	welcomeEnabled := true
 	groupConfigs := assistant.GroupConfigSet{
 		Groups: []assistant.GroupConfig{
 			{
 				GroupID:                    "123456",
 				Enabled:                    true,
 				GroupTriggers:              []string{"Diana"},
-				WelcomeEnabled:             true,
+				WelcomeEnabled:             &welcomeEnabled,
 				WelcomeMessage:             "欢迎 {user_id}",
 				RecentContextLimit:         8,
 				MaxReplyChars:              1200,

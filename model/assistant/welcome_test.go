@@ -181,7 +181,7 @@ func TestWelcomeGroupConfigOverridesModeAndPool(t *testing.T) {
 	}, channel, nil)
 	runtime.SetGroupConfigStore(staticGroupConfigStore{cfg: GroupConfig{
 		GroupID: "g-welcome", Enabled: true, EnabledSet: true,
-		WelcomeEnabled:   true,
+		WelcomeEnabled:   boolPointer(true),
 		WelcomeMode:      WelcomeModeTemplate,
 		WelcomeTemplates: []string{"本群模板 {user_id}"},
 	}})

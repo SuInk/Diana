@@ -102,3 +102,34 @@ func migratedGroupIDs(set assistant.GroupConfigSet, profileID string, lists ...[
 	sort.Strings(ids)
 	return ids
 }
+
+// MigrateGroupInheritance 在启动时清掉旧群配置里抄进来的机器人值快照，并立刻落盘。
+//
+// 读取时也会迁（GroupConfig.WithDefaults），但那只在内存里：迁移按「和机器人现在的值
+// 相同」判断快照，用户升级后要是先去机器人页改了值，没落盘的旧快照就再也对不上，
+// 成了永久的单独设置。所以要赶在任何人改配置之前，按各群自己那台机器人存一遍。
+func MigrateGroupInheritance(profiles groupScopeProfiles, groups groupScopeGroups) error {
+	byID := map[string]assistant.BotConfig{}
+	for _, profile := range profiles.Profiles().Profiles {
+		byID[profile.ID] = profile
+	}
+	migrated := 0
+	for _, cfg := range groups.Groups().Groups {
+		if cfg.InheritanceMigrated {
+			continue
+		}
+		// 没有机器人标记的老记录交给群归属迁移，这里拿不准该跟哪台比，宁可不动。
+		base, ok := byID[cfg.BotProfileID]
+		if !ok {
+			continue
+		}
+		if _, err := groups.SaveGroupConfig(cfg, base); err != nil {
+			return err
+		}
+		migrated++
+	}
+	if migrated > 0 {
+		log.Printf("diana 已把 %d 个群配置里抄进来的机器人设置改回跟随机器人（和机器人现值不同的保留为本群单独设置）", migrated)
+	}
+	return nil
+}

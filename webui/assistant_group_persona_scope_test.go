@@ -77,14 +77,15 @@ func TestSaveGroupConfigDoesNotTouchOtherProfileGroups(t *testing.T) {
 	if !strings.Contains(after.SystemPrompt, "贝塔的人设正文") {
 		t.Fatalf("beta 的群选过老风格，应从 beta 继承人设：%q", after.SystemPrompt)
 	}
-	if strings.Join(after.GroupTriggers, ",") != "贝塔" {
-		t.Fatalf("beta 的群拿到了别人的触发词：%v", after.GroupTriggers)
+	// 触发词和欢迎语不再抄进群配置：留空，运行时跟随 beta 当前的值。
+	if len(after.GroupTriggers) != 0 {
+		t.Fatalf("beta 的群被写进了触发词快照：%v", after.GroupTriggers)
 	}
-	if after.WelcomeMessage != "贝塔的欢迎语" {
-		t.Fatalf("beta 的群拿到了别人的欢迎语：%q", after.WelcomeMessage)
+	if after.WelcomeMessage != "" {
+		t.Fatalf("beta 的群被写进了欢迎语快照：%q", after.WelcomeMessage)
 	}
-	if alphaCfg, ok := store.ConfigForGroup(alpha.ID, "300"); !ok || strings.Join(alphaCfg.GroupTriggers, ",") != "阿尔法" {
-		t.Fatalf("alpha 的群应跟随 alpha：%+v", alphaCfg)
+	if alphaCfg, ok := store.ConfigForGroup(alpha.ID, "300"); !ok || len(alphaCfg.GroupTriggers) != 0 {
+		t.Fatalf("alpha 的群应留空跟随 alpha：%+v", alphaCfg)
 	}
 }
 

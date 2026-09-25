@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -850,6 +851,8 @@ type ReplyRule struct {
 }
 
 type GroupConfig struct {
+	// InheritanceMigrated 标记这份群配置已经清掉旧版抄进来的机器人值快照，只做一次。
+	InheritanceMigrated     bool  `json:"inheritance_migrated,omitempty"`
 	ReplyPreserveLineBreaks *bool `json:"reply_preserve_line_breaks,omitempty"`
 	// ReplyLineSplitEnabled 的 nil 同样保留，发送时跟随所属机器人。
 	ReplyLineSplitEnabled *bool `json:"reply_line_split_enabled,omitempty"`
@@ -869,18 +872,21 @@ type GroupConfig struct {
 	// PersonaID 表示本群的人设绑定在人设库的某一套上：下面的正文、表达风格、
 	// 动作描写、自称、句尾语气词都是那一套的内容，库里改了会同步写过来（见
 	// persona_link.go）。空值表示没绑定：正文留空跟随机器人，填了是本群自定义。
-	PersonaID                 string       `json:"persona_id,omitempty"`
-	SystemPrompt              string       `json:"system_prompt,omitempty"`
-	ResponseMode              ResponseMode `json:"response_mode,omitempty"`
-	ReplyStyle                ReplyStyle   `json:"reply_style,omitempty"`
-	ActionDescriptionEnabled  *bool        `json:"action_description_enabled,omitempty"`
-	SelfReference             string       `json:"self_reference,omitempty"`
-	SentenceEnders            string       `json:"sentence_enders,omitempty"`
-	WelcomeEnabled            bool         `json:"welcome_enabled,omitempty"`
-	WelcomeMessage            string       `json:"welcome_message,omitempty"`
-	WelcomeMode               WelcomeMode  `json:"welcome_mode,omitempty"`
-	WelcomeTemplates          []string     `json:"welcome_templates,omitempty"`
-	WelcomeLLMCooldownSeconds int          `json:"welcome_llm_cooldown_seconds,omitempty"`
+	PersonaID                string       `json:"persona_id,omitempty"`
+	SystemPrompt             string       `json:"system_prompt,omitempty"`
+	ResponseMode             ResponseMode `json:"response_mode,omitempty"`
+	ReplyStyle               ReplyStyle   `json:"reply_style,omitempty"`
+	ActionDescriptionEnabled *bool        `json:"action_description_enabled,omitempty"`
+	SelfReference            string       `json:"self_reference,omitempty"`
+	SentenceEnders           string       `json:"sentence_enders,omitempty"`
+	// 下面这批「留空跟随机器人」的字段：零值、空串、nil 都表示没单独设置，运行时用
+	// 所属机器人的当前值。以前新建和归一化时会把机器人当时的值抄进来并落库，之后
+	// 机器人页再怎么改都进不了这个群（见 clearInheritedSnapshots）。
+	WelcomeEnabled            *bool       `json:"welcome_enabled,omitempty"`
+	WelcomeMessage            string      `json:"welcome_message,omitempty"`
+	WelcomeMode               WelcomeMode `json:"welcome_mode,omitempty"`
+	WelcomeTemplates          []string    `json:"welcome_templates,omitempty"`
+	WelcomeLLMCooldownSeconds int         `json:"welcome_llm_cooldown_seconds,omitempty"`
 	// ModelCallQuota 是这个群在滚动 5 小时窗口里能发起的模型调用次数上限。留空跟随
 	// 机器人那一档，两边都没填表示不限。
 	//
@@ -1174,41 +1180,110 @@ type ConfigPayload struct {
 // DefaultGroupConfig 返回指定群的默认行为配置，只包含群作用域字段。
 func DefaultGroupConfig(groupID string, base BotConfig) GroupConfig {
 	base = base.WithDefaults()
+	// 只放群自己的状态。触发词、欢迎、上下文预算、撤回回复这些「留空跟随机器人」的
+	// 字段一律不抄：抄进来就是一份快照，存盘后机器人页改了也进不了这个群。
 	return GroupConfig{
 		GroupID: strings.TrimSpace(groupID),
 		// 新建的群配置跟着机器人的新群默认走：白名单模式下新群默认不工作，
 		// 建一条配置出来不该把它悄悄打开。
-		Enabled:                      base.GroupAdmission.NewGroupEnabled(),
-		EnabledSet:                   true,
-		GroupTriggers:                append([]string(nil), base.GroupTriggers...),
-		GroupTriggerMode:             base.GroupTriggerMode,
-		ActionDescriptionEnabled:     copyBoolPointer(base.ActionDescriptionEnabled),
-		WelcomeEnabled:               base.WelcomeEnabled,
-		WelcomeMessage:               base.WelcomeMessage,
-		WelcomeMode:                  base.WelcomeMode,
-		WelcomeTemplates:             append([]string(nil), base.WelcomeTemplates...),
-		WelcomeLLMCooldownSeconds:    base.WelcomeLLMCooldownSeconds,
-		MaxContextTokens:             base.MaxContextTokens,
-		RecentHistoryTokenBudget:     base.RecentHistoryTokenBudget,
-		RecentContextLimit:           base.RecentContextLimit,
-		MaxReplyChars:                base.MaxReplyChars,
-		ReplyMaxBubbles:              base.ReplyMaxBubbles,
-		DirectReplyChunkSize:         base.DirectReplyChunkSize,
-		ProactiveReplyChance:         base.ProactiveReplyChance,
-		ProactiveReplyThreshold:      base.ProactiveReplyThreshold,
-		ChatInEnabled:                base.ChatInEnabled,
-		ChatInLevel:                  base.ChatInLevel,
-		ChatInThreshold:              base.ChatInThreshold,
-		ChatInChance:                 base.ChatInChance,
-		ChatInCooldownSeconds:        base.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:   copyBoolPointer(base.NaturalInterjectionEnabled),
-		SocialReplyEnabled:           copyBoolPointer(base.SocialReplyEnabled),
-		MinimumReplyMemberLevel:      0,
-		RecallReplyAutoDeleteEnabled: copyBoolPointer(base.RecallReplyAutoDeleteEnabled),
-		RecallReplyTTLSeconds:        base.RecallReplyTTLSeconds,
-		PluginOverrides:              map[string]bool{},
-		PluginSettingOverrides:       PluginSettingOverrides{},
+		Enabled:                 base.GroupAdmission.NewGroupEnabled(),
+		EnabledSet:              true,
+		InheritanceMigrated:     true,
+		MinimumReplyMemberLevel: 0,
+		PluginOverrides:         map[string]bool{},
+		PluginSettingOverrides:  PluginSettingOverrides{},
 	}
+}
+
+// clearInheritedSnapshots 清掉旧版抄进群配置的机器人值。
+//
+// 旧版新建群配置、每次保存归一化时都把机器人当时的值写进群里，于是「留空跟随机器人」
+// 的字段全成了定死的快照。分不出哪些是用户单独填的，只能按值判断：和所属机器人现在
+// 的值相同的清成跟随，清完这一刻行为完全不变。不同的保留——它可能是过期快照，也可能
+// 是真的单独设置（比如机器人开着、本群特意关掉），没法替用户猜，界面上显示成本群单独
+// 设置，想跟随时清空即可。不拿系统默认值比：开关类的「关」往往就是默认值，会把本群
+// 特意关掉的设置误清。
+//
+// 入群欢迎开关旧版是 bool，false 不落盘：读回来的 nil 按旧行为当成关闭再比较，
+// 免得机器人开着欢迎时，一批本来不欢迎的群升级后突然开始欢迎。
+func (cfg GroupConfig) clearInheritedSnapshots(base BotConfig) GroupConfig {
+	bot := base.WithDefaults()
+	sameStrings := func(value []string, pick func(BotConfig) []string) bool {
+		return len(value) > 0 && slices.Equal(value, cleanStrings(pick(bot)))
+	}
+	sameBool := func(value *bool, pick func(BotConfig) bool) bool {
+		return value != nil && *value == pick(bot)
+	}
+	clearInt := func(value *int, pick func(BotConfig) int) {
+		if *value > 0 && *value == pick(bot) {
+			*value = 0
+		}
+	}
+	clearInt64 := func(value *int64, pick func(BotConfig) int64) {
+		if *value > 0 && *value == pick(bot) {
+			*value = 0
+		}
+	}
+	clearFloat := func(value *float64, pick func(BotConfig) float64) {
+		if *value > 0 && *value == pick(bot) {
+			*value = 0
+		}
+	}
+	if sameStrings(cfg.GroupTriggers, func(c BotConfig) []string { return c.GroupTriggers }) {
+		cfg.GroupTriggers = nil
+	}
+	if cfg.GroupTriggerMode != "" && cfg.GroupTriggerMode == bot.GroupTriggerMode {
+		cfg.GroupTriggerMode = ""
+	}
+	// 绑定了人设库的群，动作描写开关是那套人设的内容，不是快照。
+	if cfg.PersonaID == "" && sameBool(cfg.ActionDescriptionEnabled, func(c BotConfig) bool { return boolValue(c.ActionDescriptionEnabled, false) }) {
+		cfg.ActionDescriptionEnabled = nil
+	}
+	if cfg.WelcomeEnabled == nil {
+		cfg.WelcomeEnabled = boolPointer(false)
+	}
+	if sameBool(cfg.WelcomeEnabled, func(c BotConfig) bool { return c.WelcomeEnabled }) {
+		cfg.WelcomeEnabled = nil
+	}
+	if cfg.WelcomeMessage != "" && cfg.WelcomeMessage == strings.TrimSpace(bot.WelcomeMessage) {
+		cfg.WelcomeMessage = ""
+	}
+	if cfg.WelcomeMode != "" && cfg.WelcomeMode == bot.WelcomeMode {
+		cfg.WelcomeMode = ""
+	}
+	if sameStrings(cfg.WelcomeTemplates, func(c BotConfig) []string { return c.WelcomeTemplates }) {
+		cfg.WelcomeTemplates = nil
+	}
+	clearInt(&cfg.WelcomeLLMCooldownSeconds, func(c BotConfig) int { return c.WelcomeLLMCooldownSeconds })
+	clearInt64(&cfg.MaxContextTokens, func(c BotConfig) int64 { return c.MaxContextTokens })
+	clearInt64(&cfg.RecentHistoryTokenBudget, func(c BotConfig) int64 { return c.RecentHistoryTokenBudget })
+	clearInt(&cfg.RecentContextLimit, func(c BotConfig) int { return c.RecentContextLimit })
+	clearInt(&cfg.MaxReplyChars, func(c BotConfig) int { return c.MaxReplyChars })
+	clearInt(&cfg.ReplyMaxBubbles, func(c BotConfig) int { return c.ReplyMaxBubbles })
+	clearInt(&cfg.DirectReplyChunkSize, func(c BotConfig) int { return c.DirectReplyChunkSize })
+	clearInt(&cfg.RecallReplyTTLSeconds, func(c BotConfig) int { return c.RecallReplyTTLSeconds })
+	clearInt(&cfg.ChatInCooldownSeconds, func(c BotConfig) int { return c.ChatInCooldownSeconds })
+	clearFloat(&cfg.ProactiveReplyChance, func(c BotConfig) float64 { return c.ProactiveReplyChance })
+	clearFloat(&cfg.ProactiveReplyThreshold, func(c BotConfig) float64 { return c.ProactiveReplyThreshold })
+	clearFloat(&cfg.ChatInThreshold, func(c BotConfig) float64 { return c.ChatInThreshold })
+	clearFloat(&cfg.ChatInChance, func(c BotConfig) float64 { return c.ChatInChance })
+	if sameBool(cfg.ChatInEnabled, func(c BotConfig) bool { return boolValue(c.ChatInEnabled, true) }) {
+		cfg.ChatInEnabled = nil
+	}
+	if cfg.ChatInLevel != "" && cfg.ChatInLevel == bot.ChatInLevel.Normalized() {
+		cfg.ChatInLevel = ""
+	}
+	if sameBool(cfg.NaturalInterjectionEnabled, func(c BotConfig) bool { return boolValue(c.NaturalInterjectionEnabled, false) }) {
+		cfg.NaturalInterjectionEnabled = nil
+	}
+	if sameBool(cfg.SocialReplyEnabled, func(c BotConfig) bool { return boolValue(c.SocialReplyEnabled, false) }) {
+		cfg.SocialReplyEnabled = nil
+	}
+	if sameBool(cfg.RecallReplyAutoDeleteEnabled, func(c BotConfig) bool { return boolValue(c.RecallReplyAutoDeleteEnabled, false) }) {
+		cfg.RecallReplyAutoDeleteEnabled = nil
+	}
+	cfg.InheritanceMigrated = true
+	return cfg
 }
 
 // positiveOptionalCount 复制一个可选计数；nil 和不大于 0 的值都当作没填，跟随上级。
@@ -1251,90 +1326,42 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		cfg.Enabled = true
 		cfg.EnabledSet = true
 	}
-	if len(cfg.GroupTriggers) == 0 {
-		cfg.GroupTriggers = append([]string(nil), defaults.GroupTriggers...)
-	}
-	// 空值表示这个群没有单独表态，读取时按全局配置解析，不在这里写死档位。
-	if strings.TrimSpace(cfg.WelcomeMessage) == "" {
-		cfg.WelcomeMessage = defaults.WelcomeMessage
-	}
-	if strings.TrimSpace(string(cfg.WelcomeMode)) == "" {
-		cfg.WelcomeMode = defaults.WelcomeMode
-	} else {
+	// 下面只做清洗和钳制，不再从机器人补值：空着就是跟随机器人，运行时再取。
+	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
+	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)
+	if strings.TrimSpace(string(cfg.WelcomeMode)) != "" {
 		cfg.WelcomeMode = normalizeWelcomeMode(cfg.WelcomeMode)
 	}
 	cfg.WelcomeTemplates = cleanStrings(cfg.WelcomeTemplates)
-	if len(cfg.WelcomeTemplates) == 0 {
-		cfg.WelcomeTemplates = append([]string(nil), defaults.WelcomeTemplates...)
-	}
-	if cfg.WelcomeLLMCooldownSeconds <= 0 {
-		cfg.WelcomeLLMCooldownSeconds = defaults.WelcomeLLMCooldownSeconds
-	}
-	if cfg.MaxContextTokens <= 0 {
-		cfg.MaxContextTokens = defaults.MaxContextTokens
-	}
-	if cfg.RecentHistoryTokenBudget <= 0 {
-		cfg.RecentHistoryTokenBudget = defaults.RecentHistoryTokenBudget
-	}
-	if cfg.RecentContextLimit <= 0 {
-		cfg.RecentContextLimit = defaults.RecentContextLimit
-	}
-	if cfg.MaxReplyChars <= 0 {
-		cfg.MaxReplyChars = defaults.MaxReplyChars
-	}
-	if cfg.ReplyMaxBubbles <= 0 {
-		cfg.ReplyMaxBubbles = defaults.ReplyMaxBubbles
-	}
-	if cfg.DirectReplyChunkSize <= 0 {
-		cfg.DirectReplyChunkSize = defaults.DirectReplyChunkSize
-	}
+	cfg.WelcomeEnabled = copyBoolPointer(cfg.WelcomeEnabled)
+	cfg.WelcomeLLMCooldownSeconds = max(0, cfg.WelcomeLLMCooldownSeconds)
+	cfg.MaxContextTokens = max(0, cfg.MaxContextTokens)
+	cfg.RecentHistoryTokenBudget = max(0, cfg.RecentHistoryTokenBudget)
+	cfg.RecentContextLimit = max(0, cfg.RecentContextLimit)
+	cfg.MaxReplyChars = max(0, cfg.MaxReplyChars)
+	cfg.ReplyMaxBubbles = max(0, cfg.ReplyMaxBubbles)
+	cfg.DirectReplyChunkSize = max(0, cfg.DirectReplyChunkSize)
 	cfg.ForwardReplyThreshold = positiveOptionalCount(cfg.ForwardReplyThreshold)
 	cfg.ForwardReplyChunkThreshold = positiveOptionalCount(cfg.ForwardReplyChunkThreshold)
 	cfg.ForwardReplyEnabled = copyBoolPointer(cfg.ForwardReplyEnabled)
-	if cfg.ProactiveReplyChance <= 0 {
-		cfg.ProactiveReplyChance = defaults.ProactiveReplyChance
-	}
-	if cfg.ProactiveReplyChance > 1 {
-		cfg.ProactiveReplyChance = 1
-	}
-	if cfg.ProactiveReplyThreshold <= 0 {
-		cfg.ProactiveReplyThreshold = defaults.ProactiveReplyThreshold
-	}
-	if cfg.ProactiveReplyThreshold > 1 {
-		cfg.ProactiveReplyThreshold = 1
-	}
-	if cfg.ChatInEnabled == nil {
-		cfg.ChatInEnabled = defaults.ChatInEnabled
-	}
-	if cfg.SocialReplyEnabled == nil {
-		cfg.SocialReplyEnabled = copyBoolPointer(defaults.SocialReplyEnabled)
-	}
-	if !cfg.ChatInLevel.Valid() {
-		cfg.ChatInLevel = defaults.ChatInLevel
-	} else {
-		cfg.ChatInLevel = cfg.ChatInLevel.Normalized()
-	}
+	cfg.ProactiveReplyChance = max(0, min(1, cfg.ProactiveReplyChance))
+	cfg.ProactiveReplyThreshold = max(0, min(1, cfg.ProactiveReplyThreshold))
+	cfg.ChatInEnabled = copyBoolPointer(cfg.ChatInEnabled)
+	cfg.SocialReplyEnabled = copyBoolPointer(cfg.SocialReplyEnabled)
+	cfg.ChatInLevel = cfg.ChatInLevel.Normalized()
 	cfg.ChatInThreshold = clampChatInRatio(cfg.ChatInThreshold)
 	cfg.ChatInChance = clampChatInRatio(cfg.ChatInChance)
 	if cfg.ChatInCooldownSeconds < 0 {
 		cfg.ChatInCooldownSeconds = 0
 	}
-	if cfg.NaturalInterjectionEnabled == nil {
-		cfg.NaturalInterjectionEnabled = copyBoolPointer(defaults.NaturalInterjectionEnabled)
-	}
+	cfg.NaturalInterjectionEnabled = copyBoolPointer(cfg.NaturalInterjectionEnabled)
 	if cfg.MinimumReplyMemberLevel < 0 {
 		cfg.MinimumReplyMemberLevel = 0
 	} else if cfg.MinimumReplyMemberLevel > maximumReplyMemberLevel {
 		cfg.MinimumReplyMemberLevel = maximumReplyMemberLevel
 	}
-	if cfg.RecallReplyAutoDeleteEnabled == nil {
-		cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(defaults.RecallReplyAutoDeleteEnabled)
-	}
-	if cfg.RecallReplyTTLSeconds <= 0 {
-		cfg.RecallReplyTTLSeconds = defaults.RecallReplyTTLSeconds
-	} else if cfg.RecallReplyTTLSeconds > maximumRecallReplyTTLSeconds {
-		cfg.RecallReplyTTLSeconds = maximumRecallReplyTTLSeconds
-	}
+	cfg.RecallReplyAutoDeleteEnabled = copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled)
+	cfg.RecallReplyTTLSeconds = max(0, min(maximumRecallReplyTTLSeconds, cfg.RecallReplyTTLSeconds))
 	if cfg.PluginOverrides == nil {
 		cfg.PluginOverrides = map[string]bool{}
 	}
@@ -1345,7 +1372,11 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 		normalized := cfg.ReplyGate.WithDefaults()
 		cfg.ReplyGate = &normalized
 	}
-	cfg.GroupTriggers = cleanStrings(cfg.GroupTriggers)
+	// 旧数据里抄进来的机器人值快照只清一次。必须拿到这个群自己那台机器人才动手：
+	// 拿别的机器人比，会把真正的单独设置当成快照清掉。
+	if !cfg.InheritanceMigrated && (cfg.BotProfileID == "" || cfg.BotProfileID == base.ID) {
+		cfg = cfg.clearInheritedSnapshots(base)
+	}
 	if cfg.UpdatedAt.IsZero() {
 		cfg.UpdatedAt = time.Now()
 	}

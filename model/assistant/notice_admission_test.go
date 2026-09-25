@@ -18,7 +18,7 @@ func TestNoticeUsesGroupScopedConfig(t *testing.T) {
 		GroupID:        "g1",
 		Enabled:        true,
 		EnabledSet:     true,
-		WelcomeEnabled: true,
+		WelcomeEnabled: boolPointer(true),
 		WelcomeMessage: "本群欢迎",
 		ReplyGate:      &ReplyGate{UserAdmission: UserAdmissionWhitelist, AllowedUsers: []string{"u1"}},
 	}})
@@ -49,7 +49,7 @@ func TestWelcomeNoticeHonorsGroupAdmissionAndReplyGate(t *testing.T) {
 		runtime := NewRuntime(BotConfig{WelcomeEnabled: true, WelcomeMessage: "全局欢迎"}, channel, NewPluginManager(), nil, nil, nil, nil)
 		runtime.SetGroupConfigStore(staticGroupConfigStore{cfg: GroupConfig{
 			GroupID: "g1", Enabled: true, EnabledSet: true,
-			WelcomeEnabled: true, WelcomeMessage: "本群欢迎 {user_id}",
+			WelcomeEnabled: boolPointer(true), WelcomeMessage: "本群欢迎 {user_id}",
 			ReplyGate: &ReplyGate{UserAdmission: UserAdmissionWhitelist, AllowedUsers: []string{"allowed-user"}},
 		}})
 		blocked := MessageEvent{Kind: EventKindNotice, SubType: "group_increase", GroupID: "g1", UserID: "blocked-user"}

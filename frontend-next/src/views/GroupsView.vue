@@ -152,12 +152,12 @@
             <span v-else-if="group.configured && group.system_prompt" class="badge">专属人设</span>
             <span v-if="group.configured && group.participation" class="badge accent">{{ participationSummary(group.participation) }}</span>
             <span v-if="group.configured && overrideCount(group) > 0" class="badge">插件覆盖 {{ overrideCount(group) }}</span>
-            <span v-if="group.configured && group.welcome_enabled" class="badge">入群欢迎</span>
+            <span v-if="group.configured && (group.welcome_enabled ?? botFor(group)?.welcome_enabled)" class="badge">入群欢迎</span>
             <span v-if="group.configured && group.reply_gate?.active_hours_enabled" class="badge">
               回复 {{ group.reply_gate.active_start }}–{{ group.reply_gate.active_end }}
             </span>
-            <span v-if="group.configured && group.recall_reply_auto_delete_enabled" class="badge">
-              撤回回复保留 {{ group.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds }} 秒
+            <span v-if="group.configured && (group.recall_reply_auto_delete_enabled ?? botFor(group)?.recall_reply_auto_delete_enabled)" class="badge">
+              撤回回复保留 {{ group.recall_reply_auto_delete_delay_seconds || botFor(group)?.recall_reply_auto_delete_delay_seconds || defaultRecallReplyAutoDeleteDelaySeconds }} 秒
             </span>
             <span v-if="group.configured && group.reply_account_safety_audit_enabled === false" class="badge">本群关闭安全审核</span>
             <span v-else-if="group.configured && group.reply_account_safety_audit_enabled === true" class="badge accent">本群开启安全审核</span>
@@ -244,8 +244,8 @@
           </label>
         </div>
         <div class="field wide">
-          <label for="group-triggers">本群触发词（逗号分隔，留空用全局）</label>
-          <input id="group-triggers" v-model="triggersDraft" class="input" placeholder="Diana,diana" />
+          <label for="group-triggers">本群触发词（逗号分隔，留空跟随机器人）</label>
+          <input id="group-triggers" v-model="triggersDraft" class="input" :placeholder="inheritedPlaceholder(inheritedBot?.group_triggers)" />
         </div>
         <div class="field wide">
           <label for="group-trigger-mode">本群触发词匹配（留空用全局）</label>
@@ -311,17 +311,19 @@
           <span v-if="editing.persona_id" class="hint">跟着人设库「{{ linkedPersonaName }}」走，改了就变成本群自定义。</span>
         </div>
         <div class="field wide">
-          <label class="switch">
-            <input v-model="editing.welcome_enabled" type="checkbox" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">开启入群欢迎</span>
-          </label>
+          <label for="group-welcome-enabled">本群入群欢迎</label>
+          <AppSelect
+            id="group-welcome-enabled"
+            :model-value="switchValue(editing.welcome_enabled)"
+            :options="groupWelcomeOptions"
+            @update:model-value="(value) => { if (editing) editing.welcome_enabled = fromSwitchValue(value); }"
+          />
         </div>
-        <div v-if="editing.welcome_enabled" class="field wide">
+        <div v-if="effectiveWelcomeEnabled" class="field wide">
           <label for="group-welcome">欢迎语</label>
-          <textarea id="group-welcome" v-model="editing.welcome_message" class="textarea" rows="2"></textarea>
+          <textarea id="group-welcome" v-model="editing.welcome_message" class="textarea" rows="2" :placeholder="inheritedPlaceholder(inheritedBot?.welcome_message)"></textarea>
         </div>
-        <div v-if="editing.welcome_enabled" class="field">
+        <div v-if="effectiveWelcomeEnabled" class="field">
           <label for="group-welcome-mode">欢迎词模式</label>
           <AppSelect
             id="group-welcome-mode"
@@ -330,7 +332,7 @@
             @update:model-value="(value) => { if (editing) editing.welcome_mode = (value || undefined) as BotGroupConfig['welcome_mode']; }"
           />
         </div>
-        <div v-if="editing.welcome_enabled && (editing.welcome_mode ?? '') !== 'fixed'" class="field wide">
+        <div v-if="effectiveWelcomeEnabled && effectiveWelcomeMode !== 'fixed'" class="field wide">
           <label for="group-welcome-templates">欢迎词模板池</label>
           <textarea
             id="group-welcome-templates"
@@ -340,14 +342,14 @@
             placeholder="每行一条候选，发送时随机抽一条；{user_id} 会替换成新成员 ID。留空跟随机器人。LLM 模式冷却或失败时也从这里回落。"
           ></textarea>
         </div>
-        <div v-if="editing.welcome_enabled && editing.welcome_mode === 'llm'" class="field">
+        <div v-if="effectiveWelcomeEnabled && effectiveWelcomeMode === 'llm'" class="field">
           <label for="group-welcome-cooldown">LLM 欢迎冷却（秒/群）</label>
           <input
             id="group-welcome-cooldown"
             v-model.number="editing.welcome_llm_cooldown_seconds"
             class="input"
             inputmode="numeric"
-            placeholder="留空跟随机器人"
+            :placeholder="inheritedPlaceholder(inheritedBot?.welcome_llm_cooldown_seconds, ' 秒')"
           />
           <span class="hint">冷却期内新成员入群改发模板池/固定文本，避免进出群刷屏消耗 Token。</span>
         </div>
@@ -377,19 +379,19 @@
         </p>
         <div class="field">
           <label for="group-history-budget">回复历史 token 预算</label>
-          <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.recent_history_token_budget)" />
         </div>
         <div class="field">
           <label for="group-context">历史查询条数上限</label>
-          <input id="group-context" v-model.number="editing.recent_context_limit" class="input" inputmode="numeric" />
+          <input id="group-context" v-model.number="editing.recent_context_limit" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.recent_context_limit, ' 条')" />
         </div>
         <div class="field">
           <label for="group-maxcontext">单次请求上下文上限</label>
-          <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随机器人" />
+          <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.max_context_tokens)" />
         </div>
         <div class="field">
           <label for="group-maxreply">单条回复上限（字符）</label>
-          <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" />
+          <input id="group-maxreply" v-model.number="editing.max_reply_chars" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.max_reply_chars)" />
         </div>
         <div class="field wide">
           <label for="group-muted-pause">本群被禁言时暂停回复</label>
@@ -499,14 +501,16 @@
           <span class="hint">实际消息数超过此值触发卡片，填 4 表示至少 5 条。不按正文行数计数。</span>
         </div>
         <div class="field wide">
-          <label class="switch">
-            <input v-model="editing.recall_reply_auto_delete_enabled" type="checkbox" />
-            <span class="track" aria-hidden="true"></span>
-            <span class="switch-label">本群查看撤回消息后自动撤回回复</span>
-          </label>
+          <label for="group-recall-delete">本群查看撤回消息后自动撤回回复</label>
+          <AppSelect
+            id="group-recall-delete"
+            :model-value="switchValue(editing.recall_reply_auto_delete_enabled)"
+            :options="groupRecallDeleteOptions"
+            @update:model-value="(value) => { if (editing) editing.recall_reply_auto_delete_enabled = fromSwitchValue(value); }"
+          />
           <span class="hint">关闭时，查看撤回记录产生的回复会一直保留。</span>
         </div>
-        <div v-if="editing.recall_reply_auto_delete_enabled" class="field">
+        <div v-if="effectiveRecallDelete" class="field">
           <label for="group-recall-delete-delay">回复保留时间（秒）</label>
           <input
             id="group-recall-delete-delay"
@@ -517,6 +521,7 @@
             :max="maximumRecallReplyAutoDeleteDelaySeconds"
             step="1"
             inputmode="numeric"
+            :placeholder="inheritedPlaceholder(inheritedBot?.recall_reply_auto_delete_delay_seconds || defaultRecallReplyAutoDeleteDelaySeconds, ' 秒')"
           />
         </div>
         <div v-for="field in sendRetryFields" :key="field.key" class="field">
@@ -648,6 +653,7 @@ import {
   type Persona,
   type PluginState,
   type BotGroupConfig,
+  type BotProfileConfig,
   type BotGroupSummary,
   type AssistantEventRange,
   type GroupRelationGraph
@@ -663,6 +669,42 @@ import { participationFromConfig, participationLevelLabel, participationPresetNa
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import { sendRetryFields, sendRetryPayload, sendRetryValidationError, withUnsetSendRetryCleared, type SendRetryField, type SendRetrySettings } from "../send-retry-settings";
+
+// 群里留空的项跟随所属机器人（后端不再把机器人的值抄进群配置），占位符和「跟随机器人」
+// 选项里写出机器人现在的值，免得用户以为留空就是没有。
+const botInheritDefaults = ref<Record<string, BotProfileConfig>>({});
+function botFor(group: { bot_profile_id?: string }): BotProfileConfig | undefined {
+  return botInheritDefaults.value[group.bot_profile_id || botScope.value] ?? botInheritDefaults.value[""];
+}
+const inheritedBot = computed<BotProfileConfig | undefined>(() => (editing.value ? botFor(editing.value) : botInheritDefaults.value[""]));
+function inheritedPlaceholder(value: unknown, unit = ""): string {
+  const text = Array.isArray(value) ? value.join(",") : value == null || value === "" || value === 0 ? "" : `${value}${unit}`;
+  return text ? `留空跟随机器人（${text}）` : "留空跟随机器人";
+}
+function switchValue(value?: boolean): string {
+  return value == null ? "" : value ? "on" : "off";
+}
+function fromSwitchValue(value: string): boolean | undefined {
+  return value === "" ? undefined : value === "on";
+}
+function followSwitchOptions(inherited: boolean): AppSelectOption[] {
+  return [
+    { value: "", label: `跟随机器人（${inherited ? "开启" : "关闭"}）` },
+    { value: "on", label: "开启" },
+    { value: "off", label: "关闭" }
+  ];
+}
+const groupWelcomeOptions = computed(() => followSwitchOptions(inheritedBot.value?.welcome_enabled ?? false));
+const groupRecallDeleteOptions = computed(() => followSwitchOptions(inheritedBot.value?.recall_reply_auto_delete_enabled ?? false));
+const effectiveWelcomeEnabled = computed(() => editing.value?.welcome_enabled ?? inheritedBot.value?.welcome_enabled ?? false);
+const effectiveWelcomeMode = computed(() => editing.value?.welcome_mode || inheritedBot.value?.welcome_mode || "");
+const effectiveRecallDelete = computed(() => editing.value?.recall_reply_auto_delete_enabled ?? inheritedBot.value?.recall_reply_auto_delete_enabled ?? false);
+// 数字框清空后 v-model.number 给的是空串：换成 0，后端按跟随机器人处理，也不会因为
+// 空串解析不成整数把整份配置拒收。
+function followNumber(value: unknown): number {
+  const parsed = Number(value);
+  return value === "" || value == null || !Number.isFinite(parsed) ? 0 : Math.max(0, Math.round(parsed));
+}
 
 // 空值代表「跟随全局」，与后端把空字符串当成未覆盖的约定一致。
 const groupTriggerModeOptions: AppSelectOption[] = [
@@ -813,7 +855,6 @@ const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const saving = ref(false);
 const togglingGroupID = ref("");
-const defaultRecallReplyAutoDeleteEnabled = ref(false);
 // 自然分条默认是开的，跟机器人配置那边的缺省一致。
 const naturalReplySplitDefaults = ref<Record<string, boolean>>({});
 const defaultNaturalReplySplitEnabled = computed(() =>
@@ -923,7 +964,6 @@ const groupAccountSafetyOptions: AppSelectOption[] = [
   { value: "on", label: "开启（主动和直接回复）" },
   { value: "off", label: "关闭（主动和直接回复）" }
 ];
-const defaultSocialReplyEnabled = ref(false);
 const participationDefaults = ref<Record<string, ParticipationPreferences>>({});
 const markedBotDefaults = ref<Record<string,string[]>>({});
 // 群人设默认跟随所属机器人，编辑框留空时得让人看见继承的是谁的哪段文字。
@@ -1048,7 +1088,6 @@ const personaPlaceholder = computed(() =>
 );
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
-const defaultRecallReplyAutoDeleteDelay = ref(defaultRecallReplyAutoDeleteDelaySeconds);
 
 const filteredGroups = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase();
@@ -1146,6 +1185,10 @@ async function load(showFeedback = false): Promise<void> {
       const [config, platformList] = configAndPlatforms;
       const active = config.profiles?.find((profile) => profile.id === botScope.value) ?? config.profiles?.[0];
       const current = active ?? config;
+      botInheritDefaults.value = Object.fromEntries([
+        ["", current as BotProfileConfig],
+        ...(config.profiles ?? []).map((profile) => [profile.id, profile as BotProfileConfig])
+      ]);
       markedBotDefaults.value = Object.fromEntries([
         ["",current.marked_bot_ids ?? []],
         ...(config.profiles ?? []).map(profile=>[profile.id,profile.marked_bot_ids ?? []])
@@ -1161,7 +1204,6 @@ async function load(showFeedback = false): Promise<void> {
       newGroupEnabled.value = (current.group_admission?.mode ?? "blacklist") !== "whitelist";
       defaultMinGroupLevel.value = current.reply_gate?.min_group_level ?? 0;
       defaultLevelUnknownPolicy.value = current.reply_gate?.level_unknown_policy === "deny" ? "deny" : "allow";
-      defaultRecallReplyAutoDeleteEnabled.value = current.recall_reply_auto_delete_enabled ?? false;
       forwardDefaults.value = Object.fromEntries([
         ["", forwardDefaultsOf(current)],
         ...(config.profiles ?? []).map((profile) => [profile.id, forwardDefaultsOf(profile)])
@@ -1178,7 +1220,6 @@ async function load(showFeedback = false): Promise<void> {
         ["", current.typing_delay_enabled ?? false],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.typing_delay_enabled ?? false])
       ]);
-      defaultSocialReplyEnabled.value = current.social_reply_enabled ?? false;
       mutedReplyPauseDefaults.value = Object.fromEntries([
         ["", current.muted_reply_pause_enabled ?? true],
         ...(config.profiles ?? []).map((profile) => [profile.id, profile.muted_reply_pause_enabled ?? true])
@@ -1190,7 +1231,6 @@ async function load(showFeedback = false): Promise<void> {
         ]);
       }
       sendRetryDefaults.value = Object.fromEntries([["", current], ...(config.profiles ?? []).map((profile) => [profile.id, profile])]);
-      defaultRecallReplyAutoDeleteDelay.value = current.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds;
       const def = platformList.platforms.find((item) => item.id === active?.platform);
       supportsGroupLevel.value = def ? def.protocol.startsWith("onebot") : true;
     } else {
@@ -1217,9 +1257,6 @@ function addGroup(): void {
       group_id: groupID,
       enabled: true,
       group_triggers: [],
-      social_reply_enabled: defaultSocialReplyEnabled.value,
-      recall_reply_auto_delete_enabled: defaultRecallReplyAutoDeleteEnabled.value,
-      recall_reply_auto_delete_delay_seconds: defaultRecallReplyAutoDeleteDelay.value,
       plugin_overrides: {},
       plugin_setting_overrides: {}
     },
@@ -1232,14 +1269,10 @@ function openEditor(group: BotGroupConfig, groupName = ""): void {
   // 深拷贝编辑，取消时不污染列表数据。
   const config = JSON.parse(JSON.stringify(groupConfigOf(group))) as BotGroupConfig;
   if (!config.participation && groupReplyDesireValue(config)) config.participation = participationFromConfig(config);
-  config.recall_reply_auto_delete_enabled ??= defaultRecallReplyAutoDeleteEnabled.value;
-  config.social_reply_enabled ??= defaultSocialReplyEnabled.value;
   config.plugin_setting_overrides ??= {};
   config.response_mode ??= "";
   withUnsetSendRetryCleared(config);
   editedFromGroupPersonaID.value = "";
-  const delay = Number(config.recall_reply_auto_delete_delay_seconds);
-  config.recall_reply_auto_delete_delay_seconds = Number.isInteger(delay) && delay > 0 ? delay : defaultRecallReplyAutoDeleteDelay.value;
   editing.value = config;
   editingGroupName.value = groupName;
   triggersDraft.value = (group.group_triggers ?? []).join(",");
@@ -1469,9 +1502,11 @@ async function saveEditing(): Promise<void> {
   if (!current) {
     return;
   }
-  const recallDeleteDelay = Number(current.recall_reply_auto_delete_delay_seconds);
+  // 保留时间留空跟随机器人；填了才校验范围。
+  const recallDeleteRaw = current.recall_reply_auto_delete_delay_seconds as unknown;
+  const recallDeleteDelay = recallDeleteRaw === "" || recallDeleteRaw == null ? 0 : Number(recallDeleteRaw);
   if (
-    current.recall_reply_auto_delete_enabled &&
+    recallDeleteDelay !== 0 &&
     (!Number.isInteger(recallDeleteDelay) || recallDeleteDelay < 1 || recallDeleteDelay > maximumRecallReplyAutoDeleteDelaySeconds)
   ) {
     toastError(`回复保留时间请输入 1 到 ${maximumRecallReplyAutoDeleteDelaySeconds} 秒之间的整数`);
@@ -1494,9 +1529,11 @@ async function saveEditing(): Promise<void> {
       forward_reply_chunk_threshold: forwardModeOf(current) === "custom" ? optionalForwardThreshold(current.forward_reply_chunk_threshold) : undefined,
       forward_reply_enabled: forwardModeOf(current) === "custom" ? true : current.forward_reply_enabled,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
-      recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
-        ? recallDeleteDelay
-        : defaultRecallReplyAutoDeleteDelaySeconds,
+      recall_reply_auto_delete_delay_seconds: recallDeleteDelay,
+      recent_history_token_budget: followNumber(current.recent_history_token_budget),
+      recent_context_limit: followNumber(current.recent_context_limit),
+      max_context_tokens: followNumber(current.max_context_tokens),
+      max_reply_chars: followNumber(current.max_reply_chars),
       group_triggers: triggersDraft.value
         .split(/[,，]/)
         .map((item) => item.trim())
@@ -1505,7 +1542,9 @@ async function saveEditing(): Promise<void> {
         .split("\n")
         .map((item) => item.trim())
         .filter((item) => item !== ""),
-      welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0
+      welcome_llm_cooldown_seconds: followNumber(current.welcome_llm_cooldown_seconds),
+      // 这个界面里空着就是跟随、填了就是本群的值，不需要后端再按旧快照猜。
+      inheritance_migrated: true
     };
     const saved = await saveBotGroup({ ...payload, bot_profile_id: botScope.value || payload.bot_profile_id });
     upsert(saved.config);
@@ -1532,19 +1571,10 @@ function forwardDefaultsOf(config: { forward_reply_enabled?: boolean; forward_re
 function upsert(config: BotGroupConfig): void {
   const index = groups.value.findIndex((group) => group.group_id === config.group_id);
   if (index >= 0) {
-    groups.value[index] = {
-      ...groups.value[index],
-      ...config,
-      // 恢复继承时响应会省略这个字段，不能保留列表里先前的显式开关。
-      natural_reply_split_enabled: config.natural_reply_split_enabled,
-      reply_preserve_line_breaks: config.reply_preserve_line_breaks,
-      reply_line_split_enabled: config.reply_line_split_enabled,
-      typing_delay_enabled: config.typing_delay_enabled,
-      forward_reply_threshold: config.forward_reply_threshold,
-      forward_reply_chunk_threshold: config.forward_reply_chunk_threshold,
-      forward_reply_enabled: config.forward_reply_enabled,
-      configured: true
-    };
+    // 整份换成保存结果，只留列表自己的群名、头像和成员数：恢复跟随时响应会省略
+    // 那个字段，合并旧对象会把先前的显式值留在列表里。
+    const { group_name, avatar_url, member_count, max_member_count, joined } = groups.value[index] as BotGroupSummary;
+    groups.value[index] = { group_name, avatar_url, member_count, max_member_count, joined, ...config, configured: true } as BotGroupSummary;
   } else {
     // 头像地址由后端按平台决定（QQ 直链或本机代理），前端不再自己拼；
     // 这里先留空，下一次拉取列表时补上。

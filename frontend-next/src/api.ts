@@ -568,6 +568,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   reply_max_bubbles?: number;
   /** @deprecated 仅兼容历史配置，不再限制聊天长度。 */
   direct_reply_chunk_size?: number;
+  /** 已按「留空跟随机器人」保存过；新版界面保存时总是带上，免得后端把填的值当旧快照清掉。 */
+  inheritance_migrated?: boolean;
   /** 本群合并转发：不设跟随机器人，false 本群关闭，true 本群单独设置。 */
   forward_reply_enabled?: boolean;
   /** 本群单独设置时正文超过多少字改用合并转发卡片；不设跟随机器人。 */
