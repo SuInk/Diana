@@ -148,13 +148,13 @@ func replyAuditDecisionSpec(need replyAuditNeed) *llm.DecisionSpec {
 		}
 	}
 
-	if need.Closing {
+	if need.Closing || need.GroupStop {
 		questions = append(questions,
 			llm.DecisionQuestion{
 				Key:            "conversation_closing",
 				Kind:           llm.DecisionNoul,
 				Label:          "对话是不是已经收尾",
-				Instructions:   "判断这段私聊是不是已经互相道别、自然结束。",
+				Instructions:   "判断这段对话是不是已经互相道别、自然结束。",
 				TrueCriteria:   "双方已经互相道过别，或者话题明确结束了",
 				FalseCriteria:  "对方还在问问题、还在等回答，或者话题仍在继续",
 				Path:           "conversation_closing",

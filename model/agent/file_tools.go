@@ -47,8 +47,9 @@ type WriteFileTool struct {
 func (t *WriteFileTool) Name() string { return "write_file" }
 
 func (t *WriteFileTool) Description() string {
-	return `在 Agent 工作目录内写入文件，父目录会自动创建。` +
-		`整体覆盖：已存在的文件会被完全替换，要改其中一段请用 edit_file，别把整个文件重写一遍。`
+	return `在 Agent 工作目录内写入文本文件，父目录会自动创建。` +
+		`整体覆盖：已存在的文件会被完全替换，要改其中一段请用 edit_file，别把整个文件重写一遍。` +
+		`只能写文本：图片、音视频、PDF、压缩包这类二进制文件写不出来，要存这些用 save_to_workspace。`
 }
 
 func (t *WriteFileTool) InputSchema() map[string]any {
@@ -62,6 +63,11 @@ func (t *WriteFileTool) Run(_ context.Context, input map[string]any) (string, er
 	rel := stringFromInput(input, "path")
 	if rel == "" {
 		return "", errors.New("path is required")
+	}
+	// content 只能是字符串，写进 .png 的永远是一段文本：文件建出来了、工具也说成功了，
+	// 可谁都打不开。线上就出过「把图存进工作目录」被存成一份文字描述的事。
+	if IsBinaryFileExtension(rel) {
+		return "", fmt.Errorf("write_file 只能写文本，%s 是二进制格式（图片、音视频、PDF、压缩包之类），写进去只会是一份打不开的文件；要把聊天里的图片或文件、网址上的文件、MCP 产物存进工作目录，请用 save_to_workspace", rel)
 	}
 	content, ok := input["content"]
 	if !ok {

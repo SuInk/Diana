@@ -101,6 +101,9 @@ func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
 // 那条消息。追发合并(superseded_follow_up)后,合并回复只有一条,视觉上没有
 // 任何锚点指向前一条——发的人会觉得前一条被跳过了。找到这条消息后提示模型
 // 承接并引用它。中间隔着机器人发言或别人发言就说明不是连发,不算。
+//
+// 只发了一张图、没有文字的那条也算:图文合并去掉以后,「先发图、再说话」是两条
+// 消息,前一条正是这种。表情不算,那多半只是个反应。
 func pendingEarlierMessage(history []MessageEvent, event MessageEvent) (MessageEvent, bool) {
 	currentID := strings.TrimSpace(event.MessageID)
 	for index := len(history) - 1; index >= 0; index-- {
@@ -118,12 +121,22 @@ func pendingEarlierMessage(history []MessageEvent, event MessageEvent) (MessageE
 		if event.Time > 0 && item.Time > 0 && event.Time-item.Time > int64(pendingEarlierMessageWindow/time.Second) {
 			return MessageEvent{}, false
 		}
-		if strings.TrimSpace(historyPlainText(item)) == "" {
+		if strings.TrimSpace(historyPlainText(item)) == "" && !pendingEarlierImageOnly(item) {
 			return MessageEvent{}, false
 		}
 		return item, true
 	}
 	return MessageEvent{}, false
+}
+
+// pendingEarlierImageOnly 判断这条没有文字的消息是不是一条正经的图(不是表情)。
+func pendingEarlierImageOnly(item MessageEvent) bool {
+	for _, segment := range item.Segments {
+		if dependencyImageCandidate(segment, nil) {
+			return true
+		}
+	}
+	return false
 }
 
 // botFollowUpWindow 限定「紧接着的下一句」的判定窗口。隔了几分钟再问就是重新
@@ -189,7 +202,11 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		if len(preview) > 40 {
 			preview = append(preview[:40], '…')
 		}
-		builder.WriteString("发送者刚连发了多条消息,上一条「" + string(preview) + "」你还没有回复。")
+		if len(preview) == 0 {
+			builder.WriteString("他刚发了一张图(message_id=" + strings.TrimSpace(earlier.MessageID) + "),你还没有回应;当前这条可能就是在说它,也可能不是。")
+		} else {
+			builder.WriteString("发送者刚连发了多条消息,上一条「" + string(preview) + "」你还没有回复。")
+		}
 		currentText := strings.TrimSpace(readableEventText(event, ""))
 		botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
 		if bareWakeMention(event, currentText, botID, cfg.GroupTriggers) {

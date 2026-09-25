@@ -25,13 +25,14 @@ const (
 	PurposeProactiveReplyRouter  = "proactive_reply_router"
 	PurposeProactiveReplyQuality = "proactive_reply_quality"
 	PurposeSemanticReference     = "semantic_reference"
-	PurposeInboundMediaReference = "inbound_media_reference"
 	PurposeContextSummary        = "context_summary_compaction"
 	PurposeMemoryExtract         = "memory_extract"
 	PurposeMemorySummary         = "memory_summary"
 	PurposeRelationshipEvaluate  = "relationship_evaluate"
-	PurposeForwardContentSafety  = "forward_content_safety"
-	PurposeReplyAccountSafety    = "reply_account_safety"
+	// PurposeGroupStyle 是风格学习：读群聊写一段「这个群怎么说话」。
+	PurposeGroupStyle           = "group_style"
+	PurposeForwardContentSafety = "forward_content_safety"
+	PurposeReplyAccountSafety   = "reply_account_safety"
 	// PurposeReplySendAudit 是实际发出这次审核调用时用的用途名。它以前只是
 	// proactive_reply_quality.go 里的一个字面量，没进这张表，于是界面上指不了、
 	// 也没法单独绑——而它是量最大的判定之一。
@@ -77,7 +78,6 @@ var llmPurposeGroup = map[string]string{
 	// 发进聊天，而且往往是对话模型刚出错的时候——再绕回对话模型最不稳，所以也
 	// 留在这里，人设由 withUserFacingPersona 补上。
 	PurposeSemanticReference:       llm.GroupReplyAssist,
-	PurposeInboundMediaReference:   llm.GroupReplyAssist,
 	PurposeSemanticTextRef:         llm.GroupReplyAssist,
 	PurposeDirectReplyTopic:        llm.GroupReplyAssist,
 	PurposeReplySemanticDedup:      llm.GroupReplyAssist,
@@ -100,6 +100,7 @@ var llmPurposeGroup = map[string]string{
 	// 后台生成：好感度、长期记忆、RSS 判定和主动问候都要写出成段文字，判断模型答不了；
 	// 它们也都在回复之外异步跑，可以指一个便宜的慢模型。
 	PurposeRelationshipEvaluate: llm.GroupBackground,
+	PurposeGroupStyle:           llm.GroupBackground,
 	PurposeMemoryExtract:        llm.GroupBackground,
 	PurposeMemorySummary:        llm.GroupBackground,
 	PurposeRSSWatchJudge:        llm.GroupBackground,

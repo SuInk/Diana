@@ -937,7 +937,7 @@ func TestRecentHistoryImageIndexesIgnoreVideoFrames(t *testing.T) {
 		},
 		{Kind: EventKindPrivate, Time: 101, UserID: "user-1", MessageID: "question", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "刚才的视频是什么"}}}},
 	}
-	if selected := recentHistoryImageIndexes(history, "question"); len(selected) != 0 {
+	if selected := recentHistoryImageIndexes(history, "question", "user-1"); len(selected) != 0 {
 		t.Fatalf("video frames selected as historical still images: %#v", selected)
 	}
 }

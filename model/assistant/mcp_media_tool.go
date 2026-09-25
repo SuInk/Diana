@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"mime"
 	"strings"
 
 	"github.com/SuInk/diana/model/agent"
@@ -31,7 +30,7 @@ func (t *dianaMCPMediaTool) Name() string { return dianaMCPMediaToolName }
 func (t *dianaMCPMediaTool) Description() string {
 	return "把 MCP 工具返回的图片、音频或文件发到当前会话。MCP 结果里出现 media_id=mcpm_… 时用它，media_id 原样填进来。" +
 		"as 省略时图片按图片发、音频和其他内容按文件发；as=file 强制按原文件发。只认 MCP 返回的 media_id（暂存 30 分钟），不能发本机任意文件。" +
-		"描述画面前先看结果里附上的图，没附图的别编内容。"
+		"描述画面前先看结果里附上的图，没附图的别编内容。它只发送不留存，要存进工作目录用 save_to_workspace source=mcp。"
 }
 
 func (t *dianaMCPMediaTool) InputSchema() map[string]any {
@@ -114,9 +113,10 @@ func mcpMediaFileName(media agent.MCPMedia) string {
 	if name := strings.TrimSpace(media.Name); name != "" {
 		return name
 	}
-	ext := ""
-	if exts, err := mime.ExtensionsByType(media.MIMEType); err == nil && len(exts) > 0 {
-		ext = exts[0]
+	// 固定表而不是 mime.ExtensionsByType：后者在 macOS 上把 image/jpeg 排成 .jfif。
+	ext := agent.CanonicalMediaExtension(media.MIMEType)
+	if ext == "" {
+		ext = agent.CanonicalMediaExtension(agent.SniffMediaType(media.Data))
 	}
 	return "mcp-" + string(media.Kind) + ext
 }

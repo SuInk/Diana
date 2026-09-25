@@ -134,7 +134,14 @@ const maxImageEditSourceMessages = 8
 // 指认的消息里没有图时直接报错，而不是悄悄退回自动猜：模型认错了消息，
 // 让它当场改正，比拿别的图改出一张对不上的结果强。
 func (r *Runtime) imageEditSourcesFromMessages(ctx context.Context, event MessageEvent, messageIDs []string) ([]string, error) {
+	out, _, err := r.imageEditSourcesFromMessagesDetailed(ctx, event, messageIDs)
+	return out, err
+}
+
+// imageEditSourcesFromMessagesDetailed 另外交出每条消息的来历（谁发的、几张图）。
+func (r *Runtime) imageEditSourcesFromMessagesDetailed(ctx context.Context, event MessageEvent, messageIDs []string) ([]string, []imageEditSourceUsed, error) {
 	var out []string
+	var used []imageEditSourceUsed
 	var missing, imageless []string
 	for _, messageID := range messageIDs {
 		messageID = strings.TrimSpace(messageID)
@@ -167,7 +174,13 @@ func (r *Runtime) imageEditSourcesFromMessages(ctx context.Context, event Messag
 			imageless = append(imageless, messageID)
 			continue
 		}
+		before := len(out)
 		out = appendImageEditSourceImages(out, images...)
+		used = append(used, imageEditSourceUsed{
+			Kind: imageSourceKindMessage, MessageID: messageID,
+			UserID: strings.TrimSpace(source.UserID), User: strings.TrimSpace(source.SenderName),
+			Images: len(out) - before,
+		})
 	}
 	var problems []string
 	if len(missing) > 0 {
@@ -177,10 +190,10 @@ func (r *Runtime) imageEditSourcesFromMessages(ctx context.Context, event Messag
 		problems = append(problems, "message_id="+strings.Join(imageless, "、")+" 里没有可用的图片")
 	}
 	if len(problems) > 0 {
-		return nil, fmt.Errorf("source_message_ids 有误：%s。这次没有开始画；请核对聊天记录里带图消息的 message_id 后重新调用，确实找不到就请用户重新发送或引用那张图", strings.Join(problems, "；"))
+		return nil, nil, fmt.Errorf("source_message_ids 有误：%s。这次没有开始画；请核对聊天记录里带图消息的 message_id 后重新调用，确实找不到就请用户重新发送或引用那张图", strings.Join(problems, "；"))
 	}
 	if len(out) == 0 {
-		return nil, errImageEditSourceNotFound
+		return nil, nil, errImageEditSourceNotFound
 	}
-	return out, nil
+	return out, used, nil
 }

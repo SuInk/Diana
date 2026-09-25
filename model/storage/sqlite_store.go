@@ -580,6 +580,9 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, t
 	if err := s.migrateRelationshipEvaluations(); err != nil {
 		return err
 	}
+	if err := s.migrateGroupStyles(); err != nil {
+		return err
+	}
 	s.historyFTS = ensureMessageHistoryFTS(s.db)
 	s.historyVectors = ensureMessageHistoryVectors(s.db)
 	return nil

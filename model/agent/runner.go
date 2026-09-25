@@ -1150,6 +1150,11 @@ func (r *Runner) systemPrompt() string {
 		// 承诺的规则管的是最终答复；say 发的是「正在做」，说完必须接着做。
 		rules = append(rules, "- 要先查、先做几步才能回答时，可以先调用 say 说一句正在做什么（比如「我去查一下」），然后接着调用工具真的去做；长任务每完成一个阶段可以再用 say 报一句进度。say 说了「去做」就必须继续调用工具，不能说完就调用 agent_finalize 收工。say 不是分条发答案用的；它发出去的话对方已经看到，agent_finalize 里不要重复，全都说完了就 silent=true。")
 	}
+	// 线上出过：主人让把生成的图存进工作目录，模型手里只有 write_file，就存了一份
+	// 文字描述，然后在没有任何成功调用的情况下回了一句「存好了」。
+	if hasAnyTool("write_file", "save_to_workspace", ManageFilesToolName, "send_attachment") {
+		rules = append(rules, "- 说文件「存好了」「发过去了」之前，本轮必须有工具调用真的返回了它：存文件要有 write_file、save_to_workspace 或 manage_files 返回的路径，发文件要有 send_attachment 这类发送工具返回的成功结果，回复里报的路径以工具返回的为准。图片、音视频、PDF、压缩包这类二进制文件用 save_to_workspace 存，不要用 write_file 写一份文字描述冒充；没有能做到的工具就如实说做不到。")
+	}
 	rules = append(rules, "- 已经足够回答时必须调用 agent_finalize 结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。需要执行外部操作时调用工具，观察结果后再给出最终答复。",

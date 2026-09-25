@@ -24,7 +24,7 @@ import (
 //
 // 输入是从生产库抽出来的 JSONL，每行一个回复时刻：触发消息、它之前的几十条群消息
 // （机器人自己以前的回复也在里面，会以 assistant 身份回放——这正是口吻传染的来源）、
-// 机器人当时实际发出去的话、当时注入的本群常用表达。机器人配置取生产那份（去掉凭据），
+// 机器人当时实际发出去的话。机器人配置取生产那份（去掉凭据），
 // 走和线上一样的旧字段折叠。长期记忆没有接进来：它按话题召回，重放里查不到。
 //
 // 默认跳过，需要：
@@ -46,14 +46,13 @@ func TestLiveSoulReplay(t *testing.T) {
 	}
 	client := liveSoulReplayClient(t)
 	type sample struct {
-		Set         string         `json:"set"`
-		GroupID     string         `json:"group_id"`
-		Hour        int            `json:"hour"`
-		Time        int64          `json:"time"`
-		Trigger     MessageEvent   `json:"trigger"`
-		History     []MessageEvent `json:"history"`
-		Original    []string       `json:"original"`
-		Expressions []string       `json:"expressions"`
+		Set      string         `json:"set"`
+		GroupID  string         `json:"group_id"`
+		Hour     int            `json:"hour"`
+		Time     int64          `json:"time"`
+		Trigger  MessageEvent   `json:"trigger"`
+		History  []MessageEvent `json:"history"`
+		Original []string       `json:"original"`
 	}
 	var samples []sample
 	file, err := os.Open(rowsPath)
@@ -145,7 +144,6 @@ func TestLiveSoulReplay(t *testing.T) {
 				runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
 				runtime.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
 				runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: groupConfigs})
-				runtime.SetExpressionStyleStore(fixedExpressionStore(item.Expressions))
 				at := time.Unix(item.Trigger.Time, 0)
 				runtime.now = func() time.Time { return at }
 				for _, event := range item.History {
@@ -306,22 +304,6 @@ func soulReplayFirstSentence(event MessageEvent) MessageEvent {
 	event.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
 	return event
 }
-
-type fixedExpressionStore []string
-
-func (s fixedExpressionStore) BumpGroupExpression(context.Context, string, string, string, time.Time) error {
-	return nil
-}
-
-func (s fixedExpressionStore) TopGroupExpressions(context.Context, string, time.Time, int, int, int) ([]GroupExpression, error) {
-	out := make([]GroupExpression, 0, len(s))
-	for _, phrase := range s {
-		out = append(out, GroupExpression{Phrase: phrase, Count: 10})
-	}
-	return out, nil
-}
-
-func (s fixedExpressionStore) PruneGroupExpressions(context.Context, time.Time) error { return nil }
 
 var (
 	// 括号动作是（笑）（揉揉你的头）这种短的；带标点、字母数字的多半是解释性括号。

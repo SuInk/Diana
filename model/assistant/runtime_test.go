@@ -340,11 +340,11 @@ func TestRuntimeDoesNotOverrideModelSilenceForDirectedFollowup(t *testing.T) {
 	if len(provider.request.Messages) < 2 {
 		t.Fatalf("router request = %#v", provider.request.Messages)
 	}
-	prompt := provider.request.Messages[0].Content + "\n" + provider.request.Messages[1].Content
-	for _, want := range []string{"web_search", "始终注册", "group", "成员总数", "image", "系统没有绘图工具", "available_reply_tools"} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("router prompt missing %q: %s", want, prompt)
-		}
+	// 接话评分只问「是不是在跟机器人说话」和闲聊分，能不能答由回复阶段负责：工具目录
+	// 不进评分上下文，引用的机器人原话要在。
+	context := provider.request.Messages[1].Content
+	if strings.Contains(context, "available_reply_tools") || !strings.Contains(context, "我可以读取当前群信息。") {
+		t.Fatalf("router context = %s", context)
 	}
 }
 
@@ -2404,9 +2404,11 @@ func TestRuntimeCarriesCrossMessageImagesIntoFollowup(t *testing.T) {
 		})
 	}
 
+	// 隔了三分钟以上才问：图已经不算「刚发、还悬着」的候选依赖图（那种会随这一轮
+	// 附上原图，见 sender_dependency_images.go），这里测的是历史图按需取。
 	reply, err := runtime.replyTo(context.Background(), MessageEvent{
 		Kind:       EventKindPrivate,
-		Time:       110,
+		Time:       400,
 		UserID:     "10001",
 		MessageID:  "q-multi-image",
 		RawMessage: "读我连发的三张图",
@@ -2496,7 +2498,7 @@ func TestRecentImageBatchAllowsInterleavedReplies(t *testing.T) {
 		"data:image/png;base64,Yg==",
 		"data:image/png;base64,Yw==",
 	}
-	if got := recentHistoryImageBatch(history, "question"); strings.Join(got, ",") != strings.Join(want, ",") {
+	if got := recentHistoryImageBatch(history, MessageEvent{MessageID: "question", UserID: "10001"}); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("image batch = %#v, want %#v", got, want)
 	}
 }
@@ -2509,7 +2511,7 @@ func TestRecentImageBatchStopsAtOldImageBurst(t *testing.T) {
 		{Kind: EventKindPrivate, Time: 405, UserID: "10001", MessageID: "question", Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "看这两张"}}}},
 	}
 	want := []string{"data:image/png;base64,bmV3MQ==", "data:image/png;base64,bmV3Mg=="}
-	if got := recentHistoryImageBatch(history, "question"); strings.Join(got, ",") != strings.Join(want, ",") {
+	if got := recentHistoryImageBatch(history, MessageEvent{MessageID: "question", UserID: "10001"}); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("image batch = %#v, want %#v", got, want)
 	}
 }
@@ -2778,7 +2780,7 @@ func TestRuntimeRoutesContextualNovelRemarkAsChatIn(t *testing.T) {
 	if !strings.Contains(request.Messages[0].Content, "不把别人对其他人的问题冒认") || !strings.Contains(request.Messages[0].Content, "chat_in：") {
 		t.Fatalf("router prompt missing contextual chat-in guidance: %q", request.Messages[0].Content)
 	}
-	for _, want := range []string{"流量不够了能玩什么", "离线小说", `"images":1`, "你不是最喜欢看小说吗"} {
+	for _, want := range []string{"流量不够了能玩什么", "离线小说", "[图片×1]", "你不是最喜欢看小说吗"} {
 		if !strings.Contains(request.Messages[1].Content, want) {
 			t.Fatalf("router context missing %q: %q", want, request.Messages[1].Content)
 		}
@@ -2849,8 +2851,7 @@ func TestRuntimeProactiveReplyKeepsBotFollowupAcrossSameSenderImage(t *testing.T
 	if !runtime.shouldHandleProactiveReply(context.Background(), event, PlainText(event.Segments)) {
 		t.Fatal("semantic criticism of the recent bot answer should be routed")
 	}
-	if !strings.Contains(provider.request.Messages[1].Content, `"last_bot_addressed_current_sender":true`) ||
-		!strings.Contains(provider.request.Messages[1].Content, `"messages_after_last_bot":1`) {
+	if !strings.Contains(provider.request.Messages[1].Content, "最近一条发言是冲着当前发送者说的") {
 		t.Fatalf("router payload = %q", provider.request.Messages[1].Content)
 	}
 }
