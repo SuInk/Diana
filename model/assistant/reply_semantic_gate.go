@@ -117,6 +117,14 @@ var promptReplySemanticDedupSpec = registerPrompt(PromptSpec{
 })
 
 func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, gate *semanticReplyGate, allowDrop bool) (string, error) {
+	reply, _, err := r.deduplicateReplyVerdict(ctx, event, input, reply, cfg, gate, allowDrop)
+	return reply, err
+}
+
+// deduplicateReplyVerdict 额外报告去重模型有没有高置信判 keep。发送前审核里的
+// 「复读自己」只看得到机器人最近几条回复，看不到对方这次在问什么；去重拿着完整
+// 的请求和引用判过「有新内容」，就不该再被复读那一项整条丢掉。
+func (r *Runtime) deduplicateReplyVerdict(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, gate *semanticReplyGate, allowDrop bool) (string, bool, error) {
 	var recent []semanticSentReply
 	for _, item := range gate.sent {
 		if time.Since(item.SentAt) <= semanticReplyRetention {
@@ -124,7 +132,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 		}
 	}
 	if len(recent) == 0 {
-		return reply, nil
+		return reply, false, nil
 	}
 	supplements := r.pendingReplyRequestContexts(r.replyTurnCandidates(ctx), event)
 	payload, err := json.Marshal(map[string]any{
@@ -132,7 +140,7 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 		"current_request_context": requestContextForReply(event, input), "accepted_supplement_requests": supplements,
 	})
 	if err != nil {
-		return reply, nil
+		return reply, false, nil
 	}
 	judgeCtx, cancel := context.WithTimeout(ctx, replySemanticDedupeTimeout)
 	defer cancel()
@@ -171,42 +179,42 @@ func (r *Runtime) deduplicateReply(ctx context.Context, event MessageEvent, inpu
 		}
 	}()
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return "", false, ctx.Err()
 	}
 	if err != nil || decision.Confidence < 0.9 || decision.Confidence > 1 {
-		return reply, nil
+		return reply, false, nil
 	}
 	switch decision.Action {
 	case "keep":
 		action = "keep"
-		return reply, nil
+		return reply, true, nil
 	case "drop":
 		// A supplement accepted while the judge was running still needs an answer.
 		if interruptErr := r.interruptedReplyError(ctx, event); interruptErr != nil {
-			return "", interruptErr
+			return "", false, interruptErr
 		}
 		if !allowDrop {
 			// 直接触发只禁止静默丢弃，不改判断本身：模型的结论照样记进日志，
 			// 按 drop_blocked 单独计数，好看出这道闸在直接回复上到底想丢掉多少。
 			action = "drop_blocked"
-			return reply, nil
+			return reply, false, nil
 		}
 		action = "drop"
-		return "", errDuplicateReply
+		return "", false, errDuplicateReply
 	case "rewrite":
 		candidate := strings.TrimSpace(decision.Content)
 		body, intent := consumeReplyControlIntent(candidate)
 		if intent != (replyControlIntent{}) || body != candidate || compressionCandidateIssue(reply, candidate, 0) != "" {
-			return reply, nil
+			return reply, false, nil
 		}
 		prepared, prepErr := r.prepareGeneratedReply(ctx, cfg, candidate, event)
 		if prepErr != nil {
-			return "", prepErr
+			return "", false, prepErr
 		}
 		action = "rewrite"
 		prepared, _ = prepareReplyDelivery(prepared, event)
-		return prepared, nil
+		return prepared, false, nil
 	default:
-		return reply, nil
+		return reply, false, nil
 	}
 }

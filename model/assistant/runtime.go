@@ -4393,6 +4393,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	var semanticGate *semanticReplyGate
 	var speculativeAudit chan preparedReplyAudit
+	dedupKept := false
 	// Tool results and disclosure deliveries must not be hidden as repeated prose.
 	if !hasExternalSideEffect(ctx) && !hasFactualPluginResponse(pluginResponses) && !controlIntent.RefuseCurrent && !controlIntent.SuppressCurrentUser {
 		var release func()
@@ -4414,7 +4415,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 没有代价。直接触发不一样——私聊、@ 本机和引用机器人消息的更正都是对方
 		// 点着名在说话，这时候一个字不发，对方看到的就是装死。去重仍然跑，重复
 		// 内容照样被压成只讲新增的那部分，只是不再允许压成零。
-		reply, err = r.deduplicateReply(ctx, event, cleanText, reply, cfg, semanticGate, proactiveTriggered)
+		reply, dedupKept, err = r.deduplicateReplyVerdict(ctx, event, cleanText, reply, cfg, semanticGate, proactiveTriggered)
 		if err != nil {
 			return "", err
 		}
@@ -4429,6 +4430,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if speculativeAudit == nil || prepared.reply != reply {
 		prepared = r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
 	}
+	prepared.newContentConfirmed = dedupKept
 	auditIntent, err := r.applyReplyAudit(ctx, event, cfg, prepared)
 	if err != nil {
 		return "", err

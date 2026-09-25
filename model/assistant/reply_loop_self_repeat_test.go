@@ -185,3 +185,53 @@ func TestSanitizeReplyPauseHintRejectsSystemVoice(t *testing.T) {
 		})
 	}
 }
+
+// 语义去重拿着对方这次的请求和引用判过「有新内容」，审核里的复读就不能再把这条
+// 整条丢掉。线上那次是被点名追问「你把url给我就行」：去重判 keep（0.95），复读
+// 却判了 true，追问的人什么也没收到。
+func TestSelfRepeatYieldsToConfirmedNewContent(t *testing.T) {
+	for _, confirmed := range []bool{false, true} {
+		provider := &sequenceLLMProvider{auditReplies: []string{
+			selfRepeatVerdict(true, 0.95, "又说了一遍拿不到链接"),
+		}}
+		r := dampingTestRuntime(BotConfig{}, provider)
+		now := time.Now()
+		event := botReplyLoopEvent(r, "again", "20002", 0, now.Add(-30*time.Second), 10*time.Second, "Diana 你把url给我就行")
+		cfg := r.effectiveConfigForEvent(event)
+		prepared := r.prepareReplyAudit(context.Background(), event, "Diana 你把url给我就行", "真翻不到它的 space 链接", cfg, false)
+		prepared.newContentConfirmed = confirmed
+		_, err := r.applyReplyAudit(context.Background(), event, cfg, prepared)
+		if confirmed && err != nil {
+			t.Fatalf("去重确认有新内容时不该按复读丢掉：%v", err)
+		}
+		if !confirmed && !errors.Is(err, errReplySelfRepeatDropped) {
+			t.Fatalf("没有去重结论时复读照旧丢这一条：%v", err)
+		}
+	}
+}
+
+// 只有高置信的 keep 才算确认有新内容；drop、低置信、改写都不算。
+func TestDeduplicateReplyVerdictReportsConfirmedKeep(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{
+		{`{"action":"keep","confidence":0.95}`, true},
+		{`{"action":"keep","confidence":0.6}`, false},
+		{`{"action":"drop","confidence":0.95}`, false},
+	} {
+		p := &auditOverrideProvider{text: tc.raw}
+		r := topicTestRuntime(p)
+		event := directedGroupMessage("m", "u", "你把url给我就行")
+		g, release, err := r.lockSemanticReply(context.Background(), event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.remember("你不能调用浏览器吗", "拿不到带 UID 的链接")
+		_, kept, err := r.deduplicateReplyVerdict(context.Background(), event, "你把url给我就行", "候选", BotConfig{}, g, false)
+		release()
+		if err != nil || kept != tc.want {
+			t.Fatalf("%s：kept=%v err=%v，want %v", tc.raw, kept, err, tc.want)
+		}
+	}
+}
