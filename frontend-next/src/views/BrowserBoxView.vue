@@ -55,19 +55,15 @@
                   下载扩展
                 </a>
               </div>
-              <!-- 内置浏览器的启停和接管属于这一行，别飘在列表外面。 -->
+              <!-- 内置浏览器的启停和接管属于这一行，别飘在列表外面。默认归机器人用，不设「我来操作」：
+                   在画面上点一下、敲一下键或在地址栏跳转就自动转为你接管，这时才出现「交还给机器人」。 -->
               <div v-if="key === 'box' && sourceState?.box.enabled && botID" class="browser-toggle-actions">
                 <button class="btn small" type="button" :disabled="busy || status.running" @click="start">启动</button>
                 <button class="btn small ghost" type="button" :disabled="busy || !status.running" @click="stop">停止</button>
-                <button
-                  class="btn small"
-                  :class="status.takeover ? 'warn' : 'ghost'"
-                  type="button"
-                  :disabled="busy || !status.running"
-                  @click="toggleTakeover"
-                >
-                  {{ status.takeover ? "交还给机器人" : "我来操作" }}
-                </button>
+                <template v-if="status.running && status.takeover">
+                  <button class="btn small warn" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
+                  <span class="browser-toggle-note">你在画面上动过手，机器人暂时用不了这个浏览器</span>
+                </template>
                 <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
               </div>
             </div>
@@ -458,10 +454,10 @@ async function stop(): Promise<void> {
   }
 }
 
-async function toggleTakeover(): Promise<void> {
+async function handBack(): Promise<void> {
   busy.value = true;
   try {
-    const result = await setBrowserBoxTakeover(botID, !status.takeover);
+    const result = await setBrowserBoxTakeover(botID, false);
     status.takeover = result.active;
   } catch (err) {
     toastError(err instanceof Error ? err.message : "切换失败");
@@ -744,6 +740,11 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   margin-top: 6px;
+}
+
+.browser-toggle-note {
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 .browser-toggle-error {
