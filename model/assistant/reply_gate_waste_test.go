@@ -73,7 +73,7 @@ func TestReplyClosedKeepsUnresolvedQuoteOnOldPath(t *testing.T) {
 	}
 }
 
-// 路由请求里当前消息只出现一次：current_text 已经带了正文，候选里那条只留标识。
+// 路由请求里当前消息只出现一次，标着【当前消息】。
 func TestProactiveRouterPayloadCarriesCurrentTextOnce(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"relevance":{"directed":false,"reason":"群友之间"},"chat_in":{"score":0.1,"reason":"没什么可接"}}`,
@@ -94,7 +94,7 @@ func TestProactiveRouterPayloadCarriesCurrentTextOnce(t *testing.T) {
 	if got := strings.Count(payload, text); got != 1 {
 		t.Fatalf("当前消息在路由请求里出现了 %d 次，want 1：%s", got, payload)
 	}
-	for _, want := range []string{`"current_text":"` + text + `"`, `"message_id":"message-1"`, `"is_current":true`} {
+	for _, want := range []string{"【当前消息】Alice：" + text} {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("payload missing %s: %s", want, payload)
 		}
@@ -117,7 +117,7 @@ func TestProactiveRouterPayloadKeepsEarlierCandidateText(t *testing.T) {
 	if strings.Count(payload, "前面那句先说的话") != 1 || strings.Count(payload, "后面这句才是当前") != 1 {
 		t.Fatalf("each candidate text should appear exactly once: %s", payload)
 	}
-	if strings.Count(payload, `"is_current":true`) != 1 {
+	if strings.Count(payload, "【当前消息】") != 1 || !strings.Contains(payload, "【当前消息】user-2：后面这句才是当前") {
 		t.Fatalf("only the latest candidate is current: %s", payload)
 	}
 }

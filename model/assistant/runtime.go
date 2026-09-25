@@ -2714,13 +2714,16 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	// 同一套判据也按题目摆一份：绑的是只做判断的模型时，它照这张表作答，答案回填
 	// 成下面解析的那个 JSON；绑对话模型时这张表用不上。
 	decisionSpec := proactiveReplyDecisionSpec(candidates, cfg.PromptOverrides)
+	routeContext := string(payloadJSON)
 	if chatIn.Participation != nil {
 		routeInstruction = cfg.prompt(promptParticipationRouteInstructionSpec)
 		decisionSpec = participationDecisionSpec(cfg.PromptOverrides)
+		// 评分这一路喂按时间排的对话而不是整份 JSON，理由见 router_transcript.go。
+		routeContext = proactiveReplyTranscript(payload)
 	}
 	// 原图照带：只给文字描述，判断「这张图在不在问机器人」时信息不够。但这里只是一道
 	// 是非题，用 low 档，正式回复那一路仍是 high。
-	routeUserMessage, _ := llmMessageFromEventWithImageDetail(routeCtx, event, routeInstruction+string(payloadJSON), nil, "low")
+	routeUserMessage, _ := llmMessageFromEventWithImageDetail(routeCtx, event, routeInstruction+routeContext, nil, "low")
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
@@ -3049,6 +3052,9 @@ type proactiveReplyHistoryItem struct {
 	// UserID 只给程序侧数「窗口里有几个人在说话」用，不进路由提示词：模型按 sender
 	// 称呼理解对话，多一个数字账号只会让它把 ID 当成正文的一部分复述出去。
 	UserID string `json:"-"`
+	// MessageID 同样只给程序侧用：接话评分的对话稿按它认出同一批里哪些消息已经在历史里，
+	// 没在的补到当前消息前面（见 proactiveReplyTranscript）。
+	MessageID string `json:"-"`
 }
 
 // botAliasesForEvent 把平台用户名一起交给路由模型：群消息里写的是
@@ -3124,6 +3130,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 			IsBot:      payload.BotAccount != "" && item.UserID == payload.BotAccount,
 			AgeSeconds: ageSeconds,
 			UserID:     strings.TrimSpace(item.UserID),
+			MessageID:  strings.TrimSpace(item.MessageID),
 		}
 		if historyItem.IsBot && payload.LastBotMessage == nil {
 			lastBotMessage := historyItem

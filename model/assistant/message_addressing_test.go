@@ -20,13 +20,11 @@ func TestBatchedCandidatesKeepTheirOwnReplyTargets(t *testing.T) {
 	if len(provider.requests) != 1 {
 		t.Fatalf("requests=%d", len(provider.requests))
 	}
+	// 接话评分喂的是按时间排的对话稿：同一批里前一条回复了机器人、后一条（当前消息）
+	// 回复了别人，两条的指向都得在稿子里各自保留。
 	text := provider.requests[0].Messages[len(provider.requests[0].Messages)-1].Content
-	var payload proactiveReplyPayload
-	if err := json.Unmarshal([]byte(text[strings.Index(text, "{"):]), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Candidates) != 2 || payload.Candidates[0].Addressing.ReplyTarget != "self" || payload.Candidates[1].Addressing.ReplyTarget != "other" {
-		t.Fatalf("batch relationships=%+v", payload.Candidates)
+	if !strings.Contains(text, "owner（回复Diana）：first") || !strings.Contains(text, "【当前消息】owner（回复别人）：second") {
+		t.Fatalf("batch relationships lost:\n%s", text)
 	}
 }
 
