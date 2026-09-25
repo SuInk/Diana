@@ -1543,7 +1543,8 @@ func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, text, 
 		messages = appendAssistantEcho(messages, text)
 		return append(messages, llm.Message{Role: llm.RoleUser, Content: reason})
 	}
-	messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: resp.ToolCalls, ResponsesOutput: resp.ResponsesOutput, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent})
+	// 带上作用域：之后切到别的配置档时，这批调用才会被识别成外来历史。
+	messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: resp.ToolCalls, ResponsesOutput: resp.ResponsesOutput, ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent})
 	for _, call := range resp.ToolCalls {
 		messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, ToolError: true, Content: "本次调用未执行：" + reason})
 	}
