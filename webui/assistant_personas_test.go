@@ -95,7 +95,7 @@ func TestPersonaLibraryCreateUpdateDelete(t *testing.T) {
 
 	// 内置人设只读：拿它的 ID 保存要被拒。
 	rec = personaRequest(t, router, http.MethodPost, "/api/assistant/personas", personaSavePayload{
-		Persona: assistant.Persona{ID: "builtin:jiaran", Name: "嘉然", SystemPrompt: "改掉"},
+		Persona: assistant.Persona{ID: "builtin:human", Name: "真人感", SystemPrompt: "改掉"},
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("builtin save status=%d body=%s", rec.Code, rec.Body.String())

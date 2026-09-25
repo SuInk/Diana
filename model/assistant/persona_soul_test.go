@@ -134,7 +134,7 @@ func TestGroupSoulOverrideReplacesWholeDocument(t *testing.T) {
 
 // 现在的格式：一份 SOUL.md，名字取一级标题，没有标题就用文件名。
 func TestParsePersonaMarkdown(t *testing.T) {
-	raw, err := os.ReadFile("souls/jiaran.md")
+	raw, err := os.ReadFile("souls/human.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestParsePersonaMarkdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	persona := document.Personas[0]
-	if persona.Name != "嘉然" || !strings.HasPrefix(persona.SystemPrompt, "# 嘉然") {
+	if persona.Name != "真人感" || !strings.HasPrefix(persona.SystemPrompt, "# 真人感") {
 		t.Fatalf("persona = %#v", persona)
 	}
 	untitled, err := ParsePersonaMarkdown([]byte("她说话很短。"), "短句")
