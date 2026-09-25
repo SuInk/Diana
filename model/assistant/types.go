@@ -731,12 +731,18 @@ type BotConfig struct {
 	ReplyRules                 []ReplyRule               `json:"reply_rules,omitempty"`
 	MaxBotConcurrency          int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeout             time.Duration             `json:"request_timeout,omitempty"`
-	AgentEnabled               bool                      `json:"agent_enabled,omitempty"`
-	AgentMaxSteps              int                       `json:"agent_max_steps,omitempty"`
-	AgentSkillRoots            []string                  `json:"agent_skill_roots,omitempty"`
-	AgentMCPConfigPath         string                    `json:"agent_mcp_config_path,omitempty"`
-	AgentCommandAllowlist      []string                  `json:"agent_command_allowlist,omitempty"`
-	AgentCommandTimeoutMS      int                       `json:"agent_command_timeout_ms,omitempty"`
+	// AgentEnabled 是旧的「启用 Agent」开关，现在只在迁移时读：加载配置时按它换算出
+	// AgentMode，之后恒为 true（见 migrateAgentMode）。AgentEnabled=false 的旧非 Agent
+	// 路径还留在代码里，界面上已经走不到，待后续移除。
+	AgentEnabled bool `json:"agent_enabled,omitempty"`
+	// AgentMode 是 standard（标准，全部能力）或 safe（安全，关掉 AgentSafeModeRules
+	// 里的高风险能力，主人也一样）。新建机器人默认 safe。
+	AgentMode             string   `json:"agent_mode,omitempty"`
+	AgentMaxSteps         int      `json:"agent_max_steps,omitempty"`
+	AgentSkillRoots       []string `json:"agent_skill_roots,omitempty"`
+	AgentMCPConfigPath    string   `json:"agent_mcp_config_path,omitempty"`
+	AgentCommandAllowlist []string `json:"agent_command_allowlist,omitempty"`
+	AgentCommandTimeoutMS int      `json:"agent_command_timeout_ms,omitempty"`
 	// AgentCommandSandbox 见 agent.CommandSandbox* 常量：auto 有沙盒就用、
 	// require 没有就拒绝执行、off 完全不套。留空按 auto。
 	AgentCommandSandbox string `json:"agent_command_sandbox,omitempty"`
@@ -1151,6 +1157,7 @@ type ConfigPayload struct {
 	MaxBotConcurrency               int                       `json:"max_bot_concurrency,omitempty"`
 	RequestTimeoutMS                int64                     `json:"request_timeout_ms,omitempty"`
 	AgentEnabled                    bool                      `json:"agent_enabled,omitempty"`
+	AgentMode                       string                    `json:"agent_mode,omitempty"`
 	AgentMaxSteps                   int                       `json:"agent_max_steps,omitempty"`
 	AgentSkillRoots                 []string                  `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfigPath              string                    `json:"agent_mcp_config_path,omitempty"`
@@ -1743,8 +1750,11 @@ func DefaultBotConfig() BotConfig {
 		MaxBotConcurrency:           8,
 		RequestTimeout:              180 * time.Second,
 		AgentEnabled:                true,
-		AgentMaxSteps:               agent.DefaultMaxSteps,
-		AgentSkillRoots:             []string{},
+		// 新建的机器人默认安全模式：高风险能力要主人明确切到标准模式才给。
+		// 存量机器人不受影响，它们的模式由 migrateAgentMode 按旧开关换算。
+		AgentMode:       AgentModeSafe,
+		AgentMaxSteps:   agent.DefaultMaxSteps,
+		AgentSkillRoots: []string{},
 		// 新建配置直接带上一组只读诊断命令，装完就能用。
 		//
 		// 只影响新建：WithDefaults 对白名单只做清洗、不回填，对写入开关根本不碰，
@@ -2006,6 +2016,8 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = defaults.RequestTimeout
 	}
+	// 空值留空：那表示还没迁移过，由加载路径按旧开关换算，这里不替它做决定。
+	cfg.AgentMode = NormalizeAgentMode(cfg.AgentMode)
 	if cfg.AgentMaxSteps <= 0 {
 		cfg.AgentMaxSteps = defaults.AgentMaxSteps
 	}
@@ -2335,6 +2347,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxBotConcurrency:                 cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                  cfg.RequestTimeout.Milliseconds(),
 		AgentEnabled:                      cfg.AgentEnabled,
+		AgentMode:                         cfg.AgentMode,
 		AgentMaxSteps:                     cfg.AgentMaxSteps,
 		AgentSkillRoots:                   append([]string(nil), cfg.AgentSkillRoots...),
 		AgentMCPConfigPath:                cfg.AgentMCPConfigPath,
@@ -2542,6 +2555,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxBotConcurrency:               payload.MaxBotConcurrency,
 		RequestTimeout:                  time.Duration(payload.RequestTimeoutMS) * time.Millisecond,
 		AgentEnabled:                    payload.AgentEnabled,
+		AgentMode:                       agentModeFromPayload(payload, existing),
 		AgentMaxSteps:                   payload.AgentMaxSteps,
 		AgentSkillRoots:                 append([]string(nil), payload.AgentSkillRoots...),
 		AgentMCPConfigPath:              payload.AgentMCPConfigPath,
@@ -2595,7 +2609,22 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	if cfg.WeComEncodingAESKey == "" {
 		cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
 	}
-	return cfg
+	// 界面保存出来的配置一律是迁移过的：Agent 恒开，模式二选一。
+	return migrateAgentMode(cfg)
+}
+
+// agentModeFromPayload 决定保存时用哪个模式。请求里写了就用请求的；没写时，编辑已有
+// 机器人沿用它现在的模式（旧版前端只会带回 agent_enabled=true，不能因此把安全模式
+// 悄悄升成标准模式），其余情况（新建、config.yaml 播种）留空，交给 migrateAgentMode
+// 按 agent_enabled 换算。
+func agentModeFromPayload(payload ConfigPayload, existing BotConfig) string {
+	if mode := NormalizeAgentMode(payload.AgentMode); mode != "" {
+		return mode
+	}
+	if strings.TrimSpace(existing.ID) != "" {
+		return NormalizeAgentMode(existing.AgentMode)
+	}
+	return ""
 }
 
 func normalizeReplyRules(rules []ReplyRule) []ReplyRule {

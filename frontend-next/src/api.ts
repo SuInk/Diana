@@ -5,6 +5,7 @@ import { trackScopeRequest } from "./scope-transition";
 import { configurationKindForMutation, notifyConfigurationChanged } from "./configuration-sync";
 import { describeServerFailure } from "./gateway-error";
 import type { SendRetrySettings } from "./send-retry-settings";
+import type { AgentSafeModeCategory } from "./agent-mode";
 
 export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
 
@@ -358,7 +359,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
   request_timeout_ms?: number;
+  /** 旧的「启用 Agent」开关，后端迁移后恒为 true，只为兼容保留。 */
   agent_enabled?: boolean;
+  /** standard 标准模式（全部能力）/ safe 安全模式（关掉高风险能力，主人也一样）。新建默认 safe。 */
+  agent_mode?: string;
   agent_max_steps?: number;
   agent_command_allowlist?: string[];
   agent_command_timeout_ms?: number;
@@ -3513,10 +3517,17 @@ export interface AgentRecommendedDefaults {
   agent_command_sandbox: string;
   agent_max_steps: number;
   agent_command_timeout_ms: number;
+  /** 安全模式关掉的能力，按类别排好；界面的说明和确认框照它生成。 */
+  agent_safe_mode?: AgentSafeModeCategory[];
 }
 
 export function getAgentDefaults(): Promise<AgentRecommendedDefaults> {
   return requestJSON<AgentRecommendedDefaults>("/api/assistant/agent-defaults");
+}
+
+/** 切到安全模式前的现场情况：这台机器人还在跑的编码任务数。只读。 */
+export function getAgentModeImpact(profile: string): Promise<{ running_coding_jobs: number }> {
+  return requestJSON(`/api/assistant/agent-mode/impact?profile=${encodeURIComponent(profile)}`);
 }
 
 export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {

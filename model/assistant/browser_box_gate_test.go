@@ -13,7 +13,7 @@ import (
 // 开关要能从 WebUI 存进配置再读回来。配置在这一层是逐字段抄的，
 // 漏抄一个字段的表现是「WebUI 上点了，保存后又变回原样」，界面上看不出原因。
 func TestBrowserBoxSwitchSurvivesPayloadRoundTrip(t *testing.T) {
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentBrowserBoxDisabled = true
 
 	payload := PayloadFromConfig(cfg)
@@ -32,10 +32,10 @@ func TestBrowserBoxBridgeOnByDefault(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.SetBrowserBox(stubBuiltinBrowser{url: "http://127.0.0.1:1234"})
 
-	if runtime.browserBoxFor(DefaultBotConfig()) == nil {
+	if runtime.browserBoxFor(standardModeBotConfig()) == nil {
 		t.Fatal("默认就该拿到内置浏览器")
 	}
-	off := DefaultBotConfig()
+	off := standardModeBotConfig()
 	off.AgentBrowserBoxDisabled = true
 	if runtime.browserBoxFor(off) != nil {
 		t.Fatal("显式关掉之后不该再拿到内置浏览器")
@@ -81,7 +81,7 @@ func TestBrowserBoxIsPerBot(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.SetBrowserBox(provider)
 	for _, id := range []string{"bot-a", "bot-b"} {
-		cfg := DefaultBotConfig()
+		cfg := standardModeBotConfig()
 		cfg.ID = id
 		bridge := runtime.browserBoxFor(cfg)
 		if bridge == nil {

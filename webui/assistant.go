@@ -319,6 +319,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/config/profile-enabled", h.setProfileEnabled)
 	router.POST(base+"/config/profiles-enabled", h.setAllProfilesEnabled)
 	router.GET(base+"/agent-defaults", h.agentDefaults)
+	router.GET(base+"/agent-mode/impact", h.agentModeImpact)
 	router.GET(base+"/features", h.featuresStatus)
 	router.GET(base+"/status", h.status)
 	router.GET(base+"/auto-info", h.autoInfo)
@@ -453,6 +454,8 @@ func (h *BotHandler) agentDefaults(c *gin.Context) {
 		"agent_command_sandbox":    defaults.AgentCommandSandbox,
 		"agent_max_steps":          defaults.AgentMaxSteps,
 		"agent_command_timeout_ms": defaults.AgentCommandTimeoutMS,
+		// 安全模式关掉什么由后端那张规则表说了算，界面的说明和确认框照它生成。
+		"agent_safe_mode": assistant.AgentSafeModeCatalog(),
 	})
 }
 
@@ -521,6 +524,9 @@ func (h *BotHandler) saveProfile(c *gin.Context, create bool) {
 		return
 	}
 	recordRequestOperation(c, h.logs, "config_save", "OneBot v11 机器人配置已保存", current.ID, botLogMetadata(current))
+	if !create {
+		h.recordAgentModeChange(c, existing, current)
+	}
 	c.JSON(http.StatusOK, assistant.PayloadFromProfileSet(next, savedID))
 }
 

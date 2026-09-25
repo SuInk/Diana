@@ -181,6 +181,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 			BrowserControl:             r.browserControlFor(cfg),
 			BuiltinBrowser:             r.browserBoxFor(cfg),
 		}
+		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
 		registry := agent.NewToolRegistry()
 		if cfg.AgentEnabled {
 			base, err := r.sharedAgentRegistry(ctx, agentCfg)
@@ -199,6 +200,7 @@ func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig
 		for _, tool := range extraTools {
 			registry.Register(tool)
 		}
+		applyAgentSafeMode(cfg, registry)
 		agentClient := newRuntimeAgentLLMProvider(r, ctx)
 		// 这条路径不知道发言者是谁，只有完全公开时才给。
 		if normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone {

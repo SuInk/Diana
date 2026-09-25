@@ -45,7 +45,7 @@ func newHandoffTestRuntime(t *testing.T, browser agent.BuiltinBrowserBridge) *Ru
 func TestBrowserHandoffToolRequestsAndEndsTurn(t *testing.T) {
 	browser := &handoffBrowser{}
 	runtime := newHandoffTestRuntime(t, browser)
-	tool := newDianaBrowserHandoffTool(runtime, MessageEvent{UserID: "owner", RawMessage: "帮我把小红书收藏导出来"}, DefaultBotConfig())
+	tool := newDianaBrowserHandoffTool(runtime, MessageEvent{UserID: "owner", RawMessage: "帮我把小红书收藏导出来"}, standardModeBotConfig())
 
 	output, err := tool.Run(context.Background(), map[string]any{
 		"reason": "登录小红书。",
@@ -72,7 +72,7 @@ func TestBrowserHandoffToolRequestsAndEndsTurn(t *testing.T) {
 
 func TestBrowserHandoffToolRejectsBadInput(t *testing.T) {
 	runtime := newHandoffTestRuntime(t, &handoffBrowser{})
-	tool := newDianaBrowserHandoffTool(runtime, MessageEvent{UserID: "owner"}, DefaultBotConfig())
+	tool := newDianaBrowserHandoffTool(runtime, MessageEvent{UserID: "owner"}, standardModeBotConfig())
 	for _, input := range []map[string]any{
 		{"reason": "登录小红书"},
 		{"task": "接着做"},
@@ -84,7 +84,7 @@ func TestBrowserHandoffToolRejectsBadInput(t *testing.T) {
 	}
 	// 外接 CDP、或内置浏览器不支持交接时，说清楚办不到，而不是假装请了。
 	plain := newHandoffTestRuntime(t, stubBuiltinBrowser{url: "http://127.0.0.1:1"})
-	tool = newDianaBrowserHandoffTool(plain, MessageEvent{UserID: "owner"}, DefaultBotConfig())
+	tool = newDianaBrowserHandoffTool(plain, MessageEvent{UserID: "owner"}, standardModeBotConfig())
 	if _, err := tool.Run(context.Background(), map[string]any{"reason": "登录", "task": "接着做"}); err == nil {
 		t.Fatal("内置浏览器不支持交接时应当报错")
 	}

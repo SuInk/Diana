@@ -101,6 +101,8 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	// 一次性交给注册表：ApplyExtensionOverrides 是整份替换，分两次调用后一次会
 	// 把前一次的机器人级停用覆盖掉。
 	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupExtensionOverrides(groupAccess)))
+	// 安全模式放在所有身份和扩展开关之后：它对主人同样生效，不能被前面任何一道放行盖掉。
+	applyAgentSafeMode(cfg, registry)
 	return registry, nil
 }
 
@@ -350,7 +352,8 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensionManagement bool) agent.Config {
 	// Skills 目录和 MCP 配置路径由 GlobalExtensionPaths 在首次使用时固定下来，
 	// 机器人之间不会因为各自填得不同而切到另一套扩展。
-	return withOwnerAgentLimits(agent.Config{
+	// 安全模式在最后收窄：它要盖过主人放宽的那些项（扩展管理跟着主人身份打开）。
+	return restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agent.Config{
 		WorkDir:             AgentWorkspaceDir(),
 		MaxSteps:            cfg.AgentMaxSteps,
 		SkillRoots:          cfg.AgentSkillRoots,
@@ -375,7 +378,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, extensi
 		// 长期保存区按机器人分目录，索引里记下是谁让存的。
 		WorkspaceBotID:   firstNonEmpty(event.ProfileID, cfg.ID),
 		WorkspaceActorID: event.UserID,
-	}, extensionManagement)
+	}, extensionManagement))
 }
 
 // browserSessionKey 让同一个对话前后几轮接着用同一个标签页，不同的群、不同的私聊各用
@@ -470,6 +473,10 @@ func logCommandExecutionPosture(configs []BotConfig) {
 	for _, cfg := range configs {
 		cfg = cfg.WithDefaults()
 		if !cfg.Enabled || !cfg.AgentEnabled {
+			continue
+		}
+		if cfg.agentSafeMode() {
+			log.Printf("diana agent: 配置 %q 处于安全模式，run_command、编码代理、交互式浏览器和 MCP 工具都不启用", cfg.ID)
 			continue
 		}
 		if len(cfg.AgentCommandAllowlist) == 0 {

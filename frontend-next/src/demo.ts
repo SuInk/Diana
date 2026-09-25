@@ -5,6 +5,8 @@ import { extensionDemoResponse } from './extension-demo';
 // 和后端登记表逐字相同的提示词目录，由 webui/demo_prompt_catalog_test.go 生成并校验。
 import demoPromptCatalogData from './demo-prompt-catalog.json';
 import demoBuiltinSouls from './demo-builtin-souls.json';
+// 安全模式目录由后端规则表生成（见 webui/agent_mode_test.go），演示站照原样返回。
+import demoAgentSafeMode from './demo-agent-safe-mode.json';
 import type {
   AgentResidencyEntry,
   AppLogEntry,
@@ -101,7 +103,7 @@ const oneBotProfile: BotProfileConfig = {
   group_triggers: ["Diana", "diana"], disabled_groups: [], system_prompt: demoDefaultSoul,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_refusal_suppression_enabled: true, prompt_inject_time: false,
   proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
-  cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_max_steps: 12,
+  cross_group_memory_enabled: true, world_book_enabled: true, romance_enabled: false, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", agent_max_steps: 12,
   max_bot_concurrency: 4, request_timeout_ms: 60_000,
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-5.6" }, vision: { profile_id: "llm-vision", model: "gpt-5.6" },
@@ -1154,13 +1156,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       agent_command_allowlist: ["uptime", "free", "df", "uname", "nproc", "date", "hostname", "whoami"],
       agent_file_write_enabled: true,
       agent_command_sandbox: "auto",
-      agent_max_steps: 8,
-      agent_command_timeout_ms: 10000
+      agent_max_steps: 12,
+      agent_command_timeout_ms: 10000,
+      agent_safe_mode: demoAgentSafeMode
     });
+  if (path === "/api/assistant/agent-mode/impact") return json({ running_coding_jobs: 1 });
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
-    group_triggers: ["Diana", "diana"], request_timeout_ms: 60000
+    group_triggers: ["Diana", "diana"], request_timeout_ms: 60000, agent_enabled: true, agent_mode: "safe"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);
   if (["/api/assistant/config", "/api/assistant/config/new"].includes(path) && method === "POST") {

@@ -318,7 +318,11 @@ func (r *ToolRegistry) extensionToolAllowed(tool Tool) bool {
 	}
 	r.mu.RLock()
 	enabled, configured := r.extensionOverrides["mcp:"+mcp.serverName]
+	mcpDisabled := r.disabled.mcpReason != ""
 	r.mu.RUnlock()
+	if mcpDisabled {
+		return false
+	}
 	return !configured || enabled
 }
 func (r *ToolRegistry) filterExtensionToolNames(names []string) []string {

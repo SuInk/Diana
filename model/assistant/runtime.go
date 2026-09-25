@@ -633,6 +633,10 @@ const defaultAgentBrowserCDPURL = "http://127.0.0.1:9222"
 // 浏览器，所以跟着「Diana 内置」走；例外是机器人自己改过外部 CDP 地址——那是
 // 显式指定的浏览器，不该被全局选择悄悄收走。
 func (r *Runtime) browserToolsDisabledFor(cfg BotConfig) bool {
+	// 安全模式下整组交互式浏览器工具都不登记，见 AgentSafeModeRules。
+	if cfg.agentSafeMode() {
+		return true
+	}
 	if cdpURL := strings.TrimSpace(cfg.AgentBrowserCDPURL); cdpURL != "" && cdpURL != defaultAgentBrowserCDPURL {
 		return false
 	}
@@ -644,7 +648,9 @@ func (r *Runtime) browserToolsDisabledFor(cfg BotConfig) bool {
 // browser_* 不在非主人的工具白名单里，只有主人能驱动它。想让某台机器人彻底碰不到，
 // 把这一档显式关掉。
 func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
-	if cfg.AgentBrowserBoxDisabled || !r.browserSourceAllows(browsersource.Box) {
+	// 安全模式连这台机器人的内置浏览器都不去取：BrowserFor 可能当场拉起一个带主人
+	// 登录态的浏览器，工具摘不摘都不该让它存在。
+	if cfg.agentSafeMode() || cfg.AgentBrowserBoxDisabled || !r.browserSourceAllows(browsersource.Box) {
 		return nil
 	}
 	r.mu.RLock()
@@ -659,7 +665,7 @@ func (r *Runtime) browserBoxFor(cfg BotConfig) agent.BuiltinBrowserBridge {
 // browserControlFor 只在都点头时才把控制面交出去：全局注入了控制面、浏览器来源
 // 选的是扩展，并且这台机器人自己那档开关也开着。
 func (r *Runtime) browserControlFor(cfg BotConfig) agent.BrowserControlBridge {
-	if !cfg.AgentBrowserControlEnabled || !r.browserSourceAllows(browsersource.Extension) {
+	if cfg.agentSafeMode() || !cfg.AgentBrowserControlEnabled || !r.browserSourceAllows(browsersource.Extension) {
 		return nil
 	}
 	r.mu.RLock()
@@ -3791,6 +3797,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event = r.enrichSemanticReference(ctx, event, cleanText)
 		}
 		event = r.prepareIncomingVoice(ctx, event)
+		// 非 Agent 路径：加载配置时 AgentEnabled 已恒为 true（见 migrateAgentMode），界面
+		// 也不再提供关掉 Agent 的开关，这里只剩直接构造配置的测试会走到，待后续移除。
 		if !cfg.AgentEnabled {
 			event = r.prepareEventImages(ctx, event)
 			if event.imageLoadErr != nil && (hasImageSegment(event.Segments) || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments))) {
@@ -4020,7 +4028,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 编码代理只挂给主人：它能在白名单仓库里不受限地跑命令和改代码，
 			// 不走 Agent 的命令白名单沙盒。allowedAgentToolNames 不收录它，这里
 			// 再按身份筛一次，两道闸都在。
-			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(codingAgentPluginID, event); enabled && relationship.Owner {
+			// 安全模式下连主人也不构造：编码代理在安全模式要关掉的第一类里。
+			if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(codingAgentPluginID, event); enabled && relationship.Owner && !cfg.agentSafeMode() {
 				if _, ok := pluginValue.(*CodingAgentPlugin); ok {
 					extraTools = append(extraTools, newDianaCodingTool(r, event, settings))
 				}
@@ -4760,7 +4769,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			BrowserToolsDisabled:       r.browserToolsDisabledFor(cfg),
 			CoreTools:                  replyAgentCoreTools,
 		}
-		agentCfg = withOwnerAgentLimits(agentCfg, relationship.Owner)
+		agentCfg = restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agentCfg, relationship.Owner))
 		registry := preparedRegistry
 		ownsRegistry := false
 		if registry == nil {

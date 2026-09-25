@@ -527,6 +527,16 @@ func capabilityRegistryReferences(registry *agent.ToolRegistry) []*capabilityRef
 			Content: content,
 		})
 	}
+	// 被安全模式这类配置关掉的工具不在 Names 里，单独收一条：主人问「你能不能跑命令」
+	// 时检索得到它，答得出「安全模式关了」，而不是「没有这个能力」。
+	if disabled := registry.DisabledSummary(); disabled != "" {
+		documents = append(documents, &capabilityReferenceDocument{
+			ID:      "runtime:disabled-tools",
+			Title:   "本轮被关掉的工具（安全模式）运行命令 编码 浏览器 MCP 写文件 改配置",
+			Source:  capabilityReferenceSourceTool,
+			Content: disabled,
+		})
+	}
 	for _, skill := range registry.Skills() {
 		description := strings.TrimSpace(skill.Description)
 		if description == "" {

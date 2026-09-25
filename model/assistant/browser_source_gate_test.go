@@ -16,7 +16,7 @@ func TestBrowserSourceKeepsOnlyOneBrowser(t *testing.T) {
 	runtime.SetBrowserControl(stubBrowserControl{})
 	source := browsersource.Box
 	runtime.SetBrowserSource(func() string { return source })
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentBrowserControlEnabled = true
 
 	if runtime.browserBoxFor(cfg) == nil || runtime.browserToolsDisabledFor(cfg) {
@@ -44,7 +44,7 @@ func TestBrowserSourceKeepsOnlyOneBrowser(t *testing.T) {
 func TestBrowserSourceKeepsExplicitCDPURL(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.SetBrowserSource(func() string { return browsersource.Off })
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentBrowserCDPURL = "http://10.0.0.5:9222"
 	if runtime.browserToolsDisabledFor(cfg) {
 		t.Fatal("配了外部 CDP 地址时不该收走 CDP 工具")
@@ -56,7 +56,7 @@ func TestBrowserSourceUnsetKeepsLegacyBehavior(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.SetBrowserBox(stubBuiltinBrowser{url: "http://127.0.0.1:1234"})
 	runtime.SetBrowserControl(stubBrowserControl{})
-	cfg := DefaultBotConfig()
+	cfg := standardModeBotConfig()
 	cfg.AgentBrowserControlEnabled = true
 	if runtime.browserBoxFor(cfg) == nil || runtime.browserControlFor(cfg) == nil || runtime.browserToolsDisabledFor(cfg) {
 		t.Fatal("没注入来源时应保持旧行为")
