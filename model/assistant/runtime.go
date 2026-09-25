@@ -1829,8 +1829,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	}
 	statusCommand := r.statusCommandActive(event, text)
 	var history []MessageEvent
-	if statusCommand {
-		// 状态卡片用不到跨群上下文，别为它跑一次跨群语义检索。
+	if statusCommand || r.replyClosedForUndirectedEvent(event, text) {
+		// 状态卡片用不到跨群上下文，别为它跑一次跨群语义检索。两个接话开关都关、
+		// 又没在叫机器人的消息同理：它注定不回，跨群检索的结果没有人用。
 		history, _ = r.sessionContextHistory(event)
 	} else {
 		history = r.contextHistory(event)
@@ -2537,6 +2538,54 @@ func (r *Runtime) proactiveReplyConsideration(event MessageEvent, text string) (
 	return true, ""
 }
 
+// participationClosed 报告「回应提问」和「闲聊」两个开关是不是都关了。都关时
+// 主动回复路由一定判「不接话」，routeProactiveReplyBatch 开头就是按这个收住的。
+func participationClosed(cfg BotConfig) bool {
+	participation := cfg.chatInSettings().Participation
+	if participation == nil {
+		return false
+	}
+	relatedLevel, chatLevel := participation.ratingLevels()
+	return relatedLevel == "off" && chatLevel == "off"
+}
+
+// eventRoutingText 和 routeMessageEvent 里取回复判断文本的口径一致。
+func eventRoutingText(event MessageEvent) string {
+	if text := PlainText(event.Segments); text != "" {
+		return text
+	}
+	return event.RawMessage
+}
+
+// replyClosedForUndirectedEvent 报告这条群消息在当前配置下注定不会得到回复：两个
+// 接话开关都关了，而它又没有 @、引用、点名机器人，也不是插件指令或链接解析。
+//
+// 这种消息走完整条路最后也只落到「回应提问与闲聊均已关闭，不主动接话」，但在那之前
+// 会先跑一次相邻媒体指代判断（inbound_media_reference）和一次跨群上下文检索——两者的
+// 输出只给回复用，于是白花一次模型调用和一次检索。提前认出来，就只跳过这两步；识图、
+// 记忆、表达学习这些「关掉发言但还要记住」的环节不受影响。
+//
+// 「是不是冲着机器人」沿用 shouldHandle 的判据，不另起一套。被标记为机器人的账号
+// 要先经模型判一次才知道是不是在叫本机（见 requiresTelegramBotMentionJudgment），
+// 这时答案还不确定，按老路走。
+func (r *Runtime) replyClosedForUndirectedEvent(event MessageEvent, text string) bool {
+	if event.Kind != EventKindGroup {
+		return false
+	}
+	if !participationClosed(r.effectiveConfigForEvent(event)) {
+		return false
+	}
+	if r.requiresTelegramBotMentionJudgment(event) {
+		return false
+	}
+	// 带了引用、但被引的那条还没解析出来（入站队列那一步还没走 enrichReplyReference）：
+	// 不知道引的是不是机器人，按老路走。
+	if event.Quoted == nil && len(replyReferenceIDs(event.Segments)) > 0 {
+		return false
+	}
+	return !r.shouldHandle(event, text)
+}
+
 func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageEvent, text string) bool {
 	_, _, _, allowed := r.routeProactiveReplyBatch(ctx, []proactiveReplyCandidate{{Event: event, Text: text}})
 	return allowed
@@ -2605,16 +2654,13 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	chatIn := cfg.chatInSettings()
-	if chatIn.Participation != nil {
-		relatedLevel, chatLevel := chatIn.Participation.ratingLevels()
-		if relatedLevel == "off" && chatLevel == "off" {
-			event.routingReason = "回应提问与闲聊均已关闭，不主动接话"
-			return event, text, nil, false
-		}
+	if participationClosed(cfg) {
+		event.routingReason = "回应提问与闲聊均已关闭，不主动接话"
+		return event, text, nil, false
 	}
 	payload := r.proactiveReplyPayloadWithContext(ctx, event, readableEventText(event, text))
-	for _, candidate := range candidates {
-		payload.Candidates = append(payload.Candidates, proactiveReplyCandidatePayload{
+	for index, candidate := range candidates {
+		item := proactiveReplyCandidatePayload{
 			Addressing: addressingForEvent(candidate.Event, r.effectiveConfigForEvent(candidate.Event)),
 			MessageID:  strings.TrimSpace(candidate.Event.MessageID),
 			UserID:     strings.TrimSpace(candidate.Event.UserID),
@@ -2622,7 +2668,15 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 			Text:       truncateRunesFromStart(strings.TrimSpace(readableEventText(candidate.Event, candidate.Text)), 180),
 			Images:     imageSegmentCount(candidate.Event.Segments),
 			AgeSeconds: proactiveReplyMessageAge(latest.Event.Time, candidate.Event.Time),
-		})
+		}
+		// 最后一条候选就是当前消息，评分契约里它的正文和图数已经在 current_text、
+		// current_images 里了，候选里再抄一遍，同一句话就进了两次提示词。这里只留
+		// message_id 等标识并标上 is_current。旧契约只认 candidates、不看 current_text，
+		// 那一路照旧带全。
+		if chatIn.Participation != nil && index == len(candidates)-1 {
+			item.Text, item.Images, item.IsCurrent = "", 0, true
+		}
+		payload.Candidates = append(payload.Candidates, item)
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -2641,7 +2695,9 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		routeInstruction = cfg.prompt(promptParticipationRouteInstructionSpec)
 		decisionSpec = participationDecisionSpec(cfg.PromptOverrides)
 	}
-	routeUserMessage := llmMessageFromEventWithImagesForContext(routeCtx, event, routeInstruction+string(payloadJSON), nil)
+	// 原图照带：只给文字描述，判断「这张图在不在问机器人」时信息不够。但这里只是一道
+	// 是非题，用 low 档，正式回复那一路仍是 high。
+	routeUserMessage, _ := llmMessageFromEventWithImageDetail(routeCtx, event, routeInstruction+string(payloadJSON), nil, "low")
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
@@ -2956,6 +3012,8 @@ type proactiveReplyCandidatePayload struct {
 	Text       string            `json:"text,omitempty"`
 	Images     int               `json:"images,omitempty"`
 	AgeSeconds *int64            `json:"age_seconds,omitempty"`
+	// IsCurrent 表示这条就是 current_text 那条当前消息，正文不再重复一遍。
+	IsCurrent bool `json:"is_current,omitempty"`
 }
 
 type proactiveReplyHistoryItem struct {
@@ -6413,6 +6471,9 @@ func compactContextEvent(event MessageEvent) string {
 		return formatPromptIdentity(event.SenderName, "") + "（机器人自己）: " + strings.Join(strings.Fields(text), " ")
 	}
 	sender := promptSenderIdentity(event)
+	if label := subscriptionPushLabel(event); label != "" {
+		sender += "（" + label + "）"
+	}
 	return sender + ": " + strings.Join(strings.Fields(text), " ") + summaryIdentityPrompt(event)
 }
 
@@ -7041,6 +7102,7 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 	if messageID = strings.TrimSpace(messageID); messageID != "" {
 		event.MessageID = messageID
 	}
+	event.PushKind = subscriptionPushKindFromContext(ctx)
 	r.mu.RLock()
 	resolver, _ := r.localMedia.(LocalMediaPathResolver)
 	r.mu.RUnlock()
@@ -7548,6 +7610,11 @@ func (r *Runtime) remember(event MessageEvent) {
 	if event.MessageID != "" {
 		for i := range history {
 			if history[i].MessageID == event.MessageID {
+				// 平台回显自己发出的消息时不知道它是订阅推送，别让回显把标记冲掉。
+				// 只认回显（本地记的出站都带 Outbound）：本地重记的一条自己说了算。
+				if event.PushKind == "" && !event.Outbound {
+					event.PushKind = history[i].PushKind
+				}
 				history = append(history[:i], history[i+1:]...)
 				break
 			}
@@ -8077,7 +8144,9 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 	}
 	taskCtx = withLLMUsagePurpose(withLLMUsageContext(taskCtx, source), PurposeRSSWatchJudge)
 	return r.reuseRSSJudgment(taskCtx, source, messages, func(judgeCtx context.Context) (rssJudgeDecision, error) {
-		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupChat, func(client LLMProvider) (string, error) {
+		// 按对话分组取的话，对话那一档一定有绑定，会盖过用途归属，后台生成指的
+		// 模型就用不上。
+		raw, err := r.runLLMProviderForGroup(judgeCtx, llm.GroupBackground, func(client LLMProvider) (string, error) {
 			resp, err := client.Generate(judgeCtx, llm.GenerateRequest{Messages: messages})
 			if err != nil {
 				return "", err

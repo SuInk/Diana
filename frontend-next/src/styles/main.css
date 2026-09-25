@@ -437,6 +437,10 @@ code {
   font: inherit;
   text-align: left;
   cursor: grab;
+  /* 手机上按住手柄滑动是拖动排序，不是滚动页面；也别弹出长按菜单或选中文字。 */
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 
 .model-route-handle:hover,

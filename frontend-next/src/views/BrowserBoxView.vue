@@ -56,14 +56,15 @@
                 </a>
               </div>
               <!-- 勾上就是开着，没有启动、停止、「我来操作」这些按钮：进程在机器人要用或你打开这一页时
-                   自动拉起，取消勾选才停；在画面上动手就自动转为你接管，这时才出现「交还给机器人」。 -->
+                   自动拉起，取消勾选才停；在画面上点击或打字就自动转为你接管，这时才出现「交还给机器人」，
+                   闲置一段时间也会自动交还。 -->
               <div
                 v-if="key === 'box' && sourceState?.box.enabled && botID && ((status.running && status.takeover) || status.last_error)"
                 class="browser-toggle-actions"
               >
                 <template v-if="status.running && status.takeover">
                   <button class="btn small warn" type="button" :disabled="busy" @click="handBack">交还给机器人</button>
-                  <span class="browser-toggle-note">你在画面上动过手，机器人暂时用不了这个浏览器</span>
+                  <span class="browser-toggle-note">你在画面上动过手，机器人暂时用不了这个浏览器；{{ takeoverIdleMinutes }} 分钟不操作会自动交还</span>
                 </template>
                 <span v-if="status.last_error" class="browser-toggle-error">最近一次错误：{{ status.last_error }}</span>
               </div>
@@ -117,7 +118,7 @@
           <p v-else class="muted" style="margin: 0; font-size: 13px">正在连接画面……</p>
         </div>
         <p class="muted" style="margin: 0; font-size: 12.5px">
-          点一下画面再打字，键盘事件才会送到页面。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
+          点一下画面就转为你接管，之后才能打字、滚动；鼠标只是划过不算。{{ takeoverIdleMinutes }} 分钟不操作会自动交还给机器人。密码这类东西你自己输，机器人看不到你敲了什么——它只能看到页面最终长什么样。
         </p>
       </div>
     </div>
@@ -347,6 +348,8 @@ const addressInput = ref("");
 const currentTitle = ref("");
 const saving = ref(false);
 const busy = ref(false);
+// 和后端 browserbox.TakeoverIdleTimeout 一致，只用来在页面上说清楚。
+const takeoverIdleMinutes = 5;
 
 let socket: WebSocket | null = null;
 let statusTimer: number | undefined;
@@ -558,11 +561,15 @@ function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): voi
       modifiers: modifiers(event)
     }
   });
-  status.takeover = true;
+  // 只有按下才算动手；松开要跟着按下走，单独一下（从画面外拖进来松手）后端会丢掉。
+  if (type === "mousePressed") status.takeover = true;
 }
 
 let lastMove = 0;
 function onMouseMove(event: MouseEvent): void {
+  // 没接管时鼠标只是路过：以前每次移动都发，WebUI 开着、鼠标划过画面就把浏览器从
+  // 机器人手里抢走了。后端同样会丢掉，这里不发是为了省掉一路的消息。
+  if (!status.takeover) return;
   // 移动事件按 20ms 节流：不节流的话一次拖动能发出几百条，画面反而更卡。
   const now = Date.now();
   if (now - lastMove < 20) return;
@@ -572,13 +579,14 @@ function onMouseMove(event: MouseEvent): void {
   send({ type: "mouse", mouse: { type: "mouseMoved", x: point.x, y: point.y, buttons: event.buttons, modifiers: modifiers(event) } });
 }
 
+// 滚轮不算接管：滚页面时顺手蹭到画面很常见，不该因此把浏览器抢过来。先点一下画面接管，才能滚动。
 function onWheel(event: WheelEvent): void {
+  if (!status.takeover) return;
   const point = pagePoint(event);
   send({
     type: "mouse",
     mouse: { type: "mouseWheel", x: point.x, y: point.y, delta_x: -event.deltaX, delta_y: -event.deltaY, modifiers: modifiers(event) }
   });
-  status.takeover = true;
 }
 
 function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
@@ -598,7 +606,7 @@ function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
       modifiers: modifiers(event)
     }
   });
-  status.takeover = true;
+  if (type === "keyDown") status.takeover = true;
 }
 
 function navigate(): void {

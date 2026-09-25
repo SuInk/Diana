@@ -950,8 +950,8 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 //   - head 只依赖机器人配置、本群配置和本轮注册的工具：同一个群里不管谁说话、
 //     说什么，它逐字节相同。它作为第一条 system 消息发出，供应商的前缀缓存
 //     （tools → system → messages）从它开始命中，后面的历史才有机会一起命中。
-//   - tail 随「谁在说话、这条说了什么」变化：权限档位、主人专属工具规则、发言者
-//     昵称、命中的别名、时段与心情语气、语气锚点。它由调用方作为独立 system
+//   - tail 随「谁在说话、这条说了什么」变化：权限档位、主人专属工具规则、主动接话
+//     与闲聊插话说明、发言者昵称、命中的别名、时段与心情语气、语气锚点。它由调用方作为独立 system
 //     消息放在历史之后、当前消息之前。以前这段直接拼在同一条 system 里，换一个
 //     人说话整条 system 就变，Anthropic / Gemini / Responses 把 system 放在所有
 //     消息之前，system 一变，几千 token 的历史缓存也跟着全部作废。
@@ -1164,17 +1164,20 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if boolValue(cfg.PromptInjectPlaintextRules, true) {
 		appendPromptSection(&builder, platformOutputRulesForConfig(cfg))
 	}
+	// 主动接话和闲聊插话的说明逐条消息变化：同一个群里这条是被点名、下一条是主动
+	// 接话，以前写在 head 里，head 一变，后面整段历史的前缀缓存就跟着作废。放进
+	// tail，和下面的识图说明一样按「这一轮是什么情况」注入。
 	if proactiveTriggered {
-		builder.WriteString("\n")
-		builder.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
-		builder.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
+		tail.WriteString("\n")
+		tail.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
+		tail.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
 	}
 	if event.chatInReply {
-		builder.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
-		builder.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
+		tail.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
+		tail.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
 		// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
 		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
-		builder.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
+		tail.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
 	}
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
@@ -1740,6 +1743,13 @@ func llmMessageFromEventWithImagesForContextDetailed(ctx context.Context, event 
 }
 
 func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) (llm.Message, []error) {
+	return llmMessageFromEventWithImageDetail(ctx, event, text, extraImageURLs, "high")
+}
+
+// llmMessageFromEventWithImageDetail 和上面一样拼图文消息，只是图片清晰度由调用方定。
+// 正式回复要看清图里的字和细节，一直用 high；只做是非判断的路由用 low 就够——
+// 它要知道「这是张什么图」，不用逐字读，high 档一张图的 token 往往比整段上下文还多。
+func llmMessageFromEventWithImageDetail(ctx context.Context, event MessageEvent, text string, extraImageURLs []string, detail string) (llm.Message, []error) {
 	text = strings.TrimSpace(text)
 	imageURLs := availableImageURLs(event.Segments)
 	if event.Quoted != nil {
@@ -1772,7 +1782,7 @@ func llmMessageFromEventWithImagesForContextDiagnostics(ctx context.Context, eve
 		parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: text})
 	}
 	for _, imageURL := range imageURLs {
-		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
+		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: detail})
 	}
 	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}, failures
 }

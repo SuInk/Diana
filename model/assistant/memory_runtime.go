@@ -23,8 +23,16 @@ const (
 	memoryPollInterval      = 750 * time.Millisecond
 	memoryLeaseDuration     = 3 * time.Minute
 	memoryExtractionTimeout = 60 * time.Second
-	memoryMaxAttempts       = 8
-	memorySummaryMaxEvents  = 100
+	// memorySummaryTimeout 单独给摘要任务：门控一次只带几条消息，几秒就回；摘要
+	// 要吃下最多 100 条事件加已有摘要、卷叠源和线程便签（约 15–18k token），再
+	// 写出 800–1300 token，慢模型（~20 tok/s）光生成就要 40–65 秒，跟门控共用
+	// 60 秒几乎必然超时。它必须小于租约时长，否则任务还在跑就被别的 worker 领走。
+	memorySummaryTimeout   = 150 * time.Second
+	memoryMaxAttempts      = 8
+	memorySummaryMaxEvents = 100
+	// memorySummaryMinEvents 是重试缩窗的下限：再往下砍，摘要就只剩零星几句，
+	// 不如保留一段能读出来龙去脉的尾巴。
+	memorySummaryMinEvents = 20
 	// memoryThreadRetentionDays 让冷会话的线程便签自然过期：一周没人说话，
 	// 「当前进行到哪」这件事本身就不成立了，不该继续常驻注入。
 	memoryThreadRetentionDays = 7
@@ -222,7 +230,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			if len(live) == 0 {
 				continue
 			}
-			jobCtx, jobCancel := context.WithTimeout(ctx, memoryExtractionTimeout)
+			jobCtx, jobCancel := context.WithTimeout(ctx, memoryJobTimeout(live))
 			err = r.processMemoryJobs(jobCtx, store, live)
 			jobCancel()
 			if err != nil && ctx.Err() == nil {
@@ -258,6 +266,31 @@ func memoryJobKindLabel(kind MemoryJobKind) string {
 	default:
 		return "记忆任务"
 	}
+}
+
+// memoryJobTimeout 按任务种类给超时。一批里只要有摘要任务就按摘要算——目前
+// 摘要总是单独领取，这里取最宽的那个只是不让批量规则的变动悄悄把摘要卡回 60 秒。
+func memoryJobTimeout(jobs []MemoryJob) time.Duration {
+	for _, job := range jobs {
+		if job.Payload.Kind == MemoryJobSummary {
+			return memorySummaryTimeout
+		}
+	}
+	return memoryExtractionTimeout
+}
+
+// memorySummaryEventWindow 决定这一次摘要带多少条事件：首次最多 100 条，之后每
+// 重试一次砍半，最少 20 条，只保留最新的一段。
+//
+// 重试原样重发同一份输入，超时就是确定性的，8 次全部失败后整段对话一条摘要都
+// 留不下；丢掉较早的一部分换一次能跑完的调用，损失远小于整批放弃。
+func memorySummaryEventWindow(events []MessageEvent, attempts int) []MessageEvent {
+	limit := min(len(events), memorySummaryMaxEvents)
+	for attempt := 1; attempt < attempts && limit > memorySummaryMinEvents; attempt++ {
+		limit /= 2
+	}
+	limit = min(len(events), max(limit, memorySummaryMinEvents))
+	return events[len(events)-limit:]
 }
 
 func memoryJobAttemptsExhausted(attempts int) bool {
@@ -481,9 +514,7 @@ func (r *Runtime) processSummaryMemoryJob(ctx context.Context, store StructuredM
 		return nil
 	}
 	summaryCfg := r.effectiveConfigForEvent(events[len(events)-1])
-	if len(events) > memorySummaryMaxEvents {
-		events = events[len(events)-memorySummaryMaxEvents:]
-	}
+	events = memorySummaryEventWindow(events, job.Attempts)
 	existing, err := store.ListStructuredMemories(ctx, StructuredMemoryQuery{
 		Session:       job.Payload.Session,
 		Now:           time.Now(),
@@ -786,9 +817,9 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 	r.mu.RUnlock()
 	if cfgFactory != nil && store != nil {
 		set := store.Profiles().WithDefaults()
-		// 记忆是自动文本任务：专用 memory 分组优先，其次使用机器人已经绑定的
-		// intent（未绑定 intent 时 roleBoundProfiles 会回退 chat）。不能直接取
-		// Current，否则激活生图配置时会拿图片模型发送文本 Responses 请求。
+		// 记忆是自动文本任务：专用 memory 分组优先，其次使用机器人给「后台生成」
+		// 绑的模型（没绑时 roleBoundProfiles 会回退 chat）。不能直接取 Current，
+		// 否则激活生图配置时会拿图片模型发送文本 Responses 请求。
 		groups := append([]string(nil), memoryProfileGroups...)
 		seen := map[string]bool{}
 		for _, group := range groups {
@@ -802,7 +833,10 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 				return r.runLLMProviderProfileAttempts(ctx, profiles, cfgFactory, true, run)
 			}
 		}
-		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupIntent)
+		// 这里以前按 intent 取。本次调用的分组排在用途归属前面，于是只要 intent
+		// 绑了模型，后台生成那一档对记忆就从来不起作用——落到的还多半是只做判断、
+		// 写不出记忆的模型。
+		profiles, roleErr := r.roleBoundProfiles(llmUsagePurposeFromContext(ctx), set, llm.GroupBackground)
 		if roleErr != nil {
 			return "", roleErr
 		}
@@ -836,14 +870,17 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 
 func parseMemoryCandidates(raw string) ([]MemoryCandidate, error) {
 	raw = strings.TrimSpace(stripJSONCodeFence(raw))
-	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
-	if start < 0 || end < start {
+	start := strings.Index(raw, "{")
+	if start < 0 {
 		return nil, fmt.Errorf("invalid memory gate response")
 	}
 	var envelope struct {
 		Memories []MemoryCandidate `json:"memories"`
 	}
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &envelope); err != nil {
+	// 只解第一个完整的 JSON 对象，后面的内容一概不看。模型偶尔会把两个对象首尾
+	// 相连地吐出来，按「首个 { 到末个 }」整段 Unmarshal 会整批报错；也不去合并
+	// 第二个——它多半是改口重写的同一批候选，合进来就是重复写入。
+	if err := json.NewDecoder(strings.NewReader(raw[start:])).Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("decode memory gate response: %w", err)
 	}
 	if len(envelope.Memories) > 8 {

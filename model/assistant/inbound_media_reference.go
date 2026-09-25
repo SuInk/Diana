@@ -75,6 +75,12 @@ func (r *Runtime) shouldMergeAdjacentMedia(ctx context.Context, event MessageEve
 	if explicitMediaReferencePattern.MatchString(strings.TrimSpace(text)) {
 		return mediaReferenceOutcome{Merge: true, Method: "explicit_media_reference", Confidence: 1}
 	}
+	// 两个接话开关都关、这句话又没在叫机器人：它注定不回，判「指的是谁」只是为了
+	// 回复时带对图，这里没有回复可带。不并——媒体留在自己的任务里照常识图、进历史，
+	// 检索时一样查得到；下面那次找竞争对象的跨群检索和那次模型判断也一并省掉。
+	if r.replyClosedForUndirectedEvent(event, eventRoutingText(event)) {
+		return mediaReferenceOutcome{Merge: false, Method: "reply_closed"}
+	}
 	competing := r.competingReferents(event, media)
 	if len(competing) == 0 {
 		return mediaReferenceOutcome{Merge: true, Method: "no_competing_referent", Confidence: 1}

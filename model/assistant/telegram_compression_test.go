@@ -72,10 +72,57 @@ func TestTelegramCompressionCanRegroupWholeCodeBlocks(t *testing.T) {
 	if err != nil || len(splitChatReply(got, chatSplitLimits{})) != 2 || len(p.requests) != 0 {
 		t.Fatalf("code blocks could not be regrouped safely: %v", err)
 	}
+	// 一行就超出 Telegram 容量的代码不交给模型改写，而是在行内按 UTF-16 容量拆开发。
 	p = &compressionTestProvider{}
-	_, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), cfg, "```text"+notificationLineMarker+strings.Repeat("\U0001f600", 2100)+notificationLineMarker+"```")
-	if !errors.Is(err, errReplyCompression) || len(p.requests) != 0 {
-		t.Fatal("indivisible oversized code should not be rewritten")
+	rt := compressionTestRuntime(p)
+	got, err = rt.prepareGeneratedReply(context.Background(), cfg, "```text"+notificationLineMarker+strings.Repeat("\U0001f600", 2100)+notificationLineMarker+"```")
+	if err != nil || len(p.requests) != 0 {
+		t.Fatalf("oversized code should be split, not rewritten: %v calls=%d", err, len(p.requests))
+	}
+	parts := splitChatReply(got, chatSplitLimits{})
+	if len(parts) != 2 {
+		t.Fatalf("parts=%d", len(parts))
+	}
+	for index, part := range parts {
+		if issue := rt.replyPartLimitIssue(cfg, MessageEvent{Platform: PlatformTelegram}, part); issue != "" || strings.Count(part, "```") != 2 {
+			t.Fatalf("part %d invalid: %s", index, issue)
+		}
+	}
+}
+
+// 发送层端到端：拆好的代码在 Telegram 上逐条发出，每条都是一整个 pre 代码块且不超容量。
+func TestTelegramOversizedCodeDeliveredAsSeveralCodeMessages(t *testing.T) {
+	p := &compressionTestProvider{err: errors.New("must not call")}
+	api := newFakeTelegramAPI(t, nil)
+	cfg := BotConfig{Platform: PlatformTelegram, MaxReplyChars: 3500}.WithDefaults()
+	rt := NewRuntime(cfg, api.channel(), NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
+	code := "```python" + notificationLineMarker + strings.Repeat("print('hello world')"+notificationLineMarker, 250) + "```"
+	prepared, err := rt.prepareGeneratedReply(context.Background(), cfg, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.sendDecorated(context.Background(), MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10001"}, prepared, outboundDecoration{}); err != nil {
+		t.Fatal(err)
+	}
+	calls := api.callsOf("sendMessage")
+	if len(calls) < 2 {
+		t.Fatalf("sendMessage calls=%d", len(calls))
+	}
+	total := 0
+	for index, call := range calls {
+		text, _ := call.Params["text"].(string)
+		entities, _ := call.Params["entities"].([]any)
+		if utf16Length(text) > telegramTextLimit || len(entities) != 1 {
+			t.Fatalf("message %d is not a single code block within capacity: %d units, entities=%v", index, utf16Length(text), entities)
+		}
+		entity, _ := entities[0].(map[string]any)
+		if entity["type"] != "pre" || entity["offset"] != float64(0) || entity["length"] != float64(utf16Length(text)) {
+			t.Fatalf("message %d code entity = %#v", index, entity)
+		}
+		total += strings.Count(text, "print(")
+	}
+	if total != 250 {
+		t.Fatalf("delivered %d code lines, want 250", total)
 	}
 }
 

@@ -19,12 +19,17 @@ const (
 const (
 	GroupChat   = DefaultProfileGroup
 	GroupIntent = "intent"
-	// GroupBackground 是后台生成：好感度评估、长期记忆抽取与归纳、上下文摘要、
-	// 语义指代这些。它们和意图识别的差别不在频次，而在输出形状——这一组要写出
-	// 成段文字，只做判断的模型答不了。没单独配时跟着 intent，升级不改变行为。
+	// GroupBackground 是后台生成：好感度评估、长期记忆抽取与归纳、RSS 判定、主动问候。它们
+	// 要写出成段文字，只做判断的模型答不了；而且都在回复之外异步跑，慢一点没关系。
+	// 没单独配时跟随对话。
 	GroupBackground = "background"
-	GroupImage      = "image"
-	GroupVision     = "vision"
+	// GroupReplyAssist 是回复辅助：语义指代、话题合并、语义去重、上下文摘要、转发
+	// 安全、戳一戳回应和各种提示改写。输出形状和后台生成一样是文字，差别在时机——它们都在这
+	// 一轮回复发出之前同步跑，模型慢，回复就跟着慢。没单独配时跟着后台生成，拆分
+	// 之前它们就在那一档，升级不改变行为。
+	GroupReplyAssist = "reply_assist"
+	GroupImage       = "image"
+	GroupVision      = "vision"
 	// GroupEmbedding 分组的配置档用于语义检索的向量化(/embeddings 接口)。
 	GroupEmbedding = "embedding"
 )

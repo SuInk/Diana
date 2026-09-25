@@ -876,7 +876,9 @@ func (r *Runtime) generateReplyPauseHint(ctx context.Context, event MessageEvent
 	})
 	callCtx, cancel := context.WithTimeout(ctx, replySuppressionNoticeTimeout)
 	defer cancel()
-	raw, err := r.runLLMProvider(callCtx, func(client LLMProvider) (string, error) {
+	// 和其他提示改写一样走回复辅助。runLLMProvider 按对话分组取，对话那一档总有
+	// 绑定，会盖过用途归属。
+	raw, err := r.runLLMProviderForGroup(callCtx, llm.GroupReplyAssist, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
 			return "", err

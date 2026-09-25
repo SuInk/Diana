@@ -15,7 +15,7 @@ function loadFunction(name, context) {
   return context[name];
 }
 
-const ROLE_ROWS = ["chat", "vision", "media_parse", "intent", "image"];
+const ROLE_ROWS = ["chat", "vision", "media_parse", "intent", "reply_assist", "background", "image"];
 
 function editorContext() {
   const context = vm.createContext({
@@ -24,7 +24,7 @@ function editorContext() {
     savedRoleSnapshot: { value: "" },
     modelRolesChangedElsewhere: { value: false },
     incomingModelRoles: { value: undefined },
-    modelRoleRows: ROLE_ROWS.map(key => ({ key }))
+    visibleModelRoleRows: ROLE_ROWS.map(key => ({ key }))
   });
   for (const name of ["orderedRoleKeys", "roleSnapshot", "setRoleForm", "syncModelRolesWhileEditing", "adoptIncomingModelRoles"]) {
     loadFunction(name, context);
@@ -74,6 +74,9 @@ test("model assignments keep the page's own order whatever order they arrive in"
   // 编辑途中被别处的改动整份换掉，键序同样不变。
   context.syncModelRolesWhileEditing({ id: "bot", model_roles: { vision: { profile_id: "p", model: "v2" }, chat: { profile_id: "p", model: "c" }, intent: { profile_id: "p", model: "i" } } });
   assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "vision", "intent"]);
+  // 细分用途也按页面排：字母序里 background 在前，页面上回复辅助在前。
+  context.setRoleForm({ background: { profile_id: "p", model: "b" }, chat: { profile_id: "p", model: "c" }, reply_assist: { profile_id: "p", model: "r" } });
+  assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "reply_assist", "background"]);
   // 认不出的用途排在后面，不会被丢掉。
   context.setRoleForm({ future: { profile_id: "p", model: "f" }, chat: { profile_id: "p", model: "c" } });
   assert.deepEqual(Object.keys(context.roleForm.value), ["chat", "future"]);

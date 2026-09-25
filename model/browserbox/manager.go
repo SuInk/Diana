@@ -56,6 +56,12 @@ const (
 	launchTimeout = 30 * time.Second
 	// restartBackoff 是进程意外退出后的重启间隔。
 	restartBackoff = 3 * time.Second
+	// TakeoverIdleTimeout 是人工接管闲置多久后自动交还给机器人。
+	//
+	// 接管期间模型的每一次浏览器调用都会被拒，而用户很容易点完就走开、忘了交还——
+	// 以前接管没有期限，机器人就一直用不了浏览器，直到有人回来点「交还」。五分钟
+	// 足够填完一张表、等一条短信验证码；真要更久，再点一下画面就重新接管了。
+	TakeoverIdleTimeout = 5 * time.Minute
 )
 
 var devToolsLine = regexp.MustCompile(`DevTools listening on (ws://[^\s]+)`)
@@ -78,6 +84,12 @@ type Manager struct {
 	watchers map[chan struct{}]struct{}
 	// saved 表示配置落过盘。没落过盘的才轮得到 EnableByDefault 按本机条件自动打开。
 	saved bool
+
+	// now 和 takeoverIdle 是闲置交还用的时钟和期限，测试里替换掉。
+	now          func() time.Time
+	takeoverIdle time.Duration
+	// onIdleRelease 在闲置交还后调用，WebUI 用它记一条操作记录。
+	onIdleRelease func(botID string, idle time.Duration)
 }
 
 // instance 是一台机器人的浏览器进程。字段都由 Manager.mu 保护。
@@ -90,7 +102,10 @@ type instance struct {
 	startedAt  time.Time
 	lastError  string
 	takeover   bool
-	stopping   bool
+	// takeoverTouched 是接管期间人最后一次有意操作的时间，idleTimer 按它判断闲置。
+	takeoverTouched time.Time
+	idleTimer       *time.Timer
+	stopping        bool
 	// generation 用来分辨「这次退出属于哪一次启动」，避免旧进程的退出把新进程的
 	// 状态清掉——和扩展那边旧 socket 的 close 是同一类坑。
 	generation uint64
@@ -107,6 +122,9 @@ func New(ctx context.Context, store Store, dataDir string) *Manager {
 		settings: Settings{}.WithDefaults(),
 		bots:     map[string]*instance{},
 		watchers: map[chan struct{}]struct{}{},
+
+		now:          time.Now,
+		takeoverIdle: TakeoverIdleTimeout,
 	}
 	if store != nil {
 		if doc, ok, err := store.LoadBrowserBox(ctx); err == nil && ok {
@@ -383,12 +401,82 @@ func (b *Bot) Start(ctx context.Context) error {
 func (b *Bot) Stop() { b.m.stop(b.id) }
 
 // SetTakeover 切换人工接管。接管打开时模型拿不到这台机器人的浏览器，一条指令都
-// 下不去，用户自己在实时画面里点。
+// 下不去，用户自己在实时画面里点。接管闲置 TakeoverIdleTimeout 后自动交还。
 func (b *Bot) SetTakeover(active bool) {
 	b.m.mu.Lock()
-	b.m.instanceLocked(b.id).takeover = active
+	inst := b.m.instanceLocked(b.id)
+	inst.takeover = active
+	if active {
+		inst.takeoverTouched = b.m.now()
+		b.m.armIdleTimerLocked(inst, b.m.takeoverIdle)
+	} else if inst.idleTimer != nil {
+		inst.idleTimer.Stop()
+		inst.idleTimer = nil
+	}
 	b.m.mu.Unlock()
 	b.m.notify()
+}
+
+// TouchTakeover 记下接管期间的一次有意操作，把闲置交还往后推。没在接管时什么都
+// 不做：碰一下不该顺手把接管打开，那是调用方按输入种类决定的事。
+func (b *Bot) TouchTakeover() {
+	b.m.mu.Lock()
+	defer b.m.mu.Unlock()
+	if inst := b.m.bots[b.id]; inst != nil && inst.takeover {
+		inst.takeoverTouched = b.m.now()
+	}
+}
+
+// OnIdleRelease 注册闲置交还的回调。回调在锁外、在定时器的 goroutine 里调用。
+func (m *Manager) OnIdleRelease(fn func(botID string, idle time.Duration)) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.onIdleRelease = fn
+	m.mu.Unlock()
+}
+
+// armIdleTimerLocked 在 after 之后检查一次闲置。每次有意操作只改时间戳、不重设
+// 定时器：键盘一秒能打出十几条，逐条 Reset 没有必要；到点时没闲够就按剩下的再等。
+func (m *Manager) armIdleTimerLocked(inst *instance, after time.Duration) {
+	if inst.idleTimer != nil {
+		inst.idleTimer.Stop()
+	}
+	id := inst.id
+	inst.idleTimer = time.AfterFunc(after, func() {
+		defer recoverGoroutinePanic("takeoverIdle")
+		m.releaseIdleTakeover(id)
+	})
+}
+
+// releaseIdleTakeover 在接管闲置满期限时交还给机器人，返回这次有没有交还。
+func (m *Manager) releaseIdleTakeover(id string) bool {
+	m.mu.Lock()
+	inst := m.bots[id]
+	if inst == nil || !inst.takeover {
+		m.mu.Unlock()
+		return false
+	}
+	idle := m.now().Sub(inst.takeoverTouched)
+	if remaining := m.takeoverIdle - idle; remaining > 0 {
+		m.armIdleTimerLocked(inst, remaining)
+		m.mu.Unlock()
+		return false
+	}
+	inst.takeover = false
+	if inst.idleTimer != nil {
+		inst.idleTimer.Stop()
+		inst.idleTimer = nil
+	}
+	hook := m.onIdleRelease
+	limit := m.takeoverIdle
+	m.mu.Unlock()
+	m.notify()
+	if hook != nil {
+		hook(id, limit)
+	}
+	return true
 }
 
 // Takeover 返回这台机器人当前是否由人接管。

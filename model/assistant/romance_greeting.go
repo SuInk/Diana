@@ -198,7 +198,7 @@ var promptRomanceGreetingSpec = registerPrompt(PromptSpec{
 // generateRomanceGreeting 用人设语气生成祝福；模型不可用时退回朴素模板——
 // 纪念日漏掉比措辞平淡严重得多。
 func (r *Runtime) generateRomanceGreeting(ctx context.Context, event MessageEvent, profile UserMemoryProfile, note string) string {
-	ctx = withLLMUsagePurpose(ctx, "romance_greeting")
+	ctx = withLLMUsagePurpose(ctx, PurposeRomanceGreeting)
 	who := firstNonEmpty(strings.TrimSpace(profile.DisplayName), profile.UserID)
 	instruction := r.effectiveConfigForEvent(event).promptf(promptRomanceGreetingSpec, map[string]string{"note": note, "who": who})
 	messages := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})

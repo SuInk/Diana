@@ -4,7 +4,9 @@
 package webui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -29,7 +31,7 @@ type BrowserBoxHandler struct {
 
 // NewBrowserBoxHandler 创建内置浏览器接口处理器。
 func NewBrowserBoxHandler(manager *browserbox.Manager) *BrowserBoxHandler {
-	return &BrowserBoxHandler{
+	h := &BrowserBoxHandler{
 		manager: manager,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
@@ -39,6 +41,14 @@ func NewBrowserBoxHandler(manager *browserbox.Manager) *BrowserBoxHandler {
 			CheckOrigin: sameOriginWebSocket,
 		},
 	}
+	// 闲置交还和手动交还记成同一种操作，浏览器页的操作记录里能看出是自动交还的。
+	manager.OnIdleRelease(func(botID string, idle time.Duration) {
+		bot := manager.Bot(botID)
+		message := fmt.Sprintf("你接管后 %d 分钟没有操作，内置浏览器已自动交还给机器人", int(idle/time.Minute))
+		recordOperation(context.Background(), h.logs, "browser_box_takeover", message, bot.ID(),
+			browserBoxLogMetadata(bot, map[string]any{"active": false, "auto": true, "idle_seconds": int(idle / time.Second)}))
+	})
+	return h
 }
 
 // SetLogStore 注入操作日志写入器。
@@ -311,32 +321,23 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 
 // handleLiveMessage 把前端的一条指令翻成 CDP 调用。
 //
-// 用户在这块画面上的操作等于人工接管，所以第一次输入就把接管打开：不这样的话
-// 用户正在填表，模型同时在点别的地方，两边抢同一个页面。
+// 用户在这块画面上有意动手等于人工接管，所以第一次有意输入就把接管打开：不这样的话
+// 用户正在填表，模型同时在点别的地方，两边抢同一个页面。只是鼠标路过、滚轮蹭到不算，
+// 见 claimLiveInput。
 func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bot, live *browserbox.Live, message liveMessage) {
+	if !h.claimLiveInput(c, bot, message) {
+		return
+	}
 	ctx := c.Request.Context()
 	switch message.Type {
 	case "mouse":
-		if message.Mouse == nil {
-			return
-		}
-		h.takeOverFromLive(c, bot)
 		_ = live.Mouse(ctx, *message.Mouse)
 	case "key":
-		if message.Key == nil {
-			return
-		}
-		h.takeOverFromLive(c, bot)
 		_ = live.Key(ctx, *message.Key)
 	case "text":
-		h.takeOverFromLive(c, bot)
 		_ = live.Text(ctx, message.Text)
 	case "navigate":
 		target := strings.TrimSpace(message.URL)
-		if target == "" || !h.manager.Settings().HostAllowed(target) {
-			return
-		}
-		h.takeOverFromLive(c, bot)
 		recordRequestOperation(c, h.logs, "browser_box_navigate", "你在内置浏览器里打开了网页", target, browserBoxLogMetadata(bot, map[string]any{"url": target}))
 		_ = live.Navigate(ctx, target)
 	case "reload":
@@ -346,10 +347,66 @@ func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bo
 	}
 }
 
-// takeOverFromLive 在用户第一次在画面上动手时打开接管，并只在这一下记一条：鼠标移动
-// 每秒几十次，逐条记会把操作记录淹掉。
+// claimLiveInput 按输入种类决定要不要接管、这条输入还送不送给页面。
+//
+// 以前任何鼠标消息都算动手，WebUI 开着、鼠标从画面上划过去就把浏览器抢了，而接管
+// 又没有期限，模型之后的每次调用都被拒。现在只有按下鼠标、敲键盘、输入文字、在
+// 地址栏打开网页这几种有意操作才接管；移动、滚轮、松开鼠标、松开按键只在已经接管
+// 时才送给页面，否则直接丢掉——机器人正在用这个页面时，悬停和滚动同样会搅乱它。
+// 判断放在后端，不指望每个前端都自觉不发。
+func (h *BrowserBoxHandler) claimLiveInput(c *gin.Context, bot *browserbox.Bot, message liveMessage) bool {
+	switch message.Type {
+	case "mouse":
+		if message.Mouse == nil {
+			return false
+		}
+		if message.Mouse.Type == "mousePressed" {
+			h.takeOverFromLive(c, bot)
+			return true
+		}
+		if !bot.Takeover() {
+			return false
+		}
+		// 接管期间滚动页面也算人还在；单纯的移动不算，鼠标搁在画面上抖一抖不该让接管永不过期。
+		if message.Mouse.Type != "mouseMoved" {
+			bot.TouchTakeover()
+		}
+		return true
+	case "key":
+		if message.Key == nil {
+			return false
+		}
+		if message.Key.Type == "keyUp" {
+			if !bot.Takeover() {
+				return false
+			}
+			bot.TouchTakeover()
+			return true
+		}
+		h.takeOverFromLive(c, bot)
+		return true
+	case "text":
+		h.takeOverFromLive(c, bot)
+		return true
+	case "navigate":
+		target := strings.TrimSpace(message.URL)
+		if target == "" || !h.manager.Settings().HostAllowed(target) {
+			return false
+		}
+		h.takeOverFromLive(c, bot)
+		return true
+	case "reload", "back":
+		bot.TouchTakeover()
+		return true
+	}
+	return false
+}
+
+// takeOverFromLive 在用户第一次在画面上有意动手时打开接管，并只在这一下记一条：
+// 打字每秒十几次，逐条记会把操作记录淹掉。已经接管时只刷新闲置时间。
 func (h *BrowserBoxHandler) takeOverFromLive(c *gin.Context, bot *browserbox.Bot) {
 	if bot.Takeover() {
+		bot.TouchTakeover()
 		return
 	}
 	bot.SetTakeover(true)

@@ -176,6 +176,9 @@ type MessageEvent struct {
 	ToMe             bool             `json:"to_me,omitempty"`
 	Quoted           *QuotedMessage   `json:"quoted,omitempty"`
 	ExternalEvent    *ExternalEvent   `json:"external_event,omitempty"`
+	// PushKind 非空表示这条出站消息是订阅推送（仓库动态、RSS 这类事实卡片），
+	// 是系统自动发的，不是机器人在聊天里说的话。见 subscription_push_history.go。
+	PushKind string `json:"push_kind,omitempty"`
 	// SemanticSourceMessageID keeps the first selected historical source for
 	// compatibility with persisted events created before multi-source routing.
 	SemanticSourceMessageID string `json:"semantic_source_message_id,omitempty"`

@@ -265,6 +265,86 @@ func TestParseMemoryCandidatesRejectsNonJSON(t *testing.T) {
 	}
 }
 
+// 模型偶尔把两个 JSON 对象首尾相连地输出，只取第一个，不让整批候选报废。
+func TestParseMemoryCandidatesKeepsFirstOfConcatenatedObjects(t *testing.T) {
+	raw := `{"memories":[{"action":"upsert","key":"preference.tea","content":"喜欢乌龙茶"}]}{"memories":[{"action":"upsert","key":"preference.coffee","content":"喜欢咖啡"}]}`
+	items, err := parseMemoryCandidates(raw)
+	if err != nil {
+		t.Fatalf("concatenated objects should decode: %v", err)
+	}
+	if len(items) != 1 || items[0].Key != "preference.tea" {
+		t.Fatalf("items = %#v", items)
+	}
+	items, err = parseMemoryCandidates("好的，结果如下：\n{\"memories\":[]}\n以上。")
+	if err != nil || len(items) != 0 {
+		t.Fatalf("surrounding prose items=%#v err=%v", items, err)
+	}
+	if _, err := parseMemoryCandidates(`{"memories":[`); err == nil {
+		t.Fatal("truncated object should still fail")
+	}
+}
+
+// 摘要和门控各用各的超时：摘要输入大、输出长，60 秒对慢模型几乎必然超时。
+func TestMemoryJobTimeoutByKind(t *testing.T) {
+	event := MemoryJob{Payload: MemoryJobPayload{Kind: MemoryJobEvent}}
+	summary := MemoryJob{Payload: MemoryJobPayload{Kind: MemoryJobSummary}}
+	if got := memoryJobTimeout([]MemoryJob{event, event}); got != memoryExtractionTimeout {
+		t.Fatalf("event batch timeout = %v", got)
+	}
+	if got := memoryJobTimeout([]MemoryJob{summary}); got != memorySummaryTimeout || got <= memoryExtractionTimeout {
+		t.Fatalf("summary timeout = %v", got)
+	}
+	if memorySummaryTimeout >= memoryLeaseDuration {
+		t.Fatalf("summary timeout %v must stay below lease %v", memorySummaryTimeout, memoryLeaseDuration)
+	}
+}
+
+// 重试不能原样重放：每次砍半事件数，保留最新的一段，不低于下限。
+func TestMemorySummaryEventWindowShrinksOnRetry(t *testing.T) {
+	events := make([]MessageEvent, 150)
+	for index := range events {
+		events[index].MessageID = fmt.Sprintf("m%d", index)
+	}
+	for _, tc := range []struct{ attempts, want int }{{0, 100}, {1, 100}, {2, 50}, {3, 25}, {4, 20}, {8, 20}} {
+		window := memorySummaryEventWindow(events, tc.attempts)
+		if len(window) != tc.want || window[len(window)-1].MessageID != "m149" {
+			t.Fatalf("attempt %d window len=%d last=%s, want %d ending at m149", tc.attempts, len(window), window[len(window)-1].MessageID, tc.want)
+		}
+	}
+	short := events[:30]
+	if got := len(memorySummaryEventWindow(short, 2)); got != 20 {
+		t.Fatalf("30 events on retry = %d, want floor 20", got)
+	}
+	if got := len(memorySummaryEventWindow(short[:10], 5)); got != 10 {
+		t.Fatalf("10 events on retry = %d, want all 10", got)
+	}
+}
+
+// 摘要任务重试时发给模型的事件确实变少了，而不是重发同一份超时的输入。
+func TestSummaryMemoryJobRetrySendsFewerEvents(t *testing.T) {
+	memory := &testStructuredMemoryStore{}
+	provider := &capturingLLMProvider{reply: `{"memories":[]}`}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	events := make([]MessageEvent, 100)
+	for index := range events {
+		events[index] = MessageEvent{
+			Kind: EventKindGroup, GroupID: "123", UserID: "a", SenderName: "Alice", MessageID: fmt.Sprintf("m%d", index), Time: int64(100 + index),
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("第%03d句", index)}}},
+		}
+	}
+	if err := runtime.processSummaryMemoryJob(context.Background(), memory, MemoryJob{
+		ID: "summary-job", Attempts: 2, Payload: MemoryJobPayload{Kind: MemoryJobSummary, Session: "group:123", Events: events},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	prompt := provider.request.Messages[len(provider.request.Messages)-1].Content
+	if strings.Contains(prompt, "第049句") || !strings.Contains(prompt, "第050句") || !strings.Contains(prompt, "第099句") {
+		t.Fatalf("第二次尝试应只带最新 50 条事件: %s", prompt)
+	}
+}
+
 func TestContextCompressionEnqueuesStructuredSummary(t *testing.T) {
 	memory := &testStructuredMemoryStore{}
 	runtime := NewRuntime(BotConfig{RecentContextLimit: 2, ContextSummaryThreshold: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

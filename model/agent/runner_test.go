@@ -1145,3 +1145,14 @@ func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
 		t.Fatal("no browser tool, but prompt still suggests browser search")
 	}
 }
+
+// TestAppendToolRepairKeepsContinuationScope 钉住被拒调用回填时也带上作用域。
+// 丢了作用域，这批调用会被当成调用方自拼的原生历史：中途切到 DeepSeek 时不会被
+// 改写成文本，缺思考内容直接 400；切到 Claude 时外来思考也不会被剥掉。
+func TestAppendToolRepairKeepsContinuationScope(t *testing.T) {
+	resp := &llm.GenerateResponse{ContinuationScope: "gemini-scope", ToolCalls: []llm.ToolCall{{ID: "call_0", Name: "unknown_tool"}}}
+	messages := appendToolRepair(nil, resp, "", "工具不存在")
+	if len(messages) != 2 || messages[0].ContinuationScope != "gemini-scope" {
+		t.Fatalf("回填的工具调用丢了作用域：%+v", messages)
+	}
+}

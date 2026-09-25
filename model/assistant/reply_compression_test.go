@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -146,8 +147,9 @@ func TestReplyCompressionProtectsCodeAndMedia(t *testing.T) {
 	if err != nil || got != replySingleMarker+"print(1)" || len(p.requests) != 2 {
 		t.Fatalf("plain-text conversion lost protected code: %q %v", got, err)
 	}
+	// 上限小到连一个字符加上围栏都装不下时拆不了，仍然报错，也不能拿去压缩。
 	p = &compressionTestProvider{}
-	if _, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 5}, code); !errors.Is(err, errReplyCompression) || len(p.requests) != 0 {
+	if _, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 5, MarkdownToPlain: boolPointer(false)}, code); !errors.Is(err, errReplyCompression) || len(p.requests) != 0 {
 		t.Fatal("attempted to shrink an indivisible code block")
 	}
 	media := "[CQ:image,file=image-token]"
@@ -180,5 +182,114 @@ func TestReplyCompressionPreservesAutoModeAndDraftLimit(t *testing.T) {
 	draft.ObserveTextDelta(context.Background(), "一二三四五六")
 	if len(channel.messages) != 1 || channel.messages[0].Text != "一二三四" {
 		t.Fatal("draft exceeded its preview budget")
+	}
+}
+
+// 生产事故（2026-09-24 群聊）：一段 5000 多字的代码撞上默认 3500 字的单条上限，
+// 代码不许压缩，整轮回复直接报错。现在按行拆成几条，每条都是完整围栏且在上限以内。
+func TestOversizedCodeBlockSplitsIntoFencedMessages(t *testing.T) {
+	var lines []string
+	for i := 0; len(strings.Join(lines, "\n")) < 5000; i++ {
+		lines = append(lines, fmt.Sprintf("    fmt.Println(\"line %04d of a very long generated program\")", i))
+	}
+	code := "```go" + notificationLineMarker + strings.Join(lines, notificationLineMarker) + notificationLineMarker + "```"
+	for _, tc := range []struct {
+		name     string
+		platform string
+		plain    bool
+		prefix   string
+	}{
+		{name: "qq plain", platform: PlatformOneBotV11, plain: true},
+		{name: "qq rich", platform: PlatformOneBotV11},
+		{name: "qq single", platform: PlatformOneBotV11, prefix: replySingleMarker},
+		{name: "telegram", platform: PlatformTelegram},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &compressionTestProvider{err: errors.New("must not call")}
+			cfg := BotConfig{Platform: tc.platform, MaxReplyChars: 3500, MarkdownToPlain: boolPointer(tc.plain)}
+			event := MessageEvent{Platform: tc.platform, Kind: EventKindGroup}
+			rt := compressionTestRuntime(p)
+			got, err := rt.prepareGeneratedReply(context.Background(), cfg, tc.prefix+"代码如下："+notificationLineMarker+code+notificationLineMarker+"跑一下试试", event)
+			if err != nil || len(p.requests) != 0 {
+				t.Fatalf("err=%v calls=%d", err, len(p.requests))
+			}
+			if tc.prefix != "" && !strings.HasPrefix(got, replyAutoMarker) {
+				t.Fatal("single mode should fall back to split delivery")
+			}
+			parts := splitEventChatReply(got, cfg, event)
+			if len(parts) < 2 {
+				t.Fatalf("code was not split: %d parts", len(parts))
+			}
+			renderedConfig := cfg
+			renderedConfig.MarkdownToPlain = boolPointer(false)
+			var restored []string
+			for index, part := range parts {
+				if issue := rt.replyPartLimitIssue(renderedConfig, event, part); issue != "" {
+					t.Fatalf("part %d over limit: %s", index, issue)
+				}
+				if !strings.Contains(part, "fmt.Println") {
+					continue
+				}
+				if tc.plain {
+					if strings.Contains(part, "```") {
+						t.Fatalf("plain part %d kept fences", index)
+					}
+				} else if strings.Count(part, "```go") != 1 || strings.Count(part, "```") != 2 {
+					t.Fatalf("part %d is not one valid fenced block: %q", index, part)
+				}
+				for _, line := range strings.Split(part, "\n") {
+					// 纯文本平台发送时整条消息会去掉首尾空白，比对时不计缩进。
+					if line = strings.TrimSpace(line); strings.HasPrefix(line, "fmt.Println") {
+						restored = append(restored, line)
+					}
+				}
+			}
+			var want []string
+			for _, line := range lines {
+				want = append(want, strings.TrimSpace(line))
+			}
+			if !reflect.DeepEqual(restored, want) {
+				t.Fatal("code lines were lost, reordered or rewritten")
+			}
+			if !strings.HasPrefix(parts[0], "代码如下") || !strings.HasSuffix(parts[len(parts)-1], "跑一下试试") {
+				t.Fatalf("surrounding prose lost: %q ... %q", parts[0], parts[len(parts)-1])
+			}
+		})
+	}
+}
+
+// 一行本身就超过上限时才在行内硬切，拼回去仍是原文。
+func TestOversizedSingleCodeLineIsHardSplit(t *testing.T) {
+	line := strings.Repeat("x", 9000)
+	fits := func(piece string) bool { return len([]rune(piece)) <= 3500 }
+	pieces := splitFencedBlockToFit("```text\nshort\n"+line+"\ntail\n```", fits)
+	if len(pieces) < 3 {
+		t.Fatalf("pieces=%d", len(pieces))
+	}
+	var body []string
+	for _, piece := range pieces {
+		if !fits(piece) || !strings.HasPrefix(piece, "```text\n") || !strings.HasSuffix(piece, "\n```") {
+			t.Fatalf("invalid piece: %q", piece[:20])
+		}
+		body = append(body, strings.TrimSuffix(strings.TrimPrefix(piece, "```text\n"), "\n```"))
+	}
+	if strings.ReplaceAll(strings.Join(body, "\n"), "\n", "") != "short"+line+"tail" {
+		t.Fatal("hard split changed the code")
+	}
+	if body[0] != "short" || !strings.HasSuffix(body[len(body)-1], "x\ntail") {
+		t.Fatalf("hard split should only cut inside the long line: %q ... %q", body[0], body[len(body)-1][len(body[len(body)-1])-10:])
+	}
+	if splitFencedBlockToFit("```text\nabc\n```", func(string) bool { return false }) != nil {
+		t.Fatal("impossible limit should report failure")
+	}
+}
+
+// 代码块放得下的普通回复不受这次兜底影响，原样通过。
+func TestFittingCodeReplyUnchanged(t *testing.T) {
+	p := &compressionTestProvider{err: errors.New("must not call")}
+	reply := "代码如下：" + notificationLineMarker + "```go" + notificationLineMarker + "fmt.Println(1)" + notificationLineMarker + "```"
+	got, err := compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{Platform: PlatformOneBotV11, MaxReplyChars: 3500, MarkdownToPlain: boolPointer(false)}, reply)
+	if err != nil || got != reply || len(p.requests) != 0 {
+		t.Fatalf("got=%q err=%v", got, err)
 	}
 }

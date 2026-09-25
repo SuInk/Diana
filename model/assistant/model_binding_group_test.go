@@ -68,7 +68,7 @@ func TestGroupKeysAreBindable(t *testing.T) {
 	for _, key := range keys {
 		found[key] = true
 	}
-	for _, key := range []string{llm.GroupIntent, llm.GroupBackground, PurposeReplySendAudit} {
+	for _, key := range []string{llm.GroupIntent, llm.GroupReplyAssist, llm.GroupBackground, PurposeReplySendAudit} {
 		if !found[key] || !isModelBindingKey(key) {
 			t.Fatalf("%s 不在可绑定键里：%v", key, keys)
 		}
@@ -86,5 +86,60 @@ func TestBackgroundPurposesReportTheirGroup(t *testing.T) {
 		if got := ModelBindingGroupOf(purpose); got != llm.GroupIntent {
 			t.Fatalf("%s 归属 = %q", purpose, got)
 		}
+	}
+}
+
+// 回复辅助是从后台生成里拆出来的。拆之前给后台生成指过模型的，升级后回复前的
+// 那些调用还该用它，不能悄悄换成对话模型。
+func TestReplyAssistInheritsBackgroundWhenUnset(t *testing.T) {
+	roles := map[string]ModelRole{
+		"intent":     {ProfileID: "jev", Model: "jev-latest"},
+		"background": {ProfileID: "gemini", Model: "gemini-flash"},
+		"chat":       {ProfileID: "terra", Model: "gpt-terra"},
+	}
+	for _, purpose := range []string{PurposeContextSummary, PurposeReplySemanticDedup, PurposeErrorNotice, PurposeReplyIntentRouter} {
+		role, ok := modelRoleFor(roles, purpose, llm.GroupReplyAssist)
+		if !ok || role.Model != "gemini-flash" {
+			t.Fatalf("%s 没单独配回复辅助时该沿用后台生成：%#v", purpose, role)
+		}
+	}
+}
+
+// 两档各自指定时互不串用：后台那一档慢一点没关系，回复辅助要快。
+func TestReplyAssistAndBackgroundBindIndependently(t *testing.T) {
+	roles := map[string]ModelRole{
+		"background":   {ProfileID: "cheap", Model: "slow-cheap"},
+		"reply_assist": {ProfileID: "fast", Model: "fast-flash"},
+		"chat":         {ProfileID: "terra", Model: "gpt-terra"},
+	}
+	if role, _ := modelRoleFor(roles, PurposeSemanticReference, llm.GroupReplyAssist); role.Model != "fast-flash" {
+		t.Fatalf("语义指代该走回复辅助：%#v", role)
+	}
+	if role, _ := modelRoleFor(roles, PurposeMemoryExtract, llm.GroupBackground); role.Model != "slow-cheap" {
+		t.Fatalf("记忆抽取该走后台生成：%#v", role)
+	}
+	// 后台生成不往回找回复辅助。
+	delete(roles, "background")
+	if role, _ := modelRoleFor(roles, PurposeMemoryExtract, llm.GroupBackground); role.Model != "gpt-terra" {
+		t.Fatalf("后台生成没配时该跟随对话，不该借用回复辅助：%#v", role)
+	}
+}
+
+// 回复辅助显式选了「跟随对话」，就不再往后台生成那一档找。
+func TestReplyAssistFollowChatStopsInheritance(t *testing.T) {
+	roles := map[string]ModelRole{
+		"background":   {ProfileID: "gemini", Model: "gemini-flash"},
+		"reply_assist": {FollowChat: true},
+		"chat":         {ProfileID: "terra", Model: "gpt-terra"},
+	}
+	if role, _ := modelRoleFor(roles, PurposeContextSummary, llm.GroupReplyAssist); role.Model != "gpt-terra" {
+		t.Fatalf("选了跟随对话该用对话模型：%#v", role)
+	}
+	if hasDedicatedModelRole(roles, PurposeSemanticTextRef, llm.GroupReplyAssist) {
+		t.Fatal("跟随对话不算单独指定")
+	}
+	delete(roles, "reply_assist")
+	if !hasDedicatedModelRole(roles, PurposeSemanticTextRef, llm.GroupReplyAssist) {
+		t.Fatal("沿用后台生成那一档算单独指定")
 	}
 }

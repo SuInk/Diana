@@ -133,6 +133,21 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 		return restoreReplyControlIntent(normalizeReply(body, 0, plain), intent), nil
 	}
 	parts := r.replyLengthPlan(cfg, event, body)
+	// 代码不许压缩改写，单个代码块自己就超出单条上限时，只能拆开发。拆过之后代码块
+	// 和原文已经不是一一对应，最后的一致性校验改拿拆好的版本当基准。
+	reference := body
+	if split, ok := r.splitProtectedCodeParts(cfg, event, parts); ok {
+		log.Printf("diana reply: oversized code block delivered in %d messages instead of failing (platform=%s profile=%s)", len(split), event.Platform, cfg.ID)
+		parts = split
+		reference = joinReplyLengthPlan(parts)
+		// 用户要的是一条发完，但放不下的代码既不能压缩也不能截断——截掉一半的代码
+		// 复制过去跑不起来，比多发几条更糟；发送方式提示里也写明了「平台自身硬限制
+		// 除外」。所以这一轮改按分条投递，拆开的每一条都还在上限以内。
+		if intent.DeliveryMode == replyDeliverySingle && len(parts) > 1 {
+			intent.DeliveryMode = replyDeliveryAuto
+			event.replyDeliveryMode = replyDeliveryAuto
+		}
+	}
 	compactCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	compactCtx = withLLMUsagePurpose(compactCtx, "reply_compression")
@@ -216,7 +231,7 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 		}
 	}
 	planned := joinReplyLengthPlan(completed)
-	if issue := compressionCandidateIssue(body, planned, 0); issue != "" {
+	if issue := compressionCandidateIssue(reference, planned, 0); issue != "" {
 		return "", fmt.Errorf("%w: %s", errReplyCompression, issue)
 	}
 	if issue := r.replyLengthIssue(cfg, event, planned); issue != "" {
@@ -268,4 +283,73 @@ func (r *Runtime) protectedReplyPartError(cfg BotConfig, event MessageEvent, par
 		}
 	}
 	return nil
+}
+
+// splitProtectedCodeParts 给「代码块本身就放不下」的那几条找出路：正文和代码分开，
+// 超限的代码块按行拆成几段、每段补齐围栏，再把相邻还放得下的片段并回同一条。
+// 其余的条目原样保留，正文超限的部分照旧交给压缩。
+//
+// 以前这里直接报 protected code 错误，整轮回复作废，群里只收到一句错误提示
+// （2026-09-24 群聊：一段 5000 多字的代码，撞上默认 3500 字的单条上限）。代码本来就
+// 不许压缩改写，没有兜底就只剩失败一条路。
+//
+// 没有哪一条需要拆代码时返回 false，调用方照旧走原来的路径。
+func (r *Runtime) splitProtectedCodeParts(cfg BotConfig, event MessageEvent, parts []string) ([]string, bool) {
+	fits := func(candidate string) bool { return r.replyPartLimitIssue(cfg, event, candidate) == "" }
+	out := make([]string, 0, len(parts))
+	changed := false
+	for _, part := range parts {
+		if fits(part) || r.protectedReplyPartError(cfg, event, part) == nil {
+			out = append(out, part)
+			continue
+		}
+		pieces := splitPartAroundCode(part, fits)
+		if len(pieces) == 0 {
+			// 上限小到连一行代码加围栏都装不下，拆不了，留给后面按原来的方式报错。
+			out = append(out, part)
+			continue
+		}
+		out = append(out, pieces...)
+		changed = true
+	}
+	return out, changed
+}
+
+// splitPartAroundCode 按原来的先后顺序把一条消息拆成正文片段和代码片段。
+// 相邻片段合起来还放得下就并成一条，免得「代码如下：」孤零零单发一条。
+func splitPartAroundCode(part string, fits func(string) bool) []string {
+	masked, blocks := maskFencedCodeBlocks(restoreExplicitReplyLines(part))
+	var out, pending []string
+	emit := func(piece string) {
+		if strings.TrimSpace(piece) == "" {
+			return
+		}
+		if last := len(out) - 1; last >= 0 && fits(out[last]+"\n"+piece) {
+			out[last] += "\n" + piece
+			return
+		}
+		out = append(out, piece)
+	}
+	for _, line := range strings.Split(masked, "\n") {
+		index, ok := codeFenceIndex(line)
+		if !ok || index >= len(blocks) {
+			pending = append(pending, line)
+			continue
+		}
+		emit(strings.Join(pending, "\n"))
+		pending = nil
+		if fits(blocks[index]) {
+			emit(blocks[index])
+			continue
+		}
+		chunks := splitFencedBlockToFit(blocks[index], fits)
+		if len(chunks) == 0 {
+			return nil
+		}
+		for _, chunk := range chunks {
+			emit(chunk)
+		}
+	}
+	emit(strings.Join(pending, "\n"))
+	return out
 }
