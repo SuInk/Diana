@@ -7,7 +7,8 @@ import { customizedPromptCount, isPromptCustomized, isPromptFormatCustomized, mi
 // 覆盖表只存改过的正文：输入框里显示的是「当前生效的正文」，和默认值一样就从表里删掉，
 // 不把默认值抄进配置——那样以后内置文案更新了，这台机器人还停在旧版上。
 // keys 给定时是精简模式：只按这个顺序列这几段，不分组、不带搜索，用来把某一类
-// 提示词（比如接话判据）嵌到它所属的设置卡片里就地改。
+// 提示词（比如接话判据）嵌到它所属的设置卡片里就地改。每段收起时只占一行，
+// 导入导出和恢复默认在展开后的那一行里。
 const props = defineProps<{ modelValue?: Record<string, string>; keys?: string[] }>();
 const emit = defineEmits<{ "update:modelValue": [value: Record<string, string> | undefined] }>();
 const id = useId();
@@ -16,12 +17,10 @@ const catalog = ref<PromptCatalog | null>(null);
 const loadError = ref("");
 const query = ref("");
 const onlyCustomized = ref(false);
-// 只嵌一段时没有列表：整段一个开关，收起时只显示一行摘要，另带单独的导入导出。
-const single = computed(() => props.keys?.length === 1);
-const singleOpen = ref(false);
-const singleFileInput = ref<HTMLInputElement | null>(null);
-const singleError = ref("");
-const expanded = ref<Set<string>>(new Set(single.value ? props.keys : []));
+const fileInput = ref<HTMLInputElement | null>(null);
+const importTarget = ref<PromptSpec | null>(null);
+const importError = ref("");
+const expanded = ref<Set<string>>(new Set());
 
 onMounted(async () => {
   try {
@@ -74,12 +73,9 @@ const allExpanded = computed(() => {
   return keys.length > 0 && keys.every((key) => expanded.value.has(key));
 });
 
-const singleSpec = computed(() => (single.value ? scopedPrompts.value[0] : undefined));
-
 // 收起时的摘要：按「xxx：」分栏数下面的条目，比截一段正文更看得出写了什么。
-const singleSummary = computed(() => {
-  const spec = singleSpec.value;
-  if (!spec) return "";
+// 不分栏的段落没有摘要，标题就够了。
+function summaryOf(spec: PromptSpec): string {
   const parts: string[] = [];
   let heading = "";
   let count = 0;
@@ -99,12 +95,10 @@ const singleSummary = computed(() => {
     }
   }
   flush();
-  return parts.length ? parts.join(" · ") : `${runeCount(promptOverrideValue(spec, overrides.value))} 字`;
-});
+  return parts.join(" · ");
+}
 
-function exportSingle(): void {
-  const spec = singleSpec.value;
-  if (!spec) return;
+function exportPrompt(spec: PromptSpec): void {
   const url = URL.createObjectURL(new Blob([promptOverrideValue(spec, overrides.value) + "\n"], { type: "text/plain;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
@@ -113,25 +107,29 @@ function exportSingle(): void {
   URL.revokeObjectURL(url);
 }
 
-async function importSingle(event: Event): Promise<void> {
+function pickImport(spec: PromptSpec): void {
+  importTarget.value = spec;
+  fileInput.value?.click();
+}
+
+async function importPrompt(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = "";
-  const spec = singleSpec.value;
+  const spec = importTarget.value;
   if (!file || !spec) return;
   const text = (await file.text()).replace(/\r\n/g, "\n").trim();
   const limit = catalog.value?.max_runes ?? 0;
   if (!text) {
-    singleError.value = "文件是空的";
+    importError.value = `${displayTitle(spec)}：文件是空的`;
     return;
   }
   if (limit && runeCount(text) > limit) {
-    singleError.value = `文件有 ${runeCount(text)} 字，超过上限 ${limit} 字`;
+    importError.value = `${displayTitle(spec)}：文件有 ${runeCount(text)} 字，超过上限 ${limit} 字`;
     return;
   }
-  singleError.value = "";
+  importError.value = "";
   update(spec, text);
-  singleOpen.value = true;
 }
 
 function toggle(key: string): void {
@@ -154,13 +152,7 @@ function reset(spec: PromptSpec): void {
 }
 
 function resetAll(): void {
-  if (!props.keys) {
-    emit("update:modelValue", undefined);
-    return;
-  }
-  let next: Record<string, string> | undefined = overrides.value;
-  for (const spec of scopedPrompts.value) next = withoutPromptCustomization(next ?? {}, spec);
-  emit("update:modelValue", next);
+  emit("update:modelValue", undefined);
 }
 
 // 精简模式下各段同属一类，标题里「接话评分 · 」这种分类前缀是重复信息。
@@ -180,31 +172,9 @@ function runeCount(text: string): number {
 
 <template>
   <div class="prompt-overrides">
-    <div v-if="single && singleSpec" class="prompt-toolbar compact">
-      <button class="btn small" type="button" :aria-expanded="singleOpen" @click="singleOpen = !singleOpen">
-        <component :is="singleOpen ? ChevronDown : ChevronRight" :size="14" aria-hidden="true" />
-        {{ singleOpen ? "收起" : "展开编辑" }}
-      </button>
-      <button class="btn small ghost" type="button" @click="exportSingle">
-        <Download :size="14" aria-hidden="true" />
-        导出
-      </button>
-      <button class="btn small ghost" type="button" @click="singleFileInput?.click()">
-        <Upload :size="14" aria-hidden="true" />
-        导入
-      </button>
-      <input ref="singleFileInput" type="file" accept=".txt,.md,text/plain,text/markdown" hidden @change="importSingle" />
-      <span v-if="!singleOpen" class="prompt-filter">{{ singleSummary }}<template v-if="isCustomized(singleSpec)"> · 已修改</template></span>
-    </div>
-    <p v-if="singleError" class="prompt-warning">{{ singleError }}</p>
-    <div v-if="keys && !single" class="prompt-toolbar compact">
-      <span class="prompt-filter">{{ customizedCount ? `改过 ${customizedCount} 段` : "都是默认" }}</span>
-      <button class="btn small" type="button" :disabled="!customizedCount" @click="resetAll">
-        <RotateCcw :size="14" aria-hidden="true" />
-        这几段恢复默认
-      </button>
-    </div>
-    <div v-else-if="!keys" class="prompt-toolbar">
+    <input v-if="keys" ref="fileInput" type="file" accept=".txt,.md,text/plain,text/markdown" hidden @change="importPrompt" />
+    <p v-if="importError" class="prompt-warning">{{ importError }}</p>
+    <div v-if="!keys" class="prompt-toolbar">
       <input v-model="query" class="input" type="search" placeholder="搜索标题、用途或正文" aria-label="搜索提示词" />
       <label class="prompt-filter">
         <input v-model="onlyCustomized" type="checkbox" />
@@ -224,27 +194,28 @@ function runeCount(text: string): number {
     <p v-else-if="!catalog" class="prompt-empty">正在加载内置提示词…</p>
     <p v-else-if="!sections.length" class="prompt-empty">{{ onlyCustomized ? "还没有改过任何提示词。" : "没有匹配的提示词。" }}</p>
 
-    <section v-for="section in sections" v-show="!single || singleOpen" :key="section.group?.id ?? 'scoped'" class="prompt-group">
+    <section v-for="section in sections" :key="section.group?.id ?? 'scoped'" class="prompt-group">
       <header v-if="section.group" class="prompt-group-head">
         <h3>{{ section.group.label }}</h3>
         <p>{{ section.group.description }}</p>
       </header>
       <article v-for="spec in section.prompts" :key="spec.key" class="prompt-item" :class="{ open: expanded.has(spec.key) }">
-        <button v-if="!single" class="prompt-summary" type="button" :aria-expanded="expanded.has(spec.key)" :aria-controls="`${id}-${spec.key}`" @click="toggle(spec.key)">
+        <button class="prompt-summary" type="button" :title="keys ? spec.usage : undefined" :aria-expanded="expanded.has(spec.key)" :aria-controls="`${id}-${spec.key}`" @click="toggle(spec.key)">
           <ChevronRight :size="16" class="prompt-chevron" aria-hidden="true" />
           <span class="prompt-title">{{ displayTitle(spec) }}</span>
+          <span v-if="keys && !expanded.has(spec.key) && summaryOf(spec)" class="prompt-digest">{{ summaryOf(spec) }}</span>
           <span v-if="isCustomized(spec)" class="badge accent">已修改</span>
           <span v-if="isPromptFormatCustomized(spec, overrides)" class="badge warn" title="输出格式改过，程序可能解析不了模型的回答">格式已改</span>
           <span v-else-if="spec.contract" class="badge" title="这段带输出格式，程序按它解析模型的回答">含输出格式</span>
         </button>
-        <p v-if="!single" class="prompt-usage">{{ spec.usage }}</p>
+        <p v-if="!keys" class="prompt-usage">{{ spec.usage }}</p>
         <div v-if="expanded.has(spec.key)" :id="`${id}-${spec.key}`" class="prompt-body">
           <textarea
             class="textarea prompt-text"
             :aria-label="spec.title"
             :value="promptOverrideValue(spec, overrides)"
             :maxlength="catalog?.max_runes"
-            :rows="single ? 16 : 8"
+            :rows="keys ? 10 : 8"
             spellcheck="false"
             @input="update(spec, ($event.target as HTMLTextAreaElement).value)"
           ></textarea>
@@ -254,7 +225,17 @@ function runeCount(text: string): number {
               占位符：
               <code v-for="variable in spec.vars" :key="variable.name" :title="variable.description">{{ placeholder(variable.name) }}</code>
             </span>
-            <button v-if="isCustomized(spec)" class="btn small ghost" type="button" @click="reset(spec)">
+            <template v-if="keys">
+              <button class="btn small ghost" type="button" @click="exportPrompt(spec)">
+                <Download :size="14" aria-hidden="true" />
+                导出
+              </button>
+              <button class="btn small ghost" type="button" @click="pickImport(spec)">
+                <Upload :size="14" aria-hidden="true" />
+                导入
+              </button>
+            </template>
+            <button v-if="isCustomized(spec)" class="btn small ghost prompt-reset" type="button" @click="reset(spec)">
               <RotateCcw :size="14" aria-hidden="true" />
               恢复默认
             </button>
@@ -302,7 +283,8 @@ function runeCount(text: string): number {
 .prompt-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; color: var(--muted); font-size: 12px; }
 .prompt-vars { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .prompt-vars code { padding: 1px 5px; border-radius: 4px; background: var(--surface-2); color: var(--text); font-size: 12px; cursor: help; }
-.prompt-meta .btn { margin-left: auto; }
+.prompt-meta .prompt-reset { margin-left: auto; }
+.prompt-digest { color: var(--muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prompt-warning { margin: 0; color: var(--warn); font-size: 12px; line-height: 1.6; }
 .prompt-contract { display: grid; gap: 4px; min-width: 0; }
 .prompt-contract-label { color: var(--muted); font-size: 12px; }

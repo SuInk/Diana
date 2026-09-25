@@ -5985,7 +5985,7 @@ a.nav-action {
   .bot-editor .editor-tab { flex: 1 1 0; min-width: 0; padding: 8px 4px; }
 }
 
-/* 接话卡片里的「什么情况下愿意接话」：标签、说明、正文框竖排。 */
+/* 接话卡片里的「内置判据」：标签、说明、判据列表竖排。 */
 .criteria-editor { display: grid; gap: 8px; }
 
 /* 内置提示词整份 YAML 编辑：等宽、够高，报错贴在框下面。 */
