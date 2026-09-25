@@ -606,7 +606,7 @@ const (
 	// Update backups, including the database copy, are kept for this long
 	// after the update, and never more than releaseBackupMaxCount at a time.
 	releaseBackupRetention  = 3 * 24 * time.Hour
-	releaseBackupMaxCount   = 5
+	releaseBackupMaxCount   = 3
 	releaseBackupTimeLayout = "20060102T150405Z"
 )
 

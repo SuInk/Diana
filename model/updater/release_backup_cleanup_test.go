@@ -48,8 +48,8 @@ func TestPruneReleaseBackupsKeepsRecentBackupsWithinLimit(t *testing.T) {
 		return now.Add(-age).Format(releaseBackupTimeLayout) + suffix
 	}
 	expired := []string{name(releaseBackupRetention+time.Second, "-v0.1.0"), "manual-copy", "2026-old"}
-	overflow := []string{name(releaseBackupRetention, "-v0.1.1"), name(5*time.Hour, "-v0.1.2")}
-	kept := []string{name(4*time.Hour, "-v0.1.3"), name(3*time.Hour, "-v0.1.4"), name(2*time.Hour, "-v0.1.5"), name(time.Hour, "-v0.1.6")}
+	overflow := []string{name(releaseBackupRetention, "-v0.1.1"), name(4*time.Hour, "-v0.1.2"), name(3*time.Hour, "-v0.1.3")}
+	kept := []string{name(2*time.Hour, "-v0.1.4"), name(time.Hour, "-v0.1.5")}
 	for _, dir := range append(append(append([]string{}, expired...), overflow...), kept...) {
 		writeUpdaterTestFile(t, filepath.Join(root, dir, "database", "diana.db"), dir, 0o600)
 	}
@@ -112,8 +112,8 @@ func TestInstallerBackupRetentionAndSuccessfulCleanup(t *testing.T) {
 	now := time.Now().UTC()
 	name := func(age time.Duration) string { return now.Add(-age).Format(releaseBackupTimeLayout) }
 	expired := []string{name(4 * 24 * time.Hour), "20260101-old", "manual-copy"}
-	overflow := []string{name(6 * time.Hour), name(5 * time.Hour)}
-	kept := []string{name(4 * time.Hour), name(3 * time.Hour), name(2 * time.Hour), name(time.Hour)}
+	overflow := []string{name(6 * time.Hour), name(5 * time.Hour), name(4 * time.Hour), name(3 * time.Hour)}
+	kept := []string{name(2 * time.Hour), name(time.Hour)}
 	for _, dir := range append(append(append([]string{}, expired...), overflow...), kept...) {
 		writeUpdaterTestFile(t, filepath.Join(root, dir, "data", "diana.db"), dir, 0o600)
 	}

@@ -193,7 +193,7 @@ try {
     $backupsRoot = Join-Path $installDir ".installer\backups"
     if (Test-Path -LiteralPath $backupsRoot) {
         # Keep backups (including the database copy) from the last 3 days, at
-        # most 5 counting this attempt's. Names are UTC timestamps, so they
+        # most 3 counting this attempt's. Names are UTC timestamps, so they
         # compare as strings; anything else has expired.
         $backupCutoff = (Get-Date).ToUniversalTime().AddDays(-3).ToString("yyyyMMddTHHmmssZ")
         $keptBackups = @()
@@ -205,8 +205,8 @@ try {
                 Remove-Item -LiteralPath $oldBackup.FullName -Recurse -Force -ErrorAction Stop
             }
         }
-        if ($keptBackups.Count -gt 4) {
-            foreach ($oldBackup in @($keptBackups | Select-Object -First ($keptBackups.Count - 4))) {
+        if ($keptBackups.Count -gt 2) {
+            foreach ($oldBackup in @($keptBackups | Select-Object -First ($keptBackups.Count - 2))) {
                 Remove-Item -LiteralPath $oldBackup.FullName -Recurse -Force -ErrorAction Stop
             }
         }
@@ -340,7 +340,7 @@ try {
             throw "Health check failed. The previous runtime was restored when available. See $backupDir."
         }
         Write-Host "==> Diana is healthy at http://${healthHost}:$port"
-        # The database backup is kept (3 days, at most 5); only the replaced
+        # The database backup is kept (3 days, at most 3); only the replaced
         # program files are dropped.
         try {
             Remove-Item -LiteralPath $runtimeBackup -Recurse -Force -ErrorAction Stop
@@ -366,7 +366,7 @@ try {
     Write-Host "Installed: $installDir"
     if (Test-Path $commandShim) { Write-Host "Command:   diana" }
     Write-Host "Backup:    $backupDir"
-    Write-Host "           Update backups are kept for 3 days, at most 5."
+    Write-Host "           Update backups are kept for 3 days, at most 3."
     if ($generatedPassword) {
         Write-Host "Username:  $username"
         Write-Host "Password:  $generatedPassword"

@@ -284,7 +284,7 @@ if [ "$install_scope" = "system" ] && [ "$install_dir" != "$legacy_install_dir" 
   retire_legacy_service
 fi
 timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
-# Keep backups (including the database copy) from the last 3 days, at most 5
+# Keep backups (including the database copy) from the last 3 days, at most 3
 # counting this attempt's; abort before copying if cleanup fails. Names are
 # UTC timestamps, so the digits compare as numbers; anything else has expired.
 backup_cutoff=$(($(date -u '+%s') - 3 * 24 * 60 * 60))
@@ -306,7 +306,7 @@ for old_backup in "$install_dir/.installer/backups/"*; do
   rm -rf -- "$old_backup"
 done
 for old_backup in "$install_dir/.installer/backups/"*; do
-  [ "$kept_backups" -gt 4 ] || break
+  [ "$kept_backups" -gt 2 ] || break
   [ -d "$old_backup" ] || continue
   rm -rf -- "$old_backup"
   kept_backups=$((kept_backups - 1))
@@ -905,7 +905,7 @@ if [ "$start_after_install" = "true" ]; then
     fail "health check failed; the previous runtime was restored when available. See $install_dir/logs"
   fi
   info "Diana is healthy at http://$health_host:$port"
-  # The database backup is kept (3 days, at most 5); only the replaced
+  # The database backup is kept (3 days, at most 3); only the replaced
   # program files are dropped.
   if ! rm -rf -- "$backup_dir/runtime"; then
     printf 'Warning: Diana is healthy, but backup cleanup failed: %s\n' "$backup_dir/runtime" >&2
@@ -948,7 +948,7 @@ if [ -n "$command_dir" ]; then
   fi
 fi
 printf 'Backup:    %s\n' "$backup_dir"
-printf '           Update backups are kept for 3 days, at most 5.\n'
+printf '           Update backups are kept for 3 days, at most 3.\n'
 if [ -n "$generated_password" ]; then
   printf 'Username:  %s\n' "$username"
   printf 'Password:  %s\n' "$generated_password"
