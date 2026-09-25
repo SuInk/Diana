@@ -1929,6 +1929,38 @@ export function getStorageUsage(): Promise<StorageUsage> {
   return requestJSON<StorageUsage>("/api/system/storage");
 }
 
+/** 工作区里的一项。kind 为 link 表示指到工作区外面或已失效的符号链接，打不开。 */
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  kind: "dir" | "file" | "link";
+  size: number;
+  modified: string;
+  symlink?: boolean;
+  /** 运行时自己的凭据配置：列出来但不给看内容 */
+  protected?: boolean;
+}
+
+export interface WorkspaceListing {
+  root: string;
+  /** 相对工作区根目录，根目录是空串 */
+  path: string;
+  /** 工作区还没建出来（Agent 第一次写文件时才创建） */
+  exists: boolean;
+  entries: WorkspaceEntry[];
+  truncated?: boolean;
+}
+
+export function listWorkspace(path: string): Promise<WorkspaceListing> {
+  return requestJSON<WorkspaceListing>(`/api/system/workspace?${new URLSearchParams({ path }).toString()}`);
+}
+
+export function workspaceFileURL(path: string, download = false): string {
+  const params = new URLSearchParams({ path });
+  if (download) params.set("download", "1");
+  return `/api/system/workspace/file?${params.toString()}`;
+}
+
 export interface HistoryMediaPolicy { retention_days: number; max_mb: number; }
 export function getHistoryMediaPolicy(): Promise<HistoryMediaPolicy> { return requestJSON<HistoryMediaPolicy>("/api/system/history-media"); }
 export function saveHistoryMediaPolicy(policy: HistoryMediaPolicy): Promise<HistoryMediaPolicy> {
