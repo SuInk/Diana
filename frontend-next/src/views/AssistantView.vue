@@ -773,6 +773,11 @@
                 <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
               </div>
               <div class="field wide criteria-editor">
+                <label>什么算在跟它说话</label>
+                <span class="hint">「回应提问」打开时，判为在跟它说话的消息一定接；判为不是的，只剩闲聊档位能放行。</span>
+                <PromptOverridesEditor :keys="participationRelevanceKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
+              </div>
+              <div class="field wide criteria-editor">
                 <label>什么情况下愿意接话</label>
                 <span class="hint">没人叫它时，哪些情形愿意插话、哪些可以接一句、哪些不接，按这三栏写大白话。闲聊档位决定到哪一栏才开口：「偶尔接话」只在「愿意接」时开口，档位越积极，「可以接一句」也会开口。有人明确在跟它说话时不看这里，由「回应提问」决定。</span>
                 <PromptOverridesEditor :keys="participationWillingnessKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
@@ -2025,6 +2030,8 @@ const promptOverridesOpen = ref(false);
 // 「什么情况下愿意接话」是内置提示词里的一段，在「接话」卡片里就地改；评分骨架、
 // 换算和输出格式留在「内置提示词」。
 const participationWillingnessKeys = ["routing.participation.willingness"];
+// 「回应提问」看的判据：哪些算在跟机器人说话、哪些不算。
+const participationRelevanceKeys = ["routing.participation.relevance_true", "routing.participation.relevance_false"];
 const promptOverrideCount = computed(() => Object.keys(form.value?.prompt_overrides ?? {}).length);
 
 // 内置提示词 YAML：导出的是编辑器里眼前这一份（可能还没保存），导入只填回编辑器，
