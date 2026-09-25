@@ -144,30 +144,64 @@
     <!-- 画面做成一个浏览器窗口：标签、工具栏、画面、状态栏拼成一整块。谁在控制这个浏览器
          是这里最要紧的信息，放在状态栏里一直看得见，交还也在那里点。 -->
     <div v-if="sourceState?.box.enabled && botID && status.running" class="card browser-live-card">
-      <div ref="liveWindow" class="browser-window" :class="{ 'is-takeover': status.takeover, 'is-fullscreen': fullscreen }">
-        <div class="browser-tabbar">
-          <span class="browser-tab" :title="currentTitle || addressInput">
-            <Globe :size="13" aria-hidden="true" />
-            <span class="browser-tab-title">{{ currentTitle || pageHost || "新标签页" }}</span>
-          </span>
+      <div ref="liveWindow" class="browser-window" :class="{ 'is-takeover': interactive, 'is-fullscreen': fullscreen }">
+        <!-- 标签栏：点哪个画面就切到哪个，只是换着看、不动机器人，不用接管；新建和关闭会改动
+             机器人的浏览器，接管之后才能点。 -->
+        <div class="browser-tabbar" role="tablist" aria-label="标签页">
+          <div
+            v-for="tab in displayTabs"
+            :key="tab.id"
+            class="browser-tab"
+            :class="{ active: tab.id === currentTabID }"
+            role="tab"
+            :aria-selected="tab.id === currentTabID"
+            :title="tabLabel(tab)"
+            tabindex="0"
+            @click="switchTab(tab.id)"
+            @keydown.enter="switchTab(tab.id)"
+          >
+            <UserRound v-if="tab.user" :size="13" aria-hidden="true" class="browser-tab-mine" />
+            <Globe v-else :size="13" aria-hidden="true" />
+            <span class="browser-tab-title">{{ tabLabel(tab) }}</span>
+            <button
+              v-if="tab.user || status.takeover"
+              class="browser-tab-close"
+              type="button"
+              aria-label="关闭标签"
+              title="关闭标签"
+              @click.stop="closeTab(tab.id)"
+            >
+              <X :size="12" aria-hidden="true" />
+            </button>
+          </div>
+          <button
+            class="browser-tab-new"
+            type="button"
+            aria-label="新建标签"
+            title="新建标签：归你，机器人不碰，不用接管就能操作"
+            :disabled="busy"
+            @click="newTab"
+          >
+            <Plus :size="15" aria-hidden="true" />
+          </button>
         </div>
         <div class="browser-toolbar">
-          <button class="browser-tool" type="button" title="后退" aria-label="后退" :disabled="!status.takeover" @click="send({ type: 'back' })">
+          <button class="browser-tool" type="button" title="后退" aria-label="后退" :disabled="!interactive" @click="send({ type: 'back' })">
             <ArrowLeft :size="16" aria-hidden="true" />
           </button>
-          <button class="browser-tool" type="button" title="刷新" aria-label="刷新" :disabled="!status.takeover" @click="send({ type: 'reload' })">
+          <button class="browser-tool" type="button" title="刷新" aria-label="刷新" :disabled="!interactive" @click="send({ type: 'reload' })">
             <RotateCw :size="15" aria-hidden="true" />
           </button>
-          <label class="browser-address" :class="{ readonly: !status.takeover }">
+          <label class="browser-address" :class="{ readonly: !interactive }">
             <Lock v-if="addressSecure" :size="13" class="browser-address-icon" aria-hidden="true" />
             <Search v-else :size="13" class="browser-address-icon" aria-hidden="true" />
             <input
               ref="addressField"
               v-model="addressInput"
               aria-label="网址"
-              :placeholder="status.takeover ? '输入网址，回车打开' : ''"
-              :readonly="!status.takeover"
-              :title="status.takeover ? '' : '接管之后才能换网址'"
+              :placeholder="interactive ? '输入网址，回车打开' : ''"
+              :readonly="!interactive"
+              :title="interactive ? '' : '接管之后才能换网址'"
               spellcheck="false"
               autocomplete="off"
               @focus="($event.target as HTMLInputElement).select()"
@@ -211,7 +245,13 @@
 
         <div class="browser-statusbar" role="status">
           <span class="browser-status-dot" aria-hidden="true"></span>
-          <template v-if="status.takeover">
+          <template v-if="currentTabOwned && !status.takeover">
+            <strong>你的标签</strong>
+            <span class="browser-status-hint">
+              机器人不碰这个标签，直接操作就行；离开画面 {{ userTabLeaveMinutes }} 分钟会自动关掉
+            </span>
+          </template>
+          <template v-else-if="status.takeover">
             <strong>你在操作</strong>
             <span class="browser-status-hint">
               机器人先停下，也看不到你敲了什么；离开这个画面或 {{ takeoverIdleMinutes }} 分钟不操作就交还给它
@@ -321,7 +361,7 @@ import { botScope } from "../bot-scope";
 import { formatTime } from "../format";
 import { pluginForBot } from "../plugin-settings";
 import { navigate as navigateToView } from "../router";
-import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, RotateCw, Search } from "@lucide/vue";
+import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, Plus, RotateCw, Search, UserRound, X } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import Modal from "../components/Modal.vue";
@@ -344,6 +384,10 @@ import {
   type BrowserBoxStatus,
   listBrowserActivity,
   type AppLogEntry,
+  listBrowserBoxTabs,
+  openBrowserBoxTab,
+  closeBrowserBoxTab,
+  type BrowserBoxTab,
   getAgentBrowser,
   type AgentBrowserSettings,
   listPlugins,
@@ -352,6 +396,7 @@ import {
   type PluginState
 } from "../api";
 import { toastError, toastSuccess } from "../toast";
+import { askConfirm } from "../confirm";
 
 /** 一帧画面的元数据。width/height 是页面的 CSS 尺寸，点击坐标按它换算。 */
 interface LiveFrameMeta {
@@ -565,6 +610,117 @@ const pageHost = computed(() => {
 const liveHealthy = computed(() => hasFrame.value && !reconnecting.value);
 const liveLabel = computed(() => (reconnecting.value ? "重新连接中…" : hasFrame.value ? "实时" : "连接中…"));
 
+// 标签页。currentTabID 是画面正连着的那个，空串表示交给后端挑（第一个）。
+const tabs = ref<BrowserBoxTab[]>([]);
+const currentTabID = ref("");
+let tabsLoaded = false;
+let tabTimer: number | undefined;
+// 机器人新开了标签时画面跟过去：它在那边干活，你停在旧标签上什么都看不到。跟得太慢
+// 就看不到它刚打开的那一页，所以标签单独 2 秒一查（/json/list 很轻）。
+const tabPollMS = 2000;
+
+// 画面正在看的标签是不是你自己开的：是的话不用接管就能操作。
+const currentTabOwned = computed(() => tabs.value.some((tab) => tab.id === currentTabID.value && tab.user));
+// 能不能在画面上操作：接管了，或者看的是自己的标签。
+const interactive = computed(() => status.takeover || currentTabOwned.value);
+// 和后端 browserbox.UserTabLeaveTimeout 一致，只用来在页面上说清楚。
+const userTabLeaveMinutes = 5;
+
+const displayTabs = computed<BrowserBoxTab[]>(() =>
+  tabs.value.length ? tabs.value : [{ id: currentTabID.value, title: currentTitle.value, url: addressInput.value }]
+);
+
+function tabHost(url?: string): string {
+  try {
+    const parsed = new URL(url ?? "");
+    return parsed.protocol.startsWith("http") ? parsed.host : "";
+  } catch {
+    return "";
+  }
+}
+
+// 空白页的标题就是 about:blank 这串地址，显示成「新标签页」，和真浏览器一样。
+function readableTitle(title?: string): string {
+  const trimmed = title?.trim() ?? "";
+  return trimmed === "about:blank" || trimmed.startsWith("chrome://") ? "" : trimmed;
+}
+
+function tabLabel(tab: BrowserBoxTab): string {
+  if (tab.id === currentTabID.value) return readableTitle(currentTitle.value) || pageHost.value || "新标签页";
+  return readableTitle(tab.title) || tabHost(tab.url) || "新标签页";
+}
+
+// 合并新列表时保留已有标签的顺序、新的排在后面：Chrome 按最近激活排序，直接用它的顺序
+// 标签会在栏里来回跳。
+function mergeTabs(next: BrowserBoxTab[]): BrowserBoxTab[] {
+  const byID = new Map(next.map((tab) => [tab.id, tab]));
+  const kept = tabs.value.filter((tab) => byID.has(tab.id)).map((tab) => byID.get(tab.id) as BrowserBoxTab);
+  const known = new Set(kept.map((tab) => tab.id));
+  return [...kept, ...next.filter((tab) => !known.has(tab.id))];
+}
+
+async function loadTabs(): Promise<void> {
+  if (!botID || !status.running) return;
+  let next: BrowserBoxTab[];
+  try {
+    next = (await listBrowserBoxTabs(botID)).tabs;
+  } catch {
+    return;
+  }
+  const previous = new Set(tabs.value.map((tab) => tab.id));
+  tabs.value = mergeTabs(next);
+  const added = next.filter((tab) => !previous.has(tab.id));
+  const wasLoaded = tabsLoaded;
+  tabsLoaded = true;
+  if (!next.length) return;
+  if (currentTabID.value && !next.some((tab) => tab.id === currentTabID.value)) {
+    // 正在看的标签被关掉了（机器人关的，或者崩了）：换到剩下的第一个。
+    switchTab(tabs.value[0].id);
+  } else if (wasLoaded && added.length && !interactive.value) {
+    // 你正在自己的标签里或接管着操作时不跳走，免得打到一半被切到机器人那边。
+    switchTab(added[added.length - 1].id);
+  }
+}
+
+function switchTab(id: string): void {
+  if (!id || id === currentTabID.value) return;
+  currentTabID.value = id;
+  const tab = tabs.value.find((item) => item.id === id);
+  currentTitle.value = tab?.title ?? "";
+  if (document.activeElement !== addressField.value) addressInput.value = tab?.url ?? "";
+  if (pageActive) connectLive();
+}
+
+async function newTab(): Promise<void> {
+  busy.value = true;
+  try {
+    const { tab } = await openBrowserBoxTab(botID, "about:blank");
+    tabs.value = [...tabs.value, tab];
+    switchTab(tab.id);
+    await nextTick();
+    addressField.value?.focus();
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "开新标签失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function closeTab(id: string): Promise<void> {
+  if (!status.takeover && !tabs.value.some((tab) => tab.id === id && tab.user)) return;
+  try {
+    await closeBrowserBoxTab(botID, id);
+    tabs.value = tabs.value.filter((tab) => tab.id !== id);
+    if (id === currentTabID.value) {
+      currentTabID.value = "";
+      if (tabs.value.length) switchTab(tabs.value[0].id);
+      else if (pageActive) connectLive();
+    }
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "关标签失败");
+  }
+}
+
 interface LivePage {
   url?: string;
   title?: string;
@@ -577,6 +733,11 @@ function applyPage(page: LivePage | undefined): void {
   if (document.activeElement !== addressField.value) addressInput.value = page.url ?? "";
   currentTitle.value = page.title ?? "";
   pageLoading.value = Boolean(page.loading);
+  const tab = tabs.value.find((item) => item.id === currentTabID.value);
+  if (tab) {
+    tab.title = page.title ?? tab.title;
+    tab.url = page.url ?? tab.url;
+  }
 }
 
 async function toggleFullscreen(): Promise<void> {
@@ -716,6 +877,13 @@ async function autoStart(): Promise<void> {
 // 画面默认只能看，接管要点按钮（和 OpenAI Operator、Cloudflare Browser Run 的 handoff 一样）：
 // 以前点一下画面就算接管，点画面想让窗口获得焦点也会把浏览器从机器人手里抢走。
 async function takeOver(): Promise<void> {
+  // 接管会让机器人停下手里的事，点错一下代价不小，先确认。只想自己逛逛的，指去开自己的标签。
+  const ok = await askConfirm({
+    title: "接管机器人的浏览器？",
+    message: `接管后机器人先停下，不再操作这个浏览器，由你来登录、点按钮；它也看不到你敲了什么。离开这个画面或 ${takeoverIdleMinutes} 分钟不操作会自动交还。只想自己逛逛的话，点标签栏右边的「+」开一个你自己的标签，不用接管。`,
+    confirmLabel: "接管"
+  });
+  if (!ok) return;
   busy.value = true;
   try {
     const result = await setBrowserBoxTakeover(botID, true);
@@ -756,7 +924,7 @@ function connectLive(): void {
   wantLive = true;
   clearReconnectTimer();
   closeLiveSocket();
-  const ws = new WebSocket(browserBoxLiveURL(botID));
+  const ws = new WebSocket(browserBoxLiveURL(botID, currentTabID.value || undefined));
   ws.binaryType = "arraybuffer";
   socket = ws;
   ws.onopen = () => {
@@ -769,14 +937,16 @@ function connectLive(): void {
     }
     const message = JSON.parse(event.data) as {
       type: string;
-      tab?: { url?: string; title?: string };
+      tab?: { id?: string; url?: string; title?: string };
       page?: LivePage;
       takeover?: boolean;
       active?: boolean;
       message?: string;
     };
     if (message.type === "ready") {
+      if (message.tab?.id) currentTabID.value = message.tab.id;
       applyPage(message.page ?? message.tab);
+      void loadTabs();
       status.takeover = Boolean(message.takeover);
       clearFirstFrameTimer();
       firstFrameTimer = window.setTimeout(() => {
@@ -913,7 +1083,7 @@ const mouseButtons = ["left", "middle", "right"];
 
 function onMouse(event: MouseEvent, type: "mousePressed" | "mouseReleased"): void {
   event.preventDefault();
-  if (!status.takeover) {
+  if (!interactive.value) {
     if (type === "mousePressed") nudgeTakeover();
     return;
   }
@@ -939,7 +1109,7 @@ let pendingMove: MouseEvent | null = null;
 let moveFrame = 0;
 function onMouseMove(event: MouseEvent): void {
   // 没接管时鼠标只是路过，不发：后端同样会丢掉，这里省掉一路的消息。
-  if (!status.takeover || !frameMeta) return;
+  if (!interactive.value || !frameMeta) return;
   pendingMove = event;
   if (moveFrame) return;
   moveFrame = window.requestAnimationFrame(() => {
@@ -958,7 +1128,7 @@ let wheelEvent: WheelEvent | null = null;
 let wheelFrame = 0;
 // 没接管时滚轮归 WebUI：鼠标停在画面上照样能上下滚这一页，不会把浏览器抢过来。
 function onWheel(event: WheelEvent): void {
-  if (!status.takeover) return;
+  if (!interactive.value) return;
   event.preventDefault();
   wheelDeltaX += event.deltaX;
   wheelDeltaY += event.deltaY;
@@ -984,7 +1154,7 @@ function onWheel(event: WheelEvent): void {
 function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
   // 没接管时按键不碰也不拦：焦点留在画面上时 Cmd+Tab、Cmd+C、Tab 照常归 WebUI，
   // 也不会因此把浏览器抢过来。
-  if (!status.takeover) return;
+  if (!interactive.value) return;
   event.preventDefault();
   // 可打印字符走 insertText：中文输入法上屏的是整段文字，不是一串按键。
   if (type === "keyDown" && event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
@@ -1005,7 +1175,7 @@ function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
 
 // 输入法选字按的回车不算提交：以前带中文的网址会因此连开两次。
 function onAddressEnter(event: KeyboardEvent): void {
-  if (event.isComposing || event.keyCode === 229 || !status.takeover) return;
+  if (event.isComposing || event.keyCode === 229 || !interactive.value) return;
   event.preventDefault();
   navigate();
   // 打开之后把焦点还给页面，地址栏才会跟着跳转后的真实地址变。
@@ -1026,6 +1196,9 @@ function onVisibilityChange(): void {
 
 function startPage(): void {
   pageActive = true;
+  tabTimer = window.setInterval(() => {
+    if (!document.hidden) void loadTabs();
+  }, tabPollMS);
   // 先读来源再读状态：要知道勾没勾上，才能决定要不要自动拉起。
   void loadSource().then(refresh);
   void loadActivity();
@@ -1041,6 +1214,8 @@ function startPage(): void {
 
 function stopPage(): void {
   pageActive = false;
+  if (tabTimer) window.clearInterval(tabTimer);
+  tabTimer = undefined;
   if (statusTimer) window.clearInterval(statusTimer);
   statusTimer = undefined;
   pauseLive();
@@ -1274,7 +1449,10 @@ onBeforeUnmount(() => {
 .browser-tabbar {
   display: flex;
   align-items: flex-end;
+  gap: 2px;
   padding: 8px 12px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
   background: var(--surface-2);
 }
 
@@ -1282,12 +1460,23 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: min(320px, 100%);
-  padding: 7px 14px;
+  flex: 0 1 220px;
+  min-width: 72px;
+  padding: 7px 8px 7px 14px;
   border-radius: 10px 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.browser-tab:hover {
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+}
+
+.browser-tab.active {
   background: var(--surface);
   color: var(--text);
-  font-size: 12.5px;
 }
 
 .browser-tab > svg {
@@ -1295,10 +1484,52 @@ onBeforeUnmount(() => {
   color: var(--muted);
 }
 
+.browser-tab > svg.browser-tab-mine {
+  color: var(--accent);
+}
+
 .browser-tab-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.browser-tab-close,
+.browser-tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.browser-tab-close {
+  width: 18px;
+  height: 18px;
+}
+
+.browser-tab-new {
+  width: 28px;
+  height: 28px;
+  margin: 0 0 3px 4px;
+}
+
+.browser-tab-close:hover,
+.browser-tab-new:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.browser-tab-new:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .browser-toolbar {

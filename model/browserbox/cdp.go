@@ -25,6 +25,8 @@ type Target struct {
 	Title                string `json:"title"`
 	URL                  string `json:"url"`
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	// User 表示这个标签是主人在 WebUI 画面里自己开的，由 WebUI 填，不来自浏览器。
+	User bool `json:"user,omitempty"`
 }
 
 const cdpHTTPTimeout = 10 * time.Second

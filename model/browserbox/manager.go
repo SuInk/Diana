@@ -69,12 +69,20 @@ const (
 	// 几秒只为断线重连：中间的代理掐掉长连接时，前端半秒左右就连回来，不能因此把人
 	// 正在做的事打断。
 	TakeoverLeaveGrace = 3 * time.Second
+	// UserTabLeaveTimeout 是主人离开画面多久之后，把他自己开的标签关掉。
+	//
+	// 这些标签机器人不碰，没人关就一直开在机器人的浏览器里。交还接管不丢东西，关标签
+	// 会丢掉页面上填了一半的内容，所以不像交还那样几秒就动手：切到别的页面看一眼再
+	// 回来、去手机上等个验证码，标签都还在。
+	UserTabLeaveTimeout = 5 * time.Minute
 )
 
 // 自动交还的原因，操作记录里用它区分。
 const (
 	AutoReleaseIdle = "idle"
 	AutoReleaseLeft = "left"
+	// AutoCloseUserTabs 不是交还接管，是主人离开太久、他自己开的标签被关掉了。
+	AutoCloseUserTabs = "user_tabs"
 )
 
 var devToolsLine = regexp.MustCompile(`DevTools listening on (ws://[^\s]+)`)
@@ -102,6 +110,7 @@ type Manager struct {
 	now           func() time.Time
 	takeoverIdle  time.Duration
 	takeoverLeave time.Duration
+	userTabLeave  time.Duration
 	// onAutoRelease 在自动交还后调用，WebUI 用它记一条操作记录。
 	onAutoRelease func(botID, reason string, after time.Duration)
 }
@@ -119,6 +128,10 @@ type instance struct {
 	// takeoverTouched 是接管期间人最后一次有意操作的时间，idleTimer 按它判断闲置。
 	takeoverTouched time.Time
 	idleTimer       *time.Timer
+	// userTabs 是主人在 WebUI 画面里自己开的标签：归主人，机器人的工具不碰，主人不用
+	// 接管就能在里面操作。进程重启后标签全换了，跟着清空。
+	userTabs     map[string]struct{}
+	userTabTimer *time.Timer
 	// viewers 是正在看这台机器人实时画面的连接数；降到零时 leaveTimer 开始计时。
 	viewers    int
 	leaveTimer *time.Timer
@@ -143,6 +156,7 @@ func New(ctx context.Context, store Store, dataDir string) *Manager {
 		now:           time.Now,
 		takeoverIdle:  TakeoverIdleTimeout,
 		takeoverLeave: TakeoverLeaveGrace,
+		userTabLeave:  UserTabLeaveTimeout,
 	}
 	if store != nil {
 		if doc, ok, err := store.LoadBrowserBox(ctx); err == nil && ok {
@@ -439,6 +453,51 @@ func (b *Bot) SetTakeover(active bool) {
 	b.m.notify()
 }
 
+// ClaimUserTab 把主人在画面里开的标签记到主人名下。
+func (b *Bot) ClaimUserTab(targetID string) {
+	if targetID = strings.TrimSpace(targetID); targetID == "" {
+		return
+	}
+	b.m.mu.Lock()
+	defer b.m.mu.Unlock()
+	inst := b.m.instanceLocked(b.id)
+	if inst.userTabs == nil {
+		inst.userTabs = map[string]struct{}{}
+	}
+	inst.userTabs[targetID] = struct{}{}
+	if inst.viewers == 0 {
+		b.m.armUserTabTimerLocked(inst)
+	}
+}
+
+// UserTab 实现 agent.BuiltinBrowserUserTabs：这个标签是不是主人自己开的。
+func (b *Bot) UserTab(targetID string) bool {
+	b.m.mu.RLock()
+	defer b.m.mu.RUnlock()
+	if inst := b.m.bots[b.id]; inst != nil {
+		_, ok := inst.userTabs[targetID]
+		return ok
+	}
+	return false
+}
+
+// KeepUserTabs 只留下还开着的那些，关掉的标签不再占着名额。
+func (b *Bot) KeepUserTabs(open []string) {
+	alive := make(map[string]bool, len(open))
+	for _, id := range open {
+		alive[id] = true
+	}
+	b.m.mu.Lock()
+	defer b.m.mu.Unlock()
+	if inst := b.m.bots[b.id]; inst != nil {
+		for id := range inst.userTabs {
+			if !alive[id] {
+				delete(inst.userTabs, id)
+			}
+		}
+	}
+}
+
 // AttachViewer 记下有人开始看这台机器人的实时画面，返回的函数在不看了（画面连接断开）
 // 时调用，多调用几次也只算一次。最后一个人离开时如果还在接管，过 TakeoverLeaveGrace
 // 没人回来就自动交还。
@@ -449,6 +508,10 @@ func (b *Bot) AttachViewer() (detach func()) {
 	if inst.leaveTimer != nil {
 		inst.leaveTimer.Stop()
 		inst.leaveTimer = nil
+	}
+	if inst.userTabTimer != nil {
+		inst.userTabTimer.Stop()
+		inst.userTabTimer = nil
 	}
 	b.m.mu.Unlock()
 	var once sync.Once
@@ -461,6 +524,9 @@ func (b *Bot) AttachViewer() (detach func()) {
 			}
 			if inst.viewers == 0 && inst.takeover {
 				b.m.armLeaveTimerLocked(inst)
+			}
+			if inst.viewers == 0 && len(inst.userTabs) > 0 {
+				b.m.armUserTabTimerLocked(inst)
 			}
 		})
 	}
@@ -508,6 +574,53 @@ func (m *Manager) armLeaveTimerLocked(inst *instance) {
 		defer recoverGoroutinePanic("takeoverLeave")
 		m.releaseLeftTakeover(id)
 	})
+}
+
+// armUserTabTimerLocked 在主人离开画面时开始计时，到点还没回来就关掉他自己开的标签。
+func (m *Manager) armUserTabTimerLocked(inst *instance) {
+	if inst.userTabTimer != nil {
+		inst.userTabTimer.Stop()
+	}
+	id := inst.id
+	inst.userTabTimer = time.AfterFunc(m.userTabLeave, func() {
+		defer recoverGoroutinePanic("userTabLeave")
+		m.closeLeftUserTabs(id)
+	})
+}
+
+// closeLeftUserTabs 关掉主人离开太久的那些标签，返回关了几个。
+func (m *Manager) closeLeftUserTabs(id string) int {
+	m.mu.Lock()
+	inst := m.bots[id]
+	if inst == nil || inst.viewers > 0 || len(inst.userTabs) == 0 {
+		m.mu.Unlock()
+		return 0
+	}
+	targets := make([]string, 0, len(inst.userTabs))
+	for target := range inst.userTabs {
+		targets = append(targets, target)
+	}
+	inst.userTabs = nil
+	inst.userTabTimer = nil
+	base := inst.cdpURL
+	hook := m.onAutoRelease
+	after := m.userTabLeave
+	m.mu.Unlock()
+	closed := 0
+	if base != "" {
+		for _, target := range targets {
+			ctx, cancel := context.WithTimeout(context.Background(), cdpHTTPTimeout)
+			if CloseTab(ctx, base, target) == nil {
+				closed++
+			}
+			cancel()
+		}
+	}
+	m.notify()
+	if hook != nil && closed > 0 {
+		hook(id, AutoCloseUserTabs, after)
+	}
+	return closed
 }
 
 // releaseLeftTakeover 在人离开画面满宽限时交还给机器人，返回这次有没有交还。
@@ -793,6 +906,11 @@ func (m *Manager) stop(id string) {
 	inst.cmd = nil
 	inst.display = nil
 	inst.cdpURL = ""
+	inst.userTabs = nil
+	if inst.userTabTimer != nil {
+		inst.userTabTimer.Stop()
+		inst.userTabTimer = nil
+	}
 	m.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = procgroup.Kill(cmd)
@@ -816,6 +934,7 @@ func (m *Manager) waitProcess(inst *instance, cmd *exec.Cmd, generation uint64, 
 		inst.cmd = nil
 		inst.display = nil
 		inst.cdpURL = ""
+		inst.userTabs = nil
 		if !stopping && err != nil {
 			// 只写 exit status 1 等于没说：真正的原因（缺显示器、profile 被占用、
 			// 缺依赖）在进程自己打印的那几行里，状态里不带上就只能去翻后台日志。

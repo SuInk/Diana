@@ -5,6 +5,9 @@ package browserbox
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -204,5 +207,55 @@ func TestTakeoverKeptWhileAnotherViewerStays(t *testing.T) {
 	time.Sleep(80 * time.Millisecond)
 	if !bot.Takeover() {
 		t.Fatal("另一个窗口还在看，不该交还")
+	}
+}
+
+// 主人离开画面满期限，只关他自己开的标签，机器人的标签不动；有人在看就不关。
+func TestUserTabsClosedAfterViewerLeaves(t *testing.T) {
+	var mu sync.Mutex
+	var closed []string
+	cdp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := strings.CutPrefix(r.URL.Path, "/json/close/"); ok {
+			mu.Lock()
+			closed = append(closed, id)
+			mu.Unlock()
+		}
+		_, _ = w.Write([]byte("Target is closing"))
+	}))
+	t.Cleanup(cdp.Close)
+
+	manager := New(context.Background(), &memoryStore{}, t.TempDir())
+	manager.userTabLeave = 40 * time.Millisecond
+	manager.mu.Lock()
+	manager.instanceLocked("bot-a").cdpURL = cdp.URL
+	manager.mu.Unlock()
+	reasons := make(chan string, 1)
+	manager.OnAutoRelease(func(_, reason string, _ time.Duration) { reasons <- reason })
+	bot := manager.Bot("bot-a")
+
+	detach := bot.AttachViewer()
+	bot.ClaimUserTab("mine")
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	if len(closed) != 0 {
+		t.Fatalf("还有人在看画面，不该关标签：%v", closed)
+	}
+	mu.Unlock()
+	detach()
+	select {
+	case reason := <-reasons:
+		if reason != AutoCloseUserTabs {
+			t.Fatalf("回调原因不对：%s", reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("主人离开之后自己开的标签没有自动关掉")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(closed) != 1 || closed[0] != "mine" {
+		t.Fatalf("应当只关主人自己的标签，实际 %v", closed)
+	}
+	if bot.UserTab("mine") {
+		t.Fatal("关掉之后不该还记在主人名下")
 	}
 }

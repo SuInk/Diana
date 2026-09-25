@@ -179,7 +179,7 @@ func newLiveInputFixture(t *testing.T) (*BrowserBoxHandler, *browserbox.Bot, *gi
 func TestLiveInputIgnoredUntilExplicitTakeover(t *testing.T) {
 	handler, bot, _, logs := newLiveInputFixture(t)
 	for _, message := range liveInputSamples() {
-		if handler.claimLiveInput(bot, message) {
+		if handler.claimLiveInput(bot, "bot-tab", message) {
 			t.Fatalf("没接管时 %+v 不该送给页面", message)
 		}
 	}
@@ -197,7 +197,7 @@ func TestLiveInputForwardedDuringTakeover(t *testing.T) {
 	bot.SetTakeover(true)
 	defer bot.SetTakeover(false)
 	for _, message := range liveInputSamples() {
-		if !handler.claimLiveInput(bot, message) {
+		if !handler.claimLiveInput(bot, "bot-tab", message) {
 			t.Fatalf("接管期间 %+v 应送给页面", message)
 		}
 	}
@@ -217,5 +217,44 @@ func liveInputSamples() []liveMessage {
 		{Type: "navigate", URL: "https://example.com"},
 		{Type: "reload"},
 		{Type: "back"},
+	}
+}
+
+// 关掉机器人的标签会搅乱它，要先接管；开新标签归主人，不用接管（这里浏览器没在跑，
+// 过了接管这一关就停在「没有运行」）。
+func TestBrowserBoxTabChangesNeedTakeover(t *testing.T) {
+	router, manager := newBrowserBoxRouter(t)
+	closeBotTab := httptest.NewRequest(http.MethodDelete, "/api/browser-box/tabs/bot-tab?bot=bot-a", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, closeBotTab)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "接管") {
+		t.Fatalf("没接管时关机器人的标签应当被挡，得到 %d：%s", recorder.Code, recorder.Body.String())
+	}
+	openTab := httptest.NewRequest(http.MethodPost, "/api/browser-box/tabs?bot=bot-a", strings.NewReader(`{"url":"about:blank"}`))
+	openTab.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, openTab)
+	if recorder.Code == http.StatusConflict {
+		t.Fatalf("开新标签不该要求接管：%s", recorder.Body.String())
+	}
+	if manager.Bot("bot-a").Takeover() {
+		t.Fatal("开关标签不该顺手接管")
+	}
+}
+
+// 主人自己开的标签机器人不碰，在里面操作不用接管；别的标签照旧要接管。
+func TestLiveInputAllowedInUserTab(t *testing.T) {
+	handler, bot, _, _ := newLiveInputFixture(t)
+	bot.ClaimUserTab("my-tab")
+	for _, message := range liveInputSamples() {
+		if !handler.claimLiveInput(bot, "my-tab", message) {
+			t.Fatalf("自己开的标签里 %+v 应送给页面", message)
+		}
+		if handler.claimLiveInput(bot, "bot-tab", message) {
+			t.Fatalf("机器人的标签里没接管时 %+v 不该送给页面", message)
+		}
+	}
+	if bot.Takeover() {
+		t.Fatal("在自己的标签里操作不该变成接管")
 	}
 }

@@ -46,6 +46,12 @@ func NewBrowserBoxHandler(manager *browserbox.Manager) *BrowserBoxHandler {
 	// 自动交还和手动交还记成同一种操作，浏览器页的操作记录里能看出是自动交还的、为什么交还。
 	manager.OnAutoRelease(func(botID, reason string, after time.Duration) {
 		bot := manager.Bot(botID)
+		if reason == browserbox.AutoCloseUserTabs {
+			recordOperation(context.Background(), h.logs, "browser_box_tab_close",
+				fmt.Sprintf("你离开画面 %d 分钟，自己开的标签已自动关掉", int(after/time.Minute)), bot.ID(),
+				browserBoxLogMetadata(bot, map[string]any{"auto": true, "reason": reason}))
+			return
+		}
 		message := fmt.Sprintf("你接管后 %d 分钟没有操作，内置浏览器已自动交还给机器人", int(after/time.Minute))
 		if reason == browserbox.AutoReleaseLeft {
 			message = "你离开了画面，内置浏览器已自动交还给机器人"
@@ -174,7 +180,7 @@ func (h *BrowserBoxHandler) listTabs(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"tabs": tabs})
+	c.JSON(http.StatusOK, gin.H{"tabs": markUserTabs(bot, tabs)})
 }
 
 func (h *BrowserBoxHandler) openTab(c *gin.Context) {
@@ -185,6 +191,7 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, errors.New("请求格式错误"))
 		return
 	}
+	// 新开的标签归主人：机器人不碰它，所以不用先接管。
 	bot, ok := h.botFor(c)
 	if !ok {
 		return
@@ -195,7 +202,7 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 		return
 	}
 	target := strings.TrimSpace(payload.URL)
-	if target == "" {
+	if target == "" || target == "about:blank" {
 		target = "about:blank"
 	} else if !h.manager.Settings().HostAllowed(target) {
 		logAndWriteError(c, h.logs, http.StatusForbidden, "browser_box_tab_open", errors.New("这个地址不在内置浏览器允许的范围内"), target, nil)
@@ -206,6 +213,8 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 		logAndWriteError(c, h.logs, http.StatusBadGateway, "browser_box_tab_open", err, target, nil)
 		return
 	}
+	bot.ClaimUserTab(tab.ID)
+	tab.User = true
 	// 从控制台让内置浏览器打开地址是一次真实的外部访问，要留审计。
 	recordRequestOperation(c, h.logs, "browser_box_tab_open", "内置浏览器已打开标签页", target, nil)
 	c.JSON(http.StatusOK, gin.H{"tab": tab})
@@ -214,6 +223,10 @@ func (h *BrowserBoxHandler) openTab(c *gin.Context) {
 func (h *BrowserBoxHandler) closeTab(c *gin.Context) {
 	bot, ok := h.botFor(c)
 	if !ok {
+		return
+	}
+	// 自己开的标签随时能关；机器人的标签要先接管。
+	if !bot.UserTab(c.Param("id")) && !requireTakeover(c, bot, "关机器人的标签") {
 		return
 	}
 	base := bot.CDPURL()
@@ -227,6 +240,17 @@ func (h *BrowserBoxHandler) closeTab(c *gin.Context) {
 	}
 	recordRequestOperation(c, h.logs, "browser_box_tab_close", "内置浏览器已关闭标签页", c.Param("id"), nil)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// requireTakeover 挡住没接管时改动机器人标签的操作：关掉它正在用的标签和在画面上点按
+// 一样，会搅乱它，要先显式接管。看哪个标签（实时画面的 ?tab=）不改动什么，不挡。
+func requireTakeover(c *gin.Context, bot *browserbox.Bot, action string) bool {
+	if bot.Takeover() {
+		bot.TouchTakeover()
+		return true
+	}
+	writeError(c, http.StatusConflict, fmt.Errorf("先点「接管」再%s：机器人正在用这个浏览器", action))
+	return false
 }
 
 // liveMessage 是前端发过来的指令。画面反过来走二进制帧，见 writeLiveFrame。
@@ -268,7 +292,7 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 		writeError(c, http.StatusBadGateway, err)
 		return
 	}
-	target, ok := pickBrowserBoxTab(tabs, tabID)
+	target, ok := pickBrowserBoxTab(markUserTabs(bot, tabs), tabID)
 	if !ok {
 		// 一个标签页都没有时开一个空白页，用户至少有个地方输地址。
 		opened, err := browserbox.OpenTab(c.Request.Context(), base, "about:blank")
@@ -316,7 +340,7 @@ func (h *BrowserBoxHandler) live(c *gin.Context) {
 				}
 				continue
 			}
-			h.handleLiveMessage(c, bot, live, message)
+			h.handleLiveMessage(c, bot, target.ID, live, message)
 		}
 	}()
 
@@ -406,8 +430,8 @@ func writeLiveFrame(conn *websocket.Conn, frame browserbox.Frame) error {
 }
 
 // handleLiveMessage 把前端的一条指令翻成 CDP 调用。
-func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bot, live *browserbox.Live, message liveMessage) {
-	if !h.claimLiveInput(bot, message) {
+func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bot, tabID string, live *browserbox.Live, message liveMessage) {
+	if !h.claimLiveInput(bot, tabID, message) {
 		return
 	}
 	ctx := c.Request.Context()
@@ -429,15 +453,16 @@ func (h *BrowserBoxHandler) handleLiveMessage(c *gin.Context, bot *browserbox.Bo
 	}
 }
 
-// claimLiveInput 决定这条输入送不送给页面：只有你显式接管了才送，否则一律丢掉。
+// claimLiveInput 决定这条输入送不送给页面：你显式接管了、或者这是你自己开的标签才送，
+// 否则一律丢掉。自己开的标签机器人不碰，在里面操作不会和它抢。
 //
 // 画面默认只能看。以前是点一下画面就算接管、后来又改成按下鼠标才算，边界怎么划都有
 // 误伤：点画面想让窗口获得焦点、切窗口时按下的修饰键，都会把浏览器从机器人手里抢
 // 走。成熟的做法（OpenAI Operator、Cloudflare Browser Run 的 handoff、BetterWright）
 // 都是默认只看，接管和交还各点一个按钮；这里照做，接管走 /api/browser-box/takeover。
 // 判断放在后端，不指望每个前端都自觉不发。
-func (h *BrowserBoxHandler) claimLiveInput(bot *browserbox.Bot, message liveMessage) bool {
-	if !bot.Takeover() {
+func (h *BrowserBoxHandler) claimLiveInput(bot *browserbox.Bot, tabID string, message liveMessage) bool {
+	if !bot.Takeover() && !bot.UserTab(tabID) {
 		return false
 	}
 	switch message.Type {
@@ -479,13 +504,26 @@ func browserBoxLogMetadata(bot *browserbox.Bot, extra map[string]any) map[string
 	return metadata
 }
 
+// markUserTabs 标出主人自己开的标签，顺手把已经关掉的从名单里清出去。
+func markUserTabs(bot *browserbox.Bot, tabs []browserbox.Target) []browserbox.Target {
+	open := make([]string, 0, len(tabs))
+	for index := range tabs {
+		open = append(open, tabs[index].ID)
+		tabs[index].User = bot.UserTab(tabs[index].ID)
+	}
+	bot.KeepUserTabs(open)
+	return tabs
+}
+
+// pickBrowserBoxTab 挑画面要连的标签。指定的那个不在了（刚被关掉）就退回第一个：看画面
+// 不该改动浏览器，以前这里会顺手开一个空白页。一个标签都没有才返回 false。
 func pickBrowserBoxTab(tabs []browserbox.Target, id string) (browserbox.Target, bool) {
 	for _, tab := range tabs {
 		if id != "" && tab.ID == id {
 			return tab, true
 		}
 	}
-	if id == "" && len(tabs) > 0 {
+	if len(tabs) > 0 {
 		return tabs[0], true
 	}
 	return browserbox.Target{}, false
