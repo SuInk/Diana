@@ -999,6 +999,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// SOUL.md 排在整条系统提示词的最前面，不加任何包装：她是谁、在乎什么、为什么，
 	// 后面所有规则都在它的框架里读。
 	builder.WriteString(cfg.SystemPrompt)
+	// 长相默认照自己的头像（见 self_avatar.go）；看不了头像时说了也没用，不加。
+	if agentEnabled && registry != nil && hasTool(dianaRemoteImageToolName) {
+		appendPromptSection(&builder, cfg.prompt(promptSelfAvatarSpec))
+	}
 	appendPromptSection(&builder, replyPresentationPrompt(!chatSplitLimitsForEvent(cfg, event).SingleMessage, cfg))
 	appendPromptSection(&builder, replyLineBreakPrompt(cfg))
 	appendPromptSection(&builder, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))

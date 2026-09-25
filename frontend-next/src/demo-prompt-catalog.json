@@ -150,6 +150,13 @@
       ]
     },
     {
+      "key": "reply.self_avatar",
+      "group": "reply_base",
+      "title": "默认形象：自己的头像",
+      "usage": "能看头像（remote_image）时紧跟在人设后面：没写长相就照机器人自己的头像说、照头像画。",
+      "default": "你的形象默认就是你自己的头像。人设里没写长相时，有人问你长什么样，先用 remote_image 的 action=view_avatar、avatar_source=bot_avatar 看一眼自己的头像再照着说，别凭空描述；让你画自己、或者画的图里要有你，用 image 的 operation=edit、identity_sources 填 bot_avatar，以你的头像为底来画。人设里写了长相的，以人设为准。"
+    },
+    {
       "key": "reply.tool.platform_group",
       "group": "reply_tools",
       "title": "群资料与群管理",
