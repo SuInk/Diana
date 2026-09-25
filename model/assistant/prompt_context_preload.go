@@ -30,9 +30,8 @@ type promptContextPreload struct {
 	worldBookContext string
 	selfNoteContext  string
 	// selfNoteUsage 是自述层进入全局预算之前的自有账。
-	selfNoteUsage     contextLayerUsage
-	expressionContext string
-	mediaIndex        string
+	selfNoteUsage contextLayerUsage
+	mediaIndex    string
 }
 
 // startPromptContextPreload 并发预取几层只读上下文。调用方必须在使用结果前调用
@@ -47,7 +46,7 @@ func (r *Runtime) startPromptContextPreload(
 ) *promptContextPreload {
 	preload := &promptContextPreload{}
 
-	preload.wg.Add(7)
+	preload.wg.Add(6)
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:48")
 		defer preload.wg.Done()
@@ -72,11 +71,6 @@ func (r *Runtime) startPromptContextPreload(
 		defer recoverGoroutinePanic("prompt_context_preload.go:64")
 		defer preload.wg.Done()
 		preload.worldBookContext = r.worldBookContext(ctx, event, queryText)
-	}()
-	go func() {
-		defer recoverGoroutinePanic("prompt_context_preload.go:68")
-		defer preload.wg.Done()
-		preload.expressionContext = r.expressionStyleContext(ctx, event)
 	}()
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:72")

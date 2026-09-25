@@ -1282,7 +1282,7 @@
             </div>
           </section>
 
-          <!-- 拟人化：情绪、表达学习、戳一戳。都是「更像一个人」的可选行为，默认全关。 -->
+          <!-- 拟人化：情绪、风格学习、戳一戳。都是「更像一个人」的可选行为，默认全关。 -->
           <section class="card">
             <div class="card-header">
               <div>
@@ -1306,11 +1306,11 @@
                 <label class="switch">
                   <input v-model="form.expression_learning_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">表达学习</span>
+                  <span class="switch-label">风格学习</span>
                 </label>
                 <span class="hint">
-                  按群统计大家常说的短句和口癖（至少两个人说过、次数够多才算），当作说话风格参考注入，让它越来越像这个群的人。
-                  半个月没人说的自动过气。注意：这会把群成员的原话喂进提示词，注入时会标注为不可信参考。
+                  每个群大约一天学一次：让后台模型读最近的群友消息，写一小段这个群怎么说话（口头禅和梗的意思、句子长短、标点和表情习惯、怎么互相调侃），回复时带上，让它越来越像这个群的人。
+                  学到的在「群管理」里编辑群时能看到，可以手动改或重新学。每个群每天多一次后台模型调用；关掉或不回复的群不学。
                 </span>
               </div>
               <div class="field wide">

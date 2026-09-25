@@ -370,7 +370,7 @@ type Runtime struct {
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	selfNotes        SelfNoteStore
-	expressionStyles ExpressionStyleStore
+	groupStyles      groupStyleState
 	moodMu           sync.Mutex
 	moods            map[string]*moodState
 	pokeMu           sync.Mutex
@@ -1741,10 +1741,9 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	restriction, blocked := r.activeReplySuppression(event, now)
 	r.remember(event)
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
-	r.observeGroupExpression(event, text)
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
 	// 连被 @、被引用也不回，这一直是 admits 的判法，这里只是把判断提到花钱之前。消息照常
-	// 进历史（上面的 remember 已经落库并排了语义索引）、表达学习（上一行）和长期记忆，好让
+	// 进历史（上面的 remember 已经落库并排了语义索引）和长期记忆，好让
 	// 群重新打开后上下文接得上；但所有要花模型 token 的环节全部跳过：contextHistory 里那次
 	// 跨群语义检索、Telegram 接话判定、主动回复路由、历史识图，以及回复生成本身。主人的
 	// 响应限制命令是本地控制指令、不花 token，放它照旧落到 shouldHandle 那条老路，不拦。
@@ -1763,6 +1762,8 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
 		return event, text, false, outcome
 	}
+	// 风格学习要花一次后台模型调用，放在关群判断之后：不回复的群用不着学怎么说话。
+	r.observeGroupStyle(event)
 	// 机器人在本群被禁言：和上面一样只记上下文，跳过所有花 token 的环节。解禁后
 	// 从新消息开始回复，这期间的消息不补发。放在额度检查之前：它只查本地状态。
 	if reason, muted := r.botMutedForReply(event); muted {
@@ -4138,15 +4139,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    selfNoteContext,
-				Priority:   llm.MessagePriorityMemory,
-				AtomicText: true,
-			})
-		}
-		// 群常用表达是风格参考，和记忆同级注入；没攒够门槛时它是空串，零开销。
-		if expressionContext := contextPreload.expressionContext; expressionContext != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    expressionContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})

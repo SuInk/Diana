@@ -290,6 +290,9 @@ const groups: BotGroupSummary[] = [
 
 // 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
 // 都没有，用这张表补上画像里没有的号。
+const demoLearnedStyle = "这个群说话很碎，一条消息大多十来个字，想到哪说到哪，连着发好几条很常见，基本不打句号。口头禅是「绷不住了」「哥几个」「这么强」，震惊时发「啊？」，捧场用「确实」「可以」。爱用 QQ 表情「吃瓜」「坐牢」代替表态。调侃很直接，互相叫外号、阴阳两句都不算事，但不会真骂人。聊代码和部署时会突然正经，贴报错、给链接，说完又回到玩梗。";
+const demoGroupStyles = new Map<string, import("./api").GroupStyle>([["100200301", { profile_id: "bot-onebot", group_id: "100200301", text: demoLearnedStyle, manual: false, sample_count: 286, updated_at: new Date(Date.now() - 5 * 3600_000).toISOString() }]]);
+
 const demoAccountNames: Record<string, string> = { "100200001": "阿墨", "880024": "小林（演示）" };
 
 // 内置人设在真实后端里是编译进程序的几份 SOUL.md；演示模式读 Go 测试生成的那份 JSON
@@ -1204,6 +1207,33 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     plugins = [...plugins]; demoStatus.plugins = plugins; return json(demoPluginForProfile(plugin, profile));
   }
 
+  const styleMatch = path.match(/^\/api\/assistant\/groups\/([^/]+)\/style(\/relearn|\/enabled)?$/);
+  if (styleMatch) {
+    // 风格学习：演示站按群号记在内存里，「重新学习」给一段固定的样例笔记。
+    const key = decodeURIComponent(styleMatch[1]);
+    const reply = () => json({ style: demoGroupStyles.get(key), learning_enabled: true, max_runes: 400 });
+    const current = demoGroupStyles.get(key);
+    const store = (next: import("./api").GroupStyle) => {
+      if (next.text || next.disabled) demoGroupStyles.set(key, next);
+      else demoGroupStyles.delete(key);
+    };
+    const base = { profile_id: "", group_id: key, disabled: current?.disabled, updated_at: new Date().toISOString() };
+    if (styleMatch[2] === "/relearn" && method === "POST") {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      store({ ...base, text: demoLearnedStyle, manual: false, sample_count: 286 });
+      return reply();
+    }
+    if (styleMatch[2] === "/enabled" && method === "PUT") {
+      store({ ...(current ?? { ...base, text: "", manual: false }), disabled: !body.enabled });
+      return reply();
+    }
+    if (method === "PUT") {
+      const text = String(body.text ?? "").trim();
+      store({ ...base, text, manual: Boolean(text) });
+      return reply();
+    }
+    return reply();
+  }
   if (path === "/api/assistant/groups" && method === "GET") return json({ groups, plugins, live_available: true, quota_window_seconds: 5 * 3600 });
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;

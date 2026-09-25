@@ -69,6 +69,7 @@ func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	router.DELETE("/api/assistant/groups/:id", h.deleteConsoleGroup)
 	router.GET("/api/assistant/groups/:id/relations", h.groupRelationGraph)
 	router.GET("/api/assistant/groups/:id/avatar", h.groupAvatar)
+	h.registerGroupStyleRoutes(router)
 	h.registerAvatarRoutes(router)
 }
 
