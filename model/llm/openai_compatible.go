@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -1142,10 +1143,27 @@ func cloneHTTPTransport(roundTripper http.RoundTripper) *http.Transport {
 	return http.DefaultTransport.(*http.Transport).Clone()
 }
 
+// decodeOpenAIResponseSSE 处理「没要流式，网关却回了 SSE」。
+//
+// sub2api 这类订阅转发网关背后的上游只有流式接口，stream=false 也照样回事件流。
+// 以前这里只把文字增量拼起来，工具调用整个丢掉：Agent 回合里模型常常只回一个
+// function_call、一个字都不说，结果被当成空回复报错，带工具的请求在这类网关上
+// 一次都跑不通。先按 Responses 事件还原完整输出（工具调用、推理续接状态和缓存
+// 用量都在里面），还原不出东西再退回只拼文字，照顾那些事件格式不规范的网关。
 func decodeOpenAIResponseSSE(reader io.Reader, model shared.ResponsesModel) (*responses.Response, error, *openAIErrorCapture) {
-	text, usage, err := decodeOpenAITextEventStream(reader)
+	body, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, err, &openAIErrorCapture{}
+	}
+	text, usage, err := decodeOpenAITextEventStream(bytes.NewReader(body))
+	if err != nil {
+		return nil, err, &openAIErrorCapture{}
+	}
+	if resp := openAIResponseFromEventStream(body); resp != nil {
+		if resp.Model == "" {
+			resp.Model = model
+		}
+		return resp, nil, &openAIErrorCapture{}
 	}
 	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("llm: openai-compatible event stream output is empty"), &openAIErrorCapture{}
@@ -1166,6 +1184,79 @@ func decodeOpenAIResponseSSE(reader io.Reader, model shared.ResponsesModel) (*re
 			TotalTokens:  usage.TotalTokens,
 		},
 	}, nil, &openAIErrorCapture{}
+}
+
+// openAIResponseFromEventStream 从 Responses 事件流里还原完整响应。
+//
+// 以 response.completed 带的 response 为准；有些上游在 completed 里把 output 留空，
+// 这时用逐条 response.output_item.done 拼出来的输出补上。既没有文字也没有工具调用
+// 时返回 nil，交给调用方退回只拼文字的解析。
+func openAIResponseFromEventStream(body []byte) *responses.Response {
+	var completed *responses.Response
+	items := map[int64]responses.ResponseOutputItemUnion{}
+	var indexes []int64
+	handle := func(data string) {
+		if data == "" || data == "[DONE]" {
+			return
+		}
+		var event responses.ResponseStreamEventUnion
+		if json.Unmarshal([]byte(data), &event) != nil {
+			return
+		}
+		switch event.Type {
+		case "response.output_item.done":
+			var item responses.ResponseOutputItemUnion
+			if raw := event.Item.RawJSON(); raw == "" || json.Unmarshal([]byte(raw), &item) != nil {
+				return
+			}
+			if _, seen := items[event.OutputIndex]; !seen {
+				indexes = append(indexes, event.OutputIndex)
+			}
+			items[event.OutputIndex] = item
+		case "response.completed":
+			response := event.Response
+			completed = &response
+		}
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var dataLines []string
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if line == "" {
+			handle(strings.TrimSpace(strings.Join(dataLines, "\n")))
+			dataLines = nil
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "data:"); ok {
+			dataLines = append(dataLines, strings.TrimPrefix(value, " "))
+		}
+	}
+	handle(strings.TrimSpace(strings.Join(dataLines, "\n")))
+
+	resp := completed
+	if resp == nil {
+		resp = &responses.Response{}
+	}
+	if len(resp.Output) == 0 {
+		slices.Sort(indexes)
+		for _, index := range indexes {
+			resp.Output = append(resp.Output, items[index])
+		}
+	}
+	if strings.TrimSpace(resp.OutputText()) == "" && !openAIResponseHasFunctionCall(resp.Output) {
+		return nil
+	}
+	return resp
+}
+
+func openAIResponseHasFunctionCall(output []responses.ResponseOutputItemUnion) bool {
+	for _, item := range output {
+		if item.Type == "function_call" {
+			return true
+		}
+	}
+	return false
 }
 
 type openAIChatCompletionDiagnostics struct {

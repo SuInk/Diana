@@ -112,33 +112,60 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 	if !ok {
 		return p.provider.Generate(ctx, req)
 	}
-	events, err := streamer.Stream(ctx, req)
-	if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
-		return nil, err
-	}
-	if err != nil || events == nil {
-		// Providers without a working streaming endpoint can still use Generate.
-		return p.provider.Generate(ctx, req)
-	}
-	response, err := accumulateChatEvents(ctx, events)
-	if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
-		return p.retryAfterStreamedRejection(ctx, req, err)
-	}
-	if err != nil {
-		return p.provider.Generate(ctx, req)
-	}
-	if response != nil && len(response.ToolCalls) == 0 {
-		if notice := llm.RejectionNoticeError(response.Text); notice != nil {
-			return p.retryAfterStreamedRejection(ctx, req, notice)
+	for skipped := 0; ; skipped++ {
+		events, err := streamer.Stream(ctx, req)
+		if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
+			return nil, err
 		}
+		if err != nil || events == nil {
+			// Providers without a working streaming endpoint can still use Generate.
+			return p.provider.Generate(ctx, req)
+		}
+		response, err := accumulateChatEvents(ctx, events)
+		if errors.Is(err, llm.ErrUnverifiedRejection) || isContentPolicyRejection(err) {
+			return p.retryAfterStreamedRejection(ctx, req, err)
+		}
+		if err != nil {
+			if p.skipFailedStreamCandidate(err, skipped) {
+				continue
+			}
+			return p.provider.Generate(ctx, req)
+		}
+		if response != nil && len(response.ToolCalls) == 0 {
+			if notice := llm.RejectionNoticeError(response.Text); notice != nil {
+				return p.retryAfterStreamedRejection(ctx, req, notice)
+			}
+		}
+		return response, nil
 	}
-	return response, nil
 }
 
-// rejectedCandidateSkipper 由后备 provider 实现：流已经正常打开、正文却是拦截时，
-// 让它把刚才那个候选往后挪一位。
+// skipFailedStreamCandidate 处理「流打开了，上游错误却在读流时才到」。
+//
+// Gemini 这类 SDK 是边读边发请求的：限流 503 不在打开流时报，而是作为流里第一个
+// 事件出来，打开时的后备切换因此看不到它。以前这里一律退回非流式 Generate，从同一个
+// 候选重跑整条后备链：刚限流的候选再打一遍、拿到同样的 503，后面的候选也只能走
+// 非流式。能切后备的错误改成把当前候选往后挪一位、在下一个候选上继续流式。
+//
+// 最多挪 候选数-1 次，全挪完仍失败就照旧退回非流式，交给它的整条后备链兜底；
+// 不能切后备的错误（流半路断开、空输出这类）也照旧退回，那种多半是流式通道本身的
+// 毛病，非流式能救回来。
+func (p *streamingLLMProvider) skipFailedStreamCandidate(cause error, skipped int) bool {
+	if !shouldFailoverLLMError(cause) {
+		return false
+	}
+	skipper, ok := p.provider.(rejectedCandidateSkipper)
+	if !ok || skipped+1 >= skipper.candidateCount() {
+		return false
+	}
+	return skipper.skipRejectedCandidate(cause)
+}
+
+// rejectedCandidateSkipper 由后备 provider 实现：流已经正常打开、正文却是拦截或
+// 读流时才报错时，让它把刚才那个候选往后挪一位。
 type rejectedCandidateSkipper interface {
 	skipRejectedCandidate(cause error) bool
+	candidateCount() int
 }
 
 // retryAfterStreamedRejection 处理「流正常打开、正文却是上游拦截文案」。
