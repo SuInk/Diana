@@ -1075,7 +1075,7 @@ func (t *RunCommandTool) Run(ctx context.Context, input map[string]any) (string,
 		return "", err
 	}
 	cmd.Dir = cwd
-	cmd.Env = t.commandEnvironment()
+	cmd.Env = environmentWithCaller(ctx, t.commandEnvironment())
 	commandOutput, err := os.CreateTemp("", "diana-agent-command-*")
 	if err != nil {
 		return "", err

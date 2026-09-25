@@ -118,7 +118,7 @@
           </label>
           <p v-if="(Object.keys(editPresetMasks).length || Object.values(editPresetValues).some(v => v.includes('****'))) && !readonly && !revealed" class="hint">令牌只显示掩码，<button type="button" class="link-button" :disabled="revealing" @click="revealSecrets">显示明文</button>。</p>
           <p v-if="verifyNote" role="status">{{ verifyNote }}</p>
-          <p class="hint">超时、工具名单这些改不到的，切<button type="button" class="link-button" @click="editAdvanced=true">高级配置</button>。</p>
+          <p class="hint">超时、工具名单、调用者身份这些改不到的，切<button type="button" class="link-button" @click="editAdvanced=true">高级配置</button>。</p>
         </template>
         <template v-else>
           <p v-if="editPreset" class="hint">这条是从「{{ editPreset.title }}」预设装的，<button type="button" class="link-button" @click="editAdvanced=false">回到预设表单</button>改地址和令牌更省事。</p>
@@ -128,6 +128,8 @@
           <label class="field">{{ transport==='http' ? '请求头 JSON' : '环境变量 JSON' }}<textarea v-model="secrets" class="input code-input" rows="4" spellcheck="false" placeholder='{"Authorization":"Bearer …"}'></textarea></label>
           <p class="hint">已保存的值只显示掩码：<strong>掩码原样留着或值留空 = 保持原值</strong>，<strong>删掉整行 = 删掉这一项</strong>。新加一行就是新增。<template v-if="storedSecrets && !readonly && !revealed">要看原文点<button type="button" class="link-button" :disabled="revealing" @click="revealSecrets">显示明文</button>。</template></p>
           <div class="extension-grid"><label class="field">连接超时（秒）<input v-model.number="form.startup_timeout_sec" class="input" type="number" min="1" max="300" /><span class="hint">最长 300，首次启动要现拉依赖的服务往大了填。</span></label><label class="field">工具超时（秒）<input v-model.number="form.tool_timeout_sec" class="input" type="number" min="1" max="900" /><span class="hint">最长 900，构建、抓取这类慢工具才需要调高。</span></label></div>
+          <label class="switch"><input v-model="form.expose_caller_identity" type="checkbox" /><span class="track"></span>把调用者身份告诉这个服务</label>
+          <p class="hint">开启后每次调用都在 <code>_meta["diana/caller"]</code> 里带上真实的平台、账号、群号、消息 ID 和是否主人，不受「对模型隐藏账号 ID」影响。远程服务会因此拿到发言人账号，只给要按账号办事的服务开。</p>
           <label class="field">允许的工具（每行一个，留空全部）<textarea v-model="form.enabled_tools" class="input code-input" rows="2"></textarea></label>
           <label class="field">禁用的工具（每行一个）<textarea v-model="form.disabled_tools" class="input code-input" rows="2"></textarea></label>
           <p class="hint">测试连接会访问服务；stdio 会启动配置的本地进程。</p>
@@ -177,7 +179,7 @@ const layout=extensionLayout,setLayout=setExtensionLayout;
 const matches=(text:string)=>{const q=query.value.trim().toLowerCase();return !q||text.toLowerCase().includes(q)};
 const items=ref<ManagedExtension[]>([]),loading=ref(false),loadError=ref(''),busy=ref(''),editing=ref(false),existing=ref(false),readonly=ref(false),saving=ref(false),error=ref('');
 const fromURL=ref(false),transport=ref<'http'|'stdio'>('http'),tested=ref(false),discovered=ref<string[]>([]),headers=ref('{}'),env=ref('{}');
-const blank=()=>({name:'',content:'',source_url:'',url:'',command:'',args:'',cwd:'',enabled:true,startup_timeout_sec:20,tool_timeout_sec:60,enabled_tools:'',disabled_tools:''});
+const blank=()=>({name:'',content:'',source_url:'',url:'',command:'',args:'',cwd:'',enabled:true,startup_timeout_sec:20,tool_timeout_sec:60,enabled_tools:'',disabled_tools:'',expose_caller_identity:false});
 const form=ref(blank());
 const secrets=computed({get:()=>transport.value==='http'?headers.value:env.value,set:v=>{if(transport.value==='http')headers.value=v;else env.value=v}});
 // 从预设装出来的那条，编辑时还给它那张表；editAdvanced 是切回通用表单的后门。
@@ -209,7 +211,7 @@ async function closeEditor(){if(!editing.value||saving.value)return;if(!readonly
 async function importFile(event:Event){const file=(event.target as HTMLInputElement).files?.[0];if(!file)return;if(file.size>2*1024*1024){error.value='文件不能超过 2 MB';return}form.value.content=await file.text();fromURL.value=false}
 const lines=(s:string)=>s.split('\n').map(x=>x.trim()).filter(Boolean);
 function stringMap(raw:string){const result=JSON.parse(raw||'{}');if(!result||Array.isArray(result)||typeof result!=='object'||Object.values(result).some(v=>typeof v!=='string'))throw new Error('凭据必须是字符串键值 JSON 对象');return result}
-function payload(operation:string){return {operation,kind:props.kind,name:form.value.name,replace:existing.value,content:fromURL.value?'':form.value.content,source_url:fromURL.value?form.value.source_url:'',config:{enabled:form.value.enabled,url:transport.value==='http'?form.value.url:'',command:transport.value==='stdio'?form.value.command:'',args:transport.value==='stdio'?lines(form.value.args):[],cwd:transport.value==='stdio'?form.value.cwd:'',headers:transport.value==='http'?stringMap(headers.value):{},env:transport.value==='stdio'?stringMap(env.value):{},startup_timeout_sec:form.value.startup_timeout_sec,tool_timeout_sec:form.value.tool_timeout_sec,enabled_tools:lines(form.value.enabled_tools),disabled_tools:lines(form.value.disabled_tools)}}}
+function payload(operation:string){return {operation,kind:props.kind,name:form.value.name,replace:existing.value,content:fromURL.value?'':form.value.content,source_url:fromURL.value?form.value.source_url:'',config:{enabled:form.value.enabled,url:transport.value==='http'?form.value.url:'',command:transport.value==='stdio'?form.value.command:'',args:transport.value==='stdio'?lines(form.value.args):[],cwd:transport.value==='stdio'?form.value.cwd:'',headers:transport.value==='http'?stringMap(headers.value):{},env:transport.value==='stdio'?stringMap(env.value):{},startup_timeout_sec:form.value.startup_timeout_sec,tool_timeout_sec:form.value.tool_timeout_sec,enabled_tools:lines(form.value.enabled_tools),disabled_tools:lines(form.value.disabled_tools),expose_caller_identity:!!form.value.expose_caller_identity}}}
 // 「恢复默认」= 把这张表清回新建 MCP 的样子。只动表单，保存了才落盘——改废了
 // 想重来的时候，比一个个字段往回删省事。
 async function resetForm(){

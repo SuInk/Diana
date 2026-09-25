@@ -367,6 +367,7 @@ func AdministerExtensions(ctx context.Context, cfg Config, req ExtensionAdminReq
 		if exists {
 			server.StartupTimeoutSec, server.ToolTimeoutSec = previous.StartupTimeoutSec, previous.ToolTimeoutSec
 			server.EnabledTools, server.DisabledTools = previous.EnabledTools, previous.DisabledTools
+			server.ExposeCallerIdentity = previous.ExposeCallerIdentity
 		}
 	} else if exists {
 		// 有人绕过表单直接改了配置，出身仍然保留：界面下次打开还是那张表，

@@ -4723,7 +4723,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			messages = append(messages, carryover)
 		}
 		promptSession := r.groupPromptSession(event)
-		resp, err := agentRunner.Run(ctx, agent.Request{
+		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
 			Messages:        messages,
 			TraceID:         traceID,
 			Observer:        r.agentRunObserver(event),
