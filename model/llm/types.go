@@ -690,7 +690,11 @@ func (req GenerateRequest) withDefaults(cfg ProviderConfig) GenerateRequest {
 	if strings.TrimSpace(req.ReasoningEffort) == "" {
 		req.ReasoningEffort = cfg.ReasoningEffort
 	}
-	req.Messages = scopedContinuationMessages(req.Messages, continuationScope(cfg, req.Model))
+	scope := continuationScope(cfg, req.Model)
+	req.Messages = scopedContinuationMessages(req.Messages, scope)
+	if requiresReasoningReplay(cfg, req.Model) {
+		req.Messages = flattenForeignToolTurns(req.Messages, scope)
+	}
 	req.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
 	if req.MaxOutputTokens == 0 {
 		// 0 表示调用方没覆盖，沿用 provider config；负数会在 Validate 阶段拒绝。
